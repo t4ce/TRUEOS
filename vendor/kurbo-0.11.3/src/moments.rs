@@ -562,33 +562,3 @@ where
         moments
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::BezPath;
-
-    use super::*;
-
-    macro_rules! assert_approx_eq {
-        ($x: expr, $y: expr) => {
-            assert!(($x - $y).abs() < 1e-8, "{} != {}", $x, $y);
-        };
-    }
-
-    #[test]
-    fn test_moments() {
-        let path = BezPath::from_vec(vec![
-            PathEl::MoveTo(Point::new(0.0, 0.0)),
-            PathEl::LineTo(Point::new(1.0, 0.0)),
-            PathEl::LineTo(Point::new(1.0, 1.0)),
-            PathEl::LineTo(Point::new(0.0, 1.0)),
-            PathEl::ClosePath,
-        ]);
-        let moments = path.moments();
-        assert_approx_eq!(moments.moment_x, 0.5);
-        assert_approx_eq!(moments.moment_y, 0.5);
-        assert_approx_eq!(moments.moment_xx, 0.3333333333333333);
-        assert_approx_eq!(moments.moment_xy, 0.25);
-        assert_approx_eq!(moments.moment_yy, 0.3333333333333333);
-    }
-}

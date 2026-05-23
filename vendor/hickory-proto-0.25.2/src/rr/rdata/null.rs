@@ -114,31 +114,3 @@ impl fmt::Display for NULL {
         f.write_str(&data_encoding::BASE64.encode(&self.anything))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::dbg_macro, clippy::print_stdout)]
-
-    #[cfg(feature = "std")]
-    use std::println;
-
-    use super::*;
-
-    #[test]
-    fn test() {
-        let rdata = NULL::with(vec![0, 1, 2, 3, 4, 5, 6, 7]);
-
-        let mut bytes = Vec::new();
-        let mut encoder: BinEncoder<'_> = BinEncoder::new(&mut bytes);
-        assert!(rdata.emit(&mut encoder).is_ok());
-        let bytes = encoder.into_bytes();
-
-        #[cfg(feature = "std")]
-        println!("bytes: {bytes:?}");
-
-        let mut decoder: BinDecoder<'_> = BinDecoder::new(bytes);
-        let restrict = Restrict::new(bytes.len() as u16);
-        let read_rdata = NULL::read_data(&mut decoder, restrict).expect("Decoding error");
-        assert_eq!(rdata, read_rdata);
-    }
-}

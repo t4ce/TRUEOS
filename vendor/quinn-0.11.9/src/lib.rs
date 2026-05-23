@@ -90,9 +90,6 @@ pub use crate::runtime::TokioRuntime;
 pub use crate::runtime::{AsyncTimer, AsyncUdpSocket, Runtime, UdpPoller, default_runtime};
 pub use crate::send_stream::{SendStream, StoppedError, WriteError};
 
-#[cfg(test)]
-mod tests;
-
 #[derive(Debug)]
 enum ConnectionEvent {
     Close {

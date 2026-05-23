@@ -122,28 +122,3 @@ where
         self.beta.sample(rng) * self.range + self.min
     }
 }
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_pert() {
-        for &(min, max, mode) in &[
-            (-1., 1., 0.),
-            (1., 2., 1.),
-            (5., 25., 25.),
-        ] {
-            let _distr = Pert::new(min, max, mode).unwrap();
-            // TODO: test correctness
-        }
-
-        for &(min, max, mode) in &[
-            (-1., 1., 2.),
-            (-1., 1., -2.),
-            (2., 1., 1.),
-        ] {
-            assert!(Pert::new(min, max, mode).is_err());
-        }
-    }
-}

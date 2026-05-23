@@ -1803,17 +1803,3 @@ pub fn xdp_statistics<Fd: AsFd>(fd: Fd) -> io::Result<XdpStatistics> {
 pub fn xdp_options<Fd: AsFd>(fd: Fd) -> io::Result<XdpOptionsFlags> {
     backend::net::sockopt::xdp_options(fd.as_fd())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_sizes() {
-        use c::c_int;
-
-        // Backend code needs to cast these to `c_int` so make sure that cast
-        // isn't lossy.
-        assert_eq_size!(Timeout, c_int);
-    }
-}

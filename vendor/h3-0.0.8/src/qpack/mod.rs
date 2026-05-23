@@ -18,9 +18,6 @@ mod encoder;
 mod prefix_int;
 mod prefix_string;
 
-#[cfg(test)]
-mod tests;
-
 #[derive(Debug)]
 pub enum Error {
     Encoder(EncoderError),

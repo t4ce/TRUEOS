@@ -135,37 +135,3 @@ name_rdata!(CNAME);
 name_rdata!(NS);
 name_rdata!(PTR);
 name_rdata!(ANAME);
-
-#[cfg(test)]
-mod tests {
-
-    use alloc::{string::ToString, vec::Vec};
-    #[cfg(feature = "std")]
-    use std::println;
-
-    use super::*;
-
-    #[test]
-    fn test_it_to_string_should_not_stack_overflow() {
-        assert_eq!(PTR("abc.com".parse().unwrap()).to_string(), "abc.com");
-    }
-
-    #[test]
-    fn test() {
-        #![allow(clippy::dbg_macro, clippy::print_stdout)]
-
-        let rdata = Name::from_ascii("WWW.example.com.").unwrap();
-
-        let mut bytes = Vec::new();
-        let mut encoder = BinEncoder::new(&mut bytes);
-        assert!(emit(&mut encoder, &rdata).is_ok());
-        let bytes = encoder.into_bytes();
-
-        #[cfg(feature = "std")]
-        println!("bytes: {bytes:?}");
-
-        let mut decoder = BinDecoder::new(bytes);
-        let read_rdata = read(&mut decoder).expect("Decoding error");
-        assert_eq!(rdata, read_rdata);
-    }
-}

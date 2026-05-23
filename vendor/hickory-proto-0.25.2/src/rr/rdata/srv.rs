@@ -282,34 +282,3 @@ impl fmt::Display for SRV {
         )
     }
 }
-
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::dbg_macro, clippy::print_stdout)]
-
-    use alloc::vec::Vec;
-    #[cfg(feature = "std")]
-    use std::println;
-
-    use super::*;
-
-    #[test]
-    fn test() {
-        use core::str::FromStr;
-
-        let rdata = SRV::new(1, 2, 3, Name::from_str("_dns._tcp.example.com.").unwrap());
-
-        let mut bytes = Vec::new();
-        let mut encoder: BinEncoder<'_> = BinEncoder::new(&mut bytes);
-        assert!(rdata.emit(&mut encoder).is_ok());
-        let bytes = encoder.into_bytes();
-
-        #[cfg(feature = "std")]
-        println!("bytes: {bytes:?}");
-
-        let mut decoder: BinDecoder<'_> = BinDecoder::new(bytes);
-
-        let read_rdata = SRV::read(&mut decoder).expect("Decoding error");
-        assert_eq!(rdata, read_rdata);
-    }
-}

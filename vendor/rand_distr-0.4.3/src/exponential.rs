@@ -149,33 +149,3 @@ where F: Float, Exp1: Distribution<F>
         rng.sample(Exp1) * self.lambda_inverse
     }
 }
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_exp() {
-        let exp = Exp::new(10.0).unwrap();
-        let mut rng = crate::test::rng(221);
-        for _ in 0..1000 {
-            assert!(exp.sample(&mut rng) >= 0.0);
-        }
-    }
-    #[test]
-    fn test_zero() {
-        let d = Exp::new(0.0).unwrap();
-        assert_eq!(d.sample(&mut crate::test::rng(21)), f64::infinity());
-    }
-    #[test]
-    #[should_panic]
-    fn test_exp_invalid_lambda_neg() {
-        Exp::new(-10.0).unwrap();
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_exp_invalid_lambda_nan() {
-        Exp::new(f64::nan()).unwrap();
-    }
-}

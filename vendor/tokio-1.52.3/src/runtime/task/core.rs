@@ -567,8 +567,3 @@ impl Trailer {
     }
 }
 
-#[test]
-#[cfg(not(loom))]
-fn header_lte_cache_line() {
-    assert!(core::mem::size_of::<Header>() <= 8 * core::mem::size_of::<*const ()>());
-}

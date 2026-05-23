@@ -480,5 +480,3 @@ impl<T: AsyncWrite + Unpin> Write for SyncWriteAdapter<'_, '_, T> {
     }
 }
 
-#[cfg(test)]
-mod test_stream;

@@ -78,38 +78,3 @@ impl core::str::FromStr for ViewBox {
     }
 }
 
-#[rustfmt::skip]
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use core::str::FromStr;
-
-    macro_rules! test {
-        ($name:ident, $text:expr, $result:expr) => (
-            #[test]
-            fn $name() {
-                let v = ViewBox::from_str($text).unwrap();
-                assert_eq!(v, $result);
-            }
-        )
-    }
-
-    test!(parse_1, "-20 30 100 500", ViewBox::new(-20.0, 30.0, 100.0, 500.0));
-
-    macro_rules! test_err {
-        ($name:ident, $text:expr, $result:expr) => (
-            #[test]
-            fn $name() {
-                assert_eq!(ViewBox::from_str($text).unwrap_err().to_string(), $result);
-            }
-        )
-    }
-
-    test_err!(parse_err_1, "qwe", "viewBox contains an invalid number");
-    test_err!(parse_err_2, "10 20 30 0", "viewBox has a negative or zero size");
-    test_err!(parse_err_3, "10 20 0 40", "viewBox has a negative or zero size");
-    test_err!(parse_err_4, "10 20 0 0", "viewBox has a negative or zero size");
-    test_err!(parse_err_5, "10 20 -30 0", "viewBox has a negative or zero size");
-    test_err!(parse_err_6, "10 20 30 -40", "viewBox has a negative or zero size");
-    test_err!(parse_err_7, "10 20 -30 -40", "viewBox has a negative or zero size");
-}

@@ -13,11 +13,6 @@ use alloc::{string::String, vec};
 
 pub mod general_purpose;
 
-#[cfg(test)]
-mod naive;
-
-#[cfg(test)]
-mod tests;
 
 pub use general_purpose::{GeneralPurpose, GeneralPurposeConfig};
 

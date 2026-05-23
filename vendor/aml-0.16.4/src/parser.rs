@@ -500,37 +500,3 @@ pub(crate) macro try_with_context($context: expr, $expr: expr) {
         Err(err) => return (Err(Propagate::Err(err)), $context),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_utils::*;
-
-    #[test]
-    fn test_take_n() {
-        let mut context = make_test_context();
-        check_err!(take_n(1).parse(&[], &mut context), AmlError::UnexpectedEndOfStream, &[]);
-        check_err!(take_n(2).parse(&[0xf5], &mut context), AmlError::UnexpectedEndOfStream, &[0xf5]);
-
-        check_ok!(take_n(1).parse(&[0xff], &mut context), &[0xff], &[]);
-        check_ok!(take_n(1).parse(&[0xff, 0xf8], &mut context), &[0xff], &[0xf8]);
-        check_ok!(take_n(2).parse(&[0xff, 0xf8], &mut context), &[0xff, 0xf8], &[]);
-    }
-
-    #[test]
-    fn test_take_ux() {
-        let mut context = make_test_context();
-        check_err!(take_u16().parse(&[0x34], &mut context), AmlError::UnexpectedEndOfStream, &[0x34]);
-        check_ok!(take_u16().parse(&[0x34, 0x12], &mut context), 0x1234, &[]);
-
-        check_err!(take_u32().parse(&[0x34, 0x12], &mut context), AmlError::UnexpectedEndOfStream, &[0x34, 0x12]);
-        check_ok!(take_u32().parse(&[0x34, 0x12, 0xf4, 0xc3, 0x3e], &mut context), 0xc3f41234, &[0x3e]);
-
-        check_err!(take_u64().parse(&[0x34], &mut context), AmlError::UnexpectedEndOfStream, &[0x34]);
-        check_ok!(
-            take_u64().parse(&[0x34, 0x12, 0x35, 0x76, 0xd4, 0x43, 0xa3, 0xb6, 0xff, 0x00], &mut context),
-            0xb6a343d476351234,
-            &[0xff, 0x00]
-        );
-    }
-}

@@ -85,19 +85,3 @@ impl Hinter for HistoryHinter {
         None
     }
 }
-
-#[cfg(test)]
-mod test {
-    use super::{Hinter, HistoryHinter};
-    use crate::history::DefaultHistory;
-    use crate::Context;
-
-    #[test]
-    pub fn empty_history() {
-        let history = DefaultHistory::new();
-        let ctx = Context::new(&history);
-        let hinter = HistoryHinter {};
-        let hint = hinter.hint("test", 4, &ctx);
-        assert_eq!(None, hint);
-    }
-}

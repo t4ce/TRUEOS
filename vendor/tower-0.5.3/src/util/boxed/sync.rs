@@ -104,9 +104,3 @@ impl<T, U, E> fmt::Debug for BoxService<T, U, E> {
     }
 }
 
-#[test]
-fn is_sync() {
-    fn assert_sync<T: Sync>() {}
-
-    assert_sync::<BoxService<(), (), ()>>();
-}

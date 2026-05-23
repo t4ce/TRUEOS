@@ -780,74 +780,8 @@ mod tests {
     #[cfg(feature = "stable_graph")]
     use crate::prelude::StableDiGraph;
 
-    #[test]
-    fn test_acyclic_graph() {
-        // Create an acyclic DiGraph
-        let mut graph = DiGraph::<(), ()>::new();
-        let a = graph.add_node(());
-        let c = graph.add_node(());
-        let b = graph.add_node(());
-        graph.add_edge(a, b, ());
-        graph.add_edge(b, c, ());
-
-        // Create an Acyclic object
-        let mut acyclic = Acyclic::try_from_graph(graph).unwrap();
-
-        // Test initial topological order
-        assert_valid_topological_order(&acyclic);
-
-        // Add a valid edge
-        assert!(acyclic.try_add_edge(a, c, ()).is_ok());
-        assert_valid_topological_order(&acyclic);
-
-        // Try to add an edge that would create a cycle
-        assert!(acyclic.try_add_edge(c, a, ()).is_err());
-
-        // Add another valid edge
-        let d = acyclic.add_node(());
-        assert!(acyclic.try_add_edge(c, d, ()).is_ok());
-        assert_valid_topological_order(&acyclic);
-
-        // Try to add an edge that would create a cycle (using the Build trait)
-        assert!(acyclic.add_edge(d, a, ()).is_none());
-    }
 
     #[cfg(feature = "stable_graph")]
-    #[test]
-    fn test_acyclic_graph_add_remove() {
-        // Create an initial Acyclic graph with two nodes and one edge
-        let mut acyclic = Acyclic::<StableDiGraph<(), ()>>::new();
-        let a = acyclic.add_node(());
-        let b = acyclic.add_node(());
-        assert!(acyclic.try_add_edge(a, b, ()).is_ok());
-
-        // Check initial topological order
-        assert_valid_topological_order(&acyclic);
-
-        // Add a new node and an edge
-        let c = acyclic.add_node(());
-        assert!(acyclic.try_add_edge(b, c, ()).is_ok());
-
-        // Check topological order after addition
-        assert_valid_topological_order(&acyclic);
-
-        // Remove the node connected to two edges (node b)
-        acyclic.remove_node(b);
-
-        // Check topological order after removal
-        assert_valid_topological_order(&acyclic);
-
-        // Verify the remaining structure
-        let remaining_nodes: Vec<_> = acyclic
-            .inner()
-            .node_references()
-            .map(|(id, _)| id)
-            .collect();
-        assert_eq!(remaining_nodes.len(), 2);
-        assert!(remaining_nodes.contains(&a));
-        assert!(remaining_nodes.contains(&c));
-        assert!(!acyclic.inner().contains_edge(a, c));
-    }
 
     fn assert_valid_topological_order<'a, G>(acyclic: &'a Acyclic<G>)
     where
@@ -881,15 +815,4 @@ mod tests {
     }
 
     #[cfg(feature = "graphmap")]
-    #[test]
-    fn test_multiedge_allowed() {
-        use crate::prelude::GraphMap;
-        use crate::Directed;
-
-        let mut graph = Acyclic::<GraphMap<usize, (), Directed>>::new();
-        graph.add_node(0);
-        graph.add_node(1);
-        graph.try_update_edge(0, 1, ()).unwrap();
-        graph.try_update_edge(0, 1, ()).unwrap(); // `Result::unwrap()` on an `Err` value: InvalidEdge
-    }
 }

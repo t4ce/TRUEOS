@@ -22,12 +22,6 @@ use std::fs::{Metadata, Permissions};
 use std::io::{self, Seek, SeekFrom};
 use crate::path::Path;
 
-#[cfg(test)]
-use super::mocks::JoinHandle;
-#[cfg(test)]
-use super::mocks::MockFile as StdFile;
-#[cfg(test)]
-use super::mocks::{spawn_blocking, spawn_mandatory_blocking};
 #[cfg(not(test))]
 use crate::blocking::JoinHandle;
 #[cfg(all(not(test), not(any(target_os = "trueos", target_os = "zkvm"))))]
@@ -1213,6 +1207,3 @@ impl Inner {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

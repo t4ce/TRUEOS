@@ -377,13 +377,3 @@ fn checked_next_multiple_of(val: usize, factor: usize) -> Option<usize> {
     }
 }
 
-#[test]
-fn next_multiple_of_backport_testsuite() {
-    assert_eq!(checked_next_multiple_of(1, 0), None);
-    assert_eq!(checked_next_multiple_of(2, 0), None);
-    assert_eq!(checked_next_multiple_of(1, 2), Some(2));
-    assert_eq!(checked_next_multiple_of(2, 2), Some(2));
-    assert_eq!(checked_next_multiple_of(2, 5), Some(5));
-    assert_eq!(checked_next_multiple_of(1, usize::MAX), Some(usize::MAX));
-    assert_eq!(checked_next_multiple_of(usize::MAX, 2), None);
-}

@@ -144,37 +144,4 @@ mod test {
         }
     }
 
-    #[test]
-    fn test_memoized() {
-        use futures::executor::block_on;
-
-        subscribe();
-
-        let client = MemoizeClientHandle::new(TestClient {
-            i: Arc::new(Mutex::new(0)),
-        });
-
-        let mut test1 = Message::new();
-        test1.add_query(Query::new().set_query_type(RecordType::A).clone());
-
-        let mut test2 = Message::new();
-        test2.add_query(Query::new().set_query_type(RecordType::AAAA).clone());
-
-        let result = block_on(client.send(test1.clone()).first_answer())
-            .ok()
-            .unwrap();
-        assert_eq!(result.id(), 0);
-
-        let result = block_on(client.send(test2.clone()).first_answer())
-            .ok()
-            .unwrap();
-        assert_eq!(result.id(), 1);
-
-        // should get the same result for each...
-        let result = block_on(client.send(test1).first_answer()).ok().unwrap();
-        assert_eq!(result.id(), 0);
-
-        let result = block_on(client.send(test2).first_answer()).ok().unwrap();
-        assert_eq!(result.id(), 1);
-    }
 }

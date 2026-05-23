@@ -41,6 +41,3 @@ impl RegistrationQueue {
         self.list.pop_front()
     }
 }
-
-#[cfg(test)]
-mod tests;

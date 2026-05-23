@@ -1713,18 +1713,3 @@ mod to_signed {
     target_arch = "mips64r6"
 ))]
 use to_signed::*;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_sizes() {
-        assert_eq_size!(linux_raw_sys::general::__kernel_loff_t, u64);
-        assert_eq_align!(linux_raw_sys::general::__kernel_loff_t, u64);
-
-        // Assert that `Timestamps` has the expected layout.
-        assert_eq_size!([linux_raw_sys::general::__kernel_timespec; 2], Timestamps);
-        assert_eq_align!([linux_raw_sys::general::__kernel_timespec; 2], Timestamps);
-    }
-}

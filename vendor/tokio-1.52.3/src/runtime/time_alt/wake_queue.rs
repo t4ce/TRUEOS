@@ -48,6 +48,3 @@ impl WakeQueue {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

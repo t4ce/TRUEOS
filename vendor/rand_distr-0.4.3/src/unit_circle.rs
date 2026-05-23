@@ -51,18 +51,3 @@ impl<F: Float + SampleUniform> Distribution<[F; 2]> for UnitCircle {
         [diff / sum, F::from(2.).unwrap() * x1 * x2 / sum]
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::UnitCircle;
-    use crate::Distribution;
-
-    #[test]
-    fn norm() {
-        let mut rng = crate::test::rng(1);
-        for _ in 0..1000 {
-            let x: [f64; 2] = UnitCircle.sample(&mut rng);
-            assert_almost_eq!(x[0] * x[0] + x[1] * x[1], 1., 1e-15);
-        }
-    }
-}

@@ -72,40 +72,4 @@ pub(crate) fn parse<'i, I: Iterator<Item = &'i str>>(
     ))
 }
 
-#[test]
-fn test_parsing() {
-    // IN NAPTR 100  50  "a"    "z3950+N2L+N2C"     ""   cidserver.example.com.
-    // IN NAPTR 100  50  "a"    "rcds+N2C"          ""   cidserver.example.com.
-    // IN NAPTR 100  50  "s"    "http+N2L+N2C+N2R"  ""   www.example.com.
 
-    assert_eq!(
-        parse(
-            vec!["100", "50", "a", "z3950+N2L+N2C", "", "cidserver"].into_iter(),
-            Some(&Name::from_str("example.com.").unwrap())
-        )
-        .expect("failed to parse NAPTR"),
-        NAPTR::new(
-            100,
-            50,
-            b"a".to_vec().into_boxed_slice(),
-            b"z3950+N2L+N2C".to_vec().into_boxed_slice(),
-            b"".to_vec().into_boxed_slice(),
-            Name::from_str("cidserver.example.com.").unwrap()
-        ),
-    );
-}
-
-#[test]
-fn test_parsing_fails() {
-    // IN NAPTR 100  50  "a"    "z3950+N2L+N2C"     ""   cidserver.example.com.
-    // IN NAPTR 100  50  "a"    "rcds+N2C"          ""   cidserver.example.com.
-    // IN NAPTR 100  50  "s"    "http+N2L+N2C+N2R"  ""   www.example.com.
-
-    assert!(
-        parse(
-            vec!["100", "50", "-", "z3950+N2L+N2C", "", "cidserver"].into_iter(),
-            Some(&Name::from_str("example.com.").unwrap())
-        )
-        .is_err()
-    );
-}

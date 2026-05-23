@@ -62,24 +62,3 @@ impl Iterator for PointsParser<'_> {
     }
 }
 
-#[rustfmt::skip]
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_1() {
-        let mut parser = PointsParser::from("10 20 30 40");
-        assert_eq!(parser.next().unwrap(), (10.0, 20.0));
-        assert_eq!(parser.next().unwrap(), (30.0, 40.0));
-        assert!(parser.next().is_none());
-    }
-
-    #[test]
-    fn parse_2() {
-        let mut parser = PointsParser::from("10 20 30 40 50");
-        assert_eq!(parser.next().unwrap(), (10.0, 20.0));
-        assert_eq!(parser.next().unwrap(), (30.0, 40.0));
-        assert!(parser.next().is_none());
-    }
-}

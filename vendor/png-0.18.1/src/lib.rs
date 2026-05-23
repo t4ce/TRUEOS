@@ -160,8 +160,6 @@ pub use crate::decoder::{UnfilterBuf, UnfilterRegion};
 pub use crate::encoder::{Encoder, EncodingError, StreamWriter, Writer};
 pub use crate::filter::Filter;
 
-#[cfg(test)]
-pub(crate) mod test_utils;
 
 #[cfg(feature = "benchmarks")]
 pub mod benchable_apis;

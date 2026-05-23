@@ -22,6 +22,3 @@ pub(super) use wheel::Wheel;
 
 mod wake_queue;
 pub(crate) use wake_queue::WakeQueue;
-
-#[cfg(test)]
-mod tests;

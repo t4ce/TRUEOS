@@ -7,5 +7,3 @@ pub use self::{
     encoder_string_writer::{EncoderStringWriter, StrConsumer},
 };
 
-#[cfg(test)]
-mod encoder_tests;

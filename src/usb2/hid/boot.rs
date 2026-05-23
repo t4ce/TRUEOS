@@ -279,6 +279,13 @@ async fn hid_boot_stream_task(
             delay_ms
         );
         Timer::after(EmbassyDuration::from_millis(delay_ms)).await;
+        crate::log_info!(target: "usb";
+            "crabusb: hid {} {:04X}:{:04X} startup settle done before endpoint claim delay_ms={}\n",
+            target.kind.as_str(),
+            vendor_id,
+            product_id,
+            delay_ms
+        );
     }
 
     if let Err(err) = device.set_configuration(target.configuration_value).await {

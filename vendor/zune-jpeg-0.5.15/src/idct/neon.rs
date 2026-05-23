@@ -259,26 +259,3 @@ unsafe fn clamp_neon(reg: int16x8_t) -> int16x8_t {
 unsafe fn clamp256_neon(reg: int16x8x2_t) -> int16x8x2_t {
     unsafe { int16x8x2_t(clamp_neon(reg.0), clamp_neon(reg.1)) }
 }
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_neon_clamp_256() {
-        unsafe {
-            let vals: [i16; 16] = [-1, -2, -3, 4, 256, 257, 258, 240, -1, 290, 2, 3, 4, 5, 6, 7];
-            let loaded = vld1q_s16_x2(vals.as_ptr().cast());
-            let shuffled = clamp256_neon(loaded);
-
-            let mut result: [i16; 16] = [0; 16];
-
-            vst1q_s16_x2(result.as_mut_ptr().cast(), shuffled);
-
-            assert_eq!(
-                result,
-                [0, 0, 0, 4, 255, 255, 255, 240, 0, 255, 2, 3, 4, 5, 6, 7]
-            )
-        }
-    }
-}

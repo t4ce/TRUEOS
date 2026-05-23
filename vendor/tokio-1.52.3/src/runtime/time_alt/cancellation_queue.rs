@@ -91,6 +91,3 @@ pub(crate) fn new() -> (Sender, Receiver) {
         Receiver { inner },
     )
 }
-
-#[cfg(test)]
-mod tests;

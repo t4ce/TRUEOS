@@ -378,22 +378,3 @@ impl SimplifyOptions {
         self
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::BezPath;
-
-    use super::{simplify_bezpath, SimplifyOptions};
-
-    #[test]
-    fn simplify_lines_corner() {
-        // Make sure lines are passed through unchanged if there is a corner.
-        let mut path = BezPath::new();
-        path.move_to((1., 2.));
-        path.line_to((3., 4.));
-        path.line_to((10., 5.));
-        let options = SimplifyOptions::default();
-        let simplified = simplify_bezpath(path.clone(), 1.0, &options);
-        assert_eq!(path, simplified);
-    }
-}

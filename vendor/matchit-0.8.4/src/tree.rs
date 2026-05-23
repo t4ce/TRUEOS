@@ -861,22 +861,6 @@ where
             .field("children", &self.children);
 
         // Extra information for debugging purposes.
-        #[cfg(test)]
-        {
-            let indices = self
-                .indices
-                .iter()
-                .map(|&x| char::from_u32(x as _))
-                .collect::<Vec<_>>();
-
-            let params = self
-                .remapping
-                .iter()
-                .map(|x| core::str::from_utf8(x).unwrap())
-                .collect::<Vec<_>>();
-
-            f.field("indices", &indices).field("params", &params);
-        }
 
         f.finish()
     }

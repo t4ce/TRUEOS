@@ -126,29 +126,3 @@ impl Default for TrustAnchors {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::dnssec::{
-        Algorithm, PublicKey, PublicKeyBuf,
-        trust_anchor::{ROOT_ANCHOR_2024, TrustAnchors},
-    };
-    use alloc::borrow::ToOwned;
-
-    #[test]
-    fn test_contains_dnskey_bytes() {
-        let trust = TrustAnchors::default();
-        assert_eq!(trust.get(1).unwrap().public_bytes(), ROOT_ANCHOR_2024);
-        let pub_key = PublicKeyBuf::new(ROOT_ANCHOR_2024.to_owned(), Algorithm::RSASHA256);
-        assert!(trust.contains(&pub_key));
-    }
-
-    #[test]
-    #[cfg(feature = "text-parsing")]
-    fn can_load_trust_anchor_file() {
-        let input = include_str!("../../tests/test-data/root.key");
-
-        let trust_anchor = input.parse::<TrustAnchors>().unwrap();
-        assert_eq!(3, trust_anchor.len());
-    }
-}

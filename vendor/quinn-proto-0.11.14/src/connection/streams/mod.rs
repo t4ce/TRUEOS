@@ -429,10 +429,6 @@ impl PendingStreamsQueue {
         self.next.iter().chain(self.streams.iter())
     }
 
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.streams.len() + self.next.is_some() as usize
-    }
 }
 
 /// The [`StreamId`] of a stream with pending data queued, ordered by its priority and recency

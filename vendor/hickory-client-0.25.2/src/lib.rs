@@ -227,8 +227,6 @@ pub mod client;
 #[path = "error.rs"]
 mod hickory_error;
 pub use hickory_error::{Error as ClientError, ErrorKind as ClientErrorKind};
-#[cfg(test)]
-mod tests;
 
 pub use hickory_proto as proto;
 

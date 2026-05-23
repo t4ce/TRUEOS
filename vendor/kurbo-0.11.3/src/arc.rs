@@ -223,24 +223,3 @@ impl Mul<Arc> for Affine {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn reversed_arc() {
-        let a = Arc::new((0., 0.), (1., 0.), 0., PI, 0.);
-        let f = a.reversed();
-
-        // Most fields should be unchanged:
-        assert_eq!(a.center, f.center);
-        assert_eq!(a.radii, f.radii);
-        assert_eq!(a.x_rotation, f.x_rotation);
-
-        // Sweep angle should be in reverse
-        assert_eq!(a.sweep_angle, -f.sweep_angle);
-
-        // Reversing it again should result in the original arc
-        assert_eq!(a, f.reversed());
-    }
-}

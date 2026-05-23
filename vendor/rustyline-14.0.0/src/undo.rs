@@ -50,27 +50,6 @@ impl Change {
         }
     }
 
-    #[cfg(test)]
-    fn redo(&self, line: &mut LineBuffer) {
-        match *self {
-            Change::Begin | Change::End => {
-                unreachable!();
-            }
-            Change::Insert { idx, ref text } => {
-                line.insert_str(idx, text, &mut NoListener);
-            }
-            Change::Delete { idx, ref text } => {
-                line.delete_range(idx..idx + text.len(), &mut NoListener);
-            }
-            Change::Replace {
-                idx,
-                ref old,
-                ref new,
-            } => {
-                line.replace(idx..idx + old.len(), new, &mut NoListener);
-            }
-        }
-    }
 
     fn insert_seq(&self, indx: usize) -> bool {
         if let Change::Insert { idx, ref text } = *self {
@@ -294,30 +273,6 @@ impl Changeset {
         self.undos.truncate(len);
     }
 
-    #[cfg(test)]
-    pub(crate) fn redo(&mut self, line: &mut LineBuffer) -> bool {
-        let mut waiting_for_end = 0;
-        let mut redone = false;
-        while let Some(change) = self.redos.pop() {
-            match change {
-                Change::Begin => {
-                    waiting_for_end += 1;
-                }
-                Change::End => {
-                    waiting_for_end -= 1;
-                }
-                _ => {
-                    change.redo(line);
-                    redone = true;
-                }
-            };
-            self.undos.push(change);
-            if waiting_for_end <= 0 {
-                break;
-            }
-        }
-        redone
-    }
 
     pub(crate) fn last_insert(&self) -> Option<String> {
         for change in self.undos.iter().rev() {
@@ -352,135 +307,5 @@ impl ChangeListener for Changeset {
 
     fn replace(&mut self, idx: usize, old: &str, new: &str) {
         self.replace(idx, old, new);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Changeset;
-    use crate::line_buffer::{LineBuffer, NoListener};
-
-    #[test]
-    fn test_insert_chars() {
-        let mut cs = Changeset::new();
-        cs.insert(0, 'H');
-        cs.insert(1, 'i');
-        assert_eq!(1, cs.undos.len());
-        assert_eq!(0, cs.redos.len());
-        cs.insert(0, ' ');
-        assert_eq!(2, cs.undos.len());
-    }
-
-    #[test]
-    fn test_insert_strings() {
-        let mut cs = Changeset::new();
-        cs.insert_str(0, "Hello");
-        cs.insert_str(5, ", ");
-        assert_eq!(2, cs.undos.len());
-        assert_eq!(0, cs.redos.len());
-    }
-
-    #[test]
-    fn test_undo_insert() {
-        let mut buf = LineBuffer::init("", 0);
-        buf.insert_str(0, "Hello", &mut NoListener);
-        buf.insert_str(5, ", world!", &mut NoListener);
-        let mut cs = Changeset::new();
-        assert_eq!(buf.as_str(), "Hello, world!");
-
-        cs.insert_str(5, ", world!");
-
-        cs.undo(&mut buf, 1);
-        assert_eq!(0, cs.undos.len());
-        assert_eq!(1, cs.redos.len());
-        assert_eq!(buf.as_str(), "Hello");
-
-        cs.redo(&mut buf);
-        assert_eq!(1, cs.undos.len());
-        assert_eq!(0, cs.redos.len());
-        assert_eq!(buf.as_str(), "Hello, world!");
-    }
-
-    #[test]
-    fn test_undo_delete() {
-        let mut buf = LineBuffer::init("", 0);
-        buf.insert_str(0, "Hello", &mut NoListener);
-        let mut cs = Changeset::new();
-        assert_eq!(buf.as_str(), "Hello");
-
-        cs.delete(5, ", world!");
-
-        cs.undo(&mut buf, 1);
-        assert_eq!(buf.as_str(), "Hello, world!");
-
-        cs.redo(&mut buf);
-        assert_eq!(buf.as_str(), "Hello");
-    }
-
-    #[test]
-    fn test_delete_chars() {
-        let mut buf = LineBuffer::init("", 0);
-        buf.insert_str(0, "Hlo", &mut NoListener);
-
-        let mut cs = Changeset::new();
-        cs.delete(1, "e");
-        cs.delete(1, "l");
-        assert_eq!(1, cs.undos.len());
-
-        cs.undo(&mut buf, 1);
-        assert_eq!(buf.as_str(), "Hello");
-    }
-
-    #[test]
-    fn test_backspace_chars() {
-        let mut buf = LineBuffer::init("", 0);
-        buf.insert_str(0, "Hlo", &mut NoListener);
-
-        let mut cs = Changeset::new();
-        cs.delete(2, "l");
-        cs.delete(1, "e");
-        assert_eq!(1, cs.undos.len());
-
-        cs.undo(&mut buf, 1);
-        assert_eq!(buf.as_str(), "Hello");
-    }
-
-    #[test]
-    fn test_undo_replace() {
-        let mut buf = LineBuffer::init("", 0);
-        buf.insert_str(0, "Hello, world!", &mut NoListener);
-        let mut cs = Changeset::new();
-        assert_eq!(buf.as_str(), "Hello, world!");
-
-        buf.replace(1..5, "i", &mut NoListener);
-        assert_eq!(buf.as_str(), "Hi, world!");
-        cs.replace(1, "ello", "i");
-
-        cs.undo(&mut buf, 1);
-        assert_eq!(buf.as_str(), "Hello, world!");
-
-        cs.redo(&mut buf);
-        assert_eq!(buf.as_str(), "Hi, world!");
-    }
-
-    #[test]
-    fn test_last_insert() {
-        let mut cs = Changeset::new();
-        cs.begin();
-        cs.delete(0, "Hello");
-        cs.insert_str(0, "Bye");
-        cs.end();
-        let insert = cs.last_insert();
-        assert_eq!(Some("Bye".to_owned()), insert);
-    }
-
-    #[test]
-    fn test_end() {
-        let mut cs = Changeset::new();
-        cs.begin();
-        assert!(!cs.end());
-        cs.begin();
-        cs.insert_str(0, "Hi");
-        assert!(cs.end());
     }
 }

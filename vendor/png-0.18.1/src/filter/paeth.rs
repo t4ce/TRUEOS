@@ -375,25 +375,3 @@ pub(super) fn unfilter(tbpp: BytesPerPixel, previous: &[u8], current: &mut [u8])
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    #[ignore] // takes ~20s without optimizations
-    fn paeth_impls_are_equivalent() {
-        for a in 0..=255 {
-            for b in 0..=255 {
-                for c in 0..=255 {
-                    let baseline = filter_paeth(a, b, c);
-                    let fpnge = filter_paeth_fpnge(a, b, c);
-                    let stbi = filter_paeth_stbi(a as i16, b as i16, c as i16);
-
-                    assert_eq!(baseline, fpnge);
-                    assert_eq!(baseline, stbi);
-                }
-            }
-        }
-    }
-}

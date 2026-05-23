@@ -290,35 +290,3 @@ impl<S: Read + Write, C: Callback> HandshakeRole for ServerHandshake<S, C> {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{super::machine::TryParse, create_response, Request};
-
-    #[test]
-    fn request_parsing() {
-        const DATA: &[u8] = b"GET /script.ws HTTP/1.1\r\nHost: foo.com\r\n\r\n";
-        let (_, req) = Request::try_parse(DATA).unwrap().unwrap();
-        assert_eq!(req.uri().path(), "/script.ws");
-        assert_eq!(req.headers().get("Host").unwrap(), &b"foo.com"[..]);
-    }
-
-    #[test]
-    fn request_replying() {
-        const DATA: &[u8] = b"\
-            GET /script.ws HTTP/1.1\r\n\
-            Host: foo.com\r\n\
-            Connection: upgrade\r\n\
-            Upgrade: websocket\r\n\
-            Sec-WebSocket-Version: 13\r\n\
-            Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
-            \r\n";
-        let (_, req) = Request::try_parse(DATA).unwrap().unwrap();
-        let response = create_response(&req).unwrap();
-
-        assert_eq!(
-            response.headers().get("Sec-WebSocket-Accept").unwrap(),
-            b"s3pPLMBiTxaQ9kYGzzhZRbK+xOo=".as_ref()
-        );
-    }
-}

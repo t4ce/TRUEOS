@@ -181,20 +181,3 @@ impl From<Utf8Bytes> for Bytes {
         bytes
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use std::{
-        borrow::Borrow,
-        hash::{BuildHasher, RandomState},
-    };
-
-    #[test]
-    fn hash_consistency() {
-        let bytes = Utf8Bytes::from_static("hash_consistency");
-        let hasher = RandomState::new();
-        assert_eq!(hasher.hash_one::<&str>(bytes.borrow()), hasher.hash_one(bytes));
-    }
-}

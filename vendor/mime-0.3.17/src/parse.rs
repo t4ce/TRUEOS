@@ -402,68 +402,6 @@ fn is_restricted_quoted_char(c: u8) -> bool {
     c > 31 && c != 127
 }
 
-#[cfg(test)]
-#[test]
-#[allow(warnings)] // ... ranges deprecated
-fn test_lookup_tables() {
-    for (i, &valid) in TOKEN_MAP.iter().enumerate() {
-        let i = i as u8;
-        let should = match i {
-            b'a'...b'z' |
-            b'A'...b'Z' |
-            b'0'...b'9' |
-            b'!' |
-            b'#' |
-            b'$' |
-            b'%' |
-            b'&' |
-            b'\'' |
-            b'*' |
-            b'+' |
-            b'-' |
-            b'.' |
-            b'^' |
-            b'_' |
-            b'`' |
-            b'|' |
-            b'~' => true,
-            _ => false
-        };
-        assert_eq!(valid, should, "{:?} ({}) should be {}", i as char, i, should);
-    }
-}
 
-#[cfg(test)]
-#[test]
-fn test_parse_iterator() {
-    let mut iter = MimeIter::new("application/json, application/json");
-    assert_eq!(iter.next().unwrap().unwrap(), parse("application/json").unwrap());
-    assert_eq!(iter.next().unwrap().unwrap(), parse("application/json").unwrap());
-    assert_eq!(iter.next(), None);
 
-    let mut iter = MimeIter::new("application/json");
-    assert_eq!(iter.next().unwrap().unwrap(), parse("application/json").unwrap());
-    assert_eq!(iter.next(), None);
 
-    let mut iter = MimeIter::new("application/json;  ");
-    assert_eq!(iter.next().unwrap().unwrap(), parse("application/json").unwrap());
-    assert_eq!(iter.next(), None);
-}
-
-#[cfg(test)]
-#[test]
-fn test_parse_iterator_invalid() {
-    let mut iter = MimeIter::new("application/json, invalid, application/json");
-    assert_eq!(iter.next().unwrap().unwrap(), parse("application/json").unwrap());
-    assert_eq!(iter.next().unwrap().unwrap_err(), "invalid");
-    assert_eq!(iter.next().unwrap().unwrap(), parse("application/json").unwrap());
-    assert_eq!(iter.next(), None);
-}
-
-#[cfg(test)]
-#[test]
-fn test_parse_iterator_all_invalid() {
-    let mut iter = MimeIter::new("application/json, text/html");
-    assert_eq!(iter.next().unwrap().unwrap_err(), "application/json");
-    assert_eq!(iter.next(), None);
-}

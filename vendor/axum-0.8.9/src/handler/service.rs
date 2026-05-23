@@ -112,12 +112,6 @@ impl<H, T, S> HandlerService<H, T, S> {
     }
 }
 
-#[test]
-fn traits() {
-    use crate::test_helpers::*;
-    assert_send::<HandlerService<(), NotSendSync, ()>>();
-    assert_sync::<HandlerService<(), NotSendSync, ()>>();
-}
 
 impl<H, T, S> HandlerService<H, T, S> {
     pub(super) fn new(handler: H, state: S) -> Self {

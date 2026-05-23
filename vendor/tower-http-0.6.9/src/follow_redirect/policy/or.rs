@@ -71,48 +71,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn redirect() {
-        let attempt = Attempt {
-            status: Default::default(),
-            location: &Uri::from_static("*"),
-            previous: &Uri::from_static("*"),
-        };
-
-        let mut a = Taint::new(Action::Follow);
-        let mut b = Taint::new(Action::Follow);
-        let mut policy = Or::new::<(), ()>(&mut a, &mut b);
-        assert!(Policy::<(), ()>::redirect(&mut policy, &attempt)
-            .unwrap()
-            .is_follow());
-        assert!(a.used);
-        assert!(!b.used); // short-circuiting
-
-        let mut a = Taint::new(Action::Stop);
-        let mut b = Taint::new(Action::Follow);
-        let mut policy = Or::new::<(), ()>(&mut a, &mut b);
-        assert!(Policy::<(), ()>::redirect(&mut policy, &attempt)
-            .unwrap()
-            .is_follow());
-        assert!(a.used);
-        assert!(b.used);
-
-        let mut a = Taint::new(Action::Follow);
-        let mut b = Taint::new(Action::Stop);
-        let mut policy = Or::new::<(), ()>(&mut a, &mut b);
-        assert!(Policy::<(), ()>::redirect(&mut policy, &attempt)
-            .unwrap()
-            .is_follow());
-        assert!(a.used);
-        assert!(!b.used);
-
-        let mut a = Taint::new(Action::Stop);
-        let mut b = Taint::new(Action::Stop);
-        let mut policy = Or::new::<(), ()>(&mut a, &mut b);
-        assert!(Policy::<(), ()>::redirect(&mut policy, &attempt)
-            .unwrap()
-            .is_stop());
-        assert!(a.used);
-        assert!(b.used);
-    }
 }

@@ -361,12 +361,3 @@ impl Sender {
 }
 
 // useful for tests, but not publicly exposed
-#[cfg(test)]
-pub(crate) fn read_to_string(mut body: Body) -> io::Result<String> {
-    let mut s = String::new();
-    match body.kind {
-        Kind::Reader(ref mut reader, _) => reader.read_to_string(&mut s),
-        Kind::Bytes(ref mut bytes) => (&**bytes).read_to_string(&mut s),
-    }
-    .map(|_| s)
-}

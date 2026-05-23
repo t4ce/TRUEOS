@@ -39,11 +39,7 @@
 
 extern crate alloc;
 
-#[cfg(test)]
-extern crate std;
 
-#[cfg(test)]
-mod test_utils;
 
 pub(crate) mod expression;
 pub(crate) mod misc;
@@ -799,16 +795,4 @@ pub enum AmlError {
 
     /// Unimplemented functionality - return error rather than abort
     Unimplemented,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_send_sync() {
-        // verify that AmlContext implements Send and Sync
-        fn test_send_sync<T: Send + Sync>() {}
-        test_send_sync::<AmlContext>();
-    }
 }

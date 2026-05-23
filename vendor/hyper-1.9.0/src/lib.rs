@@ -363,8 +363,6 @@ mod common;
 #[path = "error.rs"]
 mod hyper_error;
 pub mod ext;
-#[cfg(test)]
-mod mock;
 pub mod rt;
 pub mod service;
 pub mod upgrade;

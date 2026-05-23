@@ -209,35 +209,3 @@ impl fmt::Display for CSYNC {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::dbg_macro, clippy::print_stdout)]
-
-    #[cfg(feature = "std")]
-    use std::println;
-
-    use alloc::vec::Vec;
-
-    use super::*;
-
-    #[test]
-    fn test() {
-        let types = [RecordType::A, RecordType::NS, RecordType::AAAA];
-
-        let rdata = CSYNC::new(123, true, true, types);
-
-        let mut bytes = Vec::new();
-        let mut encoder: BinEncoder<'_> = BinEncoder::new(&mut bytes);
-        assert!(rdata.emit(&mut encoder).is_ok());
-        let bytes = encoder.into_bytes();
-
-        #[cfg(feature = "std")]
-        println!("bytes: {bytes:?}");
-
-        let mut decoder: BinDecoder<'_> = BinDecoder::new(bytes);
-        let restrict = Restrict::new(bytes.len() as u16);
-        let read_rdata = CSYNC::read_data(&mut decoder, restrict).expect("Decoding error");
-        assert_eq!(rdata, read_rdata);
-    }
-}

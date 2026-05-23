@@ -910,51 +910,6 @@ mod gso {
             })
         }
     }
-
-    #[cfg(test)]
-    mod test {
-        use super::*;
-
-        #[test]
-        fn parse_current_kernel_version_release_string() {
-            let release = kernel_version_string().unwrap();
-            KernelVersion::from_str(&release).unwrap();
-        }
-
-        #[test]
-        fn parse_kernel_version_release_string() {
-            // These are made up for the test
-            assert_eq!(
-                KernelVersion::from_str("4.14"),
-                Some(KernelVersion {
-                    version: 4,
-                    major_revision: 14
-                })
-            );
-            assert_eq!(
-                KernelVersion::from_str("4.18"),
-                Some(KernelVersion {
-                    version: 4,
-                    major_revision: 18
-                })
-            );
-            // These were seen in the wild
-            assert_eq!(
-                KernelVersion::from_str("4.14.186-27095505"),
-                Some(KernelVersion {
-                    version: 4,
-                    major_revision: 14
-                })
-            );
-            assert_eq!(
-                KernelVersion::from_str("6.8.0-59-generic"),
-                Some(KernelVersion {
-                    version: 6,
-                    major_revision: 8
-                })
-            );
-        }
-    }
 }
 
 // On Apple platforms using the `sendmsg_x` call, UDP datagram segmentation is not

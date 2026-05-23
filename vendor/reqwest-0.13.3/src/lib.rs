@@ -351,12 +351,7 @@ fn _assert_impls() {
 }
 
 if_hyper! {
-    #[cfg(test)]
-    #[macro_use]
-    extern crate doc_comment;
 
-    #[cfg(test)]
-    doctest!("../README.md");
 
     pub use self::async_impl::{
         Body, Client, ClientBuilder, Request, RequestBuilder, Response, Upgraded,

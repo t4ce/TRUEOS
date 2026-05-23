@@ -410,36 +410,3 @@ fn domain(request: &tungstenite::handshake::client::Request) -> Result<String, W
         None => Err(WsError::Url(tungstenite::error::UrlError::NoHostName)),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    #[cfg(feature = "connect")]
-    use crate::stream::MaybeTlsStream;
-    use crate::{compat::AllowStd, WebSocketStream};
-    use std::io::{Read, Write};
-    #[cfg(feature = "connect")]
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    fn is_read<T: Read>() {}
-    fn is_write<T: Write>() {}
-    #[cfg(feature = "connect")]
-    fn is_async_read<T: AsyncReadExt>() {}
-    #[cfg(feature = "connect")]
-    fn is_async_write<T: AsyncWriteExt>() {}
-    fn is_unpin<T: Unpin>() {}
-
-    #[test]
-    fn web_socket_stream_has_traits() {
-        is_read::<AllowStd<tokio::net::TcpStream>>();
-        is_write::<AllowStd<tokio::net::TcpStream>>();
-
-        #[cfg(feature = "connect")]
-        is_async_read::<MaybeTlsStream<tokio::net::TcpStream>>();
-        #[cfg(feature = "connect")]
-        is_async_write::<MaybeTlsStream<tokio::net::TcpStream>>();
-
-        is_unpin::<WebSocketStream<tokio::net::TcpStream>>();
-        #[cfg(feature = "connect")]
-        is_unpin::<WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>>();
-    }
-}

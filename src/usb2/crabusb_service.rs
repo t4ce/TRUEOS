@@ -548,6 +548,39 @@ fn observed_port_location(
     }
 }
 
+fn probed_device_root_port(
+    controller_id: usize,
+    ordinal: usize,
+    dev: &crab_usb::ProbedDevice,
+) -> u8 {
+    observed_port_location(
+        controller_id,
+        ordinal,
+        dev.id(),
+        dev.as_device_info().and_then(|info| info.root_port_id()),
+        dev.as_device_info().and_then(|info| info.port_id()),
+    )
+    .root_port_id
+}
+
+fn is_known_keyboard_probe_only(controller_id: usize, devices: &[crab_usb::ProbedDevice]) -> bool {
+    devices.len() == 1
+        && devices.iter().enumerate().any(|(ordinal, dev)| {
+            let desc = dev.descriptor();
+            desc.vendor_id == 0x1B1C
+                && desc.product_id == 0x1B39
+                && probed_device_root_port(controller_id, ordinal, dev) == 3
+        })
+}
+
+fn intel_bind_priority(controller_id: usize, ordinal: usize, dev: &crab_usb::ProbedDevice) -> u8 {
+    match probed_device_root_port(controller_id, ordinal, dev) {
+        26 => 0,
+        3 => 1,
+        _ => 2,
+    }
+}
+
 fn install_event_handler(controller_id: usize, handler: EventHandler) {
     *EVENT_HANDLER[controller_id].lock() = Some(handler);
     EVENT_HANDLER_READY[controller_id].store(true, Ordering::Release);
@@ -583,7 +616,7 @@ async fn probe_and_bind(
     if !quiet_empty {
         crate::log!("crabusb: probe enter ctrl={}\n", info.index);
     }
-    let devices = match host.probe_devices().await {
+    let mut devices = match host.probe_devices().await {
         Ok(devices) => devices,
         Err(err) => {
             crate::log!("crabusb: probe error ctrl={} err={:?}\n", info.index, err);
@@ -595,6 +628,34 @@ async fn probe_and_bind(
             return;
         }
     };
+    if is_known_keyboard_probe_only(info.index, devices.as_slice()) {
+        crate::log!(
+            "crabusb: probe cascade ctrl={} reason=known-keyboard-before-superspeed\n",
+            info.index
+        );
+        match host.probe_devices().await {
+            Ok(followup_devices) => {
+                crate::log!(
+                    "crabusb: probe cascade done ctrl={} devices={}\n",
+                    info.index,
+                    followup_devices.len()
+                );
+                for dev in followup_devices {
+                    if !devices.iter().any(|existing| existing.id() == dev.id()) {
+                        devices.push(dev);
+                    }
+                }
+                devices.sort_by_key(|dev| intel_bind_priority(info.index, 0, dev));
+            }
+            Err(err) => {
+                crate::log!(
+                    "crabusb: probe cascade error ctrl={} err={:?}\n",
+                    info.index,
+                    err
+                );
+            }
+        }
+    }
     if !quiet_empty || !devices.is_empty() {
         crate::log!("crabusb: probe done ctrl={} devices={}\n", info.index, devices.len());
     }
@@ -923,7 +984,7 @@ pub async fn bsp_service(controller_index: usize) {
     const RETRY_MS: u64 = 1000;
     const HOTPLUG_POLL_MS: u64 = 1000;
     const FOLLOWUP_PROBE_MS: u64 = 50;
-    const SETTLED_PROBE_FOLLOWUPS: u8 = 3;
+    const SETTLED_PROBE_FOLLOWUPS: u8 = 0;
     const INTEL_PROBE_SETTLE_MS: u64 = 0;
     const INTEL_REPROBE_MS: u64 = 1500;
     let spawner: Spawner = unsafe { Spawner::for_current_executor().await };
@@ -1030,6 +1091,13 @@ pub async fn bsp_service(controller_index: usize) {
                             );
                         }
                         probe_and_bind(&mut host, info, &spawner, false).await;
+                        if usb_log_all_enabled() {
+                            crate::log!(
+                                "crabusb: settled probe returned controller {} followups_left={}\n",
+                                info.index,
+                                quiet_probe_followups
+                            );
+                        }
                         hotplug_poll_deadline =
                             Instant::now() + EmbassyDuration::from_millis(FOLLOWUP_PROBE_MS);
                         if quiet_probe_followups > 0 {

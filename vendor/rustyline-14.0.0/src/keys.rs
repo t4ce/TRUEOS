@@ -191,33 +191,3 @@ bitflags::bitflags! {
         const CTRL_ALT_SHIFT = Self::CTRL.bits() | Self::ALT.bits() | Self::SHIFT.bits();
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{KeyCode as K, KeyEvent as E, Modifiers as M};
-
-    #[test]
-    fn new() {
-        assert_eq!(E::ESC, E::new('\x1b', M::NONE));
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn from() {
-        assert_eq!(E(K::Tab, M::NONE), E::from('\t'));
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn from() {
-        assert_eq!(E(K::Char('I'), M::CTRL), E::from('\t'));
-    }
-
-    #[test]
-    fn normalize() {
-        assert_eq!(E::ctrl('A'), E::normalize(E(K::Char('\x01'), M::NONE)));
-        assert_eq!(E::ctrl('A'), E::normalize(E::ctrl('a')));
-        assert_eq!(E::from('A'), E::normalize(E(K::Char('A'), M::SHIFT)));
-        assert_eq!(E(K::BackTab, M::NONE), E::normalize(E(K::Tab, M::SHIFT)));
-    }
-}

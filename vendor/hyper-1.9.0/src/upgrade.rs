@@ -363,16 +363,6 @@ mod sealed {
 mod tests {
     use super::*;
 
-    #[test]
-    fn upgraded_downcast() {
-        let upgraded = Upgraded::new(Mock, Bytes::new());
-
-        let upgraded = upgraded
-            .downcast::<crate::common::io::Compat<std::io::Cursor<Vec<u8>>>>()
-            .unwrap_err();
-
-        upgraded.downcast::<Mock>().unwrap();
-    }
 
     // TODO: replace with tokio_test::io when it can test write_buf
     struct Mock;

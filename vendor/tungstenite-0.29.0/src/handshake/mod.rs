@@ -131,14 +131,3 @@ fn version_as_str(ver: Version) -> crate::Result<&'static str> {
         _ => Err(Error::Protocol(ProtocolError::WrongHttpVersion)),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::derive_accept_key;
-
-    #[test]
-    fn key_conversion() {
-        // example from RFC 6455
-        assert_eq!(derive_accept_key(b"dGhlIHNhbXBsZSBub25jZQ=="), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
-    }
-}

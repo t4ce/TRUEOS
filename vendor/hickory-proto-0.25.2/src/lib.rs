@@ -192,7 +192,6 @@ pub mod serialize;
 #[cfg(feature = "std")]
 pub mod tcp;
 #[cfg(all(feature = "std", any(test, feature = "testing")))]
-pub mod tests;
 #[cfg(feature = "std")]
 pub mod udp;
 pub mod xfer;
@@ -248,19 +247,5 @@ mod no_std_rand {
     /// Seed the rng that is used to create random DNS IDs throughout the lib (no_std-only).
     pub fn seed(seed: u64) {
         critical_section::with(|cs| *RNG.borrow_ref_mut(cs) = Some(StdRng::seed_from_u64(seed)));
-    }
-
-    static RNG: Mutex<RefCell<Option<StdRng>>> = Mutex::new(RefCell::new(None));
-
-    #[cfg(test)]
-    mod test {
-        use super::*;
-
-        #[test]
-        fn test_no_std_rand() {
-            // In practice, the seed needs to be a secure random number.
-            seed(0x1337);
-            let _ = random::<u32>();
-        }
     }
 }

@@ -543,5 +543,3 @@ cfg_not_sync! {
 }
 
 /// Unit tests
-#[cfg(test)]
-mod tests;

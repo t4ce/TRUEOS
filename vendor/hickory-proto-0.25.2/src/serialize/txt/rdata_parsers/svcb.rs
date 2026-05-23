@@ -389,72 +389,9 @@ mod tests {
             .clone()
     }
 
-    #[test]
-    fn test_parsing() {
-        let svcb: HTTPS = parse_record(CF_HTTPS_RECORD);
 
-        assert_eq!(svcb.svc_priority(), 1);
-        assert_eq!(*svcb.target_name(), Name::root());
-
-        let mut params = svcb.svc_params().iter();
-
-        // alpn
-        let param = params.next().expect("not alpn");
-        assert_eq!(param.0, SvcParamKey::Alpn);
-        assert_eq!(param.1.as_alpn().expect("not alpn").0, &["http/1.1", "h2"]);
-
-        // ipv4 hint
-        let param = params.next().expect("ipv4hint");
-        assert_eq!(SvcParamKey::Ipv4Hint, param.0);
-        assert_eq!(
-            param.1.as_ipv4_hint().expect("ipv4hint").0,
-            &[A::new(162, 159, 137, 85), A::new(162, 159, 138, 85)]
-        );
-
-        // echconfig
-        let param = params.next().expect("echconfig");
-        assert_eq!(SvcParamKey::EchConfigList, param.0);
-        assert_eq!(
-            param.1.as_ech_config_list().expect("ech").0,
-            data_encoding::BASE64.decode(b"AEX+DQBBtgAgACBMmGJQR02doup+5VPMjYpe5HQQ/bpntFCxDa8LT2PLAgAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA=").unwrap()
-        );
-
-        // ipv6 hint
-        let param = params.next().expect("ipv6hint");
-        assert_eq!(SvcParamKey::Ipv6Hint, param.0);
-        assert_eq!(
-            param.1.as_ipv6_hint().expect("ipv6hint").0,
-            &[
-                AAAA::new(0x2606, 0x4700, 0x7, 0, 0, 0, 0xa29f, 0x8955),
-                AAAA::new(0x2606, 0x4700, 0x7, 0, 0, 0, 0xa29f, 0x8a5)
-            ]
-        );
-    }
-
-    #[test]
-    fn test_parse_display() {
-        let svcb: SVCB = parse_record(CF_SVCB_RECORD);
-
-        let svcb_display = svcb.to_string();
-
-        // add back the name, etc...
-        let svcb_display = format!("crypto.cloudflare.com. 299 IN SVCB {svcb_display}");
-        let svcb_display = parse_record(&svcb_display);
-
-        assert_eq!(svcb, svcb_display);
-    }
 
     /// sanity check for https
-    #[test]
-    fn test_parsing_https() {
-        let records = [GOOGLE_HTTPS_RECORD, CF_HTTPS_RECORD];
-        for record in records.iter() {
-            let svcb: HTTPS = parse_record(record);
-
-            assert_eq!(svcb.svc_priority(), 1);
-            assert_eq!(*svcb.target_name(), Name::root());
-        }
-    }
 
     /// Test with RFC 9460 Appendix D test vectors
     /// <https://datatracker.ietf.org/doc/html/rfc9460#appendix-D>

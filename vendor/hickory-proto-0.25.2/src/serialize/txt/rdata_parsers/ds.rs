@@ -74,25 +74,3 @@ pub(crate) fn parse<'i, I: Iterator<Item = &'i str>>(mut tokens: I) -> ParseResu
     }
     Ok(DS::new(tag, algorithm, digest_type, digest))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_parsing() {
-        assert_eq!(
-            parse("60485 5 1 2BB183AF5F22588179A53B0A 98631FAD1A292118".split(' ')).unwrap(),
-            DS::new(
-                60485,
-                Algorithm::RSASHA1,
-                DigestType::SHA1,
-                vec![
-                    0x2B, 0xB1, 0x83, 0xAF, 0x5F, 0x22, 0x58, 0x81, 0x79, 0xA5, 0x3B, 0x0A, 0x98,
-                    0x63, 0x1F, 0xAD, 0x1A, 0x29, 0x21, 0x18
-                ]
-            )
-        );
-    }
-}

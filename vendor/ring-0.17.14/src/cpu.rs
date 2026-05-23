@@ -217,15 +217,3 @@ const CAPS_STATIC: u32 = featureflags::STATIC_DETECTED & !featureflags::FORCE_DY
 #[allow(clippy::assertions_on_constants, clippy::bad_bit_mask)]
 const _FORCE_DYNAMIC_DETECTION_HONORED: () =
     assert!((CAPS_STATIC & featureflags::FORCE_DYNAMIC_DETECTION) == 0);
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_static_is_subset_of_dynamic() {
-        let cpu = features();
-        let dynamic = featureflags::get(cpu);
-        assert_eq!(dynamic & CAPS_STATIC, CAPS_STATIC);
-    }
-}

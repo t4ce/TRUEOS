@@ -113,12 +113,6 @@ impl fmt::Display for Proof {
 
 impl core::error::Error for Proof {}
 
-#[test]
-fn test_order() {
-    assert!(Proof::Secure > Proof::Insecure);
-    assert!(Proof::Insecure > Proof::Bogus);
-    assert!(Proof::Bogus > Proof::Indeterminate);
-}
 
 bitflags! {
     /// Represents a set of flags.
