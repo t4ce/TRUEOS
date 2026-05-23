@@ -11,7 +11,7 @@
 
 [package]
 edition = "2024"
-rust-version = "1.65"
+rust-version = "1.85"
 name = "svgtypes"
 version = "0.15.3"
 build = false

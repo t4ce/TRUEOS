@@ -11,7 +11,7 @@
 
 [package]
 edition = "2024"
-rust-version = "1.73"
+rust-version = "1.85"
 name = "png"
 version = "0.18.1"
 authors = ["The image-rs Developers"]

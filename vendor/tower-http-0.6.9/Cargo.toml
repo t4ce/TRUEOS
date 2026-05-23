@@ -11,7 +11,7 @@
 
 [package]
 edition = "2024"
-rust-version = "1.64"
+rust-version = "1.85"
 name = "tower-http"
 version = "0.6.9"
 authors = ["Tower Maintainers <team@tower-rs.com>"]

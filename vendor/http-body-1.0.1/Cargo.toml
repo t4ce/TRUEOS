@@ -11,7 +11,7 @@
 
 [package]
 edition = "2024"
-rust-version = "1.49"
+rust-version = "1.85"
 name = "http-body"
 version = "1.0.1"
 authors = [

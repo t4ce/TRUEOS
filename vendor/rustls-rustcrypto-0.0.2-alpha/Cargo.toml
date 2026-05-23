@@ -11,7 +11,7 @@
 
 [package]
 edition = "2024"
-rust-version = "1.75"
+rust-version = "1.85"
 name = "rustls-rustcrypto"
 version = "0.0.2-alpha"
 authors = ["RustCrypto Developers"]

@@ -11,7 +11,7 @@
 
 [package]
 edition = "2024"
-rust-version = "1.71.1"
+rust-version = "1.85"
 name = "hickory-proto"
 version = "0.25.2"
 authors = ["The contributors to Hickory DNS"]

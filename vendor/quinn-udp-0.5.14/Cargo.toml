@@ -11,7 +11,7 @@
 
 [package]
 edition = "2024"
-rust-version = "1.74.1"
+rust-version = "1.85"
 name = "quinn-udp"
 version = "0.5.14"
 build = "build.rs"
