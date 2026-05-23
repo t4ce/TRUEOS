@@ -38,19 +38,37 @@ struct Ui2ShellSelectionState {
     drag_active: bool,
 }
 
-fn ui2_shell_surface_width() -> u32 {
-    UI2_SHELL_VIEW_W
+fn ui2_shell_active_cols() -> usize {
+    crate::shell2::line_width_for_backend(&crate::shell2::UI2_SHELL_BACKEND).max(1)
 }
 
-fn ui2_shell_surface_height() -> u32 {
-    UI2_SHELL_VIEW_H
+fn ui2_shell_cell_width_px() -> usize {
+    ui2_shell_cell_advance_px('W').max(1)
 }
 
-fn ui2_shell_layout_for_viewport(viewport_w: u32, viewport_h: u32) -> (usize, usize) {
-    let cols = ((viewport_w as usize).saturating_mul(UI2_SHELL_BASE_TEXT_COLS))
-        .checked_div(UI2_SHELL_VIEW_W as usize)
-        .unwrap_or(UI2_SHELL_BASE_TEXT_COLS)
-        .max(1);
+fn ui2_shell_surface_width_for_cols(cols: usize) -> u32 {
+    cols.max(1)
+        .saturating_mul(ui2_shell_cell_width_px())
+        .min(u32::MAX as usize) as u32
+}
+
+fn ui2_shell_surface_height_for_rows(rows: usize) -> u32 {
+    rows.max(1)
+        .saturating_mul(ui2_shell_line_height() as usize)
+        .min(u32::MAX as usize) as u32
+}
+
+fn ui2_shell_surface_height_for_viewport(viewport_h: u32) -> u32 {
+    let rows = (viewport_h as usize)
+        .checked_div(ui2_shell_line_height() as usize)
+        .unwrap_or(UI2_SHELL_BASE_TEXT_ROWS)
+        .max(1)
+        .max(UI2_SHELL_BASE_TEXT_ROWS);
+    ui2_shell_surface_height_for_rows(rows)
+}
+
+fn ui2_shell_layout_for_viewport(viewport_h: u32) -> (usize, usize) {
+    let cols = ui2_shell_active_cols();
     let rows = (viewport_h as usize)
         .checked_div(ui2_shell_line_height() as usize)
         .unwrap_or(UI2_SHELL_BASE_TEXT_ROWS)
@@ -189,20 +207,13 @@ fn ui2_shell_position_to_cell(
     };
     row = row.min(rows.saturating_sub(1));
 
-    let mut pen_x = 0usize;
-    for col in 0..cols {
-        let cell = snapshot_cell(snapshot, row, col);
-        let advance_px = ui2_shell_cell_advance_px(cell.ch).max(1);
-        if x < (pen_x.saturating_add(advance_px)) as f32 || col + 1 == cols {
-            return Ui2ShellSelectionCell { row, col };
-        }
-        pen_x = pen_x.saturating_add(advance_px);
-    }
-
-    Ui2ShellSelectionCell {
-        row,
-        col: cols.saturating_sub(1),
-    }
+    let cell_w = ui2_shell_cell_width_px();
+    let col = if x <= 0.0 {
+        0
+    } else {
+        (libm::floorf(x / cell_w as f32) as usize).min(cols.saturating_sub(1))
+    };
+    Ui2ShellSelectionCell { row, col }
 }
 
 fn update_selection_from_mouse(
@@ -290,12 +301,9 @@ fn render_cursor(
     let cols = (snapshot.cols as usize).max(1);
     let cursor_col = (snapshot.cursor_col as usize).min(cols.saturating_sub(1));
     let cursor_row = (snapshot.cursor_row as usize).min((snapshot.rows as usize).saturating_sub(1));
-    let mut x = 0usize;
-    for col in 0..cursor_col {
-        let ch = snapshot_cell(snapshot, cursor_row, col).ch;
-        x = x.saturating_add(ui2_shell_cell_advance_px(ch));
-    }
-    let cursor_w = ui2_shell_cell_advance_px(snapshot_cell(snapshot, cursor_row, cursor_col).ch);
+    let cell_w = ui2_shell_cell_width_px();
+    let x = cursor_col.saturating_mul(cell_w);
+    let cursor_w = cell_w;
     let row_y = cursor_row.saturating_mul(ui2_shell_line_height() as usize);
     let cell = effective_cell_for_render(
         snapshot_cell(snapshot, cursor_row, cursor_col),
@@ -361,7 +369,7 @@ fn render_shell_snapshot_rgba(
         if row_y >= content_h {
             break;
         }
-        let mut pen_x = 0usize;
+        let cell_w = ui2_shell_cell_width_px();
         for col in 0..cols {
             let cell = effective_cell_for_render(
                 snapshot_cell(snapshot, row, col),
@@ -370,7 +378,8 @@ fn render_shell_snapshot_rgba(
                 col,
                 cols,
             );
-            let advance_px = ui2_shell_cell_advance_px(cell.ch);
+            let pen_x = col.saturating_mul(cell_w);
+            let advance_px = cell_w;
             fill_rect_rgba(
                 rgba.as_mut_slice(),
                 content_w,
@@ -393,8 +402,7 @@ fn render_shell_snapshot_rgba(
                     &cell,
                 );
             }
-            pen_x = pen_x.saturating_add(advance_px);
-            if pen_x >= content_w {
+            if pen_x.saturating_add(cell_w) >= content_w {
                 break;
             }
         }
@@ -419,8 +427,9 @@ pub async fn ui2_shell_demo_task() {
         return;
     };
 
-    let content_w = ui2_shell_surface_width();
-    let content_h = ui2_shell_surface_height();
+    let initial_cols = ui2_shell_active_cols().max(UI2_SHELL_BASE_TEXT_COLS);
+    let content_w = ui2_shell_surface_width_for_cols(initial_cols);
+    let content_h = ui2_shell_surface_height_for_viewport(UI2_SHELL_VIEW_H);
     let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::get_or_create_for_hosted_content_with_size(
         "Shell",
         crate::r::ui2::Ui2Rect {
@@ -483,6 +492,7 @@ pub async fn ui2_shell_demo_task() {
     let mut last_blink_on = false;
     let mut selection = Ui2ShellSelectionState::default();
     let mut last_viewport = (0u32, 0u32);
+    let mut last_content_size = (0u32, 0u32);
     let mut attached_layout = None;
     loop {
         if crate::r::spawn_service::task_stop_requested("ui2-shell-demo") {
@@ -497,9 +507,21 @@ pub async fn ui2_shell_demo_task() {
         if viewport != last_viewport {
             last_viewport = viewport;
             viewport_needs_present = true;
-            let _ = surface.bind_hosted_scroll_state(UI2_SHELL_CONTENT_ID, viewport.0, viewport.1);
         }
-        let layout = ui2_shell_layout_for_viewport(viewport.0, viewport.1);
+        let layout = ui2_shell_layout_for_viewport(viewport.1);
+        let content_size = (
+            ui2_shell_surface_width_for_cols(layout.0).max(viewport.0),
+            ui2_shell_surface_height_for_rows(layout.1).max(viewport.1),
+        );
+        if content_size != last_content_size || viewport_needs_present {
+            last_content_size = content_size;
+            viewport_needs_present = true;
+            let _ = surface.bind_hosted_scroll_state(
+                UI2_SHELL_CONTENT_ID,
+                content_size.0,
+                content_size.1,
+            );
+        }
         if attached_layout != Some(layout) {
             let (cols, rows) = layout;
             crate::shell2::ui2_shell_attach_window(surface.window_id(), cols, rows);
@@ -525,13 +547,13 @@ pub async fn ui2_shell_demo_task() {
                     &snapshot,
                     &selection,
                     blink_on,
-                    last_viewport.0.max(1),
-                    last_viewport.1.max(1),
+                    last_content_size.0.max(1),
+                    last_content_size.1.max(1),
                 );
                 if crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
                     surface.tex_id(),
-                    last_viewport.0.max(1),
-                    last_viewport.1.max(1),
+                    last_content_size.0.max(1),
+                    last_content_size.1.max(1),
                     rgba.as_slice(),
                     surface.window_id(),
                     "ui2-shell-demo-present",

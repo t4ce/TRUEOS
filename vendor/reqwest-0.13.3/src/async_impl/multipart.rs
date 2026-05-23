@@ -5,7 +5,10 @@ use core::pin::Pin;
 
 #[cfg(feature = "stream")]
 use std::io;
+#[cfg(all(feature = "stream", any(target_os = "trueos", target_os = "zkvm")))]
+use tokio::path::Path;
 #[cfg(feature = "stream")]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::path::Path;
 
 use bytes::Bytes;

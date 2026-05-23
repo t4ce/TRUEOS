@@ -83,8 +83,10 @@ pub(crate) struct ConnectorBuilder {
     user_agent: Option<HeaderValue>,
     #[cfg(feature = "socks")]
     resolver: Option<DynResolver>,
-    #[cfg(unix)]
+    #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
     unix_socket: Option<Arc<std::path::Path>>,
+    #[cfg(all(unix, any(target_os = "trueos", target_os = "zkvm")))]
+    unix_socket: Option<Arc<tokio::path::Path>>,
     #[cfg(target_os = "windows")]
     windows_named_pipe: Option<Arc<core::ffi::OsStr>>,
 }
@@ -471,8 +473,13 @@ where {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
     pub(crate) fn set_unix_socket(&mut self, path: Option<Arc<std::path::Path>>) {
+        self.unix_socket = path;
+    }
+
+    #[cfg(all(unix, any(target_os = "trueos", target_os = "zkvm")))]
+    pub(crate) fn set_unix_socket(&mut self, path: Option<Arc<tokio::path::Path>>) {
         self.unix_socket = path;
     }
 
@@ -502,8 +509,10 @@ pub(crate) struct ConnectorService {
     #[cfg(feature = "socks")]
     resolver: DynResolver,
     /// If set, this always takes priority over TCP.
-    #[cfg(unix)]
+    #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
     unix_socket: Option<Arc<std::path::Path>>,
+    #[cfg(all(unix, any(target_os = "trueos", target_os = "zkvm")))]
+    unix_socket: Option<Arc<tokio::path::Path>>,
     #[cfg(target_os = "windows")]
     windows_named_pipe: Option<Arc<core::ffi::OsStr>>,
 }
@@ -1383,7 +1392,10 @@ pub(crate) mod sealed {
 // Some sealed things for UDS
 #[cfg(unix)]
 pub(crate) mod uds {
-    use std::path::Path;
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    use tokio::path::{Path, PathBuf};
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    use std::path::{Path, PathBuf};
 
     /// A provider for Unix Domain Socket paths.
     ///
@@ -1417,7 +1429,7 @@ pub(crate) mod uds {
         String,
         &'_ str,
         &'_ Path,
-        std::path::PathBuf,
+        PathBuf,
         std::sync::Arc<Path>,
     ];
 }
