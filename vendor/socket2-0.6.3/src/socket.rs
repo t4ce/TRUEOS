@@ -7,11 +7,11 @@
 // except according to those terms.
 
 use core::fmt;
-use std::io::{self, Read, Write};
+use crate::io::{self, Read, Write};
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
-use std::io::IoSlice;
+use crate::io::IoSlice;
 #[cfg(not(any(target_os = "redox", target_os = "wasi", target_os = "trueos", target_os = "zkvm")))]
-use std::io::IoSliceMut;
+use crate::io::IoSliceMut;
 use core::mem::MaybeUninit;
 #[cfg(not(target_os = "nto"))]
 use std::net::Ipv6Addr;
@@ -62,7 +62,7 @@ use crate::{MaybeUninitSlice, MsgHdr, RecvFlags};
 ///
 /// # Examples
 /// ```no_run
-/// # fn main() -> std::io::Result<()> {
+/// # fn main() -> crate::io::Result<()> {
 /// use std::net::{SocketAddr, TcpListener};
 /// use socket2::{Socket, Domain, Type};
 ///
@@ -2139,7 +2139,7 @@ impl Socket {
     ///
     /// use socket2::{Socket, TcpKeepalive, Domain, Type};
     ///
-    /// # fn main() -> std::io::Result<()> {
+    /// # fn main() -> crate::io::Result<()> {
     /// let socket = Socket::new(Domain::IPV4, Type::STREAM, None)?;
     /// let keepalive = TcpKeepalive::new()
     ///     .with_time(Duration::from_secs(4));

@@ -11,7 +11,8 @@ use std::os::hermit::io::AsRawFd;
 use std::os::windows::io::AsRawSocket;
 #[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{fmt, io};
+use core::fmt;
+use crate::io;
 
 use crate::sys::IoSourceState;
 use crate::{event, Interest, Registry, Token};

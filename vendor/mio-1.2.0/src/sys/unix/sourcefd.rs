@@ -1,4 +1,4 @@
-use std::io;
+use crate::io;
 #[cfg(not(target_os = "hermit"))]
 use std::os::fd::RawFd;
 // TODO: once <https://github.com/rust-lang/rust/issues/126198> is fixed this
@@ -74,7 +74,7 @@ use crate::{event, Interest, Registry, Token};
 /// use mio::wasi::SourceFd;
 ///
 /// use std::os::fd::RawFd;
-/// use std::io;
+/// use crate::io;
 ///
 /// # #[allow(dead_code)]
 /// pub struct MyIo {

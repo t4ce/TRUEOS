@@ -7,7 +7,7 @@
 
 use alloc::{fmt, string::String};
 use core::num::ParseIntError;
-use std::io;
+use crate::io;
 
 use crate::error::ProtoError;
 use http::header::ToStrError;

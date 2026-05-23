@@ -5,7 +5,9 @@ use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 use crate::path::Path;
 #[cfg(all(not(target_os = "wasi"), not(any(target_os = "trueos", target_os = "zkvm"))))]
 use std::path::Path;
-use std::{fmt, io, ptr};
+use core::fmt;
+use crate::io;
+use std::{ptr};
 
 #[cfg(windows)]
 use windows_sys::Win32::Networking::WinSock::SOCKADDR_IN6_0;
@@ -112,9 +114,9 @@ impl SockAddr {
     /// # Examples
     ///
     /// ```
-    /// # fn main() -> std::io::Result<()> {
+    /// # fn main() -> crate::io::Result<()> {
     /// # #[cfg(unix)] {
-    /// use std::io;
+    /// use crate::io;
     /// use std::os::fd::AsRawFd;
     ///
     /// use socket2::{SockAddr, SockAddrStorage, Socket, Domain, Type};
@@ -170,9 +172,9 @@ impl SockAddr {
     /// # Examples
     ///
     /// ```
-    /// # fn main() -> std::io::Result<()> {
+    /// # fn main() -> crate::io::Result<()> {
     /// # #[cfg(unix)] {
-    /// use std::io;
+    /// use crate::io;
     /// use std::os::fd::AsRawFd;
     ///
     /// use socket2::{SockAddr, Socket, Domain, Type};

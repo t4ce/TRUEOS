@@ -5,7 +5,7 @@ use alloc::{
     string::{self, String, ToString},
 };
 use core::{result, str};
-use std::io;
+use crate::io;
 
 use crate::protocol::{frame::coding::Data, Message};
 #[cfg(feature = "handshake")]

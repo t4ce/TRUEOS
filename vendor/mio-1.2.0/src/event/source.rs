@@ -1,6 +1,6 @@
 use crate::{Interest, Registry, Token};
 
-use std::io;
+use crate::io;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use alloc::boxed::Box;
 
@@ -46,7 +46,7 @@ use alloc::boxed::Box;
 /// use mio::event::Source;
 /// use mio::net::TcpStream;
 ///
-/// use std::io;
+/// use crate::io;
 ///
 /// # #[allow(dead_code)]
 /// pub struct MySource {

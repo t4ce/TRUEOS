@@ -5,7 +5,8 @@ use std::os::linux::net::SocketAddrExt;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::FromRawFd;
 use std::os::unix::net::SocketAddr;
-use std::{io, mem, ptr};
+use crate::io;
+use std::{mem, ptr};
 
 pub(crate) mod datagram;
 pub(crate) mod listener;

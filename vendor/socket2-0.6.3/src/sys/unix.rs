@@ -10,7 +10,7 @@ use core::cmp::min;
 #[cfg(not(target_os = "wasi"))]
 use std::ffi::OsStr;
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
-use std::io::IoSlice;
+use crate::io::IoSlice;
 use core::marker::PhantomData;
 use core::mem::{self, size_of, MaybeUninit};
 use std::net::Shutdown;
@@ -56,7 +56,8 @@ use core::ptr;
 use core::time::Duration;
 use std as hostlib;
 use hostlib::time::Instant;
-use std::{io, slice};
+use crate::io;
+use std::{slice};
 
 #[cfg(not(any(
     target_os = "ios",
@@ -328,7 +329,7 @@ macro_rules! syscall {
         #[allow(unused_unsafe)]
         let res = unsafe { libc::$fn($($arg, )*) };
         if res == -1 {
-            Err(std::io::Error::last_os_error())
+            Err(crate::io::Error::last_os_error())
         } else {
             Ok(res)
         }
@@ -2182,7 +2183,7 @@ impl crate::Socket {
     ///
     /// ```
     /// use socket2::{Domain, Socket, Type};
-    /// use std::io::{self, Error, ErrorKind};
+    /// use crate::io::{self, Error, ErrorKind};
     ///
     /// fn enable_freebind(socket: &Socket) -> io::Result<()> {
     ///     match socket.domain()? {

@@ -24,12 +24,12 @@
 //! this crate can be a little wordy, but it should give you maximal flexibility
 //! over configuration of sockets.
 //!
-//! [`EINTR`]: std::io::ErrorKind::Interrupted
+//! [`EINTR`]: crate::io::ErrorKind::Interrupted
 //!
 //! # Examples
 //!
 //! ```no_run
-//! # fn main() -> std::io::Result<()> {
+//! # fn main() -> crate::io::Result<()> {
 //! use std::net::{SocketAddr, TcpListener};
 //! use socket2::{Socket, Domain, Type};
 //!
@@ -163,7 +163,7 @@ pub mod slice {
 }
 
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
-use std::io::IoSlice;
+use crate::io::IoSlice;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::{fmt, mem};
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
@@ -511,7 +511,7 @@ impl RecvFlags {
 
 /// A version of [`IoSliceMut`] that allows the buffer to be uninitialised.
 ///
-/// [`IoSliceMut`]: std::io::IoSliceMut
+/// [`IoSliceMut`]: crate::io::IoSliceMut
 #[repr(transparent)]
 pub struct MaybeUninitSlice<'a>(sys::MaybeUninitSlice<'a>);
 

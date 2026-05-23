@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::io::IoSlice;
+use crate::io::IoSlice;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 

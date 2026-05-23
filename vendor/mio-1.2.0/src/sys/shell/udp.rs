@@ -1,7 +1,7 @@
 #![cfg(not(target_os = "wasi"))]
 #![allow(dead_code)]
 
-use std::io;
+use crate::io;
 use std::net::{self, SocketAddr};
 
 pub fn bind(_: SocketAddr) -> io::Result<net::UdpSocket> {

@@ -2,7 +2,7 @@ use core::fmt;
 #[cfg(feature = "server")]
 use core::future::Future;
 use std::boxed::Box;
-use std::io;
+use crate::io;
 use core::marker::{PhantomData, Unpin};
 use core::pin::Pin;
 use core::task::{Context, Poll};

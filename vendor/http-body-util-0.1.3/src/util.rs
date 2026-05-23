@@ -1,6 +1,6 @@
 use alloc::collections::VecDeque;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::io::IoSlice;
+use crate::io::IoSlice;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 

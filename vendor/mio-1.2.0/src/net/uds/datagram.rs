@@ -2,7 +2,8 @@ use std::net::Shutdown;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::os::unix::net::{self, SocketAddr};
 use std::path::Path;
-use std::{fmt, io};
+use core::fmt;
+use crate::io;
 
 use crate::io_source::IoSource;
 use crate::{event, sys, Interest, Registry, Token};
@@ -134,7 +135,7 @@ impl UnixDatagram {
     /// # use core::error::Error;
     /// #
     /// # fn main() -> Result<(), Box<dyn Error>> {
-    /// use std::io;
+    /// use crate::io;
     /// use std::os::fd::AsRawFd;
     /// use mio::net::UnixDatagram;
     ///

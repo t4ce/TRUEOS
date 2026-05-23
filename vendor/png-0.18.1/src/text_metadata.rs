@@ -24,7 +24,7 @@
 //!
 //!  ```
 //!  use std::fs::File;
-//!  use std::io::BufReader;
+//!  use crate::io::BufReader;
 //!  use core::iter::FromIterator;
 //!  use std::path::PathBuf;
 //!
@@ -51,7 +51,7 @@
 //!  # use png::text_metadata::{ITXtChunk, ZTXtChunk};
 //!  # use std::env;
 //!  # use std::fs::File;
-//!  # use std::io::BufWriter;
+//!  # use crate::io::BufWriter;
 //!  # use core::iter::FromIterator;
 //!  # use std::path::PathBuf;
 //!  # let file = File::create(PathBuf::from_iter(["target", "text_chunk.png"])).unwrap();
@@ -111,7 +111,7 @@ use flate2::write::ZlibEncoder;
 #[cfg(feature = "png-encoding")]
 use flate2::Compression;
 #[cfg(feature = "png-encoding")]
-use std::io::Write;
+use crate::io::Write;
 
 /// Default decompression limit for compressed text chunks.
 pub const DECOMPRESSION_LIMIT: usize = 2097152; // 2 MiB

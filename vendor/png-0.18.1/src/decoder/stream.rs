@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::convert::TryInto;
 use core::error;
 use core::fmt;
-use std::io;
+use crate::io;
 use std::{borrow::Cow, cmp::min};
 
 use crc32fast::Hasher as Crc32;
@@ -120,7 +120,7 @@ pub enum DecodingError {
     ///
     /// Note that some IO errors may be recoverable - decoding may be retried after the
     /// error is resolved.  For example, decoding from a slow stream of data (e.g. decoding from a
-    /// network stream) may occasionally result in [std::io::ErrorKind::UnexpectedEof] kind of
+    /// network stream) may occasionally result in [crate::io::ErrorKind::UnexpectedEof] kind of
     /// error, but decoding can resume when more data becomes available.
     IoError(io::Error),
     /// The input image was not a valid PNG.
@@ -1138,7 +1138,7 @@ impl StreamingDecoder {
                 // `UnexpectedEof` from something like `read_be` is permanent and indicates an
                 // invalid PNG that should be represented as a `FormatError`, rather than as a
                 // (potentially recoverable) `IoError` / `UnexpectedEof`.
-                DecodingError::IoError(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                DecodingError::IoError(e) if e.kind() == crate::io::ErrorKind::UnexpectedEof => {
                     let fmt_err: FormatError =
                         FormatErrorInner::ChunkLengthWrong { kind: type_str }.into();
                     fmt_err.into()
@@ -1559,7 +1559,7 @@ impl StreamingDecoder {
                 1 => true,
                 _ => {
                     return Err(DecodingError::IoError(
-                        std::io::ErrorKind::InvalidData.into(),
+                        crate::io::ErrorKind::InvalidData.into(),
                     ));
                 }
             }
@@ -1569,13 +1569,13 @@ impl StreamingDecoder {
         // such Matrix Coefficients shall be set to 0.
         if matrix_coefficients != 0 {
             return Err(DecodingError::IoError(
-                std::io::ErrorKind::InvalidData.into(),
+                crate::io::ErrorKind::InvalidData.into(),
             ));
         }
 
         if !buf.is_empty() {
             return Err(DecodingError::IoError(
-                std::io::ErrorKind::InvalidData.into(),
+                crate::io::ErrorKind::InvalidData.into(),
             ));
         }
 
@@ -1635,7 +1635,7 @@ impl StreamingDecoder {
         let min_luminance: u32 = buf.read_be()?;
         if !buf.is_empty() {
             return Err(DecodingError::IoError(
-                std::io::ErrorKind::InvalidData.into(),
+                crate::io::ErrorKind::InvalidData.into(),
             ));
         }
         info.mastering_display_color_volume = Some(MasteringDisplayColorVolume {
@@ -1660,7 +1660,7 @@ impl StreamingDecoder {
         let max_frame_average_light_level: u32 = buf.read_be()?;
         if !buf.is_empty() {
             return Err(DecodingError::IoError(
-                std::io::ErrorKind::InvalidData.into(),
+                crate::io::ErrorKind::InvalidData.into(),
             ));
         }
         info.content_light_level = Some(ContentLightLevelInfo {
@@ -1939,7 +1939,7 @@ impl StreamingDecoder {
             ColorType::Indexed => {
                 if info.palette.is_none() {
                     return Err(DecodingError::IoError(
-                        std::io::ErrorKind::InvalidData.into(),
+                        crate::io::ErrorKind::InvalidData.into(),
                     ));
                 };
                 1

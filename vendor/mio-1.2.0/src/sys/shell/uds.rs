@@ -1,5 +1,5 @@
 pub(crate) mod datagram {
-    use std::io;
+    use crate::io;
     use std::os::unix::net::{self, SocketAddr};
 
     pub(crate) fn bind_addr(_: &SocketAddr) -> io::Result<net::UnixDatagram> {
@@ -16,7 +16,7 @@ pub(crate) mod datagram {
 }
 
 pub(crate) mod listener {
-    use std::io;
+    use crate::io;
     use std::os::unix::net::{self, SocketAddr};
 
     use crate::net::UnixStream;
@@ -31,7 +31,7 @@ pub(crate) mod listener {
 }
 
 pub(crate) mod stream {
-    use std::io;
+    use crate::io;
     use std::os::unix::net::{self, SocketAddr};
 
     pub(crate) fn connect_addr(_: &SocketAddr) -> io::Result<net::UnixStream> {

@@ -1,4 +1,4 @@
-use std::io;
+use crate::io;
 use std::net::{self, SocketAddr};
 use std::os::windows::io::AsRawSocket;
 

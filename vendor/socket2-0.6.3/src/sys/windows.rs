@@ -7,7 +7,7 @@
 // except according to those terms.
 
 use core::cmp::min;
-use std::io::{self, IoSlice};
+use crate::io::{self, IoSlice};
 use core::marker::PhantomData;
 use core::mem::{self, size_of, MaybeUninit};
 use std::net::{self, Ipv4Addr, Ipv6Addr, Shutdown};

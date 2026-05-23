@@ -1,4 +1,4 @@
-use std::io;
+use crate::io;
 
 macro_rules! read_bytes_ext {
     ($output_type:ty) => {

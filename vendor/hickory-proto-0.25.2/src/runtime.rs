@@ -7,7 +7,7 @@ use core::future::Future;
 use core::marker::Send;
 use core::pin::Pin;
 use core::time::Duration;
-use std::io;
+use crate::io;
 use std::net::SocketAddr;
 
 use async_trait::async_trait;
@@ -34,12 +34,12 @@ pub fn spawn_bg<F: Future<Output = R> + Send + 'static, R: Send + 'static>(
 pub mod iocompat {
     use core::pin::Pin;
     use core::task::{Context, Poll};
-    use std::io;
+    use crate::io;
 
     use futures_io::{AsyncRead, AsyncWrite};
     use tokio::io::{AsyncRead as TokioAsyncRead, AsyncWrite as TokioAsyncWrite, ReadBuf};
 
-    /// Conversion from `tokio::io::{AsyncRead, AsyncWrite}` to `std::io::{AsyncRead, AsyncWrite}`
+    /// Conversion from `tokio::io::{AsyncRead, AsyncWrite}` to `crate::io::{AsyncRead, AsyncWrite}`
     pub struct AsyncIoTokioAsStd<T: TokioAsyncRead + TokioAsyncWrite>(pub T);
 
     impl<T: TokioAsyncRead + TokioAsyncWrite + Unpin> Unpin for AsyncIoTokioAsStd<T> {}
@@ -72,7 +72,7 @@ pub mod iocompat {
         }
     }
 
-    /// Conversion from `std::io::{AsyncRead, AsyncWrite}` to `tokio::io::{AsyncRead, AsyncWrite}`
+    /// Conversion from `crate::io::{AsyncRead, AsyncWrite}` to `tokio::io::{AsyncRead, AsyncWrite}`
     pub struct AsyncIoStdAsTokio<T: AsyncRead + AsyncWrite>(pub T);
 
     impl<T: AsyncRead + AsyncWrite + Unpin> Unpin for AsyncIoStdAsTokio<T> {}
@@ -361,7 +361,7 @@ pub trait Time {
     async fn timeout<F: 'static + Future + Send>(
         duration: Duration,
         future: F,
-    ) -> Result<F::Output, std::io::Error>;
+    ) -> Result<F::Output, crate::io::Error>;
 }
 
 /// New type which is implemented using tokio::time::{Delay, Timeout}
@@ -379,9 +379,9 @@ impl Time for TokioTime {
     async fn timeout<F: 'static + Future + Send>(
         duration: Duration,
         future: F,
-    ) -> Result<F::Output, std::io::Error> {
+    ) -> Result<F::Output, crate::io::Error> {
         tokio::time::timeout(duration, future)
             .await
-            .map_err(move |_| std::io::Error::new(std::io::ErrorKind::TimedOut, "future timed out"))
+            .map_err(move |_| crate::io::Error::new(crate::io::ErrorKind::TimedOut, "future timed out"))
     }
 }

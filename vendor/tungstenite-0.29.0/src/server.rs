@@ -9,7 +9,7 @@ use crate::handshake::{
 
 use crate::protocol::{WebSocket, WebSocketConfig};
 
-use std::io::{Read, Write};
+use crate::io::{Read, Write};
 
 /// Accept the given Stream as a WebSocket.
 ///

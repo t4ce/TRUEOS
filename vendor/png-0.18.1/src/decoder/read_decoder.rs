@@ -2,7 +2,7 @@ use super::stream::{DecodeOptions, Decoded, DecodingError, FormatErrorInner, Str
 use super::zlib::UnfilterBuf;
 use super::Limits;
 
-use std::io::{BufRead, ErrorKind, Read, Seek};
+use crate::io::{BufRead, ErrorKind, Read, Seek};
 
 use crate::chunk;
 use crate::common::Info;

@@ -349,7 +349,7 @@ impl Error {
         any(feature = "client", feature = "server"),
         any(feature = "http1", feature = "http2")
     ))]
-    pub(super) fn new_io(cause: std::io::Error) -> Error {
+    pub(super) fn new_io(cause: crate::io::Error) -> Error {
         Error::new(Kind::Io).with(cause)
     }
 
@@ -437,7 +437,7 @@ impl Error {
     }
 
     #[cfg(all(any(feature = "client", feature = "server"), feature = "http1"))]
-    pub(super) fn new_shutdown(cause: std::io::Error) -> Error {
+    pub(super) fn new_shutdown(cause: crate::io::Error) -> Error {
         Error::new(Kind::Shutdown).with(cause)
     }
 

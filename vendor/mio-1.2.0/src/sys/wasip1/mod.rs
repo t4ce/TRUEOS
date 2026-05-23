@@ -14,7 +14,7 @@
 //! In summary, this only (barely) works using a single thread.
 
 use core::cmp::min;
-use std::io;
+use crate::io;
 #[cfg(all(feature = "net", debug_assertions))]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -25,7 +25,7 @@ use crate::{Interest, Token};
 
 cfg_net! {
     pub(crate) mod tcp {
-        use std::io;
+        use crate::io;
         use std::net::{self, SocketAddr};
 
         pub(crate) fn accept(listener: &net::TcpListener) -> io::Result<(net::TcpStream, SocketAddr)> {

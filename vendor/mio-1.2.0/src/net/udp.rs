@@ -18,7 +18,9 @@ use std::os::hermit::io::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, Owned
 use std::os::windows::io::{
     AsRawSocket, AsSocket, BorrowedSocket, FromRawSocket, IntoRawSocket, OwnedSocket, RawSocket,
 };
-use std::{fmt, io, net};
+use core::fmt;
+use crate::io;
+use std::{net};
 
 use crate::io_source::IoSource;
 use crate::{event, sys, Interest, Registry, Token};
@@ -581,7 +583,7 @@ impl UdpSocket {
     /// # use core::error::Error;
     /// #
     /// # fn main() -> Result<(), Box<dyn Error>> {
-    /// use std::io;
+    /// use crate::io;
     /// #[cfg(any(unix, target_os = "wasi"))]
     /// use std::os::fd::AsRawFd;
     /// #[cfg(windows)]

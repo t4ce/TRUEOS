@@ -1,6 +1,6 @@
 use core::cmp;
 use core::fmt;
-use std::io::{self, IoSlice};
+use crate::io::{self, IoSlice};
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use alloc::vec::Vec;

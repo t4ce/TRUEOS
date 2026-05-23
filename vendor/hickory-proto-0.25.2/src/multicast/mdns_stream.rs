@@ -10,7 +10,7 @@ use alloc::sync::Arc;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use std::io;
+use crate::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use futures_util::stream::{Stream, StreamExt};

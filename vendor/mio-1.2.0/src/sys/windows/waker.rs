@@ -3,7 +3,7 @@ use crate::sys::windows::Selector;
 use crate::Token;
 
 use super::iocp::CompletionPort;
-use std::io;
+use crate::io;
 use std::sync::Arc;
 
 #[derive(Debug)]

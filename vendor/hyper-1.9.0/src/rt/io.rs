@@ -25,7 +25,7 @@ use alloc::boxed::Box;
 
 /// Reads bytes from a source.
 ///
-/// This trait is similar to `std::io::Read`, but supports asynchronous reads.
+/// This trait is similar to `crate::io::Read`, but supports asynchronous reads.
 ///
 /// # Implementing `Read`
 ///
@@ -37,7 +37,7 @@ use alloc::boxed::Box;
 /// use hyper::rt::{Read, ReadBufCursor};
 /// use core::pin::Pin;
 /// use core::task::{Context, Poll};
-/// use std::io;
+/// use crate::io;
 ///
 /// struct MyReader {
 ///     data: Vec<u8>,
@@ -86,12 +86,12 @@ pub trait Read {
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: ReadBufCursor<'_>,
-    ) -> Poll<Result<(), std::io::Error>>;
+    ) -> Poll<Result<(), crate::io::Error>>;
 }
 
 /// Write bytes asynchronously.
 ///
-/// This trait is similar to `std::io::Write`, but for asynchronous writes.
+/// This trait is similar to `crate::io::Write`, but for asynchronous writes.
 pub trait Write {
     /// Attempt to write bytes from `buf` into the destination.
     ///
@@ -107,7 +107,7 @@ pub trait Write {
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
-    ) -> Poll<Result<usize, std::io::Error>>;
+    ) -> Poll<Result<usize, crate::io::Error>>;
 
     /// Attempts to flush the object.
     ///
@@ -116,13 +116,13 @@ pub trait Write {
     /// If flushing cannot immediately complete, this method returns
     /// `Poll::Pending` and arranges for the current task (via `cx.waker()`) to
     /// receive a notification when the object can make progress.
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>>;
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), crate::io::Error>>;
 
     /// Attempts to shut down this writer.
     fn poll_shutdown(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Result<(), std::io::Error>>;
+    ) -> Poll<Result<(), crate::io::Error>>;
 
     /// Returns whether this writer has an efficient `poll_write_vectored`
     /// implementation.
@@ -136,8 +136,8 @@ pub trait Write {
     fn poll_write_vectored(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        bufs: &[std::io::IoSlice<'_>],
-    ) -> Poll<Result<usize, std::io::Error>> {
+        bufs: &[crate::io::IoSlice<'_>],
+    ) -> Poll<Result<usize, crate::io::Error>> {
         let buf = bufs
             .iter()
             .find(|b| !b.is_empty())
@@ -391,7 +391,7 @@ macro_rules! deref_async_read {
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
             buf: ReadBufCursor<'_>,
-        ) -> Poll<std::io::Result<()>> {
+        ) -> Poll<crate::io::Result<()>> {
             Pin::new(&mut **self).poll_read(cx, buf)
         }
     };
@@ -414,7 +414,7 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: ReadBufCursor<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    ) -> Poll<crate::io::Result<()>> {
         pin_as_deref_mut(self).poll_read(cx, buf)
     }
 }
@@ -425,15 +425,15 @@ macro_rules! deref_async_write {
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
             buf: &[u8],
-        ) -> Poll<std::io::Result<usize>> {
+        ) -> Poll<crate::io::Result<usize>> {
             Pin::new(&mut **self).poll_write(cx, buf)
         }
 
         fn poll_write_vectored(
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
-            bufs: &[std::io::IoSlice<'_>],
-        ) -> Poll<std::io::Result<usize>> {
+            bufs: &[crate::io::IoSlice<'_>],
+        ) -> Poll<crate::io::Result<usize>> {
             Pin::new(&mut **self).poll_write_vectored(cx, bufs)
         }
 
@@ -441,14 +441,14 @@ macro_rules! deref_async_write {
             (**self).is_write_vectored()
         }
 
-        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<crate::io::Result<()>> {
             Pin::new(&mut **self).poll_flush(cx)
         }
 
         fn poll_shutdown(
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
-        ) -> Poll<std::io::Result<()>> {
+        ) -> Poll<crate::io::Result<()>> {
             Pin::new(&mut **self).poll_shutdown(cx)
         }
     };
@@ -471,15 +471,15 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
+    ) -> Poll<crate::io::Result<usize>> {
         pin_as_deref_mut(self).poll_write(cx, buf)
     }
 
     fn poll_write_vectored(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        bufs: &[std::io::IoSlice<'_>],
-    ) -> Poll<std::io::Result<usize>> {
+        bufs: &[crate::io::IoSlice<'_>],
+    ) -> Poll<crate::io::Result<usize>> {
         pin_as_deref_mut(self).poll_write_vectored(cx, bufs)
     }
 
@@ -487,11 +487,11 @@ where
         (**self).is_write_vectored()
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<crate::io::Result<()>> {
         pin_as_deref_mut(self).poll_flush(cx)
     }
 
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<crate::io::Result<()>> {
         pin_as_deref_mut(self).poll_shutdown(cx)
     }
 }

@@ -5,7 +5,7 @@
 //! accessible as a cursor for reading bytes.
 
 use alloc::{boxed::Box, vec::Vec};
-use std::io::{Cursor, Read, Result as IoResult};
+use crate::io::{Cursor, Read, Result as IoResult};
 
 use bytes::Buf;
 
