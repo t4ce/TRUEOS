@@ -10,7 +10,7 @@
 //! Open the given URL in the default web browser, without blocking.
 //!
 //! ```no_run
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! open::that("http://rust-lang.org")?;
 //! # Ok(())
 //! # }
@@ -19,7 +19,7 @@
 //! Alternatively, specify the program to be used to open the path or URL.
 //!
 //! ```no_run
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! open::with("http://rust-lang.org", "firefox")?;
 //! # Ok(())
 //! # }
@@ -28,7 +28,7 @@
 //! Or obtain the commands to launch a file or path without running them.
 //!
 //! ```no_run
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! let cmds = open::commands("http://rust-lang.org")[0].status()?;
 //! # Ok(())
 //! # }
@@ -37,7 +37,7 @@
 //! It's also possible to obtain a command that can be used to open a path in an application.
 //!
 //! ```no_run
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! let status = open::with_command("http://rust-lang.org", "firefox").status()?;
 //! # Ok(())
 //! # }
@@ -219,7 +219,7 @@ pub fn with(path: impl AsRef<OsStr>, app: impl Into<String>) -> io::Result<()> {
 /// # Examples
 ///
 /// ```no_run
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # fn main() -> Result<(), Box<dyn core::error::Error>> {
 /// let path = "http://rust-lang.org";
 /// assert!(open::commands(path)[0].status()?.success());
 /// # Ok(())
@@ -234,7 +234,7 @@ pub fn commands(path: impl AsRef<OsStr>) -> Vec<Command> {
 /// # Examples
 ///
 /// ```no_run
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # fn main() -> Result<(), Box<dyn core::error::Error>> {
 /// let path = "http://rust-lang.org";
 /// assert!(open::with_command(path, "app").status()?.success());
 /// # Ok(())

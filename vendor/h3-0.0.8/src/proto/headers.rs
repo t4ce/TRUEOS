@@ -457,7 +457,7 @@ impl HeaderError {
     }
 }
 
-impl std::error::Error for HeaderError {}
+impl core::error::Error for HeaderError {}
 
 impl fmt::Display for HeaderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

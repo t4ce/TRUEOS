@@ -304,7 +304,7 @@ pub use self::ipsec_esp::{Packet as IpSecEspPacket, Repr as IpSecEspRepr};
 pub struct Error;
 
 #[cfg(feature = "std")]
-impl std::error::Error for Error {}
+impl core::error::Error for Error {}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

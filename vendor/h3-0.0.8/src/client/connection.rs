@@ -51,7 +51,7 @@ use super::stream::RequestStream;
 /// # use h3::{quic, client::*};
 /// # use http::{Request, Response};
 /// # use bytes::Buf;
-/// # async fn doc<T,B>(mut send_request: SendRequest<T, B>) -> Result<(), Box<dyn std::error::Error>>
+/// # async fn doc<T,B>(mut send_request: SendRequest<T, B>) -> Result<(), Box<dyn core::error::Error>>
 /// # where
 /// #     T: quic::OpenStreams<B>,
 /// #     B: Buf,
@@ -77,7 +77,7 @@ use super::stream::RequestStream;
 /// # use h3::{quic, client::*};
 /// # use http::{Request, Response, HeaderMap};
 /// # use bytes::{Buf, Bytes};
-/// # async fn doc<T,B>(mut send_request: SendRequest<T, Bytes>) -> Result<(), Box<dyn std::error::Error>>
+/// # async fn doc<T,B>(mut send_request: SendRequest<T, Bytes>) -> Result<(), Box<dyn core::error::Error>>
 /// # where
 /// #     T: quic::OpenStreams<Bytes>,
 /// # {
@@ -289,7 +289,7 @@ where
 /// # use h3::{client::*, quic};
 /// # use tokio::task::JoinHandle;
 /// # async fn doc<C, B>(mut connection: Connection<C, B>)
-/// #    -> JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>>
+/// #    -> JoinHandle<Result<(), Box<dyn core::error::Error + Send + Sync>>>
 /// # where
 /// #    C: quic::Connection<B> + Send + 'static,
 /// #    C::SendStream: Send + 'static,
@@ -299,7 +299,7 @@ where
 /// // Run the driver on a different task
 /// tokio::spawn(async move {
 ///     future::poll_fn(|cx| connection.poll_close(cx)).await;
-///     Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+///     Ok::<(), Box<dyn core::error::Error + Send + Sync>>(())
 /// })
 /// # }
 /// ```
@@ -314,7 +314,7 @@ where
 /// # use h3::client::SendRequest;
 /// # use tokio::{self, sync::oneshot, task::JoinHandle};
 /// # async fn doc<C, B>(mut connection: Connection<C, B>)
-/// #    -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+/// #    -> Result<(), Box<dyn core::error::Error + Send + Sync>>
 /// # where
 /// #    C: quic::Connection<B> + Send + 'static,
 /// #    C::SendStream: Send + 'static,
@@ -338,7 +338,7 @@ where
 ///         }
 ///     };
 ///
-///     Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+///     Ok::<(), Box<dyn core::error::Error + Send + Sync>>(())
 /// });
 ///
 /// // Do client things, wait for close condition...

@@ -1,11 +1,11 @@
 use alloc::boxed::Box;
 use core::alloc::Layout;
 use core::future::Future;
-use std::panic::AssertUnwindSafe;
+use core::panic::AssertUnwindSafe;
 use core::pin::Pin;
 use core::ptr::{self, NonNull};
 use core::task::{Context, Poll};
-use std::{fmt, panic};
+use core::{fmt, panic};
 
 /// A reusable `Pin<Box<dyn Future<Output = T> + Send>>`.
 ///

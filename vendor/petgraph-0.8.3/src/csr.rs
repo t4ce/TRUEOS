@@ -37,7 +37,7 @@ pub enum CsrError {
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for CsrError {}
+impl core::error::Error for CsrError {}
 
 #[cfg(not(feature = "std"))]
 impl core::error::Error for CsrError {}

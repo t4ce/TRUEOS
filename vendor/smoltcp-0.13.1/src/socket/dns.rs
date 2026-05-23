@@ -50,7 +50,7 @@ impl core::fmt::Display for StartQueryError {
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for StartQueryError {}
+impl core::error::Error for StartQueryError {}
 
 /// Error returned by [`Socket::get_query_result`]
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -72,7 +72,7 @@ impl core::fmt::Display for GetQueryResultError {
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for GetQueryResultError {}
+impl core::error::Error for GetQueryResultError {}
 
 /// State for an in-progress DNS query.
 ///

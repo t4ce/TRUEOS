@@ -1,4 +1,4 @@
-use std::{error, fmt};
+use core::{error, fmt};
 
 /// Error returned if the inner [`Service`] has not been set.
 ///

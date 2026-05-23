@@ -5,7 +5,8 @@
 //! `redirect::Policy` can be used with a `ClientBuilder`.
 
 use core::fmt;
-use std::{error::Error as StdError, sync::Arc};
+use core::error::Error as StdError;
+use std::sync::Arc;
 
 use crate::header::{AUTHORIZATION, COOKIE, PROXY_AUTHORIZATION, REFERER, WWW_AUTHENTICATE};
 use http::{HeaderMap, HeaderValue};

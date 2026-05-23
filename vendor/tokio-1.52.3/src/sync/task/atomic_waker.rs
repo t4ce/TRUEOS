@@ -5,7 +5,8 @@ use crate::loom::hint;
 use crate::loom::sync::atomic::AtomicUsize;
 
 use core::fmt;
-use std::panic::{resume_unwind, AssertUnwindSafe, RefUnwindSafe, UnwindSafe};
+use core::panic::{AssertUnwindSafe, RefUnwindSafe, UnwindSafe};
+use std::panic::resume_unwind;
 use core::sync::atomic::Ordering::{AcqRel, Acquire, Release};
 use core::task::Waker;
 

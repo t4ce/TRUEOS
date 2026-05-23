@@ -423,7 +423,7 @@ impl std::fmt::Display for NoInitialCipherSuite {
     }
 }
 
-impl std::error::Error for NoInitialCipherSuite {}
+impl core::error::Error for NoInitialCipherSuite {}
 
 /// A QUIC-compatible TLS server configuration
 ///

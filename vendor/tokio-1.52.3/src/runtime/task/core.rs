@@ -31,7 +31,7 @@ use crate::util::linked_list;
 
 use core::num::NonZeroU64;
 #[cfg(tokio_unstable)]
-use std::panic::Location;
+use core::panic::Location;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::task::{Context, Poll, Waker};

@@ -516,9 +516,9 @@ impl Drop for Runtime {
     }
 }
 
-impl std::panic::UnwindSafe for Runtime {}
+impl core::panic::UnwindSafe for Runtime {}
 
-impl std::panic::RefUnwindSafe for Runtime {}
+impl core::panic::RefUnwindSafe for Runtime {}
 
 fn display_eq(d: impl core::fmt::Display, s: &str) -> bool {
     use core::fmt::Write;

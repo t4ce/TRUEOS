@@ -69,7 +69,7 @@
 //! use h2::client;
 //!
 //! use http::{Request, Method};
-//! use std::error::Error;
+//! use core::error::Error;
 //! use tokio::net::TcpStream;
 //!
 //! #[tokio::main]

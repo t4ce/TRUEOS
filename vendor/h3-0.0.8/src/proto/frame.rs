@@ -27,7 +27,7 @@ pub enum FrameError {
     InvalidPushId(InvalidPushId),
 }
 
-impl std::error::Error for FrameError {}
+impl core::error::Error for FrameError {}
 
 impl fmt::Display for FrameError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -526,7 +526,7 @@ pub enum SettingsError {
     InvalidSettingValue(SettingId, u64),
 }
 
-impl std::error::Error for SettingsError {}
+impl core::error::Error for SettingsError {}
 
 impl fmt::Display for SettingsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

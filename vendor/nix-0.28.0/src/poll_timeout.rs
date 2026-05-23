@@ -55,7 +55,7 @@ impl std::fmt::Display for PollTimeoutTryFromError {
     }
 }
 
-impl std::error::Error for PollTimeoutTryFromError {}
+impl core::error::Error for PollTimeoutTryFromError {}
 
 impl<T: Into<PollTimeout>> From<Option<T>> for PollTimeout {
     fn from(x: Option<T>) -> Self {

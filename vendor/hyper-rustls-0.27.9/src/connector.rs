@@ -17,7 +17,7 @@ use crate::stream::MaybeHttpsStream;
 
 pub(crate) mod builder;
 
-type BoxError = Box<dyn std::error::Error + Send + Sync>;
+type BoxError = Box<dyn core::error::Error + Send + Sync>;
 
 /// A Connector for the `https` scheme.
 #[derive(Clone)]
@@ -154,7 +154,7 @@ impl ResolveServerName for DefaultServerNameResolver {
     fn resolve(
         &self,
         uri: &Uri,
-    ) -> Result<ServerName<'static>, Box<dyn std::error::Error + Sync + Send>> {
+    ) -> Result<ServerName<'static>, Box<dyn core::error::Error + Sync + Send>> {
         let mut hostname = uri.host().unwrap_or_default();
 
         // Remove square brackets around IPv6 address.
@@ -185,7 +185,7 @@ impl ResolveServerName for FixedServerNameResolver {
     fn resolve(
         &self,
         _: &Uri,
-    ) -> Result<ServerName<'static>, Box<dyn std::error::Error + Sync + Send>> {
+    ) -> Result<ServerName<'static>, Box<dyn core::error::Error + Sync + Send>> {
         Ok(self.name.clone())
     }
 }
@@ -193,12 +193,12 @@ impl ResolveServerName for FixedServerNameResolver {
 impl<F, E> ResolveServerName for F
 where
     F: Fn(&Uri) -> Result<ServerName<'static>, E>,
-    E: Into<Box<dyn std::error::Error + Sync + Send>>,
+    E: Into<Box<dyn core::error::Error + Sync + Send>>,
 {
     fn resolve(
         &self,
         uri: &Uri,
-    ) -> Result<ServerName<'static>, Box<dyn std::error::Error + Sync + Send>> {
+    ) -> Result<ServerName<'static>, Box<dyn core::error::Error + Sync + Send>> {
         self(uri).map_err(Into::into)
     }
 }
@@ -209,7 +209,7 @@ pub trait ResolveServerName {
     fn resolve(
         &self,
         uri: &Uri,
-    ) -> Result<ServerName<'static>, Box<dyn std::error::Error + Sync + Send>>;
+    ) -> Result<ServerName<'static>, Box<dyn core::error::Error + Sync + Send>>;
 }
 
 #[cfg(all(

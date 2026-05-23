@@ -41,7 +41,7 @@ pub enum DecoderError {
     BufSize(TryFromIntError),
 }
 
-impl std::error::Error for DecoderError {}
+impl core::error::Error for DecoderError {}
 
 impl core::fmt::Display for DecoderError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> fmt::Result {

@@ -1,7 +1,7 @@
 //! Contains error type for handling I/O and Errno errors
 #[cfg(windows)]
 use std::char;
-use std::error::Error;
+use core::error::Error;
 use std::fmt;
 use std::io;
 

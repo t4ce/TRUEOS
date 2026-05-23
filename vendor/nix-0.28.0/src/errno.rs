@@ -14,7 +14,8 @@
 use crate::Result;
 use cfg_if::cfg_if;
 use libc::{c_int, c_void};
-use std::{error, fmt, io};
+use core::{error, fmt};
+use std::io;
 
 pub use self::consts::*;
 

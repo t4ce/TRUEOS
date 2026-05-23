@@ -11,7 +11,7 @@ use core::{fmt, num::NonZeroU32};
 ///
 /// *If this crate's `"std"` Cargo feature is enabled*, then:
 /// - [`getrandom::Error`][Error] implements
-///   [`std::error::Error`](https://doc.rust-lang.org/std/error/trait.Error.html)
+///   [`core::error::Error`](https://doc.rust-lang.org/std/error/trait.Error.html)
 /// - [`std::io::Error`](https://doc.rust-lang.org/std/io/struct.Error.html) implements
 ///   [`From<getrandom::Error>`](https://doc.rust-lang.org/std/convert/trait.From.html).
 #[derive(Copy, Clone, Eq, PartialEq)]

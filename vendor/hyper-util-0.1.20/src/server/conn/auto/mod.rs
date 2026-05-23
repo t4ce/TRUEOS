@@ -10,7 +10,7 @@ use core::marker::PhantomPinned;
 use core::mem::MaybeUninit;
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};
-use std::error::Error as StdError;
+use core::error::Error as StdError;
 
 use bytes::Bytes;
 use http::{Request, Response};

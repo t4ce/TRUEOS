@@ -200,7 +200,7 @@ pub enum MatrixError {
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for MatrixError {}
+impl core::error::Error for MatrixError {}
 
 #[cfg(not(feature = "std"))]
 impl core::error::Error for MatrixError {}

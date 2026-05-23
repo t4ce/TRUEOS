@@ -147,9 +147,9 @@ pub const fn compile_time_assert_send<T: Send>() {}
 pub const fn compile_time_assert_sync<T: Sync>() {}
 
 /// `compile_time_assert_std_error_error::<T>();` fails to compile if `T`
-/// doesn't implement `std::error::Error`.
+/// doesn't implement `core::error::Error`.
 #[cfg(feature = "std")]
-pub const fn compile_time_assert_std_error_error<T: std::error::Error>() {}
+pub const fn compile_time_assert_std_error_error<T: core::error::Error>() {}
 
 /// A test case. A test case consists of a set of named attributes. Every
 /// attribute in the test case must be consumed exactly once; this helps catch

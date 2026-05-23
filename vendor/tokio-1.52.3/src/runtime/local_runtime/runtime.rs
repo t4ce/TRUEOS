@@ -394,6 +394,6 @@ impl Drop for LocalRuntime {
     }
 }
 
-impl std::panic::UnwindSafe for LocalRuntime {}
+impl core::panic::UnwindSafe for LocalRuntime {}
 
-impl std::panic::RefUnwindSafe for LocalRuntime {}
+impl core::panic::RefUnwindSafe for LocalRuntime {}

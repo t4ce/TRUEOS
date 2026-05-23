@@ -1,6 +1,6 @@
 use std::env;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn core::error::Error>> {
     let mut args = env::args();
     let path_or_url = match args.nth(1) {
         Some(arg) => arg,

@@ -37,7 +37,7 @@ mod h2_common {
 mod h2_client {
     use alloc::boxed::Box;
     use core::future::Future;
-    use std::error::Error;
+    use core::error::Error;
 
     use crate::rt::{Read, Write};
     use crate::{proto::h2::client::H2ClientFuture, rt::Executor};
