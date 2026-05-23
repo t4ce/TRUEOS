@@ -4,10 +4,11 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::convert::TryFrom;
 use core::error::Error;
-use core::fmt::Write;
+use ::core::fmt;
+use ::core::fmt::Write;
 use core::hash::{Hash, Hasher};
 use core::str::FromStr;
-use std::{cmp, fmt, str};
+use std::{cmp, str};
 
 use crate::header::name::HeaderName;
 
@@ -440,7 +441,6 @@ from_integers! {
     from_isize: isize => 20
 }
 
-
 impl FromStr for HeaderValue {
     type Err = InvalidHeaderValue;
 
@@ -500,7 +500,6 @@ impl TryFrom<Vec<u8>> for HeaderValue {
         HeaderValue::from_shared(vec.into())
     }
 }
-
 
 const fn is_visible_ascii(b: u8) -> bool {
     b >= 32 && b < 127 || b == b'\t'
@@ -697,5 +696,3 @@ impl<'a> PartialOrd<HeaderValue> for &'a str {
         self.as_bytes().partial_cmp(other.as_bytes())
     }
 }
-
-

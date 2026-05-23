@@ -1,12 +1,13 @@
 use super::{IntoResponse, Response};
+use alloc::string::ToString;
+use ::core::fmt;
+use core::option::Option::{self, Some};
+use core::result::Result::{self, Err, Ok};
 use http::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Extensions, StatusCode,
 };
-use alloc::string::ToString;
-use core::option::Option::{self, Some};
-use core::result::Result::{self, Err, Ok};
-use std::{convert::Infallible, fmt};
+use std::convert::Infallible;
 
 /// Trait for adding headers and extensions to a response.
 ///

@@ -5,9 +5,10 @@
 #[allow(unused_imports)]
 use crate::runtime::prelude::*;
 
-use crate::task::Id;
-use std::{fmt, future::Future};
 use crate::path::{Path, PathBuf};
+use crate::task::Id;
+use ::core::fmt;
+use std::future::Future;
 
 pub use crate::runtime::task::trace::{trace_with, Root, TraceMeta};
 
@@ -174,7 +175,7 @@ impl Backtrace {
 ///
 /// <div class="warning">
 ///
-/// Resolving a backtrace, either via the [`Display`][core::fmt::Display] impl or via
+/// Resolving a backtrace, either via the [`Display`][::core::fmt::Display] impl or via
 /// [`resolve_backtraces`][Trace::resolve_backtraces], parses debuginfo, which is
 /// possibly a CPU-expensive operation that can take a platform-specific but
 /// long time to run - often over 100 milliseconds, especially if the current

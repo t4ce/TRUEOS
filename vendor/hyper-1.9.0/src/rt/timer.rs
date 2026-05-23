@@ -59,13 +59,9 @@
 //! }
 //! ```
 
-use std::{
-    any::TypeId,
-    future::Future,
-    pin::Pin,
-};
-use alloc::boxed::Box;
 use crate::time::{Duration, Instant};
+use alloc::boxed::Box;
+use std::{any::TypeId, future::Future, pin::Pin};
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn instant_now() -> Instant {

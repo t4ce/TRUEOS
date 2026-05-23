@@ -626,8 +626,8 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     /// #   Parse(core::num::ParseIntError)
     /// # }
     /// #
-    /// # impl core::fmt::Display for DbError {
-    /// #    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { core::fmt::Debug::fmt(self, f) }
+    /// # impl ::core::fmt::Display for DbError {
+    /// #    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result { ::core::fmt::Debug::fmt(self, f) }
     /// # }
     /// # impl core::error::Error for DbError {}
     /// # impl Service<u32> for DatabaseService {
@@ -698,8 +698,8 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     /// # enum DbError {
     /// #   Rejected
     /// # }
-    /// # impl core::fmt::Display for DbError {
-    /// #    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { core::fmt::Debug::fmt(self, f) }
+    /// # impl ::core::fmt::Display for DbError {
+    /// #    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result { ::core::fmt::Debug::fmt(self, f) }
     /// # }
     /// # impl core::error::Error for DbError {}
     /// #

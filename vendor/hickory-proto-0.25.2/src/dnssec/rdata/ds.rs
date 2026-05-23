@@ -9,7 +9,7 @@
 
 use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
-use core::fmt::{self, Display, Formatter};
+use ::core::fmt::{self, Display, Formatter};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

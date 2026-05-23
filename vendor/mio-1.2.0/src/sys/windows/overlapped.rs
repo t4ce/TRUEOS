@@ -1,7 +1,7 @@
 use crate::sys::windows::Event;
 
 use core::cell::UnsafeCell;
-use core::fmt;
+use ::core::fmt;
 
 use windows_sys::Win32::System::IO::{OVERLAPPED, OVERLAPPED_ENTRY};
 

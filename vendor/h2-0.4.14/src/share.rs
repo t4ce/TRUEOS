@@ -5,7 +5,7 @@ use crate::proto::{self, WindowSize};
 use bytes::{Buf, Bytes};
 use http::HeaderMap;
 
-use std::fmt;
+use ::core::fmt;
 #[cfg(feature = "stream")]
 use core::pin::Pin;
 use core::task::{Context, Poll};

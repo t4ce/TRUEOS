@@ -12,7 +12,7 @@
 use num_traits::Float;
 use crate::{Distribution, Exp1, Gamma, Open01, StandardNormal};
 use rand::Rng;
-use core::fmt;
+use ::core::fmt;
 use alloc::{boxed::Box, vec, vec::Vec};
 
 /// The Dirichlet distribution `Dirichlet(alpha)`.

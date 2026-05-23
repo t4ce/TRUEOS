@@ -1,6 +1,6 @@
 use alloc::boxed::Box;
 use core::error::Error;
-use core::fmt::Debug;
+use ::core::fmt::Debug;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 

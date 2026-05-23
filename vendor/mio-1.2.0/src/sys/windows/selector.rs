@@ -11,17 +11,17 @@ cfg_net! {
 }
 
 use super::iocp::{CompletionPort, CompletionStatus};
-use std::collections::VecDeque;
-use core::ffi::c_void;
 use crate::io;
+use core::ffi::c_void;
 use core::marker::PhantomPinned;
-use std::os::windows::io::RawSocket;
 use core::pin::Pin;
 #[cfg(debug_assertions)]
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use core::sync::atomic::AtomicUsize;
+use core::sync::atomic::{AtomicBool, Ordering};
 use core::time::Duration;
+use std::collections::VecDeque;
+use std::os::windows::io::RawSocket;
+use std::sync::{Arc, Mutex};
 
 use windows_sys::Win32::Foundation::{
     ERROR_INVALID_HANDLE, ERROR_IO_PENDING, HANDLE, STATUS_CANCELLED, WAIT_TIMEOUT,

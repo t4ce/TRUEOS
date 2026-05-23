@@ -1,7 +1,8 @@
 //! Error types for the `Buffer` middleware.
 
 use crate::BoxError;
-use std::{fmt, sync::Arc};
+use ::core::fmt;
+use std::sync::Arc;
 
 /// An error produced by a [`Service`] wrapped by a [`Buffer`]
 ///

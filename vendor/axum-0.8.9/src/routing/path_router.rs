@@ -1,14 +1,15 @@
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use crate::prelude::rust_2021::*;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-use alloc::borrow::ToOwned;
 use crate::{
     extract::{nested_path::SetNestedPath, Request},
     handler::Handler,
 };
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::borrow::ToOwned;
 use axum_core::response::IntoResponse;
+use ::core::fmt;
 use matchit::MatchError;
-use std::{borrow::Cow, collections::HashMap, convert::Infallible, fmt, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, convert::Infallible, sync::Arc};
 use tower_layer::Layer;
 use tower_service::Service;
 
@@ -58,17 +59,13 @@ fn validate_v07_paths(path: &str) -> Result<(), &'static str> {
     path.split('/')
         .find_map(|segment| {
             if segment.starts_with(':') {
-                Some(Err(
-                    "Path segments must not start with `:`. For capture groups, use \
+                Some(Err("Path segments must not start with `:`. For capture groups, use \
                 `{capture}`. If you meant to literally match a segment starting with \
-                a colon, call `without_v07_checks` on the router.",
-                ))
+                a colon, call `without_v07_checks` on the router."))
             } else if segment.starts_with('*') {
-                Some(Err(
-                    "Path segments must not start with `*`. For wildcard capture, use \
+                Some(Err("Path segments must not start with `*`. For wildcard capture, use \
                 `{*wildcard}`. If you meant to literally match a segment starting with \
-                an asterisk, call `without_v07_checks` on the router.",
-                ))
+                an asterisk, call `without_v07_checks` on the router."))
             } else {
                 None
             }
@@ -266,10 +263,7 @@ where
             format!("{path}/{{*{NEST_TAIL_PARAM}}}")
         };
 
-        let layer = (
-            StripPrefix::layer(prefix),
-            SetNestedPath::layer(path_to_nest_at),
-        );
+        let layer = (StripPrefix::layer(prefix), SetNestedPath::layer(path_to_nest_at));
         let endpoint = Endpoint::Route(Route::new(layer.layer(svc)));
 
         self.route_endpoint(&path, endpoint.clone())?;

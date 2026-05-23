@@ -1,8 +1,8 @@
 #[allow(unused_imports)]
 use crate::runtime::prelude::*;
 
-use core::sync::atomic::AtomicPtr;
 use crate::runtime::task::{Header, Notified, RawTask};
+use core::sync::atomic::AtomicPtr;
 
 use core::marker::PhantomData;
 use core::ptr;

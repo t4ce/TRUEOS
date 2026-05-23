@@ -1,7 +1,7 @@
 use alloc::boxed::Box;
 use alloc::sync::Arc;
-use core::fmt;
-use core::fmt::{Debug, Formatter};
+use ::core::fmt;
+use ::core::fmt::{Debug, Formatter};
 use core::future::Future;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use futures_util::future::{AbortHandle, Abortable};

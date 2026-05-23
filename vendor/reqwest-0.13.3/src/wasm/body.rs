@@ -2,8 +2,9 @@
 use super::multipart::Form;
 /// dox
 use bytes::Bytes;
+use ::core::fmt;
 use js_sys::Uint8Array;
-use std::{borrow::Cow, fmt};
+use std::borrow::Cow;
 use wasm_bindgen::JsValue;
 
 /// The body of a `Request`.

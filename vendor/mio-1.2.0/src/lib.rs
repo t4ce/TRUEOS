@@ -53,7 +53,7 @@ extern crate self as std;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod fmt {
     //! TRUEOS no_std compatibility re-exports for existing mio paths.
-    pub use core::fmt::*;
+    pub use ::core::fmt::*;
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
@@ -75,6 +75,82 @@ pub mod ops {
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod path {
+    //! TRUEOS no_std compatibility path vocabulary.
+    use alloc::string::String;
+    use core::ops::Deref;
+
+    /// Borrowed platform path.
+    #[derive(Debug)]
+    #[repr(transparent)]
+    pub struct Path {
+        inner: str,
+    }
+
+    /// Owned platform path.
+    #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+    pub struct PathBuf {
+        inner: String,
+    }
+
+    impl Path {
+        /// Build a borrowed path from a string-like value.
+        pub fn new<S: AsRef<str> + ?Sized>(path: &S) -> &Self {
+            unsafe { &*(path.as_ref() as *const str as *const Self) }
+        }
+
+        /// Return the path as UTF-8.
+        pub fn as_str(&self) -> &str {
+            &self.inner
+        }
+
+        /// Whether the path starts at the platform root.
+        pub fn is_absolute(&self) -> bool {
+            self.as_str().starts_with('/')
+        }
+
+        /// Return an owned copy.
+        pub fn to_path_buf(&self) -> PathBuf {
+            PathBuf {
+                inner: String::from(self.as_str()),
+            }
+        }
+    }
+
+    impl AsRef<Path> for Path {
+        fn as_ref(&self) -> &Path {
+            self
+        }
+    }
+
+    impl AsRef<Path> for str {
+        fn as_ref(&self) -> &Path {
+            Path::new(self)
+        }
+    }
+
+    impl AsRef<Path> for String {
+        fn as_ref(&self) -> &Path {
+            Path::new(self.as_str())
+        }
+    }
+
+    impl AsRef<Path> for PathBuf {
+        fn as_ref(&self) -> &Path {
+            Path::new(self.inner.as_str())
+        }
+    }
+
+    impl Deref for PathBuf {
+        type Target = Path;
+
+        fn deref(&self) -> &Self::Target {
+            self.as_ref()
+        }
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod sync {
     //! TRUEOS no_std compatibility re-exports for existing mio paths.
     pub use alloc::sync::Arc;
@@ -90,13 +166,13 @@ pub mod sync {
 mod macros;
 
 mod interest;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+mod platform;
 mod poll;
 mod sys;
 mod token;
 #[cfg(not(target_os = "wasi"))]
 mod waker;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-mod platform;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod zkvm_compat;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]

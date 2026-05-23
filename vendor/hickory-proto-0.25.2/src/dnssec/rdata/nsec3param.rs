@@ -8,7 +8,7 @@
 //! parameters used for the nsec3 hash method
 
 use alloc::{string::ToString, vec::Vec};
-use core::fmt;
+use ::core::fmt;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

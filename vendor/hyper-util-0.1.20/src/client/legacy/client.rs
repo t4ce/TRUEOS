@@ -5,7 +5,7 @@
 //! in much the same way it did in hyper 0.14.
 
 use core::error::Error as StdError;
-use core::fmt;
+use ::core::fmt;
 use core::future::{poll_fn, Future};
 use core::pin::Pin;
 use core::task::{self, Poll};

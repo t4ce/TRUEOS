@@ -3,7 +3,7 @@ use crate::runtime::prelude::*;
 
 use core::sync::atomic::AtomicUsize;
 
-use core::fmt;
+use ::core::fmt;
 use core::sync::atomic::Ordering::{AcqRel, Acquire, Release};
 
 pub(super) struct State {
@@ -200,12 +200,7 @@ impl State {
     /// Returns true if the task should be deallocated.
     pub(super) fn transition_to_terminal(&self, count: usize) -> bool {
         let prev = Snapshot(self.val.fetch_sub(count * REF_ONE, AcqRel));
-        assert!(
-            prev.ref_count() >= count,
-            "current: {}, sub: {}",
-            prev.ref_count(),
-            count
-        );
+        assert!(prev.ref_count() >= count, "current: {}, sub: {}", prev.ref_count(), count);
         prev.ref_count() == count
     }
 
@@ -482,9 +477,9 @@ impl State {
     }
 
     pub(super) fn ref_inc(&self) {
+        use core::sync::atomic::Ordering::Relaxed;
         #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         use std::process;
-        use core::sync::atomic::Ordering::Relaxed;
 
         // Using a relaxed ordering is alright here, as knowledge of the
         // original reference prevents other threads from erroneously deleting

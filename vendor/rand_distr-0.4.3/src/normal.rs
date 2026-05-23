@@ -13,7 +13,7 @@ use crate::utils::ziggurat;
 use num_traits::Float;
 use crate::{ziggurat_tables, Distribution, Open01};
 use rand::Rng;
-use core::fmt;
+use ::core::fmt;
 
 /// Samples floating-point numbers according to the normal distribution
 /// `N(0, 1)` (a.k.a. a standard normal, or Gaussian). This is equivalent to

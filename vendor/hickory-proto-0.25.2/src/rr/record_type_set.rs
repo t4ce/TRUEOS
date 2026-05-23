@@ -7,7 +7,7 @@
 
 //! type bit map helper definitions
 
-use core::fmt;
+use ::core::fmt;
 use core::hash::{Hash, Hasher};
 
 use alloc::collections::{BTreeMap, BTreeSet};

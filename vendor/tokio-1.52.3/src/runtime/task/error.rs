@@ -2,7 +2,7 @@
 use crate::runtime::prelude::*;
 
 use core::any::Any;
-use core::fmt;
+use ::core::fmt;
 use std::io;
 
 use super::Id;
@@ -141,11 +141,7 @@ impl fmt::Display for JoinError {
             Repr::Cancelled => write!(fmt, "task {} was cancelled", self.id),
             Repr::Panic(p) => match panic_payload_as_str(p) {
                 Some(panic_str) => {
-                    write!(
-                        fmt,
-                        "task {} panicked with message {:?}",
-                        self.id, panic_str
-                    )
+                    write!(fmt, "task {} panicked with message {:?}", self.id, panic_str)
                 }
                 None => {
                     write!(fmt, "task {} panicked", self.id)

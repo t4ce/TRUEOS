@@ -38,7 +38,7 @@ use crate::signal::unix::{signal, Signal, SignalKind};
 
 use mio::event::Source;
 use mio::unix::SourceFd;
-use core::fmt;
+use ::core::fmt;
 use std::fs::File;
 use core::future::Future;
 use std::io;

@@ -27,11 +27,11 @@ pub struct PublicKeyComponents<B> {
     pub e: B,
 }
 
-impl<B> core::fmt::Debug for PublicKeyComponents<B>
+impl<B> ::core::fmt::Debug for PublicKeyComponents<B>
 where
-    B: core::fmt::Debug,
+    B: ::core::fmt::Debug,
 {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> Result<(), ::core::fmt::Error> {
         f.debug_struct("PublicKeyComponents")
             .field("n", &self.n)
             .field("e", &self.e)

@@ -10,7 +10,7 @@
 //! image
 
 use alloc::string::String;
-use core::fmt::{Debug, Display, Formatter};
+use ::core::fmt::{Debug, Display, Formatter};
 
 use zune_core::bytestream::ZByteIoError;
 
@@ -68,7 +68,7 @@ impl From<ZByteIoError> for DecodeErrors {
     }
 }
 impl Debug for DecodeErrors {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> ::core::fmt::Result {
         match &self
         {
             Self::Format(ref a) => write!(f, "{a:?}"),
@@ -103,7 +103,7 @@ impl Debug for DecodeErrors {
 }
 
 impl Display for DecodeErrors {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> ::core::fmt::Result {
         write!(f, "{self:?}")
     }
 }
@@ -124,7 +124,7 @@ pub enum UnsupportedSchemes {
 }
 
 impl Debug for UnsupportedSchemes {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> ::core::fmt::Result {
         match &self {
             Self::ExtendedSequentialHuffman => {
                 write!(f, "The library cannot yet decode images encoded using Extended Sequential Huffman  encoding scheme yet.")

@@ -1,13 +1,13 @@
+use crate::time::Instant;
+use alloc::boxed::Box;
+use alloc::sync::Arc;
+use ::core::fmt;
+use core::pin::Pin;
 #[cfg(any(
     all(any(feature = "client", feature = "server"), feature = "http2"),
     all(feature = "server", feature = "http1"),
 ))]
 use core::time::Duration;
-use alloc::boxed::Box;
-use alloc::sync::Arc;
-use core::fmt;
-use core::pin::Pin;
-use crate::time::Instant;
 
 use crate::rt::Sleep;
 use crate::rt::Timer;

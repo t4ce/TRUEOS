@@ -112,8 +112,8 @@ pub struct TimeoutError(());
 
 impl core::error::Error for TimeoutError {}
 
-impl core::fmt::Display for TimeoutError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for TimeoutError {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         write!(f, "data was not received within the designated timeout")
     }
 }

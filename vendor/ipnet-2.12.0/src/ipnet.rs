@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::cmp::{min, max};
 use core::cmp::Ordering::{Less, Equal};
 use core::convert::From;
-use core::fmt;
+use ::core::fmt;
 use core::iter::FusedIterator;
 use core::option::Option::{Some, None};
 #[cfg(not(feature = "std"))]

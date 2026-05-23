@@ -7,7 +7,7 @@
 
 //! null record type, generally not used except as an internal tool for representing null data
 use alloc::vec::Vec;
-use core::fmt;
+use ::core::fmt;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

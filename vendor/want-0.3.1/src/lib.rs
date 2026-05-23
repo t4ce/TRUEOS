@@ -87,7 +87,7 @@ extern crate alloc;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use alloc::sync::Arc;
-use core::fmt;
+use ::core::fmt;
 use core::future::Future;
 use core::mem;
 use core::pin::Pin;

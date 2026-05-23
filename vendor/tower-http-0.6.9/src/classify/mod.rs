@@ -54,7 +54,7 @@ pub trait MakeClassifier {
 /// # Example
 ///
 /// ```
-/// use core::fmt;
+/// use ::core::fmt;
 /// use tower_http::classify::{
 ///     ClassifyResponse, ClassifiedResponse, NeverClassifyEos,
 ///     SharedClassifier, MakeClassifier,

@@ -11,7 +11,7 @@
 
 use alloc::format;
 use core::cmp::max;
-use core::fmt;
+use ::core::fmt;
 use core::num::NonZeroU32;
 
 use zune_core::bytestream::ZByteReaderTrait;

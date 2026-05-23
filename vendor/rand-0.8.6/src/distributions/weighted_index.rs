@@ -12,7 +12,7 @@ use crate::distributions::uniform::{SampleBorrow, SampleUniform, UniformSampler}
 use crate::distributions::Distribution;
 use crate::Rng;
 use core::cmp::PartialOrd;
-use core::fmt;
+use ::core::fmt;
 
 // Note that this whole module is only imported if feature="alloc" is enabled.
 use alloc::vec::Vec;

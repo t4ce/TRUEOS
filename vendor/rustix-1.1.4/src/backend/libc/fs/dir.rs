@@ -35,7 +35,7 @@ use alloc::borrow::ToOwned as _;
 use c::readdir as libc_readdir;
 #[cfg(any(linux_like, target_os = "hurd"))]
 use c::readdir64 as libc_readdir;
-use core::fmt;
+use ::core::fmt;
 use core::ptr::NonNull;
 use libc_errno::{errno, set_errno, Errno};
 

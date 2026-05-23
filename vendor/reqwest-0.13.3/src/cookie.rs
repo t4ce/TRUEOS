@@ -3,7 +3,7 @@
 use crate::header::{HeaderValue, SET_COOKIE};
 use bytes::Bytes;
 use core::convert::TryInto;
-use core::fmt;
+use ::core::fmt;
 use std::sync::RwLock;
 use std as hostlib;
 use hostlib::time::SystemTime;

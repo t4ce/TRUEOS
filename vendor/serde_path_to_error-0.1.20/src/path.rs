@@ -2,7 +2,7 @@ use super::Chain;
 use alloc::borrow::ToOwned as _;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::fmt::{self, Display};
+use ::core::fmt::{self, Display};
 use core::slice;
 
 /// Path to the error value in the input, like `dependencies.serde.typo1`.

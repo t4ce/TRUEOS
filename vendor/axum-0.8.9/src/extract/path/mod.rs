@@ -13,9 +13,10 @@ use axum_core::{
     response::{IntoResponse, Response},
     RequestPartsExt as _,
 };
+use ::core::fmt;
 use http::{request::Parts, StatusCode};
 use serde_core::de::DeserializeOwned;
-use std::{fmt, sync::Arc};
+use std::sync::Arc;
 
 /// Extractor that will get captures from the URL and parse them using
 /// [`serde`].
@@ -376,10 +377,7 @@ impl fmt::Display for ErrorKind {
                 key,
                 value,
                 expected_type,
-            } => write!(
-                f,
-                "Cannot parse `{key}` with value `{value}` to a `{expected_type}`"
-            ),
+            } => write!(f, "Cannot parse `{key}` with value `{value}` to a `{expected_type}`"),
             ErrorKind::ParseError {
                 value,
                 expected_type,
@@ -530,7 +528,6 @@ impl RawPathParams {
     pub fn iter(&self) -> RawPathParamsIter<'_> {
         self.into_iter()
     }
-
 }
 
 impl<'a> IntoIterator for &'a RawPathParams {
@@ -638,10 +635,8 @@ mod tests {
 
     #[crate::test]
     async fn percent_decoding() {
-        let app = Router::new().route(
-            "/{key}",
-            get(|Path(param): Path<String>| async move { param }),
-        );
+        let app =
+            Router::new().route("/{key}", get(|Path(param): Path<String>| async move { param }));
 
         let client = TestClient::new(app);
 
@@ -653,14 +648,8 @@ mod tests {
     #[crate::test]
     async fn supports_128_bit_numbers() {
         let app = Router::new()
-            .route(
-                "/i/{key}",
-                get(|Path(param): Path<i128>| async move { param.to_string() }),
-            )
-            .route(
-                "/u/{key}",
-                get(|Path(param): Path<u128>| async move { param.to_string() }),
-            );
+            .route("/i/{key}", get(|Path(param): Path<i128>| async move { param.to_string() }))
+            .route("/u/{key}", get(|Path(param): Path<u128>| async move { param.to_string() }));
 
         let client = TestClient::new(app);
 
@@ -674,10 +663,7 @@ mod tests {
     #[crate::test]
     async fn wildcard() {
         let app = Router::new()
-            .route(
-                "/foo/{*rest}",
-                get(|Path(param): Path<String>| async move { param }),
-            )
+            .route("/foo/{*rest}", get(|Path(param): Path<String>| async move { param }))
             .route(
                 "/bar/{*rest}",
                 get(|Path(params): Path<HashMap<String, String>>| async move {
@@ -709,10 +695,8 @@ mod tests {
 
     #[crate::test]
     async fn captures_match_empty_inner_segments() {
-        let app = Router::new().route(
-            "/{key}/method",
-            get(|Path(param): Path<String>| async move { param.clone() }),
-        );
+        let app = Router::new()
+            .route("/{key}/method", get(|Path(param): Path<String>| async move { param.clone() }));
 
         let client = TestClient::new(app);
 
@@ -725,10 +709,8 @@ mod tests {
 
     #[crate::test]
     async fn captures_match_empty_inner_segments_near_end() {
-        let app = Router::new().route(
-            "/method/{key}/",
-            get(|Path(param): Path<String>| async move { param.clone() }),
-        );
+        let app = Router::new()
+            .route("/method/{key}/", get(|Path(param): Path<String>| async move { param.clone() }));
 
         let client = TestClient::new(app);
 
@@ -744,10 +726,8 @@ mod tests {
 
     #[crate::test]
     async fn captures_match_empty_trailing_segment() {
-        let app = Router::new().route(
-            "/method/{key}",
-            get(|Path(param): Path<String>| async move { param.clone() }),
-        );
+        let app = Router::new()
+            .route("/method/{key}", get(|Path(param): Path<String>| async move { param.clone() }));
 
         let client = TestClient::new(app);
 
@@ -777,10 +757,8 @@ mod tests {
             }
         }
 
-        let app = Router::new().route(
-            "/{key}",
-            get(|param: Path<Param>| async move { param.0 .0 }),
-        );
+        let app =
+            Router::new().route("/{key}", get(|param: Path<Param>| async move { param.0 .0 }));
 
         let client = TestClient::new(app);
 
@@ -814,10 +792,7 @@ mod tests {
         struct Tuple(String, String);
 
         let app = Router::new()
-            .route(
-                "/foo/{a}/{b}/{c}",
-                get(|_: Path<(String, String)>| async {}),
-            )
+            .route("/foo/{a}/{b}/{c}", get(|_: Path<(String, String)>| async {}))
             .route("/bar/{a}/{b}/{c}", get(|_: Path<Tuple>| async {}));
 
         let client = TestClient::new(app);
@@ -870,10 +845,7 @@ mod tests {
         }
 
         let app = Router::new()
-            .route(
-                "/single/{a}",
-                get(|Path(a): Path<Date>| async move { format!("single: {a}") }),
-            )
+            .route("/single/{a}", get(|Path(a): Path<Date>| async move { format!("single: {a}") }))
             .route(
                 "/tuple/{a}/{b}/{c}",
                 get(|Path((a, b, c)): Path<(Date, Date, Date)>| async move {
@@ -924,10 +896,7 @@ mod tests {
         let res = client
             .get("/vec_pairs/2023-01-01/2023-01-02/2023-01-03")
             .await;
-        assert_eq!(
-            res.text().await,
-            "vec_pairs: 2023-01-01 2023-01-02 2023-01-03",
-        );
+        assert_eq!(res.text().await, "vec_pairs: 2023-01-01 2023-01-02 2023-01-03",);
 
         let res = client.get("/map/2023-01-01/2023-01-02/2023-01-03").await;
         assert_eq!(res.text().await, "map: 2023-01-01 2023-01-02 2023-01-03");
@@ -1000,12 +969,10 @@ mod tests {
     async fn deserialize_error_multi_value() {
         let app = Router::new().route(
             "/resources/{res}/sub/{sub}",
-            get(
-                |Path((res, sub)): Path<(uuid::Uuid, uuid::Uuid)>| async move {
-                    let _res = res;
-                    let _sub = sub;
-                },
-            ),
+            get(|Path((res, sub)): Path<(uuid::Uuid, uuid::Uuid)>| async move {
+                let _res = res;
+                let _sub = sub;
+            }),
         );
 
         let client = TestClient::new(app);

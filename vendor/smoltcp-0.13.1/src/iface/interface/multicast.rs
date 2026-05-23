@@ -88,8 +88,8 @@ impl State {
     }
 }
 
-impl core::fmt::Display for MulticastError {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+impl ::core::fmt::Display for MulticastError {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         match self {
             MulticastError::GroupTableFull => write!(f, "GroupTableFull"),
             MulticastError::Unaddressable => write!(f, "Unaddressable"),

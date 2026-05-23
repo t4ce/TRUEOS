@@ -1,13 +1,14 @@
 //! Common types shared between the encoder and decoder
-use alloc::vec::Vec;
+#[cfg(feature = "png-encoding")]
+use crate::io::Write;
 use crate::text_metadata::{ITXtChunk, TEXtChunk, ZTXtChunk};
 #[allow(unused_imports)] // used by doc comments only
 use crate::Filter;
-use std::{borrow::Cow, convert::TryFrom, fmt};
 #[cfg(feature = "png-encoding")]
 use crate::{chunk, encoder};
-#[cfg(feature = "png-encoding")]
-use crate::io::Write;
+use alloc::vec::Vec;
+use ::core::fmt;
+use std::{borrow::Cow, convert::TryFrom};
 
 /// Describes how a pixel is encoded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

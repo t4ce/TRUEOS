@@ -20,7 +20,7 @@ use crate::process::kill::Kill;
 use crate::process::SpawnedChild;
 use crate::sync::oneshot;
 
-use core::fmt;
+use ::core::fmt;
 use std::fs::File as StdFile;
 use core::future::Future;
 use std::io;

@@ -49,8 +49,8 @@ pub enum Error {
     InvalidNumber(usize),
 }
 
-impl core::fmt::Display for Error {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for Error {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         match *self {
             Error::UnexpectedEndOfStream => {
                 write!(f, "unexpected end of stream")

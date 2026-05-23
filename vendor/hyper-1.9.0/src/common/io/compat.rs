@@ -63,7 +63,10 @@ where
         crate::rt::Write::poll_write(self.p(), cx, buf)
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), crate::io::Error>> {
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), crate::io::Error>> {
         crate::rt::Write::poll_flush(self.p(), cx)
     }
 
@@ -87,7 +90,6 @@ where
     }
 }
 
-
 #[cfg(test)]
 impl<T> crate::rt::Write for Compat<T>
 where
@@ -101,7 +103,10 @@ where
         tokio::io::AsyncWrite::poll_write(self.p(), cx, buf)
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), crate::io::Error>> {
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), crate::io::Error>> {
         tokio::io::AsyncWrite::poll_flush(self.p(), cx)
     }
 

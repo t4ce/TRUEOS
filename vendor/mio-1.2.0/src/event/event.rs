@@ -1,6 +1,6 @@
 use crate::{sys, Token};
 
-use core::fmt;
+use ::core::fmt;
 
 /// A readiness event.
 ///

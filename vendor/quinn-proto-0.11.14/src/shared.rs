@@ -1,8 +1,9 @@
-use std::{fmt, net::SocketAddr};
+use ::core::fmt;
+use std::net::SocketAddr;
 
 use bytes::{Buf, BufMut, BytesMut};
 
-use crate::{Instant, MAX_CID_SIZE, ResetToken, coding::BufExt, packet::PartialDecode};
+use crate::{coding::BufExt, packet::PartialDecode, Instant, ResetToken, MAX_CID_SIZE};
 
 /// Events sent from an Endpoint to a Connection
 #[derive(Debug)]

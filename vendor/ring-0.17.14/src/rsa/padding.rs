@@ -24,7 +24,7 @@ pub use self::{
 pub(super) use pkcs1::RSA_PKCS1_SHA1_FOR_LEGACY_USE_ONLY;
 
 /// Common features of both RSA padding encoding and RSA padding verification.
-pub trait Padding: 'static + Sync + crate::sealed::Sealed + core::fmt::Debug {
+pub trait Padding: 'static + Sync + crate::sealed::Sealed + ::core::fmt::Debug {
     // The digest algorithm used for digesting the message (and maybe for
     // other things).
     fn digest_alg(&self) -> &'static digest::Algorithm;

@@ -1,4 +1,5 @@
-use std::{fmt, sync::Arc};
+use ::core::fmt;
+use std::{sync::Arc};
 #[cfg(feature = "qlog")]
 use std::{io, sync::Mutex};
 use std as hostlib;

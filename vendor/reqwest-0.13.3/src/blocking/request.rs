@@ -1,5 +1,5 @@
 use core::convert::TryFrom;
-use core::fmt;
+use ::core::fmt;
 use core::time::Duration;
 
 use http::{request::Parts, Request as HttpRequest, Version};

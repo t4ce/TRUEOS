@@ -10,11 +10,11 @@
 #[allow(unused_imports)]
 use crate::runtime::prelude::*;
 
-use core::future::Future;
 use crate::runtime::task::core::{Core, Trailer};
 use crate::runtime::task::{Cell, Harness, Header, Id, Schedule, State};
 #[cfg(tokio_unstable)]
 use ::core::panic::Location;
+use core::future::Future;
 use core::ptr::NonNull;
 use core::task::{Poll, Waker};
 
@@ -97,10 +97,8 @@ impl<T: Future, S: Schedule> OffsetHelper<T, S> {
 
     // The `scheduler` is the first field of `Core`, so it has the same
     // offset as `Core`.
-    const SCHEDULER_OFFSET: usize = get_core_offset(
-        core::mem::size_of::<Header>(),
-        core::mem::align_of::<Core<T, S>>(),
-    );
+    const SCHEDULER_OFFSET: usize =
+        get_core_offset(core::mem::size_of::<Header>(), core::mem::align_of::<Core<T, S>>());
 
     const ID_OFFSET: usize = get_id_offset(
         core::mem::size_of::<Header>(),

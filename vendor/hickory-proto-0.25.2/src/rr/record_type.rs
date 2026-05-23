@@ -10,7 +10,7 @@
 
 use alloc::string::ToString;
 use core::cmp::Ordering;
-use core::fmt::{self, Display, Formatter};
+use ::core::fmt::{self, Display, Formatter};
 use core::str::FromStr;
 
 #[cfg(feature = "serde")]

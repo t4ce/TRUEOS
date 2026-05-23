@@ -1,5 +1,5 @@
 use core::error;
-use core::fmt;
+use ::core::fmt;
 use std::result;
 
 use crate::header;

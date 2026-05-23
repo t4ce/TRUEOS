@@ -7,7 +7,7 @@
 
 //! CSYNC record for synchronizing data from a child zone to the parent
 
-use core::fmt;
+use ::core::fmt;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

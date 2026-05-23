@@ -520,8 +520,8 @@ impl ::core::panic::UnwindSafe for Runtime {}
 
 impl ::core::panic::RefUnwindSafe for Runtime {}
 
-fn display_eq(d: impl core::fmt::Display, s: &str) -> bool {
-    use core::fmt::Write;
+fn display_eq(d: impl ::core::fmt::Display, s: &str) -> bool {
+    use ::core::fmt::Write;
 
     struct FormatEq<'r> {
         remainder: &'r str,
@@ -529,7 +529,7 @@ fn display_eq(d: impl core::fmt::Display, s: &str) -> bool {
     }
 
     impl<'r> Write for FormatEq<'r> {
-        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        fn write_str(&mut self, s: &str) -> ::core::fmt::Result {
             if !self.unequal {
                 if let Some(new_remainder) = self.remainder.strip_prefix(s) {
                     self.remainder = new_remainder;

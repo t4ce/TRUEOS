@@ -9,7 +9,7 @@ use {
     crate::net::addr::SocketAddrLen,
     crate::path,
     core::cmp::Ordering,
-    core::fmt,
+    ::core::fmt,
     core::hash::{Hash, Hasher},
     core::slice,
 };

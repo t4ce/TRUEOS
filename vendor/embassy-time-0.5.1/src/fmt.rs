@@ -1,7 +1,7 @@
 #![macro_use]
 #![allow(unused)]
 
-use core::fmt::{Debug, Display, LowerHex};
+use ::core::fmt::{Debug, Display, LowerHex};
 
 #[cfg(all(feature = "defmt", feature = "log"))]
 compile_error!("You may not enable both `defmt` and `log` features.");
@@ -245,19 +245,19 @@ impl<T, E> Try for Result<T, E> {
 pub(crate) struct Bytes<'a>(pub &'a [u8]);
 
 impl<'a> Debug for Bytes<'a> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         write!(f, "{:#02x?}", self.0)
     }
 }
 
 impl<'a> Display for Bytes<'a> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         write!(f, "{:#02x?}", self.0)
     }
 }
 
 impl<'a> LowerHex for Bytes<'a> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         write!(f, "{:#02x?}", self.0)
     }
 }

@@ -1,6 +1,6 @@
 use bitflags::bitflags;
 use byteorder::{ByteOrder, NetworkEndian};
-use core::fmt;
+use ::core::fmt;
 
 use super::{Error, Result};
 use crate::time::Duration;

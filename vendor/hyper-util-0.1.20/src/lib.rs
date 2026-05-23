@@ -61,8 +61,8 @@ pub mod error {
 
 #[cfg(not(feature = "std"))]
 pub mod fmt {
-    //! no_std stand-in for `std::fmt`.
-    pub use core::fmt::*;
+    //! no_std stand-in for `::core::fmt`.
+    pub use ::core::fmt::*;
 }
 
 #[cfg(not(feature = "std"))]

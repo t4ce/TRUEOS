@@ -20,8 +20,9 @@ use self::Inner::*;
 
 use core::convert::TryFrom;
 use core::error::Error;
+use ::core::fmt;
 use core::str::FromStr;
-use std::{fmt, str};
+use std::str;
 
 /// The Request Method (VERB)
 ///

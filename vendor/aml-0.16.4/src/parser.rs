@@ -255,7 +255,7 @@ pub fn comment_scope<'a, 'c, P, R>(
 ) -> impl Parser<'a, 'c, R>
 where
     'c: 'a,
-    R: core::fmt::Debug,
+    R: ::core::fmt::Debug,
     P: Parser<'a, 'c, R>,
 {
     move |input, context: &'c mut AmlContext| {

@@ -49,7 +49,7 @@ pub mod ffi {
 }
 
 pub mod fmt {
-    pub use core::fmt::*;
+    pub use ::core::fmt::*;
 }
 
 pub mod hash {
@@ -99,7 +99,7 @@ pub mod path {
     use alloc::borrow::{Cow, ToOwned};
     use alloc::string::{String, ToString};
     use core::borrow::Borrow;
-    use core::fmt;
+    use ::core::fmt;
     use core::ops::Deref;
 
     pub const MAIN_SEPARATOR: char = '/';
@@ -568,7 +568,7 @@ pub mod thread {
     extern crate alloc;
 
     use alloc::boxed::Box;
-    use core::fmt;
+    use ::core::fmt;
     use core::marker::PhantomData;
     use core::sync::atomic::{AtomicUsize, Ordering};
     use core::time::Duration;
@@ -766,21 +766,21 @@ struct TrueosLogWriter {
     level: u32,
 }
 
-impl core::fmt::Write for TrueosLogWriter {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+impl ::core::fmt::Write for TrueosLogWriter {
+    fn write_str(&mut self, s: &str) -> ::core::fmt::Result {
         unsafe { trueos_tokio_platform_log(self.level, s.as_ptr(), s.len()) };
         Ok(())
     }
 }
 
 #[doc(hidden)]
-pub fn _print(args: core::fmt::Arguments<'_>) {
-    let _ = core::fmt::write(&mut TrueosLogWriter { level: TRUEOS_LOG_INFO }, args);
+pub fn _print(args: ::core::fmt::Arguments<'_>) {
+    let _ = ::core::fmt::write(&mut TrueosLogWriter { level: TRUEOS_LOG_INFO }, args);
 }
 
 #[doc(hidden)]
-pub fn _eprint(args: core::fmt::Arguments<'_>) {
-    let _ = core::fmt::write(&mut TrueosLogWriter { level: TRUEOS_LOG_ERROR }, args);
+pub fn _eprint(args: ::core::fmt::Arguments<'_>) {
+    let _ = ::core::fmt::write(&mut TrueosLogWriter { level: TRUEOS_LOG_ERROR }, args);
 }
 
 #[macro_export]

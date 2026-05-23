@@ -17,7 +17,7 @@
 use alloc::borrow::ToOwned;
 use core::convert::TryFrom;
 use core::error::Error;
-use core::fmt;
+use ::core::fmt;
 use core::num::NonZeroU16;
 use core::str::FromStr;
 

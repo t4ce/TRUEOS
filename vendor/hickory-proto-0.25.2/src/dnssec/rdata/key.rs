@@ -9,7 +9,7 @@
 #![allow(clippy::use_self)]
 
 use alloc::{sync::Arc, vec::Vec};
-use core::fmt;
+use ::core::fmt;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

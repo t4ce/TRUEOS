@@ -1,4 +1,4 @@
-use core::fmt;
+use ::core::fmt;
 use std::io::{self, Read};
 use core::mem;
 use std::net::SocketAddr;

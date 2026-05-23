@@ -1,5 +1,5 @@
 use core::error::Error as StdError;
-use core::fmt;
+use ::core::fmt;
 use crate::io;
 use core::task::{Context, Poll};
 use alloc::{vec, vec::Vec};

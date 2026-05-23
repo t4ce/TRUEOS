@@ -39,8 +39,8 @@ pub enum StartQueryError {
     NameTooLong,
 }
 
-impl core::fmt::Display for StartQueryError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for StartQueryError {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         match self {
             StartQueryError::NoFreeSlot => write!(f, "No free slot"),
             StartQueryError::InvalidName => write!(f, "Invalid name"),
@@ -62,8 +62,8 @@ pub enum GetQueryResultError {
     Failed,
 }
 
-impl core::fmt::Display for GetQueryResultError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for GetQueryResultError {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         match self {
             GetQueryResultError::Pending => write!(f, "Query is not done yet"),
             GetQueryResultError::Failed => write!(f, "Query failed"),

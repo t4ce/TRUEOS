@@ -1,5 +1,5 @@
 use core::convert::TryFrom;
-use core::fmt::{self, Display};
+use ::core::fmt::{self, Display};
 
 use super::varint::VarInt;
 

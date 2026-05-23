@@ -8,7 +8,7 @@ use crate::backend::c;
 use crate::ffi::CStr;
 #[cfg(not(any(target_os = "espidf", target_os = "emscripten", target_os = "vita")))]
 use crate::io;
-use core::fmt;
+use ::core::fmt;
 
 #[cfg(linux_kernel)]
 pub use backend::system::types::Sysinfo;

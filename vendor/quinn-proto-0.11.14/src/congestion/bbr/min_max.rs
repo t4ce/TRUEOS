@@ -25,7 +25,7 @@
  * holds for 2nd & 3rd best.
  */
 
-use std::fmt::Debug;
+use ::core::fmt::Debug;
 
 #[derive(Copy, Clone, Debug)]
 pub(super) struct MinMax {

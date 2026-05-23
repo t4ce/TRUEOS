@@ -1,6 +1,6 @@
 use futures_core::Stream;
 use alloc::sync::Arc;
-use core::fmt;
+use ::core::fmt;
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};
 use tokio::sync::{AcquireError, OwnedSemaphorePermit, Semaphore, TryAcquireError};

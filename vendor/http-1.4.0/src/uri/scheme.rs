@@ -1,6 +1,6 @@
 use alloc::boxed::Box;
 use core::convert::TryFrom;
-use core::fmt;
+use ::core::fmt;
 use core::hash::{Hash, Hasher};
 use core::str::FromStr;
 

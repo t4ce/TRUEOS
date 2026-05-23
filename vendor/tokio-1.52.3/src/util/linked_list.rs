@@ -14,7 +14,7 @@
 //! specified node is actually contained by the list.
 
 use core::cell::UnsafeCell;
-use core::fmt;
+use ::core::fmt;
 use core::marker::{PhantomData, PhantomPinned};
 use core::mem::ManuallyDrop;
 use core::ptr::{self, NonNull};

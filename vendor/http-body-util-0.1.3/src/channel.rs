@@ -63,8 +63,8 @@ where
     }
 }
 
-impl<D, E: core::fmt::Debug> core::fmt::Debug for Channel<D, E> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl<D, E: ::core::fmt::Debug> ::core::fmt::Debug for Channel<D, E> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("Channel")
             .field("rx_frame", &self.rx_frame)
             .field("rx_error", &self.rx_error)
@@ -179,8 +179,8 @@ impl<D, E> Sender<D, E> {
     }
 }
 
-impl<D, E: core::fmt::Debug> core::fmt::Debug for Sender<D, E> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl<D, E: ::core::fmt::Debug> ::core::fmt::Debug for Sender<D, E> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("Sender")
             .field("tx_frame", &self.tx_frame)
             .field("tx_error", &self.tx_error)
@@ -194,7 +194,7 @@ impl<D, E: core::fmt::Debug> core::fmt::Debug for Sender<D, E> {
 pub struct SendError;
 
 impl Display for SendError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         write!(f, "failed to send frame")
     }
 }

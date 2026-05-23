@@ -1,13 +1,14 @@
 use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
-use std::collections::hash_map::RandomState;
-use std::collections::HashMap;
 use core::convert::TryFrom;
+use ::core::fmt;
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::{FromIterator, FusedIterator};
 use core::marker::PhantomData;
-use std::{fmt, mem, ops, ptr};
+use std::collections::hash_map::RandomState;
+use std::collections::HashMap;
+use std::{mem, ops, ptr};
 
 use crate::Error;
 
@@ -1798,10 +1799,8 @@ impl<T> HeaderMap<T> {
 
         // visit the entries in an order where we can simply reinsert them
         // into self.indices without any bucket stealing.
-        let old_indices = mem::replace(
-            &mut self.indices,
-            vec![Pos::none(); new_raw_cap].into_boxed_slice(),
-        );
+        let old_indices =
+            mem::replace(&mut self.indices, vec![Pos::none(); new_raw_cap].into_boxed_slice());
         self.mask = new_raw_cap.wrapping_sub(1) as Size;
 
         for &pos in &old_indices[first_ideal..] {
@@ -3894,9 +3893,7 @@ mod as_header_name {
     impl<'a> Sealed for &'a str {
         #[inline]
         fn try_entry<T>(self, map: &mut HeaderMap<T>) -> Result<Entry<'_, T>, TryEntryError> {
-            Ok(HdrName::from_bytes(self.as_bytes(), move |hdr| {
-                map.try_entry2(hdr)
-            })??)
+            Ok(HdrName::from_bytes(self.as_bytes(), move |hdr| map.try_entry2(hdr))??)
         }
 
         #[inline]
@@ -3967,4 +3964,3 @@ fn test_bounds() {
     check_bounds::<ValueIterMut<'static, ()>>();
     check_bounds::<ValueDrain<'static, ()>>();
 }
-

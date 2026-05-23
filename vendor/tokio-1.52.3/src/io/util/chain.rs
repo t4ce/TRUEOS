@@ -1,7 +1,7 @@
 use crate::io::{AsyncBufRead, AsyncRead, ReadBuf};
 
 use pin_project_lite::pin_project;
-use core::fmt;
+use ::core::fmt;
 use std::io;
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};

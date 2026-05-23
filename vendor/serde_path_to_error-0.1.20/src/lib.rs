@@ -78,7 +78,7 @@ mod wrap;
 
 use alloc::string::String;
 use core::cell::Cell;
-use core::fmt::{self, Display};
+use ::core::fmt::{self, Display};
 use serde::ser::StdError;
 
 pub use crate::de::{deserialize, Deserializer};

@@ -36,8 +36,8 @@ impl<Fut, ResBody, E, C, OnResponseT, OnBodyChunkT, OnEosT, OnFailureT> Future
 where
     Fut: Future<Output = Result<Response<ResBody>, E>>,
     ResBody: Body,
-    ResBody::Error: core::fmt::Display + 'static,
-    E: core::fmt::Display + 'static,
+    ResBody::Error: ::core::fmt::Display + 'static,
+    E: ::core::fmt::Display + 'static,
     C: ClassifyResponse,
     OnResponseT: OnResponse<ResBody>,
     OnFailureT: OnFailure<C::FailureClass>,

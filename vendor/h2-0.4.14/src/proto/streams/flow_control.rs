@@ -1,7 +1,7 @@
 use crate::frame::Reason;
 use crate::proto::{WindowSize, MAX_WINDOW_SIZE};
 
-use std::fmt;
+use ::core::fmt;
 
 // We don't want to send WINDOW_UPDATE frames for tiny changes, but instead
 // aggregate them when the changes are significant. Many implementations do
@@ -17,7 +17,6 @@ use std::fmt;
 // becomes greater than 1/2, or 50 bytes.
 const UNCLAIMED_NUMERATOR: i32 = 1;
 const UNCLAIMED_DENOMINATOR: i32 = 2;
-
 
 #[derive(Copy, Clone, Debug)]
 pub struct FlowControl {

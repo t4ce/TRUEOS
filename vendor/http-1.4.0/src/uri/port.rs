@@ -1,4 +1,4 @@
-use core::fmt;
+use ::core::fmt;
 
 use super::{ErrorKind, InvalidUri};
 

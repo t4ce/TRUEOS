@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use std::borrow::Borrow;
 use core::convert::TryFrom;
 use core::error::Error;
-use core::fmt;
+use ::core::fmt;
 use core::hash::{Hash, Hasher};
 use core::mem::MaybeUninit;
 use core::str::FromStr;

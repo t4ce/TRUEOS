@@ -4,7 +4,7 @@
 //! maximum redirect chain of 10 hops. To customize this behavior, a
 //! `redirect::Policy` can be used with a `ClientBuilder`.
 
-use core::fmt;
+use ::core::fmt;
 use core::error::Error as StdError;
 use std::sync::Arc;
 

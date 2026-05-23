@@ -1,6 +1,6 @@
 //! Future types
 
-use core::fmt;
+use ::core::fmt;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};

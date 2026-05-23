@@ -1,4 +1,4 @@
-use core::fmt;
+use ::core::fmt;
 
 use bytes::Bytes;
 use http::{HeaderMap, StatusCode};

@@ -1105,11 +1105,11 @@ where
     }
 }
 
-impl<T: ?Sized> core::fmt::Debug for RwLock<T>
+impl<T: ?Sized> ::core::fmt::Debug for RwLock<T>
 where
-    T: core::fmt::Debug,
+    T: ::core::fmt::Debug,
 {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         let mut d = f.debug_struct("RwLock");
         match self.try_read() {
             Ok(inner) => d.field("data", &&*inner),

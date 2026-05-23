@@ -16,7 +16,7 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
-use core::fmt;
+use ::core::fmt;
 #[cfg(feature = "std")]
 use crate::io;
 use std::{sync};

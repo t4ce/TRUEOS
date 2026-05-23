@@ -5,8 +5,8 @@ pub use self::os::*;
 mod os {
     use crate::sys::utsname::uname;
     use crate::Result;
+    use core::sync::atomic::{AtomicUsize, Ordering};
     use std::os::unix::ffi::OsStrExt;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     // Features:
     // * atomic cloexec on socket: 2.6.27
@@ -90,7 +90,6 @@ mod os {
             .map(|version| version >= VERS_2_6_27)
             .unwrap_or(false)
     }
-
 }
 
 #[cfg(any(

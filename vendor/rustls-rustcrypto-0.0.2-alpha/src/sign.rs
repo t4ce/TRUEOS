@@ -24,8 +24,8 @@ where
 
 impl<T, S> Signer for GenericRandomizedSigner<S, T>
 where
-    S: SignatureEncoding + Send + Sync + core::fmt::Debug,
-    T: RandomizedSigner<S> + Send + Sync + core::fmt::Debug,
+    S: SignatureEncoding + Send + Sync + ::core::fmt::Debug,
+    T: RandomizedSigner<S> + Send + Sync + ::core::fmt::Debug,
 {
     fn sign(&self, message: &[u8]) -> Result<Vec<u8>, Error> {
         self.key
@@ -52,8 +52,8 @@ where
 
 impl<S, T> Signer for GenericSigner<S, T>
 where
-    S: SignatureEncoding + Send + Sync + core::fmt::Debug,
-    T: signature::Signer<S> + Send + Sync + core::fmt::Debug,
+    S: SignatureEncoding + Send + Sync + ::core::fmt::Debug,
+    T: signature::Signer<S> + Send + Sync + ::core::fmt::Debug,
 {
     fn sign(&self, message: &[u8]) -> Result<Vec<u8>, Error> {
         self.key

@@ -9,7 +9,7 @@ cfg_time! {
 }
 
 use alloc::vec::Vec;
-use core::fmt;
+use ::core::fmt;
 use core::task::{Context, Poll};
 
 /// Sends values to the associated `Receiver`.

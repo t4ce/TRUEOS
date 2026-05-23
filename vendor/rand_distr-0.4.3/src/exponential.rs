@@ -13,7 +13,7 @@ use crate::utils::ziggurat;
 use num_traits::Float;
 use crate::{ziggurat_tables, Distribution};
 use rand::Rng;
-use core::fmt;
+use ::core::fmt;
 
 /// Samples floating-point numbers according to the exponential distribution,
 /// with rate parameter `λ = 1`. This is equivalent to `Exp::new(1.0)` or

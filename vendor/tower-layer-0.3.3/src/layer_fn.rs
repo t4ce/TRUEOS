@@ -1,5 +1,5 @@
 use super::Layer;
-use core::fmt;
+use ::core::fmt;
 
 /// Returns a new [`LayerFn`] that implements [`Layer`] by calling the
 /// given function.
@@ -15,7 +15,7 @@ use core::fmt;
 /// # use tower::Service;
 /// # use core::task::{Poll, Context};
 /// # use tower_layer::{Layer, layer_fn};
-/// # use core::fmt;
+/// # use ::core::fmt;
 /// # use core::convert::Infallible;
 /// #
 /// // A middleware that logs requests before forwarding them to another service

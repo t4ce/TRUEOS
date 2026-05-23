@@ -1,6 +1,6 @@
 #[cfg(any(feature = "alloc", test))]
 use alloc::string::String;
-use core::fmt;
+use ::core::fmt;
 #[cfg(any(feature = "std", test))]
 use core::error;
 

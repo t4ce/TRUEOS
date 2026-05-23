@@ -3,7 +3,7 @@
 extern crate alloc;
 
 use core::error::Error;
-use core::fmt;
+use ::core::fmt;
 use core3::io::{BufRead, Cursor, Seek};
 
 mod container;

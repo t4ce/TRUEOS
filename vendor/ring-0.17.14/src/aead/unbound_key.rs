@@ -55,8 +55,8 @@ impl UnboundKey {
     }
 }
 
-impl core::fmt::Debug for UnboundKey {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
+impl ::core::fmt::Debug for UnboundKey {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
         self.inner.fmt_debug("UnboundKey", f)
     }
 }

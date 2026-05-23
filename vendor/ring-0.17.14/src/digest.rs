@@ -328,8 +328,8 @@ impl AsRef<[u8]> for Digest {
     }
 }
 
-impl core::fmt::Debug for Digest {
-    fn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::fmt::Result {
+impl ::core::fmt::Debug for Digest {
+    fn fmt(&self, fmt: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         write!(fmt, "{:?}:", self.algorithm)?;
         debug::write_hex_bytes(fmt, self.as_ref())
     }

@@ -1,4 +1,4 @@
-use core::fmt;
+use ::core::fmt;
 use std::fs::File;
 use core::future::Future;
 #[cfg(feature = "multipart")]

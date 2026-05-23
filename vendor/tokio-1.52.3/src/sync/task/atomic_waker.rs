@@ -4,7 +4,7 @@ use crate::loom::cell::UnsafeCell;
 use crate::loom::hint;
 use crate::loom::sync::atomic::AtomicUsize;
 
-use core::fmt;
+use ::core::fmt;
 use crate::panic::{resume_unwind, AssertUnwindSafe, RefUnwindSafe, UnwindSafe};
 use core::sync::atomic::Ordering::{AcqRel, Acquire, Release};
 use core::task::Waker;

@@ -1,6 +1,6 @@
 use crate::net::{TcpListener, TcpStream};
 
-use core::fmt;
+use ::core::fmt;
 use std::io;
 use std::net::SocketAddr;
 

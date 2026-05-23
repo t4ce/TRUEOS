@@ -127,9 +127,7 @@ impl AioCb {
     }
 
     fn cancel(mut self: Pin<&mut Self>) -> Result<AioCancelStat> {
-        let r = unsafe {
-            libc::aio_cancel(self.aiocb.0.aio_fildes, &mut self.aiocb.0)
-        };
+        let r = unsafe { libc::aio_cancel(self.aiocb.0.aio_fildes, &mut self.aiocb.0) };
         match r {
             libc::AIO_CANCELED => Ok(AioCancelStat::AioCanceled),
             libc::AIO_NOTCANCELED => Ok(AioCancelStat::AioNotCanceled),
@@ -199,10 +197,7 @@ impl Drop for AioCb {
     /// If the `AioCb` has no remaining state in the kernel, just drop it.
     /// Otherwise, dropping constitutes a resource leak, which is an error
     fn drop(&mut self) {
-        assert!(
-            thread::panicking() || !self.in_progress,
-            "Dropped an in-progress AioCb"
-        );
+        assert!(thread::panicking() || !self.in_progress, "Dropped an in-progress AioCb");
     }
 }
 
@@ -450,12 +445,7 @@ impl AioFsync {
     ///                   priority level minus `prio`.
     /// * `sigev_notify`: Determines how you will be notified of event
     ///                   completion.
-    pub fn new(
-        fd: RawFd,
-        mode: AioFsyncMode,
-        prio: i32,
-        sigev_notify: SigevNotify,
-    ) -> Self {
+    pub fn new(fd: RawFd, mode: AioFsyncMode, prio: i32, sigev_notify: SigevNotify) -> Self {
         let mut aiocb = AioCb::common_init(fd, prio, sigev_notify);
         // To save some memory, store mode in an unused field of the AioCb.
         // True it isn't very much memory, but downstream creates will likely
@@ -1044,10 +1034,7 @@ pub fn aio_cancel_all(fd: RawFd) -> Result<AioCancelStat> {
 /// # References
 ///
 /// [`aio_suspend`](https://pubs.opengroup.org/onlinepubs/9699919799/functions/aio_suspend.html)
-pub fn aio_suspend(
-    list: &[&dyn AsRef<libc::aiocb>],
-    timeout: Option<TimeSpec>,
-) -> Result<()> {
+pub fn aio_suspend(list: &[&dyn AsRef<libc::aiocb>], timeout: Option<TimeSpec>) -> Result<()> {
     // Note that this allocation could be eliminated by making the argument
     // generic, and accepting arguments like &[AioWrite].  But that would
     // prevent using aio_suspend to wait on a heterogeneous list of mixed
@@ -1061,8 +1048,7 @@ pub fn aio_suspend(
         None => ptr::null::<libc::timespec>(),
         Some(x) => x.as_ref() as *const libc::timespec,
     };
-    Errno::result(unsafe { libc::aio_suspend(p, list.len() as i32, timep) })
-        .map(drop)
+    Errno::result(unsafe { libc::aio_suspend(p, list.len() as i32, timep) }).map(drop)
 }
 
 /// Submits multiple asynchronous I/O requests with a single system call.
@@ -1137,7 +1123,7 @@ pub fn aio_suspend(
 /// ```
 /// # use libc::c_int;
 /// # use std::os::unix::io::AsRawFd;
-/// # use std::sync::atomic::{AtomicBool, Ordering};
+/// # use core::sync::atomic::{AtomicBool, Ordering};
 /// # use std::thread;
 /// # use core::time;
 /// # use nix::errno::Errno;
@@ -1173,21 +1159,15 @@ pub fn aio_suspend(
 /// // notification, we know that all operations are complete.
 /// assert_eq!(aiow.as_mut().aio_return().unwrap(), WBUF.len());
 /// ```
-#[deprecated(
-    since = "0.27.0",
-    note = "https://github.com/nix-rust/nix/issues/2017"
-)]
+#[deprecated(since = "0.27.0", note = "https://github.com/nix-rust/nix/issues/2017")]
 pub fn lio_listio(
     mode: LioMode,
     list: &mut [Pin<&mut dyn AsMut<libc::aiocb>>],
     sigev_notify: SigevNotify,
 ) -> Result<()> {
-    let p = list as *mut [Pin<&mut dyn AsMut<libc::aiocb>>]
-        as *mut [*mut libc::aiocb] as *mut *mut libc::aiocb;
+    let p = list as *mut [Pin<&mut dyn AsMut<libc::aiocb>>] as *mut [*mut libc::aiocb]
+        as *mut *mut libc::aiocb;
     let sigev = SigEvent::new(sigev_notify);
     let sigevp = &mut sigev.sigevent() as *mut libc::sigevent;
-    Errno::result(unsafe {
-        libc::lio_listio(mode as i32, p, list.len() as i32, sigevp)
-    })
-    .map(drop)
+    Errno::result(unsafe { libc::lio_listio(mode as i32, p, list.len() as i32, sigevp) }).map(drop)
 }

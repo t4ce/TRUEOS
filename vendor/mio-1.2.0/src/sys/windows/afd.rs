@@ -1,8 +1,8 @@
-use core::ffi::c_void;
-use core::fmt;
-use std::fs::File;
 use crate::io;
+use core::ffi::c_void;
+use ::core::fmt;
 use core::mem::size_of;
+use std::fs::File;
 use std::os::windows::io::AsRawHandle;
 
 use windows_sys::Wdk::Storage::FileSystem::NtCancelIoFileEx;
@@ -79,9 +79,7 @@ impl Afd {
         match status {
             STATUS_SUCCESS => Ok(true),
             STATUS_PENDING => Ok(false),
-            _ => Err(io::Error::from_raw_os_error(
-                RtlNtStatusToDosError(status) as i32
-            )),
+            _ => Err(io::Error::from_raw_os_error(RtlNtStatusToDosError(status) as i32)),
         }
     }
 
@@ -107,9 +105,7 @@ impl Afd {
         if status == STATUS_SUCCESS || status == STATUS_NOT_FOUND {
             return Ok(());
         }
-        Err(io::Error::from_raw_os_error(
-            RtlNtStatusToDosError(status) as i32
-        ))
+        Err(io::Error::from_raw_os_error(RtlNtStatusToDosError(status) as i32))
     }
 }
 
@@ -117,7 +113,7 @@ cfg_io_source! {
     use core::mem::zeroed;
     use std::os::windows::io::{FromRawHandle, RawHandle};
     use core::ptr::null_mut;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
     use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
     use windows_sys::Wdk::Storage::FileSystem::{NtCreateFile, FILE_OPEN};

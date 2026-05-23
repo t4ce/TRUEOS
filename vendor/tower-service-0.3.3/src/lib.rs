@@ -126,7 +126,7 @@ use core::task::{Context, Poll};
 /// use core::task::{Context, Poll};
 /// use core::time::Duration;
 /// use core::pin::Pin;
-/// use core::fmt;
+/// use ::core::fmt;
 /// use core::error::Error;
 ///
 /// // Our timeout service, which wraps another service and

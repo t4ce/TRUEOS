@@ -533,8 +533,8 @@ mod internal {
     #[derive(Debug)]
     struct UseOther;
 
-    impl core::fmt::Display for UseOther {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    impl ::core::fmt::Display for UseOther {
+        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
             f.write_str("sentinel error; using other")
         }
     }

@@ -16,17 +16,17 @@
 
 //! Allows for the root trust_anchor to either be added to or replaced for dns_sec validation.
 
+#[cfg(feature = "text-parsing")]
+use crate::{fs, path::Path};
 use alloc::{borrow::ToOwned, vec::Vec};
 #[cfg(feature = "text-parsing")]
 use core::str::FromStr;
-#[cfg(feature = "text-parsing")]
-use std::{fs, path::Path};
 
 use crate::dnssec::PublicKey;
 #[cfg(feature = "text-parsing")]
-use crate::serialize::txt::ParseError;
-#[cfg(feature = "text-parsing")]
 use crate::serialize::txt::trust_anchor::{self, Entry};
+#[cfg(feature = "text-parsing")]
+use crate::serialize::txt::ParseError;
 
 #[cfg(feature = "text-parsing")]
 use super::Verifier;
@@ -70,10 +70,8 @@ impl TrustAnchors {
             return false;
         }
 
-        self.pkeys.push(PublicKeyBuf::new(
-            public_key.public_bytes().to_vec(),
-            public_key.algorithm(),
-        ));
+        self.pkeys
+            .push(PublicKeyBuf::new(public_key.public_bytes().to_vec(), public_key.algorithm()));
         true
     }
 
@@ -106,10 +104,7 @@ impl FromStr for TrustAnchors {
             let Entry::DNSKEY(record) = entry;
             let dnskey = record.data();
             let key = dnskey.key()?;
-            pkeys.push(PublicKeyBuf::new(
-                key.public_bytes().to_vec(),
-                dnskey.algorithm(),
-            ));
+            pkeys.push(PublicKeyBuf::new(key.public_bytes().to_vec(), dnskey.algorithm()));
         }
 
         Ok(Self { pkeys })

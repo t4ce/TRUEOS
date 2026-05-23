@@ -1,5 +1,5 @@
 use crate::{backend, io};
-use core::fmt;
+use ::core::fmt;
 
 pub use crate::timespec::{Nsecs, Secs, Timespec};
 

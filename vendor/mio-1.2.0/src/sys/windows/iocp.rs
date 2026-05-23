@@ -2,7 +2,7 @@
 
 use super::{Handle, Overlapped};
 use core::cmp;
-use core::fmt;
+use ::core::fmt;
 use crate::io;
 use core::mem;
 use std::os::windows::io::*;

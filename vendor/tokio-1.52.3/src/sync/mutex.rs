@@ -783,11 +783,11 @@ where
     }
 }
 
-impl<T: ?Sized> core::fmt::Debug for Mutex<T>
+impl<T: ?Sized> ::core::fmt::Debug for Mutex<T>
 where
-    T: core::fmt::Debug,
+    T: ::core::fmt::Debug,
 {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         let mut d = f.debug_struct("Mutex");
         match self.try_lock() {
             Ok(inner) => d.field("data", &&*inner),

@@ -20,8 +20,8 @@ use crate::{cpu, error, sealed, signature};
 /// Parameters for EdDSA signing and verification.
 pub struct EdDSAParameters;
 
-impl core::fmt::Debug for EdDSAParameters {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
+impl ::core::fmt::Debug for EdDSAParameters {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
         write!(f, "ring::signature::ED25519")
     }
 }

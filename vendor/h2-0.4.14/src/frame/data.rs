@@ -1,7 +1,7 @@
 use crate::frame::{util, Error, Frame, Head, Kind, StreamId};
 use bytes::{Buf, BufMut, Bytes};
 
-use std::fmt;
+use ::core::fmt;
 
 /// Data frame
 ///

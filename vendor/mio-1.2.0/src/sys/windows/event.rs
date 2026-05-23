@@ -1,4 +1,4 @@
-use core::fmt;
+use ::core::fmt;
 
 use super::afd;
 use super::iocp::CompletionStatus;

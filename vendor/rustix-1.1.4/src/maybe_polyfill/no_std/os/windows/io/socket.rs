@@ -7,7 +7,7 @@
 
 use super::raw::*;
 use crate::backend::c;
-use core::fmt;
+use ::core::fmt;
 use core::marker::PhantomData;
 use core::mem::forget;
 

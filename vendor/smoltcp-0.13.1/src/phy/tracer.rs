@@ -1,4 +1,4 @@
-use core::fmt;
+use ::core::fmt;
 
 use crate::phy::{self, Device, DeviceCapabilities, Medium};
 use crate::time::Instant;

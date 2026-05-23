@@ -22,9 +22,9 @@ mod tracking {
         inner: std::sync::Mutex<Inner<T>>,
     }
 
-    impl<T: Debug> std::fmt::Debug for Mutex<T> {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            std::fmt::Debug::fmt(&self.inner, f)
+    impl<T: Debug> ::core::fmt::Debug for Mutex<T> {
+        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+            ::core::fmt::Debug::fmt(&self.inner, f)
         }
     }
 
@@ -80,10 +80,7 @@ mod tracking {
             let duration = self.start_time.elapsed();
 
             if duration > Duration::from_millis(1) {
-                warn!(
-                    "Utilizing the connection for {} took {:?}",
-                    self.purpose, duration
-                );
+                warn!("Utilizing the connection for {} took {:?}", self.purpose, duration);
             }
 
             self.guard

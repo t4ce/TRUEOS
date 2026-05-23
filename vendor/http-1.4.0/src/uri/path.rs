@@ -1,8 +1,9 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::convert::TryFrom;
+use ::core::fmt;
 use core::str::FromStr;
-use std::{cmp, fmt, hash, str};
+use std::{cmp, hash, str};
 
 use bytes::Bytes;
 

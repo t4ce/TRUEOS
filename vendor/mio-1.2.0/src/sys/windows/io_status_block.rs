@@ -1,4 +1,4 @@
-use core::fmt;
+use ::core::fmt;
 use core::ops::{Deref, DerefMut};
 
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;

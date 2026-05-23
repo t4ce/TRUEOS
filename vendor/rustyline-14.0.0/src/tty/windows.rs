@@ -1,13 +1,13 @@
 //! Windows specific definitions
 #![allow(clippy::try_err)] // suggested fix does not work (cannot infer...)
 
+use core::sync::atomic::{AtomicBool, Ordering};
 use std::fs::OpenOptions;
 use std::io;
 use std::mem;
 use std::os::windows::io::IntoRawHandle;
 use std::ptr;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
 
@@ -36,10 +36,7 @@ fn check_handle(handle: HANDLE) -> Result<HANDLE> {
     if handle == foundation::INVALID_HANDLE_VALUE {
         Err(io::Error::last_os_error())?;
     } else if handle == 0 {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            "no stdio handle available for this process",
-        ))?;
+        Err(io::Error::new(io::ErrorKind::Other, "no stdio handle available for this process"))?;
     }
     Ok(handle)
 }
@@ -56,10 +53,7 @@ fn get_win_size(handle: HANDLE) -> (usize, usize) {
     let mut info = unsafe { mem::zeroed() };
     match unsafe { console::GetConsoleScreenBufferInfo(handle, &mut info) } {
         FALSE => (80, 24),
-        _ => (
-            info.dwSize.X as usize,
-            (1 + info.srWindow.Bottom - info.srWindow.Top) as usize,
-        ), // (info.srWindow.Right - info.srWindow.Left + 1)
+        _ => (info.dwSize.X as usize, (1 + info.srWindow.Bottom - info.srWindow.Top) as usize), // (info.srWindow.Right - info.srWindow.Left + 1)
     }
 }
 
@@ -379,11 +373,7 @@ impl ConsoleRenderer {
         coord.X = 0;
         coord.Y -= current_row as i16;
         let coord = self.set_console_cursor_position(coord, info.dwSize)?;
-        self.clear(
-            (info.dwSize.X * (old_rows as i16 + 1)) as u32,
-            coord,
-            info.wAttributes,
-        )
+        self.clear((info.dwSize.X * (old_rows as i16 + 1)) as u32, coord, info.wAttributes)
     }
 }
 

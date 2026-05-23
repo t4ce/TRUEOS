@@ -3,7 +3,7 @@
 use hyper::rt::Executor;
 use alloc::sync::Arc;
 use alloc::boxed::Box;
-use core::fmt;
+use ::core::fmt;
 use core::future::Future;
 use core::pin::Pin;
 

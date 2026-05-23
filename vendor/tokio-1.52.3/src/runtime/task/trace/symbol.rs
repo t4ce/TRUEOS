@@ -2,7 +2,7 @@
 use crate::runtime::prelude::*;
 
 use backtrace::BacktraceSymbol;
-use core::fmt;
+use ::core::fmt;
 use core::hash::{Hash, Hasher};
 use core::ptr;
 

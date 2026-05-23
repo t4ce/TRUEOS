@@ -310,8 +310,8 @@ mod internal {
     #[derive(Debug)]
     pub struct SingletonError(pub(super) BoxError);
 
-    impl core::fmt::Display for SingletonError {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    impl ::core::fmt::Display for SingletonError {
+        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
             f.write_str("singleton connection error")
         }
     }
@@ -325,8 +325,8 @@ mod internal {
     #[derive(Debug)]
     struct Canceled;
 
-    impl core::fmt::Display for Canceled {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    impl ::core::fmt::Display for Canceled {
+        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
             f.write_str("singleton connection canceled")
         }
     }

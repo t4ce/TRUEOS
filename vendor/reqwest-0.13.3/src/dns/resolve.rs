@@ -176,7 +176,7 @@ where
 }
 
 mod sealed {
-    use core::fmt;
+    use ::core::fmt;
 
     #[derive(Debug)]
     pub struct InvalidNameError {

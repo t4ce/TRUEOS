@@ -9,8 +9,8 @@ use crate::proto::{self, Error, Initiator};
 use bytes::Buf;
 use tokio::io::AsyncWrite;
 
-use std::cmp::Ordering;
 use core::task::{Context, Poll, Waker};
+use std::cmp::Ordering;
 use tokio::io;
 
 /// Manages state transitions related to outbound frames.

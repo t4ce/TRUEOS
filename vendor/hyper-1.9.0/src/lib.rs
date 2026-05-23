@@ -135,7 +135,7 @@ pub mod error {
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod fmt {
-    pub use core::fmt::*;
+    pub use ::core::fmt::*;
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
@@ -209,11 +209,16 @@ pub mod string {
     pub use alloc::string::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod sync {
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    pub use ::std::sync::*;
+
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     pub use alloc::sync::{Arc, Weak};
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     pub use core::sync::atomic;
 
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     use core::{
         cell::UnsafeCell,
         convert::Infallible,
@@ -221,18 +226,23 @@ pub mod sync {
         sync::atomic::{AtomicBool, Ordering},
     };
 
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     pub struct Mutex<T: ?Sized> {
         locked: AtomicBool,
         value: UnsafeCell<T>,
     }
 
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     pub struct MutexGuard<'a, T: ?Sized> {
         mutex: &'a Mutex<T>,
     }
 
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     unsafe impl<T: ?Sized + Send> Send for Mutex<T> {}
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     unsafe impl<T: ?Sized + Send> Sync for Mutex<T> {}
 
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     impl<T> Mutex<T> {
         pub const fn new(value: T) -> Self {
             Self {
@@ -246,6 +256,7 @@ pub mod sync {
         }
     }
 
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     impl<T: ?Sized> Mutex<T> {
         pub fn lock(&self) -> Result<MutexGuard<'_, T>, Infallible> {
             while self
@@ -259,12 +270,14 @@ pub mod sync {
         }
     }
 
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     impl<T: ?Sized> Drop for MutexGuard<'_, T> {
         fn drop(&mut self) {
             self.mutex.locked.store(false, Ordering::Release);
         }
     }
 
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     impl<T: ?Sized> Deref for MutexGuard<'_, T> {
         type Target = T;
 
@@ -273,6 +286,7 @@ pub mod sync {
         }
     }
 
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     impl<T: ?Sized> DerefMut for MutexGuard<'_, T> {
         fn deref_mut(&mut self) -> &mut T {
             unsafe { &mut *self.mutex.value.get() }
@@ -308,7 +322,9 @@ pub mod time {
         }
 
         pub fn duration_since(self, earlier: SystemTime) -> Result<Duration, Duration> {
-            self.0.checked_sub(earlier.0).ok_or_else(|| earlier.0 - self.0)
+            self.0
+                .checked_sub(earlier.0)
+                .ok_or_else(|| earlier.0 - self.0)
         }
     }
 
@@ -361,9 +377,9 @@ mod platform;
 
 pub mod body;
 mod common;
+pub mod ext;
 #[path = "error.rs"]
 mod hyper_error;
-pub mod ext;
 pub mod rt;
 pub mod service;
 pub mod upgrade;

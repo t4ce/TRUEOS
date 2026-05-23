@@ -222,7 +222,7 @@ pub mod collections {
 #[cfg(not(feature = "std"))]
 pub mod fmt {
     //! no_std compatibility re-exports for existing http paths.
-    pub use core::fmt::*;
+    pub use ::core::fmt::*;
 }
 
 #[cfg(not(feature = "std"))]

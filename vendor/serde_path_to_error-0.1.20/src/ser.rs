@@ -3,7 +3,7 @@ use crate::{Chain, Error, Track};
 use alloc::borrow::ToOwned as _;
 use alloc::string::{String, ToString as _};
 use core::cell::Cell;
-use core::fmt::Display;
+use ::core::fmt::Display;
 use serde::ser::{self, Serialize};
 
 /// Entry point for tracking path to Serialize error.

@@ -1,5 +1,5 @@
 use core::convert::From;
-use core::fmt;
+use ::core::fmt;
 
 use super::{Error, Result};
 use crate::phy::ChecksumCapabilities;

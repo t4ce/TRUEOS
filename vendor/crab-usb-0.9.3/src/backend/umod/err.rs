@@ -1,4 +1,4 @@
-use core::fmt::Display;
+use ::core::fmt::Display;
 
 use libusb1_sys::constants::*;
 use usb_if::err::{TransferError, USBError};
@@ -33,7 +33,7 @@ pub(crate) fn libusb_error_to_usb_error(code: i32) -> Result<i32, LibUsbErr> {
 }
 
 impl Display for LibUsbErr {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         write!(f, "LibUSB error {}: {}", self.code, self.msg)
     }
 }

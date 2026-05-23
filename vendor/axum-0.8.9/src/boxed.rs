@@ -2,7 +2,8 @@
 use crate::prelude::rust_2021::*;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use alloc::borrow::ToOwned;
-use std::{convert::Infallible, fmt};
+use ::core::fmt;
+use std::convert::Infallible;
 
 use crate::extract::Request;
 use tower::Service;

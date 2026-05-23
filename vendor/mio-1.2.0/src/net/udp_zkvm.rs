@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
 
-use core::fmt;
+use ::core::fmt;
 use core::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use trueos_io as io;
 

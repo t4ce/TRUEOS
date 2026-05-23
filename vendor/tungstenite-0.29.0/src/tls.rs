@@ -23,7 +23,7 @@ pub enum Connector {
     NativeTls(native_tls_crate::TlsConnector),
     /// `rustls` TLS connector.
     #[cfg(feature = "__rustls-tls")]
-    Rustls(std::sync::Arc<rustls::ClientConfig>),
+    Rustls(crate::sync::Arc<rustls::ClientConfig>),
 }
 
 mod encryption {
@@ -73,10 +73,8 @@ mod encryption {
         use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
         use rustls_pki_types::ServerName;
 
-        use std::{
-            io::{Read, Write},
-            sync::Arc,
-        };
+        use crate::io::{Read, Write};
+        use crate::sync::Arc;
 
         use crate::{
             error::TlsError,

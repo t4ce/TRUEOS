@@ -1,5 +1,5 @@
 use core::cmp;
-use core::fmt;
+use ::core::fmt;
 use crate::io::{self, IoSlice};
 use core::pin::Pin;
 use core::task::{Context, Poll};

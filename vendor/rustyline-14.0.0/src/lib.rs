@@ -41,7 +41,7 @@ mod tty;
 mod undo;
 pub mod validate;
 
-use std::fmt;
+use ::core::fmt;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 use std::result;

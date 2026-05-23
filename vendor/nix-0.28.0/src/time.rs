@@ -5,8 +5,8 @@ use crate::sys::time::TimeSpec;
 #[cfg(feature = "process")]
 use crate::unistd::Pid;
 use crate::{Errno, Result};
-use libc::{self, clockid_t};
 use core::mem::MaybeUninit;
+use libc::{self, clockid_t};
 
 /// Clock identifier
 ///
@@ -64,22 +64,18 @@ impl ClockId {
     /// Like [`CLOCK_BOOTTIME`](ClockId::CLOCK_BOOTTIME), but will wake the system if it is
     /// suspended..
     #[cfg(any(linux_android, target_os = "emscripten", target_os = "fuchsia"))]
-    pub const CLOCK_BOOTTIME_ALARM: ClockId =
-        ClockId(libc::CLOCK_BOOTTIME_ALARM);
+    pub const CLOCK_BOOTTIME_ALARM: ClockId = ClockId(libc::CLOCK_BOOTTIME_ALARM);
     /// Increments in SI seconds.
     pub const CLOCK_MONOTONIC: ClockId = ClockId(libc::CLOCK_MONOTONIC);
     /// Like [`CLOCK_MONOTONIC`](ClockId::CLOCK_MONOTONIC), but optimized for execution time at the expense of accuracy.
     #[cfg(any(linux_android, target_os = "emscripten", target_os = "fuchsia"))]
-    pub const CLOCK_MONOTONIC_COARSE: ClockId =
-        ClockId(libc::CLOCK_MONOTONIC_COARSE);
+    pub const CLOCK_MONOTONIC_COARSE: ClockId = ClockId(libc::CLOCK_MONOTONIC_COARSE);
     #[cfg(freebsdlike)]
     /// Like [`CLOCK_MONOTONIC`](ClockId::CLOCK_MONOTONIC), but optimized for execution time at the expense of accuracy.
-    pub const CLOCK_MONOTONIC_FAST: ClockId =
-        ClockId(libc::CLOCK_MONOTONIC_FAST);
+    pub const CLOCK_MONOTONIC_FAST: ClockId = ClockId(libc::CLOCK_MONOTONIC_FAST);
     #[cfg(freebsdlike)]
     /// Like [`CLOCK_MONOTONIC`](ClockId::CLOCK_MONOTONIC), but optimized for accuracy at the expense of execution time.
-    pub const CLOCK_MONOTONIC_PRECISE: ClockId =
-        ClockId(libc::CLOCK_MONOTONIC_PRECISE);
+    pub const CLOCK_MONOTONIC_PRECISE: ClockId = ClockId(libc::CLOCK_MONOTONIC_PRECISE);
     /// Similar to [`CLOCK_MONOTONIC`](ClockId::CLOCK_MONOTONIC), but provides access to a raw
     /// hardware-based time that is not subject to NTP adjustments.
     #[cfg(any(linux_android, target_os = "emscripten", target_os = "fuchsia"))]
@@ -93,8 +89,7 @@ impl ClockId {
         target_os = "redox",
     ))]
     /// Returns the execution time of the calling process.
-    pub const CLOCK_PROCESS_CPUTIME_ID: ClockId =
-        ClockId(libc::CLOCK_PROCESS_CPUTIME_ID);
+    pub const CLOCK_PROCESS_CPUTIME_ID: ClockId = ClockId(libc::CLOCK_PROCESS_CPUTIME_ID);
     #[cfg(freebsdlike)]
     /// Increments when the CPU is running in user or kernel mode
     pub const CLOCK_PROF: ClockId = ClockId(libc::CLOCK_PROF);
@@ -102,19 +97,16 @@ impl ClockId {
     pub const CLOCK_REALTIME: ClockId = ClockId(libc::CLOCK_REALTIME);
     /// Like [`CLOCK_REALTIME`](ClockId::CLOCK_REALTIME), but not settable.
     #[cfg(any(linux_android, target_os = "emscripten", target_os = "fuchsia"))]
-    pub const CLOCK_REALTIME_ALARM: ClockId =
-        ClockId(libc::CLOCK_REALTIME_ALARM);
+    pub const CLOCK_REALTIME_ALARM: ClockId = ClockId(libc::CLOCK_REALTIME_ALARM);
     /// Like [`CLOCK_REALTIME`](ClockId::CLOCK_REALTIME), but optimized for execution time at the expense of accuracy.
     #[cfg(any(linux_android, target_os = "emscripten", target_os = "fuchsia"))]
-    pub const CLOCK_REALTIME_COARSE: ClockId =
-        ClockId(libc::CLOCK_REALTIME_COARSE);
+    pub const CLOCK_REALTIME_COARSE: ClockId = ClockId(libc::CLOCK_REALTIME_COARSE);
     #[cfg(freebsdlike)]
     /// Like [`CLOCK_REALTIME`](ClockId::CLOCK_REALTIME), but optimized for execution time at the expense of accuracy.
     pub const CLOCK_REALTIME_FAST: ClockId = ClockId(libc::CLOCK_REALTIME_FAST);
     #[cfg(freebsdlike)]
     /// Like [`CLOCK_REALTIME`](ClockId::CLOCK_REALTIME), but optimized for accuracy at the expense of execution time.
-    pub const CLOCK_REALTIME_PRECISE: ClockId =
-        ClockId(libc::CLOCK_REALTIME_PRECISE);
+    pub const CLOCK_REALTIME_PRECISE: ClockId = ClockId(libc::CLOCK_REALTIME_PRECISE);
     #[cfg(freebsdlike)]
     /// Returns the current second without performing a full time counter query, using an in-kernel
     /// cached value of the current second.
@@ -139,8 +131,7 @@ impl ClockId {
         target_os = "fuchsia",
     ))]
     /// Returns the execution time of the calling thread.
-    pub const CLOCK_THREAD_CPUTIME_ID: ClockId =
-        ClockId(libc::CLOCK_THREAD_CPUTIME_ID);
+    pub const CLOCK_THREAD_CPUTIME_ID: ClockId = ClockId(libc::CLOCK_THREAD_CPUTIME_ID);
     #[cfg(freebsdlike)]
     /// Starts at zero when the kernel boots and increments monotonically in SI seconds while the
     /// machine is running.
@@ -150,8 +141,7 @@ impl ClockId {
     pub const CLOCK_UPTIME_FAST: ClockId = ClockId(libc::CLOCK_UPTIME_FAST);
     #[cfg(freebsdlike)]
     /// Like [`CLOCK_UPTIME`](ClockId::CLOCK_UPTIME), but optimized for accuracy at the expense of execution time.
-    pub const CLOCK_UPTIME_PRECISE: ClockId =
-        ClockId(libc::CLOCK_UPTIME_PRECISE);
+    pub const CLOCK_UPTIME_PRECISE: ClockId = ClockId(libc::CLOCK_UPTIME_PRECISE);
     #[cfg(freebsdlike)]
     /// Increments only when the CPU is running in user mode on behalf of the calling process.
     pub const CLOCK_VIRTUAL: ClockId = ClockId(libc::CLOCK_VIRTUAL);
@@ -169,9 +159,9 @@ impl From<clockid_t> for ClockId {
     }
 }
 
-impl std::fmt::Display for ClockId {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
+impl ::core::fmt::Display for ClockId {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        ::core::fmt::Display::fmt(&self.0, f)
     }
 }
 
@@ -180,8 +170,7 @@ impl std::fmt::Display for ClockId {
 #[cfg(not(target_os = "redox"))]
 pub fn clock_getres(clock_id: ClockId) -> Result<TimeSpec> {
     let mut c_time: MaybeUninit<libc::timespec> = MaybeUninit::uninit();
-    let ret =
-        unsafe { libc::clock_getres(clock_id.as_raw(), c_time.as_mut_ptr()) };
+    let ret = unsafe { libc::clock_getres(clock_id.as_raw(), c_time.as_mut_ptr()) };
     Errno::result(ret)?;
     let res = unsafe { c_time.assume_init() };
     Ok(TimeSpec::from(res))
@@ -191,8 +180,7 @@ pub fn clock_getres(clock_id: ClockId) -> Result<TimeSpec> {
 /// [clock_gettime(2)](https://pubs.opengroup.org/onlinepubs/7908799/xsh/clock_gettime.html)).
 pub fn clock_gettime(clock_id: ClockId) -> Result<TimeSpec> {
     let mut c_time: MaybeUninit<libc::timespec> = MaybeUninit::uninit();
-    let ret =
-        unsafe { libc::clock_gettime(clock_id.as_raw(), c_time.as_mut_ptr()) };
+    let ret = unsafe { libc::clock_gettime(clock_id.as_raw(), c_time.as_mut_ptr()) };
     Errno::result(ret)?;
     let res = unsafe { c_time.assume_init() };
     Ok(TimeSpec::from(res))
@@ -208,8 +196,7 @@ pub fn clock_gettime(clock_id: ClockId) -> Result<TimeSpec> {
     target_os = "hermit"
 )))]
 pub fn clock_settime(clock_id: ClockId, timespec: TimeSpec) -> Result<()> {
-    let ret =
-        unsafe { libc::clock_settime(clock_id.as_raw(), timespec.as_ref()) };
+    let ret = unsafe { libc::clock_settime(clock_id.as_raw(), timespec.as_ref()) };
     Errno::result(ret).map(drop)
 }
 
@@ -220,8 +207,7 @@ pub fn clock_settime(clock_id: ClockId, timespec: TimeSpec) -> Result<()> {
 #[cfg_attr(docsrs, doc(cfg(feature = "process")))]
 pub fn clock_getcpuclockid(pid: Pid) -> Result<ClockId> {
     let mut clk_id: MaybeUninit<libc::clockid_t> = MaybeUninit::uninit();
-    let ret =
-        unsafe { libc::clock_getcpuclockid(pid.into(), clk_id.as_mut_ptr()) };
+    let ret = unsafe { libc::clock_getcpuclockid(pid.into(), clk_id.as_mut_ptr()) };
     if ret == 0 {
         let res = unsafe { clk_id.assume_init() };
         Ok(ClockId::from(res))

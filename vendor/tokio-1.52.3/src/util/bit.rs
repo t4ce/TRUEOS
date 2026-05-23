@@ -1,4 +1,4 @@
-use core::fmt;
+use ::core::fmt;
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct Pack {

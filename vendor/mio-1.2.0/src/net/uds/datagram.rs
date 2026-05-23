@@ -1,9 +1,12 @@
+use crate::io;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::path::Path;
+use ::core::fmt;
 use std::net::Shutdown;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::os::unix::net::{self, SocketAddr};
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::path::Path;
-use core::fmt;
-use crate::io;
 
 use crate::io_source::IoSource;
 use crate::{event, sys, Interest, Registry, Token};
@@ -53,10 +56,7 @@ impl UnixDatagram {
     /// Create an unnamed pair of connected sockets.
     pub fn pair() -> io::Result<(UnixDatagram, UnixDatagram)> {
         sys::uds::datagram::pair().map(|(socket1, socket2)| {
-            (
-                UnixDatagram::from_std(socket1),
-                UnixDatagram::from_std(socket2),
-            )
+            (UnixDatagram::from_std(socket1), UnixDatagram::from_std(socket2))
         })
     }
 

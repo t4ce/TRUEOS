@@ -1,6 +1,6 @@
 use futures_core::TryFuture;
 use futures_util::{future, TryFutureExt};
-use core::fmt;
+use ::core::fmt;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
@@ -44,8 +44,8 @@ impl<F1, F2: TryFuture, N> AndThenFuture<F1, F2, N> {
     }
 }
 
-impl<F1, F2: TryFuture, N> core::fmt::Debug for AndThenFuture<F1, F2, N> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl<F1, F2: TryFuture, N> ::core::fmt::Debug for AndThenFuture<F1, F2, N> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_tuple("AndThenFuture")
             .field(&format_args!("..."))
             .finish()

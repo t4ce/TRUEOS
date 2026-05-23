@@ -12,7 +12,7 @@ use crate::runtime::{
 };
 use crate::util::RngSeedGenerator;
 
-use core::fmt;
+use ::core::fmt;
 use core::num::NonZeroU64;
 
 mod metrics;

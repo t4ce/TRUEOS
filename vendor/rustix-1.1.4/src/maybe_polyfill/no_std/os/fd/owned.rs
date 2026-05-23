@@ -12,7 +12,7 @@
 
 use super::raw::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
 use crate::io::close;
-use core::fmt;
+use ::core::fmt;
 use core::marker::PhantomData;
 use core::mem::forget;
 

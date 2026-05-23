@@ -790,7 +790,7 @@ mod tests {
             + IntoNodeReferences
             + IntoNeighborsDirected
             + GraphBase<NodeId = G::NodeId>,
-        G::NodeId: core::fmt::Debug,
+        G::NodeId: ::core::fmt::Debug,
     {
         let ordered_nodes: Vec<_> = acyclic.nodes_iter().collect();
         assert_eq!(ordered_nodes.len(), acyclic.node_count());

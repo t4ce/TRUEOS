@@ -1,6 +1,6 @@
 //! Environment variables
 use cfg_if::cfg_if;
-use std::fmt;
+use ::core::fmt;
 
 /// Indicates that [`clearenv`] failed for some unknown reason
 #[derive(Clone, Copy, Debug)]

@@ -49,8 +49,8 @@ impl<N: NonceSequence> BoundKey<N> for OpeningKey<N> {
     }
 }
 
-impl<N: NonceSequence> core::fmt::Debug for OpeningKey<N> {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
+impl<N: NonceSequence> ::core::fmt::Debug for OpeningKey<N> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
         self.key.fmt_debug("OpeningKey", f)
     }
 }

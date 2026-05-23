@@ -2,7 +2,7 @@ use crate::codec::SendError;
 use crate::frame::{Reason, StreamId};
 
 use bytes::Bytes;
-use std::fmt;
+use ::core::fmt;
 use tokio::io;
 
 /// Either an H2 reason  or an I/O error

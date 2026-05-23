@@ -6,7 +6,7 @@ cfg_not_wasip1! {
     use crate::net::{to_socket_addrs, ToSocketAddrs};
 }
 
-use core::fmt;
+use ::core::fmt;
 use std::io;
 use std::net::{self, SocketAddr};
 use core::task::{ready, Context, Poll};

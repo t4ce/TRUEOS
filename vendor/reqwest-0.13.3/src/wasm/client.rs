@@ -1,8 +1,9 @@
+use core::convert::TryInto;
+use ::core::fmt;
 use http::header::USER_AGENT;
 use http::{HeaderMap, HeaderValue, Method};
 use js_sys::Promise;
-use core::convert::TryInto;
-use std::{fmt, future::Future, sync::Arc};
+use std::{future::Future, sync::Arc};
 use url::Url;
 use wasm_bindgen::prelude::{wasm_bindgen, UnwrapThrowExt as _};
 use wasm_bindgen::JsCast;
@@ -205,10 +206,7 @@ async fn fetch(req: Request) -> crate::Result<Response> {
 
     for (name, value) in req.headers() {
         js_headers
-            .append(
-                name.as_str(),
-                value.to_str().map_err(crate::error::builder)?,
-            )
+            .append(name.as_str(), value.to_str().map_err(crate::error::builder)?)
             .map_err(crate::error::wasm)
             .map_err(crate::error::builder)?;
     }

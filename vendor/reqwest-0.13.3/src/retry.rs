@@ -363,8 +363,8 @@ mod scope {
         }
     }
 
-    impl core::fmt::Debug for Scoped {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    impl ::core::fmt::Debug for Scoped {
+        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
             match self {
                 Self::Unscoped => f.write_str("Unscoped"),
                 Self::Dyn(_) => f.write_str("Scoped"),
@@ -479,8 +479,8 @@ mod classify {
         }
     }
 
-    impl core::fmt::Debug for Classifier {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    impl ::core::fmt::Debug for Classifier {
+        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
             match self {
                 Self::Never => f.write_str("Never"),
                 Self::ProtocolNacks => f.write_str("ProtocolNacks"),

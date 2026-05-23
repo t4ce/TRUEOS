@@ -12,7 +12,7 @@ use crate::net::tcp::split::{split, ReadHalf, WriteHalf};
 use crate::net::tcp::split_owned::{split_owned, OwnedReadHalf, OwnedWriteHalf};
 use crate::util::check_socket_for_blocking;
 
-use core::fmt;
+use ::core::fmt;
 use std::io;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use core::net::SocketAddr;

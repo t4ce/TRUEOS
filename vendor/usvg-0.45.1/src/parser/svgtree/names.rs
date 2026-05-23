@@ -147,14 +147,14 @@ impl EId {
     }
 }
 
-impl core::fmt::Debug for EId {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+impl ::core::fmt::Debug for EId {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         write!(f, "{}", self.to_str())
     }
 }
 
-impl core::fmt::Display for EId {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+impl ::core::fmt::Display for EId {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         write!(f, "{:?}", self)
     }
 }
@@ -645,14 +645,14 @@ impl AId {
     }
 }
 
-impl core::fmt::Debug for AId {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+impl ::core::fmt::Debug for AId {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         write!(f, "{}", self.to_str())
     }
 }
 
-impl core::fmt::Display for AId {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+impl ::core::fmt::Display for AId {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         write!(f, "{:?}", self)
     }
 }

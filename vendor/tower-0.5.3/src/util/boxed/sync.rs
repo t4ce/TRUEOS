@@ -6,7 +6,7 @@ use tower_service::Service;
 
 use sync_wrapper::SyncWrapper;
 
-use core::fmt;
+use ::core::fmt;
 use std::{
     future::Future,
     pin::Pin,

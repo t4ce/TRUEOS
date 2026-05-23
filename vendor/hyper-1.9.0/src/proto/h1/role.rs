@@ -2,7 +2,7 @@ use core::mem::MaybeUninit;
 use alloc::vec::Vec;
 
 #[cfg(feature = "client")]
-use core::fmt::{self, Write as _};
+use ::core::fmt::{self, Write as _};
 
 use bytes::Bytes;
 use bytes::BytesMut;
@@ -1196,7 +1196,7 @@ impl Http1Transaction for Client {
 
         extend(dst, msg.head.subject.0.as_str().as_bytes());
         extend(dst, b" ");
-        //TODO: add API to http::Uri to encode without core::fmt
+        //TODO: add API to http::Uri to encode without ::core::fmt
         let _ = write!(FastWrite(dst), "{} ", msg.head.subject.1);
 
         match msg.head.version {

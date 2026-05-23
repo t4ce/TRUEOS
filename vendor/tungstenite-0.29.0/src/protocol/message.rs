@@ -3,15 +3,12 @@ use crate::{
     error::{CapacityError, Error, Result},
     protocol::frame::Utf8Bytes,
 };
-use alloc::{
-    string::String,
-    vec::Vec,
-};
+use alloc::{string::String, vec::Vec};
 use core::{fmt, result::Result as StdResult, str};
 
 mod string_collect {
-    use alloc::{format, string::String};
     use crate::utf8::DecodeError;
+    use alloc::{format, string::String};
 
     use crate::error::{Error, Result};
 
@@ -23,7 +20,10 @@ mod string_collect {
 
     impl StringCollector {
         pub fn new() -> Self {
-            StringCollector { data: String::new(), incomplete: None }
+            StringCollector {
+                data: String::new(),
+                incomplete: None,
+            }
         }
 
         pub fn len(&self) -> usize {
@@ -56,12 +56,19 @@ mod string_collect {
                         self.data.push_str(text);
                         Ok(())
                     }
-                    Err(DecodeError::Incomplete { valid_prefix, incomplete_suffix }) => {
+                    Err(DecodeError::Incomplete {
+                        valid_prefix,
+                        incomplete_suffix,
+                    }) => {
                         self.data.push_str(valid_prefix);
                         self.incomplete = Some(incomplete_suffix);
                         Ok(())
                     }
-                    Err(DecodeError::Invalid { valid_prefix, invalid_sequence, .. }) => {
+                    Err(DecodeError::Invalid {
+                        valid_prefix,
+                        invalid_sequence,
+                        ..
+                    }) => {
                         self.data.push_str(valid_prefix);
                         Err(Error::Utf8(String::from_utf8_lossy(invalid_sequence).into()))
                     }

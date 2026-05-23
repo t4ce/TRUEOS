@@ -3,20 +3,20 @@
 // Permission to use this code has been granted by original author:
 // https://github.com/tokio-rs/mio/pull/1602#issuecomment-1218441031
 
+use ::core::fmt::{Debug, Formatter};
 use std::collections::HashMap;
-use core::fmt::{Debug, Formatter};
 #[cfg(not(target_os = "hermit"))]
 use std::os::fd::RawFd;
 // TODO: once <https://github.com/rust-lang/rust/issues/126198> is fixed this
 // can use `std::os::fd` and be merged with the above.
+use crate::io;
+use ::core::fmt;
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::time::Duration;
+use std::cmp;
 #[cfg(target_os = "hermit")]
 use std::os::hermit::io::RawFd;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use core::time::Duration;
-use core::fmt;
-use crate::io;
-use std::{cmp};
 
 use crate::sys::unix::waker::Waker as WakerInternal;
 use crate::{Interest, Token};
@@ -250,7 +250,8 @@ impl SelectorState {
             // We now check whether this poll was performed with descriptors which were pending
             // for removal and filter out any matching.
             let mut pending_removal_guard = self.pending_removal.lock().unwrap();
-            let mut pending_removal = core::mem::replace(pending_removal_guard.as_mut(), Vec::new());
+            let mut pending_removal =
+                core::mem::replace(pending_removal_guard.as_mut(), Vec::new());
             drop(pending_removal_guard);
 
             // Store the events if there were any.
@@ -586,7 +587,7 @@ pub struct Event {
 pub type Events = Vec<Event>;
 
 pub mod event {
-    use core::fmt;
+    use ::core::fmt;
 
     use crate::sys::Event;
     use crate::Token;

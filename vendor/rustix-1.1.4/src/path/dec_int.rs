@@ -8,7 +8,7 @@
 
 use crate::backend::fd::{AsFd, AsRawFd as _};
 use crate::ffi::CStr;
-use core::fmt;
+use ::core::fmt;
 use core::hint::unreachable_unchecked;
 use core::mem::{self, MaybeUninit};
 use core::num::{NonZeroU8, NonZeroUsize};

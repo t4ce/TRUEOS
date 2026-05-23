@@ -3,7 +3,7 @@
 use tower_layer::{Identity, Layer, Stack};
 use tower_service::Service;
 
-use core::fmt;
+use ::core::fmt;
 
 /// Declaratively construct [`Service`] values.
 ///

@@ -11,7 +11,7 @@
 use num_traits::Float;
 use crate::{Distribution, OpenClosed01};
 use rand::Rng;
-use core::fmt;
+use ::core::fmt;
 
 /// Samples floating-point numbers according to the Weibull distribution
 ///

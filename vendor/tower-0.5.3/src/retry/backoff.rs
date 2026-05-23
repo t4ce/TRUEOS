@@ -10,7 +10,7 @@
 //!
 //! [backoff]: https://en.wikipedia.org/wiki/Exponential_backoff
 
-use core::fmt::Display;
+use ::core::fmt::Display;
 use core::future::Future;
 use core::time::Duration;
 use tokio::time;
@@ -200,7 +200,7 @@ impl Default for ExponentialBackoffMaker {
 pub struct InvalidBackoff(&'static str);
 
 impl Display for InvalidBackoff {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         write!(f, "invalid backoff: {}", self.0)
     }
 }

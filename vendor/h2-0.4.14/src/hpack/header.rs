@@ -2,9 +2,9 @@ use super::{DecoderError, NeedMore};
 use crate::ext::Protocol;
 
 use bytes::Bytes;
+use ::core::fmt;
 use http::header::{HeaderName, HeaderValue};
 use http::{Method, StatusCode};
-use std::fmt;
 
 /// HTTP/2 Header
 #[derive(Debug, Clone, Eq, PartialEq)]

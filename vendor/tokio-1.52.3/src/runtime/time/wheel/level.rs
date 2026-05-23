@@ -3,7 +3,8 @@ use crate::runtime::prelude::*;
 
 use crate::runtime::time::{EntryList, TimerHandle, TimerShared};
 
-use std::{array, fmt, ptr::NonNull};
+use ::core::fmt;
+use std::{array, ptr::NonNull};
 
 /// Wheel for a single level in the timer. This wheel contains 64 slots.
 pub(crate) struct Level {

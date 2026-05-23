@@ -9,7 +9,7 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::fmt;
+use ::core::fmt;
 
 #[cfg(feature = "backtrace")]
 use backtrace::Backtrace;

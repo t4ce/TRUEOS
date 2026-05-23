@@ -22,8 +22,8 @@ pub enum BindError {
     Unaddressable,
 }
 
-impl core::fmt::Display for BindError {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+impl ::core::fmt::Display for BindError {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         match self {
             BindError::InvalidState => write!(f, "invalid state"),
             BindError::Unaddressable => write!(f, "unaddressable"),
@@ -41,8 +41,8 @@ pub enum SendError {
     BufferFull,
 }
 
-impl core::fmt::Display for SendError {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+impl ::core::fmt::Display for SendError {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         match self {
             SendError::BufferFull => write!(f, "buffer full"),
         }
@@ -60,8 +60,8 @@ pub enum RecvError {
     Truncated,
 }
 
-impl core::fmt::Display for RecvError {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+impl ::core::fmt::Display for RecvError {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         match self {
             RecvError::Exhausted => write!(f, "exhausted"),
             RecvError::Truncated => write!(f, "truncated"),

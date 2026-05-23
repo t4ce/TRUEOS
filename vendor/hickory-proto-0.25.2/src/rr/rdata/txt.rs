@@ -7,7 +7,7 @@
 
 //! text records for storing arbitrary data
 use alloc::{boxed::Box, string::String, vec::Vec};
-use core::fmt;
+use ::core::fmt;
 use core::slice::Iter;
 
 #[cfg(feature = "serde")]

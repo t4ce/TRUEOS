@@ -39,7 +39,7 @@ pub mod convert {
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 #[allow(missing_docs)]
 pub mod fmt {
-    pub use core::fmt::*;
+    pub use ::core::fmt::*;
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]

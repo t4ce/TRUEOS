@@ -1,8 +1,8 @@
 //! Contains error type for handling I/O and Errno errors
+use core::error::Error;
+use ::core::fmt;
 #[cfg(windows)]
 use std::char;
-use core::error::Error;
-use std::fmt;
 use std::io;
 
 /// The error type for Rustyline errors that can arise from

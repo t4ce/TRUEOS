@@ -2,7 +2,7 @@ use crate::data::Create;
 use alloc::boxed::Box;
 use core::convert::TryFrom;
 use core::error::Error;
-use core::fmt::{Display, Formatter};
+use ::core::fmt::{Display, Formatter};
 use dot_parser::ast::AList;
 use dot_parser::ast::Graph as DotGraph;
 use dot_parser::ast::PestError as ParsingError;
@@ -18,7 +18,7 @@ pub struct DotParsingError {
 }
 
 impl Display for DotParsingError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), ::core::fmt::Error> {
         write!(f, "{}", self.error)
     }
 }

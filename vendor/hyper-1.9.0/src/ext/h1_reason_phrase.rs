@@ -130,8 +130,8 @@ pub struct InvalidReasonPhrase {
     bad_byte: u8,
 }
 
-impl core::fmt::Display for InvalidReasonPhrase {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for InvalidReasonPhrase {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         write!(f, "Invalid byte in reason phrase: {}", self.bad_byte)
     }
 }

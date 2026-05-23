@@ -1,11 +1,11 @@
-use core::cell::UnsafeCell;
-use core::fmt;
-use core::ops;
 use ::core::panic;
+use core::cell::UnsafeCell;
+use ::core::fmt;
+use core::ops;
 
 /// `AtomicUsize` providing an additional `unsync_load` function.
 pub(crate) struct AtomicUsize {
-    inner: UnsafeCell<std::sync::atomic::AtomicUsize>,
+    inner: UnsafeCell<core::sync::atomic::AtomicUsize>,
 }
 
 unsafe impl Send for AtomicUsize {}
@@ -15,7 +15,7 @@ impl panic::UnwindSafe for AtomicUsize {}
 
 impl AtomicUsize {
     pub(crate) const fn new(val: usize) -> AtomicUsize {
-        let inner = UnsafeCell::new(std::sync::atomic::AtomicUsize::new(val));
+        let inner = UnsafeCell::new(core::sync::atomic::AtomicUsize::new(val));
         AtomicUsize { inner }
     }
 
@@ -36,7 +36,7 @@ impl AtomicUsize {
 }
 
 impl ops::Deref for AtomicUsize {
-    type Target = std::sync::atomic::AtomicUsize;
+    type Target = core::sync::atomic::AtomicUsize;
 
     fn deref(&self) -> &Self::Target {
         // safety: it is always safe to access `&self` fns on the inner value as

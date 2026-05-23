@@ -152,10 +152,9 @@ impl Read for hyper_io {
 
         match (self.read)(self.userdata, hyper_context::wrap(cx), buf_ptr, buf_len) {
             HYPER_IO_PENDING => Poll::Pending,
-            HYPER_IO_ERROR => Poll::Ready(Err(crate::io::Error::new(
-                crate::io::ErrorKind::Other,
-                "io error",
-            ))),
+            HYPER_IO_ERROR => {
+                Poll::Ready(Err(crate::io::Error::new(crate::io::ErrorKind::Other, "io error")))
+            }
             ok => {
                 // We have to trust that the user's read callback actually
                 // filled in that many bytes... :(
@@ -177,10 +176,9 @@ impl Write for hyper_io {
 
         match (self.write)(self.userdata, hyper_context::wrap(cx), buf_ptr, buf_len) {
             HYPER_IO_PENDING => Poll::Pending,
-            HYPER_IO_ERROR => Poll::Ready(Err(crate::io::Error::new(
-                crate::io::ErrorKind::Other,
-                "io error",
-            ))),
+            HYPER_IO_ERROR => {
+                Poll::Ready(Err(crate::io::Error::new(crate::io::ErrorKind::Other, "io error")))
+            }
             ok => Poll::Ready(Ok(ok)),
         }
     }

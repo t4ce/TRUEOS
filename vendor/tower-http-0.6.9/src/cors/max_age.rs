@@ -1,5 +1,5 @@
 use core::time::Duration;
-use core::fmt;
+use ::core::fmt;
 use std::sync::Arc;
 
 use http::{

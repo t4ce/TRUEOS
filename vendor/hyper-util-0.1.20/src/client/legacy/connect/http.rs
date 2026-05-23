@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
 use core::error::Error as StdError;
-use core::fmt;
+use ::core::fmt;
 use core::future::Future;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use hyper::io;

@@ -9,7 +9,7 @@
 //! The Fréchet distribution.
 
 use crate::{Distribution, OpenClosed01};
-use core::fmt;
+use ::core::fmt;
 use num_traits::Float;
 use rand::Rng;
 

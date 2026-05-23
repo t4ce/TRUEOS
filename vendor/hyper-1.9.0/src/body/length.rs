@@ -1,4 +1,4 @@
-use core::fmt;
+use ::core::fmt;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DecodedLength(u64);
@@ -21,7 +21,6 @@ impl DecodedLength {
     pub(crate) const CLOSE_DELIMITED: DecodedLength = DecodedLength(u64::MAX);
     pub(crate) const CHUNKED: DecodedLength = DecodedLength(u64::MAX - 1);
     pub(crate) const ZERO: DecodedLength = DecodedLength(0);
-
 
     /// Takes the length as a content-length without other checks.
     ///

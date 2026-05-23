@@ -3,13 +3,13 @@ use std::{
     io,
     pin::Pin,
     sync::Arc,
-    task::{Context, Poll, ready},
+    task::{ready, Context, Poll},
     time::Instant,
 };
 
 use tokio::{
     io::Interest,
-    time::{Sleep, sleep_until},
+    time::{sleep_until, Sleep},
 };
 
 use super::{AsyncTimer, AsyncUdpSocket, Runtime, UdpPollHelper};
@@ -63,9 +63,8 @@ impl AsyncUdpSocket for UdpSocket {
     }
 
     fn try_send(&self, transmit: &udp::Transmit) -> io::Result<()> {
-        self.io.try_io(Interest::WRITABLE, || {
-            self.inner.send((&self.io).into(), transmit)
-        })
+        self.io
+            .try_io(Interest::WRITABLE, || self.inner.send((&self.io).into(), transmit))
     }
 
     fn poll_recv(
@@ -76,9 +75,10 @@ impl AsyncUdpSocket for UdpSocket {
     ) -> Poll<io::Result<usize>> {
         loop {
             ready!(self.io.poll_recv_ready(cx))?;
-            if let Ok(res) = self.io.try_io(Interest::READABLE, || {
-                self.inner.recv((&self.io).into(), bufs, meta)
-            }) {
+            if let Ok(res) = self
+                .io
+                .try_io(Interest::READABLE, || self.inner.recv((&self.io).into(), bufs, meta))
+            {
                 return Poll::Ready(Ok(res));
             }
         }

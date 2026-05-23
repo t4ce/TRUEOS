@@ -10,7 +10,7 @@
 use num_traits::Float;
 use crate::{Beta, Distribution, Exp1, Open01, StandardNormal};
 use rand::Rng;
-use core::fmt;
+use ::core::fmt;
 
 /// The PERT distribution.
 ///

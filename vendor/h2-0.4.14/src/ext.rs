@@ -3,7 +3,7 @@
 use crate::hpack::BytesStr;
 
 use bytes::Bytes;
-use std::fmt;
+use ::core::fmt;
 
 /// Represents the `:protocol` pseudo-header used by
 /// the [Extended CONNECT Protocol].

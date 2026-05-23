@@ -56,7 +56,7 @@ pub trait NonceSequence {
 }
 
 /// An AEAD key bound to a nonce sequence.
-pub trait BoundKey<N: NonceSequence>: core::fmt::Debug {
+pub trait BoundKey<N: NonceSequence>: ::core::fmt::Debug {
     /// Constructs a new key from the given `UnboundKey` and `NonceSequence`.
     fn new(key: UnboundKey, nonce_sequence: N) -> Self;
 
@@ -96,11 +96,11 @@ impl Aad<[u8; 0]> {
     }
 }
 
-impl<A> core::fmt::Debug for Aad<A>
+impl<A> ::core::fmt::Debug for Aad<A>
 where
-    A: core::fmt::Debug,
+    A: ::core::fmt::Debug,
 {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_tuple("Aad").field(&self.0).finish()
     }
 }

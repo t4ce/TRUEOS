@@ -1,7 +1,7 @@
 //! Connection statistics
 
 #![allow(missing_docs)]
-use crate::{Dir, Duration, frame::Frame};
+use crate::{frame::Frame, Dir, Duration};
 
 /// Statistics about UDP datagrams transmitted or received on a connection
 ///
@@ -100,8 +100,8 @@ impl FrameStats {
     }
 }
 
-impl std::fmt::Debug for FrameStats {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl ::core::fmt::Debug for FrameStats {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("FrameStats")
             .field("ACK", &self.acks)
             .field("ACK_FREQUENCY", &self.ack_frequency)

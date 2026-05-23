@@ -1,5 +1,6 @@
 use super::service::Buffer;
-use std::{fmt, marker::PhantomData};
+use ::core::fmt;
+use std::marker::PhantomData;
 use tower_layer::Layer;
 use tower_service::Service;
 

@@ -1,6 +1,6 @@
 use crate::time::wheel::Stack;
 
-use core::fmt;
+use ::core::fmt;
 
 /// Wheel for a single level in the timer. This wheel contains 64 slots.
 pub(crate) struct Level<T> {

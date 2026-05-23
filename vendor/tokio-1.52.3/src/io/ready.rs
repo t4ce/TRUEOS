@@ -2,7 +2,7 @@
 
 use crate::io::interest::Interest;
 
-use core::fmt;
+use ::core::fmt;
 use core::ops;
 
 const READABLE: usize = 0b0_01;

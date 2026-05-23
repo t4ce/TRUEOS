@@ -1,13 +1,14 @@
 #[cfg(any(feature = "__native-tls", feature = "__rustls",))]
 use core::any::Any;
+use ::core::fmt;
 use core::future::Future;
-use std::net::IpAddr;
 use core::pin::Pin;
-use std::sync::Arc;
 use core::task::{ready, Context, Poll};
 use core::time::Duration;
+use std::net::IpAddr;
+use std::str;
+use std::sync::Arc;
 use std::{collections::HashMap, convert::TryInto, net::SocketAddr};
-use std::{fmt, str};
 
 use super::request::{Request, RequestBuilder};
 use super::response::Response;
@@ -431,10 +432,7 @@ impl ClientBuilder {
                 resolver = dns_resolver;
             }
             if !config.dns_overrides.is_empty() {
-                resolver = Arc::new(DnsResolverWithOverrides::new(
-                    resolver,
-                    config.dns_overrides,
-                ));
+                resolver = Arc::new(DnsResolverWithOverrides::new(resolver, config.dns_overrides));
             }
             DynResolver::new(resolver)
         };
@@ -3046,9 +3044,9 @@ impl Future for Pending {
         let inner = self.inner();
         match inner.get_mut() {
             PendingInner::Request(ref mut req) => Pin::new(req).poll(cx),
-            PendingInner::Error(ref mut err) => Poll::Ready(Err(err
-                .take()
-                .expect("Pending error polled more than once"))),
+            PendingInner::Error(ref mut err) => {
+                Poll::Ready(Err(err.take().expect("Pending error polled more than once")))
+            }
         }
     }
 }
@@ -3099,12 +3097,8 @@ impl Future for PendingRequest {
             }
         };
 
-        let res = Response::new(
-            res,
-            self.url.clone(),
-            self.total_timeout.take(),
-            self.read_timeout,
-        );
+        let res =
+            Response::new(res, self.url.clone(), self.total_timeout.take(), self.read_timeout);
         Poll::Ready(Ok(res))
     }
 }

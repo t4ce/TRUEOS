@@ -1,5 +1,5 @@
+use ::core::fmt;
 use core::time::Duration;
-use core::fmt;
 use trueos_io as io;
 
 unsafe extern "C" {

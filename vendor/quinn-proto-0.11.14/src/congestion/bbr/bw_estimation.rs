@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Display, Formatter};
+use ::core::fmt::{Debug, Display, Formatter};
 
 use super::min_max::MinMax;
 use crate::{Duration, Instant};
@@ -53,11 +53,10 @@ impl BandwidthEstimation {
         };
 
         let ack_rate = match self.prev_acked_time {
-            Some(prev_acked_time) => Self::bw_from_delta(
-                self.total_acked - self.prev_total_acked,
-                now - prev_acked_time,
-            )
-            .unwrap_or(0),
+            Some(prev_acked_time) => {
+                Self::bw_from_delta(self.total_acked - self.prev_total_acked, now - prev_acked_time)
+                    .unwrap_or(0)
+            }
             None => 0,
         };
 
@@ -91,11 +90,7 @@ impl BandwidthEstimation {
 }
 
 impl Display for BandwidthEstimation {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{:.3} MB/s",
-            self.get_estimate() as f32 / (1024 * 1024) as f32
-        )
+    fn fmt(&self, f: &mut Formatter<'_>) -> ::core::fmt::Result {
+        write!(f, "{:.3} MB/s", self.get_estimate() as f32 / (1024 * 1024) as f32)
     }
 }

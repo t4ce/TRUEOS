@@ -20,7 +20,7 @@ mod rr_key;
 mod rr_set;
 pub mod serial_number;
 
-use core::fmt::{Debug, Display};
+use ::core::fmt::{Debug, Display};
 
 use crate::{
     error::ProtoResult,

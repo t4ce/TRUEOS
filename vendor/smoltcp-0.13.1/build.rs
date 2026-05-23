@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::fmt::Write;
+use ::core::fmt::Write;
 use std::path::PathBuf;
 use std::{env, fs};
 

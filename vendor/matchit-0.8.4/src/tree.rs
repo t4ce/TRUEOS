@@ -6,10 +6,11 @@ use core::cell::UnsafeCell;
 use core::clone::Clone;
 use core::cmp::min;
 use core::default::Default;
-use core::option::Option::{self, None, Some};
+use ::core::fmt;
 use core::ops::Range;
+use core::option::Option::{self, None, Some};
 use core::result::Result::{self, Err, Ok};
-use std::{fmt, mem};
+use std::mem;
 
 /// A radix tree used for URL path matching.
 ///

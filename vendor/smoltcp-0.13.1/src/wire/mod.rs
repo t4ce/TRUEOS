@@ -135,7 +135,7 @@ mod ipsec_ah;
 #[cfg(feature = "proto-ipsec-esp")]
 mod ipsec_esp;
 
-use core::fmt;
+use ::core::fmt;
 
 use crate::phy::Medium;
 
@@ -425,8 +425,8 @@ impl HardwareAddress {
     feature = "medium-ethernet",
     feature = "medium-ieee802154"
 ))]
-impl core::fmt::Display for HardwareAddress {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+impl ::core::fmt::Display for HardwareAddress {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         match self {
             #[cfg(feature = "medium-ip")]
             HardwareAddress::Ip => write!(f, "no hardware addr"),
@@ -523,8 +523,8 @@ impl RawHardwareAddress {
 }
 
 #[cfg(any(feature = "medium-ethernet", feature = "medium-ieee802154"))]
-impl core::fmt::Display for RawHardwareAddress {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+impl ::core::fmt::Display for RawHardwareAddress {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         for (i, &b) in self.as_bytes().iter().enumerate() {
             if i != 0 {
                 write!(f, ":")?;

@@ -74,8 +74,8 @@ impl<'input> Document<'input> {
     }
 }
 
-impl core::fmt::Debug for Document<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
+impl ::core::fmt::Debug for Document<'_> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
         if !self.root().has_children() {
             return write!(f, "Document []");
         }
@@ -94,8 +94,8 @@ impl core::fmt::Debug for Document<'_> {
         fn print_children(
             parent: SvgNode,
             depth: usize,
-            f: &mut core::fmt::Formatter,
-        ) -> Result<(), core::fmt::Error> {
+            f: &mut ::core::fmt::Formatter,
+        ) -> Result<(), ::core::fmt::Error> {
             for child in parent.children() {
                 if child.is_element() {
                     writeln_indented!(depth, f, "Element {{");
@@ -209,8 +209,8 @@ pub struct Attribute<'input> {
     pub important: bool,
 }
 
-impl core::fmt::Debug for Attribute<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
+impl ::core::fmt::Debug for Attribute<'_> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
         write!(
             f,
             "Attribute {{ name: {:?}, value: {}, important: {} }}",
@@ -481,8 +481,8 @@ impl<'a, 'input: 'a> SvgNode<'a, 'input> {
     }
 }
 
-impl core::fmt::Debug for SvgNode<'_, '_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
+impl ::core::fmt::Debug for SvgNode<'_, '_> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
         match self.d.kind {
             NodeKind::Root => write!(f, "Root"),
             NodeKind::Element { .. } => {

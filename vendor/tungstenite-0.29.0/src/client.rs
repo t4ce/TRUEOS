@@ -57,8 +57,15 @@ pub fn connect_with_config<Req: IntoClientRequest>(
             return Err(Error::Url(UrlError::TlsFeatureNotEnabled));
         }
 
-        let host = request.uri().host().ok_or(Error::Url(UrlError::NoHostName))?;
-        let host = if host.starts_with('[') { &host[1..host.len() - 1] } else { host };
+        let host = request
+            .uri()
+            .host()
+            .ok_or(Error::Url(UrlError::NoHostName))?;
+        let host = if host.starts_with('[') {
+            &host[1..host.len() - 1]
+        } else {
+            host
+        };
         let port = uri.port_u16().unwrap_or(match mode {
             Mode::Plain => 80,
             Mode::Tls => 443,
@@ -79,8 +86,10 @@ pub fn connect_with_config<Req: IntoClientRequest>(
     }
 
     fn create_request(parts: &Parts, uri: &Uri) -> Request {
-        let mut builder =
-            Request::builder().uri(uri.clone()).method(parts.method.clone()).version(parts.version);
+        let mut builder = Request::builder()
+            .uri(uri.clone())
+            .method(parts.method.clone())
+            .version(parts.version);
         *builder.headers_mut().expect("Failed to create `Request`") = parts.headers.clone();
         builder.body(()).expect("Failed to create `Request`")
     }
@@ -222,7 +231,10 @@ impl IntoClientRequest for &Uri {
 
 impl IntoClientRequest for Uri {
     fn into_client_request(self) -> Result<Request> {
-        let authority = self.authority().ok_or(Error::Url(UrlError::NoHostName))?.as_str();
+        let authority = self
+            .authority()
+            .ok_or(Error::Url(UrlError::NoHostName))?
+            .as_str();
         let host = authority
             .find('@')
             .map(|idx| authority.split_at(idx + 1).1)
@@ -302,7 +314,11 @@ impl ClientRequestBuilder {
     /// Initializes an empty request builder
     #[must_use]
     pub const fn new(uri: Uri) -> Self {
-        Self { uri, additional_headers: Vec::new(), subprotocols: Vec::new() }
+        Self {
+            uri,
+            additional_headers: Vec::new(),
+            subprotocols: Vec::new(),
+        }
     }
 
     /// Adds (`key`, `value`) as an additional header to the handshake request

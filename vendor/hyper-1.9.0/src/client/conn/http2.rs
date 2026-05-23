@@ -1,12 +1,12 @@
 //! HTTP/2 client connections
 
+use crate::sync::Arc;
 use alloc::boxed::Box;
 use core::error::Error;
-use core::fmt;
+use ::core::fmt;
 use core::future::Future;
 use core::marker::PhantomData;
 use core::pin::Pin;
-use std::sync::Arc;
 use core::task::{Context, Poll};
 use core::time::Duration;
 

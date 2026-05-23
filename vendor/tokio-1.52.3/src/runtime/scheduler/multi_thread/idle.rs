@@ -6,7 +6,7 @@ use crate::runtime::prelude::*;
 use core::sync::atomic::AtomicUsize;
 use crate::runtime::scheduler::multi_thread::Shared;
 
-use core::fmt;
+use ::core::fmt;
 use core::sync::atomic::Ordering::{self, SeqCst};
 
 pub(super) struct Idle {

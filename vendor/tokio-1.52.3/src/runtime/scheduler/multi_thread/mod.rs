@@ -48,7 +48,7 @@ use crate::runtime::{
 };
 use crate::util::RngSeedGenerator;
 
-use core::fmt;
+use ::core::fmt;
 use core::future::Future;
 
 /// Work-stealing based thread pool for executing futures.

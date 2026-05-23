@@ -4,7 +4,7 @@
 //! A 2D size.
 
 use core::convert::{From, Into};
-use core::fmt;
+use ::core::fmt;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
 
 use crate::common::FloatExt;

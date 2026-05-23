@@ -2,7 +2,7 @@
 
 #![allow(missing_docs)]
 use byteorder::{ByteOrder, NetworkEndian};
-use core::fmt;
+use ::core::fmt;
 
 use super::{Error, Result};
 use crate::wire::HardwareAddress;

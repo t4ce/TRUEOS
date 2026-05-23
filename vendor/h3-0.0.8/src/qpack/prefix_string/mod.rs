@@ -3,7 +3,7 @@ mod decode;
 mod encode;
 
 use core::convert::TryInto;
-use core::fmt;
+use ::core::fmt;
 use core::num::TryFromIntError;
 
 use bytes::{Buf, BufMut};
@@ -27,8 +27,8 @@ pub enum Error {
     BufSize(TryFromIntError),
 }
 
-impl core::fmt::Display for Error {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> fmt::Result {
+impl ::core::fmt::Display for Error {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::UnexpectedEnd => write!(f, "unexpected end"),
             Error::Integer(e) => write!(f, "could not parse integer: {}", e),

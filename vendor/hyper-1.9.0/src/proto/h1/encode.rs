@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 use std::collections::HashSet;
-use core::fmt;
+use ::core::fmt;
 use crate::io::IoSlice;
 
 use bytes::buf::{Chain, Take};
@@ -348,7 +348,7 @@ struct ChunkSize {
 
 impl ChunkSize {
     fn new(len: usize) -> ChunkSize {
-        use core::fmt::Write;
+        use ::core::fmt::Write;
         let mut size = ChunkSize {
             bytes: [0; CHUNK_SIZE_MAX_BYTES + 2],
             pos: 0,

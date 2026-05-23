@@ -2,7 +2,7 @@
 //!
 //! [`tower::balance`]: crate::balance
 
-use core::fmt;
+use ::core::fmt;
 
 /// The balancer's endpoint discovery stream failed.
 #[derive(Debug)]

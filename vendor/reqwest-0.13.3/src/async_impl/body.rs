@@ -1,4 +1,4 @@
-use core::fmt;
+use ::core::fmt;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};

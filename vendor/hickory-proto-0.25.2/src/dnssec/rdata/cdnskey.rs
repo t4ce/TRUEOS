@@ -8,7 +8,7 @@
 //! CDNSKEY type and related implementations
 
 use alloc::vec::Vec;
-use core::fmt;
+use ::core::fmt;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

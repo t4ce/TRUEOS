@@ -1,7 +1,7 @@
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::fmt::Formatter;
+use ::core::fmt::Formatter;
 
 pub(crate) mod no_std_readers;
 pub(crate) mod std_readers;
@@ -67,8 +67,8 @@ pub enum ZByteIoError {
     SeekErrorOwned(String)
 }
 
-impl core::fmt::Debug for ZByteIoError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for ZByteIoError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> ::core::fmt::Result {
         match self {
             #[cfg(feature = "std")]
             ZByteIoError::StdIoError(err) => {

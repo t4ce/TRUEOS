@@ -1,4 +1,4 @@
-use core::fmt;
+use ::core::fmt;
 use tower_layer::Layer;
 
 use super::LoadShed;

@@ -1,5 +1,5 @@
 use super::Layer;
-use core::fmt;
+use ::core::fmt;
 
 /// A no-op middleware.
 ///

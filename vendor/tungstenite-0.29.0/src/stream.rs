@@ -4,12 +4,10 @@
 //! `native_tls` or `openssl` will work as long as there is a TLS stream supporting standard
 //! `Read + Write` traits.
 
+use ::core::fmt::{self, Debug};
 #[cfg(feature = "__rustls-tls")]
 use core::ops::Deref;
-use core::fmt::{self, Debug};
-use std::{
-    io::{Read, Result as IoResult, Write},
-};
+use std::io::{Read, Result as IoResult, Write};
 
 use std::net::TcpStream;
 
@@ -93,7 +91,9 @@ impl<S: Read + Write + Debug> Debug for MaybeTlsStream<S> {
                     }
                 }
 
-                f.debug_tuple("MaybeTlsStream::Rustls").field(&RustlsStreamDebug(s)).finish()
+                f.debug_tuple("MaybeTlsStream::Rustls")
+                    .field(&RustlsStreamDebug(s))
+                    .finish()
             }
         }
     }

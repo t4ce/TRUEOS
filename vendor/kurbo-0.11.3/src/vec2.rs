@@ -4,7 +4,7 @@
 //! A simple 2D vector.
 
 use core::convert::From;
-use core::fmt;
+use ::core::fmt;
 use core::iter::{Iterator, Sum};
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 

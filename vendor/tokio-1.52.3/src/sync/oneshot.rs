@@ -129,7 +129,7 @@ use crate::loom::sync::Arc;
 #[cfg(all(tokio_unstable, feature = "tracing"))]
 use crate::util::trace;
 
-use core::fmt;
+use ::core::fmt;
 use core::future::Future;
 use core::mem::MaybeUninit;
 use core::pin::Pin;
@@ -339,7 +339,7 @@ pub struct Receiver<T> {
 pub mod error {
     //! `Oneshot` error types.
 
-    use core::fmt;
+    use ::core::fmt;
 
     /// Error returned by the `Future` implementation for `Receiver`.
     ///

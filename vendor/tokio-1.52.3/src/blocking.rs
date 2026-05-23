@@ -10,7 +10,7 @@ cfg_rt! {
 }
 
 cfg_not_rt! {
-    use core::fmt;
+    use ::core::fmt;
     use core::future::Future;
     use core::pin::Pin;
     use core::task::{Context, Poll};

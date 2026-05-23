@@ -5,7 +5,7 @@
 //! IP network addresses.
 
 use alloc::{str::FromStr, boxed::Box};
-use core::fmt;
+use ::core::fmt;
 #[cfg(not(feature = "std"))]
 use core::error::Error;
 #[cfg(feature = "std")]

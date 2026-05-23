@@ -6,17 +6,23 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use core::fmt;
-use crate::io::{self, Read, Write};
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
 use crate::io::IoSlice;
-#[cfg(not(any(target_os = "redox", target_os = "wasi", target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(any(
+    target_os = "redox",
+    target_os = "wasi",
+    target_os = "trueos",
+    target_os = "zkvm"
+)))]
 use crate::io::IoSliceMut;
+use crate::io::{self, Read, Write};
+use ::core::fmt;
 use core::mem::MaybeUninit;
-#[cfg(not(target_os = "nto"))]
-use std::net::Ipv6Addr;
+use core::time::Duration;
 #[cfg(not(target_os = "zkvm"))]
 use std::net;
+#[cfg(not(target_os = "nto"))]
+use std::net::Ipv6Addr;
 use std::net::{Ipv4Addr, Shutdown};
 #[cfg(any(
     all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
@@ -25,7 +31,6 @@ use std::net::{Ipv4Addr, Shutdown};
 use std::os::fd::{FromRawFd, IntoRawFd};
 #[cfg(windows)]
 use std::os::windows::io::{FromRawSocket, IntoRawSocket};
-use core::time::Duration;
 
 use crate::sys::{self, c_int, getsockopt, setsockopt, Bool};
 #[cfg(all(unix, not(target_os = "redox")))]
@@ -910,10 +915,7 @@ impl Socket {
     pub fn take_error(&self) -> io::Result<Option<io::Error>> {
         match unsafe { getsockopt::<c_int>(self.as_raw(), sys::SOL_SOCKET, sys::SO_ERROR) } {
             Ok(0) => Ok(None),
-            Ok(_) => Ok(Some(io::Error::new(
-                io::ErrorKind::Other,
-                "socket2 stored socket error",
-            ))),
+            Ok(_) => Ok(Some(io::Error::new(io::ErrorKind::Other, "socket2 stored socket error"))),
             Err(err) => Err(err),
         }
     }

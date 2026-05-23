@@ -1,6 +1,6 @@
 #![allow(unused)]
 
-use core::fmt;
+use ::core::fmt;
 
 use managed::{ManagedMap, ManagedSlice};
 

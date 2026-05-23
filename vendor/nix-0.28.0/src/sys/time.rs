@@ -1,9 +1,10 @@
+use ::core::fmt;
+use core::time::Duration;
 #[cfg_attr(target_env = "musl", allow(deprecated))]
 // https://github.com/rust-lang/libc/issues/1848
 pub use libc::{suseconds_t, time_t};
 use libc::{timespec, timeval};
-use core::time::Duration;
-use std::{cmp, fmt, ops};
+use std::{cmp, ops};
 
 const fn zero_init_timespec() -> timespec {
     // `std::mem::MaybeUninit::zeroed()` is not yet a const fn
@@ -60,12 +61,10 @@ pub(crate) mod timer {
                     it_interval: zero_init_timespec(),
                     it_value: *t.as_ref(),
                 }),
-                Expiration::IntervalDelayed(start, interval) => {
-                    TimerSpec(libc::itimerspec {
-                        it_interval: *interval.as_ref(),
-                        it_value: *start.as_ref(),
-                    })
-                }
+                Expiration::IntervalDelayed(start, interval) => TimerSpec(libc::itimerspec {
+                    it_interval: *interval.as_ref(),
+                    it_value: *start.as_ref(),
+                }),
                 Expiration::Interval(t) => TimerSpec(libc::itimerspec {
                     it_interval: *t.as_ref(),
                     it_value: *t.as_ref(),
@@ -121,15 +120,10 @@ pub(crate) mod timer {
                     it_interval: int_ts,
                     it_value: val_ts,
                 }) => {
-                    if (int_ts.tv_sec == val_ts.tv_sec)
-                        && (int_ts.tv_nsec == val_ts.tv_nsec)
-                    {
+                    if (int_ts.tv_sec == val_ts.tv_sec) && (int_ts.tv_nsec == val_ts.tv_nsec) {
                         Expiration::Interval(int_ts.into())
                     } else {
-                        Expiration::IntervalDelayed(
-                            val_ts.into(),
-                            int_ts.into(),
-                        )
+                        Expiration::IntervalDelayed(val_ts.into(), int_ts.into())
                     }
                 }
             }
@@ -290,10 +284,7 @@ impl TimeValLike for TimeSpec {
     // https://github.com/rust-lang/libc/issues/1848
     fn nanoseconds(nanoseconds: i64) -> TimeSpec {
         let (secs, nanos) = div_mod_floor_64(nanoseconds, NANOS_PER_SEC);
-        assert!(
-            (TS_MIN_SECONDS..=TS_MAX_SECONDS).contains(&secs),
-            "TimeSpec out of bounds"
-        );
+        assert!((TS_MIN_SECONDS..=TS_MAX_SECONDS).contains(&secs), "TimeSpec out of bounds");
         let mut ts = zero_init_timespec();
         ts.tv_sec = secs as time_t;
         ts.tv_nsec = nanos as timespec_tv_nsec_t;
@@ -331,13 +322,11 @@ impl TimeSpec {
     /// Leave the timestamp unchanged.
     #[cfg(not(target_os = "redox"))]
     // At the time of writing this PR, redox does not support this feature
-    pub const UTIME_OMIT: TimeSpec =
-        TimeSpec::new(0, libc::UTIME_OMIT as timespec_tv_nsec_t);
+    pub const UTIME_OMIT: TimeSpec = TimeSpec::new(0, libc::UTIME_OMIT as timespec_tv_nsec_t);
     /// Update the timestamp to `Now`
     // At the time of writing this PR, redox does not support this feature
     #[cfg(not(target_os = "redox"))]
-    pub const UTIME_NOW: TimeSpec =
-        TimeSpec::new(0, libc::UTIME_NOW as timespec_tv_nsec_t);
+    pub const UTIME_NOW: TimeSpec = TimeSpec::new(0, libc::UTIME_NOW as timespec_tv_nsec_t);
 
     /// Construct a new `TimeSpec` from its components
     #[cfg_attr(target_env = "musl", allow(deprecated))] // https://github.com/rust-lang/libc/issues/1848
@@ -527,10 +516,7 @@ impl TimeValLike for TimeVal {
     #[inline]
     fn microseconds(microseconds: i64) -> TimeVal {
         let (secs, micros) = div_mod_floor_64(microseconds, MICROS_PER_SEC);
-        assert!(
-            (TV_MIN_SECONDS..=TV_MAX_SECONDS).contains(&secs),
-            "TimeVal out of bounds"
-        );
+        assert!((TV_MIN_SECONDS..=TV_MAX_SECONDS).contains(&secs), "TimeVal out of bounds");
         #[cfg_attr(target_env = "musl", allow(deprecated))]
         // https://github.com/rust-lang/libc/issues/1848
         TimeVal(timeval {
@@ -545,10 +531,7 @@ impl TimeValLike for TimeVal {
     fn nanoseconds(nanoseconds: i64) -> TimeVal {
         let microseconds = nanoseconds / 1000;
         let (secs, micros) = div_mod_floor_64(microseconds, MICROS_PER_SEC);
-        assert!(
-            (TV_MIN_SECONDS..=TV_MAX_SECONDS).contains(&secs),
-            "TimeVal out of bounds"
-        );
+        assert!((TV_MIN_SECONDS..=TV_MAX_SECONDS).contains(&secs), "TimeVal out of bounds");
         #[cfg_attr(target_env = "musl", allow(deprecated))]
         // https://github.com/rust-lang/libc/issues/1848
         TimeVal(timeval {

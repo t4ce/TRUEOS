@@ -1,5 +1,5 @@
 // Copied from hyperium/hyper-tls#62e3376/src/stream.rs
-use core::fmt;
+use ::core::fmt;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 

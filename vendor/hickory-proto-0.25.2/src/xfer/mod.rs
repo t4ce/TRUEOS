@@ -5,8 +5,8 @@
 //! TODO: this module needs some serious refactoring and normalization.
 
 #[cfg(feature = "std")]
-use core::fmt::Display;
-use core::fmt::{self, Debug};
+use ::core::fmt::Display;
+use ::core::fmt::{self, Debug};
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};

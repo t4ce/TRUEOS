@@ -1,7 +1,7 @@
 #[cfg(feature = "std")]
 extern crate std;
 
-use core::fmt;
+use ::core::fmt;
 
 cfg_if::cfg_if!(
     if #[cfg(target_os = "uefi")] {

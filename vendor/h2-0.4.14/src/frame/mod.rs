@@ -2,7 +2,7 @@ use crate::hpack;
 
 use bytes::Bytes;
 
-use std::fmt;
+use ::core::fmt;
 
 /// A helper macro that unpacks a sequence of 4 bytes found in the buffer with
 /// the given identifier, starting at the given offset, into the given integer

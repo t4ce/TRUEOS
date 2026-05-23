@@ -6,7 +6,7 @@
 // copied, modified, or distributed except according to those terms.
 
 use alloc::boxed::Box;
-use core::fmt::{self, Debug, Formatter};
+use ::core::fmt::{self, Debug, Formatter};
 use core::pin::Pin;
 use std::sync::Arc;
 use crate::time::Instant;

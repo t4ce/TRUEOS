@@ -1,4 +1,4 @@
-use core::fmt;
+use ::core::fmt;
 #[cfg(all(feature = "http1", any(feature = "client", feature = "server")))]
 use core::future::Future;
 use core::pin::Pin;
@@ -13,10 +13,10 @@ use futures_channel::oneshot;
 ))]
 use futures_core::ready;
 #[cfg(all(feature = "http1", any(feature = "client", feature = "server")))]
-use tokio::sync::mpsc;
-#[cfg(all(feature = "http1", any(feature = "client", feature = "server")))]
 use http::HeaderMap;
 use http_body::{Body, Frame, SizeHint};
+#[cfg(all(feature = "http1", any(feature = "client", feature = "server")))]
+use tokio::sync::mpsc;
 
 #[cfg(all(
     any(feature = "http1", feature = "http2"),
@@ -107,7 +107,6 @@ impl Incoming {
     /// Useful when wanting to stream chunks from another thread.
     #[cfg(all(feature = "http1", any(feature = "client", feature = "server")))]
     #[inline]
-
     #[cfg(all(feature = "http1", any(feature = "client", feature = "server")))]
     pub(crate) fn new_channel(content_length: DecodedLength, wanter: bool) -> (Sender, Incoming) {
         let (data_tx, data_rx) = mpsc::unbounded_channel();
@@ -365,7 +364,6 @@ impl Sender {
         }
     }
 
-
     /// Send data on data channel when it is ready.
 
     /// Send trailers on trailers channel.
@@ -410,11 +408,8 @@ impl Sender {
         tx.send(trailers).map_err(Some)
     }
 
-
     pub(crate) fn send_error(&mut self, err: crate::Error) {
-        let _ = self
-            .data_tx
-            .send(Err(err));
+        let _ = self.data_tx.send(Err(err));
     }
 }
 

@@ -5,7 +5,7 @@ use futures_core::Stream;
 use futures_util::{stream::FuturesUnordered, task::AtomicWaker};
 pub use indexmap::Equivalent;
 use indexmap::IndexMap;
-use core::fmt;
+use ::core::fmt;
 use core::future::Future;
 use core::hash::Hash;
 use core::pin::Pin;

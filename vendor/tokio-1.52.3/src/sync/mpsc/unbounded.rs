@@ -3,7 +3,7 @@ use crate::sync::mpsc::chan;
 use crate::sync::mpsc::error::{SendError, TryRecvError};
 
 use alloc::vec::Vec;
-use core::fmt;
+use ::core::fmt;
 use core::task::{Context, Poll};
 
 /// Send values to the associated `UnboundedReceiver`.

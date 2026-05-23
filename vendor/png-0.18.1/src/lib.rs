@@ -92,7 +92,7 @@ pub mod error {
 }
 
 pub mod fmt {
-    pub use core::fmt::*;
+    pub use ::core::fmt::*;
 }
 
 pub mod io {

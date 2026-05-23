@@ -12,12 +12,13 @@ use crate::io::{AsyncRead, AsyncWrite, Interest, ReadBuf, Ready};
 use crate::net::TcpStream;
 
 use core::error::Error;
+use ::core::fmt;
 use core::future::poll_fn;
-use std::net::{Shutdown, SocketAddr};
 use core::pin::Pin;
-use std::sync::Arc;
 use core::task::{Context, Poll};
-use std::{fmt, io};
+use std::io;
+use std::net::{Shutdown, SocketAddr};
+use std::sync::Arc;
 
 cfg_io_util! {
     use bytes::BufMut;

@@ -2,7 +2,7 @@ use crate::io::{Interest, PollEvented, ReadBuf, Ready};
 use crate::net::{to_socket_addrs, ToSocketAddrs};
 use crate::util::check_socket_for_blocking;
 
-use core::fmt;
+use ::core::fmt;
 use std::io;
 use std::net::{self, Ipv4Addr, Ipv6Addr, SocketAddr};
 use core::task::{ready, Context, Poll};

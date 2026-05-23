@@ -78,8 +78,8 @@ where
     }
 }
 
-impl<C> core::fmt::Display for SocksError<C> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl<C> ::core::fmt::Display for SocksError<C> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.write_str("SOCKS error: ")?;
 
         match self {
@@ -99,7 +99,7 @@ impl<C> core::fmt::Display for SocksError<C> {
     }
 }
 
-impl<C: core::fmt::Debug + core::fmt::Display> core::error::Error for SocksError<C> {}
+impl<C: ::core::fmt::Debug + ::core::fmt::Display> core::error::Error for SocksError<C> {}
 
 impl<C> From<io::Error> for SocksError<C> {
     fn from(err: io::Error) -> Self {

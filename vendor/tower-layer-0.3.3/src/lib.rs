@@ -39,7 +39,7 @@ pub mod any {
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod fmt {
-    pub use core::fmt::*;
+    pub use ::core::fmt::*;
 }
 
 mod identity;
@@ -69,7 +69,7 @@ pub use self::{
 /// # use tower_service::Service;
 /// # use core::task::{Poll, Context};
 /// # use tower_layer::Layer;
-/// # use core::fmt;
+/// # use ::core::fmt;
 ///
 /// pub struct LogLayer {
 ///     target: &'static str,

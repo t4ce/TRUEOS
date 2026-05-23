@@ -204,8 +204,8 @@ pub enum Repr {
     Fragment { size: u16, tag: u16, offset: u8 },
 }
 
-impl core::fmt::Display for Repr {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for Repr {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         match self {
             Repr::FirstFragment { size, tag } => {
                 write!(f, "FirstFrag size={size} tag={tag}")

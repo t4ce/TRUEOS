@@ -4,17 +4,28 @@ use core::{cmp, error::Error, fmt, str};
 pub(crate) enum DecodeError<'a> {
     /// In lossy decoding insert `valid_prefix`, then `"\u{FFFD}"`,
     /// then call `decode()` again with `remaining_input`.
-    Invalid { valid_prefix: &'a str, invalid_sequence: &'a [u8], remaining_input: &'a [u8] },
+    Invalid {
+        valid_prefix: &'a str,
+        invalid_sequence: &'a [u8],
+        remaining_input: &'a [u8],
+    },
 
     /// Call the `incomplete_suffix.try_complete` method with more input when available.
     /// If no more input is available, this is an invalid byte sequence.
-    Incomplete { valid_prefix: &'a str, incomplete_suffix: Incomplete },
+    Incomplete {
+        valid_prefix: &'a str,
+        incomplete_suffix: Incomplete,
+    },
 }
 
 impl<'a> fmt::Display for DecodeError<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            DecodeError::Invalid { valid_prefix, invalid_sequence, remaining_input } => write!(
+            DecodeError::Invalid {
+                valid_prefix,
+                invalid_sequence,
+                remaining_input,
+            } => write!(
                 f,
                 "found invalid byte sequence {invalid_sequence:02x?} after \
                  {valid_byte_count} valid bytes, followed by {unprocessed_byte_count} more \
@@ -23,7 +34,10 @@ impl<'a> fmt::Display for DecodeError<'a> {
                 valid_byte_count = valid_prefix.len(),
                 unprocessed_byte_count = remaining_input.len()
             ),
-            DecodeError::Incomplete { valid_prefix, incomplete_suffix } => write!(
+            DecodeError::Incomplete {
+                valid_prefix,
+                incomplete_suffix,
+            } => write!(
                 f,
                 "found incomplete byte sequence {incomplete_suffix:02x?} after \
                  {valid_byte_count} bytes",
@@ -79,7 +93,10 @@ impl Incomplete {
         let mut buffer = [0, 0, 0, 0];
         let len = bytes.len();
         buffer[..len].copy_from_slice(bytes);
-        Incomplete { buffer, buffer_len: len as u8 }
+        Incomplete {
+            buffer,
+            buffer_len: len as u8,
+        }
     }
 
     /// * `None`: still incomplete, call `try_complete` again with more input.
@@ -99,7 +116,10 @@ impl Incomplete {
             Ok(()) => Ok(unsafe { str::from_utf8_unchecked(result_bytes) }),
             Err(()) => Err(result_bytes),
         };
-        Some(Completed { result, remaining_input })
+        Some(Completed {
+            result,
+            remaining_input,
+        })
     }
 
     fn take_buffer(&mut self) -> &[u8] {
@@ -134,8 +154,9 @@ impl Incomplete {
                 } else {
                     match error.error_len() {
                         Some(invalid_sequence_length) => {
-                            let consumed =
-                                invalid_sequence_length.checked_sub(initial_buffer_len).unwrap();
+                            let consumed = invalid_sequence_length
+                                .checked_sub(initial_buffer_len)
+                                .unwrap();
                             self.buffer_len = invalid_sequence_length as u8;
                             (consumed, Some(Err(())))
                         }

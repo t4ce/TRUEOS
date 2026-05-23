@@ -1,18 +1,21 @@
 #![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), allow(dead_code))]
 
 use core::ops::{Deref, DerefMut};
-#[cfg(any(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))), target_os = "wasi"))]
+#[cfg(any(
+    all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+    target_os = "wasi"
+))]
 use std::os::fd::AsRawFd;
 // TODO: once <https://github.com/rust-lang/rust/issues/126198> is fixed this
 // can use `std::os::fd` and be merged with the above.
+use crate::io;
+use ::core::fmt;
+#[cfg(debug_assertions)]
+use core::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(target_os = "hermit")]
 use std::os::hermit::io::AsRawFd;
 #[cfg(windows)]
 use std::os::windows::io::AsRawSocket;
-#[cfg(debug_assertions)]
-use std::sync::atomic::{AtomicUsize, Ordering};
-use core::fmt;
-use crate::io;
 
 use crate::sys::IoSourceState;
 use crate::{event, Interest, Registry, Token};

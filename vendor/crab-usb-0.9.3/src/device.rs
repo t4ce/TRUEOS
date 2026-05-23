@@ -74,7 +74,7 @@ impl ProbedDevice {
 }
 
 impl Debug for ProbedDevice {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         match self {
             Self::Device(info) => f.debug_tuple("ProbedDevice::Device").field(info).finish(),
             Self::Hub(info) => f.debug_tuple("ProbedDevice::Hub").field(info).finish(),
@@ -83,7 +83,7 @@ impl Debug for ProbedDevice {
 }
 
 impl Display for ProbedDevice {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         match self {
             Self::Device(info) => Display::fmt(info, f),
             Self::Hub(info) => Display::fmt(info, f),
@@ -155,7 +155,7 @@ impl HubDeviceInfo {
 }
 
 impl Debug for DeviceInfo {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("DeviceInfo")
             .field("backend", &self.inner.backend_name())
             .field("vender_id", &self.inner.descriptor().vendor_id)
@@ -165,7 +165,7 @@ impl Debug for DeviceInfo {
 }
 
 impl Debug for HubDeviceInfo {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("HubDeviceInfo")
             .field("backend", &self.inner.backend_name())
             .field("vender_id", &self.inner.descriptor().vendor_id)
@@ -175,7 +175,7 @@ impl Debug for HubDeviceInfo {
 }
 
 impl Display for DeviceInfo {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         write!(
             f,
             "{:04x}:{:04x}",
@@ -186,7 +186,7 @@ impl Display for DeviceInfo {
 }
 
 impl Display for HubDeviceInfo {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         write!(
             f,
             "{:04x}:{:04x}",
@@ -204,7 +204,7 @@ pub struct Device {
 }
 
 impl Debug for Device {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("Device")
             .field("backend", &self.inner.backend_name())
             .field("vender_id", &self.inner.descriptor().vendor_id)
@@ -484,7 +484,7 @@ fn skip_optional_manufacturer_read_reason(vendor_id: u16, product_id: u16) -> Op
 }
 
 impl Display for Device {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         write!(
             f,
             "{:04x}:{:04x}",

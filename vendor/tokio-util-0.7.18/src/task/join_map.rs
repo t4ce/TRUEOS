@@ -1,6 +1,6 @@
 use hashbrown::hash_table::Entry;
 use hashbrown::{HashMap, HashTable};
-use core::fmt;
+use ::core::fmt;
 use core::future::Future;
 use core::marker::PhantomData;
 use std::borrow::Borrow;

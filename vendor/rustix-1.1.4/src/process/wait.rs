@@ -9,7 +9,7 @@
 use crate::process::Pid;
 use crate::{backend, io};
 use bitflags::bitflags;
-use core::fmt;
+use ::core::fmt;
 
 #[cfg(target_os = "linux")]
 use crate::fd::BorrowedFd;

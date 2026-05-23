@@ -1,6 +1,6 @@
+use crate::io;
 use crate::sys::Selector;
 use crate::Token;
-use crate::io;
 
 #[derive(Debug)]
 pub struct Waker {

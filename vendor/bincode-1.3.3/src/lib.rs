@@ -64,7 +64,7 @@ pub mod io {
     use alloc::boxed::Box;
     use core::prelude::rust_2021::*;
     use core::{derive, write};
-    use core::fmt;
+    use ::core::fmt;
 
     pub type Result<T> = core::result::Result<T, Error>;
 

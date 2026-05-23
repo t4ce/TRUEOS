@@ -1,5 +1,5 @@
 use super::{Action, Attempt, Policy};
-use core::fmt;
+use ::core::fmt;
 
 /// A redirection [`Policy`] created from a closure.
 ///

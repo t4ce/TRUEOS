@@ -4,7 +4,7 @@ use crate::runtime::scheduler;
 
 use mio::unix::SourceFd;
 use core::error::Error;
-use core::fmt;
+use ::core::fmt;
 use std::io;
 use std::os::unix::io::{AsRawFd, RawFd};
 use core::task::{ready, Context, Poll};
@@ -936,8 +936,8 @@ impl<T: AsRawFd> std::os::unix::io::AsFd for AsyncFd<T> {
     }
 }
 
-impl<T: core::fmt::Debug + AsRawFd> core::fmt::Debug for AsyncFd<T> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl<T: ::core::fmt::Debug + AsRawFd> ::core::fmt::Debug for AsyncFd<T> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("AsyncFd")
             .field("inner", &self.inner)
             .finish()
@@ -1369,16 +1369,16 @@ impl<'a, Inner: AsRawFd> AsyncFdReadyMutGuard<'a, Inner> {
     }
 }
 
-impl<'a, T: core::fmt::Debug + AsRawFd> core::fmt::Debug for AsyncFdReadyGuard<'a, T> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl<'a, T: ::core::fmt::Debug + AsRawFd> ::core::fmt::Debug for AsyncFdReadyGuard<'a, T> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("ReadyGuard")
             .field("async_fd", &self.async_fd)
             .finish()
     }
 }
 
-impl<'a, T: core::fmt::Debug + AsRawFd> core::fmt::Debug for AsyncFdReadyMutGuard<'a, T> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl<'a, T: ::core::fmt::Debug + AsRawFd> ::core::fmt::Debug for AsyncFdReadyMutGuard<'a, T> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("MutReadyGuard")
             .field("async_fd", &self.async_fd)
             .finish()

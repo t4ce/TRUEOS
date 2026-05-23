@@ -1,4 +1,4 @@
-use core::fmt;
+use ::core::fmt;
 use core::mem::MaybeUninit;
 
 /// A wrapper around a byte buffer that is incrementally filled and initialized.

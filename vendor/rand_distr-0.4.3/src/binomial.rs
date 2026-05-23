@@ -11,7 +11,7 @@
 
 use crate::{Distribution, Uniform};
 use rand::Rng;
-use core::fmt;
+use ::core::fmt;
 use core::cmp::Ordering;
 #[allow(unused_imports)]
 use num_traits::Float;

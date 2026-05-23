@@ -1,4 +1,4 @@
-use std::fmt;
+use ::core::fmt;
 
 use super::Error;
 use bytes::{Buf, Bytes};

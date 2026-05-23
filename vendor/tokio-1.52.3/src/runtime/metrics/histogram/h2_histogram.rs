@@ -4,7 +4,7 @@ use crate::runtime::prelude::*;
 use crate::runtime::metrics::batch::duration_as_u64;
 use core::cmp;
 use core::error::Error;
-use core::fmt::{Display, Formatter};
+use ::core::fmt::{Display, Formatter};
 use core::time::Duration;
 
 const DEFAULT_MIN_VALUE: Duration = Duration::from_nanos(100);
@@ -271,7 +271,7 @@ pub enum InvalidHistogramConfiguration {
 }
 
 impl Display for InvalidHistogramConfiguration {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> ::core::fmt::Result {
         match self {
             InvalidHistogramConfiguration::TooManyBuckets { required_bucket_count } =>
                 write!(f, "The configuration for this histogram would have required {required_bucket_count} buckets")

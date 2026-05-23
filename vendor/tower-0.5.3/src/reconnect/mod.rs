@@ -17,7 +17,7 @@ mod future;
 pub use future::ResponseFuture;
 
 use crate::make::MakeService;
-use core::fmt;
+use ::core::fmt;
 use std::{
     future::Future,
     pin::Pin,

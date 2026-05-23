@@ -18,11 +18,11 @@ pub struct OnEarlyDropService<S, OFD, OBD> {
     pub(crate) on_body_drop: OBD,
 }
 
-impl<S, OFD, OBD> core::fmt::Debug for OnEarlyDropService<S, OFD, OBD>
+impl<S, OFD, OBD> ::core::fmt::Debug for OnEarlyDropService<S, OFD, OBD>
 where
-    S: core::fmt::Debug,
+    S: ::core::fmt::Debug,
 {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("OnEarlyDropService")
             .field("inner", &self.inner)
             .field("on_future_drop", &format_args!(".."))

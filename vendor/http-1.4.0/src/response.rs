@@ -63,7 +63,7 @@
 
 use core::any::Any;
 use core::convert::TryInto;
-use core::fmt;
+use ::core::fmt;
 
 use crate::header::{HeaderMap, HeaderName, HeaderValue};
 use crate::status::StatusCode;

@@ -6,15 +6,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use core::cmp::min;
-#[cfg(not(target_os = "wasi"))]
-use std::ffi::OsStr;
+use crate::io;
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
 use crate::io::IoSlice;
+#[cfg(not(target_os = "wasi"))]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::path::Path;
+use core::cmp::min;
 use core::marker::PhantomData;
 use core::mem::{self, size_of, MaybeUninit};
-use std::net::Shutdown;
-use std::net::{Ipv4Addr, Ipv6Addr};
 #[cfg(all(
     feature = "all",
     any(
@@ -45,19 +45,22 @@ use core::num::NonZeroU32;
     )
 ))]
 use core::num::NonZeroUsize;
+use core::ptr;
+use core::time::Duration;
+use hostlib::time::Instant;
+use std as hostlib;
+#[cfg(not(target_os = "wasi"))]
+use std::ffi::OsStr;
+use std::net::Shutdown;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 #[cfg(not(target_os = "wasi"))]
 use std::os::unix::ffi::OsStrExt;
 #[cfg(all(feature = "all", unix))]
 use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
-#[cfg(not(target_os = "wasi"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::path::Path;
-use core::ptr;
-use core::time::Duration;
-use std as hostlib;
-use hostlib::time::Instant;
-use crate::io;
-use std::{slice};
+use std::slice;
 
 #[cfg(not(any(
     target_os = "ios",
@@ -626,8 +629,8 @@ impl RecvFlags {
 }
 
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
-impl core::fmt::Debug for RecvFlags {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for RecvFlags {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         let mut s = f.debug_struct("RecvFlags");
         #[cfg(not(target_os = "espidf"))]
         s.field("is_end_of_record", &self.is_end_of_record());
@@ -2733,8 +2736,8 @@ impl SockFilter {
 }
 
 #[cfg(all(feature = "all", any(target_os = "linux", target_os = "android")))]
-impl core::fmt::Debug for SockFilter {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for SockFilter {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("SockFilter").finish_non_exhaustive()
     }
 }
@@ -2809,5 +2812,3 @@ from!(crate::Socket, UnixStream);
 from!(crate::Socket, UnixListener);
 #[cfg(all(feature = "all", unix))]
 from!(crate::Socket, UnixDatagram);
-
-

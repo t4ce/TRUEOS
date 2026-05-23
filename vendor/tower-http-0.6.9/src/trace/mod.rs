@@ -346,7 +346,7 @@
 //!
 //!     fn classify_error<E>(self, error: &E) -> Self::FailureClass
 //!     where
-//!         E: core::fmt::Display + 'static,
+//!         E: ::core::fmt::Display + 'static,
 //!     {
 //!         "something went wrong..."
 //!     }
@@ -385,7 +385,7 @@
 //! [`Body::poll_frame`]: http_body::Body::poll_frame
 
 use core::time::Duration;
-use core::fmt;
+use ::core::fmt;
 
 use tracing::Level;
 

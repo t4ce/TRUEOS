@@ -10,7 +10,7 @@
 #![allow(deprecated, clippy::use_self)]
 
 use alloc::fmt;
-use core::fmt::{Display, Formatter};
+use ::core::fmt::{Display, Formatter};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

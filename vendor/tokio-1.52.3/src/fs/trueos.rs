@@ -3,7 +3,7 @@ use crate::loom::sync as trueos_sync;
 use crate::runtime::prelude::*;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::fmt;
+use ::core::fmt;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use crate::path::{Component, Path, PathBuf};
 

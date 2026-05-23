@@ -1,5 +1,5 @@
 use byteorder::{ByteOrder, NetworkEndian};
-use core::fmt;
+use ::core::fmt;
 
 use super::{Error, Result};
 use super::{EthernetAddress, Ipv4Address};

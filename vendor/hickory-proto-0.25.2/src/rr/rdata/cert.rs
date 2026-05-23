@@ -9,7 +9,7 @@
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
-use core::fmt;
+use ::core::fmt;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

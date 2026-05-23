@@ -29,7 +29,7 @@ impl Clone for PublicModulus {
 }
 
 /*
-impl core::fmt::Debug for PublicModulus {
+impl ::core::fmt::Debug for PublicModulus {
     fn fmt(&self, fmt: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
         self.value.fmt(fmt)
     }

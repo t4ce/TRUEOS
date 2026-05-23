@@ -21,17 +21,17 @@
 #[allow(unused_imports)]
 use crate::runtime::prelude::*;
 
-use core::future::Future;
 use crate::loom::cell::UnsafeCell;
 use crate::runtime::context;
 use crate::runtime::task::raw::{self, Vtable};
 use crate::runtime::task::state::State;
 use crate::runtime::task::{Id, Schedule, TaskHarnessScheduleHooks};
 use crate::util::linked_list;
+use core::future::Future;
 
-use core::num::NonZeroU64;
 #[cfg(tokio_unstable)]
 use ::core::panic::Location;
+use core::num::NonZeroU64;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::task::{Context, Poll, Waker};
@@ -566,4 +566,3 @@ impl Trailer {
         });
     }
 }
-

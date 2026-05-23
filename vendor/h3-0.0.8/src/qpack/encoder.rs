@@ -33,8 +33,8 @@ pub enum EncoderError {
 
 impl core::error::Error for EncoderError {}
 
-impl core::fmt::Display for EncoderError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for EncoderError {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         match self {
             EncoderError::Insertion(e) => write!(f, "dynamic table insertion: {:?}", e),
             EncoderError::InvalidString(e) => write!(f, "could not parse string: {}", e),

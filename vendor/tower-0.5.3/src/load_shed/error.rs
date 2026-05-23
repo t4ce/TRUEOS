@@ -1,6 +1,6 @@
 //! Error types
 
-use core::fmt;
+use ::core::fmt;
 
 /// An error returned by [`LoadShed`] when the underlying service
 /// is not ready to handle any requests at the time of being

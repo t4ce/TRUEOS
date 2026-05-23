@@ -7,7 +7,7 @@
 
 //! NSEC record types
 
-use core::fmt;
+use ::core::fmt;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

@@ -15,7 +15,7 @@ use crate::util::rand::{RngSeed, RngSeedGenerator};
 
 use crate::runtime::blocking::BlockingPool;
 use crate::runtime::scheduler::CurrentThread;
-use core::fmt;
+use ::core::fmt;
 use std::io;
 use std::thread::ThreadId;
 use core::time::Duration;

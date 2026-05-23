@@ -1,5 +1,5 @@
 use crate::header::{Entry, HeaderMap, HeaderValue, OccupiedEntry};
-use core::fmt;
+use ::core::fmt;
 
 pub fn basic_auth<U, P>(username: U, password: Option<P>) -> HeaderValue
 where

@@ -4,7 +4,7 @@ use crate::proto::{Error, Open};
 
 use http::{HeaderMap, Request, Response};
 
-use std::fmt;
+use ::core::fmt;
 
 /// Either a Client or a Server
 pub(crate) trait Peer {

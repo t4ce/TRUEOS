@@ -8,11 +8,11 @@ use crate::proto::{peer, Error, Initiator, Open, Peer, WindowSize};
 use crate::{client, proto, server};
 
 use bytes::{Buf, Bytes};
-use http::{HeaderMap, Request, Response};
 use core::task::{Context, Poll, Waker};
+use http::{HeaderMap, Request, Response};
 use tokio::io::AsyncWrite;
 
-use std::fmt;
+use ::core::fmt;
 use std::sync::{Arc, Mutex};
 use tokio::io;
 

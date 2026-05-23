@@ -1,4 +1,4 @@
-use core::fmt;
+use ::core::fmt;
 use core::future::Future;
 use core::task::{Context, Poll};
 use tower_service::Service;

@@ -13,11 +13,12 @@ use crate::net::UnixStream;
 
 use crate::net::unix::SocketAddr;
 use core::error::Error;
-use std::net::Shutdown;
+use ::core::fmt;
 use core::pin::Pin;
-use std::sync::Arc;
 use core::task::{Context, Poll};
-use std::{fmt, io};
+use std::io;
+use std::net::Shutdown;
+use std::sync::Arc;
 
 cfg_io_util! {
     use bytes::BufMut;
@@ -89,10 +90,7 @@ pub struct ReuniteError(pub OwnedReadHalf, pub OwnedWriteHalf);
 
 impl fmt::Display for ReuniteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "tried to reunite halves that are not from the same socket"
-        )
+        write!(f, "tried to reunite halves that are not from the same socket")
     }
 }
 

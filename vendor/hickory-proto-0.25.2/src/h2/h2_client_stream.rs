@@ -8,7 +8,7 @@
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
-use core::fmt::{self, Display};
+use ::core::fmt::{self, Display};
 use core::future::Future;
 use core::ops::DerefMut;
 use core::pin::Pin;

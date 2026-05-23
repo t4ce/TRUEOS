@@ -20,14 +20,15 @@
 //!     Ok::<_, Infallible>(iter::once(SocketAddr::from(([127, 0, 0, 1], 8080))))
 //! });
 //! ```
+use alloc::{boxed::Box, vec::Vec};
 use core::error::Error;
+use ::core::fmt;
 use core::future::Future;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, ToSocketAddrs};
 use core::pin::Pin;
 use core::str::FromStr;
 use core::task::{self, Poll};
-use std::{fmt, io, vec};
-use alloc::{boxed::Box, vec::Vec};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, ToSocketAddrs};
+use std::{io, vec};
 
 #[cfg(not(target_os = "trueos"))]
 use tokio::task::JoinHandle;
@@ -72,7 +73,8 @@ fn trueos_lookup_host(host: &str) -> io::Result<SocketAddrs> {
     }
 
     let mut octets = [0u8; 4];
-    let rc = unsafe { trueos_cabi_dns_resolve_ipv4(host.as_ptr(), host.len(), octets.as_mut_ptr()) };
+    let rc =
+        unsafe { trueos_cabi_dns_resolve_ipv4(host.as_ptr(), host.len(), octets.as_mut_ptr()) };
     if rc != 0 {
         return Err(io::Error::new(io::ErrorKind::Other, "trueos dns resolve failed"));
     }
@@ -178,7 +180,12 @@ impl Future for GaiFuture {
             return Poll::Ready(
                 self.inner
                     .take()
-                    .unwrap_or_else(|| Err(io::Error::new(io::ErrorKind::Interrupted, "resolver polled after completion")))
+                    .unwrap_or_else(|| {
+                        Err(io::Error::new(
+                            io::ErrorKind::Interrupted,
+                            "resolver polled after completion",
+                        ))
+                    })
                     .map(|addrs| GaiAddrs { inner: addrs }),
             );
         }

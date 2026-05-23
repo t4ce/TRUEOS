@@ -1,6 +1,6 @@
 use core::borrow::{Borrow, BorrowMut};
 use core::cmp::{Eq, Ord, PartialEq, PartialOrd};
-use core::fmt::Debug;
+use ::core::fmt::Debug;
 use core::hash::Hash;
 
 pub trait NumBytes:

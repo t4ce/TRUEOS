@@ -1,6 +1,6 @@
+use crate::sync::Arc;
 use core::ffi::c_int;
 use core::ptr;
-use std::sync::Arc;
 
 use crate::client::conn;
 use crate::rt::Executor as _;

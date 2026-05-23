@@ -1,6 +1,6 @@
 //! User and Group ID types.
 
-use core::fmt;
+use ::core::fmt;
 
 use crate::backend::c;
 use crate::ffi;

@@ -8,14 +8,15 @@
 //! Error types for the crate
 
 use alloc::string::String;
-use std::{fmt, io};
+use ::core::fmt;
+use std::io;
 
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use futures_channel::mpsc;
 use thiserror::Error;
 
 #[cfg(feature = "backtrace")]
-use crate::proto::{ExtBacktrace, trace};
+use crate::proto::{trace, ExtBacktrace};
 #[cfg(feature = "__dnssec")]
 use hickory_proto::dnssec::{DnsSecError, DnsSecErrorKind};
 use hickory_proto::{ProtoError, ProtoErrorKind};
@@ -171,4 +172,3 @@ impl From<Error> for io::Error {
         }
     }
 }
-

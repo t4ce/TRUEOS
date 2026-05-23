@@ -30,7 +30,7 @@
 //! where
 //!     S::Error: Into<tower::BoxError>,
 //! # // this bound is pretty unfortunate, and the compiler does _not_ help
-//!     S::Metric: core::fmt::Debug,
+//!     S::Metric: ::core::fmt::Debug,
 //! {
 //!     // Spread load evenly across the two services
 //!     let p2c = Balance::new(tower::discover::ServiceList::new(vec![svc1, svc2]));
