@@ -315,7 +315,7 @@ pub(crate) fn layout_text(
             }
 
             let mut fill = span.fill.clone();
-            if let Some(ref mut fill) = fill {
+            if let Some(fill) = fill {
                 // The `fill-rule` should be ignored.
                 // https://www.w3.org/TR/SVG2/text.html#TextRenderingOrder
                 //
@@ -516,7 +516,7 @@ fn resolve_clusters_positions(
         TextFlow::Linear => {
             resolve_clusters_positions_horizontal(text, chunk, char_offset, writing_mode, clusters)
         }
-        TextFlow::Path(ref path) => resolve_clusters_positions_path(
+        TextFlow::Path(path) => resolve_clusters_positions_path(
             text,
             chunk,
             char_offset,

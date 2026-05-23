@@ -33,7 +33,7 @@ impl Allowed {
         macro_rules! arm{
             ($($variant:ident),*)=>{
                 match self {
-                    $(Self::$variant(ref mut x)=>{
+                    $(Self::$variant(x)=>{
                         x.set_interrupt_on_completion();
                     },)*
                 }
@@ -57,7 +57,7 @@ impl Allowed {
         macro_rules! arm{
             ($($variant:ident),*)=>{
                 match self {
-                    $(Self::$variant(ref mut x)=>{
+                    $(Self::$variant(x)=>{
                         x.clear_interrupt_on_completion();
                     },)*
                 }

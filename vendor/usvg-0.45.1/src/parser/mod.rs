@@ -68,7 +68,7 @@ impl ::core::fmt::Display for Error {
             Error::InvalidSize => {
                 write!(f, "SVG has an invalid size")
             }
-            Error::ParsingFailed(ref e) => {
+            Error::ParsingFailed(e) => {
                 write!(f, "SVG data parsing failed cause {}", e)
             }
         }

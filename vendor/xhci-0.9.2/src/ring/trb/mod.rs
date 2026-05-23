@@ -133,7 +133,7 @@ macro_rules! allowed {
             pub fn set_cycle_bit(&mut self)->&mut Self{
                 match self{
                     $(
-                        Self::$variant(ref mut v) => {
+                        Self::$variant(v) => {
                             v.set_cycle_bit();
                         }
                     ),+
@@ -145,7 +145,7 @@ macro_rules! allowed {
             pub fn clear_cycle_bit(&mut self)->&mut Self{
                 match self{
                     $(
-                        Self::$variant(ref mut v) => {
+                        Self::$variant(v) => {
                             v.clear_cycle_bit();
                         }
                     ),+
@@ -157,7 +157,7 @@ macro_rules! allowed {
             #[must_use]
             pub fn cycle_bit(&self)->bool{
                 match self{
-                    $( Self::$variant(ref v) => v.cycle_bit() ),+
+                    $( Self::$variant(v) => v.cycle_bit() ),+
                 }
             }
 
@@ -172,7 +172,7 @@ macro_rules! allowed {
         impl AsRef<[u32]> for Allowed {
             fn as_ref(&self) -> &[u32]{
                 match self{
-                    $( Self::$variant(ref v) => v.as_ref() ),+
+                    $( Self::$variant(v) => v.as_ref() ),+
                 }
             }
         }

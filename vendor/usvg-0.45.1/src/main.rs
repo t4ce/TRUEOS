@@ -369,7 +369,7 @@ fn process(args: Args) -> Result<(), String> {
 
     if args.list_fonts {
         for face in fontdb.faces() {
-            if let usvg::fontdb::Source::File(ref path) = &face.source {
+            if let usvg::fontdb::Source::File(path) = &face.source {
                 let families: Vec<_> = face
                     .families
                     .iter()
@@ -394,7 +394,7 @@ fn process(args: Args) -> Result<(), String> {
         None => {
             match in_svg {
                 InputFrom::Stdin => None,
-                InputFrom::File(ref f) => {
+                InputFrom::File(f) => {
                     // Get input file absolute directory.
                     std::fs::canonicalize(f)
                         .ok()
@@ -437,7 +437,7 @@ fn process(args: Args) -> Result<(), String> {
 
     let input_svg = match in_svg {
         InputFrom::Stdin => load_stdin(),
-        InputFrom::File(ref path) => std::fs::read(path).map_err(|e| e.to_string()),
+        InputFrom::File(path) => std::fs::read(path).map_err(|e| e.to_string()),
     }?;
 
     let tree = usvg::Tree::from_data(&input_svg, &re_opt).map_err(|e| format!("{}", e))?;
