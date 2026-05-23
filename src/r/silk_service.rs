@@ -19,6 +19,7 @@ place demo.art in main align 16
 place arena.art in main align 16
 place path.art in main align 8
 place buf.art in main align 16
+place ring.art in main align 16
 "#;
 
 enum SilkServiceError {
@@ -27,6 +28,10 @@ enum SilkServiceError {
     MissingArtifact,
     MissingPlacementArtifact,
     UnknownPlacementArena,
+    RingArtifact(trueos_silk::SilkStatus),
+    RingPlace(trueos_silk::SilkStatus),
+    RingBind(trueos_silk::SilkStatus),
+    RingOp(trueos_silk::SilkStatus),
 }
 
 impl core::fmt::Display for SilkServiceError {
@@ -37,6 +42,10 @@ impl core::fmt::Display for SilkServiceError {
             Self::MissingArtifact => f.write_str("missing in-memory artifact"),
             Self::MissingPlacementArtifact => f.write_str("missing placement artifact"),
             Self::UnknownPlacementArena => f.write_str("unknown placement arena"),
+            Self::RingArtifact(status) => write!(f, "ring artifact: {:?}", status),
+            Self::RingPlace(status) => write!(f, "ring place: {:?}", status),
+            Self::RingBind(status) => write!(f, "ring bind: {:?}", status),
+            Self::RingOp(status) => write!(f, "ring op: {:?}", status),
         }
     }
 }
@@ -100,6 +109,57 @@ fn buf_artifact(plan: &trueos_silk::Plan, bytes: &[u8]) -> String {
     )
 }
 
+fn ring_artifact() -> Result<String, SilkServiceError> {
+    let result = trueos_silk::RingArtifact::u8("ring.art", 8);
+    if result.status != trueos_silk::SilkStatus::Ok {
+        return Err(SilkServiceError::RingArtifact(result.status));
+    }
+
+    let layout = result.artifact.layout;
+    Ok(format!(
+        "artifact {} kind=ring.u8 header={} data_offset={} capacity={} total_len={} align={}\nops=bind,push,pop,validate\n",
+        result.artifact.name,
+        layout.header_len,
+        layout.data_offset,
+        layout.capacity,
+        layout.total_len,
+        layout.align
+    ))
+}
+
+fn ring_runtime_demo(plan: &trueos_silk::Plan) -> Result<String, SilkServiceError> {
+    let result = trueos_silk::RingArtifact::u8("ring.art", 8);
+    if result.status != trueos_silk::SilkStatus::Ok {
+        return Err(SilkServiceError::RingArtifact(result.status));
+    }
+
+    let artifact = result.artifact;
+    let mut arena = trueos_silk::Arena::new(0x2000, plan.arena.size);
+    let placed = arena.alloc_aligned(artifact.layout.total_len, artifact.layout.align);
+    if placed.status != trueos_silk::SilkStatus::Ok {
+        return Err(SilkServiceError::RingPlace(placed.status));
+    }
+
+    let mut data = [0u8; 8];
+    let mut ring = trueos_silk::RingBinding::bind(artifact, placed.span, &mut data)
+        .map_err(SilkServiceError::RingBind)?;
+    let start = ring.validate().map_err(SilkServiceError::RingOp)?;
+    ring.push(b'A').map_err(SilkServiceError::RingOp)?;
+    ring.push(b'B').map_err(SilkServiceError::RingOp)?;
+    let popped = ring.pop().map_err(SilkServiceError::RingOp)?;
+    let end = ring.validate().map_err(SilkServiceError::RingOp)?;
+
+    Ok(format!(
+        "ring.art runtime span=0x{:x}+{} start={:?} push=[A,B] pop={} end={:?} remaining={}\n",
+        placed.span.addr,
+        placed.span.len,
+        start,
+        popped as char,
+        end,
+        arena.remaining()
+    ))
+}
+
 fn place_artifacts(
     plan: &trueos_silk::Plan,
     artifacts: &[Artifact<'_>],
@@ -149,6 +209,7 @@ async fn build_and_load_artifacts() -> Result<(), SilkServiceError> {
     let arena = arena_artifact(&plan, read_bytes.len());
     let path = path_artifact(&plan);
     let buf = buf_artifact(&plan, read_bytes);
+    let ring = ring_artifact()?;
     let artifacts = [
         Artifact {
             name: "demo.art",
@@ -166,18 +227,26 @@ async fn build_and_load_artifacts() -> Result<(), SilkServiceError> {
             name: "buf.art",
             bytes: buf.as_bytes(),
         },
+        Artifact {
+            name: "ring.art",
+            bytes: ring.as_bytes(),
+        },
     ];
     let placement = place_artifacts(&plan, &artifacts)?;
+    let ring_runtime = ring_runtime_demo(&plan)?;
 
     crate::log!(
-        "silk-service: built in-memory artifacts demo={} arena={} path={} buf={} placement={}\n",
+        "silk-service: built in-memory artifacts demo={} arena={} path={} buf={} ring={} placement={} ring_runtime={}\n",
         demo.len(),
         arena.len(),
         path.len(),
         buf.len(),
-        placement.len()
+        ring.len(),
+        placement.len(),
+        ring_runtime.len()
     );
     crate::log!("silk-service: placement begin\n{}silk-service: placement end\n", placement);
+    crate::log!("silk-service: ring begin\n{}silk-service: ring end\n", ring_runtime);
     crate::log!(
         "silk-service: log.write {} bytes from {}\n",
         read_bytes.len(),

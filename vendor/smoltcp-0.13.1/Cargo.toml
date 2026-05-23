@@ -492,10 +492,6 @@ name = "netsim"
 path = "tests/netsim.rs"
 required-features = ["_netsim"]
 
-[[bench]]
-name = "bench"
-path = "benches/bench.rs"
-
 [dependencies.bitflags]
 version = "2"
 default-features = false

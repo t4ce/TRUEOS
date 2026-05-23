@@ -197,18 +197,6 @@ path = "src/lib.rs"
 name = "integration"
 path = "tests/integration/main.rs"
 
-[[bench]]
-name = "lib"
-path = "benches/lib.rs"
-
-[[bench]]
-name = "lower_name_benches"
-path = "benches/lower_name_benches.rs"
-
-[[bench]]
-name = "name_benches"
-path = "benches/name_benches.rs"
-
 [dependencies.async-trait]
 version = "0.1.43"
 

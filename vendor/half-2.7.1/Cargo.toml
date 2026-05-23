@@ -64,11 +64,6 @@ zerocopy = []
 name = "half"
 path = "src/lib.rs"
 
-[[bench]]
-name = "convert"
-path = "benches/convert.rs"
-harness = false
-
 [dependencies.arbitrary]
 version = "1.4.1"
 features = ["derive"]

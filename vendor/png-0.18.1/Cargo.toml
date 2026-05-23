@@ -62,29 +62,6 @@ path = "examples/png-generate.rs"
 name = "pngcheck"
 path = "examples/pngcheck.rs"
 
-[[bench]]
-name = "adam7"
-path = "benches/adam7.rs"
-harness = false
-required-features = ["benchmarks"]
-
-[[bench]]
-name = "decoder"
-path = "benches/decoder.rs"
-harness = false
-
-[[bench]]
-name = "expand_paletted"
-path = "benches/expand_paletted.rs"
-harness = false
-required-features = ["benchmarks"]
-
-[[bench]]
-name = "unfilter"
-path = "benches/unfilter.rs"
-harness = false
-required-features = ["benchmarks"]
-
 [dependencies.bitflags]
 version = "2.0"
 

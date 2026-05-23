@@ -50,11 +50,6 @@ required-features = ["alloc"]
 name = "encode"
 required-features = ["alloc"]
 
-[[bench]]
-name = "benchmarks"
-harness = false
-required-features = ["std"]
-
 [dev-dependencies.clap]
 version = "3.2.25"
 features = ["derive"]

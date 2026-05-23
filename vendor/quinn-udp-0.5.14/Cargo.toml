@@ -51,11 +51,6 @@ bench = false
 name = "tests"
 path = "tests/tests.rs"
 
-[[bench]]
-name = "throughput"
-path = "benches/throughput.rs"
-harness = false
-
 [dependencies.libc]
 version = "0.2.158"
 

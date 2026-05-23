@@ -145,11 +145,6 @@ path = "src/lib.rs"
 name = "panic_location"
 path = "tests/panic_location.rs"
 
-[[bench]]
-name = "benches"
-path = "benches/benches.rs"
-harness = false
-
 [dependencies.axum-core]
 version = "0.5.5"
 
