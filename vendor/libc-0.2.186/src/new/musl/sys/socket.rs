@@ -34,7 +34,7 @@ s! {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn sendmmsg(
         sockfd: c_int,
         msgvec: *mut crate::mmsghdr,

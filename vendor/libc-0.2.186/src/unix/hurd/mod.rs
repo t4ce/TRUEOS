@@ -3478,7 +3478,7 @@ f! {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn lutimes(file: *const c_char, times: *const crate::timeval) -> c_int;
 
     pub fn futimes(fd: c_int, times: *const crate::timeval) -> c_int;

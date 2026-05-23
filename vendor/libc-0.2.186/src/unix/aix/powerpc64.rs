@@ -422,6 +422,6 @@ pub const PTHREAD_ONCE_INIT: pthread_once_t = pthread_once_t {
 
 pub const RLIM_INFINITY: c_ulong = 0x7fffffffffffffff;
 
-extern "C" {
+unsafe extern "C" {
     pub fn getsystemcfg(label: c_int) -> c_ulong;
 }

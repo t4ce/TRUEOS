@@ -261,7 +261,7 @@ pub(crate) unsafe fn select(
     // have an `FD_SETSIZE` limitation.
     #[cfg(apple)]
     {
-        extern "C" {
+        unsafe extern "C" {
             #[link_name = "select$DARWIN_EXTSN$NOCANCEL"]
             fn select(
                 nfds: c::c_int,

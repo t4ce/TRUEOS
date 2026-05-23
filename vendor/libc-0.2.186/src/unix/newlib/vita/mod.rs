@@ -168,7 +168,7 @@ pub const PTHREAD_STACK_MIN: size_t = 32 * 1024;
 
 pub const IP_HDRINCL: c_int = 2;
 
-extern "C" {
+unsafe extern "C" {
     pub fn futimens(fd: c_int, times: *const crate::timespec) -> c_int;
     pub fn writev(fd: c_int, iov: *const crate::iovec, iovcnt: c_int) -> ssize_t;
     pub fn readv(fd: c_int, iov: *const crate::iovec, iovcnt: c_int) -> ssize_t;

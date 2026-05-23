@@ -139,7 +139,7 @@ pub const ENOTRECOVERABLE: c_int = 131;
 pub const ERFKILL: c_int = 132;
 pub const EHWPOISON: c_int = 133;
 
-extern "C" {
+unsafe extern "C" {
     // Error number access
     #[link_name = "__errno_location"]
     pub fn __errno_location() -> *mut c_int;

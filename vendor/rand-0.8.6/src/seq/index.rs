@@ -357,7 +357,7 @@ where
                 return Err(WeightedError::InvalidWeight);
             }
 
-            let key = rng.gen::<f64>().powf(1.0 / weight);
+            let key = rng.r#gen::<f64>().powf(1.0 / weight);
             candidates.push(Element { index, key });
 
             index += N::one();
@@ -392,7 +392,7 @@ where
                 return Err(WeightedError::InvalidWeight);
             }
 
-            let key = rng.gen::<f64>().powf(1.0 / weight);
+            let key = rng.r#gen::<f64>().powf(1.0 / weight);
             candidates.push(Element { index, key });
 
             index += N::one();

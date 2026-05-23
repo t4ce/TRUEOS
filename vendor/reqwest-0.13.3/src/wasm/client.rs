@@ -12,7 +12,7 @@ use super::{AbortGuard, Request, RequestBuilder, Response};
 use crate::IntoUrl;
 
 #[wasm_bindgen]
-extern "C" {
+unsafe extern "C" {
     #[wasm_bindgen(js_name = fetch)]
     fn fetch_with_request(input: &web_sys::Request) -> Promise;
 }

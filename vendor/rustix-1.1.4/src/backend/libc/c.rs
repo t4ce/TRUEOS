@@ -535,7 +535,7 @@ syscall!(pub(crate) fn timerfd_settime(
 ) via SYS_timerfd_settime -> c_int);
 
 #[cfg(all(feature = "time", target_os = "illumos"))]
-extern "C" {
+unsafe extern "C" {
     pub(crate) fn timerfd_create(clockid: c_int, flags: c_int) -> c_int;
     pub(crate) fn timerfd_gettime(fd: c_int, curr_value: *mut itimerspec) -> c_int;
     pub(crate) fn timerfd_settime(

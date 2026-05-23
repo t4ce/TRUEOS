@@ -401,7 +401,7 @@ extern_ty! {
     pub enum fpos_t {}
 }
 
-extern "C" {
+unsafe extern "C" {
     // ctype.h
     pub fn isalnum(c: c_int) -> c_int;
     pub fn isalpha(c: c_int) -> c_int;

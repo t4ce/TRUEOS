@@ -111,7 +111,7 @@ macro_rules! float_impls {
                 let precision = $fraction_bits + 1;
                 let scale = 1.0 / ((1 as $u_scalar << precision) as $f_scalar);
 
-                let value: $uty = rng.gen();
+                let value: $uty = rng.r#gen();
                 let value = value >> (float_size - precision);
                 scale * $ty::cast_from_int(value)
             }
@@ -126,7 +126,7 @@ macro_rules! float_impls {
                 let precision = $fraction_bits + 1;
                 let scale = 1.0 / ((1 as $u_scalar << precision) as $f_scalar);
 
-                let value: $uty = rng.gen();
+                let value: $uty = rng.r#gen();
                 let value = value >> (float_size - precision);
                 // Add 1 to shift up; will not overflow because of right-shift:
                 scale * $ty::cast_from_int(value + 1)
@@ -141,7 +141,7 @@ macro_rules! float_impls {
                 use core::$f_scalar::EPSILON;
                 let float_size = mem::size_of::<$f_scalar>() as u32 * 8;
 
-                let value: $uty = rng.gen();
+                let value: $uty = rng.r#gen();
                 let fraction = value >> (float_size - $fraction_bits);
                 fraction.into_float_with_exponent(0) - (1.0 - EPSILON / 2.0)
             }

@@ -5,7 +5,7 @@
 use crate::prelude::*;
 pub use crate::sys::qos::*;
 
-extern "C" {
+unsafe extern "C" {
     pub fn pthread_attr_set_qos_class_np(
         attr: *mut crate::pthread_attr_t,
         class: qos_class_t,

@@ -135,7 +135,7 @@ impl Distribution<bool> for Bernoulli {
         if self.p_int == ALWAYS_TRUE {
             return true;
         }
-        let v: u64 = rng.gen();
+        let v: u64 = rng.r#gen();
         v < self.p_int
     }
 }

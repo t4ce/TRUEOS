@@ -112,7 +112,7 @@ fn is_node(global: &Global) -> bool {
 }
 
 #[wasm_bindgen]
-extern "C" {
+unsafe extern "C" {
     // Return type of js_sys::global()
     type Global;
 

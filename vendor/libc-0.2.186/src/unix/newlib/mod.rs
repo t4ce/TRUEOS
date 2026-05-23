@@ -1302,7 +1302,7 @@ safe_f! {
 
 pub const WNOHANG: c_int = 1;
 
-extern "C" {
+unsafe extern "C" {
     pub fn getrlimit(resource: c_int, rlim: *mut crate::rlimit) -> c_int;
     pub fn setrlimit(resource: c_int, rlim: *const crate::rlimit) -> c_int;
 

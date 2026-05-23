@@ -653,7 +653,7 @@ f! {
     feature = "rustc-dep-of-std",
     link(name = "c", cfg(not(target_feature = "crt-static")))
 )]
-extern "C" {
+unsafe extern "C" {
     pub fn _Exit(code: c_int) -> !;
     pub fn _exit(code: c_int) -> !;
     pub fn abort() -> !;

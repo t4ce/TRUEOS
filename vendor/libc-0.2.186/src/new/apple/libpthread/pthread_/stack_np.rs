@@ -4,7 +4,7 @@
 
 use crate::prelude::*;
 
-extern "C" {
+unsafe extern "C" {
     pub fn pthread_stack_frame_decode_np(
         frame_addr: uintptr_t,
         return_addr: *mut uintptr_t,

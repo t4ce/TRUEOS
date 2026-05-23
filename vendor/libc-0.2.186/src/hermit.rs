@@ -385,7 +385,7 @@ pub const ENOTRECOVERABLE: i32 = 131;
 pub const ERFKILL: i32 = 132;
 pub const EHWPOISON: i32 = 133;
 
-extern "C" {
+unsafe extern "C" {
     #[link_name = "sys_alloc"]
     pub fn alloc(size: usize, align: usize) -> *mut u8;
 

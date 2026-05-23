@@ -126,7 +126,7 @@ mod libc {
     #[cfg(not(all(target_os = "android", target_pointer_width = "32")))]
     pub(super) const RTLD_DEFAULT: *mut c_void = ptr::null_mut();
 
-    extern "C" {
+    unsafe extern "C" {
         pub(super) fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
     }
 

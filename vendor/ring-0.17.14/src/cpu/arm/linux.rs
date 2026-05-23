@@ -85,7 +85,7 @@ pub fn detect_features() -> u32 {
     // for all 32-bit ARM targets so that testing on one of them will
     // be more meaningful to the others.
     use libc::c_ulong;
-    extern "C" {
+    unsafe extern "C" {
         pub fn getauxval(type_: c_ulong) -> c_ulong;
     }
     const AT_HWCAP: c_ulong = 16;

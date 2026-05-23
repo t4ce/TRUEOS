@@ -2315,7 +2315,7 @@ safe_f! {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn getrlimit(resource: c_int, rlim: *mut crate::rlimit) -> c_int;
     pub fn setrlimit(resource: c_int, rlim: *const crate::rlimit) -> c_int;
 
@@ -2955,7 +2955,7 @@ extern "C" {
 }
 
 #[link(name = "sendfile")]
-extern "C" {
+unsafe extern "C" {
     pub fn sendfile(out_fd: c_int, in_fd: c_int, off: *mut off_t, len: size_t) -> ssize_t;
     pub fn sendfilev(
         fildes: c_int,
@@ -2966,7 +2966,7 @@ extern "C" {
 }
 
 #[link(name = "lgrp")]
-extern "C" {
+unsafe extern "C" {
     pub fn lgrp_init(view: lgrp_view_t) -> lgrp_cookie_t;
     pub fn lgrp_fini(cookie: lgrp_cookie_t) -> c_int;
     pub fn lgrp_affinity_get(

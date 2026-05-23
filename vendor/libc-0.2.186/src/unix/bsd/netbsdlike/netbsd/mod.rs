@@ -1895,7 +1895,7 @@ safe_f! {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn clock_nanosleep(
         clk_id: crate::clockid_t,
         flags: c_int,
@@ -2272,7 +2272,7 @@ extern "C" {
 }
 
 #[link(name = "rt")]
-extern "C" {
+unsafe extern "C" {
     pub fn aio_read(aiocbp: *mut aiocb) -> c_int;
     pub fn aio_write(aiocbp: *mut aiocb) -> c_int;
     pub fn aio_fsync(op: c_int, aiocbp: *mut aiocb) -> c_int;
@@ -2294,7 +2294,7 @@ extern "C" {
 }
 
 #[link(name = "util")]
-extern "C" {
+unsafe extern "C" {
     #[link_name = "__getpwent_r50"]
     pub fn getpwent_r(
         pwd: *mut crate::passwd,
@@ -2439,7 +2439,7 @@ extern "C" {
 }
 
 #[link(name = "execinfo")]
-extern "C" {
+unsafe extern "C" {
     pub fn backtrace(addrlist: *mut *mut c_void, len: size_t) -> size_t;
     pub fn backtrace_symbols(addrlist: *const *mut c_void, len: size_t) -> *mut *mut c_char;
     pub fn backtrace_symbols_fd(addrlist: *const *mut c_void, len: size_t, fd: c_int) -> c_int;

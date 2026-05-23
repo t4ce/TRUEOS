@@ -45,7 +45,7 @@ pub const F_WRLCK: c_int = 1;
 pub const F_UNLCK: c_int = 2;
 
 // Functions
-extern "C" {
+unsafe extern "C" {
     pub fn open(pathname: *const c_char, flags: c_int, ...) -> c_int;
     pub fn creat(pathname: *const c_char, mode: mode_t) -> c_int;
     pub fn fcntl(fd: c_int, cmd: c_int, ...) -> c_int;

@@ -47,7 +47,7 @@ pub const AT_PAGESZ: c_ulong = 6;
 
 pub const MAP_FAILED: *mut c_void = !0 as *mut c_void;
 
-extern "C" {
+unsafe extern "C" {
     pub fn calloc(nobj: size_t, size: size_t) -> *mut c_void;
     pub fn malloc(size: size_t) -> *mut c_void;
     pub fn realloc(p: *mut c_void, size: size_t) -> *mut c_void;

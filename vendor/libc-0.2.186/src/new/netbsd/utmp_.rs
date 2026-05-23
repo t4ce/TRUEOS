@@ -24,7 +24,7 @@ s! {
 }
 
 #[link(name = "util")]
-extern "C" {
+unsafe extern "C" {
     pub fn utmpname(file: *const c_char) -> c_int;
     pub fn setutent();
     #[link_name = "__getutent50"]

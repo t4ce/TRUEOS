@@ -4,7 +4,7 @@
 
 use crate::prelude::*;
 
-extern "C" {
+unsafe extern "C" {
     pub fn posix_spawnattr_set_qos_class_np(
         attr: *mut crate::posix_spawnattr_t,
         qos_class: crate::qos_class_t,

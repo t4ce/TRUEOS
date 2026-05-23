@@ -4,7 +4,7 @@ use crate::prelude::*;
 // This particular error code is only currently available in msvc toolchain
 pub const EOTHER: c_int = 131;
 
-extern "C" {
+unsafe extern "C" {
     #[link_name = "_stricmp"]
     pub fn stricmp(s1: *const c_char, s2: *const c_char) -> c_int;
     #[link_name = "_strnicmp"]

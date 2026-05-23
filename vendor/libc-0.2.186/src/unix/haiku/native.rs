@@ -907,7 +907,7 @@ pub const B_MIME_STRING_TYPE: u32 = haiku_constant!('M', 'I', 'M', 'S');
 pub const B_ASCII_TYPE: u32 = haiku_constant!('T', 'E', 'X', 'T');
 pub const B_APP_IMAGE_SYMBOL: *const c_void = core::ptr::null();
 
-extern "C" {
+unsafe extern "C" {
     // kernel/OS.h
     pub fn create_area(
         name: *const c_char,

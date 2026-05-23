@@ -63,7 +63,7 @@ s! {
 }
 
 #[link(name = "util")]
-extern "C" {
+unsafe extern "C" {
     pub fn setutxent();
     pub fn endutxent();
 

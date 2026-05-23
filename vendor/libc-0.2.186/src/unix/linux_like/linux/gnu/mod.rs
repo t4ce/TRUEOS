@@ -937,7 +937,7 @@ pub const REG_EEND: c_int = 14;
 pub const REG_ESIZE: c_int = 15;
 pub const REG_ERPAREN: c_int = 16;
 
-extern "C" {
+unsafe extern "C" {
     pub fn fgetspent_r(
         fp: *mut crate::FILE,
         spbuf: *mut crate::spwd,

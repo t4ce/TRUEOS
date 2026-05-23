@@ -2565,7 +2565,7 @@ safe_f! {
 
 cfg_if! {
     if #[cfg(not(target_env = "nto71_iosock"))] {
-        extern "C" {
+        unsafe extern "C" {
             pub fn sendmmsg(
                 sockfd: c_int,
                 msgvec: *mut crate::mmsghdr,
@@ -2581,7 +2581,7 @@ cfg_if! {
             ) -> c_int;
         }
     } else {
-        extern "C" {
+        unsafe extern "C" {
             pub fn sendmmsg(
                 sockfd: c_int,
                 msgvec: *mut crate::mmsghdr,
@@ -2604,7 +2604,7 @@ cfg_if! {
 // In QNX <=7.0, libregex functions were included in libc itself.
 #[link(name = "socket")]
 #[cfg_attr(not(target_env = "nto70"), link(name = "regex"))]
-extern "C" {
+unsafe extern "C" {
     pub fn sem_destroy(sem: *mut sem_t) -> c_int;
     pub fn sem_init(sem: *mut sem_t, pshared: c_int, value: c_uint) -> c_int;
     pub fn fdatasync(fd: c_int) -> c_int;
@@ -3146,7 +3146,7 @@ extern "C" {
 // Models the implementation in stdlib.h.  Ctest will fail if trying to use the
 // default symbol from libc
 pub unsafe fn atexit(cb: extern "C" fn()) -> c_int {
-    extern "C" {
+    unsafe extern "C" {
         static __dso_handle: *mut c_void;
         pub fn __cxa_atexit(cb: extern "C" fn(), __arg: *mut c_void, __dso: *mut c_void) -> c_int;
     }

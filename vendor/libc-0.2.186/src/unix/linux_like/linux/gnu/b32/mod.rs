@@ -449,7 +449,7 @@ pub const PTRACE_SETFPREGS: c_uint = 15;
 pub const PTRACE_GETREGS: c_uint = 12;
 pub const PTRACE_SETREGS: c_uint = 13;
 
-extern "C" {
+unsafe extern "C" {
     pub fn sysctl(
         name: *mut c_int,
         namelen: c_int,

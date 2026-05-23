@@ -725,7 +725,7 @@ pub const REG_TRAPNO: c_int = 20;
 pub const REG_OLDMASK: c_int = 21;
 pub const REG_CR2: c_int = 22;
 
-extern "C" {
+unsafe extern "C" {
     pub fn getcontext(ucp: *mut ucontext_t) -> c_int;
     pub fn setcontext(ucp: *const ucontext_t) -> c_int;
     pub fn makecontext(ucp: *mut ucontext_t, func: extern "C" fn(), argc: c_int, ...);

@@ -183,7 +183,7 @@ use crate::Rng;
 ///
 /// impl Distribution<MyF32> for Standard {
 ///     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> MyF32 {
-///         MyF32 { x: rng.gen() }
+///         MyF32 { x: rng.r#gen() }
 ///     }
 /// }
 /// ```
@@ -204,7 +204,7 @@ use crate::Rng;
 /// All values that can be generated are of the form `n * ε/2`. For `f32`
 /// the 24 most significant random bits of a `u32` are used and for `f64` the
 /// 53 most significant bits of a `u64` are used. The conversion uses the
-/// multiplicative method: `(rng.gen::<$uty>() >> N) as $ty * (ε/2)`.
+/// multiplicative method: `(rng.r#gen::<$uty>() >> N) as $ty * (ε/2)`.
 ///
 /// See also: [`Open01`] which samples from `(0, 1)`, [`OpenClosed01`] which
 /// samples from `(0, 1]` and `Rng::gen_range(0..1)` which also samples from

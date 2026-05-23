@@ -1833,7 +1833,7 @@ const fn CMSG_ALIGN(len: usize) -> usize {
     len + size_of::<usize>() - 1 & !(size_of::<usize>() - 1)
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn sigwait(set: *const sigset_t, sig: *mut c_int) -> c_int;
     pub fn sigwaitinfo(set: *const sigset_t, info: *mut siginfo_t) -> c_int;
 

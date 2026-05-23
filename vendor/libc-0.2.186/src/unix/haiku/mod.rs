@@ -1480,7 +1480,7 @@ safe_f! {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn getrlimit(resource: c_int, rlim: *mut crate::rlimit) -> c_int;
     pub fn setrlimit(resource: c_int, rlim: *const crate::rlimit) -> c_int;
     pub fn getpriority(which: c_int, who: id_t) -> c_int;
@@ -1912,7 +1912,7 @@ extern "C" {
 }
 
 #[link(name = "gnu")]
-extern "C" {
+unsafe extern "C" {
     pub fn memmem(
         source: *const c_void,
         sourceLength: size_t,

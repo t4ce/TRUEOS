@@ -110,7 +110,7 @@ pub const DT_LNK: u8 = 10;
 pub const DT_SOCK: u8 = 12;
 pub const DT_WHT: u8 = 14;
 
-extern "C" {
+unsafe extern "C" {
     pub fn pthread_create(
         native: *mut crate::pthread_t,
         attr: *const crate::pthread_attr_t,

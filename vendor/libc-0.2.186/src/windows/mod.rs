@@ -251,7 +251,7 @@ pub const TMP_MAX: c_uint = 0x7fff_ffff;
 #[cfg(all(target_env = "msvc", feature = "rustc-dep-of-std"))] // " if "
 #[link(name = "msvcrt", cfg(not(target_feature = "crt-static")))]
 #[link(name = "libcmt", cfg(target_feature = "crt-static"))]
-extern "C" {}
+unsafe extern "C" {}
 
 extern_ty! {
     pub enum FILE {}
@@ -265,7 +265,7 @@ cfg_if! {
             all(windows, target_env = "msvc"),
             link(name = "legacy_stdio_definitions")
         )]
-        extern "C" {
+        unsafe extern "C" {
             pub fn printf(format: *const c_char, ...) -> c_int;
             pub fn fprintf(stream: *mut FILE, format: *const c_char, ...) -> c_int;
             pub fn snprintf(
@@ -283,7 +283,7 @@ cfg_if! {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn isalnum(c: c_int) -> c_int;
     pub fn isalpha(c: c_int) -> c_int;
     pub fn iscntrl(c: c_int) -> c_int;
@@ -559,7 +559,7 @@ extern "C" {
     ) -> crate::errno_t;
 }
 
-extern "system" {
+unsafe extern "system" {
     pub fn listen(s: SOCKET, backlog: c_int) -> c_int;
     pub fn accept(s: SOCKET, addr: *mut crate::sockaddr, addrlen: *mut c_int) -> SOCKET;
     pub fn bind(s: SOCKET, name: *const crate::sockaddr, namelen: c_int) -> c_int;

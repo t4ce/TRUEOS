@@ -1903,7 +1903,7 @@ safe_f! {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn gettimeofday(tp: *mut crate::timeval, tz: *mut crate::timezone) -> c_int;
     pub fn settimeofday(tp: *const crate::timeval, tz: *const crate::timezone) -> c_int;
     pub fn pledge(promises: *const c_char, execpromises: *const c_char) -> c_int;
@@ -2060,7 +2060,7 @@ extern "C" {
 }
 
 #[link(name = "execinfo")]
-extern "C" {
+unsafe extern "C" {
     pub fn backtrace(addrlist: *mut *mut c_void, len: size_t) -> size_t;
     pub fn backtrace_symbols(addrlist: *const *mut c_void, len: size_t) -> *mut *mut c_char;
     pub fn backtrace_symbols_fd(addrlist: *const *mut c_void, len: size_t, fd: c_int) -> c_int;

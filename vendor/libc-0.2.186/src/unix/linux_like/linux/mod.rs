@@ -43,7 +43,7 @@ pub const NLMSG_MIN_TYPE: c_int = 0x10;
 pub type sctp_assoc_t = __s32;
 
 #[cfg(target_os = "trueos")]
-extern "C" {
+unsafe extern "C" {
     pub fn pthread_getname_np(
         thread: crate::pthread_t,
         name: *mut c_char,
@@ -4041,7 +4041,7 @@ safe_f! {
 // These functions are not available on OpenHarmony
 cfg_if! {
     if #[cfg(not(target_env = "ohos"))] {
-        extern "C" {
+        unsafe extern "C" {
             // Only `getspnam_r` is implemented for musl, out of all of the reenterant
             // functions from `shadow.h`.
             // https://git.musl-libc.org/cgit/musl/tree/include/shadow.h
@@ -4100,7 +4100,7 @@ cfg_if! {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn mrand48() -> c_long;
     pub fn seed48(xseed: *mut c_ushort) -> *mut c_ushort;
     pub fn lcong48(p: *mut c_ushort);
@@ -4418,7 +4418,7 @@ extern "C" {
 // * musl has 64-bit versions only so aliases the LFS64 symbols to the standard ones
 cfg_if! {
     if #[cfg(not(any(target_env = "musl", target_env = "ohos")))] {
-        extern "C" {
+        unsafe extern "C" {
             pub fn fallocate64(fd: c_int, mode: c_int, offset: off64_t, len: off64_t) -> c_int;
             pub fn fgetpos64(stream: *mut crate::FILE, ptr: *mut crate::fpos64_t) -> c_int;
             pub fn fopen64(filename: *const c_char, mode: *const c_char) -> *mut crate::FILE;

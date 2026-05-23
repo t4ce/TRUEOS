@@ -160,7 +160,7 @@ macro_rules! tuple_impl {
                     // use the $tyvar's to get the appropriate number of
                     // repeats (they're not actually needed)
                     $(
-                        _rng.gen::<$tyvar>()
+                        _rng.r#gen::<$tyvar>()
                     ),*
                     ,
                 )
@@ -199,7 +199,7 @@ where Standard: Distribution<T>
         let mut buff: [MaybeUninit<T>; N] = unsafe { MaybeUninit::uninit().assume_init() };
 
         for elem in &mut buff {
-            *elem = MaybeUninit::new(_rng.gen());
+            *elem = MaybeUninit::new(_rng.r#gen());
         }
 
         unsafe { mem::transmute_copy::<_, _>(&buff) }
@@ -215,7 +215,7 @@ macro_rules! array_impl {
         impl<T> Distribution<[T; $n]> for Standard where Standard: Distribution<T> {
             #[inline]
             fn sample<R: Rng + ?Sized>(&self, _rng: &mut R) -> [T; $n] {
-                [_rng.gen::<$t>(), $(_rng.gen::<$ts>()),*]
+                [_rng.r#gen::<$t>(), $(_rng.r#gen::<$ts>()),*]
             }
         }
     };
@@ -236,8 +236,8 @@ where Standard: Distribution<T>
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Option<T> {
         // UFCS is needed here: https://github.com/rust-lang/rust/issues/24066
-        if rng.gen::<bool>() {
-            Some(rng.gen())
+        if rng.r#gen::<bool>() {
+            Some(rng.r#gen())
         } else {
             None
         }
@@ -249,7 +249,7 @@ where Standard: Distribution<T>
 {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Wrapping<T> {
-        Wrapping(rng.gen())
+        Wrapping(rng.r#gen())
     }
 }
 

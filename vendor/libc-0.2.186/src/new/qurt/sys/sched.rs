@@ -17,7 +17,7 @@ s! {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn sched_yield() -> c_int;
     pub fn sched_get_priority_max(policy: c_int) -> c_int;
     pub fn sched_get_priority_min(policy: c_int) -> c_int;

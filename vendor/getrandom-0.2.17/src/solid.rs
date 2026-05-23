@@ -2,7 +2,7 @@
 use crate::Error;
 use core::{mem::MaybeUninit, num::NonZeroU32};
 
-extern "C" {
+unsafe extern "C" {
     pub fn SOLID_RNG_SampleRandomBytes(buffer: *mut u8, length: usize) -> i32;
 }
 

@@ -29,7 +29,7 @@
 //! }
 //!
 //! let mut rng = rand::thread_rng();
-//! let y: f64 = rng.gen(); // generates a float between 0 and 1
+//! let y: f64 = rng.r#gen(); // generates a float between 0 and 1
 //!
 //! let mut nums: Vec<i32> = (1..100).collect();
 //! nums.shuffle(&mut rng);
@@ -80,7 +80,7 @@ use crate::distributions::{Distribution, Standard};
 
 /// Generates a random value using the thread-local random number generator.
 ///
-/// This is simply a shortcut for `thread_rng().gen()`. See [`thread_rng`] for
+/// This is simply a shortcut for `thread_rng().r#gen()`. See [`thread_rng`] for
 /// documentation of the entropy source and [`Standard`] for documentation of
 /// distributions and type-specific generation.
 ///
@@ -142,7 +142,7 @@ use crate::distributions::{Distribution, Standard};
 /// let mut rng = rand::thread_rng();
 ///
 /// for x in v.iter_mut() {
-///     *x = rng.gen();
+///     *x = rng.r#gen();
 /// }
 /// ```
 ///
@@ -152,5 +152,5 @@ use crate::distributions::{Distribution, Standard};
 #[inline]
 pub fn random<T>() -> T
 where Standard: Distribution<T> {
-    thread_rng().gen()
+    thread_rng().r#gen()
 }

@@ -88,7 +88,7 @@ macro_rules! register_custom_getrandom {
 
 #[allow(dead_code)]
 pub fn getrandom_inner(dest: &mut [MaybeUninit<u8>]) -> Result<(), Error> {
-    extern "Rust" {
+    unsafe extern "Rust" {
         fn __getrandom_custom(dest: *mut u8, len: usize) -> u32;
     }
     // Previously we always passed a valid, initialized slice to

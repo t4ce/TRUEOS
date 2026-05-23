@@ -16,7 +16,7 @@ use crate::distributions::{Distribution, Uniform};
 /// the slice is required, [`SliceRandom::choose`] can be more efficient.
 ///
 /// Steps are taken to avoid bias which might be present in naive
-/// implementations; for example `slice[rng.gen() % slice.len()]` samples from
+/// implementations; for example `slice[rng.r#gen() % slice.len()]` samples from
 /// the slice, but may be more likely to select numbers in the low range than
 /// other values.
 ///

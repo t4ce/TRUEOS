@@ -1244,7 +1244,7 @@ safe_f! {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn __errno_location() -> *mut c_int;
     pub fn setgrent();
     pub fn mprotect(addr: *mut c_void, len: size_t, prot: c_int) -> c_int;
@@ -1336,7 +1336,7 @@ extern "C" {
 }
 
 #[link(name = "rt")]
-extern "C" {
+unsafe extern "C" {
     pub fn aio_cancel(fd: c_int, aiocbp: *mut aiocb) -> c_int;
     pub fn aio_error(aiocbp: *const aiocb) -> c_int;
     pub fn aio_fsync(op: c_int, aiocbp: *mut aiocb) -> c_int;
@@ -1360,7 +1360,7 @@ extern "C" {
 }
 
 #[link(name = "kvm")]
-extern "C" {
+unsafe extern "C" {
     pub fn kvm_vm_map_entry_first(
         kvm: *mut crate::kvm_t,
         map: vm_map_t,

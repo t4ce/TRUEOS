@@ -20,7 +20,7 @@ pub fn detect_features() -> u32 {
     type zx_status_t = i32;
 
     #[link(name = "zircon")]
-    extern "C" {
+    unsafe extern "C" {
         fn zx_system_get_features(kind: u32, features: *mut u32) -> zx_status_t;
     }
 

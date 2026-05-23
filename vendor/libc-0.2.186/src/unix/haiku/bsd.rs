@@ -62,7 +62,7 @@ pub const IOC_INOUT: c_ulong = IOC_IN | IOC_OUT;
 pub const IOC_DIRMASK: c_ulong = 0xe0000000;
 
 #[link(name = "bsd")]
-extern "C" {
+unsafe extern "C" {
     // stdlib.h
     pub fn daemon(nochdir: c_int, noclose: c_int) -> c_int;
     pub fn getprogname() -> *const c_char;

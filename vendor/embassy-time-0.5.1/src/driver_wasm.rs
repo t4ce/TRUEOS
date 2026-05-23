@@ -18,7 +18,7 @@ impl AlarmState {
 }
 
 #[wasm_bindgen]
-extern "C" {
+unsafe extern "C" {
     fn setTimeout(closure: &Closure<dyn FnMut()>, millis: u32) -> f64;
     fn clearTimeout(token: f64);
 }
