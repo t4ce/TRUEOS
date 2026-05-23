@@ -620,10 +620,7 @@ pub mod routing;
 #[cfg(all(feature = "tokio", any(feature = "http1", feature = "http2")))]
 pub mod serve;
 
-#[cfg(any(test, feature = "__private"))]
 #[allow(missing_docs, missing_debug_implementations, clippy::print_stdout)]
-pub mod test_helpers;
-
 #[doc(no_inline)]
 pub use http;
 
@@ -650,4 +647,3 @@ pub use axum_macros::{debug_handler, debug_middleware};
 pub use self::serve::serve;
 
 pub use self::service_ext::ServiceExt;
-
