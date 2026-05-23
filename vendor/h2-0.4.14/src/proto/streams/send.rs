@@ -10,7 +10,7 @@ use bytes::Buf;
 use tokio::io::AsyncWrite;
 
 use std::cmp::Ordering;
-use std::task::{Context, Poll, Waker};
+use core::task::{Context, Poll, Waker};
 use tokio::io;
 
 /// Manages state transitions related to outbound frames.

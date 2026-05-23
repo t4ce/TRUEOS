@@ -6,7 +6,7 @@ use atomic_waker::AtomicWaker;
 use bytes::Buf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use tokio::io;
 use tokio::io::AsyncWrite;
 

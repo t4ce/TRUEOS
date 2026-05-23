@@ -3,7 +3,7 @@
 use super::ServeDir;
 use http::{HeaderValue, Request};
 use mime::Mime;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::path::Path;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]

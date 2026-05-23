@@ -3,7 +3,7 @@ use crate::Reason;
 use super::*;
 
 use std::fmt;
-use std::task::{Context, Waker};
+use core::task::{Context, Waker};
 use crate::time::Instant;
 
 /// Tracks Stream related state

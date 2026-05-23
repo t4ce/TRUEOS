@@ -4,7 +4,7 @@ use crate::response::Response;
 use axum_core::extract::Request;
 use futures_util::future::Map;
 use pin_project_lite::pin_project;
-use std::{convert::Infallible, future::Future, pin::Pin, task::Context};
+use core::{convert::Infallible, future::Future, pin::Pin, task::Context};
 use tower::util::Oneshot;
 use tower_service::Service;
 

@@ -13,8 +13,8 @@ use crate::proto::Error;
 use bytes::Buf;
 use futures_core::Stream;
 use futures_sink::Sink;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::length_delimited;
 

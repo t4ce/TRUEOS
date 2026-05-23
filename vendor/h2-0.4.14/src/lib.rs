@@ -150,9 +150,9 @@ pub use crate::share::{FlowControl, Ping, PingPong, Pong, RecvStream, SendStream
 #[cfg(feature = "unstable")]
 pub use codec::{Codec, SendError, UserError};
 
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 /// Creates a future from a function that returns `Poll`.
 fn poll_fn<T, F: FnMut(&mut Context<'_>) -> T>(f: F) -> PollFn<F> {
