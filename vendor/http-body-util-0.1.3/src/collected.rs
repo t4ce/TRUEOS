@@ -89,3 +89,5 @@ impl<B> Default for Collected<B> {
         }
     }
 }
+
+impl<B> Unpin for Collected<B> {}

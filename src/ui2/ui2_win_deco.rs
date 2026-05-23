@@ -1006,12 +1006,18 @@ fn window_bottom_scrollbar_rect(state: &Ui2State, window: &Ui2Window) -> Option<
     if !(rect.w > 0.0 && rect.h > (title_h + bottom_bar_h + scrollbar_h)) {
         return None;
     }
+    let left_inset = window_left_inset(window);
+    let right_inset = window_right_inset(window);
+    let w = rect.w - left_inset - right_inset;
+    if !(w > 0.0) {
+        return None;
+    }
     let y = if window.horizontal_scrollbar_side == Ui2WindowHorizontalScrollbarSide::Top {
         rect.y + title_h
     } else {
         rect.y + rect.h - bottom_bar_h - scrollbar_h
     };
-    Some(Ui2Rect::new(rect.x, y, rect.w.max(1.0), scrollbar_h))
+    Some(Ui2Rect::new(rect.x + left_inset, y, w.max(1.0), scrollbar_h))
 }
 
 pub(super) fn window_content_rect(state: &Ui2State, window: &Ui2Window) -> Option<Ui2Rect> {

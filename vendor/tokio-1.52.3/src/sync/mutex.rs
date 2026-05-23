@@ -300,6 +300,473 @@ impl fmt::Display for TryLockError {
 
 impl Error for TryLockError {}
 
+impl<T: ?Sized> Mutex<T> {
+    /// Creates a new lock in an unlocked state ready for use.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tokio::sync::Mutex;
+    ///
+    /// let lock = Mutex::new(5);
+    /// ```
+    #[track_caller]
+    pub fn new(t: T) -> Self
+    where
+        T: Sized,
+    {
+        #[cfg(all(tokio_unstable, feature = "tracing"))]
+        let resource_span = {
+            let location = core::panic::Location::caller();
+
+            tracing::trace_span!(
+                parent: None,
+                "runtime.resource",
+                concrete_type = "Mutex",
+                kind = "Sync",
+                loc.file = location.file(),
+                loc.line = location.line(),
+                loc.col = location.column(),
+            )
+        };
+
+        #[cfg(all(tokio_unstable, feature = "tracing"))]
+        let s = resource_span.in_scope(|| {
+            tracing::trace!(
+                target: "runtime::resource::state_update",
+                locked = false,
+            );
+            semaphore::Semaphore::new(1)
+        });
+
+        #[cfg(any(not(tokio_unstable), not(feature = "tracing")))]
+        let s = semaphore::Semaphore::new(1);
+
+        Self {
+            c: UnsafeCell::new(t),
+            s,
+            #[cfg(all(tokio_unstable, feature = "tracing"))]
+            resource_span,
+        }
+    }
+
+    /// Creates a new lock in an unlocked state ready for use.
+    ///
+    /// When using the `tracing` [unstable feature], a `Mutex` created with
+    /// `const_new` will not be instrumented. As such, it will not be visible
+    /// in [`tokio-console`]. Instead, [`Mutex::new`] should be used to create
+    /// an instrumented object if that is needed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tokio::sync::Mutex;
+    ///
+    /// static LOCK: Mutex<i32> = Mutex::const_new(5);
+    /// ```
+    ///
+    /// [`tokio-console`]: https://github.com/tokio-rs/console
+    /// [unstable feature]: crate#unstable-features
+    #[cfg(not(all(loom, test)))]
+    pub const fn const_new(t: T) -> Self
+    where
+        T: Sized,
+    {
+        Self {
+            c: UnsafeCell::new(t),
+            s: semaphore::Semaphore::const_new(1),
+            #[cfg(all(tokio_unstable, feature = "tracing"))]
+            resource_span: tracing::Span::none(),
+        }
+    }
+
+    /// Locks this mutex, causing the current task to yield until the lock has
+    /// been acquired.  When the lock has been acquired, function returns a
+    /// [`MutexGuard`].
+    ///
+    /// If the mutex is available to be acquired immediately, then this call
+    /// will typically not yield to the runtime. However, this is not guaranteed
+    /// under all circumstances.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method uses a queue to fairly distribute locks in the order they
+    /// were requested. Cancelling a call to `lock` makes you lose your place in
+    /// the queue.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tokio::sync::Mutex;
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() {
+    /// let mutex = Mutex::new(1);
+    ///
+    /// let mut n = mutex.lock().await;
+    /// *n = 2;
+    /// # }
+    /// ```
+    pub async fn lock(&self) -> MutexGuard<'_, T> {
+        let acquire_fut = async {
+            self.acquire().await;
+
+            MutexGuard {
+                lock: self,
+                #[cfg(all(tokio_unstable, feature = "tracing"))]
+                resource_span: self.resource_span.clone(),
+            }
+        };
+
+        #[cfg(all(tokio_unstable, feature = "tracing"))]
+        let acquire_fut = trace::async_op(
+            move || acquire_fut,
+            self.resource_span.clone(),
+            "Mutex::lock",
+            "poll",
+            false,
+        );
+
+        #[allow(clippy::let_and_return)] // this lint triggers when disabling tracing
+        let guard = acquire_fut.await;
+
+        #[cfg(all(tokio_unstable, feature = "tracing"))]
+        self.resource_span.in_scope(|| {
+            tracing::trace!(
+                target: "runtime::resource::state_update",
+                locked = true,
+            );
+        });
+
+        guard
+    }
+
+    /// Blockingly locks this `Mutex`. When the lock has been acquired, function returns a
+    /// [`MutexGuard`].
+    ///
+    /// This method is intended for use cases where you
+    /// need to use this mutex in asynchronous code as well as in synchronous code.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if called within an asynchronous execution context.
+    ///
+    ///   - If you find yourself in an asynchronous execution context and needing
+    ///     to call some (synchronous) function which performs one of these
+    ///     `blocking_` operations, then consider wrapping that call inside
+    ///     [`spawn_blocking()`][crate::runtime::Handle::spawn_blocking]
+    ///     (or [`block_in_place()`][crate::task::block_in_place]).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[cfg(not(target_family = "wasm"))]
+    /// # {
+    /// use std::sync::Arc;
+    /// use tokio::sync::Mutex;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let mutex =  Arc::new(Mutex::new(1));
+    ///     let lock = mutex.lock().await;
+    ///
+    ///     let mutex1 = Arc::clone(&mutex);
+    ///     let blocking_task = tokio::task::spawn_blocking(move || {
+    ///         // This shall block until the `lock` is released.
+    ///         let mut n = mutex1.blocking_lock();
+    ///         *n = 2;
+    ///     });
+    ///
+    ///     assert_eq!(*lock, 1);
+    ///     // Release the lock.
+    ///     drop(lock);
+    ///
+    ///     // Await the completion of the blocking task.
+    ///     blocking_task.await.unwrap();
+    ///
+    ///     // Assert uncontended.
+    ///     let n = mutex.try_lock().unwrap();
+    ///     assert_eq!(*n, 2);
+    /// }
+    /// # }
+    /// ```
+    #[track_caller]
+    #[cfg(feature = "sync")]
+    #[cfg_attr(docsrs, doc(alias = "lock_blocking"))]
+    pub fn blocking_lock(&self) -> MutexGuard<'_, T> {
+        crate::future::block_on(self.lock())
+    }
+
+    /// Blockingly locks this `Mutex`. When the lock has been acquired, function returns an
+    /// [`OwnedMutexGuard`].
+    ///
+    /// This method is identical to [`Mutex::blocking_lock`], except that the returned
+    /// guard references the `Mutex` with an [`Arc`] rather than by borrowing
+    /// it. Therefore, the `Mutex` must be wrapped in an `Arc` to call this
+    /// method, and the guard will live for the `'static` lifetime, as it keeps
+    /// the `Mutex` alive by holding an `Arc`.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if called within an asynchronous execution context.
+    ///
+    ///   - If you find yourself in an asynchronous execution context and needing
+    ///     to call some (synchronous) function which performs one of these
+    ///     `blocking_` operations, then consider wrapping that call inside
+    ///     [`spawn_blocking()`][crate::runtime::Handle::spawn_blocking]
+    ///     (or [`block_in_place()`][crate::task::block_in_place]).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[cfg(not(target_family = "wasm"))]
+    /// # {
+    /// use std::sync::Arc;
+    /// use tokio::sync::Mutex;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let mutex =  Arc::new(Mutex::new(1));
+    ///     let lock = mutex.lock().await;
+    ///
+    ///     let mutex1 = Arc::clone(&mutex);
+    ///     let blocking_task = tokio::task::spawn_blocking(move || {
+    ///         // This shall block until the `lock` is released.
+    ///         let mut n = mutex1.blocking_lock_owned();
+    ///         *n = 2;
+    ///     });
+    ///
+    ///     assert_eq!(*lock, 1);
+    ///     // Release the lock.
+    ///     drop(lock);
+    ///
+    ///     // Await the completion of the blocking task.
+    ///     blocking_task.await.unwrap();
+    ///
+    ///     // Assert uncontended.
+    ///     let n = mutex.try_lock().unwrap();
+    ///     assert_eq!(*n, 2);
+    /// }
+    /// # }
+    /// ```
+    #[track_caller]
+    #[cfg(feature = "sync")]
+    pub fn blocking_lock_owned(self: Arc<Self>) -> OwnedMutexGuard<T> {
+        crate::future::block_on(self.lock_owned())
+    }
+
+    /// Locks this mutex, causing the current task to yield until the lock has
+    /// been acquired. When the lock has been acquired, this returns an
+    /// [`OwnedMutexGuard`].
+    ///
+    /// If the mutex is available to be acquired immediately, then this call
+    /// will typically not yield to the runtime. However, this is not guaranteed
+    /// under all circumstances.
+    ///
+    /// This method is identical to [`Mutex::lock`], except that the returned
+    /// guard references the `Mutex` with an [`Arc`] rather than by borrowing
+    /// it. Therefore, the `Mutex` must be wrapped in an `Arc` to call this
+    /// method, and the guard will live for the `'static` lifetime, as it keeps
+    /// the `Mutex` alive by holding an `Arc`.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method uses a queue to fairly distribute locks in the order they
+    /// were requested. Cancelling a call to `lock_owned` makes you lose your
+    /// place in the queue.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tokio::sync::Mutex;
+    /// use std::sync::Arc;
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() {
+    /// let mutex = Arc::new(Mutex::new(1));
+    ///
+    /// let mut n = mutex.clone().lock_owned().await;
+    /// *n = 2;
+    /// # }
+    /// ```
+    ///
+    /// [`Arc`]: std::sync::Arc
+    pub async fn lock_owned(self: Arc<Self>) -> OwnedMutexGuard<T> {
+        #[cfg(all(tokio_unstable, feature = "tracing"))]
+        let resource_span = self.resource_span.clone();
+
+        let acquire_fut = async {
+            self.acquire().await;
+
+            OwnedMutexGuard {
+                #[cfg(all(tokio_unstable, feature = "tracing"))]
+                resource_span: self.resource_span.clone(),
+                lock: self,
+            }
+        };
+
+        #[cfg(all(tokio_unstable, feature = "tracing"))]
+        let acquire_fut = trace::async_op(
+            move || acquire_fut,
+            resource_span,
+            "Mutex::lock_owned",
+            "poll",
+            false,
+        );
+
+        #[allow(clippy::let_and_return)] // this lint triggers when disabling tracing
+        let guard = acquire_fut.await;
+
+        #[cfg(all(tokio_unstable, feature = "tracing"))]
+        guard.resource_span.in_scope(|| {
+            tracing::trace!(
+                target: "runtime::resource::state_update",
+                locked = true,
+            );
+        });
+
+        guard
+    }
+
+    async fn acquire(&self) {
+        crate::trace::async_trace_leaf().await;
+
+        self.s.acquire(1).await.unwrap_or_else(|_| {
+            // The semaphore was closed. but, we never explicitly close it, and
+            // we own it exclusively, which means that this can never happen.
+            unreachable!()
+        });
+    }
+
+    /// Attempts to acquire the lock, and returns [`TryLockError`] if the
+    /// lock is currently held somewhere else.
+    ///
+    /// [`TryLockError`]: TryLockError
+    /// # Examples
+    ///
+    /// ```
+    /// use tokio::sync::Mutex;
+    /// # async fn dox() -> Result<(), tokio::sync::TryLockError> {
+    ///
+    /// let mutex = Mutex::new(1);
+    ///
+    /// let n = mutex.try_lock()?;
+    /// assert_eq!(*n, 1);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn try_lock(&self) -> Result<MutexGuard<'_, T>, TryLockError> {
+        match self.s.try_acquire(1) {
+            Ok(()) => {
+                let guard = MutexGuard {
+                    lock: self,
+                    #[cfg(all(tokio_unstable, feature = "tracing"))]
+                    resource_span: self.resource_span.clone(),
+                };
+
+                #[cfg(all(tokio_unstable, feature = "tracing"))]
+                self.resource_span.in_scope(|| {
+                    tracing::trace!(
+                        target: "runtime::resource::state_update",
+                        locked = true,
+                    );
+                });
+
+                Ok(guard)
+            }
+            Err(_) => Err(TryLockError(())),
+        }
+    }
+
+    /// Returns a mutable reference to the underlying data.
+    ///
+    /// Since this call borrows the `Mutex` mutably, no actual locking needs to
+    /// take place -- the mutable borrow statically guarantees no locks exist.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tokio::sync::Mutex;
+    ///
+    /// fn main() {
+    ///     let mut mutex = Mutex::new(1);
+    ///
+    ///     let n = mutex.get_mut();
+    ///     *n = 2;
+    /// }
+    /// ```
+    pub fn get_mut(&mut self) -> &mut T {
+        self.c.get_mut()
+    }
+
+    /// Attempts to acquire the lock, and returns [`TryLockError`] if the lock
+    /// is currently held somewhere else.
+    ///
+    /// This method is identical to [`Mutex::try_lock`], except that the
+    /// returned  guard references the `Mutex` with an [`Arc`] rather than by
+    /// borrowing it. Therefore, the `Mutex` must be wrapped in an `Arc` to call
+    /// this method, and the guard will live for the `'static` lifetime, as it
+    /// keeps the `Mutex` alive by holding an `Arc`.
+    ///
+    /// [`TryLockError`]: TryLockError
+    /// [`Arc`]: std::sync::Arc
+    /// # Examples
+    ///
+    /// ```
+    /// use tokio::sync::Mutex;
+    /// use std::sync::Arc;
+    /// # async fn dox() -> Result<(), tokio::sync::TryLockError> {
+    ///
+    /// let mutex = Arc::new(Mutex::new(1));
+    ///
+    /// let n = mutex.clone().try_lock_owned()?;
+    /// assert_eq!(*n, 1);
+    /// # Ok(())
+    /// # }
+    pub fn try_lock_owned(self: Arc<Self>) -> Result<OwnedMutexGuard<T>, TryLockError> {
+        match self.s.try_acquire(1) {
+            Ok(()) => {
+                let guard = OwnedMutexGuard {
+                    #[cfg(all(tokio_unstable, feature = "tracing"))]
+                    resource_span: self.resource_span.clone(),
+                    lock: self,
+                };
+
+                #[cfg(all(tokio_unstable, feature = "tracing"))]
+                guard.resource_span.in_scope(|| {
+                    tracing::trace!(
+                        target: "runtime::resource::state_update",
+                        locked = true,
+                    );
+                });
+
+                Ok(guard)
+            }
+            Err(_) => Err(TryLockError(())),
+        }
+    }
+
+    /// Consumes the mutex, returning the underlying data.
+    /// # Examples
+    ///
+    /// ```
+    /// use tokio::sync::Mutex;
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() {
+    /// let mutex = Mutex::new(1);
+    ///
+    /// let n = mutex.into_inner();
+    /// assert_eq!(n, 1);
+    /// # }
+    /// ```
+    pub fn into_inner(self) -> T
+    where
+        T: Sized,
+    {
+        self.c.into_inner()
+    }
+}
 
 impl<T> From<T> for Mutex<T> {
     fn from(s: T) -> Self {

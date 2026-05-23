@@ -402,7 +402,6 @@ where [T]: Fill
     }
 }
 
-#[cfg(not(feature = "min_const_gen"))]
 macro_rules! impl_fill_arrays {
     ($n:expr,) => {};
     ($n:expr, $N:ident) => {
@@ -423,3 +422,7 @@ macro_rules! impl_fill_arrays {
     };
 }
 #[cfg(not(feature = "min_const_gen"))]
+#[rustfmt::skip]
+impl_fill_arrays!(32, N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,);
+#[cfg(not(feature = "min_const_gen"))]
+impl_fill_arrays!(!div 4096, N,N,N,N,N,N,N,);

@@ -34,8 +34,8 @@ pub(crate) mod rand {
     use std::collections::hash_map::RandomState;
     #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     use core::hash::{BuildHasher, Hash, Hasher};
-    use std::sync::atomic::AtomicU32;
-    use std::sync::atomic::Ordering::Relaxed;
+    use core::sync::atomic::AtomicU32;
+    use core::sync::atomic::Ordering::Relaxed;
 
     static COUNTER: AtomicU32 = AtomicU32::new(1);
 
@@ -105,7 +105,7 @@ pub(crate) mod sync {
         pub(crate) use crate::loom::std::atomic_u64::AtomicU64;
         pub(crate) use crate::loom::std::atomic_usize::AtomicUsize;
 
-        pub(crate) use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering, fence};
+        pub(crate) use core::sync::atomic::{fence, AtomicBool, AtomicPtr, AtomicU8, Ordering};
     }
 
     pub(crate) use super::barrier::Barrier;
