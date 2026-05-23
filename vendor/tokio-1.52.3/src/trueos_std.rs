@@ -96,7 +96,7 @@ pub mod os {
 pub mod path {
     extern crate alloc;
 
-    use alloc::borrow::ToOwned;
+    use alloc::borrow::{Cow, ToOwned};
     use alloc::string::{String, ToString};
     use core::borrow::Borrow;
     use core::fmt;
@@ -147,6 +147,14 @@ pub mod path {
             &self.inner
         }
 
+        pub fn is_absolute(&self) -> bool {
+            self.inner.starts_with('/')
+        }
+
+        pub fn is_relative(&self) -> bool {
+            !self.is_absolute()
+        }
+
         pub fn to_path_buf(&self) -> PathBuf {
             self.to_owned()
         }
@@ -170,12 +178,65 @@ pub mod path {
             if name.is_empty() { None } else { Some(name) }
         }
 
+        pub fn file_stem(&self) -> Option<&str> {
+            let name = self.file_name()?;
+            match name.rsplit_once('.') {
+                Some((stem, _)) if !stem.is_empty() => Some(stem),
+                Some(_) => None,
+                None => Some(name),
+            }
+        }
+
+        pub fn extension(&self) -> Option<&str> {
+            let name = self.file_name()?;
+            let (_, ext) = name.rsplit_once('.')?;
+            if ext.is_empty() { None } else { Some(ext) }
+        }
+
+        pub fn with_extension<S: AsRef<str>>(&self, extension: S) -> PathBuf {
+            let mut out = self.to_path_buf();
+            out.set_extension(extension);
+            out
+        }
+
+        pub fn starts_with<P: AsRef<Path>>(&self, base: P) -> bool {
+            let base = base.as_ref().inner.trim_end_matches('/');
+            if base == "/" {
+                return self.is_absolute();
+            }
+            &self.inner == base
+                || self
+                    .inner
+                    .strip_prefix(base)
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+        }
+
+        pub fn strip_prefix<P: AsRef<Path>>(&self, base: P) -> Result<&Path, StripPrefixError> {
+            let base = base.as_ref().inner.trim_end_matches('/');
+            if base == "/" {
+                return if self.is_absolute() { Ok(self) } else { Err(StripPrefixError) };
+            }
+            if let Some(rest) = self.inner.strip_prefix(base) {
+                if rest.is_empty() {
+                    return Ok(Path::new(""));
+                }
+                if let Some(rest) = rest.strip_prefix('/') {
+                    return Ok(Path::new(rest));
+                }
+            }
+            Err(StripPrefixError)
+        }
+
         pub fn components(&self) -> Components<'_> {
             Components { path: &self.inner, pos: 0, yielded_root: false }
         }
 
         pub fn display(&self) -> Display<'_> {
             Display { path: self }
+        }
+
+        pub fn to_string_lossy(&self) -> Cow<'_, str> {
+            Cow::Borrowed(&self.inner)
         }
 
         pub fn join<P: AsRef<Path>>(&self, path: P) -> PathBuf {
@@ -200,6 +261,9 @@ pub mod path {
             f.write_str(&self.path.inner)
         }
     }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct StripPrefixError;
 
     impl PathBuf {
         pub fn new() -> Self {
@@ -241,12 +305,48 @@ pub mod path {
             self.inner.as_str()
         }
 
+        pub fn to_str(&self) -> Option<&str> {
+            self.as_path().to_str()
+        }
+
         pub fn display(&self) -> Display<'_> {
             self.as_path().display()
         }
 
         pub fn file_name(&self) -> Option<&str> {
             self.as_path().file_name()
+        }
+
+        pub fn file_stem(&self) -> Option<&str> {
+            self.as_path().file_stem()
+        }
+
+        pub fn extension(&self) -> Option<&str> {
+            self.as_path().extension()
+        }
+
+        pub fn with_extension<S: AsRef<str>>(&self, extension: S) -> PathBuf {
+            self.as_path().with_extension(extension)
+        }
+
+        pub fn is_absolute(&self) -> bool {
+            self.as_path().is_absolute()
+        }
+
+        pub fn is_relative(&self) -> bool {
+            self.as_path().is_relative()
+        }
+
+        pub fn starts_with<P: AsRef<Path>>(&self, base: P) -> bool {
+            self.as_path().starts_with(base)
+        }
+
+        pub fn strip_prefix<P: AsRef<Path>>(&self, base: P) -> Result<&Path, StripPrefixError> {
+            self.as_path().strip_prefix(base)
+        }
+
+        pub fn to_string_lossy(&self) -> Cow<'_, str> {
+            self.as_path().to_string_lossy()
         }
 
         pub fn set_file_name<S: AsRef<str>>(&mut self, file_name: S) {

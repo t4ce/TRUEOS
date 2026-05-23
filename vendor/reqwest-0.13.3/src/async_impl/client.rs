@@ -261,8 +261,10 @@ struct Config {
     dns_overrides: HashMap<String, Vec<SocketAddr>>,
     dns_resolver: Option<Arc<dyn Resolve>>,
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
     unix_socket: Option<Arc<std::path::Path>>,
+    #[cfg(all(unix, any(target_os = "trueos", target_os = "zkvm")))]
+    unix_socket: Option<Arc<tokio::path::Path>>,
     #[cfg(target_os = "windows")]
     windows_named_pipe: Option<Arc<core::ffi::OsStr>>,
 }

@@ -463,6 +463,7 @@ struct Ui2WindowScrollDrag {
     active: bool,
     window_id: u32,
     cursor_slot_id: u32,
+    horizontal: bool,
     track_rect: Ui2Rect,
     thumb_extent: f32,
     grab_offset: f32,
@@ -2447,6 +2448,38 @@ fn draw_window_texture_content(
     content: Ui2Rect,
     tex_id: u32,
 ) -> bool {
+    if window.kind == Ui2WindowKind::HostedSurface {
+        if let Some(snapshot) = window_scroll_snapshot(window) {
+            let viewport_w = snapshot.viewport_width.max(1);
+            let content_w = snapshot.content_width.max(viewport_w);
+            if content_w > viewport_w && window.content_rotation_quadrants % 4 == 0 {
+                let Some((_tex_w, _tex_h)) = texture_dimensions(tex_id) else {
+                    return false;
+                };
+                let scroll_x = normalized_hosted_browser_scroll_x(&snapshot).min(content_w);
+                let visible_w = viewport_w.min(content_w.saturating_sub(scroll_x)).max(1);
+                let u0 = scroll_x as f32 / content_w as f32;
+                let u1 = scroll_x.saturating_add(visible_w) as f32 / content_w as f32;
+                let draw_w = content.w * (visible_w as f32 / viewport_w as f32);
+                return draw_texture_rect_uv_no_present(
+                    tex_id,
+                    content.x,
+                    content.y,
+                    draw_w,
+                    content.h,
+                    u0.clamp(0.0, 1.0),
+                    0.0,
+                    u1.clamp(0.0, 1.0),
+                    1.0,
+                    state.view_w,
+                    state.view_h,
+                    window.content_tex_blend,
+                    window.alpha,
+                );
+            }
+        }
+    }
+
     let rotation = window.content_rotation_quadrants % 4;
     if !window.content_preserve_scale {
         if rotation != 0 {

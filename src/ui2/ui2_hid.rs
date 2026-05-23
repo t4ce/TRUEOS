@@ -407,7 +407,8 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
     let mut window_button_action: Option<(u32, Ui2SystemButtonAction)> = None;
     let mut begin_move_drag = false;
     let mut begin_resize_drag: Option<(u32, u32)> = None;
-    let mut begin_scroll_drag = false;
+    let mut begin_vertical_scroll_drag = false;
+    let mut begin_horizontal_scroll_drag = false;
     let mut begin_scroll_pan_window_id = 0u32;
     let mut click_candidate_window_id = 0u32;
     let mut click_candidate_item_id = 0u32;
@@ -538,9 +539,11 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
                 ));
             }
             Ui2HitKind::WindowVerticalScrollbar => {
-                begin_scroll_drag = true;
+                begin_vertical_scroll_drag = true;
             }
-            Ui2HitKind::WindowHorizontalScrollbar => {}
+            Ui2HitKind::WindowHorizontalScrollbar => {
+                begin_horizontal_scroll_drag = true;
+            }
             Ui2HitKind::WindowDecoration => {
                 if press_system_button_action.is_none() {
                     let _ =
@@ -553,8 +556,11 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
     if let Some((window_id, edge_mask)) = begin_resize_drag {
         let _ = begin_window_resize_for_cursor(state, slot_id, window_id, edge_mask);
     }
-    if begin_scroll_drag {
+    if begin_vertical_scroll_drag {
         let _ = begin_vertical_scroll_drag_for_cursor(state, slot_id, px, py);
+    }
+    if begin_horizontal_scroll_drag {
+        let _ = begin_horizontal_scroll_drag_for_cursor(state, slot_id, px, py);
     }
     if begin_scroll_pan_window_id != 0 {
         let _ =
@@ -564,7 +570,7 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
 
     update_move_drag_for_cursor(state, slot_id, px, py, event.buttons_down);
     update_resize_drag_for_cursor(state, slot_id, px, py, event.buttons_down);
-    let _ = update_scroll_drag_for_cursor(state, slot_id, py, event.buttons_down);
+    let _ = update_scroll_drag_for_cursor(state, slot_id, px, py, event.buttons_down);
     let _ = update_scroll_pan_for_cursor(state, slot_id, px, py, event.buttons_down);
 
     if click_candidate_window_id != 0 {
@@ -1104,6 +1110,29 @@ fn browser_vertical_scrollbar_metrics(
     Some((track, thumb_h, thumb_y, scroll_range))
 }
 
+fn browser_horizontal_scrollbar_metrics(
+    state: &Ui2State,
+    window: &Ui2Window,
+) -> Option<(Ui2Rect, f32, f32, u32)> {
+    let Some(snapshot) = window_scroll_snapshot(window) else {
+        return None;
+    };
+    let track = window_horizontal_scrollbar_rect(state, window)?;
+    let viewport_w = snapshot.viewport_width.max(1);
+    let content_w = snapshot.content_width.max(viewport_w);
+    let scroll_range = hosted_browser_scroll_x_max(&snapshot);
+    let thumb_w =
+        libm::fmaxf(10.0, (track.w * (viewport_w as f32 / content_w as f32)).min(track.w));
+    let thumb_x = if scroll_range > 0 {
+        let avail = (track.w - thumb_w).max(0.0);
+        track.x
+            + (avail * (normalized_hosted_browser_scroll_x(&snapshot) as f32 / scroll_range as f32))
+    } else {
+        track.x
+    };
+    Some((track, thumb_w, thumb_x, scroll_range))
+}
+
 fn begin_vertical_scroll_drag_for_cursor(
     state: &mut Ui2State,
     slot_id: u32,
@@ -1144,12 +1173,61 @@ fn begin_vertical_scroll_drag_for_cursor(
             active: true,
             window_id,
             cursor_slot_id: slot_id,
+            horizontal: false,
             track_rect: track,
             thumb_extent: thumb_h,
             grab_offset,
         },
     );
-    update_scroll_drag_for_cursor(state, slot_id, cursor_y, UI2_PRIMARY_BUTTON_MASK)
+    update_scroll_drag_for_cursor(state, slot_id, cursor_x, cursor_y, UI2_PRIMARY_BUTTON_MASK)
+}
+
+fn begin_horizontal_scroll_drag_for_cursor(
+    state: &mut Ui2State,
+    slot_id: u32,
+    cursor_x: f32,
+    cursor_y: f32,
+) -> bool {
+    let Some(window_id) = state
+        .cursors
+        .iter()
+        .find(|cursor| cursor.slot_id == slot_id)
+        .map(|cursor| cursor.press_window_id)
+    else {
+        return false;
+    };
+    let Some(window) = state
+        .windows
+        .iter()
+        .find(|window| window.id == window_id && window_is_renderable(window))
+    else {
+        return false;
+    };
+    let Some((track, thumb_w, thumb_x, _)) = browser_horizontal_scrollbar_metrics(state, window)
+    else {
+        return false;
+    };
+    let thumb_rect = Ui2Rect::new(thumb_x, track.y, thumb_w, track.h);
+    let grab_offset = if rect_contains_point(thumb_rect, cursor_x, cursor_y) {
+        (cursor_x - thumb_x).clamp(0.0, thumb_w)
+    } else {
+        thumb_w * 0.5
+    };
+    clear_window_drag_claims(state, window_id);
+    clear_other_drag_modes_for_slot(state, slot_id);
+    upsert_scroll_drag(
+        state,
+        Ui2WindowScrollDrag {
+            active: true,
+            window_id,
+            cursor_slot_id: slot_id,
+            horizontal: true,
+            track_rect: track,
+            thumb_extent: thumb_w,
+            grab_offset,
+        },
+    );
+    update_scroll_drag_for_cursor(state, slot_id, cursor_x, cursor_y, UI2_PRIMARY_BUTTON_MASK)
 }
 
 fn begin_window_scroll_pan_for_cursor(
@@ -1188,6 +1266,7 @@ fn begin_window_scroll_pan_for_cursor(
 fn update_scroll_drag_for_cursor(
     state: &mut Ui2State,
     slot_id: u32,
+    cursor_x: f32,
     cursor_y: f32,
     buttons_down: u32,
 ) -> bool {
@@ -1211,9 +1290,12 @@ fn update_scroll_drag_for_cursor(
         state.scroll_drags.remove(drag_idx);
         return false;
     };
-    let Some((track, _thumb_h, _thumb_y, scroll_range)) =
+    let metrics = if drag.horizontal {
+        browser_horizontal_scrollbar_metrics(state, window)
+    } else {
         browser_vertical_scrollbar_metrics(state, window)
-    else {
+    };
+    let Some((track, _thumb_extent, _thumb_origin, scroll_range)) = metrics else {
         state.scroll_drags.remove(drag_idx);
         return false;
     };
@@ -1221,16 +1303,18 @@ fn update_scroll_drag_for_cursor(
     if scroll_range == 0 {
         return false;
     }
-    let avail = (track.h - state.scroll_drags[drag_idx].thumb_extent).max(0.0);
+    let track_origin = if drag.horizontal { track.x } else { track.y };
+    let cursor_origin = if drag.horizontal { cursor_x } else { cursor_y };
+    let track_extent = if drag.horizontal { track.w } else { track.h };
+    let avail = (track_extent - state.scroll_drags[drag_idx].thumb_extent).max(0.0);
     if avail <= 0.0 {
         return false;
     }
-    let thumb_y =
-        (cursor_y - state.scroll_drags[drag_idx].grab_offset).clamp(track.y, track.y + avail);
-    let ratio = ((thumb_y - track.y) / avail).clamp(0.0, 1.0);
+    let thumb_origin = (cursor_origin - state.scroll_drags[drag_idx].grab_offset)
+        .clamp(track_origin, track_origin + avail);
+    let ratio = ((thumb_origin - track_origin) / avail).clamp(0.0, 1.0);
     let snapshot = hosted_surface_state_for_window(window);
-    let next_scroll =
-        clamp_hosted_browser_scroll(&snapshot, libm::roundf(ratio * scroll_range as f32) as i64);
+    let next_scroll = libm::roundf(ratio * scroll_range as f32) as i64;
     let Some(window) = state
         .windows
         .iter()
@@ -1242,7 +1326,14 @@ fn update_scroll_drag_for_cursor(
     if content_id == 0 {
         return false;
     }
-    if hosted_set_scroll_y(content_id, next_scroll) {
+    let scrolled = if drag.horizontal {
+        let next_scroll_x = clamp_hosted_browser_scroll_x(&snapshot, next_scroll);
+        hosted_set_scroll(content_id, next_scroll_x, normalized_hosted_browser_scroll(&snapshot))
+    } else {
+        let next_scroll_y = clamp_hosted_browser_scroll(&snapshot, next_scroll);
+        hosted_set_scroll_y(content_id, next_scroll_y)
+    };
+    if scrolled {
         state.compose_reason = "scrollbar-drag";
         true
     } else {

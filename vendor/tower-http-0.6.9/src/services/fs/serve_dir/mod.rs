@@ -19,8 +19,6 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-use std::path as host_path;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use tokio::{
     io,
     path::{Component, Path, PathBuf},
@@ -30,7 +28,7 @@ use tower_service::Service;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 type PublicPath = Path;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-type PublicPath = host_path::Path;
+type PublicPath = Path;
 
 pub(crate) mod future;
 mod headers;
