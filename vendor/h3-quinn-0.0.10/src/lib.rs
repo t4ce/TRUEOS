@@ -3,6 +3,7 @@
 //! This module implements QUIC traits with Quinn.
 #![deny(missing_docs)]
 
+#![allow(missing_docs)]
 extern crate alloc;
 
 use alloc::{boxed::Box, sync::Arc};

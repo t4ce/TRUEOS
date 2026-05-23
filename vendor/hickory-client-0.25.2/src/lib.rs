@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 /*
  * Copyright (C) 2015 Benjamin Fry <benjaminfry@me.com>
  *

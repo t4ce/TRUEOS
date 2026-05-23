@@ -176,6 +176,7 @@
 
 // LIBRARY WARNINGS
 #![warn(
+#![allow(missing_docs)]
     clippy::default_trait_access,
     clippy::dbg_macro,
     clippy::print_stdout,

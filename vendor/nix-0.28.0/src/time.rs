@@ -1,4 +1,5 @@
 //! Sleep, query system clocks, and set system clock
+#![allow(missing_docs)]
 use crate::sys::time::TimeSpec;
 #[cfg(any(freebsdlike, linux_android, target_os = "emscripten"))]
 #[cfg(feature = "process")]

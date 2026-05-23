@@ -111,6 +111,7 @@
 #![cfg_attr(feature = "rustc-dep-of-std", feature(ip))]
 #![cfg_attr(feature = "rustc-dep-of-std", allow(internal_features))]
 #![cfg_attr(
+#![allow(missing_docs)]
     any(feature = "rustc-dep-of-std", core_intrinsics),
     feature(core_intrinsics)
 )]

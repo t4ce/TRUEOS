@@ -12,6 +12,7 @@
 //!  system, e.g. most Unixes have this written to `/etc/resolv.conf`
 #![allow(missing_docs, unused_extern_crates)]
 
+#![allow(missing_docs)]
 #[cfg(unix)]
 #[cfg(feature = "system-config")]
 mod unix;

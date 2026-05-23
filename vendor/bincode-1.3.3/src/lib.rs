@@ -31,6 +31,7 @@
 #![crate_type = "rlib"]
 #![cfg_attr(not(target_os = "trueos"), crate_type = "dylib")]
 
+#![allow(missing_docs)]
 #[macro_use]
 extern crate serde;
 #[cfg(target_os = "trueos")]

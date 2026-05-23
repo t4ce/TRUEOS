@@ -1,6 +1,7 @@
 // Copyright 2022 the SVG Types Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+#![allow(missing_docs)]
 use alloc::vec::Vec;
 
 use crate::stream::Stream;

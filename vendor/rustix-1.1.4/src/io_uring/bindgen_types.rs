@@ -1,5 +1,6 @@
 //! Local versions of types that bindgen would use.
 
+#![allow(missing_docs)]
 use crate::utils::{as_mut_ptr, as_ptr};
 
 /// This represents an incomplete array field at the end of a struct.

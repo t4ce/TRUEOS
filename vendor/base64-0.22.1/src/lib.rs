@@ -222,6 +222,7 @@
 
 #![cfg_attr(feature = "cargo-clippy", allow(clippy::cast_lossless))]
 #![deny(
+#![allow(missing_docs)]
     missing_docs,
     trivial_casts,
     trivial_numeric_casts,

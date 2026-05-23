@@ -22,6 +22,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+#![allow(missing_docs)]
 #[macro_use]
 extern crate alloc;
 

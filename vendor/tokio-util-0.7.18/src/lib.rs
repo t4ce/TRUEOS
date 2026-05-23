@@ -1,5 +1,6 @@
 #![allow(clippy::needless_doctest_main)]
 #![warn(
+#![allow(missing_docs)]
     missing_debug_implementations,
     missing_docs,
     rust_2018_idioms,

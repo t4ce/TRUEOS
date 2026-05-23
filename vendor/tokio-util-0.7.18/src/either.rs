@@ -1,4 +1,5 @@
 //! Module defining an Either type.
+#![allow(missing_docs)]
 use core::{
     future::Future,
     pin::Pin,

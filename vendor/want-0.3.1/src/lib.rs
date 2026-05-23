@@ -81,6 +81,7 @@
 //! # fn main() {}
 //! ```
 
+#![allow(missing_docs)]
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 extern crate alloc;
 

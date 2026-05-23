@@ -1,6 +1,7 @@
 // Copyright 2019 the Resvg Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+#![allow(missing_docs)]
 use alloc::{boxed::Box, string::String, vec::Vec};
 pub mod filter;
 mod geom;

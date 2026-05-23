@@ -10,6 +10,7 @@
 
 #![deny(missing_docs, unused_must_use, unused_mut, unused_imports, unused_import_braces)]
 
+#![allow(missing_docs)]
 pub use tungstenite;
 
 mod compat;

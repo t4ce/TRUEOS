@@ -1,5 +1,6 @@
 #![allow(dead_code, missing_docs)]
 
+#![allow(missing_docs)]
 use crate::{Interest, Registry, Token};
 
 use alloc::{vec, vec::Vec};

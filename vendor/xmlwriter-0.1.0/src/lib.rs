@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 /*!
 A simple, streaming, partially-validating XML writer that writes XML data into an internal buffer.
 

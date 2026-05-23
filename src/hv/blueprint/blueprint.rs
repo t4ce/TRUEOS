@@ -1394,6 +1394,9 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "trueos_tokio_platform_log_semantic_gap" => Some(
             crate::t::tokio_platform::trueos_tokio_platform_log_semantic_gap as *const () as usize,
         ),
+        "trueos_tokio_platform_log" => {
+            Some(crate::t::tokio_platform::trueos_tokio_platform_log as *const () as usize)
+        }
         "trueos_tokio_platform_monotonic_nanos" => Some(
             crate::t::tokio_platform::trueos_tokio_platform_monotonic_nanos as *const () as usize,
         ),

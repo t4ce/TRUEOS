@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 use alloc::boxed::Box;
 use tower_layer::{layer_fn, LayerFn};
 use tower_service::Service;

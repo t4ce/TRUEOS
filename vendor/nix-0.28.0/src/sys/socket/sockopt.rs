@@ -1,4 +1,5 @@
 //! Socket options as used by `setsockopt` and `getsockopt`.
+#![allow(missing_docs)]
 use super::{GetSockOpt, SetSockOpt};
 use crate::errno::Errno;
 use crate::sys::time::TimeVal;

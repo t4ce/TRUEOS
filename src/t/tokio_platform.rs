@@ -13,6 +13,9 @@ const TRUEOS_DEBUG_BUILD_DRIVER_NEW: u32 = 6;
 const TRUEOS_DEBUG_BUILD_BLOCKING_POOL: u32 = 7;
 const TRUEOS_DEBUG_BUILD_CURRENT_THREAD: u32 = 8;
 const TRUEOS_DEBUG_BUILD_CURRENT_THREAD_READY: u32 = 9;
+const TRUEOS_LOG_INFO: u32 = 3;
+const TRUEOS_LOG_WARN: u32 = 4;
+const TRUEOS_LOG_ERROR: u32 = 5;
 
 fn semantic_gap_message(code: u32) -> &'static str {
     match code {
@@ -56,6 +59,24 @@ pub extern "Rust" fn trueos_tokio_platform_log_semantic_gap(code: u32) {
     let mask = 1u64 << code;
     if SEMANTIC_GAPS_LOGGED.fetch_or(mask, Ordering::AcqRel) & mask == 0 {
         crate::log_warn!(target: "tokio"; "{}\n", semantic_gap_message(code));
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "Rust" fn trueos_tokio_platform_log(level: u32, bytes: *const u8, len: usize) {
+    if bytes.is_null() || len == 0 {
+        return;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(bytes, len) };
+    let text = match core::str::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(_) => "<non-utf8 tokio log>\n",
+    };
+    match level {
+        TRUEOS_LOG_ERROR => crate::log_error!(target: "tokio"; "{}", text),
+        TRUEOS_LOG_WARN => crate::log_warn!(target: "tokio"; "{}", text),
+        TRUEOS_LOG_INFO => crate::log_info!(target: "tokio"; "{}", text),
+        _ => crate::log_info!(target: "tokio"; "{}", text),
     }
 }
 

@@ -19,6 +19,7 @@
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+#![allow(missing_docs)]
 #[cfg(feature = "custom-bindings")]
 mod binding;
 mod command;

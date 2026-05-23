@@ -1,4 +1,5 @@
 //! Mostly platform-specific functionality
+#![allow(missing_docs)]
 #[cfg(any(
     freebsdlike,
     all(target_os = "linux", not(target_env = "uclibc")),

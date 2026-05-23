@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 use crate::errno::Errno;
 use crate::{NixPath, Result};
 use libc::{self, c_int, c_ulong};

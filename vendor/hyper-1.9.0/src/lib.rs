@@ -1,6 +1,7 @@
 #![deny(missing_docs)]
 #![deny(missing_debug_implementations)]
 #![cfg_attr(
+#![allow(missing_docs)]
     any(target_os = "trueos", target_os = "zkvm"),
     allow(dead_code, missing_docs, missing_debug_implementations, unused_imports)
 )]

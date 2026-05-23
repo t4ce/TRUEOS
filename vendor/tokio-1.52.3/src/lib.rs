@@ -1,4 +1,5 @@
 #![allow(
+#![allow(missing_docs)]
     clippy::cognitive_complexity,
     clippy::large_enum_variant,
     clippy::module_inception,

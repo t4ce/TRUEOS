@@ -9,6 +9,7 @@
 
 #![deny(missing_docs)]
 
+#![allow(missing_docs)]
 use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};

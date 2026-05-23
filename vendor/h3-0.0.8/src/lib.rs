@@ -2,6 +2,7 @@
 #![deny(missing_docs, clippy::self_named_module_files)]
 #![allow(clippy::derive_partial_eq_without_eq)]
 
+#![allow(missing_docs)]
 extern crate alloc;
 
 pub mod client;

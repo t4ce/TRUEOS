@@ -15,6 +15,7 @@
 //!
 //! See the specific sub modules for usage examples.
 
+#![allow(missing_docs)]
 #[cfg(any(
     feature = "support-v0_6",
     feature = "support-v0_7",

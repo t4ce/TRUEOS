@@ -9,6 +9,7 @@
 //!
 //! [`Empty`] and [`Full`] provide simple implementations.
 
+#![allow(missing_docs)]
 extern crate alloc;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 extern crate self as std;

@@ -151,7 +151,7 @@ unnecessary_cast = "warn"
 useless_conversion = "warn"
 
 [lints.rust]
-missing_docs = "warn"
+missing_docs = "allow"
 unused_lifetimes = "warn"
 
 [lints.rust.unexpected_cfgs]

@@ -66,6 +66,7 @@
 //! # }
 //! ```
 
+#![allow(missing_docs)]
 use std::borrow::Borrow;
 use std::io::Error;
 use core::pin::Pin;

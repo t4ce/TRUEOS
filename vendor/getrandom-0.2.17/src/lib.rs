@@ -202,6 +202,7 @@
 //! [platform-support]: https://doc.rust-lang.org/stable/rustc/platform-support.html
 
 #![doc(
+#![allow(missing_docs)]
     html_logo_url = "https://www.rust-lang.org/logos/rust-logo-128x128-blk.png",
     html_favicon_url = "https://www.rust-lang.org/favicon.ico",
     html_root_url = "https://docs.rs/getrandom/0.2.17"

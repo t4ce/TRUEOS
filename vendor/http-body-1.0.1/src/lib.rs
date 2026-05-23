@@ -1,4 +1,5 @@
 #![deny(
+#![allow(missing_docs)]
     missing_debug_implementations,
     missing_docs,
     unreachable_pub,

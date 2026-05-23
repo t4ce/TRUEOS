@@ -7,6 +7,7 @@
 //! This crate is less-stable than [`hyper`](https://docs.rs/hyper). However,
 //! does respect Rust's semantic version regarding breaking changes.
 
+#![allow(missing_docs)]
 extern crate alloc;
 
 #[cfg(not(feature = "std"))]

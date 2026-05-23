@@ -1,5 +1,6 @@
 //! Connection statistics
 
+#![allow(missing_docs)]
 use crate::{Dir, Duration, frame::Frame};
 
 /// Statistics about UDP datagrams transmitted or received on a connection

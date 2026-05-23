@@ -1,6 +1,7 @@
 // Copyright 2023 the SVG Types Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+#![allow(missing_docs)]
 use crate::directional_position::DirectionalPosition;
 use crate::stream::Stream;
 use crate::{Length, LengthUnit};

@@ -11,6 +11,7 @@
 //! This module is deprecated. Use [`crate::distributions::WeightedIndex`] and
 //! [`crate::distributions::WeightedError`] instead.
 
+#![allow(missing_docs)]
 pub use super::{WeightedIndex, WeightedError};
 
 #[allow(missing_docs)]
