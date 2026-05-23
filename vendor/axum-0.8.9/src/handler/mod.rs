@@ -51,7 +51,7 @@ use crate::{
     response::{IntoResponse, Response},
     routing::IntoMakeService,
 };
-use std::{convert::Infallible, fmt, future::Future, marker::PhantomData, pin::Pin};
+use core::{convert::Infallible, fmt, future::Future, marker::PhantomData, pin::Pin};
 use tower::ServiceExt;
 use tower_layer::Layer;
 use tower_service::Service;

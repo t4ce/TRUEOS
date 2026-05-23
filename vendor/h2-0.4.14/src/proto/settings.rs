@@ -1,7 +1,7 @@
 use crate::codec::UserError;
 use crate::error::Reason;
 use crate::proto::*;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 
 #[derive(Debug)]
 pub(crate) struct Settings {

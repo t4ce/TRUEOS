@@ -1,7 +1,7 @@
 use std::io::{self, Cursor, Read, Write};
-use std::pin::Pin;
+use core::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 
 use futures_util::future::poll_fn;
 use futures_util::task::noop_waker_ref;

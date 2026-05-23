@@ -4,8 +4,8 @@ use crate::frame::{self, Frame, FrameSize};
 use crate::hpack;
 
 use bytes::{Buf, BufMut, BytesMut};
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_util::io::poll_write_buf;
 

@@ -6,7 +6,7 @@ use crate::proto;
 use http::{HeaderMap, Request, Response};
 
 use std::cmp::Ordering;
-use std::task::{Context, Poll, Waker};
+use core::task::{Context, Poll, Waker};
 use crate::time::Instant;
 use tokio::io;
 

@@ -228,7 +228,7 @@ impl EndpointOp for EndpointImpl {
         )
     }
 
-    fn register_waker(&self, id: RequestId, cx: &mut std::task::Context<'_>) {
+    fn register_waker(&self, id: RequestId, cx: &mut core::task::Context<'_>) {
         if let Some(trans) = self.transfers.get(&id.raw()) {
             trans.register_waker(cx);
         }
@@ -262,7 +262,7 @@ unsafe impl Send for TransferHandleRaw {}
 unsafe impl Sync for TransferHandleRaw {}
 
 impl TransferHandleRaw {
-    fn register_waker(&self, cx: &mut std::task::Context<'_>) {
+    fn register_waker(&self, cx: &mut core::task::Context<'_>) {
         self.waker.register(cx.waker());
     }
 

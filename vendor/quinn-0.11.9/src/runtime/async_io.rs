@@ -5,7 +5,8 @@ use std::{
     time::Instant,
 };
 #[cfg(any(feature = "runtime-smol", feature = "runtime-async-std"))]
-use std::{io, sync::Arc, task::ready};
+use core::task::ready;
+use std::{io, sync::Arc};
 
 #[cfg(any(feature = "runtime-smol", feature = "runtime-async-std"))]
 use async_io::Async;

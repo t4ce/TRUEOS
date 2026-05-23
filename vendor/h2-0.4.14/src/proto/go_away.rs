@@ -2,7 +2,7 @@ use crate::codec::Codec;
 use crate::frame::{self, Reason, StreamId};
 
 use bytes::Buf;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use tokio::io;
 use tokio::io::AsyncWrite;
 

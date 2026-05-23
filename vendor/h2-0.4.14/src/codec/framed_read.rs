@@ -12,8 +12,8 @@ use bytes::{Buf, BytesMut};
 
 use tokio::io;
 
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 use tokio::io::AsyncRead;
 use tokio_util::codec::FramedRead as InnerFramedRead;
 use tokio_util::codec::{LengthDelimitedCodec, LengthDelimitedCodecError};

@@ -13,7 +13,8 @@ use crate::{io::Interest, loom::sync::Mutex};
 use super::{Handle, TOKEN_WAKEUP};
 
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::{io, mem, task::Waker};
+use core::task::Waker;
+use std::{io, mem};
 
 const DEFAULT_RING_SIZE: u32 = 256;
 

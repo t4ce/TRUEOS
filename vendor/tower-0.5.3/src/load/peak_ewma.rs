@@ -7,7 +7,7 @@ use futures_core::Stream;
 #[cfg(feature = "discover")]
 use pin_project_lite::pin_project;
 #[cfg(feature = "discover")]
-use std::{pin::Pin, task::ready};
+use core::{pin::Pin, task::ready};
 
 use super::completion::{CompleteOnResponse, TrackCompletion, TrackCompletionFuture};
 use super::Load;
