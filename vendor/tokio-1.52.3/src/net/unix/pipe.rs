@@ -8,6 +8,9 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::path::Path;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::path::Path;
 use core::pin::Pin;
 use core::task::{Context, Poll};

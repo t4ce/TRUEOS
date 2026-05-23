@@ -1,7 +1,11 @@
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::sync::Arc;
-use std::{ffi::CString, io, path::Path};
+use std::{ffi::CString, io};
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::path::Path;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use std::path::Path;
 
 pub(crate) type ArcFd = Arc<dyn AsRawFd + Send + Sync + 'static>;
 

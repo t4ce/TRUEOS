@@ -6,7 +6,11 @@
 use crate::runtime::prelude::*;
 
 use crate::task::Id;
-use std::{fmt, future::Future, path::Path};
+use std::{fmt, future::Future};
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::path::{Path, PathBuf};
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use std::path::{Path, PathBuf};
 
 pub use crate::runtime::task::trace::{trace_with, Root, TraceMeta};
 
@@ -54,7 +58,7 @@ pub struct BacktraceSymbol {
     name: Option<Box<[u8]>>,
     name_demangled: Option<Box<str>>,
     addr: Option<Address>,
-    filename: Option<std::path::PathBuf>,
+    filename: Option<PathBuf>,
     lineno: Option<u32>,
     colno: Option<u32>,
 }

@@ -4,6 +4,9 @@ use crate::runtime::driver::op::Op;
 use std::io;
 use std::io::ErrorKind;
 use std::os::fd::OwnedFd;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::path::Path;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::path::Path;
 
 // this algorithm is inspired from rust std lib version 1.90.0
