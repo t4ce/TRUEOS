@@ -8,6 +8,8 @@ use core::{
     task::{Context, Poll},
 };
 
+#[cfg(kmod)]
+use embassy_time::{Duration as EmbassyDuration, Timer};
 #[cfg(any(kmod, umod))]
 use usb_if::endpoint::{IsoPacketResult, TransferStatus};
 use usb_if::{
@@ -92,7 +94,13 @@ impl Endpoint {
         request: TransferRequest,
     ) -> Result<TransferCompletion, TransferError> {
         let id = self.submit(request)?;
-        EndpointRequestFuture { id, endpoint: self }.await
+        EndpointRequestFuture {
+            id,
+            endpoint: self,
+            #[cfg(kmod)]
+            retry_timer: None,
+        }
+        .await
     }
 
     #[allow(unused)]
@@ -119,6 +127,8 @@ impl Endpoint {
 struct EndpointRequestFuture<'a> {
     id: RequestId,
     endpoint: &'a mut Endpoint,
+    #[cfg(kmod)]
+    retry_timer: Option<Pin<Box<Timer>>>,
 }
 
 impl Future for EndpointRequestFuture<'_> {
@@ -126,7 +136,31 @@ impl Future for EndpointRequestFuture<'_> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        this.endpoint.poll_request(this.id, cx)
+        match this.endpoint.poll_request(this.id, cx) {
+            Poll::Ready(res) => Poll::Ready(res),
+            Poll::Pending => {
+                #[cfg(kmod)]
+                {
+                    if this.retry_timer.is_none() {
+                        this.retry_timer =
+                            Some(Box::pin(Timer::after(EmbassyDuration::from_millis(1))));
+                    }
+                    if let Some(timer) = this.retry_timer.as_mut()
+                        && timer.as_mut().poll(cx).is_ready()
+                    {
+                        this.retry_timer = None;
+                        match this.endpoint.poll_request(this.id, cx) {
+                            Poll::Ready(res) => return Poll::Ready(res),
+                            Poll::Pending => {
+                                this.retry_timer =
+                                    Some(Box::pin(Timer::after(EmbassyDuration::from_millis(1))));
+                            }
+                        }
+                    }
+                }
+                Poll::Pending
+            }
+        }
     }
 }
 

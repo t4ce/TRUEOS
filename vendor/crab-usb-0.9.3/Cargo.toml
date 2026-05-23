@@ -70,6 +70,10 @@ version = "0.7.3"
 [dependencies.enum_dispatch]
 version = "0.3"
 
+[dependencies.embassy-time]
+version = "0.5.1"
+default-features = false
+
 [dependencies.futures]
 version = "0.3"
 features = ["alloc"]

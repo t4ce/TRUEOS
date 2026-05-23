@@ -1,4 +1,4 @@
-use alloc::{collections::BTreeMap, sync::Arc, vec, vec::Vec};
+use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 
 use dma_api::DmaDirection;
 use mbarrier::mb;
@@ -17,7 +17,7 @@ use xhci::{
     },
 };
 
-use super::{DirectionExt, reg::SlotBell, ring::SendRing, transfer::TransferId};
+use super::{DirectionExt, delay::delay_ms, reg::SlotBell, ring::SendRing, transfer::TransferId};
 use crate::{
     BusAddr,
     backend::{
@@ -31,6 +31,8 @@ use crate::{
     osal::Kernel,
 };
 
+const EP0_CONTROL_PACE_MAX_LEN: usize = 82;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct EndpointRequestId(u64);
 
@@ -41,30 +43,24 @@ enum ControlStage {
     Status,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct ControlTd {
     setup_trb: TransferId,
-    data_trb: Option<TransferId>,
+    data_trbs: Vec<TransferId>,
     status_trb: TransferId,
     requested: usize,
     actual: Option<usize>,
 }
 
 impl ControlTd {
-    fn trbs(self) -> impl Iterator<Item = (TransferId, ControlStage)> {
-        [
-            Some((self.setup_trb, ControlStage::Setup)),
-            self.data_trb.map(|trb| (trb, ControlStage::Data)),
-            Some((self.status_trb, ControlStage::Status)),
-        ]
-        .into_iter()
-        .flatten()
+    fn last_data_trb(&self) -> Option<TransferId> {
+        self.data_trbs.last().copied()
     }
 
-    fn completion_first_trbs(self) -> impl Iterator<Item = (TransferId, ControlStage)> {
+    fn completion_first_trbs(&self) -> impl Iterator<Item = (TransferId, ControlStage)> {
         [
             Some((self.status_trb, ControlStage::Status)),
-            self.data_trb.map(|trb| (trb, ControlStage::Data)),
+            self.last_data_trb().map(|trb| (trb, ControlStage::Data)),
             Some((self.setup_trb, ControlStage::Setup)),
         ]
         .into_iter()
@@ -72,9 +68,7 @@ impl ControlTd {
     }
 
     fn register_waker(&self, ring: &SendRing<TransferEvent>, cx: &mut core::task::Context<'_>) {
-        for (trb, _) in (*self).completion_first_trbs() {
-            ring.register_cx(trb.0, cx);
-        }
+        ring.register_cx(self.status_trb.0, cx);
     }
 }
 
@@ -104,6 +98,7 @@ pub struct Endpoint {
     dci: Dci,
     pub ring: SendRing<TransferEvent>,
     bell: Arc<Mutex<SlotBell>>,
+    pace_ep0_control: bool,
     next_request_id: u64,
     inflight: BTreeMap<EndpointRequestId, SubmittedTd>,
     trb_to_request: BTreeMap<TransferId, EndpointRequestId>,
@@ -130,6 +125,7 @@ impl Endpoint {
             dci,
             ring,
             bell,
+            pace_ep0_control: false,
             next_request_id: 1,
             inflight: BTreeMap::new(),
             trb_to_request: BTreeMap::new(),
@@ -141,6 +137,14 @@ impl Endpoint {
             iso_start_asap: true,
             next_iso_frame_id: 0,
         })
+    }
+
+    pub(crate) fn set_ep0_control_pacing(&mut self, enabled: bool) {
+        self.pace_ep0_control = enabled;
+    }
+
+    pub(crate) fn set_control_max_packet_size(&mut self, max_packet_size: usize) {
+        self.max_packet_size = max_packet_size;
     }
 
     pub fn configure_periodic(
@@ -246,9 +250,11 @@ impl Endpoint {
                 self.trb_to_request.remove(completion_trb);
             }
             SubmittedTdKind::Control(control_td) => {
-                for (trb, _) in (*control_td).trbs() {
-                    self.trb_to_request.remove(&trb);
+                self.trb_to_request.remove(&control_td.setup_trb);
+                for trb in &control_td.data_trbs {
+                    self.trb_to_request.remove(trb);
                 }
+                self.trb_to_request.remove(&control_td.status_trb);
             }
             SubmittedTdKind::Iso { packets } => {
                 for packet in packets {
@@ -568,15 +574,17 @@ impl Endpoint {
         self.iso_start_asap
     }
 
-    fn required_trbs(transfer: &Transfer) -> usize {
+    fn control_data_packet_count(&self, data_len: usize) -> usize {
+        if data_len == 0 {
+            0
+        } else {
+            data_len.div_ceil(self.max_packet_size.clamp(1, 64)).max(1)
+        }
+    }
+
+    fn required_trbs(&self, transfer: &Transfer) -> usize {
         match &transfer.kind {
-            TransferKind::Control(_) => {
-                if transfer.buffer_len() > 0 {
-                    3
-                } else {
-                    2
-                }
-            }
+            TransferKind::Control(_) => 2 + usize::from(transfer.buffer_len() > 0),
             TransferKind::Bulk | TransferKind::Interrupt => 1,
             TransferKind::Isochronous { packet_lengths } => packet_lengths.len().max(1),
         }
@@ -590,14 +598,10 @@ impl Endpoint {
         Ok(())
     }
 
-    fn required_trbs_for_request(request: &TransferRequest) -> usize {
+    fn required_trbs_for_request(&self, request: &TransferRequest) -> usize {
         match request {
             TransferRequest::Control { buffer, .. } => {
-                if buffer.is_some_and(|buffer| buffer.len > 0) {
-                    3
-                } else {
-                    2
-                }
+                2 + usize::from(buffer.is_some_and(|buffer| buffer.len > 0))
             }
             TransferRequest::Bulk { .. } | TransferRequest::Interrupt { .. } => 1,
             TransferRequest::Isochronous { packets, .. } => packets.len().max(1),
@@ -607,10 +611,10 @@ impl Endpoint {
 
 impl EndpointOp for Endpoint {
     fn submit_request(&mut self, request: TransferRequest) -> Result<RequestId, TransferError> {
-        let required_trbs = Self::required_trbs_for_request(&request);
+        let required_trbs = self.required_trbs_for_request(&request);
         self.ensure_ring_capacity(required_trbs)?;
         let transfer = Transfer::from_request(&self.kernel, request)?;
-        debug_assert_eq!(required_trbs, Self::required_trbs(&transfer));
+        debug_assert_eq!(required_trbs, self.required_trbs(&transfer));
 
         let mut data_bus_addr = 0;
         if transfer.buffer_len() > 0 {
@@ -632,24 +636,10 @@ impl EndpointOp for Endpoint {
         let data_len = transfer.buffer_len();
         let dir = transfer.direction;
         let request_id = self.allocate_request_id();
-        let trace_ep0 = false;
-        if trace_ep0 {
-            info!(
-                "crabusb/xhci/endpoint: submit begin dci={} req={} kind={} dir={:?} len={} trbs={} dma=0x{:x}",
-                self.dci.as_u8(),
-                request_id.0,
-                match &transfer.kind {
-                    TransferKind::Control(_) => "control",
-                    TransferKind::Bulk => "bulk",
-                    TransferKind::Interrupt => "interrupt",
-                    TransferKind::Isochronous { .. } => "iso",
-                },
-                dir,
-                data_len,
-                required_trbs,
-                data_bus_addr
-            );
-        }
+        let pace_ep0 = self.pace_ep0_control
+            && self.dci.as_u8() == 1
+            && matches!(transfer.kind, TransferKind::Control(_))
+            && data_len <= EP0_CONTROL_PACE_MAX_LEN;
 
         let kind = match &transfer.kind {
             TransferKind::Control(t) => {
@@ -668,22 +658,10 @@ impl EndpointOp for Endpoint {
                     .set_length(0)
                     .set_transfer_type(transfer::TransferType::No);
 
-                let mut data = None;
-
                 if transfer.buffer_len() > 0 {
                     setup
                         .set_transfer_type(dir.to_xhci_transfer_type())
                         .set_length(data_len as _);
-
-                    let mut _data = transfer::DataStage::default();
-                    _data
-                        .set_data_buffer_pointer(data_bus_addr)
-                        .set_trb_transfer_length(data_len as _)
-                        .set_direction(transfer.direction.to_xhci_direction());
-                    if matches!(transfer.direction, Direction::In) {
-                        _data.set_interrupt_on_short_packet();
-                    }
-                    data = Some(_data);
                 }
 
                 let mut status = transfer::StatusStage::default();
@@ -695,35 +673,43 @@ impl EndpointOp for Endpoint {
                     status.set_direction();
                 }
 
-                let has_data_stage = data.is_some();
-                let setup_trb = TransferId(self.ring.enque_transfer(setup.into()));
-                let data_trb = if let Some(data) = data {
-                    Some(TransferId(self.ring.enque_transfer(data.into())))
+                let has_data_stage = data_len > 0;
+                let mut trbs = Vec::with_capacity(required_trbs);
+                trbs.push(transfer::Allowed::SetupStage(setup));
+                if has_data_stage {
+                    let packet_count = self.control_data_packet_count(data_len);
+                    let mut data = transfer::DataStage::default();
+                    data.set_data_buffer_pointer(data_bus_addr)
+                        .set_trb_transfer_length(data_len as _)
+                        .set_direction(transfer.direction.to_xhci_direction())
+                        .set_td_size(packet_count.saturating_sub(1).min(0x1f) as u8);
+                    if matches!(transfer.direction, Direction::In) {
+                        data.set_interrupt_on_short_packet();
+                    }
+                    trbs.push(transfer::Allowed::DataStage(data));
+                }
+                trbs.push(transfer::Allowed::StatusStage(status));
+
+                let addrs = self.ring.enqueue_transfer_td(&mut trbs);
+                let setup_trb = TransferId(addrs[0]);
+                let status_trb = TransferId(*addrs.last().unwrap());
+                let data_trbs: Vec<TransferId> = if has_data_stage {
+                    addrs[1..addrs.len().saturating_sub(1)]
+                        .iter()
+                        .copied()
+                        .map(TransferId)
+                        .collect()
                 } else {
-                    None
+                    Vec::new()
                 };
-                let status_trb = TransferId(self.ring.enque_transfer(status.into()));
-                if trace_ep0 {
-                    info!(
-                        "crabusb/xhci/endpoint: control td queued simple dci={} req={} setup=0x{:x} data=0x{:x} status=0x{:x} has_data={} len={}",
-                        self.dci.as_u8(),
-                        request_id.0,
-                        setup_trb.0.raw(),
-                        data_trb.map(|trb| trb.0.raw()).unwrap_or(0),
-                        status_trb.0.raw(),
-                        has_data_stage,
-                        data_len
-                    );
+                self.trb_to_request.insert(setup_trb, request_id);
+                for trb in &data_trbs {
+                    self.trb_to_request.insert(*trb, request_id);
                 }
-                for trb in [Some(setup_trb), data_trb, Some(status_trb)]
-                    .into_iter()
-                    .flatten()
-                {
-                    self.trb_to_request.insert(trb, request_id);
-                }
+                self.trb_to_request.insert(status_trb, request_id);
                 SubmittedTdKind::Control(ControlTd {
                     setup_trb,
-                    data_trb,
+                    data_trbs,
                     status_trb,
                     requested: data_len,
                     actual: None,
@@ -766,21 +752,10 @@ impl EndpointOp for Endpoint {
             },
         );
         mb();
-        if trace_ep0 {
-            info!(
-                "crabusb/xhci/endpoint: doorbell begin dci={} req={} outstanding={}",
-                self.dci.as_u8(),
-                request_id.0,
-                self.outstanding_trbs
-            );
-        }
         self.doorbell();
-        if trace_ep0 {
-            info!(
-                "crabusb/xhci/endpoint: doorbell end dci={} req={}",
-                self.dci.as_u8(),
-                request_id.0
-            );
+        if pace_ep0 && request_id.0 >= 3 {
+            delay_ms(2);
+            self.doorbell();
         }
 
         Ok(Self::public_request_id(request_id))

@@ -331,6 +331,20 @@ fn mass_transport_label(kind: mass::MassTransportKind) -> &'static str {
     }
 }
 
+fn observed_port_speed(controller_id: u32, dev_info: &crab_usb::DeviceInfo) -> usb_if::Speed {
+    let Some(root_port_id) = dev_info.root_port_id() else {
+        return usb_if::Speed::Full;
+    };
+    let Some(diag) = super::controller_mmio_diag(controller_id as usize) else {
+        return usb_if::Speed::Full;
+    };
+    let Some(port) = diag.ports.iter().find(|port| port.port_id == root_port_id) else {
+        return usb_if::Speed::Full;
+    };
+    let raw_speed = (port.portsc >> 10) & 0xF;
+    usb_if::Speed::from_xhci_portsc(raw_speed as u8)
+}
+
 fn mass_io_profile_label(profile: MassIoProfile) -> &'static str {
     match profile {
         MassIoProfile::ConservativeBot => "bot-safe",
@@ -346,15 +360,19 @@ fn is_superspeed_bulk_bot(port_speed: usb_if::Speed, target: &MassTarget) -> boo
 
 fn choose_mass_io_profile(
     transport_kind: mass::MassTransportKind,
-    _vendor_id: u16,
-    _product_id: u16,
+    vendor_id: u16,
+    product_id: u16,
     port_speed: usb_if::Speed,
     target: &MassTarget,
 ) -> MassIoProfile {
     let fast_bot_capable = transport_kind == mass::MassTransportKind::Bot
         && is_superspeed_bulk_bot(port_speed, target);
+    let known_skhynix_green = vendor_id == 0x152E && product_id == 0x7001;
 
-    if transport_kind == mass::MassTransportKind::Bot && FORCE_CONSERVATIVE_BOT {
+    if transport_kind == mass::MassTransportKind::Bot
+        && FORCE_CONSERVATIVE_BOT
+        && !known_skhynix_green
+    {
         return MassIoProfile::ConservativeBot;
     }
 
@@ -1086,17 +1104,8 @@ pub(crate) async fn maybe_start_mass_storage(
     let desc = dev_info.descriptor();
     let vendor_id = desc.vendor_id;
     let product_id = desc.product_id;
-    let port_speed = usb_if::Speed::Full;
-    let uas_candidate_count = transport_plan.uas.len().min(u8::MAX as usize) as u8;
-
-    if vendor_id == 0x152E && product_id == 0x7001 {
-        crate::log!(
-            "crabusb: mass {:04X}:{:04X} temporary skip bot/uas before open\n",
-            vendor_id,
-            product_id
-        );
-        return true;
-    }
+    let port_speed = observed_port_speed(controller_id, dev_info);
+    let uas_candidate_count = transport_plan.uas_candidate_count.min(u8::MAX as usize) as u8;
 
     if uas_candidate_count > 0 {
         crate::log!(
@@ -1111,7 +1120,13 @@ pub(crate) async fn maybe_start_mass_storage(
         return false;
     };
     let transport_kind = mass::MassTransportKind::Bot;
-    let io_profile = MassIoProfile::ConservativeBot;
+    let io_profile = choose_mass_io_profile(
+        transport_kind,
+        vendor_id,
+        product_id,
+        port_speed,
+        &target,
+    );
 
     let device = match host.open_device(dev_info).await {
         Ok(device) => device,

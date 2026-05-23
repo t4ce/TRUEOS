@@ -1,4 +1,4 @@
-use alloc::{string::String, vec::Vec};
+use alloc::string::String;
 use core::{future::Future, task::Poll};
 use crab_usb::{err::TransferError, usb_if};
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -30,7 +30,20 @@ pub(crate) enum MassTransportKind {
 #[derive(Clone, Debug)]
 pub(crate) struct MassTransportPlan {
     pub bot: Option<MassTarget>,
-    pub uas: Vec<()>,
+    pub uas_candidate_count: usize,
+}
+
+fn count_uas_candidates(configs: &[usb_if::descriptor::ConfigurationDescriptor]) -> usize {
+    configs
+        .iter()
+        .flat_map(|cfg| cfg.interfaces.iter())
+        .flat_map(|interface| interface.alt_settings.iter())
+        .filter(|alt| {
+            alt.class == USB_CLASS_MASS_STORAGE
+                && alt.subclass == USB_SUBCLASS_SCSI
+                && alt.protocol == USB_PROTO_UAS
+        })
+        .count()
 }
 
 pub(crate) fn inspect_mass_transports(
@@ -38,7 +51,7 @@ pub(crate) fn inspect_mass_transports(
 ) -> MassTransportPlan {
     MassTransportPlan {
         bot: pick_mass_target(configs),
-        uas: Vec::new(),
+        uas_candidate_count: count_uas_candidates(configs),
     }
 }
 

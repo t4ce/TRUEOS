@@ -619,16 +619,15 @@ pub(crate) async fn maybe_start_skhynix_green(
         return false;
     }
 
-    let topology = dev_info.topology();
-    let location = dev_info.location();
+    let root_port_id = dev_info.root_port_id().unwrap_or(0);
+    let route_string = u32::from(root_port_id) << 24;
     crate::log!(
-        "crabusb: skhynix-green {:04X}:{:04X} proof=detect ctrl={} root_port={} route=0x{:X} speed={:?} cfgs={}\n",
+        "crabusb: skhynix-green {:04X}:{:04X} proof=detect ctrl={} root_port={} route=0x{:X} cfgs={}\n",
         vendor_id,
         product_id,
         controller_id,
-        topology.root_port_id,
-        location.route_string,
-        topology.port_speed,
+        root_port_id,
+        route_string,
         dev_info.configurations().len()
     );
 

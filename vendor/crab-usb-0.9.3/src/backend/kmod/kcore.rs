@@ -8,6 +8,7 @@ use id_arena::{Arena, Id};
 use usb_if::{
     descriptor::{ConfigurationDescriptor, DeviceDescriptor},
     err::USBError,
+    host::hub::Speed,
 };
 
 use super::osal::Kernel;
@@ -41,6 +42,7 @@ pub struct Core {
     hubs: Arena<Hub>,
     root_hub: Option<Id<Hub>>,
     inited_devices: BTreeMap<usize, Box<dyn DeviceOp>>,
+    deferred_initial_superspeed: bool,
 }
 
 fn is_xhci_command_timeout(err: &USBError) -> bool {
@@ -54,6 +56,7 @@ impl Core {
             backend: Box::new(backend),
             hubs: Arena::new(),
             inited_devices: BTreeMap::new(),
+            deferred_initial_superspeed: false,
         }
     }
 
@@ -90,7 +93,35 @@ impl Core {
                     parent_hub_id
                 );
             }
+            let defer_superspeed = !self.deferred_initial_superspeed
+                && addr_infos.iter().any(|addr| {
+                    !matches!(
+                        addr.port_speed,
+                        Speed::SuperSpeed | Speed::SuperSpeedPlus
+                    )
+                })
+                && addr_infos.iter().any(|addr| {
+                    matches!(addr.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus)
+                });
             for addr_info in addr_infos {
+                if defer_superspeed
+                    && matches!(
+                        addr_info.port_speed,
+                        Speed::SuperSpeed | Speed::SuperSpeedPlus
+                    )
+                {
+                    info!(
+                        "kcore: deferred initial superspeed address root_port={} port={} speed={:?}",
+                        addr_info.root_port_id,
+                        addr_info.port_id,
+                        addr_info.port_speed
+                    );
+                    self.deferred_initial_superspeed = true;
+                    if let Some(hub) = self.hubs.get_mut(id) {
+                        hub.backend.rearm_port(addr_info.port_id);
+                    }
+                    continue;
+                }
                 info!(
                     "kcore: address begin root_port={} port={} speed={:?}",
                     addr_info.root_port_id,
@@ -170,8 +201,13 @@ impl Core {
                     let hub_id = self.hubs.alloc(hub);
                     is_have_new_hub = true;
 
-                    let hub_info = Box::new(DeviceInfo::new(device_id, desc, &configs))
-                        as Box<dyn DeviceInfoOp>;
+                    let hub_info = Box::new(DeviceInfo::new(
+                        device_id,
+                        desc,
+                        &configs,
+                        addr_info.root_port_id,
+                        addr_info.port_id,
+                    )) as Box<dyn DeviceInfoOp>;
                     out.push(ProbedDeviceInfoOp::Hub(hub_info));
 
                     info!("Added new hub with id {:?}", hub_id);
@@ -181,8 +217,13 @@ impl Core {
 
                     self.inited_devices.insert(device_id, device);
 
-                    let device_info = Box::new(DeviceInfo::new(device_id, desc, &configs))
-                        as Box<dyn DeviceInfoOp>;
+                    let device_info = Box::new(DeviceInfo::new(
+                        device_id,
+                        desc,
+                        &configs,
+                        addr_info.root_port_id,
+                        addr_info.port_id,
+                    )) as Box<dyn DeviceInfoOp>;
 
                     out.push(ProbedDeviceInfoOp::Device(device_info));
                 }
@@ -257,14 +298,24 @@ pub struct DeviceInfo {
     id: usize,
     desc: DeviceDescriptor,
     config_desc: Vec<ConfigurationDescriptor>,
+    root_port_id: u8,
+    port_id: u8,
 }
 
 impl DeviceInfo {
-    pub fn new(id: usize, desc: DeviceDescriptor, config_desc: &[ConfigurationDescriptor]) -> Self {
+    pub fn new(
+        id: usize,
+        desc: DeviceDescriptor,
+        config_desc: &[ConfigurationDescriptor],
+        root_port_id: u8,
+        port_id: u8,
+    ) -> Self {
         Self {
             id,
             desc,
             config_desc: config_desc.to_vec(),
+            root_port_id,
+            port_id,
         }
     }
 }
@@ -284,5 +335,13 @@ impl DeviceInfoOp for DeviceInfo {
 
     fn configuration_descriptors(&self) -> &[ConfigurationDescriptor] {
         &self.config_desc
+    }
+
+    fn root_port_id(&self) -> Option<u8> {
+        Some(self.root_port_id)
+    }
+
+    fn port_id(&self) -> Option<u8> {
+        Some(self.port_id)
     }
 }

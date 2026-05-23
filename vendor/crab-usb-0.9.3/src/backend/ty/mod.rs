@@ -29,6 +29,14 @@ pub(crate) trait DeviceInfoOp: Send + Sync + Any + Debug + 'static {
     fn backend_name(&self) -> &str;
     fn descriptor(&self) -> &DeviceDescriptor;
     fn configuration_descriptors(&self) -> &[ConfigurationDescriptor];
+
+    fn root_port_id(&self) -> Option<u8> {
+        None
+    }
+
+    fn port_id(&self) -> Option<u8> {
+        None
+    }
 }
 
 #[cfg(any(kmod, umod))]

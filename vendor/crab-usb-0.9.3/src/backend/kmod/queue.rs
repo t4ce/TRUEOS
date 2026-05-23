@@ -1,4 +1,4 @@
-use alloc::{collections::BTreeMap, sync::Arc};
+use alloc::{boxed::Box, collections::BTreeMap, sync::Arc};
 use core::{
     cell::UnsafeCell,
     hint::spin_loop,
@@ -8,6 +8,7 @@ use core::{
 };
 
 use futures::task::AtomicWaker;
+use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use crate::BusAddr;
 
@@ -127,12 +128,14 @@ impl<C> Finished<C> {
         }
         TWaiter {
             finished: data.clone(),
+            retry_timer: None,
         }
     }
 }
 
 pub struct TWaiter<C> {
     finished: Arc<FinishedData<C>>,
+    retry_timer: Option<Pin<Box<Timer>>>,
 }
 
 impl<C> Future for TWaiter<C> {
@@ -146,7 +149,27 @@ impl<C> Future for TWaiter<C> {
         this.finished.register(cx.waker());
         match this.finished.get_finished() {
             Some(res) => Poll::Ready(res),
-            None => Poll::Pending,
+            None => {
+                if this.retry_timer.is_none() {
+                    this.retry_timer =
+                        Some(Box::pin(Timer::after(EmbassyDuration::from_millis(1))));
+                }
+                if let Some(timer) = this.retry_timer.as_mut()
+                    && timer.as_mut().poll(cx).is_ready()
+                {
+                    this.retry_timer = None;
+                    match this.finished.get_finished() {
+                        Some(res) => Poll::Ready(res),
+                        None => {
+                            this.retry_timer =
+                                Some(Box::pin(Timer::after(EmbassyDuration::from_millis(1))));
+                            Poll::Pending
+                        }
+                    }
+                } else {
+                    Poll::Pending
+                }
+            }
         }
     }
 }

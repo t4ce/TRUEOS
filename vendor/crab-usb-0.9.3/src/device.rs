@@ -104,6 +104,14 @@ impl DeviceInfo {
         self.inner.configuration_descriptors()
     }
 
+    pub fn root_port_id(&self) -> Option<u8> {
+        self.inner.root_port_id()
+    }
+
+    pub fn port_id(&self) -> Option<u8> {
+        self.inner.port_id()
+    }
+
     pub fn interface_descriptors<'a>(
         &'a self,
     ) -> impl Iterator<Item = &'a InterfaceDescriptor> + 'a {

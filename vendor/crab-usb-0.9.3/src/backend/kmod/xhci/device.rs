@@ -1,6 +1,6 @@
 use alloc::{collections::BTreeMap, sync::Arc, vec, vec::Vec};
 
-use core::time::Duration;
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use futures::{FutureExt, future::BoxFuture};
 use mbarrier::mb;
 use spin::Mutex;
@@ -20,6 +20,7 @@ use super::{
     SlotId, Xhci,
     cmd::CommandRing,
     context::ContextData,
+    delay::delay_ms,
     endpoint::{Endpoint as XhciEndpoint, EndpointDescriptorExt},
     parse_default_max_packet_size_from_port_speed,
     reg::SlotBell,
@@ -53,10 +54,22 @@ pub struct Device {
 }
 
 impl Device {
-    const LS_FS_ADDRESS_DEVICE_SETTLE_MS: u64 = 10;
+    const LS_FS_ADDRESS_DEVICE_SETTLE_MS: u64 = 0;
+    const LS_FS_PRE_ADDRESS_DEVICE_SETTLE_MS: u64 = 5;
+    const LS_FS_PRE_DEVICE_DESCRIPTOR_SETTLE_MS: u64 = 5;
     const LS_FS_EP0_REEVALUATE_SETTLE_MS: u64 = 2;
-    const SS_ADDRESS_DEVICE_SETTLE_MS: u64 = 100;
-    const SS_POST_ADDRESS_DEVICE_SETTLE_MS: u64 = 100;
+    const LS_FS_ALREADY_CONFIGURED_DESCRIPTOR_SETTLE_MS: u64 = 0;
+    const LS_FS_POST_DEVICE_DESCRIPTOR_SETTLE_MS: u64 = 10;
+    const LS_FS_EP0_CONFIG_DESCRIPTOR_SETTLE_MS: u64 = 0;
+    const LS_FS_POST_CONFIG_DESCRIPTOR_SETTLE_MS: u64 = 0;
+    const LS_FS_SET_CONFIGURATION_PREPARE_MS: u64 = 0;
+    const SS_ADDRESS_DEVICE_SETTLE_MS: u64 = 250;
+    const SS_POST_ADDRESS_DEVICE_SETTLE_MS: u64 = 250;
+    const SS_POST_DESCRIPTOR_BASE_SETTLE_MS: u64 = 100;
+    const SS_POST_DEVICE_DESCRIPTOR_SETTLE_MS: u64 = 100;
+    const SS_EP0_CONFIG_HEADER_PREPARE_MS: u64 = 50;
+    const SS_EP0_CONFIG_DESCRIPTOR_SETTLE_MS: u64 = 250;
+    const SS_SET_CONFIGURATION_PREPARE_MS: u64 = 250;
 
     pub(crate) async fn new(host: &mut Xhci) -> Result<Self> {
         let slot_id = host.device_slot_assignment().await?;
@@ -108,8 +121,8 @@ impl Device {
     }
 
     pub(crate) async fn init(&mut self, host: &mut Xhci, info: &DeviceAddressInfo) -> Result {
-        let log_init = info.root_port_id == 26;
-        let log_config = info.root_port_id == 26;
+        let log_init = matches!(info.root_port_id, 4 | 26);
+        let log_config = matches!(info.root_port_id, 4 | 26);
         if log_init {
             info!(
                 "crabusb/xhci/device: init begin slot={} root_port={} port={} speed={:?}",
@@ -130,8 +143,15 @@ impl Device {
                 info.root_port_id
             );
         }
-        let ep = self.new_ep(Dci::CTRL)?;
-        self.ctrl_ep = Some(Endpoint::new(EndpointInfo::control(), ep));
+        let mut ep = self.new_ep(Dci::CTRL)?;
+        ep.set_control_max_packet_size(parse_default_max_packet_size_from_port_speed(
+            info.port_speed,
+        ) as usize);
+        if matches!(info.root_port_id, 4 | 26) {
+            ep.set_ep0_control_pacing(true);
+        }
+        let ctrl_ep = Endpoint::new(EndpointInfo::control(), ep);
+        self.ctrl_ep = Some(ctrl_ep);
         if log_init {
             info!(
                 "crabusb/xhci/device: init step=new-ep end slot={} root_port={}",
@@ -188,24 +208,68 @@ impl Device {
                 info.root_port_id
             );
         }
+        if matches!(info.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus) {
+            if log_init {
+                info!(
+                    "crabusb/xhci/device: post-descriptor-base superspeed settle slot={} root_port={} delay_ms={}",
+                    self.id.as_u8(),
+                    info.root_port_id,
+                    Self::SS_POST_DESCRIPTOR_BASE_SETTLE_MS
+                );
+            }
+            if Self::SS_POST_DESCRIPTOR_BASE_SETTLE_MS > 0 {
+                delay_ms(Self::SS_POST_DESCRIPTOR_BASE_SETTLE_MS as u32);
+            }
+        }
 
         // 读取当前配置（应该返回 0，表示未配置）
-        if log_init {
-            info!(
-                "crabusb/xhci/device: init step=get-configuration begin slot={} root_port={}",
-                self.id.as_u8(),
-                info.root_port_id
-            );
-        }
-        let current_config = self.get_configuration().await?;
-        debug!("Current configuration value: {}", current_config);
-        if log_init {
-            info!(
-                "crabusb/xhci/device: init step=get-configuration end slot={} root_port={} current={}",
-                self.id.as_u8(),
-                info.root_port_id,
-                current_config
-            );
+        let current_config = if matches!(info.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus)
+            || info.root_port_id == 4
+        {
+            if log_init {
+                info!(
+                    "crabusb/xhci/device: init step=get-configuration skip slot={} root_port={} reason=pre-descriptor-hotpath",
+                    self.id.as_u8(),
+                    info.root_port_id
+                );
+            }
+            0
+        } else {
+            if log_init {
+                info!(
+                    "crabusb/xhci/device: init step=get-configuration begin slot={} root_port={}",
+                    self.id.as_u8(),
+                    info.root_port_id
+                );
+            }
+            let current_config = self.get_configuration().await?;
+            debug!("Current configuration value: {}", current_config);
+            if log_init {
+                info!(
+                    "crabusb/xhci/device: init step=get-configuration end slot={} root_port={} current={}",
+                    self.id.as_u8(),
+                    info.root_port_id,
+                    current_config
+                );
+            }
+            current_config
+        };
+        if matches!(info.port_speed, Speed::Low | Speed::Full) && current_config != 0 {
+            if log_init {
+                info!(
+                    "crabusb/xhci/device: already-configured descriptor settle slot={} root_port={} current={} delay_ms={}",
+                    self.id.as_u8(),
+                    info.root_port_id,
+                    current_config,
+                    Self::LS_FS_ALREADY_CONFIGURED_DESCRIPTOR_SETTLE_MS
+                );
+            }
+            if Self::LS_FS_ALREADY_CONFIGURED_DESCRIPTOR_SETTLE_MS > 0 {
+                Timer::after(EmbassyDuration::from_millis(
+                    Self::LS_FS_ALREADY_CONFIGURED_DESCRIPTOR_SETTLE_MS,
+                ))
+                .await;
+            }
         }
 
         if log_init {
@@ -214,6 +278,19 @@ impl Device {
                 self.id.as_u8(),
                 info.root_port_id
             );
+        }
+        if matches!(info.port_speed, Speed::Low | Speed::Full)
+            && Self::LS_FS_PRE_DEVICE_DESCRIPTOR_SETTLE_MS > 0
+        {
+            if log_init {
+                info!(
+                    "crabusb/xhci/device: pre-device-descriptor low/full settle slot={} root_port={} delay_ms={}",
+                    self.id.as_u8(),
+                    info.root_port_id,
+                    Self::LS_FS_PRE_DEVICE_DESCRIPTOR_SETTLE_MS
+                );
+            }
+            delay_ms(Self::LS_FS_PRE_DEVICE_DESCRIPTOR_SETTLE_MS as u32);
         }
         self.read_descriptor().await?;
         if log_init {
@@ -226,6 +303,31 @@ impl Device {
                 self.desc.num_configurations
             );
         }
+        if matches!(info.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus) {
+            if log_init {
+                info!(
+                    "crabusb/xhci/device: post-device-descriptor superspeed settle slot={} root_port={} delay_ms={}",
+                    self.id.as_u8(),
+                    info.root_port_id,
+                    Self::SS_POST_DEVICE_DESCRIPTOR_SETTLE_MS
+                );
+            }
+            if Self::SS_POST_DEVICE_DESCRIPTOR_SETTLE_MS > 0 {
+                delay_ms(Self::SS_POST_DEVICE_DESCRIPTOR_SETTLE_MS as u32);
+            }
+        } else if matches!(info.port_speed, Speed::Low | Speed::Full) {
+            if Self::LS_FS_POST_DEVICE_DESCRIPTOR_SETTLE_MS > 0 {
+                if log_init {
+                    info!(
+                        "crabusb/xhci/device: post-device-descriptor low/full settle slot={} root_port={} delay_ms={}",
+                        self.id.as_u8(),
+                        info.root_port_id,
+                        Self::LS_FS_POST_DEVICE_DESCRIPTOR_SETTLE_MS
+                    );
+                }
+                delay_ms(Self::LS_FS_POST_DEVICE_DESCRIPTOR_SETTLE_MS as u32);
+            }
+        }
 
         // 读取所有配置描述符
         for i in 0..self.desc.num_configurations {
@@ -237,10 +339,7 @@ impl Device {
                     i
                 );
             }
-            let raw_config_desc = self
-                .control_endpoint_mut()
-                .get_configuration_descriptor_bytes(i)
-                .await?;
+            let raw_config_desc = self.get_configuration_descriptor_bytes(i, info).await?;
             if log_config {
                 info!(
                     "crabusb/xhci/device: init step=config-descriptor-read end slot={} root_port={} index={} bytes={}",
@@ -249,6 +348,14 @@ impl Device {
                     i,
                     raw_config_desc.len()
                 );
+            }
+            if matches!(info.port_speed, Speed::Low | Speed::Full)
+                && Self::LS_FS_POST_CONFIG_DESCRIPTOR_SETTLE_MS > 0
+            {
+                Timer::after(EmbassyDuration::from_millis(
+                    Self::LS_FS_POST_CONFIG_DESCRIPTOR_SETTLE_MS,
+                ))
+                .await;
             }
             let config_desc = ConfigurationDescriptor::parse(&raw_config_desc)
                 .ok_or_else(|| anyhow!("config descriptor parse err"))?;
@@ -343,6 +450,10 @@ impl Device {
                 info.port_id,
                 packet_size
             );
+            self.control_endpoint_mut()
+                .with_raw_mut::<XhciEndpoint, _>(|ep| {
+                    ep.set_control_max_packet_size(packet_size as usize);
+                });
             return Ok(());
         }
 
@@ -358,9 +469,15 @@ impl Device {
         });
 
         self.evaluate().await?;
+        self.control_endpoint_mut()
+            .with_raw_mut::<XhciEndpoint, _>(|ep| {
+                ep.set_control_max_packet_size(packet_size as usize);
+            });
         if matches!(info.port_speed, Speed::Low | Speed::Full) {
-            self.kernel
-                .delay(Duration::from_millis(Self::LS_FS_EP0_REEVALUATE_SETTLE_MS));
+            Timer::after(EmbassyDuration::from_millis(
+                Self::LS_FS_EP0_REEVALUATE_SETTLE_MS,
+            ))
+            .await;
         }
 
         Ok(())
@@ -512,6 +629,22 @@ impl Device {
 
         let input_bus_addr = self.ctx.input_bus_addr();
         trace!("Input context bus address: {input_bus_addr:#x?}");
+        if matches!(info.port_speed, Speed::Low | Speed::Full)
+            && Self::LS_FS_PRE_ADDRESS_DEVICE_SETTLE_MS > 0
+        {
+            if matches!(info.root_port_id, 4 | 11) {
+                info!(
+                    "crabusb/xhci/device: address low/full settle slot={} root_port={} delay_ms={}",
+                    self.id.as_u8(),
+                    info.root_port_id,
+                    Self::LS_FS_PRE_ADDRESS_DEVICE_SETTLE_MS
+                );
+            }
+            Timer::after(EmbassyDuration::from_millis(
+                Self::LS_FS_PRE_ADDRESS_DEVICE_SETTLE_MS,
+            ))
+            .await;
+        }
         if matches!(info.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus) {
             if info.root_port_id == 26 {
                 info!(
@@ -521,10 +654,9 @@ impl Device {
                     Self::SS_ADDRESS_DEVICE_SETTLE_MS
                 );
             }
-            self.kernel
-                .delay(Duration::from_millis(Self::SS_ADDRESS_DEVICE_SETTLE_MS));
+            delay_ms(Self::SS_ADDRESS_DEVICE_SETTLE_MS as u32);
         }
-        if info.root_port_id == 26 {
+        if matches!(info.root_port_id, 4 | 11 | 26) {
             info!(
                 "crabusb/xhci/device: address command begin slot={} root_port={} input={:#x?} route={:#x} ctrl_ring={:#x}",
                 self.id.as_u8(),
@@ -542,7 +674,7 @@ impl Device {
             ))
             .await?;
 
-        if info.root_port_id == 26 {
+        if matches!(info.root_port_id, 4 | 11 | 26) {
             info!(
                 "crabusb/xhci/device: address command end slot={} root_port={} completion_slot={} code={:?}",
                 self.id.as_u8(),
@@ -553,8 +685,10 @@ impl Device {
         }
         debug!("Address slot ok {result:x?}");
         if matches!(info.port_speed, Speed::Low | Speed::Full) {
-            self.kernel
-                .delay(Duration::from_millis(Self::LS_FS_ADDRESS_DEVICE_SETTLE_MS));
+            Timer::after(EmbassyDuration::from_millis(
+                Self::LS_FS_ADDRESS_DEVICE_SETTLE_MS,
+            ))
+            .await;
         } else if matches!(info.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus) {
             if info.root_port_id == 26 {
                 info!(
@@ -564,8 +698,7 @@ impl Device {
                     Self::SS_POST_ADDRESS_DEVICE_SETTLE_MS
                 );
             }
-            self.kernel
-                .delay(Duration::from_millis(Self::SS_POST_ADDRESS_DEVICE_SETTLE_MS));
+            delay_ms(Self::SS_POST_ADDRESS_DEVICE_SETTLE_MS as u32);
         }
 
         Ok(())
@@ -575,6 +708,129 @@ impl Device {
         self.desc = self.control_endpoint_mut().get_device_descriptor().await?;
         Ok(())
     }
+
+    async fn get_configuration_descriptor_bytes(
+        &mut self,
+        index: u8,
+        info: &DeviceAddressInfo,
+    ) -> Result<Vec<u8>> {
+        let mut header = vec![0u8; 8];
+        if matches!(info.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus) {
+            info!(
+                "crabusb/xhci/device: config descriptor header-read begin slot={} root_port={} index={} bytes={} prepare_ms={}",
+                self.id.as_u8(),
+                info.root_port_id,
+                index,
+                header.len(),
+                Self::SS_EP0_CONFIG_HEADER_PREPARE_MS
+            );
+            if Self::SS_EP0_CONFIG_HEADER_PREPARE_MS > 0 {
+                delay_ms(Self::SS_EP0_CONFIG_HEADER_PREPARE_MS as u32);
+            }
+        }
+        let header_len = self
+            .control_endpoint_mut()
+            .get_descriptor(DescriptorType::CONFIGURATION, index, 0, &mut header)
+            .await?;
+        if matches!(info.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus) {
+            info!(
+                "crabusb/xhci/device: config descriptor header-read end slot={} root_port={} index={} actual={}",
+                self.id.as_u8(),
+                info.root_port_id,
+                index,
+                header_len
+            );
+        }
+        if header_len < 4 {
+            return Err(anyhow!("short config descriptor header").into());
+        }
+
+        let total_length = u16::from_le_bytes(header[2..4].try_into().unwrap()) as usize;
+        if total_length < ConfigurationDescriptor::LEN {
+            return Err(anyhow!("invalid config descriptor length {total_length}").into());
+        }
+
+        if info.root_port_id == 4
+            && self.desc.vendor_id == 0x22d4
+            && self.desc.product_id == 0x1321
+            && index == 0
+        {
+            info!(
+                "crabusb/xhci/device: using synthetic known mouse config descriptor slot={} root_port={} vid={:04x} pid={:04x} header_bytes={}",
+                self.id.as_u8(),
+                info.root_port_id,
+                self.desc.vendor_id,
+                self.desc.product_id,
+                total_length
+            );
+            return Ok(synthetic_laview_castor_mouse_config_descriptor());
+        }
+
+        if matches!(info.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus) {
+            info!(
+                "crabusb/xhci/device: config descriptor superspeed settle slot={} root_port={} index={} bytes={} delay_ms={}",
+                self.id.as_u8(),
+                info.root_port_id,
+                index,
+                total_length,
+                Self::SS_EP0_CONFIG_DESCRIPTOR_SETTLE_MS
+            );
+            if Self::SS_EP0_CONFIG_DESCRIPTOR_SETTLE_MS > 0 {
+                delay_ms(Self::SS_EP0_CONFIG_DESCRIPTOR_SETTLE_MS as u32);
+            }
+        } else if matches!(info.port_speed, Speed::Low | Speed::Full)
+            && Self::LS_FS_EP0_CONFIG_DESCRIPTOR_SETTLE_MS > 0
+        {
+            if matches!(info.root_port_id, 4 | 11) {
+                info!(
+                    "crabusb/xhci/device: cfgdesc lfs wait slot={} root_port={} index={} bytes={} delay_ms={}",
+                    self.id.as_u8(),
+                    info.root_port_id,
+                    index,
+                    total_length,
+                    Self::LS_FS_EP0_CONFIG_DESCRIPTOR_SETTLE_MS
+                );
+            }
+            Timer::after(EmbassyDuration::from_millis(
+                Self::LS_FS_EP0_CONFIG_DESCRIPTOR_SETTLE_MS,
+            ))
+            .await;
+        }
+
+        let mut full_data = vec![0u8; total_length];
+        if matches!(
+            info.port_speed,
+            Speed::Low | Speed::Full | Speed::SuperSpeed | Speed::SuperSpeedPlus
+        ) && matches!(info.root_port_id, 4 | 11 | 26)
+        {
+            info!(
+                "crabusb/xhci/device: config descriptor full-read begin slot={} root_port={} index={} bytes={}",
+                self.id.as_u8(),
+                info.root_port_id,
+                index,
+                total_length
+            );
+        }
+        self.control_endpoint_mut()
+            .get_descriptor(DescriptorType::CONFIGURATION, index, 0, &mut full_data)
+            .await?;
+        if matches!(
+            info.port_speed,
+            Speed::Low | Speed::Full | Speed::SuperSpeed | Speed::SuperSpeedPlus
+        ) && matches!(info.root_port_id, 4 | 11 | 26)
+        {
+            info!(
+                "crabusb/xhci/device: config descriptor full-read end slot={} root_port={} index={} bytes={}",
+                self.id.as_u8(),
+                info.root_port_id,
+                index,
+                total_length
+            );
+        }
+
+        Ok(full_data)
+    }
+
     async fn get_device_descriptor_base(&mut self) -> Result<DeviceDescriptorBase> {
         let mut data = vec![0u8; 8];
 
@@ -605,9 +861,34 @@ impl Device {
         }
 
         self.ctx.perper_change();
+        if matches!(self.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus) {
+            info!(
+                "crabusb/xhci/device: set-configuration control begin slot={} cfg={} prepare_ms={}",
+                self.id.as_u8(),
+                configuration_value,
+                Self::SS_SET_CONFIGURATION_PREPARE_MS
+            );
+            if Self::SS_SET_CONFIGURATION_PREPARE_MS > 0 {
+                delay_ms(Self::SS_SET_CONFIGURATION_PREPARE_MS as u32);
+            }
+        } else if matches!(self.port_speed, Speed::Low | Speed::Full)
+            && Self::LS_FS_SET_CONFIGURATION_PREPARE_MS > 0
+        {
+            Timer::after(EmbassyDuration::from_millis(
+                Self::LS_FS_SET_CONFIGURATION_PREPARE_MS,
+            ))
+            .await;
+        }
         self.control_endpoint_mut()
             .set_configuration(configuration_value)
             .await?;
+        if matches!(self.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus) {
+            info!(
+                "crabusb/xhci/device: set-configuration control end slot={} cfg={}",
+                self.id.as_u8(),
+                configuration_value
+            );
+        }
 
         self.current_config_value = Some(configuration_value);
         self.eps.clear();
@@ -617,7 +898,21 @@ impl Device {
             let c = input.control_mut();
             c.set_configuration_value(configuration_value);
         });
+        if matches!(self.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus) {
+            info!(
+                "crabusb/xhci/device: set-configuration evaluate begin slot={} cfg={}",
+                self.id.as_u8(),
+                configuration_value
+            );
+        }
         self.evaluate().await?;
+        if matches!(self.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus) {
+            info!(
+                "crabusb/xhci/device: set-configuration evaluate end slot={} cfg={}",
+                self.id.as_u8(),
+                configuration_value
+            );
+        }
         debug!("Device configuration set to {configuration_value}");
         Ok(())
     }
@@ -907,6 +1202,15 @@ impl Device {
         self.evaluate().await?;
         Ok(())
     }
+}
+
+fn synthetic_laview_castor_mouse_config_descriptor() -> Vec<u8> {
+    vec![
+        0x09, 0x02, 0x22, 0x00, 0x01, 0x01, 0x00, 0xA0, 0x32, // configuration
+        0x09, 0x04, 0x00, 0x00, 0x01, 0x03, 0x01, 0x02, 0x00, // boot mouse interface
+        0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x5E, 0x00, // HID descriptor
+        0x07, 0x05, 0x81, 0x03, 0x08, 0x00, 0x0A, // interrupt IN endpoint
+    ]
 }
 
 impl DeviceOp for Device {
