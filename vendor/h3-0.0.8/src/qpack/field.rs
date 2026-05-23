@@ -57,7 +57,7 @@ impl AsRef<HeaderField> for HeaderField {
 }
 
 impl Display for HeaderField {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), core::fmt::Error> {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), ::core::fmt::Error> {
         write!(
             f,
             "\"{}\": \"{}\"",

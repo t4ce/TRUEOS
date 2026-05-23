@@ -381,8 +381,8 @@ impl<T> JoinQueue<T> {
     }
 }
 
-impl<T> core::fmt::Debug for JoinQueue<T> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl<T> ::core::fmt::Debug for JoinQueue<T> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_list()
             .entries(self.0.iter().map(|jh| JoinHandle::id(jh.as_ref())))
             .finish()

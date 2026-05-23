@@ -62,7 +62,7 @@ cfg_test_util! {
     #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     use core::sync::atomic::AtomicBool as StdAtomicBool;
     #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-    use std::sync::atomic::AtomicBool as StdAtomicBool;
+    use core::sync::atomic::AtomicBool as StdAtomicBool;
 
     cfg_rt! {
         #[track_caller]

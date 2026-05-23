@@ -24,8 +24,8 @@ pub(crate) struct Timer {
     deadline: Instant,
 }
 
-impl core::fmt::Debug for Timer {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for Timer {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("Timer")
             .field("deadline", &self.deadline)
             .finish()

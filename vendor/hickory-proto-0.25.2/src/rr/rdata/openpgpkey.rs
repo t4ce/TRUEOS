@@ -7,7 +7,7 @@
 
 //! OPENPGPKEY records for OpenPGP public keys
 use alloc::vec::Vec;
-use core::fmt;
+use ::core::fmt;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

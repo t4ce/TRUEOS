@@ -75,8 +75,8 @@ extern crate std;
 pub struct Unspecified;
 
 // This is required for the implementation of `core::error::Error`.
-impl core::fmt::Display for Unspecified {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+impl ::core::fmt::Display for Unspecified {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         f.write_str("ring::error::Unspecified")
     }
 }

@@ -48,8 +48,8 @@ impl<N: NonceSequence> BoundKey<N> for SealingKey<N> {
     }
 }
 
-impl<N: NonceSequence> core::fmt::Debug for SealingKey<N> {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
+impl<N: NonceSequence> ::core::fmt::Debug for SealingKey<N> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
         self.key.fmt_debug("SealingKey", f)
     }
 }

@@ -160,8 +160,8 @@ impl AsRef<[u8]> for PublicKey {
     }
 }
 
-impl core::fmt::Debug for PublicKey {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
+impl ::core::fmt::Debug for PublicKey {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
         f.debug_struct("PublicKey")
             .field("algorithm", &self.algorithm)
             .field("bytes", &debug::HexStr(self.as_ref()))
@@ -193,11 +193,11 @@ where
     }
 }
 
-impl<B: core::fmt::Debug> core::fmt::Debug for UnparsedPublicKey<B>
+impl<B: ::core::fmt::Debug> ::core::fmt::Debug for UnparsedPublicKey<B>
 where
     B: AsRef<[u8]>,
 {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
         f.debug_struct("UnparsedPublicKey")
             .field("algorithm", &self.algorithm)
             .field("bytes", &debug::HexStr(self.bytes.as_ref()))

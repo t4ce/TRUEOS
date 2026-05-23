@@ -12,7 +12,7 @@
 use alloc::{string::String, vec::Vec};
 use core::borrow::Borrow;
 use core::cmp::{Ordering, PartialEq};
-use core::fmt::{self, Debug, Display, Formatter, Write};
+use ::core::fmt::{self, Debug, Display, Formatter, Write};
 use core::hash::{Hash, Hasher};
 
 use idna::uts46::{AsciiDenyList, DnsLength, Hyphens, Uts46};

@@ -3,7 +3,7 @@
 //!
 //! This can be extended to additional types/methods as required.
 
-use core::fmt;
+use ::core::fmt;
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
 use std::sync::TryLockError;

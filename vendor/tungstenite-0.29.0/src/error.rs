@@ -1,11 +1,11 @@
 //! Error handling.
 
+use crate::io;
 use alloc::{
     boxed::Box,
     string::{self, String, ToString},
 };
 use core::{result, str};
-use crate::io;
 
 use crate::protocol::{frame::coding::Data, Message};
 #[cfg(feature = "handshake")]

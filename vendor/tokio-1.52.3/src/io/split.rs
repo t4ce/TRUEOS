@@ -6,7 +6,7 @@
 
 use crate::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use core::fmt;
+use ::core::fmt;
 use std::io;
 use core::pin::Pin;
 use alloc::sync::Arc;

@@ -1950,8 +1950,8 @@ mod socks {
         }
     }
 
-    impl core::fmt::Display for SocksProxyError {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    impl ::core::fmt::Display for SocksProxyError {
+        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
             match self {
                 Self::SocksNoHostInUrl => f.write_str("socks proxy destination has no host"),
                 Self::SocksLocalResolve(_) => f.write_str("error resolving for socks proxy"),
@@ -1978,7 +1978,7 @@ mod verbose {
     use hyper::rt::{Read, ReadBufCursor, Write};
     use hyper_util::client::legacy::connect::{Connected, Connection};
     use core::cmp::min;
-    use core::fmt;
+    use ::core::fmt;
     #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     use std::io::{self, IoSlice};
     use core::pin::Pin;

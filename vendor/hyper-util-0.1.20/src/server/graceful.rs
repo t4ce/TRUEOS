@@ -306,7 +306,7 @@ mod private {
 mod test {
     use super::*;
     use pin_project_lite::pin_project;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use core::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
     pin_project! {

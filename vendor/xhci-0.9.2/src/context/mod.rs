@@ -28,7 +28,7 @@ mod macros;
 
 use bit_field::BitField;
 use core::convert::TryInto;
-use core::fmt;
+use ::core::fmt;
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 

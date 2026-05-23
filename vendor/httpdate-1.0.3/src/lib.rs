@@ -26,7 +26,7 @@ extern crate self as std;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use alloc::{format, string::String};
-use core::fmt::{Display, Formatter};
+use ::core::fmt::{Display, Formatter};
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::{format, string::String};
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
@@ -49,7 +49,7 @@ pub struct Error(());
 impl core::error::Error for Error {}
 
 impl Display for Error {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), core::fmt::Error> {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), ::core::fmt::Error> {
         f.write_str("string contains no or an invalid date")
     }
 }
@@ -72,12 +72,12 @@ pub mod error {
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod fmt {
-    pub use core::fmt::*;
+    pub use ::core::fmt::*;
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod io {
-    use core::fmt;
+    use ::core::fmt;
 
     #[derive(Debug)]
     pub struct Error {

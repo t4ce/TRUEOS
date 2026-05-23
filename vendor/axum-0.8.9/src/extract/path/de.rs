@@ -1,9 +1,9 @@
+use super::{ErrorKind, PathDeserializationError};
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use crate::prelude::rust_2021::*;
+use crate::util::PercentDecodedStr;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use alloc::borrow::ToOwned;
-use super::{ErrorKind, PathDeserializationError};
-use crate::util::PercentDecodedStr;
 use serde_core::{
     de::{self, DeserializeSeed, EnumAccess, Error, MapAccess, SeqAccess, VariantAccess, Visitor},
     forward_to_deserialize_any, Deserializer,
@@ -16,9 +16,7 @@ macro_rules! unsupported_type {
         where
             V: Visitor<'de>,
         {
-            Err(PathDeserializationError::unsupported_type(type_name::<
-                V::Value,
-            >()))
+            Err(PathDeserializationError::unsupported_type(type_name::<V::Value>()))
         }
     };
 }
@@ -486,9 +484,7 @@ impl<'de> Deserializer<'de> for ValueDeserializer<'de> {
                 None => unreachable!(),
             }
         } else {
-            Err(PathDeserializationError::unsupported_type(type_name::<
-                V::Value,
-            >()))
+            Err(PathDeserializationError::unsupported_type(type_name::<V::Value>()))
         }
     }
 
@@ -496,9 +492,7 @@ impl<'de> Deserializer<'de> for ValueDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        Err(PathDeserializationError::unsupported_type(type_name::<
-            V::Value,
-        >()))
+        Err(PathDeserializationError::unsupported_type(type_name::<V::Value>()))
     }
 
     fn deserialize_tuple_struct<V>(
@@ -510,9 +504,7 @@ impl<'de> Deserializer<'de> for ValueDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        Err(PathDeserializationError::unsupported_type(type_name::<
-            V::Value,
-        >()))
+        Err(PathDeserializationError::unsupported_type(type_name::<V::Value>()))
     }
 
     fn deserialize_struct<V>(
@@ -524,9 +516,7 @@ impl<'de> Deserializer<'de> for ValueDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        Err(PathDeserializationError::unsupported_type(type_name::<
-            V::Value,
-        >()))
+        Err(PathDeserializationError::unsupported_type(type_name::<V::Value>()))
     }
 
     fn deserialize_enum<V>(
@@ -561,10 +551,7 @@ impl<'de> EnumAccess<'de> for EnumDeserializer<'de> {
     where
         V: de::DeserializeSeed<'de>,
     {
-        Ok((
-            seed.deserialize(KeyDeserializer { key: self.value })?,
-            UnitVariant,
-        ))
+        Ok((seed.deserialize(KeyDeserializer { key: self.value })?, UnitVariant))
     }
 }
 
@@ -581,18 +568,14 @@ impl<'de> VariantAccess<'de> for UnitVariant {
     where
         T: DeserializeSeed<'de>,
     {
-        Err(PathDeserializationError::unsupported_type(
-            "newtype enum variant",
-        ))
+        Err(PathDeserializationError::unsupported_type("newtype enum variant"))
     }
 
     fn tuple_variant<V>(self, _len: usize, _visitor: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        Err(PathDeserializationError::unsupported_type(
-            "tuple enum variant",
-        ))
+        Err(PathDeserializationError::unsupported_type("tuple enum variant"))
     }
 
     fn struct_variant<V>(
@@ -603,9 +586,7 @@ impl<'de> VariantAccess<'de> for UnitVariant {
     where
         V: Visitor<'de>,
     {
-        Err(PathDeserializationError::unsupported_type(
-            "struct enum variant",
-        ))
+        Err(PathDeserializationError::unsupported_type("struct enum variant"))
     }
 }
 

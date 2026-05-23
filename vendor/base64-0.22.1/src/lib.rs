@@ -206,7 +206,7 @@
 //! #### Display
 //!
 //! If you only need a base64 representation for implementing the
-//! [`Display`][core::fmt::Display] trait, use
+//! [`Display`][::core::fmt::Display] trait, use
 //! [`Base64Display`][display::Base64Display]:
 //!
 //! ```

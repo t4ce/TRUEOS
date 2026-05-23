@@ -22,7 +22,7 @@ cfg_net! {
 cfg_io_source! {
     use crate::io;
     #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use core::sync::atomic::{AtomicUsize, Ordering};
     #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
     use std::os::fd::RawFd;
     // TODO: once <https://github.com/rust-lang/rust/issues/126198> is fixed this

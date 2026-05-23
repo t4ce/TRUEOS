@@ -2,7 +2,7 @@
 // the parts of RFC 1122 that discuss TCP, as well as RFC 7323 for some of the TCP options.
 // Consult RFC 7414 when implementing a new feature.
 
-use core::fmt::Display;
+use ::core::fmt::Display;
 #[cfg(feature = "async")]
 use core::task::Waker;
 use core::{fmt, mem};

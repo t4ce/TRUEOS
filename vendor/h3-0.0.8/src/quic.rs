@@ -4,7 +4,7 @@
 //! QUIC implementation.
 
 use alloc::sync::Arc;
-use core::fmt::{Debug, Display};
+use ::core::fmt::{Debug, Display};
 use core::task::{self, Poll};
 
 use bytes::Buf;
@@ -36,7 +36,7 @@ pub enum ConnectionErrorIncoming {
 
 // Manual Debug implementation to display the right h3 error string for the error code like H3_NO_ERROR instead of a number
 impl Debug for ConnectionErrorIncoming {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         match self {
             Self::ApplicationClose { error_code } => {
                 let error_code = Code::from(*error_code);
@@ -77,7 +77,7 @@ pub enum StreamErrorIncoming {
 impl core::error::Error for StreamErrorIncoming {}
 
 impl Display for StreamErrorIncoming {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         // display enum with fields
         match self {
             StreamErrorIncoming::ConnectionErrorIncoming { connection_error } => {
@@ -93,7 +93,7 @@ impl Display for StreamErrorIncoming {
 }
 
 impl Display for ConnectionErrorIncoming {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         // display enum with fields
         match self {
             ConnectionErrorIncoming::ApplicationClose { error_code } => {

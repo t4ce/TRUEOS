@@ -1,7 +1,7 @@
 //! Command processor
 
+use ::core::fmt;
 use log::debug;
-use std::fmt;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthChar;
 
@@ -180,14 +180,8 @@ impl<'out, 'prompt, H: Helper> State<'out, 'prompt, H> {
 
         debug!(target: "rustyline", "old layout: {:?}", self.layout);
         debug!(target: "rustyline", "new layout: {:?}", new_layout);
-        self.out.refresh_line(
-            prompt,
-            &self.line,
-            info,
-            &self.layout,
-            &new_layout,
-            highlighter,
-        )?;
+        self.out
+            .refresh_line(prompt, &self.line, info, &self.layout, &new_layout, highlighter)?;
         self.layout = new_layout;
 
         Ok(())
@@ -743,4 +737,3 @@ impl<'out, 'prompt, H: Helper> State<'out, 'prompt, H> {
         }
     }
 }
-

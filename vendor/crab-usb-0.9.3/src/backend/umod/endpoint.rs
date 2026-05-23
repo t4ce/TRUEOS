@@ -217,7 +217,7 @@ impl EndpointOp for EndpointImpl {
         id: RequestId,
     ) -> Option<Result<TransferCompletion, usb_if::err::TransferError>> {
         let trans = self.transfers.get(&id.raw())?;
-        if !trans.ok.load(std::sync::atomic::Ordering::Acquire) {
+        if !trans.ok.load(core::sync::atomic::Ordering::Acquire) {
             return None;
         }
         let trans = self.transfers.remove(&id.raw()).unwrap();
@@ -323,7 +323,7 @@ extern "system" fn transfer_callback(transfer: *mut libusb_transfer) {
 
         trans_handle
             .ok
-            .store(true, std::sync::atomic::Ordering::Release);
+            .store(true, core::sync::atomic::Ordering::Release);
         trans_handle.waker.wake();
     }
 }

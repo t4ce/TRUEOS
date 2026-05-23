@@ -1,6 +1,6 @@
 use crate::io;
+use core::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::os::fd::RawFd;
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
 /// Waker backed by a boolean value.
 ///

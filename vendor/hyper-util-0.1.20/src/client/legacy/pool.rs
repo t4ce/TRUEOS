@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use std::collections::{HashMap, HashSet};
 use core::convert::Infallible;
 use core::error::Error as StdError;
-use core::fmt::{self, Debug};
+use ::core::fmt::{self, Debug};
 use core::future::Future;
 use core::hash::Hash;
 use core::ops::{Deref, DerefMut};

@@ -145,8 +145,8 @@ pub(crate) struct Child {
     id: u32,
 }
 
-impl core::fmt::Debug for Child {
-    fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for Child {
+    fn fmt(&self, fmt: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         fmt.debug_struct("Child").field("pid", &self.id()).finish()
     }
 }

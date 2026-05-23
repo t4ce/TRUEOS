@@ -1,8 +1,6 @@
 #[allow(unused_imports)]
 use crate::runtime::prelude::*;
 
-use core::sync::atomic::AtomicBool;
-use alloc::sync::Arc;
 use crate::runtime::driver::{self, Driver};
 use crate::runtime::scheduler::{self, Defer, Inject};
 use crate::runtime::task::{
@@ -14,16 +12,19 @@ use crate::runtime::{
 use crate::sync::notify::Notify;
 use crate::util::atomic_cell::AtomicCell;
 use crate::util::{waker_ref, RngSeedGenerator, Wake, WakerRef};
+use alloc::sync::Arc;
+use core::sync::atomic::AtomicBool;
 
-use core::cell::RefCell;
 use alloc::collections::VecDeque;
+use core::cell::RefCell;
+use ::core::fmt;
 use core::future::{poll_fn, Future};
 use core::sync::atomic::Ordering::{AcqRel, Acquire, Release};
 use core::task::Poll::{Pending, Ready};
 use core::task::Waker;
-use std::thread::ThreadId;
 use core::time::Duration;
-use std::{fmt, thread};
+use std::thread;
+use std::thread::ThreadId;
 
 /// Executes tasks on the current thread
 pub(crate) struct CurrentThread {

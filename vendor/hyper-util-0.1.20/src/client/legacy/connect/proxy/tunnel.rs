@@ -236,8 +236,8 @@ where
     }
 }
 
-impl core::fmt::Display for TunnelError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for TunnelError {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.write_str("tunnel error: ")?;
 
         f.write_str(match self {

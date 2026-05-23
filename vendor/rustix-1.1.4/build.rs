@@ -210,7 +210,7 @@ fn use_thumb_mode() -> bool {
 fn has_lower_upper_exp_for_non_zero() -> bool {
     // LowerExp/UpperExp for NonZero* were added in Rust 1.84.
     // <https://doc.rust-lang.org/stable/std/fmt/trait.LowerExp.html#impl-LowerExp-for-NonZero%3CT%3E>
-    can_compile("fn a(x: &core::num::NonZeroI32, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result { core::fmt::LowerExp::fmt(x, f) }")
+    can_compile("fn a(x: &core::num::NonZeroI32, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result { ::core::fmt::LowerExp::fmt(x, f) }")
 }
 
 fn use_feature_or_nothing(feature: &str) {

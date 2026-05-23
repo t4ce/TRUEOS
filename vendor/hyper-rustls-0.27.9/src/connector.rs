@@ -2,7 +2,7 @@ use core::future::Future;
 use core::pin::Pin;
 use std::sync::Arc;
 use core::task::{Context, Poll};
-use core::fmt;
+use ::core::fmt;
 use std::io;
 
 use http::Uri;

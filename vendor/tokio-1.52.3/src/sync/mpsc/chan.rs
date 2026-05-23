@@ -9,7 +9,7 @@ use crate::sync::notify::Notify;
 use crate::util::cacheline::CachePadded;
 
 use alloc::vec::Vec;
-use core::fmt;
+use ::core::fmt;
 use ::core::panic;
 use core::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
 use core::task::Poll::{Pending, Ready};

@@ -11,7 +11,7 @@
 
 #![allow(deprecated)]
 
-use core::fmt;
+use ::core::fmt;
 use std::io::Read;
 
 use rand_core::{impls, Error, RngCore};

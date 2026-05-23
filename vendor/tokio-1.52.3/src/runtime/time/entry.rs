@@ -110,8 +110,8 @@ impl Default for StateCell {
     }
 }
 
-impl core::fmt::Debug for StateCell {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for StateCell {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         write!(f, "StateCell({:?})", self.read_state())
     }
 }
@@ -365,8 +365,8 @@ pub(crate) struct TimerShared {
 unsafe impl Send for TimerShared {}
 unsafe impl Sync for TimerShared {}
 
-impl core::fmt::Debug for TimerShared {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for TimerShared {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("TimerShared")
             .field(
                 "registered_when",

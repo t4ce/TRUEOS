@@ -1,7 +1,7 @@
 use alloc::boxed::Box;
 use core::any::{type_name, Any, TypeId};
 use std::collections::HashMap;
-use core::fmt;
+use ::core::fmt;
 use core::hash::{BuildHasherDefault, Hasher};
 
 type AnyMap = HashMap<TypeId, Box<dyn AnyClone + Send + Sync>, BuildHasherDefault<IdHasher>>;

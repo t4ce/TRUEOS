@@ -1286,14 +1286,14 @@ impl Default for io_uring_ptr {
     }
 }
 
-impl core::fmt::Pointer for io_uring_ptr {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Pointer for io_uring_ptr {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         self.ptr.fmt(f)
     }
 }
 
-impl core::fmt::Debug for io_uring_ptr {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for io_uring_ptr {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         self.ptr.fmt(f)
     }
 }
@@ -1406,8 +1406,8 @@ impl Default for io_uring_user_data {
     }
 }
 
-impl core::fmt::Debug for io_uring_user_data {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for io_uring_user_data {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         // SAFETY: Just format as a `u64`, since formatting doesn't preserve
         // provenance, and we don't have a discriminant.
         unsafe { self.u64_.fmt(f) }

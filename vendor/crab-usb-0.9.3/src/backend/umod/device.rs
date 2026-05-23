@@ -1,5 +1,6 @@
+use ::core::fmt::Debug;
 use core::{mem::MaybeUninit, num::NonZero};
-use std::{fmt::Debug, sync::Arc};
+use std::sync::Arc;
 
 use futures::FutureExt;
 use libusb1_sys::*;
@@ -12,7 +13,7 @@ use usb_if::{
 
 use super::{context::Context, endpoint::EndpointImpl};
 use crate::{
-    backend::ty::{DeviceInfoOp, DeviceOp, ep::Endpoint},
+    backend::ty::{ep::Endpoint, DeviceInfoOp, DeviceOp},
     err::*,
 };
 
@@ -23,7 +24,7 @@ pub struct DeviceInfo {
 }
 
 impl Debug for DeviceInfo {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("DeviceInfo").finish()
     }
 }
@@ -209,16 +210,10 @@ impl Device {
     }
 
     async fn _claim_interface(&mut self, interface: u8, alternate: u8) -> Result<()> {
-        let res = usb!(libusb_kernel_driver_active(
-            self.handle.raw(),
-            interface as _
-        ))?;
+        let res = usb!(libusb_kernel_driver_active(self.handle.raw(), interface as _))?;
 
         if res == 1 {
-            usb!(libusb_detach_kernel_driver(
-                self.handle.raw(),
-                interface as _
-            ))?;
+            usb!(libusb_detach_kernel_driver(self.handle.raw(), interface as _))?;
             debug!("Kernel driver detached for interface {interface}");
         }
 
@@ -275,10 +270,7 @@ impl DeviceOp for Device {
         configuration_value: u8,
     ) -> futures::future::BoxFuture<'a, std::result::Result<(), USBError>> {
         async move {
-            usb!(libusb_set_configuration(
-                self.handle.raw(),
-                configuration_value as _
-            ))?;
+            usb!(libusb_set_configuration(self.handle.raw(), configuration_value as _))?;
             Ok(())
         }
         .boxed()

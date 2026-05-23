@@ -60,7 +60,6 @@
 #![cfg_attr(test, deny(warnings))]
 // Disallow warnings in examples.
 #![doc(test(attr(deny(warnings))))]
-
 #![allow(missing_docs)]
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 extern crate alloc;
@@ -82,7 +81,7 @@ pub mod ffi {
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod fmt {
     //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
-    pub use core::fmt::*;
+    pub use ::core::fmt::*;
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
@@ -144,10 +143,71 @@ pub mod ops {
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod path {
-    //! TRUEOS no_std compatibility placeholder for unsupported Unix socket APIs.
-    /// Placeholder path type for unsupported Unix socket APIs.
+    //! TRUEOS no_std compatibility path vocabulary.
+    use alloc::string::String;
+    use core::ops::Deref;
+
+    /// Borrowed platform path.
     #[derive(Debug)]
-    pub struct Path;
+    #[repr(transparent)]
+    pub struct Path {
+        inner: str,
+    }
+
+    /// Owned platform path.
+    #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+    pub struct PathBuf {
+        inner: String,
+    }
+
+    impl Path {
+        /// Build a borrowed path from a string-like value.
+        pub fn new<S: AsRef<str> + ?Sized>(path: &S) -> &Self {
+            unsafe { &*(path.as_ref() as *const str as *const Self) }
+        }
+
+        /// Return the path as UTF-8.
+        pub fn as_str(&self) -> &str {
+            &self.inner
+        }
+
+        /// Whether the path starts at the platform root.
+        pub fn is_absolute(&self) -> bool {
+            self.as_str().starts_with('/')
+        }
+    }
+
+    impl AsRef<Path> for Path {
+        fn as_ref(&self) -> &Path {
+            self
+        }
+    }
+
+    impl AsRef<Path> for str {
+        fn as_ref(&self) -> &Path {
+            Path::new(self)
+        }
+    }
+
+    impl AsRef<Path> for String {
+        fn as_ref(&self) -> &Path {
+            Path::new(self.as_str())
+        }
+    }
+
+    impl AsRef<Path> for PathBuf {
+        fn as_ref(&self) -> &Path {
+            Path::new(self.inner.as_str())
+        }
+    }
+
+    impl Deref for PathBuf {
+        type Target = Path;
+
+        fn deref(&self) -> &Self::Target {
+            self.as_ref()
+        }
+    }
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
@@ -165,7 +225,7 @@ pub mod slice {
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
 use crate::io::IoSlice;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::{fmt, mem};
+use ::core::fmt;
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
 use core::marker::PhantomData;
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
@@ -191,8 +251,8 @@ macro_rules! impl_debug {
             $libc: ident :: $flag: ident
         ),+ $(,)*
     ) => {
-        impl core::fmt::Debug for $type {
-            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        impl ::core::fmt::Debug for $type {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                 let string = match self.0 {
                     $(
                         $(#[$target])*
@@ -706,7 +766,7 @@ impl<'addr, 'bufs, 'control> MsgHdr<'addr, 'bufs, 'control> {
     pub fn new() -> MsgHdr<'addr, 'bufs, 'control> {
         // SAFETY: all zero is valid for `msghdr` and `WSAMSG`.
         MsgHdr {
-            inner: unsafe { mem::zeroed() },
+            inner: unsafe { core::mem::zeroed() },
             _lifetimes: PhantomData,
         }
     }
@@ -775,7 +835,7 @@ impl<'addr, 'bufs, 'control> MsgHdrMut<'addr, 'bufs, 'control> {
     pub fn new() -> MsgHdrMut<'addr, 'bufs, 'control> {
         // SAFETY: all zero is valid for `msghdr` and `WSAMSG`.
         MsgHdrMut {
-            inner: unsafe { mem::zeroed() },
+            inner: unsafe { core::mem::zeroed() },
             _lifetimes: PhantomData,
         }
     }

@@ -73,8 +73,8 @@ macro_rules! __define_rejection {
             }
         }
 
-        impl core::fmt::Display for $name {
-            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        impl ::core::fmt::Display for $name {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                 write!(f, "{}", $body)
             }
         }
@@ -133,11 +133,11 @@ macro_rules! __define_rejection {
             }
         }
 
-        impl core::fmt::Display for $name {
-            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        impl ::core::fmt::Display for $name {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                 f.write_str($body)?;
                 f.write_str(": ")?;
-                core::fmt::Display::fmt(&self.0, f)
+                ::core::fmt::Display::fmt(&self.0, f)
             }
         }
 
@@ -210,8 +210,8 @@ macro_rules! __composite_rejection {
             }
         )+
 
-        impl core::fmt::Display for $name {
-            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        impl ::core::fmt::Display for $name {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                 match self {
                     $(
                         Self::$variant(inner) => write!(f, "{inner}"),

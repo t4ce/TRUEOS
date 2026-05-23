@@ -31,9 +31,8 @@ use crate::sys::stat::Mode;
 use crate::{Error, NixPath, Result};
 #[cfg(not(target_os = "redox"))]
 use cfg_if::cfg_if;
-use libc::{
-    c_char, c_int, c_long, c_uint, gid_t, mode_t, off_t, pid_t, size_t, uid_t,
-};
+use ::core::fmt;
+use libc::{c_char, c_int, c_long, c_uint, gid_t, mode_t, off_t, pid_t, size_t, uid_t};
 use std::convert::Infallible;
 #[cfg(not(target_os = "redox"))]
 use std::ffi::CString;
@@ -41,7 +40,7 @@ use std::ffi::{CStr, OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::io::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::path::PathBuf;
-use std::{fmt, mem, ptr};
+use std::{mem, ptr};
 
 feature! {
     #![feature = "fs"]
@@ -1094,8 +1093,7 @@ pub fn close(fd: RawFd) -> Result<()> {
 ///
 /// See also [read(2)](https://pubs.opengroup.org/onlinepubs/9699919799/functions/read.html)
 pub fn read(fd: RawFd, buf: &mut [u8]) -> Result<usize> {
-    let res =
-        unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len() as size_t) };
+    let res = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len() as size_t) };
 
     Errno::result(res).map(|r| r as usize)
 }
@@ -1104,13 +1102,8 @@ pub fn read(fd: RawFd, buf: &mut [u8]) -> Result<usize> {
 ///
 /// See also [write(2)](https://pubs.opengroup.org/onlinepubs/9699919799/functions/write.html)
 pub fn write<Fd: AsFd>(fd: Fd, buf: &[u8]) -> Result<usize> {
-    let res = unsafe {
-        libc::write(
-            fd.as_fd().as_raw_fd(),
-            buf.as_ptr().cast(),
-            buf.len() as size_t,
-        )
-    };
+    let res =
+        unsafe { libc::write(fd.as_fd().as_raw_fd(), buf.as_ptr().cast(), buf.len() as size_t) };
 
     Errno::result(res).map(|r| r as usize)
 }
@@ -2863,11 +2856,7 @@ mod pivot_root {
     ) -> Result<()> {
         let res = new_root.with_nix_path(|new_root| {
             put_old.with_nix_path(|put_old| unsafe {
-                libc::syscall(
-                    libc::SYS_pivot_root,
-                    new_root.as_ptr(),
-                    put_old.as_ptr(),
-                )
+                libc::syscall(libc::SYS_pivot_root, new_root.as_ptr(), put_old.as_ptr())
             })
         })??;
 

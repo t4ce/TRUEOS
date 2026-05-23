@@ -120,13 +120,13 @@ use crate::frame::{self, Pseudo, PushPromiseHeaderError, Reason, Settings, Strea
 use crate::proto::{self, Config, Error, Prioritized};
 use crate::{FlowControl, PingPong, RecvStream, SendStream};
 
+use crate::time::Duration;
 use bytes::{Buf, Bytes};
-use http::{HeaderMap, Method, Request, Response};
-use std::fmt;
+use ::core::fmt;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use crate::time::Duration;
+use http::{HeaderMap, Method, Request, Response};
 use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tracing::instrument::{Instrument, Instrumented};
@@ -1014,7 +1014,7 @@ impl Builder {
     /// # use tokio::io::{AsyncRead, AsyncWrite};
     /// # use h2::server::*;
     /// # use std as hostlib;
-/// use hostlib::time::Duration;
+    /// use hostlib::time::Duration;
     /// #
     /// # fn doc<T: AsyncRead + AsyncWrite + Unpin>(my_io: T)
     /// # -> Handshake<T>

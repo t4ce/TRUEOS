@@ -8,7 +8,7 @@
 //! HTTPS related server items
 
 use alloc::sync::Arc;
-use core::fmt::Debug;
+use ::core::fmt::Debug;
 use core::str::FromStr;
 
 use bytes::{Bytes, BytesMut};

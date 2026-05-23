@@ -219,7 +219,7 @@ where
     L: Debug + 'static,
     M: Debug,
 {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         let Self {
             listener,
             make_service,
@@ -333,7 +333,7 @@ where
     S: Debug,
     F: Debug,
 {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         let Self {
             listener,
             make_service,
@@ -506,8 +506,8 @@ mod private {
         }
     }
 
-    impl core::fmt::Debug for ServeFuture {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    impl ::core::fmt::Debug for ServeFuture {
+        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
             f.debug_struct("ServeFuture").finish_non_exhaustive()
         }
     }

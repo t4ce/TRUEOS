@@ -8,7 +8,7 @@
 
 use http::{header, Extensions, HeaderMap, StatusCode, Version};
 use http_body::Body;
-use core::fmt;
+use ::core::fmt;
 use std::sync::Arc;
 
 /// Predicate used to determine if a response should be compressed or not.

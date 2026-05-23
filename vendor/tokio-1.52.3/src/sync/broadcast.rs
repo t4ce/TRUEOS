@@ -124,7 +124,7 @@ use crate::util::linked_list::{self, GuardedLinkedList, LinkedList};
 use crate::util::WakeList;
 
 use alloc::{boxed::Box, vec::Vec};
-use core::fmt;
+use ::core::fmt;
 use core::future::Future;
 use core::marker::PhantomPinned;
 use core::pin::Pin;
@@ -248,7 +248,7 @@ pub struct Receiver<T> {
 pub mod error {
     //! Broadcast error types
 
-    use core::fmt;
+    use ::core::fmt;
 
     /// Error returned by the [`send`] function on a [`Sender`].
     ///

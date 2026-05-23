@@ -3,7 +3,7 @@ use super::{Error, Result};
 use super::{RplHopByHopPacket, RplHopByHopRepr};
 
 use byteorder::{ByteOrder, NetworkEndian};
-use core::fmt;
+use ::core::fmt;
 
 enum_with_unknown! {
     /// IPv6 Extension Header Option Type

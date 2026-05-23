@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use core::convert::TryInto;
 use core::error;
-use core::fmt;
+use ::core::fmt;
 use crate::io;
 use std::{borrow::Cow, cmp::min};
 

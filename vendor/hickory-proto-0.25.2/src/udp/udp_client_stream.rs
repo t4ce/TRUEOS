@@ -8,7 +8,7 @@
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::fmt::{self, Display};
+use ::core::fmt::{self, Display};
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use core::time::Duration;

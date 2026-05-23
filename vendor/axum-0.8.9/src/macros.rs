@@ -22,8 +22,8 @@ macro_rules! opaque_future {
             }
         }
 
-        impl<$($param),*> core::fmt::Debug for $name<$($param),*> {
-            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        impl<$($param),*> ::core::fmt::Debug for $name<$($param),*> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                 f.debug_struct(stringify!($name)).finish_non_exhaustive()
             }
         }

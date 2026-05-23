@@ -55,13 +55,13 @@ use core::prelude::rust_2021::*;
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::fmt::{self, Display, Write as _};
+use ::core::fmt::{self, Display, Write as _};
 use core::ops::Range;
 
 struct BufWrite<'a>(&'a mut Vec<u8>);
 
-impl core::fmt::Write for BufWrite<'_> {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+impl ::core::fmt::Write for BufWrite<'_> {
+    fn write_str(&mut self, s: &str) -> ::core::fmt::Result {
         self.0.extend_from_slice(s.as_bytes());
         Ok(())
     }

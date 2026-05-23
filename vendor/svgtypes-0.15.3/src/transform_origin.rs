@@ -74,8 +74,8 @@ pub enum TransformOriginError {
     ZIndexIsPercentage,
 }
 
-impl core::fmt::Display for TransformOriginError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for TransformOriginError {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         match *self {
             TransformOriginError::MissingParameters => {
                 write!(f, "transform origin doesn't have enough parameters")

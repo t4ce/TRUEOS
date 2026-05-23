@@ -1,4 +1,4 @@
-use core::fmt::Display;
+use ::core::fmt::Display;
 
 pub use usb_if::err::{TransferError, USBError};
 use xhci::ring::trb::event::CompletionCode;
@@ -30,7 +30,7 @@ impl ConvertXhciError for CompletionCode {
 pub struct HostError(USBError);
 
 impl Display for HostError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         write!(f, "{}", self.0)
     }
 }

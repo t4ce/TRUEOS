@@ -8,7 +8,7 @@
 //! HINFO record for storing host information
 
 use alloc::{boxed::Box, string::String};
-use core::fmt;
+use ::core::fmt;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

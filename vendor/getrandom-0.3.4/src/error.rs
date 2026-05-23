@@ -1,7 +1,7 @@
 #[cfg(feature = "std")]
 extern crate std;
 
-use core::fmt;
+use ::core::fmt;
 
 // This private alias mirrors `std::io::RawOsError`:
 // https://doc.rust-lang.org/std/io/type.RawOsError.html)

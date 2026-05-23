@@ -16,7 +16,7 @@
 
 //! Query struct for looking up resource records
 
-use core::fmt::{self, Display, Formatter};
+use ::core::fmt::{self, Display, Formatter};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

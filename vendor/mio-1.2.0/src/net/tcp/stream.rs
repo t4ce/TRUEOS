@@ -1,4 +1,4 @@
-use core::fmt;
+use ::core::fmt;
 use crate::io::{self, IoSlice, IoSliceMut, Read, Write};
 use std::net::{self, Shutdown, SocketAddr};
 #[cfg(any(unix, target_os = "wasi"))]

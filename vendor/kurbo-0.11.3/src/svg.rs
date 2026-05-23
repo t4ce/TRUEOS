@@ -5,7 +5,7 @@
 
 use alloc::vec::Vec;
 use core::f64::consts::PI;
-use core::fmt::{self, Display, Formatter};
+use ::core::fmt::{self, Display, Formatter};
 use core::iter::Iterator;
 use core::option::Option::{self, None, Some};
 use core::result::Result::{self, Err, Ok};

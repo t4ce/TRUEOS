@@ -143,8 +143,8 @@ pub struct WebSocketUpgrade<F = DefaultOnFailedUpgrade> {
     sec_websocket_protocol: BTreeSet<HeaderValue>,
 }
 
-impl<F> core::fmt::Debug for WebSocketUpgrade<F> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl<F> ::core::fmt::Debug for WebSocketUpgrade<F> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("WebSocketUpgrade")
             .field("config", &self.config)
             .field("protocol", &self.protocol)
@@ -663,9 +663,9 @@ impl core::ops::Deref for Utf8Bytes {
     }
 }
 
-impl core::fmt::Display for Utf8Bytes {
+impl ::core::fmt::Display for Utf8Bytes {
     #[inline]
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.write_str(self.as_str())
     }
 }

@@ -6,7 +6,7 @@ use super::{BlockingRegionGuard, SetCurrentGuard, CONTEXT};
 use crate::runtime::scheduler;
 use crate::util::rand::{FastRand, RngSeed};
 
-use core::fmt;
+use ::core::fmt;
 
 #[derive(Debug, Clone, Copy)]
 #[must_use]

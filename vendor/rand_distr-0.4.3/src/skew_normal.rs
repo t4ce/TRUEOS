@@ -9,7 +9,7 @@
 //! The Skew Normal distribution.
 
 use crate::{Distribution, StandardNormal};
-use core::fmt;
+use ::core::fmt;
 use num_traits::Float;
 use rand::Rng;
 

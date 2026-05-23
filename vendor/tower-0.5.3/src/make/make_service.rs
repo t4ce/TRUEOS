@@ -1,7 +1,7 @@
 //! Contains [`MakeService`] which is a trait alias for a [`Service`] of [`Service`]s.
 
 use crate::sealed::Sealed;
-use core::fmt;
+use ::core::fmt;
 use core::future::Future;
 use core::marker::PhantomData;
 use core::task::{Context, Poll};

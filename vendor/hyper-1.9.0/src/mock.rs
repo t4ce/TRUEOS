@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use core::cmp;
 use crate::io::{self, Read, Write};
 #[cfg(feature = "runtime")]
-use std::sync::{Arc, Mutex};
+use crate::sync::{Arc, Mutex};
 
 use bytes::Buf;
 use futures::{Async, Poll};

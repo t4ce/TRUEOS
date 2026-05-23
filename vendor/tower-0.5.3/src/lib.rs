@@ -244,7 +244,7 @@ pub mod error {
 }
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod fmt {
-    pub use core::fmt::*;
+    pub use ::core::fmt::*;
 }
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod future {

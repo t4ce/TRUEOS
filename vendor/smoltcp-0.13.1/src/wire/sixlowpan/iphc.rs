@@ -692,8 +692,8 @@ pub struct Repr {
     pub flow_label: Option<u16>,
 }
 
-impl core::fmt::Display for Repr {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for Repr {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         write!(
             f,
             "IPHC src={} dst={} nxt-hdr={} hop-limit={}",

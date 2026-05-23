@@ -1,4 +1,4 @@
-use core::fmt;
+use ::core::fmt;
 #[cfg(feature = "server")]
 use core::future::Future;
 use std::boxed::Box;

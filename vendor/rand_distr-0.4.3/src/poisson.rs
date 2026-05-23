@@ -12,7 +12,7 @@
 use num_traits::{Float, FloatConst};
 use crate::{Cauchy, Distribution, Standard};
 use rand::Rng;
-use core::fmt;
+use ::core::fmt;
 
 /// The Poisson distribution `Poisson(lambda)`.
 ///

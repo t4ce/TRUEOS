@@ -6,20 +6,23 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use core::cmp::min;
 use crate::io::{self, IoSlice};
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::path::Path;
+use core::cmp::min;
 use core::marker::PhantomData;
 use core::mem::{self, size_of, MaybeUninit};
+use core::time::Duration;
+use hostlib::time::Instant;
+use std as hostlib;
 use std::net::{self, Ipv4Addr, Ipv6Addr, Shutdown};
 use std::os::windows::io::{
     AsRawSocket, AsSocket, BorrowedSocket, FromRawSocket, IntoRawSocket, OwnedSocket,
     RawSocket as StdRawSocket,
 };
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::path::Path;
 use std::sync::Once;
-use core::time::Duration;
-use std as hostlib;
-use hostlib::time::Instant;
 use std::{process, ptr, slice};
 
 use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT};
@@ -164,8 +167,8 @@ impl_debug!(
     WinSock::IPPROTO_UDP,
 );
 
-impl core::fmt::Debug for RecvFlags {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for RecvFlags {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("RecvFlags")
             .field("is_truncated", &self.is_truncated())
             .finish()
@@ -1018,5 +1021,3 @@ impl FromRawSocket for crate::Socket {
         crate::Socket::from_raw(socket as RawSocket)
     }
 }
-
-

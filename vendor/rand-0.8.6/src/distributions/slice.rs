@@ -104,8 +104,8 @@ impl<'a, T> Distribution<&'a T> for Slice<'a, T> {
 #[derive(Debug, Clone, Copy)]
 pub struct EmptySlice;
 
-impl core::fmt::Display for EmptySlice {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for EmptySlice {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         write!(
             f,
             "Tried to create a `distributions::Slice` with an empty slice"

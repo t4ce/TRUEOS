@@ -6,7 +6,7 @@
 // copied, modified, or distributed except according to those terms.
 
 //! service records for identify port mapping for specific services on a host
-use core::fmt;
+use ::core::fmt;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

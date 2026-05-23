@@ -2,9 +2,9 @@ use crate::Reason;
 
 use super::*;
 
-use std::fmt;
-use core::task::{Context, Waker};
 use crate::time::Instant;
+use ::core::fmt;
+use core::task::{Context, Waker};
 
 /// Tracks Stream related state
 ///

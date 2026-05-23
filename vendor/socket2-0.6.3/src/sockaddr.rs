@@ -1,13 +1,16 @@
-use core::hash::Hash;
-use core::mem::{self, size_of};
-use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
+use crate::io;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use crate::path::Path;
-#[cfg(all(not(target_os = "wasi"), not(any(target_os = "trueos", target_os = "zkvm"))))]
+use ::core::fmt;
+use core::hash::Hash;
+use core::mem::{self, size_of};
+use core::ptr;
+use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
+#[cfg(all(
+    not(target_os = "wasi"),
+    not(any(target_os = "trueos", target_os = "zkvm"))
+))]
 use std::path::Path;
-use core::fmt;
-use crate::io;
-use std::{ptr};
 
 #[cfg(windows)]
 use windows_sys::Win32::Networking::WinSock::SOCKADDR_IN6_0;
@@ -82,8 +85,8 @@ impl SockAddrStorage {
     }
 }
 
-impl core::fmt::Debug for SockAddrStorage {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for SockAddrStorage {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("sockaddr_storage")
             .field("ss_family", &self.storage.ss_family)
             .finish_non_exhaustive()

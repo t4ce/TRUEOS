@@ -1,6 +1,6 @@
 use crate::BoxError;
+use ::core::fmt;
 use core::{error::Error as StdError, option::Option, option::Option::Some};
-use std::fmt;
 
 /// Errors that can happen when using axum.
 #[derive(Debug)]

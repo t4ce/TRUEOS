@@ -1,4 +1,4 @@
-use core::fmt;
+use ::core::fmt;
 use managed::ManagedSlice;
 
 use super::socket_meta::Meta;

@@ -1,9 +1,10 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::convert::TryFrom;
+use ::core::fmt;
 use core::hash::{Hash, Hasher};
 use core::str::FromStr;
-use std::{cmp, fmt, str};
+use std::{cmp, str};
 
 use bytes::Bytes;
 

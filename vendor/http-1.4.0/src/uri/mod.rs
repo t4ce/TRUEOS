@@ -31,7 +31,7 @@ use core::convert::TryFrom;
 use bytes::Bytes;
 
 use core::error::Error;
-use core::fmt;
+use ::core::fmt;
 use core::hash::{Hash, Hasher};
 use core::str::{self, FromStr};
 

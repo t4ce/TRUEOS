@@ -74,8 +74,8 @@ impl From<Error> for FilterValueListParserError {
     }
 }
 
-impl core::fmt::Display for FilterValueListParserError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for FilterValueListParserError {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         match *self {
             FilterValueListParserError::PercentageValue(pos) => {
                 write!(f, "a percentage value detected at position {}", pos)

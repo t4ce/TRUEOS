@@ -1,7 +1,7 @@
 //! Simple graphviz dot file format output.
 
 use alloc::string::String;
-use core::fmt::{self, Display, Write};
+use ::core::fmt::{self, Display, Write};
 
 use crate::visit::{
     EdgeRef, GraphProp, IntoEdgeReferences, IntoNodeReferences, NodeIndexable, NodeRef,

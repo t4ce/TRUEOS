@@ -3,7 +3,7 @@ use bytes::Buf;
 use http_body::{Body, Frame, SizeHint};
 use pin_project_lite::pin_project;
 use core::error::Error;
-use core::fmt;
+use ::core::fmt;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 

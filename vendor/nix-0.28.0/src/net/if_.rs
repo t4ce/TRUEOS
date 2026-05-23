@@ -3,8 +3,8 @@
 //! Uses Linux and/or POSIX functions to resolve interface names like "eth0"
 //! or "socan1" into device numbers.
 
-use std::fmt;
 use crate::{Error, NixPath, Result};
+use ::core::fmt;
 use libc::c_uint;
 
 #[cfg(not(solarish))]
@@ -16,8 +16,7 @@ pub type IflagsType = libc::c_longlong;
 
 /// Resolve an interface into a interface number.
 pub fn if_nametoindex<P: ?Sized + NixPath>(name: &P) -> Result<c_uint> {
-    let if_index = name
-        .with_nix_path(|name| unsafe { libc::if_nametoindex(name.as_ptr()) })?;
+    let if_index = name.with_nix_path(|name| unsafe { libc::if_nametoindex(name.as_ptr()) })?;
 
     if if_index == 0 {
         Err(Error::last())
@@ -29,7 +28,7 @@ pub fn if_nametoindex<P: ?Sized + NixPath>(name: &P) -> Result<c_uint> {
 libc_bitflags!(
     /// Standard interface flags, used by `getifaddrs`
     pub struct InterfaceFlags: IflagsType {
-    
+
         /// Interface is running. (see
         /// [`netdevice(7)`](https://man7.org/linux/man-pages/man7/netdevice.7.html))
         IFF_UP as IflagsType;
@@ -251,18 +250,12 @@ impl fmt::Display for InterfaceFlags {
     }
 }
 
-
-#[cfg(any(
-    bsd,
-    target_os = "fuchsia",
-    target_os = "linux",
-    solarish,
-))]
+#[cfg(any(bsd, target_os = "fuchsia", target_os = "linux", solarish,))]
 mod if_nameindex {
     use super::*;
 
+    use ::core::fmt;
     use std::ffi::CStr;
-    use std::fmt;
     use std::marker::PhantomData;
     use std::ptr::NonNull;
 
@@ -379,10 +372,5 @@ mod if_nameindex {
         }
     }
 }
-#[cfg(any(
-    bsd,
-    target_os = "fuchsia",
-    target_os = "linux",
-    solarish,
-))]
+#[cfg(any(bsd, target_os = "fuchsia", target_os = "linux", solarish,))]
 pub use if_nameindex::*;

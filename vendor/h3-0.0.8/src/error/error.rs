@@ -159,8 +159,8 @@ impl From<InternalConnectionError> for LocalError {
     }
 }
 
-impl core::fmt::Display for ConnectionError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for ConnectionError {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         match self {
             ConnectionError::Local { error } => write!(f, "Local error: {:?}", error),
             ConnectionError::Remote(err) => write!(f, "Remote error: {}", err),
@@ -171,8 +171,8 @@ impl core::fmt::Display for ConnectionError {
 
 impl core::error::Error for ConnectionError {}
 
-impl core::fmt::Display for StreamError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for StreamError {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         match self {
             StreamError::StreamError { code, reason } => {
                 write!(f, "Stream error: {:?} - {}", code, reason)

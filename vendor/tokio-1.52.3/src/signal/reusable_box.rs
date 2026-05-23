@@ -5,7 +5,7 @@ use crate::panic::AssertUnwindSafe;
 use core::pin::Pin;
 use core::ptr::{self, NonNull};
 use core::task::{Context, Poll};
-use core::fmt;
+use ::core::fmt;
 use crate::panic;
 
 /// A reusable `Pin<Box<dyn Future<Output = T> + Send>>`.

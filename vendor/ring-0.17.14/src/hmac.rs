@@ -157,8 +157,8 @@ pub struct Key {
     outer: digest::BlockContext,
 }
 
-impl core::fmt::Debug for Key {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
+impl ::core::fmt::Debug for Key {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
         f.debug_struct("Key")
             .field("algorithm", self.algorithm().digest_algorithm())
             .finish()
@@ -306,8 +306,8 @@ pub struct Context {
     outer: digest::BlockContext,
 }
 
-impl core::fmt::Debug for Context {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
+impl ::core::fmt::Debug for Context {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
         f.debug_struct("Context")
             .field("algorithm", self.inner.algorithm())
             .finish()

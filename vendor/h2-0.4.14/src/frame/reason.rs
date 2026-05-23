@@ -1,4 +1,4 @@
-use std::fmt;
+use ::core::fmt;
 
 /// HTTP/2 error codes.
 ///

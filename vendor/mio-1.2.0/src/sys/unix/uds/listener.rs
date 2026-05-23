@@ -1,10 +1,13 @@
+use crate::io;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::path::Path;
+use core::mem;
 use std::ffi::OsStr;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::{self, SocketAddr};
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::path::Path;
-use crate::io;
-use std::{mem};
 
 use crate::net::UnixStream;
 use crate::sys::unix::net::new_socket;

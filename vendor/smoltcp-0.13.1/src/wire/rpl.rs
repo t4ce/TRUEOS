@@ -116,8 +116,8 @@ enum_with_unknown! {
     }
 }
 
-impl core::fmt::Display for RplControlMessage {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for RplControlMessage {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         match self {
             RplControlMessage::DodagInformationSolicitation => {
                 write!(f, "DODAG information solicitation (DIS)")
@@ -639,8 +639,8 @@ pub enum Repr<'p> {
     },
 }
 
-impl core::fmt::Display for Repr<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for Repr<'_> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         match self {
             Repr::DodagInformationSolicitation { .. } => {
                 write!(f, "DIS")?;
@@ -1917,8 +1917,8 @@ pub mod options {
         },
     }
 
-    impl core::fmt::Display for Repr<'_> {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    impl ::core::fmt::Display for Repr<'_> {
+        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
             match self {
                 Repr::Pad1 => write!(f, "Pad1"),
                 Repr::PadN(n) => write!(f, "PadN({n})"),
@@ -2380,8 +2380,8 @@ pub mod data {
         }
     }
 
-    impl core::fmt::Display for HopByHopOption {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    impl ::core::fmt::Display for HopByHopOption {
+        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
             write!(
                 f,
                 "down={} rank_error={} forw_error={} IID={:?} sender_rank={}",

@@ -2,7 +2,7 @@ use crate::io::{Interest, PollEvented, ReadBuf, Ready};
 use crate::net::unix::SocketAddr;
 use crate::util::check_socket_for_blocking;
 
-use core::fmt;
+use ::core::fmt;
 use std::io;
 use std::net::Shutdown;
 use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, RawFd};

@@ -3,7 +3,7 @@ use crate::io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWrite, ReadBuf};
 use crate::runtime::prelude::*;
 
 use pin_project_lite::pin_project;
-use core::fmt;
+use ::core::fmt;
 use std::io::{self, IoSlice, SeekFrom, Write};
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};

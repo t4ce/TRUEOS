@@ -1,6 +1,6 @@
 use super::{ClassifiedResponse, ClassifyEos, ClassifyResponse};
 use http::{HeaderMap, Response};
-use core::fmt;
+use ::core::fmt;
 
 /// Response classifier that transforms the failure class of some other
 /// classifier.
@@ -54,7 +54,7 @@ where
 
     fn classify_error<E>(self, error: &E) -> Self::FailureClass
     where
-        E: core::fmt::Display + 'static,
+        E: ::core::fmt::Display + 'static,
     {
         (self.f)(self.inner.classify_error(error))
     }
@@ -73,7 +73,7 @@ where
 
     fn classify_error<E>(self, error: &E) -> Self::FailureClass
     where
-        E: core::fmt::Display + 'static,
+        E: ::core::fmt::Display + 'static,
     {
         (self.f)(self.inner.classify_error(error))
     }

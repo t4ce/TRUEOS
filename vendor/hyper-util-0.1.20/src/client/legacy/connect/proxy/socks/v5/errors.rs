@@ -26,8 +26,8 @@ impl From<AuthError> for SocksV5Error {
     }
 }
 
-impl core::fmt::Display for SocksV5Error {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for SocksV5Error {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         match self {
             Self::HostTooLong => f.write_str("host address is more than 255 characters"),
             Self::Command(e) => e.fmt(f),
@@ -36,8 +36,8 @@ impl core::fmt::Display for SocksV5Error {
     }
 }
 
-impl core::fmt::Display for AuthError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for AuthError {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.write_str(match self {
             Self::Unsupported => "server does not support user/pass authentication",
             Self::MethodMismatch => "server implements authentication incorrectly",

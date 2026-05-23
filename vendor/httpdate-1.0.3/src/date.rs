@@ -1,5 +1,5 @@
 use core::cmp;
-use core::fmt::{self, Display, Formatter};
+use ::core::fmt::{self, Display, Formatter};
 use core::str::FromStr;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use crate::time::{Duration, SystemTime, UNIX_EPOCH};

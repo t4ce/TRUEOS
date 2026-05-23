@@ -2,7 +2,7 @@ use crate::escape::{UnescapedRef, UnescapedRoute};
 use crate::tree::{denormalize_params, Node};
 
 use alloc::string::String;
-use core::fmt;
+use ::core::fmt;
 
 /// Represents errors that can occur when inserting a new route.
 #[non_exhaustive]

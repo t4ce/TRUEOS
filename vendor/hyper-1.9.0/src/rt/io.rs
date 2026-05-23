@@ -1,9 +1,9 @@
-use core::fmt;
+use alloc::boxed::Box;
+use ::core::fmt;
 use core::mem::MaybeUninit;
 use core::ops::DerefMut;
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use alloc::boxed::Box;
 
 // New IO traits? What?! Why, are you bonkers?
 //
@@ -116,7 +116,8 @@ pub trait Write {
     /// If flushing cannot immediately complete, this method returns
     /// `Poll::Pending` and arranges for the current task (via `cx.waker()`) to
     /// receive a notification when the object can make progress.
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), crate::io::Error>>;
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>)
+        -> Poll<Result<(), crate::io::Error>>;
 
     /// Attempts to shut down this writer.
     fn poll_shutdown(
@@ -361,10 +362,7 @@ impl ReadBufCursor<'_> {
     /// `self` must have enough remaining capacity to contain all of `src`.
     #[inline]
     pub fn put_slice(&mut self, src: &[u8]) {
-        assert!(
-            self.buf.remaining() >= src.len(),
-            "src.len() must fit in remaining()"
-        );
+        assert!(self.buf.remaining() >= src.len(), "src.len() must fit in remaining()");
 
         let amt = src.len();
         // Cannot overflow, asserted above
@@ -441,7 +439,10 @@ macro_rules! deref_async_write {
             (**self).is_write_vectored()
         }
 
-        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<crate::io::Result<()>> {
+        fn poll_flush(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<crate::io::Result<()>> {
             Pin::new(&mut **self).poll_flush(cx)
         }
 

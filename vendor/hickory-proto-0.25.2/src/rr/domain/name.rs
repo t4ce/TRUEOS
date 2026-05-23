@@ -12,7 +12,7 @@ use alloc::string::ToString;
 use alloc::{string::String, vec::Vec};
 use core::char;
 use core::cmp::{Ordering, PartialEq};
-use core::fmt::{self, Write};
+use ::core::fmt::{self, Write};
 use core::hash::{Hash, Hasher};
 #[cfg(not(feature = "std"))]
 use core::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -1029,8 +1029,8 @@ impl Name {
     }
 }
 
-impl core::fmt::Debug for Name {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for Name {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.write_str("Name(\"")?;
         self.write_labels::<_, LabelEncUtf8>(f)?;
         f.write_str("\")")

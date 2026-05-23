@@ -57,8 +57,8 @@ impl<T> AbortOnDropHandle<T> {
     }
 }
 
-impl<T> core::fmt::Debug for AbortOnDropHandle<T> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl<T> ::core::fmt::Debug for AbortOnDropHandle<T> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("AbortOnDropHandle")
             .field("id", &self.0.id())
             .finish()

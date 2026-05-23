@@ -2,8 +2,8 @@ use alloc::{collections::BTreeMap, vec::Vec};
 use core::mem::MaybeUninit;
 use core::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use core::ptr;
-use spin::{Mutex, Once};
 use core::time::Duration;
+use spin::{Mutex, Once};
 use trueos_io as io;
 
 use crate::{MsgHdr, MsgHdrMut, RecvFlags, SockAddr, TcpKeepalive};
@@ -407,10 +407,7 @@ pub(crate) fn socket_into_raw(socket: Socket) -> RawSocket {
 }
 
 fn unsupported() -> io::Error {
-    io::Error::new(
-        io::ErrorKind::Other,
-        "socket2 zkvm backend is not wired to TRUEOS net yet",
-    )
+    io::Error::new(io::ErrorKind::Other, "socket2 zkvm backend is not wired to TRUEOS net yet")
 }
 
 pub(crate) fn socket(domain: c_int, socket_type: c_int, protocol: c_int) -> io::Result<RawSocket> {
@@ -420,22 +417,20 @@ pub(crate) fn socket(domain: c_int, socket_type: c_int, protocol: c_int) -> io::
 
     let raw = next_socket_id();
 
-    socket_registry()
-        .lock()
-        .insert(
-            raw,
-            SocketMeta {
-                domain,
-                socket_type,
-                protocol,
-                backend: None,
-                nonblocking: false,
-                recv_timeout: None,
-                send_timeout: None,
-                local: None,
-                peer: None,
-            },
-        );
+    socket_registry().lock().insert(
+        raw,
+        SocketMeta {
+            domain,
+            socket_type,
+            protocol,
+            backend: None,
+            nonblocking: false,
+            recv_timeout: None,
+            send_timeout: None,
+            local: None,
+            peer: None,
+        },
+    );
     Ok(raw)
 }
 
@@ -451,9 +446,8 @@ pub(crate) fn bind(socket: RawSocket, address: &SockAddr) -> io::Result<()> {
     let socket_type = with_meta(socket, |meta| meta.socket_type)?;
     if socket_type == SOCK_DGRAM {
         let mut backend = 0u32;
-        let status = unsafe {
-            trueos_mio_udp_socket_bind(socket_addr_to_mio(address), &mut backend)
-        };
+        let status =
+            unsafe { trueos_mio_udp_socket_bind(socket_addr_to_mio(address), &mut backend) };
         mio_status_to_io(status, "socket2 zkvm UDP bind failed")?;
         let _ = with_meta_mut(socket, |meta| {
             meta.backend = Some(backend as RawSocket);
@@ -483,9 +477,8 @@ pub(crate) fn connect(socket: RawSocket, address: &SockAddr) -> io::Result<()> {
     }
 
     let mut backend = 0u32;
-    let status = unsafe {
-        trueos_mio_tcp_stream_connect(socket_addr_to_mio(address), &mut backend)
-    };
+    let status =
+        unsafe { trueos_mio_tcp_stream_connect(socket_addr_to_mio(address), &mut backend) };
     mio_status_to_io(status, "socket2 zkvm TCP connect failed")?;
     let _ = with_meta_mut(socket, |meta| {
         meta.backend = Some(backend as RawSocket);
@@ -512,9 +505,7 @@ pub(crate) fn listen(socket: RawSocket, _: c_int) -> io::Result<()> {
             .unwrap_or_else(|| default_local_addr(meta.domain))
     })?;
     let mut backend = 0u32;
-    let status = unsafe {
-        trueos_mio_tcp_listener_bind(socket_addr_to_mio(address), &mut backend)
-    };
+    let status = unsafe { trueos_mio_tcp_listener_bind(socket_addr_to_mio(address), &mut backend) };
     mio_status_to_io(status, "socket2 zkvm TCP listen failed")?;
     let _ = with_meta_mut(socket, |meta| {
         meta.backend = Some(backend as RawSocket);
@@ -527,29 +518,26 @@ pub(crate) fn accept(socket: RawSocket) -> io::Result<(RawSocket, SockAddr)> {
     with_backend(socket, "socket2 zkvm accept before listen", |backend| {
         let mut child = 0u32;
         let mut addr = TrueosMioSocketAddr::default();
-        let status = unsafe {
-            trueos_mio_tcp_listener_accept(backend as u32, &mut child, &mut addr)
-        };
+        let status =
+            unsafe { trueos_mio_tcp_listener_accept(backend as u32, &mut child, &mut addr) };
         mio_status_to_io(status, "socket2 zkvm TCP accept failed")?;
         let peer = mio_to_socket_addr(addr)?;
         let child_socket = next_socket_id();
         let parent_meta = with_meta(socket, Clone::clone)?;
-        socket_registry()
-            .lock()
-            .insert(
-                child_socket,
-                SocketMeta {
-                    domain: parent_meta.domain,
-                    socket_type: SOCK_STREAM,
-                    protocol: IPPROTO_TCP,
-                    backend: Some(child as RawSocket),
-                    nonblocking: parent_meta.nonblocking,
-                    recv_timeout: parent_meta.recv_timeout,
-                    send_timeout: parent_meta.send_timeout,
-                    local: parent_meta.local,
-                    peer: Some(peer),
-                },
-            );
+        socket_registry().lock().insert(
+            child_socket,
+            SocketMeta {
+                domain: parent_meta.domain,
+                socket_type: SOCK_STREAM,
+                protocol: IPPROTO_TCP,
+                backend: Some(child as RawSocket),
+                nonblocking: parent_meta.nonblocking,
+                recv_timeout: parent_meta.recv_timeout,
+                send_timeout: parent_meta.send_timeout,
+                local: parent_meta.local,
+                peer: Some(peer),
+            },
+        );
         Ok((child_socket, SockAddr::from(peer)))
     })
 }
@@ -561,10 +549,16 @@ pub(crate) fn getsockname(socket: RawSocket) -> io::Result<SockAddr> {
         if status == 0 {
             mio_to_socket_addr(addr)?
         } else {
-            with_meta(socket, |meta| meta.local.unwrap_or_else(|| default_local_addr(meta.domain)))?
+            with_meta(socket, |meta| {
+                meta.local
+                    .unwrap_or_else(|| default_local_addr(meta.domain))
+            })?
         }
     } else {
-        with_meta(socket, |meta| meta.local.unwrap_or_else(|| default_local_addr(meta.domain)))?
+        with_meta(socket, |meta| {
+            meta.local
+                .unwrap_or_else(|| default_local_addr(meta.domain))
+        })?
     };
     Ok(SockAddr::from(address))
 }
@@ -576,12 +570,14 @@ pub(crate) fn getpeername(socket: RawSocket) -> io::Result<SockAddr> {
         if status == 0 {
             mio_to_socket_addr(addr)?
         } else {
-            with_meta(socket, |meta| meta.peer)?
-                .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "socket2 zkvm peer not connected"))?
+            with_meta(socket, |meta| meta.peer)?.ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotConnected, "socket2 zkvm peer not connected")
+            })?
         }
     } else {
-        with_meta(socket, |meta| meta.peer)?
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "socket2 zkvm peer not connected"))?
+        with_meta(socket, |meta| meta.peer)?.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotConnected, "socket2 zkvm peer not connected")
+        })?
     };
     Ok(SockAddr::from(address))
 }
@@ -623,11 +619,7 @@ pub(crate) fn recv(
     with_backend(socket, "socket2 zkvm recv before connect", |backend| {
         mio_ssize_to_io(
             unsafe {
-                trueos_mio_tcp_stream_read(
-                    backend as u32,
-                    buf.as_mut_ptr().cast::<u8>(),
-                    buf.len(),
-                )
+                trueos_mio_tcp_stream_read(backend as u32, buf.as_mut_ptr().cast::<u8>(), buf.len())
             },
             "socket2 zkvm TCP recv failed",
         )
@@ -703,7 +695,12 @@ pub(crate) fn send_vectored(
     send(socket, &merged, flags)
 }
 
-pub(crate) fn send_to(socket: RawSocket, buf: &[u8], address: &SockAddr, _: c_int) -> io::Result<usize> {
+pub(crate) fn send_to(
+    socket: RawSocket,
+    buf: &[u8],
+    address: &SockAddr,
+    _: c_int,
+) -> io::Result<usize> {
     let Some(address) = address.as_socket() else {
         return Err(unsupported());
     };
@@ -776,9 +773,8 @@ pub(crate) unsafe fn getsockopt<T>(socket: RawSocket, level: c_int, name: c_int)
             Ok(cast_value(socket_type))
         }
         (SOL_SOCKET, SO_ERROR) => {
-            let value = with_meta(socket, |meta| meta.backend)?.map_or(0, |backend| unsafe {
-                trueos_mio_socket_take_error(backend as u32)
-            });
+            let value = with_meta(socket, |meta| meta.backend)?
+                .map_or(0, |backend| unsafe { trueos_mio_socket_take_error(backend as u32) });
             if value < 0 {
                 Err(mio_status_to_error(value, "socket2 zkvm socket error"))
             } else {
@@ -881,9 +877,7 @@ pub(crate) fn msghdr_control_len(msg: &msghdr) -> usize {
 
 impl Drop for Socket {
     fn drop(&mut self) {
-        let meta = socket_registry()
-            .lock()
-            .remove(&self.0);
+        let meta = socket_registry().lock().remove(&self.0);
         if let Some(meta) = meta {
             if let Some(backend) = meta.backend {
                 let _ = unsafe { trueos_mio_socket_close(backend as u32) };
@@ -892,26 +886,26 @@ impl Drop for Socket {
     }
 }
 
-impl core::fmt::Debug for crate::Domain {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for crate::Domain {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_tuple("Domain").field(&self.0).finish()
     }
 }
 
-impl core::fmt::Debug for crate::Type {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for crate::Type {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_tuple("Type").field(&self.0).finish()
     }
 }
 
-impl core::fmt::Debug for crate::Protocol {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for crate::Protocol {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_tuple("Protocol").field(&self.0).finish()
     }
 }
 
-impl core::fmt::Debug for crate::RecvFlags {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for crate::RecvFlags {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_tuple("RecvFlags").field(&self.0).finish()
     }
 }

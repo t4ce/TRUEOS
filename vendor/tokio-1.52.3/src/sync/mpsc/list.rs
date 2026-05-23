@@ -5,7 +5,7 @@ use crate::loom::thread;
 use crate::sync::mpsc::block::{self, Block};
 
 use alloc::boxed::Box;
-use core::fmt;
+use ::core::fmt;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
 

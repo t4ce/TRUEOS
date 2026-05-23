@@ -17,7 +17,7 @@ use crate::util::trace::{blocking_task, SpawnMeta};
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::collections::HashMap;
 use alloc::collections::VecDeque;
-use core::fmt;
+use ::core::fmt;
 use std::io;
 use core::sync::atomic::Ordering;
 use core::time::Duration;

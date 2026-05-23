@@ -1,9 +1,7 @@
 //! Server handshake machine.
 
 use core::{marker::PhantomData, result::Result as StdResult};
-use std::{
-    io::{self, Read, Write},
-};
+use std::io::{self, Read, Write};
 
 use http::{
     response::Builder, HeaderMap, Request as HttpRequest, Response as HttpResponse, StatusCode,
@@ -45,7 +43,10 @@ fn create_parts<T>(request: &HttpRequest<T>) -> Result<Builder> {
         .headers()
         .get("Connection")
         .and_then(|h| h.to_str().ok())
-        .map(|h| h.split([' ', ',']).any(|p| p.eq_ignore_ascii_case("Upgrade")))
+        .map(|h| {
+            h.split([' ', ','])
+                .any(|p| p.eq_ignore_ascii_case("Upgrade"))
+        })
         .unwrap_or(false)
     {
         return Err(Error::Protocol(ProtocolError::MissingConnectionUpgradeHeader));
@@ -61,7 +62,12 @@ fn create_parts<T>(request: &HttpRequest<T>) -> Result<Builder> {
         return Err(Error::Protocol(ProtocolError::MissingUpgradeWebSocketHeader));
     }
 
-    if !request.headers().get("Sec-WebSocket-Version").map(|h| h == "13").unwrap_or(false) {
+    if !request
+        .headers()
+        .get("Sec-WebSocket-Version")
+        .map(|h| h == "13")
+        .unwrap_or(false)
+    {
         return Err(Error::Protocol(ProtocolError::MissingSecWebSocketVersionHeader));
     }
 
@@ -235,7 +241,11 @@ impl<S: Read + Write, C: Callback> HandshakeRole for ServerHandshake<S, C> {
         finish: StageResult<Self::IncomingData, Self::InternalStream>,
     ) -> Result<ProcessingResult<Self::InternalStream, Self::FinalResult>> {
         Ok(match finish {
-            StageResult::DoneReading { stream, result, tail } => {
+            StageResult::DoneReading {
+                stream,
+                result,
+                tail,
+            } => {
                 if !tail.is_empty() {
                     return Err(Error::Protocol(ProtocolError::JunkAfterRequest));
                 }

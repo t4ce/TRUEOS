@@ -9,7 +9,7 @@ use std::os::hermit::io::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, Owned
 use std::os::windows::io::{
     AsRawSocket, AsSocket, BorrowedSocket, FromRawSocket, IntoRawSocket, OwnedSocket, RawSocket,
 };
-use core::fmt;
+use ::core::fmt;
 use crate::io;
 
 use crate::io_source::IoSource;

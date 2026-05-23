@@ -1,6 +1,7 @@
 //! Unix specific definitions
 #[cfg(feature = "buffer-redux")]
 use buffer_redux::BufReader;
+use core::sync::atomic::{AtomicBool, Ordering};
 use std::cmp;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -9,7 +10,6 @@ use std::io::BufReader;
 use std::io::{self, ErrorKind, Read, Write};
 use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, IntoRawFd, RawFd};
 use std::os::unix::net::UnixStream;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, Mutex};
 
@@ -156,10 +156,7 @@ impl Read for TtyIn {
             if res == -1 {
                 let error = io::Error::last_os_error();
                 if error.kind() == ErrorKind::Interrupted && self.sigwinch()? {
-                    return Err(io::Error::new(
-                        ErrorKind::Interrupted,
-                        error::WindowResizedError,
-                    ));
+                    return Err(io::Error::new(ErrorKind::Interrupted, error::WindowResizedError));
                 } else if error.kind() != ErrorKind::Interrupted {
                     return Err(error);
                 }
@@ -920,7 +917,7 @@ impl PosixRenderer {
     }
 
     fn clear_old_rows(&mut self, layout: &Layout) {
-        use std::fmt::Write;
+        use ::core::fmt::Write;
         let current_row = layout.cursor.row;
         let old_rows = layout.end.row;
         // old_rows < cursor_row if the prompt spans multiple lines and if
@@ -943,7 +940,7 @@ impl Renderer for PosixRenderer {
     type Reader = PosixRawReader;
 
     fn move_cursor(&mut self, old: Position, new: Position) -> Result<()> {
-        use std::fmt::Write;
+        use ::core::fmt::Write;
         self.buffer.clear();
         let row_ordering = new.row.cmp(&old.row);
         if row_ordering == cmp::Ordering::Greater {
@@ -994,7 +991,7 @@ impl Renderer for PosixRenderer {
         new_layout: &Layout,
         highlighter: Option<&dyn Highlighter>,
     ) -> Result<()> {
-        use std::fmt::Write;
+        use ::core::fmt::Write;
         self.buffer.clear();
 
         let default_prompt = new_layout.default_prompt;
@@ -1432,12 +1429,7 @@ impl Term for PosixTerminal {
     }
 
     fn create_writer(&self) -> PosixRenderer {
-        PosixRenderer::new(
-            self.tty_out,
-            self.tab_stop,
-            self.colors_enabled(),
-            self.bell_style,
-        )
+        PosixRenderer::new(self.tty_out, self.tab_stop, self.colors_enabled(), self.bell_style)
     }
 
     fn writeln(&self) -> Result<()> {

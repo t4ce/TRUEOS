@@ -44,7 +44,7 @@
 #[allow(unused)]
 use core::prelude::rust_2021::*;
 
-use core::fmt;
+use ::core::fmt;
 use core::hash;
 
 mod baseline;

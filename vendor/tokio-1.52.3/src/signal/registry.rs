@@ -2,7 +2,7 @@ use crate::signal::unix::{OsExtraData, OsStorage};
 use crate::sync::watch;
 
 use core::ops;
-use std::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 pub(crate) type EventId = usize;

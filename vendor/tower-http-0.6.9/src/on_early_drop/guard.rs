@@ -9,7 +9,7 @@ use crate::on_early_drop::traits::OnDropCallback;
 ///
 /// ```
 /// use tower_http::on_early_drop::OnEarlyDropGuard;
-/// use std::sync::atomic::{AtomicUsize, Ordering};
+/// use core::sync::atomic::{AtomicUsize, Ordering};
 /// use std::sync::Arc;
 ///
 /// let count = Arc::new(AtomicUsize::new(0));
@@ -26,7 +26,7 @@ use crate::on_early_drop::traits::OnDropCallback;
 ///
 /// ```
 /// use tower_http::on_early_drop::OnEarlyDropGuard;
-/// use std::sync::atomic::{AtomicUsize, Ordering};
+/// use core::sync::atomic::{AtomicUsize, Ordering};
 /// use std::sync::Arc;
 ///
 /// let count = Arc::new(AtomicUsize::new(0));

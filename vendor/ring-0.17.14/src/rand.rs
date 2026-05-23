@@ -62,7 +62,7 @@ pub fn generate<T: RandomlyConstructable>(
 pub(crate) mod sealed {
     use crate::error;
 
-    pub trait SecureRandom: core::fmt::Debug {
+    pub trait SecureRandom: ::core::fmt::Debug {
         /// Fills `dest` with random bytes.
         fn fill_impl(&self, dest: &mut [u8]) -> Result<(), error::Unspecified>;
     }

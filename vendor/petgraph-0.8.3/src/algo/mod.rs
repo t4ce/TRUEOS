@@ -557,7 +557,7 @@ pub struct NegativeCycle(pub ());
 pub fn is_bipartite_undirected<G, N, VM>(g: G, start: N) -> bool
 where
     G: GraphRef + Visitable<NodeId = N, Map = VM> + IntoNeighbors<NodeId = N>,
-    N: Copy + PartialEq + core::fmt::Debug,
+    N: Copy + PartialEq + ::core::fmt::Debug,
     VM: VisitMap<N>,
 {
     let mut red = g.visit_map();
@@ -604,7 +604,7 @@ where
     true
 }
 
-use core::fmt::Debug;
+use ::core::fmt::Debug;
 use core::ops::Add;
 
 /// Associated data that can be used for measures (such as length).

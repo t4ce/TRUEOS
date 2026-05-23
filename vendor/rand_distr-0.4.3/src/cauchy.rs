@@ -12,7 +12,7 @@
 use num_traits::{Float, FloatConst};
 use crate::{Distribution, Standard};
 use rand::Rng;
-use core::fmt;
+use ::core::fmt;
 
 /// The Cauchy distribution `Cauchy(median, scale)`.
 ///

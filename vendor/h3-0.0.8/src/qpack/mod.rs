@@ -26,8 +26,8 @@ pub enum Error {
 
 impl core::error::Error for Error {}
 
-impl core::fmt::Display for Error {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for Error {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         match self {
             Error::Encoder(e) => write!(f, "Encoder {}", e),
             Error::Decoder(e) => write!(f, "Decoder {}", e),

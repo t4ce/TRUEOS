@@ -1,6 +1,6 @@
 use super::{Latency, DEFAULT_ERROR_LEVEL};
 use crate::LatencyUnit;
-use core::fmt;
+use ::core::fmt;
 use core::time::Duration;
 use tracing::{Level, Span};
 

@@ -5,10 +5,10 @@ use alloc::{
 };
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::time::Duration;
-use trueos_io as io;
+use spin::Mutex;
 #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
-use spin::Mutex;
+use trueos_io as io;
 
 use crate::{Interest, Token};
 
@@ -260,7 +260,7 @@ impl AsRawFd for Selector {
 pub mod event {
     use crate::sys::Event;
     use crate::Token;
-    use core::fmt;
+    use ::core::fmt;
 
     pub fn token(event: &Event) -> Token {
         event.token

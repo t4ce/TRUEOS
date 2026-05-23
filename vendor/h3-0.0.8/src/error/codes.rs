@@ -1,6 +1,6 @@
 //! HTTP/3 error codes.
 
-use core::fmt::{self};
+use ::core::fmt::{self};
 
 /// An HTTP/3 "application error code".
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]

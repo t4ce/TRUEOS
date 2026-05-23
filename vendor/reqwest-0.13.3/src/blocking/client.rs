@@ -1,7 +1,7 @@
 #[cfg(any(feature = "__native-tls", feature = "__rustls",))]
 use core::any::Any;
 use core::convert::TryInto;
-use core::fmt;
+use ::core::fmt;
 use core::future::Future;
 use std::net::IpAddr;
 use std::net::SocketAddr;

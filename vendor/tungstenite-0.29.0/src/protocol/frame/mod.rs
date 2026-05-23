@@ -12,6 +12,7 @@ pub use self::{
     utf8::Utf8Bytes,
 };
 
+use crate::io::{self, Cursor, Error as IoError, ErrorKind as IoErrorKind, Read, Write};
 use crate::{
     error::{CapacityError, Error, ProtocolError, Result},
     protocol::frame::mask::apply_mask,
@@ -20,7 +21,6 @@ use crate::{
 use alloc::vec::Vec;
 use bytes::BytesMut;
 use log::*;
-use crate::io::{self, Cursor, Error as IoError, ErrorKind as IoErrorKind, Read, Write};
 
 /// Read buffer size used for `FrameSocket`.
 const READ_BUF_LEN: usize = 128 * 1024;
@@ -37,12 +37,18 @@ pub struct FrameSocket<Stream> {
 impl<Stream> FrameSocket<Stream> {
     /// Create a new frame socket.
     pub fn new(stream: Stream) -> Self {
-        FrameSocket { stream, codec: FrameCodec::new(READ_BUF_LEN) }
+        FrameSocket {
+            stream,
+            codec: FrameCodec::new(READ_BUF_LEN),
+        }
     }
 
     /// Create a new frame socket from partially read data.
     pub fn from_partially_read(stream: Stream, part: Vec<u8>) -> Self {
-        FrameSocket { stream, codec: FrameCodec::from_partially_read(part, READ_BUF_LEN) }
+        FrameSocket {
+            stream,
+            codec: FrameCodec::from_partially_read(part, READ_BUF_LEN),
+        }
     }
 
     /// Extract a stream from the socket.
@@ -67,7 +73,8 @@ where
 {
     /// Read a frame from stream.
     pub fn read(&mut self, max_size: Option<usize>) -> Result<Option<Frame>> {
-        self.codec.read_frame(&mut self.stream, max_size, false, true)
+        self.codec
+            .read_frame(&mut self.stream, max_size, false, true)
     }
 }
 
@@ -234,9 +241,11 @@ impl FrameCodec {
     fn read_in(&mut self, stream: &mut impl Read) -> io::Result<usize> {
         let len = self.in_buffer.len();
         debug_assert!(self.in_buffer.capacity() > len);
-        self.in_buffer.resize(self.in_buffer.capacity().min(len + self.in_buf_max_read), 0);
+        self.in_buffer
+            .resize(self.in_buffer.capacity().min(len + self.in_buf_max_read), 0);
         let size = stream.read(&mut self.in_buffer[len..]);
-        self.in_buffer.truncate(len + size.as_ref().copied().unwrap_or(0));
+        self.in_buffer
+            .truncate(len + size.as_ref().copied().unwrap_or(0));
         size
     }
 
@@ -258,7 +267,9 @@ impl FrameCodec {
         trace!("writing frame {frame}");
 
         self.out_buffer.reserve(frame.len());
-        frame.format_into_buf(&mut self.out_buffer).expect("Bug: can't write to vector");
+        frame
+            .format_into_buf(&mut self.out_buffer)
+            .expect("Bug: can't write to vector");
 
         if self.out_buffer.len() > self.out_buffer_write_len {
             self.write_out_buffer(stream)

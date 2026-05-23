@@ -2,7 +2,7 @@ use crate::io::{Interest, PollEvented};
 use crate::net::unix::{SocketAddr, UnixStream};
 use crate::util::check_socket_for_blocking;
 
-use core::fmt;
+use ::core::fmt;
 use std::io;
 #[cfg(target_os = "android")]
 use std::os::android::net::SocketAddrExt;

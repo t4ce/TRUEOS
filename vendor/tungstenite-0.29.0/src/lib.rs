@@ -75,7 +75,7 @@ pub mod default {
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod fmt {
     //! TRUEOS no_std compatibility re-exports.
-    pub use core::fmt::*;
+    pub use ::core::fmt::*;
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
@@ -172,9 +172,11 @@ pub mod string {
     pub use alloc::string::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod sync {
-    //! TRUEOS no_std compatibility re-exports.
+    //! Sync compatibility re-exports.
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    pub use ::std::sync::*;
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     pub use alloc::sync::*;
 }
 
@@ -198,7 +200,10 @@ pub mod protocol;
 #[cfg(feature = "handshake")]
 mod server;
 pub mod stream;
-#[cfg(all(any(feature = "native-tls", feature = "__rustls-tls"), feature = "handshake"))]
+#[cfg(all(
+    any(feature = "native-tls", feature = "__rustls-tls"),
+    feature = "handshake"
+))]
 mod tls;
 mod utf8;
 pub mod util;
@@ -220,5 +225,8 @@ pub use crate::{
     server::{accept, accept_hdr, accept_hdr_with_config, accept_with_config},
 };
 
-#[cfg(all(any(feature = "native-tls", feature = "__rustls-tls"), feature = "handshake"))]
+#[cfg(all(
+    any(feature = "native-tls", feature = "__rustls-tls"),
+    feature = "handshake"
+))]
 pub use tls::{client_tls, client_tls_with_config, Connector};

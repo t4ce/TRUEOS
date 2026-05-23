@@ -18,11 +18,9 @@ use crate::{
     protocol::frame::Utf8Bytes,
 };
 use alloc::vec::Vec;
-use log::*;
 use core::mem::replace;
-use std::{
-    io::{self, Read, Write},
-};
+use log::*;
+use std::io::{self, Read, Write};
 
 /// Indicates a Client or Server role of the websocket
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,7 +175,10 @@ impl<Stream> WebSocket<Stream> {
     /// # Panics
     /// Panics if config is invalid e.g. `max_write_buffer_size <= write_buffer_size`.
     pub fn from_raw_socket(stream: Stream, role: Role, config: Option<WebSocketConfig>) -> Self {
-        WebSocket { socket: stream, context: WebSocketContext::new(role, config) }
+        WebSocket {
+            socket: stream,
+            context: WebSocketContext::new(role, config),
+        }
     }
 
     /// Convert a raw socket into a WebSocket without performing a handshake.
@@ -419,8 +420,10 @@ impl WebSocketContext {
     pub fn set_config(&mut self, set_func: impl FnOnce(&mut WebSocketConfig)) {
         set_func(&mut self.config);
         self.config.assert_valid();
-        self.frame.set_max_out_buffer_len(self.config.max_write_buffer_size);
-        self.frame.set_out_buffer_write_len(self.config.write_buffer_size);
+        self.frame
+            .set_max_out_buffer_len(self.config.max_write_buffer_size);
+        self.frame
+            .set_out_buffer_write_len(self.config.write_buffer_size);
     }
 
     /// Read the configuration.
@@ -767,7 +770,9 @@ impl WebSocketContext {
         }
 
         trace!("Sending frame: {frame:?}");
-        self.frame.buffer_frame(stream, frame).check_connection_reset(self.state)
+        self.frame
+            .buffer_frame(stream, frame)
+            .check_connection_reset(self.state)
     }
 
     /// Replace `additional_send` if it is currently a `Pong` message.

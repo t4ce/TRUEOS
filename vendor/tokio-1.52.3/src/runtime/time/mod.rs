@@ -31,7 +31,7 @@ use crate::time::error::Error;
 use crate::time::{Clock, Duration};
 use crate::util::WakeList;
 
-use core::fmt;
+use ::core::fmt;
 use std::{num::NonZeroU64, ptr::NonNull};
 
 /// Time implementation that drives [`Sleep`][sleep], [`Interval`][interval], and [`Timeout`][timeout].

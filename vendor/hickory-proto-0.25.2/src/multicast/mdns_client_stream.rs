@@ -6,7 +6,7 @@
 // copied, modified, or distributed except according to those terms.
 
 use alloc::boxed::Box;
-use core::fmt::{self, Display};
+use ::core::fmt::{self, Display};
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};

@@ -1,6 +1,7 @@
+use crate::io;
+use core::cmp;
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use std::{cmp, io};
 
 use bytes::{Buf, Bytes};
 

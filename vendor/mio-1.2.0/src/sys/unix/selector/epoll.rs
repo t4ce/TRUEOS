@@ -1,8 +1,8 @@
 use crate::io;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 #[cfg(debug_assertions)]
-use std::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 use core::time::Duration;
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 
 use libc::{EPOLLET, EPOLLIN, EPOLLOUT, EPOLLPRI, EPOLLRDHUP};
 
@@ -145,7 +145,7 @@ pub type Event = libc::epoll_event;
 pub type Events = Vec<Event>;
 
 pub mod event {
-    use core::fmt;
+    use ::core::fmt;
 
     use crate::sys::Event;
     use crate::Token;

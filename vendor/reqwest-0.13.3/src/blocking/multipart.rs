@@ -37,7 +37,7 @@
 //!
 //! [builder]: ../struct.RequestBuilder.html#method.multipart
 use std::borrow::Cow;
-use core::fmt;
+use ::core::fmt;
 use std::fs::File;
 use std::io::{self, Cursor, Read};
 use std::path::Path;

@@ -225,15 +225,16 @@ cfg_taskdump! {
     pub(crate) mod trace;
 }
 
-use ::core::future::Future;
 use crate::util::linked_list;
 use crate::util::sharded_list;
+use ::core::future::Future;
 
 use crate::runtime::TaskCallback;
 use ::core::marker::PhantomData;
 use ::core::panic::Location;
 use ::core::ptr::NonNull;
-use std::{fmt, mem};
+use ::core::fmt;
+use std::mem;
 
 /// An owned handle to the task, tracked by ref count.
 #[repr(transparent)]
@@ -651,7 +652,6 @@ mod spawn_location {
             Self()
         }
     }
-
 }
 
 impl SpawnLocation {

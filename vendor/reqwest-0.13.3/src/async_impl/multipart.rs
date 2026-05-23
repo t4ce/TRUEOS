@@ -1,6 +1,6 @@
 //! multipart/form-data
 use std::borrow::Cow;
-use core::fmt;
+use ::core::fmt;
 use core::pin::Pin;
 
 #[cfg(feature = "stream")]

@@ -1,4 +1,4 @@
-use core::fmt;
+use ::core::fmt;
 use std::{
     future::Future,
     pin::Pin,

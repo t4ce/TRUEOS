@@ -43,8 +43,8 @@ pub enum DecoderError {
 
 impl core::error::Error for DecoderError {}
 
-impl core::fmt::Display for DecoderError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> fmt::Result {
+impl ::core::fmt::Display for DecoderError {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> fmt::Result {
         match self {
             DecoderError::InvalidInteger(e) => write!(f, "invalid integer: {}", e),
             DecoderError::InvalidString(e) => write!(f, "invalid string: {:?}", e),

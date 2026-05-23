@@ -10,7 +10,7 @@ use backtrace::BacktraceFrame;
 use core::cell::Cell;
 use alloc::collections::VecDeque;
 use core::ffi::c_void;
-use core::fmt;
+use ::core::fmt;
 use core::future::Future;
 use core::pin::Pin;
 use core::ptr::NonNull;

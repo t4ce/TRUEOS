@@ -1,5 +1,5 @@
 use crate::loom::sync::Mutex;
-use std::sync::atomic::Ordering;
+use core::sync::atomic::Ordering;
 
 cfg_has_const_mutex_new! {
     #[path = "atomic_u64_static_const_new.rs"]

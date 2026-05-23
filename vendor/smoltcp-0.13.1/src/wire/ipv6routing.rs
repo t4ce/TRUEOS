@@ -1,5 +1,5 @@
 use super::{Error, Result};
-use core::fmt;
+use ::core::fmt;
 
 use crate::wire::Ipv6Address as Address;
 

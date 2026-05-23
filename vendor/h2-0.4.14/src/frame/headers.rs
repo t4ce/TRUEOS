@@ -8,7 +8,7 @@ use http::{uri, HeaderMap, Method, Request, StatusCode, Uri};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
-use std::fmt;
+use ::core::fmt;
 use std::io::Cursor;
 
 type EncodeBuf<'a> = bytes::buf::Limit<&'a mut BytesMut>;

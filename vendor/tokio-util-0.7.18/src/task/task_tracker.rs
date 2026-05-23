@@ -4,7 +4,7 @@
 
 use pin_project_lite::pin_project;
 use alloc::sync::Arc;
-use core::fmt;
+use ::core::fmt;
 use core::future::Future;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicUsize, Ordering};

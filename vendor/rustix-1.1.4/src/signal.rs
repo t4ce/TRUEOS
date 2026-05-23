@@ -12,7 +12,7 @@
 #![allow(unsafe_code)]
 
 use crate::backend::c;
-use core::fmt;
+use ::core::fmt;
 use core::num::NonZeroI32;
 
 /// A signal number for use with [`kill_process`], [`kill_process_group`], and

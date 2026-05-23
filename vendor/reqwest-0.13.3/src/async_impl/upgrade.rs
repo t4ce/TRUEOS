@@ -1,6 +1,6 @@
+use ::core::fmt;
 use core::pin::Pin;
 use core::task::{self, Poll};
-use std::fmt;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use hyper::io;

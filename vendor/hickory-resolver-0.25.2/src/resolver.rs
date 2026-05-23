@@ -7,7 +7,7 @@
 
 //! Structs for creating and using a Resolver
 use alloc::{boxed::Box, vec, vec::Vec};
-use core::fmt;
+use ::core::fmt;
 use core::future::Future;
 use std::net::IpAddr;
 use core::pin::Pin;

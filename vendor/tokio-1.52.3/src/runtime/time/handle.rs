@@ -2,7 +2,7 @@
 use crate::runtime::prelude::*;
 
 use crate::runtime::time::TimeSource;
-use core::fmt;
+use ::core::fmt;
 
 /// Handle to time driver instance.
 pub(crate) struct Handle {

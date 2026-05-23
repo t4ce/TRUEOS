@@ -7,7 +7,7 @@
 
 //! Update related operations for Messages
 
-use core::fmt::Debug;
+use ::core::fmt::Debug;
 
 #[cfg(any(feature = "std", feature = "no-std-rand"))]
 use crate::{

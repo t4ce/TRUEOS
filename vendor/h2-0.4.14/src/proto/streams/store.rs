@@ -2,8 +2,8 @@ use super::*;
 
 use indexmap::{self, IndexMap};
 
+use ::core::fmt;
 use std::convert::Infallible;
-use std::fmt;
 use std::marker::PhantomData;
 use std::ops;
 

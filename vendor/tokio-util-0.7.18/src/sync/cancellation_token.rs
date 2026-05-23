@@ -103,8 +103,8 @@ pin_project! {
 
 // ===== impl CancellationToken =====
 
-impl core::fmt::Debug for CancellationToken {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for CancellationToken {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("CancellationToken")
             .field("is_cancelled", &self.is_cancelled())
             .finish()
@@ -317,8 +317,8 @@ impl CancellationToken {
 
 // ===== impl WaitForCancellationFuture =====
 
-impl<'a> core::fmt::Debug for WaitForCancellationFuture<'a> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl<'a> ::core::fmt::Debug for WaitForCancellationFuture<'a> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("WaitForCancellationFuture").finish()
     }
 }
@@ -348,8 +348,8 @@ impl<'a> Future for WaitForCancellationFuture<'a> {
 
 // ===== impl WaitForCancellationFutureOwned =====
 
-impl core::fmt::Debug for WaitForCancellationFutureOwned {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for WaitForCancellationFutureOwned {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("WaitForCancellationFutureOwned").finish()
     }
 }

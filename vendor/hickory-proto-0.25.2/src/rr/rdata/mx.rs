@@ -7,7 +7,7 @@
 
 //! mail exchange, email, record
 
-use core::fmt;
+use ::core::fmt;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

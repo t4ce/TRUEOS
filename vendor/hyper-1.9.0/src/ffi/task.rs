@@ -1,11 +1,11 @@
+use crate::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex, Weak,
+};
 use core::ffi::{c_int, c_void};
 use core::future::Future;
 use core::pin::Pin;
 use core::ptr;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex, Weak,
-};
 use core::task::{Context, Poll};
 
 use futures_util::stream::{FuturesUnordered, Stream};

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use crate::sync::Arc;
 
 #[derive(Clone)]
 pub(crate) struct OnInformational(Arc<dyn OnInformationalCallback + Send + Sync>);

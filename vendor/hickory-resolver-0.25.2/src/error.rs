@@ -8,17 +8,18 @@
 //! Error types for the crate
 
 use alloc::{boxed::Box, format, string::String};
-use std::{fmt, io, sync};
+use ::core::fmt;
+use std::{io, sync};
 
 use thiserror::Error;
 
-#[cfg(feature = "backtrace")]
-use crate::proto::{ExtBacktrace, trace};
 use crate::proto::{
-    ProtoError, ProtoErrorKind,
-    rr::{Record, rdata::SOA},
+    rr::{rdata::SOA, Record},
     xfer::retry_dns_handle::RetryableError,
+    ProtoError, ProtoErrorKind,
 };
+#[cfg(feature = "backtrace")]
+use crate::proto::{trace, ExtBacktrace};
 
 #[allow(clippy::large_enum_variant)]
 /// The error kind for errors that get returned in the crate

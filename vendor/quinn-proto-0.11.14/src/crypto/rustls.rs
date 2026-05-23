@@ -9,20 +9,21 @@ pub use rustls::Error;
 #[cfg(feature = "__rustls-post-quantum-test")]
 use rustls::NamedGroup;
 use rustls::{
-    self, CipherSuite,
+    self,
     client::danger::ServerCertVerifier,
     pki_types::{CertificateDer, PrivateKeyDer, ServerName},
     quic::{Connection, HeaderProtectionKey, KeyChange, PacketKey, Secrets, Suite, Version},
+    CipherSuite,
 };
 #[cfg(feature = "platform-verifier")]
 use rustls_platform_verifier::BuilderVerifierExt;
 
 use crate::{
-    ConnectError, ConnectionId, Side, TransportError, TransportErrorCode,
     crypto::{
         self, CryptoError, ExportKeyingMaterialError, HeaderKey, KeyPair, Keys, UnsupportedVersion,
     },
     transport_parameters::TransportParameters,
+    ConnectError, ConnectionId, Side, TransportError, TransportErrorCode,
 };
 
 impl From<Side> for rustls::Side {
@@ -414,8 +415,8 @@ pub struct NoInitialCipherSuite {
     specific: bool,
 }
 
-impl std::fmt::Display for NoInitialCipherSuite {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl ::core::fmt::Display for NoInitialCipherSuite {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         f.write_str(match self.specific {
             true => "invalid cipher suite specified",
             false => "no initial cipher suite found",

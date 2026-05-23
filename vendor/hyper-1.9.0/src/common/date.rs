@@ -1,10 +1,10 @@
+use crate::time::{SystemTime, UNIX_EPOCH};
+use crate::vec::Vec;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use core::cell::RefCell;
-use core::fmt::{self, Write};
+use ::core::fmt::{self, Write};
 use core::str;
 use core::time::Duration;
-use crate::vec::Vec;
-use crate::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "http2")]
 use http::header::HeaderValue;

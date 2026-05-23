@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
 
-use core::fmt;
+use ::core::fmt;
 use core::net::SocketAddr;
 use trueos_io::{self as io, IoSlice, IoSliceMut, Read, Write};
 

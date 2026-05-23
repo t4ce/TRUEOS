@@ -1,7 +1,7 @@
 //! Line buffer with current cursor position
 use crate::keymap::{At, CharSearch, Movement, RepeatCount, Word};
+use ::core::fmt;
 use std::cmp::min;
-use std::fmt;
 use std::iter;
 use std::ops::{Deref, Index, Range};
 use std::string::Drain;
@@ -107,7 +107,6 @@ impl LineBuffer {
     fn must_truncate(&self, new_len: usize) -> bool {
         !self.can_growth && new_len > self.buf.capacity()
     }
-
 
     /// Extracts a string slice containing the entire buffer.
     #[must_use]

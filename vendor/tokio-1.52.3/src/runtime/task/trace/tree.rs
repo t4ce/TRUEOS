@@ -2,7 +2,7 @@
 use crate::runtime::prelude::*;
 
 use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
-use core::fmt;
+use ::core::fmt;
 use core::hash::{Hash, Hasher};
 
 use super::{Backtrace, Symbol, SymbolTrace, Trace};

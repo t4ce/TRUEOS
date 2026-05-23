@@ -9,7 +9,7 @@ use crate::process::fchdir;
 use crate::utils::as_ptr;
 use alloc::borrow::ToOwned as _;
 use alloc::vec::Vec;
-use core::fmt;
+use ::core::fmt;
 use core::mem::size_of;
 use linux_raw_sys::general::{linux_dirent64, SEEK_SET};
 

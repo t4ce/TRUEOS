@@ -1,7 +1,7 @@
 use crate::engine::{general_purpose::STANDARD, DecodeEstimate, Engine};
 #[cfg(any(feature = "alloc", test))]
 use alloc::vec::Vec;
-use core::fmt;
+use ::core::fmt;
 #[cfg(any(feature = "std", test))]
 use core::error;
 

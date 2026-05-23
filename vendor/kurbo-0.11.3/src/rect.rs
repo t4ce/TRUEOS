@@ -3,7 +3,7 @@
 
 //! A rectangle.
 
-use core::fmt;
+use ::core::fmt;
 use core::iter::Iterator;
 use core::ops::{Add, Sub};
 use core::option::Option::{self, None, Some};

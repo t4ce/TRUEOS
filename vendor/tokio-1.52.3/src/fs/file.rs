@@ -11,7 +11,7 @@ use crate::sync::Mutex;
 
 use alloc::sync::Arc;
 use core::cmp;
-use core::fmt;
+use ::core::fmt;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};

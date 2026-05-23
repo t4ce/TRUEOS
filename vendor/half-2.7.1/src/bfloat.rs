@@ -1285,7 +1285,7 @@ impl<'de> Deserialize<'de> for bf16 {
 impl<'de> serde::de::Visitor<'de> for Visitor {
     type Value = bf16;
 
-    fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
+    fn expecting(&self, formatter: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         write!(formatter, "tuple struct bf16")
     }
 

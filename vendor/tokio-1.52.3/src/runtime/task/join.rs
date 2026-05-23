@@ -3,10 +3,10 @@ use crate::runtime::prelude::*;
 
 use crate::runtime::task::{AbortHandle, Header, RawTask};
 
-use core::fmt;
+use ::core::panic::{RefUnwindSafe, UnwindSafe};
+use ::core::fmt;
 use core::future::Future;
 use core::marker::PhantomData;
-use ::core::panic::{RefUnwindSafe, UnwindSafe};
 use core::pin::Pin;
 use core::task::{ready, Context, Poll, Waker};
 

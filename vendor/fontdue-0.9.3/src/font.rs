@@ -204,8 +204,8 @@ impl Hash for Font {
     }
 }
 
-impl core::fmt::Debug for Font {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for Font {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("Font")
             .field("name", &self.name)
             .field("settings", &self.settings)

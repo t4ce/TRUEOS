@@ -4,9 +4,9 @@ use crate::proto::{self, PingPayload};
 
 use atomic_waker::AtomicWaker;
 use bytes::Buf;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use core::task::{Context, Poll};
+use std::sync::Arc;
 use tokio::io;
 use tokio::io::AsyncWrite;
 

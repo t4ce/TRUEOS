@@ -242,8 +242,8 @@ impl From<heapless::CapacityError> for Error {
     }
 }
 
-impl core::fmt::Display for Error {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for Error {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         match self {
             Error::HttpHeader(error) => write!(f, "bad http header {error}"),
             Error::HttpResponseCodeInvalid(Some(code)) => write!(f, "bad http response ({code})"),

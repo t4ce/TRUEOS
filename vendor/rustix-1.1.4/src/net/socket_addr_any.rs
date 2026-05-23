@@ -9,7 +9,7 @@ use crate::net::addr::{SocketAddrArg, SocketAddrLen, SocketAddrOpaque, SocketAdd
 #[cfg(unix)]
 use crate::net::SocketAddrUnix;
 use crate::net::{AddressFamily, SocketAddr, SocketAddrV4, SocketAddrV6};
-use core::fmt;
+use ::core::fmt;
 use core::mem::{size_of, MaybeUninit};
 use core::num::NonZeroU32;
 

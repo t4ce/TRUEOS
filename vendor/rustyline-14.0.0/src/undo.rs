@@ -1,5 +1,5 @@
 //! Undo API
-use std::fmt::Debug;
+use ::core::fmt::Debug;
 
 use crate::keymap::RepeatCount;
 use crate::line_buffer::{ChangeListener, DeleteListener, Direction, LineBuffer, NoListener};
@@ -49,7 +49,6 @@ impl Change {
             }
         }
     }
-
 
     fn insert_seq(&self, indx: usize) -> bool {
         if let Change::Insert { idx, ref text } = *self {
@@ -200,9 +199,10 @@ impl Changeset {
 
     fn single_char(s: &str) -> bool {
         let mut graphemes = s.graphemes(true);
-        graphemes.next().map_or(false, |grapheme| {
-            grapheme.chars().all(char::is_alphanumeric)
-        }) && graphemes.next().is_none()
+        graphemes
+            .next()
+            .map_or(false, |grapheme| grapheme.chars().all(char::is_alphanumeric))
+            && graphemes.next().is_none()
     }
 
     pub(crate) fn replace<S: AsRef<str> + Into<String> + Debug>(
@@ -272,7 +272,6 @@ impl Changeset {
         debug!(target: "rustyline", "Changeset::truncate({})", len);
         self.undos.truncate(len);
     }
-
 
     pub(crate) fn last_insert(&self) -> Option<String> {
         for change in self.undos.iter().rev() {

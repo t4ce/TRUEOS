@@ -57,7 +57,7 @@ where
 pub struct Internal<T>
 where
     T: MessageAddress,
-    <T as TryFrom<u64>>::Error: core::fmt::Debug,
+    <T as TryFrom<u64>>::Error: ::core::fmt::Debug,
 {
     _id: u8,
     _next: u8,
@@ -74,7 +74,7 @@ where
 impl<T> Internal<T>
 where
     T: MessageAddress,
-    <T as TryFrom<u64>>::Error: core::fmt::Debug,
+    <T as TryFrom<u64>>::Error: ::core::fmt::Debug,
 {
     /// Sets the Message Address.
     ///
@@ -102,7 +102,7 @@ where
 /// A marker trait for the Message Address.
 pub trait MessageAddress: Into<u64> + TryFrom<u64> + Copy
 where
-    <Self as TryFrom<u64>>::Error: core::fmt::Debug,
+    <Self as TryFrom<u64>>::Error: ::core::fmt::Debug,
 {
 }
 impl MessageAddress for u32 {}

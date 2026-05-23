@@ -417,8 +417,8 @@ pin_project! {
     }
 }
 
-impl<S, B> core::fmt::Debug for BufRecvStream<S, B> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl<S, B> ::core::fmt::Debug for BufRecvStream<S, B> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("BufRecvStream")
             .field("buf", &self.buf)
             .field("eos", &self.eos)

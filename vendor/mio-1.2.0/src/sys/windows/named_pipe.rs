@@ -1,10 +1,11 @@
-use core::ffi::OsStr;
 use crate::io::{self, Read, Write};
+use core::ffi::OsStr;
+use ::core::fmt;
+use core::sync::atomic::Ordering::{Relaxed, SeqCst};
+use core::sync::atomic::{AtomicBool, AtomicUsize};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
-use std::sync::atomic::Ordering::{Relaxed, SeqCst};
-use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, Mutex};
-use std::{fmt, mem, slice};
+use std::{mem, slice};
 
 use windows_sys::Win32::Foundation::{
     ERROR_BROKEN_PIPE, ERROR_IO_INCOMPLETE, ERROR_IO_PENDING, ERROR_MORE_DATA, ERROR_NO_DATA,
@@ -316,7 +317,6 @@ impl Inner {
         }
     }
 }
-
 
 struct Io {
     // Uniquely identifies the selector associated with this named pipe

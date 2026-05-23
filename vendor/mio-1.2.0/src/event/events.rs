@@ -1,7 +1,7 @@
 use crate::event::Event;
 use crate::sys;
 
-use core::fmt;
+use ::core::fmt;
 
 /// A collection of readiness events.
 ///

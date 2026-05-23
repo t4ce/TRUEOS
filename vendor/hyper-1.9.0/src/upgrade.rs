@@ -39,15 +39,15 @@
 //!
 //! [example]: https://github.com/hyperium/hyper/blob/master/examples/upgrades.rs
 
+use crate::io;
+use crate::sync::{Arc, Mutex};
+use alloc::{boxed::Box, vec::Vec};
 use core::any::TypeId;
 use core::error::Error as StdError;
-use core::fmt;
+use ::core::fmt;
 use core::future::Future;
-use crate::io;
 use core::pin::Pin;
-use std::sync::{Arc, Mutex};
 use core::task::{Context, Poll};
-use alloc::{boxed::Box, vec::Vec};
 
 use crate::rt::{Read, ReadBufCursor, Write};
 use bytes::Bytes;
@@ -362,7 +362,6 @@ mod sealed {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     // TODO: replace with tokio_test::io when it can test write_buf
     struct Mock;

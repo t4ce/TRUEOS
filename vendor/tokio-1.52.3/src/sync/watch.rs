@@ -168,10 +168,10 @@ use crate::task::coop::cooperative;
 use crate::loom::sync::atomic::AtomicUsize;
 use crate::loom::sync::atomic::Ordering::{AcqRel, Relaxed};
 use crate::loom::sync::{Arc, RwLock, RwLockReadGuard};
-use core::fmt;
+use crate::panic;
+use ::core::fmt;
 use core::mem;
 use core::ops;
-use crate::panic;
 
 /// Receives values from the associated [`Sender`](struct@Sender).
 ///
@@ -332,7 +332,7 @@ pub mod error {
     //! Watch error types.
 
     use core::error::Error;
-    use core::fmt;
+    use ::core::fmt;
 
     /// Error produced when sending a value fails.
     #[derive(PartialEq, Eq, Clone, Copy)]
@@ -386,7 +386,7 @@ mod big_notify {
 
     pub(super) struct BigNotify {
         #[cfg(not(all(not(loom), feature = "sync", any(feature = "rt", feature = "macros"))))]
-        next: std::sync::atomic::AtomicUsize,
+        next: core::sync::atomic::AtomicUsize,
         inner: [Notify; 8],
     }
 
@@ -398,7 +398,7 @@ mod big_notify {
                     feature = "sync",
                     any(feature = "rt", feature = "macros")
                 )))]
-                next: std::sync::atomic::AtomicUsize::new(0),
+                next: core::sync::atomic::AtomicUsize::new(0),
                 inner: Default::default(),
             }
         }
@@ -412,7 +412,10 @@ mod big_notify {
         /// This function implements the case where randomness is not available.
         #[cfg(not(all(not(loom), feature = "sync", any(feature = "rt", feature = "macros"))))]
         pub(super) fn notified(&self) -> Notified<'_> {
-            let i = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 8;
+            let i = self
+                .next
+                .fetch_add(1, core::sync::atomic::Ordering::Relaxed)
+                % 8;
             self.inner[i].notified()
         }
 
@@ -460,7 +463,7 @@ mod state {
         /// Decrements the version.
         pub(super) fn decrement(&mut self) {
             // Using a wrapping decrement here is required to ensure that the
-            // operation is consistent with `std::sync::atomic::AtomicUsize::fetch_add()`
+            // operation is consistent with `core::sync::atomic::AtomicUsize::fetch_add()`
             // which wraps on overflow.
             self.0 = self.0.wrapping_sub(STEP_SIZE);
         }

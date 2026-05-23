@@ -67,8 +67,9 @@
 //! # Ok(())
 //! # }
 //! ```
+use ::core::fmt;
 use core::task::{Context, Poll};
-use std::{collections::VecDeque, fmt, marker::PhantomData};
+use std::{collections::VecDeque, marker::PhantomData};
 use tower_service::Service;
 
 /// This is how callers of [`Steer`] tell it which `Service` a `Req` corresponds to.

@@ -3,7 +3,7 @@ use crate::{Chain, Error, Track};
 use alloc::borrow::ToOwned as _;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::fmt;
+use ::core::fmt;
 use serde::de::{self, Deserialize, DeserializeSeed, Visitor};
 
 /// Entry point. See [crate documentation][crate] for an example.

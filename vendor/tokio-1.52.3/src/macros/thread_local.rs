@@ -13,7 +13,7 @@ macro_rules! tokio_thread_local {
 #[cfg(all(not(all(loom, test)), any(target_os = "trueos", target_os = "zkvm")))]
 pub(crate) mod trueos_tls {
     use alloc::boxed::Box;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
     const TRUEOS_TLS_SLOT_COUNT: usize = 64;
 

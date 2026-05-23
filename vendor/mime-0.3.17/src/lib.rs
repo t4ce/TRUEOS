@@ -52,7 +52,7 @@ mod error {
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod fmt {
-    pub use core::fmt::*;
+    pub use ::core::fmt::*;
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
@@ -90,7 +90,7 @@ use core::{
 use core::cmp::Ordering;
 use core::error::Error;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use core::fmt;
+use ::core::fmt;
 use core::hash::Hasher;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use core::hash::Hash;

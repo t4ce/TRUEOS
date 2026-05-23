@@ -1,4 +1,5 @@
-use std::{convert::TryInto, fmt};
+use ::core::fmt;
+use std::convert::TryInto;
 
 use bytes::{Buf, BufMut};
 use thiserror::Error;

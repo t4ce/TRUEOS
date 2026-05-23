@@ -11,7 +11,7 @@
 use num_traits::Float;
 use crate::{Distribution, Standard};
 use rand::{Rng, distributions::OpenClosed01};
-use core::fmt;
+use ::core::fmt;
 
 /// Samples integers according to the [zeta distribution].
 ///

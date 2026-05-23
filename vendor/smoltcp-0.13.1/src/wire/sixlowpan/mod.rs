@@ -213,8 +213,8 @@ pub enum NextHeader {
     Uncompressed(IpProtocol),
 }
 
-impl core::fmt::Display for NextHeader {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for NextHeader {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         match self {
             NextHeader::Compressed => write!(f, "compressed"),
             NextHeader::Uncompressed(protocol) => write!(f, "{protocol}"),

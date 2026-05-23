@@ -36,8 +36,8 @@ mod h2_common {
 #[cfg_attr(docsrs, doc(cfg(all(feature = "client", feature = "http2"))))]
 mod h2_client {
     use alloc::boxed::Box;
-    use core::future::Future;
     use core::error::Error;
+    use core::future::Future;
 
     use crate::rt::{Read, Write};
     use crate::{proto::h2::client::H2ClientFuture, rt::Executor};
@@ -97,8 +97,8 @@ mod h2_client {
 #[cfg_attr(docsrs, doc(cfg(all(feature = "server", feature = "http2"))))]
 mod h2_server {
     use crate::{proto::h2::server::H2Stream, rt::Executor};
-    use http_body::Body;
     use core::future::Future;
+    use http_body::Body;
 
     /// An executor to spawn http2 connections.
     ///

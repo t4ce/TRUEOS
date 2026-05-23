@@ -284,8 +284,8 @@ struct NonceRandom<'a> {
     rng: &'a dyn rand::SecureRandom,
 }
 
-impl core::fmt::Debug for NonceRandom<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for NonceRandom<'_> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("NonceRandom").finish()
     }
 }

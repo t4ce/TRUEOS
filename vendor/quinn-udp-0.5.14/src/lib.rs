@@ -157,7 +157,7 @@ const IO_ERROR_LOG_INTERVAL: Duration = hostlib::time::Duration::from_secs(60);
 #[cfg(all(not(wasm_browser), any(feature = "tracing", feature = "direct-log")))]
 fn log_sendmsg_error(
     last_send_error: &Mutex<Instant>,
-    err: impl core::fmt::Debug,
+    err: impl ::core::fmt::Debug,
     transmit: &Transmit,
 ) {
     let now = Instant::now();
@@ -178,7 +178,7 @@ fn log_sendmsg_error(
 
 // No-op
 #[cfg(not(any(wasm_browser, feature = "tracing", feature = "direct-log")))]
-fn log_sendmsg_error(_: &Mutex<Instant>, _: impl core::fmt::Debug, _: &Transmit) {}
+fn log_sendmsg_error(_: &Mutex<Instant>, _: impl ::core::fmt::Debug, _: &Transmit) {}
 
 /// A borrowed UDP socket
 ///

@@ -3,7 +3,7 @@ use crate::io::uring::utils::{ArcFd, UringFd};
 use crate::runtime::driver::op::{CancelData, Cancellable, Completable, CqeResult, Op};
 
 use io_uring::{opcode, types};
-use core::fmt;
+use ::core::fmt;
 use std::io::{self, Error};
 use std::os::fd::OwnedFd;
 

@@ -5,7 +5,7 @@ use crate::net::unix::ucred::{self, UCred};
 use crate::net::unix::SocketAddr;
 use crate::util::check_socket_for_blocking;
 
-use core::fmt;
+use ::core::fmt;
 use core::future::poll_fn;
 use std::io::{self, Read, Write};
 use std::net::Shutdown;

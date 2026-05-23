@@ -3,7 +3,7 @@
     allow(unused)
 )]
 use core::error::Error as StdError;
-use core::fmt;
+use ::core::fmt;
 use std::io;
 
 use crate::util::Escape;

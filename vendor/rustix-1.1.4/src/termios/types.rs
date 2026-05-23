@@ -211,8 +211,8 @@ impl Termios {
     }
 }
 
-impl core::fmt::Debug for Termios {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for Termios {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         let mut d = f.debug_struct("Termios");
         d.field("input_modes", &self.input_modes);
         d.field("output_modes", &self.output_modes);
@@ -1138,8 +1138,8 @@ impl core::ops::IndexMut<SpecialCodeIndex> for SpecialCodes {
     }
 }
 
-impl core::fmt::Debug for SpecialCodes {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for SpecialCodes {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         write!(f, "SpecialCodes {{")?;
         let mut first = true;
         for i in 0..self.0.len() {
@@ -1162,8 +1162,8 @@ impl core::fmt::Debug for SpecialCodes {
 /// A newtype for pretty printing.
 struct SpecialCode(u8);
 
-impl core::fmt::Debug for SpecialCode {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for SpecialCode {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         if self.0 == 0 {
             write!(f, "<undef>")
         } else if self.0 < 0x20 {
@@ -1271,8 +1271,8 @@ impl SpecialCodeIndex {
     pub const VERASE2: Self = Self(c::VERASE2 as usize);
 }
 
-impl core::fmt::Debug for SpecialCodeIndex {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for SpecialCodeIndex {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         match *self {
             Self::VINTR => write!(f, "VINTR"),
             Self::VQUIT => write!(f, "VQUIT"),

@@ -14,8 +14,8 @@ pub enum ViewBoxError {
     InvalidSize,
 }
 
-impl core::fmt::Display for ViewBoxError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for ViewBoxError {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         match *self {
             ViewBoxError::InvalidNumber => {
                 write!(f, "viewBox contains an invalid number")

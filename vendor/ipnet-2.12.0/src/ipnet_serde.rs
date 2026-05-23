@@ -1,5 +1,5 @@
 use crate::{IpNet, Ipv4Net, Ipv6Net};
-use core::fmt;
+use ::core::fmt;
 #[cfg(not(feature = "std"))]
 use core::net::{Ipv4Addr, Ipv6Addr};
 #[cfg(feature = "std")]

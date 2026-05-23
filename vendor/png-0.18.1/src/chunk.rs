@@ -1,7 +1,7 @@
 //! Chunk types and functions
 #![allow(dead_code)]
 #![allow(non_upper_case_globals)]
-use core::fmt;
+use ::core::fmt;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ChunkType(pub [u8; 4]);

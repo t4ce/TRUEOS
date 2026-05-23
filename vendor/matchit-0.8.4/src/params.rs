@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
-use std::{fmt, iter, mem, slice};
+use ::core::fmt;
+use std::{iter, mem, slice};
 
 /// A single URL parameter, consisting of a key and a value.
 #[derive(PartialEq, Eq, Ord, PartialOrd, Default, Copy, Clone)]

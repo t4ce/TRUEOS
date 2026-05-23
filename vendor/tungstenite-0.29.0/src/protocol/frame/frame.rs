@@ -1,12 +1,11 @@
-use log::*;
 use alloc::vec::Vec;
 use core::{
     default::Default,
-    fmt,
-    mem,
+    fmt, mem,
     result::Result as StdResult,
     str::{self, Utf8Error},
 };
+use log::*;
 use std::{
     io::{Cursor, ErrorKind, Read, Write},
     string::String,
@@ -200,7 +199,14 @@ impl FrameHeader {
             _ => (),
         }
 
-        let hdr = FrameHeader { is_final, rsv1, rsv2, rsv3, opcode, mask };
+        let hdr = FrameHeader {
+            is_final,
+            rsv1,
+            rsv2,
+            rsv3,
+            opcode,
+            mask,
+        };
 
         Ok(Some((hdr, length)))
     }
@@ -298,7 +304,11 @@ impl Frame {
     pub fn message(data: impl Into<Bytes>, opcode: OpCode, is_final: bool) -> Frame {
         debug_assert!(matches!(opcode, OpCode::Data(_)), "Invalid opcode for data frame.");
         Frame {
-            header: FrameHeader { is_final, opcode, ..FrameHeader::default() },
+            header: FrameHeader {
+                is_final,
+                opcode,
+                ..FrameHeader::default()
+            },
             payload: data.into(),
         }
     }
@@ -339,7 +349,10 @@ impl Frame {
             <_>::default()
         };
 
-        Frame { header: FrameHeader::default(), payload: payload.into() }
+        Frame {
+            header: FrameHeader::default(),
+            payload: payload.into(),
+        }
     }
 
     /// Create a frame from given header and data.
@@ -378,7 +391,7 @@ impl Frame {
 
 impl fmt::Display for Frame {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use core::fmt::Write;
+        use ::core::fmt::Write;
 
         write!(
             f,

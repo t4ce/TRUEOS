@@ -141,13 +141,13 @@ use crate::frame::{Headers, Pseudo, Reason, Settings, StreamId};
 use crate::proto::{self, Error};
 use crate::{FlowControl, PingPong, RecvStream, SendStream};
 
+use crate::time::Duration;
 use bytes::{Buf, Bytes};
-use http::{uri, HeaderMap, Method, Request, Response, Version};
-use std::fmt;
+use ::core::fmt;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use crate::time::Duration;
+use http::{uri, HeaderMap, Method, Request, Response, Version};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tracing::Instrument;
 
@@ -976,7 +976,7 @@ impl Builder {
     /// # use tokio::io::{AsyncRead, AsyncWrite};
     /// # use h2::client::*;
     /// # use std as hostlib;
-/// use hostlib::time::Duration;
+    /// use hostlib::time::Duration;
     /// # use bytes::Bytes;
     /// #
     /// # async fn doc<T: AsyncRead + AsyncWrite + Unpin>(my_io: T)
@@ -1093,7 +1093,7 @@ impl Builder {
     /// # use tokio::io::{AsyncRead, AsyncWrite};
     /// # use h2::client::*;
     /// # use std as hostlib;
-/// use hostlib::time::Duration;
+    /// use hostlib::time::Duration;
     /// # use bytes::Bytes;
     /// #
     /// # async fn doc<T: AsyncRead + AsyncWrite + Unpin>(my_io: T)

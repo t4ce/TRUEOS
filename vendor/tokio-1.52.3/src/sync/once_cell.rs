@@ -1,7 +1,7 @@
 use super::{Semaphore, SemaphorePermit, TryAcquireError};
 use crate::loom::cell::UnsafeCell;
 use core::error::Error;
-use core::fmt;
+use ::core::fmt;
 use core::future::Future;
 use core::mem::MaybeUninit;
 use core::ops::Drop;

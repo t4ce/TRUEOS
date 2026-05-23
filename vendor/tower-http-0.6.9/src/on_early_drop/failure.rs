@@ -3,7 +3,7 @@
 //! [`EarlyDropsAsFailures`]: super::EarlyDropsAsFailures
 
 use http::StatusCode;
-use core::fmt;
+use ::core::fmt;
 
 /// Classification for early-drop events reported through
 /// [`EarlyDropsAsFailures`].

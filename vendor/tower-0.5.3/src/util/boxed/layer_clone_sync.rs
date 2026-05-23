@@ -1,4 +1,5 @@
-use std::{fmt, sync::Arc};
+use ::core::fmt;
+use std::sync::Arc;
 use tower_layer::{layer_fn, Layer};
 use tower_service::Service;
 

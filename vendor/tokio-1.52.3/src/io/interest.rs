@@ -2,7 +2,7 @@
 
 use crate::io::ready::Ready;
 
-use core::fmt;
+use ::core::fmt;
 use core::ops;
 
 // These must be unique.

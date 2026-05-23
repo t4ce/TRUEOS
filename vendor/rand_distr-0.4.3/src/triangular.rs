@@ -10,7 +10,7 @@
 use num_traits::Float;
 use crate::{Distribution, Standard};
 use rand::Rng;
-use core::fmt;
+use ::core::fmt;
 
 /// The triangular distribution.
 ///

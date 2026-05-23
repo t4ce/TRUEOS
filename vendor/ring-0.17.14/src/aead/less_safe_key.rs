@@ -166,16 +166,16 @@ impl LessSafeKey {
     pub(super) fn fmt_debug(
         &self,
         type_name: &'static str,
-        f: &mut core::fmt::Formatter,
-    ) -> Result<(), core::fmt::Error> {
+        f: &mut ::core::fmt::Formatter,
+    ) -> Result<(), ::core::fmt::Error> {
         f.debug_struct(type_name)
             .field("algorithm", &self.algorithm())
             .finish()
     }
 }
 
-impl core::fmt::Debug for LessSafeKey {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
+impl ::core::fmt::Debug for LessSafeKey {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
         self.fmt_debug("LessSafeKey", f)
     }
 }

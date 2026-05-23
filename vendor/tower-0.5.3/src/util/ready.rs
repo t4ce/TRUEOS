@@ -1,5 +1,6 @@
 #![allow(missing_docs)]
-use std::{fmt, marker::PhantomData};
+use ::core::fmt;
+use std::marker::PhantomData;
 
 use std::{
     future::Future,

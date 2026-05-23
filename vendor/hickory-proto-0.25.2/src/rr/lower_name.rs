@@ -10,7 +10,7 @@
 #[cfg(feature = "serde")]
 use alloc::string::{String, ToString};
 use core::cmp::{Ordering, PartialEq};
-use core::fmt;
+use ::core::fmt;
 use core::hash::{Hash, Hasher};
 use core::ops::Deref;
 use core::str::FromStr;

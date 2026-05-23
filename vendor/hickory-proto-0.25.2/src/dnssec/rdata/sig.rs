@@ -7,7 +7,7 @@
 
 //! signature record for signing queries, updates, and responses
 use alloc::vec::Vec;
-use core::fmt;
+use ::core::fmt;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

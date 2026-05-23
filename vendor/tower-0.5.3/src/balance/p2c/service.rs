@@ -96,7 +96,7 @@ where
     D::Key: Hash + Clone,
     D::Error: Into<crate::BoxError>,
     D::Service: Service<Req> + Load,
-    <D::Service as Load>::Metric: core::fmt::Debug,
+    <D::Service as Load>::Metric: ::core::fmt::Debug,
     <D::Service as Service<Req>>::Error: Into<crate::BoxError>,
 {
     /// Polls `discover` for updates, adding new items to `not_ready`.
@@ -195,7 +195,7 @@ where
     D::Key: Hash + Clone,
     D::Error: Into<crate::BoxError>,
     D::Service: Service<Req> + Load,
-    <D::Service as Load>::Metric: core::fmt::Debug,
+    <D::Service as Load>::Metric: ::core::fmt::Debug,
     <D::Service as Service<Req>>::Error: Into<crate::BoxError>,
 {
     type Response = <D::Service as Service<Req>>::Response;

@@ -19,14 +19,14 @@
 //!    3c. Calculate bdp as bytes/rtt.
 //!    3d. If bdp is over 2/3 max, set new max to bdp and update windows.
 
+use crate::sync::{Arc, Mutex};
+use crate::time::Instant;
 use alloc::boxed::Box;
-use core::fmt;
+use ::core::fmt;
 use core::future::Future;
 use core::pin::Pin;
-use std::sync::{Arc, Mutex};
 use core::task::{self, Poll};
 use core::time::Duration;
-use crate::time::Instant;
 
 use h2::{Ping, PingPong};
 
@@ -40,10 +40,7 @@ pub(super) fn disabled() -> Recorder {
 }
 
 pub(super) fn channel(ping_pong: PingPong, config: Config, timer: Time) -> (Recorder, Ponger) {
-    debug_assert!(
-        config.is_enabled(),
-        "ping channel requires bdp or keep-alive config",
-    );
+    debug_assert!(config.is_enabled(), "ping channel requires bdp or keep-alive config",);
 
     let bdp = config.bdp_initial_window.map(|wnd| Bdp {
         bdp: wnd,

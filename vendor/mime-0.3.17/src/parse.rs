@@ -1,7 +1,7 @@
 #[allow(unused, deprecated)]
 use std::ascii::AsciiExt;
 use core::error::Error;
-use core::fmt;
+use ::core::fmt;
 use core::iter::Enumerate;
 use core::str::Bytes;
 

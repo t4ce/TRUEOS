@@ -1,5 +1,6 @@
 use crate::{engine::Engine, DecodeError, DecodeSliceError, PAD_BYTE};
-use std::{cmp, fmt, io};
+use ::core::fmt;
+use std::{cmp, io};
 
 // This should be large, but it has to fit on the stack.
 pub(crate) const BUF_SIZE: usize = 1024;
@@ -324,10 +325,8 @@ impl<'e, E: Engine, R: io::Read> io::Read for DecoderReader<'e, E, R> {
                     self.b64_len - self.b64_len % 4
                 };
 
-                let actual_decode_len = cmp::min(
-                    b64_bytes_that_can_decode_into_buf,
-                    b64_bytes_available_to_decode,
-                );
+                let actual_decode_len =
+                    cmp::min(b64_bytes_that_can_decode_into_buf, b64_bytes_available_to_decode);
                 self.decode_to_buf(actual_decode_len, buf)
             }
         }

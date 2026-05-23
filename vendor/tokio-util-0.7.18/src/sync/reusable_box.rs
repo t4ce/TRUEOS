@@ -1,5 +1,5 @@
 use std::alloc::Layout;
-use core::fmt;
+use ::core::fmt;
 use core::future::{self, Future};
 use core::mem::{self, ManuallyDrop};
 use core::pin::Pin;

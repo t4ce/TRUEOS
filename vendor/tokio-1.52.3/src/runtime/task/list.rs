@@ -9,15 +9,15 @@
 #[allow(unused_imports)]
 use crate::runtime::prelude::*;
 
-use core::future::Future;
 use crate::loom::cell::UnsafeCell;
 use crate::runtime::task::{JoinHandle, LocalNotified, Notified, Schedule, SpawnLocation, Task};
 use crate::util::linked_list::{Link, LinkedList};
 use crate::util::sharded_list;
+use core::future::Future;
 
-use core::sync::atomic::{AtomicBool, Ordering};
 use core::marker::PhantomData;
 use core::num::NonZeroU64;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 // The id from the module below is used to verify whether a given task is stored
 // in this OwnedTasks, or some other task. The counter starts at one so we can

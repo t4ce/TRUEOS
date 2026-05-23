@@ -3,7 +3,7 @@
 
 //! A 2D point.
 
-use core::fmt;
+use ::core::fmt;
 use core::ops::{Add, AddAssign, Sub, SubAssign};
 
 use crate::common::FloatExt;

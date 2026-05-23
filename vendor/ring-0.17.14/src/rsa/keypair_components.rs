@@ -25,11 +25,11 @@ pub struct KeyPairComponents<Public, Private = Public> {
     pub qInv: Private,
 }
 
-impl<Public, Private> core::fmt::Debug for KeyPairComponents<Public, Private>
+impl<Public, Private> ::core::fmt::Debug for KeyPairComponents<Public, Private>
 where
-    PublicKeyComponents<Public>: core::fmt::Debug,
+    PublicKeyComponents<Public>: ::core::fmt::Debug,
 {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> Result<(), ::core::fmt::Error> {
         // Non-public components are intentionally skipped
         f.debug_struct("KeyPairComponents")
             .field("public_key", &self.public_key)

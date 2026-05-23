@@ -776,8 +776,8 @@ impl TlsInfo {
     }
 }
 
-impl core::fmt::Debug for TlsInfo {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+impl ::core::fmt::Debug for TlsInfo {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         f.debug_struct("TlsInfo").finish()
     }
 }

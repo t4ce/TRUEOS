@@ -8,7 +8,7 @@
 //!
 //! ```
 //! use rustix::thread::futex;
-//! use std::sync::atomic::AtomicU32;
+//! use core::sync::atomic::AtomicU32;
 //!
 //! # fn test(futex: &AtomicU32) -> rustix::io::Result<()> {
 //! // Wake up one waiter.
@@ -325,21 +325,13 @@ pub fn wait_bitset(
 ) -> io::Result<()> {
     // SAFETY: The raw pointers come from references or null.
     unsafe {
-        futex_timeout(
-            uaddr,
-            Operation::WaitBitset,
-            flags,
-            val,
-            timeout,
-            ptr::null(),
-            val3.get(),
-        )
-        .map(|val| {
-            debug_assert_eq!(
-                val, 0,
-                "The return value should always equal zero, if the call is successful"
-            );
-        })
+        futex_timeout(uaddr, Operation::WaitBitset, flags, val, timeout, ptr::null(), val3.get())
+            .map(|val| {
+                debug_assert_eq!(
+                    val, 0,
+                    "The return value should always equal zero, if the call is successful"
+                );
+            })
     }
 }
 
@@ -362,17 +354,7 @@ pub fn wake_bitset(
     val3: NonZeroU32,
 ) -> io::Result<usize> {
     // SAFETY: The raw pointers come from references or null.
-    unsafe {
-        futex_val2(
-            uaddr,
-            Operation::WakeBitset,
-            flags,
-            val,
-            0,
-            ptr::null(),
-            val3.get(),
-        )
-    }
+    unsafe { futex_val2(uaddr, Operation::WakeBitset, flags, val, 0, ptr::null(), val3.get()) }
 }
 
 /// `syscall(SYS_futex, uaddr, FUTEX_WAIT_REQUEUE_PI, val, timeout, uaddr2, 0)`
@@ -396,16 +378,7 @@ pub fn wait_requeue_pi(
 ) -> io::Result<()> {
     // SAFETY: The raw pointers come from references or null.
     unsafe {
-        futex_timeout(
-            uaddr,
-            Operation::WaitRequeuePi,
-            flags,
-            val,
-            timeout,
-            uaddr2,
-            0,
-        )
-        .map(|val| {
+        futex_timeout(uaddr, Operation::WaitRequeuePi, flags, val, timeout, uaddr2, 0).map(|val| {
             debug_assert_eq!(
                 val, 0,
                 "The return value should always equal zero, if the call is successful"
@@ -513,8 +486,8 @@ impl From<*mut c_void> for WaitPtr {
     }
 }
 
-impl core::fmt::Debug for WaitPtr {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Debug for WaitPtr {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         self.ptr.fmt(f)
     }
 }
@@ -585,4 +558,3 @@ bitflags::bitflags! {
         const _ = !0;
     }
 }
-

@@ -3,7 +3,7 @@ use alloc::boxed::Box;
 use tower_layer::{layer_fn, LayerFn};
 use tower_service::Service;
 
-use core::fmt;
+use ::core::fmt;
 use std::{
     future::Future,
     pin::Pin,

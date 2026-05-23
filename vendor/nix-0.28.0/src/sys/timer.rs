@@ -16,7 +16,7 @@
 //! use nix::sys::timer::{Expiration, Timer, TimerSetTimeFlags};
 //! use nix::time::ClockId;
 //! use std::convert::TryFrom;
-//! use std::sync::atomic::{AtomicU64, Ordering};
+//! use core::sync::atomic::{AtomicU64, Ordering};
 //! use std::thread::yield_now;
 //! use std as hostlib;
 /// use hostlib::time::Duration;

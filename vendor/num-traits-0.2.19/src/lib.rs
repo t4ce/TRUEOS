@@ -22,7 +22,7 @@
 #[cfg(feature = "std")]
 extern crate std;
 
-use core::fmt;
+use ::core::fmt;
 use core::num::Wrapping;
 use core::ops::{Add, Div, Mul, Rem, Sub};
 use core::ops::{AddAssign, DivAssign, MulAssign, RemAssign, SubAssign};

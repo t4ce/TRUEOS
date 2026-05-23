@@ -4,8 +4,8 @@
 //! It is filled by reading from a stream supporting `Read` and is then
 //! accessible as a cursor for reading bytes.
 
-use alloc::{boxed::Box, vec::Vec};
 use crate::io::{Cursor, Read, Result as IoResult};
+use alloc::{boxed::Box, vec::Vec};
 
 use bytes::Buf;
 
@@ -29,7 +29,10 @@ impl<const CHUNK_SIZE: usize> ReadBuffer<CHUNK_SIZE> {
 
     /// Create a input buffer filled with previously read data.
     pub fn from_partially_read(part: Vec<u8>) -> Self {
-        Self { storage: Cursor::new(part), chunk: Box::new([0; CHUNK_SIZE]) }
+        Self {
+            storage: Cursor::new(part),
+            chunk: Box::new([0; CHUNK_SIZE]),
+        }
     }
 
     /// Get a cursor to the data storage.
@@ -56,7 +59,9 @@ impl<const CHUNK_SIZE: usize> ReadBuffer<CHUNK_SIZE> {
     pub fn read_from<S: Read>(&mut self, stream: &mut S) -> IoResult<usize> {
         self.clean_up();
         let size = stream.read(&mut *self.chunk)?;
-        self.storage.get_mut().extend_from_slice(&self.chunk[..size]);
+        self.storage
+            .get_mut()
+            .extend_from_slice(&self.chunk[..size]);
         Ok(size)
     }
 

@@ -18,7 +18,7 @@ pub use self::internal::Cached;
 // more public, but we can't change type shapes (generics) once things are
 // public.
 mod internal {
-    use core::fmt;
+    use ::core::fmt;
     use core::future::Future;
     use core::pin::Pin;
     use alloc::sync::Arc;

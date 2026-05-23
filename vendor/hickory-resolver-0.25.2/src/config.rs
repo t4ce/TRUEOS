@@ -10,7 +10,7 @@
 
 use alloc::{string::String, vec, vec::Vec};
 use std::collections::HashSet;
-use core::fmt;
+use ::core::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use core::ops::{Deref, DerefMut};
 use std::path::PathBuf;

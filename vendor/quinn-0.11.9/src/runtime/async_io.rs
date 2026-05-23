@@ -1,11 +1,11 @@
+#[cfg(any(feature = "runtime-smol", feature = "runtime-async-std"))]
+use core::task::ready;
 use std::{
     future::Future,
     pin::Pin,
     task::{Context, Poll},
     time::Instant,
 };
-#[cfg(any(feature = "runtime-smol", feature = "runtime-async-std"))]
-use core::task::ready;
 use std::{io, sync::Arc};
 
 #[cfg(any(feature = "runtime-smol", feature = "runtime-async-std"))]

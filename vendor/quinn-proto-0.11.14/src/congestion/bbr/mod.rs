@@ -1,16 +1,16 @@
+use ::core::fmt::Debug;
 use std::any::Any;
-use std::fmt::Debug;
 use std::sync::Arc;
 
 use rand::{Rng, SeedableRng};
 
-use crate::congestion::ControllerMetrics;
 use crate::congestion::bbr::bw_estimation::BandwidthEstimation;
 use crate::congestion::bbr::min_max::MinMax;
+use crate::congestion::ControllerMetrics;
 use crate::connection::RttEstimator;
 use crate::{Duration, Instant};
 
-use super::{BASE_DATAGRAM_SIZE, Controller, ControllerFactory};
+use super::{Controller, ControllerFactory, BASE_DATAGRAM_SIZE};
 
 mod bw_estimation;
 mod min_max;

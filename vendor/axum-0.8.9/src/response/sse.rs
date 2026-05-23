@@ -176,7 +176,7 @@ pub struct Event {
     flags: EventFlags,
 }
 
-/// Expose [`Event`] as a [`core::fmt::Write`]
+/// Expose [`Event`] as a [`::core::fmt::Write`]
 /// such that any form of data can be written as data safely.
 ///
 /// This also ensures that newline characters `\r` and `\n`

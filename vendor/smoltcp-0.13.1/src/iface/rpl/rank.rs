@@ -29,8 +29,8 @@ pub struct Rank {
     pub(super) min_hop_rank_increase: u16,
 }
 
-impl core::fmt::Display for Rank {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl ::core::fmt::Display for Rank {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         write!(f, "Rank({})", self.dag_rank())
     }
 }

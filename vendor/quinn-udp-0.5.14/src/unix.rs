@@ -6,8 +6,8 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
     os::unix::io::AsRawFd,
     sync::{
-        Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        Mutex,
     },
     time::Instant,
 };
@@ -15,7 +15,7 @@ use std::{
 use socket2::SockRef;
 
 use super::{
-    EcnCodepoint, IO_ERROR_LOG_INTERVAL, RecvMeta, Transmit, UdpSockRef, cmsg, log_sendmsg_error,
+    cmsg, log_sendmsg_error, EcnCodepoint, RecvMeta, Transmit, UdpSockRef, IO_ERROR_LOG_INTERVAL,
 };
 
 // Adapted from https://github.com/apple-oss-distributions/xnu/blob/8d741a5de7ff4191bf97d57b9f54c2f6d4a15585/bsd/sys/socket_private.h
@@ -355,7 +355,7 @@ fn send(
                         );
                         state
                             .max_gso_segments
-                            .store(1, std::sync::atomic::Ordering::Relaxed);
+                            .store(1, core::sync::atomic::Ordering::Relaxed);
                     }
                 }
 
@@ -468,12 +468,7 @@ fn recv(io: SockRef<'_>, bufs: &mut [IoSliceMut<'_>], meta: &mut [RecvMeta]) -> 
     let mut hdrs = unsafe { mem::zeroed::<[libc::mmsghdr; BATCH_SIZE]>() };
     let max_msg_count = bufs.len().min(BATCH_SIZE);
     for i in 0..max_msg_count {
-        prepare_recv(
-            &mut bufs[i],
-            &mut names[i],
-            &mut ctrls[i],
-            &mut hdrs[i].msg_hdr,
-        );
+        prepare_recv(&mut bufs[i], &mut names[i], &mut ctrls[i], &mut hdrs[i].msg_hdr);
     }
     let msg_count = loop {
         let n = unsafe {
@@ -733,9 +728,7 @@ fn decode_recv(
             #[cfg(any(target_os = "linux", target_os = "android"))]
             (libc::IPPROTO_IP, libc::IP_PKTINFO) => {
                 let pktinfo = unsafe { cmsg::decode::<libc::in_pktinfo, libc::cmsghdr>(cmsg) };
-                dst_ip = Some(IpAddr::V4(Ipv4Addr::from(
-                    pktinfo.ipi_addr.s_addr.to_ne_bytes(),
-                )));
+                dst_ip = Some(IpAddr::V4(Ipv4Addr::from(pktinfo.ipi_addr.s_addr.to_ne_bytes())));
             }
             #[cfg(any(bsd, apple))]
             (libc::IPPROTO_IP, libc::IP_RECVDSTADDR) => {

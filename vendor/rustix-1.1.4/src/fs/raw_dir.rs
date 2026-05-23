@@ -5,7 +5,7 @@ use crate::fd::AsFd;
 use crate::ffi::CStr;
 use crate::fs::FileType;
 use crate::io;
-use core::fmt;
+use ::core::fmt;
 use core::mem::{align_of, MaybeUninit};
 
 #[cfg(not(linux_raw_dep))]

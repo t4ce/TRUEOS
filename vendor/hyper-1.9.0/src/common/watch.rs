@@ -4,11 +4,11 @@
 //! - The consumer is only notified if the value is different.
 //! - The value `0` is reserved for closed.
 
-use atomic_waker::AtomicWaker;
-use std::sync::{
+use crate::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
+use atomic_waker::AtomicWaker;
 use core::task;
 
 type Value = usize;
@@ -16,10 +16,7 @@ type Value = usize;
 pub(crate) const CLOSED: usize = 0;
 
 pub(crate) fn channel(initial: Value) -> (Sender, Receiver) {
-    debug_assert!(
-        initial != CLOSED,
-        "watch::channel initial state of 0 is reserved"
-    );
+    debug_assert!(initial != CLOSED, "watch::channel initial state of 0 is reserved");
 
     let shared = Arc::new(Shared {
         value: AtomicUsize::new(initial),

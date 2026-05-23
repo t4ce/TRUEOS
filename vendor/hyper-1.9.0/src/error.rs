@@ -1,7 +1,7 @@
 //! Error and Result module.
-use core::error::Error as StdError;
-use core::fmt;
 use alloc::boxed::Box;
+use core::error::Error as StdError;
+use ::core::fmt;
 
 /// Result type often returned from methods that can have hyper `Error`s.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -181,10 +181,7 @@ impl Error {
     /// Returns true if this was an HTTP parse error caused by a message that was too large.
     #[cfg(all(feature = "http1", feature = "server"))]
     pub fn is_parse_too_large(&self) -> bool {
-        matches!(
-            self.inner.kind,
-            Kind::Parse(Parse::TooLarge) | Kind::Parse(Parse::UriTooLong)
-        )
+        matches!(self.inner.kind, Kind::Parse(Parse::TooLarge) | Kind::Parse(Parse::UriTooLong))
     }
 
     /// Returns true if this was an HTTP parse error caused by an invalid response status code or

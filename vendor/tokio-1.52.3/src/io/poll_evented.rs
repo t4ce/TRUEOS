@@ -3,7 +3,7 @@ use crate::runtime::io::Registration;
 use crate::runtime::scheduler;
 
 use mio::event::Source;
-use core::fmt;
+use ::core::fmt;
 use std::io;
 use core::ops::Deref;
 use ::core::panic::{RefUnwindSafe, UnwindSafe};

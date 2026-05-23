@@ -6,9 +6,7 @@ pub mod machine;
 pub mod server;
 
 use core::{error::Error as ErrorTrait, fmt};
-use std::{
-    io::{Read, Write},
-};
+use std::io::{Read, Write};
 
 use http::Version;
 use sha1::{Digest, Sha1};

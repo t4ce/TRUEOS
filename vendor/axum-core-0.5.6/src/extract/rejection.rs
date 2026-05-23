@@ -5,7 +5,7 @@ use crate::__define_rejection as define_rejection;
 
 use crate::{BoxError, Error};
 use alloc::string::{String, ToString};
-use core::fmt::Debug;
+use ::core::fmt::Debug;
 use core::result::Result::{Err, Ok};
 
 composite_rejection! {

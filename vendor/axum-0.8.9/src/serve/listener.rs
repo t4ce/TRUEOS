@@ -2,8 +2,9 @@
 use crate::prelude::rust_2021::*;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use alloc::borrow::ToOwned;
+use ::core::fmt;
 use core::time::Duration;
-use std::{fmt, future::Future};
+use std::future::Future;
 
 use tokio::{
     io::{self, AsyncRead, AsyncWrite},

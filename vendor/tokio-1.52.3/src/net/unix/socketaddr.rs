@@ -1,4 +1,4 @@
-use core::fmt;
+use ::core::fmt;
 use crate::path::Path;
 
 /// An address associated with a Tokio Unix socket.

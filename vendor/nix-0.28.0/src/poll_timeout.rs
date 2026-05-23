@@ -46,11 +46,13 @@ pub enum PollTimeoutTryFromError {
     TooPositive,
 }
 
-impl std::fmt::Display for PollTimeoutTryFromError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl ::core::fmt::Display for PollTimeoutTryFromError {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         match self {
             Self::TooNegative => write!(f, "Passed a negative timeout less than -1."),
-            Self::TooPositive => write!(f, "Passed a positive timeout greater than `i32::MAX` milliseconds.")
+            Self::TooPositive => {
+                write!(f, "Passed a positive timeout greater than `i32::MAX` milliseconds.")
+            }
         }
     }
 }
@@ -65,37 +67,25 @@ impl<T: Into<PollTimeout>> From<Option<T>> for PollTimeout {
 impl TryFrom<Duration> for PollTimeout {
     type Error = PollTimeoutTryFromError;
     fn try_from(x: Duration) -> std::result::Result<Self, Self::Error> {
-        Ok(Self(
-            i32::try_from(x.as_millis())
-                .map_err(|_| PollTimeoutTryFromError::TooPositive)?,
-        ))
+        Ok(Self(i32::try_from(x.as_millis()).map_err(|_| PollTimeoutTryFromError::TooPositive)?))
     }
 }
 impl TryFrom<u128> for PollTimeout {
     type Error = PollTimeoutTryFromError;
     fn try_from(x: u128) -> std::result::Result<Self, Self::Error> {
-        Ok(Self(
-            i32::try_from(x)
-                .map_err(|_| PollTimeoutTryFromError::TooPositive)?,
-        ))
+        Ok(Self(i32::try_from(x).map_err(|_| PollTimeoutTryFromError::TooPositive)?))
     }
 }
 impl TryFrom<u64> for PollTimeout {
     type Error = PollTimeoutTryFromError;
     fn try_from(x: u64) -> std::result::Result<Self, Self::Error> {
-        Ok(Self(
-            i32::try_from(x)
-                .map_err(|_| PollTimeoutTryFromError::TooPositive)?,
-        ))
+        Ok(Self(i32::try_from(x).map_err(|_| PollTimeoutTryFromError::TooPositive)?))
     }
 }
 impl TryFrom<u32> for PollTimeout {
     type Error = PollTimeoutTryFromError;
     fn try_from(x: u32) -> std::result::Result<Self, Self::Error> {
-        Ok(Self(
-            i32::try_from(x)
-                .map_err(|_| PollTimeoutTryFromError::TooPositive)?,
-        ))
+        Ok(Self(i32::try_from(x).map_err(|_| PollTimeoutTryFromError::TooPositive)?))
     }
 }
 impl From<u16> for PollTimeout {
@@ -113,10 +103,7 @@ impl TryFrom<i128> for PollTimeout {
     fn try_from(x: i128) -> std::result::Result<Self, Self::Error> {
         match x {
             ..=-2 => Err(PollTimeoutTryFromError::TooNegative),
-            -1.. => Ok(Self(
-                i32::try_from(x)
-                    .map_err(|_| PollTimeoutTryFromError::TooPositive)?,
-            )),
+            -1.. => Ok(Self(i32::try_from(x).map_err(|_| PollTimeoutTryFromError::TooPositive)?)),
         }
     }
 }
@@ -125,10 +112,7 @@ impl TryFrom<i64> for PollTimeout {
     fn try_from(x: i64) -> std::result::Result<Self, Self::Error> {
         match x {
             ..=-2 => Err(PollTimeoutTryFromError::TooNegative),
-            -1.. => Ok(Self(
-                i32::try_from(x)
-                    .map_err(|_| PollTimeoutTryFromError::TooPositive)?,
-            )),
+            -1.. => Ok(Self(i32::try_from(x).map_err(|_| PollTimeoutTryFromError::TooPositive)?)),
         }
     }
 }

@@ -4,7 +4,7 @@ use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
-use core::fmt;
+use ::core::fmt;
 
 /// A handle is used to refer to an AML value without actually borrowing it until you need to
 /// access it (this makes borrowing situation much easier as you only have to consider who's

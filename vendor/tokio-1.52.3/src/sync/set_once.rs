@@ -4,7 +4,7 @@ use crate::loom::cell::UnsafeCell;
 use crate::loom::sync::atomic::AtomicBool;
 
 use core::error::Error;
-use core::fmt;
+use ::core::fmt;
 use core::future::{poll_fn, Future};
 use core::mem::MaybeUninit;
 use core::ops::Drop;

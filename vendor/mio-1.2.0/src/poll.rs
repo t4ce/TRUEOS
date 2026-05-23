@@ -1,3 +1,8 @@
+use crate::io;
+use ::core::fmt;
+#[cfg(all(debug_assertions, not(target_os = "wasi")))]
+use core::sync::atomic::{AtomicBool, Ordering};
+use core::time::Duration;
 #[cfg(all(
     unix,
     not(mio_unsupported_force_poll_poll),
@@ -18,12 +23,7 @@
 ))]
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 #[cfg(all(debug_assertions, not(target_os = "wasi")))]
-use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(all(debug_assertions, not(target_os = "wasi")))]
 use std::sync::Arc;
-use core::time::Duration;
-use core::fmt;
-use crate::io;
 
 use crate::{event, sys, Events, Interest, Token};
 
@@ -538,7 +538,7 @@ impl Registry {
     /// use std::net::SocketAddr;
     /// use core::time::Duration;
     /// use std as hostlib;
-/// use hostlib::time::Instant;
+    /// use hostlib::time::Instant;
     ///
     /// let mut poll = Poll::new()?;
     ///

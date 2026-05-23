@@ -327,9 +327,9 @@ impl AsRef<[u8]> for Signature {
 }
 
 /// Key pairs for signing messages (private key and public key).
-pub trait KeyPair: core::fmt::Debug + Send + Sized + Sync {
+pub trait KeyPair: ::core::fmt::Debug + Send + Sized + Sync {
     /// The type of the public key.
-    type PublicKey: AsRef<[u8]> + core::fmt::Debug + Clone + Send + Sized + Sync;
+    type PublicKey: AsRef<[u8]> + ::core::fmt::Debug + Clone + Send + Sized + Sync;
 
     /// The public key for the key pair.
     fn public_key(&self) -> &Self::PublicKey;
@@ -343,7 +343,7 @@ pub(crate) const MAX_LEN: usize = 1/*tag:SEQUENCE*/ + 2/*len*/ +
     (2 * (1/*tag:INTEGER*/ + 1/*len*/ + 1/*zero*/ + ec::SCALAR_MAX_BYTES));
 
 /// A signature verification algorithm.
-pub trait VerificationAlgorithm: core::fmt::Debug + Sync + sealed::Sealed {
+pub trait VerificationAlgorithm: ::core::fmt::Debug + Sync + sealed::Sealed {
     /// Verify the signature `signature` of message `msg` with the public key
     /// `public_key`.
     fn verify(
@@ -370,11 +370,11 @@ where
     }
 }
 
-impl<B: core::fmt::Debug> core::fmt::Debug for UnparsedPublicKey<B>
+impl<B: ::core::fmt::Debug> ::core::fmt::Debug for UnparsedPublicKey<B>
 where
     B: AsRef<[u8]>,
 {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
         f.debug_struct("UnparsedPublicKey")
             .field("algorithm", &self.algorithm)
             .field("bytes", &debug::HexStr(self.bytes.as_ref()))

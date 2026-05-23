@@ -2,7 +2,7 @@ use alloc::{boxed::Box, vec::Vec};
 
 use crate::runtime::prelude::*;
 use core::ptr::NonNull;
-use std::sync::atomic::Ordering;
+use core::sync::atomic::Ordering;
 
 use crate::loom::sync::{Mutex, MutexGuard};
 use crate::util::metric_atomics::{MetricAtomicU64, MetricAtomicUsize};
