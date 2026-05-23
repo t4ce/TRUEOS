@@ -922,6 +922,8 @@ pub async fn bsp_service(controller_index: usize) {
     const BOOT_USB_DEFER_MS: u64 = 10_000;
     const RETRY_MS: u64 = 1000;
     const HOTPLUG_POLL_MS: u64 = 1000;
+    const FOLLOWUP_PROBE_MS: u64 = 50;
+    const SETTLED_PROBE_FOLLOWUPS: u8 = 3;
     const INTEL_PROBE_SETTLE_MS: u64 = 0;
     const INTEL_REPROBE_MS: u64 = 1500;
     let spawner: Spawner = unsafe { Spawner::for_current_executor().await };
@@ -987,6 +989,7 @@ pub async fn bsp_service(controller_index: usize) {
 
             PROBE_REQUESTED[info.index].store(false, Ordering::Release);
             let mut quiet_probe_until = None;
+            let mut quiet_probe_followups = 0u8;
             let mut reprobe_until = None;
             install_event_handler(info.index, host.create_event_handler());
             if let Ok(token) = event_pump_task(info.index) {
@@ -1002,6 +1005,7 @@ pub async fn bsp_service(controller_index: usize) {
                 }
                 quiet_probe_until =
                     Some(Instant::now() + EmbassyDuration::from_millis(INTEL_PROBE_SETTLE_MS));
+                quiet_probe_followups = SETTLED_PROBE_FOLLOWUPS;
             } else {
                 probe_and_bind(&mut host, info, &spawner, false).await;
             }
@@ -1012,6 +1016,7 @@ pub async fn bsp_service(controller_index: usize) {
                         quiet_probe_until = Some(
                             Instant::now() + EmbassyDuration::from_millis(INTEL_PROBE_SETTLE_MS),
                         );
+                        quiet_probe_followups = SETTLED_PROBE_FOLLOWUPS;
                     } else {
                         probe_and_bind(&mut host, info, &spawner, false).await;
                     }
@@ -1026,8 +1031,14 @@ pub async fn bsp_service(controller_index: usize) {
                         }
                         probe_and_bind(&mut host, info, &spawner, false).await;
                         hotplug_poll_deadline =
-                            Instant::now() + EmbassyDuration::from_millis(HOTPLUG_POLL_MS);
-                        quiet_probe_until = None;
+                            Instant::now() + EmbassyDuration::from_millis(FOLLOWUP_PROBE_MS);
+                        if quiet_probe_followups > 0 {
+                            quiet_probe_followups = quiet_probe_followups.saturating_sub(1);
+                            quiet_probe_until =
+                                Some(Instant::now() + EmbassyDuration::from_millis(FOLLOWUP_PROBE_MS));
+                        } else {
+                            quiet_probe_until = None;
+                        }
                     }
                 }
                 if let Some(deadline) = reprobe_until {

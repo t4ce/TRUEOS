@@ -361,6 +361,73 @@ impl<'a> RingBinding<'a> {
     }
 }
 
+#[repr(u32)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum MachineOpKind {
+    AddU64 = 1,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct MachineOpArtifact {
+    pub name: &'static str,
+    pub kind: MachineOpKind,
+    pub input_count: u8,
+    pub output_count: u8,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct MachineOpResult {
+    pub status: SilkStatus,
+    pub value: u64,
+}
+
+impl MachineOpArtifact {
+    pub const fn add_u64(name: &'static str) -> Self {
+        Self {
+            name,
+            kind: MachineOpKind::AddU64,
+            input_count: 2,
+            output_count: 1,
+        }
+    }
+
+    pub fn run_add_u64(self, lhs: u64, rhs: u64) -> MachineOpResult {
+        if self.kind != MachineOpKind::AddU64 || self.input_count != 2 || self.output_count != 1 {
+            return MachineOpResult {
+                status: SilkStatus::Corrupt,
+                value: 0,
+            };
+        }
+
+        MachineOpResult {
+            status: SilkStatus::Ok,
+            value: machine_add_u64(lhs, rhs),
+        }
+    }
+}
+
+#[inline(always)]
+fn machine_add_u64(lhs: u64, rhs: u64) -> u64 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let mut value = lhs;
+        unsafe {
+            core::arch::asm!(
+                "add {0}, {1}",
+                inout(reg) value,
+                in(reg) rhs,
+                options(nomem, nostack)
+            );
+        }
+        value
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        lhs.wrapping_add(rhs)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Plan {
     pub arena: ArenaBinding,

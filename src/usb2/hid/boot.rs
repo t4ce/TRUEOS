@@ -13,8 +13,13 @@ const LED_VID_JGINYUE: u16 = 0x0416;
 const LED_PID_JGINYUE: u16 = 0xA125;
 const MOUSE_VID_LAVIEW_CASTOR: u16 = 0x22D4;
 const MOUSE_PID_LAVIEW_CASTOR: u16 = 0x1321;
+const KEYBOARD_VID_CORSAIR: u16 = 0x1B1C;
+const KEYBOARD_PID_CORSAIR: u16 = 0x1B39;
 const QEMU_HID_VID: u16 = 0x0627;
 const QEMU_HID_PID: u16 = 0x0001;
+const KNOWN_BOOT_HID_STARTUP_SETTLE_MS: u64 = 1500;
+const KNOWN_BOOT_HID_TRANSIENT_BACKOFF_MIN_MS: u64 = 50;
+const KNOWN_BOOT_HID_TRANSIENT_BACKOFF_MAX_MS: u64 = 1000;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum HidBootKind {
@@ -210,6 +215,42 @@ fn unregister_active_hid_stream(stream: ActiveHidStream) -> bool {
         .any(|active| active.controller_id == stream.controller_id)
 }
 
+fn skip_known_boot_class_controls(
+    kind: HidBootKind,
+    vendor_id: u16,
+    product_id: u16,
+) -> Option<&'static str> {
+    match (kind, vendor_id, product_id) {
+        (HidBootKind::Mouse, MOUSE_VID_LAVIEW_CASTOR, MOUSE_PID_LAVIEW_CASTOR) => {
+            Some("known-mouse-hotpath")
+        }
+        (HidBootKind::Keyboard, KEYBOARD_VID_CORSAIR, KEYBOARD_PID_CORSAIR) => {
+            Some("known-keyboard-hotpath")
+        }
+        _ => None,
+    }
+}
+
+fn known_boot_hid_startup_settle_ms(
+    kind: HidBootKind,
+    vendor_id: u16,
+    product_id: u16,
+) -> Option<u64> {
+    match (kind, vendor_id, product_id) {
+        (HidBootKind::Mouse, MOUSE_VID_LAVIEW_CASTOR, MOUSE_PID_LAVIEW_CASTOR)
+        | (HidBootKind::Keyboard, KEYBOARD_VID_CORSAIR, KEYBOARD_PID_CORSAIR) => {
+            Some(KNOWN_BOOT_HID_STARTUP_SETTLE_MS)
+        }
+        _ => None,
+    }
+}
+
+fn transient_read_backoff_ms(count: u32) -> u64 {
+    let shift = count.saturating_sub(1).min(5);
+    let delay = KNOWN_BOOT_HID_TRANSIENT_BACKOFF_MIN_MS.saturating_mul(1u64 << shift);
+    delay.min(KNOWN_BOOT_HID_TRANSIENT_BACKOFF_MAX_MS)
+}
+
 #[embassy_executor::task(pool_size = 8)]
 async fn hid_boot_stream_task(
     mut device: crab_usb::Device,
@@ -224,6 +265,21 @@ async fn hid_boot_stream_task(
     let ep_target = endpoint_target_from_address(target.in_endpoint);
     let mut boot_protocol_ok = false;
     let mut set_idle_ok = false;
+    let skip_class_controls =
+        skip_known_boot_class_controls(target.kind, vendor_id, product_id);
+
+    if let Some(delay_ms) =
+        known_boot_hid_startup_settle_ms(target.kind, vendor_id, product_id)
+    {
+        crate::log_info!(target: "usb";
+            "crabusb: hid {} {:04X}:{:04X} startup settle before endpoint claim delay_ms={}\n",
+            target.kind.as_str(),
+            vendor_id,
+            product_id,
+            delay_ms
+        );
+        Timer::after(EmbassyDuration::from_millis(delay_ms)).await;
+    }
 
     if let Err(err) = device.set_configuration(target.configuration_value).await {
         crate::log_info!(target: "usb";
@@ -257,7 +313,16 @@ async fn hid_boot_stream_task(
             }
         };
 
-    if matches!(target.kind, HidBootKind::Mouse | HidBootKind::Keyboard) && !target.generic_pointer
+    if let Some(reason) = skip_class_controls {
+        crate::log_info!(target: "usb";
+            "crabusb: hid {} {:04X}:{:04X} skip optional boot class controls if#{} reason={}\n",
+            target.kind.as_str(),
+            vendor_id,
+            product_id,
+            target.interface_number,
+            reason
+        );
+    } else if matches!(target.kind, HidBootKind::Mouse | HidBootKind::Keyboard) && !target.generic_pointer
     {
         match interface
             .device()
@@ -404,10 +469,12 @@ async fn hid_boot_stream_task(
         0u8,
         usize::from(target.in_max_packet_size.max(target.report_len as u16)),
     ));
+    let mut transient_read_errors = 0u32;
 
     loop {
         match interrupt_in.submit_and_wait(report.as_mut_slice()).await {
             Ok(read) => {
+                transient_read_errors = 0;
                 if read == 0 {
                     Timer::after(EmbassyDuration::from_millis(1)).await;
                     continue;
@@ -448,6 +515,26 @@ async fn hid_boot_stream_task(
                 }
             }
             Err(err) => {
+                if skip_class_controls.is_some() {
+                    transient_read_errors = transient_read_errors.saturating_add(1);
+                    let backoff_ms = transient_read_backoff_ms(transient_read_errors);
+                    if transient_read_errors <= 4
+                        || transient_read_errors.is_power_of_two()
+                    {
+                        crate::log_info!(target: "usb";
+                            "crabusb: hid {} {:04X}:{:04X} transient interrupt read error ep=0x{:02X} count={} backoff_ms={} err={:?}\n",
+                            target.kind.as_str(),
+                            vendor_id,
+                            product_id,
+                            target.in_endpoint,
+                            transient_read_errors,
+                            backoff_ms,
+                            err
+                        );
+                    }
+                    Timer::after(EmbassyDuration::from_millis(backoff_ms)).await;
+                    continue;
+                }
                 crate::log_info!(target: "usb";
                 "crabusb: hid {} {:04X}:{:04X} stream stop ep=0x{:02X} err={:?}\n",
                 target.kind.as_str(),

@@ -44,6 +44,7 @@ pub struct Core {
     inited_devices: BTreeMap<usize, Box<dyn DeviceOp>>,
     deferred_initial_superspeed: bool,
     deferred_initial_keyboard: bool,
+    deferred_superspeed_after_keyboard: bool,
 }
 
 fn is_xhci_command_timeout(err: &USBError) -> bool {
@@ -59,6 +60,7 @@ impl Core {
             inited_devices: BTreeMap::new(),
             deferred_initial_superspeed: false,
             deferred_initial_keyboard: false,
+            deferred_superspeed_after_keyboard: false,
         }
     }
 
@@ -109,6 +111,7 @@ impl Core {
                 && addr_infos.iter().any(|addr| {
                     matches!(addr.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus)
                 });
+            let mut addressed_keyboard_this_probe = false;
             for addr_info in addr_infos {
                 if !self.deferred_initial_keyboard && addr_info.root_port_id == 3 {
                     info!(
@@ -118,6 +121,26 @@ impl Core {
                         addr_info.port_speed
                     );
                     self.deferred_initial_keyboard = true;
+                    if let Some(hub) = self.hubs.get_mut(id) {
+                        hub.backend.rearm_port(addr_info.port_id);
+                    }
+                    continue;
+                }
+
+                if !self.deferred_superspeed_after_keyboard
+                    && addressed_keyboard_this_probe
+                    && matches!(
+                        addr_info.port_speed,
+                        Speed::SuperSpeed | Speed::SuperSpeedPlus
+                    )
+                {
+                    info!(
+                        "kcore: deferred superspeed after keyboard address root_port={} port={} speed={:?}",
+                        addr_info.root_port_id,
+                        addr_info.port_id,
+                        addr_info.port_speed
+                    );
+                    self.deferred_superspeed_after_keyboard = true;
                     if let Some(hub) = self.hubs.get_mut(id) {
                         hub.backend.rearm_port(addr_info.port_id);
                     }
@@ -203,6 +226,9 @@ impl Core {
                     desc.subclass,
                     desc.protocol
                 );
+                if addr_info.root_port_id == 3 {
+                    addressed_keyboard_this_probe = true;
+                }
 
                 if let Some(hub_settings) =
                     HubDevice::is_hub(device.descriptor(), device.configuration_descriptors())

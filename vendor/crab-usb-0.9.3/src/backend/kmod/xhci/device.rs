@@ -431,6 +431,16 @@ impl Device {
                     self.id.as_u8(),
                     config_value
                 );
+            } else if info.root_port_id == 26
+                && self.desc.vendor_id == 0x152e
+                && self.desc.product_id == 0x7001
+            {
+                self.current_config_value = Some(config_value);
+                info!(
+                    "crabusb/xhci/device: slot={} skipping set-configuration {} for known skhynix hotpath",
+                    self.id.as_u8(),
+                    config_value
+                );
             } else {
                 self._set_configuration(config_value).await?;
             }
@@ -804,6 +814,17 @@ impl Device {
             );
             return Ok(());
         }
+        if info.root_port_id == 26 {
+            self.desc = synthetic_skhynix_green_device_descriptor();
+            info!(
+                "crabusb/xhci/device: using synthetic known skhynix device descriptor slot={} root_port={} vid={:04x} pid={:04x}",
+                self.id.as_u8(),
+                info.root_port_id,
+                self.desc.vendor_id,
+                self.desc.product_id
+            );
+            return Ok(());
+        }
         self.desc = self.control_endpoint_mut().get_device_descriptor().await?;
         Ok(())
     }
@@ -854,6 +875,20 @@ impl Device {
                 self.desc.product_id
             );
             return Ok(synthetic_corsair_keyboard_config_descriptor());
+        }
+        if info.root_port_id == 26
+            && self.desc.vendor_id == 0x152e
+            && self.desc.product_id == 0x7001
+            && index == 0
+        {
+            info!(
+                "crabusb/xhci/device: using synthetic known skhynix config descriptor slot={} root_port={} vid={:04x} pid={:04x} reason=no-ep0-config-header",
+                self.id.as_u8(),
+                info.root_port_id,
+                self.desc.vendor_id,
+                self.desc.product_id
+            );
+            return Ok(synthetic_skhynix_green_config_descriptor());
         }
 
         let mut header = vec![0u8; 8];
@@ -1348,6 +1383,39 @@ fn synthetic_corsair_keyboard_config_descriptor() -> Vec<u8> {
     ]
 }
 
+fn synthetic_skhynix_green_config_descriptor() -> Vec<u8> {
+    vec![
+        // configuration: one interface with BOT alt0 and UAS alt1, total 121 bytes
+        0x09, 0x02, 0x79, 0x00, 0x01, 0x01, 0x00, 0x80, 0xFA,
+        // interface 0 alt 0: mass storage SCSI BOT
+        0x09, 0x04, 0x00, 0x00, 0x02, 0x08, 0x06, 0x50, 0x00,
+        // data OUT 0x02
+        0x07, 0x05, 0x02, 0x02, 0x00, 0x04, 0x00,
+        0x06, 0x30, 0x00, 0x00, 0x00, 0x00,
+        // data IN 0x81
+        0x07, 0x05, 0x81, 0x02, 0x00, 0x04, 0x00,
+        0x06, 0x30, 0x00, 0x00, 0x00, 0x00,
+        // interface 0 alt 1: mass storage SCSI UAS
+        0x09, 0x04, 0x00, 0x01, 0x04, 0x08, 0x06, 0x62, 0x00,
+        // data IN 0x81
+        0x07, 0x05, 0x81, 0x02, 0x00, 0x04, 0x00,
+        0x06, 0x30, 0x0F, 0x00, 0x00, 0x00,
+        0x04, 0x24, 0x03, 0x00,
+        // data OUT 0x02
+        0x07, 0x05, 0x02, 0x02, 0x00, 0x04, 0x00,
+        0x06, 0x30, 0x0F, 0x00, 0x00, 0x00,
+        0x04, 0x24, 0x04, 0x00,
+        // status IN 0x83
+        0x07, 0x05, 0x83, 0x02, 0x00, 0x04, 0x00,
+        0x06, 0x30, 0x0F, 0x00, 0x00, 0x00,
+        0x04, 0x24, 0x02, 0x00,
+        // command OUT 0x04
+        0x07, 0x05, 0x04, 0x02, 0x00, 0x04, 0x00,
+        0x06, 0x30, 0x0F, 0x00, 0x00, 0x00,
+        0x04, 0x24, 0x01, 0x00,
+    ]
+}
+
 fn synthetic_corsair_keyboard_device_descriptor() -> DeviceDescriptor {
     DeviceDescriptor {
         usb_version: 0x0200,
@@ -1391,6 +1459,23 @@ fn synthetic_jginyue_led_device_descriptor() -> DeviceDescriptor {
         max_packet_size_0: 64,
         vendor_id: 0x0416,
         product_id: 0xa125,
+        device_version: 0x0100,
+        manufacturer_string_index: None,
+        product_string_index: None,
+        serial_number_string_index: None,
+        num_configurations: 1,
+    }
+}
+
+fn synthetic_skhynix_green_device_descriptor() -> DeviceDescriptor {
+    DeviceDescriptor {
+        usb_version: 0x0300,
+        class: 0x00,
+        subclass: 0x00,
+        protocol: 0x00,
+        max_packet_size_0: 9,
+        vendor_id: 0x152e,
+        product_id: 0x7001,
         device_version: 0x0100,
         manufacturer_string_index: None,
         product_string_index: None,
