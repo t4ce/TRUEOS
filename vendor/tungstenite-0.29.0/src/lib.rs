@@ -1,6 +1,5 @@
 //! Lightweight, flexible WebSockets for Rust.
 #![deny(
-#![allow(missing_docs)]
     missing_docs,
     missing_copy_implementations,
     missing_debug_implementations,
@@ -12,6 +11,7 @@
     unused_imports,
     unused_import_braces
 )]
+#![allow(missing_docs)]
 #![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
 // This can be removed when `error::Error::Http`, `handshake::HandshakeError::Interrupted` and
 // `handshake::server::ErrorResponse` are boxed.

@@ -1,11 +1,11 @@
 #![allow(clippy::needless_doctest_main)]
 #![warn(
-#![allow(missing_docs)]
     missing_debug_implementations,
     missing_docs,
     rust_2018_idioms,
     unreachable_pub
 )]
+#![allow(missing_docs)]
 #![doc(test(
     no_crate_inject,
     attr(deny(warnings, rust_2018_idioms), allow(dead_code, unused_variables))

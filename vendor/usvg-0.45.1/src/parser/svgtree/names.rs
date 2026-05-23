@@ -5,7 +5,6 @@
 // See ./codegen for details.
 
 /// An element ID.
-#![allow(missing_docs)]
 #[allow(missing_docs)]
 #[derive(Clone, Copy, PartialEq)]
 pub enum EId {

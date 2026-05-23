@@ -1,10 +1,10 @@
 #![allow(
-#![allow(missing_docs)]
     clippy::cognitive_complexity,
     clippy::large_enum_variant,
     clippy::module_inception,
     clippy::needless_doctest_main
 )]
+#![allow(missing_docs)]
 #![warn(
     missing_debug_implementations,
     missing_docs,

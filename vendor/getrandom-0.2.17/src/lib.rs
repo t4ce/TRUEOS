@@ -200,9 +200,9 @@
 //! [ES modules]: https://nodejs.org/api/esm.html
 //! [`sys_read_entropy`]: https://github.com/hermit-os/kernel/blob/315f58ff5efc81d9bf0618af85a59963ff55f8b1/src/syscalls/entropy.rs#L47-L55
 //! [platform-support]: https://doc.rust-lang.org/stable/rustc/platform-support.html
-
-#![doc(
 #![allow(missing_docs)]
+#![doc(
+
     html_logo_url = "https://www.rust-lang.org/logos/rust-logo-128x128-blk.png",
     html_favicon_url = "https://www.rust-lang.org/favicon.ico",
     html_root_url = "https://docs.rs/getrandom/0.2.17"

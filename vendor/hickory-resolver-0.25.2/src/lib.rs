@@ -176,7 +176,6 @@
 
 // LIBRARY WARNINGS
 #![warn(
-#![allow(missing_docs)]
     clippy::default_trait_access,
     clippy::dbg_macro,
     clippy::print_stdout,
@@ -189,6 +188,7 @@
     rust_2018_idioms,
     unreachable_pub
 )]
+#![allow(missing_docs)]
 #![recursion_limit = "128"]
 #![allow(clippy::needless_doctest_main, clippy::single_component_path_imports)]
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
