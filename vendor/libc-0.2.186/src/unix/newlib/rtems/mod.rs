@@ -119,7 +119,7 @@ safe_f! {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn futimens(fd: c_int, times: *const crate::timespec) -> c_int;
     pub fn writev(fd: c_int, iov: *const crate::iovec, iovcnt: c_int) -> ssize_t;
     pub fn readv(fd: c_int, iov: *const crate::iovec, iovcnt: c_int) -> ssize_t;

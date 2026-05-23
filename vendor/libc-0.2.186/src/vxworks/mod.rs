@@ -1477,7 +1477,7 @@ f! {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn isalnum(c: c_int) -> c_int;
     pub fn isalpha(c: c_int) -> c_int;
     pub fn iscntrl(c: c_int) -> c_int;
@@ -1615,7 +1615,7 @@ extern "C" {
     ) -> c_int;
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn fprintf(stream: *mut crate::FILE, format: *const c_char, ...) -> c_int;
     pub fn printf(format: *const c_char, ...) -> c_int;
     pub fn snprintf(s: *mut c_char, n: size_t, format: *const c_char, ...) -> c_int;
@@ -1755,7 +1755,7 @@ extern "C" {
     pub fn utime(file: *const c_char, buf: *const utimbuf) -> c_int;
 }
 
-extern "C" {
+unsafe extern "C" {
     // stdlib.h
     pub fn memalign(block_size: size_t, size_arg: size_t) -> *mut c_void;
 

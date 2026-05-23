@@ -281,7 +281,7 @@ safe_f! {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     // Return type c_int was removed in FreeBSD 12
     pub fn setgrent() -> c_int;
 

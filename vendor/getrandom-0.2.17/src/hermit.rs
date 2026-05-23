@@ -7,7 +7,7 @@ use core::{mem::MaybeUninit, num::NonZeroU32};
 /// https://github.com/hermitcore/libhermit-rs/blob/main/src/errno.rs
 const MIN_RET_CODE: isize = -(i32::MAX as isize);
 
-extern "C" {
+unsafe extern "C" {
     fn sys_read_entropy(buffer: *mut u8, length: usize, flags: u32) -> isize;
 }
 

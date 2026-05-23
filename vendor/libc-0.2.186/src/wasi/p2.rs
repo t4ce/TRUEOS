@@ -129,7 +129,7 @@ pub const TCP_KEEPCNT: c_int = 6;
 
 pub const EAI_SYSTEM: c_int = -11;
 
-extern "C" {
+unsafe extern "C" {
     pub fn socket(domain: c_int, type_: c_int, protocol: c_int) -> c_int;
     pub fn connect(fd: c_int, name: *const sockaddr, addrlen: socklen_t) -> c_int;
     pub fn bind(socket: c_int, addr: *const sockaddr, addrlen: socklen_t) -> c_int;

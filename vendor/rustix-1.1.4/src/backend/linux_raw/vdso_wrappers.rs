@@ -411,7 +411,7 @@ unsafe extern "C" fn getcpu_via_syscall(
 }
 
 #[cfg(target_arch = "x86")]
-extern "C" {
+unsafe extern "C" {
     /// A symbol pointing to an x86 `int 0x80` instruction. This “function”
     /// is only called from assembly, and only with the x86 syscall calling
     /// convention, so its signature here is not its true signature.

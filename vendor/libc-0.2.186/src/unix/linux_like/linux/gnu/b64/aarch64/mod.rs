@@ -949,7 +949,7 @@ pub const SYS_mseal: c_long = 462;
 pub const PROT_BTI: c_int = 0x10;
 pub const PROT_MTE: c_int = 0x20;
 
-extern "C" {
+unsafe extern "C" {
     pub fn sysctl(
         name: *mut c_int,
         namelen: c_int,

@@ -4,7 +4,7 @@
 
 use crate::prelude::*;
 
-extern "C" {
+unsafe extern "C" {
     #[cfg(any(target_os = "android", any(target_os = "linux", target_os = "trueos")))]
     pub fn pthread_atfork(
         prepare: Option<unsafe extern "C" fn()>,

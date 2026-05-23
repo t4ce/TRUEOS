@@ -223,7 +223,7 @@ pub const _SC_XOPEN_STREAMS: c_int = 246;
 pub const _SC_THREAD_ROBUST_PRIO_INHERIT: c_int = 247;
 pub const _SC_THREAD_ROBUST_PRIO_PROTECT: c_int = 248;
 
-extern "C" {
+unsafe extern "C" {
     // File operations
     pub fn access(pathname: *const c_char, mode: c_int) -> c_int;
     pub fn close(fd: c_int) -> c_int;

@@ -5,7 +5,7 @@ use core::{ffi::c_void, mem::MaybeUninit, num::NonZeroU32, ptr};
 const BCRYPT_USE_SYSTEM_PREFERRED_RNG: u32 = 0x00000002;
 
 #[link(name = "bcrypt")]
-extern "system" {
+unsafe extern "system" {
     fn BCryptGenRandom(
         hAlgorithm: *mut c_void,
         pBuffer: *mut u8,
@@ -17,7 +17,7 @@ extern "system" {
 // Forbidden when targetting UWP
 #[cfg(not(target_vendor = "uwp"))]
 #[link(name = "advapi32")]
-extern "system" {
+unsafe extern "system" {
     #[link_name = "SystemFunction036"]
     fn RtlGenRandom(RandomBuffer: *mut c_void, RandomBufferLength: u32) -> u8;
 }

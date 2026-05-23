@@ -4427,7 +4427,7 @@ safe_f! {
 
 cfg_if! {
     if #[cfg(not(any(freebsd10, freebsd11)))] {
-        extern "C" {
+        unsafe extern "C" {
             pub fn fhlink(fhp: *mut fhandle_t, to: *const c_char) -> c_int;
             pub fn fhlinkat(fhp: *mut fhandle_t, tofd: c_int, to: *const c_char) -> c_int;
             pub fn fhreadlink(fhp: *mut fhandle_t, buf: *mut c_char, bufsize: size_t) -> c_int;
@@ -4436,7 +4436,7 @@ cfg_if! {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     #[cfg_attr(doc, doc(alias = "__errno_location"))]
     #[cfg_attr(doc, doc(alias = "errno"))]
     pub fn __error() -> *mut c_int;
@@ -4903,7 +4903,7 @@ extern "C" {
 }
 
 #[link(name = "memstat")]
-extern "C" {
+unsafe extern "C" {
     pub fn memstat_strerror(error: c_int) -> *const c_char;
     pub fn memstat_mtl_alloc() -> *mut memory_type_list;
     pub fn memstat_mtl_first(list: *mut memory_type_list) -> *mut memory_type;
@@ -4919,7 +4919,7 @@ extern "C" {
 }
 
 #[link(name = "kvm")]
-extern "C" {
+unsafe extern "C" {
     pub fn kvm_dpcpu_setcpu(kd: *mut crate::kvm_t, cpu: c_uint) -> c_int;
     pub fn kvm_getargv(
         kd: *mut crate::kvm_t,
@@ -4962,7 +4962,7 @@ extern "C" {
 }
 
 #[link(name = "util")]
-extern "C" {
+unsafe extern "C" {
     pub fn extattr_namespace_to_string(attrnamespace: c_int, string: *mut *mut c_char) -> c_int;
     pub fn extattr_string_to_namespace(string: *const c_char, attrnamespace: *mut c_int) -> c_int;
     pub fn realhostname(host: *mut c_char, hsize: size_t, ip: *const crate::in_addr) -> c_int;
@@ -5006,7 +5006,7 @@ extern "C" {
 }
 
 #[link(name = "procstat")]
-extern "C" {
+unsafe extern "C" {
     pub fn procstat_open_sysctl() -> *mut procstat;
     pub fn procstat_getfiles(
         procstat: *mut procstat,
@@ -5098,7 +5098,7 @@ extern "C" {
 }
 
 #[link(name = "rt")]
-extern "C" {
+unsafe extern "C" {
     pub fn timer_create(clock_id: clockid_t, evp: *mut sigevent, timerid: *mut timer_t) -> c_int;
     pub fn timer_delete(timerid: timer_t) -> c_int;
     pub fn timer_getoverrun(timerid: timer_t) -> c_int;
@@ -5112,7 +5112,7 @@ extern "C" {
 }
 
 #[link(name = "devstat")]
-extern "C" {
+unsafe extern "C" {
     pub fn devstat_getnumdevs(kd: *mut crate::kvm_t) -> c_int;
     pub fn devstat_getgeneration(kd: *mut crate::kvm_t) -> c_long;
     pub fn devstat_getversion(kd: *mut crate::kvm_t) -> c_int;

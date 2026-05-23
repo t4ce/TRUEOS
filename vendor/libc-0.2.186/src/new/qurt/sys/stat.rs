@@ -30,7 +30,7 @@ pub const S_IROTH: mode_t = 0o0004;
 pub const S_IWOTH: mode_t = 0o0002;
 pub const S_IXOTH: mode_t = 0o0001;
 
-extern "C" {
+unsafe extern "C" {
     pub fn stat(pathname: *const c_char, statbuf: *mut stat) -> c_int;
     pub fn fstat(fd: c_int, statbuf: *mut stat) -> c_int;
 }

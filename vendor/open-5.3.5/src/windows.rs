@@ -236,7 +236,7 @@ mod ffi {
     }
 
     #[link(name = "shell32")]
-    extern "system" {
+    unsafe extern "system" {
         pub fn ShellExecuteExW(info: *mut SHELLEXECUTEINFOW) -> isize;
         pub fn ILCreateFromPathW(pszpath: *const u16) -> *mut ITEMIDLIST;
         pub fn SHOpenFolderAndSelectItems(
@@ -249,7 +249,7 @@ mod ffi {
     }
 
     #[link(name = "ole32")]
-    extern "system" {
+    unsafe extern "system" {
         pub fn CoInitialize(pvreserved: *const core::ffi::c_void) -> i32;
     }
 }

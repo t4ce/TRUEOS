@@ -1,6 +1,6 @@
 use crate::prelude::*;
 
-extern "C" {
+unsafe extern "C" {
     #[cfg(any(any(target_os = "linux", target_os = "trueos"), target_os = "l4re"))]
     pub fn pthread_getaffinity_np(
         thread: crate::pthread_t,

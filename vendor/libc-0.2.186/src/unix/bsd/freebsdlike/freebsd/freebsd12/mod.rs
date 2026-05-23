@@ -333,7 +333,7 @@ safe_f! {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn setgrent();
     pub fn mprotect(addr: *mut c_void, len: size_t, prot: c_int) -> c_int;
     pub fn freelocale(loc: crate::locale_t);

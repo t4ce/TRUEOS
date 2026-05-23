@@ -10,7 +10,7 @@ pub const FILENAME_MAX: c_uint = 260;
 // End of file
 pub const EOF: c_int = -1;
 
-extern "C" {
+unsafe extern "C" {
     // File operations
     pub fn fopen(filename: *const c_char, mode: *const c_char) -> *mut FILE;
     pub fn freopen(filename: *const c_char, mode: *const c_char, stream: *mut FILE) -> *mut FILE;

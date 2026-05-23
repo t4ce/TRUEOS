@@ -36,7 +36,7 @@ pub const MS_SYNC: c_int = 0x04;
 pub const MCL_CURRENT: c_int = 0x01;
 pub const MCL_FUTURE: c_int = 0x02;
 
-extern "C" {
+unsafe extern "C" {
     pub fn mmap(
         addr: *mut c_void,
         len: size_t,

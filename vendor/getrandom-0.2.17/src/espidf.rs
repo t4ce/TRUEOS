@@ -2,7 +2,7 @@
 use crate::Error;
 use core::{ffi::c_void, mem::MaybeUninit};
 
-extern "C" {
+unsafe extern "C" {
     fn esp_fill_random(buf: *mut c_void, len: usize) -> u32;
 }
 

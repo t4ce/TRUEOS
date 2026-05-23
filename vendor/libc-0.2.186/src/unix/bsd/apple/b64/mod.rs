@@ -61,7 +61,7 @@ pub const BIOCSRTIMEOUT: c_ulong = 0x8010426d;
 pub const BIOCGRTIMEOUT: c_ulong = 0x4010426e;
 pub const BIOCSETFNR: c_ulong = 0x8010427e;
 
-extern "C" {
+unsafe extern "C" {
     pub fn exchangedata(path1: *const c_char, path2: *const c_char, options: c_uint) -> c_int;
 }
 

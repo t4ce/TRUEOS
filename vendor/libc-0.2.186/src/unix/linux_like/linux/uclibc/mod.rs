@@ -420,7 +420,7 @@ pub const UDP_GRO: c_int = 104;
 pub const UDP_SEGMENT: c_int = 103;
 pub const YESEXPR: c_int = ((5) << 8) | (0);
 
-extern "C" {
+unsafe extern "C" {
     pub fn gettimeofday(tp: *mut crate::timeval, tz: *mut crate::timezone) -> c_int;
 
     pub fn pthread_rwlockattr_getkind_np(

@@ -1640,7 +1640,7 @@ cfg_if! {
         any(target_env = "gnu", target_env = "musl", target_env = "ohos"),
         any(target_arch = "x86_64", target_arch = "x86")
     ))] {
-        extern "C" {
+        unsafe extern "C" {
             pub fn iopl(level: c_int) -> c_int;
             pub fn ioperm(from: c_ulong, num: c_ulong, turn_on: c_int) -> c_int;
         }
@@ -1649,7 +1649,7 @@ cfg_if! {
 
 cfg_if! {
     if #[cfg(all(not(target_env = "uclibc"), not(target_env = "ohos")))] {
-        extern "C" {
+        unsafe extern "C" {
             #[cfg_attr(gnu_file_offset_bits64, link_name = "aio_read64")]
             pub fn aio_read(aiocbp: *mut crate::aiocb) -> c_int;
             #[cfg_attr(gnu_file_offset_bits64, link_name = "aio_write64")]
@@ -1683,7 +1683,7 @@ cfg_if! {
 
 cfg_if! {
     if #[cfg(not(target_env = "uclibc"))] {
-        extern "C" {
+        unsafe extern "C" {
             #[cfg_attr(gnu_file_offset_bits64, link_name = "pwritev64")]
             pub fn pwritev(
                 fd: c_int,
@@ -1731,7 +1731,7 @@ cfg_if! {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     #[cfg_attr(
         not(any(target_env = "musl", target_env = "ohos")),
         link_name = "__xpg_strerror_r"
@@ -1979,7 +1979,7 @@ extern "C" {
 
 cfg_if! {
     if #[cfg(not(any(target_env = "musl", target_env = "ohos")))] {
-        extern "C" {
+        unsafe extern "C" {
             pub fn freopen64(
                 filename: *const c_char,
                 mode: *const c_char,

@@ -4,7 +4,7 @@ use core::{ffi::c_void, mem::MaybeUninit};
 
 // libsystem contains the libc of Darwin, and every binary ends up linked against it either way. This
 // makes it a more lightweight choice compared to `Security.framework`.
-extern "C" {
+unsafe extern "C" {
     // This RNG uses a thread-local CSPRNG to provide data, which is seeded by the operating system's root CSPRNG.
     // Its the best option after `getentropy` on modern Darwin-based platforms that also avoids the
     // high startup costs and linking of Security.framework.

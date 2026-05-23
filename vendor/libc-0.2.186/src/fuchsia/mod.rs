@@ -3135,14 +3135,14 @@ fn __MHDR_END(mhdr: *const msghdr) -> *mut c_uchar {
 
 #[link(name = "c")]
 #[link(name = "fdio")]
-extern "C" {}
+unsafe extern "C" {}
 
 extern_ty! {
     pub enum FILE {}
     pub enum fpos_t {} // FIXME(fuchsia): fill this out with a struct
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn isalnum(c: c_int) -> c_int;
     pub fn isalpha(c: c_int) -> c_int;
     pub fn iscntrl(c: c_int) -> c_int;

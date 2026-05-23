@@ -70,7 +70,7 @@ macro_rules! impl_int_from_uint {
         impl Distribution<$ty> for Standard {
             #[inline]
             fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> $ty {
-                rng.gen::<$uty>() as $ty
+                rng.r#gen::<$uty>() as $ty
             }
         }
     };
@@ -88,7 +88,7 @@ macro_rules! impl_nzint {
         impl Distribution<$ty> for Standard {
             fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> $ty {
                 loop {
-                    if let Some(nz) = $new(rng.gen()) {
+                    if let Some(nz) = $new(rng.r#gen()) {
                         break nz;
                     }
                 }

@@ -935,7 +935,7 @@ pub(crate) fn utimensat(
                 c::c_int
             ) -> c::c_int
         }
-        extern "C" {
+        unsafe extern "C" {
             fn setattrlist(
                 path: *const ffi::c_char,
                 attr_list: *const Attrlist,
@@ -1667,7 +1667,7 @@ pub(crate) fn futimens(fd: BorrowedFd<'_>, times: &Timestamps) -> io::Result<()>
         weak! {
             fn futimens(c::c_int, *const c::timespec) -> c::c_int
         }
-        extern "C" {
+        unsafe extern "C" {
             fn fsetattrlist(
                 fd: c::c_int,
                 attr_list: *const Attrlist,
@@ -2105,7 +2105,7 @@ pub(crate) unsafe fn fcopyfile(
     state: copyfile_state_t,
     flags: CopyfileFlags,
 ) -> io::Result<()> {
-    extern "C" {
+    unsafe extern "C" {
         fn fcopyfile(
             from: c::c_int,
             to: c::c_int,
@@ -2124,7 +2124,7 @@ pub(crate) unsafe fn fcopyfile(
 
 #[cfg(apple)]
 pub(crate) fn copyfile_state_alloc() -> io::Result<copyfile_state_t> {
-    extern "C" {
+    unsafe extern "C" {
         fn copyfile_state_alloc() -> copyfile_state_t;
     }
 
@@ -2138,7 +2138,7 @@ pub(crate) fn copyfile_state_alloc() -> io::Result<copyfile_state_t> {
 
 #[cfg(apple)]
 pub(crate) unsafe fn copyfile_state_free(state: copyfile_state_t) -> io::Result<()> {
-    extern "C" {
+    unsafe extern "C" {
         fn copyfile_state_free(state: copyfile_state_t) -> c::c_int;
     }
 
@@ -2161,7 +2161,7 @@ pub(crate) unsafe fn copyfile_state_get(
     flag: u32,
     dst: *mut c::c_void,
 ) -> io::Result<()> {
-    extern "C" {
+    unsafe extern "C" {
         fn copyfile_state_get(state: copyfile_state_t, flag: u32, dst: *mut c::c_void) -> c::c_int;
     }
 

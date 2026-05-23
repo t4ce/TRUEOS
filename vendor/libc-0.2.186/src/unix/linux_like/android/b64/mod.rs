@@ -193,7 +193,7 @@ f! {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn __system_property_wait(
         pi: *const crate::prop_info,
         __old_serial: u32,

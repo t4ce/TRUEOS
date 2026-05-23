@@ -434,7 +434,7 @@ pub const SYS_set_mempolicy_home_node: c_long = 450;
 pub const SYS_fchmodat2: c_long = 452;
 pub const SYS_mseal: c_long = 462;
 
-extern "C" {
+unsafe extern "C" {
     pub fn sysctl(
         name: *mut c_int,
         namelen: c_int,

@@ -550,7 +550,7 @@ safe_f! {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     #[cfg_attr(
         all(target_os = "macos", target_arch = "x86"),
         link_name = "getrlimit$UNIX2003"

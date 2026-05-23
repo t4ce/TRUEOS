@@ -39,7 +39,7 @@ pub const PTHREAD_SCOPE_PROCESS: c_int = 1;
 pub const PTHREAD_INHERIT_SCHED: c_int = 0;
 pub const PTHREAD_EXPLICIT_SCHED: c_int = 1;
 
-extern "C" {
+unsafe extern "C" {
     // Thread management
     pub fn pthread_create(
         thread: *mut pthread_t,

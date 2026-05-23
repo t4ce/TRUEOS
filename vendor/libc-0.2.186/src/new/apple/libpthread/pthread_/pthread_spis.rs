@@ -4,7 +4,7 @@
 
 use crate::prelude::*;
 
-extern "C" {
+unsafe extern "C" {
     pub fn pthread_create_from_mach_thread(
         thread: *mut crate::pthread_t,
         attr: *const crate::pthread_attr_t,

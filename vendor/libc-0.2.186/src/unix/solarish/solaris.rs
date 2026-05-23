@@ -156,7 +156,7 @@ pub const PRIV_USER: c_uint = PRIV_DEBUG
     | PRIV_TPD_KILLABLE
     | PRIV_PROC_TPD_RESET;
 
-extern "C" {
+unsafe extern "C" {
     // DIFF(main): changed to `*const *mut` in e77f551de9
     pub fn fexecve(fd: c_int, argv: *const *const c_char, envp: *const *const c_char) -> c_int;
 

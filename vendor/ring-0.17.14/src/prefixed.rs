@@ -31,7 +31,7 @@ macro_rules! prefixed_extern {
             $( -> $ret_ty:ty )?;
         )+
     } => {
-        extern "C" {
+        unsafe extern "C" {
             $(
                 prefixed_item! {
                     link_name
@@ -51,7 +51,7 @@ macro_rules! prefixed_extern {
         $( #[$meta:meta] )*
         $vis:vis static $name:ident: $typ:ty;
     } => {
-        extern "C" {
+        unsafe extern "C" {
             prefixed_item! {
                 link_name
                 $name
@@ -68,7 +68,7 @@ macro_rules! prefixed_extern {
         $( #[$meta:meta] )*
         $vis:vis static mut $name:ident: $typ:ty;
     } => {
-        extern "C" {
+        unsafe extern "C" {
             prefixed_item! {
                 link_name
                 $name

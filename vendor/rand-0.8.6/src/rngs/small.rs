@@ -52,7 +52,7 @@ type Rng = super::xoshiro128plusplus::Xoshiro128PlusPlus;
 /// // Create small, cheap to initialize and fast RNG with a random seed.
 /// // The randomness is supplied by the operating system.
 /// let mut small_rng = SmallRng::from_entropy();
-/// # let v: u32 = small_rng.gen();
+/// # let v: u32 = small_rng.r#gen();
 /// ```
 ///
 /// When initializing a lot of `SmallRng`'s, using [`thread_rng`] can be more

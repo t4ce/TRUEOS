@@ -89,7 +89,7 @@ s! {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn signal(sig: c_int, handler: sighandler_t) -> sighandler_t;
     pub fn kill(pid: pid_t, sig: c_int) -> c_int;
     pub fn raise(sig: c_int) -> c_int;

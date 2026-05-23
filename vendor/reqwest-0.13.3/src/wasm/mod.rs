@@ -20,7 +20,7 @@ pub use self::request::{Request, RequestBuilder};
 pub use self::response::Response;
 
 #[wasm_bindgen]
-extern "C" {
+unsafe extern "C" {
     #[wasm_bindgen(js_name = "setTimeout")]
     fn set_timeout(handler: &Function, timeout: i32) -> JsValue;
 

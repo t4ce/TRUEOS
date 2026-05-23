@@ -18,7 +18,7 @@ c_enum! {
 pub type pthread_introspection_hook_t =
     extern "C" fn(event: c_uint, thread: pthread_t, addr: *mut c_void, size: size_t);
 
-extern "C" {
+unsafe extern "C" {
     // Available from Big Sur
     pub fn pthread_introspection_hook_install(
         hook: pthread_introspection_hook_t,

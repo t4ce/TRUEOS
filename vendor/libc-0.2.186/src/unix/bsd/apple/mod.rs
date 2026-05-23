@@ -4303,7 +4303,7 @@ safe_f! {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn setgrent();
     #[doc(hidden)]
     #[deprecated(since = "0.2.49", note = "Deprecated in MacOSX 10.5")]
@@ -5125,7 +5125,7 @@ pub unsafe fn mach_task_self() -> crate::mach_port_t {
 
 cfg_if! {
     if #[cfg(target_os = "macos")] {
-        extern "C" {
+        unsafe extern "C" {
             pub fn clock_settime(clock_id: crate::clockid_t, tp: *const crate::timespec) -> c_int;
         }
     }
@@ -5137,7 +5137,7 @@ cfg_if! {
         target_os = "tvos",
         target_os = "visionos"
     ))] {
-        extern "C" {
+        unsafe extern "C" {
             pub fn memmem(
                 haystack: *const c_void,
                 haystacklen: size_t,
@@ -5158,7 +5158,7 @@ cfg_if! {
 // part of `std` means every Rust program gets it. Ideally we would have a link
 // modifier to only include these if they are used, but we do not.
 #[cfg_attr(not(feature = "rustc-dep-of-std"), link(name = "iconv"))]
-extern "C" {
+unsafe extern "C" {
     #[deprecated(note = "Will be removed in 1.0 to avoid the `iconv` dependency")]
     pub fn iconv_open(tocode: *const c_char, fromcode: *const c_char) -> iconv_t;
     #[deprecated(note = "Will be removed in 1.0 to avoid the `iconv` dependency")]

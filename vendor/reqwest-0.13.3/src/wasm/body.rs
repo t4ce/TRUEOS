@@ -205,7 +205,7 @@ mod tests {
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
     #[wasm_bindgen]
-    extern "C" {
+    unsafe extern "C" {
         // Use `js_namespace` here to bind `console.log(..)` instead of just
         // `log(..)`
         #[wasm_bindgen(js_namespace = console)]

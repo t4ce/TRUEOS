@@ -1027,7 +1027,7 @@ pub const REG_EFL: c_int = 16;
 pub const REG_UESP: c_int = 17;
 pub const REG_SS: c_int = 18;
 
-extern "C" {
+unsafe extern "C" {
     pub fn getcontext(ucp: *mut ucontext_t) -> c_int;
     pub fn setcontext(ucp: *const ucontext_t) -> c_int;
     pub fn makecontext(ucp: *mut ucontext_t, func: extern "C" fn(), argc: c_int, ...);

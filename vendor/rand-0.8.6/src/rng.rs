@@ -37,7 +37,7 @@ use core::{mem, slice};
 /// on references (including type-erased references). Unfortunately within the
 /// function `foo` it is not known whether `rng` is a reference type or not,
 /// hence many uses of `rng` require an extra reference, either explicitly
-/// (`distr.sample(&mut rng)`) or implicitly (`rng.gen()`); one may hope the
+/// (`distr.sample(&mut rng)`) or implicitly (`rng.r#gen()`); one may hope the
 /// optimiser can remove redundant references later.
 ///
 /// Example:
@@ -47,7 +47,7 @@ use core::{mem, slice};
 /// use rand::Rng;
 ///
 /// fn foo<R: Rng + ?Sized>(rng: &mut R) -> f32 {
-///     rng.gen()
+///     rng.r#gen()
 /// }
 ///
 /// # let v = foo(&mut thread_rng());
@@ -61,14 +61,14 @@ pub trait Rng: RngCore {
     /// use rand::{thread_rng, Rng};
     ///
     /// let mut rng = thread_rng();
-    /// let x: u32 = rng.gen();
+    /// let x: u32 = rng.r#gen();
     /// println!("{}", x);
-    /// println!("{:?}", rng.gen::<(f64, bool)>());
+    /// println!("{:?}", rng.r#gen::<(f64, bool)>());
     /// ```
     ///
     /// # Arrays and tuples
     ///
-    /// The `rng.gen()` method is able to generate arrays (up to 32 elements)
+    /// The `rng.r#gen()` method is able to generate arrays (up to 32 elements)
     /// and tuples (up to 12 elements), so long as all element types can be
     /// generated.
     /// When using `rustc` ≥ 1.51, enable the `min_const_gen` feature to support
@@ -81,16 +81,16 @@ pub trait Rng: RngCore {
     /// use rand::{thread_rng, Rng};
     ///
     /// let mut rng = thread_rng();
-    /// let tuple: (u8, i32, char) = rng.gen(); // arbitrary tuple support
+    /// let tuple: (u8, i32, char) = rng.r#gen(); // arbitrary tuple support
     ///
-    /// let arr1: [f32; 32] = rng.gen();        // array construction
+    /// let arr1: [f32; 32] = rng.r#gen();        // array construction
     /// let mut arr2 = [0u8; 128];
     /// rng.fill(&mut arr2);                    // array fill
     /// ```
     ///
     /// [`Standard`]: distributions::Standard
     #[inline]
-    fn gen<T>(&mut self) -> T
+    fn r#gen<T>(&mut self) -> T
     where Standard: Distribution<T> {
         Standard.sample(self)
     }
@@ -322,7 +322,7 @@ macro_rules! impl_fill_each {
         impl Fill for [$t] {
             fn try_fill<R: Rng + ?Sized>(&mut self, rng: &mut R) -> Result<(), Error> {
                 for elt in self.iter_mut() {
-                    *elt = rng.gen();
+                    *elt = rng.r#gen();
                 }
                 Ok(())
             }

@@ -666,7 +666,7 @@ pub const RB_AUTOBOOT: c_int = 0;
 pub const TCP_INFO: c_int = 9;
 
 #[link(name = "util")]
-extern "C" {
+unsafe extern "C" {
     pub fn setgrent();
     pub fn sem_destroy(sem: *mut sem_t) -> c_int;
     pub fn sem_init(sem: *mut sem_t, pshared: c_int, value: c_uint) -> c_int;
@@ -847,7 +847,7 @@ extern "C" {
     ) -> c_int;
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn reallocarray(ptr: *mut c_void, nmemb: size_t, size: size_t) -> *mut c_void;
     pub fn gethostid() -> c_long;
     pub fn sethostid(hostid: c_long) -> c_int;

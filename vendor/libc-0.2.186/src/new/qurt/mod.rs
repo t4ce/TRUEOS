@@ -253,7 +253,7 @@ pub const DT_LNK: c_uchar = 10;
 pub const DT_SOCK: c_uchar = 12;
 
 // Directory functions (dirent.h)
-extern "C" {
+unsafe extern "C" {
     pub fn opendir(name: *const c_char) -> *mut DIR;
     pub fn readdir(dirp: *mut DIR) -> *mut dirent;
     pub fn closedir(dirp: *const DIR) -> c_int;
@@ -261,7 +261,7 @@ extern "C" {
 }
 
 // Additional pthread functions
-extern "C" {
+unsafe extern "C" {
     pub fn pthread_attr_getstack(
         attr: *const pthread_attr_t,
         stackaddr: *mut *mut c_void,
@@ -275,24 +275,24 @@ extern "C" {
 }
 
 // Additional time functions
-extern "C" {
+unsafe extern "C" {
     pub fn clock_getcpuclockid(pid: pid_t, clock_id: *mut clockid_t) -> c_int;
 }
 
 // POSIX semaphore functions
-extern "C" {
+unsafe extern "C" {
     pub fn sem_open(name: *const c_char, oflag: c_int, ...) -> *mut sem_t;
     pub fn sem_close(sem: *mut sem_t) -> c_int;
     pub fn sem_unlink(name: *const c_char) -> c_int;
 }
 
 // Additional stdlib functions
-extern "C" {
+unsafe extern "C" {
     pub fn aligned_alloc(alignment: size_t, size: size_t) -> *mut c_void;
 }
 
 // String functions (string.h)
-extern "C" {
+unsafe extern "C" {
     pub fn strlen(s: *const c_char) -> size_t;
     pub fn strcpy(dest: *mut c_char, src: *const c_char) -> *mut c_char;
     pub fn strncpy(dest: *mut c_char, src: *const c_char, n: size_t) -> *mut c_char;
@@ -318,7 +318,7 @@ extern "C" {
 }
 
 // Additional unistd functions
-extern "C" {
+unsafe extern "C" {
     pub fn fork() -> pid_t;
     pub fn execve(
         filename: *const c_char,
@@ -328,7 +328,7 @@ extern "C" {
 }
 
 // Character classification functions (ctype.h)
-extern "C" {
+unsafe extern "C" {
     pub fn isalnum(c: c_int) -> c_int;
     pub fn isalpha(c: c_int) -> c_int;
     pub fn iscntrl(c: c_int) -> c_int;

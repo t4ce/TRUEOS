@@ -2557,7 +2557,7 @@ pub const UTILITY_HTMLVIEWER_ENABLE_ANALOG_HOLD: i32 = 0x000200;
 pub const UTILITY_HTMLVIEWER_ENABLE_FLASH: i32 = 0x000400;
 pub const UTILITY_HTMLVIEWER_DISABLE_LRTRIGGER: i32 = 0x000800;
 
-extern "C" {
+unsafe extern "C" {
     pub fn sceAudioChReserve(channel: i32, sample_count: i32, format: AudioFormat) -> i32;
     pub fn sceAudioChRelease(channel: i32) -> i32;
     pub fn sceAudioOutput(channel: i32, vol: i32, buf: *mut c_void) -> i32;
@@ -3149,7 +3149,7 @@ extern "C" {
     pub fn sceUsbGetDrvState(driver_name: *const u8) -> i32;
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn sceUsbCamSetupStill(param: *mut UsbCamSetupStillParam) -> i32;
     pub fn sceUsbCamSetupStillEx(param: *mut UsbCamSetupStillExParam) -> i32;
     pub fn sceUsbCamStillInputBlocking(buf: *mut u8, size: usize) -> i32;
@@ -3906,7 +3906,7 @@ extern "C" {
     pub fn sceNetAdhocGetPtpStat(size: *mut i32, stat: *mut SceNetAdhocPtpStat) -> i32;
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn sceNetAdhocMatchingInit(memsize: i32) -> i32;
     pub fn sceNetAdhocMatchingTerm() -> i32;
     pub fn sceNetAdhocMatchingCreate(
@@ -3970,7 +3970,7 @@ extern "C" {
     pub fn sceNetAdhocMatchingGetPoolStat(poolstat: *mut AdhocPoolStat) -> i32;
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn sceNetApctlInit(stack_size: i32, init_priority: i32) -> i32;
     pub fn sceNetApctlTerm() -> i32;
     pub fn sceNetApctlGetInfo(code: ApctlInfo, pinfo: *mut SceNetApctlInfo) -> i32;

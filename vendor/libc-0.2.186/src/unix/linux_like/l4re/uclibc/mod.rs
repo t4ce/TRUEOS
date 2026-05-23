@@ -483,7 +483,7 @@ pub const PTHREAD_RWLOCK_INITIALIZER: pthread_rwlock_t = pthread_rwlock_t {
     __rw_pshared: crate::PTHREAD_PROCESS_PRIVATE,
 };
 
-extern "C" {
+unsafe extern "C" {
     pub fn gettimeofday(tp: *mut crate::timeval, tz: *mut crate::timezone) -> c_int;
 
     pub fn pthread_rwlockattr_getkind_np(
