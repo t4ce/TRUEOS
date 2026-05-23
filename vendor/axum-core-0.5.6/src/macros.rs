@@ -1,5 +1,5 @@
 /// Private API.
-#![allow(missing_docs)]
+#[allow(missing_docs)]
 #[cfg(feature = "tracing")]
 #[doc(hidden)]
 #[macro_export]
@@ -315,4 +315,3 @@ macro_rules! __impl_deref {
         }
     };
 }
-
