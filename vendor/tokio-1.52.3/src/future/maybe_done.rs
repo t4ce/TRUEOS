@@ -70,24 +70,3 @@ impl<Fut: Future> Future for MaybeDone<Fut> {
         Poll::Ready(())
     }
 }
-
-// Test for https://github.com/tokio-rs/tokio/issues/6729
-
-    impl Future for ThingAdder<'_> {
-        type Output = ();
-
-        fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-            unsafe {
-                *self.get_unchecked_mut().thing += ", world";
-            }
-            Poll::Pending
-        }
-    }
-
-
-    struct DummyWaker;
-
-    impl Wake for DummyWaker {
-        fn wake(self: Arc<Self>) {}
-    }
-}

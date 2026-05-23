@@ -476,6 +476,10 @@ impl<'a> Socket<'a> {
     }
 }
 
+#[cfg(test)]
+mod test {
+    use super::*;
+
     #[cfg(feature = "proto-ipv6")]
     mod ipv6_locals {
         use super::*;

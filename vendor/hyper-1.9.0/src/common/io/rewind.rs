@@ -112,8 +112,3 @@ where
         self.inner.is_write_vectored()
     }
 }
-
-#[cfg(all(
-    any(feature = "client", feature = "server"),
-    any(feature = "http1", feature = "http2"),
-))]

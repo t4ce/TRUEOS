@@ -541,5 +541,3 @@ cfg_not_sync! {
     #[cfg(any(feature = "signal", all(unix, feature = "process")))]
     pub(crate) mod watch;
 }
-
-/// Unit tests

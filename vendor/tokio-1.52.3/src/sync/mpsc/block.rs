@@ -459,5 +459,3 @@ impl<T> ops::Index<usize> for Values<T> {
         self.0.index(index)
     }
 }
-
-#[cfg(all(test, not(loom)))]

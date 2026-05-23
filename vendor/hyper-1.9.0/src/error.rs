@@ -660,19 +660,3 @@ impl fmt::Display for TimedOut {
 }
 
 impl StdError for TimedOut {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use core::mem;
-
-    fn assert_send_sync<T: Send + Sync + 'static>() {}
-
-
-
-    #[cfg(feature = "http2")]
-
-    #[cfg(feature = "http2")]
-
-    #[cfg(feature = "http2")]
-}

@@ -270,7 +270,6 @@ fn next_impl(s: &mut Stream<'_>, prev_cmd: &mut Option<u8>) -> Result<PathSegmen
 }
 
 /// Returns `true` if the selected char is the command.
-#[rustfmt::skip]
 #[inline]
 fn is_cmd(c: u8) -> bool {
     matches!(c,
@@ -730,5 +729,3 @@ impl Iterator for SimplifyingPathParser<'_> {
         Some(Ok(self.buffer.remove(0)))
     }
 }
-
-#[rustfmt::skip]

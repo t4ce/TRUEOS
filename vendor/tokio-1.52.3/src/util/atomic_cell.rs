@@ -4,7 +4,7 @@ use crate::loom::sync::atomic::AtomicPtr;
 use crate::runtime::prelude::*;
 
 use core::ptr;
-use std::sync::atomic::Ordering::AcqRel;
+use core::sync::atomic::Ordering::AcqRel;
 
 pub(crate) struct AtomicCell<T> {
     data: AtomicPtr<T>,
