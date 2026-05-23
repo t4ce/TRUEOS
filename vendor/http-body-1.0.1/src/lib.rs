@@ -1,11 +1,11 @@
 #![deny(
-#![allow(missing_docs)]
     missing_debug_implementations,
     missing_docs,
     unreachable_pub,
     clippy::missing_safety_doc,
     clippy::undocumented_unsafe_blocks
 )]
+#![allow(missing_docs)]
 #![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
 #![cfg_attr(test, deny(warnings))]
 

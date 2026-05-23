@@ -160,7 +160,6 @@
 //! [examples]: https://github.com/tower-rs/tower-http/tree/master/examples
 
 #![warn(
-#![allow(missing_docs)]
     clippy::all,
     clippy::dbg_macro,
     clippy::todo,
@@ -191,6 +190,7 @@
     nonstandard_style,
     missing_docs
 )]
+#![allow(missing_docs)]
 #![deny(unreachable_pub)]
 #![allow(
     elided_lifetimes_in_paths,

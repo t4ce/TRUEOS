@@ -1,11 +1,11 @@
 #![deny(
-#![allow(missing_docs)]
     missing_docs,
     missing_debug_implementations,
     rust_2018_idioms,
     unused_imports,
     dead_code
 )]
+#![allow(missing_docs)]
 #![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 // Disallow warnings when running tests.

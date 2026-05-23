@@ -9,7 +9,6 @@
 #![no_std]
 // LIBRARY WARNINGS
 #![warn(
-#![allow(missing_docs)]
     clippy::alloc_instead_of_core,
     clippy::default_trait_access,
     clippy::dbg_macro,
@@ -25,6 +24,7 @@
     rust_2018_idioms,
     unreachable_pub
 )]
+#![allow(missing_docs)]
 #![allow(
     clippy::single_component_path_imports,
     clippy::upper_case_acronyms, // can be removed on a major release boundary

@@ -1,10 +1,10 @@
 #![warn(
-#![allow(missing_docs)]
     missing_debug_implementations,
     missing_docs,
     rust_2018_idioms,
     unreachable_pub
 )]
+#![allow(missing_docs)]
 #![cfg_attr(
     any(target_os = "trueos", target_os = "zkvm"),
     allow(
