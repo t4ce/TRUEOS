@@ -78,7 +78,7 @@ impl Core {
 
         for id in hub_ids {
             debug!("kcore: hub {:?} changed_ports begin", id);
-            let addr_infos = self.hub_changed_ports(id).await?;
+            let mut addr_infos = self.hub_changed_ports(id).await?;
             let parent_hub_id = self.hubs.get(id).unwrap().backend.slot_id();
             if addr_infos.is_empty() {
                 debug!(
@@ -93,6 +93,10 @@ impl Core {
                     parent_hub_id
                 );
             }
+            if addr_infos.iter().any(|addr| addr.root_port_id == 4) {
+                info!("kcore: temporary prioritize known mouse root_port=4 before other ports");
+                addr_infos.sort_by_key(|addr| if addr.root_port_id == 4 { 0 } else { 1 });
+            }
             let defer_superspeed = !self.deferred_initial_superspeed
                 && addr_infos.iter().any(|addr| {
                     !matches!(
@@ -104,6 +108,16 @@ impl Core {
                     matches!(addr.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus)
                 });
             for addr_info in addr_infos {
+                if addr_info.root_port_id == 11 {
+                    info!(
+                        "kcore: temporary skip known LED controller before address root_port={} port={} speed={:?}",
+                        addr_info.root_port_id,
+                        addr_info.port_id,
+                        addr_info.port_speed
+                    );
+                    continue;
+                }
+
                 if defer_superspeed
                     && matches!(
                         addr_info.port_speed,
