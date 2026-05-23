@@ -7,10 +7,7 @@ use crate::fs::trueos::Permissions;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::fs::Permissions;
 use std::io;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use crate::path::Path;
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::path::Path;
 
 /// Changes the permissions found on a file or a directory.
 ///

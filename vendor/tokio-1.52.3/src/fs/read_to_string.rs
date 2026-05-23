@@ -4,10 +4,7 @@ use crate::runtime::prelude::*;
 use alloc::borrow::ToOwned;
 
 use std::io;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use crate::path::Path;
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::path::Path;
 
 /// Creates a future which will open a file for reading and read the entire
 /// contents into a string and return said string.

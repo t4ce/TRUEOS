@@ -3,10 +3,7 @@ use crate::{fs::asyncify, util::as_ref::OwnedBuf};
 use alloc::borrow::ToOwned;
 
 use std::io;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use crate::path::Path;
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::path::Path;
 
 /// Creates a future that will open a file for writing and write the entire
 /// contents of `contents` to it.

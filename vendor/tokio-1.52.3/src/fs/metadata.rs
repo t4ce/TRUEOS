@@ -7,10 +7,7 @@ use crate::fs::trueos::Metadata;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::fs::Metadata;
 use std::io;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use crate::path::Path;
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::path::Path;
 
 /// Given a path, queries the file system to get information about a file,
 /// directory, etc.

@@ -1,6 +1,7 @@
 use crab_usb::usb_if;
 
 use crate::usb2::api::{EndpointBulkIn, EndpointBulkOut, EndpointSubmitExt};
+use core::task::Poll;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use usb_if::host::ControlSetup;
 use usb_if::transfer::{Recipient, Request, RequestType};
@@ -175,17 +176,117 @@ fn endpoint_dci(endpoint_addr: u8) -> u8 {
     }
 }
 
+fn read10_cdb_lba_blocks(cdb: &[u8]) -> Option<(u32, u16)> {
+    if cdb.len() < 10 || cdb[0] != scsi::OP_READ_10 {
+        return None;
+    }
+    let lba = u32::from_be_bytes([cdb[2], cdb[3], cdb[4], cdb[5]]);
+    let blocks = u16::from_be_bytes([cdb[7], cdb[8]]);
+    Some((lba, blocks))
+}
+
+fn trace_read10_phase(tag: u32, cdb: &[u8], len: usize) -> bool {
+    let Some((lba, blocks)) = read10_cdb_lba_blocks(cdb) else {
+        return false;
+    };
+    let tag_low = tag & 0xFF;
+    blocks != 1 || len != 512 || lba <= 4096 || tag_low < 0x10 || tag_low >= 0xA0 || (tag & 0x3F) == 0
+}
+
+fn log_read10_phase_enter(
+    phase: &'static str,
+    tag: u32,
+    cdb: &[u8],
+    ep: u8,
+    direction: u8,
+    len: usize,
+    ptr: *const u8,
+) {
+    let Some((lba, blocks)) = read10_cdb_lba_blocks(cdb) else {
+        return;
+    };
+    crate::log!(
+        "crabusb: mass read-10 phase={} tag=0x{:08X} lba={} blocks={} ep=0x{:02X} dci={} dir={} len={} ptr=0x{:X}\n",
+        phase,
+        tag,
+        lba,
+        blocks,
+        ep,
+        endpoint_dci(ep),
+        direction,
+        len,
+        ptr as usize
+    );
+}
+
+async fn with_read10_phase_trace_or_none<F: core::future::Future>(
+    fut: F,
+    cmd: &'static str,
+    phase: &'static str,
+    tag: u32,
+    ep: u8,
+    direction: u8,
+    len: usize,
+    ptr: *const u8,
+) -> Option<F::Output> {
+    if cmd != "read-10" {
+        return with_timeout_or_none(fut, BOT_IO_TIMEOUT_MS).await;
+    }
+
+    let mut fut = core::pin::pin!(fut);
+    let mut soft = core::pin::pin!(Timer::after(EmbassyDuration::from_millis(100)));
+    let mut timeout = core::pin::pin!(Timer::after(EmbassyDuration::from_millis(BOT_IO_TIMEOUT_MS)));
+    let mut traced = false;
+
+    core::future::poll_fn(|cx| {
+        if let Poll::Ready(out) = fut.as_mut().poll(cx) {
+            return Poll::Ready(Some(out));
+        }
+        if !traced && soft.as_mut().poll(cx).is_ready() {
+            log_bot_transport_debug(phase, cmd, tag, ep, direction, len, ptr);
+            traced = true;
+        }
+        if timeout.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(None);
+        }
+        Poll::Pending
+    })
+    .await
+}
+
 async fn read_and_validate_csw(
     bulk_in: &mut EndpointBulkIn,
     cmd: &'static str,
     expected_tag: u32,
     bulk_in_ep: u8,
+    trace_read10: bool,
 ) -> Result<(), MassProbeError> {
     let mut csw = [0u8; 13];
     let mut csw_got = 0usize;
     for _ in 0..BOT_IO_RETRIES {
-        let Some(result) =
-            with_timeout_or_none(bulk_in.submit_and_wait(&mut csw), BOT_IO_TIMEOUT_MS).await
+        let csw_len = csw.len();
+        let csw_ptr = csw.as_ptr();
+        if cmd == "read-10" && trace_read10 {
+            crate::log!(
+                "crabusb: mass read-10 phase=csw-enter tag=0x{:08X} ep=0x{:02X} dci={} dir=1 len={} ptr=0x{:X}\n",
+                expected_tag,
+                bulk_in_ep,
+                endpoint_dci(bulk_in_ep),
+                csw_len,
+                csw_ptr as usize
+            );
+        }
+        let Some(result) = with_read10_phase_trace_or_none(
+            bulk_in.submit_and_wait(&mut csw),
+            cmd,
+            "csw-wait",
+            expected_tag,
+            bulk_in_ep,
+            1,
+            csw_len,
+            csw_ptr,
+        )
+        .await
         else {
             log_bot_transport_debug(
                 "csw-timeout",
@@ -193,8 +294,8 @@ async fn read_and_validate_csw(
                 expected_tag,
                 bulk_in_ep,
                 1,
-                csw.len(),
-                csw.as_ptr(),
+                csw_len,
+                csw_ptr,
             );
             return Err(MassProbeError::Transport("csw-timeout"));
         };
@@ -240,10 +341,23 @@ async fn bot_command_in(
     tag: u32,
 ) -> Result<usize, MassProbeError> {
     let cbw = make_cbw(tag, data.len() as u32, 0x80, lun, cdb);
+    let trace_read10 = trace_read10_phase(tag, cdb, data.len());
     let mut sent = 0usize;
     for _ in 0..BOT_IO_RETRIES {
-        let Some(result) =
-            with_timeout_or_none(bulk_out.submit_and_wait(&cbw), BOT_IO_TIMEOUT_MS).await
+        if trace_read10 {
+            log_read10_phase_enter("cbw-enter", tag, cdb, bulk_out_ep, 2, cbw.len(), cbw.as_ptr());
+        }
+        let Some(result) = with_read10_phase_trace_or_none(
+            bulk_out.submit_and_wait(&cbw),
+            cmd,
+            "cbw-wait",
+            tag,
+            bulk_out_ep,
+            2,
+            cbw.len(),
+            cbw.as_ptr(),
+        )
+        .await
         else {
             log_bot_transport_debug(
                 "cbw-timeout",
@@ -274,8 +388,20 @@ async fn bot_command_in(
     let data_len = data.len();
     let data_ptr = data.as_ptr();
     for _ in 0..BOT_IO_RETRIES {
-        let Some(result) =
-            with_timeout_or_none(bulk_in.submit_and_wait(&mut *data), BOT_IO_TIMEOUT_MS).await
+        if trace_read10 {
+            log_read10_phase_enter("data-enter", tag, cdb, bulk_in_ep, 1, data_len, data_ptr);
+        }
+        let Some(result) = with_read10_phase_trace_or_none(
+            bulk_in.submit_and_wait(&mut *data),
+            cmd,
+            "data-wait",
+            tag,
+            bulk_in_ep,
+            1,
+            data_len,
+            data_ptr,
+        )
+        .await
         else {
             log_bot_transport_debug("data-timeout", cmd, tag, bulk_in_ep, 1, data_len, data_ptr);
             log_transport_debug("data-timeout");
@@ -290,7 +416,7 @@ async fn bot_command_in(
             break;
         }
     }
-    read_and_validate_csw(bulk_in, cmd, tag, bulk_in_ep).await?;
+    read_and_validate_csw(bulk_in, cmd, tag, bulk_in_ep, trace_read10).await?;
     Ok(got)
 }
 
@@ -335,7 +461,7 @@ async fn bot_command_no_data(
         return Err(MassProbeError::ShortData);
     }
 
-    read_and_validate_csw(bulk_in, cmd, tag, bulk_in_ep).await
+    read_and_validate_csw(bulk_in, cmd, tag, bulk_in_ep, false).await
 }
 
 async fn bot_command_out(
@@ -418,7 +544,7 @@ async fn bot_command_out(
         return Err(MassProbeError::ShortData);
     }
 
-    read_and_validate_csw(bulk_in, cmd, tag, bulk_in_ep).await
+    read_and_validate_csw(bulk_in, cmd, tag, bulk_in_ep, false).await
 }
 
 pub(crate) async fn bot_recovery(

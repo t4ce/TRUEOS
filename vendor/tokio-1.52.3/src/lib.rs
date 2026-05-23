@@ -485,6 +485,11 @@ pub mod ffi {
     pub use std::ffi::*;
 }
 
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+pub mod path {
+    pub use std::path::*;
+}
+
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 include!("trueos_std.rs");
 

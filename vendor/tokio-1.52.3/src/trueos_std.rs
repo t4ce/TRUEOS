@@ -102,6 +102,9 @@ pub mod path {
     use core::fmt;
     use core::ops::Deref;
 
+    pub const MAIN_SEPARATOR: char = '/';
+    pub const MAIN_SEPARATOR_STR: &str = "/";
+
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum Component<'a> {
         Prefix(&'a str),

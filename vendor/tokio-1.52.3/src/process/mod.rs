@@ -260,10 +260,7 @@ use core::pin::Pin;
 use core::task::{ready, Context, Poll};
 use std::ffi::OsStr;
 use std::io;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use crate::path::Path;
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::path::Path;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::process::{Child as StdChild, Command as StdCommand, ExitStatus, Output, Stdio};
 
