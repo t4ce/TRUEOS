@@ -48,7 +48,6 @@
 #![deny(unused)]
 #![allow(unused_macros)]
 #![cfg_attr(
-#![allow(missing_docs)]
     not(all(
         feature = "acct",
         feature = "aio",
@@ -90,6 +89,7 @@
 #![deny(missing_copy_implementations)]
 #![deny(missing_debug_implementations)]
 #![warn(missing_docs)]
+#![allow(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(clippy::cast_ptr_alignment)]
 #![deny(unsafe_op_in_unsafe_fn)]

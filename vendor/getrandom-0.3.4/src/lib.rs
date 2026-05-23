@@ -4,12 +4,12 @@
 
 #![no_std]
 #![doc(
-#![allow(missing_docs)]
     html_logo_url = "https://www.rust-lang.org/logos/rust-logo-128x128-blk.png",
     html_favicon_url = "https://www.rust-lang.org/favicon.ico"
 )]
 #![doc = include_str!("../README.md")]
 #![warn(rust_2018_idioms, unused_lifetimes, missing_docs)]
+#![allow(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(getrandom_backend = "efi_rng", feature(uefi_std))]
 #![deny(
