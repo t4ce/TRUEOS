@@ -133,7 +133,7 @@ pub enum StreamError {
         not(feature = "i-implement-a-third-party-backend-and-opt-into-breaking-changes"),
         non_exhaustive
     )]
-    Undefined(Box<dyn std::error::Error + Send + Sync>),
+    Undefined(Box<dyn core::error::Error + Send + Sync>),
 }
 
 impl StreamError {
@@ -169,7 +169,7 @@ impl core::fmt::Display for ConnectionError {
     }
 }
 
-impl std::error::Error for ConnectionError {}
+impl core::error::Error for ConnectionError {}
 
 impl core::fmt::Display for StreamError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -193,4 +193,4 @@ impl core::fmt::Display for StreamError {
     }
 }
 
-impl std::error::Error for StreamError {}
+impl core::error::Error for StreamError {}

@@ -260,4 +260,4 @@ impl From<io::Error> for AnyDelimiterCodecError {
     }
 }
 
-impl std::error::Error for AnyDelimiterCodecError {}
+impl core::error::Error for AnyDelimiterCodecError {}

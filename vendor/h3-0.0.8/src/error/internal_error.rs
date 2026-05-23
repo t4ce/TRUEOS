@@ -1,6 +1,6 @@
 //! This module contains the internal error type, which is used to represent errors, which have not yet affected the connection state
 
-use std::error::Error;
+use core::error::Error;
 
 use crate::{frame::FrameProtocolError, quic::ConnectionErrorIncoming};
 

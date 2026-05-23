@@ -231,7 +231,7 @@ use crate::util::sharded_list;
 
 use crate::runtime::TaskCallback;
 use ::core::marker::PhantomData;
-use std::panic::Location;
+use core::panic::Location;
 use ::core::ptr::NonNull;
 use std::{fmt, mem};
 
@@ -622,12 +622,12 @@ unsafe impl<S> sharded_list::ShardedListItem for Task<S> {
     }
 }
 
-/// Wrapper around [`std::panic::Location`] that's conditionally compiled out
+/// Wrapper around [`core::panic::Location`] that's conditionally compiled out
 /// when `tokio_unstable` is not enabled.
 #[cfg(tokio_unstable)]
 mod spawn_location {
 
-    use std::panic::Location;
+    use core::panic::Location;
 
     #[derive(Copy, Clone)]
     pub(crate) struct SpawnLocation(pub &'static Location<'static>);
@@ -641,7 +641,7 @@ mod spawn_location {
 
 #[cfg(not(tokio_unstable))]
 mod spawn_location {
-    use std::panic::Location;
+    use core::panic::Location;
 
     #[derive(Copy, Clone)]
     pub(crate) struct SpawnLocation();

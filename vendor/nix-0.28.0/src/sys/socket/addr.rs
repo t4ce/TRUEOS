@@ -766,7 +766,7 @@ impl fmt::Display for SocketAddressLengthNotDynamic {
         f.write_str("Attempted to set length on socket whose length is statically fixed")
     }
 }
-impl std::error::Error for SocketAddressLengthNotDynamic {}
+impl core::error::Error for SocketAddressLengthNotDynamic {}
 
 impl private::SockaddrLikePriv for () {
     fn as_mut_ptr(&mut self) -> *mut libc::sockaddr {

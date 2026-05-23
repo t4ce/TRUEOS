@@ -3,7 +3,7 @@ use crate::frame::StreamId;
 use crate::proto::{self, Initiator};
 
 use bytes::Bytes;
-use std::{error, fmt};
+use core::{error, fmt};
 use tokio::io;
 
 pub use crate::frame::Reason;

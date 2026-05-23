@@ -1612,7 +1612,7 @@ pub fn getgroups() -> Result<Vec<Gid>> {
 /// follows:
 ///
 /// ```rust,no_run
-/// # use std::error::Error;
+/// # use core::error::Error;
 /// # use nix::unistd::*;
 /// #
 /// # fn try_main() -> Result<(), Box<dyn Error>> {
@@ -1743,7 +1743,7 @@ pub fn getgrouplist(user: &CStr, group: Gid) -> Result<Vec<Gid>> {
 /// respectively, one could switch the user as follows:
 ///
 /// ```rust,no_run
-/// # use std::error::Error;
+/// # use core::error::Error;
 /// # use std::ffi::CString;
 /// # use nix::unistd::*;
 /// #

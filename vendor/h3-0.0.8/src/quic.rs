@@ -31,7 +31,7 @@ pub enum ConnectionErrorIncoming {
     /// A unknown error occurred (not relevant to h3)
     ///
     /// For example when the quic implementation errors because of a protocol violation
-    Undefined(Arc<dyn std::error::Error + Send + Sync>),
+    Undefined(Arc<dyn core::error::Error + Send + Sync>),
 }
 
 // Manual Debug implementation to display the right h3 error string for the error code like H3_NO_ERROR instead of a number
@@ -71,10 +71,10 @@ pub enum StreamErrorIncoming {
     ///
     /// H3 will handle this exactly like a StreamTerminated
     /// like closing the connection with an error if http3 forbids a stream end for example with the control stream
-    Unknown(Box<dyn std::error::Error + Send + Sync>),
+    Unknown(Box<dyn core::error::Error + Send + Sync>),
 }
 
-impl std::error::Error for StreamErrorIncoming {}
+impl core::error::Error for StreamErrorIncoming {}
 
 impl Display for StreamErrorIncoming {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -115,7 +115,7 @@ impl Display for ConnectionErrorIncoming {
     }
 }
 
-impl std::error::Error for ConnectionErrorIncoming {}
+impl core::error::Error for ConnectionErrorIncoming {}
 
 /// Trait representing a QUIC connection.
 pub trait Connection<B: Buf>: OpenStreams<B> {

@@ -12,4 +12,4 @@ impl From<Error> for io::Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl core::error::Error for Error {}

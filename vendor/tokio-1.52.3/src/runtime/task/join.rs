@@ -6,7 +6,7 @@ use crate::runtime::task::{AbortHandle, Header, RawTask};
 use core::fmt;
 use core::future::Future;
 use core::marker::PhantomData;
-use std::panic::{RefUnwindSafe, UnwindSafe};
+use core::panic::{RefUnwindSafe, UnwindSafe};
 use core::pin::Pin;
 use core::task::{ready, Context, Poll, Waker};
 
@@ -117,7 +117,7 @@ cfg_rt! {
     /// # {
     /// use tokio::task;
     /// use std::io;
-    /// use std::panic;
+    /// use core::panic;
     ///
     /// #[tokio::main]
     /// async fn main() -> io::Result<()> {

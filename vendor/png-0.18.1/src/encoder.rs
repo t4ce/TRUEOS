@@ -1,7 +1,8 @@
 use borrow::Cow;
 use io::{Read, Write};
 use ops::{Deref, DerefMut};
-use std::{borrow, error, fmt, io, mem, ops, result};
+use core::{borrow, error, fmt, mem, ops, result};
+use std::io;
 
 use crc32fast::Hasher as Crc32;
 use flate2::write::ZlibEncoder;

@@ -231,4 +231,4 @@ impl From<io::Error> for LinesCodecError {
     }
 }
 
-impl std::error::Error for LinesCodecError {}
+impl core::error::Error for LinesCodecError {}

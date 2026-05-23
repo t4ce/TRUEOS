@@ -1,6 +1,6 @@
 //! Error types
 
-use std::{error, fmt};
+use core::{error, fmt};
 
 /// The timeout elapsed.
 #[derive(Debug, Default)]

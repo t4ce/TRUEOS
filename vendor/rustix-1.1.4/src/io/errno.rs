@@ -9,7 +9,7 @@ use crate::backend;
 use core::error;
 use core::{fmt, result};
 #[cfg(feature = "std")]
-use std::error;
+use core::error;
 
 /// A specialized [`Result`] type for `rustix` APIs.
 pub type Result<T> = result::Result<T, Errno>;

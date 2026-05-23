@@ -1,7 +1,7 @@
 use core::cell::UnsafeCell;
 use core::fmt;
 use core::ops;
-use std::panic;
+use core::panic;
 
 /// `AtomicUsize` providing an additional `unsync_load` function.
 pub(crate) struct AtomicUsize {

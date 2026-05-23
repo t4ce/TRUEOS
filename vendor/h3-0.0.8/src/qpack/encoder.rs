@@ -31,7 +31,7 @@ pub enum EncoderError {
     UnknownDecoderInstruction(u8),
 }
 
-impl std::error::Error for EncoderError {}
+impl core::error::Error for EncoderError {}
 
 impl core::fmt::Display for EncoderError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

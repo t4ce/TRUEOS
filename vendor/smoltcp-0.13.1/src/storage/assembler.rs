@@ -12,7 +12,7 @@ impl fmt::Display for TooManyHolesError {
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for TooManyHolesError {}
+impl core::error::Error for TooManyHolesError {}
 
 /// A contiguous chunk of absent data, followed by a contiguous chunk of present data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -19,7 +19,7 @@ impl core::fmt::Display for RouteTableFull {
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for RouteTableFull {}
+impl core::error::Error for RouteTableFull {}
 
 /// A prefix of addresses that should be routed via a router
 #[derive(Debug, Clone, Copy)]

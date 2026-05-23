@@ -45,7 +45,7 @@
 //! use futures::SinkExt;
 //! use bytes::Bytes;
 //!
-//! async fn write_frame<T>(io: T) -> Result<(), Box<dyn std::error::Error>>
+//! async fn write_frame<T>(io: T) -> Result<(), Box<dyn core::error::Error>>
 //! where
 //!     T: AsyncRead + AsyncWrite + Unpin,
 //! {
@@ -399,7 +399,7 @@ use crate::codec::{Decoder, Encoder, Framed, FramedRead, FramedWrite};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use std::error::Error as StdError;
+use core::error::Error as StdError;
 use std::io::Cursor;
 use core::{cmp, fmt, mem};
 use tokio::io;

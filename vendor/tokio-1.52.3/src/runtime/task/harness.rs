@@ -12,7 +12,7 @@ use crate::runtime::TaskMeta;
 use core::any::Any;
 use core::mem;
 use core::mem::ManuallyDrop;
-use std::panic;
+use core::panic;
 use core::ptr::NonNull;
 use core::task::{Context, Poll, Waker};
 

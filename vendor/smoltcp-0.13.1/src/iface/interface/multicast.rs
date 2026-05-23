@@ -98,7 +98,7 @@ impl core::fmt::Display for MulticastError {
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for MulticastError {}
+impl core::error::Error for MulticastError {}
 
 impl Interface {
     /// Add an address to a list of subscribed multicast IP addresses.

@@ -117,7 +117,7 @@ impl NmountError {
 }
 
 #[cfg(target_os = "freebsd")]
-impl std::error::Error for NmountError {}
+impl core::error::Error for NmountError {}
 
 #[cfg(target_os = "freebsd")]
 impl fmt::Display for NmountError {

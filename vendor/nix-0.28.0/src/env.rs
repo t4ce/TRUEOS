@@ -12,7 +12,7 @@ impl fmt::Display for ClearEnvError {
     }
 }
 
-impl std::error::Error for ClearEnvError {}
+impl core::error::Error for ClearEnvError {}
 
 /// Clear the environment of all name-value pairs.
 ///

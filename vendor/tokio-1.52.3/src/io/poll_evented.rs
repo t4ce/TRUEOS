@@ -6,7 +6,7 @@ use mio::event::Source;
 use core::fmt;
 use std::io;
 use core::ops::Deref;
-use std::panic::{RefUnwindSafe, UnwindSafe};
+use core::panic::{RefUnwindSafe, UnwindSafe};
 use core::task::ready;
 
 cfg_io_driver! {

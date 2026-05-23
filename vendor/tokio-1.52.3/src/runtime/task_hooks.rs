@@ -77,7 +77,7 @@ impl<'a> TaskMeta<'a> {
 
     /// Return the source code location where the task was spawned.
     #[cfg(tokio_unstable)]
-    pub fn spawned_at(&self) -> &'static std::panic::Location<'static> {
+    pub fn spawned_at(&self) -> &'static core::panic::Location<'static> {
         self.spawned_at.0
     }
 }

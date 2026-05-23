@@ -292,7 +292,7 @@ pub enum GraphError {
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for GraphError {}
+impl core::error::Error for GraphError {}
 
 #[cfg(not(feature = "std"))]
 impl core::error::Error for GraphError {}

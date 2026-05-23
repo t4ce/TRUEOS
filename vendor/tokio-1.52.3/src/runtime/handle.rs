@@ -24,7 +24,7 @@ use crate::util::trace::SpawnMeta;
 
 use core::future::Future;
 use core::marker::PhantomData;
-use std::{error, fmt, mem};
+use core::{error, fmt, mem};
 
 /// Runtime context guard.
 ///
@@ -505,9 +505,9 @@ impl Handle {
     }
 }
 
-impl std::panic::UnwindSafe for Handle {}
+impl core::panic::UnwindSafe for Handle {}
 
-impl std::panic::RefUnwindSafe for Handle {}
+impl core::panic::RefUnwindSafe for Handle {}
 
 cfg_taskdump! {
     impl Handle {

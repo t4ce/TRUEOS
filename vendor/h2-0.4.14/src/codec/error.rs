@@ -1,6 +1,6 @@
 use crate::proto::Error;
 
-use std::{error, fmt};
+use core::{error, fmt};
 use tokio::io;
 
 /// Errors caused by sending a message

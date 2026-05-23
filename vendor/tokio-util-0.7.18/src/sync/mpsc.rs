@@ -27,7 +27,7 @@ impl<T> fmt::Display for PollSendError<T> {
     }
 }
 
-impl<T: fmt::Debug> std::error::Error for PollSendError<T> {}
+impl<T: fmt::Debug> core::error::Error for PollSendError<T> {}
 
 #[derive(Debug)]
 enum State<T> {
