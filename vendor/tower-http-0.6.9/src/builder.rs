@@ -21,7 +21,7 @@ mod sealed {
 /// use http::{Request, Response, header::HeaderName};
 /// use bytes::Bytes;
 /// use http_body_util::Full;
-/// use std::{time::Duration, convert::Infallible};
+/// use core::time::Duration; use std::convert::Infallible;
 /// use tower::{ServiceBuilder, ServiceExt, Service};
 /// use tower_http::ServiceBuilderExt;
 ///

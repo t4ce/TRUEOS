@@ -309,7 +309,8 @@ fn nanos(d: Duration) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use std::{future, time::Duration};
+    use core::time::Duration;
+use std::future;
     use tokio::time;
     use tokio_test::{assert_ready, assert_ready_ok, task};
 

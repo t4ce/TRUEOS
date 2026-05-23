@@ -673,7 +673,8 @@ pub enum ControlMessageOwned {
     /// # use nix::sys::socket::*;
     /// # use nix::sys::time::*;
     /// # use std::io::{IoSlice, IoSliceMut};
-    /// # use std::time::*;
+    /// # use std as hostlib;
+/// use hostlib::time::*;
     /// # use std::str::FromStr;
     /// # use std::os::unix::io::AsRawFd;
     /// # fn main() {

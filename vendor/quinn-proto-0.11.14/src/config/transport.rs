@@ -1,6 +1,8 @@
 use std::{fmt, sync::Arc};
 #[cfg(feature = "qlog")]
-use std::{io, sync::Mutex, time::Instant};
+use std::{io, sync::Mutex};
+use std as hostlib;
+use hostlib::time::Instant;
 
 #[cfg(feature = "qlog")]
 use qlog::streamer::QlogStreamer;
@@ -337,7 +339,7 @@ impl Default for MtuDiscoveryConfig {
 /// constructed by converting directly from `VarInt`, or using `TryFrom<Duration>`.
 ///
 /// ```
-/// # use std::{convert::TryFrom, time::Duration};
+/// # use core::time::Duration; use std::convert::TryFrom;
 /// # use quinn_proto::{IdleTimeout, VarIntBoundsExceeded, VarInt};
 /// # fn main() -> Result<(), VarIntBoundsExceeded> {
 /// // A `VarInt`-encoded value in milliseconds

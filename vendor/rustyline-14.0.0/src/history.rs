@@ -14,7 +14,8 @@ use std::io::SeekFrom;
 use std::ops::Index;
 use std::path::Path;
 #[cfg(feature = "with-file-history")]
-use std::time::SystemTime;
+use std as hostlib;
+use hostlib::time::SystemTime;
 
 use super::Result;
 use crate::config::{Config, HistoryDuplicates};

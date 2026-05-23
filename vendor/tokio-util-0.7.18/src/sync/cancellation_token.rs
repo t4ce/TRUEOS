@@ -40,14 +40,14 @@ use pin_project_lite::pin_project;
 ///                 // The token was cancelled
 ///                 5
 ///             }
-///             _ = tokio::time::sleep(std::time::Duration::from_secs(9999)) => {
+///             _ = tokio::time::sleep(hostlib::time::Duration::from_secs(9999)) => {
 ///                 99
 ///             }
 ///         }
 ///     });
 ///
 ///     tokio::spawn(async move {
-///         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+///         tokio::time::sleep(hostlib::time::Duration::from_millis(10)).await;
 ///         token.cancel();
 ///     });
 ///
@@ -167,14 +167,14 @@ impl CancellationToken {
     ///                 // The token was cancelled
     ///                 5
     ///             }
-    ///             _ = tokio::time::sleep(std::time::Duration::from_secs(9999)) => {
+    ///             _ = tokio::time::sleep(hostlib::time::Duration::from_secs(9999)) => {
     ///                 99
     ///             }
     ///         }
     ///     });
     ///
     ///     tokio::spawn(async move {
-    ///         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    ///         tokio::time::sleep(hostlib::time::Duration::from_millis(10)).await;
     ///         token.cancel();
     ///     });
     ///

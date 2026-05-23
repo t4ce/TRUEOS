@@ -105,7 +105,8 @@ use arbitrary::Arbitrary;
 
 // Deal with time
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-pub(crate) use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+pub(crate) use std as hostlib;
+use hostlib::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
 pub(crate) use web_time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 

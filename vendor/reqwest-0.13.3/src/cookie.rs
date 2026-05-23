@@ -5,7 +5,8 @@ use bytes::Bytes;
 use core::convert::TryInto;
 use core::fmt;
 use std::sync::RwLock;
-use std::time::SystemTime;
+use std as hostlib;
+use hostlib::time::SystemTime;
 
 /// Actions for a persistent cookie store providing session support.
 pub trait CookieStore: Send + Sync {

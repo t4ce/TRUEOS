@@ -14,7 +14,8 @@ use core::task::{Context, Poll};
 use core::time::Duration;
 use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std as hostlib;
+use hostlib::time::{SystemTime, UNIX_EPOCH};
 
 use futures_util::{future::Future, stream::Stream};
 use tracing::{debug, trace, warn};

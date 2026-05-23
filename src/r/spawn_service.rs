@@ -47,7 +47,6 @@ define_started_flags!(
     AI_QJS_ONESHOT_STARTED,
     HTTP_TRUEOSFS_STARTED,
     HYPER_HTTP1_PROBE_STARTED,
-    AXUM_BOOT_STARTED,
     WS_TIME_STARTED,
     ESP_GATE_STARTED,
     ESP_GATE_REGISTRY_STARTED,
@@ -501,10 +500,6 @@ fn spawn_hyper_http1_probe(spawner: Spawner) -> SpawnAttempt {
 
 fn hyper_http1_probe_enabled() -> bool {
     crate::allcaps::probes::HYPER_HTTP1_NET_PROBE
-}
-
-fn spawn_axum_boot(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::r::net::srv::axum_boot::axum_boot_service_task())
 }
 
 fn spawn_ws_time(spawner: Spawner) -> SpawnAttempt {
@@ -1119,9 +1114,9 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 #[cfg(feature = "trueos_rdp")]
-const TASK_COUNT: usize = 73;
+const TASK_COUNT: usize = 72;
 #[cfg(not(feature = "trueos_rdp"))]
-const TASK_COUNT: usize = 71;
+const TASK_COUNT: usize = 70;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1225,12 +1220,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         hyper_http1_probe_enabled,
         &HYPER_HTTP1_PROBE_STARTED,
         spawn_hyper_http1_probe,
-    ),
-    TaskSpec::disabled(
-        "axum-boot",
-        crate::r::readiness::NET_V4_CONFIGURED,
-        &AXUM_BOOT_STARTED,
-        spawn_axum_boot,
     ),
     TaskSpec::enabled("app-vm-run-queue", 0, &APP_VM_RUN_QUEUE_STARTED, spawn_app_vm_run_queue),
     TaskSpec::enabled(

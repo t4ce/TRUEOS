@@ -241,7 +241,7 @@ pub trait Aio {
     /// # use nix::Error;
     /// # use nix::sys::aio::*;
     /// # use nix::sys::signal::SigevNotify;
-    /// # use std::{thread, time};
+    /// # use std::thread and core::time;
     /// # use std::io::Write;
     /// # use std::os::unix::io::AsRawFd;
     /// # use tempfile::tempfile;
@@ -283,7 +283,7 @@ pub trait Aio {
     /// # use nix::Error;
     /// # use nix::sys::aio::*;
     /// # use nix::sys::signal::SigevNotify;
-    /// # use std::{thread, time};
+    /// # use std::thread and core::time;
     /// # use std::os::unix::io::AsRawFd;
     /// # use tempfile::tempfile;
     /// const WBUF: &[u8] = b"abcdef123456";
@@ -320,7 +320,7 @@ pub trait Aio {
     /// # use nix::Error;
     /// # use nix::sys::aio::*;
     /// # use nix::sys::signal::SigevNotify::SigevNone;
-    /// # use std::{thread, time};
+    /// # use std::thread and core::time;
     /// # use std::os::unix::io::AsRawFd;
     /// # use tempfile::tempfile;
     /// let f = tempfile().unwrap();
@@ -412,7 +412,7 @@ macro_rules! aio_methods {
 /// # use nix::Error;
 /// # use nix::sys::aio::*;
 /// # use nix::sys::signal::SigevNotify::SigevNone;
-/// # use std::{thread, time};
+/// # use std::thread and core::time;
 /// # use std::os::unix::io::AsRawFd;
 /// # use tempfile::tempfile;
 /// let f = tempfile().unwrap();
@@ -510,7 +510,7 @@ impl AsRef<libc::aiocb> for AioFsync {
 /// # use nix::Error;
 /// # use nix::sys::aio::*;
 /// # use nix::sys::signal::SigevNotify;
-/// # use std::{thread, time};
+/// # use std::thread and core::time;
 /// # use std::io::Write;
 /// # use std::os::unix::io::AsRawFd;
 /// # use tempfile::tempfile;
@@ -627,7 +627,7 @@ impl<'a> AsRef<libc::aiocb> for AioRead<'a> {
 /// # use nix::Error;
 /// # use nix::sys::aio::*;
 /// # use nix::sys::signal::SigevNotify;
-/// # use std::{thread, time};
+/// # use std::thread and core::time;
 /// # use std::io::{IoSliceMut, Write};
 /// # use std::os::unix::io::AsRawFd;
 /// # use tempfile::tempfile;
@@ -749,7 +749,7 @@ impl<'a> AsRef<libc::aiocb> for AioReadv<'a> {
 /// # use nix::Error;
 /// # use nix::sys::aio::*;
 /// # use nix::sys::signal::SigevNotify;
-/// # use std::{thread, time};
+/// # use std::thread and core::time;
 /// # use std::os::unix::io::AsRawFd;
 /// # use tempfile::tempfile;
 /// const WBUF: &[u8] = b"abcdef123456";
@@ -862,7 +862,7 @@ impl<'a> AsRef<libc::aiocb> for AioWrite<'a> {
 /// # use nix::Error;
 /// # use nix::sys::aio::*;
 /// # use nix::sys::signal::SigevNotify;
-/// # use std::{thread, time};
+/// # use std::thread and core::time;
 /// # use std::io::IoSlice;
 /// # use std::os::unix::io::AsRawFd;
 /// # use tempfile::tempfile;
@@ -981,7 +981,7 @@ impl<'a> AsRef<libc::aiocb> for AioWritev<'a> {
 /// # use nix::Error;
 /// # use nix::sys::aio::*;
 /// # use nix::sys::signal::SigevNotify;
-/// # use std::{thread, time};
+/// # use std::thread and core::time;
 /// # use std::io::Write;
 /// # use std::os::unix::io::AsRawFd;
 /// # use tempfile::tempfile;
@@ -1104,7 +1104,7 @@ pub fn aio_suspend(
 /// ```
 /// # use std::os::unix::io::AsRawFd;
 /// # use std::thread;
-/// # use std::time;
+/// # use core::time;
 /// # use nix::errno::Errno;
 /// # use nix::sys::aio::*;
 /// # use nix::sys::signal::SigevNotify;
@@ -1139,7 +1139,7 @@ pub fn aio_suspend(
 /// # use std::os::unix::io::AsRawFd;
 /// # use std::sync::atomic::{AtomicBool, Ordering};
 /// # use std::thread;
-/// # use std::time;
+/// # use core::time;
 /// # use nix::errno::Errno;
 /// # use nix::sys::aio::*;
 /// # use nix::sys::signal::*;

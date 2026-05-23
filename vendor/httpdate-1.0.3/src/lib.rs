@@ -34,7 +34,9 @@ use std::io;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use crate::time::SystemTime;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::time::SystemTime;
+use std as hostlib;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use hostlib::time::SystemTime;
 
 pub use date::HttpDate;
 

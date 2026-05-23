@@ -61,15 +61,15 @@ impl Instant {
         }
     }
 
-    /// Create a new `Instant` from the current [std::time::SystemTime].
+    /// Create a new `Instant` from the current [hostlib::time::SystemTime].
     ///
-    /// See [std::time::SystemTime::now]
+    /// See [hostlib::time::SystemTime::now]
     ///
-    /// [std::time::SystemTime]: https://doc.rust-lang.org/std/time/struct.SystemTime.html
-    /// [std::time::SystemTime::now]: https://doc.rust-lang.org/std/time/struct.SystemTime.html#method.now
+    /// [hostlib::time::SystemTime]: https://doc.rust-lang.org/std/time/struct.SystemTime.html
+    /// [hostlib::time::SystemTime::now]: https://doc.rust-lang.org/std/time/struct.SystemTime.html#method.now
     #[cfg(feature = "std")]
     pub fn now() -> Instant {
-        Self::from(::std::time::SystemTime::now())
+        Self::from(hostlib::time::SystemTime::now())
     }
 
     /// The fractional number of milliseconds that have passed
@@ -103,27 +103,27 @@ impl Instant {
 }
 
 #[cfg(feature = "std")]
-impl From<::std::time::Instant> for Instant {
-    fn from(other: ::std::time::Instant) -> Instant {
+impl From<hostlib::time::Instant> for Instant {
+    fn from(other: hostlib::time::Instant) -> Instant {
         let elapsed = other.elapsed();
         Instant::from_micros((elapsed.as_secs() * 1_000000) as i64 + elapsed.subsec_micros() as i64)
     }
 }
 
 #[cfg(feature = "std")]
-impl From<::std::time::SystemTime> for Instant {
-    fn from(other: ::std::time::SystemTime) -> Instant {
+impl From<hostlib::time::SystemTime> for Instant {
+    fn from(other: hostlib::time::SystemTime) -> Instant {
         let n = other
-            .duration_since(::std::time::UNIX_EPOCH)
+            .duration_since(hostlib::time::UNIX_EPOCH)
             .expect("start time must not be before the unix epoch");
         Self::from_micros(n.as_secs() as i64 * 1000000 + n.subsec_micros() as i64)
     }
 }
 
 #[cfg(feature = "std")]
-impl From<Instant> for ::std::time::SystemTime {
+impl From<Instant> for hostlib::time::SystemTime {
     fn from(val: Instant) -> Self {
-        ::std::time::UNIX_EPOCH + ::std::time::Duration::from_micros(val.micros as u64)
+        hostlib::time::UNIX_EPOCH + hostlib::time::Duration::from_micros(val.micros as u64)
     }
 }
 

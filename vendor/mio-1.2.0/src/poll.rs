@@ -536,7 +536,8 @@ impl Registry {
     /// use mio::net::TcpStream;
     /// use std::net::SocketAddr;
     /// use core::time::Duration;
-    /// use std::time::Instant;
+    /// use std as hostlib;
+/// use hostlib::time::Instant;
     ///
     /// let mut poll = Poll::new()?;
     ///

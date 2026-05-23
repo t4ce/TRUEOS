@@ -54,7 +54,8 @@ mod send_stream;
 mod work_limiter;
 
 #[cfg(not(wasm_browser))]
-pub(crate) use std::time::{Duration, Instant};
+pub(crate) use std as hostlib;
+use hostlib::time::{Duration, Instant};
 #[cfg(wasm_browser)]
 pub(crate) use web_time::{Duration, Instant};
 
