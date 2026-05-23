@@ -27,7 +27,7 @@
 /// use mio::net::TcpListener;
 ///
 /// use std::thread;
-/// use std::io::{self, Read};
+/// use crate::io::{self, Read};
 /// use std::collections::HashMap;
 ///
 /// // After this number of sockets is accepted, the server will shutdown.

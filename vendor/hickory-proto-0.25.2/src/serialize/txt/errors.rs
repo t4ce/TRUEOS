@@ -1,5 +1,5 @@
 use alloc::{fmt, string::String};
-use std::io;
+use crate::io;
 
 #[cfg(feature = "backtrace")]
 use crate::trace;
@@ -63,7 +63,7 @@ pub enum ParseErrorKind {
     /// An error got returned from IO
     #[cfg(any(feature = "std", target_os = "trueos", target_os = "zkvm"))]
     #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] crate::io::Error),
 
     /// An error from the lexer
     #[error("lexer error: {0}")]
@@ -104,7 +104,7 @@ impl Clone for ParseErrorKind {
             AddrParse(e) => AddrParse(e.clone()),
             DataEncoding(e) => DataEncoding(*e),
             #[cfg(any(feature = "std", target_os = "trueos", target_os = "zkvm"))]
-            Io(e) => Io(std::io::Error::from(e.kind())),
+            Io(e) => Io(crate::io::Error::from(e.kind())),
             Lexer(e) => Lexer(e.clone()),
             ParseInt(e) => ParseInt(e.clone()),
             Proto(e) => Proto(e.clone()),

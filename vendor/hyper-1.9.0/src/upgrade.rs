@@ -43,7 +43,7 @@ use core::any::TypeId;
 use core::error::Error as StdError;
 use core::fmt;
 use core::future::Future;
-use std::io;
+use crate::io;
 use core::pin::Pin;
 use std::sync::{Arc, Mutex};
 use core::task::{Context, Poll};

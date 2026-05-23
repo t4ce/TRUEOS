@@ -1,7 +1,7 @@
 use core::ffi::c_void;
 use core::fmt;
 use std::fs::File;
-use std::io;
+use crate::io;
 use core::mem::size_of;
 use std::os::windows::io::AsRawHandle;
 

@@ -692,7 +692,7 @@ pub(crate) fn send(socket: RawSocket, buf: &[u8], _: c_int) -> io::Result<usize>
 
 pub(crate) fn send_vectored(
     socket: RawSocket,
-    bufs: &[std::io::IoSlice<'_>],
+    bufs: &[crate::io::IoSlice<'_>],
     flags: c_int,
 ) -> io::Result<usize> {
     let total = bufs.iter().map(|buf| buf.len()).sum();
@@ -724,7 +724,7 @@ pub(crate) fn send_to(socket: RawSocket, buf: &[u8], address: &SockAddr, _: c_in
 
 pub(crate) fn send_to_vectored(
     _: RawSocket,
-    _: &[std::io::IoSlice<'_>],
+    _: &[crate::io::IoSlice<'_>],
     _: &SockAddr,
     _: c_int,
 ) -> io::Result<usize> {

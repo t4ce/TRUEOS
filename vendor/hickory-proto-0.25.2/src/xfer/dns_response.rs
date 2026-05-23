@@ -21,7 +21,7 @@ use core::{
     task::{Context, Poll},
 };
 #[cfg(feature = "std")]
-use std::io;
+use crate::io;
 
 #[cfg(feature = "std")]
 use futures_channel::mpsc;

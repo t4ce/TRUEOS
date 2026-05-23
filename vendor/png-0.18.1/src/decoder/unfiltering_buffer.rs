@@ -164,7 +164,7 @@ impl UnfilteringBuffer {
     /// append new bytes to the returned vector (which is indeed the behavior of
     /// `ReadDecoder` and `StreamingDecoder`).  TODO: Consider protecting the
     /// invariants by returning an append-only view of the vector
-    /// (`FnMut(&[u8])`??? or maybe `std::io::Write`???).
+    /// (`FnMut(&[u8])`??? or maybe `crate::io::Write`???).
     pub fn with_unfilled_buffer<F, T>(&mut self, f: F) -> T
     where
         F: FnOnce(&mut UnfilterBuf<'_>) -> T,

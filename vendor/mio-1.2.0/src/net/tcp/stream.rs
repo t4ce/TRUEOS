@@ -1,5 +1,5 @@
 use core::fmt;
-use std::io::{self, IoSlice, IoSliceMut, Read, Write};
+use crate::io::{self, IoSlice, IoSliceMut, Read, Write};
 use std::net::{self, Shutdown, SocketAddr};
 #[cfg(any(unix, target_os = "wasi"))]
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
@@ -248,7 +248,7 @@ impl TcpStream {
     /// # use core::error::Error;
     /// #
     /// # fn main() -> Result<(), Box<dyn Error>> {
-    /// use std::io;
+    /// use crate::io;
     /// #[cfg(any(unix, target_os = "wasi"))]
     /// use std::os::fd::AsRawFd;
     /// #[cfg(windows)]

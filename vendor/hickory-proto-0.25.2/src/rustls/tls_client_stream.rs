@@ -12,7 +12,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use core::future::Future;
 use core::pin::Pin;
-use std::io;
+use crate::io;
 use std::net::SocketAddr;
 
 use futures_util::TryFutureExt;

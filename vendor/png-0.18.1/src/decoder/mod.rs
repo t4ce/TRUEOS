@@ -12,7 +12,7 @@ use self::stream::{DecodeOptions, DecodingError, FormatErrorInner};
 use self::transform::{create_transform_fn, TransformFn};
 use self::unfiltering_buffer::UnfilteringBuffer;
 
-use std::io::{BufRead, Seek};
+use crate::io::{BufRead, Seek};
 use core::mem;
 
 use crate::adam7::Adam7Info;
@@ -162,7 +162,7 @@ impl<R: BufRead + Seek> Decoder<R> {
     ///
     /// ```
     /// use std::fs::File;
-    /// use std::io::BufReader;
+    /// use crate::io::BufReader;
     /// use png::{Decoder, Limits};
     /// // This image is 32×32, 1bit per pixel. The reader buffers one row which requires 4 bytes.
     /// let mut limits = Limits::default();
@@ -258,7 +258,7 @@ impl<R: BufRead + Seek> Decoder<R> {
     /// eg.
     /// ```
     /// use std::fs::File;
-    /// use std::io::BufReader;
+    /// use crate::io::BufReader;
     /// use png::Decoder;
     /// let mut decoder = Decoder::new(BufReader::new(File::open("tests/pngsuite/basi0g01.png").unwrap()));
     /// decoder.set_ignore_text_chunk(true);
@@ -273,7 +273,7 @@ impl<R: BufRead + Seek> Decoder<R> {
     /// eg.
     /// ```
     /// use std::fs::File;
-    /// use std::io::BufReader;
+    /// use crate::io::BufReader;
     /// use png::Decoder;
     /// let mut decoder = Decoder::new(BufReader::new(File::open("tests/iccp/broken_iccp.png").unwrap()));
     /// decoder.set_ignore_iccp_chunk(true);
@@ -716,7 +716,7 @@ impl<R: BufRead + Seek> Reader<R> {
                 Ok(ImageDataCompletionStatus::ExpectingMoreData) => (),
                 Ok(ImageDataCompletionStatus::Done) => self.mark_subframe_as_consumed_and_flushed(),
                 Err(DecodingError::IoError(e))
-                    if e.kind() == std::io::ErrorKind::UnexpectedEof
+                    if e.kind() == crate::io::ErrorKind::UnexpectedEof
                         && self.unfiltering_buffer.readable_len_of_curr_row() >= rowlen =>
                 {
                     return self

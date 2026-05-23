@@ -3,7 +3,7 @@
 use super::{Handle, Overlapped};
 use core::cmp;
 use core::fmt;
-use std::io;
+use crate::io;
 use core::mem;
 use std::os::windows::io::*;
 use core::ptr::null_mut;

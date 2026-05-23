@@ -7,7 +7,7 @@ use std::{borrow::Cow, convert::TryFrom, fmt};
 #[cfg(feature = "png-encoding")]
 use crate::{chunk, encoder};
 #[cfg(feature = "png-encoding")]
-use std::io::Write;
+use crate::io::Write;
 
 /// Describes how a pixel is encoded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

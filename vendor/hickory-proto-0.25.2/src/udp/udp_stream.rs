@@ -11,7 +11,7 @@ use core::future::poll_fn;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use std::collections::HashSet;
-use std::io;
+use crate::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use async_trait::async_trait;

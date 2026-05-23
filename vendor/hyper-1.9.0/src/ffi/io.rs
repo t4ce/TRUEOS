@@ -146,14 +146,14 @@ impl Read for hyper_io {
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         mut buf: crate::rt::ReadBufCursor<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    ) -> Poll<crate::io::Result<()>> {
         let buf_ptr = unsafe { buf.as_mut() }.as_mut_ptr() as *mut u8;
         let buf_len = buf.remaining();
 
         match (self.read)(self.userdata, hyper_context::wrap(cx), buf_ptr, buf_len) {
             HYPER_IO_PENDING => Poll::Pending,
-            HYPER_IO_ERROR => Poll::Ready(Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            HYPER_IO_ERROR => Poll::Ready(Err(crate::io::Error::new(
+                crate::io::ErrorKind::Other,
                 "io error",
             ))),
             ok => {
@@ -171,25 +171,25 @@ impl Write for hyper_io {
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
+    ) -> Poll<crate::io::Result<usize>> {
         let buf_ptr = buf.as_ptr();
         let buf_len = buf.len();
 
         match (self.write)(self.userdata, hyper_context::wrap(cx), buf_ptr, buf_len) {
             HYPER_IO_PENDING => Poll::Pending,
-            HYPER_IO_ERROR => Poll::Ready(Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            HYPER_IO_ERROR => Poll::Ready(Err(crate::io::Error::new(
+                crate::io::ErrorKind::Other,
                 "io error",
             ))),
             ok => Poll::Ready(Ok(ok)),
         }
     }
 
-    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<crate::io::Result<()>> {
         Poll::Ready(Ok(()))
     }
 
-    fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<crate::io::Result<()>> {
         Poll::Ready(Ok(()))
     }
 }

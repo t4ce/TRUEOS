@@ -47,7 +47,7 @@ mod waker;
 pub(crate) use waker::Waker;
 
 cfg_io_source! {
-    use std::io;
+    use crate::io;
     use std::os::windows::io::RawSocket;
     use core::pin::Pin;
     use std::sync::{Arc, Mutex};

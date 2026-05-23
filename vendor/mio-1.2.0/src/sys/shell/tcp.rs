@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::io;
+use crate::io;
 use std::net::{self, SocketAddr};
 
 #[cfg(not(target_os = "wasi"))]

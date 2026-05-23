@@ -3,7 +3,7 @@
 #![allow(missing_docs)]
 use bytes::Buf;
 use log::*;
-use std::io::{Cursor, Read, Write};
+use crate::io::{Cursor, Read, Write};
 
 use crate::{
     error::{Error, ProtocolError, Result},

@@ -13,7 +13,7 @@ cfg_net! {
 use super::iocp::{CompletionPort, CompletionStatus};
 use std::collections::VecDeque;
 use core::ffi::c_void;
-use std::io;
+use crate::io;
 use core::marker::PhantomPinned;
 use std::os::windows::io::RawSocket;
 use core::pin::Pin;

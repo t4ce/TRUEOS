@@ -1,6 +1,6 @@
 use core::error::Error as StdError;
 use core::fmt;
-use std::io;
+use crate::io;
 use core::task::{Context, Poll};
 use alloc::{vec, vec::Vec};
 
@@ -736,8 +736,8 @@ mod tests {
     }
 
     /*
-    use std::io;
-    use std::io::Write;
+    use crate::io;
+    use crate::io::Write;
     use super::Decoder;
     use super::ChunkedState;
     use futures::{Async, Poll};

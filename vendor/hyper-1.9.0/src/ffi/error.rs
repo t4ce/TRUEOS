@@ -52,9 +52,9 @@ impl hyper_error {
     }
 
     fn print_to(&self, dst: &mut [u8]) -> usize {
-        use std::io::Write;
+        use crate::io::Write;
 
-        let mut dst = std::io::Cursor::new(dst);
+        let mut dst = crate::io::Cursor::new(dst);
 
         // A write! error doesn't matter. As much as possible will have been
         // written, and the Cursor position will know how far that is (even

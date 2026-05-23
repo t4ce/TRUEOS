@@ -221,7 +221,7 @@ pub mod guide {
     #![cfg_attr(feature = "os-poll", doc = "```")]
     #![cfg_attr(not(feature = "os-poll"), doc = "```ignore")]
     //! # use mio::{Poll, Events};
-    //! # fn main() -> std::io::Result<()> {
+    //! # fn main() -> crate::io::Result<()> {
     //! // `Poll` allows for polling of readiness events.
     //! let poll = Poll::new()?;
     //! // `Events` is collection of readiness `Event`s and can be filled by
@@ -257,7 +257,7 @@ pub mod guide {
     #![cfg_attr(not(all(feature = "os-poll", feature = "net")), doc = "```ignore")]
     //! # use mio::net::TcpListener;
     //! # use mio::{Poll, Token, Interest};
-    //! # fn main() -> std::io::Result<()> {
+    //! # fn main() -> crate::io::Result<()> {
     //! # let poll = Poll::new()?;
     //! # let address = "127.0.0.1:0".parse().unwrap();
     //! // Create a `TcpListener`, binding it to `address`.
@@ -294,7 +294,7 @@ pub mod guide {
     //!
     #![cfg_attr(all(feature = "os-poll", feature = "net"), doc = "```")]
     #![cfg_attr(not(all(feature = "os-poll", feature = "net")), doc = "```ignore")]
-    //! # use std::io;
+    //! # use crate::io;
     //! # use core::time::Duration;
     //! # use mio::net::TcpListener;
     //! # use mio::{Poll, Token, Interest, Events};

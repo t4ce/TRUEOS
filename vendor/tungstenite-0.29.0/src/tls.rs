@@ -1,5 +1,5 @@
 //! Connection helper.
-use std::io::{Read, Write};
+use crate::io::{Read, Write};
 
 use crate::{
     client::{client_with_config, uri_mode, IntoClientRequest},
@@ -31,7 +31,7 @@ mod encryption {
     pub mod native_tls {
         use native_tls_crate::{HandshakeError as TlsHandshakeError, TlsConnector};
 
-        use std::io::{Read, Write};
+        use crate::io::{Read, Write};
 
         use crate::{
             error::TlsError,
@@ -118,7 +118,7 @@ mod encryption {
                                 // "rustls-tls-webpki-roots" feature is enabled.
                                 #[cfg(not(feature = "rustls-tls-webpki-roots"))]
                                 if certs.is_empty() {
-                                    return Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("no native root CA certificates found (errors: {errors:?})")).into());
+                                    return Err(crate::io::Error::new(crate::io::ErrorKind::NotFound, format!("no native root CA certificates found (errors: {errors:?})")).into());
                                 }
 
                                 let total_number = certs.len();
@@ -151,7 +151,7 @@ mod encryption {
     }
 
     pub mod plain {
-        use std::io::{Read, Write};
+        use crate::io::{Read, Write};
 
         use crate::{
             error::UrlError,

@@ -7,7 +7,7 @@ macro_rules! syscall {
         #[allow(unused_unsafe)]
         let res = unsafe { libc::$fn($($arg, )*) };
         if res < 0 {
-            Err(std::io::Error::last_os_error())
+            Err(crate::io::Error::last_os_error())
         } else {
             Ok(res)
         }

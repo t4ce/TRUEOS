@@ -3,7 +3,8 @@ use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::{self, SocketAddr};
 use std::path::Path;
-use std::{io, mem};
+use crate::io;
+use std::{mem};
 
 use crate::net::UnixStream;
 use crate::sys::unix::net::new_socket;

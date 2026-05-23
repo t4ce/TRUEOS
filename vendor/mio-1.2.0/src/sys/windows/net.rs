@@ -1,4 +1,4 @@
-use std::io;
+use crate::io;
 use core::mem;
 use std::net::SocketAddr;
 use std::sync::Once;

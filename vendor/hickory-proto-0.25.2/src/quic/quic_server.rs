@@ -6,7 +6,8 @@
 // copied, modified, or distributed except according to those terms.
 
 use alloc::sync::Arc;
-use std::{io, net::SocketAddr};
+use crate::io;
+use std::{net::SocketAddr};
 
 use quinn::crypto::rustls::QuicServerConfig;
 use quinn::{Connection, Endpoint, ServerConfig};

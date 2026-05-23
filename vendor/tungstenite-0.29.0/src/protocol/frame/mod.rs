@@ -20,7 +20,7 @@ use crate::{
 use alloc::vec::Vec;
 use bytes::BytesMut;
 use log::*;
-use std::io::{self, Cursor, Error as IoError, ErrorKind as IoErrorKind, Read, Write};
+use crate::io::{self, Cursor, Error as IoError, ErrorKind as IoErrorKind, Read, Write};
 
 /// Read buffer size used for `FrameSocket`.
 const READ_BUF_LEN: usize = 128 * 1024;

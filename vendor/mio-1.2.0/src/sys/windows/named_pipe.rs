@@ -1,5 +1,5 @@
 use core::ffi::OsStr;
-use std::io::{self, Read, Write};
+use crate::io::{self, Read, Write};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
@@ -722,7 +722,7 @@ impl Inner {
             //
             // Return `true` to indicate that an overlapped read was scheduled "successfully",
             // without actually scheduling it. Instead, update `io.read` to `State::Ok(buf, 0)`
-            // to ensure that the next `std::io::Read::read` call is presented still with the
+            // to ensure that the next `crate::io::Read::read` call is presented still with the
             // unread data to read from.
             Err(ref e) if e.raw_os_error() == Some(ERROR_MORE_DATA as i32) => {
                 io.read = State::Ok(buf, 0);

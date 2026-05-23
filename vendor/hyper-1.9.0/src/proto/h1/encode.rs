@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use std::collections::HashSet;
 use core::fmt;
-use std::io::IoSlice;
+use crate::io::IoSlice;
 
 use bytes::buf::{Chain, Take};
 use bytes::{Buf, Bytes};
@@ -388,7 +388,7 @@ impl fmt::Debug for ChunkSize {
 
 impl fmt::Write for ChunkSize {
     fn write_str(&mut self, num: &str) -> fmt::Result {
-        use std::io::Write;
+        use crate::io::Write;
         (&mut self.bytes[self.len.into()..])
             .write_all(num.as_bytes())
             .expect("&mut [u8].write() cannot error");

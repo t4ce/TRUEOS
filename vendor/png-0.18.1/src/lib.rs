@@ -5,14 +5,14 @@
 //! ## The decoder
 //!
 //! The most important types for decoding purposes are [`Decoder`] and
-//! [`Reader`]. They both wrap a [`std::io::Read`].
+//! [`Reader`]. They both wrap a [`crate::io::Read`].
 //! `Decoder` serves as a builder for `Reader`. Calling [`Decoder::read_info`] reads from the `Read` until the
 //! image data is reached.
 //!
 //! ### Using the decoder
 //! ```
 //! use std::fs::File;
-//! use std::io::BufReader;
+//! use crate::io::BufReader;
 //! // The decoder is a build for reader and can be used to set various decoding options
 //! // via `Transformations`. The default output transformation is `Transformations::IDENTITY`.
 //! let decoder = png::Decoder::new(BufReader::new(File::open("tests/pngsuite/basi0g01.png").unwrap()));
@@ -34,7 +34,7 @@
 //! // For reading and opening files
 //! use std::path::Path;
 //! use std::fs::File;
-//! use std::io::BufWriter;
+//! use crate::io::BufWriter;
 //!
 //! let path = Path::new(r"/path/to/image.png");
 //! let file = File::create(path).unwrap();

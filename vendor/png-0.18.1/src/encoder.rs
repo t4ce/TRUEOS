@@ -2,7 +2,7 @@ use borrow::Cow;
 use io::{Read, Write};
 use ops::{Deref, DerefMut};
 use core::{borrow, error, fmt, mem, ops, result};
-use std::io;
+use crate::io;
 
 use crc32fast::Hasher as Crc32;
 use flate2::write::ZlibEncoder;
@@ -778,7 +778,7 @@ impl<W: Write> Writer<W> {
         let zlib_encoded = match self.options.compression {
             DeflateCompression::NoCompression => {
                 let mut compressor =
-                    fdeflate::StoredOnlyCompressor::new(std::io::Cursor::new(Vec::new()))?;
+                    fdeflate::StoredOnlyCompressor::new(crate::io::Cursor::new(Vec::new()))?;
                 for line in data.chunks(in_len) {
                     compressor.write_data(&[0])?;
                     compressor.write_data(line)?;
@@ -786,7 +786,7 @@ impl<W: Write> Writer<W> {
                 compressor.finish()?.into_inner()
             }
             DeflateCompression::FdeflateUltraFast => {
-                let mut compressor = fdeflate::Compressor::new(std::io::Cursor::new(Vec::new()))?;
+                let mut compressor = fdeflate::Compressor::new(crate::io::Cursor::new(Vec::new()))?;
 
                 let mut current = vec![0; in_len + 1];
                 for line in data.chunks(in_len) {
@@ -806,7 +806,7 @@ impl<W: Write> Writer<W> {
                     //
                     // This is essentially a fallback to NoCompression.
                     let mut compressor =
-                        fdeflate::StoredOnlyCompressor::new(std::io::Cursor::new(Vec::new()))?;
+                        fdeflate::StoredOnlyCompressor::new(crate::io::Cursor::new(Vec::new()))?;
                     for line in data.chunks(in_len) {
                         compressor.write_data(&[0])?;
                         compressor.write_data(line)?;

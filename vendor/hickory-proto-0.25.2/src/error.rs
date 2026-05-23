@@ -18,7 +18,8 @@ use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::fmt;
 #[cfg(feature = "std")]
-use std::{io, sync};
+use crate::io;
+use std::{sync};
 
 #[cfg(feature = "backtrace")]
 pub use backtrace::Backtrace as ExtBacktrace;
@@ -486,7 +487,7 @@ impl ProtoError {
         }
     }
 
-    /// Returns true if this is a std::io::Error
+    /// Returns true if this is a crate::io::Error
     #[inline]
     #[cfg(feature = "std")]
     pub fn is_io(&self) -> bool {

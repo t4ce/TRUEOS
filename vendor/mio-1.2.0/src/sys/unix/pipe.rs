@@ -2,7 +2,7 @@
 //!
 //! See the [`new`] function for documentation.
 
-use std::io;
+use crate::io;
 use std::os::fd::RawFd;
 
 pub(crate) fn new_raw() -> io::Result<[RawFd; 2]> {
@@ -65,7 +65,7 @@ pub(crate) fn new_raw() -> io::Result<[RawFd; 2]> {
 
 cfg_os_ext! {
 use std::fs::File;
-use std::io::{IoSlice, IoSliceMut, Read, Write};
+use crate::io::{IoSlice, IoSliceMut, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::process::{ChildStderr, ChildStdin, ChildStdout};
 
@@ -115,7 +115,7 @@ use crate::{event, Interest, Registry, Token};
 /// receiving end.
 ///
 /// ```
-/// use std::io::{self, Read, Write};
+/// use crate::io::{self, Read, Write};
 ///
 /// use mio::{Poll, Events, Interest, Token};
 /// use mio::unix::pipe;
@@ -170,7 +170,7 @@ use crate::{event, Interest, Registry, Token};
 /// Example that receives an event once the `Sender` is dropped.
 ///
 /// ```
-/// # use std::io;
+/// # use crate::io;
 /// #
 /// # use mio::{Poll, Events, Interest, Token};
 /// # use mio::unix::pipe;
@@ -245,7 +245,7 @@ impl Sender {
     /// # use core::error::Error;
     /// #
     /// # fn main() -> Result<(), Box<dyn Error>> {
-    /// use std::io;
+    /// use crate::io;
     /// use std::os::fd::AsRawFd;
     /// use mio::unix::pipe;
     ///
@@ -430,7 +430,7 @@ impl Receiver {
     /// # use core::error::Error;
     /// #
     /// # fn main() -> Result<(), Box<dyn Error>> {
-    /// use std::io;
+    /// use crate::io;
     /// use std::os::fd::AsRawFd;
     /// use mio::unix::pipe;
     ///

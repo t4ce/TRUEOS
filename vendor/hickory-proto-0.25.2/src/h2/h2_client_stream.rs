@@ -14,7 +14,7 @@ use core::ops::DerefMut;
 use core::pin::Pin;
 use core::str::FromStr;
 use core::task::{Context, Poll};
-use std::io;
+use crate::io;
 use std::net::SocketAddr;
 
 use bytes::{Buf, Bytes, BytesMut};
@@ -364,7 +364,7 @@ impl<S: DnsTcpStream> HttpsClientConnect<S> {
     ) -> Self
     where
         S: DnsTcpStream,
-        F: Future<Output = std::io::Result<S>> + Send + Unpin + 'static,
+        F: Future<Output = crate::io::Result<S>> + Send + Unpin + 'static,
     {
         // ensure the ALPN protocol is set correctly
         if client_config.alpn_protocols.is_empty() {

@@ -12,7 +12,7 @@ use core::mem;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use core::time::Duration;
-use std::io;
+use crate::io;
 use std::net::SocketAddr;
 
 use futures_io::{AsyncRead, AsyncWrite};

@@ -22,7 +22,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(all(debug_assertions, not(target_os = "wasi")))]
 use std::sync::Arc;
 use core::time::Duration;
-use std::{fmt, io};
+use core::fmt;
+use crate::io;
 
 use crate::{event, sys, Events, Interest, Token};
 
@@ -114,7 +115,7 @@ use crate::{event, sys, Events, Interest, Token};
 /// there is no guarantee that another readiness event will be delivered, even
 /// if further data is received for the event source.
 ///
-/// [`WouldBlock`]: std::io::ErrorKind::WouldBlock
+/// [`WouldBlock`]: crate::io::ErrorKind::WouldBlock
 ///
 /// ### Readiness operations
 ///

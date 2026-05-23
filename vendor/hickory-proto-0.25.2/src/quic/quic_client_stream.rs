@@ -12,7 +12,8 @@ use core::{
     pin::Pin,
     task::{Context, Poll},
 };
-use std::{io, net::SocketAddr};
+use crate::io;
+use std::{net::SocketAddr};
 
 use futures_util::{future::FutureExt, stream::Stream};
 use quinn::{

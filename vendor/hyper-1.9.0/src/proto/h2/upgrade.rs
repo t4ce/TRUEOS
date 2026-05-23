@@ -160,7 +160,7 @@ impl Read for H2Upgraded {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         mut read_buf: ReadBufCursor<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
+    ) -> Poll<Result<(), crate::io::Error>> {
         if self.buf.is_empty() {
             self.buf = loop {
                 match ready!(self.recv_stream.poll_data(cx)) {
@@ -175,8 +175,8 @@ impl Read for H2Upgraded {
                     Some(Err(e)) => {
                         return Poll::Ready(match e.reason() {
                             Some(Reason::NO_ERROR) | Some(Reason::CANCEL) => Ok(()),
-                            Some(Reason::STREAM_CLOSED) => Err(std::io::Error::new(
-                                std::io::ErrorKind::BrokenPipe,
+                            Some(Reason::STREAM_CLOSED) => Err(crate::io::Error::new(
+                                crate::io::ErrorKind::BrokenPipe,
                                 "h2 stream closed",
                             )),
                             _ => Err(h2_to_io_error(e)),
@@ -198,7 +198,7 @@ impl Write for H2Upgraded {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
-    ) -> Poll<Result<usize, std::io::Error>> {
+    ) -> Poll<Result<usize, crate::io::Error>> {
         if buf.is_empty() {
             return Poll::Ready(Ok(0));
         }
@@ -211,7 +211,7 @@ impl Write for H2Upgraded {
                 return match Pin::new(&mut self.send_stream.error_rx).poll(cx) {
                     Poll::Ready(Ok(reason)) => Poll::Ready(Err(io_error(reason))),
                     Poll::Ready(Err(_task_dropped)) => {
-                        Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into()))
+                        Poll::Ready(Err(crate::io::ErrorKind::BrokenPipe.into()))
                     }
                     Poll::Pending => Poll::Pending,
                 };
@@ -228,7 +228,7 @@ impl Write for H2Upgraded {
                 match Pin::new(&mut self.send_stream.error_rx).poll(cx) {
                     Poll::Ready(Ok(reason)) => Poll::Ready(Err(io_error(reason))),
                     Poll::Ready(Err(_task_dropped)) => {
-                        Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into()))
+                        Poll::Ready(Err(crate::io::ErrorKind::BrokenPipe.into()))
                     }
                     Poll::Pending => Poll::Pending,
                 }
@@ -239,7 +239,7 @@ impl Write for H2Upgraded {
     fn poll_flush(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
+    ) -> Poll<Result<(), crate::io::Error>> {
         match self.send_stream.tx.poll_ready(cx) {
             Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
             Poll::Ready(Err(_task_dropped)) => {
@@ -258,7 +258,7 @@ impl Write for H2Upgraded {
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
+    ) -> Poll<Result<(), crate::io::Error>> {
         self.send_stream.tx.close_channel();
         match Pin::new(&mut self.send_stream.error_rx).poll(cx) {
             Poll::Ready(Ok(reason)) => Poll::Ready(Err(io_error(reason))),
@@ -268,15 +268,15 @@ impl Write for H2Upgraded {
     }
 }
 
-fn io_error(e: crate::Error) -> std::io::Error {
+fn io_error(e: crate::Error) -> crate::io::Error {
     let _ = e;
-    std::io::Error::new(std::io::ErrorKind::Other, "h2 upgraded stream error")
+    crate::io::Error::new(crate::io::ErrorKind::Other, "h2 upgraded stream error")
 }
 
-fn h2_to_io_error(e: h2::Error) -> std::io::Error {
+fn h2_to_io_error(e: h2::Error) -> crate::io::Error {
     if e.is_io() {
         e.into_io().unwrap()
     } else {
-        std::io::Error::new(std::io::ErrorKind::Other, "h2 protocol error")
+        crate::io::Error::new(crate::io::ErrorKind::Other, "h2 protocol error")
     }
 }

@@ -14,7 +14,9 @@ use std::os::hermit::io::RawFd;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use core::time::Duration;
-use std::{cmp, fmt, io};
+use core::fmt;
+use crate::io;
+use std::{cmp};
 
 use crate::sys::unix::waker::Waker as WakerInternal;
 use crate::{Interest, Token};

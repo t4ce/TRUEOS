@@ -1,4 +1,4 @@
-use std::io;
+use crate::io;
 use core::mem::size_of;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
