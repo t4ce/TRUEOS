@@ -35,10 +35,8 @@
 //! });
 //! while o.usbsts.read().hc_halted() {}
 //! ```
-#![allow(missing_docs)]
 #![no_std]
 #![deny(
-
     rustdoc::all,
     missing_docs,
     elided_lifetimes_in_paths,
@@ -58,6 +56,7 @@
     unused_qualifications,
     missing_debug_implementations
 )]
+#![allow(missing_docs)]
 #![allow(clippy::missing_panics_doc)]
 
 pub use accessor;

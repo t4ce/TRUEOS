@@ -219,10 +219,8 @@
 //! # Panics
 //!
 //! If length calculations result in overflowing `usize`, a panic will result.
-#![allow(missing_docs)]
 #![cfg_attr(feature = "cargo-clippy", allow(clippy::cast_lossless))]
 #![deny(
-
     missing_docs,
     trivial_casts,
     trivial_numeric_casts,
@@ -231,6 +229,7 @@
     unused_results,
     variant_size_differences
 )]
+#![allow(missing_docs)]
 // Allow globally until https://github.com/rust-lang/rust-clippy/issues/8768 is resolved.
 // The desired state is to allow it only for the rstest_reuse import.
 #![allow(clippy::single_component_path_imports)]
