@@ -105,12 +105,14 @@ pub(crate) const fn descriptor_scope_index(scope: UsbDescriptorScope) -> u16 {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum UsbDescriptorSkipReason {
     QemuBootHidOptionalRead,
+    CorsairKeyboardOptionalRead,
 }
 
 impl UsbDescriptorSkipReason {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::QemuBootHidOptionalRead => "qemu-boot-hid-optional-read",
+            Self::CorsairKeyboardOptionalRead => "corsair-keyboard-optional-read",
         }
     }
 }
@@ -134,6 +136,8 @@ pub(crate) const fn hid_optional_descriptor_skip_reason(
         Some(UsbDescriptorSkipReason::QemuBootHidOptionalRead)
     } else if vendor_id == 0x22d4 && product_id == 0x1321 {
         Some(UsbDescriptorSkipReason::QemuBootHidOptionalRead)
+    } else if vendor_id == 0x1b1c && product_id == 0x1b39 {
+        Some(UsbDescriptorSkipReason::CorsairKeyboardOptionalRead)
     } else {
         None
     }

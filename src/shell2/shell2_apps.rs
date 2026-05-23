@@ -1,4 +1,4 @@
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt::Write;
 
@@ -6,11 +6,15 @@ use embassy_executor::Spawner;
 
 use super::cmds::run;
 use super::cmds::tlb_helper::TlbTable;
-use super::{ShellBackend2, line_width_for_backend, print_shell_line};
+use super::{
+    line_width_for_backend, matrix_target_for_backend, print_matrix_target_line, print_shell_line,
+    set_matrix_target_active, MatrixTarget, ShellBackend2,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AppsPromptMode {
     Start,
+    Online,
     Pause,
     Unpause,
     Save,
@@ -22,7 +26,8 @@ pub(crate) enum AppsPromptMode {
 impl AppsPromptMode {
     pub(crate) const fn next(self) -> Self {
         match self {
-            Self::Start => Self::Pause,
+            Self::Start => Self::Online,
+            Self::Online => Self::Pause,
             Self::Pause => Self::Unpause,
             Self::Unpause => Self::Save,
             Self::Save => Self::Load,
@@ -35,6 +40,7 @@ impl AppsPromptMode {
     pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Start => "start",
+            Self::Online => "online",
             Self::Pause => "pause",
             Self::Unpause => "unpause",
             Self::Save => "save",
@@ -192,6 +198,183 @@ fn print_available(io: &'static dyn ShellBackend2) {
     run::print_app_archive_table(io);
 }
 
+#[derive(Clone)]
+struct OnlineApp {
+    name: String,
+    url: String,
+}
+
+const ONLINE_APPS_URL_HTTPS: &str = "https://trueos.eu/apps";
+const ONLINE_LIST_MAX_BYTES: usize = 1024 * 1024;
+const ONLINE_APP_MAX_BYTES: usize = 64 * 1024 * 1024;
+const ONLINE_FETCH_TIMEOUT_MS: u32 = 45_000;
+const ONLINE_HEADERS: &[&str; 3] = &["id", "module", "url"];
+
+async fn fetch_url_bytes(url: String, max_bytes: usize) -> Result<Vec<u8>, String> {
+    crate::t::run_on_shared_tokio(move || async move {
+        crate::t::net::https::fetch_https_body_hyper_async(
+            url.as_str(),
+            ONLINE_FETCH_TIMEOUT_MS,
+            max_bytes,
+        )
+        .await
+    })
+    .await
+    .map_err(|err| alloc::format!("shared tokio unavailable ({:?})", err))?
+    .map_err(|err| alloc::format!("{:?}", err))
+}
+
+async fn fetch_online_apps_html() -> Result<Vec<u8>, String> {
+    fetch_url_bytes(String::from(ONLINE_APPS_URL_HTTPS), ONLINE_LIST_MAX_BYTES).await
+}
+
+fn absolutize_online_url(href: &str) -> String {
+    if href.contains("://") {
+        String::from(href)
+    } else if href.starts_with('/') {
+        alloc::format!("https://trueos.eu{}", href)
+    } else {
+        alloc::format!("https://trueos.eu/apps/{}", href)
+    }
+}
+
+fn parse_attr_value<'a>(text: &'a str, attr: &str) -> Option<&'a str> {
+    let pos = text.find(attr)?;
+    let rest = &text[pos + attr.len()..];
+    let quote = rest.as_bytes().first().copied()?;
+    if quote != b'"' && quote != b'\'' {
+        return None;
+    }
+    let rest = &rest[1..];
+    let end = rest.as_bytes().iter().position(|&b| b == quote)?;
+    Some(&rest[..end])
+}
+
+fn parse_online_apps(html: &str) -> Vec<OnlineApp> {
+    let mut out = Vec::new();
+    let mut rest = html;
+    while let Some(li_start) = rest.find("<li") {
+        rest = &rest[li_start + 3..];
+        let li_end = rest.find("</li>").unwrap_or(rest.len());
+        let item = &rest[..li_end];
+        let Some(a_start) = item.find("<a") else {
+            rest = &rest[li_end..];
+            continue;
+        };
+        let link = &item[a_start..];
+        let Some(tag_end) = link.find('>') else {
+            rest = &rest[li_end..];
+            continue;
+        };
+        let tag = &link[..tag_end];
+        let Some(href) = parse_attr_value(tag, "href=") else {
+            rest = &rest[li_end..];
+            continue;
+        };
+        let Some(text_end) = link[tag_end + 1..].find("</a>") else {
+            rest = &rest[li_end..];
+            continue;
+        };
+        let name = link[tag_end + 1..tag_end + 1 + text_end].trim();
+        if href.ends_with(".bp") && !name.is_empty() {
+            out.push(OnlineApp {
+                name: name.to_string(),
+                url: absolutize_online_url(href),
+            });
+        }
+        rest = &rest[li_end..];
+    }
+    out
+}
+
+async fn online_apps() -> Result<Vec<OnlineApp>, String> {
+    let html = fetch_online_apps_html().await?;
+    let text = core::str::from_utf8(html.as_slice())
+        .map_err(|_| String::from("online apps list is not UTF-8"))?;
+    Ok(parse_online_apps(text))
+}
+
+fn print_online_apps_target(target: &MatrixTarget, width: usize, apps: &[OnlineApp]) {
+    if apps.is_empty() {
+        print_matrix_target_line(target, "apps: online list is empty");
+        return;
+    }
+    let table = TlbTable::with_width(ONLINE_HEADERS, width.saturating_sub(2));
+    table.emit_header(|text| print_matrix_target_line(target, text));
+    for (idx, app) in apps.iter().enumerate() {
+        let id = alloc::format!("{}", idx);
+        let row = [id.as_str(), app.name.as_str(), app.url.as_str()];
+        table.emit_row(&row, |text| print_matrix_target_line(target, text));
+    }
+    table.emit_footer(|text| print_matrix_target_line(target, text));
+}
+
+#[embassy_executor::task(pool_size = 2)]
+async fn online_app_task(target: MatrixTarget, width: usize, mut args: Vec<String>) {
+    crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
+
+    let log = |text: &str| print_matrix_target_line(&target, text);
+    if args.is_empty() {
+        log("apps: fetching online app list");
+        match online_apps().await {
+            Ok(apps) => print_online_apps_target(&target, width, apps.as_slice()),
+            Err(err) => log(alloc::format!("apps: online list failed: {}", err).as_str()),
+        }
+        set_matrix_target_active(&target, false);
+        return;
+    }
+
+    let id_text = args.remove(0);
+    let Ok(id) = id_text.parse::<usize>() else {
+        log("apps: online expects an app id");
+        set_matrix_target_active(&target, false);
+        return;
+    };
+    let app_args = args;
+    let apps = match online_apps().await {
+        Ok(apps) => apps,
+        Err(err) => {
+            log(alloc::format!("apps: online list failed: {}", err).as_str());
+            set_matrix_target_active(&target, false);
+            return;
+        }
+    };
+    let Some(app) = apps.get(id) else {
+        log("apps: unknown online app id");
+        print_online_apps_target(&target, width, apps.as_slice());
+        set_matrix_target_active(&target, false);
+        return;
+    };
+    log(alloc::format!("apps: fetching {} from {}", app.name.as_str(), app.url.as_str()).as_str());
+    match fetch_url_bytes(app.url.clone(), ONLINE_APP_MAX_BYTES).await {
+        Ok(module_bytes) => {
+            let _ = run::enqueue_blueprint_bytes(
+                target.clone(),
+                app.name.clone(),
+                module_bytes,
+                app_args,
+            );
+        }
+        Err(err) => log(alloc::format!("apps: online fetch failed: {}", err).as_str()),
+    }
+    set_matrix_target_active(&target, false);
+}
+
+fn online_app(spawner: &Spawner, io: &'static dyn ShellBackend2, args: Vec<String>) {
+    let target = matrix_target_for_backend(io);
+    let width = line_width_for_backend(io);
+    set_matrix_target_active(&target, true);
+    match online_app_task(target.clone(), width, args) {
+        Ok(token) => {
+            spawner.spawn(token);
+        }
+        Err(_) => {
+            set_matrix_target_active(&target, false);
+            line(io, "apps: online task unavailable");
+        }
+    }
+}
+
 fn parse_id(token: Option<&str>) -> Option<u8> {
     token.and_then(|s| s.parse::<u8>().ok())
 }
@@ -301,6 +484,7 @@ pub(crate) fn submit(
     let (action, rest): (AppsPromptMode, Vec<String>) = match first {
         None => (mode, Vec::new()),
         Some("start") => (AppsPromptMode::Start, parts.map(String::from).collect()),
+        Some("online") => (AppsPromptMode::Online, parts.map(String::from).collect()),
         Some("pause") => (AppsPromptMode::Pause, parts.map(String::from).collect()),
         Some("unpause") => (AppsPromptMode::Unpause, parts.map(String::from).collect()),
         Some("save") => (AppsPromptMode::Save, parts.map(String::from).collect()),
@@ -317,6 +501,7 @@ pub(crate) fn submit(
 
     match action {
         AppsPromptMode::Start => start_app(io, rest.into_iter()),
+        AppsPromptMode::Online => online_app(spawner, io, rest),
         AppsPromptMode::Pause => {
             stop_selected_or_all(io, parse_id(rest.first().map(String::as_str)), "pause")
         }

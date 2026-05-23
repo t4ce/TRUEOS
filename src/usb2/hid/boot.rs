@@ -37,16 +37,9 @@ impl HidBootKind {
 }
 
 #[inline]
-fn should_skip_descriptor_logging(vendor_id: u16, product_id: u16, kind: HidBootKind) -> bool {
-    // Narrow workaround for QEMU's simple emulated USB boot HID devices, which can
-    // wedge on the optional HID descriptor dump path before the interrupt stream starts.
-    let _ = kind;
+fn descriptor_logging_skip_reason(vendor_id: u16, product_id: u16) -> Option<&'static str> {
     super::super::descriptor::hid_optional_descriptor_skip_reason(vendor_id, product_id)
-        .map(|reason| {
-            let _ = reason.as_str();
-            true
-        })
-        .unwrap_or(false)
+        .map(|reason| reason.as_str())
 }
 
 #[inline]
@@ -563,6 +556,15 @@ pub(crate) async fn maybe_start_hid_boot_streams(
             target.in_max_packet_size,
             target.protocol
         );
+        crate::log_info!(target: "usb";
+            "crabusb: hid {} {:04X}:{:04X} open begin if#{} alt={} ep=0x{:02X}\n",
+            target.kind.as_str(),
+            vendor_id,
+            product_id,
+            target.interface_number,
+            target.alternate_setting,
+            target.in_endpoint
+        );
         let device = match host.open_device(dev_info).await {
             Ok(device) => device,
             Err(err) => {
@@ -577,15 +579,25 @@ pub(crate) async fn maybe_start_hid_boot_streams(
                 continue;
             }
         };
+        crate::log_info!(target: "usb";
+            "crabusb: hid {} {:04X}:{:04X} open end if#{} alt={} ep=0x{:02X}\n",
+            target.kind.as_str(),
+            vendor_id,
+            product_id,
+            target.interface_number,
+            target.alternate_setting,
+            target.in_endpoint
+        );
         let mut device = device;
 
         if descriptors_pending {
-            if should_skip_descriptor_logging(vendor_id, product_id, target.kind) {
+            if let Some(reason) = descriptor_logging_skip_reason(vendor_id, product_id) {
                 crate::log_info!(target: "usb";
-                    "crabusb: hid {} {:04X}:{:04X} skipping descriptor log for qemu boot hid\n",
+                    "crabusb: hid {} {:04X}:{:04X} skipping descriptor log reason={}\n",
                     target.kind.as_str(),
                     vendor_id,
-                    product_id
+                    product_id,
+                    reason
                 );
             } else {
                 crate::usb2::descriptor::log_hid_report_descriptors_on_device(

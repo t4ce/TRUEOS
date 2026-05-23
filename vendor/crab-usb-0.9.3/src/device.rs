@@ -237,11 +237,28 @@ impl From<Box<dyn DeviceOp>> for Device {
 
 impl Device {
     pub(crate) async fn init(&mut self) -> Result<(), USBError> {
-        if self.vendor_id() == 0x22d4 && self.product_id() == 0x1321 {
+        if let Some(reason) = skip_optional_manufacturer_read_reason(self.vendor_id(), self.product_id()) {
+            info!(
+                "crabusb/device: public init skip optional manufacturer read vid={:04x} pid={:04x} reason={}",
+                self.vendor_id(),
+                self.product_id(),
+                reason
+            );
             self.manufacturer = None;
             return Ok(());
         }
+        info!(
+            "crabusb/device: public init read-manufacturer begin vid={:04x} pid={:04x}",
+            self.vendor_id(),
+            self.product_id()
+        );
         self.manufacturer = self.read_manufacturer().await;
+        info!(
+            "crabusb/device: public init read-manufacturer end vid={:04x} pid={:04x} present={}",
+            self.vendor_id(),
+            self.product_id(),
+            self.manufacturer.is_some()
+        );
         Ok(())
     }
 
@@ -453,6 +470,16 @@ impl Device {
             }
         }
         Err(USBError::NotFound)
+    }
+}
+
+fn skip_optional_manufacturer_read_reason(vendor_id: u16, product_id: u16) -> Option<&'static str> {
+    match (vendor_id, product_id) {
+        // LaView/Castor boot mouse: optional string read can wedge real hardware.
+        (0x22d4, 0x1321) => Some("known-mouse-optional-string-read"),
+        // Corsair K70-style keyboard: do not let optional strings block boot HID handoff.
+        (0x1b1c, 0x1b39) => Some("corsair-keyboard-optional-string-read"),
+        _ => None,
     }
 }
 

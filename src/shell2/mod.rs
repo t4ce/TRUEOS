@@ -363,6 +363,7 @@ impl<'a> AlignedWriter<'a> {
         self.push_plain(&mut text, " ");
         for (idx, mode) in [
             AppsPromptMode::Start,
+            AppsPromptMode::Online,
             AppsPromptMode::Pause,
             AppsPromptMode::Unpause,
             AppsPromptMode::Save,

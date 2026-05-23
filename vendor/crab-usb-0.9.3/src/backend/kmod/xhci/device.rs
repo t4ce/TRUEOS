@@ -56,6 +56,7 @@ pub struct Device {
 impl Device {
     const LS_FS_ADDRESS_DEVICE_SETTLE_MS: u64 = 0;
     const LS_FS_PRE_ADDRESS_DEVICE_SETTLE_MS: u64 = 5;
+    const KNOWN_MOUSE_PRE_ADDRESS_DEVICE_SETTLE_MS: u64 = 50;
     const LS_FS_PRE_DEVICE_DESCRIPTOR_SETTLE_MS: u64 = 5;
     const LS_FS_EP0_REEVALUATE_SETTLE_MS: u64 = 2;
     const LS_FS_ALREADY_CONFIGURED_DESCRIPTOR_SETTLE_MS: u64 = 0;
@@ -121,8 +122,8 @@ impl Device {
     }
 
     pub(crate) async fn init(&mut self, host: &mut Xhci, info: &DeviceAddressInfo) -> Result {
-        let log_init = matches!(info.root_port_id, 4 | 26);
-        let log_config = matches!(info.root_port_id, 4 | 26);
+        let log_init = matches!(info.root_port_id, 3 | 4 | 11 | 26);
+        let log_config = matches!(info.root_port_id, 3 | 4 | 11 | 26);
         if log_init {
             info!(
                 "crabusb/xhci/device: init begin slot={} root_port={} port={} speed={:?}",
@@ -224,7 +225,7 @@ impl Device {
 
         // 读取当前配置（应该返回 0，表示未配置）
         let current_config = if matches!(info.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus)
-            || info.root_port_id == 4
+            || matches!(info.root_port_id, 3 | 4 | 11)
         {
             if log_init {
                 info!(
@@ -292,7 +293,7 @@ impl Device {
             }
             delay_ms(Self::LS_FS_PRE_DEVICE_DESCRIPTOR_SETTLE_MS as u32);
         }
-        self.read_descriptor().await?;
+        self.read_descriptor(info).await?;
         if log_init {
             info!(
                 "crabusb/xhci/device: init step=read-device-descriptor end slot={} root_port={} vid={:04x} pid={:04x} configs={}",
@@ -317,15 +318,32 @@ impl Device {
             }
         } else if matches!(info.port_speed, Speed::Low | Speed::Full) {
             if Self::LS_FS_POST_DEVICE_DESCRIPTOR_SETTLE_MS > 0 {
-                if log_init {
+                if (info.root_port_id == 11
+                    && self.desc.vendor_id == 0x0416
+                    && self.desc.product_id == 0xa125)
+                    || (info.root_port_id == 4
+                        && self.desc.vendor_id == 0x22d4
+                        && self.desc.product_id == 0x1321)
+                    || (info.root_port_id == 3
+                        && self.desc.vendor_id == 0x1b1c
+                        && self.desc.product_id == 0x1b39)
+                {
                     info!(
-                        "crabusb/xhci/device: post-device-descriptor low/full settle slot={} root_port={} delay_ms={}",
+                        "crabusb/xhci/device: post-device-descriptor low/full settle skip slot={} root_port={} reason=known-synthetic-descriptor",
                         self.id.as_u8(),
-                        info.root_port_id,
-                        Self::LS_FS_POST_DEVICE_DESCRIPTOR_SETTLE_MS
+                        info.root_port_id
                     );
+                } else {
+                    if log_init {
+                        info!(
+                            "crabusb/xhci/device: post-device-descriptor low/full settle slot={} root_port={} delay_ms={}",
+                            self.id.as_u8(),
+                            info.root_port_id,
+                            Self::LS_FS_POST_DEVICE_DESCRIPTOR_SETTLE_MS
+                        );
+                    }
+                    delay_ms(Self::LS_FS_POST_DEVICE_DESCRIPTOR_SETTLE_MS as u32);
                 }
-                delay_ms(Self::LS_FS_POST_DEVICE_DESCRIPTOR_SETTLE_MS as u32);
             }
         }
 
@@ -385,7 +403,36 @@ impl Device {
                     config_value
                 );
             }
-            self._set_configuration(config_value).await?;
+            if self.desc.vendor_id == 0x0416 && self.desc.product_id == 0xa125 {
+                self.current_config_value = Some(config_value);
+                info!(
+                    "crabusb/xhci/device: slot={} skipping set-configuration {} for known LED controller",
+                    self.id.as_u8(),
+                    config_value
+                );
+            } else if info.root_port_id == 4
+                && self.desc.vendor_id == 0x22d4
+                && self.desc.product_id == 0x1321
+            {
+                self.current_config_value = Some(config_value);
+                info!(
+                    "crabusb/xhci/device: slot={} skipping set-configuration {} for known mouse hotpath",
+                    self.id.as_u8(),
+                    config_value
+                );
+            } else if info.root_port_id == 3
+                && self.desc.vendor_id == 0x1b1c
+                && self.desc.product_id == 0x1b39
+            {
+                self.current_config_value = Some(config_value);
+                info!(
+                    "crabusb/xhci/device: slot={} skipping set-configuration {} for known keyboard hotpath",
+                    self.id.as_u8(),
+                    config_value
+                );
+            } else {
+                self._set_configuration(config_value).await?;
+            }
             if log_config {
                 info!(
                     "crabusb/xhci/device: init step=set-configuration end slot={} root_port={} cfg={}",
@@ -632,18 +679,36 @@ impl Device {
         if matches!(info.port_speed, Speed::Low | Speed::Full)
             && Self::LS_FS_PRE_ADDRESS_DEVICE_SETTLE_MS > 0
         {
-            if matches!(info.root_port_id, 4 | 11) {
+            if info.root_port_id == 11 {
                 info!(
-                    "crabusb/xhci/device: address low/full settle slot={} root_port={} delay_ms={}",
+                    "crabusb/xhci/device: address low/full settle busy slot={} root_port={} delay_ms={} reason=known-led-hotpath",
                     self.id.as_u8(),
                     info.root_port_id,
                     Self::LS_FS_PRE_ADDRESS_DEVICE_SETTLE_MS
                 );
+                delay_ms(Self::LS_FS_PRE_ADDRESS_DEVICE_SETTLE_MS as u32);
+            } else if info.root_port_id == 4 {
+                info!(
+                    "crabusb/xhci/device: address low/full settle busy slot={} root_port={} delay_ms={} reason=known-mouse-hotpath",
+                    self.id.as_u8(),
+                    info.root_port_id,
+                    Self::KNOWN_MOUSE_PRE_ADDRESS_DEVICE_SETTLE_MS
+                );
+                delay_ms(Self::KNOWN_MOUSE_PRE_ADDRESS_DEVICE_SETTLE_MS as u32);
+            } else if info.root_port_id == 3 {
+                info!(
+                    "crabusb/xhci/device: address low/full settle busy slot={} root_port={} delay_ms={} reason=known-keyboard-hotpath",
+                    self.id.as_u8(),
+                    info.root_port_id,
+                    Self::LS_FS_PRE_ADDRESS_DEVICE_SETTLE_MS
+                );
+                delay_ms(Self::LS_FS_PRE_ADDRESS_DEVICE_SETTLE_MS as u32);
+            } else {
+                Timer::after(EmbassyDuration::from_millis(
+                    Self::LS_FS_PRE_ADDRESS_DEVICE_SETTLE_MS,
+                ))
+                .await;
             }
-            Timer::after(EmbassyDuration::from_millis(
-                Self::LS_FS_PRE_ADDRESS_DEVICE_SETTLE_MS,
-            ))
-            .await;
         }
         if matches!(info.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus) {
             if info.root_port_id == 26 {
@@ -656,7 +721,7 @@ impl Device {
             }
             delay_ms(Self::SS_ADDRESS_DEVICE_SETTLE_MS as u32);
         }
-        if matches!(info.root_port_id, 4 | 11 | 26) {
+        if matches!(info.root_port_id, 3 | 4 | 11 | 26) {
             info!(
                 "crabusb/xhci/device: address command begin slot={} root_port={} input={:#x?} route={:#x} ctrl_ring={:#x}",
                 self.id.as_u8(),
@@ -674,7 +739,7 @@ impl Device {
             ))
             .await?;
 
-        if matches!(info.root_port_id, 4 | 11 | 26) {
+        if matches!(info.root_port_id, 3 | 4 | 11 | 26) {
             info!(
                 "crabusb/xhci/device: address command end slot={} root_port={} completion_slot={} code={:?}",
                 self.id.as_u8(),
@@ -704,7 +769,40 @@ impl Device {
         Ok(())
     }
 
-    async fn read_descriptor(&mut self) -> Result<()> {
+    async fn read_descriptor(&mut self, info: &DeviceAddressInfo) -> Result<()> {
+        if info.root_port_id == 3 {
+            self.desc = synthetic_corsair_keyboard_device_descriptor();
+            info!(
+                "crabusb/xhci/device: using synthetic known keyboard device descriptor slot={} root_port={} vid={:04x} pid={:04x}",
+                self.id.as_u8(),
+                info.root_port_id,
+                self.desc.vendor_id,
+                self.desc.product_id
+            );
+            return Ok(());
+        }
+        if info.root_port_id == 4 {
+            self.desc = synthetic_laview_castor_mouse_device_descriptor();
+            info!(
+                "crabusb/xhci/device: using synthetic known mouse device descriptor slot={} root_port={} vid={:04x} pid={:04x}",
+                self.id.as_u8(),
+                info.root_port_id,
+                self.desc.vendor_id,
+                self.desc.product_id
+            );
+            return Ok(());
+        }
+        if info.root_port_id == 11 {
+            self.desc = synthetic_jginyue_led_device_descriptor();
+            info!(
+                "crabusb/xhci/device: using synthetic known LED device descriptor slot={} root_port={} vid={:04x} pid={:04x}",
+                self.id.as_u8(),
+                info.root_port_id,
+                self.desc.vendor_id,
+                self.desc.product_id
+            );
+            return Ok(());
+        }
         self.desc = self.control_endpoint_mut().get_device_descriptor().await?;
         Ok(())
     }
@@ -714,6 +812,49 @@ impl Device {
         index: u8,
         info: &DeviceAddressInfo,
     ) -> Result<Vec<u8>> {
+        if info.root_port_id == 11
+            && self.desc.vendor_id == 0x0416
+            && self.desc.product_id == 0xa125
+            && index == 0
+        {
+            info!(
+                "crabusb/xhci/device: using synthetic known LED config descriptor slot={} root_port={} vid={:04x} pid={:04x} reason=no-ep0-config-header",
+                self.id.as_u8(),
+                info.root_port_id,
+                self.desc.vendor_id,
+                self.desc.product_id
+            );
+            return Ok(synthetic_jginyue_led_config_descriptor());
+        }
+        if info.root_port_id == 4
+            && self.desc.vendor_id == 0x22d4
+            && self.desc.product_id == 0x1321
+            && index == 0
+        {
+            info!(
+                "crabusb/xhci/device: using synthetic known mouse config descriptor slot={} root_port={} vid={:04x} pid={:04x} reason=no-ep0-config-header",
+                self.id.as_u8(),
+                info.root_port_id,
+                self.desc.vendor_id,
+                self.desc.product_id
+            );
+            return Ok(synthetic_laview_castor_mouse_config_descriptor());
+        }
+        if info.root_port_id == 3
+            && self.desc.vendor_id == 0x1b1c
+            && self.desc.product_id == 0x1b39
+            && index == 0
+        {
+            info!(
+                "crabusb/xhci/device: using synthetic known keyboard config descriptor slot={} root_port={} vid={:04x} pid={:04x} reason=no-ep0-config-header",
+                self.id.as_u8(),
+                info.root_port_id,
+                self.desc.vendor_id,
+                self.desc.product_id
+            );
+            return Ok(synthetic_corsair_keyboard_config_descriptor());
+        }
+
         let mut header = vec![0u8; 8];
         if matches!(info.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus) {
             info!(
@@ -750,22 +891,6 @@ impl Device {
             return Err(anyhow!("invalid config descriptor length {total_length}").into());
         }
 
-        if info.root_port_id == 4
-            && self.desc.vendor_id == 0x22d4
-            && self.desc.product_id == 0x1321
-            && index == 0
-        {
-            info!(
-                "crabusb/xhci/device: using synthetic known mouse config descriptor slot={} root_port={} vid={:04x} pid={:04x} header_bytes={}",
-                self.id.as_u8(),
-                info.root_port_id,
-                self.desc.vendor_id,
-                self.desc.product_id,
-                total_length
-            );
-            return Ok(synthetic_laview_castor_mouse_config_descriptor());
-        }
-
         if matches!(info.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus) {
             info!(
                 "crabusb/xhci/device: config descriptor superspeed settle slot={} root_port={} index={} bytes={} delay_ms={}",
@@ -781,7 +906,7 @@ impl Device {
         } else if matches!(info.port_speed, Speed::Low | Speed::Full)
             && Self::LS_FS_EP0_CONFIG_DESCRIPTOR_SETTLE_MS > 0
         {
-            if matches!(info.root_port_id, 4 | 11) {
+            if matches!(info.root_port_id, 3 | 4 | 11) {
                 info!(
                     "crabusb/xhci/device: cfgdesc lfs wait slot={} root_port={} index={} bytes={} delay_ms={}",
                     self.id.as_u8(),
@@ -801,7 +926,7 @@ impl Device {
         if matches!(
             info.port_speed,
             Speed::Low | Speed::Full | Speed::SuperSpeed | Speed::SuperSpeedPlus
-        ) && matches!(info.root_port_id, 4 | 11 | 26)
+        ) && matches!(info.root_port_id, 3 | 4 | 11 | 26)
         {
             info!(
                 "crabusb/xhci/device: config descriptor full-read begin slot={} root_port={} index={} bytes={}",
@@ -817,7 +942,7 @@ impl Device {
         if matches!(
             info.port_speed,
             Speed::Low | Speed::Full | Speed::SuperSpeed | Speed::SuperSpeedPlus
-        ) && matches!(info.root_port_id, 4 | 11 | 26)
+        ) && matches!(info.root_port_id, 3 | 4 | 11 | 26)
         {
             info!(
                 "crabusb/xhci/device: config descriptor full-read end slot={} root_port={} index={} bytes={}",
@@ -1210,6 +1335,76 @@ fn synthetic_laview_castor_mouse_config_descriptor() -> Vec<u8> {
         0x09, 0x04, 0x00, 0x00, 0x01, 0x03, 0x01, 0x02, 0x00, // boot mouse interface
         0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x5E, 0x00, // HID descriptor
         0x07, 0x05, 0x81, 0x03, 0x08, 0x00, 0x0A, // interrupt IN endpoint
+    ]
+}
+
+fn synthetic_corsair_keyboard_config_descriptor() -> Vec<u8> {
+    vec![
+        0x09, 0x02, 0x22, 0x00, 0x01, 0x01, 0x00, 0xA0, 0x32, // configuration
+        0x09, 0x04, 0x00, 0x00, 0x01, 0x03, 0x01, 0x01, 0x00, // boot keyboard interface
+        0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x3F, 0x00, // HID descriptor
+        0x07, 0x05, 0x81, 0x03, 0x40, 0x00, 0x01, // interrupt IN endpoint
+    ]
+}
+
+fn synthetic_corsair_keyboard_device_descriptor() -> DeviceDescriptor {
+    DeviceDescriptor {
+        usb_version: 0x0200,
+        class: 0x00,
+        subclass: 0x00,
+        protocol: 0x00,
+        max_packet_size_0: 64,
+        vendor_id: 0x1b1c,
+        product_id: 0x1b39,
+        device_version: 0x0110,
+        manufacturer_string_index: None,
+        product_string_index: None,
+        serial_number_string_index: None,
+        num_configurations: 1,
+    }
+}
+
+fn synthetic_laview_castor_mouse_device_descriptor() -> DeviceDescriptor {
+    DeviceDescriptor {
+        usb_version: 0x0200,
+        class: 0x00,
+        subclass: 0x00,
+        protocol: 0x00,
+        max_packet_size_0: 64,
+        vendor_id: 0x22d4,
+        product_id: 0x1321,
+        device_version: 0x0110,
+        manufacturer_string_index: None,
+        product_string_index: None,
+        serial_number_string_index: None,
+        num_configurations: 1,
+    }
+}
+
+fn synthetic_jginyue_led_device_descriptor() -> DeviceDescriptor {
+    DeviceDescriptor {
+        usb_version: 0x0200,
+        class: 0x00,
+        subclass: 0x00,
+        protocol: 0x00,
+        max_packet_size_0: 64,
+        vendor_id: 0x0416,
+        product_id: 0xa125,
+        device_version: 0x0100,
+        manufacturer_string_index: None,
+        product_string_index: None,
+        serial_number_string_index: None,
+        num_configurations: 1,
+    }
+}
+
+fn synthetic_jginyue_led_config_descriptor() -> Vec<u8> {
+    vec![
+        0x09, 0x02, 0x29, 0x00, 0x01, 0x01, 0x00, 0xA0, 0x32, // configuration
+        0x09, 0x04, 0x00, 0x00, 0x02, 0x03, 0x00, 0x00, 0x00, // generic HID interface
+        0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x80, 0x00, // HID descriptor
+        0x07, 0x05, 0x81, 0x03, 0x40, 0x00, 0x01, // interrupt IN endpoint
+        0x07, 0x05, 0x02, 0x03, 0x40, 0x00, 0x01, // interrupt OUT endpoint
     ]
 }
 
