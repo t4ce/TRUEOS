@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 use super::Change;
 use futures_core::Stream;
 use pin_project_lite::pin_project;

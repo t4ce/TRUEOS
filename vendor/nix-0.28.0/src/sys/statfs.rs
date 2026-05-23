@@ -1,6 +1,7 @@
 //! Get filesystem statistics, non-portably
 //!
 //! See [`statvfs`](crate::sys::statvfs) for a portable alternative.
+#![allow(missing_docs)]
 #[cfg(not(linux_android))]
 use std::ffi::CStr;
 use std::fmt::{self, Debug};

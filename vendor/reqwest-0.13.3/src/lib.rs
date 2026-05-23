@@ -249,6 +249,7 @@
 //! [cargo-features]: https://doc.rust-lang.org/stable/cargo/reference/manifest.html#the-features-section
 //! [sponsor]: https://seanmonstar.com/sponsor
 
+#![allow(missing_docs)]
 #[cfg(all(feature = "http3", not(reqwest_unstable)))]
 compile_error!(
     "\

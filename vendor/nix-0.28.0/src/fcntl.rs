@@ -1,4 +1,5 @@
 //! file control options
+#![allow(missing_docs)]
 use crate::errno::Errno;
 #[cfg(all(target_os = "freebsd", target_arch = "x86_64"))]
 use core::slice;

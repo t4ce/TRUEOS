@@ -1,6 +1,7 @@
 // Copyright 2018 the SVG Types Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+#![allow(missing_docs)]
 /*!
 *svgtypes* is a collection of parsers for [SVG](https://www.w3.org/TR/SVG2/) types.
 

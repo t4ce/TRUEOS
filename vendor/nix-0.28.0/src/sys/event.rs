@@ -3,6 +3,7 @@
 //! # See Also
 //! [kqueue(2)](https://www.freebsd.org/cgi/man.cgi?query=kqueue)
 
+#![allow(missing_docs)]
 use crate::{Errno, Result};
 #[cfg(not(target_os = "netbsd"))]
 use libc::{c_int, c_long, intptr_t, time_t, timespec, uintptr_t};

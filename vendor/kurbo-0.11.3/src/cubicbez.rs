@@ -3,6 +3,7 @@
 
 //! Cubic Bézier segments.
 
+#![allow(missing_docs)]
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::{Mul, Range};

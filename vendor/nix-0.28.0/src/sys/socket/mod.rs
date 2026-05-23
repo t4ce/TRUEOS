@@ -1,6 +1,7 @@
 //! Socket interface functions
 //!
 //! [Further reading](https://man7.org/linux/man-pages/man7/socket.7.html)
+#![allow(missing_docs)]
 #[cfg(any(target_os = "freebsd", linux_android))]
 #[cfg(feature = "uio")]
 use crate::sys::time::TimeSpec;

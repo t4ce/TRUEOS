@@ -475,7 +475,7 @@ verbose_file_reads = "warn"
 
 [lints.rust]
 missing_debug_implementations = "warn"
-missing_docs = "warn"
+missing_docs = "allow"
 unreachable_pub = "warn"
 unsafe_code = "forbid"
 

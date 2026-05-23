@@ -1,6 +1,7 @@
 // Copyright 2018 the SVG Types Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+#![allow(missing_docs)]
 use crate::{Error, Stream};
 
 /// List of all SVG angle units.

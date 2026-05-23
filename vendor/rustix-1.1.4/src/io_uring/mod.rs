@@ -24,6 +24,7 @@
 //! [rustix-uring]: https://crates.io/crates/rustix-uring
 #![allow(unsafe_code)]
 
+#![allow(missing_docs)]
 mod bindgen_types;
 
 use crate::fd::{AsFd, BorrowedFd, OwnedFd, RawFd};

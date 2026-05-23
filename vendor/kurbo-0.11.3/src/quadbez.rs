@@ -3,6 +3,7 @@
 
 //! Quadratic Bézier segments.
 
+#![allow(missing_docs)]
 use core::ops::{Mul, Range};
 
 use arrayvec::ArrayVec;

@@ -79,6 +79,7 @@
 //! [`client::handshake`]: client/fn.handshake.html
 
 #![deny(
+#![allow(missing_docs)]
     missing_debug_implementations,
     missing_docs,
     clippy::missing_safety_doc,

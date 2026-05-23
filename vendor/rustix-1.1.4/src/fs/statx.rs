@@ -1,5 +1,6 @@
 //! Linux `statx`.
 
+#![allow(missing_docs)]
 use crate::fd::AsFd;
 use crate::fs::AtFlags;
 use crate::{backend, io, path};

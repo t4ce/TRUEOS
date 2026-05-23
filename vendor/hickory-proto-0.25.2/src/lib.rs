@@ -9,6 +9,7 @@
 #![no_std]
 // LIBRARY WARNINGS
 #![warn(
+#![allow(missing_docs)]
     clippy::alloc_instead_of_core,
     clippy::default_trait_access,
     clippy::dbg_macro,

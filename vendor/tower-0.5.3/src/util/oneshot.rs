@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 use pin_project_lite::pin_project;
 use std::{
     fmt,

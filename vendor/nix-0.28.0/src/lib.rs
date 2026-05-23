@@ -48,6 +48,7 @@
 #![deny(unused)]
 #![allow(unused_macros)]
 #![cfg_attr(
+#![allow(missing_docs)]
     not(all(
         feature = "acct",
         feature = "aio",

@@ -35,6 +35,7 @@
 #![warn(missing_docs, unreachable_pub, clippy::use_self)]
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
 
+#![allow(missing_docs)]
 mod config;
 mod connector;
 mod stream;

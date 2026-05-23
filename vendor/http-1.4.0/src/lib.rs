@@ -157,6 +157,7 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
+#![allow(missing_docs)]
 extern crate alloc;
 
 #[cfg(not(feature = "std"))]

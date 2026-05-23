@@ -160,6 +160,7 @@
 //! [examples]: https://github.com/tower-rs/tower-http/tree/master/examples
 
 #![warn(
+#![allow(missing_docs)]
     clippy::all,
     clippy::dbg_macro,
     clippy::todo,

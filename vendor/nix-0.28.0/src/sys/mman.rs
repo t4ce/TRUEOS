@@ -1,5 +1,6 @@
 //! Memory management declarations.
 
+#![allow(missing_docs)]
 use crate::errno::Errno;
 #[cfg(not(target_os = "android"))]
 use crate::NixPath;

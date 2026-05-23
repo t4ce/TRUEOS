@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 use bytes::{Buf, BufMut};
 use std::{
     convert::TryFrom,

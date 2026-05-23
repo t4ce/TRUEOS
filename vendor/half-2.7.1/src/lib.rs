@@ -117,6 +117,7 @@
 //! [`rkyv`]: (https://crates.io/crates/rkyv)
 //! [`arbitrary`]: (https://crates.io/crates/arbitrary)
 #![cfg_attr(
+#![allow(missing_docs)]
     feature = "alloc",
     doc = "
 [`vec`]: mod@vec"

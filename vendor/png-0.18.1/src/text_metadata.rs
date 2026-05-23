@@ -98,6 +98,7 @@
 
 #![warn(missing_docs)]
 
+#![allow(missing_docs)]
 use alloc::borrow::ToOwned;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;

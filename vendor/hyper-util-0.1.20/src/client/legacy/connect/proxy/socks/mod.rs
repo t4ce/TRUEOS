@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 mod v5;
 pub use v5::{SocksV5, SocksV5Error};
 

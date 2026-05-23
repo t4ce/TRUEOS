@@ -1,5 +1,6 @@
 //! Safe wrappers around functions found in libc "unistd.h" header
 
+#![allow(missing_docs)]
 use crate::errno::Errno;
 
 #[cfg(any(

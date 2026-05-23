@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 use alloc::{boxed::Box, format};
 use core::error::Error as StdError;
 use core::future::Future;

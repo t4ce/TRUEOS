@@ -1,6 +1,7 @@
 // Copyright 2021 the SVG Types Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+#![allow(missing_docs)]
 use crate::{Angle, AngleUnit, Color, Error, Length, LengthUnit, Stream};
 
 /// Representation of the [`<filter-function>`] | [`<url>`] type.

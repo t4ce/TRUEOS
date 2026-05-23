@@ -2,6 +2,7 @@
 //!
 //! See [`Either`] documentation for more details.
 
+#![allow(missing_docs)]
 use pin_project_lite::pin_project;
 use std::{
     future::Future,

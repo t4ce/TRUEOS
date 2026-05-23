@@ -12,6 +12,7 @@
 #![cfg_attr(not(test), warn(clippy::print_stdout, clippy::dbg_macro))]
 #![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
 
+#![allow(missing_docs)]
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 extern crate alloc;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]

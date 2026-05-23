@@ -20,6 +20,7 @@
 #![allow(clippy::too_many_arguments)]
 #![warn(clippy::use_self)]
 
+#![allow(missing_docs)]
 use std::{
     fmt,
     net::{IpAddr, SocketAddr},

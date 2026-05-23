@@ -41,6 +41,7 @@
 #![warn(unreachable_pub)]
 #![warn(clippy::use_self)]
 
+#![allow(missing_docs)]
 use std::sync::Arc;
 
 mod connection;

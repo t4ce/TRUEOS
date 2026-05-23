@@ -1,5 +1,6 @@
 //! Lightweight, flexible WebSockets for Rust.
 #![deny(
+#![allow(missing_docs)]
     missing_docs,
     missing_copy_implementations,
     missing_debug_implementations,

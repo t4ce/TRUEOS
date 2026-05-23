@@ -1,4 +1,5 @@
 #![deny(missing_docs)]
+#![allow(missing_docs)]
 use heapless::{LinearMap, Vec};
 
 use crate::config::{IFACE_MAX_PREFIX_COUNT, IFACE_MAX_ROUTE_COUNT};

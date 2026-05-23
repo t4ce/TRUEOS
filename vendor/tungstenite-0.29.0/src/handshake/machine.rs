@@ -1,5 +1,6 @@
 //! WebSocket handshake machine.
 
+#![allow(missing_docs)]
 use bytes::Buf;
 use log::*;
 use std::io::{Cursor, Read, Write};

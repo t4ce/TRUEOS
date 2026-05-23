@@ -3,6 +3,7 @@
 
 #![warn(missing_debug_implementations, missing_docs, unreachable_pub)]
 
+#![allow(missing_docs)]
 use crate::filter::AsyncFilter;
 use futures_util::future::Either;
 use pin_project_lite::pin_project;

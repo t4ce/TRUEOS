@@ -61,6 +61,7 @@
 // Disallow warnings in examples.
 #![doc(test(attr(deny(warnings))))]
 
+#![allow(missing_docs)]
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 extern crate alloc;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]

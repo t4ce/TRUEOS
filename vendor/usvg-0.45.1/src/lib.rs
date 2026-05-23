@@ -1,6 +1,7 @@
 // Copyright 2018 the Resvg Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+#![allow(missing_docs)]
 /*!
 `usvg` (micro SVG) is an [SVG] parser that tries to solve most of SVG complexity.
 

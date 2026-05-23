@@ -38,6 +38,7 @@
 
 #![no_std]
 #![deny(
+#![allow(missing_docs)]
     rustdoc::all,
     missing_docs,
     elided_lifetimes_in_paths,

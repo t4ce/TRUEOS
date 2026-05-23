@@ -755,9 +755,66 @@ pub mod vec {
     pub use alloc::vec::*;
 }
 
+const TRUEOS_LOG_INFO: u32 = 3;
+const TRUEOS_LOG_ERROR: u32 = 5;
+
+unsafe extern "Rust" {
+    fn trueos_tokio_platform_log(level: u32, bytes: *const u8, len: usize);
+}
+
+struct TrueosLogWriter {
+    level: u32,
+}
+
+impl core::fmt::Write for TrueosLogWriter {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        unsafe { trueos_tokio_platform_log(self.level, s.as_ptr(), s.len()) };
+        Ok(())
+    }
+}
+
+#[doc(hidden)]
+pub fn _print(args: core::fmt::Arguments<'_>) {
+    let _ = core::fmt::write(&mut TrueosLogWriter { level: TRUEOS_LOG_INFO }, args);
+}
+
+#[doc(hidden)]
+pub fn _eprint(args: core::fmt::Arguments<'_>) {
+    let _ = core::fmt::write(&mut TrueosLogWriter { level: TRUEOS_LOG_ERROR }, args);
+}
+
+#[macro_export]
+macro_rules! print {
+    ($($arg:tt)*) => {{
+        $crate::_print(core::format_args!($($arg)*));
+    }};
+}
+
+#[macro_export]
+macro_rules! println {
+    () => {{
+        $crate::_print(core::format_args!("\n"));
+    }};
+    ($($arg:tt)*) => {{
+        $crate::_print(core::format_args!("{}\n", core::format_args!($($arg)*)));
+    }};
+}
+
+#[macro_export]
+macro_rules! eprint {
+    ($($arg:tt)*) => {{
+        $crate::_eprint(core::format_args!($($arg)*));
+    }};
+}
+
 #[macro_export]
 macro_rules! eprintln {
-    ($($tt:tt)*) => {{}};
+    () => {{
+        $crate::_eprint(core::format_args!("\n"));
+    }};
+    ($($arg:tt)*) => {{
+        $crate::_eprint(core::format_args!("{}\n", core::format_args!($($arg)*)));
+    }};
 }
 
 #[macro_export]

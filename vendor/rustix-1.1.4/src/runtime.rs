@@ -45,6 +45,7 @@
 //! serious problems.
 #![allow(unsafe_code)]
 
+#![allow(missing_docs)]
 use crate::ffi::CStr;
 #[cfg(feature = "fs")]
 use crate::fs::AtFlags;

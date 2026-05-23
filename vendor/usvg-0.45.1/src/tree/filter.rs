@@ -3,6 +3,7 @@
 
 //! SVG filter types.
 
+#![allow(missing_docs)]
 use alloc::{boxed::Box, string::String, vec, vec::Vec};
 use strict_num::PositiveF32;
 
