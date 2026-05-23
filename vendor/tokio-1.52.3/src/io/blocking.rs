@@ -4,8 +4,8 @@ use crate::runtime::prelude::*;
 
 use core::cmp;
 use core::future::Future;
-use std::io;
-use std::io::prelude::*;
+use crate::io;
+use crate::io::prelude::*;
 use core::mem::MaybeUninit;
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};

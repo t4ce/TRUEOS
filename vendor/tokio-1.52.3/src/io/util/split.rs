@@ -3,7 +3,7 @@ use crate::io::AsyncBufRead;
 use crate::runtime::prelude::*;
 
 use pin_project_lite::pin_project;
-use std::io;
+use crate::io;
 use core::mem;
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};

@@ -2,7 +2,7 @@ use crate::io::util::poll_proceed_and_make_progress;
 use crate::io::AsyncWrite;
 
 use ::core::fmt;
-use std::io;
+use crate::io;
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};
 

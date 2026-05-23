@@ -8,7 +8,7 @@ use crate::runtime::io::{Direction, Handle, ReadyEvent, ScheduledIo};
 use crate::runtime::scheduler;
 
 use mio::event::Source;
-use std::io;
+use crate::io;
 use alloc::sync::Arc;
 use core::task::{ready, Context, Poll};
 

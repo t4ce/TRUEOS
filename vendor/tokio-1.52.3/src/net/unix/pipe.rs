@@ -5,7 +5,7 @@ use crate::io::{AsyncRead, AsyncWrite, PollEvented, ReadBuf, Ready};
 
 use mio::unix::pipe as mio_pipe;
 use std::fs::File;
-use std::io::{self, Read, Write};
+use crate::io::{self, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use crate::path::Path;
@@ -1360,7 +1360,7 @@ impl Receiver {
         /// ```
         pub fn try_read_buf<B: BufMut>(&self, buf: &mut B) -> io::Result<usize> {
             self.io.registration().try_io(Interest::READABLE, || {
-                use std::io::Read;
+                use crate::io::Read;
 
                 let dst = buf.chunk_mut();
                 let dst =

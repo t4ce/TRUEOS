@@ -5,7 +5,7 @@ use super::windows::{self as os_impl};
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use super::zkvm::{self as os_impl};
 
-use std::io;
+use crate::io;
 
 /// Completes when a "ctrl-c" notification is sent to the process.
 ///

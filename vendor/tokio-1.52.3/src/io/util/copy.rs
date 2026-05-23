@@ -2,7 +2,7 @@ use crate::io::{AsyncRead, AsyncWrite, ReadBuf};
 use crate::runtime::prelude::*;
 
 use core::future::Future;
-use std::io;
+use crate::io;
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};
 

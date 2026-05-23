@@ -18,7 +18,7 @@ use crate::util::trace::{blocking_task, SpawnMeta};
 use std::collections::HashMap;
 use alloc::collections::VecDeque;
 use ::core::fmt;
-use std::io;
+use crate::io;
 use core::sync::atomic::Ordering;
 use core::time::Duration;
 

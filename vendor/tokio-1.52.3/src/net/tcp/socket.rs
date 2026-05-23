@@ -1,7 +1,7 @@
 use crate::net::{TcpListener, TcpStream};
 
 use ::core::fmt;
-use std::io;
+use crate::io;
 use std::net::SocketAddr;
 
 #[cfg(not(windows))]

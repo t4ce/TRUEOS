@@ -1,7 +1,7 @@
 use crate::fs::asyncify;
 use alloc::borrow::ToOwned;
 
-use std::io;
+use crate::io;
 use crate::path::Path;
 
 /// Creates a new symbolic link on the filesystem.

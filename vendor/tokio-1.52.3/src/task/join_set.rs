@@ -726,7 +726,7 @@ impl<'a, T: 'static> Builder<'a, T> {
     ///
     /// [`AbortHandle`]: crate::task::AbortHandle
     #[track_caller]
-    pub fn spawn<F>(self, future: F) -> std::io::Result<AbortHandle>
+    pub fn spawn<F>(self, future: F) -> crate::io::Result<AbortHandle>
     where
         F: Future<Output = T>,
         F: Send + 'static,
@@ -746,7 +746,7 @@ impl<'a, T: 'static> Builder<'a, T> {
     /// [`AbortHandle`]: crate::task::AbortHandle
     /// [runtime handle]: crate::runtime::Handle
     #[track_caller]
-    pub fn spawn_on<F>(self, future: F, handle: &Handle) -> std::io::Result<AbortHandle>
+    pub fn spawn_on<F>(self, future: F, handle: &Handle) -> crate::io::Result<AbortHandle>
     where
         F: Future<Output = T>,
         F: Send + 'static,
@@ -769,7 +769,7 @@ impl<'a, T: 'static> Builder<'a, T> {
     /// [`JoinSet`]: crate::task::JoinSet
     /// [`AbortHandle`]: crate::task::AbortHandle
     #[track_caller]
-    pub fn spawn_blocking<F>(self, f: F) -> std::io::Result<AbortHandle>
+    pub fn spawn_blocking<F>(self, f: F) -> crate::io::Result<AbortHandle>
     where
         F: FnOnce() -> T,
         F: Send + 'static,
@@ -789,7 +789,7 @@ impl<'a, T: 'static> Builder<'a, T> {
     /// [`JoinSet`]: crate::task::JoinSet
     /// [`AbortHandle`]: crate::task::AbortHandle
     #[track_caller]
-    pub fn spawn_blocking_on<F>(self, f: F, handle: &Handle) -> std::io::Result<AbortHandle>
+    pub fn spawn_blocking_on<F>(self, f: F, handle: &Handle) -> crate::io::Result<AbortHandle>
     where
         F: FnOnce() -> T,
         F: Send + 'static,
@@ -815,7 +815,7 @@ impl<'a, T: 'static> Builder<'a, T> {
     /// [`LocalRuntime`]: crate::runtime::LocalRuntime
     /// [`AbortHandle`]: crate::task::AbortHandle
     #[track_caller]
-    pub fn spawn_local<F>(self, future: F) -> std::io::Result<AbortHandle>
+    pub fn spawn_local<F>(self, future: F) -> crate::io::Result<AbortHandle>
     where
         F: Future<Output = T>,
         F: 'static,
@@ -833,7 +833,7 @@ impl<'a, T: 'static> Builder<'a, T> {
     /// [`LocalSet`]: crate::task::LocalSet
     /// [`AbortHandle`]: crate::task::AbortHandle
     #[track_caller]
-    pub fn spawn_local_on<F>(self, future: F, local_set: &LocalSet) -> std::io::Result<AbortHandle>
+    pub fn spawn_local_on<F>(self, future: F, local_set: &LocalSet) -> crate::io::Result<AbortHandle>
     where
         F: Future<Output = T>,
         F: 'static,

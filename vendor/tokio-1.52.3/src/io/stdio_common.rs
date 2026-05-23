@@ -33,7 +33,7 @@ where
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         mut buf: &[u8],
-    ) -> Poll<Result<usize, std::io::Error>> {
+    ) -> Poll<Result<usize, crate::io::Error>> {
         // just a closure to avoid repetitive code
         let mut call_inner = move |buf| Pin::new(&mut self.inner).poll_write(cx, buf);
 
@@ -94,14 +94,14 @@ where
     fn poll_flush(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
+    ) -> Poll<Result<(), crate::io::Error>> {
         Pin::new(&mut self.inner).poll_flush(cx)
     }
 
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
+    ) -> Poll<Result<(), crate::io::Error>> {
         Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }

@@ -42,7 +42,7 @@ cfg_not_rt! {
     unsafe impl<T: Send> Sync for JoinHandle<T> {}
 
     impl<R> Future for JoinHandle<R> {
-        type Output = Result<R, std::io::Error>;
+        type Output = Result<R, crate::io::Error>;
 
         fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
             unreachable!()

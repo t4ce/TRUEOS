@@ -9,7 +9,7 @@ use crate::runtime::{driver, io};
 use crate::signal::registry::globals;
 
 use mio::net::UnixStream;
-use std::io::{self as std_io, Read};
+use crate::io::{self as std_io, Read};
 use std::sync::{Arc, Weak};
 use core::time::Duration;
 

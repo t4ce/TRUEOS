@@ -141,7 +141,7 @@ pub(crate) mod impl_netbsd {
     use crate::net::unix::{self, UnixStream};
 
     use libc::{c_void, getsockopt, socklen_t, unpcbid, LOCAL_PEEREID, SOL_SOCKET};
-    use std::io;
+    use crate::io;
     use core::mem::size_of;
     use std::os::unix::io::AsRawFd;
 
@@ -183,7 +183,7 @@ pub(crate) mod impl_bsd {
     use crate::net::unix::{self, UnixStream};
 
     use libc::getpeereid;
-    use std::io;
+    use crate::io;
     use core::mem::MaybeUninit;
     use std::os::unix::io::AsRawFd;
 
@@ -220,7 +220,7 @@ pub(crate) mod impl_macos {
     use crate::net::unix::{self, UnixStream};
 
     use libc::{c_void, getpeereid, getsockopt, pid_t, LOCAL_PEEREPID, SOL_LOCAL};
-    use std::io;
+    use crate::io;
     use core::mem::size_of;
     use core::mem::MaybeUninit;
     use std::os::unix::io::AsRawFd;
@@ -265,7 +265,7 @@ pub(crate) mod impl_macos {
 #[cfg(any(target_os = "solaris", target_os = "illumos"))]
 pub(crate) mod impl_solaris {
     use crate::net::unix::{self, UnixStream};
-    use std::io;
+    use crate::io;
     use std::os::unix::io::AsRawFd;
     use core::ptr;
 
@@ -298,7 +298,7 @@ pub(crate) mod impl_solaris {
 #[cfg(target_os = "aix")]
 pub(crate) mod impl_aix {
     use crate::net::unix::UnixStream;
-    use std::io;
+    use crate::io;
     use std::os::unix::io::AsRawFd;
 
     pub(crate) fn get_peer_cred(sock: &UnixStream) -> io::Result<super::UCred> {
@@ -332,7 +332,7 @@ pub(crate) mod impl_aix {
 ))]
 pub(crate) mod impl_noproc {
     use crate::net::unix::UnixStream;
-    use std::io;
+    use crate::io;
 
     pub(crate) fn get_peer_cred(_sock: &UnixStream) -> io::Result<super::UCred> {
         Ok(super::UCred {

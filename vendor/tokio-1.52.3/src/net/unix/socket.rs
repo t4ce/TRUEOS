@@ -1,4 +1,4 @@
-use std::io;
+use crate::io;
 use crate::path::Path;
 
 use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, RawFd};

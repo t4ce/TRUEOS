@@ -2,7 +2,7 @@
 use crate::fs::asyncify;
 use alloc::borrow::ToOwned;
 
-use std::io;
+use crate::io;
 use crate::path::Path;
 
 /// Returns `Ok(true)` if the path points at an existing entity.

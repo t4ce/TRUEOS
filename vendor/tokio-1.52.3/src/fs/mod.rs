@@ -304,7 +304,7 @@ cfg_io_uring! {
     pub(crate) use self::open_options::UringOpenOptions;
 }
 
-use std::io;
+use crate::io;
 
 #[cfg(not(test))]
 use crate::blocking::spawn_blocking;

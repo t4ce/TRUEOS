@@ -2,7 +2,7 @@
 use crate::fs::asyncify;
 use alloc::borrow::ToOwned;
 
-use std::io;
+use crate::io;
 use crate::path::{Path, PathBuf};
 
 /// Returns the canonical, absolute form of a path with all intermediate

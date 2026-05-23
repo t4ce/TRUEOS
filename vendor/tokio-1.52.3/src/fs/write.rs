@@ -2,7 +2,7 @@
 use crate::{fs::asyncify, util::as_ref::OwnedBuf};
 use alloc::borrow::ToOwned;
 
-use std::io;
+use crate::io;
 use crate::path::Path;
 
 /// Creates a future that will open a file for writing and write the entire

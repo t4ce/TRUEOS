@@ -7,7 +7,7 @@ cfg_not_wasip1! {
 }
 
 use ::core::fmt;
-use std::io;
+use crate::io;
 use std::net::{self, SocketAddr};
 use core::task::{ready, Context, Poll};
 

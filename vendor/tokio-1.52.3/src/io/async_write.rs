@@ -1,5 +1,5 @@
 use crate::runtime::prelude::*;
-use std::io::{self, IoSlice};
+use crate::io::{self, IoSlice};
 use core::ops::DerefMut;
 use core::pin::Pin;
 use core::task::{Context, Poll};

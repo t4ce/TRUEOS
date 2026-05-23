@@ -70,7 +70,7 @@ macro_rules! register_custom_getrandom {
         // TODO(MSRV 1.37): change to unnamed block
         const __GETRANDOM_INTERNAL: () = {
             // We use Rust ABI to be safe against potential panics in the passed function.
-            #[no_mangle]
+            #[unsafe(no_mangle)]
             unsafe fn __getrandom_custom(dest: *mut u8, len: usize) -> u32 {
                 // Make sure the passed function has the type of getrandom::getrandom
                 type F = fn(&mut [u8]) -> ::core::result::Result<(), $crate::Error>;

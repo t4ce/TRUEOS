@@ -7,7 +7,7 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use std::ffi::OsStr;
-use std::io;
+use crate::io;
 use crate::path::Path;
 
 fn unsupported() -> io::Error {

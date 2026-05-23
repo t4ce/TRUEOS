@@ -19,7 +19,7 @@ use core::task::{ready, Context, Poll};
 use crate::fs::trueos::{Metadata, Permissions};
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::fs::{Metadata, Permissions};
-use std::io::{self, Seek, SeekFrom};
+use crate::io::{self, Seek, SeekFrom};
 use crate::path::Path;
 
 #[cfg(not(test))]
@@ -232,7 +232,7 @@ impl File {
     ///
     /// [`write_all`]: fn@crate::io::AsyncWriteExt::write_all
     /// [`AsyncWriteExt`]: trait@crate::io::AsyncWriteExt
-    pub async fn create_new<P: AsRef<Path>>(path: P) -> std::io::Result<File> {
+    pub async fn create_new<P: AsRef<Path>>(path: P) -> crate::io::Result<File> {
         Self::options()
             .read(true)
             .write(true)

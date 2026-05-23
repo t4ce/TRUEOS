@@ -117,8 +117,8 @@ impl fmt::Display for Elapsed {
 impl error::Error for Elapsed {}
 
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-impl From<Elapsed> for std::io::Error {
-    fn from(_err: Elapsed) -> std::io::Error {
-        std::io::ErrorKind::TimedOut.into()
+impl From<Elapsed> for crate::io::Error {
+    fn from(_err: Elapsed) -> crate::io::Error {
+        crate::io::ErrorKind::TimedOut.into()
     }
 }

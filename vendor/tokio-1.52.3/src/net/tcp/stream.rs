@@ -13,7 +13,7 @@ use crate::net::tcp::split_owned::{split_owned, OwnedReadHalf, OwnedWriteHalf};
 use crate::util::check_socket_for_blocking;
 
 use ::core::fmt;
-use std::io;
+use crate::io;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use core::net::SocketAddr;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
@@ -641,7 +641,7 @@ impl TcpStream {
     /// }
     /// ```
     pub fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {
-        use std::io::Read;
+        use crate::io::Read;
 
         self.io
             .registration()
@@ -719,7 +719,7 @@ impl TcpStream {
     /// }
     /// ```
     pub fn try_read_vectored(&self, bufs: &mut [io::IoSliceMut<'_>]) -> io::Result<usize> {
-        use std::io::Read;
+        use crate::io::Read;
 
         self.io
             .registration()
@@ -786,7 +786,7 @@ impl TcpStream {
         /// ```
         pub fn try_read_buf<B: BufMut>(&self, buf: &mut B) -> io::Result<usize> {
             self.io.registration().try_io(Interest::READABLE, || {
-                use std::io::Read;
+                use crate::io::Read;
 
                 let dst = buf.chunk_mut();
                 let dst =
@@ -938,7 +938,7 @@ impl TcpStream {
     /// }
     /// ```
     pub fn try_write(&self, buf: &[u8]) -> io::Result<usize> {
-        use std::io::Write;
+        use crate::io::Write;
 
         self.io
             .registration()
@@ -1000,7 +1000,7 @@ impl TcpStream {
     /// }
     /// ```
     pub fn try_write_vectored(&self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
-        use std::io::Write;
+        use crate::io::Write;
 
         self.io
             .registration()
@@ -1155,7 +1155,7 @@ impl TcpStream {
         };
 
         match self.io.shutdown(how) {
-            Err(err) if err.kind() == std::io::ErrorKind::NotConnected => Ok(()),
+            Err(err) if err.kind() == crate::io::ErrorKind::NotConnected => Ok(()),
             result => result,
         }
     }

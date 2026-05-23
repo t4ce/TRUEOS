@@ -7,7 +7,7 @@ use crate::fs::mocks::MockFile;
 use std::os::unix::fs::OpenOptionsExt;
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
-use std::io;
+use crate::io;
 use crate::path::Path;
 
 mock! {

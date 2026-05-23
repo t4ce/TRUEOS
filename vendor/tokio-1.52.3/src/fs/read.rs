@@ -3,7 +3,7 @@ use crate::fs::asyncify;
 use crate::runtime::prelude::*;
 use alloc::borrow::ToOwned;
 
-use std::io;
+use crate::io;
 use crate::path::Path;
 
 /// Reads the entire contents of a file into a bytes vector.

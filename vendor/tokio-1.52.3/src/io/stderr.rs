@@ -4,7 +4,7 @@ use crate::io::blocking::Blocking;
 use crate::io::stdio_common::SplitByUtf8BoundaryIfWindows;
 use crate::io::AsyncWrite;
 
-use std::io;
+use crate::io;
 use core::pin::Pin;
 use core::task::Context;
 use core::task::Poll;
@@ -39,7 +39,7 @@ cfg_io_std! {
     #[derive(Debug)]
     #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     pub struct Stderr {
-        std: SplitByUtf8BoundaryIfWindows<Blocking<std::io::Stderr>>,
+        std: SplitByUtf8BoundaryIfWindows<Blocking<crate::io::Stderr>>,
     }
 
     #[derive(Debug)]
@@ -114,7 +114,7 @@ mod sys {
 
     impl AsRawFd for Stderr {
         fn as_raw_fd(&self) -> RawFd {
-            std::io::stderr().as_raw_fd()
+            crate::io::stderr().as_raw_fd()
         }
     }
 
@@ -130,7 +130,7 @@ cfg_windows! {
 
     impl AsRawHandle for Stderr {
         fn as_raw_handle(&self) -> RawHandle {
-            std::io::stderr().as_raw_handle()
+            crate::io::stderr().as_raw_handle()
         }
     }
 

@@ -128,7 +128,7 @@ impl AsyncRead for DuplexStream {
         mut self: Pin<&mut Self>,
         cx: &mut task::Context<'_>,
         buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    ) -> Poll<crate::io::Result<()>> {
         Pin::new(&mut *self.read.lock()).poll_read(cx, buf)
     }
 }
@@ -139,15 +139,15 @@ impl AsyncWrite for DuplexStream {
         mut self: Pin<&mut Self>,
         cx: &mut task::Context<'_>,
         buf: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
+    ) -> Poll<crate::io::Result<usize>> {
         Pin::new(&mut *self.write.lock()).poll_write(cx, buf)
     }
 
     fn poll_write_vectored(
         self: Pin<&mut Self>,
         cx: &mut task::Context<'_>,
-        bufs: &[std::io::IoSlice<'_>],
-    ) -> Poll<Result<usize, std::io::Error>> {
+        bufs: &[crate::io::IoSlice<'_>],
+    ) -> Poll<Result<usize, crate::io::Error>> {
         Pin::new(&mut *self.write.lock()).poll_write_vectored(cx, bufs)
     }
 
@@ -159,7 +159,7 @@ impl AsyncWrite for DuplexStream {
     fn poll_flush(
         mut self: Pin<&mut Self>,
         cx: &mut task::Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    ) -> Poll<crate::io::Result<()>> {
         Pin::new(&mut *self.write.lock()).poll_flush(cx)
     }
 
@@ -167,7 +167,7 @@ impl AsyncWrite for DuplexStream {
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
         cx: &mut task::Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    ) -> Poll<crate::io::Result<()>> {
         Pin::new(&mut *self.write.lock()).poll_shutdown(cx)
     }
 }
@@ -249,7 +249,7 @@ impl SimplexStream {
         mut self: Pin<&mut Self>,
         cx: &mut task::Context<'_>,
         buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    ) -> Poll<crate::io::Result<()>> {
         if self.buffer.has_remaining() {
             let max = self.buffer.remaining().min(buf.remaining());
             buf.put_slice(&self.buffer[..max]);
@@ -274,9 +274,9 @@ impl SimplexStream {
         mut self: Pin<&mut Self>,
         cx: &mut task::Context<'_>,
         buf: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
+    ) -> Poll<crate::io::Result<usize>> {
         if self.is_closed {
-            return Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into()));
+            return Poll::Ready(Err(crate::io::ErrorKind::BrokenPipe.into()));
         }
         let avail = self.max_buf_size - self.buffer.len();
         if avail == 0 {
@@ -295,10 +295,10 @@ impl SimplexStream {
     fn poll_write_vectored_internal(
         mut self: Pin<&mut Self>,
         cx: &mut task::Context<'_>,
-        bufs: &[std::io::IoSlice<'_>],
-    ) -> Poll<Result<usize, std::io::Error>> {
+        bufs: &[crate::io::IoSlice<'_>],
+    ) -> Poll<Result<usize, crate::io::Error>> {
         if self.is_closed {
-            return Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into()));
+            return Poll::Ready(Err(crate::io::ErrorKind::BrokenPipe.into()));
         }
         let avail = self.max_buf_size - self.buffer.len();
         if avail == 0 {
@@ -330,7 +330,7 @@ impl AsyncRead for SimplexStream {
             self: Pin<&mut Self>,
             cx: &mut task::Context<'_>,
             buf: &mut ReadBuf<'_>,
-        ) -> Poll<std::io::Result<()>> {
+        ) -> Poll<crate::io::Result<()>> {
             ready!(crate::trace::trace_leaf(cx));
             let coop = ready!(crate::task::coop::poll_proceed(cx));
 
@@ -347,7 +347,7 @@ impl AsyncRead for SimplexStream {
             self: Pin<&mut Self>,
             cx: &mut task::Context<'_>,
             buf: &mut ReadBuf<'_>,
-        ) -> Poll<std::io::Result<()>> {
+        ) -> Poll<crate::io::Result<()>> {
             ready!(crate::trace::trace_leaf(cx));
             self.poll_read_internal(cx, buf)
         }
@@ -360,7 +360,7 @@ impl AsyncWrite for SimplexStream {
             self: Pin<&mut Self>,
             cx: &mut task::Context<'_>,
             buf: &[u8],
-        ) -> Poll<std::io::Result<usize>> {
+        ) -> Poll<crate::io::Result<usize>> {
             ready!(crate::trace::trace_leaf(cx));
             let coop = ready!(crate::task::coop::poll_proceed(cx));
 
@@ -377,7 +377,7 @@ impl AsyncWrite for SimplexStream {
             self: Pin<&mut Self>,
             cx: &mut task::Context<'_>,
             buf: &[u8],
-        ) -> Poll<std::io::Result<usize>> {
+        ) -> Poll<crate::io::Result<usize>> {
             ready!(crate::trace::trace_leaf(cx));
             self.poll_write_internal(cx, buf)
         }
@@ -387,8 +387,8 @@ impl AsyncWrite for SimplexStream {
         fn poll_write_vectored(
             self: Pin<&mut Self>,
             cx: &mut task::Context<'_>,
-            bufs: &[std::io::IoSlice<'_>],
-        ) -> Poll<Result<usize, std::io::Error>> {
+            bufs: &[crate::io::IoSlice<'_>],
+        ) -> Poll<Result<usize, crate::io::Error>> {
             ready!(crate::trace::trace_leaf(cx));
             let coop = ready!(crate::task::coop::poll_proceed(cx));
 
@@ -404,8 +404,8 @@ impl AsyncWrite for SimplexStream {
         fn poll_write_vectored(
             self: Pin<&mut Self>,
             cx: &mut task::Context<'_>,
-            bufs: &[std::io::IoSlice<'_>],
-        ) -> Poll<Result<usize, std::io::Error>> {
+            bufs: &[crate::io::IoSlice<'_>],
+        ) -> Poll<Result<usize, crate::io::Error>> {
             ready!(crate::trace::trace_leaf(cx));
             self.poll_write_vectored_internal(cx, bufs)
         }
@@ -415,14 +415,14 @@ impl AsyncWrite for SimplexStream {
         true
     }
 
-    fn poll_flush(self: Pin<&mut Self>, _: &mut task::Context<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_flush(self: Pin<&mut Self>, _: &mut task::Context<'_>) -> Poll<crate::io::Result<()>> {
         Poll::Ready(Ok(()))
     }
 
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
         _: &mut task::Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    ) -> Poll<crate::io::Result<()>> {
         self.close_write();
         Poll::Ready(Ok(()))
     }

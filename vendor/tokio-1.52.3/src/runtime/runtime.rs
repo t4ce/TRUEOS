@@ -10,7 +10,7 @@ use crate::util::error::RUNTIME_SHUTTING_DOWN_ERROR;
 use crate::util::trace::SpawnMeta;
 
 use core::future::Future;
-use std::io;
+use crate::io;
 use core::mem;
 use core::time::Duration;
 
@@ -174,7 +174,7 @@ impl Runtime {
     /// [runtime builder]: crate::runtime::Builder
     #[cfg(feature = "rt-multi-thread")]
     #[cfg_attr(docsrs, doc(cfg(feature = "rt-multi-thread")))]
-    pub fn new() -> std::io::Result<Runtime> {
+    pub fn new() -> crate::io::Result<Runtime> {
         Builder::new_multi_thread().enable_all().build()
     }
 

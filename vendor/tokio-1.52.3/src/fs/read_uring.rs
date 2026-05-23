@@ -1,8 +1,8 @@
 use crate::fs::OpenOptions;
 use crate::runtime::driver::op::Op;
 
-use std::io;
-use std::io::ErrorKind;
+use crate::io;
+use crate::io::ErrorKind;
 use std::os::fd::OwnedFd;
 use crate::path::Path;
 

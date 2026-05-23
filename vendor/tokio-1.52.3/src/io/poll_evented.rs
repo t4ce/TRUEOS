@@ -4,7 +4,7 @@ use crate::runtime::scheduler;
 
 use mio::event::Source;
 use ::core::fmt;
-use std::io;
+use crate::io;
 use core::ops::Deref;
 use ::core::panic::{RefUnwindSafe, UnwindSafe};
 use core::task::ready;
@@ -166,7 +166,7 @@ feature! {
         where
             &'a E: io::Read + 'a,
         {
-            use std::io::Read;
+            use crate::io::Read;
 
             loop {
                 let evt = ready!(self.registration.poll_read_ready(cx))?;
@@ -230,7 +230,7 @@ feature! {
         where
             &'a E: io::Write + 'a,
         {
-            use std::io::Write;
+            use crate::io::Write;
 
             loop {
                 let evt = ready!(self.registration.poll_write_ready(cx))?;
@@ -300,7 +300,7 @@ feature! {
 
             #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
             {
-            use std::io::Write;
+            use crate::io::Write;
             self.registration.poll_write_io(cx, || self.io.as_ref().unwrap().write_vectored(bufs))
             }
         }

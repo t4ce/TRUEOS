@@ -1,4 +1,4 @@
-use std::io;
+use crate::io;
 use std::sync::OnceLock;
 
 use crate::signal::RxFuture;

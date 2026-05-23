@@ -15,7 +15,7 @@ use core::task::{ready, Context, Poll};
 use crate::ffi::OsString;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::fs::{FileType, Metadata};
-use std::io;
+use crate::io;
 use crate::path::{Path, PathBuf};
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::fs::{DirEntry as StdDirEntry, ReadDir as StdReadDir};

@@ -3,7 +3,7 @@ use crate::process::kill::Kill;
 use crate::signal::unix::InternalStream;
 
 use core::future::Future;
-use std::io;
+use crate::io;
 use core::ops::Deref;
 use core::pin::Pin;
 use std::process::ExitStatus;

@@ -1,6 +1,6 @@
 use super::ReadBuf;
 use crate::runtime::prelude::*;
-use std::io;
+use crate::io;
 use core::ops::DerefMut;
 use core::pin::Pin;
 use core::task::{Context, Poll};
