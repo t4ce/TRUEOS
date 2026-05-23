@@ -578,6 +578,19 @@ impl block::BlockDevice for UsbMassBlockDevice {
                             let bulk_out_ep = rt.bulk_out_ep;
                             let bulk_in_ep = rt.bulk_in_ep;
                             let command_tag = rt.io_tag;
+                            crate::log!(
+                                "crabusb: mass {:04X}:{:04X} read-10 begin key=0x{:016X} slot={} lba={} blocks={} bytes={} tag=0x{:08X} out_ep=0x{:02X} in_ep=0x{:02X}\n",
+                                rt.vendor_id,
+                                rt.product_id,
+                                rt.runtime_key,
+                                rt.slot_id,
+                                cur_lba,
+                                blocks_here,
+                                bytes_here,
+                                command_tag,
+                                bulk_out_ep,
+                                bulk_in_ep
+                            );
                             let result = match &mut rt.endpoints {
                                 UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
                                     mass::read_blocks_bot(
@@ -597,10 +610,33 @@ impl block::BlockDevice for UsbMassBlockDevice {
 
                             match result {
                                 Ok(()) => {
+                                    crate::log!(
+                                        "crabusb: mass {:04X}:{:04X} read-10 end key=0x{:016X} slot={} lba={} blocks={} bytes={} tag=0x{:08X} status=ok\n",
+                                        rt.vendor_id,
+                                        rt.product_id,
+                                        rt.runtime_key,
+                                        rt.slot_id,
+                                        cur_lba,
+                                        blocks_here,
+                                        bytes_here,
+                                        command_tag
+                                    );
                                     mass_io_note_success(rt, block_size);
                                     break;
                                 }
                                 Err(err) => {
+                                    crate::log!(
+                                        "crabusb: mass {:04X}:{:04X} read-10 end key=0x{:016X} slot={} lba={} blocks={} bytes={} tag=0x{:08X} status=err err={:?}\n",
+                                        rt.vendor_id,
+                                        rt.product_id,
+                                        rt.runtime_key,
+                                        rt.slot_id,
+                                        cur_lba,
+                                        blocks_here,
+                                        bytes_here,
+                                        command_tag,
+                                        err
+                                    );
                                     mass_io_backoff(rt, block_size);
                                     let recovered =
                                         recover_runtime_transport(rt, "read-10", err).await.is_ok();
@@ -693,6 +729,19 @@ impl block::BlockDevice for UsbMassBlockDevice {
                         let bulk_out_ep = rt.bulk_out_ep;
                         let bulk_in_ep = rt.bulk_in_ep;
                         let command_tag = rt.io_tag;
+                        crate::log!(
+                            "crabusb: mass {:04X}:{:04X} write-10 begin key=0x{:016X} slot={} lba={} blocks={} bytes={} tag=0x{:08X} out_ep=0x{:02X} in_ep=0x{:02X}\n",
+                            rt.vendor_id,
+                            rt.product_id,
+                            rt.runtime_key,
+                            rt.slot_id,
+                            cur_lba,
+                            blocks_here,
+                            bytes_here,
+                            command_tag,
+                            bulk_out_ep,
+                            bulk_in_ep
+                        );
                         let result = match &mut rt.endpoints {
                             UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
                                 mass::write_blocks_bot(
@@ -712,10 +761,33 @@ impl block::BlockDevice for UsbMassBlockDevice {
 
                         match result {
                             Ok(()) => {
+                                crate::log!(
+                                    "crabusb: mass {:04X}:{:04X} write-10 end key=0x{:016X} slot={} lba={} blocks={} bytes={} tag=0x{:08X} status=ok\n",
+                                    rt.vendor_id,
+                                    rt.product_id,
+                                    rt.runtime_key,
+                                    rt.slot_id,
+                                    cur_lba,
+                                    blocks_here,
+                                    bytes_here,
+                                    command_tag
+                                );
                                 mass_io_note_success(&mut rt, block_size);
                                 break;
                             }
                             Err(err) => {
+                                crate::log!(
+                                    "crabusb: mass {:04X}:{:04X} write-10 end key=0x{:016X} slot={} lba={} blocks={} bytes={} tag=0x{:08X} status=err err={:?}\n",
+                                    rt.vendor_id,
+                                    rt.product_id,
+                                    rt.runtime_key,
+                                    rt.slot_id,
+                                    cur_lba,
+                                    blocks_here,
+                                    bytes_here,
+                                    command_tag,
+                                    err
+                                );
                                 mass_io_backoff(&mut rt, block_size);
                                 let recovered = recover_runtime_transport(&mut rt, "write-10", err)
                                     .await
@@ -998,7 +1070,7 @@ pub async fn mass_storage_task(
     let initial_io_bytes =
         initial_mass_io_bytes(io_profile, port_speed, &target, probe.block_size as usize);
     crate::log!(
-        "crabusb: mass {:04X}:{:04X} ready slot={} if#{} alt={} cfg={} bulk_in=0x{:02X} bulk_out=0x{:02X} in_mps={} out_mps={} disk={} mode={} label={:?} serial={:?} key={} transport={} profile={} init_io={} speed={:?} uas_candidates={} bs={} blocks={} vendor='{}' product='{}'\n",
+        "crabusb: mass {:04X}:{:04X} ready slot={} if#{} alt={} cfg={} bulk_in=0x{:02X} bulk_out=0x{:02X} in_mps={} out_mps={} disk={} mode={} label={:?} serial={:?} key={} runtime_key=0x{:016X} transport={} profile={} init_io={} speed={:?} uas_candidates={} bs={} blocks={} vendor='{}' product='{}'\n",
         vendor_id,
         product_id,
         slot,
@@ -1014,6 +1086,7 @@ pub async fn mass_storage_task(
         handle.info().label,
         identity.serial.as_deref(),
         identity.key_kind,
+        identity.runtime_key,
         mass_transport_label(transport_kind),
         mass_io_profile_label(io_profile),
         initial_io_bytes,
