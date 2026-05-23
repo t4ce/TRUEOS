@@ -166,7 +166,7 @@ pub enum MethodCode {
 impl fmt::Debug for MethodCode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MethodCode::Aml(ref code) => write!(f, "AML({:x?})", code),
+            MethodCode::Aml(code) => write!(f, "AML({:x?})", code),
             MethodCode::Native(_) => write!(f, "(native method)"),
         }
     }
@@ -275,7 +275,7 @@ impl AmlValue {
         match self {
             AmlValue::Integer(value) => Ok(*value),
             AmlValue::Boolean(value) => Ok(if *value { u64::max_value() } else { 0 }),
-            AmlValue::Buffer(ref bytes) => {
+            AmlValue::Buffer(bytes) => {
                 /*
                  * "The first 8 bytes of the buffer are converted to an integer, taking the first
                  * byte as the least significant byte of the integer. A zero-length buffer is
@@ -305,7 +305,7 @@ impl AmlValue {
 
     pub fn as_buffer(&self, context: &AmlContext) -> Result<Arc<Spinlock<Vec<u8>>>, AmlError> {
         match self {
-            AmlValue::Buffer(ref bytes) => Ok(bytes.clone()),
+            AmlValue::Buffer(bytes) => Ok(bytes.clone()),
             // TODO: implement conversion of String and Integer to Buffer
             AmlValue::Field { .. } => self.read_field(context)?.as_buffer(context),
             AmlValue::BufferField { .. } => self.read_buffer_field(context)?.as_buffer(context),
@@ -315,7 +315,7 @@ impl AmlValue {
 
     pub fn as_string(&self, context: &AmlContext) -> Result<String, AmlError> {
         match self {
-            AmlValue::String(ref string) => Ok(string.clone()),
+            AmlValue::String(string) => Ok(string.clone()),
             // TODO: implement conversion of Buffer to String
             AmlValue::Field { .. } => self.read_field(context)?.as_string(context),
             _ => Err(AmlError::IncompatibleValueConversion { current: self.type_of(), target: AmlType::String }),

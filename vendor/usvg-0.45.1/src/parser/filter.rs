@@ -457,7 +457,7 @@ fn resolve_input(node: SvgNode, aid: AId, primitives: &[Primitive]) -> Input {
 
             // If `in` references an unknown `result` than fallback
             // to previous result or `SourceGraphic`.
-            if let Input::Reference(ref name) = input {
+            if let Input::Reference(name) = input {
                 if !primitives.iter().any(|p| p.result == *name) {
                     return if let Some(prev) = primitives.last() {
                         Input::Reference(prev.result.clone())
@@ -838,14 +838,14 @@ fn convert_image_inner(
         return if root.has_children() {
             root.calculate_bounding_boxes();
             // Transfer node id from group's child to the group itself if needed.
-            if let Some(Node::Group(ref mut g)) = root.children.first_mut() {
+            if let Some(Node::Group(g)) = root.children.first_mut() {
                 if let Some(child2) = g.children.first_mut() {
                     g.id = child2.id().to_string();
                     match child2 {
-                        Node::Group(ref mut g2) => g2.id.clear(),
-                        Node::Path(ref mut path) => path.id.clear(),
-                        Node::Image(ref mut image) => image.id.clear(),
-                        Node::Text(ref mut text) => text.id.clear(),
+                        Node::Group(g2) => g2.id.clear(),
+                        Node::Path(path) => path.id.clear(),
+                        Node::Image(image) => image.id.clear(),
+                        Node::Text(text) => text.id.clear(),
                     }
                 }
             }
