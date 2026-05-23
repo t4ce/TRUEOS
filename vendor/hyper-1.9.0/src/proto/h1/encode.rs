@@ -426,3 +426,5 @@ impl fmt::Display for NotEof {
         write!(f, "early end, expected {} more bytes", self.0)
     }
 }
+
+impl core::error::Error for NotEof {}
