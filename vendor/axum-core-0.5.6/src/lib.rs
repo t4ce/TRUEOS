@@ -104,5 +104,3 @@ pub type BoxError = alloc::boxed::Box<dyn core::error::Error + core::marker::Sen
 
 pub use self::ext_traits::{request::RequestExt, request_parts::RequestPartsExt};
 
-#[cfg(test)]
-use axum_macros::__private_axum_test as test;

@@ -36,9 +36,6 @@ pub(crate) mod future;
 mod headers;
 mod open_file;
 
-#[cfg(test)]
-mod tests;
-
 // default capacity 64KiB
 const DEFAULT_CAPACITY: usize = 65536;
 

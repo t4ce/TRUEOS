@@ -123,26 +123,3 @@ where
         Full::new(D::from(slice))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::BodyExt;
-
-    #[tokio::test]
-    async fn full_returns_some() {
-        let mut full = Full::new(&b"hello"[..]);
-        assert_eq!(full.size_hint().exact(), Some(b"hello".len() as u64));
-        assert_eq!(
-            full.frame().await.unwrap().unwrap().into_data().unwrap(),
-            &b"hello"[..]
-        );
-        assert!(full.frame().await.is_none());
-    }
-
-    #[tokio::test]
-    async fn empty_full_returns_none() {
-        assert!(Full::<&[u8]>::default().frame().await.is_none());
-        assert!(Full::new(&b""[..]).frame().await.is_none());
-    }
-}

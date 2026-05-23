@@ -112,10 +112,6 @@ impl CommonOps {
         self.num_limbs.into() * LIMB_BYTES
     }
 
-    #[cfg(test)]
-    pub(super) fn n_limbs(&self) -> &[Limb] {
-        &self.n.limbs[..self.num_limbs.into()]
-    }
 }
 
 impl<M> Modulus<M> {
@@ -646,31 +642,9 @@ mod tests {
         assert!(q.is_zero(&x));
     }
 
-    #[test]
-    fn p256_q_minus_n_plus_n_equals_0_test() {
-        q_minus_n_plus_n_equals_0_test(&p256::PUBLIC_SCALAR_OPS);
-    }
 
-    #[test]
-    fn p384_q_minus_n_plus_n_equals_0_test() {
-        q_minus_n_plus_n_equals_0_test(&p384::PUBLIC_SCALAR_OPS);
-    }
 
-    #[test]
-    fn p256_elem_add_test() {
-        elem_add_test(
-            &p256::PUBLIC_SCALAR_OPS,
-            test_vector_file!("ops/p256_elem_sum_tests.txt"),
-        );
-    }
 
-    #[test]
-    fn p384_elem_add_test() {
-        elem_add_test(
-            &p384::PUBLIC_SCALAR_OPS,
-            test_vector_file!("ops/p384_elem_sum_tests.txt"),
-        );
-    }
 
     fn elem_add_test(ops: &PublicScalarOps, test_file: test::File) {
         let cops = ops.public_key_ops.common;
@@ -697,17 +671,6 @@ mod tests {
     // XXX: There's no `p256_sub` in *ring*; it's logic is inlined into
     // the point arithmetic functions. Thus, we can't test it.
 
-    #[test]
-    fn p384_elem_sub_test() {
-        prefixed_extern! {
-            fn p384_elem_sub(r: *mut Limb, a: *const Limb, b: *const Limb);
-        }
-        elem_sub_test(
-            &p384::COMMON_OPS,
-            p384_elem_sub,
-            test_vector_file!("ops/p384_elem_sum_tests.txt"),
-        );
-    }
 
     fn elem_sub_test(
         ops: &'static CommonOps,
@@ -749,17 +712,6 @@ mod tests {
     // XXX: There's no `p256_div_by_2` in *ring*; it's logic is inlined
     // into the point arithmetic functions. Thus, we can't test it.
 
-    #[test]
-    fn p384_elem_div_by_2_test() {
-        prefixed_extern! {
-            fn p384_elem_div_by_2(r: *mut Limb, a: *const Limb);
-        }
-        elem_div_by_2_test(
-            &p384::COMMON_OPS,
-            p384_elem_div_by_2,
-            test_vector_file!("ops/p384_elem_div_by_2_tests.txt"),
-        );
-    }
 
     fn elem_div_by_2_test(
         ops: &'static CommonOps,
@@ -785,29 +737,7 @@ mod tests {
 
     // There is no `ecp_nistz256_neg` on other targets.
     #[cfg(target_arch = "x86_64")]
-    #[test]
-    fn p256_elem_neg_test() {
-        prefixed_extern! {
-            fn ecp_nistz256_neg(r: *mut Limb, a: *const Limb);
-        }
-        elem_neg_test(
-            &p256::COMMON_OPS,
-            ecp_nistz256_neg,
-            test_vector_file!("ops/p256_elem_neg_tests.txt"),
-        );
-    }
 
-    #[test]
-    fn p384_elem_neg_test() {
-        prefixed_extern! {
-            fn p384_elem_neg(r: *mut Limb, a: *const Limb);
-        }
-        elem_neg_test(
-            &p384::COMMON_OPS,
-            p384_elem_neg,
-            test_vector_file!("ops/p384_elem_neg_tests.txt"),
-        );
-    }
 
     fn elem_neg_test(
         ops: &'static CommonOps,
@@ -843,21 +773,7 @@ mod tests {
         })
     }
 
-    #[test]
-    fn p256_elem_mul_test() {
-        elem_mul_test(
-            &p256::COMMON_OPS,
-            test_vector_file!("ops/p256_elem_mul_tests.txt"),
-        );
-    }
 
-    #[test]
-    fn p384_elem_mul_test() {
-        elem_mul_test(
-            &p384::COMMON_OPS,
-            test_vector_file!("ops/p384_elem_mul_tests.txt"),
-        );
-    }
 
     fn elem_mul_test(ops: &'static CommonOps, test_file: test::File) {
         let q = &ops.elem_modulus(cpu::features());
@@ -874,21 +790,7 @@ mod tests {
         })
     }
 
-    #[test]
-    fn p256_scalar_mul_test() {
-        scalar_mul_test(
-            &p256::SCALAR_OPS,
-            test_vector_file!("ops/p256_scalar_mul_tests.txt"),
-        );
-    }
 
-    #[test]
-    fn p384_scalar_mul_test() {
-        scalar_mul_test(
-            &p384::SCALAR_OPS,
-            test_vector_file!("ops/p384_scalar_mul_tests.txt"),
-        );
-    }
 
     fn scalar_mul_test(ops: &ScalarOps, test_file: test::File) {
         let cpu = cpu::features();
@@ -906,17 +808,6 @@ mod tests {
         })
     }
 
-    #[test]
-    fn p256_scalar_square_test() {
-        prefixed_extern! {
-            fn p256_scalar_sqr_rep_mont(r: *mut Limb, a: *const Limb, rep: LeakyWord);
-        }
-        scalar_square_test(
-            &p256::SCALAR_OPS,
-            p256_scalar_sqr_rep_mont,
-            test_vector_file!("ops/p256_scalar_square_tests.txt"),
-        );
-    }
 
     // XXX: There's no `p384_scalar_square_test()` because there's no dedicated
     // `p384_scalar_sqr_rep_mont()`.
@@ -956,33 +847,9 @@ mod tests {
         })
     }
 
-    #[test]
-    #[should_panic(expected = "!self.scalar_ops.common.is_zero(a)")]
-    fn p256_scalar_inv_to_mont_zero_panic_test() {
-        let _ = p256::PRIVATE_SCALAR_OPS.scalar_inv_to_mont(&ZERO_SCALAR, cpu::features());
-    }
 
-    #[test]
-    #[should_panic(expected = "!self.scalar_ops.common.is_zero(a)")]
-    fn p384_scalar_inv_to_mont_zero_panic_test() {
-        let _ = p384::PRIVATE_SCALAR_OPS.scalar_inv_to_mont(&ZERO_SCALAR, cpu::features());
-    }
 
-    #[test]
-    fn p256_point_sum_test() {
-        point_sum_test(
-            &p256::PRIVATE_KEY_OPS,
-            test_vector_file!("ops/p256_point_sum_tests.txt"),
-        );
-    }
 
-    #[test]
-    fn p384_point_sum_test() {
-        point_sum_test(
-            &p384::PRIVATE_KEY_OPS,
-            test_vector_file!("ops/p384_point_sum_tests.txt"),
-        );
-    }
 
     fn point_sum_test(ops: &PrivateKeyOps, test_file: test::File) {
         let cpu = cpu::features();
@@ -1001,21 +868,6 @@ mod tests {
         });
     }
 
-    #[test]
-    fn p256_point_sum_mixed_test() {
-        prefixed_extern! {
-            fn p256_point_add_affine(
-                r: *mut Limb,   // [p256::COMMON_OPS.num_limbs*3]
-                a: *const Limb, // [p256::COMMON_OPS.num_limbs*3]
-                b: *const Limb, // [p256::COMMON_OPS.num_limbs*2]
-            );
-        }
-        point_sum_mixed_test(
-            &p256::PRIVATE_KEY_OPS,
-            p256_point_add_affine,
-            test_vector_file!("ops/p256_point_sum_mixed_tests.txt"),
-        );
-    }
 
     // XXX: There is no `nistz384_point_add_affine()`.
 
@@ -1046,35 +898,7 @@ mod tests {
         });
     }
 
-    #[test]
-    fn p256_point_double_test() {
-        prefixed_extern! {
-            fn p256_point_double(
-                r: *mut Limb,   // [p256::COMMON_OPS.num_limbs*3]
-                a: *const Limb, // [p256::COMMON_OPS.num_limbs*3]
-            );
-        }
-        point_double_test(
-            &p256::PRIVATE_KEY_OPS,
-            p256_point_double,
-            test_vector_file!("ops/p256_point_double_tests.txt"),
-        );
-    }
 
-    #[test]
-    fn p384_point_double_test() {
-        prefixed_extern! {
-            fn p384_point_double(
-                r: *mut Limb,   // [p384::COMMON_OPS.num_limbs*3]
-                a: *const Limb, // [p384::COMMON_OPS.num_limbs*3]
-            );
-        }
-        point_double_test(
-            &p384::PRIVATE_KEY_OPS,
-            p384_point_double,
-            test_vector_file!("ops/p384_point_double_tests.txt"),
-        );
-    }
 
     fn point_double_test(
         ops: &PrivateKeyOps,
@@ -1102,42 +926,9 @@ mod tests {
     }
 
     /// TODO: We should be testing `point_mul` with points other than the generator.
-    #[test]
-    fn p256_point_mul_test() {
-        let generator = (
-            Elem::from(&p256::GENERATOR.0),
-            Elem::from(&p256::GENERATOR.1),
-        );
-        point_mul_base_tests(
-            &p256::PRIVATE_KEY_OPS,
-            |s, cpu| p256::PRIVATE_KEY_OPS.point_mul(s, &generator, cpu),
-            test_vector_file!("ops/p256_point_mul_base_tests.txt"),
-        );
-    }
 
     /// TODO: We should be testing `point_mul` with points other than the generator.
-    #[test]
-    fn p384_point_mul_test() {
-        let generator = (
-            Elem::from(&p384::GENERATOR.0),
-            Elem::from(&p384::GENERATOR.1),
-        );
 
-        point_mul_base_tests(
-            &p384::PRIVATE_KEY_OPS,
-            |s, cpu| p384::PRIVATE_KEY_OPS.point_mul(s, &generator, cpu),
-            test_vector_file!("ops/p384_point_mul_base_tests.txt"),
-        );
-    }
-
-    #[test]
-    fn p256_point_mul_serialized_test() {
-        point_mul_serialized_test(
-            &p256::PRIVATE_KEY_OPS,
-            &p256::PUBLIC_KEY_OPS,
-            test_vector_file!("ops/p256_point_mul_serialized_tests.txt"),
-        );
-    }
 
     fn point_mul_serialized_test(
         priv_ops: &PrivateKeyOps,
@@ -1183,23 +974,7 @@ mod tests {
         })
     }
 
-    #[test]
-    fn p256_point_mul_base_test() {
-        point_mul_base_tests(
-            &p256::PRIVATE_KEY_OPS,
-            |s, cpu| p256::PRIVATE_KEY_OPS.point_mul_base(s, cpu),
-            test_vector_file!("ops/p256_point_mul_base_tests.txt"),
-        );
-    }
 
-    #[test]
-    fn p384_point_mul_base_test() {
-        point_mul_base_tests(
-            &p384::PRIVATE_KEY_OPS,
-            |s, cpu| p384::PRIVATE_KEY_OPS.point_mul_base(s, cpu),
-            test_vector_file!("ops/p384_point_mul_base_tests.txt"),
-        );
-    }
 
     pub(super) fn point_mul_base_tests(
         ops: &PrivateKeyOps,

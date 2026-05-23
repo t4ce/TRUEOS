@@ -270,28 +270,3 @@ impl fmt::Display for NSEC3PARAM {
         )
     }
 }
-
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::dbg_macro, clippy::print_stdout)]
-
-    use std::println;
-
-    use super::*;
-
-    #[test]
-    fn test() {
-        let rdata = NSEC3PARAM::new(Nsec3HashAlgorithm::SHA1, true, 2, vec![1, 2, 3, 4, 5]);
-
-        let mut bytes = Vec::new();
-        let mut encoder: BinEncoder<'_> = BinEncoder::new(&mut bytes);
-        assert!(rdata.emit(&mut encoder).is_ok());
-        let bytes = encoder.into_bytes();
-
-        println!("bytes: {bytes:?}");
-
-        let mut decoder: BinDecoder<'_> = BinDecoder::new(bytes);
-        let read_rdata = NSEC3PARAM::read(&mut decoder).expect("Decoding error");
-        assert_eq!(rdata, read_rdata);
-    }
-}

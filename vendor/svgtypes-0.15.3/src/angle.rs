@@ -95,38 +95,3 @@ impl Stream<'_> {
     }
 }
 
-#[rustfmt::skip]
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use core::str::FromStr;
-
-    macro_rules! test_p {
-        ($name:ident, $text:expr, $result:expr) => (
-            #[test]
-            fn $name() {
-                assert_eq!(Angle::from_str($text).unwrap(), $result);
-            }
-        )
-    }
-
-    test_p!(parse_1,  "1",   Angle::new(1.0, AngleUnit::Degrees));
-    test_p!(parse_2,  "1deg", Angle::new(1.0, AngleUnit::Degrees));
-    test_p!(parse_3,  "1grad", Angle::new(1.0, AngleUnit::Gradians));
-    test_p!(parse_4,  "1rad", Angle::new(1.0, AngleUnit::Radians));
-    test_p!(parse_5,  "1turn", Angle::new(1.0, AngleUnit::Turns));
-
-    #[test]
-    fn err_1() {
-        let mut s = Stream::from("1q");
-        assert_eq!(s.parse_angle().unwrap(), Angle::new(1.0, AngleUnit::Degrees));
-        assert_eq!(s.parse_angle().unwrap_err().to_string(),
-                   "invalid number at position 2");
-    }
-
-    #[test]
-    fn err_2() {
-        assert_eq!(Angle::from_str("1degq").unwrap_err().to_string(),
-                   "unexpected data at position 5");
-    }
-}

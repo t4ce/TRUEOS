@@ -77,35 +77,3 @@ pub(crate) fn parse<'i, I: Iterator<Item = &'i str>>(
     ))
 }
 
-#[test]
-fn test_parse() {
-    use core::str::FromStr;
-
-    let soa_tokens = vec![
-        "hickory-dns.org.",
-        "root.hickory-dns.org.",
-        "199609203",
-        "8h",
-        "120m",
-        "7d",
-        "24h",
-    ];
-
-    let parsed_soa = parse(
-        soa_tokens.into_iter(),
-        Some(&Name::from_str("example.com.").unwrap()),
-    )
-    .expect("failed to parse tokens");
-
-    let expected_soa = SOA::new(
-        "hickory-dns.org.".parse().unwrap(),
-        "root.hickory-dns.org.".parse().unwrap(),
-        199609203,
-        28800,
-        7200,
-        604800,
-        86400,
-    );
-
-    assert_eq!(parsed_soa, expected_soa);
-}

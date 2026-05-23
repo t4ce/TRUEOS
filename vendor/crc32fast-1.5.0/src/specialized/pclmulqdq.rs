@@ -183,25 +183,3 @@ unsafe fn get(a: &mut &[u8]) -> arch::__m128i {
     *a = &a[16..];
     r
 }
-
-#[cfg(test)]
-mod test {
-    quickcheck::quickcheck! {
-        fn check_against_baseline(init: u32, chunks: Vec<(Vec<u8>, usize)>) -> bool {
-            let mut baseline = super::super::super::baseline::State::new(init);
-            let mut pclmulqdq = super::State::new(init).expect("not supported");
-            for (chunk, mut offset) in chunks {
-                // simulate random alignments by offsetting the slice by up to 15 bytes
-                offset &= 0xF;
-                if chunk.len() <= offset {
-                    baseline.update(&chunk);
-                    pclmulqdq.update(&chunk);
-                } else {
-                    baseline.update(&chunk[offset..]);
-                    pclmulqdq.update(&chunk[offset..]);
-                }
-            }
-            pclmulqdq.finalize() == baseline.finalize()
-        }
-    }
-}

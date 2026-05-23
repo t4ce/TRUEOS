@@ -134,13 +134,3 @@ where
         Poll::Ready(Ok(Some(mem::take(me.buf))))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn assert_unpin() {
-        crate::is_unpin::<Lines<()>>();
-    }
-}

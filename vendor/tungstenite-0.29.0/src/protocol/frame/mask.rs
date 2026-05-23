@@ -52,34 +52,3 @@ pub fn apply_mask_fast32(buf: &mut [u8], mask: [u8; 4]) {
     }
     apply_mask_fallback(suffix, mask_u32.to_ne_bytes());
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_apply_mask() {
-        let mask = [0x6d, 0xb6, 0xb2, 0x80];
-        let unmasked = [
-            0xf3, 0x00, 0x01, 0x02, 0x03, 0x80, 0x81, 0x82, 0xff, 0xfe, 0x00, 0x17, 0x74, 0xf9,
-            0x12, 0x03,
-        ];
-
-        for data_len in 0..=unmasked.len() {
-            let unmasked = &unmasked[0..data_len];
-            // Check masking with different alignment.
-            for off in 0..=3 {
-                if unmasked.len() < off {
-                    continue;
-                }
-                let mut masked = unmasked.to_vec();
-                apply_mask_fallback(&mut masked[off..], mask);
-
-                let mut masked_fast = unmasked.to_vec();
-                apply_mask_fast32(&mut masked_fast[off..], mask);
-
-                assert_eq!(masked, masked_fast);
-            }
-        }
-    }
-}

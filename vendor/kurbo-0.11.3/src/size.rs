@@ -414,23 +414,3 @@ impl From<Size> for (f64, f64) {
         (v.width, v.height)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn display() {
-        let s = Size::new(-0.12345, 9.87654);
-        assert_eq!(format!("{s}"), "(-0.12345×9.87654)");
-
-        let s = Size::new(-0.12345, 9.87654);
-        assert_eq!(format!("{s:+6.2}"), "( -0.12× +9.88)");
-    }
-
-    #[test]
-    fn aspect_ratio() {
-        let s = Size::new(1.0, 1.0);
-        assert!((s.aspect_ratio() - 1.0).abs() < 1e-6);
-    }
-}

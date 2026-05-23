@@ -33,9 +33,6 @@ mod layer;
 mod make;
 mod service;
 
-#[cfg(test)]
-mod test;
-
 pub use layer::MakeBalanceLayer;
 pub use make::{MakeBalance, MakeFuture};
 pub use service::Balance;

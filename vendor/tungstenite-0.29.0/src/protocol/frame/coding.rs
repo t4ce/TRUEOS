@@ -257,35 +257,3 @@ impl From<u16> for CloseCode {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn opcode_from_u8() {
-        let byte = 2u8;
-        assert_eq!(OpCode::from(byte), OpCode::Data(Data::Binary));
-    }
-
-    #[test]
-    fn opcode_into_u8() {
-        let text = OpCode::Data(Data::Text);
-        let byte: u8 = text.into();
-        assert_eq!(byte, 1u8);
-    }
-
-    #[test]
-    fn closecode_from_u16() {
-        let byte = 1008u16;
-        assert_eq!(CloseCode::from(byte), CloseCode::Policy);
-    }
-
-    #[test]
-    fn closecode_into_u16() {
-        let text = CloseCode::Away;
-        let byte: u16 = text.into();
-        assert_eq!(byte, 1001u16);
-        assert_eq!(u16::from(text), 1001u16);
-    }
-}

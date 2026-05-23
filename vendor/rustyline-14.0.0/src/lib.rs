@@ -775,10 +775,6 @@ impl<H: Helper, I: History> Editor<H, I> {
             }
 
             // Tiny test quirk
-            #[cfg(test)]
-            if matches!(
-                cmd,
-                Cmd::AcceptLine | Cmd::Newline | Cmd::AcceptOrInsertLine { .. }
             ) {
                 self.term.cursor = s.layout.cursor.col;
             }
@@ -986,11 +982,6 @@ impl<'a, H: Helper, I: History> Iterator for Iter<'a, H, I> {
     }
 }
 
-#[cfg(test)]
-#[macro_use]
-extern crate assert_matches;
-#[cfg(test)]
-mod test;
 
 #[cfg(doctest)]
 doc_comment::doctest!("../README.md");

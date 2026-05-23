@@ -44,20 +44,4 @@ pub(crate) fn parse<'i, I: Iterator<Item = &'i str>>(mut tokens: I) -> ParseResu
     Ok(CSYNC::new(soa_serial, immediate, soa_minimum, record_types))
 }
 
-#[test]
-fn test_parsing() {
-    // IN CSYNC 123 3 NS
 
-    assert_eq!(
-        parse(vec!["123", "3", "NS"].into_iter()).expect("failed to parse CSYNC"),
-        CSYNC::new(123, true, true, [RecordType::NS]),
-    );
-}
-
-#[test]
-fn test_parsing_fails() {
-    // IN CSYNC NS
-
-    assert!(parse(vec!["NS"].into_iter()).is_err());
-    assert!(parse(vec![].into_iter()).is_err());
-}

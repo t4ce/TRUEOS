@@ -300,13 +300,3 @@ impl<R: fmt::Debug> fmt::Debug for BufReader<R> {
             .finish()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn assert_unpin() {
-        crate::is_unpin::<BufReader<()>>();
-    }
-}

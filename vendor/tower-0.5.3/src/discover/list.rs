@@ -53,10 +53,4 @@ where
 }
 
 // check that List can be directly over collections
-#[cfg(test)]
-#[allow(dead_code)]
-type ListVecTest<T> = ServiceList<Vec<T>>;
 
-#[cfg(test)]
-#[allow(dead_code)]
-type ListVecIterTest<T> = ServiceList<::alloc::vec::IntoIter<T>>;

@@ -60,14 +60,6 @@ impl BufList<Bytes> {
     }
 }
 
-#[cfg(test)]
-impl<T: Buf> From<T> for BufList<T> {
-    fn from(b: T) -> Self {
-        let mut buf = Self::new();
-        buf.push(b);
-        buf
-    }
-}
 
 impl<T: Buf> Buf for BufList<T> {
     #[inline]
@@ -162,21 +154,5 @@ impl<'a, B: Buf> Buf for Cursor<'a, B> {
     #[inline]
     fn chunks_vectored<'t>(&'t self, dst: &mut [IoSlice<'t>]) -> usize {
         self.buf.chunks_vectored(dst)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use bytes::Bytes;
-
-    #[test]
-    fn cursor_advance() {
-        let buf = BufList::from(Bytes::from_static(&[1u8, 2, 3, 4]));
-        let mut cur = buf.cursor();
-        cur.advance(2);
-        assert_eq!(cur.remaining(), 2);
-        cur.advance(2);
-        assert_eq!(cur.remaining(), 0);
     }
 }

@@ -145,13 +145,6 @@ pub mod pbkdf2;
 pub mod pkcs8;
 pub mod rand;
 
-#[cfg(feature = "alloc")]
-pub mod rsa;
-
-pub mod signature;
-
-#[cfg(test)]
-mod tests;
 
 mod sealed {
     /// Traits that are designed to only be implemented internally in *ring*.

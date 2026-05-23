@@ -188,29 +188,7 @@ impl CidState {
         self.retire_seq
     }
 
-    #[cfg(test)]
-    pub(crate) fn active_seq(&self) -> (u64, u64) {
-        let mut min = u64::MAX;
-        let mut max = u64::MIN;
-        for n in self.active_seq.iter() {
-            if n < &min {
-                min = *n;
-            }
-            if n > &max {
-                max = *n;
-            }
-        }
-        (min, max)
-    }
 
-    #[cfg(test)]
-    pub(crate) fn assign_retire_seq(&mut self, v: u64) -> u64 {
-        // Cannot retire more CIDs than what have been issued
-        debug_assert!(v <= *self.active_seq.iter().max().unwrap() + 1);
-        let n = v.checked_sub(self.retire_seq).unwrap();
-        self.retire_seq = v;
-        n
-    }
 }
 
 /// Data structure that records when issued cids should be retired

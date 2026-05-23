@@ -2,9 +2,6 @@
 // of RFC 1122 that discuss Ethernet, ARP and IP for any IPv4 work
 // and RFCs 8200 and 4861 for any IPv6 and NDISC work.
 
-#[cfg(test)]
-mod tests;
-
 #[cfg(feature = "medium-ethernet")]
 mod ethernet;
 #[cfg(feature = "medium-ieee802154")]
@@ -853,17 +850,7 @@ impl InterfaceInner {
         }
     }
 
-    #[cfg(test)]
-    #[allow(unused)] // unused depending on which sockets are enabled
-    pub(crate) fn set_now(&mut self, now: Instant) {
-        self.now = now
-    }
 
-    #[cfg(test)]
-    #[allow(unused)] // unused depending on which sockets are enabled
-    pub(crate) fn set_ip_addrs(&mut self, addrs: Vec<IpCidr, IFACE_MAX_ADDR_COUNT>) {
-        self.ip_addrs = addrs;
-    }
 
     #[cfg(any(feature = "medium-ethernet", feature = "medium-ieee802154"))]
     fn check_hardware_addr(addr: &HardwareAddress) {

@@ -548,36 +548,3 @@ extern "C" {
 
 // illumos and NetBSD timerfd support.
 // Submitted upstream in <https://github.com/rust-lang/libc/pull/4333>.
-
-// <https://code.illumos.org/plugins/gitiles/illumos-gate/+/refs/heads/master/usr/src/uts/common/sys/timerfd.h#34>
-#[cfg(all(feature = "time", target_os = "illumos"))]
-pub(crate) const TFD_CLOEXEC: i32 = 0o2000000;
-#[cfg(all(feature = "time", target_os = "illumos"))]
-pub(crate) const TFD_NONBLOCK: i32 = 0o4000;
-#[cfg(all(feature = "time", target_os = "illumos"))]
-pub(crate) const TFD_TIMER_ABSTIME: i32 = 1 << 0;
-#[cfg(all(feature = "time", target_os = "illumos"))]
-pub(crate) const TFD_TIMER_CANCEL_ON_SET: i32 = 1 << 1;
-
-// <https://nxr.netbsd.org/xref/src/sys/sys/timerfd.h#44>
-#[cfg(all(feature = "time", target_os = "netbsd"))]
-pub(crate) const TFD_CLOEXEC: i32 = O_CLOEXEC;
-#[cfg(all(feature = "time", target_os = "netbsd"))]
-pub(crate) const TFD_NONBLOCK: i32 = O_NONBLOCK;
-#[cfg(all(feature = "time", target_os = "netbsd"))]
-pub(crate) const TFD_TIMER_ABSTIME: i32 = O_WRONLY;
-#[cfg(all(feature = "time", target_os = "netbsd"))]
-pub(crate) const TFD_TIMER_CANCEL_ON_SET: i32 = O_RDWR;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    #[cfg(linux_kernel)]
-    fn test_flags() {
-        // libc may publicly define `O_LARGEFILE` to 0, but we want the real
-        // non-zero value.
-        assert_ne!(O_LARGEFILE, 0);
-    }
-}

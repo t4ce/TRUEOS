@@ -46,15 +46,3 @@ opaque_future! {
     pub type IntoMakeServiceFuture<S> =
         core::future::Ready<Result<S, Infallible>>;
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn traits() {
-        use crate::test_helpers::*;
-
-        assert_send::<IntoMakeService<()>>();
-    }
-}

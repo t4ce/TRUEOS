@@ -99,19 +99,3 @@ pub(super) fn has_content_type(headers: &HeaderMap, expected_content_type: &mime
 
     content_type.starts_with(expected_content_type.as_ref())
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::{routing::get, test_helpers::*, Router};
-
-    #[crate::test]
-    async fn consume_body() {
-        let app = Router::new().route("/", get(|body: String| async { body }));
-
-        let client = TestClient::new(app);
-        let res = client.get("/").body("foo").await;
-        let body = res.text().await;
-
-        assert_eq!(body, "foo");
-    }
-}

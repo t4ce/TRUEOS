@@ -897,22 +897,7 @@ impl Endpoint {
         self.all_incoming_buffers_total_bytes
     }
 
-    #[cfg(test)]
-    pub(crate) fn known_connections(&self) -> usize {
-        let x = self.connections.len();
-        debug_assert_eq!(x, self.index.connection_ids_initial.len());
-        // Not all connections have known reset tokens
-        debug_assert!(x >= self.index.connection_reset_tokens.0.len());
-        // Not all connections have unique remotes, and 0-length CIDs might not be in use.
-        debug_assert!(x >= self.index.incoming_connection_remotes.len());
-        debug_assert!(x >= self.index.outgoing_connection_remotes.len());
-        x
-    }
 
-    #[cfg(test)]
-    pub(crate) fn known_cids(&self) -> usize {
-        self.index.connection_ids.len()
-    }
 
     /// Whether we've used up 3/4 of the available CID space
     ///

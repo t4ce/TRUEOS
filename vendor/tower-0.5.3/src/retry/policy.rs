@@ -90,5 +90,3 @@ pub trait Policy<Req, Res, E> {
 }
 
 // Ensure `Policy` is object safe
-#[cfg(test)]
-fn _obj_safe(_: Box<dyn Policy<(), (), (), Future = core::future::Ready<()>>>) {}

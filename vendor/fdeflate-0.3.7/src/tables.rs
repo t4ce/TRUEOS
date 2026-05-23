@@ -195,11 +195,9 @@ pub(crate) const FIXED_DIST_TABLE: [u32; 32] = [
     201427461, 12682757, 5,
 ];
 
-#[cfg(test)]
-pub(crate) const FIXED_CODE_LENGTHS: [u8; 320] = make_fixed_code_lengths();
+ 320] = make_fixed_code_lengths();
 
-#[cfg(test)]
-const fn make_fixed_code_lengths() -> [u8; 320] {
+ 320] {
     let mut i = 0;
     let mut lengths = [0; 320];
     while i < 144 {

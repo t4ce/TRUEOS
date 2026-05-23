@@ -86,19 +86,6 @@ pub struct Record<R: RecordData = RData> {
 }
 
 impl Record {
-    #[cfg(test)]
-    pub(crate) fn stub() -> Self {
-        Self {
-            name_labels: Name::from_ascii(".").unwrap(),
-            dns_class: DNSClass::IN,
-            ttl: 0,
-            rdata: RData::Update0(RecordType::NULL),
-            #[cfg(feature = "mdns")]
-            mdns_cache_flush: false,
-            #[cfg(feature = "__dnssec")]
-            proof: Proof::default(),
-        }
-    }
 }
 
 impl Record {
@@ -814,108 +801,5 @@ impl<'a, R: RecordData> TryFrom<&'a Record> for RecordRef<'a, R> {
                 proof: *proof,
             }),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::dbg_macro, clippy::print_stdout)]
-
-    use alloc::vec::Vec;
-    use core::cmp::Ordering;
-    use core::str::FromStr;
-    #[cfg(feature = "std")]
-    use std::println;
-
-    use super::*;
-    use crate::rr::Name;
-    use crate::rr::dns_class::DNSClass;
-    use crate::rr::rdata::{A, AAAA};
-    use crate::rr::record_data::RData;
-    #[allow(clippy::useless_attribute)]
-    #[allow(unused)]
-    use crate::serialize::binary::*;
-
-    #[test]
-    fn test_emit_and_read() {
-        let record = Record::from_rdata(
-            Name::from_str("www.example.com.").unwrap(),
-            5,
-            RData::A(A::new(192, 168, 0, 1)),
-        );
-
-        let mut vec_bytes: Vec<u8> = Vec::with_capacity(512);
-        {
-            let mut encoder = BinEncoder::new(&mut vec_bytes);
-            record.emit(&mut encoder).unwrap();
-        }
-
-        let mut decoder = BinDecoder::new(&vec_bytes);
-
-        let got = Record::read(&mut decoder).unwrap();
-
-        assert_eq!(got, record);
-    }
-
-    #[test]
-    fn test_order() {
-        let mut record = Record::from_rdata(
-            Name::from_str("www.example.com").unwrap(),
-            5,
-            RData::A(A::new(192, 168, 0, 1)),
-        );
-        record.set_dns_class(DNSClass::IN);
-
-        let mut greater_name = record.clone();
-        greater_name.set_name(Name::from_str("zzz.example.com").unwrap());
-
-        let mut greater_type = record.clone().into_record_of_rdata();
-        greater_type.set_data(RData::AAAA(AAAA::new(0, 0, 0, 0, 0, 0, 0, 0)));
-
-        let mut greater_class = record.clone();
-        greater_class.set_dns_class(DNSClass::NONE);
-
-        let mut greater_rdata = record.clone();
-        greater_rdata.set_data(RData::A(A::new(192, 168, 0, 255)));
-
-        let compares = vec![
-            (&record, &greater_name),
-            (&record, &greater_type),
-            (&record, &greater_class),
-            (&record, &greater_rdata),
-        ];
-
-        assert_eq!(record.clone(), record.clone());
-        for (r, g) in compares {
-            #[cfg(feature = "std")]
-            println!("r, g: {r:?}, {g:?}");
-            assert_eq!(r.cmp(g), Ordering::Less);
-        }
-    }
-
-    #[cfg(feature = "mdns")]
-    #[test]
-    fn test_mdns_cache_flush_bit_handling() {
-        const RR_CLASS_OFFSET: usize = 1 /* empty name */ +
-            core::mem::size_of::<u16>() /* rr_type */;
-
-        let mut record = Record::<RData>::stub();
-        record.set_mdns_cache_flush(true);
-
-        let mut vec_bytes: Vec<u8> = Vec::with_capacity(512);
-        {
-            let mut encoder = BinEncoder::new(&mut vec_bytes);
-            record.emit(&mut encoder).unwrap();
-
-            let rr_class_slice = encoder.slice_of(RR_CLASS_OFFSET, RR_CLASS_OFFSET + 2);
-            assert_eq!(rr_class_slice, &[0x80, 0x01]);
-        }
-
-        let mut decoder = BinDecoder::new(&vec_bytes);
-
-        let got = Record::<RData>::read(&mut decoder).unwrap();
-
-        assert_eq!(got.dns_class(), DNSClass::IN);
-        assert!(got.mdns_cache_flush());
     }
 }

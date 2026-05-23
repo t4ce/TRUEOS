@@ -906,19 +906,3 @@ cfg_io_source! {
     pub(crate) use stateless_io_source::IoSourceState;
 }
 
-#[test]
-#[cfg(feature = "os-ext")]
-fn does_not_register_rw() {
-    use crate::unix::SourceFd;
-    use crate::{Poll, Token};
-
-    let kq = unsafe { libc::kqueue() };
-    let mut kqf = SourceFd(&kq);
-    let poll = Poll::new().unwrap();
-
-    // Registering kqueue fd will fail if write is requested (On anything but
-    // some versions of macOS).
-    poll.registry()
-        .register(&mut kqf, Token(1234), Interest::READABLE)
-        .unwrap();
-}

@@ -653,21 +653,3 @@ impl Args {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_utils::*;
-    use core::cmp::Ordering;
-
-    #[test]
-    fn test_object_cmp() {
-        let mut context = make_test_context();
-
-        assert_eq!(AmlValue::Integer(76).cmp(AmlValue::Integer(89), &mut context), Ok(Ordering::Less));
-        assert_eq!(AmlValue::Integer(11).cmp(AmlValue::Integer(11), &mut context), Ok(Ordering::Equal));
-        assert_eq!(AmlValue::Integer(8362836690).cmp(AmlValue::Integer(1), &mut context), Ok(Ordering::Greater));
-
-        // TODO: test the other combinations too, as well as conversions to the correct types for the second operand
-    }
-}

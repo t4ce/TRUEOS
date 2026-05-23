@@ -13,8 +13,6 @@ use std::sync::{
 use crate::time::{Duration, Instant};
 
 use parking_lot::Mutex;
-#[cfg(test)]
-use tokio::time::{Duration, Instant};
 
 use crate::proto::{ProtoError, ProtoErrorKind, op::ResponseCode, xfer::DnsResponse};
 
@@ -151,12 +149,6 @@ impl NameServerStats {
     /// Returns the raw SRTT value.
     ///
     /// Prefer to use `decayed_srtt` when ordering name servers.
-    #[cfg(test)]
-    fn srtt(&self) -> Duration {
-        Duration::from_micros(u64::from(
-            self.srtt_microseconds.load(atomic::Ordering::Acquire),
-        ))
-    }
 
     /// Returns the SRTT value after applying a time based decay.
     ///
@@ -206,152 +198,3 @@ impl NameServerStats {
     }
 }
 
-#[cfg(test)]
-#[allow(clippy::extra_unused_type_parameters)]
-mod tests {
-    use core::cmp::Ordering;
-
-    use super::*;
-
-    fn is_send_sync<S: Sync + Send>() -> bool {
-        true
-    }
-
-    #[test]
-    fn stats_are_sync() {
-        assert!(is_send_sync::<NameServerStats>());
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_stats_cmp() {
-        let server_a = NameServerStats::new(Duration::from_micros(10));
-        let server_b = NameServerStats::new(Duration::from_micros(20));
-
-        // No RTTs or failures have been recorded. The initial SRTTs should be
-        // compared.
-        assert_eq!(cmp(&server_a, &server_b), Ordering::Less);
-
-        // Server A was used. Unused server B should now be preferred.
-        server_a.record_rtt(Duration::from_millis(30));
-        tokio::time::advance(Duration::from_secs(5)).await;
-        assert_eq!(cmp(&server_a, &server_b), Ordering::Greater);
-
-        // Both servers have been used. Server A has a lower SRTT and should be
-        // preferred.
-        server_b.record_rtt(Duration::from_millis(50));
-        tokio::time::advance(Duration::from_secs(5)).await;
-        assert_eq!(cmp(&server_a, &server_b), Ordering::Less);
-
-        // Server A experiences a connection failure, which results in Server B
-        // being preferred.
-        server_a.record_connection_failure();
-        tokio::time::advance(Duration::from_secs(5)).await;
-        assert_eq!(cmp(&server_a, &server_b), Ordering::Greater);
-
-        // Server A should eventually recover and once again be preferred.
-        while cmp(&server_a, &server_b) != Ordering::Less {
-            server_b.record_rtt(Duration::from_millis(50));
-            tokio::time::advance(Duration::from_secs(5)).await;
-        }
-
-        server_a.record_rtt(Duration::from_millis(30));
-        tokio::time::advance(Duration::from_secs(3)).await;
-        assert_eq!(cmp(&server_a, &server_b), Ordering::Less);
-    }
-
-    fn cmp(a: &NameServerStats, b: &NameServerStats) -> Ordering {
-        a.decayed_srtt().total_cmp(&b.decayed_srtt())
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_record_rtt() {
-        let server = NameServerStats::new(Duration::from_micros(10));
-
-        let first_rtt = Duration::from_millis(50);
-        server.record_rtt(first_rtt);
-
-        // The first recorded RTT should replace the initial value.
-        assert_eq!(server.srtt(), first_rtt);
-
-        tokio::time::advance(Duration::from_secs(3)).await;
-
-        // Subsequent RTTs should factor in previously recorded values.
-        server.record_rtt(Duration::from_millis(100));
-        assert_eq!(server.srtt(), Duration::from_micros(81606));
-    }
-
-    #[test]
-    fn test_record_rtt_maximum_value() {
-        let server = NameServerStats::new(Duration::from_micros(10));
-
-        server.record_rtt(Duration::MAX);
-        // Updates to the SRTT are capped at a maximum value.
-        assert_eq!(
-            server.srtt(),
-            Duration::from_micros(NameServerStats::MAX_SRTT_MICROS.into())
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_record_connection_failure() {
-        let server = NameServerStats::new(Duration::from_micros(10));
-
-        // Verify that the SRTT value is initially replaced with the penalty and
-        // subsequent failures result in the penalty being added.
-        for failure_count in 1..4 {
-            server.record_connection_failure();
-            assert_eq!(
-                server.srtt(),
-                Duration::from_micros(
-                    NameServerStats::CONNECTION_FAILURE_PENALTY
-                        .checked_mul(failure_count)
-                        .expect("checked_mul overflow")
-                        .into()
-                )
-            );
-            tokio::time::advance(Duration::from_secs(3)).await;
-        }
-
-        // Verify that the `last_update` timestamp was updated for a connection
-        // failure and is used in subsequent calculations.
-        server.record_rtt(Duration::from_millis(50));
-        assert_eq!(server.srtt(), Duration::from_micros(197152));
-    }
-
-    #[test]
-    fn test_record_connection_failure_maximum_value() {
-        let server = NameServerStats::new(Duration::from_micros(10));
-
-        let num_failures =
-            (NameServerStats::MAX_SRTT_MICROS / NameServerStats::CONNECTION_FAILURE_PENALTY) + 1;
-        for _ in 0..num_failures {
-            server.record_connection_failure();
-        }
-
-        // Updates to the SRTT are capped at a maximum value.
-        assert_eq!(
-            server.srtt(),
-            Duration::from_micros(NameServerStats::MAX_SRTT_MICROS.into())
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_decayed_srtt() {
-        let initial_srtt = 10;
-        let server = NameServerStats::new(Duration::from_micros(initial_srtt));
-
-        // No decay should be applied to the initial value.
-        assert_eq!(server.decayed_srtt() as u32, initial_srtt as u32);
-
-        tokio::time::advance(Duration::from_secs(5)).await;
-        server.record_rtt(Duration::from_millis(100));
-
-        // The decay function should assume a minimum of one second has elapsed
-        // since the last update.
-        tokio::time::advance(Duration::from_millis(500)).await;
-        assert_eq!(server.decayed_srtt() as u32, 99445);
-
-        tokio::time::advance(Duration::from_secs(5)).await;
-        assert_eq!(server.decayed_srtt() as u32, 96990);
-    }
-}

@@ -147,10 +147,6 @@ where
     /// Sends the settings and initializes the control streams
     #[cfg_attr(feature = "tracing", instrument(skip_all, level = "trace"))]
     pub async fn send_control_stream_headers(&mut self) -> Result<(), ConnectionError> {
-        #[cfg(test)]
-        if !self.config.send_settings {
-            return Ok(());
-        }
 
         let settings = frame::Settings::try_from(self.config).map_err(|_err| {
             // TODO: converting a config to settings should never fail

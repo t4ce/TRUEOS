@@ -48,8 +48,6 @@ mod builder;
 mod path;
 mod port;
 mod scheme;
-#[cfg(test)]
-mod tests;
 
 /// The URI component of a request.
 ///

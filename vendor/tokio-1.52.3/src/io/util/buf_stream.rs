@@ -195,13 +195,3 @@ impl<RW: AsyncRead + AsyncWrite> AsyncBufRead for BufStream<RW> {
         self.project().inner.consume(amt);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn assert_unpin() {
-        crate::is_unpin::<BufStream<()>>();
-    }
-}

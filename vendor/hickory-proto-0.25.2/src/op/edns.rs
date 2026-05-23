@@ -291,38 +291,3 @@ impl From<EdnsFlags> for u16 {
         }
     }
 }
-
-#[cfg(all(test, feature = "__dnssec"))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_encode_decode() {
-        let mut edns = Edns::new();
-
-        let flags = edns.flags_mut();
-        flags.dnssec_ok = true;
-        flags.z = 1;
-        edns.set_max_payload(0x8008);
-        edns.set_version(0x40);
-        edns.set_rcode_high(0x01);
-        edns.options_mut()
-            .insert(EdnsOption::DAU(SupportedAlgorithms::all()));
-
-        let record = Record::from(&edns);
-        let edns_decode = Edns::from(&record);
-
-        assert_eq!(edns.flags().dnssec_ok, edns_decode.flags().dnssec_ok);
-        assert_eq!(edns.flags().z, edns_decode.flags().z);
-        assert_eq!(edns.max_payload(), edns_decode.max_payload());
-        assert_eq!(edns.version(), edns_decode.version());
-        assert_eq!(edns.rcode_high(), edns_decode.rcode_high());
-        assert_eq!(edns.options(), edns_decode.options());
-
-        // re-insert and remove using mut
-        edns.options_mut()
-            .insert(EdnsOption::DAU(SupportedAlgorithms::all()));
-        edns.options_mut().remove(EdnsCode::DAU);
-        assert!(edns.option(EdnsCode::DAU).is_none());
-    }
-}

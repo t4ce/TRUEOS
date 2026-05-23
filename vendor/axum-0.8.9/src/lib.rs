@@ -651,5 +651,3 @@ pub use self::serve::serve;
 
 pub use self::service_ext::ServiceExt;
 
-#[cfg(test)]
-use axum_macros::__private_axum_test as test;

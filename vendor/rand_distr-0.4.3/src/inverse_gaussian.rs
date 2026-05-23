@@ -88,25 +88,3 @@ where
         mu * mu / x
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_inverse_gaussian() {
-        let inv_gauss = InverseGaussian::new(1.0, 1.0).unwrap();
-        let mut rng = crate::test::rng(210);
-        for _ in 0..1000 {
-            inv_gauss.sample(&mut rng);
-        }
-    }
-
-    #[test]
-    fn test_inverse_gaussian_invalid_param() {
-        assert!(InverseGaussian::new(-1.0, 1.0).is_err());
-        assert!(InverseGaussian::new(-1.0, -1.0).is_err());
-        assert!(InverseGaussian::new(1.0, -1.0).is_err());
-        assert!(InverseGaussian::new(1.0, 1.0).is_ok());
-    }
-}

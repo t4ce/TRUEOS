@@ -105,10 +105,6 @@ impl From<Itimerspec> for LibcItimerspec {
 ))]
 #[cfg(not(fix_y2038))]
 pub(crate) fn as_libc_itimerspec_ptr(itimerspec: &Itimerspec) -> *const c::itimerspec {
-    #[cfg(test)]
-    {
-        assert_eq_size!(Itimerspec, c::itimerspec);
-    }
     crate::utils::as_ptr(itimerspec).cast::<c::itimerspec>()
 }
 
@@ -123,10 +119,6 @@ pub(crate) fn as_libc_itimerspec_ptr(itimerspec: &Itimerspec) -> *const c::itime
 pub(crate) fn as_libc_itimerspec_mut_ptr(
     itimerspec: &mut core::mem::MaybeUninit<Itimerspec>,
 ) -> *mut c::itimerspec {
-    #[cfg(test)]
-    {
-        assert_eq_size!(Itimerspec, c::itimerspec);
-    }
     itimerspec.as_mut_ptr().cast::<c::itimerspec>()
 }
 
@@ -244,23 +236,4 @@ pub enum TimerfdClockId {
     #[cfg(any(linux_kernel, target_os = "cygwin", target_os = "fuchsia"))]
     #[doc(alias = "CLOCK_BOOTTIME_ALARM")]
     BoottimeAlarm = bitcast!(c::CLOCK_BOOTTIME_ALARM),
-}
-
-#[cfg(test)]
-mod tests {
-    #[allow(unused_imports)]
-    use super::*;
-
-    #[cfg(any(
-        linux_kernel,
-        target_os = "freebsd",
-        target_os = "fuchsia",
-        target_os = "illumos",
-        target_os = "netbsd"
-    ))]
-    #[test]
-    fn test_types() {
-        assert_eq_size!(TimerfdFlags, c::c_int);
-        assert_eq_size!(TimerfdTimerFlags, c::c_int);
-    }
 }

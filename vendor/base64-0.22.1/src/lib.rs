@@ -239,8 +239,6 @@
 extern crate alloc;
 
 // has to be included at top level because of the way rstest_reuse defines its macros
-#[cfg(test)]
-use rstest_reuse;
 
 mod chunked_encoder;
 pub mod display;
@@ -263,14 +261,11 @@ pub use crate::encode::{encode_engine_slice, encoded_len, EncodeSliceError};
 
 mod decode;
 #[allow(deprecated)]
-#[cfg(any(feature = "alloc", test))]
+#[cfg(feature = "alloc")]
 pub use crate::decode::{decode, decode_engine, decode_engine_vec};
 #[allow(deprecated)]
 pub use crate::decode::{decode_engine_slice, decoded_len_estimate, DecodeError, DecodeSliceError};
 
 pub mod prelude;
-
-#[cfg(test)]
-mod tests;
 
 const PAD_BYTE: u8 = b'=';

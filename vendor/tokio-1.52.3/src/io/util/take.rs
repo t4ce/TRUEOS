@@ -127,13 +127,3 @@ impl<R: AsyncBufRead> AsyncBufRead for Take<R> {
         me.inner.consume(amt);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn assert_unpin() {
-        crate::is_unpin::<Take<()>>();
-    }
-}

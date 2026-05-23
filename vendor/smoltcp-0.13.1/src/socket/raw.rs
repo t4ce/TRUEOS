@@ -476,54 +476,6 @@ impl<'a> Socket<'a> {
     }
 }
 
-#[cfg(test)]
-mod test {
-    use crate::phy::Medium;
-    use crate::tests::setup;
-    use rstest::*;
-
-    use super::*;
-    use crate::wire::IpRepr;
-    #[cfg(feature = "proto-ipv4")]
-    use crate::wire::{Ipv4Address, Ipv4Repr};
-    #[cfg(feature = "proto-ipv6")]
-    use crate::wire::{Ipv6Address, Ipv6Repr};
-
-    fn buffer(packets: usize) -> PacketBuffer<'static> {
-        PacketBuffer::new(vec![PacketMetadata::EMPTY; packets], vec![0; 48 * packets])
-    }
-
-    #[cfg(feature = "proto-ipv4")]
-    mod ipv4_locals {
-        use super::*;
-
-        pub fn socket(
-            rx_buffer: PacketBuffer<'static>,
-            tx_buffer: PacketBuffer<'static>,
-        ) -> Socket<'static> {
-            Socket::new(
-                Some(IpVersion::Ipv4),
-                Some(IpProtocol::Unknown(IP_PROTO)),
-                rx_buffer,
-                tx_buffer,
-            )
-        }
-
-        pub const IP_PROTO: u8 = 63;
-        pub const HEADER_REPR: IpRepr = IpRepr::Ipv4(Ipv4Repr {
-            src_addr: Ipv4Address::new(10, 0, 0, 1),
-            dst_addr: Ipv4Address::new(10, 0, 0, 2),
-            next_header: IpProtocol::Unknown(IP_PROTO),
-            payload_len: 4,
-            hop_limit: 64,
-        });
-        pub const PACKET_BYTES: [u8; 24] = [
-            0x45, 0x00, 0x00, 0x18, 0x00, 0x00, 0x40, 0x00, 0x40, 0x3f, 0x00, 0x00, 0x0a, 0x00,
-            0x00, 0x01, 0x0a, 0x00, 0x00, 0x02, 0xaa, 0x00, 0x00, 0xff,
-        ];
-        pub const PACKET_PAYLOAD: [u8; 4] = [0xaa, 0x00, 0x00, 0xff];
-    }
-
     #[cfg(feature = "proto-ipv6")]
     mod ipv6_locals {
         use super::*;
@@ -564,11 +516,6 @@ mod test {
             mod $module {
                 use super::*;
 
-                #[test]
-                fn test_send_truncated() {
-                    let mut socket = $socket(buffer(0), buffer(1));
-                    assert_eq!(socket.send_slice(&[0; 56][..]), Err(SendError::BufferFull));
-                }
 
                 #[rstest]
                 #[case::ip(Medium::Ip)]
@@ -829,33 +776,6 @@ mod test {
         }
     }
 
-    #[test]
-    fn test_doesnt_accept_wrong_proto() {
-        #[cfg(feature = "proto-ipv4")]
-        {
-            let socket = Socket::new(
-                Some(IpVersion::Ipv4),
-                Some(IpProtocol::Unknown(ipv4_locals::IP_PROTO + 1)),
-                buffer(1),
-                buffer(1),
-            );
-            assert!(!socket.accepts(&ipv4_locals::HEADER_REPR));
-            #[cfg(feature = "proto-ipv6")]
-            assert!(!socket.accepts(&ipv6_locals::HEADER_REPR));
-        }
-        #[cfg(feature = "proto-ipv6")]
-        {
-            let socket = Socket::new(
-                Some(IpVersion::Ipv6),
-                Some(IpProtocol::Unknown(ipv6_locals::IP_PROTO + 1)),
-                buffer(1),
-                buffer(1),
-            );
-            assert!(!socket.accepts(&ipv6_locals::HEADER_REPR));
-            #[cfg(feature = "proto-ipv4")]
-            assert!(!socket.accepts(&ipv4_locals::HEADER_REPR));
-        }
-    }
 
     fn check_dispatch(socket: &mut Socket<'_>, cx: &mut Context) {
         // Check dispatch returns Ok(()) and calls the emit closure

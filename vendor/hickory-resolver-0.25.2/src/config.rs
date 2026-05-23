@@ -962,37 +962,3 @@ pub const QUAD9_IPS: &[IpAddr] = &[
     IpAddr::V6(Ipv6Addr::new(0x2620, 0x00fe, 0, 0, 0, 0, 0, 0x00fe)),
     IpAddr::V6(Ipv6Addr::new(0x2620, 0x00fe, 0, 0, 0, 0, 0x00fe, 0x0009)),
 ];
-
-#[cfg(all(test, feature = "serde"))]
-mod tests {
-    use super::*;
-
-    #[cfg(feature = "serde")]
-    #[test]
-    fn default_opts() {
-        let code = ResolverOpts::default();
-        let json = serde_json::from_str::<ResolverOpts>("{}").unwrap();
-        assert_eq!(code.ndots, json.ndots);
-        assert_eq!(code.timeout, json.timeout);
-        assert_eq!(code.attempts, json.attempts);
-        assert_eq!(code.check_names, json.check_names);
-        assert_eq!(code.edns0, json.edns0);
-        assert_eq!(code.validate, json.validate);
-        assert_eq!(code.ip_strategy, json.ip_strategy);
-        assert_eq!(code.cache_size, json.cache_size);
-        assert_eq!(code.use_hosts_file, json.use_hosts_file);
-        assert_eq!(code.positive_min_ttl, json.positive_min_ttl);
-        assert_eq!(code.negative_min_ttl, json.negative_min_ttl);
-        assert_eq!(code.positive_max_ttl, json.positive_max_ttl);
-        assert_eq!(code.negative_max_ttl, json.negative_max_ttl);
-        assert_eq!(code.num_concurrent_reqs, json.num_concurrent_reqs);
-        assert_eq!(code.preserve_intermediates, json.preserve_intermediates);
-        assert_eq!(code.try_tcp_on_error, json.try_tcp_on_error);
-        assert_eq!(code.recursion_desired, json.recursion_desired);
-        assert_eq!(code.server_ordering_strategy, json.server_ordering_strategy);
-        assert_eq!(code.avoid_local_udp_ports, json.avoid_local_udp_ports);
-        assert_eq!(code.os_port_selection, json.os_port_selection);
-        assert_eq!(code.case_randomization, json.case_randomization);
-        assert_eq!(code.trust_anchor, json.trust_anchor);
-    }
-}

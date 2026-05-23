@@ -491,6 +491,3 @@ impl fmt::Debug for Inner {
         fmt.debug_struct("Inner").finish()
     }
 }
-
-#[cfg(test)]
-mod tests;

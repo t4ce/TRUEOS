@@ -144,29 +144,3 @@ impl PartialEq for NameServerState {
         self.load() == other.load()
     }
 }
-
-impl Eq for NameServerState {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::name_server::NameServerState;
-
-    #[test]
-    fn test_state_cmp() {
-        let init = NameServerState::init(None);
-
-        let established = NameServerState::init(None);
-        established.establish(None);
-
-        let failed = NameServerState::init(None);
-        failed.fail(Instant::now());
-
-        assert_eq!(init.cmp(&init), Ordering::Equal);
-        assert_eq!(init.cmp(&established), Ordering::Less);
-        assert_eq!(init.cmp(&failed), Ordering::Greater);
-        assert_eq!(established.cmp(&established), Ordering::Equal);
-        assert_eq!(established.cmp(&failed), Ordering::Greater);
-        assert_eq!(failed.cmp(&failed), Ordering::Equal);
-    }
-}

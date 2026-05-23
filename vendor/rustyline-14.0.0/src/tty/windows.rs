@@ -926,20 +926,3 @@ impl Drop for Handle {
         unsafe { foundation::CloseHandle(self.0) };
     }
 }
-
-#[cfg(test)]
-mod test {
-    use super::Console;
-
-    #[test]
-    fn test_send() {
-        fn assert_send<T: Send>() {}
-        assert_send::<Console>();
-    }
-
-    #[test]
-    fn test_sync() {
-        fn assert_sync<T: Sync>() {}
-        assert_sync::<Console>();
-    }
-}

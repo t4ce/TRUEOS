@@ -30,20 +30,4 @@ pub(crate) fn parse<'i, I: Iterator<Item = &'i str>>(mut tokens: I) -> ParseResu
     Ok(HINFO::new(cpu, os))
 }
 
-#[test]
-fn test_parsing() {
-    // IN HINFO DEC-2060 TOPS20
 
-    assert_eq!(
-        parse(vec!["DEC-2060", "TOPS20"].into_iter()).expect("failed to parse NAPTR"),
-        HINFO::new("DEC-2060".to_string(), "TOPS20".to_string()),
-    );
-}
-
-#[test]
-fn test_parsing_fails() {
-    // IN HINFO DEC-2060 TOPS20
-
-    assert!(parse(vec!["DEC-2060"].into_iter()).is_err());
-    assert!(parse(vec![].into_iter()).is_err());
-}

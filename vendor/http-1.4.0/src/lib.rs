@@ -299,12 +299,7 @@ pub mod vec {
 #[cfg(not(feature = "std"))]
 pub use core::{i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize};
 
-#[cfg(test)]
-#[macro_use]
-extern crate doc_comment;
 
-#[cfg(test)]
-doctest!("../README.md");
 
 #[macro_use]
 mod convert;
@@ -331,20 +326,3 @@ pub use crate::response::Response;
 pub use crate::status::StatusCode;
 pub use crate::uri::Uri;
 pub use crate::version::Version;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn assert_send_sync<T: Send + Sync>() {}
-
-    #[test]
-    fn request_satisfies_send_sync() {
-        assert_send_sync::<Request<()>>();
-    }
-
-    #[test]
-    fn response_satisfies_send_sync() {
-        assert_send_sync::<Response<()>>();
-    }
-}

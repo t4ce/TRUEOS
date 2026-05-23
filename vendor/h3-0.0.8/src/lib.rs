@@ -53,7 +53,3 @@ mod webtransport;
 
 #[allow(dead_code)]
 mod qpack;
-#[cfg(test)]
-mod tests;
-#[cfg(test)]
-extern crate self as h3;

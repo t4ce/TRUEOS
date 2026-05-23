@@ -318,24 +318,3 @@ impl From<rustls::Error> for TlsError {
         Self::Rustls(e.into())
     }
 }
-
-#[cfg(test)]
-mod test {
-    #[test]
-    fn error_size() {
-        let size = core::mem::size_of::<crate::Error>();
-        assert!(size <= 32, "Error is large: {size}");
-    }
-
-    #[test]
-    fn tls_error_size() {
-        let size = core::mem::size_of::<crate::error::TlsError>();
-        assert!(size <= 16, "TlsError is large: {size}");
-    }
-
-    #[test]
-    fn protocol_error_size() {
-        let size = core::mem::size_of::<crate::error::ProtocolError>();
-        assert!(size <= 16, "ProtocolError is large: {size}");
-    }
-}

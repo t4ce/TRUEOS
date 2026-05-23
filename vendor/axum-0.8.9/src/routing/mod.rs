@@ -34,9 +34,6 @@ mod route;
 mod strip_prefix;
 pub(crate) mod url_params;
 
-#[cfg(test)]
-mod tests;
-
 pub use self::{into_make_service::IntoMakeService, method_filter::MethodFilter, route::Route};
 
 pub use self::method_routing::{
@@ -795,16 +792,6 @@ impl<S> fmt::Debug for Endpoint<S> {
     }
 }
 
-#[test]
-fn traits() {
-    use crate::test_helpers::*;
-    assert_send::<Router<()>>();
-    assert_sync::<Router<()>>();
-    assert_send::<RouterAsService<'static, Body, ()>>();
-    assert_sync::<RouterAsService<'static, Body, ()>>();
-    assert_send::<RouterIntoService<Body, ()>>();
-    assert_sync::<RouterIntoService<Body, ()>>();
-}
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use crate::prelude::rust_2021::*;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]

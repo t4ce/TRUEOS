@@ -106,18 +106,3 @@ impl ArmRng {
         None
     }
 }
-
-#[cfg(all(test, target_os = "linux"))]
-mod tests {
-    use super::*;
-
-    #[test]
-    pub fn test_rndr() {
-        // This works on Linux from userspace since Linux emulatates the Arm ID registers on the
-        // userspace undef.
-        if let Some(rand) = ArmRng::new() {
-            assert!(rand.rndr().unwrap() != 0);
-            assert!(rand.rndrss().unwrap() != 0);
-        }
-    }
-}

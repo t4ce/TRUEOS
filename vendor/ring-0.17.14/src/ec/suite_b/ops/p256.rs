@@ -35,11 +35,6 @@ pub static COMMON_OPS: CommonOps = CommonOps {
     elem_sqr_mont: p256_sqr_mont,
 };
 
-#[cfg(test)]
-pub(super) static GENERATOR: (PublicElem<R>, PublicElem<R>) = (
-    PublicElem::from_hex("18905f76a53755c679fb732b7762251075ba95fc5fedb60179e730d418a9143c"),
-    PublicElem::from_hex("8571ff1825885d85d2e88688dd21f3258b4ab8e4ba19e45cddf25357ce95560a"),
-);
 
 pub static PRIVATE_KEY_OPS: PrivateKeyOps = PrivateKeyOps {
     common: &COMMON_OPS,
@@ -314,21 +309,4 @@ prefixed_extern! {
         a: *const Limb, // [COMMON_OPS.num_limbs]
         rep: LeakyWord,
     );
-}
-
-#[cfg(test)]
-mod tests {
-    #[cfg(any(
-        all(target_arch = "aarch64", target_endian = "little"),
-        target_arch = "x86_64"
-    ))]
-    #[test]
-    fn p256_point_mul_base_vartime_test() {
-        use super::{super::tests::point_mul_base_tests, *};
-        point_mul_base_tests(
-            &PRIVATE_KEY_OPS,
-            point_mul_base_vartime,
-            test_vector_file!("p256_point_mul_base_tests.txt"),
-        );
-    }
 }

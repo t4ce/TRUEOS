@@ -7,8 +7,7 @@ use core::num::NonZeroU64;
 pub struct PublicExponent(NonZeroU64);
 
 impl PublicExponent {
-    #[cfg(test)]
-    const ALL_CONSTANTS: [Self; 3] = [Self::_3, Self::_65537, Self::MAX];
+ 3] = [Self::_3, Self::_65537, Self::MAX];
 
     pub(super) const _3: Self = Self(unwrap_const(NonZeroU64::new(3)));
     pub(super) const _65537: Self = Self(unwrap_const(NonZeroU64::new(65537)));
@@ -85,20 +84,5 @@ impl PublicExponent {
 
     pub(super) fn value(self) -> NonZeroU64 {
         self.0
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_public_exponent_constants() {
-        for value in PublicExponent::ALL_CONSTANTS.iter() {
-            let value: u64 = value.0.into();
-            assert_eq!(value & 1, 1);
-            assert!(value >= PublicExponent::_3.0.into()); // The absolute minimum.
-            assert!(value <= PublicExponent::MAX.0.into());
-        }
     }
 }

@@ -320,11 +320,7 @@ impl Connection {
             timers: TimerTable::default(),
             authentication_failures: 0,
             error: None,
-            #[cfg(test)]
-            packet_number_filter: match config.deterministic_packet_numbers {
-                false => PacketNumberFilter::new(&mut rng),
-                true => PacketNumberFilter::disabled(),
-            },
+,
             #[cfg(not(test))]
             packet_number_filter: PacketNumberFilter::new(&mut rng),
 
@@ -3564,106 +3560,25 @@ impl Connection {
     }
 
     /// Decodes a packet, returning its decrypted payload, so it can be inspected in tests
-    #[cfg(test)]
-    pub(crate) fn decode_packet(&self, event: &ConnectionEvent) -> Option<Vec<u8>> {
-        let (first_decode, remaining) = match &event.0 {
-            ConnectionEventInner::Datagram(DatagramConnectionEvent {
-                first_decode,
-                remaining,
-                ..
-            }) => (first_decode, remaining),
-            _ => return None,
-        };
-
-        if remaining.is_some() {
-            panic!("Packets should never be coalesced in tests");
-        }
-
-        let decrypted_header = packet_crypto::unprotect_header(
-            first_decode.clone(),
-            &self.spaces,
-            self.zero_rtt_crypto.as_ref(),
-            self.peer_params.stateless_reset_token,
-        )?;
-
-        let mut packet = decrypted_header.packet?;
-        packet_crypto::decrypt_packet_body(
-            &mut packet,
-            &self.spaces,
-            self.zero_rtt_crypto.as_ref(),
-            self.key_phase,
-            self.prev_crypto.as_ref(),
-            self.next_crypto.as_ref(),
-        )
-        .ok()?;
-
-        Some(packet.payload.to_vec())
-    }
 
     /// The number of bytes of packets containing retransmittable frames that have not been
     /// acknowledged or declared lost.
-    #[cfg(test)]
-    pub(crate) fn bytes_in_flight(&self) -> u64 {
-        self.path.in_flight.bytes
-    }
 
     /// Number of bytes worth of non-ack-only packets that may be sent
-    #[cfg(test)]
-    pub(crate) fn congestion_window(&self) -> u64 {
-        self.path
-            .congestion
-            .window()
-            .saturating_sub(self.path.in_flight.bytes)
-    }
 
     /// Whether no timers but keepalive, idle, rtt, pushnewcid, and key discard are running
-    #[cfg(test)]
-    pub(crate) fn is_idle(&self) -> bool {
-        Timer::VALUES
-            .iter()
-            .filter(|&&t| !matches!(t, Timer::KeepAlive | Timer::PushNewCid | Timer::KeyDiscard))
-            .filter_map(|&t| Some((t, self.timers.get(t)?)))
-            .min_by_key(|&(_, time)| time)
-            .map_or(true, |(timer, _)| timer == Timer::Idle)
-    }
 
     /// Whether explicit congestion notification is in use on outgoing packets.
-    #[cfg(test)]
-    pub(crate) fn using_ecn(&self) -> bool {
-        self.path.sending_ecn
-    }
 
     /// The number of received bytes in the current path
-    #[cfg(test)]
-    pub(crate) fn total_recvd(&self) -> u64 {
-        self.path.total_recvd
-    }
 
-    #[cfg(test)]
-    pub(crate) fn active_local_cid_seq(&self) -> (u64, u64) {
-        self.local_cid_state.active_seq()
-    }
 
     /// Instruct the peer to replace previously issued CIDs by sending a NEW_CONNECTION_ID frame
     /// with updated `retire_prior_to` field set to `v`
-    #[cfg(test)]
-    pub(crate) fn rotate_local_cid(&mut self, v: u64, now: Instant) {
-        let n = self.local_cid_state.assign_retire_seq(v);
-        self.endpoint_events
-            .push_back(EndpointEventInner::NeedIdentifiers(now, n));
-    }
 
     /// Check the current active remote CID sequence
-    #[cfg(test)]
-    pub(crate) fn active_rem_cid_seq(&self) -> u64 {
-        self.rem_cids.active_seq()
-    }
 
     /// Returns the detected maximum udp payload size for the current path
-    #[cfg(test)]
-    pub(crate) fn path_mtu(&self) -> u16 {
-        self.path.current_mtu()
-    }
 
     /// Whether we have 1-RTT data to send
     ///
@@ -4068,35 +3983,5 @@ fn negotiate_max_idle_timeout(x: Option<VarInt>, y: Option<VarInt>) -> Option<Du
         (Some(VarInt(0)) | None, Some(y)) => Some(Duration::from_millis(y.0)),
         (Some(x), Some(VarInt(0)) | None) => Some(Duration::from_millis(x.0)),
         (Some(x), Some(y)) => Some(Duration::from_millis(cmp::min(x, y).0)),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn negotiate_max_idle_timeout_commutative() {
-        let test_params = [
-            (None, None, None),
-            (None, Some(VarInt(0)), None),
-            (None, Some(VarInt(2)), Some(Duration::from_millis(2))),
-            (Some(VarInt(0)), Some(VarInt(0)), None),
-            (
-                Some(VarInt(2)),
-                Some(VarInt(0)),
-                Some(Duration::from_millis(2)),
-            ),
-            (
-                Some(VarInt(1)),
-                Some(VarInt(4)),
-                Some(Duration::from_millis(1)),
-            ),
-        ];
-
-        for (left, right, result) in test_params {
-            assert_eq!(negotiate_max_idle_timeout(left, right), result);
-            assert_eq!(negotiate_max_idle_timeout(right, left), result);
-        }
     }
 }

@@ -48,36 +48,3 @@ pub(crate) fn new_h3_stream_with_future(
     test,
     any(feature = "rustls-platform-verifier", feature = "webpki-roots")
 ))]
-mod tests {
-    use test_support::subscribe;
-
-    use crate::TokioResolver;
-    use crate::config::ResolverConfig;
-    use crate::name_server::TokioConnectionProvider;
-
-    async fn h3_test(config: ResolverConfig) {
-        let resolver =
-            TokioResolver::builder_with_config(config, TokioConnectionProvider::default()).build();
-
-        let response = resolver
-            .lookup_ip("www.example.com.")
-            .await
-            .expect("failed to run lookup");
-
-        assert_ne!(response.iter().count(), 0);
-
-        // check if there is another connection created
-        let response = resolver
-            .lookup_ip("www.example.com.")
-            .await
-            .expect("failed to run lookup");
-
-        assert_ne!(response.iter().count(), 0);
-    }
-
-    #[tokio::test]
-    async fn test_google_h3() {
-        subscribe();
-        h3_test(ResolverConfig::google_h3()).await
-    }
-}

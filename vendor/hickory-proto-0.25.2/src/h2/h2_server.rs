@@ -127,27 +127,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_from_post() {
-        subscribe();
-        let message = Message::new();
-        let msg_bytes = message.to_vec().unwrap();
-        let len = msg_bytes.len();
-        let stream = TestBytesStream(vec![Ok(Bytes::from(msg_bytes))]);
-        let request = request::new(Version::Http2, "ns.example.com", "/dns-query", len).unwrap();
-        let request = request.map(|()| stream);
-
-        let from_post = message_from(
-            Some(Arc::from("ns.example.com")),
-            "/dns-query".into(),
-            request,
-        );
-        let bytes = match block_on(from_post) {
-            Ok(bytes) => bytes,
-            e => panic!("{:#?}", e),
-        };
-
-        let msg_from_post = Message::from_vec(bytes.as_ref()).expect("bytes failed");
-        assert_eq!(message, msg_from_post);
-    }
 }

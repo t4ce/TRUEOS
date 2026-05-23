@@ -521,11 +521,6 @@ impl<S: Schedule> LocalNotified<S> {
 
 impl<S: Schedule> UnownedTask<S> {
     // Used in test of the inject queue.
-    #[cfg(test)]
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
-    pub(super) fn into_notified(self) -> Notified<S> {
-        Notified(self.into_task())
-    }
 
     fn into_task(self) -> Task<S> {
         // Convert into a task.
@@ -657,11 +652,6 @@ mod spawn_location {
         }
     }
 
-    #[cfg(test)]
-    #[test]
-    fn spawn_location_is_zero_sized() {
-        assert_eq!(core::mem::size_of::<SpawnLocation>(), 0);
-    }
 }
 
 impl SpawnLocation {

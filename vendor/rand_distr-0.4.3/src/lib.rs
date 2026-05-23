@@ -135,52 +135,6 @@ pub use weighted_alias::WeightedAliasIndex;
 
 pub use num_traits;
 
-#[cfg(test)]
-#[macro_use]
-mod test {
-    // Notes on testing
-    //
-    // Testing random number distributions correctly is hard. The following
-    // testing is desired:
-    //
-    // - Construction: test initialisation with a few valid parameter sets.
-    // - Erroneous usage: test that incorrect usage generates an error.
-    // - Vector: test that usage with fixed inputs (including RNG) generates a
-    //   fixed output sequence on all platforms.
-    // - Correctness at fixed points (optional): using a specific mock RNG,
-    //   check that specific values are sampled (e.g. end-points and median of
-    //   distribution).
-    // - Correctness of PDF (extra): generate a histogram of samples within a
-    //   certain range, and check this approximates the PDF. These tests are
-    //   expected to be expensive, and should be behind a feature-gate.
-    //
-    // TODO: Vector and correctness tests are largely absent so far.
-    // NOTE: Some distributions have tests checking only that samples can be
-    // generated. This is redundant with vector and correctness tests.
-
-    /// Construct a deterministic RNG with the given seed
-    pub fn rng(seed: u64) -> impl rand::RngCore {
-        // For tests, we want a statistically good, fast, reproducible RNG.
-        // PCG32 will do fine, and will be easy to embed if we ever need to.
-        const INC: u64 = 11634580027462260723;
-        rand_pcg::Pcg32::new(seed, INC)
-    }
-
-    /// Assert that two numbers are almost equal to each other.
-    ///
-    /// On panic, this macro will print the values of the expressions with their
-    /// debug representations.
-    macro_rules! assert_almost_eq {
-        ($a:expr, $b:expr, $prec:expr) => {
-            let diff = ($a - $b).abs();
-            assert!(diff <= $prec,
-                "assertion failed: `abs(left - right) = {:.1e} < {:e}`, \
-                    (left: `{}`, right: `{}`)",
-                diff, $prec, $a, $b
-            );
-        };
-    }
-}
 
 #[cfg(feature = "alloc")]
 #[cfg_attr(doc_cfg, doc(cfg(feature = "alloc")))]

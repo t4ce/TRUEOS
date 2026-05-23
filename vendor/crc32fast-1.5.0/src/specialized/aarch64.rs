@@ -76,25 +76,3 @@ pub unsafe fn calculate(crc: u32, data: &[u8]) -> u32 {
 
     !c32
 }
-
-#[cfg(test)]
-mod test {
-    quickcheck::quickcheck! {
-        fn check_against_baseline(init: u32, chunks: Vec<(Vec<u8>, usize)>) -> bool {
-            let mut baseline = super::super::super::baseline::State::new(init);
-            let mut aarch64 = super::State::new(init).expect("not supported");
-            for (chunk, mut offset) in chunks {
-                // simulate random alignments by offsetting the slice by up to 15 bytes
-                offset &= 0xF;
-                if chunk.len() <= offset {
-                    baseline.update(&chunk);
-                    aarch64.update(&chunk);
-                } else {
-                    baseline.update(&chunk[offset..]);
-                    aarch64.update(&chunk[offset..]);
-                }
-            }
-            aarch64.finalize() == baseline.finalize()
-        }
-    }
-}

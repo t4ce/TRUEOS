@@ -270,12 +270,5 @@ pub use self::windows::*;
 
 // If on Unix platform import Unix TTY module
 // and re-export into mod.rs scope
-#[cfg(all(unix, not(target_arch = "wasm32")))]
-mod unix;
-#[cfg(all(unix, not(target_arch = "wasm32"), not(test)))]
-pub use self::unix::*;
-
-#[cfg(any(test, target_arch = "wasm32"))]
-mod test;
 #[cfg(any(test, target_arch = "wasm32"))]
 pub use self::test::*;

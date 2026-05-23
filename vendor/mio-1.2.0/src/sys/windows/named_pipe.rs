@@ -317,29 +317,6 @@ impl Inner {
     }
 }
 
-#[test]
-fn ptr_from() {
-    use core::mem::ManuallyDrop;
-    use core::ptr;
-
-    let pipe = unsafe { ManuallyDrop::new(NamedPipe::from_raw_handle(ptr::null_mut())) };
-    let inner: &Inner = &pipe.inner;
-    assert_eq!(
-        inner as *const Inner,
-        unsafe { Inner::ptr_from_conn_overlapped(&inner.connect as *const _ as *mut OVERLAPPED) },
-        "`ptr_from_conn_overlapped` incorrect"
-    );
-    assert_eq!(
-        inner as *const Inner,
-        unsafe { Inner::ptr_from_read_overlapped(&inner.read as *const _ as *mut OVERLAPPED) },
-        "`ptr_from_read_overlapped` incorrect"
-    );
-    assert_eq!(
-        inner as *const Inner,
-        unsafe { Inner::ptr_from_write_overlapped(&inner.write as *const _ as *mut OVERLAPPED) },
-        "`ptr_from_write_overlapped` incorrect"
-    );
-}
 
 struct Io {
     // Uniquely identifies the selector associated with this named pipe

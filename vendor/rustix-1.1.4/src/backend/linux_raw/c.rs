@@ -25,17 +25,9 @@ pub(crate) use linux_raw_sys::system::sysinfo;
 
 #[cfg(feature = "fs")]
 #[cfg(target_arch = "x86")]
-#[cfg(test)]
-pub(crate) use linux_raw_sys::general::stat64;
 #[cfg(feature = "fs")]
-#[cfg(test)]
-pub(crate) use linux_raw_sys::general::{
-    __kernel_fsid_t as fsid_t, stat, statfs64, statx, statx_timestamp,
-};
 
 #[cfg(feature = "event")]
-#[cfg(test)]
-pub(crate) use linux_raw_sys::general::epoll_event;
 
 #[cfg(feature = "mm")]
 mod mm {

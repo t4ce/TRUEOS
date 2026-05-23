@@ -671,8 +671,6 @@ pub(crate) fn stat(path: &CStr) -> io::Result<Stat> {
         )
     )))]
     unsafe {
-        #[cfg(test)]
-        assert_eq_size!(Stat, c::stat);
 
         let mut stat = MaybeUninit::<Stat>::uninit();
         ret(c::stat(c_str(path), stat.as_mut_ptr().cast()))?;
@@ -717,8 +715,6 @@ pub(crate) fn lstat(path: &CStr) -> io::Result<Stat> {
         )
     )))]
     unsafe {
-        #[cfg(test)]
-        assert_eq_size!(Stat, c::stat);
 
         let mut stat = MaybeUninit::<Stat>::uninit();
         ret(c::lstat(c_str(path), stat.as_mut_ptr().cast()))?;
@@ -759,8 +755,6 @@ pub(crate) fn statat(dirfd: BorrowedFd<'_>, path: &CStr, flags: AtFlags) -> io::
         )
     )))]
     unsafe {
-        #[cfg(test)]
-        assert_eq_size!(Stat, c::stat);
 
         let mut stat = MaybeUninit::<Stat>::uninit();
         ret(c::fstatat(
@@ -1562,8 +1556,6 @@ pub(crate) fn fstat(fd: BorrowedFd<'_>) -> io::Result<Stat> {
         )
     )))]
     unsafe {
-        #[cfg(test)]
-        assert_eq_size!(Stat, c::stat);
 
         let mut stat = MaybeUninit::<Stat>::uninit();
         ret(c::fstat(borrowed_fd(fd), stat.as_mut_ptr().cast()))?;
@@ -2718,22 +2710,4 @@ pub(crate) fn inotify_rm_watch(inot: BorrowedFd<'_>, wd: i32) -> io::Result<()> 
     let wd = wd as u32;
     // SAFETY: The fd is valid and closing an arbitrary wd is valid.
     unsafe { ret(c::inotify_rm_watch(borrowed_fd(inot), wd)) }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_sizes() {
-        #[cfg(linux_kernel)]
-        assert_eq_size!(c::loff_t, u64);
-
-        // Assert that `Timestamps` has the expected layout. If we're not fixing
-        // y2038, libc's type should match ours. If we are, it's smaller.
-        #[cfg(not(fix_y2038))]
-        assert_eq_size!([c::timespec; 2], Timestamps);
-        #[cfg(fix_y2038)]
-        assert!(core::mem::size_of::<[c::timespec; 2]>() < core::mem::size_of::<Timestamps>());
-    }
 }

@@ -161,22 +161,3 @@ unsafe impl SocketAddrArg for SocketAddrUnix {
         f(as_ptr(&self.unix).cast(), self.addr_len())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::backend::c;
-
-    #[test]
-    fn test_layouts() {
-        assert_eq_size!(SocketAddrLen, c::socklen_t);
-
-        #[cfg(not(any(windows, target_os = "redox")))]
-        assert_eq!(
-            memoffset::span_of!(c::msghdr, msg_namelen).len(),
-            size_of::<SocketAddrLen>()
-        );
-
-        assert!(size_of::<SocketAddrLen>() <= size_of::<usize>());
-    }
-}

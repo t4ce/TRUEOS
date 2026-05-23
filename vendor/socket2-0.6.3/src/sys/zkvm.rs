@@ -848,7 +848,7 @@ pub(crate) fn set_tcp_ack_frequency(_: RawSocket, _: u32) -> io::Result<()> {
     Err(unsupported())
 }
 
-pub(crate) fn unix_sockaddr(_: &std::path::Path) -> io::Result<SockAddr> {
+pub(crate) fn unix_sockaddr(_: &crate::path::Path) -> io::Result<SockAddr> {
     Err(unsupported())
 }
 

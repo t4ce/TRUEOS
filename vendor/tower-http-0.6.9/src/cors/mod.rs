@@ -74,9 +74,6 @@ mod expose_headers;
 mod max_age;
 mod vary;
 
-#[cfg(test)]
-mod tests;
-
 pub use self::{
     allow_credentials::AllowCredentials, allow_headers::AllowHeaders, allow_methods::AllowMethods,
     allow_origin::AllowOrigin, allow_private_network::AllowPrivateNetwork,

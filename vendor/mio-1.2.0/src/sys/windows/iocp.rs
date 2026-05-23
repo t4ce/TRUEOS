@@ -246,37 +246,3 @@ fn duration_millis(dur: Option<Duration>) -> u32 {
         u32::MAX
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{CompletionPort, CompletionStatus};
-
-    #[test]
-    fn is_send_sync() {
-        fn is_send_sync<T: Send + Sync>() {}
-        is_send_sync::<CompletionPort>();
-    }
-
-    #[test]
-    fn get_many() {
-        let c = CompletionPort::new(1).unwrap();
-
-        c.post(CompletionStatus::new(1, 2, 3 as *mut _)).unwrap();
-        c.post(CompletionStatus::new(4, 5, 6 as *mut _)).unwrap();
-
-        let mut s = vec![CompletionStatus::zero(); 4];
-        {
-            let s = c.get_many(&mut s, None).unwrap();
-            assert_eq!(s.len(), 2);
-            assert_eq!(s[0].bytes_transferred(), 1);
-            assert_eq!(s[0].token(), 2);
-            assert_eq!(s[0].overlapped(), 3 as *mut _);
-            assert_eq!(s[1].bytes_transferred(), 4);
-            assert_eq!(s[1].token(), 5);
-            assert_eq!(s[1].overlapped(), 6 as *mut _);
-        }
-        assert_eq!(s[2].bytes_transferred(), 0);
-        assert_eq!(s[2].token(), 0);
-        assert_eq!(s[2].overlapped(), 0 as *mut _);
-    }
-}

@@ -12,10 +12,6 @@ cfg_io_uring! {
     use crate::runtime::driver::op::Op;
 }
 
-#[cfg(test)]
-mod mock_open_options;
-#[cfg(test)]
-use mock_open_options::MockOpenOptions as StdOpenOptions;
 #[cfg(all(not(test), not(any(target_os = "trueos", target_os = "zkvm"))))]
 use std::fs::OpenOptions as StdOpenOptions;
 #[cfg(all(not(test), any(target_os = "trueos", target_os = "zkvm")))]

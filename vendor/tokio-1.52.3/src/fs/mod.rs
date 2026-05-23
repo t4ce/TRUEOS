@@ -281,8 +281,6 @@ pub use self::copy::copy;
 mod try_exists;
 pub use self::try_exists::try_exists;
 
-#[cfg(test)]
-mod mocks;
 
 feature! {
     #![unix]
@@ -310,8 +308,6 @@ use std::io;
 
 #[cfg(not(test))]
 use crate::blocking::spawn_blocking;
-#[cfg(test)]
-use mocks::spawn_blocking;
 
 pub(crate) async fn asyncify<F, T>(f: F) -> io::Result<T>
 where

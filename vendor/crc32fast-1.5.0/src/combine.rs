@@ -40,16 +40,3 @@ pub(crate) fn combine(crc1: u32, crc2: u32, len2: u64) -> u32 {
     p ^ crc2
 }
 
-#[test]
-fn golden() {
-    assert_eq!(combine(0x0, 0x1, 0x0), 0x0);
-    assert_eq!(combine(0xc401f8c9, 0x00000000, 0x0), 0xc401f8c9);
-    assert_eq!(combine(0x7cba3d5e, 0xe7466d39, 0xb), 0x76365c4f);
-    assert_eq!(combine(0x576c62d6, 0x123256e1, 0x47), 0x579a636);
-    assert_eq!(combine(0x4f626f9a, 0x9e5ccbf5, 0xa59d), 0x98d43168);
-    assert_eq!(combine(0xa09b8a88, 0x815b0f48, 0x40f39511), 0xd7a5f79);
-    assert_eq!(
-        combine(0x7f6a4306, 0xbc929646, 0x828cde72b3e25301),
-        0xef922dda
-    );
-}

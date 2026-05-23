@@ -719,8 +719,6 @@ cfg_macros! {
 
 // TODO: rm
 #[cfg(feature = "io-util")]
-#[cfg(test)]
-fn is_unpin<T: Unpin>() {}
 
 /// fuzz test (`fuzz_linked_list`)
 #[cfg(fuzzing)]

@@ -272,9 +272,4 @@ impl Handle {
         lock.cancelled
     }
 
-    #[cfg(test)]
-    /// Only used for unit tests.
-    pub(crate) fn inner_strong_count(&self) -> usize {
-        Arc::strong_count(&self.entry)
-    }
 }

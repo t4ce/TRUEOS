@@ -258,26 +258,3 @@ mod serde {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::dbg_macro, clippy::print_stdout)]
-
-    use super::*;
-
-    #[test]
-    fn test_encode_decode() {
-        let types = RecordTypeSet::new([RecordType::A, RecordType::NS]);
-
-        let mut bytes = Vec::new();
-        let mut encoder: BinEncoder<'_> = BinEncoder::new(&mut bytes);
-        types.emit(&mut encoder).expect("Encoding error");
-        let bytes = encoder.into_bytes();
-
-        let mut decoder: BinDecoder<'_> = BinDecoder::new(bytes);
-        let restrict = Restrict::new(bytes.len() as u16);
-        let read_bit_map =
-            RecordTypeSet::read_data(&mut decoder, restrict).expect("Decoding error");
-        assert_eq!(types, read_bit_map);
-    }
-}

@@ -180,38 +180,3 @@ pub fn getifaddrs() -> Result<InterfaceAddressIterator> {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Only checks if `getifaddrs` can be invoked without panicking.
-    #[test]
-    fn test_getifaddrs() {
-        let _ = getifaddrs();
-    }
-
-    // Ensures getting the netmask works, and in particular that
-    // `workaround_xnu_bug` works properly.
-    #[test]
-    fn test_getifaddrs_netmask_correct() {
-        let addrs = getifaddrs().unwrap();
-        for iface in addrs {
-            let sock = if let Some(sock) = iface.netmask {
-                sock
-            } else {
-                continue;
-            };
-            if sock.family() == Some(crate::sys::socket::AddressFamily::Inet) {
-                let _ = sock.as_sockaddr_in().unwrap();
-                return;
-            } else if sock.family()
-                == Some(crate::sys::socket::AddressFamily::Inet6)
-            {
-                let _ = sock.as_sockaddr_in6().unwrap();
-                return;
-            }
-        }
-        panic!("No address?");
-    }
-}

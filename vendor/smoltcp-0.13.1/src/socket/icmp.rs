@@ -696,31 +696,6 @@ impl<'a> Socket<'a> {
     }
 }
 
-#[cfg(test)]
-mod tests_common {
-    pub use super::*;
-    pub use crate::wire::IpAddress;
-
-    pub fn buffer(packets: usize) -> PacketBuffer<'static> {
-        PacketBuffer::new(vec![PacketMetadata::EMPTY; packets], vec![0; 66 * packets])
-    }
-
-    pub fn socket(
-        rx_buffer: PacketBuffer<'static>,
-        tx_buffer: PacketBuffer<'static>,
-    ) -> Socket<'static> {
-        Socket::new(rx_buffer, tx_buffer)
-    }
-
-    pub const LOCAL_PORT: u16 = 53;
-
-    pub static UDP_REPR: UdpRepr = UdpRepr {
-        src_port: 53,
-        dst_port: 9090,
-    };
-
-    pub static UDP_PAYLOAD: &[u8] = &[0xff; 10];
-}
 
 #[cfg(all(test, feature = "proto-ipv4"))]
 mod test_ipv4 {
@@ -760,15 +735,6 @@ mod test_ipv4 {
         hop_limit: 0x40,
     };
 
-    #[test]
-    fn test_send_unaddressable() {
-        let mut socket = socket(buffer(0), buffer(1));
-        assert_eq!(
-            socket.send_slice(b"abcdef", IpAddress::Ipv4(Ipv4Address::new(0, 0, 0, 0))),
-            Err(SendError::Unaddressable)
-        );
-        assert_eq!(socket.send_slice(b"abcdef", REMOTE_IPV4.into()), Ok(()));
-    }
 
     #[rstest]
     #[case::ethernet(Medium::Ethernet)]
@@ -1021,15 +987,6 @@ mod test_ipv6 {
         hop_limit: 0x40,
     };
 
-    #[test]
-    fn test_send_unaddressable() {
-        let mut socket = socket(buffer(0), buffer(1));
-        assert_eq!(
-            socket.send_slice(b"abcdef", IpAddress::Ipv6(Ipv6Address::UNSPECIFIED)),
-            Err(SendError::Unaddressable)
-        );
-        assert_eq!(socket.send_slice(b"abcdef", REMOTE_IPV6.into()), Ok(()));
-    }
 
     #[rstest]
     #[case::ethernet(Medium::Ethernet)]

@@ -178,16 +178,3 @@ pub(crate) fn translate_fchown_args(
 
     (ow as c::uid_t, gr as c::gid_t)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_sizes() {
-        assert_eq_size!(RawUid, u32);
-        assert_eq_size!(RawGid, u32);
-        assert_eq_size!(RawUid, libc::uid_t);
-        assert_eq_size!(RawGid, libc::gid_t);
-    }
-}

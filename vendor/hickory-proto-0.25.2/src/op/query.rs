@@ -16,8 +16,6 @@
 
 //! Query struct for looking up resource records
 
-#[cfg(test)]
-use alloc::vec::Vec;
 use core::fmt::{self, Display, Formatter};
 
 #[cfg(feature = "serde")]
@@ -256,49 +254,5 @@ impl Display for Query {
     }
 }
 
-#[test]
-#[allow(clippy::needless_update)]
-fn test_read_and_emit() {
-    let expect = Query {
-        name: Name::from_ascii("WWW.example.com.").unwrap(),
-        query_type: RecordType::AAAA,
-        query_class: DNSClass::IN,
-        ..Query::default()
-    };
-
-    let mut byte_vec: Vec<u8> = Vec::with_capacity(512);
-    {
-        let mut encoder = BinEncoder::new(&mut byte_vec);
-        expect.emit(&mut encoder).unwrap();
-    }
-
-    let mut decoder = BinDecoder::new(&byte_vec);
-    let got = Query::read(&mut decoder).unwrap();
-    assert_eq!(got, expect);
-}
 
 #[cfg(feature = "mdns")]
-#[test]
-fn test_mdns_unicast_response_bit_handling() {
-    const QCLASS_OFFSET: usize = 1 /* empty name */ +
-        core::mem::size_of::<u16>() /* query_type */;
-
-    let mut query = Query::new();
-    query.set_mdns_unicast_response(true);
-
-    let mut vec_bytes: Vec<u8> = Vec::with_capacity(512);
-    {
-        let mut encoder = BinEncoder::new(&mut vec_bytes);
-        query.emit(&mut encoder).unwrap();
-
-        let query_class_slice = encoder.slice_of(QCLASS_OFFSET, QCLASS_OFFSET + 2);
-        assert_eq!(query_class_slice, &[0x80, 0x01]);
-    }
-
-    let mut decoder = BinDecoder::new(&vec_bytes);
-
-    let got = Query::read(&mut decoder).unwrap();
-
-    assert_eq!(got.query_class(), DNSClass::IN);
-    assert!(got.mdns_unicast_response());
-}
