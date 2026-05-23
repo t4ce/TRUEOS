@@ -50,7 +50,7 @@ mod prelude {
         vec::Vec,
     };
     #[allow(unused_imports)]
-    pub(crate) use core::prelude::rust_2021::*;
+    pub(crate) use core::prelude::rust_2024::*;
     #[allow(unused_imports)]
     pub(crate) use core::{assert, derive, try, write};
 }
@@ -62,7 +62,7 @@ use crate::prelude::*;
 #[allow(missing_docs)]
 pub mod io {
     use alloc::boxed::Box;
-    use core::prelude::rust_2021::*;
+    use core::prelude::rust_2024::*;
     use core::{derive, write};
     use ::core::fmt;
 

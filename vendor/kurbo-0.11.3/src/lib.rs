@@ -118,7 +118,7 @@ extern crate alloc;
 
 #[prelude_import]
 #[allow(unused)]
-use core::prelude::rust_2021::*;
+use core::prelude::rust_2024::*;
 
 mod affine;
 mod arc;

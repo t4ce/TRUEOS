@@ -1,7 +1,7 @@
 // Copyright 2023 the Kurbo Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use core::prelude::rust_2021::*;
+use core::prelude::rust_2024::*;
 
 use core::{borrow::Borrow, f64::consts::PI};
 use core::option::Option::{self, None, Some};

@@ -51,7 +51,7 @@ extern crate alloc;
 
 #[prelude_import]
 #[allow(unused)]
-use core::prelude::rust_2021::*;
+use core::prelude::rust_2024::*;
 
 use alloc::string::String;
 use alloc::vec::Vec;

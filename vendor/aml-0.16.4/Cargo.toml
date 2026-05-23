@@ -10,7 +10,7 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
-edition = "2018"
+edition = "2024"
 name = "aml"
 version = "0.16.4"
 authors = ["Isaac Woods"]
