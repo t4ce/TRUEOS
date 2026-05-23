@@ -297,7 +297,8 @@ impl LocalPool {
                 }
                 Err(e) => {
                     if e.is_panic() {
-                        std::panic::resume_unwind(e.into_panic());
+                        let _ = e.into_panic();
+                        panic!("panic resume is not available on TRUEOS");
                     } else if e.is_cancelled() {
                         // No one else should have the join handle, so this is
                         // unexpected. Forward this error as a panic in the join

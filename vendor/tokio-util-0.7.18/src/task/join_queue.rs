@@ -273,7 +273,10 @@ impl<T> JoinQueue<T> {
         while let Some(res) = self.join_next().await {
             match res {
                 Ok(t) => output.push(t),
-                Err(err) if err.is_panic() => std::panic::resume_unwind(err.into_panic()),
+                Err(err) if err.is_panic() => {
+                    let _ = err.into_panic();
+                    panic!("panic resume is not available on TRUEOS")
+                }
                 Err(err) => panic!("{err}"),
             }
         }
