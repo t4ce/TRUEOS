@@ -1013,7 +1013,8 @@ impl Builder {
     /// ```
     /// # use tokio::io::{AsyncRead, AsyncWrite};
     /// # use h2::server::*;
-    /// # use std::time::Duration;
+    /// # use std as hostlib;
+/// use hostlib::time::Duration;
     /// #
     /// # fn doc<T: AsyncRead + AsyncWrite + Unpin>(my_io: T)
     /// # -> Handshake<T>

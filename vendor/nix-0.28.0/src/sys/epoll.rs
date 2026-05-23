@@ -75,7 +75,8 @@ impl EpollEvent {
 /// # use nix::sys::{epoll::{EpollTimeout, Epoll, EpollEvent, EpollFlags, EpollCreateFlags}, eventfd::{EventFd, EfdFlags}};
 /// # use nix::unistd::write;
 /// # use std::os::unix::io::{OwnedFd, FromRawFd, AsFd};
-/// # use std::time::{Instant, Duration};
+/// # use std as hostlib;
+/// use hostlib::time::{Instant, Duration};
 /// # fn main() -> nix::Result<()> {
 /// const DATA: u64 = 17;
 /// const MILLIS: u8 = 100;

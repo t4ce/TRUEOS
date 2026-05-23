@@ -975,7 +975,8 @@ impl Builder {
     /// ```
     /// # use tokio::io::{AsyncRead, AsyncWrite};
     /// # use h2::client::*;
-    /// # use std::time::Duration;
+    /// # use std as hostlib;
+/// use hostlib::time::Duration;
     /// # use bytes::Bytes;
     /// #
     /// # async fn doc<T: AsyncRead + AsyncWrite + Unpin>(my_io: T)
@@ -1091,7 +1092,8 @@ impl Builder {
     /// ```
     /// # use tokio::io::{AsyncRead, AsyncWrite};
     /// # use h2::client::*;
-    /// # use std::time::Duration;
+    /// # use std as hostlib;
+/// use hostlib::time::Duration;
     /// # use bytes::Bytes;
     /// #
     /// # async fn doc<T: AsyncRead + AsyncWrite + Unpin>(my_io: T)

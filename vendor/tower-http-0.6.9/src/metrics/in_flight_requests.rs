@@ -12,7 +12,7 @@
 //! use http::{Request, Response};
 //! use bytes::Bytes;
 //! use http_body_util::Full;
-//! use std::{time::Duration, convert::Infallible};
+//! use core::time::Duration; use std::convert::Infallible;
 //!
 //! async fn handle(req: Request<Full<Bytes>>) -> Result<Response<Full<Bytes>>, Infallible> {
 //!     // ...

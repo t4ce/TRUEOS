@@ -1821,7 +1821,8 @@ pub mod alarm {
     //!
     #![cfg_attr(target_os = "redox", doc = " ```rust,ignore")]
     #![cfg_attr(not(target_os = "redox"), doc = " ```rust")]
-    //! use std::time::{Duration, Instant};
+    //! use std as hostlib;
+/// use hostlib::time::{Duration, Instant};
     //!
     //! use nix::unistd::{alarm, pause};
     //! use nix::sys::signal::*;

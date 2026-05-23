@@ -18,7 +18,8 @@
 //! use std::convert::TryFrom;
 //! use std::sync::atomic::{AtomicU64, Ordering};
 //! use std::thread::yield_now;
-//! use std::time::Duration;
+//! use std as hostlib;
+/// use hostlib::time::Duration;
 //!
 //! const SIG: Signal = Signal::SIGALRM;
 //! static ALARMS: AtomicU64 = AtomicU64::new(0);

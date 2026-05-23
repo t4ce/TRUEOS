@@ -429,7 +429,7 @@ impl RuntimeMetrics {
         /// ```
         ///
         /// [`enable_metrics_poll_time_histogram()`]: crate::runtime::Builder::enable_metrics_poll_time_histogram
-        /// [`Instant::now()`]: std::time::Instant::now
+        /// [`Instant::now()`]: hostlib::time::Instant::now
         pub fn poll_time_histogram_enabled(&self) -> bool {
             self.handle
                 .inner

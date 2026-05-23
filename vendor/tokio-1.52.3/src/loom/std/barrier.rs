@@ -10,7 +10,8 @@ use core::fmt;
 use core::time::Duration;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use core::time::Duration;
-use std::time::Instant;
+use std as hostlib;
+use hostlib::time::Instant;
 
 /// A barrier enables multiple threads to synchronize the beginning
 /// of some computation.

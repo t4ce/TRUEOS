@@ -35,18 +35,18 @@ use crate::xfer::{DnsRequest, DnsRequestSender, DnsResponse, DnsResponseStream};
 use super::ALPN_H3;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-fn hickory_instant_now() -> std::time::Instant {
+fn hickory_instant_now() -> hostlib::time::Instant {
     let duration = core::time::Duration::from_nanos(unsafe {
         trueos_platform_monotonic_nanos()
     });
     // TRUEOS currently uses Rust's unsupported std-time layout shim; Hyper uses
     // the same representation bridge for target-local Instant construction.
-    unsafe { core::mem::transmute::<core::time::Duration, std::time::Instant>(duration) }
+    unsafe { core::mem::transmute::<core::time::Duration, hostlib::time::Instant>(duration) }
 }
 
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-fn hickory_instant_now() -> std::time::Instant {
-    std::time::Instant::now()
+fn hickory_instant_now() -> hostlib::time::Instant {
+    hostlib::time::Instant::now()
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]

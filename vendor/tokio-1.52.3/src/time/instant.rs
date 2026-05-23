@@ -7,7 +7,7 @@ use core::{derive, fmt, ops};
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub(crate) type StdInstant = Duration;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-pub(crate) type StdInstant = std::time::Instant;
+pub(crate) type StdInstant = crate::time::Duration;
 
 /// A measurement of a monotonically nondecreasing clock.
 /// Opaque and useful only with `Duration`.
@@ -54,7 +54,7 @@ impl Instant {
         variant::now()
     }
 
-    /// Create a `tokio::time::Instant` from a `std::time::Instant`.
+    /// Create a `tokio::time::Instant` from a `hostlib::time::Instant`.
     pub fn from_std(std: StdInstant) -> Instant {
         Instant { std }
     }
@@ -67,7 +67,7 @@ impl Instant {
         Self::now() + Duration::from_secs(86400 * 365 * 30)
     }
 
-    /// Convert the value into a `std::time::Instant`.
+    /// Convert the value into a `hostlib::time::Instant`.
     pub fn into_std(self) -> StdInstant {
         self.std
     }
@@ -253,7 +253,7 @@ mod variant {
 
         #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
-            Instant::from_std(std::time::Instant::now())
+            Instant::from_std(hostlib::time::Instant::now())
         }
     }
 }

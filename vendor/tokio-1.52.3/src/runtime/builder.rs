@@ -1417,7 +1417,7 @@ impl Builder {
         /// ```
         ///
         /// [`Handle::metrics()`]: crate::runtime::Handle::metrics
-        /// [`Instant::now()`]: std::time::Instant::now
+        /// [`Instant::now()`]: hostlib::time::Instant::now
         /// [`LogHistogram`]: crate::runtime::LogHistogram
         /// [`metrics_poll_time_histogram_configuration()`]: Builder::metrics_poll_time_histogram_configuration
         pub fn enable_metrics_poll_time_histogram(&mut self) -> &mut Self {

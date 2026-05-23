@@ -4,7 +4,9 @@ use core::str::FromStr;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use crate::time::{Duration, SystemTime, UNIX_EPOCH};
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std as hostlib;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use hostlib::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::Error;
 

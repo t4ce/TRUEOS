@@ -54,7 +54,8 @@ use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
 use std::path::Path;
 use core::ptr;
 use core::time::Duration;
-use std::time::Instant;
+use std as hostlib;
+use hostlib::time::Instant;
 use std::{io, slice};
 
 #[cfg(not(any(

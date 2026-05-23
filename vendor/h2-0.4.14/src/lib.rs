@@ -114,7 +114,8 @@ mod time {
 
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 mod time {
-    pub(crate) use std::time::{Duration, Instant};
+    pub(crate) use std as hostlib;
+use hostlib::time::{Duration, Instant};
 }
 
 #[cfg_attr(feature = "unstable", allow(missing_docs))]

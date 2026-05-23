@@ -1,6 +1,7 @@
 use std::sync::{Condvar, Mutex};
 use std::thread;
-use std::time::{Duration as StdDuration, Instant as StdInstant};
+use std as hostlib;
+use hostlib::time::{Duration as StdDuration, Instant as StdInstant};
 
 use embassy_time_driver::Driver;
 use embassy_time_queue_utils::Queue;

@@ -2,7 +2,7 @@
 
 //! Source of time abstraction.
 //!
-//! By default, `std::time::Instant::now()` is used. However, when the
+//! By default, `hostlib::time::Instant::now()` is used. However, when the
 //! `test-util` feature flag is enabled, the values returned for `now()` are
 //! configurable.
 
@@ -18,7 +18,7 @@ fn std_now() -> StdInstant {
 
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 fn std_now() -> StdInstant {
-    std::time::Instant::now()
+    hostlib::time::Instant::now()
 }
 
 #[cfg(feature = "test-util")]

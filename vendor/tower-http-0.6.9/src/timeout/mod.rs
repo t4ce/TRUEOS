@@ -19,7 +19,7 @@
 //! use http::{Request, Response, StatusCode};
 //! use http_body_util::Full;
 //! use bytes::Bytes;
-//! use std::{convert::Infallible, time::Duration};
+//! use core::time::Duration; use std::convert::Infallible;
 //! use tower::ServiceBuilder;
 //! use tower_http::timeout::TimeoutLayer;
 //!
