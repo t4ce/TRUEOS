@@ -21,6 +21,10 @@ place path.art in main align 8
 place buf.art in main align 16
 place ring.art in main align 16
 place asm.add.art in main align 16
+place mem.buf.art in main align 16
+place bind.art in main align 16
+place validate.eq.art in main align 16
+place control.seq.art in main align 16
 "#;
 
 enum SilkServiceError {
@@ -34,6 +38,7 @@ enum SilkServiceError {
     RingBind(trueos_silk::SilkStatus),
     RingOp(trueos_silk::SilkStatus),
     MachineOp(trueos_silk::SilkStatus),
+    PoolOp(&'static str, trueos_silk::SilkStatus),
 }
 
 impl core::fmt::Display for SilkServiceError {
@@ -49,6 +54,7 @@ impl core::fmt::Display for SilkServiceError {
             Self::RingBind(status) => write!(f, "ring bind: {:?}", status),
             Self::RingOp(status) => write!(f, "ring op: {:?}", status),
             Self::MachineOp(status) => write!(f, "machine op: {:?}", status),
+            Self::PoolOp(name, status) => write!(f, "{}: {:?}", name, status),
         }
     }
 }
@@ -188,6 +194,114 @@ fn asm_add_runtime_demo() -> Result<String, SilkServiceError> {
     ))
 }
 
+fn memory_buffer_artifact() -> String {
+    let artifact = trueos_silk::BufferArtifact::bytes("mem.buf.art", 16, 16);
+    format!(
+        "artifact {} kind=buffer.u8 len={} align={}\nops=bind\n",
+        artifact.name, artifact.len, artifact.align
+    )
+}
+
+fn binding_artifact() -> String {
+    let artifact = trueos_silk::SymbolBindingArtifact::new(
+        "bind.art",
+        "pool.demo.call",
+        "asm.add.art",
+        "invoke.machine-op",
+    );
+    format!(
+        "artifact {} kind=symbol-binding import={} export={} capability={}\nops=bind,validate-align\n",
+        artifact.name, artifact.import, artifact.export, artifact.capability
+    )
+}
+
+fn validation_artifact() -> String {
+    let artifact = trueos_silk::ValidationArtifact::exact_u64("validate.eq.art");
+    format!(
+        "artifact {} kind={:?}\nops=run_exact_u64\n",
+        artifact.name, artifact.kind
+    )
+}
+
+fn control_artifact() -> String {
+    let artifact = trueos_silk::SequenceArtifact::fixed("control.seq.art", 4);
+    format!(
+        "artifact {} kind=sequence steps={}\nops=run-status-sequence\n",
+        artifact.name, artifact.step_count
+    )
+}
+
+fn pool_runtime_demo(plan: &trueos_silk::Plan) -> Result<String, SilkServiceError> {
+    let mut arena = trueos_silk::Arena::new(0x3000, plan.arena.size);
+
+    let buffer_art = trueos_silk::BufferArtifact::bytes("mem.buf.art", 16, 16);
+    let buffer_span = arena.alloc_aligned(buffer_art.len, buffer_art.align);
+    if buffer_span.status != trueos_silk::SilkStatus::Ok {
+        return Err(SilkServiceError::PoolOp("mem.buf place", buffer_span.status));
+    }
+    let mut buffer = [0u8; 16];
+    let buffer_binding = buffer_art
+        .bind(buffer_span.span, buffer.len())
+        .map_err(|status| SilkServiceError::PoolOp("mem.buf bind", status))?;
+    buffer[0..8].copy_from_slice(&0x1335_5779_9bbd_dff1u64.to_le_bytes());
+
+    let symbol_art = trueos_silk::SymbolBindingArtifact::new(
+        "bind.art",
+        "pool.demo.call",
+        "asm.add.art",
+        "invoke.machine-op",
+    );
+    let symbol_binding = symbol_art
+        .bind(buffer_binding.span, buffer_art.align)
+        .map_err(|status| SilkServiceError::PoolOp("bind.art", status))?;
+
+    let machine = trueos_silk::MachineOpArtifact::add_u64("asm.add.art");
+    let lhs = 0x1234_5678_9abc_def0u64;
+    let rhs = 0x0101_0101_0101_0101u64;
+    let machine_result = machine.run_add_u64(lhs, rhs);
+    if machine_result.status != trueos_silk::SilkStatus::Ok {
+        return Err(SilkServiceError::PoolOp("asm.add.art", machine_result.status));
+    }
+
+    let expected = lhs.wrapping_add(rhs);
+    let validator = trueos_silk::ValidationArtifact::exact_u64("validate.eq.art");
+    let validation = validator.run_exact_u64(machine_result.value, expected);
+    if validation.status != trueos_silk::SilkStatus::Ok {
+        return Err(SilkServiceError::PoolOp("validate.eq.art", validation.status));
+    }
+
+    let validation_status = if validation.valid {
+        trueos_silk::SilkStatus::Ok
+    } else {
+        trueos_silk::SilkStatus::Corrupt
+    };
+    let sequence = trueos_silk::SequenceArtifact::fixed("control.seq.art", 4);
+    let statuses = [
+        trueos_silk::SilkStatus::Ok,
+        trueos_silk::SilkStatus::Ok,
+        machine_result.status,
+        validation_status,
+    ];
+    let control = sequence.run(&statuses);
+    if control.status != trueos_silk::SilkStatus::Ok {
+        return Err(SilkServiceError::PoolOp("control.seq.art", control.status));
+    }
+
+    Ok(format!(
+        "pool runtime mem={}@0x{:x}+{} bind={}=>{} cap={} asm=0x{:016x} validate={} control={:?} remaining={}\n",
+        buffer_binding.artifact.name,
+        buffer_binding.span.addr,
+        buffer_binding.span.len,
+        symbol_binding.artifact.import,
+        symbol_binding.artifact.export,
+        symbol_binding.artifact.capability,
+        machine_result.value,
+        validation.valid,
+        control,
+        arena.remaining()
+    ))
+}
+
 fn place_artifacts(
     plan: &trueos_silk::Plan,
     artifacts: &[Artifact<'_>],
@@ -239,6 +353,10 @@ async fn build_and_load_artifacts() -> Result<(), SilkServiceError> {
     let buf = buf_artifact(&plan, read_bytes);
     let ring = ring_artifact()?;
     let asm_add = asm_add_artifact();
+    let mem_buf = memory_buffer_artifact();
+    let binding = binding_artifact();
+    let validation = validation_artifact();
+    let control = control_artifact();
     let artifacts = [
         Artifact {
             name: "demo.art",
@@ -264,28 +382,54 @@ async fn build_and_load_artifacts() -> Result<(), SilkServiceError> {
             name: "asm.add.art",
             bytes: asm_add.as_bytes(),
         },
+        Artifact {
+            name: "mem.buf.art",
+            bytes: mem_buf.as_bytes(),
+        },
+        Artifact {
+            name: "bind.art",
+            bytes: binding.as_bytes(),
+        },
+        Artifact {
+            name: "validate.eq.art",
+            bytes: validation.as_bytes(),
+        },
+        Artifact {
+            name: "control.seq.art",
+            bytes: control.as_bytes(),
+        },
     ];
     let placement = place_artifacts(&plan, &artifacts)?;
     let ring_runtime = ring_runtime_demo(&plan)?;
     let asm_add_runtime = asm_add_runtime_demo()?;
+    let pool_runtime = pool_runtime_demo(&plan)?;
 
     crate::log!(
-        "silk-service: built in-memory artifacts demo={} arena={} path={} buf={} ring={} asm_add={} placement={} ring_runtime={} asm_add_runtime={}\n",
+        "silk-service: built in-memory artifacts demo={} arena={} path={} buf={} ring={} asm_add={} mem_buf={} bind={} validate={} control={} placement={} ring_runtime={} asm_add_runtime={} pool_runtime={}\n",
         demo.len(),
         arena.len(),
         path.len(),
         buf.len(),
         ring.len(),
         asm_add.len(),
+        mem_buf.len(),
+        binding.len(),
+        validation.len(),
+        control.len(),
         placement.len(),
         ring_runtime.len(),
-        asm_add_runtime.len()
+        asm_add_runtime.len(),
+        pool_runtime.len()
     );
     crate::log!("silk-service: placement begin\n{}silk-service: placement end\n", placement);
     crate::log!("silk-service: ring begin\n{}silk-service: ring end\n", ring_runtime);
     crate::log!(
         "silk-service: asm.add begin\n{}silk-service: asm.add end\n",
         asm_add_runtime
+    );
+    crate::log!(
+        "silk-service: pool begin\n{}silk-service: pool end\n",
+        pool_runtime
     );
     crate::log!(
         "silk-service: log.write {} bytes from {}\n",

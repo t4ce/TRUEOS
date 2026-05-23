@@ -33,6 +33,7 @@ const FAST_BOT_INITIAL_IO_BYTES: usize =
     crate::allcaps::storage::USB_MASS_FAST_BOT_INITIAL_IO_BYTES;
 const FAST_BOT_WRITE_MAX_IO_BYTES: usize =
     crate::allcaps::storage::USB_MASS_FAST_BOT_WRITE_MAX_IO_BYTES;
+const KNOWN_SKHYNIX_BOT_STARTUP_SETTLE_MS: u64 = 500;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct ActiveMassStream {
@@ -999,6 +1000,7 @@ pub async fn mass_storage_task(
     let vendor_id = desc.vendor_id;
     let product_id = desc.product_id;
     let slot = device.slot_id();
+    let known_skhynix_green = vendor_id == 0x152E && product_id == 0x7001;
     let active_stream = ActiveMassStream {
         controller_id,
         slot_id: u32::from(slot),
@@ -1064,6 +1066,24 @@ pub async fn mass_storage_task(
 
     let mut bulk_out = bulk_out;
     let mut bulk_in = bulk_in;
+    if known_skhynix_green && transport_kind == mass::MassTransportKind::Bot {
+        crate::log!(
+            "crabusb: mass {:04X}:{:04X} bot startup settle before inquiry delay_ms={}\n",
+            vendor_id,
+            product_id,
+            KNOWN_SKHYNIX_BOT_STARTUP_SETTLE_MS
+        );
+        Timer::after(EmbassyDuration::from_millis(
+            KNOWN_SKHYNIX_BOT_STARTUP_SETTLE_MS,
+        ))
+        .await;
+        crate::log!(
+            "crabusb: mass {:04X}:{:04X} bot startup settle done before inquiry delay_ms={}\n",
+            vendor_id,
+            product_id,
+            KNOWN_SKHYNIX_BOT_STARTUP_SETTLE_MS
+        );
+    }
     let probe = match mass::probe_mass_bot(
         &mut device,
         &mut bulk_out,
