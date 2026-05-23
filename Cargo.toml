@@ -10,7 +10,7 @@ test = false
 bench = false
 
 [features]
-default = []
+default = ["trueos_rdp"]
 trueos_rdp = []
 
 [dependencies]

@@ -200,18 +200,11 @@ where
     }
 
     fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
-        match std::panic::catch_unwind(AssertUnwindSafe(|| self.inner.call(req))) {
-            Ok(future) => ResponseFuture {
-                kind: Kind::Future {
-                    future: AssertUnwindSafe(future).catch_unwind(),
-                    panic_handler: Some(self.panic_handler.clone()),
-                },
-            },
-            Err(panic_err) => ResponseFuture {
-                kind: Kind::Panicked {
-                    panic_err: Some(panic_err),
-                    panic_handler: Some(self.panic_handler.clone()),
-                },
+        let future = self.inner.call(req);
+        ResponseFuture {
+            kind: Kind::Future {
+                future: AssertUnwindSafe(future).catch_unwind(),
+                panic_handler: Some(self.panic_handler.clone()),
             },
         }
     }

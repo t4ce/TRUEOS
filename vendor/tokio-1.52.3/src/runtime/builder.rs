@@ -1234,7 +1234,7 @@ impl Builder {
         /// spawned task.
         ///
         /// By default, an unhandled panic (i.e. a panic not caught by
-        /// [`std::panic::catch_unwind`]) has no impact on the runtime's
+        /// [`core::panic::catch_unwind`]) has no impact on the runtime's
         /// execution. The panic's error value is forwarded to the task's
         /// [`JoinHandle`] and all other spawned tasks continue running.
         ///

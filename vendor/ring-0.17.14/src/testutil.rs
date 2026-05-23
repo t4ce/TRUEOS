@@ -94,9 +94,9 @@
 //! stack backtrace:
 //!    0:     0x7ff654a05c7c - std::rt::lang_start::h61f4934e780b4dfc
 //!    1:     0x7ff654a04f32 - std::rt::lang_start::h61f4934e780b4dfc
-//!    2:     0x7ff6549f505d - std::panicking::rust_panic_with_hook::hfe203e3083c2b544
+//!    2:     0x7ff6549f505d - core panicking::rust_panic_with_hook::hfe203e3083c2b544
 //!    3:     0x7ff654a0825b - rust_begin_unwind
-//!    4:     0x7ff6549f63af - std::panicking::begin_panic_fmt::h484cd47786497f03
+//!    4:     0x7ff6549f63af - core panicking::begin_panic_fmt::h484cd47786497f03
 //!    5:     0x7ff654a07e9b - rust_begin_unwind
 //!    6:     0x7ff654a0ae95 - core::panicking::panic_fmt::h257ceb0aa351d801
 //!    7:     0x7ff654a0b190 - core::panicking::panic::h4bb1497076d04ab9

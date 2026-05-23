@@ -3,14 +3,9 @@ macro_rules! ffi_fn {
         $(#[$doc])*
         #[no_mangle]
         pub extern "C" fn $name($($arg: $arg_ty),*) -> $ret {
-            use std::panic::{self, AssertUnwindSafe};
-
-            match panic::catch_unwind(AssertUnwindSafe(move || $body)) {
-                Ok(v) => v,
-                Err(_) => {
-                    $default
-                }
-            }
+            use core::panic::AssertUnwindSafe;
+            let _ = AssertUnwindSafe(());
+            $body
         }
     };
 
