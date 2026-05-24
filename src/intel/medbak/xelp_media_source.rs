@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 pub(crate) const MEDIA_DECODE_CACHE_PATH: &str = "media/trueos_h264_diag_mbgrid_2560x1440.mp4";
 const MEDIA_EMBEDDED_DEMO_NAME: &str = "embedded:demo_yelly3.mp4";
-const MEDIA_EMBEDDED_DEMO_MP4: &[u8] = include_bytes!("../../../tools/vid/demo_yelly3.mp4");
+const MEDIA_EMBEDDED_DEMO_MP4: &[u8] = include_bytes!("../../../tools/vid/trueos_h264_diag_luma_1920x1088.mp4");
 const MEDIA_HTTP_DEMO_TIMEOUT_MS: u32 = 60_000;
 const MEDIA_HTTP_DEMO_MAX_BYTES: usize = 16 * 1024 * 1024;
 
