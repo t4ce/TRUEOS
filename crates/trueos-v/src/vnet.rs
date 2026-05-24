@@ -123,7 +123,7 @@ impl<const N: usize> fmt::Debug for ByteBuf<N> {
     }
 }
 
-pub const MAX_MSG: usize = 8192;
+pub const MAX_MSG: usize = 32 * 1024;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Command {
