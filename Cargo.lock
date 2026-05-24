@@ -451,14 +451,13 @@ dependencies = [
 
 [[package]]
 name = "crab-usb"
-version = "0.9.3"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "bitflags 2.11.1",
  "crossbeam",
  "crossbeam-skiplist",
  "dma-api",
- "embassy-time",
  "enum_dispatch",
  "futures",
  "id-arena",
@@ -2702,9 +2701,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "usb-if"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d2f3d338fd260603442d59d583012de4d3ca6b0122593602dc50db3fb7f6817"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "futures",

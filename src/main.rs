@@ -86,7 +86,7 @@ mod tst_ws_time;
 mod turbo;
 #[allow(non_snake_case)]
 mod tyche;
-#[path = "USB3/mod.rs"]
+#[path = "usb3/mod.rs"]
 pub(crate) mod usb3;
 pub(crate) use usb3 as usb2;
 mod wait;
