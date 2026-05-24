@@ -9,3 +9,6 @@
 	url = https://github.com/limine-bootloader/limine.git
 	branch = v10.x
 	ignore = untracked
+[submodule "vendor/CrabUSB"]
+	path = vendor/CrabUSB
+	url = https://github.com/t4ce/CrabUSB

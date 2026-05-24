@@ -832,8 +832,7 @@ fn spawn_ui2_swarm_demo(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
-    let _ = spawner;
-    SpawnAttempt::Skipped
+    spawn_local(spawner, |_spawner| crate::usb2::usb_controller_service_task())
 }
 
 const USER_INPUT_RECORD_FLUSH_INTERVAL_SECS: u64 = 120;

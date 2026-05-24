@@ -55,8 +55,8 @@ crc32fast = { version = "1.5.0", default-features = false }
 sha2 = { version = "0.10.9", default-features = false }
 embedded-websocket = { version = "0.9.4", default-features = false }
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "proto-ipv4", "proto-ipv6", "multicast", "socket-raw", "socket-udp", "socket-tcp", "socket-icmp", "socket-dhcpv4", "medium-ethernet"] }
-crab-usb = { path = "vendor/crab-usb-0.9.3", default-features = false }
 dma-api = { version = "=0.7.3", default-features = false }
+crab-usb = { path = "vendor/CrabUSB/usb-host", default-features = false }
 trueos-math = { path = "crates/trueos-math", features = ["alloc"] }
 trueos-fs = { path = "crates/trueos-fs" }
 trueos-c4 = { path = "crates/trueos-c4" }
