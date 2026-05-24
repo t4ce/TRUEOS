@@ -1434,10 +1434,9 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &TRUEOSFS_READY_HOOK_STARTED,
         spawn_trueosfs_ready_hook,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "lumen-service",
-        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
-            | crate::r::readiness::MANDELBROT_GPU_SIDEQUEST_READY,
+        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         &LUMEN_SERVICE_STARTED,
         spawn_lumen_service,
     ),

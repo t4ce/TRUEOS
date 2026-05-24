@@ -60,6 +60,8 @@ impl HttpPerf {
 
 const HTTP_TRUEOSFS_MAX_ENTRIES: usize = 256;
 const HTTP_TRUEOSFS_MAX_REQUEST_BYTES: usize = 1024 * 1024;
+const HTTP_TRUEOSFS_STREAM_MAX_BYTES: usize = 1024 * 1024;
+const HTTP_TRUEOSFS_SEND_YIELD_COMMANDS: usize = 16;
 const HTTP_OCTET_STREAM: &str = "application/octet-stream";
 const HTTP_MULTIPART_BOUNDARY: &str = "trueosfs-boundary";
 const HTTP_MULTIPART_CONTENT_TYPE: &str = "multipart/byteranges; boundary=trueosfs-boundary";
@@ -141,14 +143,13 @@ fn http_stream_chunk_bytes(disk: DeviceHandle) -> usize {
     if base == 0 {
         base = 256 * 1024;
     }
-    let mut safe = base.saturating_mul(9) / 10;
     const MIN: usize = 16 * 1024;
-    const MAX: usize = 512 * 1024;
+    const MAX: usize = HTTP_TRUEOSFS_STREAM_MAX_BYTES;
+    let block_size = (disk.info().block_size as usize).max(1);
+    let mut safe = base.clamp(MIN, MAX);
+    safe -= safe % block_size;
     if safe < MIN {
         safe = MIN;
-    }
-    if safe > MAX {
-        safe = MAX;
     }
     safe
 }
@@ -162,6 +163,169 @@ fn http_submit_commands(vnet: &VNet, cmds: Vec<api::Command>) {
     for cmd in cmds {
         let _ = vnet.submit(cmd);
     }
+}
+
+fn http_submit_busy_response(vnet: &VNet, server: &mut vhttp_srv::HttpServer, handle: api::NetHandle) {
+    let body = b"server busy\n";
+    let mut cmds = Vec::new();
+    let pending = vhttp_srv::queue_response_head(
+        &mut cmds,
+        handle,
+        "HTTP/1.1 503 Service Unavailable\r\n",
+        "text/plain; charset=utf-8",
+        "",
+        body.len() as u64,
+        false,
+    );
+    server.mark_response(handle, pending, false);
+    vhttp_srv::queue_send_bytes(&mut cmds, handle, body);
+    http_submit_commands(vnet, cmds);
+}
+
+fn http_submit_error_response(
+    vnet: &VNet,
+    server: &mut vhttp_srv::HttpServer,
+    handle: api::NetHandle,
+    status: &'static str,
+    body: &'static [u8],
+) {
+    let mut cmds = Vec::new();
+    let pending = vhttp_srv::queue_response_head(
+        &mut cmds,
+        handle,
+        status,
+        "text/plain; charset=utf-8",
+        "",
+        body.len() as u64,
+        false,
+    );
+    server.mark_response(handle, pending, false);
+    vhttp_srv::queue_send_bytes(&mut cmds, handle, body);
+    http_submit_commands(vnet, cmds);
+}
+
+fn http_stream_drain_events(
+    vnet: &VNet,
+    server: &mut vhttp_srv::HttpServer,
+    active: api::NetHandle,
+) -> bool {
+    const MAX_DRAIN: usize = 64;
+    for _ in 0..MAX_DRAIN {
+        let Some(ev) = vnet.pop_event() else {
+            return true;
+        };
+        if matches!(ev, api::Event::Closed { handle } if handle == active) {
+            let _ = server.on_event(ev);
+            crate::log!("http-trueosfs: stream cancelled handle={}\n", active.0);
+            return false;
+        }
+        match server.on_event(ev) {
+            vhttp_srv::HttpServerEvent::None => {}
+            vhttp_srv::HttpServerEvent::Submit(cmd) => {
+                let _ = vnet.submit(cmd);
+            }
+            vhttp_srv::HttpServerEvent::Error(msg) => {
+                crate::log!("http-trueosfs: error {}\n", msg);
+            }
+            vhttp_srv::HttpServerEvent::RequestTooLarge { handle } => {
+                http_submit_error_response(
+                    vnet,
+                    server,
+                    handle,
+                    "HTTP/1.1 413 Payload Too Large\r\n",
+                    b"request too large\n",
+                );
+            }
+            vhttp_srv::HttpServerEvent::BadRequest { handle } => {
+                http_submit_error_response(
+                    vnet,
+                    server,
+                    handle,
+                    "HTTP/1.1 400 Bad Request\r\n",
+                    b"bad request\n",
+                );
+            }
+            vhttp_srv::HttpServerEvent::RequestReady { handle, .. } => {
+                http_submit_busy_response(vnet, server, handle);
+            }
+        }
+    }
+    true
+}
+
+async fn http_submit_body_bytes(vnet: &VNet, handle: api::NetHandle, bytes: &[u8]) -> usize {
+    let mut submitted = 0usize;
+    let mut commands = 0usize;
+    for chunk in bytes.chunks(api::MAX_MSG) {
+        if vnet
+            .submit(api::Command::SendTcp {
+                handle,
+                data: api::ByteBuf::from_slice_trunc(chunk),
+            })
+            .is_ok()
+        {
+            submitted = submitted.saturating_add(chunk.len());
+        }
+        commands = commands.saturating_add(1);
+        if commands % HTTP_TRUEOSFS_SEND_YIELD_COMMANDS == 0 {
+            Timer::after(EmbassyDuration::from_micros(0)).await;
+        }
+    }
+    submitted
+}
+
+async fn http_stream_file_range(
+    vnet: &VNet,
+    server: &mut vhttp_srv::HttpServer,
+    handle: api::NetHandle,
+    disk: DeviceHandle,
+    path: &str,
+    offset: u64,
+    len: u64,
+    perf: &mut HttpPerf,
+) -> bool {
+    let chunk_bytes = http_stream_chunk_bytes(disk);
+    let mut buffers = [vec![0u8; chunk_bytes], vec![0u8; chunk_bytes]];
+    let mut remaining = len;
+    let mut off = offset;
+    let mut slot = 0usize;
+
+    while remaining > 0 {
+        if !http_stream_drain_events(vnet, server, handle) {
+            return false;
+        }
+        let buf = &mut buffers[slot];
+        let want = core::cmp::min(remaining, buf.len() as u64) as usize;
+        let t0 = tsc_now();
+        let read =
+            match crate::r::fs::trueosfs::file_read_range_async(disk, path, off, &mut buf[..want])
+                .await
+            {
+                Ok(Some(n)) => n,
+                _ => 0,
+            };
+        let t1 = tsc_now();
+        perf.record_read(t1.wrapping_sub(t0));
+        if read == 0 {
+            break;
+        }
+        if !http_stream_drain_events(vnet, server, handle) {
+            return false;
+        }
+
+        let t2 = tsc_now();
+        let submitted = http_submit_body_bytes(vnet, handle, &buf[..read]).await;
+        let t3 = tsc_now();
+        perf.record_submit(t3.wrapping_sub(t2), submitted);
+        if submitted < read {
+            return false;
+        }
+
+        off = off.saturating_add(read as u64);
+        remaining = remaining.saturating_sub(read as u64);
+        slot ^= 1;
+    }
+    true
 }
 
 #[derive(Clone, Debug)]
@@ -891,37 +1055,17 @@ pub async fn http_trueosfs_task() {
                                 offset,
                                 len,
                             } => {
-                                let mut buf = vec![0u8; http_stream_chunk_bytes(disk)];
-                                let mut remaining = len;
-                                let mut off = offset;
-                                while remaining > 0 {
-                                    let want = core::cmp::min(remaining, buf.len() as u64) as usize;
-                                    let t0 = tsc_now();
-                                    let read = match crate::r::fs::trueosfs::file_read_range_async(
-                                        disk,
-                                        path.as_str(),
-                                        off,
-                                        &mut buf[..want],
-                                    )
-                                    .await
-                                    {
-                                        Ok(Some(n)) => n,
-                                        _ => 0,
-                                    };
-                                    let t1 = tsc_now();
-                                    perf.record_read(t1.wrapping_sub(t0));
-                                    if read == 0 {
-                                        break;
-                                    }
-                                    let t2 = tsc_now();
-                                    let mut cmds = Vec::new();
-                                    vhttp_srv::queue_send_bytes(&mut cmds, handle, &buf[..read]);
-                                    http_submit_commands(&endpoint.vnet, cmds);
-                                    let t3 = tsc_now();
-                                    perf.record_submit(t3.wrapping_sub(t2), read);
-                                    off = off.saturating_add(read as u64);
-                                    remaining = remaining.saturating_sub(read as u64);
-                                }
+                                http_stream_file_range(
+                                    &endpoint.vnet,
+                                    &mut endpoint.server,
+                                    handle,
+                                    disk,
+                                    path.as_str(),
+                                    offset,
+                                    len,
+                                    &mut perf,
+                                )
+                                .await;
                             }
                             HttpBodyPlan::Multipart {
                                 disk,
@@ -929,40 +1073,24 @@ pub async fn http_trueosfs_task() {
                                 parts,
                                 boundary,
                             } => {
-                                let mut buf = vec![0u8; http_stream_chunk_bytes(disk)];
                                 for part in parts {
                                     let mut cmds = Vec::new();
                                     vhttp_srv::queue_send_bytes(&mut cmds, handle, part.header.as_bytes());
                                     http_submit_commands(&endpoint.vnet, cmds);
-                                    let mut remaining = part.end.saturating_sub(part.start).saturating_add(1);
-                                    let mut off = part.start;
-                                    while remaining > 0 {
-                                        let want = core::cmp::min(remaining, buf.len() as u64) as usize;
-                                        let t0 = tsc_now();
-                                        let read = match crate::r::fs::trueosfs::file_read_range_async(
-                                            disk,
-                                            path.as_str(),
-                                            off,
-                                            &mut buf[..want],
-                                        )
-                                        .await
-                                        {
-                                            Ok(Some(n)) => n,
-                                            _ => 0,
-                                        };
-                                        let t1 = tsc_now();
-                                        perf.record_read(t1.wrapping_sub(t0));
-                                        if read == 0 {
-                                            break;
-                                        }
-                                        let t2 = tsc_now();
-                                        let mut cmds = Vec::new();
-                                        vhttp_srv::queue_send_bytes(&mut cmds, handle, &buf[..read]);
-                                        http_submit_commands(&endpoint.vnet, cmds);
-                                        let t3 = tsc_now();
-                                        perf.record_submit(t3.wrapping_sub(t2), read);
-                                        off = off.saturating_add(read as u64);
-                                        remaining = remaining.saturating_sub(read as u64);
+                                    let len = part.end.saturating_sub(part.start).saturating_add(1);
+                                    if !http_stream_file_range(
+                                        &endpoint.vnet,
+                                        &mut endpoint.server,
+                                        handle,
+                                        disk,
+                                        path.as_str(),
+                                        part.start,
+                                        len,
+                                        &mut perf,
+                                    )
+                                    .await
+                                    {
+                                        break;
                                     }
                                     let mut cmds = Vec::new();
                                     vhttp_srv::queue_send_bytes(&mut cmds, handle, b"\r\n");
