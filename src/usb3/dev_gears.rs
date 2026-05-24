@@ -1,0 +1,785 @@
+use alloc::{string::String, vec::Vec};
+use core::{future::Future, task::Poll};
+use spin::Mutex;
+
+use super::crabusb;
+
+pub const USB_DEVICE_POOL_CAP: usize = 8;
+const USB_UAS_ACTIVE_CAP: usize = 4;
+const USB_CLASS_MASS_STORAGE: u8 = 0x08;
+const USB_SUBCLASS_SCSI: u8 = 0x06;
+const USB_PROTO_UAS: u8 = 0x62;
+const UAS_IO_TIMEOUT_MS: u64 = 2_000;
+const UAS_IU_COMMAND: u8 = 0x01;
+const UAS_IU_STATUS: u8 = 0x03;
+const UAS_IU_READ_READY: u8 = 0x06;
+const UAS_STATUS_GOOD: u8 = 0x00;
+
+static USB_DEVICE_POOL: Mutex<UsbDevicePool> = Mutex::new(UsbDevicePool::new());
+static USB_UAS_ACTIVE: Mutex<Vec<SkhynixUasRuntime>> = Mutex::new(Vec::new());
+
+struct UsbDevicePool {
+    devices: Vec<PooledUsbDevice>,
+    pending_worker: Vec<usize>,
+}
+
+struct PooledUsbDevice {
+    id: usize,
+    vendor_id: u16,
+    product_id: u16,
+    class: u8,
+    subclass: u8,
+    protocol: u8,
+    device: crabusb::Device,
+}
+
+struct SkhynixUasRuntime {
+    device: crabusb::Device,
+    command_out: crabusb::Endpoint,
+    status_in: crabusb::Endpoint,
+    data_in: crabusb::Endpoint,
+    data_out: crabusb::Endpoint,
+    target: UasTarget,
+}
+
+impl UsbDevicePool {
+    const fn new() -> Self {
+        Self {
+            devices: Vec::new(),
+            pending_worker: Vec::new(),
+        }
+    }
+
+    fn insert_for_worker(&mut self, device: crabusb::Device) -> Result<usize, crabusb::Device> {
+        if self.devices.len() >= USB_DEVICE_POOL_CAP {
+            return Err(device);
+        }
+
+        let desc = device.descriptor();
+        let pooled = PooledUsbDevice {
+            id: device.slot_id() as usize,
+            vendor_id: desc.vendor_id,
+            product_id: desc.product_id,
+            class: desc.class,
+            subclass: desc.subclass,
+            protocol: desc.protocol,
+            device,
+        };
+        let id = pooled.id;
+        self.devices.push(pooled);
+        self.pending_worker.push(id);
+        Ok(id)
+    }
+
+    fn pop_pending_worker(&mut self) -> Option<PooledUsbDevice> {
+        let id = self.pending_worker.pop()?;
+        let idx = self.devices.iter().position(|device| device.id == id)?;
+        Some(self.devices.remove(idx))
+    }
+
+    fn len(&self) -> usize {
+        self.devices.len()
+    }
+}
+
+pub fn handoff_opened_device(device: crabusb::Device) -> Result<usize, crabusb::Device> {
+    let mut pool = USB_DEVICE_POOL.lock();
+    pool.insert_for_worker(device)?;
+    Ok(pool.len())
+}
+
+#[embassy_executor::task]
+pub async fn usb_device_pool_worker_task() {
+    loop {
+        let next = {
+            let mut pool = USB_DEVICE_POOL.lock();
+            pool.pop_pending_worker()
+        };
+
+        if let Some(device) = next {
+            crate::log!(
+                "crabusb: device worker handoff id={} vid={:04x} pid={:04x} class={:02x}:{:02x}:{:02x}\n",
+                device.id,
+                device.vendor_id,
+                device.product_id,
+                device.class,
+                device.subclass,
+                device.protocol
+            );
+            process_opened_device(device).await;
+        } else {
+            embassy_time::Timer::after(embassy_time::Duration::from_millis(25)).await;
+        }
+    }
+}
+
+async fn process_opened_device(device: PooledUsbDevice) {
+    if device.vendor_id == 0x152e && device.product_id == 0x7001 {
+        start_skhynix_green_uas(device).await;
+    }
+}
+
+#[derive(Clone, Debug)]
+struct MassBulkEndpoint {
+    address: u8,
+    max_packet_size: u16,
+}
+
+#[derive(Clone, Debug)]
+struct UasCandidate {
+    configuration_value: u8,
+    interface_number: u8,
+    alternate_setting: u8,
+    bulk_in: Vec<MassBulkEndpoint>,
+    bulk_out: Vec<MassBulkEndpoint>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct UasTarget {
+    configuration_value: u8,
+    interface_number: u8,
+    alternate_setting: u8,
+    command_out: u8,
+    status_in: u8,
+    data_in: u8,
+    data_out: u8,
+    command_out_max_packet_size: u16,
+    status_in_max_packet_size: u16,
+    data_in_max_packet_size: u16,
+    data_out_max_packet_size: u16,
+}
+
+async fn start_skhynix_green_uas(mut pooled: PooledUsbDevice) {
+    let candidates = collect_uas_candidates(pooled.device.configurations());
+    crate::log!(
+        "crabusb: skhynix-green {:04x}:{:04x} proof=transport-plan uas_candidates={}\n",
+        pooled.vendor_id,
+        pooled.product_id,
+        candidates.len()
+    );
+
+    let Some(target) = pick_skhynix_uas_target(pooled.vendor_id, pooled.product_id, &candidates)
+    else {
+        crate::log!(
+            "crabusb: skhynix-green {:04x}:{:04x} proof=uas-target status=missing\n",
+            pooled.vendor_id,
+            pooled.product_id
+        );
+        return;
+    };
+
+    crate::log!(
+        "crabusb: skhynix-green {:04x}:{:04x} proof=uas-target if#{} alt={} cfg={} cmd_out=0x{:02x}/{} status_in=0x{:02x}/{} data_in=0x{:02x}/{} data_out=0x{:02x}/{}\n",
+        pooled.vendor_id,
+        pooled.product_id,
+        target.interface_number,
+        target.alternate_setting,
+        target.configuration_value,
+        target.command_out,
+        target.command_out_max_packet_size,
+        target.status_in,
+        target.status_in_max_packet_size,
+        target.data_in,
+        target.data_in_max_packet_size,
+        target.data_out,
+        target.data_out_max_packet_size
+    );
+
+    if USB_UAS_ACTIVE.lock().len() >= USB_UAS_ACTIVE_CAP {
+        crate::log!(
+            "crabusb: skhynix-green {:04x}:{:04x} proof=uas-active status=full cap={}\n",
+            pooled.vendor_id,
+            pooled.product_id,
+            USB_UAS_ACTIVE_CAP
+        );
+        return;
+    }
+
+    if let Err(err) = pooled
+        .device
+        .set_configuration(target.configuration_value)
+        .await
+    {
+        crate::log!(
+            "crabusb: skhynix-green {:04x}:{:04x} proof=set-config cfg={} status=failed err={:?}\n",
+            pooled.vendor_id,
+            pooled.product_id,
+            target.configuration_value,
+            err
+        );
+        return;
+    }
+    crate::log!(
+        "crabusb: skhynix-green {:04x}:{:04x} proof=set-config cfg={} status=ok\n",
+        pooled.vendor_id,
+        pooled.product_id,
+        target.configuration_value
+    );
+
+    if let Err(err) = pooled
+        .device
+        .claim_interface(target.interface_number, target.alternate_setting)
+        .await
+    {
+        crate::log!(
+            "crabusb: skhynix-green {:04x}:{:04x} proof=claim if#{} alt={} status=failed err={:?}\n",
+            pooled.vendor_id,
+            pooled.product_id,
+            target.interface_number,
+            target.alternate_setting,
+            err
+        );
+        return;
+    }
+    crate::log!(
+        "crabusb: skhynix-green {:04x}:{:04x} proof=claim if#{} alt={} status=ok\n",
+        pooled.vendor_id,
+        pooled.product_id,
+        target.interface_number,
+        target.alternate_setting
+    );
+
+    let command_out = match pooled.device.endpoint(target.command_out) {
+        Ok(endpoint) => endpoint,
+        Err(err) => {
+            crate::log!(
+                "crabusb: skhynix-green {:04x}:{:04x} proof=endpoints cmd_out=false err={:?}\n",
+                pooled.vendor_id,
+                pooled.product_id,
+                err
+            );
+            return;
+        }
+    };
+    let status_in = match pooled.device.endpoint(target.status_in) {
+        Ok(endpoint) => endpoint,
+        Err(err) => {
+            crate::log!(
+                "crabusb: skhynix-green {:04x}:{:04x} proof=endpoints status_in=false err={:?}\n",
+                pooled.vendor_id,
+                pooled.product_id,
+                err
+            );
+            return;
+        }
+    };
+    let data_in = match pooled.device.endpoint(target.data_in) {
+        Ok(endpoint) => endpoint,
+        Err(err) => {
+            crate::log!(
+                "crabusb: skhynix-green {:04x}:{:04x} proof=endpoints data_in=false err={:?}\n",
+                pooled.vendor_id,
+                pooled.product_id,
+                err
+            );
+            return;
+        }
+    };
+    let data_out = match pooled.device.endpoint(target.data_out) {
+        Ok(endpoint) => endpoint,
+        Err(err) => {
+            crate::log!(
+                "crabusb: skhynix-green {:04x}:{:04x} proof=endpoints data_out=false err={:?}\n",
+                pooled.vendor_id,
+                pooled.product_id,
+                err
+            );
+            return;
+        }
+    };
+
+    let mut command_out = command_out;
+    let mut status_in = status_in;
+    let mut data_in = data_in;
+    let data_out = data_out;
+
+    match probe_mass_uas_skhynix(&mut command_out, &mut status_in, &mut data_in).await {
+        Ok(info) => {
+            crate::log!(
+                "crabusb: skhynix-green {:04x}:{:04x} proof=scsi-probe status=ok bs={} blocks={} vendor='{}' product='{}'\n",
+                pooled.vendor_id,
+                pooled.product_id,
+                info.block_size,
+                info.block_count,
+                info.vendor.as_str(),
+                info.product.as_str()
+            );
+        }
+        Err(err) => {
+            crate::log!(
+                "crabusb: skhynix-green {:04x}:{:04x} proof=scsi-probe status=failed err={:?}\n",
+                pooled.vendor_id,
+                pooled.product_id,
+                err
+            );
+        }
+    }
+
+    let runtime = SkhynixUasRuntime {
+        device: pooled.device,
+        command_out,
+        status_in,
+        data_in,
+        data_out,
+        target,
+    };
+    let mut active = USB_UAS_ACTIVE.lock();
+    active.push(runtime);
+    crate::log!(
+        "crabusb: skhynix-green {:04x}:{:04x} proof=endpoints cmd_out=true status_in=true data_in=true data_out=true active={}\n",
+        pooled.vendor_id,
+        pooled.product_id,
+        active.len()
+    );
+}
+
+fn collect_uas_candidates(
+    configs: &[crabusb::usb_if::descriptor::ConfigurationDescriptor],
+) -> Vec<UasCandidate> {
+    let mut out = Vec::new();
+
+    for config in configs {
+        for interface in &config.interfaces {
+            for alt in &interface.alt_settings {
+                if alt.class != USB_CLASS_MASS_STORAGE
+                    || alt.subclass != USB_SUBCLASS_SCSI
+                    || alt.protocol != USB_PROTO_UAS
+                {
+                    continue;
+                }
+
+                let mut bulk_in = Vec::new();
+                let mut bulk_out = Vec::new();
+                for ep in &alt.endpoints {
+                    if ep.transfer_type != crabusb::usb_if::descriptor::EndpointType::Bulk {
+                        continue;
+                    }
+
+                    let item = MassBulkEndpoint {
+                        address: ep.address,
+                        max_packet_size: ep.max_packet_size,
+                    };
+                    match ep.direction {
+                        crabusb::usb_if::transfer::Direction::In => bulk_in.push(item),
+                        crabusb::usb_if::transfer::Direction::Out => bulk_out.push(item),
+                    }
+                }
+
+                if !bulk_in.is_empty() && !bulk_out.is_empty() {
+                    out.push(UasCandidate {
+                        configuration_value: config.configuration_value,
+                        interface_number: interface.interface_number,
+                        alternate_setting: alt.alternate_setting,
+                        bulk_in,
+                        bulk_out,
+                    });
+                }
+            }
+        }
+    }
+
+    out
+}
+
+fn pick_skhynix_uas_target(
+    vendor_id: u16,
+    product_id: u16,
+    candidates: &[UasCandidate],
+) -> Option<UasTarget> {
+    if vendor_id != 0x152e || product_id != 0x7001 {
+        return None;
+    }
+
+    for uas in candidates {
+        let command_out = uas.bulk_out.iter().find(|ep| ep.address == 0x04)?;
+        let status_in = uas.bulk_in.iter().find(|ep| ep.address == 0x83)?;
+        let data_out = uas.bulk_out.iter().find(|ep| ep.address == 0x02)?;
+        let data_in = uas.bulk_in.iter().find(|ep| ep.address == 0x81)?;
+        return Some(UasTarget {
+            configuration_value: uas.configuration_value,
+            interface_number: uas.interface_number,
+            alternate_setting: uas.alternate_setting,
+            command_out: command_out.address,
+            status_in: status_in.address,
+            data_in: data_in.address,
+            data_out: data_out.address,
+            command_out_max_packet_size: command_out.max_packet_size,
+            status_in_max_packet_size: status_in.max_packet_size,
+            data_in_max_packet_size: data_in.max_packet_size,
+            data_out_max_packet_size: data_out.max_packet_size,
+        });
+    }
+
+    None
+}
+
+#[derive(Clone, Debug)]
+struct MassProbeInfo {
+    block_size: u32,
+    block_count: u64,
+    vendor: String,
+    product: String,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum MassProbeError {
+    Transport(&'static str),
+    ShortData,
+    Csw,
+}
+
+async fn with_timeout_or_none<F: Future>(fut: F, timeout_ms: u64) -> Option<F::Output> {
+    embassy_time::with_timeout(embassy_time::Duration::from_millis(timeout_ms), fut)
+        .await
+        .ok()
+}
+
+async fn endpoint_wait_submitted(
+    endpoint: &mut crabusb::Endpoint,
+    id: crabusb::usb_if::endpoint::RequestId,
+    timeout_label: &'static str,
+    transfer_label: &'static str,
+) -> Result<usize, MassProbeError> {
+    let mut timeout = core::pin::pin!(embassy_time::Timer::after(
+        embassy_time::Duration::from_millis(UAS_IO_TIMEOUT_MS),
+    ));
+
+    core::future::poll_fn(|cx| {
+        if let Poll::Ready(result) = endpoint.poll_request(id, cx) {
+            return Poll::Ready(
+                result
+                    .map(|completion| completion.actual_length)
+                    .map_err(|_| MassProbeError::Transport(transfer_label)),
+            );
+        }
+        if timeout.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(Err(MassProbeError::Transport(timeout_label)));
+        }
+        Poll::Pending
+    })
+    .await
+}
+
+async fn uas_send_command(
+    command_out: &mut crabusb::Endpoint,
+    cmd: &'static str,
+    cdb: &[u8],
+    tag: u16,
+) -> Result<(), MassProbeError> {
+    let iu = make_uas_command_iu(tag, cdb);
+    let id = command_out
+        .submit(crabusb::usb_if::endpoint::TransferRequest::bulk_out(&iu))
+        .map_err(|_| MassProbeError::Transport("uas-command-submit"))?;
+    crate::log!(
+        "crabusb: skhynix-green proof=uas-command-submit cmd={} tag=0x{:04x} request={}\n",
+        cmd,
+        tag,
+        id.raw()
+    );
+    let sent =
+        endpoint_wait_submitted(command_out, id, "uas-command-timeout", "uas-command-out").await?;
+    crate::log!(
+        "crabusb: skhynix-green proof=uas-command cmd={} tag=0x{:04x} sent={}\n",
+        cmd,
+        tag,
+        sent
+    );
+    if sent != iu.len() {
+        return Err(MassProbeError::ShortData);
+    }
+    Ok(())
+}
+
+async fn uas_drain_status_grace(
+    status_in: &mut crabusb::Endpoint,
+    cmd: &'static str,
+    tag: u16,
+) -> Result<(), MassProbeError> {
+    let mut status = [0u8; 96];
+    let got = with_timeout_or_none(
+        status_in.wait(crabusb::usb_if::endpoint::TransferRequest::bulk_in_on_stream(
+            &mut status,
+            tag,
+        )),
+        UAS_IO_TIMEOUT_MS,
+    )
+    .await
+    .ok_or(MassProbeError::Transport("uas-status-timeout"))?
+    .map_err(|_| MassProbeError::Transport("uas-status-in"))?
+    .actual_length;
+    if got < 4 {
+        return Err(MassProbeError::ShortData);
+    }
+    validate_uas_status(cmd, &status[..got.min(status.len())], tag)
+}
+
+async fn uas_command_in(
+    command_out: &mut crabusb::Endpoint,
+    status_in: &mut crabusb::Endpoint,
+    data_in: &mut crabusb::Endpoint,
+    cmd: &'static str,
+    cdb: &[u8],
+    data: &mut [u8],
+    tag: u16,
+) -> Result<usize, MassProbeError> {
+    let mut ready_iu = [0u8; 16];
+    enum FirstInCompletion {
+        Status(Result<usize, MassProbeError>),
+        Data(Result<usize, MassProbeError>),
+        Timeout,
+    }
+    enum InOutcome {
+        Done(usize),
+        DrainStatus(usize),
+    }
+
+    let outcome = {
+        let ready_id = status_in
+            .submit(crabusb::usb_if::endpoint::TransferRequest::bulk_in_on_stream(
+                &mut ready_iu,
+                tag,
+            ))
+            .map_err(|_| MassProbeError::Transport("uas-status-submit"))?;
+        let data_id = data_in
+            .submit(crabusb::usb_if::endpoint::TransferRequest::bulk_in_on_stream(data, tag))
+            .map_err(|_| MassProbeError::Transport("uas-data-submit"))?;
+        crate::log!(
+            "crabusb: skhynix-green proof=uas-prepost cmd={} tag=0x{:04x} status_req={} data_req={}\n",
+            cmd,
+            tag,
+            ready_id.raw(),
+            data_id.raw()
+        );
+
+        if let Err(err) = uas_send_command(command_out, cmd, cdb, tag).await {
+            let _ = status_in.cancel(ready_id);
+            let _ = data_in.cancel(data_id);
+            return Err(err);
+        }
+
+        let mut timeout =
+            core::pin::pin!(embassy_time::Timer::after(embassy_time::Duration::from_millis(
+                UAS_IO_TIMEOUT_MS,
+            )));
+        let first = core::future::poll_fn(|cx| {
+            if let Poll::Ready(result) = data_in.poll_request(data_id, cx) {
+                return Poll::Ready(FirstInCompletion::Data(
+                    result
+                        .map(|completion| completion.actual_length)
+                        .map_err(|_| MassProbeError::Transport("uas-data-in")),
+                ));
+            }
+            if let Poll::Ready(result) = status_in.poll_request(ready_id, cx) {
+                return Poll::Ready(FirstInCompletion::Status(
+                    result
+                        .map(|completion| completion.actual_length)
+                        .map_err(|_| MassProbeError::Transport("uas-status-in")),
+                ));
+            }
+            if timeout.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(FirstInCompletion::Timeout);
+            }
+            Poll::Pending
+        })
+        .await;
+
+        match first {
+            FirstInCompletion::Data(got) => {
+                let got = got?;
+                let ready_got = endpoint_wait_submitted(
+                    status_in,
+                    ready_id,
+                    "uas-status-timeout",
+                    "uas-status-in",
+                )
+                    .await
+                    ?;
+                if ready_got < 4 {
+                    return Err(MassProbeError::ShortData);
+                }
+                let ready = &ready_iu[..ready_got.min(ready_iu.len())];
+                let ready_id = ready[0];
+                let ready_tag = parse_uas_tag(ready).unwrap_or(0);
+                if ready_id == UAS_IU_STATUS && ready_tag == tag {
+                    validate_uas_status(cmd, ready, tag)?;
+                    Ok(InOutcome::Done(got))
+                } else if ready_id == UAS_IU_READ_READY && ready_tag == tag {
+                    Ok(InOutcome::DrainStatus(got))
+                } else {
+                    Err(MassProbeError::Csw)
+                }
+            }
+            FirstInCompletion::Status(ready_got) => {
+                let ready_got = ready_got?;
+                if ready_got < 4 {
+                    return Err(MassProbeError::ShortData);
+                }
+                let ready = &ready_iu[..ready_got.min(ready_iu.len())];
+                let ready_id = ready[0];
+                let ready_tag = parse_uas_tag(ready).unwrap_or(0);
+                if ready_id == UAS_IU_STATUS && ready_tag == tag {
+                    validate_uas_status(cmd, ready, tag)?;
+                    let got = endpoint_wait_submitted(
+                        data_in,
+                        data_id,
+                        "uas-data-timeout",
+                        "uas-data-in",
+                    )
+                        .await
+                        ?;
+                    Ok(InOutcome::Done(got))
+                } else if ready_id == UAS_IU_READ_READY && ready_tag == tag {
+                    let got = endpoint_wait_submitted(
+                        data_in,
+                        data_id,
+                        "uas-data-timeout",
+                        "uas-data-in",
+                    )
+                        .await
+                        ?;
+                    Ok(InOutcome::DrainStatus(got))
+                } else {
+                    Err(MassProbeError::Csw)
+                }
+            }
+            FirstInCompletion::Timeout => {
+                crate::log!(
+                    "crabusb: skhynix-green proof=uas-in-timeout cmd={} tag=0x{:04x} status_req={} data_req={}\n",
+                    cmd,
+                    tag,
+                    ready_id.raw(),
+                    data_id.raw()
+                );
+                let _ = status_in.cancel(ready_id);
+                let _ = data_in.cancel(data_id);
+                Err(MassProbeError::Transport("uas-in-timeout"))
+            }
+        }
+    }?;
+
+    match outcome {
+        InOutcome::Done(got) => Ok(got),
+        InOutcome::DrainStatus(got) => {
+            uas_drain_status_grace(status_in, cmd, tag).await?;
+            Ok(got)
+        }
+    }
+}
+
+async fn probe_mass_uas_skhynix(
+    command_out: &mut crabusb::Endpoint,
+    status_in: &mut crabusb::Endpoint,
+    data_in: &mut crabusb::Endpoint,
+) -> Result<MassProbeInfo, MassProbeError> {
+    let mut inquiry = [0u8; 36];
+    let inquiry_cdb = cdb_inquiry(inquiry.len() as u16);
+    let inquiry_read = uas_command_in(
+        command_out,
+        status_in,
+        data_in,
+        "inquiry",
+        &inquiry_cdb,
+        &mut inquiry,
+        1,
+    )
+    .await?;
+    if inquiry_read < 32 {
+        return Err(MassProbeError::ShortData);
+    }
+    crate::log!(
+        "crabusb: mass uas-skhynix inquiry removable={} pdt=0x{:02x}\n",
+        (inquiry[1] & 0x80) != 0,
+        inquiry[0] & 0x1f
+    );
+
+    let mut read_capacity = [0u8; 8];
+    let capacity_cdb = cdb_read_capacity_10();
+    let capacity_read = uas_command_in(
+        command_out,
+        status_in,
+        data_in,
+        "read-capacity10",
+        &capacity_cdb,
+        &mut read_capacity,
+        2,
+    )
+    .await?;
+    if capacity_read < read_capacity.len() {
+        return Err(MassProbeError::ShortData);
+    }
+    let last_lba = u32::from_be_bytes([
+        read_capacity[0],
+        read_capacity[1],
+        read_capacity[2],
+        read_capacity[3],
+    ]);
+    let block_size = u32::from_be_bytes([
+        read_capacity[4],
+        read_capacity[5],
+        read_capacity[6],
+        read_capacity[7],
+    ]);
+    if block_size == 0 {
+        return Err(MassProbeError::ShortData);
+    }
+
+    Ok(MassProbeInfo {
+        block_size,
+        block_count: u64::from(last_lba) + 1,
+        vendor: decode_ascii_field(&inquiry[8..16]),
+        product: decode_ascii_field(&inquiry[16..32]),
+    })
+}
+
+fn make_uas_command_iu(tag: u16, cdb: &[u8]) -> [u8; 32] {
+    let mut iu = [0u8; 32];
+    iu[0] = UAS_IU_COMMAND;
+    iu[2..4].copy_from_slice(&tag.to_be_bytes());
+    let cdb_len = cdb.len().min(16);
+    iu[16..16 + cdb_len].copy_from_slice(&cdb[..cdb_len]);
+    iu
+}
+
+fn parse_uas_tag(iu: &[u8]) -> Option<u16> {
+    if iu.len() < 4 {
+        return None;
+    }
+    Some(u16::from_be_bytes([iu[2], iu[3]]))
+}
+
+fn validate_uas_status(
+    _cmd: &'static str,
+    iu: &[u8],
+    expected_tag: u16,
+) -> Result<(), MassProbeError> {
+    if iu.len() < 10 {
+        return Err(MassProbeError::ShortData);
+    }
+    let iu_id = iu[0];
+    let tag = parse_uas_tag(iu).unwrap_or(0);
+    let status = iu[6];
+    if iu_id != UAS_IU_STATUS || tag != expected_tag || status != UAS_STATUS_GOOD {
+        return Err(MassProbeError::Csw);
+    }
+    Ok(())
+}
+
+fn cdb_inquiry(allocation_len: u16) -> [u8; 6] {
+    [0x12, 0, 0, 0, allocation_len.min(0xff) as u8, 0]
+}
+
+fn cdb_read_capacity_10() -> [u8; 10] {
+    [0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+}
+
+fn decode_ascii_field(field: &[u8]) -> String {
+    let mut out = String::new();
+    for &b in field {
+        if (0x20..=0x7e).contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push(' ');
+        }
+    }
+    String::from(out.trim())
+}

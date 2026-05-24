@@ -19,37 +19,72 @@ impl crabusb::DmaOp for TrueosCrabKernel {
         addr: NonNull<u8>,
         size: NonZeroUsize,
         align: usize,
-        _direction: crabusb::DmaDirection,
+        direction: crabusb::DmaDirection,
     ) -> Result<crabusb::DmaMapHandle, crabusb::DmaError> {
+        let size = size.get();
+        let layout = Layout::from_size_align(size, align.max(1))?;
         let phys = crate::phys::virt_to_phys_checked(addr.as_ptr())
             .ok_or(crabusb::DmaError::NullPointer)?;
         let dma_addr = crabusb::DmaAddr::from(phys);
-        if dma_addr > dma_mask {
-            return Err(crabusb::DmaError::DmaMaskNotMatch {
+        let end = phys
+            .checked_add(size.saturating_sub(1) as u64)
+            .ok_or(crabusb::DmaError::DmaMaskNotMatch {
                 addr: dma_addr,
                 mask: dma_mask,
+            })?;
+        if end > dma_mask || (align > 1 && !phys.is_multiple_of(align as u64)) {
+            let max_phys = Some(dma_mask.checked_add(1).unwrap_or(u64::MAX));
+            let (bounce_phys, bounce_virt) =
+                crate::dma::alloc_with_max(size, layout.align(), max_phys)
+                    .ok_or(crabusb::DmaError::NoMemory)?;
+            let bounce = NonNull::new(bounce_virt).ok_or(crabusb::DmaError::NullPointer)?;
+
+            if matches!(
+                direction,
+                crabusb::DmaDirection::ToDevice | crabusb::DmaDirection::Bidirectional
+            ) {
+                unsafe {
+                    core::ptr::copy_nonoverlapping(addr.as_ptr(), bounce.as_ptr(), size);
+                }
+            }
+
+            crate::log!(
+                "crabusb: dma remap size={} align={} orig_phys=0x{:X} bounce_phys=0x{:X}\n",
+                size,
+                layout.align(),
+                phys,
+                bounce_phys
+            );
+
+            return Ok(unsafe {
+                crabusb::DmaMapHandle::new(
+                    addr,
+                    crabusb::DmaAddr::from(bounce_phys),
+                    layout,
+                    Some(bounce),
+                )
             });
         }
-        if align > 1 && !phys.is_multiple_of(align as u64) {
-            return Err(crabusb::DmaError::AlignMismatch {
-                required: align,
-                address: dma_addr,
-            });
-        }
-        let layout = Layout::from_size_align(size.get(), align.max(1))?;
         Ok(unsafe { crabusb::DmaMapHandle::new(addr, dma_addr, layout, None) })
     }
 
-    unsafe fn unmap_single(&self, _handle: crabusb::DmaMapHandle) {}
+    unsafe fn unmap_single(&self, handle: crabusb::DmaMapHandle) {
+        if let Some(virt) = handle.alloc_virt() {
+            crate::dma::dealloc(virt.as_ptr(), handle.size());
+        }
+    }
 
     unsafe fn alloc_coherent(
         &self,
         dma_mask: u64,
         layout: Layout,
     ) -> Option<crabusb::DmaHandle> {
-        let max_phys = dma_mask
-            .checked_add(1)
-            .map(|limit| limit.min(0x1_0000_0000));
+        let max_phys = Some(
+            dma_mask
+                .checked_add(1)
+                .unwrap_or(u64::MAX)
+                .min(0x1_0000_0000),
+        );
         let (phys, virt) = crate::dma::alloc_with_max(layout.size(), layout.align(), max_phys)?;
         let ptr = NonNull::new(virt)?;
         Some(unsafe { crabusb::DmaHandle::new(ptr, crabusb::DmaAddr::from(phys), layout) })
