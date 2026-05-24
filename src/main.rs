@@ -81,14 +81,14 @@ mod tst_http_trueosfs;
 mod tst_mandelbrot_gpu_sidequest;
 #[path = "tst/net_tcp_shell.rs"]
 mod tst_net_tcp_shell;
-#[path = "usb2/device/uas_skhynix_route_probe.rs"]
-mod tst_uas_skhynix_route_probe;
 #[path = "tst/ws_time.rs"]
 mod tst_ws_time;
 mod turbo;
 #[allow(non_snake_case)]
 mod tyche;
-mod usb2;
+#[path = "USB3/mod.rs"]
+pub(crate) mod usb3;
+pub(crate) use usb3 as usb2;
 mod wait;
 mod workers;
 mod x2apic;

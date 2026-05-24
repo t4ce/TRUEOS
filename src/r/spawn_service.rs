@@ -832,32 +832,8 @@ fn spawn_ui2_swarm_demo(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
-    let count = crate::usb2::pci_usb_controllers()
-        .len()
-        .min(crate::usb2::xhci::MAX_XHCI_CONTROLLERS);
-    if count == 0 {
-        return SpawnAttempt::Skipped;
-    }
-
-    let mut spawned_any = false;
-    for i in 0..count {
-        let spawn_result = spawn_local(spawner, |_spawner| crate::usb2::crabusb_bsp_service(i));
-
-        match spawn_result {
-            SpawnAttempt::Spawned => {
-                spawned_any = true;
-            }
-            SpawnAttempt::Failed(e) => {
-                crate::log!("spawn-svc: usb-controller-task({}) spawn failed: {:?}\n", i, e);
-            }
-            SpawnAttempt::Skipped => {}
-        }
-    }
-    if spawned_any {
-        SpawnAttempt::Spawned
-    } else {
-        SpawnAttempt::Skipped
-    }
+    let _ = spawner;
+    SpawnAttempt::Skipped
 }
 
 const USER_INPUT_RECORD_FLUSH_INTERVAL_SECS: u64 = 120;
