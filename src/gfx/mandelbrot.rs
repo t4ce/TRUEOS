@@ -6,6 +6,7 @@ use core::fmt::Write;
 use trueos_gfx_core::{Rgba8, push_tex_quad_ndc, tex_vertices_byte_len};
 
 pub const MANDELBROT_PIPELINE_FS_TAG_RAW: u32 = 0x4D44_4C42;
+pub const MANDELBROT_ITERATIONS: u32 = 64;
 const FULL_CENTER_X: f32 = -0.5;
 const FULL_CENTER_Y: f32 = 0.0;
 const FULL_X_SPAN: f32 = 1.5;
@@ -32,6 +33,71 @@ const MANDELBROT_PALETTE: [([u8; 3], f32); 15] = [
     ([0x52, 0x00, 0x66], 58.0), // dark-plum
     ([0x33, 0x00, 0x33], 64.0), // midnight-plum
 ];
+
+fn color_for_iter_sum(iter_sum: f32) -> [f32; 4] {
+    let mut rgb = MANDELBROT_PALETTE[14].0;
+    for idx in (0..14).rev() {
+        if iter_sum < MANDELBROT_PALETTE[idx].1 {
+            rgb = MANDELBROT_PALETTE[idx].0;
+        }
+    }
+    [
+        rgb[0] as f32 / 255.0,
+        rgb[1] as f32 / 255.0,
+        rgb[2] as f32 / 255.0,
+        1.0,
+    ]
+}
+
+pub fn shade_uv_simd16(
+    us: [f32; 16],
+    vs: [f32; 16],
+    dispatch_mask: u16,
+    iterations: u32,
+) -> [[f32; 4]; 16] {
+    let mut zr = [0.0f32; 16];
+    let mut zi = [0.0f32; 16];
+    let mut iter_sum = [0.0f32; 16];
+    let mut cx = [0.0f32; 16];
+    let mut cy = [0.0f32; 16];
+    let mut live_mask = dispatch_mask;
+
+    for lane in 0..16 {
+        cx[lane] = us[lane] * 3.0 - 2.0;
+        cy[lane] = 1.0 - vs[lane] * 2.0;
+    }
+
+    for _ in 0..iterations {
+        if live_mask == 0 {
+            break;
+        }
+        for lane in 0..16 {
+            let lane_bit = 1u16 << lane;
+            if (live_mask & lane_bit) == 0 {
+                continue;
+            }
+
+            let zr2 = zr[lane] * zr[lane];
+            let zi2 = zi[lane] * zi[lane];
+            if zr2 + zi2 < 4.0 {
+                let zrzi = zr[lane] * zi[lane];
+                zr[lane] = zr2 - zi2 + cx[lane];
+                zi[lane] = zrzi + zrzi + cy[lane];
+                iter_sum[lane] += 1.0;
+            } else {
+                live_mask &= !lane_bit;
+            }
+        }
+    }
+
+    let mut out = [[0.0f32, 0.0, 0.0, 0.0]; 16];
+    for lane in 0..16 {
+        if (dispatch_mask & (1u16 << lane)) != 0 {
+            out[lane] = color_for_iter_sum(iter_sum[lane]);
+        }
+    }
+    out
+}
 
 fn emit_palette_immediates(shader: &mut String) {
     for (idx, (rgb, threshold)) in MANDELBROT_PALETTE.iter().enumerate() {

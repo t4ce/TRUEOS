@@ -593,6 +593,34 @@ fn submit_cgp_bf16_prefix_suffix_jobs(
         prefix_index_start = prefix_index_end;
     }
 
+    let suffix_k_dim = k_dim.saturating_sub(cgp_prefix.live_k_dim);
+    let gpu_prefix_values = accepted_indices.saturating_mul(cgp_prefix.live_k_dim);
+    let cpu_suffix_values = accepted_indices.saturating_mul(suffix_k_dim);
+    let cpu_full_row_values_avoided = accepted_indices.saturating_mul(k_dim);
+    let local_full_values = local_row_end.min(n_rows).saturating_mul(k_dim);
+    let gpu_prefix_local_bp = if local_full_values == 0 {
+        0
+    } else {
+        gpu_prefix_values.saturating_mul(10_000) / local_full_values
+    };
+    let gpu_prefix_accepted_row_bp = if k_dim == 0 {
+        0
+    } else {
+        cgp_prefix.live_k_dim.saturating_mul(10_000) / k_dim
+    };
+    let t8_frontier_rows = crate::lumen::gpu_shadow::t8_groupid_frontier_rows();
+    let t8_row_groups = if t8_frontier_rows == 0 {
+        0
+    } else {
+        accepted_indices / t8_frontier_rows
+    };
+    let t8_frontier_ready = t8_frontier_rows != 0;
+    let offload_action = if t8_frontier_ready {
+        "account-trusted-prefix-benefit"
+    } else {
+        "account-prefix-benefit-await-t8-frontier"
+    };
+
     crate::log!(
         "burn-baby: cgp accepted-prefix suffix-submit source={} mode={} rows={} first_row={} last_row={} live_k_dim={} k_dim={} suffix_jobs={} output_owner=hybrid-cgp-prefix-cpu-ap-suffix contract=scalar-bf16-reference action=parallel-cpu-suffix-skip-ap-full-row-recompute\n",
         source_label,
@@ -603,6 +631,28 @@ fn submit_cgp_bf16_prefix_suffix_jobs(
         cgp_prefix.live_k_dim,
         k_dim,
         submitted_jobs,
+    );
+    crate::log!(
+        "burn-baby: cgp effective-offload source={} mode={} rows={} first_row={} last_row={} live_k_dim={} suffix_k_dim={} k_dim={} local_rows={} t8_frontier_ready={} t8_frontier_rows={} t8_row_groups={} gpu_prefix_t8_projected_submits={} gpu_prefix_values={} cpu_suffix_values={} cpu_full_row_values_avoided={} gpu_prefix_local_bp={} gpu_prefix_accepted_row_bp={} output_owner=hybrid-cgp-prefix-cpu-ap-suffix backend=local-gpu-burn-baby action={} next=prove-groupid-live32-or-fused-two-window-artifact\n",
+        source_label,
+        cgp_prefix.mode.as_str(),
+        accepted_indices,
+        first_row,
+        last_row,
+        cgp_prefix.live_k_dim,
+        suffix_k_dim,
+        k_dim,
+        local_row_end.min(n_rows),
+        t8_frontier_ready as u8,
+        t8_frontier_rows,
+        t8_row_groups,
+        t8_row_groups,
+        gpu_prefix_values,
+        cpu_suffix_values,
+        cpu_full_row_values_avoided,
+        gpu_prefix_local_bp,
+        gpu_prefix_accepted_row_bp,
+        offload_action,
     );
 
     CgpPrefixSuffixSubmit {

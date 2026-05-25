@@ -206,6 +206,8 @@ pub(crate) struct GpgpuT62PartialMatvecProof {
     pub(crate) expected_words: [u32; 8],
     pub(crate) output_words16: [u32; 16],
     pub(crate) expected_words16: [u32; 16],
+    pub(crate) output_words32: [u32; 32],
+    pub(crate) expected_words32: [u32; 32],
     pub(crate) compare_mask: u32,
     pub(crate) expected_mask: u32,
     pub(crate) dispatch_delta: u64,
@@ -727,6 +729,31 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_trusted_no_readback(
     )
 }
 
+pub(crate) fn submit_gpgpu_t8_groupid_live16_trusted_no_readback(
+    output_gpu: u64,
+    output_bytes: usize,
+    row_count: usize,
+    live_k_dim: usize,
+) -> GpgpuT62PartialMatvecProof {
+    self::gpgpu::submit_gpgpu_t8_groupid_live16_trusted_no_readback(
+        output_gpu,
+        output_bytes,
+        row_count,
+        live_k_dim,
+    )
+}
+
+pub(crate) fn stage_gpgpu_tile_record_output_rows_trusted(
+    output_gpu: u64,
+    src_row: usize,
+    dst_row: usize,
+    row_count: usize,
+) -> GpgpuTileRowsStageProof {
+    self::gpgpu::stage_gpgpu_tile_record_output_rows_trusted(
+        output_gpu, src_row, dst_row, row_count,
+    )
+}
+
 pub(crate) fn submit_gpgpu_t63_accum16_hi_live32_partial_matvec_probe(
     output_gpu: u64,
     output_bytes: usize,
@@ -814,6 +841,38 @@ pub(crate) fn submit_gpgpu_t8_groupid_live16_distinct_row16_probe(
         output_gpu,
         output_bytes,
         expected_words16,
+        row_count,
+        live_k_dim,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t8_groupid_live16_distinct_row32_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words32: [u32; 32],
+    row_count: usize,
+    live_k_dim: usize,
+) -> GpgpuT62PartialMatvecProof {
+    self::gpgpu::submit_gpgpu_t8_groupid_live16_distinct_row32_probe(
+        output_gpu,
+        output_bytes,
+        expected_words32,
+        row_count,
+        live_k_dim,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t9_existing_t63_groupid_live32_negative_control_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words32: [u32; 32],
+    row_count: usize,
+    live_k_dim: usize,
+) -> GpgpuT62PartialMatvecProof {
+    self::gpgpu::submit_gpgpu_t9_existing_t63_groupid_live32_negative_control_probe(
+        output_gpu,
+        output_bytes,
+        expected_words32,
         row_count,
         live_k_dim,
     )
