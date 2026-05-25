@@ -34,10 +34,13 @@ pub(crate) use mandelbrot::{
 };
 pub(crate) use matmul::{
     log_gpgpu_t63_first_tile_output_detail_once, stage_gpgpu_one_tile_record_probe,
-    stage_gpgpu_tile_record_rows_probe, submit_gpgpu_one_tile_output_compare_probe,
-    submit_gpgpu_one_tile_output_sentinel_probe, submit_gpgpu_t5_one_row_matvec_probe,
-    submit_gpgpu_t6_one_row_matvec_probe, submit_gpgpu_t61_one_row_matvec_probe,
-    submit_gpgpu_t62_partial_matvec_probe, submit_gpgpu_t63_accum16_hi_live32_partial_matvec_probe,
+    stage_gpgpu_tile_record_accum16_window_probe, stage_gpgpu_tile_record_rows_probe,
+    submit_gpgpu_one_tile_output_compare_probe, submit_gpgpu_one_tile_output_sentinel_probe,
+    submit_gpgpu_t5_one_row_matvec_probe, submit_gpgpu_t6_one_row_matvec_probe,
+    submit_gpgpu_t61_one_row_matvec_probe, submit_gpgpu_t62_partial_matvec_probe,
+    submit_gpgpu_t63_accum16_hi_live32_partial_matvec_probe,
+    submit_gpgpu_t64_windowed_accum16_live48_partial_matvec_probe,
+    submit_gpgpu_t65_windowed_accum16_live64_partial_matvec_probe,
 };
 
 const FORCEWAKE_RENDER: usize = 0x0A278;
@@ -1453,6 +1456,9 @@ fn is_raw_awake_program_name(name: &str) -> bool {
 }
 
 fn should_log_gpgpu_program_shape(name: &str) -> bool {
+    if is_raw_awake_program_name(name) {
+        return true;
+    }
     if name == trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_PROGRAM_NAME
@@ -1466,7 +1472,7 @@ fn should_log_gpgpu_program_shape(name: &str) -> bool {
     {
         return !MANDELBROT_WALKER_SHAPE_LOGGED.swap(true, Ordering::AcqRel);
     }
-    !is_raw_awake_program_name(name) && !name.contains("-quiet-")
+    !name.contains("-quiet-")
 }
 
 fn should_log_gpgpu_surface_state(note: &str) -> bool {

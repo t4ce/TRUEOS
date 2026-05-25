@@ -40,6 +40,7 @@ const LUMEN_RUNTIME_SOFT_STOP_TOKENS: usize = 24;
 const LUMEN_RUNTIME_MIN_SENTENCE_TOKENS: usize = 12;
 const LUMEN_RUNTIME_STREAM_TOKENS: usize = 5;
 const LUMEN_RUNTIME_MAX_ANSWER_CHARS: usize = 512;
+const LUMEN_RUNTIME_BOOT_SELFTEST_ENABLED: bool = false;
 const LUMEN_RUNTIME_SELFTEST_PROMPT: &str = "Hello Lumen, how are you doing today";
 const LUMEN_RUNTIME_PROGRESS_TENSORS: usize = 16;
 const LUMEN_RUNTIME_EARLY_PROGRESS_TENSORS: usize = 2;
@@ -545,6 +546,7 @@ struct LumenInferenceRequest {
     session_id: u64,
     prompt: AllocString,
     statement: Option<AllocString>,
+    reset_after: bool,
 }
 
 struct LumenInferenceResult {
@@ -658,11 +660,7 @@ fn generate_lumen_answer(
     prompt: &str,
     statement: Option<&str>,
 ) -> Result<LumenGenerateReport, AllocString> {
-    let chat_prompt = if state.first_turn {
-        lumen_chat_prompt(prompt)
-    } else {
-        lumen_chat_next_turn_prompt(prompt)
-    };
+    let chat_prompt = AllocString::from(prompt.trim());
     let prompt_tokens = encode_prompt_lossy(chat_prompt.as_str(), vocab_entries);
     if prompt_tokens.is_empty() {
         return Err(AllocString::from("tokenizer produced no tokens"));
@@ -702,7 +700,7 @@ fn generate_lumen_answer(
         );
         state.reset(model);
 
-        let fresh_prompt = lumen_chat_prompt(prompt);
+        let fresh_prompt = AllocString::from(prompt.trim());
         prompt_tokens = encode_prompt_lossy(fresh_prompt.as_str(), vocab_entries);
         if prompt_tokens.is_empty() {
             return Err(AllocString::from("tokenizer produced no tokens"));
@@ -733,7 +731,7 @@ fn generate_lumen_answer(
     let _bf16_prompt_context = crate::lumen::burn_baby::enter_lumen_prompt_bf16_context();
     state.all_tokens.extend_from_slice(&prompt_tokens);
     crate::log!(
-        "lumen: generation start prompt_tokens={} context_tokens={} max_new_tokens={} max_seq_len={} prefill_mode=incremental-decode-ap cgp_backend=local-gpgpu-burn-baby cgp_role=proof-only note=first-token-is-prompt-ingest\n",
+        "lumen: generation start prompt_tokens={} context_tokens={} max_new_tokens={} max_seq_len={} prefill_mode=incremental-decode-ap cgp_backend=local-gpgpu-burn-baby cgp_role=proof-first-accepted-prefix-capable note=first-token-is-prompt-ingest\n",
         prompt_tokens.len(),
         prefill_start_len,
         LUMEN_RUNTIME_MAX_NEW_TOKENS,
@@ -875,6 +873,7 @@ fn submit_lumen_inference(
     session_id: u64,
     prompt: &str,
     statement: Option<&str>,
+    reset_after: bool,
 ) -> Result<u64, AllocString> {
     let mut mailbox = LUMEN_INFER_MAILBOX.lock();
     if mailbox.busy || mailbox.pending.is_some() || mailbox.result.is_some() {
@@ -887,6 +886,7 @@ fn submit_lumen_inference(
         session_id,
         prompt: AllocString::from(prompt),
         statement: statement.map(AllocString::from),
+        reset_after,
     });
     mailbox.busy = true;
     drop(mailbox);
@@ -1015,6 +1015,13 @@ async fn lumen_inference_worker_task(
             request.prompt.as_str(),
             request.statement.as_deref(),
         );
+        if request.reset_after {
+            runtime.chat_state.reset(&runtime.model);
+            crate::log!(
+                "lumen: AP2+ inference worker chat state reset session={} reason=selftest-complete\n",
+                session_id
+            );
+        }
         {
             let mut mailbox = LUMEN_INFER_MAILBOX.lock();
             mailbox.result = Some(LumenInferenceResult {
@@ -2556,71 +2563,85 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                 LumenInferEngine::Local { model, chat_state }
             }
         };
-        let selftest_start = embassy_time_driver::now();
-        let compute_before = crate::lumen::burn_baby::stats();
-        crate::log!(
-            "lumen: selftest prompt begin session={} prompt={:?} proof=end-to-end-after-tensor-load\n",
-            session_id,
-            LUMEN_RUNTIME_SELFTEST_PROMPT
-        );
-        let selftest_result = match &mut infer_engine {
-            LumenInferEngine::Local { model, chat_state } => generate_lumen_answer(
-                model,
-                chat_state,
-                &tokenizer_json,
-                vocab_entries.as_slice(),
-                stop_ids.as_slice(),
-                LUMEN_RUNTIME_SELFTEST_PROMPT,
-                None,
-            ),
-            LumenInferEngine::Worker => {
-                match submit_lumen_inference(session_id, LUMEN_RUNTIME_SELFTEST_PROMPT, None) {
-                    Ok(request_id) => wait_lumen_inference_result(session_id, request_id).await,
-                    Err(err) => Err(err),
+        if LUMEN_RUNTIME_BOOT_SELFTEST_ENABLED {
+            let selftest_start = embassy_time_driver::now();
+            let compute_before = crate::lumen::burn_baby::stats();
+            crate::log!(
+                "lumen: selftest prompt begin session={} prompt={:?} proof=end-to-end-after-tensor-load\n",
+                session_id,
+                LUMEN_RUNTIME_SELFTEST_PROMPT
+            );
+            let selftest_result = match &mut infer_engine {
+                LumenInferEngine::Local { model, chat_state } => generate_lumen_answer(
+                    model,
+                    chat_state,
+                    &tokenizer_json,
+                    vocab_entries.as_slice(),
+                    stop_ids.as_slice(),
+                    LUMEN_RUNTIME_SELFTEST_PROMPT,
+                    None,
+                ),
+                LumenInferEngine::Worker => {
+                    match submit_lumen_inference(session_id, LUMEN_RUNTIME_SELFTEST_PROMPT, None, true) {
+                        Ok(request_id) => wait_lumen_inference_result(session_id, request_id).await,
+                        Err(err) => Err(err),
+                    }
+                }
+            };
+            match selftest_result {
+                Ok(report) => {
+                    let infer_ms = elapsed_ms_since(selftest_start);
+                    let compute_after = crate::lumen::burn_baby::stats();
+                    let submitted_jobs = compute_after
+                        .submitted_jobs
+                        .saturating_sub(compute_before.submitted_jobs);
+                    let completed_jobs = compute_after
+                        .completed_jobs
+                        .saturating_sub(compute_before.completed_jobs);
+                    let polled_jobs = compute_after
+                        .polled_jobs
+                        .saturating_sub(compute_before.polled_jobs);
+                    crate::log!(
+                        "lumen: selftest answer prompt={:?} answer={:?} prompt_tokens={} generated_tokens={} first_token={}ms infer={}ms speed={} jobs={}/{} polled={} queued={} proof=end-to-end-ok\n",
+                        LUMEN_RUNTIME_SELFTEST_PROMPT,
+                        report.answer.as_str(),
+                        report.prompt_tokens,
+                        report.generated_tokens,
+                        report.first_token_ms,
+                        infer_ms,
+                        format_tokens_per_second(report.generated_tokens, infer_ms),
+                        completed_jobs,
+                        submitted_jobs,
+                        polled_jobs,
+                        compute_after.queued_jobs
+                    );
+                }
+                Err(err) => {
+                    crate::log!(
+                        "lumen: selftest failed prompt={:?} err={} proof=end-to-end-failed\n",
+                        LUMEN_RUNTIME_SELFTEST_PROMPT,
+                        err
+                    );
                 }
             }
-        };
-        match selftest_result {
-            Ok(report) => {
-                let infer_ms = elapsed_ms_since(selftest_start);
-                let compute_after = crate::lumen::burn_baby::stats();
-                let submitted_jobs = compute_after
-                    .submitted_jobs
-                    .saturating_sub(compute_before.submitted_jobs);
-                let completed_jobs = compute_after
-                    .completed_jobs
-                    .saturating_sub(compute_before.completed_jobs);
-                let polled_jobs = compute_after
-                    .polled_jobs
-                    .saturating_sub(compute_before.polled_jobs);
+            if let LumenInferEngine::Local { model, chat_state } = &mut infer_engine {
+                chat_state.reset(model);
                 crate::log!(
-                    "lumen: selftest answer prompt={:?} answer={:?} prompt_tokens={} generated_tokens={} first_token={}ms infer={}ms speed={} jobs={}/{} polled={} queued={} proof=end-to-end-ok\n",
-                    LUMEN_RUNTIME_SELFTEST_PROMPT,
-                    report.answer.as_str(),
-                    report.prompt_tokens,
-                    report.generated_tokens,
-                    report.first_token_ms,
-                    infer_ms,
-                    format_tokens_per_second(report.generated_tokens, infer_ms),
-                    completed_jobs,
-                    submitted_jobs,
-                    polled_jobs,
-                    compute_after.queued_jobs
+                    "lumen: local chat state reset session={} reason=selftest-complete\n",
+                    session_id
                 );
             }
-            Err(err) => {
-                crate::log!(
-                    "lumen: selftest failed prompt={:?} err={} proof=end-to-end-failed\n",
-                    LUMEN_RUNTIME_SELFTEST_PROMPT,
-                    err
-                );
-            }
+        } else {
+            crate::log!(
+                "lumen: selftest skipped session={} reason=boot-selftest-disabled prompt-loop-clean-context\n",
+                session_id
+            );
         }
         register_lumen_interactive_session(session_id);
         crate::lumen::lumen_service::mark_online(session_id);
         print_matrix_target_line(
             &task_target,
-            "lumen: selftest complete; prompt loop ready",
+            "lumen: prompt loop ready",
         );
         let mut idle_waits = 0u64;
         let mut last_wait_log_tick = embassy_time_driver::now();
@@ -2679,6 +2700,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                         session_id,
                         request.prompt.as_str(),
                         request.statement.as_deref(),
+                        false,
                     ) {
                         Ok(request_id) => wait_lumen_inference_result(session_id, request_id).await,
                         Err(err) => Err(err),

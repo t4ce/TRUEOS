@@ -528,6 +528,24 @@ pub(crate) fn stage_gpgpu_tile_record_rows_probe(
     )
 }
 
+pub(crate) fn stage_gpgpu_tile_record_accum16_window_probe(
+    output_gpu: u64,
+    x: &[f32],
+    rows_bf16: &[u8],
+    row_count: usize,
+    k_dim: usize,
+    source_start: usize,
+) -> GpgpuTileRowsStageProof {
+    self::gpgpu::stage_gpgpu_tile_record_accum16_window_probe(
+        output_gpu,
+        x,
+        rows_bf16,
+        row_count,
+        k_dim,
+        source_start,
+    )
+}
+
 pub(crate) fn submit_gpgpu_one_tile_output_sentinel_probe(
     output_gpu: u64,
     output_bytes: usize,
@@ -660,6 +678,38 @@ pub(crate) fn submit_gpgpu_t63_accum16_hi_live32_partial_matvec_probe(
     live_k_dim: usize,
 ) -> GpgpuT62PartialMatvecProof {
     self::gpgpu::submit_gpgpu_t63_accum16_hi_live32_partial_matvec_probe(
+        output_gpu,
+        output_bytes,
+        expected_words,
+        row_count,
+        live_k_dim,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t64_windowed_accum16_live48_partial_matvec_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words: [u32; 8],
+    row_count: usize,
+    live_k_dim: usize,
+) -> GpgpuT62PartialMatvecProof {
+    self::gpgpu::submit_gpgpu_t64_windowed_accum16_live48_partial_matvec_probe(
+        output_gpu,
+        output_bytes,
+        expected_words,
+        row_count,
+        live_k_dim,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t65_windowed_accum16_live64_partial_matvec_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words: [u32; 8],
+    row_count: usize,
+    live_k_dim: usize,
+) -> GpgpuT62PartialMatvecProof {
+    self::gpgpu::submit_gpgpu_t65_windowed_accum16_live64_partial_matvec_probe(
         output_gpu,
         output_bytes,
         expected_words,

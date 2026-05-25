@@ -102,9 +102,33 @@ struct MatvecRowsBf16 {
 }
 
 #[derive(Copy, Clone)]
+struct MatvecRowsBf16Suffix {
+    x: usize,
+    w_rowmajor_bf16: usize,
+    out: usize,
+    n_rows: usize,
+    k_dim: usize,
+    live_k_dim: usize,
+    prefix_rows: usize,
+    prefix_count: usize,
+    prefix_index_start: usize,
+    prefix_index_end: usize,
+    done: usize,
+}
+
+#[derive(Copy, Clone)]
 enum ComputeJob {
     MatvecRowsF32(MatvecRowsF32),
     MatvecRowsBf16(MatvecRowsBf16),
+    MatvecRowsBf16Suffix(MatvecRowsBf16Suffix),
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+struct CgpPrefixSuffixSubmit {
+    accepted_rows: usize,
+    submitted_jobs: usize,
+    first_row: usize,
+    last_row: usize,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -321,7 +345,7 @@ pub fn matvec_rowmajor_bf16(
     if source_label == "lumen-prompt" && !LOGGED_BF16_CGP_PROMPT_PATH.swap(true, Ordering::AcqRel) {
         let backend = crate::lumen::cgp::gpu_burn_baby_backend();
         crate::log!(
-            "burn-baby: cgp prompt path source={} backend={} label={} role={} output_owner={} contract={} dispatch_contract={} action=guarded-proof-before-cpu-owner\n",
+            "burn-baby: cgp prompt path source={} backend={} label={} role={} output_owner={} contract={} dispatch_contract={} action=guarded-proof-before-prefix-ownership\n",
             source_label,
             backend.name,
             backend.label,
@@ -384,16 +408,19 @@ pub fn matvec_rowmajor_bf16(
         poll_counts_for_slots(&spread_slots)
     };
 
-    let cgp_prefix_rows = apply_cgp_bf16_prefix_contribution(
+    let cgp_prefix_submit = submit_cgp_bf16_prefix_suffix_jobs(
         source_label,
-        x,
-        w_rowmajor_bf16,
+        x_ptr,
+        w_ptr,
+        out_ptr,
+        n_rows,
         k_dim,
-        out,
         local_row_end,
+        done_ptr,
         &cgp_prefix,
     );
-    let submitted = submit_bf16_jobs_skipping_cgp_prefix(
+    let submitted = cgp_prefix_submit.submitted_jobs
+        + submit_bf16_jobs_skipping_cgp_prefix(
         x_ptr,
         w_ptr,
         out_ptr,
@@ -428,14 +455,29 @@ pub fn matvec_rowmajor_bf16(
             spread
         );
     }
-    if cgp_prefix_rows != 0 {
+    if cgp_prefix_submit.accepted_rows != 0 {
+        let first_output_bits = out
+            .get(cgp_prefix_submit.first_row)
+            .copied()
+            .unwrap_or(0.0)
+            .to_bits();
+        let last_output_bits = out
+            .get(cgp_prefix_submit.last_row)
+            .copied()
+            .unwrap_or(0.0)
+            .to_bits();
         crate::log!(
-            "burn-baby: cgp accepted-prefix complete source={} rows={} live_k_dim={} k_dim={} cpu_jobs={} output_owner=hybrid-cgp-prefix-cpu-ap-suffix action=cpu-ap-skipped-prefix-owned-rows\n",
+            "burn-baby: cgp accepted-prefix complete source={} rows={} first_row={} last_row={} live_k_dim={} k_dim={} suffix_jobs={} total_cpu_jobs={} first_output_bits=0x{:08X} last_output_bits=0x{:08X} output_owner=hybrid-cgp-prefix-cpu-ap-suffix action=cpu-ap-skipped-prefix-owned-rows\n",
             source_label,
-            cgp_prefix_rows,
+            cgp_prefix_submit.accepted_rows,
+            cgp_prefix_submit.first_row,
+            cgp_prefix_submit.last_row,
             cgp_prefix.live_k_dim,
             k_dim,
+            cgp_prefix_submit.submitted_jobs,
             submitted,
+            first_output_bits,
+            last_output_bits,
         );
     }
 
@@ -486,67 +528,89 @@ fn submit_bf16_range_jobs(
     submitted
 }
 
-fn apply_cgp_bf16_prefix_contribution(
+fn submit_cgp_bf16_prefix_suffix_jobs(
     source_label: &'static str,
-    x: &[f32],
-    w_rowmajor_bf16: &[u8],
+    x_ptr: usize,
+    w_ptr: usize,
+    out_ptr: usize,
+    n_rows: usize,
     k_dim: usize,
-    out: &mut [f32],
     local_row_end: usize,
+    done_ptr: usize,
     cgp_prefix: &crate::lumen::cgp::CgpBf16PrefixContribution,
-) -> usize {
+) -> CgpPrefixSuffixSubmit {
     if cgp_prefix.is_empty() || cgp_prefix.live_k_dim == 0 || cgp_prefix.live_k_dim > k_dim {
-        return 0;
+        return CgpPrefixSuffixSubmit::default();
     }
 
-    let mut accepted_rows = 0usize;
+    let mut accepted_indices = 0usize;
     let mut first_row = usize::MAX;
     let mut last_row = 0usize;
-    let mut first_output_bits = 0u32;
-    let mut last_output_bits = 0u32;
-    for contribution in &cgp_prefix.rows {
+    for contribution in cgp_prefix.rows.iter() {
         let row = contribution.row;
-        if row >= local_row_end || row >= out.len() {
+        if row >= local_row_end || row >= n_rows {
             continue;
         }
         let base = row.saturating_mul(k_dim).saturating_mul(2);
         let row_end = base.saturating_add(k_dim.saturating_mul(2));
-        if row_end > w_rowmajor_bf16.len() {
+        let w_len = n_rows.saturating_mul(k_dim).saturating_mul(2);
+        if row_end > w_len {
             continue;
         }
 
-        let mut acc = f32::from_bits(contribution.prefix_bits);
-        let weights = &w_rowmajor_bf16[base..row_end];
-        for idx in cgp_prefix.live_k_dim..k_dim {
-            let off = idx.saturating_mul(2);
-            let bits = u16::from_le_bytes([weights[off], weights[off + 1]]);
-            acc += x[idx] * bf16_to_f32(bits);
-        }
-        out[row] = acc;
-        if accepted_rows == 0 {
+        if accepted_indices == 0 {
             first_row = row;
-            first_output_bits = acc.to_bits();
         }
         last_row = row;
-        last_output_bits = acc.to_bits();
-        accepted_rows += 1;
+        accepted_indices += 1;
     }
 
-    if accepted_rows != 0 {
-        crate::log!(
-            "burn-baby: cgp accepted-prefix apply source={} mode={} rows={} first_row={} last_row={} live_k_dim={} k_dim={} first_output_bits=0x{:08X} last_output_bits=0x{:08X} output_owner=hybrid-cgp-prefix-cpu-ap-suffix contract=scalar-bf16-reference action=skip-ap-full-row-recompute\n",
-            source_label,
-            cgp_prefix.mode.as_str(),
-            accepted_rows,
-            first_row,
-            last_row,
-            cgp_prefix.live_k_dim,
-            k_dim,
-            first_output_bits,
-            last_output_bits,
-        );
+    if accepted_indices == 0 {
+        return CgpPrefixSuffixSubmit::default();
     }
-    accepted_rows
+
+    let chunk_rows = recommended_chunk_rows(accepted_indices).max(1);
+    let mut submitted_jobs = 0usize;
+    let mut prefix_index_start = 0usize;
+    while prefix_index_start < cgp_prefix.rows.len() {
+        let prefix_index_end = prefix_index_start
+            .saturating_add(chunk_rows)
+            .min(cgp_prefix.rows.len());
+        submit_job(ComputeJob::MatvecRowsBf16Suffix(MatvecRowsBf16Suffix {
+            x: x_ptr,
+            w_rowmajor_bf16: w_ptr,
+            out: out_ptr,
+            n_rows,
+            k_dim,
+            live_k_dim: cgp_prefix.live_k_dim,
+            prefix_rows: cgp_prefix.rows.as_ptr() as usize,
+            prefix_count: cgp_prefix.rows.len(),
+            prefix_index_start,
+            prefix_index_end,
+            done: done_ptr,
+        }));
+        submitted_jobs += 1;
+        prefix_index_start = prefix_index_end;
+    }
+
+    crate::log!(
+        "burn-baby: cgp accepted-prefix suffix-submit source={} mode={} rows={} first_row={} last_row={} live_k_dim={} k_dim={} suffix_jobs={} output_owner=hybrid-cgp-prefix-cpu-ap-suffix contract=scalar-bf16-reference action=parallel-cpu-suffix-skip-ap-full-row-recompute\n",
+        source_label,
+        cgp_prefix.mode.as_str(),
+        accepted_indices,
+        first_row,
+        last_row,
+        cgp_prefix.live_k_dim,
+        k_dim,
+        submitted_jobs,
+    );
+
+    CgpPrefixSuffixSubmit {
+        accepted_rows: accepted_indices,
+        submitted_jobs,
+        first_row,
+        last_row,
+    }
 }
 
 fn submit_bf16_jobs_skipping_cgp_prefix(
@@ -947,6 +1011,7 @@ fn execute_job(job: ComputeJob) {
     match job {
         ComputeJob::MatvecRowsF32(job) => execute_matvec_rows_f32(job),
         ComputeJob::MatvecRowsBf16(job) => execute_matvec_rows_bf16(job),
+        ComputeJob::MatvecRowsBf16Suffix(job) => execute_matvec_rows_bf16_suffix(job),
     }
     COMPLETED_JOBS.fetch_add(1, Ordering::AcqRel);
 }
@@ -978,6 +1043,48 @@ fn execute_matvec_rows_bf16(job: MatvecRowsBf16) {
     let out = unsafe { core::slice::from_raw_parts_mut(job.out as *mut f32, job.n_rows) };
 
     matvec_rows_bf16(x, w, job.k_dim, out, job.row_start, job.row_end);
+    mark_done(job.done);
+}
+
+fn execute_matvec_rows_bf16_suffix(job: MatvecRowsBf16Suffix) {
+    if job.live_k_dim >= job.k_dim
+        || job.prefix_index_start >= job.prefix_index_end
+        || job.prefix_index_end > job.prefix_count
+    {
+        mark_done(job.done);
+        return;
+    }
+
+    let x = unsafe { core::slice::from_raw_parts(job.x as *const f32, job.k_dim) };
+    let w_len = job.n_rows.saturating_mul(job.k_dim).saturating_mul(2);
+    let w = unsafe { core::slice::from_raw_parts(job.w_rowmajor_bf16 as *const u8, w_len) };
+    let out = unsafe { core::slice::from_raw_parts_mut(job.out as *mut f32, job.n_rows) };
+    let prefix_rows = unsafe {
+        core::slice::from_raw_parts(
+            job.prefix_rows as *const crate::lumen::cgp::CgpBf16PrefixRow,
+            job.prefix_count,
+        )
+    };
+
+    for contribution in &prefix_rows[job.prefix_index_start..job.prefix_index_end] {
+        let row = contribution.row;
+        if row >= job.n_rows || row >= out.len() {
+            continue;
+        }
+        let base = row.saturating_mul(job.k_dim).saturating_mul(2);
+        let row_end = base.saturating_add(job.k_dim.saturating_mul(2));
+        if row_end > w.len() {
+            continue;
+        }
+        let weights = &w[base..row_end];
+        let mut acc = f32::from_bits(contribution.prefix_bits);
+        for idx in job.live_k_dim..job.k_dim {
+            let off = idx.saturating_mul(2);
+            let bits = u16::from_le_bytes([weights[off], weights[off + 1]]);
+            acc += x[idx] * bf16_to_f32(bits);
+        }
+        out[row] = acc;
+    }
     mark_done(job.done);
 }
 
