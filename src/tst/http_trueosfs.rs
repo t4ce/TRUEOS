@@ -165,7 +165,11 @@ fn http_submit_commands(vnet: &VNet, cmds: Vec<api::Command>) {
     }
 }
 
-fn http_submit_busy_response(vnet: &VNet, server: &mut vhttp_srv::HttpServer, handle: api::NetHandle) {
+fn http_submit_busy_response(
+    vnet: &VNet,
+    server: &mut vhttp_srv::HttpServer,
+    handle: api::NetHandle,
+) {
     let body = b"server busy\n";
     let mut cmds = Vec::new();
     let pending = vhttp_srv::queue_response_head(

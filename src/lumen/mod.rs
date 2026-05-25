@@ -42,6 +42,8 @@ const LUMEN_RUNTIME_STREAM_TOKENS: usize = 5;
 const LUMEN_RUNTIME_MAX_ANSWER_CHARS: usize = 512;
 const LUMEN_RUNTIME_BOOT_SELFTEST_ENABLED: bool = false;
 const LUMEN_RUNTIME_SELFTEST_PROMPT: &str = "Hello Lumen, how are you doing today";
+const LUMEN_RUNTIME_BOOT_CGP_AUTORUN_ENABLED: bool = true;
+const LUMEN_RUNTIME_BOOT_CGP_AUTORUN_PROMPT: &str = "hi";
 const LUMEN_RUNTIME_PROGRESS_TENSORS: usize = 16;
 const LUMEN_RUNTIME_EARLY_PROGRESS_TENSORS: usize = 2;
 const LUMEN_RUNTIME_HEAP_EXTRA_BYTES: usize = 512 * 1024 * 1024;
@@ -541,12 +543,19 @@ struct LumenGenerateReport {
     streamed: bool,
 }
 
+#[derive(Copy, Clone)]
+enum LumenInferenceMode {
+    Generate,
+    CgpAutorunPrefill,
+}
+
 struct LumenInferenceRequest {
     id: u64,
     session_id: u64,
     prompt: AllocString,
     statement: Option<AllocString>,
     reset_after: bool,
+    mode: LumenInferenceMode,
 }
 
 struct LumenInferenceResult {
@@ -869,11 +878,85 @@ fn generate_lumen_answer(
     })
 }
 
+fn run_lumen_cgp_autorun_prefill(
+    model: &LlamaModel,
+    state: &mut LumenChatState,
+    vocab_entries: &[(AllocString, usize)],
+    prompt: &str,
+) -> Result<LumenGenerateReport, AllocString> {
+    let chat_prompt = AllocString::from(prompt.trim());
+    let prompt_tokens = encode_prompt_lossy(chat_prompt.as_str(), vocab_entries);
+    if prompt_tokens.is_empty() {
+        return Err(AllocString::from("tokenizer produced no tokens"));
+    }
+    if prompt_tokens.len().saturating_add(8) >= LUMEN_RUNTIME_MAX_SEQ_LEN {
+        return Err(format!(
+            "autorun prompt too long tokens={} max_seq_len={}",
+            prompt_tokens.len(),
+            LUMEN_RUNTIME_MAX_SEQ_LEN
+        ));
+    }
+
+    let autorun_start = embassy_time_driver::now();
+    let prefill_start_len = state.cache_len();
+    let _bf16_prompt_context = crate::lumen::burn_baby::enter_lumen_prompt_bf16_context();
+    state.all_tokens.extend_from_slice(&prompt_tokens);
+    crate::log!(
+        "lumen: cgp autorun begin prompt={:?} prompt_tokens={} context_tokens={} max_seq_len={} mode=prefill-only cgp_backend=local-gpgpu-burn-baby proof=boot-gpgpu-ladder-prefill-only\n",
+        prompt,
+        prompt_tokens.len(),
+        prefill_start_len,
+        LUMEN_RUNTIME_MAX_SEQ_LEN
+    );
+    lumen_cooperate();
+
+    let mut first_token_ms = 0u64;
+    no_grad(|| {
+        let first_token_start = embassy_time_driver::now();
+        let mut next_token = 0usize;
+        for (idx, prompt_token) in prompt_tokens.iter().copied().enumerate() {
+            lumen_cooperate();
+            let input = tensor_from_token_ids(&[prompt_token])?;
+            next_token = model.forward_last_argmax(input, &mut state.kv_caches, 0);
+            lumen_cooperate();
+            let consumed = idx + 1;
+            if consumed == 1 || consumed == prompt_tokens.len() || consumed.is_multiple_of(4) {
+                crate::log!(
+                    "lumen: cgp autorun prefill consumed={} total={} next_token={} elapsed={}ms\n",
+                    consumed,
+                    prompt_tokens.len(),
+                    next_token,
+                    elapsed_ms_since(autorun_start)
+                );
+            }
+        }
+        first_token_ms = elapsed_ms_since(first_token_start);
+        crate::log!(
+            "lumen: cgp autorun done prompt={:?} prompt_tokens={} first_token={}ms total={}ms final_next_token={} proof=boot-gpgpu-ladder-prefill-only\n",
+            prompt,
+            prompt_tokens.len(),
+            first_token_ms,
+            elapsed_ms_since(autorun_start),
+            next_token
+        );
+        Ok::<(), AllocString>(())
+    })?;
+
+    Ok(LumenGenerateReport {
+        answer: AllocString::new(),
+        prompt_tokens: prompt_tokens.len(),
+        generated_tokens: 0,
+        first_token_ms,
+        streamed: false,
+    })
+}
+
 fn submit_lumen_inference(
     session_id: u64,
     prompt: &str,
     statement: Option<&str>,
     reset_after: bool,
+    mode: LumenInferenceMode,
 ) -> Result<u64, AllocString> {
     let mut mailbox = LUMEN_INFER_MAILBOX.lock();
     if mailbox.busy || mailbox.pending.is_some() || mailbox.result.is_some() {
@@ -887,6 +970,7 @@ fn submit_lumen_inference(
         prompt: AllocString::from(prompt),
         statement: statement.map(AllocString::from),
         reset_after,
+        mode,
     });
     mailbox.busy = true;
     drop(mailbox);
@@ -1006,20 +1090,33 @@ async fn lumen_inference_worker_task(
             LUMEN_INFER_REQUEST_WAIT.wait_for_event_timeout(1_000).await;
             continue;
         };
-        let result = generate_lumen_answer(
-            &runtime.model,
-            &mut runtime.chat_state,
-            &tokenizer_json,
-            vocab_entries.as_slice(),
-            stop_ids.as_slice(),
-            request.prompt.as_str(),
-            request.statement.as_deref(),
-        );
+        let result = match request.mode {
+            LumenInferenceMode::Generate => generate_lumen_answer(
+                &runtime.model,
+                &mut runtime.chat_state,
+                &tokenizer_json,
+                vocab_entries.as_slice(),
+                stop_ids.as_slice(),
+                request.prompt.as_str(),
+                request.statement.as_deref(),
+            ),
+            LumenInferenceMode::CgpAutorunPrefill => run_lumen_cgp_autorun_prefill(
+                &runtime.model,
+                &mut runtime.chat_state,
+                vocab_entries.as_slice(),
+                request.prompt.as_str(),
+            ),
+        };
         if request.reset_after {
             runtime.chat_state.reset(&runtime.model);
+            let reason = match request.mode {
+                LumenInferenceMode::Generate => "selftest-complete",
+                LumenInferenceMode::CgpAutorunPrefill => "cgp-autorun-complete",
+            };
             crate::log!(
-                "lumen: AP2+ inference worker chat state reset session={} reason=selftest-complete\n",
-                session_id
+                "lumen: AP2+ inference worker chat state reset session={} reason={}\n",
+                session_id,
+                reason
             );
         }
         {
@@ -2582,7 +2679,13 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                     None,
                 ),
                 LumenInferEngine::Worker => {
-                    match submit_lumen_inference(session_id, LUMEN_RUNTIME_SELFTEST_PROMPT, None, true) {
+                    match submit_lumen_inference(
+                        session_id,
+                        LUMEN_RUNTIME_SELFTEST_PROMPT,
+                        None,
+                        true,
+                        LumenInferenceMode::Generate,
+                    ) {
                         Ok(request_id) => wait_lumen_inference_result(session_id, request_id).await,
                         Err(err) => Err(err),
                     }
@@ -2634,6 +2737,78 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
         } else {
             crate::log!(
                 "lumen: selftest skipped session={} reason=boot-selftest-disabled prompt-loop-clean-context\n",
+                session_id
+            );
+        }
+        if LUMEN_RUNTIME_BOOT_CGP_AUTORUN_ENABLED {
+            let autorun_start = embassy_time_driver::now();
+            let compute_before = crate::lumen::burn_baby::stats();
+            crate::log!(
+                "lumen: cgp autorun schedule session={} prompt={:?} mode=prefill-only proof=boot-gpgpu-ladder-prefill-only\n",
+                session_id,
+                LUMEN_RUNTIME_BOOT_CGP_AUTORUN_PROMPT
+            );
+            let autorun_result = match &mut infer_engine {
+                LumenInferEngine::Local { model, chat_state } => run_lumen_cgp_autorun_prefill(
+                    model,
+                    chat_state,
+                    vocab_entries.as_slice(),
+                    LUMEN_RUNTIME_BOOT_CGP_AUTORUN_PROMPT,
+                ),
+                LumenInferEngine::Worker => match submit_lumen_inference(
+                    session_id,
+                    LUMEN_RUNTIME_BOOT_CGP_AUTORUN_PROMPT,
+                    None,
+                    true,
+                    LumenInferenceMode::CgpAutorunPrefill,
+                ) {
+                    Ok(request_id) => wait_lumen_inference_result(session_id, request_id).await,
+                    Err(err) => Err(err),
+                },
+            };
+            match autorun_result {
+                Ok(report) => {
+                    let infer_ms = elapsed_ms_since(autorun_start);
+                    let compute_after = crate::lumen::burn_baby::stats();
+                    let submitted_jobs = compute_after
+                        .submitted_jobs
+                        .saturating_sub(compute_before.submitted_jobs);
+                    let completed_jobs = compute_after
+                        .completed_jobs
+                        .saturating_sub(compute_before.completed_jobs);
+                    let polled_jobs = compute_after
+                        .polled_jobs
+                        .saturating_sub(compute_before.polled_jobs);
+                    crate::log!(
+                        "lumen: cgp autorun stats prompt={:?} prompt_tokens={} first_token={}ms infer={}ms jobs={}/{} polled={} queued={} proof=boot-gpgpu-ladder-prefill-only\n",
+                        LUMEN_RUNTIME_BOOT_CGP_AUTORUN_PROMPT,
+                        report.prompt_tokens,
+                        report.first_token_ms,
+                        infer_ms,
+                        completed_jobs,
+                        submitted_jobs,
+                        polled_jobs,
+                        compute_after.queued_jobs
+                    );
+                }
+                Err(err) => {
+                    crate::log!(
+                        "lumen: cgp autorun failed prompt={:?} err={} proof=boot-gpgpu-ladder-prefill-only\n",
+                        LUMEN_RUNTIME_BOOT_CGP_AUTORUN_PROMPT,
+                        err
+                    );
+                }
+            }
+            if let LumenInferEngine::Local { model, chat_state } = &mut infer_engine {
+                chat_state.reset(model);
+                crate::log!(
+                    "lumen: local chat state reset session={} reason=cgp-autorun-complete\n",
+                    session_id
+                );
+            }
+        } else {
+            crate::log!(
+                "lumen: cgp autorun skipped session={} reason=boot-cgp-autorun-disabled\n",
                 session_id
             );
         }
@@ -2701,6 +2876,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                         request.prompt.as_str(),
                         request.statement.as_deref(),
                         false,
+                        LumenInferenceMode::Generate,
                     ) {
                         Ok(request_id) => wait_lumen_inference_result(session_id, request_id).await,
                         Err(err) => Err(err),

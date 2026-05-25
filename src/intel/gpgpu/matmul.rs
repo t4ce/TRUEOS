@@ -2,6 +2,10 @@
 
 use super::*;
 
+static LOGGED_TRUSTED_PARTIAL_MATVEC: AtomicBool = AtomicBool::new(false);
+static LOGGED_ONE_TILE_STAGE_PROOF: AtomicBool = AtomicBool::new(false);
+static LOGGED_WINDOW_STAGE_PROOF: AtomicBool = AtomicBool::new(false);
+
 #[derive(Copy, Clone)]
 struct GpgpuOneRowMatvecProfile {
     program: GpgpuEuProgram,
@@ -102,6 +106,20 @@ fn gpgpu_t62_partial_matvec_program() -> GpgpuEuProgram {
     }
 }
 
+fn gpgpu_t8_groupid_live16_partial_matvec_program() -> GpgpuEuProgram {
+    let artifact =
+        trueos_eu::gfx12::T8_GROUPID_LIVE16_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT;
+    GpgpuEuProgram {
+        name: artifact.name,
+        kind: artifact.kind,
+        words: artifact.words,
+        expects_store: artifact.expects_store,
+        expected_store_value: 0,
+        store_send_dword: Some(trueos_eu::gfx12::T8_GROUPID_LIVE16_STORE_SEND_DWORD),
+        visible_seed_dword: None,
+    }
+}
+
 fn gpgpu_t63_partial_matvec_program() -> GpgpuEuProgram {
     let artifact =
         trueos_eu::gfx12::T63_LANE_INDEXED_LIVE32_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT;
@@ -140,6 +158,62 @@ fn gpgpu_t65_windowed_accum16_live64_partial_matvec_program() -> GpgpuEuProgram 
     let mut program = gpgpu_t63_accum16_hi_live32_partial_matvec_program();
     program.name = trueos_eu::gfx12::T65_WINDOWED_ACCUM16_LIVE64_PROGRAM_NAME;
     program
+}
+
+fn gpgpu_t66_windowed_accum16_live80_partial_matvec_program() -> GpgpuEuProgram {
+    let mut program = gpgpu_t63_accum16_hi_live32_partial_matvec_program();
+    program.name = trueos_eu::gfx12::T66_WINDOWED_ACCUM16_LIVE80_PROGRAM_NAME;
+    program
+}
+
+fn gpgpu_t67_windowed_accum16_live96_partial_matvec_program() -> GpgpuEuProgram {
+    let mut program = gpgpu_t63_accum16_hi_live32_partial_matvec_program();
+    program.name = trueos_eu::gfx12::T67_WINDOWED_ACCUM16_LIVE96_PROGRAM_NAME;
+    program
+}
+
+fn gpgpu_t68_windowed_accum16_live112_partial_matvec_program() -> GpgpuEuProgram {
+    let mut program = gpgpu_t63_accum16_hi_live32_partial_matvec_program();
+    program.name = trueos_eu::gfx12::T68_WINDOWED_ACCUM16_LIVE112_PROGRAM_NAME;
+    program
+}
+
+fn gpgpu_t69_windowed_accum16_live128_partial_matvec_program() -> GpgpuEuProgram {
+    let mut program = gpgpu_t63_accum16_hi_live32_partial_matvec_program();
+    program.name = trueos_eu::gfx12::T69_WINDOWED_ACCUM16_LIVE128_PROGRAM_NAME;
+    program
+}
+
+fn gpgpu_t610_windowed_accum16_live144_partial_matvec_program() -> GpgpuEuProgram {
+    let mut program = gpgpu_t63_accum16_hi_live32_partial_matvec_program();
+    program.name = trueos_eu::gfx12::T610_WINDOWED_ACCUM16_LIVE144_PROGRAM_NAME;
+    program
+}
+
+fn gpgpu_t611_windowed_accum16_live160_partial_matvec_program() -> GpgpuEuProgram {
+    let mut program = gpgpu_t63_accum16_hi_live32_partial_matvec_program();
+    program.name = trueos_eu::gfx12::T611_WINDOWED_ACCUM16_LIVE160_PROGRAM_NAME;
+    program
+}
+
+fn gpgpu_windowed_accum16_partial_matvec_program(program_name: &'static str) -> GpgpuEuProgram {
+    let mut program = gpgpu_t63_accum16_hi_live32_partial_matvec_program();
+    program.name = program_name;
+    program
+}
+
+fn gpgpu_t66_accum32_hi_live96_partial_matvec_program() -> GpgpuEuProgram {
+    let artifact =
+        trueos_eu::gfx12::T66_ACCUM32_HI_LIVE96_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT;
+    GpgpuEuProgram {
+        name: artifact.name,
+        kind: artifact.kind,
+        words: artifact.words,
+        expects_store: artifact.expects_store,
+        expected_store_value: 0,
+        store_send_dword: Some(trueos_eu::gfx12::T66_ACCUM32_HI_LIVE96_STORE_SEND_DWORD),
+        visible_seed_dword: None,
+    }
 }
 
 fn gpgpu_t5_one_row_matvec_profile() -> GpgpuOneRowMatvecProfile {
@@ -211,6 +285,33 @@ fn gpgpu_t62_partial_matvec_profile() -> GpgpuPartialMatvecProfile {
     }
 }
 
+fn gpgpu_t8_batch2_rowblock_retire_profile() -> GpgpuPartialMatvecProfile {
+    let mut profile = gpgpu_t62_partial_matvec_profile();
+    profile.program.name = "gfx12-t8-batch2-rowblock-live16-uses-t62-localid-retire-probe";
+    profile.log_label = "t8-batch2-rowblock-live16-retire";
+    profile.submit_label = "gpgpu-t8-batch2-rowblock-live16-retire";
+    profile.surface_note = "bind-send-bti-to-t8-batch2-rowblock-live16-arena-base";
+    profile.success_reason = "t8-batch2-rowblock-live16-retired";
+    profile.success_next = "generate-t8-groupid-distinct-row-output";
+    profile.failure_next = "fix-t8-batch2-walker-retire";
+    profile
+}
+
+fn gpgpu_t8_groupid_live16_partial_matvec_profile() -> GpgpuPartialMatvecProfile {
+    GpgpuPartialMatvecProfile {
+        program: gpgpu_t8_groupid_live16_partial_matvec_program(),
+        live_k_dim: trueos_eu::gfx12::T8_GROUPID_LIVE_K,
+        partial_rows: 16,
+        clear_output_before_submit: true,
+        log_label: "t8-groupid-live16-distinct-row-partial",
+        submit_label: "gpgpu-t8-groupid-live16-distinct-row",
+        surface_note: "bind-send-bti-to-t8-groupid-live16-arena-base",
+        success_reason: "t8-groupid-live16-distinct-rows-written",
+        success_next: "scale-t8-groupid-row-count",
+        failure_next: "fix-t8-groupid-live16-distinct-row-output",
+    }
+}
+
 fn gpgpu_t63_partial_matvec_profile() -> GpgpuPartialMatvecProfile {
     GpgpuPartialMatvecProfile {
         program: gpgpu_t63_partial_matvec_program(),
@@ -268,6 +369,129 @@ fn gpgpu_t65_windowed_accum16_live64_partial_matvec_profile() -> GpgpuPartialMat
         success_reason: "t6-5-windowed-accum16-live64-written",
         success_next: "promote-row-block-owner-or-scale-live-k",
         failure_next: "fix-t6-5-windowed-accum16-live64",
+    }
+}
+
+fn gpgpu_t66_windowed_accum16_live80_partial_matvec_profile() -> GpgpuPartialMatvecProfile {
+    GpgpuPartialMatvecProfile {
+        program: gpgpu_t66_windowed_accum16_live80_partial_matvec_program(),
+        live_k_dim: trueos_eu::gfx12::T66_WINDOWED_ACCUM16_LIVE80_LIVE_K,
+        partial_rows: trueos_eu::gfx12::T63_ACCUM16_HI_LIVE32_PARTIAL_ROWS,
+        clear_output_before_submit: false,
+        log_label: "t6-6-windowed-accum16-live80-partial",
+        submit_label: "gpgpu-t6-6-windowed-accum16-live80",
+        surface_note: "bind-send-bti-to-t6-6-windowed-accum16-live80-arena-base",
+        success_reason: "t6-6-windowed-accum16-live80-written",
+        success_next: "promote-row-block-owner-or-scale-live-k",
+        failure_next: "fix-t6-6-windowed-accum16-live80",
+    }
+}
+
+fn gpgpu_t67_windowed_accum16_live96_partial_matvec_profile() -> GpgpuPartialMatvecProfile {
+    GpgpuPartialMatvecProfile {
+        program: gpgpu_t67_windowed_accum16_live96_partial_matvec_program(),
+        live_k_dim: trueos_eu::gfx12::T67_WINDOWED_ACCUM16_LIVE96_LIVE_K,
+        partial_rows: trueos_eu::gfx12::T63_ACCUM16_HI_LIVE32_PARTIAL_ROWS,
+        clear_output_before_submit: false,
+        log_label: "t6-7-windowed-accum16-live96-partial",
+        submit_label: "gpgpu-t6-7-windowed-accum16-live96",
+        surface_note: "bind-send-bti-to-t6-7-windowed-accum16-live96-arena-base",
+        success_reason: "t6-7-windowed-accum16-live96-written",
+        success_next: "promote-row-block-owner-or-scale-live-k",
+        failure_next: "fix-t6-7-windowed-accum16-live96",
+    }
+}
+
+fn gpgpu_t68_windowed_accum16_live112_partial_matvec_profile() -> GpgpuPartialMatvecProfile {
+    GpgpuPartialMatvecProfile {
+        program: gpgpu_t68_windowed_accum16_live112_partial_matvec_program(),
+        live_k_dim: trueos_eu::gfx12::T68_WINDOWED_ACCUM16_LIVE112_LIVE_K,
+        partial_rows: trueos_eu::gfx12::T63_ACCUM16_HI_LIVE32_PARTIAL_ROWS,
+        clear_output_before_submit: false,
+        log_label: "t6-8-windowed-accum16-live112-partial",
+        submit_label: "gpgpu-t6-8-windowed-accum16-live112",
+        surface_note: "bind-send-bti-to-t6-8-windowed-accum16-live112-arena-base",
+        success_reason: "t6-8-windowed-accum16-live112-written",
+        success_next: "promote-row-block-owner-or-scale-live-k",
+        failure_next: "fix-t6-8-windowed-accum16-live112",
+    }
+}
+
+fn gpgpu_t69_windowed_accum16_live128_partial_matvec_profile() -> GpgpuPartialMatvecProfile {
+    GpgpuPartialMatvecProfile {
+        program: gpgpu_t69_windowed_accum16_live128_partial_matvec_program(),
+        live_k_dim: trueos_eu::gfx12::T69_WINDOWED_ACCUM16_LIVE128_LIVE_K,
+        partial_rows: trueos_eu::gfx12::T63_ACCUM16_HI_LIVE32_PARTIAL_ROWS,
+        clear_output_before_submit: false,
+        log_label: "t6-9-windowed-accum16-live128-partial",
+        submit_label: "gpgpu-t6-9-windowed-accum16-live128",
+        surface_note: "bind-send-bti-to-t6-9-windowed-accum16-live128-arena-base",
+        success_reason: "t6-9-windowed-accum16-live128-written",
+        success_next: "promote-row-block-owner-or-scale-live-k",
+        failure_next: "fix-t6-9-windowed-accum16-live128",
+    }
+}
+
+fn gpgpu_t610_windowed_accum16_live144_partial_matvec_profile() -> GpgpuPartialMatvecProfile {
+    GpgpuPartialMatvecProfile {
+        program: gpgpu_t610_windowed_accum16_live144_partial_matvec_program(),
+        live_k_dim: trueos_eu::gfx12::T610_WINDOWED_ACCUM16_LIVE144_LIVE_K,
+        partial_rows: trueos_eu::gfx12::T63_ACCUM16_HI_LIVE32_PARTIAL_ROWS,
+        clear_output_before_submit: false,
+        log_label: "t6-10-windowed-accum16-live144-partial",
+        submit_label: "gpgpu-t6-10-windowed-accum16-live144",
+        surface_note: "bind-send-bti-to-t6-10-windowed-accum16-live144-arena-base",
+        success_reason: "t6-10-windowed-accum16-live144-written",
+        success_next: "promote-row-block-owner-or-scale-live-k",
+        failure_next: "fix-t6-10-windowed-accum16-live144",
+    }
+}
+
+fn gpgpu_t611_windowed_accum16_live160_partial_matvec_profile() -> GpgpuPartialMatvecProfile {
+    GpgpuPartialMatvecProfile {
+        program: gpgpu_t611_windowed_accum16_live160_partial_matvec_program(),
+        live_k_dim: trueos_eu::gfx12::T611_WINDOWED_ACCUM16_LIVE160_LIVE_K,
+        partial_rows: trueos_eu::gfx12::T63_ACCUM16_HI_LIVE32_PARTIAL_ROWS,
+        clear_output_before_submit: false,
+        log_label: "t6-11-windowed-accum16-live160-partial",
+        submit_label: "gpgpu-t6-11-windowed-accum16-live160",
+        surface_note: "bind-send-bti-to-t6-11-windowed-accum16-live160-arena-base",
+        success_reason: "t6-11-windowed-accum16-live160-written",
+        success_next: "promote-row-block-owner-or-scale-live-k",
+        failure_next: "fix-t6-11-windowed-accum16-live160",
+    }
+}
+
+fn gpgpu_windowed_accum16_partial_matvec_profile(
+    program_name: &'static str,
+    live_k_dim: usize,
+) -> GpgpuPartialMatvecProfile {
+    GpgpuPartialMatvecProfile {
+        program: gpgpu_windowed_accum16_partial_matvec_program(program_name),
+        live_k_dim,
+        partial_rows: trueos_eu::gfx12::T63_ACCUM16_HI_LIVE32_PARTIAL_ROWS,
+        clear_output_before_submit: false,
+        log_label: "t6-windowed-accum16-partial",
+        submit_label: "gpgpu-t6-windowed-accum16",
+        surface_note: "bind-send-bti-to-t6-windowed-accum16-arena-base",
+        success_reason: "t6-windowed-accum16-written",
+        success_next: "promote-row-block-owner-or-scale-live-k",
+        failure_next: "fix-t6-windowed-accum16",
+    }
+}
+
+fn gpgpu_t66_accum32_hi_live96_partial_matvec_profile() -> GpgpuPartialMatvecProfile {
+    GpgpuPartialMatvecProfile {
+        program: gpgpu_t66_accum32_hi_live96_partial_matvec_program(),
+        live_k_dim: trueos_eu::gfx12::T66_ACCUM32_HI_LIVE96_LIVE_K,
+        partial_rows: trueos_eu::gfx12::T66_ACCUM32_HI_LIVE96_PARTIAL_ROWS,
+        clear_output_before_submit: false,
+        log_label: "t6-6-accum32-hi-live96-partial",
+        submit_label: "gpgpu-t6-6-accum32-hi-live96",
+        surface_note: "bind-send-bti-to-t6-6-accum32-hi-live96-arena-base",
+        success_reason: "t6-6-accum32-hi-live96-written",
+        success_next: "promote-row-block-owner-or-scale-live-k",
+        failure_next: "fix-t6-6-accum32-hi-live96",
     }
 }
 
@@ -429,7 +653,8 @@ pub(crate) fn stage_gpgpu_one_tile_record_probe(
     let staged =
         arena_mapped && staged_x_checksum == x_checksum && staged_row_checksum == row_checksum;
     let output_zeroed = output_nonzero_dwords == 0;
-    let readback_ok = staged && output_zeroed && output_expected_hits_lo64 == 0;
+    let expected_hits_ok = cpu_expected_bits == 0 || output_expected_hits_lo64 == 0;
+    let readback_ok = staged && output_zeroed && expected_hits_ok;
     let reason = if staged {
         "staged"
     } else if !arena_mapped {
@@ -460,42 +685,44 @@ pub(crate) fn stage_gpgpu_one_tile_record_probe(
         output_expected_hits_lo64,
         output_checksum,
     };
-    crate::log!(
-        "intel/gpgpu: one-tile-stage staged={} reason={} arena_mapped={} arena_gpu_base=0x{:X} row={} tile_slot={} tile_record_bytes=0x{:X} tile_rows={} k_dim={} layout=tile-record-x-row-output x_gpu=0x{:X} row_gpu=0x{:X} output_gpu=0x{:X} x_bytes={} row_bytes={} output_bytes={} x_checksum=0x{:016X} staged_x_checksum=0x{:016X} row_checksum=0x{:016X} staged_row_checksum=0x{:016X} cpu_expected_bits=0x{:08X} gpu_submission=0 output_owner=cpu-ap next=t5-live4-then-t6-live8 does_not_prove=gpu_live_load_or_model_matvec\n",
-        proof.staged as u8,
-        proof.reason,
-        proof.arena_mapped as u8,
-        proof.arena_gpu_base,
-        row_index,
-        tile_slot,
-        GPGPU_TILE_RECORD_BYTES,
-        proof.tile_rows,
-        proof.k_dim,
-        proof.x_gpu,
-        proof.row_gpu,
-        proof.output_gpu,
-        proof.x_bytes,
-        proof.row_bytes,
-        proof.output_bytes,
-        x_checksum,
-        staged_x_checksum,
-        row_checksum,
-        staged_row_checksum,
-        cpu_expected_bits,
-    );
-    crate::log!(
-        "intel/gpgpu: one-tile-readback readback_ok={} staged={} x_match={} row_match={} output_zeroed={} output_first_bits=0x{:08X} output_nonzero_dwords={} output_expected_hits_lo64=0x{:016X} output_checksum=0x{:016X} cpu_expected_bits=0x{:08X} gpu_submission=0 scenario=one-worker-tile-before-submit plain=\"tile record holds live x and row bytes, output slot is untouched zero state\" next=t5-live4-then-t6-live8 does_not_prove=gpu_output_or_matvec\n",
-        proof.readback_ok as u8,
-        proof.staged as u8,
-        (staged_x_checksum == x_checksum) as u8,
-        (staged_row_checksum == row_checksum) as u8,
-        proof.output_zeroed as u8,
-        proof.output_first_bits,
-        proof.output_nonzero_dwords,
-        proof.output_expected_hits_lo64,
-        proof.output_checksum,
-        cpu_expected_bits,
-    );
+    if !proof.readback_ok || !LOGGED_ONE_TILE_STAGE_PROOF.swap(true, Ordering::AcqRel) {
+        crate::log!(
+            "intel/gpgpu: one-tile-stage staged={} reason={} arena_mapped={} arena_gpu_base=0x{:X} row={} tile_slot={} tile_record_bytes=0x{:X} tile_rows={} k_dim={} layout=tile-record-x-row-output x_gpu=0x{:X} row_gpu=0x{:X} output_gpu=0x{:X} x_bytes={} row_bytes={} output_bytes={} x_checksum=0x{:016X} staged_x_checksum=0x{:016X} row_checksum=0x{:016X} staged_row_checksum=0x{:016X} cpu_expected_bits=0x{:08X} gpu_submission=0 output_owner=cpu-ap next=t5-live4-then-t6-live8 does_not_prove=gpu_live_load_or_model_matvec\n",
+            proof.staged as u8,
+            proof.reason,
+            proof.arena_mapped as u8,
+            proof.arena_gpu_base,
+            row_index,
+            tile_slot,
+            GPGPU_TILE_RECORD_BYTES,
+            proof.tile_rows,
+            proof.k_dim,
+            proof.x_gpu,
+            proof.row_gpu,
+            proof.output_gpu,
+            proof.x_bytes,
+            proof.row_bytes,
+            proof.output_bytes,
+            x_checksum,
+            staged_x_checksum,
+            row_checksum,
+            staged_row_checksum,
+            cpu_expected_bits,
+        );
+        crate::log!(
+            "intel/gpgpu: one-tile-readback readback_ok={} staged={} x_match={} row_match={} output_zeroed={} output_first_bits=0x{:08X} output_nonzero_dwords={} output_expected_hits_lo64=0x{:016X} output_checksum=0x{:016X} cpu_expected_bits=0x{:08X} gpu_submission=0 scenario=one-worker-tile-before-submit plain=\"tile record holds live x and row bytes, output slot is untouched zero state\" next=t5-live4-then-t6-live8 does_not_prove=gpu_output_or_matvec\n",
+            proof.readback_ok as u8,
+            proof.staged as u8,
+            (staged_x_checksum == x_checksum) as u8,
+            (staged_row_checksum == row_checksum) as u8,
+            proof.output_zeroed as u8,
+            proof.output_first_bits,
+            proof.output_nonzero_dwords,
+            proof.output_expected_hits_lo64,
+            proof.output_checksum,
+            cpu_expected_bits,
+        );
+    }
     proof
 }
 
@@ -505,6 +732,26 @@ pub(crate) fn stage_gpgpu_tile_record_rows_probe(
     row_count: usize,
     k_dim: usize,
     rows_checksum: u64,
+) -> crate::intel::GpgpuTileRowsStageProof {
+    stage_gpgpu_tile_record_rows_for(output_gpu, rows_bf16, row_count, k_dim, rows_checksum, true)
+}
+
+pub(crate) fn stage_gpgpu_tile_record_rows_trusted(
+    output_gpu: u64,
+    rows_bf16: &[u8],
+    row_count: usize,
+    k_dim: usize,
+) -> crate::intel::GpgpuTileRowsStageProof {
+    stage_gpgpu_tile_record_rows_for(output_gpu, rows_bf16, row_count, k_dim, 0, false)
+}
+
+fn stage_gpgpu_tile_record_rows_for(
+    output_gpu: u64,
+    rows_bf16: &[u8],
+    row_count: usize,
+    k_dim: usize,
+    rows_checksum: u64,
+    validate_stage: bool,
 ) -> crate::intel::GpgpuTileRowsStageProof {
     let Some(warm) = warm_state() else {
         return gpgpu_tile_rows_stage_failure(
@@ -603,33 +850,48 @@ pub(crate) fn stage_gpgpu_tile_record_rows_probe(
     crate::intel::dma_flush(row_virt, GPGPU_WEIGHT_TILE_BYTES);
     crate::intel::dma_flush(output_virt, GPGPU_OUTPUT_TILE_BYTES);
 
-    let staged_rows_checksum =
-        unsafe { gpgpu_stage_checksum_bytes(row_virt as *const u8, row_bytes) };
-    let output_nonzero_dwords =
-        unsafe { gpgpu_stage_nonzero_dwords(output_virt as *const u32, GPGPU_TILE_ROWS) };
-    let output_zeroed = output_nonzero_dwords == 0;
-    let staged = staged_rows_checksum == rows_checksum;
-    let readback_ok = staged && output_zeroed;
-    let reason = if readback_ok {
-        "staged"
-    } else if !staged {
-        "rows-checksum-mismatch"
-    } else {
-        "output-not-zero"
-    };
-    crate::log!(
-        "intel/gpgpu: tile-rows-stage staged={} reason={} output_gpu=0x{:X} row_count={} k_dim={} row_bytes={} rows_checksum=0x{:016X} staged_rows_checksum=0x{:016X} output_zeroed={} output_nonzero_dwords={} next=t6-2-lane-indexed-live16 does_not_prove=full_model_matvec\n",
-        staged as u8,
-        reason,
-        output_gpu,
-        row_count,
-        k_dim,
-        row_bytes,
-        rows_checksum,
-        staged_rows_checksum,
-        output_zeroed as u8,
-        output_nonzero_dwords,
-    );
+    let (staged_rows_checksum, output_nonzero_dwords, output_zeroed, staged, readback_ok, reason) =
+        if validate_stage {
+            let staged_rows_checksum =
+                unsafe { gpgpu_stage_checksum_bytes(row_virt as *const u8, row_bytes) };
+            let output_nonzero_dwords =
+                unsafe { gpgpu_stage_nonzero_dwords(output_virt as *const u32, GPGPU_TILE_ROWS) };
+            let output_zeroed = output_nonzero_dwords == 0;
+            let staged = staged_rows_checksum == rows_checksum;
+            let readback_ok = staged && output_zeroed;
+            let reason = if readback_ok {
+                "staged"
+            } else if !staged {
+                "rows-checksum-mismatch"
+            } else {
+                "output-not-zero"
+            };
+            (
+                staged_rows_checksum,
+                output_nonzero_dwords,
+                output_zeroed,
+                staged,
+                readback_ok,
+                reason,
+            )
+        } else {
+            (0, 0, true, true, true, "trusted-staged")
+        };
+    if validate_stage {
+        crate::log!(
+            "intel/gpgpu: tile-rows-stage staged={} reason={} output_gpu=0x{:X} row_count={} k_dim={} row_bytes={} rows_checksum=0x{:016X} staged_rows_checksum=0x{:016X} output_zeroed={} output_nonzero_dwords={} next=t6-2-lane-indexed-live16 does_not_prove=full_model_matvec\n",
+            staged as u8,
+            reason,
+            output_gpu,
+            row_count,
+            k_dim,
+            row_bytes,
+            rows_checksum,
+            staged_rows_checksum,
+            output_zeroed as u8,
+            output_nonzero_dwords,
+        );
+    }
     crate::intel::GpgpuTileRowsStageProof {
         staged,
         reason,
@@ -652,16 +914,49 @@ pub(crate) fn stage_gpgpu_tile_record_accum16_window_probe(
     k_dim: usize,
     source_start: usize,
 ) -> crate::intel::GpgpuTileRowsStageProof {
+    stage_gpgpu_tile_record_accum16_window_for(
+        output_gpu,
+        x,
+        rows_bf16,
+        row_count,
+        k_dim,
+        source_start,
+        true,
+    )
+}
+
+pub(crate) fn stage_gpgpu_tile_record_accum16_window_trusted(
+    output_gpu: u64,
+    x: &[f32],
+    rows_bf16: &[u8],
+    row_count: usize,
+    k_dim: usize,
+    source_start: usize,
+) -> crate::intel::GpgpuTileRowsStageProof {
+    stage_gpgpu_tile_record_accum16_window_for(
+        output_gpu,
+        x,
+        rows_bf16,
+        row_count,
+        k_dim,
+        source_start,
+        false,
+    )
+}
+
+fn stage_gpgpu_tile_record_accum16_window_for(
+    output_gpu: u64,
+    x: &[f32],
+    rows_bf16: &[u8],
+    row_count: usize,
+    k_dim: usize,
+    source_start: usize,
+    validate_stage: bool,
+) -> crate::intel::GpgpuTileRowsStageProof {
     const WINDOW_LANES: usize = 16;
     const ARTIFACT_WINDOW_START: usize = 16;
     let Some(warm) = warm_state() else {
-        return gpgpu_tile_rows_stage_failure(
-            "no-warm-state",
-            output_gpu,
-            row_count,
-            k_dim,
-            0,
-        );
+        return gpgpu_tile_rows_stage_failure("no-warm-state", output_gpu, row_count, k_dim, 0);
     };
     if warm.gpgpu_arena_virt.is_null() || warm.gpgpu_arena_len == 0 {
         return gpgpu_tile_rows_stage_failure("no-arena", output_gpu, row_count, k_dim, 0);
@@ -709,7 +1004,13 @@ pub(crate) fn stage_gpgpu_tile_record_accum16_window_probe(
         );
     }
     let Some(tile_record_end) = tile_base_offset.checked_add(GPGPU_TILE_RECORD_USED_BYTES) else {
-        return gpgpu_tile_rows_stage_failure("tile-record-overflow", output_gpu, row_count, k_dim, 0);
+        return gpgpu_tile_rows_stage_failure(
+            "tile-record-overflow",
+            output_gpu,
+            row_count,
+            k_dim,
+            0,
+        );
     };
     if tile_record_end > warm.gpgpu_arena_len {
         return gpgpu_tile_rows_stage_failure(
@@ -758,52 +1059,64 @@ pub(crate) fn stage_gpgpu_tile_record_accum16_window_probe(
     crate::intel::dma_flush(unsafe { x_virt.add(dst_x_byte) }, window_x_bytes);
     crate::intel::dma_flush(row_virt, row_bytes);
 
-    let mut staged = true;
-    unsafe {
-        for lane in 0..WINDOW_LANES {
-            let src = core::ptr::read_unaligned(x.as_ptr().add(source_start + lane) as *const u32);
-            let dst = core::ptr::read_volatile(
-                x_virt.add(dst_x_byte + lane * core::mem::size_of::<f32>()) as *const u32,
-            );
-            staged &= src == dst;
-        }
-        for row in 0..row_count {
+    let (staged, output_nonzero_dwords, rows_checksum, reason) = if validate_stage {
+        let mut staged = true;
+        unsafe {
             for lane in 0..WINDOW_LANES {
-                let src_off = row
-                    .saturating_mul(k_dim)
-                    .saturating_mul(GPGPU_TILE_WEIGHT_BYTES_PER_ELEM)
-                    .saturating_add(src_row_byte)
-                    .saturating_add(lane.saturating_mul(GPGPU_TILE_WEIGHT_BYTES_PER_ELEM));
-                let dst_off = row
-                    .saturating_mul(k_dim)
-                    .saturating_mul(GPGPU_TILE_WEIGHT_BYTES_PER_ELEM)
-                    .saturating_add(dst_row_byte)
-                    .saturating_add(lane.saturating_mul(GPGPU_TILE_WEIGHT_BYTES_PER_ELEM));
-                let src = u16::from_le_bytes([rows_bf16[src_off], rows_bf16[src_off + 1]]);
-                let dst = core::ptr::read_volatile(row_virt.add(dst_off) as *const u16);
+                let src =
+                    core::ptr::read_unaligned(x.as_ptr().add(source_start + lane) as *const u32);
+                let dst = core::ptr::read_volatile(
+                    x_virt.add(dst_x_byte + lane * core::mem::size_of::<f32>()) as *const u32,
+                );
                 staged &= src == dst;
             }
+            for row in 0..row_count {
+                for lane in 0..WINDOW_LANES {
+                    let src_off = row
+                        .saturating_mul(k_dim)
+                        .saturating_mul(GPGPU_TILE_WEIGHT_BYTES_PER_ELEM)
+                        .saturating_add(src_row_byte)
+                        .saturating_add(lane.saturating_mul(GPGPU_TILE_WEIGHT_BYTES_PER_ELEM));
+                    let dst_off = row
+                        .saturating_mul(k_dim)
+                        .saturating_mul(GPGPU_TILE_WEIGHT_BYTES_PER_ELEM)
+                        .saturating_add(dst_row_byte)
+                        .saturating_add(lane.saturating_mul(GPGPU_TILE_WEIGHT_BYTES_PER_ELEM));
+                    let src = u16::from_le_bytes([rows_bf16[src_off], rows_bf16[src_off + 1]]);
+                    let dst = core::ptr::read_volatile(row_virt.add(dst_off) as *const u16);
+                    staged &= src == dst;
+                }
+            }
         }
+        let output_nonzero_dwords =
+            unsafe { gpgpu_stage_nonzero_dwords(output_virt as *const u32, GPGPU_TILE_ROWS) };
+        let rows_checksum = unsafe { gpgpu_stage_checksum_bytes(row_virt as *const u8, row_bytes) };
+        let reason = if staged {
+            "window-staged"
+        } else {
+            "window-mismatch"
+        };
+        (staged, output_nonzero_dwords, rows_checksum, reason)
+    } else {
+        (true, 0, 0, "trusted-window-staged")
+    };
+    if validate_stage && (!staged || !LOGGED_WINDOW_STAGE_PROOF.swap(true, Ordering::AcqRel)) {
+        crate::log!(
+            "intel/gpgpu: tile-accum16-window-stage staged={} reason={} output_gpu=0x{:X} row_count={} k_dim={} source_start={} source_end={} artifact_window={}..{} row_bytes={} rows_checksum=0x{:016X} output_preserved_nonzero_dwords={} next=t6-windowed-accum16-submit does_not_prove=full_model_matvec\n",
+            staged as u8,
+            reason,
+            output_gpu,
+            row_count,
+            k_dim,
+            source_start,
+            source_start.saturating_add(WINDOW_LANES),
+            ARTIFACT_WINDOW_START,
+            ARTIFACT_WINDOW_START.saturating_add(WINDOW_LANES),
+            row_bytes,
+            rows_checksum,
+            output_nonzero_dwords,
+        );
     }
-    let output_nonzero_dwords =
-        unsafe { gpgpu_stage_nonzero_dwords(output_virt as *const u32, GPGPU_TILE_ROWS) };
-    let rows_checksum = unsafe { gpgpu_stage_checksum_bytes(row_virt as *const u8, row_bytes) };
-    let reason = if staged { "window-staged" } else { "window-mismatch" };
-    crate::log!(
-        "intel/gpgpu: tile-accum16-window-stage staged={} reason={} output_gpu=0x{:X} row_count={} k_dim={} source_start={} source_end={} artifact_window={}..{} row_bytes={} rows_checksum=0x{:016X} output_preserved_nonzero_dwords={} next=t6-windowed-accum16-submit does_not_prove=full_model_matvec\n",
-        staged as u8,
-        reason,
-        output_gpu,
-        row_count,
-        k_dim,
-        source_start,
-        source_start.saturating_add(WINDOW_LANES),
-        ARTIFACT_WINDOW_START,
-        ARTIFACT_WINDOW_START.saturating_add(WINDOW_LANES),
-        row_bytes,
-        rows_checksum,
-        output_nonzero_dwords,
-    );
     crate::intel::GpgpuTileRowsStageProof {
         staged,
         reason,
@@ -1269,6 +1582,28 @@ unsafe fn read_gpgpu_output_words8(output_virt: *mut u8) -> [u32; 8] {
         core::ptr::read_volatile(words.add(5)),
         core::ptr::read_volatile(words.add(6)),
         core::ptr::read_volatile(words.add(7)),
+    ]
+}
+
+unsafe fn read_gpgpu_output_words16(output_virt: *mut u8) -> [u32; 16] {
+    let words = output_virt as *const u32;
+    [
+        core::ptr::read_volatile(words.add(0)),
+        core::ptr::read_volatile(words.add(1)),
+        core::ptr::read_volatile(words.add(2)),
+        core::ptr::read_volatile(words.add(3)),
+        core::ptr::read_volatile(words.add(4)),
+        core::ptr::read_volatile(words.add(5)),
+        core::ptr::read_volatile(words.add(6)),
+        core::ptr::read_volatile(words.add(7)),
+        core::ptr::read_volatile(words.add(8)),
+        core::ptr::read_volatile(words.add(9)),
+        core::ptr::read_volatile(words.add(10)),
+        core::ptr::read_volatile(words.add(11)),
+        core::ptr::read_volatile(words.add(12)),
+        core::ptr::read_volatile(words.add(13)),
+        core::ptr::read_volatile(words.add(14)),
+        core::ptr::read_volatile(words.add(15)),
     ]
 }
 
@@ -1777,6 +2112,36 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
     )
 }
 
+pub(crate) fn submit_gpgpu_t62_partial_matvec_trusted(
+    output_gpu: u64,
+    output_bytes: usize,
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_trusted_for(
+        gpgpu_t62_partial_matvec_profile(),
+        output_gpu,
+        output_bytes,
+        row_count,
+        live_k_dim,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t62_partial_matvec_trusted_no_readback(
+    output_gpu: u64,
+    output_bytes: usize,
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_trusted_no_readback_for(
+        gpgpu_t62_partial_matvec_profile(),
+        output_gpu,
+        output_bytes,
+        row_count,
+        live_k_dim,
+    )
+}
+
 pub(crate) fn submit_gpgpu_t63_partial_matvec_probe(
     output_gpu: u64,
     output_bytes: usize,
@@ -1811,6 +2176,36 @@ pub(crate) fn submit_gpgpu_t63_accum16_hi_live32_partial_matvec_probe(
     )
 }
 
+pub(crate) fn submit_gpgpu_t63_accum16_hi_live32_partial_matvec_trusted(
+    output_gpu: u64,
+    output_bytes: usize,
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_trusted_for(
+        gpgpu_t63_accum16_hi_live32_partial_matvec_profile(),
+        output_gpu,
+        output_bytes,
+        row_count,
+        live_k_dim,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t63_accum16_hi_live32_partial_matvec_trusted_no_readback(
+    output_gpu: u64,
+    output_bytes: usize,
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_trusted_no_readback_for(
+        gpgpu_t63_accum16_hi_live32_partial_matvec_profile(),
+        output_gpu,
+        output_bytes,
+        row_count,
+        live_k_dim,
+    )
+}
+
 pub(crate) fn submit_gpgpu_t64_windowed_accum16_live48_partial_matvec_probe(
     output_gpu: u64,
     output_bytes: usize,
@@ -1837,6 +2232,175 @@ pub(crate) fn submit_gpgpu_t65_windowed_accum16_live64_partial_matvec_probe(
 ) -> crate::intel::GpgpuT62PartialMatvecProof {
     submit_gpgpu_partial_matvec_probe_for(
         gpgpu_t65_windowed_accum16_live64_partial_matvec_profile(),
+        output_gpu,
+        output_bytes,
+        expected_words,
+        row_count,
+        live_k_dim,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t66_windowed_accum16_live80_partial_matvec_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words: [u32; 8],
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_probe_for(
+        gpgpu_t66_windowed_accum16_live80_partial_matvec_profile(),
+        output_gpu,
+        output_bytes,
+        expected_words,
+        row_count,
+        live_k_dim,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t67_windowed_accum16_live96_partial_matvec_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words: [u32; 8],
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_probe_for(
+        gpgpu_t67_windowed_accum16_live96_partial_matvec_profile(),
+        output_gpu,
+        output_bytes,
+        expected_words,
+        row_count,
+        live_k_dim,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t68_windowed_accum16_live112_partial_matvec_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words: [u32; 8],
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_probe_for(
+        gpgpu_t68_windowed_accum16_live112_partial_matvec_profile(),
+        output_gpu,
+        output_bytes,
+        expected_words,
+        row_count,
+        live_k_dim,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t69_windowed_accum16_live128_partial_matvec_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words: [u32; 8],
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_probe_for(
+        gpgpu_t69_windowed_accum16_live128_partial_matvec_profile(),
+        output_gpu,
+        output_bytes,
+        expected_words,
+        row_count,
+        live_k_dim,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t610_windowed_accum16_live144_partial_matvec_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words: [u32; 8],
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_probe_for(
+        gpgpu_t610_windowed_accum16_live144_partial_matvec_profile(),
+        output_gpu,
+        output_bytes,
+        expected_words,
+        row_count,
+        live_k_dim,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t611_windowed_accum16_live160_partial_matvec_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words: [u32; 8],
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_probe_for(
+        gpgpu_t611_windowed_accum16_live160_partial_matvec_profile(),
+        output_gpu,
+        output_bytes,
+        expected_words,
+        row_count,
+        live_k_dim,
+    )
+}
+
+pub(crate) fn submit_gpgpu_windowed_accum16_partial_matvec_probe(
+    program_name: &'static str,
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words: [u32; 8],
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_probe_for(
+        gpgpu_windowed_accum16_partial_matvec_profile(program_name, live_k_dim),
+        output_gpu,
+        output_bytes,
+        expected_words,
+        row_count,
+        live_k_dim,
+    )
+}
+
+pub(crate) fn submit_gpgpu_windowed_accum16_partial_matvec_trusted(
+    program_name: &'static str,
+    output_gpu: u64,
+    output_bytes: usize,
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_trusted_preuploaded_for(
+        gpgpu_windowed_accum16_partial_matvec_profile(program_name, live_k_dim),
+        output_gpu,
+        output_bytes,
+        row_count,
+        live_k_dim,
+    )
+}
+
+pub(crate) fn submit_gpgpu_windowed_accum16_partial_matvec_trusted_no_readback(
+    program_name: &'static str,
+    output_gpu: u64,
+    output_bytes: usize,
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_trusted_preuploaded_no_readback_for(
+        gpgpu_windowed_accum16_partial_matvec_profile(program_name, live_k_dim),
+        output_gpu,
+        output_bytes,
+        row_count,
+        live_k_dim,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t66_accum32_hi_live96_partial_matvec_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words: [u32; 8],
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_probe_for(
+        gpgpu_t66_accum32_hi_live96_partial_matvec_profile(),
         output_gpu,
         output_bytes,
         expected_words,
@@ -2063,7 +2627,215 @@ fn submit_gpgpu_partial_matvec_probe_for(
     row_count: usize,
     live_k_dim: usize,
 ) -> crate::intel::GpgpuT62PartialMatvecProof {
-    let program = profile.program;
+    submit_gpgpu_partial_matvec_for(
+        profile,
+        output_gpu,
+        output_bytes,
+        expected_words,
+        row_count,
+        live_k_dim,
+        true,
+        false,
+        true,
+        1,
+    )
+}
+
+fn submit_gpgpu_partial_matvec_trusted_for(
+    profile: GpgpuPartialMatvecProfile,
+    output_gpu: u64,
+    output_bytes: usize,
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_for(
+        profile,
+        output_gpu,
+        output_bytes,
+        [0; 8],
+        row_count,
+        live_k_dim,
+        false,
+        false,
+        true,
+        1,
+    )
+}
+
+fn submit_gpgpu_partial_matvec_trusted_no_readback_for(
+    profile: GpgpuPartialMatvecProfile,
+    output_gpu: u64,
+    output_bytes: usize,
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_for(
+        profile,
+        output_gpu,
+        output_bytes,
+        [0; 8],
+        row_count,
+        live_k_dim,
+        false,
+        false,
+        false,
+        1,
+    )
+}
+
+fn submit_gpgpu_partial_matvec_trusted_preuploaded_for(
+    profile: GpgpuPartialMatvecProfile,
+    output_gpu: u64,
+    output_bytes: usize,
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_for(
+        profile,
+        output_gpu,
+        output_bytes,
+        [0; 8],
+        row_count,
+        live_k_dim,
+        false,
+        true,
+        true,
+        1,
+    )
+}
+
+fn submit_gpgpu_partial_matvec_trusted_preuploaded_no_readback_for(
+    profile: GpgpuPartialMatvecProfile,
+    output_gpu: u64,
+    output_bytes: usize,
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_for(
+        profile,
+        output_gpu,
+        output_bytes,
+        [0; 8],
+        row_count,
+        live_k_dim,
+        false,
+        true,
+        false,
+        1,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t8_batch2_rowblock_retire_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words: [u32; 8],
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_for(
+        gpgpu_t8_batch2_rowblock_retire_profile(),
+        output_gpu,
+        output_bytes,
+        expected_words,
+        row_count,
+        live_k_dim,
+        true,
+        false,
+        true,
+        2,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t8_groupid_live16_distinct_row_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words: [u32; 8],
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_for(
+        gpgpu_t8_groupid_live16_partial_matvec_profile(),
+        output_gpu,
+        output_bytes,
+        expected_words,
+        row_count,
+        live_k_dim,
+        true,
+        false,
+        true,
+        row_count as u32,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t8_groupid_live16_distinct_row16_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words16: [u32; 16],
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    let mut expected_words = [0u32; 8];
+    expected_words.copy_from_slice(&expected_words16[..8]);
+    submit_gpgpu_partial_matvec_for_wide(
+        gpgpu_t8_groupid_live16_partial_matvec_profile(),
+        output_gpu,
+        output_bytes,
+        expected_words,
+        Some(expected_words16),
+        row_count,
+        live_k_dim,
+        true,
+        false,
+        true,
+        row_count as u32,
+    )
+}
+
+fn submit_gpgpu_partial_matvec_for(
+    profile: GpgpuPartialMatvecProfile,
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words: [u32; 8],
+    row_count: usize,
+    live_k_dim: usize,
+    validate_output: bool,
+    skip_program_upload: bool,
+    read_output_words: bool,
+    dispatch_groups: u32,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_for_wide(
+        profile,
+        output_gpu,
+        output_bytes,
+        expected_words,
+        None,
+        row_count,
+        live_k_dim,
+        validate_output,
+        skip_program_upload,
+        read_output_words,
+        dispatch_groups,
+    )
+}
+
+fn submit_gpgpu_partial_matvec_for_wide(
+    profile: GpgpuPartialMatvecProfile,
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words: [u32; 8],
+    expected_words16_override: Option<[u32; 16]>,
+    row_count: usize,
+    live_k_dim: usize,
+    validate_output: bool,
+    skip_program_upload: bool,
+    read_output_words: bool,
+    dispatch_groups: u32,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    let mut program = profile.program;
+    if !validate_output {
+        program.name =
+            "gfx12-t6-windowed-trusted-quiet-packed-bf16-dot-hdc1-stateless-store-then-ts-eot";
+    }
     let Some(dev) = crate::intel::claimed_device() else {
         return gpgpu_t62_partial_matvec_failure(
             profile,
@@ -2212,9 +2984,15 @@ fn submit_gpgpu_partial_matvec_probe_for(
     }
 
     let output_virt = unsafe { warm.gpgpu_arena_virt.add(output_offset) };
+    let t8_groupid_scan = validate_output && program.name.contains("t8-groupid-live16");
+    let output_clear_dwords = if t8_groupid_scan {
+        GPGPU_TILE_ROWS
+    } else {
+        row_count
+    };
     unsafe {
         if profile.clear_output_before_submit {
-            clear_gpgpu_output_words(output_virt, row_count);
+            clear_gpgpu_output_words(output_virt, output_clear_dwords);
         }
         core::ptr::write_volatile(
             warm.result_virt
@@ -2225,11 +3003,14 @@ fn submit_gpgpu_partial_matvec_probe_for(
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
         core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
     }
-    crate::intel::dma_flush(output_virt, row_count * core::mem::size_of::<u32>());
+    crate::intel::dma_flush(output_virt, output_clear_dwords * core::mem::size_of::<u32>());
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
 
-    let program_uploaded =
-        upload_and_verify_gpu_program_at(warm, GPGPU_EU_KERNEL_OFFSET_BYTES, program.words);
+    let program_uploaded = if skip_program_upload {
+        true
+    } else {
+        upload_and_verify_gpu_program_at(warm, GPGPU_EU_KERNEL_OFFSET_BYTES, program.words)
+    };
     if !program_uploaded {
         return gpgpu_t62_partial_matvec_failure(
             profile,
@@ -2245,12 +3026,15 @@ fn submit_gpgpu_partial_matvec_probe_for(
         warm,
         surface_gpu_base,
         surface_bytes,
-        profile.surface_note,
+        if validate_output {
+            profile.surface_note
+        } else {
+            "bind-send-bti-to-t6-windowed-trusted-quiet-arena-base"
+        },
     );
     let batch_dwords = warm.batch_len / core::mem::size_of::<u32>();
     let batch =
         unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
-    let dispatch_groups = 1u32;
     let batch_bytes = match encode_gfx12_gpgpu_walker_probe_batch(
         warm,
         batch,
@@ -2279,32 +3063,63 @@ fn submit_gpgpu_partial_matvec_probe_for(
         warm,
         RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
         RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
-        profile.submit_label,
+        if validate_output {
+            profile.submit_label
+        } else {
+            "gpgpu-t6-windowed-trusted-quiet"
+        },
     );
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
-    crate::intel::dma_flush(unsafe { warm.gpgpu_arena_virt.add(tile_base_offset) }, surface_bytes);
+    if read_output_words {
+        crate::intel::dma_flush(
+            unsafe { warm.gpgpu_arena_virt.add(tile_base_offset) },
+            surface_bytes,
+        );
+    }
     let dispatch_after = read_gpgpu_threads_dispatched(dev);
     let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
     let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
-    let output_words = unsafe { read_gpgpu_output_words8(output_virt) };
-    let mut compare_mask = 0u32;
-    for index in 0..row_count {
-        if output_words[index] == expected_words[index] {
-            compare_mask |= 1u32 << index;
-        }
-    }
+    let output_words = if read_output_words {
+        unsafe { read_gpgpu_output_words8(output_virt) }
+    } else {
+        [0; 8]
+    };
+    let output_words16 = if read_output_words {
+        unsafe { read_gpgpu_output_words16(output_virt) }
+    } else {
+        [0; 16]
+    };
+    let expected_words16 = expected_words16_override.unwrap_or_else(|| {
+        let mut words = [0u32; 16];
+        words[..8].copy_from_slice(&expected_words);
+        words
+    });
     let expected_mask = if row_count >= 32 {
         u32::MAX
     } else {
         (1u32 << row_count) - 1
     };
+    let mut compare_mask = if validate_output { 0u32 } else { expected_mask };
+    if validate_output {
+        for index in 0..row_count {
+            if output_words16[index] == expected_words16[index] {
+                compare_mask |= 1u32 << index;
+            }
+        }
+    }
     let expected_lane_dispatch = dispatch_groups.saturating_mul(GPGPU_WALKER_SIMD8_LANES);
     let marker_ok = finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
     let lane_count_matches = dispatch_delta == expected_lane_dispatch as u64;
-    let compare_ok = compare_mask == expected_mask;
+    let compare_ok = !validate_output || compare_mask == expected_mask;
     let readback_ok = finished && marker_ok && lane_count_matches && compare_ok;
     let reason = if readback_ok {
-        profile.success_reason
+        if validate_output {
+            profile.success_reason
+        } else if read_output_words {
+            "trusted-frontier-readback"
+        } else {
+            "trusted-frontier-retire-only"
+        }
     } else if !finished {
         "submit-not-finished"
     } else if !marker_ok {
@@ -2314,43 +3129,105 @@ fn submit_gpgpu_partial_matvec_probe_for(
     } else {
         "partial-output-mismatch"
     };
-    crate::log!(
-        "intel/gpgpu: {} submitted=1 finished={} readback_ok={} compare_ok={} reason={} program_source={} groups={} expected_lane_dispatch={} observed_lane_dispatch={} output_gpu=0x{:X} row_count={} live_k_dim={} compare_mask=0x{:08X} expected_mask=0x{:08X} output_words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] expected_words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap next={} does_not_prove=full_model_matvec\n",
-        profile.log_label,
-        finished as u8,
-        readback_ok as u8,
-        compare_ok as u8,
-        reason,
-        program.name,
-        dispatch_groups,
-        expected_lane_dispatch,
-        dispatch_delta,
-        output_gpu,
-        row_count,
-        live_k_dim,
-        compare_mask,
-        expected_mask,
-        output_words[0],
-        output_words[1],
-        output_words[2],
-        output_words[3],
-        output_words[4],
-        output_words[5],
-        output_words[6],
-        output_words[7],
-        expected_words[0],
-        expected_words[1],
-        expected_words[2],
-        expected_words[3],
-        expected_words[4],
-        expected_words[5],
-        expected_words[6],
-        expected_words[7],
-        finish_marker,
-        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
-        batch_bytes,
-        profile.success_next,
-    );
+    let quiet_success_profile = program.name.contains("windowed-accum16")
+        || program.name.contains("t6-2-lane-indexed")
+        || program.name.contains("t6-3-accum16-hi");
+    let log_partial = if validate_output {
+        !readback_ok || !compare_ok || !quiet_success_profile
+    } else {
+        read_output_words && !LOGGED_TRUSTED_PARTIAL_MATVEC.swap(true, Ordering::AcqRel)
+    };
+    if log_partial {
+        crate::log!(
+            "intel/gpgpu: {} submitted=1 finished={} readback_ok={} compare_ok={} validation={} reason={} program_source={} groups={} expected_lane_dispatch={} observed_lane_dispatch={} output_gpu=0x{:X} row_count={} live_k_dim={} compare_mask=0x{:08X} expected_mask=0x{:08X} output_words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] expected_words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap next={} does_not_prove=full_model_matvec\n",
+            profile.log_label,
+            finished as u8,
+            readback_ok as u8,
+            compare_ok as u8,
+            if validate_output {
+                "cpu-reference"
+            } else {
+                "trusted-frontier"
+            },
+            reason,
+            program.name,
+            dispatch_groups,
+            expected_lane_dispatch,
+            dispatch_delta,
+            output_gpu,
+            row_count,
+            live_k_dim,
+            compare_mask,
+            expected_mask,
+            output_words[0],
+            output_words[1],
+            output_words[2],
+            output_words[3],
+            output_words[4],
+            output_words[5],
+            output_words[6],
+            output_words[7],
+            expected_words[0],
+            expected_words[1],
+            expected_words[2],
+            expected_words[3],
+            expected_words[4],
+            expected_words[5],
+            expected_words[6],
+            expected_words[7],
+            finish_marker,
+            RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+            batch_bytes,
+            profile.success_next,
+        );
+    }
+    if t8_groupid_scan {
+        let scan_dwords = GPGPU_TILE_ROWS.min(output_bytes / core::mem::size_of::<u32>());
+        let output_ptr = output_virt as *const u32;
+        let output_nonzero = unsafe { gpgpu_stage_nonzero_dwords(output_ptr, scan_dwords) };
+        let first_nonzero = unsafe { gpgpu_stage_first_nonzero_dword(output_ptr, scan_dwords) };
+        let row0_hits_lo64 =
+            unsafe { gpgpu_stage_dword_hits_mask_lo64(output_ptr, scan_dwords, expected_words[0]) };
+        let row1_hits_lo64 =
+            unsafe { gpgpu_stage_dword_hits_mask_lo64(output_ptr, scan_dwords, expected_words[1]) };
+        let row0_first =
+            unsafe { gpgpu_stage_first_dword_hit(output_ptr, scan_dwords, expected_words[0]) };
+        let row1_first =
+            unsafe { gpgpu_stage_first_dword_hit(output_ptr, scan_dwords, expected_words[1]) };
+        crate::log!(
+            "intel/gpgpu: t8-groupid-output-scan program_source={} groups={} scan_dwords={} cleared_dwords={} nonzero_dwords={} first_nonzero={} row0_expected=0x{:08X} row1_expected=0x{:08X} row0_hits_lo64=0x{:016X} row1_hits_lo64=0x{:016X} row0_first={} row1_first={} output_words16=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] finish_marker=0x{:08X} dispatch_delta={} next=decode-t8-groupid-row-payload-or-store-offset\n",
+            program.name,
+            dispatch_groups,
+            scan_dwords,
+            output_clear_dwords,
+            output_nonzero,
+            first_nonzero,
+            expected_words[0],
+            expected_words[1],
+            row0_hits_lo64,
+            row1_hits_lo64,
+            row0_first,
+            row1_first,
+            output_words16[0],
+            output_words16[1],
+            output_words16[2],
+            output_words16[3],
+            output_words16[4],
+            output_words16[5],
+            output_words16[6],
+            output_words16[7],
+            output_words16[8],
+            output_words16[9],
+            output_words16[10],
+            output_words16[11],
+            output_words16[12],
+            output_words16[13],
+            output_words16[14],
+            output_words16[15],
+            finish_marker,
+            dispatch_delta,
+        );
+    }
     if !finished {
         recover_render_engine_after_nonretired_submit(dev, warm, profile.submit_label);
     }
@@ -2364,6 +3241,8 @@ fn submit_gpgpu_partial_matvec_probe_for(
         output_gpu,
         output_words,
         expected_words,
+        output_words16,
+        expected_words16,
         compare_mask,
         expected_mask,
         dispatch_delta,
@@ -3107,6 +3986,12 @@ fn gpgpu_t62_partial_matvec_failure(
         output_gpu,
         output_words: [0; 8],
         expected_words,
+        output_words16: [0; 16],
+        expected_words16: {
+            let mut words = [0u32; 16];
+            words[..8].copy_from_slice(&expected_words);
+            words
+        },
         compare_mask: 0,
         expected_mask: 0,
         dispatch_delta: 0,
@@ -3180,6 +4065,9 @@ fn log_gpgpu_one_tile_stage_failure(
         output_expected_hits_lo64: 0,
         output_checksum: 0,
     };
+    if reason == "k-dim-not-tile-k" {
+        return proof;
+    }
     crate::log!(
         "intel/gpgpu: one-tile-stage staged=0 reason={} arena_mapped=0 arena_gpu_base=0x0 row={} tile_rows={} k_dim={} x_bytes={} row_bytes={} output_bytes=0 x_checksum=0x{:016X} row_checksum=0x{:016X} cpu_expected_bits=0x{:08X} gpu_submission=0 output_owner=cpu-ap next=fix-one-tile-stage does_not_prove=gpu_live_load_or_model_matvec\n",
         reason,
@@ -3561,4 +4449,22 @@ unsafe fn gpgpu_stage_dword_hits_mask_lo64(ptr: *const u32, count: usize, expect
         }
     }
     hits
+}
+
+unsafe fn gpgpu_stage_first_dword_hit(ptr: *const u32, count: usize, expected: u32) -> usize {
+    for i in 0..count {
+        if unsafe { core::ptr::read_volatile(ptr.add(i)) } == expected {
+            return i;
+        }
+    }
+    usize::MAX
+}
+
+unsafe fn gpgpu_stage_first_nonzero_dword(ptr: *const u32, count: usize) -> usize {
+    for i in 0..count {
+        if unsafe { core::ptr::read_volatile(ptr.add(i)) } != 0 {
+            return i;
+        }
+    }
+    usize::MAX
 }

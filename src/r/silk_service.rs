@@ -217,10 +217,7 @@ fn binding_artifact() -> String {
 
 fn validation_artifact() -> String {
     let artifact = trueos_silk::ValidationArtifact::exact_u64("validate.eq.art");
-    format!(
-        "artifact {} kind={:?}\nops=run_exact_u64\n",
-        artifact.name, artifact.kind
-    )
+    format!("artifact {} kind={:?}\nops=run_exact_u64\n", artifact.name, artifact.kind)
 }
 
 fn control_artifact() -> String {
@@ -423,14 +420,8 @@ async fn build_and_load_artifacts() -> Result<(), SilkServiceError> {
     );
     crate::log!("silk-service: placement begin\n{}silk-service: placement end\n", placement);
     crate::log!("silk-service: ring begin\n{}silk-service: ring end\n", ring_runtime);
-    crate::log!(
-        "silk-service: asm.add begin\n{}silk-service: asm.add end\n",
-        asm_add_runtime
-    );
-    crate::log!(
-        "silk-service: pool begin\n{}silk-service: pool end\n",
-        pool_runtime
-    );
+    crate::log!("silk-service: asm.add begin\n{}silk-service: asm.add end\n", asm_add_runtime);
+    crate::log!("silk-service: pool begin\n{}silk-service: pool end\n", pool_runtime);
     crate::log!(
         "silk-service: log.write {} bytes from {}\n",
         read_bytes.len(),

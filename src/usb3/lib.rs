@@ -26,12 +26,12 @@ impl crabusb::DmaOp for TrueosCrabKernel {
         let phys = crate::phys::virt_to_phys_checked(addr.as_ptr())
             .ok_or(crabusb::DmaError::NullPointer)?;
         let dma_addr = crabusb::DmaAddr::from(phys);
-        let end = phys
-            .checked_add(size.saturating_sub(1) as u64)
-            .ok_or(crabusb::DmaError::DmaMaskNotMatch {
+        let end = phys.checked_add(size.saturating_sub(1) as u64).ok_or(
+            crabusb::DmaError::DmaMaskNotMatch {
                 addr: dma_addr,
                 mask: dma_mask,
-            })?;
+            },
+        )?;
         if end > dma_mask || (align > 1 && !phys.is_multiple_of(align as u64)) {
             let max_phys = Some(dma_mask.checked_add(1).unwrap_or(u64::MAX));
             let (bounce_phys, bounce_virt) =
@@ -76,11 +76,7 @@ impl crabusb::DmaOp for TrueosCrabKernel {
         }
     }
 
-    unsafe fn alloc_coherent(
-        &self,
-        dma_mask: u64,
-        layout: Layout,
-    ) -> Option<crabusb::DmaHandle> {
+    unsafe fn alloc_coherent(&self, dma_mask: u64, layout: Layout) -> Option<crabusb::DmaHandle> {
         let max_phys = Some(
             dma_mask
                 .checked_add(1)

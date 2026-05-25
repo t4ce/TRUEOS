@@ -34,13 +34,30 @@ pub(crate) use mandelbrot::{
 };
 pub(crate) use matmul::{
     log_gpgpu_t63_first_tile_output_detail_once, stage_gpgpu_one_tile_record_probe,
-    stage_gpgpu_tile_record_accum16_window_probe, stage_gpgpu_tile_record_rows_probe,
+    stage_gpgpu_tile_record_accum16_window_probe, stage_gpgpu_tile_record_accum16_window_trusted,
+    stage_gpgpu_tile_record_rows_probe, stage_gpgpu_tile_record_rows_trusted,
     submit_gpgpu_one_tile_output_compare_probe, submit_gpgpu_one_tile_output_sentinel_probe,
     submit_gpgpu_t5_one_row_matvec_probe, submit_gpgpu_t6_one_row_matvec_probe,
-    submit_gpgpu_t61_one_row_matvec_probe, submit_gpgpu_t62_partial_matvec_probe,
+    submit_gpgpu_t8_batch2_rowblock_retire_probe,
+    submit_gpgpu_t8_groupid_live16_distinct_row_probe,
+    submit_gpgpu_t8_groupid_live16_distinct_row16_probe, submit_gpgpu_t61_one_row_matvec_probe,
+    submit_gpgpu_t62_partial_matvec_probe, submit_gpgpu_t62_partial_matvec_trusted,
+    submit_gpgpu_t62_partial_matvec_trusted_no_readback,
     submit_gpgpu_t63_accum16_hi_live32_partial_matvec_probe,
+    submit_gpgpu_t63_accum16_hi_live32_partial_matvec_trusted,
+    submit_gpgpu_t63_accum16_hi_live32_partial_matvec_trusted_no_readback,
     submit_gpgpu_t64_windowed_accum16_live48_partial_matvec_probe,
     submit_gpgpu_t65_windowed_accum16_live64_partial_matvec_probe,
+    submit_gpgpu_t66_accum32_hi_live96_partial_matvec_probe,
+    submit_gpgpu_t66_windowed_accum16_live80_partial_matvec_probe,
+    submit_gpgpu_t67_windowed_accum16_live96_partial_matvec_probe,
+    submit_gpgpu_t68_windowed_accum16_live112_partial_matvec_probe,
+    submit_gpgpu_t69_windowed_accum16_live128_partial_matvec_probe,
+    submit_gpgpu_t610_windowed_accum16_live144_partial_matvec_probe,
+    submit_gpgpu_t611_windowed_accum16_live160_partial_matvec_probe,
+    submit_gpgpu_windowed_accum16_partial_matvec_probe,
+    submit_gpgpu_windowed_accum16_partial_matvec_trusted,
+    submit_gpgpu_windowed_accum16_partial_matvec_trusted_no_readback,
 };
 
 const FORCEWAKE_RENDER: usize = 0x0A278;
@@ -935,6 +952,15 @@ fn uses_gpgpu_pipeline_submit_name(name: &str) -> bool {
 }
 
 fn should_log_gpgpu_submit_name(name: &str) -> bool {
+    if name.contains("quiet") {
+        return false;
+    }
+    if name.contains("windowed-accum16")
+        || name.contains("t6-2-lane-indexed")
+        || name.contains("t6-3-accum16-hi")
+    {
+        return false;
+    }
     !matches!(
         name,
         "gpgpu-preflight"
@@ -1459,6 +1485,12 @@ fn should_log_gpgpu_program_shape(name: &str) -> bool {
     if is_raw_awake_program_name(name) {
         return true;
     }
+    if name.contains("windowed-accum16")
+        || name.contains("t6-2-lane-indexed")
+        || name.contains("t6-3-accum16-hi")
+    {
+        return false;
+    }
     if name == trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_PROGRAM_NAME
@@ -1478,6 +1510,9 @@ fn should_log_gpgpu_program_shape(name: &str) -> bool {
 fn should_log_gpgpu_surface_state(note: &str) -> bool {
     note != "bind-send-bti-to-result-raw-buffer"
         && !note.contains("-quiet")
+        && !note.contains("windowed-accum16")
+        && !note.contains("t6-2-lane-indexed")
+        && !note.contains("t6-3-accum16-hi")
         && !note.contains("line1280-burst")
         && !note.contains("groupid-line1280")
 }
