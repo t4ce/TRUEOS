@@ -625,6 +625,62 @@ impl IntelGfxBackend {
         })?;
         Ok(())
     }
+
+    fn draw_mandelbrot(
+        &mut self,
+        target: RenderTarget,
+        buffer: BufferId,
+        byte_offset: u64,
+        vertex_count: u32,
+        first_vertex: u32,
+        scissor: Option<ScissorRect>,
+        blend: BlendDesc,
+    ) -> Result<()> {
+        if matches!(target, RenderTarget::Screen) {
+            self.sync_screen_rgba_from_gpu();
+        }
+        let buffer = self.buffer(buffer).ok_or(Error::NotFound)?;
+        let start = byte_offset as usize + first_vertex as usize * trueos_gfx_core::TEX_VERTEX_SIZE;
+        let need = vertex_count as usize * trueos_gfx_core::TEX_VERTEX_SIZE;
+        if start > buffer.bytes.len() || start.saturating_add(need) > buffer.bytes.len() {
+            return Err(Error::Invalid);
+        }
+        let verts = buffer.bytes[start..start + need].to_vec();
+        let should_log = self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120);
+        self.with_target_mut(target, |rgba, width, height| {
+            if should_log {
+                crate::log!(
+                    "intel/gfx-backend: draw-mandelbrot mode=simd16-mask triangles={} size={}x{} target={}\n",
+                    verts.len() / (3 * trueos_gfx_core::TEX_VERTEX_SIZE),
+                    width,
+                    height,
+                    match target {
+                        RenderTarget::Screen => "screen",
+                        RenderTarget::Image(_) => "image",
+                    }
+                );
+            }
+            let mut off = 0usize;
+            while off + (3 * trueos_gfx_core::TEX_VERTEX_SIZE) <= verts.len() {
+                let Some(v0) = read_tex_vertex_f32_bytes(&verts, off) else {
+                    break;
+                };
+                let Some(v1) =
+                    read_tex_vertex_f32_bytes(&verts, off + trueos_gfx_core::TEX_VERTEX_SIZE)
+                else {
+                    break;
+                };
+                let Some(v2) =
+                    read_tex_vertex_f32_bytes(&verts, off + 2 * trueos_gfx_core::TEX_VERTEX_SIZE)
+                else {
+                    break;
+                };
+                draw_mandelbrot_triangle_rgba(rgba, width, height, scissor, blend, v0, v1, v2);
+                off += 3 * trueos_gfx_core::TEX_VERTEX_SIZE;
+            }
+        })?;
+        Ok(())
+    }
 }
 
 impl GfxDevice for IntelGfxBackend {
@@ -948,7 +1004,17 @@ impl GfxDevice for IntelGfxBackend {
                     first_vertex,
                 } => {
                     if bound_buffer.is_valid() {
-                        let draw_res = if bound_image.is_valid() || pipeline != PipelineKind::Rgb {
+                        let draw_res = if pipeline == PipelineKind::Mandelbrot {
+                            self.draw_mandelbrot(
+                                target,
+                                bound_buffer,
+                                bound_offset,
+                                vertex_count,
+                                first_vertex,
+                                scissor,
+                                blend,
+                            )
+                        } else if bound_image.is_valid() || pipeline != PipelineKind::Rgb {
                             self.draw_tex(
                                 target,
                                 bound_buffer,
@@ -1425,5 +1491,111 @@ fn draw_tex_triangle_rgba(
                 blend_pixel(&mut target[idx..idx + 4], src, blend);
             }
         }
+    }
+}
+
+fn draw_mandelbrot_triangle_rgba(
+    target: &mut [u8],
+    width: u32,
+    height: u32,
+    scissor: Option<ScissorRect>,
+    blend: BlendDesc,
+    v0: trueos_gfx_core::TexVertexF32,
+    v1: trueos_gfx_core::TexVertexF32,
+    v2: trueos_gfx_core::TexVertexF32,
+) {
+    // SIMD16 pixel dispatch: four 2x2 subspans packed into one 16-bit execution mask.
+    const LANE_X: [i32; 16] = [0, 1, 0, 1, 2, 3, 2, 3, 0, 1, 0, 1, 2, 3, 2, 3];
+    const LANE_Y: [i32; 16] = [0, 0, 1, 1, 0, 0, 1, 1, 2, 2, 3, 3, 2, 2, 3, 3];
+
+    if width == 0 || height == 0 {
+        return;
+    }
+
+    let p0 = (ndc_to_target_x(v0.x, width), ndc_to_target_y(v0.y, height));
+    let p1 = (ndc_to_target_x(v1.x, width), ndc_to_target_y(v1.y, height));
+    let p2 = (ndc_to_target_x(v2.x, width), ndc_to_target_y(v2.y, height));
+    let area = edge_fn(p0.0, p0.1, p1.0, p1.1, p2.0, p2.1);
+    if area.abs() <= 1e-6 {
+        return;
+    }
+
+    let mut min_x = floorf(p0.0.min(p1.0).min(p2.0)).max(0.0) as i32;
+    let mut max_x = ceilf(p0.0.max(p1.0).max(p2.0)).min(width as f32) as i32;
+    let mut min_y = floorf(p0.1.min(p1.1).min(p2.1)).max(0.0) as i32;
+    let mut max_y = ceilf(p0.1.max(p1.1).max(p2.1)).min(height as f32) as i32;
+    if let Some(scissor) = scissor {
+        min_x = min_x.max(scissor.x.min(width) as i32);
+        max_x = max_x.min(scissor.x.saturating_add(scissor.width).min(width) as i32);
+        min_y = min_y.max(scissor.y.min(height) as i32);
+        max_y = max_y.min(scissor.y.saturating_add(scissor.height).min(height) as i32);
+    }
+    if min_x >= max_x || min_y >= max_y {
+        return;
+    }
+
+    let inv_area = 1.0 / area;
+    let tile_min_x = min_x & !3;
+    let tile_min_y = min_y & !3;
+    let mut tile_y = tile_min_y;
+    while tile_y < max_y {
+        let mut tile_x = tile_min_x;
+        while tile_x < max_x {
+            let mut dispatch_mask = 0u16;
+            let mut us = [0.0f32; 16];
+            let mut vs = [0.0f32; 16];
+
+            for lane in 0..16 {
+                let x = tile_x + LANE_X[lane];
+                let y = tile_y + LANE_Y[lane];
+                if x < min_x || x >= max_x || y < min_y || y >= max_y {
+                    continue;
+                }
+
+                let px = x as f32 + 0.5;
+                let py = y as f32 + 0.5;
+                let w0 = edge_fn(p1.0, p1.1, p2.0, p2.1, px, py);
+                let w1 = edge_fn(p2.0, p2.1, p0.0, p0.1, px, py);
+                let w2 = edge_fn(p0.0, p0.1, p1.0, p1.1, px, py);
+                if (area > 0.0 && (w0 < 0.0 || w1 < 0.0 || w2 < 0.0))
+                    || (area < 0.0 && (w0 > 0.0 || w1 > 0.0 || w2 > 0.0))
+                {
+                    continue;
+                }
+
+                let b0 = w0 * inv_area;
+                let b1 = w1 * inv_area;
+                let b2 = w2 * inv_area;
+                us[lane] = v0.u * b0 + v1.u * b1 + v2.u * b2;
+                vs[lane] = v0.v * b0 + v1.v * b1 + v2.v * b2;
+                dispatch_mask |= 1u16 << lane;
+            }
+
+            if dispatch_mask != 0 {
+                let colors = crate::gfx::mandelbrot::shade_uv_simd16(
+                    us,
+                    vs,
+                    dispatch_mask,
+                    crate::gfx::mandelbrot::MANDELBROT_ITERATIONS,
+                );
+                for lane in 0..16 {
+                    if (dispatch_mask & (1u16 << lane)) == 0 {
+                        continue;
+                    }
+                    let x = (tile_x + LANE_X[lane]) as usize;
+                    let y = (tile_y + LANE_Y[lane]) as usize;
+                    let idx = y
+                        .saturating_mul(width as usize)
+                        .saturating_add(x)
+                        .saturating_mul(4);
+                    if idx + 4 <= target.len() {
+                        blend_pixel(&mut target[idx..idx + 4], colors[lane], blend);
+                    }
+                }
+            }
+
+            tile_x += 4;
+        }
+        tile_y += 4;
     }
 }

@@ -1446,3 +1446,409 @@ the current artifact shape can cut the projected trusted-window submit count fro
 3072 to 1536 before any tile-wide coalescing work.  The next useful runtime
 change is to issue the trusted path in this 16-row T8 shape instead of only
 accounting for it.
+
+T8 live16 trusted-path execution, next boot:
+
+Runtime change:
+
+- The trusted-window path now issues the proven T8 group-ID live16 artifact for
+  each aligned 16-row pair of 8-row blocks.
+- The second 8-row half is carried by copying the T8 output rows into the
+  8-row output slot consumed by the existing prefix collector.
+- Residual trusted T62 accounting is split out so this rung can be measured
+  independently from later live32..live512 window work.
+
+Boot proof after `make iso`:
+
+- `latest.log` points at `trueos-baremetal.0.log` for this cycle.
+- The T8 frontier still proves cleanly:
+  `rung_rows=16`, `readback_ok=1`, `compare_ok=1`,
+  `expected_lane_dispatch=128`, `observed_lane_dispatch=128`,
+  `finish_marker=0xC0DE7732`.
+- Summary remains clean:
+  `director-step step=43 ... frontier_rows=16 live_k_dim=16
+  last_dispatch_delta=128 failed=0`.
+- Trusted submit accounting moved:
+  `current_model=trusted-t8-live16-plus-residual-t6-windows
+  submitted_blocks=3024 t8_live16_submitted_blocks=48
+  t8_live16_accepted_blocks=48 t8_live16_accepted_rows=768
+  residual_t62_submitted_blocks=0 projected_submits_at_current_t8=1536
+  ideal_tile_projected_submits=96`.
+- Fast-path summary agrees:
+  `trusted-window-fast-path ... submitted_blocks=3024
+  t8_live16_submitted_blocks=48 residual_t62_submitted_blocks=0
+  accepted_blocks=96 accepted_rows=768 t8_live16_accepted_rows=768
+  failed=0`.
+- The CGP prefix still completes:
+  `accepted-prefix complete ... rows=768 first_row=0 last_row=767
+  live_k_dim=512 output_owner=hybrid-cgp-prefix-cpu-ap-suffix`.
+
+Interpretation: this is the first runtime submit-count movement from the T8
+artifact.  It retires the live16 rung with 48 T8 submits instead of 96 T62
+submits, dropping the trusted path from 3072 to 3024 submitted blocks while
+preserving the accepted 768-row GPU prefix.  It is intentionally a small ladder
+step, not the full 1536-submit shape yet: the remaining 31 live16 windows per
+row block are still issued through the existing trusted T6/T62 window path.
+
+Next step: build the next group-ID window rung for live32 (or another narrowly
+bounded window stride) and repeat the same boot/log/document loop.  Avoid
+rewiring the CPU command stream wholesale; keep each new dispatch shape
+artifact-proven before moving another slice of the trusted path onto it.
+
+T8 live16 32-row scale and execution, next boot:
+
+Runtime change:
+
+- The T8 group-ID live16 proof path now reads and compares 32 output rows.
+- The T8 row-scale ladder now attempts `2, 4, 8, 16, 32` rows with the same
+  artifact before changing any live32/window execution.
+- The trusted path carries a proven 32-row T8 live16 submit across four 8-row
+  collector blocks, then leaves the remaining live32..live512 window work on the
+  existing trusted T6 path.
+
+Boot proof after `make iso`:
+
+- `latest.log` points at `trueos-baremetal.1.log` for this cycle.
+- The new rung proves:
+  `rung_rows=32`, `readback_ok=1`, `compare_ok=1`,
+  `expected_lane_dispatch=256`, `observed_lane_dispatch=256`,
+  `last_gpu=0xB86B4EEC`, `last_cpu_expected=0xB86B4EEC`,
+  `finish_marker=0xC0DE7732`.
+- The T8 scan agrees with the wider shape:
+  `groups=32`, `nonzero_dwords=32`, `dispatch_delta=256`.
+- Summary advances:
+  `director-step step=43 ... attempted_rungs=5 frontier_rows=32
+  live_k_dim=16 last_dispatch_delta=256 failed=0`.
+- Trusted submit accounting moved again:
+  `submitted_blocks=3000 t8_live16_submitted_blocks=24
+  t8_live16_accepted_blocks=24 t8_live16_accepted_rows=768
+  residual_t62_submitted_blocks=0 t8_frontier_rows=32
+  row_blocks_per_t8_submit=4 projected_submits_at_current_t8=768`.
+- Fast-path summary agrees:
+  `trusted-window-fast-path ... submitted_blocks=3000
+  t8_live16_submitted_blocks=24 residual_t62_submitted_blocks=0
+  accepted_blocks=96 accepted_rows=768 t8_live16_accepted_rows=768
+  failed=0`.
+- The CGP prefix still completes:
+  `accepted-prefix complete ... rows=768 first_row=0 last_row=767
+  live_k_dim=512 output_owner=hybrid-cgp-prefix-cpu-ap-suffix`.
+
+Interpretation: the existing T8 group-ID artifact is not limited to the 16-row
+frontier.  It cleanly owns 32 live16 rows per dispatch, so the runtime live16
+slice drops from 48 T8 submits to 24, and total trusted-path submits move from
+3024 to 3000.  This is still only the live16 slice; the 31 higher windows per
+8-row block remain on the trusted T6 window chain, so this does not yet prove the
+full `projected_submits_at_current_t8` shape.
+
+Next step: stop growing live16 row ownership for now and create the next
+artifact-proven group-ID window rung, starting at live32 or a tightly bounded
+two-window form.  The useful target is to remove duplicated live32..live512
+window submits for rows that are already grouped by T8, not to rewrite the whole
+CPU command stream in one pass.
+
+T8 live16 32-row carry correction, next boot:
+
+Runtime correction:
+
+- The first 32-row execution pass proved the row32 artifact and accounting
+  shape, but review found that the carry path still copied `block_tile_row % 16`.
+  That was only valid for the 16-row rung; rows 16..31 must be copied from their
+  own T8 output slots.
+- The carry source now uses the proven T8 row span instead of a fixed 16-row
+  modulo.
+- A follow-up boot then exposed a second small sequencing issue: the fresh boot
+  loaded `T8_GROUPID_FRONTIER_ROWS` before the one-shot row-scale probe, so the
+  first 32 rows stayed on residual T62 for that cycle.  The trace showed
+  `submitted_blocks=3003`, `t8_live16_submitted_blocks=23`,
+  `t8_live16_accepted_rows=736`, and `residual_t62_submitted_blocks=4`.
+- The runtime now reloads the frontier after the probe before choosing the
+  trusted submit path, allowing the first boot block to consume the just-proven
+  32-row rung.
+
+Boot proof after the correction and `make iso`:
+
+- `latest.log` points at `trueos-baremetal.0.log` for this cycle.
+- The rung still proves cleanly:
+  `rung_rows=32`, `readback_ok=1`, `compare_ok=1`,
+  `expected_lane_dispatch=256`, `observed_lane_dispatch=256`,
+  `last_gpu=0xB86B4EEC`, `last_cpu_expected=0xB86B4EEC`,
+  `finish_marker=0xC0DE7732`.
+- The row-scale summary remains clean:
+  `director-step step=43 ... attempted_rungs=5 frontier_rows=32
+  live_k_dim=16 last_dispatch_delta=256 failed=0`.
+- Trusted runtime accounting now reaches the intended 32-row T8 shape:
+  `submitted_blocks=3000 t8_live16_submitted_blocks=24
+  t8_live16_accepted_blocks=24 t8_live16_accepted_rows=768
+  residual_t62_submitted_blocks=0 t8_frontier_rows=32
+  row_blocks_per_t8_submit=4 projected_submits_at_current_t8=768`.
+- Fast-path summary agrees:
+  `trusted-window-fast-path ... submitted_blocks=3000
+  t8_live16_submitted_blocks=24 residual_t62_submitted_blocks=0
+  accepted_blocks=96 accepted_rows=768 t8_live16_accepted_rows=768
+  skipped_output_readbacks=2904 failed=0`.
+- The CGP prefix still completes:
+  `accepted-prefix complete ... rows=768 first_row=0 last_row=767
+  live_k_dim=512 output_owner=hybrid-cgp-prefix-cpu-ap-suffix`.
+
+Interpretation: corrected 32-row T8 live16 execution now sits.  The runtime owns
+all 768 accepted prefix rows with 24 T8 submits for the live16 slice, with no
+residual T62 live16 fallback.  The remaining gap to the 1536-submit projection
+is still live32..live512 window work, so the next ladder-up should be a new
+artifact-proven group-ID/two-window rung rather than treating the existing T63
+local-invocation live32 artifact as a drop-in group-ID window.
+
+Next-window accounting guard, next boot:
+
+Runtime change:
+
+- Added `step=45` after the corrected 32-row T8 live16 path.  This is an
+  accounting/guard rung only: it keeps runtime ownership unchanged, but records
+  the exact next-window submit targets and the reason the existing T63 live32
+  artifact cannot be promoted as-is.
+- The guard logs the T8 row groups, the current local-invocation T63 shape, and
+  separate/fused live32 projections so the next real artifact can be judged
+  against a stable trace.
+
+Boot proof after `make iso`:
+
+- `latest.log` points at `trueos-baremetal.2.log` for this cycle.
+- The 32-row T8 rung still proves:
+  `rung_rows=32`, `readback_ok=1`, `compare_ok=1`,
+  `expected_lane_dispatch=256`, `observed_lane_dispatch=256`,
+  `finish_marker=0xC0DE7732`.
+- Runtime counters remain at the corrected baseline:
+  `submitted_blocks=3000 t8_live16_submitted_blocks=24
+  t8_live16_accepted_rows=768 residual_t62_submitted_blocks=0
+  accepted_rows=768 failed=0`.
+- New `step=45` records:
+  `current_submitted_blocks=3000`, `t8_frontier_rows=32`,
+  `t8_row_groups=24`, `row_blocks_per_t8_submit=4`,
+  `live_windows_to_trusted=32`,
+  `groupid_live32_separate_projected_submits=2928`,
+  `fused_live16_live32_projected_submits=2904`,
+  `all_groupid_window_projected_submits=768`,
+  `ideal_tile_projected_submits=96`,
+  `existing_t63_partial_rows=8`, `existing_t63_live_k=32`,
+  `existing_t63_addressing=local-invocation`,
+  `action=hold-runtime`.
+- The CGP accepted prefix continues to complete:
+  `accepted-prefix complete ... rows=768 first_row=0 last_row=767
+  live_k_dim=512 output_owner=hybrid-cgp-prefix-cpu-ap-suffix`.
+
+Interpretation: this rung deliberately does not reduce submits.  It makes the
+next ladder target explicit: a separate group-ID live32 artifact would move the
+current runtime from 3000 to 2928 submits, while a fused live16+live32
+two-window artifact would move it to 2904.  The existing T63 live32 artifact is
+still an 8-row local-invocation artifact, so the next execution change needs a
+new group-ID row-addressed live32/two-window proof before any trusted-path
+ownership moves again.
+
+Accepted-prefix effective offload accounting, next boot:
+
+Runtime change:
+
+- Added a `burn-baby: cgp effective-offload` line at the CPU suffix handoff.
+- The line records the actual math split for accepted-prefix rows:
+  GPU-owned prefix values, AP suffix values, avoided full-row CPU recompute
+  values, accepted-row coverage, and the current T8 row frontier/group count.
+- This is still an accounting rung.  It does not move another window to the GPU;
+  it makes the CPU savings from the already accepted prefix visible in the same
+  trace that proves the artifact frontier.
+
+Boot proof after `make iso`:
+
+- `latest.log` points at `trueos-baremetal.2.log` for this cycle.
+- The first accepted-prefix call happens before the trusted T8 frontier is
+  consumed, so it correctly records the cold-frontier state:
+  `rows=768`, `live_k_dim=512`, `suffix_k_dim=1536`,
+  `gpu_prefix_values=393216`, `cpu_suffix_values=1179648`,
+  `cpu_full_row_values_avoided=1572864`, `t8_frontier_rows=0`.
+- The T8 proof then advances cleanly in the same boot:
+  `rung_rows=32`, `readback_ok=1`, `compare_ok=1`,
+  `expected_lane_dispatch=256`, `observed_lane_dispatch=256`,
+  `finish_marker=0xC0DE7732`,
+  followed by `frontier_rows=32`, `failed=0`.
+- Trusted runtime accounting remains at the corrected baseline:
+  `submitted_blocks=3000`, `t8_live16_submitted_blocks=24`,
+  `t8_live16_accepted_rows=768`, `residual_t62_submitted_blocks=0`,
+  `t8_frontier_rows=32`, `t8_row_groups=24`.
+- Subsequent accepted-prefix calls now report the proven T8 shape:
+  `rows=768`, `live_k_dim=512`, `suffix_k_dim=1536`,
+  `t8_frontier_rows=32`, `t8_row_groups=24`,
+  `gpu_prefix_values=393216`, `cpu_suffix_values=1179648`,
+  `cpu_full_row_values_avoided=1572864`,
+  `gpu_prefix_accepted_row_bp=2500`.
+
+Interpretation: the accepted-prefix path is visibly saving the first 512 BF16
+dot terms for each of 768 rows, or 393,216 multiply/add terms per accepted
+matvec.  AP suffix work for those rows is now the remaining 1,179,648 terms
+instead of the full 1,572,864-term row recompute.  Once the T8 frontier is
+established, those 768 rows map to 24 proven 32-row group-ID live16 row groups.
+
+Next step: keep the execution ladder narrow.  The T8 live16 row grouping is now
+both proven and visible at the burn-baby suffix boundary; the next runtime
+movement should be a live32/two-window artifact proof that can reduce the
+remaining local-invocation window chain without reworking the whole CPU command
+stream.
+
+Effective offload frontier-ready refinement, next boot:
+
+Runtime change:
+
+- The effective-offload accounting line now records `t8_frontier_ready`,
+  `gpu_prefix_t8_projected_submits`, and distinct actions for the cold
+  pre-frontier call versus trusted-frontier calls.
+- This keeps the burn-baby suffix boundary explicit: before the T8 artifact
+  frontier is consumed, the line only accounts the prefix benefit; after the
+  frontier is proven, the same accepted rows are tied back to the 32-row T8
+  group-ID shape.
+
+Boot proof after `make iso`:
+
+- `latest.log` points at `trueos-baremetal.0.log` for this cycle.
+- The first accepted-prefix call still arrives before the frontier is loaded:
+  `t8_frontier_ready=0`, `t8_frontier_rows=0`,
+  `gpu_prefix_t8_projected_submits=0`,
+  `gpu_prefix_values=393216`, `cpu_suffix_values=1179648`,
+  `cpu_full_row_values_avoided=1572864`,
+  `action=account-prefix-benefit-await-t8-frontier`.
+- The T8 row-scale proof remains clean:
+  `rung_rows=32`, `readback_ok=1`, `compare_ok=1`,
+  `expected_lane_dispatch=256`, `observed_lane_dispatch=256`,
+  `finish_marker=0xC0DE7732`, followed by `frontier_rows=32`,
+  `failed=0`.
+- Runtime execution remains at the current trusted-window baseline:
+  `submitted_blocks=3000`, `t8_live16_submitted_blocks=24`,
+  `t8_live16_accepted_rows=768`, `residual_t62_submitted_blocks=0`,
+  `skipped_output_readbacks=2904`, `failed=0`.
+- The next-window guard still holds runtime ownership while exposing the target:
+  `groupid_live32_separate_projected_submits=2928`,
+  `fused_live16_live32_projected_submits=2904`,
+  `all_groupid_window_projected_submits=768`,
+  `ideal_tile_projected_submits=96`,
+  `existing_t63_addressing=local-invocation`,
+  `action=hold-runtime`.
+- Subsequent accepted-prefix calls now report the trusted T8 shape:
+  `t8_frontier_ready=1`, `t8_frontier_rows=32`,
+  `t8_row_groups=24`, `gpu_prefix_t8_projected_submits=24`,
+  `gpu_prefix_values=393216`, `cpu_suffix_values=1179648`,
+  `cpu_full_row_values_avoided=1572864`,
+  `gpu_prefix_accepted_row_bp=2500`,
+  `action=account-trusted-prefix-benefit`.
+
+Interpretation: the trace now separates cold accounting from frontier-ready
+accounting.  The accepted-prefix math benefit is still 393,216 GPU-owned prefix
+terms for 768 rows, with AP suffix limited to the remaining 1,179,648 terms.
+After the T8 proof lands, that benefit is also expressed as 24 trusted 32-row
+T8 group-ID submits.  This is not yet a new submit-reduction rung; the next
+execution movement remains a group-ID live32 artifact or a fused live16+live32
+two-window artifact.
+
+Existing T63 live32 group-ID negative control, next boot:
+
+Runtime change:
+
+- Added a one-shot `step=46` proof after the 32-row T8 live16 row-scale rung.
+- The probe keeps runtime ownership unchanged.  It stages the live32 window over
+  the same 32-row T8-shaped tile output, then dispatches the existing
+  `gfx12-t6-3-accum16-hi-live32` artifact with 32 groups and validates all 32
+  rows against CPU live32 prefix references.
+- This intentionally tests whether the existing local-invocation live32 artifact
+  can be reused as a group-shaped live32 rung.  The trusted path still falls
+  back to the current local-invocation window chain regardless of the result.
+
+Boot proof after `make iso`:
+
+- `latest.log` points at `trueos-baremetal.1.log` for this cycle.
+- The T8 live16 32-row frontier still proves cleanly:
+  `rung_rows=32`, `readback_ok=1`, `compare_ok=1`,
+  `expected_lane_dispatch=256`, `observed_lane_dispatch=256`,
+  `finish_marker=0xC0DE7732`.
+- The new `step=46` probe retires and dispatches the expected lane count, but
+  only the first 8 rows compare:
+  `submitted=1`, `finished=1`, `readback_ok=0`, `compare_ok=0`,
+  `reason=partial-output-mismatch`, `groups=32`, `row_count=32`,
+  `live_k_dim=32`, `expected_lane_dispatch=256`,
+  `observed_lane_dispatch=256`, `compare_mask=0x000000FF`,
+  `expected_mask=0xFFFFFFFF`, `finish_marker=0xC0DE7732`,
+  `action=hold-runtime`, `next=generate-dedicated-groupid-live32-artifact`.
+- The row-scale summary remains good after the negative control:
+  `frontier_rows=32`, `live_k_dim=16`, `last_dispatch_delta=256`,
+  `failed=0`.
+- Trusted runtime accounting is unchanged:
+  `submitted_blocks=3000`, `t8_live16_submitted_blocks=24`,
+  `t8_live16_accepted_rows=768`, `residual_t62_submitted_blocks=0`,
+  `accepted_rows=768`, `skipped_output_readbacks=2904`, `failed=0`.
+- The next-window accounting remains:
+  `groupid_live32_separate_projected_submits=2928`,
+  `fused_live16_live32_projected_submits=2904`,
+  `all_groupid_window_projected_submits=768`,
+  `ideal_tile_projected_submits=96`.
+- Ready effective-offload lines still tie the accepted prefix to the T8 shape:
+  `t8_frontier_ready=1`, `t8_frontier_rows=32`, `t8_row_groups=24`,
+  `gpu_prefix_t8_projected_submits=24`,
+  `gpu_prefix_values=393216`, `cpu_suffix_values=1179648`,
+  `cpu_full_row_values_avoided=1572864`,
+  `action=account-trusted-prefix-benefit`.
+
+Interpretation: the existing T63 live32 artifact is now empirically boxed in as
+an 8-row local-invocation artifact under a 32-group launch.  It retires cleanly
+and does real live32 math for rows 0..7, but it does not write distinct rows
+8..31, so it cannot be promoted into the T8-shaped trusted runtime path.  The
+next ladder-up is therefore not a CPU command-stream patch; it is a dedicated
+group-ID live32 artifact, or a fused live16+live32 artifact, proven against this
+same 32-row compare contract before submit counts move below 3000.
+
+T9 group-ID live32 artifact contract breadcrumb, next boot:
+
+Runtime change:
+
+- Added `step=47` immediately after the Step46 negative control.
+- Added the candidate source and acceptance contract under
+  `crates/trueos-shader/t9_groupid_accum16_hi_live32_trueos_arena_bf16_unpack.comp`
+  and `crates/trueos-shader/t9_groupid_accum16_hi_live32_artifact_contract.md`.
+- Runtime ownership is intentionally unchanged.  The breadcrumb records the
+  exact native EU artifact target needed before the trusted path can move below
+  the current 3000-submit baseline.
+
+Boot proof after `make iso`:
+
+- `latest.log` points at `trueos-baremetal.2.log` for this cycle.
+- The T8 live16 row-scale ladder remains clean through 32 rows:
+  `rung_rows=32`, `readback_ok=1`, `compare_ok=1`,
+  `expected_lane_dispatch=256`, `observed_lane_dispatch=256`,
+  `finish_marker=0xC0DE7732`.
+- The Step46 negative control still boxes in the old T63 artifact:
+  `groups=32`, `row_count=32`, `live_k_dim=32`,
+  `expected_lane_dispatch=256`, `observed_lane_dispatch=256`,
+  `compare_mask=0x000000FF`, `expected_mask=0xFFFFFFFF`,
+  `finish_marker=0xC0DE7732`, `action=hold-runtime`,
+  `next=generate-dedicated-groupid-live32-artifact`.
+- The new Step47 breadcrumb records the dedicated T9 target:
+  `source=crates/trueos-shader/t9_groupid_accum16_hi_live32_trueos_arena_bf16_unpack.comp`,
+  `required_selector=workgroup-id-x`, `required_local_size_x=1`,
+  `required_groups=32`, `required_row_count=32`,
+  `required_live_k_dim=32`, `required_expected_lane_dispatch=256`,
+  `target_compare_mask=0xFFFFFFFF`,
+  `target_finish_marker=0xC0DE7732`,
+  `projected_submits_after_separate_live32=2928`,
+  `current_submitted_blocks=3000`, `action=await-native-eu-artifact`,
+  `next=bake-and-prove-t9-groupid-live32`.
+- The trusted-window runtime remains at the current baseline:
+  `submitted_blocks=3000`, `t8_live16_submitted_blocks=24`,
+  `t8_live16_accepted_rows=768`, `residual_t62_submitted_blocks=0`,
+  `accepted_rows=768`, `skipped_output_readbacks=2904`, `failed=0`.
+- Ready effective-offload lines still tie the accepted prefix to the proven T8
+  shape: `t8_frontier_ready=1`, `t8_frontier_rows=32`,
+  `t8_row_groups=24`, `gpu_prefix_t8_projected_submits=24`,
+  `gpu_prefix_values=393216`, `cpu_suffix_values=1179648`,
+  `cpu_full_row_values_avoided=1572864`,
+  `action=account-trusted-prefix-benefit`.
+
+Interpretation: the ladder now has a precise T9 gate.  The bad path, stretching
+the existing local-invocation T63 artifact over 32 groups, fails with only the
+first 8 rows matching.  The good path is now spelled out as a native group-ID
+live32 artifact using `gl_WorkGroupID.x`, one local invocation per group, 32
+groups, and the same 32-row compare mask contract.  Once that artifact proves,
+the separate-live32 projection can move the trusted runtime accounting from
+3000 submitted blocks to 2928 before any wider window or tile coalescing work.

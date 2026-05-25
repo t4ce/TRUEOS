@@ -301,7 +301,7 @@ fn gpgpu_t8_groupid_live16_partial_matvec_profile() -> GpgpuPartialMatvecProfile
     GpgpuPartialMatvecProfile {
         program: gpgpu_t8_groupid_live16_partial_matvec_program(),
         live_k_dim: trueos_eu::gfx12::T8_GROUPID_LIVE_K,
-        partial_rows: 16,
+        partial_rows: 32,
         clear_output_before_submit: true,
         log_label: "t8-groupid-live16-distinct-row-partial",
         submit_label: "gpgpu-t8-groupid-live16-distinct-row",
@@ -340,6 +340,18 @@ fn gpgpu_t63_accum16_hi_live32_partial_matvec_profile() -> GpgpuPartialMatvecPro
         success_next: "promote-row-block-owner-or-scale-live-k",
         failure_next: "fix-t6-3-accum16-hi-live32",
     }
+}
+
+fn gpgpu_t9_existing_t63_groupid_live32_probe_profile() -> GpgpuPartialMatvecProfile {
+    let mut profile = gpgpu_t63_accum16_hi_live32_partial_matvec_profile();
+    profile.partial_rows = 32;
+    profile.log_label = "t9-existing-t63-live32-groupid-negative-control";
+    profile.submit_label = "gpgpu-t9-existing-t63-live32-groupid-negative-control";
+    profile.surface_note = "bind-send-bti-to-t9-existing-t63-live32-groupid-negative-control";
+    profile.success_reason = "existing-t63-live32-groupid-shaped-rows-written";
+    profile.success_next = "promote-or-generate-dedicated-groupid-live32";
+    profile.failure_next = "generate-dedicated-groupid-live32-artifact";
+    profile
 }
 
 fn gpgpu_t64_windowed_accum16_live48_partial_matvec_profile() -> GpgpuPartialMatvecProfile {
@@ -942,6 +954,71 @@ pub(crate) fn stage_gpgpu_tile_record_accum16_window_trusted(
         source_start,
         false,
     )
+}
+
+pub(crate) fn stage_gpgpu_tile_record_output_rows_trusted(
+    output_gpu: u64,
+    src_row: usize,
+    dst_row: usize,
+    row_count: usize,
+) -> crate::intel::GpgpuTileRowsStageProof {
+    let Some(warm) = warm_state() else {
+        return gpgpu_tile_rows_stage_failure("no-warm-state", output_gpu, row_count, 0, 0);
+    };
+    if warm.gpgpu_arena_virt.is_null() || warm.gpgpu_arena_len == 0 {
+        return gpgpu_tile_rows_stage_failure("no-arena", output_gpu, row_count, 0, 0);
+    }
+    if output_gpu < GPU_VA_GPGPU_TILE_ARENA_BASE
+        || row_count == 0
+        || src_row.saturating_add(row_count) > GPGPU_TILE_ROWS
+        || dst_row.saturating_add(row_count) > GPGPU_TILE_ROWS
+    {
+        return gpgpu_tile_rows_stage_failure("bad-output-window", output_gpu, row_count, 0, 0);
+    }
+    let output_offset = (output_gpu - GPU_VA_GPGPU_TILE_ARENA_BASE) as usize;
+    let Some(tile_base_offset) = output_offset.checked_sub(GPGPU_TILE_OUTPUT_OFFSET_BYTES) else {
+        return gpgpu_tile_rows_stage_failure(
+            "output-before-tile-output-slot",
+            output_gpu,
+            row_count,
+            0,
+            0,
+        );
+    };
+    if tile_base_offset % GPGPU_TILE_RECORD_BYTES != 0 {
+        return gpgpu_tile_rows_stage_failure(
+            "output-gpu-not-tile-record-slot",
+            output_gpu,
+            row_count,
+            0,
+            0,
+        );
+    }
+    let output_end = output_offset.saturating_add(GPGPU_OUTPUT_TILE_BYTES);
+    if output_end > warm.gpgpu_arena_len {
+        return gpgpu_tile_rows_stage_failure("output-outside-arena", output_gpu, row_count, 0, 0);
+    }
+    let output_virt = unsafe { warm.gpgpu_arena_virt.add(output_offset) };
+    unsafe {
+        core::ptr::copy(
+            output_virt.add(src_row.saturating_mul(core::mem::size_of::<u32>())),
+            output_virt.add(dst_row.saturating_mul(core::mem::size_of::<u32>())),
+            row_count.saturating_mul(core::mem::size_of::<u32>()),
+        );
+    }
+    crate::intel::dma_flush(output_virt, GPGPU_OUTPUT_TILE_BYTES);
+    crate::intel::GpgpuTileRowsStageProof {
+        staged: true,
+        reason: "trusted-output-window-staged",
+        readback_ok: true,
+        output_zeroed: false,
+        output_gpu,
+        row_count,
+        row_bytes: row_count.saturating_mul(core::mem::size_of::<u32>()),
+        rows_checksum: 0,
+        staged_rows_checksum: 0,
+        output_nonzero_dwords: 0,
+    }
 }
 
 fn stage_gpgpu_tile_record_accum16_window_for(
@@ -1607,6 +1684,15 @@ unsafe fn read_gpgpu_output_words16(output_virt: *mut u8) -> [u32; 16] {
     ]
 }
 
+unsafe fn read_gpgpu_output_words32(output_virt: *mut u8) -> [u32; 32] {
+    let words = output_virt as *const u32;
+    let mut out = [0u32; 32];
+    for (index, value) in out.iter_mut().enumerate() {
+        *value = core::ptr::read_volatile(words.add(index));
+    }
+    out
+}
+
 unsafe fn clear_gpgpu_output_words(output_virt: *mut u8, dwords: usize) {
     let words = output_virt as *mut u32;
     for index in 0..dwords {
@@ -2206,6 +2292,33 @@ pub(crate) fn submit_gpgpu_t63_accum16_hi_live32_partial_matvec_trusted_no_readb
     )
 }
 
+pub(crate) fn submit_gpgpu_t9_existing_t63_groupid_live32_negative_control_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words32: [u32; 32],
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    let mut expected_words = [0u32; 8];
+    let mut expected_words16 = [0u32; 16];
+    expected_words.copy_from_slice(&expected_words32[..8]);
+    expected_words16.copy_from_slice(&expected_words32[..16]);
+    submit_gpgpu_partial_matvec_for_wide(
+        gpgpu_t9_existing_t63_groupid_live32_probe_profile(),
+        output_gpu,
+        output_bytes,
+        expected_words,
+        Some(expected_words16),
+        Some(expected_words32),
+        row_count,
+        live_k_dim,
+        true,
+        false,
+        true,
+        row_count as u32,
+    )
+}
+
 pub(crate) fn submit_gpgpu_t64_windowed_accum16_live48_partial_matvec_probe(
     output_gpu: u64,
     output_bytes: usize,
@@ -2782,11 +2895,61 @@ pub(crate) fn submit_gpgpu_t8_groupid_live16_distinct_row16_probe(
         output_bytes,
         expected_words,
         Some(expected_words16),
+        None,
         row_count,
         live_k_dim,
         true,
         false,
         true,
+        row_count as u32,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t8_groupid_live16_distinct_row32_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words32: [u32; 32],
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    let mut expected_words = [0u32; 8];
+    let mut expected_words16 = [0u32; 16];
+    expected_words.copy_from_slice(&expected_words32[..8]);
+    expected_words16.copy_from_slice(&expected_words32[..16]);
+    submit_gpgpu_partial_matvec_for_wide(
+        gpgpu_t8_groupid_live16_partial_matvec_profile(),
+        output_gpu,
+        output_bytes,
+        expected_words,
+        Some(expected_words16),
+        Some(expected_words32),
+        row_count,
+        live_k_dim,
+        true,
+        false,
+        true,
+        row_count as u32,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t8_groupid_live16_trusted_no_readback(
+    output_gpu: u64,
+    output_bytes: usize,
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_for_wide(
+        gpgpu_t8_groupid_live16_partial_matvec_profile(),
+        output_gpu,
+        output_bytes,
+        [0; 8],
+        None,
+        None,
+        row_count,
+        live_k_dim,
+        false,
+        false,
+        false,
         row_count as u32,
     )
 }
@@ -2809,6 +2972,7 @@ fn submit_gpgpu_partial_matvec_for(
         output_bytes,
         expected_words,
         None,
+        None,
         row_count,
         live_k_dim,
         validate_output,
@@ -2824,6 +2988,7 @@ fn submit_gpgpu_partial_matvec_for_wide(
     output_bytes: usize,
     expected_words: [u32; 8],
     expected_words16_override: Option<[u32; 16]>,
+    expected_words32_override: Option<[u32; 32]>,
     row_count: usize,
     live_k_dim: usize,
     validate_output: bool,
@@ -3089,9 +3254,19 @@ fn submit_gpgpu_partial_matvec_for_wide(
     } else {
         [0; 16]
     };
+    let output_words32 = if read_output_words {
+        unsafe { read_gpgpu_output_words32(output_virt) }
+    } else {
+        [0; 32]
+    };
     let expected_words16 = expected_words16_override.unwrap_or_else(|| {
         let mut words = [0u32; 16];
         words[..8].copy_from_slice(&expected_words);
+        words
+    });
+    let expected_words32 = expected_words32_override.unwrap_or_else(|| {
+        let mut words = [0u32; 32];
+        words[..16].copy_from_slice(&expected_words16);
         words
     });
     let expected_mask = if row_count >= 32 {
@@ -3102,7 +3277,7 @@ fn submit_gpgpu_partial_matvec_for_wide(
     let mut compare_mask = if validate_output { 0u32 } else { expected_mask };
     if validate_output {
         for index in 0..row_count {
-            if output_words16[index] == expected_words16[index] {
+            if output_words32[index] == expected_words32[index] {
                 compare_mask |= 1u32 << index;
             }
         }
@@ -3243,6 +3418,8 @@ fn submit_gpgpu_partial_matvec_for_wide(
         expected_words,
         output_words16,
         expected_words16,
+        output_words32,
+        expected_words32,
         compare_mask,
         expected_mask,
         dispatch_delta,
@@ -3989,6 +4166,12 @@ fn gpgpu_t62_partial_matvec_failure(
         output_words16: [0; 16],
         expected_words16: {
             let mut words = [0u32; 16];
+            words[..8].copy_from_slice(&expected_words);
+            words
+        },
+        output_words32: [0; 32],
+        expected_words32: {
+            let mut words = [0u32; 32];
             words[..8].copy_from_slice(&expected_words);
             words
         },

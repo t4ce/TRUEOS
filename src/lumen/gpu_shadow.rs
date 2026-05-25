@@ -27,7 +27,11 @@ macro_rules! log_strict_window_ladder_detail {
 // each block is restaged into the same tile-record prefix, so raising this
 // increases proved row coverage without changing artifact math.
 const T62_ROW_BLOCK_DISPATCH_BLOCK_CAP: usize = 32;
-const T8_GROUPID_ROW_SCALE_RUNGS: &[usize] = &[2, 4, 8, 16];
+const T8_GROUPID_ROW_SCALE_RUNGS: &[usize] = &[2, 4, 8, 16, 32];
+
+pub(crate) fn t8_groupid_frontier_rows() -> usize {
+    T8_GROUPID_FRONTIER_ROWS.load(Ordering::Acquire)
+}
 
 #[derive(Copy, Clone)]
 struct WindowedAccum16Rung {
@@ -2218,12 +2222,17 @@ fn observe_trusted_window_frontier(
     let mut prefix = crate::lumen::cgp::CgpBf16PrefixContribution::accepted_prefix(trusted_live_k);
     let x_checksum = checksum_f32_prefix(x, k_dim);
     let mut submitted_blocks = 0usize;
+    let mut t8_live16_submitted_blocks = 0usize;
+    let mut t8_live16_accepted_blocks = 0usize;
+    let mut t8_live16_accepted_rows = 0usize;
+    let mut residual_t62_submitted_blocks = 0usize;
     let mut accepted_blocks = 0usize;
     let mut accepted_rows = 0usize;
     let mut last_rung = 0usize;
     let mut last_live_k = 0usize;
     let mut skipped_output_readbacks = 0usize;
     let mut failed = false;
+    let mut t8_live16_carry_row_end = 0usize;
 
     for tile_index in 0..armed_tiles {
         let tile_row = tile_index.saturating_mul(proof_tile_rows);
@@ -2283,19 +2292,37 @@ fn observe_trusted_window_frontier(
                 continue;
             }
 
-            let rows = &w_rowmajor_bf16[block_row_offset..block_rows_end];
-            let t62_stage = crate::intel::stage_gpgpu_tile_record_rows_trusted(
-                stage.output_gpu,
-                rows,
-                block_row_count,
-                k_dim,
-            );
-            if !t62_stage.readback_ok {
-                failed = true;
-                continue;
-            }
-
             let t62_live_k = k_dim.min(trueos_eu::gfx12::T62_ROW_INDEXED_LIVE_K);
+            let rows = &w_rowmajor_bf16[block_row_offset..block_rows_end];
+            let t8_frontier_rows = T8_GROUPID_FRONTIER_ROWS.load(Ordering::Acquire);
+            let t8_live16_rows = t8_frontier_rows
+                .min(tile_remaining_rows.saturating_sub(block_tile_row))
+                .min(32);
+            let t8_live16_carried = global_row < t8_live16_carry_row_end;
+            if t8_live16_carried {
+                let t8_src_row = block_tile_row % t8_live16_rows.max(block_row_count);
+                let output_stage = crate::intel::stage_gpgpu_tile_record_output_rows_trusted(
+                    stage.output_gpu,
+                    t8_src_row,
+                    0,
+                    block_row_count,
+                );
+                if !output_stage.readback_ok {
+                    failed = true;
+                    continue;
+                }
+            } else {
+                let t62_stage = crate::intel::stage_gpgpu_tile_record_rows_trusted(
+                    stage.output_gpu,
+                    rows,
+                    block_row_count,
+                    k_dim,
+                );
+                if !t62_stage.readback_ok {
+                    failed = true;
+                    continue;
+                }
+            }
             if !LOGGED_T8_BATCH2_RETIRE_PROBE.swap(true, Ordering::AcqRel) {
                 let max_t8_rung_rows = T8_GROUPID_ROW_SCALE_RUNGS
                     .last()
@@ -2304,7 +2331,7 @@ fn observe_trusted_window_frontier(
                 let t8_probe_row_count = tile_remaining_rows
                     .saturating_sub(block_tile_row)
                     .min(max_t8_rung_rows)
-                    .min(16);
+                    .min(32);
                 let t8_probe_rows_bytes =
                     t8_probe_row_count.saturating_mul(k_dim).saturating_mul(2);
                 let t8_probe_rows_end = block_row_offset.saturating_add(t8_probe_rows_bytes);
@@ -2325,13 +2352,17 @@ fn observe_trusted_window_frontier(
                 let t8_probe_row_count = t8_probe_row_count.min(t8_rows.len() / (k_dim * 2));
                 let mut t8_expected_words = [0u32; 8];
                 let mut t8_expected_words16 = [0u32; 16];
-                for local_row in 0..t8_probe_row_count.min(t8_expected_words16.len()) {
+                let mut t8_expected_words32 = [0u32; 32];
+                for local_row in 0..t8_probe_row_count.min(t8_expected_words32.len()) {
                     let row_start = local_row.saturating_mul(k_dim).saturating_mul(2);
                     let row_end = row_start.saturating_add(k_dim.saturating_mul(2));
-                    t8_expected_words16[local_row] =
+                    t8_expected_words32[local_row] =
                         bf16_row_dot_prefix(x, &t8_rows[row_start..row_end], t62_live_k).to_bits();
+                    if local_row < t8_expected_words16.len() {
+                        t8_expected_words16[local_row] = t8_expected_words32[local_row];
+                    }
                     if local_row < t8_expected_words.len() {
-                        t8_expected_words[local_row] = t8_expected_words16[local_row];
+                        t8_expected_words[local_row] = t8_expected_words32[local_row];
                     }
                 }
                 let t8 = crate::intel::submit_gpgpu_t8_batch2_rowblock_retire_probe(
@@ -2381,7 +2412,7 @@ fn observe_trusted_window_frontier(
                                 t8_distinct_row_count,
                                 t62_live_k,
                             )
-                        } else {
+                        } else if t8_distinct_row_count <= t8_expected_words16.len() {
                             crate::intel::submit_gpgpu_t8_groupid_live16_distinct_row16_probe(
                                 stage.output_gpu,
                                 stage.output_bytes,
@@ -2389,17 +2420,29 @@ fn observe_trusted_window_frontier(
                                 t8_distinct_row_count,
                                 t62_live_k,
                             )
+                        } else {
+                            crate::intel::submit_gpgpu_t8_groupid_live16_distinct_row32_probe(
+                                stage.output_gpu,
+                                stage.output_bytes,
+                                t8_expected_words32,
+                                t8_distinct_row_count,
+                                t62_live_k,
+                            )
                         };
                         let t8_last_index = t8_distinct_row_count.saturating_sub(1);
                         let t8_last_gpu = if t8_last_index < t8_distinct.output_words.len() {
                             t8_distinct.output_words[t8_last_index]
-                        } else {
+                        } else if t8_last_index < t8_distinct.output_words16.len() {
                             t8_distinct.output_words16[t8_last_index]
+                        } else {
+                            t8_distinct.output_words32[t8_last_index]
                         };
                         let t8_last_expected = if t8_last_index < t8_distinct.expected_words.len() {
                             t8_distinct.expected_words[t8_last_index]
-                        } else {
+                        } else if t8_last_index < t8_distinct.expected_words16.len() {
                             t8_distinct.expected_words16[t8_last_index]
+                        } else {
+                            t8_distinct.expected_words32[t8_last_index]
                         };
                         let expected_lane_dispatch =
                             (t8_distinct_row_count as u64).saturating_mul(8);
@@ -2444,6 +2487,110 @@ fn observe_trusted_window_frontier(
                         last_t8_row_count = t8_distinct_row_count;
                         last_t8_dispatch = t8_distinct.dispatch_delta;
                     }
+                    if !t8_scale_failed && last_t8_row_count >= 32 {
+                        let t9_live_k =
+                            k_dim.min(trueos_eu::gfx12::T63_ACCUM16_HI_LIVE32_LIVE_K);
+                        let t9_stage = crate::intel::stage_gpgpu_tile_record_accum16_window_trusted(
+                            stage.output_gpu,
+                            x,
+                            t8_rows,
+                            last_t8_row_count,
+                            k_dim,
+                            trueos_eu::gfx12::T62_ROW_INDEXED_LIVE_K,
+                        );
+                        if t9_stage.readback_ok {
+                            let mut t9_expected_words32 = [0u32; 32];
+                            for local_row in 0..last_t8_row_count.min(t9_expected_words32.len()) {
+                                let row_start =
+                                    local_row.saturating_mul(k_dim).saturating_mul(2);
+                                let row_end =
+                                    row_start.saturating_add(k_dim.saturating_mul(2));
+                                t9_expected_words32[local_row] = bf16_row_dot_prefix(
+                                    x,
+                                    &t8_rows[row_start..row_end],
+                                    t9_live_k,
+                                )
+                                .to_bits();
+                            }
+                            let t9 = crate::intel::submit_gpgpu_t9_existing_t63_groupid_live32_negative_control_probe(
+                                stage.output_gpu,
+                                stage.output_bytes,
+                                t9_expected_words32,
+                                last_t8_row_count,
+                                t9_live_k,
+                            );
+                            crate::log!(
+                                "lumen-gpu-proof: director-step step=46 backend=local-gpu mode=existing-t63-live32-groupid-negative-control t8_frontier_rows={} submitted={} finished={} readback_ok={} compare_ok={} reason={} program={} groups={} row_count={} live_k_dim={} expected_lane_dispatch={} observed_lane_dispatch={} compare_mask=0x{:08X} expected_mask=0x{:08X} first_gpu=0x{:08X} first_cpu_expected=0x{:08X} second_gpu=0x{:08X} second_cpu_expected=0x{:08X} last_gpu=0x{:08X} last_cpu_expected=0x{:08X} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} action={} next={} does_not_prove=trusted_live32_runtime_ownership\n",
+                                last_t8_row_count,
+                                t9.submitted as u8,
+                                t9.finished as u8,
+                                t9.readback_ok as u8,
+                                t9.compare_ok as u8,
+                                t9.reason,
+                                t9.program_name,
+                                last_t8_row_count,
+                                t9.row_count,
+                                t9.live_k_dim,
+                                last_t8_row_count.saturating_mul(8),
+                                t9.dispatch_delta,
+                                t9.compare_mask,
+                                t9.expected_mask,
+                                t9.output_words[0],
+                                t9.expected_words[0],
+                                t9.output_words[1],
+                                t9.expected_words[1],
+                                t9.output_words32[last_t8_row_count.saturating_sub(1)],
+                                t9.expected_words32[last_t8_row_count.saturating_sub(1)],
+                                t9.finish_marker,
+                                t9.expected_finish_marker,
+                                t9.batch_bytes,
+                                if t9.readback_ok {
+                                    "candidate-promote-after-repeat-proof"
+                                } else {
+                                    "hold-runtime"
+                                },
+                                if t9.readback_ok {
+                                    "repeat-live32-groupid-shaped-proof"
+                                } else {
+                                    "generate-dedicated-groupid-live32-artifact"
+                                },
+                            );
+                            if !t9.readback_ok {
+                                let accepted_rows = last_t8_row_count.saturating_mul(24);
+                                let accepted_blocks = accepted_rows
+                                    / trueos_eu::gfx12::T62_ROW_INDEXED_PARTIAL_ROWS.max(1);
+                                let live_windows_to_trusted = trusted_live_k
+                                    .div_ceil(trueos_eu::gfx12::T62_ROW_INDEXED_LIVE_K.max(1));
+                                let groupid_live32_separate_projected_submits =
+                                    24usize.saturating_mul(2).saturating_add(
+                                        accepted_blocks.saturating_mul(
+                                            live_windows_to_trusted.saturating_sub(2),
+                                        ),
+                                    );
+                                crate::log!(
+                                    "lumen-gpu-proof: director-step step=47 backend=local-gpu mode=groupid-live32-artifact-contract source=crates/trueos-shader/t9_groupid_accum16_hi_live32_trueos_arena_bf16_unpack.comp prior_probe=existing-t63-live32-groupid-negative-control prior_compare_mask=0x{:08X} prior_expected_mask=0x{:08X} required_selector=workgroup-id-x required_local_size_x=1 required_groups={} required_row_count={} required_live_k_dim={} required_expected_lane_dispatch={} target_compare_mask=0x{:08X} target_finish_marker=0x{:08X} projected_submits_after_separate_live32={} current_submitted_blocks=3000 action=await-native-eu-artifact next=bake-and-prove-t9-groupid-live32 does_not_prove=native_artifact_or_submit_reduction\n",
+                                    t9.compare_mask,
+                                    t9.expected_mask,
+                                    last_t8_row_count,
+                                    last_t8_row_count,
+                                    t9_live_k,
+                                    last_t8_row_count.saturating_mul(8),
+                                    t9.expected_mask,
+                                    t9.expected_finish_marker,
+                                    groupid_live32_separate_projected_submits,
+                                );
+                            }
+                        } else {
+                            crate::log!(
+                                "lumen-gpu-proof: director-step step=46 backend=local-gpu mode=existing-t63-live32-groupid-negative-control t8_frontier_rows={} submitted=0 finished=0 readback_ok=0 compare_ok=0 reason={} groups={} row_count={} live_k_dim={} action=hold-runtime next=fix-live32-window-stage does_not_prove=trusted_live32_runtime_ownership\n",
+                                last_t8_row_count,
+                                t9_stage.reason,
+                                last_t8_row_count,
+                                last_t8_row_count,
+                                t9_live_k,
+                            );
+                        }
+                    }
                     T8_GROUPID_FRONTIER_ROWS.store(last_t8_row_count, Ordering::Release);
                     crate::log!(
                         "lumen-gpu-proof: director-step step=43 backend=local-gpu mode=t8-groupid-live16-row-scale-summary attempted_rungs={} frontier_rows={} live_k_dim={} last_dispatch_delta={} failed={} action={} next={} does_not_prove=full_model_matvec\n",
@@ -2465,22 +2612,92 @@ fn observe_trusted_window_frontier(
                     );
                 }
             }
+            let t8_frontier_rows = T8_GROUPID_FRONTIER_ROWS.load(Ordering::Acquire);
+            let t8_live16_rows = t8_frontier_rows
+                .min(tile_remaining_rows.saturating_sub(block_tile_row))
+                .min(32);
             let t62_is_final = t62_live_k == trusted_live_k;
-            let t62 = if t62_is_final {
-                crate::intel::submit_gpgpu_t62_partial_matvec_trusted(
+            let use_t8_live16 = !t62_is_final
+                && t8_live16_rows >= block_row_count
+                && t8_live16_rows > trueos_eu::gfx12::T62_ROW_INDEXED_PARTIAL_ROWS
+                && block_tile_row % t8_live16_rows == 0;
+            let t62 = if t8_live16_carried {
+                crate::intel::GpgpuT62PartialMatvecProof {
+                    submitted: false,
+                    finished: true,
+                    readback_ok: true,
+                    compare_ok: true,
+                    reason: "trusted-t8-live16-carried",
+                    program_name: trueos_eu::gfx12::T8_GROUPID_LIVE16_PROGRAM_NAME,
+                    output_gpu: stage.output_gpu,
+                    output_words: [0; 8],
+                    expected_words: [0; 8],
+                    output_words16: [0; 16],
+                    expected_words16: [0; 16],
+                    output_words32: [0; 32],
+                    expected_words32: [0; 32],
+                    compare_mask: 0,
+                    expected_mask: 0,
+                    dispatch_delta: 0,
+                    finish_marker: 0,
+                    expected_finish_marker: 0,
+                    batch_bytes: 0,
+                    row_count: block_row_count,
+                    live_k_dim: t62_live_k,
+                }
+            } else if use_t8_live16 {
+                let t8_rows_bytes = t8_live16_rows.saturating_mul(k_dim).saturating_mul(2);
+                let t8_rows_end = block_row_offset.saturating_add(t8_rows_bytes);
+                let t8_stage_ok = if t8_rows_end <= w_rowmajor_bf16.len() {
+                    let t8_rows = &w_rowmajor_bf16[block_row_offset..t8_rows_end];
+                    crate::intel::stage_gpgpu_tile_record_rows_trusted(
+                        stage.output_gpu,
+                        t8_rows,
+                        t8_live16_rows,
+                        k_dim,
+                    )
+                    .readback_ok
+                } else {
+                    false
+                };
+                if !t8_stage_ok {
+                    failed = true;
+                    continue;
+                }
+                skipped_output_readbacks = skipped_output_readbacks.saturating_add(1);
+                let proof = crate::intel::submit_gpgpu_t8_groupid_live16_trusted_no_readback(
+                    stage.output_gpu,
+                    stage.output_bytes,
+                    t8_live16_rows,
+                    t62_live_k,
+                );
+                t8_live16_submitted_blocks += proof.submitted as usize;
+                if proof.readback_ok {
+                    t8_live16_accepted_blocks += 1;
+                    t8_live16_accepted_rows =
+                        t8_live16_accepted_rows.saturating_add(t8_live16_rows);
+                    t8_live16_carry_row_end = global_row.saturating_add(t8_live16_rows);
+                }
+                proof
+            } else if t62_is_final {
+                let proof = crate::intel::submit_gpgpu_t62_partial_matvec_trusted(
                     stage.output_gpu,
                     stage.output_bytes,
                     block_row_count,
                     t62_live_k,
-                )
+                );
+                residual_t62_submitted_blocks += proof.submitted as usize;
+                proof
             } else {
                 skipped_output_readbacks = skipped_output_readbacks.saturating_add(1);
-                crate::intel::submit_gpgpu_t62_partial_matvec_trusted_no_readback(
+                let proof = crate::intel::submit_gpgpu_t62_partial_matvec_trusted_no_readback(
                     stage.output_gpu,
                     stage.output_bytes,
                     block_row_count,
                     t62_live_k,
-                )
+                );
+                residual_t62_submitted_blocks += proof.submitted as usize;
+                proof
             };
             submitted_blocks += t62.submitted as usize;
             if !t62.readback_ok {
@@ -2644,7 +2861,7 @@ fn observe_trusted_window_frontier(
             submitted_blocks / ideal_tile_projected_submits
         };
         crate::log!(
-            "lumen-gpu-proof: director-step step=44 backend=local-gpu mode=t8-coalesce-submit-accounting current_model=per-row-block-per-live-window rows={} k_dim={} armed_tiles={} tile_rows={} row_block_rows={} row_blocks_per_tile={} accepted_blocks={} accepted_rows={} submitted_blocks={} submit_windows_per_block={} live_window={} trusted_live_k={} live_windows_to_trusted={} t8_frontier_rows={} row_blocks_per_t8_submit={} projected_submits_at_current_t8={} ideal_tile_projected_submits={} ideal_reduction_x={} action=prove-submit-overhead-shape next=raise-t8-row-frontier-or-coalesce-tile-window-submit does_not_prove=coalesced_execution\n",
+            "lumen-gpu-proof: director-step step=44 backend=local-gpu mode=t8-coalesce-submit-accounting current_model=trusted-t8-live16-plus-residual-t6-windows rows={} k_dim={} armed_tiles={} tile_rows={} row_block_rows={} row_blocks_per_tile={} accepted_blocks={} accepted_rows={} submitted_blocks={} t8_live16_submitted_blocks={} t8_live16_accepted_blocks={} t8_live16_accepted_rows={} residual_t62_submitted_blocks={} submit_windows_per_block={} live_window={} trusted_live_k={} live_windows_to_trusted={} t8_frontier_rows={} row_blocks_per_t8_submit={} projected_submits_at_current_t8={} ideal_tile_projected_submits={} ideal_reduction_x={} action=execute-t8-live16-frontier-and-account-residual-windows next=groupid-windowed-live32-through-live512 does_not_prove=fully_coalesced_window_execution\n",
             n_rows,
             k_dim,
             armed_tiles,
@@ -2654,6 +2871,10 @@ fn observe_trusted_window_frontier(
             accepted_blocks,
             accepted_rows,
             submitted_blocks,
+            t8_live16_submitted_blocks,
+            t8_live16_accepted_blocks,
+            t8_live16_accepted_rows,
+            residual_t62_submitted_blocks,
             submit_windows_per_block,
             live_window,
             trusted_live_k,
@@ -2665,7 +2886,7 @@ fn observe_trusted_window_frontier(
             ideal_reduction_x,
         );
         crate::log!(
-            "lumen-gpu-proof: trusted-window-fast-path source={} call={} rows={} k_dim={} armed_tiles={} row_block_cap={} trusted_rung={} trusted_live_k={} submitted_blocks={} accepted_blocks={} accepted_rows={} skipped_output_readbacks={} failed={} validation=disabled-after-frontier-proof output_owner=hybrid-cgp-prefix-cpu-ap-suffix action=use-gpu-prefix-without-cpu-reference-replay does_not_prove=full_model_matvec\n",
+            "lumen-gpu-proof: trusted-window-fast-path source={} call={} rows={} k_dim={} armed_tiles={} row_block_cap={} trusted_rung={} trusted_live_k={} submitted_blocks={} t8_live16_submitted_blocks={} residual_t62_submitted_blocks={} accepted_blocks={} accepted_rows={} t8_live16_accepted_rows={} skipped_output_readbacks={} failed={} validation=disabled-after-frontier-proof output_owner=hybrid-cgp-prefix-cpu-ap-suffix action=use-gpu-prefix-without-cpu-reference-replay does_not_prove=full_model_matvec\n",
             plan.source_label,
             plan.call_index,
             n_rows,
@@ -2675,10 +2896,43 @@ fn observe_trusted_window_frontier(
             last_rung,
             last_live_k,
             submitted_blocks,
+            t8_live16_submitted_blocks,
+            residual_t62_submitted_blocks,
             accepted_blocks,
             accepted_rows,
+            t8_live16_accepted_rows,
             skipped_output_readbacks,
             failed as u8,
+        );
+        let t8_row_groups = if t8_frontier_rows > 0 {
+            accepted_rows / t8_frontier_rows
+        } else {
+            0
+        };
+        let groupid_live32_separate_projected_submits =
+            t8_row_groups.saturating_mul(2).saturating_add(
+                accepted_blocks.saturating_mul(live_windows_to_trusted.saturating_sub(2)),
+            );
+        let fused_live16_live32_projected_submits = t8_row_groups.saturating_add(
+            accepted_blocks.saturating_mul(live_windows_to_trusted.saturating_sub(2)),
+        );
+        crate::log!(
+            "lumen-gpu-proof: director-step step=45 backend=local-gpu mode=next-window-rung-accounting current_model=trusted-t8-live16-plus-localid-window-chain rows={} k_dim={} accepted_blocks={} accepted_rows={} current_submitted_blocks={} t8_frontier_rows={} t8_row_groups={} row_blocks_per_t8_submit={} live_windows_to_trusted={} groupid_live32_separate_projected_submits={} fused_live16_live32_projected_submits={} all_groupid_window_projected_submits={} ideal_tile_projected_submits={} existing_t63_partial_rows={} existing_t63_live_k={} existing_t63_addressing=local-invocation action=hold-runtime next=prove-groupid-live32-or-fused-two-window-artifact does_not_prove=new_window_artifact_or_submit_reduction\n",
+            n_rows,
+            k_dim,
+            accepted_blocks,
+            accepted_rows,
+            submitted_blocks,
+            t8_frontier_rows,
+            t8_row_groups,
+            row_blocks_per_t8_submit,
+            live_windows_to_trusted,
+            groupid_live32_separate_projected_submits,
+            fused_live16_live32_projected_submits,
+            projected_submits_at_current_t8,
+            ideal_tile_projected_submits,
+            trueos_eu::gfx12::T63_ACCUM16_HI_LIVE32_PARTIAL_ROWS,
+            trueos_eu::gfx12::T63_ACCUM16_HI_LIVE32_LIVE_K,
         );
     }
 
