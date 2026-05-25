@@ -1,12 +1,14 @@
 mod dev_gears;
 mod lib;
 
-pub use crab_usb as crabusb;
 pub use self::lib::*;
+pub use crab_usb as crabusb;
 
 #[embassy_executor::task]
 pub async fn usb_controller_service_task() {
-    let Some((mmio, kernel)) = lib::known_xhci_host_inputs() else { return };
+    let Some((mmio, kernel)) = lib::known_xhci_host_inputs() else {
+        return;
+    };
     let mut host = crabusb::USBHost::new_xhci(mmio, kernel).expect("crabusb xhci host");
     host.init().await.expect("crabusb xhci init");
 
@@ -15,13 +17,11 @@ pub async fn usb_controller_service_task() {
         unsafe { embassy_executor::Spawner::for_current_executor().await };
     spawner.spawn(usb_event_pump_task(event_handler).expect("crabusb event pump token"));
     crate::log!("crabusb: event pump started\n");
-    spawner.spawn(
-        dev_gears::usb_device_pool_worker_task().expect("crabusb device pool worker token"),
-    );
+    spawner
+        .spawn(dev_gears::usb_device_pool_worker_task().expect("crabusb device pool worker token"));
     crate::log!("crabusb: device pool worker started\n");
-    spawner.spawn(
-        dev_gears::usb_boot_mouse_worker_task().expect("crabusb boot mouse worker token"),
-    );
+    spawner
+        .spawn(dev_gears::usb_boot_mouse_worker_task().expect("crabusb boot mouse worker token"));
     crate::log!("crabusb: boot mouse worker started\n");
 
     let Some(news) = probe_devices_with_log(&mut host, "initial").await else {
@@ -53,11 +53,7 @@ async fn probe_devices_with_log(
             return None;
         }
     };
-    crate::log!(
-        "crabusb: probe_devices label={} count={}\n",
-        label,
-        news.len()
-    );
+    crate::log!("crabusb: probe_devices label={} count={}\n", label, news.len());
     Some(news)
 }
 

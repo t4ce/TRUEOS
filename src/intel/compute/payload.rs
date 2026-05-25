@@ -40,7 +40,10 @@ pub(super) fn write_gpgpu_dummy_curbe(
     unsafe {
         let curbe = warm.draw_state_virt.add(curbe_state_offset_bytes) as *mut u32;
         for index in 0..curbe_dwords {
-            core::ptr::write_volatile(curbe.add(index), 0x5A5A_5A5A);
+            // Mesa compute payloads can add CURBE dword 4 as the base workgroup X.
+            // Keep the rest poisoned, but make the base-group offset semantically zero.
+            let value = if index == 4 { 0 } else { 0x5A5A_5A5A };
+            core::ptr::write_volatile(curbe.add(index), value);
         }
     }
     crate::intel::dma_flush(

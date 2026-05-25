@@ -421,16 +421,16 @@ pub fn matvec_rowmajor_bf16(
     );
     let submitted = cgp_prefix_submit.submitted_jobs
         + submit_bf16_jobs_skipping_cgp_prefix(
-        x_ptr,
-        w_ptr,
-        out_ptr,
-        n_rows,
-        k_dim,
-        chunk_rows,
-        local_row_end,
-        done_ptr,
-        &cgp_prefix,
-    );
+            x_ptr,
+            w_ptr,
+            out_ptr,
+            n_rows,
+            k_dim,
+            chunk_rows,
+            local_row_end,
+            done_ptr,
+            &cgp_prefix,
+        );
 
     let wait_start = embassy_time_driver::now();
     let mut last_wait_log = wait_start;
