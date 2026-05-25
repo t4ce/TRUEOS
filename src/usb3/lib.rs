@@ -440,9 +440,16 @@ pub mod input {
 }
 
 pub mod hid {
+    use alloc::vec::Vec;
     use core::sync::atomic::{AtomicU64, Ordering};
+    use spin::Mutex;
 
     static VIRTUAL_CURSOR_SEQ: AtomicU64 = AtomicU64::new(1);
+    const CURSOR_EVENT_CAP: usize = crate::allcaps::input::HID_CURSOR_EVENT_RING_CAP;
+    const USB3_MOUSE_CONTROLLER_ID: u32 = 3;
+
+    static CURSOR_EVENTS: Mutex<Vec<TrueosHidCursorEvent>> = Mutex::new(Vec::new());
+    static MOUSE_STATES: Mutex<Vec<MouseCursorState>> = Mutex::new(Vec::new());
 
     #[repr(C)]
     #[derive(Clone, Copy, Debug, Default)]
@@ -457,15 +464,49 @@ pub mod hid {
         pub flags: u32,
     }
 
+    #[derive(Clone, Copy, Debug)]
+    struct MouseCursorState {
+        controller_id: u32,
+        slot_id: u32,
+        ep_target: u32,
+        x: f64,
+        y: f64,
+    }
+
     pub fn pop_cursor_event() -> Option<TrueosHidCursorEvent> {
-        None
+        let mut events = CURSOR_EVENTS.lock();
+        if events.is_empty() {
+            None
+        } else {
+            Some(events.remove(0))
+        }
     }
 
     pub fn read_cursor_events_since(
         read_seq: u64,
-        _out: &mut [TrueosHidCursorEvent],
+        out: &mut [TrueosHidCursorEvent],
     ) -> (u64, u32, usize) {
-        (read_seq.max(VIRTUAL_CURSOR_SEQ.load(Ordering::Relaxed)), 0, 0)
+        let events = CURSOR_EVENTS.lock();
+        let next_seq = VIRTUAL_CURSOR_SEQ
+            .load(Ordering::Relaxed)
+            .saturating_sub(1)
+            .max(read_seq);
+        let first_seq = events.first().map(|event| event.seq).unwrap_or(next_seq);
+        let dropped = if read_seq != 0 && read_seq.saturating_add(1) < first_seq {
+            first_seq.saturating_sub(read_seq.saturating_add(1)) as u32
+        } else {
+            0
+        };
+
+        let mut wrote = 0usize;
+        for event in events.iter().filter(|event| event.seq > read_seq) {
+            if wrote >= out.len() {
+                break;
+            }
+            out[wrote] = *event;
+            wrote += 1;
+        }
+        (next_seq, dropped, wrote)
     }
 
     pub fn inject_virtual_cursor_event(
@@ -476,7 +517,102 @@ pub mod hid {
         _wheel: i16,
         _flags: u32,
     ) {
-        VIRTUAL_CURSOR_SEQ.fetch_add(1, Ordering::Relaxed);
+        push_cursor_event(TrueosHidCursorEvent {
+            seq: 0,
+            controller_id: 0,
+            slot_id: _slot_id,
+            ep_target: 0,
+            hid_kind: crate::r::cursor::HID_KIND_VIRTUAL_CURSOR,
+            buttons_down: _buttons_down,
+            wheel: _wheel,
+            flags: _flags,
+        });
+    }
+
+    pub fn inject_usb3_mouse_relative_event(
+        slot_id: u32,
+        ep_target: u32,
+        dx: i8,
+        dy: i8,
+        buttons_down: u32,
+        wheel: i16,
+        flags: u32,
+    ) {
+        let (x, y) = update_mouse_cursor(USB3_MOUSE_CONTROLLER_ID, slot_id, ep_target, dx, dy);
+        crate::r::cursor::upsert_snapshot(
+            USB3_MOUSE_CONTROLLER_ID,
+            slot_id,
+            ep_target,
+            crate::r::cursor::HID_KIND_MOUSE,
+            x,
+            y,
+            buttons_down,
+        );
+        push_cursor_event(TrueosHidCursorEvent {
+            seq: 0,
+            controller_id: USB3_MOUSE_CONTROLLER_ID,
+            slot_id,
+            ep_target,
+            hid_kind: crate::r::cursor::HID_KIND_MOUSE,
+            buttons_down,
+            wheel,
+            flags,
+        });
+    }
+
+    fn push_cursor_event(mut event: TrueosHidCursorEvent) {
+        event.seq = VIRTUAL_CURSOR_SEQ.fetch_add(1, Ordering::Relaxed);
+        let mut events = CURSOR_EVENTS.lock();
+        if events.len() >= CURSOR_EVENT_CAP {
+            let _ = events.remove(0);
+        }
+        events.push(event);
+    }
+
+    fn update_mouse_cursor(
+        controller_id: u32,
+        slot_id: u32,
+        ep_target: u32,
+        dx: i8,
+        dy: i8,
+    ) -> (f64, f64) {
+        let (view_w, view_h) = crate::intel::active_scanout_dimensions()
+            .map(|(w, h)| (w.max(1) as f64, h.max(1) as f64))
+            .unwrap_or((1920.0, 1080.0));
+        let mut states = MOUSE_STATES.lock();
+        if let Some(state) = states.iter_mut().find(|state| {
+            state.controller_id == controller_id
+                && state.slot_id == slot_id
+                && state.ep_target == ep_target
+        }) {
+            state.x = clamp01(state.x + (dx as f64 / view_w));
+            state.y = clamp01(state.y + (dy as f64 / view_h));
+            return (state.x, state.y);
+        }
+
+        let mut state = MouseCursorState {
+            controller_id,
+            slot_id,
+            ep_target,
+            x: 0.5,
+            y: 0.5,
+        };
+        state.x = clamp01(state.x + (dx as f64 / view_w));
+        state.y = clamp01(state.y + (dy as f64 / view_h));
+        let out = (state.x, state.y);
+        states.push(state);
+        out
+    }
+
+    #[inline]
+    fn clamp01(value: f64) -> f64 {
+        if value < 0.0 {
+            0.0
+        } else if value > 1.0 {
+            1.0
+        } else {
+            value
+        }
     }
 }
 

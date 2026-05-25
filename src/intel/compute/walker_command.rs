@@ -350,6 +350,7 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch(
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
+    push_store_marker(batch_dwords, &mut cursor, 26, 0xC0DE_7804)?;
     if !GPGPU_CONTIGUOUS_VFE_IDD_WALKER {
         push_pipe_control_full(
             batch_dwords,
@@ -381,11 +382,13 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch(
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, midl_total_bytes as u32)?;
     push(batch_dwords, &mut cursor, midl_start_address)?;
+    push_store_marker(batch_dwords, &mut cursor, 27, 0xC0DE_7805)?;
     if GPGPU_LOAD_DUMMY_CURBE {
         push(batch_dwords, &mut cursor, MEDIA_CURBE_LOAD_CMD)?;
         push(batch_dwords, &mut cursor, 0)?;
         push(batch_dwords, &mut cursor, curbe_total_bytes as u32)?;
         push(batch_dwords, &mut cursor, CURBE_DYNAMIC_OFFSET_BYTES as u32)?;
+        push_store_marker(batch_dwords, &mut cursor, 28, 0xC0DE_7806)?;
     }
     let walker_start = cursor;
     push(batch_dwords, &mut cursor, GPGPU_WALKER_CMD)?;

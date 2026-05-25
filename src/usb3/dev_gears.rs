@@ -8,6 +8,14 @@ pub const USB_DEVICE_POOL_CAP: usize = 8;
 const USB_CLASS_MASS_STORAGE: u8 = 0x08;
 const USB_SUBCLASS_SCSI: u8 = 0x06;
 const USB_PROTO_UAS: u8 = 0x62;
+const USB_CLASS_HID: u8 = 0x03;
+const USB_HID_SUBCLASS_BOOT: u8 = 0x01;
+const USB_HID_PROTOCOL_MOUSE: u8 = 0x02;
+const HID_REQ_SET_IDLE: u8 = 0x0A;
+const HID_REQ_SET_PROTOCOL: u8 = 0x0B;
+const HID_BOOT_PROTOCOL: u16 = 0;
+const USB3_BOOT_MOUSE_POOL_CAP: usize = 4;
+const USB3_BOOT_MOUSE_POLL_TIMEOUT_MS: u64 = 16;
 const UAS_IO_TIMEOUT_MS: u64 = 2_000;
 const UAS_IU_COMMAND: u8 = 0x01;
 const UAS_IU_STATUS: u8 = 0x03;
@@ -20,6 +28,7 @@ const SKHYNIX_UAS_MAX_TRANSFER_BYTES: usize = 1024 * 1024;
 const SKHYNIX_UAS_LOG_TRANSFER_BYTES: usize = 512 * 1024;
 
 static USB_DEVICE_POOL: Mutex<UsbDevicePool> = Mutex::new(UsbDevicePool::new());
+static USB_BOOT_MOUSE_POOL: Mutex<UsbBootMousePool> = Mutex::new(UsbBootMousePool::new());
 
 struct UsbDevicePool {
     devices: Vec<PooledUsbDevice>,
@@ -49,6 +58,20 @@ struct SkhynixUasBlockDevice {
     runtime: SkhynixUasRuntime,
     info: MassProbeInfo,
     next_tag: u16,
+}
+
+struct UsbBootMousePool {
+    devices: Vec<PooledUsbDevice>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct BootMouseTarget {
+    configuration_value: u8,
+    interface_number: u8,
+    alternate_setting: u8,
+    interrupt_in: u8,
+    max_packet_size: u16,
+    interval: u8,
 }
 
 impl UsbDevicePool {
@@ -91,10 +114,35 @@ impl UsbDevicePool {
     }
 }
 
+impl UsbBootMousePool {
+    const fn new() -> Self {
+        Self {
+            devices: Vec::new(),
+        }
+    }
+
+    fn insert(&mut self, device: PooledUsbDevice) -> Result<usize, PooledUsbDevice> {
+        if self.devices.len() >= USB3_BOOT_MOUSE_POOL_CAP {
+            return Err(device);
+        }
+        self.devices.push(device);
+        Ok(self.devices.len())
+    }
+
+    fn pop(&mut self) -> Option<PooledUsbDevice> {
+        self.devices.pop()
+    }
+}
+
 pub fn handoff_opened_device(device: crabusb::Device) -> Result<usize, crabusb::Device> {
     let mut pool = USB_DEVICE_POOL.lock();
     pool.insert_for_worker(device)?;
     Ok(pool.len())
+}
+
+fn handoff_boot_mouse_device(device: PooledUsbDevice) -> Result<usize, PooledUsbDevice> {
+    let mut pool = USB_BOOT_MOUSE_POOL.lock();
+    pool.insert(device)
 }
 
 #[embassy_executor::task]
@@ -123,9 +171,255 @@ pub async fn usb_device_pool_worker_task() {
 }
 
 async fn process_opened_device(device: PooledUsbDevice) {
+    if pick_boot_mouse_target(device.device.configurations()).is_some() {
+        let id = device.id;
+        let vendor_id = device.vendor_id;
+        let product_id = device.product_id;
+        match handoff_boot_mouse_device(device) {
+            Ok(pool_len) => {
+                crate::log!(
+                    "crabusb: boot-mouse {:04x}:{:04x} id={} handed_to_mouse_pool pool_len={}\n",
+                    vendor_id,
+                    product_id,
+                    id,
+                    pool_len
+                );
+            }
+            Err(device) => {
+                crate::log!(
+                    "crabusb: boot-mouse {:04x}:{:04x} id={} dropped reason=mouse_pool_full cap={}\n",
+                    device.vendor_id,
+                    device.product_id,
+                    device.id,
+                    USB3_BOOT_MOUSE_POOL_CAP
+                );
+            }
+        }
+        return;
+    }
+
     if device.vendor_id == 0x152e && device.product_id == 0x7001 {
         start_skhynix_green_uas(device).await;
     }
+}
+
+#[embassy_executor::task]
+pub async fn usb_boot_mouse_worker_task() {
+    loop {
+        let next = {
+            let mut pool = USB_BOOT_MOUSE_POOL.lock();
+            pool.pop()
+        };
+
+        if let Some(device) = next {
+            poll_usb3_boot_mouse(device).await;
+        } else {
+            embassy_time::Timer::after(embassy_time::Duration::from_millis(25)).await;
+        }
+    }
+}
+
+async fn poll_usb3_boot_mouse(mut pooled: PooledUsbDevice) {
+    let Some(target) = pick_boot_mouse_target(pooled.device.configurations()) else {
+        return;
+    };
+
+    if let Err(err) = pooled
+        .device
+        .set_configuration(target.configuration_value)
+        .await
+    {
+        crate::log!(
+            "crabusb: boot-mouse {:04x}:{:04x} proof=set-config cfg={} status=failed err={:?}\n",
+            pooled.vendor_id,
+            pooled.product_id,
+            target.configuration_value,
+            err
+        );
+        return;
+    }
+
+    if let Err(err) = hid_class_control_out(
+        &mut pooled.device,
+        target.interface_number,
+        HID_REQ_SET_IDLE,
+        0,
+    )
+    .await
+    {
+        crate::log_trace!(
+            target: "usb";
+            "crabusb: boot-mouse {:04x}:{:04x} proof=set-idle if#{} status=failed err={:?}\n",
+            pooled.vendor_id,
+            pooled.product_id,
+            target.interface_number,
+            err
+        );
+    }
+
+    if let Err(err) = hid_class_control_out(
+        &mut pooled.device,
+        target.interface_number,
+        HID_REQ_SET_PROTOCOL,
+        HID_BOOT_PROTOCOL,
+    )
+    .await
+    {
+        crate::log!(
+            "crabusb: boot-mouse {:04x}:{:04x} proof=set-protocol if#{} status=failed err={:?}\n",
+            pooled.vendor_id,
+            pooled.product_id,
+            target.interface_number,
+            err
+        );
+        return;
+    }
+
+    if let Err(err) = pooled
+        .device
+        .claim_interface(target.interface_number, target.alternate_setting)
+        .await
+    {
+        crate::log!(
+            "crabusb: boot-mouse {:04x}:{:04x} proof=claim if#{} alt={} status=failed err={:?}\n",
+            pooled.vendor_id,
+            pooled.product_id,
+            target.interface_number,
+            target.alternate_setting,
+            err
+        );
+        return;
+    }
+
+    let mut interrupt_in = match pooled.device.endpoint(target.interrupt_in) {
+        Ok(endpoint) => endpoint,
+        Err(err) => {
+            crate::log!(
+                "crabusb: boot-mouse {:04x}:{:04x} proof=endpoint ep=0x{:02x} status=failed err={:?}\n",
+                pooled.vendor_id,
+                pooled.product_id,
+                target.interrupt_in,
+                err
+            );
+            return;
+        }
+    };
+
+    crate::log!(
+        "crabusb: boot-mouse {:04x}:{:04x} proof=start id={} if#{} alt={} ep=0x{:02x}/{} interval={} poll=1khz\n",
+        pooled.vendor_id,
+        pooled.product_id,
+        pooled.id,
+        target.interface_number,
+        target.alternate_setting,
+        target.interrupt_in,
+        target.max_packet_size,
+        target.interval
+    );
+
+    let mut last_buttons = 0u32;
+    loop {
+        let mut report = [0u8; 8];
+        let completion = embassy_time::with_timeout(
+            embassy_time::Duration::from_millis(USB3_BOOT_MOUSE_POLL_TIMEOUT_MS),
+            interrupt_in.wait(crabusb::usb_if::endpoint::TransferRequest::interrupt_in(
+                &mut report,
+            )),
+        )
+        .await;
+
+        match completion {
+            Ok(Ok(done)) => {
+                let len = done.actual_length.min(report.len());
+                if len >= 3 {
+                    let buttons = (report[0] & 0x07) as u32;
+                    let dx = report[1] as i8;
+                    let dy = report[2] as i8;
+                    let wheel = if len >= 4 { report[3] as i8 as i16 } else { 0 };
+                    if dx != 0 || dy != 0 || wheel != 0 || buttons != last_buttons {
+                        crate::usb2::hid::inject_usb3_mouse_relative_event(
+                            pooled.id as u32,
+                            target.interrupt_in as u32,
+                            dx,
+                            dy,
+                            buttons,
+                            wheel,
+                            0,
+                        );
+                        last_buttons = buttons;
+                    }
+                }
+            }
+            Ok(Err(err)) => {
+                crate::log!(
+                    "crabusb: boot-mouse {:04x}:{:04x} proof=poll status=failed err={:?}\n",
+                    pooled.vendor_id,
+                    pooled.product_id,
+                    err
+                );
+                embassy_time::Timer::after(embassy_time::Duration::from_millis(25)).await;
+            }
+            Err(_) => {}
+        }
+
+        embassy_time::Timer::after(embassy_time::Duration::from_millis(1)).await;
+    }
+}
+
+async fn hid_class_control_out(
+    device: &mut crabusb::Device,
+    interface_number: u8,
+    request: u8,
+    value: u16,
+) -> Result<usize, crabusb::usb_if::err::TransferError> {
+    device
+        .control_out(
+            crabusb::usb_if::host::ControlSetup {
+                request_type: crabusb::usb_if::transfer::RequestType::Class,
+                recipient: crabusb::usb_if::transfer::Recipient::Interface,
+                request: crabusb::usb_if::transfer::Request::Other(request),
+                value,
+                index: interface_number as u16,
+            },
+            &[],
+        )
+        .await
+}
+
+fn pick_boot_mouse_target(
+    configs: &[crabusb::usb_if::descriptor::ConfigurationDescriptor],
+) -> Option<BootMouseTarget> {
+    for config in configs {
+        for interface in &config.interfaces {
+            for alt in &interface.alt_settings {
+                if alt.class != USB_CLASS_HID
+                    || alt.subclass != USB_HID_SUBCLASS_BOOT
+                    || alt.protocol != USB_HID_PROTOCOL_MOUSE
+                {
+                    continue;
+                }
+
+                for ep in &alt.endpoints {
+                    if ep.transfer_type != crabusb::usb_if::descriptor::EndpointType::Interrupt {
+                        continue;
+                    }
+                    if ep.direction != crabusb::usb_if::transfer::Direction::In {
+                        continue;
+                    }
+                    return Some(BootMouseTarget {
+                        configuration_value: config.configuration_value,
+                        interface_number: interface.interface_number,
+                        alternate_setting: alt.alternate_setting,
+                        interrupt_in: ep.address,
+                        max_packet_size: ep.max_packet_size,
+                        interval: ep.interval,
+                    });
+                }
+            }
+        }
+    }
+
+    None
 }
 
 #[derive(Clone, Debug)]

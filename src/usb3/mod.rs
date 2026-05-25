@@ -19,6 +19,10 @@ pub async fn usb_controller_service_task() {
         dev_gears::usb_device_pool_worker_task().expect("crabusb device pool worker token"),
     );
     crate::log!("crabusb: device pool worker started\n");
+    spawner.spawn(
+        dev_gears::usb_boot_mouse_worker_task().expect("crabusb boot mouse worker token"),
+    );
+    crate::log!("crabusb: boot mouse worker started\n");
 
     let Some(news) = probe_devices_with_log(&mut host, "initial").await else {
         return;

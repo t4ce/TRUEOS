@@ -47,7 +47,8 @@ clean "worker ran and said done" baseline.
 
 ### 3. Static DP4A plus stateless HDC store plus EOT
 
-Status: proven on 2026-05-10 08:31 boot log.
+Status: proven on 2026-05-10 08:31 boot log, re-proven on 2026-05-25
+after the HDC/EOT payload-register correction.
 
 Active artifact:
 
@@ -92,6 +93,47 @@ Interpretation:
 
 This is the first wide, side-effecting GPGPU milestone suitable to feed into
 `burn_baba` planning.
+
+2026-05-25 correction: the old store-then-EOT tail reused `g127` for both the
+HDC store message payload and the TS EOT payload:
+
+- `mov g127 = store address/header`
+- `send HDC store using g127`
+- `mov g127 = g0`
+- `send TS EOT from g127`
+
+That sequence was observably unsafe on the local Intel path.  The HDC store
+landed, but the worker did not retire:
+
+- `target_value=0xC0DE7733`
+- `retired=0`
+- `post_walker_marker=0`
+- `finish_marker=0x00000000`
+
+The A/B artifact that preserved `g127` for the HDC send and used `g126` for TS
+EOT retired cleanly.  The canonical `trueos-eu` HDC store-then-EOT artifacts now
+use this tail:
+
+- HDC store source/header remains `g127`
+- EOT payload is copied into `g126`
+- EOT send descriptor is `0x70007E0C`
+
+Fresh proof from `bld/baremetal-logs/latest.log` on 2026-05-25:
+
+- `program_source=gfx12-static-dp4a-hdc1-stateless-store-then-ts-eot`
+- `send_w2=0x70007E0C`
+- `src0_g=126`
+- `store_value=0xC0DE7733`
+- `retired=1`
+- `post_walker_marker=1`
+- `finish_marker=0xC0DE7732`
+- `eot_retired=1`
+- `failure_class=shared-ram-write-proven`
+
+Interpretation: this was not a lost-EU or bad-HDC-descriptor problem.  It was a
+payload lifetime/clobber problem in the local artifact sequence.  The safe rule
+for generated HDC store artifacts is: do not overwrite the HDC send source0
+message register before thread EOT; use a separate EOT payload register.
 
 ### 4. Walker scale ladder
 
@@ -155,20 +197,17 @@ experimental failed scale attempt.
 
 ## What This Still Does Not Prove
 
-The current artifact still does not prove model matvec.
+The current static DP4A artifact still does not prove model matvec.
 
 Not yet proven:
 
-- Per-lane or per-group unique output indexing.
-- Loading live Lumen activation `x` from GPU-visible memory.
-- Loading BF16 model weight rows from the tile arena.
-- Accumulating a real dot product over `k_dim`.
-- Writing one F32 result per output row.
 - Re-entering this path from the Lumen `burn_baby` matvec call as the actual
   backend.
 
-The latest milestone proves that the door is open: the walker can launch wide,
-execute a non-empty EU artifact, touch the result buffer through HDC, and retire.
+Later rungs now prove live staged loads, packed BF16 partial dots, per-lane row
+outputs, and row-block compare against CPU.  The missing piece is not "can the
+EU run?" anymore; it is bounded result ownership plus scaling from the accepted
+prefix toward the full `k_dim` reduction.
 
 ## Immediate Backend Ladder
 
@@ -626,9 +665,10 @@ The current row/block scheme deliberately does not depend on
 - Logs carry `row_block`, `global_row_start`, and `tile_row_start`, so the CPU
   comparison knows which matrix rows the eight output words represent.
 
-The first cap is four row blocks per actual-work tile, so one tile can now
-prove up to 32 live16 row partials as four explicit 8-row dispatches.  This is
-the lowest-risk block owner while the legacy walker row payload is untrusted.
+The current cap is eight row blocks per actual-work tile, so one tile can now
+prove up to 64 row partials as eight explicit 8-row dispatches.  Across the
+current three armed tiles, that gives a 192-row checked prefix while the legacy
+walker row payload remains untrusted.
 
 ## T6.3 Live32 Row-Block Tier
 
@@ -665,6 +705,108 @@ Runtime proof, 2026-05-11:
 - The one-shot first-tile scan reported `nonzero=8`, `expected_hits=8`, and
   `expected_misplaced_hits=0`, so the live32 row-block output landed only in
   the intended first eight output slots.
+
+Runtime proof, 2026-05-25:
+
+- The HDC/EOT `g126` tail correction allowed the canonical static DP4A proof to
+  retire cleanly during the Lumen selftest path, so the local GPU proof now
+  promotes immediately to live row work:
+  `action=promote-to-live-row-proof`.
+- The staged actual-work run armed three tiles from the live Lumen matvec and
+  advanced through T5, T6, T6.1, T6.2, and T6.3.
+- T6.2 reported `t62_submitted_blocks=24`, `t62_finished_blocks=24`,
+  `t62_compare_ok_blocks=24`, and `t62_compared_rows=192`.
+- T6.3 reported `t63_submitted_blocks=24`, `t63_finished_blocks=24`,
+  `t63_compare_ok_blocks=24`, and `t63_compared_rows=192`.
+- The aggregate step 16 frontier is now:
+  `cgp_mode=accepted-prefix`, `cgp_prefix_rows=192`,
+  `cgp_prefix_live_k=32`, `action=offer-accepted-prefix`,
+  `next=cpu-suffix-finish-or-scale-live-k`.
+
+Interpretation: the local GPU path is past the old sentinel/retire frontier.
+It has a CPU-reference-checked row-block prefix for real Lumen data.  The next
+meaningful promotion is bounded prefix contribution/ownership while CPU/AP
+finishes the suffix, or scaling live-k beyond the accepted live32 prefix.
+
+Follow-up correction, 2026-05-25:
+
+- The accepted-prefix handoff now queues CPU suffix jobs instead of completing
+  the suffix inline on the Lumen/AP path.
+- Fresh boot proof:
+  `cgp accepted-prefix suffix-submit ... rows=192 ... live_k_dim=32
+  k_dim=2048 suffix_jobs=12`.
+- The AP compute lane then reports `submitted=74`: 12 prefix-suffix jobs plus
+  the remaining full-row jobs.
+- Completion proof:
+  `cgp accepted-prefix complete ... rows=192 ... suffix_jobs=12
+  total_cpu_jobs=74 first_output_bits=0xBD25C5EA
+  last_output_bits=0x3D70DD26`.
+
+This is still not a major speed path because the GPU prefix is only 32 lanes of
+2048 and only covers 192 rows, but it removes the misleading serial suffix and
+makes the hybrid ownership contract real: GPU-checked prefix, AP worker suffix,
+and no full AP recompute for accepted rows.
+
+## T6.4/T6.5 Windowed Live64 Row-Block Tier
+
+`T6.4` and `T6.5` are the current live-k scaling rung:
+
+- `gfx12-t6-4-windowed-accum16-live48-packed-bf16-dot-hdc1-stateless-store-then-ts-eot`
+- `gfx12-t6-5-windowed-accum16-live64-packed-bf16-dot-hdc1-stateless-store-then-ts-eot`
+
+These names describe the runtime proof role.  The first implementation reuses
+the proven T6.3 accum16 artifact body instead of introducing a larger new EU
+program.  Software stages later 16-lane K windows into the artifact-visible
+lanes `16..31`:
+
+- T6.3 restores/stages source window `16..32`, then accumulates live32.
+- T6.4 stages source window `32..48`, then accumulates live48.
+- T6.5 stages source window `48..64`, then accumulates live64.
+
+The restore before every T6.3 run is important.  The windowed T6.4/T6.5 stages
+overwrite the artifact-visible high lanes of the tile record.  Without restoring
+`16..32`, the next row block's T6.3 run compares CPU `x[16..32]` against stale
+GPU `x[48..64]`, producing deterministic partial-output mismatches.  The
+hardware fix was a CPU/dataflow staging restore, not a shader change:
+
+- `mode=t6-3-accum16-hi-live32-window-restore`
+- `source_window=16..32 artifact_window=16..32`
+
+Runtime proof, 2026-05-25:
+
+- `t63_submitted_blocks=24`, `t63_finished_blocks=24`,
+  `t63_compare_ok_blocks=24`, and `t63_compared_rows=192`.
+- `t64_window_staged_blocks=24`, `t64_submitted_blocks=24`,
+  `t64_finished_blocks=24`, `t64_compare_ok_blocks=24`, and
+  `t64_compared_rows=192`.
+- `t65_window_staged_blocks=24`, `t65_submitted_blocks=24`,
+  `t65_finished_blocks=24`, `t65_compare_ok_blocks=24`, and
+  `t65_compared_rows=192`.
+- The aggregate step 16 frontier is now:
+  `cgp_mode=accepted-prefix`, `cgp_prefix_rows=192`,
+  `cgp_prefix_live_k=64`, `action=offer-accepted-prefix`,
+  `next=cpu-suffix-finish-or-scale-live-k`.
+- CPU suffix handoff accepted the live64 prefix:
+  `cgp accepted-prefix suffix-submit ... rows=192 ...
+  live_k_dim=64 k_dim=2048 suffix_jobs=12`.
+- Completion proof:
+  `cgp accepted-prefix complete ... rows=192 ... live_k_dim=64
+  suffix_jobs=12 total_cpu_jobs=74 first_output_bits=0xBD2A32C8
+  last_output_bits=0x3D81B1A6`.
+
+Interpretation: local GPGPU has now proved a real Lumen BF16 matvec prefix over
+192 rows and 64 K lanes, with GPU output bits matching CPU reference at each
+live32/live48/live64 rung.  This is still a prefix proof, not full model
+matvec ownership: the CPU/AP suffix completes lanes `64..2048`, and CPU/AP
+keeps final output ownership.
+
+Next useful directions:
+
+- Generate a true larger live-k artifact instead of window-reusing T6.3.
+- Extend the window ladder to live128/live256 if we want another low-risk
+  correctness rung before a larger artifact.
+- Reduce per-block proof overhead once the rung is stable; the current logs are
+  deliberately verbose and correctness-first.
 
 ## Backend Selection Boundary
 
