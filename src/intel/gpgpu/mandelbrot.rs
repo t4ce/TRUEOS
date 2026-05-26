@@ -16,6 +16,8 @@ enum MandelbrotCommandStreamSource {
 
 const MANDELBROT_COMMAND_STREAM_SOURCE: MandelbrotCommandStreamSource =
     MandelbrotCommandStreamSource::DynamicEncoded;
+const MANDELBROT_GROUPID_LINE1280_SIMD16_MASK_PROBE: bool = true;
+const MANDELBROT_GROUPID_LINE1280_SIMD16_PROGRAM_NAME: &str = "gfx12-primary-scanout-groupid-line1280-rows-simd16-mask-dispatch-scalar-step8-color-hdc1-stateless-unrolled-store-then-ts-eot";
 
 fn gpgpu_primary_scanout_pixel_quiet_program() -> GpgpuEuProgram {
     let artifact = trueos_eu::gfx12::HDC1_STATELESS_STORE_THEN_TS_EOT;
@@ -79,7 +81,11 @@ fn gpgpu_primary_scanout_groupid_line1280_rows_program() -> GpgpuEuProgram {
     let artifact =
         trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT;
     GpgpuEuProgram {
-        name: artifact.name,
+        name: if MANDELBROT_GROUPID_LINE1280_SIMD16_MASK_PROBE {
+            MANDELBROT_GROUPID_LINE1280_SIMD16_PROGRAM_NAME
+        } else {
+            artifact.name
+        },
         kind: artifact.kind,
         words: artifact.words,
         expects_store: artifact.expects_store,
@@ -88,6 +94,14 @@ fn gpgpu_primary_scanout_groupid_line1280_rows_program() -> GpgpuEuProgram {
             trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_STORE_SEND_DWORD,
         ),
         visible_seed_dword: None,
+    }
+}
+
+fn groupid_line1280_expected_dispatch_lanes() -> usize {
+    if MANDELBROT_GROUPID_LINE1280_SIMD16_MASK_PROBE {
+        16
+    } else {
+        8
     }
 }
 
@@ -1744,7 +1758,8 @@ pub(crate) fn submit_gpgpu_primary_scanout_line1280_groupid_rows_color_burst(
         .dispatch_after
         .saturating_sub(submit_proof.dispatch_before);
     let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
-    let expected_lane_dispatch = row_group_count.saturating_mul(8);
+    let expected_lane_dispatch =
+        row_group_count.saturating_mul(groupid_line1280_expected_dispatch_lanes());
     let readback_ok = finished
         && finish_marker == completion_marker
         && dispatch_delta >= expected_lane_dispatch as u64;
@@ -1951,7 +1966,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_line1280_groupid_rows_fullwidth_color
         .saturating_sub(submit_proof.dispatch_before);
     let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
     let expected_lane_dispatch = row_group_count
-        .saturating_mul(8)
+        .saturating_mul(groupid_line1280_expected_dispatch_lanes())
         .saturating_mul(segments_per_row);
     let readback_ok = finished
         && finish_marker == completion_marker

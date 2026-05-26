@@ -1290,7 +1290,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
         spawn_gfx_texture_upload_service,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "mandelbrot-gpu-sidequest",
         0,
         &MANDELBROT_GPU_SIDEQUEST_STARTED,
@@ -1434,7 +1434,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &TRUEOSFS_READY_HOOK_STARTED,
         spawn_trueosfs_ready_hook,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "lumen-service",
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         &LUMEN_SERVICE_STARTED,
