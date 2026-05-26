@@ -484,14 +484,19 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                         stage_next,
                     );
                 }
-                crate::log!(
-                    "mandelbrot-gpu-sidequest: stage-ready heartbeat={} reason={} artifact_stage=simd16-q12-one-iteration-visible-primary-plane legacy_row_writer_running=0 obsolete_row_color_protocol=0 restamp_enabled={} sweep_enabled={} next={} does_not_prove=full-frame-mandelbrot\n",
-                    frame,
-                    stage_reason,
-                    mandelbrot16_probe_readback_ok as u8,
-                    MANDELBROT16_STAGE_READY_SWEEP_ENABLED as u8,
-                    stage_next,
-                );
+                if !mandelbrot16_probe_readback_ok
+                    || !MANDELBROT16_STAGE_READY_SWEEP_ENABLED
+                    || frame % 16 == 0
+                {
+                    crate::log!(
+                        "mandelbrot-gpu-sidequest: stage-ready heartbeat={} reason={} artifact_stage=simd16-q12-one-iteration-visible-primary-plane legacy_row_writer_running=0 obsolete_row_color_protocol=0 restamp_enabled={} sweep_enabled={} next={} does_not_prove=full-frame-mandelbrot\n",
+                        frame,
+                        stage_reason,
+                        mandelbrot16_probe_readback_ok as u8,
+                        MANDELBROT16_STAGE_READY_SWEEP_ENABLED as u8,
+                        stage_next,
+                    );
+                }
             }
         }
     }
