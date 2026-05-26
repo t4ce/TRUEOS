@@ -145,6 +145,12 @@ pub fn handoff_opened_device(device: crabusb::Device) -> Result<usize, crabusb::
     Ok(pool.len())
 }
 
+pub fn has_boot_mouse_transport(
+    configs: &[crabusb::usb_if::descriptor::ConfigurationDescriptor],
+) -> bool {
+    !collect_boot_mouse_candidates(configs).is_empty()
+}
+
 fn handoff_boot_mouse_device(
     device: PooledUsbDevice,
     target: BootMouseTarget,
@@ -374,7 +380,7 @@ async fn poll_usb3_boot_mouse(mouse: PooledUsbBootMouse) {
                     let dy = report[2] as i8;
                     let wheel = if len >= 4 { report[3] as i8 as i16 } else { 0 };
                     if dx != 0 || dy != 0 || wheel != 0 || buttons != last_buttons {
-                        crate::usb2::hid::inject_usb3_mouse_relative_event(
+                        super::hid::inject_usb3_mouse_relative_event(
                             pooled.id as u32,
                             target.interrupt_in as u32,
                             dx,

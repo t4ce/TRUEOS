@@ -219,8 +219,8 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
         y: runtime.mouse_y,
         flags,
     });
-    crate::usb2::input::push_event(crate::usb2::input::InputEvent::Tablet(
-        crate::usb2::input::TabletEvent {
+    super::input::push_event(super::input::InputEvent::Tablet(
+        super::input::TabletEvent {
             slot_id: runtime.slot_id,
             buttons: decoded.buttons,
             report_id: decoded.report_id,
@@ -232,7 +232,7 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
         },
     ));
     sync_runtime_cursor_snapshot(runtime);
-    crate::usb2::hut::upsert_tablet_state(
+    super::hut::upsert_tablet_state(
         runtime.controller_id,
         runtime.slot_id,
         runtime.ep_target,
@@ -242,7 +242,7 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
         decoded.y_raw,
         runtime.mouse_buttons_down,
         decoded.report_id,
-        crate::usb2::hut::HidSourceKind::Human,
+        super::hut::HidSourceKind::Human,
         "tablet",
         false,
     );

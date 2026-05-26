@@ -33,6 +33,7 @@ pub(crate) use mandelbrot::{
     submit_gpgpu_primary_scanout_mandelbrot_preview,
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe,
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet,
+    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_rows,
     submit_gpgpu_primary_scanout_row2560_simd8_probe,
 };
 pub(crate) use matmul::{

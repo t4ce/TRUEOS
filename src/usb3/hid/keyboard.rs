@@ -213,22 +213,22 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
             ascii[5],
         );
     }
-    crate::usb2::input::push_event(crate::usb2::input::InputEvent::Keyboard(
-        crate::usb2::input::KeyboardEvent {
+    super::input::push_event(super::input::InputEvent::Keyboard(
+        super::input::KeyboardEvent {
             slot_id: runtime.slot_id,
             modifiers,
             keys,
             ascii,
         },
     ));
-    crate::usb2::hut::upsert_keyboard_state(
+    super::hut::upsert_keyboard_state(
         runtime.controller_id as u32,
         runtime.slot_id,
         runtime.ep_target,
         modifiers,
         keys,
         ascii,
-        crate::usb2::hut::HidSourceKind::Human,
+        super::hut::HidSourceKind::Human,
         "human",
         false,
     );

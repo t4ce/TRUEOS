@@ -45,6 +45,7 @@ pub(crate) const MANDELBROT16_BOOT_Q12_EXPECTED_RE1: u32 = 0x0000_0B00;
 pub(crate) const MANDELBROT16_BOOT_Q12_EXPECTED_VISIBLE: u32 = 0xFFFF_0B00;
 pub(crate) const MANDELBROT16_BOOT_VISIBLE_STAMP_ROWS: u32 = 32;
 pub(crate) const MANDELBROT16_STAGE_READY_SWEEP_ENABLED: bool = true;
+pub(crate) const MANDELBROT16_STAGE_READY_SWEEP_X_BLOCKS_PER_HEARTBEAT: u32 = 160;
 pub(crate) const MANDELBROT_BURST_LANE_POOL_START: u32 = 3;
 pub(crate) const MANDELBROT_BURST_LANE_POOL_SIZE: u32 = 4;
 pub(crate) const MANDELBROT_GPGPU_BURSTS_PER_FRAME_BUDGET: u64 = 2;
@@ -357,9 +358,9 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
             if probe.readback_ok {
                 "add-z-imaginary-and-iteration-count-color"
             } else if probe.finished {
-                "fix-simd16-q12-wide-mul-readback-or-store"
+                "fix-simd16-q12-address-or-store-readback"
             } else {
-                "fix-simd16-q12-wide-mul-submit-or-eot"
+                "fix-simd16-q12-submit-or-eot"
             },
             if probe.readback_ok {
                 "boot-exercises-simd16-q12-one-iteration-visible-store-eot-primary-plane-lane0-validation-once"
@@ -384,9 +385,9 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
         let stage_next = if mandelbrot16_probe_readback_ok {
             "add-z-imaginary-and-iteration-count-color"
         } else if mandelbrot16_probe_finished {
-            "fix-simd16-q12-wide-mul-readback-or-store"
+            "fix-simd16-q12-address-or-store-readback"
         } else {
-            "fix-simd16-q12-wide-mul-submit-or-eot"
+            "fix-simd16-q12-submit-or-eot"
         };
         crate::log!(
             "mandelbrot-gpu-sidequest: stage-parked reason={} legacy_row_writer_running=0 frame_loop_running=0 obsolete_row_color_protocol=0 artifact_contract=simd16-q12-one-iteration-visible-store-primary-plane q12_c_re=0x{:08X} q12_c_im=0x{:08X} expected_q12_re1=0x{:08X} expected_plane_value=0x{:08X} next={} does_not_prove=full-frame-mandelbrot\n",
@@ -405,12 +406,14 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
             .saturating_add(MANDELBROT16_BOOT_VISIBLE_STAMP_ROWS - 1)
             / MANDELBROT16_BOOT_VISIBLE_STAMP_ROWS;
         let sweep_blocks = sweep_x_groups.saturating_mul(sweep_y_blocks).max(1);
+        let mut sweep_y_cursor = 0u32;
         loop {
             Timer::after(EmbassyDuration::from_millis(MANDELBROT_GPGPU_STAGE_READY_HEARTBEAT_MS))
                 .await;
             frame = frame.wrapping_add(1);
             if frame == 1 || MANDELBROT16_STAGE_READY_SWEEP_ENABLED || frame % 16 == 0 {
                 let mut restamped_rows = 0u32;
+                let mut restamped_x_blocks = 0u32;
                 let mut restamp_finish_marker = 0u32;
                 let mut restamp_dispatch_delta = 0u64;
                 let mut x_base = ((scanout_w as u32).saturating_sub(
@@ -423,52 +426,69 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                 let mut sweep_y_block = sweep_y_blocks / 2;
                 let mut stamp_rows = MANDELBROT16_BOOT_VISIBLE_STAMP_ROWS;
                 if MANDELBROT16_STAGE_READY_SWEEP_ENABLED {
-                    sweep_block = ((frame - 1) % sweep_blocks as u64) as u32;
-                    sweep_x_group = if sweep_x_groups == 0 {
+                    sweep_y_block = if sweep_y_blocks == 0 {
                         0
                     } else {
-                        sweep_block % sweep_x_groups
+                        sweep_y_cursor % sweep_y_blocks
                     };
-                    sweep_y_block = if sweep_x_groups == 0 {
-                        0
-                    } else {
-                        sweep_block / sweep_x_groups
-                    };
-                    x_base = sweep_x_group.saturating_mul(
-                        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM
-                            as u32,
-                    );
+                    sweep_block = sweep_y_block.saturating_mul(sweep_x_groups);
                     row_index = sweep_y_block.saturating_mul(MANDELBROT16_BOOT_VISIBLE_STAMP_ROWS);
                     stamp_rows = (scanout_h as u32)
                         .saturating_sub(row_index)
                         .min(MANDELBROT16_BOOT_VISIBLE_STAMP_ROWS);
                 }
                 if mandelbrot16_probe_readback_ok {
-                    let mut stamp_row = 0u32;
-                    while stamp_row < stamp_rows {
+                    let x_blocks_this_heartbeat = if MANDELBROT16_STAGE_READY_SWEEP_ENABLED {
+                        MANDELBROT16_STAGE_READY_SWEEP_X_BLOCKS_PER_HEARTBEAT
+                            .max(1)
+                            .min(sweep_x_groups.max(1))
+                    } else {
+                        1
+                    };
+                    let mut x_block = 0u32;
+                    while x_block < x_blocks_this_heartbeat {
+                        sweep_x_group = if MANDELBROT16_STAGE_READY_SWEEP_ENABLED {
+                            x_block
+                        } else {
+                            sweep_x_group
+                        };
+                        x_base = sweep_x_group.saturating_mul(
+                            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM
+                                as u32,
+                        );
                         let row_probe =
-                            crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet(
+                            crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_rows(
                                 MANDELBROT16_BOOT_Q12_MODE_ONE_ITER_VISIBLE,
-                                row_index.saturating_add(stamp_row),
+                                row_index,
                                 x_base,
+                                stamp_rows,
                                 MANDELBROT16_BOOT_Q12_C_RE,
                                 MANDELBROT16_BOOT_Q12_C_IM,
                             );
                         if row_probe.readback_ok {
-                            restamped_rows = restamped_rows.saturating_add(1);
+                            restamped_rows = restamped_rows.saturating_add(stamp_rows);
                         }
                         restamp_finish_marker = row_probe.finish_marker;
                         restamp_dispatch_delta =
                             restamp_dispatch_delta.saturating_add(row_probe.dispatch_delta);
-                        stamp_row = stamp_row.saturating_add(1);
+                        restamped_x_blocks = restamped_x_blocks.saturating_add(1);
+                        x_block = x_block.saturating_add(1);
+                    }
+                    if MANDELBROT16_STAGE_READY_SWEEP_ENABLED {
+                        sweep_y_cursor = if sweep_y_blocks == 0 {
+                            0
+                        } else {
+                            (sweep_y_cursor + 1) % sweep_y_blocks
+                        };
                     }
                     crate::log!(
-                        "mandelbrot-gpu-sidequest: stage-ready-restamp heartbeat={} reason={} artifact_stage=simd16-q12-one-iteration-visible-primary-plane sweep_enabled={} sweep_block={}/{} sweep_xy={}x{} sweep_grid={}x{} stamp_rect={}x{}@{},{} restamped_rows={} per_row_readback=0 lane_dispatch_delta={} finish_marker=0x{:08X} expected_plane_value=0x{:08X} next={} proves=ongoing-simd16-q12-onevis-primary-plane-exercise does_not_prove=full-frame-mandelbrot\n",
+                        "mandelbrot-gpu-sidequest: stage-ready-t10-band heartbeat={} reason={} artifact_stage=simd16-q12-one-iteration-visible-primary-plane sweep_enabled={} sweep_block={}/{} sweep_y_cursor={} sweep_xy={}x{} sweep_grid={}x{} stamp_rect={}x{}@{},{} restamped_x_blocks={} restamped_rows={} per_row_readback=0 lane_dispatch_delta={} finish_marker=0x{:08X} expected_plane_value=0x{:08X} next={} proves=ongoing-t10-groupid-row-simd16-primary-plane-exercise does_not_prove=full-frame-mandelbrot\n",
                         frame,
                         stage_reason,
                         MANDELBROT16_STAGE_READY_SWEEP_ENABLED as u8,
                         sweep_block,
                         sweep_blocks,
+                        sweep_y_cursor,
                         sweep_x_group,
                         sweep_y_block,
                         sweep_x_groups,
@@ -477,6 +497,7 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                         stamp_rows,
                         x_base,
                         row_index,
+                        restamped_x_blocks,
                         restamped_rows,
                         restamp_dispatch_delta,
                         restamp_finish_marker,

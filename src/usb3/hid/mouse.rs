@@ -154,8 +154,8 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
         y: runtime.mouse_y,
         flags,
     });
-    crate::usb2::input::push_event(crate::usb2::input::InputEvent::Mouse(
-        crate::usb2::input::MouseEvent {
+    super::input::push_event(super::input::InputEvent::Mouse(
+        super::input::MouseEvent {
             slot_id: runtime.slot_id,
             buttons,
             dx,
@@ -164,7 +164,7 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
             has_wheel,
         },
     ));
-    crate::usb2::input::qjs_mouse_offer(crate::usb2::input::MouseEvent {
+    super::input::qjs_mouse_offer(super::input::MouseEvent {
         slot_id: runtime.slot_id,
         buttons,
         dx,
@@ -173,14 +173,14 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
         has_wheel,
     });
     sync_runtime_cursor_snapshot(runtime);
-    crate::usb2::hut::upsert_mouse_state(
+    super::hut::upsert_mouse_state(
         runtime.controller_id as u32,
         runtime.slot_id,
         runtime.ep_target,
         runtime.mouse_x,
         runtime.mouse_y,
         runtime.mouse_buttons_down,
-        crate::usb2::hut::HidSourceKind::Human,
+        super::hut::HidSourceKind::Human,
         "human",
         false,
     );
