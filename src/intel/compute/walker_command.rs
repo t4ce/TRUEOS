@@ -122,7 +122,7 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch(
     }
 
     fn walker_simd_width(program_name: &str) -> u32 {
-        if program_name.contains("simd16-mask") {
+        if program_name.contains("simd16") {
             16
         } else {
             8
@@ -509,7 +509,7 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch(
             RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
         );
         crate::log!(
-            "intel/gpgpu: compute-walker-contract program_source={} groups={}x{}x{} threads_per_group={} expected_hw_threads={} expected_lane_dispatch={} idd_threads_in_group={} barrier_enable={} slm_size=0x{:X} simd_mask_bits={} right_mask=0x{:08X} bottom_mask=0x{:08X} right_lanes={} bottom_lanes={} use_gfx125_compute_walker={} note=legacy-walker-lane-shape\n",
+            "intel/gpgpu: compute-walker-contract program_source={} groups={}x{}x{} threads_per_group={} expected_hw_threads={} expected_lane_dispatch={} idd_threads_in_group={} barrier_enable={} slm_size=0x{:X} walker_dw4=0x{:08X} simd_select={} simd_mask_bits={} right_mask=0x{:08X} bottom_mask=0x{:08X} right_lanes={} bottom_lanes={} use_gfx125_compute_walker={} note=legacy-walker-lane-shape\n",
             program.name,
             walker_x_dim,
             walker_y_dim,
@@ -520,6 +520,8 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch(
             idd_threads_in_group,
             idd_barrier_enable,
             idd_slm_size,
+            walker_dw4,
+            (walker_dw4 >> 30) & 0x3,
             simd_mask_bits,
             batch_dwords[walker_start + 13],
             batch_dwords[walker_start + 14],

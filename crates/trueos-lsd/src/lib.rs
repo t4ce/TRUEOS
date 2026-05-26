@@ -5,6 +5,7 @@ extern crate alloc;
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::{String, ToString};
+use alloc::vec;
 use alloc::vec::Vec;
 
 use trueos_io::{self as io, ErrorKind};
@@ -29,6 +30,23 @@ struct Entry {
     kind: kfs::FsEntryKind,
     depth: usize,
     len: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TableListing {
+    pub path: String,
+    pub rows: Vec<TableRow>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TableRow {
+    pub mode: &'static str,
+    pub owner: &'static str,
+    pub group: &'static str,
+    pub size: String,
+    pub date: &'static str,
+    pub kind: &'static str,
+    pub name: String,
 }
 
 impl Options {
@@ -261,6 +279,33 @@ fn permissions(entry: &Entry) -> &'static str {
     }
 }
 
+fn kind_text(kind: kfs::FsEntryKind) -> &'static str {
+    match kind {
+        kfs::FsEntryKind::Dir => "dir",
+        kfs::FsEntryKind::File => "file",
+        kfs::FsEntryKind::Other => "other",
+    }
+}
+
+fn table_row(entry: &Entry, base_depth: usize, tree: bool) -> TableRow {
+    let (owner, group) = authority(entry.path.as_str());
+    let is_dir = matches!(entry.kind, kfs::FsEntryKind::Dir);
+    let depth = if tree {
+        entry.depth.saturating_sub(base_depth.saturating_add(1))
+    } else {
+        0
+    };
+    TableRow {
+        mode: permissions(entry),
+        owner,
+        group,
+        size: human_size(entry.len, is_dir),
+        date: "-",
+        kind: kind_text(entry.kind),
+        name: format!("{}{}", "  ".repeat(depth), display_name(entry)),
+    }
+}
+
 fn render_grid_entry(entry: &Entry, cell_width: usize) -> String {
     let name = display_name(entry);
     let visible = name.len();
@@ -406,7 +451,7 @@ where
     W: FnMut(&str),
 {
     write_line("lsd: usage `lsd [path ...]`");
-    write_line("     flags: -l/--long  -R/--tree  -lR/-Rl  --version  help");
+    write_line("     flags: -l/--long  -R/--tree  -T/--table  -lR/-Rl  --version  help");
     write_line("     paths: / and . both mean the TRUEOSFS root");
 }
 
@@ -477,6 +522,77 @@ where
     }
 
     Ok(())
+}
+
+pub fn table_listings(args: &[String]) -> io::Result<Vec<TableListing>> {
+    let mut options = Options::new();
+    let mut paths = Vec::new();
+
+    for arg in args.iter().skip(1) {
+        match arg.as_str() {
+            "-l" | "--long" => options.long = true,
+            "-R" | "--tree" => options.tree = true,
+            raw if raw.starts_with('-') && apply_short_flags(&raw[1..], &mut options) => {}
+            raw if raw.starts_with('-') => {
+                return Err(io::Error::new(ErrorKind::InvalidInput, "unsupported lsd flag"));
+            }
+            path => paths.push(String::from(path)),
+        }
+    }
+
+    if paths.is_empty() {
+        paths.push(String::from("."));
+    }
+
+    let mut listings = Vec::new();
+    for path in paths {
+        let normalized = normalize_path(path.as_str());
+        let entries = if !normalized.is_empty() {
+            match api::stat(normalized.as_bytes()) {
+                Ok(stat) if matches!(stat.kind, api::FsNodeKind::File) => vec![Entry {
+                    path: normalized.clone(),
+                    name: normalized.clone(),
+                    kind: kfs::FsEntryKind::File,
+                    depth: path_depth(normalized.as_str()),
+                    len: Some(stat.len),
+                }],
+                Ok(_) if options.tree => tree_entries(normalized.as_str())?,
+                Ok(_) => immediate_entries(normalized.as_str())?,
+                Err(rc) if trueos_io::status_kind(rc) == ErrorKind::NotFound => {
+                    if options.tree {
+                        tree_entries(normalized.as_str())?
+                    } else {
+                        immediate_entries(normalized.as_str())?
+                    }
+                }
+                Err(rc) => return Err(trueos_io::status_error(rc)),
+            }
+        } else if options.tree {
+            tree_entries(normalized.as_str())?
+        } else {
+            immediate_entries(normalized.as_str())?
+        };
+
+        if entries.is_empty() {
+            if normalized.is_empty() {
+                listings.push(TableListing {
+                    path,
+                    rows: Vec::new(),
+                });
+                continue;
+            }
+            return Err(io::Error::new(ErrorKind::NotFound, "lsd path not found"));
+        }
+
+        let base_depth = path_depth(normalized.as_str());
+        let rows = entries
+            .iter()
+            .map(|entry| table_row(entry, base_depth, options.tree))
+            .collect();
+        listings.push(TableListing { path, rows });
+    }
+
+    Ok(listings)
 }
 
 pub fn run(args: &[String]) -> io::Result<()> {
