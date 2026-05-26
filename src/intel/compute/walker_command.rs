@@ -17,6 +17,25 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch(
     program: GpgpuEuProgram,
     walker_group_x_dim: u32,
 ) -> Result<usize, &'static str> {
+    encode_gfx12_gpgpu_walker_probe_batch_xy(
+        warm,
+        batch_dwords,
+        store_surface,
+        program,
+        walker_group_x_dim,
+        1,
+    )
+}
+
+#[allow(dead_code)]
+pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
+    warm: RenderWarmState,
+    batch_dwords: &mut [u32],
+    store_surface: GpgpuStoreSurfaceState,
+    program: GpgpuEuProgram,
+    walker_group_x_dim: u32,
+    walker_group_y_dim: u32,
+) -> Result<usize, &'static str> {
     const MEDIA_VFE_STATE_CMD: u32 = (3 << 29) | (2 << 27) | 7;
     const MEDIA_CURBE_LOAD_CMD: u32 = (3 << 29) | (2 << 27) | (1 << 16) | 2;
     const MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD: u32 = (3 << 29) | (2 << 27) | (2 << 16) | 2;
@@ -35,7 +54,6 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch(
     const CS_GPR1_STAMP_LO: u32 = 0xC5A0_2608;
     const IDD_STATE_OFFSET_BYTES: usize = GPGPU_WALKER_SCRATCH_OFFSET_BYTES;
     const CURBE_STATE_OFFSET_BYTES: usize = GPGPU_WALKER_SCRATCH_OFFSET_BYTES + 0x100;
-    const GPGPU_WALKER_GROUP_Y_DIM: u32 = 1;
     const GPGPU_WALKER_GROUP_Z_DIM: u32 = 1;
     const GPGPU_VFE_MAX_THREADS: u32 = 223;
     const GPGPU_VFE_URB_ENTRIES: u32 = 2;
@@ -160,6 +178,9 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch(
         let size_bytes = u32::try_from(size_bytes).map_err(|_| "compute-sba-size-convert")?;
         push(batch_dwords, cursor, (size_bytes & 0xFFFF_F000) | u32::from(enable))
     }
+
+    let walker_group_x_dim = walker_group_x_dim.max(1);
+    let walker_group_y_dim = walker_group_y_dim.max(1);
 
     batch_dwords.fill(0);
     write_gpgpu_dummy_curbe(warm, CURBE_STATE_OFFSET_BYTES)?;
@@ -424,7 +445,7 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch(
     push(batch_dwords, &mut cursor, walker_group_x_dim)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, GPGPU_WALKER_GROUP_Y_DIM)?;
+    push(batch_dwords, &mut cursor, walker_group_y_dim)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, GPGPU_WALKER_GROUP_Z_DIM)?;
     push(batch_dwords, &mut cursor, walker_right_mask)?;

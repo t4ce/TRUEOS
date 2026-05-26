@@ -61,7 +61,7 @@ struct SkhynixUasBlockDevice {
 }
 
 struct UsbBootMousePool {
-    devices: Vec<PooledUsbDevice>,
+    devices: Vec<PooledUsbBootMouse>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -72,6 +72,11 @@ struct BootMouseTarget {
     interrupt_in: u8,
     max_packet_size: u16,
     interval: u8,
+}
+
+struct PooledUsbBootMouse {
+    device: PooledUsbDevice,
+    target: BootMouseTarget,
 }
 
 impl UsbDevicePool {
@@ -121,7 +126,7 @@ impl UsbBootMousePool {
         }
     }
 
-    fn insert(&mut self, device: PooledUsbDevice) -> Result<usize, PooledUsbDevice> {
+    fn insert(&mut self, device: PooledUsbBootMouse) -> Result<usize, PooledUsbBootMouse> {
         if self.devices.len() >= USB3_BOOT_MOUSE_POOL_CAP {
             return Err(device);
         }
@@ -129,7 +134,7 @@ impl UsbBootMousePool {
         Ok(self.devices.len())
     }
 
-    fn pop(&mut self) -> Option<PooledUsbDevice> {
+    fn pop(&mut self) -> Option<PooledUsbBootMouse> {
         self.devices.pop()
     }
 }
@@ -140,9 +145,12 @@ pub fn handoff_opened_device(device: crabusb::Device) -> Result<usize, crabusb::
     Ok(pool.len())
 }
 
-fn handoff_boot_mouse_device(device: PooledUsbDevice) -> Result<usize, PooledUsbDevice> {
+fn handoff_boot_mouse_device(
+    device: PooledUsbDevice,
+    target: BootMouseTarget,
+) -> Result<usize, PooledUsbBootMouse> {
     let mut pool = USB_BOOT_MOUSE_POOL.lock();
-    pool.insert(device)
+    pool.insert(PooledUsbBootMouse { device, target })
 }
 
 #[embassy_executor::task]
@@ -171,11 +179,37 @@ pub async fn usb_device_pool_worker_task() {
 }
 
 async fn process_opened_device(device: PooledUsbDevice) {
-    if pick_boot_mouse_target(device.device.configurations()).is_some() {
+    let boot_mouse_candidates = collect_boot_mouse_candidates(device.device.configurations());
+    if !boot_mouse_candidates.is_empty() {
         let id = device.id;
         let vendor_id = device.vendor_id;
         let product_id = device.product_id;
-        match handoff_boot_mouse_device(device) {
+        crate::log!(
+            "crabusb: boot-mouse {:04x}:{:04x} proof=transport-plan candidates={}\n",
+            vendor_id,
+            product_id,
+            boot_mouse_candidates.len()
+        );
+        let Some(target) = pick_boot_mouse_target(&boot_mouse_candidates) else {
+            crate::log!(
+                "crabusb: boot-mouse {:04x}:{:04x} proof=hid-target status=missing\n",
+                vendor_id,
+                product_id
+            );
+            return;
+        };
+        crate::log!(
+            "crabusb: boot-mouse {:04x}:{:04x} proof=hid-target if#{} alt={} cfg={} interrupt_in=0x{:02x}/{} interval={}\n",
+            vendor_id,
+            product_id,
+            target.interface_number,
+            target.alternate_setting,
+            target.configuration_value,
+            target.interrupt_in,
+            target.max_packet_size,
+            target.interval
+        );
+        match handoff_boot_mouse_device(device, target) {
             Ok(pool_len) => {
                 crate::log!(
                     "crabusb: boot-mouse {:04x}:{:04x} id={} handed_to_mouse_pool pool_len={}\n",
@@ -188,9 +222,9 @@ async fn process_opened_device(device: PooledUsbDevice) {
             Err(device) => {
                 crate::log!(
                     "crabusb: boot-mouse {:04x}:{:04x} id={} dropped reason=mouse_pool_full cap={}\n",
-                    device.vendor_id,
-                    device.product_id,
-                    device.id,
+                    device.device.vendor_id,
+                    device.device.product_id,
+                    device.device.id,
                     USB3_BOOT_MOUSE_POOL_CAP
                 );
             }
@@ -211,18 +245,19 @@ pub async fn usb_boot_mouse_worker_task() {
             pool.pop()
         };
 
-        if let Some(device) = next {
-            poll_usb3_boot_mouse(device).await;
+        if let Some(mouse) = next {
+            poll_usb3_boot_mouse(mouse).await;
         } else {
             embassy_time::Timer::after(embassy_time::Duration::from_millis(25)).await;
         }
     }
 }
 
-async fn poll_usb3_boot_mouse(mut pooled: PooledUsbDevice) {
-    let Some(target) = pick_boot_mouse_target(pooled.device.configurations()) else {
-        return;
-    };
+async fn poll_usb3_boot_mouse(mouse: PooledUsbBootMouse) {
+    let PooledUsbBootMouse {
+        device: mut pooled,
+        target,
+    } = mouse;
 
     if let Err(err) = pooled
         .device
@@ -286,6 +321,13 @@ async fn poll_usb3_boot_mouse(mut pooled: PooledUsbDevice) {
         );
         return;
     }
+    crate::log!(
+        "crabusb: boot-mouse {:04x}:{:04x} proof=claim if#{} alt={} status=ok\n",
+        pooled.vendor_id,
+        pooled.product_id,
+        target.interface_number,
+        target.alternate_setting
+    );
 
     let mut interrupt_in = match pooled.device.endpoint(target.interrupt_in) {
         Ok(endpoint) => endpoint,
@@ -381,9 +423,11 @@ async fn hid_class_control_out(
         .await
 }
 
-fn pick_boot_mouse_target(
+fn collect_boot_mouse_candidates(
     configs: &[crabusb::usb_if::descriptor::ConfigurationDescriptor],
-) -> Option<BootMouseTarget> {
+) -> Vec<BootMouseTarget> {
+    let mut out = Vec::new();
+
     for config in configs {
         for interface in &config.interfaces {
             for alt in &interface.alt_settings {
@@ -401,7 +445,7 @@ fn pick_boot_mouse_target(
                     if ep.direction != crabusb::usb_if::transfer::Direction::In {
                         continue;
                     }
-                    return Some(BootMouseTarget {
+                    out.push(BootMouseTarget {
                         configuration_value: config.configuration_value,
                         interface_number: interface.interface_number,
                         alternate_setting: alt.alternate_setting,
@@ -414,7 +458,11 @@ fn pick_boot_mouse_target(
         }
     }
 
-    None
+    out
+}
+
+fn pick_boot_mouse_target(candidates: &[BootMouseTarget]) -> Option<BootMouseTarget> {
+    candidates.first().copied()
 }
 
 #[derive(Clone, Debug)]
