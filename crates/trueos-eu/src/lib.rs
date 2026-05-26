@@ -38,6 +38,7 @@ pub enum EuArtifactKind {
     PrimaryScanoutLine8Simd8BwThenHdc1StoreThenThreadSpawnerEot,
     PrimaryScanoutMandelbrot8Simd8CoordColorThenHdc1StoreThenThreadSpawnerEot,
     PrimaryScanoutMandelbrot8Simd8Q12EscapeThenHdc1StoreThenThreadSpawnerEot,
+    PrimaryScanoutMandelbrot16Simd16BwThenHdc1StoreThenThreadSpawnerEot,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

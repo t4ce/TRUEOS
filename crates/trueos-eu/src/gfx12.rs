@@ -1843,6 +1843,98 @@ pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ADDRESS_BASE_DWORDS: [usize;
     PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIPS_PER_PROGRAM] = [519, 1039, 1559, 2079];
 pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STORE_EXDESC_DWORD: usize = 527;
 
+// Real SIMD16 Mandelbrot artifact slot.
+//
+// This first body is deliberately a runnable store prologue, not the final
+// Mandelbrot iteration loop: the CPU can patch a row address and color, the EU
+// derives 16 contiguous byte offsets, performs sixteen scalar HDC stores,
+// then retires with TS EOT. Replace the uniform color setup with the SIMD16 Q12
+// escape loop before calling it a Mandelbrot math proof.
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PROGRAM_NAME: &str =
+    "gfx12-primary-scanout-mandelbrot16-simd16-bw-q12-store-prologue-then-ts-eot";
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_LANES: usize = 16;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_FRAC_BITS: u32 = 12;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_MAX_ITER: u32 = 32;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM: usize =
+    PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_LANES;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_STORE_SENDS: usize = 16;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_WORD_DWORDS: usize =
+    20 + 4 + ((PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_STORE_SENDS - 1) * 8) + 8;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_X_STEP_DWORD: usize = usize::MAX;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_C_RE_BASE_DWORD: usize = usize::MAX;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_C_IM_DWORD: usize = usize::MAX;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_ADDRESS_BASE_DWORD: usize = 15;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_COLOR_DWORD: usize = 19;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_STORE_SEND_DWORD: usize = 23;
+
+const fn primary_scanout_mandelbrot16_simd16_bw_words()
+-> [u32; PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_WORD_DWORDS] {
+    let mut words = [0u32; PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_WORD_DWORDS];
+
+    words[0] = 0x80030061;
+    words[1] = 0x01054410;
+    words[2] = 0x00000000;
+    words[3] = 0x76543210;
+    words[4] = 0x80030261;
+    words[5] = 0x01050120;
+    words[6] = 0x00460105;
+    words[7] = 0x00000000;
+    words[8] = 0x00030069;
+    words[9] = 0x7F058660;
+    words[10] = 0x02460105;
+    words[11] = 0x00000002;
+    words[12] = 0x00030140;
+    words[13] = 0x7F058660;
+    words[14] = 0x06467F05;
+    words[15] = 0x00000000;
+    words[16] = 0x80030061;
+    words[17] = 0x04054660;
+    words[18] = 0x00000000;
+    words[19] = 0x00000000;
+
+    let mut cursor = 20usize;
+    let mut send = 0usize;
+    while send < PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_STORE_SENDS {
+        words[cursor] = 0x00030131;
+        words[cursor + 1] = 0x00000000;
+        words[cursor + 2] = 0xCC027F0C;
+        words[cursor + 3] = 0x009A040C;
+        cursor += 4;
+        send += 1;
+
+        if send < PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_STORE_SENDS {
+            words[cursor] = 0x00030140;
+            words[cursor + 1] = 0x7F058660;
+            words[cursor + 2] = 0x06467F05;
+            words[cursor + 3] = 0x00000004;
+            cursor += 4;
+        }
+    }
+
+    words[cursor] = 0x80030061;
+    words[cursor + 1] = 0x7E050220;
+    words[cursor + 2] = 0x00460005;
+    words[cursor + 3] = 0x00000000;
+    words[cursor + 4] = 0x80030131;
+    words[cursor + 5] = 0x00000004;
+    words[cursor + 6] = 0x70007E0C;
+    words[cursor + 7] = 0x00000000;
+    words
+}
+
+pub static PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS:
+    [u32; PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_WORD_DWORDS] =
+    primary_scanout_mandelbrot16_simd16_bw_words();
+
+pub static PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_HDC1_STATELESS_STORE_THEN_TS_EOT:
+    EuArtifact = EuArtifact {
+    name: PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PROGRAM_NAME,
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::PrimaryScanoutMandelbrot16Simd16BwThenHdc1StoreThenThreadSpawnerEot,
+    words: &PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS,
+    expects_store: true,
+};
+
 // Preserve the generated SIMD8x2 Q12 program body and widen only by reusing
 // its already-proven second-strip block. The Q12 iteration math, color math,
 // and TS EOT suffix remain byte-for-byte from the generated base artifact; only

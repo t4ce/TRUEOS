@@ -30,6 +30,7 @@ use walker_command::encode_gfx12_gpgpu_walker_probe_batch;
 pub(crate) use mandelbrot::{
     submit_gpgpu_primary_scanout_groupid_line320_probe,
     submit_gpgpu_primary_scanout_line1280_groupid_rows_fullwidth_color_burst,
+    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe,
     submit_gpgpu_primary_scanout_row2560_simd8_probe,
 };
 pub(crate) use matmul::{
@@ -1497,9 +1498,10 @@ fn should_log_gpgpu_program_shape(name: &str) -> bool {
     if name == trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_PROGRAM_NAME
+        || name == trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_PROGRAM_NAME
-        || name.contains("primary-scanout-groupid-line1280-rows-simd16-mask")
+        || name.contains("primary-scanout-groupid-line1280-rows-simd16")
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD8_BW_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_SCALAR_BW_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_LINE320_SCALAR_BW_PROGRAM_NAME
@@ -1785,6 +1787,9 @@ fn gpgpu_one_tile_sentinel_failure(
     program: GpgpuEuProgram,
     output_gpu: u64,
 ) -> crate::intel::GpgpuOneTileSentinelProof {
+    if reason == "no-device" {
+        return gpgpu_one_tile_sentinel_failure_quiet(reason, program, output_gpu);
+    }
     crate::log!(
         "intel/gpgpu: one-tile-output-sentinel submitted=0 finished=0 readback_ok=0 reason={} program_source={} groups=1 expected_lane_dispatch=8 observed_lane_dispatch=0 output_gpu=0x{:X} output_first_before=0x00000000 output_first_after=0x00000000 sentinel=0x{:08X} output_nonzero_before=0 output_nonzero_after=0 output_hits_lo64=0x0000000000000000 finish_marker=0x00000000 finish_expected=0x{:08X} batch_bytes=0x0 output_owner=cpu-ap next=fix-one-tile-output-sentinel does_not_prove=model_matvec\n",
         reason,
