@@ -33,9 +33,10 @@ pub(crate) const MANDELBROT_GPGPU_ANIM_PALETTE: [u32; 8] = [
     0x00FF_8800,
 ];
 pub(crate) const MANDELBROT_GPGPU_NOTIFY_AFTER_FULLSCREEN_SWEEP: bool = true;
+pub(crate) const MANDELBROT_GPGPU_RUN_Q12_SIMD8X4_PREVIEW: bool = false;
 pub(crate) const MANDELBROT_GPGPU_RUN_MANDELBROT16_SIMD16_STORE_PROBE: bool = true;
 pub(crate) const MANDELBROT_GPGPU_RUN_LEGACY_ROW_WRITER_FALLBACK_ON_SUCCESS: bool = false;
-pub(crate) const MANDELBROT_GPGPU_RUN_LEGACY_ROW_WRITER_FALLBACK_ON_FAILURE: bool = true;
+pub(crate) const MANDELBROT_GPGPU_RUN_LEGACY_ROW_WRITER_FALLBACK_ON_FAILURE: bool = false;
 pub(crate) const MANDELBROT_GPGPU_STAGE_READY_HEARTBEAT_MS: u64 = 1_000;
 pub(crate) const MANDELBROT_BURST_LANE_POOL_START: u32 = 3;
 pub(crate) const MANDELBROT_BURST_LANE_POOL_SIZE: u32 = 4;
@@ -189,7 +190,7 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
     let primary_gpu = crate::intel::primary_surface_gpu_addr().unwrap_or(0);
 
     crate::log!(
-        "mandelbrot-gpu-sidequest: attempted name={} called=1 hot=1 artifact_stage=gpgpu-eu target={}x{} scanout={}x{} primary_gpu=0x{:X} boot_probe_enabled={} legacy_row_fallback_on_success={} legacy_row_fallback_on_failure={} action=boot-exercise-mandelbrot16-store-prologue next=add-q12-coordinate-and-one-iteration-contract does_not_prove=fragment-shader-or-mandelbrot-iteration\n",
+        "mandelbrot-gpu-sidequest: attempted name={} called=1 hot=1 artifact_stage=gpgpu-eu target={}x{} scanout={}x{} primary_gpu=0x{:X} simd16_store_probe_enabled={} q12_simd8x4_reference_enabled={} legacy_row_fallback_on_success={} legacy_row_fallback_on_failure={} action=boot-exercise-simd16-mul-dword-witness-store cpu_runtime_patches=address-only eu_runtime_work=simd16-mul-dword-three-by-three-store-eot next=restore-fixed10-q12-body-after-mul-witness does_not_prove=full-frame-mandelbrot\n",
         MANDELBROT_GPU_SIDEQUEST_NAME,
         MANDELBROT_TARGET_WIDTH,
         MANDELBROT_TARGET_HEIGHT,
@@ -197,13 +198,87 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
         scanout_h,
         primary_gpu,
         MANDELBROT_GPGPU_RUN_MANDELBROT16_SIMD16_STORE_PROBE as u8,
+        MANDELBROT_GPGPU_RUN_Q12_SIMD8X4_PREVIEW as u8,
         MANDELBROT_GPGPU_RUN_LEGACY_ROW_WRITER_FALLBACK_ON_SUCCESS as u8,
         MANDELBROT_GPGPU_RUN_LEGACY_ROW_WRITER_FALLBACK_ON_FAILURE as u8,
     );
 
+    if MANDELBROT_GPGPU_RUN_Q12_SIMD8X4_PREVIEW {
+        let mut frame: u64 = 0;
+        let mut cursor = 0usize;
+        let mut released_lumen = false;
+        loop {
+            let control = mandelbrot_artifact_control_snapshot();
+            let pixel_budget = (control.row_groups_per_burst as usize)
+                .saturating_mul(
+                    trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_PIXELS_PER_PROGRAM,
+                )
+                .max(trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_PIXELS_PER_PROGRAM);
+            let (proof, next_cursor) =
+                crate::intel::submit_gpgpu_primary_scanout_mandelbrot_preview(
+                    cursor,
+                    frame as usize,
+                    pixel_budget,
+                );
+            cursor = next_cursor;
+            if proof.submitted && !released_lumen {
+                crate::r::readiness::set(crate::r::readiness::MANDELBROT_GPU_SIDEQUEST_READY);
+                released_lumen = true;
+            }
+            let missing_hardware_or_scanout = !proof.submitted
+                && (proof.reason == "no-device"
+                    || proof.reason == "no-warm-state"
+                    || proof.reason == "no-primary-scanout");
+            let should_log = frame < 4 || frame % 64 == 0 || !proof.readback_ok;
+            if should_log {
+                crate::log!(
+                    "mandelbrot-gpu-sidequest: q12-preview frame={} cursor={} submitted={} finished={} readback_ok={} reason={} program_source={} target_gpu=0x{:X} expected_mask=0x{:016X} lane_dispatch_delta={} finish_marker=0x{:08X} lumen_released={} cpu_runtime_patches=coords-and-address-bases eu_runtime_work=q12-iteration-color-and-hdc-message-payload message_contract=4x-hdc-simd8-store next={} does_not_prove=simd16-register-pair-body\n",
+                    frame,
+                    cursor,
+                    proof.submitted as u8,
+                    proof.finished as u8,
+                    proof.readback_ok as u8,
+                    proof.reason,
+                    proof.program_name,
+                    proof.output_gpu,
+                    proof.output_hits_lo64,
+                    proof.dispatch_delta,
+                    proof.finish_marker,
+                    released_lumen as u8,
+                    if proof.readback_ok {
+                        "continue-q12-preview"
+                    } else if proof.dispatch_delta != 0 {
+                        "fix-q12-readback-or-store-payload"
+                    } else {
+                        "fix-q12-submit-or-walker"
+                    },
+                );
+            }
+            if missing_hardware_or_scanout {
+                loop {
+                    Timer::after(EmbassyDuration::from_millis(
+                        MANDELBROT_GPGPU_STAGE_READY_HEARTBEAT_MS,
+                    ))
+                    .await;
+                    frame = frame.wrapping_add(1);
+                    if frame == 1 || frame % 16 == 0 {
+                        crate::log!(
+                            "mandelbrot-gpu-sidequest: q12-preview-parked heartbeat={} reason={} submitted=0 frame_loop_running=0 next=boot-on-intel-gpgpu-hardware does_not_prove=mandelbrot-iteration-math\n",
+                            frame,
+                            proof.reason,
+                        );
+                    }
+                }
+            }
+            frame = frame.wrapping_add(1);
+            Timer::after(EmbassyDuration::from_millis(MANDELBROT_GPGPU_LOOP_MS)).await;
+        }
+    }
+
     let mut frame: u64 = 0;
     let mut released_lumen = false;
     let mut mandelbrot16_probe_readback_ok = false;
+    let mut mandelbrot16_probe_finished = false;
     if MANDELBROT_GPGPU_RUN_MANDELBROT16_SIMD16_STORE_PROBE {
         let x_base = ((scanout_w as u32).saturating_sub(
             trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM as u32,
@@ -217,8 +292,9 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
             released_lumen = true;
         }
         mandelbrot16_probe_readback_ok = probe.readback_ok;
+        mandelbrot16_probe_finished = probe.finished;
         crate::log!(
-            "mandelbrot-gpu-sidequest: mandelbrot16-simd16-store-prologue-probe submitted={} finished={} readback_ok={} reason={} program_source={} target_gpu=0x{:X} pixel_hit_mask=0x{:04X} lane_dispatch_delta={} finish_marker=0x{:08X} lumen_released={} ready_gate=readback_ok math_contract=absent q12_coordinate_params=not-yet-wired action={} next={} proves={} does_not_prove=mandelbrot-iteration-math\n",
+            "mandelbrot-gpu-sidequest: mandelbrot16-simd16-mul-dword-witness-probe submitted={} finished={} readback_ok={} reason={} program_source={} target_gpu=0x{:X} validation_hit_mask=0x{:04X} validation_scope=first-kickoff-lane0-only lane_dispatch_delta={} finish_marker=0x{:08X} lumen_released={} ready_gate=readback_ok artifact_contract=simd16-mul-dword-witness-split-src1-store-data-source-unfixed action={} next={} proves={} does_not_prove=full-frame-mandelbrot\n",
             probe.submitted as u8,
             probe.finished as u8,
             probe.readback_ok as u8,
@@ -230,19 +306,19 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
             probe.finish_marker,
             released_lumen as u8,
             if probe.submitted {
-                "stage-simd16-visible-store-proof"
+                "stage-simd16-mul-dword-witness-proof"
             } else {
                 "hold-before-math-contract"
             },
             if probe.readback_ok {
-                "add-q12-coordinate-and-one-iteration-contract"
-            } else if probe.dispatch_delta != 0 {
-                "fix-mandelbrot16-store-prologue-readback"
+                "restore-fixed10-q12-body-after-mul-witness"
+            } else if probe.finished {
+                "fix-simd16-mul-witness-readback-or-store"
             } else {
-                "fix-mandelbrot16-store-prologue-submit"
+                "fix-simd16-mul-witness-submit-or-eot"
             },
             if probe.readback_ok {
-                "boot-exercises-new-mandelbrot16-artifact-and-visible-store"
+                "boot-exercises-simd16-mul-dword-witness-store-eot-lane0-validation-once"
             } else if probe.dispatch_delta != 0 {
                 "boot-exercises-new-mandelbrot16-artifact-partial-store"
             } else {
@@ -257,13 +333,21 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
     };
     if !run_legacy_row_writer {
         let stage_reason = if mandelbrot16_probe_readback_ok {
-            "simd16-visible-store-proven"
+            "simd16-mul-dword-witness-proven"
         } else {
             "legacy-row-writer-disabled-without-mandelbrot16-proof"
         };
+        let stage_next = if mandelbrot16_probe_readback_ok {
+            "restore-fixed10-q12-body-after-mul-witness"
+        } else if mandelbrot16_probe_finished {
+            "fix-simd16-mul-witness-readback-or-store"
+        } else {
+            "fix-simd16-mul-witness-submit-or-eot"
+        };
         crate::log!(
-            "mandelbrot-gpu-sidequest: stage-parked reason={} legacy_row_writer_running=0 frame_loop_running=0 math_contract=absent q12_coordinate_params=not-yet-wired next=add-q12-coordinate-and-one-iteration-contract does_not_prove=mandelbrot-iteration-math\n",
+            "mandelbrot-gpu-sidequest: stage-parked reason={} legacy_row_writer_running=0 frame_loop_running=0 artifact_contract=simd16-mul-dword-witness-split-src1-store-data-source-unfixed next={} does_not_prove=full-frame-mandelbrot\n",
             stage_reason,
+            stage_next,
         );
         loop {
             Timer::after(EmbassyDuration::from_millis(MANDELBROT_GPGPU_STAGE_READY_HEARTBEAT_MS))
@@ -271,9 +355,10 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
             frame = frame.wrapping_add(1);
             if frame == 1 || frame % 16 == 0 {
                 crate::log!(
-                    "mandelbrot-gpu-sidequest: stage-ready heartbeat={} reason={} artifact_stage=simd16-visible-store-prologue legacy_row_writer_running=0 next=add-q12-coordinate-and-one-iteration-contract does_not_prove=mandelbrot-iteration-math\n",
+                    "mandelbrot-gpu-sidequest: stage-ready heartbeat={} reason={} artifact_stage=simd16-mul-dword-witness legacy_row_writer_running=0 next={} does_not_prove=full-frame-mandelbrot\n",
                     frame,
                     stage_reason,
+                    stage_next,
                 );
             }
         }

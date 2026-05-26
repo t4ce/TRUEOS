@@ -1845,27 +1845,148 @@ pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STORE_EXDESC_DWORD: usize = 527;
 
 // Real SIMD16 Mandelbrot artifact slot.
 //
-// This first body is deliberately a runnable store prologue, not the final
-// Mandelbrot iteration loop: the CPU can patch a row address and color, the EU
-// derives 16 contiguous byte offsets, performs sixteen scalar HDC stores,
-// then retires with TS EOT. Replace the uniform color setup with the SIMD16 Q12
-// escape loop before calling it a Mandelbrot math proof.
+// Keep the active baseline at the 16-lane store/EOT shape. SIMD8 remains a
+// diagnostic subset, but this sidequest must prove the 16-flow artifact surface
+// before adding Mandelbrot math back on top.
 pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PROGRAM_NAME: &str =
-    "gfx12-primary-scanout-mandelbrot16-simd16-bw-q12-store-prologue-then-ts-eot";
+    "gfx12-primary-scanout-mandelbrot16-simd16-bw-mul-dword-witness-store-then-ts-eot";
 pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_LANES: usize = 16;
 pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_FRAC_BITS: u32 = 12;
-pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_MAX_ITER: u32 = 32;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_MAX_ITER: u32 = 10;
 pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM: usize =
     PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_LANES;
-pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_STORE_SENDS: usize = 16;
-pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_WORD_DWORDS: usize =
-    20 + 4 + ((PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_STORE_SENDS - 1) * 8) + 8;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_STORE_SENDS: usize = 1;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_WORD_DWORDS: usize = 44;
 pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_X_STEP_DWORD: usize = usize::MAX;
 pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_C_RE_BASE_DWORD: usize = usize::MAX;
 pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_C_IM_DWORD: usize = usize::MAX;
-pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_ADDRESS_BASE_DWORD: usize = 15;
-pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_COLOR_DWORD: usize = 19;
-pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_STORE_SEND_DWORD: usize = 23;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_ADDRESS_BASE_DWORD: usize = 19;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_ADDRESS_BASE_DWORDS: [usize; 1] =
+    [PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_ADDRESS_BASE_DWORD];
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_COLOR_DWORD: usize = usize::MAX;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_ONE_ITER_DWORD: usize = 24;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_COLOR_FROM_DEPTH_DWORD: usize = 28;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_STORE_SEND_DWORD: usize = 32;
+
+#[allow(dead_code)]
+const fn emit_mandelbrot16_fixed10_iter(
+    words: &mut [u32; PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_WORD_DWORDS],
+    cursor: usize,
+) -> usize {
+    words[cursor] = 0x00030141;
+    words[cursor + 1] = 0x0C050660;
+    words[cursor + 2] = 0x06460605;
+    words[cursor + 3] = 0x00460605;
+    words[cursor + 4] = 0x0003016C;
+    words[cursor + 5] = 0x0C058660;
+    words[cursor + 6] = 0x06460C05;
+    words[cursor + 7] = 0x0000000C;
+    words[cursor + 8] = 0x00030141;
+    words[cursor + 9] = 0x0E050660;
+    words[cursor + 10] = 0x06460805;
+    words[cursor + 11] = 0x00460805;
+    words[cursor + 12] = 0x0003016C;
+    words[cursor + 13] = 0x0E058660;
+    words[cursor + 14] = 0x06460E05;
+    words[cursor + 15] = 0x0000000C;
+    words[cursor + 16] = 0x00030140;
+    words[cursor + 17] = 0x10050660;
+    words[cursor + 18] = 0x06460C05;
+    words[cursor + 19] = 0x00460E05;
+    words[cursor + 20] = 0x00030170;
+    words[cursor + 21] = 0x00018660;
+    words[cursor + 22] = 0x56461005;
+    words[cursor + 23] = 0x00004000;
+    words[cursor + 24] = 0x01030140;
+    words[cursor + 25] = 0x0A058660;
+    words[cursor + 26] = 0x06460A05;
+    words[cursor + 27] = 0x00000001;
+    words[cursor + 28] = 0x00030140;
+    words[cursor + 29] = 0x12050660;
+    words[cursor + 30] = 0x06460C05;
+    words[cursor + 31] = 0x02460E05;
+    words[cursor + 32] = 0x00030140;
+    words[cursor + 33] = 0x12050660;
+    words[cursor + 34] = 0x06461205;
+    words[cursor + 35] = 0x00460205;
+    words[cursor + 36] = 0x00030141;
+    words[cursor + 37] = 0x14050660;
+    words[cursor + 38] = 0x06460605;
+    words[cursor + 39] = 0x00460805;
+    words[cursor + 40] = 0x0003016C;
+    words[cursor + 41] = 0x14058660;
+    words[cursor + 42] = 0x06461405;
+    words[cursor + 43] = 0x0000000B;
+    words[cursor + 44] = 0x00030140;
+    words[cursor + 45] = 0x14050660;
+    words[cursor + 46] = 0x06461405;
+    words[cursor + 47] = 0x00460405;
+    words[cursor + 48] = 0x01030161;
+    words[cursor + 49] = 0x06050660;
+    words[cursor + 50] = 0x00461205;
+    words[cursor + 51] = 0x00000000;
+    words[cursor + 52] = 0x01030161;
+    words[cursor + 53] = 0x08050660;
+    words[cursor + 54] = 0x00461405;
+    words[cursor + 55] = 0x00000000;
+    cursor + 56
+}
+
+#[allow(dead_code)]
+const fn emit_mandelbrot16_fixed10_color_and_store(
+    words: &mut [u32; PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_WORD_DWORDS],
+    cursor: usize,
+) -> usize {
+    words[cursor] = 0x00030169;
+    words[cursor + 1] = 0x14058660;
+    words[cursor + 2] = 0x02460805;
+    words[cursor + 3] = 0x00000012;
+    words[cursor + 4] = 0x00030169;
+    words[cursor + 5] = 0x15058660;
+    words[cursor + 6] = 0x02460805;
+    words[cursor + 7] = 0x0000000A;
+    words[cursor + 8] = 0x00030169;
+    words[cursor + 9] = 0x16058660;
+    words[cursor + 10] = 0x02460805;
+    words[cursor + 11] = 0x00000002;
+    words[cursor + 12] = 0x00030140;
+    words[cursor + 13] = 0x04050660;
+    words[cursor + 14] = 0x06461405;
+    words[cursor + 15] = 0x00461505;
+    words[cursor + 16] = 0x00030140;
+    words[cursor + 17] = 0x04050660;
+    words[cursor + 18] = 0x06460405;
+    words[cursor + 19] = 0x00461605;
+    words[cursor + 20] = 0x00030140;
+    words[cursor + 21] = 0x04058660;
+    words[cursor + 22] = 0x06460405;
+    words[cursor + 23] = 0x00002040;
+    words[cursor + 24] = 0x00030170;
+    words[cursor + 25] = 0x00018660;
+    words[cursor + 26] = 0x46460805;
+    words[cursor + 27] = PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_MAX_ITER;
+    words[cursor + 28] = 0x01030161;
+    words[cursor + 29] = 0x04054660;
+    words[cursor + 30] = 0x00000000;
+    words[cursor + 31] = 0x00000000;
+    words[cursor + 32] = 0x00030069;
+    words[cursor + 33] = 0x7F058660;
+    words[cursor + 34] = 0x02460105;
+    words[cursor + 35] = 0x00000002;
+    words[cursor + 36] = 0x00030140;
+    words[cursor + 37] = 0x7F058660;
+    words[cursor + 38] = 0x06467F05;
+    words[cursor + 39] = 0x00000000;
+    words[cursor + 40] = 0x80000101;
+    words[cursor + 41] = 0x00000000;
+    words[cursor + 42] = 0x00000000;
+    words[cursor + 43] = 0x00000000;
+    words[cursor + 44] = 0x00030131;
+    words[cursor + 45] = 0x00000000;
+    words[cursor + 46] = 0xCC027F0C;
+    words[cursor + 47] = 0x009A040C;
+    cursor + 48
+}
 
 const fn primary_scanout_mandelbrot16_simd16_bw_words()
 -> [u32; PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_WORD_DWORDS] {
@@ -1875,50 +1996,46 @@ const fn primary_scanout_mandelbrot16_simd16_bw_words()
     words[1] = 0x01054410;
     words[2] = 0x00000000;
     words[3] = 0x76543210;
-    words[4] = 0x80030261;
-    words[5] = 0x01050120;
-    words[6] = 0x00460105;
-    words[7] = 0x00000000;
-    words[8] = 0x00030069;
-    words[9] = 0x7F058660;
-    words[10] = 0x02460105;
-    words[11] = 0x00000002;
-    words[12] = 0x00030140;
-    words[13] = 0x7F058660;
-    words[14] = 0x06467F05;
-    words[15] = 0x00000000;
-    words[16] = 0x80030061;
-    words[17] = 0x04054660;
-    words[18] = 0x00000000;
+    words[4] = 0x80030061;
+    words[5] = 0x02054410;
+    words[6] = 0x00000000;
+    words[7] = 0xFEDCBA98;
+    words[8] = 0x80040261;
+    words[9] = 0x01050120;
+    words[10] = 0x00460105;
+    words[11] = 0x00000000;
+    words[12] = 0x00040069;
+    words[13] = 0x14058660;
+    words[14] = 0x02460105;
+    words[15] = 0x00000002;
+    words[16] = 0x00040140;
+    words[17] = 0x14058660;
+    words[18] = 0x06461405;
     words[19] = 0x00000000;
-
-    let mut cursor = 20usize;
-    let mut send = 0usize;
-    while send < PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_STORE_SENDS {
-        words[cursor] = 0x00030131;
-        words[cursor + 1] = 0x00000000;
-        words[cursor + 2] = 0xCC027F0C;
-        words[cursor + 3] = 0x009A040C;
-        cursor += 4;
-        send += 1;
-
-        if send < PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_STORE_SENDS {
-            words[cursor] = 0x00030140;
-            words[cursor + 1] = 0x7F058660;
-            words[cursor + 2] = 0x06467F05;
-            words[cursor + 3] = 0x00000004;
-            cursor += 4;
-        }
-    }
-
-    words[cursor] = 0x80030061;
-    words[cursor + 1] = 0x7E050220;
-    words[cursor + 2] = 0x00460005;
-    words[cursor + 3] = 0x00000000;
-    words[cursor + 4] = 0x80030131;
-    words[cursor + 5] = 0x00000004;
-    words[cursor + 6] = 0x70007E0C;
-    words[cursor + 7] = 0x00000000;
+    words[20] = 0x80040061;
+    words[21] = 0x06054660;
+    words[22] = 0x00000000;
+    words[23] = 0x00000003;
+    words[24] = 0x00040141;
+    words[25] = 0x16050660;
+    words[26] = 0x06460605;
+    words[27] = 0x00460605;
+    words[28] = 0x80040061;
+    words[29] = 0x16054660;
+    words[30] = 0x00000000;
+    words[31] = 0x00000009;
+    words[32] = 0x00040131;
+    words[33] = 0x00000000;
+    words[34] = 0xCC021414;
+    words[35] = 0x00961614;
+    words[36] = 0x80030061;
+    words[37] = 0x7E050220;
+    words[38] = 0x00460005;
+    words[39] = 0x00000000;
+    words[40] = 0x80030131;
+    words[41] = 0x00000004;
+    words[42] = 0x70007E0C;
+    words[43] = 0x00000000;
     words
 }
 

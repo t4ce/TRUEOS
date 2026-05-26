@@ -634,6 +634,14 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe(
     )
 }
 
+pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
+    cursor: usize,
+    target_phase: usize,
+    pixel_budget: usize,
+) -> (GpgpuOneTileSentinelProof, usize) {
+    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot_preview(cursor, target_phase, pixel_budget)
+}
+
 pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd8_probe(
     mode: u32,
     row_index: u32,
