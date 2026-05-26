@@ -155,10 +155,13 @@ fn upload_primary_scanout_mandelbrot16_simd16_bw_artifact(
     address_base: u32,
     color: u32,
     mode: u32,
+    lhs: u32,
+    rhs: u32,
 ) -> bool {
     let mut words =
         trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS;
-    patch_mandelbrot16_simd16_probe_variant(&mut words, mode);
+    patch_mandelbrot16_simd16_probe_variant(&mut words, mode, lhs, rhs);
+    patch_mandelbrot16_simd16_probe_source(&mut words, mode, lhs);
     let mut address_slot = 0usize;
     while address_slot
         < trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_ADDRESS_BASE_DWORDS.len()
@@ -182,6 +185,8 @@ fn upload_primary_scanout_mandelbrot16_simd16_bw_artifact(
 fn patch_mandelbrot16_simd16_probe_variant(
     words: &mut [u32; trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_WORD_DWORDS],
     mode: u32,
+    lhs: u32,
+    rhs: u32,
 ) {
     const NOP: [u32; 4] = [0x80000101, 0x00000000, 0x00000000, 0x00000000];
     const ADD_G22_G6_G6: [u32; 4] = [0x00040140, 0x16050660, 0x06460605, 0x00460605];
@@ -200,6 +205,84 @@ fn patch_mandelbrot16_simd16_probe_variant(
     const MUL_G24_G6_G6_UW: [u32; 4] = [0x00040141, 0x18050110, 0x01580605, 0x00580605];
     const MOV_G22_G24_UW: [u32; 4] = [0x00040161, 0x16050120, 0x00581805, 0x00000000];
     const MOV_G22_9: [u32; 4] = [0x80040061, 0x16054660, 0x00000000, 0x00000009];
+    const MOV_G22_G6: [u32; 4] = [0x00040161, 0x16050660, 0x00460605, 0x00000000];
+    const NEG_G22_G6: [u32; 4] = [0x00040161, 0x16052660, 0x00460605, 0x00000000];
+    const ABS_G22_G6: [u32; 4] = [0x00040161, 0x16051660, 0x00460605, 0x00000000];
+    const ADD_G22_G6_IMM: [u32; 4] = [0x00040140, 0x16058660, 0x06460605, 0x00000004];
+    const SUB_G22_G6_IMM: [u32; 4] = [0x00040140, 0x16058660, 0x06460605, 0xFFFF_FFFF];
+    const SUB_G22_G6_G6: [u32; 4] = [0x00040140, 0x16050660, 0x06460605, 0x02460605];
+    const AND_G22_G6_IMM: [u32; 4] = [0x00040165, 0x16058220, 0x02460605, 0x00000001];
+    const OR_G22_G6_IMM: [u32; 4] = [0x00040166, 0x16058220, 0x02460605, 0x00000004];
+    const XOR_G22_G6_IMM: [u32; 4] = [0x00040167, 0x16058220, 0x02460605, 0x00000001];
+    const SHL_G22_G6_IMM: [u32; 4] = [0x00040169, 0x16058660, 0x06460605, 0x00000001];
+    const SHR_G22_G6_IMM: [u32; 4] = [0x00040168, 0x16058220, 0x02460605, 0x00000001];
+    const ASR_G22_G6_IMM: [u32; 4] = [0x0004016C, 0x16058660, 0x06460605, 0x00000001];
+    const NOT_G22_G6: [u32; 4] = [0x00040164, 0x16050220, 0x00460605, 0x00000000];
+    const CMPGE_G22_G6_IMM: [u32; 4] = [0x00040170, 0x16058660, 0x46460605, 0x00000003];
+    const MOV_G22_G6_W_PACKED: [u32; 4] = [0x00040161, 0x16050550, 0x00560606, 0x00000000];
+    const MOV_G22_G6_UW_PACKED: [u32; 4] = [0x00040161, 0x16050110, 0x00560606, 0x00000000];
+    const MUL_G22_G6_G6_W_TO_D: [u32; 4] = [0x00040141, 0x16050560, 0x05560606, 0x00560606];
+    const MUL_G22_G6_G6_UW_TO_UD: [u32; 4] = [0x00040141, 0x16050120, 0x01560606, 0x00560606];
+    const ASR_G22_G22_12D: [u32; 4] = [0x0004016C, 0x16058660, 0x06461605, 0x0000000C];
+    const SHR_G22_G22_12UD: [u32; 4] = [0x00040168, 0x16058220, 0x02461605, 0x0000000C];
+    const MOV_G8_W_IMM: [u32; 4] = [0x00040161, 0x08054550, 0x00000000, 0x00040004];
+    const MUL_G24_G8_G8_W_TO_D: [u32; 4] = [0x00040141, 0x18050560, 0x05560806, 0x00560806];
+    const ASR_G24_G24_12D: [u32; 4] = [0x0004016C, 0x18058660, 0x06461805, 0x0000000C];
+    const SUB_G22_G22_G24: [u32; 4] = [0x00040140, 0x16050660, 0x06461605, 0x02461805];
+    const ADD_G22_G22_IMM: [u32; 4] = [0x00040140, 0x16058660, 0x06461605, 0x00000800];
+    const OR_G22_G22_IMM: [u32; 4] = [0x00040166, 0x16058220, 0x02461605, 0xFFFF0000];
+    const STORE_SEND_G20_G22: [u32; 4] = [0x00040131, 0x00000000, 0xCC021414, 0x00961614];
+    const MOV_G126_G0: [u32; 4] = [0x80030061, 0x7E050220, 0x00460005, 0x00000000];
+    const EOT_SEND_G126: [u32; 4] = [0x80030131, 0x00000004, 0x70007E0C, 0x00000000];
+
+    if mode == 42 || mode == 43 {
+        let mut mov_g8 = MOV_G8_W_IMM;
+        let rhs16 = rhs & 0xFFFF;
+        mov_g8[3] = rhs16 | (rhs16 << 16);
+        let mut add_cre = ADD_G22_G22_IMM;
+        add_cre[3] = ((lhs & 0xFFFF) as u16 as i16 as i32) as u32;
+        let body = if mode == 43 {
+            [
+                NOP,
+                mov_g8,
+                MUL_G22_G6_G6_W_TO_D,
+                ASR_G22_G22_12D,
+                MUL_G24_G8_G8_W_TO_D,
+                ASR_G24_G24_12D,
+                SUB_G22_G22_G24,
+                add_cre,
+                OR_G22_G22_IMM,
+                STORE_SEND_G20_G22,
+                MOV_G126_G0,
+                EOT_SEND_G126,
+            ]
+        } else {
+            [
+                NOP,
+                mov_g8,
+                MUL_G22_G6_G6_W_TO_D,
+                ASR_G22_G22_12D,
+                MUL_G24_G8_G8_W_TO_D,
+                ASR_G24_G24_12D,
+                SUB_G22_G22_G24,
+                add_cre,
+                NOP,
+                STORE_SEND_G20_G22,
+                MOV_G126_G0,
+                EOT_SEND_G126,
+            ]
+        };
+        let mut instr = 0usize;
+        while instr < body.len() {
+            let off = 20 + instr * 4;
+            words[off] = body[instr][0];
+            words[off + 1] = body[instr][1];
+            words[off + 2] = body[instr][2];
+            words[off + 3] = body[instr][3];
+            instr += 1;
+        }
+        return;
+    }
 
     let (first, second) = match mode {
         1 => (ADD_G22_G6_G6, NOP),
@@ -215,6 +298,72 @@ fn patch_mandelbrot16_simd16_probe_variant(
         11 => (MUL8_G22_G6_G6_1Q, MUL8_G23_G7_G7_2Q),
         12 => (MUL_G24_G6_G6_W, MOV_G22_G24_W),
         13 => (MUL_G24_G6_G6_UW, MOV_G22_G24_UW),
+        14 => (MOV_G22_G6, NOP),
+        15 => {
+            let mut mov = MOV_G22_9;
+            mov[3] = rhs;
+            (NOP, mov)
+        }
+        16 => (NEG_G22_G6, NOP),
+        17 => (ABS_G22_G6, NOP),
+        18 => {
+            let mut add = ADD_G22_G6_IMM;
+            add[3] = rhs;
+            (add, NOP)
+        }
+        19 => {
+            let mut sub = SUB_G22_G6_IMM;
+            sub[3] = rhs.wrapping_neg();
+            (sub, NOP)
+        }
+        20 => (SUB_G22_G6_G6, NOP),
+        21 => {
+            let mut and = AND_G22_G6_IMM;
+            and[3] = rhs;
+            (and, NOP)
+        }
+        22 => {
+            let mut or = OR_G22_G6_IMM;
+            or[3] = rhs;
+            (or, NOP)
+        }
+        23 => {
+            let mut xor = XOR_G22_G6_IMM;
+            xor[3] = rhs;
+            (xor, NOP)
+        }
+        24 => {
+            let mut shl = SHL_G22_G6_IMM;
+            shl[3] = rhs & 31;
+            (shl, NOP)
+        }
+        25 => {
+            let mut shr = SHR_G22_G6_IMM;
+            shr[3] = rhs & 31;
+            (shr, NOP)
+        }
+        26 => {
+            let mut asr = ASR_G22_G6_IMM;
+            asr[3] = rhs & 31;
+            (asr, NOP)
+        }
+        27 => (NOT_G22_G6, NOP),
+        28 => {
+            let mut cmp = CMPGE_G22_G6_IMM;
+            cmp[3] = rhs;
+            (cmp, NOP)
+        }
+        29 => (MOV_G22_G6, NOP),
+        30 | 32 => (MOV_G22_G6_W_PACKED, NOP),
+        31 | 33 => (MOV_G22_G6_UW_PACKED, NOP),
+        34 => (MUL_G22_G6_G6_W, NOP),
+        35 => (MUL_G22_G6_G6_UW, NOP),
+        36 => (MUL_G24_G6_G6_W, MOV_G22_G24_W),
+        37 => (MUL_G24_G6_G6_UW, MOV_G22_G24_UW),
+        38 => (MUL_G22_G6_G6_W_TO_D, NOP),
+        39 => (MUL_G22_G6_G6_UW_TO_UD, NOP),
+        40 => (MUL_G22_G6_G6_W_TO_D, ASR_G22_G22_12D),
+        41 => (MUL_G22_G6_G6_UW_TO_UD, SHR_G22_G22_12UD),
         _ => (MUL_G22_G6_G6, MOV_G22_9),
     };
 
@@ -226,6 +375,32 @@ fn patch_mandelbrot16_simd16_probe_variant(
     words[29] = second[1];
     words[30] = second[2];
     words[31] = second[3];
+}
+
+fn patch_mandelbrot16_simd16_probe_source(
+    words: &mut [u32; trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_WORD_DWORDS],
+    mode: u32,
+    lhs: u32,
+) {
+    const MOV_G6_D_IMM: [u32; 4] = [0x80040061, 0x06054660, 0x00000000, 0x00000003];
+    const MOV_G6_W_IMM: [u32; 4] = [0x00040161, 0x06054550, 0x00000000, 0x00030003];
+    const MOV_G6_UW_IMM: [u32; 4] = [0x00040161, 0x06054110, 0x00000000, 0x00030003];
+
+    let replicated = (lhs & 0xFFFF) | ((lhs & 0xFFFF) << 16);
+    let mut init = match mode {
+        32 | 34 | 36 | 38 | 40 | 42 | 43 => MOV_G6_W_IMM,
+        33 | 35 | 37 | 39 | 41 => MOV_G6_UW_IMM,
+        _ => MOV_G6_D_IMM,
+    };
+    init[3] = if matches!(mode, 32 | 33 | 34 | 35 | 36 | 37 | 38 | 39 | 40 | 41 | 42 | 43) {
+        replicated
+    } else {
+        lhs
+    };
+    words[20] = init[0];
+    words[21] = init[1];
+    words[22] = init[2];
+    words[23] = init[3];
 }
 
 fn mandelbrot16_simd16_probe_variant_name(mode: u32) -> &'static str {
@@ -243,14 +418,93 @@ fn mandelbrot16_simd16_probe_variant_name(mode: u32) -> &'static str {
         11 => "mul8x2-dword-g6-g7-times-self-g22-g23",
         12 => "mul16-word-g6-times-g6-g24-then-widen-g22",
         13 => "mul16-uword-g6-times-g6-g24-then-widen-g22",
+        14 => "mov16-dword-g6-to-g22",
+        15 => "mov16-immediate-rhs-to-g22",
+        16 => "neg16-dword-g6-to-g22",
+        17 => "abs16-dword-g6-to-g22",
+        18 => "add16-dword-g6-plus-rhs-g22",
+        19 => "sub16-dword-g6-minus-rhs-g22",
+        20 => "sub16-dword-g6-minus-g6-g22",
+        21 => "and16-udword-g6-and-rhs-g22",
+        22 => "or16-udword-g6-or-rhs-g22",
+        23 => "xor16-udword-g6-xor-rhs-g22",
+        24 => "shl16-dword-g6-by-rhs-g22",
+        25 => "shr16-udword-g6-by-rhs-g22",
+        26 => "asr16-dword-g6-by-rhs-g22",
+        27 => "not16-udword-g6-to-g22",
+        28 => "cmpge16-dword-g6-vs-rhs-mask-g22",
+        29 => "dump16-dword-g6-to-g22",
+        30 => "dump16-word-packed-g6-dword-init-to-g22",
+        31 => "dump16-uword-packed-g6-dword-init-to-g22",
+        32 => "dump16-word-packed-g6-replicated-halfword-init-to-g22",
+        33 => "dump16-uword-packed-g6-replicated-halfword-init-to-g22",
+        34 => "mul16-word-packed-g6-replicated-halfword-init-g22",
+        35 => "mul16-uword-packed-g6-replicated-halfword-init-g22",
+        36 => "mul16-word-replicated-halfword-init-g24-then-widen-g22",
+        37 => "mul16-uword-replicated-halfword-init-g24-then-widen-g22",
+        38 => "mul16-word-to-dword-g6-replicated-halfword-init-g22",
+        39 => "mul16-uword-to-udword-g6-replicated-halfword-init-g22",
+        40 => "mul16-word-to-dword-g6-replicated-halfword-init-g22-asr12",
+        41 => "mul16-uword-to-udword-g6-replicated-halfword-init-g22-shr12",
+        42 => "mandelbrot16-one-iteration-re2-minus-im2-plus-cre-store",
+        43 => "mandelbrot16-one-iteration-re2-minus-im2-plus-cre-visible-store",
         _ => "mul16-dword-g6-times-g6-g22-then-immediate-nine-isolation",
     }
 }
 
-fn mandelbrot16_simd16_probe_expected_first(mode: u32) -> u32 {
+fn mandelbrot16_oneiter_re1_q12(lhs: u32, rhs: u32) -> u32 {
+    let c_re = (lhs as i16) as i32;
+    let c_im = (rhs as i16) as i32;
+    let re2 = c_re.wrapping_mul(c_re).wrapping_shr(12);
+    let im2 = c_im.wrapping_mul(c_im).wrapping_shr(12);
+    re2.wrapping_sub(im2).wrapping_add(c_re) as u32
+}
+
+fn mandelbrot16_simd16_probe_expected_first(mode: u32, lhs: u32, rhs: u32) -> u32 {
     match mode {
-        1 => 6,
+        1 => lhs.wrapping_add(lhs),
         9 | 10 => 0x0009_0009,
+        14 => lhs,
+        15 => rhs,
+        16 => (lhs as i32).wrapping_neg() as u32,
+        17 => (lhs as i32).wrapping_abs() as u32,
+        18 => lhs.wrapping_add(rhs),
+        19 => lhs.wrapping_sub(rhs),
+        20 => 0,
+        21 => lhs & rhs,
+        22 => lhs | rhs,
+        23 => lhs ^ rhs,
+        24 => (lhs as i32).wrapping_shl(rhs & 31) as u32,
+        25 => lhs.wrapping_shr(rhs & 31),
+        26 => (lhs as i32).wrapping_shr(rhs & 31) as u32,
+        27 => !lhs,
+        28 => {
+            if (lhs as i32) >= (rhs as i32) {
+                0xFFFF_FFFF
+            } else {
+                0
+            }
+        }
+        29 => lhs,
+        30 | 31 => lhs & 0xFFFF,
+        32 | 33 => (lhs & 0xFFFF) | ((lhs & 0xFFFF) << 16),
+        34 | 35 => {
+            let product = ((lhs & 0xFFFF).wrapping_mul(lhs & 0xFFFF)) & 0xFFFF;
+            product | (product << 16)
+        }
+        36 | 37 => (lhs & 0xFFFF).wrapping_mul(lhs & 0xFFFF),
+        38 => {
+            let value = (lhs as i16) as i32;
+            value.wrapping_mul(value) as u32
+        }
+        39 => (lhs & 0xFFFF).wrapping_mul(lhs & 0xFFFF),
+        40 => {
+            let value = (lhs as i16) as i32;
+            value.wrapping_mul(value).wrapping_shr(12) as u32
+        }
+        41 => (lhs & 0xFFFF).wrapping_mul(lhs & 0xFFFF).wrapping_shr(12),
+        42 => mandelbrot16_oneiter_re1_q12(lhs, rhs),
+        43 => mandelbrot16_oneiter_re1_q12(lhs, rhs) | 0xFFFF_0000,
         _ => 9,
     }
 }
@@ -2889,6 +3143,33 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe(
     mode: u32,
     row_index: u32,
     x_base: u32,
+    lhs: u32,
+    rhs: u32,
+) -> crate::intel::GpgpuOneTileSentinelProof {
+    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
+        mode, row_index, x_base, lhs, rhs, true,
+    )
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet(
+    mode: u32,
+    row_index: u32,
+    x_base: u32,
+    lhs: u32,
+    rhs: u32,
+) -> crate::intel::GpgpuOneTileSentinelProof {
+    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
+        mode, row_index, x_base, lhs, rhs, false,
+    )
+}
+
+fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
+    mode: u32,
+    row_index: u32,
+    x_base: u32,
+    lhs: u32,
+    rhs: u32,
+    validate_readback: bool,
 ) -> crate::intel::GpgpuOneTileSentinelProof {
     const PIXELS: usize =
         trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM;
@@ -2937,17 +3218,34 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe(
         return gpgpu_one_tile_sentinel_failure("mandelbrot16-gpu-high32", program, row_gpu);
     }
     let row_virt = unsafe { target.virt.add(row_offset) };
-    crate::intel::dma_flush(row_virt, BYTES);
-    let mut before_words = [0u32; PIXELS];
+    let expected_first = mandelbrot16_simd16_probe_expected_first(mode, lhs, rhs);
+    let poison = expected_first ^ 0x00A5_A5A5;
     let mut lane = 0usize;
-    while lane < PIXELS {
-        before_words[lane] = unsafe {
-            core::ptr::read_volatile(row_virt.add(lane * core::mem::size_of::<u32>()) as *const u32)
-        };
-        lane += 1;
+    if validate_readback {
+        while lane < PIXELS {
+            unsafe {
+                core::ptr::write_volatile(
+                    row_virt.add(lane * core::mem::size_of::<u32>()) as *mut u32,
+                    poison,
+                );
+            }
+            lane += 1;
+        }
+        crate::intel::dma_flush(row_virt, BYTES);
+    }
+    let mut before_words = [0u32; PIXELS];
+    if validate_readback {
+        lane = 0;
+        while lane < PIXELS {
+            before_words[lane] = unsafe {
+                core::ptr::read_volatile(
+                    row_virt.add(lane * core::mem::size_of::<u32>()) as *const u32
+                )
+            };
+            lane += 1;
+        }
     }
     let output_first_before = before_words[0];
-    let expected_first = mandelbrot16_simd16_probe_expected_first(mode);
     let patched_color = 0;
 
     if !upload_primary_scanout_mandelbrot16_simd16_bw_artifact(
@@ -2955,6 +3253,8 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe(
         row_offset as u32,
         patched_color,
         mode,
+        lhs,
+        rhs,
     ) {
         return gpgpu_one_tile_sentinel_failure("mandelbrot16-program-upload", program, row_gpu);
     }
@@ -2974,11 +3274,16 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe(
     let batch_dwords = warm.batch_len / core::mem::size_of::<u32>();
     let batch =
         unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
+    let surface_note = if validate_readback {
+        "stateless-primary-scanout-mandelbrot16-simd16-q12-plane"
+    } else {
+        "stateless-primary-scanout-mandelbrot16-simd16-q12-plane-quiet"
+    };
     let store_surface = prepare_gpgpu_mandelbrot_store_surface_state_for_target_span(
         warm,
         target.gpu,
         target.byte_len,
-        "stateless-primary-scanout-mandelbrot16-simd16-mul-witness",
+        surface_note,
     );
     let batch_bytes =
         match encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program, 1) {
@@ -2988,12 +3293,17 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe(
     crate::intel::dma_flush(warm.batch_virt, batch_bytes);
 
     let dispatch_before = read_gpgpu_threads_dispatched(dev);
+    let submit_name = if validate_readback {
+        "gpgpu-primary-scanout-mandelbrot16-simd16-q12-plane"
+    } else {
+        "gpgpu-primary-scanout-mandelbrot16-simd16-q12-plane-quiet"
+    };
     let finished = submit_warm_render_batch(
         dev,
         warm,
         RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
         RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
-        "gpgpu-primary-scanout-mandelbrot16-simd16-mul-witness",
+        submit_name,
     );
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
 
@@ -3042,107 +3352,155 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe(
     let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
     let first_hit = hits & 1 != 0;
     let any_changed = changed != 0;
-    let readback_ok = finished
+    let command_ok = finished
         && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE
-        && dispatch_delta >= EXPECTED_HW_LANE_DISPATCH
-        && first_hit
-        && any_changed;
-    let display_notified = readback_ok
+        && dispatch_delta >= EXPECTED_HW_LANE_DISPATCH;
+    let readback_ok = if validate_readback {
+        command_ok && first_hit && any_changed
+    } else {
+        command_ok
+    };
+    let display_notified = command_ok
         && crate::intel::display::notify_primary_surface_external_write(
-            "gpgpu-primary-scanout-mandelbrot16-simd16-mul-witness",
+            "gpgpu-primary-scanout-mandelbrot16-simd16-q12-plane",
             row_offset,
             BYTES,
         );
-    let reason = if readback_ok {
-        "mandelbrot16-simd16-mul-dword-witness-visible"
+    let is_one_iter = mode == 42 || mode == 43;
+    let is_one_iter_visible = mode == 43;
+    let reason = if !validate_readback && command_ok {
+        "mandelbrot16-simd16-q12-onevis-quiet-submit-finished-no-readback"
+    } else if readback_ok && is_one_iter {
+        if is_one_iter_visible {
+            "mandelbrot16-simd16-q12-one-iteration-visible-color-store-visible"
+        } else {
+            "mandelbrot16-simd16-q12-one-iteration-real-store-visible"
+        }
+    } else if readback_ok {
+        "mandelbrot16-simd16-alu-store-witness-visible"
     } else if !finished {
-        "mandelbrot16-simd16-mul-dword-witness-submit-not-finished"
+        "mandelbrot16-simd16-alu-store-witness-submit-not-finished"
     } else if dispatch_delta == 0 {
-        "mandelbrot16-simd16-mul-dword-witness-no-eu-dispatch"
+        "mandelbrot16-simd16-alu-store-witness-no-eu-dispatch"
     } else if hits == 0 {
-        "mandelbrot16-mul-dword-witness-first-lane-no-expected-value"
+        "mandelbrot16-simd16-alu-store-witness-first-lane-no-expected-value"
     } else {
-        "mandelbrot16-mul-dword-witness-first-lane-ok-readback-side-observation"
+        "mandelbrot16-simd16-alu-store-witness-first-lane-ok-readback-side-observation"
     };
-    let proves = if readback_ok {
-        "simd16-mul-dword-witness-store-eot-first-lane-validation-once"
+    let proves = if !validate_readback && command_ok {
+        "simd16-q12-onevis-submit-eot-no-readback-visual-exercise"
+    } else if readback_ok && is_one_iter_visible {
+        "simd16-q12-one-iteration-visible-color-store-eot-first-lane-validation-once"
+    } else if readback_ok && is_one_iter {
+        "simd16-q12-one-iteration-real-store-eot-first-lane-validation-once"
+    } else if readback_ok {
+        "simd16-q12-or-alu-store-eot-first-lane-validation-once"
     } else if dispatch_delta >= EXPECTED_HW_LANE_DISPATCH {
-        "simd16-mul-witness-dispatch-plus-store-mismatch"
+        "simd16-q12-or-alu-dispatch-plus-store-mismatch"
     } else if dispatch_delta != 0 {
         "partial-eu-dispatch"
     } else {
         "no-eu-dispatch"
     };
+    let artifact_body = if is_one_iter_visible {
+        "simd16-q12-one-iteration-visible-color-store"
+    } else if is_one_iter {
+        "simd16-q12-one-iteration-real-store"
+    } else {
+        "simd16-q12-wide-mul-or-alu-store"
+    };
+    let eu_work = if is_one_iter_visible {
+        "q12-cre-cim-re2-minus-im2-plus-cre-or-visible-mask-store"
+    } else if is_one_iter {
+        "q12-cre-cim-re2-minus-im2-plus-cre-store"
+    } else {
+        mandelbrot16_simd16_probe_variant_name(mode)
+    };
+    let one_iter_dword = if is_one_iter {
+        20usize
+    } else {
+        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_ONE_ITER_DWORD
+    };
+    let store_send_dword = if is_one_iter {
+        56usize
+    } else {
+        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_STORE_SEND_DWORD
+    };
 
-    crate::log!(
-        "intel/gpgpu: primary-scanout-mandelbrot16-simd16-mul-witness y={} x_base={} row_offset=0x{:X} row_gpu=0x{:X} target_gpu=0x{:X} target_phys=0x{:X} target_virt=0x{:X} pitch_bytes={} byte_len=0x{:X} mul_lhs=0x{:08X} mul_rhs=0x{:08X} patched_color=0x{:08X} expected_value=0x{:08X} artifact_body=simd16-mul-dword-witness-store-v8-retired-but-header-source payload_contract=mesa-send16-split-address-g20-data-g22-bti1-mlen2-exmlen2 dispatch_contract=simd16-basics-walker-v1 eu_math_lanes_mask=0x{:04X} eu_store_lanes_mask=0x{:04X} cpu_patched_lanes_mask=0x0000 eu_color_lanes=0 cpu_color_dwords_patched=0 eu_address_alu=mul16-laneid-by-4-add-bound-surface-offset-g20 eu_alu_variant={} eu_store_value=split-src1-g22-not-yet-selected-by-hdc validation_scope=first-kickoff-lane0-only validation_lanes=1 logical_lanes={} hdc_store_sends={} expected_store_pixels={} hit_mask=0x{:04X} changed_mask=0x{:04X} readback_ok={} reason={} first_before=0x{:08X} first_after=0x{:08X} expected_first=0x{:08X} after0=0x{:08X} after1=0x{:08X} after2=0x{:08X} after3=0x{:08X} after4=0x{:08X} after5=0x{:08X} after6=0x{:08X} after7=0x{:08X} after8=0x{:08X} after9=0x{:08X} after10=0x{:08X} after11=0x{:08X} after12=0x{:08X} after13=0x{:08X} after14=0x{:08X} after15=0x{:08X} display_notified={} notify_bytes=0x{:X} finish_marker=0x{:08X} lane_dispatch_delta={} expected_hw_lane_dispatch={} program_source={} address_base_dword={} color_dword={} one_iter_dword={} color_from_depth_dword={} store_send_dword={} proves={} next={} does_not_prove=full-frame-mandelbrot\n",
-        y,
-        x,
-        row_offset,
-        row_gpu,
-        target.gpu,
-        target.phys,
-        target.virt as usize,
-        target.pitch_bytes,
-        target.byte_len,
-        3u32,
-        3u32,
-        patched_color,
-        expected_first,
-        mandelbrot16_active_lane_mask(),
-        mandelbrot16_active_lane_mask(),
-        mandelbrot16_simd16_probe_variant_name(mode),
-        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_LANES,
-        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_STORE_SENDS,
-        PIXELS,
-        hits,
-        changed,
-        readback_ok as u8,
-        reason,
-        output_first_before,
-        output_first_after,
-        expected_first,
-        after_words[0],
-        after_words[1],
-        after_words[2],
-        after_words[3],
-        after_words[4],
-        after_words[5],
-        after_words[6],
-        after_words[7],
-        after_words[8],
-        after_words[9],
-        after_words[10],
-        after_words[11],
-        after_words[12],
-        after_words[13],
-        after_words[14],
-        after_words[15],
-        display_notified as u8,
-        BYTES,
-        finish_marker,
-        dispatch_delta,
-        EXPECTED_HW_LANE_DISPATCH,
-        program.name,
-        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_ADDRESS_BASE_DWORD,
-        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_COLOR_DWORD,
-        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_ONE_ITER_DWORD,
-        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_COLOR_FROM_DEPTH_DWORD,
-        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_STORE_SEND_DWORD,
-        proves,
-        if readback_ok {
-            "restore-fixed10-q12-body-after-mul-witness"
-        } else if finished {
-            "fix-simd16-mul-witness-readback-or-store"
-        } else {
-            "fix-simd16-mul-witness-submit-or-eot"
-        },
-    );
+    if validate_readback {
+        crate::log!(
+            "intel/gpgpu: primary-scanout-mandelbrot16-simd16-q12-plane y={} x_base={} row_offset=0x{:X} row_gpu=0x{:X} target_gpu=0x{:X} target_phys=0x{:X} target_virt=0x{:X} pitch_bytes={} byte_len=0x{:X} q12_lhs=0x{:08X} q12_rhs=0x{:08X} patched_color=0x{:08X} expected_plane_value=0x{:08X} artifact_body={} payload_contract=mesa-send16-address-g20-data-g22-bti1 dispatch_contract=simd16-basics-walker-v1 eu_math_lanes_mask=0x{:04X} eu_store_lanes_mask=0x{:04X} cpu_patched_lanes_mask=0x0000 eu_color_lanes=0 cpu_color_dwords_patched=0 eu_address_alu=laneid-by-4-add-bound-surface-offset-g20 eu_alu_variant={} eu_store_value=g22 validation_scope=first-kickoff-lane0-only validation_lanes=1 logical_lanes={} hdc_store_sends={} expected_store_pixels={} hit_mask=0x{:04X} changed_mask=0x{:04X} readback_ok={} reason={} first_before=0x{:08X} first_after=0x{:08X} expected_first=0x{:08X} after0=0x{:08X} after1=0x{:08X} after2=0x{:08X} after3=0x{:08X} after4=0x{:08X} after5=0x{:08X} after6=0x{:08X} after7=0x{:08X} after8=0x{:08X} after9=0x{:08X} after10=0x{:08X} after11=0x{:08X} after12=0x{:08X} after13=0x{:08X} after14=0x{:08X} after15=0x{:08X} display_notified={} notify_bytes=0x{:X} finish_marker=0x{:08X} lane_dispatch_delta={} expected_hw_lane_dispatch={} program_source={} address_base_dword={} color_dword={} one_iter_dword={} color_from_depth_dword={} store_send_dword={} proves={} next={} does_not_prove=full-frame-mandelbrot\n",
+            y,
+            x,
+            row_offset,
+            row_gpu,
+            target.gpu,
+            target.phys,
+            target.virt as usize,
+            target.pitch_bytes,
+            target.byte_len,
+            lhs,
+            rhs,
+            patched_color,
+            expected_first,
+            artifact_body,
+            mandelbrot16_active_lane_mask(),
+            mandelbrot16_active_lane_mask(),
+            eu_work,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_LANES,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_STORE_SENDS,
+            PIXELS,
+            hits,
+            changed,
+            readback_ok as u8,
+            reason,
+            output_first_before,
+            output_first_after,
+            expected_first,
+            after_words[0],
+            after_words[1],
+            after_words[2],
+            after_words[3],
+            after_words[4],
+            after_words[5],
+            after_words[6],
+            after_words[7],
+            after_words[8],
+            after_words[9],
+            after_words[10],
+            after_words[11],
+            after_words[12],
+            after_words[13],
+            after_words[14],
+            after_words[15],
+            display_notified as u8,
+            BYTES,
+            finish_marker,
+            dispatch_delta,
+            EXPECTED_HW_LANE_DISPATCH,
+            program.name,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_ADDRESS_BASE_DWORD,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_COLOR_DWORD,
+            one_iter_dword,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_COLOR_FROM_DEPTH_DWORD,
+            store_send_dword,
+            proves,
+            if readback_ok && is_one_iter {
+                "add-z-imaginary-and-iteration-count-color"
+            } else if readback_ok {
+                "replace-witness-with-coordinate-and-iteration-body"
+            } else if finished {
+                "fix-simd16-q12-readback-or-store"
+            } else {
+                "fix-simd16-q12-submit-or-eot"
+            },
+        );
+    }
     if !finished {
         recover_render_engine_after_nonretired_submit(
             dev,
             warm,
-            "gpgpu-primary-scanout-mandelbrot16-simd16-mul-witness",
+            "gpgpu-primary-scanout-mandelbrot16-simd16-q12-plane",
         );
     }
     crate::intel::GpgpuOneTileSentinelProof {

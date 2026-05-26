@@ -1,8 +1,13 @@
 mod dev_gears;
+mod descriptor;
+pub mod hid;
 mod lib;
 
+pub use self::hid::{hut, input, midi};
 pub use self::lib::*;
 pub use crab_usb as crabusb;
+
+const CRABUSB_CONTROLLER_ID: u32 = 3;
 
 #[embassy_executor::task]
 pub async fn usb_controller_service_task() {
@@ -27,7 +32,7 @@ pub async fn usb_controller_service_task() {
     let Some(news) = probe_devices_with_log(&mut host, "initial").await else {
         return;
     };
-    open_and_handoff_devices(&mut host, news).await;
+    open_and_handoff_devices(&mut host, news, &spawner).await;
 }
 
 async fn probe_devices_with_log(
@@ -60,11 +65,24 @@ async fn probe_devices_with_log(
 async fn open_and_handoff_devices(
     host: &mut crabusb::USBHost,
     news: alloc::vec::Vec<crabusb::ProbedDevice>,
+    spawner: &embassy_executor::Spawner,
 ) {
     for new in news {
         log_probed_device("probed", &new);
         match new {
             crabusb::ProbedDevice::Device(info) => {
+                if hid::boot::maybe_start_hid_boot_streams(
+                    host,
+                    &info,
+                    spawner,
+                    CRABUSB_CONTROLLER_ID,
+                    true,
+                )
+                .await
+                {
+                    continue;
+                }
+
                 let device = host.open_device(&info).await.expect("crabusb open device");
                 let id = device.slot_id() as usize;
                 match dev_gears::handoff_opened_device(device) {

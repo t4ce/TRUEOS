@@ -628,9 +628,23 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe(
     mode: u32,
     row_index: u32,
     x_base: u32,
+    lhs: u32,
+    rhs: u32,
 ) -> GpgpuOneTileSentinelProof {
     self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe(
-        mode, row_index, x_base,
+        mode, row_index, x_base, lhs, rhs,
+    )
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet(
+    mode: u32,
+    row_index: u32,
+    x_base: u32,
+    lhs: u32,
+    rhs: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet(
+        mode, row_index, x_base, lhs, rhs,
     )
 }
 
