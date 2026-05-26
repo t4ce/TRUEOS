@@ -61,7 +61,6 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch(
     const GPGPU_KERNEL_GPU: u64 = GPU_VA_DRAW_STATE_BASE + GPGPU_EU_KERNEL_OFFSET_BYTES as u64;
     const GPGPU_INSTRUCTION_BASE: u64 = GPGPU_KERNEL_GPU;
     const GPGPU_MIDL_NEGATIVE_CONTROL: bool = false;
-    const GPGPU_WALKER_SIMD8_RIGHT_MASK: u32 = 0x0000_00FF;
     const GPGPU_WALKER_BOTTOM_MASK: u32 = 0xFFFF_FFFF;
     const STATE_SIP_CMD: u32 = 0x6102_0001;
     const GPGPU_SIP_GPU: u64 = GPU_VA_DRAW_STATE_BASE + GPGPU_SIP_HANDLER_OFFSET_BYTES as u64;
@@ -120,6 +119,22 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch(
         push(batch_dwords, cursor, CS_GPR1_STAMP_LO)?;
         push(batch_dwords, cursor, (RCS_CS_GPR_REL_BASE + 12) as u32)?;
         push(batch_dwords, cursor, CS_GPR_STAMP_HI)
+    }
+
+    fn walker_simd_width(program_name: &str) -> u32 {
+        if program_name.contains("simd16-mask") {
+            16
+        } else {
+            8
+        }
+    }
+
+    fn walker_simd_select(simd_width: u32) -> u32 {
+        match simd_width {
+            16 => 1,
+            32 => 2,
+            _ => 0,
+        }
     }
 
     fn push_sba_address(
@@ -395,7 +410,15 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch(
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, GPGPU_WALKER_GROUP_THREADS - 1)?;
+    let requested_simd_width = walker_simd_width(program.name);
+    let walker_thread_dims =
+        (walker_simd_select(requested_simd_width) << 30) | (GPGPU_WALKER_GROUP_THREADS - 1);
+    let walker_right_mask = if requested_simd_width >= 32 {
+        u32::MAX
+    } else {
+        (1u32 << requested_simd_width) - 1
+    };
+    push(batch_dwords, &mut cursor, walker_thread_dims)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, walker_group_x_dim)?;
@@ -404,7 +427,7 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch(
     push(batch_dwords, &mut cursor, GPGPU_WALKER_GROUP_Y_DIM)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, GPGPU_WALKER_GROUP_Z_DIM)?;
-    push(batch_dwords, &mut cursor, GPGPU_WALKER_SIMD8_RIGHT_MASK)?;
+    push(batch_dwords, &mut cursor, walker_right_mask)?;
     push(batch_dwords, &mut cursor, GPGPU_WALKER_BOTTOM_MASK)?;
     push(batch_dwords, &mut cursor, MEDIA_STATE_FLUSH_CMD)?;
     push(batch_dwords, &mut cursor, 0)?;
@@ -493,7 +516,7 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch(
             walker_z_dim,
             walker_group_threads,
             expected_hw_threads,
-            expected_hw_threads.saturating_mul(GPGPU_WALKER_SIMD8_LANES),
+            expected_hw_threads.saturating_mul(simd_mask_bits),
             idd_threads_in_group,
             idd_barrier_enable,
             idd_slm_size,

@@ -42,13 +42,13 @@ pub(crate) use matmul::{
     submit_gpgpu_t8_groupid_live16_distinct_row_probe,
     submit_gpgpu_t8_groupid_live16_distinct_row16_probe,
     submit_gpgpu_t8_groupid_live16_distinct_row32_probe,
-    submit_gpgpu_t8_groupid_live16_trusted_no_readback, submit_gpgpu_t61_one_row_matvec_probe,
-    submit_gpgpu_t62_partial_matvec_probe, submit_gpgpu_t62_partial_matvec_trusted,
-    submit_gpgpu_t62_partial_matvec_trusted_no_readback,
+    submit_gpgpu_t8_groupid_live16_trusted_no_readback,
+    submit_gpgpu_t9_existing_t63_groupid_live32_negative_control_probe,
+    submit_gpgpu_t61_one_row_matvec_probe, submit_gpgpu_t62_partial_matvec_probe,
+    submit_gpgpu_t62_partial_matvec_trusted, submit_gpgpu_t62_partial_matvec_trusted_no_readback,
     submit_gpgpu_t63_accum16_hi_live32_partial_matvec_probe,
     submit_gpgpu_t63_accum16_hi_live32_partial_matvec_trusted,
     submit_gpgpu_t63_accum16_hi_live32_partial_matvec_trusted_no_readback,
-    submit_gpgpu_t9_existing_t63_groupid_live32_negative_control_probe,
     submit_gpgpu_t64_windowed_accum16_live48_partial_matvec_probe,
     submit_gpgpu_t65_windowed_accum16_live64_partial_matvec_probe,
     submit_gpgpu_t66_accum32_hi_live96_partial_matvec_probe,
@@ -1499,6 +1499,7 @@ fn should_log_gpgpu_program_shape(name: &str) -> bool {
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_PROGRAM_NAME
+        || name.contains("primary-scanout-groupid-line1280-rows-simd16-mask")
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD8_BW_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_SCALAR_BW_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_LINE320_SCALAR_BW_PROGRAM_NAME

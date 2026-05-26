@@ -2488,8 +2488,7 @@ fn observe_trusted_window_frontier(
                         last_t8_dispatch = t8_distinct.dispatch_delta;
                     }
                     if !t8_scale_failed && last_t8_row_count >= 32 {
-                        let t9_live_k =
-                            k_dim.min(trueos_eu::gfx12::T63_ACCUM16_HI_LIVE32_LIVE_K);
+                        let t9_live_k = k_dim.min(trueos_eu::gfx12::T63_ACCUM16_HI_LIVE32_LIVE_K);
                         let t9_stage = crate::intel::stage_gpgpu_tile_record_accum16_window_trusted(
                             stage.output_gpu,
                             x,
@@ -2501,16 +2500,11 @@ fn observe_trusted_window_frontier(
                         if t9_stage.readback_ok {
                             let mut t9_expected_words32 = [0u32; 32];
                             for local_row in 0..last_t8_row_count.min(t9_expected_words32.len()) {
-                                let row_start =
-                                    local_row.saturating_mul(k_dim).saturating_mul(2);
-                                let row_end =
-                                    row_start.saturating_add(k_dim.saturating_mul(2));
-                                t9_expected_words32[local_row] = bf16_row_dot_prefix(
-                                    x,
-                                    &t8_rows[row_start..row_end],
-                                    t9_live_k,
-                                )
-                                .to_bits();
+                                let row_start = local_row.saturating_mul(k_dim).saturating_mul(2);
+                                let row_end = row_start.saturating_add(k_dim.saturating_mul(2));
+                                t9_expected_words32[local_row] =
+                                    bf16_row_dot_prefix(x, &t8_rows[row_start..row_end], t9_live_k)
+                                        .to_bits();
                             }
                             let t9 = crate::intel::submit_gpgpu_t9_existing_t63_groupid_live32_negative_control_probe(
                                 stage.output_gpu,
