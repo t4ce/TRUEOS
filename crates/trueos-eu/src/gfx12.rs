@@ -525,8 +525,7 @@ pub const PRIMARY_SCANOUT_LINE1280_SCALAR_BW_WORD_DWORDS: usize =
 pub const PRIMARY_SCANOUT_LINE1280_SCALAR_BW_ADDRESS_BASE_DWORD: usize = 7;
 pub const PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_DWORD: usize = 3;
 pub const PRIMARY_SCANOUT_LINE1280_SCALAR_BW_STORE_SEND_DWORD: usize = 11;
-pub const PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_PROGRAM_NAME: &str =
-    "gfx12-primary-scanout-line1280-scalar-address-color-step8-hdc1-stateless-unrolled-store-then-ts-eot";
+pub const PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_PROGRAM_NAME: &str = "gfx12-primary-scanout-line1280-scalar-address-color-step8-hdc1-stateless-unrolled-store-then-ts-eot";
 pub const PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_LANES: usize =
     PRIMARY_SCANOUT_LINE1280_SCALAR_BW_LANES;
 pub const PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_WORD_DWORDS: usize =
@@ -534,8 +533,7 @@ pub const PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_WORD_DWORDS: usize =
 pub const PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_ADDRESS_BASE_DWORD: usize = 7;
 pub const PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_COLOR_SEED_DWORD: usize = 11;
 pub const PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_STORE_SEND_DWORD: usize = 15;
-pub const PRIMARY_SCANOUT_LINE1280_LANE8ROWS_PROGRAM_NAME: &str =
-    "gfx12-primary-scanout-line1280-lane8rows-address-color-step8-hdc1-t62-send-bti1-simd8-store-then-ts-eot";
+pub const PRIMARY_SCANOUT_LINE1280_LANE8ROWS_PROGRAM_NAME: &str = "gfx12-primary-scanout-line1280-lane8rows-address-color-step8-hdc1-t62-send-bti1-simd8-store-then-ts-eot";
 pub const PRIMARY_SCANOUT_LINE1280_LANE8ROWS_LANES: usize =
     PRIMARY_SCANOUT_LINE1280_SCALAR_BW_LANES;
 pub const PRIMARY_SCANOUT_LINE1280_LANE8ROWS_ROWS: usize = 8;
@@ -544,11 +542,11 @@ pub const PRIMARY_SCANOUT_LINE1280_LANE8ROWS_COLOR_STEP_PIXELS: usize =
     PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_STEP_PIXELS;
 pub const PRIMARY_SCANOUT_LINE1280_LANE8ROWS_COLOR_STEP_DWORDS: usize =
     PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_STEP_DWORDS;
-pub const PRIMARY_SCANOUT_LINE1280_LANE8ROWS_WORD_DWORDS: usize =
-    20 + PRIMARY_SCANOUT_LINE1280_LANE8ROWS_LANES * 4
-        + (PRIMARY_SCANOUT_LINE1280_LANE8ROWS_LANES - 1) * 4
-        + PRIMARY_SCANOUT_LINE1280_LANE8ROWS_COLOR_STEP_DWORDS * 4
-        + 8;
+pub const PRIMARY_SCANOUT_LINE1280_LANE8ROWS_WORD_DWORDS: usize = 20
+    + PRIMARY_SCANOUT_LINE1280_LANE8ROWS_LANES * 4
+    + (PRIMARY_SCANOUT_LINE1280_LANE8ROWS_LANES - 1) * 4
+    + PRIMARY_SCANOUT_LINE1280_LANE8ROWS_COLOR_STEP_DWORDS * 4
+    + 8;
 pub const PRIMARY_SCANOUT_LINE1280_LANE8ROWS_ADDRESS_BASE_DWORD: usize = 15;
 pub const PRIMARY_SCANOUT_LINE1280_LANE8ROWS_COLOR_SEED_DWORD: usize = 19;
 pub const PRIMARY_SCANOUT_LINE1280_LANE8ROWS_STORE_SEND_DWORD: usize = 23;
@@ -563,8 +561,7 @@ pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_WORD_DWORDS: usize =
 pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_ADDRESS_BASE_DWORD: usize = 25;
 pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_COLOR_DWORD: usize = 29;
 pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_STORE_SEND_DWORD: usize = 30;
-pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_PROGRAM_NAME: &str =
-    "gfx12-primary-scanout-groupid-line1280-rows-scalar-step8-color-hdc1-stateless-unrolled-store-then-ts-eot";
+pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_PROGRAM_NAME: &str = "gfx12-primary-scanout-groupid-line1280-rows-scalar-step8-color-hdc1-stateless-unrolled-store-then-ts-eot";
 pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_LANES: usize =
     PRIMARY_SCANOUT_LINE1280_SCALAR_BW_LANES;
 pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_PITCH_BYTES: u32 = 0x2800;
@@ -908,8 +905,8 @@ pub static T62_ROW_INDEXED_LIVE16_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THE
 // two-group walker path.  The extracted native oracle used the old g127 EOT
 // tail, so the embedded TRUEOS copy applies the same g126 EOT payload fix used
 // by the other HDC store-then-EOT artifacts.
-pub static T8_GROUPID_LIVE16_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS:
-    [u32; 200] = [
+pub static T8_GROUPID_LIVE16_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS: [u32;
+    200] = [
     0x80030061, 0x31050220, 0x00000024, 0x00000000, 0x80030061, 0x32054220, 0x00000000, 0x00000000,
     0x80030061, 0x33054220, 0x00000000, 0x00000000, 0xA40D0340, 0x0111310A, 0x80000361, 0x32454620,
     0x00000000, 0x00000000, 0x80030269, 0x1C058660, 0x02000D04, 0x0000000C, 0x80030069, 0x2F058660,
@@ -937,14 +934,14 @@ pub static T8_GROUPID_LIVE16_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_
     0x00460005, 0x00000000, 0x80030131, 0x00000004, 0x70007E0C, 0x00000000, 0x20000060, 0x00000000,
 ];
 
-pub static T8_GROUPID_LIVE16_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT:
-    EuArtifact = EuArtifact {
-    name: T8_GROUPID_LIVE16_PROGRAM_NAME,
-    isa: EuIsa::Gfx12,
-    kind: EuArtifactKind::T8GroupidLive16Bf16DotThenHdc1StoreThenThreadSpawnerEot,
-    words: &T8_GROUPID_LIVE16_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS,
-    expects_store: true,
-};
+pub static T8_GROUPID_LIVE16_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT: EuArtifact =
+    EuArtifact {
+        name: T8_GROUPID_LIVE16_PROGRAM_NAME,
+        isa: EuIsa::Gfx12,
+        kind: EuArtifactKind::T8GroupidLive16Bf16DotThenHdc1StoreThenThreadSpawnerEot,
+        words: &T8_GROUPID_LIVE16_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS,
+        expects_store: true,
+    };
 
 // Mesa ANV oracle artifact from
 // `.codex_tmp/t6_3_lane_indexed_live32_trueos_arena_bf16_unpack.comp`.
@@ -1059,7 +1056,6 @@ pub static T63_ACCUM16_HI_LIVE32_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN
     words: &T63_ACCUM16_HI_LIVE32_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS,
     expects_store: true,
 };
-
 
 // Mesa ANV oracle artifact from
 // `crates/trueos-shader/t6_6_accum32_hi_live96_trueos_arena_bf16_unpack.comp`.
@@ -1601,7 +1597,8 @@ pub static PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_HDC1_STATELESS_UNROLLED_STO
     name: PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_PROGRAM_NAME,
     isa: EuIsa::Gfx12,
     kind: EuArtifactKind::PrimaryScanoutGroupidLine320ScalarBwThenHdc1StoreThenThreadSpawnerEot,
-    words: &PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS,
+    words:
+        &PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS,
     expects_store: true,
 };
 
@@ -1751,18 +1748,17 @@ const fn primary_scanout_row2560_simd8_bw_words()
     words
 }
 
-pub static PRIMARY_SCANOUT_ROW2560_SIMD8_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS:
-    [u32; PRIMARY_SCANOUT_ROW2560_SIMD8_BW_WORD_DWORDS] =
-    primary_scanout_row2560_simd8_bw_words();
+pub static PRIMARY_SCANOUT_ROW2560_SIMD8_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS: [u32;
+    PRIMARY_SCANOUT_ROW2560_SIMD8_BW_WORD_DWORDS] = primary_scanout_row2560_simd8_bw_words();
 
-pub static PRIMARY_SCANOUT_ROW2560_SIMD8_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT:
-    EuArtifact = EuArtifact {
-    name: PRIMARY_SCANOUT_ROW2560_SIMD8_BW_PROGRAM_NAME,
-    isa: EuIsa::Gfx12,
-    kind: EuArtifactKind::PrimaryScanoutRow2560Simd8BwThenHdc1StoreThenThreadSpawnerEot,
-    words: &PRIMARY_SCANOUT_ROW2560_SIMD8_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS,
-    expects_store: true,
-};
+pub static PRIMARY_SCANOUT_ROW2560_SIMD8_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT: EuArtifact =
+    EuArtifact {
+        name: PRIMARY_SCANOUT_ROW2560_SIMD8_BW_PROGRAM_NAME,
+        isa: EuIsa::Gfx12,
+        kind: EuArtifactKind::PrimaryScanoutRow2560Simd8BwThenHdc1StoreThenThreadSpawnerEot,
+        words: &PRIMARY_SCANOUT_ROW2560_SIMD8_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS,
+        expects_store: true,
+    };
 
 // Mandelbrot sidequest line-pilot probe from
 // `crates/trueos-shader/scanout_block/scanout_8px.asm`.
@@ -1849,24 +1845,28 @@ pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STORE_EXDESC_DWORD: usize = 527;
 // diagnostic subset, but this sidequest must prove the 16-flow artifact surface
 // before adding Mandelbrot math back on top.
 pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PROGRAM_NAME: &str =
-    "gfx12-primary-scanout-mandelbrot16-simd16-bw-mul-dword-witness-store-then-ts-eot";
+    "gfx12-primary-scanout-mandelbrot16-t10-groupid-row-simd16-bw-store-then-ts-eot";
 pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_LANES: usize = 16;
 pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_FRAC_BITS: u32 = 12;
 pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_MAX_ITER: u32 = 10;
 pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM: usize =
     PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_LANES;
 pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_STORE_SENDS: usize = 1;
-pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_WORD_DWORDS: usize = 68;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_WORD_DWORDS: usize = 80;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_BODY_DWORD: usize = 32;
 pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_X_STEP_DWORD: usize = usize::MAX;
 pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_C_RE_BASE_DWORD: usize = usize::MAX;
 pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_C_IM_DWORD: usize = usize::MAX;
-pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_ADDRESS_BASE_DWORD: usize = 19;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_ADDRESS_BASE_DWORD: usize = 27;
 pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_ADDRESS_BASE_DWORDS: [usize; 1] =
     [PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_ADDRESS_BASE_DWORD];
 pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_COLOR_DWORD: usize = usize::MAX;
-pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_ONE_ITER_DWORD: usize = 24;
-pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_COLOR_FROM_DEPTH_DWORD: usize = 28;
-pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_STORE_SEND_DWORD: usize = 32;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_ONE_ITER_DWORD: usize =
+    PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_BODY_DWORD + 4;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_COLOR_FROM_DEPTH_DWORD: usize =
+    PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_BODY_DWORD + 8;
+pub const PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_STORE_SEND_DWORD: usize =
+    PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_BODY_DWORD + 12;
 
 #[allow(dead_code)]
 const fn emit_mandelbrot16_fixed10_iter(
@@ -2008,49 +2008,61 @@ const fn primary_scanout_mandelbrot16_simd16_bw_words()
     words[13] = 0x14058660;
     words[14] = 0x02460105;
     words[15] = 0x00000002;
-    words[16] = 0x00040140;
-    words[17] = 0x14058660;
-    words[18] = 0x06461405;
+    words[16] = 0x80030061;
+    words[17] = 0x31050220;
+    words[18] = 0x00000024;
     words[19] = 0x00000000;
-    words[20] = 0x80040061;
-    words[21] = 0x06054660;
-    words[22] = 0x00000000;
-    words[23] = 0x00000003;
-    words[24] = 0x00040141;
-    words[25] = 0x16050660;
-    words[26] = 0x06460605;
-    words[27] = 0x00460605;
-    words[28] = 0x80040061;
-    words[29] = 0x16054660;
-    words[30] = 0x00000000;
-    words[31] = 0x00000009;
-    words[32] = 0x00040131;
-    words[33] = 0x00000000;
-    words[34] = 0xCC021414;
-    words[35] = 0x00961614;
-    words[36] = 0x80030061;
-    words[37] = 0x7E050220;
-    words[38] = 0x00460005;
-    words[39] = 0x00000000;
-    words[40] = 0x80030131;
-    words[41] = 0x00000004;
-    words[42] = 0x70007E0C;
-    words[43] = 0x00000000;
+    words[20] = 0x80030241;
+    words[21] = 0x1C058660;
+    words[22] = 0x02003104;
+    words[23] = PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_PITCH_BYTES;
+    words[24] = 0x80030240;
+    words[25] = 0x1C058660;
+    words[26] = 0x06001C04;
+    words[27] = 0x00000000;
+    words[28] = 0x00040140;
+    words[29] = 0x14058660;
+    words[30] = 0x06461405;
+    words[31] = 0x06001C04;
+    words[32] = 0x80040061;
+    words[33] = 0x06054660;
+    words[34] = 0x00000000;
+    words[35] = 0x00000003;
+    words[36] = 0x00040141;
+    words[37] = 0x16050660;
+    words[38] = 0x06460605;
+    words[39] = 0x00460605;
+    words[40] = 0x80040061;
+    words[41] = 0x16054660;
+    words[42] = 0x00000000;
+    words[43] = 0x00000009;
+    words[44] = 0x00040131;
+    words[45] = 0x00000000;
+    words[46] = 0xCC021414;
+    words[47] = 0x00961614;
+    words[48] = 0x80030061;
+    words[49] = 0x7E050220;
+    words[50] = 0x00460005;
+    words[51] = 0x00000000;
+    words[52] = 0x80030131;
+    words[53] = 0x00000004;
+    words[54] = 0x70007E0C;
+    words[55] = 0x00000000;
     words
 }
 
-pub static PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS:
-    [u32; PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_WORD_DWORDS] =
+pub static PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS: [u32;
+    PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_WORD_DWORDS] =
     primary_scanout_mandelbrot16_simd16_bw_words();
 
-pub static PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_HDC1_STATELESS_STORE_THEN_TS_EOT:
-    EuArtifact = EuArtifact {
-    name: PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PROGRAM_NAME,
-    isa: EuIsa::Gfx12,
-    kind: EuArtifactKind::PrimaryScanoutMandelbrot16Simd16BwThenHdc1StoreThenThreadSpawnerEot,
-    words: &PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS,
-    expects_store: true,
-};
+pub static PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_HDC1_STATELESS_STORE_THEN_TS_EOT: EuArtifact =
+    EuArtifact {
+        name: PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PROGRAM_NAME,
+        isa: EuIsa::Gfx12,
+        kind: EuArtifactKind::PrimaryScanoutMandelbrot16Simd16BwThenHdc1StoreThenThreadSpawnerEot,
+        words: &PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS,
+        expects_store: true,
+    };
 
 // Preserve the generated SIMD8x2 Q12 program body and widen only by reusing
 // its already-proven second-strip block. The Q12 iteration math, color math,

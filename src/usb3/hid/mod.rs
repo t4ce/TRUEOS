@@ -2,7 +2,6 @@ extern crate alloc;
 use alloc::vec::Vec;
 use spin::Mutex;
 pub mod boot;
-pub(crate) mod api;
 pub mod eyetracker;
 pub mod hut;
 pub mod input;

@@ -157,6 +157,7 @@ fn upload_primary_scanout_mandelbrot16_simd16_bw_artifact(
     mode: u32,
     lhs: u32,
     rhs: u32,
+    row_groups: u32,
 ) -> bool {
     let mut words =
         trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS;
@@ -174,12 +175,41 @@ fn upload_primary_scanout_mandelbrot16_simd16_bw_artifact(
     if color_dword != usize::MAX {
         words[color_dword] = color;
     }
+    patch_mandelbrot16_simd16_address_prelude(&mut words, address_base, row_groups > 1);
     let uploaded = upload_and_verify_gpu_program_at(warm, GPGPU_EU_KERNEL_OFFSET_BYTES, &words);
     if uploaded {
         MANDELBROT_LINE1280_TEMPLATE_UPLOADED.store(false, Ordering::Release);
         MANDELBROT_GROUPID_LINE1280_TEMPLATE_UPLOADED.store(false, Ordering::Release);
     }
     uploaded
+}
+
+fn patch_mandelbrot16_simd16_address_prelude(
+    words: &mut [u32; trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_WORD_DWORDS],
+    address_base: u32,
+    use_groupid_row_base: bool,
+) {
+    const NOP: [u32; 4] = [0x80000101, 0x00000000, 0x00000000, 0x00000000];
+    if use_groupid_row_base {
+        return;
+    }
+
+    words[16] = 0x00040140;
+    words[17] = 0x14058660;
+    words[18] = 0x06461405;
+    words[19] = address_base;
+    words[20] = NOP[0];
+    words[21] = NOP[1];
+    words[22] = NOP[2];
+    words[23] = NOP[3];
+    words[24] = NOP[0];
+    words[25] = NOP[1];
+    words[26] = NOP[2];
+    words[27] = NOP[3];
+    words[28] = NOP[0];
+    words[29] = NOP[1];
+    words[30] = NOP[2];
+    words[31] = NOP[3];
 }
 
 fn patch_mandelbrot16_simd16_probe_variant(
@@ -272,9 +302,10 @@ fn patch_mandelbrot16_simd16_probe_variant(
                 EOT_SEND_G126,
             ]
         };
+        let body_base = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_BODY_DWORD;
         let mut instr = 0usize;
         while instr < body.len() {
-            let off = 20 + instr * 4;
+            let off = body_base + instr * 4;
             words[off] = body[instr][0];
             words[off + 1] = body[instr][1];
             words[off + 2] = body[instr][2];
@@ -367,14 +398,15 @@ fn patch_mandelbrot16_simd16_probe_variant(
         _ => (MUL_G22_G6_G6, MOV_G22_9),
     };
 
-    words[24] = first[0];
-    words[25] = first[1];
-    words[26] = first[2];
-    words[27] = first[3];
-    words[28] = second[0];
-    words[29] = second[1];
-    words[30] = second[2];
-    words[31] = second[3];
+    let body_base = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_BODY_DWORD;
+    words[body_base + 4] = first[0];
+    words[body_base + 5] = first[1];
+    words[body_base + 6] = first[2];
+    words[body_base + 7] = first[3];
+    words[body_base + 8] = second[0];
+    words[body_base + 9] = second[1];
+    words[body_base + 10] = second[2];
+    words[body_base + 11] = second[3];
 }
 
 fn patch_mandelbrot16_simd16_probe_source(
@@ -397,10 +429,11 @@ fn patch_mandelbrot16_simd16_probe_source(
     } else {
         lhs
     };
-    words[20] = init[0];
-    words[21] = init[1];
-    words[22] = init[2];
-    words[23] = init[3];
+    let body_base = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_BODY_DWORD;
+    words[body_base] = init[0];
+    words[body_base + 1] = init[1];
+    words[body_base + 2] = init[2];
+    words[body_base + 3] = init[3];
 }
 
 fn mandelbrot16_simd16_probe_variant_name(mode: u32) -> &'static str {
@@ -3147,7 +3180,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe(
     rhs: u32,
 ) -> crate::intel::GpgpuOneTileSentinelProof {
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
-        mode, row_index, x_base, lhs, rhs, true,
+        mode, row_index, x_base, 1, lhs, rhs, true,
     )
 }
 
@@ -3159,7 +3192,26 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet(
     rhs: u32,
 ) -> crate::intel::GpgpuOneTileSentinelProof {
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
-        mode, row_index, x_base, lhs, rhs, false,
+        mode, row_index, x_base, 1, lhs, rhs, false,
+    )
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_rows(
+    mode: u32,
+    row_index: u32,
+    x_base: u32,
+    row_groups: u32,
+    lhs: u32,
+    rhs: u32,
+) -> crate::intel::GpgpuOneTileSentinelProof {
+    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
+        mode,
+        row_index,
+        x_base,
+        row_groups.max(1),
+        lhs,
+        rhs,
+        false,
     )
 }
 
@@ -3167,6 +3219,7 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
     mode: u32,
     row_index: u32,
     x_base: u32,
+    row_groups: u32,
     lhs: u32,
     rhs: u32,
     validate_readback: bool,
@@ -3174,8 +3227,9 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
     const PIXELS: usize =
         trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM;
     const BYTES: usize = PIXELS * core::mem::size_of::<u32>();
-    const EXPECTED_HW_LANE_DISPATCH: u64 =
-        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_LANES as u64;
+    let row_groups = row_groups.max(1);
+    let expected_hw_lane_dispatch =
+        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_LANES as u64 * row_groups as u64;
 
     let program = gpgpu_primary_scanout_mandelbrot16_simd16_bw_program();
     let Some(dev) = crate::intel::claimed_device() else {
@@ -3203,7 +3257,11 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
     let row_offset = y
         .saturating_mul(target.pitch_bytes as usize)
         .saturating_add(x.saturating_mul(core::mem::size_of::<u32>()));
-    if row_offset.saturating_add(BYTES) > target.byte_len {
+    let submit_span_bytes = (row_groups as usize)
+        .saturating_sub(1)
+        .saturating_mul(target.pitch_bytes as usize)
+        .saturating_add(BYTES);
+    if row_offset.saturating_add(submit_span_bytes) > target.byte_len {
         return gpgpu_one_tile_sentinel_failure(
             "mandelbrot16-outside-scanout",
             program,
@@ -3255,6 +3313,7 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
         mode,
         lhs,
         rhs,
+        row_groups,
     ) {
         return gpgpu_one_tile_sentinel_failure("mandelbrot16-program-upload", program, row_gpu);
     }
@@ -3285,11 +3344,16 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
         target.byte_len,
         surface_note,
     );
-    let batch_bytes =
-        match encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program, 1) {
-            Ok(bytes) => bytes,
-            Err(reason) => return gpgpu_one_tile_sentinel_failure(reason, program, row_gpu),
-        };
+    let batch_bytes = match encode_gfx12_gpgpu_walker_probe_batch(
+        warm,
+        batch,
+        store_surface,
+        program,
+        row_groups,
+    ) {
+        Ok(bytes) => bytes,
+        Err(reason) => return gpgpu_one_tile_sentinel_failure(reason, program, row_gpu),
+    };
     crate::intel::dma_flush(warm.batch_virt, batch_bytes);
 
     let dispatch_before = read_gpgpu_threads_dispatched(dev);
@@ -3354,7 +3418,7 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
     let any_changed = changed != 0;
     let command_ok = finished
         && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE
-        && dispatch_delta >= EXPECTED_HW_LANE_DISPATCH;
+        && dispatch_delta >= expected_hw_lane_dispatch;
     let readback_ok = if validate_readback {
         command_ok && first_hit && any_changed
     } else {
@@ -3364,7 +3428,7 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
         && crate::intel::display::notify_primary_surface_external_write(
             "gpgpu-primary-scanout-mandelbrot16-simd16-q12-plane",
             row_offset,
-            BYTES,
+            submit_span_bytes,
         );
     let is_one_iter = mode == 42 || mode == 43;
     let is_one_iter_visible = mode == 43;
@@ -3395,7 +3459,7 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
         "simd16-q12-one-iteration-real-store-eot-first-lane-validation-once"
     } else if readback_ok {
         "simd16-q12-or-alu-store-eot-first-lane-validation-once"
-    } else if dispatch_delta >= EXPECTED_HW_LANE_DISPATCH {
+    } else if dispatch_delta >= expected_hw_lane_dispatch {
         "simd16-q12-or-alu-dispatch-plus-store-mismatch"
     } else if dispatch_delta != 0 {
         "partial-eu-dispatch"
@@ -3417,21 +3481,27 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
         mandelbrot16_simd16_probe_variant_name(mode)
     };
     let one_iter_dword = if is_one_iter {
-        20usize
+        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_BODY_DWORD
     } else {
         trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_ONE_ITER_DWORD
     };
     let store_send_dword = if is_one_iter {
-        56usize
+        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_BODY_DWORD + 36
     } else {
         trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_STORE_SEND_DWORD
+    };
+    let address_contract = if row_groups > 1 {
+        "groupid-row-times-pitch-plus-base-plus-laneid-g20"
+    } else {
+        "legacy-immediate-base-plus-laneid-g20-validation"
     };
 
     if validate_readback {
         crate::log!(
-            "intel/gpgpu: primary-scanout-mandelbrot16-simd16-q12-plane y={} x_base={} row_offset=0x{:X} row_gpu=0x{:X} target_gpu=0x{:X} target_phys=0x{:X} target_virt=0x{:X} pitch_bytes={} byte_len=0x{:X} q12_lhs=0x{:08X} q12_rhs=0x{:08X} patched_color=0x{:08X} expected_plane_value=0x{:08X} artifact_body={} payload_contract=mesa-send16-address-g20-data-g22-bti1 dispatch_contract=simd16-basics-walker-v1 eu_math_lanes_mask=0x{:04X} eu_store_lanes_mask=0x{:04X} cpu_patched_lanes_mask=0x0000 eu_color_lanes=0 cpu_color_dwords_patched=0 eu_address_alu=laneid-by-4-add-bound-surface-offset-g20 eu_alu_variant={} eu_store_value=g22 validation_scope=first-kickoff-lane0-only validation_lanes=1 logical_lanes={} hdc_store_sends={} expected_store_pixels={} hit_mask=0x{:04X} changed_mask=0x{:04X} readback_ok={} reason={} first_before=0x{:08X} first_after=0x{:08X} expected_first=0x{:08X} after0=0x{:08X} after1=0x{:08X} after2=0x{:08X} after3=0x{:08X} after4=0x{:08X} after5=0x{:08X} after6=0x{:08X} after7=0x{:08X} after8=0x{:08X} after9=0x{:08X} after10=0x{:08X} after11=0x{:08X} after12=0x{:08X} after13=0x{:08X} after14=0x{:08X} after15=0x{:08X} display_notified={} notify_bytes=0x{:X} finish_marker=0x{:08X} lane_dispatch_delta={} expected_hw_lane_dispatch={} program_source={} address_base_dword={} color_dword={} one_iter_dword={} color_from_depth_dword={} store_send_dword={} proves={} next={} does_not_prove=full-frame-mandelbrot\n",
+            "intel/gpgpu: primary-scanout-mandelbrot16-simd16-q12-plane y={} x_base={} row_groups={} row_offset=0x{:X} row_gpu=0x{:X} target_gpu=0x{:X} target_phys=0x{:X} target_virt=0x{:X} pitch_bytes={} byte_len=0x{:X} q12_lhs=0x{:08X} q12_rhs=0x{:08X} patched_color=0x{:08X} expected_plane_value=0x{:08X} artifact_body={} payload_contract=mesa-send16-address-g20-data-g22-bti1 dispatch_contract=simd16-t10-groupid-row-walker-v1 eu_math_lanes_mask=0x{:04X} eu_store_lanes_mask=0x{:04X} cpu_patched_lanes_mask=0x0000 eu_color_lanes=0 cpu_color_dwords_patched=0 eu_address_alu={} eu_alu_variant={} eu_store_value=g22 validation_scope=first-kickoff-lane0-only validation_lanes=1 logical_lanes={} hdc_store_sends={} expected_store_pixels={} hit_mask=0x{:04X} changed_mask=0x{:04X} readback_ok={} reason={} first_before=0x{:08X} first_after=0x{:08X} expected_first=0x{:08X} after0=0x{:08X} after1=0x{:08X} after2=0x{:08X} after3=0x{:08X} after4=0x{:08X} after5=0x{:08X} after6=0x{:08X} after7=0x{:08X} after8=0x{:08X} after9=0x{:08X} after10=0x{:08X} after11=0x{:08X} after12=0x{:08X} after13=0x{:08X} after14=0x{:08X} after15=0x{:08X} display_notified={} notify_bytes=0x{:X} finish_marker=0x{:08X} lane_dispatch_delta={} expected_hw_lane_dispatch={} program_source={} address_base_dword={} color_dword={} one_iter_dword={} color_from_depth_dword={} store_send_dword={} proves={} next={} does_not_prove=full-frame-mandelbrot\n",
             y,
             x,
+            row_groups,
             row_offset,
             row_gpu,
             target.gpu,
@@ -3446,6 +3516,7 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
             artifact_body,
             mandelbrot16_active_lane_mask(),
             mandelbrot16_active_lane_mask(),
+            address_contract,
             eu_work,
             trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_LANES,
             trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_STORE_SENDS,
@@ -3474,10 +3545,10 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
             after_words[14],
             after_words[15],
             display_notified as u8,
-            BYTES,
+            submit_span_bytes,
             finish_marker,
             dispatch_delta,
-            EXPECTED_HW_LANE_DISPATCH,
+            expected_hw_lane_dispatch,
             program.name,
             trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_ADDRESS_BASE_DWORD,
             trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_COLOR_DWORD,

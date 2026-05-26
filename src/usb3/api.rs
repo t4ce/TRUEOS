@@ -1,33 +1,39 @@
 use crab_usb::{
     Device, Endpoint,
     err::{TransferError, USBError},
-    usb_if::{
-        descriptor::EndpointType,
-        endpoint::TransferRequest,
-        transfer::Direction,
-    },
+    usb_if::{descriptor::EndpointType, endpoint::TransferRequest, transfer::Direction},
 };
 
+#[derive(Debug)]
 pub(crate) enum InterfaceEndpointError {
-    WrongKind { address: u8, expected: &'static str },
     Usb(USBError),
+    WrongKind { address: u8, expected: &'static str },
+}
+
+impl From<USBError> for InterfaceEndpointError {
+    fn from(value: USBError) -> Self {
+        Self::Usb(value)
+    }
 }
 
 pub(crate) struct ClaimedInterface<'a> {
     device: &'a mut Device,
 }
 
+pub(crate) async fn claim_interface(
+    device: &mut Device,
+    interface_number: u8,
+    alternate_setting: u8,
+) -> Result<ClaimedInterface<'_>, USBError> {
+    device
+        .claim_interface(interface_number, alternate_setting)
+        .await?;
+    Ok(ClaimedInterface { device })
+}
+
 impl ClaimedInterface<'_> {
     pub(crate) fn device(&mut self) -> &mut Device {
         self.device
-    }
-
-    pub(crate) async fn endpoint_interrupt_in(
-        &mut self,
-        address: u8,
-    ) -> Result<ClaimedEndpoint, InterfaceEndpointError> {
-        self.endpoint(address, EndpointType::Interrupt, Direction::In, "interrupt-in")
-            .await
     }
 
     pub(crate) async fn endpoint_bulk_in(
@@ -46,6 +52,33 @@ impl ClaimedInterface<'_> {
             .await
     }
 
+    #[allow(dead_code)]
+    pub(crate) async fn endpoint_isochronous_in(
+        &mut self,
+        address: u8,
+    ) -> Result<ClaimedEndpoint, InterfaceEndpointError> {
+        self.endpoint(
+            address,
+            EndpointType::Isochronous,
+            Direction::In,
+            "iso-in",
+        )
+        .await
+    }
+
+    pub(crate) async fn endpoint_interrupt_in(
+        &mut self,
+        address: u8,
+    ) -> Result<ClaimedEndpoint, InterfaceEndpointError> {
+        self.endpoint(
+            address,
+            EndpointType::Interrupt,
+            Direction::In,
+            "interrupt-in",
+        )
+        .await
+    }
+
     async fn endpoint(
         &mut self,
         address: u8,
@@ -53,7 +86,7 @@ impl ClaimedInterface<'_> {
         direction: Direction,
         expected: &'static str,
     ) -> Result<ClaimedEndpoint, InterfaceEndpointError> {
-        let endpoint = self.device.endpoint(address).map_err(InterfaceEndpointError::Usb)?;
+        let endpoint = self.device.endpoint(address)?;
         let info = endpoint.info();
         if info.transfer_type != transfer_type || info.direction != direction {
             return Err(InterfaceEndpointError::WrongKind { address, expected });
@@ -85,13 +118,4 @@ impl ClaimedEndpoint {
         };
         self.endpoint.wait(request).await.map(|done| done.actual_length)
     }
-}
-
-pub(crate) async fn claim_interface(
-    device: &mut Device,
-    interface: u8,
-    alternate: u8,
-) -> Result<ClaimedInterface<'_>, USBError> {
-    device.claim_interface(interface, alternate).await?;
-    Ok(ClaimedInterface { device })
 }

@@ -9,7 +9,7 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
-use super::api::{InterfaceEndpointError, claim_interface};
+use super::super::api::{InterfaceEndpointError, claim_interface};
 
 const HID_INTERRUPT_TIMEOUT_MS: u64 = 1000;
 const LED_VID_JGINYUE: u16 = 0x0416;
@@ -809,7 +809,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
                     product_id
                 );
             } else {
-                crate::usb2::descriptor::log_hid_report_descriptors_on_device(
+                super::super::descriptor::log_hid_report_descriptors_on_device(
                     &mut device,
                     dev_info,
                 )
