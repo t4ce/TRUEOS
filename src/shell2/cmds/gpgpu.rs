@@ -16,7 +16,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "gpgpu: usage `gpgpu status` | `gpgpu mandel16 [variant] [row] [x] [lhs] [rhs]`; variants: current add mul mov9 mulimm mulud mulacc mulnop mulscalar mulw muluw mul8x2 mulwwide muluwwide movreg movimm neg abs addimm subimm subself and or xor shl shr asr not cmpge dumpd dumpw dumpuw dumpwrep dumpuwrep mulwrep muluwrep mulwwiderep muluwwiderep mulwd muluwd mulwdq12 muluwdq12 oneiter onevis",
+        "gpgpu: usage `gpgpu status` | `gpgpu mandel16 [variant] [row] [x] [lhs] [rhs]`; variants: current add mul mov9 mulimm mulud mulacc mulnop mulscalar mulw muluw mul8x2 mulwwide muluwwide movreg movimm neg abs addimm subimm subself and or xor shl shr asr not cmpge dumpd dumpw dumpuw dumpwrep dumpuwrep mulwrep muluwrep mulwwiderep muluwwiderep mulwd muluwd mulwdq12 muluwdq12 oneiter onevis fixed10 fixed1 grad10",
     );
 }
 
@@ -89,6 +89,9 @@ fn mandel16(io: &'static dyn ShellBackend2, args: &mut core::str::SplitWhitespac
         Some("muluwdq12") => (41, "muluwdq12", args.next()),
         Some("oneiter") => (42, "oneiter", args.next()),
         Some("onevis") => (43, "onevis", args.next()),
+        Some("fixed10") => (44, "fixed10", args.next()),
+        Some("fixed1") => (45, "fixed1", args.next()),
+        Some("grad10") => (47, "grad10", args.next()),
         Some(value) => (0, "current", Some(value)),
         None => (0, "current", None),
     };

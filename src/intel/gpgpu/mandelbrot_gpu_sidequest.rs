@@ -39,13 +39,23 @@ pub(crate) const MANDELBROT_GPGPU_RUN_LEGACY_ROW_WRITER_FALLBACK_ON_SUCCESS: boo
 pub(crate) const MANDELBROT_GPGPU_RUN_LEGACY_ROW_WRITER_FALLBACK_ON_FAILURE: bool = false;
 pub(crate) const MANDELBROT_GPGPU_STAGE_READY_HEARTBEAT_MS: u64 = 1_000;
 pub(crate) const MANDELBROT16_BOOT_Q12_MODE_ONE_ITER_VISIBLE: u32 = 43;
+pub(crate) const MANDELBROT16_BOOT_Q12_MODE_FIXED10_VISIBLE: u32 = 44;
+pub(crate) const MANDELBROT16_BOOT_Q12_MODE_FIXED1_FEEDBACK_VISIBLE: u32 = 45;
 pub(crate) const MANDELBROT16_BOOT_Q12_C_RE: u32 = 0x0000_0800;
 pub(crate) const MANDELBROT16_BOOT_Q12_C_IM: u32 = 0x0000_0400;
 pub(crate) const MANDELBROT16_BOOT_Q12_EXPECTED_RE1: u32 = 0x0000_0B00;
 pub(crate) const MANDELBROT16_BOOT_Q12_EXPECTED_VISIBLE: u32 = 0xFFFF_0B00;
+pub(crate) const MANDELBROT16_Q12_VIEW_RE_MIN: i32 = -8192;
+pub(crate) const MANDELBROT16_Q12_VIEW_RE_SPAN: i32 = 12_288;
+pub(crate) const MANDELBROT16_Q12_VIEW_IM_MIN: i32 = -4608;
+pub(crate) const MANDELBROT16_Q12_VIEW_IM_SPAN: i32 = 9216;
+pub(crate) const MANDELBROT16_T13_Q12_X_STEP: i32 = 5;
 pub(crate) const MANDELBROT16_BOOT_VISIBLE_STAMP_ROWS: u32 = 32;
 pub(crate) const MANDELBROT16_STAGE_READY_SWEEP_ENABLED: bool = true;
 pub(crate) const MANDELBROT16_STAGE_READY_SWEEP_X_BLOCKS_PER_HEARTBEAT: u32 = 160;
+pub(crate) const MANDELBROT16_STAGE_READY_ROW_GROUP_SCALE: [u32; 1] = [32];
+pub(crate) const MANDELBROT16_STAGE_READY_X_BLOCK_SCALE: [u32; 1] = [160];
+pub(crate) const MANDELBROT16_T11_LINEAR_MAX_GROUPS_PER_SUBMIT: u32 = 32;
 pub(crate) const MANDELBROT_BURST_LANE_POOL_START: u32 = 3;
 pub(crate) const MANDELBROT_BURST_LANE_POOL_SIZE: u32 = 4;
 pub(crate) const MANDELBROT_GPGPU_BURSTS_PER_FRAME_BUDGET: u64 = 2;
@@ -60,6 +70,26 @@ pub(crate) const MANDELBROT_ARTIFACT_DEFAULT_FLAGS: u32 =
     MANDELBROT_ARTIFACT_FLAG_FULL_FRAME_COLOR_FLIP
         | MANDELBROT_ARTIFACT_FLAG_VISUAL_ONLY_IGNORE_RETIRE
         | MANDELBROT_ARTIFACT_FLAG_NOTIFY_AFTER_SWEEP;
+
+fn mandelbrot16_block_c_re_q12(x_group: u32, x_groups: u32) -> u32 {
+    let denom = x_groups.saturating_sub(1).max(1) as i32;
+    let value = MANDELBROT16_Q12_VIEW_RE_MIN
+        + (MANDELBROT16_Q12_VIEW_RE_SPAN.saturating_mul(x_group as i32) / denom);
+    value as i16 as u16 as u32
+}
+
+fn mandelbrot16_pixel_c_re_q12(pixel_x: u32) -> u32 {
+    let value = MANDELBROT16_Q12_VIEW_RE_MIN
+        .saturating_add(MANDELBROT16_T13_Q12_X_STEP.saturating_mul(pixel_x as i32));
+    value as i16 as u16 as u32
+}
+
+fn mandelbrot16_block_c_im_q12(y_block: u32, y_blocks: u32) -> u32 {
+    let denom = y_blocks.saturating_sub(1).max(1) as i32;
+    let value = MANDELBROT16_Q12_VIEW_IM_MIN
+        + (MANDELBROT16_Q12_VIEW_IM_SPAN.saturating_mul(y_block as i32) / denom);
+    value as i16 as u16 as u32
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MandelbrotArtifactControlSnapshot {
@@ -198,7 +228,7 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
     let primary_gpu = crate::intel::primary_surface_gpu_addr().unwrap_or(0);
 
     crate::log!(
-        "mandelbrot-gpu-sidequest: attempted name={} called=1 hot=1 artifact_stage=gpgpu-eu-q12-simd16-one-iter-visible target={}x{} scanout={}x{} primary_gpu=0x{:X} simd16_store_probe_enabled={} q12_simd8x4_reference_enabled={} legacy_row_fallback_on_success={} legacy_row_fallback_on_failure={} action=boot-exercise-simd16-q12-one-iteration-visible-store-to-primary-plane cpu_runtime_patches=address-and-q12-coordinate eu_runtime_work=re2-minus-im2-plus-cre-or-visible-mask-store-eot q12_c_re=0x{:08X} q12_c_im=0x{:08X} expected_q12_re1=0x{:08X} expected_plane_value=0x{:08X} next=add-z-imaginary-and-iteration-count-color does_not_prove=full-frame-mandelbrot\n",
+        "mandelbrot-gpu-sidequest: attempted name={} called=1 hot=1 artifact_stage=gpgpu-eu-q12-simd16-fixed10-escape-gradient target={}x{} scanout={}x{} primary_gpu=0x{:X} simd16_store_probe_enabled={} q12_simd8x4_reference_enabled={} legacy_row_fallback_on_success={} legacy_row_fallback_on_failure={} action=boot-exercise-simd16-q12-one-iteration-visible-store-then-fixed10-escape-gradient-sweep cpu_runtime_patches=address-plus-linear-chunk-q12-coordinate eu_runtime_work=address-derived-lane-q12-re-plus-row-chunk-q12-ci-fixed10-escape-accumulation-gradient-store-eot q12_c_re=0x{:08X} q12_c_im=0x{:08X} expected_q12_re1=0x{:08X} expected_plane_value=0x{:08X} next=increase-iteration-budget-or-refine-gradient does_not_prove=single-heartbeat-full-frame-or-smooth-coloring\n",
         MANDELBROT_GPU_SIDEQUEST_NAME,
         MANDELBROT_TARGET_WIDTH,
         MANDELBROT_TARGET_HEIGHT,
@@ -291,6 +321,16 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
     let mut released_lumen = false;
     let mut mandelbrot16_probe_readback_ok = false;
     let mut mandelbrot16_probe_finished = false;
+    let mut mandelbrot16_t17_immediate_constant_readback_ok = false;
+    let mut mandelbrot16_t17_immediate_constant_finished = false;
+    let mut mandelbrot16_t20_immediate_row_constant_readback_ok = false;
+    let mut mandelbrot16_t20_immediate_row_constant_finished = false;
+    let mut mandelbrot16_t16_linear_constant_readback_ok = false;
+    let mut mandelbrot16_t16_linear_constant_finished = false;
+    let mut mandelbrot16_t15_probe_readback_ok = false;
+    let mut mandelbrot16_t15_probe_finished = false;
+    let mut mandelbrot16_t19_raw_radius_readback_ok = false;
+    let mut mandelbrot16_t19_raw_radius_finished = false;
     if MANDELBROT_GPGPU_RUN_MANDELBROT16_SIMD16_STORE_PROBE {
         let x_base = ((scanout_w as u32).saturating_sub(
             trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM as u32,
@@ -356,7 +396,7 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                 "hold-before-math-contract"
             },
             if probe.readback_ok {
-                "add-z-imaginary-and-iteration-count-color"
+                "start-fixed10-escape-bw-sweep"
             } else if probe.finished {
                 "fix-simd16-q12-address-or-store-readback"
             } else {
@@ -370,6 +410,292 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                 "boot-attempts-new-mandelbrot16-artifact"
             },
         );
+        if mandelbrot16_probe_readback_ok {
+            const T17_IMMEDIATE_CONSTANT_COLOR: u32 = 0xFF33_CC00;
+            const T16_LINEAR_CONSTANT_COLOR: u32 = 0xFF33_CC00;
+            let t17_probe =
+                crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_immediate_constant_probe(
+                    row_index,
+                    x_base,
+                    T17_IMMEDIATE_CONSTANT_COLOR,
+                );
+            mandelbrot16_t17_immediate_constant_readback_ok = t17_probe.readback_ok;
+            mandelbrot16_t17_immediate_constant_finished = t17_probe.finished;
+            crate::log!(
+                "mandelbrot-gpu-sidequest: t17-immediate-constant-store-probe submitted={} finished={} readback_ok={} reason={} program_source={} target_gpu=0x{:X} stamp_rect={}x{}@{},{} validation_hit_mask=0x{:04X} lane_dispatch_delta={} finish_marker=0x{:08X} artifact_contract=simd16-t17-immediate-base-constant-primary-plane sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} sample_match={} action={} next={} proves={} does_not_prove=linear-address-or-t15-gradient-math-or-full-frame-mandelbrot\n",
+                t17_probe.submitted as u8,
+                t17_probe.finished as u8,
+                t17_probe.readback_ok as u8,
+                t17_probe.reason,
+                t17_probe.program_name,
+                t17_probe.output_gpu,
+                trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM,
+                1u32,
+                x_base,
+                row_index,
+                t17_probe.output_hits_lo64 as u32,
+                t17_probe.dispatch_delta,
+                t17_probe.finish_marker,
+                t17_probe.output_first_before,
+                t17_probe.output_first_after,
+                t17_probe.sentinel,
+                (t17_probe.readback_ok && t17_probe.output_first_after == t17_probe.sentinel) as u8,
+                if t17_probe.readback_ok {
+                    "run-t16-linear-address-probe"
+                } else {
+                    "park-before-linear-address-probe"
+                },
+                if t17_probe.readback_ok {
+                    "check-linear-address-prelude"
+                } else if t17_probe.finished {
+                    "fix-constant-store-body-or-send-payload"
+                } else {
+                    "fix-t17-immediate-constant-submit-or-eot"
+                },
+                if t17_probe.readback_ok {
+                    "t17-immediate-base-plus-constant-store-eot-readback-validation"
+                } else if t17_probe.dispatch_delta != 0 {
+                    "t17-immediate-base-dispatch-eot-but-constant-store-mismatch"
+                } else {
+                    "t17-immediate-base-submit-attempted"
+                },
+            );
+            if t17_probe.readback_ok {
+                let t20_row_probe =
+                    crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_immediate_constant_rows_probe(
+                        row_index,
+                        x_base,
+                        MANDELBROT16_BOOT_VISIBLE_STAMP_ROWS,
+                        T17_IMMEDIATE_CONSTANT_COLOR,
+                    );
+                mandelbrot16_t20_immediate_row_constant_readback_ok = t20_row_probe.readback_ok;
+                mandelbrot16_t20_immediate_row_constant_finished = t20_row_probe.finished;
+                crate::log!(
+                    "mandelbrot-gpu-sidequest: t20-immediate-row-constant-store-probe submitted={} finished={} readback_ok={} reason={} program_source={} target_gpu=0x{:X} stamp_rect={}x{}@{},{} validation_hit_mask=0x{:04X} lane_dispatch_delta={} finish_marker=0x{:08X} artifact_contract=simd16-t20-immediate-base-row32-constant-primary-plane sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} sample_match={} action={} next={} proves={} does_not_prove=t19-raw-radius-math-or-full-frame-mandelbrot\n",
+                    t20_row_probe.submitted as u8,
+                    t20_row_probe.finished as u8,
+                    t20_row_probe.readback_ok as u8,
+                    t20_row_probe.reason,
+                    t20_row_probe.program_name,
+                    t20_row_probe.output_gpu,
+                    trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM,
+                    MANDELBROT16_BOOT_VISIBLE_STAMP_ROWS,
+                    x_base,
+                    row_index,
+                    t20_row_probe.output_hits_lo64 as u32,
+                    t20_row_probe.dispatch_delta,
+                    t20_row_probe.finish_marker,
+                    t20_row_probe.output_first_before,
+                    t20_row_probe.output_first_after,
+                    t20_row_probe.sentinel,
+                    (t20_row_probe.readback_ok
+                        && t20_row_probe.output_first_after == t20_row_probe.sentinel)
+                        as u8,
+                    if t20_row_probe.readback_ok {
+                        "row-group-address-path-ok"
+                    } else {
+                        "hold-row-group-sweep"
+                    },
+                    if t20_row_probe.readback_ok {
+                        "fix-gradient-compare-accumulator-or-raw-radius-payload"
+                    } else if t20_row_probe.finished {
+                        "fix-immediate-row-address-prelude"
+                    } else {
+                        "fix-t20-submit-or-eot"
+                    },
+                    if t20_row_probe.readback_ok {
+                        "t20-immediate-row32-constant-store-eot-readback-validation"
+                    } else if t20_row_probe.dispatch_delta != 0 {
+                        "t20-row32-dispatch-eot-but-store-mismatch"
+                    } else {
+                        "t20-row32-submit-attempted"
+                    },
+                );
+                let t16_probe =
+                    crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_linear_constant_probe(
+                        row_index,
+                        x_base,
+                        T16_LINEAR_CONSTANT_COLOR,
+                    );
+                mandelbrot16_t16_linear_constant_readback_ok = t16_probe.readback_ok;
+                mandelbrot16_t16_linear_constant_finished = t16_probe.finished;
+                crate::log!(
+                    "mandelbrot-gpu-sidequest: t16-linear-constant-store-probe submitted={} finished={} readback_ok={} reason={} program_source={} target_gpu=0x{:X} stamp_rect={}x{}@{},{} validation_hit_mask=0x{:04X} lane_dispatch_delta={} finish_marker=0x{:08X} artifact_contract=simd16-t16-linear-groupid-constant-primary-plane sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} sample_match={} action={} next={} proves={} does_not_prove=t15-gradient-math-or-full-frame-mandelbrot\n",
+                    t16_probe.submitted as u8,
+                    t16_probe.finished as u8,
+                    t16_probe.readback_ok as u8,
+                    t16_probe.reason,
+                    t16_probe.program_name,
+                    t16_probe.output_gpu,
+                    trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM,
+                    1u32,
+                    x_base,
+                    row_index,
+                    t16_probe.output_hits_lo64 as u32,
+                    t16_probe.dispatch_delta,
+                    t16_probe.finish_marker,
+                    t16_probe.output_first_before,
+                    t16_probe.output_first_after,
+                    t16_probe.sentinel,
+                    (t16_probe.readback_ok && t16_probe.output_first_after == t16_probe.sentinel)
+                        as u8,
+                    if t16_probe.readback_ok {
+                        "run-t15-gradient-probe"
+                    } else if t16_probe.finished {
+                        "run-t15-immediate-gradient-probe-keep-t16-diagnostic"
+                    } else {
+                        "park-before-t15-gradient-sweep"
+                    },
+                    if t16_probe.readback_ok {
+                        "check-t15-gradient-math-payload"
+                    } else if t16_probe.finished {
+                        "validate-t15-gradient-on-proven-immediate-address"
+                    } else {
+                        "fix-linear-constant-submit-or-eot"
+                    },
+                    if t16_probe.readback_ok {
+                        "t16-linear-address-plus-constant-store-eot-readback-validation"
+                    } else if t16_probe.dispatch_delta != 0 {
+                        "t16-linear-address-dispatch-eot-but-store-mismatch"
+                    } else {
+                        "t16-linear-address-submit-attempted"
+                    },
+                );
+                if t16_probe.finished {
+                    let t15_probe_c_re = mandelbrot16_pixel_c_re_q12(x_base);
+                    let t15_probe_c_im = mandelbrot16_block_c_im_q12(
+                        row_index / MANDELBROT16_BOOT_VISIBLE_STAMP_ROWS,
+                        (scanout_h as u32).saturating_add(MANDELBROT16_BOOT_VISIBLE_STAMP_ROWS - 1)
+                            / MANDELBROT16_BOOT_VISIBLE_STAMP_ROWS,
+                    );
+                    let t15_probe = if t16_probe.readback_ok {
+                        crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_linear_band_probe(
+                            row_index,
+                            x_base,
+                            1,
+                            1,
+                            t15_probe_c_re,
+                            t15_probe_c_im,
+                        )
+                    } else {
+                        crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_immediate_gradient_probe(
+                            row_index,
+                            x_base,
+                            t15_probe_c_re,
+                            t15_probe_c_im,
+                        )
+                    };
+                    mandelbrot16_t15_probe_readback_ok = t15_probe.readback_ok;
+                    mandelbrot16_t15_probe_finished = t15_probe.finished;
+                    crate::log!(
+                        "mandelbrot-gpu-sidequest: t15-gradient-store-probe submitted={} finished={} readback_ok={} reason={} program_source={} target_gpu=0x{:X} stamp_rect={}x{}@{},{} address_path={} validation_hit_mask=0x{:04X} lane_dispatch_delta={} finish_marker=0x{:08X} artifact_contract={} sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} sample_match={} action={} next={} proves={} does_not_prove=physical-display-visible-or-single-heartbeat-full-frame-or-smooth-coloring\n",
+                        t15_probe.submitted as u8,
+                        t15_probe.finished as u8,
+                        t15_probe.readback_ok as u8,
+                        t15_probe.reason,
+                        t15_probe.program_name,
+                        t15_probe.output_gpu,
+                        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM,
+                        1u32,
+                        x_base,
+                        row_index,
+                        if t16_probe.readback_ok {
+                            "linear-groupid"
+                        } else {
+                            "immediate-base-fallback"
+                        },
+                        t15_probe.output_hits_lo64 as u32,
+                        t15_probe.dispatch_delta,
+                        t15_probe.finish_marker,
+                        if t16_probe.readback_ok {
+                            "simd16-t15-linear-eu-lane-re-row-chunk-ci-fixed10-escape-gradient-primary-plane"
+                        } else {
+                            "simd16-t18-immediate-eu-lane-re-row-chunk-ci-fixed10-escape-gradient-primary-plane"
+                        },
+                        t15_probe.output_first_before,
+                        t15_probe.output_first_after,
+                        t15_probe.sentinel,
+                        (t15_probe.readback_ok
+                            && t15_probe.output_first_after == t15_probe.sentinel)
+                            as u8,
+                        if t15_probe.readback_ok {
+                            "allow-gradient-sweep"
+                        } else {
+                            "park-t15-gradient-sweep"
+                        },
+                        if t15_probe.readback_ok {
+                            "increase-iteration-budget-or-refine-gradient"
+                        } else if t15_probe.finished {
+                            "fix-t15-math-payload-or-final-store"
+                        } else {
+                            "fix-t15-submit-or-eot"
+                        },
+                        if t15_probe.readback_ok {
+                            if t16_probe.readback_ok {
+                                "t15-linear-single-group-gradient-store-eot-readback-validation"
+                            } else {
+                                "t18-immediate-single-group-gradient-store-eot-readback-validation"
+                            }
+                        } else if t15_probe.dispatch_delta != 0 {
+                            "t15-single-group-dispatch-eot-but-store-mismatch"
+                        } else {
+                            "t15-single-group-submit-attempted"
+                        },
+                    );
+                    if !t16_probe.readback_ok {
+                        let t19_probe = crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_immediate_raw_radius_probe(
+                            row_index,
+                            x_base,
+                            t15_probe_c_re,
+                            t15_probe_c_im,
+                        );
+                        mandelbrot16_t19_raw_radius_readback_ok = t19_probe.readback_ok;
+                        mandelbrot16_t19_raw_radius_finished = t19_probe.finished;
+                        crate::log!(
+                            "mandelbrot-gpu-sidequest: t19-raw-radius-store-probe submitted={} finished={} readback_ok={} reason={} program_source={} target_gpu=0x{:X} stamp_rect={}x{}@{},{} address_path=immediate-base-fallback validation_hit_mask=0x{:04X} lane_dispatch_delta={} finish_marker=0x{:08X} artifact_contract=simd16-t19-immediate-eu-lane-re-row-chunk-ci-fixed1-raw-radius-primary-plane sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} sample_match={} action={} next={} proves={} does_not_prove=gradient-compare-accumulator-or-physical-display-visible-or-single-heartbeat-full-frame\n",
+                            t19_probe.submitted as u8,
+                            t19_probe.finished as u8,
+                            t19_probe.readback_ok as u8,
+                            t19_probe.reason,
+                            t19_probe.program_name,
+                            t19_probe.output_gpu,
+                            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM,
+                            1u32,
+                            x_base,
+                            row_index,
+                            t19_probe.output_hits_lo64 as u32,
+                            t19_probe.dispatch_delta,
+                            t19_probe.finish_marker,
+                            t19_probe.output_first_before,
+                            t19_probe.output_first_after,
+                            t19_probe.sentinel,
+                            (t19_probe.readback_ok
+                                && t19_probe.output_first_after == t19_probe.sentinel)
+                                as u8,
+                            if t19_probe.readback_ok {
+                                "allow-raw-radius-sweep"
+                            } else {
+                                "keep-gradient-sweep-if-available"
+                            },
+                            if t19_probe.readback_ok {
+                                "fix-gradient-compare-accumulator-while-raw-radius-sweeps"
+                            } else if t19_probe.finished {
+                                "fix-raw-radius-final-store"
+                            } else {
+                                "fix-t19-submit-or-eot"
+                            },
+                            if t19_probe.readback_ok {
+                                "t19-immediate-single-group-raw-radius-store-eot-readback-validation"
+                            } else if t19_probe.dispatch_delta != 0 {
+                                "t19-single-group-dispatch-eot-but-store-mismatch"
+                            } else {
+                                "t19-single-group-submit-attempted"
+                            },
+                        );
+                    }
+                }
+            }
+        }
     }
     let run_legacy_row_writer = if mandelbrot16_probe_readback_ok {
         MANDELBROT_GPGPU_RUN_LEGACY_ROW_WRITER_FALLBACK_ON_SUCCESS
@@ -377,20 +703,120 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
         MANDELBROT_GPGPU_RUN_LEGACY_ROW_WRITER_FALLBACK_ON_FAILURE
     };
     if !run_legacy_row_writer {
-        let stage_reason = if mandelbrot16_probe_readback_ok {
-            "simd16-q12-one-iteration-visible-primary-plane-proven"
+        let immediate_row_group_ready = mandelbrot16_t20_immediate_row_constant_readback_ok;
+        let immediate_row_group_finished = mandelbrot16_t20_immediate_row_constant_finished;
+        let t15_sweep_gate = mandelbrot16_probe_readback_ok
+            && mandelbrot16_t17_immediate_constant_readback_ok
+            && ((mandelbrot16_t16_linear_constant_readback_ok
+                && mandelbrot16_t15_probe_readback_ok)
+                || mandelbrot16_t15_probe_readback_ok
+                || (immediate_row_group_ready
+                    && (mandelbrot16_t15_probe_readback_ok
+                        || mandelbrot16_t19_raw_radius_readback_ok)));
+        let t15_linear_address_ready = mandelbrot16_t16_linear_constant_readback_ok;
+        let t19_raw_radius_ready = !t15_linear_address_ready
+            && immediate_row_group_ready
+            && mandelbrot16_t19_raw_radius_readback_ok;
+        let stage_reason = if t15_sweep_gate {
+            if t19_raw_radius_ready {
+                "simd16-q12-one-iteration-visible-primary-plane-proven-fixed1-raw-radius-immediate-sweep-enabled-gradient-diagnostic-failed-linear-diagnostic-failed"
+            } else if t15_linear_address_ready {
+                "simd16-q12-one-iteration-visible-primary-plane-proven-fixed10-escape-gradient-linear-sweep-enabled"
+            } else if !immediate_row_group_ready {
+                "simd16-q12-one-iteration-visible-primary-plane-proven-fixed10-escape-gradient-t21-immediate-row-batch-sweep-enabled-t20-row-prelude-failed"
+            } else {
+                "simd16-q12-one-iteration-visible-primary-plane-proven-fixed10-escape-gradient-immediate-sweep-enabled-linear-diagnostic-failed"
+            }
+        } else if mandelbrot16_probe_readback_ok
+            && mandelbrot16_t17_immediate_constant_finished
+            && !mandelbrot16_t17_immediate_constant_readback_ok
+        {
+            "t10-visible-store-proven-but-t17-immediate-constant-store-mismatch"
+        } else if mandelbrot16_probe_readback_ok && !mandelbrot16_t17_immediate_constant_finished {
+            "t10-visible-store-proven-but-t17-immediate-constant-submit-not-finished"
+        } else if mandelbrot16_probe_readback_ok
+            && mandelbrot16_t17_immediate_constant_readback_ok
+            && immediate_row_group_finished
+            && !immediate_row_group_ready
+        {
+            "t10-and-t17-store-proven-but-t20-immediate-row-store-mismatch"
+        } else if mandelbrot16_probe_readback_ok
+            && mandelbrot16_t17_immediate_constant_readback_ok
+            && !immediate_row_group_finished
+        {
+            "t10-and-t17-store-proven-but-t20-immediate-row-submit-not-finished"
+        } else if mandelbrot16_probe_readback_ok
+            && mandelbrot16_t17_immediate_constant_readback_ok
+            && mandelbrot16_t16_linear_constant_finished
+            && !mandelbrot16_t16_linear_constant_readback_ok
+        {
+            "t10-and-t17-store-proven-but-t16-linear-address-store-mismatch"
+        } else if mandelbrot16_probe_readback_ok
+            && mandelbrot16_t17_immediate_constant_readback_ok
+            && !mandelbrot16_t16_linear_constant_finished
+        {
+            "t10-and-t17-store-proven-but-t16-linear-address-submit-not-finished"
+        } else if mandelbrot16_probe_readback_ok
+            && (mandelbrot16_t15_probe_finished || mandelbrot16_t19_raw_radius_finished)
+        {
+            "t10-visible-store-proven-but-t15-gradient-store-mismatch"
+        } else if mandelbrot16_probe_readback_ok {
+            "t10-visible-store-proven-but-t15-gradient-submit-not-finished"
         } else {
             "legacy-row-writer-disabled-without-mandelbrot16-proof"
         };
-        let stage_next = if mandelbrot16_probe_readback_ok {
-            "add-z-imaginary-and-iteration-count-color"
+        let stage_next = if t15_sweep_gate {
+            if t19_raw_radius_ready {
+                "fix-gradient-compare-accumulator-while-raw-radius-sweeps"
+            } else if t15_linear_address_ready {
+                "increase-iteration-budget-or-refine-gradient"
+            } else if !immediate_row_group_ready {
+                "watch-t21-immediate-row-batch-visual-coverage-and-fix-t20-row-prelude"
+            } else {
+                "fix-linear-address-prelude-while-immediate-gradient-sweeps"
+            }
+        } else if mandelbrot16_probe_readback_ok
+            && mandelbrot16_t17_immediate_constant_finished
+            && !mandelbrot16_t17_immediate_constant_readback_ok
+        {
+            "fix-constant-store-body-or-send-payload"
+        } else if mandelbrot16_probe_readback_ok && !mandelbrot16_t17_immediate_constant_finished {
+            "fix-t17-immediate-constant-submit-or-eot"
+        } else if mandelbrot16_probe_readback_ok
+            && mandelbrot16_t17_immediate_constant_readback_ok
+            && immediate_row_group_finished
+            && !immediate_row_group_ready
+        {
+            "fix-immediate-row-address-prelude"
+        } else if mandelbrot16_probe_readback_ok
+            && mandelbrot16_t17_immediate_constant_readback_ok
+            && !immediate_row_group_finished
+        {
+            "fix-t20-immediate-row-submit-or-eot"
+        } else if mandelbrot16_probe_readback_ok
+            && mandelbrot16_t17_immediate_constant_readback_ok
+            && mandelbrot16_t16_linear_constant_finished
+            && !mandelbrot16_t16_linear_constant_readback_ok
+        {
+            "fix-linear-address-prelude"
+        } else if mandelbrot16_probe_readback_ok
+            && mandelbrot16_t17_immediate_constant_readback_ok
+            && !mandelbrot16_t16_linear_constant_finished
+        {
+            "fix-t16-linear-constant-submit-or-eot"
+        } else if mandelbrot16_probe_readback_ok
+            && (mandelbrot16_t15_probe_finished || mandelbrot16_t19_raw_radius_finished)
+        {
+            "fix-t15-math-payload-or-final-store"
+        } else if mandelbrot16_probe_readback_ok {
+            "fix-t15-submit-or-eot"
         } else if mandelbrot16_probe_finished {
             "fix-simd16-q12-address-or-store-readback"
         } else {
             "fix-simd16-q12-submit-or-eot"
         };
         crate::log!(
-            "mandelbrot-gpu-sidequest: stage-parked reason={} legacy_row_writer_running=0 frame_loop_running=0 obsolete_row_color_protocol=0 artifact_contract=simd16-q12-one-iteration-visible-store-primary-plane q12_c_re=0x{:08X} q12_c_im=0x{:08X} expected_q12_re1=0x{:08X} expected_plane_value=0x{:08X} next={} does_not_prove=full-frame-mandelbrot\n",
+            "mandelbrot-gpu-sidequest: stage-parked reason={} legacy_row_writer_running=0 frame_loop_running=0 obsolete_row_color_protocol=0 artifact_contract=simd16-q12-fixed10-escape-gradient-primary-plane q12_c_re=0x{:08X} q12_c_im=0x{:08X} expected_q12_re1=0x{:08X} expected_plane_value=0x{:08X} next={} does_not_prove=single-heartbeat-full-frame-or-smooth-coloring\n",
             stage_reason,
             MANDELBROT16_BOOT_Q12_C_RE,
             MANDELBROT16_BOOT_Q12_C_IM,
@@ -407,25 +833,31 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
             / MANDELBROT16_BOOT_VISIBLE_STAMP_ROWS;
         let sweep_blocks = sweep_x_groups.saturating_mul(sweep_y_blocks).max(1);
         let mut sweep_y_cursor = 0u32;
+        let mut fixed10_sweep_alive = t15_sweep_gate;
+        let mut fixed10_sweep_stop_logged = false;
+        let mut fixed10_row_group_scale_index = 0usize;
+        let mut fixed10_x_block_scale_index = 0usize;
         loop {
             Timer::after(EmbassyDuration::from_millis(MANDELBROT_GPGPU_STAGE_READY_HEARTBEAT_MS))
                 .await;
             frame = frame.wrapping_add(1);
-            if frame == 1 || MANDELBROT16_STAGE_READY_SWEEP_ENABLED || frame % 16 == 0 {
+            let sweep_live = fixed10_sweep_alive && MANDELBROT16_STAGE_READY_SWEEP_ENABLED;
+            if frame == 1 || sweep_live || frame % 16 == 0 {
                 let mut restamped_rows = 0u32;
                 let mut restamped_x_blocks = 0u32;
                 let mut restamp_finish_marker = 0u32;
                 let mut restamp_dispatch_delta = 0u64;
-                let mut x_base = ((scanout_w as u32).saturating_sub(
-                    trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM
-                        as u32,
-                )) / 2;
+                let mut restamp_stopped = false;
+                let mut sample_observed = 0u32;
+                let mut sample_expected = 0u32;
+                let mut sample_gpu = 0u64;
+                let mut sample_valid = false;
+                let mut x_base: u32;
                 let mut row_index = ((scanout_h as u32) / 2).saturating_sub(16);
                 let mut sweep_block = 0u32;
                 let mut sweep_x_group = sweep_x_groups / 2;
                 let mut sweep_y_block = sweep_y_blocks / 2;
-                let mut stamp_rows = MANDELBROT16_BOOT_VISIBLE_STAMP_ROWS;
-                if MANDELBROT16_STAGE_READY_SWEEP_ENABLED {
+                if sweep_live {
                     sweep_y_block = if sweep_y_blocks == 0 {
                         0
                     } else {
@@ -433,48 +865,196 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                     };
                     sweep_block = sweep_y_block.saturating_mul(sweep_x_groups);
                     row_index = sweep_y_block.saturating_mul(MANDELBROT16_BOOT_VISIBLE_STAMP_ROWS);
-                    stamp_rows = (scanout_h as u32)
-                        .saturating_sub(row_index)
-                        .min(MANDELBROT16_BOOT_VISIBLE_STAMP_ROWS);
                 }
-                if mandelbrot16_probe_readback_ok {
-                    let x_blocks_this_heartbeat = if MANDELBROT16_STAGE_READY_SWEEP_ENABLED {
+                if mandelbrot16_probe_readback_ok && fixed10_sweep_alive {
+                    let submitted_x_block_scale_index = fixed10_x_block_scale_index;
+                    let scaled_x_blocks = MANDELBROT16_STAGE_READY_X_BLOCK_SCALE
+                        [submitted_x_block_scale_index]
+                        .max(1)
+                        .min(sweep_x_groups.max(1));
+                    let x_blocks_this_heartbeat = if sweep_live {
                         MANDELBROT16_STAGE_READY_SWEEP_X_BLOCKS_PER_HEARTBEAT
                             .max(1)
+                            .max(scaled_x_blocks)
                             .min(sweep_x_groups.max(1))
                     } else {
                         1
                     };
-                    let mut x_block = 0u32;
-                    while x_block < x_blocks_this_heartbeat {
-                        sweep_x_group = if MANDELBROT16_STAGE_READY_SWEEP_ENABLED {
-                            x_block
+                    let submitted_row_group_scale_index = fixed10_row_group_scale_index;
+                    let submitted_row_groups = MANDELBROT16_STAGE_READY_ROW_GROUP_SCALE
+                        [submitted_row_group_scale_index]
+                        .clamp(1, MANDELBROT16_BOOT_VISIBLE_STAMP_ROWS);
+                    let t11_linear_band = submitted_row_group_scale_index + 1
+                        == MANDELBROT16_STAGE_READY_ROW_GROUP_SCALE.len()
+                        && submitted_x_block_scale_index + 1
+                            == MANDELBROT16_STAGE_READY_X_BLOCK_SCALE.len();
+                    let mut submit_calls = 0u32;
+                    if sweep_live {
+                        sweep_x_group = x_blocks_this_heartbeat.saturating_sub(1);
+                        x_base = 0;
+                        let total_linear_groups = if t15_linear_address_ready {
+                            submitted_row_groups.saturating_mul(x_blocks_this_heartbeat)
                         } else {
-                            sweep_x_group
+                            x_blocks_this_heartbeat
                         };
+                        let mut linear_group_base = 0u32;
+                        while linear_group_base < total_linear_groups {
+                            let linear_groups_this_submit = if t15_linear_address_ready {
+                                MANDELBROT16_T11_LINEAR_MAX_GROUPS_PER_SUBMIT
+                                    .min(total_linear_groups.saturating_sub(linear_group_base))
+                            } else {
+                                1
+                            };
+                            let linear_pixel_base = linear_group_base.saturating_mul(
+                                trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM
+                                    as u32,
+                            );
+                            let chunk_x_group = if sweep_x_groups == 0 {
+                                0
+                            } else {
+                                linear_group_base % sweep_x_groups
+                            };
+                            let chunk_y_block = if sweep_x_groups == 0 {
+                                sweep_y_block
+                            } else {
+                                sweep_y_block
+                                    .saturating_add(linear_group_base / sweep_x_groups)
+                                    .min(sweep_y_blocks.saturating_sub(1))
+                            };
+                            let c_re = mandelbrot16_pixel_c_re_q12(
+                                chunk_x_group.saturating_mul(
+                                    trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM
+                                        as u32,
+                                ),
+                            );
+                            let c_im = mandelbrot16_block_c_im_q12(chunk_y_block, sweep_y_blocks);
+                            let submit_x_base = if t15_linear_address_ready {
+                                linear_pixel_base
+                            } else {
+                                chunk_x_group.saturating_mul(
+                                    trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM
+                                        as u32,
+                                )
+                            };
+                            let submit_row_index = if t15_linear_address_ready {
+                                row_index
+                            } else {
+                                chunk_y_block.saturating_mul(MANDELBROT16_BOOT_VISIBLE_STAMP_ROWS)
+                            };
+                            let row_probe = if t15_linear_address_ready {
+                                crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_linear_band(
+                                    row_index,
+                                    linear_pixel_base,
+                                    1,
+                                    linear_groups_this_submit,
+                                    c_re,
+                                    c_im,
+                                )
+                            } else if t19_raw_radius_ready {
+                                crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_raw_radius_rows(
+                                    submit_row_index,
+                                    submit_x_base,
+                                    submitted_row_groups,
+                                    c_re,
+                                    c_im,
+                                )
+                            } else {
+                                crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_gradient_rows_batched(
+                                    submit_row_index,
+                                    submit_x_base,
+                                    submitted_row_groups,
+                                    c_re,
+                                    c_im,
+                                )
+                            };
+                            restamp_finish_marker = row_probe.finish_marker;
+                            restamp_dispatch_delta =
+                                restamp_dispatch_delta.saturating_add(row_probe.dispatch_delta);
+                            submit_calls = submit_calls.saturating_add(1);
+                            if !sample_valid {
+                                sample_observed = row_probe.output_first_after;
+                                sample_expected = row_probe.sentinel;
+                                sample_gpu = row_probe.output_gpu;
+                                sample_valid = row_probe.submitted;
+                            }
+                            if !row_probe.finished {
+                                fixed10_sweep_alive = false;
+                                restamp_stopped = true;
+                                x_base = submit_x_base;
+                                break;
+                            }
+                            linear_group_base =
+                                linear_group_base.saturating_add(linear_groups_this_submit);
+                        }
+                        if !restamp_stopped {
+                            restamped_rows = restamped_rows.saturating_add(
+                                submitted_row_groups.saturating_mul(x_blocks_this_heartbeat),
+                            );
+                            restamped_x_blocks =
+                                restamped_x_blocks.saturating_add(x_blocks_this_heartbeat);
+                        }
+                    } else {
                         x_base = sweep_x_group.saturating_mul(
                             trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM
                                 as u32,
                         );
-                        let row_probe =
-                            crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_rows(
-                                MANDELBROT16_BOOT_Q12_MODE_ONE_ITER_VISIBLE,
+                        let c_re = mandelbrot16_pixel_c_re_q12(x_base);
+                        let c_im = mandelbrot16_block_c_im_q12(sweep_y_block, sweep_y_blocks);
+                        let row_probe = if t15_linear_address_ready {
+                            crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_linear_band(
                                 row_index,
                                 x_base,
-                                stamp_rows,
-                                MANDELBROT16_BOOT_Q12_C_RE,
-                                MANDELBROT16_BOOT_Q12_C_IM,
-                            );
-                        if row_probe.readback_ok {
-                            restamped_rows = restamped_rows.saturating_add(stamp_rows);
+                                1,
+                                1,
+                                c_re,
+                                c_im,
+                            )
+                        } else if t19_raw_radius_ready {
+                            crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_raw_radius(
+                                row_index,
+                                x_base,
+                                c_re,
+                                c_im,
+                            )
+                        } else {
+                            crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_gradient(
+                                row_index,
+                                x_base,
+                                c_re,
+                                c_im,
+                            )
+                        };
+                        if row_probe.finished {
+                            restamped_rows = restamped_rows.saturating_add(1);
+                            restamped_x_blocks = restamped_x_blocks.saturating_add(1);
                         }
                         restamp_finish_marker = row_probe.finish_marker;
                         restamp_dispatch_delta =
                             restamp_dispatch_delta.saturating_add(row_probe.dispatch_delta);
-                        restamped_x_blocks = restamped_x_blocks.saturating_add(1);
-                        x_block = x_block.saturating_add(1);
+                        submit_calls = submit_calls.saturating_add(1);
+                        if !sample_valid {
+                            sample_observed = row_probe.output_first_after;
+                            sample_expected = row_probe.sentinel;
+                            sample_gpu = row_probe.output_gpu;
+                            sample_valid = row_probe.submitted;
+                        }
+                        if !row_probe.finished {
+                            fixed10_sweep_alive = false;
+                            restamp_stopped = true;
+                        }
                     }
-                    if MANDELBROT16_STAGE_READY_SWEEP_ENABLED {
+                    if sweep_live && fixed10_sweep_alive {
+                        if fixed10_row_group_scale_index + 1
+                            < MANDELBROT16_STAGE_READY_ROW_GROUP_SCALE.len()
+                        {
+                            fixed10_row_group_scale_index =
+                                fixed10_row_group_scale_index.saturating_add(1);
+                        } else if fixed10_x_block_scale_index + 1
+                            < MANDELBROT16_STAGE_READY_X_BLOCK_SCALE.len()
+                        {
+                            fixed10_x_block_scale_index =
+                                fixed10_x_block_scale_index.saturating_add(1);
+                        }
                         sweep_y_cursor = if sweep_y_blocks == 0 {
                             0
                         } else {
@@ -482,10 +1062,29 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                         };
                     }
                     crate::log!(
-                        "mandelbrot-gpu-sidequest: stage-ready-t10-band heartbeat={} reason={} artifact_stage=simd16-q12-one-iteration-visible-primary-plane sweep_enabled={} sweep_block={}/{} sweep_y_cursor={} sweep_xy={}x{} sweep_grid={}x{} stamp_rect={}x{}@{},{} restamped_x_blocks={} restamped_rows={} per_row_readback=0 lane_dispatch_delta={} finish_marker=0x{:08X} expected_plane_value=0x{:08X} next={} proves=ongoing-t10-groupid-row-simd16-primary-plane-exercise does_not_prove=full-frame-mandelbrot\n",
+                        "mandelbrot-gpu-sidequest: stage-ready-t15-gradient-sweep-probe heartbeat={} reason={} artifact_stage={} address_path={} sweep_enabled={} sweep_alive={} stopped={} t11_linear_band={} linear_max_groups_per_submit={} submit_calls={} sweep_block={}/{} sweep_y_cursor={} sweep_xy={}x{} sweep_grid={}x{} row_group_scale_index={} x_block_scale_index={} stamp_rect={}x{}@{},{} submitted_row_groups={} submitted_x_blocks={} restamped_x_blocks={} restamped_groups={} per_row_readback=0 sample_valid={} sample_gpu=0x{:X} sample_observed=0x{:08X} sample_expected=0x{:08X} sample_match={} lane_dispatch_delta={} finish_marker=0x{:08X} expected_plane_value=0x{:08X} next={} proves=t15-or-t18-submit-dispatch-eot-and-scanout-sample-instrumentation does_not_prove=sample-match-or-physical-display-visible-or-single-heartbeat-full-frame-or-smooth-coloring\n",
                         frame,
                         stage_reason,
-                        MANDELBROT16_STAGE_READY_SWEEP_ENABLED as u8,
+                        if t19_raw_radius_ready {
+                            "simd16-t19-immediate-eu-lane-re-row-chunk-ci-fixed1-raw-radius-primary-plane"
+                        } else if t15_linear_address_ready {
+                            "simd16-t15-linear-eu-lane-re-row-chunk-ci-fixed10-escape-gradient-primary-plane"
+                        } else {
+                            "simd16-t18-immediate-eu-lane-re-row-chunk-ci-fixed10-escape-gradient-primary-plane"
+                        },
+                        if t15_linear_address_ready {
+                            "linear-groupid"
+                        } else if t19_raw_radius_ready {
+                            "immediate-base-raw-radius-fallback"
+                        } else {
+                            "immediate-base-fallback"
+                        },
+                        sweep_live as u8,
+                        fixed10_sweep_alive as u8,
+                        restamp_stopped as u8,
+                        t11_linear_band as u8,
+                        MANDELBROT16_T11_LINEAR_MAX_GROUPS_PER_SUBMIT,
+                        submit_calls,
                         sweep_block,
                         sweep_blocks,
                         sweep_y_cursor,
@@ -493,28 +1092,61 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                         sweep_y_block,
                         sweep_x_groups,
                         sweep_y_blocks,
+                        submitted_row_group_scale_index,
+                        submitted_x_block_scale_index,
                         trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM,
-                        stamp_rows,
+                        submitted_row_groups,
                         x_base,
                         row_index,
+                        submitted_row_groups,
+                        x_blocks_this_heartbeat,
                         restamped_x_blocks,
                         restamped_rows,
+                        sample_valid as u8,
+                        sample_gpu,
+                        sample_observed,
+                        sample_expected,
+                        (sample_valid && sample_observed == sample_expected) as u8,
                         restamp_dispatch_delta,
                         restamp_finish_marker,
                         MANDELBROT16_BOOT_Q12_EXPECTED_VISIBLE,
                         stage_next,
                     );
+                    if restamp_stopped && !fixed10_sweep_stop_logged {
+                        fixed10_sweep_stop_logged = true;
+                        crate::log!(
+                            "mandelbrot-gpu-sidequest: fixed10-escape-bw-scale-disabled heartbeat={} reason=fixed10-rowgroup-or-xblock-scale-submit-did-not-retire artifact_stage=simd16-q12-fixed10-escape-bw-primary-plane row_group_scale_index={} x_block_scale_index={} submitted_row_groups={} submitted_x_blocks={} failed_xy={}x{} failed_rect_or_linear_span={}x{}@{},{} finish_marker=0x{:08X} lane_dispatch_delta={} action=park-auto-sweep-use-shell-for-single-probes next=fix-groupid-row-address-or-walker-timeout does_not_prove=iteration-count-gradient-or-full-frame-mandelbrot\n",
+                            frame,
+                            submitted_row_group_scale_index,
+                            submitted_x_block_scale_index,
+                            submitted_row_groups,
+                            x_blocks_this_heartbeat,
+                            sweep_x_group,
+                            sweep_y_block,
+                            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM,
+                            submitted_row_groups,
+                            x_base,
+                            row_index,
+                            restamp_finish_marker,
+                            restamp_dispatch_delta,
+                        );
+                    }
                 }
-                if !mandelbrot16_probe_readback_ok
-                    || !MANDELBROT16_STAGE_READY_SWEEP_ENABLED
-                    || frame % 16 == 0
-                {
+                if !mandelbrot16_probe_readback_ok || !sweep_live || frame % 16 == 0 {
                     crate::log!(
-                        "mandelbrot-gpu-sidequest: stage-ready heartbeat={} reason={} artifact_stage=simd16-q12-one-iteration-visible-primary-plane legacy_row_writer_running=0 obsolete_row_color_protocol=0 restamp_enabled={} sweep_enabled={} next={} does_not_prove=full-frame-mandelbrot\n",
+                        "mandelbrot-gpu-sidequest: stage-ready heartbeat={} reason={} artifact_stage={} legacy_row_writer_running=0 obsolete_row_color_protocol=0 restamp_enabled={} sweep_enabled={} sweep_alive={} next={} does_not_prove=single-heartbeat-full-frame-or-smooth-coloring\n",
                         frame,
                         stage_reason,
-                        mandelbrot16_probe_readback_ok as u8,
+                        if t15_linear_address_ready {
+                            "simd16-t15-linear-eu-lane-re-row-chunk-ci-fixed10-escape-gradient-primary-plane"
+                        } else if t19_raw_radius_ready {
+                            "simd16-t19-immediate-eu-lane-re-row-chunk-ci-fixed1-raw-radius-primary-plane"
+                        } else {
+                            "simd16-t18-immediate-eu-lane-re-row-chunk-ci-fixed10-escape-gradient-primary-plane"
+                        },
+                        (mandelbrot16_probe_readback_ok && fixed10_sweep_alive) as u8,
                         MANDELBROT16_STAGE_READY_SWEEP_ENABLED as u8,
+                        fixed10_sweep_alive as u8,
                         stage_next,
                     );
                 }
