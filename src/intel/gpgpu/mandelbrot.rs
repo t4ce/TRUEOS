@@ -34,6 +34,14 @@ const MANDELBROT16_T17_MODE_IMMEDIATE_CONSTANT_STORE: u32 = 49;
 const MANDELBROT16_T18_MODE_IMMEDIATE_GRADIENT_STORE: u32 = 50;
 const MANDELBROT16_T19_MODE_IMMEDIATE_RAW_RADIUS_STORE: u32 = 51;
 const MANDELBROT16_T30_MODE_FULLSCREEN_LINEAR_CONSTANT_STORE: u32 = 60;
+const MANDELBROT16_T32_MODE_IMMEDIATE_CONSTANT_SINGLE_SEND: u32 = 61;
+const MANDELBROT16_T33_MODE_IMMEDIATE_CONSTANT_BTI1_UNTYPED: u32 = 62;
+const MANDELBROT16_T34_MODE_IMMEDIATE_ADDRESS_DATA_WITNESS: u32 = 63;
+const MANDELBROT16_T35_MODE_IMMEDIATE_EXPLICIT_WIDE_PAYLOAD: u32 = 64;
+const MANDELBROT16_T36_MODE_IMMEDIATE_UNROLLED_SCALAR16: u32 = 65;
+const MANDELBROT16_T37_MODE_GROUPID_X_UNROLLED_SCALAR16: u32 = 66;
+const MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP: u32 = 67;
+const MANDELBROT16_T38_STAMP_REPEATS: u32 = 5;
 const MANDELBROT16_T13_Q12_X_STEP: u32 = 5;
 const MANDELBROT16_CONSTANT_BODY_UPLOAD_DEBUG: bool = false;
 
@@ -42,6 +50,17 @@ enum Mandelbrot16AddressMode {
     ImmediateBase,
     GroupIdRowPitch,
     GroupIdLinear64,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Mandelbrot16ConstantStoreVariant {
+    LegacyStateless,
+    SingleSend,
+    Bti1Untyped,
+    AddressDataWitness,
+    ExplicitWidePayload,
+    UnrolledScalar16,
+    WideScalar16x5,
 }
 
 impl Mandelbrot16AddressMode {
@@ -205,7 +224,14 @@ fn upload_primary_scanout_mandelbrot16_simd16_bw_artifact(
     if MANDELBROT16_CONSTANT_BODY_UPLOAD_DEBUG
         && (mode == MANDELBROT16_T16_MODE_LINEAR_CONSTANT_STORE
             || mode == MANDELBROT16_T17_MODE_IMMEDIATE_CONSTANT_STORE
-            || mode == MANDELBROT16_T30_MODE_FULLSCREEN_LINEAR_CONSTANT_STORE)
+            || mode == MANDELBROT16_T30_MODE_FULLSCREEN_LINEAR_CONSTANT_STORE
+            || mode == MANDELBROT16_T32_MODE_IMMEDIATE_CONSTANT_SINGLE_SEND
+            || mode == MANDELBROT16_T33_MODE_IMMEDIATE_CONSTANT_BTI1_UNTYPED
+            || mode == MANDELBROT16_T34_MODE_IMMEDIATE_ADDRESS_DATA_WITNESS
+            || mode == MANDELBROT16_T35_MODE_IMMEDIATE_EXPLICIT_WIDE_PAYLOAD
+            || mode == MANDELBROT16_T36_MODE_IMMEDIATE_UNROLLED_SCALAR16
+            || mode == MANDELBROT16_T37_MODE_GROUPID_X_UNROLLED_SCALAR16
+            || mode == MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP)
     {
         let body = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_BODY_DWORD;
         crate::log!(
@@ -465,12 +491,23 @@ fn patch_mandelbrot16_simd16_linear_constant_store_body(
     color: u32,
     address_base: u32,
     address_mode: Mandelbrot16AddressMode,
+    store_variant: Mandelbrot16ConstantStoreVariant,
 ) {
     const NOP: [u32; 4] = [0x80000101, 0x00000000, 0x00000000, 0x00000000];
     const SUB_G22_G20_G20: [u32; 4] = [0x00040140, 0x16050660, 0x06461405, 0x02461405];
+    const MOV_G22_G20: [u32; 4] = [0x00040161, 0x16050660, 0x00461405, 0x00000000];
     const OR_G22_G22_IMM: [u32; 4] = [0x00040166, 0x16058220, 0x02461605, 0x00000000];
+    const ADD_G21_G20_32_1Q: [u32; 4] = [0x00030140, 0x15058660, 0x06461405, 0x00000020];
+    const SUB_G22_G20_G20_1Q: [u32; 4] = [0x00030140, 0x16050660, 0x06461405, 0x02461405];
+    const OR_G22_G22_IMM_1Q: [u32; 4] = [0x00030166, 0x16058220, 0x02461605, 0x00000000];
+    const SUB_G23_G21_G21_1Q: [u32; 4] = [0x00030140, 0x17050660, 0x06461505, 0x02461505];
+    const OR_G23_G23_IMM_1Q: [u32; 4] = [0x00030166, 0x17058220, 0x02461705, 0x00000000];
+    const ADD_G20_G20_4_1Q: [u32; 4] = [0x00030140, 0x14058660, 0x06461405, 0x00000004];
     const STORE_SEND8_G20_G22_1Q: [u32; 4] = [0x00030131, 0x00000000, 0xCC02140C, 0x009A160C];
     const STORE_SEND8_G21_G23_2Q: [u32; 4] = [0x00130131, 0x00000000, 0xCC02150C, 0x009A170C];
+    const STORE_SEND16_G20_G22: [u32; 4] = [0x00040131, 0x00000000, 0xCC021414, 0x00961614];
+    const STORE_BTI1_G20_G22_1Q: [u32; 4] = [0x00030131, 0x00000000, 0x02026E01, 0x00000040];
+    const STORE_BTI1_G21_G23_2Q: [u32; 4] = [0x00130131, 0x00000000, 0x02026E01, 0x00000040];
     const MOV_G126_G0: [u32; 4] = [0x80030061, 0x7E050220, 0x00460005, 0x00000000];
     const EOT_SEND_G126: [u32; 4] = [0x80030131, 0x00000004, 0x70007E0C, 0x00000000];
 
@@ -484,10 +521,73 @@ fn patch_mandelbrot16_simd16_linear_constant_store_body(
     let mut or_color = OR_G22_G22_IMM;
     or_color[3] = color;
     let _ = (address_base, address_mode);
-    patch_mandelbrot16_simd16_put(words, &mut cursor, SUB_G22_G20_G20);
+    if store_variant == Mandelbrot16ConstantStoreVariant::ExplicitWidePayload {
+        let mut or_g22 = OR_G22_G22_IMM_1Q;
+        let mut or_g23 = OR_G23_G23_IMM_1Q;
+        or_g22[3] = color;
+        or_g23[3] = color;
+        patch_mandelbrot16_simd16_put(words, &mut cursor, ADD_G21_G20_32_1Q);
+        patch_mandelbrot16_simd16_put(words, &mut cursor, SUB_G22_G20_G20_1Q);
+        patch_mandelbrot16_simd16_put(words, &mut cursor, or_g22);
+        patch_mandelbrot16_simd16_put(words, &mut cursor, SUB_G23_G21_G21_1Q);
+        patch_mandelbrot16_simd16_put(words, &mut cursor, or_g23);
+        patch_mandelbrot16_simd16_put(words, &mut cursor, STORE_SEND8_G20_G22_1Q);
+        patch_mandelbrot16_simd16_put(words, &mut cursor, STORE_SEND8_G21_G23_2Q);
+        patch_mandelbrot16_simd16_put(words, &mut cursor, MOV_G126_G0);
+        patch_mandelbrot16_simd16_put(words, &mut cursor, EOT_SEND_G126);
+        return;
+    }
+    if store_variant == Mandelbrot16ConstantStoreVariant::UnrolledScalar16
+        || store_variant == Mandelbrot16ConstantStoreVariant::WideScalar16x5
+    {
+        let mut or_g22 = OR_G22_G22_IMM_1Q;
+        or_g22[3] = color;
+        patch_mandelbrot16_simd16_put(words, &mut cursor, SUB_G22_G20_G20_1Q);
+        patch_mandelbrot16_simd16_put(words, &mut cursor, or_g22);
+        let stamp_pixels = if store_variant == Mandelbrot16ConstantStoreVariant::WideScalar16x5 {
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_LANES
+                * MANDELBROT16_T38_STAMP_REPEATS as usize
+        } else {
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_LANES
+        };
+        let mut pixel = 0usize;
+        while pixel < stamp_pixels {
+            patch_mandelbrot16_simd16_put(words, &mut cursor, STORE_SEND8_G20_G22_1Q);
+            pixel += 1;
+            if pixel < stamp_pixels {
+                patch_mandelbrot16_simd16_put(words, &mut cursor, ADD_G20_G20_4_1Q);
+            }
+        }
+        patch_mandelbrot16_simd16_put(words, &mut cursor, MOV_G126_G0);
+        patch_mandelbrot16_simd16_put(words, &mut cursor, EOT_SEND_G126);
+        return;
+    }
+    if store_variant == Mandelbrot16ConstantStoreVariant::AddressDataWitness {
+        patch_mandelbrot16_simd16_put(words, &mut cursor, MOV_G22_G20);
+    } else {
+        patch_mandelbrot16_simd16_put(words, &mut cursor, SUB_G22_G20_G20);
+    }
     patch_mandelbrot16_simd16_put(words, &mut cursor, or_color);
-    patch_mandelbrot16_simd16_put(words, &mut cursor, STORE_SEND8_G20_G22_1Q);
-    patch_mandelbrot16_simd16_put(words, &mut cursor, STORE_SEND8_G21_G23_2Q);
+    match store_variant {
+        Mandelbrot16ConstantStoreVariant::SingleSend => {
+            patch_mandelbrot16_simd16_put(words, &mut cursor, STORE_SEND16_G20_G22);
+        }
+        Mandelbrot16ConstantStoreVariant::Bti1Untyped => {
+            patch_mandelbrot16_simd16_put(words, &mut cursor, STORE_BTI1_G20_G22_1Q);
+            patch_mandelbrot16_simd16_put(words, &mut cursor, STORE_BTI1_G21_G23_2Q);
+        }
+        Mandelbrot16ConstantStoreVariant::LegacyStateless => {
+            patch_mandelbrot16_simd16_put(words, &mut cursor, STORE_SEND8_G20_G22_1Q);
+            patch_mandelbrot16_simd16_put(words, &mut cursor, STORE_SEND8_G21_G23_2Q);
+        }
+        Mandelbrot16ConstantStoreVariant::AddressDataWitness => {
+            patch_mandelbrot16_simd16_put(words, &mut cursor, STORE_SEND8_G20_G22_1Q);
+            patch_mandelbrot16_simd16_put(words, &mut cursor, STORE_SEND8_G21_G23_2Q);
+        }
+        Mandelbrot16ConstantStoreVariant::ExplicitWidePayload => {}
+        Mandelbrot16ConstantStoreVariant::UnrolledScalar16 => {}
+        Mandelbrot16ConstantStoreVariant::WideScalar16x5 => {}
+    }
     patch_mandelbrot16_simd16_put(words, &mut cursor, MOV_G126_G0);
     patch_mandelbrot16_simd16_put(words, &mut cursor, EOT_SEND_G126);
 }
@@ -551,12 +651,38 @@ fn patch_mandelbrot16_simd16_probe_variant(
     if mode == MANDELBROT16_T16_MODE_LINEAR_CONSTANT_STORE
         || mode == MANDELBROT16_T17_MODE_IMMEDIATE_CONSTANT_STORE
         || mode == MANDELBROT16_T30_MODE_FULLSCREEN_LINEAR_CONSTANT_STORE
+        || mode == MANDELBROT16_T32_MODE_IMMEDIATE_CONSTANT_SINGLE_SEND
+        || mode == MANDELBROT16_T33_MODE_IMMEDIATE_CONSTANT_BTI1_UNTYPED
+        || mode == MANDELBROT16_T34_MODE_IMMEDIATE_ADDRESS_DATA_WITNESS
+        || mode == MANDELBROT16_T35_MODE_IMMEDIATE_EXPLICIT_WIDE_PAYLOAD
+        || mode == MANDELBROT16_T36_MODE_IMMEDIATE_UNROLLED_SCALAR16
+        || mode == MANDELBROT16_T37_MODE_GROUPID_X_UNROLLED_SCALAR16
+        || mode == MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP
     {
+        let store_variant = if mode == MANDELBROT16_T32_MODE_IMMEDIATE_CONSTANT_SINGLE_SEND {
+            Mandelbrot16ConstantStoreVariant::SingleSend
+        } else if mode == MANDELBROT16_T33_MODE_IMMEDIATE_CONSTANT_BTI1_UNTYPED {
+            Mandelbrot16ConstantStoreVariant::Bti1Untyped
+        } else if mode == MANDELBROT16_T34_MODE_IMMEDIATE_ADDRESS_DATA_WITNESS {
+            Mandelbrot16ConstantStoreVariant::AddressDataWitness
+        } else if mode == MANDELBROT16_T35_MODE_IMMEDIATE_EXPLICIT_WIDE_PAYLOAD {
+            Mandelbrot16ConstantStoreVariant::ExplicitWidePayload
+        } else if mode == MANDELBROT16_T30_MODE_FULLSCREEN_LINEAR_CONSTANT_STORE
+            || mode == MANDELBROT16_T36_MODE_IMMEDIATE_UNROLLED_SCALAR16
+            || mode == MANDELBROT16_T37_MODE_GROUPID_X_UNROLLED_SCALAR16
+        {
+            Mandelbrot16ConstantStoreVariant::UnrolledScalar16
+        } else if mode == MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP {
+            Mandelbrot16ConstantStoreVariant::WideScalar16x5
+        } else {
+            Mandelbrot16ConstantStoreVariant::LegacyStateless
+        };
         patch_mandelbrot16_simd16_linear_constant_store_body(
             words,
             lhs,
             address_base,
             address_mode,
+            store_variant,
         );
         return;
     }
@@ -748,6 +874,13 @@ fn patch_mandelbrot16_simd16_probe_source(
         || mode == MANDELBROT16_T16_MODE_LINEAR_CONSTANT_STORE
         || mode == MANDELBROT16_T17_MODE_IMMEDIATE_CONSTANT_STORE
         || mode == MANDELBROT16_T30_MODE_FULLSCREEN_LINEAR_CONSTANT_STORE
+        || mode == MANDELBROT16_T32_MODE_IMMEDIATE_CONSTANT_SINGLE_SEND
+        || mode == MANDELBROT16_T33_MODE_IMMEDIATE_CONSTANT_BTI1_UNTYPED
+        || mode == MANDELBROT16_T34_MODE_IMMEDIATE_ADDRESS_DATA_WITNESS
+        || mode == MANDELBROT16_T35_MODE_IMMEDIATE_EXPLICIT_WIDE_PAYLOAD
+        || mode == MANDELBROT16_T36_MODE_IMMEDIATE_UNROLLED_SCALAR16
+        || mode == MANDELBROT16_T37_MODE_GROUPID_X_UNROLLED_SCALAR16
+        || mode == MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP
         || mode == MANDELBROT16_T11_MODE_LINEAR_FULL_BAND
         || mode == MANDELBROT16_T15_MODE_LINEAR_GRADIENT_FULL_BAND
         || mode == MANDELBROT16_T18_MODE_IMMEDIATE_GRADIENT_STORE
@@ -840,7 +973,28 @@ fn mandelbrot16_simd16_probe_variant_name(mode: u32) -> &'static str {
             "mandelbrot16-t19-immediate-base-fixed1-raw-radius-visible-store"
         }
         MANDELBROT16_T30_MODE_FULLSCREEN_LINEAR_CONSTANT_STORE => {
-            "mandelbrot16-t30-fullscreen-linear-groupid-constant-visible-store"
+            "mandelbrot16-t30-fullscreen-linear-groupid-unrolled-scalar16-visible-store"
+        }
+        MANDELBROT16_T32_MODE_IMMEDIATE_CONSTANT_SINGLE_SEND => {
+            "mandelbrot16-t32-immediate-base-constant-single-send-visible-store"
+        }
+        MANDELBROT16_T33_MODE_IMMEDIATE_CONSTANT_BTI1_UNTYPED => {
+            "mandelbrot16-t33-immediate-base-constant-bti1-untyped-visible-store"
+        }
+        MANDELBROT16_T34_MODE_IMMEDIATE_ADDRESS_DATA_WITNESS => {
+            "mandelbrot16-t34-immediate-base-address-data-witness-visible-store"
+        }
+        MANDELBROT16_T35_MODE_IMMEDIATE_EXPLICIT_WIDE_PAYLOAD => {
+            "mandelbrot16-t35-immediate-base-explicit-wide-payload-visible-store"
+        }
+        MANDELBROT16_T36_MODE_IMMEDIATE_UNROLLED_SCALAR16 => {
+            "mandelbrot16-t36-immediate-base-unrolled-scalar16-visible-store"
+        }
+        MANDELBROT16_T37_MODE_GROUPID_X_UNROLLED_SCALAR16 => {
+            "mandelbrot16-t37-groupid-x-unrolled-scalar16-visible-store"
+        }
+        MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP => {
+            "mandelbrot16-t38-immediate-base-wide-stamp-visible-store"
         }
         _ => "mul16-dword-g6-times-g6-g22-then-immediate-nine-isolation",
     }
@@ -1015,6 +1169,13 @@ fn mandelbrot16_simd16_probe_expected_first(mode: u32, lhs: u32, rhs: u32) -> u3
         MANDELBROT16_T16_MODE_LINEAR_CONSTANT_STORE => lhs,
         MANDELBROT16_T17_MODE_IMMEDIATE_CONSTANT_STORE => lhs,
         MANDELBROT16_T30_MODE_FULLSCREEN_LINEAR_CONSTANT_STORE => lhs,
+        MANDELBROT16_T32_MODE_IMMEDIATE_CONSTANT_SINGLE_SEND => lhs,
+        MANDELBROT16_T33_MODE_IMMEDIATE_CONSTANT_BTI1_UNTYPED => lhs,
+        MANDELBROT16_T34_MODE_IMMEDIATE_ADDRESS_DATA_WITNESS => lhs | rhs,
+        MANDELBROT16_T35_MODE_IMMEDIATE_EXPLICIT_WIDE_PAYLOAD => lhs,
+        MANDELBROT16_T36_MODE_IMMEDIATE_UNROLLED_SCALAR16 => lhs,
+        MANDELBROT16_T37_MODE_GROUPID_X_UNROLLED_SCALAR16 => lhs,
+        MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP => lhs,
         MANDELBROT16_T18_MODE_IMMEDIATE_GRADIENT_STORE => {
             mandelbrot16_fixed10_gradient_q12(lhs, rhs)
         }
@@ -1637,7 +1798,7 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
             row_gpu.saturating_add(
                 (strip.saturating_mul(LANES_PER_SEND) * core::mem::size_of::<u32>()) as u64,
             ) as u32;
-        lane = 0;
+        let mut lane = 0usize;
         while lane < LANES_PER_SEND {
             let pixel = strip.saturating_mul(LANES_PER_SEND).saturating_add(lane);
             let c_re = q12_c_re0.saturating_add(q12_x_step.saturating_mul(lane as i32));
@@ -3989,6 +4150,299 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_immediat
     )
 }
 
+pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t31_store_ladder_probe(
+    heartbeat: u64,
+    row_index: u32,
+    x_base: u32,
+    color: u32,
+) -> crate::intel::GpgpuOneTileSentinelProof {
+    let proof = submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
+        MANDELBROT16_T17_MODE_IMMEDIATE_CONSTANT_STORE,
+        row_index,
+        x_base,
+        1,
+        color,
+        0,
+        true,
+    );
+    let hit_mask = proof.output_hits_lo64 as u16;
+    crate::log!(
+        "intel/gpgpu: t31-mandelbrot16-store-ladder heartbeat={} row={} x_base={} color=0x{:08X} submitted={} finished={} all_lane_readback_ok={} hit_mask=0x{:04X} target_lane0=0x0001 pass_lane0={} target_lane01=0x0003 pass_lane01={} target_lane03=0x000F pass_lane03={} target_lane07=0x00FF pass_lane07={} target_lane15=0xFFFF pass_lane15={} sample_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} lane_dispatch_delta={} finish_marker=0x{:08X} artifact_body=t31-store-payload-ladder-over-t17-immediate-constant purpose=score-simd16-collapse-without-changing-t30-visual-bridge next=if-hit-mask-stays-0001-try-send-descriptor-and-grf-payload-variants\n",
+        heartbeat,
+        row_index,
+        x_base,
+        color,
+        proof.submitted as u8,
+        proof.finished as u8,
+        proof.readback_ok as u8,
+        hit_mask,
+        ((hit_mask & 0x0001) == 0x0001) as u8,
+        ((hit_mask & 0x0003) == 0x0003) as u8,
+        ((hit_mask & 0x000F) == 0x000F) as u8,
+        ((hit_mask & 0x00FF) == 0x00FF) as u8,
+        ((hit_mask & 0xFFFF) == 0xFFFF) as u8,
+        proof.output_gpu,
+        proof.output_first_before,
+        proof.output_first_after,
+        proof.sentinel,
+        proof.dispatch_delta,
+        proof.finish_marker,
+    );
+    proof
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t32_single_send_probe(
+    heartbeat: u64,
+    row_index: u32,
+    x_base: u32,
+    color: u32,
+) -> crate::intel::GpgpuOneTileSentinelProof {
+    let proof = submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
+        MANDELBROT16_T32_MODE_IMMEDIATE_CONSTANT_SINGLE_SEND,
+        row_index,
+        x_base,
+        1,
+        color,
+        0,
+        true,
+    );
+    let hit_mask = proof.output_hits_lo64 as u16;
+    crate::log!(
+        "intel/gpgpu: t32-mandelbrot16-single-send heartbeat={} row={} x_base={} color=0x{:08X} submitted={} finished={} all_lane_readback_ok={} hit_mask=0x{:04X} pass_lane0={} pass_lane01={} pass_lane03={} pass_lane07={} pass_lane15={} sample_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} lane_dispatch_delta={} finish_marker=0x{:08X} artifact_body=t32-original-single-simd16-send-g20-g22 purpose=test-original-send16-descriptor-against-t31-two-send-collapse next=if-t32-wide-then-promote-send16-into-t30-else-build-explicit-g21-g23-payload\n",
+        heartbeat,
+        row_index,
+        x_base,
+        color,
+        proof.submitted as u8,
+        proof.finished as u8,
+        proof.readback_ok as u8,
+        hit_mask,
+        ((hit_mask & 0x0001) == 0x0001) as u8,
+        ((hit_mask & 0x0003) == 0x0003) as u8,
+        ((hit_mask & 0x000F) == 0x000F) as u8,
+        ((hit_mask & 0x00FF) == 0x00FF) as u8,
+        ((hit_mask & 0xFFFF) == 0xFFFF) as u8,
+        proof.output_gpu,
+        proof.output_first_before,
+        proof.output_first_after,
+        proof.sentinel,
+        proof.dispatch_delta,
+        proof.finish_marker,
+    );
+    proof
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t33_bti1_untyped_probe(
+    heartbeat: u64,
+    row_index: u32,
+    x_base: u32,
+    color: u32,
+) -> crate::intel::GpgpuOneTileSentinelProof {
+    let proof = submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
+        MANDELBROT16_T33_MODE_IMMEDIATE_CONSTANT_BTI1_UNTYPED,
+        row_index,
+        x_base,
+        1,
+        color,
+        0,
+        true,
+    );
+    let hit_mask = proof.output_hits_lo64 as u16;
+    crate::log!(
+        "intel/gpgpu: t33-mandelbrot16-bti1-untyped heartbeat={} row={} x_base={} color=0x{:08X} submitted={} finished={} all_lane_readback_ok={} hit_mask=0x{:04X} pass_lane0={} pass_lane01={} pass_lane03={} pass_lane07={} pass_lane15={} sample_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} lane_dispatch_delta={} finish_marker=0x{:08X} artifact_body=t33-two-simd8-bti1-untyped-g20-g22-g21-g23 purpose=separate-address-payload-from-legacy-stateless-send-descriptor next=if-wide-promote-bti1-untyped-descriptor-to-t30-else-lane-address-payload-is-collapsing\n",
+        heartbeat,
+        row_index,
+        x_base,
+        color,
+        proof.submitted as u8,
+        proof.finished as u8,
+        proof.readback_ok as u8,
+        hit_mask,
+        ((hit_mask & 0x0001) == 0x0001) as u8,
+        ((hit_mask & 0x0003) == 0x0003) as u8,
+        ((hit_mask & 0x000F) == 0x000F) as u8,
+        ((hit_mask & 0x00FF) == 0x00FF) as u8,
+        ((hit_mask & 0xFFFF) == 0xFFFF) as u8,
+        proof.output_gpu,
+        proof.output_first_before,
+        proof.output_first_after,
+        proof.sentinel,
+        proof.dispatch_delta,
+        proof.finish_marker,
+    );
+    proof
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t34_address_data_witness_probe(
+    heartbeat: u64,
+    row_index: u32,
+    x_base: u32,
+    color_mask: u32,
+) -> crate::intel::GpgpuOneTileSentinelProof {
+    let proof = submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
+        MANDELBROT16_T34_MODE_IMMEDIATE_ADDRESS_DATA_WITNESS,
+        row_index,
+        x_base,
+        1,
+        color_mask,
+        0,
+        true,
+    );
+    let hit_mask = proof.output_hits_lo64 as u16;
+    let lane0_only = (hit_mask & 0x0001) == 0x0001
+        && (hit_mask & 0xFFFE) == 0
+        && proof.output_first_after == proof.sentinel;
+    let alias_or_late_lane = proof.output_first_after != proof.output_first_before
+        && proof.output_first_after != proof.sentinel;
+    crate::log!(
+        "intel/gpgpu: t34-mandelbrot16-address-data-witness heartbeat={} row={} x_base={} color_mask=0x{:08X} submitted={} finished={} all_lane_readback_ok={} hit_mask=0x{:04X} lane0_only={} alias_or_late_lane={} sample_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} lane0_expected=0x{:08X} lane_dispatch_delta={} finish_marker=0x{:08X} artifact_body=t34-address-derived-data-over-legacy-two-send purpose=distinguish-lane0-only-from-multilane-address-alias next=if-lane0-only-materialize-wide-address-data-payload else-fix-address-vector\n",
+        heartbeat,
+        row_index,
+        x_base,
+        color_mask,
+        proof.submitted as u8,
+        proof.finished as u8,
+        proof.readback_ok as u8,
+        hit_mask,
+        lane0_only as u8,
+        alias_or_late_lane as u8,
+        proof.output_gpu,
+        proof.output_first_before,
+        proof.output_first_after,
+        proof.sentinel,
+        proof.dispatch_delta,
+        proof.finish_marker,
+    );
+    proof
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t35_explicit_wide_payload_probe(
+    heartbeat: u64,
+    row_index: u32,
+    x_base: u32,
+    color: u32,
+) -> crate::intel::GpgpuOneTileSentinelProof {
+    let proof = submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
+        MANDELBROT16_T35_MODE_IMMEDIATE_EXPLICIT_WIDE_PAYLOAD,
+        row_index,
+        x_base,
+        1,
+        color,
+        0,
+        true,
+    );
+    let hit_mask = proof.output_hits_lo64 as u16;
+    let low_half_ok = (hit_mask & 0x00FF) == 0x00FF;
+    let high_half_ok = (hit_mask & 0xFF00) == 0xFF00;
+    let high_lane0_ok = (hit_mask & 0x0100) == 0x0100;
+    crate::log!(
+        "intel/gpgpu: t35-mandelbrot16-explicit-wide-payload heartbeat={} row={} x_base={} color=0x{:08X} submitted={} finished={} all_lane_readback_ok={} hit_mask=0x{:04X} pass_lane0={} pass_low8={} pass_lane8={} pass_high8={} pass_lane15={} sample_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} lane_dispatch_delta={} finish_marker=0x{:08X} artifact_body=t35-explicit-g21-g22-g23-payload-over-legacy-two-send purpose=separate-missing-high-payload-from-send-descriptor-collapse next=if-wide-promote-explicit-payload else-rebuild-message-descriptor-contract\n",
+        heartbeat,
+        row_index,
+        x_base,
+        color,
+        proof.submitted as u8,
+        proof.finished as u8,
+        proof.readback_ok as u8,
+        hit_mask,
+        ((hit_mask & 0x0001) == 0x0001) as u8,
+        low_half_ok as u8,
+        high_lane0_ok as u8,
+        high_half_ok as u8,
+        ((hit_mask & 0x8000) == 0x8000) as u8,
+        proof.output_gpu,
+        proof.output_first_before,
+        proof.output_first_after,
+        proof.sentinel,
+        proof.dispatch_delta,
+        proof.finish_marker,
+    );
+    proof
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t36_unrolled_scalar16_probe(
+    heartbeat: u64,
+    row_index: u32,
+    x_base: u32,
+    color: u32,
+) -> crate::intel::GpgpuOneTileSentinelProof {
+    let proof = submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
+        MANDELBROT16_T36_MODE_IMMEDIATE_UNROLLED_SCALAR16,
+        row_index,
+        x_base,
+        1,
+        color,
+        0,
+        true,
+    );
+    let hit_mask = proof.output_hits_lo64 as u16;
+    crate::log!(
+        "intel/gpgpu: t36-mandelbrot16-unrolled-scalar16 heartbeat={} row={} x_base={} color=0x{:08X} submitted={} finished={} all_lane_readback_ok={} hit_mask=0x{:04X} pass_lane0={} pass_lane01={} pass_lane03={} pass_lane07={} pass_lane15={} sample_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} lane_dispatch_delta={} finish_marker=0x{:08X} artifact_body=t36-sixteen-scalar-hdc-stores-from-one-eu-invocation purpose=prove-simd8-send-is-scalar-store-and-replace-cpu-lane-phasing next=if-ffff-promote-to-t30-block-fill-then-add-gpu-color-math\n",
+        heartbeat,
+        row_index,
+        x_base,
+        color,
+        proof.submitted as u8,
+        proof.finished as u8,
+        proof.readback_ok as u8,
+        hit_mask,
+        ((hit_mask & 0x0001) == 0x0001) as u8,
+        ((hit_mask & 0x0003) == 0x0003) as u8,
+        ((hit_mask & 0x000F) == 0x000F) as u8,
+        ((hit_mask & 0x00FF) == 0x00FF) as u8,
+        ((hit_mask & 0xFFFF) == 0xFFFF) as u8,
+        proof.output_gpu,
+        proof.output_first_before,
+        proof.output_first_after,
+        proof.sentinel,
+        proof.dispatch_delta,
+        proof.finish_marker,
+    );
+    proof
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t37_groupid_x_unrolled_scalar16_probe(
+    heartbeat: u64,
+    row_index: u32,
+    x_base: u32,
+    color: u32,
+    row_groups: u32,
+) -> crate::intel::GpgpuOneTileSentinelProof {
+    let row_groups = row_groups.max(2).min(8);
+    let proof = submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
+        MANDELBROT16_T37_MODE_GROUPID_X_UNROLLED_SCALAR16,
+        row_index,
+        x_base,
+        row_groups,
+        color,
+        0,
+        true,
+    );
+    let hit_mask = proof.output_hits_lo64 as u16;
+    crate::log!(
+        "intel/gpgpu: t37-mandelbrot16-groupid-x-unrolled-scalar16 heartbeat={} row={} x_base={} row_groups={} color=0x{:08X} submitted={} finished={} groupid_x_readback_ok={} first_block_hit_mask=0x{:04X} first_block_all_lanes={} sample_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} lane_dispatch_delta={} expected_dispatch={} finish_marker=0x{:08X} artifact_body=t37-groupid-x-linear64-t36-unrolled-scalar16 purpose=prove-gpu-side-groupid-x-selects-adjacent-16px-blocks next=if-readback-ok-promote-t30-from-cpu-xblock-submit-loop-to-row-group-walker else-fix-r0-groupid-source-prelude does_not_prove=groupid-y-or-mandelbrot-math\n",
+        heartbeat,
+        row_index,
+        x_base,
+        row_groups,
+        color,
+        proof.submitted as u8,
+        proof.finished as u8,
+        proof.readback_ok as u8,
+        hit_mask,
+        ((hit_mask & 0xFFFF) == 0xFFFF) as u8,
+        proof.output_gpu,
+        proof.output_first_before,
+        proof.output_first_after,
+        proof.sentinel,
+        proof.dispatch_delta,
+        (trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_LANES as u64)
+            .saturating_mul(row_groups as u64),
+        proof.finish_marker,
+    );
+    proof
+}
+
 pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_fullscreen_frame(
     frame_seed: u32,
     rows_per_submit: u32,
@@ -4013,7 +4467,8 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_fullscreen_ba
     };
     let pixels_per_group =
         trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM as u32;
-    let x_groups = target.width.saturating_add(pixels_per_group - 1) / pixels_per_group;
+    let pixels_per_stamp = pixels_per_group.saturating_mul(MANDELBROT16_T38_STAMP_REPEATS);
+    let x_groups = target.width.saturating_add(pixels_per_stamp - 1) / pixels_per_stamp;
     let rows_per_submit = rows_per_submit.clamp(1, target.height.max(1));
     let total_bands = target
         .height
@@ -4079,7 +4534,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_fullscreen_ba
     let all_requested_bands_finished = requested_bands != 0 && finished == requested_bands;
     let all_requested_bands_readback_ok = requested_bands != 0 && readback_ok == requested_bands;
     crate::log!(
-        "intel/gpgpu: t30-mandelbrot16-fullscreen-bands first_row={} next_row={} submitted_bands={} finished_bands={} readback_ok_bands={} requested_bands={} total_frame_bands={} frame_seed=0x{:08X} target={}x{} pitch_bytes={} x_groups={} rows_per_submit={} groups_per_full_row={} requested_store_pixels={} full_frame_store_pixels={} lane_dispatch_delta={} finish_marker=0x{:08X} program_source={} artifact_body=t30-simd16-linear-groupid-g20-g22-vector-store runtime_contract=redraw-same-frame-on-heartbeat address_path=linear-groupid-x-times-64 primary_gpu=0x{:X} sample_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} sample_match={} validation=exact-first-row-chunk next=enable-y-cursor-after-offset-band-retire-then-replace-constant-with-coordinate-mandelbrot-color\n",
+        "intel/gpgpu: t30-mandelbrot16-fullscreen-bands first_row={} next_row={} submitted_bands={} finished_bands={} readback_ok_bands={} requested_bands={} total_frame_bands={} frame_seed=0x{:08X} target={}x{} pitch_bytes={} x_groups={} rows_per_submit={} groups_per_full_row={} requested_store_pixels={} full_frame_store_pixels={} lane_dispatch_delta={} finish_marker=0x{:08X} program_source={} artifact_body=t30-t36-linear-groupid-unrolled-scalar16-block-fill runtime_contract=redraw-same-frame-on-heartbeat address_path=linear-groupid-x-times-64 primary_gpu=0x{:X} sample_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} sample_match={} validation=exact-first-row-chunk next=raise-rows-per-heartbeat-or-replace-constant-with-coordinate-mandelbrot-color\n",
         start_row,
         y,
         submitted,
@@ -4133,6 +4588,21 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_fullscreen_ba
     }
 }
 
+fn mandelbrot16_t30_xy_gradient_color(
+    frame_seed: u32,
+    width: u32,
+    height: u32,
+    pixel_x: u32,
+    pixel_y: u32,
+) -> u32 {
+    let width_m1 = width.saturating_sub(1).max(1);
+    let height_m1 = height.saturating_sub(1).max(1);
+    let r = pixel_x.min(width_m1).saturating_mul(255) / width_m1;
+    let g = pixel_y.min(height_m1).saturating_mul(255) / height_m1;
+    let b = ((pixel_x >> 4) ^ pixel_y ^ frame_seed) & 0xFF;
+    0xFF00_0000 | (r << 16) | (g << 8) | b
+}
+
 pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_immediate_lane0_sweep_bands(
     frame_seed: u32,
     first_row: u32,
@@ -4148,7 +4618,8 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_immediate_lan
     };
     let pixels_per_group =
         trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM as u32;
-    let x_groups = target.width.saturating_add(pixels_per_group - 1) / pixels_per_group;
+    let pixels_per_stamp = pixels_per_group.saturating_mul(MANDELBROT16_T38_STAMP_REPEATS);
+    let x_groups = target.width.saturating_add(pixels_per_stamp - 1) / pixels_per_stamp;
     let rows_per_submit = rows_per_submit.clamp(1, target.height.max(1));
     let total_bands = target
         .height
@@ -4156,7 +4627,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_immediate_lan
         / rows_per_submit;
     let requested_bands = max_bands.max(1).min(total_bands.max(1));
     let requested_x_blocks = max_x_blocks.max(1).min(x_groups.max(1));
-    let requested_lane_phases = lane_phases_per_block.max(1).min(pixels_per_group.max(1));
+    let _requested_lane_phases = lane_phases_per_block.max(1).min(pixels_per_group.max(1));
     let start_row = if target.height == 0 {
         0
     } else {
@@ -4165,9 +4636,8 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_immediate_lan
     let start_x_group = if x_groups == 0 {
         0
     } else {
-        (first_x / pixels_per_group).min(x_groups.saturating_sub(1))
+        (first_x / pixels_per_stamp).min(x_groups.saturating_sub(1))
     };
-    let base_color = 0xFF00_0000 | (frame_seed & 0x00FF_FFFF);
     let mut y = start_row;
     let mut submitted = 0u32;
     let mut finished = 0u32;
@@ -4184,7 +4654,6 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_immediate_lan
 
     while attempted_bands < requested_bands {
         let rows = rows_per_submit.min(target.height.saturating_sub(y)).max(1);
-        let row_color = base_color ^ ((y & 0xFF) << 8) ^ ((rows & 0xFF) << 16);
         let mut x_count = 0u32;
         while x_count < requested_x_blocks {
             let x_group = if x_groups == 0 {
@@ -4195,25 +4664,30 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_immediate_lan
             let group_base_x = if x_count == 0 {
                 first_x
                     .min(target.width.saturating_sub(1))
-                    .saturating_sub(first_x % pixels_per_group.max(1))
+                    .saturating_sub(first_x % pixels_per_stamp.max(1))
             } else {
-                x_group.saturating_mul(pixels_per_group)
+                x_group.saturating_mul(pixels_per_stamp)
             };
-            let mut lane_phase = 0u32;
-            while lane_phase < requested_lane_phases {
-                let x_base = group_base_x.saturating_add(lane_phase);
-                if x_base >= target.width {
-                    break;
-                }
-                let pixel_color =
-                    row_color ^ ((x_group & 0xFF) << 16) ^ ((lane_phase & 0x0F) << 20);
-                let proof =
-                    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_fast_immediate_constant_rows(
-                        y,
-                        x_base,
-                        rows,
-                        pixel_color,
-                    );
+            let mut row_delta = 0u32;
+            while row_delta < rows {
+                let row_y = y.saturating_add(row_delta);
+                let x_base = group_base_x;
+                let pixel_color = mandelbrot16_t30_xy_gradient_color(
+                    frame_seed,
+                    target.width,
+                    target.height,
+                    x_base,
+                    row_y,
+                );
+                let proof = submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
+                    MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP,
+                    row_y,
+                    x_base,
+                    1,
+                    pixel_color,
+                    0,
+                    !first_seen,
+                );
                 submitted = submitted.saturating_add(proof.submitted as u32);
                 finished = finished.saturating_add(proof.finished as u32);
                 readback_ok = readback_ok.saturating_add(proof.readback_ok as u32);
@@ -4230,9 +4704,9 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_immediate_lan
                 if !proof.finished {
                     break;
                 }
-                lane_phase = lane_phase.saturating_add(1);
+                row_delta = row_delta.saturating_add(1);
             }
-            if lane_phase < requested_lane_phases {
+            if row_delta < rows {
                 break;
             }
             x_count = x_count.saturating_add(1);
@@ -4249,7 +4723,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_immediate_lan
 
     let requested_blocks = (requested_bands as u64)
         .saturating_mul(requested_x_blocks as u64)
-        .saturating_mul(requested_lane_phases as u64);
+        .saturating_mul(rows_per_submit as u64);
     let all_requested_finished = requested_blocks != 0 && finished as u64 == requested_blocks;
     let first_sample_match = first_seen && first_after == first_expected;
     let notified_rows = rows_per_submit
@@ -4257,12 +4731,12 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_immediate_lan
         .min(target.height.max(1));
     let display_notified = all_requested_finished
         && crate::intel::display::notify_primary_surface_external_write(
-            "gpgpu-primary-scanout-mandelbrot16-t30-phase-fill-row",
+            "gpgpu-primary-scanout-mandelbrot16-t30-t36-block-fill-row",
             (start_row as usize).saturating_mul(target.pitch_bytes as usize),
             (notified_rows as usize).saturating_mul(target.pitch_bytes as usize),
         );
     crate::log!(
-        "intel/gpgpu: t30-mandelbrot16-immediate-lane0-sweep first_row={} first_x={} start_x_group={} next_row={} submitted_blocks={} finished_blocks={} requested_blocks={} requested_x_blocks={} lane_phases_per_block={} sample_readback_ok={} display_notified={} total_frame_bands={} frame_seed=0x{:08X} target={}x{} pitch_bytes={} x_groups={} rows_per_submit={} requested_store_pixels={} lane_dispatch_delta={} finish_marker=0x{:08X} program_source={} artifact_body=t30-fallback-t17-immediate-lane0-phase-row-batched runtime_contract=draw-same-frame-again address_path=immediate-base-cpu-xblock-phase-row-batch primary_gpu=0x{:X} sample_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} sample_match={} validation=first-batched-pixel-exact-rest-fast-row-batched next=fix-simd16-all-lanes-payload-or-groupid-linear-address-prelude\n",
+        "intel/gpgpu: t30-mandelbrot16-immediate-t38-wide-stamp-sweep first_row={} first_x={} start_x_group={} next_row={} submitted_blocks={} finished_blocks={} requested_blocks={} requested_x_blocks={} stamp_repeats={} pixels_per_stamp={} sample_readback_ok={} display_notified={} total_frame_bands={} frame_seed=0x{:08X} target={}x{} pitch_bytes={} x_groups={} rows_per_submit={} requested_store_pixels={} lane_dispatch_delta={} finish_marker=0x{:08X} program_source={} artifact_body=t30-t38-immediate-wide-stamp-unrolled-scalar16-block-fill color_mode=xy-gradient-runtime-patched-block-constant runtime_contract=draw-same-frame-again address_path=immediate-base-cpu-wide-stamp-row-sweep primary_gpu=0x{:X} sample_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} sample_match={} validation=first-16px-chunk-exact-rest-command-retire next=raise-rows-per-heartbeat-or-prove-gpu-side-groupid-xy\n",
         start_row,
         first_x,
         start_x_group,
@@ -4271,7 +4745,8 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_immediate_lan
         finished,
         requested_blocks,
         requested_x_blocks,
-        requested_lane_phases,
+        MANDELBROT16_T38_STAMP_REPEATS,
+        pixels_per_stamp,
         first_sample_match as u8,
         display_notified as u8,
         total_bands,
@@ -4300,11 +4775,11 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_immediate_lan
         finished: all_requested_finished,
         readback_ok: first_sample_match,
         reason: if first_sample_match {
-            "t30-immediate-lane0-sweep-first-pixel-visible"
+            "t30-immediate-t36-block-sweep-first-block-visible"
         } else if all_requested_finished {
-            "t30-immediate-lane0-sweep-finished-no-first-match"
+            "t30-immediate-t36-block-sweep-finished-no-first-match"
         } else {
-            "t30-immediate-lane0-sweep-stopped"
+            "t30-immediate-t36-block-sweep-stopped"
         },
         program_name: program.name,
         output_gpu: first_gpu,
@@ -4676,6 +5151,7 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
         || mode == MANDELBROT16_T15_MODE_LINEAR_GRADIENT_FULL_BAND
         || mode == MANDELBROT16_T16_MODE_LINEAR_CONSTANT_STORE
         || mode == MANDELBROT16_T30_MODE_FULLSCREEN_LINEAR_CONSTANT_STORE
+        || mode == MANDELBROT16_T37_MODE_GROUPID_X_UNROLLED_SCALAR16
     {
         Mandelbrot16AddressMode::GroupIdLinear64
     } else if row_groups > 1 {
@@ -4708,21 +5184,31 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
     } else {
         row_index % target.height
     } as usize;
+    let store_pixels_per_invocation = if mode == MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP {
+        PIXELS.saturating_mul(MANDELBROT16_T38_STAMP_REPEATS as usize)
+    } else {
+        PIXELS
+    };
+    let store_bytes_per_invocation =
+        store_pixels_per_invocation.saturating_mul(core::mem::size_of::<u32>());
     let x = if address_mode == Mandelbrot16AddressMode::GroupIdLinear64 {
         x_base as usize
     } else {
-        core::cmp::min(x_base as usize, (target.width as usize).saturating_sub(PIXELS))
+        core::cmp::min(
+            x_base as usize,
+            (target.width as usize).saturating_sub(store_pixels_per_invocation),
+        )
     };
     let row_offset = y
         .saturating_mul(target.pitch_bytes as usize)
         .saturating_add(x.saturating_mul(core::mem::size_of::<u32>()));
     let submit_span_bytes = if address_mode == Mandelbrot16AddressMode::GroupIdLinear64 {
-        (row_groups as usize).saturating_mul(BYTES)
+        (row_groups as usize).saturating_mul(store_bytes_per_invocation)
     } else {
         (row_groups as usize)
             .saturating_sub(1)
             .saturating_mul(target.pitch_bytes as usize)
-            .saturating_add(BYTES)
+            .saturating_add(store_bytes_per_invocation)
     };
     if row_offset.saturating_add(submit_span_bytes) > target.byte_len {
         return gpgpu_one_tile_sentinel_failure(
@@ -4739,10 +5225,21 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
         return gpgpu_one_tile_sentinel_failure("mandelbrot16-gpu-high32", program, row_gpu);
     }
     let row_virt = unsafe { target.virt.add(row_offset) };
-    let expected_first = mandelbrot16_simd16_probe_expected_first(mode, lhs, rhs);
+    let expected_first = if mode == MANDELBROT16_T34_MODE_IMMEDIATE_ADDRESS_DATA_WITNESS {
+        lhs | row_offset as u32
+    } else {
+        mandelbrot16_simd16_probe_expected_first(mode, lhs, rhs)
+    };
     let validate_all_lanes = mode == MANDELBROT16_T16_MODE_LINEAR_CONSTANT_STORE
         || mode == MANDELBROT16_T17_MODE_IMMEDIATE_CONSTANT_STORE
-        || mode == MANDELBROT16_T30_MODE_FULLSCREEN_LINEAR_CONSTANT_STORE;
+        || mode == MANDELBROT16_T30_MODE_FULLSCREEN_LINEAR_CONSTANT_STORE
+        || mode == MANDELBROT16_T32_MODE_IMMEDIATE_CONSTANT_SINGLE_SEND
+        || mode == MANDELBROT16_T33_MODE_IMMEDIATE_CONSTANT_BTI1_UNTYPED
+        || mode == MANDELBROT16_T34_MODE_IMMEDIATE_ADDRESS_DATA_WITNESS
+        || mode == MANDELBROT16_T35_MODE_IMMEDIATE_EXPLICIT_WIDE_PAYLOAD
+        || mode == MANDELBROT16_T36_MODE_IMMEDIATE_UNROLLED_SCALAR16
+        || mode == MANDELBROT16_T37_MODE_GROUPID_X_UNROLLED_SCALAR16
+        || mode == MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP;
     let expected_hit_mask = if validate_all_lanes {
         mandelbrot16_active_lane_mask() as u64
     } else {
@@ -4760,17 +5257,24 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
     };
     let poison = expected_first ^ 0x00A5_A5A5;
     let row_group_stride_bytes = if address_mode == Mandelbrot16AddressMode::GroupIdLinear64 {
-        BYTES
+        store_bytes_per_invocation
     } else {
         target.pitch_bytes as usize
     };
-    let mut lane = 0usize;
+    let is_t37_groupid_x = mode == MANDELBROT16_T37_MODE_GROUPID_X_UNROLLED_SCALAR16;
+    let expected_row_group_mask = if is_t37_groupid_x && row_groups < 64 {
+        (1u64 << row_groups) - 1
+    } else if is_t37_groupid_x {
+        u64::MAX
+    } else {
+        0
+    };
     if validate_readback {
         let mut group = 0usize;
         while group < row_groups as usize {
             let group_row_virt =
                 unsafe { row_virt.add(group.saturating_mul(row_group_stride_bytes)) };
-            lane = 0;
+            let mut lane = 0usize;
             while lane < PIXELS {
                 unsafe {
                     core::ptr::write_volatile(
@@ -4786,7 +5290,7 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
     }
     let mut before_words = [0u32; PIXELS];
     if validate_readback {
-        lane = 0;
+        let mut lane = 0usize;
         while lane < PIXELS {
             before_words[lane] = unsafe {
                 core::ptr::read_volatile(
@@ -4885,7 +5389,7 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
         changed = 0;
         row_group_hit_mask = 0;
         row_group_changed_mask = 0;
-        lane = 0;
+        let mut lane = 0usize;
         while lane < PIXELS {
             let after = unsafe {
                 core::ptr::read_volatile(
@@ -4896,7 +5400,12 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
             if lane == 0 {
                 output_first_after = after;
             }
-            if (validate_all_lanes || lane == 0) && after == expected_first {
+            let expected_lane = if mode == MANDELBROT16_T34_MODE_IMMEDIATE_ADDRESS_DATA_WITNESS {
+                lhs | (row_offset as u32).wrapping_add((lane as u32).wrapping_mul(4))
+            } else {
+                expected_first
+            };
+            if (validate_all_lanes || lane == 0) && after == expected_lane {
                 hits |= 1u64 << lane;
             }
             if after != before_words[lane] {
@@ -4922,7 +5431,10 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
                 group += 1;
             }
         }
-        if hits & expected_hit_mask == expected_hit_mask {
+        if hits & expected_hit_mask == expected_hit_mask
+            && (expected_row_group_mask == 0
+                || row_group_hit_mask & expected_row_group_mask == expected_row_group_mask)
+        {
             break;
         }
         readback_poll += 1;
@@ -4937,8 +5449,10 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
     let command_ok = finished
         && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE
         && dispatch_delta >= expected_hw_lane_dispatch;
+    let expected_row_groups_hit = expected_row_group_mask == 0
+        || row_group_hit_mask & expected_row_group_mask == expected_row_group_mask;
     let readback_ok = if validate_readback {
-        command_ok && expected_hit && any_changed
+        command_ok && expected_hit && any_changed && expected_row_groups_hit
     } else {
         command_ok
     };
@@ -4957,6 +5471,14 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
     let is_t17_immediate_constant = mode == MANDELBROT16_T17_MODE_IMMEDIATE_CONSTANT_STORE;
     let is_t30_fullscreen_linear_constant =
         mode == MANDELBROT16_T30_MODE_FULLSCREEN_LINEAR_CONSTANT_STORE;
+    let is_t32_single_send = mode == MANDELBROT16_T32_MODE_IMMEDIATE_CONSTANT_SINGLE_SEND;
+    let is_t33_bti1_untyped = mode == MANDELBROT16_T33_MODE_IMMEDIATE_CONSTANT_BTI1_UNTYPED;
+    let is_t34_address_data = mode == MANDELBROT16_T34_MODE_IMMEDIATE_ADDRESS_DATA_WITNESS;
+    let is_t35_explicit_wide_payload =
+        mode == MANDELBROT16_T35_MODE_IMMEDIATE_EXPLICIT_WIDE_PAYLOAD;
+    let is_t36_unrolled_scalar16 = mode == MANDELBROT16_T36_MODE_IMMEDIATE_UNROLLED_SCALAR16;
+    let is_t37_groupid_x_unrolled_scalar16 = is_t37_groupid_x;
+    let is_t38_wide_stamp = mode == MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP;
     let is_t18_immediate_gradient = mode == MANDELBROT16_T18_MODE_IMMEDIATE_GRADIENT_STORE;
     let is_t19_immediate_raw_radius = mode == MANDELBROT16_T19_MODE_IMMEDIATE_RAW_RADIUS_STORE;
     let is_fixed10_visible = mode == 44 || is_t11_linear_band || is_t15_linear_gradient;
@@ -4984,6 +5506,20 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
             }
         } else if is_t30_fullscreen_linear_constant {
             "mandelbrot16-t30-fullscreen-linear-constant-quiet-submit-finished-no-readback"
+        } else if is_t32_single_send {
+            "mandelbrot16-t32-immediate-single-send-constant-quiet-submit-finished-no-readback"
+        } else if is_t33_bti1_untyped {
+            "mandelbrot16-t33-immediate-bti1-untyped-constant-quiet-submit-finished-no-readback"
+        } else if is_t34_address_data {
+            "mandelbrot16-t34-immediate-address-data-witness-quiet-submit-finished-no-readback"
+        } else if is_t35_explicit_wide_payload {
+            "mandelbrot16-t35-immediate-explicit-wide-payload-quiet-submit-finished-no-readback"
+        } else if is_t36_unrolled_scalar16 {
+            "mandelbrot16-t36-immediate-unrolled-scalar16-quiet-submit-finished-no-readback"
+        } else if is_t37_groupid_x_unrolled_scalar16 {
+            "mandelbrot16-t37-groupid-x-unrolled-scalar16-quiet-submit-finished-no-readback"
+        } else if is_t38_wide_stamp {
+            "mandelbrot16-t38-immediate-wide-stamp-quiet-submit-finished-no-readback"
         } else {
             "mandelbrot16-simd16-q12-onevis-quiet-submit-finished-no-readback"
         }
@@ -5015,6 +5551,20 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
         "mandelbrot16-t17-immediate-base-constant-color-store-visible"
     } else if readback_ok && is_t30_fullscreen_linear_constant {
         "mandelbrot16-t30-fullscreen-linear-constant-color-store-visible"
+    } else if readback_ok && is_t32_single_send {
+        "mandelbrot16-t32-immediate-single-send-constant-color-store-visible"
+    } else if readback_ok && is_t33_bti1_untyped {
+        "mandelbrot16-t33-immediate-bti1-untyped-constant-color-store-visible"
+    } else if readback_ok && is_t34_address_data {
+        "mandelbrot16-t34-immediate-address-data-witness-color-store-visible"
+    } else if readback_ok && is_t35_explicit_wide_payload {
+        "mandelbrot16-t35-immediate-explicit-wide-payload-color-store-visible"
+    } else if readback_ok && is_t36_unrolled_scalar16 {
+        "mandelbrot16-t36-immediate-unrolled-scalar16-color-store-visible"
+    } else if readback_ok && is_t37_groupid_x_unrolled_scalar16 {
+        "mandelbrot16-t37-groupid-x-unrolled-scalar16-color-store-visible"
+    } else if readback_ok && is_t38_wide_stamp {
+        "mandelbrot16-t38-immediate-wide-stamp-color-store-visible"
     } else if readback_ok {
         "mandelbrot16-simd16-alu-store-witness-visible"
     } else if !finished {
@@ -5045,6 +5595,20 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
             }
         } else if is_t30_fullscreen_linear_constant {
             "t30-simd16-fullscreen-linear-groupid-constant-submit-eot-no-readback"
+        } else if is_t32_single_send {
+            "t32-simd16-immediate-single-send-constant-submit-eot-no-readback"
+        } else if is_t33_bti1_untyped {
+            "t33-simd16-immediate-bti1-untyped-constant-submit-eot-no-readback"
+        } else if is_t34_address_data {
+            "t34-simd16-immediate-address-data-witness-submit-eot-no-readback"
+        } else if is_t35_explicit_wide_payload {
+            "t35-simd16-immediate-explicit-wide-payload-submit-eot-no-readback"
+        } else if is_t36_unrolled_scalar16 {
+            "t36-simd16-immediate-unrolled-scalar16-submit-eot-no-readback"
+        } else if is_t37_groupid_x_unrolled_scalar16 {
+            "t37-simd16-groupid-x-unrolled-scalar16-submit-eot-no-readback"
+        } else if is_t38_wide_stamp {
+            "t38-simd16-immediate-wide-stamp-submit-eot-no-readback"
         } else {
             "simd16-q12-onevis-submit-eot-no-readback-visual-exercise"
         }
@@ -5074,6 +5638,20 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
         "t17-simd16-immediate-base-constant-store-eot-first-lane-validation-once"
     } else if readback_ok && is_t30_fullscreen_linear_constant {
         "t30-simd16-fullscreen-linear-groupid-constant-store-eot-first-lane-validation-once"
+    } else if readback_ok && is_t32_single_send {
+        "t32-simd16-immediate-single-send-constant-store-eot-all-lane-validation-once"
+    } else if readback_ok && is_t33_bti1_untyped {
+        "t33-simd16-immediate-bti1-untyped-constant-store-eot-all-lane-validation-once"
+    } else if readback_ok && is_t34_address_data {
+        "t34-simd16-immediate-address-data-witness-store-eot-all-lane-validation-once"
+    } else if readback_ok && is_t35_explicit_wide_payload {
+        "t35-simd16-immediate-explicit-wide-payload-store-eot-all-lane-validation-once"
+    } else if readback_ok && is_t36_unrolled_scalar16 {
+        "t36-simd16-immediate-unrolled-scalar16-store-eot-all-lane-validation-once"
+    } else if readback_ok && is_t37_groupid_x_unrolled_scalar16 {
+        "t37-simd16-groupid-x-unrolled-scalar16-store-eot-all-lane-and-block-validation-once"
+    } else if readback_ok && is_t38_wide_stamp {
+        "t38-simd16-immediate-wide-stamp-store-eot-first-chunk-validation-once"
     } else if readback_ok {
         "simd16-q12-or-alu-store-eot-first-lane-validation-once"
     } else if dispatch_delta >= expected_hw_lane_dispatch {
@@ -5091,6 +5669,20 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
         "t17-simd16-immediate-base-constant-visible-color-store"
     } else if is_t30_fullscreen_linear_constant {
         "t30-simd16-fullscreen-linear-groupid-constant-visible-color-store"
+    } else if is_t32_single_send {
+        "t32-simd16-immediate-single-send-constant-visible-color-store"
+    } else if is_t33_bti1_untyped {
+        "t33-simd16-immediate-bti1-untyped-constant-visible-color-store"
+    } else if is_t34_address_data {
+        "t34-simd16-immediate-address-data-witness-visible-color-store"
+    } else if is_t35_explicit_wide_payload {
+        "t35-simd16-immediate-explicit-wide-payload-visible-color-store"
+    } else if is_t36_unrolled_scalar16 {
+        "t36-simd16-immediate-unrolled-scalar16-visible-color-store"
+    } else if is_t37_groupid_x_unrolled_scalar16 {
+        "t37-simd16-groupid-x-unrolled-scalar16-visible-color-store"
+    } else if is_t38_wide_stamp {
+        "t38-simd16-immediate-wide-stamp-visible-color-store"
     } else if is_fixed10_visible {
         if is_t19_immediate_raw_radius {
             "t19-simd16-immediate-base-fixed1-raw-radius-visible-color-store"
@@ -5118,6 +5710,20 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
         "immediate-base-address-constant-visible-store"
     } else if is_t30_fullscreen_linear_constant {
         "fullscreen-linear-groupid-address-constant-visible-store"
+    } else if is_t32_single_send {
+        "immediate-base-address-constant-single-send-visible-store"
+    } else if is_t33_bti1_untyped {
+        "immediate-base-address-constant-bti1-untyped-visible-store"
+    } else if is_t34_address_data {
+        "immediate-base-address-derived-data-visible-store"
+    } else if is_t35_explicit_wide_payload {
+        "immediate-base-explicit-g21-g22-g23-payload-visible-store"
+    } else if is_t36_unrolled_scalar16 {
+        "immediate-base-unrolled-scalar16-visible-store"
+    } else if is_t37_groupid_x_unrolled_scalar16 {
+        "groupid-x-linear64-unrolled-scalar16-visible-store"
+    } else if is_t38_wide_stamp {
+        "immediate-base-wide-stamp-unrolled-scalar16-visible-store"
     } else if is_fixed10_visible {
         if is_t19_immediate_raw_radius {
             "immediate-base-address-q12-fixed1-raw-radius-visible-store"
@@ -5147,8 +5753,23 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
     } else if is_t16_linear_constant
         || is_t17_immediate_constant
         || is_t30_fullscreen_linear_constant
+        || is_t32_single_send
+        || is_t33_bti1_untyped
+        || is_t34_address_data
+        || is_t35_explicit_wide_payload
+        || is_t36_unrolled_scalar16
+        || is_t37_groupid_x_unrolled_scalar16
+        || is_t38_wide_stamp
     {
-        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_BODY_DWORD + 8
+        if is_t36_unrolled_scalar16 {
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_BODY_DWORD + 8
+        } else if is_t35_explicit_wide_payload {
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_BODY_DWORD + 20
+        } else if is_t32_single_send {
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_BODY_DWORD + 8
+        } else {
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_BODY_DWORD + 8
+        }
     } else if is_one_iter {
         trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_BODY_DWORD + 36
     } else {

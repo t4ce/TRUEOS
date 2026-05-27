@@ -57,16 +57,24 @@ pub(crate) const MANDELBROT16_STAGE_READY_ROW_GROUP_SCALE: [u32; 1] = [1];
 pub(crate) const MANDELBROT16_STAGE_READY_X_BLOCK_SCALE: [u32; 1] = [160];
 pub(crate) const MANDELBROT16_T11_LINEAR_MAX_GROUPS_PER_SUBMIT: u32 = 32;
 pub(crate) const MANDELBROT16_T30_FULLSCREEN_ENABLED: bool = true;
-pub(crate) const MANDELBROT16_T30_ROWS_PER_SUBMIT: u32 = 32;
+pub(crate) const MANDELBROT16_T30_ROWS_PER_SUBMIT: u32 = 20;
 pub(crate) const MANDELBROT16_T30_BANDS_PER_HEARTBEAT: u32 = 1;
-pub(crate) const MANDELBROT16_T30_IMMEDIATE_X_BLOCKS_PER_HEARTBEAT: u32 = 160;
+pub(crate) const MANDELBROT16_T30_IMMEDIATE_X_BLOCKS_PER_HEARTBEAT: u32 = 32;
 pub(crate) const MANDELBROT16_T30_IMMEDIATE_LANE0_SWEEP_ENABLED: bool = true;
-pub(crate) const MANDELBROT16_T30_IMMEDIATE_LANE_PHASES_PER_BLOCK: u32 = 16;
+pub(crate) const MANDELBROT16_T30_IMMEDIATE_LANE_PHASES_PER_BLOCK: u32 = 1;
 pub(crate) const MANDELBROT16_T30_ADVANCE_ROW_CURSOR: bool = true;
 pub(crate) const MANDELBROT16_T30_GROUPID_DIAGNOSTIC_ENABLED: bool = false;
 pub(crate) const MANDELBROT16_T30_BASELINE_HALFSCREEN_ENABLED: bool = false;
 pub(crate) const MANDELBROT16_T30_BASELINE_HALFSCREEN_ROWS_PER_HEARTBEAT: u32 = 16;
 pub(crate) const MANDELBROT16_T30_BASELINE_HALFSCREEN_COLOR: u32 = 0xFFFF_0000;
+pub(crate) const MANDELBROT16_T31_STORE_LADDER_ENABLED: bool = false;
+pub(crate) const MANDELBROT16_T31_STORE_LADDER_PERIOD_HEARTBEATS: u64 = 64;
+pub(crate) const MANDELBROT16_T32_SINGLE_SEND_PROBE_ENABLED: bool = false;
+pub(crate) const MANDELBROT16_T33_BTI1_UNTYPED_PROBE_ENABLED: bool = false;
+pub(crate) const MANDELBROT16_T34_ADDRESS_DATA_WITNESS_ENABLED: bool = false;
+pub(crate) const MANDELBROT16_T35_EXPLICIT_WIDE_PAYLOAD_ENABLED: bool = false;
+pub(crate) const MANDELBROT16_T36_UNROLLED_SCALAR16_ENABLED: bool = false;
+pub(crate) const MANDELBROT16_T37_GROUPID_X_WITNESS_ENABLED: bool = false;
 pub(crate) const MANDELBROT_BURST_LANE_POOL_START: u32 = 3;
 pub(crate) const MANDELBROT_BURST_LANE_POOL_SIZE: u32 = 4;
 pub(crate) const MANDELBROT_GPGPU_BURSTS_PER_FRAME_BUDGET: u64 = 2;
@@ -897,14 +905,7 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                 } else {
                     draw_row
                 };
-                let fallback_pixels_per_group =
-                    trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM
-                        as u32;
-                let fallback_x = if scanout_w > fallback_pixels_per_group {
-                    scanout_w.saturating_sub(fallback_pixels_per_group) / 2
-                } else {
-                    0
-                };
+                let fallback_x = 0;
                 let fallback_proof = if MANDELBROT16_T30_IMMEDIATE_LANE0_SWEEP_ENABLED {
                     crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_immediate_lane0_sweep_bands(
                         frame_seed,
@@ -916,24 +917,12 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                         MANDELBROT16_T30_IMMEDIATE_LANE_PHASES_PER_BLOCK,
                     )
                 } else {
-                    crate::intel::GpgpuOneTileSentinelProof {
-                        submitted: false,
-                        finished: false,
-                        readback_ok: false,
-                        reason: "t30-immediate-lane0-paused-for-halfscreen-control",
-                        program_name: "t30-immediate-lane0-paused",
-                        output_gpu: 0,
-                        sentinel: 0,
-                        output_first_before: 0,
-                        output_first_after: 0,
-                        output_nonzero_before: 0,
-                        output_nonzero_after: 0,
-                        output_hits_lo64: 0,
-                        dispatch_delta: 0,
-                        finish_marker: 0,
-                        expected_finish_marker: 0,
-                        batch_bytes: 0,
-                    }
+                    crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_fullscreen_bands(
+                        frame_seed,
+                        draw_row,
+                        MANDELBROT16_T30_ROWS_PER_SUBMIT,
+                        MANDELBROT16_T30_BANDS_PER_HEARTBEAT,
+                    )
                 };
                 let (
                     groupid_submitted,
@@ -1041,6 +1030,157 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                 } else {
                     (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
                 };
+                let t31_probe_enabled = MANDELBROT16_T31_STORE_LADDER_ENABLED
+                    && (MANDELBROT16_T31_STORE_LADDER_PERIOD_HEARTBEATS == 0
+                        || frame % MANDELBROT16_T31_STORE_LADDER_PERIOD_HEARTBEATS == 1);
+                let t31_probe = if t31_probe_enabled {
+                    let probe_row = fallback_row;
+                    let probe_color =
+                        0xFF31_0000 | (((frame as u32) & 0xFF) << 8) | (draw_row & 0xFF);
+                    crate::log!(
+                        "mandelbrot-gpu-sidequest: t31-store-ladder-pre-submit heartbeat={} enabled=1 row={} x={} color=0x{:08X} purpose=last-breadcrumb-before-periodic-safe-store-scoreboard\n",
+                        frame,
+                        probe_row,
+                        fallback_x,
+                        probe_color,
+                    );
+                    Some(crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t31_store_ladder_probe(
+                        frame,
+                        probe_row,
+                        fallback_x,
+                        probe_color,
+                    ))
+                } else {
+                    None
+                };
+                let t32_probe = if t31_probe_enabled && MANDELBROT16_T32_SINGLE_SEND_PROBE_ENABLED {
+                    let probe_row = fallback_row
+                        .saturating_add(1)
+                        .min(scanout_h.saturating_sub(1));
+                    let probe_color =
+                        0xFF32_0000 | (((frame as u32) & 0xFF) << 8) | (draw_row & 0xFF);
+                    crate::log!(
+                        "mandelbrot-gpu-sidequest: t32-single-send-pre-submit heartbeat={} enabled=1 row={} x={} color=0x{:08X} purpose=last-breadcrumb-before-risky-original-send16-descriptor\n",
+                        frame,
+                        probe_row,
+                        fallback_x,
+                        probe_color,
+                    );
+                    Some(crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t32_single_send_probe(
+                        frame,
+                        probe_row,
+                        fallback_x,
+                        probe_color,
+                    ))
+                } else {
+                    None
+                };
+                let t33_probe = if t31_probe_enabled && MANDELBROT16_T33_BTI1_UNTYPED_PROBE_ENABLED
+                {
+                    let probe_row = fallback_row
+                        .saturating_add(2)
+                        .min(scanout_h.saturating_sub(1));
+                    let probe_color =
+                        0xFF33_0000 | (((frame as u32) & 0xFF) << 8) | (draw_row & 0xFF);
+                    crate::log!(
+                        "mandelbrot-gpu-sidequest: t33-bti1-untyped-pre-submit heartbeat={} enabled=1 row={} x={} color=0x{:08X} purpose=last-breadcrumb-before-bti1-untyped-two-send-store-scoreboard\n",
+                        frame,
+                        probe_row,
+                        fallback_x,
+                        probe_color,
+                    );
+                    Some(crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t33_bti1_untyped_probe(
+                        frame,
+                        probe_row,
+                        fallback_x,
+                        probe_color,
+                    ))
+                } else {
+                    None
+                };
+                let t34_probe = if t31_probe_enabled
+                    && MANDELBROT16_T34_ADDRESS_DATA_WITNESS_ENABLED
+                {
+                    let probe_row = fallback_row
+                        .saturating_add(3)
+                        .min(scanout_h.saturating_sub(1));
+                    let color_mask = 0xFF34_0000 | (((frame as u32) & 0xFF) << 8);
+                    crate::log!(
+                        "mandelbrot-gpu-sidequest: t34-address-data-witness-pre-submit heartbeat={} enabled=1 row={} x={} color_mask=0x{:08X} purpose=last-breadcrumb-before-address-derived-data-scoreboard\n",
+                        frame,
+                        probe_row,
+                        fallback_x,
+                        color_mask,
+                    );
+                    Some(crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t34_address_data_witness_probe(
+                            frame,
+                            probe_row,
+                            fallback_x,
+                            color_mask,
+                        ))
+                } else {
+                    None
+                };
+                let t35_probe = if t31_probe_enabled
+                    && MANDELBROT16_T35_EXPLICIT_WIDE_PAYLOAD_ENABLED
+                {
+                    let probe_row = fallback_row
+                        .saturating_add(4)
+                        .min(scanout_h.saturating_sub(1));
+                    let probe_color =
+                        0xFF35_0000 | (((frame as u32) & 0xFF) << 8) | (draw_row & 0xFF);
+                    crate::log!(
+                        "mandelbrot-gpu-sidequest: t35-explicit-wide-payload-pre-submit heartbeat={} enabled=1 row={} x={} color=0x{:08X} purpose=last-breadcrumb-before-explicit-g21-g22-g23-payload-scoreboard\n",
+                        frame,
+                        probe_row,
+                        fallback_x,
+                        probe_color,
+                    );
+                    Some(crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t35_explicit_wide_payload_probe(
+                            frame,
+                            probe_row,
+                            fallback_x,
+                            probe_color,
+                        ))
+                } else {
+                    None
+                };
+                let t36_probe = if t31_probe_enabled && MANDELBROT16_T36_UNROLLED_SCALAR16_ENABLED {
+                    let probe_row = fallback_row
+                        .saturating_add(5)
+                        .min(scanout_h.saturating_sub(1));
+                    let probe_color =
+                        0xFF36_0000 | (((frame as u32) & 0xFF) << 8) | (draw_row & 0xFF);
+                    crate::log!(
+                        "mandelbrot-gpu-sidequest: t36-unrolled-scalar16-pre-submit heartbeat={} enabled=1 row={} x={} color=0x{:08X} purpose=last-breadcrumb-before-sixteen-scalar-hdc-store-scoreboard\n",
+                        frame,
+                        probe_row,
+                        fallback_x,
+                        probe_color,
+                    );
+                    Some(crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t36_unrolled_scalar16_probe(
+                            frame,
+                            probe_row,
+                            fallback_x,
+                            probe_color,
+                        ))
+                } else {
+                    None
+                };
+                let t37_probe = if MANDELBROT16_T37_GROUPID_X_WITNESS_ENABLED {
+                    let probe_row = fallback_row;
+                    let probe_color =
+                        0xFF37_0000 | (((frame as u32) & 0xFF) << 8) | (draw_row & 0xFF);
+                    Some(crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t37_groupid_x_unrolled_scalar16_probe(
+                        frame,
+                        probe_row,
+                        fallback_x,
+                        probe_color,
+                        4,
+                    ))
+                } else {
+                    None
+                };
                 let active_proof = fallback_proof;
                 let expected_first = active_proof.sentinel;
                 if MANDELBROT16_T30_ADVANCE_ROW_CURSOR && active_proof.finished {
@@ -1052,7 +1192,7 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                     }
                 }
                 crate::log!(
-                    "mandelbrot-gpu-sidequest: stage-ready-t30-fullscreen-redraw heartbeat={} reason=simd16-t30-new-sheet-fullscreen-immediate-first artifact_stage=simd16-t30-immediate-lane0-phase-fill-primary-plane runtime_control=draw-same-frame-again redraw_same_frame={} control_version={} frame_seed=0x{:08X} target={}x{} row_cursor_enabled={} draw_row={} fallback_row={} fallback_x={} next_row_cursor={} rows_per_submit={} bands_per_heartbeat={} immediate_x_blocks_per_heartbeat={} immediate_lane_phases_per_block={} immediate_lane0_enabled={} submitted={} finished={} readback_ok={} sample_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} sample_match={} lane_dispatch_delta={} finish_marker=0x{:08X} groupid_diagnostic_enabled={} groupid_submitted={} groupid_finished={} groupid_readback_ok={} groupid_sample_match={} fallback_immediate_lane0=1 fallback_finished={} fallback_sample_match={} next=make-phase-fill-visible-then-fix-true-simd16-all-lanes-payload proves=t30-runtime-loop-with-groupid-poison-avoided-and-phase-fill-visual-contract does_not_prove=full-simd16-lane-fill-or-groupid-linear-store-or-smooth-coloring\n",
+                    "mandelbrot-gpu-sidequest: stage-ready-t30-fullscreen-redraw heartbeat={} reason=simd16-t30-promoted-t38-wide-stamp-fill artifact_stage=simd16-t30-t38-wide-stamp-primary-plane color_mode=xy-gradient-runtime-patched-block-constant runtime_control=draw-same-frame-again redraw_same_frame={} control_version={} frame_seed=0x{:08X} target={}x{} row_cursor_enabled={} draw_row={} fallback_row={} fallback_x={} next_row_cursor={} rows_per_submit={} bands_per_heartbeat={} immediate_x_blocks_per_heartbeat={} immediate_lane_phases_per_block={} immediate_lane0_enabled={} submitted={} finished={} readback_ok={} sample_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} sample_match={} lane_dispatch_delta={} finish_marker=0x{:08X} groupid_diagnostic_enabled={} groupid_submitted={} groupid_finished={} groupid_readback_ok={} groupid_sample_match={} active_t38_wide_stamp_fill={} active_finished={} active_sample_match={} next=raise-rows-per-heartbeat-or-prove-gpu-side-groupid-xy proves=t30-runtime-loop-uses-t38-wide-stamp-contract does_not_prove=smooth-mandelbrot-coloring-or-gpu-side-coordinate-generation\n",
                     frame,
                     redraw_same_frame as u8,
                     control.version,
@@ -1084,6 +1224,7 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                     groupid_finished,
                     groupid_readback_ok,
                     groupid_sample_match,
+                    1u8,
                     fallback_proof.finished as u8,
                     (fallback_proof.output_first_after == expected_first) as u8,
                 );
@@ -1109,6 +1250,177 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                         (baseline_sample_after == baseline_sample_expected) as u8,
                         baseline_dispatch_delta,
                         baseline_finish_marker,
+                    );
+                }
+                if let Some(t31_probe) = t31_probe {
+                    crate::log!(
+                        "mandelbrot-gpu-sidequest: t31-store-ladder heartbeat={} enabled=1 row={} x={} submitted={} finished={} all_lane_readback_ok={} sample_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} hit_mask=0x{:04X} pass_lane0={} pass_lane01={} pass_lane03={} pass_lane07={} pass_lane15={} lane_dispatch_delta={} finish_marker=0x{:08X} purpose=periodic-simd16-store-collapse-scoreboard next=if-only-lane0-then-swap-send-descriptor-and-payload-layout does_not_prove=mandelbrot-math-or-fullscreen-performance\n",
+                        frame,
+                        fallback_row,
+                        fallback_x,
+                        t31_probe.submitted as u8,
+                        t31_probe.finished as u8,
+                        t31_probe.readback_ok as u8,
+                        t31_probe.output_gpu,
+                        t31_probe.output_first_before,
+                        t31_probe.output_first_after,
+                        t31_probe.sentinel,
+                        t31_probe.output_hits_lo64 as u16,
+                        ((t31_probe.output_hits_lo64 & 0x0001) == 0x0001) as u8,
+                        ((t31_probe.output_hits_lo64 & 0x0003) == 0x0003) as u8,
+                        ((t31_probe.output_hits_lo64 & 0x000F) == 0x000F) as u8,
+                        ((t31_probe.output_hits_lo64 & 0x00FF) == 0x00FF) as u8,
+                        ((t31_probe.output_hits_lo64 & 0xFFFF) == 0xFFFF) as u8,
+                        t31_probe.dispatch_delta,
+                        t31_probe.finish_marker,
+                    );
+                }
+                if let Some(t32_probe) = t32_probe {
+                    crate::log!(
+                        "mandelbrot-gpu-sidequest: t32-single-send heartbeat={} enabled=1 row={} x={} submitted={} finished={} all_lane_readback_ok={} sample_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} hit_mask=0x{:04X} pass_lane0={} pass_lane01={} pass_lane03={} pass_lane07={} pass_lane15={} lane_dispatch_delta={} finish_marker=0x{:08X} purpose=compare-original-send16-descriptor-with-t31-two-send-path next=if-wide-promote-single-send-constant-body-to-t30 else-explicitly-materialize-g21-g23 does_not_prove=mandelbrot-math-or-groupid-linear-address\n",
+                        frame,
+                        fallback_row
+                            .saturating_add(1)
+                            .min(scanout_h.saturating_sub(1)),
+                        fallback_x,
+                        t32_probe.submitted as u8,
+                        t32_probe.finished as u8,
+                        t32_probe.readback_ok as u8,
+                        t32_probe.output_gpu,
+                        t32_probe.output_first_before,
+                        t32_probe.output_first_after,
+                        t32_probe.sentinel,
+                        t32_probe.output_hits_lo64 as u16,
+                        ((t32_probe.output_hits_lo64 & 0x0001) == 0x0001) as u8,
+                        ((t32_probe.output_hits_lo64 & 0x0003) == 0x0003) as u8,
+                        ((t32_probe.output_hits_lo64 & 0x000F) == 0x000F) as u8,
+                        ((t32_probe.output_hits_lo64 & 0x00FF) == 0x00FF) as u8,
+                        ((t32_probe.output_hits_lo64 & 0xFFFF) == 0xFFFF) as u8,
+                        t32_probe.dispatch_delta,
+                        t32_probe.finish_marker,
+                    );
+                }
+                if let Some(t33_probe) = t33_probe {
+                    crate::log!(
+                        "mandelbrot-gpu-sidequest: t33-bti1-untyped heartbeat={} enabled=1 row={} x={} submitted={} finished={} all_lane_readback_ok={} sample_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} hit_mask=0x{:04X} pass_lane0={} pass_lane01={} pass_lane03={} pass_lane07={} pass_lane15={} lane_dispatch_delta={} finish_marker=0x{:08X} purpose=compare-proven-bti1-untyped-descriptor-with-legacy-stateless-t31 next=if-wide-promote-bti1-untyped-to-t30 else-fix-lane-address-materialization does_not_prove=mandelbrot-math-or-groupid-linear-address\n",
+                        frame,
+                        fallback_row
+                            .saturating_add(2)
+                            .min(scanout_h.saturating_sub(1)),
+                        fallback_x,
+                        t33_probe.submitted as u8,
+                        t33_probe.finished as u8,
+                        t33_probe.readback_ok as u8,
+                        t33_probe.output_gpu,
+                        t33_probe.output_first_before,
+                        t33_probe.output_first_after,
+                        t33_probe.sentinel,
+                        t33_probe.output_hits_lo64 as u16,
+                        ((t33_probe.output_hits_lo64 & 0x0001) == 0x0001) as u8,
+                        ((t33_probe.output_hits_lo64 & 0x0003) == 0x0003) as u8,
+                        ((t33_probe.output_hits_lo64 & 0x000F) == 0x000F) as u8,
+                        ((t33_probe.output_hits_lo64 & 0x00FF) == 0x00FF) as u8,
+                        ((t33_probe.output_hits_lo64 & 0xFFFF) == 0xFFFF) as u8,
+                        t33_probe.dispatch_delta,
+                        t33_probe.finish_marker,
+                    );
+                }
+                if let Some(t34_probe) = t34_probe {
+                    let t34_lane0_only = (t34_probe.output_hits_lo64 & 0x0001) == 0x0001
+                        && (t34_probe.output_hits_lo64 & 0xFFFE) == 0
+                        && t34_probe.output_first_after == t34_probe.sentinel;
+                    let t34_alias_or_late_lane = t34_probe.output_first_after
+                        != t34_probe.output_first_before
+                        && t34_probe.output_first_after != t34_probe.sentinel;
+                    crate::log!(
+                        "mandelbrot-gpu-sidequest: t34-address-data-witness heartbeat={} enabled=1 row={} x={} submitted={} finished={} all_lane_readback_ok={} sample_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} lane0_expected=0x{:08X} hit_mask=0x{:04X} lane0_only={} alias_or_late_lane={} lane_dispatch_delta={} finish_marker=0x{:08X} purpose=classify-legacy-simd16-store-collapse next=if-lane0-only-build-explicit-wide-send-payload else-fix-address-vector does_not_prove=mandelbrot-math-or-fullscreen-performance\n",
+                        frame,
+                        fallback_row
+                            .saturating_add(3)
+                            .min(scanout_h.saturating_sub(1)),
+                        fallback_x,
+                        t34_probe.submitted as u8,
+                        t34_probe.finished as u8,
+                        t34_probe.readback_ok as u8,
+                        t34_probe.output_gpu,
+                        t34_probe.output_first_before,
+                        t34_probe.output_first_after,
+                        t34_probe.sentinel,
+                        t34_probe.output_hits_lo64 as u16,
+                        t34_lane0_only as u8,
+                        t34_alias_or_late_lane as u8,
+                        t34_probe.dispatch_delta,
+                        t34_probe.finish_marker,
+                    );
+                }
+                if let Some(t35_probe) = t35_probe {
+                    let t35_hit_mask = t35_probe.output_hits_lo64 as u16;
+                    crate::log!(
+                        "mandelbrot-gpu-sidequest: t35-explicit-wide-payload heartbeat={} enabled=1 row={} x={} submitted={} finished={} all_lane_readback_ok={} sample_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} hit_mask=0x{:04X} pass_lane0={} pass_low8={} pass_lane8={} pass_high8={} pass_lane15={} lane_dispatch_delta={} finish_marker=0x{:08X} purpose=classify-explicit-wide-message-payload next=if-only-lane0-then-rebuild-send-descriptor-contract-if-low8-or-high8-then-promote-that-half does_not_prove=mandelbrot-math-or-groupid-linear-address\n",
+                        frame,
+                        fallback_row
+                            .saturating_add(4)
+                            .min(scanout_h.saturating_sub(1)),
+                        fallback_x,
+                        t35_probe.submitted as u8,
+                        t35_probe.finished as u8,
+                        t35_probe.readback_ok as u8,
+                        t35_probe.output_gpu,
+                        t35_probe.output_first_before,
+                        t35_probe.output_first_after,
+                        t35_probe.sentinel,
+                        t35_hit_mask,
+                        ((t35_hit_mask & 0x0001) == 0x0001) as u8,
+                        ((t35_hit_mask & 0x00FF) == 0x00FF) as u8,
+                        ((t35_hit_mask & 0x0100) == 0x0100) as u8,
+                        ((t35_hit_mask & 0xFF00) == 0xFF00) as u8,
+                        ((t35_hit_mask & 0x8000) == 0x8000) as u8,
+                        t35_probe.dispatch_delta,
+                        t35_probe.finish_marker,
+                    );
+                }
+                if let Some(t36_probe) = t36_probe {
+                    crate::log!(
+                        "mandelbrot-gpu-sidequest: t36-unrolled-scalar16 heartbeat={} enabled=1 row={} x={} submitted={} finished={} all_lane_readback_ok={} sample_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} hit_mask=0x{:04X} pass_lane0={} pass_lane01={} pass_lane03={} pass_lane07={} pass_lane15={} lane_dispatch_delta={} finish_marker=0x{:08X} purpose=prove-one-eu-invocation-can-fill-16-pixel-block-with-scalar-sends next=if-ffff-promote-to-t30-block-fill does_not_prove=mandelbrot-math-or-groupid-linear-address\n",
+                        frame,
+                        fallback_row
+                            .saturating_add(5)
+                            .min(scanout_h.saturating_sub(1)),
+                        fallback_x,
+                        t36_probe.submitted as u8,
+                        t36_probe.finished as u8,
+                        t36_probe.readback_ok as u8,
+                        t36_probe.output_gpu,
+                        t36_probe.output_first_before,
+                        t36_probe.output_first_after,
+                        t36_probe.sentinel,
+                        t36_probe.output_hits_lo64 as u16,
+                        ((t36_probe.output_hits_lo64 & 0x0001) == 0x0001) as u8,
+                        ((t36_probe.output_hits_lo64 & 0x0003) == 0x0003) as u8,
+                        ((t36_probe.output_hits_lo64 & 0x000F) == 0x000F) as u8,
+                        ((t36_probe.output_hits_lo64 & 0x00FF) == 0x00FF) as u8,
+                        ((t36_probe.output_hits_lo64 & 0xFFFF) == 0xFFFF) as u8,
+                        t36_probe.dispatch_delta,
+                        t36_probe.finish_marker,
+                    );
+                }
+                if let Some(t37_probe) = t37_probe {
+                    crate::log!(
+                        "mandelbrot-gpu-sidequest: t37-groupid-x-witness heartbeat={} enabled=1 row={} x={} row_groups=4 submitted={} finished={} groupid_x_readback_ok={} sample_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} first_block_hit_mask=0x{:04X} pass_first_block_all_lanes={} lane_dispatch_delta={} finish_marker=0x{:08X} purpose=prove-gpu-side-groupid-x-selects-adjacent-16px-blocks next=if-ok-promote-t30-to-row-group-walker else-fix-r0-groupid-source-prelude does_not_prove=groupid-y-or-mandelbrot-math\n",
+                        frame,
+                        fallback_row,
+                        fallback_x,
+                        t37_probe.submitted as u8,
+                        t37_probe.finished as u8,
+                        t37_probe.readback_ok as u8,
+                        t37_probe.output_gpu,
+                        t37_probe.output_first_before,
+                        t37_probe.output_first_after,
+                        t37_probe.sentinel,
+                        t37_probe.output_hits_lo64 as u16,
+                        ((t37_probe.output_hits_lo64 & 0xFFFF) == 0xFFFF) as u8,
+                        t37_probe.dispatch_delta,
+                        t37_probe.finish_marker,
                     );
                 }
             }

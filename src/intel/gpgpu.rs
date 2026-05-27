@@ -51,6 +51,13 @@ pub(crate) use mandelbrot::{
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_fullscreen_bands,
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_fullscreen_frame,
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_immediate_lane0_sweep_bands,
+    submit_gpgpu_primary_scanout_mandelbrot16_simd16_t31_store_ladder_probe,
+    submit_gpgpu_primary_scanout_mandelbrot16_simd16_t32_single_send_probe,
+    submit_gpgpu_primary_scanout_mandelbrot16_simd16_t33_bti1_untyped_probe,
+    submit_gpgpu_primary_scanout_mandelbrot16_simd16_t34_address_data_witness_probe,
+    submit_gpgpu_primary_scanout_mandelbrot16_simd16_t35_explicit_wide_payload_probe,
+    submit_gpgpu_primary_scanout_mandelbrot16_simd16_t36_unrolled_scalar16_probe,
+    submit_gpgpu_primary_scanout_mandelbrot16_simd16_t37_groupid_x_unrolled_scalar16_probe,
     submit_gpgpu_primary_scanout_row2560_simd8_color_probe,
     submit_gpgpu_primary_scanout_row2560_simd8_probe,
 };
