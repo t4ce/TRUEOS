@@ -862,6 +862,84 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_immediate_lan
     )
 }
 
+pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t31_store_ladder_probe(
+    heartbeat: u64,
+    row_index: u32,
+    x_base: u32,
+    color: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t31_store_ladder_probe(
+        heartbeat, row_index, x_base, color,
+    )
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t32_single_send_probe(
+    heartbeat: u64,
+    row_index: u32,
+    x_base: u32,
+    color: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t32_single_send_probe(
+        heartbeat, row_index, x_base, color,
+    )
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t33_bti1_untyped_probe(
+    heartbeat: u64,
+    row_index: u32,
+    x_base: u32,
+    color: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t33_bti1_untyped_probe(
+        heartbeat, row_index, x_base, color,
+    )
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t34_address_data_witness_probe(
+    heartbeat: u64,
+    row_index: u32,
+    x_base: u32,
+    color_mask: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t34_address_data_witness_probe(
+        heartbeat, row_index, x_base, color_mask,
+    )
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t35_explicit_wide_payload_probe(
+    heartbeat: u64,
+    row_index: u32,
+    x_base: u32,
+    color: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t35_explicit_wide_payload_probe(
+        heartbeat, row_index, x_base, color,
+    )
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t36_unrolled_scalar16_probe(
+    heartbeat: u64,
+    row_index: u32,
+    x_base: u32,
+    color: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t36_unrolled_scalar16_probe(
+        heartbeat, row_index, x_base, color,
+    )
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t37_groupid_x_unrolled_scalar16_probe(
+    heartbeat: u64,
+    row_index: u32,
+    x_base: u32,
+    color: u32,
+    row_groups: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t37_groupid_x_unrolled_scalar16_probe(
+        heartbeat, row_index, x_base, color, row_groups,
+    )
+}
+
 pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
     cursor: usize,
     target_phase: usize,

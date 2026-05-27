@@ -1301,7 +1301,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
         spawn_gfx_texture_upload_service,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "mandelbrot-gpu-sidequest",
         0,
         &MANDELBROT_GPU_SIDEQUEST_STARTED,

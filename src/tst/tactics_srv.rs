@@ -17,6 +17,8 @@ const MAX_LINE_BYTES: usize = 16 * 1024;
 const TICK_MS: u64 = 25;
 const HEARTBEAT_TIMEOUT_TICKS: u64 = 60_000 / TICK_MS;
 const STATE_BROADCAST_TICKS: u64 = 100 / TICK_MS;
+const HEARTBEAT_LOG_TICKS: u64 = 10_000 / TICK_MS;
+const POSITION_LOG_TICKS: u64 = 1_000 / TICK_MS;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -54,8 +56,7 @@ pub struct PlayerState {
     pub state: Value,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Debug)]
 pub enum ClientMsg {
     Hello {
         name: String,
@@ -366,7 +367,170 @@ impl TacticsServer {
                 lines.push(line);
             }
         }
+
+        if lines.is_empty()
+            && client.rx.len() <= MAX_LINE_BYTES
+            && looks_like_complete_json_object(client.rx.as_slice())
+        {
+            lines.push(core::mem::take(&mut client.rx));
+        }
         lines
+    }
+}
+
+fn looks_like_complete_json_object(bytes: &[u8]) -> bool {
+    let mut start = 0;
+    let mut end = bytes.len();
+    while start < end && bytes[start].is_ascii_whitespace() {
+        start += 1;
+    }
+    while end > start && bytes[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    start < end && bytes[start] == b'{' && bytes[end - 1] == b'}'
+}
+
+fn log_json_parse_error(handle: api::NetHandle, client_id: u64, line: &[u8], err: &str) {
+    let preview_len = line.len().min(96);
+    crate::log!(
+        "tactics-srv: invalid json handle={} client={} bytes={} err={} preview={:?}\n",
+        handle.0,
+        client_id,
+        line.len(),
+        err,
+        &line[..preview_len]
+    );
+}
+
+fn value_field<'a>(obj: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a Value> {
+    obj.get(key)
+}
+
+fn string_field(obj: &serde_json::Map<String, Value>, key: &str) -> Result<String, String> {
+    value_field(obj, key)
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .ok_or_else(|| alloc::format!("missing string field `{}`", key))
+}
+
+fn opt_string_field(
+    obj: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<String>, String> {
+    match value_field(obj, key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(|s| Some(s.to_string()))
+            .ok_or_else(|| alloc::format!("field `{}` must be string", key)),
+    }
+}
+
+fn u64_field(obj: &serde_json::Map<String, Value>, key: &str) -> Result<u64, String> {
+    value_field(obj, key)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| alloc::format!("missing integer field `{}`", key))
+}
+
+fn opt_u32_field(obj: &serde_json::Map<String, Value>, key: &str) -> Result<Option<u32>, String> {
+    match value_field(obj, key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .and_then(|v| u32::try_from(v).ok())
+            .map(Some)
+            .ok_or_else(|| alloc::format!("field `{}` must be u32", key)),
+    }
+}
+
+fn opt_u16_field(obj: &serde_json::Map<String, Value>, key: &str) -> Result<Option<u16>, String> {
+    match value_field(obj, key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .and_then(|v| u16::try_from(v).ok())
+            .map(Some)
+            .ok_or_else(|| alloc::format!("field `{}` must be u16", key)),
+    }
+}
+
+fn opt_u64_field(obj: &serde_json::Map<String, Value>, key: &str) -> Result<Option<u64>, String> {
+    match value_field(obj, key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| alloc::format!("field `{}` must be u64", key)),
+    }
+}
+
+fn json_value_field(obj: &serde_json::Map<String, Value>, key: &str) -> Result<Value, String> {
+    value_field(obj, key)
+        .cloned()
+        .ok_or_else(|| alloc::format!("missing json field `{}`", key))
+}
+
+fn parse_client_msg(line: &[u8]) -> Result<ClientMsg, String> {
+    let value = serde_json::from_slice::<Value>(line)
+        .map_err(|err| alloc::format!("json parse failed: {}", err))?;
+    let obj = value
+        .as_object()
+        .ok_or_else(|| "command must be a json object".to_string())?;
+    let ty = value_field(obj, "type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "missing string field `type`".to_string())?;
+
+    match ty {
+        "hello" => Ok(ClientMsg::Hello {
+            name: string_field(obj, "name")?,
+            ping_ms: opt_u32_field(obj, "ping_ms")?,
+            latency_ms: opt_u32_field(obj, "latency_ms")?,
+            game: opt_string_field(obj, "game")?,
+        }),
+        "heartbeat" => Ok(ClientMsg::Heartbeat {
+            ping_ms: opt_u32_field(obj, "ping_ms")?,
+            latency_ms: opt_u32_field(obj, "latency_ms")?,
+        }),
+        "chat" => Ok(ClientMsg::Chat {
+            text: string_field(obj, "text")?,
+        }),
+        "create_game" => Ok(ClientMsg::CreateGame {
+            name: string_field(obj, "name")?,
+            game: string_field(obj, "game")?,
+            max_players: opt_u16_field(obj, "max_players")?,
+        }),
+        "free_game" => Ok(ClientMsg::FreeGame {
+            game_id: u64_field(obj, "game_id")?,
+        }),
+        "join_game" => Ok(ClientMsg::JoinGame {
+            game_id: u64_field(obj, "game_id")?,
+        }),
+        "leave_game" => Ok(ClientMsg::LeaveGame {
+            game_id: opt_u64_field(obj, "game_id")?,
+        }),
+        "start_game" => Ok(ClientMsg::StartGame {
+            game_id: u64_field(obj, "game_id")?,
+        }),
+        "pause_game" => Ok(ClientMsg::PauseGame {
+            game_id: u64_field(obj, "game_id")?,
+        }),
+        "resume_game" => Ok(ClientMsg::ResumeGame {
+            game_id: u64_field(obj, "game_id")?,
+        }),
+        "finish_game" => Ok(ClientMsg::FinishGame {
+            game_id: u64_field(obj, "game_id")?,
+        }),
+        "game_list" => Ok(ClientMsg::GameList),
+        "game_command" => Ok(ClientMsg::GameCommand {
+            game_id: u64_field(obj, "game_id")?,
+            seq: opt_u64_field(obj, "seq")?,
+            command: json_value_field(obj, "command")?,
+        }),
+        "position" => Ok(ClientMsg::Position {
+            game_id: u64_field(obj, "game_id")?,
+            state: json_value_field(obj, "state")?,
+        }),
+        _ => Err(alloc::format!("unknown command type `{}`", ty)),
     }
 }
 
@@ -384,6 +548,7 @@ fn broadcast<T: Serialize>(vnet: &VNet, handles: &[api::NetHandle], msg: &T) {
 }
 
 fn send_error(vnet: &VNet, handle: api::NetHandle, message: &str) {
+    crate::log!("tactics-srv: send error handle={} msg={}\n", handle.0, message);
     send_msg(
         vnet,
         handle,
@@ -455,9 +620,18 @@ fn handle_client_msg(
             name,
             ping_ms,
             latency_ms,
-            game: _,
+            game,
         } => {
             if let Some(client) = server.clients.get_mut(&client_id) {
+                crate::log!(
+                    "tactics-srv: hello client={} handle={} name={} game={:?} ping_ms={:?} latency_ms={:?}\n",
+                    client_id,
+                    handle.0,
+                    name,
+                    game,
+                    ping_ms,
+                    latency_ms
+                );
                 client.name = name;
                 client.ping_ms = ping_ms;
                 client.latency_ms = latency_ms;
@@ -484,6 +658,15 @@ fn handle_client_msg(
             latency_ms,
         } => {
             if let Some(client) = server.clients.get_mut(&client_id) {
+                if server.tick.is_multiple_of(HEARTBEAT_LOG_TICKS) {
+                    crate::log!(
+                        "tactics-srv: heartbeat client={} name={} ping_ms={:?} latency_ms={:?}\n",
+                        client_id,
+                        client.name,
+                        ping_ms,
+                        latency_ms
+                    );
+                }
                 client.ping_ms = ping_ms;
                 client.latency_ms = latency_ms;
                 client.last_seen_tick = server.tick;
@@ -511,6 +694,13 @@ fn handle_client_msg(
                 .and_then(|client| client.game_id)
                 .map(|game_id| server.game_handles(game_id))
                 .unwrap_or_else(|| server.all_handles());
+            crate::log!(
+                "tactics-srv: chat client={} name={} recipients={} bytes={}\n",
+                client_id,
+                from,
+                handles.len(),
+                text.len()
+            );
             broadcast(
                 vnet,
                 handles.as_slice(),
@@ -529,11 +719,25 @@ fn handle_client_msg(
             let game_id = server.next_game_id;
             server.next_game_id = server.next_game_id.saturating_add(1);
             if let Some(old_game) = server.clients.get(&client_id).and_then(|c| c.game_id) {
+                crate::log!(
+                    "tactics-srv: create_game client={} leaving old_game={}\n",
+                    client_id,
+                    old_game
+                );
                 server.remove_player_from_game(old_game, client_id);
             }
             if let Some(client) = server.clients.get_mut(&client_id) {
                 client.game_id = Some(game_id);
             }
+            let max_players = max_players.unwrap_or(8).max(1);
+            crate::log!(
+                "tactics-srv: create_game id={} host={} name={} game={} max_players={}\n",
+                game_id,
+                client_id,
+                name,
+                game,
+                max_players
+            );
             server.games.insert(
                 game_id,
                 GameSession {
@@ -541,10 +745,18 @@ fn handle_client_msg(
                     name,
                     game,
                     host_id: client_id,
-                    max_players: max_players.unwrap_or(8).max(1),
+                    max_players,
                     status: GameStatus::Lobby,
                     players: alloc::vec![client_id],
                     player_state: BTreeMap::new(),
+                },
+            );
+            send_msg(
+                vnet,
+                handle,
+                &ServerMsg::Ack {
+                    action: "create_game",
+                    game_id: Some(game_id),
                 },
             );
             if let Some(game) = server.games.get(&game_id) {
@@ -568,12 +780,26 @@ fn handle_client_msg(
                 return;
             }
             if let Some(game) = server.games.remove(&game_id) {
+                crate::log!(
+                    "tactics-srv: free_game id={} host={} players={}\n",
+                    game_id,
+                    client_id,
+                    game.players.len()
+                );
                 for player_id in game.players {
                     if let Some(client) = server.clients.get_mut(&player_id) {
                         client.game_id = None;
                     }
                 }
             }
+            send_msg(
+                vnet,
+                handle,
+                &ServerMsg::Ack {
+                    action: "free_game",
+                    game_id: Some(game_id),
+                },
+            );
             broadcast(vnet, server.all_handles().as_slice(), &ServerMsg::GameFreed { game_id });
         }
         ClientMsg::JoinGame { game_id } => {
@@ -591,6 +817,11 @@ fn handle_client_msg(
                 return;
             }
             if let Some(old_game) = server.clients.get(&client_id).and_then(|c| c.game_id) {
+                crate::log!(
+                    "tactics-srv: join_game client={} leaving old_game={}\n",
+                    client_id,
+                    old_game
+                );
                 server.remove_player_from_game(old_game, client_id);
             }
             if let Some(client) = server.clients.get_mut(&client_id) {
@@ -602,6 +833,21 @@ fn handle_client_msg(
                 game.players.push(client_id);
             }
             if let Some(game) = server.games.get(&game_id) {
+                send_msg(
+                    vnet,
+                    handle,
+                    &ServerMsg::Ack {
+                        action: "join_game",
+                        game_id: Some(game_id),
+                    },
+                );
+                crate::log!(
+                    "tactics-srv: join_game client={} game_id={} players={}/{}\n",
+                    client_id,
+                    game_id,
+                    game.players.len(),
+                    game.max_players
+                );
                 broadcast(
                     vnet,
                     server.all_handles().as_slice(),
@@ -615,10 +861,19 @@ fn handle_client_msg(
             let game_id =
                 game_id.or_else(|| server.clients.get(&client_id).and_then(|c| c.game_id));
             if let Some(game_id) = game_id {
+                crate::log!("tactics-srv: leave_game client={} game_id={}\n", client_id, game_id);
                 if let Some(client) = server.clients.get_mut(&client_id) {
                     client.game_id = None;
                 }
                 let recipients = server.remove_player_from_game(game_id, client_id);
+                send_msg(
+                    vnet,
+                    handle,
+                    &ServerMsg::Ack {
+                        action: "leave_game",
+                        game_id: Some(game_id),
+                    },
+                );
                 if let Some(game) = server.games.get(&game_id) {
                     broadcast(
                         vnet,
@@ -650,6 +905,20 @@ fn handle_client_msg(
                 game.status = GameStatus::Running;
             }
             if let Some(game) = server.games.get(&game_id) {
+                send_msg(
+                    vnet,
+                    handle,
+                    &ServerMsg::Ack {
+                        action: "start_game",
+                        game_id: Some(game_id),
+                    },
+                );
+                crate::log!(
+                    "tactics-srv: start_game id={} host={} players={}\n",
+                    game_id,
+                    client_id,
+                    game.players.len()
+                );
                 broadcast(
                     vnet,
                     server.game_handles(game_id).as_slice(),
@@ -664,6 +933,15 @@ fn handle_client_msg(
                 && game.host_id == client_id
             {
                 game.status = GameStatus::Paused;
+                crate::log!("tactics-srv: pause_game id={} host={}\n", game_id, client_id);
+                send_msg(
+                    vnet,
+                    handle,
+                    &ServerMsg::Ack {
+                        action: "pause_game",
+                        game_id: Some(game_id),
+                    },
+                );
                 broadcast(
                     vnet,
                     server.game_handles(game_id).as_slice(),
@@ -676,6 +954,15 @@ fn handle_client_msg(
                 && game.host_id == client_id
             {
                 game.status = GameStatus::Running;
+                crate::log!("tactics-srv: resume_game id={} host={}\n", game_id, client_id);
+                send_msg(
+                    vnet,
+                    handle,
+                    &ServerMsg::Ack {
+                        action: "resume_game",
+                        game_id: Some(game_id),
+                    },
+                );
                 broadcast(
                     vnet,
                     server.game_handles(game_id).as_slice(),
@@ -688,6 +975,15 @@ fn handle_client_msg(
                 && game.host_id == client_id
             {
                 game.status = GameStatus::Finished;
+                crate::log!("tactics-srv: finish_game id={} host={}\n", game_id, client_id);
+                send_msg(
+                    vnet,
+                    handle,
+                    &ServerMsg::Ack {
+                        action: "finish_game",
+                        game_id: Some(game_id),
+                    },
+                );
                 broadcast(
                     vnet,
                     server.game_handles(game_id).as_slice(),
@@ -696,6 +992,11 @@ fn handle_client_msg(
             }
         }
         ClientMsg::GameList => {
+            crate::log!(
+                "tactics-srv: game_list client={} games={}\n",
+                client_id,
+                server.games.len()
+            );
             send_msg(
                 vnet,
                 handle,
@@ -718,6 +1019,12 @@ fn handle_client_msg(
                 send_error(vnet, handle, "client is not in that game");
                 return;
             }
+            crate::log!(
+                "tactics-srv: game_command game_id={} from={} seq={:?}\n",
+                game_id,
+                client_id,
+                seq
+            );
             broadcast(
                 vnet,
                 server.game_handles(game_id).as_slice(),
@@ -742,6 +1049,14 @@ fn handle_client_msg(
             if let Some(game) = server.games.get_mut(&game_id) {
                 game.player_state.insert(client_id, state);
             }
+            if server.tick.is_multiple_of(POSITION_LOG_TICKS) {
+                crate::log!(
+                    "tactics-srv: position game_id={} client={} tick={}\n",
+                    game_id,
+                    client_id,
+                    server.tick
+                );
+            }
             if let Some(state) = server.state_for_game(game_id) {
                 broadcast(vnet, server.game_handles(game_id).as_slice(), &state);
             }
@@ -758,15 +1073,7 @@ fn drain_endpoint(endpoint: &mut TacticsEndpoint, server: &mut TacticsServer) {
             api::Event::Opened { .. } => {}
             api::Event::TcpEstablished { handle, .. } => {
                 let id = server.add_client(handle);
-                send_msg(
-                    &endpoint.vnet,
-                    handle,
-                    &ServerMsg::Welcome {
-                        client_id: id,
-                        protocol: "trueos.tactics.v1",
-                        heartbeat_ms: 1_000,
-                    },
-                );
+                crate::log!("tactics-srv: tcp established handle={} client={}\n", handle.0, id);
             }
             api::Event::TcpData { handle, data } => {
                 let client_id = match server.handle_to_client.get(&handle.0).copied() {
@@ -774,15 +1081,29 @@ fn drain_endpoint(endpoint: &mut TacticsEndpoint, server: &mut TacticsServer) {
                     None => server.add_client(handle),
                 };
                 for line in server.client_lines(handle, data.as_slice()) {
-                    match serde_json::from_slice::<ClientMsg>(line.as_slice()) {
+                    match parse_client_msg(line.as_slice()) {
                         Ok(msg) => {
                             handle_client_msg(server, &endpoint.vnet, handle, client_id, msg);
                         }
-                        Err(_) => send_error(&endpoint.vnet, handle, "invalid json command"),
+                        Err(err) => {
+                            log_json_parse_error(handle, client_id, line.as_slice(), err.as_str());
+                            send_error(&endpoint.vnet, handle, "invalid json command");
+                        }
                     }
                 }
             }
             api::Event::Closed { handle } => {
+                if let Some(client_id) = server.handle_to_client.get(&handle.0).copied() {
+                    if let Some(client) = server.clients.get(&client_id) {
+                        crate::log!(
+                            "tactics-srv: tcp closed handle={} client={} name={} game_id={:?}\n",
+                            handle.0,
+                            client_id,
+                            client.name,
+                            client.game_id
+                        );
+                    }
+                }
                 for (game_id, recipients) in server.remove_handle(handle) {
                     if let Some(game) = server.games.get(&game_id) {
                         broadcast(
@@ -857,6 +1178,17 @@ pub async fn tactics_srv_task() {
             .map(|client| client.handle)
             .collect();
         for handle in stale {
+            if let Some(client_id) = server.handle_to_client.get(&handle.0).copied()
+                && let Some(client) = server.clients.get(&client_id)
+            {
+                crate::log!(
+                    "tactics-srv: heartbeat timeout handle={} client={} name={} game_id={:?}\n",
+                    handle.0,
+                    client_id,
+                    client.name,
+                    client.game_id
+                );
+            }
             for endpoint in &endpoints {
                 let _ = endpoint.vnet.submit(api::Command::Close { handle });
             }
