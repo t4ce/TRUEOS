@@ -154,16 +154,14 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
         y: runtime.mouse_y,
         flags,
     });
-    super::input::push_event(super::input::InputEvent::Mouse(
-        super::input::MouseEvent {
-            slot_id: runtime.slot_id,
-            buttons,
-            dx,
-            dy,
-            wheel,
-            has_wheel,
-        },
-    ));
+    super::input::push_event(super::input::InputEvent::Mouse(super::input::MouseEvent {
+        slot_id: runtime.slot_id,
+        buttons,
+        dx,
+        dy,
+        wheel,
+        has_wheel,
+    }));
     super::input::qjs_mouse_offer(super::input::MouseEvent {
         slot_id: runtime.slot_id,
         buttons,

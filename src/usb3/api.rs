@@ -57,26 +57,16 @@ impl ClaimedInterface<'_> {
         &mut self,
         address: u8,
     ) -> Result<ClaimedEndpoint, InterfaceEndpointError> {
-        self.endpoint(
-            address,
-            EndpointType::Isochronous,
-            Direction::In,
-            "iso-in",
-        )
-        .await
+        self.endpoint(address, EndpointType::Isochronous, Direction::In, "iso-in")
+            .await
     }
 
     pub(crate) async fn endpoint_interrupt_in(
         &mut self,
         address: u8,
     ) -> Result<ClaimedEndpoint, InterfaceEndpointError> {
-        self.endpoint(
-            address,
-            EndpointType::Interrupt,
-            Direction::In,
-            "interrupt-in",
-        )
-        .await
+        self.endpoint(address, EndpointType::Interrupt, Direction::In, "interrupt-in")
+            .await
     }
 
     async fn endpoint(
@@ -116,6 +106,9 @@ impl ClaimedEndpoint {
             (EndpointType::Bulk, Direction::Out) => TransferRequest::bulk_out(buffer),
             _ => return Err(TransferError::InvalidEndpoint),
         };
-        self.endpoint.wait(request).await.map(|done| done.actual_length)
+        self.endpoint
+            .wait(request)
+            .await
+            .map(|done| done.actual_length)
     }
 }

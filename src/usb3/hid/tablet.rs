@@ -219,18 +219,16 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
         y: runtime.mouse_y,
         flags,
     });
-    super::input::push_event(super::input::InputEvent::Tablet(
-        super::input::TabletEvent {
-            slot_id: runtime.slot_id,
-            buttons: decoded.buttons,
-            report_id: decoded.report_id,
-            x_raw: decoded.x_raw,
-            y_raw: decoded.y_raw,
-            x_norm_q15: q15_from_norm(runtime.mouse_x),
-            y_norm_q15: q15_from_norm(runtime.mouse_y),
-            flags: flags as u8,
-        },
-    ));
+    super::input::push_event(super::input::InputEvent::Tablet(super::input::TabletEvent {
+        slot_id: runtime.slot_id,
+        buttons: decoded.buttons,
+        report_id: decoded.report_id,
+        x_raw: decoded.x_raw,
+        y_raw: decoded.y_raw,
+        x_norm_q15: q15_from_norm(runtime.mouse_x),
+        y_norm_q15: q15_from_norm(runtime.mouse_y),
+        flags: flags as u8,
+    }));
     sync_runtime_cursor_snapshot(runtime);
     super::hut::upsert_tablet_state(
         runtime.controller_id,

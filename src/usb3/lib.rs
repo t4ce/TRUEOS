@@ -154,11 +154,33 @@ pub struct UsbControllerInfo {
 }
 
 pub fn pci_usb_controllers() -> Vec<UsbControllerInfo> {
-    Vec::new()
+    let mut out = Vec::new();
+    crate::pci::with_devices(|devices| {
+        for dev in devices
+            .iter()
+            .copied()
+            .filter(|dev| dev.class == 0x0c && dev.subclass == 0x03 && dev.prog_if == 0x30)
+        {
+            out.push(UsbControllerInfo {
+                index: out.len(),
+                bus: dev.bus,
+                slot: dev.slot,
+                function: dev.function,
+                vendor_id: dev.vendor_id,
+                device_id: dev.device_id,
+                controller_phase: "crabusb",
+                root_hub_lifecycle: "active",
+                event_ready: true,
+                root_port_change_seen: false,
+                empty_probe_streak: 0,
+            });
+        }
+    });
+    out
 }
 
 pub fn discover_first_controller() -> Option<UsbControllerInfo> {
-    None
+    pci_usb_controllers().into_iter().next()
 }
 
 pub async fn crabusb_bsp_service(_index: usize) {
@@ -273,7 +295,10 @@ pub struct TlbUsbSnapshot {
 }
 
 pub fn tlb_usb_snapshot() -> TlbUsbSnapshot {
-    TlbUsbSnapshot::default()
+    TlbUsbSnapshot {
+        controllers: pci_usb_controllers(),
+        ..TlbUsbSnapshot::default()
+    }
 }
 
 pub fn crabusb_observed_device_summaries(
@@ -336,69 +361,4 @@ pub struct XhciMmioDiag {
 
 pub fn controller_mmio_diag(_controller_index: usize) -> Option<XhciMmioDiag> {
     None
-}
-
-pub mod class {
-    #[derive(Clone, Copy, Debug)]
-    pub struct UsbClassTriple {
-        class: u8,
-        subclass: u8,
-        protocol: u8,
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    pub struct UsbBaseClass {
-        code: u8,
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    pub struct DescriptorUsage;
-
-    impl UsbClassTriple {
-        pub const fn from_codes(class: u8, subclass: u8, protocol: u8) -> Self {
-            Self {
-                class,
-                subclass,
-                protocol,
-            }
-        }
-
-        pub const fn base_class(self) -> UsbBaseClass {
-            UsbBaseClass { code: self.class }
-        }
-
-        pub const fn short_name(self) -> &'static str {
-            let _ = self.subclass;
-            let _ = self.protocol;
-            "USB"
-        }
-
-        pub const fn description(self) -> &'static str {
-            let _ = self;
-            "disabled"
-        }
-    }
-
-    impl UsbBaseClass {
-        pub const fn code(self) -> u8 {
-            self.code
-        }
-
-        pub const fn descriptor_usage(self) -> DescriptorUsage {
-            let _ = self;
-            DescriptorUsage
-        }
-
-        pub const fn description(self) -> &'static str {
-            let _ = self;
-            "disabled"
-        }
-    }
-
-    impl DescriptorUsage {
-        pub const fn as_str(self) -> &'static str {
-            let _ = self;
-            "disabled"
-        }
-    }
 }

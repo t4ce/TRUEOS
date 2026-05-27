@@ -1,7 +1,7 @@
 mod api;
 pub mod class;
-mod dev_gears;
 mod descriptor;
+mod dev_gears;
 pub mod hid;
 mod lib;
 
@@ -73,16 +73,15 @@ async fn open_and_handoff_devices(
         log_probed_device("probed", &new);
         match new {
             crabusb::ProbedDevice::Device(info) => {
-                let handoff_to_gears =
-                    dev_gears::has_boot_mouse_transport(info.configurations())
-                        || !hid::boot::maybe_start_hid_boot_streams(
-                            host,
-                            &info,
-                            spawner,
-                            CRABUSB_CONTROLLER_ID,
-                            true,
-                        )
-                        .await;
+                let handoff_to_gears = dev_gears::has_boot_mouse_transport(info.configurations())
+                    || !hid::boot::maybe_start_hid_boot_streams(
+                        host,
+                        &info,
+                        spawner,
+                        CRABUSB_CONTROLLER_ID,
+                        true,
+                    )
+                    .await;
                 if !handoff_to_gears {
                     continue;
                 }
