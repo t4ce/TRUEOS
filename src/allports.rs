@@ -42,6 +42,7 @@ pub mod services {
     pub const VM_STORE_REPL_PORT: u16 = 32_123;
     pub const HTTP_TRUEOSFS_TCP_PORT: u16 = well_known::HTTP;
     pub const LOCALCODER_WEB_TCP_PORT: u16 = 81;
+    pub const GAMESERVER_TACTICS_TCP_PORT: u16 = 1337;
 }
 
 pub mod mail {

@@ -81,6 +81,8 @@ mod tst_http_trueosfs;
 mod tst_mandelbrot_gpu_sidequest;
 #[path = "tst/net_tcp_shell.rs"]
 mod tst_net_tcp_shell;
+#[path = "tst/tactics_srv.rs"]
+mod tst_tactics_srv;
 #[path = "tst/ws_time.rs"]
 mod tst_ws_time;
 mod turbo;

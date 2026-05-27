@@ -31,6 +31,7 @@ pub(crate) use mandelbrot::{
     submit_gpgpu_primary_scanout_groupid_line320_probe,
     submit_gpgpu_primary_scanout_line1280_groupid_rows_fullwidth_color_burst,
     submit_gpgpu_primary_scanout_mandelbrot_preview,
+    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_fast_immediate_constant,
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_immediate_constant_probe,
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_immediate_constant_rows_probe,
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_immediate_gradient_probe,
@@ -39,6 +40,7 @@ pub(crate) use mandelbrot::{
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_linear_constant_probe,
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe,
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet,
+    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_constant,
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_gradient,
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_gradient_rows,
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_gradient_rows_batched,
@@ -46,6 +48,10 @@ pub(crate) use mandelbrot::{
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_raw_radius_rows,
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_linear_band,
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_rows,
+    submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_fullscreen_bands,
+    submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_fullscreen_frame,
+    submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_immediate_lane0_sweep_bands,
+    submit_gpgpu_primary_scanout_row2560_simd8_color_probe,
     submit_gpgpu_primary_scanout_row2560_simd8_probe,
 };
 pub(crate) use matmul::{
@@ -974,6 +980,9 @@ fn should_log_gpgpu_submit_name(name: &str) -> bool {
     if name.contains("quiet") {
         return false;
     }
+    if name.contains("immediate-row-batch") {
+        return false;
+    }
     if name.contains("windowed-accum16")
         || name.contains("t6-2-lane-indexed")
         || name.contains("t6-3-accum16-hi")
@@ -1531,6 +1540,7 @@ fn should_log_gpgpu_program_shape(name: &str) -> bool {
 fn should_log_gpgpu_surface_state(note: &str) -> bool {
     note != "bind-send-bti-to-result-raw-buffer"
         && !note.contains("-quiet")
+        && !note.contains("immediate-row-batch")
         && !note.contains("windowed-accum16")
         && !note.contains("t6-2-lane-indexed")
         && !note.contains("t6-3-accum16-hi")
