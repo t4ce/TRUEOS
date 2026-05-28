@@ -41,6 +41,7 @@ const MANDELBROT16_T35_MODE_IMMEDIATE_EXPLICIT_WIDE_PAYLOAD: u32 = 64;
 const MANDELBROT16_T36_MODE_IMMEDIATE_UNROLLED_SCALAR16: u32 = 65;
 const MANDELBROT16_T37_MODE_GROUPID_X_UNROLLED_SCALAR16: u32 = 66;
 const MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP: u32 = 67;
+const MANDELBROT16_T39_MODE_IMMEDIATE_WIDE_STAMP_ADDRESS_COLOR: u32 = 68;
 const MANDELBROT16_T38_STAMP_REPEATS: u32 = 5;
 const MANDELBROT16_T13_Q12_X_STEP: u32 = 5;
 const MANDELBROT16_CONSTANT_BODY_UPLOAD_DEBUG: bool = false;
@@ -61,6 +62,7 @@ enum Mandelbrot16ConstantStoreVariant {
     ExplicitWidePayload,
     UnrolledScalar16,
     WideScalar16x5,
+    WideScalar16x5AddressColor,
 }
 
 impl Mandelbrot16AddressMode {
@@ -231,7 +233,8 @@ fn upload_primary_scanout_mandelbrot16_simd16_bw_artifact(
             || mode == MANDELBROT16_T35_MODE_IMMEDIATE_EXPLICIT_WIDE_PAYLOAD
             || mode == MANDELBROT16_T36_MODE_IMMEDIATE_UNROLLED_SCALAR16
             || mode == MANDELBROT16_T37_MODE_GROUPID_X_UNROLLED_SCALAR16
-            || mode == MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP)
+            || mode == MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP
+            || mode == MANDELBROT16_T39_MODE_IMMEDIATE_WIDE_STAMP_ADDRESS_COLOR)
     {
         let body = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_BODY_DWORD;
         crate::log!(
@@ -539,12 +542,24 @@ fn patch_mandelbrot16_simd16_linear_constant_store_body(
     }
     if store_variant == Mandelbrot16ConstantStoreVariant::UnrolledScalar16
         || store_variant == Mandelbrot16ConstantStoreVariant::WideScalar16x5
+        || store_variant == Mandelbrot16ConstantStoreVariant::WideScalar16x5AddressColor
     {
         let mut or_g22 = OR_G22_G22_IMM_1Q;
-        or_g22[3] = color;
-        patch_mandelbrot16_simd16_put(words, &mut cursor, SUB_G22_G20_G20_1Q);
+        or_g22[3] = if store_variant == Mandelbrot16ConstantStoreVariant::WideScalar16x5AddressColor
+        {
+            0xFF00_0000
+        } else {
+            color
+        };
+        if store_variant == Mandelbrot16ConstantStoreVariant::WideScalar16x5AddressColor {
+            patch_mandelbrot16_simd16_put(words, &mut cursor, MOV_G22_G20);
+        } else {
+            patch_mandelbrot16_simd16_put(words, &mut cursor, SUB_G22_G20_G20_1Q);
+        }
         patch_mandelbrot16_simd16_put(words, &mut cursor, or_g22);
-        let stamp_pixels = if store_variant == Mandelbrot16ConstantStoreVariant::WideScalar16x5 {
+        let stamp_pixels = if store_variant == Mandelbrot16ConstantStoreVariant::WideScalar16x5
+            || store_variant == Mandelbrot16ConstantStoreVariant::WideScalar16x5AddressColor
+        {
             trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_LANES
                 * MANDELBROT16_T38_STAMP_REPEATS as usize
         } else {
@@ -587,6 +602,7 @@ fn patch_mandelbrot16_simd16_linear_constant_store_body(
         Mandelbrot16ConstantStoreVariant::ExplicitWidePayload => {}
         Mandelbrot16ConstantStoreVariant::UnrolledScalar16 => {}
         Mandelbrot16ConstantStoreVariant::WideScalar16x5 => {}
+        Mandelbrot16ConstantStoreVariant::WideScalar16x5AddressColor => {}
     }
     patch_mandelbrot16_simd16_put(words, &mut cursor, MOV_G126_G0);
     patch_mandelbrot16_simd16_put(words, &mut cursor, EOT_SEND_G126);
@@ -658,6 +674,7 @@ fn patch_mandelbrot16_simd16_probe_variant(
         || mode == MANDELBROT16_T36_MODE_IMMEDIATE_UNROLLED_SCALAR16
         || mode == MANDELBROT16_T37_MODE_GROUPID_X_UNROLLED_SCALAR16
         || mode == MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP
+        || mode == MANDELBROT16_T39_MODE_IMMEDIATE_WIDE_STAMP_ADDRESS_COLOR
     {
         let store_variant = if mode == MANDELBROT16_T32_MODE_IMMEDIATE_CONSTANT_SINGLE_SEND {
             Mandelbrot16ConstantStoreVariant::SingleSend
@@ -674,6 +691,8 @@ fn patch_mandelbrot16_simd16_probe_variant(
             Mandelbrot16ConstantStoreVariant::UnrolledScalar16
         } else if mode == MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP {
             Mandelbrot16ConstantStoreVariant::WideScalar16x5
+        } else if mode == MANDELBROT16_T39_MODE_IMMEDIATE_WIDE_STAMP_ADDRESS_COLOR {
+            Mandelbrot16ConstantStoreVariant::WideScalar16x5AddressColor
         } else {
             Mandelbrot16ConstantStoreVariant::LegacyStateless
         };
@@ -881,6 +900,7 @@ fn patch_mandelbrot16_simd16_probe_source(
         || mode == MANDELBROT16_T36_MODE_IMMEDIATE_UNROLLED_SCALAR16
         || mode == MANDELBROT16_T37_MODE_GROUPID_X_UNROLLED_SCALAR16
         || mode == MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP
+        || mode == MANDELBROT16_T39_MODE_IMMEDIATE_WIDE_STAMP_ADDRESS_COLOR
         || mode == MANDELBROT16_T11_MODE_LINEAR_FULL_BAND
         || mode == MANDELBROT16_T15_MODE_LINEAR_GRADIENT_FULL_BAND
         || mode == MANDELBROT16_T18_MODE_IMMEDIATE_GRADIENT_STORE
@@ -995,6 +1015,9 @@ fn mandelbrot16_simd16_probe_variant_name(mode: u32) -> &'static str {
         }
         MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP => {
             "mandelbrot16-t38-immediate-base-wide-stamp-visible-store"
+        }
+        MANDELBROT16_T39_MODE_IMMEDIATE_WIDE_STAMP_ADDRESS_COLOR => {
+            "mandelbrot16-t39-immediate-base-wide-stamp-address-color-visible-store"
         }
         _ => "mul16-dword-g6-times-g6-g22-then-immediate-nine-isolation",
     }
@@ -1176,6 +1199,7 @@ fn mandelbrot16_simd16_probe_expected_first(mode: u32, lhs: u32, rhs: u32) -> u3
         MANDELBROT16_T36_MODE_IMMEDIATE_UNROLLED_SCALAR16 => lhs,
         MANDELBROT16_T37_MODE_GROUPID_X_UNROLLED_SCALAR16 => lhs,
         MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP => lhs,
+        MANDELBROT16_T39_MODE_IMMEDIATE_WIDE_STAMP_ADDRESS_COLOR => lhs,
         MANDELBROT16_T18_MODE_IMMEDIATE_GRADIENT_STORE => {
             mandelbrot16_fixed10_gradient_q12(lhs, rhs)
         }
@@ -4603,6 +4627,13 @@ fn mandelbrot16_t30_xy_gradient_color(
     0xFF00_0000 | (r << 16) | (g << 8) | b
 }
 
+fn mandelbrot16_t30_address_gradient_color(pitch_bytes: u32, pixel_x: u32, pixel_y: u32) -> u32 {
+    let offset = pixel_y
+        .saturating_mul(pitch_bytes)
+        .saturating_add(pixel_x.saturating_mul(core::mem::size_of::<u32>() as u32));
+    0xFF00_0000 | offset
+}
+
 pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_immediate_lane0_sweep_bands(
     frame_seed: u32,
     first_row: u32,
@@ -4672,15 +4703,10 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_immediate_lan
             while row_delta < rows {
                 let row_y = y.saturating_add(row_delta);
                 let x_base = group_base_x;
-                let pixel_color = mandelbrot16_t30_xy_gradient_color(
-                    frame_seed,
-                    target.width,
-                    target.height,
-                    x_base,
-                    row_y,
-                );
+                let pixel_color =
+                    mandelbrot16_t30_address_gradient_color(target.pitch_bytes, x_base, row_y);
                 let proof = submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl(
-                    MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP,
+                    MANDELBROT16_T39_MODE_IMMEDIATE_WIDE_STAMP_ADDRESS_COLOR,
                     row_y,
                     x_base,
                     1,
@@ -4736,7 +4762,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_immediate_lan
             (notified_rows as usize).saturating_mul(target.pitch_bytes as usize),
         );
     crate::log!(
-        "intel/gpgpu: t30-mandelbrot16-immediate-t38-wide-stamp-sweep first_row={} first_x={} start_x_group={} next_row={} submitted_blocks={} finished_blocks={} requested_blocks={} requested_x_blocks={} stamp_repeats={} pixels_per_stamp={} sample_readback_ok={} display_notified={} total_frame_bands={} frame_seed=0x{:08X} target={}x{} pitch_bytes={} x_groups={} rows_per_submit={} requested_store_pixels={} lane_dispatch_delta={} finish_marker=0x{:08X} program_source={} artifact_body=t30-t38-immediate-wide-stamp-unrolled-scalar16-block-fill color_mode=xy-gradient-runtime-patched-block-constant runtime_contract=draw-same-frame-again address_path=immediate-base-cpu-wide-stamp-row-sweep primary_gpu=0x{:X} sample_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} sample_match={} validation=first-16px-chunk-exact-rest-command-retire next=raise-rows-per-heartbeat-or-prove-gpu-side-groupid-xy\n",
+        "intel/gpgpu: t30-mandelbrot16-immediate-t39-wide-stamp-address-color-sweep first_row={} first_x={} start_x_group={} next_row={} submitted_blocks={} finished_blocks={} requested_blocks={} requested_x_blocks={} stamp_repeats={} pixels_per_stamp={} sample_readback_ok={} display_notified={} total_frame_bands={} frame_seed=0x{:08X} target={}x{} pitch_bytes={} x_groups={} rows_per_submit={} requested_store_pixels={} lane_dispatch_delta={} finish_marker=0x{:08X} program_source={} artifact_body=t30-t39-immediate-wide-stamp-address-derived-color-block-fill color_mode=eu-address-derived-block-constant runtime_contract=draw-same-frame-again address_path=immediate-base-cpu-wide-stamp-row-sweep-color-from-g20 primary_gpu=0x{:X} sample_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_expected=0x{:08X} sample_match={} validation=first-16px-chunk-exact-rest-command-retire next=raise-rows-per-heartbeat-or-prove-gpu-side-groupid-xy\n",
         start_row,
         first_x,
         start_x_group,
@@ -4775,11 +4801,11 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_immediate_lan
         finished: all_requested_finished,
         readback_ok: first_sample_match,
         reason: if first_sample_match {
-            "t30-immediate-t36-block-sweep-first-block-visible"
+            "t30-immediate-t39-address-color-block-sweep-first-block-visible"
         } else if all_requested_finished {
-            "t30-immediate-t36-block-sweep-finished-no-first-match"
+            "t30-immediate-t39-address-color-block-sweep-finished-no-first-match"
         } else {
-            "t30-immediate-t36-block-sweep-stopped"
+            "t30-immediate-t39-address-color-block-sweep-stopped"
         },
         program_name: program.name,
         output_gpu: first_gpu,
@@ -5184,7 +5210,9 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
     } else {
         row_index % target.height
     } as usize;
-    let store_pixels_per_invocation = if mode == MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP {
+    let store_pixels_per_invocation = if mode == MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP
+        || mode == MANDELBROT16_T39_MODE_IMMEDIATE_WIDE_STAMP_ADDRESS_COLOR
+    {
         PIXELS.saturating_mul(MANDELBROT16_T38_STAMP_REPEATS as usize)
     } else {
         PIXELS
@@ -5239,7 +5267,8 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
         || mode == MANDELBROT16_T35_MODE_IMMEDIATE_EXPLICIT_WIDE_PAYLOAD
         || mode == MANDELBROT16_T36_MODE_IMMEDIATE_UNROLLED_SCALAR16
         || mode == MANDELBROT16_T37_MODE_GROUPID_X_UNROLLED_SCALAR16
-        || mode == MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP;
+        || mode == MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP
+        || mode == MANDELBROT16_T39_MODE_IMMEDIATE_WIDE_STAMP_ADDRESS_COLOR;
     let expected_hit_mask = if validate_all_lanes {
         mandelbrot16_active_lane_mask() as u64
     } else {
@@ -5479,6 +5508,8 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
     let is_t36_unrolled_scalar16 = mode == MANDELBROT16_T36_MODE_IMMEDIATE_UNROLLED_SCALAR16;
     let is_t37_groupid_x_unrolled_scalar16 = is_t37_groupid_x;
     let is_t38_wide_stamp = mode == MANDELBROT16_T38_MODE_IMMEDIATE_WIDE_STAMP;
+    let is_t39_wide_stamp_address_color =
+        mode == MANDELBROT16_T39_MODE_IMMEDIATE_WIDE_STAMP_ADDRESS_COLOR;
     let is_t18_immediate_gradient = mode == MANDELBROT16_T18_MODE_IMMEDIATE_GRADIENT_STORE;
     let is_t19_immediate_raw_radius = mode == MANDELBROT16_T19_MODE_IMMEDIATE_RAW_RADIUS_STORE;
     let is_fixed10_visible = mode == 44 || is_t11_linear_band || is_t15_linear_gradient;
@@ -5520,6 +5551,8 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
             "mandelbrot16-t37-groupid-x-unrolled-scalar16-quiet-submit-finished-no-readback"
         } else if is_t38_wide_stamp {
             "mandelbrot16-t38-immediate-wide-stamp-quiet-submit-finished-no-readback"
+        } else if is_t39_wide_stamp_address_color {
+            "mandelbrot16-t39-immediate-wide-stamp-address-color-quiet-submit-finished-no-readback"
         } else {
             "mandelbrot16-simd16-q12-onevis-quiet-submit-finished-no-readback"
         }
@@ -5565,6 +5598,8 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
         "mandelbrot16-t37-groupid-x-unrolled-scalar16-color-store-visible"
     } else if readback_ok && is_t38_wide_stamp {
         "mandelbrot16-t38-immediate-wide-stamp-color-store-visible"
+    } else if readback_ok && is_t39_wide_stamp_address_color {
+        "mandelbrot16-t39-immediate-wide-stamp-address-color-store-visible"
     } else if readback_ok {
         "mandelbrot16-simd16-alu-store-witness-visible"
     } else if !finished {
@@ -5609,6 +5644,8 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
             "t37-simd16-groupid-x-unrolled-scalar16-submit-eot-no-readback"
         } else if is_t38_wide_stamp {
             "t38-simd16-immediate-wide-stamp-submit-eot-no-readback"
+        } else if is_t39_wide_stamp_address_color {
+            "t39-simd16-immediate-wide-stamp-address-color-submit-eot-no-readback"
         } else {
             "simd16-q12-onevis-submit-eot-no-readback-visual-exercise"
         }
@@ -5652,6 +5689,8 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
         "t37-simd16-groupid-x-unrolled-scalar16-store-eot-all-lane-and-block-validation-once"
     } else if readback_ok && is_t38_wide_stamp {
         "t38-simd16-immediate-wide-stamp-store-eot-first-chunk-validation-once"
+    } else if readback_ok && is_t39_wide_stamp_address_color {
+        "t39-simd16-immediate-wide-stamp-address-color-store-eot-first-chunk-validation-once"
     } else if readback_ok {
         "simd16-q12-or-alu-store-eot-first-lane-validation-once"
     } else if dispatch_delta >= expected_hw_lane_dispatch {
@@ -5683,6 +5722,8 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
         "t37-simd16-groupid-x-unrolled-scalar16-visible-color-store"
     } else if is_t38_wide_stamp {
         "t38-simd16-immediate-wide-stamp-visible-color-store"
+    } else if is_t39_wide_stamp_address_color {
+        "t39-simd16-immediate-wide-stamp-address-derived-visible-color-store"
     } else if is_fixed10_visible {
         if is_t19_immediate_raw_radius {
             "t19-simd16-immediate-base-fixed1-raw-radius-visible-color-store"
@@ -5724,6 +5765,8 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
         "groupid-x-linear64-unrolled-scalar16-visible-store"
     } else if is_t38_wide_stamp {
         "immediate-base-wide-stamp-unrolled-scalar16-visible-store"
+    } else if is_t39_wide_stamp_address_color {
+        "immediate-base-wide-stamp-address-derived-color-visible-store"
     } else if is_fixed10_visible {
         if is_t19_immediate_raw_radius {
             "immediate-base-address-q12-fixed1-raw-radius-visible-store"
@@ -5760,6 +5803,7 @@ fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe_impl_with_not
         || is_t36_unrolled_scalar16
         || is_t37_groupid_x_unrolled_scalar16
         || is_t38_wide_stamp
+        || is_t39_wide_stamp_address_color
     {
         if is_t36_unrolled_scalar16 {
             trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_BODY_DWORD + 8

@@ -265,7 +265,7 @@ struct Config {
     #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
     unix_socket: Option<Arc<std::path::Path>>,
     #[cfg(all(unix, any(target_os = "trueos", target_os = "zkvm")))]
-    unix_socket: Option<Arc<tokio::path::Path>>,
+    unix_socket: Option<Arc<tokio::path::PathBuf>>,
     #[cfg(target_os = "windows")]
     windows_named_pipe: Option<Arc<core::ffi::OsStr>>,
 }
@@ -1810,7 +1810,16 @@ impl ClientBuilder {
     /// Likewise, DNS resolution will not be done on the domain name.
     #[cfg(unix)]
     pub fn unix_socket(mut self, path: impl UnixSocketProvider) -> ClientBuilder {
-        self.config.unix_socket = Some(path.reqwest_uds_path(crate::connect::uds::Internal).into());
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        let unix_socket: Arc<tokio::path::PathBuf> = Arc::new(
+            path.reqwest_uds_path(crate::connect::uds::Internal)
+                .to_path_buf(),
+        );
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        let unix_socket: Arc<std::path::Path> =
+            Arc::from(path.reqwest_uds_path(crate::connect::uds::Internal));
+
+        self.config.unix_socket = Some(unix_socket);
         self
     }
 

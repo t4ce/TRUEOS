@@ -603,15 +603,15 @@ pub fn defer_blueprint_app_window_create(
     }
     let width = width.max(1);
     let height = height.max(1);
-    if kind_id == APP_WINDOW_DEFERRED_KIND_SURFACE
-        && tex_id != 0
-        && !seed_deferred_surface_texture(tex_id, host_tex_id, width, height)
-    {
-        app_window_broker_log(format_args!(
-            "app-window-broker: vm{} deferred surface texture init failed title={} tex={} host_tex={} size={}x{}",
-            vm_id, title, tex_id, host_tex_id, width, height
-        ));
-        return 0;
+    if kind_id == APP_WINDOW_DEFERRED_KIND_SURFACE && tex_id != 0 {
+        if !seed_deferred_surface_texture(tex_id, host_tex_id, width, height) {
+            app_window_broker_log(format_args!(
+                "app-window-broker: vm{} deferred surface texture init failed title={} tex={} host_tex={} size={}x{}",
+                vm_id, title, tex_id, host_tex_id, width, height
+            ));
+            return 0;
+        }
+        crate::r::io::cabi::record_vm_texture_dimensions_for_vm(vm_id, tex_id, width, height);
     }
 
     *slot = DeferredAppWindowRecord {

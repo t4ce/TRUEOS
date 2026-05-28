@@ -1210,6 +1210,11 @@ fn resolve_known_import(name: &str) -> Option<usize> {
         "memset" => Some(trueos_qjs::trueos_shims::memset as *const () as usize),
         "memcmp" => Some(trueos_qjs::trueos_shims::memcmp as *const () as usize),
         "strlen" => Some(trueos_qjs::trueos_shims::strlen as *const () as usize),
+        "sinf" => Some(trueos_math::sinf as *const () as usize),
+        "cosf" => Some(trueos_math::cosf as *const () as usize),
+        "acosf" => Some(trueos_math::acosf as *const () as usize),
+        "asinf" => Some(trueos_math::asinf as *const () as usize),
+        "log2f" => Some(trueos_math::log2f as *const () as usize),
         "trueos_tokio_tls_current_slot" => {
             Some(crate::stackkeeper::trueos_tokio_tls_current_slot as *const () as usize)
         }

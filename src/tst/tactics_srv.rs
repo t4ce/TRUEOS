@@ -63,6 +63,7 @@ pub enum ClientMsg {
         ping_ms: Option<u32>,
         latency_ms: Option<u32>,
         game: Option<String>,
+        session_id: Option<String>,
     },
     Heartbeat {
         ping_ms: Option<u32>,
@@ -75,9 +76,11 @@ pub enum ClientMsg {
         name: String,
         game: String,
         max_players: Option<u16>,
+        session_id: Option<String>,
     },
     FreeGame {
         game_id: u64,
+        session_id: Option<String>,
     },
     JoinGame {
         game_id: u64,
@@ -87,15 +90,19 @@ pub enum ClientMsg {
     },
     StartGame {
         game_id: u64,
+        session_id: Option<String>,
     },
     PauseGame {
         game_id: u64,
+        session_id: Option<String>,
     },
     ResumeGame {
         game_id: u64,
+        session_id: Option<String>,
     },
     FinishGame {
         game_id: u64,
+        session_id: Option<String>,
     },
     GameList,
     GameCommand {
@@ -172,6 +179,7 @@ struct ClientSession {
     name: String,
     ping_ms: Option<u32>,
     latency_ms: Option<u32>,
+    session_id: Option<String>,
     game_id: Option<u64>,
     rx: Vec<u8>,
     last_seen_tick: u64,
@@ -194,6 +202,7 @@ struct GameSession {
     name: String,
     game: String,
     host_id: u64,
+    host_session_id: Option<String>,
     max_players: u16,
     status: GameStatus,
     players: Vec<u64>,
@@ -203,6 +212,7 @@ struct GameSession {
 struct TacticsEndpoint {
     vnet: VNet,
     dev_idx: usize,
+    listen_handle: Option<api::NetHandle>,
 }
 
 struct TacticsServer {
@@ -238,6 +248,7 @@ impl TacticsServer {
                 name: alloc::format!("player-{}", id),
                 ping_ms: None,
                 latency_ms: None,
+                session_id: None,
                 game_id: None,
                 rx: Vec::new(),
                 last_seen_tick: self.tick,
@@ -256,8 +267,15 @@ impl TacticsServer {
             .and_then(|client| client.game_id);
         let mut updates = Vec::new();
         if let Some(game_id) = old_game {
-            let recipients = self.remove_player_from_game(game_id, client_id);
-            updates.push((game_id, recipients));
+            let should_remove_player = self
+                .games
+                .get(&game_id)
+                .map(|game| game.status != GameStatus::Lobby)
+                .unwrap_or(false);
+            if should_remove_player {
+                let recipients = self.remove_player_from_game(game_id, client_id);
+                updates.push((game_id, recipients));
+            }
         }
         updates
     }
@@ -318,6 +336,25 @@ impl TacticsServer {
             .collect()
     }
 
+    fn host_allowed(
+        &self,
+        game_id: u64,
+        client_id: u64,
+        session_id: Option<&str>,
+    ) -> Result<bool, ()> {
+        let Some(game) = self.games.get(&game_id) else {
+            return Err(());
+        };
+        if game.host_id == client_id {
+            return Ok(true);
+        }
+        Ok(match (game.host_session_id.as_deref(), session_id) {
+            (Some(expected), Some(actual)) => expected == actual,
+            (None, _) => game.status == GameStatus::Lobby,
+            _ => false,
+        })
+    }
+
     fn state_for_game(&self, game_id: u64) -> Option<ServerMsg> {
         let game = self.games.get(&game_id)?;
         if game.status != GameStatus::Running {
@@ -368,17 +405,101 @@ impl TacticsServer {
             }
         }
 
-        if lines.is_empty()
-            && client.rx.len() <= MAX_LINE_BYTES
-            && looks_like_complete_json_object(client.rx.as_slice())
-        {
-            lines.push(core::mem::take(&mut client.rx));
+        while client.rx.len() <= MAX_LINE_BYTES {
+            let Some(frame_len) = json_object_frame_len(client.rx.as_slice()) else {
+                break;
+            };
+            let mut line: Vec<u8> = client.rx.drain(..frame_len).collect();
+            trim_ascii_edges(&mut line);
+            if !line.is_empty() && line.len() <= MAX_LINE_BYTES {
+                lines.push(line);
+            }
         }
         lines
     }
+
+    fn take_pending_line_on_close(&mut self, handle: api::NetHandle) -> Option<(u64, Vec<u8>)> {
+        let client_id = self.handle_to_client.get(&handle.0).copied()?;
+        let client = self.clients.get_mut(&client_id)?;
+        if client.rx.is_empty() || client.rx.len() > MAX_LINE_BYTES {
+            return None;
+        }
+
+        let mut line = core::mem::take(&mut client.rx);
+        while matches!(line.last(), Some(b'\n' | b'\r')) {
+            line.pop();
+        }
+        if !looks_like_complete_json_object(line.as_slice())
+            && looks_like_unclosed_json_object(line.as_slice())
+        {
+            crate::log!(
+                "tactics-srv: repairing eof json handle={} client={} bytes={}\n",
+                handle.0,
+                client_id,
+                line.len()
+            );
+            line.push(b'}');
+        }
+        Some((client_id, line))
+    }
+}
+
+fn trim_ascii_edges(bytes: &mut Vec<u8>) {
+    let leading = bytes
+        .iter()
+        .position(|b| !b.is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    if leading != 0 {
+        bytes.drain(..leading);
+    }
+    while matches!(bytes.last(), Some(b) if b.is_ascii_whitespace()) {
+        bytes.pop();
+    }
+}
+
+fn json_object_frame_len(bytes: &[u8]) -> Option<usize> {
+    let start = bytes.iter().position(|b| !b.is_ascii_whitespace())?;
+    if bytes.get(start).copied() != Some(b'{') {
+        return None;
+    }
+
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (offset, &byte) in bytes[start..].iter().enumerate() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match byte {
+            b'"' => in_string = true,
+            b'{' => depth = depth.saturating_add(1),
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(start + offset + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn looks_like_complete_json_object(bytes: &[u8]) -> bool {
+    let mut trimmed = bytes.to_vec();
+    trim_ascii_edges(&mut trimmed);
+    json_object_frame_len(trimmed.as_slice()) == Some(trimmed.len())
+}
+
+fn looks_like_unclosed_json_object(bytes: &[u8]) -> bool {
     let mut start = 0;
     let mut end = bytes.len();
     while start < end && bytes[start].is_ascii_whitespace() {
@@ -387,7 +508,7 @@ fn looks_like_complete_json_object(bytes: &[u8]) -> bool {
     while end > start && bytes[end - 1].is_ascii_whitespace() {
         end -= 1;
     }
-    start < end && bytes[start] == b'{' && bytes[end - 1] == b'}'
+    start < end && bytes[start] == b'{' && bytes[start..end].windows(6).any(|w| w == b"\"type\"")
 }
 
 fn log_json_parse_error(handle: api::NetHandle, client_id: u64, line: &[u8], err: &str) {
@@ -424,6 +545,20 @@ fn opt_string_field(
             .map(|s| Some(s.to_string()))
             .ok_or_else(|| alloc::format!("field `{}` must be string", key)),
     }
+}
+
+fn opt_session_id(obj: &serde_json::Map<String, Value>) -> Result<Option<String>, String> {
+    for key in ["session_id", "client_key", "token"] {
+        if let Some(value) = value_field(obj, key) {
+            return match value {
+                Value::Null => Ok(None),
+                Value::String(value) if value.len() <= 128 => Ok(Some(value.clone())),
+                Value::String(_) => Err(alloc::format!("field `{}` is too long", key)),
+                _ => Err(alloc::format!("field `{}` must be string", key)),
+            };
+        }
+    }
+    Ok(None)
 }
 
 fn u64_field(obj: &serde_json::Map<String, Value>, key: &str) -> Result<u64, String> {
@@ -486,6 +621,7 @@ fn parse_client_msg(line: &[u8]) -> Result<ClientMsg, String> {
             ping_ms: opt_u32_field(obj, "ping_ms")?,
             latency_ms: opt_u32_field(obj, "latency_ms")?,
             game: opt_string_field(obj, "game")?,
+            session_id: opt_session_id(obj)?,
         }),
         "heartbeat" => Ok(ClientMsg::Heartbeat {
             ping_ms: opt_u32_field(obj, "ping_ms")?,
@@ -498,9 +634,11 @@ fn parse_client_msg(line: &[u8]) -> Result<ClientMsg, String> {
             name: string_field(obj, "name")?,
             game: string_field(obj, "game")?,
             max_players: opt_u16_field(obj, "max_players")?,
+            session_id: opt_session_id(obj)?,
         }),
         "free_game" => Ok(ClientMsg::FreeGame {
             game_id: u64_field(obj, "game_id")?,
+            session_id: opt_session_id(obj)?,
         }),
         "join_game" => Ok(ClientMsg::JoinGame {
             game_id: u64_field(obj, "game_id")?,
@@ -510,15 +648,19 @@ fn parse_client_msg(line: &[u8]) -> Result<ClientMsg, String> {
         }),
         "start_game" => Ok(ClientMsg::StartGame {
             game_id: u64_field(obj, "game_id")?,
+            session_id: opt_session_id(obj)?,
         }),
         "pause_game" => Ok(ClientMsg::PauseGame {
             game_id: u64_field(obj, "game_id")?,
+            session_id: opt_session_id(obj)?,
         }),
         "resume_game" => Ok(ClientMsg::ResumeGame {
             game_id: u64_field(obj, "game_id")?,
+            session_id: opt_session_id(obj)?,
         }),
         "finish_game" => Ok(ClientMsg::FinishGame {
             game_id: u64_field(obj, "game_id")?,
+            session_id: opt_session_id(obj)?,
         }),
         "game_list" => Ok(ClientMsg::GameList),
         "game_command" => Ok(ClientMsg::GameCommand {
@@ -534,10 +676,31 @@ fn parse_client_msg(line: &[u8]) -> Result<ClientMsg, String> {
     }
 }
 
+fn client_msg_label(msg: &ClientMsg) -> &'static str {
+    match msg {
+        ClientMsg::Hello { .. } => "hello",
+        ClientMsg::Heartbeat { .. } => "heartbeat",
+        ClientMsg::Chat { .. } => "chat",
+        ClientMsg::CreateGame { .. } => "create_game",
+        ClientMsg::FreeGame { .. } => "free_game",
+        ClientMsg::JoinGame { .. } => "join_game",
+        ClientMsg::LeaveGame { .. } => "leave_game",
+        ClientMsg::StartGame { .. } => "start_game",
+        ClientMsg::PauseGame { .. } => "pause_game",
+        ClientMsg::ResumeGame { .. } => "resume_game",
+        ClientMsg::FinishGame { .. } => "finish_game",
+        ClientMsg::GameList => "game_list",
+        ClientMsg::GameCommand { .. } => "game_command",
+        ClientMsg::Position { .. } => "position",
+    }
+}
+
 fn send_msg<T: Serialize>(vnet: &VNet, handle: api::NetHandle, msg: &T) {
     if let Ok(mut data) = serde_json::to_vec(msg) {
         data.push(b'\n');
-        let _ = vnet.send_tcp_all(handle, data.as_slice());
+        if vnet.send_tcp_all(handle, data.as_slice()).is_err() {
+            crate::log!("tactics-srv: send failed handle={} bytes={}\n", handle.0, data.len());
+        }
     }
 }
 
@@ -558,6 +721,44 @@ fn send_error(vnet: &VNet, handle: api::NetHandle, message: &str) {
     );
 }
 
+fn open_tactics_listener(endpoint: &mut TacticsEndpoint) -> bool {
+    if endpoint
+        .vnet
+        .submit(api::Command::OpenTcpListen {
+            port: ports::GAMESERVER_TACTICS_TCP_PORT,
+        })
+        .is_err()
+    {
+        crate::log!(
+            "tactics-srv: reopen listen failed dev={} owner={}\n",
+            endpoint.dev_idx,
+            endpoint.vnet.owner()
+        );
+        return false;
+    }
+
+    let ip = crate::net::adapter::ipv4_at(endpoint.dev_idx);
+    match ip {
+        Some([a, b, c, d]) => crate::log!(
+            "tactics-srv: listening tcp {} dev={} owner={} ip={}.{}.{}.{}\n",
+            ports::GAMESERVER_TACTICS_TCP_PORT,
+            endpoint.dev_idx,
+            endpoint.vnet.owner(),
+            a,
+            b,
+            c,
+            d
+        ),
+        None => crate::log!(
+            "tactics-srv: listening tcp {} dev={} owner={} ip=none\n",
+            ports::GAMESERVER_TACTICS_TCP_PORT,
+            endpoint.dev_idx,
+            endpoint.vnet.owner()
+        ),
+    }
+    true
+}
+
 fn add_endpoints(endpoints: &mut Vec<TacticsEndpoint>) -> usize {
     let mut added = 0;
     for dev_idx in 0..crate::net::device_count() {
@@ -574,35 +775,15 @@ fn add_endpoints(endpoints: &mut Vec<TacticsEndpoint>) -> usize {
         let Some(vnet) = VNet::open(dev_idx) else {
             continue;
         };
-        if vnet
-            .submit(api::Command::OpenTcpListen {
-                port: ports::GAMESERVER_TACTICS_TCP_PORT,
-            })
-            .is_err()
-        {
+        let mut endpoint = TacticsEndpoint {
+            vnet,
+            dev_idx,
+            listen_handle: None,
+        };
+        if !open_tactics_listener(&mut endpoint) {
             continue;
         }
-
-        let ip = crate::net::adapter::ipv4_at(dev_idx);
-        match ip {
-            Some([a, b, c, d]) => crate::log!(
-                "tactics-srv: listening tcp {} dev={} owner={} ip={}.{}.{}.{}\n",
-                ports::GAMESERVER_TACTICS_TCP_PORT,
-                dev_idx,
-                vnet.owner(),
-                a,
-                b,
-                c,
-                d
-            ),
-            None => crate::log!(
-                "tactics-srv: listening tcp {} dev={} owner={} ip=none\n",
-                ports::GAMESERVER_TACTICS_TCP_PORT,
-                dev_idx,
-                vnet.owner()
-            ),
-        }
-        endpoints.push(TacticsEndpoint { vnet, dev_idx });
+        endpoints.push(endpoint);
         added += 1;
     }
     added
@@ -621,20 +802,23 @@ fn handle_client_msg(
             ping_ms,
             latency_ms,
             game,
+            session_id,
         } => {
             if let Some(client) = server.clients.get_mut(&client_id) {
                 crate::log!(
-                    "tactics-srv: hello client={} handle={} name={} game={:?} ping_ms={:?} latency_ms={:?}\n",
+                    "tactics-srv: hello client={} handle={} name={} game={:?} session={} ping_ms={:?} latency_ms={:?}\n",
                     client_id,
                     handle.0,
                     name,
                     game,
+                    session_id.as_deref().unwrap_or("none"),
                     ping_ms,
                     latency_ms
                 );
                 client.name = name;
                 client.ping_ms = ping_ms;
                 client.latency_ms = latency_ms;
+                client.session_id = session_id;
             }
             send_msg(
                 vnet,
@@ -715,6 +899,7 @@ fn handle_client_msg(
             name,
             game,
             max_players,
+            session_id,
         } => {
             let game_id = server.next_game_id;
             server.next_game_id = server.next_game_id.saturating_add(1);
@@ -728,12 +913,16 @@ fn handle_client_msg(
             }
             if let Some(client) = server.clients.get_mut(&client_id) {
                 client.game_id = Some(game_id);
+                if session_id.is_some() {
+                    client.session_id = session_id.clone();
+                }
             }
             let max_players = max_players.unwrap_or(8).max(1);
             crate::log!(
-                "tactics-srv: create_game id={} host={} name={} game={} max_players={}\n",
+                "tactics-srv: create_game id={} host={} session={} name={} game={} max_players={}\n",
                 game_id,
                 client_id,
+                session_id.as_deref().unwrap_or("none"),
                 name,
                 game,
                 max_players
@@ -745,6 +934,7 @@ fn handle_client_msg(
                     name,
                     game,
                     host_id: client_id,
+                    host_session_id: session_id,
                     max_players,
                     status: GameStatus::Lobby,
                     players: alloc::vec![client_id],
@@ -769,11 +959,17 @@ fn handle_client_msg(
                 );
             }
         }
-        ClientMsg::FreeGame { game_id } => {
+        ClientMsg::FreeGame {
+            game_id,
+            session_id,
+        } => {
+            if session_id.is_some()
+                && let Some(client) = server.clients.get_mut(&client_id)
+            {
+                client.session_id = session_id.clone();
+            }
             let allowed = server
-                .games
-                .get(&game_id)
-                .map(|game| game.host_id == client_id)
+                .host_allowed(game_id, client_id, session_id.as_deref())
                 .unwrap_or(false);
             if !allowed {
                 send_error(vnet, handle, "only the host can free this game");
@@ -781,9 +977,10 @@ fn handle_client_msg(
             }
             if let Some(game) = server.games.remove(&game_id) {
                 crate::log!(
-                    "tactics-srv: free_game id={} host={} players={}\n",
+                    "tactics-srv: free_game id={} host={} session={} players={}\n",
                     game_id,
                     client_id,
+                    session_id.as_deref().unwrap_or("none"),
                     game.players.len()
                 );
                 for player_id in game.players {
@@ -891,17 +1088,27 @@ fn handle_client_msg(
                 }
             }
         }
-        ClientMsg::StartGame { game_id } => {
+        ClientMsg::StartGame {
+            game_id,
+            session_id,
+        } => {
             let allowed = server
-                .games
-                .get(&game_id)
-                .map(|game| game.host_id == client_id)
+                .host_allowed(game_id, client_id, session_id.as_deref())
                 .unwrap_or(false);
             if !allowed {
                 send_error(vnet, handle, "only the host can start this game");
                 return;
             }
+            if let Some(client) = server.clients.get_mut(&client_id) {
+                client.game_id = Some(game_id);
+                if session_id.is_some() {
+                    client.session_id = session_id.clone();
+                }
+            }
             if let Some(game) = server.games.get_mut(&game_id) {
+                if !game.players.contains(&client_id) {
+                    game.players.push(client_id);
+                }
                 game.status = GameStatus::Running;
             }
             if let Some(game) = server.games.get(&game_id) {
@@ -914,9 +1121,10 @@ fn handle_client_msg(
                     },
                 );
                 crate::log!(
-                    "tactics-srv: start_game id={} host={} players={}\n",
+                    "tactics-srv: start_game id={} host={} session={} players={}\n",
                     game_id,
                     client_id,
+                    session_id.as_deref().unwrap_or("none"),
                     game.players.len()
                 );
                 broadcast(
@@ -928,12 +1136,23 @@ fn handle_client_msg(
                 );
             }
         }
-        ClientMsg::PauseGame { game_id } => {
-            if let Some(game) = server.games.get_mut(&game_id)
-                && game.host_id == client_id
-            {
-                game.status = GameStatus::Paused;
-                crate::log!("tactics-srv: pause_game id={} host={}\n", game_id, client_id);
+        ClientMsg::PauseGame {
+            game_id,
+            session_id,
+        } => {
+            let allowed = server
+                .host_allowed(game_id, client_id, session_id.as_deref())
+                .unwrap_or(false);
+            if allowed {
+                if let Some(game) = server.games.get_mut(&game_id) {
+                    game.status = GameStatus::Paused;
+                }
+                crate::log!(
+                    "tactics-srv: pause_game id={} host={} session={}\n",
+                    game_id,
+                    client_id,
+                    session_id.as_deref().unwrap_or("none")
+                );
                 send_msg(
                     vnet,
                     handle,
@@ -947,14 +1166,27 @@ fn handle_client_msg(
                     server.game_handles(game_id).as_slice(),
                     &ServerMsg::GamePaused { game_id },
                 );
+            } else {
+                send_error(vnet, handle, "only the host can pause this game");
             }
         }
-        ClientMsg::ResumeGame { game_id } => {
-            if let Some(game) = server.games.get_mut(&game_id)
-                && game.host_id == client_id
-            {
-                game.status = GameStatus::Running;
-                crate::log!("tactics-srv: resume_game id={} host={}\n", game_id, client_id);
+        ClientMsg::ResumeGame {
+            game_id,
+            session_id,
+        } => {
+            let allowed = server
+                .host_allowed(game_id, client_id, session_id.as_deref())
+                .unwrap_or(false);
+            if allowed {
+                if let Some(game) = server.games.get_mut(&game_id) {
+                    game.status = GameStatus::Running;
+                }
+                crate::log!(
+                    "tactics-srv: resume_game id={} host={} session={}\n",
+                    game_id,
+                    client_id,
+                    session_id.as_deref().unwrap_or("none")
+                );
                 send_msg(
                     vnet,
                     handle,
@@ -968,14 +1200,27 @@ fn handle_client_msg(
                     server.game_handles(game_id).as_slice(),
                     &ServerMsg::GameResumed { game_id },
                 );
+            } else {
+                send_error(vnet, handle, "only the host can resume this game");
             }
         }
-        ClientMsg::FinishGame { game_id } => {
-            if let Some(game) = server.games.get_mut(&game_id)
-                && game.host_id == client_id
-            {
-                game.status = GameStatus::Finished;
-                crate::log!("tactics-srv: finish_game id={} host={}\n", game_id, client_id);
+        ClientMsg::FinishGame {
+            game_id,
+            session_id,
+        } => {
+            let allowed = server
+                .host_allowed(game_id, client_id, session_id.as_deref())
+                .unwrap_or(false);
+            if allowed {
+                if let Some(game) = server.games.get_mut(&game_id) {
+                    game.status = GameStatus::Finished;
+                }
+                crate::log!(
+                    "tactics-srv: finish_game id={} host={} session={}\n",
+                    game_id,
+                    client_id,
+                    session_id.as_deref().unwrap_or("none")
+                );
                 send_msg(
                     vnet,
                     handle,
@@ -989,6 +1234,8 @@ fn handle_client_msg(
                     server.game_handles(game_id).as_slice(),
                     &ServerMsg::GameFinished { game_id },
                 );
+            } else {
+                send_error(vnet, handle, "only the host can finish this game");
             }
         }
         ClientMsg::GameList => {
@@ -1070,19 +1317,58 @@ fn drain_endpoint(endpoint: &mut TacticsEndpoint, server: &mut TacticsServer) {
             break;
         };
         match ev {
-            api::Event::Opened { .. } => {}
+            api::Event::Opened { handle, .. } => {
+                endpoint.listen_handle = Some(handle);
+                crate::log!("tactics-srv: opened handle={}\n", handle.0);
+            }
+            api::Event::Error { msg } => {
+                crate::log!("tactics-srv: net error msg={}\n", msg);
+            }
             api::Event::TcpEstablished { handle, .. } => {
-                let id = server.add_client(handle);
+                if endpoint.listen_handle == Some(handle) {
+                    endpoint.listen_handle = None;
+                    crate::log!(
+                        "tactics-srv: accepted handle={} dev={} reopening listener\n",
+                        handle.0,
+                        endpoint.dev_idx
+                    );
+                    let _ = open_tactics_listener(endpoint);
+                }
+                let id = match server.handle_to_client.get(&handle.0).copied() {
+                    Some(id) => id,
+                    None => server.add_client(handle),
+                };
                 crate::log!("tactics-srv: tcp established handle={} client={}\n", handle.0, id);
             }
             api::Event::TcpData { handle, data } => {
+                if endpoint.listen_handle == Some(handle) {
+                    endpoint.listen_handle = None;
+                    crate::log!(
+                        "tactics-srv: accepted-data handle={} dev={} reopening listener\n",
+                        handle.0,
+                        endpoint.dev_idx
+                    );
+                    let _ = open_tactics_listener(endpoint);
+                }
                 let client_id = match server.handle_to_client.get(&handle.0).copied() {
                     Some(client_id) => client_id,
                     None => server.add_client(handle),
                 };
+                crate::log!(
+                    "tactics-srv: tcp data handle={} client={} bytes={}\n",
+                    handle.0,
+                    client_id,
+                    data.len()
+                );
                 for line in server.client_lines(handle, data.as_slice()) {
                     match parse_client_msg(line.as_slice()) {
                         Ok(msg) => {
+                            crate::log!(
+                                "tactics-srv: command handle={} client={} type={}\n",
+                                handle.0,
+                                client_id,
+                                client_msg_label(&msg)
+                            );
                             handle_client_msg(server, &endpoint.vnet, handle, client_id, msg);
                         }
                         Err(err) => {
@@ -1093,6 +1379,33 @@ fn drain_endpoint(endpoint: &mut TacticsEndpoint, server: &mut TacticsServer) {
                 }
             }
             api::Event::Closed { handle } => {
+                let was_listener = endpoint.listen_handle == Some(handle);
+                if was_listener {
+                    endpoint.listen_handle = None;
+                }
+                if let Some((client_id, line)) = server.take_pending_line_on_close(handle) {
+                    crate::log!(
+                        "tactics-srv: flushing eof command handle={} client={} bytes={}\n",
+                        handle.0,
+                        client_id,
+                        line.len()
+                    );
+                    match parse_client_msg(line.as_slice()) {
+                        Ok(msg) => {
+                            crate::log!(
+                                "tactics-srv: eof command handle={} client={} type={}\n",
+                                handle.0,
+                                client_id,
+                                client_msg_label(&msg)
+                            );
+                            handle_client_msg(server, &endpoint.vnet, handle, client_id, msg);
+                        }
+                        Err(err) => {
+                            log_json_parse_error(handle, client_id, line.as_slice(), err.as_str());
+                            send_error(&endpoint.vnet, handle, "invalid json command");
+                        }
+                    }
+                }
                 if let Some(client_id) = server.handle_to_client.get(&handle.0).copied() {
                     if let Some(client) = server.clients.get(&client_id) {
                         crate::log!(
@@ -1121,10 +1434,13 @@ fn drain_endpoint(endpoint: &mut TacticsEndpoint, server: &mut TacticsServer) {
                         );
                     }
                 }
-            }
-            api::Event::Error { msg } => {
-                if msg != "bad handle" {
-                    crate::log!("tactics-srv: net error {}\n", msg);
+                if was_listener {
+                    crate::log!(
+                        "tactics-srv: listener closed handle={} dev={} reopening\n",
+                        handle.0,
+                        endpoint.dev_idx
+                    );
+                    let _ = open_tactics_listener(endpoint);
                 }
             }
             api::Event::TcpSent { .. }
@@ -1216,22 +1532,25 @@ fn main() -> std::io::Result<()> {
     let mut stream = TcpStream::connect("TRUEOS_IP:1337")?;
     stream.set_nodelay(true)?;
 
+    let session_id = "local-dev-session";
     let started = Instant::now();
     send(&mut stream, json!({
         "type": "hello",
         "name": "Ada",
         "ping_ms": 0,
         "latency_ms": 0,
-        "game": "tactics"
+        "game": "tactics",
+        "session_id": session_id
     }))?;
     send(&mut stream, json!({"type": "game_list"}))?;
     send(&mut stream, json!({
         "type": "create_game",
         "name": "Friday lobby",
         "game": "tactics",
-        "max_players": 4
+        "max_players": 4,
+        "session_id": session_id
     }))?;
-    send(&mut stream, json!({"type": "start_game", "game_id": 1}))?;
+    send(&mut stream, json!({"type": "start_game", "game_id": 1, "session_id": session_id}))?;
 
     let mut read = BufReader::new(stream.try_clone()?);
     let mut line = String::new();
@@ -1257,8 +1576,8 @@ fn main() -> std::io::Result<()> {
 Useful commands:
 {"type":"chat","text":"hello"}
 {"type":"join_game","game_id":1}
-{"type":"pause_game","game_id":1}
-{"type":"resume_game","game_id":1}
+{"type":"pause_game","game_id":1,"session_id":"local-dev-session"}
+{"type":"resume_game","game_id":1,"session_id":"local-dev-session"}
 {"type":"game_command","game_id":1,"seq":42,"command":{"move":{"dx":1,"dy":0}}}
-{"type":"free_game","game_id":1}
+{"type":"free_game","game_id":1,"session_id":"local-dev-session"}
 */

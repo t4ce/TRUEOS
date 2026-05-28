@@ -3882,7 +3882,11 @@ impl NetService {
             //
             // Convert CLOSE-WAIT into an orderly local close so we eventually emit
             // `NetEvent::Closed`.
-            if socket.state() == tcp::State::CloseWait && !rx_backpressured && !socket.can_recv() {
+            if socket.state() == tcp::State::CloseWait
+                && !rx_backpressured
+                && !socket.can_recv()
+                && self.records[idx].tcp_tx.is_empty()
+            {
                 if crate::logflag::NET_LOG_TCP_FLOW {
                     crate::log_info!(target: "net";
                         "net: tcp closewait owner={} handle={} rx_bytes_this_poll={} rx_events={} rx_drops={}\n",

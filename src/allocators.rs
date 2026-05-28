@@ -835,26 +835,24 @@ fn log_hv_guest_alloc_watermark(vm_id: u8, layout: Layout, ptr: *mut u8, path: &
             return;
         }
         let trace = last_alloc_trace();
-        crate::globalog::log_with_purpose(
-            Some("info"),
-            format_args!(
-                "hv-guest-alloc: vm{} {} ok size={} align={} ptr=0x{:016X} free_bytes={} largest_free={} free_blocks={} bucket={} prev={} trace_size={} trace_align={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X}\n",
-                vm_id,
-                path,
-                layout.size(),
-                layout.align(),
-                ptr as usize,
-                stats.free_bytes,
-                stats.largest_free_block,
-                stats.free_blocks,
-                bucket,
-                previous,
-                trace.layout_size,
-                trace.layout_align,
-                trace.caller_rip,
-                trace.caller_rip_1,
-                trace.caller_rip_2,
-            ),
+        crate::log_info!(
+            target: "hv";
+            "hv-guest-alloc: vm{} {} ok size={} align={} ptr=0x{:016X} free_bytes={} largest_free={} free_blocks={} bucket={} prev={} trace_size={} trace_align={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X}\n",
+            vm_id,
+            path,
+            layout.size(),
+            layout.align(),
+            ptr as usize,
+            stats.free_bytes,
+            stats.largest_free_block,
+            stats.free_blocks,
+            bucket,
+            previous,
+            trace.layout_size,
+            trace.layout_align,
+            trace.caller_rip,
+            trace.caller_rip_1,
+            trace.caller_rip_2,
         );
     });
 }
@@ -863,40 +861,36 @@ fn log_hv_guest_alloc_failure(vm_id: u8, layout: Layout, path: &str) {
     with_host_alloc_domain(|| {
         let stats = hv_guest_heap_stats(vm_id);
         let trace = last_alloc_trace();
-        crate::globalog::log_with_purpose(
-            Some("warn"),
-            format_args!(
-                "hv-guest-alloc: vm{} {} failed size={} align={} src={:?} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}\n",
-                vm_id,
-                path,
-                layout.size(),
-                layout.align(),
-                stats.source,
-                stats.usable_total,
-                stats.free_bytes,
-                stats.largest_free_block,
-                stats.free_blocks,
-                stats.initialized,
-            ),
+        crate::log_warn!(
+            target: "hv";
+            "hv-guest-alloc: vm{} {} failed size={} align={} src={:?} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}\n",
+            vm_id,
+            path,
+            layout.size(),
+            layout.align(),
+            stats.source,
+            stats.usable_total,
+            stats.free_bytes,
+            stats.largest_free_block,
+            stats.free_blocks,
+            stats.initialized,
         );
-        crate::globalog::log_with_purpose(
-            Some("warn"),
-            format_args!(
-                "hv-guest-alloc: trace seq={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X} size={} align={} stage={} head=0x{:016X} block=0x{:016X} block_size={} next=0x{:016X} payload=0x{:016X} aligned_used={}\n",
-                trace.seq,
-                trace.caller_rip,
-                trace.caller_rip_1,
-                trace.caller_rip_2,
-                trace.layout_size,
-                trace.layout_align,
-                trace.stage,
-                trace.head_ptr,
-                trace.block_ptr,
-                trace.block_size,
-                trace.block_next,
-                trace.payload_start,
-                trace.aligned_used,
-            ),
+        crate::log_warn!(
+            target: "hv";
+            "hv-guest-alloc: trace seq={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X} size={} align={} stage={} head=0x{:016X} block=0x{:016X} block_size={} next=0x{:016X} payload=0x{:016X} aligned_used={}\n",
+            trace.seq,
+            trace.caller_rip,
+            trace.caller_rip_1,
+            trace.caller_rip_2,
+            trace.layout_size,
+            trace.layout_align,
+            trace.stage,
+            trace.head_ptr,
+            trace.block_ptr,
+            trace.block_size,
+            trace.block_next,
+            trace.payload_start,
+            trace.aligned_used,
         );
     });
 }
