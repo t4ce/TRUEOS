@@ -100,15 +100,40 @@ impl crabusb::KernelOp for TrueosCrabKernel {
     }
 }
 
-pub fn known_xhci_host_inputs() -> Option<(crabusb::Mmio, &'static dyn crabusb::KernelOp)> {
+pub fn known_xhci_host_inputs() -> Option<(
+    crabusb::Mmio,
+    &'static dyn crabusb::KernelOp,
+    crabusb::XhciRootHubInitPolicy,
+)> {
     let dev = known_xhci_device()?;
+    let root_hub_policy = if is_qemu_xhci_device(dev.vendor_id, dev.device_id) {
+        crate::log!(
+            "crabusb: xhci controller policy=qemu-full-root-hub-reset pci={:02x}:{:02x}.{} vid={:04x} pid={:04x}\n",
+            dev.bus,
+            dev.slot,
+            dev.function,
+            dev.vendor_id,
+            dev.device_id
+        );
+        crabusb::XhciRootHubInitPolicy::FullAllPorts
+    } else {
+        crate::log!(
+            "crabusb: xhci controller policy=baremetal-selective-3-4-skip-11 pci={:02x}:{:02x}.{} vid={:04x} pid={:04x}\n",
+            dev.bus,
+            dev.slot,
+            dev.function,
+            dev.vendor_id,
+            dev.device_id
+        );
+        crabusb::XhciRootHubInitPolicy::SelectivePorts3And4Skip11
+    };
     crate::pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
     let (bar, phys) = first_mmio_bar(&dev)?;
     let size = crate::pci::bar_size_bytes(dev.bus, dev.slot, dev.function, bar)
         .unwrap_or(0x10000)
         .max(0x1000) as usize;
     let mmio = crate::pci::mmio::map_mmio_region_exact(phys, size).ok()?;
-    Some((mmio, &TRUEOS_CRAB_KERNEL))
+    Some((mmio, &TRUEOS_CRAB_KERNEL, root_hub_policy))
 }
 
 fn known_xhci_device() -> Option<crate::pci::PciDevice> {
@@ -118,6 +143,16 @@ fn known_xhci_device() -> Option<crate::pci::PciDevice> {
             .copied()
             .find(|dev| dev.class == 0x0c && dev.subclass == 0x03 && dev.prog_if == 0x30)
     })
+}
+
+fn is_qemu_xhci_device(vendor_id: u16, device_id: u16) -> bool {
+    matches!(
+        (vendor_id, device_id),
+        // qemu-xhci
+        (0x1b36, 0x000d)
+            // nec-usb-xhci, commonly used by older QEMU invocations
+            | (0x1033, 0x0194)
+    )
 }
 
 fn first_mmio_bar(dev: &crate::pci::PciDevice) -> Option<(u8, u64)> {

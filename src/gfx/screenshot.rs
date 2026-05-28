@@ -271,6 +271,9 @@ pub unsafe extern "C" fn trueos_cabi_gfx_capture_screenshot_data_url(
     if crate::hv::current_guest_execution_context_vm_id().is_some() {
         return -1;
     }
+    if !crate::allcaps::gfx::SCREENSHOT_CAPTURE_ENABLED {
+        return -1;
+    }
     if out_ptr.is_null() || out_cap == 0 {
         let Some(image) = next_frame_blocking(2000) else {
             return -1;
@@ -290,10 +293,14 @@ static ENCODED_SCREENSHOT_BUFFER: EncodedScreenshotBuffer = EncodedScreenshotBuf
 static VIRGL_SCREENSHOT_AWAIT: ScreenshotAwait = ScreenshotAwait::new(&LAST_SCREENSHOT_BUFFER);
 
 pub(crate) fn screenshot_capture_armed() -> bool {
-    LAST_SCREENSHOT_BUFFER.is_capture_armed()
+    crate::allcaps::gfx::SCREENSHOT_CAPTURE_ENABLED && LAST_SCREENSHOT_BUFFER.is_capture_armed()
 }
 
 pub(crate) fn publish_screenshot_rgba_buffer(width: u32, height: u32, rgba: &[u8]) -> u64 {
+    if !crate::allcaps::gfx::SCREENSHOT_CAPTURE_ENABLED {
+        return 0;
+    }
+
     let need_pixels = (width as usize).saturating_mul(height as usize);
     if need_pixels == 0 {
         return LAST_SCREENSHOT_BUFFER.publish_copy(width, height, &[]);

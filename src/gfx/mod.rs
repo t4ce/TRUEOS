@@ -122,7 +122,6 @@ pub enum SystemLockOwner {
     UploadTexture = 2,
     EndFrame = 3,
     CursorQueryViewport = 4,
-    CursorEndFrame = 5,
     DrawMandelbrot = 6,
     FinalizeBackendInit = 7,
     WithFramebuffers = 8,
@@ -141,7 +140,6 @@ impl SystemLockOwner {
             Self::UploadTexture => "upload_texture",
             Self::EndFrame => "end_frame",
             Self::CursorQueryViewport => "cursor_query_viewport",
-            Self::CursorEndFrame => "cursor_end_frame",
             Self::DrawMandelbrot => "draw_mandelbrot",
             Self::FinalizeBackendInit => "finalize_backend_init",
             Self::WithFramebuffers => "with_framebuffers",
@@ -159,7 +157,6 @@ impl SystemLockOwner {
             x if x == Self::UploadTexture as u32 => Self::UploadTexture,
             x if x == Self::EndFrame as u32 => Self::EndFrame,
             x if x == Self::CursorQueryViewport as u32 => Self::CursorQueryViewport,
-            x if x == Self::CursorEndFrame as u32 => Self::CursorEndFrame,
             x if x == Self::DrawMandelbrot as u32 => Self::DrawMandelbrot,
             x if x == Self::FinalizeBackendInit as u32 => Self::FinalizeBackendInit,
             x if x == Self::WithFramebuffers as u32 => Self::WithFramebuffers,
@@ -248,7 +245,7 @@ pub fn cabi_frame_lock_begin() {
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
-        core::hint::spin_loop();
+        crate::wait::spin_step();
     }
 }
 

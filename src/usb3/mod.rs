@@ -13,10 +13,12 @@ const CRABUSB_CONTROLLER_ID: u32 = 3;
 
 #[embassy_executor::task]
 pub async fn usb_controller_service_task() {
-    let Some((mmio, kernel)) = lib::known_xhci_host_inputs() else {
+    let Some((mmio, kernel, root_hub_policy)) = lib::known_xhci_host_inputs() else {
         return;
     };
-    let mut host = crabusb::USBHost::new_xhci(mmio, kernel).expect("crabusb xhci host");
+    let mut host =
+        crabusb::USBHost::new_xhci_with_root_hub_init_policy(mmio, kernel, root_hub_policy)
+            .expect("crabusb xhci host");
     host.init().await.expect("crabusb xhci init");
 
     let event_handler = host.create_event_handler();
