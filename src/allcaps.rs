@@ -35,6 +35,10 @@ pub mod blueprint {
     pub const PORTAL_IMAGE_CAP_BYTES: usize = 16 * 1024 * 1024;
 }
 
+pub mod gfx {
+    pub const SCREENSHOT_CAPTURE_ENABLED: bool = false;
+}
+
 pub mod stackkeeper {
     pub const TOKIO_LANE_COUNT: usize = 16;
     pub const TOKIO_LANE_SCRATCH_BYTES: usize = 16 * 1024;

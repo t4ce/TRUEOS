@@ -520,6 +520,7 @@ pub fn handle_ui2_window_op_vmcall(vm_id: u8, window_id: u32, payload: &[u8]) ->
     };
     if ok {
         let _ = materialize_deferred_blueprint_app_windows(vm_id);
+        sync_materialized_deferred_blueprint_app_window_updates(vm_id);
         Ok(0)
     } else {
         Ok(-1)
@@ -1120,6 +1121,7 @@ fn sync_materialized_deferred_blueprint_app_window_updates(vm_id: u8) {
     for record in pending {
         let window_id = record.materialized_window_id;
         let _ = crate::r::ui2::set_window_title(window_id, record.title.as_str());
+        apply_deferred_app_window_properties(window_id, &record);
         if let Some(info) = crate::r::ui2::window_info_by_id(window_id) {
             let _ = info_updates.push((record.deferred_id, info));
         }
