@@ -1107,37 +1107,6 @@ pub mod cabi {
         base.add(VM_CABI_ALLOC_HEADER_BYTES)
     }
 
-    #[inline]
-    unsafe fn cabi_return_address(depth: usize) -> usize {
-        #[cfg(target_arch = "x86_64")]
-        {
-            let rbp: usize;
-            core::arch::asm!("mov {}, rbp", out(reg) rbp, options(nomem, nostack, preserves_flags));
-            let mut frame = rbp as *const usize;
-            let mut remaining = depth;
-            while remaining != 0 {
-                if frame.is_null()
-                    || !(frame as usize).is_multiple_of(core::mem::align_of::<usize>())
-                {
-                    return 0;
-                }
-                frame = *frame as *const usize;
-                remaining -= 1;
-            }
-            if frame.is_null() || !(frame as usize).is_multiple_of(core::mem::align_of::<usize>()) {
-                0
-            } else {
-                *frame.add(1)
-            }
-        }
-
-        #[cfg(not(target_arch = "x86_64"))]
-        {
-            let _ = depth;
-            0
-        }
-    }
-
     fn log_cabi_vm_alloc_watermark(vm_id: u8, size: usize, ptr: *mut u8) {
         let Some(bucket_slot) = CABI_VM_ALLOC_FREE_BUCKET_BY_VM.get(vm_id as usize) else {
             return;
@@ -1152,7 +1121,8 @@ pub mod cabi {
         if !should_log {
             return;
         }
-        crate::log!(
+        crate::log_info!(
+            target: "gfx";
             "cabi-alloc: vm{} size={} ptr=0x{:X} free={} largest={} blocks={} bucket={} prev={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X}\n",
             vm_id,
             size,
@@ -1162,9 +1132,9 @@ pub mod cabi {
             stats.free_blocks,
             bucket,
             previous,
-            unsafe { cabi_return_address(3) },
-            unsafe { cabi_return_address(4) },
-            unsafe { cabi_return_address(5) },
+            0usize,
+            0usize,
+            0usize,
         );
     }
 
@@ -1963,11 +1933,11 @@ pub mod cabi {
         core::sync::atomic::AtomicBool::new(false);
     static MANDELBROT_QUEUE_LOGS: core::sync::atomic::AtomicU32 =
         core::sync::atomic::AtomicU32::new(0);
-    const VM_TEXTURE_OWNER_CAP: usize = 256;
-    const VM_TEXTURE_META_CAP: usize = 256;
-    const VM_TEXTURE_GUEST_ID_LIMIT: u32 = 8_191;
+    const VM_TEXTURE_OWNER_CAP: usize = 1024;
+    const VM_TEXTURE_META_CAP: usize = 1024;
+    const VM_TEXTURE_GUEST_ID_LIMIT: u32 = 65_535;
     const VM_TEXTURE_HOST_BASE: u32 = 50_000;
-    const VM_TEXTURE_HOST_STRIDE: u32 = 8_192;
+    const VM_TEXTURE_HOST_STRIDE: u32 = 65_536;
     static VM_TEXTURE_OWNER_GENERATION: core::sync::atomic::AtomicU32 =
         core::sync::atomic::AtomicU32::new(1);
     static VM_TEXTURE_META_GENERATION: core::sync::atomic::AtomicU32 =
@@ -2354,6 +2324,52 @@ pub mod cabi {
         }
 
         let ctx_key = super::runtime_context_key();
+        let generation = VM_TEXTURE_META_GENERATION
+            .fetch_add(1, core::sync::atomic::Ordering::Relaxed)
+            .wrapping_add(1);
+        let mut meta = VM_TEXTURE_META.lock();
+        let mut replace_idx = 0usize;
+        let mut oldest_generation = u32::MAX;
+
+        for (idx, entry) in meta.iter_mut().enumerate() {
+            if entry.valid && entry.ctx_key == ctx_key && entry.tex_id == tex_id {
+                entry.width = width;
+                entry.height = height;
+                entry.generation = generation;
+                return;
+            }
+            if !entry.valid {
+                replace_idx = idx;
+                break;
+            }
+            if entry.generation < oldest_generation {
+                oldest_generation = entry.generation;
+                replace_idx = idx;
+            }
+        }
+
+        meta[replace_idx] = VmTextureMeta {
+            ctx_key,
+            tex_id,
+            width,
+            height,
+            generation,
+            valid: true,
+        };
+    }
+
+    pub fn record_vm_texture_dimensions_for_vm(vm_id: u8, tex_id: u32, width: u32, height: u32) {
+        if tex_id == 0 || width == 0 || height == 0 {
+            return;
+        }
+        if !claim_vm_texture_id_for_vm(vm_id, tex_id, "vm-texture-meta-owner") {
+            return;
+        }
+        if reject_unreasonable_tex_id(tex_id, "vm-texture-meta") {
+            return;
+        }
+
+        let ctx_key = vm_context_key_for_id(vm_id);
         let generation = VM_TEXTURE_META_GENERATION
             .fetch_add(1, core::sync::atomic::Ordering::Relaxed)
             .wrapping_add(1);

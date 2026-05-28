@@ -1,5 +1,5 @@
 use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use embassy_executor::Spawner;
@@ -13,7 +13,7 @@ use super::super::{
 };
 use super::tlb_helper::TlbTable;
 
-const TABLE_HEADERS: &[&str; 3] = &["id", "module", "source"];
+const TABLE_HEADERS: &[&str; 4] = &["id", "module", "source", "updated"];
 const BLUEPRINT_READINESS_TIMEOUT: EmbassyDuration = EmbassyDuration::from_secs(30);
 const MIB: usize = 1024 * 1024;
 
@@ -74,6 +74,7 @@ enum ArchiveSource {
 struct ArchiveEntry {
     archive: String,
     source: ArchiveSource,
+    updated: Option<String>,
 }
 
 fn embedded_archive_name(cmdline: &[u8]) -> Option<String> {
@@ -104,10 +105,25 @@ fn root_archives() -> Result<Vec<ArchiveEntry>, &'static str> {
         .map(|name| ArchiveEntry {
             archive: String::from(name),
             source: ArchiveSource::TrueosfsRoot,
+            updated: root_archive_updated(disk, name),
         })
         .collect::<Vec<_>>();
     out.sort_by(|a, b| a.archive.cmp(&b.archive));
     Ok(out)
+}
+
+fn root_archive_timestamp_path(name: &str) -> String {
+    alloc::format!("apps/common/.bp-meta/root/{}.updated", name)
+}
+
+fn root_archive_updated(disk: crate::disc::block::DeviceHandle, name: &str) -> Option<String> {
+    let stamp_path = root_archive_timestamp_path(name);
+    let bytes = crate::wait::spawn_and_wait_local(async move {
+        crate::r::fs::trueosfs::file_out_async(disk, stamp_path.as_str()).await
+    })
+    .ok()??;
+    let text = String::from_utf8_lossy(bytes.as_slice()).trim().to_string();
+    if text.is_empty() { None } else { Some(text) }
 }
 
 fn is_runnable_root_artifact(name: &str) -> bool {
@@ -138,6 +154,7 @@ fn embedded_archives() -> Vec<ArchiveEntry> {
             source: ArchiveSource::EmbeddedModule {
                 cmdline: String::from_utf8_lossy(cmdline).into_owned(),
             },
+            updated: None,
         });
     }
     out.sort_by(|a, b| a.archive.cmp(&b.archive));
@@ -195,6 +212,7 @@ fn print_archive_table(io: &'static dyn ShellBackend2, archives: &[ArchiveEntry]
             id.as_str(),
             archive.archive.as_str(),
             source_label(&archive.source),
+            archive.updated.as_deref().unwrap_or("-"),
         ];
         table.emit_row(&row, |text| print_shell_line(io, text));
     }

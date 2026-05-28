@@ -407,3 +407,5 @@ impl fmt::Display for BadScheme {
         f.write_str("URL scheme is not allowed")
     }
 }
+
+impl StdError for BadScheme {}

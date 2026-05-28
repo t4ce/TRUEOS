@@ -58,8 +58,9 @@ impl HttpPerf {
     }
 }
 
+const MIB: usize = 1024 * 1024;
 const HTTP_TRUEOSFS_MAX_ENTRIES: usize = 256;
-const HTTP_TRUEOSFS_MAX_REQUEST_BYTES: usize = 1024 * 1024;
+const HTTP_TRUEOSFS_MAX_REQUEST_BYTES: usize = 500 * MIB;
 const HTTP_TRUEOSFS_STREAM_MAX_BYTES: usize = 1024 * 1024;
 const HTTP_TRUEOSFS_SEND_YIELD_COMMANDS: usize = 16;
 const HTTP_OCTET_STREAM: &str = "application/octet-stream";
@@ -157,6 +158,77 @@ fn http_stream_chunk_bytes(disk: DeviceHandle) -> usize {
 fn http_log_target_preview(prefix: &str, target: &str) {
     let path = vhttp_srv::path_only(target);
     crate::log!("http-trueosfs: {} target={}\n", prefix, path);
+}
+
+fn http_is_runnable_root_artifact(path: &str) -> bool {
+    !path.contains('/') && (path.ends_with(".bp") || path.ends_with(".vm"))
+}
+
+fn http_root_artifact_timestamp_path(name: &str) -> String {
+    format!("apps/common/.bp-meta/root/{}.updated", name)
+}
+
+fn http_current_timestamp_label() -> String {
+    let unix = crate::r::net::ntp::current_unix_seconds().or_else(crate::time::unix_time_seconds);
+    match unix {
+        Some(ts) => {
+            let (year, month, day, hour, minute, second) = http_unix_timestamp_to_ymdhms(ts);
+            format!(
+                "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
+                year, month, day, hour, minute, second
+            )
+        }
+        None => format!("uptime+{}s", crate::time::uptime_seconds()),
+    }
+}
+
+fn http_is_leap_year(year: u32) -> bool {
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
+}
+
+fn http_month_lengths(year: u32) -> [u8; 12] {
+    if http_is_leap_year(year) {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    }
+}
+
+fn http_unix_timestamp_to_ymdhms(ts: u64) -> (u32, u8, u8, u8, u8, u8) {
+    const SECS_PER_MIN: u64 = 60;
+    const SECS_PER_HOUR: u64 = 60 * SECS_PER_MIN;
+    const SECS_PER_DAY: u64 = 24 * SECS_PER_HOUR;
+
+    let mut days = ts / SECS_PER_DAY;
+    let mut rem = ts % SECS_PER_DAY;
+
+    let hour = (rem / SECS_PER_HOUR) as u8;
+    rem %= SECS_PER_HOUR;
+    let minute = (rem / SECS_PER_MIN) as u8;
+    let second = (rem % SECS_PER_MIN) as u8;
+
+    let mut year = 1970u32;
+    loop {
+        let days_in_year = if http_is_leap_year(year) { 366 } else { 365 };
+        if days < days_in_year {
+            break;
+        }
+        days -= days_in_year;
+        year += 1;
+    }
+
+    let lengths = http_month_lengths(year);
+    let mut month_idx = 0usize;
+    while month_idx < lengths.len() {
+        let len = lengths[month_idx] as u64;
+        if days < len {
+            return (year, (month_idx + 1) as u8, (days + 1) as u8, hour, minute, second);
+        }
+        days -= len;
+        month_idx += 1;
+    }
+
+    (year, 12, 31, hour, minute, second)
 }
 
 fn http_submit_commands(vnet: &VNet, cmds: Vec<api::Command>) {
@@ -884,9 +956,21 @@ pub async fn http_trueosfs_task() {
                                     }
                                 };
                                 let full_path = http_join_rel_path(dir.as_str(), name.as_str());
-                                match crate::r::fs::trueosfs::file_in_async(disk, full_path.as_str(), body_bytes).await
-                                {
-                                    Ok(true) => http_plain_response("HTTP/1.1 200 OK\r\n", "upload ok\n"),
+                                match crate::r::fs::trueosfs::file_in_async(disk, full_path.as_str(), body_bytes).await {
+                                    Ok(true) => {
+                                        if http_is_runnable_root_artifact(full_path.as_str()) {
+                                            let stamp_path = http_root_artifact_timestamp_path(full_path.as_str());
+                                            let mut stamp = http_current_timestamp_label();
+                                            stamp.push('\n');
+                                            let _ = crate::r::fs::trueosfs::file_in_async(
+                                                disk,
+                                                stamp_path.as_str(),
+                                                stamp.as_bytes(),
+                                            )
+                                            .await;
+                                        }
+                                        http_plain_response("HTTP/1.1 200 OK\r\n", "upload ok\n")
+                                    }
                                     Ok(false) => {
                                         http_plain_response("HTTP/1.1 507 Insufficient Storage\r\n", "upload failed\n")
                                     }

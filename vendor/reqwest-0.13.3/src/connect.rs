@@ -86,7 +86,7 @@ pub(crate) struct ConnectorBuilder {
     #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
     unix_socket: Option<Arc<std::path::Path>>,
     #[cfg(all(unix, any(target_os = "trueos", target_os = "zkvm")))]
-    unix_socket: Option<Arc<tokio::path::Path>>,
+    unix_socket: Option<Arc<tokio::path::PathBuf>>,
     #[cfg(target_os = "windows")]
     windows_named_pipe: Option<Arc<core::ffi::OsStr>>,
 }
@@ -479,7 +479,7 @@ where {
     }
 
     #[cfg(all(unix, any(target_os = "trueos", target_os = "zkvm")))]
-    pub(crate) fn set_unix_socket(&mut self, path: Option<Arc<tokio::path::Path>>) {
+    pub(crate) fn set_unix_socket(&mut self, path: Option<Arc<tokio::path::PathBuf>>) {
         self.unix_socket = path;
     }
 
@@ -512,7 +512,7 @@ pub(crate) struct ConnectorService {
     #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
     unix_socket: Option<Arc<std::path::Path>>,
     #[cfg(all(unix, any(target_os = "trueos", target_os = "zkvm")))]
-    unix_socket: Option<Arc<tokio::path::Path>>,
+    unix_socket: Option<Arc<tokio::path::PathBuf>>,
     #[cfg(target_os = "windows")]
     windows_named_pipe: Option<Arc<core::ffi::OsStr>>,
 }

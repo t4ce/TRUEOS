@@ -528,7 +528,11 @@ pub fn hvlogf(args: core::fmt::Arguments<'_>) {
         return;
     }
 
+    let level = hvlog_console_level(line.as_str());
     if current_hull_guest_context_vm_id().is_some() {
+        if !hvlog_console_enabled(line.as_str(), level) {
+            return;
+        }
         for &b in line.as_bytes() {
             crate::globalog::debugcon_write_byte_raw(b);
         }
@@ -538,7 +542,6 @@ pub fn hvlogf(args: core::fmt::Arguments<'_>) {
         return;
     }
 
-    let level = hvlog_console_level(line.as_str());
     if hvlog_console_enabled(line.as_str(), level) {
         crate::globalog::log_with_concept_level("hv", level, format_args!("{}\n", line.as_str()));
     }

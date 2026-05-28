@@ -821,6 +821,7 @@ impl<B: Body + 'static> PoolClient<B> {
         &mut self,
         req: Request<B>,
     ) -> impl Future<Output = Result<Response<hyper::body::Incoming>, ConnTrySendError<Request<B>>>>
+    + '_
     where
         B: Send,
     {

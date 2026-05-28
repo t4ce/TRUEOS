@@ -211,13 +211,3 @@ pub trait ResolveServerName {
         uri: &Uri,
     ) -> Result<ServerName<'static>, Box<dyn core::error::Error + Sync + Send>>;
 }
-
-#[cfg(all(
-    test,
-    any(feature = "ring", feature = "aws-lc-rs"),
-    any(
-        feature = "rustls-native-certs",
-        feature = "webpki-roots",
-        feature = "rustls-platform-verifier",
-    )
-))]
