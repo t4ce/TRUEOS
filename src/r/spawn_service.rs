@@ -1401,7 +1401,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &UI2_GBOI_DEMO_STARTED,
         spawn_ui2_gboi_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-mandelbrot-demo",
         UI2_DEMO_READY,
         &UI2_MANDELBROT_DEMO_STARTED,
@@ -1427,7 +1427,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &UI2_SMILEY_FOUNTAIN_DEMO_STARTED,
         spawn_ui2_smiley_fountain_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-shell-demo",
         UI2_DEMO_READY,
         &UI2_SHELL_DEMO_STARTED,

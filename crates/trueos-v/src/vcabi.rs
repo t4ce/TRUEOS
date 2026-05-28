@@ -300,10 +300,34 @@ unsafe extern "C" {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32;
+    pub fn trueos_cabi_gfx_begin_frame(clear_rgb: u32) -> i32;
+    pub fn trueos_cabi_gfx_begin_frame_preserve(clear_rgb: u32) -> i32;
     pub fn trueos_cabi_gfx_set_render_target(tex_id: u32) -> i32;
+    pub fn trueos_cabi_gfx_set_blend(
+        enabled: u32,
+        src_rgb: u32,
+        dst_rgb: u32,
+        src_alpha: u32,
+        dst_alpha: u32,
+        eq_rgb: u32,
+        eq_alpha: u32,
+    ) -> i32;
+    pub fn trueos_cabi_gfx_set_sampler(
+        wrap_s: u32,
+        wrap_t: u32,
+        min_filter: u32,
+        mag_filter: u32,
+    ) -> i32;
+    pub fn trueos_cabi_gfx_set_scissor(x: u32, y: u32, width: u32, height: u32) -> i32;
+    pub fn trueos_cabi_gfx_clear_scissor() -> i32;
     pub fn trueos_cabi_gfx_begin_frame_no_present(clear_rgb: u32) -> i32;
     pub fn trueos_cabi_gfx_draw_rgb_triangles_no_present(vtx_ptr: *const u8, vtx_len: usize)
         -> i32;
+    pub fn trueos_cabi_gfx_draw_tex_triangles_no_present(
+        tex_id: u32,
+        vtx_ptr: *const u8,
+        vtx_len: usize,
+    ) -> i32;
     pub fn trueos_cabi_gfx_queue_render_rgb_triangles_to_texture(
         tex_id: u32,
         clear_rgb: u32,

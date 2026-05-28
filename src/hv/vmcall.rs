@@ -51,6 +51,21 @@ pub const OP_BP_UI2_WINDOW_OP: u32 = 0x64; // arg0 window id, payload deferred w
 pub const OP_BP_GFX_TEXTURE_UPLOAD_BEGIN: u32 = 0x65; // payload texture upload header
 pub const OP_BP_GFX_TEXTURE_UPLOAD_CHUNK: u32 = 0x66; // arg0 offset, payload rgba chunk
 pub const OP_BP_GFX_TEXTURE_UPLOAD_FINISH: u32 = 0x67; // finalize pending texture upload
+pub const OP_BP_GFX_TEXTURE_DIMENSIONS: u32 = 0x70; // arg0 tex -> packed width/height
+pub const OP_BP_GFX_QUEUE_RENDER_RGB: u32 = 0x71; // arg0 tex, arg1 clear/repaint, payload vertices
+pub const OP_BP_GFX_QUEUE_RENDER_TEX: u32 = 0x72; // arg0 target/source, payload clear/repaint + vertices
+pub const OP_BP_GFX_QUEUE_RENDER_MANDELBROT: u32 = 0x73; // arg0 tex/repaint, payload ticks/hz
+pub const OP_BP_GFX_QUEUE_RENDER_BEGIN: u32 = 0x74; // payload render queue header
+pub const OP_BP_GFX_QUEUE_RENDER_CHUNK: u32 = 0x75; // arg0 offset, payload vertex chunk
+pub const OP_BP_GFX_QUEUE_RENDER_FINISH: u32 = 0x76; // finalize pending render queue
+pub const OP_BP_GFX_TEXTURE_STATUS: u32 = 0x77; // arg0 tex -> async texture status
+pub const OP_BP_GFX_FRAME_BEGIN: u32 = 0x78; // arg0 clear, arg1 flags preserve/present
+pub const OP_BP_GFX_FRAME_SET_TARGET: u32 = 0x79; // arg0 texture id, 0 = screen
+pub const OP_BP_GFX_FRAME_STATE: u32 = 0x7A; // arg0 kind, payload state values
+pub const OP_BP_GFX_FRAME_DRAW_BEGIN: u32 = 0x7B; // payload frame draw upload header
+pub const OP_BP_GFX_FRAME_DRAW_CHUNK: u32 = 0x7C; // arg0 offset, payload vertex chunk
+pub const OP_BP_GFX_FRAME_DRAW_FINISH: u32 = 0x7D; // finalize pending frame draw
+pub const OP_BP_GFX_FRAME_END: u32 = 0x7E; // submit current frame through native batcher
 pub const OP_BP_INPUT_CURSOR_POS: u32 = 0x68; // arg0 cursor id -> packed x/y
 pub const OP_BP_INPUT_CURSOR_BUTTONS: u32 = 0x69; // arg0 cursor id -> buttons
 pub const OP_BP_INPUT_CURSOR_EVENTS: u32 = 0x6A; // arg0 read seq, arg1 cap -> payload events
@@ -388,6 +403,180 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         OP_BP_GFX_TEXTURE_UPLOAD_FINISH => {
             let rc = crate::r::io::cabi::handle_vm_texture_upload_finish(vm_id);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_GFX_TEXTURE_DIMENSIONS => {
+            if let Some((width, height)) =
+                crate::r::io::cabi::handle_vm_texture_dimensions(vm_id, arg0 as u32)
+            {
+                let packed = width as u64 | ((height as u64) << 32);
+                write_response(vm_id, seq, STATUS_OK, packed, 0);
+            } else {
+                write_response(vm_id, seq, STATUS_OK, u64::MAX, 0);
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_GFX_TEXTURE_STATUS => {
+            let rc = crate::r::io::cabi::handle_vm_texture_status(vm_id, arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_GFX_QUEUE_RENDER_RGB => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let clear_rgb = arg1 as u32;
+            let repaint_window_id = (arg1 >> 32) as u32;
+            let ok = crate::r::io::cabi::handle_vm_queue_render_rgb(
+                vm_id,
+                arg0 as u32,
+                clear_rgb,
+                repaint_window_id,
+                bytes,
+            );
+            write_response(vm_id, seq, STATUS_OK, if ok { 1 } else { 0 }, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_GFX_QUEUE_RENDER_TEX => {
+            const HEADER_LEN: usize = 8;
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            if n < HEADER_LEN {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let clear_rgb = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+            let repaint_window_id = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+            let target_tex_id = arg0 as u32;
+            let source_tex_id = (arg0 >> 32) as u32;
+            let ok = crate::r::io::cabi::handle_vm_queue_render_tex(
+                vm_id,
+                target_tex_id,
+                source_tex_id,
+                clear_rgb,
+                repaint_window_id,
+                &bytes[HEADER_LEN..],
+            );
+            write_response(vm_id, seq, STATUS_OK, if ok { 1 } else { 0 }, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_GFX_QUEUE_RENDER_MANDELBROT => {
+            const PAYLOAD_LEN: usize = 16;
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            if n < PAYLOAD_LEN {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let ticks = u64::from_le_bytes([
+                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            ]);
+            let tick_hz = u64::from_le_bytes([
+                bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14],
+                bytes[15],
+            ]);
+            let ok = crate::r::io::cabi::handle_vm_queue_render_mandelbrot(
+                vm_id,
+                arg0 as u32,
+                ticks,
+                tick_hz,
+                arg1 as u32,
+            );
+            write_response(vm_id, seq, STATUS_OK, if ok { 1 } else { 0 }, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_GFX_QUEUE_RENDER_BEGIN => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let rc = crate::r::io::cabi::handle_vm_render_upload_begin(vm_id, bytes);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_GFX_QUEUE_RENDER_CHUNK => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let rc = crate::r::io::cabi::handle_vm_render_upload_chunk(vm_id, arg0 as usize, bytes);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_GFX_QUEUE_RENDER_FINISH => {
+            let ok = crate::r::io::cabi::handle_vm_render_upload_finish(vm_id);
+            write_response(vm_id, seq, STATUS_OK, if ok { 1 } else { 0 }, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_GFX_FRAME_BEGIN => {
+            let clear_rgb = arg0 as u32;
+            let flags = arg1 as u32;
+            let rc = crate::r::io::cabi::handle_vm_gfx_frame_begin(vm_id, clear_rgb, flags);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_GFX_FRAME_SET_TARGET => {
+            let rc = crate::r::io::cabi::handle_vm_gfx_frame_set_render_target(vm_id, arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_GFX_FRAME_STATE => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let rc = crate::r::io::cabi::handle_vm_gfx_frame_state(vm_id, arg0 as u32, bytes);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_GFX_FRAME_DRAW_BEGIN => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let rc = crate::r::io::cabi::handle_vm_gfx_frame_draw_begin(vm_id, bytes);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_GFX_FRAME_DRAW_CHUNK => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let rc =
+                crate::r::io::cabi::handle_vm_gfx_frame_draw_chunk(vm_id, arg0 as usize, bytes);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_GFX_FRAME_DRAW_FINISH => {
+            let rc = crate::r::io::cabi::handle_vm_gfx_frame_draw_finish(vm_id);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_GFX_FRAME_END => {
+            let rc = crate::r::io::cabi::handle_vm_gfx_frame_end(vm_id);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
