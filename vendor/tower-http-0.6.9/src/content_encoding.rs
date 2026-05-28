@@ -250,11 +250,3 @@ pub(crate) fn encodings<'a>(
             Some((encoding, qval))
         })
 }
-
-#[cfg(all(
-    test,
-    feature = "compression-gzip",
-    feature = "compression-deflate",
-    feature = "compression-br",
-    feature = "compression-zstd",
-))]

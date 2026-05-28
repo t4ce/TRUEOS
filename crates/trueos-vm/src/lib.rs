@@ -86,6 +86,14 @@ pub mod vmcall {
     pub const OP_BP_GFX_TEXTURE_UPLOAD_BEGIN: u32 = 0x65;
     pub const OP_BP_GFX_TEXTURE_UPLOAD_CHUNK: u32 = 0x66;
     pub const OP_BP_GFX_TEXTURE_UPLOAD_FINISH: u32 = 0x67;
+    pub const OP_BP_GFX_TEXTURE_DIMENSIONS: u32 = 0x70;
+    pub const OP_BP_GFX_QUEUE_RENDER_RGB: u32 = 0x71;
+    pub const OP_BP_GFX_QUEUE_RENDER_TEX: u32 = 0x72;
+    pub const OP_BP_GFX_QUEUE_RENDER_MANDELBROT: u32 = 0x73;
+    pub const OP_BP_GFX_QUEUE_RENDER_BEGIN: u32 = 0x74;
+    pub const OP_BP_GFX_QUEUE_RENDER_CHUNK: u32 = 0x75;
+    pub const OP_BP_GFX_QUEUE_RENDER_FINISH: u32 = 0x76;
+    pub const OP_BP_GFX_TEXTURE_STATUS: u32 = 0x77;
     pub const OP_BP_INPUT_CURSOR_POS: u32 = 0x68;
     pub const OP_BP_INPUT_CURSOR_BUTTONS: u32 = 0x69;
     pub const OP_BP_INPUT_CURSOR_EVENTS: u32 = 0x6A;

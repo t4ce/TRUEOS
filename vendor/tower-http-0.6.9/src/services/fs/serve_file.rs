@@ -128,7 +128,12 @@ fn guess_mime(path: &Path) -> mime_guess::MimeGuess {
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn guess_mime(path: &Path) -> mime_guess::MimeGuess {
-    mime_guess::from_path(path)
+    let ext = path
+        .as_os_str()
+        .rsplit_once('.')
+        .map(|(_, ext)| ext)
+        .unwrap_or_default();
+    mime_guess::from_ext(ext)
 }
 
 impl<ReqBody> Service<Request<ReqBody>> for ServeFile

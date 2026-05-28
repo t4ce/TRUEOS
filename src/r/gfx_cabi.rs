@@ -1904,6 +1904,7 @@ pub mod cabi {
     const GFX_CABI_VBUF_RING_LEN: usize = 3;
     // Shared draw chunk budget used by cmd-stream draw capture paths.
     const MAX_CMDSTREAM_DRAW_BYTES: usize = 64 * 1024;
+    const MAX_VM_RENDER_UPLOAD_BYTES: usize = 4 * 1024 * 1024;
     // Conservative pre-submit guard to avoid submit_3d request overflow.
     const MAX_EST_SUBMIT_BYTES: usize = 512 * 1024;
     // Verbose per-frame begin/end tracing is useful when debugging gfx-cabi pacing,
@@ -1918,14 +1919,20 @@ pub mod cabi {
     const ASYNC_PNG_DECODE_TASK_POOL_SIZE: usize = 4;
     const ASYNC_JPEG_DECODE_TASK_POOL_SIZE: usize = 4;
     static ASYNC_TEX_STATUS: spin::Mutex<Vec<i32>> = spin::Mutex::new(Vec::new());
+    static RENDER_TEX_INFLIGHT: spin::Mutex<Vec<(u32, u32)>> = spin::Mutex::new(Vec::new());
     static ASYNC_JPEG_REQS: spin::Mutex<VecDeque<AsyncJpegUploadReq>> =
         spin::Mutex::new(VecDeque::new());
     static ASYNC_SVG_REQS: spin::Mutex<VecDeque<AsyncSvgUploadReq>> =
         spin::Mutex::new(VecDeque::new());
-    const TEXTURE_UPLOAD_RING_CAP: usize = 64;
+    const TEXTURE_UPLOAD_RING_CAP: usize = 4096;
+    const MAX_RENDER_TEX_INFLIGHT_PER_TARGET: u32 = 256;
     static TEXTURE_UPLOAD_REQS: spin::Mutex<TextureWorkRing> =
         spin::Mutex::new(TextureWorkRing::new());
     static VM_TEXTURE_UPLOADS: spin::Mutex<Vec<VmTextureUploadPending>> =
+        spin::Mutex::new(Vec::new());
+    static VM_RENDER_UPLOADS: spin::Mutex<Vec<VmRenderUploadPending>> =
+        spin::Mutex::new(Vec::new());
+    static VM_FRAME_DRAW_UPLOADS: spin::Mutex<Vec<VmFrameDrawUploadPending>> =
         spin::Mutex::new(Vec::new());
     static ASYNC_SVG_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
     static TEXTURE_UPLOAD_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
@@ -1933,8 +1940,8 @@ pub mod cabi {
         core::sync::atomic::AtomicBool::new(false);
     static MANDELBROT_QUEUE_LOGS: core::sync::atomic::AtomicU32 =
         core::sync::atomic::AtomicU32::new(0);
-    const VM_TEXTURE_OWNER_CAP: usize = 1024;
-    const VM_TEXTURE_META_CAP: usize = 1024;
+    const VM_TEXTURE_OWNER_CAP: usize = 4096;
+    const VM_TEXTURE_META_CAP: usize = 4096;
     const VM_TEXTURE_GUEST_ID_LIMIT: u32 = 65_535;
     const VM_TEXTURE_HOST_BASE: u32 = 50_000;
     const VM_TEXTURE_HOST_STRIDE: u32 = 65_536;
@@ -2021,6 +2028,37 @@ pub mod cabi {
         region: Option<ImageRegion>,
         sample_kind: TexSampleKind,
         rgba: Vec<u8>,
+        received: usize,
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum VmRenderUploadKind {
+        Rgb,
+        Tex,
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum VmFrameDrawKind {
+        Rgb,
+        Tex,
+    }
+
+    struct VmRenderUploadPending {
+        vm_id: u8,
+        kind: VmRenderUploadKind,
+        target_tex_id: u32,
+        source_tex_id: u32,
+        clear_rgb: u32,
+        repaint_window_id: u32,
+        verts: Vec<u8>,
+        received: usize,
+    }
+
+    struct VmFrameDrawUploadPending {
+        vm_id: u8,
+        kind: VmFrameDrawKind,
+        source_tex_id: u32,
+        verts: Vec<u8>,
         received: usize,
     }
 
@@ -2233,6 +2271,67 @@ pub mod cabi {
             .unwrap_or(ASYNC_TEX_STATUS_UNKNOWN)
     }
 
+    fn mark_render_tex_inflight(tex_id: u32) {
+        if tex_id == 0 {
+            return;
+        }
+        set_async_tex_status(tex_id, ASYNC_TEX_STATUS_PENDING);
+        let mut inflight = RENDER_TEX_INFLIGHT.lock();
+        if let Some((_, count)) = inflight.iter_mut().find(|(id, _)| *id == tex_id) {
+            *count = count.saturating_add(1);
+            return;
+        }
+        inflight.push((tex_id, 1));
+    }
+
+    fn render_tex_inflight_count(tex_id: u32) -> u32 {
+        if tex_id == 0 {
+            return 0;
+        }
+        RENDER_TEX_INFLIGHT
+            .lock()
+            .iter()
+            .find(|(id, _)| *id == tex_id)
+            .map(|(_, count)| *count)
+            .unwrap_or(0)
+    }
+
+    fn render_tex_accepts_more_work(tex_id: u32, op: &'static str) -> bool {
+        let count = render_tex_inflight_count(tex_id);
+        if count < MAX_RENDER_TEX_INFLIGHT_PER_TARGET {
+            return true;
+        }
+        crate::log!(
+            "gfx-cabi: reject render enqueue target={} op={} inflight={} cap={}\n",
+            tex_id,
+            op,
+            count,
+            MAX_RENDER_TEX_INFLIGHT_PER_TARGET
+        );
+        false
+    }
+
+    fn finish_render_tex_inflight(tex_id: u32, rc: i32) {
+        if tex_id == 0 {
+            return;
+        }
+        let mut ready = true;
+        {
+            let mut inflight = RENDER_TEX_INFLIGHT.lock();
+            if let Some(index) = inflight.iter().position(|(id, _)| *id == tex_id) {
+                if inflight[index].1 > 1 {
+                    inflight[index].1 -= 1;
+                    ready = false;
+                } else {
+                    inflight.swap_remove(index);
+                }
+            }
+        }
+        if ready {
+            set_async_tex_status(tex_id, if rc == 0 { ASYNC_TEX_STATUS_READY } else { rc });
+        }
+    }
+
     fn vm_texture_owned_by_ctx(ctx_key: u32, tex_id: u32) -> bool {
         if tex_id == 0 {
             return false;
@@ -2241,6 +2340,17 @@ pub mod cabi {
             .lock()
             .iter()
             .any(|entry| entry.valid && entry.ctx_key == ctx_key && entry.tex_id == tex_id)
+    }
+
+    fn vm_texture_dimensions_for_ctx(ctx_key: u32, tex_id: u32) -> Option<(u32, u32)> {
+        if tex_id == 0 {
+            return None;
+        }
+        VM_TEXTURE_META
+            .lock()
+            .iter()
+            .find(|entry| entry.valid && entry.ctx_key == ctx_key && entry.tex_id == tex_id)
+            .map(|entry| (entry.width, entry.height))
     }
 
     fn claim_vm_texture_id_for_ctx(ctx_key: u32, tex_id: u32, reason: &'static str) -> bool {
@@ -2416,11 +2526,45 @@ pub mod cabi {
         }
 
         let ctx_key = super::runtime_context_key();
-        VM_TEXTURE_META
-            .lock()
-            .iter()
-            .find(|entry| entry.valid && entry.ctx_key == ctx_key && entry.tex_id == tex_id)
-            .map(|entry| (entry.width, entry.height))
+        vm_texture_dimensions_for_ctx(ctx_key, tex_id)
+    }
+
+    pub fn handle_vm_texture_dimensions(vm_id: u8, tex_id: u32) -> Option<(u32, u32)> {
+        if !vm_guest_texture_id_valid(tex_id, "vmcall-texture-dimensions") {
+            return None;
+        }
+        let ctx_key = vm_context_key_for_id(vm_id);
+        if !vm_texture_owned_by_ctx(ctx_key, tex_id) {
+            return None;
+        }
+        vm_texture_dimensions_for_ctx(ctx_key, tex_id)
+    }
+
+    pub fn handle_vm_texture_status(vm_id: u8, tex_id: u32) -> i32 {
+        if !vm_guest_texture_id_valid(tex_id, "vmcall-texture-status") {
+            return ASYNC_TEX_STATUS_UNKNOWN;
+        }
+        let ctx_key = vm_context_key_for_id(vm_id);
+        if !vm_texture_owned_by_ctx(ctx_key, tex_id) {
+            return ASYNC_TEX_STATUS_UNKNOWN;
+        }
+        let host_tex_id = host_texture_id_for_vm(vm_id, tex_id);
+        if host_tex_id == 0 || reject_unreasonable_tex_id(host_tex_id, "vmcall-texture-status-host")
+        {
+            return ASYNC_TEX_STATUS_UNKNOWN;
+        }
+        let status = get_async_tex_status(host_tex_id);
+        if status != ASYNC_TEX_STATUS_UNKNOWN {
+            return status;
+        }
+        if texture_dimensions_inner(host_tex_id).is_some() {
+            return ASYNC_TEX_STATUS_READY;
+        }
+        if vm_texture_dimensions_for_ctx(ctx_key, tex_id).is_some() {
+            ASYNC_TEX_STATUS_PENDING
+        } else {
+            ASYNC_TEX_STATUS_UNKNOWN
+        }
     }
 
     fn enqueue_async_jpeg_upload(tex_id: u32, bytes: Vec<u8>) {
@@ -2478,68 +2622,49 @@ pub mod cabi {
     fn enqueue_texture_draw_rgb(req: TextureDrawRgbReq) {
         let tex_id = req.tex_id;
         let mut queue = TEXTURE_UPLOAD_REQS.lock();
-        let work = TextureWorkReq::DrawRgb(req);
-        let work = match queue.replace_matching(work, |entry| match entry {
-            TextureWorkReq::Upload(_) => false,
-            TextureWorkReq::DrawRgb(existing) => existing.tex_id == tex_id,
-            TextureWorkReq::DrawMandelbrot(_) => false,
-            TextureWorkReq::DrawTex(_) => false,
-        }) {
+        match queue.push_back(TextureWorkReq::DrawRgb(req)) {
             Ok(()) => {
+                mark_render_tex_inflight(tex_id);
                 notify_texture_work_available();
-                return;
             }
-            Err(work) => work,
-        };
-        let _ = queue.push_back(work).map_err(drop_texture_work_overflow);
-        notify_texture_work_available();
+            Err(req) => drop_texture_work_overflow(req),
+        }
     }
 
     fn enqueue_texture_draw_mandelbrot(req: TextureDrawMandelbrotReq) {
         let tex_id = req.tex_id;
         let mut queue = TEXTURE_UPLOAD_REQS.lock();
-        let work = TextureWorkReq::DrawMandelbrot(req);
-        let work = match queue.replace_matching(work, |entry| match entry {
-            TextureWorkReq::Upload(_) => false,
-            TextureWorkReq::DrawRgb(_) => false,
-            TextureWorkReq::DrawMandelbrot(existing) => existing.tex_id == tex_id,
-            TextureWorkReq::DrawTex(_) => false,
-        }) {
+        match queue.push_back(TextureWorkReq::DrawMandelbrot(req)) {
             Ok(()) => {
+                mark_render_tex_inflight(tex_id);
                 notify_texture_work_available();
-                return;
             }
-            Err(work) => work,
-        };
-        let _ = queue.push_back(work).map_err(drop_texture_work_overflow);
-        notify_texture_work_available();
+            Err(req) => drop_texture_work_overflow(req),
+        }
     }
 
     fn enqueue_texture_draw_tex(req: TextureDrawTexReq) {
         let target_tex_id = req.target_tex_id;
         let mut queue = TEXTURE_UPLOAD_REQS.lock();
-        let work = TextureWorkReq::DrawTex(req);
-        let work = match queue.replace_matching(work, |entry| match entry {
-            TextureWorkReq::Upload(_) => false,
-            TextureWorkReq::DrawRgb(_) => false,
-            TextureWorkReq::DrawMandelbrot(_) => false,
-            TextureWorkReq::DrawTex(existing) => existing.target_tex_id == target_tex_id,
-        }) {
+        match queue.push_back(TextureWorkReq::DrawTex(req)) {
             Ok(()) => {
+                mark_render_tex_inflight(target_tex_id);
                 notify_texture_work_available();
-                return;
             }
-            Err(work) => work,
-        };
-        let _ = queue.push_back(work).map_err(drop_texture_work_overflow);
-        notify_texture_work_available();
+            Err(req) => drop_texture_work_overflow(req),
+        }
     }
 
     fn take_texture_upload() -> Option<TextureWorkReq> {
         TEXTURE_UPLOAD_REQS.lock().pop_front()
     }
 
+    const SUPPRESS_TEXTURE_WORK_REPAINT_WINDOW_ID: u32 = u32::MAX;
+
     fn request_texture_work_present(window_id: u32, host_tex_id: u32, reason: &'static str) {
+        if window_id == SUPPRESS_TEXTURE_WORK_REPAINT_WINDOW_ID {
+            return;
+        }
         if window_id == 0 {
             let _ = crate::hv::request_deferred_blueprint_app_windows_for_host_texture(
                 host_tex_id,
@@ -2679,7 +2804,12 @@ pub mod cabi {
         if pending.received != pending.rgba.len() {
             return -2;
         }
-        record_vm_texture_dimensions(pending.guest_tex_id, pending.width, pending.height);
+        record_vm_texture_dimensions_for_vm(
+            pending.vm_id,
+            pending.guest_tex_id,
+            pending.width,
+            pending.height,
+        );
         enqueue_texture_upload(TextureUploadReq {
             tex_id: pending.host_tex_id,
             width: pending.width,
@@ -2781,6 +2911,741 @@ pub mod cabi {
         } else {
             -92
         }
+    }
+
+    fn vmcall_texture_dimensions(tex_id: u32) -> Option<(u32, u32)> {
+        let (status, packed) = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_GFX_TEXTURE_DIMENSIONS,
+            tex_id as u64,
+            0,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK || packed == u64::MAX {
+            return None;
+        }
+        let width = packed as u32;
+        let height = (packed >> 32) as u32;
+        if width == 0 || height == 0 {
+            None
+        } else {
+            Some((width, height))
+        }
+    }
+
+    fn vmcall_texture_status(tex_id: u32) -> i32 {
+        let (status, rc) =
+            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_GFX_TEXTURE_STATUS, tex_id as u64, 0);
+        if status == trueos_vm::vmcall::STATUS_OK {
+            rc as i64 as i32
+        } else {
+            ASYNC_TEX_STATUS_UNKNOWN
+        }
+    }
+
+    fn vmcall_queue_render_upload(
+        kind: VmRenderUploadKind,
+        target_tex_id: u32,
+        source_tex_id: u32,
+        clear_rgb: u32,
+        repaint_window_id: u32,
+        vtx: &[u8],
+    ) -> bool {
+        const HEADER_LEN: usize = 24;
+        let mut header = [0u8; HEADER_LEN];
+        vm_texture_upload_put_u32(
+            &mut header,
+            0,
+            match kind {
+                VmRenderUploadKind::Rgb => 0,
+                VmRenderUploadKind::Tex => 1,
+            },
+        );
+        vm_texture_upload_put_u32(&mut header, 4, target_tex_id);
+        vm_texture_upload_put_u32(&mut header, 8, source_tex_id);
+        vm_texture_upload_put_u32(&mut header, 12, clear_rgb);
+        vm_texture_upload_put_u32(&mut header, 16, repaint_window_id);
+        vm_texture_upload_put_u32(&mut header, 20, vtx.len().min(u32::MAX as usize) as u32);
+
+        let mut out = [0u8; 0];
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_GFX_QUEUE_RENDER_BEGIN,
+            0,
+            0,
+            &header,
+            &mut out,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK || rc != 0 {
+            return false;
+        }
+
+        let mut offset = 0usize;
+        while offset < vtx.len() {
+            let end = core::cmp::min(offset + trueos_vm::vmcall::PAYLOAD_CAP, vtx.len());
+            let (status, rc) = trueos_vm::vmcall::call_with_payload(
+                trueos_vm::vmcall::OP_BP_GFX_QUEUE_RENDER_CHUNK,
+                offset as u64,
+                0,
+                &vtx[offset..end],
+                &mut out,
+            );
+            if status != trueos_vm::vmcall::STATUS_OK || rc != 0 {
+                return false;
+            }
+            offset = end;
+        }
+
+        let (status, rc) =
+            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_GFX_QUEUE_RENDER_FINISH, 0, 0);
+        status == trueos_vm::vmcall::STATUS_OK && rc == 1
+    }
+
+    fn vmcall_gfx_frame_begin(clear_rgb: u32, preserve_contents: bool, allow_present: bool) -> i32 {
+        let mut flags = 0u64;
+        if preserve_contents {
+            flags |= 1;
+        }
+        if allow_present {
+            flags |= 2;
+        }
+        let (status, rc) = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_GFX_FRAME_BEGIN,
+            clear_rgb as u64,
+            flags,
+        );
+        if status == trueos_vm::vmcall::STATUS_OK {
+            rc as i64 as i32
+        } else {
+            -91
+        }
+    }
+
+    fn vmcall_gfx_frame_state(kind: u32, payload: &[u8]) -> i32 {
+        let mut out = [0u8; 0];
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_GFX_FRAME_STATE,
+            kind as u64,
+            0,
+            payload,
+            &mut out,
+        );
+        if status == trueos_vm::vmcall::STATUS_OK {
+            rc as i64 as i32
+        } else {
+            -91
+        }
+    }
+
+    fn vmcall_gfx_frame_draw_upload(kind: VmFrameDrawKind, source_tex_id: u32, vtx: &[u8]) -> i32 {
+        const HEADER_LEN: usize = 12;
+        let mut header = [0u8; HEADER_LEN];
+        vm_texture_upload_put_u32(
+            &mut header,
+            0,
+            match kind {
+                VmFrameDrawKind::Rgb => 0,
+                VmFrameDrawKind::Tex => 1,
+            },
+        );
+        vm_texture_upload_put_u32(&mut header, 4, source_tex_id);
+        vm_texture_upload_put_u32(&mut header, 8, vtx.len().min(u32::MAX as usize) as u32);
+
+        let mut out = [0u8; 0];
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_GFX_FRAME_DRAW_BEGIN,
+            0,
+            0,
+            &header,
+            &mut out,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK || (rc as i64 as i32) != 0 {
+            return if status == trueos_vm::vmcall::STATUS_OK {
+                rc as i64 as i32
+            } else {
+                -91
+            };
+        }
+
+        let mut offset = 0usize;
+        while offset < vtx.len() {
+            let end = core::cmp::min(offset + trueos_vm::vmcall::PAYLOAD_CAP, vtx.len());
+            let (status, rc) = trueos_vm::vmcall::call_with_payload(
+                trueos_vm::vmcall::OP_BP_GFX_FRAME_DRAW_CHUNK,
+                offset as u64,
+                0,
+                &vtx[offset..end],
+                &mut out,
+            );
+            if status != trueos_vm::vmcall::STATUS_OK || (rc as i64 as i32) != 0 {
+                return if status == trueos_vm::vmcall::STATUS_OK {
+                    rc as i64 as i32
+                } else {
+                    -92
+                };
+            }
+            offset = end;
+        }
+
+        let (status, rc) =
+            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_GFX_FRAME_DRAW_FINISH, 0, 0);
+        if status == trueos_vm::vmcall::STATUS_OK {
+            rc as i64 as i32
+        } else {
+            -93
+        }
+    }
+
+    pub fn handle_vm_queue_render_rgb(
+        vm_id: u8,
+        tex_id: u32,
+        clear_rgb: u32,
+        repaint_window_id: u32,
+        vtx: &[u8],
+    ) -> bool {
+        if tex_id == 0 || reject_unreasonable_tex_id(tex_id, "vmcall-queue-draw-rgb") {
+            return false;
+        }
+        if !claim_vm_texture_id_for_vm(vm_id, tex_id, "vmcall-queue-draw-rgb-owner") {
+            return false;
+        }
+        let host_tex_id = host_texture_id_for_vm(vm_id, tex_id);
+        if host_tex_id == 0 || reject_unreasonable_tex_id(host_tex_id, "vmcall-queue-draw-rgb-host")
+        {
+            return false;
+        }
+        const VTX_SIZE: usize = 12;
+        let usable = vtx.len() - (vtx.len() % VTX_SIZE);
+        if usable == 0 {
+            return vtx.is_empty();
+        }
+        if !render_tex_accepts_more_work(host_tex_id, "vmcall-queue-draw-rgb") {
+            return false;
+        }
+        enqueue_texture_draw_rgb(TextureDrawRgbReq {
+            tex_id: host_tex_id,
+            clear_rgb,
+            verts: vtx[..usable].to_vec(),
+            repaint_window_id,
+            repaint_reason: "vmcall-rgb-triangles",
+        });
+        true
+    }
+
+    pub fn handle_vm_queue_render_tex(
+        vm_id: u8,
+        target_tex_id: u32,
+        source_tex_id: u32,
+        clear_rgb: u32,
+        repaint_window_id: u32,
+        vtx: &[u8],
+    ) -> bool {
+        if target_tex_id == 0 || source_tex_id == 0 {
+            return false;
+        }
+        if reject_unreasonable_tex_pair(target_tex_id, source_tex_id, "vmcall-queue-draw-tex") {
+            return false;
+        }
+        if !claim_vm_texture_id_for_vm(vm_id, target_tex_id, "vmcall-queue-draw-tex-target") {
+            return false;
+        }
+        let ctx_key = vm_context_key_for_id(vm_id);
+        if source_tex_id != target_tex_id && !vm_texture_owned_by_ctx(ctx_key, source_tex_id) {
+            return false;
+        }
+        let host_target_tex_id = host_texture_id_for_vm(vm_id, target_tex_id);
+        let host_source_tex_id = host_texture_id_for_vm(vm_id, source_tex_id);
+        if host_target_tex_id == 0
+            || host_source_tex_id == 0
+            || reject_unreasonable_tex_pair(
+                host_target_tex_id,
+                host_source_tex_id,
+                "vmcall-queue-draw-tex-host",
+            )
+        {
+            return false;
+        }
+        const VTX_SIZE: usize = 20;
+        let usable = vtx.len() - (vtx.len() % VTX_SIZE);
+        if usable == 0 {
+            return vtx.is_empty();
+        }
+        if !render_tex_accepts_more_work(host_target_tex_id, "vmcall-queue-draw-tex") {
+            return false;
+        }
+        enqueue_texture_draw_tex(TextureDrawTexReq {
+            target_tex_id: host_target_tex_id,
+            source_tex_id: host_source_tex_id,
+            clear_rgb,
+            verts: vtx[..usable].to_vec(),
+            particle_shader: false,
+            repaint_window_id,
+            repaint_reason: "vmcall-tex-triangles",
+        });
+        true
+    }
+
+    pub fn handle_vm_render_upload_begin(vm_id: u8, payload: &[u8]) -> i32 {
+        const HEADER_LEN: usize = 24;
+        if payload.len() < HEADER_LEN {
+            return -1;
+        }
+        let kind = match vm_texture_upload_get_u32(payload, 0).unwrap_or(u32::MAX) {
+            0 => VmRenderUploadKind::Rgb,
+            1 => VmRenderUploadKind::Tex,
+            _ => return -2,
+        };
+        let target_tex_id = vm_texture_upload_get_u32(payload, 4).unwrap_or(0);
+        let source_tex_id = vm_texture_upload_get_u32(payload, 8).unwrap_or(0);
+        let clear_rgb = vm_texture_upload_get_u32(payload, 12).unwrap_or(0);
+        let repaint_window_id = vm_texture_upload_get_u32(payload, 16).unwrap_or(0);
+        let total_len = vm_texture_upload_get_u32(payload, 20).unwrap_or(0) as usize;
+        if total_len > MAX_VM_RENDER_UPLOAD_BYTES {
+            return -3;
+        }
+        let vtx_size = match kind {
+            VmRenderUploadKind::Rgb => RGB_VERTEX_SIZE,
+            VmRenderUploadKind::Tex => TEX_VERTEX_SIZE,
+        };
+        if total_len == 0 || total_len % vtx_size != 0 {
+            return -4;
+        }
+        match kind {
+            VmRenderUploadKind::Rgb => {
+                if target_tex_id == 0 {
+                    return -5;
+                }
+                if !claim_vm_texture_id_for_vm(vm_id, target_tex_id, "vm-render-rgb-target") {
+                    return -6;
+                }
+            }
+            VmRenderUploadKind::Tex => {
+                if target_tex_id == 0 || source_tex_id == 0 {
+                    return -5;
+                }
+                if !claim_vm_texture_id_for_vm(vm_id, target_tex_id, "vm-render-tex-target") {
+                    return -6;
+                }
+                let ctx_key = vm_context_key_for_id(vm_id);
+                if source_tex_id != target_tex_id
+                    && !vm_texture_owned_by_ctx(ctx_key, source_tex_id)
+                {
+                    return -7;
+                }
+            }
+        }
+
+        let mut uploads = VM_RENDER_UPLOADS.lock();
+        uploads.retain(|upload| upload.vm_id != vm_id);
+        let mut verts = Vec::new();
+        if verts.try_reserve_exact(total_len).is_err() {
+            return -8;
+        }
+        verts.resize(total_len, 0);
+        uploads.push(VmRenderUploadPending {
+            vm_id,
+            kind,
+            target_tex_id,
+            source_tex_id,
+            clear_rgb,
+            repaint_window_id,
+            verts,
+            received: 0,
+        });
+        0
+    }
+
+    pub fn handle_vm_render_upload_chunk(vm_id: u8, offset: usize, payload: &[u8]) -> i32 {
+        let mut uploads = VM_RENDER_UPLOADS.lock();
+        let Some(upload) = uploads.iter_mut().find(|upload| upload.vm_id == vm_id) else {
+            return -1;
+        };
+        if offset != upload.received {
+            return -2;
+        }
+        let end = offset.saturating_add(payload.len());
+        if end > upload.verts.len() {
+            return -3;
+        }
+        upload.verts[offset..end].copy_from_slice(payload);
+        upload.received = end;
+        0
+    }
+
+    pub fn handle_vm_render_upload_finish(vm_id: u8) -> bool {
+        let pending = {
+            let mut uploads = VM_RENDER_UPLOADS.lock();
+            let Some(idx) = uploads.iter().position(|upload| upload.vm_id == vm_id) else {
+                return false;
+            };
+            uploads.swap_remove(idx)
+        };
+        if pending.received != pending.verts.len() {
+            return false;
+        }
+        match pending.kind {
+            VmRenderUploadKind::Rgb => handle_vm_queue_render_rgb(
+                pending.vm_id,
+                pending.target_tex_id,
+                pending.clear_rgb,
+                pending.repaint_window_id,
+                pending.verts.as_slice(),
+            ),
+            VmRenderUploadKind::Tex => handle_vm_queue_render_tex(
+                pending.vm_id,
+                pending.target_tex_id,
+                pending.source_tex_id,
+                pending.clear_rgb,
+                pending.repaint_window_id,
+                pending.verts.as_slice(),
+            ),
+        }
+    }
+
+    fn append_vm_frame_rgb_draw(bytes: &[u8]) -> i32 {
+        const VTX_SIZE: usize = RGB_VERTEX_SIZE;
+        let usable = bytes.len() - (bytes.len() % VTX_SIZE);
+        if usable == 0 {
+            return if bytes.is_empty() { 0 } else { -1 };
+        }
+        let mut st = GFX_CABI_STATE.lock();
+        if !st.frame_active {
+            return -2;
+        }
+        st.frame_rgb_draws = st.frame_rgb_draws.saturating_add(1);
+        st.frame_draw_bytes = st.frame_draw_bytes.saturating_add(usable);
+        let blend = st.cur_blend;
+        let mut off = 0usize;
+        while off < usable {
+            let rem = usable - off;
+            let chunk = core::cmp::min(MAX_CMDSTREAM_DRAW_BYTES, rem);
+            let chunk = chunk - (chunk % VTX_SIZE);
+            if chunk == 0 {
+                break;
+            }
+            let blob_offset = st.frame_rgb_blob.len();
+            st.frame_rgb_blob
+                .extend_from_slice(&bytes[off..off + chunk]);
+            st.frame_draws.push(PendingDraw::Rgb {
+                blob_offset,
+                blob_len: chunk,
+                blend,
+            });
+            off += chunk;
+        }
+        0
+    }
+
+    fn append_vm_frame_tex_draw(host_tex_id: u32, bytes: &[u8]) -> i32 {
+        if host_tex_id == 0 || reject_unreasonable_tex_id(host_tex_id, "vm-frame-tex-host") {
+            return -1;
+        }
+        const VTX_SIZE: usize = TEX_VERTEX_SIZE;
+        let usable = bytes.len() - (bytes.len() % VTX_SIZE);
+        if usable == 0 {
+            return if bytes.is_empty() { 0 } else { -2 };
+        }
+        let mut st = GFX_CABI_STATE.lock();
+        if !st.frame_active {
+            return -3;
+        }
+        st.frame_tex_draws = st.frame_tex_draws.saturating_add(1);
+        st.frame_draw_bytes = st.frame_draw_bytes.saturating_add(usable);
+        let idx = host_tex_id.saturating_sub(1) as usize;
+        let (image, sample_kind, origin) = st
+            .tex_images
+            .as_ref()
+            .and_then(|images| images.get(idx))
+            .and_then(|e| e.as_ref())
+            .map(|e| (e.image, e.sample_kind, e.origin))
+            .unwrap_or((ImageId::invalid(), TexSampleKind::Mask, TexCoordOrigin::TopLeft));
+        let sampler = st.cur_sampler;
+        let blend = st.cur_blend;
+        let mut off = 0usize;
+        while off < usable {
+            let rem = usable - off;
+            let chunk = core::cmp::min(MAX_CMDSTREAM_DRAW_BYTES, rem);
+            let chunk = chunk - (chunk % VTX_SIZE);
+            if chunk == 0 {
+                break;
+            }
+            let blob_offset = st.frame_tex_blob.len();
+            append_tex_vertices_with_origin(
+                &mut st.frame_tex_blob,
+                &bytes[off..off + chunk],
+                origin,
+            );
+            st.frame_draws.push(PendingDraw::Tex {
+                tex_id: host_tex_id,
+                image,
+                sample_kind,
+                sampler,
+                blob_offset,
+                blob_len: chunk,
+                blend,
+            });
+            off += chunk;
+        }
+        0
+    }
+
+    pub fn handle_vm_gfx_frame_begin(_vm_id: u8, clear_rgb: u32, flags: u32) -> i32 {
+        let preserve_contents = (flags & 1) != 0;
+        let allow_present = (flags & 2) != 0;
+        begin_frame_host_inner(clear_rgb, preserve_contents, allow_present)
+    }
+
+    pub fn handle_vm_gfx_frame_set_render_target(vm_id: u8, tex_id: u32) -> i32 {
+        let host_tex_id = if tex_id == 0 {
+            0
+        } else {
+            if !claim_vm_texture_id_for_vm(vm_id, tex_id, "vm-frame-target-owner") {
+                return -1;
+            }
+            let host_tex_id = host_texture_id_for_vm(vm_id, tex_id);
+            if host_tex_id == 0 || reject_unreasonable_tex_id(host_tex_id, "vm-frame-target-host") {
+                return -2;
+            }
+            host_tex_id
+        };
+        let mut st = GFX_CABI_STATE.lock();
+        if host_tex_id == 0 {
+            let had_scissor = st.cur_scissor.take().is_some();
+            st.frame_render_target_tex_id = 0;
+            st.viewport_configured = false;
+            if st.frame_active {
+                if had_scissor {
+                    st.frame_draws.push(PendingDraw::SetScissor { rect: None });
+                }
+                st.frame_draws
+                    .push(PendingDraw::SetRenderTarget { tex_id: 0 });
+            }
+            return 0;
+        }
+        let idx = host_tex_id.saturating_sub(1) as usize;
+        let Some(entry) = st
+            .tex_images
+            .as_mut()
+            .and_then(|images| images.get_mut(idx))
+            .and_then(|entry| entry.as_mut())
+        else {
+            return -3;
+        };
+        entry.origin = TexCoordOrigin::BottomLeft;
+        let had_scissor = st.cur_scissor.take().is_some();
+        st.frame_render_target_tex_id = host_tex_id;
+        st.viewport_configured = false;
+        if st.frame_active {
+            if had_scissor {
+                st.frame_draws.push(PendingDraw::SetScissor { rect: None });
+            }
+            st.frame_draws.push(PendingDraw::SetRenderTarget {
+                tex_id: host_tex_id,
+            });
+        }
+        0
+    }
+
+    pub fn handle_vm_gfx_frame_state(_vm_id: u8, kind: u32, payload: &[u8]) -> i32 {
+        match kind {
+            0 => {
+                if payload.len() < 12 {
+                    return -1;
+                }
+                let enabled =
+                    u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) != 0;
+                let src_rgb = u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
+                let dst_rgb =
+                    u32::from_le_bytes([payload[8], payload[9], payload[10], payload[11]]);
+                let mut st = GFX_CABI_STATE.lock();
+                st.cur_blend = BlendDesc {
+                    enabled,
+                    src: gl_blend_factor_to_core(src_rgb),
+                    dst: gl_blend_factor_to_core(dst_rgb),
+                };
+                0
+            }
+            1 => {
+                if payload.len() < 16 {
+                    return -1;
+                }
+                let wrap_s = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                let wrap_t = u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
+                let min_filter =
+                    u32::from_le_bytes([payload[8], payload[9], payload[10], payload[11]]);
+                let mag_filter =
+                    u32::from_le_bytes([payload[12], payload[13], payload[14], payload[15]]);
+                let mut st = GFX_CABI_STATE.lock();
+                st.cur_sampler = SamplerDesc {
+                    wrap_s: if wrap_s == 1 {
+                        SamplerWrap::Repeat
+                    } else {
+                        SamplerWrap::ClampToEdge
+                    },
+                    wrap_t: if wrap_t == 1 {
+                        SamplerWrap::Repeat
+                    } else {
+                        SamplerWrap::ClampToEdge
+                    },
+                    min_filter: if min_filter == 0 {
+                        SamplerFilter::Nearest
+                    } else {
+                        SamplerFilter::Linear
+                    },
+                    mag_filter: if mag_filter == 0 {
+                        SamplerFilter::Nearest
+                    } else {
+                        SamplerFilter::Linear
+                    },
+                };
+                0
+            }
+            2 => {
+                if payload.len() < 16 {
+                    return -1;
+                }
+                let x = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                let y = u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
+                let width = u32::from_le_bytes([payload[8], payload[9], payload[10], payload[11]]);
+                let height =
+                    u32::from_le_bytes([payload[12], payload[13], payload[14], payload[15]]);
+                let mut st = GFX_CABI_STATE.lock();
+                st.cur_scissor = if width == 0 || height == 0 {
+                    None
+                } else {
+                    Some(ScissorRect {
+                        x,
+                        y,
+                        width,
+                        height,
+                    })
+                };
+                if st.frame_active {
+                    let rect = st.cur_scissor;
+                    st.frame_draws.push(PendingDraw::SetScissor { rect });
+                }
+                0
+            }
+            _ => -2,
+        }
+    }
+
+    pub fn handle_vm_gfx_frame_draw_begin(vm_id: u8, payload: &[u8]) -> i32 {
+        const HEADER_LEN: usize = 12;
+        if payload.len() < HEADER_LEN {
+            return -1;
+        }
+        let kind = match vm_texture_upload_get_u32(payload, 0).unwrap_or(u32::MAX) {
+            0 => VmFrameDrawKind::Rgb,
+            1 => VmFrameDrawKind::Tex,
+            _ => return -2,
+        };
+        let source_tex_id = vm_texture_upload_get_u32(payload, 4).unwrap_or(0);
+        let total_len = vm_texture_upload_get_u32(payload, 8).unwrap_or(0) as usize;
+        if total_len > MAX_VM_RENDER_UPLOAD_BYTES {
+            return -3;
+        }
+        let vtx_size = match kind {
+            VmFrameDrawKind::Rgb => RGB_VERTEX_SIZE,
+            VmFrameDrawKind::Tex => TEX_VERTEX_SIZE,
+        };
+        if total_len == 0 || total_len % vtx_size != 0 {
+            return -4;
+        }
+        if kind == VmFrameDrawKind::Tex {
+            if source_tex_id == 0 {
+                return -5;
+            }
+            let ctx_key = vm_context_key_for_id(vm_id);
+            if !vm_texture_owned_by_ctx(ctx_key, source_tex_id) {
+                return -6;
+            }
+        }
+        let mut uploads = VM_FRAME_DRAW_UPLOADS.lock();
+        uploads.retain(|upload| upload.vm_id != vm_id);
+        let mut verts = Vec::new();
+        if verts.try_reserve_exact(total_len).is_err() {
+            return -7;
+        }
+        verts.resize(total_len, 0);
+        uploads.push(VmFrameDrawUploadPending {
+            vm_id,
+            kind,
+            source_tex_id,
+            verts,
+            received: 0,
+        });
+        0
+    }
+
+    pub fn handle_vm_gfx_frame_draw_chunk(vm_id: u8, offset: usize, payload: &[u8]) -> i32 {
+        let mut uploads = VM_FRAME_DRAW_UPLOADS.lock();
+        let Some(upload) = uploads.iter_mut().find(|upload| upload.vm_id == vm_id) else {
+            return -1;
+        };
+        if offset != upload.received {
+            return -2;
+        }
+        let end = offset.saturating_add(payload.len());
+        if end > upload.verts.len() {
+            return -3;
+        }
+        upload.verts[offset..end].copy_from_slice(payload);
+        upload.received = end;
+        0
+    }
+
+    pub fn handle_vm_gfx_frame_draw_finish(vm_id: u8) -> i32 {
+        let pending = {
+            let mut uploads = VM_FRAME_DRAW_UPLOADS.lock();
+            let Some(idx) = uploads.iter().position(|upload| upload.vm_id == vm_id) else {
+                return -1;
+            };
+            uploads.swap_remove(idx)
+        };
+        if pending.received != pending.verts.len() {
+            return -2;
+        }
+        match pending.kind {
+            VmFrameDrawKind::Rgb => append_vm_frame_rgb_draw(pending.verts.as_slice()),
+            VmFrameDrawKind::Tex => {
+                let host_source_tex_id = host_texture_id_for_vm(vm_id, pending.source_tex_id);
+                append_vm_frame_tex_draw(host_source_tex_id, pending.verts.as_slice())
+            }
+        }
+    }
+
+    pub fn handle_vm_gfx_frame_end(_vm_id: u8) -> i32 {
+        end_frame_host_inner()
+    }
+
+    pub fn handle_vm_queue_render_mandelbrot(
+        vm_id: u8,
+        tex_id: u32,
+        ticks: u64,
+        tick_hz: u64,
+        repaint_window_id: u32,
+    ) -> bool {
+        if tex_id == 0 || reject_unreasonable_tex_id(tex_id, "vmcall-queue-draw-mandelbrot") {
+            return false;
+        }
+        if !claim_vm_texture_id_for_vm(vm_id, tex_id, "vmcall-queue-draw-mandelbrot-owner") {
+            return false;
+        }
+        let host_tex_id = host_texture_id_for_vm(vm_id, tex_id);
+        if host_tex_id == 0
+            || reject_unreasonable_tex_id(host_tex_id, "vmcall-queue-draw-mandelbrot-host")
+        {
+            return false;
+        }
+        if !render_tex_accepts_more_work(host_tex_id, "vmcall-queue-draw-mandelbrot") {
+            return false;
+        }
+        enqueue_texture_draw_mandelbrot(TextureDrawMandelbrotReq {
+            tex_id: host_tex_id,
+            ticks,
+            tick_hz,
+            repaint_window_id,
+            repaint_reason: "vmcall-mandelbrot",
+        });
+        true
     }
 
     fn log_texture_work_failed(
@@ -3051,6 +3916,16 @@ pub mod cabi {
         repaint_window_id: u32,
         repaint_reason: &'static str,
     ) -> bool {
+        if crate::hv::current_hull_guest_context_vm_id().is_some() {
+            return vmcall_queue_render_upload(
+                VmRenderUploadKind::Rgb,
+                tex_id,
+                0,
+                clear_rgb,
+                repaint_window_id,
+                vtx,
+            );
+        }
         if tex_id == 0 {
             return false;
         }
@@ -3072,6 +3947,9 @@ pub mod cabi {
         if usable == 0 {
             return false;
         }
+        if !render_tex_accepts_more_work(host_tex_id, "queue-draw-rgb") {
+            return false;
+        }
 
         enqueue_texture_draw_rgb(TextureDrawRgbReq {
             tex_id: host_tex_id,
@@ -3090,6 +3968,19 @@ pub mod cabi {
         repaint_window_id: u32,
         repaint_reason: &'static str,
     ) -> bool {
+        if crate::hv::current_hull_guest_context_vm_id().is_some() {
+            let mut payload = [0u8; 16];
+            payload[0..8].copy_from_slice(&ticks.to_le_bytes());
+            payload[8..16].copy_from_slice(&tick_hz.to_le_bytes());
+            let (status, rc) = trueos_vm::vmcall::call_with_payload(
+                trueos_vm::vmcall::OP_BP_GFX_QUEUE_RENDER_MANDELBROT,
+                tex_id as u64,
+                repaint_window_id as u64,
+                &payload,
+                &mut [],
+            );
+            return status == trueos_vm::vmcall::STATUS_OK && rc == 1;
+        }
         if tex_id == 0 {
             return false;
         }
@@ -3134,6 +4025,16 @@ pub mod cabi {
         repaint_window_id: u32,
         repaint_reason: &'static str,
     ) -> bool {
+        if crate::hv::current_hull_guest_context_vm_id().is_some() {
+            return vmcall_queue_render_upload(
+                VmRenderUploadKind::Tex,
+                target_tex_id,
+                source_tex_id,
+                clear_rgb,
+                repaint_window_id,
+                vtx,
+            );
+        }
         if target_tex_id == 0 || source_tex_id == 0 {
             return false;
         }
@@ -3166,6 +4067,9 @@ pub mod cabi {
         const VTX_SIZE: usize = 20;
         let usable = vtx.len() - (vtx.len() % VTX_SIZE);
         if usable == 0 {
+            return false;
+        }
+        if !render_tex_accepts_more_work(host_target_tex_id, "queue-draw-tex") {
             return false;
         }
 
@@ -3221,6 +4125,9 @@ pub mod cabi {
         const VTX_SIZE: usize = 20;
         let usable = vtx.len() - (vtx.len() % VTX_SIZE);
         if usable == 0 {
+            return false;
+        }
+        if !render_tex_accepts_more_work(host_target_tex_id, "queue-draw-particle-tex") {
             return false;
         }
 
@@ -3323,6 +4230,7 @@ pub mod cabi {
                         req.clear_rgb,
                         req.verts.as_slice(),
                     );
+                    finish_render_tex_inflight(req.tex_id, rc);
                     if rc == 0 {
                         request_texture_work_present(
                             req.repaint_window_id,
@@ -3342,8 +4250,8 @@ pub mod cabi {
                 }
                 TextureWorkReq::DrawMandelbrot(req) => {
                     let rc = render_mandelbrot_to_texture_now(req.tex_id, req.ticks, req.tick_hz);
+                    finish_render_tex_inflight(req.tex_id, rc);
                     if rc == 0 {
-                        set_async_tex_status(req.tex_id, ASYNC_TEX_STATUS_READY);
                         crate::log_info!(
                             target: "gfx";
                             "gfx-cabi: mandelbrot render ok tex={} repaint_window={} reason={} ticks={} hz={}\n",
@@ -3377,6 +4285,7 @@ pub mod cabi {
                         req.verts.as_slice(),
                         req.particle_shader,
                     );
+                    finish_render_tex_inflight(req.target_tex_id, rc);
                     if rc == 0 {
                         request_texture_work_present(
                             req.repaint_window_id,
@@ -3395,7 +4304,6 @@ pub mod cabi {
                     }
                 }
             }
-            Timer::after_millis(1).await;
         }
     }
 
@@ -4777,7 +5685,11 @@ pub mod cabi {
         _eq_alpha: u32,
     ) -> i32 {
         if gfx_cabi_vm_context() {
-            return GFX_CABI_VM_HOST_ONLY_RC;
+            let mut payload = [0u8; 12];
+            payload[0..4].copy_from_slice(&enabled.to_le_bytes());
+            payload[4..8].copy_from_slice(&src_rgb.to_le_bytes());
+            payload[8..12].copy_from_slice(&dst_rgb.to_le_bytes());
+            return vmcall_gfx_frame_state(0, &payload);
         }
         let en = enabled != 0;
         let mut st = GFX_CABI_STATE.lock();
@@ -4811,7 +5723,12 @@ pub mod cabi {
         mag_filter: u32,
     ) -> i32 {
         if gfx_cabi_vm_context() {
-            return GFX_CABI_VM_HOST_ONLY_RC;
+            let mut payload = [0u8; 16];
+            payload[0..4].copy_from_slice(&wrap_s.to_le_bytes());
+            payload[4..8].copy_from_slice(&wrap_t.to_le_bytes());
+            payload[8..12].copy_from_slice(&min_filter.to_le_bytes());
+            payload[12..16].copy_from_slice(&mag_filter.to_le_bytes());
+            return vmcall_gfx_frame_state(1, &payload);
         }
         let ws = if wrap_s == 1 {
             SamplerWrap::Repeat
@@ -4863,7 +5780,12 @@ pub mod cabi {
         height: u32,
     ) -> i32 {
         if gfx_cabi_vm_context() {
-            return GFX_CABI_VM_HOST_ONLY_RC;
+            let mut payload = [0u8; 16];
+            payload[0..4].copy_from_slice(&x.to_le_bytes());
+            payload[4..8].copy_from_slice(&y.to_le_bytes());
+            payload[8..12].copy_from_slice(&width.to_le_bytes());
+            payload[12..16].copy_from_slice(&height.to_le_bytes());
+            return vmcall_gfx_frame_state(2, &payload);
         }
         let mut st = GFX_CABI_STATE.lock();
         st.cur_scissor = if width == 0 || height == 0 {
@@ -4890,7 +5812,8 @@ pub mod cabi {
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_gfx_clear_scissor() -> i32 {
         if gfx_cabi_vm_context() {
-            return GFX_CABI_VM_HOST_ONLY_RC;
+            let payload = [0u8; 16];
+            return vmcall_gfx_frame_state(2, &payload);
         }
         let mut st = GFX_CABI_STATE.lock();
         st.cur_scissor = None;
@@ -4947,7 +5870,16 @@ pub mod cabi {
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_gfx_set_render_target(tex_id: u32) -> i32 {
         if gfx_cabi_vm_context() {
-            return GFX_CABI_VM_HOST_ONLY_RC;
+            let (status, rc) = trueos_vm::vmcall::call(
+                trueos_vm::vmcall::OP_BP_GFX_FRAME_SET_TARGET,
+                tex_id as u64,
+                0,
+            );
+            return if status == trueos_vm::vmcall::STATUS_OK {
+                rc as i64 as i32
+            } else {
+                -91
+            };
         }
         let mut st = GFX_CABI_STATE.lock();
         if tex_id == 0 {
@@ -4996,7 +5928,13 @@ pub mod cabi {
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_gfx_clear_render_target() -> i32 {
         if gfx_cabi_vm_context() {
-            return GFX_CABI_VM_HOST_ONLY_RC;
+            let (status, rc) =
+                trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_GFX_FRAME_SET_TARGET, 0, 0);
+            return if status == trueos_vm::vmcall::STATUS_OK {
+                rc as i64 as i32
+            } else {
+                -91
+            };
         }
         let mut st = GFX_CABI_STATE.lock();
         let had_scissor = st.cur_scissor.take().is_some();
@@ -5391,6 +6329,8 @@ pub mod cabi {
         ret
     }
 
+    const PRESERVE_RENDER_TARGET_CLEAR_RGB: u32 = u32::MAX;
+
     fn render_rgb_triangles_to_texture_now(tex_id: u32, clear_rgb: u32, vtx: &[u8]) -> i32 {
         crate::gfx::init(None);
 
@@ -5412,6 +6352,8 @@ pub mod cabi {
         if vcount == 0 {
             return 0;
         }
+        let preserve_target = clear_rgb == PRESERVE_RENDER_TARGET_CLEAR_RGB;
+        let clear_rgb = clear_rgb & 0x00ff_ffff;
 
         let (image, width, height) = {
             let st = GFX_CABI_STATE.lock();
@@ -5444,7 +6386,7 @@ pub mod cabi {
                         return -4;
                     }
 
-                    let cmds = [
+                    let cmds_with_clear = [
                         Command::SetRenderTarget(Some(image)),
                         Command::SetViewport(Viewport {
                             x: 0,
@@ -5465,10 +6407,35 @@ pub mod cabi {
                             first_vertex: 0,
                         },
                     ];
+                    let cmds_without_clear = [
+                        Command::SetRenderTarget(Some(image)),
+                        Command::SetViewport(Viewport {
+                            x: 0,
+                            y: 0,
+                            width: width as i32,
+                            height: height as i32,
+                        }),
+                        Command::SetScissor(None),
+                        Command::SetBlend(trueos_gfx_core::BlendDesc::disabled()),
+                        Command::BindPipeline(pipeline),
+                        Command::BindVertexBuffer {
+                            buffer: vbuf,
+                            offset: 0,
+                        },
+                        Command::Draw {
+                            vertex_count: vcount,
+                            first_vertex: 0,
+                        },
+                    ];
+                    let cmds = if preserve_target {
+                        &cmds_without_clear[..]
+                    } else {
+                        &cmds_with_clear[..]
+                    };
                     if !check_submit_budget(usable, cmds.len(), "draw_rgb_triangles_to_texture") {
                         return -7;
                     }
-                    if ctx.submit(CommandBuffer { commands: &cmds }).is_err() {
+                    if ctx.submit(CommandBuffer { commands: cmds }).is_err() {
                         return -8;
                     }
                     0
@@ -5484,6 +6451,7 @@ pub mod cabi {
                     .and_then(|images| images.get_mut(tex_id.saturating_sub(1) as usize))
                     .and_then(|entry| entry.as_mut())
                 {
+                    entry.origin = TexCoordOrigin::BottomLeft;
                     let Some(need) = checked_reasonable_rgba_len(entry.width, entry.height) else {
                         crate::log!(
                             "gfx-cabi: invalid rgba len for rgb-to-texture tex={} size={}x{}\n",
@@ -5496,7 +6464,9 @@ pub mod cabi {
                     if entry.rgba.len() != need {
                         entry.rgba.resize(need, 0);
                     }
-                    clear_rgba_buffer(entry.rgba.as_mut_slice(), clear_rgb);
+                    if !preserve_target {
+                        clear_rgba_buffer(entry.rgba.as_mut_slice(), clear_rgb);
+                    }
                     let mut off = 0usize;
                     while off + (3 * RGB_VERTEX_SIZE) <= usable {
                         let Some(v0) = read_rgb_vtx(&vtx[..usable], off) else {
@@ -5647,6 +6617,8 @@ pub mod cabi {
         if vcount == 0 {
             return 0;
         }
+        let preserve_target = clear_rgb == PRESERVE_RENDER_TARGET_CLEAR_RGB;
+        let clear_rgb = clear_rgb & 0x00ff_ffff;
 
         let (target_image, target_width, target_height) = {
             let st = GFX_CABI_STATE.lock();
@@ -5709,7 +6681,7 @@ pub mod cabi {
                         return -7;
                     }
 
-                    let cmds = [
+                    let cmds_with_clear = [
                         Command::SetRenderTarget(Some(target_image)),
                         Command::SetViewport(Viewport {
                             x: 0,
@@ -5737,10 +6709,42 @@ pub mod cabi {
                             first_vertex: 0,
                         },
                     ];
+                    let cmds_without_clear = [
+                        Command::SetRenderTarget(Some(target_image)),
+                        Command::SetViewport(Viewport {
+                            x: 0,
+                            y: 0,
+                            width: target_width as i32,
+                            height: target_height as i32,
+                        }),
+                        Command::SetScissor(None),
+                        Command::SetBlend(trueos_gfx_core::BlendDesc::straight_alpha()),
+                        Command::BindPipeline(pipeline),
+                        Command::SetSampler(SamplerDesc {
+                            wrap_s: SamplerWrap::ClampToEdge,
+                            wrap_t: SamplerWrap::ClampToEdge,
+                            min_filter: SamplerFilter::Nearest,
+                            mag_filter: SamplerFilter::Nearest,
+                        }),
+                        Command::BindImage(source_image),
+                        Command::BindVertexBuffer {
+                            buffer: vbuf,
+                            offset: 0,
+                        },
+                        Command::Draw {
+                            vertex_count: vcount,
+                            first_vertex: 0,
+                        },
+                    ];
+                    let cmds = if preserve_target {
+                        &cmds_without_clear[..]
+                    } else {
+                        &cmds_with_clear[..]
+                    };
                     if !check_submit_budget(usable, cmds.len(), "draw_tex_triangles_to_texture") {
                         return -8;
                     }
-                    if ctx.submit(CommandBuffer { commands: &cmds }).is_err() {
+                    if ctx.submit(CommandBuffer { commands: cmds }).is_err() {
                         return -9;
                     }
                     0
@@ -5759,6 +6763,11 @@ pub mod cabi {
                     return ret;
                 }
                 if target_idx == source_idx {
+                    if let Some(target) =
+                        images.get_mut(target_idx).and_then(|entry| entry.as_mut())
+                    {
+                        target.origin = TexCoordOrigin::BottomLeft;
+                    }
                     crate::log!(
                         "gfx-cabi: tex-to-texture mirror skipped target==source tex={} src={}\n",
                         target_tex_id,
@@ -5775,6 +6784,7 @@ pub mod cabi {
                     let Some(target) = right.get_mut(0).and_then(|entry| entry.as_mut()) else {
                         return ret;
                     };
+                    target.origin = TexCoordOrigin::BottomLeft;
                     (source_tex, target)
                 } else {
                     let (left, right) = images.split_at_mut(source_idx);
@@ -5782,6 +6792,7 @@ pub mod cabi {
                     else {
                         return ret;
                     };
+                    target.origin = TexCoordOrigin::BottomLeft;
                     let Some(source_tex) = right.get(0).and_then(|entry| entry.as_ref()) else {
                         return ret;
                     };
@@ -5800,7 +6811,9 @@ pub mod cabi {
                 if target.rgba.len() != need {
                     target.rgba.resize(need, 0);
                 }
-                clear_rgba_buffer(target.rgba.as_mut_slice(), clear_rgb);
+                if !preserve_target {
+                    clear_rgba_buffer(target.rgba.as_mut_slice(), clear_rgb);
+                }
                 let mut off = 0usize;
                 while off + (3 * TEX_VERTEX_SIZE) <= usable {
                     let Some(v0) = read_tex_vtx(&vtx[..usable], off) else {
@@ -5848,9 +6861,10 @@ pub mod cabi {
         data_len: usize,
         mut owned_rgba: Option<Vec<u8>>,
         sample_kind: TexSampleKind,
+        vm_redirect: bool,
         call_init: bool,
     ) -> i32 {
-        if gfx_cabi_vm_context() {
+        if vm_redirect && gfx_cabi_vm_context() {
             if crate::hv::current_hull_guest_context_vm_id().is_some() {
                 if let Some(rgba) = owned_rgba.as_ref() {
                     return vmcall_texture_rgba_upload_from_ptr(
@@ -6214,6 +7228,7 @@ pub mod cabi {
             None,
             sample_kind,
             true,
+            true,
         )
     }
 
@@ -6235,6 +7250,7 @@ pub mod cabi {
             rgba.len(),
             Some(rgba),
             sample_kind,
+            true,
             true,
         )
     }
@@ -6641,6 +7657,9 @@ pub mod cabi {
         if reject_unreasonable_tex_id(tex_id, "texture-status") {
             return ASYNC_TEX_STATUS_UNKNOWN;
         }
+        if crate::hv::current_hull_guest_context_vm_id().is_some() {
+            return vmcall_texture_status(tex_id);
+        }
         if gfx_cabi_vm_context() {
             return if vm_texture_dimensions(tex_id).is_some() {
                 ASYNC_TEX_STATUS_READY
@@ -6671,6 +7690,16 @@ pub mod cabi {
         if out_width.is_null() || out_height.is_null() {
             return -1;
         }
+        if crate::hv::current_hull_guest_context_vm_id().is_some() {
+            let Some((width, height)) = vmcall_texture_dimensions(tex_id) else {
+                return -2;
+            };
+            unsafe {
+                core::ptr::write(out_width, width);
+                core::ptr::write(out_height, height);
+            }
+            return 0;
+        }
         if gfx_cabi_vm_context() {
             let Some((width, height)) = vm_texture_dimensions(tex_id) else {
                 return -2;
@@ -6692,14 +7721,11 @@ pub mod cabi {
     }
 
     #[inline]
-    fn begin_frame_inner(
+    fn begin_frame_host_inner(
         clear_rgb: u32,
         preserve_contents: bool,
         allow_screen_present: bool,
     ) -> i32 {
-        if gfx_cabi_vm_context() {
-            return GFX_CABI_VM_HOST_ONLY_RC;
-        }
         crate::gfx::init(None);
 
         let mut st = GFX_CABI_STATE.lock();
@@ -6743,6 +7769,18 @@ pub mod cabi {
         0
     }
 
+    #[inline]
+    fn begin_frame_inner(
+        clear_rgb: u32,
+        preserve_contents: bool,
+        allow_screen_present: bool,
+    ) -> i32 {
+        if gfx_cabi_vm_context() {
+            return vmcall_gfx_frame_begin(clear_rgb, preserve_contents, allow_screen_present);
+        }
+        begin_frame_host_inner(clear_rgb, preserve_contents, allow_screen_present)
+    }
+
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_gfx_begin_frame(clear_rgb: u32) -> i32 {
         begin_frame_inner(clear_rgb, false, true)
@@ -6763,9 +7801,6 @@ pub mod cabi {
         vtx_ptr: *const u8,
         vtx_len: usize,
     ) -> i32 {
-        if gfx_cabi_vm_context() {
-            return GFX_CABI_VM_HOST_ONLY_RC;
-        }
         if vtx_ptr.is_null() {
             return if vtx_len == 0 { 0 } else { -1 };
         }
@@ -6782,6 +7817,9 @@ pub mod cabi {
             return 0;
         }
         let bytes = core::slice::from_raw_parts(vtx_ptr, usable);
+        if gfx_cabi_vm_context() {
+            return vmcall_gfx_frame_draw_upload(VmFrameDrawKind::Rgb, 0, bytes);
+        }
         let mut st = GFX_CABI_STATE.lock();
         if !st.frame_active {
             crate::globalog::log(format_args!(
@@ -6905,9 +7943,6 @@ pub mod cabi {
         vtx_ptr: *const u8,
         vtx_len: usize,
     ) -> i32 {
-        if gfx_cabi_vm_context() {
-            return GFX_CABI_VM_HOST_ONLY_RC;
-        }
         if tex_id == 0 {
             return -1;
         }
@@ -6927,6 +7962,9 @@ pub mod cabi {
             return 0;
         }
         let bytes = core::slice::from_raw_parts(vtx_ptr, usable);
+        if gfx_cabi_vm_context() {
+            return vmcall_gfx_frame_draw_upload(VmFrameDrawKind::Tex, tex_id, bytes);
+        }
         let mut st = GFX_CABI_STATE.lock();
         if !st.frame_active {
             crate::globalog::log(format_args!(
@@ -7089,11 +8127,7 @@ pub mod cabi {
         )
     }
 
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn trueos_cabi_gfx_end_frame() -> i32 {
-        if gfx_cabi_vm_context() {
-            return GFX_CABI_VM_HOST_ONLY_RC;
-        }
+    fn end_frame_host_inner() -> i32 {
         let _host_alloc_domain = crate::allocators::enter_host_alloc_domain_current_cpu();
         crate::gfx::init(None);
 
@@ -7749,6 +8783,20 @@ pub mod cabi {
             ));
         }
         ret
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_end_frame() -> i32 {
+        if gfx_cabi_vm_context() {
+            let (status, rc) =
+                trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_GFX_FRAME_END, 0, 0);
+            return if status == trueos_vm::vmcall::STATUS_OK {
+                rc as i64 as i32
+            } else {
+                -91
+            };
+        }
+        end_frame_host_inner()
     }
 
     // --- Input C-ABI ---
