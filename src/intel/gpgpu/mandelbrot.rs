@@ -2,31 +2,6 @@
 
 use super::*;
 
-const MANDELBROT_ORACLE_LATEST_HANDLE9_BATCH_BYTES: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/intel_userland_oracle/latest/dumps/000534_pre_exec_handle_9_off_0x2000_len_0x2000.bin",
-);
-const MANDELBROT_ORACLE_LATEST_HANDLE9_COMPLETION_MARKER: u32 = 0xC0DE_7732;
-static MANDELBROT_ORACLE_LATEST_HANDLE9_BATCH_LOGGED: AtomicBool = AtomicBool::new(false);
-
-#[derive(Clone, Copy)]
-enum MandelbrotCommandStreamSource {
-    DynamicEncoded,
-    OracleLatestHandle9Batch,
-}
-
-const MANDELBROT_COMMAND_STREAM_SOURCE: MandelbrotCommandStreamSource =
-    MandelbrotCommandStreamSource::DynamicEncoded;
-// This toggles the compute-walker SIMD mask only. The EU artifact below remains
-// the existing scalar groupid row writer; this is not a SIMD16 Mandelbrot body.
-const MANDELBROT_GROUPID_LINE1280_SIMD16_MASK_PROBE: bool = true;
-const MANDELBROT_GROUPID_LINE1280_SIMD16_PROGRAM_NAME: &str = "gfx12-primary-scanout-groupid-line1280-rows-simd16-walker-mask-existing-scalar-row-writer-hdc1-stateless-unrolled-store-then-ts-eot";
-const MANDELBROT_GROUPID_LINE1280_ARTIFACT_BODY: &str = "row-writer-scalar-bw-v1";
-const MANDELBROT_GROUPID_LINE1280_PAYLOAD_CONTRACT: &str = "row-color-burst-v1";
-const MANDELBROT_GROUPID_LINE1280_SIMD16_DISPATCH_CONTRACT: &str = "simd16-mask-walker-v1";
-const MANDELBROT_GROUPID_LINE1280_SIMD8_DISPATCH_CONTRACT: &str = "simd8-mask-walker-v1";
-const MANDELBROT_GROUPID_LINE1280_SIMD16_PROVES: &str = "simd16-walker-dispatch-over-row-writer";
-const MANDELBROT_GROUPID_LINE1280_SIMD8_PROVES: &str = "simd8-walker-dispatch-over-row-writer";
-const MANDELBROT_GROUPID_LINE1280_DOES_NOT_PROVE: &str = "simd16-mandelbrot-eu-body";
 const MANDELBROT16_T11_MODE_LINEAR_FULL_BAND: u32 = 46;
 const MANDELBROT16_T15_MODE_LINEAR_GRADIENT_FULL_BAND: u32 = 47;
 const MANDELBROT16_T16_MODE_LINEAR_CONSTANT_STORE: u32 = 48;
@@ -76,6 +51,4 @@ impl Mandelbrot16AddressMode {
 }
 
 include!("mandelbrot/programs_and_patches.rs");
-include!("mandelbrot/line_and_row_pilots.rs");
 include!("mandelbrot/simd16_submits.rs");
-include!("mandelbrot/preview.rs");
