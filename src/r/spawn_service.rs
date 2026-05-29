@@ -328,9 +328,7 @@ fn spawn_codec_service(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_factory_ram_probe(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| {
-        crate::tst_boot_factory_ram_probe::boot_factory_ram_probe_task()
-    })
+    spawn_local(spawner, |_spawner| crate::ram_probe::boot_factory_ram_probe_task())
 }
 
 fn spawn_qjs_async_fs_service(spawner: Spawner) -> SpawnAttempt {

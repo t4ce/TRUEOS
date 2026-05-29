@@ -167,9 +167,29 @@ pub unsafe fn spawn_guest_blocking_job_from_raw(
     if data == 0 || vtable == 0 {
         return -5;
     }
-    let raw: *mut (dyn FnOnce() + Send + 'static) = core::mem::transmute((data, vtable));
-    let job = Box::from_raw(raw);
-    spawn_on_background_ap(job, purpose, Some(vm_id))
+    let job = Box::new(move || {
+        run_guest_blocking_job_from_raw(vm_id, data, vtable);
+    });
+    let rc = spawn_on_background_ap(job, purpose, Some(vm_id));
+    if rc != 0 {
+        drop_guest_blocking_job_from_raw(vm_id, data, vtable);
+    }
+    rc
+}
+
+fn run_guest_blocking_job_from_raw(vm_id: u8, data: usize, vtable: usize) {
+    let _ = crate::allocators::with_hv_guest_alloc_domain(vm_id, || unsafe {
+        let raw: *mut (dyn FnOnce() + Send + 'static) = core::mem::transmute((data, vtable));
+        let job = Box::from_raw(raw);
+        job();
+    });
+}
+
+fn drop_guest_blocking_job_from_raw(vm_id: u8, data: usize, vtable: usize) {
+    let _ = crate::allocators::with_hv_guest_alloc_domain(vm_id, || unsafe {
+        let raw: *mut (dyn FnOnce() + Send + 'static) = core::mem::transmute((data, vtable));
+        drop(Box::from_raw(raw));
+    });
 }
 
 #[unsafe(no_mangle)]

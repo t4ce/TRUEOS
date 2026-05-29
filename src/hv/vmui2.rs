@@ -675,6 +675,9 @@ pub fn note_deferred_blueprint_app_window_op(window_id: u32, op: &'static str) -
     if op == "begin-move" {
         return begin_deferred_blueprint_app_window_move(window_id);
     }
+    if op == "close" {
+        return close_deferred_blueprint_app_window(window_id);
+    }
     let Some(records_lock) = APP_WINDOW_DEFERRED_RECORDS.get(vm_id as usize) else {
         return false;
     };
@@ -687,8 +690,50 @@ pub fn note_deferred_blueprint_app_window_op(window_id: u32, op: &'static str) -
     };
     match op {
         "request-repaint" => record.repaint_requested = true,
-        "close" => record.close_requested = true,
         _ => {}
+    }
+    true
+}
+
+fn close_deferred_blueprint_app_window(window_id: u32) -> bool {
+    let Some(vm_id) = deferred_blueprint_app_window_vm_id(window_id) else {
+        return false;
+    };
+    let Some(records_lock) = APP_WINDOW_DEFERRED_RECORDS.get(vm_id as usize) else {
+        return false;
+    };
+
+    let mut host_window_id = 0u32;
+    {
+        let mut records = records_lock.lock();
+        let Some(record) = records
+            .iter_mut()
+            .find(|record| record.active && record.deferred_id == window_id)
+        else {
+            return false;
+        };
+        if record.materialized_window_id != 0
+            && record.materialized_window_id != DeferredAppWindowRecord::MATERIALIZING
+        {
+            host_window_id = record.materialized_window_id;
+        }
+        record.close_requested = true;
+        record.active = false;
+        record.materialized_window_id = 0;
+        record.cached_info = None;
+    }
+
+    if host_window_id != 0 {
+        let _ = crate::r::ui2::destroy_window(host_window_id);
+        app_window_broker_log(format_args!(
+            "app-window-broker: vm{} deferred close window={} host_window={} status=destroyed",
+            vm_id, window_id, host_window_id
+        ));
+    } else {
+        app_window_broker_log(format_args!(
+            "app-window-broker: vm{} deferred close window={} status=closed-before-materialize",
+            vm_id, window_id
+        ));
     }
     true
 }
