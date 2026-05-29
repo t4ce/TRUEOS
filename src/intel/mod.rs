@@ -601,8 +601,14 @@ pub(crate) fn submit_gpgpu_primary_scanout_walkrow16(
     row_one_based: u32,
     x_base: u32,
     color: u32,
+    verify_readback: bool,
 ) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_walkrow16(row_one_based, x_base, color)
+    self::gpgpu::submit_gpgpu_primary_scanout_walkrow16(
+        row_one_based,
+        x_base,
+        color,
+        verify_readback,
+    )
 }
 
 pub(crate) fn submit_gpgpu_one_tile_output_compare_probe(

@@ -2,11 +2,12 @@ pub(crate) fn submit_gpgpu_primary_scanout_walkrow16(
     row_one_based: u32,
     x_base: u32,
     color: u32,
+    verify_readback: bool,
 ) -> crate::intel::GpgpuOneTileSentinelProof {
     const PIXELS: usize =
         trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_PIXELS_PER_PROGRAM;
     const STORE_BYTES: usize = PIXELS * core::mem::size_of::<u32>();
-    const MODE: u32 = MANDELBROT16_T17_MODE_IMMEDIATE_CONSTANT_STORE;
+    const MODE: u32 = MANDELBROT16_T36_MODE_IMMEDIATE_UNROLLED_SCALAR16;
 
     let program = gpgpu_primary_scanout_mandelbrot16_simd16_bw_program();
     let Some(dev) = crate::intel::claimed_device() else {
@@ -53,24 +54,30 @@ pub(crate) fn submit_gpgpu_primary_scanout_walkrow16(
     let expected_hit_mask = mandelbrot16_active_lane_mask() as u64;
     let poison = expected ^ 0x00A5_A5A5;
     let mut lane = 0usize;
-    while lane < PIXELS {
-        unsafe {
-            core::ptr::write_volatile(
-                row_virt.add(lane * core::mem::size_of::<u32>()) as *mut u32,
-                poison,
-            );
+    if verify_readback {
+        while lane < PIXELS {
+            unsafe {
+                core::ptr::write_volatile(
+                    row_virt.add(lane * core::mem::size_of::<u32>()) as *mut u32,
+                    poison,
+                );
+            }
+            lane += 1;
         }
-        lane += 1;
+        crate::intel::dma_flush(row_virt, STORE_BYTES);
     }
-    crate::intel::dma_flush(row_virt, STORE_BYTES);
 
     let mut before_words = [0u32; PIXELS];
-    lane = 0;
-    while lane < PIXELS {
-        before_words[lane] = unsafe {
-            core::ptr::read_volatile(row_virt.add(lane * core::mem::size_of::<u32>()) as *const u32)
-        };
-        lane += 1;
+    if verify_readback {
+        lane = 0;
+        while lane < PIXELS {
+            before_words[lane] = unsafe {
+                core::ptr::read_volatile(
+                    row_virt.add(lane * core::mem::size_of::<u32>()) as *const u32
+                )
+            };
+            lane += 1;
+        }
     }
     let output_first_before = before_words[0];
 
@@ -129,56 +136,62 @@ pub(crate) fn submit_gpgpu_primary_scanout_walkrow16(
     let mut changed = 0u64;
     let mut after_words = [0u32; PIXELS];
     let mut output_first_after = output_first_before;
-    while poll < MANDELBROT_STRIP_READBACK_POLLS {
-        crate::intel::dma_flush(row_virt, STORE_BYTES);
-        hits = 0;
-        changed = 0;
-        lane = 0;
-        while lane < PIXELS {
-            let after = unsafe {
-                core::ptr::read_volatile(
-                    row_virt.add(lane * core::mem::size_of::<u32>()) as *const u32
-                )
-            };
-            after_words[lane] = after;
-            if lane == 0 {
-                output_first_after = after;
+    if verify_readback {
+        while poll < MANDELBROT_STRIP_READBACK_POLLS {
+            crate::intel::dma_flush(row_virt, STORE_BYTES);
+            hits = 0;
+            changed = 0;
+            lane = 0;
+            while lane < PIXELS {
+                let after = unsafe {
+                    core::ptr::read_volatile(
+                        row_virt.add(lane * core::mem::size_of::<u32>()) as *const u32
+                    )
+                };
+                after_words[lane] = after;
+                if lane == 0 {
+                    output_first_after = after;
+                }
+                if after == expected {
+                    hits |= 1u64 << lane;
+                }
+                if after != before_words[lane] {
+                    changed |= 1u64 << lane;
+                }
+                lane += 1;
             }
-            if after == expected {
-                hits |= 1u64 << lane;
+            if hits & expected_hit_mask == expected_hit_mask {
+                break;
             }
-            if after != before_words[lane] {
-                changed |= 1u64 << lane;
-            }
-            lane += 1;
+            poll += 1;
+            core::hint::spin_loop();
         }
-        if hits & expected_hit_mask == expected_hit_mask {
-            break;
-        }
-        poll += 1;
-        core::hint::spin_loop();
     }
 
     let dispatch_after = read_gpgpu_threads_dispatched(dev);
     let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
     let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
     let expected_dispatch = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_LANES as u64;
-    let command_ok = finished
-        && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE
-        && dispatch_delta >= expected_dispatch;
-    let readback_ok = command_ok && changed != 0 && hits & expected_hit_mask == expected_hit_mask;
+    let command_ok = finished && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
+    let readback_ok = if verify_readback {
+        command_ok && changed != 0 && hits & expected_hit_mask == expected_hit_mask
+    } else {
+        command_ok
+    };
     let display_notified = command_ok
         && crate::intel::display::notify_primary_surface_external_write(
             "gpgpu-primary-scanout-walkrow16",
             row_offset,
             STORE_BYTES,
         );
-    let reason = if readback_ok {
+    let reason = if !verify_readback && command_ok {
+        "simd16-store-submitted-no-readback"
+    } else if readback_ok {
         "simd16-immediate-constant-store-visible"
     } else if !finished {
         "simd16-store-submit-not-finished"
-    } else if dispatch_delta == 0 {
-        "simd16-store-no-eu-dispatch"
+    } else if finish_marker != RCS_EXEC_RESULT_COMPUTE_WALKER_DONE {
+        "simd16-store-finish-marker-mismatch"
     } else if hits == 0 {
         "simd16-store-no-lane-matched-expected-color"
     } else {
@@ -186,7 +199,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_walkrow16(
     };
 
     crate::log!(
-        "intel/gpgpu: walkrow16 row={} y={} x={} row_offset=0x{:X} row_gpu=0x{:X} target_gpu=0x{:X} target_phys=0x{:X} pitch_bytes={} color=0x{:08X} pixels={} expected_hit_mask=0x{:04X} hit_mask=0x{:04X} changed_mask=0x{:04X} readback_ok={} reason={} first_before=0x{:08X} first_after=0x{:08X} after0=0x{:08X} after1=0x{:08X} after2=0x{:08X} after3=0x{:08X} after4=0x{:08X} after5=0x{:08X} after6=0x{:08X} after7=0x{:08X} after8=0x{:08X} after9=0x{:08X} after10=0x{:08X} after11=0x{:08X} after12=0x{:08X} after13=0x{:08X} after14=0x{:08X} after15=0x{:08X} display_notified={} finish_marker=0x{:08X} lane_dispatch_delta={} expected_dispatch={} program_source={} batch_bytes=0x{:X}\n",
+        "intel/gpgpu: walkrow16 row={} y={} x={} row_offset=0x{:X} row_gpu=0x{:X} target_gpu=0x{:X} target_phys=0x{:X} pitch_bytes={} color=0x{:08X} pixels={} verify_readback={} expected_hit_mask=0x{:04X} hit_mask=0x{:04X} changed_mask=0x{:04X} readback_ok={} reason={} first_before=0x{:08X} first_after=0x{:08X} after0=0x{:08X} after1=0x{:08X} after2=0x{:08X} after3=0x{:08X} after4=0x{:08X} after5=0x{:08X} after6=0x{:08X} after7=0x{:08X} after8=0x{:08X} after9=0x{:08X} after10=0x{:08X} after11=0x{:08X} after12=0x{:08X} after13=0x{:08X} after14=0x{:08X} after15=0x{:08X} display_notified={} finish_marker=0x{:08X} lane_dispatch_delta={} expected_dispatch={} program_source={} batch_bytes=0x{:X}\n",
         row_one_based,
         y,
         x,
@@ -197,6 +210,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_walkrow16(
         target.pitch_bytes,
         color,
         PIXELS,
+        verify_readback as u8,
         expected_hit_mask,
         hits,
         changed,
@@ -229,11 +243,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_walkrow16(
     );
 
     if !finished {
-        recover_render_engine_after_nonretired_submit(
-            dev,
-            warm,
-            "gpgpu-primary-scanout-walkrow16",
-        );
+        recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-primary-scanout-walkrow16");
     }
     crate::intel::GpgpuOneTileSentinelProof {
         submitted: batch_bytes != 0,

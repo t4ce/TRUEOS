@@ -34,6 +34,7 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
         row_one_based,
         x_base,
         MANDELBROT16_EXAMPLE_COLOR,
+        true,
     );
     if proof.readback_ok {
         crate::r::readiness::set(crate::r::readiness::MANDELBROT_GPU_SIDEQUEST_READY);
