@@ -179,12 +179,7 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
     );
     let gradient = if linear_constant.readback_ok {
         crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_linear_band_probe(
-            row_index,
-            x_base,
-            1,
-            1,
-            c_re,
-            c_im,
+            row_index, x_base, 1, 1, c_re, c_im,
         )
     } else {
         crate::intel::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_immediate_gradient_probe(
@@ -229,7 +224,9 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
         } else {
             gradient.sentinel
         },
-        gradient.dispatch_delta.saturating_add(raw_radius.dispatch_delta),
+        gradient
+            .dispatch_delta
+            .saturating_add(raw_radius.dispatch_delta),
         if use_raw_radius {
             raw_radius.finish_marker
         } else {
@@ -242,11 +239,8 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
         },
     );
 
-    let sweep_x_groups = scanout_w
-        .saturating_add(pixels_per_program - 1)
-        / pixels_per_program;
-    let sweep_y_blocks = scanout_h
-        .saturating_add(MANDELBROT16_BOOT_VISIBLE_STAMP_ROWS - 1)
+    let sweep_x_groups = scanout_w.saturating_add(pixels_per_program - 1) / pixels_per_program;
+    let sweep_y_blocks = scanout_h.saturating_add(MANDELBROT16_BOOT_VISIBLE_STAMP_ROWS - 1)
         / MANDELBROT16_BOOT_VISIBLE_STAMP_ROWS;
     let mut frame = 0u64;
     let mut sweep_cursor = 0u32;

@@ -100,11 +100,8 @@ impl crabusb::KernelOp for TrueosCrabKernel {
     }
 }
 
-pub fn known_xhci_host_inputs() -> Option<(
-    crabusb::Mmio,
-    &'static dyn crabusb::KernelOp,
-    crabusb::XhciRootHubInitPolicy,
-)> {
+pub fn known_xhci_host_inputs()
+-> Option<(crabusb::Mmio, &'static dyn crabusb::KernelOp, crabusb::XhciRootHubInitPolicy)> {
     let dev = known_xhci_device()?;
     let root_hub_policy = if is_qemu_xhci_device(dev.vendor_id, dev.device_id) {
         crate::log!(

@@ -498,6 +498,65 @@ fn close_window_in_state(state: &mut Ui2State, window_id: u32) -> bool {
     set_window_visible_in_state(state, window_id, false)
 }
 
+fn destroy_window_in_state(state: &mut Ui2State, window_id: u32) -> bool {
+    let Some(index) = state
+        .windows
+        .iter()
+        .position(|window| window.id == window_id)
+    else {
+        return false;
+    };
+    let hosted_content_id = window_hosted_content_id(&state.windows[index]);
+
+    clear_window_drag_claims(state, window_id);
+    for cursor in &mut state.cursors {
+        if cursor.selected_window_id == window_id {
+            cursor.selected_window_id = 0;
+        }
+        if cursor.press_window_id == window_id {
+            cursor.press_window_id = 0;
+            cursor.press_armed = false;
+        }
+    }
+
+    if hosted_content_id != 0 {
+        let _ = hosted_bind_window(hosted_content_id, 0);
+    }
+    if UI2_BROWSER_WINDOW_ID.load(Ordering::Acquire) == window_id {
+        UI2_BROWSER_WINDOW_ID.store(0, Ordering::Release);
+    }
+
+    state.windows.remove(index);
+
+    let active_selected: Vec<(u32, u32)> = state
+        .cursors
+        .iter()
+        .map(|cursor| (cursor.slot_id, cursor.selected_window_id))
+        .collect();
+    for window in &mut state.windows {
+        window.selected_cursor_slots.retain(|slot_id| {
+            active_selected
+                .iter()
+                .any(|(selected_slot_id, selected_window_id)| {
+                    *selected_slot_id == *slot_id && *selected_window_id == window.id
+                })
+        });
+    }
+
+    state.compose_reason = "destroy-window";
+    for id in state
+        .windows
+        .iter()
+        .map(|window| window.id)
+        .collect::<Vec<_>>()
+    {
+        refresh_window_hit_entries(state, id);
+    }
+    UI2_DIRTY.store(true, Ordering::Release);
+    queue_hosted_container_sync();
+    true
+}
+
 pub(super) fn teardown_stopped_vm_windows_in_state(state: &mut Ui2State) -> usize {
     let stale_ids = state
         .windows
@@ -2040,6 +2099,12 @@ pub fn close_window(id: u32) -> bool {
     let state_lock = init_state();
     let mut state = state_lock.lock();
     close_window_in_state(&mut state, id)
+}
+
+pub fn destroy_window(id: u32) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    destroy_window_in_state(&mut state, id)
 }
 
 pub fn minimize_window(id: u32) -> bool {

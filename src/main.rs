@@ -9,6 +9,7 @@ const _: f16 = 0.0_f16;
 #[macro_use]
 pub extern crate alloc;
 
+// Modules
 mod allcaps;
 mod allocators;
 pub mod allports;
@@ -63,6 +64,7 @@ mod power;
 #[path = "power/power_disabled.rs"]
 mod power;
 mod r;
+mod ram_probe;
 mod runtime;
 mod shell2;
 mod smp;
@@ -73,8 +75,6 @@ mod surfer;
 mod t;
 mod tga;
 mod tst;
-#[path = "tst/boot_factory_ram_probe.rs"]
-mod tst_boot_factory_ram_probe;
 #[path = "tst/http_trueosfs.rs"]
 mod tst_http_trueosfs;
 #[path = "intel/gpgpu/mandelbrot_gpu_sidequest.rs"]
@@ -90,19 +90,21 @@ mod turbo;
 mod tyche;
 #[path = "usb3/mod.rs"]
 pub(crate) mod usb3;
-pub(crate) use usb3 as usb2;
 mod wait;
 mod workers;
 mod x2apic;
 mod z7;
 
+// Re-exports
 pub(crate) use crate::intel::hda;
-
-use embassy_executor::{Spawner, raw::Executor};
 pub(crate) use portio::{inb, inl, inw, outb, outl, outw};
 pub use r::pat as pattern;
 pub use r::time;
 pub use r::{io, path};
+pub(crate) use usb3 as usb2;
+
+// Imports
+use embassy_executor::{Spawner, raw::Executor};
 
 // Provide a known-good BSP stack and switch to it immediately in `_start` for bigger stack
 const BSP_BOOT_STACK_BYTES: usize = crate::allcaps::boot::BSP_BOOT_STACK_BYTES;
