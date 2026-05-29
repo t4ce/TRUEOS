@@ -220,6 +220,41 @@ pub struct IndexCheckpoint {
     pub entries: Vec<(Vec<u8>, LogKind, u64)>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RawLogRecord {
+    pub entry_lba: u64,
+    pub rel_blocks: u64,
+    pub blocks: u64,
+    pub kind: LogKind,
+    pub committed: bool,
+    pub name: Vec<u8>,
+    pub name_len: u16,
+    pub data_len: u64,
+    pub data_lba: u64,
+    pub delete_ref_lba: Option<u64>,
+    pub checkpoint_replay_from_rel_blocks: Option<u64>,
+    pub checkpoint_entry_count: Option<usize>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RawLogStop {
+    End,
+    MaxRecords,
+    InvalidHeader { lba: u64 },
+    Uncommitted { lba: u64 },
+    InvalidShape { lba: u64 },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RawLogScan {
+    pub superblock: Superblock,
+    pub block_size: usize,
+    pub data_lba: u64,
+    pub end_lba: u64,
+    pub records: Vec<RawLogRecord>,
+    pub stop: RawLogStop,
+}
+
 /// Encode the checkpoint payload as:
 /// - `replay_from_rel_blocks: u64` (LE)
 /// - repeated entries:
@@ -679,6 +714,167 @@ pub async fn replay_log_range<D: BlockIo>(
     }
 
     Ok(())
+}
+
+/// Naively scan the append-only log as physical records.
+///
+/// Unlike the normal lookup/index code, this does not collapse by path and does
+/// not apply tombstones. It is intended for diagnostics that need to see every
+/// committed log record still reachable from the superblock log head.
+pub async fn scan_raw_log<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    max_records: usize,
+) -> Result<RawLogScan, FsError<D::Error>> {
+    let bs = dev.block_size();
+    if bs == 0 {
+        return Err(FsError::InvalidParam);
+    }
+
+    let sb_block = read_one_block(dev, params.super_lba).await?;
+    let Some(sb) = parse_superblock(&sb_block) else {
+        return Err(FsError::Corrupted);
+    };
+
+    let mut records = Vec::new();
+    let mut lba = params.data_lba;
+    let end_lba = params.data_lba.saturating_add(sb.log_head_rel_blocks);
+    let disk_end_lba = disk_data_end_lba_exclusive(dev, params);
+
+    while lba < end_lba && lba < disk_end_lba {
+        if records.len() >= max_records {
+            return Ok(RawLogScan {
+                superblock: sb,
+                block_size: bs,
+                data_lba: params.data_lba,
+                end_lba,
+                records,
+                stop: RawLogStop::MaxRecords,
+            });
+        }
+
+        let hdr_block = read_one_block(dev, lba).await?;
+        let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
+            return Ok(RawLogScan {
+                superblock: sb,
+                block_size: bs,
+                data_lba: params.data_lba,
+                end_lba,
+                records,
+                stop: RawLogStop::InvalidHeader { lba },
+            });
+        };
+        if !hdr.committed {
+            return Ok(RawLogScan {
+                superblock: sb,
+                block_size: bs,
+                data_lba: params.data_lba,
+                end_lba,
+                records,
+                stop: RawLogStop::Uncommitted { lba },
+            });
+        }
+
+        let name_len = hdr.name_len as usize;
+        let data_len = match usize::try_from(hdr.data_len) {
+            Ok(v) => v,
+            Err(_) => {
+                return Ok(RawLogScan {
+                    superblock: sb,
+                    block_size: bs,
+                    data_lba: params.data_lba,
+                    end_lba,
+                    records,
+                    stop: RawLogStop::InvalidShape { lba },
+                });
+            }
+        };
+
+        let valid_shape = match hdr.kind {
+            LogKind::Put => name_len > 0 && name_len <= 4096,
+            LogKind::Delete => name_len > 0 && name_len <= 4096 && data_len == DELETE_REF_BYTES,
+            LogKind::IndexCheckpoint => name_len == 0 && data_len >= 8,
+        };
+        if !valid_shape {
+            return Ok(RawLogScan {
+                superblock: sb,
+                block_size: bs,
+                data_lba: params.data_lba,
+                end_lba,
+                records,
+                stop: RawLogStop::InvalidShape { lba },
+            });
+        }
+
+        let name_blocks = (name_len + (bs - 1)) / bs;
+        let data_blocks = (data_len + (bs - 1)) / bs;
+        let blocks = 1u64
+            .saturating_add(name_blocks as u64)
+            .saturating_add(data_blocks as u64);
+        if lba.saturating_add(blocks) > end_lba || lba.saturating_add(blocks) > disk_end_lba {
+            return Ok(RawLogScan {
+                superblock: sb,
+                block_size: bs,
+                data_lba: params.data_lba,
+                end_lba,
+                records,
+                stop: RawLogStop::InvalidShape { lba },
+            });
+        }
+
+        let mut name = vec![0u8; name_len];
+        if name_len > 0 {
+            read_exact_bytes(dev, lba.saturating_add(1), 0, &mut name).await?;
+        }
+
+        let data_lba = lba.saturating_add(1).saturating_add(name_blocks as u64);
+        let mut delete_ref_lba = None;
+        let mut checkpoint_replay_from_rel_blocks = None;
+        let mut checkpoint_entry_count = None;
+
+        match hdr.kind {
+            LogKind::Delete => {
+                let mut ref_bytes = [0u8; DELETE_REF_BYTES];
+                read_exact_bytes(dev, data_lba, 0, &mut ref_bytes).await?;
+                delete_ref_lba = Some(u64::from_le_bytes(ref_bytes));
+            }
+            LogKind::IndexCheckpoint => {
+                let mut payload = vec![0u8; data_len];
+                read_exact_bytes(dev, data_lba, 0, &mut payload).await?;
+                if let Some(ckpt) = decode_index_checkpoint_payload(&payload) {
+                    checkpoint_replay_from_rel_blocks = Some(ckpt.replay_from_rel_blocks);
+                    checkpoint_entry_count = Some(ckpt.entries.len());
+                }
+            }
+            LogKind::Put => {}
+        }
+
+        records.push(RawLogRecord {
+            entry_lba: lba,
+            rel_blocks: lba.saturating_sub(params.data_lba),
+            blocks,
+            kind: hdr.kind,
+            committed: hdr.committed,
+            name,
+            name_len: hdr.name_len,
+            data_len: hdr.data_len,
+            data_lba,
+            delete_ref_lba,
+            checkpoint_replay_from_rel_blocks,
+            checkpoint_entry_count,
+        });
+
+        lba = lba.saturating_add(blocks);
+    }
+
+    Ok(RawLogScan {
+        superblock: sb,
+        block_size: bs,
+        data_lba: params.data_lba,
+        end_lba,
+        records,
+        stop: RawLogStop::End,
+    })
 }
 
 async fn write_stream_at_lba<D: BlockIo>(

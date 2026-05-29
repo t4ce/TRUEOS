@@ -155,6 +155,12 @@ pub mod kfs {
                 prefix.push_str(part);
 
                 let marker = alloc::format!("{}/.keep", prefix);
+                if crate::r::fs::trueosfs::file_exists_async(disk, marker.as_str()).await?
+                    || crate::r::fs::trueosfs::dir_has_children_async(disk, prefix.as_str()).await?
+                {
+                    continue;
+                }
+
                 let ok = crate::r::fs::trueosfs::file_in_async(disk, marker.as_str(), &[]).await?;
                 if !ok {
                     return Err(FsError::NoSpace);
@@ -623,6 +629,45 @@ pub mod cabi {
                 crate::disc::block::Error::MmioMapFailed => FS_ERR_IO,
             },
         }
+    }
+
+    #[inline]
+    fn fs_rc_name(rc: i32) -> &'static str {
+        match rc {
+            FS_ERR_BAD_UTF8 => "FS_ERR_BAD_UTF8",
+            FS_ERR_IO => "FS_ERR_IO",
+            FS_ERR_NO_SPACE => "FS_ERR_NO_SPACE",
+            FS_ERR_BAD_PARAM => "FS_ERR_BAD_PARAM",
+            FS_ERR_NOT_FOUND => "FS_ERR_NOT_FOUND",
+            FS_ERR_BAD_PATH => "FS_ERR_BAD_PATH",
+            FS_ERR_TOO_LARGE => "FS_ERR_TOO_LARGE",
+            FS_ERR_ALREADY_EXISTS => "FS_ERR_ALREADY_EXISTS",
+            FS_ERR_TIMEOUT => "FS_ERR_TIMEOUT",
+            _ => "FS_ERR_UNKNOWN",
+        }
+    }
+
+    fn log_fs_cabi_path_fail(op: &str, raw: &str, resolved: Option<&str>, detail: &str, rc: i32) {
+        if rc >= 0 {
+            return;
+        }
+        match resolved {
+            Some(resolved) => crate::log!(
+                "fs-cabi: {op} failed raw={raw} resolved={resolved} {detail} rc={rc} {}\n",
+                fs_rc_name(rc)
+            ),
+            None => crate::log!(
+                "fs-cabi: {op} failed raw={raw} resolved=<none> {detail} rc={rc} {}\n",
+                fs_rc_name(rc)
+            ),
+        }
+    }
+
+    fn log_fs_cabi_handle_fail(op: &str, handle: u32, detail: &str, rc: i32) {
+        if rc >= 0 {
+            return;
+        }
+        crate::log!("fs-cabi: {op} failed handle={handle} {detail} rc={rc} {}\n", fs_rc_name(rc));
     }
 
     #[inline]
@@ -1324,28 +1369,68 @@ pub mod cabi {
 
     pub(crate) fn fs_read_file_len_host(path: &str) -> isize {
         if path.len() > QJS_ASYNC_FS_MAX_PATH {
+            log_fs_cabi_path_fail(
+                "read_len",
+                path,
+                None,
+                "reason=raw-path-too-large",
+                FS_ERR_TOO_LARGE,
+            );
             return FS_ERR_TOO_LARGE as isize;
         }
         let Some(path) = super::env::resolve_fs_path(path, false) else {
+            log_fs_cabi_path_fail("read_len", path, None, "reason=resolve-failed", FS_ERR_BAD_PATH);
             return FS_ERR_BAD_PATH as isize;
         };
         if path.len() > QJS_ASYNC_FS_MAX_PATH {
+            log_fs_cabi_path_fail(
+                "read_len",
+                path.as_str(),
+                Some(path.as_str()),
+                "reason=resolved-path-too-large",
+                FS_ERR_TOO_LARGE,
+            );
             return FS_ERR_TOO_LARGE as isize;
         }
         match super::kfs::read_file_len(path.as_str()) {
             Ok(len) => len as isize,
-            Err(e) => fs_error_to_code(e) as isize,
+            Err(e) => {
+                let rc = fs_error_to_code(e);
+                log_fs_cabi_path_fail("read_len", path.as_str(), Some(path.as_str()), "", rc);
+                rc as isize
+            }
         }
     }
 
     pub(crate) fn fs_read_file_chunk_host(path: &str, offset: usize, out: &mut [u8]) -> isize {
         if path.len() > QJS_ASYNC_FS_MAX_PATH {
+            log_fs_cabi_path_fail(
+                "read_chunk",
+                path,
+                None,
+                "reason=raw-path-too-large",
+                FS_ERR_TOO_LARGE,
+            );
             return FS_ERR_TOO_LARGE as isize;
         }
         let Some(path) = super::env::resolve_fs_path(path, false) else {
+            log_fs_cabi_path_fail(
+                "read_chunk",
+                path,
+                None,
+                "reason=resolve-failed",
+                FS_ERR_BAD_PATH,
+            );
             return FS_ERR_BAD_PATH as isize;
         };
         if path.len() > QJS_ASYNC_FS_MAX_PATH {
+            log_fs_cabi_path_fail(
+                "read_chunk",
+                path.as_str(),
+                Some(path.as_str()),
+                "reason=resolved-path-too-large",
+                FS_ERR_TOO_LARGE,
+            );
             return FS_ERR_TOO_LARGE as isize;
         }
         match super::kfs::read_file(path.as_str()) {
@@ -1357,88 +1442,203 @@ pub mod cabi {
                 out[..n].copy_from_slice(&bytes[offset..offset + n]);
                 n as isize
             }
-            Err(e) => fs_error_to_code(e) as isize,
+            Err(e) => {
+                let rc = fs_error_to_code(e);
+                log_fs_cabi_path_fail("read_chunk", path.as_str(), Some(path.as_str()), "", rc);
+                rc as isize
+            }
         }
     }
 
     pub(crate) fn fs_write_begin_host(path: &str, total_len: u64) -> i64 {
         if path.len() > QJS_ASYNC_FS_MAX_PATH {
+            log_fs_cabi_path_fail(
+                "write_begin",
+                path,
+                None,
+                "reason=raw-path-too-large",
+                FS_ERR_TOO_LARGE,
+            );
             return FS_ERR_TOO_LARGE as i64;
         }
+        let raw = path;
         let Some(path) = super::env::resolve_fs_path(path, false) else {
+            log_fs_cabi_path_fail(
+                "write_begin",
+                raw,
+                None,
+                "reason=resolve-failed",
+                FS_ERR_BAD_PATH,
+            );
             return FS_ERR_BAD_PATH as i64;
         };
         if path.len() > QJS_ASYNC_FS_MAX_PATH {
+            log_fs_cabi_path_fail(
+                "write_begin",
+                raw,
+                Some(path.as_str()),
+                "reason=resolved-path-too-large",
+                FS_ERR_TOO_LARGE,
+            );
             return FS_ERR_TOO_LARGE as i64;
         }
         match super::kfs::write_file_begin(path.as_str(), total_len) {
             Ok(h) => h as i64,
-            Err(e) => fs_error_to_code(e) as i64,
+            Err(e) => {
+                let rc = fs_error_to_code(e);
+                log_fs_cabi_path_fail(
+                    "write_begin",
+                    raw,
+                    Some(path.as_str()),
+                    alloc::format!("len={total_len}").as_str(),
+                    rc,
+                );
+                rc as i64
+            }
         }
     }
 
     pub(crate) fn fs_write_chunk_host(handle: u32, data: &[u8]) -> i32 {
         match super::kfs::write_file_chunk(handle, data) {
             Ok(()) => 0,
-            Err(e) => fs_error_to_code(e),
+            Err(e) => {
+                let rc = fs_error_to_code(e);
+                log_fs_cabi_handle_fail(
+                    "write_chunk",
+                    handle,
+                    alloc::format!("len={}", data.len()).as_str(),
+                    rc,
+                );
+                rc
+            }
         }
     }
 
     pub(crate) fn fs_write_finish_host(handle: u32) -> i32 {
         match super::kfs::write_file_finish(handle) {
             Ok(()) => 0,
-            Err(e) => fs_error_to_code(e),
+            Err(e) => {
+                let rc = fs_error_to_code(e);
+                log_fs_cabi_handle_fail("write_finish", handle, "", rc);
+                rc
+            }
         }
     }
 
     pub(crate) fn fs_write_abort_host(handle: u32) -> i32 {
         match super::kfs::write_file_abort(handle) {
             Ok(()) => 0,
-            Err(e) => fs_error_to_code(e),
+            Err(e) => {
+                let rc = fs_error_to_code(e);
+                log_fs_cabi_handle_fail("write_abort", handle, "", rc);
+                rc
+            }
         }
     }
 
     pub(crate) fn fs_create_dir_all_host(path: &str) -> i32 {
         if path.len() > QJS_ASYNC_FS_MAX_PATH {
+            log_fs_cabi_path_fail(
+                "create_dir_all",
+                path,
+                None,
+                "reason=raw-path-too-large",
+                FS_ERR_TOO_LARGE,
+            );
             return FS_ERR_TOO_LARGE;
         }
+        let raw = path;
         let Some(path) = super::env::resolve_fs_path(path, true) else {
+            log_fs_cabi_path_fail(
+                "create_dir_all",
+                raw,
+                None,
+                "reason=resolve-failed",
+                FS_ERR_BAD_PATH,
+            );
             return FS_ERR_BAD_PATH;
         };
         if path.len() > QJS_ASYNC_FS_MAX_PATH {
+            log_fs_cabi_path_fail(
+                "create_dir_all",
+                raw,
+                Some(path.as_str()),
+                "reason=resolved-path-too-large",
+                FS_ERR_TOO_LARGE,
+            );
             return FS_ERR_TOO_LARGE;
         }
         match super::kfs::create_dir_all(path.as_str()) {
             Ok(()) => 0,
-            Err(e) => fs_error_to_code(e),
+            Err(e) => {
+                let rc = fs_error_to_code(e);
+                log_fs_cabi_path_fail("create_dir_all", raw, Some(path.as_str()), "", rc);
+                rc
+            }
         }
     }
 
     pub(crate) fn fs_exists_host(path: &str) -> i32 {
         if path.len() > QJS_ASYNC_FS_MAX_PATH {
+            log_fs_cabi_path_fail(
+                "exists",
+                path,
+                None,
+                "reason=raw-path-too-large",
+                FS_ERR_TOO_LARGE,
+            );
             return FS_ERR_TOO_LARGE;
         }
+        let raw = path;
         let Some(path) = super::env::resolve_fs_path(path, false) else {
+            log_fs_cabi_path_fail("exists", raw, None, "reason=resolve-failed", FS_ERR_BAD_PATH);
             return FS_ERR_BAD_PATH;
         };
         if path.len() > QJS_ASYNC_FS_MAX_PATH {
+            log_fs_cabi_path_fail(
+                "exists",
+                raw,
+                Some(path.as_str()),
+                "reason=resolved-path-too-large",
+                FS_ERR_TOO_LARGE,
+            );
             return FS_ERR_TOO_LARGE;
         }
         match super::kfs::exists(path.as_str()) {
             Ok(true) => 1,
             Ok(false) => 0,
-            Err(e) => fs_error_to_code(e),
+            Err(e) => {
+                let rc = fs_error_to_code(e);
+                log_fs_cabi_path_fail("exists", raw, Some(path.as_str()), "", rc);
+                rc
+            }
         }
     }
 
     pub(crate) fn fs_stat_host(path: &str, out_kind: &mut u32, out_len: &mut u64) -> i32 {
         if path.len() > QJS_ASYNC_FS_MAX_PATH {
+            log_fs_cabi_path_fail(
+                "stat",
+                path,
+                None,
+                "reason=raw-path-too-large",
+                FS_ERR_TOO_LARGE,
+            );
             return FS_ERR_TOO_LARGE;
         }
+        let raw = path;
         let Some(path) = super::env::resolve_fs_path(path, true) else {
+            log_fs_cabi_path_fail("stat", raw, None, "reason=resolve-failed", FS_ERR_BAD_PATH);
             return FS_ERR_BAD_PATH;
         };
         if path.len() > QJS_ASYNC_FS_MAX_PATH {
+            log_fs_cabi_path_fail(
+                "stat",
+                raw,
+                Some(path.as_str()),
+                "reason=resolved-path-too-large",
+                FS_ERR_TOO_LARGE,
+            );
             return FS_ERR_TOO_LARGE;
         }
         match super::kfs::stat(path.as_str()) {
@@ -1450,23 +1650,47 @@ pub mod cabi {
                 *out_len = stat.len;
                 0
             }
-            Err(e) => fs_error_to_code(e),
+            Err(e) => {
+                let rc = fs_error_to_code(e);
+                log_fs_cabi_path_fail("stat", raw, Some(path.as_str()), "", rc);
+                rc
+            }
         }
     }
 
     pub(crate) fn fs_remove_host(path: &str) -> i32 {
         if path.len() > QJS_ASYNC_FS_MAX_PATH {
+            log_fs_cabi_path_fail(
+                "remove",
+                path,
+                None,
+                "reason=raw-path-too-large",
+                FS_ERR_TOO_LARGE,
+            );
             return FS_ERR_TOO_LARGE;
         }
+        let raw = path;
         let Some(path) = super::env::resolve_fs_path(path, false) else {
+            log_fs_cabi_path_fail("remove", raw, None, "reason=resolve-failed", FS_ERR_BAD_PATH);
             return FS_ERR_BAD_PATH;
         };
         if path.len() > QJS_ASYNC_FS_MAX_PATH {
+            log_fs_cabi_path_fail(
+                "remove",
+                raw,
+                Some(path.as_str()),
+                "reason=resolved-path-too-large",
+                FS_ERR_TOO_LARGE,
+            );
             return FS_ERR_TOO_LARGE;
         }
         match super::kfs::remove(path.as_str()) {
             Ok(()) => 0,
-            Err(e) => fs_error_to_code(e),
+            Err(e) => {
+                let rc = fs_error_to_code(e);
+                log_fs_cabi_path_fail("remove", raw, Some(path.as_str()), "", rc);
+                rc
+            }
         }
     }
 

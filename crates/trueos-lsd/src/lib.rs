@@ -25,6 +25,7 @@ struct Options {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Entry {
+    id: u64,
     path: String,
     name: String,
     kind: kfs::FsEntryKind,
@@ -41,6 +42,7 @@ pub struct TableListing {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TableRow {
     pub mode: &'static str,
+    pub id: String,
     pub owner: &'static str,
     pub group: &'static str,
     pub size: String,
@@ -76,6 +78,19 @@ fn entry_size(path: &str) -> Option<u64> {
     api::stat(path.as_bytes()).ok().map(|stat| stat.len)
 }
 
+fn indexed_id(path: &str) -> u64 {
+    kfs::tree(MAX_ENTRIES)
+        .ok()
+        .and_then(|snapshot| {
+            snapshot
+                .entries
+                .into_iter()
+                .find(|entry| entry.path == path)
+                .map(|entry| entry.id)
+        })
+        .unwrap_or(0)
+}
+
 fn is_under_prefix(entry_path: &str, prefix: &str) -> bool {
     prefix.is_empty()
         || entry_path == prefix
@@ -107,7 +122,7 @@ fn immediate_entries(prefix: &str) -> io::Result<Vec<Entry>> {
     let snapshot = kfs::tree(MAX_ENTRIES).map_err(|rc| {
         io::Error::new(trueos_io::status_kind(rc), "TRUEOSFS index unavailable for lsd")
     })?;
-    let mut children = BTreeMap::<String, Entry>::new();
+    let mut children = BTreeMap::<(String, u64), Entry>::new();
 
     for raw in snapshot.entries.into_iter() {
         if !is_under_prefix(raw.path.as_str(), prefix) || raw.path == prefix {
@@ -138,13 +153,14 @@ fn immediate_entries(prefix: &str) -> io::Result<Vec<Entry>> {
         let depth = path_depth(path.as_str());
 
         children
-            .entry(path.clone())
+            .entry((path.clone(), raw.id))
             .and_modify(|entry| {
                 if matches!(kind, kfs::FsEntryKind::Dir) {
                     entry.kind = kfs::FsEntryKind::Dir;
                 }
             })
             .or_insert_with(|| Entry {
+                id: raw.id,
                 path,
                 name: String::from(name),
                 kind,
@@ -166,7 +182,7 @@ fn tree_entries(prefix: &str) -> io::Result<Vec<Entry>> {
     let snapshot = kfs::tree(MAX_ENTRIES).map_err(|rc| {
         io::Error::new(trueos_io::status_kind(rc), "TRUEOSFS index unavailable for lsd")
     })?;
-    let mut entries = BTreeMap::<String, Entry>::new();
+    let mut entries = BTreeMap::<(String, u64), Entry>::new();
 
     for raw in snapshot.entries.into_iter() {
         if !is_under_prefix(raw.path.as_str(), prefix) || raw.path == prefix {
@@ -191,13 +207,14 @@ fn tree_entries(prefix: &str) -> io::Result<Vec<Entry>> {
             };
             let depth = path_depth(current.as_str());
             entries
-                .entry(current.clone())
+                .entry((current.clone(), raw.id))
                 .and_modify(|entry| {
                     if matches!(kind, kfs::FsEntryKind::Dir) {
                         entry.kind = kfs::FsEntryKind::Dir;
                     }
                 })
                 .or_insert_with(|| Entry {
+                    id: raw.id,
                     path: current.clone(),
                     name: String::from(segment),
                     kind,
@@ -287,6 +304,14 @@ fn kind_text(kind: kfs::FsEntryKind) -> &'static str {
     }
 }
 
+fn entry_id(entry: &Entry) -> String {
+    if entry.id == 0 {
+        String::from("-")
+    } else {
+        format!("{:08x}", entry.id)
+    }
+}
+
 fn table_row(entry: &Entry, base_depth: usize, tree: bool) -> TableRow {
     let (owner, group) = authority(entry.path.as_str());
     let is_dir = matches!(entry.kind, kfs::FsEntryKind::Dir);
@@ -297,6 +322,7 @@ fn table_row(entry: &Entry, base_depth: usize, tree: bool) -> TableRow {
     };
     TableRow {
         mode: permissions(entry),
+        id: entry_id(entry),
         owner,
         group,
         size: human_size(entry.len, is_dir),
@@ -307,9 +333,9 @@ fn table_row(entry: &Entry, base_depth: usize, tree: bool) -> TableRow {
 }
 
 fn render_grid_entry(entry: &Entry, cell_width: usize) -> String {
-    let name = display_name(entry);
-    let visible = name.len();
-    pad_visible(colorize(name.as_str(), entry.kind), visible, cell_width)
+    let label = format!("{} {}", entry_id(entry), display_name(entry));
+    let visible = label.len();
+    pad_visible(colorize(label.as_str(), entry.kind), visible, cell_width)
 }
 
 fn render_grid<W>(entries: &[Entry], width: usize, write_line: &mut W)
@@ -318,7 +344,7 @@ where
 {
     let max_name = entries
         .iter()
-        .map(|entry| display_name(entry).len())
+        .map(|entry| entry_id(entry).len() + 1 + display_name(entry).len())
         .max()
         .unwrap_or(MIN_CELL_WIDTH);
     let cell_width = core::cmp::max(max_name.saturating_add(3), MIN_CELL_WIDTH);
@@ -351,7 +377,8 @@ where
     let name = colorize(format!("{name_prefix}{}", display_name(entry)).as_str(), entry.kind);
     write_line(
         format!(
-            "{} {:<7} {:<7} {:>7} {:>10} {}",
+            "{:<8} {} {:<7} {:<7} {:>7} {:>10} {}",
+            entry_id(entry),
             permissions(entry),
             owner,
             group,
@@ -370,7 +397,10 @@ where
     for entry in entries {
         let depth = entry.depth.saturating_sub(base_depth.saturating_add(1));
         let indent = "  ".repeat(depth);
-        let name = colorize(display_name(entry).as_str(), entry.kind);
+        let name = colorize(
+            format!("{} {}", entry_id(entry), display_name(entry)).as_str(),
+            entry.kind,
+        );
         write_line(format!("{indent}{name}").as_str());
     }
 }
@@ -410,6 +440,7 @@ where
         match api::stat(normalized.as_bytes()) {
             Ok(stat) if matches!(stat.kind, api::FsNodeKind::File) => {
                 let entry = Entry {
+                    id: indexed_id(normalized.as_str()),
                     path: normalized.clone(),
                     name: normalized.clone(),
                     kind: kfs::FsEntryKind::File,
@@ -550,6 +581,7 @@ pub fn table_listings(args: &[String]) -> io::Result<Vec<TableListing>> {
         let entries = if !normalized.is_empty() {
             match api::stat(normalized.as_bytes()) {
                 Ok(stat) if matches!(stat.kind, api::FsNodeKind::File) => vec![Entry {
+                    id: indexed_id(normalized.as_str()),
                     path: normalized.clone(),
                     name: normalized.clone(),
                     kind: kfs::FsEntryKind::File,
