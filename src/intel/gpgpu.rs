@@ -27,18 +27,7 @@ use surfaces::{
 };
 use walker_command::encode_gfx12_gpgpu_walker_probe_batch;
 
-pub(crate) use mandelbrot::{
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_immediate_constant_probe,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_immediate_constant_rows_probe,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_immediate_gradient_probe,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_immediate_raw_radius_probe,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_linear_band_probe,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_linear_constant_probe,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_constant,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_raw_radius_rows,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_linear_band,
-};
+pub(crate) use mandelbrot::submit_gpgpu_primary_scanout_walkrow16;
 pub(crate) use matmul::{
     log_gpgpu_t63_first_tile_output_detail_once, stage_gpgpu_one_tile_record_probe,
     stage_gpgpu_tile_record_accum16_window_probe, stage_gpgpu_tile_record_accum16_window_trusted,
