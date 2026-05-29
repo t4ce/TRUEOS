@@ -121,7 +121,7 @@ unsafe extern "C" {
     pub fn trueos_cabi_socket_tcp_set_nonblocking(socket_id: u32, nonblocking: u32) -> i32;
     pub fn trueos_cabi_socket_tcp_bind_v4(socket_id: u32, addr_be: u32, port_be: u16) -> i32;
     pub fn trueos_cabi_socket_tcp_bind_v6(socket_id: u32, addr_ptr: *const u8, port_be: u16)
-        -> i32;
+    -> i32;
     pub fn trueos_cabi_socket_tcp_connect_v4(
         socket_id: u32,
         addr_be: u32,
@@ -235,7 +235,7 @@ unsafe extern "C" {
     ) -> i32;
     pub fn trueos_cabi_hid_hut_read_mice(out: *mut TrueosHidHutMouseState, out_cap: u32) -> u32;
     pub fn trueos_cabi_hid_hut_read_tablets(out: *mut TrueosHidHutTabletState, out_cap: u32)
-        -> u32;
+    -> u32;
     pub fn trueos_cabi_hid_hut_read_keyboards(
         out: *mut TrueosHidHutKeyboardState,
         out_cap: u32,
@@ -322,7 +322,7 @@ unsafe extern "C" {
     pub fn trueos_cabi_gfx_clear_scissor() -> i32;
     pub fn trueos_cabi_gfx_begin_frame_no_present(clear_rgb: u32) -> i32;
     pub fn trueos_cabi_gfx_draw_rgb_triangles_no_present(vtx_ptr: *const u8, vtx_len: usize)
-        -> i32;
+    -> i32;
     pub fn trueos_cabi_gfx_draw_tex_triangles_no_present(
         tex_id: u32,
         vtx_ptr: *const u8,
@@ -438,6 +438,11 @@ unsafe extern "C" {
         blend_enabled: u32,
     ) -> u32;
     pub fn trueos_cabi_ui2_window_info(window_id: u32, out_info: *mut TrueosUi2WindowInfo) -> i32;
+    pub fn trueos_cabi_ui2_window_take_cursor_events(
+        window_id: u32,
+        out: *mut TrueosUi2WindowCursorEvent,
+        out_cap: u32,
+    ) -> u32;
     pub fn trueos_cabi_ui2_window_set_title(
         window_id: u32,
         title_ptr: *const u8,
@@ -724,4 +729,16 @@ pub struct TrueosUi2WindowInfo {
     pub decoration_y: i32,
     pub decoration_width: u32,
     pub decoration_height: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi2WindowCursorEvent {
+    pub slot_id: u32,
+    pub buttons_down: u32,
+    pub flags: u32,
+    pub wheel: i16,
+    pub reserved0: u16,
+    pub x: f32,
+    pub y: f32,
 }

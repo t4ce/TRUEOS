@@ -1499,12 +1499,15 @@ fn vm_deferred_window_ok(window_id: u32, op: &'static str) -> Option<i32> {
         ));
         return Some(-1);
     };
-    let _ = crate::hv::note_deferred_blueprint_app_window_op(window_id, op);
+    let ok = crate::hv::note_deferred_blueprint_app_window_op(window_id, op);
     if op != "request-repaint" {
         crate::hv::log_blueprint_app_window_event(format_args!(
             "app-window-broker: vm{} deferred window op={} window={} status=queued",
             current_vm_id, op, window_id
         ));
+    }
+    if op == "begin-move" {
+        return Some(if ok { 0 } else { -1 });
     }
     Some(0)
 }
@@ -1557,6 +1560,105 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_info(
     };
     *out_info = info;
     0
+}
+
+fn copy_window_cursor_events_to_payload(
+    events: Vec<Ui2WindowCursorEvent>,
+    out_cap: u32,
+    payload: &mut [u8],
+) -> (usize, usize) {
+    let event_size = core::mem::size_of::<v::vcabi::TrueosUi2WindowCursorEvent>();
+    let max_events = core::cmp::min(out_cap as usize, payload.len() / event_size);
+    let wrote = core::cmp::min(events.len(), max_events);
+    for (idx, event) in events.into_iter().take(wrote).enumerate() {
+        let raw = v::vcabi::TrueosUi2WindowCursorEvent {
+            slot_id: event.slot_id,
+            buttons_down: event.buttons_down,
+            flags: event.flags,
+            wheel: event.wheel,
+            reserved0: 0,
+            x: event.x,
+            y: event.y,
+        };
+        let dst = idx * event_size;
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                (&raw as *const v::vcabi::TrueosUi2WindowCursorEvent) as *const u8,
+                payload[dst..dst + event_size].as_mut_ptr(),
+                event_size,
+            );
+        }
+    }
+    (wrote, wrote * event_size)
+}
+
+pub fn host_ui2_window_cursor_events(
+    window_id: u32,
+    out_cap: u32,
+    payload: &mut [u8],
+) -> (usize, usize) {
+    if let Some(vm_id) = crate::hv::deferred_blueprint_app_window_vm_id(window_id) {
+        let _ = crate::hv::materialize_deferred_blueprint_app_windows(vm_id);
+    }
+    let host_window_id = crate::hv::host_blueprint_app_window_id(window_id);
+    let events = take_window_cursor_events(host_window_id);
+    copy_window_cursor_events_to_payload(events, out_cap, payload)
+}
+
+fn guest_ui2_window_take_cursor_events(
+    window_id: u32,
+    out: *mut v::vcabi::TrueosUi2WindowCursorEvent,
+    out_cap: u32,
+) -> u32 {
+    if out_cap == 0 {
+        return 0;
+    }
+    let mut payload = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+    let (status, wrote) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_UI2_WINDOW_CURSOR_EVENTS,
+        window_id as u64,
+        out_cap as u64,
+        &[],
+        &mut payload,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return 0;
+    }
+    let event_size = core::mem::size_of::<v::vcabi::TrueosUi2WindowCursorEvent>();
+    let got = core::cmp::min(wrote as usize, out_cap as usize);
+    let bytes_len = got.saturating_mul(event_size);
+    if got == 0 || out.is_null() || bytes_len > payload.len() {
+        return got as u32;
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(payload.as_ptr(), out as *mut u8, bytes_len);
+    }
+    got as u32
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_take_cursor_events(
+    window_id: u32,
+    out: *mut v::vcabi::TrueosUi2WindowCursorEvent,
+    out_cap: u32,
+) -> u32 {
+    if out_cap == 0 {
+        return 0;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_ui2_window_take_cursor_events(window_id, out, out_cap);
+    }
+    if out.is_null() {
+        return 0;
+    }
+    let window_id = ui2_cabi_target_window_id(window_id);
+    let events = take_window_cursor_events(window_id);
+    let mut payload = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+    let (wrote, bytes_len) = copy_window_cursor_events_to_payload(events, out_cap, &mut payload);
+    unsafe {
+        core::ptr::copy_nonoverlapping(payload.as_ptr(), out as *mut u8, bytes_len);
+    }
+    wrote as u32
 }
 
 #[unsafe(no_mangle)]

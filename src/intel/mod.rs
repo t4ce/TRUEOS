@@ -589,39 +589,12 @@ pub(crate) fn submit_gpgpu_one_tile_output_sentinel_probe(
     )
 }
 
-pub(crate) fn submit_gpgpu_primary_scanout_line1280_groupid_rows_fullwidth_color_burst(
-    color_seed: u32,
-    first_row_group: u32,
-    row_group_count: u32,
-    rect_x: u32,
-    rect_y: u32,
-    rect_width: u32,
-    rect_height: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_line1280_groupid_rows_fullwidth_color_burst(
-        color_seed,
-        first_row_group,
-        row_group_count,
-        rect_x,
-        rect_y,
-        rect_width,
-        rect_height,
-    )
-}
-
 pub(crate) fn notify_gpgpu_primary_scanout_external_write(
     reason: &str,
     flush_offset: usize,
     flush_bytes: usize,
 ) -> bool {
     self::gpgpu::notify_gpgpu_primary_scanout_external_write(reason, flush_offset, flush_bytes)
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_groupid_line320_probe(
-    mode: u32,
-    row_index: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_groupid_line320_probe(mode, row_index)
 }
 
 pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe(
@@ -633,31 +606,6 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe(
 ) -> GpgpuOneTileSentinelProof {
     self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe(
         mode, row_index, x_base, lhs, rhs,
-    )
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet(
-    mode: u32,
-    row_index: u32,
-    x_base: u32,
-    lhs: u32,
-    rhs: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet(
-        mode, row_index, x_base, lhs, rhs,
-    )
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_rows(
-    mode: u32,
-    row_index: u32,
-    x_base: u32,
-    row_groups: u32,
-    lhs: u32,
-    rhs: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_rows(
-        mode, row_index, x_base, row_groups, lhs, rhs,
     )
 }
 
@@ -674,17 +622,6 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_li
     )
 }
 
-pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_gradient(
-    row_index: u32,
-    x_base: u32,
-    lhs: u32,
-    rhs: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_gradient(
-        row_index, x_base, lhs, rhs,
-    )
-}
-
 pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_constant(
     row_index: u32,
     x_base: u32,
@@ -692,51 +629,6 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_im
 ) -> GpgpuOneTileSentinelProof {
     self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_constant(
         row_index, x_base, color,
-    )
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_fast_immediate_constant(
-    row_index: u32,
-    x_base: u32,
-    color: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_fast_immediate_constant(
-        row_index, x_base, color,
-    )
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_gradient_rows(
-    row_index: u32,
-    x_base: u32,
-    row_groups: u32,
-    lhs: u32,
-    rhs: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_gradient_rows(
-        row_index, x_base, row_groups, lhs, rhs,
-    )
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_gradient_rows_batched(
-    row_index: u32,
-    x_base: u32,
-    row_groups: u32,
-    lhs: u32,
-    rhs: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_gradient_rows_batched(
-        row_index, x_base, row_groups, lhs, rhs,
-    )
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_raw_radius(
-    row_index: u32,
-    x_base: u32,
-    lhs: u32,
-    rhs: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_raw_radius(
-        row_index, x_base, lhs, rhs,
     )
 }
 
@@ -815,155 +707,6 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_immediat
 ) -> GpgpuOneTileSentinelProof {
     self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_immediate_constant_rows_probe(
         row_index, x_base, row_groups, color,
-    )
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_fullscreen_frame(
-    frame_seed: u32,
-    rows_per_submit: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_fullscreen_frame(
-        frame_seed,
-        rows_per_submit,
-    )
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_fullscreen_bands(
-    frame_seed: u32,
-    first_row: u32,
-    rows_per_submit: u32,
-    max_bands: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_fullscreen_bands(
-        frame_seed,
-        first_row,
-        rows_per_submit,
-        max_bands,
-    )
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_immediate_lane0_sweep_bands(
-    frame_seed: u32,
-    first_row: u32,
-    first_x: u32,
-    rows_per_submit: u32,
-    max_bands: u32,
-    max_x_blocks: u32,
-    lane_phases_per_block: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_immediate_lane0_sweep_bands(
-        frame_seed,
-        first_row,
-        first_x,
-        rows_per_submit,
-        max_bands,
-        max_x_blocks,
-        lane_phases_per_block,
-    )
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t31_store_ladder_probe(
-    heartbeat: u64,
-    row_index: u32,
-    x_base: u32,
-    color: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t31_store_ladder_probe(
-        heartbeat, row_index, x_base, color,
-    )
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t32_single_send_probe(
-    heartbeat: u64,
-    row_index: u32,
-    x_base: u32,
-    color: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t32_single_send_probe(
-        heartbeat, row_index, x_base, color,
-    )
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t33_bti1_untyped_probe(
-    heartbeat: u64,
-    row_index: u32,
-    x_base: u32,
-    color: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t33_bti1_untyped_probe(
-        heartbeat, row_index, x_base, color,
-    )
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t34_address_data_witness_probe(
-    heartbeat: u64,
-    row_index: u32,
-    x_base: u32,
-    color_mask: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t34_address_data_witness_probe(
-        heartbeat, row_index, x_base, color_mask,
-    )
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t35_explicit_wide_payload_probe(
-    heartbeat: u64,
-    row_index: u32,
-    x_base: u32,
-    color: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t35_explicit_wide_payload_probe(
-        heartbeat, row_index, x_base, color,
-    )
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t36_unrolled_scalar16_probe(
-    heartbeat: u64,
-    row_index: u32,
-    x_base: u32,
-    color: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t36_unrolled_scalar16_probe(
-        heartbeat, row_index, x_base, color,
-    )
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot16_simd16_t37_groupid_x_unrolled_scalar16_probe(
-    heartbeat: u64,
-    row_index: u32,
-    x_base: u32,
-    color: u32,
-    row_groups: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot16_simd16_t37_groupid_x_unrolled_scalar16_probe(
-        heartbeat, row_index, x_base, color, row_groups,
-    )
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
-    cursor: usize,
-    target_phase: usize,
-    pixel_budget: usize,
-) -> (GpgpuOneTileSentinelProof, usize) {
-    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot_preview(cursor, target_phase, pixel_budget)
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd8_probe(
-    mode: u32,
-    row_index: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_row2560_simd8_probe(mode, row_index)
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd8_color_probe(
-    row_index: u32,
-    color_seed: u32,
-    requested_mode: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_row2560_simd8_color_probe(
-        row_index,
-        color_seed,
-        requested_mode,
     )
 }
 
