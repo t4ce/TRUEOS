@@ -29,6 +29,7 @@ const APP_WINDOW_VMCALL_OP_SIZE: u32 = 5;
 const APP_WINDOW_VMCALL_OP_U32: u32 = 6;
 const APP_WINDOW_VMCALL_OP_BOOL: u32 = 7;
 const APP_WINDOW_VMCALL_OP_BUTTON_VISIBLE: u32 = 8;
+const APP_WINDOW_VMCALL_OP_BEGIN_MOVE: u32 = 9;
 
 static APP_WINDOW_DEFERRED_NEXT_ID_BY_VM: [AtomicU32; TRUEOS_VM_ID_LIMIT] =
     [const { AtomicU32::new(0) }; TRUEOS_VM_ID_LIMIT];
@@ -516,6 +517,7 @@ pub fn handle_ui2_window_op_vmcall(vm_id: u8, window_id: u32, payload: &[u8]) ->
         APP_WINDOW_VMCALL_OP_BUTTON_VISIBLE => {
             note_deferred_blueprint_app_window_button_visible(window_id, a, b != 0)
         }
+        APP_WINDOW_VMCALL_OP_BEGIN_MOVE => begin_deferred_blueprint_app_window_move(window_id),
         _ => false,
     };
     if ok {
@@ -665,9 +667,13 @@ pub fn note_deferred_blueprint_app_window_op(window_id: u32, op: &'static str) -
         let op_code = match op {
             "request-repaint" => APP_WINDOW_VMCALL_OP_REQUEST_REPAINT,
             "close" => APP_WINDOW_VMCALL_OP_CLOSE,
+            "begin-move" => APP_WINDOW_VMCALL_OP_BEGIN_MOVE,
             _ => 0,
         };
         return op_code == 0 || app_window_guest_op_vmcall(window_id, op_code, 0, 0, None);
+    }
+    if op == "begin-move" {
+        return begin_deferred_blueprint_app_window_move(window_id);
     }
     let Some(records_lock) = APP_WINDOW_DEFERRED_RECORDS.get(vm_id as usize) else {
         return false;
@@ -685,6 +691,18 @@ pub fn note_deferred_blueprint_app_window_op(window_id: u32, op: &'static str) -
         _ => {}
     }
     true
+}
+
+fn begin_deferred_blueprint_app_window_move(window_id: u32) -> bool {
+    let Some(vm_id) = deferred_blueprint_app_window_vm_id(window_id) else {
+        return false;
+    };
+    let _ = materialize_deferred_blueprint_app_windows(vm_id);
+    sync_materialized_deferred_blueprint_app_window_updates(vm_id);
+    let Some(host_window_id) = materialized_blueprint_app_window_id(window_id) else {
+        return false;
+    };
+    crate::r::ui2::begin_window_move(host_window_id)
 }
 
 pub fn note_deferred_blueprint_app_window_title(window_id: u32, title: &str) -> bool {

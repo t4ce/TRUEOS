@@ -55,7 +55,6 @@ define_started_flags!(
     FTP_SERVER_STARTED,
     TGA_TASK_STARTED,
     GFX_VIRGL_READY_TASK_STARTED,
-    GFX_VIRGL_CURSOR_OVERLAY_STARTED,
     MANDELBROT_GPU_SIDEQUEST_STARTED,
     INTEL_CURSOR_SERVICE_STARTED,
     HW_PIC_SERVICE_STARTED,
@@ -582,23 +581,6 @@ fn spawn_gfx_virgl_ready_task(spawner: Spawner) -> SpawnAttempt {
 }
 
 #[embassy_executor::task]
-async fn gfx_virgl_cursor_overlay_task() {
-    crate::log_info!(
-        target: "gfx";
-        "boot-probe: gfx-cursor-overlay task start ms={}\n",
-        boot_probe_ms()
-    );
-    loop {
-        let _ = crate::r::io::cabi::kernel_cursor_overlay_tick();
-        Timer::after(EmbassyDuration::from_millis(4)).await;
-    }
-}
-
-fn spawn_gfx_virgl_cursor_overlay_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |_ap1_spawner| gfx_virgl_cursor_overlay_task())
-}
-
-#[embassy_executor::task]
 async fn intel_cursor_service_task() {
     crate::log_info!(
         target: "gfx";
@@ -1094,9 +1076,9 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 #[cfg(feature = "trueos_rdp")]
-const TASK_COUNT: usize = 73;
+const TASK_COUNT: usize = 72;
 #[cfg(not(feature = "trueos_rdp"))]
-const TASK_COUNT: usize = 71;
+const TASK_COUNT: usize = 70;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1253,12 +1235,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         gfx_backend_boot_gate,
         &GFX_VIRGL_READY_TASK_STARTED,
         spawn_gfx_virgl_ready_task,
-    ),
-    TaskSpec::enabled(
-        "gfx-virgl-cursor-overlay",
-        crate::r::readiness::GFX_BACKEND_READY,
-        &GFX_VIRGL_CURSOR_OVERLAY_STARTED,
-        spawn_gfx_virgl_cursor_overlay_task,
     ),
     TaskSpec::enabled_gated(
         "intel-cursor-service",

@@ -15,7 +15,6 @@ const HID_REQ_SET_IDLE: u8 = 0x0A;
 const HID_REQ_SET_PROTOCOL: u8 = 0x0B;
 const HID_BOOT_PROTOCOL: u16 = 0;
 const USB3_BOOT_MOUSE_POOL_CAP: usize = 4;
-const USB3_BOOT_MOUSE_POLL_TIMEOUT_MS: u64 = 16;
 const UAS_IO_TIMEOUT_MS: u64 = 2_000;
 const UAS_IU_COMMAND: u8 = 0x01;
 const UAS_IU_STATUS: u8 = 0x03;
@@ -366,15 +365,12 @@ async fn poll_usb3_boot_mouse(mouse: PooledUsbBootMouse) {
     let mut report_logs = 0u32;
     loop {
         let mut report = [0u8; 8];
-        let completion = embassy_time::with_timeout(
-            embassy_time::Duration::from_millis(USB3_BOOT_MOUSE_POLL_TIMEOUT_MS),
-            interrupt_in
-                .wait(crabusb::usb_if::endpoint::TransferRequest::interrupt_in(&mut report)),
-        )
-        .await;
+        let completion = interrupt_in
+            .wait(crabusb::usb_if::endpoint::TransferRequest::interrupt_in(&mut report))
+            .await;
 
         match completion {
-            Ok(Ok(done)) => {
+            Ok(done) => {
                 let len = done.actual_length.min(report.len());
                 completion_logs = completion_logs.wrapping_add(1);
                 if completion_logs <= 16 || completion_logs.is_multiple_of(256) {
@@ -424,7 +420,7 @@ async fn poll_usb3_boot_mouse(mouse: PooledUsbBootMouse) {
                     }
                 }
             }
-            Ok(Err(err)) => {
+            Err(err) => {
                 crate::log!(
                     "crabusb: boot-mouse {:04x}:{:04x} proof=poll status=failed err={:?}\n",
                     pooled.vendor_id,
@@ -433,7 +429,6 @@ async fn poll_usb3_boot_mouse(mouse: PooledUsbBootMouse) {
                 );
                 embassy_time::Timer::after(embassy_time::Duration::from_millis(25)).await;
             }
-            Err(_) => {}
         }
 
         embassy_time::Timer::after(embassy_time::Duration::from_millis(1)).await;

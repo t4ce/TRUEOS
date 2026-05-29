@@ -27,7 +27,7 @@ exec env -i \
     "${QEMU_BIN}" -no-shutdown \
     -display sdl,gl=on \
     -vga none \
-    -device virtio-gpu-gl-pci,xres=1600,yres=900 \
+    -device virtio-gpu-gl-pci,xres=2048,yres=1152 \
     -machine q35,accel=kvm:tcg \
     -bios "${QEMU_UEFI_FIRMWARE:?QEMU_UEFI_FIRMWARE is not set}" \
     -boot order=d \

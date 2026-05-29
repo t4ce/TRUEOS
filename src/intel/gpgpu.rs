@@ -28,10 +28,6 @@ use surfaces::{
 use walker_command::encode_gfx12_gpgpu_walker_probe_batch;
 
 pub(crate) use mandelbrot::{
-    submit_gpgpu_primary_scanout_groupid_line320_probe,
-    submit_gpgpu_primary_scanout_line1280_groupid_rows_fullwidth_color_burst,
-    submit_gpgpu_primary_scanout_mandelbrot_preview,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_fast_immediate_constant,
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_immediate_constant_probe,
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_immediate_constant_rows_probe,
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_immediate_gradient_probe,
@@ -39,27 +35,9 @@ pub(crate) use mandelbrot::{
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_linear_band_probe,
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_linear_constant_probe,
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_probe,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet,
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_constant,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_gradient,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_gradient_rows,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_gradient_rows_batched,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_raw_radius,
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_immediate_raw_radius_rows,
     submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_linear_band,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_bw_store_quiet_rows,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_fullscreen_bands,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_fullscreen_frame,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_t30_immediate_lane0_sweep_bands,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_t31_store_ladder_probe,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_t32_single_send_probe,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_t33_bti1_untyped_probe,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_t34_address_data_witness_probe,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_t35_explicit_wide_payload_probe,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_t36_unrolled_scalar16_probe,
-    submit_gpgpu_primary_scanout_mandelbrot16_simd16_t37_groupid_x_unrolled_scalar16_probe,
-    submit_gpgpu_primary_scanout_row2560_simd8_color_probe,
-    submit_gpgpu_primary_scanout_row2560_simd8_probe,
 };
 pub(crate) use matmul::{
     log_gpgpu_t63_first_tile_output_detail_once, stage_gpgpu_one_tile_record_probe,

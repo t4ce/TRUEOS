@@ -66,6 +66,7 @@ pub const OP_BP_GFX_FRAME_DRAW_BEGIN: u32 = 0x7B; // payload frame draw upload h
 pub const OP_BP_GFX_FRAME_DRAW_CHUNK: u32 = 0x7C; // arg0 offset, payload vertex chunk
 pub const OP_BP_GFX_FRAME_DRAW_FINISH: u32 = 0x7D; // finalize pending frame draw
 pub const OP_BP_GFX_FRAME_END: u32 = 0x7E; // submit current frame through native batcher
+pub const OP_BP_UI2_WINDOW_CURSOR_EVENTS: u32 = 0x7F; // arg0 window id, arg1 cap -> payload events
 pub const OP_BP_INPUT_CURSOR_POS: u32 = 0x68; // arg0 cursor id -> packed x/y
 pub const OP_BP_INPUT_CURSOR_BUTTONS: u32 = 0x69; // arg0 cursor id -> buttons
 pub const OP_BP_INPUT_CURSOR_EVENTS: u32 = 0x6A; // arg0 read seq, arg1 cap -> payload events
@@ -605,6 +606,18 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             };
             let (wrote, response_len) =
                 crate::r::io::cabi::host_input_cursor_events_since(arg0, arg1 as u32, unsafe {
+                    &mut (*p).payload
+                });
+            write_response(vm_id, seq, STATUS_OK, wrote as u64, response_len as u32);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI2_WINDOW_CURSOR_EVENTS => {
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let (wrote, response_len) =
+                crate::r::ui2::host_ui2_window_cursor_events(arg0 as u32, arg1 as u32, unsafe {
                     &mut (*p).payload
                 });
             write_response(vm_id, seq, STATUS_OK, wrote as u64, response_len as u32);
