@@ -223,6 +223,15 @@ fn one_second_rate_limit_allows(last_marker: &AtomicU64) -> bool {
 }
 
 fn usb_vendor_rendered_log_allowed(rendered: &str) -> bool {
+    if !crate::logflag::USB_XHCI_TRANSFER_TRACE_LOGS
+        && (rendered.starts_with("[Transfer] >>")
+            || rendered.starts_with("Transfer data length:")
+            || rendered.starts_with("xhci: event transfer ")
+            || rendered.starts_with("xhci: dispatch transfer event ")
+            || rendered.starts_with("xhci: event ring drained command=0 port=0 transfer="))
+    {
+        return false;
+    }
     if rendered.starts_with("crabusb/xhci/ep: completion") {
         return one_second_rate_limit_allows(&USB_XHCI_COMPLETION_LAST_LOG_TICK);
     }
