@@ -362,6 +362,8 @@ async fn poll_usb3_boot_mouse(mouse: PooledUsbBootMouse) {
     );
 
     let mut last_buttons = 0u32;
+    let mut completion_logs = 0u32;
+    let mut report_logs = 0u32;
     loop {
         let mut report = [0u8; 8];
         let completion = embassy_time::with_timeout(
@@ -374,12 +376,41 @@ async fn poll_usb3_boot_mouse(mouse: PooledUsbBootMouse) {
         match completion {
             Ok(Ok(done)) => {
                 let len = done.actual_length.min(report.len());
+                completion_logs = completion_logs.wrapping_add(1);
+                if completion_logs <= 16 || completion_logs.is_multiple_of(256) {
+                    crate::log!(
+                        "crabusb: boot-mouse {:04x}:{:04x} completion id={} actual={} len={} raw={:02x?} count={}\n",
+                        pooled.vendor_id,
+                        pooled.product_id,
+                        pooled.id,
+                        done.actual_length,
+                        len,
+                        &report[..len],
+                        completion_logs
+                    );
+                }
                 if len >= 3 {
                     let buttons = (report[0] & 0x07) as u32;
                     let dx = report[1] as i8;
                     let dy = report[2] as i8;
                     let wheel = if len >= 4 { report[3] as i8 as i16 } else { 0 };
                     if dx != 0 || dy != 0 || wheel != 0 || buttons != last_buttons {
+                        report_logs = report_logs.wrapping_add(1);
+                        if report_logs <= 16 || report_logs.is_multiple_of(64) {
+                            crate::log!(
+                                "crabusb: boot-mouse {:04x}:{:04x} report id={} len={} buttons=0x{:02x} dx={} dy={} wheel={} raw={:02x?} count={}\n",
+                                pooled.vendor_id,
+                                pooled.product_id,
+                                pooled.id,
+                                len,
+                                buttons,
+                                dx,
+                                dy,
+                                wheel,
+                                &report[..len],
+                                report_logs
+                            );
+                        }
                         super::hid::inject_usb3_mouse_relative_event(
                             pooled.id as u32,
                             target.interrupt_in as u32,

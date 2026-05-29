@@ -187,9 +187,9 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
         y_norm_q15: q15_from_norm(runtime.mouse_y),
     });
 
-    if HID_DEBUG_REPORT_LOGS && runtime.mouse_buttons_down != prev_buttons {
+    if runtime.mouse_buttons_down != prev_buttons {
         crate::log!(
-            "tablet-report: ctrl={} slot={} ep={} seq={} flags=0x{:02X} buttons=0x{:02X} prev=0x{:02X} x={} y={} rid={}\n",
+            "tablet-click: ctrl={} slot={} ep={} seq={} flags=0x{:02X} buttons=0x{:02X} prev=0x{:02X} x={} y={} rid={}\n",
             runtime.controller_id,
             runtime.slot_id,
             runtime.ep_target,
