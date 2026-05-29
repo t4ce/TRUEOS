@@ -4591,6 +4591,26 @@ pub mod cabi {
         frame_draws: Vec<PendingDraw>,
         frame_rgb_blob: Vec<u8>,
         frame_tex_blob: Vec<u8>,
+        cursor_frame_active: bool,
+        cursor_frame_seq: u32,
+        cursor_rgb_draws: u32,
+        cursor_tex_draws: u32,
+        cursor_draw_bytes: usize,
+        cursor_draws: Vec<PendingDraw>,
+        cursor_rgb_blob: Vec<u8>,
+        cursor_tex_blob: Vec<u8>,
+        base_cache_valid: bool,
+        base_cache_updated_at_ticks: u64,
+        base_cache_screen_width: u32,
+        base_cache_screen_height: u32,
+        base_cache_clear_rgb: u32,
+        base_cache_draws: Vec<PendingDraw>,
+        base_cache_rgb_blob: Vec<u8>,
+        base_cache_tex_blob: Vec<u8>,
+        cursor_cache_valid: bool,
+        cursor_cache_draws: Vec<PendingDraw>,
+        cursor_cache_rgb_blob: Vec<u8>,
+        cursor_cache_tex_blob: Vec<u8>,
         // Current sampler state (set by the WebGL shim) that will be captured per textured draw.
         cur_sampler: SamplerDesc,
         // Current blend state (set by the WebGL shim) that will be captured per draw.
@@ -4734,6 +4754,7 @@ pub mod cabi {
 
     static GFX_TRACE_RING: spin::Mutex<GfxTraceRing> = spin::Mutex::new(GfxTraceRing::new());
     static END_FRAME_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+    static CURSOR_HELPER_SKIP_LOGS: AtomicU32 = AtomicU32::new(0);
     static SCREENSHOT_HELPER_SKIP_LOGS: AtomicU32 = AtomicU32::new(0);
     static TEXTURE_WORKER_SKIP_LOGS: AtomicU32 = AtomicU32::new(0);
 
@@ -4786,9 +4807,12 @@ pub mod cabi {
     }
 
     #[inline]
-    fn wait_for_end_frame_idle() {
-        while end_frame_in_progress() {
-            crate::wait::spin_step();
+    fn log_cursor_helper_skipped_end_frame_active() {
+        let n = CURSOR_HELPER_SKIP_LOGS.fetch_add(1, Ordering::Relaxed);
+        if n < 32 {
+            crate::globalog::log(format_args!(
+                "gfx-cabi: cursor overlay tick skipped because end_frame is active\n"
+            ));
         }
     }
 
@@ -4901,6 +4925,26 @@ pub mod cabi {
                 frame_draws: Vec::new(),
                 frame_rgb_blob: Vec::new(),
                 frame_tex_blob: Vec::new(),
+                cursor_frame_active: false,
+                cursor_frame_seq: 0,
+                cursor_rgb_draws: 0,
+                cursor_tex_draws: 0,
+                cursor_draw_bytes: 0,
+                cursor_draws: Vec::new(),
+                cursor_rgb_blob: Vec::new(),
+                cursor_tex_blob: Vec::new(),
+                base_cache_valid: false,
+                base_cache_updated_at_ticks: 0,
+                base_cache_screen_width: 0,
+                base_cache_screen_height: 0,
+                base_cache_clear_rgb: 0x00ff_ffff,
+                base_cache_draws: Vec::new(),
+                base_cache_rgb_blob: Vec::new(),
+                base_cache_tex_blob: Vec::new(),
+                cursor_cache_valid: false,
+                cursor_cache_draws: Vec::new(),
+                cursor_cache_rgb_blob: Vec::new(),
+                cursor_cache_tex_blob: Vec::new(),
                 cur_sampler: SamplerDesc {
                     wrap_s: SamplerWrap::ClampToEdge,
                     wrap_t: SamplerWrap::ClampToEdge,
@@ -5361,10 +5405,6 @@ pub mod cabi {
         rgb_src: &[u8],
         tex_src: &[u8],
     ) {
-        if !crate::allcaps::gfx::SCREENSHOT_CAPTURE_ENABLED {
-            return;
-        }
-
         if end_frame_in_progress() {
             log_screenshot_helper_skipped_end_frame_active();
             return;
@@ -5981,6 +6021,24 @@ pub mod cabi {
             st.frame_draws.clear();
             st.frame_rgb_blob.clear();
             st.frame_tex_blob.clear();
+            st.cursor_frame_active = false;
+            st.cursor_frame_seq = 0;
+            st.cursor_rgb_draws = 0;
+            st.cursor_tex_draws = 0;
+            st.cursor_draw_bytes = 0;
+            st.cursor_draws.clear();
+            st.cursor_rgb_blob.clear();
+            st.cursor_tex_blob.clear();
+            st.base_cache_valid = false;
+            st.base_cache_screen_width = 0;
+            st.base_cache_screen_height = 0;
+            st.base_cache_draws.clear();
+            st.base_cache_rgb_blob.clear();
+            st.base_cache_tex_blob.clear();
+            st.cursor_cache_valid = false;
+            st.cursor_cache_draws.clear();
+            st.cursor_cache_rgb_blob.clear();
+            st.cursor_cache_tex_blob.clear();
             st.epoch = epoch;
         }
         if !st.swapchain_configured || st.swapchain_desc != desired_swap {
@@ -6073,6 +6131,24 @@ pub mod cabi {
             st.frame_draws.clear();
             st.frame_rgb_blob.clear();
             st.frame_tex_blob.clear();
+            st.cursor_frame_active = false;
+            st.cursor_frame_seq = 0;
+            st.cursor_rgb_draws = 0;
+            st.cursor_tex_draws = 0;
+            st.cursor_draw_bytes = 0;
+            st.cursor_draws.clear();
+            st.cursor_rgb_blob.clear();
+            st.cursor_tex_blob.clear();
+            st.base_cache_valid = false;
+            st.base_cache_screen_width = 0;
+            st.base_cache_screen_height = 0;
+            st.base_cache_draws.clear();
+            st.base_cache_rgb_blob.clear();
+            st.base_cache_tex_blob.clear();
+            st.cursor_cache_valid = false;
+            st.cursor_cache_draws.clear();
+            st.cursor_cache_rgb_blob.clear();
+            st.cursor_cache_tex_blob.clear();
             st.epoch = epoch;
         }
         if !st.swapchain_configured || st.swapchain_desc != desired_swap {
@@ -6892,7 +6968,6 @@ pub mod cabi {
             data,
         );
 
-        wait_for_end_frame_idle();
         let Some(ret) = crate::gfx::with_context_tag(
             crate::gfx::SystemLockOwner::UploadTexture,
             |ctx| {
@@ -6923,6 +6998,24 @@ pub mod cabi {
                     st.frame_draws.clear();
                     st.frame_rgb_blob.clear();
                     st.frame_tex_blob.clear();
+                    st.cursor_frame_active = false;
+                    st.cursor_frame_seq = 0;
+                    st.cursor_rgb_draws = 0;
+                    st.cursor_tex_draws = 0;
+                    st.cursor_draw_bytes = 0;
+                    st.cursor_draws.clear();
+                    st.cursor_rgb_blob.clear();
+                    st.cursor_tex_blob.clear();
+                    st.base_cache_valid = false;
+                    st.base_cache_screen_width = 0;
+                    st.base_cache_screen_height = 0;
+                    st.base_cache_draws.clear();
+                    st.base_cache_rgb_blob.clear();
+                    st.base_cache_tex_blob.clear();
+                    st.cursor_cache_valid = false;
+                    st.cursor_cache_draws.clear();
+                    st.cursor_cache_rgb_blob.clear();
+                    st.cursor_cache_tex_blob.clear();
                     st.epoch = epoch;
                 }
                 let images = st.tex_images.get_or_insert_with(Vec::new);
@@ -7633,22 +7726,12 @@ pub mod cabi {
         preserve_contents: bool,
         allow_screen_present: bool,
     ) -> i32 {
-        wait_for_end_frame_idle();
         crate::gfx::init(None);
 
-        let wait_start_ticks = embassy_time_driver::now();
-        let wait_timeout_ticks = (embassy_time_driver::TICK_HZ / 2).max(1);
-        let mut st = loop {
-            let st = GFX_CABI_STATE.lock();
-            if !st.frame_active {
-                break st;
-            }
-            drop(st);
-            if embassy_time_driver::now().saturating_sub(wait_start_ticks) >= wait_timeout_ticks {
-                return -2;
-            }
-            crate::wait::spin_step();
-        };
+        let mut st = GFX_CABI_STATE.lock();
+        if st.frame_active {
+            return -2;
+        }
         // Keep CABI epoch aligned at frame start so first-use texture upload does not
         // treat initial bootstrap as a backend switch and invalidate this frame.
         st.epoch = crate::gfx::backend_epoch();
@@ -8085,7 +8168,6 @@ pub mod cabi {
             crate::globalog::log(format_args!("gfx-cabi: end without active frame\n"));
             return -3;
         }
-        let _end_frame_guard = EndFrameProgressGuard::new();
         let mut end_flags = 0u32;
         if allow_screen_present {
             end_flags |= 1;
@@ -8147,8 +8229,9 @@ pub mod cabi {
         let mut screenshot_overlay_extent: Option<(u32, u32)> = None;
 
         let Some(ret) = ({
+            let _end_frame_guard = EndFrameProgressGuard::new();
             crate::gfx::with_context_tag(crate::gfx::SystemLockOwner::EndFrame, |ctx| {
-                let (_p, _v, _need_set_viewport) = match ensure_gfx_resources(ctx, 0) {
+                let (_p, _v, need_set_viewport) = match ensure_gfx_resources(ctx, 0) {
                     Some(v) => v,
                     None => return -1,
                 };
@@ -8171,7 +8254,7 @@ pub mod cabi {
                         None,
                     );
                 }
-                const MAX_PASS_VERTEX_BYTES: usize = 384 * 1024;
+                const MAX_PASS_VERTEX_BYTES: usize = 96 * 1024;
 
                 enum Plan {
                     SetRenderTarget {
@@ -8431,13 +8514,15 @@ pub mod cabi {
                         pass_vp_w = *vp_w;
                         pass_vp_h = *vp_h;
                     }
+                    if first_pass && need_set_viewport {
+                        cmds.push(Command::SetViewport(Viewport {
+                            x: 0,
+                            y: 0,
+                            width: pass_vp_w as i32,
+                            height: pass_vp_h as i32,
+                        }));
+                    }
                     cmds.push(Command::SetRenderTarget(pass_target_image));
-                    cmds.push(Command::SetViewport(Viewport {
-                        x: 0,
-                        y: 0,
-                        width: pass_vp_w as i32,
-                        height: pass_vp_h as i32,
-                    }));
                     if first_pass && !preserve_contents {
                         cmds.push(Command::ClearColor { rgb: clear_rgb });
                     }
@@ -8583,13 +8668,15 @@ pub mod cabi {
                 if first_pass {
                     // No valid draw payloads in this frame; keep clear/present behavior.
                     let mut cmds: Vec<Command> = Vec::new();
+                    if need_set_viewport {
+                        cmds.push(Command::SetViewport(Viewport {
+                            x: 0,
+                            y: 0,
+                            width: current_vp_w as i32,
+                            height: current_vp_h as i32,
+                        }));
+                    }
                     cmds.push(Command::SetRenderTarget(current_target_image));
-                    cmds.push(Command::SetViewport(Viewport {
-                        x: 0,
-                        y: 0,
-                        width: current_vp_w as i32,
-                        height: current_vp_h as i32,
-                    }));
                     if !preserve_contents {
                         cmds.push(Command::ClearColor { rgb: clear_rgb });
                     }
@@ -8622,6 +8709,19 @@ pub mod cabi {
             if submitted_passes != 0 {
                 st.ring_idx = (st.ring_idx + submitted_passes) % GFX_CABI_VBUF_RING_LEN;
             }
+            if is_screen_present_frame {
+                st.base_cache_valid = true;
+                st.base_cache_updated_at_ticks = embassy_time_driver::now();
+                let (screen_w, screen_h) = screenshot_overlay_extent
+                    .unwrap_or((st.swapchain_desc.extent.width, st.swapchain_desc.extent.height));
+                st.base_cache_screen_width = screen_w;
+                st.base_cache_screen_height = screen_h;
+                st.base_cache_clear_rgb = clear_rgb;
+                st.base_cache_draws = draws.clone();
+                st.base_cache_rgb_blob = rgb_src.clone();
+                st.base_cache_tex_blob = tex_src.clone();
+            }
+
             if crate::gfx::is_virgl_active() {
                 let first = !crate::logflag::GFX_CABI_VIRGL_FIRST_FRAME_SEEN
                     .swap(true, core::sync::atomic::Ordering::AcqRel);
@@ -8643,7 +8743,7 @@ pub mod cabi {
             }
             drop(st);
 
-            if is_screen_present_frame && crate::allcaps::gfx::SCREENSHOT_CAPTURE_ENABLED {
+            if is_screen_present_frame {
                 let mut screenshot_draws = draws.clone();
                 let mut screenshot_rgb = rgb_src.clone();
                 let mut screenshot_tex = tex_src.clone();
