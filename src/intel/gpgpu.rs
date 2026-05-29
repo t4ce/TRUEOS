@@ -929,6 +929,7 @@ fn is_gpgpu_submit_name(name: &str) -> bool {
             | "gpgpu-compute-walker"
             | "gpgpu-one-tile-sentinel"
             | "gpgpu-one-tile-compare"
+            | "gpgpu-primary-scanout-walkrow16"
             | "gpgpu-primary-scanout-groupid-line1280-fullwidth"
             | "gpgpu-pre-submit"
     )
@@ -943,6 +944,7 @@ fn uses_gpgpu_pipeline_submit_name(name: &str) -> bool {
         || matches!(
             name,
             "gpgpu-primary-scanout-mandelbrot8-strip"
+                | "gpgpu-primary-scanout-walkrow16"
                 | "gpgpu-primary-scanout-gpu-color8-witness"
                 | "gpgpu-primary-scanout-line1280-burst"
                 | "gpgpu-primary-scanout-groupid-line1280-rows"
