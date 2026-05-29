@@ -270,7 +270,20 @@ fn fs_status_to_io(rc: i32, _op: &'static str) -> io::Error {
         -14 => io::ErrorKind::TimedOut,
         _ => io::ErrorKind::Other,
     };
-    io::Error::new(kind, "TRUEOS fs CABI operation failed")
+    let message = match rc {
+        -1 => "TRUEOS fs CABI operation failed: FS_ERR_BAD_UTF8",
+        -2 => "TRUEOS fs CABI operation failed: FS_ERR_IO",
+        -3 => "TRUEOS fs CABI operation failed: FS_ERR_NO_SPACE",
+        -4 => "TRUEOS fs CABI operation failed: FS_ERR_BAD_PARAM",
+        -5 => "TRUEOS fs CABI operation failed: FS_ERR_NOT_FOUND",
+        -6 => "TRUEOS fs CABI operation failed: FS_ERR_BAD_PATH",
+        -7 => "TRUEOS fs CABI operation failed: FS_ERR_TOO_LARGE",
+        -8 => "TRUEOS fs CABI operation failed: FS_ERR_NOT_FOUND",
+        -9 => "TRUEOS fs CABI operation failed: FS_ERR_ALREADY_EXISTS",
+        -14 => "TRUEOS fs CABI operation failed: FS_ERR_TIMEOUT",
+        _ => "TRUEOS fs CABI operation failed: UNKNOWN",
+    };
+    io::Error::new(kind, message)
 }
 
 fn read_sync(path: &Path) -> io::Result<Vec<u8>> {

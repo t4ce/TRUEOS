@@ -1671,6 +1671,7 @@ pub async fn json_all_async(
         path: String,
         kind: &'static str,
         name: String,
+        id: u64,
     }
 
     let mut by_depth: BTreeMap<usize, Vec<JsonEntry>> = BTreeMap::new();
@@ -1685,7 +1686,7 @@ pub async fn json_all_async(
             return Err(block::Error::Corrupted);
         };
 
-        'scan: for key in index.keys() {
+        'scan: for (key, index_ref) in index.iter() {
             let Ok(path) = core::str::from_utf8(key.as_slice()) else {
                 continue;
             };
@@ -1707,6 +1708,15 @@ pub async fn json_all_async(
 
                 by_depth.entry(depth).or_default().push(JsonEntry {
                     depth,
+                    id: if depth + 1 == segments.len() {
+                        index_ref.entry_lba
+                    } else {
+                        let marker = alloc::format!("{}/.keep", rel_path);
+                        index
+                            .get(marker.as_bytes())
+                            .map(|entry| entry.entry_lba)
+                            .unwrap_or(index_ref.entry_lba)
+                    },
                     path: rel_path,
                     name: String::from(segments[depth]),
                     kind: if depth + 1 == segments.len() {
@@ -1753,6 +1763,8 @@ pub async fn json_all_async(
             push_json_string_escaped(&mut out, entry.kind);
             out.push_str(",\"depth\":");
             out.push_str(alloc::format!("{}", entry.depth).as_str());
+            out.push_str(",\"id\":");
+            out.push_str(alloc::format!("{}", entry.id).as_str());
             out.push('}');
             written += 1;
         }
@@ -1850,6 +1862,29 @@ pub fn root_index_paths(disk_id: block::DiscId, max_paths: usize) -> Option<Vec<
         }
     }
     Some(out)
+}
+
+pub async fn raw_log_scan_async(
+    disk: block::DeviceHandle,
+    max_records: usize,
+) -> Result<Option<trueos_fs::RawLogScan>, block::Error> {
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    let Some(placement) = locate_async(disk).await? else {
+        return Ok(None);
+    };
+
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    let io = KernelBlockIo::new(disk);
+    trueos_fs::scan_raw_log(&io, &params, max_records)
+        .await
+        .map(Some)
+        .map_err(map_engine_err)
 }
 
 pub fn request_warm_index(disk_id: block::DiscId) {

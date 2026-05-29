@@ -10,7 +10,9 @@ use super::super::{
 use super::tlb_helper::TlbTable;
 use crate::shell2::shell2_cmd::ParseOutcome;
 
-const TABLE_HEADERS: [&str; 7] = ["Mode", "Owner", "Group", "Size", "Date", "Kind", "Name"];
+const TABLE_HEADERS: [&str; 8] = [
+    "FileID", "Mode", "Owner", "Group", "Size", "Date", "Kind", "Name",
+];
 
 fn run_lsd(io: &'static dyn ShellBackend2, args: Vec<String>) -> trueos_io::Result<()> {
     let target = matrix_target_for_backend(io);
@@ -61,8 +63,8 @@ fn run_lsd_table(io: &'static dyn ShellBackend2, args: Vec<String>) -> trueos_io
     let listings = trueos_lsd::table_listings(args.as_slice())?;
     let multiple = listings.len() > 1;
     let width = line_width_for_backend(io).saturating_sub(2);
-    let table =
-        TlbTable::with_width(&TABLE_HEADERS, width).with_max_col_widths(&[10, 7, 7, 8, 10, 5, 0]);
+    let table = TlbTable::with_width(&TABLE_HEADERS, width)
+        .with_max_col_widths(&[8, 10, 7, 7, 8, 10, 5, 0]);
 
     for (idx, listing) in listings.iter().enumerate() {
         if multiple {
@@ -75,6 +77,7 @@ fn run_lsd_table(io: &'static dyn ShellBackend2, args: Vec<String>) -> trueos_io
         table.emit_header(|text| print_shell_line(io, text));
         for row in listing.rows.iter() {
             let cells = [
+                row.id.as_str(),
                 row.mode,
                 row.owner,
                 row.group,

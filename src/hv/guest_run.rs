@@ -386,8 +386,13 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     };
 
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        if create_blueprint_dir_all(app_fs_root.as_str()).is_err() {
-            log("run: guest app fs root create failed");
+        if let Err(err) = create_blueprint_dir_all(app_fs_root.as_str()) {
+            log(alloc::format!(
+                "run: guest app fs root create failed path={} err={}",
+                app_fs_root.as_str(),
+                err
+            )
+            .as_str());
         }
     } else {
         match create_blueprint_dir_all(app_fs_root.as_str()) {
@@ -405,8 +410,13 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     }
 
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        if create_blueprint_dir_all(app_fs_common.as_str()).is_err() {
-            log("run: guest app fs common create failed");
+        if let Err(err) = create_blueprint_dir_all(app_fs_common.as_str()) {
+            log(alloc::format!(
+                "run: guest app fs common create failed path={} err={}",
+                app_fs_common.as_str(),
+                err
+            )
+            .as_str());
         }
     } else {
         match create_blueprint_dir_all(app_fs_common.as_str()) {

@@ -18,6 +18,7 @@ pub mod kfs {
 
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct FsTreeEntry {
+        pub id: u64,
         pub path: String,
         pub name: String,
         pub kind: FsEntryKind,
@@ -44,6 +45,8 @@ pub mod kfs {
 
     #[derive(Clone, Debug, Deserialize)]
     struct FsTreeEntryWire {
+        #[serde(default)]
+        id: u64,
         path: String,
         name: String,
         kind: String,
@@ -71,6 +74,7 @@ pub mod kfs {
                 .entries
                 .into_iter()
                 .map(|entry| FsTreeEntry {
+                    id: entry.id,
                     path: entry.path,
                     name: entry.name,
                     kind: FsEntryKind::from_wire(entry.kind.as_str()),
