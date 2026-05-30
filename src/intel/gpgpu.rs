@@ -27,7 +27,13 @@ use surfaces::{
 };
 use walker_command::encode_gfx12_gpgpu_walker_probe_batch;
 
-pub(crate) use mandelbrot::submit_gpgpu_primary_scanout_walkrow16;
+pub(crate) use mandelbrot::{
+    submit_gpgpu_primary_scanout_chunkstamp704,
+    submit_gpgpu_primary_scanout_chunkstamp704_unrolled,
+    submit_gpgpu_primary_scanout_fillrow_linear16, submit_gpgpu_primary_scanout_row2560_simd16,
+    submit_gpgpu_primary_scanout_row2560_simd16_variant, submit_gpgpu_primary_scanout_rowburst1280,
+    submit_gpgpu_primary_scanout_walkrow16,
+};
 pub(crate) use matmul::{
     log_gpgpu_t63_first_tile_output_detail_once, stage_gpgpu_one_tile_record_probe,
     stage_gpgpu_tile_record_accum16_window_probe, stage_gpgpu_tile_record_accum16_window_trusted,
@@ -1503,6 +1509,7 @@ fn should_log_gpgpu_program_shape(name: &str) -> bool {
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_PROGRAM_NAME
         || name.contains("primary-scanout-groupid-line1280-rows-simd16")
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD8_BW_PROGRAM_NAME
+        || name == trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_BW_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_SCALAR_BW_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_LINE320_SCALAR_BW_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_LINE8_SCALAR8_BW_PROGRAM_NAME

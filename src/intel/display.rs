@@ -70,6 +70,7 @@ const PIPE_BOTTOM_COLOR_RGB: u32 = 0x00FF_37FF;
 const PRIMARY_FORMAT_PROBE_XRGB: u32 = 0;
 const PRIMARY_FORMAT_PROBE_XBGR: u32 = 1;
 const PRIMARY_FORMAT_PROBE_MODE: u32 = PRIMARY_FORMAT_PROBE_XRGB;
+const UNIVERSAL_PLANE_SLOTS: usize = 4;
 const PRIMARY_PRESENT_DISABLE_PSR_PROBE: bool = true;
 const PRIMARY_BYTES_PER_PIXEL: u32 = 4;
 const PRIMARY_BASELINE_COLOR: u32 = 0x00FF_37FF;
@@ -1384,6 +1385,46 @@ fn overlay_plane_ctl_enabled(ctl_before: u32) -> u32 {
     primary_plane_ctl_enabled(ctl_before)
 }
 
+fn plane_color_ctl_alpha_disabled(color_ctl: u32) -> u32 {
+    color_ctl & !PLANE_COLOR_ALPHA_MASK
+}
+
+fn disable_non_primary_universal_planes(dev: crate::intel::Dev, pipe: PipeInfo, reason: &str) {
+    let mut slot = 1usize;
+    while slot < UNIVERSAL_PLANE_SLOTS {
+        let plane_base = pipe.plane_ctl_off + slot.saturating_mul(UNI_PLANE_SLOT_STRIDE);
+        let ctl_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_CTL_OFF);
+        let surf_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURF_OFF);
+        let live_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURFLIVE_OFF);
+        let color_ctl_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_COLOR_CTL_OFF);
+        let ctl_disabled = ctl_before & !PLANE_CTL_ENABLE;
+        let color_ctl_disabled = plane_color_ctl_alpha_disabled(color_ctl_before);
+
+        crate::intel::mmio_write(dev, plane_base + UNI_PLANE_CTL_OFF, ctl_disabled);
+        crate::intel::mmio_write(dev, plane_base + UNI_PLANE_SURF_OFF, 0);
+        crate::intel::mmio_write(dev, plane_base + UNI_PLANE_COLOR_CTL_OFF, color_ctl_disabled);
+
+        if (ctl_before & PLANE_CTL_ENABLE) != 0 || surf_before != 0 || live_before != 0 {
+            crate::log!(
+                "intel/display: plane-stack-disable reason={} pipe={} slot={} ctl=0x{:08X}=>0x{:08X} surf=0x{:08X} live=0x{:08X} color_ctl=0x{:08X}=>0x{:08X} color_alpha={}=>{}\n",
+                reason,
+                pipe.name,
+                slot,
+                ctl_before,
+                ctl_disabled,
+                surf_before,
+                live_before,
+                color_ctl_before,
+                color_ctl_disabled,
+                decode_plane_color_alpha(color_ctl_before),
+                decode_plane_color_alpha(color_ctl_disabled),
+            );
+        }
+
+        slot += 1;
+    }
+}
+
 fn primary_format_probe_name() -> &'static str {
     match PRIMARY_FORMAT_PROBE_MODE {
         PRIMARY_FORMAT_PROBE_XRGB => "xrgb8888",
@@ -1407,7 +1448,11 @@ fn program_primary_plane_and_wait(
     let ctl_before = crate::intel::mmio_read(dev, pipe.plane_ctl_off);
     let ctl_disabled = ctl_before & !PLANE_CTL_ENABLE;
     let ctl_enabled = primary_plane_ctl_enabled(ctl_before);
+    let color_ctl_off = pipe.plane_ctl_off + UNI_PLANE_COLOR_CTL_OFF;
+    let color_ctl_before = crate::intel::mmio_read(dev, color_ctl_off);
+    let color_ctl_enabled = plane_color_ctl_alpha_disabled(color_ctl_before);
 
+    disable_non_primary_universal_planes(dev, pipe, reason);
     crate::intel::mmio_write(dev, pipe.plane_ctl_off, ctl_disabled);
     crate::intel::mmio_write(dev, pipe.plane_surf_off, 0);
     let (disable_frame_before, disable_frame_after, disable_frame_iters) =
@@ -1430,6 +1475,7 @@ fn program_primary_plane_and_wait(
         pipe.plane_ctl_off + UNI_PLANE_OFFSET_OFF,
         plane_pos_reg_value(0, 0),
     );
+    crate::intel::mmio_write(dev, color_ctl_off, color_ctl_enabled);
     crate::intel::mmio_write(dev, pipe.plane_ctl_off, ctl_enabled);
     crate::intel::mmio_write(dev, pipe.plane_surf_off, surface_reg);
 
@@ -1437,13 +1483,17 @@ fn program_primary_plane_and_wait(
     let (surf_live_after, live_iters) = wait_for_primary_plane_live(dev, pipe, surface_reg, 20_000);
 
     intel_display_verbose_log!(
-        "intel/display: primary-rearm reason={} pipe={} format_probe={} ctl_before=0x{:08X} ctl_disabled=0x{:08X} ctl_enabled=0x{:08X} disable_frame={}=>{} disable_wait={} clear_live=0x{:08X} clear_iters={} arm_frame={}=>{} arm_wait={} surf=0x{:08X} surf_live=0x{:08X} live_iters={}\n",
+        "intel/display: primary-rearm reason={} pipe={} format_probe={} ctl_before=0x{:08X} ctl_disabled=0x{:08X} ctl_enabled=0x{:08X} color_ctl=0x{:08X}=>0x{:08X} color_alpha={}=>{} disable_frame={}=>{} disable_wait={} clear_live=0x{:08X} clear_iters={} arm_frame={}=>{} arm_wait={} surf=0x{:08X} surf_live=0x{:08X} live_iters={}\n",
         reason,
         pipe.name,
         primary_format_probe_name(),
         ctl_before,
         ctl_disabled,
         ctl_enabled,
+        color_ctl_before,
+        color_ctl_enabled,
+        decode_plane_color_alpha(color_ctl_before),
+        decode_plane_color_alpha(color_ctl_enabled),
         disable_frame_before,
         disable_frame_after,
         disable_frame_iters,
@@ -1640,7 +1690,9 @@ fn arm_overlay_plane(dev: crate::intel::Dev, surface: OverlaySurface, reason: &s
     let ctl_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_CTL_OFF);
     let ctl_disabled = ctl_before & !PLANE_CTL_ENABLE;
     let ctl_enabled = overlay_plane_ctl_enabled(ctl_before);
-    let color_ctl_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_COLOR_CTL_OFF);
+    let color_ctl_off = plane_base + UNI_PLANE_COLOR_CTL_OFF;
+    let color_ctl_before = crate::intel::mmio_read(dev, color_ctl_off);
+    let color_ctl_enabled = plane_color_ctl_alpha_disabled(color_ctl_before);
     let surf_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURF_OFF);
     let live_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURFLIVE_OFF);
 
@@ -1658,18 +1710,22 @@ fn arm_overlay_plane(dev: crate::intel::Dev, surface: OverlaySurface, reason: &s
         plane_size_reg_value(surface.width, surface.height),
     );
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_OFFSET_OFF, plane_pos_reg_value(0, 0));
+    crate::intel::mmio_write(dev, color_ctl_off, color_ctl_enabled);
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_CTL_OFF, ctl_enabled);
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_SURF_OFF, surface_reg);
 
     let (live_after, live_iters) = wait_for_plane_live(dev, plane_base, surface_reg, 20_000);
     crate::log!(
-        "intel/display: overlay-arm reason={} pipe={} slot={} ctl_before=0x{:08X} ctl_enabled=0x{:08X} color_ctl=0x{:08X} pos={}x{} size={}x{} stride=0x{:08X} surf_before=0x{:08X} surf_after=0x{:08X} surf_live_before=0x{:08X} surf_live_after=0x{:08X} live_iters={}\n",
+        "intel/display: overlay-arm reason={} pipe={} slot={} ctl_before=0x{:08X} ctl_enabled=0x{:08X} color_ctl=0x{:08X}=>0x{:08X} color_alpha={}=>{} pos={}x{} size={}x{} stride=0x{:08X} surf_before=0x{:08X} surf_after=0x{:08X} surf_live_before=0x{:08X} surf_live_after=0x{:08X} live_iters={}\n",
         reason,
         surface.pipe.name,
         surface.plane_slot,
         ctl_before,
         ctl_enabled,
         color_ctl_before,
+        color_ctl_enabled,
+        decode_plane_color_alpha(color_ctl_before),
+        decode_plane_color_alpha(color_ctl_enabled),
         pos_x,
         pos_y,
         surface.width,

@@ -48,18 +48,24 @@ pub async fn net_shell_task() {
         let owner: &'static str = "net-shell";
 
         let ip = crate::net::adapter::ipv4_at(dev_idx);
+        let ip_mode = match crate::net::adapter::dhcp_has_lease_at(dev_idx) {
+            Some(true) => "dhcp",
+            Some(false) => "fallback",
+            None => "unknown",
+        };
         let name = crate::net::device_name_at(dev_idx).unwrap_or("?");
         match ip {
             Some([a, b, c, d]) => {
                 crate::log!(
-                    "net-shell: routing dev={} {} owner={} ip={}.{}.{}.{}\n",
+                    "net-shell: routing dev={} {} owner={} ip={}.{}.{}.{} mode={}\n",
                     dev_idx,
                     name,
                     owner,
                     a,
                     b,
                     c,
-                    d
+                    d,
+                    ip_mode
                 )
             }
             None => {

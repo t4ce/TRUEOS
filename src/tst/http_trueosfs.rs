@@ -93,10 +93,15 @@ fn http_trueosfs_open_endpoint(dev_idx: usize) -> Option<HttpTrueosfsEndpoint> {
         return None;
     }
     let ip = crate::net::adapter::ipv4_at(dev_idx);
+    let ip_mode = match crate::net::adapter::dhcp_has_lease_at(dev_idx) {
+        Some(true) => "dhcp",
+        Some(false) => "fallback",
+        None => "unknown",
+    };
     let name = crate::net::device_name_at(dev_idx).unwrap_or("?");
     match ip {
         Some([a, b, c, d]) => crate::log!(
-            "http-trueosfs: listening on tcp {} owner={} dev={} {} ip={}.{}.{}.{}\n",
+            "http-trueosfs: listening on tcp {} owner={} dev={} {} ip={}.{}.{}.{} mode={}\n",
             ports::HTTP_TRUEOSFS_TCP_PORT,
             vnet.owner(),
             dev_idx,
@@ -104,7 +109,8 @@ fn http_trueosfs_open_endpoint(dev_idx: usize) -> Option<HttpTrueosfsEndpoint> {
             a,
             b,
             c,
-            d
+            d,
+            ip_mode
         ),
         None => crate::log!(
             "http-trueosfs: listening on tcp {} owner={} dev={} {} ip=none\n",
