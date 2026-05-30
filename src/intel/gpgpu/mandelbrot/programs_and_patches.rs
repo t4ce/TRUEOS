@@ -14,6 +14,202 @@ fn gpgpu_primary_scanout_mandelbrot16_simd16_bw_program() -> GpgpuEuProgram {
     }
 }
 
+fn gpgpu_primary_scanout_groupid_line1280_rows_program() -> GpgpuEuProgram {
+    let artifact =
+        trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT;
+    GpgpuEuProgram {
+        name: artifact.name,
+        kind: artifact.kind,
+        words: artifact.words,
+        expects_store: artifact.expects_store,
+        expected_store_value: 0,
+        store_send_dword: Some(
+            trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_STORE_SEND_DWORD,
+        ),
+        visible_seed_dword: None,
+    }
+}
+
+fn gpgpu_primary_scanout_row2560_simd16_program() -> GpgpuEuProgram {
+    let artifact =
+        trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT;
+    GpgpuEuProgram {
+        name: artifact.name,
+        kind: artifact.kind,
+        words: artifact.words,
+        expects_store: artifact.expects_store,
+        expected_store_value: 0,
+        store_send_dword: Some(trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_BW_STORE_SEND_DWORD),
+        visible_seed_dword: None,
+    }
+}
+
+fn upload_primary_scanout_row2560_simd16_artifact(
+    warm: RenderWarmState,
+    address_base: u32,
+    color: u32,
+    variant: u32,
+) -> bool {
+    let mut words =
+        trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS;
+    patch_primary_scanout_row2560_simd16_variant(&mut words, color, variant);
+    let program_bytes = core::mem::size_of_val(&words);
+    if GPGPU_EU_KERNEL_OFFSET_BYTES
+        .checked_add(program_bytes)
+        .is_none_or(|end| end > warm.draw_state_len)
+    {
+        return false;
+    }
+
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            words.as_ptr() as *const u8,
+            warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES),
+            program_bytes,
+        );
+        let dst = warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES) as *mut u32;
+        core::ptr::write_volatile(
+            dst.add(trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_BW_ADDRESS_BASE_DWORD),
+            address_base,
+        );
+        core::ptr::write_volatile(
+            dst.add(trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_BW_COLOR_DWORD),
+            color,
+        );
+    }
+    crate::intel::dma_flush(
+        unsafe { warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES) },
+        program_bytes,
+    );
+
+    let uploaded = unsafe {
+        core::slice::from_raw_parts(
+            warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES) as *const u32,
+            words.len(),
+        )
+    };
+    uploaded[trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_BW_ADDRESS_BASE_DWORD]
+        == address_base
+        && uploaded[trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_BW_COLOR_DWORD] == color
+        && uploaded[0] == words[0]
+        && uploaded[words.len() - 1] == words[words.len() - 1]
+}
+
+fn patch_primary_scanout_row2560_simd16_variant(
+    words: &mut [u32; trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_BW_WORD_DWORDS],
+    color: u32,
+    variant: u32,
+) {
+    let base = trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_BW_COLOR_DWORD - 7;
+    match variant % 5 {
+        0 => {
+            // sub g22,g20,g20; or g22,g22,color
+            words[base] = 0x00040140;
+            words[base + 1] = 0x16050660;
+            words[base + 2] = 0x06461405;
+            words[base + 3] = 0x02461405;
+            words[base + 4] = 0x00040166;
+            words[base + 5] = 0x16058220;
+            words[base + 6] = 0x02461605;
+            words[base + 7] = color;
+        }
+        1 => {
+            // mov g22,color; nop
+            words[base] = 0x80030061;
+            words[base + 1] = 0x16054660;
+            words[base + 2] = 0x00000000;
+            words[base + 3] = color;
+            words[base + 4] = 0x80030101;
+            words[base + 5] = 0x00000000;
+            words[base + 6] = 0x00000000;
+            words[base + 7] = 0x00000000;
+        }
+        2 => {
+            // mov g22,color; or g22,g22,0
+            words[base] = 0x80030061;
+            words[base + 1] = 0x16054660;
+            words[base + 2] = 0x00000000;
+            words[base + 3] = color;
+            words[base + 4] = 0x00040166;
+            words[base + 5] = 0x16058220;
+            words[base + 6] = 0x02461605;
+            words[base + 7] = 0x00000000;
+        }
+        3 => {
+            // sub g22,g20,g20; add g22,g22,color
+            words[base] = 0x00040140;
+            words[base + 1] = 0x16050660;
+            words[base + 2] = 0x06461405;
+            words[base + 3] = 0x02461405;
+            words[base + 4] = 0x00040140;
+            words[base + 5] = 0x16058660;
+            words[base + 6] = 0x06461605;
+            words[base + 7] = color;
+        }
+        _ => {
+            // mov g22,color; add g22,g22,0
+            words[base] = 0x80030061;
+            words[base + 1] = 0x16054660;
+            words[base + 2] = 0x00000000;
+            words[base + 3] = color;
+            words[base + 4] = 0x00040140;
+            words[base + 5] = 0x16058660;
+            words[base + 6] = 0x06461605;
+            words[base + 7] = 0x00000000;
+        }
+    }
+}
+
+fn upload_primary_scanout_groupid_line1280_rows_artifact(
+    warm: RenderWarmState,
+    address_base: u32,
+    color: u32,
+) -> bool {
+    let words =
+        trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS;
+    let program_bytes = core::mem::size_of_val(&words);
+    if GPGPU_EU_KERNEL_OFFSET_BYTES
+        .checked_add(program_bytes)
+        .is_none_or(|end| end > warm.draw_state_len)
+    {
+        return false;
+    }
+
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            words.as_ptr() as *const u8,
+            warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES),
+            program_bytes,
+        );
+        let dst = warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES) as *mut u32;
+        core::ptr::write_volatile(
+            dst.add(trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_ADDRESS_BASE_DWORD),
+            address_base,
+        );
+        core::ptr::write_volatile(
+            dst.add(trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_COLOR_DWORD),
+            color,
+        );
+    }
+    crate::intel::dma_flush(
+        unsafe { warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES) },
+        program_bytes,
+    );
+
+    let uploaded = unsafe {
+        core::slice::from_raw_parts(
+            warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES) as *const u32,
+            words.len(),
+        )
+    };
+    uploaded[trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_ADDRESS_BASE_DWORD]
+        == address_base
+        && uploaded[trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_COLOR_DWORD]
+            == color
+        && uploaded[0] == words[0]
+        && uploaded[words.len() - 1] == words[words.len() - 1]
+}
+
 fn upload_primary_scanout_mandelbrot16_simd16_bw_artifact(
     warm: RenderWarmState,
     address_base: u32,
@@ -323,6 +519,8 @@ fn patch_mandelbrot16_simd16_linear_constant_store_body(
     const SUB_G23_G21_G21_1Q: [u32; 4] = [0x00030140, 0x17050660, 0x06461505, 0x02461505];
     const OR_G23_G23_IMM_1Q: [u32; 4] = [0x00030166, 0x17058220, 0x02461705, 0x00000000];
     const ADD_G20_G20_4_1Q: [u32; 4] = [0x00030140, 0x14058660, 0x06461405, 0x00000004];
+    const ADD_G20_G20_64_1Q: [u32; 4] = [0x00030140, 0x14058660, 0x06461405, 0x00000040];
+    const ADD_G21_G21_64_1Q: [u32; 4] = [0x00030140, 0x15058660, 0x06461505, 0x00000040];
     const STORE_SEND8_G20_G22_1Q: [u32; 4] = [0x00030131, 0x00000000, 0xCC02140C, 0x009A160C];
     const STORE_SEND8_G21_G23_2Q: [u32; 4] = [0x00130131, 0x00000000, 0xCC02150C, 0x009A170C];
     const STORE_SEND16_G20_G22: [u32; 4] = [0x00040131, 0x00000000, 0xCC021414, 0x00961614];
@@ -357,8 +555,31 @@ fn patch_mandelbrot16_simd16_linear_constant_store_body(
         patch_mandelbrot16_simd16_put(words, &mut cursor, EOT_SEND_G126);
         return;
     }
+    if store_variant == Mandelbrot16ConstantStoreVariant::WideScalar16x5 {
+        let mut or_g22 = OR_G22_G22_IMM_1Q;
+        let mut or_g23 = OR_G23_G23_IMM_1Q;
+        or_g22[3] = color;
+        or_g23[3] = color;
+        patch_mandelbrot16_simd16_put(words, &mut cursor, ADD_G21_G20_32_1Q);
+        patch_mandelbrot16_simd16_put(words, &mut cursor, SUB_G22_G20_G20_1Q);
+        patch_mandelbrot16_simd16_put(words, &mut cursor, or_g22);
+        patch_mandelbrot16_simd16_put(words, &mut cursor, SUB_G23_G21_G21_1Q);
+        patch_mandelbrot16_simd16_put(words, &mut cursor, or_g23);
+        let mut stamp = 0u32;
+        while stamp < MANDELBROT16_T38_STAMP_REPEATS {
+            patch_mandelbrot16_simd16_put(words, &mut cursor, STORE_SEND8_G20_G22_1Q);
+            patch_mandelbrot16_simd16_put(words, &mut cursor, STORE_SEND8_G21_G23_2Q);
+            stamp += 1;
+            if stamp < MANDELBROT16_T38_STAMP_REPEATS {
+                patch_mandelbrot16_simd16_put(words, &mut cursor, ADD_G20_G20_64_1Q);
+                patch_mandelbrot16_simd16_put(words, &mut cursor, ADD_G21_G21_64_1Q);
+            }
+        }
+        patch_mandelbrot16_simd16_put(words, &mut cursor, MOV_G126_G0);
+        patch_mandelbrot16_simd16_put(words, &mut cursor, EOT_SEND_G126);
+        return;
+    }
     if store_variant == Mandelbrot16ConstantStoreVariant::UnrolledScalar16
-        || store_variant == Mandelbrot16ConstantStoreVariant::WideScalar16x5
         || store_variant == Mandelbrot16ConstantStoreVariant::WideScalar16x5AddressColor
     {
         let mut or_g22 = OR_G22_G22_IMM_1Q;
@@ -374,14 +595,13 @@ fn patch_mandelbrot16_simd16_linear_constant_store_body(
             patch_mandelbrot16_simd16_put(words, &mut cursor, SUB_G22_G20_G20_1Q);
         }
         patch_mandelbrot16_simd16_put(words, &mut cursor, or_g22);
-        let stamp_pixels = if store_variant == Mandelbrot16ConstantStoreVariant::WideScalar16x5
-            || store_variant == Mandelbrot16ConstantStoreVariant::WideScalar16x5AddressColor
-        {
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_LANES
-                * MANDELBROT16_T38_STAMP_REPEATS as usize
-        } else {
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_LANES
-        };
+        let stamp_pixels =
+            if store_variant == Mandelbrot16ConstantStoreVariant::WideScalar16x5AddressColor {
+                trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_LANES
+                    * MANDELBROT16_T38_STAMP_REPEATS as usize
+            } else {
+                trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT16_SIMD16_BW_LANES
+            };
         let mut pixel = 0usize;
         while pixel < stamp_pixels {
             patch_mandelbrot16_simd16_put(words, &mut cursor, STORE_SEND8_G20_G22_1Q);

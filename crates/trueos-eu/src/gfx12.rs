@@ -586,6 +586,17 @@ pub const PRIMARY_SCANOUT_ROW2560_SIMD8_BW_WORD_DWORDS: usize =
 pub const PRIMARY_SCANOUT_ROW2560_SIMD8_BW_ADDRESS_BASE_DWORD: usize = 15;
 pub const PRIMARY_SCANOUT_ROW2560_SIMD8_BW_COLOR_DWORD: usize = 19;
 pub const PRIMARY_SCANOUT_ROW2560_SIMD8_BW_STORE_SEND_DWORD: usize = 23;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_PROGRAM_NAME: &str =
+    "gfx12-primary-scanout-row2560-simd16-bw-hdc1-stateless-unrolled-store-then-ts-eot";
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_PIXELS: usize = 2560;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_LANES: usize = 16;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_SENDS: usize =
+    PRIMARY_SCANOUT_ROW2560_SIMD16_BW_PIXELS / PRIMARY_SCANOUT_ROW2560_SIMD16_BW_LANES;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_WORD_DWORDS: usize =
+    28 + 4 + ((PRIMARY_SCANOUT_ROW2560_SIMD16_BW_SENDS - 1) * 8) + 8;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_ADDRESS_BASE_DWORD: usize = 19;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_COLOR_DWORD: usize = 27;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_STORE_SEND_DWORD: usize = 28;
 pub const PRIMARY_SCANOUT_LINE8_SIMD8_BW_PROGRAM_NAME: &str =
     "gfx12-primary-scanout-line8-simd8-bw-hdc1-bti1-offset-store-then-ts-eot";
 pub const PRIMARY_SCANOUT_LINE8_SIMD8_BW_LANES: usize = 8;
@@ -1757,6 +1768,84 @@ pub static PRIMARY_SCANOUT_ROW2560_SIMD8_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_T
         isa: EuIsa::Gfx12,
         kind: EuArtifactKind::PrimaryScanoutRow2560Simd8BwThenHdc1StoreThenThreadSpawnerEot,
         words: &PRIMARY_SCANOUT_ROW2560_SIMD8_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS,
+        expects_store: true,
+    };
+
+const fn primary_scanout_row2560_simd16_bw_words()
+-> [u32; PRIMARY_SCANOUT_ROW2560_SIMD16_BW_WORD_DWORDS] {
+    let mut words = [0u32; PRIMARY_SCANOUT_ROW2560_SIMD16_BW_WORD_DWORDS];
+
+    // Build the SIMD16 byte-address vector and a SIMD16 color vector:
+    //   g20 = row_base + [0, 4, 8, ... 60]
+    //   g22 = repeated color dwords
+    words[0] = 0x80030061;
+    words[1] = 0x01054410;
+    words[2] = 0x00000000;
+    words[3] = 0x76543210;
+    words[4] = 0x80030061;
+    words[5] = 0x02054410;
+    words[6] = 0x00000000;
+    words[7] = 0xFEDCBA98;
+    words[8] = 0x80040261;
+    words[9] = 0x01050120;
+    words[10] = 0x00460105;
+    words[11] = 0x00000000;
+    words[12] = 0x00040069;
+    words[13] = 0x14058660;
+    words[14] = 0x02460105;
+    words[15] = 0x00000002;
+    words[16] = 0x00040140;
+    words[17] = 0x14058660;
+    words[18] = 0x06461405;
+    words[19] = 0x00000000;
+    words[20] = 0x00040140;
+    words[21] = 0x16050660;
+    words[22] = 0x06461405;
+    words[23] = 0x02461405;
+    words[24] = 0x00040166;
+    words[25] = 0x16058220;
+    words[26] = 0x02461605;
+    words[27] = 0x00FF00FF;
+
+    let mut cursor = PRIMARY_SCANOUT_ROW2560_SIMD16_BW_STORE_SEND_DWORD;
+    let mut send = 0usize;
+    while send < PRIMARY_SCANOUT_ROW2560_SIMD16_BW_SENDS {
+        words[cursor] = 0x00040131;
+        words[cursor + 1] = 0x00000000;
+        words[cursor + 2] = 0xCC021414;
+        words[cursor + 3] = 0x00961614;
+        cursor += 4;
+        send += 1;
+
+        if send < PRIMARY_SCANOUT_ROW2560_SIMD16_BW_SENDS {
+            words[cursor] = 0x00040140;
+            words[cursor + 1] = 0x14058660;
+            words[cursor + 2] = 0x06461405;
+            words[cursor + 3] = 0x00000040;
+            cursor += 4;
+        }
+    }
+
+    words[cursor] = 0x80030061;
+    words[cursor + 1] = 0x7E050220;
+    words[cursor + 2] = 0x00460005;
+    words[cursor + 3] = 0x00000000;
+    words[cursor + 4] = 0x80030131;
+    words[cursor + 5] = 0x00000004;
+    words[cursor + 6] = 0x70007E0C;
+    words[cursor + 7] = 0x00000000;
+    words
+}
+
+pub static PRIMARY_SCANOUT_ROW2560_SIMD16_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS: [u32;
+    PRIMARY_SCANOUT_ROW2560_SIMD16_BW_WORD_DWORDS] = primary_scanout_row2560_simd16_bw_words();
+
+pub static PRIMARY_SCANOUT_ROW2560_SIMD16_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT: EuArtifact =
+    EuArtifact {
+        name: PRIMARY_SCANOUT_ROW2560_SIMD16_BW_PROGRAM_NAME,
+        isa: EuIsa::Gfx12,
+        kind: EuArtifactKind::PrimaryScanoutRow2560Simd16BwThenHdc1StoreThenThreadSpawnerEot,
+        words: &PRIMARY_SCANOUT_ROW2560_SIMD16_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS,
         expects_store: true,
     };
 

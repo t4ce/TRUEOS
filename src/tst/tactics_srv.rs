@@ -738,16 +738,22 @@ fn open_tactics_listener(endpoint: &mut TacticsEndpoint) -> bool {
     }
 
     let ip = crate::net::adapter::ipv4_at(endpoint.dev_idx);
+    let ip_mode = match crate::net::adapter::dhcp_has_lease_at(endpoint.dev_idx) {
+        Some(true) => "dhcp",
+        Some(false) => "fallback",
+        None => "unknown",
+    };
     match ip {
         Some([a, b, c, d]) => crate::log!(
-            "tactics-srv: listening tcp {} dev={} owner={} ip={}.{}.{}.{}\n",
+            "tactics-srv: listening tcp {} dev={} owner={} ip={}.{}.{}.{} mode={}\n",
             ports::GAMESERVER_TACTICS_TCP_PORT,
             endpoint.dev_idx,
             endpoint.vnet.owner(),
             a,
             b,
             c,
-            d
+            d,
+            ip_mode
         ),
         None => crate::log!(
             "tactics-srv: listening tcp {} dev={} owner={} ip=none\n",

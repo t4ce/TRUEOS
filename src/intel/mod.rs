@@ -611,6 +611,76 @@ pub(crate) fn submit_gpgpu_primary_scanout_walkrow16(
     )
 }
 
+pub(crate) fn submit_gpgpu_primary_scanout_chunkstamp704(
+    row_one_based: u32,
+    x_base: u32,
+    color: u32,
+    verify_readback: bool,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_chunkstamp704(
+        row_one_based,
+        x_base,
+        color,
+        verify_readback,
+    )
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_chunkstamp704_unrolled(
+    row_one_based: u32,
+    x_base: u32,
+    color: u32,
+    verify_readback: bool,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_chunkstamp704_unrolled(
+        row_one_based,
+        x_base,
+        color,
+        verify_readback,
+    )
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_fillrow_linear16(
+    row_one_based: u32,
+    color: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_fillrow_linear16(row_one_based, color)
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16(
+    row_one_based: u32,
+    color: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_row2560_simd16(row_one_based, color)
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16_variant(
+    row_one_based: u32,
+    color: u32,
+    variant: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_row2560_simd16_variant(
+        row_one_based,
+        color,
+        variant,
+    )
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_rowburst1280(
+    row_one_based: u32,
+    rows: u32,
+    x_base: u32,
+    color: u32,
+    allow_no_eot: bool,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_rowburst1280(
+        row_one_based,
+        rows,
+        x_base,
+        color,
+        allow_no_eot,
+    )
+}
+
 pub(crate) fn submit_gpgpu_one_tile_output_compare_probe(
     output_gpu: u64,
     output_bytes: usize,

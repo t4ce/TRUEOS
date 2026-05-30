@@ -42,6 +42,7 @@ typedef struct BoInfo {
     size_t map_len;
     uint64_t map_bo_offset;
     int dumped_pre_exec;
+    int dumped_batch_start;
 } BoInfo;
 
 typedef struct MapInfo {
@@ -72,6 +73,7 @@ static size_t max_dump_bytes = 0;
 static int trace_stacks = 1;
 static int trace_stack_depth = 64;
 static int trace_snapshots = 1;
+static int dump_every_exec = 0;
 static __thread int in_hook = 0;
 
 static void mkdir_one(const char *path) {
@@ -502,10 +504,43 @@ static void dump_temp_mmap_bytes(int fd,
                                  const BoInfo *bo,
                                  uint64_t start_offset,
                                  size_t dump_len) {
-    if (fd < 0 || !phase || !bo || bo->mmap_offset == 0 || bo->size == 0) {
+    if (fd < 0 || !phase || !bo) {
+        trace_log(
+            "bo-temp-map-skip phase=%s handle=%u reason=bad-args fd=%d bo=%p",
+            phase ? phase : "?",
+            handle,
+            fd,
+            (const void *)bo
+        );
+        return;
+    }
+    if (bo->mmap_offset == 0) {
+        trace_log(
+            "bo-temp-map-skip phase=%s handle=%u reason=no-mmap-offset start_offset=0x%llX bo_size=0x%llX",
+            phase,
+            handle,
+            (unsigned long long)start_offset,
+            (unsigned long long)bo->size
+        );
+        return;
+    }
+    if (bo->size == 0) {
+        trace_log(
+            "bo-temp-map-skip phase=%s handle=%u reason=unknown-size start_offset=0x%llX",
+            phase,
+            handle,
+            (unsigned long long)start_offset
+        );
         return;
     }
     if (start_offset >= bo->size) {
+        trace_log(
+            "bo-temp-map-skip phase=%s handle=%u reason=start-offset-out-of-range start_offset=0x%llX bo_size=0x%llX",
+            phase,
+            handle,
+            (unsigned long long)start_offset,
+            (unsigned long long)bo->size
+        );
         return;
     }
 
@@ -514,6 +549,12 @@ static void dump_temp_mmap_bytes(int fd,
         dump_len = (size_t)remaining;
     }
     if (dump_len == 0) {
+        trace_log(
+            "bo-temp-map-skip phase=%s handle=%u reason=zero-dump-len start_offset=0x%llX",
+            phase,
+            handle,
+            (unsigned long long)start_offset
+        );
         return;
     }
 
@@ -576,6 +617,13 @@ static void dump_batch_start_window(int fd,
 
     if (bo->addr && batch_start >= bo->map_bo_offset &&
         batch_start < bo->map_bo_offset + bo->map_len) {
+        trace_log(
+            "bo-dump-batch-start-covered handle=%u batch_start=0x%llX map_bo_offset=0x%llX map_len=0x%zX",
+            obj->handle,
+            (unsigned long long)batch_start,
+            (unsigned long long)bo->map_bo_offset,
+            bo->map_len
+        );
         return;
     }
 
@@ -696,13 +744,16 @@ static void log_execbuffer(int fd, const struct drm_i915_gem_execbuffer2 *exec, 
             bo && bo->addr,
             bo ? bo->map_len : 0
         );
-        if (bo && bo->addr && !bo->dumped_pre_exec) {
+        if (bo && bo->addr && (dump_every_exec || !bo->dumped_pre_exec)) {
             dump_bo_bytes("pre_exec", obj->handle, bo->map_bo_offset, bo->addr, bo->map_len);
             if (strcmp(phase, "pre") == 0 && i == 0) {
                 dump_temp_mmap_bytes(fd, "pre_exec_full_object", obj->handle, bo, 0, (size_t)bo->size);
             }
-            dump_batch_start_window(fd, phase, exec, obj, bo);
             bo->dumped_pre_exec = 1;
+        }
+        if (bo && strcmp(phase, "pre") == 0 && i == 0 && (dump_every_exec || !bo->dumped_batch_start)) {
+            dump_batch_start_window(fd, phase, exec, obj, bo);
+            bo->dumped_batch_start = 1;
         }
     }
 }
@@ -751,20 +802,25 @@ static void trace_ctor(void) {
     if (snapshots && snapshots[0]) {
         trace_snapshots = atoi(snapshots) != 0;
     }
+    const char *dump_every = getenv("TRUEOS_ORACLE_DUMP_EVERY_EXEC");
+    if (dump_every && dump_every[0]) {
+        dump_every_exec = atoi(dump_every) != 0;
+    }
     mkdir_p(out_dir);
     mkdir_p(dump_dir);
     char log_path[768];
     snprintf(log_path, sizeof(log_path), "%s/log.txt", out_dir);
     log_file = fopen(log_path, "a");
     in_hook = 0;
-    trace_log("trace-start pid=%d out_dir=\"%s\" max_dump_mode=%s max_dump_cap=0x%zX trace_stacks=%d stack_depth=%d trace_snapshots=%d",
+    trace_log("trace-start pid=%d out_dir=\"%s\" max_dump_mode=%s max_dump_cap=0x%zX trace_stacks=%d stack_depth=%d trace_snapshots=%d dump_every_exec=%d",
               getpid(),
               out_dir,
               max_dump_bytes ? "capped" : "full",
               max_dump_bytes,
               trace_stacks,
               trace_stack_depth,
-              trace_snapshots);
+              trace_snapshots,
+              dump_every_exec);
     snapshot_process_state("start", 1);
 }
 
