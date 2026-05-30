@@ -7,6 +7,9 @@ const { spawn, spawnSync } = require("child_process");
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const BOOTFILE = "EFI/BOOT/BOOTX64.EFI";
+const OPTIONAL_BOOT_MODULES = [
+  "EFI/BOOT/intel_replay_rotating_triangle.tar",
+];
 const TFTP_ROOT = path.join(REPO_ROOT, "bld");
 const TFTP_PORT = 69;
 
@@ -269,6 +272,12 @@ function buildDnsmasqArgs({ iface, serverIp, lanNetwork, lanNetmask }) {
     process.stdout.write(
       `TRUEOS PXE ProxyDHCP iface=${iface} ip=${serverIp}/${prefix} tftp=${TFTP_ROOT} boot=${BOOTFILE}\n`
     );
+    for (const moduleName of OPTIONAL_BOOT_MODULES) {
+      const modulePath = path.join(TFTP_ROOT, moduleName);
+      process.stdout.write(
+        `TRUEOS PXE module ${moduleName} ${fs.existsSync(modulePath) ? "ready" : "missing"}\n`
+      );
+    }
 
     startTftpServer(serverIp);
     const child = spawn("dnsmasq", args, { stdio: "inherit" });

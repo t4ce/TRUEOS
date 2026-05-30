@@ -2,6 +2,10 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
+const MI_BATCH_BUFFER_START_MASK: u32 = 0xFF80_0000;
+const MI_BATCH_BUFFER_START_PREFIX: u32 = 0x1880_0000;
+const REPLAY_SCAN_MAX_HITS: usize = 24;
+
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct ReplayBoSpec {
     pub(crate) handle: u32,
@@ -64,12 +68,16 @@ pub(crate) fn submit_replay_frame_visible(
     if !apply_patches(&backing, base_patches) || !apply_patches(&backing, submit.patches) {
         return replay_failure(submit.batch_gpu);
     }
+    log_replay_artifact_scan(&backing, submit.batch_gpu);
     let ranges = ppgtt_ranges(&backing);
     let proof = super::gpgpu::submit_render_replay_probe(submit.batch_gpu, &ranges);
     log_probe_address("batch-start", submit.batch_gpu, &backing);
     log_probe_address("acthd", proof.acthd as u64, &backing);
     let bbaddr = ((proof.bbaddr_hi as u64) << 32) | proof.bbaddr_lo as u64;
     log_probe_address("bbaddr", bbaddr, &backing);
+    log_probe_address("bbaddr-bit0-clear", bbaddr & !1, &backing);
+    log_probe_address("bbaddr-page", bbaddr & !0xFFF, &backing);
+    log_replay_edge_probe(&backing, bbaddr);
     crate::log!(
         "intel/replay: frame seq={} batch_gpu=0x{:X} batch_start=0x{:X} flags=0x{:X} bo_count={} submitted={} retired={} fault8=0x{:08X} fault12=0x{:08X}\n",
         submit.seq,
@@ -168,11 +176,81 @@ fn apply_patches(backing: &[ReplayBoBacking], patches: &[ReplayPatch]) -> bool {
     true
 }
 
+fn log_replay_artifact_scan(backing: &[ReplayBoBacking], batch_gpu: u64) {
+    log_probe_address("pre-submit-batch-start", batch_gpu, backing);
+    let batch_page = batch_gpu & !0xFFF;
+    if batch_page != batch_gpu {
+        log_probe_address("pre-submit-batch-page", batch_page, backing);
+    }
+
+    let mut hits = 0usize;
+    for bo in backing {
+        let dword_count = bo.size / core::mem::size_of::<u32>();
+        let dwords = unsafe { core::slice::from_raw_parts(bo.virt as *const u32, dword_count) };
+        let mut index = 0usize;
+        while index + 2 < dwords.len() {
+            let word = unsafe { core::ptr::read_volatile(dwords.as_ptr().add(index)) };
+            if (word & MI_BATCH_BUFFER_START_MASK) == MI_BATCH_BUFFER_START_PREFIX {
+                let lo = unsafe { core::ptr::read_volatile(dwords.as_ptr().add(index + 1)) };
+                let hi = unsafe { core::ptr::read_volatile(dwords.as_ptr().add(index + 2)) };
+                let target = ((hi as u64) << 32) | lo as u64;
+                let target_clear = target & !1;
+                let resolved = resolve_gpu(target, backing).is_some();
+                let resolved_clear = resolve_gpu(target_clear, backing).is_some();
+                crate::log!(
+                    "intel/replay: bbs-scan hit={} src_handle={} src_gpu=0x{:X} src_off=0x{:X} cmd=0x{:08X} target=0x{:X} target_clear=0x{:X} resolved={} resolved_clear={}\n",
+                    hits,
+                    bo.handle,
+                    bo.gpu_va + (index * core::mem::size_of::<u32>()) as u64,
+                    index * core::mem::size_of::<u32>(),
+                    word,
+                    target,
+                    target_clear,
+                    resolved as u8,
+                    resolved_clear as u8,
+                );
+                hits += 1;
+                if hits >= REPLAY_SCAN_MAX_HITS {
+                    crate::log!(
+                        "intel/replay: bbs-scan truncated max_hits={} note=pre-submit-patched-artifact\n",
+                        REPLAY_SCAN_MAX_HITS,
+                    );
+                    return;
+                }
+            }
+            index += 1;
+        }
+    }
+    crate::log!(
+        "intel/replay: bbs-scan done hits={} note=pre-submit-patched-artifact\n",
+        hits,
+    );
+}
+
+fn log_replay_edge_probe(backing: &[ReplayBoBacking], bbaddr: u64) {
+    for bo in backing {
+        let bo_end = bo.gpu_va.saturating_add(bo.size as u64);
+        if bbaddr == bo_end || (bbaddr & !1) == bo_end || (bbaddr & !0xFFF) == bo_end {
+            let probe_off = bo.size.saturating_sub(0x40);
+            let dwords = read_probe_dwords(bo, probe_off);
+            crate::log!(
+                "intel/replay: edge-probe bbaddr=0x{:X} handle={} bo_gpu=0x{:X} bo_end=0x{:X} probe_off=0x{:X} tail_dw=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
+                bbaddr,
+                bo.handle,
+                bo.gpu_va,
+                bo_end,
+                probe_off,
+                dwords[0],
+                dwords[1],
+                dwords[2],
+                dwords[3],
+            );
+        }
+    }
+}
+
 fn log_probe_address(label: &'static str, gpu: u64, backing: &[ReplayBoBacking]) {
-    let Some(bo) = backing
-        .iter()
-        .find(|bo| gpu >= bo.gpu_va && gpu < bo.gpu_va.saturating_add(bo.size as u64))
-    else {
+    let Some(bo) = resolve_gpu(gpu, backing) else {
         crate::log!("intel/replay: probe label={} gpu=0x{:X} resolved=0\n", label, gpu,);
         return;
     };
@@ -191,6 +269,12 @@ fn log_probe_address(label: &'static str, gpu: u64, backing: &[ReplayBoBacking])
         dwords[2],
         dwords[3],
     );
+}
+
+fn resolve_gpu(gpu: u64, backing: &[ReplayBoBacking]) -> Option<&ReplayBoBacking> {
+    backing
+        .iter()
+        .find(|bo| gpu >= bo.gpu_va && gpu < bo.gpu_va.saturating_add(bo.size as u64))
 }
 
 fn read_probe_dwords(bo: &ReplayBoBacking, off: usize) -> [u32; 4] {
