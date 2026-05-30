@@ -41,6 +41,8 @@ DMC_FW_HOST_PATH ?= /lib/firmware/i915/adls_dmc_ver2_01.bin.zst
 DMC_FW_ISO_REL_PATH ?= EFI/BOOT/adls_dmc_ver2_01.bin
 HUC_FW_HOST_PATH ?= /lib/firmware/i915/tgl_huc.bin.zst
 HUC_FW_ISO_REL_PATH ?= EFI/BOOT/tgl_huc.bin
+INTEL_REPLAY_ROT_TRI_SRC_DIR ?= .codex_tmp/intel_userland_oracle/adapterlibgfx-rotating-visible-intel
+INTEL_REPLAY_ROT_TRI_ISO_REL_PATH ?= EFI/BOOT/intel_replay_rotating_triangle.tar
 QEMU_RUNNER := tools/qemu/run.sh
 QEMU_BIN ?= qemu-system-x86_64
 QEMU_UEFI_FIRMWARE = $(OVMF_BUNDLE_PATH)
@@ -157,7 +159,28 @@ baremetal-reboot-log:
 	python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('',7777)); exec(\"while True:\n d,a=s.recvfrom(2048)\n if d==b'probe': s.sendto(b'ack',(a[0],7777)); break\")" &
 	@TRUEOS_BAREMETAL_LOG_HOST="$(BAREMETAL_LOG_HOST)" TRUEOS_BAREMETAL_LOG_PORT="$(BAREMETAL_LOG_PORT)" TRUEOS_BAREMETAL_LOG_DELAY="$(BAREMETAL_LOG_DELAY)" TRUEOS_BAREMETAL_LOG_DIR="$(BAREMETAL_LOG_DIR)" "$(BAREMETAL_LOG_DRAIN)" start
 
-iso: baremetal-reboot-log artifacts images limine
+$(ISO_DIR)/$(INTEL_REPLAY_ROT_TRI_ISO_REL_PATH):
+	@if [ -d "$(INTEL_REPLAY_ROT_TRI_SRC_DIR)" ]; then \
+		mkdir -p "$$(dirname "$@")"; \
+		tar -C "$(INTEL_REPLAY_ROT_TRI_SRC_DIR)" -cf "$@" \
+			replay_manifest.json \
+			dumps/002584_pre_exec_full_object_handle_7_off_0x0_len_0x200000.bin \
+			dumps/002587_pre_exec_handle_10_off_0x0_len_0x1000.bin \
+			dumps/002589_pre_exec_handle_14_off_0x0_len_0x8000000.bin \
+			dumps/002591_pre_exec_handle_2_off_0x0_len_0x200000.bin \
+			dumps/002593_pre_exec_handle_5_off_0x0_len_0x200000.bin \
+			dumps/002595_pre_exec_handle_13_off_0x0_len_0x800000.bin \
+			dumps/002597_pre_exec_handle_4_off_0x0_len_0x200000.bin \
+			dumps/002599_pre_exec_handle_6_off_0x0_len_0x200000.bin \
+			dumps/002601_pre_exec_handle_3_off_0x0_len_0x200000.bin \
+			dumps/002603_pre_exec_handle_1_off_0x0_len_0x200000.bin \
+			dumps/002605_pre_exec_handle_11_off_0x0_len_0x200000.bin \
+			dumps/002607_pre_exec_handle_8_off_0x42000_len_0x2000.bin; \
+	else \
+		echo "iso: skipping Intel replay artifact, missing $(INTEL_REPLAY_ROT_TRI_SRC_DIR)"; \
+	fi
+
+iso: baremetal-reboot-log artifacts images limine $(ISO_DIR)/$(INTEL_REPLAY_ROT_TRI_ISO_REL_PATH)
 	rm -rf $(ISO_BOOT_DIR)
 	rm -f $(ISO_PATH)
 	mkdir -p $(ISO_BOOT_DIR)
@@ -203,6 +226,10 @@ iso: baremetal-reboot-log artifacts images limine
 		mkdir -p $(ISO_BOOT_DIR)/$(dir $(HUC_FW_ISO_REL_PATH)); \
 		cp "$(ISO_DIR)/EFI/BOOT/$$(basename "$(HUC_FW_ISO_REL_PATH)")" "$(ISO_BOOT_DIR)/$(HUC_FW_ISO_REL_PATH)"; \
 	fi
+	@if [ -f "$(ISO_DIR)/$(INTEL_REPLAY_ROT_TRI_ISO_REL_PATH)" ]; then \
+		mkdir -p $(ISO_BOOT_DIR)/$(dir $(INTEL_REPLAY_ROT_TRI_ISO_REL_PATH)); \
+		cp "$(ISO_DIR)/$(INTEL_REPLAY_ROT_TRI_ISO_REL_PATH)" "$(ISO_BOOT_DIR)/$(INTEL_REPLAY_ROT_TRI_ISO_REL_PATH)"; \
+	fi
 	cp "$(LIMINE_CFG)" "$(LIMINE_CFG_GENERATED)"
 	@if [ -f "$(ISO_BOOT_DIR)/$(DMC_FW_ISO_REL_PATH)" ]; then \
 		printf '%s\n%s\n' \
@@ -214,6 +241,12 @@ iso: baremetal-reboot-log artifacts images limine
 		printf '%s\n%s\n' \
 			"module_path: boot():/$(HUC_FW_ISO_REL_PATH)" \
 			"module_string: trueos.fw.huc.candidate.tgl" \
+			>> "$(LIMINE_CFG_GENERATED)"; \
+	fi
+	@if [ -f "$(ISO_BOOT_DIR)/$(INTEL_REPLAY_ROT_TRI_ISO_REL_PATH)" ]; then \
+		printf '%s\n%s\n' \
+			"module_path: boot():/$(INTEL_REPLAY_ROT_TRI_ISO_REL_PATH)" \
+			"module_string: trueos.intel.replay.rotating_triangle" \
 			>> "$(LIMINE_CFG_GENERATED)"; \
 	fi
 	printf '%s\n%s\n' \
