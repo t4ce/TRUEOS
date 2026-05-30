@@ -31,8 +31,7 @@ pub(crate) use mandelbrot::{
     submit_gpgpu_primary_scanout_chunkstamp704,
     submit_gpgpu_primary_scanout_chunkstamp704_unrolled,
     submit_gpgpu_primary_scanout_fillrow_linear16, submit_gpgpu_primary_scanout_row2560_simd16,
-    submit_gpgpu_primary_scanout_rowburst1280,
-    submit_gpgpu_primary_scanout_walkrow16,
+    submit_gpgpu_primary_scanout_rowburst1280, submit_gpgpu_primary_scanout_walkrow16,
 };
 pub(crate) use matmul::{
     log_gpgpu_t63_first_tile_output_detail_once, stage_gpgpu_one_tile_record_probe,
@@ -590,8 +589,12 @@ pub(crate) struct RenderReplayProof {
     pub(crate) head: u32,
     pub(crate) tail: u32,
     pub(crate) acthd: u32,
+    pub(crate) bbaddr_lo: u32,
+    pub(crate) bbaddr_hi: u32,
     pub(crate) ipehr: u32,
     pub(crate) eir: u32,
+    pub(crate) fault8: u32,
+    pub(crate) fault12: u32,
 }
 
 pub(crate) fn submit_render_replay_probe(
@@ -681,7 +684,7 @@ pub(crate) fn submit_render_replay_probe(
     let pre_marker = read_result_dword(warm, RESULT_SLOT_RENDER_REPLAY_PRE_DWORD);
     let post_marker = read_result_dword(warm, RESULT_SLOT_RENDER_REPLAY_POST_DWORD);
     crate::log!(
-        "intel/replay: render-replay-submit submitted=1 retired={} pml4=0x{:X} table_pages={} batch_gpu=0x{:X} pre=0x{:08X} post=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipehr=0x{:08X} eir=0x{:08X}\n",
+        "intel/replay: render-replay-submit submitted=1 retired={} pml4=0x{:X} table_pages={} batch_gpu=0x{:X} pre=0x{:08X} post=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} bbaddr=0x{:08X}:0x{:08X} ipehr=0x{:08X} eir=0x{:08X} fault8=0x{:08X} fault12=0x{:08X}\n",
         retired as u8,
         ppgtt.pml4_phys(),
         ppgtt.table_page_count(),
@@ -691,8 +694,12 @@ pub(crate) fn submit_render_replay_probe(
         crate::intel::mmio_read(dev, RCS_RING_HEAD),
         crate::intel::mmio_read(dev, RCS_RING_TAIL),
         crate::intel::mmio_read(dev, RCS_RING_ACTHD),
+        crate::intel::mmio_read(dev, RCS_RING_BBADDR_UDW),
+        crate::intel::mmio_read(dev, RCS_RING_BBADDR),
         crate::intel::mmio_read(dev, RCS_RING_IPEHR),
         crate::intel::mmio_read(dev, RCS_RING_EIR),
+        crate::intel::mmio_read(dev, GEN8_RING_FAULT_REG),
+        crate::intel::mmio_read(dev, GEN12_RING_FAULT_REG),
     );
     RenderReplayProof {
         submitted: true,
@@ -705,8 +712,12 @@ pub(crate) fn submit_render_replay_probe(
         head: crate::intel::mmio_read(dev, RCS_RING_HEAD),
         tail: crate::intel::mmio_read(dev, RCS_RING_TAIL),
         acthd: crate::intel::mmio_read(dev, RCS_RING_ACTHD),
+        bbaddr_lo: crate::intel::mmio_read(dev, RCS_RING_BBADDR),
+        bbaddr_hi: crate::intel::mmio_read(dev, RCS_RING_BBADDR_UDW),
         ipehr: crate::intel::mmio_read(dev, RCS_RING_IPEHR),
         eir: crate::intel::mmio_read(dev, RCS_RING_EIR),
+        fault8: crate::intel::mmio_read(dev, GEN8_RING_FAULT_REG),
+        fault12: crate::intel::mmio_read(dev, GEN12_RING_FAULT_REG),
     }
 }
 
@@ -722,8 +733,12 @@ fn render_replay_failure(batch_gpu: u64) -> RenderReplayProof {
         head: 0,
         tail: 0,
         acthd: 0,
+        bbaddr_lo: 0,
+        bbaddr_hi: 0,
         ipehr: 0,
         eir: 0,
+        fault8: 0,
+        fault12: 0,
     }
 }
 

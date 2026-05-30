@@ -13,6 +13,7 @@ pub(crate) mod hw_vid;
 pub(crate) mod medbak;
 pub(crate) mod ppgtt;
 pub(crate) mod replay;
+pub(crate) mod replay_rotating_triangle;
 pub(crate) mod state;
 pub(crate) mod stats;
 mod uc_fw;
@@ -1101,6 +1102,19 @@ pub(crate) fn submit_render_replay_probe(
     captured_ranges: &[self::ppgtt::PpgttRange],
 ) -> self::gpgpu::RenderReplayProof {
     self::gpgpu::submit_render_replay_probe(captured_batch_gpu, captured_ranges)
+}
+
+pub(crate) fn submit_rotating_triangle_replay_frame(
+    frame_index: usize,
+) -> self::gpgpu::RenderReplayProof {
+    let submits = self::replay_rotating_triangle::ROTATING_TRIANGLE_SUBMITS;
+    let submit = submits.get(frame_index).copied().unwrap_or(submits[0]);
+    self::replay::submit_replay_frame_visible(
+        self::replay_rotating_triangle::ROTATING_TRIANGLE_BO_SPECS,
+        self::replay_rotating_triangle::ROTATING_TRIANGLE_BASE_PATCHES,
+        submit,
+        Some(self::replay_rotating_triangle::ROTATING_TRIANGLE_PRESENT),
+    )
 }
 
 pub(crate) fn submit_gpgpu_t66_accum32_hi_live96_partial_matvec_probe(

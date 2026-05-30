@@ -20,6 +20,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
         Some("walkrow") => walkrow(io, &mut args),
         Some("tilewalker") => tilewalker(io, &mut args),
         Some("rowburst") => rowburst(io, &mut args),
+        Some("replay") => replay(io, &mut args),
         Some(row) => match parse_u32(Some(row)) {
             Some(row) => rowpaint(io, row, &mut args),
             None => usage(io),
@@ -32,7 +33,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "gpgpu: usage `gpgpu [row=1..1440] [rows=5]` | `gpgpu status` | debug: `gpgpu walkrow ...` `gpgpu tilewalker ...` `gpgpu rowburst ...`",
+        "gpgpu: usage `gpgpu [row=1..1440] [rows=5]` | `gpgpu status` | debug: `gpgpu walkrow ...` `gpgpu tilewalker ...` `gpgpu rowburst ...` `gpgpu replay [0..2]`",
     );
 }
 
@@ -130,17 +131,47 @@ fn rowpaint(
 
 fn next_fill_color() -> u32 {
     const COLORS: [u32; 8] = [
-        0x00FF00,
-        0xFF00FF,
-        0x00FFFF,
-        0xFF0000,
-        0x0000FF,
-        0xFFFF00,
-        0xFFFFFF,
-        0x202020,
+        0x00FF00, 0xFF00FF, 0x00FFFF, 0xFF0000, 0x0000FF, 0xFFFF00, 0xFFFFFF, 0x202020,
     ];
     let index = GPGPU_FILL_COLOR_INDEX.fetch_add(1, Ordering::Relaxed) as usize;
     COLORS[index % COLORS.len()]
+}
+
+fn replay(io: &'static dyn ShellBackend2, args: &mut core::str::SplitWhitespace<'_>) {
+    let frame = parse_u32(args.next()).unwrap_or(0).min(2) as usize;
+    print_shell_line(
+        io,
+        format!(
+            "gpgpu: replay rotating-triangle frame={} allocating captured BO set (~154 MiB)",
+            frame,
+        )
+        .as_str(),
+    );
+    let proof = crate::intel::submit_rotating_triangle_replay_frame(frame);
+    print_shell_line(
+        io,
+        format!(
+            "gpgpu: replay frame={} submitted={} retired={} batch_gpu=0x{:X} pml4=0x{:X} table_pages={} pre=0x{:08X} post=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} bbaddr=0x{:08X}:0x{:08X} ipehr=0x{:08X} eir=0x{:08X} fault8=0x{:08X} fault12=0x{:08X}",
+            frame,
+            proof.submitted as u8,
+            proof.retired as u8,
+            proof.batch_gpu,
+            proof.pml4_phys,
+            proof.table_pages,
+            proof.pre_marker,
+            proof.post_marker,
+            proof.head,
+            proof.tail,
+            proof.acthd,
+            proof.bbaddr_hi,
+            proof.bbaddr_lo,
+            proof.ipehr,
+            proof.eir,
+            proof.fault8,
+            proof.fault12,
+        )
+        .as_str(),
+    );
 }
 
 fn walkrow(io: &'static dyn ShellBackend2, args: &mut core::str::SplitWhitespace<'_>) {
