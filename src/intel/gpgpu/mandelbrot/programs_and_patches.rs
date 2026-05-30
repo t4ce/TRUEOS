@@ -48,11 +48,9 @@ fn upload_primary_scanout_row2560_simd16_artifact(
     warm: RenderWarmState,
     address_base: u32,
     color: u32,
-    variant: u32,
 ) -> bool {
-    let mut words =
+    let words =
         trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS;
-    patch_primary_scanout_row2560_simd16_variant(&mut words, color, variant);
     let program_bytes = core::mem::size_of_val(&words);
     if GPGPU_EU_KERNEL_OFFSET_BYTES
         .checked_add(program_bytes)
@@ -93,71 +91,6 @@ fn upload_primary_scanout_row2560_simd16_artifact(
         && uploaded[trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_BW_COLOR_DWORD] == color
         && uploaded[0] == words[0]
         && uploaded[words.len() - 1] == words[words.len() - 1]
-}
-
-fn patch_primary_scanout_row2560_simd16_variant(
-    words: &mut [u32; trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_BW_WORD_DWORDS],
-    color: u32,
-    variant: u32,
-) {
-    let base = trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_BW_COLOR_DWORD - 7;
-    match variant % 5 {
-        0 => {
-            // sub g22,g20,g20; or g22,g22,color
-            words[base] = 0x00040140;
-            words[base + 1] = 0x16050660;
-            words[base + 2] = 0x06461405;
-            words[base + 3] = 0x02461405;
-            words[base + 4] = 0x00040166;
-            words[base + 5] = 0x16058220;
-            words[base + 6] = 0x02461605;
-            words[base + 7] = color;
-        }
-        1 => {
-            // mov g22,color; nop
-            words[base] = 0x80030061;
-            words[base + 1] = 0x16054660;
-            words[base + 2] = 0x00000000;
-            words[base + 3] = color;
-            words[base + 4] = 0x80030101;
-            words[base + 5] = 0x00000000;
-            words[base + 6] = 0x00000000;
-            words[base + 7] = 0x00000000;
-        }
-        2 => {
-            // mov g22,color; or g22,g22,0
-            words[base] = 0x80030061;
-            words[base + 1] = 0x16054660;
-            words[base + 2] = 0x00000000;
-            words[base + 3] = color;
-            words[base + 4] = 0x00040166;
-            words[base + 5] = 0x16058220;
-            words[base + 6] = 0x02461605;
-            words[base + 7] = 0x00000000;
-        }
-        3 => {
-            // sub g22,g20,g20; add g22,g22,color
-            words[base] = 0x00040140;
-            words[base + 1] = 0x16050660;
-            words[base + 2] = 0x06461405;
-            words[base + 3] = 0x02461405;
-            words[base + 4] = 0x00040140;
-            words[base + 5] = 0x16058660;
-            words[base + 6] = 0x06461605;
-            words[base + 7] = color;
-        }
-        _ => {
-            // mov g22,color; add g22,g22,0
-            words[base] = 0x80030061;
-            words[base + 1] = 0x16054660;
-            words[base + 2] = 0x00000000;
-            words[base + 3] = color;
-            words[base + 4] = 0x00040140;
-            words[base + 5] = 0x16058660;
-            words[base + 6] = 0x06461605;
-            words[base + 7] = 0x00000000;
-        }
-    }
 }
 
 fn upload_primary_scanout_groupid_line1280_rows_artifact(

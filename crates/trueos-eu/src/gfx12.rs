@@ -593,10 +593,10 @@ pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_LANES: usize = 16;
 pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_SENDS: usize =
     PRIMARY_SCANOUT_ROW2560_SIMD16_BW_PIXELS / PRIMARY_SCANOUT_ROW2560_SIMD16_BW_LANES;
 pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_WORD_DWORDS: usize =
-    28 + 4 + ((PRIMARY_SCANOUT_ROW2560_SIMD16_BW_SENDS - 1) * 8) + 8;
+    24 + 4 + ((PRIMARY_SCANOUT_ROW2560_SIMD16_BW_SENDS - 1) * 8) + 8;
 pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_ADDRESS_BASE_DWORD: usize = 19;
-pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_COLOR_DWORD: usize = 27;
-pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_STORE_SEND_DWORD: usize = 28;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_COLOR_DWORD: usize = 23;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_STORE_SEND_DWORD: usize = 24;
 pub const PRIMARY_SCANOUT_LINE8_SIMD8_BW_PROGRAM_NAME: &str =
     "gfx12-primary-scanout-line8-simd8-bw-hdc1-bti1-offset-store-then-ts-eot";
 pub const PRIMARY_SCANOUT_LINE8_SIMD8_BW_LANES: usize = 8;
@@ -1798,14 +1798,10 @@ const fn primary_scanout_row2560_simd16_bw_words()
     words[17] = 0x14058660;
     words[18] = 0x06461405;
     words[19] = 0x00000000;
-    words[20] = 0x00040140;
-    words[21] = 0x16050660;
-    words[22] = 0x06461405;
-    words[23] = 0x02461405;
-    words[24] = 0x00040166;
-    words[25] = 0x16058220;
-    words[26] = 0x02461605;
-    words[27] = 0x00FF00FF;
+    words[20] = 0x80030061;
+    words[21] = 0x16054660;
+    words[22] = 0x00000000;
+    words[23] = 0x00FF00FF;
 
     let mut cursor = PRIMARY_SCANOUT_ROW2560_SIMD16_BW_STORE_SEND_DWORD;
     let mut send = 0usize;

@@ -31,7 +31,7 @@ pub(crate) use mandelbrot::{
     submit_gpgpu_primary_scanout_chunkstamp704,
     submit_gpgpu_primary_scanout_chunkstamp704_unrolled,
     submit_gpgpu_primary_scanout_fillrow_linear16, submit_gpgpu_primary_scanout_row2560_simd16,
-    submit_gpgpu_primary_scanout_row2560_simd16_variant, submit_gpgpu_primary_scanout_rowburst1280,
+    submit_gpgpu_primary_scanout_rowburst1280,
     submit_gpgpu_primary_scanout_walkrow16,
 };
 pub(crate) use matmul::{
@@ -190,6 +190,8 @@ const GRDOM_RENDER: u32 = 1 << 1;
 const MI_BATCH_BUFFER_START_GEN8: u32 = (0x31 << 23) | 1;
 const MI_BATCH_GTT: u32 = 2 << 6;
 const MI_BATCH_PPGTT: u32 = 1 << 8;
+const MI_STORE_DWORD_IMM_GEN4_LEN_DW4_PPGTT: u32 = (0x20 << 23) | (4 - 2);
+const MI_ARB_CHECK: u32 = 0x0280_0000;
 const MI_LOAD_REGISTER_IMM: u32 = 0x1100_0000;
 const MI_LRI_CS_MMIO: u32 = 1 << 19;
 const MI_LRI_FORCE_POSTED: u32 = 1 << 12;
@@ -238,6 +240,10 @@ const RESULT_SLOT_GPGPU_PREFLIGHT_LANES_DWORD: usize = 20;
 const RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD: usize = 21;
 const RESULT_SLOT_GPGPU_EU_C_STORE_DWORD: usize = 22;
 const GPGPU_WALKER_IPEHR_LEN13: u32 = (3 << 29) | (2 << 27) | (1 << 24) | (5 << 16) | 13;
+const RENDER_REPLAY_PRE_MARKER: u32 = 0xC0DE_7A01;
+const RENDER_REPLAY_POST_MARKER: u32 = 0xC0DE_7A02;
+const RESULT_SLOT_RENDER_REPLAY_PRE_DWORD: usize = 0;
+const RESULT_SLOT_RENDER_REPLAY_POST_DWORD: usize = 1;
 
 #[derive(Copy, Clone, Debug)]
 struct RenderWarmState {
@@ -570,6 +576,155 @@ struct WarmRenderBatchSubmitProof {
     completed: bool,
     dispatch_before: u64,
     dispatch_after: u64,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct RenderReplayProof {
+    pub(crate) submitted: bool,
+    pub(crate) retired: bool,
+    pub(crate) pml4_phys: u64,
+    pub(crate) table_pages: usize,
+    pub(crate) batch_gpu: u64,
+    pub(crate) pre_marker: u32,
+    pub(crate) post_marker: u32,
+    pub(crate) head: u32,
+    pub(crate) tail: u32,
+    pub(crate) acthd: u32,
+    pub(crate) ipehr: u32,
+    pub(crate) eir: u32,
+}
+
+pub(crate) fn submit_render_replay_probe(
+    captured_batch_gpu: u64,
+    captured_ranges: &[crate::intel::ppgtt::PpgttRange],
+) -> RenderReplayProof {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return render_replay_failure(captured_batch_gpu);
+    };
+    let warm = warm_once(dev);
+    if warm.ring_len == 0 || warm.context_len == 0 || warm.result_len < 16 {
+        return render_replay_failure(captured_batch_gpu);
+    }
+    if !forcewake_render_acquire(warm) || !ensure_gpgpu_warm_buffers_mapped(dev, warm) {
+        return render_replay_failure(captured_batch_gpu);
+    }
+
+    unsafe {
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+        core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
+    }
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let mut ranges = alloc::vec::Vec::with_capacity(captured_ranges.len() + 3);
+    ranges.extend_from_slice(captured_ranges);
+    ranges.push(crate::intel::ppgtt::PpgttRange {
+        gpu: GPU_VA_RING_BASE,
+        phys: warm.ring_phys,
+        bytes: warm.ring_len,
+    });
+    ranges.push(crate::intel::ppgtt::PpgttRange {
+        gpu: GPU_VA_CONTEXT_BASE,
+        phys: warm.context_phys,
+        bytes: warm.context_len,
+    });
+    ranges.push(crate::intel::ppgtt::PpgttRange {
+        gpu: GPU_VA_RESULT_BASE,
+        phys: warm.result_phys,
+        bytes: warm.result_len,
+    });
+    let Some(ppgtt) = crate::intel::ppgtt::build_sparse_ppgtt_for_ranges(&ranges) else {
+        return render_replay_failure(captured_batch_gpu);
+    };
+
+    let ring_tail_bytes = build_ring_render_replay_ppgtt(warm, captured_batch_gpu);
+    let Some(ring_ctl) = ring_ctl_value(warm.ring_len) else {
+        return render_replay_failure(captured_batch_gpu);
+    };
+    if !init_gen12_lrc_context_image_with_ppgtt(
+        warm,
+        GPU_VA_RING_BASE as u32,
+        ring_tail_bytes as u32,
+        ring_ctl,
+        ppgtt.pml4_phys(),
+    ) {
+        return render_replay_failure(captured_batch_gpu);
+    }
+
+    let (context_desc_lo, context_desc_hi) = build_execlist_context_descriptor(GPU_VA_CONTEXT_BASE);
+    write_lrc_ring_tail(warm, ring_tail_bytes as u32);
+    crate::intel::mmio_write(
+        dev,
+        RCS_RING_MODE_GEN7,
+        masked_bit_enable(GFX_RUN_LIST_ENABLE | GEN11_GFX_DISABLE_LEGACY_MODE),
+    );
+    let ctx_ctl_after = rcs_ctx_control_value(false);
+    crate::intel::mmio_write(dev, RCS_RING_CONTEXT_CONTROL, ctx_ctl_after);
+    crate::intel::mmio_write(dev, RCS_RING_CONTEXT_CONTROL_REF, ctx_ctl_after);
+    crate::intel::mmio_write(dev, RCS_RING_MI_MODE, masked_bit_disable(RING_MI_MODE_STOP_RING));
+    crate::intel::mmio_write(dev, RCS_RING_HWS_PGA, (GPU_VA_CONTEXT_BASE & !0xFFF) as u32);
+    super::ggtt_invalidate(dev);
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    execlist_submit_port_push(dev, context_desc_lo, context_desc_hi, 0, 0);
+    crate::intel::mmio_write(dev, RCS_RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
+
+    let mut retired = false;
+    for _ in 0..262_144 {
+        if read_result_dword(warm, RESULT_SLOT_RENDER_REPLAY_POST_DWORD)
+            == RENDER_REPLAY_POST_MARKER
+        {
+            retired = true;
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+    let pre_marker = read_result_dword(warm, RESULT_SLOT_RENDER_REPLAY_PRE_DWORD);
+    let post_marker = read_result_dword(warm, RESULT_SLOT_RENDER_REPLAY_POST_DWORD);
+    crate::log!(
+        "intel/replay: render-replay-submit submitted=1 retired={} pml4=0x{:X} table_pages={} batch_gpu=0x{:X} pre=0x{:08X} post=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipehr=0x{:08X} eir=0x{:08X}\n",
+        retired as u8,
+        ppgtt.pml4_phys(),
+        ppgtt.table_page_count(),
+        captured_batch_gpu,
+        pre_marker,
+        post_marker,
+        crate::intel::mmio_read(dev, RCS_RING_HEAD),
+        crate::intel::mmio_read(dev, RCS_RING_TAIL),
+        crate::intel::mmio_read(dev, RCS_RING_ACTHD),
+        crate::intel::mmio_read(dev, RCS_RING_IPEHR),
+        crate::intel::mmio_read(dev, RCS_RING_EIR),
+    );
+    RenderReplayProof {
+        submitted: true,
+        retired,
+        pml4_phys: ppgtt.pml4_phys(),
+        table_pages: ppgtt.table_page_count(),
+        batch_gpu: captured_batch_gpu,
+        pre_marker,
+        post_marker,
+        head: crate::intel::mmio_read(dev, RCS_RING_HEAD),
+        tail: crate::intel::mmio_read(dev, RCS_RING_TAIL),
+        acthd: crate::intel::mmio_read(dev, RCS_RING_ACTHD),
+        ipehr: crate::intel::mmio_read(dev, RCS_RING_IPEHR),
+        eir: crate::intel::mmio_read(dev, RCS_RING_EIR),
+    }
+}
+
+fn render_replay_failure(batch_gpu: u64) -> RenderReplayProof {
+    RenderReplayProof {
+        submitted: false,
+        retired: false,
+        pml4_phys: 0,
+        table_pages: 0,
+        batch_gpu,
+        pre_marker: 0,
+        post_marker: 0,
+        head: 0,
+        tail: 0,
+        acthd: 0,
+        ipehr: 0,
+        eir: 0,
+    }
 }
 
 fn submit_warm_render_batch(
@@ -1098,6 +1253,33 @@ fn build_ring_batch_start(warm: RenderWarmState, batch_gpu_addr: u64) -> usize {
     BLT_RING_TAIL_BYTES
 }
 
+fn build_ring_render_replay_ppgtt(warm: RenderWarmState, batch_gpu_addr: u64) -> usize {
+    const RENDER_REPLAY_RING_DWORDS: usize = 13;
+    let dwords = unsafe {
+        core::slice::from_raw_parts_mut(warm.ring_virt as *mut u32, RENDER_REPLAY_RING_DWORDS)
+    };
+    let pre_gpu = GPU_VA_RESULT_BASE
+        + (RESULT_SLOT_RENDER_REPLAY_PRE_DWORD * core::mem::size_of::<u32>()) as u64;
+    let post_gpu = GPU_VA_RESULT_BASE
+        + (RESULT_SLOT_RENDER_REPLAY_POST_DWORD * core::mem::size_of::<u32>()) as u64;
+    dwords[0] = MI_STORE_DWORD_IMM_GEN4_LEN_DW4_PPGTT;
+    dwords[1] = pre_gpu as u32;
+    dwords[2] = (pre_gpu >> 32) as u32;
+    dwords[3] = RENDER_REPLAY_PRE_MARKER;
+    dwords[4] = MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_PPGTT;
+    dwords[5] = batch_gpu_addr as u32;
+    dwords[6] = (batch_gpu_addr >> 32) as u32;
+    dwords[7] = MI_STORE_DWORD_IMM_GEN4_LEN_DW4_PPGTT;
+    dwords[8] = post_gpu as u32;
+    dwords[9] = (post_gpu >> 32) as u32;
+    dwords[10] = RENDER_REPLAY_POST_MARKER;
+    dwords[11] = MI_ARB_CHECK;
+    dwords[12] = MI_NOOP;
+    let tail = RENDER_REPLAY_RING_DWORDS * core::mem::size_of::<u32>();
+    crate::intel::dma_flush(warm.ring_virt, tail);
+    tail
+}
+
 fn ring_ctl_value(size: usize) -> Option<u32> {
     let size = u32::try_from(size).ok()?;
     Some(size.checked_sub(4096)? | RING_VALID)
@@ -1197,6 +1379,16 @@ fn init_gen12_lrc_context_image(
     ring_tail: u32,
     ring_ctl: u32,
 ) -> bool {
+    init_gen12_lrc_context_image_with_ppgtt(warm, ring_start, ring_tail, ring_ctl, warm.ppgtt_phys)
+}
+
+fn init_gen12_lrc_context_image_with_ppgtt(
+    warm: RenderWarmState,
+    ring_start: u32,
+    ring_tail: u32,
+    ring_ctl: u32,
+    pml4_phys: u64,
+) -> bool {
     let total_dwords = warm.context_len / core::mem::size_of::<u32>();
     if total_dwords <= LRC_STATE_OFFSET_DWORDS {
         return false;
@@ -1269,13 +1461,13 @@ fn init_gen12_lrc_context_image(
     state[idx + 13] = 0;
     state[idx + 14] = 0x2274;
     state[idx + 15] = if GPGPU_USE_MINIMAL_PPGTT {
-        (warm.ppgtt_phys >> 32) as u32
+        (pml4_phys >> 32) as u32
     } else {
         0
     };
     state[idx + 16] = 0x2270;
     state[idx + 17] = if GPGPU_USE_MINIMAL_PPGTT {
-        warm.ppgtt_phys as u32
+        pml4_phys as u32
     } else {
         0
     };
