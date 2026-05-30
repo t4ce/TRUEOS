@@ -1,1 +1,0 @@
-sudo-rs: interactive authentication is required
