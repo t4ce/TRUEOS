@@ -267,14 +267,6 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16(
     row_one_based: u32,
     color: u32,
 ) -> crate::intel::GpgpuOneTileSentinelProof {
-    submit_gpgpu_primary_scanout_row2560_simd16_variant(row_one_based, color, 0)
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16_variant(
-    row_one_based: u32,
-    color: u32,
-    variant: u32,
-) -> crate::intel::GpgpuOneTileSentinelProof {
     const PIXELS: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_BW_PIXELS;
     const STORE_BYTES_PER_PIXEL: usize = core::mem::size_of::<u32>();
     let store_bytes = PIXELS * STORE_BYTES_PER_PIXEL;
@@ -318,7 +310,6 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16_variant(
         warm,
         row_offset as u32,
         color,
-        variant,
     ) {
         return gpgpu_one_tile_sentinel_failure("row2560-simd16-program-upload", program, row_gpu);
     }
@@ -380,7 +371,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16_variant(
     };
 
     crate::log!(
-        "intel/gpgpu: row2560-simd16 row={} y={} width={} row_offset=0x{:X} row_gpu=0x{:X} target_gpu=0x{:X} pitch_bytes={} color=0x{:08X} variant={} store_bytes={} display_notified={} finished={} reason={} finish_marker=0x{:08X} dispatch_delta={} expected_dispatch=16 program_source={} batch_bytes=0x{:X}\n",
+        "intel/gpgpu: row2560-simd16 row={} y={} width={} row_offset=0x{:X} row_gpu=0x{:X} target_gpu=0x{:X} pitch_bytes={} color=0x{:08X} store_bytes={} display_notified={} finished={} reason={} finish_marker=0x{:08X} dispatch_delta={} expected_dispatch=16 program_source={} batch_bytes=0x{:X}\n",
         row_one_based,
         y,
         target.width,
@@ -389,7 +380,6 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16_variant(
         target.gpu,
         target.pitch_bytes,
         color,
-        variant % 5,
         store_bytes,
         display_notified as u8,
         finished as u8,

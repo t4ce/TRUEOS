@@ -20,7 +20,6 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
         Some("walkrow") => walkrow(io, &mut args),
         Some("tilewalker") => tilewalker(io, &mut args),
         Some("rowburst") => rowburst(io, &mut args),
-        Some("variants") => variants(io, &mut args),
         Some(row) => match parse_u32(Some(row)) {
             Some(row) => rowpaint(io, row, &mut args),
             None => usage(io),
@@ -33,7 +32,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "gpgpu: usage `gpgpu [row=1..1440] [rows=5]` | `gpgpu variants ROW` | `gpgpu status` | debug: `gpgpu walkrow ...` `gpgpu tilewalker ...` `gpgpu rowburst ...`",
+        "gpgpu: usage `gpgpu [row=1..1440] [rows=5]` | `gpgpu status` | debug: `gpgpu walkrow ...` `gpgpu tilewalker ...` `gpgpu rowburst ...`",
     );
 }
 
@@ -120,92 +119,6 @@ fn rowpaint(
             proof.program_name,
             proof.output_gpu,
             proof.sentinel,
-            proof.dispatch_delta,
-            proof.finish_marker,
-            proof.expected_finish_marker,
-            proof.batch_bytes,
-        )
-        .as_str(),
-    );
-}
-
-fn variants(io: &'static dyn ShellBackend2, args: &mut core::str::SplitWhitespace<'_>) {
-    let Some(start_row) = parse_u32(args.next()) else {
-        print_shell_line(io, "gpgpu: variants usage `gpgpu variants ROW`");
-        return;
-    };
-    if !(1..=1440).contains(&start_row) {
-        print_shell_line(io, "gpgpu: variants row must be in 1..=1440");
-        return;
-    }
-
-    const VARIANTS: u32 = 5;
-    const ROWS_PER_VARIANT: u32 = 5;
-    const GAP_ROWS: u32 = 2;
-    const COLORS: [u32; VARIANTS as usize] = [
-        0x00FF00,
-        0xFF00FF,
-        0x00FFFF,
-        0xFFFF00,
-        0x0000FF,
-    ];
-    let (width, height) = crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
-    let start_tick = embassy_time_driver::now();
-    let mut submits = 0u32;
-    let mut ok = 0u32;
-    let mut last_row = start_row;
-    let mut last_proof = None;
-
-    let mut variant = 0u32;
-    while variant < VARIANTS {
-        let band_row = start_row + variant * (ROWS_PER_VARIANT + GAP_ROWS);
-        let mut row_index = 0u32;
-        while row_index < ROWS_PER_VARIANT {
-            let row = band_row + row_index;
-            if row > height {
-                break;
-            }
-            let proof = crate::intel::submit_gpgpu_primary_scanout_row2560_simd16_variant(
-                row,
-                COLORS[variant as usize],
-                variant,
-            );
-            submits = submits.saturating_add(1);
-            if proof.readback_ok {
-                ok = ok.saturating_add(1);
-            }
-            last_proof = Some(proof);
-            last_row = row;
-            row_index += 1;
-        }
-        variant += 1;
-    }
-
-    let elapsed_ticks = embassy_time_driver::now().saturating_sub(start_tick);
-    let elapsed_ms = ticks_to_ms(elapsed_ticks);
-    let Some(proof) = last_proof else {
-        print_shell_line(io, "gpgpu: variants no rows submitted");
-        return;
-    };
-    print_shell_line(
-        io,
-        format!(
-            "gpgpu: variants start={} variants={} rows_per_variant={} gap_rows={} width={} submits={} ok={}/{} elapsed_ms={} elapsed_ticks={} tick_hz={} last_row={} finished={} reason={} impl=row2560-simd16-variant-sweep program={} dispatch_delta={} finish=0x{:08X}/0x{:08X} batch_bytes=0x{:X}",
-            start_row,
-            VARIANTS,
-            ROWS_PER_VARIANT,
-            GAP_ROWS,
-            width,
-            submits,
-            ok,
-            submits,
-            elapsed_ms,
-            elapsed_ticks,
-            embassy_time_driver::TICK_HZ,
-            last_row,
-            proof.finished as u8,
-            proof.reason,
-            proof.program_name,
             proof.dispatch_delta,
             proof.finish_marker,
             proof.expected_finish_marker,

@@ -11,6 +11,8 @@ mod hw_cursor;
 pub(crate) mod hw_pic;
 pub(crate) mod hw_vid;
 pub(crate) mod medbak;
+pub(crate) mod ppgtt;
+pub(crate) mod replay;
 pub(crate) mod state;
 pub(crate) mod stats;
 mod uc_fw;
@@ -653,18 +655,6 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16(
     self::gpgpu::submit_gpgpu_primary_scanout_row2560_simd16(row_one_based, color)
 }
 
-pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16_variant(
-    row_one_based: u32,
-    color: u32,
-    variant: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_row2560_simd16_variant(
-        row_one_based,
-        color,
-        variant,
-    )
-}
-
 pub(crate) fn submit_gpgpu_primary_scanout_rowburst1280(
     row_one_based: u32,
     rows: u32,
@@ -1104,6 +1094,13 @@ pub(crate) fn submit_gpgpu_windowed_accum16_partial_matvec_trusted_no_readback(
         row_count,
         live_k_dim,
     )
+}
+
+pub(crate) fn submit_render_replay_probe(
+    captured_batch_gpu: u64,
+    captured_ranges: &[self::ppgtt::PpgttRange],
+) -> self::gpgpu::RenderReplayProof {
+    self::gpgpu::submit_render_replay_probe(captured_batch_gpu, captured_ranges)
 }
 
 pub(crate) fn submit_gpgpu_t66_accum32_hi_live96_partial_matvec_probe(
