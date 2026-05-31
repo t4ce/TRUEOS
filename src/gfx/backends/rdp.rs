@@ -225,24 +225,28 @@ impl RdpGfxBackend {
     }
 
     fn clear_rgba(&mut self, rgba: trueos_gfx_core::Rgba8) {
+        let seq = self.begin_frame(
+            (u32::from(rgba.r) << 16) | (u32::from(rgba.g) << 8) | u32::from(rgba.b),
+            !matches!(self.target, RenderTarget::Screen),
+        );
         match self.target {
             RenderTarget::Screen => {
-                let rgb = (u32::from(rgba.r) << 16) | (u32::from(rgba.g) << 8) | u32::from(rgba.b);
-                self.begin_frame(rgb, false);
+                crate::r::rdp::publish_clear_color_rgba(
+                    seq,
+                    u32::from(rgba.r),
+                    u32::from(rgba.g),
+                    u32::from(rgba.b),
+                    255,
+                );
             }
-            RenderTarget::Image(id) => {
-                let Some(image) = self.image_mut(id) else {
-                    return;
-                };
-                for px in image.rgba.chunks_exact_mut(4) {
-                    px[0] = rgba.r;
-                    px[1] = rgba.g;
-                    px[2] = rgba.b;
-                    px[3] = rgba.a;
-                }
-                if let Some(image) = self.image(id) {
-                    self.publish_image(id, None, image.rgba.as_slice());
-                }
+            RenderTarget::Image(_) => {
+                crate::r::rdp::publish_clear_color_rgba(
+                    seq,
+                    u32::from(rgba.r),
+                    u32::from(rgba.g),
+                    u32::from(rgba.b),
+                    u32::from(rgba.a),
+                );
             }
         }
     }

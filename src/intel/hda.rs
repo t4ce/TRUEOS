@@ -18,6 +18,24 @@ use core::{
 };
 use spin::Mutex;
 
+macro_rules! hda_debug {
+    ($fmt:literal $(, $arg:expr)* $(,)?) => {
+        crate::log_debug!(target: "hda"; concat!($fmt, "\n") $(, $arg)*)
+    };
+}
+
+macro_rules! hda_info {
+    ($fmt:literal $(, $arg:expr)* $(,)?) => {
+        crate::log_info!(target: "hda"; concat!($fmt, "\n") $(, $arg)*)
+    };
+}
+
+macro_rules! hda_warn {
+    ($fmt:literal $(, $arg:expr)* $(,)?) => {
+        crate::log_warn!(target: "hda"; concat!($fmt, "\n") $(, $arg)*)
+    };
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Register Offsets — Intel HDA Spec §3
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -369,8 +387,8 @@ impl HdaController {
 
     /// Initialize the HDA controller from a PCI device
     pub fn init(dev: &crate::pci::PciDevice) -> Result<Self, &'static str> {
-        log::info!("[HDA] Initializing Intel HDA controller...");
-        log::info!(
+        hda_info!("[HDA] Initializing Intel HDA controller...");
+        hda_info!(
             "[HDA]   PCI {:02X}:{:02X}.{} {:04X}:{:04X}",
             dev.bus,
             dev.slot,
@@ -384,14 +402,14 @@ impl HdaController {
 
         // Get BAR0 (MMIO base)
         let bar0_phys = dev.bar_address(0).ok_or("HDA: no BAR0")?;
-        log::info!("[HDA]   BAR0 phys = {:#010X}", bar0_phys);
+        hda_debug!("[HDA]   BAR0 phys = {:#010X}", bar0_phys);
 
         // HDA register space is typically 16 KiB.
         let mmio_base = crate::pci::mmio::map_mmio_region_exact(bar0_phys, 0x4000)
             .map_err(|_| "HDA: MMIO map failed")?
             .as_ptr() as u64;
 
-        log::info!("[HDA]   MMIO mapped at virt {:#018X}", mmio_base);
+        hda_debug!("[HDA]   MMIO mapped at virt {:#018X}", mmio_base);
 
         let mut ctrl = HdaController {
             mmio_base,
@@ -431,14 +449,14 @@ impl HdaController {
             ctrl.num_bss = ((gcap >> 3) & 0x1F) as u8;
             ctrl.addr64 = (gcap & 1) != 0;
 
-            log::info!("[HDA]   Version {}.{}", vmaj, vmin);
-            log::info!(
+            hda_debug!("[HDA]   Version {}.{}", vmaj, vmin);
+            hda_info!(
                 "[HDA]   Streams: {} output, {} input, {} bidir",
                 ctrl.num_oss,
                 ctrl.num_iss,
                 ctrl.num_bss
             );
-            log::info!("[HDA]   64-bit: {}", ctrl.addr64);
+            hda_debug!("[HDA]   64-bit: {}", ctrl.addr64);
 
             if ctrl.num_oss == 0 {
                 return Err("HDA: no output streams available");
@@ -460,13 +478,13 @@ impl HdaController {
         // Setup output stream
         ctrl.setup_output_stream()?;
 
-        log::info!("[HDA] Initialization complete!");
+        hda_info!("[HDA] Initialization complete!");
         Ok(ctrl)
     }
 
     /// Reset the controller (§4.2.2)
     fn reset(&mut self) -> Result<(), &'static str> {
-        log::info!("[HDA] Resetting controller...");
+        hda_info!("[HDA] Resetting controller...");
         unsafe {
             // Clear STATESTS
             self.write16(reg::STATESTS, 0xFFFF);
@@ -526,7 +544,7 @@ impl HdaController {
             self.write32(reg::DPUBASE, 0);
             self.write32(reg::DPLBASE, 0x01); // bit 0 = enable
 
-            log::info!("[HDA]   STATESTS = {:#06X} (codec presence)", statests);
+            hda_debug!("[HDA]   STATESTS = {:#06X} (codec presence)", statests);
 
             if statests == 0 {
                 return Err("HDA: no codecs detected after reset");
@@ -536,7 +554,7 @@ impl HdaController {
             for i in 0..15u8 {
                 if statests & (1 << i) != 0 {
                     self.codecs.push(i);
-                    log::info!("[HDA]   Codec {} present", i);
+                    hda_debug!("[HDA]   Codec {} present", i);
                 }
             }
         }
@@ -548,7 +566,7 @@ impl HdaController {
     // ═════════════════════════════════════════════════════════════════════════
 
     fn setup_corb_rirb(&mut self) -> Result<(), &'static str> {
-        log::info!("[HDA] Setting up CORB/RIRB...");
+        hda_info!("[HDA] Setting up CORB/RIRB...");
 
         unsafe {
             // ── Stop CORB & RIRB ──
@@ -567,7 +585,7 @@ impl HdaController {
             };
             self.write8(reg::CORBSIZE, corb_sz_sel);
             self.corb_entries = corb_entries;
-            log::info!("[HDA]   CORB: {} entries", corb_entries);
+            hda_debug!("[HDA]   CORB: {} entries", corb_entries);
 
             // Allocate CORB buffer (4 bytes per entry, page-aligned)
             let corb_bytes = (corb_entries as usize) * 4;
@@ -609,7 +627,7 @@ impl HdaController {
             };
             self.write8(reg::RIRBSIZE, rirb_sz_sel);
             self.rirb_entries = rirb_entries;
-            log::info!("[HDA]   RIRB: {} entries", rirb_entries);
+            hda_debug!("[HDA]   RIRB: {} entries", rirb_entries);
 
             // Allocate RIRB buffer (8 bytes per entry)
             let rirb_bytes = (rirb_entries as usize) * 8;
@@ -643,7 +661,7 @@ impl HdaController {
             self.write8(reg::RIRBCTL, 0x02); // RIRBDMAEN
             Self::delay_us(100);
 
-            log::info!("[HDA]   CORB phys={:#010X}, RIRB phys={:#010X}", corb_phys, rirb_phys);
+            hda_debug!("[HDA]   CORB phys={:#010X}, RIRB phys={:#010X}", corb_phys, rirb_phys);
         }
 
         Ok(())
@@ -726,23 +744,23 @@ impl HdaController {
     fn discover_codecs(&mut self) -> Result<(), &'static str> {
         let codecs = self.codecs.clone();
         for &caddr in &codecs {
-            log::info!("[HDA] Walking codec {}...", caddr);
+            hda_info!("[HDA] Walking codec {}...", caddr);
 
             // Get vendor/device
             let vendor = self.get_param(caddr, 0, verb::PARAM_VENDOR_ID)?;
-            log::info!("[HDA]   Vendor={:04X}, Device={:04X}", vendor >> 16, vendor & 0xFFFF);
+            hda_debug!("[HDA]   Vendor={:04X}, Device={:04X}", vendor >> 16, vendor & 0xFFFF);
 
             // Get sub-node count from root (NID 0)
             let node_count = self.get_param(caddr, 0, verb::PARAM_NODE_COUNT)?;
             let start_nid = ((node_count >> 16) & 0xFF) as u16;
             let num_nodes = (node_count & 0xFF) as u16;
-            log::info!("[HDA]   Root: subnodes {}..{}", start_nid, start_nid + num_nodes - 1);
+            hda_debug!("[HDA]   Root: subnodes {}..{}", start_nid, start_nid + num_nodes - 1);
 
             // Walk function groups
             for fg_nid in start_nid..(start_nid + num_nodes) {
                 let fg_type = self.get_param(caddr, fg_nid, verb::PARAM_FN_GROUP_TYPE)?;
                 let fg_type_id = fg_type & 0xFF;
-                log::info!(
+                hda_info!(
                     "[HDA]   FG NID {}: type={} ({})",
                     fg_nid,
                     fg_type_id,
@@ -763,7 +781,7 @@ impl HdaController {
                 self.afg_amp_in_caps = self
                     .get_param(caddr, fg_nid, verb::PARAM_AMP_IN_CAPS)
                     .unwrap_or(0);
-                log::info!(
+                hda_info!(
                     "[HDA]   AFG amp caps: out={:#010X} in={:#010X}",
                     self.afg_amp_out_caps,
                     self.afg_amp_in_caps
@@ -773,7 +791,7 @@ impl HdaController {
                 let sub_count = self.get_param(caddr, fg_nid, verb::PARAM_NODE_COUNT)?;
                 let w_start = ((sub_count >> 16) & 0xFF) as u16;
                 let w_count = (sub_count & 0xFF) as u16;
-                log::info!("[HDA]   AFG widgets: {}..{}", w_start, w_start + w_count - 1);
+                hda_debug!("[HDA]   AFG widgets: {}..{}", w_start, w_start + w_count - 1);
 
                 // Walk each widget
                 for nid in w_start..(w_start + w_count) {
@@ -847,7 +865,7 @@ impl HdaController {
                         }
                     }
 
-                    log::info!(
+                    hda_info!(
                         "[HDA]     NID {:3}: {} conns={:?}{}",
                         nid,
                         wtype.name(),
@@ -868,7 +886,7 @@ impl HdaController {
 
     /// Find output audio paths: Pin Complex (output) → ... → DAC
     fn find_output_paths(&mut self) {
-        log::info!("[HDA] Searching output paths...");
+        hda_info!("[HDA] Searching output paths...");
 
         // Find all output pin complexes
         let pins: Vec<(u16, u32, Vec<u16>)> = self
@@ -895,7 +913,7 @@ impl HdaController {
             // Walk backward from pin to find a DAC
             if let Some(path) = self.trace_to_dac(*pin_nid, &mut Vec::new()) {
                 let device = pin_default_device(*pin_config);
-                log::info!(
+                hda_info!(
                     "[HDA]   Path found: {} -> {:?}",
                     device,
                     path.iter()
@@ -912,9 +930,9 @@ impl HdaController {
         }
 
         if self.output_paths.is_empty() {
-            log::info!("[HDA]   WARNING: No output paths found!");
+            hda_warn!("[HDA] No output paths found!");
         } else {
-            log::info!("[HDA]   {} output path(s) found", self.output_paths.len());
+            hda_debug!("[HDA]   {} output path(s) found", self.output_paths.len());
         }
     }
 
@@ -954,7 +972,7 @@ impl HdaController {
         let codec = self.codecs[0];
         let path = self.output_paths[0].clone();
 
-        log::info!("[HDA] Setting up output stream for path: {:?}", path.path);
+        hda_info!("[HDA] Setting up output stream for path: {:?}", path.path);
 
         // ── Configure the codec path ──
         // Power on all widgets in the path
@@ -967,7 +985,7 @@ impl HdaController {
         let vendor_id = self.get_param(codec, 0, verb::PARAM_VENDOR_ID).unwrap_or(0);
         let vendor_hi = (vendor_id >> 16) & 0xFFFF;
         let codec_device = vendor_id & 0xFFFF;
-        log::info!("[HDA]   Codec vendor={:#06X} device={:#06X}", vendor_hi, codec_device);
+        hda_debug!("[HDA]   Codec vendor={:#06X} device={:#06X}", vendor_hi, codec_device);
 
         // AD1984 (vendor 0x11D4) / CX20549 Venice (vendor 0x14F1) quirks:
         // These codecs need pin sense + specific EAPD + extra power states
@@ -976,7 +994,7 @@ impl HdaController {
         let needs_quirks = is_ad198x || is_conexant;
 
         if needs_quirks {
-            log::info!(
+            hda_info!(
                 "[HDA]   Applying {} codec quirks",
                 if is_ad198x {
                     "Analog Devices AD198x"
@@ -1013,7 +1031,7 @@ impl HdaController {
                 // Enable EAPD (bit 1) — do NOT set bit 2 (L/R swap) on AD1984
                 // as it can cause silence on some configurations
                 let _ = self.codec_cmd(codec, nid, verb::SET_EAPD, 0x02);
-                log::info!("[HDA]   Pin NID {} -> EAPD=0x02, PIN_CTL=0xC0", nid);
+                hda_debug!("[HDA]   Pin NID {} -> EAPD=0x02, PIN_CTL=0xC0", nid);
             }
 
             // ── ThinkPad DMIC coefficient init (from Linux patch_analog.c) ──
@@ -1021,7 +1039,7 @@ impl HdaController {
             // without setting a coef index first (uses codec's default index).
             if is_ad198x {
                 let _ = self.set_verb_16(codec, 1, verb::SET_PROC_COEF, 0x0008);
-                log::info!("[HDA]   AD1984 DMIC COEF: val=0x08 (default index)");
+                hda_debug!("[HDA]   AD1984 DMIC COEF: val=0x08 (default index)");
             }
 
             // Also try to unmute the AFG output/input amps (node 1) — separate commands
@@ -1036,7 +1054,7 @@ impl HdaController {
             let _ = self.codec_cmd(codec, 1, verb::SET_GPIO_MASK, 0x02); // Enable GPIO1
             let _ = self.codec_cmd(codec, 1, verb::SET_GPIO_DIR, 0x02); // GPIO1 = output
             let _ = self.codec_cmd(codec, 1, verb::SET_GPIO_DATA, 0x02); // GPIO1 = HIGH (amp on)
-            log::info!("[HDA]   GPIO1 HIGH (speaker amp power on)");
+            hda_debug!("[HDA]   GPIO1 HIGH (speaker amp power on)");
         }
 
         // Configure the pin: OUT enable + HP amp enable
@@ -1044,7 +1062,7 @@ impl HdaController {
         // Enable EAPD (External Amplifier) — bit 1 only
         // Bit 2 is L/R swap which causes silence on AD1984/CX20549
         let _ = self.codec_cmd(codec, path.pin_nid, verb::SET_EAPD, 0x02);
-        log::info!("[HDA]   Output pin {} -> EAPD=0x02, PIN_CTL=0xC0", path.pin_nid);
+        hda_debug!("[HDA]   Output pin {} -> EAPD=0x02, PIN_CTL=0xC0", path.pin_nid);
 
         // Set stream tag on DAC — configure ALL DACs with our stream tag/format
         // so audio reaches whichever pin the hardware actually routes to.
@@ -1067,7 +1085,7 @@ impl HdaController {
                 (stream_tag << 4) | channel,
             );
             let _ = self.set_verb_16(codec, dac_nid, verb::SET_STREAM_FORMAT, fmt);
-            log::info!(
+            hda_info!(
                 "[HDA]   DAC NID {} -> stream_tag={}, fmt=0x{:04X}",
                 dac_nid,
                 stream_tag,
@@ -1127,7 +1145,7 @@ impl HdaController {
                 }
             }
         }
-        log::info!(
+        hda_info!(
             "[HDA]   Unmuted all {} widget amps (separate OUT/IN, afg_out={} afg_in={})",
             all_widget_conns.len(),
             afg_out_steps,
@@ -1162,11 +1180,7 @@ impl HdaController {
             // Pin control: output enable + HP amp enable + EAPD
             let _ = self.codec_cmd(codec, *pin_nid, verb::SET_PIN_CONTROL, 0xC0);
             let _ = self.codec_cmd(codec, *pin_nid, verb::SET_EAPD, 0x02);
-            log::info!(
-                "[HDA]   Path pin NID {} -> amp forced gain={}, EAPD+OUT",
-                pin_nid,
-                afg_gain
-            );
+            hda_info!("[HDA]   Path pin NID {} -> amp forced gain={}, EAPD+OUT", pin_nid, afg_gain);
         }
 
         // Set connector selects for ALL output paths, not just the primary one.
@@ -1197,7 +1211,7 @@ impl HdaController {
                 if let Some(next_nid) = next_in_path {
                     if let Some(idx) = connections.iter().position(|&c| c == next_nid) {
                         let _ = self.codec_cmd(codec, *nid, verb::SET_CONN_SELECT, idx as u8);
-                        log::info!("[HDA]   NID {} conn_sel={} (-> NID {})", nid, idx, next_nid);
+                        hda_debug!("[HDA]   NID {} conn_sel={} (-> NID {})", nid, idx, next_nid);
                     }
                 }
             }
@@ -1282,9 +1296,9 @@ impl HdaController {
             let ctl_high = (stream_tag as u32) << (sctl::STREAM_TAG_SHIFT - 16);
             self.write8(sd_base + sd::CTL + 2, ctl_high as u8);
 
-            log::info!("[HDA]   Stream configured: 48kHz 16-bit stereo");
-            log::info!("[HDA]   Audio buf phys={:#010X} size={}", buf_phys, total_size);
-            log::info!("[HDA]   BDL phys={:#010X} entries={}", bdl_phys, num_frags);
+            hda_debug!("[HDA]   Stream configured: 48kHz 16-bit stereo");
+            hda_debug!("[HDA]   Audio buf phys={:#010X} size={}", buf_phys, total_size);
+            hda_debug!("[HDA]   BDL phys={:#010X} entries={}", bdl_phys, num_frags);
         }
 
         Ok(())
@@ -1338,7 +1352,7 @@ impl HdaController {
             self.write8(sd_base + sd::CTL + 2, ctl_high as u8);
         }
         self.playing = false;
-        log::info!("[HDA] Stream reset (LPIB->0, reconfig done)");
+        hda_info!("[HDA] Stream reset (LPIB->0, reconfig done)");
     }
 
     fn configure_output_loop_len(&mut self, byte_len: u32) -> Result<(), &'static str> {
@@ -1445,14 +1459,14 @@ impl HdaController {
                 self.write8(sd_base + sd::CTL, (ctl | sctl::RUN as u8) & !(sctl::IOCE as u8));
 
                 self.playing = true;
-                log::info!("[HDA] Playback started");
+                hda_info!("[HDA] Playback started");
             } else {
                 // Stop stream
                 let ctl = self.read8(sd_base + sd::CTL);
                 self.write8(sd_base + sd::CTL, ctl & !(sctl::RUN as u8));
 
                 self.playing = false;
-                log::info!("[HDA] Playback stopped");
+                hda_info!("[HDA] Playback stopped");
             }
         }
     }
@@ -1545,11 +1559,11 @@ pub fn boot_probe_once() -> bool {
 
     match init() {
         Ok(()) => {
-            log::info!("[HDA] Boot init ready");
+            hda_info!("[HDA] Boot init ready");
             true
         }
         Err(err) => {
-            log::info!("[HDA] Boot init failed: {}", err);
+            hda_warn!("[HDA] Boot init failed: {}", err);
             false
         }
     }
@@ -1594,7 +1608,7 @@ pub fn play_tone(freq_hz: u32, duration_ms: u32) -> Result<(), &'static str> {
     ctrl.play(false);
 
     // Log DMA status for debugging
-    log::info!(
+    hda_info!(
         "[HDA] play_tone: LPIB before={} early={} after={} target={}",
         pos_before,
         pos_early,
@@ -1602,7 +1616,7 @@ pub fn play_tone(freq_hz: u32, duration_ms: u32) -> Result<(), &'static str> {
         target
     );
     if pos_early == 0 && pos_after == 0 {
-        log::info!("[HDA] WARNING: LPIB never advanced! DMA may not be running.");
+        hda_warn!("[HDA] LPIB never advanced! DMA may not be running.");
     }
 
     Ok(())
@@ -1617,7 +1631,7 @@ pub fn set_gpio(val: u8) -> Result<(), &'static str> {
     }
     let codec = ctrl.codecs[0];
     let _ = ctrl.codec_cmd(codec, 1, verb::SET_GPIO_DATA, val);
-    log::info!("[HDA] GPIO DATA set to {:#04X}", val);
+    hda_info!("[HDA] GPIO DATA set to {:#04X}", val);
     Ok(())
 }
 
@@ -1683,7 +1697,7 @@ pub fn reset_stream() {
             let ctl_high = (ctrl.stream_tag as u32) << (sctl::STREAM_TAG_SHIFT - 16);
             ctrl.write8(sd_base + sd::CTL + 2, ctl_high as u8);
         }
-        log::info!("[HDA] Stream reset (LPIB->0, reconfig done)");
+        hda_info!("[HDA] Stream reset (LPIB->0, reconfig done)");
     }
 }
 
@@ -1727,7 +1741,7 @@ pub fn start_looped_playback(samples: &[i16]) -> Result<(), &'static str> {
 
     let data_bytes = (to_copy * 2) as u32;
     ctrl.configure_output_loop_len(data_bytes)?;
-    log::info!(
+    hda_info!(
         "[HDA] Looped playback: {} bytes ({} ms), buf={}",
         data_bytes,
         data_bytes / (48000 * 4 / 1000),
@@ -1812,7 +1826,7 @@ pub fn ensure_running() -> bool {
                 // Stream stalled — clear status and restart
                 ctrl.write8(sd_base + sd::STS, 0x1C);
                 ctrl.write8(sd_base + sd::CTL, ctl | sctl::RUN as u8);
-                log::info!("[HDA] Stream stalled - restarted (LPIB={})", ctrl.stream_position());
+                hda_warn!("[HDA] Stream stalled - restarted (LPIB={})", ctrl.stream_position());
                 return true;
             }
         }
@@ -2438,7 +2452,7 @@ pub fn set_volume(level: u8) -> Result<(), &'static str> {
         let _ = ctrl.set_verb_16(codec, nid, 0x300, amp_in);
     }
 
-    log::info!("[HDA] Volume set to {}% (gain={})", level, gain);
+    hda_info!("[HDA] Volume set to {}% (gain={})", level, gain);
     Ok(())
 }
 

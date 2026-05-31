@@ -42,6 +42,7 @@ const MSG_RESOURCE_SNAPSHOT_END: u16 = 18;
 const MSG_SHADER_CREATE: u16 = 19;
 const MSG_PIPELINE_CREATE: u16 = 20;
 const MSG_DRAW_PIPELINE_TRIANGLES: u16 = 21;
+const MSG_CLEAR_COLOR_RGBA: u16 = 22;
 const MSG_INPUT_TABLET_ABS: u16 = 100;
 const MSG_INPUT_KEYBOARD_BOOT: u16 = 101;
 const MSG_CLIENT_RECOMPOSE: u16 = 102;
@@ -73,6 +74,7 @@ static TRUEOS_RDP_DROPPED_SENDS: AtomicU32 = AtomicU32::new(0);
 static TRUEOS_RDP_SCREEN_FRAMES: AtomicU32 = AtomicU32::new(0);
 static TRUEOS_RDP_RESOURCE_SEQ: AtomicU32 = AtomicU32::new(1);
 static TRUEOS_RDP_TEXTURE_CACHE_BYTES: AtomicU32 = AtomicU32::new(0);
+static TRUEOS_RDP_FRAME_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
 static TRUEOS_RDP_COMMAND_QUEUE: Mutex<Option<&'static NetQueue<NetCommand>>> = Mutex::new(None);
 static TRUEOS_RDP_CLIENT_HANDLES: Mutex<Vec<NetHandle>> = Mutex::new(Vec::new());
 static TRUEOS_RDP_TEXTURE_CACHE: Mutex<Vec<CachedTexture>> = Mutex::new(Vec::new());
@@ -308,11 +310,13 @@ fn publish_client_handles(clients: &[NetHandle]) {
 
 fn remove_client_handle(
     clients: &mut Vec<NetHandle>,
+    ready_clients: &mut Vec<NetHandle>,
     input_buffers: &mut Vec<ClientInputBuffer>,
     handle: NetHandle,
 ) -> bool {
     let before = clients.len();
     clients.retain(|client| *client != handle);
+    ready_clients.retain(|client| *client != handle);
     input_buffers.retain(|buffer| buffer.handle != handle);
     if clients.len() == before {
         return false;
@@ -320,12 +324,13 @@ fn remove_client_handle(
     if clients.is_empty() {
         crate::usb3::hid::remove_rdp_tablet();
     }
-    publish_client_handles(clients.as_slice());
+    publish_client_handles(ready_clients.as_slice());
     true
 }
 
 fn clear_client_handles(
     clients: &mut Vec<NetHandle>,
+    ready_clients: &mut Vec<NetHandle>,
     input_buffers: &mut Vec<ClientInputBuffer>,
 ) -> usize {
     let cleared = clients.len();
@@ -333,9 +338,10 @@ fn clear_client_handles(
         return 0;
     }
     clients.clear();
+    ready_clients.clear();
     input_buffers.clear();
     crate::usb3::hid::remove_rdp_tablet();
-    publish_client_handles(clients.as_slice());
+    publish_client_handles(ready_clients.as_slice());
     cleared
 }
 
@@ -390,6 +396,25 @@ fn publish_bytes(msg: u16, fields: &[u32], data: &[u8]) {
         return;
     }
     broadcast_frame(protocol_frame(msg, fields, data));
+}
+
+fn acquire_frame_stream() {
+    while TRUEOS_RDP_FRAME_STREAM_ACTIVE
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        crate::wait::spin_step();
+    }
+}
+
+fn release_frame_stream() {
+    TRUEOS_RDP_FRAME_STREAM_ACTIVE.store(false, Ordering::Release);
+}
+
+fn wait_frame_stream_idle() {
+    while TRUEOS_RDP_FRAME_STREAM_ACTIVE.load(Ordering::Acquire) {
+        crate::wait::spin_step();
+    }
 }
 
 fn encoded_msg(kind: crate::r::resource_monitor::EncodedKind) -> u16 {
@@ -529,6 +554,7 @@ async fn send_resource_snapshot(cmds: &NetQueue<NetCommand>, handle: NetHandle) 
 }
 
 pub fn publish_begin_frame(seq: u32, flags: u32, clear_rgb: u32) {
+    acquire_frame_stream();
     if has_clients() && screen_frame_count() == 0 {
         crate::log!(
             "trueos-rdp: first-frame begin seq={} flags=0x{:08x} clear=0x{:06x}\n",
@@ -555,6 +581,7 @@ pub fn publish_end_frame(seq: u32, flags: u32, rgb_draws: u32, tex_draws: u32, d
         }
     }
     publish_small(MSG_END_FRAME, &[seq, flags, rgb_draws, tex_draws, draw_bytes]);
+    release_frame_stream();
 }
 
 pub fn publish_set_blend(
@@ -596,6 +623,13 @@ pub fn publish_clear_render_target(frame_seq: u32) {
 
 pub fn publish_clear_rect(frame_seq: u32, rgb: u32, x: u32, y: u32, width: u32, height: u32) {
     publish_small(MSG_CLEAR_RECT, &[frame_seq, rgb & 0x00FF_FFFF, x, y, width, height]);
+}
+
+pub fn publish_clear_color_rgba(frame_seq: u32, r: u32, g: u32, b: u32, a: u32) {
+    publish_small(
+        MSG_CLEAR_COLOR_RGBA,
+        &[frame_seq, r.min(255), g.min(255), b.min(255), a.min(255)],
+    );
 }
 
 pub fn publish_texture_rgba(
@@ -792,6 +826,7 @@ pub async fn trueos_rdp_task() {
 
     let mut listener: Option<NetHandle> = None;
     let mut clients: Vec<NetHandle> = Vec::new();
+    let mut ready_clients: Vec<NetHandle> = Vec::new();
     let mut input_buffers: Vec<ClientInputBuffer> = Vec::new();
     let mut ticks: u32 = 0;
     let mut first_frame_base = screen_frame_count();
@@ -817,7 +852,6 @@ pub async fn trueos_rdp_task() {
 
                     if !clients.contains(&handle) {
                         clients.push(handle);
-                        publish_client_handles(clients.as_slice());
                         first_frame_base = screen_frame_count();
                     }
 
@@ -844,6 +878,12 @@ pub async fn trueos_rdp_task() {
                     }
 
                     send_hello(cmds, handle).await;
+                    if clients.contains(&handle) && !ready_clients.contains(&handle) {
+                        wait_frame_stream_idle();
+                        ready_clients.push(handle);
+                        publish_client_handles(ready_clients.as_slice());
+                        first_frame_base = screen_frame_count();
+                    }
                 }
                 NetEvent::Closed { handle } => {
                     if listener == Some(handle) {
@@ -852,7 +892,12 @@ pub async fn trueos_rdp_task() {
                         crate::log!("trueos-rdp: listener closed handle={} relisten=1\n", handle.0);
                     }
 
-                    if remove_client_handle(&mut clients, &mut input_buffers, handle) {
+                    if remove_client_handle(
+                        &mut clients,
+                        &mut ready_clients,
+                        &mut input_buffers,
+                        handle,
+                    ) {
                         if clients.is_empty() {
                             first_frame_base = screen_frame_count();
                         }
@@ -869,7 +914,11 @@ pub async fn trueos_rdp_task() {
                 NetEvent::TcpSent { .. } => {}
                 NetEvent::Error { msg } => {
                     if msg == "bad handle" {
-                        let cleared = clear_client_handles(&mut clients, &mut input_buffers);
+                        let cleared = clear_client_handles(
+                            &mut clients,
+                            &mut ready_clients,
+                            &mut input_buffers,
+                        );
                         if cleared != 0 {
                             crate::log!(
                                 "trueos-rdp: clients cleared reason=bad-handle count={}\n",
@@ -889,7 +938,7 @@ pub async fn trueos_rdp_task() {
         }
 
         ticks = ticks.wrapping_add(1);
-        if !clients.is_empty() && screen_frame_count() == first_frame_base {
+        if !ready_clients.is_empty() && screen_frame_count() == first_frame_base {
             request_first_frame_recompose("rdp-client-first-frame", ticks);
         }
         Timer::after(EmbassyDuration::from_millis(10)).await;

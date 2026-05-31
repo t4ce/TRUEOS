@@ -15,6 +15,12 @@ static OUTPUTS: Mutex<VecDeque<HwPicOutput>> = Mutex::new(VecDeque::new());
 static WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 static OUTPUT_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 
+macro_rules! hw_pic_info {
+    ($($arg:tt)*) => {
+        crate::log_info!(target: "media"; $($arg)*);
+    };
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HwPicCodec {
     Jpeg,
@@ -130,12 +136,12 @@ fn push_output(output: HwPicOutput) {
 #[embassy_executor::task]
 pub(crate) async fn hw_pic_service() {
     if SERVICE_STARTED.swap(true, Ordering::AcqRel) {
-        crate::log!("intel/hw_pic: duplicate service task entered; parking\n");
+        hw_pic_info!("intel/hw_pic: duplicate service task entered; parking\n");
         loop {
             embassy_time::Timer::after_secs(3600).await;
         }
     }
-    crate::log!("intel/hw_pic: service started backend=media-vdbox\n");
+    hw_pic_info!("intel/hw_pic: service started backend=media-vdbox\n");
     hw_pic_service_inner().await;
 }
 
@@ -146,7 +152,7 @@ async fn hw_pic_service_inner() {
             continue;
         };
         let output = process_job(job);
-        crate::log!(
+        hw_pic_info!(
             "intel/hw_pic: output id={} codec={:?} status={:?} fmt={:?} size={}x{} pitch=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} virt=0x{:X} err={}\n",
             output.id,
             output.codec,
@@ -173,7 +179,7 @@ fn process_job(job: HwPicJob) -> HwPicOutput {
 }
 
 fn log_stage(id: u32, stage: &str, accepted: bool, detail: &str, code: i32) {
-    crate::log!(
+    hw_pic_info!(
         "intel/hw_pic-stage: id={} stage={} accepted={} code={} detail={}\n",
         id,
         stage,
@@ -209,7 +215,7 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
     log_stage(job.id, "device", true, "claimed_device=ok", 0);
 
     let (engine, windows) = super::xelp_media2_ngin_hw_pic::default_decode_engine_and_window();
-    crate::log!(
+    hw_pic_info!(
         "intel/hw_pic-stage: id={} stage=route accepted=1 engine={} ring_gpu=0x{:X} ctx_gpu=0x{:X} batch_gpu=0x{:X} bitstream_gpu=0x{:X} output_gpu=0x{:X} result_gpu=0x{:X}\n",
         job.id,
         engine.name,
@@ -225,7 +231,7 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         log_stage(job.id, "backing", false, "alloc-or-map-failed", -5);
         return failed_output(&job, -5);
     };
-    crate::log!(
+    hw_pic_info!(
         "intel/hw_pic-stage: id={} stage=backing accepted=1 ring=0x{:X}/0x{:X} ctx=0x{:X}/0x{:X} batch=0x{:X}/0x{:X} bitstream=0x{:X}/0x{:X} output=0x{:X}/0x{:X} result=0x{:X}/0x{:X}\n",
         job.id,
         backing.ring_phys,
@@ -246,7 +252,7 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         log_stage(job.id, "input", false, "encoded-larger-than-bitstream", -12);
         return failed_output(&job, -12);
     }
-    crate::log!(
+    hw_pic_info!(
         "intel/hw_pic-stage: id={} stage=input accepted=1 encoded=0x{:X} bitstream_capacity=0x{:X}\n",
         job.id,
         job.encoded.len(),
@@ -264,7 +270,7 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         return failed_output(&job, -6);
     };
 
-    crate::log!(
+    hw_pic_info!(
         "intel/hw_pic-stage: id={} stage=stream accepted=1 engine={} bytes=0x{:X} capacity=0x{:X} sig=0x{:08X} bitstream_gpu=0x{:X}\n",
         job.id,
         proof.engine_name,
@@ -273,7 +279,7 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         proof.signature,
         proof.bitstream_gpu_addr
     );
-    crate::log!(
+    hw_pic_info!(
         "intel/hw_pic: jpeg encoded-stream id={} engine={} bytes=0x{:X}/0x{:X} bitstream_gpu=0x{:X} bitstream_phys=0x{:X} bitstream_virt=0x{:X} sig=0x{:08X} fw_engine_ack_reg=0x{:X} fw_engine_ack=0x{:08X} fw_engine_awake={} fw_global_ack=0x{:08X} fw_awake={}\n",
         job.id,
         proof.engine_name,
@@ -303,7 +309,7 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         return failed_output(&job, -7);
     };
 
-    crate::log!(
+    hw_pic_info!(
         "intel/hw_pic-stage: id={} stage=submit accepted=1 engine={} retired={} polls={} coded={}x{} pitch=0x{:X} surface_bytes=0x{:X} batch_bytes=0x{:X} ring_bytes=0x{:X}\n",
         job.id,
         smoke.engine_name,
@@ -316,7 +322,7 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         smoke.batch_tail_bytes,
         smoke.ring_tail_bytes
     );
-    crate::log!(
+    hw_pic_info!(
         "intel/hw_pic-stage: id={} stage=jpeg-state accepted=1 input={} layout={} output={} components={} interleaved={} dri={} mcu_count={} scan=0x{:X}+0x{:X} bsd_dw4=0x{:08X} pipe_mode=0x{:08X} surface_dw=0x{:08X}/0x{:08X}/0x{:08X}/0x{:08X} pic_dw=0x{:08X}/0x{:08X} stage_flags=0x{:08X}\n",
         job.id,
         smoke.jpeg_input_format,
@@ -339,7 +345,7 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         smoke.jpeg_pic_dw2,
         smoke.stage_flags_value
     );
-    crate::log!(
+    hw_pic_info!(
         "intel/hw_pic-stage: id={} stage=markers accepted={} kickoff=0x{:08X}/0x{:08X} presubmit=0x{:08X}/0x{:08X} postsubmit=0x{:08X}/0x{:08X} complete=0x{:08X}/0x{:08X}\n",
         job.id,
         smoke.retired as u8,
@@ -352,7 +358,7 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         smoke.complete_value,
         smoke.complete_marker
     );
-    crate::log!(
+    hw_pic_info!(
         "intel/hw_pic-stage: id={} stage=engine-regs accepted=1 el=0x{:08X}:0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X}:0x{:08X} bbaddr=0x{:08X}:0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} fault=0x{:08X}/0x{:08X}\n",
         job.id,
         smoke.execlist_status_lo,
@@ -368,7 +374,7 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         smoke.fault_gen8,
         smoke.fault_gen12
     );
-    crate::log!(
+    hw_pic_info!(
         "intel/hw_pic: jpeg smoke-submit id={} engine={} retired={} polls={} batch_gpu=0x{:X} result_gpu=0x{:X} bitstream_gpu=0x{:X} output_gpu=0x{:X} bytes=0x{:X} coded={}x{} jpeg_in={} jpeg_out={} scan_components={} interleaved={} dri={} mcu_count={} surface=0x{:08X}/0x{:08X} jpeg_pic=0x{:08X}/0x{:08X} batch_bytes=0x{:X} ring_bytes=0x{:X} kickoff=0x{:08X}/0x{:08X} presubmit=0x{:08X}/0x{:08X} postsubmit=0x{:08X}/0x{:08X} complete=0x{:08X}/0x{:08X} stage_flags=0x{:08X} el=0x{:08X}:0x{:08X} start=0x{:08X} ctl=0x{:08X} hws=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} acthd64=0x{:016X} acthd_region={} acthd_off=0x{:X} acthd_dword=0x{:08X} bbaddr64=0x{:016X} dma_fadd64=0x{:016X} bbstate=0x{:08X} esr=0x{:08X} instps=0x{:08X} psmi_ctl=0x{:08X} nopid=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} fault8=0x{:08X} fault12=0x{:08X} fault8_tlb=0x{:08X}/0x{:08X} fault12_tlb=0x{:08X}/0x{:08X} bitstream_dword0=0x{:08X}\n",
         job.id,
         smoke.engine_name,
@@ -434,7 +440,7 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
 
     let retired = smoke.retired;
     let output_ready = retired;
-    crate::log!(
+    hw_pic_info!(
         "intel/hw_pic-stage: id={} stage=classify accepted={} retired={} detail={} status={:?} err={}\n",
         job.id,
         output_ready as u8,

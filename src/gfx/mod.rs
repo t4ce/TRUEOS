@@ -499,6 +499,16 @@ pub fn rdp_monitor_clear_rect(frame_seq: u32, rgb: u32, x: u32, y: u32, width: u
 }
 
 #[inline]
+pub fn rdp_monitor_clear_color_rgba(frame_seq: u32, r: u32, g: u32, b: u32, a: u32) {
+    #[cfg(feature = "trueos_rdp")]
+    if rdp_sideband_enabled() {
+        crate::r::rdp::publish_clear_color_rgba(frame_seq, r, g, b, a);
+    }
+    #[cfg(not(feature = "trueos_rdp"))]
+    let _ = (frame_seq, r, g, b, a);
+}
+
+#[inline]
 pub fn rdp_monitor_texture_rgba(
     tex_id: u32,
     width: u32,
