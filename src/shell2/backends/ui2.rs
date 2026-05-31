@@ -648,6 +648,7 @@ fn push_bytes(bytes: &[u8]) {
 }
 
 pub(crate) fn ui2_shell_attach_window(window_id: u32, cols: usize, rows: usize) {
+    crate::shell2::set_line_width_for_backend(&UI2_SHELL_BACKEND, cols);
     {
         let mut runtime = runtime().lock();
         let is_new_window = runtime.window_id != window_id;

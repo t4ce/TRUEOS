@@ -565,6 +565,10 @@ pub(crate) fn line_width_for_backend(io: &'static dyn ShellBackend2) -> usize {
     matrix::active_line_width(output_target_for_backend(io))
 }
 
+pub(crate) fn set_line_width_for_backend(io: &'static dyn ShellBackend2, width: usize) {
+    matrix::set_active_line_width(output_target_for_backend(io), width.max(1));
+}
+
 pub(crate) fn output_target_for_backend(io: &'static dyn ShellBackend2) -> u8 {
     let uart_io: &'static dyn ShellIo2 = &UART1_COM1_BACKEND;
     if same_backend_task(io, uart_io) {
