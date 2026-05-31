@@ -142,10 +142,7 @@ fn replay(io: &'static dyn ShellBackend2, args: &mut core::str::SplitWhitespace<
     let mode_arg = args.next().unwrap_or("visible");
     let (mode_label, load_mode) = match mode_arg {
         "full" => ("full", crate::intel::replay::ReplayModuleLoadMode::Full),
-        _ => (
-            "visible",
-            crate::intel::replay::ReplayModuleLoadMode::VisibleTruncated,
-        ),
+        _ => ("visible", crate::intel::replay::ReplayModuleLoadMode::VisibleTruncated),
     };
     print_shell_line(
         io,

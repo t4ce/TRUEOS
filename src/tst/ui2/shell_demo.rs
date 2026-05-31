@@ -568,13 +568,8 @@ fn render_shell_row_range_rgba(
     );
 
     for col in start_col..=end_col.min(cols.saturating_sub(1)) {
-        let cell = effective_cell_for_render(
-            snapshot_cell(snapshot, row, col),
-            selection,
-            row,
-            col,
-            cols,
-        );
+        let cell =
+            effective_cell_for_render(snapshot_cell(snapshot, row, col), selection, row, col, cols);
         let pen_x = row_cell_x(snapshot, row, col).saturating_sub(range_x);
         let advance_px = shell_cell_visual_advance_px(&cell);
         fill_rect_rgba(
@@ -630,11 +625,7 @@ fn render_shell_row_range_rgba(
         );
         let cursor_cell = crate::shell2::Ui2ShellCell {
             ch: UI2_SHELL_CURSOR_CH,
-            fg: (
-                UI2_SHELL_CURSOR_RGBA[0],
-                UI2_SHELL_CURSOR_RGBA[1],
-                UI2_SHELL_CURSOR_RGBA[2],
-            ),
+            fg: (UI2_SHELL_CURSOR_RGBA[0], UI2_SHELL_CURSOR_RGBA[1], UI2_SHELL_CURSOR_RGBA[2]),
             bg: cell.bg,
         };
         render_cell_glyph(
@@ -836,14 +827,7 @@ pub async fn ui2_shell_demo_task() {
                             .min(last_content_size.1.saturating_sub(y))
                             .max(1);
                         let rgba = render_shell_row_range_rgba(
-                            &atlases,
-                            &snapshot,
-                            &selection,
-                            blink_on,
-                            row,
-                            start_col,
-                            end_col,
-                            x,
+                            &atlases, &snapshot, &selection, blink_on, row, start_col, end_col, x,
                             w,
                         );
                         let ok = crate::r::io::cabi::queue_texture_rgba_image_region_upload_copy(

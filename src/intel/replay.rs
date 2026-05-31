@@ -469,10 +469,7 @@ fn log_replay_artifact_scan(backing: &[ReplayBoBacking], batch_gpu: u64) {
             index += 1;
         }
     }
-    crate::log!(
-        "intel/replay: bbs-scan done hits={} note=pre-submit-patched-artifact\n",
-        hits,
-    );
+    crate::log!("intel/replay: bbs-scan done hits={} note=pre-submit-patched-artifact\n", hits,);
 }
 
 fn log_replay_edge_probe(backing: &[ReplayBoBacking], bbaddr: u64) {

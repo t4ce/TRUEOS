@@ -5,8 +5,7 @@
 // Limine module named `trueos.intel.replay.rotating_triangle` instead.
 use crate::intel::replay::{ReplayBoSpec, ReplayPatch, ReplayPresent, ReplaySubmit};
 
-pub(crate) const ROTATING_TRIANGLE_MODULE_STRING: &[u8] =
-    b"trueos.intel.replay.rotating_triangle";
+pub(crate) const ROTATING_TRIANGLE_MODULE_STRING: &[u8] = b"trueos.intel.replay.rotating_triangle";
 
 pub(crate) const ROTATING_TRIANGLE_BO_SPECS: &[ReplayBoSpec] = &[
     ReplayBoSpec {
