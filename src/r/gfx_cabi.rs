@@ -2143,6 +2143,8 @@ pub mod cabi {
     const ASYNC_PNG_DECODE_TASK_POOL_SIZE: usize = 4;
     const ASYNC_JPEG_DECODE_TASK_POOL_SIZE: usize = 4;
     static ASYNC_TEX_STATUS: spin::Mutex<Vec<i32>> = spin::Mutex::new(Vec::new());
+    static HOST_TEXTURE_META: spin::Mutex<Vec<Option<HostTextureMeta>>> =
+        spin::Mutex::new(Vec::new());
     static RENDER_TEX_INFLIGHT: spin::Mutex<Vec<(u32, u32)>> = spin::Mutex::new(Vec::new());
     static ASYNC_JPEG_REQS: spin::Mutex<VecDeque<AsyncJpegUploadReq>> =
         spin::Mutex::new(VecDeque::new());
@@ -2495,6 +2497,98 @@ pub mod cabi {
             .unwrap_or(ASYNC_TEX_STATUS_UNKNOWN)
     }
 
+    #[derive(Clone, Copy)]
+    struct HostTextureMeta {
+        width: u32,
+        height: u32,
+        sample_kind: TexSampleKind,
+        origin: TexCoordOrigin,
+    }
+
+    fn record_host_texture_meta(
+        tex_id: u32,
+        width: u32,
+        height: u32,
+        sample_kind: TexSampleKind,
+        origin: TexCoordOrigin,
+    ) {
+        if tex_id == 0 || width == 0 || height == 0 {
+            return;
+        }
+        if reject_unreasonable_tex_id(tex_id, "host-texture-meta") {
+            return;
+        }
+        let idx = tex_id.saturating_sub(1) as usize;
+        let mut meta = HOST_TEXTURE_META.lock();
+        if idx >= meta.len() {
+            meta.resize(idx + 1, None);
+        }
+        meta[idx] = Some(HostTextureMeta {
+            width,
+            height,
+            sample_kind,
+            origin,
+        });
+    }
+
+    fn record_host_texture_dimensions(tex_id: u32, width: u32, height: u32) {
+        record_host_texture_meta(
+            tex_id,
+            width,
+            height,
+            TexSampleKind::Rgba,
+            TexCoordOrigin::TopLeft,
+        );
+    }
+
+    fn host_texture_meta_recorded(tex_id: u32) -> Option<HostTextureMeta> {
+        if tex_id == 0 {
+            return None;
+        }
+        HOST_TEXTURE_META
+            .lock()
+            .get(tex_id.saturating_sub(1) as usize)
+            .and_then(|entry| *entry)
+    }
+
+    fn host_texture_dimensions_recorded(tex_id: u32) -> Option<(u32, u32)> {
+        host_texture_meta_recorded(tex_id).map(|meta| (meta.width, meta.height))
+    }
+
+    fn png_encoded_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+        if data.len() < 24 || data.get(0..8) != Some(b"\x89PNG\r\n\x1a\n") {
+            return None;
+        }
+        if data.get(12..16) != Some(b"IHDR") {
+            return None;
+        }
+        let width = u32::from_be_bytes([data[16], data[17], data[18], data[19]]);
+        let height = u32::from_be_bytes([data[20], data[21], data[22], data[23]]);
+        (width != 0 && height != 0).then_some((width, height))
+    }
+
+    fn jpeg_encoded_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+        let layout = crate::gfx::jpeg_layout::classify_jpeg_layout(data);
+        (layout.width != 0 && layout.height != 0).then_some((layout.width, layout.height))
+    }
+
+    fn finish_rdp_only_encoded_texture(tex_id: u32, dims: Option<(u32, u32)>) -> bool {
+        if !crate::gfx::is_rdp_only_active() {
+            return false;
+        }
+        if let Some((width, height)) = dims {
+            record_current_texture_meta(
+                tex_id,
+                width,
+                height,
+                TexSampleKind::Rgba,
+                TexCoordOrigin::TopLeft,
+            );
+        }
+        set_async_tex_status(host_texture_id_for_current_context(tex_id), ASYNC_TEX_STATUS_READY);
+        true
+    }
+
     fn mark_render_tex_inflight(tex_id: u32) {
         if tex_id == 0 {
             return;
@@ -2690,6 +2784,38 @@ pub mod cabi {
             generation,
             valid: true,
         };
+    }
+
+    fn record_current_texture_meta(
+        tex_id: u32,
+        width: u32,
+        height: u32,
+        sample_kind: TexSampleKind,
+        origin: TexCoordOrigin,
+    ) {
+        record_vm_texture_dimensions(tex_id, width, height);
+        let host_tex_id = host_texture_id_for_current_context(tex_id);
+        record_host_texture_meta(host_tex_id, width, height, sample_kind, origin);
+    }
+
+    fn finish_rdp_only_virtual_texture(
+        tex_id: u32,
+        width: u32,
+        height: u32,
+        sample_kind: TexSampleKind,
+    ) -> bool {
+        if !crate::gfx::is_rdp_only_active() {
+            return false;
+        }
+        record_current_texture_meta(
+            tex_id,
+            width,
+            height,
+            sample_kind,
+            TexCoordOrigin::TopLeft,
+        );
+        set_async_tex_status(host_texture_id_for_current_context(tex_id), ASYNC_TEX_STATUS_READY);
+        true
     }
 
     pub fn record_vm_texture_dimensions_for_vm(vm_id: u8, tex_id: u32, width: u32, height: u32) {
@@ -3579,6 +3705,11 @@ pub mod cabi {
             .and_then(|images| images.get(idx))
             .and_then(|e| e.as_ref())
             .map(|e| (e.image, e.sample_kind, e.origin))
+            .or_else(|| {
+                host_texture_meta_recorded(host_tex_id).map(|meta| {
+                    (ImageId::invalid(), meta.sample_kind, meta.origin)
+                })
+            })
             .unwrap_or((ImageId::invalid(), TexSampleKind::Mask, TexCoordOrigin::TopLeft));
         let sampler = st.cur_sampler;
         let blend = st.cur_blend;
@@ -3980,6 +4111,13 @@ pub mod cabi {
             region.map(|region| (region.x, region.y, region.width, region.height)),
             &rgba[..expected],
         );
+        if finish_rdp_only_virtual_texture(tex_id, width, height, sample_kind) {
+            if update_async_status {
+                set_async_tex_status(host_tex_id, ASYNC_TEX_STATUS_READY);
+            }
+            request_texture_work_present(repaint_window_id, host_tex_id, repaint_reason);
+            return true;
+        }
         record_vm_texture_dimensions(tex_id, width, height);
         enqueue_texture_upload(TextureUploadReq {
             tex_id: host_tex_id,
@@ -4046,6 +4184,26 @@ pub mod cabi {
             .saturating_mul(4);
         if rgba.len() < expected {
             return false;
+        }
+        if crate::gfx::is_rdp_only_active() {
+            crate::gfx::rdp_monitor_texture_rgba(
+                host_tex_id,
+                width,
+                height,
+                1,
+                None,
+                &rgba[..expected],
+            );
+            record_host_texture_meta(
+                host_tex_id,
+                width,
+                height,
+                TexSampleKind::Rgba,
+                TexCoordOrigin::TopLeft,
+            );
+            set_async_tex_status(host_tex_id, ASYNC_TEX_STATUS_READY);
+            request_texture_work_present(repaint_window_id, host_tex_id, repaint_reason);
+            return true;
         }
         enqueue_texture_upload(TextureUploadReq {
             tex_id: host_tex_id,
@@ -4541,6 +4699,9 @@ pub mod cabi {
     }
 
     async fn async_png_decode_upload_inner(tex_id: u32, bytes: Vec<u8>) {
+        if finish_rdp_only_encoded_texture(tex_id, png_encoded_dimensions(bytes.as_slice())) {
+            return;
+        }
         let rc = match crate::gfx::png_codec::decode_png_rgba(bytes.as_slice()) {
             Ok(decoded) => {
                 if queue_texture_rgba_upload_owned(
@@ -4578,6 +4739,9 @@ pub mod cabi {
     }
 
     async fn async_jpeg_decode_upload_inner(tex_id: u32, bytes: Vec<u8>) {
+        if finish_rdp_only_encoded_texture(tex_id, jpeg_encoded_dimensions(bytes.as_slice())) {
+            return;
+        }
         let rc = match crate::gfx::jpeg_codec::decode_jpeg_rgba(bytes.as_slice()) {
             Ok(decoded) => {
                 if queue_texture_rgba_upload_owned(
@@ -4635,6 +4799,9 @@ pub mod cabi {
     }
 
     async fn async_svg_decode_upload_inner(tex_id: u32, bytes: Vec<u8>) {
+        if finish_rdp_only_encoded_texture(tex_id, None) {
+            return;
+        }
         let data_len = bytes.len();
         let rc = match crate::gfx::svg::rasterize_svg_bytes_rgba(bytes.as_slice()) {
             Ok((info, rgba)) => {
@@ -5173,6 +5340,7 @@ pub mod cabi {
             .and_then(|images| images.get(idx))
             .and_then(|entry| entry.as_ref())
             .map(|img| (img.width, img.height))
+            .or_else(|| host_texture_dimensions_recorded(tex_id))
     }
 
     pub fn host_texture_has_image(tex_id: u32) -> bool {
@@ -6089,6 +6257,25 @@ pub mod cabi {
             .as_mut()
             .and_then(|images| images.get_mut(idx))
             .and_then(|entry| entry.as_mut());
+        if entry.is_none()
+            && crate::gfx::is_rdp_only_active()
+            && host_texture_dimensions_recorded(tex_id).is_some()
+        {
+            let had_scissor = st.cur_scissor.take().is_some();
+            st.frame_render_target_tex_id = tex_id;
+            st.viewport_configured = false;
+            if st.frame_active {
+                if had_scissor {
+                    st.frame_draws.push(PendingDraw::SetScissor { rect: None });
+                }
+                st.frame_draws.push(PendingDraw::SetRenderTarget { tex_id });
+            }
+            let frame_seq = st.frame_seq;
+            drop(st);
+            gfx_trace_record(GFX_TRACE_OP_SET_RENDER_TARGET, frame_seq, 0, tex_id, 0, 0, 0);
+            crate::gfx::rdp_monitor_set_render_target(frame_seq, tex_id);
+            return 0;
+        }
         let Some(entry) = entry else {
             return -1;
         };
@@ -7115,6 +7302,9 @@ pub mod cabi {
             region.map(|region| (region.x, region.y, region.width, region.height)),
             data,
         );
+        if finish_rdp_only_virtual_texture(tex_id, width, height, sample_kind) {
+            return 0;
+        }
 
         wait_for_end_frame_idle();
         let Some(ret) = crate::gfx::with_context_tag(
@@ -7459,6 +7649,9 @@ pub mod cabi {
         }
         let data = unsafe { core::slice::from_raw_parts(data_ptr, expected) };
         crate::gfx::rdp_monitor_texture_rgba(tex_id, width, height, 0x8000_0001, None, data);
+        if finish_rdp_only_virtual_texture(tex_id, width, height, TexSampleKind::Rgba) {
+            return 0;
+        }
         if !queue_texture_rgba_upload_owned(
             tex_id,
             width,
@@ -7509,6 +7702,9 @@ pub mod cabi {
             0,
             data,
         );
+        if finish_rdp_only_encoded_texture(tex_id, png_encoded_dimensions(data)) {
+            return 0;
+        }
         let decoded = match crate::gfx::png_codec::decode_png_rgba(data) {
             Ok(decoded) => decoded,
             Err(err) => return err.code(),
@@ -7563,6 +7759,9 @@ pub mod cabi {
             0x8000_0000,
             bytes.as_slice(),
         );
+        if finish_rdp_only_encoded_texture(tex_id, png_encoded_dimensions(bytes.as_slice())) {
+            return 0;
+        }
         spawn_async_png_decode_upload(tex_id, bytes)
     }
 
@@ -7600,6 +7799,9 @@ pub mod cabi {
             0,
             data,
         );
+        if finish_rdp_only_encoded_texture(tex_id, jpeg_encoded_dimensions(data)) {
+            return 0;
+        }
         let decoded = match crate::gfx::jpeg_codec::decode_jpeg_rgba(data) {
             Ok(decoded) => decoded,
             Err(err) => return err.code(),
@@ -7654,6 +7856,9 @@ pub mod cabi {
             0x8000_0000,
             bytes.as_slice(),
         );
+        if finish_rdp_only_encoded_texture(tex_id, jpeg_encoded_dimensions(bytes.as_slice())) {
+            return 0;
+        }
         set_async_tex_status(tex_id, ASYNC_TEX_STATUS_PENDING);
         enqueue_async_jpeg_upload(tex_id, bytes);
         try_spawn_async_jpeg_decode_uploads();
@@ -7694,6 +7899,9 @@ pub mod cabi {
             0,
             data,
         );
+        if finish_rdp_only_encoded_texture(tex_id, None) {
+            return 0;
+        }
         if gfx_cabi_vm_context() {
             return match crate::gfx::svg::rasterize_svg_bytes_rgba(data) {
                 Ok((info, rgba)) => {
@@ -7777,6 +7985,9 @@ pub mod cabi {
             0x8000_0000,
             bytes.as_slice(),
         );
+        if finish_rdp_only_encoded_texture(tex_id, None) {
+            return 0;
+        }
         set_async_tex_status(tex_id, ASYNC_TEX_STATUS_PENDING);
         enqueue_async_svg_upload(tex_id, bytes);
         try_start_async_svg_worker();
@@ -7792,8 +8003,12 @@ pub mod cabi {
             return vmcall_texture_status(tex_id);
         }
         if gfx_cabi_vm_context() {
-            return if vm_texture_dimensions(tex_id).is_some() {
-                ASYNC_TEX_STATUS_READY
+            if vm_texture_dimensions(tex_id).is_some() {
+                return ASYNC_TEX_STATUS_READY;
+            }
+            let status = get_async_tex_status(host_texture_id_for_current_context(tex_id));
+            return if status != ASYNC_TEX_STATUS_UNKNOWN {
+                status
             } else {
                 ASYNC_TEX_STATUS_UNKNOWN
             };
@@ -8123,6 +8338,10 @@ pub mod cabi {
             .and_then(|images| images.get(idx))
             .and_then(|e| e.as_ref())
             .map(|e| (e.image, e.sample_kind, e.origin))
+            .or_else(|| {
+                host_texture_meta_recorded(tex_id)
+                    .map(|meta| (ImageId::invalid(), meta.sample_kind, meta.origin))
+            })
             .unwrap_or((ImageId::invalid(), TexSampleKind::Mask, TexCoordOrigin::TopLeft));
         let sampler = st.cur_sampler;
         let blend = st.cur_blend;
@@ -8349,6 +8568,9 @@ pub mod cabi {
                 ));
             }
             return -4;
+        }
+        if crate::gfx::is_rdp_only_active() {
+            return 0;
         }
 
         let resolved_tex_images: Vec<Option<(ImageId, u32, u32)>> = {
