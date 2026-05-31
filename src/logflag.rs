@@ -6,10 +6,10 @@ pub(crate) const GLOBAL_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
 pub(crate) const BOOT_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const SERVICE_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const NET_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
-pub(crate) const USB_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
-pub(crate) const STORAGE_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
-pub(crate) const GFX_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
-pub(crate) const HV_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
+pub(crate) const USB_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
+pub(crate) const STORAGE_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
+pub(crate) const GFX_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
+pub(crate) const HV_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 
 pub(crate) const NET_LOG_RX_TAP: bool = false;
 pub(crate) const NET_LOG_TX_TAP: bool = false;

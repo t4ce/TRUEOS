@@ -13,6 +13,7 @@ pub enum Ui2DemoTexId {
     TextInput = 4_726,
     AnalogClock = 4_727,
     Gboi = 4_728,
+    BeeTiles = 4_729,
 }
 
 impl Ui2DemoTexId {

@@ -58,6 +58,7 @@ enum PipelineKind {
     Mandelbrot,
     Julia,
     BurningShip,
+    BeeTiles,
 }
 
 #[derive(Clone)]
@@ -557,7 +558,10 @@ impl IntelGfxBackend {
         let sample_kind = match pipeline_kind {
             PipelineKind::TexMask => SampleKind::Mask,
             PipelineKind::TexRgba | PipelineKind::TexParticle => SampleKind::Rgba,
-            PipelineKind::Mandelbrot | PipelineKind::Julia | PipelineKind::BurningShip => {
+            PipelineKind::Mandelbrot
+            | PipelineKind::Julia
+            | PipelineKind::BurningShip
+            | PipelineKind::BeeTiles => {
                 return Err(Error::Unsupported);
             }
             PipelineKind::Rgb => return Err(Error::Invalid),
@@ -752,6 +756,9 @@ impl GfxDevice for IntelGfxBackend {
                 Some(crate::gfx::mandelbrot::JULIA_PIPELINE_FS_TAG_RAW) => PipelineKind::Julia,
                 Some(crate::gfx::mandelbrot::BURNING_SHIP_PIPELINE_FS_TAG_RAW) => {
                     PipelineKind::BurningShip
+                }
+                Some(crate::gfx::bee_tiles::BEE_TILES_PIPELINE_FS_TAG_RAW) => {
+                    PipelineKind::BeeTiles
                 }
                 _ => PipelineKind::TexRgba,
             }
@@ -1044,6 +1051,7 @@ impl GfxDevice for IntelGfxBackend {
                             PipelineKind::Mandelbrot
                                 | PipelineKind::Julia
                                 | PipelineKind::BurningShip
+                                | PipelineKind::BeeTiles
                         ) {
                             self.draw_mandelbrot(
                                 target,
@@ -1628,6 +1636,9 @@ fn draw_mandelbrot_triangle_rgba(
                             dispatch_mask,
                             crate::gfx::mandelbrot::BURNING_SHIP_ITERATIONS,
                         )
+                    }
+                    PipelineKind::BeeTiles => {
+                        crate::gfx::bee_tiles::shade_uv_simd16(us, vs, dispatch_mask)
                     }
                     _ => crate::gfx::mandelbrot::shade_uv_simd16(
                         us,
