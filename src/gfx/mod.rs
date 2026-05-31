@@ -253,6 +253,29 @@ pub fn with_cabi_frame_lock<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
+pub fn try_with_cabi_frame_lock<R>(spin_limit: u32, f: impl FnOnce() -> R) -> Option<R> {
+    let mut spins = 0u32;
+    while CABI_FRAME_LOCK
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        spins = spins.saturating_add(1);
+        if spins >= spin_limit {
+            return None;
+        }
+        crate::wait::spin_step();
+    }
+
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            cabi_frame_lock_end();
+        }
+    }
+    let _guard = Guard;
+    Some(f())
+}
+
 #[inline]
 pub fn cabi_frame_lock_begin() {
     while CABI_FRAME_LOCK

@@ -2282,6 +2282,18 @@ pub fn request_full_recompose(reason: &'static str) {
     let state_lock = init_state();
     let mut state = state_lock.lock();
     state.compose_reason = reason;
+    if reason == "rdp-client-connect"
+        || reason == "rdp-client-first-frame"
+        || reason == "rdp-client-resize"
+    {
+        crate::log!(
+            "ui2: full-recompose request reason={} windows={} first={} dirty={}\n",
+            reason,
+            state.windows.len(),
+            state.first_compose_signaled as u8,
+            UI2_DIRTY.load(Ordering::Acquire) as u8
+        );
+    }
     for window in &mut state.windows {
         window.dirty = true;
         window.content_present_dirty = false;

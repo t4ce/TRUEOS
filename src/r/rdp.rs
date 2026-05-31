@@ -41,6 +41,7 @@ const MSG_RESOURCE_SNAPSHOT_BEGIN: u16 = 17;
 const MSG_RESOURCE_SNAPSHOT_END: u16 = 18;
 const MSG_INPUT_TABLET_ABS: u16 = 100;
 const MSG_INPUT_KEYBOARD_BOOT: u16 = 101;
+const MSG_CLIENT_RECOMPOSE: u16 = 102;
 const CAP_ONE_WAY_MONITOR: u32 = 1;
 const CAP_GFX_COMMAND_STREAM: u32 = 1 << 1;
 const CAP_RESOURCE_SNAPSHOT: u32 = 1 << 2;
@@ -65,6 +66,7 @@ struct ClientInputBuffer {
 static TRUEOS_RDP_STARTED: AtomicBool = AtomicBool::new(false);
 static TRUEOS_RDP_CLIENTS: AtomicU32 = AtomicU32::new(0);
 static TRUEOS_RDP_DROPPED_SENDS: AtomicU32 = AtomicU32::new(0);
+static TRUEOS_RDP_SCREEN_FRAMES: AtomicU32 = AtomicU32::new(0);
 static TRUEOS_RDP_RESOURCE_SEQ: AtomicU32 = AtomicU32::new(1);
 static TRUEOS_RDP_TEXTURE_CACHE_BYTES: AtomicU32 = AtomicU32::new(0);
 static TRUEOS_RDP_COMMAND_QUEUE: Mutex<Option<&'static NetQueue<NetCommand>>> = Mutex::new(None);
@@ -89,6 +91,11 @@ pub fn cached_texture_count() -> u32 {
 #[inline]
 pub fn cached_texture_bytes() -> u32 {
     TRUEOS_RDP_TEXTURE_CACHE_BYTES.load(Ordering::Acquire)
+}
+
+#[inline]
+fn screen_frame_count() -> u32 {
+    TRUEOS_RDP_SCREEN_FRAMES.load(Ordering::Acquire)
 }
 
 fn active_view_dimensions() -> (u32, u32) {
@@ -237,6 +244,20 @@ fn handle_client_payload(handle: NetHandle, payload: &[u8]) {
                     keys[5],
                 );
             }
+        }
+        MSG_CLIENT_RECOMPOSE => {
+            if body.len() < 12 {
+                return;
+            }
+            let width = read_u32(body, 0).unwrap_or(0).max(1);
+            let height = read_u32(body, 4).unwrap_or(0).max(1);
+            crate::log!(
+                "trueos-rdp: client recompose handle={} view={}x{}\n",
+                handle.0,
+                width,
+                height
+            );
+            crate::r::ui2::request_full_recompose("rdp-client-resize");
         }
         _ => {}
     }
@@ -449,12 +470,20 @@ async fn send_resource_snapshot(cmds: &NetQueue<NetCommand>, handle: NetHandle) 
         );
     }
 
-    let assets = crate::r::resource_monitor::encoded_assets_snapshot();
-    let bytes = assets
+    let textures = texture_cache_snapshot();
+    let bytes = textures
         .iter()
-        .fold(0usize, |acc, asset| acc.saturating_add(asset.bytes.len()))
+        .fold(0usize, |acc, texture| acc.saturating_add(texture.data.len()))
         .min(u32::MAX as usize) as u32;
-    let latest_seq = assets.last().map(|asset| asset.seq).unwrap_or(0);
+    let latest_seq = textures.last().map(|texture| texture.seq).unwrap_or(0);
+    crate::log!(
+        "trueos-rdp: asset sync cache textures={} bytes={} latest={} preserved={} preserved_bytes={}\n",
+        textures.len(),
+        bytes,
+        latest_seq,
+        crate::r::resource_monitor::preserved_count(),
+        crate::r::resource_monitor::preserved_bytes()
+    );
 
     send_frame_to(
         cmds,
@@ -462,24 +491,20 @@ async fn send_resource_snapshot(cmds: &NetQueue<NetCommand>, handle: NetHandle) 
         protocol_frame(
             MSG_RESOURCE_SNAPSHOT_BEGIN,
             &[
-                assets.len().min(u32::MAX as usize) as u32,
+                textures.len().min(u32::MAX as usize) as u32,
                 bytes,
-                latest_seq.min(u32::MAX as u64) as u32,
+                latest_seq,
             ],
             &[],
         ),
         "asset-sync-begin",
     );
 
-    for asset in assets {
+    for texture in textures {
         send_frame_to(
             cmds,
             handle,
-            protocol_frame(
-                encoded_msg(asset.kind),
-                encoded_fields(&asset).as_slice(),
-                asset.bytes.as_slice(),
-            ),
+            protocol_frame(texture.msg, texture.fields.as_slice(), texture.data.as_slice()),
             "asset-sync-texture",
         );
     }
@@ -489,11 +514,7 @@ async fn send_resource_snapshot(cmds: &NetQueue<NetCommand>, handle: NetHandle) 
         handle,
         protocol_frame(
             MSG_RESOURCE_SNAPSHOT_END,
-            &[
-                crate::r::resource_monitor::preserved_count(),
-                crate::r::resource_monitor::preserved_bytes().min(u32::MAX as u64) as u32,
-                latest_seq.min(u32::MAX as u64) as u32,
-            ],
+            &[cached_texture_count(), cached_texture_bytes(), latest_seq],
             &[],
         ),
         "asset-sync-end",
@@ -501,10 +522,31 @@ async fn send_resource_snapshot(cmds: &NetQueue<NetCommand>, handle: NetHandle) 
 }
 
 pub fn publish_begin_frame(seq: u32, flags: u32, clear_rgb: u32) {
+    if has_clients() && screen_frame_count() == 0 {
+        crate::log!(
+            "trueos-rdp: first-frame begin seq={} flags=0x{:08x} clear=0x{:06x}\n",
+            seq,
+            flags,
+            clear_rgb & 0x00FF_FFFF
+        );
+    }
     publish_small(MSG_BEGIN_FRAME, &[seq, flags, clear_rgb & 0x00FF_FFFF]);
 }
 
 pub fn publish_end_frame(seq: u32, flags: u32, rgb_draws: u32, tex_draws: u32, draw_bytes: u32) {
+    if has_clients() && (flags & 1) != 0 {
+        let frame = TRUEOS_RDP_SCREEN_FRAMES.fetch_add(1, Ordering::AcqRel) + 1;
+        if frame == 1 {
+            crate::log!(
+                "trueos-rdp: first-frame end seq={} flags=0x{:08x} rgb={} tex={} bytes={}\n",
+                seq,
+                flags,
+                rgb_draws,
+                tex_draws,
+                draw_bytes
+            );
+        }
+    }
     publish_small(MSG_END_FRAME, &[seq, flags, rgb_draws, tex_draws, draw_bytes]);
 }
 
@@ -646,6 +688,24 @@ fn open_listener(cmds: &NetQueue<NetCommand>) {
 async fn send_hello(cmds: &NetQueue<NetCommand>, handle: NetHandle) {
     send_frame_to(cmds, handle, hello_frame(), "hello");
     send_resource_snapshot(cmds, handle).await;
+    crate::log!(
+        "trueos-rdp: request first recompose handle={} clients={} frames={} preserved={} bytes={}\n",
+        handle.0,
+        client_count(),
+        screen_frame_count(),
+        crate::r::resource_monitor::preserved_count(),
+        crate::r::resource_monitor::preserved_bytes()
+    );
+    crate::r::ui2::request_full_recompose("rdp-client-connect");
+}
+
+fn request_first_frame_recompose(reason: &'static str, ticks: u32) {
+    if ticks.is_multiple_of(10) {
+        if ticks.is_multiple_of(100) {
+            crate::log!("trueos-rdp: first-frame recompose reason={}\n", reason);
+        }
+        crate::r::ui2::request_full_recompose(reason);
+    }
 }
 
 #[task]
@@ -668,6 +728,7 @@ pub async fn trueos_rdp_task() {
     let mut clients: Vec<NetHandle> = Vec::new();
     let mut input_buffers: Vec<ClientInputBuffer> = Vec::new();
     let mut ticks: u32 = 0;
+    let mut first_frame_base = screen_frame_count();
 
     loop {
         for ev in events.drain(64) {
@@ -691,6 +752,7 @@ pub async fn trueos_rdp_task() {
                     if !clients.contains(&handle) {
                         clients.push(handle);
                         publish_client_handles(clients.as_slice());
+                        first_frame_base = screen_frame_count();
                     }
 
                     match peer {
@@ -725,6 +787,9 @@ pub async fn trueos_rdp_task() {
                     }
 
                     if remove_client_handle(&mut clients, &mut input_buffers, handle) {
+                        if clients.is_empty() {
+                            first_frame_base = screen_frame_count();
+                        }
                         crate::log!(
                             "trueos-rdp: client closed handle={} clients={}\n",
                             handle.0,
@@ -758,6 +823,9 @@ pub async fn trueos_rdp_task() {
         }
 
         ticks = ticks.wrapping_add(1);
+        if !clients.is_empty() && screen_frame_count() == first_frame_base {
+            request_first_frame_recompose("rdp-client-first-frame", ticks);
+        }
         Timer::after(EmbassyDuration::from_millis(10)).await;
     }
 }
