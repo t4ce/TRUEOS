@@ -2301,6 +2301,7 @@ pub mod cabi {
         Mandelbrot,
         Julia,
         BurningShip,
+        BeeTiles,
     }
 
     const fn fractal_render_label(kind: FractalRenderKind) -> &'static str {
@@ -2308,6 +2309,7 @@ pub mod cabi {
             FractalRenderKind::Mandelbrot => "mandelbrot",
             FractalRenderKind::Julia => "julia",
             FractalRenderKind::BurningShip => "burning-ship",
+            FractalRenderKind::BeeTiles => "bee-tiles",
         }
     }
 
@@ -2316,6 +2318,7 @@ pub mod cabi {
             FractalRenderKind::Mandelbrot => "draw-mandelbrot",
             FractalRenderKind::Julia => "draw-julia",
             FractalRenderKind::BurningShip => "draw-burning-ship",
+            FractalRenderKind::BeeTiles => "draw-bee-tiles",
         }
     }
 
@@ -4476,6 +4479,53 @@ pub mod cabi {
         true
     }
 
+    pub fn queue_render_bee_tiles_to_texture(
+        tex_id: u32,
+        ticks: u64,
+        tick_hz: u64,
+        repaint_window_id: u32,
+        repaint_reason: &'static str,
+    ) -> bool {
+        if crate::hv::current_hull_guest_context_vm_id().is_some() {
+            return false;
+        }
+        if tex_id == 0 {
+            return false;
+        }
+        if reject_unreasonable_tex_id(tex_id, "queue-draw-bee-tiles") {
+            return false;
+        }
+        if !claim_current_vm_texture_id(tex_id, "queue-draw-bee-tiles-owner") {
+            return false;
+        }
+        let host_tex_id = host_texture_id_for_current_context(tex_id);
+        if host_tex_id == 0 || reject_unreasonable_tex_id(host_tex_id, "queue-draw-bee-tiles-host")
+        {
+            return false;
+        }
+        let queue_log = MANDELBROT_QUEUE_LOGS.fetch_add(1, Ordering::Relaxed);
+        if queue_log < 16 || queue_log % 120 == 0 {
+            crate::log!(
+                "gfx-cabi: queue bee-tiles guest_tex={} host_tex={} repaint_window={} reason={} ticks={} hz={}\n",
+                tex_id,
+                host_tex_id,
+                repaint_window_id,
+                repaint_reason,
+                ticks,
+                tick_hz
+            );
+        }
+        enqueue_texture_draw_mandelbrot(TextureDrawMandelbrotReq {
+            tex_id: host_tex_id,
+            ticks,
+            tick_hz,
+            kind: FractalRenderKind::BeeTiles,
+            repaint_window_id,
+            repaint_reason,
+        });
+        true
+    }
+
     pub fn queue_render_tex_triangles_to_texture_copy(
         target_tex_id: u32,
         source_tex_id: u32,
@@ -5045,6 +5095,7 @@ pub mod cabi {
         tex_pipeline_mandelbrot: PipelineId,
         tex_pipeline_julia: PipelineId,
         tex_pipeline_burning_ship: PipelineId,
+        tex_pipeline_bee_tiles: PipelineId,
         tex_vbuf: [BufferId; GFX_CABI_VBUF_RING_LEN],
         tex_capacity: [usize; GFX_CABI_VBUF_RING_LEN],
         tex_images: Option<Vec<Option<TexImage>>>,
@@ -5096,6 +5147,7 @@ pub mod cabi {
         Mandelbrot,
         Julia,
         BurningShip,
+        BeeTiles,
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5357,6 +5409,7 @@ pub mod cabi {
                 tex_pipeline_mandelbrot: PipelineId::invalid(),
                 tex_pipeline_julia: PipelineId::invalid(),
                 tex_pipeline_burning_ship: PipelineId::invalid(),
+                tex_pipeline_bee_tiles: PipelineId::invalid(),
                 tex_vbuf: [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN],
                 tex_capacity: [0; GFX_CABI_VBUF_RING_LEN],
                 tex_images: None,
@@ -6524,6 +6577,7 @@ pub mod cabi {
             st.tex_pipeline_mandelbrot = PipelineId::invalid();
             st.tex_pipeline_julia = PipelineId::invalid();
             st.tex_pipeline_burning_ship = PipelineId::invalid();
+            st.tex_pipeline_bee_tiles = PipelineId::invalid();
             st.tex_vbuf = [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN];
             st.tex_capacity = [0; GFX_CABI_VBUF_RING_LEN];
             st.tex_images = None;
@@ -6620,6 +6674,7 @@ pub mod cabi {
             st.tex_pipeline_mandelbrot = PipelineId::invalid();
             st.tex_pipeline_julia = PipelineId::invalid();
             st.tex_pipeline_burning_ship = PipelineId::invalid();
+            st.tex_pipeline_bee_tiles = PipelineId::invalid();
             st.tex_vbuf = [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN];
             st.tex_capacity = [0; GFX_CABI_VBUF_RING_LEN];
             st.tex_images = None;
@@ -6649,6 +6704,7 @@ pub mod cabi {
             TexPipelineKind::Mandelbrot => st.tex_pipeline_mandelbrot,
             TexPipelineKind::Julia => st.tex_pipeline_julia,
             TexPipelineKind::BurningShip => st.tex_pipeline_burning_ship,
+            TexPipelineKind::BeeTiles => st.tex_pipeline_bee_tiles,
         };
 
         if !pipeline_id.is_valid() {
@@ -6673,6 +6729,9 @@ pub mod cabi {
                 TexPipelineKind::BurningShip => {
                     ShaderId::from_raw(crate::gfx::mandelbrot::BURNING_SHIP_PIPELINE_FS_TAG_RAW)
                 }
+                TexPipelineKind::BeeTiles => {
+                    ShaderId::from_raw(crate::gfx::bee_tiles::BEE_TILES_PIPELINE_FS_TAG_RAW)
+                }
             };
             let p = ctx
                 .create_pipeline(PipelineDesc {
@@ -6689,6 +6748,7 @@ pub mod cabi {
                 TexPipelineKind::Mandelbrot => st.tex_pipeline_mandelbrot = p,
                 TexPipelineKind::Julia => st.tex_pipeline_julia = p,
                 TexPipelineKind::BurningShip => st.tex_pipeline_burning_ship = p,
+                TexPipelineKind::BeeTiles => st.tex_pipeline_bee_tiles = p,
             }
         }
 
@@ -7015,24 +7075,6 @@ pub mod cabi {
             return -2;
         }
 
-        let verts = match kind {
-            FractalRenderKind::Mandelbrot => {
-                crate::gfx::mandelbrot::fullscreen_quad_rgba_bytes_for_view(ticks, tick_hz)
-            }
-            FractalRenderKind::Julia => {
-                let _ = (ticks, tick_hz);
-                crate::gfx::mandelbrot::fullscreen_quad_rgba_bytes_for_julia_view()
-            }
-            FractalRenderKind::BurningShip => {
-                let _ = (ticks, tick_hz);
-                crate::gfx::mandelbrot::fullscreen_quad_rgba_bytes_for_burning_ship_view()
-            }
-        };
-        let usable = verts.len();
-        if usable == 0 {
-            return -3;
-        }
-
         let (image, width, height) = {
             let st = GFX_CABI_STATE.lock();
             let idx = tex_id.saturating_sub(1) as usize;
@@ -7051,6 +7093,29 @@ pub mod cabi {
             return -7;
         }
 
+        let verts = match kind {
+            FractalRenderKind::Mandelbrot => {
+                crate::gfx::mandelbrot::fullscreen_quad_rgba_bytes_for_view(ticks, tick_hz)
+            }
+            FractalRenderKind::Julia => {
+                let _ = (ticks, tick_hz);
+                crate::gfx::mandelbrot::fullscreen_quad_rgba_bytes_for_julia_view()
+            }
+            FractalRenderKind::BurningShip => {
+                let _ = (ticks, tick_hz);
+                crate::gfx::mandelbrot::fullscreen_quad_rgba_bytes_for_burning_ship_view()
+            }
+            FractalRenderKind::BeeTiles => {
+                crate::gfx::bee_tiles::fullscreen_quad_rgba_bytes_for_view(
+                    ticks, tick_hz, width, height,
+                )
+            }
+        };
+        let usable = verts.len();
+        if usable == 0 {
+            return -3;
+        }
+
         crate::gfx::with_cabi_frame_lock(|| {
             let Some(ret) =
                 crate::gfx::with_context_tag(crate::gfx::SystemLockOwner::DrawMandelbrot, |ctx| {
@@ -7058,6 +7123,7 @@ pub mod cabi {
                         FractalRenderKind::Mandelbrot => TexPipelineKind::Mandelbrot,
                         FractalRenderKind::Julia => TexPipelineKind::Julia,
                         FractalRenderKind::BurningShip => TexPipelineKind::BurningShip,
+                        FractalRenderKind::BeeTiles => TexPipelineKind::BeeTiles,
                     };
                     let (pipeline, vbuf, _) =
                         match ensure_gfx_resources_tex(ctx, usable, pipeline_kind) {
@@ -7507,6 +7573,7 @@ pub mod cabi {
                     st.tex_pipeline_mandelbrot = PipelineId::invalid();
                     st.tex_pipeline_julia = PipelineId::invalid();
                     st.tex_pipeline_burning_ship = PipelineId::invalid();
+                    st.tex_pipeline_bee_tiles = PipelineId::invalid();
                     st.tex_vbuf = [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN];
                     st.tex_capacity = [0; GFX_CABI_VBUF_RING_LEN];
                     st.tex_images = None;

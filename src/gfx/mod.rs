@@ -1,5 +1,6 @@
 pub mod althlasfont;
 pub mod backends;
+pub mod bee_tiles;
 pub mod jpeg_codec;
 pub(crate) mod jpeg_layout;
 pub mod lyon;

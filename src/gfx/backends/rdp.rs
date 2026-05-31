@@ -45,6 +45,7 @@ enum PipelineKind {
     Mandelbrot,
     Julia,
     BurningShip,
+    BeeTiles,
 }
 
 #[derive(Clone)]
@@ -320,7 +321,10 @@ impl RdpGfxBackend {
     ) -> Result<()> {
         if !matches!(
             entry.kind,
-            PipelineKind::Mandelbrot | PipelineKind::Julia | PipelineKind::BurningShip
+            PipelineKind::Mandelbrot
+                | PipelineKind::Julia
+                | PipelineKind::BurningShip
+                | PipelineKind::BeeTiles
         ) && self.image(source).is_none()
         {
             return Err(Error::NotFound);
@@ -340,7 +344,10 @@ impl RdpGfxBackend {
         publish_sampler(seq, self.sampler);
         if matches!(
             entry.kind,
-            PipelineKind::Mandelbrot | PipelineKind::Julia | PipelineKind::BurningShip
+            PipelineKind::Mandelbrot
+                | PipelineKind::Julia
+                | PipelineKind::BurningShip
+                | PipelineKind::BeeTiles
         ) {
             self.publish_draw_chunks_pipeline(seq, pipeline_id.raw(), verts.as_slice());
         } else {
@@ -377,7 +384,8 @@ impl RdpGfxBackend {
             PipelineKind::Rgb
             | PipelineKind::Mandelbrot
             | PipelineKind::Julia
-            | PipelineKind::BurningShip => 0,
+            | PipelineKind::BurningShip
+            | PipelineKind::BeeTiles => 0,
         };
         let mut off = 0usize;
         while off < verts.len() {
@@ -455,6 +463,10 @@ impl RdpGfxBackend {
             PipelineKind::BurningShip => (
                 crate::gfx::mandelbrot::BURNING_SHIP_PIPELINE_FS_TAG_RAW,
                 crate::gfx::mandelbrot::BURNING_SHIP_WGSL_FRAGMENT.as_bytes(),
+            ),
+            PipelineKind::BeeTiles => (
+                crate::gfx::bee_tiles::BEE_TILES_PIPELINE_FS_TAG_RAW,
+                crate::gfx::bee_tiles::BEE_TILES_WGSL_FRAGMENT.as_bytes(),
             ),
             _ => return,
         };
@@ -611,6 +623,9 @@ impl GfxDevice for RdpGfxBackend {
                 Some(crate::gfx::mandelbrot::JULIA_PIPELINE_FS_TAG_RAW) => PipelineKind::Julia,
                 Some(crate::gfx::mandelbrot::BURNING_SHIP_PIPELINE_FS_TAG_RAW) => {
                     PipelineKind::BurningShip
+                }
+                Some(crate::gfx::bee_tiles::BEE_TILES_PIPELINE_FS_TAG_RAW) => {
+                    PipelineKind::BeeTiles
                 }
                 _ => PipelineKind::TexRgba,
             }

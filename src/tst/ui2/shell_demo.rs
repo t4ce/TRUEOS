@@ -14,7 +14,7 @@ const UI2_SHELL_WINDOW_Z: i16 = 31;
 const UI2_SHELL_WINDOW_ALPHA: u8 = 0xFF;
 const UI2_SHELL_BG_RGBA: [u8; 4] = [0x0C, 0x10, 0x16, 0xFF];
 const UI2_SHELL_CURSOR_RGBA: [u8; 4] = [0xF1, 0xF4, 0xF8, 0xFF];
-const UI2_SHELL_CURSOR_CH: char = '▏';
+const UI2_SHELL_CURSOR_W_PX: usize = 2;
 const UI2_SHELL_CURSOR_BLINK_ENABLED: bool = true;
 const UI2_SHELL_CURSOR_BLINK_MS: u64 = 1_000;
 const UI2_SHELL_BASE_TEXT_ROWS: usize = 12;
@@ -90,33 +90,6 @@ fn snapshot_cell(
         })
 }
 
-fn render_cell_glyph(
-    rgba: &mut [u8],
-    dst_width: usize,
-    dst_height: usize,
-    atlases: &ui2::Ui2FontCpuAtlases,
-    pen_x: usize,
-    row_y: usize,
-    advance_px: usize,
-    cell: &crate::shell2::Ui2ShellCell,
-) {
-    let _ = ui2::ui2_font_blit_char_rgba(
-        rgba,
-        dst_width,
-        dst_height,
-        atlases,
-        UI2_SHELL_FONT_TIER,
-        cell.ch,
-        Ui2Rect {
-            x: pen_x as f32,
-            y: row_y as f32,
-            w: advance_px as f32,
-            h: ui2_shell_line_height() as f32,
-        },
-        cell_fg_rgba(cell),
-    );
-}
-
 fn push_row_text_run(
     rgba: &mut [u8],
     dst_width: usize,
@@ -146,7 +119,6 @@ fn render_cursor(
     rgba: &mut [u8],
     dst_width: usize,
     dst_height: usize,
-    atlases: &ui2::Ui2FontCpuAtlases,
     snapshot: &crate::shell2::Ui2ShellScreenSnapshot,
     blink_on: bool,
 ) {
@@ -170,20 +142,15 @@ fn render_cursor(
         ui2_shell_line_height() as usize,
         cell_bg_rgba(&cell),
     );
-    let cursor_cell = crate::shell2::Ui2ShellCell {
-        ch: UI2_SHELL_CURSOR_CH,
-        fg: (UI2_SHELL_CURSOR_RGBA[0], UI2_SHELL_CURSOR_RGBA[1], UI2_SHELL_CURSOR_RGBA[2]),
-        bg: cell.bg,
-    };
-    render_cell_glyph(
+    fill_rect_rgba(
         rgba,
         dst_width,
         dst_height,
-        atlases,
         x,
         row_y,
-        cursor_w.max(1),
-        &cursor_cell,
+        UI2_SHELL_CURSOR_W_PX.min(cursor_w).max(1),
+        ui2_shell_line_height() as usize,
+        UI2_SHELL_CURSOR_RGBA,
     );
 }
 
@@ -390,7 +357,7 @@ fn render_shell_snapshot_rgba(
         }
     }
 
-    render_cursor(rgba.as_mut_slice(), content_w, content_h, atlases, snapshot, blink_on);
+    render_cursor(rgba.as_mut_slice(), content_w, content_h, snapshot, blink_on);
     rgba
 }
 
@@ -501,20 +468,15 @@ fn render_shell_row_range_rgba(
             height_usize,
             cell_bg_rgba(&cell),
         );
-        let cursor_cell = crate::shell2::Ui2ShellCell {
-            ch: UI2_SHELL_CURSOR_CH,
-            fg: (UI2_SHELL_CURSOR_RGBA[0], UI2_SHELL_CURSOR_RGBA[1], UI2_SHELL_CURSOR_RGBA[2]),
-            bg: cell.bg,
-        };
-        render_cell_glyph(
+        fill_rect_rgba(
             rgba.as_mut_slice(),
             width_usize,
             height_usize,
-            atlases,
             pen_x,
             0,
-            advance_px,
-            &cursor_cell,
+            UI2_SHELL_CURSOR_W_PX.min(advance_px).max(1),
+            height_usize,
+            UI2_SHELL_CURSOR_RGBA,
         );
     }
 
