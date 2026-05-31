@@ -39,6 +39,9 @@ const MSG_DRAW_RGB_TRIANGLES: u16 = 15;
 const MSG_DRAW_TEX_TRIANGLES: u16 = 16;
 const MSG_RESOURCE_SNAPSHOT_BEGIN: u16 = 17;
 const MSG_RESOURCE_SNAPSHOT_END: u16 = 18;
+const MSG_SHADER_CREATE: u16 = 19;
+const MSG_PIPELINE_CREATE: u16 = 20;
+const MSG_DRAW_PIPELINE_TRIANGLES: u16 = 21;
 const MSG_INPUT_TABLET_ABS: u16 = 100;
 const MSG_INPUT_KEYBOARD_BOOT: u16 = 101;
 const MSG_CLIENT_RECOMPOSE: u16 = 102;
@@ -46,6 +49,7 @@ const CAP_ONE_WAY_MONITOR: u32 = 1;
 const CAP_GFX_COMMAND_STREAM: u32 = 1 << 1;
 const CAP_RESOURCE_SNAPSHOT: u32 = 1 << 2;
 const CAP_ABSOLUTE_TABLET_INPUT: u32 = 1 << 3;
+const CAP_SHADER_PIPELINES: u32 = 1 << 4;
 const RDP_TEXTURE_CACHE_CAP: usize = 512;
 const RDP_INPUT_MAX_FRAME_BYTES: usize = 1024;
 
@@ -136,7 +140,8 @@ fn hello_frame() -> Vec<u8> {
     let caps = CAP_ONE_WAY_MONITOR
         | CAP_GFX_COMMAND_STREAM
         | CAP_RESOURCE_SNAPSHOT
-        | CAP_ABSOLUTE_TABLET_INPUT;
+        | CAP_ABSOLUTE_TABLET_INPUT
+        | CAP_SHADER_PIPELINES;
 
     let mut payload = begin_payload(MSG_HELLO, 16);
     push_u32(&mut payload, view_w);
@@ -226,7 +231,9 @@ fn handle_client_payload(handle: NetHandle, payload: &[u8]) {
             let modifiers = read_u32(body, 4).unwrap_or(0).min(u8::MAX as u32) as u8;
             let keys_lo = read_u32(body, 8).unwrap_or(0).to_le_bytes();
             let keys_hi = read_u32(body, 12).unwrap_or(0).to_le_bytes();
-            let keys = [keys_lo[0], keys_lo[1], keys_lo[2], keys_lo[3], keys_hi[0], keys_hi[1]];
+            let keys = [
+                keys_lo[0], keys_lo[1], keys_lo[2], keys_lo[3], keys_hi[0], keys_hi[1],
+            ];
             crate::usb3::hid::inject_virtual_keyboard_boot_report(modifiers, keys);
 
             static KEYBOARD_INPUT_LOGS: AtomicU32 = AtomicU32::new(0);
@@ -317,7 +324,10 @@ fn remove_client_handle(
     true
 }
 
-fn clear_client_handles(clients: &mut Vec<NetHandle>, input_buffers: &mut Vec<ClientInputBuffer>) -> usize {
+fn clear_client_handles(
+    clients: &mut Vec<NetHandle>,
+    input_buffers: &mut Vec<ClientInputBuffer>,
+) -> usize {
     let cleared = clients.len();
     if cleared == 0 {
         return 0;
@@ -464,10 +474,7 @@ async fn send_resource_snapshot(cmds: &NetQueue<NetCommand>, handle: NetHandle) 
     let target_seq = crate::r::resource_monitor::latest_encoded_seq();
     let flushed = crate::r::resource_monitor::wait_until_flushed(target_seq, 1_500).await;
     if !flushed {
-        crate::log!(
-            "trueos-rdp: asset sync ramdisk wait timeout target_seq={}\n",
-            target_seq
-        );
+        crate::log!("trueos-rdp: asset sync ramdisk wait timeout target_seq={}\n", target_seq);
     }
 
     let textures = texture_cache_snapshot();
@@ -668,6 +675,65 @@ pub fn publish_draw_tex_triangles(
             vcount,
             sampler_flags,
             sample_kind,
+            vertices.len().min(u32::MAX as usize) as u32,
+        ],
+        vertices,
+    );
+}
+
+pub fn publish_shader_create(shader_id: u32, stage: u32, format: u32, flags: u32, source: &[u8]) {
+    publish_bytes(
+        MSG_SHADER_CREATE,
+        &[
+            shader_id,
+            stage,
+            format,
+            flags,
+            source.len().min(u32::MAX as usize) as u32,
+        ],
+        source,
+    );
+}
+
+pub fn publish_pipeline_create(
+    pipeline_id: u32,
+    stride: u32,
+    pos_offset: u32,
+    color_offset: u32,
+    color_format: u32,
+    texcoord_offset: u32,
+    texcoord_format: u32,
+    vs_shader_id: u32,
+    fs_shader_id: u32,
+) {
+    publish_small(
+        MSG_PIPELINE_CREATE,
+        &[
+            pipeline_id,
+            stride,
+            pos_offset,
+            color_offset,
+            color_format,
+            texcoord_offset,
+            texcoord_format,
+            vs_shader_id,
+            fs_shader_id,
+        ],
+    );
+}
+
+pub fn publish_draw_pipeline_triangles(
+    frame_seq: u32,
+    pipeline_id: u32,
+    vcount: u32,
+    vertices: &[u8],
+) {
+    publish_bytes(
+        MSG_DRAW_PIPELINE_TRIANGLES,
+        &[
+            frame_seq,
+            pipeline_id,
+            vcount,
             vertices.len().min(u32::MAX as usize) as u32,
         ],
         vertices,

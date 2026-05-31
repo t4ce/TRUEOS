@@ -1581,6 +1581,8 @@ pub struct VirglGfxBackend {
     fs_tex_rgba_handle: u32,
     fs_tex_particle_handle: u32,
     fs_mandelbrot_handle: u32,
+    fs_julia_handle: u32,
+    fs_burning_ship_handle: u32,
     sampler_state_nearest_handle: u32,
     sampler_state_linear_handle: u32,
     debug_tex_res: u32,
@@ -1885,6 +1887,8 @@ impl VirglGfxBackend {
         let fs_tex_mask_handle = 23u32;
         let fs_tex_rgba_handle = 24u32;
         let fs_mandelbrot_handle = 25u32;
+        let fs_julia_handle = 29u32;
+        let fs_burning_ship_handle = 39u32;
         let fs_tex_particle_handle = 28u32;
         let sampler_state_handle = 26u32;
         let sampler_state_linear_handle = 27u32;
@@ -1911,7 +1915,16 @@ impl VirglGfxBackend {
         // Virgl vertex format is fixed for this minimal backend.
         encode_set_vertex_buffer(&mut init, core::mem::size_of::<Vertex>() as u32, 0, vbo_res);
 
-        let fs_mandelbrot = crate::gfx::mandelbrot::build_fragment_shader_tgsi_unrolled(64);
+        let fs_mandelbrot = crate::gfx::mandelbrot::build_fragment_shader_tgsi_unrolled(
+            crate::gfx::mandelbrot::MANDELBROT_ITERATIONS,
+        );
+        let fs_julia = crate::gfx::mandelbrot::build_julia_fragment_shader_tgsi_unrolled(
+            crate::gfx::mandelbrot::JULIA_ITERATIONS,
+        );
+        let fs_burning_ship =
+            crate::gfx::mandelbrot::build_burning_ship_fragment_shader_tgsi_unrolled(
+                crate::gfx::mandelbrot::BURNING_SHIP_ITERATIONS,
+            );
 
         // Color pipeline program.
         encode_shader(&mut init, vs_color_handle, PIPE_SHADER_VERTEX, VS_COLOR);
@@ -1940,6 +1953,17 @@ impl VirglGfxBackend {
         );
         encode_bind_shader(&mut init, fs_mandelbrot_handle, PIPE_SHADER_FRAGMENT);
         encode_link_shader(&mut init, vs_tex_handle, fs_mandelbrot_handle);
+        encode_shader(&mut init, fs_julia_handle, PIPE_SHADER_FRAGMENT, fs_julia.as_str());
+        encode_bind_shader(&mut init, fs_julia_handle, PIPE_SHADER_FRAGMENT);
+        encode_link_shader(&mut init, vs_tex_handle, fs_julia_handle);
+        encode_shader(
+            &mut init,
+            fs_burning_ship_handle,
+            PIPE_SHADER_FRAGMENT,
+            fs_burning_ship.as_str(),
+        );
+        encode_bind_shader(&mut init, fs_burning_ship_handle, PIPE_SHADER_FRAGMENT);
+        encode_link_shader(&mut init, vs_tex_handle, fs_burning_ship_handle);
 
         // Shared sampler states for 2D textures (sampler views are per-image).
         encode_create_sampler_state(
@@ -2075,6 +2099,8 @@ impl VirglGfxBackend {
             fs_tex_rgba_handle,
             fs_tex_particle_handle,
             fs_mandelbrot_handle,
+            fs_julia_handle,
+            fs_burning_ship_handle,
             sampler_state_nearest_handle: sampler_state_handle,
             sampler_state_linear_handle,
             debug_tex_res,
@@ -2717,6 +2743,8 @@ impl GfxDevice for VirglGfxBackend {
             TexturedRgba,
             Particle,
             Mandelbrot,
+            Julia,
+            BurningShip,
         }
 
         #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2906,6 +2934,14 @@ impl GfxDevice for VirglGfxBackend {
                         == Some(crate::gfx::mandelbrot::MANDELBROT_PIPELINE_FS_TAG_RAW)
                     {
                         DrawKind::Mandelbrot
+                    } else if pipe_desc.fs.map(|id| id.raw())
+                        == Some(crate::gfx::mandelbrot::JULIA_PIPELINE_FS_TAG_RAW)
+                    {
+                        DrawKind::Julia
+                    } else if pipe_desc.fs.map(|id| id.raw())
+                        == Some(crate::gfx::mandelbrot::BURNING_SHIP_PIPELINE_FS_TAG_RAW)
+                    {
+                        DrawKind::BurningShip
                     } else {
                         DrawKind::TexturedMask
                     };
@@ -3039,7 +3075,10 @@ impl GfxDevice for VirglGfxBackend {
                         layout_color_format: pipe_desc.vertex_layout.color_format,
                         layout_texcoord_offset: pipe_desc.vertex_layout.texcoord_offset,
                         layout_texcoord_format: pipe_desc.vertex_layout.texcoord_format,
-                        image_id: if draw_kind == DrawKind::Mandelbrot {
+                        image_id: if matches!(
+                            draw_kind,
+                            DrawKind::Mandelbrot | DrawKind::Julia | DrawKind::BurningShip
+                        ) {
                             0
                         } else if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32
                             && (VIRGL_FORCE_DEBUG_TEXTURE
@@ -3049,7 +3088,10 @@ impl GfxDevice for VirglGfxBackend {
                         } else {
                             self.state.image.raw()
                         },
-                        image_rev: if draw_kind == DrawKind::Mandelbrot {
+                        image_rev: if matches!(
+                            draw_kind,
+                            DrawKind::Mandelbrot | DrawKind::Julia | DrawKind::BurningShip
+                        ) {
                             0
                         } else if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32
                             && (VIRGL_FORCE_DEBUG_TEXTURE
@@ -3073,7 +3115,10 @@ impl GfxDevice for VirglGfxBackend {
                         || bypass_cache_for_color
                         || self.converted_cache.key != Some(cache_key)
                     {
-                        let bound_image = if draw_kind == DrawKind::Mandelbrot {
+                        let bound_image = if matches!(
+                            draw_kind,
+                            DrawKind::Mandelbrot | DrawKind::Julia | DrawKind::BurningShip
+                        ) {
                             None
                         } else if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32 {
                             let use_debug_texture = VIRGL_FORCE_DEBUG_TEXTURE
@@ -3149,7 +3194,10 @@ impl GfxDevice for VirglGfxBackend {
                         last_bound_vbo = Some((self.vbo_res, frame_vbo_write_offset));
                     }
 
-                    if draw_kind == DrawKind::Mandelbrot {
+                    if matches!(
+                        draw_kind,
+                        DrawKind::Mandelbrot | DrawKind::Julia | DrawKind::BurningShip
+                    ) {
                         if last_bound_sampler_view != Some(0) {
                             encode_set_sampler_views(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[0]);
                             last_bound_sampler_view = Some(0);
@@ -3158,14 +3206,15 @@ impl GfxDevice for VirglGfxBackend {
                             encode_bind_sampler_states(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[0]);
                             last_bound_sampler_state = Some(0);
                         }
-                        if last_bound_shader_kind != Some(DrawKind::Mandelbrot) {
+                        if last_bound_shader_kind != Some(draw_kind) {
                             encode_bind_shader(&mut cmd, self.vs_tex_handle, PIPE_SHADER_VERTEX);
-                            encode_bind_shader(
-                                &mut cmd,
-                                self.fs_mandelbrot_handle,
-                                PIPE_SHADER_FRAGMENT,
-                            );
-                            last_bound_shader_kind = Some(DrawKind::Mandelbrot);
+                            let fs_handle = match draw_kind {
+                                DrawKind::Julia => self.fs_julia_handle,
+                                DrawKind::BurningShip => self.fs_burning_ship_handle,
+                                _ => self.fs_mandelbrot_handle,
+                            };
+                            encode_bind_shader(&mut cmd, fs_handle, PIPE_SHADER_FRAGMENT);
+                            last_bound_shader_kind = Some(draw_kind);
                         }
                     } else if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32 {
                         let use_debug_texture = VIRGL_FORCE_DEBUG_TEXTURE

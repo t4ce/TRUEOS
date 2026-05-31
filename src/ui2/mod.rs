@@ -1232,11 +1232,7 @@ fn note_window_dirty(state: &mut Ui2State, id: u32, reason: &'static str) -> boo
     true
 }
 
-fn note_window_content_present_dirty(
-    state: &mut Ui2State,
-    id: u32,
-    reason: &'static str,
-) -> bool {
+fn note_window_content_present_dirty(state: &mut Ui2State, id: u32, reason: &'static str) -> bool {
     let Some(window) = window_mut(state, id) else {
         return false;
     };

@@ -582,10 +582,7 @@ pub fn rdp_monitor_draw_tex_triangles(
 #[cfg(feature = "trueos_rdp")]
 #[inline]
 fn rdp_sideband_enabled() -> bool {
-    !matches!(
-        backend_kind_cached(),
-        Some(BackendKind::VirglRdp) | Some(BackendKind::Rdp)
-    )
+    !matches!(backend_kind_cached(), Some(BackendKind::VirglRdp) | Some(BackendKind::Rdp))
 }
 
 pub fn with_framebuffers<R>(

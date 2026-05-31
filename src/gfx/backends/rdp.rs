@@ -42,6 +42,9 @@ enum PipelineKind {
     TexMask,
     TexRgba,
     TexParticle,
+    Mandelbrot,
+    Julia,
+    BurningShip,
 }
 
 #[derive(Clone)]
@@ -289,9 +292,14 @@ impl RdpGfxBackend {
         vertex_count: u32,
         first_vertex: u32,
         source: ImageId,
+        pipeline_id: PipelineId,
         entry: &PipelineEntry,
     ) -> Result<()> {
-        if self.image(source).is_none() {
+        if !matches!(
+            entry.kind,
+            PipelineKind::Mandelbrot | PipelineKind::Julia | PipelineKind::BurningShip
+        ) && self.image(source).is_none()
+        {
             return Err(Error::NotFound);
         }
         let verts = self.pack_tex_vertices(
@@ -307,7 +315,14 @@ impl RdpGfxBackend {
         let seq = self.begin_frame(0, true);
         publish_blend(seq, self.blend);
         publish_sampler(seq, self.sampler);
-        self.publish_draw_chunks_tex(seq, source.raw(), entry.kind, verts.as_slice());
+        if matches!(
+            entry.kind,
+            PipelineKind::Mandelbrot | PipelineKind::Julia | PipelineKind::BurningShip
+        ) {
+            self.publish_draw_chunks_pipeline(seq, pipeline_id.raw(), verts.as_slice());
+        } else {
+            self.publish_draw_chunks_tex(seq, source.raw(), entry.kind, verts.as_slice());
+        }
         Ok(())
     }
 
@@ -336,7 +351,10 @@ impl RdpGfxBackend {
         let sample_kind = match kind {
             PipelineKind::TexMask => 0,
             PipelineKind::TexRgba | PipelineKind::TexParticle => 1,
-            PipelineKind::Rgb => 0,
+            PipelineKind::Rgb
+            | PipelineKind::Mandelbrot
+            | PipelineKind::Julia
+            | PipelineKind::BurningShip => 0,
         };
         let mut off = 0usize;
         while off < verts.len() {
@@ -362,6 +380,79 @@ impl RdpGfxBackend {
             }
             off += chunk;
         }
+    }
+
+    fn publish_draw_chunks_pipeline(&mut self, seq: u32, pipeline_id: u32, verts: &[u8]) {
+        self.publish_shader_pipeline(pipeline_id);
+        let mut off = 0usize;
+        while off < verts.len() {
+            let rem = verts.len() - off;
+            let chunk = core::cmp::min(MAX_RDP_DRAW_BYTES, rem);
+            let tri_size = 3 * trueos_gfx_core::TEX_VERTEX_SIZE;
+            let chunk = chunk - (chunk % tri_size);
+            if chunk == 0 {
+                break;
+            }
+            let vcount = (chunk / trueos_gfx_core::TEX_VERTEX_SIZE) as u32;
+            crate::r::rdp::publish_draw_pipeline_triangles(
+                seq,
+                pipeline_id,
+                vcount,
+                &verts[off..off + chunk],
+            );
+            if let Some(frame) = self.frame.as_mut() {
+                frame.tex_draws = frame.tex_draws.saturating_add(1);
+                frame.draw_bytes = frame.draw_bytes.saturating_add(chunk);
+            }
+            off += chunk;
+        }
+    }
+
+    fn publish_shader_pipeline(&self, pipeline_id: u32) {
+        const SHADER_STAGE_FRAGMENT: u32 = 1;
+        const SHADER_FORMAT_WGSL: u32 = 1;
+        const COLOR_FORMAT_RGBA_U8: u32 = 1;
+        const TEXCOORD_FORMAT_UV_F32: u32 = 1;
+        let Some(entry) = pipeline_id
+            .checked_sub(1)
+            .and_then(|idx| self.pipelines.get(idx as usize))
+            .and_then(|entry| entry.as_ref())
+        else {
+            return;
+        };
+        let (fs_shader_id, source) = match entry.kind {
+            PipelineKind::Mandelbrot => (
+                crate::gfx::mandelbrot::MANDELBROT_PIPELINE_FS_TAG_RAW,
+                crate::gfx::mandelbrot::MANDELBROT_WGSL_FRAGMENT.as_bytes(),
+            ),
+            PipelineKind::Julia => (
+                crate::gfx::mandelbrot::JULIA_PIPELINE_FS_TAG_RAW,
+                crate::gfx::mandelbrot::JULIA_WGSL_FRAGMENT.as_bytes(),
+            ),
+            PipelineKind::BurningShip => (
+                crate::gfx::mandelbrot::BURNING_SHIP_PIPELINE_FS_TAG_RAW,
+                crate::gfx::mandelbrot::BURNING_SHIP_WGSL_FRAGMENT.as_bytes(),
+            ),
+            _ => return,
+        };
+        crate::r::rdp::publish_shader_create(
+            fs_shader_id,
+            SHADER_STAGE_FRAGMENT,
+            SHADER_FORMAT_WGSL,
+            0,
+            source,
+        );
+        crate::r::rdp::publish_pipeline_create(
+            pipeline_id,
+            20,
+            0,
+            16,
+            COLOR_FORMAT_RGBA_U8,
+            8,
+            TEXCOORD_FORMAT_UV_F32,
+            0,
+            fs_shader_id,
+        );
     }
 
     fn pack_rgb_vertices(
@@ -491,6 +582,13 @@ impl GfxDevice for RdpGfxBackend {
                 Some(TEX_PIPELINE_FS_MASK_TAG_RAW) => PipelineKind::TexMask,
                 Some(TEX_PIPELINE_FS_RGBA_TAG_RAW) => PipelineKind::TexRgba,
                 Some(TEX_PIPELINE_FS_PARTICLE_TAG_RAW) => PipelineKind::TexParticle,
+                Some(crate::gfx::mandelbrot::MANDELBROT_PIPELINE_FS_TAG_RAW) => {
+                    PipelineKind::Mandelbrot
+                }
+                Some(crate::gfx::mandelbrot::JULIA_PIPELINE_FS_TAG_RAW) => PipelineKind::Julia,
+                Some(crate::gfx::mandelbrot::BURNING_SHIP_PIPELINE_FS_TAG_RAW) => {
+                    PipelineKind::BurningShip
+                }
                 _ => PipelineKind::TexRgba,
             }
         };
@@ -527,7 +625,11 @@ impl GfxDevice for RdpGfxBackend {
                 rgba: alloc::vec![0; len],
             },
         );
-        Ok(ImageId::from_raw(id))
+        let image_id = ImageId::from_raw(id);
+        if let Some(image) = self.image(image_id) {
+            self.publish_image(image_id, None, image.rgba.as_slice());
+        }
+        Ok(image_id)
     }
 
     fn destroy_image(&mut self, id: ImageId) {
@@ -728,6 +830,7 @@ impl GfxDevice for RdpGfxBackend {
                                     vertex_count,
                                     first_vertex,
                                     bound_image,
+                                    pipeline,
                                     &entry,
                                 )
                             }

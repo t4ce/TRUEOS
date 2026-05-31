@@ -56,6 +56,8 @@ enum PipelineKind {
     TexRgba,
     TexParticle,
     Mandelbrot,
+    Julia,
+    BurningShip,
 }
 
 #[derive(Clone)]
@@ -555,7 +557,9 @@ impl IntelGfxBackend {
         let sample_kind = match pipeline_kind {
             PipelineKind::TexMask => SampleKind::Mask,
             PipelineKind::TexRgba | PipelineKind::TexParticle => SampleKind::Rgba,
-            PipelineKind::Mandelbrot => return Err(Error::Unsupported),
+            PipelineKind::Mandelbrot | PipelineKind::Julia | PipelineKind::BurningShip => {
+                return Err(Error::Unsupported);
+            }
             PipelineKind::Rgb => return Err(Error::Invalid),
         };
         let screen_surface_gpu =
@@ -635,6 +639,7 @@ impl IntelGfxBackend {
         first_vertex: u32,
         scissor: Option<ScissorRect>,
         blend: BlendDesc,
+        pipeline_kind: PipelineKind,
     ) -> Result<()> {
         if matches!(target, RenderTarget::Screen) {
             self.sync_screen_rgba_from_gpu();
@@ -675,7 +680,17 @@ impl IntelGfxBackend {
                 else {
                     break;
                 };
-                draw_mandelbrot_triangle_rgba(rgba, width, height, scissor, blend, v0, v1, v2);
+                draw_mandelbrot_triangle_rgba(
+                    rgba,
+                    width,
+                    height,
+                    scissor,
+                    blend,
+                    pipeline_kind,
+                    v0,
+                    v1,
+                    v2,
+                );
                 off += 3 * trueos_gfx_core::TEX_VERTEX_SIZE;
             }
         })?;
@@ -733,6 +748,10 @@ impl GfxDevice for IntelGfxBackend {
                 Some(TEX_PIPELINE_FS_PARTICLE_TAG_RAW) => PipelineKind::TexParticle,
                 Some(crate::gfx::mandelbrot::MANDELBROT_PIPELINE_FS_TAG_RAW) => {
                     PipelineKind::Mandelbrot
+                }
+                Some(crate::gfx::mandelbrot::JULIA_PIPELINE_FS_TAG_RAW) => PipelineKind::Julia,
+                Some(crate::gfx::mandelbrot::BURNING_SHIP_PIPELINE_FS_TAG_RAW) => {
+                    PipelineKind::BurningShip
                 }
                 _ => PipelineKind::TexRgba,
             }
@@ -1004,7 +1023,12 @@ impl GfxDevice for IntelGfxBackend {
                     first_vertex,
                 } => {
                     if bound_buffer.is_valid() {
-                        let draw_res = if pipeline == PipelineKind::Mandelbrot {
+                        let draw_res = if matches!(
+                            pipeline,
+                            PipelineKind::Mandelbrot
+                                | PipelineKind::Julia
+                                | PipelineKind::BurningShip
+                        ) {
                             self.draw_mandelbrot(
                                 target,
                                 bound_buffer,
@@ -1013,6 +1037,7 @@ impl GfxDevice for IntelGfxBackend {
                                 first_vertex,
                                 scissor,
                                 blend,
+                                pipeline,
                             )
                         } else if bound_image.is_valid() || pipeline != PipelineKind::Rgb {
                             self.draw_tex(
@@ -1500,6 +1525,7 @@ fn draw_mandelbrot_triangle_rgba(
     height: u32,
     scissor: Option<ScissorRect>,
     blend: BlendDesc,
+    pipeline_kind: PipelineKind,
     v0: trueos_gfx_core::TexVertexF32,
     v1: trueos_gfx_core::TexVertexF32,
     v2: trueos_gfx_core::TexVertexF32,
@@ -1572,12 +1598,28 @@ fn draw_mandelbrot_triangle_rgba(
             }
 
             if dispatch_mask != 0 {
-                let colors = crate::gfx::mandelbrot::shade_uv_simd16(
-                    us,
-                    vs,
-                    dispatch_mask,
-                    crate::gfx::mandelbrot::MANDELBROT_ITERATIONS,
-                );
+                let colors = match pipeline_kind {
+                    PipelineKind::Julia => crate::gfx::mandelbrot::shade_julia_uv_simd16(
+                        us,
+                        vs,
+                        dispatch_mask,
+                        crate::gfx::mandelbrot::JULIA_ITERATIONS,
+                    ),
+                    PipelineKind::BurningShip => {
+                        crate::gfx::mandelbrot::shade_burning_ship_uv_simd16(
+                            us,
+                            vs,
+                            dispatch_mask,
+                            crate::gfx::mandelbrot::BURNING_SHIP_ITERATIONS,
+                        )
+                    }
+                    _ => crate::gfx::mandelbrot::shade_uv_simd16(
+                        us,
+                        vs,
+                        dispatch_mask,
+                        crate::gfx::mandelbrot::MANDELBROT_ITERATIONS,
+                    ),
+                };
                 for lane in 0..16 {
                     if (dispatch_mask & (1u16 << lane)) == 0 {
                         continue;
