@@ -188,8 +188,13 @@ impl System {
 #[inline]
 fn backend_kind_raw(backend: &backends::Backend) -> u8 {
     match backend {
+        #[cfg(not(feature = "trueos_rdp"))]
         backends::Backend::Virgl(_) => 1,
         backends::Backend::None(_) => 2,
+        #[cfg(feature = "trueos_rdp")]
+        backends::Backend::VirglRdp(_) => 3,
+        #[cfg(feature = "trueos_rdp")]
+        backends::Backend::Rdp(_) => 4,
     }
 }
 
@@ -203,6 +208,10 @@ fn backend_kind_cached() -> Option<BackendKind> {
     match BACKEND_KIND_ATOMIC.load(Ordering::Acquire) {
         1 => Some(BackendKind::Virgl),
         2 => Some(BackendKind::None),
+        #[cfg(feature = "trueos_rdp")]
+        3 => Some(BackendKind::VirglRdp),
+        #[cfg(feature = "trueos_rdp")]
+        4 => Some(BackendKind::Rdp),
         _ => None,
     }
 }
@@ -214,7 +223,12 @@ pub fn init(framebuffers: Option<&'static crate::limine::FramebufferResponse>) {
         // that takes our eyeballs
         let backend = backends::Backend::init_auto(framebuffers);
         let backend_name = match &backend {
+            #[cfg(not(feature = "trueos_rdp"))]
             backends::Backend::Virgl(_) => "virgl",
+            #[cfg(feature = "trueos_rdp")]
+            backends::Backend::VirglRdp(_) => "virgl+rdp",
+            #[cfg(feature = "trueos_rdp")]
+            backends::Backend::Rdp(_) => "rdp",
             backends::Backend::None(_) => "none",
         };
         crate::log_info!(target: "gfx"; "gfx: backend={}\n", backend_name);
@@ -353,7 +367,9 @@ pub fn with_context_tag<R>(
 #[inline]
 pub fn rdp_monitor_begin_frame(seq: u32, flags: u32, clear_rgb: u32) {
     #[cfg(feature = "trueos_rdp")]
-    crate::r::rdp::publish_begin_frame(seq, flags, clear_rgb);
+    if rdp_sideband_enabled() {
+        crate::r::rdp::publish_begin_frame(seq, flags, clear_rgb);
+    }
     #[cfg(not(feature = "trueos_rdp"))]
     let _ = (seq, flags, clear_rgb);
 }
@@ -367,7 +383,9 @@ pub fn rdp_monitor_end_frame(
     draw_bytes: u32,
 ) {
     #[cfg(feature = "trueos_rdp")]
-    crate::r::rdp::publish_end_frame(seq, flags, rgb_draws, tex_draws, draw_bytes);
+    if rdp_sideband_enabled() {
+        crate::r::rdp::publish_end_frame(seq, flags, rgb_draws, tex_draws, draw_bytes);
+    }
     #[cfg(not(feature = "trueos_rdp"))]
     let _ = (seq, flags, rgb_draws, tex_draws, draw_bytes);
 }
@@ -382,7 +400,11 @@ pub fn rdp_monitor_set_blend(
     dst_alpha: u32,
 ) {
     #[cfg(feature = "trueos_rdp")]
-    crate::r::rdp::publish_set_blend(frame_seq, enabled, src_rgb, dst_rgb, src_alpha, dst_alpha);
+    if rdp_sideband_enabled() {
+        crate::r::rdp::publish_set_blend(
+            frame_seq, enabled, src_rgb, dst_rgb, src_alpha, dst_alpha,
+        );
+    }
     #[cfg(not(feature = "trueos_rdp"))]
     let _ = (frame_seq, enabled, src_rgb, dst_rgb, src_alpha, dst_alpha);
 }
@@ -396,7 +418,9 @@ pub fn rdp_monitor_set_sampler(
     mag_filter: u32,
 ) {
     #[cfg(feature = "trueos_rdp")]
-    crate::r::rdp::publish_set_sampler(frame_seq, wrap_s, wrap_t, min_filter, mag_filter);
+    if rdp_sideband_enabled() {
+        crate::r::rdp::publish_set_sampler(frame_seq, wrap_s, wrap_t, min_filter, mag_filter);
+    }
     #[cfg(not(feature = "trueos_rdp"))]
     let _ = (frame_seq, wrap_s, wrap_t, min_filter, mag_filter);
 }
@@ -404,7 +428,9 @@ pub fn rdp_monitor_set_sampler(
 #[inline]
 pub fn rdp_monitor_set_scissor(frame_seq: u32, x: u32, y: u32, width: u32, height: u32) {
     #[cfg(feature = "trueos_rdp")]
-    crate::r::rdp::publish_set_scissor(frame_seq, x, y, width, height);
+    if rdp_sideband_enabled() {
+        crate::r::rdp::publish_set_scissor(frame_seq, x, y, width, height);
+    }
     #[cfg(not(feature = "trueos_rdp"))]
     let _ = (frame_seq, x, y, width, height);
 }
@@ -412,7 +438,9 @@ pub fn rdp_monitor_set_scissor(frame_seq: u32, x: u32, y: u32, width: u32, heigh
 #[inline]
 pub fn rdp_monitor_clear_scissor(frame_seq: u32) {
     #[cfg(feature = "trueos_rdp")]
-    crate::r::rdp::publish_clear_scissor(frame_seq);
+    if rdp_sideband_enabled() {
+        crate::r::rdp::publish_clear_scissor(frame_seq);
+    }
     #[cfg(not(feature = "trueos_rdp"))]
     let _ = frame_seq;
 }
@@ -420,7 +448,9 @@ pub fn rdp_monitor_clear_scissor(frame_seq: u32) {
 #[inline]
 pub fn rdp_monitor_set_render_target(frame_seq: u32, tex_id: u32) {
     #[cfg(feature = "trueos_rdp")]
-    crate::r::rdp::publish_set_render_target(frame_seq, tex_id);
+    if rdp_sideband_enabled() {
+        crate::r::rdp::publish_set_render_target(frame_seq, tex_id);
+    }
     #[cfg(not(feature = "trueos_rdp"))]
     let _ = (frame_seq, tex_id);
 }
@@ -428,7 +458,9 @@ pub fn rdp_monitor_set_render_target(frame_seq: u32, tex_id: u32) {
 #[inline]
 pub fn rdp_monitor_clear_render_target(frame_seq: u32) {
     #[cfg(feature = "trueos_rdp")]
-    crate::r::rdp::publish_clear_render_target(frame_seq);
+    if rdp_sideband_enabled() {
+        crate::r::rdp::publish_clear_render_target(frame_seq);
+    }
     #[cfg(not(feature = "trueos_rdp"))]
     let _ = frame_seq;
 }
@@ -436,7 +468,9 @@ pub fn rdp_monitor_clear_render_target(frame_seq: u32) {
 #[inline]
 pub fn rdp_monitor_clear_rect(frame_seq: u32, rgb: u32, x: u32, y: u32, width: u32, height: u32) {
     #[cfg(feature = "trueos_rdp")]
-    crate::r::rdp::publish_clear_rect(frame_seq, rgb, x, y, width, height);
+    if rdp_sideband_enabled() {
+        crate::r::rdp::publish_clear_rect(frame_seq, rgb, x, y, width, height);
+    }
     #[cfg(not(feature = "trueos_rdp"))]
     let _ = (frame_seq, rgb, x, y, width, height);
 }
@@ -451,7 +485,9 @@ pub fn rdp_monitor_texture_rgba(
     rgba: &[u8],
 ) {
     #[cfg(feature = "trueos_rdp")]
-    crate::r::rdp::publish_texture_rgba(tex_id, width, height, flags, region, rgba);
+    if rdp_sideband_enabled() {
+        crate::r::rdp::publish_texture_rgba(tex_id, width, height, flags, region, rgba);
+    }
     #[cfg(not(feature = "trueos_rdp"))]
     let _ = (tex_id, width, height, flags, region, rgba);
 }
@@ -459,7 +495,9 @@ pub fn rdp_monitor_texture_rgba(
 #[inline]
 pub fn rdp_monitor_texture_png(tex_id: u32, flags: u32, data: &[u8]) {
     #[cfg(feature = "trueos_rdp")]
-    crate::r::rdp::publish_texture_png(tex_id, flags, data);
+    if rdp_sideband_enabled() {
+        crate::r::rdp::publish_texture_png(tex_id, flags, data);
+    }
     #[cfg(not(feature = "trueos_rdp"))]
     let _ = (tex_id, flags, data);
 }
@@ -467,7 +505,9 @@ pub fn rdp_monitor_texture_png(tex_id: u32, flags: u32, data: &[u8]) {
 #[inline]
 pub fn rdp_monitor_texture_jpeg(tex_id: u32, flags: u32, data: &[u8]) {
     #[cfg(feature = "trueos_rdp")]
-    crate::r::rdp::publish_texture_jpeg(tex_id, flags, data);
+    if rdp_sideband_enabled() {
+        crate::r::rdp::publish_texture_jpeg(tex_id, flags, data);
+    }
     #[cfg(not(feature = "trueos_rdp"))]
     let _ = (tex_id, flags, data);
 }
@@ -475,7 +515,9 @@ pub fn rdp_monitor_texture_jpeg(tex_id: u32, flags: u32, data: &[u8]) {
 #[inline]
 pub fn rdp_monitor_texture_svg(tex_id: u32, flags: u32, data: &[u8]) {
     #[cfg(feature = "trueos_rdp")]
-    crate::r::rdp::publish_texture_svg(tex_id, flags, data);
+    if rdp_sideband_enabled() {
+        crate::r::rdp::publish_texture_svg(tex_id, flags, data);
+    }
     #[cfg(not(feature = "trueos_rdp"))]
     let _ = (tex_id, flags, data);
 }
@@ -483,7 +525,9 @@ pub fn rdp_monitor_texture_svg(tex_id: u32, flags: u32, data: &[u8]) {
 #[inline]
 pub fn rdp_monitor_draw_rgb_triangles(frame_seq: u32, vcount: u32, vertices: &[u8]) {
     #[cfg(feature = "trueos_rdp")]
-    crate::r::rdp::publish_draw_rgb_triangles(frame_seq, vcount, vertices);
+    if rdp_sideband_enabled() {
+        crate::r::rdp::publish_draw_rgb_triangles(frame_seq, vcount, vertices);
+    }
     #[cfg(not(feature = "trueos_rdp"))]
     let _ = (frame_seq, vcount, vertices);
 }
@@ -498,16 +542,27 @@ pub fn rdp_monitor_draw_tex_triangles(
     vertices: &[u8],
 ) {
     #[cfg(feature = "trueos_rdp")]
-    crate::r::rdp::publish_draw_tex_triangles(
-        frame_seq,
-        tex_id,
-        vcount,
-        sampler_flags,
-        sample_kind,
-        vertices,
-    );
+    if rdp_sideband_enabled() {
+        crate::r::rdp::publish_draw_tex_triangles(
+            frame_seq,
+            tex_id,
+            vcount,
+            sampler_flags,
+            sample_kind,
+            vertices,
+        );
+    }
     #[cfg(not(feature = "trueos_rdp"))]
     let _ = (frame_seq, tex_id, vcount, sampler_flags, sample_kind, vertices);
+}
+
+#[cfg(feature = "trueos_rdp")]
+#[inline]
+fn rdp_sideband_enabled() -> bool {
+    !matches!(
+        backend_kind_cached(),
+        Some(BackendKind::VirglRdp) | Some(BackendKind::Rdp)
+    )
 }
 
 pub fn with_framebuffers<R>(
@@ -517,7 +572,17 @@ pub fn with_framebuffers<R>(
 }
 
 pub fn is_virgl_active() -> bool {
-    matches!(backend_kind_cached(), Some(BackendKind::Virgl))
+    let kind = backend_kind_cached();
+    if matches!(kind, Some(BackendKind::Virgl)) {
+        return true;
+    }
+    #[cfg(feature = "trueos_rdp")]
+    {
+        if matches!(kind, Some(BackendKind::VirglRdp)) {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn is_intel_active() -> bool {
@@ -562,5 +627,9 @@ pub fn switch_to_virgl() -> bool {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BackendKind {
     Virgl,
+    #[cfg(feature = "trueos_rdp")]
+    VirglRdp,
+    #[cfg(feature = "trueos_rdp")]
+    Rdp,
     None,
 }

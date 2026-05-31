@@ -139,19 +139,27 @@ fn next_fill_color() -> u32 {
 
 fn replay(io: &'static dyn ShellBackend2, args: &mut core::str::SplitWhitespace<'_>) {
     let frame = parse_u32(args.next()).unwrap_or(0).min(2) as usize;
+    let mode_arg = args.next().unwrap_or("visible");
+    let (mode_label, load_mode) = match mode_arg {
+        "full" => ("full", crate::intel::replay::ReplayModuleLoadMode::Full),
+        _ => (
+            "visible",
+            crate::intel::replay::ReplayModuleLoadMode::VisibleTruncated,
+        ),
+    };
     print_shell_line(
         io,
         format!(
-            "gpgpu: replay rotating-triangle frame={} allocating captured BO set (~154 MiB)",
-            frame,
+            "gpgpu: replay rotating-triangle frame={} mode={} allocating captured BO set (~154 MiB)",
+            frame, mode_label,
         )
         .as_str(),
     );
-    let proof = crate::intel::submit_rotating_triangle_replay_frame(frame);
+    let proof = crate::intel::submit_rotating_triangle_replay_frame(frame, load_mode);
     print_shell_line(
         io,
         format!(
-            "gpgpu: replay frame={} submitted={} retired={} batch_gpu=0x{:X} pml4=0x{:X} table_pages={} pre=0x{:08X} post=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} bbaddr=0x{:08X}:0x{:08X} ipehr=0x{:08X} eir=0x{:08X} fault8=0x{:08X} fault12=0x{:08X}",
+            "gpgpu: replay frame={} submitted={} retired={} batch_gpu=0x{:X} pml4=0x{:X} table_pages={} pre=0x{:08X} post=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X}:0x{:08X} bbaddr=0x{:08X}:0x{:08X} ipehr=0x{:08X} eir=0x{:08X} fault8=0x{:08X} fault12=0x{:08X}",
             frame,
             proof.submitted as u8,
             proof.retired as u8,
@@ -162,6 +170,7 @@ fn replay(io: &'static dyn ShellBackend2, args: &mut core::str::SplitWhitespace<
             proof.post_marker,
             proof.head,
             proof.tail,
+            proof.acthd_hi,
             proof.acthd,
             proof.bbaddr_hi,
             proof.bbaddr_lo,

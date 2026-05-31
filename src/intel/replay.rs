@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 const MI_BATCH_BUFFER_START_MASK: u32 = 0xFF80_0000;
 const MI_BATCH_BUFFER_START_PREFIX: u32 = 0x1880_0000;
 const REPLAY_SCAN_MAX_HITS: usize = 24;
+const TAR_BLOCK_BYTES: usize = 512;
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct ReplayBoSpec {
@@ -40,6 +41,12 @@ pub(crate) struct ReplayPresent {
 }
 
 #[derive(Copy, Clone, Debug)]
+pub(crate) enum ReplayModuleLoadMode {
+    VisibleTruncated,
+    Full,
+}
+
+#[derive(Copy, Clone, Debug)]
 struct ReplayBoBacking {
     handle: u32,
     gpu_va: u64,
@@ -62,9 +69,32 @@ pub(crate) fn submit_replay_frame_visible(
     submit: ReplaySubmit,
     present: Option<ReplayPresent>,
 ) -> super::gpgpu::RenderReplayProof {
+    submit_replay_frame_visible_from_module(
+        bos,
+        base_patches,
+        submit,
+        present,
+        None,
+        ReplayModuleLoadMode::Full,
+    )
+}
+
+pub(crate) fn submit_replay_frame_visible_from_module(
+    bos: &'static [ReplayBoSpec],
+    base_patches: &'static [ReplayPatch],
+    submit: ReplaySubmit,
+    present: Option<ReplayPresent>,
+    module_string: Option<&'static [u8]>,
+    load_mode: ReplayModuleLoadMode,
+) -> super::gpgpu::RenderReplayProof {
     let Some(backing) = allocate_bos(bos) else {
         return replay_failure(submit.batch_gpu);
     };
+    if let Some(module_string) = module_string {
+        if !load_replay_module_dumps(&backing, module_string, load_mode) {
+            return replay_failure(submit.batch_gpu);
+        }
+    }
     if !apply_patches(&backing, base_patches) || !apply_patches(&backing, submit.patches) {
         return replay_failure(submit.batch_gpu);
     }
@@ -72,8 +102,10 @@ pub(crate) fn submit_replay_frame_visible(
     let ranges = ppgtt_ranges(&backing);
     let proof = super::gpgpu::submit_render_replay_probe(submit.batch_gpu, &ranges);
     log_probe_address("batch-start", submit.batch_gpu, &backing);
-    log_probe_address("acthd", proof.acthd as u64, &backing);
-    let bbaddr = ((proof.bbaddr_hi as u64) << 32) | proof.bbaddr_lo as u64;
+    let acthd = canonicalize_gen48_gpu_addr(((proof.acthd_hi as u64) << 32) | proof.acthd as u64);
+    log_probe_address("acthd", acthd, &backing);
+    let bbaddr =
+        canonicalize_gen48_gpu_addr(((proof.bbaddr_hi as u64) << 32) | proof.bbaddr_lo as u64);
     log_probe_address("bbaddr", bbaddr, &backing);
     log_probe_address("bbaddr-bit0-clear", bbaddr & !1, &backing);
     log_probe_address("bbaddr-page", bbaddr & !0xFFF, &backing);
@@ -118,6 +150,7 @@ fn replay_failure(batch_gpu: u64) -> super::gpgpu::RenderReplayProof {
         head: 0,
         tail: 0,
         acthd: 0,
+        acthd_hi: 0,
         bbaddr_lo: 0,
         bbaddr_hi: 0,
         ipehr: 0,
@@ -151,6 +184,221 @@ fn allocate_bos(specs: &[ReplayBoSpec]) -> Option<Vec<ReplayBoBacking>> {
         );
     }
     Some(out)
+}
+
+fn load_replay_module_dumps(
+    backing: &[ReplayBoBacking],
+    module_string: &'static [u8],
+    load_mode: ReplayModuleLoadMode,
+) -> bool {
+    let Some(module) = crate::limine::module_bytes_by_string(module_string) else {
+        crate::log!(
+            "intel/replay: module-load present=0 string={} action=abort-zero-batch\n",
+            core::str::from_utf8(module_string).unwrap_or("<non-utf8>"),
+        );
+        return false;
+    };
+    let mut cursor = 0usize;
+    let mut loaded = 0usize;
+    let mut copied = 0usize;
+    while cursor + TAR_BLOCK_BYTES <= module.len() {
+        let header = &module[cursor..cursor + TAR_BLOCK_BYTES];
+        if header.iter().all(|b| *b == 0) {
+            break;
+        }
+        let name_len = header[..100].iter().position(|b| *b == 0).unwrap_or(100);
+        let name = &header[..name_len];
+        let Some(size) = parse_tar_octal(&header[124..136]) else {
+            crate::log!("intel/replay: module-load bad-tar-size action=abort\n");
+            return false;
+        };
+        let data_start = cursor + TAR_BLOCK_BYTES;
+        let Some(data_end) = data_start.checked_add(size) else {
+            return false;
+        };
+        if data_end > module.len() {
+            crate::log!("intel/replay: module-load truncated-tar action=abort\n");
+            return false;
+        }
+        if let Some((handle, dump_off, declared_len)) = parse_dump_name(name) {
+            if should_skip_replay_dump(load_mode, handle, dump_off, declared_len) {
+                crate::log!(
+                    "intel/replay: module-load skip handle={} off=0x{:X} len=0x{:X} mode={:?} reason=visible-truncated-rung\n",
+                    handle,
+                    dump_off,
+                    declared_len,
+                    load_mode,
+                );
+                let padded = (size + TAR_BLOCK_BYTES - 1) & !(TAR_BLOCK_BYTES - 1);
+                let Some(next) = data_start.checked_add(padded) else {
+                    return false;
+                };
+                cursor = next;
+                continue;
+            }
+            let copy_len = size.min(declared_len);
+            let Some(bo) = backing.iter().find(|bo| bo.handle == handle) else {
+                crate::log!(
+                    "intel/replay: module-load unknown-handle handle={} name={} action=abort\n",
+                    handle,
+                    core::str::from_utf8(name).unwrap_or("<non-utf8>"),
+                );
+                return false;
+            };
+            let Some(copy_end) = dump_off.checked_add(copy_len) else {
+                return false;
+            };
+            if copy_end > bo.size {
+                crate::log!(
+                    "intel/replay: module-load out-of-bo handle={} off=0x{:X} len=0x{:X} size=0x{:X} action=abort\n",
+                    handle,
+                    dump_off,
+                    copy_len,
+                    bo.size,
+                );
+                return false;
+            }
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    module.as_ptr().add(data_start),
+                    bo.virt.add(dump_off),
+                    copy_len,
+                );
+            }
+            crate::intel::dma_flush(unsafe { bo.virt.add(dump_off) }, copy_len);
+            loaded += 1;
+            copied += copy_len;
+            crate::log!(
+                "intel/replay: module-load dump={} handle={} off=0x{:X} len=0x{:X} file_len=0x{:X}\n",
+                loaded,
+                handle,
+                dump_off,
+                copy_len,
+                size,
+            );
+        }
+        let padded = (size + TAR_BLOCK_BYTES - 1) & !(TAR_BLOCK_BYTES - 1);
+        let Some(next) = data_start.checked_add(padded) else {
+            return false;
+        };
+        cursor = next;
+    }
+    crate::log!(
+        "intel/replay: module-load present=1 bytes=0x{:X} dumps={} copied=0x{:X}\n",
+        module.len(),
+        loaded,
+        copied,
+    );
+    loaded != 0
+}
+
+fn should_skip_replay_dump(
+    load_mode: ReplayModuleLoadMode,
+    handle: u32,
+    dump_off: usize,
+    declared_len: usize,
+) -> bool {
+    match load_mode {
+        ReplayModuleLoadMode::Full => false,
+        ReplayModuleLoadMode::VisibleTruncated => handle == 8 && dump_off == 0,
+    }
+}
+
+fn parse_tar_octal(bytes: &[u8]) -> Option<usize> {
+    let mut value = 0usize;
+    let mut seen = false;
+    for b in bytes {
+        match *b {
+            0 | b' ' => {
+                if seen {
+                    break;
+                }
+            }
+            b'0'..=b'7' => {
+                seen = true;
+                value = value.checked_mul(8)?.checked_add((b - b'0') as usize)?;
+            }
+            _ => return None,
+        }
+    }
+    Some(value)
+}
+
+fn parse_dump_name(name: &[u8]) -> Option<(u32, usize, usize)> {
+    if !name.starts_with(b"dumps/") || !name.ends_with(b".bin") {
+        return None;
+    }
+    let handle_pos = find_bytes(name, b"handle_")? + b"handle_".len();
+    let off_tag = find_bytes_from(name, b"_off_0x", handle_pos)?;
+    let handle = parse_decimal_u32(&name[handle_pos..off_tag])?;
+    let off_start = off_tag + b"_off_0x".len();
+    let len_tag = find_bytes_from(name, b"_len_0x", off_start)?;
+    let off = parse_hex_usize(&name[off_start..len_tag])?;
+    let len_start = len_tag + b"_len_0x".len();
+    let len_end = name.len().checked_sub(b".bin".len())?;
+    let len = parse_hex_usize(&name[len_start..len_end])?;
+    Some((handle, off, len))
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    find_bytes_from(haystack, needle, 0)
+}
+
+fn find_bytes_from(haystack: &[u8], needle: &[u8], start: usize) -> Option<usize> {
+    if needle.is_empty() || start > haystack.len() || needle.len() > haystack.len() {
+        return None;
+    }
+    let end = haystack.len().checked_sub(needle.len())?;
+    let mut pos = start;
+    while pos <= end {
+        if &haystack[pos..pos + needle.len()] == needle {
+            return Some(pos);
+        }
+        pos += 1;
+    }
+    None
+}
+
+fn parse_decimal_u32(bytes: &[u8]) -> Option<u32> {
+    let mut value = 0u32;
+    if bytes.is_empty() {
+        return None;
+    }
+    for b in bytes {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        value = value.checked_mul(10)?.checked_add((b - b'0') as u32)?;
+    }
+    Some(value)
+}
+
+fn parse_hex_usize(bytes: &[u8]) -> Option<usize> {
+    let mut value = 0usize;
+    if bytes.is_empty() {
+        return None;
+    }
+    for b in bytes {
+        let digit = match *b {
+            b'0'..=b'9' => b - b'0',
+            b'a'..=b'f' => b - b'a' + 10,
+            b'A'..=b'F' => b - b'A' + 10,
+            _ => return None,
+        } as usize;
+        value = value.checked_mul(16)?.checked_add(digit)?;
+    }
+    Some(value)
+}
+
+fn canonicalize_gen48_gpu_addr(addr: u64) -> u64 {
+    const BIT47: u64 = 1u64 << 47;
+    const LOW48_MASK: u64 = (1u64 << 48) - 1;
+    let low48 = addr & LOW48_MASK;
+    if low48 & BIT47 != 0 {
+        low48 | !LOW48_MASK
+    } else {
+        low48
+    }
 }
 
 fn apply_patches(backing: &[ReplayBoBacking], patches: &[ReplayPatch]) -> bool {

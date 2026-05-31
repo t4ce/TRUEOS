@@ -4,11 +4,32 @@ use trueos_gfx_core::{
     Result, ShaderDesc, ShaderId, SwapchainDesc,
 };
 
+#[cfg(feature = "trueos_rdp")]
+pub mod rdp;
+
 use crate::gfx::virtio_gpu_3d;
 
 pub enum Backend {
+    #[cfg(not(feature = "trueos_rdp"))]
     Virgl(virtio_gpu_3d::VirglGfxBackend),
+    #[cfg(feature = "trueos_rdp")]
+    VirglRdp(VirglRdpBackend),
+    #[cfg(feature = "trueos_rdp")]
+    Rdp(rdp::RdpGfxBackend),
     None(NullBackend),
+}
+
+#[cfg(feature = "trueos_rdp")]
+pub struct VirglRdpBackend {
+    virgl: virtio_gpu_3d::VirglGfxBackend,
+    rdp: rdp::RdpGfxBackend,
+}
+
+#[cfg(feature = "trueos_rdp")]
+impl VirglRdpBackend {
+    fn new(virgl: virtio_gpu_3d::VirglGfxBackend, rdp: rdp::RdpGfxBackend) -> Self {
+        Self { virgl, rdp }
+    }
 }
 
 pub struct NullBackend;
@@ -103,27 +124,190 @@ fn ensure_pci_enumerated_if_empty() {
 
 impl Backend {
     pub fn init_auto(framebuffers: Option<&'static crate::limine::FramebufferResponse>) -> Self {
-        if let Some(v) = Self::init_virgl(framebuffers) {
-            crate::log_info!(target: "gfx"; "gfx: using virgl backend (auto)\n");
-            return v;
+        #[cfg(feature = "trueos_rdp")]
+        {
+            if crate::intel::has_claimed_device() {
+                crate::log_info!(target: "gfx"; "gfx: using rdp backend (intel claimed)\n");
+                return Backend::Rdp(rdp::RdpGfxBackend::init(framebuffers));
+            }
+            if let Some(virgl) = virtio_gpu_3d::VirglGfxBackend::init(framebuffers) {
+                crate::log_info!(target: "gfx"; "gfx: using virgl+rdp backend (auto)\n");
+                return Backend::VirglRdp(VirglRdpBackend::new(
+                    virgl,
+                    rdp::RdpGfxBackend::init(framebuffers),
+                ));
+            }
+            crate::log_info!(target: "gfx"; "gfx: virgl auto init failed; using rdp backend\n");
+            return Backend::Rdp(rdp::RdpGfxBackend::init(framebuffers));
         }
-        crate::log_info!(target: "gfx"; "gfx: virgl auto init failed\n");
 
-        crate::log_info!(target: "gfx"; "gfx: no accelerated backend available; gfx backend inactive\n");
-        Backend::None(NullBackend)
+        #[cfg(not(feature = "trueos_rdp"))]
+        {
+            if let Some(v) = Self::init_virgl(framebuffers) {
+                crate::log_info!(target: "gfx"; "gfx: using virgl backend (auto)\n");
+                return v;
+            }
+            crate::log_info!(target: "gfx"; "gfx: virgl auto init failed\n");
+
+            crate::log_info!(target: "gfx"; "gfx: no accelerated backend available; gfx backend inactive\n");
+            Backend::None(NullBackend)
+        }
     }
 
     pub fn init_virgl(
         framebuffers: Option<&'static crate::limine::FramebufferResponse>,
     ) -> Option<Self> {
         ensure_pci_enumerated_if_empty();
-        virtio_gpu_3d::VirglGfxBackend::init(framebuffers).map(Backend::Virgl)
+        let virgl = virtio_gpu_3d::VirglGfxBackend::init(framebuffers)?;
+        #[cfg(feature = "trueos_rdp")]
+        {
+            Some(Backend::VirglRdp(VirglRdpBackend::new(
+                virgl,
+                rdp::RdpGfxBackend::init(framebuffers),
+            )))
+        }
+        #[cfg(not(feature = "trueos_rdp"))]
+        {
+            Some(Backend::Virgl(virgl))
+        }
     }
 
     pub fn context_mut(&mut self) -> &mut dyn GfxContext {
         match self {
+            #[cfg(not(feature = "trueos_rdp"))]
             Backend::Virgl(b) => b,
+            #[cfg(feature = "trueos_rdp")]
+            Backend::VirglRdp(b) => b,
+            #[cfg(feature = "trueos_rdp")]
+            Backend::Rdp(b) => b,
             Backend::None(b) => b,
         }
+    }
+}
+
+#[cfg(feature = "trueos_rdp")]
+impl GfxDevice for VirglRdpBackend {
+    fn caps(&self) -> DeviceCaps {
+        self.virgl.caps()
+    }
+
+    fn create_buffer(&mut self, desc: BufferDesc) -> Result<BufferId> {
+        let id = self.virgl.create_buffer(desc)?;
+        match self.rdp.create_buffer(desc) {
+            Ok(mirror_id) if mirror_id == id => Ok(id),
+            Ok(mirror_id) => {
+                self.virgl.destroy_buffer(id);
+                self.rdp.destroy_buffer(mirror_id);
+                Err(Error::Invalid)
+            }
+            Err(err) => {
+                self.virgl.destroy_buffer(id);
+                Err(err)
+            }
+        }
+    }
+
+    fn destroy_buffer(&mut self, id: BufferId) {
+        self.virgl.destroy_buffer(id);
+        self.rdp.destroy_buffer(id);
+    }
+
+    fn create_shader(&mut self, desc: ShaderDesc<'_>) -> Result<ShaderId> {
+        let id = self.virgl.create_shader(desc)?;
+        let _ = self.rdp.create_shader(desc);
+        Ok(id)
+    }
+
+    fn destroy_shader(&mut self, id: ShaderId) {
+        self.virgl.destroy_shader(id);
+        self.rdp.destroy_shader(id);
+    }
+
+    fn create_pipeline(&mut self, desc: PipelineDesc) -> Result<PipelineId> {
+        let id = self.virgl.create_pipeline(desc)?;
+        match self.rdp.create_pipeline(desc) {
+            Ok(mirror_id) if mirror_id == id => Ok(id),
+            Ok(mirror_id) => {
+                self.virgl.destroy_pipeline(id);
+                self.rdp.destroy_pipeline(mirror_id);
+                Err(Error::Invalid)
+            }
+            Err(err) => {
+                self.virgl.destroy_pipeline(id);
+                Err(err)
+            }
+        }
+    }
+
+    fn destroy_pipeline(&mut self, id: PipelineId) {
+        self.virgl.destroy_pipeline(id);
+        self.rdp.destroy_pipeline(id);
+    }
+
+    fn create_image(&mut self, desc: ImageDesc) -> Result<ImageId> {
+        let id = self.virgl.create_image(desc)?;
+        match self.rdp.create_image(desc) {
+            Ok(mirror_id) if mirror_id == id => Ok(id),
+            Ok(mirror_id) => {
+                self.virgl.destroy_image(id);
+                self.rdp.destroy_image(mirror_id);
+                Err(Error::Invalid)
+            }
+            Err(err) => {
+                self.virgl.destroy_image(id);
+                Err(err)
+            }
+        }
+    }
+
+    fn destroy_image(&mut self, id: ImageId) {
+        self.virgl.destroy_image(id);
+        self.rdp.destroy_image(id);
+    }
+
+    fn write_image(&mut self, id: ImageId, data: &[u8]) -> Result<()> {
+        self.virgl.write_image(id, data)?;
+        self.rdp.write_image(id, data)
+    }
+
+    fn write_image_region(&mut self, id: ImageId, region: ImageRegion, data: &[u8]) -> Result<()> {
+        self.virgl.write_image_region(id, region, data)?;
+        self.rdp.write_image_region(id, region, data)
+    }
+
+    fn write_buffer(&mut self, id: BufferId, offset: u64, data: &[u8]) -> Result<()> {
+        self.virgl.write_buffer(id, offset, data)?;
+        self.rdp.write_buffer(id, offset, data)
+    }
+
+    fn submit(&mut self, cmds: CommandBuffer<'_>) -> Result<FenceId> {
+        let fence = self.virgl.submit(cmds)?;
+        let _ = self.rdp.submit(cmds);
+        Ok(fence)
+    }
+
+    fn poll(&mut self, fence: FenceId) -> bool {
+        self.virgl.poll(fence)
+    }
+
+    fn device_idle(&mut self) {
+        self.virgl.device_idle();
+        self.rdp.device_idle();
+    }
+}
+
+#[cfg(feature = "trueos_rdp")]
+impl GfxPresent for VirglRdpBackend {
+    fn configure_swapchain(&mut self, desc: SwapchainDesc) -> Result<()> {
+        self.virgl.configure_swapchain(desc)?;
+        self.rdp.configure_swapchain(desc)
+    }
+
+    fn swapchain_desc(&self) -> SwapchainDesc {
+        self.virgl.swapchain_desc()
+    }
+
+    fn display_refresh_millihz(&mut self) -> Option<u32> {
+        self.virgl.display_refresh_millihz()
     }
 }

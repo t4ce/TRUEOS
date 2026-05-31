@@ -286,6 +286,71 @@ pub(crate) fn inject_virtual_cursor_event(
     );
 }
 
+pub(crate) fn inject_virtual_tablet_absolute_event(
+    slot_id: u32,
+    x: f64,
+    y: f64,
+    buttons_down: u32,
+    flags: u32,
+) {
+    const RDP_TABLET_CONTROLLER_ID: u32 = 0x5244_5030;
+    let x = clamp01(x);
+    let y = clamp01(y);
+    let x_raw = ((x * 65535.0) + 0.5).clamp(0.0, 65535.0) as u16;
+    let y_raw = ((y * 65535.0) + 0.5).clamp(0.0, 65535.0) as u16;
+    let buttons = buttons_down.min(u8::MAX as u32) as u8;
+    let event = TrueosHidCursorEvent {
+        t_ms: now_ms_u32(),
+        seq: 0,
+        controller_id: RDP_TABLET_CONTROLLER_ID,
+        slot_id,
+        ep_target: 0,
+        hid_kind: HID_KIND_TABLET,
+        reserved0: 0,
+        reserved1: 0,
+        buttons_down,
+        wheel: 0,
+        reserved2: 0,
+        x,
+        y,
+        flags,
+    };
+    push_cursor_event(event);
+    self::input::push_event(self::input::InputEvent::Tablet(self::input::TabletEvent {
+        slot_id,
+        buttons,
+        report_id: 0,
+        x_raw,
+        y_raw,
+        x_norm_q15: ((x * 32767.0) + 0.5).clamp(0.0, 32767.0) as u16,
+        y_norm_q15: ((y * 32767.0) + 0.5).clamp(0.0, 32767.0) as u16,
+        flags: flags.min(u8::MAX as u32) as u8,
+    }));
+    crate::r::cursor::upsert_snapshot(
+        RDP_TABLET_CONTROLLER_ID,
+        slot_id,
+        0,
+        HID_KIND_TABLET,
+        x,
+        y,
+        buttons_down,
+    );
+    self::hut::upsert_tablet_state(
+        RDP_TABLET_CONTROLLER_ID,
+        slot_id,
+        0,
+        x,
+        y,
+        x_raw,
+        y_raw,
+        buttons_down,
+        0,
+        self::hut::HidSourceKind::Ai,
+        "rdp",
+        true,
+    );
+}
+
 pub(crate) fn handle_keyboard_boot_report(
     controller_id: u32,
     slot_id: u32,
