@@ -951,6 +951,22 @@ impl GfxDevice for IntelGfxBackend {
                         })?;
                     }
                 }
+                Command::ClearColorRgba { rgba: clear } => {
+                    if matches!(target, RenderTarget::Screen) {
+                        self.sync_screen_rgba_from_gpu();
+                    }
+                    self.with_target_mut(target, |rgba, width, height| {
+                        for px in rgba
+                            .chunks_exact_mut(4)
+                            .take((width as usize).saturating_mul(height as usize))
+                        {
+                            px[0] = clear.r;
+                            px[1] = clear.g;
+                            px[2] = clear.b;
+                            px[3] = clear.a;
+                        }
+                    })?;
+                }
                 Command::ClearRect {
                     rgb,
                     x,

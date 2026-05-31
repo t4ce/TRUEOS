@@ -70,7 +70,8 @@ const UI2_WINDOW_RESIZE_LEFT: u32 = 1 << 0;
 const UI2_WINDOW_RESIZE_TOP: u32 = 1 << 1;
 const UI2_WINDOW_RESIZE_RIGHT: u32 = 1 << 2;
 const UI2_WINDOW_RESIZE_BOTTOM: u32 = 1 << 3;
-const UI2_WARMUP_RENDER_TARGET_TEX_ID: u32 = 4_706;
+const UI2_SCENE_TARGET_TEX_ID: u32 = 4_706;
+const UI2_OVERLAY_TARGET_TEX_ID: u32 = 4_707;
 
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct Ui2Rect {
@@ -670,6 +671,7 @@ struct Ui2State {
     windows: Vec<Ui2Window>,
     last_athlas_small_ready_seq: u32,
     first_compose_signaled: bool,
+    cursor_overlay_dirty: bool,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -749,6 +751,7 @@ fn init_state() -> &'static Mutex<Ui2State> {
             windows: Vec::new(),
             last_athlas_small_ready_seq: 0,
             first_compose_signaled: false,
+            cursor_overlay_dirty: false,
         };
 
         refresh_all_window_hit_entries(&mut state);
@@ -1221,6 +1224,87 @@ fn draw_resize_preview_outline(state: &Ui2State) {
     }
 }
 
+#[inline]
+fn cursor_overlay_center_px(nx: f32, ny: f32, vp_w: u32, vp_h: u32) -> (f32, f32) {
+    let max_x = vp_w.saturating_sub(1).max(1) as f32;
+    let max_y = vp_h.saturating_sub(1).max(1) as f32;
+    (nx * max_x, ny * max_y)
+}
+
+fn draw_cursor_cross_overlay(state: &Ui2State, center_x: f32, center_y: f32, color: Rgba8) {
+    let half_span = (state.view_h as f32 * 0.013).clamp(12.0, 24.0);
+    let half_thickness = (half_span * 0.22).clamp(2.0, 6.0);
+    let _ = draw_rgb_rect_no_present(
+        center_x - half_span,
+        center_y - half_thickness,
+        half_span * 2.0,
+        half_thickness * 2.0,
+        color,
+        state.view_w,
+        state.view_h,
+    );
+    let _ = draw_rgb_rect_no_present(
+        center_x - half_thickness,
+        center_y - half_span,
+        half_thickness * 2.0,
+        half_span * 2.0,
+        color,
+        state.view_w,
+        state.view_h,
+    );
+}
+
+fn draw_cursor_overlay_layer(state: &Ui2State) {
+    let cursors = crate::r::cursor::ordered_cursor_snapshot_with_slots();
+    for (idx, (slot_id, cx, cy)) in cursors.into_iter().enumerate() {
+        let cursor_id = (idx as u32).saturating_add(1);
+        let nx = if cx.is_finite() {
+            cx.clamp(0.0, 1.0) as f32
+        } else {
+            0.0
+        };
+        let ny = if cy.is_finite() {
+            cy.clamp(0.0, 1.0) as f32
+        } else {
+            0.0
+        };
+        let (center_x, center_y) = cursor_overlay_center_px(nx, ny, state.view_w, state.view_h);
+        let Some(glyph) = cursor_overlay_glyph_spec(cursor_id, slot_id, state.view_h) else {
+            draw_cursor_cross_overlay(
+                state,
+                center_x,
+                center_y,
+                cursor_color_rgba8_for_cursor_id(cursor_id),
+            );
+            continue;
+        };
+
+        let draw_w = f32::from(glyph.draw_w_px.max(1));
+        let draw_h = f32::from(glyph.draw_h_px.max(1));
+        let atlas_w = f32::from(glyph.atlas_w.max(1));
+        let atlas_h = f32::from(glyph.atlas_h.max(1));
+        let u0 = f32::from(glyph.src_x) / atlas_w;
+        let v0 = f32::from(glyph.src_y) / atlas_h;
+        let u1 = f32::from(glyph.src_x.saturating_add(glyph.src_w)) / atlas_w;
+        let v1 = f32::from(glyph.src_y.saturating_add(glyph.src_h)) / atlas_h;
+        let _ = draw_texture_rect_uv_rgba_no_present(
+            glyph.tex_id,
+            center_x - draw_w * 0.5,
+            center_y - draw_h * 0.5,
+            draw_w,
+            draw_h,
+            u0,
+            v0,
+            u1,
+            v1,
+            state.view_w,
+            state.view_h,
+            true,
+            (255, 255, 255, 255),
+        );
+    }
+}
+
 fn note_window_dirty(state: &mut Ui2State, id: u32, reason: &'static str) -> bool {
     let Some(window) = window_mut(state, id) else {
         return false;
@@ -1244,6 +1328,12 @@ fn note_window_content_present_dirty(state: &mut Ui2State, id: u32, reason: &'st
     window.last_reason = reason;
     UI2_DIRTY.store(true, Ordering::Release);
     true
+}
+
+fn note_cursor_overlay_dirty(state: &mut Ui2State, reason: &'static str) {
+    state.cursor_overlay_dirty = true;
+    state.compose_reason = reason;
+    UI2_DIRTY.store(true, Ordering::Release);
 }
 
 fn note_window_viewport_sync_needed(state: &mut Ui2State, id: u32) -> bool {
@@ -2251,6 +2341,9 @@ fn content_present_dirty_scissor(state: &Ui2State, present_to_screen: bool) -> O
     if !present_to_screen || !state.first_compose_signaled {
         return None;
     }
+    if state.cursor_overlay_dirty {
+        return None;
+    }
 
     let mut dirty_count = 0usize;
     let mut rect = None;
@@ -2887,7 +2980,39 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTimin
     }
 }
 
-fn ensure_ui2_warmup_render_target(view_w: u32, view_h: u32) -> bool {
+fn upload_ui2_blank_target(tex_id: u32, view_w: u32, view_h: u32, reason: &'static str) -> bool {
+    let width = view_w.max(1);
+    let height = view_h.max(1);
+
+    let Some(pixel_bytes) = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+    else {
+        crate::log!("ui2: invalid layer render-target size={}x{}\n", width, height);
+        return false;
+    };
+
+    let pixels = alloc::vec![0u8; pixel_bytes];
+    (unsafe {
+        crate::r::io::cabi::trueos_cabi_gfx_upload_texture_rgba_image(
+            tex_id,
+            width,
+            height,
+            pixels.as_ptr(),
+            pixels.len(),
+        ) == 0
+    }) || {
+        crate::log!("ui2: layer render-target upload failed tex={} reason={}\n", tex_id, reason);
+        false
+    }
+}
+
+fn ensure_ui2_layer_render_target(
+    tex_id: u32,
+    view_w: u32,
+    view_h: u32,
+    reason: &'static str,
+) -> bool {
     let width = view_w.max(1);
     let height = view_h.max(1);
 
@@ -2895,7 +3020,7 @@ fn ensure_ui2_warmup_render_target(view_w: u32, view_h: u32) -> bool {
     let mut existing_h = 0u32;
     let already_sized = unsafe {
         crate::r::io::cabi::trueos_cabi_gfx_texture_dimensions(
-            UI2_WARMUP_RENDER_TARGET_TEX_ID,
+            tex_id,
             &mut existing_w as *mut u32,
             &mut existing_h as *mut u32,
         ) == 0
@@ -2905,23 +3030,7 @@ fn ensure_ui2_warmup_render_target(view_w: u32, view_h: u32) -> bool {
         return true;
     }
 
-    let Some(pixel_bytes) = (width as usize)
-        .checked_mul(height as usize)
-        .and_then(|pixels| pixels.checked_mul(4))
-    else {
-        crate::log!("ui2: invalid warmup render-target size={}x{}\n", width, height);
-        return false;
-    };
-
-    let pixels = alloc::vec![0u8; pixel_bytes];
-    crate::r::io::cabi::queue_texture_rgba_image_upload_copy(
-        UI2_WARMUP_RENDER_TARGET_TEX_ID,
-        width,
-        height,
-        pixels.as_slice(),
-        0,
-        "ui2-warmup-render-target",
-    )
+    upload_ui2_blank_target(tex_id, width, height, reason)
 }
 
 fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
@@ -2932,86 +3041,140 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
     let compose_started_at = Instant::now();
     let mut surface_timings = Vec::new();
     let mut frame_ok = false;
-    let dirty_scissor = content_present_dirty_scissor(state, present_to_screen);
+    let scene_dirty = !present_to_screen
+        || !state.first_compose_signaled
+        || state.windows.iter().any(|w| w.dirty);
 
-    if !present_to_screen && !ensure_ui2_warmup_render_target(state.view_w, state.view_h) {
-        crate::log!("ui2: warmup render-target ensure failed\n");
+    if !ensure_ui2_layer_render_target(
+        UI2_SCENE_TARGET_TEX_ID,
+        state.view_w,
+        state.view_h,
+        "ui2-scene-target",
+    ) {
+        crate::log!("ui2: scene render-target ensure failed\n");
         return false;
+    }
+    if present_to_screen {
+        if !ensure_ui2_layer_render_target(
+            UI2_OVERLAY_TARGET_TEX_ID,
+            state.view_w,
+            state.view_h,
+            "ui2-overlay-target",
+        ) {
+            crate::log!("ui2: overlay render-target ensure failed\n");
+            return false;
+        }
     }
 
     let lock_result = crate::gfx::try_with_cabi_frame_lock(20_000, || {
-        let begin_rc = unsafe {
-            if present_to_screen {
-                if dirty_scissor.is_some() {
-                    crate::r::io::cabi::trueos_cabi_gfx_begin_frame_preserve(0xE9EEF2)
-                } else {
-                    crate::r::io::cabi::trueos_cabi_gfx_begin_frame(0xE9EEF2)
-                }
-            } else {
-                crate::r::io::cabi::trueos_cabi_gfx_begin_frame_no_present(0xE9EEF2)
+        if scene_dirty {
+            let begin_rc =
+                unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame_no_present(0xE9EEF2) };
+            if begin_rc != 0 {
+                crate::log!("ui2: scene begin_frame-no-present failed rc={}\n", begin_rc);
+                return;
             }
-        };
-        if begin_rc != 0 {
-            crate::log!(
-                "ui2: begin_frame{} failed rc={}\n",
-                if present_to_screen { "" } else { "-no-present" },
-                begin_rc
-            );
-            return;
-        }
-
-        if !present_to_screen {
             let set_rt_rc = unsafe {
-                crate::r::io::cabi::trueos_cabi_gfx_set_render_target(
-                    UI2_WARMUP_RENDER_TARGET_TEX_ID,
-                )
+                crate::r::io::cabi::trueos_cabi_gfx_set_render_target(UI2_SCENE_TARGET_TEX_ID)
             };
             if set_rt_rc != 0 {
-                crate::log!("ui2: warmup render-target bind failed rc={}\n", set_rt_rc);
+                crate::log!("ui2: scene render-target bind failed rc={}\n", set_rt_rc);
                 let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
                 return;
             }
-        }
 
-        if let Some(scissor) = dirty_scissor {
-            let _ = unsafe {
-                crate::r::io::cabi::trueos_cabi_gfx_set_scissor(
-                    scissor.x as u32,
-                    scissor.y as u32,
-                    scissor.w as u32,
-                    scissor.h as u32,
-                )
-            };
-        }
-
-        if dirty_scissor.is_none() {
             ui2_win_register::draw_offline_dock(state);
-        }
-        for idx in sorted_window_indices(state) {
-            let window = &state.windows[idx];
-            if !window_is_renderable(window) {
-                continue;
-            }
-            if let Some(scissor) = dirty_scissor {
-                let rect = effective_window_rect(state, window);
-                if !rects_intersect(rect, scissor) {
+            for idx in sorted_window_indices(state) {
+                let window = &state.windows[idx];
+                if !window_is_renderable(window) {
                     continue;
                 }
+                let timing = draw_window_frame(state, window);
+                surface_timings.push(Ui2ComposeSurfaceTiming {
+                    id: window.id,
+                    chrome_ms: timing.chrome_ms,
+                    texture_ms: timing.texture_ms,
+                    placeholder_ms: timing.placeholder_ms,
+                    path: timing.content_path,
+                });
             }
-            let timing = draw_window_frame(state, window);
-            surface_timings.push(Ui2ComposeSurfaceTiming {
-                id: window.id,
-                chrome_ms: timing.chrome_ms,
-                texture_ms: timing.texture_ms,
-                placeholder_ms: timing.placeholder_ms,
-                path: timing.content_path,
-            });
+            unsafe {
+                crate::r::io::cabi::trueos_cabi_gfx_end_frame();
+            }
         }
-        if dirty_scissor.is_none() {
+
+        if !present_to_screen {
+            frame_ok = true;
+            return;
+        }
+
+        let overlay_begin_rc =
+            unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame_no_present(0) };
+        if overlay_begin_rc != 0 {
+            crate::log!("ui2: overlay begin_frame-no-present failed rc={}\n", overlay_begin_rc);
+            return;
+        }
+        let overlay_rt_rc = unsafe {
+            crate::r::io::cabi::trueos_cabi_gfx_set_render_target(UI2_OVERLAY_TARGET_TEX_ID)
+        };
+        if overlay_rt_rc != 0 {
+            crate::log!("ui2: overlay render-target bind failed rc={}\n", overlay_rt_rc);
+            let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
+            return;
+        }
+        let clear_overlay_rc =
+            unsafe { crate::r::io::cabi::trueos_cabi_gfx_clear_rgba_no_present(0, 0, 0, 0) };
+        if clear_overlay_rc != 0 {
+            crate::log!("ui2: overlay clear failed rc={}\n", clear_overlay_rc);
+            let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
+            return;
+        }
+        draw_cursor_overlay_layer(state);
+        if scene_dirty {
             draw_resize_preview_outline(state);
         }
-        if dirty_scissor.is_some() {
-            let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_clear_scissor() };
+        unsafe {
+            crate::r::io::cabi::trueos_cabi_gfx_end_frame();
+        }
+
+        let present_begin_rc = unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame(0xE9EEF2) };
+        if present_begin_rc != 0 {
+            crate::log!("ui2: layered present begin_frame failed rc={}\n", present_begin_rc);
+            return;
+        }
+        let _ = unsafe {
+            crate::r::io::cabi::trueos_cabi_gfx_suppress_cursor_overlay_for_current_frame()
+        };
+        let scene_drawn = draw_texture_rect_no_present(
+            UI2_SCENE_TARGET_TEX_ID,
+            0.0,
+            0.0,
+            state.view_w as f32,
+            state.view_h as f32,
+            state.view_w,
+            state.view_h,
+            false,
+            255,
+        );
+        let overlay_drawn = draw_texture_rect_no_present(
+            UI2_OVERLAY_TARGET_TEX_ID,
+            0.0,
+            0.0,
+            state.view_w as f32,
+            state.view_h as f32,
+            state.view_w,
+            state.view_h,
+            true,
+            255,
+        );
+        if !scene_drawn || !overlay_drawn {
+            crate::log!(
+                "ui2: layered present draw failed scene={} overlay={}\n",
+                scene_drawn as u8,
+                overlay_drawn as u8
+            );
+            let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
+            return;
         }
         unsafe {
             crate::r::io::cabi::trueos_cabi_gfx_end_frame();
@@ -3023,7 +3186,7 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
             "ui2: compose skipped reason={} present={} dirty_scissor={} cause=cabi-frame-lock-busy\n",
             compose_reason,
             present_to_screen as u8,
-            dirty_scissor.is_some() as u8
+            0
         );
     }
 
@@ -3037,8 +3200,9 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
     state.last_logged_compose_dirty_count =
         state.windows.iter().filter(|window| window.dirty).count();
     UI2_DIRTY.store(false, Ordering::Release);
+    state.cursor_overlay_dirty = false;
     for window in &mut state.windows {
-        if window.dirty {
+        if scene_dirty && window.dirty {
             window.dirty = false;
             window.content_present_dirty = false;
             window.dirty_seq = window.dirty_seq.wrapping_add(1);

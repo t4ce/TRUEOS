@@ -2771,7 +2771,7 @@ impl GfxDevice for VirglGfxBackend {
             SetViewport(Viewport),
             SetScissor(Option<ScissorRect>),
             SetRenderTarget(ImageId),
-            ClearColor(u32),
+            ClearColor(trueos_gfx_core::Rgba8),
             Draw(DrawOp),
             Present,
         }
@@ -2794,12 +2794,27 @@ impl GfxDevice for VirglGfxBackend {
                 }
                 Command::ClearColor { rgb } => {
                     self.state.clear_rgb = rgb;
-                    ops.push(Op::ClearColor(rgb));
+                    ops.push(Op::ClearColor(trueos_gfx_core::Rgba8::new(
+                        ((rgb >> 16) & 0xFF) as u8,
+                        ((rgb >> 8) & 0xFF) as u8,
+                        (rgb & 0xFF) as u8,
+                        0xFF,
+                    )));
+                }
+                Command::ClearColorRgba { rgba } => {
+                    self.state.clear_rgb =
+                        (u32::from(rgba.r) << 16) | (u32::from(rgba.g) << 8) | u32::from(rgba.b);
+                    ops.push(Op::ClearColor(rgba));
                 }
                 Command::ClearRect { rgb, .. } => {
                     // Rect clears are not supported yet; approximate with full clear.
                     self.state.clear_rgb = rgb;
-                    ops.push(Op::ClearColor(rgb));
+                    ops.push(Op::ClearColor(trueos_gfx_core::Rgba8::new(
+                        ((rgb >> 16) & 0xFF) as u8,
+                        ((rgb >> 8) & 0xFF) as u8,
+                        (rgb & 0xFF) as u8,
+                        0xFF,
+                    )));
                 }
                 Command::BindPipeline(p) => {
                     self.state.pipeline = p;
@@ -2895,7 +2910,7 @@ impl GfxDevice for VirglGfxBackend {
                         did_work = true;
                     }
                 }
-                Op::ClearColor(rgb) => {
+                Op::ClearColor(rgba) => {
                     let surf =
                         self.ensure_render_target_surface(self.state.render_target, &mut cmd)?;
                     if last_framebuffer_surface != Some(surf) {
@@ -2903,8 +2918,13 @@ impl GfxDevice for VirglGfxBackend {
                         last_framebuffer_surface = Some(surf);
                     }
                     clear_ops = clear_ops.saturating_add(1);
-                    let (r, g, b) = Self::rgb_to_f32(rgb);
-                    encode_clear_color(&mut cmd, r, g, b, 1.0);
+                    encode_clear_color(
+                        &mut cmd,
+                        f32::from(rgba.r) / 255.0,
+                        f32::from(rgba.g) / 255.0,
+                        f32::from(rgba.b) / 255.0,
+                        f32::from(rgba.a) / 255.0,
+                    );
                     did_work = true;
                 }
                 Op::Draw(draw) => {

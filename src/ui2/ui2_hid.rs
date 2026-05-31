@@ -418,6 +418,7 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
     let mut click_press_y = 0.0f32;
     let mut try_offline_dock = false;
     let mut cursor_capture_window_id = 0u32;
+    let mut cursor_overlay_changed = false;
     {
         let cursor = &mut state.cursors[cursor_idx];
         let prev_buttons_down = cursor.buttons_down;
@@ -425,10 +426,15 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
         let primary_is_down = (event.buttons_down & UI2_PRIMARY_BUTTON_MASK) != 0;
         let middle_was_down = (prev_buttons_down & UI2_MIDDLE_BUTTON_MASK) != 0;
         let middle_is_down = (event.buttons_down & UI2_MIDDLE_BUTTON_MASK) != 0;
+        let prev_x = cursor.x;
+        let prev_y = cursor.y;
 
         cursor.x = px;
         cursor.y = py;
         cursor.buttons_down = event.buttons_down;
+        if prev_x != px || prev_y != py || prev_buttons_down != event.buttons_down {
+            cursor_overlay_changed = true;
+        }
 
         if !primary_was_down && primary_is_down {
             cursor.press_x = px;
@@ -487,6 +493,10 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
         {
             begin_scroll_pan_window_id = target.owner_window_id;
         }
+    }
+
+    if cursor_overlay_changed {
+        note_cursor_overlay_dirty(state, "cursor-overlay");
     }
 
     let selected_window_id = state.cursors[cursor_idx].selected_window_id;

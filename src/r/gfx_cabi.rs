@@ -5055,6 +5055,7 @@ pub mod cabi {
         frame_active: bool,
         frame_allow_screen_present: bool,
         frame_preserve_contents: bool,
+        frame_suppress_cursor_overlay: bool,
         frame_clear_rgb: u32,
         frame_seq: u32,
         frame_rgb_draws: u32,
@@ -5120,6 +5121,9 @@ pub mod cabi {
         },
         SetScissor {
             rect: Option<ScissorRect>,
+        },
+        ClearColorRgba {
+            rgba: trueos_gfx_core::Rgba8,
         },
         ClearRect {
             rgb: u32,
@@ -5369,6 +5373,7 @@ pub mod cabi {
                 frame_active: false,
                 frame_allow_screen_present: true,
                 frame_preserve_contents: false,
+                frame_suppress_cursor_overlay: false,
                 frame_clear_rgb: 0x00ff_ffff,
                 frame_seq: 0,
                 frame_rgb_draws: 0,
@@ -5437,11 +5442,16 @@ pub mod cabi {
         let r = ((rgb >> 16) & 0xFF) as u8;
         let g = ((rgb >> 8) & 0xFF) as u8;
         let b = (rgb & 0xFF) as u8;
+        clear_rgba_buffer_exact(rgba, trueos_gfx_core::Rgba8::new(r, g, b, 255));
+    }
+
+    #[inline]
+    fn clear_rgba_buffer_exact(rgba: &mut [u8], color: trueos_gfx_core::Rgba8) {
         for px in rgba.chunks_exact_mut(4) {
-            px[0] = r;
-            px[1] = g;
-            px[2] = b;
-            px[3] = 255;
+            px[0] = color.r;
+            px[1] = color.g;
+            px[2] = color.b;
+            px[3] = color.a;
         }
     }
 
@@ -5492,6 +5502,41 @@ pub mod cabi {
         let r = ((rgb >> 16) & 0xFF) as u8;
         let g = ((rgb >> 8) & 0xFF) as u8;
         let b = (rgb & 0xFF) as u8;
+        clear_rgba_rect_exact(
+            rgba,
+            width,
+            height,
+            x,
+            y,
+            rect_w,
+            rect_h,
+            trueos_gfx_core::Rgba8::new(r, g, b, 255),
+        );
+    }
+
+    #[inline]
+    fn clear_rgba_rect_exact(
+        rgba: &mut [u8],
+        width: u32,
+        height: u32,
+        x: u32,
+        y: u32,
+        rect_w: u32,
+        rect_h: u32,
+        color: trueos_gfx_core::Rgba8,
+    ) {
+        if width == 0 || height == 0 || rect_w == 0 || rect_h == 0 {
+            return;
+        }
+
+        let x0 = x.min(width) as usize;
+        let y0 = y.min(height) as usize;
+        let x1 = x.saturating_add(rect_w).min(width) as usize;
+        let y1 = y.saturating_add(rect_h).min(height) as usize;
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+
         let stride = width as usize * 4;
         for py in y0..y1 {
             let row = py.saturating_mul(stride);
@@ -5500,10 +5545,10 @@ pub mod cabi {
                 if off + 4 > rgba.len() {
                     break;
                 }
-                rgba[off] = r;
-                rgba[off + 1] = g;
-                rgba[off + 2] = b;
-                rgba[off + 3] = 255;
+                rgba[off] = color.r;
+                rgba[off + 1] = color.g;
+                rgba[off + 2] = color.b;
+                rgba[off + 3] = color.a;
             }
         }
     }
@@ -5885,6 +5930,17 @@ pub mod cabi {
                 }
                 PendingDraw::SetScissor { rect } => {
                     current_scissor = rect;
+                }
+                PendingDraw::ClearColorRgba { rgba } => {
+                    if current_target_tex_id == 0 {
+                        clear_rgba_buffer_exact(screen.as_mut_slice(), rgba);
+                    } else if let Some(Some(target)) =
+                        textures.get_mut(current_target_tex_id.saturating_sub(1) as usize)
+                    {
+                        clear_rgba_buffer_exact(target.rgba.as_mut_slice(), rgba);
+                    }
+                    saw_draw = true;
+                    cleared_first_target = true;
                 }
                 PendingDraw::ClearRect {
                     rgb,
@@ -6305,6 +6361,28 @@ pub mod cabi {
     }
 
     #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_clear_rgba_no_present(
+        r: u32,
+        g: u32,
+        b: u32,
+        a: u32,
+    ) -> i32 {
+        let mut st = GFX_CABI_STATE.lock();
+        if !st.frame_active {
+            return -1;
+        }
+        st.frame_draws.push(PendingDraw::ClearColorRgba {
+            rgba: trueos_gfx_core::Rgba8::new(
+                r.min(255) as u8,
+                g.min(255) as u8,
+                b.min(255) as u8,
+                a.min(255) as u8,
+            ),
+        });
+        0
+    }
+
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_gfx_set_render_target(tex_id: u32) -> i32 {
         if gfx_cabi_vm_context() {
             let (status, rc) = trueos_vm::vmcall::call(
@@ -6453,6 +6531,7 @@ pub mod cabi {
             st.viewport_configured = false;
             st.frame_active = false;
             st.frame_allow_screen_present = true;
+            st.frame_suppress_cursor_overlay = false;
             st.frame_seq = 0;
             st.frame_rgb_draws = 0;
             st.frame_tex_draws = 0;
@@ -6932,7 +7011,7 @@ pub mod cabi {
         if reject_unreasonable_tex_id(tex_id, "render-mandelbrot-now") {
             return -8;
         }
-        if !crate::gfx::is_virgl_active() {
+        if !crate::gfx::is_virgl_active() && !crate::gfx::is_rdp_only_active() {
             return -2;
         }
 
@@ -8170,6 +8249,16 @@ pub mod cabi {
         0
     }
 
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_suppress_cursor_overlay_for_current_frame() -> i32 {
+        let mut st = GFX_CABI_STATE.lock();
+        if !st.frame_active {
+            return -1;
+        }
+        st.frame_suppress_cursor_overlay = true;
+        0
+    }
+
     #[inline]
     fn begin_frame_host_inner(
         clear_rgb: u32,
@@ -8199,6 +8288,7 @@ pub mod cabi {
         st.frame_active = true;
         st.frame_allow_screen_present = allow_screen_present;
         st.frame_preserve_contents = preserve_contents;
+        st.frame_suppress_cursor_overlay = false;
         st.frame_clear_rgb = clear_rgb;
         st.frame_rgb_draws = 0;
         st.frame_tex_draws = 0;
@@ -8254,6 +8344,13 @@ pub mod cabi {
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_gfx_begin_frame_no_present(clear_rgb: u32) -> i32 {
         begin_frame_inner(clear_rgb, false, false)
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_begin_frame_preserve_no_present(
+        clear_rgb: u32,
+    ) -> i32 {
+        begin_frame_inner(clear_rgb, true, false)
     }
 
     #[unsafe(no_mangle)]
@@ -8603,6 +8700,7 @@ pub mod cabi {
             was_active,
             allow_screen_present,
             preserve_contents,
+            suppress_cursor_overlay,
             clear_rgb,
             draws,
             rgb_src,
@@ -8617,6 +8715,7 @@ pub mod cabi {
                 st.frame_active,
                 st.frame_allow_screen_present,
                 st.frame_preserve_contents,
+                st.frame_suppress_cursor_overlay,
                 st.frame_clear_rgb,
                 core::mem::take(&mut st.frame_draws),
                 core::mem::take(&mut st.frame_rgb_blob),
@@ -8625,6 +8724,7 @@ pub mod cabi {
             st.frame_active = false;
             st.frame_allow_screen_present = true;
             st.frame_preserve_contents = false;
+            st.frame_suppress_cursor_overlay = false;
             st.frame_render_target_tex_id = 0;
             out
         };
@@ -8707,7 +8807,7 @@ pub mod cabi {
                 let mut submit_draws = draws.clone();
                 let mut submit_rgb_src = rgb_src.clone();
                 let mut submit_tex_src = tex_src.clone();
-                if is_screen_present_frame {
+                if is_screen_present_frame && !suppress_cursor_overlay {
                     append_kernel_cursor_overlay_draws(
                         &mut submit_draws,
                         &mut submit_rgb_src,
@@ -8727,6 +8827,9 @@ pub mod cabi {
                     },
                     SetScissor {
                         rect: Option<ScissorRect>,
+                    },
+                    ClearColorRgba {
+                        rgba: trueos_gfx_core::Rgba8,
                     },
                     ClearRect {
                         rgb: u32,
@@ -8772,6 +8875,13 @@ pub mod cabi {
                                 break;
                             }
                             PendingDraw::SetScissor { .. } => {
+                                if pass_kind == 0 {
+                                    draw_idx += 1;
+                                    continue;
+                                }
+                                break;
+                            }
+                            PendingDraw::ClearColorRgba { .. } => {
                                 if pass_kind == 0 {
                                     draw_idx += 1;
                                     continue;
@@ -8845,6 +8955,9 @@ pub mod cabi {
                             }
                             PendingDraw::SetScissor { rect } => {
                                 plans.push(Plan::SetScissor { rect: *rect });
+                            }
+                            PendingDraw::ClearColorRgba { rgba } => {
+                                plans.push(Plan::ClearColorRgba { rgba: *rgba });
                             }
                             PendingDraw::ClearRect {
                                 rgb,
@@ -9012,6 +9125,9 @@ pub mod cabi {
                                         height: scissor.height,
                                     }
                                 })));
+                            }
+                            Plan::ClearColorRgba { rgba } => {
+                                cmds.push(Command::ClearColorRgba { rgba });
                             }
                             Plan::ClearRect {
                                 rgb,
@@ -9193,7 +9309,7 @@ pub mod cabi {
                 let mut screenshot_draws = draws.clone();
                 let mut screenshot_rgb = rgb_src.clone();
                 let mut screenshot_tex = tex_src.clone();
-                if let Some((vp_w, vp_h)) = screenshot_overlay_extent {
+                if !suppress_cursor_overlay && let Some((vp_w, vp_h)) = screenshot_overlay_extent {
                     append_kernel_cursor_overlay_draws(
                         &mut screenshot_draws,
                         &mut screenshot_rgb,
