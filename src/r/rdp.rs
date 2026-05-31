@@ -40,6 +40,7 @@ const MSG_DRAW_TEX_TRIANGLES: u16 = 16;
 const MSG_RESOURCE_SNAPSHOT_BEGIN: u16 = 17;
 const MSG_RESOURCE_SNAPSHOT_END: u16 = 18;
 const MSG_INPUT_TABLET_ABS: u16 = 100;
+const MSG_INPUT_KEYBOARD_BOOT: u16 = 101;
 const CAP_ONE_WAY_MONITOR: u32 = 1;
 const CAP_GFX_COMMAND_STREAM: u32 = 1 << 1;
 const CAP_RESOURCE_SNAPSHOT: u32 = 1 << 2;
@@ -174,35 +175,70 @@ fn handle_client_payload(handle: NetHandle, payload: &[u8]) {
     let Some(msg) = read_u16(payload, 6) else {
         return;
     };
-    if msg != MSG_INPUT_TABLET_ABS {
-        return;
-    }
     let body = &payload[8..];
-    if body.len() < 20 {
-        return;
-    }
 
-    let slot_id = read_u32(body, 0).unwrap_or(0).max(1);
-    let x_q16 = read_u32(body, 4).unwrap_or(0).min(65535);
-    let y_q16 = read_u32(body, 8).unwrap_or(0).min(65535);
-    let buttons_down = read_u32(body, 12).unwrap_or(0);
-    let flags = read_u32(body, 16).unwrap_or(0);
-    let x = f64::from(x_q16) / 65535.0;
-    let y = f64::from(y_q16) / 65535.0;
-    crate::usb3::hid::inject_virtual_tablet_absolute_event(slot_id, x, y, buttons_down, flags);
+    match msg {
+        MSG_INPUT_TABLET_ABS => {
+            if body.len() < 20 {
+                return;
+            }
 
-    static INPUT_LOGS: AtomicU32 = AtomicU32::new(0);
-    let n = INPUT_LOGS.fetch_add(1, Ordering::Relaxed);
-    if n < 8 {
-        crate::log!(
-            "trueos-rdp: input tablet handle={} slot={} x={} y={} buttons=0x{:X} flags=0x{:X}\n",
-            handle.0,
-            slot_id,
-            x_q16,
-            y_q16,
-            buttons_down,
-            flags
-        );
+            let slot_id = crate::usb3::hid::rdp_tablet_slot_id();
+            let x_q16 = read_u32(body, 4).unwrap_or(0).min(65535);
+            let y_q16 = read_u32(body, 8).unwrap_or(0).min(65535);
+            let buttons_down = read_u32(body, 12).unwrap_or(0);
+            let flags = read_u32(body, 16).unwrap_or(0);
+            let x = f64::from(x_q16) / 65535.0;
+            let y = f64::from(y_q16) / 65535.0;
+            crate::usb3::hid::inject_virtual_tablet_absolute_event(
+                slot_id,
+                x,
+                y,
+                buttons_down,
+                flags,
+            );
+
+            static TABLET_INPUT_LOGS: AtomicU32 = AtomicU32::new(0);
+            let n = TABLET_INPUT_LOGS.fetch_add(1, Ordering::Relaxed);
+            if n < 8 {
+                crate::log!(
+                    "trueos-rdp: input tablet handle={} slot={} x={} y={} buttons=0x{:X} flags=0x{:X}\n",
+                    handle.0,
+                    slot_id,
+                    x_q16,
+                    y_q16,
+                    buttons_down,
+                    flags
+                );
+            }
+        }
+        MSG_INPUT_KEYBOARD_BOOT => {
+            if body.len() < 16 {
+                return;
+            }
+            let modifiers = read_u32(body, 4).unwrap_or(0).min(u8::MAX as u32) as u8;
+            let keys_lo = read_u32(body, 8).unwrap_or(0).to_le_bytes();
+            let keys_hi = read_u32(body, 12).unwrap_or(0).to_le_bytes();
+            let keys = [keys_lo[0], keys_lo[1], keys_lo[2], keys_lo[3], keys_hi[0], keys_hi[1]];
+            crate::usb3::hid::inject_virtual_keyboard_boot_report(modifiers, keys);
+
+            static KEYBOARD_INPUT_LOGS: AtomicU32 = AtomicU32::new(0);
+            let n = KEYBOARD_INPUT_LOGS.fetch_add(1, Ordering::Relaxed);
+            if n < 8 {
+                crate::log!(
+                    "trueos-rdp: input keyboard handle={} mods=0x{:02X} keys=[{},{},{},{},{},{}]\n",
+                    handle.0,
+                    modifiers,
+                    keys[0],
+                    keys[1],
+                    keys[2],
+                    keys[3],
+                    keys[4],
+                    keys[5],
+                );
+            }
+        }
+        _ => {}
     }
 }
 
@@ -235,6 +271,41 @@ fn handle_client_data(handle: NetHandle, data: Vec<u8>, buffers: &mut Vec<Client
         buffer.drain(0..total);
         handle_client_payload(handle, payload.as_slice());
     }
+}
+
+fn publish_client_handles(clients: &[NetHandle]) {
+    TRUEOS_RDP_CLIENTS.store(clients.len() as u32, Ordering::Release);
+    *TRUEOS_RDP_CLIENT_HANDLES.lock() = clients.to_vec();
+}
+
+fn remove_client_handle(
+    clients: &mut Vec<NetHandle>,
+    input_buffers: &mut Vec<ClientInputBuffer>,
+    handle: NetHandle,
+) -> bool {
+    let before = clients.len();
+    clients.retain(|client| *client != handle);
+    input_buffers.retain(|buffer| buffer.handle != handle);
+    if clients.len() == before {
+        return false;
+    }
+    if clients.is_empty() {
+        crate::usb3::hid::remove_rdp_tablet();
+    }
+    publish_client_handles(clients.as_slice());
+    true
+}
+
+fn clear_client_handles(clients: &mut Vec<NetHandle>, input_buffers: &mut Vec<ClientInputBuffer>) -> usize {
+    let cleared = clients.len();
+    if cleared == 0 {
+        return 0;
+    }
+    clients.clear();
+    input_buffers.clear();
+    crate::usb3::hid::remove_rdp_tablet();
+    publish_client_handles(clients.as_slice());
+    cleared
 }
 
 fn protocol_frame(msg: u16, fields: &[u32], data: &[u8]) -> Vec<u8> {
@@ -606,8 +677,7 @@ pub async fn trueos_rdp_task() {
 
                     if !clients.contains(&handle) {
                         clients.push(handle);
-                        TRUEOS_RDP_CLIENTS.store(clients.len() as u32, Ordering::Release);
-                        *TRUEOS_RDP_CLIENT_HANDLES.lock() = clients.clone();
+                        publish_client_handles(clients.as_slice());
                     }
 
                     match peer {
@@ -641,12 +711,7 @@ pub async fn trueos_rdp_task() {
                         crate::log!("trueos-rdp: listener closed handle={} relisten=1\n", handle.0);
                     }
 
-                    let before = clients.len();
-                    clients.retain(|client| *client != handle);
-                    input_buffers.retain(|buffer| buffer.handle != handle);
-                    if clients.len() != before {
-                        TRUEOS_RDP_CLIENTS.store(clients.len() as u32, Ordering::Release);
-                        *TRUEOS_RDP_CLIENT_HANDLES.lock() = clients.clone();
+                    if remove_client_handle(&mut clients, &mut input_buffers, handle) {
                         crate::log!(
                             "trueos-rdp: client closed handle={} clients={}\n",
                             handle.0,
@@ -659,7 +724,15 @@ pub async fn trueos_rdp_task() {
                 }
                 NetEvent::TcpSent { .. } => {}
                 NetEvent::Error { msg } => {
-                    if ticks.is_multiple_of(100) {
+                    if msg == "bad handle" {
+                        let cleared = clear_client_handles(&mut clients, &mut input_buffers);
+                        if cleared != 0 {
+                            crate::log!(
+                                "trueos-rdp: clients cleared reason=bad-handle count={}\n",
+                                cleared
+                            );
+                        }
+                    } else if ticks.is_multiple_of(100) {
                         crate::log!("trueos-rdp: net error {}\n", msg);
                     }
                 }

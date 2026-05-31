@@ -585,6 +585,17 @@ pub fn is_virgl_active() -> bool {
     false
 }
 
+pub fn is_rdp_only_active() -> bool {
+    #[cfg(feature = "trueos_rdp")]
+    {
+        matches!(backend_kind_cached(), Some(BackendKind::Rdp))
+    }
+    #[cfg(not(feature = "trueos_rdp"))]
+    {
+        false
+    }
+}
+
 pub fn is_intel_active() -> bool {
     false
 }
