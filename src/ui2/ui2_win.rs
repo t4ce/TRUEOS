@@ -1694,29 +1694,6 @@ impl Ui2SurfaceWindow {
         true
     }
 
-    pub fn render_bee_tiles(&self, ticks: u64, tick_hz: u64, repaint_reason: &'static str) -> bool {
-        let repaint_window_id = if is_window_minimized(self.window_id) {
-            0
-        } else {
-            self.window_id
-        };
-        if !crate::r::io::cabi::queue_render_bee_tiles_to_texture(
-            self.tex_id,
-            ticks,
-            tick_hz,
-            repaint_window_id,
-            repaint_reason,
-        ) {
-            crate::log!(
-                "ui2-surface-window: bee tiles render queue failed window={} tex={}\n",
-                self.window_id,
-                self.tex_id
-            );
-            return false;
-        }
-        true
-    }
-
     #[allow(dead_code)]
     pub fn upload_rgba(&self, pixels: &[u8], repaint_reason: &'static str) -> bool {
         let expected = self.width as usize * self.height as usize * 4;
