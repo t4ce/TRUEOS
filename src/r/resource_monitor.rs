@@ -10,6 +10,7 @@ use alloc::{format, string::String, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use embassy_executor::task;
+use embassy_time_driver::{TICK_HZ, now};
 use heapless::Deque;
 use spin::Mutex;
 
@@ -65,6 +66,7 @@ static RESOURCE_MONITOR_DROPPED: AtomicU32 = AtomicU32::new(0);
 static RESOURCE_MONITOR_PRESERVED: AtomicU32 = AtomicU32::new(0);
 static RESOURCE_MONITOR_BYTES: AtomicU64 = AtomicU64::new(0);
 static RESOURCE_MONITOR_SEQ: AtomicU64 = AtomicU64::new(1);
+static RESOURCE_MONITOR_FLUSHED_SEQ: AtomicU64 = AtomicU64::new(0);
 static RESOURCE_MONITOR_DISK: Mutex<Option<block::DeviceHandle>> = Mutex::new(None);
 static RESOURCE_MONITOR_QUEUE: Mutex<Deque<PreserveRequest, RESOURCE_MONITOR_QUEUE_CAP>> =
     Mutex::new(Deque::new());
@@ -159,6 +161,47 @@ pub fn encoded_texture(tex_id: u32) -> Option<EncodedAsset> {
         .cloned()
 }
 
+pub fn encoded_assets_snapshot() -> Vec<EncodedAsset> {
+    let mut assets = RESOURCE_MONITOR_ENCODED.lock().clone();
+    assets.sort_by_key(|asset| asset.seq);
+    assets
+}
+
+pub fn latest_encoded_seq() -> u64 {
+    RESOURCE_MONITOR_ENCODED
+        .lock()
+        .iter()
+        .map(|asset| asset.seq)
+        .max()
+        .unwrap_or(0)
+}
+
+pub async fn wait_until_flushed(target_seq: u64, timeout_ms: u64) -> bool {
+    if target_seq == 0 {
+        return true;
+    }
+    let ticks = if TICK_HZ == 0 || timeout_ms == 0 {
+        0
+    } else {
+        timeout_ms.saturating_mul(TICK_HZ).div_ceil(1000).max(1)
+    };
+    let deadline = if ticks == 0 {
+        0
+    } else {
+        now().saturating_add(ticks)
+    };
+
+    loop {
+        if RESOURCE_MONITOR_FLUSHED_SEQ.load(Ordering::Acquire) >= target_seq {
+            return true;
+        }
+        if deadline != 0 && now() >= deadline {
+            return false;
+        }
+        let _ = RESOURCE_MONITOR_WAIT.wait_for_event_timeout(25).await;
+    }
+}
+
 async fn ensure_disk() -> Result<block::DeviceHandle, block::Error> {
     if let Some(disk) = *RESOURCE_MONITOR_DISK.lock() {
         return Ok(disk);
@@ -239,6 +282,8 @@ async fn write_request(
 
     RESOURCE_MONITOR_PRESERVED.fetch_add(1, Ordering::AcqRel);
     RESOURCE_MONITOR_BYTES.fetch_add(req.bytes.len() as u64, Ordering::AcqRel);
+    RESOURCE_MONITOR_FLUSHED_SEQ.fetch_max(req.seq, Ordering::AcqRel);
+    RESOURCE_MONITOR_WAIT.notify_all();
     Ok(())
 }
 

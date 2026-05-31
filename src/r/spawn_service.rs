@@ -686,6 +686,11 @@ fn intel_media_engine_gate() -> bool {
 
 #[inline]
 fn ui2_core_task_gate() -> bool {
+    true
+}
+
+#[inline]
+fn rdp_only_client_gate() -> bool {
     if crate::gfx::is_rdp_only_active() {
         #[cfg(feature = "trueos_rdp")]
         {
@@ -701,17 +706,7 @@ fn ui2_core_task_gate() -> bool {
 
 #[inline]
 fn gfx_texture_upload_service_gate() -> bool {
-    if crate::gfx::is_rdp_only_active() {
-        #[cfg(feature = "trueos_rdp")]
-        {
-            return crate::r::rdp::has_clients();
-        }
-        #[cfg(not(feature = "trueos_rdp"))]
-        {
-            return false;
-        }
-    }
-    true
+    rdp_only_client_gate()
 }
 
 #[inline]
@@ -1395,9 +1390,10 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &UI2_CURSORPICKER_DEMO_STARTED,
         spawn_ui2_cursorpicker_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::enabled_gated(
         "ui2-gboi-demo",
         GBOI_DEMO_READY,
+        ui2_demo_task_gate,
         &UI2_GBOI_DEMO_STARTED,
         spawn_ui2_gboi_demo,
     ),
