@@ -1583,7 +1583,6 @@ pub struct VirglGfxBackend {
     fs_mandelbrot_handle: u32,
     fs_julia_handle: u32,
     fs_burning_ship_handle: u32,
-    fs_bee_tiles_handle: u32,
     sampler_state_nearest_handle: u32,
     sampler_state_linear_handle: u32,
     debug_tex_res: u32,
@@ -1890,7 +1889,6 @@ impl VirglGfxBackend {
         let fs_mandelbrot_handle = 25u32;
         let fs_julia_handle = 29u32;
         let fs_burning_ship_handle = 39u32;
-        let fs_bee_tiles_handle = 40u32;
         let fs_tex_particle_handle = 28u32;
         let sampler_state_handle = 26u32;
         let sampler_state_linear_handle = 27u32;
@@ -1927,7 +1925,6 @@ impl VirglGfxBackend {
             crate::gfx::mandelbrot::build_burning_ship_fragment_shader_tgsi_unrolled(
                 crate::gfx::mandelbrot::BURNING_SHIP_ITERATIONS,
             );
-        let fs_bee_tiles = crate::gfx::bee_tiles::build_fragment_shader_tgsi();
 
         // Color pipeline program.
         encode_shader(&mut init, vs_color_handle, PIPE_SHADER_VERTEX, VS_COLOR);
@@ -1967,9 +1964,6 @@ impl VirglGfxBackend {
         );
         encode_bind_shader(&mut init, fs_burning_ship_handle, PIPE_SHADER_FRAGMENT);
         encode_link_shader(&mut init, vs_tex_handle, fs_burning_ship_handle);
-        encode_shader(&mut init, fs_bee_tiles_handle, PIPE_SHADER_FRAGMENT, fs_bee_tiles.as_str());
-        encode_bind_shader(&mut init, fs_bee_tiles_handle, PIPE_SHADER_FRAGMENT);
-        encode_link_shader(&mut init, vs_tex_handle, fs_bee_tiles_handle);
 
         // Shared sampler states for 2D textures (sampler views are per-image).
         encode_create_sampler_state(
@@ -2107,7 +2101,6 @@ impl VirglGfxBackend {
             fs_mandelbrot_handle,
             fs_julia_handle,
             fs_burning_ship_handle,
-            fs_bee_tiles_handle,
             sampler_state_nearest_handle: sampler_state_handle,
             sampler_state_linear_handle,
             debug_tex_res,
@@ -2752,7 +2745,6 @@ impl GfxDevice for VirglGfxBackend {
             Mandelbrot,
             Julia,
             BurningShip,
-            BeeTiles,
         }
 
         #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2970,10 +2962,6 @@ impl GfxDevice for VirglGfxBackend {
                         == Some(crate::gfx::mandelbrot::BURNING_SHIP_PIPELINE_FS_TAG_RAW)
                     {
                         DrawKind::BurningShip
-                    } else if pipe_desc.fs.map(|id| id.raw())
-                        == Some(crate::gfx::bee_tiles::BEE_TILES_PIPELINE_FS_TAG_RAW)
-                    {
-                        DrawKind::BeeTiles
                     } else {
                         DrawKind::TexturedMask
                     };
@@ -3109,10 +3097,7 @@ impl GfxDevice for VirglGfxBackend {
                         layout_texcoord_format: pipe_desc.vertex_layout.texcoord_format,
                         image_id: if matches!(
                             draw_kind,
-                            DrawKind::Mandelbrot
-                                | DrawKind::Julia
-                                | DrawKind::BurningShip
-                                | DrawKind::BeeTiles
+                            DrawKind::Mandelbrot | DrawKind::Julia | DrawKind::BurningShip
                         ) {
                             0
                         } else if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32
@@ -3125,10 +3110,7 @@ impl GfxDevice for VirglGfxBackend {
                         },
                         image_rev: if matches!(
                             draw_kind,
-                            DrawKind::Mandelbrot
-                                | DrawKind::Julia
-                                | DrawKind::BurningShip
-                                | DrawKind::BeeTiles
+                            DrawKind::Mandelbrot | DrawKind::Julia | DrawKind::BurningShip
                         ) {
                             0
                         } else if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32
@@ -3155,10 +3137,7 @@ impl GfxDevice for VirglGfxBackend {
                     {
                         let bound_image = if matches!(
                             draw_kind,
-                            DrawKind::Mandelbrot
-                                | DrawKind::Julia
-                                | DrawKind::BurningShip
-                                | DrawKind::BeeTiles
+                            DrawKind::Mandelbrot | DrawKind::Julia | DrawKind::BurningShip
                         ) {
                             None
                         } else if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32 {
@@ -3237,10 +3216,7 @@ impl GfxDevice for VirglGfxBackend {
 
                     if matches!(
                         draw_kind,
-                        DrawKind::Mandelbrot
-                            | DrawKind::Julia
-                            | DrawKind::BurningShip
-                            | DrawKind::BeeTiles
+                        DrawKind::Mandelbrot | DrawKind::Julia | DrawKind::BurningShip
                     ) {
                         if last_bound_sampler_view != Some(0) {
                             encode_set_sampler_views(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[0]);
@@ -3255,7 +3231,6 @@ impl GfxDevice for VirglGfxBackend {
                             let fs_handle = match draw_kind {
                                 DrawKind::Julia => self.fs_julia_handle,
                                 DrawKind::BurningShip => self.fs_burning_ship_handle,
-                                DrawKind::BeeTiles => self.fs_bee_tiles_handle,
                                 _ => self.fs_mandelbrot_handle,
                             };
                             encode_bind_shader(&mut cmd, fs_handle, PIPE_SHADER_FRAGMENT);

@@ -79,7 +79,6 @@ define_started_flags!(
     UI2_CORETICKS_DEMO_STARTED,
     UI2_CURSORPICKER_DEMO_STARTED,
     UI2_GBOI_DEMO_STARTED,
-    UI2_HEX_TILES_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
     UI2_PLAYER_DEMO_STARTED,
     UI2_RAPLE_DEMO_STARTED,
@@ -120,7 +119,6 @@ define_stop_flags!(
     STOP_UI2_CORETICKS_DEMO,
     STOP_UI2_CURSORPICKER_DEMO,
     STOP_UI2_GBOI_DEMO,
-    STOP_UI2_BEE_TILES_DEMO,
     STOP_UI2_MANDELBROT_DEMO,
     STOP_UI2_PLAYER_DEMO,
     STOP_UI2_RAPLE_DEMO,
@@ -137,7 +135,6 @@ fn stop_flag_by_task_name(name: &str) -> Option<&'static AtomicBool> {
         "ui2-coreticks-demo" => Some(&STOP_UI2_CORETICKS_DEMO),
         "ui2-cursorpicker-demo" => Some(&STOP_UI2_CURSORPICKER_DEMO),
         "ui2-gboi-demo" => Some(&STOP_UI2_GBOI_DEMO),
-        "ui2-bee-tiles-demo" => Some(&STOP_UI2_BEE_TILES_DEMO),
         "ui2-mandelbrot-demo" => Some(&STOP_UI2_MANDELBROT_DEMO),
         "ui2-player-demo" => Some(&STOP_UI2_PLAYER_DEMO),
         "ui2-raple-demo" => Some(&STOP_UI2_RAPLE_DEMO),
@@ -781,13 +778,6 @@ fn spawn_ui2_mandelbrot_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
-fn spawn_ui2_bee_tiles_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::tst::ui2::hex_tiles_demo::ui2_hex_tiles_demo_task()
-    })
-}
-
 fn spawn_ui2_player_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
@@ -1085,9 +1075,9 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 #[cfg(feature = "trueos_rdp")]
-const TASK_COUNT: usize = 73;
+const TASK_COUNT: usize = 72;
 #[cfg(not(feature = "trueos_rdp"))]
-const TASK_COUNT: usize = 71;
+const TASK_COUNT: usize = 70;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1392,12 +1382,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         UI2_DEMO_READY,
         &UI2_MANDELBROT_DEMO_STARTED,
         spawn_ui2_mandelbrot_demo,
-    ),
-    TaskSpec::enabled(
-        "ui2-bee-tiles-demo",
-        UI2_DEMO_READY,
-        &UI2_HEX_TILES_DEMO_STARTED,
-        spawn_ui2_bee_tiles_demo,
     ),
     // Keep the player demo opt-in because it opens the audio player on boot.
     // HDA is currently a single-owner stream; emulator audio should not race it.
