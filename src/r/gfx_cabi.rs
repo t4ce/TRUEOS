@@ -3784,7 +3784,7 @@ pub mod cabi {
         else {
             return -3;
         };
-        entry.origin = TexCoordOrigin::BottomLeft;
+        entry.origin = render_target_tex_origin();
         let had_scissor = st.cur_scissor.take().is_some();
         st.frame_render_target_tex_id = host_tex_id;
         st.viewport_configured = false;
@@ -5104,6 +5104,15 @@ pub mod cabi {
         BottomLeft,
     }
 
+    #[inline]
+    fn render_target_tex_origin() -> TexCoordOrigin {
+        if crate::gfx::is_rdp_only_active() {
+            TexCoordOrigin::TopLeft
+        } else {
+            TexCoordOrigin::BottomLeft
+        }
+    }
+
     #[derive(Clone)]
     struct TexImage {
         image: ImageId,
@@ -6379,6 +6388,9 @@ pub mod cabi {
                 a.min(255) as u8,
             ),
         });
+        let frame_seq = st.frame_seq;
+        drop(st);
+        crate::gfx::rdp_monitor_clear_color_rgba(frame_seq, r, g, b, a);
         0
     }
 
@@ -6423,7 +6435,7 @@ pub mod cabi {
         let Some(entry) = entry else {
             return -1;
         };
-        entry.origin = TexCoordOrigin::BottomLeft;
+        entry.origin = render_target_tex_origin();
         let had_scissor = st.cur_scissor.take().is_some();
         st.frame_render_target_tex_id = tex_id;
         st.viewport_configured = false;
@@ -6945,7 +6957,7 @@ pub mod cabi {
                     .and_then(|images| images.get_mut(tex_id.saturating_sub(1) as usize))
                     .and_then(|entry| entry.as_mut())
                 {
-                    entry.origin = TexCoordOrigin::BottomLeft;
+                    entry.origin = render_target_tex_origin();
                     let Some(need) = checked_reasonable_rgba_len(entry.width, entry.height) else {
                         crate::log!(
                             "gfx-cabi: invalid rgba len for rgb-to-texture tex={} size={}x{}\n",
@@ -7282,7 +7294,7 @@ pub mod cabi {
                     if let Some(target) =
                         images.get_mut(target_idx).and_then(|entry| entry.as_mut())
                     {
-                        target.origin = TexCoordOrigin::BottomLeft;
+                        target.origin = render_target_tex_origin();
                     }
                     crate::log!(
                         "gfx-cabi: tex-to-texture mirror skipped target==source tex={} src={}\n",
@@ -7300,7 +7312,7 @@ pub mod cabi {
                     let Some(target) = right.get_mut(0).and_then(|entry| entry.as_mut()) else {
                         return ret;
                     };
-                    target.origin = TexCoordOrigin::BottomLeft;
+                    target.origin = render_target_tex_origin();
                     (source_tex, target)
                 } else {
                     let (left, right) = images.split_at_mut(source_idx);
@@ -7308,7 +7320,7 @@ pub mod cabi {
                     else {
                         return ret;
                     };
-                    target.origin = TexCoordOrigin::BottomLeft;
+                    target.origin = render_target_tex_origin();
                     let Some(source_tex) = right.get(0).and_then(|entry| entry.as_ref()) else {
                         return ret;
                     };

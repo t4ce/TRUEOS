@@ -121,6 +121,20 @@ fn inferred_concept_for_rendered(rendered: &str) -> Option<&'static str> {
     if rendered.starts_with("gfx-cabi:") || rendered.starts_with("gfx-cabi/") {
         return Some("gfx");
     }
+    if rendered.starts_with("intel/gpgpu:") {
+        return Some("gpgpu");
+    }
+    if rendered.starts_with("intel/render:") && rendered.contains("gpgpu_probe=") {
+        return Some("gpgpu");
+    }
+    if rendered.starts_with("intel/media:")
+        || rendered.starts_with("intel/media2:")
+        || rendered.starts_with("intel/hw_pic:")
+        || rendered.starts_with("intel/hw_pic-stage:")
+        || (rendered.starts_with("intel/display:") && rendered.contains("hw-logo"))
+    {
+        return Some("media");
+    }
     None
 }
 

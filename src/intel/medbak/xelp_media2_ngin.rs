@@ -1912,7 +1912,7 @@ fn log_media2_batch_geometry(
     mpr_row_addr: u64,
     mpr_row_attr: u32,
 ) {
-    if !crate::logflag::INTEL_MEDIA_NGIN_LOGS {
+    if !crate::logflag::intel_media_ngin_log_enabled(log::Level::Info) {
         return;
     }
 

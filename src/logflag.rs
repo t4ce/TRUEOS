@@ -6,9 +6,11 @@ pub(crate) const GLOBAL_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
 pub(crate) const BOOT_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const SERVICE_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const NET_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
-pub(crate) const USB_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
+pub(crate) const USB_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
 pub(crate) const STORAGE_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
-pub(crate) const GFX_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
+pub(crate) const GFX_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
+pub(crate) const GPGPU_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
+pub(crate) const HDA_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const HV_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 
 pub(crate) const NET_LOG_RX_TAP: bool = false;
@@ -44,7 +46,7 @@ pub(crate) static VIRGL_PRESENT_DIAG_LOGS: AtomicU32 = AtomicU32::new(0);
 pub(crate) const INTEL_CURSOR_PROBE_LOGS: bool = false;
 
 pub(crate) const INTEL_DISPLAY_NGIN_LOGS: bool = true;
-pub(crate) const INTEL_MEDIA_NGIN_LOGS: bool = true;
+pub(crate) const INTEL_MEDIA_NGIN_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const INTEL_MEDIA_FS_CACHE_ENABLED: bool = false;
 pub(crate) const INTEL_MEDIA_PRESENT_LUMA_ONLY: bool = true;
 
@@ -82,7 +84,18 @@ pub(crate) fn blueprint_log_enabled(level: Level) -> bool {
     level_enabled(BLUEPRINT_LOG_LEVEL, level)
 }
 
+pub(crate) fn intel_media_ngin_log_enabled(level: Level) -> bool {
+    level_enabled(INTEL_MEDIA_NGIN_LOG_LEVEL, level)
+}
+
 pub(crate) fn concept_log_enabled(concept: &str, level: Level) -> bool {
+    match canonical_concept(concept) {
+        "media" | "intel/media" | "intel/media2" | "intel/hw_pic" | "intel/hw_pic-stage" => {
+            return intel_media_ngin_log_enabled(level);
+        }
+        _ => {}
+    }
+
     let filter = match canonical_concept(concept) {
         "boot" | "cpu" | "tokio" | "rapl" | "tga" => BOOT_LOG_LEVEL,
         "service" | "spawn-svc" | "http" => SERVICE_LOG_LEVEL,
@@ -90,6 +103,8 @@ pub(crate) fn concept_log_enabled(concept: &str, level: Level) -> bool {
         "usb" => USB_LOG_LEVEL,
         "fs" | "storage" | "trueosfs" | "nvme" => STORAGE_LOG_LEVEL,
         "gfx" | "intel" | "display" => GFX_LOG_LEVEL,
+        "gpgpu" | "intel/gpgpu" => GPGPU_LOG_LEVEL,
+        "hda" | "audio" => HDA_LOG_LEVEL,
         "hv" => HV_LOG_LEVEL,
         _ => GLOBAL_LOG_LEVEL,
     };
