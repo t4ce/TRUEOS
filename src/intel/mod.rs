@@ -1106,14 +1106,17 @@ pub(crate) fn submit_render_replay_probe(
 
 pub(crate) fn submit_rotating_triangle_replay_frame(
     frame_index: usize,
+    load_mode: self::replay::ReplayModuleLoadMode,
 ) -> self::gpgpu::RenderReplayProof {
     let submits = self::replay_rotating_triangle::ROTATING_TRIANGLE_SUBMITS;
     let submit = submits.get(frame_index).copied().unwrap_or(submits[0]);
-    self::replay::submit_replay_frame_visible(
+    self::replay::submit_replay_frame_visible_from_module(
         self::replay_rotating_triangle::ROTATING_TRIANGLE_BO_SPECS,
         self::replay_rotating_triangle::ROTATING_TRIANGLE_BASE_PATCHES,
         submit,
         Some(self::replay_rotating_triangle::ROTATING_TRIANGLE_PRESENT),
+        Some(self::replay_rotating_triangle::ROTATING_TRIANGLE_MODULE_STRING),
+        load_mode,
     )
 }
 

@@ -39,10 +39,13 @@ const MSG_DRAW_RGB_TRIANGLES: u16 = 15;
 const MSG_DRAW_TEX_TRIANGLES: u16 = 16;
 const MSG_RESOURCE_SNAPSHOT_BEGIN: u16 = 17;
 const MSG_RESOURCE_SNAPSHOT_END: u16 = 18;
+const MSG_INPUT_TABLET_ABS: u16 = 100;
 const CAP_ONE_WAY_MONITOR: u32 = 1;
 const CAP_GFX_COMMAND_STREAM: u32 = 1 << 1;
 const CAP_RESOURCE_SNAPSHOT: u32 = 1 << 2;
+const CAP_ABSOLUTE_TABLET_INPUT: u32 = 1 << 3;
 const RDP_TEXTURE_CACHE_CAP: usize = 512;
+const RDP_INPUT_MAX_FRAME_BYTES: usize = 1024;
 
 #[derive(Clone)]
 struct CachedTexture {
@@ -51,6 +54,11 @@ struct CachedTexture {
     fields: Vec<u32>,
     data: Vec<u8>,
     seq: u32,
+}
+
+struct ClientInputBuffer {
+    handle: NetHandle,
+    bytes: Vec<u8>,
 }
 
 static TRUEOS_RDP_STARTED: AtomicBool = AtomicBool::new(false);
@@ -117,7 +125,10 @@ fn frame_from_payload(payload: Vec<u8>) -> Vec<u8> {
 
 fn hello_frame() -> Vec<u8> {
     let (view_w, view_h) = active_view_dimensions();
-    let caps = CAP_ONE_WAY_MONITOR | CAP_GFX_COMMAND_STREAM | CAP_RESOURCE_SNAPSHOT;
+    let caps = CAP_ONE_WAY_MONITOR
+        | CAP_GFX_COMMAND_STREAM
+        | CAP_RESOURCE_SNAPSHOT
+        | CAP_ABSOLUTE_TABLET_INPUT;
 
     let mut payload = begin_payload(MSG_HELLO, 16);
     push_u32(&mut payload, view_w);
@@ -125,6 +136,105 @@ fn hello_frame() -> Vec<u8> {
     push_u32(&mut payload, caps);
 
     frame_from_payload(payload)
+}
+
+fn input_buffer_mut<'a>(
+    buffers: &'a mut Vec<ClientInputBuffer>,
+    handle: NetHandle,
+) -> &'a mut Vec<u8> {
+    if let Some(idx) = buffers.iter().position(|buffer| buffer.handle == handle) {
+        return &mut buffers[idx].bytes;
+    }
+    buffers.push(ClientInputBuffer {
+        handle,
+        bytes: Vec::new(),
+    });
+    let idx = buffers.len() - 1;
+    &mut buffers[idx].bytes
+}
+
+fn read_u16(data: &[u8], off: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(data.get(off..off + 2)?.try_into().ok()?))
+}
+
+fn read_u32(data: &[u8], off: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(data.get(off..off + 4)?.try_into().ok()?))
+}
+
+fn handle_client_payload(handle: NetHandle, payload: &[u8]) {
+    if payload.len() < 8 || payload.get(0..4) != Some(b"TRDP") {
+        return;
+    }
+    let Some(version) = read_u16(payload, 4) else {
+        return;
+    };
+    if version != PROTOCOL_VERSION {
+        return;
+    }
+    let Some(msg) = read_u16(payload, 6) else {
+        return;
+    };
+    if msg != MSG_INPUT_TABLET_ABS {
+        return;
+    }
+    let body = &payload[8..];
+    if body.len() < 20 {
+        return;
+    }
+
+    let slot_id = read_u32(body, 0).unwrap_or(0).max(1);
+    let x_q16 = read_u32(body, 4).unwrap_or(0).min(65535);
+    let y_q16 = read_u32(body, 8).unwrap_or(0).min(65535);
+    let buttons_down = read_u32(body, 12).unwrap_or(0);
+    let flags = read_u32(body, 16).unwrap_or(0);
+    let x = f64::from(x_q16) / 65535.0;
+    let y = f64::from(y_q16) / 65535.0;
+    crate::usb3::hid::inject_virtual_tablet_absolute_event(slot_id, x, y, buttons_down, flags);
+
+    static INPUT_LOGS: AtomicU32 = AtomicU32::new(0);
+    let n = INPUT_LOGS.fetch_add(1, Ordering::Relaxed);
+    if n < 8 {
+        crate::log!(
+            "trueos-rdp: input tablet handle={} slot={} x={} y={} buttons=0x{:X} flags=0x{:X}\n",
+            handle.0,
+            slot_id,
+            x_q16,
+            y_q16,
+            buttons_down,
+            flags
+        );
+    }
+}
+
+fn handle_client_data(handle: NetHandle, data: Vec<u8>, buffers: &mut Vec<ClientInputBuffer>) {
+    let buffer = input_buffer_mut(buffers, handle);
+    buffer.extend_from_slice(data.as_slice());
+
+    loop {
+        if buffer.len() < 4 {
+            return;
+        }
+        let Some(len) = read_u32(buffer.as_slice(), 0).map(|len| len as usize) else {
+            buffer.clear();
+            return;
+        };
+        if len > RDP_INPUT_MAX_FRAME_BYTES {
+            crate::log!(
+                "trueos-rdp: input frame too large handle={} bytes={} clearing\n",
+                handle.0,
+                len
+            );
+            buffer.clear();
+            return;
+        }
+        let total = 4usize.saturating_add(len);
+        if buffer.len() < total {
+            return;
+        }
+        let payload = buffer[4..total].to_vec();
+        buffer.drain(0..total);
+        handle_client_payload(handle, payload.as_slice());
+    }
 }
 
 fn protocol_frame(msg: u16, fields: &[u32], data: &[u8]) -> Vec<u8> {
@@ -472,6 +582,7 @@ pub async fn trueos_rdp_task() {
 
     let mut listener: Option<NetHandle> = None;
     let mut clients: Vec<NetHandle> = Vec::new();
+    let mut input_buffers: Vec<ClientInputBuffer> = Vec::new();
     let mut ticks: u32 = 0;
 
     loop {
@@ -532,6 +643,7 @@ pub async fn trueos_rdp_task() {
 
                     let before = clients.len();
                     clients.retain(|client| *client != handle);
+                    input_buffers.retain(|buffer| buffer.handle != handle);
                     if clients.len() != before {
                         TRUEOS_RDP_CLIENTS.store(clients.len() as u32, Ordering::Release);
                         *TRUEOS_RDP_CLIENT_HANDLES.lock() = clients.clone();
@@ -542,7 +654,10 @@ pub async fn trueos_rdp_task() {
                         );
                     }
                 }
-                NetEvent::TcpSent { .. } | NetEvent::TcpData { .. } => {}
+                NetEvent::TcpData { handle, data } => {
+                    handle_client_data(handle, data, &mut input_buffers);
+                }
+                NetEvent::TcpSent { .. } => {}
                 NetEvent::Error { msg } => {
                     if ticks.is_multiple_of(100) {
                         crate::log!("trueos-rdp: net error {}\n", msg);

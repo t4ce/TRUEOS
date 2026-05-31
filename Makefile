@@ -53,9 +53,10 @@ QEMU_BRIDGE_HELPER ?= $(firstword $(wildcard /usr/lib/qemu/qemu-bridge-helper /u
 QEMU_HDA_AUDIODEV ?= none,id=snd0
 QEMU_HOST_TCP_PORT_3 ?= 10003
 QEMU_HOST_TCP_PORT_4 ?= 10004
+QEMU_HOST_TCP_PORT_100 ?= 10100
 QEMU_HOST_TCP_PORT_80 ?= 8080
 QEMU_HOST_TCP_PORT_54321 ?= 15432
-QEMU_RUN_ENV = ISO_PATH="$(ISO_PATH)" QEMU_BIN="$(QEMU_BIN)" QEMU_UEFI_FIRMWARE="$(QEMU_UEFI_FIRMWARE)" QEMU_NVME_IMG="$(NVME_IMG)" QEMU_BRIDGE="$(QEMU_BRIDGE)" QEMU_BRIDGE_HELPER="$(QEMU_BRIDGE_HELPER)" QEMU_HDA_AUDIODEV="$(QEMU_HDA_AUDIODEV)" QEMU_HOST_TCP_PORT_3="$(QEMU_HOST_TCP_PORT_3)" QEMU_HOST_TCP_PORT_4="$(QEMU_HOST_TCP_PORT_4)" QEMU_HOST_TCP_PORT_80="$(QEMU_HOST_TCP_PORT_80)" QEMU_HOST_TCP_PORT_54321="$(QEMU_HOST_TCP_PORT_54321)"
+QEMU_RUN_ENV = ISO_PATH="$(ISO_PATH)" QEMU_BIN="$(QEMU_BIN)" QEMU_UEFI_FIRMWARE="$(QEMU_UEFI_FIRMWARE)" QEMU_NVME_IMG="$(NVME_IMG)" QEMU_BRIDGE="$(QEMU_BRIDGE)" QEMU_BRIDGE_HELPER="$(QEMU_BRIDGE_HELPER)" QEMU_HDA_AUDIODEV="$(QEMU_HDA_AUDIODEV)" QEMU_HOST_TCP_PORT_3="$(QEMU_HOST_TCP_PORT_3)" QEMU_HOST_TCP_PORT_4="$(QEMU_HOST_TCP_PORT_4)" QEMU_HOST_TCP_PORT_100="$(QEMU_HOST_TCP_PORT_100)" QEMU_HOST_TCP_PORT_80="$(QEMU_HOST_TCP_PORT_80)" QEMU_HOST_TCP_PORT_54321="$(QEMU_HOST_TCP_PORT_54321)"
 BAREMETAL_LOG_DRAIN := tools/baremetal-log-drain.sh
 BAREMETAL_LOG_HOST ?= 192.168.178.94
 BAREMETAL_LOG_PORT ?= 1
@@ -159,9 +160,13 @@ baremetal-reboot-log:
 	python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('',7777)); exec(\"while True:\n d,a=s.recvfrom(2048)\n if d==b'probe': s.sendto(b'ack',(a[0],7777)); break\")" &
 	@TRUEOS_BAREMETAL_LOG_HOST="$(BAREMETAL_LOG_HOST)" TRUEOS_BAREMETAL_LOG_PORT="$(BAREMETAL_LOG_PORT)" TRUEOS_BAREMETAL_LOG_DELAY="$(BAREMETAL_LOG_DELAY)" TRUEOS_BAREMETAL_LOG_DIR="$(BAREMETAL_LOG_DIR)" "$(BAREMETAL_LOG_DRAIN)" start
 
-$(ISO_DIR)/$(INTEL_REPLAY_ROT_TRI_ISO_REL_PATH):
+.PHONY: intel-replay-rot-tri-artifact
+intel-replay-rot-tri-artifact: $(ISO_DIR)/$(INTEL_REPLAY_ROT_TRI_ISO_REL_PATH)
+
+$(ISO_DIR)/$(INTEL_REPLAY_ROT_TRI_ISO_REL_PATH): FORCE
 	@if [ -d "$(INTEL_REPLAY_ROT_TRI_SRC_DIR)" ]; then \
 		mkdir -p "$$(dirname "$@")"; \
+		rm -f "$@"; \
 		tar -C "$(INTEL_REPLAY_ROT_TRI_SRC_DIR)" -cf "$@" \
 			replay_manifest.json \
 			dumps/002584_pre_exec_full_object_handle_7_off_0x0_len_0x200000.bin \
@@ -180,7 +185,9 @@ $(ISO_DIR)/$(INTEL_REPLAY_ROT_TRI_ISO_REL_PATH):
 		echo "iso: skipping Intel replay artifact, missing $(INTEL_REPLAY_ROT_TRI_SRC_DIR)"; \
 	fi
 
-iso: baremetal-reboot-log artifacts images limine $(ISO_DIR)/$(INTEL_REPLAY_ROT_TRI_ISO_REL_PATH)
+FORCE:
+
+iso: baremetal-reboot-log artifacts images limine intel-replay-rot-tri-artifact
 	rm -rf $(ISO_BOOT_DIR)
 	rm -f $(ISO_PATH)
 	mkdir -p $(ISO_BOOT_DIR)
