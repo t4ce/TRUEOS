@@ -229,6 +229,7 @@ fn ensure_cursor_index(state: &mut Ui2State, slot_id: u32) -> Option<usize> {
 
 pub(super) fn note_selection_change(window: &mut Ui2Window) {
     window.dirty = true;
+    window.content_present_dirty = false;
     window.last_reason = "cursor-select";
 }
 
@@ -275,6 +276,7 @@ fn set_cursor_selected_window(state: &mut Ui2State, slot_id: u32, next_window_id
             if window.z != next_z {
                 window.z = next_z;
                 window.dirty = true;
+                window.content_present_dirty = false;
                 window.last_reason = "cursor-select";
                 raised = true;
             }

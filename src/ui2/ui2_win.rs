@@ -137,6 +137,7 @@ pub(super) fn alloc_window(
         container_sync_needed: true,
         selected_cursor_slots: Vec::new(),
         dirty: true,
+        content_present_dirty: false,
         dirty_seq: 0,
         last_reason: "create",
         last_logged_dirty_seq: 0,
@@ -2260,7 +2261,10 @@ fn request_window_composite(id: u32, reason: &'static str) -> bool {
 }
 
 pub fn request_window_content_present(id: u32, reason: &'static str) -> bool {
-    request_window_composite(id, reason)
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    state.compose_reason = reason;
+    note_window_content_present_dirty(&mut state, id, reason)
 }
 
 pub fn request_window_repaint(id: u32, reason: &'static str) -> bool {
@@ -2280,6 +2284,7 @@ pub fn request_full_recompose(reason: &'static str) {
     state.compose_reason = reason;
     for window in &mut state.windows {
         window.dirty = true;
+        window.content_present_dirty = false;
         window.last_reason = reason;
     }
     UI2_DIRTY.store(true, Ordering::Release);

@@ -556,6 +556,7 @@ struct Ui2Window {
     container_sync_needed: bool,
     selected_cursor_slots: Vec<u32>,
     dirty: bool,
+    content_present_dirty: bool,
     dirty_seq: u32,
     last_reason: &'static str,
     last_logged_dirty_seq: u32,
@@ -1040,6 +1041,7 @@ fn apply_hosted_browser_dirty(state: &mut Ui2State, dirty: HostedBrowserDirtyMas
         }
         if content_dirty && !window.composition_locked {
             window.dirty = true;
+            window.content_present_dirty = true;
             window.last_reason = "browser-content";
             UI2_DIRTY.store(true, Ordering::Release);
             state.compose_reason = "browser-content";
@@ -1224,6 +1226,25 @@ fn note_window_dirty(state: &mut Ui2State, id: u32, reason: &'static str) -> boo
         return false;
     };
     window.dirty = true;
+    window.content_present_dirty = false;
+    window.last_reason = reason;
+    UI2_DIRTY.store(true, Ordering::Release);
+    true
+}
+
+fn note_window_content_present_dirty(
+    state: &mut Ui2State,
+    id: u32,
+    reason: &'static str,
+) -> bool {
+    let Some(window) = window_mut(state, id) else {
+        return false;
+    };
+    let was_dirty = window.dirty;
+    window.dirty = true;
+    if !was_dirty {
+        window.content_present_dirty = true;
+    }
     window.last_reason = reason;
     UI2_DIRTY.store(true, Ordering::Release);
     true
@@ -2195,6 +2216,69 @@ fn with_window_content_scissor<T>(state: &Ui2State, content: Ui2Rect, f: impl Fn
     out
 }
 
+#[inline]
+fn rects_intersect(a: Ui2Rect, b: Ui2Rect) -> bool {
+    a.w > 0.0
+        && a.h > 0.0
+        && b.w > 0.0
+        && b.h > 0.0
+        && a.x < b.x + b.w
+        && a.x + a.w > b.x
+        && a.y < b.y + b.h
+        && a.y + a.h > b.y
+}
+
+#[inline]
+fn union_rect(a: Ui2Rect, b: Ui2Rect) -> Ui2Rect {
+    let x0 = a.x.min(b.x);
+    let y0 = a.y.min(b.y);
+    let x1 = (a.x + a.w).max(b.x + b.w);
+    let y1 = (a.y + a.h).max(b.y + b.h);
+    Ui2Rect::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
+}
+
+fn clamp_rect_to_view(rect: Ui2Rect, view_w: u32, view_h: u32) -> Option<Ui2Rect> {
+    let x0 = libm::floorf(rect.x.max(0.0));
+    let y0 = libm::floorf(rect.y.max(0.0));
+    let x1 = libm::ceilf((rect.x + rect.w).min(view_w as f32));
+    let y1 = libm::ceilf((rect.y + rect.h).min(view_h as f32));
+    let w = (x1 - x0).max(0.0);
+    let h = (y1 - y0).max(0.0);
+    if w <= 0.0 || h <= 0.0 {
+        None
+    } else {
+        Some(Ui2Rect::new(x0, y0, w, h))
+    }
+}
+
+fn content_present_dirty_scissor(state: &Ui2State, present_to_screen: bool) -> Option<Ui2Rect> {
+    if !present_to_screen || !state.first_compose_signaled {
+        return None;
+    }
+
+    let mut dirty_count = 0usize;
+    let mut rect = None;
+    for window in &state.windows {
+        if !window.dirty {
+            continue;
+        }
+        dirty_count = dirty_count.saturating_add(1);
+        if !window.content_present_dirty || !window_is_renderable(window) {
+            return None;
+        }
+        let window_rect = effective_window_rect(state, window);
+        rect = Some(match rect {
+            Some(existing) => union_rect(existing, window_rect),
+            None => window_rect,
+        });
+    }
+
+    if dirty_count == 0 {
+        return None;
+    }
+    clamp_rect_to_view(rect?, state.view_w, state.view_h)
+}
+
 fn draw_texture_rect_uv_no_present(
     tex_id: u32,
     x: f32,
@@ -2852,6 +2936,7 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
     let compose_started_at = Instant::now();
     let mut surface_timings = Vec::new();
     let mut frame_ok = false;
+    let dirty_scissor = content_present_dirty_scissor(state, present_to_screen);
 
     if !present_to_screen && !ensure_ui2_warmup_render_target(state.view_w, state.view_h) {
         crate::log!("ui2: warmup render-target ensure failed\n");
@@ -2861,7 +2946,11 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
     crate::gfx::with_cabi_frame_lock(|| {
         let begin_rc = unsafe {
             if present_to_screen {
-                crate::r::io::cabi::trueos_cabi_gfx_begin_frame(0xE9EEF2)
+                if dirty_scissor.is_some() {
+                    crate::r::io::cabi::trueos_cabi_gfx_begin_frame_preserve(0xE9EEF2)
+                } else {
+                    crate::r::io::cabi::trueos_cabi_gfx_begin_frame(0xE9EEF2)
+                }
             } else {
                 crate::r::io::cabi::trueos_cabi_gfx_begin_frame_no_present(0xE9EEF2)
             }
@@ -2888,11 +2977,30 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
             }
         }
 
-        ui2_win_register::draw_offline_dock(state);
+        if let Some(scissor) = dirty_scissor {
+            let _ = unsafe {
+                crate::r::io::cabi::trueos_cabi_gfx_set_scissor(
+                    scissor.x as u32,
+                    scissor.y as u32,
+                    scissor.w as u32,
+                    scissor.h as u32,
+                )
+            };
+        }
+
+        if dirty_scissor.is_none() {
+            ui2_win_register::draw_offline_dock(state);
+        }
         for idx in sorted_window_indices(state) {
             let window = &state.windows[idx];
             if !window_is_renderable(window) {
                 continue;
+            }
+            if let Some(scissor) = dirty_scissor {
+                let rect = effective_window_rect(state, window);
+                if !rects_intersect(rect, scissor) {
+                    continue;
+                }
             }
             let timing = draw_window_frame(state, window);
             surface_timings.push(Ui2ComposeSurfaceTiming {
@@ -2903,7 +3011,12 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
                 path: timing.content_path,
             });
         }
-        draw_resize_preview_outline(state);
+        if dirty_scissor.is_none() {
+            draw_resize_preview_outline(state);
+        }
+        if dirty_scissor.is_some() {
+            let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_clear_scissor() };
+        }
         unsafe {
             crate::r::io::cabi::trueos_cabi_gfx_end_frame();
         }
@@ -2923,6 +3036,7 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
     for window in &mut state.windows {
         if window.dirty {
             window.dirty = false;
+            window.content_present_dirty = false;
             window.dirty_seq = window.dirty_seq.wrapping_add(1);
             window.last_logged_dirty_seq = window.dirty_seq;
             window.last_logged_reason = window.last_reason;

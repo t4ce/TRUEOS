@@ -690,30 +690,11 @@ fn ui2_core_task_gate() -> bool {
 }
 
 #[inline]
-fn rdp_only_client_gate() -> bool {
-    if crate::gfx::is_rdp_only_active() {
-        #[cfg(feature = "trueos_rdp")]
-        {
-            return crate::r::rdp::has_clients();
-        }
-        #[cfg(not(feature = "trueos_rdp"))]
-        {
-            return false;
-        }
-    }
-    true
-}
-
-#[inline]
-fn gfx_texture_upload_service_gate() -> bool {
-    rdp_only_client_gate()
-}
-
-#[inline]
 fn ui2_demo_task_gate() -> bool {
     UI2_DEMOS_ENABLED
 }
 
+#[inline]
 fn spawn_ui2_demo_on_worker<S: Send, F>(spawner: Spawner, spawn: F) -> SpawnAttempt
 where
     F: FnOnce(SendSpawner) -> Result<SpawnToken<S>, SpawnError>,
@@ -1289,10 +1270,9 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &HTML_SHACK_SERVICE_STARTED,
         html_fetch_service,
     ),
-    TaskSpec::enabled_gated(
+    TaskSpec::enabled(
         "gfx-texture-upload-service",
         crate::r::readiness::GFX_BACKEND_READY,
-        gfx_texture_upload_service_gate,
         &GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
         spawn_gfx_texture_upload_service,
     ),
