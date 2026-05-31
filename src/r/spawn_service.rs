@@ -686,6 +686,31 @@ fn intel_media_engine_gate() -> bool {
 
 #[inline]
 fn ui2_core_task_gate() -> bool {
+    if crate::gfx::is_rdp_only_active() {
+        #[cfg(feature = "trueos_rdp")]
+        {
+            return crate::r::rdp::has_clients();
+        }
+        #[cfg(not(feature = "trueos_rdp"))]
+        {
+            return false;
+        }
+    }
+    true
+}
+
+#[inline]
+fn gfx_texture_upload_service_gate() -> bool {
+    if crate::gfx::is_rdp_only_active() {
+        #[cfg(feature = "trueos_rdp")]
+        {
+            return crate::r::rdp::has_clients();
+        }
+        #[cfg(not(feature = "trueos_rdp"))]
+        {
+            return false;
+        }
+    }
     true
 }
 
@@ -1269,9 +1294,10 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &HTML_SHACK_SERVICE_STARTED,
         html_fetch_service,
     ),
-    TaskSpec::enabled(
+    TaskSpec::enabled_gated(
         "gfx-texture-upload-service",
         crate::r::readiness::GFX_BACKEND_READY,
+        gfx_texture_upload_service_gate,
         &GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
         spawn_gfx_texture_upload_service,
     ),

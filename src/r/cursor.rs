@@ -152,6 +152,11 @@ pub fn remove_snapshots(controller_id: u32, slot_id: u32) -> bool {
     removed
 }
 
+pub fn slot_id_in_use(slot_id: u32) -> bool {
+    let guard = CURSOR_SNAPSHOTS.lock();
+    guard.iter().any(|snapshot| snapshot.slot_id == slot_id)
+}
+
 pub fn mouse_cursor_snapshot() -> Vec<(f64, f64), MAX_CURSOR_SNAPSHOTS> {
     let guard = CURSOR_SNAPSHOTS.lock();
     let mut out = Vec::new();

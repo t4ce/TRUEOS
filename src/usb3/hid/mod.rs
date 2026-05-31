@@ -95,6 +95,7 @@ impl HidRuntime {
 static HID_RUNTIMES: Mutex<Vec<HidRuntime>> = Mutex::new(Vec::new());
 static CURSOR_EVENT_RING: Mutex<CursorEventRing> = Mutex::new(CursorEventRing::new());
 static CURSOR_EVENT_POP_SEQ: Mutex<u64> = Mutex::new(0);
+static RDP_TABLET_SLOT_ID: Mutex<Option<u32>> = Mutex::new(None);
 
 #[inline]
 fn clamp01(value: f64) -> f64 {
@@ -286,6 +287,36 @@ pub(crate) fn inject_virtual_cursor_event(
     );
 }
 
+pub(crate) const RDP_TABLET_CONTROLLER_ID: u32 = 0x5244_5030;
+
+fn hid_slot_id_in_use(slot_id: u32) -> bool {
+    HID_RUNTIMES
+        .lock()
+        .iter()
+        .any(|runtime| runtime.slot_id == slot_id)
+}
+
+pub(crate) fn rdp_tablet_slot_id() -> u32 {
+    let mut guard = RDP_TABLET_SLOT_ID.lock();
+    if let Some(slot_id) = *guard {
+        return slot_id;
+    }
+
+    let mut slot_id = 1u32;
+    while hid_slot_id_in_use(slot_id) || crate::r::cursor::slot_id_in_use(slot_id) {
+        slot_id = slot_id.saturating_add(1);
+    }
+    *guard = Some(slot_id);
+    slot_id
+}
+
+pub(crate) fn remove_rdp_tablet() {
+    let Some(slot_id) = *RDP_TABLET_SLOT_ID.lock() else {
+        return;
+    };
+    remove_hid_slot(RDP_TABLET_CONTROLLER_ID, slot_id);
+}
+
 pub(crate) fn inject_virtual_tablet_absolute_event(
     slot_id: u32,
     x: f64,
@@ -293,7 +324,6 @@ pub(crate) fn inject_virtual_tablet_absolute_event(
     buttons_down: u32,
     flags: u32,
 ) {
-    const RDP_TABLET_CONTROLLER_ID: u32 = 0x5244_5030;
     let x = clamp01(x);
     let y = clamp01(y);
     let x_raw = ((x * 65535.0) + 0.5).clamp(0.0, 65535.0) as u16;
@@ -349,6 +379,14 @@ pub(crate) fn inject_virtual_tablet_absolute_event(
         "rdp",
         true,
     );
+}
+
+pub(crate) fn inject_virtual_keyboard_boot_report(modifiers: u8, keys: [u8; 6]) {
+    let slot_id = rdp_tablet_slot_id();
+    let report = [
+        modifiers, 0, keys[0], keys[1], keys[2], keys[3], keys[4], keys[5],
+    ];
+    handle_keyboard_boot_report(RDP_TABLET_CONTROLLER_ID, slot_id, 0, &report);
 }
 
 pub(crate) fn handle_keyboard_boot_report(
