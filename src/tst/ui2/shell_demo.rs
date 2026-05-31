@@ -730,6 +730,7 @@ pub async fn ui2_shell_demo_task() {
     let mut last_viewport = (0u32, 0u32);
     let mut last_content_size = (0u32, 0u32);
     let mut attached_layout = None;
+    let mut full_present_pending = true;
     loop {
         if crate::r::spawn_service::task_stop_requested("ui2-shell-demo") {
             break;
@@ -743,12 +744,14 @@ pub async fn ui2_shell_demo_task() {
         if viewport != last_viewport {
             last_viewport = viewport;
             viewport_needs_present = true;
+            full_present_pending = true;
         }
         let layout = ui2_shell_layout_for_viewport(viewport.0, viewport.1);
         let content_size = (viewport.0.max(1), viewport.1.max(1));
         if content_size != last_content_size || viewport_needs_present {
             last_content_size = content_size;
             viewport_needs_present = true;
+            full_present_pending = true;
             let _ = surface.bind_hosted_scroll_state(
                 UI2_SHELL_CONTENT_ID,
                 content_size.0,
@@ -765,6 +768,7 @@ pub async fn ui2_shell_demo_task() {
             last_selection = selection;
             last_snapshot = None;
             viewport_needs_present = true;
+            full_present_pending = true;
         }
         if let Some((dirty_seq, snapshot)) = crate::shell2::ui2_shell_snapshot(surface.window_id())
         {
@@ -772,8 +776,9 @@ pub async fn ui2_shell_demo_task() {
                 update_selection_from_mouse(&mut selection, surface.window_id(), &snapshot);
             let shell_dirty = dirty_seq != last_rendered_seq
                 && dirty_seq != crate::shell2::ui2_shell_last_rendered_seq();
-            let needs_full_present = viewport_needs_present || last_snapshot.is_none();
-            if dirty_seq != 0 && needs_full_present {
+            let needs_full_present =
+                full_present_pending || viewport_needs_present || last_snapshot.is_none();
+            if needs_full_present {
                 let rgba = render_shell_snapshot_rgba(
                     &atlases,
                     &snapshot,
@@ -797,6 +802,7 @@ pub async fn ui2_shell_demo_task() {
                     last_blink_on = blink_on;
                     last_selection = selection;
                     last_snapshot = Some(snapshot.clone());
+                    full_present_pending = false;
                 }
             } else if dirty_seq != 0
                 && (shell_dirty || selection_changed || blink_on != last_blink_on)

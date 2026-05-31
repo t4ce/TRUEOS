@@ -439,13 +439,22 @@ fn send_frame_to(
     }
 }
 
-fn send_resource_snapshot(cmds: &NetQueue<NetCommand>, handle: NetHandle) {
-    let textures = texture_cache_snapshot();
-    let bytes = textures
+async fn send_resource_snapshot(cmds: &NetQueue<NetCommand>, handle: NetHandle) {
+    let target_seq = crate::r::resource_monitor::latest_encoded_seq();
+    let flushed = crate::r::resource_monitor::wait_until_flushed(target_seq, 1_500).await;
+    if !flushed {
+        crate::log!(
+            "trueos-rdp: asset sync ramdisk wait timeout target_seq={}\n",
+            target_seq
+        );
+    }
+
+    let assets = crate::r::resource_monitor::encoded_assets_snapshot();
+    let bytes = assets
         .iter()
-        .fold(0usize, |acc, entry| acc.saturating_add(entry.data.len()))
+        .fold(0usize, |acc, asset| acc.saturating_add(asset.bytes.len()))
         .min(u32::MAX as usize) as u32;
-    let latest_seq = textures.last().map(|entry| entry.seq).unwrap_or(0);
+    let latest_seq = assets.last().map(|asset| asset.seq).unwrap_or(0);
 
     send_frame_to(
         cmds,
@@ -453,21 +462,25 @@ fn send_resource_snapshot(cmds: &NetQueue<NetCommand>, handle: NetHandle) {
         protocol_frame(
             MSG_RESOURCE_SNAPSHOT_BEGIN,
             &[
-                textures.len().min(u32::MAX as usize) as u32,
+                assets.len().min(u32::MAX as usize) as u32,
                 bytes,
-                latest_seq,
+                latest_seq.min(u32::MAX as u64) as u32,
             ],
             &[],
         ),
-        "snapshot-begin",
+        "asset-sync-begin",
     );
 
-    for texture in textures {
+    for asset in assets {
         send_frame_to(
             cmds,
             handle,
-            protocol_frame(texture.msg, texture.fields.as_slice(), texture.data.as_slice()),
-            "snapshot-texture",
+            protocol_frame(
+                encoded_msg(asset.kind),
+                encoded_fields(&asset).as_slice(),
+                asset.bytes.as_slice(),
+            ),
+            "asset-sync-texture",
         );
     }
 
@@ -477,13 +490,13 @@ fn send_resource_snapshot(cmds: &NetQueue<NetCommand>, handle: NetHandle) {
         protocol_frame(
             MSG_RESOURCE_SNAPSHOT_END,
             &[
-                cached_texture_count(),
-                cached_texture_bytes(),
-                TRUEOS_RDP_RESOURCE_SEQ.load(Ordering::Acquire),
+                crate::r::resource_monitor::preserved_count(),
+                crate::r::resource_monitor::preserved_bytes().min(u32::MAX as u64) as u32,
+                latest_seq.min(u32::MAX as u64) as u32,
             ],
             &[],
         ),
-        "snapshot-end",
+        "asset-sync-end",
     );
 }
 
@@ -630,9 +643,9 @@ fn open_listener(cmds: &NetQueue<NetCommand>) {
     }
 }
 
-fn send_hello(cmds: &NetQueue<NetCommand>, handle: NetHandle) {
+async fn send_hello(cmds: &NetQueue<NetCommand>, handle: NetHandle) {
     send_frame_to(cmds, handle, hello_frame(), "hello");
-    send_resource_snapshot(cmds, handle);
+    send_resource_snapshot(cmds, handle).await;
 }
 
 #[task]
@@ -643,8 +656,8 @@ pub async fn trueos_rdp_task() {
 
     crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
 
-    let cmds = NetQueue::new_leaked("trueos-rdp-cmd", 512);
-    let events = NetQueue::new_leaked("trueos-rdp-evt", 512);
+    let cmds = NetQueue::new_leaked("trueos-rdp-cmd", 8192);
+    let events = NetQueue::new_leaked("trueos-rdp-evt", 1024);
     register_app_queues(OWNER, cmds, events);
     *TRUEOS_RDP_COMMAND_QUEUE.lock() = Some(cmds);
 
@@ -702,7 +715,7 @@ pub async fn trueos_rdp_task() {
                         }
                     }
 
-                    send_hello(cmds, handle);
+                    send_hello(cmds, handle).await;
                 }
                 NetEvent::Closed { handle } => {
                     if listener == Some(handle) {
