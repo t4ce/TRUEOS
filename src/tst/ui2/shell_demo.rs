@@ -1,4 +1,4 @@
-use alloc::{vec, vec::Vec};
+use alloc::{string::String, vec, vec::Vec};
 
 use embassy_time::Instant;
 
@@ -17,41 +17,16 @@ const UI2_SHELL_CURSOR_RGBA: [u8; 4] = [0xF1, 0xF4, 0xF8, 0xFF];
 const UI2_SHELL_CURSOR_CH: char = '▏';
 const UI2_SHELL_CURSOR_BLINK_ENABLED: bool = true;
 const UI2_SHELL_CURSOR_BLINK_MS: u64 = 1_000;
-const UI2_SHELL_SELECTION_BG_RGBA: [u8; 4] = [0x1E, 0x5A, 0x96, 0xFF];
-const UI2_SHELL_SELECTION_FG_RGBA: [u8; 4] = [0xF8, 0xFB, 0xFF, 0xFF];
-const UI2_SHELL_PRIMARY_BUTTON_MASK: u32 = 1;
-const UI2_SHELL_BASE_TEXT_COLS: usize = 100;
 const UI2_SHELL_BASE_TEXT_ROWS: usize = 12;
 const UI2_SHELL_FONT_TIER: Ui2FontTier = Ui2FontTier::Third;
 const UI2_SHELL_FONT_SIZE_CASE: usize = UI2_SHELL_FONT_TIER.size_case();
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct Ui2ShellSelectionCell {
-    row: usize,
-    col: usize,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct Ui2ShellSelectionState {
-    anchor: Option<Ui2ShellSelectionCell>,
-    focus: Option<Ui2ShellSelectionCell>,
-    drag_slot_id: u32,
-    drag_active: bool,
-}
-
 fn ui2_shell_cell_width_px() -> usize {
-    ui2_shell_cell_advance_px('W').max(1)
+    ui2_shell_cell_advance_px(' ').max(1)
 }
 
-fn shell_cell_visual_advance_px(cell: &crate::shell2::Ui2ShellCell) -> usize {
-    ui2_shell_cell_advance_px(cell.ch).max(1)
-}
-
-fn ui2_shell_layout_for_viewport(viewport_w: u32, viewport_h: u32) -> (usize, usize) {
-    let cols = (viewport_w as usize)
-        .checked_div(ui2_shell_cell_width_px())
-        .unwrap_or(UI2_SHELL_BASE_TEXT_COLS)
-        .max(1);
+fn ui2_shell_layout_for_viewport(_viewport_w: u32, viewport_h: u32) -> (usize, usize) {
+    let cols = crate::shell2::line_width_for_backend(&crate::shell2::UI2_SHELL_BACKEND).max(1);
     let rows = (viewport_h as usize)
         .checked_div(ui2_shell_line_height() as usize)
         .unwrap_or(UI2_SHELL_BASE_TEXT_ROWS)
@@ -98,66 +73,6 @@ fn cell_fg_rgba(cell: &crate::shell2::Ui2ShellCell) -> [u8; 4] {
     [cell.fg.0, cell.fg.1, cell.fg.2, 0xFF]
 }
 
-fn selection_linear_index(cell: Ui2ShellSelectionCell, cols: usize) -> usize {
-    cell.row.saturating_mul(cols).saturating_add(cell.col)
-}
-
-fn selection_bounds(
-    selection: &Ui2ShellSelectionState,
-    cols: usize,
-) -> Option<(Ui2ShellSelectionCell, Ui2ShellSelectionCell)> {
-    let anchor = selection.anchor?;
-    let focus = selection.focus?;
-    let anchor_idx = selection_linear_index(anchor, cols);
-    let focus_idx = selection_linear_index(focus, cols);
-    if anchor_idx == focus_idx {
-        return None;
-    }
-    if anchor_idx < focus_idx {
-        Some((anchor, focus))
-    } else {
-        Some((focus, anchor))
-    }
-}
-
-fn selection_contains(
-    selection: &Ui2ShellSelectionState,
-    row: usize,
-    col: usize,
-    cols: usize,
-) -> bool {
-    let Some((start, end)) = selection_bounds(selection, cols) else {
-        return false;
-    };
-    let idx = row.saturating_mul(cols).saturating_add(col);
-    idx >= selection_linear_index(start, cols) && idx <= selection_linear_index(end, cols)
-}
-
-fn effective_cell_for_render(
-    cell: crate::shell2::Ui2ShellCell,
-    selection: &Ui2ShellSelectionState,
-    row: usize,
-    col: usize,
-    cols: usize,
-) -> crate::shell2::Ui2ShellCell {
-    if !selection_contains(selection, row, col, cols) {
-        return cell;
-    }
-    crate::shell2::Ui2ShellCell {
-        ch: cell.ch,
-        fg: (
-            UI2_SHELL_SELECTION_FG_RGBA[0],
-            UI2_SHELL_SELECTION_FG_RGBA[1],
-            UI2_SHELL_SELECTION_FG_RGBA[2],
-        ),
-        bg: (
-            UI2_SHELL_SELECTION_BG_RGBA[0],
-            UI2_SHELL_SELECTION_BG_RGBA[1],
-            UI2_SHELL_SELECTION_BG_RGBA[2],
-        ),
-    }
-}
-
 fn snapshot_cell(
     snapshot: &crate::shell2::Ui2ShellScreenSnapshot,
     row: usize,
@@ -173,79 +88,6 @@ fn snapshot_cell(
             fg: (0xF1, 0xF4, 0xF8),
             bg: (0x0C, 0x10, 0x16),
         })
-}
-
-fn ui2_shell_position_to_cell(
-    snapshot: &crate::shell2::Ui2ShellScreenSnapshot,
-    x: f32,
-    y: f32,
-) -> Ui2ShellSelectionCell {
-    let cols = (snapshot.cols as usize).max(1);
-    let rows = (snapshot.rows as usize).max(1);
-    let line_h = ui2_shell_line_height().max(1) as f32;
-    let mut row = if y <= 0.0 {
-        0
-    } else {
-        libm::floorf(y / line_h) as usize
-    };
-    row = row.min(rows.saturating_sub(1));
-
-    let mut col = 0usize;
-    let mut pen_x = 0usize;
-    let target_x = x.max(0.0) as usize;
-    while col + 1 < cols {
-        let cell = snapshot_cell(snapshot, row, col);
-        let next_x = pen_x.saturating_add(shell_cell_visual_advance_px(&cell));
-        if target_x < next_x {
-            break;
-        }
-        pen_x = next_x;
-        col += 1;
-    }
-    Ui2ShellSelectionCell { row, col }
-}
-
-fn update_selection_from_mouse(
-    selection: &mut Ui2ShellSelectionState,
-    window_id: u32,
-    snapshot: &crate::shell2::Ui2ShellScreenSnapshot,
-) -> bool {
-    let mut changed = false;
-    for event in crate::r::ui2::take_window_cursor_events(window_id) {
-        if selection.drag_active {
-            if event.slot_id != selection.drag_slot_id {
-                continue;
-            }
-            let next_focus = ui2_shell_position_to_cell(snapshot, event.x, event.y);
-            if selection.focus != Some(next_focus) {
-                selection.focus = Some(next_focus);
-                changed = true;
-            }
-            if (event.buttons_down & UI2_SHELL_PRIMARY_BUTTON_MASK) == 0 {
-                selection.drag_active = false;
-                selection.drag_slot_id = 0;
-                if selection.anchor == selection.focus && selection.anchor.is_some() {
-                    selection.anchor = None;
-                    selection.focus = None;
-                }
-                changed = true;
-            }
-            continue;
-        }
-
-        if (event.buttons_down & UI2_SHELL_PRIMARY_BUTTON_MASK) == 0 {
-            continue;
-        }
-        let anchor = ui2_shell_position_to_cell(snapshot, event.x, event.y);
-        *selection = Ui2ShellSelectionState {
-            anchor: Some(anchor),
-            focus: Some(anchor),
-            drag_slot_id: event.slot_id,
-            drag_active: true,
-        };
-        changed = true;
-    }
-    changed
 }
 
 fn render_cell_glyph(
@@ -275,13 +117,37 @@ fn render_cell_glyph(
     );
 }
 
+fn push_row_text_run(
+    rgba: &mut [u8],
+    dst_width: usize,
+    dst_height: usize,
+    atlases: &ui2::Ui2FontCpuAtlases,
+    x: usize,
+    row_y: usize,
+    text: &str,
+    fg_rgba: [u8; 4],
+) {
+    let max_width = dst_width.saturating_sub(x);
+    let _ = ui2::ui2_font_blit_text_rgba(
+        rgba,
+        dst_width,
+        dst_height,
+        atlases,
+        UI2_SHELL_FONT_TIER,
+        x,
+        row_y,
+        max_width,
+        text,
+        fg_rgba,
+    );
+}
+
 fn render_cursor(
     rgba: &mut [u8],
     dst_width: usize,
     dst_height: usize,
     atlases: &ui2::Ui2FontCpuAtlases,
     snapshot: &crate::shell2::Ui2ShellScreenSnapshot,
-    selection: &Ui2ShellSelectionState,
     blink_on: bool,
 ) {
     if !snapshot.cursor_visible || !blink_on {
@@ -290,17 +156,10 @@ fn render_cursor(
     let cols = (snapshot.cols as usize).max(1);
     let cursor_col = (snapshot.cursor_col as usize).min(cols.saturating_sub(1));
     let cursor_row = (snapshot.cursor_row as usize).min((snapshot.rows as usize).saturating_sub(1));
-    let cell_w = ui2_shell_cell_width_px();
-    let x = cursor_col.saturating_mul(cell_w);
-    let cursor_w = cell_w;
     let row_y = cursor_row.saturating_mul(ui2_shell_line_height() as usize);
-    let cell = effective_cell_for_render(
-        snapshot_cell(snapshot, cursor_row, cursor_col),
-        selection,
-        cursor_row,
-        cursor_col,
-        cols,
-    );
+    let cell = snapshot_cell(snapshot, cursor_row, cursor_col);
+    let x = row_cell_x(snapshot, cursor_row, cursor_col);
+    let cursor_w = ui2_shell_cell_advance_px(cell.ch).max(ui2_shell_cell_width_px());
     fill_rect_rgba(
         rgba,
         dst_width,
@@ -333,7 +192,7 @@ fn row_cell_x(snapshot: &crate::shell2::Ui2ShellScreenSnapshot, row: usize, col:
     let mut x = 0usize;
     for c in 0..col.min(cols) {
         let cell = snapshot_cell(snapshot, row, c);
-        x = x.saturating_add(shell_cell_visual_advance_px(&cell));
+        x = x.saturating_add(ui2_shell_cell_advance_px(cell.ch));
     }
     x
 }
@@ -350,12 +209,8 @@ fn row_range_span_px(
         return None;
     }
     let start = row_cell_x(snapshot, row, start_col).min(content_w as usize);
-    let mut end = start;
     let end_col = end_col.min(cols.saturating_sub(1));
-    for col in start_col..=end_col {
-        let cell = snapshot_cell(snapshot, row, col);
-        end = end.saturating_add(shell_cell_visual_advance_px(&cell));
-    }
+    let end = row_cell_x(snapshot, row, end_col.saturating_add(1));
     let end = end.min(content_w as usize);
     if end <= start {
         return None;
@@ -401,8 +256,6 @@ fn push_dirty_range(ranges: &mut Vec<(usize, usize, usize)>, row: usize, start: 
 fn collect_dirty_row_ranges(
     prev_snapshot: Option<&crate::shell2::Ui2ShellScreenSnapshot>,
     snapshot: &crate::shell2::Ui2ShellScreenSnapshot,
-    prev_selection: &Ui2ShellSelectionState,
-    selection: &Ui2ShellSelectionState,
     prev_blink_on: bool,
     blink_on: bool,
 ) -> Option<Vec<(usize, usize, usize)>> {
@@ -417,25 +270,14 @@ fn collect_dirty_row_ranges(
 
     for row in 0..rows {
         let mut first_cell_change = None;
-        let mut first_deco_change = None;
-        let mut last_deco_change = 0usize;
         for col in 0..cols {
             let idx = row.saturating_mul(cols).saturating_add(col);
             if prev.cells.get(idx) != snapshot.cells.get(idx) && first_cell_change.is_none() {
                 first_cell_change = Some(col);
             }
-            let was_selected = selection_contains(prev_selection, row, col, cols);
-            let is_selected = selection_contains(selection, row, col, cols);
-            if was_selected != is_selected {
-                first_deco_change.get_or_insert(col);
-                last_deco_change = col;
-            }
         }
         if let Some(start) = first_cell_change {
             push_dirty_range(&mut ranges, row, start, cols.saturating_sub(1));
-        }
-        if let Some(start) = first_deco_change {
-            push_dirty_range(&mut ranges, row, start, last_deco_change);
         }
     }
 
@@ -462,7 +304,6 @@ fn collect_dirty_row_ranges(
 fn render_shell_snapshot_rgba(
     atlases: &ui2::Ui2FontCpuAtlases,
     snapshot: &crate::shell2::Ui2ShellScreenSnapshot,
-    selection: &Ui2ShellSelectionState,
     blink_on: bool,
     content_w: u32,
     content_h: u32,
@@ -490,15 +331,12 @@ fn render_shell_snapshot_rgba(
             break;
         }
         let mut pen_x = 0usize;
+        let mut run_text = String::new();
+        let mut run_x = 0usize;
+        let mut run_fg = [0u8; 4];
         for col in 0..cols {
-            let cell = effective_cell_for_render(
-                snapshot_cell(snapshot, row, col),
-                selection,
-                row,
-                col,
-                cols,
-            );
-            let advance_px = shell_cell_visual_advance_px(&cell);
+            let cell = snapshot_cell(snapshot, row, col);
+            let advance_px = ui2_shell_cell_advance_px(cell.ch);
             fill_rect_rgba(
                 rgba.as_mut_slice(),
                 content_w,
@@ -510,40 +348,55 @@ fn render_shell_snapshot_rgba(
                 cell_bg_rgba(&cell),
             );
             if cell.ch != ' ' {
-                render_cell_glyph(
-                    rgba.as_mut_slice(),
-                    content_w,
-                    content_h,
-                    atlases,
-                    pen_x,
-                    row_y,
-                    advance_px,
-                    &cell,
-                );
+                let fg = cell_fg_rgba(&cell);
+                if run_text.is_empty() {
+                    run_x = pen_x;
+                    run_fg = fg;
+                } else if fg != run_fg {
+                    push_row_text_run(
+                        rgba.as_mut_slice(),
+                        content_w,
+                        content_h,
+                        atlases,
+                        run_x,
+                        row_y,
+                        run_text.as_str(),
+                        run_fg,
+                    );
+                    run_text.clear();
+                    run_x = pen_x;
+                    run_fg = fg;
+                }
+                run_text.push(cell.ch);
+            } else if !run_text.is_empty() {
+                run_text.push(cell.ch);
             }
             pen_x = pen_x.saturating_add(advance_px);
             if pen_x >= content_w {
                 break;
             }
         }
+        if !run_text.is_empty() {
+            push_row_text_run(
+                rgba.as_mut_slice(),
+                content_w,
+                content_h,
+                atlases,
+                run_x,
+                row_y,
+                run_text.as_str(),
+                run_fg,
+            );
+        }
     }
 
-    render_cursor(
-        rgba.as_mut_slice(),
-        content_w,
-        content_h,
-        atlases,
-        snapshot,
-        selection,
-        blink_on,
-    );
+    render_cursor(rgba.as_mut_slice(), content_w, content_h, atlases, snapshot, blink_on);
     rgba
 }
 
 fn render_shell_row_range_rgba(
     atlases: &ui2::Ui2FontCpuAtlases,
     snapshot: &crate::shell2::Ui2ShellScreenSnapshot,
-    selection: &Ui2ShellSelectionState,
     blink_on: bool,
     row: usize,
     start_col: usize,
@@ -568,10 +421,9 @@ fn render_shell_row_range_rgba(
     );
 
     for col in start_col..=end_col.min(cols.saturating_sub(1)) {
-        let cell =
-            effective_cell_for_render(snapshot_cell(snapshot, row, col), selection, row, col, cols);
+        let cell = snapshot_cell(snapshot, row, col);
         let pen_x = row_cell_x(snapshot, row, col).saturating_sub(range_x);
-        let advance_px = shell_cell_visual_advance_px(&cell);
+        let advance_px = ui2_shell_cell_advance_px(cell.ch);
         fill_rect_rgba(
             rgba.as_mut_slice(),
             width_usize,
@@ -582,18 +434,50 @@ fn render_shell_row_range_rgba(
             height_usize,
             cell_bg_rgba(&cell),
         );
+    }
+
+    let mut run_text = String::new();
+    let mut run_x = 0usize;
+    let mut run_fg = [0u8; 4];
+    for col in start_col..=end_col.min(cols.saturating_sub(1)) {
+        let cell = snapshot_cell(snapshot, row, col);
+        let pen_x = row_cell_x(snapshot, row, col).saturating_sub(range_x);
         if cell.ch != ' ' {
-            render_cell_glyph(
-                rgba.as_mut_slice(),
-                width_usize,
-                height_usize,
-                atlases,
-                pen_x,
-                0,
-                advance_px,
-                &cell,
-            );
+            let fg = cell_fg_rgba(&cell);
+            if run_text.is_empty() {
+                run_x = pen_x;
+                run_fg = fg;
+            } else if fg != run_fg {
+                push_row_text_run(
+                    rgba.as_mut_slice(),
+                    width_usize,
+                    height_usize,
+                    atlases,
+                    run_x,
+                    0,
+                    run_text.as_str(),
+                    run_fg,
+                );
+                run_text.clear();
+                run_x = pen_x;
+                run_fg = fg;
+            }
+            run_text.push(cell.ch);
+        } else if !run_text.is_empty() {
+            run_text.push(cell.ch);
         }
+    }
+    if !run_text.is_empty() {
+        push_row_text_run(
+            rgba.as_mut_slice(),
+            width_usize,
+            height_usize,
+            atlases,
+            run_x,
+            0,
+            run_text.as_str(),
+            run_fg,
+        );
     }
 
     let cursor_row = snapshot.cursor_row as usize;
@@ -604,15 +488,9 @@ fn render_shell_row_range_rgba(
         && cursor_col >= start_col
         && cursor_col <= end_col
     {
-        let cell = effective_cell_for_render(
-            snapshot_cell(snapshot, cursor_row, cursor_col),
-            selection,
-            cursor_row,
-            cursor_col,
-            cols,
-        );
+        let cell = snapshot_cell(snapshot, cursor_row, cursor_col);
         let pen_x = row_cell_x(snapshot, row, cursor_col).saturating_sub(range_x);
-        let advance_px = shell_cell_visual_advance_px(&cell);
+        let advance_px = ui2_shell_cell_advance_px(cell.ch);
         fill_rect_rgba(
             rgba.as_mut_slice(),
             width_usize,
@@ -715,8 +593,6 @@ pub async fn ui2_shell_demo_task() {
 
     let mut last_rendered_seq = 0u32;
     let mut last_blink_on = false;
-    let mut selection = Ui2ShellSelectionState::default();
-    let mut last_selection = Ui2ShellSelectionState::default();
     let mut last_snapshot: Option<crate::shell2::Ui2ShellScreenSnapshot> = None;
     let mut last_viewport = (0u32, 0u32);
     let mut last_content_size = (0u32, 0u32);
@@ -755,16 +631,12 @@ pub async fn ui2_shell_demo_task() {
             attached_layout = Some(layout);
             last_rendered_seq = 0;
             last_blink_on = false;
-            selection = Ui2ShellSelectionState::default();
-            last_selection = selection;
             last_snapshot = None;
             viewport_needs_present = true;
             full_present_pending = true;
         }
         if let Some((dirty_seq, snapshot)) = crate::shell2::ui2_shell_snapshot(surface.window_id())
         {
-            let selection_changed =
-                update_selection_from_mouse(&mut selection, surface.window_id(), &snapshot);
             let shell_dirty = dirty_seq != last_rendered_seq
                 && dirty_seq != crate::shell2::ui2_shell_last_rendered_seq();
             let needs_full_present =
@@ -773,7 +645,6 @@ pub async fn ui2_shell_demo_task() {
                 let rgba = render_shell_snapshot_rgba(
                     &atlases,
                     &snapshot,
-                    &selection,
                     blink_on,
                     last_content_size.0.max(1),
                     last_content_size.1.max(1),
@@ -791,18 +662,13 @@ pub async fn ui2_shell_demo_task() {
                     }
                     last_rendered_seq = dirty_seq;
                     last_blink_on = blink_on;
-                    last_selection = selection;
                     last_snapshot = Some(snapshot.clone());
                     full_present_pending = false;
                 }
-            } else if dirty_seq != 0
-                && (shell_dirty || selection_changed || blink_on != last_blink_on)
-            {
+            } else if dirty_seq != 0 && (shell_dirty || blink_on != last_blink_on) {
                 let ranges = collect_dirty_row_ranges(
                     last_snapshot.as_ref(),
                     &snapshot,
-                    &last_selection,
-                    &selection,
                     last_blink_on,
                     blink_on,
                 );
@@ -827,8 +693,7 @@ pub async fn ui2_shell_demo_task() {
                             .min(last_content_size.1.saturating_sub(y))
                             .max(1);
                         let rgba = render_shell_row_range_rgba(
-                            &atlases, &snapshot, &selection, blink_on, row, start_col, end_col, x,
-                            w,
+                            &atlases, &snapshot, blink_on, row, start_col, end_col, x, w,
                         );
                         let ok = crate::r::io::cabi::queue_texture_rgba_image_region_upload_copy(
                             surface.tex_id(),
@@ -849,7 +714,6 @@ pub async fn ui2_shell_demo_task() {
                     let rgba = render_shell_snapshot_rgba(
                         &atlases,
                         &snapshot,
-                        &selection,
                         blink_on,
                         last_content_size.0.max(1),
                         last_content_size.1.max(1),
@@ -873,7 +737,6 @@ pub async fn ui2_shell_demo_task() {
                         last_snapshot = Some(snapshot.clone());
                     }
                     last_blink_on = blink_on;
-                    last_selection = selection;
                 }
             }
         }

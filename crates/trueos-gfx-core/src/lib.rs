@@ -340,6 +340,9 @@ pub enum Command {
     ClearColor {
         rgb: u32,
     },
+    ClearColorRgba {
+        rgba: Rgba8,
+    },
     ClearRect {
         rgb: u32,
         x: u32,
