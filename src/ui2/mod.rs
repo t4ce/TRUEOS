@@ -2943,7 +2943,7 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
         return false;
     }
 
-    crate::gfx::with_cabi_frame_lock(|| {
+    let lock_result = crate::gfx::try_with_cabi_frame_lock(20_000, || {
         let begin_rc = unsafe {
             if present_to_screen {
                 if dirty_scissor.is_some() {
@@ -3022,6 +3022,14 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
         }
         frame_ok = true;
     });
+    if lock_result.is_none() {
+        crate::log!(
+            "ui2: compose skipped reason={} present={} dirty_scissor={} cause=cabi-frame-lock-busy\n",
+            compose_reason,
+            present_to_screen as u8,
+            dirty_scissor.is_some() as u8
+        );
+    }
 
     if !frame_ok {
         return false;

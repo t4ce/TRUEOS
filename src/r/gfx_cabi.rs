@@ -2573,20 +2573,18 @@ pub mod cabi {
     }
 
     fn finish_rdp_only_encoded_texture(tex_id: u32, dims: Option<(u32, u32)>) -> bool {
-        if !crate::gfx::is_rdp_only_active() {
-            return false;
-        }
-        if let Some((width, height)) = dims {
-            record_current_texture_meta(
-                tex_id,
-                width,
-                height,
-                TexSampleKind::Rgba,
-                TexCoordOrigin::TopLeft,
-            );
-        }
-        set_async_tex_status(host_texture_id_for_current_context(tex_id), ASYNC_TEX_STATUS_READY);
-        true
+        let _ = (tex_id, dims);
+        false
+    }
+
+    fn finish_rdp_only_virtual_texture(
+        tex_id: u32,
+        width: u32,
+        height: u32,
+        sample_kind: TexSampleKind,
+    ) -> bool {
+        let _ = (tex_id, width, height, sample_kind);
+        false
     }
 
     fn mark_render_tex_inflight(tex_id: u32) {
@@ -2796,26 +2794,6 @@ pub mod cabi {
         record_vm_texture_dimensions(tex_id, width, height);
         let host_tex_id = host_texture_id_for_current_context(tex_id);
         record_host_texture_meta(host_tex_id, width, height, sample_kind, origin);
-    }
-
-    fn finish_rdp_only_virtual_texture(
-        tex_id: u32,
-        width: u32,
-        height: u32,
-        sample_kind: TexSampleKind,
-    ) -> bool {
-        if !crate::gfx::is_rdp_only_active() {
-            return false;
-        }
-        record_current_texture_meta(
-            tex_id,
-            width,
-            height,
-            sample_kind,
-            TexCoordOrigin::TopLeft,
-        );
-        set_async_tex_status(host_texture_id_for_current_context(tex_id), ASYNC_TEX_STATUS_READY);
-        true
     }
 
     pub fn record_vm_texture_dimensions_for_vm(vm_id: u8, tex_id: u32, width: u32, height: u32) {
@@ -4184,26 +4162,6 @@ pub mod cabi {
             .saturating_mul(4);
         if rgba.len() < expected {
             return false;
-        }
-        if crate::gfx::is_rdp_only_active() {
-            crate::gfx::rdp_monitor_texture_rgba(
-                host_tex_id,
-                width,
-                height,
-                1,
-                None,
-                &rgba[..expected],
-            );
-            record_host_texture_meta(
-                host_tex_id,
-                width,
-                height,
-                TexSampleKind::Rgba,
-                TexCoordOrigin::TopLeft,
-            );
-            set_async_tex_status(host_tex_id, ASYNC_TEX_STATUS_READY);
-            request_texture_work_present(repaint_window_id, host_tex_id, repaint_reason);
-            return true;
         }
         enqueue_texture_upload(TextureUploadReq {
             tex_id: host_tex_id,
@@ -6257,25 +6215,6 @@ pub mod cabi {
             .as_mut()
             .and_then(|images| images.get_mut(idx))
             .and_then(|entry| entry.as_mut());
-        if entry.is_none()
-            && crate::gfx::is_rdp_only_active()
-            && host_texture_dimensions_recorded(tex_id).is_some()
-        {
-            let had_scissor = st.cur_scissor.take().is_some();
-            st.frame_render_target_tex_id = tex_id;
-            st.viewport_configured = false;
-            if st.frame_active {
-                if had_scissor {
-                    st.frame_draws.push(PendingDraw::SetScissor { rect: None });
-                }
-                st.frame_draws.push(PendingDraw::SetRenderTarget { tex_id });
-            }
-            let frame_seq = st.frame_seq;
-            drop(st);
-            gfx_trace_record(GFX_TRACE_OP_SET_RENDER_TARGET, frame_seq, 0, tex_id, 0, 0, 0);
-            crate::gfx::rdp_monitor_set_render_target(frame_seq, tex_id);
-            return 0;
-        }
         let Some(entry) = entry else {
             return -1;
         };
@@ -8569,10 +8508,6 @@ pub mod cabi {
             }
             return -4;
         }
-        if crate::gfx::is_rdp_only_active() {
-            return 0;
-        }
-
         let resolved_tex_images: Vec<Option<(ImageId, u32, u32)>> = {
             let st = GFX_CABI_STATE.lock();
             st.tex_images
