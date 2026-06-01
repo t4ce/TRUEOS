@@ -2,7 +2,7 @@ use alloc::{string::String, vec, vec::Vec};
 
 use embassy_time::Instant;
 
-use crate::r::ui2::{self, Ui2FontTier, Ui2Rect, Ui2WindowResizeMode};
+use crate::r::ui2::{self, Ui2FontTier, Ui2WindowResizeMode};
 
 const UI2_SHELL_TEX_ID: u32 = crate::tst::ui2::ids::Ui2DemoTexId::Shell.get();
 const UI2_SHELL_CONTENT_ID: u32 = crate::tst::ui2::ids::Ui2DemoContentId::Shell.get();

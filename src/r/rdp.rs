@@ -46,6 +46,7 @@ const MSG_CLEAR_COLOR_RGBA: u16 = 22;
 const MSG_INPUT_TABLET_ABS: u16 = 100;
 const MSG_INPUT_KEYBOARD_BOOT: u16 = 101;
 const MSG_CLIENT_RECOMPOSE: u16 = 102;
+const MSG_RESOURCE_SNAPSHOT_ACK: u16 = 103;
 const CAP_ONE_WAY_MONITOR: u32 = 1;
 const CAP_GFX_COMMAND_STREAM: u32 = 1 << 1;
 const CAP_RESOURCE_SNAPSHOT: u32 = 1 << 2;
@@ -78,6 +79,7 @@ static TRUEOS_RDP_FRAME_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
 static TRUEOS_RDP_COMMAND_QUEUE: Mutex<Option<&'static NetQueue<NetCommand>>> = Mutex::new(None);
 static TRUEOS_RDP_CLIENT_HANDLES: Mutex<Vec<NetHandle>> = Mutex::new(Vec::new());
 static TRUEOS_RDP_TEXTURE_CACHE: Mutex<Vec<CachedTexture>> = Mutex::new(Vec::new());
+static TRUEOS_RDP_SNAPSHOT_ACKS: Mutex<Vec<NetHandle>> = Mutex::new(Vec::new());
 
 #[inline]
 pub fn client_count() -> u32 {
@@ -268,6 +270,13 @@ fn handle_client_payload(handle: NetHandle, payload: &[u8]) {
             );
             crate::r::ui2::request_full_recompose("rdp-client-resize");
         }
+        MSG_RESOURCE_SNAPSHOT_ACK => {
+            let mut acks = TRUEOS_RDP_SNAPSHOT_ACKS.lock();
+            if !acks.contains(&handle) {
+                acks.push(handle);
+            }
+            crate::log!("trueos-rdp: asset sync ack handle={}\n", handle.0);
+        }
         _ => {}
     }
 }
@@ -318,6 +327,9 @@ fn remove_client_handle(
     clients.retain(|client| *client != handle);
     ready_clients.retain(|client| *client != handle);
     input_buffers.retain(|buffer| buffer.handle != handle);
+    TRUEOS_RDP_SNAPSHOT_ACKS
+        .lock()
+        .retain(|acked| *acked != handle);
     if clients.len() == before {
         return false;
     }
@@ -340,6 +352,7 @@ fn clear_client_handles(
     clients.clear();
     ready_clients.clear();
     input_buffers.clear();
+    TRUEOS_RDP_SNAPSHOT_ACKS.lock().clear();
     crate::usb3::hid::remove_rdp_tablet();
     publish_client_handles(ready_clients.as_slice());
     cleared
@@ -878,12 +891,6 @@ pub async fn trueos_rdp_task() {
                     }
 
                     send_hello(cmds, handle).await;
-                    if clients.contains(&handle) && !ready_clients.contains(&handle) {
-                        wait_frame_stream_idle();
-                        ready_clients.push(handle);
-                        publish_client_handles(ready_clients.as_slice());
-                        first_frame_base = screen_frame_count();
-                    }
                 }
                 NetEvent::Closed { handle } => {
                     if listener == Some(handle) {
@@ -934,6 +941,25 @@ pub async fn trueos_rdp_task() {
                 | NetEvent::UdpPacketV6 { .. }
                 | NetEvent::IcmpReply { .. }
                 | NetEvent::IcmpReplyV6 { .. } => {}
+            }
+        }
+
+        let acked_clients = {
+            let mut acks = TRUEOS_RDP_SNAPSHOT_ACKS.lock();
+            core::mem::take(&mut *acks)
+        };
+        for handle in acked_clients {
+            if clients.contains(&handle) && !ready_clients.contains(&handle) {
+                wait_frame_stream_idle();
+                ready_clients.push(handle);
+                publish_client_handles(ready_clients.as_slice());
+                first_frame_base = screen_frame_count();
+                crate::log!(
+                    "trueos-rdp: client ready handle={} live_clients={}\n",
+                    handle.0,
+                    ready_clients.len()
+                );
+                crate::r::ui2::request_full_recompose("rdp-client-ready");
             }
         }
 

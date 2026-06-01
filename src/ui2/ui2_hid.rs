@@ -393,6 +393,7 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
             None
         }
     });
+    let hover_decoration_button = decoration_hover_button_at(state, press_hit, px, py);
     let press_window_id = if (event.buttons_down & UI2_PRIMARY_BUTTON_MASK) != 0 {
         press_hit.map(|target| target.owner_window_id).unwrap_or(0)
     } else {
@@ -419,6 +420,8 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
     let mut try_offline_dock = false;
     let mut cursor_capture_window_id = 0u32;
     let mut cursor_overlay_changed = false;
+    let mut hover_dirty_prev: Option<(u32, Ui2DecorationHoverButton)> = None;
+    let mut hover_dirty_next: Option<(u32, Ui2DecorationHoverButton)> = None;
     {
         let cursor = &mut state.cursors[cursor_idx];
         let prev_buttons_down = cursor.buttons_down;
@@ -434,6 +437,21 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
         cursor.buttons_down = event.buttons_down;
         if prev_x != px || prev_y != py || prev_buttons_down != event.buttons_down {
             cursor_overlay_changed = true;
+        }
+
+        let prev_hover = cursor
+            .hover_decoration_button
+            .map(|button| (cursor.hover_window_id, button));
+        if prev_hover != hover_decoration_button {
+            hover_dirty_prev = prev_hover;
+            hover_dirty_next = hover_decoration_button;
+            if let Some((window_id, button)) = hover_decoration_button {
+                cursor.hover_window_id = window_id;
+                cursor.hover_decoration_button = Some(button);
+            } else {
+                cursor.hover_window_id = 0;
+                cursor.hover_decoration_button = None;
+            }
         }
 
         if !primary_was_down && primary_is_down {
@@ -497,6 +515,16 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
 
     if cursor_overlay_changed {
         note_cursor_overlay_dirty(state, "cursor-overlay");
+    }
+    if let Some((window_id, button)) = hover_dirty_prev {
+        if decoration_hover_button_rect(state, window_id, button).is_some() {
+            let _ = note_window_dirty(state, window_id, "decor-button-hover");
+        }
+    }
+    if let Some((window_id, button)) = hover_dirty_next {
+        if decoration_hover_button_rect(state, window_id, button).is_some() {
+            let _ = note_window_dirty(state, window_id, "decor-button-hover");
+        }
     }
 
     let selected_window_id = state.cursors[cursor_idx].selected_window_id;
