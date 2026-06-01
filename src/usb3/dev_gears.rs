@@ -155,61 +155,15 @@ pub async fn usb_device_pool_worker_task() {
 }
 
 async fn process_opened_device(device: PooledUsbDevice) {
-    let boot_mouse_candidates = collect_boot_mouse_candidates(device.device.configurations());
-    if !boot_mouse_candidates.is_empty() {
-        let id = device.id;
-        let vendor_id = device.vendor_id;
-        let product_id = device.product_id;
-        crate::log!(
-            "crabusb: boot-mouse {:04x}:{:04x} proof=transport-plan candidates={}\n",
-            vendor_id,
-            product_id,
-            boot_mouse_candidates.len()
-        );
-        let Some(target) = pick_boot_mouse_target(&boot_mouse_candidates) else {
-            crate::log!(
-                "crabusb: boot-mouse {:04x}:{:04x} proof=hid-target status=missing\n",
-                vendor_id,
-                product_id
-            );
-            return;
-        };
-        crate::log!(
-            "crabusb: boot-mouse {:04x}:{:04x} proof=hid-target if#{} alt={} cfg={} interrupt_in=0x{:02x}/{} interval={}\n",
-            vendor_id,
-            product_id,
-            target.interface_number,
-            target.alternate_setting,
-            target.configuration_value,
-            target.interrupt_in,
-            target.max_packet_size,
-            target.interval
-        );
-        match handoff_boot_mouse_device(device, target) {
-            Ok(pool_len) => {
-                crate::log!(
-                    "crabusb: boot-mouse {:04x}:{:04x} id={} handed_to_mouse_pool pool_len={}\n",
-                    vendor_id,
-                    product_id,
-                    id,
-                    pool_len
-                );
-            }
-            Err(device) => {
-                crate::log!(
-                    "crabusb: boot-mouse {:04x}:{:04x} id={} dropped reason=mouse_pool_full cap={}\n",
-                    device.device.vendor_id,
-                    device.device.product_id,
-                    device.device.id,
-                    USB3_BOOT_MOUSE_POOL_CAP
-                );
-            }
-        }
-        return;
-    }
-
     if device.vendor_id == 0x152e && device.product_id == 0x7001 {
         super::skhynix::start_green_uas(device).await;
+    } else {
+        crate::log!(
+            "crabusb: device worker ignored id={} vid={:04x} pid={:04x} reason=usb3-skhynix-only\n",
+            device.id,
+            device.vendor_id,
+            device.product_id
+        );
     }
 }
 

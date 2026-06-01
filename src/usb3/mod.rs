@@ -30,14 +30,11 @@ pub async fn usb_controller_service_task() {
     spawner
         .spawn(dev_gears::usb_device_pool_worker_task().expect("crabusb device pool worker token"));
     crate::log!("crabusb: device pool worker started\n");
-    spawner
-        .spawn(dev_gears::usb_boot_mouse_worker_task().expect("crabusb boot mouse worker token"));
-    crate::log!("crabusb: boot mouse worker started\n");
 
     let Some(news) = probe_devices_with_log(&mut host, "initial").await else {
         return;
     };
-    open_and_handoff_devices(&mut host, news, &spawner).await;
+    open_and_handoff_devices(&mut host, news).await;
 }
 
 async fn probe_devices_with_log(
@@ -70,22 +67,19 @@ async fn probe_devices_with_log(
 async fn open_and_handoff_devices(
     host: &mut crabusb::USBHost,
     news: alloc::vec::Vec<crabusb::ProbedDevice>,
-    spawner: &embassy_executor::Spawner,
 ) {
     for new in news {
         log_probed_device("probed", &new);
         match new {
             crabusb::ProbedDevice::Device(info) => {
-                let handoff_to_gears = dev_gears::has_boot_mouse_transport(info.configurations())
-                    || !hid::boot::maybe_start_hid_boot_streams(
-                        host,
-                        &info,
-                        spawner,
-                        CRABUSB_CONTROLLER_ID,
-                        true,
-                    )
-                    .await;
-                if !handoff_to_gears {
+                let desc = info.descriptor();
+                if desc.vendor_id != 0x152e || desc.product_id != 0x7001 {
+                    crate::log!(
+                        "crabusb: device id={} ignored reason=usb3-skhynix-only vid={:04x} pid={:04x}\n",
+                        info.id(),
+                        desc.vendor_id,
+                        desc.product_id
+                    );
                     continue;
                 }
 

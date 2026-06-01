@@ -14,6 +14,7 @@ const UAS_STREAM_ID_FIRST: u16 = 1;
 const UAS_STREAM_ID_LAST: u16 = 1;
 const UAS_XHCI_STREAMS_ENABLED: bool = true;
 const UAS_XHCI_OUT_STREAMS_ENABLED: bool = true;
+const UAS_PREPOST_WRITE_DATA_OUT_STREAMS: bool = true;
 const SKHYNIX_UAS_MAX_TRANSFER_BYTES: usize = 8 * 1024 * 1024;
 const SKHYNIX_UAS_LOG_TRANSFER_BYTES: usize = 512 * 1024;
 
@@ -554,6 +555,11 @@ async fn uas_command_in(
     data: &mut [u8],
     tag: u16,
 ) -> Result<usize, MassProbeError> {
+    if !UAS_XHCI_STREAMS_ENABLED {
+        return uas_command_in_no_streams(command_out, status_in, data_in, cmd, cdb, data, tag)
+            .await;
+    }
+
     let mut ready_iu = [0u8; 16];
     enum FirstInCompletion {
         Status(Result<usize, MassProbeError>),
@@ -696,6 +702,75 @@ async fn uas_command_in(
     }
 }
 
+async fn uas_command_in_no_streams(
+    command_out: &mut super::crabusb::Endpoint,
+    status_in: &mut super::crabusb::Endpoint,
+    data_in: &mut super::crabusb::Endpoint,
+    cmd: &'static str,
+    cdb: &[u8],
+    data: &mut [u8],
+    tag: u16,
+) -> Result<usize, MassProbeError> {
+    let mut ready_iu = [0u8; 96];
+    let status_id = status_in
+        .submit(uas_bulk_in_request(&mut ready_iu, tag))
+        .map_err(|_| MassProbeError::Transport("uas-status-submit"))?;
+
+    if crate::logflag::USB_MASS_UAS_TRACE_LOGS
+        || (cmd == "read10" && data.len() >= SKHYNIX_UAS_LOG_TRANSFER_BYTES)
+    {
+        crate::log!(
+            "crabusb: skhynix-green proof=uas-read phase=ready-submit cmd={} tag=0x{:04x} status_req={} bytes={}\n",
+            cmd,
+            tag,
+            status_id.raw(),
+            data.len()
+        );
+    }
+
+    if let Err(err) = uas_send_command(command_out, cmd, cdb, tag).await {
+        let _ = status_in.cancel(status_id);
+        return Err(err);
+    }
+
+    let ready_got =
+        endpoint_wait_submitted(status_in, status_id, "uas-read-ready-timeout", "uas-status-in")
+            .await?;
+    if ready_got < 4 {
+        return Err(MassProbeError::ShortData);
+    }
+
+    let ready = &ready_iu[..ready_got.min(ready_iu.len())];
+    let ready_id = ready[0];
+    let ready_tag = parse_uas_tag(ready).unwrap_or(0);
+    if ready_id == UAS_IU_STATUS && ready_tag == tag {
+        validate_uas_status(cmd, ready, tag)?;
+        return Err(MassProbeError::ShortData);
+    }
+    if ready_id != UAS_IU_READ_READY || ready_tag != tag {
+        return Err(MassProbeError::Csw);
+    }
+
+    let data_id = data_in
+        .submit(uas_bulk_in_request(data, tag))
+        .map_err(|_| MassProbeError::Transport("uas-data-submit"))?;
+    if crate::logflag::USB_MASS_UAS_TRACE_LOGS
+        || (cmd == "read10" && data.len() >= SKHYNIX_UAS_LOG_TRANSFER_BYTES)
+    {
+        crate::log!(
+            "crabusb: skhynix-green proof=uas-read phase=ready-data-submit cmd={} tag=0x{:04x} data_req={} bytes={}\n",
+            cmd,
+            tag,
+            data_id.raw(),
+            data.len()
+        );
+    }
+
+    let got = endpoint_wait_submitted(data_in, data_id, "uas-data-timeout", "uas-data-in").await?;
+    uas_drain_status_grace(status_in, cmd, tag, "uas-read-status-timeout").await?;
+    Ok(got)
+}
+
 async fn uas_command_out(
     command_out: &mut super::crabusb::Endpoint,
     status_in: &mut super::crabusb::Endpoint,
@@ -705,7 +780,7 @@ async fn uas_command_out(
     data: &[u8],
     tag: u16,
 ) -> Result<usize, MassProbeError> {
-    if UAS_XHCI_OUT_STREAMS_ENABLED {
+    if UAS_PREPOST_WRITE_DATA_OUT_STREAMS {
         return uas_command_out_streams(command_out, status_in, data_out, cmd, cdb, data, tag)
             .await;
     }
@@ -1239,6 +1314,7 @@ fn mass_probe_to_block_error(err: MassProbeError) -> crate::disc::block::Error {
 fn make_uas_command_iu(tag: u16, cdb: &[u8]) -> [u8; 32] {
     let mut iu = [0u8; 32];
     iu[0] = UAS_IU_COMMAND;
+    iu[1] = 0x00;
     iu[2..4].copy_from_slice(&tag.to_be_bytes());
     let cdb_len = cdb.len().min(16);
     iu[16..16 + cdb_len].copy_from_slice(&cdb[..cdb_len]);
