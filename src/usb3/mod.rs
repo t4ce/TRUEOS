@@ -4,6 +4,7 @@ mod descriptor;
 mod dev_gears;
 pub mod hid;
 mod lib;
+mod skhynix;
 
 pub use self::hid::{hut, input, midi};
 pub use self::lib::*;

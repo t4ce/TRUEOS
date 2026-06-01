@@ -14,6 +14,8 @@ pub(crate) mod medbak;
 pub(crate) mod ppgtt;
 pub(crate) mod replay;
 pub(crate) mod replay_rotating_triangle;
+mod render;
+mod shader;
 pub(crate) mod state;
 pub(crate) mod stats;
 mod uc_fw;
@@ -397,9 +399,7 @@ pub fn init_once() {
     } else {
         crate::log!("intel/display: plane1 boot demo disabled\n");
     }
-    crate::log!(
-        "intel/render: disabled reason=primary-render-module-removed gpgpu_probe=enabled\n"
-    );
+    self::render::submit_primary_triangle_once();
     self::gpgpu::submit_gpgpu_preflight_once();
     crate::log!("intel/media: source warmup disabled trigger=trueosfs-root-mounted\n",);
     if MEDIA_BOOT_DEMO_ENABLED {
@@ -1118,6 +1118,10 @@ pub(crate) fn submit_rotating_triangle_replay_frame(
         Some(self::replay_rotating_triangle::ROTATING_TRIANGLE_MODULE_STRING),
         load_mode,
     )
+}
+
+pub(crate) fn submit_primary_triangle_demo() {
+    self::render::submit_primary_probe_periodic();
 }
 
 pub(crate) fn submit_gpgpu_t66_accum32_hi_live96_partial_matvec_probe(

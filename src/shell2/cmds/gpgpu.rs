@@ -21,6 +21,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
         Some("tilewalker") => tilewalker(io, &mut args),
         Some("rowburst") => rowburst(io, &mut args),
         Some("replay") => replay(io, &mut args),
+        Some("triangle") => triangle(io),
         Some(row) => match parse_u32(Some(row)) {
             Some(row) => rowpaint(io, row, &mut args),
             None => usage(io),
@@ -33,7 +34,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "gpgpu: usage `gpgpu [row=1..1440] [rows=5]` | `gpgpu status` | debug: `gpgpu walkrow ...` `gpgpu tilewalker ...` `gpgpu rowburst ...` `gpgpu replay [0..2]`",
+        "gpgpu: usage `gpgpu [row=1..1440] [rows=5]` | `gpgpu status` | `gpgpu triangle` | debug: `gpgpu walkrow ...` `gpgpu tilewalker ...` `gpgpu rowburst ...` `gpgpu replay [0..2]`",
     );
 }
 
@@ -57,6 +58,12 @@ fn status(io: &'static dyn ShellBackend2) {
         )
         .as_str(),
     );
+}
+
+fn triangle(io: &'static dyn ShellBackend2) {
+    print_shell_line(io, "gpgpu: triangle render demo submit requested");
+    crate::intel::submit_primary_triangle_demo();
+    print_shell_line(io, "gpgpu: triangle render demo submitted; watch intel/render logs");
 }
 
 fn rowpaint(
