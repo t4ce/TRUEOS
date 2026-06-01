@@ -208,6 +208,7 @@ fn submit_primary_triangle_with_retries(
         initial_streamout_experiment.label(),
         vf_streamout_precheck as u8,
     );
+    paint_expected_fragment_album_tile();
     if !vf_streamout_precheck {
         return false;
     }
@@ -744,6 +745,41 @@ fn log_primary_frontier_summary(
             "recheck-raster-input"
         },
     );
+
+    let (problem, suspect, next_probe) = if !wm_coverage_observed && fragment_candidate_ready {
+        (
+            "fixed-function-raster-does-not-report-wm-coverage",
+            "viewport-raster-scissor-sample-mask-or-wm-coverage-programming",
+            "instrument-wm-coverage",
+        )
+    } else if wm_coverage_observed && !psd_dispatch_observed {
+        (
+            "wm-coverage-reaches-psd-but-no-pixel-shader-dispatch",
+            "ps-thread-dispatch-state-or-payload",
+            "instrument-psd-dispatch",
+        )
+    } else if !fragment_candidate_ready {
+        (
+            "clip-sf-did-not-produce-fragment-candidate",
+            "clip-sf-viewport-primitive-handoff",
+            "recheck-raster-input",
+        )
+    } else {
+        (
+            "ps-or-render-target-write-not-visible",
+            "binding-table-surface-state-or-rt-cache-flush",
+            "prove-rt-write",
+        )
+    };
+
+    intel_render_focus_log!(
+        "intel/render: primary-problem last_proven={} first_missing={} problem={} suspect={} next_probe={} note=vs_hs_ds_gs_zero_is_expected_for_vf_synthesized_vue\n",
+        first_good,
+        first_bad,
+        problem,
+        suspect,
+        next_probe,
+    );
 }
 
 fn submit_triangle_vf_streamout_proof(
@@ -848,6 +884,7 @@ fn submit_triangle_vf_streamout_proof(
         draw.vertex_count as usize,
         experiment,
     );
+    paint_streamout_buffer_album_tile(warm, accepted, draw.vertex_count as usize, experiment);
     if !completed {
         recover_render_engine_after_nonretired_submit(dev, warm, "vf-streamout-proof");
     }
@@ -933,6 +970,9 @@ fn submit_triangle_vf_draw_to_surface(
             draw.target_w.saturating_sub(1),
             draw.target_h.saturating_sub(1),
         );
+    }
+    if geometry.fullscreen_candidate() || backend_probe_mode.uses_raster_wm_oa() {
+        paint_expected_wm_input_album_tile(submit_name, draw, geometry);
     }
 
     let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
@@ -1153,7 +1193,7 @@ fn submit_triangle_vf_draw_to_surface(
             delta.ps_depth,
         );
         if is_raster_wm_oa_submit_name(submit_name) {
-            log_raster_wm_oa_probe(submit_name, warm, completed, draw, delta);
+            log_raster_wm_oa_probe(dev, submit_name, warm, completed, draw, delta);
         }
     }
     if is_raster_wm_oa_submit_name(submit_name) {
@@ -1240,6 +1280,7 @@ fn oa_a_delta_gfx125(begin: &[u32], end: &[u32], index: usize) -> u64 {
 }
 
 fn log_raster_wm_oa_probe(
+    dev: crate::intel::Dev,
     submit_name: &'static str,
     warm: RenderWarmState,
     completed: bool,
@@ -1291,8 +1332,60 @@ fn log_raster_wm_oa_probe(
             || delta.ps_invocations != 0
             || delta.cps_invocations != 0
             || delta.ps_depth != 0);
+    let sc_instdone = crate::intel::mmio_read(dev, SC_INSTDONE);
+    let sc_extra = crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA);
+    let sc_extra2 = crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA2);
+    let row_instdone = crate::intel::mmio_read(dev, ROW_INSTDONE);
+    let sampler_instdone = crate::intel::mmio_read(dev, SAMPLER_INSTDONE);
+    let tdl_thr_status0 = crate::intel::mmio_read(dev, TDL_THR_STATUS0);
+    let tdl_thr_status1 = crate::intel::mmio_read(dev, TDL_THR_STATUS1);
+    let tdl_thr_disp_count = crate::intel::mmio_read(dev, TDL_THR_DISP_COUNT);
+    let tdl_thr_pf_count = crate::intel::mmio_read(dev, TDL_THR_PF_COUNT);
+    let tdl_thr_pf_status0 = crate::intel::mmio_read(dev, TDL_THR_PF_STATUS0);
+    let tdl_thr_pf_status1 = crate::intel::mmio_read(dev, TDL_THR_PF_STATUS1);
+    let rcu_mode = crate::intel::mmio_read(dev, GEN12_RCU_MODE);
+    let chicken_raster_2 = crate::intel::mmio_read(dev, CHICKEN_RASTER_2);
+    let gfx_mode = crate::intel::mmio_read(dev, GFX_MODE);
+    let instps = crate::intel::mmio_read(dev, RCS_RING_INSTPS);
+    let psmi_ctl = crate::intel::mmio_read(dev, RCS_RING_PSMI_CTL);
+    let acthd = crate::intel::mmio_read(dev, RCS_RING_ACTHD);
+    let ipehr = crate::intel::mmio_read(dev, RCS_RING_IPEHR);
     record_fragment_boundary_probe(true, accepted);
     record_wm_psd_boundary_probe(wm_coverage_observed, psd_dispatch_observed);
+    paint_fixed_function_album_tile(
+        4,
+        "WM",
+        if wm_coverage_observed {
+            1
+        } else if reports_valid {
+            2
+        } else {
+            0
+        },
+        [
+            raster_samples_delta.min(u32::MAX as u64) as u32,
+            samples_killed_delta.min(u32::MAX as u64) as u32,
+            postps_fail_delta.min(u32::MAX as u64) as u32,
+            reports_valid as u32,
+        ],
+    );
+    paint_fixed_function_album_tile(
+        5,
+        "PSD",
+        if psd_dispatch_observed {
+            1
+        } else if wm_coverage_observed {
+            2
+        } else {
+            0
+        },
+        [
+            ps_threads_delta.min(u32::MAX as u64) as u32,
+            delta.ps_invocations.min(u32::MAX as u64) as u32,
+            delta.cps_invocations.min(u32::MAX as u64) as u32,
+            delta.ps_depth.min(u32::MAX as u64) as u32,
+        ],
+    );
     intel_render_focus_log!(
         "intel/render: {} raster-wm-input-proof accepted={} completed={} reports_valid={} wm_coverage={} psd_dispatch={} begin_id=0x{:08X} end_id=0x{:08X} rt_gpu=0x{:X} size={}x{} pitch=0x{:X} raster_samples_delta={} ps_threads_delta={} samples_killed_delta={} postps_fail_delta={} pixel_write_delta={} pixel_blend_delta={} ps_delta={} cps_delta={} ps_depth_delta={} observable=oar-mi-rpc-a21 does_not_prove=rt_visible\n",
         submit_name,
@@ -1316,6 +1409,31 @@ fn log_raster_wm_oa_probe(
         delta.ps_invocations,
         delta.cps_invocations,
         delta.ps_depth,
+    );
+    intel_render_focus_log!(
+        "intel/render: {} wm-boundary-regs reports_valid={} wm_coverage={} psd_dispatch={} sc=0x{:08X} sc_extra=0x{:08X} sc_extra2=0x{:08X} row=0x{:08X} sampler=0x{:08X} tdl0=0x{:08X} tdl1=0x{:08X} tdl_disp=0x{:08X} tdl_pf=0x{:08X} tdl_pf0=0x{:08X} tdl_pf1=0x{:08X} rcu_mode=0x{:08X} chicken_raster_2=0x{:08X} gfx_mode=0x{:08X} instps=0x{:08X} psmi_ctl=0x{:08X} acthd=0x{:08X} ipehr=0x{:08X} meaning=live-fixed-function-boundary-snapshot\n",
+        submit_name,
+        reports_valid as u8,
+        wm_coverage_observed as u8,
+        psd_dispatch_observed as u8,
+        sc_instdone,
+        sc_extra,
+        sc_extra2,
+        row_instdone,
+        sampler_instdone,
+        tdl_thr_status0,
+        tdl_thr_status1,
+        tdl_thr_disp_count,
+        tdl_thr_pf_count,
+        tdl_thr_pf_status0,
+        tdl_thr_pf_status1,
+        rcu_mode,
+        chicken_raster_2,
+        gfx_mode,
+        instps,
+        psmi_ctl,
+        acthd,
+        ipehr,
     );
 }
 

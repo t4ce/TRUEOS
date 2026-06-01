@@ -465,25 +465,29 @@ async fn uas_send_command(
             id.raw()
         );
     }
-    let sent =
-        match endpoint_wait_submitted(command_out, id, "uas-command-timeout", "uas-command-out")
-            .await
-        {
-            Ok(sent) => sent,
-            Err(err) => {
-                let _ = command_out.cancel(id);
-                if cmd == "read10" || cmd == "write10" {
-                    crate::log!(
-                        "crabusb: skhynix-green proof=uas-command cmd={} tag=0x{:04x} request={} status=failed err={:?}\n",
-                        cmd,
-                        tag,
-                        id.raw(),
-                        err
-                    );
-                }
-                return Err(err);
+    let sent = match endpoint_wait_submitted(
+        command_out,
+        id,
+        "uas-command-timeout",
+        "uas-command-out",
+    )
+    .await
+    {
+        Ok(sent) => sent,
+        Err(err) => {
+            let _ = command_out.cancel(id);
+            if cmd == "read10" || cmd == "write10" {
+                crate::log!(
+                    "crabusb: skhynix-green proof=uas-command cmd={} tag=0x{:04x} request={} status=failed err={:?}\n",
+                    cmd,
+                    tag,
+                    id.raw(),
+                    err
+                );
             }
-        };
+            return Err(err);
+        }
+    };
     if crate::logflag::USB_MASS_UAS_TRACE_LOGS || cmd == "write10" {
         crate::log!(
             "crabusb: skhynix-green proof=uas-command cmd={} tag=0x{:04x} sent={}\n",
@@ -519,7 +523,10 @@ async fn uas_drain_status_grace(
     validate_uas_status(cmd, &status[..got.min(status.len())], tag)
 }
 
-fn uas_bulk_in_request(buffer: &mut [u8], tag: u16) -> super::crabusb::usb_if::endpoint::TransferRequest {
+fn uas_bulk_in_request(
+    buffer: &mut [u8],
+    tag: u16,
+) -> super::crabusb::usb_if::endpoint::TransferRequest {
     if UAS_XHCI_STREAMS_ENABLED {
         super::crabusb::usb_if::endpoint::TransferRequest::bulk_in_on_stream(buffer, tag)
     } else {
@@ -527,7 +534,10 @@ fn uas_bulk_in_request(buffer: &mut [u8], tag: u16) -> super::crabusb::usb_if::e
     }
 }
 
-fn uas_bulk_out_request(buffer: &[u8], tag: u16) -> super::crabusb::usb_if::endpoint::TransferRequest {
+fn uas_bulk_out_request(
+    buffer: &[u8],
+    tag: u16,
+) -> super::crabusb::usb_if::endpoint::TransferRequest {
     if UAS_XHCI_OUT_STREAMS_ENABLED {
         super::crabusb::usb_if::endpoint::TransferRequest::bulk_out_on_stream(buffer, tag)
     } else {
@@ -695,6 +705,11 @@ async fn uas_command_out(
     data: &[u8],
     tag: u16,
 ) -> Result<usize, MassProbeError> {
+    if UAS_XHCI_OUT_STREAMS_ENABLED {
+        return uas_command_out_streams(command_out, status_in, data_out, cmd, cdb, data, tag)
+            .await;
+    }
+
     let mut status_iu = [0u8; 96];
     let status_id = status_in
         .submit(uas_bulk_in_request(&mut status_iu, tag))
@@ -746,7 +761,7 @@ async fn uas_command_out(
             ready_id,
             ready_tag,
             ready_got
-    );
+        );
     }
     if ready_id == UAS_IU_STATUS && ready_tag == tag {
         validate_uas_status(cmd, ready, tag)?;
@@ -769,8 +784,8 @@ async fn uas_command_out(
         );
     }
 
-    let sent = endpoint_wait_submitted(data_out, data_id, "uas-data-timeout", "uas-data-out")
-        .await?;
+    let sent =
+        endpoint_wait_submitted(data_out, data_id, "uas-data-timeout", "uas-data-out").await?;
 
     uas_drain_status_grace(status_in, cmd, tag, "uas-write-status-timeout").await?;
 
@@ -784,6 +799,98 @@ async fn uas_command_out(
     }
     if sent != data.len() {
         return Err(MassProbeError::ShortData);
+    }
+
+    if cmd == "write10" {
+        crate::log!(
+            "crabusb: skhynix-green proof=uas-write phase=status-ok cmd={} tag=0x{:04x}\n",
+            cmd,
+            tag
+        );
+    }
+    Ok(sent)
+}
+
+async fn uas_command_out_streams(
+    command_out: &mut super::crabusb::Endpoint,
+    status_in: &mut super::crabusb::Endpoint,
+    data_out: &mut super::crabusb::Endpoint,
+    cmd: &'static str,
+    cdb: &[u8],
+    data: &[u8],
+    tag: u16,
+) -> Result<usize, MassProbeError> {
+    let mut status_iu = [0u8; 96];
+    let status_id = status_in
+        .submit(uas_bulk_in_request(&mut status_iu, tag))
+        .map_err(|_| MassProbeError::Transport("uas-status-submit"))?;
+    let data_id = data_out
+        .submit(uas_bulk_out_request(data, tag))
+        .map_err(|_| MassProbeError::Transport("uas-data-submit"))?;
+
+    if cmd == "write10" {
+        crate::log!(
+            "crabusb: skhynix-green proof=uas-write phase=prepost-streams cmd={} tag=0x{:04x} status_req={} data_req={} bytes={}\n",
+            cmd,
+            tag,
+            status_id.raw(),
+            data_id.raw(),
+            data.len()
+        );
+    }
+
+    if let Err(err) = uas_send_command(command_out, cmd, cdb, tag).await {
+        let _ = status_in.cancel(status_id);
+        let _ = data_out.cancel(data_id);
+        return Err(err);
+    }
+    if cmd == "write10" {
+        crate::log!(
+            "crabusb: skhynix-green proof=uas-write phase=command-sent cmd={} tag=0x{:04x}\n",
+            cmd,
+            tag
+        );
+    }
+
+    let sent =
+        endpoint_wait_submitted(data_out, data_id, "uas-data-timeout", "uas-data-out").await?;
+    if sent != data.len() {
+        return Err(MassProbeError::ShortData);
+    }
+    if cmd == "write10" {
+        crate::log!(
+            "crabusb: skhynix-green proof=uas-write phase=data-sent cmd={} tag=0x{:04x} bytes={}\n",
+            cmd,
+            tag,
+            sent
+        );
+    }
+
+    let ready_got =
+        endpoint_wait_submitted(status_in, status_id, "uas-write-status-timeout", "uas-status-in")
+            .await?;
+    if ready_got < 4 {
+        return Err(MassProbeError::ShortData);
+    }
+
+    let ready = &status_iu[..ready_got.min(status_iu.len())];
+    let ready_id = ready[0];
+    let ready_tag = parse_uas_tag(ready).unwrap_or(0);
+    if cmd == "write10" {
+        crate::log!(
+            "crabusb: skhynix-green proof=uas-write phase=status-stream cmd={} tag=0x{:04x} iu=0x{:02x} iu_tag=0x{:04x} raw_len={}\n",
+            cmd,
+            tag,
+            ready_id,
+            ready_tag,
+            ready_got
+        );
+    }
+
+    if ready_id == UAS_IU_WRITE_READY && ready_tag == tag {
+        uas_drain_status_grace(status_in, cmd, tag, "uas-write-status-timeout").await?;
+    } else {
+        validate_uas_status(cmd, ready, tag)?;
     }
 
     if cmd == "write10" {
