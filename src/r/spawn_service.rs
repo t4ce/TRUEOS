@@ -87,6 +87,7 @@ define_started_flags!(
     UI2_SWARM_DEMO_STARTED,
     USB_CONTROLLER_TASKS_STARTED,
     TRUEOSFS_READY_HOOK_STARTED,
+    TRUEOSFS_RW_PROBE_STARTED,
     BP_AUTOSTART_STARTED,
     APP_VM_RUN_QUEUE_STARTED,
     FACTORY_RAM_PROBE_STARTED,
@@ -882,6 +883,177 @@ fn spawn_trueosfs_ready_hook(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| trueosfs_ready_hook_task())
 }
 
+const TRUEOSFS_RW_PROBE_PATH: &str = "trueos/probe/rw-500k.bin";
+const TRUEOSFS_RW_PROBE_BYTES: usize = 500 * 1024;
+const TRUEOSFS_RW_PROBE_CHUNK_BYTES: usize = 64 * 1024;
+
+fn trueosfs_rw_probe_now_ms() -> u64 {
+    let ticks = embassy_time_driver::now();
+    let hz = embassy_time_driver::TICK_HZ;
+    if hz == 0 {
+        0
+    } else {
+        ticks.saturating_mul(1000) / hz
+    }
+}
+
+fn trueosfs_rw_probe_fill(buf: &mut Vec<u8>, len: usize) {
+    buf.clear();
+    for i in 0..len {
+        let b = ((i as u32)
+            .wrapping_mul(37)
+            .wrapping_add((i as u32 >> 3) ^ 0x5a))
+            as u8;
+        buf.push(b);
+    }
+}
+
+#[embassy_executor::task]
+async fn trueosfs_rw_probe_task() {
+    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
+        crate::log!("trueosfs-rw-probe: result=failed phase=root err=missing\n");
+        return;
+    };
+
+    let start_ms = trueosfs_rw_probe_now_ms();
+    crate::log!(
+        "trueosfs-rw-probe: start disk={} path={} bytes={}\n",
+        disk.id().raw(),
+        TRUEOSFS_RW_PROBE_PATH,
+        TRUEOSFS_RW_PROBE_BYTES
+    );
+
+    let _ = crate::r::fs::trueosfs::file_delete_async(disk, TRUEOSFS_RW_PROBE_PATH).await;
+
+    let mut expected = Vec::with_capacity(TRUEOSFS_RW_PROBE_BYTES);
+    trueosfs_rw_probe_fill(&mut expected, TRUEOSFS_RW_PROBE_BYTES);
+
+    let handle = match crate::r::fs::trueosfs::file_write_begin_async(
+        disk,
+        TRUEOSFS_RW_PROBE_PATH,
+        TRUEOSFS_RW_PROBE_BYTES as u64,
+    )
+    .await
+    {
+        Ok(Some(handle)) => handle,
+        Ok(None) => {
+            crate::log!("trueosfs-rw-probe: result=failed phase=begin err=no-space-or-fs\n");
+            return;
+        }
+        Err(err) => {
+            crate::log!(
+                "trueosfs-rw-probe: result=failed phase=begin err={:?}\n",
+                err
+            );
+            return;
+        }
+    };
+
+    let mut offset = 0usize;
+    while offset < expected.len() {
+        let end = (offset + TRUEOSFS_RW_PROBE_CHUNK_BYTES).min(expected.len());
+        if let Err(err) =
+            crate::r::fs::trueosfs::file_write_chunk_async(handle, &expected[offset..end]).await
+        {
+            let _ = crate::r::fs::trueosfs::file_write_abort_async(handle).await;
+            crate::log!(
+                "trueosfs-rw-probe: result=failed phase=write offset={} len={} err={:?}\n",
+                offset,
+                end - offset,
+                err
+            );
+            return;
+        }
+        offset = end;
+    }
+
+    if let Err(err) = crate::r::fs::trueosfs::file_write_finish_async(handle).await {
+        crate::log!(
+            "trueosfs-rw-probe: result=failed phase=finish err={:?}\n",
+            err
+        );
+        return;
+    }
+    let write_ms = trueosfs_rw_probe_now_ms();
+    crate::log!(
+        "trueosfs-rw-probe: phase=write-ok bytes={} elapsed_ms={}\n",
+        TRUEOSFS_RW_PROBE_BYTES,
+        write_ms.saturating_sub(start_ms)
+    );
+
+    let mut actual = Vec::new();
+    actual.resize(TRUEOSFS_RW_PROBE_BYTES, 0);
+    match crate::r::fs::trueosfs::file_read_range_async(
+        disk,
+        TRUEOSFS_RW_PROBE_PATH,
+        0,
+        actual.as_mut_slice(),
+    )
+    .await
+    {
+        Ok(Some(got)) if got == TRUEOSFS_RW_PROBE_BYTES => {}
+        Ok(Some(got)) => {
+            crate::log!(
+                "trueosfs-rw-probe: result=failed phase=read got={} expected={}\n",
+                got,
+                TRUEOSFS_RW_PROBE_BYTES
+            );
+            return;
+        }
+        Ok(None) => {
+            crate::log!("trueosfs-rw-probe: result=failed phase=read err=missing\n");
+            return;
+        }
+        Err(err) => {
+            crate::log!(
+                "trueosfs-rw-probe: result=failed phase=read err={:?}\n",
+                err
+            );
+            return;
+        }
+    }
+
+    if actual.as_slice() != expected.as_slice() {
+        let mismatch = actual
+            .iter()
+            .zip(expected.iter())
+            .position(|(got, want)| got != want)
+            .unwrap_or(usize::MAX);
+        crate::log!(
+            "trueosfs-rw-probe: result=failed phase=verify mismatch={}\n",
+            mismatch
+        );
+        return;
+    }
+    let read_ms = trueosfs_rw_probe_now_ms();
+    crate::log!(
+        "trueosfs-rw-probe: phase=verify-ok bytes={} read_elapsed_ms={}\n",
+        TRUEOSFS_RW_PROBE_BYTES,
+        read_ms.saturating_sub(write_ms)
+    );
+
+    match crate::r::fs::trueosfs::file_delete_async(disk, TRUEOSFS_RW_PROBE_PATH).await {
+        Ok(true) | Ok(false) => {
+            let done_ms = trueosfs_rw_probe_now_ms();
+            crate::log!(
+                "trueosfs-rw-probe: result=ok bytes={} total_elapsed_ms={}\n",
+                TRUEOSFS_RW_PROBE_BYTES,
+                done_ms.saturating_sub(start_ms)
+            );
+        }
+        Err(err) => {
+            crate::log!(
+                "trueosfs-rw-probe: result=failed phase=delete err={:?}\n",
+                err
+            );
+        }
+    }
+}
+
+fn spawn_trueosfs_rw_probe(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| trueosfs_rw_probe_task())
+}
+
 fn spawn_app_vm_run_queue(spawner: Spawner) -> SpawnAttempt {
     match crate::shell2::spawn_app_vm_run_queue(spawner) {
         Ok(()) => SpawnAttempt::Spawned,
@@ -1060,6 +1232,9 @@ fn spawn_atomic_bomb(spawner: Spawner) -> SpawnAttempt {
 
 const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
     crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
+const NET_ANY_CONFIGURED_AND_INDEX_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
+    | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
+    | crate::r::readiness::TRUEOSFS_INDEX_READY;
 const HYPER_HTTP1_PROBE_READY: u32 =
     crate::r::readiness::NET_SOCKET_READY | crate::r::readiness::NET_V4_GATEWAY_REACHABLE;
 const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
@@ -1075,9 +1250,9 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 #[cfg(feature = "trueos_rdp")]
-const TASK_COUNT: usize = 72;
+const TASK_COUNT: usize = 73;
 #[cfg(not(feature = "trueos_rdp"))]
-const TASK_COUNT: usize = 70;
+const TASK_COUNT: usize = 71;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1165,9 +1340,15 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::disabled("html-demo", 0, &HTML_DEMO_STARTED, spawn_html_demo),
     TaskSpec::enabled(
         "http-trueosfs",
-        NET_ANY_CONFIGURED_AND_ROOT_READY,
+        NET_ANY_CONFIGURED_AND_INDEX_READY,
         &HTTP_TRUEOSFS_STARTED,
         spawn_http_trueosfs,
+    ),
+    TaskSpec::enabled(
+        "trueosfs-rw-probe",
+        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
+        &TRUEOSFS_RW_PROBE_STARTED,
+        spawn_trueosfs_rw_probe,
     ),
     TaskSpec::enabled(
         "shader-compile-service",

@@ -6949,6 +6949,7 @@ pub mod cabi {
             ) else {
                 return -9;
             };
+            let mut rdp_texture_update = None;
             if ret == 0 {
                 let mut st = GFX_CABI_STATE.lock();
                 if let Some(entry) = st
@@ -6997,9 +6998,21 @@ pub mod cabi {
                         );
                         off += 3 * RGB_VERTEX_SIZE;
                     }
+                    rdp_texture_update =
+                        Some((tex_id, entry.width, entry.height, entry.rgba.clone()));
                 }
                 st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
                 st.viewport_configured = false;
+            }
+            if let Some((tex_id, width, height, rgba)) = rdp_texture_update {
+                crate::gfx::rdp_monitor_texture_rgba(
+                    tex_id,
+                    width,
+                    height,
+                    1,
+                    None,
+                    rgba.as_slice(),
+                );
             }
             ret
         })
@@ -7280,6 +7293,7 @@ pub mod cabi {
             else {
                 return -10;
             };
+            let mut rdp_texture_update = None;
             if ret == 0 {
                 let mut st = GFX_CABI_STATE.lock();
                 let target_idx = target_tex_id.saturating_sub(1) as usize;
@@ -7373,8 +7387,20 @@ pub mod cabi {
                     );
                     off += 3 * TEX_VERTEX_SIZE;
                 }
+                rdp_texture_update =
+                    Some((target_tex_id, target.width, target.height, target.rgba.clone()));
                 st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
                 st.viewport_configured = false;
+            }
+            if let Some((tex_id, width, height, rgba)) = rdp_texture_update {
+                crate::gfx::rdp_monitor_texture_rgba(
+                    tex_id,
+                    width,
+                    height,
+                    1,
+                    None,
+                    rgba.as_slice(),
+                );
             }
             ret
         })

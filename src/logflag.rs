@@ -35,6 +35,8 @@ pub(crate) const HTML_SHACK_VERBOSE: bool = false;
 pub(crate) const HTML_SHACK_IDLE_LOGS: bool = false;
 pub(crate) const GFX_FRAME_PROGRESS_LOGS: bool = false;
 pub(crate) const INTEL_STAGE1_LOGS: bool = true;
+pub(crate) const INTEL_RENDER_NGIN_LOGS: bool = true;
+pub(crate) const INTEL_RENDER_NGIN_BATCH_LOGS: bool = false;
 
 pub(crate) const VIRGL_DRAW_DIAGNOSTICS_LOGS: bool = false;
 pub(crate) static VIRGL_TEX_DEBUG_LOGS: AtomicU32 = AtomicU32::new(0);

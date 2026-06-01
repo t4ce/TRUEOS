@@ -69,6 +69,11 @@ struct ClientInputBuffer {
     bytes: Vec<u8>,
 }
 
+struct ClientSnapshotSeq {
+    handle: NetHandle,
+    latest_seq: u32,
+}
+
 static TRUEOS_RDP_STARTED: AtomicBool = AtomicBool::new(false);
 static TRUEOS_RDP_CLIENTS: AtomicU32 = AtomicU32::new(0);
 static TRUEOS_RDP_DROPPED_SENDS: AtomicU32 = AtomicU32::new(0);
@@ -80,6 +85,7 @@ static TRUEOS_RDP_COMMAND_QUEUE: Mutex<Option<&'static NetQueue<NetCommand>>> = 
 static TRUEOS_RDP_CLIENT_HANDLES: Mutex<Vec<NetHandle>> = Mutex::new(Vec::new());
 static TRUEOS_RDP_TEXTURE_CACHE: Mutex<Vec<CachedTexture>> = Mutex::new(Vec::new());
 static TRUEOS_RDP_SNAPSHOT_ACKS: Mutex<Vec<NetHandle>> = Mutex::new(Vec::new());
+static TRUEOS_RDP_CLIENT_SNAPSHOT_SEQS: Mutex<Vec<ClientSnapshotSeq>> = Mutex::new(Vec::new());
 
 #[inline]
 pub fn client_count() -> u32 {
@@ -330,6 +336,9 @@ fn remove_client_handle(
     TRUEOS_RDP_SNAPSHOT_ACKS
         .lock()
         .retain(|acked| *acked != handle);
+    TRUEOS_RDP_CLIENT_SNAPSHOT_SEQS
+        .lock()
+        .retain(|entry| entry.handle != handle);
     if clients.len() == before {
         return false;
     }
@@ -353,6 +362,7 @@ fn clear_client_handles(
     ready_clients.clear();
     input_buffers.clear();
     TRUEOS_RDP_SNAPSHOT_ACKS.lock().clear();
+    TRUEOS_RDP_CLIENT_SNAPSHOT_SEQS.lock().clear();
     crate::usb3::hid::remove_rdp_tablet();
     publish_client_handles(ready_clients.as_slice());
     cleared
@@ -491,6 +501,24 @@ fn texture_cache_snapshot() -> Vec<CachedTexture> {
     textures
 }
 
+fn note_client_snapshot_seq(handle: NetHandle, latest_seq: u32) {
+    let mut seqs = TRUEOS_RDP_CLIENT_SNAPSHOT_SEQS.lock();
+    if let Some(entry) = seqs.iter_mut().find(|entry| entry.handle == handle) {
+        entry.latest_seq = latest_seq;
+        return;
+    }
+    seqs.push(ClientSnapshotSeq { handle, latest_seq });
+}
+
+fn client_snapshot_seq(handle: NetHandle) -> u32 {
+    TRUEOS_RDP_CLIENT_SNAPSHOT_SEQS
+        .lock()
+        .iter()
+        .find(|entry| entry.handle == handle)
+        .map(|entry| entry.latest_seq)
+        .unwrap_or(0)
+}
+
 fn send_frame_to(
     cmds: &NetQueue<NetCommand>,
     handle: NetHandle,
@@ -564,6 +592,70 @@ async fn send_resource_snapshot(cmds: &NetQueue<NetCommand>, handle: NetHandle) 
         ),
         "asset-sync-end",
     );
+    note_client_snapshot_seq(handle, latest_seq);
+}
+
+fn send_resource_delta_since(cmds: &NetQueue<NetCommand>, handle: NetHandle, since_seq: u32) {
+    let textures: Vec<CachedTexture> = texture_cache_snapshot()
+        .into_iter()
+        .filter(|texture| texture.seq > since_seq)
+        .collect();
+    if textures.is_empty() {
+        return;
+    }
+
+    let bytes = textures
+        .iter()
+        .fold(0usize, |acc, texture| acc.saturating_add(texture.data.len()))
+        .min(u32::MAX as usize) as u32;
+    let latest_seq = textures
+        .last()
+        .map(|texture| texture.seq)
+        .unwrap_or(since_seq);
+    crate::log!(
+        "trueos-rdp: asset sync delta handle={} textures={} bytes={} since={} latest={}\n",
+        handle.0,
+        textures.len(),
+        bytes,
+        since_seq,
+        latest_seq
+    );
+
+    send_frame_to(
+        cmds,
+        handle,
+        protocol_frame(
+            MSG_RESOURCE_SNAPSHOT_BEGIN,
+            &[
+                textures.len().min(u32::MAX as usize) as u32,
+                bytes,
+                latest_seq,
+            ],
+            &[],
+        ),
+        "asset-delta-begin",
+    );
+
+    for texture in textures {
+        send_frame_to(
+            cmds,
+            handle,
+            protocol_frame(texture.msg, texture.fields.as_slice(), texture.data.as_slice()),
+            "asset-delta-texture",
+        );
+    }
+
+    send_frame_to(
+        cmds,
+        handle,
+        protocol_frame(
+            MSG_RESOURCE_SNAPSHOT_END,
+            &[cached_texture_count(), cached_texture_bytes(), latest_seq],
+            &[],
+        ),
+        "asset-delta-end",
+    );
+    note_client_snapshot_seq(handle, latest_seq);
 }
 
 pub fn publish_begin_frame(seq: u32, flags: u32, clear_rgb: u32) {
@@ -951,6 +1043,7 @@ pub async fn trueos_rdp_task() {
         for handle in acked_clients {
             if clients.contains(&handle) && !ready_clients.contains(&handle) {
                 wait_frame_stream_idle();
+                send_resource_delta_since(cmds, handle, client_snapshot_seq(handle));
                 ready_clients.push(handle);
                 publish_client_handles(ready_clients.as_slice());
                 first_frame_base = screen_frame_count();

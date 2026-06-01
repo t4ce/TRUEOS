@@ -14,6 +14,14 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
+macro_rules! intel_display_focus_log {
+    ($($arg:tt)*) => {
+        if crate::logflag::INTEL_STAGE1_LOGS || crate::logflag::INTEL_DISPLAY_NGIN_LOGS {
+            crate::log!($($arg)*);
+        }
+    };
+}
+
 macro_rules! intel_display_verbose_log {
     ($($arg:tt)*) => {
         if crate::logflag::INTEL_DISPLAY_NGIN_LOGS && !crate::logflag::INTEL_STAGE1_LOGS {
@@ -96,6 +104,36 @@ static OVERLAY_SURFACE: Mutex<Option<OverlaySurface>> = Mutex::new(None);
 static HW_LOGO_PENDING_IDS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 static HW_LOGO_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 static HW_LOGO_NEXT_STAGE: AtomicU32 = AtomicU32::new(0);
+
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct PrimarySurfaceSampleSet {
+    pub(crate) tl: u32,
+    pub(crate) center: u32,
+    pub(crate) br: u32,
+    pub(crate) apex: u32,
+    pub(crate) centroid: u32,
+    pub(crate) left: u32,
+    pub(crate) right: u32,
+}
+
+impl PrimarySurfaceSampleSet {
+    pub(crate) fn any_changed_since(self, before: Self) -> bool {
+        self.tl != before.tl
+            || self.center != before.center
+            || self.br != before.br
+            || self.apex != before.apex
+            || self.centroid != before.centroid
+            || self.left != before.left
+            || self.right != before.right
+    }
+
+    pub(crate) fn triangle_points_changed_since(self, before: Self) -> bool {
+        self.apex != before.apex
+            || self.centroid != before.centroid
+            || self.left != before.left
+            || self.right != before.right
+    }
+}
 
 struct BootLogoStage {
     name: &'static str,
@@ -704,6 +742,93 @@ pub(crate) fn primary_surface_gpu_addr() -> Option<u64> {
         .lock()
         .as_ref()
         .map(|_| crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE)
+}
+
+pub(crate) fn log_primary_surface_samples(label: &str) {
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+        return;
+    };
+    log_surface_samples(surface, label);
+}
+
+pub(crate) fn capture_primary_surface_samples() -> Option<PrimarySurfaceSampleSet> {
+    let surface = (*PRIMARY_SURFACE.lock())?;
+    capture_surface_samples(surface)
+}
+
+pub(crate) fn sample_primary_surface_pixel(x: u32, y: u32) -> Option<u32> {
+    let surface = (*PRIMARY_SURFACE.lock())?;
+    sample_surface_pixel(surface, x as usize, y as usize)
+}
+
+fn log_surface_samples(surface: PrimarySurface, label: &str) {
+    let Some(samples) = capture_surface_samples(surface) else {
+        return;
+    };
+
+    intel_display_focus_log!(
+        "intel/display: primary-samples label={} gpu=0x{:X} phys=0x{:X} pitch=0x{:X} tl=0x{:08X} center=0x{:08X} br=0x{:08X} apex=0x{:08X} centroid=0x{:08X} left=0x{:08X} right=0x{:08X}\n",
+        label,
+        crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE,
+        surface.phys,
+        surface.pitch_bytes,
+        samples.tl,
+        samples.center,
+        samples.br,
+        samples.apex,
+        samples.centroid,
+        samples.left,
+        samples.right
+    );
+}
+
+fn capture_surface_samples(surface: PrimarySurface) -> Option<PrimarySurfaceSampleSet> {
+    let width = surface.width as usize;
+    let height = surface.height as usize;
+    let pitch_bytes = surface.pitch_bytes as usize;
+    if width == 0 || height == 0 || pitch_bytes < 4 || surface.virt.is_null() {
+        return None;
+    }
+
+    let clip_to_screen = |clip_x: f32, clip_y: f32| -> (usize, usize) {
+        let sx = ((clip_x + 1.0) * 0.5 * width as f32).clamp(0.0, width.saturating_sub(1) as f32)
+            as usize;
+        let sy = ((1.0 - (clip_y + 1.0) * 0.5) * height as f32)
+            .clamp(0.0, height.saturating_sub(1) as f32) as usize;
+        (sx, sy)
+    };
+    let (apex_x, apex_y) = clip_to_screen(0.0, 0.72);
+    let (left_x, left_y) = clip_to_screen(-0.72, -0.58);
+    let (right_x, right_y) = clip_to_screen(0.72, -0.58);
+    let (centroid_x, centroid_y) = clip_to_screen(0.0, -0.15);
+
+    Some(PrimarySurfaceSampleSet {
+        tl: sample_surface_pixel(surface, 0, 0)?,
+        center: sample_surface_pixel(surface, width / 2, height / 2)?,
+        br: sample_surface_pixel(surface, width.saturating_sub(1), height.saturating_sub(1))?,
+        apex: sample_surface_pixel(surface, apex_x, apex_y)?,
+        centroid: sample_surface_pixel(surface, centroid_x, centroid_y)?,
+        left: sample_surface_pixel(surface, left_x, left_y)?,
+        right: sample_surface_pixel(surface, right_x, right_y)?,
+    })
+}
+
+fn sample_surface_pixel(surface: PrimarySurface, x: usize, y: usize) -> Option<u32> {
+    let width = surface.width as usize;
+    let height = surface.height as usize;
+    let pitch_bytes = surface.pitch_bytes as usize;
+    if width == 0 || height == 0 || pitch_bytes < 4 || surface.virt.is_null() {
+        return None;
+    }
+
+    let clamped_x = x.min(width.saturating_sub(1));
+    let clamped_y = y.min(height.saturating_sub(1));
+    let byte_offset = clamped_y
+        .checked_mul(pitch_bytes)?
+        .checked_add(clamped_x.checked_mul(4)?)?;
+    let sample_ptr = unsafe { surface.virt.add(byte_offset) };
+    crate::intel::dma_flush(sample_ptr, core::mem::size_of::<u32>());
+    Some(unsafe { core::ptr::read_volatile(sample_ptr as *const u32) })
 }
 
 pub(super) fn primary_surface_gpgpu_marker_target() -> Option<PrimarySurfaceGpgpuTarget> {
@@ -1508,6 +1633,115 @@ fn program_primary_plane_and_wait(
     );
 
     (ctl_before, ctl_enabled, surf_live_after, live_iters)
+}
+
+pub(crate) fn kick_primary_surface_scanout(label: &str) -> bool {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return false;
+    };
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+        return false;
+    };
+
+    let pos_off = surface.pipe.plane_ctl_off + UNI_PLANE_POS_OFF;
+    let size_off = surface.pipe.plane_ctl_off + UNI_PLANE_SIZE_OFF;
+    let pos_before = crate::intel::mmio_read(dev, pos_off);
+    let size_before = crate::intel::mmio_read(dev, size_off);
+    let stride_before = crate::intel::mmio_read(dev, surface.pipe.plane_stride_off);
+    let surf_before = crate::intel::mmio_read(dev, surface.pipe.plane_surf_off);
+    let live_before = crate::intel::mmio_read(dev, surface.pipe.plane_surf_live_off);
+    let Some(surface_reg) = u32::try_from(crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE).ok() else {
+        return false;
+    };
+
+    let (_, _, live_after, iter) = program_primary_plane_and_wait(
+        dev,
+        surface.pipe,
+        surface.width,
+        surface.height,
+        surface.pitch_bytes,
+        surface_reg,
+        label,
+    );
+    let pos_after = crate::intel::mmio_read(dev, pos_off);
+    let size_after = crate::intel::mmio_read(dev, size_off);
+    let stride_after = crate::intel::mmio_read(dev, surface.pipe.plane_stride_off);
+    let surf_after = crate::intel::mmio_read(dev, surface.pipe.plane_surf_off);
+
+    intel_display_verbose_log!(
+        "intel/display: primary-scanout-kick label={} pipe={} stride_before=0x{:08X} stride_after=0x{:08X} size_before=0x{:08X} size_after=0x{:08X} pos_before=0x{:08X} pos_after=0x{:08X} surf_before=0x{:08X} surf_after=0x{:08X} live_before=0x{:08X} live_after=0x{:08X} iter={}\n",
+        label,
+        surface.pipe.name,
+        stride_before,
+        stride_after,
+        size_before,
+        size_after,
+        pos_before,
+        pos_after,
+        surf_before,
+        surf_after,
+        live_before,
+        live_after,
+        iter
+    );
+
+    live_after == surface_reg
+}
+
+pub(crate) fn log_pipe_live_scanout_state(label: &str) {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return;
+    };
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+        return;
+    };
+    let pipe = surface.pipe;
+    let pipe_src_raw = crate::intel::mmio_read(dev, pipe.pipe_src_off);
+    let (pipe_w, pipe_h) = decode_pipe_src(pipe_src_raw).unwrap_or((0, 0));
+    intel_display_verbose_log!(
+        "intel/display: live-scanout label={} pipe={} pipe_src=0x{:08X} dims={}x{} primary_surf_gpu=0x{:08X}\n",
+        label,
+        pipe.name,
+        pipe_src_raw,
+        pipe_w,
+        pipe_h,
+        crate::intel::mmio_read(dev, pipe.plane_surf_off)
+    );
+
+    let mut slot = 0usize;
+    while slot < UNIVERSAL_PLANE_SLOTS {
+        let plane_base = pipe.plane_ctl_off + slot.saturating_mul(UNI_PLANE_SLOT_STRIDE);
+        let ctl = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_CTL_OFF);
+        let stride = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_STRIDE_OFF);
+        let pos = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_POS_OFF);
+        let size = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SIZE_OFF);
+        let surf = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURF_OFF);
+        let surf_live = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURFLIVE_OFF);
+        let color_ctl = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_COLOR_CTL_OFF);
+        let buf_cfg = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_BUF_CFG_OFF);
+        intel_display_verbose_log!(
+            "intel/display: live-plane label={} pipe={} slot={} enabled={} format={} tiled={} rot={} rgbx={} stride=0x{:08X} pos={}x{} size={}x{} surf=0x{:08X} surf_live=0x{:08X} color_ctl=0x{:08X} color_alpha={} buf_cfg=0x{:08X}\n",
+            label,
+            pipe.name,
+            slot,
+            ((ctl & PLANE_CTL_ENABLE) != 0) as u8,
+            decode_plane_format(ctl),
+            decode_plane_tiling(ctl),
+            decode_plane_rotation(ctl),
+            ((ctl & PLANE_CTL_ORDER_RGBX) != 0) as u8,
+            stride,
+            decode_xy_x(pos),
+            decode_xy_y(pos),
+            decode_xy_x(size).saturating_add(1),
+            decode_xy_y(size).saturating_add(1),
+            surf,
+            surf_live,
+            color_ctl,
+            decode_plane_color_alpha(color_ctl),
+            buf_cfg
+        );
+        slot += 1;
+    }
 }
 
 fn log_primary_scanout_pte_window(dev: crate::intel::Dev, label: &str, byte_len: usize) {
