@@ -258,6 +258,24 @@ fn prepare_triangle_draw_resources(
     rect_w: usize,
     rect_h: usize,
 ) -> Option<TriangleDrawPrep> {
+    prepare_triangle_draw_resources_with_geometry(
+        warm,
+        dst_gpu_addr,
+        pitch,
+        rect_w,
+        rect_h,
+        VfPrimitiveGeometry::Canonical,
+    )
+}
+
+fn prepare_triangle_draw_resources_with_geometry(
+    warm: RenderWarmState,
+    dst_gpu_addr: u64,
+    pitch: usize,
+    rect_w: usize,
+    rect_h: usize,
+    geometry: VfPrimitiveGeometry,
+) -> Option<TriangleDrawPrep> {
     let target_w = u32::try_from(rect_w).ok()?;
     let target_h = u32::try_from(rect_h).ok()?;
     let rt_pitch = u32::try_from(pitch).ok()?;
@@ -268,7 +286,7 @@ fn prepare_triangle_draw_resources(
         return None;
     }
 
-    let vertex_proof = write_canonical_triangle_vertices(warm)?;
+    let vertex_proof = write_triangle_vertices(warm, geometry)?;
 
     unsafe {
         core::ptr::write_bytes(warm.draw_state_virt, 0, warm.draw_state_len);
@@ -287,10 +305,11 @@ fn prepare_triangle_draw_resources(
     })
 }
 
-fn write_canonical_triangle_vertices(warm: RenderWarmState) -> Option<TriangleVertexUploadProof> {
-    const TRIANGLE_NDC: [[f32; TRIANGLE_DRAW_VERTEX_DWORDS]; TRIANGLE_DRAW_VERTICES] =
-        [[-0.25, -0.20, 0.0], [0.25, -0.20, 0.0], [0.00, 0.20, 0.0]];
-
+fn write_triangle_vertices(
+    warm: RenderWarmState,
+    geometry: VfPrimitiveGeometry,
+) -> Option<TriangleVertexUploadProof> {
+    let tri = geometry.vertices();
     let byte_len = TRIANGLE_DRAW_VERTICES * TRIANGLE_DRAW_VERTEX_STRIDE;
     if warm.vertex_len < byte_len || warm.vertex_virt.is_null() {
         return None;
@@ -320,13 +339,13 @@ fn write_canonical_triangle_vertices(warm: RenderWarmState) -> Option<TriangleVe
     for (dst, src) in vertices
         .chunks_exact_mut(TRIANGLE_DRAW_VERTEX_DWORDS)
         .take(TRIANGLE_DRAW_VERTICES)
-        .zip(TRIANGLE_NDC.iter())
+        .zip(tri.iter())
     {
         dst.copy_from_slice(src);
     }
 
     let mut expected = [0u32; TRIANGLE_DRAW_VERTICES * TRIANGLE_DRAW_VERTEX_DWORDS];
-    for (dst, src) in expected.iter_mut().zip(TRIANGLE_NDC.iter().flatten()) {
+    for (dst, src) in expected.iter_mut().zip(tri.iter().flatten()) {
         *dst = src.to_bits();
     }
 
@@ -340,13 +359,13 @@ fn write_canonical_triangle_vertices(warm: RenderWarmState) -> Option<TriangleVe
 
     crate::intel::dma_flush(warm.vertex_virt, byte_len);
 
-    let signed_area_2x = (TRIANGLE_NDC[1][0] - TRIANGLE_NDC[0][0])
-        * (TRIANGLE_NDC[2][1] - TRIANGLE_NDC[0][1])
-        - (TRIANGLE_NDC[2][0] - TRIANGLE_NDC[0][0]) * (TRIANGLE_NDC[1][1] - TRIANGLE_NDC[0][1]);
+    let signed_area_2x = (tri[1][0] - tri[0][0]) * (tri[2][1] - tri[0][1])
+        - (tri[2][0] - tri[0][0]) * (tri[1][1] - tri[0][1]);
 
     intel_render_focus_log!(
-        "intel/render: vertex-upload-proof accepted={} stage=cpu-write-readback bytes={} stride={} count={} gpu=0x{:X} readback_ok={} flush=1 area2={:.3} winding={} v0=[{:.3},{:.3},{:.3}] v1=[{:.3},{:.3},{:.3}] v2=[{:.3},{:.3},{:.3}] does_not_prove=vf_fetch\n",
+        "intel/render: vertex-upload-proof accepted={} stage=cpu-write-readback geometry={} bytes={} stride={} count={} gpu=0x{:X} readback_ok={} flush=1 area2={:.3} winding={} v0=[{:.3},{:.3},{:.3}] v1=[{:.3},{:.3},{:.3}] v2=[{:.3},{:.3},{:.3}] does_not_prove=vf_fetch\n",
         cpu_readback_ok as u8,
+        geometry.label(),
         byte_len,
         TRIANGLE_DRAW_VERTEX_STRIDE,
         TRIANGLE_DRAW_VERTICES,
@@ -354,15 +373,15 @@ fn write_canonical_triangle_vertices(warm: RenderWarmState) -> Option<TriangleVe
         cpu_readback_ok as u8,
         signed_area_2x,
         if signed_area_2x >= 0.0 { "ccw" } else { "cw" },
-        TRIANGLE_NDC[0][0],
-        TRIANGLE_NDC[0][1],
-        TRIANGLE_NDC[0][2],
-        TRIANGLE_NDC[1][0],
-        TRIANGLE_NDC[1][1],
-        TRIANGLE_NDC[1][2],
-        TRIANGLE_NDC[2][0],
-        TRIANGLE_NDC[2][1],
-        TRIANGLE_NDC[2][2],
+        tri[0][0],
+        tri[0][1],
+        tri[0][2],
+        tri[1][0],
+        tri[1][1],
+        tri[1][2],
+        tri[2][0],
+        tri[2][1],
+        tri[2][2],
     );
 
     Some(TriangleVertexUploadProof {

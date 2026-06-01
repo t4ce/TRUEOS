@@ -1654,11 +1654,14 @@ fn log_triangle_named_proofs(
     let raster_marker_ok = post_raster_marker == RCS_EXEC_RESULT_DRAW_POST_RASTER;
     let vf_accept = delta.ia_vertices > 0 || delta.ia_primitives > 0;
     let vs_accept = delta.vs_invocations > 0;
-    let clip_raster_accept = delta.cl_invocations > 0 || delta.cl_primitives > 0;
     let ps_accept = delta.ps_invocations > 0 || delta.cps_invocations > 0 || delta.ps_depth > 0;
-    let clip_accept = delta.cl_invocations > 0 || delta.cl_primitives > 0;
+    let clip_counter_accept = delta.cl_invocations > 0 || delta.cl_primitives > 0;
     let raster_packet_accept = clip_marker_ok && raster_marker_ok;
-    let ps_launch_input_ready = ps_state_marker_ok && raster_packet_accept && clip_accept;
+    let clip_counter_required = fragment_probe_requires_clip_counter(submit_name);
+    let clip_input_accept =
+        clip_counter_accept || (!clip_counter_required && clip_marker_ok && raster_marker_ok);
+    let clip_raster_accept = clip_input_accept && raster_packet_accept;
+    let ps_launch_input_ready = ps_state_marker_ok && raster_packet_accept && clip_input_accept;
     let sc_instdone = crate::intel::mmio_read(dev, SC_INSTDONE);
     let sc_extra = crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA);
     let sc_extra2 = crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA2);
@@ -1677,7 +1680,13 @@ fn log_triangle_named_proofs(
     paint_fixed_function_album_tile(
         2,
         "CL",
-        if clip_accept { 1 } else { 2 },
+        if clip_input_accept {
+            1
+        } else if clip_counter_required {
+            2
+        } else {
+            0
+        },
         [
             delta.cl_invocations.min(u32::MAX as u64) as u32,
             delta.cl_primitives.min(u32::MAX as u64) as u32,
@@ -1692,7 +1701,7 @@ fn log_triangle_named_proofs(
         [
             clip_marker_ok as u32,
             raster_marker_ok as u32,
-            clip_accept as u32,
+            clip_input_accept as u32,
             completed as u32,
         ],
     );
@@ -1732,19 +1741,22 @@ fn log_triangle_named_proofs(
         vs_marker_ok as u8,
     );
     intel_render_focus_log!(
-        "intel/render: {} clip-raster-proof accepted={} cl_delta={} cl_prim_delta={} post_clip=0x{:08X} post_raster=0x{:08X} packet_markers={} does_not_prove=ps_or_rt_write\n",
+        "intel/render: {} clip-raster-proof accepted={} cl_delta={} cl_prim_delta={} clip_counter_required={} clip_input={} post_clip=0x{:08X} post_raster=0x{:08X} packet_markers={} does_not_prove=ps_or_rt_write\n",
         submit_name,
         clip_raster_accept as u8,
         delta.cl_invocations,
         delta.cl_primitives,
+        clip_counter_required as u8,
+        clip_input_accept as u8,
         post_clip_marker,
         post_raster_marker,
         (clip_marker_ok && raster_marker_ok) as u8,
     );
     intel_render_focus_log!(
-        "intel/render: {} clip-counter-proof accepted={} cl_delta={} cl_prim_delta={} does_not_prove=raster_samples_or_ps\n",
+        "intel/render: {} clip-counter-proof accepted={} required={} cl_delta={} cl_prim_delta={} does_not_prove=raster_samples_or_ps\n",
         submit_name,
-        clip_accept as u8,
+        clip_counter_accept as u8,
+        clip_counter_required as u8,
         delta.cl_invocations,
         delta.cl_primitives,
     );
@@ -1754,13 +1766,13 @@ fn log_triangle_named_proofs(
         raster_packet_accept as u8,
         post_clip_marker,
         post_raster_marker,
-        clip_accept as u8,
+        clip_input_accept as u8,
         sc_instdone,
         sc_extra,
         sc_extra2,
     );
     if is_fragment_candidate_submit_name(submit_name) {
-        let candidate_ready = clip_accept
+        let candidate_ready = clip_input_accept
             && raster_packet_accept
             && delta.ps_invocations == 0
             && delta.cps_invocations == 0
@@ -1770,12 +1782,14 @@ fn log_triangle_named_proofs(
         record_fragment_boundary_probe(candidate_ready, fragment_observed);
         record_wm_psd_boundary_probe(false, fragment_observed);
         intel_render_focus_log!(
-            "intel/render: {} fragment-candidate-proof accepted={} candidate_ready={} candidate_shape={} clip_counter={} raster_packet={} ps_state_marker={} fragment_observed={} ps_delta={} cps_delta={} ps_depth_delta={} observable=no_dedicated_fragment_counter_yet does_not_prove=rt_write\n",
+            "intel/render: {} fragment-candidate-proof accepted={} candidate_ready={} candidate_shape={} clip_counter={} clip_counter_required={} clip_input={} raster_packet={} ps_state_marker={} fragment_observed={} ps_delta={} cps_delta={} ps_depth_delta={} observable=no_dedicated_fragment_counter_yet does_not_prove=rt_write\n",
             submit_name,
             candidate_ready as u8,
             candidate_ready as u8,
             fragment_candidate_shape_label(submit_name),
-            clip_accept as u8,
+            clip_counter_accept as u8,
+            clip_counter_required as u8,
+            clip_input_accept as u8,
             raster_packet_accept as u8,
             ps_state_marker_ok as u8,
             fragment_observed as u8,
@@ -1791,7 +1805,7 @@ fn log_triangle_named_proofs(
         ps_launch_input_ready as u8,
         ps_state_marker_ok as u8,
         raster_packet_accept as u8,
-        clip_accept as u8,
+        clip_input_accept as u8,
         delta.ps_invocations,
         delta.cps_invocations,
         delta.ps_depth,
@@ -1804,7 +1818,7 @@ fn log_triangle_named_proofs(
             ps_launch_input_ready as u8,
             ps_state_marker_ok as u8,
             raster_packet_accept as u8,
-            clip_accept as u8,
+            clip_input_accept as u8,
             delta.ps_invocations,
             delta.cps_invocations,
             delta.ps_depth,
@@ -1817,7 +1831,7 @@ fn log_triangle_named_proofs(
             ps_launch_input_ready as u8,
             ps_state_marker_ok as u8,
             raster_packet_accept as u8,
-            clip_accept as u8,
+            clip_input_accept as u8,
             delta.ps_invocations,
             delta.cps_invocations,
             delta.ps_depth,
@@ -1830,7 +1844,7 @@ fn log_triangle_named_proofs(
             ps_launch_input_ready as u8,
             ps_state_marker_ok as u8,
             raster_packet_accept as u8,
-            clip_accept as u8,
+            clip_input_accept as u8,
             delta.ps_invocations,
             delta.cps_invocations,
             delta.ps_depth,
@@ -1843,7 +1857,7 @@ fn log_triangle_named_proofs(
             ps_launch_input_ready as u8,
             ps_state_marker_ok as u8,
             raster_packet_accept as u8,
-            clip_accept as u8,
+            clip_input_accept as u8,
             delta.ps_invocations,
             delta.cps_invocations,
             delta.ps_depth,
@@ -1856,7 +1870,7 @@ fn log_triangle_named_proofs(
             ps_launch_input_ready as u8,
             ps_state_marker_ok as u8,
             raster_packet_accept as u8,
-            clip_accept as u8,
+            clip_input_accept as u8,
             delta.ps_invocations,
             delta.cps_invocations,
             delta.ps_depth,
@@ -1877,7 +1891,7 @@ fn log_triangle_named_proofs(
             slot,
             ps_state_marker_ok as u8,
             raster_packet_accept as u8,
-            clip_accept as u8,
+            clip_input_accept as u8,
             delta.ps_invocations,
             delta.cps_invocations,
             delta.ps_depth,
@@ -1899,7 +1913,7 @@ fn log_triangle_named_proofs(
             payload_variant,
             ps_state_marker_ok as u8,
             raster_packet_accept as u8,
-            clip_accept as u8,
+            clip_input_accept as u8,
             delta.ps_invocations,
             delta.cps_invocations,
             delta.ps_depth,
@@ -1921,7 +1935,7 @@ fn log_triangle_named_proofs(
             grf_variant,
             ps_state_marker_ok as u8,
             raster_packet_accept as u8,
-            clip_accept as u8,
+            clip_input_accept as u8,
             delta.ps_invocations,
             delta.cps_invocations,
             delta.ps_depth,
@@ -1940,11 +1954,27 @@ fn log_triangle_named_proofs(
 }
 
 fn fragment_candidate_shape_label(submit_name: &str) -> &'static str {
-    if submit_name == "raster-wm-oa-probe" {
+    if matches!(
+        submit_name,
+        "raster-wm-oa-probe" | "real-vs-raster-wm-oa-probe"
+    ) {
         "screen-space-8x8"
     } else {
         "oversized"
     }
+}
+
+fn fragment_probe_requires_clip_counter(submit_name: &str) -> bool {
+    !matches!(
+        submit_name,
+        "raster-wm-oa-probe"
+            | "real-vs-raster-wm-oa-probe"
+            | "real-vs-ndc-raster-wm-oa-probe"
+            | "real-vs-ndc-walk16-raster-wm-oa-probe"
+            | "real-vs-ndc-perpoly-raster-wm-oa-probe"
+            | "real-vs-ndc-no-scissor-raster-wm-oa-probe"
+            | "real-vs-ndc-ms-raster-wm-oa-probe"
+    )
 }
 
 fn maybe_soft_accept_streamout_submit(

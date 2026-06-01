@@ -34,7 +34,7 @@ pub async fn usb_controller_service_task() {
     let Some(news) = probe_devices_with_log(&mut host, "initial").await else {
         return;
     };
-    open_and_handoff_devices(&mut host, news).await;
+    open_and_handoff_devices(&mut host, news, &spawner).await;
 }
 
 async fn probe_devices_with_log(
@@ -67,18 +67,33 @@ async fn probe_devices_with_log(
 async fn open_and_handoff_devices(
     host: &mut crabusb::USBHost,
     news: alloc::vec::Vec<crabusb::ProbedDevice>,
+    spawner: &embassy_executor::Spawner,
 ) {
     for new in news {
         log_probed_device("probed", &new);
         match new {
             crabusb::ProbedDevice::Device(info) => {
                 let desc = info.descriptor();
-                if desc.vendor_id != 0x152e || desc.product_id != 0x7001 {
+                let vendor_id = desc.vendor_id;
+                let product_id = desc.product_id;
+                if hid::boot::maybe_start_hid_boot_streams(
+                    host,
+                    &info,
+                    spawner,
+                    CRABUSB_CONTROLLER_ID,
+                    false,
+                )
+                .await
+                {
+                    continue;
+                }
+
+                if vendor_id != 0x152e || product_id != 0x7001 {
                     crate::log!(
-                        "crabusb: device id={} ignored reason=usb3-skhynix-only vid={:04x} pid={:04x}\n",
+                        "crabusb: device id={} ignored reason=no-usb3-driver vid={:04x} pid={:04x}\n",
                         info.id(),
-                        desc.vendor_id,
-                        desc.product_id
+                        vendor_id,
+                        product_id
                     );
                     continue;
                 }
