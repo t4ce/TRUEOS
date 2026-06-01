@@ -35,6 +35,17 @@ pub async fn usb_controller_service_task() {
         return;
     };
     open_and_handoff_devices(&mut host, news, &spawner).await;
+
+    loop {
+        embassy_time::Timer::after(embassy_time::Duration::from_millis(500)).await;
+        let Some(news) = probe_devices_with_log(&mut host, "rescan").await else {
+            continue;
+        };
+        if news.is_empty() {
+            continue;
+        }
+        open_and_handoff_devices(&mut host, news, &spawner).await;
+    }
 }
 
 async fn probe_devices_with_log(
@@ -60,7 +71,9 @@ async fn probe_devices_with_log(
             return None;
         }
     };
-    crate::log!("crabusb: probe_devices label={} count={}\n", label, news.len());
+    if label == "initial" || !news.is_empty() {
+        crate::log!("crabusb: probe_devices label={} count={}\n", label, news.len());
+    }
     Some(news)
 }
 
