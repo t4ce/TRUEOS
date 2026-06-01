@@ -91,67 +91,172 @@ fn paint_expected_wm_input_album_tile(
     const VIS_H: usize = 16;
     let mut pixels = [0xFF202530u32; VIS_W * VIS_H];
     let tri = geometry.vertices();
-    let mut screen = [[0.0f32; 2]; TRIANGLE_DRAW_VERTICES];
+    let mut ndc_viewport_screen = [[0.0f32; 2]; TRIANGLE_DRAW_VERTICES];
+    let mut pretransformed_screen = [[0.0f32; 2]; TRIANGLE_DRAW_VERTICES];
     for idx in 0..TRIANGLE_DRAW_VERTICES {
-        screen[idx][0] = (tri[idx][0] * 0.5 + 0.5) * draw.target_w as f32;
-        screen[idx][1] = (-tri[idx][1] * 0.5 + 0.5) * draw.target_h as f32;
+        ndc_viewport_screen[idx][0] = (tri[idx][0] * 0.5 + 0.5) * draw.target_w as f32;
+        ndc_viewport_screen[idx][1] = (-tri[idx][1] * 0.5 + 0.5) * draw.target_h as f32;
+        pretransformed_screen[idx][0] = tri[idx][0];
+        pretransformed_screen[idx][1] = tri[idx][1];
     }
-
-    let area = edge_function(screen[0], screen[1], screen[2]);
-    let mut expected_samples = 0u32;
-    let mut min_x = VIS_W;
-    let mut min_y = VIS_H;
-    let mut max_x = 0usize;
-    let mut max_y = 0usize;
-    if area != 0.0 {
-        for y in 0..VIS_H {
-            for x in 0..VIS_W {
-                let sample = [
-                    ((x as f32 + 0.5) * draw.target_w as f32) / VIS_W as f32,
-                    ((y as f32 + 0.5) * draw.target_h as f32) / VIS_H as f32,
-                ];
-                let w0 = edge_function(screen[1], screen[2], sample);
-                let w1 = edge_function(screen[2], screen[0], sample);
-                let w2 = edge_function(screen[0], screen[1], sample);
-                let inside = if area > 0.0 {
-                    w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0
-                } else {
-                    w0 <= 0.0 && w1 <= 0.0 && w2 <= 0.0
-                };
-                if inside {
-                    expected_samples += 1;
-                    min_x = min_x.min(x);
-                    min_y = min_y.min(y);
-                    max_x = max_x.max(x);
-                    max_y = max_y.max(y);
-                    pixels[y * VIS_W + x] = 0xFF3BCF86;
-                }
-            }
-        }
-    }
+    let ndc_ref = coverage_reference(ndc_viewport_screen, draw, VIS_W, VIS_H, None);
+    let screen_ref = coverage_reference(
+        pretransformed_screen,
+        draw,
+        VIS_W,
+        VIS_H,
+        if geometry.pretransformed_screen_space() {
+            Some(&mut pixels)
+        } else {
+            None
+        },
+    );
+    let active_ref = if geometry.pretransformed_screen_space() {
+        screen_ref
+    } else {
+        coverage_reference(ndc_viewport_screen, draw, VIS_W, VIS_H, Some(&mut pixels))
+    };
 
     paint_render_album_argb_tile(
         9,
         "WM IN",
-        if expected_samples != 0 { 3 } else { 2 },
+        if active_ref.expected_samples != 0 {
+            3
+        } else {
+            2
+        },
         VIS_W as u32,
         VIS_H as u32,
         &pixels,
     );
     intel_render_focus_log!(
-        "intel/render: {} wm-input-reference geometry={} target={}x{} sample_grid={}x{} expected_samples={} bbox={}x{}..{}x{} source=cpu-viewport-scissor-reference slot=9 does_not_prove=wm_coverage\n",
+        "intel/render: {} wm-input-reference geometry={} target={}x{} sample_grid={}x{} active_interpretation={} expected_samples={} bbox={}x{}..{}x{} source=cpu-active-reference slot=9 does_not_prove=wm_coverage\n",
         submit_name,
         geometry.label(),
         draw.target_w,
         draw.target_h,
         VIS_W,
         VIS_H,
-        expected_samples,
-        if expected_samples == 0 { 0 } else { min_x },
-        if expected_samples == 0 { 0 } else { min_y },
-        if expected_samples == 0 { 0 } else { max_x },
-        if expected_samples == 0 { 0 } else { max_y },
+        if geometry.pretransformed_screen_space() {
+            "pretransformed-screen-space"
+        } else {
+            "ndc-viewport-transform"
+        },
+        active_ref.expected_samples,
+        active_ref.logged_min_x(),
+        active_ref.logged_min_y(),
+        active_ref.logged_max_x(),
+        active_ref.logged_max_y(),
     );
+    intel_render_focus_log!(
+        "intel/render: {} wm-input-reference-compare geometry={} target={}x{} sample_grid={}x{} ndc_viewport_samples={} ndc_bbox={}x{}..{}x{} pretransformed_screen_samples={} pretransformed_bbox={}x{}..{}x{} reason=PerspectiveDivideDisable_ambiguity\n",
+        submit_name,
+        geometry.label(),
+        draw.target_w,
+        draw.target_h,
+        VIS_W,
+        VIS_H,
+        ndc_ref.expected_samples,
+        ndc_ref.logged_min_x(),
+        ndc_ref.logged_min_y(),
+        ndc_ref.logged_max_x(),
+        ndc_ref.logged_max_y(),
+        screen_ref.expected_samples,
+        screen_ref.logged_min_x(),
+        screen_ref.logged_min_y(),
+        screen_ref.logged_max_x(),
+        screen_ref.logged_max_y(),
+    );
+}
+
+#[derive(Copy, Clone)]
+struct CoverageRef {
+    expected_samples: u32,
+    min_x: usize,
+    min_y: usize,
+    max_x: usize,
+    max_y: usize,
+}
+
+impl CoverageRef {
+    fn logged_min_x(self) -> usize {
+        if self.expected_samples == 0 {
+            0
+        } else {
+            self.min_x
+        }
+    }
+
+    fn logged_min_y(self) -> usize {
+        if self.expected_samples == 0 {
+            0
+        } else {
+            self.min_y
+        }
+    }
+
+    fn logged_max_x(self) -> usize {
+        if self.expected_samples == 0 {
+            0
+        } else {
+            self.max_x
+        }
+    }
+
+    fn logged_max_y(self) -> usize {
+        if self.expected_samples == 0 {
+            0
+        } else {
+            self.max_y
+        }
+    }
+}
+
+fn coverage_reference(
+    screen: [[f32; 2]; TRIANGLE_DRAW_VERTICES],
+    draw: TriangleDrawPrep,
+    vis_w: usize,
+    vis_h: usize,
+    mut pixels: Option<&mut [u32]>,
+) -> CoverageRef {
+    let area = edge_function(screen[0], screen[1], screen[2]);
+    let mut result = CoverageRef {
+        expected_samples: 0,
+        min_x: vis_w,
+        min_y: vis_h,
+        max_x: 0,
+        max_y: 0,
+    };
+    if area == 0.0 {
+        return result;
+    }
+    for y in 0..vis_h {
+        for x in 0..vis_w {
+            let sample = [
+                ((x as f32 + 0.5) * draw.target_w as f32) / vis_w as f32,
+                ((y as f32 + 0.5) * draw.target_h as f32) / vis_h as f32,
+            ];
+            let w0 = edge_function(screen[1], screen[2], sample);
+            let w1 = edge_function(screen[2], screen[0], sample);
+            let w2 = edge_function(screen[0], screen[1], sample);
+            let inside = if area > 0.0 {
+                w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0
+            } else {
+                w0 <= 0.0 && w1 <= 0.0 && w2 <= 0.0
+            };
+            if inside {
+                result.expected_samples += 1;
+                result.min_x = result.min_x.min(x);
+                result.min_y = result.min_y.min(y);
+                result.max_x = result.max_x.max(x);
+                result.max_y = result.max_y.max(y);
+                if let Some(buf) = pixels.as_deref_mut() {
+                    buf[y * vis_w + x] = 0xFF3BCF86;
+                }
+            }
+        }
+    }
+    result
 }
 
 fn edge_function(a: [f32; 2], b: [f32; 2], p: [f32; 2]) -> f32 {
@@ -843,9 +948,62 @@ fn device_is_gfx125(device_id: u16) -> bool {
 fn decode_clip_mode_name(mode: u32) -> &'static str {
     match mode {
         0 => "CLIPMODE_NORMAL",
+        1 => "CLIPMODE_CLIP_ALL",
+        2 => "CLIPMODE_CLIP_NON_REJECT",
         3 => "CLIPMODE_REJECT_ALL",
         4 => "CLIPMODE_ACCEPT_ALL",
         _ => "unknown",
+    }
+}
+
+fn decode_clip_mode_action(mode: u32) -> &'static str {
+    match mode {
+        0 => "normal-classification",
+        1 => "spawn-clip-thread-all",
+        2 => "spawn-clip-thread-non-rejected",
+        3 => "discard-all",
+        4 => "passthru-non-bad",
+        _ => "unknown",
+    }
+}
+
+fn clip_mode_thread_expected(mode: u32) -> bool {
+    matches!(mode, 1 | 2)
+}
+
+fn decode_wm_force_mode(mode: u32) -> &'static str {
+    match mode {
+        0 => "Normal",
+        1 => "ForceOff",
+        2 => "ForceON",
+        _ => "Reserved",
+    }
+}
+
+fn decode_wm_eds_mode(mode: u32) -> &'static str {
+    match mode {
+        0 => "EDSC_NORMAL",
+        1 => "EDSC_PSEXEC",
+        2 => "EDSC_PREPS",
+        _ => "Reserved",
+    }
+}
+
+fn decode_wm_position_zw_mode(mode: u32) -> &'static str {
+    match mode {
+        0 => "INTERP_PIXEL",
+        2 => "INTERP_CENTROID",
+        3 => "INTERP_SAMPLE",
+        _ => "Reserved",
+    }
+}
+
+fn decode_wm_walk_granularity(mode: u32) -> &'static str {
+    match mode {
+        0 => "16x16",
+        1 => "32x32",
+        2 => "64x64",
+        _ => "Reserved",
     }
 }
 
@@ -899,6 +1057,44 @@ fn decode_front_winding_name(bit: u32) -> &'static str {
         1 => "ccw",
         _ => "unknown",
     }
+}
+
+fn decode_raster_api_mode_name(mode: u32) -> &'static str {
+    match mode {
+        0 => "DX9/OGL",
+        1 => "DX10.0",
+        2 => "DX10.1+",
+        _ => "reserved",
+    }
+}
+
+fn decode_ms_raster_mode_name(mode: u32) -> &'static str {
+    match mode {
+        0 => "off-pixel",
+        1 => "off-pattern",
+        2 => "on-pixel",
+        3 => "on-pattern",
+        _ => "unknown",
+    }
+}
+
+fn decode_forced_sample_count_name(mode: u32) -> &'static str {
+    match mode {
+        0 => "NUMRASTSAMPLES_0",
+        1 => "NUMRASTSAMPLES_1",
+        2 => "NUMRASTSAMPLES_2",
+        3 => "NUMRASTSAMPLES_4",
+        4 => "NUMRASTSAMPLES_8",
+        5 => "NUMRASTSAMPLES_16",
+        _ => "reserved",
+    }
+}
+
+fn decode_forced_wm_int_ms_raster_mode_name(force_multisampling: bool, mode: u32) -> &'static str {
+    if !force_multisampling {
+        return "table-derived";
+    }
+    decode_ms_raster_mode_name(mode)
 }
 
 fn decode_wm_force_thread_dispatch_name(mode: u32) -> &'static str {
@@ -1574,10 +1770,11 @@ fn log_triangle_named_proofs(
         record_fragment_boundary_probe(candidate_ready, fragment_observed);
         record_wm_psd_boundary_probe(false, fragment_observed);
         intel_render_focus_log!(
-            "intel/render: {} fragment-candidate-proof accepted={} candidate_ready={} oversized=1 clip_counter={} raster_packet={} ps_state_marker={} fragment_observed={} ps_delta={} cps_delta={} ps_depth_delta={} observable=no_dedicated_fragment_counter_yet does_not_prove=rt_write\n",
+            "intel/render: {} fragment-candidate-proof accepted={} candidate_ready={} candidate_shape={} clip_counter={} raster_packet={} ps_state_marker={} fragment_observed={} ps_delta={} cps_delta={} ps_depth_delta={} observable=no_dedicated_fragment_counter_yet does_not_prove=rt_write\n",
             submit_name,
             candidate_ready as u8,
             candidate_ready as u8,
+            fragment_candidate_shape_label(submit_name),
             clip_accept as u8,
             raster_packet_accept as u8,
             ps_state_marker_ok as u8,
@@ -1740,6 +1937,14 @@ fn log_triangle_named_proofs(
         ps_state_marker_ok as u8,
         completed as u8,
     );
+}
+
+fn fragment_candidate_shape_label(submit_name: &str) -> &'static str {
+    if submit_name == "raster-wm-oa-probe" {
+        "screen-space-8x8"
+    } else {
+        "oversized"
+    }
 }
 
 fn maybe_soft_accept_streamout_submit(

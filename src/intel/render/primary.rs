@@ -308,8 +308,8 @@ fn submit_primary_triangle_with_retries(
         8,
         8,
         TriangleBlendProbeMode::MesaZeroedState,
-        VfPrimitiveGeometry::Oversized,
-        BackendProbeMode::RasterWmInputOa,
+        VfPrimitiveGeometry::ScreenSpace8x8,
+        BackendProbeMode::RasterWmInputOaForceOnPattern,
         PostDrawSyncVariant::LightPostSyncNoCs,
     );
     intel_render_verbose_log!(
@@ -749,7 +749,7 @@ fn log_primary_frontier_summary(
     let (problem, suspect, next_probe) = if !wm_coverage_observed && fragment_candidate_ready {
         (
             "fixed-function-raster-does-not-report-wm-coverage",
-            "viewport-raster-scissor-sample-mask-or-wm-coverage-programming",
+            "sf-to-wm-raster-state-not-vf-geometry",
             "instrument-wm-coverage",
         )
     } else if wm_coverage_observed && !psd_dispatch_observed {
@@ -773,7 +773,7 @@ fn log_primary_frontier_summary(
     };
 
     intel_render_focus_log!(
-        "intel/render: primary-problem last_proven={} first_missing={} problem={} suspect={} next_probe={} note=vs_hs_ds_gs_zero_is_expected_for_vf_synthesized_vue\n",
+        "intel/render: primary-problem last_proven={} first_missing={} problem={} suspect={} next_probe={} note=vs_hs_ds_gs_zero_is_expected_for_vf_synthesized_vue;screen_space_probe_expected_coverage_rules_out_vf_geometry\n",
         first_good,
         first_bad,
         problem,
@@ -969,6 +969,14 @@ fn submit_triangle_vf_draw_to_surface(
             geometry.label(),
             draw.target_w.saturating_sub(1),
             draw.target_h.saturating_sub(1),
+        );
+    } else if geometry.pretransformed_screen_space() {
+        intel_render_focus_log!(
+            "intel/render: {} fragment-candidate-shape accepted=1 geometry={} screen=v0[0.000,0.000] v1[8.000,0.000] v2[0.000,8.000] target={}x{} coverage_contract=pretransformed-screen-space does_not_prove=raster_samples_or_ps\n",
+            submit_name,
+            geometry.label(),
+            draw.target_w,
+            draw.target_h,
         );
     }
     if geometry.fullscreen_candidate() || backend_probe_mode.uses_raster_wm_oa() {
@@ -1227,9 +1235,8 @@ fn oa_report_slice(warm: RenderWarmState, base_dword: usize) -> Option<&'static 
     {
         return None;
     }
-    let dwords = unsafe {
-        core::slice::from_raw_parts(warm.result_virt as *const u32, warm.result_len / 4)
-    };
+    let dwords =
+        unsafe { core::slice::from_raw_parts(warm.result_virt as *const u32, warm.result_len / 4) };
     dwords.get(base_dword..base_dword + RESULT_OA_REPORT_DWORDS)
 }
 
@@ -1248,16 +1255,14 @@ fn oa_a_counter_gfx125(report: &[u32], index: usize) -> Option<u64> {
     if index < 4 {
         Some(report[4 + index] as u64)
     } else if index < 24 {
-        let high_bytes = unsafe {
-            core::slice::from_raw_parts(report.as_ptr().add(40) as *const u8, 32)
-        };
+        let high_bytes =
+            unsafe { core::slice::from_raw_parts(report.as_ptr().add(40) as *const u8, 32) };
         Some(report[4 + index] as u64 | ((high_bytes[index] as u64) << 32))
     } else if index < 28 {
         Some(report[28 + (index - 24)] as u64)
     } else if index < 32 {
-        let high_bytes = unsafe {
-            core::slice::from_raw_parts(report.as_ptr().add(40) as *const u8, 32)
-        };
+        let high_bytes =
+            unsafe { core::slice::from_raw_parts(report.as_ptr().add(40) as *const u8, 32) };
         Some(report[4 + index] as u64 | ((high_bytes[index] as u64) << 32))
     } else {
         Some(report[36 + (index - 32)] as u64)

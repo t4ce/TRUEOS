@@ -205,6 +205,7 @@ enum BackendProbeMode {
     PsGrfMaxThreads31,
     PsGrfMaxThreads15,
     RasterWmInputOa,
+    RasterWmInputOaForceOnPattern,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -327,6 +328,7 @@ impl BackendProbeMode {
             Self::PsGrfMaxThreads31 => "ps-grf-maxthreads-31",
             Self::PsGrfMaxThreads15 => "ps-grf-maxthreads-15",
             Self::RasterWmInputOa => "raster-wm-input-oa",
+            Self::RasterWmInputOaForceOnPattern => "raster-wm-input-oa-force-on-pattern",
         }
     }
 
@@ -368,7 +370,18 @@ impl BackendProbeMode {
     }
 
     fn uses_raster_wm_oa(self) -> bool {
-        matches!(self, Self::RasterWmInputOa)
+        matches!(self, Self::RasterWmInputOa | Self::RasterWmInputOaForceOnPattern)
+    }
+
+    fn forced_ms_raster_mode(self) -> Option<u32> {
+        match self {
+            Self::RasterWmInputOaForceOnPattern => Some(3),
+            _ => None,
+        }
+    }
+
+    fn disable_sf_viewport_transform(self) -> bool {
+        matches!(self, Self::RasterWmInputOaForceOnPattern)
     }
 }
 
@@ -376,6 +389,7 @@ impl BackendProbeMode {
 enum VfPrimitiveGeometry {
     Canonical,
     Oversized,
+    ScreenSpace8x8,
 }
 
 impl VfPrimitiveGeometry {
@@ -383,6 +397,7 @@ impl VfPrimitiveGeometry {
         match self {
             Self::Canonical => "canonical",
             Self::Oversized => "oversized",
+            Self::ScreenSpace8x8 => "screen-space-8x8",
         }
     }
 
@@ -394,11 +409,18 @@ impl VfPrimitiveGeometry {
             // move PS counters, coverage of the tiny canonical triangle was
             // not the blocker.
             Self::Oversized => [[-1.0, -1.0, 0.0], [3.0, -1.0, 0.0], [-1.0, 3.0, 0.0]],
+            // PerspectiveDivideDisable makes position screen-space-like. This
+            // variant tests that interpretation directly on the 8x8 scratch RT.
+            Self::ScreenSpace8x8 => [[0.0, 0.0, 0.0], [8.0, 0.0, 0.0], [0.0, 8.0, 0.0]],
         }
     }
 
     fn fullscreen_candidate(self) -> bool {
         matches!(self, Self::Oversized)
+    }
+
+    fn pretransformed_screen_space(self) -> bool {
+        matches!(self, Self::ScreenSpace8x8)
     }
 }
 
