@@ -82,6 +82,7 @@ define_started_flags!(
     UI2_MANDELBROT_DEMO_STARTED,
     UI2_PLAYER_DEMO_STARTED,
     UI2_RAPLE_DEMO_STARTED,
+    UI2_RENDER_ALBUM_DEMO_STARTED,
     UI2_SMILEY_FOUNTAIN_DEMO_STARTED,
     UI2_SHELL_DEMO_STARTED,
     UI2_SWARM_DEMO_STARTED,
@@ -123,6 +124,7 @@ define_stop_flags!(
     STOP_UI2_MANDELBROT_DEMO,
     STOP_UI2_PLAYER_DEMO,
     STOP_UI2_RAPLE_DEMO,
+    STOP_UI2_RENDER_ALBUM_DEMO,
     STOP_UI2_SMILEY_FOUNTAIN_DEMO,
     STOP_UI2_SHELL_DEMO,
     STOP_UI2_SWARM_DEMO,
@@ -139,6 +141,7 @@ fn stop_flag_by_task_name(name: &str) -> Option<&'static AtomicBool> {
         "ui2-mandelbrot-demo" => Some(&STOP_UI2_MANDELBROT_DEMO),
         "ui2-player-demo" => Some(&STOP_UI2_PLAYER_DEMO),
         "ui2-raple-demo" => Some(&STOP_UI2_RAPLE_DEMO),
+        "ui2-render-album-demo" => Some(&STOP_UI2_RENDER_ALBUM_DEMO),
         "ui2-smiley-fountain-demo" => Some(&STOP_UI2_SMILEY_FOUNTAIN_DEMO),
         "ui2-shell-demo" => Some(&STOP_UI2_SHELL_DEMO),
         "ui2-swarm-demo" => Some(&STOP_UI2_SWARM_DEMO),
@@ -793,6 +796,13 @@ fn spawn_ui2_raple_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_ui2_render_album_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        let _ = worker_spawner;
+        crate::tst::ui2::render_album_demo::ui2_render_album_demo_task()
+    })
+}
+
 fn spawn_ui2_smiley_fountain_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
@@ -902,8 +912,7 @@ fn trueosfs_rw_probe_fill(buf: &mut Vec<u8>, len: usize) {
     for i in 0..len {
         let b = ((i as u32)
             .wrapping_mul(37)
-            .wrapping_add((i as u32 >> 3) ^ 0x5a))
-            as u8;
+            .wrapping_add((i as u32 >> 3) ^ 0x5a)) as u8;
         buf.push(b);
     }
 }
@@ -941,10 +950,7 @@ async fn trueosfs_rw_probe_task() {
             return;
         }
         Err(err) => {
-            crate::log!(
-                "trueosfs-rw-probe: result=failed phase=begin err={:?}\n",
-                err
-            );
+            crate::log!("trueosfs-rw-probe: result=failed phase=begin err={:?}\n", err);
             return;
         }
     };
@@ -968,10 +974,7 @@ async fn trueosfs_rw_probe_task() {
     }
 
     if let Err(err) = crate::r::fs::trueosfs::file_write_finish_async(handle).await {
-        crate::log!(
-            "trueosfs-rw-probe: result=failed phase=finish err={:?}\n",
-            err
-        );
+        crate::log!("trueosfs-rw-probe: result=failed phase=finish err={:?}\n", err);
         return;
     }
     let write_ms = trueosfs_rw_probe_now_ms();
@@ -1005,10 +1008,7 @@ async fn trueosfs_rw_probe_task() {
             return;
         }
         Err(err) => {
-            crate::log!(
-                "trueosfs-rw-probe: result=failed phase=read err={:?}\n",
-                err
-            );
+            crate::log!("trueosfs-rw-probe: result=failed phase=read err={:?}\n", err);
             return;
         }
     }
@@ -1019,10 +1019,7 @@ async fn trueosfs_rw_probe_task() {
             .zip(expected.iter())
             .position(|(got, want)| got != want)
             .unwrap_or(usize::MAX);
-        crate::log!(
-            "trueosfs-rw-probe: result=failed phase=verify mismatch={}\n",
-            mismatch
-        );
+        crate::log!("trueosfs-rw-probe: result=failed phase=verify mismatch={}\n", mismatch);
         return;
     }
     let read_ms = trueosfs_rw_probe_now_ms();
@@ -1042,10 +1039,7 @@ async fn trueosfs_rw_probe_task() {
             );
         }
         Err(err) => {
-            crate::log!(
-                "trueosfs-rw-probe: result=failed phase=delete err={:?}\n",
-                err
-            );
+            crate::log!("trueosfs-rw-probe: result=failed phase=delete err={:?}\n", err);
         }
     }
 }
@@ -1250,9 +1244,9 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 #[cfg(feature = "trueos_rdp")]
-const TASK_COUNT: usize = 73;
+const TASK_COUNT: usize = 74;
 #[cfg(not(feature = "trueos_rdp"))]
-const TASK_COUNT: usize = 71;
+const TASK_COUNT: usize = 72;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1577,6 +1571,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         UI2_DEMO_READY,
         &UI2_RAPLE_DEMO_STARTED,
         spawn_ui2_raple_demo,
+    ),
+    TaskSpec::enabled(
+        "ui2-render-album-demo",
+        UI2_DEMO_READY,
+        &UI2_RENDER_ALBUM_DEMO_STARTED,
+        spawn_ui2_render_album_demo,
     ),
     TaskSpec::disabled(
         "ui2-smiley-fountain-demo",

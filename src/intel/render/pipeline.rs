@@ -1157,6 +1157,19 @@ fn encode_triangle_probe_batch(
     push_addr(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
 
+    // Drawing rectangle participates in the fixed-function raster/clip window.
+    // Program it before CLIP/SF/RASTER so the main pipe cannot consume stale
+    // inherited bounds while setting up the primitive.
+    log_batch_offset(cursor, "3DSTATE_DRAWING_RECTANGLE pre-raster");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_DRAWING_RECTANGLE)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        draw.target_w.saturating_sub(1) | (draw.target_h.saturating_sub(1) << 16),
+    )?;
+    push(batch_dwords, &mut cursor, 0)?;
+
     log_batch_offset(cursor, "3DSTATE_CLIP");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_CLIP)?;
     push(batch_dwords, &mut cursor, clip_dw1)?;
@@ -1256,16 +1269,6 @@ fn encode_triangle_probe_batch(
     log_batch_offset(cursor, "3DSTATE_SAMPLE_MASK");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_SAMPLE_MASK)?;
     push(batch_dwords, &mut cursor, 1)?;
-
-    log_batch_offset(cursor, "3DSTATE_DRAWING_RECTANGLE");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_DRAWING_RECTANGLE)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(
-        batch_dwords,
-        &mut cursor,
-        draw.target_w.saturating_sub(1) | (draw.target_h.saturating_sub(1) << 16),
-    )?;
-    push(batch_dwords, &mut cursor, 0)?;
 
     // Clear inherited WM_HZ_OP clear/resolve overrides so PS dispatch only
     // depends on the explicit probe state we log below.

@@ -1,3 +1,163 @@
+fn paint_fixed_function_album_tile(slot: usize, label: &str, status: u32, metrics: [u32; 4]) {
+    if PRIMARY_DEBUG_ALBUM_ENABLED {
+        let _ = crate::tst::ui2::render_album_demo::queue_render_album_metrics_tile(
+            slot, label, status, metrics,
+        );
+    }
+}
+
+fn paint_render_album_argb_tile(
+    slot: usize,
+    label: &str,
+    status: u32,
+    width: u32,
+    height: u32,
+    argb: &[u32],
+) {
+    if PRIMARY_DEBUG_ALBUM_ENABLED {
+        let _ = crate::tst::ui2::render_album_demo::queue_render_album_argb_tile(
+            slot, label, status, width, height, argb,
+        );
+    }
+}
+
+fn paint_streamout_buffer_album_tile(
+    warm: RenderWarmState,
+    accepted: bool,
+    vertex_count: usize,
+    experiment: StreamoutProofExperiment,
+) {
+    const SO_VIS_W: usize = 16;
+    const SO_VIS_H: usize = 6;
+    const SO_VIS_PIXELS: usize = SO_VIS_W * SO_VIS_H;
+
+    let sample_bytes = experiment
+        .vertex_bytes()
+        .saturating_mul(vertex_count)
+        .min(SO_VIS_PIXELS)
+        .min(warm.streamout_len);
+    if sample_bytes != 0 {
+        crate::intel::dma_flush(warm.streamout_virt, sample_bytes);
+    }
+
+    let mut pixels = [0xFF202530u32; SO_VIS_PIXELS];
+    let mut nonzero = 0u32;
+    for idx in 0..sample_bytes {
+        let byte = unsafe { core::ptr::read_volatile(warm.streamout_virt.add(idx)) };
+        if byte != 0 {
+            nonzero += 1;
+        }
+        let r = byte as u32;
+        let g = byte.wrapping_mul(5).rotate_left(1) as u32;
+        let b = 0xFFu32.saturating_sub(byte as u32);
+        pixels[idx] = 0xFF00_0000 | (r << 16) | (g << 8) | b;
+    }
+
+    paint_render_album_argb_tile(
+        7,
+        "SO BUF",
+        if accepted && nonzero != 0 { 1 } else { 2 },
+        SO_VIS_W as u32,
+        SO_VIS_H as u32,
+        &pixels,
+    );
+    intel_render_focus_log!(
+        "intel/render: streamout-album sample_bytes={} nonzero={} accepted={} source=engine-streamout slot=7\n",
+        sample_bytes,
+        nonzero,
+        accepted as u8,
+    );
+}
+
+fn paint_expected_fragment_album_tile() {
+    const REF_W: usize = 8;
+    const REF_H: usize = 8;
+    let mut pixels = [0xFF202530u32; REF_W * REF_H];
+    for y in 0..REF_H {
+        for x in 0..REF_W {
+            let inside = x + y >= 2 && x <= y + 4;
+            pixels[y * REF_W + x] = if inside { 0xFF3BCF86 } else { 0xFF2B313C };
+        }
+    }
+    paint_render_album_argb_tile(8, "RT EXPECT", 3, REF_W as u32, REF_H as u32, &pixels);
+}
+
+fn paint_expected_wm_input_album_tile(
+    submit_name: &str,
+    draw: TriangleDrawPrep,
+    geometry: VfPrimitiveGeometry,
+) {
+    const VIS_W: usize = 16;
+    const VIS_H: usize = 16;
+    let mut pixels = [0xFF202530u32; VIS_W * VIS_H];
+    let tri = geometry.vertices();
+    let mut screen = [[0.0f32; 2]; TRIANGLE_DRAW_VERTICES];
+    for idx in 0..TRIANGLE_DRAW_VERTICES {
+        screen[idx][0] = (tri[idx][0] * 0.5 + 0.5) * draw.target_w as f32;
+        screen[idx][1] = (-tri[idx][1] * 0.5 + 0.5) * draw.target_h as f32;
+    }
+
+    let area = edge_function(screen[0], screen[1], screen[2]);
+    let mut expected_samples = 0u32;
+    let mut min_x = VIS_W;
+    let mut min_y = VIS_H;
+    let mut max_x = 0usize;
+    let mut max_y = 0usize;
+    if area != 0.0 {
+        for y in 0..VIS_H {
+            for x in 0..VIS_W {
+                let sample = [
+                    ((x as f32 + 0.5) * draw.target_w as f32) / VIS_W as f32,
+                    ((y as f32 + 0.5) * draw.target_h as f32) / VIS_H as f32,
+                ];
+                let w0 = edge_function(screen[1], screen[2], sample);
+                let w1 = edge_function(screen[2], screen[0], sample);
+                let w2 = edge_function(screen[0], screen[1], sample);
+                let inside = if area > 0.0 {
+                    w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0
+                } else {
+                    w0 <= 0.0 && w1 <= 0.0 && w2 <= 0.0
+                };
+                if inside {
+                    expected_samples += 1;
+                    min_x = min_x.min(x);
+                    min_y = min_y.min(y);
+                    max_x = max_x.max(x);
+                    max_y = max_y.max(y);
+                    pixels[y * VIS_W + x] = 0xFF3BCF86;
+                }
+            }
+        }
+    }
+
+    paint_render_album_argb_tile(
+        9,
+        "WM IN",
+        if expected_samples != 0 { 3 } else { 2 },
+        VIS_W as u32,
+        VIS_H as u32,
+        &pixels,
+    );
+    intel_render_focus_log!(
+        "intel/render: {} wm-input-reference geometry={} target={}x{} sample_grid={}x{} expected_samples={} bbox={}x{}..{}x{} source=cpu-viewport-scissor-reference slot=9 does_not_prove=wm_coverage\n",
+        submit_name,
+        geometry.label(),
+        draw.target_w,
+        draw.target_h,
+        VIS_W,
+        VIS_H,
+        expected_samples,
+        if expected_samples == 0 { 0 } else { min_x },
+        if expected_samples == 0 { 0 } else { min_y },
+        if expected_samples == 0 { 0 } else { max_x },
+        if expected_samples == 0 { 0 } else { max_y },
+    );
+}
+
+fn edge_function(a: [f32; 2], b: [f32; 2], p: [f32; 2]) -> f32 {
+    (p[0] - a[0]) * (b[1] - a[1]) - (p[1] - a[1]) * (b[0] - a[0])
+}
+
 fn submit_warm_render_batch(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
@@ -16,11 +176,7 @@ fn submit_warm_render_batch(
     }
     if is_gpgpu_submit_name(submit_name) {
         recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-pre-submit");
-        crate::intel::mmio_write(
-            dev,
-            GEN12_RCU_MODE,
-            masked_bit_enable(GEN12_RCU_MODE_CCS_ENABLE),
-        );
+        crate::intel::mmio_write(dev, GEN12_RCU_MODE, masked_bit_enable(GEN12_RCU_MODE_CCS_ENABLE));
     }
     let ring_tail_bytes = build_ring_batch_start(warm, GPU_VA_BATCH_BASE);
     let Some(ring_ctl) = ring_ctl_value(warm.ring_len) else {
@@ -47,11 +203,7 @@ fn submit_warm_render_batch(
     let ctx_ctl_after = rcs_ctx_control_value(false);
     crate::intel::mmio_write(dev, RCS_RING_CONTEXT_CONTROL, ctx_ctl_after);
     crate::intel::mmio_write(dev, RCS_RING_CONTEXT_CONTROL_REF, ctx_ctl_after);
-    crate::intel::mmio_write(
-        dev,
-        RCS_RING_MI_MODE,
-        masked_bit_disable(RING_MI_MODE_STOP_RING),
-    );
+    crate::intel::mmio_write(dev, RCS_RING_MI_MODE, masked_bit_disable(RING_MI_MODE_STOP_RING));
     crate::intel::mmio_write(dev, RCS_RING_HWS_PGA, pphwsp_gpu);
     let hws_after = crate::intel::mmio_read(dev, RCS_RING_HWS_PGA);
 
@@ -77,6 +229,17 @@ fn submit_warm_render_batch(
             crate::intel::mmio_read(dev, RCS_RING_TAIL),
         );
     }
+    paint_fixed_function_album_tile(
+        0,
+        "CS",
+        3,
+        [
+            ring_tail_bytes as u32,
+            crate::intel::mmio_read(dev, RCS_RING_TAIL),
+            crate::intel::mmio_read(dev, RCS_RING_HEAD),
+            crate::intel::mmio_read(dev, RCS_RING_EXECLIST_STATUS_LO),
+        ],
+    );
 
     let mut completed = false;
     let mut iter = 0usize;
@@ -576,6 +739,21 @@ fn submit_warm_render_batch(
             let delta = stats_after.delta_since(stats_before);
             let any_change = after.any_changed_since(before);
             let triangle_change = after.triangle_points_changed_since(before);
+            paint_fixed_function_album_tile(
+                6,
+                "RT",
+                if delta.ps_invocations > 0 && any_change {
+                    1
+                } else {
+                    2
+                },
+                [
+                    delta.ps_invocations.min(u32::MAX as u64) as u32,
+                    any_change as u32,
+                    triangle_change as u32,
+                    completed as u32,
+                ],
+            );
             intel_render_focus_log!(
                 "intel/render: {} ps-rt-proof accepted={} ps_delta={} rt_any_change={} rt_triangle_change={} does_not_prove=display_scanout\n",
                 submit_name,
@@ -1288,6 +1466,57 @@ fn log_triangle_named_proofs(
     let sc_instdone = crate::intel::mmio_read(dev, SC_INSTDONE);
     let sc_extra = crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA);
     let sc_extra2 = crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA2);
+
+    paint_fixed_function_album_tile(
+        1,
+        "VF",
+        if vf_accept { 1 } else { 2 },
+        [
+            delta.ia_vertices.min(u32::MAX as u64) as u32,
+            delta.ia_primitives.min(u32::MAX as u64) as u32,
+            vf_marker_ok as u32,
+            completed as u32,
+        ],
+    );
+    paint_fixed_function_album_tile(
+        2,
+        "CL",
+        if clip_accept { 1 } else { 2 },
+        [
+            delta.cl_invocations.min(u32::MAX as u64) as u32,
+            delta.cl_primitives.min(u32::MAX as u64) as u32,
+            clip_marker_ok as u32,
+            completed as u32,
+        ],
+    );
+    paint_fixed_function_album_tile(
+        3,
+        "SF",
+        if raster_packet_accept { 3 } else { 2 },
+        [
+            clip_marker_ok as u32,
+            raster_marker_ok as u32,
+            clip_accept as u32,
+            completed as u32,
+        ],
+    );
+    paint_fixed_function_album_tile(
+        5,
+        "PSD",
+        if ps_accept {
+            1
+        } else if ps_launch_input_ready {
+            2
+        } else {
+            0
+        },
+        [
+            delta.ps_invocations.min(u32::MAX as u64) as u32,
+            delta.cps_invocations.min(u32::MAX as u64) as u32,
+            delta.ps_depth.min(u32::MAX as u64) as u32,
+            ps_launch_input_ready as u32,
+        ],
+    );
 
     intel_render_focus_log!(
         "intel/render: {} vf-proof accepted={} ia_vtx_delta={} ia_prim_delta={} post_vf=0x{:08X} post_vf_marker={} does_not_prove=vs_or_pixels\n",
