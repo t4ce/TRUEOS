@@ -3,22 +3,8 @@
 use super::*;
 
 const UI2_CHROME_TEXT_RGBA: (u8, u8, u8, u8) = (0x00, 0x00, 0x00, 0xFF);
-const UI2_CHROME_TITLE_FONT_TIER: Ui2FontTier = Ui2FontTier::Third;
+const UI2_CHROME_TITLE_FONT_TIER: Ui2FontTier = Ui2FontTier::Half;
 const UI2_VM_HINT_ACCENT_RGBA: (u8, u8, u8, u8) = (0xFF, 0x37, 0xFF, 0xFF);
-const UI2_SYSTEM_BUTTON_TOGGLE_COMPOSITION_UNLOCKED_TWEMOJI: char = '\u{25FC}';
-const UI2_SYSTEM_BUTTON_TOGGLE_COMPOSITION_LOCKED_TWEMOJI: char = '\u{25FB}';
-const UI2_SYSTEM_BUTTON_FORK_TWEMOJI: char = '\u{2797}';
-const UI2_SYSTEM_BUTTON_MINIMIZE_TWEMOJI: char = '\u{2796}';
-const UI2_SYSTEM_BUTTON_MAXIMIZE_TWEMOJI: char = '\u{23F9}';
-const UI2_SYSTEM_BUTTON_RESTORE_TWEMOJI: char = '\u{23CF}';
-const UI2_SYSTEM_BUTTON_PRESERVE_VM_TWEMOJI: char = '\u{1F4BF}';
-const UI2_SYSTEM_BUTTON_VM_PLAY_TWEMOJI: char = '\u{23F5}';
-const UI2_SYSTEM_BUTTON_VM_PAUSE_TWEMOJI: char = '\u{23F8}';
-const UI2_SYSTEM_BUTTON_TASK_OFFLINE_TWEMOJI: char = '\u{23EF}';
-const UI2_SYSTEM_BUTTON_CLOSE_HULL_TWEMOJI: char = '\u{2716}';
-const UI2_RESIZE_HANDLE_TWEMOJI: char = '\u{25E2}';
-const UI2_ROTATE_LEFT_LABEL: &str = "90L";
-const UI2_ROTATE_RIGHT_LABEL: &str = "90R";
 
 fn title_text_with_ellipsis(text: &str, max_width_px: f32) -> alloc::string::String {
     if text.is_empty() || max_width_px <= 0.0 {
@@ -124,89 +110,13 @@ fn draw_window_system_button(state: &Ui2State, window: &Ui2Window, action: Ui2Sy
     let Some(rect) = window_system_button_rect(state, window, action) else {
         return;
     };
-    if let Some(ch) = window_system_button_twemoji(window, action) {
-        if draw_window_twemoji_button(state, window, rect, ch) {
-            return;
-        }
-    }
-}
-
-fn draw_window_twemoji_button(
-    state: &Ui2State,
-    window: &Ui2Window,
-    rect: Ui2Rect,
-    ch: char,
-) -> bool {
-    let Some(glyph) = ui2_font_resolve_glyph(Ui2FontTier::OneX, ch) else {
-        return false;
-    };
-    if !glyph.ready {
-        return false;
-    }
-    let Some(texture) = glyph.texture else {
-        return false;
-    };
-
-    let inset_rect =
-        Ui2Rect::new(rect.x + 1.0, rect.y + 1.0, (rect.w - 2.0).max(1.0), (rect.h - 2.0).max(1.0));
-    let crop_px = 1.0f32;
-    let src_x = f32::from(glyph.region.src_x) + crop_px;
-    let src_y = f32::from(glyph.region.src_y) + crop_px;
-    let src_w = f32::from(glyph.region.src_w.max(3)) - (crop_px * 2.0);
-    let src_h = f32::from(glyph.region.src_h.max(3)) - (crop_px * 2.0);
-    let scale = libm::fminf(inset_rect.w / src_w, inset_rect.h / src_h);
-    let draw_w = libm::fmaxf(1.0, src_w * scale);
-    let draw_h = libm::fmaxf(1.0, src_h * scale);
-    let draw_x = inset_rect.x + ((inset_rect.w - draw_w) * 0.5).max(0.0);
-    let draw_y = inset_rect.y + ((inset_rect.h - draw_h) * 0.5).max(0.0);
-    let atlas_w = f32::from(glyph.region.atlas_w.max(1));
-    let atlas_h = f32::from(glyph.region.atlas_h.max(1));
-
-    draw_texture_rect_uv_rgba_no_present(
-        texture.tex_id,
-        draw_x,
-        draw_y,
-        draw_w,
-        draw_h,
-        src_x / atlas_w,
-        src_y / atlas_h,
-        (src_x + src_w) / atlas_w,
-        (src_y + src_h) / atlas_h,
-        state.view_w,
-        state.view_h,
-        true,
-        (255, 255, 255, window.alpha),
-    )
-}
-
-#[inline]
-fn window_system_button_twemoji(window: &Ui2Window, action: Ui2SystemButtonAction) -> Option<char> {
-    match action {
-        Ui2SystemButtonAction::ToggleComposition => Some(if window.composition_locked {
-            UI2_SYSTEM_BUTTON_TOGGLE_COMPOSITION_LOCKED_TWEMOJI
-        } else {
-            UI2_SYSTEM_BUTTON_TOGGLE_COMPOSITION_UNLOCKED_TWEMOJI
-        }),
-        Ui2SystemButtonAction::Fork => Some(UI2_SYSTEM_BUTTON_FORK_TWEMOJI),
-        Ui2SystemButtonAction::Minimize => Some(UI2_SYSTEM_BUTTON_MINIMIZE_TWEMOJI),
-        Ui2SystemButtonAction::Restore => Some(UI2_SYSTEM_BUTTON_RESTORE_TWEMOJI),
-        Ui2SystemButtonAction::ToggleMaximize => Some(UI2_SYSTEM_BUTTON_MAXIMIZE_TWEMOJI),
-        Ui2SystemButtonAction::PreserveVm => window
-            .vm_origin_hint
-            .then_some(UI2_SYSTEM_BUTTON_PRESERVE_VM_TWEMOJI),
-        Ui2SystemButtonAction::RotateLeft | Ui2SystemButtonAction::RotateRight => None,
-        Ui2SystemButtonAction::Close => Some(if window.vm_origin_hint {
-            let hv_status = crate::hv::status();
-            if hv_status.running_count != 0 || hv_status.starting_count != 0 {
-                UI2_SYSTEM_BUTTON_VM_PAUSE_TWEMOJI
-            } else {
-                UI2_SYSTEM_BUTTON_VM_PLAY_TWEMOJI
-            }
-        } else if window.spawn_task_index.is_some() {
-            UI2_SYSTEM_BUTTON_TASK_OFFLINE_TWEMOJI
-        } else {
-            UI2_SYSTEM_BUTTON_CLOSE_HULL_TWEMOJI
-        }),
+    if let Some(ico) = ui2_btn_ico_for_system_button(window, action) {
+        let hovered = window_decoration_button_hovered(
+            state,
+            window,
+            Ui2DecorationHoverButton::System(action),
+        );
+        let _ = draw_ui2_btn_ico(state, window, rect, ico, UI2_CHROME_TITLE_FONT_TIER, hovered);
     }
 }
 
@@ -214,7 +124,15 @@ fn draw_window_bottom_resize_button(state: &Ui2State, window: &Ui2Window) {
     let Some(rect) = window_bottom_resize_button_rect(state, window) else {
         return;
     };
-    draw_window_twemoji_button(state, window, rect, UI2_RESIZE_HANDLE_TWEMOJI);
+    let hovered = window_decoration_button_hovered(state, window, Ui2DecorationHoverButton::Resize);
+    let _ = draw_ui2_btn_ico(
+        state,
+        window,
+        rect,
+        ui2_btn_ico_for_resize(),
+        UI2_CHROME_TITLE_FONT_TIER,
+        hovered,
+    );
 }
 
 fn draw_window_bottom_rotate_button(
@@ -225,21 +143,22 @@ fn draw_window_bottom_rotate_button(
     let Some(rect) = window_bottom_rotate_button_rect(state, window, action) else {
         return;
     };
-    let label = match action {
-        Ui2SystemButtonAction::RotateLeft => UI2_ROTATE_LEFT_LABEL,
-        Ui2SystemButtonAction::RotateRight => UI2_ROTATE_RIGHT_LABEL,
-        _ => return,
+    let Some(ico) = ui2_btn_ico_for_system_button(window, action) else {
+        return;
     };
-    let _ = ui2_font_draw_text_line_in_rect_with_tier_rgba_no_present(
-        label,
-        rect,
-        UI2_CHROME_TITLE_FONT_TIER,
-        Ui2FontTextAlign::Center,
-        Ui2FontVerticalAlign::Center,
-        state.view_w,
-        state.view_h,
-        modulate_rgba_alpha(UI2_CHROME_TEXT_RGBA, window.alpha),
-    );
+    let hovered =
+        window_decoration_button_hovered(state, window, Ui2DecorationHoverButton::System(action));
+    let _ = draw_ui2_btn_ico(state, window, rect, ico, UI2_CHROME_TITLE_FONT_TIER, hovered);
+}
+
+fn window_decoration_button_hovered(
+    state: &Ui2State,
+    window: &Ui2Window,
+    button: Ui2DecorationHoverButton,
+) -> bool {
+    state.cursors.iter().any(|cursor| {
+        cursor.hover_window_id == window.id && cursor.hover_decoration_button == Some(button)
+    })
 }
 
 fn draw_window_system_scrollbars(state: &Ui2State, window: &Ui2Window) {
@@ -482,7 +401,14 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
                     title_icon_rect.w,
                 );
             } else if has_title_twemoji {
-                draw_window_twemoji_button(state, window, title_icon_rect, window.title_twemoji);
+                let _ = draw_ui2_btn_ico(
+                    state,
+                    window,
+                    title_icon_rect,
+                    Ui2BtnIco::TwemojiFit(window.title_twemoji),
+                    UI2_CHROME_TITLE_FONT_TIER,
+                    false,
+                );
             } else {
                 let _ = draw_window_title_lyon_icon(state, window, title_icon_rect);
             }
@@ -1240,6 +1166,43 @@ pub(super) fn system_button_action_at(
         }
     }
     None
+}
+
+pub(super) fn decoration_hover_button_at(
+    state: &Ui2State,
+    target: Option<Ui2HitTarget>,
+    x: f32,
+    y: f32,
+) -> Option<(u32, Ui2DecorationHoverButton)> {
+    let target = target?;
+    match target.kind {
+        Ui2HitKind::WindowResizeButton => {
+            Some((target.owner_window_id, Ui2DecorationHoverButton::Resize))
+        }
+        Ui2HitKind::WindowDecoration => {
+            system_button_action_at(state, target.owner_window_id, x, y)
+                .map(|action| (target.owner_window_id, Ui2DecorationHoverButton::System(action)))
+        }
+        Ui2HitKind::WindowBody
+        | Ui2HitKind::WindowVerticalScrollbar
+        | Ui2HitKind::WindowHorizontalScrollbar
+        | Ui2HitKind::BrowserInteractive => None,
+    }
+}
+
+pub(super) fn decoration_hover_button_rect(
+    state: &Ui2State,
+    window_id: u32,
+    button: Ui2DecorationHoverButton,
+) -> Option<Ui2Rect> {
+    let window = state.windows.iter().find(|window| window.id == window_id)?;
+    match button {
+        Ui2DecorationHoverButton::System(action) => {
+            window_system_button_rect(state, window, action)
+                .or_else(|| window_bottom_rotate_button_rect(state, window, action))
+        }
+        Ui2DecorationHoverButton::Resize => window_bottom_resize_button_rect(state, window),
+    }
 }
 
 pub(super) fn window_rect_for_content(

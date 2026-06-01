@@ -15,6 +15,7 @@ mod ui2_font_bucketproducer;
 mod ui2_hid;
 mod ui2_hit;
 mod ui2_hosted;
+mod ui2_win_btn;
 mod ui2_win_deco;
 mod ui2_win_register;
 
@@ -39,6 +40,7 @@ use self::ui2_hit::*;
 pub(crate) use self::ui2_hosted::ui2_hosted_task;
 use self::ui2_hosted::*;
 pub use self::ui2_win::*;
+use self::ui2_win_btn::*;
 pub use self::ui2_win_deco::*;
 use trueos_gfx_core::{
     RGB_VERTEX_SIZE, Rgba8, TEX_VERTEX_SIZE, TexVertex, ViewTransform, push_rgb_quad_px,
@@ -336,6 +338,8 @@ struct Ui2CursorState {
     press_item_id: u32,
     press_armed: bool,
     selected_window_id: u32,
+    hover_window_id: u32,
+    hover_decoration_button: Option<Ui2DecorationHoverButton>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -349,6 +353,12 @@ enum Ui2SystemButtonAction {
     RotateLeft,
     RotateRight,
     Close,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum Ui2DecorationHoverButton {
+    System(Ui2SystemButtonAction),
+    Resize,
 }
 
 #[repr(u32)]
@@ -3079,6 +3089,14 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
             };
             if set_rt_rc != 0 {
                 crate::log!("ui2: scene render-target bind failed rc={}\n", set_rt_rc);
+                let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
+                return;
+            }
+            let scene_clear_rc = unsafe {
+                crate::r::io::cabi::trueos_cabi_gfx_clear_rgba_no_present(0xE9, 0xEE, 0xF2, 0xFF)
+            };
+            if scene_clear_rc != 0 {
+                crate::log!("ui2: scene render-target clear failed rc={}\n", scene_clear_rc);
                 let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
                 return;
             }
