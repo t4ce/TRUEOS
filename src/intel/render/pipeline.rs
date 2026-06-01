@@ -605,7 +605,10 @@ fn encode_triangle_probe_batch(
     } else {
         0
     };
+    let wm_walk_granularity = backend_probe_mode.wm_walk_granularity_override().unwrap_or(2);
     let wm_dw1 = (1 << 31)
+        | (u32::from(backend_probe_mode.enable_wm_scissor()) << 29)
+        | ((wm_walk_granularity & 0x3) << 24)
         | if matches!(batch_mode, TriangleBatchMode::VfDraw)
             && !matches!(backend_probe_mode, BackendProbeMode::WmNormalDispatch)
         {
@@ -664,8 +667,12 @@ fn encode_triangle_probe_batch(
         | BackendProbeMode::PsGrfMaxThreads15
         | BackendProbeMode::RasterWmInputOa
         | BackendProbeMode::RasterWmInputOaNdcBlock32
+        | BackendProbeMode::RasterWmInputOaNdcPerPoly
+        | BackendProbeMode::RasterWmInputOaNdcWalk16
+        | BackendProbeMode::RasterWmInputOaNdcNoWmScissor
         | BackendProbeMode::RasterWmInputOaScreenSpace
         | BackendProbeMode::RasterWmInputOaScreenSpaceClipBypass
+        | BackendProbeMode::RasterWmInputOaNdcForceOnPattern
         | BackendProbeMode::RasterWmInputOaForceOnPattern
         | BackendProbeMode::RasterWmInputOaForceOffPixel => {
             pipeline.ps.meta.kernel.binding_table_entry_count
@@ -679,8 +686,12 @@ fn encode_triangle_probe_batch(
         BackendProbeMode::PsBindingTableCountZero
             | BackendProbeMode::RasterWmInputOa
             | BackendProbeMode::RasterWmInputOaNdcBlock32
+            | BackendProbeMode::RasterWmInputOaNdcPerPoly
+            | BackendProbeMode::RasterWmInputOaNdcWalk16
+            | BackendProbeMode::RasterWmInputOaNdcNoWmScissor
             | BackendProbeMode::RasterWmInputOaScreenSpace
             | BackendProbeMode::RasterWmInputOaScreenSpaceClipBypass
+            | BackendProbeMode::RasterWmInputOaNdcForceOnPattern
             | BackendProbeMode::RasterWmInputOaForceOnPattern
             | BackendProbeMode::RasterWmInputOaForceOffPixel
     ) {
@@ -1636,7 +1647,7 @@ fn encode_triangle_probe_batch(
         (sf_dw3 >> 25) & 0x3,
     );
     intel_render_focus_log!(
-        "intel/render: probe-raster-decoded sf_viewport=0x{:X} cc_viewport=0x{:X} scissor_ptr=0x{:X} cull={} fill_front={} fill_back={} front={} api_mode={}({}) scissor_enable={} aa_enable={} dx_ms_enable={} dx_ms_mode={}({}) force_multisampling={} forced_samples={}({}) rt_independent_raster={} wm_hz_op={} wm_int_ms_raster_mode={} sample_mask=0x{:X} multisample_dw=0x{:08X}\n",
+        "intel/render: probe-raster-decoded sf_viewport=0x{:X} cc_viewport=0x{:X} scissor_ptr=0x{:X} cull={} fill_front={} fill_back={} front={} api_mode={}({}) raster_scissor_legacy_bit={} aa_enable={} dx_ms_enable={} dx_ms_mode={}({}) force_multisampling={} forced_samples={}({}) rt_independent_raster={} wm_hz_op={} wm_int_ms_raster_mode={} sample_mask=0x{:X} multisample_dw=0x{:08X}\n",
         probe_state.sf_clip_viewport_offset_bytes,
         probe_state.cc_viewport_offset_bytes,
         probe_state.scissor_rect_offset_bytes,
@@ -1672,7 +1683,7 @@ fn encode_triangle_probe_batch(
     let wm_walk_direction = (wm_dw1 >> 23) & 0x1;
     let wm_walk_granularity = (wm_dw1 >> 24) & 0x3;
     intel_render_focus_log!(
-        "intel/render: probe-wm-decoded backend={} force_kill={}({}) point_rule={} line_stipple={} poly_stipple={} bary=0x{:02X} pos_zw={}({}) force_thread_dispatch={}({}) eds={}({}) walk={} granularity={}({}) legacy_depth_clear={} legacy_depth_resolve={} legacy_hiz_resolve={} stats={} thread_dispatch_formula_inputs ps_valid={} ps_writes_rt={} has_writeable_rt={} wm_hz_op={} note=coverage_still_requires_sf_setup_and_scan_conversion\n",
+        "intel/render: probe-wm-decoded backend={} force_kill={}({}) point_rule={} line_stipple={} poly_stipple={} bary=0x{:02X} pos_zw={}({}) force_thread_dispatch={}({}) eds={}({}) walk={} granularity={}({}) scissor_enable={} legacy_depth_clear={} legacy_depth_resolve={} legacy_hiz_resolve={} stats={} thread_dispatch_formula_inputs ps_valid={} ps_writes_rt={} has_writeable_rt={} wm_hz_op={} note=coverage_still_requires_sf_setup_and_scan_conversion\n",
         backend_probe_mode.label(),
         wm_force_kill,
         decode_wm_force_mode(wm_force_kill),
@@ -1689,6 +1700,7 @@ fn encode_triangle_probe_batch(
         if wm_walk_direction == 0 { "snake" } else { "z" },
         wm_walk_granularity,
         decode_wm_walk_granularity(wm_walk_granularity),
+        (wm_dw1 >> 29) & 0x1,
         (wm_dw1 >> 30) & 0x1,
         (wm_dw1 >> 28) & 0x1,
         (wm_dw1 >> 27) & 0x1,
