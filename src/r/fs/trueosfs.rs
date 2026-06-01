@@ -863,6 +863,7 @@ pub async fn file_write_finish_async(stream_handle: u32) -> Result<(), block::Er
     };
 
     let io = KernelBlockIo::new(entry.disk);
+    let record = trueos_fs::write_stream_record_ref(&entry.stream);
     trueos_fs::finish_write_file_stream(&io, &entry.params, entry.stream)
         .await
         .map_err(map_engine_err)?;
@@ -870,6 +871,7 @@ pub async fn file_write_finish_async(stream_handle: u32) -> Result<(), block::Er
     let disk_id = entry.disk.id();
     bump_root_cache_gen(disk_id);
     file_record_cache_invalidate_path(disk_id, entry.path.as_str());
+    file_record_cache_insert(disk_id, entry.path.as_str(), record);
     invalidate_root_index(disk_id);
     Ok(())
 }

@@ -963,6 +963,18 @@ pub struct PutWriteStream {
     pending: Vec<u8>,
 }
 
+pub fn write_stream_record_ref(stream: &PutWriteStream) -> FileRecordRef {
+    let name_blocks = (stream.name_len as usize).div_ceil(stream.block_size);
+    FileRecordRef {
+        entry_lba: stream.entry_lba,
+        data_lba: stream
+            .entry_lba
+            .saturating_add(1)
+            .saturating_add(name_blocks as u64),
+        data_len: stream.data_len,
+    }
+}
+
 #[inline]
 fn batch_available(stream: &PutWriteStream) -> usize {
     stream.batch.len().saturating_sub(stream.batch_off)

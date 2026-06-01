@@ -11,6 +11,7 @@ pub use self::lib::*;
 pub use crab_usb as crabusb;
 
 const CRABUSB_CONTROLLER_ID: u32 = 3;
+static USB_PORT_CHANGE_SEQ: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 #[embassy_executor::task]
 pub async fn usb_controller_service_task() {
@@ -36,8 +37,20 @@ pub async fn usb_controller_service_task() {
     };
     open_and_handoff_devices(&mut host, news, &spawner).await;
 
+    let mut observed_port_change_seq =
+        USB_PORT_CHANGE_SEQ.load(core::sync::atomic::Ordering::Acquire);
     loop {
-        embassy_time::Timer::after(embassy_time::Duration::from_millis(500)).await;
+        embassy_time::Timer::after(embassy_time::Duration::from_millis(25)).await;
+        let next_port_change_seq = USB_PORT_CHANGE_SEQ.load(core::sync::atomic::Ordering::Acquire);
+        if next_port_change_seq == observed_port_change_seq {
+            continue;
+        }
+        observed_port_change_seq = next_port_change_seq;
+        embassy_time::Timer::after(embassy_time::Duration::from_millis(100)).await;
+        crate::log!(
+            "crabusb: probe_devices trigger=port-change seq={}\n",
+            observed_port_change_seq
+        );
         let Some(news) = probe_devices_with_log(&mut host, "rescan").await else {
             continue;
         };
@@ -176,6 +189,7 @@ pub async fn usb_event_pump_task(handler: crabusb::EventHandler) {
                 crabusb::Event::Nothing => break,
                 crabusb::Event::PortChange { port } => {
                     active = true;
+                    USB_PORT_CHANGE_SEQ.fetch_add(1, core::sync::atomic::Ordering::AcqRel);
                     crate::log!("crabusb: event port-change port={}\n", port);
                 }
                 crabusb::Event::TransferActivity { count } => {

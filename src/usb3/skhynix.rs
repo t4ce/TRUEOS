@@ -978,6 +978,65 @@ async fn uas_command_out_streams(
     Ok(sent)
 }
 
+async fn uas_command_no_data(
+    command_out: &mut super::crabusb::Endpoint,
+    status_in: &mut super::crabusb::Endpoint,
+    cmd: &'static str,
+    cdb: &[u8],
+    tag: u16,
+) -> Result<(), MassProbeError> {
+    let mut status_iu = [0u8; 96];
+    let status_id = status_in
+        .submit(uas_bulk_in_request(&mut status_iu, tag))
+        .map_err(|_| MassProbeError::Transport("uas-status-submit"))?;
+    if crate::logflag::USB_MASS_UAS_TRACE_LOGS || cmd == "sync-cache10" {
+        crate::log!(
+            "crabusb: skhynix-green proof=uas-nodata phase=status-submit cmd={} tag=0x{:04x} status_req={}\n",
+            cmd,
+            tag,
+            status_id.raw()
+        );
+    }
+
+    if let Err(err) = uas_send_command(command_out, cmd, cdb, tag).await {
+        let _ = status_in.cancel(status_id);
+        return Err(err);
+    }
+    if crate::logflag::USB_MASS_UAS_TRACE_LOGS || cmd == "sync-cache10" {
+        crate::log!(
+            "crabusb: skhynix-green proof=uas-nodata phase=command-sent cmd={} tag=0x{:04x}\n",
+            cmd,
+            tag
+        );
+    }
+
+    let got = endpoint_wait_submitted(status_in, status_id, "uas-status-timeout", "uas-status-in")
+        .await?;
+    if got < 4 {
+        return Err(MassProbeError::ShortData);
+    }
+    let status = &status_iu[..got.min(status_iu.len())];
+    if crate::logflag::USB_MASS_UAS_TRACE_LOGS || cmd == "sync-cache10" {
+        crate::log!(
+            "crabusb: skhynix-green proof=uas-nodata phase=status-stream cmd={} tag=0x{:04x} iu=0x{:02x} iu_tag=0x{:04x} raw_len={}\n",
+            cmd,
+            tag,
+            status[0],
+            parse_uas_tag(status).unwrap_or(0),
+            got
+        );
+    }
+    validate_uas_status(cmd, status, tag)?;
+    if crate::logflag::USB_MASS_UAS_TRACE_LOGS || cmd == "sync-cache10" {
+        crate::log!(
+            "crabusb: skhynix-green proof=uas-nodata phase=status-ok cmd={} tag=0x{:04x}\n",
+            cmd,
+            tag
+        );
+    }
+    Ok(())
+}
+
 async fn probe_mass_uas_skhynix(
     command_out: &mut super::crabusb::Endpoint,
     status_in: &mut super::crabusb::Endpoint,
@@ -1231,6 +1290,42 @@ impl SkhynixUasBlockDevice {
         }
         Ok(())
     }
+
+    async fn flush_inner(&mut self) -> crate::disc::block::Result<()> {
+        self.ensure_not_poisoned()?;
+        let tag = self.alloc_tag();
+        let cdb = cdb_synchronize_cache_10(0, 0);
+        crate::log!(
+            "crabusb: skhynix-green proof=sync-cache10 flush=true tag=0x{:04x} status=start\n",
+            tag
+        );
+        match uas_command_no_data(
+            &mut self.runtime.command_out,
+            &mut self.runtime.status_in,
+            "sync-cache10",
+            &cdb,
+            tag,
+        )
+        .await
+        {
+            Ok(()) => {
+                crate::log!(
+                    "crabusb: skhynix-green proof=sync-cache10 flush=true tag=0x{:04x} status=ok\n",
+                    tag
+                );
+                Ok(())
+            }
+            Err(err) => {
+                crate::log!(
+                    "crabusb: skhynix-green proof=sync-cache10 flush=true tag=0x{:04x} status=failed err={:?}\n",
+                    tag,
+                    err
+                );
+                self.poison_on_timeout("sync-cache10", err);
+                Err(mass_probe_to_block_error(err))
+            }
+        }
+    }
 }
 
 impl crate::disc::block::BlockDevice for SkhynixUasBlockDevice {
@@ -1270,6 +1365,12 @@ impl crate::disc::block::BlockDevice for SkhynixUasBlockDevice {
         buf: &'a [u8],
     ) -> crate::disc::block::BoxFuture<'a, crate::disc::block::Result<()>> {
         Box::pin(async move { self.write_blocks_inner(lba, buf).await })
+    }
+
+    fn flush<'a>(
+        &'a mut self,
+    ) -> crate::disc::block::BoxFuture<'a, crate::disc::block::Result<()>> {
+        Box::pin(async move { self.flush_inner().await })
     }
 
     fn dma_alignment_bytes(&self) -> u32 {
@@ -1375,6 +1476,14 @@ fn cdb_write_10(lba: u32, blocks: u16) -> [u8; 10] {
     let blocks = blocks.to_be_bytes();
     [
         0x2A, 0, lba[0], lba[1], lba[2], lba[3], 0, blocks[0], blocks[1], 0,
+    ]
+}
+
+fn cdb_synchronize_cache_10(lba: u32, blocks: u16) -> [u8; 10] {
+    let lba = lba.to_be_bytes();
+    let blocks = blocks.to_be_bytes();
+    [
+        0x35, 0, lba[0], lba[1], lba[2], lba[3], 0, blocks[0], blocks[1], 0,
     ]
 }
 
