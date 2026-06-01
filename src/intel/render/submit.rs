@@ -1972,6 +1972,7 @@ fn fragment_probe_requires_clip_counter(submit_name: &str) -> bool {
             | "real-vs-ndc-raster-wm-oa-probe"
             | "real-vs-ndc-walk16-raster-wm-oa-probe"
             | "real-vs-ndc-32x32-walk16-raster-wm-oa-probe"
+            | "real-vs-ndc-clip-preconditions-raster-wm-oa-probe"
             | "real-vs-ndc-perpoly-raster-wm-oa-probe"
             | "real-vs-ndc-no-scissor-raster-wm-oa-probe"
             | "real-vs-ndc-ms-raster-wm-oa-probe"

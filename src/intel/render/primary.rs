@@ -436,6 +436,36 @@ fn submit_primary_triangle_with_retries(
             "real-vs-ndc-32x32-walk16-raster-wm-oa-probe",
         );
     }
+    let real_vs_ndc_clip_preconditions_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-ndc-clip-preconditions-raster-wm-oa-probe",
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::Oversized,
+            BackendProbeMode::RasterWmInputOaNdcClipPreconditions,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-ndc-clip-preconditions-raster-wm-oa-probe completed={}\n",
+        real_vs_ndc_clip_preconditions_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-ndc-clip-preconditions-raster-wm-oa-probe diagnostic completed={} note=conventional-ndc-with-sf-viewport-minmax-and-clip-guardband-viewportxy-earlycull\n",
+        real_vs_ndc_clip_preconditions_raster_wm_oa_probe as u8,
+    );
+    if real_vs_ndc_clip_preconditions_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-ndc-clip-preconditions-raster-wm-oa-probe",
+        );
+    }
     let real_vs_ndc_perpoly_raster_wm_oa_probe = submit_triangle_real_vs_draw_probe_to_surface(
         dev,
         warm,
