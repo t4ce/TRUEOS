@@ -406,6 +406,36 @@ fn submit_primary_triangle_with_retries(
             "real-vs-ndc-walk16-raster-wm-oa-probe",
         );
     }
+    let real_vs_ndc_32x32_walk16_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-ndc-32x32-walk16-raster-wm-oa-probe",
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::Oversized,
+            BackendProbeMode::RasterWmInputOaNdcWalk16,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-ndc-32x32-walk16-raster-wm-oa-probe completed={}\n",
+        real_vs_ndc_32x32_walk16_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-ndc-32x32-walk16-raster-wm-oa-probe diagnostic completed={} note=conventional-ndc-with-32x32-target-and-16x16-wm-walk-granularity\n",
+        real_vs_ndc_32x32_walk16_raster_wm_oa_probe as u8,
+    );
+    if real_vs_ndc_32x32_walk16_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-ndc-32x32-walk16-raster-wm-oa-probe",
+        );
+    }
     let real_vs_ndc_perpoly_raster_wm_oa_probe = submit_triangle_real_vs_draw_probe_to_surface(
         dev,
         warm,

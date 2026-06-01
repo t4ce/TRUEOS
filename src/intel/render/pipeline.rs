@@ -241,6 +241,10 @@ fn write_triangle_probe_state(
     sf_clip_viewport[9] = 32768.0f32.to_bits();
     sf_clip_viewport[10] = (-32768.0f32).to_bits();
     sf_clip_viewport[11] = 32768.0f32.to_bits();
+    sf_clip_viewport[12] = 0.0f32.to_bits();
+    sf_clip_viewport[13] = (draw.target_w.saturating_sub(1) as f32).to_bits();
+    sf_clip_viewport[14] = 0.0f32.to_bits();
+    sf_clip_viewport[15] = (draw.target_h.saturating_sub(1) as f32).to_bits();
 
     let scissor_rect = &mut dwords[scissor_rect_offset / 4..scissor_rect_offset / 4 + 2];
     scissor_rect[0] = 0;
@@ -565,9 +569,19 @@ fn encode_triangle_probe_batch(
     // enabled for counters; the clip-bypass probe mirrors simple-shader state
     // by clearing ClipEnable while using screen-space coordinates.
     let clip_enable = !backend_probe_mode.disable_clip_enable();
-    let clip_dw1 = if clip_enable { 1 << 10 } else { 0 };
+    let clip_dw1 = if clip_enable { 1 << 10 } else { 0 }
+        | if backend_probe_mode.enable_clip_preconditions() {
+            (1 << 17) | (1 << 18)
+        } else {
+            0
+        };
     let clip_dw2 = CLIP_MODE_ACCEPT_ALL
         | (u32::from(clip_enable) << 31)
+        | if backend_probe_mode.enable_clip_preconditions() {
+            (1 << 26) | (1 << 28)
+        } else {
+            0
+        }
         | if backend_probe_mode.enable_clip_perspective_divide() {
             0
         } else {
@@ -669,6 +683,7 @@ fn encode_triangle_probe_batch(
         | BackendProbeMode::RasterWmInputOaNdcBlock32
         | BackendProbeMode::RasterWmInputOaNdcPerPoly
         | BackendProbeMode::RasterWmInputOaNdcWalk16
+        | BackendProbeMode::RasterWmInputOaNdcClipPreconditions
         | BackendProbeMode::RasterWmInputOaNdcNoWmScissor
         | BackendProbeMode::RasterWmInputOaScreenSpace
         | BackendProbeMode::RasterWmInputOaScreenSpaceClipBypass
@@ -688,6 +703,7 @@ fn encode_triangle_probe_batch(
             | BackendProbeMode::RasterWmInputOaNdcBlock32
             | BackendProbeMode::RasterWmInputOaNdcPerPoly
             | BackendProbeMode::RasterWmInputOaNdcWalk16
+            | BackendProbeMode::RasterWmInputOaNdcClipPreconditions
             | BackendProbeMode::RasterWmInputOaNdcNoWmScissor
             | BackendProbeMode::RasterWmInputOaScreenSpace
             | BackendProbeMode::RasterWmInputOaScreenSpaceClipBypass

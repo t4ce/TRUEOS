@@ -208,6 +208,7 @@ enum BackendProbeMode {
     RasterWmInputOaNdcBlock32,
     RasterWmInputOaNdcPerPoly,
     RasterWmInputOaNdcWalk16,
+    RasterWmInputOaNdcClipPreconditions,
     RasterWmInputOaNdcNoWmScissor,
     RasterWmInputOaScreenSpace,
     RasterWmInputOaScreenSpaceClipBypass,
@@ -339,6 +340,9 @@ impl BackendProbeMode {
             Self::RasterWmInputOaNdcBlock32 => "raster-wm-input-oa-ndc-block32",
             Self::RasterWmInputOaNdcPerPoly => "raster-wm-input-oa-ndc-per-poly",
             Self::RasterWmInputOaNdcWalk16 => "raster-wm-input-oa-ndc-walk16",
+            Self::RasterWmInputOaNdcClipPreconditions => {
+                "raster-wm-input-oa-ndc-clip-preconditions"
+            }
             Self::RasterWmInputOaNdcNoWmScissor => "raster-wm-input-oa-ndc-no-wm-scissor",
             Self::RasterWmInputOaScreenSpace => "raster-wm-input-oa-screen-space",
             Self::RasterWmInputOaScreenSpaceClipBypass => {
@@ -396,6 +400,7 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaNdcBlock32
                 | Self::RasterWmInputOaNdcPerPoly
                 | Self::RasterWmInputOaNdcWalk16
+                | Self::RasterWmInputOaNdcClipPreconditions
                 | Self::RasterWmInputOaNdcNoWmScissor
                 | Self::RasterWmInputOaScreenSpace
                 | Self::RasterWmInputOaScreenSpaceClipBypass
@@ -428,9 +433,13 @@ impl BackendProbeMode {
 
     fn wm_walk_granularity_override(self) -> Option<u32> {
         match self {
-            Self::RasterWmInputOaNdcWalk16 => Some(0),
+            Self::RasterWmInputOaNdcWalk16 | Self::RasterWmInputOaNdcClipPreconditions => Some(0),
             _ => None,
         }
+    }
+
+    fn enable_clip_preconditions(self) -> bool {
+        matches!(self, Self::RasterWmInputOaNdcClipPreconditions)
     }
 
     fn disable_sf_viewport_transform(self) -> bool {
@@ -448,6 +457,7 @@ impl BackendProbeMode {
             Self::RasterWmInputOaNdcPerPoly => Some(1),
             Self::RasterWmInputOaNdcBlock32
             | Self::RasterWmInputOaNdcWalk16
+            | Self::RasterWmInputOaNdcClipPreconditions
             | Self::RasterWmInputOaNdcNoWmScissor
             | Self::RasterWmInputOaNdcForceOnPattern
             | Self::RasterWmInputOaScreenSpace
@@ -464,6 +474,7 @@ impl BackendProbeMode {
             Self::RasterWmInputOaNdcBlock32
                 | Self::RasterWmInputOaNdcPerPoly
                 | Self::RasterWmInputOaNdcWalk16
+                | Self::RasterWmInputOaNdcClipPreconditions
                 | Self::RasterWmInputOaNdcNoWmScissor
                 | Self::RasterWmInputOaNdcForceOnPattern
         )
@@ -481,6 +492,7 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaNdcBlock32
                 | Self::RasterWmInputOaNdcPerPoly
                 | Self::RasterWmInputOaNdcWalk16
+                | Self::RasterWmInputOaNdcClipPreconditions
                 | Self::RasterWmInputOaNdcNoWmScissor
                 | Self::RasterWmInputOaNdcForceOnPattern
                 | Self::RasterWmInputOaForceOnPattern
@@ -658,6 +670,7 @@ fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
             | "real-vs-raster-wm-oa-probe"
             | "real-vs-ndc-raster-wm-oa-probe"
             | "real-vs-ndc-walk16-raster-wm-oa-probe"
+            | "real-vs-ndc-32x32-walk16-raster-wm-oa-probe"
             | "real-vs-ndc-perpoly-raster-wm-oa-probe"
             | "real-vs-ndc-no-scissor-raster-wm-oa-probe"
             | "real-vs-ndc-ms-raster-wm-oa-probe"
@@ -671,6 +684,7 @@ fn is_raster_wm_oa_submit_name(submit_name: &str) -> bool {
             | "real-vs-raster-wm-oa-probe"
             | "real-vs-ndc-raster-wm-oa-probe"
             | "real-vs-ndc-walk16-raster-wm-oa-probe"
+            | "real-vs-ndc-32x32-walk16-raster-wm-oa-probe"
             | "real-vs-ndc-perpoly-raster-wm-oa-probe"
             | "real-vs-ndc-no-scissor-raster-wm-oa-probe"
             | "real-vs-ndc-ms-raster-wm-oa-probe"
@@ -711,6 +725,7 @@ fn is_surface_draw_submit_name(submit_name: &str) -> bool {
             | "real-vs-raster-wm-oa-probe"
             | "real-vs-ndc-raster-wm-oa-probe"
             | "real-vs-ndc-walk16-raster-wm-oa-probe"
+            | "real-vs-ndc-32x32-walk16-raster-wm-oa-probe"
             | "real-vs-ndc-perpoly-raster-wm-oa-probe"
             | "real-vs-ndc-no-scissor-raster-wm-oa-probe"
             | "real-vs-ndc-ms-raster-wm-oa-probe"
@@ -727,6 +742,7 @@ fn is_fragment_candidate_submit_name(submit_name: &str) -> bool {
             | "real-vs-raster-wm-oa-probe"
             | "real-vs-ndc-raster-wm-oa-probe"
             | "real-vs-ndc-walk16-raster-wm-oa-probe"
+            | "real-vs-ndc-32x32-walk16-raster-wm-oa-probe"
             | "real-vs-ndc-perpoly-raster-wm-oa-probe"
             | "real-vs-ndc-no-scissor-raster-wm-oa-probe"
             | "real-vs-ndc-ms-raster-wm-oa-probe"
