@@ -309,7 +309,7 @@ fn submit_primary_triangle_with_retries(
         8,
         TriangleBlendProbeMode::MesaZeroedState,
         VfPrimitiveGeometry::ScreenSpace8x8,
-        BackendProbeMode::RasterWmInputOaForceOnPattern,
+        BackendProbeMode::RasterWmInputOaScreenSpaceClipBypass,
         PostDrawSyncVariant::LightPostSyncNoCs,
     );
     intel_render_verbose_log!(
@@ -749,7 +749,7 @@ fn log_primary_frontier_summary(
     let (problem, suspect, next_probe) = if !wm_coverage_observed && fragment_candidate_ready {
         (
             "fixed-function-raster-does-not-report-wm-coverage",
-            "sf-to-wm-raster-state-not-vf-geometry",
+            "sf-to-wm-raster-state-not-vf-geometry-or-vue-slot",
             "instrument-wm-coverage",
         )
     } else if wm_coverage_observed && !psd_dispatch_observed {
@@ -904,22 +904,28 @@ fn submit_triangle_vf_draw_to_surface(
     backend_probe_mode: BackendProbeMode,
     post_draw_sync_variant: PostDrawSyncVariant,
 ) -> bool {
+    let streamout_experiment = if backend_probe_mode.uses_vf_position_slot0() {
+        StreamoutProofExperiment::PositionSlot0
+    } else {
+        StreamoutProofExperiment::PositionSlot1
+    };
     let Some(draw) = prepare_vf_streamout_proof_resources(
         warm,
         dst_gpu_addr,
         pitch,
         rect_w,
         rect_h,
-        StreamoutProofExperiment::PositionSlot1,
+        streamout_experiment,
         geometry,
     ) else {
         crate::log!(
-            "intel/render: {} staging skipped reason=resource-layout size={}x{} pitch=0x{:X} geometry={}\n",
+            "intel/render: {} staging skipped reason=resource-layout size={}x{} pitch=0x{:X} geometry={} streamout_experiment={}\n",
             submit_name,
             rect_w,
             rect_h,
             pitch,
             geometry.label(),
+            streamout_experiment.label(),
         );
         return false;
     };
@@ -1119,7 +1125,7 @@ fn submit_triangle_vf_draw_to_surface(
         RCS_EXEC_RESULT_DRAW_POST3D,
         RCS_EXEC_RESULT_DONE,
         TriangleBatchMode::VfDraw,
-        StreamoutProofExperiment::PositionSlot1,
+        streamout_experiment,
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
         backend_probe_mode,
         post_draw_sync_variant,

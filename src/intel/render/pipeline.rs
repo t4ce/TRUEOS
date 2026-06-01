@@ -561,26 +561,37 @@ fn encode_triangle_probe_batch(
         BackendProbeMode::PsDispatchAllKspSlots => (1, 1, 1),
         _ => stage_dispatch_bits(pipeline.ps.meta.kernel.dispatch_mode),
     };
-    // Keep CLIP close to Mesa's trivial path, but explicitly arm the clipper
-    // counters for bring-up. ACCEPT_ALL passes non-BAD objects directly
-    // down-pipe and inhibits clipping without requiring CLIP threads.
-    let clip_dw1 = 1 << 10;
-    let clip_dw2 = CLIP_PERSPECTIVE_DIVIDE_DISABLE | CLIP_MODE_ACCEPT_ALL | (1 << 31);
+    // Keep CLIP close to Mesa's trivial path. Most probes leave the CLIP stage
+    // enabled for counters; the clip-bypass probe mirrors simple-shader state
+    // by clearing ClipEnable while using screen-space coordinates.
+    let clip_enable = !backend_probe_mode.disable_clip_enable();
+    let clip_dw1 = if clip_enable { 1 << 10 } else { 0 };
+    let clip_dw2 = CLIP_MODE_ACCEPT_ALL
+        | (u32::from(clip_enable) << 31)
+        | if backend_probe_mode.enable_clip_perspective_divide() {
+            0
+        } else {
+            CLIP_PERSPECTIVE_DIVIDE_DISABLE
+        };
     let clip_dw3 = 1 << 5;
     // Keep SF close to the trivial host path by default.  The screen-space WM
     // coverage probe disables the SF viewport transform so the coordinate
     // contract matches PerspectiveDivideDisable instead of applying a second
     // hidden transform before scan conversion.
-    let sf_dw1 = (u32::from(!backend_probe_mode.disable_sf_viewport_transform()) << 1) | (1 << 10);
-    let sf_dw2 = 1 << 29;
+    let sf_dw1 = (u32::from(!backend_probe_mode.disable_sf_viewport_transform()) << 1)
+        | if clip_enable { 1 << 10 } else { 0 };
+    let sf_deref_block_size = backend_probe_mode.sf_deref_block_size_override().unwrap_or(1);
+    let sf_dw2 = sf_deref_block_size << 29;
     let sf_dw3 = 0;
     // Mirror Mesa's simple-shader path by default: cull none, and otherwise
     // leave raster defaults boring. The forced-MSAA raster probe deliberately
     // overrides only the WM_INT/SF_INT multisample-rasterization mode.
     let forced_ms_raster_mode = backend_probe_mode.forced_ms_raster_mode();
+    let forced_raster_sample_count = backend_probe_mode.forced_raster_sample_count();
     let raster_dw1 = (1 << 16)
         | forced_ms_raster_mode
             .map_or(0, |mode| (1 << 14) | ((mode & 0x3) << 10) | (u32::from(mode >= 2) << 12));
+    let raster_dw1 = raster_dw1 | forced_raster_sample_count.map_or(0, |samples| (samples & 0x7) << 18);
     let raster_dw2 = 0;
     let raster_dw3 = 0;
     let raster_dw4 = 0;
@@ -652,7 +663,11 @@ fn encode_triangle_probe_batch(
         | BackendProbeMode::PsGrfMaxThreads31
         | BackendProbeMode::PsGrfMaxThreads15
         | BackendProbeMode::RasterWmInputOa
-        | BackendProbeMode::RasterWmInputOaForceOnPattern => {
+        | BackendProbeMode::RasterWmInputOaNdcBlock32
+        | BackendProbeMode::RasterWmInputOaScreenSpace
+        | BackendProbeMode::RasterWmInputOaScreenSpaceClipBypass
+        | BackendProbeMode::RasterWmInputOaForceOnPattern
+        | BackendProbeMode::RasterWmInputOaForceOffPixel => {
             pipeline.ps.meta.kernel.binding_table_entry_count
         }
         BackendProbeMode::PsBindingTableCountOne => {
@@ -663,7 +678,11 @@ fn encode_triangle_probe_batch(
         backend_probe_mode,
         BackendProbeMode::PsBindingTableCountZero
             | BackendProbeMode::RasterWmInputOa
+            | BackendProbeMode::RasterWmInputOaNdcBlock32
+            | BackendProbeMode::RasterWmInputOaScreenSpace
+            | BackendProbeMode::RasterWmInputOaScreenSpaceClipBypass
             | BackendProbeMode::RasterWmInputOaForceOnPattern
+            | BackendProbeMode::RasterWmInputOaForceOffPixel
     ) {
         0
     } else {
@@ -863,35 +882,75 @@ fn encode_triangle_probe_batch(
     push_addr(batch_dwords, &mut cursor, draw.vertex_gpu_addr)?;
     push(batch_dwords, &mut cursor, draw.vertex_count.saturating_mul(draw.vertex_stride))?;
 
+    let vf_vertex_element_count = if vf_synthesized_vue {
+        streamout_experiment.vf_vertex_element_count()
+    } else {
+        1
+    };
     log_batch_offset(cursor, "3DSTATE_VERTEX_ELEMENTS");
     push(
         batch_dwords,
         &mut cursor,
-        if vf_synthesized_vue {
+        if vf_vertex_element_count == 2 {
             CMD_3DSTATE_VERTEX_ELEMENTS_2
         } else {
             CMD_3DSTATE_VERTEX_ELEMENTS_1
         },
     )?;
     if vf_synthesized_vue {
-        push(batch_dwords, &mut cursor, (SURFACE_FORMAT_R32G32B32A32_FLOAT << 16) | (1 << 25))?;
-        push(
-            batch_dwords,
-            &mut cursor,
-            (VFCOMP_STORE_0 << 28)
-                | (VFCOMP_STORE_0 << 24)
-                | (VFCOMP_STORE_0 << 20)
-                | (VFCOMP_STORE_0 << 16),
-        )?;
-        push(batch_dwords, &mut cursor, (SURFACE_FORMAT_R32G32B32A32_FLOAT << 16) | (1 << 25))?;
-        push(
-            batch_dwords,
-            &mut cursor,
-            (VFCOMP_STORE_SRC << 28)
-                | (VFCOMP_STORE_SRC << 24)
-                | (VFCOMP_STORE_SRC << 20)
-                | (VFCOMP_STORE_SRC << 16),
-        )?;
+        match streamout_experiment {
+            StreamoutProofExperiment::PositionSlot0 => {
+                push(batch_dwords, &mut cursor, (SURFACE_FORMAT_R32G32B32_FLOAT << 16) | (1 << 25))?;
+                push(
+                    batch_dwords,
+                    &mut cursor,
+                    (VFCOMP_STORE_SRC << 28)
+                        | (VFCOMP_STORE_SRC << 24)
+                        | (VFCOMP_STORE_SRC << 20)
+                        | (VFCOMP_STORE_1_FP << 16),
+                )?;
+            }
+            StreamoutProofExperiment::PositionSlot1 => {
+                push(batch_dwords, &mut cursor, (SURFACE_FORMAT_R32G32B32A32_FLOAT << 16) | (1 << 25))?;
+                push(
+                    batch_dwords,
+                    &mut cursor,
+                    (VFCOMP_STORE_0 << 28)
+                        | (VFCOMP_STORE_0 << 24)
+                        | (VFCOMP_STORE_0 << 20)
+                        | (VFCOMP_STORE_0 << 16),
+                )?;
+                push(batch_dwords, &mut cursor, (SURFACE_FORMAT_R32G32B32_FLOAT << 16) | (1 << 25))?;
+                push(
+                    batch_dwords,
+                    &mut cursor,
+                    (VFCOMP_STORE_SRC << 28)
+                        | (VFCOMP_STORE_SRC << 24)
+                        | (VFCOMP_STORE_SRC << 20)
+                        | (VFCOMP_STORE_1_FP << 16),
+                )?;
+            }
+            StreamoutProofExperiment::HeaderAndPositionSlots01 => {
+                push(batch_dwords, &mut cursor, (SURFACE_FORMAT_R32G32B32A32_UINT << 16) | (1 << 25))?;
+                push(
+                    batch_dwords,
+                    &mut cursor,
+                    (VFCOMP_STORE_SRC << 28)
+                        | (VFCOMP_STORE_SRC << 24)
+                        | (VFCOMP_STORE_SRC << 20)
+                        | (VFCOMP_STORE_SRC << 16),
+                )?;
+                push(batch_dwords, &mut cursor, 16 | (SURFACE_FORMAT_R32G32B32_FLOAT << 16) | (1 << 25))?;
+                push(
+                    batch_dwords,
+                    &mut cursor,
+                    (VFCOMP_STORE_SRC << 28)
+                        | (VFCOMP_STORE_SRC << 24)
+                        | (VFCOMP_STORE_SRC << 20)
+                        | (VFCOMP_STORE_1_FP << 16),
+                )?;
+            }
+        }
     } else {
         push(batch_dwords, &mut cursor, (SURFACE_FORMAT_R32G32B32_FLOAT << 16) | (1 << 25))?;
         push(
@@ -903,6 +962,38 @@ fn encode_triangle_probe_batch(
                 | (VFCOMP_STORE_1_FP << 16),
         )?;
     }
+    intel_render_focus_log!(
+        "intel/render: probe-vf-vue-contract vf_synthesized_vue={} experiment={} ve_count={} vue_contract={} header_slot={} position_slot={} position_format={} position_components={} vertex_stride={} note=clip_sf_requires_valid_xyzw_position\n",
+        vf_synthesized_vue as u8,
+        streamout_experiment.label(),
+        vf_vertex_element_count,
+        if vf_synthesized_vue {
+            streamout_experiment.vf_slot_contract()
+        } else {
+            "shader-output"
+        },
+        if vf_synthesized_vue {
+            match streamout_experiment {
+                StreamoutProofExperiment::PositionSlot0 => "none",
+                StreamoutProofExperiment::PositionSlot1 => "zero4",
+                StreamoutProofExperiment::HeaderAndPositionSlots01 => "source-offset0",
+            }
+        } else {
+            "shader-output"
+        },
+        if vf_synthesized_vue {
+            match streamout_experiment {
+                StreamoutProofExperiment::PositionSlot0 => "slot0=xyz+forced-w1",
+                StreamoutProofExperiment::PositionSlot1 => "slot1=xyz+forced-w1",
+                StreamoutProofExperiment::HeaderAndPositionSlots01 => "slot1=offset16-xyz+forced-w1",
+            }
+        } else {
+            "vertex-shader"
+        },
+        "R32G32B32_FLOAT",
+        "src,src,src,1.0",
+        draw.vertex_stride,
+    );
 
     log_batch_offset(cursor, "3DSTATE_VF_STATISTICS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_STATISTICS | 1)?;
@@ -1185,6 +1276,15 @@ fn encode_triangle_probe_batch(
     )?;
     push(batch_dwords, &mut cursor, 0)?;
 
+    // Raster setup consumes the multisample/sample-mask contract, so establish
+    // it before CLIP/SF/RASTER instead of relying on later state writes.
+    log_batch_offset(cursor, "3DSTATE_MULTISAMPLE pre-raster");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_MULTISAMPLE)?;
+    push(batch_dwords, &mut cursor, multisample_dw1)?;
+    log_batch_offset(cursor, "3DSTATE_SAMPLE_MASK pre-raster");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_SAMPLE_MASK)?;
+    push(batch_dwords, &mut cursor, sample_mask_dw1)?;
+
     log_batch_offset(cursor, "3DSTATE_CLIP");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_CLIP)?;
     push(batch_dwords, &mut cursor, clip_dw1)?;
@@ -1277,13 +1377,6 @@ fn encode_triangle_probe_batch(
     log_batch_offset(cursor, "3DSTATE_PS_BLEND");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_PS_BLEND)?;
     push(batch_dwords, &mut cursor, ps_blend_dw1)?;
-
-    log_batch_offset(cursor, "3DSTATE_MULTISAMPLE");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_MULTISAMPLE)?;
-    push(batch_dwords, &mut cursor, multisample_dw1)?;
-    log_batch_offset(cursor, "3DSTATE_SAMPLE_MASK");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_SAMPLE_MASK)?;
-    push(batch_dwords, &mut cursor, sample_mask_dw1)?;
 
     // Clear inherited WM_HZ_OP clear/resolve overrides so PS dispatch only
     // depends on the explicit probe state we log below.
@@ -1543,7 +1636,7 @@ fn encode_triangle_probe_batch(
         (sf_dw3 >> 25) & 0x3,
     );
     intel_render_focus_log!(
-        "intel/render: probe-raster-decoded sf_viewport=0x{:X} cc_viewport=0x{:X} scissor_ptr=0x{:X} cull={} fill_front={} fill_back={} front={} api_mode={}({}) scissor_enable={} aa_enable={} dx_ms_enable={} dx_ms_mode={}({}) force_multisampling={} forced_samples={}({}) wm_int_ms_raster_mode={} sample_mask=0x{:X} multisample_dw=0x{:08X}\n",
+        "intel/render: probe-raster-decoded sf_viewport=0x{:X} cc_viewport=0x{:X} scissor_ptr=0x{:X} cull={} fill_front={} fill_back={} front={} api_mode={}({}) scissor_enable={} aa_enable={} dx_ms_enable={} dx_ms_mode={}({}) force_multisampling={} forced_samples={}({}) rt_independent_raster={} wm_hz_op={} wm_int_ms_raster_mode={} sample_mask=0x{:X} multisample_dw=0x{:08X}\n",
         probe_state.sf_clip_viewport_offset_bytes,
         probe_state.cc_viewport_offset_bytes,
         probe_state.scissor_rect_offset_bytes,
@@ -1561,6 +1654,9 @@ fn encode_triangle_probe_batch(
         (raster_dw1 >> 14) & 0x1,
         (raster_dw1 >> 18) & 0x7,
         decode_forced_sample_count_name((raster_dw1 >> 18) & 0x7),
+        (((raster_dw1 >> 18) & 0x7) != 0
+            && (wm_hz_op_dw1 | wm_hz_op_dw2 | wm_hz_op_dw3 | wm_hz_op_dw4) == 0) as u8,
+        ((wm_hz_op_dw1 | wm_hz_op_dw2 | wm_hz_op_dw3 | wm_hz_op_dw4) != 0) as u8,
         decode_forced_wm_int_ms_raster_mode_name(
             ((raster_dw1 >> 14) & 0x1) != 0,
             (raster_dw1 >> 10) & 0x3,
@@ -1603,7 +1699,7 @@ fn encode_triangle_probe_batch(
         ((wm_hz_op_dw1 | wm_hz_op_dw2 | wm_hz_op_dw3 | wm_hz_op_dw4) != 0) as u8,
     );
     intel_render_focus_log!(
-        "intel/render: probe-sf-wm-contract topo={} vertex_count={} primitive_objects_expected={} coord_contract={} pdd={} sf_viewport_transform={} vp_index=0 rta_index_forced_zero={} draw_rect=[0,0..{},{}] scissor=[0,0..{},{}] sf_outputs_hidden=pue_handle|bbox|edge_equations|raster_start|orientation first_unproven=sf_object_setup_to_wm_scan_conversion\n",
+        "intel/render: probe-sf-wm-contract topo={} vertex_count={} primitive_objects_expected={} coord_contract={} clip_mode={}({}) clip_enable={} clip_action={} pdd={} sf_viewport_transform={} sf_deref_block={}({}) prm_vs_entries={} prm_expected_deref={} vp_index=0 rta_index_forced_zero={} draw_rect=[0,0..{},{}] scissor=[0,0..{},{}] sf_outputs_hidden=pue_handle|bbox|edge_equations|raster_start|orientation first_unproven=sf_object_setup_to_wm_scan_conversion\n",
         primitive_topology_label(batch_mode.topology()),
         draw.vertex_count,
         if batch_mode.topology() == TRIANGLE_TOPOLOGY_TRILIST {
@@ -1620,8 +1716,24 @@ fn encode_triangle_probe_batch(
         } else {
             "clip-space-with-sf-viewport-transform"
         },
+        clip_mode,
+        decode_clip_mode_name(clip_mode),
+        clip_enable as u8,
+        if clip_enable != 0 {
+            decode_clip_mode_action(clip_mode)
+        } else {
+            "clip-stage-bypass"
+        },
         ((clip_dw2 & CLIP_PERSPECTIVE_DIVIDE_DISABLE) != 0) as u8,
         (sf_dw1 >> 1) & 0x1,
+        (sf_dw2 >> 29) & 0x3,
+        decode_deref_block_size_name((sf_dw2 >> 29) & 0x3),
+        TRIANGLE_VS_URB_ENTRIES,
+        if TRIANGLE_VS_URB_ENTRIES < 192 {
+            "PerPoly"
+        } else {
+            "Block32"
+        },
         force_zero_rta_index,
         draw.target_w.saturating_sub(1),
         draw.target_h.saturating_sub(1),

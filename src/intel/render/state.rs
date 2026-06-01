@@ -205,7 +205,11 @@ enum BackendProbeMode {
     PsGrfMaxThreads31,
     PsGrfMaxThreads15,
     RasterWmInputOa,
+    RasterWmInputOaNdcBlock32,
+    RasterWmInputOaScreenSpace,
+    RasterWmInputOaScreenSpaceClipBypass,
     RasterWmInputOaForceOnPattern,
+    RasterWmInputOaForceOffPixel,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -328,7 +332,13 @@ impl BackendProbeMode {
             Self::PsGrfMaxThreads31 => "ps-grf-maxthreads-31",
             Self::PsGrfMaxThreads15 => "ps-grf-maxthreads-15",
             Self::RasterWmInputOa => "raster-wm-input-oa",
+            Self::RasterWmInputOaNdcBlock32 => "raster-wm-input-oa-ndc-block32",
+            Self::RasterWmInputOaScreenSpace => "raster-wm-input-oa-screen-space",
+            Self::RasterWmInputOaScreenSpaceClipBypass => {
+                "raster-wm-input-oa-screen-space-clip-bypass"
+            }
             Self::RasterWmInputOaForceOnPattern => "raster-wm-input-oa-force-on-pattern",
+            Self::RasterWmInputOaForceOffPixel => "raster-wm-input-oa-force-off-pixel",
         }
     }
 
@@ -370,18 +380,70 @@ impl BackendProbeMode {
     }
 
     fn uses_raster_wm_oa(self) -> bool {
-        matches!(self, Self::RasterWmInputOa | Self::RasterWmInputOaForceOnPattern)
+        matches!(
+            self,
+            Self::RasterWmInputOa
+                | Self::RasterWmInputOaNdcBlock32
+                | Self::RasterWmInputOaScreenSpace
+                | Self::RasterWmInputOaScreenSpaceClipBypass
+                | Self::RasterWmInputOaForceOnPattern
+                | Self::RasterWmInputOaForceOffPixel
+        )
     }
 
     fn forced_ms_raster_mode(self) -> Option<u32> {
         match self {
             Self::RasterWmInputOaForceOnPattern => Some(3),
+            Self::RasterWmInputOaForceOffPixel => Some(0),
+            _ => None,
+        }
+    }
+
+    fn forced_raster_sample_count(self) -> Option<u32> {
+        match self {
+            Self::RasterWmInputOaForceOnPattern | Self::RasterWmInputOaForceOffPixel => Some(2),
             _ => None,
         }
     }
 
     fn disable_sf_viewport_transform(self) -> bool {
-        matches!(self, Self::RasterWmInputOaForceOnPattern)
+        matches!(
+            self,
+            Self::RasterWmInputOaScreenSpace
+                | Self::RasterWmInputOaScreenSpaceClipBypass
+                | Self::RasterWmInputOaForceOnPattern
+                | Self::RasterWmInputOaForceOffPixel
+        )
+    }
+
+    fn sf_deref_block_size_override(self) -> Option<u32> {
+        match self {
+            Self::RasterWmInputOaNdcBlock32
+            | Self::RasterWmInputOaScreenSpace
+            | Self::RasterWmInputOaScreenSpaceClipBypass
+            | Self::RasterWmInputOaForceOnPattern
+            | Self::RasterWmInputOaForceOffPixel => Some(0),
+            _ => None,
+        }
+    }
+
+    fn enable_clip_perspective_divide(self) -> bool {
+        matches!(self, Self::RasterWmInputOaNdcBlock32)
+    }
+
+    fn disable_clip_enable(self) -> bool {
+        matches!(self, Self::RasterWmInputOaScreenSpaceClipBypass)
+    }
+
+    fn uses_vf_position_slot0(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaScreenSpace
+                | Self::RasterWmInputOaScreenSpaceClipBypass
+                | Self::RasterWmInputOaNdcBlock32
+                | Self::RasterWmInputOaForceOnPattern
+                | Self::RasterWmInputOaForceOffPixel
+        )
     }
 }
 
