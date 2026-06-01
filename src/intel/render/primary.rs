@@ -255,7 +255,13 @@ fn submit_primary_triangle_with_retries(
         return true;
     }
 
-    run_postdraw_pc_retire_spectrum(dev, warm, surface_gpu, pitch_bytes, width, height);
+    if PRIMARY_POSTDRAW_RETIRE_SPECTRUM_ENABLED {
+        run_postdraw_pc_retire_spectrum(dev, warm, surface_gpu, pitch_bytes, width, height);
+    } else {
+        intel_render_focus_log!(
+            "intel/render: postdraw-pc-retire-spectrum skipped reason=fragment-frontier-first noise_budget=boot\n",
+        );
+    }
 
     unsafe {
         core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
@@ -319,15 +325,30 @@ fn submit_primary_triangle_with_retries(
 
     let fragment_candidate_ready = fragment_candidate_ready();
     let fragment_boundary_observed = fragment_boundary_observed();
+    let wm_coverage_observed = wm_coverage_observed();
+    let psd_dispatch_observed = psd_dispatch_observed();
     intel_render_focus_log!(
-        "intel/render: primary-fragment-boundary-gate candidate_ready={} fragment_observed={} action={} reason=shape_to_fragment_boundary_precedes_ps_spectrum\n",
+        "intel/render: primary-fragment-boundary-gate candidate_ready={} wm_coverage={} psd_dispatch={} fragment_observed={} action={} reason=shape_to_fragment_boundary_precedes_ps_spectrum\n",
         fragment_candidate_ready as u8,
+        wm_coverage_observed as u8,
+        psd_dispatch_observed as u8,
         fragment_boundary_observed as u8,
         if fragment_boundary_observed {
             "continue-ps-spectrum"
         } else {
             "halt-ps-spectrum"
         },
+    );
+    log_primary_frontier_summary(
+        vf_streamout_precheck,
+        vf_draw_precheck,
+        ps_launch_big_primitive,
+        ps_bt0_scratch_rt,
+        raster_wm_oa_probe,
+        fragment_candidate_ready,
+        fragment_boundary_observed,
+        wm_coverage_observed,
+        psd_dispatch_observed,
     );
     if !fragment_boundary_observed {
         return false;
@@ -664,6 +685,65 @@ fn run_postdraw_pc_retire_spectrum(
             recover_render_engine_after_nonretired_submit(dev, warm, submit_name);
         }
     }
+}
+
+fn log_primary_frontier_summary(
+    vf_streamout_precheck: bool,
+    vf_draw_precheck: bool,
+    ps_launch_big_primitive: bool,
+    ps_bt0_scratch_rt: bool,
+    raster_wm_oa_probe: bool,
+    fragment_candidate_ready: bool,
+    fragment_boundary_observed: bool,
+    wm_coverage_observed: bool,
+    psd_dispatch_observed: bool,
+) {
+    let first_good = if psd_dispatch_observed {
+        "psd-dispatch"
+    } else if wm_coverage_observed {
+        "wm-coverage"
+    } else if fragment_candidate_ready {
+        "clip-sf-setup"
+    } else if vf_draw_precheck {
+        "draw-retired"
+    } else if vf_streamout_precheck {
+        "vf-streamout"
+    } else {
+        "scanout-mi-only"
+    };
+    let first_bad = if !wm_coverage_observed && fragment_candidate_ready {
+        "wm-coverage"
+    } else if wm_coverage_observed && !psd_dispatch_observed {
+        "psd-dispatch"
+    } else if !fragment_candidate_ready {
+        "clip-sf-to-wm"
+    } else {
+        "rt-visible"
+    };
+
+    intel_render_focus_log!(
+        "intel/render: primary-frontier-summary first_good={} first_bad={} vf_streamout={} vf_draw={} ps_big={} scratch_rt={} raster_oa={} fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} next={}\n",
+        first_good,
+        first_bad,
+        vf_streamout_precheck as u8,
+        vf_draw_precheck as u8,
+        ps_launch_big_primitive as u8,
+        ps_bt0_scratch_rt as u8,
+        raster_wm_oa_probe as u8,
+        fragment_candidate_ready as u8,
+        wm_coverage_observed as u8,
+        psd_dispatch_observed as u8,
+        fragment_boundary_observed as u8,
+        if psd_dispatch_observed {
+            "prove-rt-write"
+        } else if wm_coverage_observed {
+            "instrument-psd-dispatch"
+        } else if fragment_candidate_ready {
+            "instrument-wm-coverage"
+        } else {
+            "recheck-raster-input"
+        },
+    );
 }
 
 fn submit_triangle_vf_streamout_proof(
@@ -1204,13 +1284,23 @@ fn log_raster_wm_oa_probe(
             || postps_fail_delta != 0
             || pixel_write_delta != 0
             || pixel_blend_delta != 0);
+    let wm_coverage_observed =
+        reports_valid && (raster_samples_delta != 0 || samples_killed_delta != 0);
+    let psd_dispatch_observed = reports_valid
+        && (ps_threads_delta != 0
+            || delta.ps_invocations != 0
+            || delta.cps_invocations != 0
+            || delta.ps_depth != 0);
     record_fragment_boundary_probe(true, accepted);
+    record_wm_psd_boundary_probe(wm_coverage_observed, psd_dispatch_observed);
     intel_render_focus_log!(
-        "intel/render: {} raster-wm-input-proof accepted={} completed={} reports_valid={} begin_id=0x{:08X} end_id=0x{:08X} rt_gpu=0x{:X} size={}x{} pitch=0x{:X} raster_samples_delta={} ps_threads_delta={} samples_killed_delta={} postps_fail_delta={} pixel_write_delta={} pixel_blend_delta={} ps_delta={} cps_delta={} ps_depth_delta={} observable=oar-mi-rpc-a21 does_not_prove=rt_visible\n",
+        "intel/render: {} raster-wm-input-proof accepted={} completed={} reports_valid={} wm_coverage={} psd_dispatch={} begin_id=0x{:08X} end_id=0x{:08X} rt_gpu=0x{:X} size={}x{} pitch=0x{:X} raster_samples_delta={} ps_threads_delta={} samples_killed_delta={} postps_fail_delta={} pixel_write_delta={} pixel_blend_delta={} ps_delta={} cps_delta={} ps_depth_delta={} observable=oar-mi-rpc-a21 does_not_prove=rt_visible\n",
         submit_name,
         accepted as u8,
         completed as u8,
         reports_valid as u8,
+        wm_coverage_observed as u8,
+        psd_dispatch_observed as u8,
         begin_id,
         end_id,
         draw.rt_gpu_addr,

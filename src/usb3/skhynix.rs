@@ -13,7 +13,7 @@ const UAS_STATUS_GOOD: u8 = 0x00;
 const UAS_STREAM_ID_FIRST: u16 = 1;
 const UAS_STREAM_ID_LAST: u16 = 1;
 const UAS_XHCI_STREAMS_ENABLED: bool = true;
-const UAS_XHCI_OUT_STREAMS_ENABLED: bool = false;
+const UAS_XHCI_OUT_STREAMS_ENABLED: bool = true;
 const SKHYNIX_UAS_MAX_TRANSFER_BYTES: usize = 8 * 1024 * 1024;
 const SKHYNIX_UAS_LOG_TRANSFER_BYTES: usize = 512 * 1024;
 
@@ -37,6 +37,7 @@ struct SkhynixUasBlockDevice {
 struct MassBulkEndpoint {
     address: u8,
     max_packet_size: u16,
+    pipe_usage: Option<u8>,
 }
 
 #[derive(Clone, Debug)]
@@ -64,6 +65,13 @@ struct UasTarget {
 }
 
 pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevice) {
+    if let Some(config) = pooled.device.configurations().first() {
+        crate::log!(
+            "crabusb: skhynix-green proof=config-raw len={} bytes={:02x?}\n",
+            config.raw.len(),
+            config.raw.as_slice()
+        );
+    }
     let candidates = collect_uas_candidates(pooled.device.configurations());
     crate::log!(
         "crabusb: skhynix-green {:04x}:{:04x} proof=transport-plan uas_candidates={}\n",
@@ -271,6 +279,7 @@ fn collect_uas_candidates(
     let mut out = Vec::new();
 
     for config in configs {
+        let pipe_usage = uas_pipe_usage_by_endpoint(&config.raw);
         for interface in &config.interfaces {
             for alt in &interface.alt_settings {
                 if alt.class != USB_CLASS_MASS_STORAGE
@@ -290,6 +299,7 @@ fn collect_uas_candidates(
                     let item = MassBulkEndpoint {
                         address: ep.address,
                         max_packet_size: ep.max_packet_size,
+                        pipe_usage: pipe_usage_for_endpoint(&pipe_usage, ep.address),
                     };
                     match ep.direction {
                         super::crabusb::usb_if::transfer::Direction::In => bulk_in.push(item),
@@ -313,6 +323,38 @@ fn collect_uas_candidates(
     out
 }
 
+fn uas_pipe_usage_by_endpoint(raw: &[u8]) -> Vec<(u8, u8)> {
+    let mut out = Vec::new();
+    let mut current_ep = None;
+    let mut offset = 0usize;
+    while offset + 2 <= raw.len() {
+        let len = raw[offset] as usize;
+        if len < 2 || offset + len > raw.len() {
+            break;
+        }
+        let ty = raw[offset + 1];
+        if ty == 0x05 && len >= 3 {
+            current_ep = Some(raw[offset + 2]);
+        } else if ty == 0x24 && len >= 3 {
+            if let Some(ep) = current_ep {
+                out.push((ep, raw[offset + 2]));
+            }
+        }
+        offset += len;
+    }
+    out
+}
+
+fn pipe_usage_for_endpoint(pipe_usage: &[(u8, u8)], address: u8) -> Option<u8> {
+    pipe_usage
+        .iter()
+        .find_map(|(ep, usage)| (*ep == address).then_some(*usage))
+}
+
+fn find_endpoint_by_pipe(endpoints: &[MassBulkEndpoint], usage: u8) -> Option<&MassBulkEndpoint> {
+    endpoints.iter().find(|ep| ep.pipe_usage == Some(usage))
+}
+
 fn pick_skhynix_uas_target(
     vendor_id: u16,
     product_id: u16,
@@ -323,10 +365,23 @@ fn pick_skhynix_uas_target(
     }
 
     for uas in candidates {
-        let command_out = uas.bulk_out.iter().find(|ep| ep.address == 0x04)?;
-        let status_in = uas.bulk_in.iter().find(|ep| ep.address == 0x83)?;
-        let data_out = uas.bulk_out.iter().find(|ep| ep.address == 0x02)?;
-        let data_in = uas.bulk_in.iter().find(|ep| ep.address == 0x81)?;
+        for ep in uas.bulk_out.iter().chain(uas.bulk_in.iter()) {
+            if let Some(pipe) = ep.pipe_usage {
+                crate::log!(
+                    "crabusb: skhynix-green proof=uas-pipe ep=0x{:02x} pipe={}\n",
+                    ep.address,
+                    pipe
+                );
+            }
+        }
+        let command_out = find_endpoint_by_pipe(&uas.bulk_out, 1)
+            .or_else(|| uas.bulk_out.iter().find(|ep| ep.address == 0x04))?;
+        let status_in = find_endpoint_by_pipe(&uas.bulk_in, 2)
+            .or_else(|| uas.bulk_in.iter().find(|ep| ep.address == 0x83))?;
+        let data_out = find_endpoint_by_pipe(&uas.bulk_out, 4)
+            .or_else(|| uas.bulk_out.iter().find(|ep| ep.address == 0x02))?;
+        let data_in = find_endpoint_by_pipe(&uas.bulk_in, 3)
+            .or_else(|| uas.bulk_in.iter().find(|ep| ep.address == 0x81))?;
         return Some(UasTarget {
             configuration_value: uas.configuration_value,
             interface_number: uas.interface_number,
@@ -666,19 +721,6 @@ async fn uas_command_out(
         );
     }
 
-    let data_id = data_out
-        .submit(uas_bulk_out_request(data, tag))
-        .map_err(|_| MassProbeError::Transport("uas-data-submit"))?;
-    if cmd == "write10" {
-        crate::log!(
-            "crabusb: skhynix-green proof=uas-write phase=post-command-data-submit cmd={} tag=0x{:04x} data_req={} bytes={}\n",
-            cmd,
-            tag,
-            data_id.raw(),
-            data.len()
-        );
-    }
-
     let ready_got = match endpoint_wait_submitted(
         status_in,
         status_id,
@@ -688,13 +730,9 @@ async fn uas_command_out(
     .await
     {
         Ok(got) => got,
-        Err(err) => {
-            let _ = data_out.cancel(data_id);
-            return Err(err);
-        }
+        Err(err) => return Err(err),
     };
     if ready_got < 4 {
-        let _ = data_out.cancel(data_id);
         return Err(MassProbeError::ShortData);
     }
     let ready = &status_iu[..ready_got.min(status_iu.len())];
@@ -711,13 +749,24 @@ async fn uas_command_out(
     );
     }
     if ready_id == UAS_IU_STATUS && ready_tag == tag {
-        let _ = data_out.cancel(data_id);
         validate_uas_status(cmd, ready, tag)?;
         return Err(MassProbeError::Csw);
     }
     if ready_id != UAS_IU_WRITE_READY || ready_tag != tag {
-        let _ = data_out.cancel(data_id);
         return Err(MassProbeError::Csw);
+    }
+
+    let data_id = data_out
+        .submit(uas_bulk_out_request(data, tag))
+        .map_err(|_| MassProbeError::Transport("uas-data-submit"))?;
+    if cmd == "write10" {
+        crate::log!(
+            "crabusb: skhynix-green proof=uas-write phase=write-ready-data-submit cmd={} tag=0x{:04x} data_req={} bytes={}\n",
+            cmd,
+            tag,
+            data_id.raw(),
+            data.len()
+        );
     }
 
     let sent = endpoint_wait_submitted(data_out, data_id, "uas-data-timeout", "uas-data-out")
