@@ -594,6 +594,8 @@ fn is_fragment_candidate_submit_name(submit_name: &str) -> bool {
 fn reset_fragment_boundary_probe() {
     FRAGMENT_CANDIDATE_READY.store(false, Ordering::Release);
     FRAGMENT_BOUNDARY_OBSERVED.store(false, Ordering::Release);
+    WM_COVERAGE_OBSERVED.store(false, Ordering::Release);
+    PSD_DISPATCH_OBSERVED.store(false, Ordering::Release);
 }
 
 fn record_fragment_boundary_probe(candidate_ready: bool, fragment_observed: bool) {
@@ -605,12 +607,29 @@ fn record_fragment_boundary_probe(candidate_ready: bool, fragment_observed: bool
     }
 }
 
+fn record_wm_psd_boundary_probe(wm_coverage_observed: bool, psd_dispatch_observed: bool) {
+    if wm_coverage_observed {
+        WM_COVERAGE_OBSERVED.store(true, Ordering::Release);
+    }
+    if psd_dispatch_observed {
+        PSD_DISPATCH_OBSERVED.store(true, Ordering::Release);
+    }
+}
+
 fn fragment_candidate_ready() -> bool {
     FRAGMENT_CANDIDATE_READY.load(Ordering::Acquire)
 }
 
 fn fragment_boundary_observed() -> bool {
     FRAGMENT_BOUNDARY_OBSERVED.load(Ordering::Acquire)
+}
+
+fn wm_coverage_observed() -> bool {
+    WM_COVERAGE_OBSERVED.load(Ordering::Acquire)
+}
+
+fn psd_dispatch_observed() -> bool {
+    PSD_DISPATCH_OBSERVED.load(Ordering::Acquire)
 }
 
 unsafe impl Send for RenderWarmState {}
@@ -622,6 +641,8 @@ static PRIMARY_PROBE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static PRIMARY_MI_SCANOUT_PROOF_SUBMITTED: AtomicBool = AtomicBool::new(false);
 static FRAGMENT_CANDIDATE_READY: AtomicBool = AtomicBool::new(false);
 static FRAGMENT_BOUNDARY_OBSERVED: AtomicBool = AtomicBool::new(false);
+static WM_COVERAGE_OBSERVED: AtomicBool = AtomicBool::new(false);
+static PSD_DISPATCH_OBSERVED: AtomicBool = AtomicBool::new(false);
 static WARM_BUFFERS_MAPPED: AtomicBool = AtomicBool::new(false);
 static MEMORY_PROOF_LOGGED: AtomicBool = AtomicBool::new(false);
 static PRIMARY_STRIPE_X_PHASE: AtomicU32 = AtomicU32::new(0);

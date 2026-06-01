@@ -296,6 +296,15 @@ fn encode_triangle_probe_batch(
 ) -> Result<usize, &'static str> {
     let mut cursor = 0usize;
     let vf_synthesized_vue = matches!(batch_mode, TriangleBatchMode::VfDraw);
+    let vs_thread_request_expected = !vf_synthesized_vue;
+    let ps_thread_request_expected = matches!(batch_mode, TriangleBatchMode::Draw | TriangleBatchMode::VfDraw);
+    intel_render_focus_log!(
+        "intel/render: thread-request-contract mode={:?} vs={} hs=0 ds=0 gs=0 ps={} vf_synthesized_vue={} note=zero_vs_counter_expected_when_vs_disabled zero_hs_ds_gs_expected\n",
+        batch_mode,
+        vs_thread_request_expected as u8,
+        ps_thread_request_expected as u8,
+        vf_synthesized_vue as u8,
+    );
 
     fn log_batch_offset(cursor: usize, label: &str) {
         intel_render_batch_log!(

@@ -1343,6 +1343,7 @@ fn log_triangle_named_proofs(
         let fragment_observed =
             delta.ps_invocations > 0 || delta.cps_invocations > 0 || delta.ps_depth > 0;
         record_fragment_boundary_probe(candidate_ready, fragment_observed);
+        record_wm_psd_boundary_probe(false, fragment_observed);
         intel_render_focus_log!(
             "intel/render: {} fragment-candidate-proof accepted={} candidate_ready={} oversized=1 clip_counter={} raster_packet={} ps_state_marker={} fragment_observed={} ps_delta={} cps_delta={} ps_depth_delta={} observable=no_dedicated_fragment_counter_yet does_not_prove=rt_write\n",
             submit_name,
