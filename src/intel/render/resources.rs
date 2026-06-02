@@ -411,7 +411,7 @@ fn prepare_vf_streamout_proof_resources(
         return None;
     }
 
-    let tri = geometry.vertices();
+    let tri = geometry.vertices_for_target(target_w, target_h);
     let words = unsafe {
         core::slice::from_raw_parts_mut(warm.vertex_virt as *mut u32, warm.vertex_len / 4)
     };
@@ -440,6 +440,24 @@ fn prepare_vf_streamout_proof_resources(
                     f32::from_bits(words[base + 1]),
                     f32::from_bits(words[base + 2]),
                     f32::from_bits(words[base + 3]),
+                );
+            }
+            StreamoutProofExperiment::MesaNoVsRectlist => {
+                let base = idx * 3;
+                words[base + 0] = pos[0].to_bits();
+                words[base + 1] = pos[1].to_bits();
+                words[base + 2] = pos[2].to_bits();
+                intel_render_verbose_log!(
+                    "intel/render: vf-streamout-source v{} experiment={} geometry={} mesa_pos=[0x{:08X},0x{:08X},0x{:08X}] pos_f=[{:.3},{:.3},{:.3}] forced_w=1.0\n",
+                    idx,
+                    experiment.label(),
+                    geometry.label(),
+                    words[base + 0],
+                    words[base + 1],
+                    words[base + 2],
+                    f32::from_bits(words[base + 0]),
+                    f32::from_bits(words[base + 1]),
+                    f32::from_bits(words[base + 2]),
                 );
             }
             StreamoutProofExperiment::HeaderAndPositionSlots01 => {
@@ -477,7 +495,7 @@ fn prepare_vf_streamout_proof_resources(
     crate::intel::dma_flush(warm.vertex_virt, TRIANGLE_DRAW_VERTICES * vertex_stride);
 
     Some(TriangleDrawPrep {
-        vertex_count: TRIANGLE_DRAW_VERTICES as u32,
+        vertex_count: geometry.draw_vertex_count(),
         vertex_stride: vertex_stride as u32,
         vertex_gpu_addr: GPU_VA_VERTEX_BASE,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,

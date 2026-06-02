@@ -90,7 +90,7 @@ fn paint_expected_wm_input_album_tile(
     const VIS_W: usize = 16;
     const VIS_H: usize = 16;
     let mut pixels = [0xFF202530u32; VIS_W * VIS_H];
-    let tri = geometry.vertices();
+    let tri = geometry.vertices_for_target(draw.target_w, draw.target_h);
     let mut ndc_viewport_screen = [[0.0f32; 2]; TRIANGLE_DRAW_VERTICES];
     let mut pretransformed_screen = [[0.0f32; 2]; TRIANGLE_DRAW_VERTICES];
     for idx in 0..TRIANGLE_DRAW_VERTICES {
@@ -1403,6 +1403,16 @@ fn log_backend_dispatch_contract(
     let ps_attribute_enable = (ps_extra_dw1 >> 8) & 0x1;
     let ps_computed_depth = (ps_extra_dw1 >> 26) & 0x3;
     let ps_kills = (ps_extra_dw1 >> 28) & 0x1;
+    let ps_writes_rt = ((ps_extra_dw1 >> 30) & 0x1) ^ 0x1;
+    let writes_rt_path = ps_writes_rt != 0 && ps_blend_has_writeable_rt != 0;
+    let depth_path =
+        ps_computed_depth != 0 && (wm_depth_test_enable != 0 || wm_depth_write_enable != 0);
+    let stencil_path = ps_computes_stencil != 0 && wm_stencil_test_enable != 0;
+    let formula_normal_path = wm_force_thread_dispatch != 1
+        && wm_hz_op_active == 0
+        && ps_valid != 0
+        && (writes_rt_path || ps_has_uav != 0 || ps_kills != 0 || depth_path || stencil_path);
+    let thread_dispatch_enable = wm_force_thread_dispatch == 2 || formula_normal_path;
     let dispatch_reason = if wm_force_thread_dispatch == 1 {
         "force-thread-dispatch-off"
     } else if ps_valid == 0 {
@@ -1411,28 +1421,22 @@ fn log_backend_dispatch_contract(
         "force-thread-dispatch-on"
     } else if wm_hz_op_active != 0 {
         "wm-hz-op-active"
-    } else if ps_blend_has_writeable_rt != 0 {
+    } else if writes_rt_path {
         "writeable-rt"
     } else if ps_has_uav != 0 {
         "ps-uav"
     } else if ps_kills != 0 {
         "ps-kill"
-    } else if ps_computed_depth != 0 && (wm_depth_test_enable != 0 || wm_depth_write_enable != 0) {
+    } else if depth_path {
         "computed-depth"
-    } else if ps_computes_stencil != 0 && wm_stencil_test_enable != 0 {
+    } else if stencil_path {
         "computed-stencil"
+    } else if ps_writes_rt == 0 && ps_blend_has_writeable_rt != 0 {
+        "ps-does-not-write-rt"
     } else {
         "no-ps-dispatch-qualifier"
     };
-    let dispatch_armed = matches!(
-        dispatch_reason,
-        "force-thread-dispatch-on"
-            | "writeable-rt"
-            | "ps-uav"
-            | "ps-kill"
-            | "computed-depth"
-            | "computed-stencil"
-    ) as u32;
+    let dispatch_armed = u32::from(thread_dispatch_enable);
 
     intel_render_focus_log!(
         "intel/render: probe-backend-decoded wm[stats={} force_thread_dispatch={}({}) edsc={}({})] ps_blend[writeable_rt={} blend_enable={} alpha_test={} alpha_to_coverage={}] wm_depth_stencil[depth_test={} depth_write={} stencil_test={} stencil_write={} double_sided_stencil={}]\n",
@@ -1452,7 +1456,7 @@ fn log_backend_dispatch_contract(
         wm_double_sided_stencil,
     );
     intel_render_focus_log!(
-        "intel/render: probe-backend-gate wm_hz_op[active={} depth_clear={} depth_resolve={} hier_resolve={} stencil_clear={} stencil_resolve={} full_surface_clear={} partial_resolve={} scissor={} clear_rect=[{},{}..{},{}] samples={} sample_mask=0x{:X}] ps_extra[valid={} attribute_enable={} per_sample={} has_uav={} kills={} computed_depth={} computes_stencil={}] dispatch_armed={} reason={}\n",
+        "intel/render: probe-backend-gate wm_hz_op[active={} depth_clear={} depth_resolve={} hier_resolve={} stencil_clear={} stencil_resolve={} full_surface_clear={} partial_resolve={} scissor={} clear_rect=[{},{}..{},{}] samples={} sample_mask=0x{:X}] ps_extra[valid={} writes_rt={} attribute_enable={} per_sample={} has_uav={} kills={} computed_depth={} computes_stencil={}] formula[force_on={} force_off={} normal_path={} write_rt_path={} depth_path={} stencil_path={}] thread_dispatch_enable={} reason={}\n",
         wm_hz_op_active,
         wm_hz_depth_clear,
         wm_hz_depth_resolve,
@@ -1469,12 +1473,19 @@ fn log_backend_dispatch_contract(
         wm_hz_samples,
         wm_hz_sample_mask,
         ps_valid,
+        ps_writes_rt,
         ps_attribute_enable,
         ps_per_sample,
         ps_has_uav,
         ps_kills,
         ps_computed_depth,
         ps_computes_stencil,
+        u32::from(wm_force_thread_dispatch == 2),
+        u32::from(wm_force_thread_dispatch == 1),
+        u32::from(formula_normal_path),
+        u32::from(writes_rt_path),
+        u32::from(depth_path),
+        u32::from(stencil_path),
         dispatch_armed,
         dispatch_reason,
     );
@@ -2158,6 +2169,7 @@ fn fragment_candidate_shape_label(submit_name: &str) -> &'static str {
             | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-raster-wm-oa-probe"
             | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-raster-wm-oa-probe"
             | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe"
+            | "late-vf-screen-rectlist-mesa-no-vs-early-backend-raster-wm-oa-probe"
     ) {
         if matches!(
             submit_name,
@@ -2170,6 +2182,7 @@ fn fragment_candidate_shape_label(submit_name: &str) -> &'static str {
                 | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-raster-wm-oa-probe"
                 | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-raster-wm-oa-probe"
                 | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe"
+                | "late-vf-screen-rectlist-mesa-no-vs-early-backend-raster-wm-oa-probe"
         ) {
             return "screen-space-rect-inset-32";
         }
@@ -2244,6 +2257,7 @@ fn fragment_probe_requires_clip_counter(submit_name: &str) -> bool {
             | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-raster-wm-oa-probe"
             | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-raster-wm-oa-probe"
             | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe"
+            | "late-vf-screen-rectlist-mesa-no-vs-early-backend-raster-wm-oa-probe"
             | "real-vs-ndc-perpoly-raster-wm-oa-probe"
             | "real-vs-ndc-no-scissor-raster-wm-oa-probe"
             | "real-vs-ndc-ms-raster-wm-oa-probe"
@@ -2449,6 +2463,21 @@ fn log_streamout_proof_result(
                     f32::from_bits(words[1]),
                     f32::from_bits(words[2]),
                     f32::from_bits(words[3])
+                );
+            }
+            StreamoutProofExperiment::MesaNoVsRectlist => {
+                intel_render_focus_log!(
+                    "intel/render: {} v{} experiment={} completed={} mesa_pos=[0x{:08X},0x{:08X},0x{:08X}] pos_f=[{:.3},{:.3},{:.3}] forced_w=1.0\n",
+                    submit_name,
+                    idx,
+                    experiment.label(),
+                    completed as u8,
+                    words[0],
+                    words[1],
+                    words[2],
+                    f32::from_bits(words[0]),
+                    f32::from_bits(words[1]),
+                    f32::from_bits(words[2])
                 );
             }
             StreamoutProofExperiment::HeaderAndPositionSlots01 => {

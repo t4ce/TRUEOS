@@ -236,6 +236,8 @@ enum BackendProbeMode {
     RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrder,
     RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOn,
     RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend,
+    RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend,
+    RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend,
     RasterWmInputOaScreenSpaceClipPreconditions,
     RasterWmInputOaScreenSpaceRasterClipPreconditions,
     RasterWmInputOaScreenSpaceRasterClipPreconditionsHardFence,
@@ -454,6 +456,12 @@ impl BackendProbeMode {
             Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend => {
                 "raster-wm-input-oa-screen-space-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend"
             }
+            Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend => {
+                "raster-wm-input-oa-screen-space-rectlist-mesa-no-vs-early-backend"
+            }
+            Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend => {
+                "raster-wm-input-oa-ndc-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend"
+            }
             Self::RasterWmInputOaScreenSpaceClipPreconditions => {
                 "raster-wm-input-oa-screen-space-clip-preconditions"
             }
@@ -566,6 +574,8 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrder
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOn
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+                | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+                | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
                 | Self::RasterWmInputOaScreenSpaceClipPreconditions
                 | Self::RasterWmInputOaScreenSpaceRasterClipPreconditions
                 | Self::RasterWmInputOaScreenSpaceRasterClipPreconditionsHardFence
@@ -631,6 +641,8 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrder
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOn
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+                | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+                | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
                 | Self::RasterWmInputOaScreenSpacePointList
                 | Self::RasterWmInputOaScreenSpacePointListOpenBounds
         )
@@ -640,6 +652,8 @@ impl BackendProbeMode {
         matches!(
             self,
             Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+                | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+                | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
         )
     }
 
@@ -647,6 +661,8 @@ impl BackendProbeMode {
         matches!(
             self,
             Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+                | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+                | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
         )
     }
 
@@ -683,6 +699,8 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrder
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOn
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+                | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+                | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
                 | Self::RasterWmInputOaScreenSpacePointList
                 | Self::RasterWmInputOaScreenSpacePointListOpenBounds
         )
@@ -705,6 +723,8 @@ impl BackendProbeMode {
             Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend => {
                 Some(1)
             }
+            Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend => Some(1),
+            Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend => Some(1),
             Self::RasterWmInputOaScreenSpacePointList
             | Self::RasterWmInputOaScreenSpacePointListOpenBounds => Some(0),
             _ => None,
@@ -727,8 +747,12 @@ impl BackendProbeMode {
             | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOn => {
                 Some(StreamoutProofExperiment::PositionSlot0Xyzw)
             }
-            Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend => {
+            Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+            | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend => {
                 Some(StreamoutProofExperiment::PositionSlot0Xyzw)
+            }
+            Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend => {
+                Some(StreamoutProofExperiment::MesaNoVsRectlist)
             }
             Self::RasterWmInputOaScreenSpacePointList
             | Self::RasterWmInputOaScreenSpacePointListOpenBounds => {
@@ -752,6 +776,8 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrder
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOn
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+                | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+                | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
                 | Self::RasterWmInputOaScreenSpacePointList
                 | Self::RasterWmInputOaScreenSpacePointListOpenBounds
         )
@@ -766,6 +792,8 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwTightPreClipPerPoly
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1TightPreClipPerPoly
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+                | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+                | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
                 | Self::RasterWmInputOaScreenSpacePointList
                 | Self::RasterWmInputOaScreenSpacePointListOpenBounds
         )
@@ -783,6 +811,8 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwTightPreClipPerPoly
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1TightPreClipPerPoly
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+                | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+                | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
                 | Self::RasterWmInputOaScreenSpacePointList
                 | Self::RasterWmInputOaScreenSpacePointListOpenBounds
         )
@@ -800,6 +830,8 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwTightPreClipPerPoly
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1TightPreClipPerPoly
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+                | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+                | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
                 | Self::RasterWmInputOaScreenSpacePointList
                 | Self::RasterWmInputOaScreenSpacePointListOpenBounds
         )
@@ -823,7 +855,9 @@ impl BackendProbeMode {
             | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1TightPreClipPerPoly
             | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrder
             | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOn
-            | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend => {
+            | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+            | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+            | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend => {
                 Some(TRIANGLE_TOPOLOGY_RECTLIST)
             }
             Self::RasterWmInputOaScreenSpacePointList
@@ -853,6 +887,9 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1TightPreClipPerPoly
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrder
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOn
+                | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+                | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+                | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
                 | Self::RasterWmInputOaScreenSpaceMesaSimpleNoSwizNoScissor
                 | Self::RasterWmInputOaScreenSpacePointList
                 | Self::RasterWmInputOaScreenSpacePointListOpenBounds
@@ -943,6 +980,8 @@ impl BackendProbeMode {
             | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrder
             | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOn
             | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+            | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+            | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
             | Self::RasterWmInputOaScreenSpaceAcceptAllOpenBoundsHeaderPerPolySbe1NoSwiz
             | Self::RasterWmInputOaScreenSpaceRasterClipPreconditions
             | Self::RasterWmInputOaScreenSpaceRasterClipPreconditionsHardFence
@@ -1000,6 +1039,7 @@ impl BackendProbeMode {
             | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrder
             | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOn
             | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+            | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
             | Self::RasterWmInputOaScreenSpaceAcceptAllOpenBoundsHeaderPerPolySbe1NoSwiz
             | Self::RasterWmInputOaScreenSpaceRasterClipPreconditionsHardFence
             | Self::RasterWmInputOaScreenSpaceD3dRasterPreconditionsNoHz
@@ -1027,6 +1067,8 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrder
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOn
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+                | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+                | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
                 | Self::RasterWmInputOaScreenSpaceAcceptAllOpenBoundsHeaderPerPolySbe1NoSwiz
                 | Self::RasterWmInputOaScreenSpaceD3dRasterPreconditionsNoHz
                 | Self::RasterWmInputOaScreenSpaceD3dPerPolyNoHz
@@ -1063,6 +1105,7 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrder
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOn
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+                | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
                 | Self::RasterWmInputOaScreenSpaceClipPreconditions
                 | Self::RasterWmInputOaScreenSpaceRasterClipPreconditions
                 | Self::RasterWmInputOaScreenSpaceRasterClipPreconditionsHardFence
@@ -1117,6 +1160,8 @@ impl BackendProbeMode {
             | Self::RasterWmInputOaScreenSpaceRectListClipBypass
             | Self::RasterWmInputOaScreenSpaceRectListClipBypassSfSane
             | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+            | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+            | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
             | Self::RasterWmInputOaScreenSpaceClipPreconditions
             | Self::RasterWmInputOaScreenSpaceRasterClipPreconditions
             | Self::RasterWmInputOaScreenSpaceRasterClipPreconditionsHardFence
@@ -1137,9 +1182,9 @@ impl BackendProbeMode {
             // GFX125 WM names zero as no barycentric interpolation mode.  Keep
             // the focused SF->WM coverage probe on a legal no-perspective
             // mode so scan conversion is not gated by an all-zero WM packet.
-            Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend => {
-                Some(8)
-            }
+            Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+            | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+            | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend => Some(8),
             _ => None,
         }
     }
@@ -1148,6 +1193,8 @@ impl BackendProbeMode {
         matches!(
             self,
             Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+                | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+                | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
         )
     }
 
@@ -1162,6 +1209,7 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaNdcClipPreconditions
                 | Self::RasterWmInputOaNdcNoWmScissor
                 | Self::RasterWmInputOaNdcForceOnPattern
+                | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
         )
     }
 
@@ -1243,6 +1291,9 @@ enum VfPrimitiveGeometry {
     ScreenSpace8x8,
     ScreenSpaceInset32,
     ScreenSpaceRectInset32,
+    ScreenSpaceRectTarget,
+    ScreenSpacePointCenter32,
+    NdcRectFullscreen,
 }
 
 impl VfPrimitiveGeometry {
@@ -1253,6 +1304,9 @@ impl VfPrimitiveGeometry {
             Self::ScreenSpace8x8 => "screen-space-8x8",
             Self::ScreenSpaceInset32 => "screen-space-inset-32",
             Self::ScreenSpaceRectInset32 => "screen-space-rect-inset-32",
+            Self::ScreenSpaceRectTarget => "screen-space-rect-target",
+            Self::ScreenSpacePointCenter32 => "screen-space-point-center-32",
+            Self::NdcRectFullscreen => "ndc-rect-fullscreen",
         }
     }
 
@@ -1273,6 +1327,29 @@ impl VfPrimitiveGeometry {
             // Mesa/blorp RECTLIST convention: v0 = lower-right, v1 =
             // lower-left, v2 = upper-left, with the fourth vertex implied.
             Self::ScreenSpaceRectInset32 => [[24.0, 24.0, 0.0], [4.0, 24.0, 0.0], [4.0, 4.0, 0.0]],
+            Self::ScreenSpaceRectTarget => [[24.0, 24.0, 0.0], [4.0, 24.0, 0.0], [4.0, 4.0, 0.0]],
+            Self::ScreenSpacePointCenter32 => [[16.0, 16.0, 0.0], [16.0, 16.0, 0.0], [16.0, 16.0, 0.0]],
+            Self::NdcRectFullscreen => [[1.0, -1.0, 0.0], [-1.0, -1.0, 0.0], [-1.0, 1.0, 0.0]],
+        }
+    }
+
+    fn vertices_for_target(self, target_w: u32, target_h: u32) -> [[f32; 3]; TRIANGLE_DRAW_VERTICES] {
+        match self {
+            Self::ScreenSpaceRectTarget => {
+                let min_x = 16.0f32;
+                let min_y = 16.0f32;
+                let max_x = target_w.saturating_sub(17).max(16) as f32;
+                let max_y = target_h.saturating_sub(17).max(16) as f32;
+                [[max_x, max_y, 0.0], [min_x, max_y, 0.0], [min_x, min_y, 0.0]]
+            }
+            _ => self.vertices(),
+        }
+    }
+
+    fn draw_vertex_count(self) -> u32 {
+        match self {
+            Self::ScreenSpacePointCenter32 => 1,
+            _ => TRIANGLE_DRAW_VERTICES as u32,
         }
     }
 
@@ -1283,12 +1360,19 @@ impl VfPrimitiveGeometry {
     fn pretransformed_screen_space(self) -> bool {
         matches!(
             self,
-            Self::ScreenSpace8x8 | Self::ScreenSpaceInset32 | Self::ScreenSpaceRectInset32
+            Self::ScreenSpace8x8
+                | Self::ScreenSpaceInset32
+                | Self::ScreenSpaceRectInset32
+                | Self::ScreenSpaceRectTarget
+                | Self::ScreenSpacePointCenter32
         )
     }
 
     fn rectlist_candidate(self) -> bool {
-        matches!(self, Self::ScreenSpaceRectInset32)
+        matches!(
+            self,
+            Self::ScreenSpaceRectInset32 | Self::ScreenSpaceRectTarget | Self::NdcRectFullscreen
+        )
     }
 }
 
@@ -1298,6 +1382,7 @@ enum StreamoutProofExperiment {
     PositionSlot0Xyzw,
     PositionSlot1,
     HeaderAndPositionSlots01,
+    MesaNoVsRectlist,
 }
 
 const CMD_3DSTATE_VERTEX_ELEMENTS_2: u32 = 3 | (9 << 16) | (3 << 27) | (3 << 29);
@@ -1309,6 +1394,7 @@ impl StreamoutProofExperiment {
             Self::PositionSlot0Xyzw => "pos-slot0-xyzw",
             Self::PositionSlot1 => "pos-slot1",
             Self::HeaderAndPositionSlots01 => "header+pos-slots01",
+            Self::MesaNoVsRectlist => "mesa-no-vs-rectlist",
         }
     }
 
@@ -1318,6 +1404,7 @@ impl StreamoutProofExperiment {
             Self::PositionSlot0Xyzw => Self::PositionSlot1,
             Self::PositionSlot1 => Self::HeaderAndPositionSlots01,
             Self::HeaderAndPositionSlots01 => Self::PositionSlot0,
+            Self::MesaNoVsRectlist => Self::PositionSlot0,
         }
     }
 
@@ -1325,6 +1412,7 @@ impl StreamoutProofExperiment {
         match self {
             Self::PositionSlot0 | Self::PositionSlot0Xyzw | Self::PositionSlot1 => 16,
             Self::HeaderAndPositionSlots01 => 32,
+            Self::MesaNoVsRectlist => 12,
         }
     }
 
@@ -1334,7 +1422,10 @@ impl StreamoutProofExperiment {
 
     fn so_decl_header(self) -> u32 {
         match self {
-            Self::PositionSlot0 | Self::PositionSlot0Xyzw | Self::PositionSlot1 => {
+            Self::PositionSlot0
+            | Self::PositionSlot0Xyzw
+            | Self::PositionSlot1
+            | Self::MesaNoVsRectlist => {
                 3 | (23 << 16) | (1 << 24) | (3 << 27) | (3 << 29)
             }
             Self::HeaderAndPositionSlots01 => 5 | (23 << 16) | (1 << 24) | (3 << 27) | (3 << 29),
@@ -1349,6 +1440,7 @@ impl StreamoutProofExperiment {
         match self {
             Self::PositionSlot0 | Self::PositionSlot0Xyzw | Self::PositionSlot1 => 1,
             Self::HeaderAndPositionSlots01 => 2,
+            Self::MesaNoVsRectlist => 1,
         }
     }
 
@@ -1358,6 +1450,7 @@ impl StreamoutProofExperiment {
             Self::PositionSlot0Xyzw => [0x0000_000F, 0x0000_0000, 0x0000_0000, 0x0000_0000],
             Self::PositionSlot1 => [0x0000_001F, 0x0000_0000, 0x0000_0000, 0x0000_0000],
             Self::HeaderAndPositionSlots01 => [0x0000_000F, 0x0000_0000, 0x0000_001F, 0x0000_0000],
+            Self::MesaNoVsRectlist => [0x0000_001F, 0x0000_0000, 0x0000_0000, 0x0000_0000],
         }
     }
 
@@ -1371,13 +1464,14 @@ impl StreamoutProofExperiment {
             Self::PositionSlot0Xyzw => "slot0=position-xyzw",
             Self::PositionSlot1 => "slot0=zero slot1=position",
             Self::HeaderAndPositionSlots01 => "slot0=header slot1=position",
+            Self::MesaNoVsRectlist => "mesa-slot0=sgvs-header slot1=position",
         }
     }
 
     fn vf_vertex_element_count(self) -> usize {
         match self {
             Self::PositionSlot0 | Self::PositionSlot0Xyzw => 1,
-            Self::PositionSlot1 | Self::HeaderAndPositionSlots01 => 2,
+            Self::PositionSlot1 | Self::HeaderAndPositionSlots01 | Self::MesaNoVsRectlist => 2,
         }
     }
 }
@@ -1467,9 +1561,13 @@ fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
             | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-raster-wm-oa-probe"
             | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-raster-wm-oa-probe"
             | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe"
+            | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-bypass-raster-wm-oa-probe"
+            | "late-vf-screen-rectlist-mesa-no-vs-early-backend-raster-wm-oa-probe"
+            | "late-vf-ndc-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe"
             | "late-vf-ndc-mesa-active-block-raster-wm-oa-probe"
             | "late-vf-ndc-centered-mesa-active-block-raster-wm-oa-probe"
             | "late-vf-ndc-centered-mesa-active-noprimrepl-raster-wm-oa-probe"
+            | "late-vf-screen-point-center-slot0-xyzw-raster-wm-oa-probe"
             | "late-vf-screen-pointlist-slot0-xyzw-preclip-raster-wm-oa-probe"
             | "late-vf-screen-pointlist-slot0-xyzw-open-bounds-raster-wm-oa-probe"
             | "late-vf-screen-inset-open-bounds-header-perpoly-sbe1-noswiz-raster-wm-oa-probe"
@@ -1527,9 +1625,13 @@ fn is_raster_wm_oa_submit_name(submit_name: &str) -> bool {
             | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-raster-wm-oa-probe"
             | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-raster-wm-oa-probe"
             | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe"
+            | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-bypass-raster-wm-oa-probe"
+            | "late-vf-screen-rectlist-mesa-no-vs-early-backend-raster-wm-oa-probe"
+            | "late-vf-ndc-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe"
             | "late-vf-ndc-mesa-active-block-raster-wm-oa-probe"
             | "late-vf-ndc-centered-mesa-active-block-raster-wm-oa-probe"
             | "late-vf-ndc-centered-mesa-active-noprimrepl-raster-wm-oa-probe"
+            | "late-vf-screen-point-center-slot0-xyzw-raster-wm-oa-probe"
             | "late-vf-screen-pointlist-slot0-xyzw-preclip-raster-wm-oa-probe"
             | "late-vf-screen-pointlist-slot0-xyzw-open-bounds-raster-wm-oa-probe"
             | "late-vf-screen-inset-open-bounds-header-perpoly-sbe1-noswiz-raster-wm-oa-probe"
@@ -1612,9 +1714,13 @@ fn is_surface_draw_submit_name(submit_name: &str) -> bool {
             | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-raster-wm-oa-probe"
             | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-raster-wm-oa-probe"
             | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe"
+            | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-bypass-raster-wm-oa-probe"
+            | "late-vf-screen-rectlist-mesa-no-vs-early-backend-raster-wm-oa-probe"
+            | "late-vf-ndc-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe"
             | "late-vf-ndc-mesa-active-block-raster-wm-oa-probe"
             | "late-vf-ndc-centered-mesa-active-block-raster-wm-oa-probe"
             | "late-vf-ndc-centered-mesa-active-noprimrepl-raster-wm-oa-probe"
+            | "late-vf-screen-point-center-slot0-xyzw-raster-wm-oa-probe"
             | "late-vf-screen-pointlist-slot0-xyzw-preclip-raster-wm-oa-probe"
             | "late-vf-screen-pointlist-slot0-xyzw-open-bounds-raster-wm-oa-probe"
             | "late-vf-screen-inset-open-bounds-header-perpoly-sbe1-noswiz-raster-wm-oa-probe"
@@ -1673,9 +1779,13 @@ fn is_fragment_candidate_submit_name(submit_name: &str) -> bool {
             | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-raster-wm-oa-probe"
             | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-raster-wm-oa-probe"
             | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe"
+            | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-bypass-raster-wm-oa-probe"
+            | "late-vf-screen-rectlist-mesa-no-vs-early-backend-raster-wm-oa-probe"
+            | "late-vf-ndc-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe"
             | "late-vf-ndc-mesa-active-block-raster-wm-oa-probe"
             | "late-vf-ndc-centered-mesa-active-block-raster-wm-oa-probe"
             | "late-vf-ndc-centered-mesa-active-noprimrepl-raster-wm-oa-probe"
+            | "late-vf-screen-point-center-slot0-xyzw-raster-wm-oa-probe"
             | "late-vf-screen-pointlist-slot0-xyzw-preclip-raster-wm-oa-probe"
             | "late-vf-screen-pointlist-slot0-xyzw-open-bounds-raster-wm-oa-probe"
             | "late-vf-screen-inset-open-bounds-header-perpoly-sbe1-noswiz-raster-wm-oa-probe"
@@ -1755,5 +1865,7 @@ static WM_COVERAGE_OBSERVED: AtomicBool = AtomicBool::new(false);
 static PSD_DISPATCH_OBSERVED: AtomicBool = AtomicBool::new(false);
 static WARM_BUFFERS_MAPPED: AtomicBool = AtomicBool::new(false);
 static MEMORY_PROOF_LOGGED: AtomicBool = AtomicBool::new(false);
+static RENDER_FOCUS_LOG_SUPPRESS_DEPTH: AtomicU32 = AtomicU32::new(0);
+static PRIMARY_REPAINT_STATUS_SIG: AtomicU32 = AtomicU32::new(u32::MAX);
 static PRIMARY_STRIPE_X_PHASE: AtomicU32 = AtomicU32::new(0);
 static PRIMARY_PROBE_SEQ: AtomicU32 = AtomicU32::new(0);

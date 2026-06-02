@@ -660,7 +660,7 @@ fn encode_triangle_probe_batch(
         BackendProbeMode::RasterWmInputOaScreenSpacePointList
             | BackendProbeMode::RasterWmInputOaScreenSpacePointListOpenBounds
     ) {
-        8 << 3
+        0x7FF
     } else if backend_probe_mode.enable_sf_sane_defaults() {
         1 << 3
     } else {
@@ -726,6 +726,8 @@ fn encode_triangle_probe_batch(
                 backend_probe_mode,
                 BackendProbeMode::WmNormalDispatch
                     | BackendProbeMode::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+                    | BackendProbeMode::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+                    | BackendProbeMode::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
             ));
     let mut wm_dw1 = (1 << 31)
         | (wm_reserved_bit29 << 29)
@@ -854,6 +856,8 @@ fn encode_triangle_probe_batch(
         | BackendProbeMode::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrder
         | BackendProbeMode::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOn
         | BackendProbeMode::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+        | BackendProbeMode::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+        | BackendProbeMode::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
         | BackendProbeMode::RasterWmInputOaScreenSpaceClipPreconditions
         | BackendProbeMode::RasterWmInputOaScreenSpaceRasterClipPreconditions
         | BackendProbeMode::RasterWmInputOaScreenSpaceRasterClipPreconditionsHardFence
@@ -908,6 +912,8 @@ fn encode_triangle_probe_batch(
             | BackendProbeMode::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrder
             | BackendProbeMode::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOn
             | BackendProbeMode::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+            | BackendProbeMode::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+            | BackendProbeMode::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
             | BackendProbeMode::RasterWmInputOaScreenSpaceClipPreconditions
             | BackendProbeMode::RasterWmInputOaScreenSpaceRasterClipPreconditions
             | BackendProbeMode::RasterWmInputOaScreenSpaceRasterClipPreconditionsHardFence
@@ -1241,6 +1247,34 @@ fn encode_triangle_probe_batch(
                         | (VFCOMP_STORE_1_FP << 16),
                 )?;
             }
+            StreamoutProofExperiment::MesaNoVsRectlist => {
+                push(
+                    batch_dwords,
+                    &mut cursor,
+                    (SURFACE_FORMAT_R32G32B32A32_FLOAT << 16) | (1 << 25) | (1 << 26),
+                )?;
+                push(
+                    batch_dwords,
+                    &mut cursor,
+                    (VFCOMP_STORE_SRC << 28)
+                        | (VFCOMP_STORE_0 << 24)
+                        | (VFCOMP_STORE_0 << 20)
+                        | (VFCOMP_STORE_0 << 16),
+                )?;
+                push(
+                    batch_dwords,
+                    &mut cursor,
+                    (SURFACE_FORMAT_R32G32B32_FLOAT << 16) | (1 << 25),
+                )?;
+                push(
+                    batch_dwords,
+                    &mut cursor,
+                    (VFCOMP_STORE_SRC << 28)
+                        | (VFCOMP_STORE_SRC << 24)
+                        | (VFCOMP_STORE_SRC << 20)
+                        | (VFCOMP_STORE_1_FP << 16),
+                )?;
+            }
         }
     } else {
         push(batch_dwords, &mut cursor, (SURFACE_FORMAT_R32G32B32_FLOAT << 16) | (1 << 25))?;
@@ -1269,6 +1303,7 @@ fn encode_triangle_probe_batch(
                 StreamoutProofExperiment::PositionSlot0Xyzw => "none",
                 StreamoutProofExperiment::PositionSlot1 => "zero4",
                 StreamoutProofExperiment::HeaderAndPositionSlots01 => "source-offset0",
+                StreamoutProofExperiment::MesaNoVsRectlist => "mesa-sgvs-slot0",
             }
         } else {
             "shader-output"
@@ -1281,6 +1316,7 @@ fn encode_triangle_probe_batch(
                 StreamoutProofExperiment::HeaderAndPositionSlots01 => {
                     "slot1=offset16-xyz+forced-w1"
                 }
+                StreamoutProofExperiment::MesaNoVsRectlist => "slot1=xyz+forced-w1",
             }
         } else {
             "vertex-shader"
@@ -1314,9 +1350,16 @@ fn encode_triangle_probe_batch(
     log_batch_offset(cursor, "3DSTATE_VF");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VF)?;
     push(batch_dwords, &mut cursor, 0)?;
+    let vf_sgvs_dw1 = if vf_synthesized_vue
+        && matches!(streamout_experiment, StreamoutProofExperiment::MesaNoVsRectlist)
+    {
+        0xA000_0000
+    } else {
+        0
+    };
     log_batch_offset(cursor, "3DSTATE_VF_SGVS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_SGVS)?;
-    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, vf_sgvs_dw1)?;
     log_batch_offset(cursor, "3DSTATE_VF_SGVS_2");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_SGVS_2)?;
     push(batch_dwords, &mut cursor, 0)?;
@@ -2831,9 +2874,16 @@ fn encode_minimal_streamout_proof_batch(
     log_batch_offset(cursor, "3DSTATE_VF");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VF)?;
     push(batch_dwords, &mut cursor, 0)?;
+    let vf_sgvs_dw1 = if vs_config.is_none()
+        && matches!(streamout_experiment, StreamoutProofExperiment::MesaNoVsRectlist)
+    {
+        0xA000_0000
+    } else {
+        0
+    };
     log_batch_offset(cursor, "3DSTATE_VF_SGVS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_SGVS)?;
-    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, vf_sgvs_dw1)?;
     log_batch_offset(cursor, "3DSTATE_VF_SGVS_2");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_SGVS_2)?;
     push(batch_dwords, &mut cursor, 0)?;
@@ -2938,6 +2988,30 @@ fn encode_minimal_streamout_proof_batch(
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_SRC,
+                )?;
+            }
+            StreamoutProofExperiment::MesaNoVsRectlist => {
+                push_vertex_element_state(
+                    batch_dwords,
+                    &mut cursor,
+                    1,
+                    0,
+                    SURFACE_FORMAT_R32G32B32A32_FLOAT,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_0,
+                    VFCOMP_STORE_0,
+                    VFCOMP_STORE_0,
+                )?;
+                push_vertex_element_state(
+                    batch_dwords,
+                    &mut cursor,
+                    0,
+                    0,
+                    SURFACE_FORMAT_R32G32B32_FLOAT,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_1_FP,
                 )?;
             }
         }
