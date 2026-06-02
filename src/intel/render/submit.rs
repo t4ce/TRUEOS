@@ -112,6 +112,19 @@ fn paint_expected_wm_input_album_tile(
                 None
             },
         )
+    } else if geometry.linelist_candidate() {
+        line_coverage_reference(
+            pretransformed_screen,
+            draw,
+            VIS_W,
+            VIS_H,
+            8.0,
+            if geometry.pretransformed_screen_space() {
+                Some(&mut pixels)
+            } else {
+                None
+            },
+        )
     } else {
         coverage_reference(
             pretransformed_screen,
@@ -367,6 +380,55 @@ fn rect_coverage_reference(
             ];
             if sample[0] >= min_x && sample[0] <= max_x && sample[1] >= min_y && sample[1] <= max_y
             {
+                result.expected_samples += 1;
+                result.min_x = result.min_x.min(x);
+                result.min_y = result.min_y.min(y);
+                result.max_x = result.max_x.max(x);
+                result.max_y = result.max_y.max(y);
+                if let Some(buf) = pixels.as_deref_mut() {
+                    buf[y * vis_w + x] = 0xFF3BCF86;
+                }
+            }
+        }
+    }
+    result
+}
+
+fn line_coverage_reference(
+    screen: [[f32; 2]; TRIANGLE_DRAW_VERTICES],
+    draw: TriangleDrawPrep,
+    vis_w: usize,
+    vis_h: usize,
+    width_pixels: f32,
+    mut pixels: Option<&mut [u32]>,
+) -> CoverageRef {
+    let a = screen[0];
+    let b = screen[1];
+    let ab = [b[0] - a[0], b[1] - a[1]];
+    let ab_len_sq = ab[0] * ab[0] + ab[1] * ab[1];
+    let mut result = CoverageRef {
+        expected_samples: 0,
+        min_x: vis_w,
+        min_y: vis_h,
+        max_x: 0,
+        max_y: 0,
+    };
+    if ab_len_sq == 0.0 {
+        return result;
+    }
+    let radius = width_pixels * 0.5;
+    for y in 0..vis_h {
+        for x in 0..vis_w {
+            let sample = [
+                ((x as f32 + 0.5) * draw.target_w as f32) / vis_w as f32,
+                ((y as f32 + 0.5) * draw.target_h as f32) / vis_h as f32,
+            ];
+            let ap = [sample[0] - a[0], sample[1] - a[1]];
+            let t = ((ap[0] * ab[0] + ap[1] * ab[1]) / ab_len_sq).clamp(0.0, 1.0);
+            let closest = [a[0] + ab[0] * t, a[1] + ab[1] * t];
+            let dx = sample[0] - closest[0];
+            let dy = sample[1] - closest[1];
+            if dx * dx + dy * dy <= radius * radius {
                 result.expected_samples += 1;
                 result.min_x = result.min_x.min(x);
                 result.min_y = result.min_y.min(y);
@@ -2133,6 +2195,36 @@ fn fragment_candidate_shape_label(submit_name: &str) -> &'static str {
             | "late-vf-ndc-centered-mesa-active-noprimrepl-raster-wm-oa-probe"
     ) {
         return "canonical";
+    }
+    if matches!(
+        submit_name,
+        "late-vf-ndc-linelist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe"
+    ) {
+        return "ndc-line-center-32";
+    }
+    if matches!(
+        submit_name,
+        "late-vf-ndc-rectlist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe"
+    ) {
+        return "ndc-rect-fullscreen";
+    }
+    if matches!(
+        submit_name,
+        "late-vf-ndc-trilist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe"
+    ) {
+        return "oversized";
+    }
+    if matches!(
+        submit_name,
+        "late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-sf-sane-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-sf-sane-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-header-pos1-mesa-active-block-swiz-sf-sane-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-header-pos1-mesa-raster-sf-sane-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-header-pos1-mesa-raster-mesa-sf-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-header-pos1-mesa-raster-mesa-sf-mesa-sbe-bary8-raster-wm-oa-probe"
+    ) {
+        return "screen-space-oversized";
     }
     if matches!(
         submit_name,
