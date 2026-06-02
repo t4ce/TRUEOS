@@ -9,7 +9,7 @@ use spin::Mutex;
 
 macro_rules! intel_render_focus_log {
     ($($arg:tt)*) => {
-        if crate::logflag::INTEL_STAGE1_LOGS || crate::logflag::INTEL_RENDER_NGIN_LOGS {
+        if render_focus_log_enabled() {
             crate::log!($($arg)*);
         }
     };

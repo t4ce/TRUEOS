@@ -104,6 +104,7 @@ fn submit_primary_probe_now(reason: &'static str) -> bool {
             pitch_bytes,
             width as usize,
             height as usize,
+            probe_seq,
         )
     } else if PRIMARY_USE_DRAW_PATH_BOOT_ONCE && reason == "boot-once" {
         let completed = submit_primary_triangle_with_retries(
@@ -2333,23 +2334,187 @@ fn submit_single_raster_isolation_probe(dev: crate::intel::Dev, warm: RenderWarm
         BackendProbeMode::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend,
         PostDrawSyncVariant::LightPostSyncNoCs,
     );
-    let fragment_candidate_ready = fragment_candidate_ready();
-    let fragment_boundary_observed = fragment_boundary_observed();
-    let wm_coverage_observed = wm_coverage_observed();
-    let psd_dispatch_observed = psd_dispatch_observed();
+    let clip_on_fragment_candidate_ready = fragment_candidate_ready();
+    let clip_on_fragment_boundary_observed = fragment_boundary_observed();
+    let clip_on_wm_coverage_observed = wm_coverage_observed();
+    let clip_on_psd_dispatch_observed = psd_dispatch_observed();
     intel_render_focus_log!(
         "intel/render: primary-single-raster-isolation completed={} scratch_only=1 probe=late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} reason=quiet_fullscreen_green_disco_and_measure_one_3d_submit\n",
         completed as u8,
-        fragment_candidate_ready as u8,
-        wm_coverage_observed as u8,
-        psd_dispatch_observed as u8,
-        fragment_boundary_observed as u8,
+        clip_on_fragment_candidate_ready as u8,
+        clip_on_wm_coverage_observed as u8,
+        clip_on_psd_dispatch_observed as u8,
+        clip_on_fragment_boundary_observed as u8,
     );
     if completed {
         recover_render_engine_after_nonretired_submit(
             dev,
             warm,
             "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe",
+        );
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let mesa_vue_completed = submit_triangle_vf_draw_to_surface(
+        "late-vf-screen-rectlist-mesa-no-vs-early-backend-raster-wm-oa-probe",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::ScreenSpaceRectInset32,
+        BackendProbeMode::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    let mesa_vue_fragment_candidate_ready = fragment_candidate_ready();
+    let mesa_vue_fragment_boundary_observed = fragment_boundary_observed();
+    let mesa_vue_wm_coverage_observed = wm_coverage_observed();
+    let mesa_vue_psd_dispatch_observed = psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-mesa-vue completed={} scratch_only=1 probe=late-vf-screen-rectlist-mesa-no-vs-early-backend-raster-wm-oa-probe fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_screen_clip_on={} reason=tests_mesa_no_vs_rectlist_vue_header_contract_at_sf_to_wm_boundary\n",
+        mesa_vue_completed as u8,
+        mesa_vue_fragment_candidate_ready as u8,
+        mesa_vue_wm_coverage_observed as u8,
+        mesa_vue_psd_dispatch_observed as u8,
+        mesa_vue_fragment_boundary_observed as u8,
+        completed as u8,
+    );
+    if mesa_vue_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-rectlist-mesa-no-vs-early-backend-raster-wm-oa-probe",
+        );
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let ndc_completed = submit_triangle_vf_draw_to_surface(
+        "late-vf-ndc-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::NdcRectFullscreen,
+        BackendProbeMode::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    let ndc_fragment_candidate_ready = fragment_candidate_ready();
+    let ndc_fragment_boundary_observed = fragment_boundary_observed();
+    let ndc_wm_coverage_observed = wm_coverage_observed();
+    let ndc_psd_dispatch_observed = psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-ndc-viewport completed={} scratch_only=1 probe=late-vf-ndc-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_screen_clip_on={} reason=tests_whether_pdd_screen_space_contract_blocks_sf_to_wm_scan_conversion\n",
+        ndc_completed as u8,
+        ndc_fragment_candidate_ready as u8,
+        ndc_wm_coverage_observed as u8,
+        ndc_psd_dispatch_observed as u8,
+        ndc_fragment_boundary_observed as u8,
+        completed as u8,
+    );
+    if ndc_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-ndc-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe",
+        );
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let point_completed = submit_triangle_vf_draw_to_surface(
+        "late-vf-screen-point-center-slot0-xyzw-raster-wm-oa-probe",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::ScreenSpacePointCenter32,
+        BackendProbeMode::RasterWmInputOaScreenSpacePointList,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    let point_fragment_candidate_ready = fragment_candidate_ready();
+    let point_fragment_boundary_observed = fragment_boundary_observed();
+    let point_wm_coverage_observed = wm_coverage_observed();
+    let point_psd_dispatch_observed = psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-pointlist completed={} scratch_only=1 probe=late-vf-screen-point-center-slot0-xyzw-raster-wm-oa-probe vertex_count=1 topology=pointlist geometry=screen-space-point-center-32 fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_rect_clip_on={} reason=tests_single_point_scan_conversion_before_triangle_rect_edge_setup\n",
+        point_completed as u8,
+        point_fragment_candidate_ready as u8,
+        point_wm_coverage_observed as u8,
+        point_psd_dispatch_observed as u8,
+        point_fragment_boundary_observed as u8,
+        completed as u8,
+    );
+    if point_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-point-center-slot0-xyzw-raster-wm-oa-probe",
+        );
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let clip_bypass_completed = submit_triangle_vf_draw_to_surface(
+        "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-bypass-raster-wm-oa-probe",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::ScreenSpaceRectInset32,
+        BackendProbeMode::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrder,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    let clip_bypass_fragment_candidate_ready = fragment_candidate_ready();
+    let clip_bypass_fragment_boundary_observed = fragment_boundary_observed();
+    let clip_bypass_wm_coverage_observed = wm_coverage_observed();
+    let clip_bypass_psd_dispatch_observed = psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-clip-bypass completed={} scratch_only=1 probe=late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-bypass-raster-wm-oa-probe fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_vs_clip_on={} reason=tests_whether_clip_stage_participation_blocks_sf_to_wm_scan_conversion\n",
+        clip_bypass_completed as u8,
+        clip_bypass_fragment_candidate_ready as u8,
+        clip_bypass_wm_coverage_observed as u8,
+        clip_bypass_psd_dispatch_observed as u8,
+        clip_bypass_fragment_boundary_observed as u8,
+        completed as u8,
+    );
+    if clip_bypass_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-bypass-raster-wm-oa-probe",
         );
     }
     false
@@ -2362,8 +2527,10 @@ fn submit_primary_visible_repaint_probe(
     pitch_bytes: usize,
     width: usize,
     height: usize,
+    probe_seq: u32,
 ) -> bool {
     reset_fragment_boundary_probe();
+    set_render_focus_log_suppressed(true);
     let completed = submit_triangle_vf_draw_to_surface(
         "primary-periodic-visible-repaint",
         dev,
@@ -2373,26 +2540,44 @@ fn submit_primary_visible_repaint_probe(
         width,
         height,
         TriangleBlendProbeMode::MesaZeroedState,
-        VfPrimitiveGeometry::ScreenSpaceRectInset32,
+        VfPrimitiveGeometry::ScreenSpaceRectTarget,
         BackendProbeMode::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend,
         PostDrawSyncVariant::LightPostSyncNoCs,
     );
+    set_render_focus_log_suppressed(false);
     let fragment_candidate_ready = fragment_candidate_ready();
     let fragment_boundary_observed = fragment_boundary_observed();
     let wm_coverage_observed = wm_coverage_observed();
     let psd_dispatch_observed = psd_dispatch_observed();
-    intel_render_focus_log!(
-        "intel/render: primary-periodic-repaint completed={} target=primary rt_gpu=0x{:X} size={}x{} pitch=0x{:X} fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} cadence_ms=1000 intent=keep_visible_triangle_path_warm\n",
-        completed as u8,
-        surface_gpu,
-        width,
-        height,
-        pitch_bytes,
-        fragment_candidate_ready as u8,
-        wm_coverage_observed as u8,
-        psd_dispatch_observed as u8,
-        fragment_boundary_observed as u8,
-    );
+    let status_sig = ((completed as u32) << 4)
+        | ((fragment_candidate_ready as u32) << 3)
+        | ((wm_coverage_observed as u32) << 2)
+        | ((psd_dispatch_observed as u32) << 1)
+        | (fragment_boundary_observed as u32);
+    let last_sig = PRIMARY_REPAINT_STATUS_SIG.swap(status_sig, Ordering::AcqRel);
+    let status_changed = last_sig != status_sig;
+    let signal_observed = completed
+        || fragment_candidate_ready
+        || wm_coverage_observed
+        || psd_dispatch_observed
+        || fragment_boundary_observed;
+    if probe_seq <= 4 || status_changed || signal_observed || probe_seq.is_multiple_of(PRIMARY_PERIODIC_LOG_EVERY) {
+        intel_render_focus_log!(
+            "intel/render: primary-periodic-repaint seq={} completed={} target=primary rt_gpu=0x{:X} size={}x{} pitch=0x{:X} geometry=screen-space-rect-target preconditions=rectlist+slot0_xyzw+pdd+sf_viewport_off+clip_accept_all fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} status_changed={} submit_frontier={} cadence_ms=1000 log_policy=first_change_signal_or_heartbeat frontier=sf_object_setup_to_wm_scan_conversion intent=quiet_live_wm_raster_probe\n",
+            probe_seq,
+            completed as u8,
+            surface_gpu,
+            width,
+            height,
+            pitch_bytes,
+            fragment_candidate_ready as u8,
+            wm_coverage_observed as u8,
+            psd_dispatch_observed as u8,
+            fragment_boundary_observed as u8,
+            status_changed as u8,
+            if completed { "retired_wm_raster_frontier" } else { "nonretired_before_wm_signal" },
+        );
+    }
     if completed {
         recover_render_engine_after_nonretired_submit(dev, warm, "primary-periodic-visible-repaint");
     }
@@ -2729,7 +2914,7 @@ fn submit_triangle_vf_draw_to_surface(
         post_draw_sync_variant.label(),
         crate::intel::shader::triangle_pipeline_note()
     );
-    let geometry_vertices = geometry.vertices();
+    let geometry_vertices = geometry.vertices_for_target(draw.target_w, draw.target_h);
     if geometry.fullscreen_candidate() {
         intel_render_focus_log!(
             "intel/render: {} fragment-candidate-shape accepted=1 geometry={} ndc=v0[-1.000,-1.000] v1[3.000,-1.000] v2[-1.000,3.000] screen_bbox=[0,0..{},{}] sample_points=full-surface coverage_contract=oversized-triangle does_not_prove=raster_samples_or_ps\n",
@@ -3739,6 +3924,19 @@ fn ensure_smoke_buffers_mapped(dev: crate::intel::Dev, warm: RenderWarmState) ->
     true
 }
 
+fn render_focus_log_enabled() -> bool {
+    RENDER_FOCUS_LOG_SUPPRESS_DEPTH.load(Ordering::Acquire) == 0
+        && (crate::logflag::INTEL_STAGE1_LOGS || crate::logflag::INTEL_RENDER_NGIN_LOGS)
+}
+
+fn set_render_focus_log_suppressed(suppressed: bool) {
+    if suppressed {
+        RENDER_FOCUS_LOG_SUPPRESS_DEPTH.fetch_add(1, Ordering::AcqRel);
+    } else if RENDER_FOCUS_LOG_SUPPRESS_DEPTH.load(Ordering::Acquire) != 0 {
+        RENDER_FOCUS_LOG_SUPPRESS_DEPTH.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 fn should_log_primary_probe(reason: &str, seq: u32) -> bool {
     reason == "boot-once" || seq <= 3 || seq.is_multiple_of(PRIMARY_PERIODIC_LOG_EVERY)
 }
@@ -3846,7 +4044,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
         post_draw_sync_variant.label(),
         crate::intel::shader::triangle_pipeline_note()
     );
-    let geometry_vertices = geometry.vertices();
+    let geometry_vertices = geometry.vertices_for_target(draw.target_w, draw.target_h);
     if geometry.fullscreen_candidate() {
         intel_render_focus_log!(
             "intel/render: {} fragment-candidate-shape accepted=1 geometry={} ndc=v0[-1.000,-1.000] v1[3.000,-1.000] v2[-1.000,3.000] screen_bbox=[0,0..{},{}] sample_points=full-surface coverage_contract=oversized-triangle does_not_prove=raster_samples_or_ps\n",
