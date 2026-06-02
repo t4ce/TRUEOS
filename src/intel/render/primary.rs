@@ -241,6 +241,8 @@ fn submit_primary_triangle_with_retries(
             8,
             8,
             experiment,
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::Canonical,
         );
         intel_render_focus_log!(
             "intel/render: primary-vs-streamout-layout-proof experiment={} accepted={} note=real-vs-vue-slot-probe-for-clip-sf-position-contract\n",
@@ -1981,6 +1983,8 @@ fn submit_primary_triangle_with_retries(
             8,
             8,
             experiment,
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::Canonical,
         );
         intel_render_focus_log!(
             "intel/render: primary-late-vs-streamout-layout-proof experiment={} accepted={} note=captured-after-wm-frontier-probes-to-verify-vs-output-xyzw-for-clip-sf\n",
@@ -2236,6 +2240,8 @@ fn submit_primary_triangle_with_retries(
             width,
             height,
             vs_streamout_experiment,
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::Canonical,
         );
         intel_render_verbose_log!(
             "intel/render: primary-vs-streamout-precheck experiment={} accepted={} attempt={}/3\n",
@@ -2353,6 +2359,15 @@ fn submit_single_raster_isolation_probe(dev: crate::intel::Dev, warm: RenderWarm
             "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe",
         );
     }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 0
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=0 completed={} reason=selected_visual_isolation_rung\n",
+            completed as u8,
+        );
+        return completed;
+    }
 
     reset_fragment_boundary_probe();
     unsafe {
@@ -2393,6 +2408,1111 @@ fn submit_single_raster_isolation_probe(dev: crate::intel::Dev, warm: RenderWarm
             warm,
             "late-vf-screen-rectlist-mesa-no-vs-early-backend-raster-wm-oa-probe",
         );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 1
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=1 completed={} reason=selected_visual_isolation_rung\n",
+            mesa_vue_completed as u8,
+        );
+        return mesa_vue_completed;
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let point_open_bounds_completed = submit_triangle_vf_draw_to_surface(
+        "late-vf-screen-pointlist-slot0-xyzw-open-bounds-raster-wm-oa-probe",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::ScreenSpacePointCenter32,
+        BackendProbeMode::RasterWmInputOaScreenSpacePointListOpenBounds,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    let point_open_bounds_fragment_candidate_ready = fragment_candidate_ready();
+    let point_open_bounds_fragment_boundary_observed = fragment_boundary_observed();
+    let point_open_bounds_wm_coverage_observed = wm_coverage_observed();
+    let point_open_bounds_psd_dispatch_observed = psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-pointlist-open-bounds completed={} scratch_only=1 probe=late-vf-screen-pointlist-slot0-xyzw-open-bounds-raster-wm-oa-probe vertex_count=1 topology=pointlist geometry=screen-space-point-center-32 fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_mesa_vue={} reason=selected_strongest_sf_object_to_wm_scan_conversion_probe\n",
+        point_open_bounds_completed as u8,
+        point_open_bounds_fragment_candidate_ready as u8,
+        point_open_bounds_wm_coverage_observed as u8,
+        point_open_bounds_psd_dispatch_observed as u8,
+        point_open_bounds_fragment_boundary_observed as u8,
+        mesa_vue_completed as u8,
+    );
+    if point_open_bounds_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-pointlist-slot0-xyzw-open-bounds-raster-wm-oa-probe",
+        );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 2
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=2 completed={} reason=selected_visual_isolation_rung\n",
+            point_open_bounds_completed as u8,
+        );
+        return point_open_bounds_completed;
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let point_clip_normal_open_bounds_completed = submit_triangle_vf_draw_to_surface(
+        "late-vf-screen-pointlist-slot0-xyzw-clip-normal-open-bounds-raster-wm-oa-probe",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::ScreenSpacePointCenter32,
+        BackendProbeMode::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    let point_clip_normal_open_bounds_fragment_candidate_ready = fragment_candidate_ready();
+    let point_clip_normal_open_bounds_fragment_boundary_observed = fragment_boundary_observed();
+    let point_clip_normal_open_bounds_wm_coverage_observed = wm_coverage_observed();
+    let point_clip_normal_open_bounds_psd_dispatch_observed = psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-pointlist-clip-normal-open-bounds completed={} scratch_only=1 probe=late-vf-screen-pointlist-slot0-xyzw-clip-normal-open-bounds-raster-wm-oa-probe vertex_count=1 topology=pointlist geometry=screen-space-point-center-32 fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_point_open_bounds={} reason=tests_normal_clip_classification_vs_accept_all_while_keeping_pointlist_open_bounds\n",
+        point_clip_normal_open_bounds_completed as u8,
+        point_clip_normal_open_bounds_fragment_candidate_ready as u8,
+        point_clip_normal_open_bounds_wm_coverage_observed as u8,
+        point_clip_normal_open_bounds_psd_dispatch_observed as u8,
+        point_clip_normal_open_bounds_fragment_boundary_observed as u8,
+        point_open_bounds_completed as u8,
+    );
+    if point_clip_normal_open_bounds_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-pointlist-slot0-xyzw-clip-normal-open-bounds-raster-wm-oa-probe",
+        );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 3
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=3 completed={} reason=selected_visual_isolation_rung\n",
+            point_clip_normal_open_bounds_completed as u8,
+        );
+        return point_clip_normal_open_bounds_completed;
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let line_open_bounds_completed = submit_triangle_vf_draw_to_surface(
+        "late-vf-screen-linelist-slot0-xyzw-open-bounds-raster-wm-oa-probe",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::ScreenSpaceLineCenter32,
+        BackendProbeMode::RasterWmInputOaScreenSpaceLineListOpenBounds,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    let line_open_bounds_fragment_candidate_ready = fragment_candidate_ready();
+    let line_open_bounds_fragment_boundary_observed = fragment_boundary_observed();
+    let line_open_bounds_wm_coverage_observed = wm_coverage_observed();
+    let line_open_bounds_psd_dispatch_observed = psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-linelist-open-bounds completed={} scratch_only=1 probe=late-vf-screen-linelist-slot0-xyzw-open-bounds-raster-wm-oa-probe vertex_count=2 topology=linelist geometry=screen-space-line-center-32 fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_point_clip_normal={} reason=tests_line_object_setup_with_nonzero_line_width_after_pointlist_failed_to_reach_wm\n",
+        line_open_bounds_completed as u8,
+        line_open_bounds_fragment_candidate_ready as u8,
+        line_open_bounds_wm_coverage_observed as u8,
+        line_open_bounds_psd_dispatch_observed as u8,
+        line_open_bounds_fragment_boundary_observed as u8,
+        point_clip_normal_open_bounds_completed as u8,
+    );
+    if line_open_bounds_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-linelist-slot0-xyzw-open-bounds-raster-wm-oa-probe",
+        );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 4
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=4 completed={} reason=selected_visual_isolation_rung\n",
+            line_open_bounds_completed as u8,
+        );
+        return line_open_bounds_completed;
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let line_mesa_backend_open_bounds_completed = submit_triangle_vf_draw_to_surface(
+        "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-raster-wm-oa-probe",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::ScreenSpaceLineCenter32,
+        BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    let line_mesa_backend_open_bounds_fragment_candidate_ready = fragment_candidate_ready();
+    let line_mesa_backend_open_bounds_fragment_boundary_observed = fragment_boundary_observed();
+    let line_mesa_backend_open_bounds_wm_coverage_observed = wm_coverage_observed();
+    let line_mesa_backend_open_bounds_psd_dispatch_observed = psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-linelist-mesa-backend-open-bounds completed={} scratch_only=1 probe=late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-raster-wm-oa-probe vertex_count=2 topology=linelist geometry=screen-space-line-center-32 fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_line_open_bounds={} reason=keeps_line_object_setup_but_stamps_mesa_successful_backend_gate_state_after_raster\n",
+        line_mesa_backend_open_bounds_completed as u8,
+        line_mesa_backend_open_bounds_fragment_candidate_ready as u8,
+        line_mesa_backend_open_bounds_wm_coverage_observed as u8,
+        line_mesa_backend_open_bounds_psd_dispatch_observed as u8,
+        line_mesa_backend_open_bounds_fragment_boundary_observed as u8,
+        line_open_bounds_completed as u8,
+    );
+    if line_mesa_backend_open_bounds_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-raster-wm-oa-probe",
+        );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 5
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=5 completed={} reason=selected_visual_isolation_rung\n",
+            line_mesa_backend_open_bounds_completed as u8,
+        );
+        return line_mesa_backend_open_bounds_completed;
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let line_mesa_backend_open_bounds_sample1_completed = submit_triangle_vf_draw_to_surface(
+        "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-raster-wm-oa-probe",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::ScreenSpaceLineCenter32,
+        BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    let line_mesa_backend_open_bounds_sample1_fragment_candidate_ready =
+        fragment_candidate_ready();
+    let line_mesa_backend_open_bounds_sample1_fragment_boundary_observed =
+        fragment_boundary_observed();
+    let line_mesa_backend_open_bounds_sample1_wm_coverage_observed = wm_coverage_observed();
+    let line_mesa_backend_open_bounds_sample1_psd_dispatch_observed = psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-linelist-mesa-backend-open-bounds-sample1 completed={} scratch_only=1 probe=late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-raster-wm-oa-probe vertex_count=2 topology=linelist geometry=screen-space-line-center-32 fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_line_mesa_backend={} reason=tests_line_mesa_backend_with_explicit_raster_sample_count_after_forced_samples_zero_failed\n",
+        line_mesa_backend_open_bounds_sample1_completed as u8,
+        line_mesa_backend_open_bounds_sample1_fragment_candidate_ready as u8,
+        line_mesa_backend_open_bounds_sample1_wm_coverage_observed as u8,
+        line_mesa_backend_open_bounds_sample1_psd_dispatch_observed as u8,
+        line_mesa_backend_open_bounds_sample1_fragment_boundary_observed as u8,
+        line_mesa_backend_open_bounds_completed as u8,
+    );
+    if line_mesa_backend_open_bounds_sample1_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-raster-wm-oa-probe",
+        );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 6
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=6 completed={} reason=selected_visual_isolation_rung\n",
+            line_mesa_backend_open_bounds_sample1_completed as u8,
+        );
+        return line_mesa_backend_open_bounds_sample1_completed;
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let line_mesa_backend_open_bounds_sample1_onpixel_completed =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceLineCenter32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    let line_mesa_backend_open_bounds_sample1_onpixel_fragment_candidate_ready =
+        fragment_candidate_ready();
+    let line_mesa_backend_open_bounds_sample1_onpixel_fragment_boundary_observed =
+        fragment_boundary_observed();
+    let line_mesa_backend_open_bounds_sample1_onpixel_wm_coverage_observed =
+        wm_coverage_observed();
+    let line_mesa_backend_open_bounds_sample1_onpixel_psd_dispatch_observed =
+        psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-linelist-mesa-backend-open-bounds-sample1-onpixel completed={} scratch_only=1 probe=late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-raster-wm-oa-probe vertex_count=2 topology=linelist geometry=screen-space-line-center-32 fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_line_mesa_backend_sample1={} reason=tests_line_mesa_backend_with_explicit_raster_sample_count_and_onpixel_ms_raster_mode\n",
+        line_mesa_backend_open_bounds_sample1_onpixel_completed as u8,
+        line_mesa_backend_open_bounds_sample1_onpixel_fragment_candidate_ready as u8,
+        line_mesa_backend_open_bounds_sample1_onpixel_wm_coverage_observed as u8,
+        line_mesa_backend_open_bounds_sample1_onpixel_psd_dispatch_observed as u8,
+        line_mesa_backend_open_bounds_sample1_onpixel_fragment_boundary_observed as u8,
+        line_mesa_backend_open_bounds_sample1_completed as u8,
+    );
+    if line_mesa_backend_open_bounds_sample1_onpixel_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-raster-wm-oa-probe",
+        );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 7
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=7 completed={} reason=selected_visual_isolation_rung\n",
+            line_mesa_backend_open_bounds_sample1_onpixel_completed as u8,
+        );
+        return line_mesa_backend_open_bounds_sample1_onpixel_completed;
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_completed =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceLineCenter32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    let line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_fragment_candidate_ready =
+        fragment_candidate_ready();
+    let line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_fragment_boundary_observed =
+        fragment_boundary_observed();
+    let line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_wm_coverage_observed =
+        wm_coverage_observed();
+    let line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_psd_dispatch_observed =
+        psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-linelist-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point completed={} scratch_only=1 probe=late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-raster-wm-oa-probe vertex_count=2 topology=linelist geometry=screen-space-line-center-32 fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_line_mesa_backend_sample1_onpixel={} reason=tests_line_mesa_backend_onpixel_with_mesa_sf_dw3_point_width_source_and_provoking_bits\n",
+        line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_completed as u8,
+        line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_fragment_candidate_ready as u8,
+        line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_wm_coverage_observed as u8,
+        line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_psd_dispatch_observed as u8,
+        line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_fragment_boundary_observed as u8,
+        line_mesa_backend_open_bounds_sample1_onpixel_completed as u8,
+    );
+    if line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-raster-wm-oa-probe",
+        );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 8
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=8 completed={} reason=selected_visual_isolation_rung\n",
+            line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_completed as u8,
+        );
+        return line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_completed;
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_completed =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceLineCenter32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    let line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_fragment_candidate_ready =
+        fragment_candidate_ready();
+    let line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_fragment_boundary_observed =
+        fragment_boundary_observed();
+    let line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_wm_coverage_observed =
+        wm_coverage_observed();
+    let line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_psd_dispatch_observed =
+        psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-linelist-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0 completed={} scratch_only=1 probe=late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-raster-wm-oa-probe vertex_count=2 topology=linelist geometry=screen-space-line-center-32 fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_line_mesa_backend_sample1_onpixel_mesa_sf_point={} reason=tests_line_mesa_backend_onpixel_mesa_sf_point_with_zero_sbe_read_length_for_no_attribute_ps\n",
+        line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_completed as u8,
+        line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_fragment_candidate_ready as u8,
+        line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_wm_coverage_observed as u8,
+        line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_psd_dispatch_observed as u8,
+        line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_fragment_boundary_observed as u8,
+        line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_completed as u8,
+    );
+    if line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-raster-wm-oa-probe",
+        );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 9
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=9 completed={} reason=selected_visual_isolation_rung\n",
+            line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_completed as u8,
+        );
+        return line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_completed;
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let ndc_line_mesa_active_block_swiz_completed = submit_triangle_vf_draw_to_surface(
+        "late-vf-ndc-linelist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::NdcLineCenter32,
+        BackendProbeMode::RasterWmInputOaNdcLineListMesaActiveBlockSwiz,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    let ndc_line_mesa_active_block_swiz_fragment_candidate_ready = fragment_candidate_ready();
+    let ndc_line_mesa_active_block_swiz_fragment_boundary_observed =
+        fragment_boundary_observed();
+    let ndc_line_mesa_active_block_swiz_wm_coverage_observed = wm_coverage_observed();
+    let ndc_line_mesa_active_block_swiz_psd_dispatch_observed = psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-ndc-linelist-mesa-active-block-swiz completed={} scratch_only=1 probe=late-vf-ndc-linelist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe vertex_count=2 topology=linelist geometry=ndc-line-center-32 fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_line_mesa_backend_sample1_onpixel_mesa_sf_point_sbe_read0={} reason=tests_cl_producing_line_shape_with_mesa_active_clip_sf_raster_and_backend_block_before_real_vs\n",
+        ndc_line_mesa_active_block_swiz_completed as u8,
+        ndc_line_mesa_active_block_swiz_fragment_candidate_ready as u8,
+        ndc_line_mesa_active_block_swiz_wm_coverage_observed as u8,
+        ndc_line_mesa_active_block_swiz_psd_dispatch_observed as u8,
+        ndc_line_mesa_active_block_swiz_fragment_boundary_observed as u8,
+        line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_completed as u8,
+    );
+    if ndc_line_mesa_active_block_swiz_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-ndc-linelist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe",
+        );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 10
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=10 completed={} reason=selected_visual_isolation_rung\n",
+            ndc_line_mesa_active_block_swiz_completed as u8,
+        );
+        return ndc_line_mesa_active_block_swiz_completed;
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let ndc_rect_mesa_active_block_swiz_completed = submit_triangle_vf_draw_to_surface(
+        "late-vf-ndc-rectlist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::NdcRectFullscreen,
+        BackendProbeMode::RasterWmInputOaNdcRectListMesaActiveBlockSwiz,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    let ndc_rect_mesa_active_block_swiz_fragment_candidate_ready = fragment_candidate_ready();
+    let ndc_rect_mesa_active_block_swiz_fragment_boundary_observed =
+        fragment_boundary_observed();
+    let ndc_rect_mesa_active_block_swiz_wm_coverage_observed = wm_coverage_observed();
+    let ndc_rect_mesa_active_block_swiz_psd_dispatch_observed = psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-ndc-rectlist-mesa-active-block-swiz completed={} scratch_only=1 probe=late-vf-ndc-rectlist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe vertex_count=3 topology=rectlist geometry=ndc-rect-fullscreen fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_ndc_line_mesa_active_block_swiz={} reason=tests_positive_coverage_ndc_rect_with_mesa_active_clip_sf_raster_backend_block_and_valid_oa\n",
+        ndc_rect_mesa_active_block_swiz_completed as u8,
+        ndc_rect_mesa_active_block_swiz_fragment_candidate_ready as u8,
+        ndc_rect_mesa_active_block_swiz_wm_coverage_observed as u8,
+        ndc_rect_mesa_active_block_swiz_psd_dispatch_observed as u8,
+        ndc_rect_mesa_active_block_swiz_fragment_boundary_observed as u8,
+        ndc_line_mesa_active_block_swiz_completed as u8,
+    );
+    if ndc_rect_mesa_active_block_swiz_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-ndc-rectlist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe",
+        );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 11
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=11 completed={} reason=selected_visual_isolation_rung\n",
+            ndc_rect_mesa_active_block_swiz_completed as u8,
+        );
+        return ndc_rect_mesa_active_block_swiz_completed;
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let ndc_tri_mesa_active_block_swiz_completed = submit_triangle_vf_draw_to_surface(
+        "late-vf-ndc-trilist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::Oversized,
+        BackendProbeMode::RasterWmInputOaNdcTriListMesaActiveBlockSwiz,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    let ndc_tri_mesa_active_block_swiz_fragment_candidate_ready = fragment_candidate_ready();
+    let ndc_tri_mesa_active_block_swiz_fragment_boundary_observed =
+        fragment_boundary_observed();
+    let ndc_tri_mesa_active_block_swiz_wm_coverage_observed = wm_coverage_observed();
+    let ndc_tri_mesa_active_block_swiz_psd_dispatch_observed = psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-ndc-trilist-mesa-active-block-swiz completed={} scratch_only=1 probe=late-vf-ndc-trilist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe vertex_count=3 topology=trilist geometry=oversized fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_ndc_rect_mesa_active_block_swiz={} reason=tests_positive_coverage_ndc_trilist_with_mesa_active_block_exact_mesa_primitive_dw1_and_valid_oa\n",
+        ndc_tri_mesa_active_block_swiz_completed as u8,
+        ndc_tri_mesa_active_block_swiz_fragment_candidate_ready as u8,
+        ndc_tri_mesa_active_block_swiz_wm_coverage_observed as u8,
+        ndc_tri_mesa_active_block_swiz_psd_dispatch_observed as u8,
+        ndc_tri_mesa_active_block_swiz_fragment_boundary_observed as u8,
+        ndc_rect_mesa_active_block_swiz_completed as u8,
+    );
+    if ndc_tri_mesa_active_block_swiz_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-ndc-trilist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe",
+        );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 12
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=12 completed={} reason=selected_visual_isolation_rung\n",
+            ndc_tri_mesa_active_block_swiz_completed as u8,
+        );
+        return ndc_tri_mesa_active_block_swiz_completed;
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let screen_tri_mesa_active_block_swiz_completed = submit_triangle_vf_draw_to_surface(
+        "late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::ScreenSpaceOversized,
+        BackendProbeMode::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    let screen_tri_mesa_active_block_swiz_fragment_candidate_ready = fragment_candidate_ready();
+    let screen_tri_mesa_active_block_swiz_fragment_boundary_observed =
+        fragment_boundary_observed();
+    let screen_tri_mesa_active_block_swiz_wm_coverage_observed = wm_coverage_observed();
+    let screen_tri_mesa_active_block_swiz_psd_dispatch_observed = psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-screen-trilist-mesa-active-block-swiz completed={} scratch_only=1 probe=late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe vertex_count=3 topology=trilist geometry=screen-space-oversized fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_ndc_tri_mesa_active_block_swiz={} reason=tests_host_pdd_screen_space_trilist_with_exact_mesa_primitive_dw1_and_mesa_backend_block\n",
+        screen_tri_mesa_active_block_swiz_completed as u8,
+        screen_tri_mesa_active_block_swiz_fragment_candidate_ready as u8,
+        screen_tri_mesa_active_block_swiz_wm_coverage_observed as u8,
+        screen_tri_mesa_active_block_swiz_psd_dispatch_observed as u8,
+        screen_tri_mesa_active_block_swiz_fragment_boundary_observed as u8,
+        ndc_tri_mesa_active_block_swiz_completed as u8,
+    );
+    if screen_tri_mesa_active_block_swiz_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe",
+        );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 13
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=13 completed={} reason=selected_visual_isolation_rung\n",
+            screen_tri_mesa_active_block_swiz_completed as u8,
+        );
+        return screen_tri_mesa_active_block_swiz_completed;
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let screen_tri_mesa_active_block_swiz_sf_sane_completed = submit_triangle_vf_draw_to_surface(
+        "late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-sf-sane-raster-wm-oa-probe",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::ScreenSpaceOversized,
+        BackendProbeMode::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    let screen_tri_mesa_active_block_swiz_sf_sane_fragment_candidate_ready =
+        fragment_candidate_ready();
+    let screen_tri_mesa_active_block_swiz_sf_sane_fragment_boundary_observed =
+        fragment_boundary_observed();
+    let screen_tri_mesa_active_block_swiz_sf_sane_wm_coverage_observed = wm_coverage_observed();
+    let screen_tri_mesa_active_block_swiz_sf_sane_psd_dispatch_observed = psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-screen-trilist-mesa-active-block-swiz-sf-sane completed={} scratch_only=1 probe=late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-sf-sane-raster-wm-oa-probe vertex_count=3 topology=trilist geometry=screen-space-oversized fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_screen_tri_mesa_active_block_swiz={} reason=tests_host_pdd_screen_space_trilist_with_sf_sane_defaults_exact_mesa_primitive_dw1_and_mesa_backend_block\n",
+        screen_tri_mesa_active_block_swiz_sf_sane_completed as u8,
+        screen_tri_mesa_active_block_swiz_sf_sane_fragment_candidate_ready as u8,
+        screen_tri_mesa_active_block_swiz_sf_sane_wm_coverage_observed as u8,
+        screen_tri_mesa_active_block_swiz_sf_sane_psd_dispatch_observed as u8,
+        screen_tri_mesa_active_block_swiz_sf_sane_fragment_boundary_observed as u8,
+        screen_tri_mesa_active_block_swiz_completed as u8,
+    );
+    if screen_tri_mesa_active_block_swiz_sf_sane_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-sf-sane-raster-wm-oa-probe",
+        );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 14
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=14 completed={} reason=selected_visual_isolation_rung\n",
+            screen_tri_mesa_active_block_swiz_sf_sane_completed as u8,
+        );
+        return screen_tri_mesa_active_block_swiz_sf_sane_completed;
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let screen_tri_mesa_active_block_swiz_sf_sane_bary8_completed =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-sf-sane-bary8-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceOversized,
+            BackendProbeMode::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    let screen_tri_mesa_active_block_swiz_sf_sane_bary8_fragment_candidate_ready =
+        fragment_candidate_ready();
+    let screen_tri_mesa_active_block_swiz_sf_sane_bary8_fragment_boundary_observed =
+        fragment_boundary_observed();
+    let screen_tri_mesa_active_block_swiz_sf_sane_bary8_wm_coverage_observed =
+        wm_coverage_observed();
+    let screen_tri_mesa_active_block_swiz_sf_sane_bary8_psd_dispatch_observed =
+        psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-screen-trilist-mesa-active-block-swiz-sf-sane-bary8 completed={} scratch_only=1 probe=late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-sf-sane-bary8-raster-wm-oa-probe vertex_count=3 topology=trilist geometry=screen-space-oversized fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_screen_tri_mesa_active_block_swiz_sf_sane={} reason=tests_host_pdd_screen_space_trilist_with_sf_sane_defaults_bary8_nonperspective_exact_mesa_primitive_dw1_and_mesa_backend_block\n",
+        screen_tri_mesa_active_block_swiz_sf_sane_bary8_completed as u8,
+        screen_tri_mesa_active_block_swiz_sf_sane_bary8_fragment_candidate_ready as u8,
+        screen_tri_mesa_active_block_swiz_sf_sane_bary8_wm_coverage_observed as u8,
+        screen_tri_mesa_active_block_swiz_sf_sane_bary8_psd_dispatch_observed as u8,
+        screen_tri_mesa_active_block_swiz_sf_sane_bary8_fragment_boundary_observed as u8,
+        screen_tri_mesa_active_block_swiz_sf_sane_completed as u8,
+    );
+    if screen_tri_mesa_active_block_swiz_sf_sane_bary8_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-sf-sane-bary8-raster-wm-oa-probe",
+        );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 15
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=15 completed={} reason=selected_visual_isolation_rung\n",
+            screen_tri_mesa_active_block_swiz_sf_sane_bary8_completed as u8,
+        );
+        return screen_tri_mesa_active_block_swiz_sf_sane_bary8_completed;
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let screen_tri_mesa_active_block_swiz_sf_sane_bary8_header_completed =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-trilist-header-pos1-mesa-active-block-swiz-sf-sane-bary8-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceOversized,
+            BackendProbeMode::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    let screen_tri_mesa_active_block_swiz_sf_sane_bary8_header_fragment_candidate_ready =
+        fragment_candidate_ready();
+    let screen_tri_mesa_active_block_swiz_sf_sane_bary8_header_fragment_boundary_observed =
+        fragment_boundary_observed();
+    let screen_tri_mesa_active_block_swiz_sf_sane_bary8_header_wm_coverage_observed =
+        wm_coverage_observed();
+    let screen_tri_mesa_active_block_swiz_sf_sane_bary8_header_psd_dispatch_observed =
+        psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-screen-trilist-mesa-active-block-swiz-sf-sane-bary8-header completed={} scratch_only=1 probe=late-vf-screen-trilist-header-pos1-mesa-active-block-swiz-sf-sane-bary8-raster-wm-oa-probe vertex_count=3 topology=trilist geometry=screen-space-oversized vue_contract=header-pos1 fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_screen_tri_mesa_active_block_swiz_sf_sane_bary8={} reason=tests_same_trilist_bary8_state_with_vf_synthesized_vue_header_slot0_position_slot1\n",
+        screen_tri_mesa_active_block_swiz_sf_sane_bary8_header_completed as u8,
+        screen_tri_mesa_active_block_swiz_sf_sane_bary8_header_fragment_candidate_ready as u8,
+        screen_tri_mesa_active_block_swiz_sf_sane_bary8_header_wm_coverage_observed as u8,
+        screen_tri_mesa_active_block_swiz_sf_sane_bary8_header_psd_dispatch_observed as u8,
+        screen_tri_mesa_active_block_swiz_sf_sane_bary8_header_fragment_boundary_observed as u8,
+        screen_tri_mesa_active_block_swiz_sf_sane_bary8_completed as u8,
+    );
+    if screen_tri_mesa_active_block_swiz_sf_sane_bary8_header_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-trilist-header-pos1-mesa-active-block-swiz-sf-sane-bary8-raster-wm-oa-probe",
+        );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 16
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=16 completed={} reason=selected_visual_isolation_rung\n",
+            screen_tri_mesa_active_block_swiz_sf_sane_bary8_header_completed as u8,
+        );
+        return screen_tri_mesa_active_block_swiz_sf_sane_bary8_header_completed;
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let screen_tri_mesa_raster_sf_sane_bary8_header_completed =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-trilist-header-pos1-mesa-raster-sf-sane-bary8-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceOversized,
+            BackendProbeMode::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    let screen_tri_mesa_raster_sf_sane_bary8_header_fragment_candidate_ready =
+        fragment_candidate_ready();
+    let screen_tri_mesa_raster_sf_sane_bary8_header_fragment_boundary_observed =
+        fragment_boundary_observed();
+    let screen_tri_mesa_raster_sf_sane_bary8_header_wm_coverage_observed =
+        wm_coverage_observed();
+    let screen_tri_mesa_raster_sf_sane_bary8_header_psd_dispatch_observed =
+        psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-screen-trilist-mesa-raster-sf-sane-bary8-header completed={} scratch_only=1 probe=late-vf-screen-trilist-header-pos1-mesa-raster-sf-sane-bary8-raster-wm-oa-probe vertex_count=3 topology=trilist geometry=screen-space-oversized vue_contract=header-pos1 raster_dw1=0x04A11003 fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_screen_tri_mesa_active_block_swiz_sf_sane_bary8_header={} reason=tests_same_header_trilist_bary8_state_with_verified_mesa_active_raster_dw1\n",
+        screen_tri_mesa_raster_sf_sane_bary8_header_completed as u8,
+        screen_tri_mesa_raster_sf_sane_bary8_header_fragment_candidate_ready as u8,
+        screen_tri_mesa_raster_sf_sane_bary8_header_wm_coverage_observed as u8,
+        screen_tri_mesa_raster_sf_sane_bary8_header_psd_dispatch_observed as u8,
+        screen_tri_mesa_raster_sf_sane_bary8_header_fragment_boundary_observed as u8,
+        screen_tri_mesa_active_block_swiz_sf_sane_bary8_header_completed as u8,
+    );
+    if screen_tri_mesa_raster_sf_sane_bary8_header_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-trilist-header-pos1-mesa-raster-sf-sane-bary8-raster-wm-oa-probe",
+        );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 17
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=17 completed={} reason=selected_visual_isolation_rung\n",
+            screen_tri_mesa_raster_sf_sane_bary8_header_completed as u8,
+        );
+        return screen_tri_mesa_raster_sf_sane_bary8_header_completed;
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let screen_tri_mesa_raster_mesa_sf_bary8_header_completed =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-trilist-header-pos1-mesa-raster-mesa-sf-bary8-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceOversized,
+            BackendProbeMode::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    let screen_tri_mesa_raster_mesa_sf_bary8_header_fragment_candidate_ready =
+        fragment_candidate_ready();
+    let screen_tri_mesa_raster_mesa_sf_bary8_header_fragment_boundary_observed =
+        fragment_boundary_observed();
+    let screen_tri_mesa_raster_mesa_sf_bary8_header_wm_coverage_observed =
+        wm_coverage_observed();
+    let screen_tri_mesa_raster_mesa_sf_bary8_header_psd_dispatch_observed =
+        psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-screen-trilist-mesa-raster-mesa-sf-bary8-header completed={} scratch_only=1 probe=late-vf-screen-trilist-header-pos1-mesa-raster-mesa-sf-bary8-raster-wm-oa-probe vertex_count=3 topology=trilist geometry=screen-space-oversized vue_contract=header-pos1 raster_dw1=0x04A11003 sf=[0x00080402,0x00000000,0x02004808] fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_screen_tri_mesa_raster_sf_sane_bary8_header={} reason=tests_same_header_trilist_bary8_mesa_raster_state_with_verified_mesa_active_sf_body\n",
+        screen_tri_mesa_raster_mesa_sf_bary8_header_completed as u8,
+        screen_tri_mesa_raster_mesa_sf_bary8_header_fragment_candidate_ready as u8,
+        screen_tri_mesa_raster_mesa_sf_bary8_header_wm_coverage_observed as u8,
+        screen_tri_mesa_raster_mesa_sf_bary8_header_psd_dispatch_observed as u8,
+        screen_tri_mesa_raster_mesa_sf_bary8_header_fragment_boundary_observed as u8,
+        screen_tri_mesa_raster_sf_sane_bary8_header_completed as u8,
+    );
+    if screen_tri_mesa_raster_mesa_sf_bary8_header_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-trilist-header-pos1-mesa-raster-mesa-sf-bary8-raster-wm-oa-probe",
+        );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 18
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=18 completed={} reason=selected_visual_isolation_rung\n",
+            screen_tri_mesa_raster_mesa_sf_bary8_header_completed as u8,
+        );
+        return screen_tri_mesa_raster_mesa_sf_bary8_header_completed;
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let screen_tri_mesa_raster_mesa_sf_mesa_sbe_bary8_header_completed =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-trilist-header-pos1-mesa-raster-mesa-sf-mesa-sbe-bary8-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceOversized,
+            BackendProbeMode::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    let screen_tri_mesa_raster_mesa_sf_mesa_sbe_bary8_header_fragment_candidate_ready =
+        fragment_candidate_ready();
+    let screen_tri_mesa_raster_mesa_sf_mesa_sbe_bary8_header_fragment_boundary_observed =
+        fragment_boundary_observed();
+    let screen_tri_mesa_raster_mesa_sf_mesa_sbe_bary8_header_wm_coverage_observed =
+        wm_coverage_observed();
+    let screen_tri_mesa_raster_mesa_sf_mesa_sbe_bary8_header_psd_dispatch_observed =
+        psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-screen-trilist-mesa-raster-mesa-sf-mesa-sbe-bary8-header completed={} scratch_only=1 probe=late-vf-screen-trilist-header-pos1-mesa-raster-mesa-sf-mesa-sbe-bary8-raster-wm-oa-probe vertex_count=3 topology=trilist geometry=screen-space-oversized vue_contract=header-pos1 raster_dw1=0x04A11003 sf=[0x00080402,0x00000000,0x02004808] sbe=[0x30200000,0x00000000,0x00000000,0xFFFFFFFF,0xFFFFFFFF] fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_screen_tri_mesa_raster_mesa_sf_bary8_header={} reason=tests_same_header_trilist_bary8_mesa_raster_mesa_sf_state_with_verified_mesa_active_sbe_body\n",
+        screen_tri_mesa_raster_mesa_sf_mesa_sbe_bary8_header_completed as u8,
+        screen_tri_mesa_raster_mesa_sf_mesa_sbe_bary8_header_fragment_candidate_ready as u8,
+        screen_tri_mesa_raster_mesa_sf_mesa_sbe_bary8_header_wm_coverage_observed as u8,
+        screen_tri_mesa_raster_mesa_sf_mesa_sbe_bary8_header_psd_dispatch_observed as u8,
+        screen_tri_mesa_raster_mesa_sf_mesa_sbe_bary8_header_fragment_boundary_observed as u8,
+        screen_tri_mesa_raster_mesa_sf_bary8_header_completed as u8,
+    );
+    if screen_tri_mesa_raster_mesa_sf_mesa_sbe_bary8_header_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-trilist-header-pos1-mesa-raster-mesa-sf-mesa-sbe-bary8-raster-wm-oa-probe",
+        );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 19
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=19 completed={} reason=selected_visual_isolation_rung\n",
+            screen_tri_mesa_raster_mesa_sf_mesa_sbe_bary8_header_completed as u8,
+        );
+        return screen_tri_mesa_raster_mesa_sf_mesa_sbe_bary8_header_completed;
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let baseline_vs_output_accepted = submit_triangle_vs_streamout_proof(
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        StreamoutProofExperiment::HeaderAndPositionSlots01,
+        TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+        VfPrimitiveGeometry::Oversized,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-output-baseline experiment={} accepted={} contract={} geometry=oversized note=before-grf2-urbdf8-output-proof\n",
+        StreamoutProofExperiment::HeaderAndPositionSlots01.label(),
+        baseline_vs_output_accepted as u8,
+        TRIANGLE_DEFAULT_FRONT_END_CONTRACT.label,
+    );
+
+    for experiment in [
+        StreamoutProofExperiment::PositionSlot0Xyzw,
+        StreamoutProofExperiment::HeaderAndPositionSlots01,
+    ] {
+        let accepted = submit_triangle_vs_streamout_proof(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            experiment,
+            TRIANGLE_VS_GRF2_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::Oversized,
+        );
+        intel_render_focus_log!(
+            "intel/render: primary-real-vs-output-proof experiment={} accepted={} contract={} geometry=oversized note=before-selected-real-vs-raster-rung\n",
+            experiment.label(),
+            accepted as u8,
+            TRIANGLE_VS_GRF2_FRONT_END_CONTRACT.label,
+        );
+    }
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let real_vs_ndc_mesa_active_block_swiz_completed = submit_triangle_real_vs_draw_probe_to_surface(
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        "real-vs-ndc-mesa-active-block-swiz-vs-grf2-urbdf8-vb0204400c-prim0-raster-wm-oa-probe",
+        TRIANGLE_VS_GRF2_FRONT_END_CONTRACT,
+        VfPrimitiveGeometry::Oversized,
+        BackendProbeMode::RasterWmInputOaNdcMesaActiveBlockSwiz,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    let real_vs_ndc_mesa_active_block_swiz_fragment_candidate_ready = fragment_candidate_ready();
+    let real_vs_ndc_mesa_active_block_swiz_fragment_boundary_observed =
+        fragment_boundary_observed();
+    let real_vs_ndc_mesa_active_block_swiz_wm_coverage_observed = wm_coverage_observed();
+    let real_vs_ndc_mesa_active_block_swiz_psd_dispatch_observed = psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-real-vs-ndc-mesa-active-block-swiz-vs-grf2-urbdf8-vb0204400c-prim0 completed={} scratch_only=1 probe=real-vs-ndc-mesa-active-block-swiz-vs-grf2-urbdf8-vb0204400c-prim0-raster-wm-oa-probe topology=trilist geometry=oversized fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_line_mesa_backend={} reason=tests_real_vs_mesa_active_frontend_backend_with_oracle_vs_grf_start_urb_entries_vertex_buffer_dw1_and_primitive_dw1_after_vf_no_vs_failed\n",
+        real_vs_ndc_mesa_active_block_swiz_completed as u8,
+        real_vs_ndc_mesa_active_block_swiz_fragment_candidate_ready as u8,
+        real_vs_ndc_mesa_active_block_swiz_wm_coverage_observed as u8,
+        real_vs_ndc_mesa_active_block_swiz_psd_dispatch_observed as u8,
+        real_vs_ndc_mesa_active_block_swiz_fragment_boundary_observed as u8,
+        line_mesa_backend_open_bounds_completed as u8,
+    );
+    if real_vs_ndc_mesa_active_block_swiz_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-ndc-mesa-active-block-swiz-vs-grf2-urbdf8-vb0204400c-prim0-raster-wm-oa-probe",
+        );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 20
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=20 completed={} reason=selected_visual_isolation_rung\n",
+            real_vs_ndc_mesa_active_block_swiz_completed as u8,
+        );
+        return real_vs_ndc_mesa_active_block_swiz_completed;
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let ndc_point_open_bounds_completed = submit_triangle_vf_draw_to_surface(
+        "late-vf-ndc-pointlist-slot0-xyzw-open-bounds-raster-wm-oa-probe",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::NdcPointCenter32,
+        BackendProbeMode::RasterWmInputOaNdcPointListOpenBounds,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    let ndc_point_open_bounds_fragment_candidate_ready = fragment_candidate_ready();
+    let ndc_point_open_bounds_fragment_boundary_observed = fragment_boundary_observed();
+    let ndc_point_open_bounds_wm_coverage_observed = wm_coverage_observed();
+    let ndc_point_open_bounds_psd_dispatch_observed = psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-ndc-pointlist-open-bounds completed={} scratch_only=1 probe=late-vf-ndc-pointlist-slot0-xyzw-open-bounds-raster-wm-oa-probe vertex_count=1 topology=pointlist geometry=ndc-point-center-32 fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_point_open_bounds={} reason=tests_sf_viewport_transform_and_perspective_divide_contract_while_keeping_pointlist_open_bounds\n",
+        ndc_point_open_bounds_completed as u8,
+        ndc_point_open_bounds_fragment_candidate_ready as u8,
+        ndc_point_open_bounds_wm_coverage_observed as u8,
+        ndc_point_open_bounds_psd_dispatch_observed as u8,
+        ndc_point_open_bounds_fragment_boundary_observed as u8,
+        point_open_bounds_completed as u8,
+    );
+    if ndc_point_open_bounds_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-ndc-pointlist-slot0-xyzw-open-bounds-raster-wm-oa-probe",
+        );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 21
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=21 completed={} reason=selected_visual_isolation_rung\n",
+            ndc_point_open_bounds_completed as u8,
+        );
+        return ndc_point_open_bounds_completed;
     }
 
     reset_fragment_boundary_probe();
@@ -2435,6 +3555,120 @@ fn submit_single_raster_isolation_probe(dev: crate::intel::Dev, warm: RenderWarm
             "late-vf-ndc-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe",
         );
     }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 22
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=22 completed={} reason=selected_visual_isolation_rung\n",
+            ndc_completed as u8,
+        );
+        return ndc_completed;
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_bary8_completed =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-bary8-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceLineCenter32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    let line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_bary8_fragment_candidate_ready =
+        fragment_candidate_ready();
+    let line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_bary8_fragment_boundary_observed =
+        fragment_boundary_observed();
+    let line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_bary8_wm_coverage_observed =
+        wm_coverage_observed();
+    let line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_bary8_psd_dispatch_observed =
+        psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-linelist-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-bary8 completed={} scratch_only=1 probe=late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-bary8-raster-wm-oa-probe vertex_count=2 topology=linelist geometry=screen-space-line-center-32 fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_line_mesa_backend_sample1_onpixel_mesa_sf_point_sbe_read0={} reason=tests_line_mesa_backend_sbe_read0_with_nonperspective_barycentric_enabled_like_rect_probes\n",
+        line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_bary8_completed as u8,
+        line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_bary8_fragment_candidate_ready as u8,
+        line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_bary8_wm_coverage_observed as u8,
+        line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_bary8_psd_dispatch_observed as u8,
+        line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_bary8_fragment_boundary_observed as u8,
+        line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_completed as u8,
+    );
+    if line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_bary8_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-bary8-raster-wm-oa-probe",
+        );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 23
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=23 completed={} reason=selected_visual_isolation_rung\n",
+            line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_bary8_completed as u8,
+        );
+        return line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_bary8_completed;
+    }
+
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let line_bary8_swiz_completed = submit_triangle_vf_draw_to_surface(
+        "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-bary8-swiz-raster-wm-oa-probe",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::ScreenSpaceLineCenter32,
+        BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    let line_bary8_swiz_fragment_candidate_ready = fragment_candidate_ready();
+    let line_bary8_swiz_fragment_boundary_observed = fragment_boundary_observed();
+    let line_bary8_swiz_wm_coverage_observed = wm_coverage_observed();
+    let line_bary8_swiz_psd_dispatch_observed = psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-linelist-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-bary8-swiz completed={} scratch_only=1 probe=late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-bary8-swiz-raster-wm-oa-probe vertex_count=2 topology=linelist geometry=screen-space-line-center-32 fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_line_mesa_backend_sample1_onpixel_mesa_sf_point_sbe_read0_bary8={} reason=tests_mesa_successful_sbe_attr_swizzle_enable_with_zeroed_sbe_swiz_and_bary8\n",
+        line_bary8_swiz_completed as u8,
+        line_bary8_swiz_fragment_candidate_ready as u8,
+        line_bary8_swiz_wm_coverage_observed as u8,
+        line_bary8_swiz_psd_dispatch_observed as u8,
+        line_bary8_swiz_fragment_boundary_observed as u8,
+        line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_bary8_completed as u8,
+    );
+    if line_bary8_swiz_completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-bary8-swiz-raster-wm-oa-probe",
+        );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 24
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=24 completed={} reason=selected_visual_isolation_rung\n",
+            line_bary8_swiz_completed as u8,
+        );
+        return line_bary8_swiz_completed;
+    }
 
     reset_fragment_boundary_probe();
     unsafe {
@@ -2476,6 +3710,15 @@ fn submit_single_raster_isolation_probe(dev: crate::intel::Dev, warm: RenderWarm
             "late-vf-screen-point-center-slot0-xyzw-raster-wm-oa-probe",
         );
     }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED
+        && PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX == 25
+    {
+        intel_render_focus_log!(
+            "intel/render: primary-single-raster-isolation-ladder stopped index=25 completed={} reason=selected_visual_isolation_rung\n",
+            point_completed as u8,
+        );
+        return point_completed;
+    }
 
     reset_fragment_boundary_probe();
     unsafe {
@@ -2516,6 +3759,13 @@ fn submit_single_raster_isolation_probe(dev: crate::intel::Dev, warm: RenderWarm
             warm,
             "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-bypass-raster-wm-oa-probe",
         );
+    }
+    if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED {
+        intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation-ladder stopped index=26 completed={} reason=selected_visual_isolation_rung\n",
+            clip_bypass_completed as u8,
+        );
+        return clip_bypass_completed;
     }
     false
 }
@@ -2561,7 +3811,11 @@ fn submit_primary_visible_repaint_probe(
         || wm_coverage_observed
         || psd_dispatch_observed
         || fragment_boundary_observed;
-    if probe_seq <= 4 || status_changed || signal_observed || probe_seq.is_multiple_of(PRIMARY_PERIODIC_LOG_EVERY) {
+    if probe_seq <= 4
+        || status_changed
+        || signal_observed
+        || probe_seq.is_multiple_of(PRIMARY_PERIODIC_LOG_EVERY)
+    {
         intel_render_focus_log!(
             "intel/render: primary-periodic-repaint seq={} completed={} target=primary rt_gpu=0x{:X} size={}x{} pitch=0x{:X} geometry=screen-space-rect-target preconditions=rectlist+slot0_xyzw+pdd+sf_viewport_off+clip_accept_all fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} status_changed={} submit_frontier={} cadence_ms=1000 log_policy=first_change_signal_or_heartbeat frontier=sf_object_setup_to_wm_scan_conversion intent=quiet_live_wm_raster_probe\n",
             probe_seq,
@@ -2575,11 +3829,19 @@ fn submit_primary_visible_repaint_probe(
             psd_dispatch_observed as u8,
             fragment_boundary_observed as u8,
             status_changed as u8,
-            if completed { "retired_wm_raster_frontier" } else { "nonretired_before_wm_signal" },
+            if completed {
+                "retired_wm_raster_frontier"
+            } else {
+                "nonretired_before_wm_signal"
+            },
         );
     }
     if completed {
-        recover_render_engine_after_nonretired_submit(dev, warm, "primary-periodic-visible-repaint");
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "primary-periodic-visible-repaint",
+        );
     }
     completed
 }
@@ -3534,14 +4796,24 @@ fn submit_triangle_vs_streamout_proof(
     rect_w: usize,
     rect_h: usize,
     experiment: StreamoutProofExperiment,
+    front_end_contract: TriangleFrontEndContract,
+    geometry: VfPrimitiveGeometry,
 ) -> bool {
-    let Some(draw) = prepare_triangle_draw_resources(warm, dst_gpu_addr, pitch, rect_w, rect_h)
-    else {
+    let Some(draw) = prepare_triangle_draw_resources_with_geometry(
+        warm,
+        dst_gpu_addr,
+        pitch,
+        rect_w,
+        rect_h,
+        geometry,
+    ) else {
         crate::log!(
-            "intel/render: vs-streamout-proof skipped reason=resource-layout size={}x{} pitch=0x{:X}\n",
+            "intel/render: vs-streamout-proof skipped reason=resource-layout size={}x{} pitch=0x{:X} geometry={} contract={}\n",
             rect_w,
             rect_h,
-            pitch
+            pitch,
+            geometry.label(),
+            front_end_contract.label,
         );
         return false;
     };
@@ -3610,6 +4882,7 @@ fn submit_triangle_vs_streamout_proof(
         VsStreamoutProofConfig {
             pipeline,
             shader_layout,
+            front_end_contract,
         },
     ) {
         Ok(bytes) => bytes,
@@ -3620,8 +4893,10 @@ fn submit_triangle_vs_streamout_proof(
     };
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
     intel_render_verbose_log!(
-        "intel/render: vs-streamout-proof batch-ready experiment={} bytes=0x{:X} so_gpu=0x{:X} so_pitch={} vertices={}\n",
+        "intel/render: vs-streamout-proof batch-ready experiment={} contract={} geometry={} bytes=0x{:X} so_gpu=0x{:X} so_pitch={} vertices={}\n",
         experiment.label(),
+        front_end_contract.label,
+        geometry.label(),
         batch_tail_bytes,
         GPU_VA_STREAMOUT_BASE,
         experiment.vertex_bytes(),
@@ -4075,13 +5350,21 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
         .vs_urb_output_length_override
         .or(TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE)
         .unwrap_or(pipeline.vs.meta.urb_entry_output_length);
+    let programmed_vs_urb_entries = front_end_contract
+        .vs_urb_entries_override
+        .unwrap_or(TRIANGLE_VS_URB_ENTRIES);
     if submit_name == "vs-draw-frontier" {
         intel_render_focus_log!(
-            "intel/render: {} contract variant={} baked_vs_urb_out_len={} programmed_vs_urb_out_len={} sbe[read_offset={} read_length={} force_offset={} force_length={} num_sf_attrs={}]\n",
+            "intel/render: {} contract variant={} baked_vs_urb_out_len={} programmed_vs_urb_out_len={} programmed_vs_urb_entries={} baked_vs_grf_start={} programmed_vs_grf_start={} sbe[read_offset={} read_length={} force_offset={} force_length={} num_sf_attrs={}]\n",
             submit_name,
             front_end_contract.label,
             pipeline.vs.meta.urb_entry_output_length,
             programmed_vs_urb_output_length,
+            programmed_vs_urb_entries,
+            pipeline.vs.meta.kernel.grf_start_register,
+            front_end_contract
+                .vs_dispatch_grf_start_override
+                .unwrap_or(pipeline.vs.meta.kernel.grf_start_register),
             front_end_contract.sbe_read_offset,
             front_end_contract.sbe_read_length,
             front_end_contract.force_sbe_read_offset as u8,
@@ -4090,11 +5373,16 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
         );
     } else {
         intel_render_verbose_log!(
-            "intel/render: {} contract variant={} baked_vs_urb_out_len={} programmed_vs_urb_out_len={} sbe[read_offset={} read_length={} force_offset={} force_length={} num_sf_attrs={}]\n",
+            "intel/render: {} contract variant={} baked_vs_urb_out_len={} programmed_vs_urb_out_len={} programmed_vs_urb_entries={} baked_vs_grf_start={} programmed_vs_grf_start={} sbe[read_offset={} read_length={} force_offset={} force_length={} num_sf_attrs={}]\n",
             submit_name,
             front_end_contract.label,
             pipeline.vs.meta.urb_entry_output_length,
             programmed_vs_urb_output_length,
+            programmed_vs_urb_entries,
+            pipeline.vs.meta.kernel.grf_start_register,
+            front_end_contract
+                .vs_dispatch_grf_start_override
+                .unwrap_or(pipeline.vs.meta.kernel.grf_start_register),
             front_end_contract.sbe_read_offset,
             front_end_contract.sbe_read_length,
             front_end_contract.force_sbe_read_offset as u8,

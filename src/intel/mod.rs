@@ -402,8 +402,7 @@ pub fn init_once() {
     } else {
         crate::log!("intel/display: plane1 boot demo disabled\n");
     }
-    self::render::submit_primary_triangle_once();
-    spawn_primary_triangle_repaint_loop();
+    spawn_primary_triangle_after_logo();
     self::gpgpu::submit_gpgpu_preflight_once();
     crate::log!("intel/media: source warmup disabled trigger=trueosfs-root-mounted\n",);
     if MEDIA_BOOT_DEMO_ENABLED {
@@ -446,6 +445,15 @@ pub fn init_once() {
     } else {
         crate::log!("intel/media: boot demo disabled\n");
     }
+}
+
+fn spawn_primary_triangle_after_logo() {
+    crate::wait::spawn_local_detached(async move {
+        self::display::wait_hw_logo_sequence_done().await;
+        crate::log!("intel/render: primary-triangle delayed until hw-logo sequence done\n");
+        self::render::submit_primary_triangle_once();
+        spawn_primary_triangle_repaint_loop();
+    });
 }
 
 fn spawn_primary_triangle_repaint_loop() {

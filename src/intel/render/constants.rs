@@ -160,6 +160,8 @@ const PRIMARY_USE_3D_NO_DRAW_PROBE: bool = true;
 const PRIMARY_USE_DRAW_PATH_BOOT_ONCE: bool = true;
 const PRIMARY_BOOT_3D_PROBES_ENABLED: bool = true;
 const PRIMARY_SINGLE_RASTER_PROBE_ONLY: bool = true;
+const PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED: bool = false;
+const PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX: usize = 19;
 const PRIMARY_POSTDRAW_RETIRE_SPECTRUM_ENABLED: bool = false;
 const PRIMARY_DEBUG_ALBUM_ENABLED: bool = true;
 const PRIMARY_DISABLE_RENDER_BRINGUP: bool = false;
@@ -189,6 +191,7 @@ const SBE_ACTIVE_COMPONENT_XYZW_MASK_DWORD: u32 = 0xFFFF_FFFF;
 const CLIP_FORCE_CLIP_MODE: u32 = 1 << 16;
 const CLIP_NON_PERSPECTIVE_BARYCENTRIC_ENABLE: u32 = 1 << 8;
 const CLIP_PERSPECTIVE_DIVIDE_DISABLE: u32 = 1 << 9;
+const CLIP_MODE_NORMAL: u32 = 0 << 13;
 const CLIP_MODE_ACCEPT_ALL: u32 = 4 << 13;
 const WM_FORCE_KILL_PIXEL_OFF: u32 = 1;
 const PS_VECTOR_MASK_ENABLE: u32 = 1 << 30;
@@ -345,6 +348,7 @@ const RESULT_OA_RASTER_WM_END_ID: u32 = 0x0A0A_2102;
 const SO_NUM_PRIMS_WRITTEN_0: usize = 0x5200;
 const SO_WRITE_OFFSET_0: usize = 0x5280;
 const TRIANGLE_TOPOLOGY_POINTLIST: u32 = 1;
+const TRIANGLE_TOPOLOGY_LINELIST: u32 = 2;
 const TRIANGLE_TOPOLOGY_TRILIST: u32 = 4;
 const TRIANGLE_TOPOLOGY_RECTLIST: u32 = 15;
 const TRIANGLE_PS_MAX_THREADS: u32 = 63;
@@ -354,6 +358,10 @@ const TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE: Option<u8> = None;
 const TRIANGLE_DEFAULT_FRONT_END_CONTRACT: TriangleFrontEndContract = TriangleFrontEndContract {
     label: "mesa-like",
     vs_urb_output_length_override: TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE,
+    vs_urb_entries_override: None,
+    vs_dispatch_grf_start_override: None,
+    vertex_buffer_dw1_override: None,
+    primitive_extended_dw1_override: None,
     sbe_read_offset: 1,
     sbe_read_length: 1,
     force_sbe_read_offset: true,
@@ -362,6 +370,10 @@ const TRIANGLE_DEFAULT_FRONT_END_CONTRACT: TriangleFrontEndContract = TriangleFr
 const TRIANGLE_SLOT0_FRONT_END_CONTRACT: TriangleFrontEndContract = TriangleFrontEndContract {
     label: "slot0-read",
     vs_urb_output_length_override: TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE,
+    vs_urb_entries_override: None,
+    vs_dispatch_grf_start_override: None,
+    vertex_buffer_dw1_override: None,
+    primitive_extended_dw1_override: None,
     sbe_read_offset: 0,
     sbe_read_length: 1,
     force_sbe_read_offset: true,
@@ -370,6 +382,22 @@ const TRIANGLE_SLOT0_FRONT_END_CONTRACT: TriangleFrontEndContract = TriangleFron
 const TRIANGLE_URB2_FRONT_END_CONTRACT: TriangleFrontEndContract = TriangleFrontEndContract {
     label: "urb2",
     vs_urb_output_length_override: Some(2),
+    vs_urb_entries_override: None,
+    vs_dispatch_grf_start_override: None,
+    vertex_buffer_dw1_override: None,
+    primitive_extended_dw1_override: None,
+    sbe_read_offset: 1,
+    sbe_read_length: 1,
+    force_sbe_read_offset: true,
+    force_sbe_read_length: true,
+};
+const TRIANGLE_VS_GRF2_FRONT_END_CONTRACT: TriangleFrontEndContract = TriangleFrontEndContract {
+    label: "mesa-vs-grf2-urbdf8-vb0204400c-prim0",
+    vs_urb_output_length_override: TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE,
+    vs_urb_entries_override: Some(0x0DF8),
+    vs_dispatch_grf_start_override: Some(2),
+    vertex_buffer_dw1_override: Some(0x0204_400C),
+    primitive_extended_dw1_override: Some(0),
     sbe_read_offset: 1,
     sbe_read_length: 1,
     force_sbe_read_offset: true,
@@ -382,6 +410,10 @@ const VS_DRAW_FRONTIER_CONTRACTS: [TriangleFrontEndContract; 4] = [
     TriangleFrontEndContract {
         label: "urb2-slot0-read",
         vs_urb_output_length_override: Some(2),
+        vs_urb_entries_override: None,
+        vs_dispatch_grf_start_override: None,
+        vertex_buffer_dw1_override: None,
+        primitive_extended_dw1_override: None,
         sbe_read_offset: 0,
         sbe_read_length: 1,
         force_sbe_read_offset: true,

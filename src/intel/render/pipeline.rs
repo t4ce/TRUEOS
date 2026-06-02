@@ -582,18 +582,24 @@ fn encode_triangle_probe_batch(
     let sbe_vertex_read_offset = backend_probe_mode
         .sbe_read_offset_override()
         .unwrap_or(front_end_contract.sbe_read_offset) as u32;
-    let sbe_vertex_read_length = front_end_contract.sbe_read_length as u32;
+    let sbe_vertex_read_length = backend_probe_mode
+        .sbe_read_length_override()
+        .unwrap_or(front_end_contract.sbe_read_length) as u32;
     let sbe_attribute_swizzle_enable = backend_probe_mode.enable_sbe_attribute_swizzle();
     // SBE_SWIZ is a separate packet on Xe-LP. Emit an explicit zeroed packet
     // even when attribute swizzle is disabled so the SF/WM handoff never
     // inherits stale swizzle state from earlier firmware or probes.
     let emit_sbe_swiz_packet = !backend_probe_mode.skip_sbe_swiz_packet();
-    let sbe_dw1 = (sbe_vertex_read_offset << 5)
+    let mut sbe_dw1 = (sbe_vertex_read_offset << 5)
         | (u32::from(sbe_attribute_swizzle_enable) << 21)
         | ((pipeline.ps.meta.num_varying_inputs as u32) << 22)
         | (u32::from(front_end_contract.force_sbe_read_offset) << 28)
         | (u32::from(front_end_contract.force_sbe_read_length) << 29)
         | (sbe_vertex_read_length << 11);
+    let mut sbe_dw2 = 0;
+    let mut sbe_dw3 = pipeline.ps.meta.flat_inputs;
+    let mut sbe_dw4 = SBE_ACTIVE_COMPONENT_XYZW_MASK_DWORD;
+    let mut sbe_dw5 = SBE_ACTIVE_COMPONENT_XYZW_MASK_DWORD;
     let (ps_dispatch_8, ps_dispatch_16, ps_dispatch_32) = match backend_probe_mode {
         BackendProbeMode::PsDispatchSlot0 => (1, 0, 0),
         BackendProbeMode::PsDispatchSlot1 => (0, 1, 0),
@@ -625,7 +631,7 @@ fn encode_triangle_probe_batch(
                     } else {
                         0
                     },
-                CLIP_MODE_ACCEPT_ALL
+                backend_probe_mode.clip_mode_bits()
                     | (u32::from(clip_enable) << 31)
                     | (u32::from(backend_probe_mode.clip_api_mode_d3d()) << 30)
                     | if backend_probe_mode.enable_clip_preconditions() {
@@ -650,7 +656,19 @@ fn encode_triangle_probe_batch(
     // coverage probe disables the SF viewport transform so the coordinate
     // contract matches PerspectiveDivideDisable instead of applying a second
     // hidden transform before scan conversion.
-    let sf_line_width_u11_7 = if backend_probe_mode.enable_sf_sane_defaults() {
+    let sf_line_width_u11_7 = if matches!(
+        backend_probe_mode,
+        BackendProbeMode::RasterWmInputOaScreenSpaceLineListOpenBounds
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+    ) {
+        8 << 7
+    } else if backend_probe_mode.enable_sf_sane_defaults() {
         1 << 7
     } else {
         0
@@ -659,6 +677,16 @@ fn encode_triangle_probe_batch(
         backend_probe_mode,
         BackendProbeMode::RasterWmInputOaScreenSpacePointList
             | BackendProbeMode::RasterWmInputOaScreenSpacePointListOpenBounds
+            | BackendProbeMode::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListOpenBounds
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+            | BackendProbeMode::RasterWmInputOaNdcPointListOpenBounds
     ) {
         0x7FF
     } else if backend_probe_mode.enable_sf_sane_defaults() {
@@ -681,6 +709,9 @@ fn encode_triangle_probe_batch(
     let mut sf_dw3 = sf_point_width_u8_3
         | sf_body_dw2_prm_default
         | (u32::from(backend_probe_mode.enable_sf_sane_defaults()) << 31);
+    if backend_probe_mode.use_mesa_sf_point_state() {
+        sf_dw3 = 0x0200_4808;
+    }
     // Mirror Mesa's simple-shader path by default: cull none, and otherwise
     // leave raster defaults boring. The forced-MSAA raster probe deliberately
     // overrides only the WM_INT/SF_INT multisample-rasterization mode.
@@ -756,7 +787,7 @@ fn encode_triangle_probe_batch(
     let so_buffer_index_dw1 = (RENDER_MOCS << 22) | (1 << 20) | (1 << 21) | (1 << 31);
     let so_buffer_stream_offset_dw = 0u32;
     let mut sample_mask_dw1 = 1u32;
-    if backend_probe_mode.mesa_active_block_state() {
+    if backend_probe_mode.mesa_active_fixed_function_state() {
         clip_dw1 = 0x0004_0400;
         clip_dw2 = 0xD400_0001;
         clip_dw3 = 0x0003_FFE0;
@@ -771,14 +802,38 @@ fn encode_triangle_probe_batch(
         wm_depth_stencil_dw1 = 0x0000_0010;
         wm_depth_stencil_dw2 = 0;
         wm_depth_stencil_dw3 = 0;
+    }
+    if backend_probe_mode.mesa_active_block_state() {
+        sample_mask_dw1 = 0x0000_FFFF;
+        wm_depth_stencil_dw1 = 0x0000_0010;
+        wm_depth_stencil_dw2 = 0;
+        wm_depth_stencil_dw3 = 0;
         primitive_replication_dw1 =
-            if backend_probe_mode.mesa_active_block_disable_primitive_replication() {
+            if backend_probe_mode.mesa_success_disable_primitive_replication() {
                 0
             } else {
                 0x0001_0000
             };
-        wm_dw1 = 0x8000_0040;
+        wm_dw1 = 0x8000_0040 | wm_barycentric_mode;
         ps_blend_dw1 = 0x518C_6200;
+    }
+    if backend_probe_mode.mesa_active_raster_state() {
+        raster_dw1 = 0x04A1_1003;
+        raster_dw2 = 0;
+        raster_dw3 = 0;
+        raster_dw4 = 0;
+    }
+    if backend_probe_mode.mesa_active_sf_state() {
+        sf_dw1 = 0x0008_0402;
+        sf_dw2 = 0;
+        sf_dw3 = 0x0200_4808;
+    }
+    if backend_probe_mode.mesa_active_sbe_state() {
+        sbe_dw1 = 0x3020_0000;
+        sbe_dw2 = 0;
+        sbe_dw3 = 0;
+        sbe_dw4 = 0xFFFF_FFFF;
+        sbe_dw5 = 0xFFFF_FFFF;
     }
     // Mesa zeros this packet during init to clear any inherited clear/resolve
     // overrides. The focused scissor probe intentionally sets the WM_HZ_OP
@@ -827,6 +882,7 @@ fn encode_triangle_probe_batch(
         | BackendProbeMode::RasterWmInputOa
         | BackendProbeMode::RasterWmInputOaNdcBlock32
         | BackendProbeMode::RasterWmInputOaNdcMesaActiveBlock
+        | BackendProbeMode::RasterWmInputOaNdcMesaActiveBlockSwiz
         | BackendProbeMode::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl
         | BackendProbeMode::RasterWmInputOaNdcPerPoly
         | BackendProbeMode::RasterWmInputOaNdcWalk16
@@ -869,6 +925,26 @@ fn encode_triangle_probe_batch(
         | BackendProbeMode::RasterWmInputOaScreenSpaceMesaSimpleNoSwizNoScissor
         | BackendProbeMode::RasterWmInputOaScreenSpacePointList
         | BackendProbeMode::RasterWmInputOaScreenSpacePointListOpenBounds
+        | BackendProbeMode::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+        | BackendProbeMode::RasterWmInputOaScreenSpaceLineListOpenBounds
+        | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
+        | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+        | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+        | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+        | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+        | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+        | BackendProbeMode::RasterWmInputOaNdcLineListMesaActiveBlockSwiz
+        | BackendProbeMode::RasterWmInputOaNdcRectListMesaActiveBlockSwiz
+        | BackendProbeMode::RasterWmInputOaNdcTriListMesaActiveBlockSwiz
+        | BackendProbeMode::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz
+        | BackendProbeMode::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane
+        | BackendProbeMode::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8
+        | BackendProbeMode::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header
+        | BackendProbeMode::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
+        | BackendProbeMode::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
+        | BackendProbeMode::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
+        | BackendProbeMode::RasterWmInputOaNdcPointListOpenBounds
         | BackendProbeMode::RasterWmInputOaScreenSpaceRtIndependent
         | BackendProbeMode::RasterWmInputOaNdcForceOnPattern
         | BackendProbeMode::RasterWmInputOaForceOnPattern
@@ -879,9 +955,10 @@ fn encode_triangle_probe_batch(
             pipeline.ps.meta.kernel.binding_table_entry_count.max(1)
         }
     };
-    let ps_binding_table_entry_count = if matches!(
-        backend_probe_mode,
-        BackendProbeMode::PsBindingTableCountZero
+    let ps_binding_table_entry_count = if backend_probe_mode.force_ps_binding_table_count_zero()
+        || matches!(
+            backend_probe_mode,
+            BackendProbeMode::PsBindingTableCountZero
             | BackendProbeMode::RasterWmInputOa
             | BackendProbeMode::RasterWmInputOaNdcBlock32
             | BackendProbeMode::RasterWmInputOaNdcPerPoly
@@ -925,11 +1002,22 @@ fn encode_triangle_probe_batch(
             | BackendProbeMode::RasterWmInputOaScreenSpaceMesaSimpleNoSwizNoScissor
             | BackendProbeMode::RasterWmInputOaScreenSpacePointList
             | BackendProbeMode::RasterWmInputOaScreenSpacePointListOpenBounds
+            | BackendProbeMode::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListOpenBounds
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+            | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+            | BackendProbeMode::RasterWmInputOaNdcPointListOpenBounds
             | BackendProbeMode::RasterWmInputOaScreenSpaceRtIndependent
             | BackendProbeMode::RasterWmInputOaNdcForceOnPattern
             | BackendProbeMode::RasterWmInputOaForceOnPattern
             | BackendProbeMode::RasterWmInputOaForceOffPixel
-    ) {
+        )
+    {
         0
     } else {
         ps_binding_table_entry_count
@@ -1138,73 +1226,77 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, CMD_3DSTATE_SCISSOR_STATE_POINTERS)?;
     push(batch_dwords, &mut cursor, probe_state.scissor_rect_offset_bytes)?;
 
+    let vertex_buffer_dw1_default = draw.vertex_stride | (1 << 14) | (RENDER_MOCS << 16);
+    let vertex_buffer_dw1 = front_end_contract
+        .vertex_buffer_dw1_override
+        .unwrap_or(vertex_buffer_dw1_default);
+    let vertex_buffer_addr_lo = draw.vertex_gpu_addr as u32;
+    let vertex_buffer_addr_hi = (draw.vertex_gpu_addr >> 32) as u32;
+    let vertex_buffer_bytes = draw.vertex_count.saturating_mul(draw.vertex_stride);
     log_batch_offset(cursor, "3DSTATE_VERTEX_BUFFERS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VERTEX_BUFFERS_1)?;
-    push(batch_dwords, &mut cursor, draw.vertex_stride | (1 << 14) | (RENDER_MOCS << 16))?;
+    push(batch_dwords, &mut cursor, vertex_buffer_dw1)?;
     push_addr(batch_dwords, &mut cursor, draw.vertex_gpu_addr)?;
-    push(batch_dwords, &mut cursor, draw.vertex_count.saturating_mul(draw.vertex_stride))?;
+    push(batch_dwords, &mut cursor, vertex_buffer_bytes)?;
 
     let vf_vertex_element_count = if vf_synthesized_vue {
         streamout_experiment.vf_vertex_element_count()
     } else {
         1
     };
+    let vertex_elements_cmd = if vf_vertex_element_count == 2 {
+        CMD_3DSTATE_VERTEX_ELEMENTS_2
+    } else {
+        CMD_3DSTATE_VERTEX_ELEMENTS_1
+    };
+    let vertex_element0_dw0;
+    let vertex_element0_dw1;
     log_batch_offset(cursor, "3DSTATE_VERTEX_ELEMENTS");
     push(
         batch_dwords,
         &mut cursor,
-        if vf_vertex_element_count == 2 {
-            CMD_3DSTATE_VERTEX_ELEMENTS_2
-        } else {
-            CMD_3DSTATE_VERTEX_ELEMENTS_1
-        },
+        vertex_elements_cmd,
     )?;
     if vf_synthesized_vue {
         match streamout_experiment {
             StreamoutProofExperiment::PositionSlot0 => {
+                vertex_element0_dw0 = (SURFACE_FORMAT_R32G32B32_FLOAT << 16) | (1 << 25);
+                vertex_element0_dw1 = (VFCOMP_STORE_SRC << 28)
+                    | (VFCOMP_STORE_SRC << 24)
+                    | (VFCOMP_STORE_SRC << 20)
+                    | (VFCOMP_STORE_1_FP << 16);
                 push(
                     batch_dwords,
                     &mut cursor,
-                    (SURFACE_FORMAT_R32G32B32_FLOAT << 16) | (1 << 25),
+                    vertex_element0_dw0,
                 )?;
-                push(
-                    batch_dwords,
-                    &mut cursor,
-                    (VFCOMP_STORE_SRC << 28)
-                        | (VFCOMP_STORE_SRC << 24)
-                        | (VFCOMP_STORE_SRC << 20)
-                        | (VFCOMP_STORE_1_FP << 16),
-                )?;
+                push(batch_dwords, &mut cursor, vertex_element0_dw1)?;
             }
             StreamoutProofExperiment::PositionSlot0Xyzw => {
+                vertex_element0_dw0 = (SURFACE_FORMAT_R32G32B32A32_FLOAT << 16) | (1 << 25);
+                vertex_element0_dw1 = (VFCOMP_STORE_SRC << 28)
+                    | (VFCOMP_STORE_SRC << 24)
+                    | (VFCOMP_STORE_SRC << 20)
+                    | (VFCOMP_STORE_SRC << 16);
                 push(
                     batch_dwords,
                     &mut cursor,
-                    (SURFACE_FORMAT_R32G32B32A32_FLOAT << 16) | (1 << 25),
+                    vertex_element0_dw0,
                 )?;
-                push(
-                    batch_dwords,
-                    &mut cursor,
-                    (VFCOMP_STORE_SRC << 28)
-                        | (VFCOMP_STORE_SRC << 24)
-                        | (VFCOMP_STORE_SRC << 20)
-                        | (VFCOMP_STORE_SRC << 16),
-                )?;
+                push(batch_dwords, &mut cursor, vertex_element0_dw1)?;
             }
             StreamoutProofExperiment::PositionSlot1 => {
+                vertex_element0_dw0 = (SURFACE_FORMAT_R32G32B32A32_FLOAT << 16) | (1 << 25);
+                vertex_element0_dw1 = (VFCOMP_STORE_0 << 28)
+                    | (VFCOMP_STORE_0 << 24)
+                    | (VFCOMP_STORE_0 << 20)
+                    | (VFCOMP_STORE_0 << 16);
                 push(
                     batch_dwords,
                     &mut cursor,
-                    (SURFACE_FORMAT_R32G32B32A32_FLOAT << 16) | (1 << 25),
+                    vertex_element0_dw0,
                 )?;
-                push(
-                    batch_dwords,
-                    &mut cursor,
-                    (VFCOMP_STORE_0 << 28)
-                        | (VFCOMP_STORE_0 << 24)
-                        | (VFCOMP_STORE_0 << 20)
-                        | (VFCOMP_STORE_0 << 16),
-                )?;
+                push(batch_dwords, &mut cursor, vertex_element0_dw1)?;
                 push(
                     batch_dwords,
                     &mut cursor,
@@ -1220,19 +1312,17 @@ fn encode_triangle_probe_batch(
                 )?;
             }
             StreamoutProofExperiment::HeaderAndPositionSlots01 => {
+                vertex_element0_dw0 = (SURFACE_FORMAT_R32G32B32A32_UINT << 16) | (1 << 25);
+                vertex_element0_dw1 = (VFCOMP_STORE_SRC << 28)
+                    | (VFCOMP_STORE_SRC << 24)
+                    | (VFCOMP_STORE_SRC << 20)
+                    | (VFCOMP_STORE_SRC << 16);
                 push(
                     batch_dwords,
                     &mut cursor,
-                    (SURFACE_FORMAT_R32G32B32A32_UINT << 16) | (1 << 25),
+                    vertex_element0_dw0,
                 )?;
-                push(
-                    batch_dwords,
-                    &mut cursor,
-                    (VFCOMP_STORE_SRC << 28)
-                        | (VFCOMP_STORE_SRC << 24)
-                        | (VFCOMP_STORE_SRC << 20)
-                        | (VFCOMP_STORE_SRC << 16),
-                )?;
+                push(batch_dwords, &mut cursor, vertex_element0_dw1)?;
                 push(
                     batch_dwords,
                     &mut cursor,
@@ -1248,19 +1338,18 @@ fn encode_triangle_probe_batch(
                 )?;
             }
             StreamoutProofExperiment::MesaNoVsRectlist => {
+                vertex_element0_dw0 =
+                    (SURFACE_FORMAT_R32G32B32A32_FLOAT << 16) | (1 << 25) | (1 << 26);
+                vertex_element0_dw1 = (VFCOMP_STORE_SRC << 28)
+                    | (VFCOMP_STORE_0 << 24)
+                    | (VFCOMP_STORE_0 << 20)
+                    | (VFCOMP_STORE_0 << 16);
                 push(
                     batch_dwords,
                     &mut cursor,
-                    (SURFACE_FORMAT_R32G32B32A32_FLOAT << 16) | (1 << 25) | (1 << 26),
+                    vertex_element0_dw0,
                 )?;
-                push(
-                    batch_dwords,
-                    &mut cursor,
-                    (VFCOMP_STORE_SRC << 28)
-                        | (VFCOMP_STORE_0 << 24)
-                        | (VFCOMP_STORE_0 << 20)
-                        | (VFCOMP_STORE_0 << 16),
-                )?;
+                push(batch_dwords, &mut cursor, vertex_element0_dw1)?;
                 push(
                     batch_dwords,
                     &mut cursor,
@@ -1277,15 +1366,13 @@ fn encode_triangle_probe_batch(
             }
         }
     } else {
-        push(batch_dwords, &mut cursor, (SURFACE_FORMAT_R32G32B32_FLOAT << 16) | (1 << 25))?;
-        push(
-            batch_dwords,
-            &mut cursor,
-            (VFCOMP_STORE_SRC << 28)
-                | (VFCOMP_STORE_SRC << 24)
-                | (VFCOMP_STORE_SRC << 20)
-                | (VFCOMP_STORE_1_FP << 16),
-        )?;
+        vertex_element0_dw0 = (SURFACE_FORMAT_R32G32B32_FLOAT << 16) | (1 << 25);
+        vertex_element0_dw1 = (VFCOMP_STORE_SRC << 28)
+            | (VFCOMP_STORE_SRC << 24)
+            | (VFCOMP_STORE_SRC << 20)
+            | (VFCOMP_STORE_1_FP << 16);
+        push(batch_dwords, &mut cursor, vertex_element0_dw0)?;
+        push(batch_dwords, &mut cursor, vertex_element0_dw1)?;
     }
     intel_render_focus_log!(
         "intel/render: probe-vf-vue-contract vf_synthesized_vue={} experiment={} ve_count={} vue_contract={} header_slot={} position_slot={} position_format={} position_components={} vertex_stride={} note=clip_sf_requires_valid_xyzw_position\n",
@@ -1398,8 +1485,9 @@ fn encode_triangle_probe_batch(
         .vs_urb_output_length_override
         .or(TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE)
         .unwrap_or(baked_vs_urb_output_length);
-    let programmed_vs_urb_entries = backend_probe_mode
-        .vs_urb_entries_override()
+    let programmed_vs_urb_entries = front_end_contract
+        .vs_urb_entries_override
+        .or_else(|| backend_probe_mode.vs_urb_entries_override())
         .unwrap_or(TRIANGLE_VS_URB_ENTRIES);
 
     log_batch_offset(cursor, "3DSTATE_URB_ALLOC_VS");
@@ -1425,14 +1513,18 @@ fn encode_triangle_probe_batch(
     } else {
         let vs_dw3 = ((pipeline.vs.meta.kernel.binding_table_entry_count as u32) << 18)
             | (sampler_count_encoding(pipeline.vs.meta.kernel.sampler_count) << 27);
-        let applied_vs_grf_start =
-            triangle_vs_dispatch_grf_start_register(pipeline.vs.meta.kernel.grf_start_register);
+        let applied_vs_grf_start = front_end_contract
+            .vs_dispatch_grf_start_override
+            .map(u32::from)
+            .unwrap_or_else(|| {
+                triangle_vs_dispatch_grf_start_register(pipeline.vs.meta.kernel.grf_start_register)
+            });
         let vs_dw6 = (1 << 11) | (applied_vs_grf_start << 20);
         let vs_dw7 = 1
             | (1 << 2)
             | (1 << 10)
             | (triangle_vs_max_threads_field(warm.device_id, pipeline.vs.meta.max_threads) << 22);
-        let vs_dw8 = (programmed_vs_urb_output_length as u32) << 16;
+        let vs_dw8 = (programmed_vs_urb_output_length.saturating_sub(1) as u32) << 16;
         log_batch_offset(cursor, "3DSTATE_VS");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_VS)?;
         push(batch_dwords, &mut cursor, vs_ksp_offset & !0x3F)?;
@@ -1443,8 +1535,8 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, vs_dw6)?;
         push(batch_dwords, &mut cursor, vs_dw7)?;
         push(batch_dwords, &mut cursor, vs_dw8)?;
-        intel_render_verbose_log!(
-            "intel/render: probe-vs ksp=0x{:08X} dw3=0x{:08X} dw6=0x{:08X} dw7=0x{:08X} dw8=0x{:08X} baked_max_threads={} applied_max_threads_field={} baked_urb_out_len={} programmed_urb_out_len={} programmed_urb_entries={} baked_grf_start={} applied_grf_start={} dispatch={:?}\n",
+        intel_render_focus_log!(
+            "intel/render: probe-vs ksp=0x{:08X} dw3=0x{:08X} dw6=0x{:08X} dw7=0x{:08X} dw8=0x{:08X} baked_max_threads={} applied_max_threads_field={} baked_urb_out_len={} programmed_urb_out_len={} programmed_urb_entries={} baked_grf_start={} applied_grf_start={} dispatch={:?} note=vs_dw8_urb_read_length_minus_one\n",
             vs_ksp_offset & !0x3F,
             vs_dw3,
             vs_dw6,
@@ -1691,10 +1783,10 @@ fn encode_triangle_probe_batch(
         log_batch_offset(cursor, "3DSTATE_SBE pre-clip");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_SBE)?;
         push(batch_dwords, &mut cursor, sbe_dw1)?;
-        push(batch_dwords, &mut cursor, 0)?;
-        push(batch_dwords, &mut cursor, pipeline.ps.meta.flat_inputs)?;
-        push(batch_dwords, &mut cursor, SBE_ACTIVE_COMPONENT_XYZW_MASK_DWORD)?;
-        push(batch_dwords, &mut cursor, SBE_ACTIVE_COMPONENT_XYZW_MASK_DWORD)?;
+        push(batch_dwords, &mut cursor, sbe_dw2)?;
+        push(batch_dwords, &mut cursor, sbe_dw3)?;
+        push(batch_dwords, &mut cursor, sbe_dw4)?;
+        push(batch_dwords, &mut cursor, sbe_dw5)?;
 
         if emit_sbe_swiz_packet {
             log_batch_offset(cursor, "3DSTATE_SBE_SWIZ pre-clip");
@@ -1723,8 +1815,13 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, ps_extra_dw1)?;
 
         intel_render_focus_log!(
-            "intel/render: probe-preclip-sbe-ps-state backend={} emitted=1 sbe_read_offset={} sbe_read_length={} ps_dw6=0x{:08X} ps_extra=0x{:08X} hypothesis=sf_wm_scan_conversion_needs_backend_contract_before_clip_sf_raster\n",
+            "intel/render: probe-preclip-sbe-ps-state backend={} emitted=1 sbe=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] sbe_read_offset={} sbe_read_length={} ps_dw6=0x{:08X} ps_extra=0x{:08X} hypothesis=sf_wm_scan_conversion_needs_backend_contract_before_clip_sf_raster\n",
             backend_probe_mode.label(),
+            sbe_dw1,
+            sbe_dw2,
+            sbe_dw3,
+            sbe_dw4,
+            sbe_dw5,
             sbe_vertex_read_offset,
             sbe_vertex_read_length,
             ps_dw6,
@@ -1889,10 +1986,10 @@ fn encode_triangle_probe_batch(
         log_batch_offset(cursor, "3DSTATE_SBE");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_SBE)?;
         push(batch_dwords, &mut cursor, sbe_dw1)?;
-        push(batch_dwords, &mut cursor, 0)?;
-        push(batch_dwords, &mut cursor, pipeline.ps.meta.flat_inputs)?;
-        push(batch_dwords, &mut cursor, SBE_ACTIVE_COMPONENT_XYZW_MASK_DWORD)?;
-        push(batch_dwords, &mut cursor, SBE_ACTIVE_COMPONENT_XYZW_MASK_DWORD)?;
+        push(batch_dwords, &mut cursor, sbe_dw2)?;
+        push(batch_dwords, &mut cursor, sbe_dw3)?;
+        push(batch_dwords, &mut cursor, sbe_dw4)?;
+        push(batch_dwords, &mut cursor, sbe_dw5)?;
 
         if emit_sbe_swiz_packet {
             // Gen12/Xe-LP keeps attribute swizzle state in a separate packet.
@@ -2068,14 +2165,28 @@ fn encode_triangle_probe_batch(
 
     log_batch_offset(cursor, "3DPRIMITIVE");
     let use_3dprimitive_extended = backend_probe_mode.use_3dprimitive_extended();
+    let primitive_cmd;
+    let primitive_dw1;
+    let primitive_dw2;
+    let primitive_dw3;
+    let primitive_dw4;
+    let primitive_dw5;
     if use_3dprimitive_extended {
-        let primitive_dw1 = primitive_topology;
+        primitive_cmd = CMD_3DPRIMITIVE_EXTENDED;
+        primitive_dw1 = backend_probe_mode
+            .primitive_extended_dw1_override()
+            .or(front_end_contract.primitive_extended_dw1_override)
+            .unwrap_or(primitive_topology);
+        primitive_dw2 = draw.vertex_count;
+        primitive_dw3 = 0;
+        primitive_dw4 = 1;
+        primitive_dw5 = 0;
         push(batch_dwords, &mut cursor, CMD_3DPRIMITIVE_EXTENDED)?;
         push(batch_dwords, &mut cursor, primitive_dw1)?;
-        push(batch_dwords, &mut cursor, draw.vertex_count)?;
-        push(batch_dwords, &mut cursor, 0)?;
-        push(batch_dwords, &mut cursor, 1)?;
-        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, primitive_dw2)?;
+        push(batch_dwords, &mut cursor, primitive_dw3)?;
+        push(batch_dwords, &mut cursor, primitive_dw4)?;
+        push(batch_dwords, &mut cursor, primitive_dw5)?;
         push(batch_dwords, &mut cursor, 0)?;
         push(batch_dwords, &mut cursor, 0)?;
         push(batch_dwords, &mut cursor, 0)?;
@@ -2090,14 +2201,174 @@ fn encode_triangle_probe_batch(
             draw.vertex_count,
         );
     } else {
+        primitive_cmd = CMD_3DPRIMITIVE;
+        primitive_dw1 = primitive_topology;
+        primitive_dw2 = draw.vertex_count;
+        primitive_dw3 = 0;
+        primitive_dw4 = 1;
+        primitive_dw5 = 0;
         push(batch_dwords, &mut cursor, CMD_3DPRIMITIVE)?;
-        push(batch_dwords, &mut cursor, primitive_topology)?;
-        push(batch_dwords, &mut cursor, draw.vertex_count)?;
-        push(batch_dwords, &mut cursor, 0)?;
-        push(batch_dwords, &mut cursor, 1)?;
-        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, primitive_dw1)?;
+        push(batch_dwords, &mut cursor, primitive_dw2)?;
+        push(batch_dwords, &mut cursor, primitive_dw3)?;
+        push(batch_dwords, &mut cursor, primitive_dw4)?;
+        push(batch_dwords, &mut cursor, primitive_dw5)?;
         push(batch_dwords, &mut cursor, 0)?;
     }
+    intel_render_focus_log!(
+        "intel/render: probe-frontend-dwords contract={} vb=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] ve0=[0x{:08X},0x{:08X},0x{:08X}] vf_topology=[0x{:08X},0x{:08X}] primitive=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},...] mesa_active_vb_dw1=0x0204400C mesa_active_ve0=[0x78090001,0x02400000,0x11130000] mesa_active_vf_topology=0x00000004 mesa_active_primitive_ext=[0x7B000808,0x00000000,0x00000003,0x00000000,0x00000001,0x00000000,...] note=visible-vf-dword-comparison\n",
+        front_end_contract.label,
+        CMD_3DSTATE_VERTEX_BUFFERS_1,
+        vertex_buffer_dw1,
+        vertex_buffer_addr_lo,
+        vertex_buffer_addr_hi,
+        vertex_buffer_bytes,
+        vertex_elements_cmd,
+        vertex_element0_dw0,
+        vertex_element0_dw1,
+        CMD_3DSTATE_VF_TOPOLOGY,
+        primitive_topology,
+        primitive_cmd,
+        primitive_dw1,
+        primitive_dw2,
+        primitive_dw3,
+        primitive_dw4,
+        primitive_dw5,
+    );
+
+    let state_dwords = unsafe {
+        core::slice::from_raw_parts(warm.draw_state_virt as *const u32, warm.draw_state_len / 4)
+    };
+    let surface = &state_dwords[probe_state.surface_state_offset_bytes as usize / 4
+        ..probe_state.surface_state_offset_bytes as usize / 4 + 16];
+    let blend = &state_dwords[probe_state.blend_state_offset_bytes as usize / 4
+        ..probe_state.blend_state_offset_bytes as usize / 4 + 2];
+    let cc_viewport = &state_dwords[probe_state.cc_viewport_offset_bytes as usize / 4
+        ..probe_state.cc_viewport_offset_bytes as usize / 4 + 2];
+    let sf_clip_viewport = &state_dwords[probe_state.sf_clip_viewport_offset_bytes as usize / 4
+        ..probe_state.sf_clip_viewport_offset_bytes as usize / 4 + 16];
+    let scissor = &state_dwords[probe_state.scissor_rect_offset_bytes as usize / 4
+        ..probe_state.scissor_rect_offset_bytes as usize / 4 + 2];
+    let surface_base = (surface[8] as u64) | ((surface[9] as u64) << 32);
+    let vs_enabled = !vf_synthesized_vue;
+    let vs_ksp = if vs_enabled { vs_ksp_offset & !0x3F } else { 0 };
+    let vs_sampler_count = if vs_enabled {
+        pipeline.vs.meta.kernel.sampler_count
+    } else {
+        0
+    };
+    let vs_binding_table_entry_count = if vs_enabled {
+        pipeline.vs.meta.kernel.binding_table_entry_count
+    } else {
+        0
+    };
+    let ps_simd_mode = if ps_dispatch_8 != 0 {
+        "simd8"
+    } else if ps_dispatch_16 != 0 {
+        "simd16"
+    } else if ps_dispatch_32 != 0 {
+        "simd32"
+    } else {
+        "none"
+    };
+    let post_heavy_flags = post_draw_sync_variant.heavy_sync_flags().unwrap_or(0);
+    intel_render_focus_log!(
+        "intel/render: probe-state-contract backend={} vs[enabled={} ksp=0x{:X} scratch=0x0 sampler_count={} binding_table_count={}] urb_vs[entries={} start={} size_64b={} size_field={} dw1=0x{:08X} dw2=0x{:08X}] sf[dw=[0x{:08X},0x{:08X},0x{:08X}] output_attr_count={}] wm[dw=0x{:08X} stats={} force_dispatch={} ps_dispatch_formula_enable={}] ps[ksp=[0x{:X},0x{:X},0x{:X}] simd={} dispatch_bits={}{}{} bt_count={} sampler_count={} scratch=0x{:X} dw3=0x{:08X} dw6=0x{:08X} dw7=0x{:08X}] primitive[cmd=0x{:08X} topology={} count={} start={} instance_count={} base_vertex={}]\n",
+        backend_probe_mode.label(),
+        vs_enabled as u8,
+        vs_ksp,
+        vs_sampler_count,
+        vs_binding_table_entry_count,
+        programmed_vs_urb_entries,
+        TRIANGLE_VS_URB_START,
+        programmed_vs_urb_output_length,
+        programmed_vs_urb_output_length.saturating_sub(1),
+        (programmed_vs_urb_output_length.saturating_sub(1) as u32)
+            | (TRIANGLE_VS_URB_START << 10)
+            | (TRIANGLE_VS_URB_START << 21),
+        programmed_vs_urb_entries | (programmed_vs_urb_entries << 16),
+        sf_dw1,
+        sf_dw2,
+        sf_dw3,
+        (sbe_dw1 >> 22) & 0x3F,
+        wm_dw1,
+        (wm_dw1 >> 31) & 0x1,
+        (wm_dw1 >> 19) & 0x3,
+        ((ps_extra_dw1 & PS_EXTRA_PIXEL_SHADER_VALID) != 0
+            && (ps_blend_dw1 & (1 << 30)) != 0) as u8,
+        ps_ksp0,
+        ps_ksp1,
+        ps_ksp2,
+        ps_simd_mode,
+        ps_dispatch_8,
+        ps_dispatch_16,
+        ps_dispatch_32,
+        ps_binding_table_entry_count,
+        pipeline.ps.meta.kernel.sampler_count,
+        ps_scratch_space_buffer,
+        ps_dw3,
+        ps_dw6,
+        ps_dw7,
+        primitive_cmd,
+        primitive_topology_label(primitive_topology),
+        primitive_dw2,
+        primitive_dw3,
+        primitive_dw4,
+        primitive_dw5,
+    );
+    intel_render_focus_log!(
+        "intel/render: probe-pointer-surface-contract backend={} binding_table_ps=0x{:X} bt_entry0=0x{:08X} surface_off=0x{:X} rt_surface[type={} format=0x{:X} width={} height={} pitch={} mocs=0x{:X} base=0x{:X} swizzle=0x{:08X}] viewport[generic_emitted=0 generic_ptr=0x0 sf_clip_ptr=0x{:X} cc_ptr=0x{:X} sf_m00={:.3} sf_m11={:.3} sf_m30={:.3} sf_m31={:.3} cc_min={:.3} cc_max={:.3}] scissor_ptr=0x{:X} scissor=[{},{}..{},{}] blend_ptr=0x{:X} blend_dwords=[0x{:08X},0x{:08X}] cc_state_ptr=0x{:X} depth_stencil_state_ptr=not-emitted wm_depth_packet=[0x{:08X},0x{:08X},0x{:08X}]\n",
+        backend_probe_mode.label(),
+        binding_table_pointer_offset,
+        state_dwords[probe_state.binding_table_offset_bytes as usize / 4],
+        probe_state.surface_state_offset_bytes,
+        (surface[0] >> 29) & 0x7,
+        (surface[0] >> 18) & 0x1FF,
+        (surface[2] & 0x3FFF) + 1,
+        ((surface[2] >> 16) & 0x3FFF) + 1,
+        surface[3] + 1,
+        (surface[1] >> 24) & 0x7F,
+        surface_base,
+        surface[7],
+        probe_state.sf_clip_viewport_offset_bytes,
+        probe_state.cc_viewport_offset_bytes,
+        f32::from_bits(sf_clip_viewport[0]),
+        f32::from_bits(sf_clip_viewport[1]),
+        f32::from_bits(sf_clip_viewport[3]),
+        f32::from_bits(sf_clip_viewport[4]),
+        f32::from_bits(cc_viewport[0]),
+        f32::from_bits(cc_viewport[1]),
+        probe_state.scissor_rect_offset_bytes,
+        scissor[0] & 0xFFFF,
+        scissor[0] >> 16,
+        scissor[1] & 0xFFFF,
+        scissor[1] >> 16,
+        blend_mode.blend_state_pointer_dword(probe_state.blend_state_offset_bytes),
+        blend[0],
+        blend[1],
+        probe_state.color_calc_state_offset_bytes | 1,
+        wm_depth_stencil_dw1,
+        wm_depth_stencil_dw2,
+        wm_depth_stencil_dw3,
+    );
+    intel_render_focus_log!(
+        "intel/render: probe-pipe-control-contract backend={} before_draw=[flush_flags=0x{:08X},invalidate_flags=0x{:08X},binding_pool_pre_cs=0x{:08X},binding_pool_post_invalidate=0x{:08X}] after_draw=[light_flags=0x{:08X},light_post_sync={},heavy_flags=0x{:08X},heavy_post_sync={},oa_fence_flags=0x{:08X}] postdraw_variant={}\n",
+        backend_probe_mode.label(),
+        PIPE_CONTROL_FLUSH_BITS,
+        PIPE_CONTROL_INVALIDATE_BITS,
+        PIPE_CONTROL_CS_STALL,
+        PIPE_CONTROL_INVALIDATE_BITS,
+        post_draw_sync_variant.light_sync_flags(),
+        post_draw_sync_variant.light_post_sync_enabled() as u8,
+        post_heavy_flags,
+        ((post_heavy_flags & PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE) != 0) as u8,
+        if defer_raster_wm_oa_end {
+            PIPE_CONTROL_POST_DRAW_SYNC_BITS
+        } else {
+            0
+        },
+        post_draw_sync_variant.label(),
+    );
 
     if backend_probe_mode.uses_raster_wm_oa() && !defer_raster_wm_oa_end {
         log_batch_offset(cursor, "MI_REPORT_PERF_COUNT raster-wm end immediate");
@@ -2253,8 +2524,8 @@ fn encode_triangle_probe_batch(
         (sbe_dw1 >> 22) & 0x3F,
         (sbe_dw1 >> 28) & 0x1,
         (sbe_dw1 >> 29) & 0x1,
-        SBE_ACTIVE_COMPONENT_XYZW_MASK_DWORD,
-        SBE_ACTIVE_COMPONENT_XYZW_MASK_DWORD,
+        sbe_dw4,
+        sbe_dw5,
     );
     log_mesa_spec_cross_compare(
         warm,
@@ -2419,6 +2690,8 @@ fn encode_triangle_probe_batch(
             draw.vertex_count / 3
         } else if primitive_topology == TRIANGLE_TOPOLOGY_RECTLIST {
             draw.vertex_count / 3
+        } else if primitive_topology == TRIANGLE_TOPOLOGY_LINELIST {
+            draw.vertex_count / 2
         } else {
             draw.vertex_count
         },
@@ -2465,9 +2738,14 @@ fn encode_triangle_probe_batch(
         (primitive_replication_dw1 == 0) as u8,
     );
     intel_render_focus_log!(
-        "intel/render: probe-handoff-decoded clip_out=sf vue_in_urb=1 baked_vs_urb_out_len={} programmed_vs_urb_out_len={} sbe_read_offset={} sbe_read_len={} ps_varyings={} streamout={}\n",
+        "intel/render: probe-handoff-decoded clip_out=sf vue_in_urb=1 baked_vs_urb_out_len={} programmed_vs_urb_out_len={} programmed_vs_urb_entries={} baked_vs_grf_start={} programmed_vs_grf_start={} sbe_read_offset={} sbe_read_len={} ps_varyings={} streamout={}\n",
         baked_vs_urb_output_length,
         programmed_vs_urb_output_length,
+        programmed_vs_urb_entries,
+        pipeline.vs.meta.kernel.grf_start_register,
+        front_end_contract
+            .vs_dispatch_grf_start_override
+            .unwrap_or(pipeline.vs.meta.kernel.grf_start_register),
         sbe_vertex_read_offset,
         sbe_vertex_read_length,
         pipeline.ps.meta.num_varying_inputs,
@@ -2737,16 +3015,28 @@ fn encode_minimal_streamout_proof_batch(
     let streamout_dw4 = 0u32;
     let so_buffer_index_dw1 = (RENDER_MOCS << 22) | (1 << 20) | (1 << 21) | (1 << 31);
     let sbe_dw1 = (1 << 5) | (1 << 11) | (1 << 21) | (1 << 22) | (1 << 28) | (1 << 29);
+    let front_end_contract = vs_config
+        .map(|config| config.front_end_contract)
+        .unwrap_or(TRIANGLE_DEFAULT_FRONT_END_CONTRACT);
     let programmed_vs_urb_output_length = vs_config
         .map(|config| {
-            TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE
+            front_end_contract
+                .vs_urb_output_length_override
+                .or(TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE)
                 .unwrap_or(config.pipeline.vs.meta.urb_entry_output_length)
         })
         .unwrap_or(1);
+    let programmed_vs_urb_entries = vs_config
+        .map(|_| {
+            front_end_contract
+                .vs_urb_entries_override
+                .unwrap_or(TRIANGLE_VS_URB_ENTRIES)
+        })
+        .unwrap_or(TRIANGLE_VS_URB_ENTRIES);
     let urb_vs_alloc_dw1 = (programmed_vs_urb_output_length.saturating_sub(1) as u32)
         | (TRIANGLE_VS_URB_START << 10)
         | (TRIANGLE_VS_URB_START << 21);
-    let urb_vs_alloc_dw2 = TRIANGLE_VS_URB_ENTRIES | (TRIANGLE_VS_URB_ENTRIES << 16);
+    let urb_vs_alloc_dw2 = programmed_vs_urb_entries | (programmed_vs_urb_entries << 16);
     let gfx125_sample_pattern_dw = 0x8888_8888;
     let gfx125_slice_hash =
         device_is_gfx125(warm.device_id).then(|| gfx125_slice_hash_config(warm));
@@ -3052,8 +3342,10 @@ fn encode_minimal_streamout_proof_batch(
         let baked_vs_urb_output_length = pipeline.vs.meta.urb_entry_output_length;
         let vs_dw3 = ((pipeline.vs.meta.kernel.binding_table_entry_count as u32) << 18)
             | (sampler_count_encoding(pipeline.vs.meta.kernel.sampler_count) << 27);
-        let applied_vs_grf_start =
-            triangle_vs_dispatch_grf_start_register(pipeline.vs.meta.kernel.grf_start_register);
+        let programmed_vs_grf_start = front_end_contract
+            .vs_dispatch_grf_start_override
+            .unwrap_or(pipeline.vs.meta.kernel.grf_start_register);
+        let applied_vs_grf_start = triangle_vs_dispatch_grf_start_register(programmed_vs_grf_start);
         let vs_dw6 = (1 << 11) | (applied_vs_grf_start << 20);
         let vs_dw7 = 1
             | (1 << 2)
@@ -3071,7 +3363,7 @@ fn encode_minimal_streamout_proof_batch(
         push(batch_dwords, &mut cursor, vs_dw7)?;
         push(batch_dwords, &mut cursor, vs_dw8)?;
         intel_render_verbose_log!(
-            "intel/render: probe-vs ksp=0x{:08X} dw3=0x{:08X} dw6=0x{:08X} dw7=0x{:08X} dw8=0x{:08X} baked_max_threads={} applied_max_threads_field={} baked_urb_out_len={} programmed_urb_out_len={} baked_grf_start={} applied_grf_start={} dispatch={:?}\n",
+            "intel/render: probe-vs ksp=0x{:08X} dw3=0x{:08X} dw6=0x{:08X} dw7=0x{:08X} dw8=0x{:08X} baked_max_threads={} applied_max_threads_field={} baked_urb_out_len={} programmed_urb_out_len={} programmed_urb_entries={} baked_grf_start={} programmed_grf_start={} applied_grf_start={} dispatch={:?} contract={} note=vs-streamout-proof\n",
             vs_ksp_offset & !0x3F,
             vs_dw3,
             vs_dw6,
@@ -3081,9 +3373,12 @@ fn encode_minimal_streamout_proof_batch(
             triangle_vs_max_threads_field(warm.device_id, pipeline.vs.meta.max_threads),
             baked_vs_urb_output_length,
             programmed_vs_urb_output_length,
+            programmed_vs_urb_entries,
             pipeline.vs.meta.kernel.grf_start_register,
+            programmed_vs_grf_start,
             applied_vs_grf_start,
             pipeline.vs.meta.kernel.dispatch_mode,
+            front_end_contract.label,
         );
         intel_render_verbose_log!(
             "intel/render: probe-vs-export note={} position_only={} generic_attrs=0 baked_urb_bytes={} programmed_urb_bytes={} expected_vue=header+position-only\n",
@@ -3210,7 +3505,7 @@ fn encode_minimal_streamout_proof_batch(
         },
         programmed_vs_urb_output_length,
         TRIANGLE_VS_URB_START,
-        TRIANGLE_VS_URB_ENTRIES,
+        programmed_vs_urb_entries,
         draw.vertex_stride,
         vb_size_bytes,
         streamout_dw2 & 0x1F,

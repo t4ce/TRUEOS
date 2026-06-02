@@ -130,6 +130,10 @@ struct TriangleProbeStateLayout {
 struct TriangleFrontEndContract {
     label: &'static str,
     vs_urb_output_length_override: Option<u8>,
+    vs_urb_entries_override: Option<u32>,
+    vs_dispatch_grf_start_override: Option<u8>,
+    vertex_buffer_dw1_override: Option<u32>,
+    primitive_extended_dw1_override: Option<u32>,
     sbe_read_offset: u8,
     sbe_read_length: u8,
     force_sbe_read_offset: bool,
@@ -140,6 +144,7 @@ struct TriangleFrontEndContract {
 struct VsStreamoutProofConfig {
     pipeline: &'static crate::intel::shader::TrianglePipeline,
     shader_layout: TriangleShaderLayout,
+    front_end_contract: TriangleFrontEndContract,
 }
 
 #[derive(Copy, Clone)]
@@ -207,6 +212,7 @@ enum BackendProbeMode {
     RasterWmInputOa,
     RasterWmInputOaNdcBlock32,
     RasterWmInputOaNdcMesaActiveBlock,
+    RasterWmInputOaNdcMesaActiveBlockSwiz,
     RasterWmInputOaNdcMesaActiveBlockNoPrimRepl,
     RasterWmInputOaNdcPerPoly,
     RasterWmInputOaNdcWalk16,
@@ -249,6 +255,26 @@ enum BackendProbeMode {
     RasterWmInputOaScreenSpaceMesaSimpleNoSwizNoScissor,
     RasterWmInputOaScreenSpacePointList,
     RasterWmInputOaScreenSpacePointListOpenBounds,
+    RasterWmInputOaScreenSpacePointListClipNormalOpenBounds,
+    RasterWmInputOaScreenSpaceLineListOpenBounds,
+    RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds,
+    RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1,
+    RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel,
+    RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint,
+    RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0,
+    RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8,
+    RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz,
+    RasterWmInputOaNdcLineListMesaActiveBlockSwiz,
+    RasterWmInputOaNdcRectListMesaActiveBlockSwiz,
+    RasterWmInputOaNdcTriListMesaActiveBlockSwiz,
+    RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz,
+    RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane,
+    RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8,
+    RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header,
+    RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster,
+    RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf,
+    RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe,
+    RasterWmInputOaNdcPointListOpenBounds,
     RasterWmInputOaScreenSpaceRtIndependent,
     RasterWmInputOaNdcForceOnPattern,
     RasterWmInputOaForceOnPattern,
@@ -377,6 +403,9 @@ impl BackendProbeMode {
             Self::RasterWmInputOa => "raster-wm-input-oa",
             Self::RasterWmInputOaNdcBlock32 => "raster-wm-input-oa-ndc-block32",
             Self::RasterWmInputOaNdcMesaActiveBlock => "raster-wm-input-oa-ndc-mesa-active-block",
+            Self::RasterWmInputOaNdcMesaActiveBlockSwiz => {
+                "raster-wm-input-oa-ndc-mesa-active-block-swiz"
+            }
             Self::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl => {
                 "raster-wm-input-oa-ndc-mesa-active-block-no-prim-repl"
             }
@@ -493,6 +522,66 @@ impl BackendProbeMode {
             Self::RasterWmInputOaScreenSpacePointListOpenBounds => {
                 "raster-wm-input-oa-screen-space-pointlist-open-bounds-walk16-sf-dw2-default"
             }
+            Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds => {
+                "raster-wm-input-oa-screen-space-pointlist-clip-normal-open-bounds-walk16-sf-dw2-default"
+            }
+            Self::RasterWmInputOaScreenSpaceLineListOpenBounds => {
+                "raster-wm-input-oa-screen-space-linelist-open-bounds-walk16-sf-line-width-8"
+            }
+            Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds => {
+                "raster-wm-input-oa-screen-space-linelist-mesa-backend-open-bounds"
+            }
+            Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1 => {
+                "raster-wm-input-oa-screen-space-linelist-mesa-backend-open-bounds-sample1"
+            }
+            Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel => {
+                "raster-wm-input-oa-screen-space-linelist-mesa-backend-open-bounds-sample1-onpixel"
+            }
+            Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint => {
+                "raster-wm-input-oa-screen-space-linelist-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point"
+            }
+            Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0 => {
+                "raster-wm-input-oa-screen-space-linelist-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0"
+            }
+            Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8 => {
+                "raster-wm-input-oa-screen-space-linelist-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-bary8"
+            }
+            Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz => {
+                "raster-wm-input-oa-screen-space-linelist-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-bary8-swiz"
+            }
+            Self::RasterWmInputOaNdcLineListMesaActiveBlockSwiz => {
+                "raster-wm-input-oa-ndc-linelist-mesa-active-block-swiz"
+            }
+            Self::RasterWmInputOaNdcRectListMesaActiveBlockSwiz => {
+                "raster-wm-input-oa-ndc-rectlist-mesa-active-block-swiz"
+            }
+            Self::RasterWmInputOaNdcTriListMesaActiveBlockSwiz => {
+                "raster-wm-input-oa-ndc-trilist-mesa-active-block-swiz"
+            }
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz => {
+                "raster-wm-input-oa-screen-space-trilist-mesa-active-block-swiz"
+            }
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane => {
+                "raster-wm-input-oa-screen-space-trilist-mesa-active-block-swiz-sf-sane"
+            }
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8 => {
+                "raster-wm-input-oa-screen-space-trilist-mesa-active-block-swiz-sf-sane-bary8"
+            }
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header => {
+                "raster-wm-input-oa-screen-space-trilist-mesa-active-block-swiz-sf-sane-bary8-header"
+            }
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster => {
+                "raster-wm-input-oa-screen-space-trilist-mesa-active-block-swiz-sf-sane-bary8-header-mesa-raster"
+            }
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf => {
+                "raster-wm-input-oa-screen-space-trilist-mesa-active-block-swiz-sf-sane-bary8-header-mesa-raster-mesa-sf"
+            }
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe => {
+                "raster-wm-input-oa-screen-space-trilist-mesa-active-block-swiz-sf-sane-bary8-header-mesa-raster-mesa-sf-mesa-sbe"
+            }
+            Self::RasterWmInputOaNdcPointListOpenBounds => {
+                "raster-wm-input-oa-ndc-pointlist-open-bounds-walk16-sf-viewport"
+            }
             Self::RasterWmInputOaScreenSpaceRtIndependent => {
                 "raster-wm-input-oa-screen-space-rt-independent"
             }
@@ -545,6 +634,7 @@ impl BackendProbeMode {
             Self::RasterWmInputOa
                 | Self::RasterWmInputOaNdcBlock32
                 | Self::RasterWmInputOaNdcMesaActiveBlock
+                | Self::RasterWmInputOaNdcMesaActiveBlockSwiz
                 | Self::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl
                 | Self::RasterWmInputOaNdcPerPoly
                 | Self::RasterWmInputOaNdcWalk16
@@ -587,6 +677,26 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaScreenSpaceMesaSimpleNoSwizNoScissor
                 | Self::RasterWmInputOaScreenSpacePointList
                 | Self::RasterWmInputOaScreenSpacePointListOpenBounds
+                | Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+                | Self::RasterWmInputOaNdcLineListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaNdcRectListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaNdcTriListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
+                | Self::RasterWmInputOaNdcPointListOpenBounds
                 | Self::RasterWmInputOaScreenSpaceRtIndependent
                 | Self::RasterWmInputOaNdcForceOnPattern
                 | Self::RasterWmInputOaForceOnPattern
@@ -601,6 +711,11 @@ impl BackendProbeMode {
     fn forced_ms_raster_mode(self) -> Option<u32> {
         match self {
             Self::RasterWmInputOaNdcForceOnPattern | Self::RasterWmInputOaForceOnPattern => Some(3),
+            Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz => Some(2),
             Self::RasterWmInputOaForceOffPixel => Some(0),
             _ => None,
         }
@@ -611,9 +726,25 @@ impl BackendProbeMode {
             Self::RasterWmInputOaNdcForceOnPattern
             | Self::RasterWmInputOaForceOnPattern
             | Self::RasterWmInputOaForceOffPixel => Some(2),
+            Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz => Some(1),
             Self::RasterWmInputOaScreenSpaceRtIndependent => Some(1),
             _ => None,
         }
+    }
+
+    fn use_mesa_sf_point_state(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+        )
     }
 
     fn force_wm_thread_dispatch(self) -> bool {
@@ -624,7 +755,18 @@ impl BackendProbeMode {
         matches!(
             self,
             Self::RasterWmInputOaNdcMesaActiveBlock
+                | Self::RasterWmInputOaNdcMesaActiveBlockSwiz
                 | Self::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl
+                | Self::RasterWmInputOaNdcLineListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaNdcRectListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaNdcTriListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
                 | Self::RasterWmInputOaScreenSpaceNoWmHzOpPacket
                 | Self::RasterWmInputOaScreenSpaceMesaSimpleOrder
                 | Self::RasterWmInputOaScreenSpaceMesaSimpleNoSwizNoScissor
@@ -635,7 +777,18 @@ impl BackendProbeMode {
         matches!(
             self,
             Self::RasterWmInputOaNdcMesaActiveBlock
+                | Self::RasterWmInputOaNdcMesaActiveBlockSwiz
                 | Self::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl
+                | Self::RasterWmInputOaNdcLineListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaNdcRectListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaNdcTriListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
                 | Self::RasterWmInputOaScreenSpaceMesaSimpleOrder
                 | Self::RasterWmInputOaScreenSpaceMesaSimpleNoSwizNoScissor
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrder
@@ -645,6 +798,9 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
                 | Self::RasterWmInputOaScreenSpacePointList
                 | Self::RasterWmInputOaScreenSpacePointListOpenBounds
+                | Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListOpenBounds
+                | Self::RasterWmInputOaNdcPointListOpenBounds
         )
     }
 
@@ -654,6 +810,7 @@ impl BackendProbeMode {
             Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
                 | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
                 | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+                | Self::RasterWmInputOaNdcPointListOpenBounds
         )
     }
 
@@ -670,11 +827,72 @@ impl BackendProbeMode {
         matches!(
             self,
             Self::RasterWmInputOaNdcMesaActiveBlock
+                | Self::RasterWmInputOaNdcMesaActiveBlockSwiz
                 | Self::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl
+                | Self::RasterWmInputOaNdcLineListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaNdcRectListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaNdcTriListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
         )
     }
 
-    fn mesa_active_block_disable_primitive_replication(self) -> bool {
+    fn mesa_active_fixed_function_state(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaNdcMesaActiveBlock
+                | Self::RasterWmInputOaNdcMesaActiveBlockSwiz
+                | Self::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl
+                | Self::RasterWmInputOaNdcLineListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaNdcRectListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaNdcTriListMesaActiveBlockSwiz
+        )
+    }
+
+    fn mesa_active_raster_state(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
+        )
+    }
+
+    fn mesa_active_sf_state(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
+        )
+    }
+
+    fn mesa_active_sbe_state(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
+        )
+    }
+
+    fn force_ps_binding_table_count_zero(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
+        )
+    }
+
+    fn mesa_success_disable_primitive_replication(self) -> bool {
         matches!(self, Self::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl)
     }
 
@@ -703,6 +921,9 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
                 | Self::RasterWmInputOaScreenSpacePointList
                 | Self::RasterWmInputOaScreenSpacePointListOpenBounds
+                | Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListOpenBounds
+                | Self::RasterWmInputOaNdcPointListOpenBounds
         )
     }
 
@@ -725,8 +946,43 @@ impl BackendProbeMode {
             }
             Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend => Some(1),
             Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend => Some(1),
+            Self::RasterWmInputOaNdcRectListMesaActiveBlockSwiz => Some(1),
+            Self::RasterWmInputOaNdcTriListMesaActiveBlockSwiz => Some(1),
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz => Some(1),
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane => Some(1),
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8 => Some(1),
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header => Some(1),
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf => Some(1),
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe => {
+                Some(0)
+            }
             Self::RasterWmInputOaScreenSpacePointList
-            | Self::RasterWmInputOaScreenSpacePointListOpenBounds => Some(0),
+            | Self::RasterWmInputOaScreenSpacePointListOpenBounds
+            | Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+            | Self::RasterWmInputOaScreenSpaceLineListOpenBounds
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+            | Self::RasterWmInputOaNdcLineListMesaActiveBlockSwiz
+            | Self::RasterWmInputOaNdcPointListOpenBounds => Some(0),
+            _ => None,
+        }
+    }
+
+    fn sbe_read_length_override(self) -> Option<u8> {
+        match self {
+            Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+                | Self::RasterWmInputOaNdcLineListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe => {
+                Some(0)
+            }
             _ => None,
         }
     }
@@ -751,11 +1007,43 @@ impl BackendProbeMode {
             | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend => {
                 Some(StreamoutProofExperiment::PositionSlot0Xyzw)
             }
+            Self::RasterWmInputOaNdcRectListMesaActiveBlockSwiz => {
+                Some(StreamoutProofExperiment::PositionSlot0Xyzw)
+            }
+            Self::RasterWmInputOaNdcTriListMesaActiveBlockSwiz => {
+                Some(StreamoutProofExperiment::PositionSlot0Xyzw)
+            }
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz => {
+                Some(StreamoutProofExperiment::PositionSlot0Xyzw)
+            }
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane => {
+                Some(StreamoutProofExperiment::PositionSlot0Xyzw)
+            }
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8 => {
+                Some(StreamoutProofExperiment::PositionSlot0Xyzw)
+            }
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe => {
+                Some(StreamoutProofExperiment::HeaderAndPositionSlots01)
+            }
             Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend => {
                 Some(StreamoutProofExperiment::MesaNoVsRectlist)
             }
             Self::RasterWmInputOaScreenSpacePointList
-            | Self::RasterWmInputOaScreenSpacePointListOpenBounds => {
+            | Self::RasterWmInputOaScreenSpacePointListOpenBounds
+            | Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+            | Self::RasterWmInputOaScreenSpaceLineListOpenBounds
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+            | Self::RasterWmInputOaNdcLineListMesaActiveBlockSwiz
+            | Self::RasterWmInputOaNdcPointListOpenBounds => {
                 Some(StreamoutProofExperiment::PositionSlot0Xyzw)
             }
             _ => None,
@@ -766,7 +1054,18 @@ impl BackendProbeMode {
         matches!(
             self,
             Self::RasterWmInputOaNdcMesaActiveBlock
+                | Self::RasterWmInputOaNdcMesaActiveBlockSwiz
                 | Self::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl
+                | Self::RasterWmInputOaNdcLineListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaNdcRectListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaNdcTriListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
                 | Self::RasterWmInputOaScreenSpaceAcceptAllOpenBoundsHeaderPreClipSbePsSbe1NoSwiz
                 | Self::RasterWmInputOaScreenSpaceSlot0PreClipSbePsNoSwiz
                 | Self::RasterWmInputOaScreenSpaceSlot0TightPreClipRasterSbePsNoSwiz
@@ -780,6 +1079,17 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
                 | Self::RasterWmInputOaScreenSpacePointList
                 | Self::RasterWmInputOaScreenSpacePointListOpenBounds
+                | Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+                | Self::RasterWmInputOaNdcLineListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaNdcPointListOpenBounds
         )
     }
 
@@ -796,6 +1106,16 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
                 | Self::RasterWmInputOaScreenSpacePointList
                 | Self::RasterWmInputOaScreenSpacePointListOpenBounds
+                | Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+                | Self::RasterWmInputOaNdcPointListOpenBounds
         )
     }
 
@@ -803,7 +1123,18 @@ impl BackendProbeMode {
         matches!(
             self,
             Self::RasterWmInputOaNdcMesaActiveBlock
+                | Self::RasterWmInputOaNdcMesaActiveBlockSwiz
                 | Self::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl
+                | Self::RasterWmInputOaNdcLineListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaNdcRectListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaNdcTriListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
                 | Self::RasterWmInputOaScreenSpaceAcceptAllOpenBoundsHeaderPreClipSbePsSbe1NoSwiz
                 | Self::RasterWmInputOaScreenSpaceSlot0PreClipSbePsNoSwiz
                 | Self::RasterWmInputOaScreenSpaceSlot0TightPreClipRasterSbePsNoSwiz
@@ -815,6 +1146,16 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
                 | Self::RasterWmInputOaScreenSpacePointList
                 | Self::RasterWmInputOaScreenSpacePointListOpenBounds
+                | Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+                | Self::RasterWmInputOaNdcPointListOpenBounds
         )
     }
 
@@ -822,7 +1163,18 @@ impl BackendProbeMode {
         matches!(
             self,
             Self::RasterWmInputOaNdcMesaActiveBlock
+                | Self::RasterWmInputOaNdcMesaActiveBlockSwiz
                 | Self::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl
+                | Self::RasterWmInputOaNdcLineListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaNdcRectListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaNdcTriListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
                 | Self::RasterWmInputOaScreenSpaceAcceptAllOpenBoundsHeaderPreClipSbePsSbe1NoSwiz
                 | Self::RasterWmInputOaScreenSpaceSlot0PreClipSbePsNoSwiz
                 | Self::RasterWmInputOaScreenSpaceSlot0TightPreClipRasterSbePsNoSwiz
@@ -834,6 +1186,16 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
                 | Self::RasterWmInputOaScreenSpacePointList
                 | Self::RasterWmInputOaScreenSpacePointListOpenBounds
+                | Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+                | Self::RasterWmInputOaNdcPointListOpenBounds
         )
     }
 
@@ -842,6 +1204,7 @@ impl BackendProbeMode {
             self,
             Self::RasterWmInputOaScreenSpaceClipBypassRasterPreconditions
                 | Self::RasterWmInputOaScreenSpaceClipBypassRasterPreconditionsOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
         )
     }
 
@@ -860,10 +1223,36 @@ impl BackendProbeMode {
             | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend => {
                 Some(TRIANGLE_TOPOLOGY_RECTLIST)
             }
+            Self::RasterWmInputOaNdcRectListMesaActiveBlockSwiz => Some(TRIANGLE_TOPOLOGY_RECTLIST),
             Self::RasterWmInputOaScreenSpacePointList
-            | Self::RasterWmInputOaScreenSpacePointListOpenBounds => {
-                Some(TRIANGLE_TOPOLOGY_POINTLIST)
+            | Self::RasterWmInputOaScreenSpacePointListOpenBounds
+            | Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+            | Self::RasterWmInputOaNdcPointListOpenBounds => Some(TRIANGLE_TOPOLOGY_POINTLIST),
+            Self::RasterWmInputOaScreenSpaceLineListOpenBounds
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz => {
+                Some(TRIANGLE_TOPOLOGY_LINELIST)
             }
+            Self::RasterWmInputOaNdcLineListMesaActiveBlockSwiz => Some(TRIANGLE_TOPOLOGY_LINELIST),
+            _ => None,
+        }
+    }
+
+    fn primitive_extended_dw1_override(self) -> Option<u32> {
+        match self {
+            Self::RasterWmInputOaNdcTriListMesaActiveBlockSwiz => Some(0),
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz => Some(0),
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane => Some(0),
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8 => Some(0),
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header => Some(0),
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe => Some(0),
             _ => None,
         }
     }
@@ -889,10 +1278,26 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOn
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
                 | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
                 | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
                 | Self::RasterWmInputOaScreenSpaceMesaSimpleNoSwizNoScissor
                 | Self::RasterWmInputOaScreenSpacePointList
                 | Self::RasterWmInputOaScreenSpacePointListOpenBounds
+                | Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+                | Self::RasterWmInputOaNdcPointListOpenBounds
         )
     }
 
@@ -908,6 +1313,16 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaScreenSpaceSlot0PreClipSbePsNoSwiz
                 | Self::RasterWmInputOaScreenSpaceAcceptAllOpenBoundsHeaderPerPolySbe1NoSwiz
                 | Self::RasterWmInputOaScreenSpacePointListOpenBounds
+                | Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+                | Self::RasterWmInputOaNdcPointListOpenBounds
         )
     }
 
@@ -922,6 +1337,16 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaScreenSpaceSlot0PreClipSbePsNoSwiz
                 | Self::RasterWmInputOaScreenSpaceAcceptAllOpenBoundsHeaderPerPolySbe1NoSwiz
                 | Self::RasterWmInputOaScreenSpacePointListOpenBounds
+                | Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+                | Self::RasterWmInputOaNdcPointListOpenBounds
         )
     }
 
@@ -947,6 +1372,9 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaScreenSpaceMesaSimpleNoSwizNoScissor
                 | Self::RasterWmInputOaScreenSpacePointList
                 | Self::RasterWmInputOaScreenSpacePointListOpenBounds
+                | Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListOpenBounds
+                | Self::RasterWmInputOaNdcPointListOpenBounds
                 | Self::RasterWmInputOaScreenSpaceRtIndependent
         )
     }
@@ -990,6 +1418,23 @@ impl BackendProbeMode {
             | Self::RasterWmInputOaScreenSpaceMesaSimpleNoSwizNoScissor
             | Self::RasterWmInputOaScreenSpacePointList
             | Self::RasterWmInputOaScreenSpacePointListOpenBounds
+            | Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+            | Self::RasterWmInputOaScreenSpaceLineListOpenBounds
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
+            | Self::RasterWmInputOaNdcPointListOpenBounds
             | Self::RasterWmInputOaScreenSpaceRtIndependent => Some(0),
             _ => None,
         }
@@ -1010,6 +1455,13 @@ impl BackendProbeMode {
 
     fn force_clip_mode(self) -> bool {
         self.enable_clip_preconditions()
+    }
+
+    fn clip_mode_bits(self) -> u32 {
+        match self {
+            Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds => CLIP_MODE_NORMAL,
+            _ => CLIP_MODE_ACCEPT_ALL,
+        }
     }
 
     fn enable_raster_viewport_z_clip_tests(self) -> bool {
@@ -1046,7 +1498,24 @@ impl BackendProbeMode {
             | Self::RasterWmInputOaScreenSpaceD3dPerPolyNoHz
             | Self::RasterWmInputOaScreenSpaceMesaSimpleNoSwizNoScissor
             | Self::RasterWmInputOaScreenSpacePointList
-            | Self::RasterWmInputOaScreenSpacePointListOpenBounds => Some(2),
+            | Self::RasterWmInputOaScreenSpacePointListOpenBounds
+            | Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+            | Self::RasterWmInputOaScreenSpaceLineListOpenBounds
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
+            | Self::RasterWmInputOaNdcPointListOpenBounds => Some(2),
             _ => None,
         }
     }
@@ -1075,6 +1544,23 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaScreenSpaceMesaSimpleNoSwizNoScissor
                 | Self::RasterWmInputOaScreenSpacePointList
                 | Self::RasterWmInputOaScreenSpacePointListOpenBounds
+                | Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
+                | Self::RasterWmInputOaNdcPointListOpenBounds
         )
     }
 
@@ -1117,6 +1603,22 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaScreenSpaceMesaSimpleNoSwizNoScissor
                 | Self::RasterWmInputOaScreenSpacePointList
                 | Self::RasterWmInputOaScreenSpacePointListOpenBounds
+                | Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
                 | Self::RasterWmInputOaScreenSpaceRtIndependent
                 | Self::RasterWmInputOaForceOnPattern
                 | Self::RasterWmInputOaForceOffPixel
@@ -1138,7 +1640,9 @@ impl BackendProbeMode {
             | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOn => Some(1),
             Self::RasterWmInputOaNdcBlock32
             | Self::RasterWmInputOaNdcMesaActiveBlock
+            | Self::RasterWmInputOaNdcMesaActiveBlockSwiz
             | Self::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl
+            | Self::RasterWmInputOaNdcLineListMesaActiveBlockSwiz
             | Self::RasterWmInputOaNdcWalk16
             | Self::RasterWmInputOaNdcClipPreconditions
             | Self::RasterWmInputOaNdcNoWmScissor
@@ -1171,6 +1675,23 @@ impl BackendProbeMode {
             | Self::RasterWmInputOaScreenSpaceMesaSimpleNoSwizNoScissor
             | Self::RasterWmInputOaScreenSpacePointList
             | Self::RasterWmInputOaScreenSpacePointListOpenBounds
+            | Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+            | Self::RasterWmInputOaScreenSpaceLineListOpenBounds
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
+            | Self::RasterWmInputOaNdcPointListOpenBounds
             | Self::RasterWmInputOaForceOnPattern
             | Self::RasterWmInputOaForceOffPixel => Some(0),
             _ => None,
@@ -1184,7 +1705,14 @@ impl BackendProbeMode {
             // mode so scan conversion is not gated by an all-zero WM packet.
             Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
             | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
-            | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend => Some(8),
+            | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+            | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe => Some(8),
             _ => None,
         }
     }
@@ -1195,6 +1723,13 @@ impl BackendProbeMode {
             Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
                 | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
                 | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
         )
     }
 
@@ -1203,13 +1738,18 @@ impl BackendProbeMode {
             self,
             Self::RasterWmInputOaNdcBlock32
                 | Self::RasterWmInputOaNdcMesaActiveBlock
+                | Self::RasterWmInputOaNdcMesaActiveBlockSwiz
                 | Self::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl
                 | Self::RasterWmInputOaNdcPerPoly
                 | Self::RasterWmInputOaNdcWalk16
                 | Self::RasterWmInputOaNdcClipPreconditions
                 | Self::RasterWmInputOaNdcNoWmScissor
                 | Self::RasterWmInputOaNdcForceOnPattern
+                | Self::RasterWmInputOaNdcLineListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaNdcRectListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaNdcTriListMesaActiveBlockSwiz
                 | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+                | Self::RasterWmInputOaNdcPointListOpenBounds
         )
     }
 
@@ -1264,6 +1804,18 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaScreenSpaceMesaSimpleNoSwizNoScissor
                 | Self::RasterWmInputOaScreenSpacePointList
                 | Self::RasterWmInputOaScreenSpacePointListOpenBounds
+                | Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixel
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPoint
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
+                | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8
                 | Self::RasterWmInputOaScreenSpaceRtIndependent
                 | Self::RasterWmInputOaNdcBlock32
                 | Self::RasterWmInputOaNdcPerPoly
@@ -1271,6 +1823,7 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaNdcClipPreconditions
                 | Self::RasterWmInputOaNdcNoWmScissor
                 | Self::RasterWmInputOaNdcForceOnPattern
+                | Self::RasterWmInputOaNdcPointListOpenBounds
                 | Self::RasterWmInputOaForceOnPattern
                 | Self::RasterWmInputOaForceOffPixel
         )
@@ -1288,11 +1841,15 @@ impl BackendProbeMode {
 enum VfPrimitiveGeometry {
     Canonical,
     Oversized,
+    ScreenSpaceOversized,
     ScreenSpace8x8,
     ScreenSpaceInset32,
     ScreenSpaceRectInset32,
     ScreenSpaceRectTarget,
     ScreenSpacePointCenter32,
+    ScreenSpaceLineCenter32,
+    NdcPointCenter32,
+    NdcLineCenter32,
     NdcRectFullscreen,
 }
 
@@ -1301,11 +1858,15 @@ impl VfPrimitiveGeometry {
         match self {
             Self::Canonical => "canonical",
             Self::Oversized => "oversized",
+            Self::ScreenSpaceOversized => "screen-space-oversized",
             Self::ScreenSpace8x8 => "screen-space-8x8",
             Self::ScreenSpaceInset32 => "screen-space-inset-32",
             Self::ScreenSpaceRectInset32 => "screen-space-rect-inset-32",
             Self::ScreenSpaceRectTarget => "screen-space-rect-target",
             Self::ScreenSpacePointCenter32 => "screen-space-point-center-32",
+            Self::ScreenSpaceLineCenter32 => "screen-space-line-center-32",
+            Self::NdcPointCenter32 => "ndc-point-center-32",
+            Self::NdcLineCenter32 => "ndc-line-center-32",
             Self::NdcRectFullscreen => "ndc-rect-fullscreen",
         }
     }
@@ -1318,6 +1879,7 @@ impl VfPrimitiveGeometry {
             // move PS counters, coverage of the tiny canonical triangle was
             // not the blocker.
             Self::Oversized => [[-1.0, -1.0, 0.0], [3.0, -1.0, 0.0], [-1.0, 3.0, 0.0]],
+            Self::ScreenSpaceOversized => [[0.0, 0.0, 0.0], [64.0, 0.0, 0.0], [0.0, 64.0, 0.0]],
             // PerspectiveDivideDisable makes position screen-space-like. This
             // variant tests that interpretation directly on the 8x8 scratch RT.
             Self::ScreenSpace8x8 => [[0.0, 0.0, 0.0], [8.0, 0.0, 0.0], [0.0, 8.0, 0.0]],
@@ -1328,19 +1890,39 @@ impl VfPrimitiveGeometry {
             // lower-left, v2 = upper-left, with the fourth vertex implied.
             Self::ScreenSpaceRectInset32 => [[24.0, 24.0, 0.0], [4.0, 24.0, 0.0], [4.0, 4.0, 0.0]],
             Self::ScreenSpaceRectTarget => [[24.0, 24.0, 0.0], [4.0, 24.0, 0.0], [4.0, 4.0, 0.0]],
-            Self::ScreenSpacePointCenter32 => [[16.0, 16.0, 0.0], [16.0, 16.0, 0.0], [16.0, 16.0, 0.0]],
+            Self::ScreenSpacePointCenter32 => {
+                [[16.0, 16.0, 0.0], [16.0, 16.0, 0.0], [16.0, 16.0, 0.0]]
+            }
+            Self::ScreenSpaceLineCenter32 => {
+                [[4.0, 16.0, 0.0], [28.0, 16.0, 0.0], [28.0, 16.0, 0.0]]
+            }
+            Self::NdcPointCenter32 => [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+            Self::NdcLineCenter32 => [[-0.75, 0.0, 0.0], [0.75, 0.0, 0.0], [0.75, 0.0, 0.0]],
             Self::NdcRectFullscreen => [[1.0, -1.0, 0.0], [-1.0, -1.0, 0.0], [-1.0, 1.0, 0.0]],
         }
     }
 
-    fn vertices_for_target(self, target_w: u32, target_h: u32) -> [[f32; 3]; TRIANGLE_DRAW_VERTICES] {
+    fn vertices_for_target(
+        self,
+        target_w: u32,
+        target_h: u32,
+    ) -> [[f32; 3]; TRIANGLE_DRAW_VERTICES] {
         match self {
+            Self::ScreenSpaceOversized => [
+                [0.0, 0.0, 0.0],
+                [(target_w.saturating_mul(2)).max(1) as f32, 0.0, 0.0],
+                [0.0, (target_h.saturating_mul(2)).max(1) as f32, 0.0],
+            ],
             Self::ScreenSpaceRectTarget => {
                 let min_x = 16.0f32;
                 let min_y = 16.0f32;
                 let max_x = target_w.saturating_sub(17).max(16) as f32;
                 let max_y = target_h.saturating_sub(17).max(16) as f32;
-                [[max_x, max_y, 0.0], [min_x, max_y, 0.0], [min_x, min_y, 0.0]]
+                [
+                    [max_x, max_y, 0.0],
+                    [min_x, max_y, 0.0],
+                    [min_x, min_y, 0.0],
+                ]
             }
             _ => self.vertices(),
         }
@@ -1348,7 +1930,8 @@ impl VfPrimitiveGeometry {
 
     fn draw_vertex_count(self) -> u32 {
         match self {
-            Self::ScreenSpacePointCenter32 => 1,
+            Self::ScreenSpacePointCenter32 | Self::NdcPointCenter32 => 1,
+            Self::ScreenSpaceLineCenter32 | Self::NdcLineCenter32 => 2,
             _ => TRIANGLE_DRAW_VERTICES as u32,
         }
     }
@@ -1361,10 +1944,12 @@ impl VfPrimitiveGeometry {
         matches!(
             self,
             Self::ScreenSpace8x8
+                | Self::ScreenSpaceOversized
                 | Self::ScreenSpaceInset32
                 | Self::ScreenSpaceRectInset32
                 | Self::ScreenSpaceRectTarget
                 | Self::ScreenSpacePointCenter32
+                | Self::ScreenSpaceLineCenter32
         )
     }
 
@@ -1373,6 +1958,10 @@ impl VfPrimitiveGeometry {
             self,
             Self::ScreenSpaceRectInset32 | Self::ScreenSpaceRectTarget | Self::NdcRectFullscreen
         )
+    }
+
+    fn linelist_candidate(self) -> bool {
+        matches!(self, Self::ScreenSpaceLineCenter32 | Self::NdcLineCenter32)
     }
 }
 
@@ -1425,9 +2014,7 @@ impl StreamoutProofExperiment {
             Self::PositionSlot0
             | Self::PositionSlot0Xyzw
             | Self::PositionSlot1
-            | Self::MesaNoVsRectlist => {
-                3 | (23 << 16) | (1 << 24) | (3 << 27) | (3 << 29)
-            }
+            | Self::MesaNoVsRectlist => 3 | (23 << 16) | (1 << 24) | (3 << 27) | (3 << 29),
             Self::HeaderAndPositionSlots01 => 5 | (23 << 16) | (1 << 24) | (3 << 27) | (3 << 29),
         }
     }
@@ -1523,6 +2110,11 @@ fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
             | "real-vs-ndc-walk16-raster-wm-oa-probe"
             | "real-vs-ndc-32x32-walk16-raster-wm-oa-probe"
             | "real-vs-ndc-mesa-active-block-raster-wm-oa-probe"
+            | "real-vs-ndc-mesa-active-block-swiz-raster-wm-oa-probe"
+            | "real-vs-ndc-mesa-active-block-swiz-vs-grf2-raster-wm-oa-probe"
+            | "real-vs-ndc-mesa-active-block-swiz-vs-grf2-urbdf8-raster-wm-oa-probe"
+            | "real-vs-ndc-mesa-active-block-swiz-vs-grf2-urbdf8-vb0204400c-raster-wm-oa-probe"
+            | "real-vs-ndc-mesa-active-block-swiz-vs-grf2-urbdf8-vb0204400c-prim0-raster-wm-oa-probe"
             | "real-vs-ndc-clip-preconditions-raster-wm-oa-probe"
             | "real-vs-screen-clip-preconditions-raster-wm-oa-probe"
             | "real-vs-screen-raster-clip-preconditions-raster-wm-oa-probe"
@@ -1570,6 +2162,26 @@ fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
             | "late-vf-screen-point-center-slot0-xyzw-raster-wm-oa-probe"
             | "late-vf-screen-pointlist-slot0-xyzw-preclip-raster-wm-oa-probe"
             | "late-vf-screen-pointlist-slot0-xyzw-open-bounds-raster-wm-oa-probe"
+            | "late-vf-screen-pointlist-slot0-xyzw-clip-normal-open-bounds-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-open-bounds-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-bary8-swiz-raster-wm-oa-probe"
+            | "late-vf-ndc-linelist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe"
+            | "late-vf-ndc-rectlist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe"
+            | "late-vf-ndc-trilist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-sf-sane-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-sf-sane-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-header-pos1-mesa-active-block-swiz-sf-sane-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-header-pos1-mesa-raster-sf-sane-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-header-pos1-mesa-raster-mesa-sf-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-header-pos1-mesa-raster-mesa-sf-mesa-sbe-bary8-raster-wm-oa-probe"
+            | "late-vf-ndc-pointlist-slot0-xyzw-open-bounds-raster-wm-oa-probe"
             | "late-vf-screen-inset-open-bounds-header-perpoly-sbe1-noswiz-raster-wm-oa-probe"
             | "real-vs-screen-inset-raster-clip-preconditions-late-raster-wm-oa-probe"
             | "real-vs-ndc-perpoly-raster-wm-oa-probe"
@@ -1587,6 +2199,11 @@ fn is_raster_wm_oa_submit_name(submit_name: &str) -> bool {
             | "real-vs-ndc-walk16-raster-wm-oa-probe"
             | "real-vs-ndc-32x32-walk16-raster-wm-oa-probe"
             | "real-vs-ndc-mesa-active-block-raster-wm-oa-probe"
+            | "real-vs-ndc-mesa-active-block-swiz-raster-wm-oa-probe"
+            | "real-vs-ndc-mesa-active-block-swiz-vs-grf2-raster-wm-oa-probe"
+            | "real-vs-ndc-mesa-active-block-swiz-vs-grf2-urbdf8-raster-wm-oa-probe"
+            | "real-vs-ndc-mesa-active-block-swiz-vs-grf2-urbdf8-vb0204400c-raster-wm-oa-probe"
+            | "real-vs-ndc-mesa-active-block-swiz-vs-grf2-urbdf8-vb0204400c-prim0-raster-wm-oa-probe"
             | "real-vs-ndc-clip-preconditions-raster-wm-oa-probe"
             | "real-vs-screen-clip-preconditions-raster-wm-oa-probe"
             | "real-vs-screen-raster-clip-preconditions-raster-wm-oa-probe"
@@ -1634,6 +2251,26 @@ fn is_raster_wm_oa_submit_name(submit_name: &str) -> bool {
             | "late-vf-screen-point-center-slot0-xyzw-raster-wm-oa-probe"
             | "late-vf-screen-pointlist-slot0-xyzw-preclip-raster-wm-oa-probe"
             | "late-vf-screen-pointlist-slot0-xyzw-open-bounds-raster-wm-oa-probe"
+            | "late-vf-screen-pointlist-slot0-xyzw-clip-normal-open-bounds-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-open-bounds-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-bary8-swiz-raster-wm-oa-probe"
+            | "late-vf-ndc-linelist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe"
+            | "late-vf-ndc-rectlist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe"
+            | "late-vf-ndc-trilist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-sf-sane-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-sf-sane-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-header-pos1-mesa-active-block-swiz-sf-sane-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-header-pos1-mesa-raster-sf-sane-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-header-pos1-mesa-raster-mesa-sf-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-header-pos1-mesa-raster-mesa-sf-mesa-sbe-bary8-raster-wm-oa-probe"
+            | "late-vf-ndc-pointlist-slot0-xyzw-open-bounds-raster-wm-oa-probe"
             | "late-vf-screen-inset-open-bounds-header-perpoly-sbe1-noswiz-raster-wm-oa-probe"
             | "real-vs-screen-inset-raster-clip-preconditions-late-raster-wm-oa-probe"
             | "real-vs-ndc-perpoly-raster-wm-oa-probe"
@@ -1678,6 +2315,11 @@ fn is_surface_draw_submit_name(submit_name: &str) -> bool {
             | "real-vs-ndc-walk16-raster-wm-oa-probe"
             | "real-vs-ndc-32x32-walk16-raster-wm-oa-probe"
             | "real-vs-ndc-mesa-active-block-raster-wm-oa-probe"
+            | "real-vs-ndc-mesa-active-block-swiz-raster-wm-oa-probe"
+            | "real-vs-ndc-mesa-active-block-swiz-vs-grf2-raster-wm-oa-probe"
+            | "real-vs-ndc-mesa-active-block-swiz-vs-grf2-urbdf8-raster-wm-oa-probe"
+            | "real-vs-ndc-mesa-active-block-swiz-vs-grf2-urbdf8-vb0204400c-raster-wm-oa-probe"
+            | "real-vs-ndc-mesa-active-block-swiz-vs-grf2-urbdf8-vb0204400c-prim0-raster-wm-oa-probe"
             | "real-vs-ndc-clip-preconditions-raster-wm-oa-probe"
             | "real-vs-screen-clip-preconditions-raster-wm-oa-probe"
             | "real-vs-screen-raster-clip-preconditions-raster-wm-oa-probe"
@@ -1723,6 +2365,26 @@ fn is_surface_draw_submit_name(submit_name: &str) -> bool {
             | "late-vf-screen-point-center-slot0-xyzw-raster-wm-oa-probe"
             | "late-vf-screen-pointlist-slot0-xyzw-preclip-raster-wm-oa-probe"
             | "late-vf-screen-pointlist-slot0-xyzw-open-bounds-raster-wm-oa-probe"
+            | "late-vf-screen-pointlist-slot0-xyzw-clip-normal-open-bounds-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-open-bounds-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-bary8-swiz-raster-wm-oa-probe"
+            | "late-vf-ndc-linelist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe"
+            | "late-vf-ndc-rectlist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe"
+            | "late-vf-ndc-trilist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-sf-sane-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-sf-sane-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-header-pos1-mesa-active-block-swiz-sf-sane-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-header-pos1-mesa-raster-sf-sane-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-header-pos1-mesa-raster-mesa-sf-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-header-pos1-mesa-raster-mesa-sf-mesa-sbe-bary8-raster-wm-oa-probe"
+            | "late-vf-ndc-pointlist-slot0-xyzw-open-bounds-raster-wm-oa-probe"
             | "late-vf-screen-inset-open-bounds-header-perpoly-sbe1-noswiz-raster-wm-oa-probe"
             | "real-vs-screen-inset-raster-clip-preconditions-late-raster-wm-oa-probe"
             | "real-vs-ndc-perpoly-raster-wm-oa-probe"
@@ -1743,6 +2405,11 @@ fn is_fragment_candidate_submit_name(submit_name: &str) -> bool {
             | "real-vs-ndc-walk16-raster-wm-oa-probe"
             | "real-vs-ndc-32x32-walk16-raster-wm-oa-probe"
             | "real-vs-ndc-mesa-active-block-raster-wm-oa-probe"
+            | "real-vs-ndc-mesa-active-block-swiz-raster-wm-oa-probe"
+            | "real-vs-ndc-mesa-active-block-swiz-vs-grf2-raster-wm-oa-probe"
+            | "real-vs-ndc-mesa-active-block-swiz-vs-grf2-urbdf8-raster-wm-oa-probe"
+            | "real-vs-ndc-mesa-active-block-swiz-vs-grf2-urbdf8-vb0204400c-raster-wm-oa-probe"
+            | "real-vs-ndc-mesa-active-block-swiz-vs-grf2-urbdf8-vb0204400c-prim0-raster-wm-oa-probe"
             | "real-vs-ndc-clip-preconditions-raster-wm-oa-probe"
             | "real-vs-screen-clip-preconditions-raster-wm-oa-probe"
             | "real-vs-screen-raster-clip-preconditions-raster-wm-oa-probe"
@@ -1788,6 +2455,26 @@ fn is_fragment_candidate_submit_name(submit_name: &str) -> bool {
             | "late-vf-screen-point-center-slot0-xyzw-raster-wm-oa-probe"
             | "late-vf-screen-pointlist-slot0-xyzw-preclip-raster-wm-oa-probe"
             | "late-vf-screen-pointlist-slot0-xyzw-open-bounds-raster-wm-oa-probe"
+            | "late-vf-screen-pointlist-slot0-xyzw-clip-normal-open-bounds-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-open-bounds-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-linelist-slot0-xyzw-mesa-backend-open-bounds-sample1-onpixel-mesa-sf-point-sbe-read0-bary8-swiz-raster-wm-oa-probe"
+            | "late-vf-ndc-linelist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe"
+            | "late-vf-ndc-rectlist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe"
+            | "late-vf-ndc-trilist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-sf-sane-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-slot0-xyzw-mesa-active-block-swiz-sf-sane-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-header-pos1-mesa-active-block-swiz-sf-sane-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-header-pos1-mesa-raster-sf-sane-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-header-pos1-mesa-raster-mesa-sf-bary8-raster-wm-oa-probe"
+            | "late-vf-screen-trilist-header-pos1-mesa-raster-mesa-sf-mesa-sbe-bary8-raster-wm-oa-probe"
+            | "late-vf-ndc-pointlist-slot0-xyzw-open-bounds-raster-wm-oa-probe"
             | "late-vf-screen-inset-open-bounds-header-perpoly-sbe1-noswiz-raster-wm-oa-probe"
             | "real-vs-screen-inset-raster-clip-preconditions-late-raster-wm-oa-probe"
             | "real-vs-ndc-perpoly-raster-wm-oa-probe"

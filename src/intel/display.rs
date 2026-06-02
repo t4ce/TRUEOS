@@ -89,9 +89,6 @@ const PRIMARY_BOOT_LOGO_JPEG: &[u8] = include_bytes!("../../logo.jpg");
 const PRIMARY_BOOT_LOGO_ENABLED: bool = true;
 const PRIMARY_BOOT_LOGO_PRESENT_HOLD_MS: u64 = 3000;
 const JPG_CENTER_CROP: bool = true;
-const CPU_SCANOUT_PROOF_ENABLED: bool = true;
-const CPU_SCANOUT_PROOF_COLOR: u32 = 0x00FF_00FF;
-const CPU_SCANOUT_PROOF_SIZE: u32 = 8;
 const OVERLAY_PLANE_SLOT: usize = 1;
 const OVERLAY_MARGIN_X: u32 = 0;
 const OVERLAY_MARGIN_Y: u32 = 0;
@@ -104,6 +101,8 @@ static OVERLAY_SURFACE: Mutex<Option<OverlaySurface>> = Mutex::new(None);
 static HW_LOGO_PENDING_IDS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 static HW_LOGO_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 static HW_LOGO_NEXT_STAGE: AtomicU32 = AtomicU32::new(0);
+static HW_LOGO_SEQUENCE_DONE: AtomicBool = AtomicBool::new(false);
+static HW_LOGO_SEQUENCE_DONE_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct PrimarySurfaceSampleSet {
@@ -341,7 +340,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         return;
     };
 
-    fill_surface_color(virt, pitch_bytes as usize, width, height, PRIMARY_BASELINE_COLOR);
+    fill_surface_color(virt, pitch_bytes as usize, width, height, 0);
     crate::intel::dma_flush(virt, byte_len);
 
     if !crate::intel::map_display_scanout_ggtt(
@@ -405,9 +404,8 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     } else {
         false
     };
-
-    if CPU_SCANOUT_PROOF_ENABLED {
-        log_cpu_scanout_proof(dev, primary_surface);
+    if !logo_ok {
+        mark_hw_logo_sequence_done("not-started");
     }
 
     crate::log!(
@@ -431,6 +429,23 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
 
 fn probe_hw_logo_decode() -> bool {
     submit_next_hw_logo_stage()
+}
+
+pub(crate) async fn wait_hw_logo_sequence_done() {
+    if !PRIMARY_BOOT_LOGO_ENABLED {
+        return;
+    }
+    while !HW_LOGO_SEQUENCE_DONE.load(Ordering::Acquire) {
+        HW_LOGO_SEQUENCE_DONE_WAIT.wait_for_event().await;
+    }
+}
+
+fn mark_hw_logo_sequence_done(reason: &'static str) {
+    if HW_LOGO_SEQUENCE_DONE.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    crate::log!("intel/display: hw-logo sequence done reason={}\n", reason);
+    HW_LOGO_SEQUENCE_DONE_WAIT.notify_all();
 }
 
 fn submit_next_hw_logo_stage() -> bool {
@@ -575,74 +590,10 @@ pub(crate) async fn hw_logo_present_task() {
         if presented {
             Timer::after(EmbassyDuration::from_millis(PRIMARY_BOOT_LOGO_PRESENT_HOLD_MS)).await;
         }
-        submit_next_hw_logo_stage();
-    }
-}
-
-fn log_cpu_scanout_proof(dev: crate::intel::Dev, surface: PrimarySurface) {
-    if surface.width == 0
-        || surface.height == 0
-        || surface.pitch_bytes < PRIMARY_BYTES_PER_PIXEL
-        || surface.virt.is_null()
-    {
-        crate::log!("intel/display: cpu-scanout-proof accepted=0 reason=bad-surface\n");
-        return;
-    }
-
-    let marker_w = CPU_SCANOUT_PROOF_SIZE.min(surface.width);
-    let marker_h = CPU_SCANOUT_PROOF_SIZE.min(surface.height);
-    let x = surface.width.saturating_sub(marker_w).saturating_sub(16);
-    let y = surface.height.saturating_sub(marker_h).saturating_sub(16);
-    let pitch_bytes = surface.pitch_bytes as usize;
-    let pixel_offset = (y as usize)
-        .saturating_mul(pitch_bytes)
-        .saturating_add((x as usize).saturating_mul(PRIMARY_BYTES_PER_PIXEL as usize));
-    let sample_ptr = unsafe { surface.virt.add(pixel_offset) };
-    let before = unsafe { core::ptr::read_volatile(sample_ptr as *const u32) };
-
-    for row in 0..marker_h as usize {
-        let row_ptr = unsafe {
-            surface
-                .virt
-                .add((y as usize + row).saturating_mul(pitch_bytes))
-                .add((x as usize).saturating_mul(PRIMARY_BYTES_PER_PIXEL as usize))
-                as *mut u32
-        };
-        for col in 0..marker_w as usize {
-            unsafe {
-                core::ptr::write_volatile(row_ptr.add(col), CPU_SCANOUT_PROOF_COLOR);
-            }
+        if !submit_next_hw_logo_stage() {
+            mark_hw_logo_sequence_done("stages-drained");
         }
     }
-    let byte_len = pitch_bytes.saturating_mul(surface.height as usize);
-    crate::intel::dma_flush(surface.virt, byte_len);
-
-    let after = unsafe { core::ptr::read_volatile(sample_ptr as *const u32) };
-    let surf = crate::intel::mmio_read(dev, surface.pipe.plane_surf_off);
-    let surf_live = crate::intel::mmio_read(dev, surface.pipe.plane_surf_live_off);
-    let stride = crate::intel::mmio_read(dev, surface.pipe.plane_stride_off);
-    let want_surf = u32::try_from(crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE).unwrap_or(0);
-    let accepted =
-        after == CPU_SCANOUT_PROOF_COLOR && (surf == want_surf || surf_live == want_surf);
-
-    crate::log!(
-        "intel/display: cpu-scanout-proof accepted={} pipe={} gpu=0x{:X} phys=0x{:X} xy={}x{} size={}x{} pitch=0x{:X} stride_reg=0x{:08X} before=0x{:08X} after=0x{:08X} color=0x{:08X} flush=1 surf=0x{:08X} surf_live=0x{:08X} does_not_prove=render_backend_write\n",
-        accepted as u8,
-        surface.pipe.name,
-        crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE,
-        surface.phys,
-        x,
-        y,
-        marker_w,
-        marker_h,
-        surface.pitch_bytes,
-        stride,
-        before,
-        after,
-        CPU_SCANOUT_PROOF_COLOR,
-        surf,
-        surf_live
-    );
 }
 
 fn log_transcoder_a_state(dev: crate::intel::Dev, label: &str) {
@@ -1097,14 +1048,6 @@ pub(crate) fn present_imc3_surface_center(
         return false;
     }
 
-    fill_surface_color(
-        surface.virt,
-        dst_pitch,
-        surface.width,
-        surface.height,
-        PRIMARY_BASELINE_COLOR,
-    );
-
     let (copy_w, copy_h) = aspect_fit_size(visible_width, visible_height, dst_width, dst_height);
     if copy_w == 0 || copy_h == 0 {
         return false;
@@ -1222,14 +1165,6 @@ pub(crate) fn present_nv12_surface_center(
     if dst_pitch < dst_width.saturating_mul(4) {
         return false;
     }
-
-    fill_surface_color(
-        surface.virt,
-        dst_pitch,
-        surface.width,
-        surface.height,
-        PRIMARY_BASELINE_COLOR,
-    );
 
     let (copy_w, copy_h) = aspect_fit_size(visible_width, visible_height, dst_width, dst_height);
     if copy_w == 0 || copy_h == 0 {
