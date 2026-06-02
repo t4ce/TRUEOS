@@ -159,7 +159,7 @@ const PRIMARY_USE_MI_SCANOUT_PROOF: bool = false;
 const PRIMARY_USE_3D_NO_DRAW_PROBE: bool = false;
 const PRIMARY_USE_DRAW_PATH_BOOT_ONCE: bool = false;
 const PRIMARY_BOOT_3D_PROBES_ENABLED: bool = false;
-const PRIMARY_SINGLE_RASTER_PROBE_ONLY: bool = false;
+const PRIMARY_SINGLE_RASTER_PROBE_ONLY: bool = true;
 const PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED: bool = false;
 const PRIMARY_SINGLE_RASTER_PROBE_STOP_AFTER_INDEX: usize = 19;
 const PRIMARY_POSTDRAW_RETIRE_SPECTRUM_ENABLED: bool = false;
@@ -169,7 +169,7 @@ const GPGPU_SUBMIT_WHEN_PRIMARY_RENDER_DISABLED: bool = true;
 const MI_STRIPE_COUNT: usize = 12;
 const MI_STRIPE_WIDTH_PX: usize = 4;
 const MI_STRIPE_X_STEP_PX: u32 = 1;
-const PRIMARY_PERIODIC_LOG_EVERY: u32 = 30;
+const PRIMARY_PERIODIC_LOG_EVERY: u32 = 600;
 const MI_STORE_DATA_IMM_GGTT_DW1: u32 = 0x1040_0002;
 const TS_GPGPU_THREADS_DISPATCHED_LO: usize = 0x2290;
 const TS_GPGPU_THREADS_DISPATCHED_HI: usize = 0x2294;
@@ -180,6 +180,7 @@ const SURFACE_FORMAT_B8G8R8A8_UNORM: u32 = 10;
 const SURFACE_FORMAT_R32G32B32A32_FLOAT: u32 = 0;
 const SURFACE_FORMAT_R32G32B32A32_UINT: u32 = 2;
 const SURFACE_FORMAT_R32G32B32_FLOAT: u32 = 64;
+const SURFACE_FORMAT_R16G16_SSCALED: u32 = 0x0F6;
 const DEPTH_SURFACE_FORMAT_D32_FLOAT: u32 = 1;
 const SURFACE_HALIGN_4: u32 = 1;
 const SURFACE_VALIGN_4: u32 = 1;
@@ -256,7 +257,10 @@ const CMD_3DSTATE_SAMPLER_STATE_POINTERS_VS: u32 = (43 << 16) | (3 << 27) | (3 <
 const CMD_3DSTATE_SAMPLER_STATE_POINTERS_PS: u32 = (47 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_VF_STATISTICS: u32 = (11 << 16) | (1 << 27) | (3 << 29);
 const CMD_3DSTATE_VF: u32 = (12 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_VF_MESA_ACTIVE: u32 = CMD_3DSTATE_VF | (1 << 9);
+const MESA_ACTIVE_VF_CUT_INDEX: u32 = 0x0000_FFFF;
 const CMD_3DSTATE_VFG: u32 = 2 | (87 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_VIEWPORT_STATE_POINTERS: u32 = (13 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_MULTISAMPLE: u32 = (13 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_DRAWING_RECTANGLE: u32 = 2 | (1 << 24) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_SAMPLE_MASK: u32 = (24 << 16) | (3 << 27) | (3 << 29);
@@ -278,7 +282,9 @@ const CMD_3DSTATE_VF_SGVS: u32 = (74 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_VF_TOPOLOGY: u32 = (75 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_VF_SGVS_2: u32 = 1 | (86 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_VERTEX_BUFFERS_1: u32 = 3 | (8 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_VERTEX_BUFFERS_2: u32 = 7 | (8 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_VERTEX_ELEMENTS_1: u32 = 1 | (9 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_VERTEX_ELEMENTS_3: u32 = 5 | (9 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DPRIMITIVE: u32 = 5 | (3 << 24) | (3 << 27) | (3 << 29);
 const CMD_3DPRIMITIVE_EXTENDED: u32 = 8 | (1 << 11) | (3 << 24) | (3 << 27) | (3 << 29);
 const PIPE_CONTROL_DC_FLUSH_ENABLE: u32 = 1 << 5;
@@ -290,11 +296,25 @@ const PIPE_CONTROL_FLUSH_BITS: u32 = PIPE_CONTROL_DC_FLUSH_ENABLE
     | PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH
     | PIPE_CONTROL_CS_STALL
     | PIPE_CONTROL_FLUSH_HDC;
-const PIPE_CONTROL_INVALIDATE_BITS: u32 =
-    (1 << 2) | (1 << 3) | (1 << 4) | (1 << 10) | (1 << 11) | (1 << 18) | (1 << 20);
+const PIPE_CONTROL_STATE_CACHE_INVALIDATE: u32 = 1 << 2;
+const PIPE_CONTROL_CONSTANT_CACHE_INVALIDATE: u32 = 1 << 3;
+const PIPE_CONTROL_VF_CACHE_INVALIDATE: u32 = 1 << 4;
+const PIPE_CONTROL_TEXTURE_CACHE_INVALIDATE: u32 = 1 << 10;
+const PIPE_CONTROL_INSTRUCTION_CACHE_INVALIDATE: u32 = 1 << 11;
+const PIPE_CONTROL_TLB_INVALIDATE: u32 = 1 << 18;
+const PIPE_CONTROL_COMMAND_CACHE_INVALIDATE: u32 = 1 << 29;
+const PIPE_CONTROL_INVALIDATE_BITS: u32 = PIPE_CONTROL_STATE_CACHE_INVALIDATE
+    | PIPE_CONTROL_CONSTANT_CACHE_INVALIDATE
+    | PIPE_CONTROL_VF_CACHE_INVALIDATE
+    | PIPE_CONTROL_TEXTURE_CACHE_INVALIDATE
+    | PIPE_CONTROL_INSTRUCTION_CACHE_INVALIDATE
+    | PIPE_CONTROL_TLB_INVALIDATE
+    | PIPE_CONTROL_CS_STALL;
 const PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE: u32 = 1 << 14;
 const PIPE_CONTROL_DEST_GGTT: u32 = 1 << 24;
 const PIPE_CONTROL_CS_STALL: u32 = 1 << 20;
+const PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER: u32 = 1 << 9;
+const PIPE_CONTROL_UNTYPED_DATAPORT_FLUSH_HEADER: u32 = 1 << 11;
 const PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS: u32 =
     PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE | PIPE_CONTROL_DEST_GGTT | PIPE_CONTROL_CS_STALL;
 const PIPE_CONTROL_POST_DRAW_LIGHT_POSTSYNC_NO_STALL_BITS: u32 =
@@ -359,49 +379,81 @@ const TRIANGLE_DEFAULT_FRONT_END_CONTRACT: TriangleFrontEndContract = TriangleFr
     label: "mesa-like",
     vs_urb_output_length_override: TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE,
     vs_urb_entries_override: None,
+    vs_urb_start_override: None,
     vs_dispatch_grf_start_override: None,
+    vs_max_threads_field_override: None,
+    vs_dw8_override: None,
+    vs_simd8_single_instance_dispatch: false,
+    vs_urb_read_offset: 0,
+    vs_urb_read_length: 1,
     vertex_buffer_dw1_override: None,
+    vertex_element_format_override: None,
     primitive_extended_dw1_override: None,
     sbe_read_offset: 1,
     sbe_read_length: 1,
     force_sbe_read_offset: true,
     force_sbe_read_length: true,
+    sbe_active_component_override: None,
 };
 const TRIANGLE_SLOT0_FRONT_END_CONTRACT: TriangleFrontEndContract = TriangleFrontEndContract {
     label: "slot0-read",
     vs_urb_output_length_override: TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE,
     vs_urb_entries_override: None,
+    vs_urb_start_override: None,
     vs_dispatch_grf_start_override: None,
+    vs_max_threads_field_override: None,
+    vs_dw8_override: None,
+    vs_simd8_single_instance_dispatch: false,
+    vs_urb_read_offset: 0,
+    vs_urb_read_length: 1,
     vertex_buffer_dw1_override: None,
+    vertex_element_format_override: None,
     primitive_extended_dw1_override: None,
     sbe_read_offset: 0,
     sbe_read_length: 1,
     force_sbe_read_offset: true,
     force_sbe_read_length: true,
+    sbe_active_component_override: None,
 };
 const TRIANGLE_URB2_FRONT_END_CONTRACT: TriangleFrontEndContract = TriangleFrontEndContract {
     label: "urb2",
     vs_urb_output_length_override: Some(2),
     vs_urb_entries_override: None,
+    vs_urb_start_override: None,
     vs_dispatch_grf_start_override: None,
+    vs_max_threads_field_override: None,
+    vs_dw8_override: None,
+    vs_simd8_single_instance_dispatch: false,
+    vs_urb_read_offset: 0,
+    vs_urb_read_length: 1,
     vertex_buffer_dw1_override: None,
+    vertex_element_format_override: None,
     primitive_extended_dw1_override: None,
     sbe_read_offset: 1,
     sbe_read_length: 1,
     force_sbe_read_offset: true,
     force_sbe_read_length: true,
+    sbe_active_component_override: None,
 };
 const TRIANGLE_VS_GRF2_FRONT_END_CONTRACT: TriangleFrontEndContract = TriangleFrontEndContract {
     label: "mesa-vs-grf2-urbdf8-vb0204400c-prim0",
     vs_urb_output_length_override: TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE,
     vs_urb_entries_override: Some(0x0DF8),
+    vs_urb_start_override: None,
     vs_dispatch_grf_start_override: Some(2),
+    vs_max_threads_field_override: None,
+    vs_dw8_override: None,
+    vs_simd8_single_instance_dispatch: false,
+    vs_urb_read_offset: 0,
+    vs_urb_read_length: 1,
     vertex_buffer_dw1_override: Some(0x0204_400C),
+    vertex_element_format_override: None,
     primitive_extended_dw1_override: Some(0),
     sbe_read_offset: 1,
     sbe_read_length: 1,
     force_sbe_read_offset: true,
     force_sbe_read_length: true,
+    sbe_active_component_override: None,
 };
 const VS_DRAW_FRONTIER_CONTRACTS: [TriangleFrontEndContract; 4] = [
     TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
@@ -411,13 +463,21 @@ const VS_DRAW_FRONTIER_CONTRACTS: [TriangleFrontEndContract; 4] = [
         label: "urb2-slot0-read",
         vs_urb_output_length_override: Some(2),
         vs_urb_entries_override: None,
+        vs_urb_start_override: None,
         vs_dispatch_grf_start_override: None,
+        vs_max_threads_field_override: None,
+        vs_dw8_override: None,
+        vs_simd8_single_instance_dispatch: false,
+        vs_urb_read_offset: 0,
+        vs_urb_read_length: 1,
         vertex_buffer_dw1_override: None,
+        vertex_element_format_override: None,
         primitive_extended_dw1_override: None,
         sbe_read_offset: 0,
         sbe_read_length: 1,
         force_sbe_read_offset: true,
         force_sbe_read_length: true,
+        sbe_active_component_override: None,
     },
 ];
 const GFX125_GEOMETRY_DSS_ENABLE: usize = 0x913C;

@@ -69,7 +69,7 @@ const MEDIA_BOOT_DEMO_ENABLED: bool = false;
 const MEDIA_BOOT_DEMO_DELAY_MS: u64 = 5_000;
 const MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT: u32 = 3;
 const PRIMARY_TRIANGLE_REPAINT_ENABLED: bool = true;
-const PRIMARY_TRIANGLE_REPAINT_PERIOD_MS: u64 = 1_000;
+const PRIMARY_TRIANGLE_REPAINT_PERIOD_MS: u64 = 16;
 static INIT: AtomicBool = AtomicBool::new(false);
 static PRIMARY_TRIANGLE_REPAINT_LOOP_STARTED: AtomicBool = AtomicBool::new(false);
 static CLAIMED_DEVICE: Mutex<Option<Dev>> = Mutex::new(None);
@@ -424,7 +424,9 @@ pub fn init_once() {
         crate::log!("intel/display: plane1 boot demo disabled\n");
     }
     spawn_primary_triangle_after_logo();
-    self::gpgpu::submit_gpgpu_preflight_once();
+    if crate::allcaps::probes::INTEL_GPGPU_PREFLIGHT_BOOT_PROBE {
+        self::gpgpu::submit_gpgpu_preflight_once();
+    }
     crate::log!("intel/media: source warmup disabled trigger=trueosfs-root-mounted\n",);
     if MEDIA_BOOT_DEMO_ENABLED {
         crate::log!("intel/media: scheduled boot demo delay_ms={}\n", MEDIA_BOOT_DEMO_DELAY_MS);
@@ -559,6 +561,13 @@ pub(crate) fn submit_gpgpu_offscreen_store_probe(group_x_dim: u32) -> GpgpuOffsc
 
 pub(crate) fn submit_gpgpu_eot_probe(variant_index: u32) -> GpgpuOffscreenStoreProof {
     self::gpgpu::submit_gpgpu_eot_probe(variant_index)
+}
+
+pub(crate) fn submit_gpgpu_vfe_eot_probe(
+    vfe_profile: u32,
+    variant_index: u32,
+) -> GpgpuOffscreenStoreProof {
+    self::gpgpu::submit_gpgpu_vfe_eot_probe(vfe_profile, variant_index)
 }
 
 pub(crate) fn stage_gpgpu_one_tile_record_probe(

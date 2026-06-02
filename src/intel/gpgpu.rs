@@ -1654,6 +1654,10 @@ const GPGPU_SIP_HANDLER_VARIANT: trueos_eu::gfx12::Gfx12EotVariant =
 const GPGPU_USE_STATIC_DP4A_STORE_THEN_EOT: bool = true;
 const GPGPU_USE_HDC_STORE_THEN_EOT: bool = true;
 const GPGPU_USE_GFX125_COMPUTE_WALKER: bool = false;
+const GPGPU_VFE_PROFILE_LEGACY: u32 = 0;
+const GPGPU_VFE_PROFILE_UOS_DW3: u32 = 1;
+const GPGPU_VFE_PROFILE_UOS_DW5: u32 = 2;
+const GPGPU_VFE_PROFILE_UOS_BOTH: u32 = 3;
 const GPGPU_WALKER_GROUP_X_DIM_LADDER: &[u32] = &[186];
 // T5 live4 proof cap: 4096 groups retires cleanly on the current shell.
 // 6144 groups still writes the right value, but does not retire cleanly; leave
@@ -1835,6 +1839,7 @@ static GPGPU_EU_C_STORE_VALUE: AtomicU32 = AtomicU32::new(0);
 static GPGPU_EU_PROVEN_WALKER_RETIRED: AtomicBool = AtomicBool::new(false);
 static GPGPU_EU_PROVEN_DISPATCH_DELTA: AtomicU32 = AtomicU32::new(0);
 static GPGPU_EU_PROVEN_C_STORE_VALUE: AtomicU32 = AtomicU32::new(0);
+static GPGPU_VFE_PROFILE_OVERRIDE: AtomicU32 = AtomicU32::new(GPGPU_VFE_PROFILE_LEGACY);
 #[allow(dead_code)]
 static MANDELBROT_Q12_PATCH_LOGGED: AtomicBool = AtomicBool::new(false);
 static MANDELBROT_WALKER_SHAPE_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -2305,6 +2310,17 @@ pub(crate) fn submit_gpgpu_eot_probe(variant_index: u32) -> crate::intel::GpgpuO
         batch_bytes: proof.batch_bytes,
     };
     paint_gpgpu_offscreen_album_tile(proof);
+    proof
+}
+
+pub(crate) fn submit_gpgpu_vfe_eot_probe(
+    vfe_profile: u32,
+    variant_index: u32,
+) -> crate::intel::GpgpuOffscreenStoreProof {
+    let vfe_profile = vfe_profile.min(GPGPU_VFE_PROFILE_UOS_BOTH);
+    let previous = GPGPU_VFE_PROFILE_OVERRIDE.swap(vfe_profile, Ordering::AcqRel);
+    let proof = submit_gpgpu_eot_probe(variant_index);
+    GPGPU_VFE_PROFILE_OVERRIDE.store(previous, Ordering::Release);
     proof
 }
 
@@ -3127,6 +3143,9 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
         "thread-eot-retired-proven"
     } else if proof.result_c_changed_by_eu {
         "shared-ram-write-proven"
+    } else if proof.expects_store && gpu_program_started && !proof.retired && !store_landed_anywhere
+    {
+        "eu-thread-started-pre-eot-send-or-store-stalled"
     } else if gpu_program_started && !proof.retired && !store_landed_anywhere {
         "eu-thread-started-no-eot-no-store-hit"
     } else if gpu_program_started && !proof.retired && proof.c_value == 0 {
@@ -3142,8 +3161,10 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
         "add-read-alu-write-kernel"
     } else if eot_retired {
         "add-dataport-store-after-clean-eot"
+    } else if proof.expects_store && gpu_program_started && !proof.retired {
+        "probe-pre-eot-dataport-send-or-enable-sip-exception-capture"
     } else if gpu_program_started && !proof.retired {
-        "fix-ts-eot-or-enable-sip-exception-capture-before-dataport-store"
+        "compare-against-pure-eot-catalog-or-enable-sip-exception-capture"
     } else {
         "fix-walker-thread-start"
     };

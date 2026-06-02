@@ -1,6 +1,6 @@
 pub(crate) fn submit_primary_triangle_once() {
     if PRIMARY_DISABLE_RENDER_BRINGUP {
-        let _ = submit_pdoane_smoke_once("boot-once-render-disabled");
+        let _ = submit_pdoane_smoke_once("boot-render-60hz");
         return;
     }
     if PRIMARY_TRIANGLE_SUBMITTED.swap(true, Ordering::AcqRel) {
@@ -12,7 +12,7 @@ pub(crate) fn submit_primary_triangle_once() {
 
 pub(crate) fn submit_primary_probe_periodic() {
     if PRIMARY_DISABLE_RENDER_BRINGUP {
-        let _ = submit_pdoane_smoke_once("periodic-render-disabled");
+        let _ = submit_pdoane_smoke_once("periodic-render-60hz");
         return;
     }
     let _ = submit_primary_probe_now("periodic-repaint");
@@ -3818,7 +3818,7 @@ fn submit_primary_visible_repaint_probe(
         || probe_seq.is_multiple_of(PRIMARY_PERIODIC_LOG_EVERY)
     {
         intel_render_focus_log!(
-            "intel/render: primary-periodic-repaint seq={} completed={} target=primary rt_gpu=0x{:X} size={}x{} pitch=0x{:X} geometry=screen-space-rect-target preconditions=rectlist+slot0_xyzw+pdd+sf_viewport_off+clip_accept_all fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} status_changed={} submit_frontier={} cadence_ms=1000 log_policy=first_change_signal_or_heartbeat frontier=sf_object_setup_to_wm_scan_conversion intent=quiet_live_wm_raster_probe\n",
+            "intel/render: primary-periodic-repaint seq={} completed={} target=primary rt_gpu=0x{:X} size={}x{} pitch=0x{:X} geometry=screen-space-rect-target preconditions=rectlist+slot0_xyzw+pdd+sf_viewport_off+clip_accept_all fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} status_changed={} submit_frontier={} cadence_ms=16 log_policy=first_change_signal_or_heartbeat frontier=sf_object_setup_to_wm_scan_conversion intent=quiet_live_wm_raster_probe\n",
             probe_seq,
             completed as u8,
             surface_gpu,
@@ -4884,6 +4884,7 @@ fn submit_triangle_vs_streamout_proof(
             pipeline,
             shader_layout,
             front_end_contract,
+            post_draw_sync: PostDrawSyncVariant::NoPostDrawPipeControl,
         },
     ) {
         Ok(bytes) => bytes,

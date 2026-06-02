@@ -44,6 +44,10 @@ pub(crate) struct ShaderKernelMetadata {
     /// Number of binding table entries the stage expects to be valid.
     pub(crate) binding_table_entry_count: u8,
 
+    /// Whether this kernel uses UAV/HDC-style memory access and needs the
+    /// corresponding stage-state bit set.
+    pub(crate) accesses_uav: bool,
+
     /// Total push constant payload consumed by this stage, in bytes.
     pub(crate) push_constant_bytes: u16,
 
@@ -111,6 +115,62 @@ pub(crate) struct TrianglePipeline {
 
 pub(crate) fn triangle_pipeline() -> &'static TrianglePipeline {
     generated::triangle_pipeline()
+}
+
+pub(crate) fn triangle_hdc_vs_store_probe_pipeline() -> &'static TrianglePipeline {
+    generated::triangle_hdc_vs_store_probe_pipeline()
+}
+
+pub(crate) fn triangle_hdc_vs_bti34_store_probe_pipeline() -> &'static TrianglePipeline {
+    generated::triangle_hdc_vs_bti34_store_probe_pipeline()
+}
+
+pub(crate) fn triangle_hdc_vs_store_ts_eot_probe_pipeline() -> &'static TrianglePipeline {
+    generated::triangle_hdc_vs_store_ts_eot_probe_pipeline()
+}
+
+pub(crate) fn triangle_pdoane_gen7_passthrough_probe_pipeline() -> &'static TrianglePipeline {
+    generated::triangle_pdoane_gen7_passthrough_probe_pipeline()
+}
+
+pub(crate) fn triangle_const_urb_vs_probe_pipeline() -> &'static TrianglePipeline {
+    generated::triangle_const_urb_vs_probe_pipeline()
+}
+
+pub(crate) fn triangle_const_urb_ksp0_vs_probe_pipeline() -> &'static TrianglePipeline {
+    generated::triangle_const_urb_ksp0_vs_probe_pipeline()
+}
+
+pub(crate) fn triangle_const_urb_handle_g0_probe_pipeline() -> &'static TrianglePipeline {
+    generated::triangle_const_urb_handle_g0_probe_pipeline()
+}
+
+pub(crate) fn triangle_const_urb_handle_g1_probe_pipeline() -> &'static TrianglePipeline {
+    generated::triangle_const_urb_handle_g1_probe_pipeline()
+}
+
+pub(crate) fn triangle_const_urb_handle_g2_probe_pipeline() -> &'static TrianglePipeline {
+    generated::triangle_const_urb_handle_g2_probe_pipeline()
+}
+
+pub(crate) fn triangle_const_urb_handle_g3_probe_pipeline() -> &'static TrianglePipeline {
+    generated::triangle_const_urb_handle_g3_probe_pipeline()
+}
+
+pub(crate) fn triangle_const_urb_handle_g4_probe_pipeline() -> &'static TrianglePipeline {
+    generated::triangle_const_urb_handle_g4_probe_pipeline()
+}
+
+pub(crate) fn triangle_const_urb_handle_g5_probe_pipeline() -> &'static TrianglePipeline {
+    generated::triangle_const_urb_handle_g5_probe_pipeline()
+}
+
+pub(crate) fn triangle_const_urb_handle_g6_probe_pipeline() -> &'static TrianglePipeline {
+    generated::triangle_const_urb_handle_g6_probe_pipeline()
+}
+
+pub(crate) fn triangle_const_urb_handle_g7_probe_pipeline() -> &'static TrianglePipeline {
+    generated::triangle_const_urb_handle_g7_probe_pipeline()
 }
 
 pub(crate) fn triangle_pipeline_is_placeholder() -> bool {

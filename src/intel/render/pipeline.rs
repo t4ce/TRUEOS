@@ -188,6 +188,7 @@ fn write_triangle_probe_state(
         core::slice::from_raw_parts_mut(warm.draw_state_virt as *mut u32, warm.draw_state_len / 4)
     };
     dwords[binding_table_offset / 4] = surface_state_offset as u32;
+    dwords[(binding_table_offset + 0x20) / 4] = surface_state_offset as u32;
 
     let surface = &mut dwords[surface_state_offset / 4..surface_state_offset / 4 + 16];
     surface.fill(0);
@@ -579,12 +580,26 @@ fn encode_triangle_probe_batch(
     };
     let vs_ksp_offset = shader_layout.vs.code_offset_bytes + shader_layout.vs.ksp_offset_bytes;
     let ps_ksp_offset = shader_layout.ps.code_offset_bytes + shader_layout.ps.ksp_offset_bytes;
-    let sbe_vertex_read_offset = backend_probe_mode
+    let mut sbe_vertex_read_offset = backend_probe_mode
         .sbe_read_offset_override()
         .unwrap_or(front_end_contract.sbe_read_offset) as u32;
-    let sbe_vertex_read_length = backend_probe_mode
+    let mut sbe_vertex_read_length = backend_probe_mode
         .sbe_read_length_override()
         .unwrap_or(front_end_contract.sbe_read_length) as u32;
+    if vf_synthesized_vue {
+        match streamout_experiment {
+            StreamoutProofExperiment::PositionSlot0 | StreamoutProofExperiment::PositionSlot0Xyzw => {
+                sbe_vertex_read_offset = 0;
+                sbe_vertex_read_length = 1;
+            }
+            StreamoutProofExperiment::PositionSlot1
+            | StreamoutProofExperiment::HeaderAndPositionSlots01
+            | StreamoutProofExperiment::MesaNoVsRectlist => {
+                sbe_vertex_read_offset = 1;
+                sbe_vertex_read_length = 1;
+            }
+        }
+    }
     let sbe_attribute_swizzle_enable = backend_probe_mode.enable_sbe_attribute_swizzle();
     // SBE_SWIZ is a separate packet on Xe-LP. Emit an explicit zeroed packet
     // even when attribute swizzle is disabled so the SF/WM handoff never
@@ -598,8 +613,10 @@ fn encode_triangle_probe_batch(
         | (sbe_vertex_read_length << 11);
     let mut sbe_dw2 = 0;
     let mut sbe_dw3 = pipeline.ps.meta.flat_inputs;
-    let mut sbe_dw4 = SBE_ACTIVE_COMPONENT_XYZW_MASK_DWORD;
-    let mut sbe_dw5 = SBE_ACTIVE_COMPONENT_XYZW_MASK_DWORD;
+    let mut sbe_dw4 = front_end_contract
+        .sbe_active_component_override
+        .unwrap_or(SBE_ACTIVE_COMPONENT_XYZW_MASK_DWORD);
+    let mut sbe_dw5 = sbe_dw4;
     let (ps_dispatch_8, ps_dispatch_16, ps_dispatch_32) = match backend_probe_mode {
         BackendProbeMode::PsDispatchSlot0 => (1, 0, 0),
         BackendProbeMode::PsDispatchSlot1 => (0, 1, 0),
@@ -612,7 +629,16 @@ fn encode_triangle_probe_batch(
     // by clearing ClipEnable while using screen-space coordinates.
     let mesa_simple_order = backend_probe_mode.mesa_simple_order();
     let mesa_order_emit_wm_hz_op = backend_probe_mode.mesa_order_with_early_backend();
+    let mesa_simple_emit_wm_hz_op_after_raster =
+        backend_probe_mode.mesa_simple_emit_wm_hz_op_after_raster();
     let early_backend_before_clip_sf_raster = !mesa_simple_order || mesa_order_emit_wm_hz_op;
+    let oracle_active_reference_order = matches!(
+        backend_probe_mode,
+        BackendProbeMode::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl
+            | BackendProbeMode::RasterWmInputOaNdcTriListMesaActiveBlockSwiz
+    );
+    let skip_tbimr_tile_pass_info_after_raster = oracle_active_reference_order
+        || backend_probe_mode.skip_tbimr_tile_pass_info_after_raster();
     let clip_enable = !backend_probe_mode.disable_clip_enable()
         && !backend_probe_mode.mesa_simple_clip_defaults();
     let (mut clip_dw1, mut clip_dw2, mut clip_dw3) =
@@ -732,10 +758,10 @@ fn encode_triangle_probe_batch(
     let mut raster_dw2 = 0;
     let mut raster_dw3 = 0;
     let mut raster_dw4 = 0;
-    // Mesa's simple-shader path emits an all-zero PRIMITIVE_REPLICATION
-    // packet to disable replication. A mask with count zero looks equivalent
-    // at first glance, but it still leaves hidden VP/RTAI replication state in
-    // the SF-to-WM object contract, exactly where this frontier is stuck.
+    // Keep primitive replication explicit on the visible Xe-LP triangle path.
+    // The userland oracle's simple triangle emitted mask bit 0 set
+    // (0x00010000); a zero-count packet leaves the SF-to-WM object contract
+    // ambiguous exactly where this frontier is stuck.
     let mut primitive_replication_dw1 = 0;
     // Mesa's simple-shader path emits a nearly all-default WM packet here.
     // Keep this dedicated triangle path equally boring rather than forcing
@@ -759,6 +785,7 @@ fn encode_triangle_probe_batch(
                     | BackendProbeMode::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
                     | BackendProbeMode::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
                     | BackendProbeMode::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+                    | BackendProbeMode::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
             ));
     let mut wm_dw1 = (1 << 31)
         | (wm_reserved_bit29 << 29)
@@ -779,20 +806,29 @@ fn encode_triangle_probe_batch(
     let mut wm_depth_stencil_dw3 = 0;
     let wm_chroma_key_dw1 = 0;
     let mut ps_blend_dw1 = 1 << 30;
-    let streamout_dw1 = (1 << 25) | (1 << 30) | (1 << 31);
+    let streamout_dw1 = (1 << 8) | (1 << 25) | (1 << 31);
     let streamout_dw2 = streamout_experiment.vertex_read_length();
     let streamout_dw3 = streamout_experiment.vertex_bytes() as u32;
     let streamout_dw4 = 0;
     let streamout_surface_size_dwords = (warm.streamout_len / 4).saturating_sub(1) as u32;
-    let so_buffer_index_dw1 = (RENDER_MOCS << 22) | (1 << 20) | (1 << 21) | (1 << 31);
+    let so_buffer_index_dw1 = (RENDER_MOCS << 22) | (1 << 21) | (1 << 31);
     let so_buffer_stream_offset_dw = 0u32;
     let mut sample_mask_dw1 = 1u32;
     if backend_probe_mode.mesa_active_fixed_function_state() {
         clip_dw1 = 0x0004_0400;
         clip_dw2 = 0xD400_0001;
+        if backend_probe_mode.mesa_success_disable_primitive_replication()
+            && !matches!(
+                backend_probe_mode,
+                BackendProbeMode::RasterWmInputOaNdcTriListMesaActiveBlockSwiz
+                    | BackendProbeMode::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl
+            )
+        {
+            clip_dw2 |= CLIP_PERSPECTIVE_DIVIDE_DISABLE;
+        }
         clip_dw3 = 0x0003_FFE0;
         sf_dw1 = 0x0008_0402;
-        sf_dw2 = 0;
+        sf_dw2 = sf_deref_block_size << 29;
         sf_dw3 = 0x0200_4808;
         raster_dw1 = 0x04A1_1003;
         raster_dw2 = 0;
@@ -808,12 +844,16 @@ fn encode_triangle_probe_batch(
         wm_depth_stencil_dw1 = 0x0000_0010;
         wm_depth_stencil_dw2 = 0;
         wm_depth_stencil_dw3 = 0;
-        primitive_replication_dw1 =
-            if backend_probe_mode.mesa_success_disable_primitive_replication() {
-                0
-            } else {
-                0x0001_0000
-            };
+        primitive_replication_dw1 = if matches!(
+            backend_probe_mode,
+            BackendProbeMode::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl
+        ) {
+            0x0001_0000
+        } else if backend_probe_mode.mesa_success_disable_primitive_replication() {
+            0
+        } else {
+            0x0001_0000
+        };
         wm_dw1 = 0x8000_0040 | wm_barycentric_mode;
         ps_blend_dw1 = 0x518C_6200;
     }
@@ -825,7 +865,7 @@ fn encode_triangle_probe_batch(
     }
     if backend_probe_mode.mesa_active_sf_state() {
         sf_dw1 = 0x0008_0402;
-        sf_dw2 = 0;
+        sf_dw2 = sf_deref_block_size << 29;
         sf_dw3 = 0x0200_4808;
     }
     if backend_probe_mode.mesa_active_sbe_state() {
@@ -835,6 +875,67 @@ fn encode_triangle_probe_batch(
         sbe_dw4 = 0xFFFF_FFFF;
         sbe_dw5 = 0xFFFF_FFFF;
     }
+    let pdoane_minimal_sf_probe = backend_probe_mode.pdoane_minimal_sf_probe();
+    if pdoane_minimal_sf_probe {
+        clip_dw1 = 0;
+        clip_dw2 = CLIP_PERSPECTIVE_DIVIDE_DISABLE | CLIP_NON_PERSPECTIVE_BARYCENTRIC_ENABLE;
+        clip_dw3 = 1 << 5;
+        sf_dw1 = 1 << 10;
+        sf_dw2 = 0;
+        sf_dw3 = 0;
+        sample_mask_dw1 = 0x0000_FFFF;
+        intel_render_focus_log!(
+            "intel/render: probe-pdoane-minimal-sf backend={} enabled=1 source=igt-rendercopy-gen7-inspired clip=[0x{:08X},0x{:08X},0x{:08X}] sf=[0x{:08X},0x{:08X},0x{:08X}] sample_mask=0x{:08X} note=active-no-vs-rectlist-clears-sf-point-line-viewport-and-clip-thread-gates\n",
+            backend_probe_mode.label(),
+            clip_dw1,
+            clip_dw2,
+            clip_dw3,
+            sf_dw1,
+            sf_dw2,
+            sf_dw3,
+            sample_mask_dw1,
+        );
+    }
+    if backend_probe_mode.disable_sf_viewport_transform() {
+        sf_dw1 &= !(1 << 1);
+    }
+    if backend_probe_mode.disable_clip_enable() {
+        clip_dw1 &= !(1 << 10);
+        clip_dw2 &= !(1 << 31);
+        sf_dw1 &= !(1 << 10);
+    }
+    if force_wm_dispatch {
+        wm_dw1 = (wm_dw1 & !(0x3 << 19)) | (2 << 19);
+    }
+    if vf_synthesized_vue
+        && !matches!(
+            backend_probe_mode,
+            BackendProbeMode::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz
+                | BackendProbeMode::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
+        )
+    {
+        sample_mask_dw1 = 0x0000_0001;
+    }
+    if matches!(
+        backend_probe_mode,
+        BackendProbeMode::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz
+    ) {
+        clip_dw1 = 0x0000_0400;
+        clip_dw2 = 0xC000_8200;
+        clip_dw3 = 0x0000_0020;
+        sf_dw1 = 0x0000_0400;
+        sf_dw2 = 0;
+        sf_dw3 = 0;
+        sbe_dw1 = 0x3000_0820;
+        sbe_dw2 = 0;
+        sbe_dw3 = 0;
+        sbe_dw4 = 0xFFFF_FFFF;
+        sbe_dw5 = 0xFFFF_FFFF;
+        sample_mask_dw1 = 0x0000_FFFF;
+        wm_dw1 = 0x8000_0040;
+    }
+    let sbe_decoded_read_offset = (sbe_dw1 >> 5) & 0x3F;
+    let sbe_decoded_read_length = (sbe_dw1 >> 11) & 0x1F;
     // Mesa zeros this packet during init to clear any inherited clear/resolve
     // overrides. The focused scissor probe intentionally sets the WM_HZ_OP
     // scissor bit, so keep the packet's own sample mask live with SAMPLE_MASK.
@@ -1000,9 +1101,6 @@ fn encode_triangle_probe_batch(
             | BackendProbeMode::RasterWmInputOaScreenSpaceUrb128PerPoly
             | BackendProbeMode::RasterWmInputOaScreenSpaceMesaSimpleOrder
             | BackendProbeMode::RasterWmInputOaScreenSpaceMesaSimpleNoSwizNoScissor
-            | BackendProbeMode::RasterWmInputOaScreenSpacePointList
-            | BackendProbeMode::RasterWmInputOaScreenSpacePointListOpenBounds
-            | BackendProbeMode::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds
             | BackendProbeMode::RasterWmInputOaScreenSpaceLineListOpenBounds
             | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBounds
             | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1
@@ -1011,7 +1109,6 @@ fn encode_triangle_probe_batch(
             | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
             | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
             | BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
-            | BackendProbeMode::RasterWmInputOaNdcPointListOpenBounds
             | BackendProbeMode::RasterWmInputOaScreenSpaceRtIndependent
             | BackendProbeMode::RasterWmInputOaNdcForceOnPattern
             | BackendProbeMode::RasterWmInputOaForceOnPattern
@@ -1022,7 +1119,7 @@ fn encode_triangle_probe_batch(
     } else {
         ps_binding_table_entry_count
     };
-    let ps_dw3 = (binding_table_entry_count_encoding(ps_binding_table_entry_count) << 18)
+    let mut ps_dw3 = (binding_table_entry_count_encoding(ps_binding_table_entry_count) << 18)
         | (sampler_count_encoding(pipeline.ps.meta.kernel.sampler_count) << 27)
         | (u32::from(pipeline.ps.meta.uses_vmask) * PS_VECTOR_MASK_ENABLE);
     let ps_push_constant_enable = pipeline.ps.meta.kernel.push_constant_bytes > 0
@@ -1033,12 +1130,12 @@ fn encode_triangle_probe_batch(
     let ps_grf_start = backend_probe_mode
         .ps_grf_start_override()
         .unwrap_or(pipeline.ps.meta.kernel.grf_start_register);
-    let ps_dw6 = ps_dispatch_8
+    let mut ps_dw6 = ps_dispatch_8
         | (ps_dispatch_16 << 1)
         | (ps_dispatch_32 << 2)
         | (u32::from(ps_push_constant_enable) * PS_PUSH_CONSTANT_ENABLE)
         | (ps_max_threads_per_psd << PS_MAX_THREADS_SHIFT);
-    let ps_dw7 =
+    let mut ps_dw7 =
         (ps_grf_start as u32) | ((ps_grf_start as u32) << 8) | ((ps_grf_start as u32) << 16);
     let ps_ksp_base = ps_ksp_offset & !0x3F;
     let ps_ksp0 = if matches!(backend_probe_mode.ps_dispatch_slot(), Some(1 | 2)) {
@@ -1046,7 +1143,7 @@ fn encode_triangle_probe_batch(
     } else {
         ps_ksp_base
     };
-    let ps_ksp1 = if matches!(
+    let mut ps_ksp1 = if matches!(
         backend_probe_mode,
         BackendProbeMode::PsDispatchSlot1 | BackendProbeMode::PsDispatchAllKspSlots
     ) {
@@ -1054,7 +1151,7 @@ fn encode_triangle_probe_batch(
     } else {
         0
     };
-    let ps_ksp2 = if matches!(
+    let mut ps_ksp2 = if matches!(
         backend_probe_mode,
         BackendProbeMode::PsDispatchSlot2 | BackendProbeMode::PsDispatchAllKspSlots
     ) {
@@ -1065,7 +1162,7 @@ fn encode_triangle_probe_batch(
     let ps_scratch_space_buffer = 0u32;
     let ps_extra_attribute_enable = pipeline.ps.meta.num_varying_inputs > 0
         || matches!(backend_probe_mode, BackendProbeMode::PsPayloadAttributeEnable);
-    let ps_extra_dw1 = (u32::from(pipeline.ps.meta.computed_stencil)
+    let mut ps_extra_dw1 = (u32::from(pipeline.ps.meta.computed_stencil)
         * PS_EXTRA_PIXEL_SHADER_COMPUTES_STENCIL)
         | (u32::from(pipeline.ps.meta.persample_dispatch) * PS_EXTRA_PIXEL_SHADER_IS_PER_SAMPLE)
         | (u32::from(ps_extra_attribute_enable) * PS_EXTRA_ATTRIBUTE_ENABLE)
@@ -1080,6 +1177,30 @@ fn encode_triangle_probe_batch(
                 | PS_EXTRA_REQUIRES_PERSPECTIVE_BARY_PLANE))
         | ((pipeline.ps.meta.computed_depth_mode as u32) << 26)
         | PS_EXTRA_PIXEL_SHADER_VALID;
+    let oracle_active_ps_packet = oracle_active_reference_order
+        || matches!(
+            backend_probe_mode,
+            BackendProbeMode::RasterWmInputOaNdcTriListMesaActiveBlockSwiz
+                | BackendProbeMode::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
+        );
+    if oracle_active_ps_packet {
+        ps_dw3 = 0x4004_0000;
+        ps_dw6 = 0x1F80_0003;
+        ps_dw7 = 0x0002_0002;
+        ps_extra_dw1 = 0x8000_0000;
+        ps_ksp1 = ps_ksp_base;
+        ps_ksp2 = ps_ksp_base + 0x40;
+        intel_render_focus_log!(
+            "intel/render: probe-oracle-ps-packet-override backend={} emitted=1 ps_dw3=0x{:08X} ps_dw6=0x{:08X} ps_dw7=0x{:08X} ps_extra=0x{:08X} ksp1=0x{:X} ksp2=0x{:X} source=host-rendercopy-gen12-active-draw-segment note=simd16-ksp1-mirrors-local-simd8-kernel\n",
+            backend_probe_mode.label(),
+            ps_dw3,
+            ps_dw6,
+            ps_dw7,
+            ps_extra_dw1,
+            ps_ksp1,
+            ps_ksp2,
+        );
+    }
 
     batch_dwords.fill(0);
 
@@ -1121,10 +1242,10 @@ fn encode_triangle_probe_batch(
     log_batch_offset(cursor, "STATE_BASE_ADDRESS");
     push(batch_dwords, &mut cursor, STATE_BASE_ADDRESS_CMD)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
-    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, RENDER_MOCS << 16)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
-    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_VERTEX_BASE)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
     push_sba_size(batch_dwords, &mut cursor, true, warm.draw_state_len)?;
     push_sba_size(batch_dwords, &mut cursor, true, warm.draw_state_len)?;
@@ -1222,29 +1343,72 @@ fn encode_triangle_probe_batch(
     log_batch_offset(cursor, "3DSTATE_VIEWPORT_STATE_POINTERS_SF_CLIP");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VIEWPORT_STATE_POINTERS_SF_CLIP)?;
     push(batch_dwords, &mut cursor, probe_state.sf_clip_viewport_offset_bytes)?;
+    log_batch_offset(cursor, "3DSTATE_VIEWPORT_STATE_POINTERS generic-zero");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_VIEWPORT_STATE_POINTERS)?;
+    push(batch_dwords, &mut cursor, 0)?;
     log_batch_offset(cursor, "3DSTATE_SCISSOR_STATE_POINTERS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_SCISSOR_STATE_POINTERS)?;
     push(batch_dwords, &mut cursor, probe_state.scissor_rect_offset_bytes)?;
 
     let vertex_buffer_dw1_default = draw.vertex_stride | (1 << 14) | (RENDER_MOCS << 16);
-    let vertex_buffer_dw1 = front_end_contract
+    let mesa_no_vs_rectlist_vb1 = vf_synthesized_vue
+        && matches!(
+            streamout_experiment,
+            StreamoutProofExperiment::MesaNoVsRectlist
+        );
+    let active_i16_rectlist_vb = vf_synthesized_vue
+        && matches!(
+            (streamout_experiment, backend_probe_mode),
+            (
+                StreamoutProofExperiment::PositionSlot1,
+                BackendProbeMode::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+            )
+        );
+    let mut vertex_buffer_dw1 = front_end_contract
         .vertex_buffer_dw1_override
         .unwrap_or(vertex_buffer_dw1_default);
+    if mesa_no_vs_rectlist_vb1 || active_i16_rectlist_vb {
+        vertex_buffer_dw1 = (vertex_buffer_dw1 & !0xFFF) | (draw.vertex_stride & 0xFFF);
+    }
+    let vertex_buffer1_dw1 = (vertex_buffer_dw1 & !(0x3F << 26)) | (1 << 26);
     let vertex_buffer_addr_lo = draw.vertex_gpu_addr as u32;
     let vertex_buffer_addr_hi = (draw.vertex_gpu_addr >> 32) as u32;
     let vertex_buffer_bytes = draw.vertex_count.saturating_mul(draw.vertex_stride);
     log_batch_offset(cursor, "3DSTATE_VERTEX_BUFFERS");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_VERTEX_BUFFERS_1)?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        if mesa_no_vs_rectlist_vb1 {
+            CMD_3DSTATE_VERTEX_BUFFERS_2
+        } else {
+            CMD_3DSTATE_VERTEX_BUFFERS_1
+        },
+    )?;
     push(batch_dwords, &mut cursor, vertex_buffer_dw1)?;
     push_addr(batch_dwords, &mut cursor, draw.vertex_gpu_addr)?;
     push(batch_dwords, &mut cursor, vertex_buffer_bytes)?;
+    if mesa_no_vs_rectlist_vb1 {
+        push(batch_dwords, &mut cursor, vertex_buffer1_dw1)?;
+        push_addr(batch_dwords, &mut cursor, draw.vertex_gpu_addr)?;
+        push(batch_dwords, &mut cursor, vertex_buffer_bytes)?;
+        intel_render_focus_log!(
+            "intel/render: probe-vf-vb1-fix active=1 experiment={} vb0_dw1=0x{:08X} vb1_dw1=0x{:08X} addr=0x{:X} bytes={} reason=mesa-no-vs-rectlist-ve0-references-vb1\n",
+            streamout_experiment.label(),
+            vertex_buffer_dw1,
+            vertex_buffer1_dw1,
+            draw.vertex_gpu_addr,
+            vertex_buffer_bytes,
+        );
+    }
 
     let vf_vertex_element_count = if vf_synthesized_vue {
         streamout_experiment.vf_vertex_element_count()
     } else {
         1
     };
-    let vertex_elements_cmd = if vf_vertex_element_count == 2 {
+    let vertex_elements_cmd = if vf_vertex_element_count == 3 {
+        CMD_3DSTATE_VERTEX_ELEMENTS_3
+    } else if vf_vertex_element_count == 2 {
         CMD_3DSTATE_VERTEX_ELEMENTS_2
     } else {
         CMD_3DSTATE_VERTEX_ELEMENTS_1
@@ -1281,17 +1445,30 @@ fn encode_triangle_probe_batch(
                     | (VFCOMP_STORE_0 << 16);
                 push(batch_dwords, &mut cursor, vertex_element0_dw0)?;
                 push(batch_dwords, &mut cursor, vertex_element0_dw1)?;
+                let active_rectlist_i16 = matches!(
+                    backend_probe_mode,
+                    BackendProbeMode::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+                );
                 push(
                     batch_dwords,
                     &mut cursor,
-                    (SURFACE_FORMAT_R32G32B32_FLOAT << 16) | (1 << 25),
+                    (if active_rectlist_i16 {
+                        SURFACE_FORMAT_R16G16_SSCALED
+                    } else {
+                        SURFACE_FORMAT_R32G32B32_FLOAT
+                    } << 16)
+                        | (1 << 25),
                 )?;
                 push(
                     batch_dwords,
                     &mut cursor,
                     (VFCOMP_STORE_SRC << 28)
                         | (VFCOMP_STORE_SRC << 24)
-                        | (VFCOMP_STORE_SRC << 20)
+                        | (if active_rectlist_i16 {
+                            VFCOMP_STORE_0
+                        } else {
+                            VFCOMP_STORE_SRC
+                        } << 20)
                         | (VFCOMP_STORE_1_FP << 16),
                 )?;
             }
@@ -1339,17 +1516,43 @@ fn encode_triangle_probe_batch(
                         | (VFCOMP_STORE_SRC << 20)
                         | (VFCOMP_STORE_1_FP << 16),
                 )?;
+                push(
+                    batch_dwords,
+                    &mut cursor,
+                    16 | (SURFACE_FORMAT_R32G32B32A32_FLOAT << 16) | (1 << 25) | (1 << 26),
+                )?;
+                push(
+                    batch_dwords,
+                    &mut cursor,
+                    (VFCOMP_STORE_SRC << 28)
+                        | (VFCOMP_STORE_SRC << 24)
+                        | (VFCOMP_STORE_SRC << 20)
+                        | (VFCOMP_STORE_SRC << 16),
+                )?;
             }
         }
     } else {
-        vertex_element0_dw0 = (SURFACE_FORMAT_R32G32B32_FLOAT << 16) | (1 << 25);
-        vertex_element0_dw1 = (VFCOMP_STORE_SRC << 28)
-            | (VFCOMP_STORE_SRC << 24)
-            | (VFCOMP_STORE_SRC << 20)
-            | (VFCOMP_STORE_1_FP << 16);
+        let vertex_element_format = front_end_contract
+            .vertex_element_format_override
+            .unwrap_or(SURFACE_FORMAT_R32G32B32_FLOAT);
+        vertex_element0_dw0 = (vertex_element_format << 16) | (1 << 25);
+        vertex_element0_dw1 = if vertex_element_format == SURFACE_FORMAT_R32G32B32A32_FLOAT {
+            (VFCOMP_STORE_SRC << 28)
+                | (VFCOMP_STORE_SRC << 24)
+                | (VFCOMP_STORE_SRC << 20)
+                | (VFCOMP_STORE_SRC << 16)
+        } else {
+            (VFCOMP_STORE_SRC << 28)
+                | (VFCOMP_STORE_SRC << 24)
+                | (VFCOMP_STORE_SRC << 20)
+                | (VFCOMP_STORE_1_FP << 16)
+        };
         push(batch_dwords, &mut cursor, vertex_element0_dw0)?;
         push(batch_dwords, &mut cursor, vertex_element0_dw1)?;
     }
+    let real_vs_vertex_element_format = front_end_contract
+        .vertex_element_format_override
+        .unwrap_or(SURFACE_FORMAT_R32G32B32_FLOAT);
     intel_render_focus_log!(
         "intel/render: probe-vf-vue-contract vf_synthesized_vue={} experiment={} ve_count={} vue_contract={} header_slot={} position_slot={} position_format={} position_components={} vertex_stride={} note=clip_sf_requires_valid_xyzw_position\n",
         vf_synthesized_vue as u8,
@@ -1384,12 +1587,34 @@ fn encode_triangle_probe_batch(
         } else {
             "vertex-shader"
         },
-        if matches!(streamout_experiment, StreamoutProofExperiment::PositionSlot0Xyzw) {
+        if !vf_synthesized_vue && real_vs_vertex_element_format == SURFACE_FORMAT_R32G32B32A32_FLOAT
+        {
+            "R32G32B32A32_FLOAT"
+        } else if matches!(
+            (streamout_experiment, backend_probe_mode),
+            (
+                StreamoutProofExperiment::PositionSlot1,
+                BackendProbeMode::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+            )
+        ) {
+            "R16G16_SSCALED"
+        } else if matches!(streamout_experiment, StreamoutProofExperiment::PositionSlot0Xyzw) {
             "R32G32B32A32_FLOAT"
         } else {
             "R32G32B32_FLOAT"
         },
-        if matches!(streamout_experiment, StreamoutProofExperiment::PositionSlot0Xyzw) {
+        if !vf_synthesized_vue && real_vs_vertex_element_format == SURFACE_FORMAT_R32G32B32A32_FLOAT
+        {
+            "src,src,src,src"
+        } else if matches!(
+            (streamout_experiment, backend_probe_mode),
+            (
+                StreamoutProofExperiment::PositionSlot1,
+                BackendProbeMode::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+            )
+        ) {
+            "src,src,0,1.0"
+        } else if matches!(streamout_experiment, StreamoutProofExperiment::PositionSlot0Xyzw) {
             "src,src,src,src"
         } else {
             "src,src,src,1.0"
@@ -1411,8 +1636,13 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, 0)?;
     }
     log_batch_offset(cursor, "3DSTATE_VF");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_VF)?;
-    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_MESA_ACTIVE)?;
+    push(batch_dwords, &mut cursor, MESA_ACTIVE_VF_CUT_INDEX)?;
+    intel_render_focus_log!(
+        "intel/render: probe-vf-state emit=initial cmd=0x{:08X} cut_index=0x{:08X} component_packing=1 source=mesa-active-triangle\n",
+        CMD_3DSTATE_VF_MESA_ACTIVE,
+        MESA_ACTIVE_VF_CUT_INDEX,
+    );
     let vf_sgvs_dw1 = if vf_synthesized_vue
         && matches!(streamout_experiment, StreamoutProofExperiment::MesaNoVsRectlist)
     {
@@ -1444,18 +1674,6 @@ fn encode_triangle_probe_batch(
         RCS_EXEC_RESULT_DRAW_POST_VF,
     )?;
 
-    log_batch_offset(cursor, "3DSTATE_URB_ALLOC_HS");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_HS)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    log_batch_offset(cursor, "3DSTATE_URB_ALLOC_DS");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_DS)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    log_batch_offset(cursor, "3DSTATE_URB_ALLOC_GS");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_GS)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
     let baked_vs_urb_output_length = pipeline.vs.meta.urb_entry_output_length;
     let programmed_vs_urb_output_length = front_end_contract
         .vs_urb_output_length_override
@@ -1465,6 +1683,11 @@ fn encode_triangle_probe_batch(
         .vs_urb_entries_override
         .or_else(|| backend_probe_mode.vs_urb_entries_override())
         .unwrap_or(TRIANGLE_VS_URB_ENTRIES);
+    let programmed_vs_urb_start = front_end_contract
+        .vs_urb_start_override
+        .unwrap_or(TRIANGLE_VS_URB_START);
+    let disabled_stage_urb_alloc_dw1 =
+        (programmed_vs_urb_start << 10) | (programmed_vs_urb_start << 21);
 
     log_batch_offset(cursor, "3DSTATE_URB_ALLOC_VS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_VS)?;
@@ -1475,10 +1698,23 @@ fn encode_triangle_probe_batch(
         // A position-only VUE is one 64B slot, so the programmed value must
         // be 0 rather than 1 or clipper sees the wrong VS allocation contract.
         (programmed_vs_urb_output_length.saturating_sub(1) as u32)
-            | (TRIANGLE_VS_URB_START << 10)
-            | (TRIANGLE_VS_URB_START << 21),
+            | (programmed_vs_urb_start << 10)
+            | (programmed_vs_urb_start << 21),
     )?;
     push(batch_dwords, &mut cursor, programmed_vs_urb_entries | (programmed_vs_urb_entries << 16))?;
+
+    log_batch_offset(cursor, "3DSTATE_URB_ALLOC_HS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_HS)?;
+    push(batch_dwords, &mut cursor, disabled_stage_urb_alloc_dw1)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    log_batch_offset(cursor, "3DSTATE_URB_ALLOC_DS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_DS)?;
+    push(batch_dwords, &mut cursor, disabled_stage_urb_alloc_dw1)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    log_batch_offset(cursor, "3DSTATE_URB_ALLOC_GS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_GS)?;
+    push(batch_dwords, &mut cursor, disabled_stage_urb_alloc_dw1)?;
+    push(batch_dwords, &mut cursor, 0)?;
 
     if vf_synthesized_vue {
         log_batch_offset(cursor, "3DSTATE_VS disabled");
@@ -1487,7 +1723,9 @@ fn encode_triangle_probe_batch(
             push(batch_dwords, &mut cursor, 0)?;
         }
     } else {
+        let vs_accesses_uav = shader_layout.vs.accesses_uav;
         let vs_dw3 = ((pipeline.vs.meta.kernel.binding_table_entry_count as u32) << 18)
+            | ((vs_accesses_uav as u32) << 12)
             | (sampler_count_encoding(pipeline.vs.meta.kernel.sampler_count) << 27);
         let applied_vs_grf_start = front_end_contract
             .vs_dispatch_grf_start_override
@@ -1495,12 +1733,23 @@ fn encode_triangle_probe_batch(
             .unwrap_or_else(|| {
                 triangle_vs_dispatch_grf_start_register(pipeline.vs.meta.kernel.grf_start_register)
             });
-        let vs_dw6 = (1 << 11) | (applied_vs_grf_start << 20);
+        let vs_dw6 = ((front_end_contract.vs_urb_read_offset as u32) << 4)
+            | ((front_end_contract.vs_urb_read_length as u32) << 11)
+            | (applied_vs_grf_start << 20);
+        let applied_vs_max_threads_field = front_end_contract
+            .vs_max_threads_field_override
+            .unwrap_or_else(|| {
+                triangle_vs_max_threads_field(warm.device_id, pipeline.vs.meta.max_threads)
+            });
         let vs_dw7 = 1
             | (1 << 2)
             | (1 << 10)
-            | (triangle_vs_max_threads_field(warm.device_id, pipeline.vs.meta.max_threads) << 22);
-        let vs_dw8 = (programmed_vs_urb_output_length.saturating_sub(1) as u32) << 16;
+            | ((front_end_contract.vs_simd8_single_instance_dispatch as u32) << 9)
+            | (applied_vs_max_threads_field << 22);
+        let vs_dw8 = front_end_contract
+            .vs_dw8_override
+            .unwrap_or((programmed_vs_urb_output_length.saturating_sub(1) as u32) << 16);
+        let vs_output_read_offset = (vs_dw8 >> 21) & 0x3F;
         log_batch_offset(cursor, "3DSTATE_VS");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_VS)?;
         push(batch_dwords, &mut cursor, vs_ksp_offset & !0x3F)?;
@@ -1512,17 +1761,24 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, vs_dw7)?;
         push(batch_dwords, &mut cursor, vs_dw8)?;
         intel_render_focus_log!(
-            "intel/render: probe-vs ksp=0x{:08X} dw3=0x{:08X} dw6=0x{:08X} dw7=0x{:08X} dw8=0x{:08X} baked_max_threads={} applied_max_threads_field={} baked_urb_out_len={} programmed_urb_out_len={} programmed_urb_entries={} baked_grf_start={} applied_grf_start={} dispatch={:?} note=vs_dw8_urb_read_length_minus_one\n",
+            "intel/render: probe-vs ksp=0x{:08X} dw3=0x{:08X} accesses_uav={} simd8_single={} dw6=0x{:08X} dw7=0x{:08X} dw8=0x{:08X} dw8_override={} vs_output_read_offset={} baked_max_threads={} applied_max_threads_field={} baked_urb_out_len={} programmed_urb_out_len={} programmed_urb_entries={} programmed_urb_start={} vs_urb_read_offset={} vs_urb_read_length={} baked_grf_start={} applied_grf_start={} dispatch={:?} note=vs_dw8_contract_or_urb_output_length_minus_one\n",
             vs_ksp_offset & !0x3F,
             vs_dw3,
+            vs_accesses_uav as u8,
+            front_end_contract.vs_simd8_single_instance_dispatch as u8,
             vs_dw6,
             vs_dw7,
             vs_dw8,
+            front_end_contract.vs_dw8_override.is_some() as u8,
+            vs_output_read_offset,
             pipeline.vs.meta.max_threads,
-            triangle_vs_max_threads_field(warm.device_id, pipeline.vs.meta.max_threads),
+            applied_vs_max_threads_field,
             baked_vs_urb_output_length,
             programmed_vs_urb_output_length,
             programmed_vs_urb_entries,
+            programmed_vs_urb_start,
+            front_end_contract.vs_urb_read_offset,
+            front_end_contract.vs_urb_read_length,
             pipeline.vs.meta.kernel.grf_start_register,
             applied_vs_grf_start,
             pipeline.vs.meta.kernel.dispatch_mode,
@@ -1588,7 +1844,7 @@ fn encode_triangle_probe_batch(
         push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
 
         log_batch_offset(cursor, "3DSTATE_SO_DECL_LIST");
-        let streamout_decl_dword0 = streamout_experiment.so_decl_buffer_selects();
+        let streamout_decl_dword0 = streamout_experiment.so_decl_stream_offsets();
         let streamout_decl_dword1 = streamout_experiment.so_decl_num_entries();
         let [
             streamout_decl_dword2,
@@ -1606,9 +1862,10 @@ fn encode_triangle_probe_batch(
             push(batch_dwords, &mut cursor, streamout_decl_dword5)?;
         }
         crate::log!(
-            "intel/render: probe-streamout-decl experiment={} read_len={} so_pitch={} decl=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] vs_position_only={} ps_varyings={} generic_attrs=0 compatible={}\n",
+            "intel/render: probe-streamout-decl experiment={} read_offset={} read_length={} so_pitch={} decl=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] vs_position_only={} ps_varyings={} generic_attrs=0 compatible={}\n",
             streamout_experiment.label(),
-            streamout_experiment.vertex_read_length(),
+            streamout_experiment.vertex_read_offset(),
+            streamout_experiment.vertex_read_length_field(),
             streamout_experiment.vertex_bytes(),
             streamout_decl_dword0,
             streamout_decl_dword1,
@@ -1621,14 +1878,16 @@ fn encode_triangle_probe_batch(
             streamout_experiment.compatible() as u8,
         );
         crate::log!(
-            "intel/render: probe-streamout-config experiment={} so[function_enable={} statistics_enable={} rendering_disable={} render_stream={} reorder={} read_offset={} read_length_field={} buffer0_pitch={}] sobuf0[enable={} write_enable={} offset_addr_enable={} offset_mode={} mocs=0x{:X} surface=0x{:X} size_dwords=0x{:X} stream_offset=0x{:08X}] slot_contract={}\n",
+            "intel/render: probe-streamout-config experiment={} so[function_enable={} statistics_enable={} rendering_disable={} sol_write_enable={} buffer0_enable={} render_stream={} reorder={} read_offset={} read_length_field={} buffer0_pitch={}] sobuf0[enable={} write_enable={} offset_addr_enable={} offset_mode={} mocs=0x{:X} surface=0x{:X} size_dwords=0x{:X} stream_offset=0x{:08X}] slot_contract={}\n",
             streamout_experiment.label(),
             (streamout_dw1 >> 31) & 0x1,
             (streamout_dw1 >> 25) & 0x1,
             (streamout_dw1 >> 30) & 0x1,
+            ((streamout_dw1 >> 31) & 0x1) & (1 ^ ((streamout_dw1 >> 30) & 0x1)),
+            (streamout_dw1 >> 8) & 0x1,
             (streamout_dw1 >> 27) & 0x3,
             (streamout_dw1 >> 26) & 0x1,
-            (streamout_dw2 >> 5) & 0x1,
+            (streamout_dw2 >> 5) & 0x1F,
             streamout_dw2 & 0x1F,
             streamout_dw3 & 0xFFF,
             (so_buffer_index_dw1 >> 31) & 0x1,
@@ -1744,9 +2003,12 @@ fn encode_triangle_probe_batch(
         wm_hz_op_dw3,
         wm_hz_op_dw4,
         wm_hz_op_dw5,
-        if backend_probe_mode.skip_wm_hz_op_packet() {
+        if mesa_simple_order && (mesa_order_emit_wm_hz_op || mesa_simple_emit_wm_hz_op_after_raster)
+        {
+            "emitted"
+        } else if backend_probe_mode.skip_wm_hz_op_packet() {
             "skipped"
-        } else if mesa_simple_order && !mesa_order_emit_wm_hz_op {
+        } else if mesa_simple_order {
             "skipped-mesa-simple"
         } else {
             "emitted"
@@ -1798,8 +2060,8 @@ fn encode_triangle_probe_batch(
             sbe_dw3,
             sbe_dw4,
             sbe_dw5,
-            sbe_vertex_read_offset,
-            sbe_vertex_read_length,
+            sbe_decoded_read_offset,
+            sbe_decoded_read_length,
             ps_dw6,
             ps_extra_dw1,
         );
@@ -1835,6 +2097,46 @@ fn encode_triangle_probe_batch(
         RCS_EXEC_RESULT_DRAW_POST_CLIP,
     )?;
 
+    if oracle_active_reference_order {
+        log_batch_offset(cursor, "3DSTATE_STREAMOUT oracle-active-off-after-clip");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_STREAMOUT)?;
+        for _ in 0..4 {
+            push(batch_dwords, &mut cursor, 0)?;
+        }
+        log_batch_offset(cursor, "3DSTATE_VIEWPORT_STATE_POINTERS_SF_CLIP oracle-active-after-clip");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_VIEWPORT_STATE_POINTERS_SF_CLIP)?;
+        push(batch_dwords, &mut cursor, probe_state.sf_clip_viewport_offset_bytes)?;
+        log_batch_offset(cursor, "3DSTATE_VIEWPORT_STATE_POINTERS_CC oracle-active-after-clip");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_VIEWPORT_STATE_POINTERS_CC)?;
+        push(batch_dwords, &mut cursor, probe_state.cc_viewport_offset_bytes)?;
+        log_batch_offset(cursor, "3DSTATE_VF_TOPOLOGY oracle-active-before-sf");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_TOPOLOGY)?;
+        push(batch_dwords, &mut cursor, primitive_topology)?;
+        log_batch_offset(cursor, "3DSTATE_VERTEX_ELEMENTS oracle-active-before-sf");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_VERTEX_ELEMENTS_1)?;
+        push(batch_dwords, &mut cursor, vertex_element0_dw0)?;
+        push(batch_dwords, &mut cursor, vertex_element0_dw1)?;
+        log_batch_offset(cursor, "3DSTATE_TE oracle-active-before-sf");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_TE)?;
+        for _ in 0..4 {
+            push(batch_dwords, &mut cursor, 0)?;
+        }
+        log_batch_offset(cursor, "3DSTATE_GS oracle-active-before-sf");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_GS)?;
+        for _ in 0..9 {
+            push(batch_dwords, &mut cursor, 0)?;
+        }
+        intel_render_focus_log!(
+            "intel/render: probe-oracle-active-before-sf backend={} emitted=1 placement=after-clip-before-sf streamout_off=1 sf_clip_vp=0x{:X} cc_vp=0x{:X} vf_topology=0x{:08X} ve0=[0x{:08X},0x{:08X}] te_gs_disabled=1 source=mesa-rendercopy-active-order hypothesis=SF_consumes_late_CLIP_viewport_and_VF_contract\n",
+            backend_probe_mode.label(),
+            probe_state.sf_clip_viewport_offset_bytes,
+            probe_state.cc_viewport_offset_bytes,
+            primitive_topology,
+            vertex_element0_dw0,
+            vertex_element0_dw1,
+        );
+    }
+
     if backend_probe_mode.primitive_replication_before_sf() {
         log_batch_offset(cursor, "3DSTATE_PRIMITIVE_REPLICATION after-clip-before-sf");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PRIMITIVE_REPLICATION)?;
@@ -1862,7 +2164,20 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, raster_dw2)?;
     push(batch_dwords, &mut cursor, raster_dw3)?;
     push(batch_dwords, &mut cursor, raster_dw4)?;
-    if device_is_gfx125(warm.device_id) {
+    if oracle_active_reference_order {
+        log_batch_offset(cursor, "3DSTATE_VIEWPORT_STATE_POINTERS oracle-active-after-raster");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_VIEWPORT_STATE_POINTERS)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        log_batch_offset(cursor, "3DSTATE_CC_STATE_POINTERS oracle-active-after-raster");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_CC_STATE_POINTERS)?;
+        push(batch_dwords, &mut cursor, probe_state.color_calc_state_offset_bytes | 1)?;
+        intel_render_focus_log!(
+            "intel/render: probe-oracle-active-after-raster backend={} emitted=1 generic_viewport=0 cc_state=0x{:X} source=mesa-rendercopy-active-order hypothesis=WM_CC_state_lifetime_before_sample_mask_depth\n",
+            backend_probe_mode.label(),
+            probe_state.color_calc_state_offset_bytes | 1,
+        );
+    }
+    if device_is_gfx125(warm.device_id) && !skip_tbimr_tile_pass_info_after_raster {
         log_batch_offset(cursor, "3DSTATE_TBIMR_TILE_PASS_INFO zero-disable");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_TBIMR_TILE_PASS_INFO)?;
         push(batch_dwords, &mut cursor, 0)?;
@@ -1872,6 +2187,11 @@ fn encode_triangle_probe_batch(
             "intel/render: probe-tbimr-tile-pass-info backend={} emitted=1 placement=after-raster-before-wm-hz-op dw=[0x{:08X},0x00000000,0x00000000,0x00000000] source=linux-xe-default-lrc-svg-state-and-mesa-gen125-xml hypothesis=clear_stale_tbimr_state_at_sf_raster_to_wm_boundary\n",
             backend_probe_mode.label(),
             CMD_3DSTATE_TBIMR_TILE_PASS_INFO,
+        );
+    } else if device_is_gfx125(warm.device_id) {
+        intel_render_focus_log!(
+            "intel/render: probe-tbimr-tile-pass-info backend={} emitted=0 reason=active-order-skips-xe-default-lrc-tbimr-packet-at-sf-raster-boundary\n",
+            backend_probe_mode.label(),
         );
     }
     if !mesa_simple_order {
@@ -1891,7 +2211,7 @@ fn encode_triangle_probe_batch(
         RCS_EXEC_RESULT_DRAW_POST_RASTER,
     )?;
 
-    if mesa_simple_order && mesa_order_emit_wm_hz_op {
+    if mesa_simple_order && (mesa_order_emit_wm_hz_op || mesa_simple_emit_wm_hz_op_after_raster) {
         log_batch_offset(cursor, "3DSTATE_WM_HZ_OP mesa-order");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_WM_HZ_OP)?;
         push(batch_dwords, &mut cursor, wm_hz_op_dw1)?;
@@ -1900,8 +2220,9 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, wm_hz_op_dw4)?;
         push(batch_dwords, &mut cursor, wm_hz_op_dw5)?;
         intel_render_focus_log!(
-            "intel/render: probe-wm-hz-op-packet backend={} emitted=1 placement=after-raster-before-sbe-wm len_dw=4 total_dwords=6 dw=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] hypothesis=gfx125_wm_int_reset_packet_length_and_post_raster_precondition\n",
+            "intel/render: probe-wm-hz-op-packet backend={} emitted=1 placement=after-raster-before-sbe-wm forced_simple_emit={} len_dw=4 total_dwords=6 dw=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] hypothesis=gfx125_wm_int_reset_packet_length_and_post_raster_precondition\n",
             backend_probe_mode.label(),
+            mesa_simple_emit_wm_hz_op_after_raster as u8,
             wm_hz_op_dw1,
             wm_hz_op_dw2,
             wm_hz_op_dw3,
@@ -1921,6 +2242,13 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, wm_depth_stencil_dw2)?;
         push(batch_dwords, &mut cursor, wm_depth_stencil_dw3)?;
 
+        log_batch_offset(cursor, "PIPE_CONTROL mesa-active-handoff");
+        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
+
+        log_batch_offset(cursor, "3DSTATE_VF mesa-active-handoff");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_MESA_ACTIVE)?;
+        push(batch_dwords, &mut cursor, MESA_ACTIVE_VF_CUT_INDEX)?;
+
         log_batch_offset(cursor, "3DSTATE_PRIMITIVE_REPLICATION mesa-active");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PRIMITIVE_REPLICATION)?;
         push(batch_dwords, &mut cursor, primitive_replication_dw1)?;
@@ -1937,8 +2265,23 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PS_BLEND)?;
         push(batch_dwords, &mut cursor, ps_blend_dw1)?;
 
+        log_batch_offset(cursor, "3DSTATE_BLEND_STATE_POINTERS mesa-active-late");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_BLEND_STATE_POINTERS)?;
+        push(
+            batch_dwords,
+            &mut cursor,
+            blend_mode.blend_state_pointer_dword(probe_state.blend_state_offset_bytes),
+        )?;
+
+        let active_binding_table_pointer_offset = 0x20u32;
+
+        log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_PS mesa-active-late");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_PS)?;
+        push(batch_dwords, &mut cursor, active_binding_table_pointer_offset)?;
+
+        let late_sbe_ps_refresh = backend_probe_mode.late_sbe_ps_refresh_after_mesa_active_block();
         intel_render_focus_log!(
-            "intel/render: probe-mesa-active-block backend={} stamped=1 clip=[0x{:08X},0x{:08X},0x{:08X}] sf=[0x{:08X},0x{:08X},0x{:08X}] raster=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] sample_mask=0x{:08X} wm_depth=[0x{:08X},0x{:08X},0x{:08X}] prim_repl=0x{:08X} wm=0x{:08X} ps_blend=0x{:08X} skipped_late_sbe_ps=1 skipped_wm_hz_op=1 sequence=preclip-sbe-ps-ps_extra-clip-sf-raster-sample_mask-wm_depth_stencil-primitive_replication-wm-ps_blend hypothesis=mesa_active_block_state_lifetime_into_wm_int\n",
+            "intel/render: probe-mesa-active-block backend={} stamped=1 clip=[0x{:08X},0x{:08X},0x{:08X}] sf=[0x{:08X},0x{:08X},0x{:08X}] raster=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] sample_mask=0x{:08X} wm_depth=[0x{:08X},0x{:08X},0x{:08X}] prim_repl=0x{:08X} wm=0x{:08X} ps_blend=0x{:08X} late_blend_ptr=0x{:X} late_ps_bt=0x{:X} streamout_off_after_clip={} skipped_tbimr={} skipped_late_sbe_ps={} skipped_wm_hz_op=1 sequence=preclip-sbe-ps-ps_extra-clip{}-sf-raster-sample_mask-wm_depth_stencil-pipe_control-vf-primitive_replication-wm-ps_blend-blend_ptr-ps_bt{} hypothesis=mesa_active_block_state_lifetime_into_wm_int\n",
             backend_probe_mode.label(),
             clip_dw1,
             clip_dw2,
@@ -1957,7 +2300,72 @@ fn encode_triangle_probe_batch(
             primitive_replication_dw1,
             wm_dw1,
             ps_blend_dw1,
+            blend_mode.blend_state_pointer_dword(probe_state.blend_state_offset_bytes),
+            active_binding_table_pointer_offset,
+            oracle_active_reference_order as u8,
+            skip_tbimr_tile_pass_info_after_raster as u8,
+            (!late_sbe_ps_refresh) as u8,
+            if oracle_active_reference_order {
+                "-streamout_off"
+            } else {
+                ""
+            },
+            if late_sbe_ps_refresh {
+                "-late-sbe-ps-ps_extra"
+            } else {
+                ""
+            },
         );
+
+        if late_sbe_ps_refresh {
+            log_batch_offset(cursor, "3DSTATE_SBE mesa-active-late-refresh");
+            push(batch_dwords, &mut cursor, CMD_3DSTATE_SBE)?;
+            push(batch_dwords, &mut cursor, sbe_dw1)?;
+            push(batch_dwords, &mut cursor, sbe_dw2)?;
+            push(batch_dwords, &mut cursor, sbe_dw3)?;
+            push(batch_dwords, &mut cursor, sbe_dw4)?;
+            push(batch_dwords, &mut cursor, sbe_dw5)?;
+
+            if emit_sbe_swiz_packet {
+                log_batch_offset(cursor, "3DSTATE_SBE_SWIZ mesa-active-late-refresh");
+                push(batch_dwords, &mut cursor, CMD_3DSTATE_SBE_SWIZ)?;
+                for _ in 0..10 {
+                    push(batch_dwords, &mut cursor, 0)?;
+                }
+            }
+
+            log_batch_offset(cursor, "3DSTATE_PS mesa-active-late-refresh");
+            push(batch_dwords, &mut cursor, CMD_3DSTATE_PS)?;
+            push(batch_dwords, &mut cursor, ps_ksp0)?;
+            push(batch_dwords, &mut cursor, 0)?;
+            push(batch_dwords, &mut cursor, ps_dw3)?;
+            push(batch_dwords, &mut cursor, ps_scratch_space_buffer)?;
+            push(batch_dwords, &mut cursor, 0)?;
+            push(batch_dwords, &mut cursor, ps_dw6)?;
+            push(batch_dwords, &mut cursor, ps_dw7)?;
+            push(batch_dwords, &mut cursor, ps_ksp1)?;
+            push(batch_dwords, &mut cursor, 0)?;
+            push(batch_dwords, &mut cursor, ps_ksp2)?;
+            push(batch_dwords, &mut cursor, 0)?;
+
+            log_batch_offset(cursor, "3DSTATE_PS_EXTRA mesa-active-late-refresh");
+            push(batch_dwords, &mut cursor, CMD_3DSTATE_PS_EXTRA)?;
+            push(batch_dwords, &mut cursor, ps_extra_dw1)?;
+
+            intel_render_focus_log!(
+                "intel/render: probe-mesa-active-late-sbe-ps backend={} emitted=1 sbe=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] sbe_swiz={} ps_dw3=0x{:08X} ps_dw6=0x{:08X} ps_extra=0x{:08X} hypothesis=late_ps_state_lifetime_into_psd_launch_frontier\n",
+                backend_probe_mode.label(),
+                sbe_dw1,
+                sbe_dw2,
+                sbe_dw3,
+                sbe_dw4,
+                sbe_dw5,
+                emit_sbe_swiz_packet as u8,
+                ps_dw3,
+                ps_dw6,
+                ps_extra_dw1,
+            );
+        }
     } else {
         log_batch_offset(cursor, "3DSTATE_SBE");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_SBE)?;
@@ -2139,21 +2547,248 @@ fn encode_triangle_probe_batch(
         )?;
     }
 
-    // pdoane/osdev's Ivy Bridge bring-up emits a zero-vertex 3DPRIMITIVE after
-    // switching to the 3D pipe/context and before the real triangle. Keep the
-    // same explicit priming draw here so the first real primitive does not also
-    // carry any post-PIPELINE_SELECT/context activation hazard.
-    log_batch_offset(cursor, "3DPRIMITIVE dummy-after-pipeline-select");
-    push(batch_dwords, &mut cursor, CMD_3DPRIMITIVE)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
+    let skip_late_dummy_draw = matches!(
+        backend_probe_mode,
+        BackendProbeMode::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl
+    );
+    if skip_late_dummy_draw {
+        log_batch_offset(cursor, "skip 3DPRIMITIVE late-dummy");
+        intel_render_focus_log!(
+            "intel/render: probe-late-dummy-draw backend={} emitted=0 reason=oracle-active-path-has-no-dummy-between-state-and-real-primitive\n",
+            backend_probe_mode.label(),
+        );
+    } else {
+        // pdoane/osdev's Ivy Bridge bring-up emits a zero-vertex 3DPRIMITIVE after
+        // switching to the 3D pipe/context and before the real triangle. This legacy
+        // probe keeps the old priming draw for non-oracle variants.
+        log_batch_offset(cursor, "3DPRIMITIVE dummy-after-pipeline-select");
+        push(batch_dwords, &mut cursor, CMD_3DPRIMITIVE)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, 0)?;
+    }
+
+    log_batch_offset(cursor, "3DSTATE_VF late-mesa-active");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_MESA_ACTIVE)?;
+    push(batch_dwords, &mut cursor, MESA_ACTIVE_VF_CUT_INDEX)?;
+    intel_render_focus_log!(
+        "intel/render: probe-vf-state emit=late-before-real-primitive cmd=0x{:08X} cut_index=0x{:08X} component_packing=1 source=mesa-active-triangle hypothesis=vf-component-packing-handoff-unblocks-post-vs-frontier\n",
+        CMD_3DSTATE_VF_MESA_ACTIVE,
+        MESA_ACTIVE_VF_CUT_INDEX,
+    );
+
+    if oracle_active_reference_order {
+        let vs_accesses_uav = shader_layout.vs.accesses_uav;
+        let vs_dw3 = ((pipeline.vs.meta.kernel.binding_table_entry_count as u32) << 18)
+            | ((vs_accesses_uav as u32) << 12)
+            | (sampler_count_encoding(pipeline.vs.meta.kernel.sampler_count) << 27);
+        let applied_vs_grf_start = front_end_contract
+            .vs_dispatch_grf_start_override
+            .map(u32::from)
+            .unwrap_or_else(|| {
+                triangle_vs_dispatch_grf_start_register(pipeline.vs.meta.kernel.grf_start_register)
+            });
+        let vs_dw6 = ((front_end_contract.vs_urb_read_offset as u32) << 4)
+            | ((front_end_contract.vs_urb_read_length as u32) << 11)
+            | (applied_vs_grf_start << 20);
+        let applied_vs_max_threads_field = front_end_contract
+            .vs_max_threads_field_override
+            .unwrap_or_else(|| {
+                triangle_vs_max_threads_field(warm.device_id, pipeline.vs.meta.max_threads)
+            });
+        let vs_dw7 = 1 | (1 << 2) | (1 << 10) | (applied_vs_max_threads_field << 22);
+        let vs_dw8 = front_end_contract
+            .vs_dw8_override
+            .unwrap_or((programmed_vs_urb_output_length.saturating_sub(1) as u32) << 16);
+        let active_binding_table_pointer_offset = 0x20u32;
+
+        log_batch_offset(cursor, "oracle-final 3DSTATE_VERTEX_BUFFERS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_VERTEX_BUFFERS_1)?;
+        push(batch_dwords, &mut cursor, vertex_buffer_dw1)?;
+        push_addr(batch_dwords, &mut cursor, draw.vertex_gpu_addr)?;
+        push(batch_dwords, &mut cursor, vertex_buffer_bytes)?;
+
+        log_batch_offset(cursor, "oracle-final 3DSTATE_URB_ALLOC_VS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_VS)?;
+        push(
+            batch_dwords,
+            &mut cursor,
+            (programmed_vs_urb_output_length.saturating_sub(1) as u32)
+                | (programmed_vs_urb_start << 10)
+                | (programmed_vs_urb_start << 21),
+        )?;
+        push(batch_dwords, &mut cursor, programmed_vs_urb_entries | (programmed_vs_urb_entries << 16))?;
+
+        log_batch_offset(cursor, "oracle-final 3DSTATE_URB_ALLOC_HS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_HS)?;
+        push(batch_dwords, &mut cursor, disabled_stage_urb_alloc_dw1)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        log_batch_offset(cursor, "oracle-final 3DSTATE_URB_ALLOC_DS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_DS)?;
+        push(batch_dwords, &mut cursor, disabled_stage_urb_alloc_dw1)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        log_batch_offset(cursor, "oracle-final 3DSTATE_URB_ALLOC_GS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_GS)?;
+        push(batch_dwords, &mut cursor, disabled_stage_urb_alloc_dw1)?;
+        push(batch_dwords, &mut cursor, 0)?;
+
+        log_batch_offset(cursor, "oracle-final 3DSTATE_VS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_VS)?;
+        push(batch_dwords, &mut cursor, vs_ksp_offset & !0x3F)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, vs_dw3)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, vs_dw6)?;
+        push(batch_dwords, &mut cursor, vs_dw7)?;
+        push(batch_dwords, &mut cursor, vs_dw8)?;
+
+        log_batch_offset(cursor, "oracle-final 3DSTATE_HS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_HS)?;
+        for _ in 0..8 {
+            push(batch_dwords, &mut cursor, 0)?;
+        }
+        log_batch_offset(cursor, "oracle-final 3DSTATE_DS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_DS)?;
+        for _ in 0..10 {
+            push(batch_dwords, &mut cursor, 0)?;
+        }
+
+        log_batch_offset(cursor, "oracle-final 3DSTATE_SBE");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_SBE)?;
+        push(batch_dwords, &mut cursor, sbe_dw1)?;
+        push(batch_dwords, &mut cursor, sbe_dw2)?;
+        push(batch_dwords, &mut cursor, sbe_dw3)?;
+        push(batch_dwords, &mut cursor, sbe_dw4)?;
+        push(batch_dwords, &mut cursor, sbe_dw5)?;
+        if emit_sbe_swiz_packet {
+            log_batch_offset(cursor, "oracle-final 3DSTATE_SBE_SWIZ");
+            push(batch_dwords, &mut cursor, CMD_3DSTATE_SBE_SWIZ)?;
+            for _ in 0..10 {
+                push(batch_dwords, &mut cursor, 0)?;
+            }
+        }
+
+        log_batch_offset(cursor, "oracle-final 3DSTATE_PS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_PS)?;
+        push(batch_dwords, &mut cursor, ps_ksp0)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, ps_dw3)?;
+        push(batch_dwords, &mut cursor, ps_scratch_space_buffer)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, ps_dw6)?;
+        push(batch_dwords, &mut cursor, ps_dw7)?;
+        push(batch_dwords, &mut cursor, ps_ksp1)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, ps_ksp2)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        log_batch_offset(cursor, "oracle-final 3DSTATE_PS_EXTRA");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_PS_EXTRA)?;
+        push(batch_dwords, &mut cursor, ps_extra_dw1)?;
+
+        log_batch_offset(cursor, "oracle-final 3DSTATE_CLIP");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_CLIP)?;
+        push(batch_dwords, &mut cursor, clip_dw1)?;
+        push(batch_dwords, &mut cursor, clip_dw2)?;
+        push(batch_dwords, &mut cursor, clip_dw3)?;
+        log_batch_offset(cursor, "oracle-final 3DSTATE_STREAMOUT off");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_STREAMOUT)?;
+        for _ in 0..4 {
+            push(batch_dwords, &mut cursor, 0)?;
+        }
+        log_batch_offset(cursor, "oracle-final 3DSTATE_VIEWPORT_STATE_POINTERS_SF_CLIP");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_VIEWPORT_STATE_POINTERS_SF_CLIP)?;
+        push(batch_dwords, &mut cursor, probe_state.sf_clip_viewport_offset_bytes)?;
+        log_batch_offset(cursor, "oracle-final 3DSTATE_VIEWPORT_STATE_POINTERS_CC");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_VIEWPORT_STATE_POINTERS_CC)?;
+        push(batch_dwords, &mut cursor, probe_state.cc_viewport_offset_bytes)?;
+        log_batch_offset(cursor, "oracle-final 3DSTATE_VF_TOPOLOGY");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_TOPOLOGY)?;
+        push(batch_dwords, &mut cursor, primitive_topology)?;
+        log_batch_offset(cursor, "oracle-final 3DSTATE_VERTEX_ELEMENTS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_VERTEX_ELEMENTS_1)?;
+        push(batch_dwords, &mut cursor, vertex_element0_dw0)?;
+        push(batch_dwords, &mut cursor, vertex_element0_dw1)?;
+        log_batch_offset(cursor, "oracle-final 3DSTATE_TE");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_TE)?;
+        for _ in 0..4 {
+            push(batch_dwords, &mut cursor, 0)?;
+        }
+        log_batch_offset(cursor, "oracle-final 3DSTATE_GS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_GS)?;
+        for _ in 0..9 {
+            push(batch_dwords, &mut cursor, 0)?;
+        }
+        log_batch_offset(cursor, "oracle-final 3DSTATE_SF");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_SF)?;
+        push(batch_dwords, &mut cursor, sf_dw1)?;
+        push(batch_dwords, &mut cursor, sf_dw2)?;
+        push(batch_dwords, &mut cursor, sf_dw3)?;
+        log_batch_offset(cursor, "oracle-final 3DSTATE_RASTER");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_RASTER)?;
+        push(batch_dwords, &mut cursor, raster_dw1)?;
+        push(batch_dwords, &mut cursor, raster_dw2)?;
+        push(batch_dwords, &mut cursor, raster_dw3)?;
+        push(batch_dwords, &mut cursor, raster_dw4)?;
+        log_batch_offset(cursor, "oracle-final 3DSTATE_VIEWPORT_STATE_POINTERS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_VIEWPORT_STATE_POINTERS)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        log_batch_offset(cursor, "oracle-final 3DSTATE_CC_STATE_POINTERS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_CC_STATE_POINTERS)?;
+        push(batch_dwords, &mut cursor, probe_state.color_calc_state_offset_bytes | 1)?;
+        log_batch_offset(cursor, "oracle-final 3DSTATE_SAMPLE_MASK");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_SAMPLE_MASK)?;
+        push(batch_dwords, &mut cursor, sample_mask_dw1)?;
+        log_batch_offset(cursor, "oracle-final 3DSTATE_WM_DEPTH_STENCIL");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_WM_DEPTH_STENCIL)?;
+        push(batch_dwords, &mut cursor, wm_depth_stencil_dw1)?;
+        push(batch_dwords, &mut cursor, wm_depth_stencil_dw2)?;
+        push(batch_dwords, &mut cursor, wm_depth_stencil_dw3)?;
+        log_batch_offset(cursor, "oracle-final PIPE_CONTROL handoff");
+        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
+        log_batch_offset(cursor, "oracle-final 3DSTATE_VF");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_MESA_ACTIVE)?;
+        push(batch_dwords, &mut cursor, MESA_ACTIVE_VF_CUT_INDEX)?;
+        log_batch_offset(cursor, "oracle-final 3DSTATE_PRIMITIVE_REPLICATION");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_PRIMITIVE_REPLICATION)?;
+        push(batch_dwords, &mut cursor, primitive_replication_dw1)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        log_batch_offset(cursor, "oracle-final 3DSTATE_WM");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_WM)?;
+        push(batch_dwords, &mut cursor, wm_dw1)?;
+        log_batch_offset(cursor, "oracle-final 3DSTATE_PS_BLEND");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_PS_BLEND)?;
+        push(batch_dwords, &mut cursor, ps_blend_dw1)?;
+        log_batch_offset(cursor, "oracle-final 3DSTATE_BLEND_STATE_POINTERS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_BLEND_STATE_POINTERS)?;
+        push(
+            batch_dwords,
+            &mut cursor,
+            blend_mode.blend_state_pointer_dword(probe_state.blend_state_offset_bytes),
+        )?;
+        log_batch_offset(cursor, "oracle-final 3DSTATE_BINDING_TABLE_POINTERS_PS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_PS)?;
+        push(batch_dwords, &mut cursor, active_binding_table_pointer_offset)?;
+        intel_render_focus_log!(
+            "intel/render: probe-oracle-final-refresh emitted=1 start_before_primitive=1 sequence=vb-urb-vs-disabled-stages-sbe-ps-clip-streamout-vp-vf-topology-ve-te-gs-sf-raster-cc-sample-depth-pipe-vf-primrepl-wm-psblend-blend-bt source=host-active-segment hypothesis=erase-earlier-state-order-noise-before-real-draw\n",
+        );
+    }
 
     log_batch_offset(cursor, "3DPRIMITIVE");
-    let use_3dprimitive_extended = backend_probe_mode.use_3dprimitive_extended();
+    let vf_legacy_primitive = vf_synthesized_vue
+        && matches!(
+            primitive_topology,
+            TRIANGLE_TOPOLOGY_RECTLIST | TRIANGLE_TOPOLOGY_POINTLIST | TRIANGLE_TOPOLOGY_LINELIST
+        );
+    let use_3dprimitive_extended = !vf_legacy_primitive
+        && (backend_probe_mode.use_3dprimitive_extended()
+            || front_end_contract.primitive_extended_dw1_override.is_some());
     let primitive_cmd;
     let primitive_dw1;
     let primitive_dw2;
@@ -2205,9 +2840,13 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, 0)?;
     }
     intel_render_focus_log!(
-        "intel/render: probe-frontend-dwords contract={} vb=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] ve0=[0x{:08X},0x{:08X},0x{:08X}] vf_topology=[0x{:08X},0x{:08X}] primitive=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},...] mesa_active_vb_dw1=0x0204400C mesa_active_ve0=[0x78090001,0x02400000,0x11130000] mesa_active_vf_topology=0x00000004 mesa_active_primitive_ext=[0x7B000808,0x00000000,0x00000003,0x00000000,0x00000001,0x00000000,...] note=visible-vf-dword-comparison\n",
+        "intel/render: probe-frontend-dwords contract={} vb=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] ve0=[0x{:08X},0x{:08X},0x{:08X}] vf=[0x{:08X},0x{:08X}] vf_topology=[0x{:08X},0x{:08X}] primitive=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},...] mesa_active_vb_dw1=0x0204400C mesa_active_ve0=[0x78090001,0x02400000,0x11130000] mesa_active_vf=[0x780C0200,0x0000FFFF] mesa_active_vf_topology=0x00000004 mesa_active_primitive_ext=[0x7B000808,0x00000000,0x00000003,0x00000000,0x00000001,0x00000000,...] note=visible-vf-dword-comparison\n",
         front_end_contract.label,
-        CMD_3DSTATE_VERTEX_BUFFERS_1,
+        if mesa_no_vs_rectlist_vb1 {
+            CMD_3DSTATE_VERTEX_BUFFERS_2
+        } else {
+            CMD_3DSTATE_VERTEX_BUFFERS_1
+        },
         vertex_buffer_dw1,
         vertex_buffer_addr_lo,
         vertex_buffer_addr_hi,
@@ -2215,6 +2854,8 @@ fn encode_triangle_probe_batch(
         vertex_elements_cmd,
         vertex_element0_dw0,
         vertex_element0_dw1,
+        CMD_3DSTATE_VF_MESA_ACTIVE,
+        MESA_ACTIVE_VF_CUT_INDEX,
         CMD_3DSTATE_VF_TOPOLOGY,
         primitive_topology,
         primitive_cmd,
@@ -2269,12 +2910,12 @@ fn encode_triangle_probe_batch(
         vs_sampler_count,
         vs_binding_table_entry_count,
         programmed_vs_urb_entries,
-        TRIANGLE_VS_URB_START,
+        programmed_vs_urb_start,
         programmed_vs_urb_output_length,
         programmed_vs_urb_output_length.saturating_sub(1),
         (programmed_vs_urb_output_length.saturating_sub(1) as u32)
-            | (TRIANGLE_VS_URB_START << 10)
-            | (TRIANGLE_VS_URB_START << 21),
+            | (programmed_vs_urb_start << 10)
+            | (programmed_vs_urb_start << 21),
         programmed_vs_urb_entries | (programmed_vs_urb_entries << 16),
         sf_dw1,
         sf_dw2,
@@ -2306,7 +2947,7 @@ fn encode_triangle_probe_batch(
         primitive_dw5,
     );
     intel_render_focus_log!(
-        "intel/render: probe-pointer-surface-contract backend={} binding_table_ps=0x{:X} bt_entry0=0x{:08X} surface_off=0x{:X} rt_surface[type={} format=0x{:X} width={} height={} pitch={} mocs=0x{:X} base=0x{:X} swizzle=0x{:08X}] viewport[generic_emitted=0 generic_ptr=0x0 sf_clip_ptr=0x{:X} cc_ptr=0x{:X} sf_m00={:.3} sf_m11={:.3} sf_m30={:.3} sf_m31={:.3} cc_min={:.3} cc_max={:.3}] scissor_ptr=0x{:X} scissor=[{},{}..{},{}] blend_ptr=0x{:X} blend_dwords=[0x{:08X},0x{:08X}] cc_state_ptr=0x{:X} depth_stencil_state_ptr=not-emitted wm_depth_packet=[0x{:08X},0x{:08X},0x{:08X}]\n",
+        "intel/render: probe-pointer-surface-contract backend={} binding_table_ps=0x{:X} bt_entry0=0x{:08X} surface_off=0x{:X} rt_surface[type={} format=0x{:X} width={} height={} pitch={} mocs=0x{:X} base=0x{:X} swizzle=0x{:08X}] viewport[generic_emitted=1 generic_ptr=0x0 sf_clip_ptr=0x{:X} cc_ptr=0x{:X} sf_m00={:.3} sf_m11={:.3} sf_m30={:.3} sf_m31={:.3} cc_min={:.3} cc_max={:.3}] scissor_ptr=0x{:X} scissor=[{},{}..{},{}] blend_ptr=0x{:X} blend_dwords=[0x{:08X},0x{:08X}] cc_state_ptr=0x{:X} depth_stencil_state_ptr=not-emitted wm_depth_packet=[0x{:08X},0x{:08X},0x{:08X}]\n",
         backend_probe_mode.label(),
         binding_table_pointer_offset,
         state_dwords[probe_state.binding_table_offset_bytes as usize / 4],
@@ -2379,19 +3020,28 @@ fn encode_triangle_probe_batch(
         RCS_EXEC_RESULT_DRAW_PRE_LIGHT_PC,
     )?;
 
-    log_batch_offset(cursor, "PIPE_CONTROL post-3d-light-marker");
-    let light_sync_flags = post_draw_sync_variant.light_sync_flags();
-    if post_draw_sync_variant.light_post_sync_enabled() {
-        push_pipe_control_post_sync_imm(
-            batch_dwords,
-            &mut cursor,
-            0,
-            light_sync_flags,
-            result_gpu_addr + (RESULT_SLOT_POST3D_LIGHT_PIPE_CONTROL_LO_DWORD as u64) * 4,
-            post3d_value,
-        )?;
+    if matches!(post_draw_sync_variant, PostDrawSyncVariant::NoPostDrawPipeControl) {
+        log_batch_offset(cursor, "skip PIPE_CONTROL post-3d-light-marker");
+        intel_render_focus_log!(
+            "intel/render: probe-postdraw-sync backend={} variant={} action=skip-light-pipe-control source=pdoane-reference-style\n",
+            backend_probe_mode.label(),
+            post_draw_sync_variant.label(),
+        );
     } else {
-        push_pipe_control(batch_dwords, &mut cursor, light_sync_flags)?;
+        log_batch_offset(cursor, "PIPE_CONTROL post-3d-light-marker");
+        let light_sync_flags = post_draw_sync_variant.light_sync_flags();
+        if post_draw_sync_variant.light_post_sync_enabled() {
+            push_pipe_control_post_sync_imm(
+                batch_dwords,
+                &mut cursor,
+                0,
+                light_sync_flags,
+                result_gpu_addr + (RESULT_SLOT_POST3D_LIGHT_PIPE_CONTROL_LO_DWORD as u64) * 4,
+                post3d_value,
+            )?;
+        } else {
+            push_pipe_control(batch_dwords, &mut cursor, light_sync_flags)?;
+        }
     }
 
     log_batch_offset(cursor, "MI_STORE_DATA_IMM final-after-light");
@@ -2407,7 +3057,7 @@ fn encode_triangle_probe_batch(
         push_pipe_control_post_sync_imm(
             batch_dwords,
             &mut cursor,
-            0,
+            post_draw_sync_variant.heavy_header_flags(),
             heavy_sync_flags,
             result_gpu_addr + (RESULT_SLOT_POST3D_PIPE_CONTROL_LO_DWORD as u64) * 4,
             post3d_value,
@@ -2727,16 +3377,22 @@ fn encode_triangle_probe_batch(
         (primitive_replication_dw1 == 0) as u8,
     );
     intel_render_focus_log!(
-        "intel/render: probe-handoff-decoded clip_out=sf vue_in_urb=1 baked_vs_urb_out_len={} programmed_vs_urb_out_len={} programmed_vs_urb_entries={} baked_vs_grf_start={} programmed_vs_grf_start={} sbe_read_offset={} sbe_read_len={} ps_varyings={} streamout={}\n",
+        "intel/render: probe-handoff-decoded clip_out=sf vue_in_urb=1 baked_vs_urb_out_len={} programmed_vs_urb_out_len={} programmed_vs_urb_entries={} programmed_vs_urb_start={} baked_vs_grf_start={} programmed_vs_grf_start={} vs_output_read_offset={} sbe_read_offset={} sbe_read_len={} ps_varyings={} streamout={}\n",
         baked_vs_urb_output_length,
         programmed_vs_urb_output_length,
         programmed_vs_urb_entries,
+        programmed_vs_urb_start,
         pipeline.vs.meta.kernel.grf_start_register,
         front_end_contract
             .vs_dispatch_grf_start_override
             .unwrap_or(pipeline.vs.meta.kernel.grf_start_register),
-        sbe_vertex_read_offset,
-        sbe_vertex_read_length,
+        (front_end_contract
+            .vs_dw8_override
+            .unwrap_or((programmed_vs_urb_output_length.saturating_sub(1) as u32) << 16)
+            >> 21)
+            & 0x3F,
+        sbe_decoded_read_offset,
+        sbe_decoded_read_length,
         pipeline.ps.meta.num_varying_inputs,
         batch_mode.streamout_enabled() as u8,
     );
@@ -2819,6 +3475,17 @@ fn encode_minimal_streamout_proof_batch(
     } else {
         "vf-streamout-proof"
     };
+    let post_draw_sync_variant = vs_config
+        .map(|config| config.post_draw_sync)
+        .unwrap_or(PostDrawSyncVariant::NoPostDrawPipeControl);
+    let vs_binding_table_entry_count = vs_config
+        .map(|config| config.pipeline.vs.meta.kernel.binding_table_entry_count)
+        .unwrap_or(0);
+    let vs_binding_table_pointer_offset = if vs_binding_table_entry_count > 0 {
+        0x3400
+    } else {
+        0
+    };
 
     fn push(batch_dwords: &mut [u32], cursor: &mut usize, value: u32) -> Result<(), &'static str> {
         if *cursor >= batch_dwords.len() {
@@ -2865,11 +3532,12 @@ fn encode_minimal_streamout_proof_batch(
     fn push_pipe_control_post_sync_imm(
         batch_dwords: &mut [u32],
         cursor: &mut usize,
+        header_flags: u32,
         flags: u32,
         address: u64,
         value: u32,
     ) -> Result<(), &'static str> {
-        push(batch_dwords, cursor, PIPE_CONTROL_CMD)?;
+        push(batch_dwords, cursor, PIPE_CONTROL_CMD | header_flags)?;
         push(batch_dwords, cursor, flags)?;
         push(batch_dwords, cursor, address as u32)?;
         push(batch_dwords, cursor, (address >> 32) as u32)?;
@@ -2910,6 +3578,16 @@ fn encode_minimal_streamout_proof_batch(
             crate::intel::align_up(size_bytes, 4096).ok_or("vf-streamout-sba-align")?;
         let size_bytes = u32::try_from(size_bytes).map_err(|_| "vf-streamout-sba-convert")?;
         push(batch_dwords, cursor, (size_bytes & 0xFFFF_F000) | u32::from(enable))
+    }
+
+    fn binding_table_pool_base_dword(device_id: u16, base: u64) -> u32 {
+        let base = (base as u32) & BINDING_TABLE_POOL_BASE_MASK;
+        let mocs = RENDER_MOCS & BINDING_TABLE_POOL_MOCS_MASK;
+        if device_is_gfx125(device_id) {
+            base | mocs
+        } else {
+            base | BINDING_TABLE_POOL_ENABLE | mocs
+        }
     }
 
     fn sampler_count_encoding(count: u8) -> u32 {
@@ -2998,12 +3676,19 @@ fn encode_minimal_streamout_proof_batch(
     }
 
     let streamout_surface_size_dwords = (warm.streamout_len / 4).saturating_sub(1) as u32;
-    let streamout_dw1 = (1 << 25) | (1 << 30) | (1 << 31);
+    let streamout_dw1 = (1 << 8) | (1 << 25) | (1 << 31);
     let streamout_dw2 = streamout_experiment.vertex_read_length();
     let streamout_dw3 = streamout_experiment.vertex_bytes() as u32;
     let streamout_dw4 = 0u32;
-    let so_buffer_index_dw1 = (RENDER_MOCS << 22) | (1 << 20) | (1 << 21) | (1 << 31);
-    let sbe_dw1 = (1 << 5) | (1 << 11) | (1 << 21) | (1 << 22) | (1 << 28) | (1 << 29);
+    let so_buffer_index_dw1 = (RENDER_MOCS << 22) | (1 << 21) | (1 << 31);
+    let sbe_vertex_read_offset = streamout_experiment.vertex_read_offset();
+    let sbe_vertex_read_length = streamout_experiment.vertex_read_length_field() + 1;
+    let sbe_dw1 = (sbe_vertex_read_offset << 5)
+        | (sbe_vertex_read_length << 11)
+        | (1 << 21)
+        | (1 << 22)
+        | (1 << 28)
+        | (1 << 29);
     let front_end_contract = vs_config
         .map(|config| config.front_end_contract)
         .unwrap_or(TRIANGLE_DEFAULT_FRONT_END_CONTRACT);
@@ -3022,17 +3707,28 @@ fn encode_minimal_streamout_proof_batch(
                 .unwrap_or(TRIANGLE_VS_URB_ENTRIES)
         })
         .unwrap_or(TRIANGLE_VS_URB_ENTRIES);
+    let programmed_vs_urb_start = front_end_contract
+        .vs_urb_start_override
+        .unwrap_or(TRIANGLE_VS_URB_START);
     let urb_vs_alloc_dw1 = (programmed_vs_urb_output_length.saturating_sub(1) as u32)
-        | (TRIANGLE_VS_URB_START << 10)
-        | (TRIANGLE_VS_URB_START << 21);
+        | (programmed_vs_urb_start << 10)
+        | (programmed_vs_urb_start << 21);
     let urb_vs_alloc_dw2 = programmed_vs_urb_entries | (programmed_vs_urb_entries << 16);
+    let disabled_stage_urb_alloc_dw1 =
+        (programmed_vs_urb_start << 10) | (programmed_vs_urb_start << 21);
     let gfx125_sample_pattern_dw = 0x8888_8888;
     let gfx125_slice_hash =
         device_is_gfx125(warm.device_id).then(|| gfx125_slice_hash_config(warm));
     let gfx125_3d_mode_dw1 = gfx125_slice_hash.map(gfx125_3d_mode_dw1).unwrap_or(0);
     let gfx125_3d_mode_dw3 = gfx125_3d_mode_dw3();
     let vb_size_bytes = draw.vertex_count.saturating_mul(draw.vertex_stride);
-    let vb_cmd = cmd_3dstate_vertex_buffers(1)?;
+    let mesa_no_vs_rectlist_vb1 = vs_config.is_none()
+        && matches!(
+            streamout_experiment,
+            StreamoutProofExperiment::MesaNoVsRectlist
+        );
+    let vb_count = if mesa_no_vs_rectlist_vb1 { 2 } else { 1 };
+    let vb_cmd = cmd_3dstate_vertex_buffers(vb_count)?;
     let ve_cmd = cmd_3dstate_vertex_elements(if vs_config.is_some() {
         1
     } else {
@@ -3072,10 +3768,10 @@ fn encode_minimal_streamout_proof_batch(
     log_batch_offset(cursor, "STATE_BASE_ADDRESS");
     push(batch_dwords, &mut cursor, STATE_BASE_ADDRESS_CMD)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
-    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, RENDER_MOCS << 16)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
-    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_VERTEX_BASE)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
     push_sba_size(batch_dwords, &mut cursor, true, warm.draw_state_len)?;
     push_sba_size(batch_dwords, &mut cursor, true, warm.draw_state_len)?;
@@ -3083,6 +3779,38 @@ fn encode_minimal_streamout_proof_batch(
     push_sba_size(batch_dwords, &mut cursor, true, warm.draw_state_len)?;
     for _ in 0..6 {
         push(batch_dwords, &mut cursor, 0)?;
+    }
+
+    if vs_binding_table_entry_count > 0 {
+        let binding_table_pool_size_dw = u32::try_from(
+            crate::intel::align_up(warm.draw_state_len, 4096)
+                .ok_or("streamout-proof-binding-pool-align")?,
+        )
+        .map_err(|_| "streamout-proof-binding-pool-convert")?
+            & 0xFFFF_F000;
+        log_batch_offset(cursor, "PIPE_CONTROL pre-vs-binding-table-pool");
+        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
+        log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POOL_ALLOC vs-probe");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POOL_ALLOC)?;
+        push(
+            batch_dwords,
+            &mut cursor,
+            binding_table_pool_base_dword(warm.device_id, GPU_VA_DRAW_STATE_BASE),
+        )?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, binding_table_pool_size_dw)?;
+        log_batch_offset(cursor, "PIPE_CONTROL post-vs-binding-table-pool");
+        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS)?;
+        log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_VS vs-probe");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_VS)?;
+        push(batch_dwords, &mut cursor, vs_binding_table_pointer_offset)?;
+        intel_render_focus_log!(
+            "intel/render: vs-streamout-proof-bti enabled=1 bt_ptr=0x{:X} bt_entries={} pool_base=0x{:X} pool_size=0x{:X} note=diagnostic-vs-dataport-bti34-store\n",
+            vs_binding_table_pointer_offset,
+            vs_binding_table_entry_count,
+            GPU_VA_DRAW_STATE_BASE,
+            binding_table_pool_size_dw,
+        );
     }
 
     log_batch_offset(cursor, "3DSTATE_SAMPLE_PATTERN");
@@ -3151,8 +3879,13 @@ fn encode_minimal_streamout_proof_batch(
         push(batch_dwords, &mut cursor, 0)?;
     }
     log_batch_offset(cursor, "3DSTATE_VF");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_VF)?;
-    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_MESA_ACTIVE)?;
+    push(batch_dwords, &mut cursor, MESA_ACTIVE_VF_CUT_INDEX)?;
+    intel_render_focus_log!(
+        "intel/render: probe-vf-state emit=streamout-initial cmd=0x{:08X} cut_index=0x{:08X} component_packing=1 source=mesa-active-triangle\n",
+        CMD_3DSTATE_VF_MESA_ACTIVE,
+        MESA_ACTIVE_VF_CUT_INDEX,
+    );
     let vf_sgvs_dw1 = if vs_config.is_none()
         && matches!(streamout_experiment, StreamoutProofExperiment::MesaNoVsRectlist)
     {
@@ -3178,20 +3911,46 @@ fn encode_minimal_streamout_proof_batch(
         draw.vertex_gpu_addr,
         vb_size_bytes,
     )?;
+    if mesa_no_vs_rectlist_vb1 {
+        push_vertex_buffer_state(
+            batch_dwords,
+            &mut cursor,
+            1,
+            draw.vertex_stride,
+            draw.vertex_gpu_addr,
+            vb_size_bytes,
+        )?;
+        intel_render_focus_log!(
+            "intel/render: probe-vf-vb1-fix streamout=1 experiment={} vb_count={} addr=0x{:X} stride={} bytes={} reason=mesa-no-vs-rectlist-ve0-references-vb1\n",
+            streamout_experiment.label(),
+            vb_count,
+            draw.vertex_gpu_addr,
+            draw.vertex_stride,
+            vb_size_bytes,
+        );
+    }
 
     log_batch_offset(cursor, "3DSTATE_VERTEX_ELEMENTS");
     push(batch_dwords, &mut cursor, ve_cmd)?;
     if vs_config.is_some() {
+        let real_vs_vertex_element_format = front_end_contract
+            .vertex_element_format_override
+            .unwrap_or(SURFACE_FORMAT_R32G32B32_FLOAT);
+        let component3 = if real_vs_vertex_element_format == SURFACE_FORMAT_R32G32B32A32_FLOAT {
+            VFCOMP_STORE_SRC
+        } else {
+            VFCOMP_STORE_1_FP
+        };
         push_vertex_element_state(
             batch_dwords,
             &mut cursor,
             0,
             0,
-            SURFACE_FORMAT_R32G32B32_FLOAT,
+            real_vs_vertex_element_format,
             VFCOMP_STORE_SRC,
             VFCOMP_STORE_SRC,
             VFCOMP_STORE_SRC,
-            VFCOMP_STORE_1_FP,
+            component3,
         )?;
     } else {
         match streamout_experiment {
@@ -3292,6 +4051,17 @@ fn encode_minimal_streamout_proof_batch(
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_1_FP,
                 )?;
+                push_vertex_element_state(
+                    batch_dwords,
+                    &mut cursor,
+                    1,
+                    16,
+                    SURFACE_FORMAT_R32G32B32A32_FLOAT,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                )?;
             }
         }
     }
@@ -3307,40 +4077,54 @@ fn encode_minimal_streamout_proof_batch(
         RCS_EXEC_RESULT_DRAW_POST_VF,
     )?;
 
-    log_batch_offset(cursor, "3DSTATE_URB_ALLOC_HS");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_HS)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    log_batch_offset(cursor, "3DSTATE_URB_ALLOC_DS");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_DS)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    log_batch_offset(cursor, "3DSTATE_URB_ALLOC_GS");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_GS)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
     log_batch_offset(cursor, "3DSTATE_URB_ALLOC_VS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_VS)?;
     push(batch_dwords, &mut cursor, urb_vs_alloc_dw1)?;
     push(batch_dwords, &mut cursor, urb_vs_alloc_dw2)?;
+
+    log_batch_offset(cursor, "3DSTATE_URB_ALLOC_HS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_HS)?;
+    push(batch_dwords, &mut cursor, disabled_stage_urb_alloc_dw1)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    log_batch_offset(cursor, "3DSTATE_URB_ALLOC_DS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_DS)?;
+    push(batch_dwords, &mut cursor, disabled_stage_urb_alloc_dw1)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    log_batch_offset(cursor, "3DSTATE_URB_ALLOC_GS");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_GS)?;
+    push(batch_dwords, &mut cursor, disabled_stage_urb_alloc_dw1)?;
+    push(batch_dwords, &mut cursor, 0)?;
 
     if let Some(config) = vs_config {
         let pipeline = config.pipeline;
         let shader_layout = config.shader_layout;
         let vs_ksp_offset = shader_layout.vs.code_offset_bytes + shader_layout.vs.ksp_offset_bytes;
         let baked_vs_urb_output_length = pipeline.vs.meta.urb_entry_output_length;
+        let vs_accesses_uav = shader_layout.vs.accesses_uav;
         let vs_dw3 = ((pipeline.vs.meta.kernel.binding_table_entry_count as u32) << 18)
+            | ((vs_accesses_uav as u32) << 12)
             | (sampler_count_encoding(pipeline.vs.meta.kernel.sampler_count) << 27);
         let programmed_vs_grf_start = front_end_contract
             .vs_dispatch_grf_start_override
             .unwrap_or(pipeline.vs.meta.kernel.grf_start_register);
         let applied_vs_grf_start = triangle_vs_dispatch_grf_start_register(programmed_vs_grf_start);
-        let vs_dw6 = (1 << 11) | (applied_vs_grf_start << 20);
+        let vs_dw6 = ((front_end_contract.vs_urb_read_offset as u32) << 4)
+            | ((front_end_contract.vs_urb_read_length as u32) << 11)
+            | (applied_vs_grf_start << 20);
+        let applied_vs_max_threads_field = front_end_contract
+            .vs_max_threads_field_override
+            .unwrap_or_else(|| {
+                triangle_vs_max_threads_field(warm.device_id, pipeline.vs.meta.max_threads)
+            });
         let vs_dw7 = 1
             | (1 << 2)
             | (1 << 10)
-            | (triangle_vs_max_threads_field(warm.device_id, pipeline.vs.meta.max_threads) << 22);
-        let vs_dw8 = (programmed_vs_urb_output_length as u32) << 16;
+            | ((front_end_contract.vs_simd8_single_instance_dispatch as u32) << 9)
+            | (applied_vs_max_threads_field << 22);
+        let vs_dw8 = front_end_contract
+            .vs_dw8_override
+            .unwrap_or((programmed_vs_urb_output_length.saturating_sub(1) as u32) << 16);
+        let vs_output_read_offset = (vs_dw8 >> 21) & 0x3F;
         log_batch_offset(cursor, "3DSTATE_VS");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_VS)?;
         push(batch_dwords, &mut cursor, vs_ksp_offset & !0x3F)?;
@@ -3351,24 +4135,59 @@ fn encode_minimal_streamout_proof_batch(
         push(batch_dwords, &mut cursor, vs_dw6)?;
         push(batch_dwords, &mut cursor, vs_dw7)?;
         push(batch_dwords, &mut cursor, vs_dw8)?;
-        intel_render_verbose_log!(
-            "intel/render: probe-vs ksp=0x{:08X} dw3=0x{:08X} dw6=0x{:08X} dw7=0x{:08X} dw8=0x{:08X} baked_max_threads={} applied_max_threads_field={} baked_urb_out_len={} programmed_urb_out_len={} programmed_urb_entries={} baked_grf_start={} programmed_grf_start={} applied_grf_start={} dispatch={:?} contract={} note=vs-streamout-proof\n",
+        intel_render_focus_log!(
+            "intel/render: probe-vs ksp=0x{:08X} dw3=0x{:08X} accesses_uav={} simd8_single={} dw6=0x{:08X} dw7=0x{:08X} dw8=0x{:08X} dw8_override={} vs_output_read_offset={} baked_max_threads={} applied_max_threads_field={} baked_urb_out_len={} programmed_urb_out_len={} programmed_urb_entries={} programmed_urb_start={} vs_urb_read_offset={} vs_urb_read_length={} baked_grf_start={} programmed_grf_start={} applied_grf_start={} dispatch={:?} contract={} note=vs-streamout-proof-dw8-contract-or-minus-one\n",
             vs_ksp_offset & !0x3F,
             vs_dw3,
+            vs_accesses_uav as u8,
+            front_end_contract.vs_simd8_single_instance_dispatch as u8,
             vs_dw6,
             vs_dw7,
             vs_dw8,
+            front_end_contract.vs_dw8_override.is_some() as u8,
+            vs_output_read_offset,
             pipeline.vs.meta.max_threads,
-            triangle_vs_max_threads_field(warm.device_id, pipeline.vs.meta.max_threads),
+            applied_vs_max_threads_field,
             baked_vs_urb_output_length,
             programmed_vs_urb_output_length,
             programmed_vs_urb_entries,
+            programmed_vs_urb_start,
+            front_end_contract.vs_urb_read_offset,
+            front_end_contract.vs_urb_read_length,
             pipeline.vs.meta.kernel.grf_start_register,
             programmed_vs_grf_start,
             applied_vs_grf_start,
             pipeline.vs.meta.kernel.dispatch_mode,
             front_end_contract.label,
         );
+        if pipeline.vs.code.len() >= 4 {
+            let send_base = pipeline.vs.code.len().saturating_sub(4);
+            let send_dw0 = pipeline.vs.code[send_base];
+            let send_dw1 = pipeline.vs.code[send_base + 1];
+            let send_dw2 = pipeline.vs.code[send_base + 2];
+            let send_dw3 = pipeline.vs.code[send_base + 3];
+            let send_sfid = (send_dw2 >> 28) & 0xF;
+            let send_src0_grf = (send_dw2 >> 8) & 0xFF;
+            let send_src0_mlen = (send_dw2 >> 3) & 0xF;
+            let send_src1_grf = (send_dw3 >> 8) & 0xFF;
+            let send_ex_mlen = (send_dw3 >> 24) & 0x1F;
+            intel_render_focus_log!(
+                "intel/render: probe-vs-urb-send send=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] sfid={} src0_g={} src0_mlen={} src1_g={} ex_mlen={} first_payload=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] note=mesa-disasm-shape-is-src0-g127-mlen1-src1-g119-ex_mlen8-urb-write-eot\n",
+                send_dw0,
+                send_dw1,
+                send_dw2,
+                send_dw3,
+                send_sfid,
+                send_src0_grf,
+                send_src0_mlen,
+                send_src1_grf,
+                send_ex_mlen,
+                pipeline.vs.code[0],
+                pipeline.vs.code.get(1).copied().unwrap_or(0),
+                pipeline.vs.code.get(2).copied().unwrap_or(0),
+                pipeline.vs.code.get(3).copied().unwrap_or(0),
+            );
+        }
         intel_render_verbose_log!(
             "intel/render: probe-vs-export note={} position_only={} generic_attrs=0 baked_urb_bytes={} programmed_urb_bytes={} expected_vue=header+position-only\n",
             crate::intel::shader::triangle_pipeline_note(),
@@ -3452,7 +4271,7 @@ fn encode_minimal_streamout_proof_batch(
     push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
 
     log_batch_offset(cursor, "3DSTATE_SO_DECL_LIST");
-    let streamout_decl_dword0 = streamout_experiment.so_decl_buffer_selects();
+        let streamout_decl_dword0 = streamout_experiment.so_decl_stream_offsets();
     let streamout_decl_dword1 = streamout_experiment.so_decl_num_entries();
     let [
         streamout_decl_dword2,
@@ -3470,10 +4289,11 @@ fn encode_minimal_streamout_proof_batch(
         push(batch_dwords, &mut cursor, streamout_decl_dword5)?;
     }
     crate::log!(
-        "intel/render: {} decl experiment={} read_len={} so_pitch={} decl=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] slot_contract={}\n",
+        "intel/render: {} decl experiment={} read_offset={} read_length={} so_pitch={} decl=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] slot_contract={}\n",
         submit_label,
         streamout_experiment.label(),
-        streamout_experiment.vertex_read_length(),
+        streamout_experiment.vertex_read_offset(),
+        streamout_experiment.vertex_read_length_field(),
         streamout_experiment.vertex_bytes(),
         streamout_decl_dword0,
         streamout_decl_dword1,
@@ -3484,7 +4304,7 @@ fn encode_minimal_streamout_proof_batch(
         streamout_experiment.vf_slot_contract(),
     );
     crate::log!(
-        "intel/render: {} contract experiment={} stages_disabled={} sbe[read_offset=1 read_length=1 num_sf_attrs=1 force_offset=1 force_length=1] urb_vs[alloc_len={} start={} entries={}] vb[index=0 pitch={} size=0x{:X}] streamout[read_offset=0 read_length_field={} rendering_disable={} stats_enable={} pitch={} so_gpu=0x{:X} size_dwords=0x{:X}] topo={}\n",
+        "intel/render: {} contract experiment={} stages_disabled={} sbe[read_offset={} read_length={} num_sf_attrs=1 force_offset=1 force_length=1] urb_vs[alloc_len={} start={} entries={}] vb[index=0 pitch={} size=0x{:X}] streamout[read_offset={} read_length_field={} rendering_disable={} sol_write_enable={} buffer0_enable={} stats_enable={} pitch={} so_gpu=0x{:X} size_dwords=0x{:X}] sobuf0[enable={} stream_offset_write_enable={} offset_addr_enable={} offset_mode={}] topo={}\n",
         submit_label,
         streamout_experiment.label(),
         if vs_config.is_some() {
@@ -3492,18 +4312,40 @@ fn encode_minimal_streamout_proof_batch(
         } else {
             "vs|hs|te|ds|gs|ps"
         },
+        sbe_vertex_read_offset,
+        sbe_vertex_read_length,
         programmed_vs_urb_output_length,
-        TRIANGLE_VS_URB_START,
+        programmed_vs_urb_start,
         programmed_vs_urb_entries,
         draw.vertex_stride,
         vb_size_bytes,
+        (streamout_dw2 >> 5) & 0x1F,
         streamout_dw2 & 0x1F,
         (streamout_dw1 >> 30) & 0x1,
+        ((streamout_dw1 >> 31) & 0x1) & (1 ^ ((streamout_dw1 >> 30) & 0x1)),
+        (streamout_dw1 >> 8) & 0x1,
         (streamout_dw1 >> 25) & 0x1,
         streamout_dw3 & 0xFFF,
         GPU_VA_STREAMOUT_BASE,
         streamout_surface_size_dwords,
+        (so_buffer_index_dw1 >> 31) & 0x1,
+        (so_buffer_index_dw1 >> 21) & 0x1,
+        (so_buffer_index_dw1 >> 20) & 0x1,
+        decode_streamout_offset_mode_name(
+            (so_buffer_index_dw1 >> 21) & 0x1,
+            (so_buffer_index_dw1 >> 20) & 0x1,
+        ),
         primitive_topology_label(batch_mode.topology()),
+    );
+    log_batch_offset(cursor, "3DSTATE_STREAMOUT refresh-after-so-decl");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_STREAMOUT)?;
+    push(batch_dwords, &mut cursor, streamout_dw1)?;
+    push(batch_dwords, &mut cursor, streamout_dw2)?;
+    push(batch_dwords, &mut cursor, streamout_dw3)?;
+    push(batch_dwords, &mut cursor, streamout_dw4)?;
+    intel_render_focus_log!(
+        "intel/render: {} streamout-refresh-after-decl emitted=1 reason=sol-state-after-buffer-and-decl-order-probe\n",
+        submit_label,
     );
     log_batch_offset(cursor, "PIPE_CONTROL post-so-decl");
     push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
@@ -3515,6 +4357,15 @@ fn encode_minimal_streamout_proof_batch(
         result_gpu_addr + (RESULT_SLOT_PRE3D_DWORD as u64) * 4,
         pre3d_value,
     )?;
+
+    log_batch_offset(cursor, "3DSTATE_VF streamout-late-mesa-active");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_MESA_ACTIVE)?;
+    push(batch_dwords, &mut cursor, MESA_ACTIVE_VF_CUT_INDEX)?;
+    intel_render_focus_log!(
+        "intel/render: probe-vf-state emit=streamout-late-before-primitive cmd=0x{:08X} cut_index=0x{:08X} component_packing=1 source=mesa-active-triangle hypothesis=vf-component-packing-handoff-unblocks-urb-streamout\n",
+        CMD_3DSTATE_VF_MESA_ACTIVE,
+        MESA_ACTIVE_VF_CUT_INDEX,
+    );
 
     log_batch_offset(cursor, "3DPRIMITIVE");
     push(batch_dwords, &mut cursor, CMD_3DPRIMITIVE)?;
@@ -3533,14 +4384,38 @@ fn encode_minimal_streamout_proof_batch(
         RCS_EXEC_RESULT_DRAW_PRE_LIGHT_PC,
     )?;
 
-    log_batch_offset(cursor, "PIPE_CONTROL post-3d-light-marker");
-    push_pipe_control_post_sync_imm(
-        batch_dwords,
-        &mut cursor,
-        PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS,
-        result_gpu_addr + (RESULT_SLOT_POST3D_LIGHT_PIPE_CONTROL_LO_DWORD as u64) * 4,
-        post3d_value,
-    )?;
+    if matches!(
+        post_draw_sync_variant,
+        PostDrawSyncVariant::NoPostDrawPipeControl
+    ) {
+        log_batch_offset(cursor, "skip PIPE_CONTROL post-3d-light-marker");
+        intel_render_focus_log!(
+            "intel/render: vs-streamout-proof-postdraw action=skip-light-pipe-control variant={} source=pdoane-reference-style reason=avoid-known-postdraw-pc-stall\n",
+            post_draw_sync_variant.label(),
+        );
+    } else {
+        let light_sync_flags = post_draw_sync_variant.light_sync_flags();
+        log_batch_offset(cursor, "PIPE_CONTROL post-3d-light-marker");
+        intel_render_focus_log!(
+            "intel/render: vs-streamout-proof-postdraw action=emit-light-pipe-control variant={} light_flags=0x{:08X} light_post_sync={} light_cs_stall={}\n",
+            post_draw_sync_variant.label(),
+            light_sync_flags,
+            post_draw_sync_variant.light_post_sync_enabled() as u8,
+            post_draw_sync_variant.light_cs_stall_enabled() as u8,
+        );
+        if post_draw_sync_variant.light_post_sync_enabled() {
+            push_pipe_control_post_sync_imm(
+                batch_dwords,
+                &mut cursor,
+                0,
+                light_sync_flags,
+                result_gpu_addr + (RESULT_SLOT_POST3D_LIGHT_PIPE_CONTROL_LO_DWORD as u64) * 4,
+                post3d_value,
+            )?;
+        } else {
+            push_pipe_control(batch_dwords, &mut cursor, light_sync_flags)?;
+        }
+    }
 
     log_batch_offset(cursor, "MI_STORE_DATA_IMM final-after-light");
     push_store_data_imm(
@@ -3549,15 +4424,45 @@ fn encode_minimal_streamout_proof_batch(
         result_gpu_addr + (RESULT_SLOT_FINAL_AFTER_LIGHT_DWORD as u64) * 4,
         RCS_EXEC_RESULT_DRAW_FINAL_AFTER_LIGHT,
     )?;
-
-    log_batch_offset(cursor, "PIPE_CONTROL post-3d-heavy-sync");
-    push_pipe_control_post_sync_imm(
+    const STREAMOUT_DEBUG_MARKER_OFFSET_BYTES: u64 = 0x80;
+    log_batch_offset(cursor, "MI_STORE_DATA_IMM streamout-debug-marker");
+    push_store_data_imm(
         batch_dwords,
         &mut cursor,
-        PIPE_CONTROL_POST_DRAW_SYNC_BITS,
-        result_gpu_addr + (RESULT_SLOT_POST3D_PIPE_CONTROL_LO_DWORD as u64) * 4,
-        post3d_value,
+        GPU_VA_STREAMOUT_BASE + STREAMOUT_DEBUG_MARKER_OFFSET_BYTES,
+        0xC0DE_F00D,
     )?;
+    intel_render_focus_log!(
+        "intel/render: {} streamout-debug-marker gpu=0x{:X} offset=0x{:X} value=0xC0DEF00D purpose=ggtt-readback-after-so\n",
+        submit_label,
+        GPU_VA_STREAMOUT_BASE + STREAMOUT_DEBUG_MARKER_OFFSET_BYTES,
+        STREAMOUT_DEBUG_MARKER_OFFSET_BYTES,
+    );
+
+    if let Some(heavy_sync_flags) = post_draw_sync_variant.heavy_sync_flags() {
+        let heavy_header_flags = post_draw_sync_variant.heavy_header_flags();
+        log_batch_offset(cursor, "PIPE_CONTROL post-3d-heavy-sync");
+        intel_render_focus_log!(
+            "intel/render: vs-streamout-proof-postdraw action=emit-heavy-pipe-control variant={} header_flags=0x{:08X} heavy_flags=0x{:08X}\n",
+            post_draw_sync_variant.label(),
+            heavy_header_flags,
+            heavy_sync_flags,
+        );
+        push_pipe_control_post_sync_imm(
+            batch_dwords,
+            &mut cursor,
+            heavy_header_flags,
+            heavy_sync_flags,
+            result_gpu_addr + (RESULT_SLOT_POST3D_PIPE_CONTROL_LO_DWORD as u64) * 4,
+            post3d_value,
+        )?;
+    } else {
+        log_batch_offset(cursor, "skip PIPE_CONTROL post-3d-heavy-sync");
+        intel_render_focus_log!(
+            "intel/render: vs-streamout-proof-postdraw action=skip-heavy-pipe-control variant={} source=pdoane-reference-style reason=proof-only-final-marker-retire\n",
+            post_draw_sync_variant.label(),
+        );
+    }
 
     log_batch_offset(cursor, "MI_STORE_DATA_IMM final");
     push_store_data_imm(
@@ -3581,8 +4486,8 @@ fn encode_minimal_streamout_proof_batch(
         draw.rt_pitch,
         draw.target_w,
         draw.target_h,
-        PostDrawSyncVariant::HeavyAll.label(),
-        PostDrawSyncVariant::HeavyAll.light_sync_flags(),
+        post_draw_sync_variant.label(),
+        post_draw_sync_variant.light_sync_flags(),
     );
 
     Ok(cursor * core::mem::size_of::<u32>())
@@ -3724,10 +4629,10 @@ fn encode_3d_no_draw_probe_batch(
     push(batch_dwords, &mut cursor, PIPELINE_SELECT_3D)?;
     push(batch_dwords, &mut cursor, STATE_BASE_ADDRESS_CMD)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
-    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, RENDER_MOCS << 16)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
-    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_VERTEX_BASE)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
     push_sba_size(batch_dwords, &mut cursor, true, warm.draw_state_len)?;
     push_sba_size(batch_dwords, &mut cursor, true, warm.draw_state_len)?;
