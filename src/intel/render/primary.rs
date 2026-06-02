@@ -1,4 +1,8 @@
 pub(crate) fn submit_primary_triangle_once() {
+    if PRIMARY_DISABLE_RENDER_BRINGUP {
+        let _ = submit_pdoane_smoke_once("boot-once-render-disabled");
+        return;
+    }
     if PRIMARY_TRIANGLE_SUBMITTED.swap(true, Ordering::AcqRel) {
         return;
     }
@@ -7,6 +11,10 @@ pub(crate) fn submit_primary_triangle_once() {
 }
 
 pub(crate) fn submit_primary_probe_periodic() {
+    if PRIMARY_DISABLE_RENDER_BRINGUP {
+        let _ = submit_pdoane_smoke_once("periodic-render-disabled");
+        return;
+    }
     let _ = submit_primary_probe_now("periodic-repaint");
 }
 
@@ -2639,8 +2647,7 @@ fn submit_single_raster_isolation_probe(dev: crate::intel::Dev, warm: RenderWarm
         BackendProbeMode::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1,
         PostDrawSyncVariant::LightPostSyncNoCs,
     );
-    let line_mesa_backend_open_bounds_sample1_fragment_candidate_ready =
-        fragment_candidate_ready();
+    let line_mesa_backend_open_bounds_sample1_fragment_candidate_ready = fragment_candidate_ready();
     let line_mesa_backend_open_bounds_sample1_fragment_boundary_observed =
         fragment_boundary_observed();
     let line_mesa_backend_open_bounds_sample1_wm_coverage_observed = wm_coverage_observed();
@@ -2696,8 +2703,7 @@ fn submit_single_raster_isolation_probe(dev: crate::intel::Dev, warm: RenderWarm
         fragment_candidate_ready();
     let line_mesa_backend_open_bounds_sample1_onpixel_fragment_boundary_observed =
         fragment_boundary_observed();
-    let line_mesa_backend_open_bounds_sample1_onpixel_wm_coverage_observed =
-        wm_coverage_observed();
+    let line_mesa_backend_open_bounds_sample1_onpixel_wm_coverage_observed = wm_coverage_observed();
     let line_mesa_backend_open_bounds_sample1_onpixel_psd_dispatch_observed =
         psd_dispatch_observed();
     intel_render_focus_log!(
@@ -2761,7 +2767,8 @@ fn submit_single_raster_isolation_probe(dev: crate::intel::Dev, warm: RenderWarm
         line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_fragment_candidate_ready as u8,
         line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_wm_coverage_observed as u8,
         line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_psd_dispatch_observed as u8,
-        line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_fragment_boundary_observed as u8,
+        line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_fragment_boundary_observed
+            as u8,
         line_mesa_backend_open_bounds_sample1_onpixel_completed as u8,
     );
     if line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_completed {
@@ -2857,8 +2864,7 @@ fn submit_single_raster_isolation_probe(dev: crate::intel::Dev, warm: RenderWarm
         PostDrawSyncVariant::LightPostSyncNoCs,
     );
     let ndc_line_mesa_active_block_swiz_fragment_candidate_ready = fragment_candidate_ready();
-    let ndc_line_mesa_active_block_swiz_fragment_boundary_observed =
-        fragment_boundary_observed();
+    let ndc_line_mesa_active_block_swiz_fragment_boundary_observed = fragment_boundary_observed();
     let ndc_line_mesa_active_block_swiz_wm_coverage_observed = wm_coverage_observed();
     let ndc_line_mesa_active_block_swiz_psd_dispatch_observed = psd_dispatch_observed();
     intel_render_focus_log!(
@@ -2908,8 +2914,7 @@ fn submit_single_raster_isolation_probe(dev: crate::intel::Dev, warm: RenderWarm
         PostDrawSyncVariant::LightPostSyncNoCs,
     );
     let ndc_rect_mesa_active_block_swiz_fragment_candidate_ready = fragment_candidate_ready();
-    let ndc_rect_mesa_active_block_swiz_fragment_boundary_observed =
-        fragment_boundary_observed();
+    let ndc_rect_mesa_active_block_swiz_fragment_boundary_observed = fragment_boundary_observed();
     let ndc_rect_mesa_active_block_swiz_wm_coverage_observed = wm_coverage_observed();
     let ndc_rect_mesa_active_block_swiz_psd_dispatch_observed = psd_dispatch_observed();
     intel_render_focus_log!(
@@ -2959,8 +2964,7 @@ fn submit_single_raster_isolation_probe(dev: crate::intel::Dev, warm: RenderWarm
         PostDrawSyncVariant::LightPostSyncNoCs,
     );
     let ndc_tri_mesa_active_block_swiz_fragment_candidate_ready = fragment_candidate_ready();
-    let ndc_tri_mesa_active_block_swiz_fragment_boundary_observed =
-        fragment_boundary_observed();
+    let ndc_tri_mesa_active_block_swiz_fragment_boundary_observed = fragment_boundary_observed();
     let ndc_tri_mesa_active_block_swiz_wm_coverage_observed = wm_coverage_observed();
     let ndc_tri_mesa_active_block_swiz_psd_dispatch_observed = psd_dispatch_observed();
     intel_render_focus_log!(
@@ -3010,8 +3014,7 @@ fn submit_single_raster_isolation_probe(dev: crate::intel::Dev, warm: RenderWarm
         PostDrawSyncVariant::LightPostSyncNoCs,
     );
     let screen_tri_mesa_active_block_swiz_fragment_candidate_ready = fragment_candidate_ready();
-    let screen_tri_mesa_active_block_swiz_fragment_boundary_observed =
-        fragment_boundary_observed();
+    let screen_tri_mesa_active_block_swiz_fragment_boundary_observed = fragment_boundary_observed();
     let screen_tri_mesa_active_block_swiz_wm_coverage_observed = wm_coverage_observed();
     let screen_tri_mesa_active_block_swiz_psd_dispatch_observed = psd_dispatch_observed();
     intel_render_focus_log!(
@@ -3227,10 +3230,8 @@ fn submit_single_raster_isolation_probe(dev: crate::intel::Dev, warm: RenderWarm
         fragment_candidate_ready();
     let screen_tri_mesa_raster_sf_sane_bary8_header_fragment_boundary_observed =
         fragment_boundary_observed();
-    let screen_tri_mesa_raster_sf_sane_bary8_header_wm_coverage_observed =
-        wm_coverage_observed();
-    let screen_tri_mesa_raster_sf_sane_bary8_header_psd_dispatch_observed =
-        psd_dispatch_observed();
+    let screen_tri_mesa_raster_sf_sane_bary8_header_wm_coverage_observed = wm_coverage_observed();
+    let screen_tri_mesa_raster_sf_sane_bary8_header_psd_dispatch_observed = psd_dispatch_observed();
     intel_render_focus_log!(
         "intel/render: primary-single-raster-isolation-screen-trilist-mesa-raster-sf-sane-bary8-header completed={} scratch_only=1 probe=late-vf-screen-trilist-header-pos1-mesa-raster-sf-sane-bary8-raster-wm-oa-probe vertex_count=3 topology=trilist geometry=screen-space-oversized vue_contract=header-pos1 raster_dw1=0x04A11003 fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_screen_tri_mesa_active_block_swiz_sf_sane_bary8_header={} reason=tests_same_header_trilist_bary8_state_with_verified_mesa_active_raster_dw1\n",
         screen_tri_mesa_raster_sf_sane_bary8_header_completed as u8,
@@ -3282,10 +3283,8 @@ fn submit_single_raster_isolation_probe(dev: crate::intel::Dev, warm: RenderWarm
         fragment_candidate_ready();
     let screen_tri_mesa_raster_mesa_sf_bary8_header_fragment_boundary_observed =
         fragment_boundary_observed();
-    let screen_tri_mesa_raster_mesa_sf_bary8_header_wm_coverage_observed =
-        wm_coverage_observed();
-    let screen_tri_mesa_raster_mesa_sf_bary8_header_psd_dispatch_observed =
-        psd_dispatch_observed();
+    let screen_tri_mesa_raster_mesa_sf_bary8_header_wm_coverage_observed = wm_coverage_observed();
+    let screen_tri_mesa_raster_mesa_sf_bary8_header_psd_dispatch_observed = psd_dispatch_observed();
     intel_render_focus_log!(
         "intel/render: primary-single-raster-isolation-screen-trilist-mesa-raster-mesa-sf-bary8-header completed={} scratch_only=1 probe=late-vf-screen-trilist-header-pos1-mesa-raster-mesa-sf-bary8-raster-wm-oa-probe vertex_count=3 topology=trilist geometry=screen-space-oversized vue_contract=header-pos1 raster_dw1=0x04A11003 sf=[0x00080402,0x00000000,0x02004808] fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} delta_screen_tri_mesa_raster_sf_sane_bary8_header={} reason=tests_same_header_trilist_bary8_mesa_raster_state_with_verified_mesa_active_sf_body\n",
         screen_tri_mesa_raster_mesa_sf_bary8_header_completed as u8,
@@ -3420,20 +3419,21 @@ fn submit_single_raster_isolation_probe(dev: crate::intel::Dev, warm: RenderWarm
     }
     crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
 
-    let real_vs_ndc_mesa_active_block_swiz_completed = submit_triangle_real_vs_draw_probe_to_surface(
-        dev,
-        warm,
-        GPU_VA_STREAMOUT_BASE,
-        32 * core::mem::size_of::<u32>(),
-        32,
-        32,
-        TriangleBlendProbeMode::MesaZeroedState,
-        "real-vs-ndc-mesa-active-block-swiz-vs-grf2-urbdf8-vb0204400c-prim0-raster-wm-oa-probe",
-        TRIANGLE_VS_GRF2_FRONT_END_CONTRACT,
-        VfPrimitiveGeometry::Oversized,
-        BackendProbeMode::RasterWmInputOaNdcMesaActiveBlockSwiz,
-        PostDrawSyncVariant::LightPostSyncNoCs,
-    );
+    let real_vs_ndc_mesa_active_block_swiz_completed =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-ndc-mesa-active-block-swiz-vs-grf2-urbdf8-vb0204400c-prim0-raster-wm-oa-probe",
+            TRIANGLE_VS_GRF2_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::Oversized,
+            BackendProbeMode::RasterWmInputOaNdcMesaActiveBlockSwiz,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
     let real_vs_ndc_mesa_active_block_swiz_fragment_candidate_ready = fragment_candidate_ready();
     let real_vs_ndc_mesa_active_block_swiz_fragment_boundary_observed =
         fragment_boundary_observed();
@@ -3615,7 +3615,8 @@ fn submit_single_raster_isolation_probe(dev: crate::intel::Dev, warm: RenderWarm
     {
         intel_render_focus_log!(
             "intel/render: primary-single-raster-isolation-ladder stopped index=23 completed={} reason=selected_visual_isolation_rung\n",
-            line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_bary8_completed as u8,
+            line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_bary8_completed
+                as u8,
         );
         return line_mesa_backend_open_bounds_sample1_onpixel_mesa_sf_point_sbe_read0_bary8_completed;
     }
@@ -3762,7 +3763,7 @@ fn submit_single_raster_isolation_probe(dev: crate::intel::Dev, warm: RenderWarm
     }
     if !PRIMARY_SINGLE_RASTER_PROBE_LADDER_ENABLED {
         intel_render_focus_log!(
-        "intel/render: primary-single-raster-isolation-ladder stopped index=26 completed={} reason=selected_visual_isolation_rung\n",
+            "intel/render: primary-single-raster-isolation-ladder stopped index=26 completed={} reason=selected_visual_isolation_rung\n",
             clip_bypass_completed as u8,
         );
         return clip_bypass_completed;

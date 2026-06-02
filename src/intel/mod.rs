@@ -104,6 +104,27 @@ pub(crate) struct GpgpuPreflightStatus {
 }
 
 #[derive(Copy, Clone, Debug)]
+pub(crate) struct GpgpuOffscreenStoreProof {
+    pub(crate) submitted: bool,
+    pub(crate) retired: bool,
+    pub(crate) readback_ok: bool,
+    pub(crate) passed: bool,
+    pub(crate) reason: &'static str,
+    pub(crate) program_name: &'static str,
+    pub(crate) group_x_dim: u32,
+    pub(crate) expected_lane_dispatch: u32,
+    pub(crate) dispatch_delta: u64,
+    pub(crate) target_slot: usize,
+    pub(crate) target_gpu: u64,
+    pub(crate) c_value: u32,
+    pub(crate) expected_store_value: u32,
+    pub(crate) expected_hits_mask: u64,
+    pub(crate) finish_marker: u32,
+    pub(crate) expected_finish_marker: u32,
+    pub(crate) batch_bytes: usize,
+}
+
+#[derive(Copy, Clone, Debug)]
 pub(crate) struct GpgpuOneTileStageProof {
     pub(crate) staged: bool,
     pub(crate) reason: &'static str,
@@ -530,6 +551,14 @@ pub(crate) fn gpgpu_preflight_status() -> GpgpuPreflightStatus {
         eu_program_name: status.eu_program_name,
         result_c_changed_by_eu: status.result_c_changed_by_eu,
     }
+}
+
+pub(crate) fn submit_gpgpu_offscreen_store_probe(group_x_dim: u32) -> GpgpuOffscreenStoreProof {
+    self::gpgpu::submit_gpgpu_offscreen_store_probe(group_x_dim)
+}
+
+pub(crate) fn submit_gpgpu_eot_probe(variant_index: u32) -> GpgpuOffscreenStoreProof {
+    self::gpgpu::submit_gpgpu_eot_probe(variant_index)
 }
 
 pub(crate) fn stage_gpgpu_one_tile_record_probe(

@@ -17,6 +17,16 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
     let mut args = rest.split_whitespace();
     match args.next() {
         Some("status") => status(io),
+        Some("eot") => eot(io, &mut args),
+        Some("offscreen") | Some("legacy") => offscreen(io, &mut args),
+        Some("rowpaint") => {
+            let row = parse_u32(args.next()).unwrap_or(1);
+            rowpaint(io, row, &mut args);
+        }
+        Some("row2560") => {
+            let row = parse_u32(args.next()).unwrap_or(1);
+            row2560(io, row, &mut args);
+        }
         Some("walkrow") => walkrow(io, &mut args),
         Some("tilewalker") => tilewalker(io, &mut args),
         Some("rowburst") => rowburst(io, &mut args),
@@ -34,7 +44,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "gpgpu: usage `gpgpu [row=1..1440] [rows=5]` | `gpgpu status` | `gpgpu triangle` | debug: `gpgpu walkrow ...` `gpgpu tilewalker ...` `gpgpu rowburst ...` `gpgpu replay [0..2]`",
+        "gpgpu: usage `gpgpu [row=1..1440] [rows=5]` | `gpgpu offscreen` | `gpgpu eot [0..10]` | `gpgpu rowpaint [row] [rows]` | `gpgpu tilewalker [row] [rows]` | `gpgpu status` | `gpgpu triangle` | debug: `gpgpu offscreen [group_x]` `gpgpu row2560 ...` `gpgpu walkrow ...` `gpgpu tilewalker ... x color stamps verify` `gpgpu rowburst ...` `gpgpu replay [0..2]`",
     );
 }
 
@@ -60,6 +70,58 @@ fn status(io: &'static dyn ShellBackend2) {
     );
 }
 
+fn offscreen(io: &'static dyn ShellBackend2, args: &mut core::str::SplitWhitespace<'_>) {
+    let group_x = parse_u32(args.next()).unwrap_or(0);
+    let proof = crate::intel::submit_gpgpu_offscreen_store_probe(group_x);
+    print_shell_line(
+        io,
+        format!(
+            "gpgpu: offscreen group_x={} submitted={} retired={} ok={} store=0x{:08X}/0x{:08X} hits=0x{:016X} dispatch={}/{} finish=0x{:08X}/0x{:08X} target=0x{:X} slot={} reason={} program={} batch=0x{:X}",
+            proof.group_x_dim,
+            proof.submitted as u8,
+            proof.retired as u8,
+            proof.passed as u8,
+            proof.c_value,
+            proof.expected_store_value,
+            proof.expected_hits_mask,
+            proof.dispatch_delta,
+            proof.expected_lane_dispatch,
+            proof.finish_marker,
+            proof.expected_finish_marker,
+            proof.target_gpu,
+            proof.target_slot,
+            proof.reason,
+            proof.program_name,
+            proof.batch_bytes,
+        )
+        .as_str(),
+    );
+}
+
+fn eot(io: &'static dyn ShellBackend2, args: &mut core::str::SplitWhitespace<'_>) {
+    let variant = parse_u32(args.next()).unwrap_or(6);
+    let proof = crate::intel::submit_gpgpu_eot_probe(variant);
+    print_shell_line(
+        io,
+        format!(
+            "gpgpu: eot variant={} group_x={} submitted={} retired={} ok={} dispatch={}/{} finish=0x{:08X}/0x{:08X} reason={} program={} batch=0x{:X}",
+            variant % 11,
+            proof.group_x_dim,
+            proof.submitted as u8,
+            proof.retired as u8,
+            proof.passed as u8,
+            proof.dispatch_delta,
+            proof.expected_lane_dispatch,
+            proof.finish_marker,
+            proof.expected_finish_marker,
+            proof.reason,
+            proof.program_name,
+            proof.batch_bytes,
+        )
+        .as_str(),
+    );
+}
+
 fn triangle(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "gpgpu: triangle render demo submit requested");
     crate::intel::submit_primary_triangle_demo();
@@ -78,11 +140,12 @@ fn rowpaint(
         return;
     }
 
-    let (width, height) = crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
+    let (_width, height) = crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
     let rows = core::cmp::min(requested_rows, height.saturating_sub(start_row).saturating_add(1));
     let start_tick = embassy_time_driver::now();
     let mut submits = 0u32;
-    let mut ok = 0u32;
+    let mut retired = 0u32;
+    let mut dense = 0u32;
     let mut last_row = start_row;
     let mut last_proof = None;
 
@@ -91,8 +154,11 @@ fn rowpaint(
         let row = start_row.saturating_add(row_index);
         let proof = crate::intel::submit_gpgpu_primary_scanout_row2560_simd16(row, color);
         submits = submits.saturating_add(1);
+        if proof.finished && proof.finish_marker == proof.expected_finish_marker {
+            retired = retired.saturating_add(1);
+        }
         if proof.readback_ok {
-            ok = ok.saturating_add(1);
+            dense = dense.saturating_add(1);
         }
         last_proof = Some(proof);
         last_row = row;
@@ -108,29 +174,22 @@ fn rowpaint(
     print_shell_line(
         io,
         format!(
-            "gpgpu: rowpaint start={} rows={} width={} auto_rgb=0x{:06X} impl=row2560-simd16 submits={} ok={}/{} elapsed_ms={} elapsed_ticks={} tick_hz={} last_row={} submitted={} finished={} ok_last={} reason={} program={} output_gpu=0x{:X} expected=0x{:08X} dispatch_delta={} finish=0x{:08X}/0x{:08X} batch_bytes=0x{:X}",
+            "gpgpu: rowpaint row={} rows={} rgb=0x{:06X} impl=row2560-simd8 retired={}/{} dense={}/{} last={} fin={} hits=0x{:016X} reason={} dt_ms={} dispatch={} finish=0x{:08X}/0x{:08X}",
             start_row,
             rows,
-            width,
             color & 0x00FF_FFFF,
+            retired,
             submits,
-            ok,
+            dense,
             submits,
-            elapsed_ms,
-            elapsed_ticks,
-            embassy_time_driver::TICK_HZ,
             last_row,
-            proof.submitted as u8,
             proof.finished as u8,
-            proof.readback_ok as u8,
+            proof.output_hits_lo64,
             proof.reason,
-            proof.program_name,
-            proof.output_gpu,
-            proof.sentinel,
+            elapsed_ms,
             proof.dispatch_delta,
             proof.finish_marker,
             proof.expected_finish_marker,
-            proof.batch_bytes,
         )
         .as_str(),
     );
@@ -300,7 +359,13 @@ fn tilewalker(io: &'static dyn ShellBackend2, args: &mut core::str::SplitWhitesp
         return;
     }
 
-    let rows = core::cmp::min(requested_rows, 1440u32.saturating_sub(start_row).saturating_add(1));
+    let (width, height) = crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
+    let rows = core::cmp::min(requested_rows, height.saturating_sub(start_row).saturating_add(1));
+    if x == 0 && stamps_arg.is_none() && !verify_readback {
+        tilewalker_row2560(io, start_row, rows, width, color);
+        return;
+    }
+
     let start_tick = embassy_time_driver::now();
     let mut row_index = 0u32;
     let mut submits = 0u32;
@@ -391,6 +456,135 @@ fn tilewalker(io: &'static dyn ShellBackend2, args: &mut core::str::SplitWhitesp
             proof.finish_marker,
             proof.expected_finish_marker,
             proof.batch_bytes,
+        )
+        .as_str(),
+    );
+}
+
+fn tilewalker_row2560(
+    io: &'static dyn ShellBackend2,
+    start_row: u32,
+    rows: u32,
+    width: u32,
+    color: u32,
+) {
+    let start_tick = embassy_time_driver::now();
+    let mut row_index = 0u32;
+    let mut submits = 0u32;
+    let mut retired = 0u32;
+    let mut dense = 0u32;
+    let mut last_row = start_row;
+    let mut last_proof = None;
+    while row_index < rows {
+        let row = start_row.saturating_add(row_index);
+        let proof = crate::intel::submit_gpgpu_primary_scanout_row2560_simd16(row, color);
+        submits = submits.saturating_add(1);
+        if proof.finished && proof.finish_marker == proof.expected_finish_marker {
+            retired = retired.saturating_add(1);
+        }
+        if proof.readback_ok {
+            dense = dense.saturating_add(1);
+        }
+        last_row = row;
+        last_proof = Some(proof);
+        row_index += 1;
+    }
+
+    let elapsed_ticks = embassy_time_driver::now().saturating_sub(start_tick);
+    let max_ticks = update_max_ticks(&GPGPU_TILEWALKER_MAX_TICKS, elapsed_ticks);
+    let elapsed_ms = ticks_to_ms(elapsed_ticks);
+    let max_ms = ticks_to_ms(max_ticks);
+    let Some(proof) = last_proof else {
+        print_shell_line(io, "gpgpu: tilewalker row2560 no rows submitted");
+        return;
+    };
+    print_shell_line(
+        io,
+        format!(
+            "gpgpu: tilewalker row={} rows={} width={} rgb=0x{:06X} impl=row2560-simd8 retired={}/{} dense={}/{} last={} fin={} hits=0x{:016X} reason={} dt_ms={} max_ms={} dispatch={} finish=0x{:08X}/0x{:08X}",
+            start_row,
+            rows,
+            width,
+            color & 0x00FF_FFFF,
+            retired,
+            submits,
+            dense,
+            submits,
+            last_row,
+            proof.finished as u8,
+            proof.output_hits_lo64,
+            proof.reason,
+            elapsed_ms,
+            max_ms,
+            proof.dispatch_delta,
+            proof.finish_marker,
+            proof.expected_finish_marker,
+        )
+        .as_str(),
+    );
+}
+
+fn row2560(
+    io: &'static dyn ShellBackend2,
+    start_row: u32,
+    args: &mut core::str::SplitWhitespace<'_>,
+) {
+    let requested_rows = parse_u32(args.next()).unwrap_or(1).clamp(1, 1440);
+    let color = next_fill_color();
+    if !(1..=1440).contains(&start_row) {
+        print_shell_line(io, "gpgpu: row2560 row must be in 1..=1440");
+        return;
+    }
+
+    let (_width, height) = crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
+    let rows = core::cmp::min(requested_rows, height.saturating_sub(start_row).saturating_add(1));
+    let start_tick = embassy_time_driver::now();
+    let mut row_index = 0u32;
+    let mut submits = 0u32;
+    let mut retired = 0u32;
+    let mut dense = 0u32;
+    let mut last_row = start_row;
+    let mut last_proof = None;
+    while row_index < rows {
+        let row = start_row.saturating_add(row_index);
+        let proof = crate::intel::submit_gpgpu_primary_scanout_row2560_simd16(row, color);
+        submits = submits.saturating_add(1);
+        if proof.finished && proof.finish_marker == proof.expected_finish_marker {
+            retired = retired.saturating_add(1);
+        }
+        if proof.readback_ok {
+            dense = dense.saturating_add(1);
+        }
+        last_row = row;
+        last_proof = Some(proof);
+        row_index += 1;
+    }
+
+    let elapsed_ticks = embassy_time_driver::now().saturating_sub(start_tick);
+    let elapsed_ms = ticks_to_ms(elapsed_ticks);
+    let Some(proof) = last_proof else {
+        print_shell_line(io, "gpgpu: row2560 no rows submitted");
+        return;
+    };
+    print_shell_line(
+        io,
+        format!(
+            "gpgpu: row2560 row={} rows={} rgb=0x{:06X} retired={}/{} dense={}/{} last={} fin={} hits=0x{:016X} reason={} dt_ms={} dispatch={} finish=0x{:08X}/0x{:08X}",
+            start_row,
+            rows,
+            color & 0x00FF_FFFF,
+            retired,
+            submits,
+            dense,
+            submits,
+            last_row,
+            proof.finished as u8,
+            proof.output_hits_lo64,
+            proof.reason,
+            elapsed_ms,
+            proof.dispatch_delta,
+            proof.finish_marker,
+            proof.expected_finish_marker,
         )
         .as_str(),
     );

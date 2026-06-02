@@ -2282,7 +2282,8 @@ fn is_raster_wm_oa_submit_name(submit_name: &str) -> bool {
 fn is_surface_draw_submit_name(submit_name: &str) -> bool {
     matches!(
         submit_name,
-        "draw-path"
+        "pdoane-smoke"
+            | "draw-path"
             | "vf-draw-path"
             | "ps-launch-big-primitive"
             | "ps-bt1-big-primitive"

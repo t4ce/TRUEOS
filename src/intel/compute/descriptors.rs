@@ -25,6 +25,9 @@ pub(super) fn build_gpgpu_interface_descriptor_words(
     program: GpgpuEuProgram,
     store_surface: GpgpuStoreSurfaceState,
     kernel_start_pointer: u64,
+    simd_width: u32,
+    use_uos_thread_payload: bool,
+    load_dummy_curbe: bool,
 ) -> [u32; GPGPU_INTERFACE_DESCRIPTOR_DWORDS] {
     const IDD_THREAD_PREEMPTION_DISABLE: u32 = 1 << 20;
     const IDD_ILLEGAL_OPCODE_EXCEPTION_ENABLE: u32 = 1 << 13;
@@ -45,9 +48,13 @@ pub(super) fn build_gpgpu_interface_descriptor_words(
     } else {
         0
     };
-    idd_words[5] = super::payload::gpgpu_curbe_read_length_8dw() << 16;
+    idd_words[5] = super::payload::gpgpu_thread_payload_urb_read_length_8dw(
+        simd_width,
+        use_uos_thread_payload,
+        load_dummy_curbe,
+    ) << 16;
     idd_words[6] = GPGPU_WALKER_GROUP_THREADS;
-    idd_words[7] = 0;
+    idd_words[7] = super::payload::gpgpu_cross_thread_read_length_8dw();
     idd_words
 }
 

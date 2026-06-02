@@ -6,7 +6,7 @@ use super::kernel_startpointer::{
 };
 use super::payload::{
     gpgpu_curbe_read_length_8dw, gpgpu_curbe_total_bytes, gpgpu_vfe_curbe_allocation_32b,
-    write_gpgpu_dummy_curbe,
+    write_gpgpu_dummy_curbe, write_gpgpu_uos_thread_payload,
 };
 use super::*;
 
@@ -54,6 +54,7 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
     const CS_GPR1_STAMP_LO: u32 = 0xC5A0_2608;
     const IDD_STATE_OFFSET_BYTES: usize = GPGPU_WALKER_SCRATCH_OFFSET_BYTES;
     const CURBE_STATE_OFFSET_BYTES: usize = GPGPU_WALKER_SCRATCH_OFFSET_BYTES + 0x100;
+    const INDIRECT_STATE_OFFSET_BYTES: usize = GPGPU_WALKER_SCRATCH_OFFSET_BYTES + 0x200;
     const GPGPU_WALKER_GROUP_Z_DIM: u32 = 1;
     const GPGPU_VFE_MAX_THREADS: u32 = 223;
     const GPGPU_VFE_URB_ENTRIES: u32 = 2;
@@ -66,6 +67,7 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
     } else {
         0
     };
+    const GPGPU_INDIRECT_OBJECT_BASE: u64 = GPU_VA_DRAW_STATE_BASE;
     const IDD_DYNAMIC_OFFSET_BYTES: usize = if GPGPU_RELATIVE_STATE_BASES {
         IDD_STATE_OFFSET_BYTES
     } else {
@@ -155,6 +157,11 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
         }
     }
 
+    fn walker_uses_uos_thread_payload(program_name: &str) -> bool {
+        GPGPU_UOS_THREAD_PAYLOAD
+            && (GPGPU_ROW2560_UOS_THREAD_PAYLOAD || !program_name.contains("row2560"))
+    }
+
     fn push_sba_address(
         batch_dwords: &mut [u32],
         cursor: &mut usize,
@@ -183,12 +190,22 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
     let walker_group_y_dim = walker_group_y_dim.max(1);
 
     batch_dwords.fill(0);
-    write_gpgpu_dummy_curbe(warm, CURBE_STATE_OFFSET_BYTES)?;
+    let requested_simd_width = walker_simd_width(program.name);
+    let use_uos_thread_payload = walker_uses_uos_thread_payload(program.name);
+    let load_dummy_curbe = !use_uos_thread_payload && GPGPU_LOAD_DUMMY_CURBE;
+    let indirect_data_bytes = write_gpgpu_uos_thread_payload(
+        warm,
+        INDIRECT_STATE_OFFSET_BYTES,
+        requested_simd_width,
+        GPGPU_WALKER_GROUP_THREADS,
+        use_uos_thread_payload,
+    )?;
+    write_gpgpu_dummy_curbe(warm, CURBE_STATE_OFFSET_BYTES, load_dummy_curbe)?;
     let mut cursor = 0usize;
 
-    let curbe_total_bytes = gpgpu_curbe_total_bytes();
-    let curbe_read_length_8dw = gpgpu_curbe_read_length_8dw();
-    let vfe_curbe_allocation_32b = gpgpu_vfe_curbe_allocation_32b();
+    let curbe_total_bytes = gpgpu_curbe_total_bytes(load_dummy_curbe);
+    let curbe_read_length_8dw = gpgpu_curbe_read_length_8dw(load_dummy_curbe);
+    let vfe_curbe_allocation_32b = gpgpu_vfe_curbe_allocation_32b(load_dummy_curbe);
     let uos_tight_launch = GPGPU_UOS_TIGHT_LAUNCH;
 
     const PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER: u32 = 1 << 9;
@@ -236,8 +253,14 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
     }
     let kernel_start_pointer =
         compute_gpgpu_kernel_start_pointer(GPGPU_KERNEL_GPU, GPGPU_INSTRUCTION_BASE);
-    let idd_words =
-        build_gpgpu_interface_descriptor_words(program, store_surface, kernel_start_pointer);
+    let idd_words = build_gpgpu_interface_descriptor_words(
+        program,
+        store_surface,
+        kernel_start_pointer,
+        requested_simd_width,
+        use_uos_thread_payload,
+        load_dummy_curbe,
+    );
     unsafe {
         let idd_dst = warm.draw_state_virt.add(IDD_STATE_OFFSET_BYTES) as *mut u32;
         for (index, word) in idd_words.iter().enumerate() {
@@ -268,8 +291,15 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
             program.kind,
         );
         crate::log!(
-            "intel/gpgpu: idd-shape program_source={} dw0_ksp_lo=0x{:08X} dw1_ksp_hi=0x{:08X} dw2=0x{:08X} dw3=0x{:08X} dw4=0x{:08X} dw5=0x{:08X} dw6=0x{:08X} dw7=0x{:08X} binding_table_present={} curbe_read_len_8dw={} threads_in_group={} barrier_enable={} slm_size=0x{:X} note=legacy-8dw-interface-descriptor\n",
+            "intel/gpgpu: idd-shape program_source={} payload_profile={} dw0_ksp_lo=0x{:08X} dw1_ksp_hi=0x{:08X} dw2=0x{:08X} dw3=0x{:08X} dw4=0x{:08X} dw5=0x{:08X} dw6=0x{:08X} dw7=0x{:08X} binding_table_present={} curbe_read_len_8dw={} threads_in_group={} barrier_enable={} slm_size=0x{:X} note=legacy-8dw-interface-descriptor\n",
             program.name,
+            if use_uos_thread_payload {
+                "uos-thread-payload"
+            } else if load_dummy_curbe {
+                "legacy-dummy-curbe"
+            } else {
+                "no-payload"
+            },
             idd_words[0],
             idd_words[1],
             idd_words[2],
@@ -312,7 +342,7 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
     }
 
     push(batch_dwords, &mut cursor, STATE_BASE_ADDRESS_CMD)?;
-    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPGPU_INDIRECT_OBJECT_BASE)?;
     push(batch_dwords, &mut cursor, RENDER_MOCS << 16)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPGPU_DYNAMIC_STATE_BASE)?;
@@ -424,7 +454,7 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
     if !uos_tight_launch {
         push_store_marker(batch_dwords, &mut cursor, 27, 0xC0DE_7805)?;
     }
-    if GPGPU_LOAD_DUMMY_CURBE {
+    if load_dummy_curbe {
         push(batch_dwords, &mut cursor, MEDIA_CURBE_LOAD_CMD)?;
         push(batch_dwords, &mut cursor, 0)?;
         push(batch_dwords, &mut cursor, curbe_total_bytes as u32)?;
@@ -436,9 +466,16 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
     let walker_start = cursor;
     push(batch_dwords, &mut cursor, GPGPU_WALKER_CMD)?;
     push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    let requested_simd_width = walker_simd_width(program.name);
+    push(batch_dwords, &mut cursor, indirect_data_bytes as u32)?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        if use_uos_thread_payload {
+            INDIRECT_STATE_OFFSET_BYTES as u32
+        } else {
+            0
+        },
+    )?;
     let walker_thread_dims =
         (walker_simd_select(requested_simd_width) << 30) | (GPGPU_WALKER_GROUP_THREADS - 1);
     let walker_right_mask = if requested_simd_width >= 32 {
@@ -500,7 +537,7 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
 
     if log_program_shape {
         crate::log!(
-            "intel/gpgpu: compute-walker-layout program_source={} expects_store={} launch_profile={} vfe_off=0x{:X} vfe_dw3=0x{:08X} vfe_dw5=0x{:08X} fused_eu_dispatch_legacy={} urb_entry_alloc_32b={} curbe_present={} curbe_bytes=0x{:X} curbe_read_len_8dw={} id_load_off=0x{:X} id_load_bytes=0x{:X} idd_payload_bytes=0x{:X} midl_negative_control={} state_bases_relative={} temporary_3d_for_sba={} midl_start=0x{:X} walker_off=0x{:X} walker_cmd=0x{:08X} exec_mask=0x{:08X} idd_gpu=0x{:X} idd_dynamic_offset=0x{:X} idd_ksp=0x{:08X} instruction_base=0x{:X} ksp_resolves_to=0x{:X} idd_dw2=0x{:08X} idd_dw4=0x{:08X} idd_dw6=0x{:08X} surface_base=0x{:X} dynamic_state_base=0x{:X} contiguous_vfe_idd_walker={} uos_tight_launch={} mesa_post_vfe_pipe_control={} tail_off=0x{:X} cs_marker=0x{:08X} note=legacy-vfe-dispatch-with-prm-len13-walker\n",
+            "intel/gpgpu: compute-walker-layout program_source={} expects_store={} launch_profile={} payload_profile={} vfe_off=0x{:X} vfe_dw3=0x{:08X} vfe_dw5=0x{:08X} fused_eu_dispatch_legacy={} urb_entry_alloc_32b={} curbe_present={} curbe_bytes=0x{:X} curbe_read_len_8dw={} uos_payload={} indirect_base=0x{:X} indirect_bytes=0x{:X} indirect_off=0x{:X} walker_dw2=0x{:08X} walker_dw3=0x{:08X} id_load_off=0x{:X} id_load_bytes=0x{:X} idd_payload_bytes=0x{:X} midl_negative_control={} state_bases_relative={} temporary_3d_for_sba={} midl_start=0x{:X} walker_off=0x{:X} walker_cmd=0x{:08X} exec_mask=0x{:08X} idd_gpu=0x{:X} idd_dynamic_offset=0x{:X} idd_ksp=0x{:08X} instruction_base=0x{:X} ksp_resolves_to=0x{:X} idd_dw2=0x{:08X} idd_dw4=0x{:08X} idd_dw5=0x{:08X} idd_dw6=0x{:08X} idd_dw7=0x{:08X} surface_base=0x{:X} dynamic_state_base=0x{:X} contiguous_vfe_idd_walker={} uos_tight_launch={} mesa_post_vfe_pipe_control={} tail_off=0x{:X} cs_marker=0x{:08X} note=legacy-vfe-dispatch-with-prm-len13-walker\n",
             program.name,
             program.expects_store as u8,
             if uos_tight_launch {
@@ -508,14 +545,31 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
             } else {
                 "split-vfe-msf-curbe-pc-midl"
             },
+            if use_uos_thread_payload {
+                "uos-thread-payload"
+            } else if load_dummy_curbe {
+                "legacy-dummy-curbe"
+            } else {
+                "no-payload"
+            },
             vfe_start * core::mem::size_of::<u32>(),
             batch_dwords[vfe_start + 3],
             batch_dwords[vfe_start + 5],
             ((batch_dwords[vfe_start + 3] & GPGPU_VFE_FUSED_EU_DISPATCH_LEGACY_MODE) != 0) as u8,
             GPGPU_VFE_URB_ENTRY_ALLOCATION_32B,
-            GPGPU_LOAD_DUMMY_CURBE as u8,
+            load_dummy_curbe as u8,
             curbe_total_bytes,
             curbe_read_length_8dw,
+            use_uos_thread_payload as u8,
+            GPGPU_INDIRECT_OBJECT_BASE,
+            indirect_data_bytes,
+            if use_uos_thread_payload {
+                INDIRECT_STATE_OFFSET_BYTES
+            } else {
+                0
+            },
+            batch_dwords[walker_start + 2],
+            batch_dwords[walker_start + 3],
             id_load_start * core::mem::size_of::<u32>(),
             midl_total_bytes,
             GPGPU_INTERFACE_DESCRIPTOR_DWORDS * core::mem::size_of::<u32>(),
@@ -533,7 +587,9 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
             GPGPU_INSTRUCTION_BASE + kernel_start_pointer,
             idd_words[2],
             idd_words[4],
+            idd_words[5],
             idd_words[6],
+            idd_words[7],
             GPU_VA_DRAW_STATE_BASE,
             GPGPU_DYNAMIC_STATE_BASE,
             GPGPU_CONTIGUOUS_VFE_IDD_WALKER as u8,
@@ -543,9 +599,10 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
             RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
         );
         crate::log!(
-            "intel/gpgpu: uos-oracle source=uos-intel-gpgpu-master per_dispatch_shape=MEDIA_STATE_FLUSH->MEDIA_INTERFACE_DESCRIPTOR_LOAD->GPGPU_WALKER->MEDIA_STATE_FLUSH trueos_tight_launch={} vfe_inside_batch=1 curbe_inside_batch={} inner_debug_markers={} inner_pipe_control={} expected_delta=ts_or_store_changes_if_launch-window-spacing-was-the-blocker\n",
+            "intel/gpgpu: uos-oracle source=uos-intel-gpgpu-master per_dispatch_shape=MEDIA_STATE_FLUSH->MEDIA_INTERFACE_DESCRIPTOR_LOAD->GPGPU_WALKER->MEDIA_STATE_FLUSH trueos_tight_launch={} vfe_inside_batch=1 curbe_inside_batch={} uos_thread_payload={} inner_debug_markers={} inner_pipe_control={} expected_delta=ts_or_store_changes_if_launch-window-spacing-was-the-blocker\n",
             uos_tight_launch as u8,
-            GPGPU_LOAD_DUMMY_CURBE as u8,
+            load_dummy_curbe as u8,
+            use_uos_thread_payload as u8,
             (!uos_tight_launch) as u8,
             (!(GPGPU_CONTIGUOUS_VFE_IDD_WALKER || uos_tight_launch)) as u8,
         );
