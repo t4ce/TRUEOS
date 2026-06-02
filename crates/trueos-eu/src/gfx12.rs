@@ -593,10 +593,13 @@ pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_LANES: usize = 16;
 pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_SENDS: usize =
     PRIMARY_SCANOUT_ROW2560_SIMD16_BW_PIXELS / PRIMARY_SCANOUT_ROW2560_SIMD16_BW_LANES;
 pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_WORD_DWORDS: usize =
-    24 + 4 + ((PRIMARY_SCANOUT_ROW2560_SIMD16_BW_SENDS - 1) * 8) + 8;
+    28 + (PRIMARY_SCANOUT_ROW2560_SIMD16_BW_SENDS * 8)
+        + ((PRIMARY_SCANOUT_ROW2560_SIMD16_BW_SENDS - 1) * 8)
+        + 8;
 pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_ADDRESS_BASE_DWORD: usize = 19;
 pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_COLOR_DWORD: usize = 23;
-pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_STORE_SEND_DWORD: usize = 24;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_COLOR_HI_DWORD: usize = 27;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_STORE_SEND_DWORD: usize = 28;
 pub const PRIMARY_SCANOUT_LINE8_SIMD8_BW_PROGRAM_NAME: &str =
     "gfx12-primary-scanout-line8-simd8-bw-hdc1-bti1-offset-store-then-ts-eot";
 pub const PRIMARY_SCANOUT_LINE8_SIMD8_BW_LANES: usize = 8;
@@ -1777,7 +1780,13 @@ const fn primary_scanout_row2560_simd16_bw_words()
 
     // Build the SIMD16 byte-address vector and a SIMD16 color vector:
     //   g20 = row_base + [0, 4, 8, ... 60]
-    //   g22 = repeated color dwords
+    //   g22/g23 = repeated color dwords
+    //
+    // Gfx12 HDC stateless scattered writes have only been proven for SIMD8 on
+    // this path.  Keep the SIMD16 address/color setup, but commit each 16-pixel
+    // chunk as two SIMD8 sends: g20/g22 for lanes 0..7 and g21/g23 for lanes
+    // 8..15.  A single SIMD16 send retires but produces visible vertical
+    // stripes because not every lane reaches scanout memory.
     words[0] = 0x80030061;
     words[1] = 0x01054410;
     words[2] = 0x00000000;
@@ -1802,23 +1811,35 @@ const fn primary_scanout_row2560_simd16_bw_words()
     words[21] = 0x16054660;
     words[22] = 0x00000000;
     words[23] = 0x00FF00FF;
+    words[24] = 0x80030061;
+    words[25] = 0x17054660;
+    words[26] = 0x00000000;
+    words[27] = 0x00FF00FF;
 
     let mut cursor = PRIMARY_SCANOUT_ROW2560_SIMD16_BW_STORE_SEND_DWORD;
     let mut send = 0usize;
     while send < PRIMARY_SCANOUT_ROW2560_SIMD16_BW_SENDS {
-        words[cursor] = 0x00040131;
+        words[cursor] = 0x00030131;
         words[cursor + 1] = 0x00000000;
-        words[cursor + 2] = 0xCC021414;
-        words[cursor + 3] = 0x00961614;
-        cursor += 4;
+        words[cursor + 2] = 0xCC02140C;
+        words[cursor + 3] = 0x009A160C;
+        words[cursor + 4] = 0x00130131;
+        words[cursor + 5] = 0x00000000;
+        words[cursor + 6] = 0xCC02150C;
+        words[cursor + 7] = 0x009A170C;
+        cursor += 8;
         send += 1;
 
         if send < PRIMARY_SCANOUT_ROW2560_SIMD16_BW_SENDS {
-            words[cursor] = 0x00040140;
+            words[cursor] = 0x00030140;
             words[cursor + 1] = 0x14058660;
             words[cursor + 2] = 0x06461405;
             words[cursor + 3] = 0x00000040;
-            cursor += 4;
+            words[cursor + 4] = 0x00030140;
+            words[cursor + 5] = 0x15058660;
+            words[cursor + 6] = 0x06461505;
+            words[cursor + 7] = 0x00000040;
+            cursor += 8;
         }
     }
 

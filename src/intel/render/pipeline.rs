@@ -1252,11 +1252,7 @@ fn encode_triangle_probe_batch(
     let vertex_element0_dw0;
     let vertex_element0_dw1;
     log_batch_offset(cursor, "3DSTATE_VERTEX_ELEMENTS");
-    push(
-        batch_dwords,
-        &mut cursor,
-        vertex_elements_cmd,
-    )?;
+    push(batch_dwords, &mut cursor, vertex_elements_cmd)?;
     if vf_synthesized_vue {
         match streamout_experiment {
             StreamoutProofExperiment::PositionSlot0 => {
@@ -1265,11 +1261,7 @@ fn encode_triangle_probe_batch(
                     | (VFCOMP_STORE_SRC << 24)
                     | (VFCOMP_STORE_SRC << 20)
                     | (VFCOMP_STORE_1_FP << 16);
-                push(
-                    batch_dwords,
-                    &mut cursor,
-                    vertex_element0_dw0,
-                )?;
+                push(batch_dwords, &mut cursor, vertex_element0_dw0)?;
                 push(batch_dwords, &mut cursor, vertex_element0_dw1)?;
             }
             StreamoutProofExperiment::PositionSlot0Xyzw => {
@@ -1278,11 +1270,7 @@ fn encode_triangle_probe_batch(
                     | (VFCOMP_STORE_SRC << 24)
                     | (VFCOMP_STORE_SRC << 20)
                     | (VFCOMP_STORE_SRC << 16);
-                push(
-                    batch_dwords,
-                    &mut cursor,
-                    vertex_element0_dw0,
-                )?;
+                push(batch_dwords, &mut cursor, vertex_element0_dw0)?;
                 push(batch_dwords, &mut cursor, vertex_element0_dw1)?;
             }
             StreamoutProofExperiment::PositionSlot1 => {
@@ -1291,11 +1279,7 @@ fn encode_triangle_probe_batch(
                     | (VFCOMP_STORE_0 << 24)
                     | (VFCOMP_STORE_0 << 20)
                     | (VFCOMP_STORE_0 << 16);
-                push(
-                    batch_dwords,
-                    &mut cursor,
-                    vertex_element0_dw0,
-                )?;
+                push(batch_dwords, &mut cursor, vertex_element0_dw0)?;
                 push(batch_dwords, &mut cursor, vertex_element0_dw1)?;
                 push(
                     batch_dwords,
@@ -1317,11 +1301,7 @@ fn encode_triangle_probe_batch(
                     | (VFCOMP_STORE_SRC << 24)
                     | (VFCOMP_STORE_SRC << 20)
                     | (VFCOMP_STORE_SRC << 16);
-                push(
-                    batch_dwords,
-                    &mut cursor,
-                    vertex_element0_dw0,
-                )?;
+                push(batch_dwords, &mut cursor, vertex_element0_dw0)?;
                 push(batch_dwords, &mut cursor, vertex_element0_dw1)?;
                 push(
                     batch_dwords,
@@ -1344,11 +1324,7 @@ fn encode_triangle_probe_batch(
                     | (VFCOMP_STORE_0 << 24)
                     | (VFCOMP_STORE_0 << 20)
                     | (VFCOMP_STORE_0 << 16);
-                push(
-                    batch_dwords,
-                    &mut cursor,
-                    vertex_element0_dw0,
-                )?;
+                push(batch_dwords, &mut cursor, vertex_element0_dw0)?;
                 push(batch_dwords, &mut cursor, vertex_element0_dw1)?;
                 push(
                     batch_dwords,
@@ -2163,6 +2139,19 @@ fn encode_triangle_probe_batch(
         )?;
     }
 
+    // pdoane/osdev's Ivy Bridge bring-up emits a zero-vertex 3DPRIMITIVE after
+    // switching to the 3D pipe/context and before the real triangle. Keep the
+    // same explicit priming draw here so the first real primitive does not also
+    // carry any post-PIPELINE_SELECT/context activation hazard.
+    log_batch_offset(cursor, "3DPRIMITIVE dummy-after-pipeline-select");
+    push(batch_dwords, &mut cursor, CMD_3DPRIMITIVE)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+
     log_batch_offset(cursor, "3DPRIMITIVE");
     let use_3dprimitive_extended = backend_probe_mode.use_3dprimitive_extended();
     let primitive_cmd;
@@ -2294,8 +2283,8 @@ fn encode_triangle_probe_batch(
         wm_dw1,
         (wm_dw1 >> 31) & 0x1,
         (wm_dw1 >> 19) & 0x3,
-        ((ps_extra_dw1 & PS_EXTRA_PIXEL_SHADER_VALID) != 0
-            && (ps_blend_dw1 & (1 << 30)) != 0) as u8,
+        ((ps_extra_dw1 & PS_EXTRA_PIXEL_SHADER_VALID) != 0 && (ps_blend_dw1 & (1 << 30)) != 0)
+            as u8,
         ps_ksp0,
         ps_ksp1,
         ps_ksp2,

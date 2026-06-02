@@ -37,5 +37,6 @@ include!("warmup.rs");
 include!("primary.rs");
 include!("pipeline.rs");
 include!("resources.rs");
+include!("pdoane_smoke.rs");
 include!("submit.rs");
 include!("lrc.rs");

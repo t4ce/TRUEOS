@@ -1107,6 +1107,7 @@ fn is_gpgpu_submit_name(name: &str) -> bool {
         name,
         "gpgpu-preflight"
             | "gpgpu-compute-walker"
+            | "gpgpu-eot-probe"
             | "gpgpu-one-tile-sentinel"
             | "gpgpu-one-tile-compare"
             | "gpgpu-primary-scanout-walkrow16"
@@ -1632,6 +1633,8 @@ const GPGPU_BURN_MIN_K_DIM: usize = 512;
 const GPU_PROGRAM_SHARED_RAM_WRITE_EXPECTED: u32 = trueos_eu::gfx12::STORE_SENTINEL_U32;
 const GPGPU_LOAD_DUMMY_CURBE: bool = true;
 const GPGPU_DUMMY_CURBE_BYTES: usize = 64;
+const GPGPU_UOS_THREAD_PAYLOAD: bool = true;
+const GPGPU_ROW2560_UOS_THREAD_PAYLOAD: bool = false;
 const GPGPU_CONTIGUOUS_VFE_IDD_WALKER: bool = false;
 // UOS' standalone GEN9.5 driver keeps the media-interface-descriptor load and
 // GPGPU_WALKER launch as a tight sequence. Preserve our GFX12 state setup, but
@@ -1782,6 +1785,19 @@ fn gpgpu_one_tile_output_sentinel_program() -> GpgpuEuProgram {
         expected_store_value: GPGPU_ONE_TILE_OUTPUT_SENTINEL,
         store_send_dword: Some(trueos_eu::gfx12::HDC1_BTI34_STORE_SEND_DWORD),
         visible_seed_dword: Some(trueos_eu::gfx12::HDC1_BTI34_STORE_IMM_DWORD),
+    }
+}
+
+fn gpgpu_eot_catalog_program(index: usize) -> GpgpuEuProgram {
+    let artifact = trueos_eu::gfx12::EOT_CATALOG[index % trueos_eu::gfx12::EOT_CATALOG.len()];
+    GpgpuEuProgram {
+        name: artifact.name,
+        kind: artifact.kind,
+        words: artifact.words,
+        expects_store: false,
+        expected_store_value: 0,
+        store_send_dword: None,
+        visible_seed_dword: None,
     }
 }
 
@@ -2003,6 +2019,378 @@ fn gpgpu_walker_scale_passed(proof: GpgpuComputeWalkerProof) -> bool {
         && post_walker_marker_retired
         && store_ok
         && proof.dispatch_delta == proof.expected_lane_dispatch as u64
+}
+
+pub(crate) fn submit_gpgpu_offscreen_store_probe(
+    group_x_dim: u32,
+) -> crate::intel::GpgpuOffscreenStoreProof {
+    if group_x_dim == 0 {
+        return submit_gpgpu_offscreen_sidequest_store_probe();
+    }
+
+    let program = selected_gpgpu_eu_program();
+    let target_slot = RESULT_SLOT_GPGPU_EU_C_STORE_DWORD;
+    let target_gpu = GPU_VA_RESULT_BASE + (target_slot * core::mem::size_of::<u32>()) as u64;
+    let expected_lane_dispatch = group_x_dim
+        .saturating_mul(GPGPU_WALKER_GROUP_THREADS)
+        .saturating_mul(GPGPU_WALKER_SIMD8_LANES);
+
+    let Some(dev) = crate::intel::claimed_device() else {
+        return gpgpu_offscreen_store_failure(
+            "no-device",
+            program.name,
+            group_x_dim,
+            expected_lane_dispatch,
+            target_slot,
+            target_gpu,
+            program.expected_store_value,
+        );
+    };
+
+    let warm = warm_once(dev);
+    if warm.ring_len == 0
+        || warm.context_len == 0
+        || warm.batch_len == 0
+        || warm.result_len < (target_slot + 1) * core::mem::size_of::<u32>()
+    {
+        return gpgpu_offscreen_store_failure(
+            "warm-buffer-missing",
+            program.name,
+            group_x_dim,
+            expected_lane_dispatch,
+            target_slot,
+            target_gpu,
+            program.expected_store_value,
+        );
+    }
+
+    if PRIMARY_DISABLE_RENDER_BRINGUP && !GPGPU_SUBMIT_WHEN_PRIMARY_RENDER_DISABLED {
+        let artifact = prepare_gpgpu_program_artifact(warm, false);
+        log_gpgpu_program_artifact_status(artifact);
+        return gpgpu_offscreen_store_failure(
+            "render-bringup-disabled",
+            program.name,
+            group_x_dim,
+            expected_lane_dispatch,
+            target_slot,
+            target_gpu,
+            program.expected_store_value,
+        );
+    }
+
+    if !forcewake_render_acquire(warm) {
+        return gpgpu_offscreen_store_failure(
+            "forcewake-failed",
+            program.name,
+            group_x_dim,
+            expected_lane_dispatch,
+            target_slot,
+            target_gpu,
+            program.expected_store_value,
+        );
+    }
+    if !ensure_gpgpu_warm_buffers_mapped(dev, warm) {
+        return gpgpu_offscreen_store_failure(
+            "warm-map-failed",
+            program.name,
+            group_x_dim,
+            expected_lane_dispatch,
+            target_slot,
+            target_gpu,
+            program.expected_store_value,
+        );
+    }
+
+    let arena_mapped = ensure_gpgpu_tile_arena_mapped(dev, warm);
+    log_gpgpu_tile_arena_status(warm, arena_mapped);
+    let artifact = prepare_gpgpu_program_artifact(warm, true);
+    log_gpgpu_program_artifact_status(artifact);
+    if !artifact.walker_encoded {
+        return gpgpu_offscreen_store_failure(
+            "program-artifact-not-encoded",
+            program.name,
+            group_x_dim,
+            expected_lane_dispatch,
+            target_slot,
+            target_gpu,
+            program.expected_store_value,
+        );
+    }
+
+    let proof = submit_gpgpu_compute_walker_probe(dev, warm, 0, group_x_dim);
+    let passed = gpgpu_walker_scale_passed(proof);
+    log_gpgpu_compute_walker_status(proof);
+    if passed {
+        record_gpgpu_proven_walker(proof);
+    }
+    if !proof.retired {
+        recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-offscreen-store");
+    }
+
+    let finish_ok = proof.marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
+    let dispatch_ok = proof.dispatch_delta == proof.expected_lane_dispatch as u64;
+    let readback_ok = !proof.expects_store || proof.result_c_changed_by_eu;
+    let reason = if passed {
+        "ok"
+    } else if !proof.submitted {
+        "walker-encode-failed"
+    } else if !proof.retired {
+        "not-retired"
+    } else if !finish_ok {
+        "finish-mismatch"
+    } else if !readback_ok {
+        "store-mismatch"
+    } else if !dispatch_ok {
+        "dispatch-mismatch"
+    } else {
+        "unknown"
+    };
+
+    let proof = crate::intel::GpgpuOffscreenStoreProof {
+        submitted: proof.submitted,
+        retired: proof.retired,
+        readback_ok,
+        passed,
+        reason,
+        program_name: proof.program_name,
+        group_x_dim: proof.requested_group_x_dim,
+        expected_lane_dispatch: proof.expected_lane_dispatch,
+        dispatch_delta: proof.dispatch_delta,
+        target_slot,
+        target_gpu,
+        c_value: proof.c_value,
+        expected_store_value: proof.expected_store_value,
+        expected_hits_mask: proof.expected_hits_mask,
+        finish_marker: proof.marker,
+        expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes: proof.batch_bytes,
+    };
+    paint_gpgpu_offscreen_album_tile(proof);
+    proof
+}
+
+pub(crate) fn submit_gpgpu_eot_probe(variant_index: u32) -> crate::intel::GpgpuOffscreenStoreProof {
+    let catalog_len = trueos_eu::gfx12::EOT_CATALOG.len();
+    let variant_index = (variant_index as usize) % catalog_len;
+    let program = gpgpu_eot_catalog_program(variant_index);
+    let group_x_dim = 1;
+    let expected_lane_dispatch = GPGPU_WALKER_SIMD8_LANES;
+    let target_slot = RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD;
+    let target_gpu = GPU_VA_RESULT_BASE + (target_slot * core::mem::size_of::<u32>()) as u64;
+
+    let Some(dev) = crate::intel::claimed_device() else {
+        return gpgpu_offscreen_store_failure(
+            "no-device",
+            program.name,
+            group_x_dim,
+            expected_lane_dispatch,
+            target_slot,
+            target_gpu,
+            RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        );
+    };
+
+    let warm = warm_once(dev);
+    if warm.ring_len == 0
+        || warm.context_len == 0
+        || warm.batch_len == 0
+        || warm.draw_state_len
+            < GPGPU_EU_KERNEL_OFFSET_BYTES + core::mem::size_of_val(program.words)
+        || warm.result_len < (target_slot + 1) * core::mem::size_of::<u32>()
+    {
+        return gpgpu_offscreen_store_failure(
+            "warm-buffer-missing",
+            program.name,
+            group_x_dim,
+            expected_lane_dispatch,
+            target_slot,
+            target_gpu,
+            RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        );
+    }
+
+    if PRIMARY_DISABLE_RENDER_BRINGUP && !GPGPU_SUBMIT_WHEN_PRIMARY_RENDER_DISABLED {
+        return gpgpu_offscreen_store_failure(
+            "render-bringup-disabled",
+            program.name,
+            group_x_dim,
+            expected_lane_dispatch,
+            target_slot,
+            target_gpu,
+            RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        );
+    }
+
+    if !forcewake_render_acquire(warm) {
+        return gpgpu_offscreen_store_failure(
+            "forcewake-failed",
+            program.name,
+            group_x_dim,
+            expected_lane_dispatch,
+            target_slot,
+            target_gpu,
+            RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        );
+    }
+    if !ensure_gpgpu_warm_buffers_mapped(dev, warm) {
+        return gpgpu_offscreen_store_failure(
+            "warm-map-failed",
+            program.name,
+            group_x_dim,
+            expected_lane_dispatch,
+            target_slot,
+            target_gpu,
+            RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        );
+    }
+    if !upload_and_verify_gpu_program_at(warm, GPGPU_EU_KERNEL_OFFSET_BYTES, program.words) {
+        return gpgpu_offscreen_store_failure(
+            "program-upload-failed",
+            program.name,
+            group_x_dim,
+            expected_lane_dispatch,
+            target_slot,
+            target_gpu,
+            RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        );
+    }
+
+    let proof = submit_gpgpu_compute_walker_probe_for_program(
+        dev,
+        warm,
+        variant_index,
+        group_x_dim,
+        program,
+        "gpgpu-eot-probe",
+    );
+    log_gpgpu_compute_walker_status(proof);
+    if !proof.retired {
+        recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-eot-probe");
+    }
+
+    let finish_ok = proof.marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
+    let dispatch_ok = proof.dispatch_delta == proof.expected_lane_dispatch as u64;
+    let passed = proof.submitted && proof.retired && finish_ok && dispatch_ok;
+    let reason = if passed {
+        "eot-retired"
+    } else if !proof.submitted {
+        "walker-encode-failed"
+    } else if !proof.retired {
+        "not-retired"
+    } else if !finish_ok {
+        "finish-mismatch"
+    } else if !dispatch_ok {
+        "dispatch-mismatch"
+    } else {
+        "unknown"
+    };
+
+    let proof = crate::intel::GpgpuOffscreenStoreProof {
+        submitted: proof.submitted,
+        retired: proof.retired,
+        readback_ok: finish_ok,
+        passed,
+        reason,
+        program_name: proof.program_name,
+        group_x_dim: proof.requested_group_x_dim,
+        expected_lane_dispatch: proof.expected_lane_dispatch,
+        dispatch_delta: proof.dispatch_delta,
+        target_slot,
+        target_gpu,
+        c_value: proof.marker,
+        expected_store_value: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        expected_hits_mask: proof.expected_hits_mask,
+        finish_marker: proof.marker,
+        expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes: proof.batch_bytes,
+    };
+    paint_gpgpu_offscreen_album_tile(proof);
+    proof
+}
+
+fn submit_gpgpu_offscreen_sidequest_store_probe() -> crate::intel::GpgpuOffscreenStoreProof {
+    if warm_state().is_none() {
+        if let Some(dev) = crate::intel::claimed_device() {
+            let _ = warm_once(dev);
+        }
+    }
+
+    let sentinel = matmul::submit_gpgpu_sidequest_target_buffer_probe();
+    let proof = crate::intel::GpgpuOffscreenStoreProof {
+        submitted: sentinel.submitted,
+        retired: sentinel.finished,
+        readback_ok: sentinel.readback_ok,
+        passed: sentinel.readback_ok,
+        reason: sentinel.reason,
+        program_name: sentinel.program_name,
+        group_x_dim: 1,
+        expected_lane_dispatch: GPGPU_WALKER_SIMD8_LANES,
+        dispatch_delta: sentinel.dispatch_delta,
+        target_slot: 0,
+        target_gpu: sentinel.output_gpu,
+        c_value: sentinel.output_first_after,
+        expected_store_value: sentinel.sentinel,
+        expected_hits_mask: sentinel.output_hits_lo64,
+        finish_marker: sentinel.finish_marker,
+        expected_finish_marker: sentinel.expected_finish_marker,
+        batch_bytes: sentinel.batch_bytes,
+    };
+    paint_gpgpu_offscreen_album_tile(proof);
+    proof
+}
+
+fn gpgpu_offscreen_store_failure(
+    reason: &'static str,
+    program_name: &'static str,
+    group_x_dim: u32,
+    expected_lane_dispatch: u32,
+    target_slot: usize,
+    target_gpu: u64,
+    expected_store_value: u32,
+) -> crate::intel::GpgpuOffscreenStoreProof {
+    let proof = crate::intel::GpgpuOffscreenStoreProof {
+        submitted: false,
+        retired: false,
+        readback_ok: false,
+        passed: false,
+        reason,
+        program_name,
+        group_x_dim,
+        expected_lane_dispatch,
+        dispatch_delta: 0,
+        target_slot,
+        target_gpu,
+        c_value: 0,
+        expected_store_value,
+        expected_hits_mask: 0,
+        finish_marker: 0,
+        expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes: 0,
+    };
+    paint_gpgpu_offscreen_album_tile(proof);
+    proof
+}
+
+fn paint_gpgpu_offscreen_album_tile(proof: crate::intel::GpgpuOffscreenStoreProof) {
+    let finish_ok = proof.finish_marker == proof.expected_finish_marker;
+    let status = if proof.passed {
+        1
+    } else if proof.submitted || proof.retired || proof.dispatch_delta != 0 {
+        3
+    } else {
+        2
+    };
+    let _ = crate::tst::ui2::render_album_demo::queue_render_album_metrics_tile(
+        6,
+        "GPGPU OFF",
+        status,
+        [
+            proof.dispatch_delta.min(u32::MAX as u64) as u32,
+            proof.expected_lane_dispatch,
+            proof.expected_hits_mask.count_ones(),
+            (proof.readback_ok && finish_ok) as u32,
+        ],
+    );
 }
 
 fn gpgpu_one_tile_sentinel_failure(
@@ -2467,6 +2855,24 @@ fn submit_gpgpu_compute_walker_probe(
     group_x_dim: u32,
 ) -> GpgpuComputeWalkerProof {
     let program = selected_gpgpu_eu_program();
+    submit_gpgpu_compute_walker_probe_for_program(
+        dev,
+        warm,
+        scale_index,
+        group_x_dim,
+        program,
+        "gpgpu-compute-walker",
+    )
+}
+
+fn submit_gpgpu_compute_walker_probe_for_program(
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+    scale_index: usize,
+    group_x_dim: u32,
+    program: GpgpuEuProgram,
+    submit_name: &'static str,
+) -> GpgpuComputeWalkerProof {
     let log_probe = should_log_gpgpu_program_shape(program.name);
     let expected_hw_threads = group_x_dim.saturating_mul(GPGPU_WALKER_GROUP_THREADS);
     let expected_lane_dispatch = expected_hw_threads.saturating_mul(GPGPU_WALKER_SIMD8_LANES);
@@ -2546,7 +2952,7 @@ fn submit_gpgpu_compute_walker_probe(
         warm,
         RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
         RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
-        "gpgpu-compute-walker",
+        submit_name,
     );
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
 

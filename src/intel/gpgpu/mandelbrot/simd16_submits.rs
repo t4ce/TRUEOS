@@ -267,10 +267,10 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16(
     row_one_based: u32,
     color: u32,
 ) -> crate::intel::GpgpuOneTileSentinelProof {
-    const PIXELS: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_BW_PIXELS;
+    const PIXELS: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD8_BW_PIXELS;
     const STORE_BYTES_PER_PIXEL: usize = core::mem::size_of::<u32>();
     let store_bytes = PIXELS * STORE_BYTES_PER_PIXEL;
-    let program = gpgpu_primary_scanout_row2560_simd16_program();
+    let program = gpgpu_primary_scanout_row2560_simd8_program();
     let Some(dev) = crate::intel::claimed_device() else {
         return gpgpu_one_tile_sentinel_failure("no-device", program, 0);
     };
@@ -281,10 +281,10 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16(
         return gpgpu_one_tile_sentinel_failure("no-primary-scanout", program, 0);
     };
     if row_one_based == 0 || row_one_based > 1440 || row_one_based > target.height {
-        return gpgpu_one_tile_sentinel_failure("row2560-simd16-row-out-of-range", program, target.gpu);
+        return gpgpu_one_tile_sentinel_failure("row2560-simd8-row-out-of-range", program, target.gpu);
     }
     if target.width as usize != PIXELS {
-        return gpgpu_one_tile_sentinel_failure("row2560-simd16-width-mismatch", program, target.gpu);
+        return gpgpu_one_tile_sentinel_failure("row2560-simd8-width-mismatch", program, target.gpu);
     }
     if !forcewake_render_acquire(warm) {
         return gpgpu_one_tile_sentinel_failure("forcewake", program, target.gpu);
@@ -296,22 +296,23 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16(
     let y = row_one_based.saturating_sub(1) as usize;
     let row_offset = y.saturating_mul(target.pitch_bytes as usize);
     if row_offset.saturating_add(store_bytes) > target.byte_len {
-        return gpgpu_one_tile_sentinel_failure("row2560-simd16-outside-scanout", program, target.gpu);
+        return gpgpu_one_tile_sentinel_failure("row2560-simd8-outside-scanout", program, target.gpu);
     }
     if row_offset >> 32 != 0 {
-        return gpgpu_one_tile_sentinel_failure("row2560-simd16-offset-high32", program, target.gpu);
+        return gpgpu_one_tile_sentinel_failure("row2560-simd8-offset-high32", program, target.gpu);
     }
     let row_gpu = target.gpu + row_offset as u64;
     if row_gpu >> 32 != 0 {
-        return gpgpu_one_tile_sentinel_failure("row2560-simd16-gpu-high32", program, row_gpu);
+        return gpgpu_one_tile_sentinel_failure("row2560-simd8-gpu-high32", program, row_gpu);
     }
+    let row_virt = unsafe { target.virt.add(row_offset) };
 
-    if !upload_primary_scanout_row2560_simd16_artifact(
+    if !upload_primary_scanout_row2560_simd8_artifact(
         warm,
         row_offset as u32,
         color,
     ) {
-        return gpgpu_one_tile_sentinel_failure("row2560-simd16-program-upload", program, row_gpu);
+        return gpgpu_one_tile_sentinel_failure("row2560-simd8-program-upload", program, row_gpu);
     }
 
     unsafe {
@@ -333,7 +334,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16(
         warm,
         target.gpu,
         target.byte_len,
-        "gpgpu-primary-scanout-row2560-simd16",
+        "gpgpu-primary-scanout-row2560-simd8",
     );
     let batch_bytes =
         match encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program, 1) {
@@ -348,7 +349,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16(
         warm,
         RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
         RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
-        "gpgpu-primary-scanout-row2560-simd16",
+        "gpgpu-primary-scanout-row2560-simd8",
     );
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
 
@@ -356,22 +357,39 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16(
     let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
     let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
     let command_ok = finished && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
+    crate::intel::dma_flush(row_virt, store_bytes);
+    let mut sample_hits = 0u64;
+    let mut sample = 0usize;
+    while sample < 64 {
+        let value = unsafe {
+            core::ptr::read_volatile(
+                row_virt.add(sample * STORE_BYTES_PER_PIXEL) as *const u32
+            )
+        };
+        if value & 0x00FF_FFFF == color & 0x00FF_FFFF {
+            sample_hits |= 1u64 << sample;
+        }
+        sample += 1;
+    }
+    let memory_ok = sample_hits == u64::MAX;
     let display_notified = command_ok
         && crate::intel::display::notify_primary_surface_external_write(
-            "gpgpu-primary-scanout-row2560-simd16",
+            "gpgpu-primary-scanout-row2560-simd8",
             row_offset,
             store_bytes,
         );
-    let reason = if command_ok {
-        "row2560-simd16-submitted-no-readback"
+    let reason = if command_ok && memory_ok {
+        "row2560-simd8-memory-visible"
+    } else if command_ok {
+        "row2560-simd8-submitted-partial-readback"
     } else if !finished {
-        "row2560-simd16-submit-not-finished"
+        "row2560-simd8-submit-not-finished"
     } else {
-        "row2560-simd16-finish-marker-mismatch"
+        "row2560-simd8-finish-marker-mismatch"
     };
 
     crate::log!(
-        "intel/gpgpu: row2560-simd16 row={} y={} width={} row_offset=0x{:X} row_gpu=0x{:X} target_gpu=0x{:X} pitch_bytes={} color=0x{:08X} store_bytes={} display_notified={} finished={} reason={} finish_marker=0x{:08X} dispatch_delta={} expected_dispatch=16 program_source={} batch_bytes=0x{:X}\n",
+        "intel/gpgpu: row2560-simd8 row={} y={} width={} row_offset=0x{:X} row_gpu=0x{:X} target_gpu=0x{:X} pitch_bytes={} color=0x{:08X} store_bytes={} display_notified={} finished={} memory_ok={} sample_hits64=0x{:016X} reason={} finish_marker=0x{:08X} dispatch_delta={} expected_dispatch=8 program_source={} batch_bytes=0x{:X}\n",
         row_one_based,
         y,
         target.width,
@@ -383,6 +401,8 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16(
         store_bytes,
         display_notified as u8,
         finished as u8,
+        memory_ok as u8,
+        sample_hits,
         reason,
         finish_marker,
         dispatch_delta,
@@ -394,14 +414,14 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16(
         recover_render_engine_after_nonretired_submit(
             dev,
             warm,
-            "gpgpu-primary-scanout-row2560-simd16",
+            "gpgpu-primary-scanout-row2560-simd8",
         );
     }
 
     crate::intel::GpgpuOneTileSentinelProof {
         submitted: batch_bytes != 0,
         finished,
-        readback_ok: command_ok,
+        readback_ok: command_ok && memory_ok,
         reason,
         program_name: program.name,
         output_gpu: row_gpu,
@@ -410,7 +430,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16(
         output_first_after: 0,
         output_nonzero_before: 0,
         output_nonzero_after: 0,
-        output_hits_lo64: 0,
+        output_hits_lo64: sample_hits,
         dispatch_delta,
         finish_marker,
         expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
