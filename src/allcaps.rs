@@ -14,6 +14,7 @@ pub mod probes {
     pub const TOKIO_SECURE_DNS_BOOT_PROBE: bool = false;
     pub const HYPER_BOOT_PROBE: bool = false;
     pub const HYPER_HTTP1_NET_PROBE: bool = false;
+    pub const INTEL_GPGPU_PREFLIGHT_BOOT_PROBE: bool = false;
     pub const UAS_SKHYNIX_ROUTE_BOOT_PROBE: bool = false;
     pub const TOKIO_NET_WRITABLE_TIMEOUT_MS: u64 = 1000;
 }

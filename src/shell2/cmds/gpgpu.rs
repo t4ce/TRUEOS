@@ -18,6 +18,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
     match args.next() {
         Some("status") => status(io),
         Some("eot") => eot(io, &mut args),
+        Some("vfe") => vfe(io, &mut args),
         Some("offscreen") | Some("legacy") => offscreen(io, &mut args),
         Some("rowpaint") => {
             let row = parse_u32(args.next()).unwrap_or(1);
@@ -44,7 +45,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "gpgpu: usage `gpgpu [row=1..1440] [rows=5]` | `gpgpu offscreen` | `gpgpu eot [0..10]` | `gpgpu rowpaint [row] [rows]` | `gpgpu tilewalker [row] [rows]` | `gpgpu status` | `gpgpu triangle` | debug: `gpgpu offscreen [group_x]` `gpgpu row2560 ...` `gpgpu walkrow ...` `gpgpu tilewalker ... x color stamps verify` `gpgpu rowburst ...` `gpgpu replay [0..2]`",
+        "gpgpu: usage `gpgpu [row=1..1440] [rows=5]` | `gpgpu offscreen` | `gpgpu eot [0..10]` | `gpgpu vfe [0..3] [eot=6]` | `gpgpu rowpaint [row] [rows]` | `gpgpu tilewalker [row] [rows]` | `gpgpu status` | `gpgpu triangle` | debug: `gpgpu offscreen [group_x]` `gpgpu row2560 ...` `gpgpu walkrow ...` `gpgpu tilewalker ... x color stamps verify` `gpgpu rowburst ...` `gpgpu replay [0..2]`",
     );
 }
 
@@ -105,6 +106,39 @@ fn eot(io: &'static dyn ShellBackend2, args: &mut core::str::SplitWhitespace<'_>
         io,
         format!(
             "gpgpu: eot variant={} group_x={} submitted={} retired={} ok={} dispatch={}/{} finish=0x{:08X}/0x{:08X} reason={} program={} batch=0x{:X}",
+            variant % 11,
+            proof.group_x_dim,
+            proof.submitted as u8,
+            proof.retired as u8,
+            proof.passed as u8,
+            proof.dispatch_delta,
+            proof.expected_lane_dispatch,
+            proof.finish_marker,
+            proof.expected_finish_marker,
+            proof.reason,
+            proof.program_name,
+            proof.batch_bytes,
+        )
+        .as_str(),
+    );
+}
+
+fn vfe(io: &'static dyn ShellBackend2, args: &mut core::str::SplitWhitespace<'_>) {
+    let profile = parse_u32(args.next()).unwrap_or(0).min(3);
+    let variant = parse_u32(args.next()).unwrap_or(6);
+    let proof = crate::intel::submit_gpgpu_vfe_eot_probe(profile, variant);
+    let profile_name = match profile {
+        1 => "uos-dw3",
+        2 => "uos-dw5",
+        3 => "uos-both",
+        _ => "legacy",
+    };
+    print_shell_line(
+        io,
+        format!(
+            "gpgpu: vfe profile={}({}) eot={} group_x={} submitted={} retired={} ok={} dispatch={}/{} finish=0x{:08X}/0x{:08X} reason={} program={} batch=0x{:X}",
+            profile,
+            profile_name,
             variant % 11,
             proof.group_x_dim,
             proof.submitted as u8,

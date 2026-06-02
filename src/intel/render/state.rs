@@ -102,6 +102,7 @@ struct TriangleShaderStageLayout {
     ksp_offset_bytes: u32,
     ksp_gpu_addr: u64,
     code_size_bytes: u32,
+    accesses_uav: bool,
 }
 
 #[derive(Copy, Clone)]
@@ -131,13 +132,21 @@ struct TriangleFrontEndContract {
     label: &'static str,
     vs_urb_output_length_override: Option<u8>,
     vs_urb_entries_override: Option<u32>,
+    vs_urb_start_override: Option<u32>,
     vs_dispatch_grf_start_override: Option<u8>,
+    vs_max_threads_field_override: Option<u32>,
+    vs_dw8_override: Option<u32>,
+    vs_simd8_single_instance_dispatch: bool,
+    vs_urb_read_offset: u8,
+    vs_urb_read_length: u8,
     vertex_buffer_dw1_override: Option<u32>,
+    vertex_element_format_override: Option<u32>,
     primitive_extended_dw1_override: Option<u32>,
     sbe_read_offset: u8,
     sbe_read_length: u8,
     force_sbe_read_offset: bool,
     force_sbe_read_length: bool,
+    sbe_active_component_override: Option<u32>,
 }
 
 #[derive(Copy, Clone)]
@@ -145,6 +154,7 @@ struct VsStreamoutProofConfig {
     pipeline: &'static crate::intel::shader::TrianglePipeline,
     shader_layout: TriangleShaderLayout,
     front_end_contract: TriangleFrontEndContract,
+    post_draw_sync: PostDrawSyncVariant,
 }
 
 #[derive(Copy, Clone)]
@@ -284,6 +294,7 @@ enum BackendProbeMode {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum PostDrawSyncVariant {
     HeavyAll,
+    NoPostDrawPipeControl,
     LightOnlyRetire,
     LightPostSyncNoCs,
     LightCsNoPostSync,
@@ -304,6 +315,7 @@ impl PostDrawSyncVariant {
     fn label(self) -> &'static str {
         match self {
             Self::HeavyAll => "heavy-all",
+            Self::NoPostDrawPipeControl => "no-postdraw-pipe-control",
             Self::LightOnlyRetire => "light-only-retire",
             Self::LightPostSyncNoCs => "pc-postsync-no-cs",
             Self::LightCsNoPostSync => "pc-cs-no-postsync",
@@ -318,6 +330,7 @@ impl PostDrawSyncVariant {
     fn submit_name(self) -> &'static str {
         match self {
             Self::HeavyAll => "postdraw-heavy-all",
+            Self::NoPostDrawPipeControl => "postdraw-no-pipe-control",
             Self::LightOnlyRetire => "postdraw-light-only-retire",
             Self::LightPostSyncNoCs => "postdraw-pc-postsync-no-cs",
             Self::LightCsNoPostSync => "postdraw-pc-cs-no-postsync",
@@ -345,6 +358,7 @@ impl PostDrawSyncVariant {
 
     fn light_sync_flags(self) -> u32 {
         match self {
+            Self::NoPostDrawPipeControl => 0,
             Self::LightPostSyncNoCs => PIPE_CONTROL_POST_DRAW_LIGHT_POSTSYNC_NO_STALL_BITS,
             Self::LightCsNoPostSync => PIPE_CONTROL_POST_DRAW_LIGHT_CS_STALL_ONLY_BITS,
             _ => PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS,
@@ -362,6 +376,7 @@ impl PostDrawSyncVariant {
     fn heavy_sync_flags(self) -> Option<u32> {
         let flags = match self {
             Self::HeavyAll => PIPE_CONTROL_POST_DRAW_SYNC_BITS,
+            Self::NoPostDrawPipeControl => return None,
             Self::LightOnlyRetire => return None,
             Self::LightPostSyncNoCs => return None,
             Self::LightCsNoPostSync => return None,
@@ -376,6 +391,15 @@ impl PostDrawSyncVariant {
             Self::FlushBit26Hdc => PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS | PIPE_CONTROL_FLUSH_HDC,
         };
         Some(flags)
+    }
+
+    fn heavy_header_flags(self) -> u32 {
+        match self {
+            Self::FlushBit26Hdc => {
+                PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER | PIPE_CONTROL_UNTYPED_DATAPORT_FLUSH_HEADER
+            }
+            _ => 0,
+        }
     }
 }
 
@@ -635,7 +659,6 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaNdcBlock32
                 | Self::RasterWmInputOaNdcMesaActiveBlock
                 | Self::RasterWmInputOaNdcMesaActiveBlockSwiz
-                | Self::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl
                 | Self::RasterWmInputOaNdcPerPoly
                 | Self::RasterWmInputOaNdcWalk16
                 | Self::RasterWmInputOaNdcClipPreconditions
@@ -748,7 +771,11 @@ impl BackendProbeMode {
     }
 
     fn force_wm_thread_dispatch(self) -> bool {
-        matches!(self, Self::RasterWmInputOaScreenSpaceForceThreadDispatch)
+        matches!(
+            self,
+            Self::RasterWmInputOaScreenSpaceForceThreadDispatch
+                | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+        )
     }
 
     fn skip_wm_hz_op_packet(self) -> bool {
@@ -810,8 +837,14 @@ impl BackendProbeMode {
             Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
                 | Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
                 | Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend
+                | Self::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
                 | Self::RasterWmInputOaNdcPointListOpenBounds
         )
+    }
+
+    fn mesa_simple_emit_wm_hz_op_after_raster(self) -> bool {
+        false
     }
 
     fn primitive_replication_before_sf(self) -> bool {
@@ -881,14 +914,29 @@ impl BackendProbeMode {
     fn mesa_active_sbe_state(self) -> bool {
         matches!(
             self,
-            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
+            Self::RasterWmInputOaNdcTriListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
         )
     }
 
     fn force_ps_binding_table_count_zero(self) -> bool {
         matches!(
             self,
-            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
+            Self::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl
+                | Self::RasterWmInputOaNdcTriListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
+        )
+    }
+
+    fn late_sbe_ps_refresh_after_mesa_active_block(self) -> bool {
+        false
+    }
+
+    fn skip_tbimr_tile_pass_info_after_raster(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaNdcTriListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
         )
     }
 
@@ -947,7 +995,7 @@ impl BackendProbeMode {
             Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend => Some(1),
             Self::RasterWmInputOaNdcRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend => Some(1),
             Self::RasterWmInputOaNdcRectListMesaActiveBlockSwiz => Some(1),
-            Self::RasterWmInputOaNdcTriListMesaActiveBlockSwiz => Some(1),
+            Self::RasterWmInputOaNdcTriListMesaActiveBlockSwiz => Some(0),
             Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz => Some(1),
             Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane => Some(1),
             Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8 => Some(1),
@@ -955,7 +1003,7 @@ impl BackendProbeMode {
             Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
             | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf => Some(1),
             Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe => {
-                Some(0)
+                Some(1)
             }
             Self::RasterWmInputOaScreenSpacePointList
             | Self::RasterWmInputOaScreenSpacePointListOpenBounds
@@ -979,9 +1027,11 @@ impl BackendProbeMode {
             Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0
                 | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
                 | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
-                | Self::RasterWmInputOaNdcLineListMesaActiveBlockSwiz
-                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe => {
+                | Self::RasterWmInputOaNdcLineListMesaActiveBlockSwiz => {
                 Some(0)
+            }
+            Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe => {
+                Some(1)
             }
             _ => None,
         }
@@ -1252,7 +1302,9 @@ impl BackendProbeMode {
             Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header => Some(0),
             Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
             | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
-            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe => Some(0),
+            | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe => {
+                Some(0)
+            }
             _ => None,
         }
     }
@@ -1457,6 +1509,13 @@ impl BackendProbeMode {
         self.enable_clip_preconditions()
     }
 
+    fn pdoane_minimal_sf_probe(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaScreenSpaceRectListMesaNoVsEarlyBackend
+        )
+    }
+
     fn clip_mode_bits(self) -> u32 {
         match self {
             Self::RasterWmInputOaScreenSpacePointListClipNormalOpenBounds => CLIP_MODE_NORMAL,
@@ -1613,12 +1672,7 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8
                 | Self::RasterWmInputOaScreenSpaceLineListMesaBackendOpenBoundsSample1OnPixelMesaSfPointSbeRead0Bary8Swiz
                 | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz
-                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane
-                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8
                 | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header
-                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
-                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
-                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
                 | Self::RasterWmInputOaScreenSpaceRtIndependent
                 | Self::RasterWmInputOaForceOnPattern
                 | Self::RasterWmInputOaForceOffPixel
@@ -1628,6 +1682,7 @@ impl BackendProbeMode {
     fn sf_deref_block_size_override(self) -> Option<u32> {
         match self {
             Self::RasterWmInputOaNdcPerPoly
+            | Self::RasterWmInputOaNdcMesaActiveBlock
             | Self::RasterWmInputOaScreenSpaceAcceptAllOpenBoundsHeaderPerPolySbe1NoSwiz
             | Self::RasterWmInputOaScreenSpaceD3dPerPolyNoHz
             | Self::RasterWmInputOaScreenSpacePerPoly
@@ -1637,12 +1692,15 @@ impl BackendProbeMode {
             | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwTightPreClipPerPoly
             | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1TightPreClipPerPoly
             | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrder
-            | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOn => Some(1),
+            | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOn
+            => {
+                Some(1)
+            }
             Self::RasterWmInputOaNdcBlock32
-            | Self::RasterWmInputOaNdcMesaActiveBlock
-            | Self::RasterWmInputOaNdcMesaActiveBlockSwiz
             | Self::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl
+            | Self::RasterWmInputOaNdcMesaActiveBlockSwiz
             | Self::RasterWmInputOaNdcLineListMesaActiveBlockSwiz
+            | Self::RasterWmInputOaNdcTriListMesaActiveBlockSwiz
             | Self::RasterWmInputOaNdcWalk16
             | Self::RasterWmInputOaNdcClipPreconditions
             | Self::RasterWmInputOaNdcNoWmScissor
@@ -1739,7 +1797,6 @@ impl BackendProbeMode {
             Self::RasterWmInputOaNdcBlock32
                 | Self::RasterWmInputOaNdcMesaActiveBlock
                 | Self::RasterWmInputOaNdcMesaActiveBlockSwiz
-                | Self::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl
                 | Self::RasterWmInputOaNdcPerPoly
                 | Self::RasterWmInputOaNdcWalk16
                 | Self::RasterWmInputOaNdcClipPreconditions
@@ -1767,6 +1824,12 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwTightPreClipPerPoly
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1TightPreClipPerPoly
                 | Self::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrder
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
         )
     }
 
@@ -1816,6 +1879,10 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwiz
                 | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSane
                 | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8Header
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRaster
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSf
+                | Self::RasterWmInputOaScreenSpaceTriListMesaActiveBlockSwizSfSaneBary8HeaderMesaRasterSfMesaSbe
                 | Self::RasterWmInputOaScreenSpaceRtIndependent
                 | Self::RasterWmInputOaNdcBlock32
                 | Self::RasterWmInputOaNdcPerPoly
@@ -2006,7 +2073,20 @@ impl StreamoutProofExperiment {
     }
 
     fn vertex_read_length(self) -> u32 {
-        1
+        let (offset, length): (u32, u32) = match self {
+            Self::PositionSlot0 | Self::PositionSlot0Xyzw | Self::MesaNoVsRectlist => (0, 1),
+            Self::PositionSlot1 => (1, 1),
+            Self::HeaderAndPositionSlots01 => (0, 2),
+        };
+        (offset << 5) | length.saturating_sub(1)
+    }
+
+    fn vertex_read_offset(self) -> u32 {
+        (self.vertex_read_length() >> 5) & 0x1F
+    }
+
+    fn vertex_read_length_field(self) -> u32 {
+        self.vertex_read_length() & 0x1F
     }
 
     fn so_decl_header(self) -> u32 {
@@ -2019,8 +2099,8 @@ impl StreamoutProofExperiment {
         }
     }
 
-    fn so_decl_buffer_selects(self) -> u32 {
-        1
+    fn so_decl_stream_offsets(self) -> u32 {
+        0
     }
 
     fn so_decl_num_entries(self) -> u32 {
@@ -2058,7 +2138,8 @@ impl StreamoutProofExperiment {
     fn vf_vertex_element_count(self) -> usize {
         match self {
             Self::PositionSlot0 | Self::PositionSlot0Xyzw => 1,
-            Self::PositionSlot1 | Self::HeaderAndPositionSlots01 | Self::MesaNoVsRectlist => 2,
+            Self::PositionSlot1 | Self::HeaderAndPositionSlots01 => 2,
+            Self::MesaNoVsRectlist => 3,
         }
     }
 }
@@ -2088,10 +2169,12 @@ impl TriangleBatchMode {
 
 fn is_streamout_submit_name(submit_name: &str) -> bool {
     matches!(submit_name, "streamout-proof" | "vf-streamout-proof" | "vs-streamout-proof")
+        || submit_name.starts_with("pdoane-vs-streamout-proof")
+        || submit_name == "pdoane-vf-streamout-proof"
 }
 
 fn is_vf_streamout_submit_name(submit_name: &str) -> bool {
-    submit_name == "vf-streamout-proof"
+    submit_name == "vf-streamout-proof" || submit_name == "pdoane-vf-streamout-proof"
 }
 
 fn is_triangle_debug_submit_name(submit_name: &str) -> bool {

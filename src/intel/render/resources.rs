@@ -54,6 +54,7 @@ fn upload_triangle_shader_pipeline(
             ksp_offset_bytes: pipeline.vs.meta.kernel.ksp_offset_bytes,
             ksp_gpu_addr: vs_gpu + pipeline.vs.meta.kernel.ksp_offset_bytes as u64,
             code_size_bytes: vs.code_size_bytes as u32,
+            accesses_uav: pipeline.vs.meta.kernel.accesses_uav,
         },
         ps: TriangleShaderStageLayout {
             code_offset_bytes: ps.code_offset_bytes as u32,
@@ -61,6 +62,7 @@ fn upload_triangle_shader_pipeline(
             ksp_offset_bytes: pipeline.ps.meta.kernel.ksp_offset_bytes,
             ksp_gpu_addr: ps_gpu + pipeline.ps.meta.kernel.ksp_offset_bytes as u64,
             code_size_bytes: ps.code_size_bytes as u32,
+            accesses_uav: pipeline.ps.meta.kernel.accesses_uav,
         },
         state_region_gpu_addr: bo_gpu_base + state_region_offset_bytes as u64,
         state_region_offset_bytes: state_region_offset_bytes as u32,
@@ -176,9 +178,13 @@ fn log_uploaded_triangle_shader_verification(
     let vs_uploaded_first = uploaded_vs.first().copied().unwrap_or(0);
     let vs_last = pipeline.vs.code.last().copied().unwrap_or(0);
     let vs_uploaded_last = uploaded_vs.last().copied().unwrap_or(0);
-    if submit_name == "vs-draw-frontier" {
+    let vs_tail4_start = pipeline.vs.code.len().saturating_sub(4);
+    let uploaded_vs_tail4_start = uploaded_vs.len().saturating_sub(4);
+    let vs_tail4 = &pipeline.vs.code[vs_tail4_start..];
+    let uploaded_vs_tail4 = &uploaded_vs[uploaded_vs_tail4_start..];
+    if submit_name == "vs-draw-frontier" || submit_name.starts_with("pdoane") {
         intel_render_focus_log!(
-            "intel/render: {} shader-upload-verify note={} vs_match={} vs_baked_sig=0x{:016X} vs_uploaded_sig=0x{:016X} vs_first=0x{:08X}/0x{:08X} vs_last=0x{:08X}/0x{:08X} ps_match={} ps_baked_sig=0x{:016X} ps_uploaded_sig=0x{:016X}\n",
+            "intel/render: {} shader-upload-verify note={} vs_match={} vs_baked_sig=0x{:016X} vs_uploaded_sig=0x{:016X} vs_first=0x{:08X}/0x{:08X} vs_last=0x{:08X}/0x{:08X} vs_tail4=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]/[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] ps_match={} ps_baked_sig=0x{:016X} ps_uploaded_sig=0x{:016X}\n",
             submit_name,
             crate::intel::shader::triangle_pipeline_note(),
             (pipeline.vs.code == uploaded_vs) as u8,
@@ -188,13 +194,21 @@ fn log_uploaded_triangle_shader_verification(
             vs_uploaded_first,
             vs_last,
             vs_uploaded_last,
+            vs_tail4.first().copied().unwrap_or(0),
+            vs_tail4.get(1).copied().unwrap_or(0),
+            vs_tail4.get(2).copied().unwrap_or(0),
+            vs_tail4.get(3).copied().unwrap_or(0),
+            uploaded_vs_tail4.first().copied().unwrap_or(0),
+            uploaded_vs_tail4.get(1).copied().unwrap_or(0),
+            uploaded_vs_tail4.get(2).copied().unwrap_or(0),
+            uploaded_vs_tail4.get(3).copied().unwrap_or(0),
             (pipeline.ps.code == uploaded_ps) as u8,
             ps_baked_sig,
             ps_uploaded_sig,
         );
     } else {
         intel_render_verbose_log!(
-            "intel/render: {} shader-upload-verify note={} vs_match={} vs_baked_sig=0x{:016X} vs_uploaded_sig=0x{:016X} vs_first=0x{:08X}/0x{:08X} vs_last=0x{:08X}/0x{:08X} ps_match={} ps_baked_sig=0x{:016X} ps_uploaded_sig=0x{:016X}\n",
+            "intel/render: {} shader-upload-verify note={} vs_match={} vs_baked_sig=0x{:016X} vs_uploaded_sig=0x{:016X} vs_first=0x{:08X}/0x{:08X} vs_last=0x{:08X}/0x{:08X} vs_tail4=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]/[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] ps_match={} ps_baked_sig=0x{:016X} ps_uploaded_sig=0x{:016X}\n",
             submit_name,
             crate::intel::shader::triangle_pipeline_note(),
             (pipeline.vs.code == uploaded_vs) as u8,
@@ -204,6 +218,14 @@ fn log_uploaded_triangle_shader_verification(
             vs_uploaded_first,
             vs_last,
             vs_uploaded_last,
+            vs_tail4.first().copied().unwrap_or(0),
+            vs_tail4.get(1).copied().unwrap_or(0),
+            vs_tail4.get(2).copied().unwrap_or(0),
+            vs_tail4.get(3).copied().unwrap_or(0),
+            uploaded_vs_tail4.first().copied().unwrap_or(0),
+            uploaded_vs_tail4.get(1).copied().unwrap_or(0),
+            uploaded_vs_tail4.get(2).copied().unwrap_or(0),
+            uploaded_vs_tail4.get(3).copied().unwrap_or(0),
             (pipeline.ps.code == uploaded_ps) as u8,
             ps_baked_sig,
             ps_uploaded_sig,

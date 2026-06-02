@@ -56,10 +56,12 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
     const CURBE_STATE_OFFSET_BYTES: usize = GPGPU_WALKER_SCRATCH_OFFSET_BYTES + 0x100;
     const INDIRECT_STATE_OFFSET_BYTES: usize = GPGPU_WALKER_SCRATCH_OFFSET_BYTES + 0x200;
     const GPGPU_WALKER_GROUP_Z_DIM: u32 = 1;
-    const GPGPU_VFE_MAX_THREADS: u32 = 223;
-    const GPGPU_VFE_URB_ENTRIES: u32 = 2;
+    const GPGPU_VFE_MAX_THREADS_LEGACY: u32 = 223;
+    const GPGPU_VFE_URB_ENTRIES_LEGACY: u32 = 2;
     const GPGPU_VFE_FUSED_EU_DISPATCH_LEGACY_MODE: u32 = 0;
-    const GPGPU_VFE_URB_ENTRY_ALLOCATION_32B: u32 = 2;
+    const GPGPU_VFE_URB_ENTRY_ALLOCATION_32B_LEGACY: u32 = 2;
+    const GPGPU_VFE_DW3_UOS: u32 = 0x00A7_0100;
+    const GPGPU_VFE_DW5_UOS: u32 = 0x0782_0000;
     const GPGPU_RELATIVE_STATE_BASES: bool = true;
     const GPGPU_TEMPORARY_3D_FOR_SBA: bool = true;
     const GPGPU_DYNAMIC_STATE_BASE: u64 = if GPGPU_RELATIVE_STATE_BASES {
@@ -162,6 +164,14 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
             && (GPGPU_ROW2560_UOS_THREAD_PAYLOAD || !program_name.contains("row2560"))
     }
 
+    fn walker_vfe_profile(program_name: &str) -> u32 {
+        if program_name.contains("row2560") {
+            GPGPU_VFE_PROFILE_LEGACY
+        } else {
+            GPGPU_VFE_PROFILE_OVERRIDE.load(core::sync::atomic::Ordering::Acquire)
+        }
+    }
+
     fn push_sba_address(
         batch_dwords: &mut [u32],
         cursor: &mut usize,
@@ -192,6 +202,11 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
     batch_dwords.fill(0);
     let requested_simd_width = walker_simd_width(program.name);
     let use_uos_thread_payload = walker_uses_uos_thread_payload(program.name);
+    let vfe_profile = walker_vfe_profile(program.name);
+    let use_uos_vfe_dw3 =
+        vfe_profile == GPGPU_VFE_PROFILE_UOS_DW3 || vfe_profile == GPGPU_VFE_PROFILE_UOS_BOTH;
+    let use_uos_vfe_dw5 =
+        vfe_profile == GPGPU_VFE_PROFILE_UOS_DW5 || vfe_profile == GPGPU_VFE_PROFILE_UOS_BOTH;
     let load_dummy_curbe = !use_uos_thread_payload && GPGPU_LOAD_DUMMY_CURBE;
     let indirect_data_bytes = write_gpgpu_uos_thread_payload(
         warm,
@@ -206,6 +221,18 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
     let curbe_total_bytes = gpgpu_curbe_total_bytes(load_dummy_curbe);
     let curbe_read_length_8dw = gpgpu_curbe_read_length_8dw(load_dummy_curbe);
     let vfe_curbe_allocation_32b = gpgpu_vfe_curbe_allocation_32b(load_dummy_curbe);
+    let vfe_dw3 = if use_uos_vfe_dw3 {
+        GPGPU_VFE_DW3_UOS
+    } else {
+        (GPGPU_VFE_MAX_THREADS_LEGACY << 16)
+            | (GPGPU_VFE_URB_ENTRIES_LEGACY << 8)
+            | GPGPU_VFE_FUSED_EU_DISPATCH_LEGACY_MODE
+    };
+    let vfe_dw5 = if use_uos_vfe_dw5 {
+        GPGPU_VFE_DW5_UOS | vfe_curbe_allocation_32b
+    } else {
+        (GPGPU_VFE_URB_ENTRY_ALLOCATION_32B_LEGACY << 16) | vfe_curbe_allocation_32b
+    };
     let uos_tight_launch = GPGPU_UOS_TIGHT_LAUNCH;
 
     const PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER: u32 = 1 << 9;
@@ -401,19 +428,9 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
     push(batch_dwords, &mut cursor, MEDIA_VFE_STATE_CMD)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
-    push(
-        batch_dwords,
-        &mut cursor,
-        (GPGPU_VFE_MAX_THREADS << 16)
-            | (GPGPU_VFE_URB_ENTRIES << 8)
-            | GPGPU_VFE_FUSED_EU_DISPATCH_LEGACY_MODE,
-    )?;
+    push(batch_dwords, &mut cursor, vfe_dw3)?;
     push(batch_dwords, &mut cursor, 0)?;
-    push(
-        batch_dwords,
-        &mut cursor,
-        (GPGPU_VFE_URB_ENTRY_ALLOCATION_32B << 16) | vfe_curbe_allocation_32b,
-    )?;
+    push(batch_dwords, &mut cursor, vfe_dw5)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
@@ -537,7 +554,7 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
 
     if log_program_shape {
         crate::log!(
-            "intel/gpgpu: compute-walker-layout program_source={} expects_store={} launch_profile={} payload_profile={} vfe_off=0x{:X} vfe_dw3=0x{:08X} vfe_dw5=0x{:08X} fused_eu_dispatch_legacy={} urb_entry_alloc_32b={} curbe_present={} curbe_bytes=0x{:X} curbe_read_len_8dw={} uos_payload={} indirect_base=0x{:X} indirect_bytes=0x{:X} indirect_off=0x{:X} walker_dw2=0x{:08X} walker_dw3=0x{:08X} id_load_off=0x{:X} id_load_bytes=0x{:X} idd_payload_bytes=0x{:X} midl_negative_control={} state_bases_relative={} temporary_3d_for_sba={} midl_start=0x{:X} walker_off=0x{:X} walker_cmd=0x{:08X} exec_mask=0x{:08X} idd_gpu=0x{:X} idd_dynamic_offset=0x{:X} idd_ksp=0x{:08X} instruction_base=0x{:X} ksp_resolves_to=0x{:X} idd_dw2=0x{:08X} idd_dw4=0x{:08X} idd_dw5=0x{:08X} idd_dw6=0x{:08X} idd_dw7=0x{:08X} surface_base=0x{:X} dynamic_state_base=0x{:X} contiguous_vfe_idd_walker={} uos_tight_launch={} mesa_post_vfe_pipe_control={} tail_off=0x{:X} cs_marker=0x{:08X} note=legacy-vfe-dispatch-with-prm-len13-walker\n",
+            "intel/gpgpu: compute-walker-layout program_source={} expects_store={} launch_profile={} payload_profile={} vfe_profile={} vfe_off=0x{:X} vfe_dw3=0x{:08X} vfe_dw5=0x{:08X} fused_eu_dispatch_legacy={} urb_entry_alloc_32b={} curbe_present={} curbe_bytes=0x{:X} curbe_read_len_8dw={} uos_payload={} indirect_base=0x{:X} indirect_bytes=0x{:X} indirect_off=0x{:X} walker_dw2=0x{:08X} walker_dw3=0x{:08X} id_load_off=0x{:X} id_load_bytes=0x{:X} idd_payload_bytes=0x{:X} midl_negative_control={} state_bases_relative={} temporary_3d_for_sba={} midl_start=0x{:X} walker_off=0x{:X} walker_cmd=0x{:08X} exec_mask=0x{:08X} idd_gpu=0x{:X} idd_dynamic_offset=0x{:X} idd_ksp=0x{:08X} instruction_base=0x{:X} ksp_resolves_to=0x{:X} idd_dw2=0x{:08X} idd_dw4=0x{:08X} idd_dw5=0x{:08X} idd_dw6=0x{:08X} idd_dw7=0x{:08X} surface_base=0x{:X} dynamic_state_base=0x{:X} contiguous_vfe_idd_walker={} uos_tight_launch={} mesa_post_vfe_pipe_control={} tail_off=0x{:X} cs_marker=0x{:08X} note=legacy-vfe-dispatch-with-prm-len13-walker\n",
             program.name,
             program.expects_store as u8,
             if uos_tight_launch {
@@ -552,11 +569,21 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
             } else {
                 "no-payload"
             },
+            match vfe_profile {
+                GPGPU_VFE_PROFILE_UOS_DW3 => "uos-dw3",
+                GPGPU_VFE_PROFILE_UOS_DW5 => "uos-dw5",
+                GPGPU_VFE_PROFILE_UOS_BOTH => "uos-both",
+                _ => "legacy",
+            },
             vfe_start * core::mem::size_of::<u32>(),
             batch_dwords[vfe_start + 3],
             batch_dwords[vfe_start + 5],
             ((batch_dwords[vfe_start + 3] & GPGPU_VFE_FUSED_EU_DISPATCH_LEGACY_MODE) != 0) as u8,
-            GPGPU_VFE_URB_ENTRY_ALLOCATION_32B,
+            if use_uos_vfe_dw5 {
+                (GPGPU_VFE_DW5_UOS >> 16) & 0xFFFF
+            } else {
+                GPGPU_VFE_URB_ENTRY_ALLOCATION_32B_LEGACY
+            },
             load_dummy_curbe as u8,
             curbe_total_bytes,
             curbe_read_length_8dw,
