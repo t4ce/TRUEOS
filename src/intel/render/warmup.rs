@@ -431,28 +431,61 @@ fn apply_gfx125_raster_workarounds(dev: crate::intel::Dev) {
         return;
     }
 
-    // Mesa's gfx125 init path enables these TBIMR-related raster controls up
-    // front. Keep the bring-up path aligned so the first primitive does not
-    // depend on whatever the boot context happened to leave behind.
+    // Linux xe/i915 only name CHICKEN_RASTER_2 bit 5 here, and the register is
+    // MCR. Put the selector in multicast mode before programming it so this
+    // bare-metal path has the same invariant the Linux MCR helper relies on.
     let before = crate::intel::mmio_read(dev, CHICKEN_RASTER_2);
-    crate::intel::mmio_write(dev, CHICKEN_RASTER_2, gfx125_chicken_raster_2_value());
+    write_gfx125_chicken_raster_2_mcr(dev, gfx125_chicken_raster_2_value());
     let after = crate::intel::mmio_read(dev, CHICKEN_RASTER_2);
 
     if should_log_primary_probe_detail() {
         crate::log!(
-            "intel/render: gfx125-raster-wa chicken_raster_2 before=0x{:08X} after=0x{:08X} tbimr_batch_override={} tbimr_open_batch={} tbimr_fast_clip={}\n",
+            "intel/render: gfx125-raster-wa chicken_raster_2 before=0x{:08X} after=0x{:08X} mcr_selector=0x{:08X} tbimr_fast_clip={} source=linux-xe-wa-14021567978\n",
             before,
             after,
-            ((after & TBIMR_BATCH_SIZE_OVERRIDE) != 0) as u8,
-            ((after & TBIMR_OPEN_BATCH_ENABLE) != 0) as u8,
+            crate::intel::mmio_read(dev, MCR_SELECTOR),
             ((after & TBIMR_FAST_CLIP) != 0) as u8,
         );
     }
 }
 
+fn apply_gfx125_raster_workarounds_for_probe(dev: crate::intel::Dev, label: &str) {
+    if !device_is_gfx125(dev.device_id) {
+        return;
+    }
+
+    let value = gfx125_chicken_raster_2_value();
+    let before = crate::intel::mmio_read(dev, CHICKEN_RASTER_2);
+    write_gfx125_chicken_raster_2_mcr(dev, value);
+    let after = crate::intel::mmio_read(dev, CHICKEN_RASTER_2);
+
+    intel_render_focus_log!(
+        "intel/render: {} gfx125-raster-wa-probe chicken_raster_2 before=0x{:08X} write=0x{:08X} after=0x{:08X} mcr_selector=0x{:08X} tbimr_fast_clip={} placement=before-submit source=linux-xe-wa-14021567978 hypothesis=recovery-clears-raster-wa-before-sf-wm-scan-conversion\n",
+        label,
+        before,
+        value,
+        after,
+        crate::intel::mmio_read(dev, MCR_SELECTOR),
+        ((after & TBIMR_FAST_CLIP) != 0) as u8,
+    );
+}
+
+fn write_gfx125_chicken_raster_2_mcr(dev: crate::intel::Dev, value: u32) {
+    crate::intel::mmio_write(dev, MCR_SELECTOR, MCR_MULTICAST);
+    crate::intel::mmio_write(dev, CHICKEN_RASTER_2, value);
+    crate::intel::mmio_write(dev, MCR_SELECTOR, MCR_MULTICAST);
+}
+
 fn gfx125_chicken_raster_2_value() -> u32 {
-    let bits = TBIMR_BATCH_SIZE_OVERRIDE | TBIMR_OPEN_BATCH_ENABLE | TBIMR_FAST_CLIP;
-    crate::intel::mask_en(bits)
+    crate::intel::mask_en(gfx125_chicken_raster_2_bits())
+}
+
+fn gfx125_chicken_raster_2_disable_value() -> u32 {
+    crate::intel::mask_dis(gfx125_chicken_raster_2_bits())
+}
+
+fn gfx125_chicken_raster_2_bits() -> u32 {
+    TBIMR_FAST_CLIP
 }
 
 #[derive(Copy, Clone)]
