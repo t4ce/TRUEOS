@@ -7,7 +7,7 @@ pub(crate) fn submit_primary_triangle_once() {
 }
 
 pub(crate) fn submit_primary_probe_periodic() {
-    let _ = submit_primary_probe_now("periodic");
+    let _ = submit_primary_probe_now("periodic-repaint");
 }
 
 fn submit_primary_probe_now(reason: &'static str) -> bool {
@@ -96,7 +96,16 @@ fn submit_primary_probe_now(reason: &'static str) -> bool {
             );
         }
     }
-    let completed = if PRIMARY_USE_DRAW_PATH_BOOT_ONCE && reason == "boot-once" {
+    let completed = if reason == "periodic-repaint" {
+        submit_primary_visible_repaint_probe(
+            dev,
+            warm,
+            surface_gpu,
+            pitch_bytes,
+            width as usize,
+            height as usize,
+        )
+    } else if PRIMARY_USE_DRAW_PATH_BOOT_ONCE && reason == "boot-once" {
         let completed = submit_primary_triangle_with_retries(
             dev,
             warm,
@@ -171,6 +180,8 @@ fn submit_primary_probe_now(reason: &'static str) -> bool {
             completed as u8,
             if PRIMARY_USE_MI_STRIPE_PROBE {
                 "mi-stripes"
+            } else if reason == "periodic-repaint" {
+                "visible-repaint"
             } else if PRIMARY_USE_DRAW_PATH_BOOT_ONCE && reason == "boot-once" {
                 "draw-path"
             } else if PRIMARY_USE_3D_NO_DRAW_PROBE {
@@ -192,6 +203,10 @@ fn submit_primary_triangle_with_retries(
     width: usize,
     height: usize,
 ) -> bool {
+    if PRIMARY_SINGLE_RASTER_PROBE_ONLY {
+        return submit_single_raster_isolation_probe(dev, warm);
+    }
+
     let initial_streamout_experiment =
         select_streamout_proof_experiment(PRIMARY_PROBE_SEQ.load(Ordering::Acquire));
     let vf_streamout_precheck = submit_triangle_vf_streamout_proof(
@@ -211,6 +226,26 @@ fn submit_primary_triangle_with_retries(
     paint_expected_fragment_album_tile();
     if !vf_streamout_precheck {
         return false;
+    }
+
+    for experiment in [
+        StreamoutProofExperiment::PositionSlot0,
+        StreamoutProofExperiment::PositionSlot1,
+    ] {
+        let accepted = submit_triangle_vs_streamout_proof(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            8 * core::mem::size_of::<u32>(),
+            8,
+            8,
+            experiment,
+        );
+        intel_render_focus_log!(
+            "intel/render: primary-vs-streamout-layout-proof experiment={} accepted={} note=real-vs-vue-slot-probe-for-clip-sf-position-contract\n",
+            experiment.label(),
+            accepted as u8,
+        );
     }
 
     let vf_draw_precheck = submit_triangle_vf_draw_to_surface(
@@ -323,6 +358,62 @@ fn submit_primary_triangle_with_retries(
     if raster_wm_oa_probe {
         recover_render_engine_after_nonretired_submit(dev, warm, "raster-wm-oa-probe");
     }
+    let vf_screen_inset_raster_clip_preconditions_probe = submit_triangle_vf_draw_to_surface(
+        "vf-screen-inset-raster-clip-preconditions-raster-wm-oa-probe",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::ScreenSpaceInset32,
+        BackendProbeMode::RasterWmInputOaScreenSpaceRasterClipPreconditions,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    intel_render_verbose_log!(
+        "intel/render: primary-vf-screen-inset-raster-clip-preconditions-raster-wm-oa-probe completed={}\n",
+        vf_screen_inset_raster_clip_preconditions_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-vf-screen-inset-raster-clip-preconditions-raster-wm-oa-probe diagnostic completed={} note=vf-synthesized-xyzw-slot0-plus-current-scissor-raster-clip-preconditions-tests-wm-before-real-vs-vue-ambiguity\n",
+        vf_screen_inset_raster_clip_preconditions_probe as u8,
+    );
+    if vf_screen_inset_raster_clip_preconditions_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "vf-screen-inset-raster-clip-preconditions-raster-wm-oa-probe",
+        );
+    }
+    let vf_screen_inset_clip_bypass_raster_preconditions_probe = submit_triangle_vf_draw_to_surface(
+        "vf-screen-inset-clip-bypass-raster-preconditions-raster-wm-oa-probe",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::ScreenSpaceInset32,
+        BackendProbeMode::RasterWmInputOaScreenSpaceClipBypassRasterPreconditions,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    intel_render_verbose_log!(
+        "intel/render: primary-vf-screen-inset-clip-bypass-raster-preconditions-raster-wm-oa-probe completed={}\n",
+        vf_screen_inset_clip_bypass_raster_preconditions_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-vf-screen-inset-clip-bypass-raster-preconditions-raster-wm-oa-probe diagnostic completed={} note=screen-space-vf-xyzw-keeps-current-raster-scissor-walk16-preconditions-but-disables-clip-and-clears-wm-hz-op-so-accept-all-cannot-discard-bad-screen-coordinates-before-sf\n",
+        vf_screen_inset_clip_bypass_raster_preconditions_probe as u8,
+    );
+    if vf_screen_inset_clip_bypass_raster_preconditions_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "vf-screen-inset-clip-bypass-raster-preconditions-raster-wm-oa-probe",
+        );
+    }
     let real_vs_raster_wm_oa_probe = submit_triangle_real_vs_draw_probe_to_surface(
         dev,
         warm,
@@ -371,11 +462,7 @@ fn submit_primary_triangle_with_retries(
         real_vs_ndc_raster_wm_oa_probe as u8,
     );
     if real_vs_ndc_raster_wm_oa_probe {
-        recover_render_engine_after_nonretired_submit(
-            dev,
-            warm,
-            "real-vs-ndc-raster-wm-oa-probe",
-        );
+        recover_render_engine_after_nonretired_submit(dev, warm, "real-vs-ndc-raster-wm-oa-probe");
     }
     let real_vs_ndc_walk16_raster_wm_oa_probe = submit_triangle_real_vs_draw_probe_to_surface(
         dev,
@@ -406,21 +493,20 @@ fn submit_primary_triangle_with_retries(
             "real-vs-ndc-walk16-raster-wm-oa-probe",
         );
     }
-    let real_vs_ndc_32x32_walk16_raster_wm_oa_probe =
-        submit_triangle_real_vs_draw_probe_to_surface(
-            dev,
-            warm,
-            GPU_VA_STREAMOUT_BASE,
-            32 * core::mem::size_of::<u32>(),
-            32,
-            32,
-            TriangleBlendProbeMode::MesaZeroedState,
-            "real-vs-ndc-32x32-walk16-raster-wm-oa-probe",
-            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
-            VfPrimitiveGeometry::Oversized,
-            BackendProbeMode::RasterWmInputOaNdcWalk16,
-            PostDrawSyncVariant::LightPostSyncNoCs,
-        );
+    let real_vs_ndc_32x32_walk16_raster_wm_oa_probe = submit_triangle_real_vs_draw_probe_to_surface(
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        "real-vs-ndc-32x32-walk16-raster-wm-oa-probe",
+        TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+        VfPrimitiveGeometry::Oversized,
+        BackendProbeMode::RasterWmInputOaNdcWalk16,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
     intel_render_verbose_log!(
         "intel/render: primary-real-vs-ndc-32x32-walk16-raster-wm-oa-probe completed={}\n",
         real_vs_ndc_32x32_walk16_raster_wm_oa_probe as u8,
@@ -434,6 +520,36 @@ fn submit_primary_triangle_with_retries(
             dev,
             warm,
             "real-vs-ndc-32x32-walk16-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_ndc_mesa_active_block_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-ndc-mesa-active-block-raster-wm-oa-probe",
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::Oversized,
+            BackendProbeMode::RasterWmInputOaNdcMesaActiveBlock,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-ndc-mesa-active-block-raster-wm-oa-probe completed={}\n",
+        real_vs_ndc_mesa_active_block_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-ndc-mesa-active-block-raster-wm-oa-probe diagnostic completed={} note=conventional-ndc-with-mesa-captured-active-clip-sf-raster-wm-adjacent-state-shape-using-trueos-bos-and-shaders\n",
+        real_vs_ndc_mesa_active_block_raster_wm_oa_probe as u8,
+    );
+    if real_vs_ndc_mesa_active_block_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-ndc-mesa-active-block-raster-wm-oa-probe",
         );
     }
     let real_vs_ndc_clip_preconditions_raster_wm_oa_probe =
@@ -464,6 +580,1305 @@ fn submit_primary_triangle_with_retries(
             dev,
             warm,
             "real-vs-ndc-clip-preconditions-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_clip_preconditions_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-clip-preconditions-raster-wm-oa-probe",
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpace8x8,
+            BackendProbeMode::RasterWmInputOaScreenSpaceClipPreconditions,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-clip-preconditions-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_clip_preconditions_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-clip-preconditions-raster-wm-oa-probe diagnostic completed={} note=screen-space-pdd-with-clip-enabled-sf-viewport-minmax-and-clip-guardband-viewportxy-earlycull\n",
+        real_vs_screen_clip_preconditions_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_clip_preconditions_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-clip-preconditions-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_raster_clip_preconditions_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-raster-clip-preconditions-raster-wm-oa-probe",
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpace8x8,
+            BackendProbeMode::RasterWmInputOaScreenSpaceRasterClipPreconditions,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-raster-clip-preconditions-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_raster_clip_preconditions_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-raster-clip-preconditions-raster-wm-oa-probe diagnostic completed={} note=screen-space-pdd-with-raster-z-near-far-clip-tests-and-dx101-api-mode\n",
+        real_vs_screen_raster_clip_preconditions_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_raster_clip_preconditions_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-raster-clip-preconditions-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_d3d_raster_no_hz_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-d3d-raster-no-hz-raster-wm-oa-probe",
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpace8x8,
+            BackendProbeMode::RasterWmInputOaScreenSpaceD3dRasterPreconditionsNoHz,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-d3d-raster-no-hz-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_d3d_raster_no_hz_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-d3d-raster-no-hz-raster-wm-oa-probe diagnostic completed={} note=screen-space-pdd-with-clip-d3d-raster-dx101-zclip-and-no-wm-hz-op\n",
+        real_vs_screen_d3d_raster_no_hz_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_d3d_raster_no_hz_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-d3d-raster-no-hz-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_d3d_perpoly_raster_no_hz_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-d3d-perpoly-raster-no-hz-raster-wm-oa-probe",
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpace8x8,
+            BackendProbeMode::RasterWmInputOaScreenSpaceD3dPerPolyNoHz,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-d3d-perpoly-raster-no-hz-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_d3d_perpoly_raster_no_hz_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-d3d-perpoly-raster-no-hz-raster-wm-oa-probe diagnostic completed={} note=same-focused-d3d-raster-no-hz-probe-but-sf-deref-perpoly-tests-sf-object-setup-to-wm-contract\n",
+        real_vs_screen_d3d_perpoly_raster_no_hz_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_d3d_perpoly_raster_no_hz_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-d3d-perpoly-raster-no-hz-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_d3d_slot0_raster_no_hz_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-d3d-slot0-raster-no-hz-raster-wm-oa-probe",
+            TRIANGLE_SLOT0_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpace8x8,
+            BackendProbeMode::RasterWmInputOaScreenSpaceD3dRasterPreconditionsNoHz,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-d3d-slot0-raster-no-hz-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_d3d_slot0_raster_no_hz_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-d3d-slot0-raster-no-hz-raster-wm-oa-probe diagnostic completed={} note=same-focused-d3d-raster-no-hz-probe-but-sbe-read-offset-zero-tests-vue-header-slot-assumption\n",
+        real_vs_screen_d3d_slot0_raster_no_hz_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_d3d_slot0_raster_no_hz_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-d3d-slot0-raster-no-hz-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_d3d_inset_raster_no_hz_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-d3d-inset-raster-no-hz-raster-wm-oa-probe",
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceD3dRasterPreconditionsNoHz,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-d3d-inset-raster-no-hz-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_d3d_inset_raster_no_hz_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-d3d-inset-raster-no-hz-raster-wm-oa-probe diagnostic completed={} note=same-focused-d3d-raster-no-hz-probe-but-triangle-is-inset-from-scissor-and-draw-rectangle-boundaries\n",
+        real_vs_screen_d3d_inset_raster_no_hz_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_d3d_inset_raster_no_hz_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-d3d-inset-raster-no-hz-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_inset_boring_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-inset-boring-raster-wm-oa-probe",
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpace,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-inset-boring-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_inset_boring_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-inset-boring-raster-wm-oa-probe diagnostic completed={} note=same-inset-triangle-with-plain-screen-space-backend-no-d3d-raster-preconditions\n",
+        real_vs_screen_inset_boring_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_inset_boring_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-inset-boring-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_inset_no_wm_hz_op_packet_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-inset-no-wm-hz-op-packet-raster-wm-oa-probe",
+            TRIANGLE_SLOT0_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceNoWmHzOpPacket,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-inset-no-wm-hz-op-packet-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_inset_no_wm_hz_op_packet_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-inset-no-wm-hz-op-packet-raster-wm-oa-probe diagnostic completed={} note=same-inset-slot0-screen-space-backend-but-omits-3dstate-wm-hz-op-packet-entirely\n",
+        real_vs_screen_inset_no_wm_hz_op_packet_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_inset_no_wm_hz_op_packet_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-inset-no-wm-hz-op-packet-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_inset_slot0_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-inset-slot0-raster-wm-oa-probe",
+            TRIANGLE_SLOT0_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpace,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-inset-slot0-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_inset_slot0_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-inset-slot0-raster-wm-oa-probe diagnostic completed={} note=same-inset-plain-screen-space-backend-but-front-end-contract-reads-position-from-vue-slot0\n",
+        real_vs_screen_inset_slot0_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_inset_slot0_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-inset-slot0-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_inset_clip_bypass_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-inset-clip-bypass-raster-wm-oa-probe",
+            TRIANGLE_SLOT0_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceClipBypass,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-inset-clip-bypass-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_inset_clip_bypass_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-inset-clip-bypass-raster-wm-oa-probe diagnostic completed={} note=same-inset-screen-space-backend-but-clip-enable-disabled-to-test-clip-stage-participation-before-sf-wm\n",
+        real_vs_screen_inset_clip_bypass_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_inset_clip_bypass_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-inset-clip-bypass-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_rectlist_clip_bypass_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-rectlist-clip-bypass-raster-wm-oa-probe",
+            TRIANGLE_SLOT0_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpaceRectInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceRectListClipBypass,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-rectlist-clip-bypass-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_rectlist_clip_bypass_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-rectlist-clip-bypass-raster-wm-oa-probe diagnostic completed={} note=mesa-blorp-like-screen-space-rectlist-with-clip-enable-disabled-tests-primitive-decomposition-vs-sf-wm-scan-conversion\n",
+        real_vs_screen_rectlist_clip_bypass_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_rectlist_clip_bypass_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-rectlist-clip-bypass-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_rectlist_clip_bypass_sf_sane_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-rectlist-clip-bypass-sf-sane-raster-wm-oa-probe",
+            TRIANGLE_SLOT0_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpaceRectInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceRectListClipBypassSfSane,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-rectlist-clip-bypass-sf-sane-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_rectlist_clip_bypass_sf_sane_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-rectlist-clip-bypass-sf-sane-raster-wm-oa-probe diagnostic completed={} note=combined-rectlist-clip-bypass-position-slot0-and-sf-line-point-last-pixel-defaults-for-sf-to-wm-boundary\n",
+        real_vs_screen_rectlist_clip_bypass_sf_sane_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_rectlist_clip_bypass_sf_sane_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-rectlist-clip-bypass-sf-sane-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_rectlist_blorp_like_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-rectlist-blorp-like-raster-wm-oa-probe",
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpaceRectInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceRectListBlorpLike,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-rectlist-blorp-like-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_rectlist_blorp_like_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-rectlist-blorp-like-raster-wm-oa-probe diagnostic completed={} note=mesa-blorp-shaped-rectlist-default-sbe-offset1-perpoly-deref-clip-bypass-tests-sf-wm-object-setup-contract\n",
+        real_vs_screen_rectlist_blorp_like_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_rectlist_blorp_like_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-rectlist-blorp-like-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_rectlist_slot0_perpoly_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-rectlist-slot0-perpoly-raster-wm-oa-probe",
+            TRIANGLE_SLOT0_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpaceRectInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceRectListSlot0PerPoly,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-rectlist-slot0-perpoly-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_rectlist_slot0_perpoly_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-rectlist-slot0-perpoly-raster-wm-oa-probe diagnostic completed={} note=position-slot0-no-fake-header-plus-rectlist-perpoly-clip-bypass-tests-vue-sbe-contract-at-sf-wm-boundary\n",
+        real_vs_screen_rectlist_slot0_perpoly_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_rectlist_slot0_perpoly_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-rectlist-slot0-perpoly-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_inset_force_wm_thread_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-inset-force-wm-thread-raster-wm-oa-probe",
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceForceThreadDispatch,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-inset-force-wm-thread-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_inset_force_wm_thread_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-inset-force-wm-thread-raster-wm-oa-probe diagnostic completed={} note=same-inset-screen-space-backend-with-3dstate-wm-force-thread-dispatch-on\n",
+        real_vs_screen_inset_force_wm_thread_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_inset_force_wm_thread_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-inset-force-wm-thread-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_inset_sf_sane_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-inset-sf-sane-raster-wm-oa-probe",
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceSfSaneDefaults,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-inset-sf-sane-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_inset_sf_sane_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-inset-sf-sane-raster-wm-oa-probe diagnostic completed={} note=same-inset-screen-space-backend-with-explicit-sf-line-point-last-pixel-and-provoking-defaults\n",
+        real_vs_screen_inset_sf_sane_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_inset_sf_sane_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-inset-sf-sane-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_inset_urb2_sf_sane_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-inset-urb2-sf-sane-raster-wm-oa-probe",
+            TRIANGLE_URB2_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceSfSaneDefaults,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-inset-urb2-sf-sane-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_inset_urb2_sf_sane_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-inset-urb2-sf-sane-raster-wm-oa-probe diagnostic completed={} note=same-inset-sf-sane-probe-but-vs-urb-output-contract-is-two-64b-slots\n",
+        real_vs_screen_inset_urb2_sf_sane_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_inset_urb2_sf_sane_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-inset-urb2-sf-sane-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_inset_perpoly_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-inset-perpoly-raster-wm-oa-probe",
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpacePerPoly,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-inset-perpoly-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_inset_perpoly_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-inset-perpoly-raster-wm-oa-probe diagnostic completed={} note=same-inset-plain-screen-space-backend-but-sf-deref-per-poly-only\n",
+        real_vs_screen_inset_perpoly_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_inset_perpoly_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-inset-perpoly-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_inset_urb128_perpoly_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-inset-urb128-perpoly-raster-wm-oa-probe",
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceUrb128PerPoly,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-inset-urb128-perpoly-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_inset_urb128_perpoly_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-inset-urb128-perpoly-raster-wm-oa-probe diagnostic completed={} note=sf-deref-per-poly-with-matching-vs-urb-entry-count-under-192\n",
+        real_vs_screen_inset_urb128_perpoly_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_inset_urb128_perpoly_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-inset-urb128-perpoly-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_inset_mesa_simple_order_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-inset-mesa-simple-order-raster-wm-oa-probe",
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceMesaSimpleOrder,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-inset-mesa-simple-order-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_inset_mesa_simple_order_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-inset-mesa-simple-order-raster-wm-oa-probe diagnostic completed={} note=mesa-simple-shader-order-without-early-backend-or-late-wm-refresh\n",
+        real_vs_screen_inset_mesa_simple_order_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_inset_mesa_simple_order_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-inset-mesa-simple-order-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_inset_mesa_noswiz_noscissor_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-inset-mesa-noswiz-noscissor-raster-wm-oa-probe",
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceMesaSimpleNoSwizNoScissor,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-inset-mesa-noswiz-noscissor-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_inset_mesa_noswiz_noscissor_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-inset-mesa-noswiz-noscissor-raster-wm-oa-probe diagnostic completed={} note=mesa-simple-order-with-mesa-sbe-read-offset1-sbe-swiz-omitted-tight-raster-scissor-walk16-dx101-raster-api-mode-tight-drawing-rectangle-sf-body-dw2-prm-default-and-clip-accept-all\n",
+        real_vs_screen_inset_mesa_noswiz_noscissor_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_inset_mesa_noswiz_noscissor_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-inset-mesa-noswiz-noscissor-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_pointlist_raster_wm_oa_probe = submit_triangle_real_vs_draw_probe_to_surface(
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        "real-vs-screen-pointlist-raster-wm-oa-probe",
+        TRIANGLE_SLOT0_FRONT_END_CONTRACT,
+        VfPrimitiveGeometry::ScreenSpaceInset32,
+        BackendProbeMode::RasterWmInputOaScreenSpacePointList,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-pointlist-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_pointlist_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-pointlist-raster-wm-oa-probe diagnostic completed={} note=position-slot0-no-fake-header-plus-pointlist-tests-wm-coverage-before-triangle-edge-setup\n",
+        real_vs_screen_pointlist_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_pointlist_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-pointlist-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_rt_independent_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-rt-independent-raster-wm-oa-probe",
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpace8x8,
+            BackendProbeMode::RasterWmInputOaScreenSpaceRtIndependent,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-rt-independent-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_rt_independent_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-rt-independent-raster-wm-oa-probe diagnostic completed={} note=screen-space-pdd-with-force-sample-count-1-rt-independent-raster-no-wm-hz-op\n",
+        real_vs_screen_rt_independent_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_rt_independent_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-rt-independent-raster-wm-oa-probe",
+        );
+    }
+    let late_vf_screen_inset_clip_bypass_raster_preconditions_probe =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-inset-clip-bypass-raster-preconditions-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceClipBypassRasterPreconditions,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-late-vf-screen-inset-clip-bypass-raster-preconditions-raster-wm-oa-probe completed={}\n",
+        late_vf_screen_inset_clip_bypass_raster_preconditions_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-late-vf-screen-inset-clip-bypass-raster-preconditions-raster-wm-oa-probe diagnostic completed={} note=late-copy-for-log-drain-capture-vf-slot0-screen-space-with-raster-scissor-walk16-preconditions-wm-hz-op-cleared-clip-disabled-and-immediate-oa-end\n",
+        late_vf_screen_inset_clip_bypass_raster_preconditions_probe as u8,
+    );
+    if late_vf_screen_inset_clip_bypass_raster_preconditions_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-inset-clip-bypass-raster-preconditions-raster-wm-oa-probe",
+        );
+    }
+    let late_vf_screen_inset_open_bounds_raster_wm_oa_probe = submit_triangle_vf_draw_to_surface(
+        "late-vf-screen-inset-open-bounds-raster-wm-oa-probe",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::ScreenSpaceInset32,
+        BackendProbeMode::RasterWmInputOaScreenSpaceClipBypassRasterPreconditionsOpenBounds,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    intel_render_verbose_log!(
+        "intel/render: primary-late-vf-screen-inset-open-bounds-raster-wm-oa-probe completed={}\n",
+        late_vf_screen_inset_open_bounds_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-late-vf-screen-inset-open-bounds-raster-wm-oa-probe diagnostic completed={} note=pos-slot0-screen-space-same-geometry-with-wm-scissor-disabled-and-full-drawing-rectangle\n",
+        late_vf_screen_inset_open_bounds_raster_wm_oa_probe as u8,
+    );
+    if late_vf_screen_inset_open_bounds_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-inset-open-bounds-raster-wm-oa-probe",
+        );
+    }
+    let late_vf_screen_inset_open_bounds_sbe1_noswiz_raster_wm_oa_probe =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-inset-open-bounds-sbe1-noswiz-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceClipBypassRasterPreconditionsOpenBoundsSbe1NoSwiz,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-late-vf-screen-inset-open-bounds-sbe1-noswiz-raster-wm-oa-probe completed={}\n",
+        late_vf_screen_inset_open_bounds_sbe1_noswiz_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-late-vf-screen-inset-open-bounds-sbe1-noswiz-raster-wm-oa-probe diagnostic completed={} note=pos-slot0-screen-space-open-bounds-with-sbe-read-offset-1-and-no-sbe-swiz\n",
+        late_vf_screen_inset_open_bounds_sbe1_noswiz_raster_wm_oa_probe as u8,
+    );
+    if late_vf_screen_inset_open_bounds_sbe1_noswiz_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-inset-open-bounds-sbe1-noswiz-raster-wm-oa-probe",
+        );
+    }
+    let late_vf_screen_inset_open_bounds_clip_on_sbe1_noswiz_raster_wm_oa_probe =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-inset-open-bounds-clip-on-sbe1-noswiz-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceAcceptAllOpenBoundsSbe1NoSwiz,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-late-vf-screen-inset-open-bounds-clip-on-sbe1-noswiz-raster-wm-oa-probe completed={}\n",
+        late_vf_screen_inset_open_bounds_clip_on_sbe1_noswiz_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-late-vf-screen-inset-open-bounds-clip-on-sbe1-noswiz-raster-wm-oa-probe diagnostic completed={} note=pos-slot0-screen-space-open-bounds-sbe1-noswiz-with-clip-enable-accept-all\n",
+        late_vf_screen_inset_open_bounds_clip_on_sbe1_noswiz_raster_wm_oa_probe as u8,
+    );
+    if late_vf_screen_inset_open_bounds_clip_on_sbe1_noswiz_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-inset-open-bounds-clip-on-sbe1-noswiz-raster-wm-oa-probe",
+        );
+    }
+    let late_vf_screen_inset_open_bounds_header_sbe1_noswiz_raster_wm_oa_probe =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-inset-open-bounds-header-sbe1-noswiz-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceAcceptAllOpenBoundsHeaderSbe1NoSwiz,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-late-vf-screen-inset-open-bounds-header-sbe1-noswiz-raster-wm-oa-probe completed={}\n",
+        late_vf_screen_inset_open_bounds_header_sbe1_noswiz_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-late-vf-screen-inset-open-bounds-header-sbe1-noswiz-raster-wm-oa-probe diagnostic completed={} note=vf-header-slot0-position-slot1-open-bounds-sbe1-noswiz-with-raster-restamped-before-clip\n",
+        late_vf_screen_inset_open_bounds_header_sbe1_noswiz_raster_wm_oa_probe as u8,
+    );
+    if late_vf_screen_inset_open_bounds_header_sbe1_noswiz_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-inset-open-bounds-header-sbe1-noswiz-raster-wm-oa-probe",
+        );
+    }
+    let late_vf_screen_inset_open_bounds_header_preclip_sbe_ps_sbe1_noswiz_raster_wm_oa_probe =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-inset-open-bounds-header-preclip-sbe-ps-sbe1-noswiz-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceAcceptAllOpenBoundsHeaderPreClipSbePsSbe1NoSwiz,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-late-vf-screen-inset-open-bounds-header-preclip-sbe-ps-sbe1-noswiz-raster-wm-oa-probe completed={}\n",
+        late_vf_screen_inset_open_bounds_header_preclip_sbe_ps_sbe1_noswiz_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-late-vf-screen-inset-open-bounds-header-preclip-sbe-ps-sbe1-noswiz-raster-wm-oa-probe diagnostic completed={} note=vf-header-slot0-position-slot1-open-bounds-sbe1-noswiz-with-sbe-ps-extra-before-clip-sf-raster-tbimr-raster-wa-disabled-and-3dprimitive-extended\n",
+        late_vf_screen_inset_open_bounds_header_preclip_sbe_ps_sbe1_noswiz_raster_wm_oa_probe as u8,
+    );
+    if late_vf_screen_inset_open_bounds_header_preclip_sbe_ps_sbe1_noswiz_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-inset-open-bounds-header-preclip-sbe-ps-sbe1-noswiz-raster-wm-oa-probe",
+        );
+    }
+    let late_vf_screen_inset_slot0_preclip_sbe_ps_noswiz_raster_wm_oa_probe =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-inset-slot0-preclip-sbe-ps-noswiz-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceSlot0PreClipSbePsNoSwiz,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-late-vf-screen-inset-slot0-preclip-sbe-ps-noswiz-raster-wm-oa-probe completed={}\n",
+        late_vf_screen_inset_slot0_preclip_sbe_ps_noswiz_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-late-vf-screen-inset-slot0-preclip-sbe-ps-noswiz-raster-wm-oa-probe diagnostic completed={} note=vf-position-slot0-no-fake-header-with-sbe-ps-extra-before-clip-sf-raster-tbimr-raster-wa-disabled-and-3dprimitive-extended\n",
+        late_vf_screen_inset_slot0_preclip_sbe_ps_noswiz_raster_wm_oa_probe as u8,
+    );
+    if late_vf_screen_inset_slot0_preclip_sbe_ps_noswiz_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-inset-slot0-preclip-sbe-ps-noswiz-raster-wm-oa-probe",
+        );
+    }
+    let late_vf_screen_inset_slot0_tight_preclip_raster_sbe_ps_noswiz_raster_wm_oa_probe =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-inset-slot0-tight-preclip-raster-sbe-ps-noswiz-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceSlot0TightPreClipRasterSbePsNoSwiz,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-late-vf-screen-inset-slot0-tight-preclip-raster-sbe-ps-noswiz-raster-wm-oa-probe completed={}\n",
+        late_vf_screen_inset_slot0_tight_preclip_raster_sbe_ps_noswiz_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-late-vf-screen-inset-slot0-tight-preclip-raster-sbe-ps-noswiz-raster-wm-oa-probe diagnostic completed={} note=vf-position-slot0-no-fake-header-with-tight-scissor-and-drawing-rectangle-plus-raster-before-clip-sbe-ps-before-clip-and-3dprimitive-extended\n",
+        late_vf_screen_inset_slot0_tight_preclip_raster_sbe_ps_noswiz_raster_wm_oa_probe as u8,
+    );
+    if late_vf_screen_inset_slot0_tight_preclip_raster_sbe_ps_noswiz_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-inset-slot0-tight-preclip-raster-sbe-ps-noswiz-raster-wm-oa-probe",
+        );
+    }
+    let late_vf_screen_inset_slot0_xyzw_tight_preclip_raster_sbe_ps_noswiz_raster_wm_oa_probe =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-inset-slot0-xyzw-tight-preclip-raster-sbe-ps-noswiz-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceSlot0XyzwTightPreClipRasterSbePsNoSwiz,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-late-vf-screen-inset-slot0-xyzw-tight-preclip-raster-sbe-ps-noswiz-raster-wm-oa-probe completed={}\n",
+        late_vf_screen_inset_slot0_xyzw_tight_preclip_raster_sbe_ps_noswiz_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-late-vf-screen-inset-slot0-xyzw-tight-preclip-raster-sbe-ps-noswiz-raster-wm-oa-probe diagnostic completed={} note=vf-position-slot0-real-xyzw-source-with-tight-scissor-and-drawing-rectangle-plus-raster-before-clip-sbe-ps-before-clip-and-3dprimitive-extended\n",
+        late_vf_screen_inset_slot0_xyzw_tight_preclip_raster_sbe_ps_noswiz_raster_wm_oa_probe as u8,
+    );
+    if late_vf_screen_inset_slot0_xyzw_tight_preclip_raster_sbe_ps_noswiz_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-inset-slot0-xyzw-tight-preclip-raster-sbe-ps-noswiz-raster-wm-oa-probe",
+        );
+    }
+    let late_vf_screen_rectlist_slot0_xyzw_tight_preclip_perpoly_raster_wm_oa_probe =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-rectlist-slot0-xyzw-tight-preclip-perpoly-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceRectInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceRectListSlot0XyzwTightPreClipPerPoly,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-late-vf-screen-rectlist-slot0-xyzw-tight-preclip-perpoly-raster-wm-oa-probe completed={}\n",
+        late_vf_screen_rectlist_slot0_xyzw_tight_preclip_perpoly_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-late-vf-screen-rectlist-slot0-xyzw-tight-preclip-perpoly-raster-wm-oa-probe diagnostic completed={} note=vf-position-slot0-real-xyzw-source-with-rectlist-topology-tight-scissor-raster-before-clip-sbe-ps-before-clip-and-sf-deref-perpoly-tests-sf-object-setup-to-wm-scan-conversion\n",
+        late_vf_screen_rectlist_slot0_xyzw_tight_preclip_perpoly_raster_wm_oa_probe as u8,
+    );
+    if late_vf_screen_rectlist_slot0_xyzw_tight_preclip_perpoly_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-rectlist-slot0-xyzw-tight-preclip-perpoly-raster-wm-oa-probe",
+        );
+    }
+    let late_vf_screen_rectlist_slot0_xyzw_sbe1_tight_preclip_perpoly_raster_wm_oa_probe =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-rectlist-slot0-xyzw-sbe1-tight-preclip-perpoly-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceRectInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1TightPreClipPerPoly,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-late-vf-screen-rectlist-slot0-xyzw-sbe1-tight-preclip-perpoly-raster-wm-oa-probe completed={}\n",
+        late_vf_screen_rectlist_slot0_xyzw_sbe1_tight_preclip_perpoly_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-late-vf-screen-rectlist-slot0-xyzw-sbe1-tight-preclip-perpoly-raster-wm-oa-probe diagnostic completed={} note=same-rectlist-slot0-xyzw-path-as-raster-input-ready-but-sbe-read-offset-forced-to-one-and-clip-api-mode-d3d-to-test-sf-to-wm-attribute-and-clip-contract\n",
+        late_vf_screen_rectlist_slot0_xyzw_sbe1_tight_preclip_perpoly_raster_wm_oa_probe as u8,
+    );
+    if late_vf_screen_rectlist_slot0_xyzw_sbe1_tight_preclip_perpoly_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-rectlist-slot0-xyzw-sbe1-tight-preclip-perpoly-raster-wm-oa-probe",
+        );
+    }
+    let late_vf_screen_rectlist_slot0_xyzw_sbe1_mesa_order_raster_wm_oa_probe =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceRectInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrder,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-raster-wm-oa-probe completed={}\n",
+        late_vf_screen_rectlist_slot0_xyzw_sbe1_mesa_order_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-raster-wm-oa-probe diagnostic completed={} note=rectlist-slot0-xyzw-sbe1-d3d-clip-with-mesa-simple-state-order-no-early-backend-refresh-tests-ordering-at-sf-to-wm-boundary\n",
+        late_vf_screen_rectlist_slot0_xyzw_sbe1_mesa_order_raster_wm_oa_probe as u8,
+    );
+    if late_vf_screen_rectlist_slot0_xyzw_sbe1_mesa_order_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-raster-wm-oa-probe",
+        );
+    }
+    let late_vf_screen_rectlist_slot0_xyzw_sbe1_mesa_order_clip_on_raster_wm_oa_probe =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceRectInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOn,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-raster-wm-oa-probe completed={}\n",
+        late_vf_screen_rectlist_slot0_xyzw_sbe1_mesa_order_clip_on_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-raster-wm-oa-probe diagnostic completed={} note=same-as-mesa-order-rectlist-slot0-xyzw-sbe1-but-keeps-clip-enable-on-to-test-clip-pass-through-into-sf-wm\n",
+        late_vf_screen_rectlist_slot0_xyzw_sbe1_mesa_order_clip_on_raster_wm_oa_probe as u8,
+    );
+    if late_vf_screen_rectlist_slot0_xyzw_sbe1_mesa_order_clip_on_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-raster-wm-oa-probe",
+        );
+    }
+    let late_vf_screen_rectlist_slot0_xyzw_sbe1_mesa_order_clip_on_early_backend_raster_wm_oa_probe =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceRectInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe completed={}\n",
+        late_vf_screen_rectlist_slot0_xyzw_sbe1_mesa_order_clip_on_early_backend_raster_wm_oa_probe
+            as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe diagnostic completed={} note=clip-on-rectlist-position-slot0-xyzw-no-fake-header-sbe1-with-mesa-late-order-plus-early-ps-blend-wm-depth-stencil-and-preclip-sbe-ps-before-clip-sf-raster-normal-wm-dispatch-extended-primitive-tight-draw-rect-raster-scissor-no-sbe-swiz-gfx125-wm-hz-op-sf-block32-sf-dw3-default-wm-linear-bary-clip-nonpersp-bary\n",
+        late_vf_screen_rectlist_slot0_xyzw_sbe1_mesa_order_clip_on_early_backend_raster_wm_oa_probe
+            as u8,
+    );
+    if late_vf_screen_rectlist_slot0_xyzw_sbe1_mesa_order_clip_on_early_backend_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe",
+        );
+    }
+    let late_vf_ndc_mesa_active_block_raster_wm_oa_probe = submit_triangle_vf_draw_to_surface(
+        "late-vf-ndc-mesa-active-block-raster-wm-oa-probe",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::Oversized,
+        BackendProbeMode::RasterWmInputOaNdcMesaActiveBlock,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    intel_render_verbose_log!(
+        "intel/render: primary-late-vf-ndc-mesa-active-block-raster-wm-oa-probe completed={}\n",
+        late_vf_ndc_mesa_active_block_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-late-vf-ndc-mesa-active-block-raster-wm-oa-probe diagnostic completed={} note=late-log-drain-copy-of-mesa-captured-active-clip-sf-raster-wm-adjacent-state-shape-using-trueos-vf-bo-and-shader-state\n",
+        late_vf_ndc_mesa_active_block_raster_wm_oa_probe as u8,
+    );
+    if late_vf_ndc_mesa_active_block_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-ndc-mesa-active-block-raster-wm-oa-probe",
+        );
+    }
+    let late_vf_ndc_centered_mesa_active_block_raster_wm_oa_probe =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-ndc-centered-mesa-active-block-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::Canonical,
+            BackendProbeMode::RasterWmInputOaNdcMesaActiveBlock,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-late-vf-ndc-centered-mesa-active-block-raster-wm-oa-probe completed={}\n",
+        late_vf_ndc_centered_mesa_active_block_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-late-vf-ndc-centered-mesa-active-block-raster-wm-oa-probe diagnostic completed={} note=centered-canonical-trilist-ndc-no-edge-touching-with-mesa-active-block-state-shape\n",
+        late_vf_ndc_centered_mesa_active_block_raster_wm_oa_probe as u8,
+    );
+    if late_vf_ndc_centered_mesa_active_block_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-ndc-centered-mesa-active-block-raster-wm-oa-probe",
+        );
+    }
+    let late_vf_ndc_centered_mesa_active_noprimrepl_raster_wm_oa_probe =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-ndc-centered-mesa-active-noprimrepl-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::Canonical,
+            BackendProbeMode::RasterWmInputOaNdcMesaActiveBlockNoPrimRepl,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-late-vf-ndc-centered-mesa-active-noprimrepl-raster-wm-oa-probe completed={}\n",
+        late_vf_ndc_centered_mesa_active_noprimrepl_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-late-vf-ndc-centered-mesa-active-noprimrepl-raster-wm-oa-probe diagnostic completed={} note=centered-canonical-trilist-ndc-with-mesa-active-block-state-shape-and-primitive-replication-disabled\n",
+        late_vf_ndc_centered_mesa_active_noprimrepl_raster_wm_oa_probe as u8,
+    );
+    if late_vf_ndc_centered_mesa_active_noprimrepl_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-ndc-centered-mesa-active-noprimrepl-raster-wm-oa-probe",
+        );
+    }
+    let late_vf_screen_pointlist_slot0_xyzw_preclip_raster_wm_oa_probe =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-pointlist-slot0-xyzw-preclip-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpacePointList,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-late-vf-screen-pointlist-slot0-xyzw-preclip-raster-wm-oa-probe completed={}\n",
+        late_vf_screen_pointlist_slot0_xyzw_preclip_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-late-vf-screen-pointlist-slot0-xyzw-preclip-raster-wm-oa-probe diagnostic completed={} note=vf-position-slot0-xyzw-no-fake-header-pointlist-with-preclip-sbe-ps-raster-and-state-point-width-8-tests-wm-coverage-before-triangle-or-rect-edge-setup\n",
+        late_vf_screen_pointlist_slot0_xyzw_preclip_raster_wm_oa_probe as u8,
+    );
+    if late_vf_screen_pointlist_slot0_xyzw_preclip_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-pointlist-slot0-xyzw-preclip-raster-wm-oa-probe",
+        );
+    }
+    let late_vf_screen_pointlist_slot0_xyzw_open_bounds_raster_wm_oa_probe =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-pointlist-slot0-xyzw-open-bounds-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpacePointListOpenBounds,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-late-vf-screen-pointlist-slot0-xyzw-open-bounds-raster-wm-oa-probe completed={}\n",
+        late_vf_screen_pointlist_slot0_xyzw_open_bounds_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-late-vf-screen-pointlist-slot0-xyzw-open-bounds-raster-wm-oa-probe diagnostic completed={} note=same-pointlist-vue-slot0-xyzw-path-with-wm-scissor-disabled-and-full-drawing-rectangle-to-test-bounds-gating-before-wm-coverage\n",
+        late_vf_screen_pointlist_slot0_xyzw_open_bounds_raster_wm_oa_probe as u8,
+    );
+    if late_vf_screen_pointlist_slot0_xyzw_open_bounds_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-pointlist-slot0-xyzw-open-bounds-raster-wm-oa-probe",
+        );
+    }
+    let late_vf_screen_inset_open_bounds_header_perpoly_sbe1_noswiz_raster_wm_oa_probe =
+        submit_triangle_vf_draw_to_surface(
+            "late-vf-screen-inset-open-bounds-header-perpoly-sbe1-noswiz-raster-wm-oa-probe",
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceAcceptAllOpenBoundsHeaderPerPolySbe1NoSwiz,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-late-vf-screen-inset-open-bounds-header-perpoly-sbe1-noswiz-raster-wm-oa-probe completed={}\n",
+        late_vf_screen_inset_open_bounds_header_perpoly_sbe1_noswiz_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-late-vf-screen-inset-open-bounds-header-perpoly-sbe1-noswiz-raster-wm-oa-probe diagnostic completed={} note=vf-header-slot0-position-slot1-open-bounds-sbe1-noswiz-with-sf-deref-perpoly\n",
+        late_vf_screen_inset_open_bounds_header_perpoly_sbe1_noswiz_raster_wm_oa_probe as u8,
+    );
+    if late_vf_screen_inset_open_bounds_header_perpoly_sbe1_noswiz_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-inset-open-bounds-header-perpoly-sbe1-noswiz-raster-wm-oa-probe",
+        );
+    }
+    let real_vs_screen_inset_raster_clip_preconditions_late_raster_wm_oa_probe =
+        submit_triangle_real_vs_draw_probe_to_surface(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            32 * core::mem::size_of::<u32>(),
+            32,
+            32,
+            TriangleBlendProbeMode::MesaZeroedState,
+            "real-vs-screen-inset-raster-clip-preconditions-late-raster-wm-oa-probe",
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            VfPrimitiveGeometry::ScreenSpaceInset32,
+            BackendProbeMode::RasterWmInputOaScreenSpaceRasterClipPreconditionsHardFence,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+        );
+    intel_render_verbose_log!(
+        "intel/render: primary-real-vs-screen-inset-raster-clip-preconditions-late-raster-wm-oa-probe completed={}\n",
+        real_vs_screen_inset_raster_clip_preconditions_late_raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-real-vs-screen-inset-raster-clip-preconditions-late-raster-wm-oa-probe diagnostic completed={} note=hard-postdraw-fence-after-raster-oa-keeps-normal-probes-comparable\n",
+        real_vs_screen_inset_raster_clip_preconditions_late_raster_wm_oa_probe as u8,
+    );
+    if real_vs_screen_inset_raster_clip_preconditions_late_raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "real-vs-screen-inset-raster-clip-preconditions-late-raster-wm-oa-probe",
         );
     }
     let real_vs_ndc_perpoly_raster_wm_oa_probe = submit_triangle_real_vs_draw_probe_to_surface(
@@ -551,6 +1966,25 @@ fn submit_primary_triangle_with_retries(
             dev,
             warm,
             "real-vs-ndc-ms-raster-wm-oa-probe",
+        );
+    }
+    for experiment in [
+        StreamoutProofExperiment::PositionSlot0,
+        StreamoutProofExperiment::PositionSlot1,
+    ] {
+        let accepted = submit_triangle_vs_streamout_proof(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            8 * core::mem::size_of::<u32>(),
+            8,
+            8,
+            experiment,
+        );
+        intel_render_focus_log!(
+            "intel/render: primary-late-vs-streamout-layout-proof experiment={} accepted={} note=captured-after-wm-frontier-probes-to-verify-vs-output-xyzw-for-clip-sf\n",
+            experiment.label(),
+            accepted as u8,
         );
     }
 
@@ -878,6 +2312,93 @@ fn submit_primary_triangle_with_retries(
     completed_any
 }
 
+fn submit_single_raster_isolation_probe(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
+    reset_fragment_boundary_probe();
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+
+    let completed = submit_triangle_vf_draw_to_surface(
+        "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        32 * core::mem::size_of::<u32>(),
+        32,
+        32,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::ScreenSpaceRectInset32,
+        BackendProbeMode::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    let fragment_candidate_ready = fragment_candidate_ready();
+    let fragment_boundary_observed = fragment_boundary_observed();
+    let wm_coverage_observed = wm_coverage_observed();
+    let psd_dispatch_observed = psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-single-raster-isolation completed={} scratch_only=1 probe=late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} reason=quiet_fullscreen_green_disco_and_measure_one_3d_submit\n",
+        completed as u8,
+        fragment_candidate_ready as u8,
+        wm_coverage_observed as u8,
+        psd_dispatch_observed as u8,
+        fragment_boundary_observed as u8,
+    );
+    if completed {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe",
+        );
+    }
+    false
+}
+
+fn submit_primary_visible_repaint_probe(
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+    surface_gpu: u64,
+    pitch_bytes: usize,
+    width: usize,
+    height: usize,
+) -> bool {
+    reset_fragment_boundary_probe();
+    let completed = submit_triangle_vf_draw_to_surface(
+        "primary-periodic-visible-repaint",
+        dev,
+        warm,
+        surface_gpu,
+        pitch_bytes,
+        width,
+        height,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::ScreenSpaceRectInset32,
+        BackendProbeMode::RasterWmInputOaScreenSpaceRectListSlot0XyzwSbe1MesaOrderClipOnEarlyBackend,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    let fragment_candidate_ready = fragment_candidate_ready();
+    let fragment_boundary_observed = fragment_boundary_observed();
+    let wm_coverage_observed = wm_coverage_observed();
+    let psd_dispatch_observed = psd_dispatch_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-periodic-repaint completed={} target=primary rt_gpu=0x{:X} size={}x{} pitch=0x{:X} fragment_candidate={} wm_coverage={} psd_dispatch={} fragment_observed={} cadence_ms=1000 intent=keep_visible_triangle_path_warm\n",
+        completed as u8,
+        surface_gpu,
+        width,
+        height,
+        pitch_bytes,
+        fragment_candidate_ready as u8,
+        wm_coverage_observed as u8,
+        psd_dispatch_observed as u8,
+        fragment_boundary_observed as u8,
+    );
+    if completed {
+        recover_render_engine_after_nonretired_submit(dev, warm, "primary-periodic-visible-repaint");
+    }
+    completed
+}
+
 fn run_postdraw_pc_retire_spectrum(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
@@ -979,7 +2500,7 @@ fn log_primary_frontier_summary(
     let (problem, suspect, next_probe) = if !wm_coverage_observed && fragment_candidate_ready {
         (
             "fixed-function-raster-does-not-report-wm-coverage",
-            "sf-to-wm-raster-state-not-vf-geometry-vue-slot-or-clip-counter",
+            "sf-object-setup-to-wm-scan-conversion-state-packet-mismatch",
             "instrument-wm-coverage",
         )
     } else if wm_coverage_observed && !psd_dispatch_observed {
@@ -1003,7 +2524,7 @@ fn log_primary_frontier_summary(
     };
 
     intel_render_focus_log!(
-        "intel/render: primary-problem last_proven={} first_missing={} problem={} suspect={} next_probe={} note=vs_hs_ds_gs_zero_is_expected_for_vf_synthesized_vue;screen_space_probe_expected_coverage_rules_out_vf_geometry\n",
+        "intel/render: primary-problem last_proven={} first_missing={} problem={} suspect={} next_probe={} note=vs_hs_ds_gs_zero_is_expected_for_vf_synthesized_vue;screen_space_probe_expected_coverage_rules_out_vf_geometry;front_winding_scissor_wm_hz_scissor_raster_zclip_dx101_and_rt_independent_paths_are_focused\n",
         first_good,
         first_bad,
         problem,
@@ -1134,10 +2655,20 @@ fn submit_triangle_vf_draw_to_surface(
     backend_probe_mode: BackendProbeMode,
     post_draw_sync_variant: PostDrawSyncVariant,
 ) -> bool {
-    let streamout_experiment = if backend_probe_mode.uses_vf_position_slot0() {
-        StreamoutProofExperiment::PositionSlot0
+    let streamout_experiment = backend_probe_mode
+        .vf_streamout_experiment_override()
+        .unwrap_or(if backend_probe_mode.uses_vf_position_slot0() {
+            StreamoutProofExperiment::PositionSlot0
+        } else {
+            StreamoutProofExperiment::PositionSlot1
+        });
+    let front_end_contract = if matches!(
+        streamout_experiment,
+        StreamoutProofExperiment::PositionSlot0 | StreamoutProofExperiment::PositionSlot0Xyzw
+    ) {
+        TRIANGLE_SLOT0_FRONT_END_CONTRACT
     } else {
-        StreamoutProofExperiment::PositionSlot1
+        TRIANGLE_DEFAULT_FRONT_END_CONTRACT
     };
     let Some(draw) = prepare_vf_streamout_proof_resources(
         warm,
@@ -1198,6 +2729,7 @@ fn submit_triangle_vf_draw_to_surface(
         post_draw_sync_variant.label(),
         crate::intel::shader::triangle_pipeline_note()
     );
+    let geometry_vertices = geometry.vertices();
     if geometry.fullscreen_candidate() {
         intel_render_focus_log!(
             "intel/render: {} fragment-candidate-shape accepted=1 geometry={} ndc=v0[-1.000,-1.000] v1[3.000,-1.000] v2[-1.000,3.000] screen_bbox=[0,0..{},{}] sample_points=full-surface coverage_contract=oversized-triangle does_not_prove=raster_samples_or_ps\n",
@@ -1208,9 +2740,29 @@ fn submit_triangle_vf_draw_to_surface(
         );
     } else if geometry.pretransformed_screen_space() {
         intel_render_focus_log!(
-            "intel/render: {} fragment-candidate-shape accepted=1 geometry={} screen=v0[0.000,0.000] v1[8.000,0.000] v2[0.000,8.000] target={}x{} coverage_contract=pretransformed-screen-space does_not_prove=raster_samples_or_ps\n",
+            "intel/render: {} fragment-candidate-shape accepted=1 geometry={} screen=v0[{:.3},{:.3}] v1[{:.3},{:.3}] v2[{:.3},{:.3}] target={}x{} coverage_contract=pretransformed-screen-space does_not_prove=raster_samples_or_ps\n",
             submit_name,
             geometry.label(),
+            geometry_vertices[0][0],
+            geometry_vertices[0][1],
+            geometry_vertices[1][0],
+            geometry_vertices[1][1],
+            geometry_vertices[2][0],
+            geometry_vertices[2][1],
+            draw.target_w,
+            draw.target_h,
+        );
+    } else {
+        intel_render_focus_log!(
+            "intel/render: {} fragment-candidate-shape accepted=1 geometry={} ndc=v0[{:.3},{:.3}] v1[{:.3},{:.3}] v2[{:.3},{:.3}] target={}x{} coverage_contract=ndc-viewport-transform does_not_prove=raster_samples_or_ps\n",
+            submit_name,
+            geometry.label(),
+            geometry_vertices[0][0],
+            geometry_vertices[0][1],
+            geometry_vertices[1][0],
+            geometry_vertices[1][1],
+            geometry_vertices[2][0],
+            geometry_vertices[2][1],
             draw.target_w,
             draw.target_h,
         );
@@ -1319,17 +2871,19 @@ fn submit_triangle_vf_draw_to_surface(
         pipeline.ps.meta.kernel.dispatch_mode
     );
 
-    let probe_state = match write_triangle_probe_state(warm, draw, shader_layout, blend_mode) {
-        Ok(layout) => layout,
-        Err(reason) => {
-            crate::log!(
-                "intel/render: {} staging skipped reason=probe-state-error detail={}\n",
-                submit_name,
-                reason
-            );
-            return false;
-        }
-    };
+    let probe_state =
+        match write_triangle_probe_state(warm, draw, shader_layout, blend_mode, backend_probe_mode)
+        {
+            Ok(layout) => layout,
+            Err(reason) => {
+                crate::log!(
+                    "intel/render: {} staging skipped reason=probe-state-error detail={}\n",
+                    submit_name,
+                    reason
+                );
+                return false;
+            }
+        };
 
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
@@ -1356,7 +2910,7 @@ fn submit_triangle_vf_draw_to_surface(
         RCS_EXEC_RESULT_DONE,
         TriangleBatchMode::VfDraw,
         streamout_experiment,
-        TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+        front_end_contract,
         backend_probe_mode,
         post_draw_sync_variant,
     ) {
@@ -1398,11 +2952,16 @@ fn submit_triangle_vf_draw_to_surface(
     } else {
         None
     };
-    let scratch_stats_before = if scratch_rt_before.is_some() {
-        Some(capture_triangle_stage_stats(dev))
-    } else {
-        None
-    };
+    let stage_stats_before =
+        if scratch_rt_before.is_some() || is_raster_wm_oa_submit_name(submit_name) {
+            Some(capture_triangle_stage_stats(dev))
+        } else {
+            None
+        };
+
+    if is_raster_wm_oa_submit_name(submit_name) {
+        apply_gfx125_raster_workarounds_for_probe(dev, submit_name);
+    }
 
     let completed = submit_warm_render_batch(
         dev,
@@ -1411,10 +2970,24 @@ fn submit_triangle_vf_draw_to_surface(
         RESULT_SLOT_FINAL_DWORD,
         submit_name,
     );
-    if let (Some(scratch_before), Some(stats_before)) = (scratch_rt_before, scratch_stats_before) {
+    let stage_delta = stage_stats_before
+        .map(|stats_before| capture_triangle_stage_stats(dev).delta_since(stats_before));
+    if is_scratch_rt_submit_name(submit_name) || is_raster_wm_oa_submit_name(submit_name) {
+        let rt_album_status = if stage_delta
+            .map(|delta| {
+                delta.ps_invocations > 0 || delta.cps_invocations > 0 || delta.ps_depth > 0
+            })
+            .unwrap_or(false)
+        {
+            1
+        } else {
+            2
+        };
+        paint_render_target_album_tile(submit_name, warm, draw, rt_album_status);
+    }
+    if let (Some(scratch_before), Some(delta)) = (scratch_rt_before, stage_delta) {
         crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
         let scratch_after = unsafe { core::ptr::read_volatile(warm.streamout_virt as *const u32) };
-        let delta = capture_triangle_stage_stats(dev).delta_since(stats_before);
         let accepted = delta.ps_invocations > 0
             || delta.cps_invocations > 0
             || delta.ps_depth > 0
@@ -1436,9 +3009,16 @@ fn submit_triangle_vf_draw_to_surface(
             delta.cps_invocations,
             delta.ps_depth,
         );
-        if is_raster_wm_oa_submit_name(submit_name) {
-            log_raster_wm_oa_probe(dev, submit_name, warm, completed, draw, delta);
-        }
+    }
+    if is_raster_wm_oa_submit_name(submit_name) {
+        log_raster_wm_oa_probe(
+            dev,
+            submit_name,
+            warm,
+            completed,
+            draw,
+            stage_delta.unwrap_or_default(),
+        );
     }
     if is_raster_wm_oa_submit_name(submit_name) {
         disable_raster_wm_oa_context(dev, submit_name);
@@ -1520,6 +3100,32 @@ fn oa_a_delta_gfx125(begin: &[u32], end: &[u32], index: usize) -> u64 {
     oa_counter_delta(before, after, bits)
 }
 
+fn oa_a_delta_scan_gfx125(begin: &[u32], end: &[u32]) -> (u32, u32, u32, u32, u64) {
+    let mut nonzero_count = 0u32;
+    let mut nonzero_mask_lo = 0u32;
+    let mut nonzero_mask_hi = 0u32;
+    let mut max_index = 0u32;
+    let mut max_delta = 0u64;
+    let mut index = 0usize;
+    while index < 36 {
+        let delta = oa_a_delta_gfx125(begin, end, index);
+        if delta != 0 {
+            nonzero_count = nonzero_count.saturating_add(1);
+            if index < 32 {
+                nonzero_mask_lo |= 1u32 << index;
+            } else {
+                nonzero_mask_hi |= 1u32 << (index - 32);
+            }
+            if delta > max_delta {
+                max_delta = delta;
+                max_index = index as u32;
+            }
+        }
+        index += 1;
+    }
+    (nonzero_count, nonzero_mask_lo, nonzero_mask_hi, max_index, max_delta)
+}
+
 fn log_raster_wm_oa_probe(
     dev: crate::intel::Dev,
     submit_name: &'static str,
@@ -1536,6 +3142,34 @@ fn log_raster_wm_oa_probe(
     let reports_valid =
         begin_id == RESULT_OA_RASTER_WM_BEGIN_ID && end_id == RESULT_OA_RASTER_WM_END_ID;
 
+    let (
+        oa_nonzero_count,
+        oa_nonzero_mask_lo,
+        oa_nonzero_mask_hi,
+        oa_max_index,
+        oa_max_delta,
+        oa_a0_delta,
+        oa_a1_delta,
+        oa_a2_delta,
+        oa_a3_delta,
+    ) = if reports_valid {
+        let begin = begin.unwrap_or(&[]);
+        let end = end.unwrap_or(&[]);
+        let (count, mask_lo, mask_hi, max_index, max_delta) = oa_a_delta_scan_gfx125(begin, end);
+        (
+            count,
+            mask_lo,
+            mask_hi,
+            max_index,
+            max_delta,
+            oa_a_delta_gfx125(begin, end, 0),
+            oa_a_delta_gfx125(begin, end, 1),
+            oa_a_delta_gfx125(begin, end, 2),
+            oa_a_delta_gfx125(begin, end, 3),
+        )
+    } else {
+        (0, 0, 0, 0, 0, 0, 0, 0, 0)
+    };
     let (ps_threads_delta, raster_samples_delta, samples_killed_delta, postps_fail_delta) =
         if reports_valid {
             let begin = begin.unwrap_or(&[]);
@@ -1585,12 +3219,16 @@ fn log_raster_wm_oa_probe(
     let tdl_thr_pf_status0 = crate::intel::mmio_read(dev, TDL_THR_PF_STATUS0);
     let tdl_thr_pf_status1 = crate::intel::mmio_read(dev, TDL_THR_PF_STATUS1);
     let rcu_mode = crate::intel::mmio_read(dev, GEN12_RCU_MODE);
+    let mcr_selector = crate::intel::mmio_read(dev, MCR_SELECTOR);
     let chicken_raster_2 = crate::intel::mmio_read(dev, CHICKEN_RASTER_2);
     let gfx_mode = crate::intel::mmio_read(dev, GFX_MODE);
     let instps = crate::intel::mmio_read(dev, RCS_RING_INSTPS);
     let psmi_ctl = crate::intel::mmio_read(dev, RCS_RING_PSMI_CTL);
     let acthd = crate::intel::mmio_read(dev, RCS_RING_ACTHD);
     let ipehr = crate::intel::mmio_read(dev, RCS_RING_IPEHR);
+    let oactx = crate::intel::mmio_read(dev, RCS_OACTXCONTROL);
+    let oar_control = crate::intel::mmio_read(dev, OAR_OACONTROL);
+    let ctx_control = crate::intel::mmio_read(dev, RCS_RING_CONTEXT_CONTROL);
     record_fragment_boundary_probe(true, accepted);
     record_wm_psd_boundary_probe(wm_coverage_observed, psd_dispatch_observed);
     paint_fixed_function_album_tile(
@@ -1652,7 +3290,31 @@ fn log_raster_wm_oa_probe(
         delta.ps_depth,
     );
     intel_render_focus_log!(
-        "intel/render: {} wm-boundary-regs reports_valid={} wm_coverage={} psd_dispatch={} sc=0x{:08X} sc_extra=0x{:08X} sc_extra2=0x{:08X} row=0x{:08X} sampler=0x{:08X} tdl0=0x{:08X} tdl1=0x{:08X} tdl_disp=0x{:08X} tdl_pf=0x{:08X} tdl_pf0=0x{:08X} tdl_pf1=0x{:08X} rcu_mode=0x{:08X} chicken_raster_2=0x{:08X} gfx_mode=0x{:08X} instps=0x{:08X} psmi_ctl=0x{:08X} acthd=0x{:08X} ipehr=0x{:08X} meaning=live-fixed-function-boundary-snapshot\n",
+        "intel/render: {} raster-wm-oa-raw reports_valid={} any_delta={} nonzero_count={} mask_lo=0x{:08X} mask_hi=0x{:08X} max=A{}:{} selected[A0={},A1={},A2={},A3={},A6_ps_threads={},A21_raster_samples_x4={},A24_killed_x4={},A25_postps_fail_x4={},A26_pixel_write_x4={},A27_pixel_blend_x4={}] oactx=0x{:08X} oar=0x{:08X} ctx_ctrl=0x{:08X} note=tests-counter-map-vs-flat-oa-window-for-wm-frontier\n",
+        submit_name,
+        reports_valid as u8,
+        (oa_nonzero_count != 0) as u8,
+        oa_nonzero_count,
+        oa_nonzero_mask_lo,
+        oa_nonzero_mask_hi,
+        oa_max_index,
+        oa_max_delta,
+        oa_a0_delta,
+        oa_a1_delta,
+        oa_a2_delta,
+        oa_a3_delta,
+        ps_threads_delta,
+        raster_samples_delta,
+        samples_killed_delta,
+        postps_fail_delta,
+        pixel_write_delta,
+        pixel_blend_delta,
+        oactx,
+        oar_control,
+        ctx_control,
+    );
+    intel_render_focus_log!(
+        "intel/render: {} wm-boundary-regs reports_valid={} wm_coverage={} psd_dispatch={} sc=0x{:08X} sc_extra=0x{:08X} sc_extra2=0x{:08X} row=0x{:08X} sampler=0x{:08X} tdl0=0x{:08X} tdl1=0x{:08X} tdl_disp=0x{:08X} tdl_pf=0x{:08X} tdl_pf0=0x{:08X} tdl_pf1=0x{:08X} rcu_mode=0x{:08X} mcr_selector=0x{:08X} chicken_raster_2=0x{:08X} gfx_mode=0x{:08X} instps=0x{:08X} psmi_ctl=0x{:08X} acthd=0x{:08X} ipehr=0x{:08X} meaning=live-fixed-function-boundary-snapshot\n",
         submit_name,
         reports_valid as u8,
         wm_coverage_observed as u8,
@@ -1669,6 +3331,7 @@ fn log_raster_wm_oa_probe(
         tdl_thr_pf_status0,
         tdl_thr_pf_status1,
         rcu_mode,
+        mcr_selector,
         chicken_raster_2,
         gfx_mode,
         instps,
@@ -1850,6 +3513,7 @@ fn submit_triangle_streamout_proof(
         draw,
         shader_layout,
         TriangleBlendProbeMode::ExplicitRt0,
+        BackendProbeMode::MesaLike,
     ) {
         Ok(layout) => layout,
         Err(reason) => {
@@ -2126,9 +3790,14 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
     backend_probe_mode: BackendProbeMode,
     post_draw_sync_variant: PostDrawSyncVariant,
 ) -> bool {
-    let Some(draw) =
-        prepare_triangle_draw_resources_with_geometry(warm, dst_gpu_addr, pitch, rect_w, rect_h, geometry)
-    else {
+    let Some(draw) = prepare_triangle_draw_resources_with_geometry(
+        warm,
+        dst_gpu_addr,
+        pitch,
+        rect_w,
+        rect_h,
+        geometry,
+    ) else {
         crate::log!(
             "intel/render: {} staging skipped reason=resource-layout size={}x{} pitch=0x{:X} geometry={}\n",
             submit_name,
@@ -2177,6 +3846,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
         post_draw_sync_variant.label(),
         crate::intel::shader::triangle_pipeline_note()
     );
+    let geometry_vertices = geometry.vertices();
     if geometry.fullscreen_candidate() {
         intel_render_focus_log!(
             "intel/render: {} fragment-candidate-shape accepted=1 geometry={} ndc=v0[-1.000,-1.000] v1[3.000,-1.000] v2[-1.000,3.000] screen_bbox=[0,0..{},{}] sample_points=full-surface coverage_contract=oversized-triangle does_not_prove=raster_samples_or_ps\n",
@@ -2187,9 +3857,15 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
         );
     } else if geometry.pretransformed_screen_space() {
         intel_render_focus_log!(
-            "intel/render: {} fragment-candidate-shape accepted=1 geometry={} screen=v0[0.000,0.000] v1[8.000,0.000] v2[0.000,8.000] target={}x{} coverage_contract=pretransformed-screen-space does_not_prove=raster_samples_or_ps\n",
+            "intel/render: {} fragment-candidate-shape accepted=1 geometry={} screen=v0[{:.3},{:.3}] v1[{:.3},{:.3}] v2[{:.3},{:.3}] target={}x{} coverage_contract=pretransformed-screen-space does_not_prove=raster_samples_or_ps\n",
             submit_name,
             geometry.label(),
+            geometry_vertices[0][0],
+            geometry_vertices[0][1],
+            geometry_vertices[1][0],
+            geometry_vertices[1][1],
+            geometry_vertices[2][0],
+            geometry_vertices[2][1],
             draw.target_w,
             draw.target_h,
         );
@@ -2273,17 +3949,19 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
         pipeline.ps.meta.kernel.dispatch_mode
     );
 
-    let probe_state = match write_triangle_probe_state(warm, draw, shader_layout, blend_mode) {
-        Ok(layout) => layout,
-        Err(reason) => {
-            crate::log!(
-                "intel/render: {} staging skipped reason=probe-state-error detail={}\n",
-                submit_name,
-                reason
-            );
-            return false;
-        }
-    };
+    let probe_state =
+        match write_triangle_probe_state(warm, draw, shader_layout, blend_mode, backend_probe_mode)
+        {
+            Ok(layout) => layout,
+            Err(reason) => {
+                crate::log!(
+                    "intel/render: {} staging skipped reason=probe-state-error detail={}\n",
+                    submit_name,
+                    reason
+                );
+                return false;
+            }
+        };
 
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
@@ -2309,7 +3987,11 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
         RCS_EXEC_RESULT_DRAW_POST3D,
         RCS_EXEC_RESULT_DONE,
         TriangleBatchMode::Draw,
-        StreamoutProofExperiment::PositionSlot1,
+        if front_end_contract.sbe_read_offset == 0 {
+            StreamoutProofExperiment::PositionSlot0
+        } else {
+            StreamoutProofExperiment::PositionSlot1
+        },
         front_end_contract,
         backend_probe_mode,
         post_draw_sync_variant,
@@ -2348,11 +4030,16 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
     } else {
         None
     };
-    let scratch_stats_before = if scratch_rt_before.is_some() {
-        Some(capture_triangle_stage_stats(dev))
-    } else {
-        None
-    };
+    let stage_stats_before =
+        if scratch_rt_before.is_some() || is_raster_wm_oa_submit_name(submit_name) {
+            Some(capture_triangle_stage_stats(dev))
+        } else {
+            None
+        };
+
+    if is_raster_wm_oa_submit_name(submit_name) {
+        apply_gfx125_raster_workarounds_for_probe(dev, submit_name);
+    }
 
     let completed = submit_warm_render_batch(
         dev,
@@ -2361,10 +4048,24 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
         RESULT_SLOT_FINAL_DWORD,
         submit_name,
     );
-    if let (Some(scratch_before), Some(stats_before)) = (scratch_rt_before, scratch_stats_before) {
+    let stage_delta = stage_stats_before
+        .map(|stats_before| capture_triangle_stage_stats(dev).delta_since(stats_before));
+    if is_scratch_rt_submit_name(submit_name) || is_raster_wm_oa_submit_name(submit_name) {
+        let rt_album_status = if stage_delta
+            .map(|delta| {
+                delta.ps_invocations > 0 || delta.cps_invocations > 0 || delta.ps_depth > 0
+            })
+            .unwrap_or(false)
+        {
+            1
+        } else {
+            2
+        };
+        paint_render_target_album_tile(submit_name, warm, draw, rt_album_status);
+    }
+    if let (Some(scratch_before), Some(delta)) = (scratch_rt_before, stage_delta) {
         crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
         let scratch_after = unsafe { core::ptr::read_volatile(warm.streamout_virt as *const u32) };
-        let delta = capture_triangle_stage_stats(dev).delta_since(stats_before);
         let accepted = delta.ps_invocations > 0
             || delta.cps_invocations > 0
             || delta.ps_depth > 0
@@ -2386,9 +4087,16 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
             delta.cps_invocations,
             delta.ps_depth,
         );
-        if is_raster_wm_oa_submit_name(submit_name) {
-            log_raster_wm_oa_probe(dev, submit_name, warm, completed, draw, delta);
-        }
+    }
+    if is_raster_wm_oa_submit_name(submit_name) {
+        log_raster_wm_oa_probe(
+            dev,
+            submit_name,
+            warm,
+            completed,
+            draw,
+            stage_delta.unwrap_or_default(),
+        );
     }
     if is_raster_wm_oa_submit_name(submit_name) {
         disable_raster_wm_oa_context(dev, submit_name);

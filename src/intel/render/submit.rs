@@ -100,17 +100,31 @@ fn paint_expected_wm_input_album_tile(
         pretransformed_screen[idx][1] = tri[idx][1];
     }
     let ndc_ref = coverage_reference(ndc_viewport_screen, draw, VIS_W, VIS_H, None);
-    let screen_ref = coverage_reference(
-        pretransformed_screen,
-        draw,
-        VIS_W,
-        VIS_H,
-        if geometry.pretransformed_screen_space() {
-            Some(&mut pixels)
-        } else {
-            None
-        },
-    );
+    let screen_ref = if geometry.rectlist_candidate() {
+        rect_coverage_reference(
+            pretransformed_screen,
+            draw,
+            VIS_W,
+            VIS_H,
+            if geometry.pretransformed_screen_space() {
+                Some(&mut pixels)
+            } else {
+                None
+            },
+        )
+    } else {
+        coverage_reference(
+            pretransformed_screen,
+            draw,
+            VIS_W,
+            VIS_H,
+            if geometry.pretransformed_screen_space() {
+                Some(&mut pixels)
+            } else {
+                None
+            },
+        )
+    };
     let active_ref = if geometry.pretransformed_screen_space() {
         screen_ref
     } else {
@@ -166,6 +180,68 @@ fn paint_expected_wm_input_album_tile(
         screen_ref.logged_min_y(),
         screen_ref.logged_max_x(),
         screen_ref.logged_max_y(),
+    );
+}
+
+fn paint_render_target_album_tile(
+    submit_name: &str,
+    warm: RenderWarmState,
+    draw: TriangleDrawPrep,
+    status: u32,
+) {
+    const VIS_W: usize = 16;
+    const VIS_H: usize = 16;
+    const SENTINEL_DEADBEEF: u32 = 0xDEAD_BEEF;
+    if draw.rt_gpu_addr != GPU_VA_STREAMOUT_BASE {
+        return;
+    }
+
+    let pitch = draw.rt_pitch as usize;
+    let target_w = draw.target_w as usize;
+    let target_h = draw.target_h as usize;
+    if pitch < target_w.saturating_mul(core::mem::size_of::<u32>()) || target_h == 0 {
+        return;
+    }
+
+    let flush_bytes = pitch.saturating_mul(target_h).min(warm.streamout_len);
+    if flush_bytes != 0 {
+        crate::intel::dma_flush(warm.streamout_virt, flush_bytes);
+    }
+
+    let mut pixels = [0xFF202530u32; VIS_W * VIS_H];
+    let mut non_sentinel = 0u32;
+    let mut unique_changes = 0u32;
+    let base = warm.streamout_virt as *const u8;
+    for y in 0..VIS_H {
+        let sy = ((y * target_h) / VIS_H).min(target_h.saturating_sub(1));
+        for x in 0..VIS_W {
+            let sx = ((x * target_w) / VIS_W).min(target_w.saturating_sub(1));
+            let byte_offset = sy
+                .saturating_mul(pitch)
+                .saturating_add(sx.saturating_mul(core::mem::size_of::<u32>()));
+            if byte_offset.saturating_add(core::mem::size_of::<u32>()) > flush_bytes {
+                continue;
+            }
+            let value = unsafe { core::ptr::read_volatile(base.add(byte_offset) as *const u32) };
+            if value != SENTINEL_DEADBEEF {
+                non_sentinel = non_sentinel.saturating_add(1);
+            }
+            if value != 0 && value != SENTINEL_DEADBEEF {
+                unique_changes = unique_changes.saturating_add(1);
+            }
+            pixels[y * VIS_W + x] = 0xFF00_0000 | (value & 0x00FF_FFFF);
+        }
+    }
+
+    paint_render_album_argb_tile(10, "RT ACTUAL", status, VIS_W as u32, VIS_H as u32, &pixels);
+    intel_render_focus_log!(
+        "intel/render: {} render-target-album sample={}x{} source=streamout-rt slot=10 non_sentinel={} nonzero_non_sentinel={} status={}\n",
+        submit_name,
+        VIS_W,
+        VIS_H,
+        non_sentinel,
+        unique_changes,
+        status,
     );
 }
 
@@ -259,6 +335,52 @@ fn coverage_reference(
     result
 }
 
+fn rect_coverage_reference(
+    screen: [[f32; 2]; TRIANGLE_DRAW_VERTICES],
+    draw: TriangleDrawPrep,
+    vis_w: usize,
+    vis_h: usize,
+    mut pixels: Option<&mut [u32]>,
+) -> CoverageRef {
+    let mut min_x = screen[0][0];
+    let mut min_y = screen[0][1];
+    let mut max_x = screen[0][0];
+    let mut max_y = screen[0][1];
+    for vertex in &screen[1..] {
+        min_x = min_x.min(vertex[0]);
+        min_y = min_y.min(vertex[1]);
+        max_x = max_x.max(vertex[0]);
+        max_y = max_y.max(vertex[1]);
+    }
+    let mut result = CoverageRef {
+        expected_samples: 0,
+        min_x: vis_w,
+        min_y: vis_h,
+        max_x: 0,
+        max_y: 0,
+    };
+    for y in 0..vis_h {
+        for x in 0..vis_w {
+            let sample = [
+                ((x as f32 + 0.5) * draw.target_w as f32) / vis_w as f32,
+                ((y as f32 + 0.5) * draw.target_h as f32) / vis_h as f32,
+            ];
+            if sample[0] >= min_x && sample[0] <= max_x && sample[1] >= min_y && sample[1] <= max_y
+            {
+                result.expected_samples += 1;
+                result.min_x = result.min_x.min(x);
+                result.min_y = result.min_y.min(y);
+                result.max_x = result.max_x.max(x);
+                result.max_y = result.max_y.max(y);
+                if let Some(buf) = pixels.as_deref_mut() {
+                    buf[y * vis_w + x] = 0xFF3BCF86;
+                }
+            }
+        }
+    }
+    result
+}
+
 fn edge_function(a: [f32; 2], b: [f32; 2], p: [f32; 2]) -> f32 {
     (p[0] - a[0]) * (b[1] - a[1]) - (p[1] - a[1]) * (b[0] - a[0])
 }
@@ -271,7 +393,9 @@ fn submit_warm_render_batch(
     submit_name: &'static str,
 ) -> bool {
     let stats_before = capture_triangle_stage_stats(dev);
-    let surface_samples_before = if is_surface_draw_submit_name(submit_name) {
+    let primary_side_effect_probe =
+        is_surface_draw_submit_name(submit_name) || is_scratch_rt_submit_name(submit_name);
+    let surface_samples_before = if primary_side_effect_probe {
         crate::intel::display::capture_primary_surface_samples()
     } else {
         None
@@ -886,6 +1010,36 @@ fn submit_warm_render_batch(
             );
         }
     }
+    if !is_surface_draw_submit_name(submit_name) && is_scratch_rt_submit_name(submit_name) {
+        if let (Some(before), Some(after)) =
+            (surface_samples_before, crate::intel::display::capture_primary_surface_samples())
+        {
+            let any_change = after.any_changed_since(before);
+            let triangle_change = after.triangle_points_changed_since(before);
+            intel_render_focus_log!(
+                "intel/render: {} primary-side-effect-proof accepted={} completed={} any_change={} triangle_change={} tl=0x{:08X}=>0x{:08X} center=0x{:08X}=>0x{:08X} br=0x{:08X}=>0x{:08X} apex=0x{:08X}=>0x{:08X} centroid=0x{:08X}=>0x{:08X} left=0x{:08X}=>0x{:08X} right=0x{:08X}=>0x{:08X} hypothesis=visible_green_blink_from_3d_engine_or_followup_display_path\n",
+                submit_name,
+                any_change as u8,
+                completed as u8,
+                any_change as u8,
+                triangle_change as u8,
+                before.tl,
+                after.tl,
+                before.center,
+                after.center,
+                before.br,
+                after.br,
+                before.apex,
+                after.apex,
+                before.centroid,
+                after.centroid,
+                before.left,
+                after.left,
+                before.right,
+                after.right,
+            );
+        }
+    }
     if is_surface_draw_submit_name(submit_name) {
         log_triangle_demo_stats(dev, completed);
     }
@@ -1236,6 +1390,10 @@ fn log_backend_dispatch_contract(
     let wm_hz_scissor = (wm_hz_op_dw1 >> 29) & 0x1;
     let wm_hz_depth_clear = (wm_hz_op_dw1 >> 30) & 0x1;
     let wm_hz_stencil_clear = (wm_hz_op_dw1 >> 31) & 0x1;
+    let wm_hz_clear_x_min = wm_hz_op_dw2 & 0xFFFF;
+    let wm_hz_clear_y_min = (wm_hz_op_dw2 >> 16) & 0xFFFF;
+    let wm_hz_clear_x_max = wm_hz_op_dw3 & 0xFFFF;
+    let wm_hz_clear_y_max = (wm_hz_op_dw3 >> 16) & 0xFFFF;
     let wm_hz_sample_mask = wm_hz_op_dw4 & 0xFFFF;
     let wm_hz_op_active = ((wm_hz_op_dw1 | wm_hz_op_dw2 | wm_hz_op_dw3 | wm_hz_op_dw4) != 0) as u32;
     let ps_valid = (ps_extra_dw1 >> 31) & 0x1;
@@ -1294,7 +1452,7 @@ fn log_backend_dispatch_contract(
         wm_double_sided_stencil,
     );
     intel_render_focus_log!(
-        "intel/render: probe-backend-gate wm_hz_op[active={} depth_clear={} depth_resolve={} hier_resolve={} stencil_clear={} stencil_resolve={} full_surface_clear={} partial_resolve={} scissor={} samples={} sample_mask=0x{:X}] ps_extra[valid={} attribute_enable={} per_sample={} has_uav={} kills={} computed_depth={} computes_stencil={}] dispatch_armed={} reason={}\n",
+        "intel/render: probe-backend-gate wm_hz_op[active={} depth_clear={} depth_resolve={} hier_resolve={} stencil_clear={} stencil_resolve={} full_surface_clear={} partial_resolve={} scissor={} clear_rect=[{},{}..{},{}] samples={} sample_mask=0x{:X}] ps_extra[valid={} attribute_enable={} per_sample={} has_uav={} kills={} computed_depth={} computes_stencil={}] dispatch_armed={} reason={}\n",
         wm_hz_op_active,
         wm_hz_depth_clear,
         wm_hz_depth_resolve,
@@ -1304,6 +1462,10 @@ fn log_backend_dispatch_contract(
         wm_hz_full_surface_clear,
         wm_hz_partial_resolve,
         wm_hz_scissor,
+        wm_hz_clear_x_min,
+        wm_hz_clear_y_min,
+        wm_hz_clear_x_max,
+        wm_hz_clear_y_max,
         wm_hz_samples,
         wm_hz_sample_mask,
         ps_valid,
@@ -1956,9 +2118,88 @@ fn log_triangle_named_proofs(
 fn fragment_candidate_shape_label(submit_name: &str) -> &'static str {
     if matches!(
         submit_name,
-        "raster-wm-oa-probe" | "real-vs-raster-wm-oa-probe"
+        "late-vf-ndc-centered-mesa-active-block-raster-wm-oa-probe"
+            | "late-vf-ndc-centered-mesa-active-noprimrepl-raster-wm-oa-probe"
     ) {
-        "screen-space-8x8"
+        return "canonical";
+    }
+    if matches!(
+        submit_name,
+        "raster-wm-oa-probe"
+            | "real-vs-raster-wm-oa-probe"
+            | "real-vs-screen-clip-preconditions-raster-wm-oa-probe"
+            | "real-vs-screen-raster-clip-preconditions-raster-wm-oa-probe"
+            | "real-vs-screen-d3d-raster-no-hz-raster-wm-oa-probe"
+            | "real-vs-screen-d3d-perpoly-raster-no-hz-raster-wm-oa-probe"
+            | "real-vs-screen-d3d-slot0-raster-no-hz-raster-wm-oa-probe"
+            | "real-vs-screen-d3d-inset-raster-no-hz-raster-wm-oa-probe"
+            | "real-vs-screen-inset-boring-raster-wm-oa-probe"
+            | "real-vs-screen-inset-no-wm-hz-op-packet-raster-wm-oa-probe"
+            | "real-vs-screen-inset-slot0-raster-wm-oa-probe"
+            | "real-vs-screen-inset-clip-bypass-raster-wm-oa-probe"
+            | "real-vs-screen-rectlist-clip-bypass-raster-wm-oa-probe"
+            | "real-vs-screen-rectlist-clip-bypass-sf-sane-raster-wm-oa-probe"
+            | "real-vs-screen-rectlist-blorp-like-raster-wm-oa-probe"
+            | "real-vs-screen-rectlist-slot0-perpoly-raster-wm-oa-probe"
+            | "real-vs-screen-inset-force-wm-thread-raster-wm-oa-probe"
+            | "real-vs-screen-inset-sf-sane-raster-wm-oa-probe"
+            | "real-vs-screen-inset-urb2-sf-sane-raster-wm-oa-probe"
+            | "real-vs-screen-inset-perpoly-raster-wm-oa-probe"
+            | "real-vs-screen-inset-urb128-perpoly-raster-wm-oa-probe"
+            | "real-vs-screen-inset-mesa-simple-order-raster-wm-oa-probe"
+            | "real-vs-screen-inset-mesa-noswiz-noscissor-raster-wm-oa-probe"
+            | "real-vs-screen-pointlist-raster-wm-oa-probe"
+            | "real-vs-screen-inset-raster-clip-preconditions-late-raster-wm-oa-probe"
+            | "real-vs-screen-rt-independent-raster-wm-oa-probe"
+            | "late-vf-screen-inset-slot0-tight-preclip-raster-sbe-ps-noswiz-raster-wm-oa-probe"
+            | "late-vf-screen-inset-slot0-xyzw-tight-preclip-raster-sbe-ps-noswiz-raster-wm-oa-probe"
+            | "late-vf-screen-rectlist-slot0-xyzw-tight-preclip-perpoly-raster-wm-oa-probe"
+            | "late-vf-screen-rectlist-slot0-xyzw-sbe1-tight-preclip-perpoly-raster-wm-oa-probe"
+            | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-raster-wm-oa-probe"
+            | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-raster-wm-oa-probe"
+            | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe"
+    ) {
+        if matches!(
+            submit_name,
+            "real-vs-screen-rectlist-clip-bypass-raster-wm-oa-probe"
+                | "real-vs-screen-rectlist-clip-bypass-sf-sane-raster-wm-oa-probe"
+                | "real-vs-screen-rectlist-blorp-like-raster-wm-oa-probe"
+                | "real-vs-screen-rectlist-slot0-perpoly-raster-wm-oa-probe"
+                | "late-vf-screen-rectlist-slot0-xyzw-tight-preclip-perpoly-raster-wm-oa-probe"
+                | "late-vf-screen-rectlist-slot0-xyzw-sbe1-tight-preclip-perpoly-raster-wm-oa-probe"
+                | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-raster-wm-oa-probe"
+                | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-raster-wm-oa-probe"
+                | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe"
+        ) {
+            return "screen-space-rect-inset-32";
+        }
+        if matches!(
+            submit_name,
+            "real-vs-screen-d3d-inset-raster-no-hz-raster-wm-oa-probe"
+                | "real-vs-screen-inset-boring-raster-wm-oa-probe"
+                | "real-vs-screen-inset-no-wm-hz-op-packet-raster-wm-oa-probe"
+                | "real-vs-screen-inset-slot0-raster-wm-oa-probe"
+                | "real-vs-screen-inset-clip-bypass-raster-wm-oa-probe"
+                | "real-vs-screen-rectlist-clip-bypass-raster-wm-oa-probe"
+                | "real-vs-screen-rectlist-clip-bypass-sf-sane-raster-wm-oa-probe"
+                | "real-vs-screen-rectlist-blorp-like-raster-wm-oa-probe"
+                | "real-vs-screen-rectlist-slot0-perpoly-raster-wm-oa-probe"
+                | "real-vs-screen-inset-force-wm-thread-raster-wm-oa-probe"
+                | "real-vs-screen-inset-sf-sane-raster-wm-oa-probe"
+                | "real-vs-screen-inset-urb2-sf-sane-raster-wm-oa-probe"
+                | "real-vs-screen-inset-perpoly-raster-wm-oa-probe"
+                | "real-vs-screen-inset-urb128-perpoly-raster-wm-oa-probe"
+                | "real-vs-screen-inset-mesa-simple-order-raster-wm-oa-probe"
+                | "real-vs-screen-inset-mesa-noswiz-noscissor-raster-wm-oa-probe"
+                | "real-vs-screen-pointlist-raster-wm-oa-probe"
+                | "real-vs-screen-inset-raster-clip-preconditions-late-raster-wm-oa-probe"
+                | "late-vf-screen-inset-slot0-tight-preclip-raster-sbe-ps-noswiz-raster-wm-oa-probe"
+                | "late-vf-screen-inset-slot0-xyzw-tight-preclip-raster-sbe-ps-noswiz-raster-wm-oa-probe"
+        ) {
+            "screen-space-inset-32"
+        } else {
+            "screen-space-8x8"
+        }
     } else {
         "oversized"
     }
@@ -1973,6 +2214,36 @@ fn fragment_probe_requires_clip_counter(submit_name: &str) -> bool {
             | "real-vs-ndc-walk16-raster-wm-oa-probe"
             | "real-vs-ndc-32x32-walk16-raster-wm-oa-probe"
             | "real-vs-ndc-clip-preconditions-raster-wm-oa-probe"
+            | "real-vs-screen-clip-preconditions-raster-wm-oa-probe"
+            | "real-vs-screen-raster-clip-preconditions-raster-wm-oa-probe"
+            | "real-vs-screen-d3d-raster-no-hz-raster-wm-oa-probe"
+            | "real-vs-screen-d3d-perpoly-raster-no-hz-raster-wm-oa-probe"
+            | "real-vs-screen-d3d-slot0-raster-no-hz-raster-wm-oa-probe"
+            | "real-vs-screen-d3d-inset-raster-no-hz-raster-wm-oa-probe"
+            | "real-vs-screen-inset-boring-raster-wm-oa-probe"
+            | "real-vs-screen-inset-no-wm-hz-op-packet-raster-wm-oa-probe"
+            | "real-vs-screen-inset-slot0-raster-wm-oa-probe"
+            | "real-vs-screen-inset-clip-bypass-raster-wm-oa-probe"
+            | "real-vs-screen-rectlist-clip-bypass-raster-wm-oa-probe"
+            | "real-vs-screen-rectlist-clip-bypass-sf-sane-raster-wm-oa-probe"
+            | "real-vs-screen-rectlist-blorp-like-raster-wm-oa-probe"
+            | "real-vs-screen-rectlist-slot0-perpoly-raster-wm-oa-probe"
+            | "real-vs-screen-inset-force-wm-thread-raster-wm-oa-probe"
+            | "real-vs-screen-inset-sf-sane-raster-wm-oa-probe"
+            | "real-vs-screen-inset-urb2-sf-sane-raster-wm-oa-probe"
+            | "real-vs-screen-inset-perpoly-raster-wm-oa-probe"
+            | "real-vs-screen-inset-urb128-perpoly-raster-wm-oa-probe"
+            | "real-vs-screen-inset-mesa-simple-order-raster-wm-oa-probe"
+            | "real-vs-screen-inset-mesa-noswiz-noscissor-raster-wm-oa-probe"
+            | "real-vs-screen-pointlist-raster-wm-oa-probe"
+            | "real-vs-screen-inset-raster-clip-preconditions-late-raster-wm-oa-probe"
+            | "real-vs-screen-rt-independent-raster-wm-oa-probe"
+            | "late-vf-screen-inset-slot0-xyzw-tight-preclip-raster-sbe-ps-noswiz-raster-wm-oa-probe"
+            | "late-vf-screen-rectlist-slot0-xyzw-tight-preclip-perpoly-raster-wm-oa-probe"
+            | "late-vf-screen-rectlist-slot0-xyzw-sbe1-tight-preclip-perpoly-raster-wm-oa-probe"
+            | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-raster-wm-oa-probe"
+            | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-raster-wm-oa-probe"
+            | "late-vf-screen-rectlist-slot0-xyzw-sbe1-mesa-order-clip-on-early-backend-raster-wm-oa-probe"
             | "real-vs-ndc-perpoly-raster-wm-oa-probe"
             | "real-vs-ndc-no-scissor-raster-wm-oa-probe"
             | "real-vs-ndc-ms-raster-wm-oa-probe"
@@ -2161,8 +2432,10 @@ fn log_streamout_proof_result(
         let words =
             unsafe { core::slice::from_raw_parts(base.add(idx * stride_words), stride_words) };
         match experiment {
-            StreamoutProofExperiment::PositionSlot0 | StreamoutProofExperiment::PositionSlot1 => {
-                intel_render_verbose_log!(
+            StreamoutProofExperiment::PositionSlot0
+            | StreamoutProofExperiment::PositionSlot0Xyzw
+            | StreamoutProofExperiment::PositionSlot1 => {
+                intel_render_focus_log!(
                     "intel/render: {} v{} experiment={} completed={} raw=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos=[{:.3},{:.3},{:.3},{:.3}]\n",
                     submit_name,
                     idx,
@@ -2179,7 +2452,7 @@ fn log_streamout_proof_result(
                 );
             }
             StreamoutProofExperiment::HeaderAndPositionSlots01 => {
-                intel_render_verbose_log!(
+                intel_render_focus_log!(
                     "intel/render: {} v{} experiment={} completed={} hdr=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos_f=[{:.3},{:.3},{:.3},{:.3}]\n",
                     submit_name,
                     idx,
@@ -2212,6 +2485,7 @@ fn primitive_topology_label(topology: u32) -> &'static str {
         0x05 => "tristrip",
         0x06 => "trifan",
         0x09 => "linelist_adj",
+        0x0F => "rectlist",
         _ => "unknown",
     }
 }

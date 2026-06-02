@@ -419,7 +419,9 @@ fn prepare_vf_streamout_proof_resources(
 
     for (idx, pos) in tri.iter().enumerate() {
         match experiment {
-            StreamoutProofExperiment::PositionSlot0 | StreamoutProofExperiment::PositionSlot1 => {
+            StreamoutProofExperiment::PositionSlot0
+            | StreamoutProofExperiment::PositionSlot0Xyzw
+            | StreamoutProofExperiment::PositionSlot1 => {
                 let base = idx * 4;
                 words[base + 0] = pos[0].to_bits();
                 words[base + 1] = pos[1].to_bits();

@@ -68,7 +68,10 @@ const DISPLAY_PLANE1_BOOT_DEMO_ENABLED: bool = true;
 const MEDIA_BOOT_DEMO_ENABLED: bool = false;
 const MEDIA_BOOT_DEMO_DELAY_MS: u64 = 5_000;
 const MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT: u32 = 3;
+const PRIMARY_TRIANGLE_REPAINT_ENABLED: bool = true;
+const PRIMARY_TRIANGLE_REPAINT_PERIOD_MS: u64 = 1_000;
 static INIT: AtomicBool = AtomicBool::new(false);
+static PRIMARY_TRIANGLE_REPAINT_LOOP_STARTED: AtomicBool = AtomicBool::new(false);
 static CLAIMED_DEVICE: Mutex<Option<Dev>> = Mutex::new(None);
 
 #[derive(Copy, Clone, Debug)]
@@ -400,6 +403,7 @@ pub fn init_once() {
         crate::log!("intel/display: plane1 boot demo disabled\n");
     }
     self::render::submit_primary_triangle_once();
+    spawn_primary_triangle_repaint_loop();
     self::gpgpu::submit_gpgpu_preflight_once();
     crate::log!("intel/media: source warmup disabled trigger=trueosfs-root-mounted\n",);
     if MEDIA_BOOT_DEMO_ENABLED {
@@ -442,6 +446,27 @@ pub fn init_once() {
     } else {
         crate::log!("intel/media: boot demo disabled\n");
     }
+}
+
+fn spawn_primary_triangle_repaint_loop() {
+    if !PRIMARY_TRIANGLE_REPAINT_ENABLED {
+        crate::log!("intel/render: primary-repaint-loop disabled\n");
+        return;
+    }
+    if PRIMARY_TRIANGLE_REPAINT_LOOP_STARTED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    crate::log!(
+        "intel/render: primary-repaint-loop scheduled period_ms={}\n",
+        PRIMARY_TRIANGLE_REPAINT_PERIOD_MS
+    );
+    crate::wait::spawn_local_detached(async move {
+        loop {
+            Timer::after(EmbassyDuration::from_millis(PRIMARY_TRIANGLE_REPAINT_PERIOD_MS)).await;
+            self::render::submit_primary_probe_periodic();
+        }
+    });
 }
 
 pub fn guc_ready() -> bool {

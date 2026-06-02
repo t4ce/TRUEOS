@@ -1633,6 +1633,10 @@ const GPU_PROGRAM_SHARED_RAM_WRITE_EXPECTED: u32 = trueos_eu::gfx12::STORE_SENTI
 const GPGPU_LOAD_DUMMY_CURBE: bool = true;
 const GPGPU_DUMMY_CURBE_BYTES: usize = 64;
 const GPGPU_CONTIGUOUS_VFE_IDD_WALKER: bool = false;
+// UOS' standalone GEN9.5 driver keeps the media-interface-descriptor load and
+// GPGPU_WALKER launch as a tight sequence. Preserve our GFX12 state setup, but
+// remove diagnostic stores/fences inside that launch window for this probe.
+const GPGPU_UOS_TIGHT_LAUNCH: bool = true;
 const GPGPU_MESA_POST_VFE_PIPE_CONTROL: bool = false;
 const GPGPU_USE_MINIMAL_PPGTT: bool = true;
 const GPGPU_BATCH_START_IN_PPGTT: bool = false;
@@ -2625,7 +2629,7 @@ fn submit_gpgpu_compute_walker_probe(
     GPGPU_EU_WALKER_RETIRED.store(retired, Ordering::Release);
     GPGPU_EU_DISPATCH_DELTA.store(dispatch_delta.min(u32::MAX as u64) as u32, Ordering::Release);
     GPGPU_EU_C_STORE_VALUE.store(c_value, Ordering::Release);
-    let breadcrumbs_ok = if GPGPU_CONTIGUOUS_VFE_IDD_WALKER {
+    let breadcrumbs_ok = if GPGPU_CONTIGUOUS_VFE_IDD_WALKER || GPGPU_UOS_TIGHT_LAUNCH {
         post_pipeline == 0xC0DE_7801 && post_sba == 0xC0DE_7802 && post_scm == 0xC0DE_7803
     } else {
         post_pipeline == 0xC0DE_7801
@@ -2637,7 +2641,7 @@ fn submit_gpgpu_compute_walker_probe(
     };
     if log_probe {
         crate::log!(
-            "intel/gpgpu: result-store-scan expected=0x{:08X} hits_mask_lo64=0x{:016X} target_slot={} target_gpu=0x{:X} target_value=0x{:08X} breadcrumbs_ok={} contiguous_vfe_idd_walker={} post_pipeline=0x{:08X} post_sba=0x{:08X} post_scm=0x{:08X} post_cfe=0x{:08X} post_pre_midl_msf=0x{:08X} post_curbe_load=0x{:08X} note=scans-result-slots-0-63-for-misplaced-eu-store\n",
+            "intel/gpgpu: result-store-scan expected=0x{:08X} hits_mask_lo64=0x{:016X} target_slot={} target_gpu=0x{:X} target_value=0x{:08X} breadcrumbs_ok={} contiguous_vfe_idd_walker={} uos_tight_launch={} post_pipeline=0x{:08X} post_sba=0x{:08X} post_scm=0x{:08X} post_cfe=0x{:08X} post_pre_midl_msf=0x{:08X} post_curbe_load=0x{:08X} note=scans-result-slots-0-63-for-misplaced-eu-store\n",
             program.expected_store_value,
             expected_hits_mask,
             RESULT_SLOT_GPGPU_EU_C_STORE_DWORD,
@@ -2646,6 +2650,7 @@ fn submit_gpgpu_compute_walker_probe(
             c_value,
             breadcrumbs_ok as u8,
             GPGPU_CONTIGUOUS_VFE_IDD_WALKER as u8,
+            GPGPU_UOS_TIGHT_LAUNCH as u8,
             post_pipeline,
             post_sba,
             post_scm,
@@ -2698,7 +2703,7 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
 
     let gpu_program_started = proof.dispatch_delta != 0;
     let store_landed_anywhere = proof.expected_hits_mask != 0;
-    let breadcrumbs_ok = if GPGPU_CONTIGUOUS_VFE_IDD_WALKER {
+    let breadcrumbs_ok = if GPGPU_CONTIGUOUS_VFE_IDD_WALKER || GPGPU_UOS_TIGHT_LAUNCH {
         proof.post_pipeline == 0xC0DE_7801
             && proof.post_sba == 0xC0DE_7802
             && proof.post_scm == 0xC0DE_7803
