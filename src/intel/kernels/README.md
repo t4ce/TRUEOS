@@ -16,7 +16,7 @@ Gen12/Alder Lake artifacts for TRUEOS.
 `copy_rect_rgba8_wide.cl` is the opt-in wider sibling:
 
 - same linear RGBA8 copy contract
-- one SIMD16 walker/subgroup copies up to 256 pixels, sixteen adjacent pixels per lane/work-item
+- one SIMD16 walker/subgroup copies up to 64 pixels across 64 rows, four adjacent pixels per lane/work-item
 - kept separate from `copy_rect_rgba8.cl` so the small, proven bring-up artifact remains available
 
 The CPU side owns resource lifetime, bounds/scissor clipping, GPU address/state
@@ -56,7 +56,7 @@ with Intel `ocloc`/IGC. Its SHA-256 is:
 SHA-256 is:
 
 ```text
-f8097f59d7525c4fd6e4f6659e58d5279238a4f9652fea58065098540fa45bba
+c94853560fdcad31703b8d556f303df1922ec645c236b55113a08b1ac367badd
 ```
 
 Regenerate it with:
