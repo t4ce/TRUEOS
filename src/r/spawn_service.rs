@@ -480,13 +480,6 @@ fn spawn_silk_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| crate::r::silk_service::silk_service_task())
 }
 
-fn spawn_mandelbrot_gpu_sidequest(spawner: Spawner) -> SpawnAttempt {
-    match crate::tst_mandelbrot_gpu_sidequest::spawn_mandelbrot_gpu_sidequest(spawner) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
-}
-
 fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
     SpawnAttempt::Skipped
@@ -601,10 +594,6 @@ fn spawn_intel_cursor_service_task(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_hw_pic_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| crate::intel::hw_pic_service())
-}
-
-fn spawn_hw_vid_probe_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |_worker_spawner| crate::intel::hw_vid_probe_task())
 }
 
 fn spawn_hw_logo_present_task(spawner: Spawner) -> SpawnAttempt {
@@ -1424,7 +1413,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &HW_PIC_SERVICE_STARTED,
         spawn_hw_pic_service,
     ),
-    TaskSpec::disabled("hw_vid_probe_task", 0, &HW_VID_PROBE_STARTED, spawn_hw_vid_probe_task),
     TaskSpec::enabled_gated(
         "hw_logo_present_task",
         0,
@@ -1450,12 +1438,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::GFX_BACKEND_READY,
         &GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
         spawn_gfx_texture_upload_service,
-    ),
-    TaskSpec::disabled(
-        "mandelbrot-gpu-sidequest",
-        0,
-        &MANDELBROT_GPU_SIDEQUEST_STARTED,
-        spawn_mandelbrot_gpu_sidequest,
     ),
     TaskSpec::enabled_gated(
         "ui2",
