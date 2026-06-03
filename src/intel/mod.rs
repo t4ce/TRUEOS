@@ -8,9 +8,7 @@ pub mod hda;
 mod huc;
 mod hw_cursor;
 pub(crate) mod hw_pic;
-pub(crate) mod hw_vid;
 pub(crate) mod ppgtt;
-pub(crate) mod replay;
 pub(crate) mod state;
 pub(crate) mod stats;
 mod uc_fw;
@@ -1539,11 +1537,6 @@ pub(crate) async fn hw_pic_wait_output_for_id(
 
 pub(crate) fn hw_pic_snapshot() -> self::hw_pic::HwPicQueueSnapshot {
     self::hw_pic::snapshot()
-}
-
-pub(crate) fn hw_vid_probe_task()
--> Result<embassy_executor::SpawnToken<impl Send>, embassy_executor::SpawnError> {
-    self::hw_vid::hw_vid_probe_task()
 }
 
 pub(crate) fn hw_logo_present_task()
