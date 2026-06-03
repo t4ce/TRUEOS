@@ -11,6 +11,7 @@ Gen12/Alder Lake artifacts for TRUEOS.
 - no format conversion
 - no blending
 - rectangular copy only
+- one SIMD16 walker/subgroup copies up to 32 pixels, two adjacent pixels per lane/work-item
 
 The CPU side owns resource lifetime, bounds/scissor clipping, GPU address/state
 binding, parameter packing, and walker submission.
@@ -33,7 +34,7 @@ binding, parameter packing, and walker submission.
 with Intel `ocloc`/IGC. Its SHA-256 is:
 
 ```text
-c68cd718dcd2241db1d0f44db54b7b9b1c707aa89c524eddc8bd2b9f6978e249
+10866024aaffae96f92cfc25a5fb188ca421994789afbc4dba3ddc290bd583ab
 ```
 
 Regenerate it with:
