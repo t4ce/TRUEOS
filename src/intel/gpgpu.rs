@@ -72,8 +72,8 @@ pub(crate) const COPY_RECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0xA4, 0x21, 0x99, 0x47, 0x89, 0xAF, 0xBC, 0x4D, 0xBA, 0x3D, 0xDC, 0x29, 0x0B, 0xD5, 0x83, 0xAB,
 ];
 pub(crate) const COPY_RECT_RGBA8_WIDE_ADLS_BIN_SHA256: [u8; 32] = [
-    0xF8, 0x09, 0x7F, 0x59, 0xD7, 0x52, 0x5C, 0x4F, 0xD6, 0xE4, 0xF6, 0x65, 0x9E, 0x58, 0xD5, 0x27,
-    0x92, 0x38, 0xA4, 0xF9, 0x65, 0x2F, 0xEA, 0x58, 0x06, 0x50, 0x98, 0x54, 0x0F, 0xA4, 0x5B, 0xBA,
+    0xC9, 0x48, 0x53, 0x56, 0x0F, 0xDC, 0xAD, 0x31, 0x70, 0x3B, 0x8D, 0x55, 0x6F, 0x30, 0x3D, 0xF1,
+    0x92, 0x2E, 0xC6, 0x45, 0xC2, 0x36, 0xB5, 0x51, 0x13, 0xA0, 0x8B, 0x1A, 0xC3, 0x67, 0xBA, 0xDD,
 ];
 pub(crate) const CLEAR_RECT_RGBA8_WHITE_ADLS_BIN_SHA256: [u8; 32] = [
     0x96, 0xB9, 0x6D, 0x64, 0x58, 0xBA, 0xDA, 0x38, 0x28, 0xB5, 0xE0, 0x5D, 0xD0, 0xD4, 0xDE, 0xCE,
@@ -212,8 +212,9 @@ const COPY_RECT_BATCH_DST_SURFACE_STATE_OFFSET_BYTES: usize = 0x10C0;
 const COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES: usize = 0x1200;
 const COPY_RECT_PIXELS_PER_LANE: u32 = 2;
 const COPY_RECT_SPAN_PIXELS: u32 = 16 * COPY_RECT_PIXELS_PER_LANE;
-const COPY_RECT_WIDE_PIXELS_PER_LANE: u32 = 16;
+const COPY_RECT_WIDE_PIXELS_PER_LANE: u32 = 4;
 const COPY_RECT_WIDE_SPAN_PIXELS: u32 = 16 * COPY_RECT_WIDE_PIXELS_PER_LANE;
+const COPY_RECT_WIDE_ROWS_PER_WALKER: u32 = 64;
 const COPY_RECT_BATCH_MAX_SPANS: usize = 32;
 const COPY_RECT_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
 const COPY_RECT_SURFACE_STATE_DWORDS: usize = 16;
@@ -251,7 +252,7 @@ const COPY_RECT_256X2_SURFACE_WIDTH: u32 = COPY_RECT_256X2_WIDTH * 2;
 const COPY_RECT_256X2_PITCH_BYTES: u32 =
     COPY_RECT_256X2_SURFACE_WIDTH * core::mem::size_of::<u32>() as u32;
 const COPY_RECT_256X2_EXPECTED_SPANS: usize = 16;
-const COPY_RECT_WIDE_256X2_EXPECTED_SPANS: usize = 2;
+const COPY_RECT_WIDE_256X2_EXPECTED_SPANS: usize = 4;
 const COPY_RECT_256X2_EXPECTED_SUBMITS: usize = 1;
 const COPY_RECT_256X2_SAMPLE_POINTS: [(usize, usize); 12] = [
     (0, 0),
@@ -319,12 +320,16 @@ const DIRECT_RCS_GPU_VA_SHELL_SURFACE_BASE: u64 = 0x008A_0000;
 const DIRECT_RCS_GPU_VA_BATCH_BASE: u64 = 0x0180_0000;
 const DIRECT_RCS_SMOKE_MARKER: u32 = 0xC0DE_5101;
 const DIRECT_RCS_SMOKE_POLL_ITERS: usize = 262_144;
-pub(crate) const GPGPU_SHELL_SURFACE_WIDTH: u32 = 256;
+pub(crate) const GPGPU_SHELL_SURFACE_WIDTH: u32 = 1024;
 pub(crate) const GPGPU_SHELL_SURFACE_HEIGHT: u32 = 64;
 pub(crate) const GPGPU_SHELL_SURFACE_PITCH_BYTES: u32 =
     GPGPU_SHELL_SURFACE_WIDTH * core::mem::size_of::<u32>() as u32;
 const GPGPU_SHELL_SURFACE_BYTES: usize =
     (GPGPU_SHELL_SURFACE_PITCH_BYTES as usize) * (GPGPU_SHELL_SURFACE_HEIGHT as usize);
+const ATHLAS_WILD_MAX_WORKERS: usize = 16;
+const ATHLAS_WILD_WORKER_TASK_POOL: usize = 16;
+const ATHLAS_WILD_PRESENT_PAD_MS: u64 = 100;
+const ATHLAS_WILD_GPU_BURST: u32 = 16;
 
 static COPY_RECT_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static COPY_RECT_RGBA8_WIDE_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
@@ -332,6 +337,13 @@ static CLEAR_RECT_RGBA8_WHITE_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mu
 static EMPTY_EOT_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static DIRECT_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static GPGPU_SHELL_SURFACE: Mutex<Option<GpgpuShellSurface>> = Mutex::new(None);
+static ATHLAS_WILD_JOB_ID: AtomicU32 = AtomicU32::new(1);
+static ATHLAS_WILD_DONE: AtomicU32 = AtomicU32::new(0);
+static ATHLAS_WILD_COPIES: AtomicU32 = AtomicU32::new(0);
+static ATHLAS_WILD_PIXELS: AtomicU32 = AtomicU32::new(0);
+static ATHLAS_WILD_LAST_SLOT: AtomicU32 = AtomicU32::new(0);
+static ATHLAS_WILD_LAST_X: AtomicU32 = AtomicU32::new(0);
+static ATHLAS_WILD_LAST_Y: AtomicU32 = AtomicU32::new(0);
 static GPGPU_TWEMOJI_ATLAS: Once<Option<GpgpuTwemojiAtlasCache>> = Once::new();
 static DIRECT_RCS_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 static DIRECT_RCS_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
@@ -712,6 +724,33 @@ pub(crate) struct GpgpuShellAtlasBatchCopyResult {
     pub(crate) max_sprite_height: u32,
 }
 
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuShellAtlasWildCpuResult {
+    pub(crate) ok: bool,
+    pub(crate) workers: u32,
+    pub(crate) requested_workers: u32,
+    pub(crate) done_workers: u32,
+    pub(crate) cpu_copies: u32,
+    pub(crate) cpu_pixels: u32,
+    pub(crate) gpu_copies: u32,
+    pub(crate) gpu_ok: u32,
+    pub(crate) gpu_fail: u32,
+    pub(crate) gpu_batches: u32,
+    pub(crate) gpu_presented: u32,
+    pub(crate) gpu_spans: usize,
+    pub(crate) gpu_submits: usize,
+    pub(crate) gpu_avg_copy_ms: u64,
+    pub(crate) gpu_max_copy_ms: u64,
+    pub(crate) duration_ms: u64,
+    pub(crate) elapsed_ms: u64,
+    pub(crate) present_ms: u64,
+    pub(crate) last_slot: u16,
+    pub(crate) last_dst_xy: GpgpuPoint,
+    pub(crate) primary_width: u32,
+    pub(crate) primary_height: u32,
+    pub(crate) slots: u16,
+}
+
 #[derive(Copy, Clone, Debug)]
 struct GpgpuShellSurface {
     surface: GpgpuRgba8Surface,
@@ -768,6 +807,7 @@ struct CopyRectKernelFlavor {
     text_offset_bytes: u64,
     pixels_per_lane: u32,
     span_pixels: u32,
+    rows_per_walker: u32,
     name: &'static str,
 }
 
@@ -950,6 +990,7 @@ fn copy_rect_kernel_flavor_narrow() -> Option<CopyRectKernelFlavor> {
         text_offset_bytes: COPY_RECT_RGBA8_TEXT_OFFSET_BYTES,
         pixels_per_lane: COPY_RECT_PIXELS_PER_LANE,
         span_pixels: COPY_RECT_SPAN_PIXELS,
+        rows_per_walker: 1,
         name: COPY_RECT_RGBA8_KERNEL_NAME,
     })
 }
@@ -960,6 +1001,7 @@ fn copy_rect_kernel_flavor_wide() -> Option<CopyRectKernelFlavor> {
         text_offset_bytes: COPY_RECT_RGBA8_TEXT_OFFSET_BYTES,
         pixels_per_lane: COPY_RECT_WIDE_PIXELS_PER_LANE,
         span_pixels: COPY_RECT_WIDE_SPAN_PIXELS,
+        rows_per_walker: COPY_RECT_WIDE_ROWS_PER_WALKER,
         name: COPY_RECT_RGBA8_WIDE_KERNEL_NAME,
     })
 }
@@ -1534,6 +1576,283 @@ pub(crate) fn shell_copy_twemoji_atlas_batch_scanout_hot(
         max_sprite_width,
         max_sprite_height,
     })
+}
+
+pub(crate) fn shell_twemoji_atlas_wild_cpu_scanout(
+    duration_ms: u64,
+) -> Option<GpgpuShellAtlasWildCpuResult> {
+    let total_start_tick = direct_rcs_now_tick();
+    let target = super::display::primary_surface_gpgpu_marker_target()?;
+    if target.virt.is_null() || target.width == 0 || target.height == 0 {
+        return None;
+    }
+    let atlas = twemoji_atlas_cache_once()?;
+    let slot_count = crate::gfx::althlasfont::twemoji::twemoji_slot_count();
+    if slot_count == 0 {
+        return None;
+    }
+
+    let mut worker_slots = crate::workers::background_worker_slots();
+    worker_slots.truncate(ATHLAS_WILD_MAX_WORKERS);
+    let requested_workers = worker_slots.len() as u32;
+    if worker_slots.is_empty() {
+        return Some(GpgpuShellAtlasWildCpuResult {
+            duration_ms,
+            elapsed_ms: direct_rcs_elapsed_ms_since(total_start_tick),
+            primary_width: target.width,
+            primary_height: target.height,
+            slots: slot_count,
+            ..GpgpuShellAtlasWildCpuResult::default()
+        });
+    }
+
+    let job_id = ATHLAS_WILD_JOB_ID.fetch_add(1, Ordering::Relaxed);
+    ATHLAS_WILD_DONE.store(0, Ordering::Release);
+    ATHLAS_WILD_COPIES.store(0, Ordering::Release);
+    ATHLAS_WILD_PIXELS.store(0, Ordering::Release);
+    ATHLAS_WILD_LAST_SLOT.store(0, Ordering::Release);
+    ATHLAS_WILD_LAST_X.store(0, Ordering::Release);
+    ATHLAS_WILD_LAST_Y.store(0, Ordering::Release);
+
+    let deadline_tick = total_start_tick.saturating_add(direct_rcs_ticks_from_ms(duration_ms));
+    let mut launched = 0u32;
+    for slot in worker_slots {
+        let Some(spawner) = crate::workers::spawner_for_slot(slot) else {
+            continue;
+        };
+        let seed = ((job_id as u64) << 32)
+            ^ ((slot as u64) << 16)
+            ^ direct_rcs_now_tick()
+            ^ 0xA747_11DA_C0DE_5150;
+        let Ok(token) = athlas_wild_cpu_worker_task(
+            job_id,
+            launched,
+            requested_workers.max(1),
+            deadline_tick,
+            seed,
+            target,
+            atlas,
+            slot_count,
+        ) else {
+            continue;
+        };
+        spawner.spawn(token);
+        launched = launched.saturating_add(1);
+    }
+
+    let mut gpu_rng = crate::tyche::SoftRng::from_seed(
+        ((job_id as u64) << 32) ^ direct_rcs_now_tick() ^ 0x6A09_E667_F3BC_C909,
+    );
+    let mut gpu_ok = 0u32;
+    let mut gpu_fail = 0u32;
+    let mut gpu_batches = 0u32;
+    let mut gpu_presented = 0u32;
+    let mut gpu_spans = 0usize;
+    let mut gpu_submits = 0usize;
+    let mut gpu_copy_ms_sum = 0u64;
+    let mut gpu_max_copy_ms = 0u64;
+
+    while direct_rcs_now_tick() < deadline_tick {
+        let mut requests = Vec::with_capacity(ATHLAS_WILD_GPU_BURST as usize);
+        for burst_index in 0..ATHLAS_WILD_GPU_BURST {
+            let slot = gpu_rng.usize_below(slot_count as usize) as u16;
+            let dst_xy = crate::gfx::althlasfont::twemoji::twemoji_lookup_slot_region(slot)
+                .and_then(|region| {
+                    athlas_wild_grid_point(
+                        &mut gpu_rng,
+                        burst_index,
+                        ATHLAS_WILD_GPU_BURST,
+                        target.width,
+                        target.height,
+                        u32::from(region.src_w.max(1)),
+                        u32::from(region.src_h.max(1)),
+                    )
+                });
+            requests.push(GpgpuAtlasBatchRequest {
+                slot,
+                dst_xy,
+                src_width: None,
+                src_height: None,
+            });
+        }
+
+        let Some(result) = shell_copy_twemoji_atlas_batch_scanout_hot(&requests) else {
+            gpu_fail = gpu_fail.saturating_add(requests.len() as u32);
+            continue;
+        };
+        gpu_batches = gpu_batches.saturating_add(1);
+        if result.presented {
+            gpu_presented = gpu_presented.saturating_add(1);
+        }
+        gpu_spans = gpu_spans.saturating_add(result.spans);
+        gpu_submits = gpu_submits.saturating_add(result.submits);
+        gpu_copy_ms_sum = gpu_copy_ms_sum.saturating_add(result.copy_ms);
+        gpu_max_copy_ms = gpu_max_copy_ms.max(result.copy_ms);
+        gpu_ok = gpu_ok.saturating_add(result.copied_copies as u32);
+        gpu_fail =
+            gpu_fail.saturating_add(result.requested.saturating_sub(result.copied_copies) as u32);
+    }
+
+    let wait_deadline =
+        deadline_tick.saturating_add(direct_rcs_ticks_from_ms(ATHLAS_WILD_PRESENT_PAD_MS));
+    while direct_rcs_now_tick() < wait_deadline
+        && ATHLAS_WILD_DONE.load(Ordering::Acquire) < launched
+    {
+        core::hint::spin_loop();
+    }
+
+    let present_start_tick = direct_rcs_now_tick();
+    let presented = super::display::notify_primary_surface_external_write(
+        "gpgpu-athlas-wild-cpu",
+        0,
+        target.byte_len,
+    );
+    let present_ms = direct_rcs_elapsed_ms_since(present_start_tick);
+    let done = ATHLAS_WILD_DONE.load(Ordering::Acquire);
+    let copies = ATHLAS_WILD_COPIES.load(Ordering::Acquire);
+    let pixels = ATHLAS_WILD_PIXELS.load(Ordering::Acquire);
+    let last_x = ATHLAS_WILD_LAST_X.load(Ordering::Acquire);
+    let last_y = ATHLAS_WILD_LAST_Y.load(Ordering::Acquire);
+    let gpu_avg_copy_ms = if gpu_batches == 0 {
+        0
+    } else {
+        gpu_copy_ms_sum / u64::from(gpu_batches)
+    };
+
+    Some(GpgpuShellAtlasWildCpuResult {
+        ok: presented && launched != 0 && done == launched && gpu_fail == 0,
+        workers: launched,
+        requested_workers,
+        done_workers: done,
+        cpu_copies: copies,
+        cpu_pixels: pixels,
+        gpu_copies: gpu_ok.saturating_add(gpu_fail),
+        gpu_ok,
+        gpu_fail,
+        gpu_batches,
+        gpu_presented,
+        gpu_spans,
+        gpu_submits,
+        gpu_avg_copy_ms,
+        gpu_max_copy_ms,
+        duration_ms,
+        elapsed_ms: direct_rcs_elapsed_ms_since(total_start_tick),
+        present_ms,
+        last_slot: ATHLAS_WILD_LAST_SLOT.load(Ordering::Acquire) as u16,
+        last_dst_xy: GpgpuPoint::new(last_x as i32, last_y as i32),
+        primary_width: target.width,
+        primary_height: target.height,
+        slots: slot_count,
+    })
+}
+
+fn athlas_wild_grid_point(
+    rng: &mut crate::tyche::SoftRng,
+    index: u32,
+    total: u32,
+    primary_width: u32,
+    primary_height: u32,
+    sprite_width: u32,
+    sprite_height: u32,
+) -> Option<GpgpuPoint> {
+    if primary_width == 0 || primary_height == 0 {
+        return None;
+    }
+    let columns = if total <= 4 { 2 } else { 4 };
+    let rows = total.div_ceil(columns).max(1);
+    let cell_w = primary_width / columns;
+    let cell_h = primary_height / rows;
+    if cell_w == 0 || cell_h == 0 {
+        return None;
+    }
+
+    let col = index % columns;
+    let row = index / columns;
+    let cell_x = col.saturating_mul(cell_w);
+    let cell_y = row.saturating_mul(cell_h);
+    let local_max_x = cell_w.saturating_sub(sprite_width);
+    let local_max_y = cell_h.saturating_sub(sprite_height);
+    let x = cell_x
+        .saturating_add(rng.usize_below(local_max_x.saturating_add(1) as usize) as u32)
+        .min(primary_width.saturating_sub(sprite_width));
+    let y = cell_y
+        .saturating_add(rng.usize_below(local_max_y.saturating_add(1) as usize) as u32)
+        .min(primary_height.saturating_sub(sprite_height));
+    Some(GpgpuPoint::new(x as i32, y as i32))
+}
+
+#[embassy_executor::task(pool_size = ATHLAS_WILD_WORKER_TASK_POOL)]
+async fn athlas_wild_cpu_worker_task(
+    _job_id: u32,
+    worker_index: u32,
+    worker_count: u32,
+    deadline_tick: u64,
+    seed: u64,
+    target: super::display::PrimarySurfaceGpgpuTarget,
+    atlas: &'static GpgpuTwemojiAtlasCache,
+    slot_count: u16,
+) {
+    let mut rng = crate::tyche::SoftRng::from_seed(seed);
+    let worker_count = worker_count.max(1);
+    let lane_start = target.width.saturating_mul(worker_index) / worker_count;
+    let lane_end = if worker_index + 1 >= worker_count {
+        target.width
+    } else {
+        target.width.saturating_mul(worker_index + 1) / worker_count
+    };
+    let lane_width = lane_end.saturating_sub(lane_start).max(1);
+    let mut copies = 0u32;
+    let mut pixels = 0u32;
+    let mut last_slot = 0u16;
+    let mut last_x = lane_start;
+    let mut last_y = 0u32;
+
+    while direct_rcs_now_tick() < deadline_tick {
+        let slot = rng.usize_below(slot_count as usize) as u16;
+        let Some(region) = crate::gfx::althlasfont::twemoji::twemoji_lookup_slot_region(slot)
+        else {
+            continue;
+        };
+        let src_rect = GpgpuRect::new(
+            region.src_x as i32,
+            region.src_y as i32,
+            u32::from(region.src_w.max(1)),
+            u32::from(region.src_h.max(1)),
+        );
+        if !rect_is_inside_atlas(atlas.width, atlas.height, src_rect)
+            || src_rect.width > target.width
+            || src_rect.height > target.height
+        {
+            continue;
+        }
+
+        let local_max_x = lane_width.saturating_sub(src_rect.width);
+        let x = lane_start
+            .saturating_add(rng.usize_below(local_max_x.saturating_add(1) as usize) as u32)
+            .min(target.width.saturating_sub(src_rect.width));
+        let y = rng.usize_below(
+            target
+                .height
+                .saturating_sub(src_rect.height)
+                .saturating_add(1) as usize,
+        ) as u32;
+        let dst_xy = GpgpuPoint::new(x as i32, y as i32);
+        let written = primary_blit_atlas_xrgb_volatile(target, atlas, src_rect, dst_xy);
+        if written != 0 {
+            copies = copies.saturating_add(1);
+            pixels = pixels.saturating_add(written as u32);
+            last_slot = slot;
+            last_x = x;
+            last_y = y;
+        }
+    }
+
+    ATHLAS_WILD_COPIES.fetch_add(copies, Ordering::AcqRel);
+    ATHLAS_WILD_PIXELS.fetch_add(pixels, Ordering::AcqRel);
+    ATHLAS_WILD_LAST_SLOT.store(last_slot as u32, Ordering::Release);
+    ATHLAS_WILD_LAST_X.store(last_x, Ordering::Release);
+    ATHLAS_WILD_LAST_Y.store(last_y, Ordering::Release);
+    ATHLAS_WILD_DONE.fetch_add(1, Ordering::AcqRel);
 }
 
 fn shell_copy_twemoji_atlas_slot_scanout_hot_with(
@@ -2386,7 +2705,7 @@ pub(crate) fn submit_copy_rect_rgba8_wide_256x2_once() -> bool {
 
     crate::log_info!(
         target: "gpgpu";
-        "intel/gpgpu: copy-rect-rgba8-wide-256x2 ok={} copy_ms={} submits={}/{} spans={}/{} copied={}/{} src_preserved={}/{} samples={}/{} surface_gpu=0x{:X} surface_phys=0x{:X} rect={}x{} src_xy=0,0 dst_xy={},0 pitch={} row0_dst_head=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row1_dst_head=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row1_dst_tail=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] lowering=row-spans pixels_per_lane={} batched_walkers=1 max_span_px={} artifact={}\n",
+        "intel/gpgpu: copy-rect-rgba8-wide-256x2 ok={} copy_ms={} submits={}/{} spans={}/{} copied={}/{} src_preserved={}/{} samples={}/{} surface_gpu=0x{:X} surface_phys=0x{:X} rect={}x{} src_xy=0,0 dst_xy={},0 pitch={} row0_dst_head=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row1_dst_head=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row1_dst_tail=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] lowering=row-blocks pixels_per_lane={} rows_per_walker={} batched_walkers=1 max_span_px={} artifact={}\n",
         ok as u8,
         copy_ms,
         stats.submits,
@@ -2418,6 +2737,7 @@ pub(crate) fn submit_copy_rect_rgba8_wide_256x2_once() -> bool {
         row1_tail[2],
         row1_tail[3],
         COPY_RECT_WIDE_PIXELS_PER_LANE,
+        COPY_RECT_WIDE_ROWS_PER_WALKER,
         COPY_RECT_WIDE_SPAN_PIXELS,
         COPY_RECT_RGBA8_WIDE_KERNEL_NAME,
     );
@@ -2911,6 +3231,76 @@ fn primary_read_pixel(target: super::display::PrimarySurfaceGpgpuTarget, x: u32,
     unsafe { core::ptr::read_volatile(ptr as *const u32) }
 }
 
+fn primary_write_pixel_volatile(
+    target: super::display::PrimarySurfaceGpgpuTarget,
+    x: u32,
+    y: u32,
+    value: u32,
+) -> bool {
+    let offset = (y as usize)
+        .saturating_mul(target.pitch_bytes as usize)
+        .saturating_add((x as usize).saturating_mul(core::mem::size_of::<u32>()));
+    if offset.saturating_add(core::mem::size_of::<u32>()) > target.byte_len {
+        return false;
+    }
+    unsafe {
+        core::ptr::write_volatile(target.virt.add(offset) as *mut u32, value & 0x00FF_FFFF);
+    }
+    true
+}
+
+fn primary_blit_atlas_xrgb_volatile(
+    target: super::display::PrimarySurfaceGpgpuTarget,
+    atlas: &GpgpuTwemojiAtlasCache,
+    src_rect: GpgpuRect,
+    dst_xy: GpgpuPoint,
+) -> usize {
+    if !rect_is_inside_atlas(atlas.width, atlas.height, src_rect) {
+        return 0;
+    }
+    let dst_rect = GpgpuRect::new(dst_xy.x, dst_xy.y, src_rect.width, src_rect.height);
+    let Some(primary) = GpgpuRgba8Surface::new(
+        target.phys,
+        target.gpu,
+        target.byte_len,
+        target.width,
+        target.height,
+        target.pitch_bytes,
+    ) else {
+        return 0;
+    };
+    if !rect_is_inside(primary, dst_rect) {
+        return 0;
+    }
+
+    let mut written = 0usize;
+    for y in 0..src_rect.height {
+        for x in 0..src_rect.width {
+            let Some(a) = atlas_alpha(atlas, src_rect, x, y) else {
+                continue;
+            };
+            if a == 0 {
+                continue;
+            }
+            let Some(xrgb) = atlas_xrgb_pixel(atlas, src_rect, x, y) else {
+                continue;
+            };
+            let dst_x = dst_xy.x as u32 + x;
+            let dst_y = dst_xy.y as u32 + y;
+            let pixel = if a == 0xFF {
+                xrgb
+            } else {
+                let dst = primary_read_pixel(target, dst_x, dst_y);
+                blend_xrgb_over_xrgb(xrgb, a, dst)
+            };
+            if primary_write_pixel_volatile(target, dst_x, dst_y, pixel) {
+                written += 1;
+            }
+        }
+    }
+    written
+}
+
 fn shell_write_pixel(shell: GpgpuShellSurface, x: u32, y: u32, value: u32) {
     let offset = (y as usize)
         .saturating_mul(shell.surface.pitch_bytes as usize)
@@ -2949,17 +3339,17 @@ fn clear_rect_expected_spans(rect: GpgpuRect) -> usize {
 }
 
 fn copy_rect_expected_spans(rect: GpgpuRect) -> usize {
-    copy_rect_expected_spans_for(rect, COPY_RECT_SPAN_PIXELS)
+    copy_rect_expected_spans_for(rect, COPY_RECT_SPAN_PIXELS, 1)
 }
 
 fn copy_rect_wide_expected_spans(rect: GpgpuRect) -> usize {
-    copy_rect_expected_spans_for(rect, COPY_RECT_WIDE_SPAN_PIXELS)
+    copy_rect_expected_spans_for(rect, COPY_RECT_WIDE_SPAN_PIXELS, COPY_RECT_WIDE_ROWS_PER_WALKER)
 }
 
-fn copy_rect_expected_spans_for(rect: GpgpuRect, span_pixels: u32) -> usize {
+fn copy_rect_expected_spans_for(rect: GpgpuRect, span_pixels: u32, rows_per_walker: u32) -> usize {
     (rect.width as usize)
         .div_ceil(span_pixels as usize)
-        .saturating_mul(rect.height as usize)
+        .saturating_mul((rect.height as usize).div_ceil(rows_per_walker as usize))
 }
 
 fn rect_is_inside(surface: GpgpuRgba8Surface, rect: GpgpuRect) -> bool {
@@ -3128,7 +3518,9 @@ fn submit_copy_rect_spans_with_stats(
     params: CopyRectRgba8Params,
     flavor: CopyRectKernelFlavor,
 ) -> GpgpuSubmitStats {
-    let Some(total_spans) = copy_rect_span_count(params, flavor.span_pixels) else {
+    let Some(total_spans) =
+        copy_rect_span_count(params, flavor.span_pixels, flavor.rows_per_walker)
+    else {
         return GpgpuSubmitStats::default();
     };
     let mut stats = GpgpuSubmitStats::default();
@@ -3155,11 +3547,15 @@ fn submit_copy_rect_multi_ops_with_stats(
     let mut span_params = Vec::with_capacity(COPY_RECT_BATCH_MAX_SPANS.min(32));
 
     for op in params {
-        let Some(total_spans) = copy_rect_span_count(*op, flavor.span_pixels) else {
+        let Some(total_spans) =
+            copy_rect_span_count(*op, flavor.span_pixels, flavor.rows_per_walker)
+        else {
             continue;
         };
         for span_index in 0..total_spans {
-            let Some(span) = copy_rect_span_params(*op, flavor.span_pixels, span_index) else {
+            let Some(span) =
+                copy_rect_span_params(*op, flavor.span_pixels, flavor.rows_per_walker, span_index)
+            else {
                 return stats;
             };
             span_params.push(span);
@@ -3184,24 +3580,31 @@ fn submit_copy_rect_multi_ops_with_stats(
     stats
 }
 
-fn copy_rect_span_count(params: CopyRectRgba8Params, span_pixels: u32) -> Option<usize> {
+fn copy_rect_span_count(
+    params: CopyRectRgba8Params,
+    span_pixels: u32,
+    rows_per_walker: u32,
+) -> Option<usize> {
     if params.width == 0 || params.height == 0 {
         return None;
     }
     let spans_per_row = (params.width as usize).div_ceil(span_pixels as usize);
-    spans_per_row.checked_mul(params.height as usize)
+    let row_blocks = (params.height as usize).div_ceil(rows_per_walker as usize);
+    spans_per_row.checked_mul(row_blocks)
 }
 
 fn copy_rect_span_params(
     params: CopyRectRgba8Params,
     span_pixels: u32,
+    rows_per_walker: u32,
     span_index: usize,
 ) -> Option<CopyRectRgba8Params> {
     let spans_per_row = (params.width as usize).div_ceil(span_pixels as usize);
     if spans_per_row == 0 {
         return None;
     }
-    let row = span_index / spans_per_row;
+    let row_block = span_index / spans_per_row;
+    let row = row_block.saturating_mul(rows_per_walker as usize);
     if row >= params.height as usize {
         return None;
     }
@@ -3211,13 +3614,14 @@ fn copy_rect_span_params(
         return None;
     }
     let span_width = (params.width - x).min(span_pixels);
+    let span_height = (params.height - row as u32).min(rows_per_walker);
     Some(CopyRectRgba8Params {
         src_x: params.src_x + x,
         src_y: params.src_y + row as u32,
         dst_x: params.dst_x + x,
         dst_y: params.dst_y + row as u32,
         width: span_width,
-        height: 1,
+        height: span_height,
         ..params
     })
 }
@@ -3967,9 +4371,12 @@ fn direct_rcs_encode_copy_rect_multi_walker_batch(
         return false;
     }
     for span in 0..span_count {
-        let Some(span_params) =
-            copy_rect_span_params(params, flavor.span_pixels, span_start + span)
-        else {
+        let Some(span_params) = copy_rect_span_params(
+            params,
+            flavor.span_pixels,
+            flavor.rows_per_walker,
+            span_start + span,
+        ) else {
             return false;
         };
         let payload_offset =
@@ -4029,9 +4436,12 @@ fn direct_rcs_encode_copy_rect_multi_walker_batch(
         COPY_RECT_PRE_MARKER,
     );
     for span in 0..span_count {
-        let Some(span_params) =
-            copy_rect_span_params(params, flavor.span_pixels, span_start + span)
-        else {
+        let Some(span_params) = copy_rect_span_params(
+            params,
+            flavor.span_pixels,
+            flavor.rows_per_walker,
+            span_start + span,
+        ) else {
             return false;
         };
         let payload_offset =
@@ -5090,6 +5500,15 @@ fn direct_rcs_read_result_slot(state: DirectRcsState, slot: usize) -> u32 {
 
 fn direct_rcs_now_tick() -> u64 {
     embassy_time_driver::now()
+}
+
+fn direct_rcs_ticks_from_ms(ms: u64) -> u64 {
+    let hz = embassy_time_driver::TICK_HZ;
+    if hz == 0 {
+        return ms.max(1);
+    }
+    let ticks = ((ms as u128).saturating_mul(hz as u128).saturating_add(999) / 1000) as u64;
+    if ms == 0 { 0 } else { ticks.max(1) }
 }
 
 fn direct_rcs_elapsed_ms_since(start_tick: u64) -> u64 {
