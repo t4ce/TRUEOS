@@ -17,13 +17,32 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch(
     program: GpgpuEuProgram,
     walker_group_x_dim: u32,
 ) -> Result<usize, &'static str> {
-    encode_gfx12_gpgpu_walker_probe_batch_xy(
+    encode_gfx12_gpgpu_walker_probe_batch_at(
+        warm,
+        batch_dwords,
+        store_surface,
+        program,
+        walker_group_x_dim,
+        GPGPU_EU_KERNEL_OFFSET_BYTES,
+    )
+}
+
+pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_at(
+    warm: RenderWarmState,
+    batch_dwords: &mut [u32],
+    store_surface: GpgpuStoreSurfaceState,
+    program: GpgpuEuProgram,
+    walker_group_x_dim: u32,
+    program_offset_bytes: usize,
+) -> Result<usize, &'static str> {
+    encode_gfx12_gpgpu_walker_probe_batch_xy_at(
         warm,
         batch_dwords,
         store_surface,
         program,
         walker_group_x_dim,
         1,
+        program_offset_bytes,
     )
 }
 
@@ -35,6 +54,27 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
     program: GpgpuEuProgram,
     walker_group_x_dim: u32,
     walker_group_y_dim: u32,
+) -> Result<usize, &'static str> {
+    encode_gfx12_gpgpu_walker_probe_batch_xy_at(
+        warm,
+        batch_dwords,
+        store_surface,
+        program,
+        walker_group_x_dim,
+        walker_group_y_dim,
+        GPGPU_EU_KERNEL_OFFSET_BYTES,
+    )
+}
+
+#[allow(dead_code)]
+pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy_at(
+    warm: RenderWarmState,
+    batch_dwords: &mut [u32],
+    store_surface: GpgpuStoreSurfaceState,
+    program: GpgpuEuProgram,
+    walker_group_x_dim: u32,
+    walker_group_y_dim: u32,
+    program_offset_bytes: usize,
 ) -> Result<usize, &'static str> {
     const MEDIA_VFE_STATE_CMD: u32 = (3 << 29) | (2 << 27) | 7;
     const MEDIA_CURBE_LOAD_CMD: u32 = (3 << 29) | (2 << 27) | (1 << 16) | 2;
@@ -80,12 +120,12 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
     } else {
         GPU_VA_DRAW_STATE_BASE as usize + CURBE_STATE_OFFSET_BYTES
     };
-    const GPGPU_KERNEL_GPU: u64 = GPU_VA_DRAW_STATE_BASE + GPGPU_EU_KERNEL_OFFSET_BYTES as u64;
-    const GPGPU_INSTRUCTION_BASE: u64 = GPGPU_KERNEL_GPU;
     const GPGPU_MIDL_NEGATIVE_CONTROL: bool = false;
     const GPGPU_WALKER_BOTTOM_MASK: u32 = 0xFFFF_FFFF;
     const STATE_SIP_CMD: u32 = 0x6102_0001;
     const GPGPU_SIP_GPU: u64 = GPU_VA_DRAW_STATE_BASE + GPGPU_SIP_HANDLER_OFFSET_BYTES as u64;
+    let gpgpu_kernel_gpu = GPU_VA_DRAW_STATE_BASE + program_offset_bytes as u64;
+    let gpgpu_instruction_base = gpgpu_kernel_gpu;
 
     fn push(batch_dwords: &mut [u32], cursor: &mut usize, value: u32) -> Result<(), &'static str> {
         if *cursor >= batch_dwords.len() {
@@ -266,7 +306,7 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
     }
     let idd_index = IDD_STATE_OFFSET_BYTES / core::mem::size_of::<u32>();
     let program_bytes = program.words.len() * core::mem::size_of::<u32>();
-    let program_end_offset = GPGPU_EU_KERNEL_OFFSET_BYTES
+    let program_end_offset = program_offset_bytes
         .checked_add(program_bytes)
         .ok_or("gpgpu-program-offset-overflow")?;
     if program_end_offset > IDD_STATE_OFFSET_BYTES {
@@ -279,7 +319,7 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
         return Err("gpgpu-idd-state-exhausted");
     }
     let kernel_start_pointer =
-        compute_gpgpu_kernel_start_pointer(GPGPU_KERNEL_GPU, GPGPU_INSTRUCTION_BASE);
+        compute_gpgpu_kernel_start_pointer(gpgpu_kernel_gpu, gpgpu_instruction_base);
     let idd_words = build_gpgpu_interface_descriptor_words(
         program,
         store_surface,
@@ -354,12 +394,12 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
         crate::log!(
             "intel/gpgpu: eu-ksp-placement-proof program_source={} instruction_base=0x{:X} ksp=0x{:X} ksp_resolves_to=0x{:X} uploaded_gpu=0x{:X} ksp_unit=byte-offset-low6-mbz ksp_64b_aligned={} instruction_base_4k_aligned={} artifact_bytes=0x{:X} dynamic_state_off=0x{:X} artifact_end_off=0x{:X} overlaps_dynamic_state={} crosses_64b_boundary={} placement_shape=mesa-base0-ksp-absolute-offset expected_delta=\"if fetch base was the bug, illegal/eot signature changes without EU byte changes\"\n",
             program.name,
-            GPGPU_INSTRUCTION_BASE,
+            gpgpu_instruction_base,
             kernel_start_pointer,
-            GPGPU_INSTRUCTION_BASE + kernel_start_pointer,
-            GPGPU_KERNEL_GPU,
+            gpgpu_instruction_base + kernel_start_pointer,
+            gpgpu_kernel_gpu,
             (kernel_start_pointer & 0x3F == 0) as u8,
-            (GPGPU_INSTRUCTION_BASE & 0xFFF == 0) as u8,
+            (gpgpu_instruction_base & 0xFFF == 0) as u8,
             program_bytes,
             IDD_STATE_OFFSET_BYTES,
             program_end_offset,
@@ -374,7 +414,7 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPGPU_DYNAMIC_STATE_BASE)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
-    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPGPU_INSTRUCTION_BASE)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, gpgpu_instruction_base)?;
     push_sba_size(batch_dwords, &mut cursor, true, COMPUTE_SBA_SPAN_BYTES)?;
     push_sba_size(batch_dwords, &mut cursor, true, COMPUTE_SBA_SPAN_BYTES)?;
     push_sba_size(batch_dwords, &mut cursor, true, COMPUTE_SBA_SPAN_BYTES)?;
@@ -384,7 +424,7 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
     if GPGPU_ENABLE_SIP_EXCEPTIONS {
-        let sip_offset = GPGPU_SIP_GPU - GPGPU_INSTRUCTION_BASE;
+        let sip_offset = GPGPU_SIP_GPU.saturating_sub(gpgpu_instruction_base);
         push(batch_dwords, &mut cursor, STATE_SIP_CMD)?;
         push(batch_dwords, &mut cursor, sip_offset as u32)?;
         push(batch_dwords, &mut cursor, (sip_offset >> 32) as u32)?;
@@ -393,9 +433,9 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
                 "intel/gpgpu: state-sip-policy program_source={} cmd=0x{:08X} instruction_base=0x{:X} sip_offset=0x{:X} sip_resolves_to=0x{:X} exception_target={} note=illegal-opcode-diagnostic\n",
                 program.name,
                 STATE_SIP_CMD,
-                GPGPU_INSTRUCTION_BASE,
+                gpgpu_instruction_base,
                 sip_offset,
-                GPGPU_INSTRUCTION_BASE + sip_offset,
+                gpgpu_instruction_base + sip_offset,
                 trueos_eu::gfx12::eot_artifact(GPGPU_SIP_HANDLER_VARIANT).name,
             );
         }
@@ -404,7 +444,7 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
             "intel/gpgpu: state-sip-policy program_source={} cmd=0x{:08X} instruction_base=0x{:X} sip_offset=0x00000000 sip_resolves_to=0x00000000 exception_target=disabled note=minimal-eot-probe\n",
             program.name,
             STATE_SIP_CMD,
-            GPGPU_INSTRUCTION_BASE,
+            gpgpu_instruction_base,
         );
     }
     push_store_marker(batch_dwords, &mut cursor, 24, 0xC0DE_7802)?;
@@ -610,8 +650,8 @@ pub(super) fn encode_gfx12_gpgpu_walker_probe_batch_xy(
             GPGPU_DYNAMIC_STATE_BASE + IDD_DYNAMIC_OFFSET_BYTES as u64,
             IDD_DYNAMIC_OFFSET_BYTES,
             idd_words[0],
-            GPGPU_INSTRUCTION_BASE,
-            GPGPU_INSTRUCTION_BASE + kernel_start_pointer,
+            gpgpu_instruction_base,
+            gpgpu_instruction_base + kernel_start_pointer,
             idd_words[2],
             idd_words[4],
             idd_words[5],

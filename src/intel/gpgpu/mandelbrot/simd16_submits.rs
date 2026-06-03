@@ -16,6 +16,9 @@ pub(crate) fn submit_gpgpu_primary_scanout_walkrow16(
     )
 }
 
+static ROWBURST_RAIL_FIRST_LOGGED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
 pub(crate) fn submit_gpgpu_primary_scanout_chunkstamp704(
     row_one_based: u32,
     x_base: u32,
@@ -68,9 +71,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_fillrow_linear16(
     let Some(dev) = crate::intel::claimed_device() else {
         return gpgpu_one_tile_sentinel_failure("no-device", program, 0);
     };
-    let Some(warm) = warm_state() else {
-        return gpgpu_one_tile_sentinel_failure("no-warm-state", program, 0);
-    };
+    let warm = warm_once(dev);
     let Some(target) = crate::intel::display::primary_surface_gpgpu_marker_target() else {
         return gpgpu_one_tile_sentinel_failure("no-primary-scanout", program, 0);
     };
@@ -267,24 +268,38 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16(
     row_one_based: u32,
     color: u32,
 ) -> crate::intel::GpgpuOneTileSentinelProof {
-    const PIXELS: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD8_BW_PIXELS;
+    submit_gpgpu_primary_scanout_row2560_simd16_impl(row_one_based, color, true, true)
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16_quiet(
+    row_one_based: u32,
+    color: u32,
+) -> crate::intel::GpgpuOneTileSentinelProof {
+    submit_gpgpu_primary_scanout_row2560_simd16_impl(row_one_based, color, false, false)
+}
+
+fn submit_gpgpu_primary_scanout_row2560_simd16_impl(
+    row_one_based: u32,
+    color: u32,
+    verify_readback: bool,
+    log_row: bool,
+) -> crate::intel::GpgpuOneTileSentinelProof {
+    const PIXELS: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_BW_PIXELS;
     const STORE_BYTES_PER_PIXEL: usize = core::mem::size_of::<u32>();
     let store_bytes = PIXELS * STORE_BYTES_PER_PIXEL;
-    let program = gpgpu_primary_scanout_row2560_simd8_program();
+    let program = gpgpu_primary_scanout_row2560_simd16_program();
     let Some(dev) = crate::intel::claimed_device() else {
         return gpgpu_one_tile_sentinel_failure("no-device", program, 0);
     };
-    let Some(warm) = warm_state() else {
-        return gpgpu_one_tile_sentinel_failure("no-warm-state", program, 0);
-    };
+    let warm = warm_once(dev);
     let Some(target) = crate::intel::display::primary_surface_gpgpu_marker_target() else {
         return gpgpu_one_tile_sentinel_failure("no-primary-scanout", program, 0);
     };
     if row_one_based == 0 || row_one_based > 1440 || row_one_based > target.height {
-        return gpgpu_one_tile_sentinel_failure("row2560-simd8-row-out-of-range", program, target.gpu);
+        return gpgpu_one_tile_sentinel_failure("row2560-simd16-row-out-of-range", program, target.gpu);
     }
     if target.width as usize != PIXELS {
-        return gpgpu_one_tile_sentinel_failure("row2560-simd8-width-mismatch", program, target.gpu);
+        return gpgpu_one_tile_sentinel_failure("row2560-simd16-width-mismatch", program, target.gpu);
     }
     if !forcewake_render_acquire(warm) {
         return gpgpu_one_tile_sentinel_failure("forcewake", program, target.gpu);
@@ -296,23 +311,23 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16(
     let y = row_one_based.saturating_sub(1) as usize;
     let row_offset = y.saturating_mul(target.pitch_bytes as usize);
     if row_offset.saturating_add(store_bytes) > target.byte_len {
-        return gpgpu_one_tile_sentinel_failure("row2560-simd8-outside-scanout", program, target.gpu);
+        return gpgpu_one_tile_sentinel_failure("row2560-simd16-outside-scanout", program, target.gpu);
     }
     if row_offset >> 32 != 0 {
-        return gpgpu_one_tile_sentinel_failure("row2560-simd8-offset-high32", program, target.gpu);
+        return gpgpu_one_tile_sentinel_failure("row2560-simd16-offset-high32", program, target.gpu);
     }
     let row_gpu = target.gpu + row_offset as u64;
     if row_gpu >> 32 != 0 {
-        return gpgpu_one_tile_sentinel_failure("row2560-simd8-gpu-high32", program, row_gpu);
+        return gpgpu_one_tile_sentinel_failure("row2560-simd16-gpu-high32", program, row_gpu);
     }
     let row_virt = unsafe { target.virt.add(row_offset) };
 
-    if !upload_primary_scanout_row2560_simd8_artifact(
+    if !upload_primary_scanout_row2560_simd16_artifact(
         warm,
         row_offset as u32,
         color,
     ) {
-        return gpgpu_one_tile_sentinel_failure("row2560-simd8-program-upload", program, row_gpu);
+        return gpgpu_one_tile_sentinel_failure("row2560-simd16-program-upload", program, row_gpu);
     }
 
     unsafe {
@@ -334,7 +349,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16(
         warm,
         target.gpu,
         target.byte_len,
-        "gpgpu-primary-scanout-row2560-simd8",
+        "gpgpu-primary-scanout-row2560-simd16",
     );
     let batch_bytes =
         match encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program, 1) {
@@ -349,7 +364,359 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16(
         warm,
         RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
         RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
-        "gpgpu-primary-scanout-row2560-simd8",
+        "gpgpu-primary-scanout-row2560-simd16",
+    );
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let dispatch_after = read_gpgpu_threads_dispatched(dev);
+    let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
+    let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
+    let command_ok = finished && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
+    let mut sample_hits = 0u64;
+    if verify_readback {
+        crate::intel::dma_flush(row_virt, store_bytes);
+        let mut sample = 0usize;
+        while sample < 64 {
+            let value = unsafe {
+                core::ptr::read_volatile(
+                    row_virt.add(sample * STORE_BYTES_PER_PIXEL) as *const u32
+                )
+            };
+            if value & 0x00FF_FFFF == color & 0x00FF_FFFF {
+                sample_hits |= 1u64 << sample;
+            }
+            sample += 1;
+        }
+    }
+    let memory_ok = sample_hits == u64::MAX;
+    let visual_memory_ok = finished && memory_ok;
+    let visual_submit_ok = visual_memory_ok || (finished && finish_marker == 0 && dispatch_delta != 0);
+    let accepted_ok = command_ok || visual_submit_ok;
+    let display_notified = accepted_ok
+        && crate::intel::display::notify_primary_surface_external_write(
+            "gpgpu-primary-scanout-row2560-simd16",
+            row_offset,
+            store_bytes,
+        );
+    let reason = if command_ok && memory_ok {
+        "row2560-simd16-memory-visible"
+    } else if visual_memory_ok {
+        "row2560-simd16-memory-visible-no-finish-marker"
+    } else if visual_submit_ok {
+        "row2560-simd16-dispatch-observed-no-eot"
+    } else if !verify_readback && accepted_ok {
+        "row2560-simd16-quiet-submit-observed"
+    } else if command_ok {
+        "row2560-simd16-submitted-partial-readback"
+    } else if !finished {
+        "row2560-simd16-submit-not-finished"
+    } else {
+        "row2560-simd16-finish-marker-mismatch"
+    };
+
+    if log_row {
+        crate::log!(
+            "intel/gpgpu: row2560-simd16 row={} y={} width={} row_offset=0x{:X} row_gpu=0x{:X} target_gpu=0x{:X} pitch_bytes={} color=0x{:08X} store_bytes={} display_notified={} finished={} memory_ok={} sample_hits64=0x{:016X} reason={} finish_marker=0x{:08X} dispatch_delta={} expected_dispatch=16 program_source={} batch_bytes=0x{:X}\n",
+            row_one_based,
+            y,
+            target.width,
+            row_offset,
+            row_gpu,
+            target.gpu,
+            target.pitch_bytes,
+            color,
+            store_bytes,
+            display_notified as u8,
+            finished as u8,
+            memory_ok as u8,
+            sample_hits,
+            reason,
+            finish_marker,
+            dispatch_delta,
+            program.name,
+            batch_bytes,
+        );
+    }
+
+    if !finished {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "gpgpu-primary-scanout-row2560-simd16",
+        );
+    }
+
+    crate::intel::GpgpuOneTileSentinelProof {
+        submitted: batch_bytes != 0,
+        finished,
+        readback_ok: accepted_ok && (!verify_readback || memory_ok || visual_submit_ok),
+        reason,
+        program_name: program.name,
+        output_gpu: row_gpu,
+        sentinel: color,
+        output_first_before: 0,
+        output_first_after: 0,
+        output_nonzero_before: 0,
+        output_nonzero_after: 0,
+        output_hits_lo64: sample_hits,
+        dispatch_delta,
+        finish_marker,
+        expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes,
+    }
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16_xwalker(
+    row_one_based: u32,
+    rows_requested: u32,
+    color: u32,
+) -> crate::intel::GpgpuOneTileSentinelProof {
+    const PIXELS: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_BW_PIXELS;
+    const STORE_BYTES_PER_PIXEL: usize = core::mem::size_of::<u32>();
+    let store_bytes = PIXELS * STORE_BYTES_PER_PIXEL;
+    let program = gpgpu_primary_scanout_row2560_simd16_xwalker_program();
+    let Some(dev) = crate::intel::claimed_device() else {
+        return gpgpu_one_tile_sentinel_failure("no-device", program, 0);
+    };
+    let warm = warm_once(dev);
+    let Some(target) = crate::intel::display::primary_surface_gpgpu_marker_target() else {
+        return gpgpu_one_tile_sentinel_failure("no-primary-scanout", program, 0);
+    };
+    if row_one_based == 0 || row_one_based > 1440 || row_one_based > target.height {
+        return gpgpu_one_tile_sentinel_failure("xwalker-row-out-of-range", program, target.gpu);
+    }
+    if target.width as usize != PIXELS {
+        return gpgpu_one_tile_sentinel_failure("xwalker-width-mismatch", program, target.gpu);
+    }
+    if !forcewake_render_acquire(warm) {
+        return gpgpu_one_tile_sentinel_failure("forcewake", program, target.gpu);
+    }
+    if !ensure_gpgpu_warm_buffers_mapped(dev, warm) {
+        return gpgpu_one_tile_sentinel_failure("ggtt-map", program, target.gpu);
+    }
+
+    let rows = core::cmp::min(
+        rows_requested.max(1),
+        target.height
+            .saturating_sub(row_one_based)
+            .saturating_add(1),
+    );
+    let y = row_one_based.saturating_sub(1) as usize;
+    let row_offset = y.saturating_mul(target.pitch_bytes as usize);
+    let span_bytes = (rows as usize)
+        .saturating_sub(1)
+        .saturating_mul(target.pitch_bytes as usize)
+        .saturating_add(store_bytes);
+    if row_offset.saturating_add(span_bytes) > target.byte_len {
+        return gpgpu_one_tile_sentinel_failure("xwalker-outside-scanout", program, target.gpu);
+    }
+    if row_offset >> 32 != 0 {
+        return gpgpu_one_tile_sentinel_failure("xwalker-offset-high32", program, target.gpu);
+    }
+    let row_gpu = target.gpu + row_offset as u64;
+    if row_gpu >> 32 != 0 {
+        return gpgpu_one_tile_sentinel_failure("xwalker-gpu-high32", program, row_gpu);
+    }
+
+    if !upload_primary_scanout_row2560_simd16_xwalker_artifact(warm, row_offset as u32, color) {
+        return gpgpu_one_tile_sentinel_failure("xwalker-program-upload", program, row_gpu);
+    }
+
+    unsafe {
+        core::ptr::write_volatile(
+            warm.result_virt
+                .add(RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD * core::mem::size_of::<u32>())
+                as *mut u32,
+            0,
+        );
+        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+    }
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let batch_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
+    let store_surface = prepare_gpgpu_mandelbrot_store_surface_state_for_target_span(
+        warm,
+        target.gpu,
+        target.byte_len,
+        "gpgpu-primary-scanout-row2560-simd16-xwalker",
+    );
+    let batch_bytes =
+        match encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program, rows) {
+            Ok(bytes) => bytes,
+            Err(reason) => return gpgpu_one_tile_sentinel_failure(reason, program, row_gpu),
+        };
+    crate::intel::dma_flush(warm.batch_virt, batch_bytes);
+
+    let dispatch_before = read_gpgpu_threads_dispatched(dev);
+    let finished = submit_warm_render_batch(
+        dev,
+        warm,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
+        "gpgpu-primary-scanout-row2560-simd16-xwalker",
+    );
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let dispatch_after = read_gpgpu_threads_dispatched(dev);
+    let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
+    let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
+    let command_ok = finished && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
+    let display_notified = command_ok
+        && crate::intel::display::notify_primary_surface_external_write(
+            "gpgpu-primary-scanout-row2560-simd16-xwalker",
+            row_offset,
+            span_bytes,
+        );
+    let expected_dispatch = u64::from(rows)
+        .saturating_mul(trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_BW_LANES as u64);
+    let reason = if command_ok {
+        "xwalker-row2560-simd16-fullscreen-command-ok"
+    } else if !finished {
+        "xwalker-row2560-simd16-submit-not-finished"
+    } else {
+        "xwalker-row2560-simd16-finish-marker-mismatch"
+    };
+
+    crate::log!(
+        "intel/gpgpu: row2560-simd16-xwalker start_row={} rows={} width={} color=0x{:08X} submitted={} accepted={} row_offset=0x{:X} output_gpu=0x{:X} target_gpu=0x{:X} pitch_bytes={} span_bytes=0x{:X} display_notified={} dispatch_delta={} expected_dispatch={} fire={} finish_marker=0x{:08X}/0x{:08X} program_source={} batch_bytes=0x{:X}\n",
+        row_one_based,
+        rows,
+        target.width,
+        color,
+        (batch_bytes != 0) as u8,
+        command_ok as u8,
+        row_offset,
+        row_gpu,
+        target.gpu,
+        target.pitch_bytes,
+        span_bytes,
+        display_notified as u8,
+        dispatch_delta,
+        expected_dispatch,
+        reason,
+        finish_marker,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        program.name,
+        batch_bytes,
+    );
+
+    if !finished {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "gpgpu-primary-scanout-row2560-simd16-xwalker",
+        );
+    }
+
+    crate::intel::GpgpuOneTileSentinelProof {
+        submitted: batch_bytes != 0,
+        finished,
+        readback_ok: command_ok,
+        reason,
+        program_name: program.name,
+        output_gpu: row_gpu,
+        sentinel: color,
+        output_first_before: 0,
+        output_first_after: 0,
+        output_nonzero_before: 0,
+        output_nonzero_after: 0,
+        output_hits_lo64: 0,
+        dispatch_delta,
+        finish_marker,
+        expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes,
+    }
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16_onestore(
+    row_one_based: u32,
+    color: u32,
+) -> crate::intel::GpgpuOneTileSentinelProof {
+    const PIXELS: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_PIXELS;
+    const GROUPS: u32 = trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_GROUPS as u32;
+    const STORE_BYTES_PER_PIXEL: usize = core::mem::size_of::<u32>();
+    let store_bytes = PIXELS * STORE_BYTES_PER_PIXEL;
+    let program = gpgpu_primary_scanout_row2560_simd16_onestore_program();
+    let Some(dev) = crate::intel::claimed_device() else {
+        return gpgpu_one_tile_sentinel_failure("no-device", program, 0);
+    };
+    let warm = warm_once(dev);
+    let Some(target) = crate::intel::display::primary_surface_gpgpu_marker_target() else {
+        return gpgpu_one_tile_sentinel_failure("no-primary-scanout", program, 0);
+    };
+    if row_one_based == 0 || row_one_based > 1440 || row_one_based > target.height {
+        return gpgpu_one_tile_sentinel_failure("row2560-simd16-onestore-row-out-of-range", program, target.gpu);
+    }
+    if target.width as usize != PIXELS {
+        return gpgpu_one_tile_sentinel_failure("row2560-simd16-onestore-width-mismatch", program, target.gpu);
+    }
+    if !forcewake_render_acquire(warm) {
+        return gpgpu_one_tile_sentinel_failure("forcewake", program, target.gpu);
+    }
+    if !ensure_gpgpu_warm_buffers_mapped(dev, warm) {
+        return gpgpu_one_tile_sentinel_failure("ggtt-map", program, target.gpu);
+    }
+
+    let y = row_one_based.saturating_sub(1) as usize;
+    let row_offset = y.saturating_mul(target.pitch_bytes as usize);
+    if row_offset.saturating_add(store_bytes) > target.byte_len {
+        return gpgpu_one_tile_sentinel_failure("row2560-simd16-onestore-outside-scanout", program, target.gpu);
+    }
+    if row_offset >> 32 != 0 {
+        return gpgpu_one_tile_sentinel_failure("row2560-simd16-onestore-offset-high32", program, target.gpu);
+    }
+    let row_gpu = target.gpu + row_offset as u64;
+    if row_gpu >> 32 != 0 {
+        return gpgpu_one_tile_sentinel_failure("row2560-simd16-onestore-gpu-high32", program, row_gpu);
+    }
+    let row_virt = unsafe { target.virt.add(row_offset) };
+
+    if !upload_primary_scanout_row2560_simd16_onestore_artifact(
+        warm,
+        row_offset as u32,
+        color,
+    ) {
+        return gpgpu_one_tile_sentinel_failure("row2560-simd16-onestore-program-upload", program, row_gpu);
+    }
+
+    unsafe {
+        core::ptr::write_volatile(
+            warm.result_virt
+                .add(RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD * core::mem::size_of::<u32>())
+                as *mut u32,
+            0,
+        );
+        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+    }
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let batch_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
+    let store_surface = prepare_gpgpu_mandelbrot_store_surface_state_for_target_span(
+        warm,
+        target.gpu,
+        target.byte_len,
+        "gpgpu-primary-scanout-row2560-simd16-onestore",
+    );
+    let batch_bytes =
+        match encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program, GROUPS) {
+            Ok(bytes) => bytes,
+            Err(reason) => return gpgpu_one_tile_sentinel_failure(reason, program, row_gpu),
+        };
+    crate::intel::dma_flush(warm.batch_virt, batch_bytes);
+
+    let dispatch_before = read_gpgpu_threads_dispatched(dev);
+    let finished = submit_warm_render_batch(
+        dev,
+        warm,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
+        "gpgpu-primary-scanout-row2560-simd16-onestore",
     );
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
 
@@ -372,33 +739,220 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16(
         sample += 1;
     }
     let memory_ok = sample_hits == u64::MAX;
-    let display_notified = command_ok
+    let visual_memory_ok = finished && memory_ok;
+    let visual_submit_ok = visual_memory_ok || (finished && finish_marker == 0 && dispatch_delta != 0);
+    let accepted_ok = command_ok || visual_submit_ok;
+    let display_notified = accepted_ok
         && crate::intel::display::notify_primary_surface_external_write(
-            "gpgpu-primary-scanout-row2560-simd8",
+            "gpgpu-primary-scanout-row2560-simd16-onestore",
             row_offset,
             store_bytes,
         );
     let reason = if command_ok && memory_ok {
-        "row2560-simd8-memory-visible"
+        "row2560-simd16-onestore-memory-visible"
+    } else if visual_memory_ok {
+        "row2560-simd16-onestore-memory-visible-no-finish-marker"
+    } else if visual_submit_ok {
+        "row2560-simd16-onestore-dispatch-observed-no-eot"
     } else if command_ok {
-        "row2560-simd8-submitted-partial-readback"
+        "row2560-simd16-onestore-submitted-partial-readback"
     } else if !finished {
-        "row2560-simd8-submit-not-finished"
+        "row2560-simd16-onestore-submit-not-finished"
     } else {
-        "row2560-simd8-finish-marker-mismatch"
+        "row2560-simd16-onestore-finish-marker-mismatch"
     };
 
     crate::log!(
-        "intel/gpgpu: row2560-simd8 row={} y={} width={} row_offset=0x{:X} row_gpu=0x{:X} target_gpu=0x{:X} pitch_bytes={} color=0x{:08X} store_bytes={} display_notified={} finished={} memory_ok={} sample_hits64=0x{:016X} reason={} finish_marker=0x{:08X} dispatch_delta={} expected_dispatch=8 program_source={} batch_bytes=0x{:X}\n",
+        "intel/gpgpu: row2560-simd16-onestore row={} y={} width={} groups={} stores_per_thread=1 row_offset=0x{:X} row_gpu=0x{:X} target_gpu=0x{:X} pitch_bytes={} color=0x{:08X} store_bytes={} display_notified={} finished={} memory_ok={} sample_hits64=0x{:016X} reason={} finish_marker=0x{:08X} dispatch_delta={} expected_dispatch={} program_source={} batch_bytes=0x{:X}\n",
         row_one_based,
         y,
         target.width,
+        GROUPS,
         row_offset,
         row_gpu,
         target.gpu,
         target.pitch_bytes,
         color,
         store_bytes,
+        display_notified as u8,
+        finished as u8,
+        memory_ok as u8,
+        sample_hits,
+        reason,
+        finish_marker,
+        dispatch_delta,
+        GROUPS,
+        program.name,
+        batch_bytes,
+    );
+
+    if !finished {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "gpgpu-primary-scanout-row2560-simd16-onestore",
+        );
+    }
+
+    crate::intel::GpgpuOneTileSentinelProof {
+        submitted: batch_bytes != 0,
+        finished,
+        readback_ok: accepted_ok && (memory_ok || visual_submit_ok),
+        reason,
+        program_name: program.name,
+        output_gpu: row_gpu,
+        sentinel: color,
+        output_first_before: 0,
+        output_first_after: 0,
+        output_nonzero_before: 0,
+        output_nonzero_after: 0,
+        output_hits_lo64: sample_hits,
+        dispatch_delta,
+        finish_marker,
+        expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes,
+    }
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_line1280_scalar(
+    row_one_based: u32,
+    x_base: u32,
+    color: u32,
+) -> crate::intel::GpgpuOneTileSentinelProof {
+    const PIXELS: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_SCALAR_BW_LANES;
+    const STORE_BYTES_PER_PIXEL: usize = core::mem::size_of::<u32>();
+    let store_bytes = PIXELS * STORE_BYTES_PER_PIXEL;
+    let program = gpgpu_primary_scanout_line1280_scalar_program();
+    let Some(dev) = crate::intel::claimed_device() else {
+        return gpgpu_one_tile_sentinel_failure("no-device", program, 0);
+    };
+    let warm = warm_once(dev);
+    let Some(target) = crate::intel::display::primary_surface_gpgpu_marker_target() else {
+        return gpgpu_one_tile_sentinel_failure("no-primary-scanout", program, 0);
+    };
+    if row_one_based == 0 || row_one_based > 1440 || row_one_based > target.height {
+        return gpgpu_one_tile_sentinel_failure("line1280-scalar-row-out-of-range", program, target.gpu);
+    }
+    let x = x_base as usize;
+    if x.saturating_add(PIXELS) > target.width as usize {
+        return gpgpu_one_tile_sentinel_failure("line1280-scalar-width-out-of-range", program, target.gpu);
+    }
+    if !forcewake_render_acquire(warm) {
+        return gpgpu_one_tile_sentinel_failure("forcewake", program, target.gpu);
+    }
+    if !ensure_gpgpu_warm_buffers_mapped(dev, warm) {
+        return gpgpu_one_tile_sentinel_failure("ggtt-map", program, target.gpu);
+    }
+
+    let y = row_one_based.saturating_sub(1) as usize;
+    let row_offset = y
+        .saturating_mul(target.pitch_bytes as usize)
+        .saturating_add(x.saturating_mul(STORE_BYTES_PER_PIXEL));
+    if row_offset.saturating_add(store_bytes) > target.byte_len {
+        return gpgpu_one_tile_sentinel_failure("line1280-scalar-outside-scanout", program, target.gpu);
+    }
+    let line_gpu = target.gpu + row_offset as u64;
+    if line_gpu >> 32 != 0 {
+        return gpgpu_one_tile_sentinel_failure("line1280-scalar-gpu-high32", program, line_gpu);
+    }
+    let row_virt = unsafe { target.virt.add(row_offset) };
+
+    if !upload_primary_scanout_line1280_scalar_artifact(warm, line_gpu as u32, color) {
+        return gpgpu_one_tile_sentinel_failure("line1280-scalar-program-upload", program, line_gpu);
+    }
+
+    unsafe {
+        core::ptr::write_volatile(
+            warm.result_virt
+                .add(RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD * core::mem::size_of::<u32>())
+                as *mut u32,
+            0,
+        );
+        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+    }
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let batch_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
+    let store_surface = prepare_gpgpu_mandelbrot_store_surface_state_for_target_span(
+        warm,
+        target.gpu,
+        target.byte_len,
+        "gpgpu-primary-scanout-line1280-scalar",
+    );
+    let batch_bytes =
+        match encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program, 1) {
+            Ok(bytes) => bytes,
+            Err(reason) => return gpgpu_one_tile_sentinel_failure(reason, program, line_gpu),
+        };
+    crate::intel::dma_flush(warm.batch_virt, batch_bytes);
+
+    let dispatch_before = read_gpgpu_threads_dispatched(dev);
+    let finished = submit_warm_render_batch(
+        dev,
+        warm,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
+        "gpgpu-primary-scanout-line1280-scalar",
+    );
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let dispatch_after = read_gpgpu_threads_dispatched(dev);
+    let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
+    let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
+    let command_ok = finished && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
+    crate::intel::dma_flush(row_virt, store_bytes);
+
+    let mut sample_hits = 0u64;
+    let mut sample = 0usize;
+    while sample < 64 {
+        let value = unsafe {
+            core::ptr::read_volatile(
+                row_virt.add(sample * STORE_BYTES_PER_PIXEL) as *const u32
+            )
+        };
+        if value & 0x00FF_FFFF == color & 0x00FF_FFFF {
+            sample_hits |= 1u64 << sample;
+        }
+        sample += 1;
+    }
+    let memory_ok = sample_hits == u64::MAX;
+    let visual_memory_ok = finished && memory_ok;
+    let visual_submit_ok = visual_memory_ok || (finished && finish_marker == 0 && dispatch_delta != 0);
+    let accepted_ok = command_ok || visual_submit_ok;
+    let display_notified = accepted_ok
+        && crate::intel::display::notify_primary_surface_external_write(
+            "gpgpu-primary-scanout-line1280-scalar",
+            row_offset,
+            store_bytes,
+        );
+    let reason = if command_ok && memory_ok {
+        "line1280-scalar-memory-visible"
+    } else if visual_memory_ok {
+        "line1280-scalar-memory-visible-no-finish-marker"
+    } else if visual_submit_ok {
+        "line1280-scalar-dispatch-observed-no-eot"
+    } else if command_ok {
+        "line1280-scalar-submitted-partial-readback"
+    } else if !finished {
+        "line1280-scalar-submit-not-finished"
+    } else {
+        "line1280-scalar-finish-marker-mismatch"
+    };
+
+    crate::log!(
+        "intel/gpgpu: line1280-scalar row={} y={} x={} pixels={} row_offset=0x{:X} line_gpu=0x{:X} target_gpu=0x{:X} pitch_bytes={} color=0x{:08X} display_notified={} finished={} memory_ok={} sample_hits64=0x{:016X} reason={} finish_marker=0x{:08X} dispatch_delta={} program_source={} batch_bytes=0x{:X}\n",
+        row_one_based,
+        y,
+        x_base,
+        PIXELS,
+        row_offset,
+        line_gpu,
+        target.gpu,
+        target.pitch_bytes,
+        color,
         display_notified as u8,
         finished as u8,
         memory_ok as u8,
@@ -414,17 +968,17 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16(
         recover_render_engine_after_nonretired_submit(
             dev,
             warm,
-            "gpgpu-primary-scanout-row2560-simd8",
+            "gpgpu-primary-scanout-line1280-scalar",
         );
     }
 
     crate::intel::GpgpuOneTileSentinelProof {
         submitted: batch_bytes != 0,
         finished,
-        readback_ok: command_ok && memory_ok,
+        readback_ok: accepted_ok && (memory_ok || visual_submit_ok),
         reason,
         program_name: program.name,
-        output_gpu: row_gpu,
+        output_gpu: line_gpu,
         sentinel: color,
         output_first_before: 0,
         output_first_after: 0,
@@ -452,9 +1006,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_rowburst1280(
     let Some(dev) = crate::intel::claimed_device() else {
         return gpgpu_one_tile_sentinel_failure("no-device", program, 0);
     };
-    let Some(warm) = warm_state() else {
-        return gpgpu_one_tile_sentinel_failure("no-warm-state", program, 0);
-    };
+    let warm = warm_once(dev);
     let Some(target) = crate::intel::display::primary_surface_gpgpu_marker_target() else {
         return gpgpu_one_tile_sentinel_failure("no-primary-scanout", program, 0);
     };
@@ -508,43 +1060,109 @@ pub(crate) fn submit_gpgpu_primary_scanout_rowburst1280(
                 as *mut u32,
             0,
         );
-        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
-        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
     }
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
 
-    let batch_dwords = warm.batch_len / core::mem::size_of::<u32>();
-    let batch =
-        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
+    let Some((batch_offset, batch_gpu)) = next_visual_batch_slot(warm) else {
+        return gpgpu_one_tile_sentinel_failure("rowburst-no-visual-batch-slot", program, row_gpu);
+    };
+    let batch_dwords = GPGPU_VISUAL_BATCH_SLOT_BYTES / core::mem::size_of::<u32>();
+    let batch_virt = unsafe { warm.batch_virt.add(batch_offset) };
+    let batch = unsafe { core::slice::from_raw_parts_mut(batch_virt as *mut u32, batch_dwords) };
     let store_surface = prepare_gpgpu_mandelbrot_store_surface_state_for_target_span(
         warm,
         target.gpu,
         target.byte_len,
         "gpgpu-primary-scanout-rowburst1280",
     );
-    let batch_bytes =
-        match encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program, rows) {
+    let y_duplicates = GPGPU_VISUAL_ROWBURST_Y_DUPLICATES.max(1);
+    let walker_repeats = GPGPU_VISUAL_ROWBURST_BATCH_WALKER_REPEATS.max(1);
+    let mut batch_bytes =
+        match encode_gfx12_gpgpu_walker_probe_batch_xy(
+            warm,
+            batch,
+            store_surface,
+            program,
+            rows,
+            y_duplicates,
+        ) {
             Ok(bytes) => bytes,
             Err(reason) => return gpgpu_one_tile_sentinel_failure(reason, program, row_gpu),
         };
-    crate::intel::dma_flush(warm.batch_virt, batch_bytes);
+    if walker_repeats > 1 {
+        const GPGPU_WALKER_CMD: u32 = (3 << 29) | (2 << 27) | (1 << 24) | (5 << 16) | 13;
+        const MEDIA_STATE_FLUSH_CMD: u32 = (3 << 29) | (2 << 27) | (4 << 16);
+        const GPGPU_WALKER_DWORDS: usize = 15;
+        const GPGPU_WALKER_WITH_FLUSH_DWORDS: usize = GPGPU_WALKER_DWORDS + 2;
+
+        let batch_word_count = batch_bytes / core::mem::size_of::<u32>();
+        let Some(walker_start) = batch[..batch_word_count]
+            .iter()
+            .position(|word| *word == GPGPU_WALKER_CMD)
+        else {
+            return gpgpu_one_tile_sentinel_failure("rowburst-repeat-walker-not-found", program, row_gpu);
+        };
+        if walker_start.saturating_add(GPGPU_WALKER_WITH_FLUSH_DWORDS) > batch_word_count {
+            return gpgpu_one_tile_sentinel_failure("rowburst-repeat-walker-truncated", program, row_gpu);
+        }
+        if batch[walker_start + GPGPU_WALKER_DWORDS] != MEDIA_STATE_FLUSH_CMD {
+            return gpgpu_one_tile_sentinel_failure("rowburst-repeat-media-flush-not-found", program, row_gpu);
+        }
+        if batch_word_count < 2 || batch[batch_word_count - 2] != MI_BATCH_BUFFER_END {
+            return gpgpu_one_tile_sentinel_failure("rowburst-repeat-end-not-found", program, row_gpu);
+        }
+        let mut cursor = batch_word_count - 2;
+        for _ in 1..walker_repeats {
+            if cursor.saturating_add(GPGPU_WALKER_WITH_FLUSH_DWORDS + 4) > batch.len() {
+                return gpgpu_one_tile_sentinel_failure("rowburst-repeat-batch-too-small", program, row_gpu);
+            }
+            let mut copy = 0usize;
+            while copy < GPGPU_WALKER_WITH_FLUSH_DWORDS {
+                batch[cursor + copy] = batch[walker_start + copy];
+                copy += 1;
+            }
+            cursor += GPGPU_WALKER_WITH_FLUSH_DWORDS;
+        }
+        batch[cursor] = MI_BATCH_BUFFER_END;
+        batch[cursor + 1] = MI_NOOP;
+        batch_bytes = (cursor + 2) * core::mem::size_of::<u32>();
+    }
+    if GPGPU_VISUAL_BATCH_SELF_LOOP {
+        let idx = batch_bytes / core::mem::size_of::<u32>();
+        if idx.saturating_add(4) > batch.len() {
+            return gpgpu_one_tile_sentinel_failure("rowburst-self-loop-batch-too-small", program, row_gpu);
+        }
+        if idx < 2 || batch[idx - 2] != MI_BATCH_BUFFER_END {
+            return gpgpu_one_tile_sentinel_failure("rowburst-self-loop-end-not-found", program, row_gpu);
+        }
+        batch[idx - 2] = MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GTT;
+        batch[idx - 1] = batch_gpu as u32;
+        batch[idx] = (batch_gpu >> 32) as u32;
+        batch[idx + 1] = MI_NOOP;
+        batch_bytes = (idx + 2) * core::mem::size_of::<u32>();
+    }
+    crate::intel::dma_flush(batch_virt, batch_bytes);
 
     let dispatch_before = read_gpgpu_threads_dispatched(dev);
-    let finished = submit_warm_render_batch(
+    let finished = submit_warm_render_batch_at(
         dev,
         warm,
         RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
         RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
         "gpgpu-primary-scanout-rowburst1280",
+        batch_gpu,
     );
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
 
     let dispatch_after = read_gpgpu_threads_dispatched(dev);
     let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
     let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
-    let expected_dispatch = u64::from(rows.saturating_mul(8));
+    let expected_dispatch = u64::from(rows)
+        .saturating_mul(u64::from(y_duplicates))
+        .saturating_mul(u64::from(walker_repeats))
+        .saturating_mul(8);
     let command_ok = finished && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
-    let loose_dispatch_ok = allow_no_eot && batch_bytes != 0 && dispatch_delta >= expected_dispatch;
+    let loose_dispatch_ok = allow_no_eot && batch_bytes != 0;
     let accepted_ok = command_ok || loose_dispatch_ok;
     let display_notified = accepted_ok
         && crate::intel::display::notify_primary_surface_external_write(
@@ -552,40 +1170,42 @@ pub(crate) fn submit_gpgpu_primary_scanout_rowburst1280(
             row_offset,
             span_bytes,
         );
-    let reason = if command_ok {
-        "rowburst1280-submitted-no-readback"
-    } else if loose_dispatch_ok {
-        "rowburst1280-dispatch-observed-no-eot"
-    } else if !finished {
-        "rowburst1280-submit-not-finished"
+    let fire_state = if accepted_ok {
+        "rowburst-row2560-selfloop-y32-repeat32-screen-fire"
     } else {
-        "rowburst1280-finish-marker-mismatch"
+        "rowburst-row2560-selfloop-y32-repeat32-submit-did-not-arm"
     };
 
-    crate::log!(
-        "intel/gpgpu: rowburst1280 start_row={} rows={} x={} pixels_per_row={} total_pixels={} color=0x{:08X} allow_no_eot={} submitted={} finished={} readback_ok={} reason={} row_offset=0x{:X} output_gpu=0x{:X} target_gpu=0x{:X} pitch_bytes={} display_notified={} finish_marker=0x{:08X} dispatch_delta={} expected_dispatch={} program_source={} batch_bytes=0x{:X}\n",
-        row_one_based,
-        rows,
-        x_base,
-        PIXELS,
-        rows.saturating_mul(PIXELS as u32),
-        color,
-        allow_no_eot as u8,
-        (batch_bytes != 0) as u8,
-        finished as u8,
-        accepted_ok as u8,
-        reason,
-        row_offset,
-        row_gpu,
-        target.gpu,
-        target.pitch_bytes,
-        display_notified as u8,
-        finish_marker,
-        dispatch_delta,
-        expected_dispatch,
-        program.name,
-        batch_bytes,
-    );
+    if !ROWBURST_RAIL_FIRST_LOGGED.swap(true, core::sync::atomic::Ordering::AcqRel)
+        || !accepted_ok
+    {
+        crate::log!(
+            "intel/gpgpu: rowburst-row2560-selfloop-y32-repeat32-one-shot start_row={} rows={} y_duplicates={} walker_repeats={} x={} pixels_per_row={} total_pixels={} color=0x{:08X} fire={} submitted={} accepted={} row_offset=0x{:X} output_gpu=0x{:X} target_gpu=0x{:X} pitch_bytes={} display_notified={} dispatch_delta={} expected_dispatch={} program_source={} batch_bytes=0x{:X}\n",
+            row_one_based,
+            rows,
+            y_duplicates,
+            walker_repeats,
+            x_base,
+            PIXELS,
+            u64::from(rows)
+                .saturating_mul(u64::from(y_duplicates))
+                .saturating_mul(u64::from(walker_repeats))
+                .saturating_mul(PIXELS as u64),
+            color,
+            fire_state,
+            (batch_bytes != 0) as u8,
+            accepted_ok as u8,
+            row_offset,
+            row_gpu,
+            target.gpu,
+            target.pitch_bytes,
+            display_notified as u8,
+            dispatch_delta,
+            expected_dispatch,
+            program.name,
+            batch_bytes,
+        );
+    }
 
     if !finished && !allow_no_eot {
         recover_render_engine_after_nonretired_submit(
@@ -599,7 +1219,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_rowburst1280(
         submitted: batch_bytes != 0,
         finished,
         readback_ok: accepted_ok,
-        reason,
+        reason: fire_state,
         program_name: program.name,
         output_gpu: row_gpu,
         sentinel: color,
@@ -629,9 +1249,7 @@ fn submit_gpgpu_primary_scanout_stamp<const PIXELS: usize>(
     let Some(dev) = crate::intel::claimed_device() else {
         return gpgpu_one_tile_sentinel_failure("no-device", program, 0);
     };
-    let Some(warm) = warm_state() else {
-        return gpgpu_one_tile_sentinel_failure("no-warm-state", program, 0);
-    };
+    let warm = warm_once(dev);
     let Some(target) = crate::intel::display::primary_surface_gpgpu_marker_target() else {
         return gpgpu_one_tile_sentinel_failure("no-primary-scanout", program, 0);
     };

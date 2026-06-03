@@ -30,16 +30,16 @@ fn gpgpu_primary_scanout_groupid_line1280_rows_program() -> GpgpuEuProgram {
     }
 }
 
-fn gpgpu_primary_scanout_row2560_simd8_program() -> GpgpuEuProgram {
+fn gpgpu_primary_scanout_line1280_scalar_program() -> GpgpuEuProgram {
     let artifact =
-        trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD8_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT;
+        trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT;
     GpgpuEuProgram {
         name: artifact.name,
         kind: artifact.kind,
         words: artifact.words,
         expects_store: artifact.expects_store,
         expected_store_value: 0,
-        store_send_dword: Some(trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD8_BW_STORE_SEND_DWORD),
+        store_send_dword: Some(trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_SCALAR_BW_STORE_SEND_DWORD),
         visible_seed_dword: None,
     }
 }
@@ -58,13 +58,45 @@ fn gpgpu_primary_scanout_row2560_simd16_program() -> GpgpuEuProgram {
     }
 }
 
-fn upload_primary_scanout_row2560_simd8_artifact(
+fn gpgpu_primary_scanout_row2560_simd16_xwalker_program() -> GpgpuEuProgram {
+    let artifact =
+        trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT;
+    GpgpuEuProgram {
+        name: artifact.name,
+        kind: artifact.kind,
+        words: artifact.words,
+        expects_store: artifact.expects_store,
+        expected_store_value: 0,
+        store_send_dword: Some(
+            trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_STORE_SEND_DWORD,
+        ),
+        visible_seed_dword: None,
+    }
+}
+
+fn gpgpu_primary_scanout_row2560_simd16_onestore_program() -> GpgpuEuProgram {
+    let artifact =
+        trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_HDC1_STATELESS_STORE_THEN_TS_EOT;
+    GpgpuEuProgram {
+        name: artifact.name,
+        kind: artifact.kind,
+        words: artifact.words,
+        expects_store: artifact.expects_store,
+        expected_store_value: 0,
+        store_send_dword: Some(
+            trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_STORE_SEND_DWORD,
+        ),
+        visible_seed_dword: None,
+    }
+}
+
+fn upload_primary_scanout_line1280_scalar_artifact(
     warm: RenderWarmState,
     address_base: u32,
     color: u32,
 ) -> bool {
     let words =
-        trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD8_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS;
+        trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS;
     let program_bytes = core::mem::size_of_val(&words);
     if GPGPU_EU_KERNEL_OFFSET_BYTES
         .checked_add(program_bytes)
@@ -81,11 +113,11 @@ fn upload_primary_scanout_row2560_simd8_artifact(
         );
         let dst = warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES) as *mut u32;
         core::ptr::write_volatile(
-            dst.add(trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD8_BW_ADDRESS_BASE_DWORD),
+            dst.add(trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_SCALAR_BW_ADDRESS_BASE_DWORD),
             address_base,
         );
         core::ptr::write_volatile(
-            dst.add(trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD8_BW_COLOR_DWORD),
+            dst.add(trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_DWORD),
             color,
         );
     }
@@ -100,9 +132,9 @@ fn upload_primary_scanout_row2560_simd8_artifact(
             words.len(),
         )
     };
-    uploaded[trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD8_BW_ADDRESS_BASE_DWORD]
+    uploaded[trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_SCALAR_BW_ADDRESS_BASE_DWORD]
         == address_base
-        && uploaded[trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD8_BW_COLOR_DWORD] == color
+        && uploaded[trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_DWORD] == color
         && uploaded[0] == words[0]
         && uploaded[words.len() - 1] == words[words.len() - 1]
 }
@@ -157,6 +189,115 @@ fn upload_primary_scanout_row2560_simd16_artifact(
         == address_base
         && uploaded[trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_BW_COLOR_DWORD] == color
         && uploaded[trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_BW_COLOR_HI_DWORD] == color
+        && uploaded[0] == words[0]
+        && uploaded[words.len() - 1] == words[words.len() - 1]
+}
+
+fn upload_primary_scanout_row2560_simd16_xwalker_artifact(
+    warm: RenderWarmState,
+    address_base: u32,
+    color: u32,
+) -> bool {
+    let words =
+        trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS;
+    let program_bytes = core::mem::size_of_val(&words);
+    if GPGPU_EU_KERNEL_OFFSET_BYTES
+        .checked_add(program_bytes)
+        .is_none_or(|end| end > warm.draw_state_len)
+    {
+        return false;
+    }
+
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            words.as_ptr() as *const u8,
+            warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES),
+            program_bytes,
+        );
+        let dst = warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES) as *mut u32;
+        core::ptr::write_volatile(
+            dst.add(trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_ADDRESS_BASE_DWORD),
+            address_base,
+        );
+        core::ptr::write_volatile(
+            dst.add(trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_COLOR_DWORD),
+            color,
+        );
+        core::ptr::write_volatile(
+            dst.add(trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_COLOR_HI_DWORD),
+            color,
+        );
+    }
+    crate::intel::dma_flush(
+        unsafe { warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES) },
+        program_bytes,
+    );
+
+    let uploaded = unsafe {
+        core::slice::from_raw_parts(
+            warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES) as *const u32,
+            words.len(),
+        )
+    };
+    uploaded[trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_ADDRESS_BASE_DWORD]
+        == address_base
+        && uploaded[trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_COLOR_DWORD] == color
+        && uploaded[trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_COLOR_HI_DWORD]
+            == color
+        && uploaded[0] == words[0]
+        && uploaded[words.len() - 1] == words[words.len() - 1]
+}
+
+fn upload_primary_scanout_row2560_simd16_onestore_artifact(
+    warm: RenderWarmState,
+    address_base: u32,
+    color: u32,
+) -> bool {
+    let words =
+        trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS;
+    let program_bytes = core::mem::size_of_val(&words);
+    if GPGPU_EU_KERNEL_OFFSET_BYTES
+        .checked_add(program_bytes)
+        .is_none_or(|end| end > warm.draw_state_len)
+    {
+        return false;
+    }
+
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            words.as_ptr() as *const u8,
+            warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES),
+            program_bytes,
+        );
+        let dst = warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES) as *mut u32;
+        core::ptr::write_volatile(
+            dst.add(trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_ADDRESS_BASE_DWORD),
+            address_base,
+        );
+        core::ptr::write_volatile(
+            dst.add(trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_COLOR_DWORD),
+            color,
+        );
+        core::ptr::write_volatile(
+            dst.add(trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_COLOR_HI_DWORD),
+            color,
+        );
+    }
+    crate::intel::dma_flush(
+        unsafe { warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES) },
+        program_bytes,
+    );
+
+    let uploaded = unsafe {
+        core::slice::from_raw_parts(
+            warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES) as *const u32,
+            words.len(),
+        )
+    };
+    uploaded[trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_ADDRESS_BASE_DWORD]
+        == address_base
+        && uploaded[trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_COLOR_DWORD] == color
+        && uploaded[trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_COLOR_HI_DWORD] == color
         && uploaded[0] == words[0]
         && uploaded[words.len() - 1] == words[words.len() - 1]
 }

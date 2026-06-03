@@ -512,7 +512,7 @@ pub const PRIMARY_SCANOUT_LINE320_SCALAR_BW_ADDRESS_BASE_DWORD: usize = 7;
 pub const PRIMARY_SCANOUT_LINE320_SCALAR_BW_COLOR_DWORD: usize = 3;
 pub const PRIMARY_SCANOUT_LINE320_SCALAR_BW_STORE_SEND_DWORD: usize = 11;
 pub const PRIMARY_SCANOUT_LINE1280_SCALAR_BW_PROGRAM_NAME: &str =
-    "gfx12-primary-scanout-line1280-scalar-step8-color-hdc1-stateless-unrolled-store-then-ts-eot";
+    "gfx12-primary-scanout-line1280-scalar-monocolor-hdc1-stateless-unrolled-store-then-ts-eot";
 pub const PRIMARY_SCANOUT_LINE1280_SCALAR_BW_LANES: usize = 1280;
 pub const PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_STEP_PIXELS: usize = 8;
 pub const PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_STEP_DWORDS: usize =
@@ -561,31 +561,22 @@ pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_WORD_DWORDS: usize =
 pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_ADDRESS_BASE_DWORD: usize = 25;
 pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_COLOR_DWORD: usize = 29;
 pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_STORE_SEND_DWORD: usize = 30;
-pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_PROGRAM_NAME: &str = "gfx12-primary-scanout-groupid-line1280-rows-scalar-step8-color-hdc1-stateless-unrolled-store-then-ts-eot";
+pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_PROGRAM_NAME: &str = "gfx12-primary-scanout-groupid-row2560-rows-scalar-fullscanout-selfloop-y32-colorstorm-hdc1-stateless-unrolled-store-then-ts-eot";
 pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_LANES: usize =
-    PRIMARY_SCANOUT_LINE1280_SCALAR_BW_LANES;
+    PRIMARY_SCANOUT_ROW2560_SIMD16_BW_PIXELS;
 pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_PITCH_BYTES: u32 = 0x2800;
 pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_COLOR_STEP_PIXELS: usize =
-    PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_STEP_PIXELS;
+    PRIMARY_SCANOUT_LINE320_SCALAR_BW_LANES;
 pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_COLOR_STEP_DWORDS: usize =
-    PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_STEP_DWORDS;
+    (PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_LANES - 1)
+        / PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_COLOR_STEP_PIXELS;
 pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_WORD_DWORDS: usize =
     PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_LANES * 8
         + PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_COLOR_STEP_DWORDS * 4
-        + 34;
+        + 42;
 pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_ADDRESS_BASE_DWORD: usize = 25;
 pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_COLOR_DWORD: usize = 29;
 pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_STORE_SEND_DWORD: usize = 33;
-pub const PRIMARY_SCANOUT_ROW2560_SIMD8_BW_PROGRAM_NAME: &str =
-    "gfx12-primary-scanout-row2560-simd8-bw-hdc1-stateless-unrolled-store-then-ts-eot";
-pub const PRIMARY_SCANOUT_ROW2560_SIMD8_BW_PIXELS: usize = 2560;
-pub const PRIMARY_SCANOUT_ROW2560_SIMD8_BW_SENDS: usize =
-    PRIMARY_SCANOUT_ROW2560_SIMD8_BW_PIXELS / PRIMARY_SCANOUT_LINE8_SIMD8_BW_LANES;
-pub const PRIMARY_SCANOUT_ROW2560_SIMD8_BW_WORD_DWORDS: usize =
-    20 + 4 + ((PRIMARY_SCANOUT_ROW2560_SIMD8_BW_SENDS - 1) * 8) + 8;
-pub const PRIMARY_SCANOUT_ROW2560_SIMD8_BW_ADDRESS_BASE_DWORD: usize = 15;
-pub const PRIMARY_SCANOUT_ROW2560_SIMD8_BW_COLOR_DWORD: usize = 19;
-pub const PRIMARY_SCANOUT_ROW2560_SIMD8_BW_STORE_SEND_DWORD: usize = 23;
 pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_PROGRAM_NAME: &str =
     "gfx12-primary-scanout-row2560-simd16-bw-hdc1-stateless-unrolled-store-then-ts-eot";
 pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_PIXELS: usize = 2560;
@@ -593,13 +584,35 @@ pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_LANES: usize = 16;
 pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_SENDS: usize =
     PRIMARY_SCANOUT_ROW2560_SIMD16_BW_PIXELS / PRIMARY_SCANOUT_ROW2560_SIMD16_BW_LANES;
 pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_WORD_DWORDS: usize =
-    28 + (PRIMARY_SCANOUT_ROW2560_SIMD16_BW_SENDS * 8)
-        + ((PRIMARY_SCANOUT_ROW2560_SIMD16_BW_SENDS - 1) * 8)
+    28 + (PRIMARY_SCANOUT_ROW2560_SIMD16_BW_SENDS * 4)
+        + ((PRIMARY_SCANOUT_ROW2560_SIMD16_BW_SENDS - 1) * 4)
         + 8;
-pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_ADDRESS_BASE_DWORD: usize = 19;
-pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_COLOR_DWORD: usize = 23;
-pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_COLOR_HI_DWORD: usize = 27;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_ADDRESS_BASE_DWORD: usize = 27;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_COLOR_DWORD: usize = 11;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_COLOR_HI_DWORD: usize = 15;
 pub const PRIMARY_SCANOUT_ROW2560_SIMD16_BW_STORE_SEND_DWORD: usize = 28;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_PROGRAM_NAME: &str =
+    "gfx12-primary-scanout-row2560-simd16-xwalker-bw-hdc1-stateless-unrolled-store-then-ts-eot";
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_WORD_DWORDS: usize =
+    PRIMARY_SCANOUT_ROW2560_SIMD16_BW_WORD_DWORDS + 12;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_ADDRESS_BASE_DWORD: usize = 35;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_COLOR_DWORD: usize = 11;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_COLOR_HI_DWORD: usize = 15;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_STORE_SEND_DWORD: usize = 40;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_PROGRAM_NAME: &str =
+    "gfx12-primary-scanout-row2560-simd16-onestore-groupid-x-hdc1-stateless-store-then-ts-eot";
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_PIXELS: usize =
+    PRIMARY_SCANOUT_ROW2560_SIMD16_BW_PIXELS;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_LANES: usize =
+    PRIMARY_SCANOUT_ROW2560_SIMD16_BW_LANES;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_GROUPS: usize =
+    PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_PIXELS
+        / PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_LANES;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_WORD_DWORDS: usize = 52;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_ADDRESS_BASE_DWORD: usize = 27;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_COLOR_DWORD: usize = 35;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_COLOR_HI_DWORD: usize = 39;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_STORE_SEND_DWORD: usize = 40;
 pub const PRIMARY_SCANOUT_LINE8_SIMD8_BW_PROGRAM_NAME: &str =
     "gfx12-primary-scanout-line8-simd8-bw-hdc1-bti1-offset-store-then-ts-eot";
 pub const PRIMARY_SCANOUT_LINE8_SIMD8_BW_LANES: usize = 8;
@@ -1355,10 +1368,10 @@ const fn primary_scanout_line1280_scalar_bw_words()
 
         if pixel < PRIMARY_SCANOUT_LINE1280_SCALAR_BW_LANES {
             if pixel % PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_STEP_PIXELS == 0 {
-                words[cursor] = 0x00030140;
-                words[cursor + 1] = 0x04058660;
-                words[cursor + 2] = 0x06460405;
-                words[cursor + 3] = 0x00010101;
+                words[cursor] = 0x80000101;
+                words[cursor + 1] = 0x00000000;
+                words[cursor + 2] = 0x00000000;
+                words[cursor + 3] = 0x00000000;
                 cursor += 4;
             }
             words[cursor] = 0x00030140;
@@ -1650,8 +1663,16 @@ const fn primary_scanout_groupid_line1280_rows_scalar_bw_words()
     words[27] = 0x04054660;
     words[28] = 0x00000000;
     words[29] = 0x00000000;
+    words[30] = 0x80030069;
+    words[31] = 0x05058660;
+    words[32] = 0x02003104;
+    words[33] = 0x00010203;
+    words[34] = 0x80030040;
+    words[35] = 0x04058660;
+    words[36] = 0x06460405;
+    words[37] = 0x06460505;
 
-    let mut cursor = 30usize;
+    let mut cursor = 38usize;
     let mut pixel = 0usize;
     while pixel < PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_LANES {
         words[cursor] = 0x00030131;
@@ -1666,7 +1687,7 @@ const fn primary_scanout_groupid_line1280_rows_scalar_bw_words()
                 words[cursor] = 0x00030140;
                 words[cursor + 1] = 0x04058660;
                 words[cursor + 2] = 0x06460405;
-                words[cursor + 3] = 0x00010101;
+                words[cursor + 3] = 0x00030711;
                 cursor += 4;
             }
             words[cursor] = 0x00030140;
@@ -1707,86 +1728,15 @@ pub static PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_HDC1_STATELESS_UNROLL
     expects_store: true,
 };
 
-const fn primary_scanout_row2560_simd8_bw_words()
--> [u32; PRIMARY_SCANOUT_ROW2560_SIMD8_BW_WORD_DWORDS] {
-    let mut words = [0u32; PRIMARY_SCANOUT_ROW2560_SIMD8_BW_WORD_DWORDS];
-
-    words[0] = 0x80030061;
-    words[1] = 0x01054410;
-    words[2] = 0x00000000;
-    words[3] = 0x76543210;
-    words[4] = 0x80030261;
-    words[5] = 0x01050120;
-    words[6] = 0x00460105;
-    words[7] = 0x00000000;
-    words[8] = 0x00030069;
-    words[9] = 0x7F058660;
-    words[10] = 0x02460105;
-    words[11] = 0x00000002;
-    words[12] = 0x00030140;
-    words[13] = 0x7F058660;
-    words[14] = 0x06467F05;
-    words[15] = 0x00000000;
-    words[16] = 0x80030061;
-    words[17] = 0x04054660;
-    words[18] = 0x00000000;
-    words[19] = 0x00FF00FF;
-
-    let mut cursor = 20usize;
-    let mut send = 0usize;
-    while send < PRIMARY_SCANOUT_ROW2560_SIMD8_BW_SENDS {
-        words[cursor] = 0x00030131;
-        words[cursor + 1] = 0x00000000;
-        words[cursor + 2] = 0xCC027F0C;
-        words[cursor + 3] = 0x009A040C;
-        cursor += 4;
-        send += 1;
-
-        if send < PRIMARY_SCANOUT_ROW2560_SIMD8_BW_SENDS {
-            words[cursor] = 0x00030140;
-            words[cursor + 1] = 0x7F058660;
-            words[cursor + 2] = 0x06467F05;
-            words[cursor + 3] = 0x00000020;
-            cursor += 4;
-        }
-    }
-
-    words[cursor] = 0x80030061;
-    words[cursor + 1] = 0x7E050220;
-    words[cursor + 2] = 0x00460005;
-    words[cursor + 3] = 0x00000000;
-    words[cursor + 4] = 0x80030131;
-    words[cursor + 5] = 0x00000004;
-    words[cursor + 6] = 0x70007E0C;
-    words[cursor + 7] = 0x00000000;
-    words
-}
-
-pub static PRIMARY_SCANOUT_ROW2560_SIMD8_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS: [u32;
-    PRIMARY_SCANOUT_ROW2560_SIMD8_BW_WORD_DWORDS] = primary_scanout_row2560_simd8_bw_words();
-
-pub static PRIMARY_SCANOUT_ROW2560_SIMD8_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT: EuArtifact =
-    EuArtifact {
-        name: PRIMARY_SCANOUT_ROW2560_SIMD8_BW_PROGRAM_NAME,
-        isa: EuIsa::Gfx12,
-        kind: EuArtifactKind::PrimaryScanoutRow2560Simd8BwThenHdc1StoreThenThreadSpawnerEot,
-        words: &PRIMARY_SCANOUT_ROW2560_SIMD8_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS,
-        expects_store: true,
-    };
-
 const fn primary_scanout_row2560_simd16_bw_words()
 -> [u32; PRIMARY_SCANOUT_ROW2560_SIMD16_BW_WORD_DWORDS] {
     let mut words = [0u32; PRIMARY_SCANOUT_ROW2560_SIMD16_BW_WORD_DWORDS];
 
-    // Build the SIMD16 byte-address vector and a SIMD16 color vector:
-    //   g20 = row_base + [0, 4, 8, ... 60]
-    //   g22/g23 = repeated color dwords
-    //
-    // Gfx12 HDC stateless scattered writes have only been proven for SIMD8 on
-    // this path.  Keep the SIMD16 address/color setup, but commit each 16-pixel
-    // chunk as two SIMD8 sends: g20/g22 for lanes 0..7 and g21/g23 for lanes
-    // 8..15.  A single SIMD16 send retires but produces visible vertical
-    // stripes because not every lane reaches scanout memory.
+    // Real row2560 SIMD16 path: stage the color payload before the address
+    // arithmetic, then fire one SIMD16 HDC stateless scattered write per
+    // 16-pixel chunk. The early color load is an intentionally boring
+    // negative-control: if lane gaps remain, they are not explained by the
+    // color immediate sitting too close to the HDC send.
     words[0] = 0x80030061;
     words[1] = 0x01054410;
     words[2] = 0x00000000;
@@ -1795,51 +1745,43 @@ const fn primary_scanout_row2560_simd16_bw_words()
     words[5] = 0x02054410;
     words[6] = 0x00000000;
     words[7] = 0xFEDCBA98;
-    words[8] = 0x80040261;
-    words[9] = 0x01050120;
-    words[10] = 0x00460105;
-    words[11] = 0x00000000;
-    words[12] = 0x00040069;
-    words[13] = 0x14058660;
-    words[14] = 0x02460105;
-    words[15] = 0x00000002;
-    words[16] = 0x00040140;
-    words[17] = 0x14058660;
-    words[18] = 0x06461405;
+    words[8] = 0x80030061;
+    words[9] = 0x16054660;
+    words[10] = 0x00000000;
+    words[11] = 0x00FF00FF;
+    words[12] = 0x80030061;
+    words[13] = 0x17054660;
+    words[14] = 0x00000000;
+    words[15] = 0x00FF00FF;
+    words[16] = 0x80040261;
+    words[17] = 0x01050120;
+    words[18] = 0x00460105;
     words[19] = 0x00000000;
-    words[20] = 0x80030061;
-    words[21] = 0x16054660;
-    words[22] = 0x00000000;
-    words[23] = 0x00FF00FF;
-    words[24] = 0x80030061;
-    words[25] = 0x17054660;
-    words[26] = 0x00000000;
-    words[27] = 0x00FF00FF;
+    words[20] = 0x00040069;
+    words[21] = 0x14058660;
+    words[22] = 0x02460105;
+    words[23] = 0x00000002;
+    words[24] = 0x00040140;
+    words[25] = 0x14058660;
+    words[26] = 0x06461405;
+    words[27] = 0x00000000;
 
     let mut cursor = PRIMARY_SCANOUT_ROW2560_SIMD16_BW_STORE_SEND_DWORD;
     let mut send = 0usize;
     while send < PRIMARY_SCANOUT_ROW2560_SIMD16_BW_SENDS {
-        words[cursor] = 0x00030131;
+        words[cursor] = 0x00040131;
         words[cursor + 1] = 0x00000000;
-        words[cursor + 2] = 0xCC02140C;
-        words[cursor + 3] = 0x009A160C;
-        words[cursor + 4] = 0x00130131;
-        words[cursor + 5] = 0x00000000;
-        words[cursor + 6] = 0xCC02150C;
-        words[cursor + 7] = 0x009A170C;
-        cursor += 8;
+        words[cursor + 2] = 0xCC021414;
+        words[cursor + 3] = 0x00961614;
+        cursor += 4;
         send += 1;
 
         if send < PRIMARY_SCANOUT_ROW2560_SIMD16_BW_SENDS {
-            words[cursor] = 0x00030140;
+            words[cursor] = 0x00040140;
             words[cursor + 1] = 0x14058660;
             words[cursor + 2] = 0x06461405;
             words[cursor + 3] = 0x00000040;
-            words[cursor + 4] = 0x00030140;
-            words[cursor + 5] = 0x15058660;
-            words[cursor + 6] = 0x06461505;
-            words[cursor + 7] = 0x00000040;
-            cursor += 8;
+            cursor += 4;
         }
     }
 
@@ -1863,6 +1805,124 @@ pub static PRIMARY_SCANOUT_ROW2560_SIMD16_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_
         isa: EuIsa::Gfx12,
         kind: EuArtifactKind::PrimaryScanoutRow2560Simd16BwThenHdc1StoreThenThreadSpawnerEot,
         words: &PRIMARY_SCANOUT_ROW2560_SIMD16_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS,
+        expects_store: true,
+    };
+
+const fn primary_scanout_row2560_simd16_xwalker_bw_words()
+-> [u32; PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_WORD_DWORDS] {
+    let mut words = [0u32; PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_WORD_DWORDS];
+
+    words[0] = 0x80030061;
+    words[1] = 0x01054410;
+    words[2] = 0x00000000;
+    words[3] = 0x76543210;
+    words[4] = 0x80030061;
+    words[5] = 0x02054410;
+    words[6] = 0x00000000;
+    words[7] = 0xFEDCBA98;
+    words[8] = 0x80030061;
+    words[9] = 0x16054660;
+    words[10] = 0x00000000;
+    words[11] = 0x00FF00FF;
+    words[12] = 0x80030061;
+    words[13] = 0x17054660;
+    words[14] = 0x00000000;
+    words[15] = 0x00FF00FF;
+    words[16] = 0x80040261;
+    words[17] = 0x01050120;
+    words[18] = 0x00460105;
+    words[19] = 0x00000000;
+    words[20] = 0x00040069;
+    words[21] = 0x14058660;
+    words[22] = 0x02460105;
+    words[23] = 0x00000002;
+    words[24] = 0x80030061;
+    words[25] = 0x31050220;
+    words[26] = 0x00000024;
+    words[27] = 0x00000000;
+    words[28] = 0x80030241;
+    words[29] = 0x1C058660;
+    words[30] = 0x02003104;
+    words[31] = PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_PITCH_BYTES;
+    words[32] = 0x80030240;
+    words[33] = 0x1C058660;
+    words[34] = 0x06001C04;
+    words[35] = 0x00000000;
+    words[36] = 0x00040140;
+    words[37] = 0x14058660;
+    words[38] = 0x06461405;
+    words[39] = 0x06001C04;
+
+    let mut cursor = PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_STORE_SEND_DWORD;
+    let mut send = 0usize;
+    while send < PRIMARY_SCANOUT_ROW2560_SIMD16_BW_SENDS {
+        words[cursor] = 0x00040131;
+        words[cursor + 1] = 0x00000000;
+        words[cursor + 2] = 0xCC021414;
+        words[cursor + 3] = 0x00961614;
+        cursor += 4;
+        send += 1;
+
+        if send < PRIMARY_SCANOUT_ROW2560_SIMD16_BW_SENDS {
+            words[cursor] = 0x00040140;
+            words[cursor + 1] = 0x14058660;
+            words[cursor + 2] = 0x06461405;
+            words[cursor + 3] = 0x00000040;
+            cursor += 4;
+        }
+    }
+
+    words[cursor] = 0x80030061;
+    words[cursor + 1] = 0x7E050220;
+    words[cursor + 2] = 0x00460005;
+    words[cursor + 3] = 0x00000000;
+    words[cursor + 4] = 0x80030131;
+    words[cursor + 5] = 0x00000004;
+    words[cursor + 6] = 0x70007E0C;
+    words[cursor + 7] = 0x00000000;
+    words
+}
+
+pub static PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS: [u32;
+    PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_WORD_DWORDS] =
+    primary_scanout_row2560_simd16_xwalker_bw_words();
+
+pub static PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT:
+    EuArtifact = EuArtifact {
+    name: PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_PROGRAM_NAME,
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::PrimaryScanoutRow2560Simd16XwalkerBwThenHdc1StoreThenThreadSpawnerEot,
+    words: &PRIMARY_SCANOUT_ROW2560_SIMD16_XWALKER_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS,
+    expects_store: true,
+};
+
+pub static PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS: [u32;
+    PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_WORD_DWORDS] = [
+    // g1/g2 = SIMD16 lane ids, then g20 = lane * 4.
+    0x80030061, 0x01054410, 0x00000000, 0x76543210,
+    0x80030061, 0x02054410, 0x00000000, 0xFEDCBA98,
+    0x80040261, 0x01050120, 0x00460105, 0x00000000,
+    0x00040069, 0x14058660, 0x02460105, 0x00000002,
+    // g31 = gl_WorkGroupID.x, g28 = g31 << 6, g28 += row_base.
+    0x80030061, 0x31050220, 0x00000024, 0x00000000,
+    0x80030269, 0x1C058660, 0x02003104, 0x00000006,
+    0x80030240, 0x1C058660, 0x06001C04, 0x00000000,
+    // g20/g21 += group byte offset, g22/g23 = patched color.
+    0x00040140, 0x14058660, 0x06461405, 0x06001C04,
+    0x80030061, 0x16054660, 0x00000000, 0x00FF00FF,
+    0x80030061, 0x17054660, 0x00000000, 0x00FF00FF,
+    // One SIMD16 store, then canonical TS EOT.
+    0x00040131, 0x00000000, 0xCC021414, 0x00961614,
+    0x80030061, 0x7E050220, 0x00460005, 0x00000000,
+    0x80030131, 0x00000004, 0x70007E0C, 0x00000000,
+];
+
+pub static PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_HDC1_STATELESS_STORE_THEN_TS_EOT: EuArtifact =
+    EuArtifact {
+        name: PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_PROGRAM_NAME,
+        isa: EuIsa::Gfx12,
+        kind: EuArtifactKind::PrimaryScanoutRow2560Simd16OneStoreThenHdc1StoreThenThreadSpawnerEot,
+        words: &PRIMARY_SCANOUT_ROW2560_SIMD16_ONESTORE_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS,
         expects_store: true,
     };
 

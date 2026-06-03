@@ -4,6 +4,7 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use super::super::{ShellBackend2, print_shell_line};
 use crate::shell2::shell2_cmd::ParseOutcome;
 
+const GPGPU_SHELL_WORKER_TASK_POOL: usize = 8;
 static GPGPU_WALKROW_MAX_TICKS: AtomicU64 = AtomicU64::new(0);
 static GPGPU_TILEWALKER_MAX_TICKS: AtomicU64 = AtomicU64::new(0);
 static GPGPU_ROWBURST_COMPAT_MAX_TICKS: AtomicU64 = AtomicU64::new(0);
@@ -12,6 +13,99 @@ const GPGPU_CHUNKSTAMP_16PX_STAMPS: u32 = 44;
 const GPGPU_STAMP_PIXELS: u32 = 16;
 const GPGPU_CHUNKSTAMP_PIXELS: u32 = GPGPU_CHUNKSTAMP_16PX_STAMPS * GPGPU_STAMP_PIXELS;
 const GPGPU_ROWBURST_BAND_PIXELS: u32 = 1280;
+
+#[embassy_executor::task(pool_size = GPGPU_SHELL_WORKER_TASK_POOL)]
+async fn row2560_worker_task(
+    origin: &'static str,
+    requested_slot: u32,
+    queued_at_ms: u64,
+    start_row: u32,
+    rows: u32,
+    width: u32,
+    color: u32,
+) {
+    let queued_ms = embassy_time::Instant::now()
+        .as_millis()
+        .saturating_sub(queued_at_ms);
+    if let Some(profile) = crate::cpu::CpuProfile::current() {
+        crate::log!(
+            "gpgpu/shell: worker begin origin={} slot={} lapic={} core={} requested_slot={} queued_ms={} row={} rows={} rgb=0x{:06X}\n",
+            origin,
+            profile.slot(),
+            profile.lapic_id(),
+            profile.core_kind_name(),
+            requested_slot,
+            queued_ms,
+            start_row,
+            rows,
+            color & 0x00FF_FFFF,
+        );
+    } else {
+        crate::log!(
+            "gpgpu/shell: worker begin origin={} slot=? lapic=? core=? requested_slot={} queued_ms={} row={} rows={} rgb=0x{:06X}\n",
+            origin,
+            requested_slot,
+            queued_ms,
+            start_row,
+            rows,
+            color & 0x00FF_FFFF,
+        );
+    }
+
+    let clear_ok = crate::intel::clear_primary_surface_color(0x0000_0000, "gpgpu-shell-full-clear");
+    let start_tick = embassy_time_driver::now();
+    let mut row_index = 0u32;
+    let mut submitted = 0u32;
+    let mut accepted = 0u32;
+    let mut retired = 0u32;
+    let mut last_row = start_row;
+    let mut last_proof = None;
+    while row_index < rows {
+        let row = start_row.saturating_add(row_index);
+        let proof = crate::intel::submit_gpgpu_primary_scanout_row2560_simd16(row, color);
+        submitted = submitted.saturating_add(proof.submitted as u32);
+        accepted = accepted.saturating_add(proof.readback_ok as u32);
+        if proof.finished && proof.finish_marker == proof.expected_finish_marker {
+            retired = retired.saturating_add(1);
+        }
+        last_row = row;
+        last_proof = Some(proof);
+        row_index = row_index.saturating_add(1);
+    }
+
+    let elapsed_ticks = embassy_time_driver::now().saturating_sub(start_tick);
+    let Some(proof) = last_proof else {
+        crate::log!(
+            "gpgpu/shell: worker done origin={} row={} rows={} reason=no-rows\n",
+            origin,
+            start_row,
+            rows,
+        );
+        return;
+    };
+    crate::log!(
+        "gpgpu/shell: worker done origin={} scanout_width={} row={} rows={} rgb=0x{:06X} worker_slot={} clear_full={} impl=row2560-simd16 submitted={} accepted={} retired={} last={} fin={} hits=0x{:016X} reason={} elapsed_ms={} dispatch={} finish=0x{:08X}/0x{:08X} program={}\n",
+        origin,
+        width,
+        start_row,
+        rows,
+        color & 0x00FF_FFFF,
+        requested_slot,
+        clear_ok as u8,
+        submitted,
+        accepted,
+        retired,
+        last_row,
+        proof.finished as u8,
+        proof.output_hits_lo64,
+        proof.reason,
+        ticks_to_ms(elapsed_ticks),
+        proof.dispatch_delta,
+        proof.finish_marker,
+        proof.expected_finish_marker,
+        proof.program_name,
+    );
+}
 
 pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
@@ -31,6 +125,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
         Some("walkrow") => walkrow(io, &mut args),
         Some("tilewalker") => tilewalker(io, &mut args),
         Some("rowburst") => rowburst(io, &mut args),
+        Some("frame") => frame(io, &mut args),
         Some("replay") => replay(io, &mut args),
         Some("triangle") => triangle(io),
         Some(row) => match parse_u32(Some(row)) {
@@ -45,8 +140,55 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "gpgpu: usage `gpgpu [row=1..1440] [rows=5]` | `gpgpu offscreen` | `gpgpu eot [0..10]` | `gpgpu vfe [0..3] [eot=6]` | `gpgpu rowpaint [row] [rows]` | `gpgpu tilewalker [row] [rows]` | `gpgpu status` | `gpgpu triangle` | debug: `gpgpu offscreen [group_x]` `gpgpu row2560 ...` `gpgpu walkrow ...` `gpgpu tilewalker ... x color stamps verify` `gpgpu rowburst ...` `gpgpu replay [0..2]`",
+        "gpgpu: usage `gpgpu frame [rgb]` | `gpgpu [row=1..1440] [rows=5]` | `gpgpu offscreen` | `gpgpu eot [0..10]` | `gpgpu vfe [0..3] [eot=6]` | `gpgpu rowpaint [row] [rows]` | `gpgpu tilewalker [row] [rows]` | `gpgpu status` | `gpgpu triangle` | debug: `gpgpu offscreen [group_x]` `gpgpu row2560 ...` `gpgpu walkrow ...` `gpgpu tilewalker ... x color stamps verify` `gpgpu rowburst ...` `gpgpu replay [0..2]`",
     );
+}
+
+fn enqueue_row2560_worker(
+    io: &'static dyn ShellBackend2,
+    origin: &'static str,
+    start_row: u32,
+    rows: u32,
+    width: u32,
+    color: u32,
+) {
+    let Some((slot, _kind, worker_spawner)) = crate::workers::pick_background_spawner_with_slot()
+    else {
+        print_shell_line(io, "gpgpu: worker handoff skipped reason=no-worker-ap-gt1");
+        return;
+    };
+    let queued_at_ms = embassy_time::Instant::now().as_millis() as u64;
+    match row2560_worker_task(origin, slot, queued_at_ms, start_row, rows, width, color) {
+        Ok(token) => {
+            worker_spawner.spawn(token);
+            print_shell_line(
+                io,
+                format!(
+                    "gpgpu: {} enqueued target_slot={} mode=worker-ap-gt1 impl=row2560-simd16 row={} rows={} width={} rgb=0x{:06X}",
+                    origin,
+                    slot,
+                    start_row,
+                    rows,
+                    width,
+                    color & 0x00FF_FFFF,
+                )
+                .as_str(),
+            );
+        }
+        Err(err) => {
+            print_shell_line(
+                io,
+                format!("gpgpu: {} handoff failed target_slot={} err={:?}", origin, slot, err,)
+                    .as_str(),
+            );
+        }
+    }
+}
+
+fn frame(io: &'static dyn ShellBackend2, args: &mut core::str::SplitWhitespace<'_>) {
+    let color = parse_scanout_rgb24(io, args.next()).unwrap_or_else(|| next_fill_color());
+    let (width, height) = crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
+    enqueue_row2560_worker(io, "frame", 1, height, width, color);
 }
 
 fn status(io: &'static dyn ShellBackend2) {
@@ -176,57 +318,7 @@ fn rowpaint(
 
     let (_width, height) = crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
     let rows = core::cmp::min(requested_rows, height.saturating_sub(start_row).saturating_add(1));
-    let start_tick = embassy_time_driver::now();
-    let mut submits = 0u32;
-    let mut retired = 0u32;
-    let mut dense = 0u32;
-    let mut last_row = start_row;
-    let mut last_proof = None;
-
-    let mut row_index = 0u32;
-    while row_index < rows {
-        let row = start_row.saturating_add(row_index);
-        let proof = crate::intel::submit_gpgpu_primary_scanout_row2560_simd16(row, color);
-        submits = submits.saturating_add(1);
-        if proof.finished && proof.finish_marker == proof.expected_finish_marker {
-            retired = retired.saturating_add(1);
-        }
-        if proof.readback_ok {
-            dense = dense.saturating_add(1);
-        }
-        last_proof = Some(proof);
-        last_row = row;
-        row_index += 1;
-    }
-
-    let elapsed_ticks = embassy_time_driver::now().saturating_sub(start_tick);
-    let elapsed_ms = ticks_to_ms(elapsed_ticks);
-    let Some(proof) = last_proof else {
-        print_shell_line(io, "gpgpu: rowpaint no rows submitted");
-        return;
-    };
-    print_shell_line(
-        io,
-        format!(
-            "gpgpu: rowpaint row={} rows={} rgb=0x{:06X} impl=row2560-simd8 retired={}/{} dense={}/{} last={} fin={} hits=0x{:016X} reason={} dt_ms={} dispatch={} finish=0x{:08X}/0x{:08X}",
-            start_row,
-            rows,
-            color & 0x00FF_FFFF,
-            retired,
-            submits,
-            dense,
-            submits,
-            last_row,
-            proof.finished as u8,
-            proof.output_hits_lo64,
-            proof.reason,
-            elapsed_ms,
-            proof.dispatch_delta,
-            proof.finish_marker,
-            proof.expected_finish_marker,
-        )
-        .as_str(),
-    );
+    enqueue_row2560_worker(io, "rowpaint", start_row, rows, _width, color);
 }
 
 fn next_fill_color() -> u32 {
@@ -502,60 +594,7 @@ fn tilewalker_row2560(
     width: u32,
     color: u32,
 ) {
-    let start_tick = embassy_time_driver::now();
-    let mut row_index = 0u32;
-    let mut submits = 0u32;
-    let mut retired = 0u32;
-    let mut dense = 0u32;
-    let mut last_row = start_row;
-    let mut last_proof = None;
-    while row_index < rows {
-        let row = start_row.saturating_add(row_index);
-        let proof = crate::intel::submit_gpgpu_primary_scanout_row2560_simd16(row, color);
-        submits = submits.saturating_add(1);
-        if proof.finished && proof.finish_marker == proof.expected_finish_marker {
-            retired = retired.saturating_add(1);
-        }
-        if proof.readback_ok {
-            dense = dense.saturating_add(1);
-        }
-        last_row = row;
-        last_proof = Some(proof);
-        row_index += 1;
-    }
-
-    let elapsed_ticks = embassy_time_driver::now().saturating_sub(start_tick);
-    let max_ticks = update_max_ticks(&GPGPU_TILEWALKER_MAX_TICKS, elapsed_ticks);
-    let elapsed_ms = ticks_to_ms(elapsed_ticks);
-    let max_ms = ticks_to_ms(max_ticks);
-    let Some(proof) = last_proof else {
-        print_shell_line(io, "gpgpu: tilewalker row2560 no rows submitted");
-        return;
-    };
-    print_shell_line(
-        io,
-        format!(
-            "gpgpu: tilewalker row={} rows={} width={} rgb=0x{:06X} impl=row2560-simd8 retired={}/{} dense={}/{} last={} fin={} hits=0x{:016X} reason={} dt_ms={} max_ms={} dispatch={} finish=0x{:08X}/0x{:08X}",
-            start_row,
-            rows,
-            width,
-            color & 0x00FF_FFFF,
-            retired,
-            submits,
-            dense,
-            submits,
-            last_row,
-            proof.finished as u8,
-            proof.output_hits_lo64,
-            proof.reason,
-            elapsed_ms,
-            max_ms,
-            proof.dispatch_delta,
-            proof.finish_marker,
-            proof.expected_finish_marker,
-        )
-        .as_str(),
-    );
+    enqueue_row2560_worker(io, "tilewalker-row2560", start_row, rows, width, color);
 }
 
 fn row2560(
@@ -572,56 +611,7 @@ fn row2560(
 
     let (_width, height) = crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
     let rows = core::cmp::min(requested_rows, height.saturating_sub(start_row).saturating_add(1));
-    let start_tick = embassy_time_driver::now();
-    let mut row_index = 0u32;
-    let mut submits = 0u32;
-    let mut retired = 0u32;
-    let mut dense = 0u32;
-    let mut last_row = start_row;
-    let mut last_proof = None;
-    while row_index < rows {
-        let row = start_row.saturating_add(row_index);
-        let proof = crate::intel::submit_gpgpu_primary_scanout_row2560_simd16(row, color);
-        submits = submits.saturating_add(1);
-        if proof.finished && proof.finish_marker == proof.expected_finish_marker {
-            retired = retired.saturating_add(1);
-        }
-        if proof.readback_ok {
-            dense = dense.saturating_add(1);
-        }
-        last_row = row;
-        last_proof = Some(proof);
-        row_index += 1;
-    }
-
-    let elapsed_ticks = embassy_time_driver::now().saturating_sub(start_tick);
-    let elapsed_ms = ticks_to_ms(elapsed_ticks);
-    let Some(proof) = last_proof else {
-        print_shell_line(io, "gpgpu: row2560 no rows submitted");
-        return;
-    };
-    print_shell_line(
-        io,
-        format!(
-            "gpgpu: row2560 row={} rows={} rgb=0x{:06X} retired={}/{} dense={}/{} last={} fin={} hits=0x{:016X} reason={} dt_ms={} dispatch={} finish=0x{:08X}/0x{:08X}",
-            start_row,
-            rows,
-            color & 0x00FF_FFFF,
-            retired,
-            submits,
-            dense,
-            submits,
-            last_row,
-            proof.finished as u8,
-            proof.output_hits_lo64,
-            proof.reason,
-            elapsed_ms,
-            proof.dispatch_delta,
-            proof.finish_marker,
-            proof.expected_finish_marker,
-        )
-        .as_str(),
-    );
+    enqueue_row2560_worker(io, "row2560", start_row, rows, _width, color);
 }
 
 fn rowburst(io: &'static dyn ShellBackend2, args: &mut core::str::SplitWhitespace<'_>) {

@@ -68,10 +68,13 @@ const DISPLAY_PLANE1_BOOT_DEMO_ENABLED: bool = true;
 const MEDIA_BOOT_DEMO_ENABLED: bool = false;
 const MEDIA_BOOT_DEMO_DELAY_MS: u64 = 5_000;
 const MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT: u32 = 3;
-const PRIMARY_TRIANGLE_REPAINT_ENABLED: bool = true;
-const PRIMARY_TRIANGLE_REPAINT_PERIOD_MS: u64 = 16;
+const PRIMARY_GPGPU_AFTER_LOGO_COLOR: u32 = 0x0000_0000;
+const PRIMARY_GPGPU_AFTER_LOGO_AUTORUN_ENABLED: bool = true;
+const PRIMARY_GPGPU_AFTER_LOGO_RETRY_DELAY_MS: u64 = 250;
+const PRIMARY_GPGPU_AFTER_LOGO_RETRY_ATTEMPTS: u32 = 80;
 static INIT: AtomicBool = AtomicBool::new(false);
-static PRIMARY_TRIANGLE_REPAINT_LOOP_STARTED: AtomicBool = AtomicBool::new(false);
+static PRIMARY_GPGPU_HAMMER_AUTORUN_SCHEDULED: AtomicBool = AtomicBool::new(false);
+static PRIMARY_GPGPU_HAMMER_ONCE_STARTED: AtomicBool = AtomicBool::new(false);
 static CLAIMED_DEVICE: Mutex<Option<Dev>> = Mutex::new(None);
 
 #[derive(Copy, Clone, Debug)]
@@ -311,6 +314,30 @@ async fn media_boot_demo_task(requested_slot: u32, queued_at_ms: u64) {
     );
 }
 
+#[embassy_executor::task]
+async fn primary_gpgpu_after_logo_task(requested_slot: u32, queued_at_ms: u64) {
+    let queued_ms = embassy_time::Instant::now()
+        .as_millis()
+        .saturating_sub(queued_at_ms);
+    if let Some(profile) = crate::cpu::CpuProfile::current() {
+        crate::log!(
+            "intel/gpgpu: after-logo-railgun task slot={} lapic={} core={} requested_slot={} queued_ms={}\n",
+            profile.slot(),
+            profile.lapic_id(),
+            profile.core_kind_name(),
+            requested_slot,
+            queued_ms,
+        );
+    } else {
+        crate::log!(
+            "intel/gpgpu: after-logo-railgun task slot=? lapic=? core=? requested_slot={} queued_ms={}\n",
+            requested_slot,
+            queued_ms,
+        );
+    }
+    run_primary_gpgpu_frame_after_logo(requested_slot).await;
+}
+
 #[derive(Copy, Clone)]
 pub(crate) struct Dev {
     pub(crate) bus: u8,
@@ -423,7 +450,7 @@ pub fn init_once() {
     } else {
         crate::log!("intel/display: plane1 boot demo disabled\n");
     }
-    spawn_primary_triangle_after_logo();
+    schedule_primary_gpgpu_frame_after_logo();
     if crate::allcaps::probes::INTEL_GPGPU_PREFLIGHT_BOOT_PROBE {
         self::gpgpu::submit_gpgpu_preflight_once();
     }
@@ -470,34 +497,157 @@ pub fn init_once() {
     }
 }
 
-fn spawn_primary_triangle_after_logo() {
+fn schedule_primary_gpgpu_frame_after_logo() {
+    if !PRIMARY_GPGPU_AFTER_LOGO_AUTORUN_ENABLED {
+        crate::log!("intel/gpgpu: after-logo-railgun autorun disabled\n");
+        return;
+    }
+    if PRIMARY_GPGPU_HAMMER_AUTORUN_SCHEDULED.swap(true, Ordering::AcqRel) {
+        return;
+    }
     crate::wait::spawn_local_detached(async move {
-        self::display::wait_hw_logo_sequence_done().await;
-        crate::log!("intel/render: primary-triangle delayed until hw-logo sequence done\n");
-        self::render::submit_primary_triangle_once();
-        spawn_primary_triangle_repaint_loop();
+        let mut attempt = 0u32;
+        loop {
+            if try_spawn_primary_gpgpu_frame_after_logo(attempt) {
+                return;
+            }
+            if attempt >= PRIMARY_GPGPU_AFTER_LOGO_RETRY_ATTEMPTS {
+                crate::log!(
+                    "intel/gpgpu: after-logo-railgun autorun skipped reason=no-worker-ap-gt1 attempts={} fallback=none\n",
+                    attempt.saturating_add(1),
+                );
+                return;
+            }
+            attempt = attempt.saturating_add(1);
+            Timer::after(EmbassyDuration::from_millis(PRIMARY_GPGPU_AFTER_LOGO_RETRY_DELAY_MS))
+                .await;
+        }
     });
 }
 
-fn spawn_primary_triangle_repaint_loop() {
-    if !PRIMARY_TRIANGLE_REPAINT_ENABLED {
-        crate::log!("intel/render: primary-repaint-loop disabled\n");
-        return;
+fn try_spawn_primary_gpgpu_frame_after_logo(attempt: u32) -> bool {
+    if PRIMARY_GPGPU_HAMMER_ONCE_STARTED.load(Ordering::Acquire) {
+        return true;
     }
-    if PRIMARY_TRIANGLE_REPAINT_LOOP_STARTED.swap(true, Ordering::AcqRel) {
-        return;
-    }
-
-    crate::log!(
-        "intel/render: primary-repaint-loop scheduled period_ms={}\n",
-        PRIMARY_TRIANGLE_REPAINT_PERIOD_MS
-    );
-    crate::wait::spawn_local_detached(async move {
-        loop {
-            Timer::after(EmbassyDuration::from_millis(PRIMARY_TRIANGLE_REPAINT_PERIOD_MS)).await;
-            self::render::submit_primary_probe_periodic();
+    let Some((slot, _kind, worker_spawner)) = crate::workers::pick_background_spawner_with_slot()
+    else {
+        if attempt == 0 {
+            crate::log!(
+                "intel/gpgpu: after-logo-railgun handoff pending reason=no-worker-ap-gt1 retry_delay_ms={} attempts={}\n",
+                PRIMARY_GPGPU_AFTER_LOGO_RETRY_DELAY_MS,
+                PRIMARY_GPGPU_AFTER_LOGO_RETRY_ATTEMPTS,
+            );
         }
-    });
+        return false;
+    };
+    let queued_at_ms = embassy_time::Instant::now().as_millis() as u64;
+    if PRIMARY_GPGPU_HAMMER_ONCE_STARTED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return true;
+    }
+    match primary_gpgpu_after_logo_task(slot, queued_at_ms) {
+        Ok(token) => {
+            crate::log!(
+                "intel/gpgpu: after-logo-railgun handoff target_slot={} mode=worker-ap-gt1 attempt={} fallback=none\n",
+                slot,
+                attempt,
+            );
+            worker_spawner.spawn(token);
+            true
+        }
+        Err(err) => {
+            PRIMARY_GPGPU_HAMMER_ONCE_STARTED.store(false, Ordering::Release);
+            crate::log!(
+                "intel/gpgpu: after-logo-railgun handoff failed target_slot={} attempt={} err={:?} fallback=retry\n",
+                slot,
+                attempt,
+                err,
+            );
+            false
+        }
+    }
+}
+
+async fn run_primary_gpgpu_frame_after_logo(worker_slot: u32) {
+    self::display::wait_hw_logo_sequence_done().await;
+    let (width, height) = self::display::active_scanout_dimensions().unwrap_or((2560, 1440));
+    let start_ticks = embassy_time_driver::now();
+    let xwalker = self::gpgpu::submit_gpgpu_primary_scanout_row2560_simd16_xwalker(
+        1,
+        height,
+        PRIMARY_GPGPU_AFTER_LOGO_COLOR,
+    );
+    if xwalker.readback_ok {
+        let elapsed_ticks = embassy_time_driver::now().saturating_sub(start_ticks);
+        crate::log!(
+            "intel/gpgpu: after-logo-railgun scanout={}x{} rows={} worker_slot={} mode=row2560-simd16-xwalker submitted={} accepted={} last={} fire={} hits=0x{:016X} dispatch_delta={} finish=0x{:08X}/0x{:08X} elapsed_ticks={} program={}\n",
+            width,
+            height,
+            height,
+            worker_slot,
+            xwalker.submitted as u32,
+            xwalker.readback_ok as u32,
+            height,
+            xwalker.reason,
+            xwalker.output_hits_lo64,
+            xwalker.dispatch_delta,
+            xwalker.finish_marker,
+            xwalker.expected_finish_marker,
+            elapsed_ticks,
+            xwalker.program_name,
+        );
+        return;
+    }
+    crate::log!(
+        "intel/gpgpu: after-logo-railgun xwalker-fallback reason={} submitted={} finished={} dispatch_delta={} finish=0x{:08X}/0x{:08X} program={}\n",
+        xwalker.reason,
+        xwalker.submitted as u8,
+        xwalker.finished as u8,
+        xwalker.dispatch_delta,
+        xwalker.finish_marker,
+        xwalker.expected_finish_marker,
+        xwalker.program_name,
+    );
+
+    let mut row = 2u32;
+    let mut last_proof = self::gpgpu::submit_gpgpu_primary_scanout_row2560_simd16_quiet(
+        1,
+        PRIMARY_GPGPU_AFTER_LOGO_COLOR,
+    );
+    let mut submitted = last_proof.submitted as u32;
+    let mut accepted = last_proof.readback_ok as u32;
+    let mut last_row = 1u32;
+    while row <= height {
+        let proof = self::gpgpu::submit_gpgpu_primary_scanout_row2560_simd16_quiet(
+            row,
+            PRIMARY_GPGPU_AFTER_LOGO_COLOR,
+        );
+        submitted = submitted.saturating_add(proof.submitted as u32);
+        accepted = accepted.saturating_add(proof.readback_ok as u32);
+        last_row = row;
+        last_proof = proof;
+        row = row.saturating_add(1);
+    }
+    let elapsed_ticks = embassy_time_driver::now().saturating_sub(start_ticks);
+    crate::log!(
+        "intel/gpgpu: after-logo-railgun scanout={}x{} rows={} worker_slot={} mode=row2560-simd16-rowloop submitted={} accepted={} last={} fire={} hits=0x{:016X} dispatch_delta={} finish=0x{:08X}/0x{:08X} elapsed_ticks={} program={}\n",
+        width,
+        height,
+        height,
+        worker_slot,
+        submitted,
+        accepted,
+        last_row,
+        last_proof.reason,
+        last_proof.output_hits_lo64,
+        last_proof.dispatch_delta,
+        last_proof.finish_marker,
+        last_proof.expected_finish_marker,
+        elapsed_ticks,
+        last_proof.program_name,
+    );
 }
 
 pub fn guc_ready() -> bool {
@@ -725,6 +875,21 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16(
     color: u32,
 ) -> GpgpuOneTileSentinelProof {
     self::gpgpu::submit_gpgpu_primary_scanout_row2560_simd16(row_one_based, color)
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16_onestore(
+    row_one_based: u32,
+    color: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_row2560_simd16_onestore(row_one_based, color)
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_line1280_scalar(
+    row_one_based: u32,
+    x_base: u32,
+    color: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_line1280_scalar(row_one_based, x_base, color)
 }
 
 pub(crate) fn submit_gpgpu_primary_scanout_rowburst1280(
@@ -1233,6 +1398,10 @@ pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
 
 pub fn primary_surface_gpu_addr() -> Option<u64> {
     self::display::primary_surface_gpu_addr()
+}
+
+pub(crate) fn clear_primary_surface_color(color: u32, reason: &str) -> bool {
+    self::display::clear_primary_surface_color(color, reason)
 }
 
 pub fn present_rgba_overlay_top_right(

@@ -74,6 +74,9 @@ const PLANE_CTL_ROTATE_MASK: u32 = 0x03;
 const PLANE_CTL_FORMAT_XRGB_8888: u32 = 4 << 24;
 const PLANE_CTL_TILED_LINEAR: u32 = 0 << 10;
 const PLANE_COLOR_ALPHA_MASK: u32 = 0x03 << 4;
+const PLANE_COLOR_ALPHA_DISABLE: u32 = 0x00 << 4;
+const PLANE_COLOR_ALPHA_SW_PREMULT: u32 = 0x02 << 4;
+const PLANE_COLOR_ALPHA_HW_PREMULT: u32 = 0x03 << 4;
 // PIPE_BOTTOM_COLOR is not A/R/G/B bytes. PRM layout is:
 // bit31 gamma enable, bit30 CSC enable, bits29:20 R/V, bits19:10 G/Y, bits9:0 B/U.
 // The color channels are unsigned U0.10, so white is 0x3FF in each channel.
@@ -86,11 +89,11 @@ const PRIMARY_PRESENT_DISABLE_PSR_PROBE: bool = true;
 const PRIMARY_BYTES_PER_PIXEL: u32 = 4;
 const PRIMARY_BASELINE_COLOR: u32 = 0x00FF_37FF;
 const VIDEO_NV12_BLACK_PROOF_LIFT: bool = false;
-const PRIMARY_BOOT_BUROSCH_JPEG: &[u8] = include_bytes!("../../tools/vid/Buro4K.jpeg");
-const PRIMARY_BOOT_YELLY_JPEG: &[u8] = include_bytes!("../../tools/vid/YellyFHD.jpg");
 const PRIMARY_BOOT_LOGO_JPEG: &[u8] = include_bytes!("../../logo.jpg");
-const PRIMARY_BOOT_LOGO_ENABLED: bool = false;
+const PRIMARY_BOOT_LOGO_ENABLED: bool = true;
+const PRIMARY_BOOT_LOGO_WAIT_TIMEOUT_MS: u64 = 5000;
 const PRIMARY_BOOT_LOGO_PRESENT_HOLD_MS: u64 = 3000;
+const PRIMARY_BOOT_DISPLAY_WARMUP_ENABLED: bool = true;
 
 const fn pipe_bottom_color_u0_10(red: u32, green: u32, blue: u32) -> u32 {
     ((red & 0x3FF) << 20) | ((green & 0x3FF) << 10) | (blue & 0x3FF)
@@ -149,26 +152,6 @@ impl PrimarySurfaceSampleSet {
     }
 }
 
-struct BootLogoStage {
-    name: &'static str,
-    jpeg: &'static [u8],
-}
-
-const PRIMARY_BOOT_JPEG_STAGES: [BootLogoStage; 3] = [
-    BootLogoStage {
-        name: "burosch4k",
-        jpeg: PRIMARY_BOOT_BUROSCH_JPEG,
-    },
-    BootLogoStage {
-        name: "yelly",
-        jpeg: PRIMARY_BOOT_YELLY_JPEG,
-    },
-    BootLogoStage {
-        name: "logo",
-        jpeg: PRIMARY_BOOT_LOGO_JPEG,
-    },
-];
-
 #[derive(Copy, Clone)]
 pub(super) struct PipeInfo {
     pub(super) name: &'static str,
@@ -187,6 +170,7 @@ struct PrimarySurface {
     pitch_bytes: u32,
     phys: u64,
     virt: *mut u8,
+    gpu: u64,
     pipe: PipeInfo,
 }
 
@@ -424,13 +408,25 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         pitch_bytes,
         phys,
         virt,
+        gpu: crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE,
         pipe,
     };
     *PRIMARY_SURFACE.lock() = Some(primary_surface);
     log_primary_scanout_pte_window(dev, "after-primary-init", byte_len);
 
     let logo_ok = if PRIMARY_BOOT_LOGO_ENABLED {
-        probe_hw_logo_decode()
+        let warmup_ok = if PRIMARY_BOOT_DISPLAY_WARMUP_ENABLED {
+            run_primary_display_warmup(primary_surface, false)
+        } else {
+            false
+        };
+        let logo_submitted = probe_hw_logo_decode();
+        if !logo_submitted && warmup_ok {
+            mark_hw_logo_sequence_done("display-warmup-no-logo");
+        }
+        logo_submitted || warmup_ok
+    } else if PRIMARY_BOOT_DISPLAY_WARMUP_ENABLED {
+        run_primary_display_warmup(primary_surface, true)
     } else {
         false
     };
@@ -461,12 +457,55 @@ fn probe_hw_logo_decode() -> bool {
     submit_next_hw_logo_stage()
 }
 
+fn run_primary_display_warmup(surface: PrimarySurface, release_render_after: bool) -> bool {
+    if surface.virt.is_null()
+        || surface.width == 0
+        || surface.height == 0
+        || surface.pitch_bytes == 0
+    {
+        return false;
+    }
+
+    let byte_len = (surface.pitch_bytes as usize).saturating_mul(surface.height as usize);
+    if byte_len == 0 {
+        return false;
+    }
+
+    let color = 0x00FF_FFFF;
+    fill_surface_color(
+        surface.virt,
+        surface.pitch_bytes as usize,
+        surface.width,
+        surface.height,
+        color,
+    );
+    crate::intel::dma_flush(surface.virt, byte_len);
+    let ok = notify_primary_surface_present(surface, "display-warmup-white", byte_len);
+    crate::log!(
+        "intel/display: primary-display-warmup stage=display-warmup-white color=0x{:08X} bytes=0x{:X} presented={}\n",
+        color,
+        byte_len,
+        ok as u8
+    );
+
+    if release_render_after {
+        mark_hw_logo_sequence_done("display-warmup");
+    }
+    ok
+}
+
 pub(crate) async fn wait_hw_logo_sequence_done() {
     if !PRIMARY_BOOT_LOGO_ENABLED {
         return;
     }
     while !HW_LOGO_SEQUENCE_DONE.load(Ordering::Acquire) {
-        HW_LOGO_SEQUENCE_DONE_WAIT.wait_for_event().await;
+        if !HW_LOGO_SEQUENCE_DONE_WAIT
+            .wait_for_event_timeout(PRIMARY_BOOT_LOGO_WAIT_TIMEOUT_MS)
+            .await
+        {
+            mark_hw_logo_sequence_done("logo-wait-timeout");
+            return;
+        }
     }
 }
 
@@ -479,15 +518,11 @@ fn mark_hw_logo_sequence_done(reason: &'static str) {
 }
 
 fn submit_next_hw_logo_stage() -> bool {
-    loop {
-        let stage_idx = HW_LOGO_NEXT_STAGE.fetch_add(1, Ordering::AcqRel) as usize;
-        let Some(stage) = PRIMARY_BOOT_JPEG_STAGES.get(stage_idx) else {
-            return false;
-        };
-        if submit_hw_logo_stage(stage.name, stage.jpeg) {
-            return true;
-        }
+    let stage_idx = HW_LOGO_NEXT_STAGE.fetch_add(1, Ordering::AcqRel) as usize;
+    if stage_idx != 0 {
+        return false;
     }
+    submit_hw_logo_stage("logo", PRIMARY_BOOT_LOGO_JPEG)
 }
 
 fn submit_hw_logo_stage(name: &'static str, jpeg: &'static [u8]) -> bool {
@@ -719,10 +754,7 @@ pub(crate) fn active_scanout_dimensions() -> Option<(u32, u32)> {
 
 #[allow(dead_code)]
 pub(crate) fn primary_surface_gpu_addr() -> Option<u64> {
-    PRIMARY_SURFACE
-        .lock()
-        .as_ref()
-        .map(|_| crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE)
+    PRIMARY_SURFACE.lock().as_ref().map(|surface| surface.gpu)
 }
 
 pub(crate) fn log_primary_surface_samples(label: &str) {
@@ -742,6 +774,51 @@ pub(crate) fn sample_primary_surface_pixel(x: u32, y: u32) -> Option<u32> {
     sample_surface_pixel(surface, x as usize, y as usize)
 }
 
+pub(crate) fn clear_primary_surface_color(color: u32, reason: &str) -> bool {
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+        crate::log!(
+            "intel/display: primary-clear skipped reason={} cause=no-primary-surface\n",
+            reason,
+        );
+        return false;
+    };
+    if surface.virt.is_null()
+        || surface.width == 0
+        || surface.height == 0
+        || surface.pitch_bytes == 0
+    {
+        crate::log!("intel/display: primary-clear skipped reason={} cause=bad-surface\n", reason,);
+        return false;
+    }
+
+    let byte_len = (surface.pitch_bytes as usize).saturating_mul(surface.height as usize);
+    if byte_len == 0 {
+        crate::log!("intel/display: primary-clear skipped reason={} cause=empty-surface\n", reason,);
+        return false;
+    }
+
+    fill_surface_color(
+        surface.virt,
+        surface.pitch_bytes as usize,
+        surface.width,
+        surface.height,
+        color,
+    );
+    crate::intel::dma_flush(surface.virt, byte_len);
+    let presented = notify_primary_surface_present(surface, reason, byte_len);
+    crate::log!(
+        "intel/display: primary-clear reason={} color=0x{:08X} size={}x{} pitch=0x{:X} bytes=0x{:X} presented={}\n",
+        reason,
+        color,
+        surface.width,
+        surface.height,
+        surface.pitch_bytes,
+        byte_len,
+        presented as u8,
+    );
+    presented
+}
+
 fn log_surface_samples(surface: PrimarySurface, label: &str) {
     let Some(samples) = capture_surface_samples(surface) else {
         return;
@@ -750,7 +827,7 @@ fn log_surface_samples(surface: PrimarySurface, label: &str) {
     intel_display_focus_log!(
         "intel/display: primary-samples label={} gpu=0x{:X} phys=0x{:X} pitch=0x{:X} tl=0x{:08X} center=0x{:08X} br=0x{:08X} apex=0x{:08X} centroid=0x{:08X} left=0x{:08X} right=0x{:08X}\n",
         label,
-        crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE,
+        surface.gpu,
         surface.phys,
         surface.pitch_bytes,
         samples.tl,
@@ -838,11 +915,11 @@ pub(super) fn primary_surface_gpgpu_marker_target() -> Option<PrimarySurfaceGpgp
         width: surface.width,
         height: surface.height,
         pitch_bytes: surface.pitch_bytes,
-        gpu: crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE,
+        gpu: surface.gpu,
         phys: surface.phys,
         virt: surface.virt,
         byte_len,
-        marker_gpu: crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE + marker_offset as u64,
+        marker_gpu: surface.gpu + marker_offset as u64,
         marker_virt: unsafe { surface.virt.add(marker_offset) },
         marker_offset,
         marker_x,
@@ -1139,8 +1216,7 @@ pub(crate) fn present_imc3_surface_center(
 
     let byte_len = dst_pitch.saturating_mul(dst_height);
     crate::intel::dma_flush(surface.virt, byte_len);
-    notify_primary_surface_present(surface, "imc3-center", byte_len);
-    true
+    notify_primary_surface_present(surface, "imc3-center", byte_len)
 }
 
 pub(crate) fn present_nv12_surface_center(
@@ -1276,7 +1352,7 @@ fn notify_primary_surface_present(surface: PrimarySurface, reason: &str, byte_le
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };
-    let Some(surface_reg) = u32::try_from(crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE).ok() else {
+    let Some(surface_reg) = u32::try_from(surface.gpu).ok() else {
         return false;
     };
 
@@ -1698,7 +1774,8 @@ fn arm_rgb_plane_probe_planes(dev: crate::intel::Dev, pipe: PipeInfo, reason: &s
     }
 
     for index in 0..RGB_PLANE_PROBE_SLOT_COUNT {
-        let Some((plane_slot, _width, _height, _x, _y, _color, _name)) = rgb_plane_probe_spec(index)
+        let Some((plane_slot, _width, _height, _x, _y, _color, _name)) =
+            rgb_plane_probe_spec(index)
         else {
             continue;
         };
@@ -1829,7 +1906,7 @@ pub(crate) fn kick_primary_surface_scanout(label: &str) -> bool {
     let stride_before = crate::intel::mmio_read(dev, surface.pipe.plane_stride_off);
     let surf_before = crate::intel::mmio_read(dev, surface.pipe.plane_surf_off);
     let live_before = crate::intel::mmio_read(dev, surface.pipe.plane_surf_live_off);
-    let Some(surface_reg) = u32::try_from(crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE).ok() else {
+    let Some(surface_reg) = u32::try_from(surface.gpu).ok() else {
         return false;
     };
 
@@ -2265,9 +2342,9 @@ fn decode_plane_format(ctl: u32) -> &'static str {
 
 fn decode_plane_color_alpha(color_ctl: u32) -> &'static str {
     match color_ctl & PLANE_COLOR_ALPHA_MASK {
-        0x00 => "disable",
-        0x20 => "sw-premul",
-        0x30 => "hw-premul",
+        PLANE_COLOR_ALPHA_DISABLE => "disable",
+        PLANE_COLOR_ALPHA_SW_PREMULT => "sw-premul",
+        PLANE_COLOR_ALPHA_HW_PREMULT => "hw-premul",
         _ => "unknown",
     }
 }
