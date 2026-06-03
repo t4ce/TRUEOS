@@ -5,6 +5,9 @@ use spin::{Mutex, Once};
 
 pub(crate) const COPY_RECT_RGBA8_KERNEL_NAME: &str = "copy_rect_rgba8";
 pub(crate) const COPY_RECT_RGBA8_OPENCL_SOURCE: &str = include_str!("kernels/copy_rect_rgba8.cl");
+pub(crate) const COPY_RECT_RGBA8_WIDE_KERNEL_NAME: &str = "copy_rect_rgba8_wide";
+pub(crate) const COPY_RECT_RGBA8_WIDE_OPENCL_SOURCE: &str =
+    include_str!("kernels/copy_rect_rgba8_wide.cl");
 pub(crate) const CLEAR_RECT_RGBA8_WHITE_KERNEL_NAME: &str = "clear_rect_rgba8_white";
 pub(crate) const CLEAR_RECT_RGBA8_WHITE_OPENCL_SOURCE: &str =
     include_str!("kernels/clear_rect_rgba8_white.cl");
@@ -14,6 +17,10 @@ pub(crate) const COPY_RECT_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/copy_rect_rgba8.bin");
 pub(crate) const COPY_RECT_RGBA8_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/copy_rect_rgba8.spv");
+pub(crate) const COPY_RECT_RGBA8_WIDE_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/copy_rect_rgba8_wide.bin");
+pub(crate) const COPY_RECT_RGBA8_WIDE_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/copy_rect_rgba8_wide.spv");
 pub(crate) const CLEAR_RECT_RGBA8_WHITE_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/clear_rect_rgba8_white.bin");
 pub(crate) const CLEAR_RECT_RGBA8_WHITE_ADLS_SPV: &[u8] =
@@ -23,6 +30,10 @@ pub(crate) const EMPTY_EOT_ADLS_SPV: &[u8] = include_bytes!("kernels/artifacts/a
 pub(crate) const COPY_RECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x10, 0x86, 0x60, 0x24, 0xAA, 0xFF, 0xAE, 0x96, 0xF9, 0x2C, 0xFC, 0x25, 0xA5, 0xFB, 0x18, 0x8C,
     0xA4, 0x21, 0x99, 0x47, 0x89, 0xAF, 0xBC, 0x4D, 0xBA, 0x3D, 0xDC, 0x29, 0x0B, 0xD5, 0x83, 0xAB,
+];
+pub(crate) const COPY_RECT_RGBA8_WIDE_ADLS_BIN_SHA256: [u8; 32] = [
+    0xF8, 0x09, 0x7F, 0x59, 0xD7, 0x52, 0x5C, 0x4F, 0xD6, 0xE4, 0xF6, 0x65, 0x9E, 0x58, 0xD5, 0x27,
+    0x92, 0x38, 0xA4, 0xF9, 0x65, 0x2F, 0xEA, 0x58, 0x06, 0x50, 0x98, 0x54, 0x0F, 0xA4, 0x5B, 0xBA,
 ];
 pub(crate) const CLEAR_RECT_RGBA8_WHITE_ADLS_BIN_SHA256: [u8; 32] = [
     0x96, 0xB9, 0x6D, 0x64, 0x58, 0xBA, 0xDA, 0x38, 0x28, 0xB5, 0xE0, 0x5D, 0xD0, 0xD4, 0xDE, 0xCE,
@@ -34,6 +45,7 @@ pub(crate) const EMPTY_EOT_ADLS_BIN_SHA256: [u8; 32] = [
 ];
 
 const COPY_RECT_RGBA8_ADLS_GPU: u64 = 0x0D20_0000;
+const COPY_RECT_RGBA8_WIDE_ADLS_GPU: u64 = 0x0D23_0000;
 const CLEAR_RECT_RGBA8_WHITE_ADLS_GPU: u64 = 0x0D21_0000;
 const EMPTY_EOT_ADLS_GPU: u64 = 0x0D22_0000;
 const COPY_RECT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
@@ -136,6 +148,8 @@ const COPY_RECT_BATCH_DST_SURFACE_STATE_OFFSET_BYTES: usize = 0x10C0;
 const COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES: usize = 0x1200;
 const COPY_RECT_PIXELS_PER_LANE: u32 = 2;
 const COPY_RECT_SPAN_PIXELS: u32 = 16 * COPY_RECT_PIXELS_PER_LANE;
+const COPY_RECT_WIDE_PIXELS_PER_LANE: u32 = 16;
+const COPY_RECT_WIDE_SPAN_PIXELS: u32 = 16 * COPY_RECT_WIDE_PIXELS_PER_LANE;
 const COPY_RECT_BATCH_MAX_SPANS: usize = 16;
 const COPY_RECT_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
 const COPY_RECT_SURFACE_STATE_DWORDS: usize = 16;
@@ -173,6 +187,7 @@ const COPY_RECT_256X2_SURFACE_WIDTH: u32 = COPY_RECT_256X2_WIDTH * 2;
 const COPY_RECT_256X2_PITCH_BYTES: u32 =
     COPY_RECT_256X2_SURFACE_WIDTH * core::mem::size_of::<u32>() as u32;
 const COPY_RECT_256X2_EXPECTED_SPANS: usize = 16;
+const COPY_RECT_WIDE_256X2_EXPECTED_SPANS: usize = 2;
 const COPY_RECT_256X2_EXPECTED_SUBMITS: usize = 1;
 const COPY_RECT_256X2_SAMPLE_POINTS: [(usize, usize); 12] = [
     (0, 0),
@@ -248,6 +263,7 @@ const GPGPU_SHELL_SURFACE_BYTES: usize =
     (GPGPU_SHELL_SURFACE_PITCH_BYTES as usize) * (GPGPU_SHELL_SURFACE_HEIGHT as usize);
 
 static COPY_RECT_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
+static COPY_RECT_RGBA8_WIDE_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static CLEAR_RECT_RGBA8_WHITE_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static EMPTY_EOT_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static DIRECT_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
@@ -260,6 +276,7 @@ static CLEAR_RECT_WALKER_RAN: AtomicBool = AtomicBool::new(false);
 static COPY_RECT_WALKER_RAN: AtomicBool = AtomicBool::new(false);
 static COPY_RECT_256_RAN: AtomicBool = AtomicBool::new(false);
 static COPY_RECT_256X2_RAN: AtomicBool = AtomicBool::new(false);
+static COPY_RECT_WIDE_256X2_RAN: AtomicBool = AtomicBool::new(false);
 static RECT_API_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
 static DIRECT_RCS_SUBMIT_COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -552,12 +569,29 @@ pub(crate) struct UploadedKernelArtifact {
 unsafe impl Send for UploadedKernelArtifact {}
 unsafe impl Sync for UploadedKernelArtifact {}
 
+#[derive(Copy, Clone, Debug)]
+struct CopyRectKernelFlavor {
+    upload: UploadedKernelArtifact,
+    text_offset_bytes: u64,
+    pixels_per_lane: u32,
+    span_pixels: u32,
+    name: &'static str,
+}
+
 pub(crate) const COPY_RECT_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
     name: COPY_RECT_RGBA8_KERNEL_NAME,
     target: "adls",
     bin: COPY_RECT_RGBA8_ADLS_BIN,
     spv: COPY_RECT_RGBA8_ADLS_SPV,
     bin_sha256: COPY_RECT_RGBA8_ADLS_BIN_SHA256,
+};
+
+pub(crate) const COPY_RECT_RGBA8_WIDE_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
+    name: COPY_RECT_RGBA8_WIDE_KERNEL_NAME,
+    target: "adls",
+    bin: COPY_RECT_RGBA8_WIDE_ADLS_BIN,
+    spv: COPY_RECT_RGBA8_WIDE_ADLS_SPV,
+    bin_sha256: COPY_RECT_RGBA8_WIDE_ADLS_BIN_SHA256,
 };
 
 pub(crate) const CLEAR_RECT_RGBA8_WHITE_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
@@ -578,6 +612,10 @@ pub(crate) const EMPTY_EOT_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtif
 
 pub(crate) fn copy_rect_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *COPY_RECT_RGBA8_UPLOAD.lock()
+}
+
+pub(crate) fn copy_rect_rgba8_wide_upload_status() -> Option<UploadedKernelArtifact> {
+    *COPY_RECT_RGBA8_WIDE_UPLOAD.lock()
 }
 
 pub(crate) fn clear_rect_rgba8_white_upload_status() -> Option<UploadedKernelArtifact> {
@@ -603,6 +641,25 @@ pub(crate) fn upload_copy_rect_rgba8_kernel() -> Option<UploadedKernelArtifact> 
 
     let upload = upload_artifact(dev, COPY_RECT_RGBA8_ADLS_ARTIFACT, COPY_RECT_RGBA8_ADLS_GPU)?;
     *COPY_RECT_RGBA8_UPLOAD.lock() = Some(upload);
+    Some(upload)
+}
+
+pub(crate) fn upload_copy_rect_rgba8_wide_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *COPY_RECT_RGBA8_WIDE_UPLOAD.lock() {
+        return Some(upload);
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: copy-rect-rgba8-wide upload skipped reason=no-claimed-device\n"
+        );
+        return None;
+    };
+
+    let upload =
+        upload_artifact(dev, COPY_RECT_RGBA8_WIDE_ADLS_ARTIFACT, COPY_RECT_RGBA8_WIDE_ADLS_GPU)?;
+    *COPY_RECT_RGBA8_WIDE_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
 
@@ -646,6 +703,26 @@ pub(crate) fn upload_empty_eot_kernel() -> Option<UploadedKernelArtifact> {
     Some(upload)
 }
 
+fn copy_rect_kernel_flavor_narrow() -> Option<CopyRectKernelFlavor> {
+    Some(CopyRectKernelFlavor {
+        upload: upload_copy_rect_rgba8_kernel()?,
+        text_offset_bytes: COPY_RECT_RGBA8_TEXT_OFFSET_BYTES,
+        pixels_per_lane: COPY_RECT_PIXELS_PER_LANE,
+        span_pixels: COPY_RECT_SPAN_PIXELS,
+        name: COPY_RECT_RGBA8_KERNEL_NAME,
+    })
+}
+
+fn copy_rect_kernel_flavor_wide() -> Option<CopyRectKernelFlavor> {
+    Some(CopyRectKernelFlavor {
+        upload: upload_copy_rect_rgba8_wide_kernel()?,
+        text_offset_bytes: COPY_RECT_RGBA8_TEXT_OFFSET_BYTES,
+        pixels_per_lane: COPY_RECT_WIDE_PIXELS_PER_LANE,
+        span_pixels: COPY_RECT_WIDE_SPAN_PIXELS,
+        name: COPY_RECT_RGBA8_WIDE_KERNEL_NAME,
+    })
+}
+
 pub(crate) fn fill_rect_white_rgba8(dst: GpgpuRgba8Surface, rect: GpgpuRect) -> usize {
     let Some(params) = lower_clear_rect_white(dst, rect) else {
         return 0;
@@ -672,7 +749,25 @@ pub(crate) fn copy_rect_rgba8_stats(
     let Some(params) = lower_copy_rect(src, src_rect, dst, dst_xy) else {
         return GpgpuSubmitStats::default();
     };
-    submit_copy_rect_spans_with_stats(src, dst, params)
+    let Some(flavor) = copy_rect_kernel_flavor_narrow() else {
+        return GpgpuSubmitStats::default();
+    };
+    submit_copy_rect_spans_with_stats(src, dst, params, flavor)
+}
+
+pub(crate) fn copy_rect_rgba8_wide_stats(
+    src: GpgpuRgba8Surface,
+    src_rect: GpgpuRect,
+    dst: GpgpuRgba8Surface,
+    dst_xy: GpgpuPoint,
+) -> GpgpuSubmitStats {
+    let Some(params) = lower_copy_rect(src, src_rect, dst, dst_xy) else {
+        return GpgpuSubmitStats::default();
+    };
+    let Some(flavor) = copy_rect_kernel_flavor_wide() else {
+        return GpgpuSubmitStats::default();
+    };
+    submit_copy_rect_spans_with_stats(src, dst, params, flavor)
 }
 
 #[allow(dead_code)]
@@ -973,6 +1068,21 @@ pub(crate) fn shell_copy_twemoji_atlas_slot_scanout_hot(
     slot: u16,
     dst_xy_override: Option<GpgpuPoint>,
 ) -> Option<GpgpuShellAtlasHotCopyResult> {
+    shell_copy_twemoji_atlas_slot_scanout_hot_with(slot, dst_xy_override, false)
+}
+
+pub(crate) fn shell_copy_twemoji_atlas_slot_scanout_hot_wide(
+    slot: u16,
+    dst_xy_override: Option<GpgpuPoint>,
+) -> Option<GpgpuShellAtlasHotCopyResult> {
+    shell_copy_twemoji_atlas_slot_scanout_hot_with(slot, dst_xy_override, true)
+}
+
+fn shell_copy_twemoji_atlas_slot_scanout_hot_with(
+    slot: u16,
+    dst_xy_override: Option<GpgpuPoint>,
+    wide: bool,
+) -> Option<GpgpuShellAtlasHotCopyResult> {
     let total_start_tick = direct_rcs_now_tick();
     let shell = shell_surface_once()?;
     let target = super::display::primary_surface_gpgpu_marker_target()?;
@@ -1032,9 +1142,17 @@ pub(crate) fn shell_copy_twemoji_atlas_slot_scanout_hot(
     super::dma_flush(shell.virt, shell.surface.bytes);
 
     let copy_start_tick = direct_rcs_now_tick();
-    let stats = copy_rect_rgba8_stats(shell.surface, stage_rect, primary, dst_xy);
+    let stats = if wide {
+        copy_rect_rgba8_wide_stats(shell.surface, stage_rect, primary, dst_xy)
+    } else {
+        copy_rect_rgba8_stats(shell.surface, stage_rect, primary, dst_xy)
+    };
     let copy_ms = direct_rcs_elapsed_ms_since(copy_start_tick);
-    let expected_spans = copy_rect_expected_spans(stage_rect);
+    let expected_spans = if wide {
+        copy_rect_wide_expected_spans(stage_rect)
+    } else {
+        copy_rect_expected_spans(stage_rect)
+    };
     let expected_submits = expected_spans.div_ceil(COPY_RECT_BATCH_MAX_SPANS);
     let flush_offset = (dst_xy.y as usize)
         .saturating_mul(primary.pitch_bytes as usize)
@@ -1044,7 +1162,11 @@ pub(crate) fn shell_copy_twemoji_atlas_slot_scanout_hot(
         .saturating_mul(primary.pitch_bytes as usize)
         .saturating_add((src_rect.width as usize).saturating_mul(core::mem::size_of::<u32>()));
     let presented = super::display::notify_primary_surface_external_write(
-        "gpgpu-twemoji-atlas-go",
+        if wide {
+            "gpgpu-twemoji-atlas-go-wide"
+        } else {
+            "gpgpu-twemoji-atlas-go"
+        },
         flush_offset,
         flush_bytes,
     );
@@ -1560,7 +1682,14 @@ pub(crate) fn submit_copy_rect_rgba8_256_once() -> bool {
         return false;
     };
     let copy_start_tick = direct_rcs_now_tick();
-    let stats = submit_copy_rect_spans_with_stats(surface, surface, params);
+    let Some(flavor) = copy_rect_kernel_flavor_narrow() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: copy-rect-rgba8-256 failed rung=kernel\n"
+        );
+        return false;
+    };
+    let stats = submit_copy_rect_spans_with_stats(surface, surface, params, flavor);
     let copy_ms = direct_rcs_elapsed_ms_since(copy_start_tick);
     let samples_ok = direct_rcs_copy_rect_256_samples_ok(state);
     let (src_preserved, copied) = direct_rcs_copy_rect_256_full_counts(state);
@@ -1664,7 +1793,14 @@ pub(crate) fn submit_copy_rect_rgba8_256x2_once() -> bool {
         return false;
     };
     let copy_start_tick = direct_rcs_now_tick();
-    let stats = submit_copy_rect_spans_with_stats(surface, surface, params);
+    let Some(flavor) = copy_rect_kernel_flavor_narrow() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: copy-rect-rgba8-256x2 failed rung=kernel\n"
+        );
+        return false;
+    };
+    let stats = submit_copy_rect_spans_with_stats(surface, surface, params, flavor);
     let copy_ms = direct_rcs_elapsed_ms_since(copy_start_tick);
     let samples_ok = direct_rcs_copy_rect_256x2_samples_ok(state);
     let (src_preserved, copied) = direct_rcs_copy_rect_256x2_full_counts(state);
@@ -1717,6 +1853,119 @@ pub(crate) fn submit_copy_rect_rgba8_256x2_once() -> bool {
         COPY_RECT_PIXELS_PER_LANE,
         COPY_RECT_SPAN_PIXELS,
         COPY_RECT_RGBA8_KERNEL_NAME,
+    );
+
+    ok
+}
+
+pub(crate) fn submit_copy_rect_rgba8_wide_256x2_once() -> bool {
+    if !DIRECT_RCS_ENABLED || COPY_RECT_WIDE_256X2_RAN.swap(true, Ordering::AcqRel) {
+        return false;
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: copy-rect-rgba8-wide-256x2 skipped reason=no-claimed-device\n"
+        );
+        return false;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: copy-rect-rgba8-wide-256x2 failed rung=alloc\n"
+        );
+        return false;
+    };
+    let Some(surface) = GpgpuRgba8Surface::new(
+        state.clear_test_phys,
+        DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
+        CLEAR_RECT_TEST_BYTES,
+        COPY_RECT_256X2_SURFACE_WIDTH,
+        COPY_RECT_256X2_HEIGHT,
+        COPY_RECT_256X2_PITCH_BYTES,
+    ) else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: copy-rect-rgba8-wide-256x2 failed rung=surface\n"
+        );
+        return false;
+    };
+
+    direct_rcs_seed_copy_rect_256x2(state);
+    let Some(params) = lower_copy_rect(
+        surface,
+        GpgpuRect::new(0, 0, COPY_RECT_256X2_WIDTH, COPY_RECT_256X2_HEIGHT),
+        surface,
+        GpgpuPoint::new(COPY_RECT_256X2_WIDTH as i32, 0),
+    ) else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: copy-rect-rgba8-wide-256x2 failed rung=lower\n"
+        );
+        return false;
+    };
+    let Some(flavor) = copy_rect_kernel_flavor_wide() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: copy-rect-rgba8-wide-256x2 failed rung=kernel\n"
+        );
+        return false;
+    };
+    let copy_start_tick = direct_rcs_now_tick();
+    let stats = submit_copy_rect_spans_with_stats(surface, surface, params, flavor);
+    let copy_ms = direct_rcs_elapsed_ms_since(copy_start_tick);
+    let samples_ok = direct_rcs_copy_rect_256x2_samples_ok(state);
+    let (src_preserved, copied) = direct_rcs_copy_rect_256x2_full_counts(state);
+    let row0_head = direct_rcs_read_copy_rect_256x2_span(state, 0, COPY_RECT_256X2_WIDTH as usize);
+    let row1_head = direct_rcs_read_copy_rect_256x2_span(state, 1, COPY_RECT_256X2_WIDTH as usize);
+    let row1_tail = direct_rcs_read_copy_rect_256x2_span(
+        state,
+        1,
+        COPY_RECT_256X2_WIDTH as usize + COPY_RECT_256X2_WIDTH as usize - 4,
+    );
+    let ok = stats.spans == COPY_RECT_WIDE_256X2_EXPECTED_SPANS
+        && stats.submits == COPY_RECT_256X2_EXPECTED_SUBMITS
+        && src_preserved == (COPY_RECT_256X2_WIDTH * COPY_RECT_256X2_HEIGHT) as usize
+        && copied == (COPY_RECT_256X2_WIDTH * COPY_RECT_256X2_HEIGHT) as usize
+        && samples_ok == COPY_RECT_256X2_SAMPLE_POINTS.len();
+
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/gpgpu: copy-rect-rgba8-wide-256x2 ok={} copy_ms={} submits={}/{} spans={}/{} copied={}/{} src_preserved={}/{} samples={}/{} surface_gpu=0x{:X} surface_phys=0x{:X} rect={}x{} src_xy=0,0 dst_xy={},0 pitch={} row0_dst_head=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row1_dst_head=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row1_dst_tail=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] lowering=row-spans pixels_per_lane={} batched_walkers=1 max_span_px={} artifact={}\n",
+        ok as u8,
+        copy_ms,
+        stats.submits,
+        COPY_RECT_256X2_EXPECTED_SUBMITS,
+        stats.spans,
+        COPY_RECT_WIDE_256X2_EXPECTED_SPANS,
+        copied,
+        COPY_RECT_256X2_WIDTH * COPY_RECT_256X2_HEIGHT,
+        src_preserved,
+        COPY_RECT_256X2_WIDTH * COPY_RECT_256X2_HEIGHT,
+        samples_ok,
+        COPY_RECT_256X2_SAMPLE_POINTS.len(),
+        surface.gpu,
+        surface.phys,
+        COPY_RECT_256X2_WIDTH,
+        COPY_RECT_256X2_HEIGHT,
+        COPY_RECT_256X2_WIDTH,
+        COPY_RECT_256X2_PITCH_BYTES,
+        row0_head[0],
+        row0_head[1],
+        row0_head[2],
+        row0_head[3],
+        row1_head[0],
+        row1_head[1],
+        row1_head[2],
+        row1_head[3],
+        row1_tail[0],
+        row1_tail[1],
+        row1_tail[2],
+        row1_tail[3],
+        COPY_RECT_WIDE_PIXELS_PER_LANE,
+        COPY_RECT_WIDE_SPAN_PIXELS,
+        COPY_RECT_RGBA8_WIDE_KERNEL_NAME,
     );
 
     ok
@@ -2193,8 +2442,16 @@ fn clear_rect_expected_spans(rect: GpgpuRect) -> usize {
 }
 
 fn copy_rect_expected_spans(rect: GpgpuRect) -> usize {
+    copy_rect_expected_spans_for(rect, COPY_RECT_SPAN_PIXELS)
+}
+
+fn copy_rect_wide_expected_spans(rect: GpgpuRect) -> usize {
+    copy_rect_expected_spans_for(rect, COPY_RECT_WIDE_SPAN_PIXELS)
+}
+
+fn copy_rect_expected_spans_for(rect: GpgpuRect, span_pixels: u32) -> usize {
     (rect.width as usize)
-        .div_ceil(COPY_RECT_SPAN_PIXELS as usize)
+        .div_ceil(span_pixels as usize)
         .saturating_mul(rect.height as usize)
 }
 
@@ -2353,15 +2610,16 @@ fn submit_copy_rect_spans_with_stats(
     src: GpgpuRgba8Surface,
     dst: GpgpuRgba8Surface,
     params: CopyRectRgba8Params,
+    flavor: CopyRectKernelFlavor,
 ) -> GpgpuSubmitStats {
-    let Some(total_spans) = copy_rect_span_count(params) else {
+    let Some(total_spans) = copy_rect_span_count(params, flavor.span_pixels) else {
         return GpgpuSubmitStats::default();
     };
     let mut stats = GpgpuSubmitStats::default();
     let mut span_start = 0usize;
     while span_start < total_spans {
         let span_take = (total_spans - span_start).min(COPY_RECT_BATCH_MAX_SPANS);
-        if !submit_copy_rect_span_batch(src, dst, params, span_start, span_take) {
+        if !submit_copy_rect_span_batch(src, dst, params, flavor, span_start, span_take) {
             break;
         }
         stats.spans = stats.spans.saturating_add(span_take);
@@ -2371,19 +2629,20 @@ fn submit_copy_rect_spans_with_stats(
     stats
 }
 
-fn copy_rect_span_count(params: CopyRectRgba8Params) -> Option<usize> {
+fn copy_rect_span_count(params: CopyRectRgba8Params, span_pixels: u32) -> Option<usize> {
     if params.width == 0 || params.height == 0 {
         return None;
     }
-    let spans_per_row = (params.width as usize).div_ceil(COPY_RECT_SPAN_PIXELS as usize);
+    let spans_per_row = (params.width as usize).div_ceil(span_pixels as usize);
     spans_per_row.checked_mul(params.height as usize)
 }
 
 fn copy_rect_span_params(
     params: CopyRectRgba8Params,
+    span_pixels: u32,
     span_index: usize,
 ) -> Option<CopyRectRgba8Params> {
-    let spans_per_row = (params.width as usize).div_ceil(COPY_RECT_SPAN_PIXELS as usize);
+    let spans_per_row = (params.width as usize).div_ceil(span_pixels as usize);
     if spans_per_row == 0 {
         return None;
     }
@@ -2392,11 +2651,11 @@ fn copy_rect_span_params(
         return None;
     }
     let span_col = span_index % spans_per_row;
-    let x = (span_col as u32).saturating_mul(COPY_RECT_SPAN_PIXELS);
+    let x = (span_col as u32).saturating_mul(span_pixels);
     if x >= params.width {
         return None;
     }
-    let span_width = (params.width - x).min(COPY_RECT_SPAN_PIXELS);
+    let span_width = (params.width - x).min(span_pixels);
     Some(CopyRectRgba8Params {
         src_x: params.src_x + x,
         src_y: params.src_y + row as u32,
@@ -2451,6 +2710,7 @@ fn submit_copy_rect_span_batch(
     src: GpgpuRgba8Surface,
     dst: GpgpuRgba8Surface,
     params: CopyRectRgba8Params,
+    flavor: CopyRectKernelFlavor,
     span_start: usize,
     span_count: usize,
 ) -> bool {
@@ -2461,9 +2721,6 @@ fn submit_copy_rect_span_batch(
     let Some(dev) = super::claimed_device() else {
         return false;
     };
-    let Some(upload) = upload_copy_rect_rgba8_kernel() else {
-        return false;
-    };
     let Some(state) = direct_rcs_state_once(dev) else {
         return false;
     };
@@ -2472,14 +2729,19 @@ fn submit_copy_rect_span_batch(
     let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
     let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
     let kernel_ppgtt_ok = ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+        && direct_rcs_map_ppgtt_kernel(
+            state,
+            flavor.upload.gpu,
+            flavor.upload.phys,
+            flavor.upload.mapped_bytes,
+        );
     let src_ppgtt_ok =
         kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, src.gpu, src.phys, src.bytes);
     let dst_ppgtt_ok =
         src_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
     let batch_ok = dst_ppgtt_ok
         && direct_rcs_encode_copy_rect_multi_walker_batch(
-            state, upload, params, src.bytes, dst.bytes, span_start, span_count,
+            state, flavor, params, src.bytes, dst.bytes, span_start, span_count,
         );
     let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
     let observed = if submitted {
@@ -2495,7 +2757,11 @@ fn clear_rect_walker_right_mask(width: u32) -> u32 {
 }
 
 fn copy_rect_walker_right_mask(width: u32) -> u32 {
-    let lanes = width.div_ceil(COPY_RECT_PIXELS_PER_LANE);
+    copy_rect_walker_right_mask_for(width, COPY_RECT_PIXELS_PER_LANE)
+}
+
+fn copy_rect_walker_right_mask_for(width: u32, pixels_per_lane: u32) -> u32 {
+    let lanes = width.div_ceil(pixels_per_lane);
     simd16_right_mask(lanes)
 }
 
@@ -3055,7 +3321,7 @@ fn direct_rcs_encode_copy_rect_walker_batch(
 
 fn direct_rcs_encode_copy_rect_multi_walker_batch(
     state: DirectRcsState,
-    upload: UploadedKernelArtifact,
+    flavor: CopyRectKernelFlavor,
     params: CopyRectRgba8Params,
     src_bytes: usize,
     dst_bytes: usize,
@@ -3081,6 +3347,7 @@ fn direct_rcs_encode_copy_rect_multi_walker_batch(
         state,
         COPY_RECT_BATCH_IDD_OFFSET_BYTES,
         COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES,
+        flavor.text_offset_bytes,
     ) {
         return false;
     }
@@ -3097,7 +3364,9 @@ fn direct_rcs_encode_copy_rect_multi_walker_batch(
         return false;
     }
     for span in 0..span_count {
-        let Some(span_params) = copy_rect_span_params(params, span_start + span) else {
+        let Some(span_params) =
+            copy_rect_span_params(params, flavor.span_pixels, span_start + span)
+        else {
             return false;
         };
         let payload_offset =
@@ -3132,7 +3401,7 @@ fn direct_rcs_encode_copy_rect_multi_walker_batch(
         &mut cursor,
         DIRECT_RCS_GPU_VA_BATCH_BASE,
         DIRECT_RCS_GPU_VA_BATCH_BASE,
-        upload.gpu,
+        flavor.upload.gpu,
     );
     ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
     ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
@@ -3157,7 +3426,9 @@ fn direct_rcs_encode_copy_rect_multi_walker_batch(
         COPY_RECT_PRE_MARKER,
     );
     for span in 0..span_count {
-        let Some(span_params) = copy_rect_span_params(params, span_start + span) else {
+        let Some(span_params) =
+            copy_rect_span_params(params, flavor.span_pixels, span_start + span)
+        else {
             return false;
         };
         let payload_offset =
@@ -3166,7 +3437,7 @@ fn direct_rcs_encode_copy_rect_multi_walker_batch(
             batch,
             &mut cursor,
             payload_offset,
-            copy_rect_walker_right_mask(span_params.width),
+            copy_rect_walker_right_mask_for(span_params.width, flavor.pixels_per_lane),
         );
         ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
         ok &= direct_rcs_push(batch, &mut cursor, 0);
@@ -3311,6 +3582,7 @@ fn direct_rcs_write_copy_rect_interface_descriptor(state: DirectRcsState) -> boo
         state,
         COPY_RECT_IDD_OFFSET_BYTES,
         COPY_RECT_BINDING_TABLE_OFFSET_BYTES,
+        COPY_RECT_RGBA8_TEXT_OFFSET_BYTES,
     )
 }
 
@@ -3318,13 +3590,14 @@ fn direct_rcs_write_copy_rect_interface_descriptor_at(
     state: DirectRcsState,
     idd_offset: usize,
     binding_table_offset: usize,
+    text_offset_bytes: u64,
 ) -> bool {
     if idd_offset + COPY_RECT_IDD_BYTES > DIRECT_RCS_BATCH_BYTES {
         return false;
     }
     let idd = unsafe { state.batch_virt.add(idd_offset) as *mut u32 };
     unsafe {
-        core::ptr::write_volatile(idd, COPY_RECT_RGBA8_TEXT_OFFSET_BYTES as u32);
+        core::ptr::write_volatile(idd, text_offset_bytes as u32);
         core::ptr::write_volatile(idd.add(1), 0);
         core::ptr::write_volatile(idd.add(2), IDD_THREAD_PREEMPTION_DISABLE);
         core::ptr::write_volatile(idd.add(3), 0);
