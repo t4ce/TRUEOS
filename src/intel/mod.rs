@@ -68,8 +68,10 @@ const DISPLAY_PLANE1_BOOT_DEMO_ENABLED: bool = true;
 const MEDIA_BOOT_DEMO_ENABLED: bool = false;
 const MEDIA_BOOT_DEMO_DELAY_MS: u64 = 5_000;
 const MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT: u32 = 3;
-const PRIMARY_GPGPU_AFTER_LOGO_COLOR: u32 = 0x0000_0000;
+const PRIMARY_GPGPU_AFTER_LOGO_COLOR: u32 = 0x0000_FF00;
 const PRIMARY_GPGPU_AFTER_LOGO_AUTORUN_ENABLED: bool = true;
+const PRIMARY_GPGPU_AFTER_LOGO_XWALKER_TIMING_PROBE: bool = true;
+const PRIMARY_GPGPU_AFTER_LOGO_XWALKER_CHUNK_ROWS: u32 = 81;
 const PRIMARY_GPGPU_AFTER_LOGO_RETRY_DELAY_MS: u64 = 250;
 const PRIMARY_GPGPU_AFTER_LOGO_RETRY_ATTEMPTS: u32 = 80;
 static INIT: AtomicBool = AtomicBool::new(false);
@@ -573,44 +575,114 @@ fn try_spawn_primary_gpgpu_frame_after_logo(attempt: u32) -> bool {
 async fn run_primary_gpgpu_frame_after_logo(worker_slot: u32) {
     self::display::wait_hw_logo_sequence_done().await;
     let (width, height) = self::display::active_scanout_dimensions().unwrap_or((2560, 1440));
+    if PRIMARY_GPGPU_AFTER_LOGO_XWALKER_TIMING_PROBE {
+        let probe_start_ticks = embassy_time_driver::now();
+        let probe = self::gpgpu::submit_gpgpu_primary_scanout_row2560_simd16_xwalker(
+            1,
+            1,
+            PRIMARY_GPGPU_AFTER_LOGO_COLOR,
+        );
+        let probe_elapsed_ticks = embassy_time_driver::now().saturating_sub(probe_start_ticks);
+        crate::log!(
+            "intel/gpgpu: after-logo-railgun xwalker-timing-probe rows=1 worker_slot={} submitted={} accepted={} fire={} dispatch_delta={} finish=0x{:08X}/0x{:08X} elapsed_ticks={} program={}\n",
+            worker_slot,
+            probe.submitted as u8,
+            probe.readback_ok as u8,
+            probe.reason,
+            probe.dispatch_delta,
+            probe.finish_marker,
+            probe.expected_finish_marker,
+            probe_elapsed_ticks,
+            probe.program_name,
+        );
+        if !probe.readback_ok {
+            crate::log!(
+                "intel/gpgpu: after-logo-railgun xwalker-fallback reason=timing-probe-failed probe_fire={} submitted={} finished={} dispatch_delta={} finish=0x{:08X}/0x{:08X} program={}\n",
+                probe.reason,
+                probe.submitted as u8,
+                probe.finished as u8,
+                probe.dispatch_delta,
+                probe.finish_marker,
+                probe.expected_finish_marker,
+                probe.program_name,
+            );
+            run_primary_gpgpu_frame_after_logo_rowloop(width, height, worker_slot).await;
+            return;
+        }
+    }
+
     let start_ticks = embassy_time_driver::now();
-    let xwalker = self::gpgpu::submit_gpgpu_primary_scanout_row2560_simd16_xwalker(
-        1,
-        height,
-        PRIMARY_GPGPU_AFTER_LOGO_COLOR,
-    );
-    if xwalker.readback_ok {
+    let mut row = 1u32;
+    let mut submitted = 0u32;
+    let mut accepted = 0u32;
+    let mut last_row = 0u32;
+    let mut dispatch_delta = 0u64;
+    let mut last_xwalker = None;
+    while row <= height {
+        let rows = core::cmp::min(
+            PRIMARY_GPGPU_AFTER_LOGO_XWALKER_CHUNK_ROWS,
+            height.saturating_sub(row).saturating_add(1),
+        );
+        let proof = self::gpgpu::submit_gpgpu_primary_scanout_row2560_simd16_xwalker(
+            row,
+            rows,
+            PRIMARY_GPGPU_AFTER_LOGO_COLOR,
+        );
+        submitted = submitted.saturating_add(proof.submitted as u32);
+        accepted = accepted.saturating_add(proof.readback_ok as u32);
+        dispatch_delta = dispatch_delta.saturating_add(proof.dispatch_delta);
+        last_row = row.saturating_add(rows).saturating_sub(1);
+        last_xwalker = Some(proof);
+        if !proof.readback_ok {
+            break;
+        }
+        row = row.saturating_add(rows);
+    }
+    let Some(last_xwalker) = last_xwalker else {
+        run_primary_gpgpu_frame_after_logo_rowloop(width, height, worker_slot).await;
+        return;
+    };
+    if accepted == submitted && submitted != 0 && last_row >= height {
         let elapsed_ticks = embassy_time_driver::now().saturating_sub(start_ticks);
         crate::log!(
-            "intel/gpgpu: after-logo-railgun scanout={}x{} rows={} worker_slot={} mode=row2560-simd16-xwalker submitted={} accepted={} last={} fire={} hits=0x{:016X} dispatch_delta={} finish=0x{:08X}/0x{:08X} elapsed_ticks={} program={}\n",
+            "intel/gpgpu: after-logo-railgun scanout={}x{} rows={} worker_slot={} mode=row2560-simd16-xwalker-chunked chunk_rows={} submitted={} accepted={} last={} fire={} hits=0x{:016X} dispatch_delta={} finish=0x{:08X}/0x{:08X} elapsed_ticks={} program={}\n",
             width,
             height,
             height,
             worker_slot,
-            xwalker.submitted as u32,
-            xwalker.readback_ok as u32,
-            height,
-            xwalker.reason,
-            xwalker.output_hits_lo64,
-            xwalker.dispatch_delta,
-            xwalker.finish_marker,
-            xwalker.expected_finish_marker,
+            PRIMARY_GPGPU_AFTER_LOGO_XWALKER_CHUNK_ROWS,
+            submitted,
+            accepted,
+            last_row,
+            last_xwalker.reason,
+            last_xwalker.output_hits_lo64,
+            dispatch_delta,
+            last_xwalker.finish_marker,
+            last_xwalker.expected_finish_marker,
             elapsed_ticks,
-            xwalker.program_name,
+            last_xwalker.program_name,
         );
         return;
     }
     crate::log!(
-        "intel/gpgpu: after-logo-railgun xwalker-fallback reason={} submitted={} finished={} dispatch_delta={} finish=0x{:08X}/0x{:08X} program={}\n",
-        xwalker.reason,
-        xwalker.submitted as u8,
-        xwalker.finished as u8,
-        xwalker.dispatch_delta,
-        xwalker.finish_marker,
-        xwalker.expected_finish_marker,
-        xwalker.program_name,
+        "intel/gpgpu: after-logo-railgun xwalker-fallback reason={} chunk_rows={} submitted={} accepted={} last={} finished={} dispatch_delta={} finish=0x{:08X}/0x{:08X} program={}\n",
+        last_xwalker.reason,
+        PRIMARY_GPGPU_AFTER_LOGO_XWALKER_CHUNK_ROWS,
+        submitted,
+        accepted,
+        last_row,
+        last_xwalker.finished as u8,
+        dispatch_delta,
+        last_xwalker.finish_marker,
+        last_xwalker.expected_finish_marker,
+        last_xwalker.program_name,
     );
 
+    run_primary_gpgpu_frame_after_logo_rowloop(width, height, worker_slot).await;
+}
+
+async fn run_primary_gpgpu_frame_after_logo_rowloop(width: u32, height: u32, worker_slot: u32) {
+    let start_ticks = embassy_time_driver::now();
     let mut row = 2u32;
     let mut last_proof = self::gpgpu::submit_gpgpu_primary_scanout_row2560_simd16_quiet(
         1,
@@ -875,6 +947,21 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16(
     color: u32,
 ) -> GpgpuOneTileSentinelProof {
     self::gpgpu::submit_gpgpu_primary_scanout_row2560_simd16(row_one_based, color)
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16_quiet(
+    row_one_based: u32,
+    color: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_row2560_simd16_quiet(row_one_based, color)
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16_xwalker(
+    row_one_based: u32,
+    rows: u32,
+    color: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_row2560_simd16_xwalker(row_one_based, rows, color)
 }
 
 pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd16_onestore(
