@@ -13,6 +13,16 @@ pub(crate) const CLEAR_RECT_RGBA8_WHITE_OPENCL_SOURCE: &str =
     include_str!("kernels/clear_rect_rgba8_white.cl");
 pub(crate) const EMPTY_EOT_KERNEL_NAME: &str = "empty_eot";
 pub(crate) const EMPTY_EOT_OPENCL_SOURCE: &str = include_str!("kernels/empty_eot.cl");
+pub(crate) const FILL_RECT_RGBA8_KERNEL_NAME: &str = "fill_rect_rgba8";
+pub(crate) const FILL_RECT_RGBA8_OPENCL_SOURCE: &str = include_str!("kernels/fill_rect_rgba8.cl");
+pub(crate) const BLIT_RGBA8_NEAREST_KERNEL_NAME: &str = "blit_rgba8_nearest";
+pub(crate) const BLIT_RGBA8_NEAREST_OPENCL_SOURCE: &str =
+    include_str!("kernels/blit_rgba8_nearest.cl");
+pub(crate) const ALPHA_BLEND_RGBA8_OVER_KERNEL_NAME: &str = "alpha_blend_rgba8_over";
+pub(crate) const ALPHA_BLEND_RGBA8_OVER_OPENCL_SOURCE: &str =
+    include_str!("kernels/alpha_blend_rgba8_over.cl");
+pub(crate) const GLYPH_MASK_RGBA8_KERNEL_NAME: &str = "glyph_mask_rgba8";
+pub(crate) const GLYPH_MASK_RGBA8_OPENCL_SOURCE: &str = include_str!("kernels/glyph_mask_rgba8.cl");
 pub(crate) const COPY_RECT_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/copy_rect_rgba8.bin");
 pub(crate) const COPY_RECT_RGBA8_ADLS_SPV: &[u8] =
@@ -27,6 +37,22 @@ pub(crate) const CLEAR_RECT_RGBA8_WHITE_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/clear_rect_rgba8_white.spv");
 pub(crate) const EMPTY_EOT_ADLS_BIN: &[u8] = include_bytes!("kernels/artifacts/adls/empty_eot.bin");
 pub(crate) const EMPTY_EOT_ADLS_SPV: &[u8] = include_bytes!("kernels/artifacts/adls/empty_eot.spv");
+pub(crate) const FILL_RECT_RGBA8_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/fill_rect_rgba8.bin");
+pub(crate) const FILL_RECT_RGBA8_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/fill_rect_rgba8.spv");
+pub(crate) const BLIT_RGBA8_NEAREST_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/blit_rgba8_nearest.bin");
+pub(crate) const BLIT_RGBA8_NEAREST_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/blit_rgba8_nearest.spv");
+pub(crate) const ALPHA_BLEND_RGBA8_OVER_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/alpha_blend_rgba8_over.bin");
+pub(crate) const ALPHA_BLEND_RGBA8_OVER_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/alpha_blend_rgba8_over.spv");
+pub(crate) const GLYPH_MASK_RGBA8_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/glyph_mask_rgba8.bin");
+pub(crate) const GLYPH_MASK_RGBA8_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/glyph_mask_rgba8.spv");
 pub(crate) const COPY_RECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x10, 0x86, 0x60, 0x24, 0xAA, 0xFF, 0xAE, 0x96, 0xF9, 0x2C, 0xFC, 0x25, 0xA5, 0xFB, 0x18, 0x8C,
     0xA4, 0x21, 0x99, 0x47, 0x89, 0xAF, 0xBC, 0x4D, 0xBA, 0x3D, 0xDC, 0x29, 0x0B, 0xD5, 0x83, 0xAB,
@@ -42,6 +68,22 @@ pub(crate) const CLEAR_RECT_RGBA8_WHITE_ADLS_BIN_SHA256: [u8; 32] = [
 pub(crate) const EMPTY_EOT_ADLS_BIN_SHA256: [u8; 32] = [
     0x72, 0x73, 0x17, 0x3D, 0xC0, 0xE3, 0xDE, 0x30, 0xED, 0x9B, 0xFA, 0x28, 0xC9, 0x03, 0xD6, 0xDB,
     0xAF, 0x49, 0x42, 0xF2, 0xF1, 0xAD, 0x1F, 0x20, 0xCC, 0xA3, 0x19, 0xCB, 0xFD, 0xD1, 0x4E, 0xAC,
+];
+pub(crate) const FILL_RECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
+    0xAB, 0x51, 0x9A, 0x0E, 0x4E, 0x47, 0x31, 0xE5, 0x8F, 0xF6, 0x5D, 0x75, 0xBF, 0x92, 0x93, 0x4C,
+    0xD7, 0x31, 0xA0, 0x88, 0x23, 0xB0, 0x40, 0x28, 0x62, 0x0E, 0x86, 0x54, 0x9F, 0x45, 0x06, 0xF4,
+];
+pub(crate) const BLIT_RGBA8_NEAREST_ADLS_BIN_SHA256: [u8; 32] = [
+    0x55, 0xF9, 0x41, 0xC8, 0x53, 0x71, 0xC0, 0xD1, 0xDF, 0x59, 0x89, 0x50, 0x01, 0xE6, 0x41, 0x23,
+    0x36, 0xA8, 0x7D, 0x65, 0xAD, 0x14, 0xD2, 0x7D, 0xB6, 0x4A, 0x31, 0xB3, 0x81, 0x36, 0x02, 0xE3,
+];
+pub(crate) const ALPHA_BLEND_RGBA8_OVER_ADLS_BIN_SHA256: [u8; 32] = [
+    0xDF, 0x30, 0x63, 0xCB, 0x0F, 0x72, 0x78, 0xD9, 0x6D, 0x15, 0xB4, 0xC4, 0x14, 0xC7, 0x9B, 0xA1,
+    0x77, 0x15, 0xF4, 0xA7, 0xA3, 0x68, 0xA8, 0x9F, 0xD1, 0x13, 0x87, 0xFB, 0x54, 0x0F, 0x48, 0x1C,
+];
+pub(crate) const GLYPH_MASK_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
+    0x90, 0x8D, 0xF0, 0x7D, 0x62, 0xB0, 0x69, 0xF3, 0x1A, 0x04, 0x6D, 0x29, 0x02, 0xDF, 0xF9, 0xA0,
+    0xFA, 0x33, 0xE4, 0x9A, 0x1C, 0x25, 0x3B, 0x74, 0xA4, 0xE7, 0xCC, 0x18, 0xDF, 0x66, 0xD3, 0x78,
 ];
 
 const COPY_RECT_RGBA8_ADLS_GPU: u64 = 0x0D20_0000;
@@ -150,7 +192,7 @@ const COPY_RECT_PIXELS_PER_LANE: u32 = 2;
 const COPY_RECT_SPAN_PIXELS: u32 = 16 * COPY_RECT_PIXELS_PER_LANE;
 const COPY_RECT_WIDE_PIXELS_PER_LANE: u32 = 16;
 const COPY_RECT_WIDE_SPAN_PIXELS: u32 = 16 * COPY_RECT_WIDE_PIXELS_PER_LANE;
-const COPY_RECT_BATCH_MAX_SPANS: usize = 16;
+const COPY_RECT_BATCH_MAX_SPANS: usize = 128;
 const COPY_RECT_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
 const COPY_RECT_SURFACE_STATE_DWORDS: usize = 16;
 const COPY_RECT_CROSS_THREAD_BYTES: usize = 96;
@@ -241,7 +283,7 @@ const SURFACE_FORMAT_RAW: u32 = 0x1FF;
 const DIRECT_RCS_ENABLED: bool = true;
 const DIRECT_RCS_RING_BYTES: usize = 4096;
 const DIRECT_RCS_CONTEXT_BYTES: usize = 22 * 4096;
-const DIRECT_RCS_BATCH_BYTES: usize = 8192;
+const DIRECT_RCS_BATCH_BYTES: usize = 64 * 1024;
 const DIRECT_RCS_RESULT_BYTES: usize = 4096;
 const DIRECT_RCS_PPGTT_PT_COUNT: usize = 128;
 const DIRECT_RCS_PPGTT_BYTES: usize = (3 + DIRECT_RCS_PPGTT_PT_COUNT) * 4096;
@@ -304,6 +346,66 @@ pub(crate) struct ClearRectRgba8WhiteParams {
     pub(crate) dst_y: u32,
     pub(crate) width: u32,
     pub(crate) height: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct FillRectRgba8Params {
+    pub(crate) dst_gpu: u64,
+    pub(crate) dst_pitch_bytes: u32,
+    pub(crate) dst_x: u32,
+    pub(crate) dst_y: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) color_rgba: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct BlitRgba8NearestParams {
+    pub(crate) src_gpu: u64,
+    pub(crate) dst_gpu: u64,
+    pub(crate) src_pitch_bytes: u32,
+    pub(crate) dst_pitch_bytes: u32,
+    pub(crate) src_x: u32,
+    pub(crate) src_y: u32,
+    pub(crate) src_width: u32,
+    pub(crate) src_height: u32,
+    pub(crate) dst_x: u32,
+    pub(crate) dst_y: u32,
+    pub(crate) dst_width: u32,
+    pub(crate) dst_height: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct AlphaBlendRgba8OverParams {
+    pub(crate) src_gpu: u64,
+    pub(crate) dst_gpu: u64,
+    pub(crate) src_pitch_bytes: u32,
+    pub(crate) dst_pitch_bytes: u32,
+    pub(crate) src_x: u32,
+    pub(crate) src_y: u32,
+    pub(crate) dst_x: u32,
+    pub(crate) dst_y: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GlyphMaskRgba8Params {
+    pub(crate) mask_gpu: u64,
+    pub(crate) dst_gpu: u64,
+    pub(crate) mask_pitch_bytes: u32,
+    pub(crate) dst_pitch_bytes: u32,
+    pub(crate) mask_x: u32,
+    pub(crate) mask_y: u32,
+    pub(crate) dst_x: u32,
+    pub(crate) dst_y: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) color_rgba: u32,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -528,6 +630,38 @@ pub(crate) struct GpgpuShellAtlasHotCopyResult {
     pub(crate) copy_ms: u64,
 }
 
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuAtlasBatchRequest {
+    pub(crate) slot: u16,
+    pub(crate) dst_xy: Option<GpgpuPoint>,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuShellAtlasBatchCopyResult {
+    pub(crate) ok: bool,
+    pub(crate) requested: usize,
+    pub(crate) staged_copies: usize,
+    pub(crate) copied_copies: usize,
+    pub(crate) failed_copies: usize,
+    pub(crate) last_slot: u16,
+    pub(crate) last_dst_xy: GpgpuPoint,
+    pub(crate) primary_width: u32,
+    pub(crate) primary_height: u32,
+    pub(crate) pixels: usize,
+    pub(crate) spans: usize,
+    pub(crate) expected_spans: usize,
+    pub(crate) submits: usize,
+    pub(crate) expected_submits: usize,
+    pub(crate) staged: usize,
+    pub(crate) copied: usize,
+    pub(crate) presented: bool,
+    pub(crate) total_ms: u64,
+    pub(crate) stage_ms: u64,
+    pub(crate) copy_ms: u64,
+    pub(crate) max_sprite_width: u32,
+    pub(crate) max_sprite_height: u32,
+}
+
 #[derive(Copy, Clone, Debug)]
 struct GpgpuShellSurface {
     surface: GpgpuRgba8Surface,
@@ -543,6 +677,15 @@ struct GpgpuTwemojiAtlasCache {
     height: u32,
     rgba: Vec<u8>,
     xrgb: Vec<u32>,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct StagedAtlasCopy {
+    slot: u16,
+    atlas_src_rect: GpgpuRect,
+    stage_rect: GpgpuRect,
+    dst_xy: GpgpuPoint,
+    pixels: usize,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -608,6 +751,38 @@ pub(crate) const EMPTY_EOT_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtif
     bin: EMPTY_EOT_ADLS_BIN,
     spv: EMPTY_EOT_ADLS_SPV,
     bin_sha256: EMPTY_EOT_ADLS_BIN_SHA256,
+};
+
+pub(crate) const FILL_RECT_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
+    name: FILL_RECT_RGBA8_KERNEL_NAME,
+    target: "adls",
+    bin: FILL_RECT_RGBA8_ADLS_BIN,
+    spv: FILL_RECT_RGBA8_ADLS_SPV,
+    bin_sha256: FILL_RECT_RGBA8_ADLS_BIN_SHA256,
+};
+
+pub(crate) const BLIT_RGBA8_NEAREST_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
+    name: BLIT_RGBA8_NEAREST_KERNEL_NAME,
+    target: "adls",
+    bin: BLIT_RGBA8_NEAREST_ADLS_BIN,
+    spv: BLIT_RGBA8_NEAREST_ADLS_SPV,
+    bin_sha256: BLIT_RGBA8_NEAREST_ADLS_BIN_SHA256,
+};
+
+pub(crate) const ALPHA_BLEND_RGBA8_OVER_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
+    name: ALPHA_BLEND_RGBA8_OVER_KERNEL_NAME,
+    target: "adls",
+    bin: ALPHA_BLEND_RGBA8_OVER_ADLS_BIN,
+    spv: ALPHA_BLEND_RGBA8_OVER_ADLS_SPV,
+    bin_sha256: ALPHA_BLEND_RGBA8_OVER_ADLS_BIN_SHA256,
+};
+
+pub(crate) const GLYPH_MASK_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
+    name: GLYPH_MASK_RGBA8_KERNEL_NAME,
+    target: "adls",
+    bin: GLYPH_MASK_RGBA8_ADLS_BIN,
+    spv: GLYPH_MASK_RGBA8_ADLS_SPV,
+    bin_sha256: GLYPH_MASK_RGBA8_ADLS_BIN_SHA256,
 };
 
 pub(crate) fn copy_rect_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
@@ -785,9 +960,50 @@ pub(crate) fn copy_rects_rgba8(copies: &[GpgpuCopyRect]) -> usize {
 }
 
 pub(crate) fn copy_rects_rgba8_stats(copies: &[GpgpuCopyRect]) -> GpgpuSubmitStats {
+    copy_rects_rgba8_stats_with_flavor(copies, false)
+}
+
+pub(crate) fn copy_rects_rgba8_wide_stats(copies: &[GpgpuCopyRect]) -> GpgpuSubmitStats {
+    copy_rects_rgba8_stats_with_flavor(copies, true)
+}
+
+fn copy_rects_rgba8_stats_with_flavor(copies: &[GpgpuCopyRect], wide: bool) -> GpgpuSubmitStats {
+    let Some(first) = copies.first().copied() else {
+        return GpgpuSubmitStats::default();
+    };
+    let Some(flavor) = (if wide {
+        copy_rect_kernel_flavor_wide()
+    } else {
+        copy_rect_kernel_flavor_narrow()
+    }) else {
+        return GpgpuSubmitStats::default();
+    };
+
+    let mut params = Vec::with_capacity(copies.len());
+    for copy in copies {
+        if !same_rgba8_surface(first.src, copy.src) || !same_rgba8_surface(first.dst, copy.dst) {
+            return copy_rects_rgba8_serial_stats_with_flavor(copies, wide);
+        }
+        let Some(copy_params) = lower_copy_rect(copy.src, copy.src_rect, copy.dst, copy.dst_xy)
+        else {
+            return GpgpuSubmitStats::default();
+        };
+        params.push(copy_params);
+    }
+    submit_copy_rect_multi_ops_with_stats(first.src, first.dst, &params, flavor)
+}
+
+fn copy_rects_rgba8_serial_stats_with_flavor(
+    copies: &[GpgpuCopyRect],
+    wide: bool,
+) -> GpgpuSubmitStats {
     let mut stats = GpgpuSubmitStats::default();
     for copy in copies {
-        let copy_stats = copy_rect_rgba8_stats(copy.src, copy.src_rect, copy.dst, copy.dst_xy);
+        let copy_stats = if wide {
+            copy_rect_rgba8_wide_stats(copy.src, copy.src_rect, copy.dst, copy.dst_xy)
+        } else {
+            copy_rect_rgba8_stats(copy.src, copy.src_rect, copy.dst, copy.dst_xy)
+        };
         stats.spans = stats.spans.saturating_add(copy_stats.spans);
         stats.submits = stats.submits.saturating_add(copy_stats.submits);
     }
@@ -1069,6 +1285,179 @@ pub(crate) fn shell_copy_twemoji_atlas_slot_scanout_hot(
     dst_xy_override: Option<GpgpuPoint>,
 ) -> Option<GpgpuShellAtlasHotCopyResult> {
     shell_copy_twemoji_atlas_slot_scanout_hot_with(slot, dst_xy_override, true)
+}
+
+pub(crate) fn shell_copy_twemoji_atlas_batch_scanout_hot(
+    requests: &[GpgpuAtlasBatchRequest],
+) -> Option<GpgpuShellAtlasBatchCopyResult> {
+    let total_start_tick = direct_rcs_now_tick();
+    if requests.is_empty() {
+        return None;
+    }
+
+    let shell = shell_surface_once()?;
+    let target = super::display::primary_surface_gpgpu_marker_target()?;
+    let primary = GpgpuRgba8Surface::new(
+        target.phys,
+        target.gpu,
+        target.byte_len,
+        target.width,
+        target.height,
+        target.pitch_bytes,
+    )?;
+    if target.virt.is_null() {
+        return None;
+    }
+    let atlas = twemoji_atlas_cache_once()?;
+
+    shell_zero_surface(shell);
+    let stage_start_tick = direct_rcs_now_tick();
+    let mut staged = Vec::with_capacity(requests.len());
+    let mut copies = Vec::with_capacity(requests.len());
+    let mut occupied_dst = Vec::with_capacity(requests.len());
+    let mut stage_x = 0u32;
+    let mut stage_y = 0u32;
+    let mut stage_row_h = 0u32;
+    let mut dst_x = 0u32;
+    let mut dst_y = 0u32;
+    let mut dst_row_h = 0u32;
+    let mut staged_pixels = 0usize;
+    let mut max_sprite_width = 0u32;
+    let mut max_sprite_height = 0u32;
+
+    for request in requests {
+        let Some(region) =
+            crate::gfx::althlasfont::twemoji::twemoji_lookup_slot_region(request.slot)
+        else {
+            continue;
+        };
+        let src_rect = GpgpuRect::new(
+            region.src_x as i32,
+            region.src_y as i32,
+            u32::from(region.src_w.max(1)),
+            u32::from(region.src_h.max(1)),
+        );
+        if !rect_is_inside_atlas(atlas.width, atlas.height, src_rect)
+            || src_rect.width > shell.surface.width
+            || src_rect.height > shell.surface.height
+            || src_rect.width > primary.width
+            || src_rect.height > primary.height
+        {
+            continue;
+        }
+
+        if stage_x.saturating_add(src_rect.width) > shell.surface.width {
+            stage_x = 0;
+            stage_y = stage_y.saturating_add(stage_row_h);
+            stage_row_h = 0;
+        }
+        if stage_y.saturating_add(src_rect.height) > shell.surface.height {
+            break;
+        }
+        let stage_xy = GpgpuPoint::new(stage_x as i32, stage_y as i32);
+        let stage_rect = GpgpuRect::new(stage_xy.x, stage_xy.y, src_rect.width, src_rect.height);
+        stage_x = stage_x.saturating_add(src_rect.width);
+        stage_row_h = stage_row_h.max(src_rect.height);
+
+        let dst_xy = if let Some(explicit) = request.dst_xy {
+            let dst_rect = GpgpuRect::new(explicit.x, explicit.y, src_rect.width, src_rect.height);
+            if !rect_is_inside(primary, dst_rect)
+                || occupied_dst
+                    .iter()
+                    .any(|used| rects_overlap(*used, dst_rect))
+            {
+                continue;
+            }
+            explicit
+        } else {
+            if dst_x.saturating_add(src_rect.width) > primary.width {
+                dst_x = 0;
+                dst_y = dst_y.saturating_add(dst_row_h);
+                dst_row_h = 0;
+            }
+            if dst_y.saturating_add(src_rect.height) > primary.height {
+                break;
+            }
+            let xy = GpgpuPoint::new(dst_x as i32, dst_y as i32);
+            dst_x = dst_x.saturating_add(src_rect.width);
+            dst_row_h = dst_row_h.max(src_rect.height);
+            xy
+        };
+        let dst_rect = GpgpuRect::new(dst_xy.x, dst_xy.y, src_rect.width, src_rect.height);
+
+        let pixels = shell_stage_atlas_over_scanout_xrgb_at(
+            shell, atlas, src_rect, target, dst_xy, stage_xy,
+        )?;
+        staged_pixels = staged_pixels.saturating_add(pixels);
+        max_sprite_width = max_sprite_width.max(src_rect.width);
+        max_sprite_height = max_sprite_height.max(src_rect.height);
+        occupied_dst.push(dst_rect);
+        staged.push(StagedAtlasCopy {
+            slot: request.slot,
+            atlas_src_rect: src_rect,
+            stage_rect,
+            dst_xy,
+            pixels,
+        });
+        copies.push(GpgpuCopyRect {
+            src: shell.surface,
+            src_rect: stage_rect,
+            dst: primary,
+            dst_xy,
+        });
+    }
+
+    let stage_ms = direct_rcs_elapsed_ms_since(stage_start_tick);
+    if copies.is_empty() {
+        return None;
+    }
+    super::dma_flush(shell.virt, shell.surface.bytes);
+
+    let copy_start_tick = direct_rcs_now_tick();
+    let stats = copy_rects_rgba8_wide_stats(&copies);
+    let copy_ms = direct_rcs_elapsed_ms_since(copy_start_tick);
+    let expected_spans = staged.iter().fold(0usize, |sum, copy| {
+        sum.saturating_add(copy_rect_wide_expected_spans(copy.stage_rect))
+    });
+    let expected_submits = expected_spans.div_ceil(COPY_RECT_BATCH_MAX_SPANS);
+    let copied_ok = stats.spans == expected_spans && stats.submits == expected_submits;
+    let copied_pixels = if copied_ok { staged_pixels } else { 0 };
+    let copied_copies = if copied_ok { staged.len() } else { 0 };
+    let (flush_offset, flush_bytes) = primary_flush_range_for_rects(primary, &occupied_dst)?;
+    let presented = super::display::notify_primary_surface_external_write(
+        "gpgpu-twemoji-atlas-go-batch",
+        flush_offset,
+        flush_bytes,
+    );
+    let last = staged.last().copied()?;
+    let failed_copies = requests.len().saturating_sub(staged.len());
+
+    Some(GpgpuShellAtlasBatchCopyResult {
+        ok: failed_copies == 0 && copied_ok && presented,
+        requested: requests.len(),
+        staged_copies: staged.len(),
+        copied_copies,
+        failed_copies,
+        last_slot: last.slot,
+        last_dst_xy: last.dst_xy,
+        primary_width: primary.width,
+        primary_height: primary.height,
+        pixels: staged
+            .iter()
+            .fold(0usize, |sum, copy| sum.saturating_add(copy.pixels)),
+        spans: stats.spans,
+        expected_spans,
+        submits: stats.submits,
+        expected_submits,
+        staged: staged_pixels,
+        copied: copied_pixels,
+        presented,
+        total_ms: direct_rcs_elapsed_ms_since(total_start_tick),
+        stage_ms,
+        copy_ms,
+        max_sprite_width,
+        max_sprite_height,
+    })
 }
 
 fn shell_copy_twemoji_atlas_slot_scanout_hot_with(
@@ -2206,13 +2595,31 @@ fn shell_stage_atlas_over_scanout_xrgb(
     target: super::display::PrimarySurfaceGpgpuTarget,
     dst_xy: GpgpuPoint,
 ) -> Option<usize> {
-    if !rect_is_inside(shell.surface, GpgpuRect::new(0, 0, src_rect.width, src_rect.height))
+    shell_stage_atlas_over_scanout_xrgb_at(
+        shell,
+        atlas,
+        src_rect,
+        target,
+        dst_xy,
+        GpgpuPoint::new(0, 0),
+    )
+}
+
+fn shell_stage_atlas_over_scanout_xrgb_at(
+    shell: GpgpuShellSurface,
+    atlas: &GpgpuTwemojiAtlasCache,
+    src_rect: GpgpuRect,
+    target: super::display::PrimarySurfaceGpgpuTarget,
+    dst_xy: GpgpuPoint,
+    stage_xy: GpgpuPoint,
+) -> Option<usize> {
+    let stage_rect = GpgpuRect::new(stage_xy.x, stage_xy.y, src_rect.width, src_rect.height);
+    if !rect_is_inside(shell.surface, stage_rect)
         || !rect_is_inside_atlas(atlas.width, atlas.height, src_rect)
     {
         return None;
     }
 
-    let atlas_width = atlas.width as usize;
     let mut staged = 0usize;
     for y in 0..src_rect.height {
         for x in 0..src_rect.width {
@@ -2224,7 +2631,7 @@ fn shell_stage_atlas_over_scanout_xrgb(
                 let dst = primary_read_pixel(target, dst_xy.x as u32 + x, dst_xy.y as u32 + y);
                 blend_xrgb_over_xrgb(xrgb, a, dst)
             };
-            shell_write_pixel(shell, x, y, pixel);
+            shell_write_pixel(shell, stage_xy.x as u32 + x, stage_xy.y as u32 + y, pixel);
             staged += 1;
         }
     }
@@ -2381,6 +2788,41 @@ fn primary_count_shell_raw_copy(
     (src_preserved, copied)
 }
 
+fn primary_flush_range_for_rects(
+    primary: GpgpuRgba8Surface,
+    rects: &[GpgpuRect],
+) -> Option<(usize, usize)> {
+    let mut min_x = u32::MAX;
+    let mut min_y = u32::MAX;
+    let mut max_x = 0u32;
+    let mut max_y = 0u32;
+    for rect in rects {
+        if !rect_is_inside(primary, *rect) {
+            return None;
+        }
+        let x = rect.x as u32;
+        let y = rect.y as u32;
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x.saturating_add(rect.width));
+        max_y = max_y.max(y.saturating_add(rect.height));
+    }
+    if min_x == u32::MAX || min_y == u32::MAX || max_x <= min_x || max_y <= min_y {
+        return None;
+    }
+    let row_count = max_y.saturating_sub(min_y) as usize;
+    let flush_offset = (min_y as usize)
+        .saturating_mul(primary.pitch_bytes as usize)
+        .saturating_add((min_x as usize).saturating_mul(core::mem::size_of::<u32>()));
+    let flush_bytes = row_count
+        .saturating_sub(1)
+        .saturating_mul(primary.pitch_bytes as usize)
+        .saturating_add(
+            (max_x.saturating_sub(min_x) as usize).saturating_mul(core::mem::size_of::<u32>()),
+        );
+    Some((flush_offset, flush_bytes))
+}
+
 fn primary_read_pixel(target: super::display::PrimarySurfaceGpgpuTarget, x: u32, y: u32) -> u32 {
     let offset = (y as usize)
         .saturating_mul(target.pitch_bytes as usize)
@@ -2471,6 +2913,15 @@ fn rects_overlap(a: GpgpuRect, b: GpgpuRect) -> bool {
     let bx2 = b.x as i64 + b.width as i64;
     let by2 = b.y as i64 + b.height as i64;
     (a.x as i64) < bx2 && (b.x as i64) < ax2 && (a.y as i64) < by2 && (b.y as i64) < ay2
+}
+
+fn same_rgba8_surface(a: GpgpuRgba8Surface, b: GpgpuRgba8Surface) -> bool {
+    a.phys == b.phys
+        && a.gpu == b.gpu
+        && a.bytes == b.bytes
+        && a.width == b.width
+        && a.height == b.height
+        && a.pitch_bytes == b.pitch_bytes
 }
 
 fn lower_clear_rect_white(
@@ -2618,6 +3069,45 @@ fn submit_copy_rect_spans_with_stats(
     stats
 }
 
+fn submit_copy_rect_multi_ops_with_stats(
+    src: GpgpuRgba8Surface,
+    dst: GpgpuRgba8Surface,
+    params: &[CopyRectRgba8Params],
+    flavor: CopyRectKernelFlavor,
+) -> GpgpuSubmitStats {
+    let mut stats = GpgpuSubmitStats::default();
+    let mut span_params = Vec::with_capacity(COPY_RECT_BATCH_MAX_SPANS.min(32));
+
+    for op in params {
+        let Some(total_spans) = copy_rect_span_count(*op, flavor.span_pixels) else {
+            continue;
+        };
+        for span_index in 0..total_spans {
+            let Some(span) = copy_rect_span_params(*op, flavor.span_pixels, span_index) else {
+                return stats;
+            };
+            span_params.push(span);
+            if span_params.len() == COPY_RECT_BATCH_MAX_SPANS {
+                if !submit_copy_rect_span_params_batch(src, dst, &span_params, flavor) {
+                    return stats;
+                }
+                stats.spans = stats.spans.saturating_add(span_params.len());
+                stats.submits = stats.submits.saturating_add(1);
+                span_params.clear();
+            }
+        }
+    }
+
+    if !span_params.is_empty() {
+        if !submit_copy_rect_span_params_batch(src, dst, &span_params, flavor) {
+            return stats;
+        }
+        stats.spans = stats.spans.saturating_add(span_params.len());
+        stats.submits = stats.submits.saturating_add(1);
+    }
+    stats
+}
+
 fn copy_rect_span_count(params: CopyRectRgba8Params, span_pixels: u32) -> Option<usize> {
     if params.width == 0 || params.height == 0 {
         return None;
@@ -2731,6 +3221,54 @@ fn submit_copy_rect_span_batch(
     let batch_ok = dst_ppgtt_ok
         && direct_rcs_encode_copy_rect_multi_walker_batch(
             state, flavor, params, src.bytes, dst.bytes, span_start, span_count,
+        );
+    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
+    let observed = if submitted {
+        direct_rcs_poll_result_slot(state, COPY_RECT_POST_MARKER_SLOT, COPY_RECT_POST_MARKER)
+    } else {
+        0
+    };
+    observed == COPY_RECT_POST_MARKER
+}
+
+fn submit_copy_rect_span_params_batch(
+    src: GpgpuRgba8Surface,
+    dst: GpgpuRgba8Surface,
+    span_params: &[CopyRectRgba8Params],
+    flavor: CopyRectKernelFlavor,
+) -> bool {
+    if span_params.is_empty() || span_params.len() > COPY_RECT_BATCH_MAX_SPANS {
+        return false;
+    }
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let Some(dev) = super::claimed_device() else {
+        return false;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        return false;
+    };
+
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(
+            state,
+            flavor.upload.gpu,
+            flavor.upload.phys,
+            flavor.upload.mapped_bytes,
+        );
+    let src_ppgtt_ok =
+        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, src.gpu, src.phys, src.bytes);
+    let dst_ppgtt_ok =
+        src_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
+    let batch_ok = dst_ppgtt_ok
+        && direct_rcs_encode_copy_rect_span_params_batch(
+            state,
+            flavor,
+            span_params,
+            src.bytes,
+            dst.bytes,
         );
     let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
     let observed = if submitted {
@@ -3427,6 +3965,137 @@ fn direct_rcs_encode_copy_rect_multi_walker_batch(
             &mut cursor,
             payload_offset,
             copy_rect_walker_right_mask_for(span_params.width, flavor.pixels_per_lane),
+        );
+        ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
+        ok &= direct_rcs_push(batch, &mut cursor, 0);
+    }
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        COPY_RECT_POST_MARKER_SLOT,
+        COPY_RECT_POST_MARKER,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, MI_BATCH_BUFFER_END);
+    ok &= direct_rcs_push(batch, &mut cursor, MI_NOOP);
+
+    if !ok {
+        return false;
+    }
+
+    super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
+    super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
+    true
+}
+
+fn direct_rcs_encode_copy_rect_span_params_batch(
+    state: DirectRcsState,
+    flavor: CopyRectKernelFlavor,
+    span_params: &[CopyRectRgba8Params],
+    src_bytes: usize,
+    dst_bytes: usize,
+) -> bool {
+    if span_params.is_empty() || span_params.len() > COPY_RECT_BATCH_MAX_SPANS {
+        return false;
+    }
+    let payload_end =
+        COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES + span_params.len() * COPY_RECT_INDIRECT_BYTES;
+    if payload_end > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+
+    unsafe {
+        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
+        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+    }
+
+    let first = span_params[0];
+    if !direct_rcs_write_copy_rect_interface_descriptor_at(
+        state,
+        COPY_RECT_BATCH_IDD_OFFSET_BYTES,
+        COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES,
+        flavor.text_offset_bytes,
+    ) {
+        return false;
+    }
+    if !direct_rcs_write_copy_rect_surface_states_at(
+        state,
+        COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES,
+        COPY_RECT_BATCH_SRC_SURFACE_STATE_OFFSET_BYTES,
+        COPY_RECT_BATCH_DST_SURFACE_STATE_OFFSET_BYTES,
+        first.src_gpu,
+        src_bytes,
+        first.dst_gpu,
+        dst_bytes,
+    ) {
+        return false;
+    }
+    for (span, params) in span_params.iter().copied().enumerate() {
+        let payload_offset =
+            COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES + span * COPY_RECT_INDIRECT_BYTES;
+        if !direct_rcs_write_copy_rect_payload_at(state, payload_offset, params) {
+            return false;
+        }
+    }
+
+    let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
+    let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
+    let mut cursor = 0usize;
+    let mut ok = true;
+
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL | 1,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_3D);
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
+    );
+    ok &= direct_rcs_push_state_base_address(
+        batch,
+        &mut cursor,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        flavor.upload.gpu,
+    );
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_VFE_STATE_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW3_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW5_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_IDD_BYTES as u32);
+    ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_BATCH_IDD_OFFSET_BYTES as u32);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        COPY_RECT_PRE_MARKER_SLOT,
+        COPY_RECT_PRE_MARKER,
+    );
+    for (span, params) in span_params.iter().copied().enumerate() {
+        let payload_offset =
+            COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES + span * COPY_RECT_INDIRECT_BYTES;
+        ok &= direct_rcs_push_copy_rect_walker(
+            batch,
+            &mut cursor,
+            payload_offset,
+            copy_rect_walker_right_mask_for(params.width, flavor.pixels_per_lane),
         );
         ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
         ok &= direct_rcs_push(batch, &mut cursor, 0);

@@ -1,4 +1,5 @@
 use alloc::string::String as AllocString;
+use alloc::vec::Vec;
 use core::str::SplitWhitespace;
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -6,10 +7,10 @@ use super::super::{ShellBackend2, print_shell_line};
 use crate::gfx::althlasfont::twemoji::twemoji_slot_count;
 use crate::intel::gpgpu::{
     GPGPU_SHELL_SURFACE_HEIGHT, GPGPU_SHELL_SURFACE_PITCH_BYTES, GPGPU_SHELL_SURFACE_WIDTH,
-    GpgpuPoint, GpgpuRect, clear_rect_rgba8_white_upload_status, copy_rect_rgba8_upload_status,
-    copy_rect_rgba8_wide_upload_status, empty_eot_upload_status, shell_clear_white_rgba8,
-    shell_copy_rgba8, shell_copy_scanout_center_rgba8, shell_copy_twemoji_atlas_slot_scanout,
-    shell_copy_twemoji_atlas_slot_scanout_hot,
+    GpgpuAtlasBatchRequest, GpgpuPoint, GpgpuRect, clear_rect_rgba8_white_upload_status,
+    copy_rect_rgba8_upload_status, copy_rect_rgba8_wide_upload_status, empty_eot_upload_status,
+    shell_clear_white_rgba8, shell_copy_rgba8, shell_copy_scanout_center_rgba8,
+    shell_copy_twemoji_atlas_batch_scanout_hot, shell_copy_twemoji_atlas_slot_scanout,
 };
 use crate::shell2::shell2_cmd::ParseOutcome;
 use crate::tyche::SoftRng;
