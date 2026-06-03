@@ -20,8 +20,8 @@ pub(crate) const CLEAR_RECT_RGBA8_WHITE_ADLS_SPV: &[u8] =
 pub(crate) const EMPTY_EOT_ADLS_BIN: &[u8] = include_bytes!("kernels/artifacts/adls/empty_eot.bin");
 pub(crate) const EMPTY_EOT_ADLS_SPV: &[u8] = include_bytes!("kernels/artifacts/adls/empty_eot.spv");
 pub(crate) const COPY_RECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
-    0xC6, 0x8C, 0xD7, 0x18, 0xDC, 0xD2, 0x24, 0x1D, 0xB1, 0xD0, 0xF4, 0x4D, 0xB5, 0x4B, 0x7B, 0x9B,
-    0x1C, 0x70, 0x7A, 0xA8, 0x9C, 0x52, 0x4E, 0xDD, 0xC8, 0xBD, 0x2B, 0x9F, 0x69, 0x78, 0xE2, 0x49,
+    0x10, 0x86, 0x60, 0x24, 0xAA, 0xFF, 0xAE, 0x96, 0xF9, 0x2C, 0xFC, 0x25, 0xA5, 0xFB, 0x18, 0x8C,
+    0xA4, 0x21, 0x99, 0x47, 0x89, 0xAF, 0xBC, 0x4D, 0xBA, 0x3D, 0xDC, 0x29, 0x0B, 0xD5, 0x83, 0xAB,
 ];
 pub(crate) const CLEAR_RECT_RGBA8_WHITE_ADLS_BIN_SHA256: [u8; 32] = [
     0x96, 0xB9, 0x6D, 0x64, 0x58, 0xBA, 0xDA, 0x38, 0x28, 0xB5, 0xE0, 0x5D, 0xD0, 0xD4, 0xDE, 0xCE,
@@ -36,6 +36,7 @@ const COPY_RECT_RGBA8_ADLS_GPU: u64 = 0x0D20_0000;
 const CLEAR_RECT_RGBA8_WHITE_ADLS_GPU: u64 = 0x0D21_0000;
 const EMPTY_EOT_ADLS_GPU: u64 = 0x0D22_0000;
 const COPY_RECT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
+const CLEAR_RECT_RGBA8_WHITE_TEXT_OFFSET_BYTES: u64 = 0x40;
 const EMPTY_EOT_TEXT_OFFSET_BYTES: u64 = 0x40;
 
 const RCS_RING_BASE: usize = 0x0000_2000;
@@ -122,17 +123,109 @@ const GPGPU_WALKER_SIMD16_SELECT: u32 = 1;
 const GPGPU_WALKER_GROUP_Z_DIM: u32 = 1;
 const GPGPU_WALKER_SIMD16_MASK: u32 = 0x0000_FFFF;
 const GPGPU_WALKER_BOTTOM_MASK: u32 = 0xFFFF_FFFF;
+const COPY_RECT_IDD_OFFSET_BYTES: usize = 0x300;
+const COPY_RECT_BINDING_TABLE_OFFSET_BYTES: usize = 0x340;
+const COPY_RECT_SRC_SURFACE_STATE_OFFSET_BYTES: usize = 0x380;
+const COPY_RECT_DST_SURFACE_STATE_OFFSET_BYTES: usize = 0x3C0;
+const COPY_RECT_PAYLOAD_OFFSET_BYTES: usize = 0x500;
+const COPY_RECT_BATCH_IDD_OFFSET_BYTES: usize = 0x1000;
+const COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES: usize = 0x1040;
+const COPY_RECT_BATCH_SRC_SURFACE_STATE_OFFSET_BYTES: usize = 0x1080;
+const COPY_RECT_BATCH_DST_SURFACE_STATE_OFFSET_BYTES: usize = 0x10C0;
+const COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES: usize = 0x1200;
+const COPY_RECT_PIXELS_PER_LANE: u32 = 2;
+const COPY_RECT_SPAN_PIXELS: u32 = 16 * COPY_RECT_PIXELS_PER_LANE;
+const COPY_RECT_BATCH_MAX_SPANS: usize = 16;
+const COPY_RECT_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
+const COPY_RECT_SURFACE_STATE_DWORDS: usize = 16;
+const COPY_RECT_CROSS_THREAD_BYTES: usize = 96;
+const COPY_RECT_PER_THREAD_BYTES: usize = 96;
+const COPY_RECT_INDIRECT_BYTES: usize = COPY_RECT_CROSS_THREAD_BYTES + COPY_RECT_PER_THREAD_BYTES;
+const COPY_RECT_TEST_WIDTH: u32 = 4;
+const COPY_RECT_TEST_HEIGHT: u32 = 1;
+const COPY_RECT_TEST_PIXELS: usize =
+    (COPY_RECT_TEST_WIDTH as usize) * (COPY_RECT_TEST_HEIGHT as usize);
+const COPY_RECT_TEST_ROW_PIXELS: u32 = COPY_RECT_TEST_WIDTH * 2;
+const COPY_RECT_TEST_ROW_DWORDS: usize = COPY_RECT_TEST_ROW_PIXELS as usize;
+const COPY_RECT_TEST_PITCH_BYTES: u32 =
+    COPY_RECT_TEST_ROW_PIXELS * core::mem::size_of::<u32>() as u32;
+const COPY_RECT_TEST_DST_X: u32 = COPY_RECT_TEST_WIDTH;
+const COPY_RECT_WALKER_RIGHT_MASK: u32 = 0x0000_0003;
+const COPY_RECT_PRE_MARKER_SLOT: usize = 5;
+const COPY_RECT_POST_MARKER_SLOT: usize = 4;
+const COPY_RECT_PRE_MARKER: u32 = 0xC0DE_A701;
+const COPY_RECT_POST_MARKER: u32 = 0xC0DE_A702;
+const COPY_RECT_DST_POISON0: u32 = 0x1111_1111;
+const COPY_RECT_DST_POISON1: u32 = 0x2222_2222;
+const COPY_RECT_DST_POISON2: u32 = 0x3333_3333;
+const COPY_RECT_DST_POISON3: u32 = 0x4444_4444;
+const COPY_RECT_256_WIDTH: u32 = 256;
+const COPY_RECT_256_HEIGHT: u32 = 1;
+const COPY_RECT_256_SURFACE_WIDTH: u32 = COPY_RECT_256_WIDTH * 2;
+const COPY_RECT_256_PITCH_BYTES: u32 =
+    COPY_RECT_256_SURFACE_WIDTH * core::mem::size_of::<u32>() as u32;
+const COPY_RECT_256_EXPECTED_SPANS: usize = 8;
+const COPY_RECT_256_SAMPLE_INDICES: [usize; 10] = [0, 1, 2, 3, 64, 127, 128, 191, 254, 255];
+const COPY_RECT_256X2_WIDTH: u32 = 256;
+const COPY_RECT_256X2_HEIGHT: u32 = 2;
+const COPY_RECT_256X2_SURFACE_WIDTH: u32 = COPY_RECT_256X2_WIDTH * 2;
+const COPY_RECT_256X2_PITCH_BYTES: u32 =
+    COPY_RECT_256X2_SURFACE_WIDTH * core::mem::size_of::<u32>() as u32;
+const COPY_RECT_256X2_EXPECTED_SPANS: usize = 16;
+const COPY_RECT_256X2_EXPECTED_SUBMITS: usize = 1;
+const COPY_RECT_256X2_SAMPLE_POINTS: [(usize, usize); 12] = [
+    (0, 0),
+    (1, 0),
+    (2, 0),
+    (3, 0),
+    (127, 0),
+    (255, 0),
+    (0, 1),
+    (1, 1),
+    (2, 1),
+    (3, 1),
+    (127, 1),
+    (255, 1),
+];
 const EMPTY_EOT_IDD_OFFSET_BYTES: usize = 0x300;
 const EMPTY_EOT_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
 const EMPTY_EOT_PRE_MARKER_SLOT: usize = 1;
 const EMPTY_EOT_POST_MARKER_SLOT: usize = 0;
 const EMPTY_EOT_PRE_MARKER: u32 = 0xC0DE_E701;
 const EMPTY_EOT_POST_MARKER: u32 = 0xC0DE_E702;
+const CLEAR_RECT_IDD_OFFSET_BYTES: usize = 0x300;
+const CLEAR_RECT_BINDING_TABLE_OFFSET_BYTES: usize = 0x340;
+const CLEAR_RECT_SURFACE_STATE_OFFSET_BYTES: usize = 0x380;
+const CLEAR_RECT_PAYLOAD_OFFSET_BYTES: usize = 0x500;
+const CLEAR_RECT_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
+const CLEAR_RECT_SURFACE_STATE_DWORDS: usize = 16;
+const CLEAR_RECT_CROSS_THREAD_BYTES: usize = 96;
+const CLEAR_RECT_PER_THREAD_BYTES: usize = 96;
+const CLEAR_RECT_INDIRECT_BYTES: usize =
+    CLEAR_RECT_CROSS_THREAD_BYTES + CLEAR_RECT_PER_THREAD_BYTES;
+const CLEAR_RECT_TEST_BYTES: usize = 4096;
+const CLEAR_RECT_TEST_WIDTH: u32 = 4;
+const CLEAR_RECT_TEST_HEIGHT: u32 = 1;
+const CLEAR_RECT_TEST_PIXELS: usize =
+    (CLEAR_RECT_TEST_WIDTH as usize) * (CLEAR_RECT_TEST_HEIGHT as usize);
+const CLEAR_RECT_TEST_PITCH_BYTES: u32 = CLEAR_RECT_TEST_WIDTH * core::mem::size_of::<u32>() as u32;
+const CLEAR_RECT_WALKER_RIGHT_MASK: u32 = 0x0000_000F;
+const CLEAR_RECT_PRE_MARKER_SLOT: usize = 3;
+const CLEAR_RECT_POST_MARKER_SLOT: usize = 2;
+const CLEAR_RECT_PRE_MARKER: u32 = 0xC0DE_C701;
+const CLEAR_RECT_POST_MARKER: u32 = 0xC0DE_C702;
+const CLEAR_RECT_EXPECTED_WHITE: u32 = 0xFFFF_FFFF;
+const CLEAR_RECT_RGBA_RED: u32 = 0xFF00_00FF;
+const CLEAR_RECT_RGBA_GREEN: u32 = 0xFF00_FF00;
+const CLEAR_RECT_RGBA_BLUE: u32 = 0xFFFF_0000;
+const CLEAR_RECT_RGBA_BLACK: u32 = 0xFF00_0000;
+const SURFTYPE_BUFFER: u32 = 4;
+const SURFACE_FORMAT_RAW: u32 = 0x1FF;
 
 const DIRECT_RCS_ENABLED: bool = true;
 const DIRECT_RCS_RING_BYTES: usize = 4096;
 const DIRECT_RCS_CONTEXT_BYTES: usize = 22 * 4096;
-const DIRECT_RCS_BATCH_BYTES: usize = 4096;
+const DIRECT_RCS_BATCH_BYTES: usize = 8192;
 const DIRECT_RCS_RESULT_BYTES: usize = 4096;
 const DIRECT_RCS_PPGTT_PT_COUNT: usize = 128;
 const DIRECT_RCS_PPGTT_BYTES: usize = (3 + DIRECT_RCS_PPGTT_PT_COUNT) * 4096;
@@ -141,16 +234,30 @@ const DIRECT_RCS_BATCH_START_DWORDS: usize = 4;
 const DIRECT_RCS_GPU_VA_RING_BASE: u64 = 0x0080_0000;
 const DIRECT_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x0081_0000;
 const DIRECT_RCS_GPU_VA_RESULT_BASE: u64 = 0x0084_0000;
+const DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE: u64 = 0x0089_0000;
+const DIRECT_RCS_GPU_VA_SHELL_SURFACE_BASE: u64 = 0x008A_0000;
 const DIRECT_RCS_GPU_VA_BATCH_BASE: u64 = 0x0180_0000;
 const DIRECT_RCS_SMOKE_MARKER: u32 = 0xC0DE_5101;
 const DIRECT_RCS_SMOKE_POLL_ITERS: usize = 262_144;
+const GPGPU_SHELL_SURFACE_BYTES: usize = 4096;
+pub(crate) const GPGPU_SHELL_SURFACE_WIDTH: u32 = 64;
+pub(crate) const GPGPU_SHELL_SURFACE_HEIGHT: u32 = 4;
+pub(crate) const GPGPU_SHELL_SURFACE_PITCH_BYTES: u32 =
+    GPGPU_SHELL_SURFACE_WIDTH * core::mem::size_of::<u32>() as u32;
 
 static COPY_RECT_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static CLEAR_RECT_RGBA8_WHITE_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static EMPTY_EOT_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static DIRECT_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
+static GPGPU_SHELL_SURFACE: Mutex<Option<GpgpuShellSurface>> = Mutex::new(None);
+static DIRECT_RCS_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 static DIRECT_RCS_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
 static EMPTY_EOT_WALKER_RAN: AtomicBool = AtomicBool::new(false);
+static CLEAR_RECT_WALKER_RAN: AtomicBool = AtomicBool::new(false);
+static COPY_RECT_WALKER_RAN: AtomicBool = AtomicBool::new(false);
+static COPY_RECT_256_RAN: AtomicBool = AtomicBool::new(false);
+static COPY_RECT_256X2_RAN: AtomicBool = AtomicBool::new(false);
+static RECT_API_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
 static DIRECT_RCS_SUBMIT_COUNTER: AtomicU32 = AtomicU32::new(0);
 static DIRECT_RCS_RING_KICK_DWORD: AtomicU32 = AtomicU32::new(0);
 
@@ -179,6 +286,166 @@ pub(crate) struct ClearRectRgba8WhiteParams {
     pub(crate) width: u32,
     pub(crate) height: u32,
 }
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GpgpuPoint {
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+}
+
+impl GpgpuPoint {
+    pub(crate) const fn new(x: i32, y: i32) -> Self {
+        Self { x, y }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GpgpuRect {
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
+impl GpgpuRect {
+    pub(crate) const fn new(x: i32, y: i32, width: u32, height: u32) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    pub(crate) const fn is_empty(self) -> bool {
+        self.width == 0 || self.height == 0
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuRgba8Surface {
+    pub(crate) phys: u64,
+    pub(crate) gpu: u64,
+    pub(crate) bytes: usize,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) pitch_bytes: u32,
+}
+
+impl GpgpuRgba8Surface {
+    pub(crate) fn new(
+        phys: u64,
+        gpu: u64,
+        bytes: usize,
+        width: u32,
+        height: u32,
+        pitch_bytes: u32,
+    ) -> Option<Self> {
+        let surface = Self {
+            phys,
+            gpu,
+            bytes,
+            width,
+            height,
+            pitch_bytes,
+        };
+        if surface.is_valid() {
+            Some(surface)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn is_valid(self) -> bool {
+        if self.width == 0 || self.height == 0 {
+            return false;
+        }
+        if (self.phys & 0xFFF) != 0 {
+            return false;
+        }
+        let min_pitch = self
+            .width
+            .saturating_mul(core::mem::size_of::<u32>() as u32);
+        if self.pitch_bytes < min_pitch {
+            return false;
+        }
+        let Some(last_row) = (self.height as usize)
+            .checked_sub(1)
+            .and_then(|row| row.checked_mul(self.pitch_bytes as usize))
+        else {
+            return false;
+        };
+        let Some(min_bytes) = last_row.checked_add(min_pitch as usize) else {
+            return false;
+        };
+        min_bytes <= self.bytes
+    }
+
+    pub(crate) const fn bounds(self) -> GpgpuRect {
+        GpgpuRect::new(0, 0, self.width, self.height)
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuCopyRect {
+    pub(crate) src: GpgpuRgba8Surface,
+    pub(crate) src_rect: GpgpuRect,
+    pub(crate) dst: GpgpuRgba8Surface,
+    pub(crate) dst_xy: GpgpuPoint,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuGlyphBlit {
+    pub(crate) atlas: GpgpuRgba8Surface,
+    pub(crate) glyph_rect: GpgpuRect,
+    pub(crate) dst: GpgpuRgba8Surface,
+    pub(crate) dst_xy: GpgpuPoint,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuSubmitStats {
+    pub(crate) spans: usize,
+    pub(crate) submits: usize,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuShellClearResult {
+    pub(crate) ok: bool,
+    pub(crate) rect: GpgpuRect,
+    pub(crate) pixels: usize,
+    pub(crate) spans: usize,
+    pub(crate) expected_spans: usize,
+    pub(crate) white: usize,
+    pub(crate) before_head: [u32; 4],
+    pub(crate) after_head: [u32; 4],
+    pub(crate) surface: GpgpuRgba8Surface,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuShellCopyResult {
+    pub(crate) ok: bool,
+    pub(crate) src_rect: GpgpuRect,
+    pub(crate) dst_xy: GpgpuPoint,
+    pub(crate) pixels: usize,
+    pub(crate) spans: usize,
+    pub(crate) expected_spans: usize,
+    pub(crate) submits: usize,
+    pub(crate) expected_submits: usize,
+    pub(crate) copied: usize,
+    pub(crate) src_preserved: usize,
+    pub(crate) src_head: [u32; 4],
+    pub(crate) dst_head: [u32; 4],
+    pub(crate) surface: GpgpuRgba8Surface,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct GpgpuShellSurface {
+    surface: GpgpuRgba8Surface,
+    virt: *mut u8,
+}
+
+unsafe impl Send for GpgpuShellSurface {}
+unsafe impl Sync for GpgpuShellSurface {}
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct GpgpuKernelArtifact {
@@ -298,6 +565,137 @@ pub(crate) fn upload_empty_eot_kernel() -> Option<UploadedKernelArtifact> {
     Some(upload)
 }
 
+pub(crate) fn fill_rect_white_rgba8(dst: GpgpuRgba8Surface, rect: GpgpuRect) -> usize {
+    let Some(params) = lower_clear_rect_white(dst, rect) else {
+        return 0;
+    };
+    submit_clear_rect_white_spans(dst, params)
+}
+
+#[allow(dead_code)]
+pub(crate) fn copy_rect_rgba8(
+    src: GpgpuRgba8Surface,
+    src_rect: GpgpuRect,
+    dst: GpgpuRgba8Surface,
+    dst_xy: GpgpuPoint,
+) -> usize {
+    copy_rect_rgba8_stats(src, src_rect, dst, dst_xy).spans
+}
+
+pub(crate) fn copy_rect_rgba8_stats(
+    src: GpgpuRgba8Surface,
+    src_rect: GpgpuRect,
+    dst: GpgpuRgba8Surface,
+    dst_xy: GpgpuPoint,
+) -> GpgpuSubmitStats {
+    let Some(params) = lower_copy_rect(src, src_rect, dst, dst_xy) else {
+        return GpgpuSubmitStats::default();
+    };
+    submit_copy_rect_spans_with_stats(src, dst, params)
+}
+
+#[allow(dead_code)]
+pub(crate) fn blit_glyph_rgba8(blit: GpgpuGlyphBlit) -> usize {
+    blit_glyph_rgba8_stats(blit).spans
+}
+
+pub(crate) fn blit_glyph_rgba8_stats(blit: GpgpuGlyphBlit) -> GpgpuSubmitStats {
+    copy_rect_rgba8_stats(blit.atlas, blit.glyph_rect, blit.dst, blit.dst_xy)
+}
+
+#[allow(dead_code)]
+pub(crate) fn copy_rects_rgba8(copies: &[GpgpuCopyRect]) -> usize {
+    copy_rects_rgba8_stats(copies).spans
+}
+
+pub(crate) fn copy_rects_rgba8_stats(copies: &[GpgpuCopyRect]) -> GpgpuSubmitStats {
+    let mut stats = GpgpuSubmitStats::default();
+    for copy in copies {
+        let copy_stats = copy_rect_rgba8_stats(copy.src, copy.src_rect, copy.dst, copy.dst_xy);
+        stats.spans = stats.spans.saturating_add(copy_stats.spans);
+        stats.submits = stats.submits.saturating_add(copy_stats.submits);
+    }
+    stats
+}
+
+pub(crate) fn shell_clear_white_rgba8(rect: GpgpuRect) -> Option<GpgpuShellClearResult> {
+    let shell = shell_surface_once()?;
+    if !rect_is_inside(shell.surface, rect) {
+        return None;
+    }
+
+    shell_zero_surface(shell);
+    shell_seed_rect(shell, rect);
+    let before_head = shell_read_rect_head(shell, rect);
+    super::dma_flush(shell.virt, shell.surface.bytes);
+
+    let spans = fill_rect_white_rgba8(shell.surface, rect);
+    super::dma_flush(shell.virt, shell.surface.bytes);
+
+    let after_head = shell_read_rect_head(shell, rect);
+    let white = shell_count_white(shell, rect);
+    let pixels = rect_pixel_count(rect);
+    let expected_spans = clear_rect_expected_spans(rect);
+    Some(GpgpuShellClearResult {
+        ok: spans == expected_spans && white == pixels,
+        rect,
+        pixels,
+        spans,
+        expected_spans,
+        white,
+        before_head,
+        after_head,
+        surface: shell.surface,
+    })
+}
+
+pub(crate) fn shell_copy_rgba8(
+    src_rect: GpgpuRect,
+    dst_xy: GpgpuPoint,
+) -> Option<GpgpuShellCopyResult> {
+    let shell = shell_surface_once()?;
+    if !copy_rect_is_inside(shell.surface, src_rect, dst_xy) {
+        return None;
+    }
+    if rects_overlap(src_rect, GpgpuRect::new(dst_xy.x, dst_xy.y, src_rect.width, src_rect.height))
+    {
+        return None;
+    }
+
+    shell_zero_surface(shell);
+    shell_seed_copy(shell, src_rect, dst_xy);
+    super::dma_flush(shell.virt, shell.surface.bytes);
+
+    let stats = copy_rect_rgba8_stats(shell.surface, src_rect, shell.surface, dst_xy);
+    super::dma_flush(shell.virt, shell.surface.bytes);
+
+    let (src_preserved, copied) = shell_count_copy(shell, src_rect, dst_xy);
+    let src_head = shell_read_rect_head(shell, src_rect);
+    let dst_rect = GpgpuRect::new(dst_xy.x, dst_xy.y, src_rect.width, src_rect.height);
+    let dst_head = shell_read_rect_head(shell, dst_rect);
+    let pixels = rect_pixel_count(src_rect);
+    let expected_spans = copy_rect_expected_spans(src_rect);
+    let expected_submits = expected_spans.div_ceil(COPY_RECT_BATCH_MAX_SPANS);
+    Some(GpgpuShellCopyResult {
+        ok: stats.spans == expected_spans
+            && stats.submits == expected_submits
+            && src_preserved == pixels
+            && copied == pixels,
+        src_rect,
+        dst_xy,
+        pixels,
+        spans: stats.spans,
+        expected_spans,
+        submits: stats.submits,
+        expected_submits,
+        copied,
+        src_preserved,
+        src_head,
+        dst_head,
+        surface: shell.surface,
+    })
+}
+
 pub(crate) fn submit_direct_rcs_smoke_once() -> bool {
     if !DIRECT_RCS_ENABLED || DIRECT_RCS_SMOKE_RAN.swap(true, Ordering::AcqRel) {
         return false;
@@ -329,9 +727,15 @@ pub(crate) fn submit_direct_rcs_smoke_once() -> bool {
     let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
     let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
     let batch_ok = ppgtt_ok && direct_rcs_encode_smoke_batch(state);
+    let submit_start_tick = direct_rcs_now_tick();
     let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
     let observed = if submitted {
         direct_rcs_poll_result(state, DIRECT_RCS_SMOKE_MARKER)
+    } else {
+        0
+    };
+    let retire_ms = if submitted {
+        direct_rcs_elapsed_ms_since(submit_start_tick)
     } else {
         0
     };
@@ -339,13 +743,14 @@ pub(crate) fn submit_direct_rcs_smoke_once() -> bool {
 
     crate::log_info!(
         target: "gpgpu";
-        "intel/gpgpu: direct-rcs-smoke forcewake={} ggtt={} ppgtt={} batch={} submitted={} retired={} observed=0x{:08X} expected=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=direct-execlist no_guc_submit=1 next=gpgpu-walker\n",
+        "intel/gpgpu: direct-rcs-smoke forcewake={} ggtt={} ppgtt={} batch={} submitted={} retired={} retire_ms={} observed=0x{:08X} expected=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=direct-execlist no_guc_submit=1 next=gpgpu-walker\n",
         forcewake_ok as u8,
         mapped_ok as u8,
         ppgtt_ok as u8,
         batch_ok as u8,
         submitted as u8,
         retired as u8,
+        retire_ms,
         observed,
         DIRECT_RCS_SMOKE_MARKER,
         upload.gpu,
@@ -397,9 +802,15 @@ pub(crate) fn submit_empty_eot_walker_once() -> bool {
     let kernel_ppgtt_ok = ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
     let batch_ok = kernel_ppgtt_ok && direct_rcs_encode_empty_eot_walker_batch(state, upload);
+    let submit_start_tick = direct_rcs_now_tick();
     let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
     let observed = if submitted {
         direct_rcs_poll_result_slot(state, EMPTY_EOT_POST_MARKER_SLOT, EMPTY_EOT_POST_MARKER)
+    } else {
+        0
+    };
+    let retire_ms = if submitted {
+        direct_rcs_elapsed_ms_since(submit_start_tick)
     } else {
         0
     };
@@ -408,7 +819,7 @@ pub(crate) fn submit_empty_eot_walker_once() -> bool {
 
     crate::log_info!(
         target: "gpgpu";
-        "intel/gpgpu: empty-eot-walker forcewake={} ggtt={} ppgtt={} kernel_ppgtt={} batch={} submitted={} retired={} pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} idd_off=0x{:X} simd=16 groups=1 threads_per_group={} ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=direct-execlist no_guc_submit=1 next=clear-rect-writes\n",
+        "intel/gpgpu: empty-eot-walker forcewake={} ggtt={} ppgtt={} kernel_ppgtt={} batch={} submitted={} retired={} retire_ms={} pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} idd_off=0x{:X} simd=16 groups=1 threads_per_group={} ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=direct-execlist no_guc_submit=1 next=clear-rect-writes\n",
         forcewake_ok as u8,
         mapped_ok as u8,
         ppgtt_ok as u8,
@@ -416,6 +827,7 @@ pub(crate) fn submit_empty_eot_walker_once() -> bool {
         batch_ok as u8,
         submitted as u8,
         retired as u8,
+        retire_ms,
         pre_marker,
         observed,
         EMPTY_EOT_POST_MARKER,
@@ -435,6 +847,1106 @@ pub(crate) fn submit_empty_eot_walker_once() -> bool {
     );
 
     retired
+}
+
+pub(crate) fn submit_clear_rect_rgba8_white_strip_once() -> bool {
+    if !DIRECT_RCS_ENABLED || CLEAR_RECT_WALKER_RAN.swap(true, Ordering::AcqRel) {
+        return false;
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: clear-rect-rgba8-white-strip skipped reason=no-claimed-device\n"
+        );
+        return false;
+    };
+    let Some(upload) = upload_clear_rect_rgba8_white_kernel() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: clear-rect-rgba8-white-strip skipped reason=no-kernel-upload\n"
+        );
+        return false;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: clear-rect-rgba8-white-strip failed rung=alloc\n"
+        );
+        return false;
+    };
+
+    let before = direct_rcs_seed_clear_rect_strip(state);
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let test_ppgtt_ok = kernel_ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(
+            state,
+            DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
+            state.clear_test_phys,
+            CLEAR_RECT_TEST_BYTES,
+        );
+    let params = ClearRectRgba8WhiteParams {
+        dst_gpu: DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
+        dst_pitch_bytes: CLEAR_RECT_TEST_PITCH_BYTES,
+        dst_x: 0,
+        dst_y: 0,
+        width: CLEAR_RECT_TEST_WIDTH,
+        height: CLEAR_RECT_TEST_HEIGHT,
+    };
+    let batch_ok = test_ppgtt_ok
+        && direct_rcs_encode_clear_rect_walker_batch(
+            state,
+            upload,
+            params,
+            CLEAR_RECT_TEST_PIXELS * core::mem::size_of::<u32>(),
+            CLEAR_RECT_WALKER_RIGHT_MASK,
+        );
+    let submit_start_tick = direct_rcs_now_tick();
+    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
+    let (observed, retire_ms) = if submitted {
+        direct_rcs_poll_result_slot_elapsed(
+            state,
+            CLEAR_RECT_POST_MARKER_SLOT,
+            CLEAR_RECT_POST_MARKER,
+            submit_start_tick,
+        )
+    } else {
+        (0, 0)
+    };
+    let pre_marker = direct_rcs_read_result_slot(state, CLEAR_RECT_PRE_MARKER_SLOT);
+    let after = direct_rcs_read_clear_rect_strip(state);
+    let retired = observed == CLEAR_RECT_POST_MARKER;
+    let before_ok = before
+        == [
+            CLEAR_RECT_RGBA_RED,
+            CLEAR_RECT_RGBA_GREEN,
+            CLEAR_RECT_RGBA_BLUE,
+            CLEAR_RECT_RGBA_BLACK,
+        ];
+    let white_count = direct_rcs_count_white(after);
+    let white_ok = white_count == CLEAR_RECT_TEST_PIXELS;
+
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/gpgpu: clear-rect-rgba8-white-strip forcewake={} ggtt={} ppgtt={} kernel_ppgtt={} test_ppgtt={} batch={} submitted={} retired={} retire_ms={} before_ok={} white_ok={} white={}/{} before=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] after=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} dst_gpu=0x{:X} rect={}x{} pitch={} idd_off=0x{:X} payload_off=0x{:X} simd=16 groups=1 threads_per_group={} ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=direct-execlist no_guc_submit=1 next=copy-rect-or-scanout\n",
+        forcewake_ok as u8,
+        mapped_ok as u8,
+        ppgtt_ok as u8,
+        kernel_ppgtt_ok as u8,
+        test_ppgtt_ok as u8,
+        batch_ok as u8,
+        submitted as u8,
+        retired as u8,
+        retire_ms,
+        before_ok as u8,
+        white_ok as u8,
+        white_count,
+        CLEAR_RECT_TEST_PIXELS,
+        before[0],
+        before[1],
+        before[2],
+        before[3],
+        after[0],
+        after[1],
+        after[2],
+        after[3],
+        pre_marker,
+        observed,
+        CLEAR_RECT_POST_MARKER,
+        upload.gpu,
+        upload.gpu + CLEAR_RECT_RGBA8_WHITE_TEXT_OFFSET_BYTES,
+        DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
+        CLEAR_RECT_TEST_WIDTH,
+        CLEAR_RECT_TEST_HEIGHT,
+        CLEAR_RECT_TEST_PITCH_BYTES,
+        CLEAR_RECT_IDD_OFFSET_BYTES,
+        CLEAR_RECT_PAYLOAD_OFFSET_BYTES,
+        GPGPU_WALKER_GROUP_THREADS,
+        DIRECT_RCS_GPU_VA_RING_BASE,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        DIRECT_RCS_GPU_VA_RESULT_BASE,
+        super::mmio_read(dev, RCS_RING_HEAD),
+        super::mmio_read(dev, RCS_RING_TAIL),
+        super::mmio_read(dev, RCS_RING_ACTHD),
+        super::mmio_read(dev, RCS_RING_IPEIR),
+        super::mmio_read(dev, RCS_RING_IPEHR),
+        super::mmio_read(dev, RCS_RING_EIR),
+    );
+
+    retired && before_ok && white_ok
+}
+
+pub(crate) fn submit_copy_rect_rgba8_strip_once() -> bool {
+    if !DIRECT_RCS_ENABLED || COPY_RECT_WALKER_RAN.swap(true, Ordering::AcqRel) {
+        return false;
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: copy-rect-rgba8-strip skipped reason=no-claimed-device\n"
+        );
+        return false;
+    };
+    let Some(upload) = upload_copy_rect_rgba8_kernel() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: copy-rect-rgba8-strip skipped reason=no-kernel-upload\n"
+        );
+        return false;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: copy-rect-rgba8-strip failed rung=alloc\n"
+        );
+        return false;
+    };
+
+    let (src_before, dst_before) = direct_rcs_seed_copy_rect_strip(state);
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let test_ppgtt_ok = kernel_ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(
+            state,
+            DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
+            state.clear_test_phys,
+            CLEAR_RECT_TEST_BYTES,
+        );
+    let params = CopyRectRgba8Params {
+        src_gpu: DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
+        dst_gpu: DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
+        src_pitch_bytes: COPY_RECT_TEST_PITCH_BYTES,
+        dst_pitch_bytes: COPY_RECT_TEST_PITCH_BYTES,
+        src_x: 0,
+        src_y: 0,
+        dst_x: COPY_RECT_TEST_DST_X,
+        dst_y: 0,
+        width: COPY_RECT_TEST_WIDTH,
+        height: COPY_RECT_TEST_HEIGHT,
+    };
+    let batch_ok = test_ppgtt_ok
+        && direct_rcs_encode_copy_rect_walker_batch(
+            state,
+            upload,
+            params,
+            COPY_RECT_TEST_ROW_DWORDS * core::mem::size_of::<u32>(),
+            COPY_RECT_TEST_ROW_DWORDS * core::mem::size_of::<u32>(),
+            COPY_RECT_WALKER_RIGHT_MASK,
+        );
+    let submit_start_tick = direct_rcs_now_tick();
+    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
+    let (observed, retire_ms) = if submitted {
+        direct_rcs_poll_result_slot_elapsed(
+            state,
+            COPY_RECT_POST_MARKER_SLOT,
+            COPY_RECT_POST_MARKER,
+            submit_start_tick,
+        )
+    } else {
+        (0, 0)
+    };
+    let pre_marker = direct_rcs_read_result_slot(state, COPY_RECT_PRE_MARKER_SLOT);
+    let (src_after, dst_after) = direct_rcs_read_copy_rect_strip(state);
+    let retired = observed == COPY_RECT_POST_MARKER;
+    let expected_src = [
+        CLEAR_RECT_RGBA_RED,
+        CLEAR_RECT_RGBA_GREEN,
+        CLEAR_RECT_RGBA_BLUE,
+        CLEAR_RECT_RGBA_BLACK,
+    ];
+    let expected_dst_before = [
+        COPY_RECT_DST_POISON0,
+        COPY_RECT_DST_POISON1,
+        COPY_RECT_DST_POISON2,
+        COPY_RECT_DST_POISON3,
+    ];
+    let src_before_ok = src_before == expected_src;
+    let dst_before_ok = dst_before == expected_dst_before;
+    let src_ok = src_after == expected_src;
+    let copy_ok = dst_after == expected_src;
+    let copied_count = direct_rcs_count_matching(dst_after, expected_src);
+
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/gpgpu: copy-rect-rgba8-strip forcewake={} ggtt={} ppgtt={} kernel_ppgtt={} test_ppgtt={} batch={} submitted={} retired={} retire_ms={} src_before_ok={} dst_before_ok={} src_ok={} copy_ok={} copied={}/{} src_before=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] dst_before=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] src_after=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] dst_after=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} buf_gpu=0x{:X} rect={}x{} src_xy=0,0 dst_xy={},0 pitch={} idd_off=0x{:X} payload_off=0x{:X} simd=16 groups=1 threads_per_group={} ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=direct-execlist no_guc_submit=1 next=recursive-copy-visual\n",
+        forcewake_ok as u8,
+        mapped_ok as u8,
+        ppgtt_ok as u8,
+        kernel_ppgtt_ok as u8,
+        test_ppgtt_ok as u8,
+        batch_ok as u8,
+        submitted as u8,
+        retired as u8,
+        retire_ms,
+        src_before_ok as u8,
+        dst_before_ok as u8,
+        src_ok as u8,
+        copy_ok as u8,
+        copied_count,
+        COPY_RECT_TEST_PIXELS,
+        src_before[0],
+        src_before[1],
+        src_before[2],
+        src_before[3],
+        dst_before[0],
+        dst_before[1],
+        dst_before[2],
+        dst_before[3],
+        src_after[0],
+        src_after[1],
+        src_after[2],
+        src_after[3],
+        dst_after[0],
+        dst_after[1],
+        dst_after[2],
+        dst_after[3],
+        pre_marker,
+        observed,
+        COPY_RECT_POST_MARKER,
+        upload.gpu,
+        upload.gpu + COPY_RECT_RGBA8_TEXT_OFFSET_BYTES,
+        DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
+        COPY_RECT_TEST_WIDTH,
+        COPY_RECT_TEST_HEIGHT,
+        COPY_RECT_TEST_DST_X,
+        COPY_RECT_TEST_PITCH_BYTES,
+        COPY_RECT_IDD_OFFSET_BYTES,
+        COPY_RECT_PAYLOAD_OFFSET_BYTES,
+        GPGPU_WALKER_GROUP_THREADS,
+        DIRECT_RCS_GPU_VA_RING_BASE,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        DIRECT_RCS_GPU_VA_RESULT_BASE,
+        super::mmio_read(dev, RCS_RING_HEAD),
+        super::mmio_read(dev, RCS_RING_TAIL),
+        super::mmio_read(dev, RCS_RING_ACTHD),
+        super::mmio_read(dev, RCS_RING_IPEIR),
+        super::mmio_read(dev, RCS_RING_IPEHR),
+        super::mmio_read(dev, RCS_RING_EIR),
+    );
+
+    retired && src_before_ok && dst_before_ok && src_ok && copy_ok
+}
+
+pub(crate) fn submit_copy_rect_rgba8_256_once() -> bool {
+    if !DIRECT_RCS_ENABLED || COPY_RECT_256_RAN.swap(true, Ordering::AcqRel) {
+        return false;
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: copy-rect-rgba8-256 skipped reason=no-claimed-device\n"
+        );
+        return false;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: copy-rect-rgba8-256 failed rung=alloc\n"
+        );
+        return false;
+    };
+    let Some(surface) = GpgpuRgba8Surface::new(
+        state.clear_test_phys,
+        DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
+        CLEAR_RECT_TEST_BYTES,
+        COPY_RECT_256_SURFACE_WIDTH,
+        COPY_RECT_256_HEIGHT,
+        COPY_RECT_256_PITCH_BYTES,
+    ) else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: copy-rect-rgba8-256 failed rung=surface\n"
+        );
+        return false;
+    };
+
+    direct_rcs_seed_copy_rect_256(state);
+    let Some(params) = lower_copy_rect(
+        surface,
+        GpgpuRect::new(0, 0, COPY_RECT_256_WIDTH, COPY_RECT_256_HEIGHT),
+        surface,
+        GpgpuPoint::new(COPY_RECT_256_WIDTH as i32, 0),
+    ) else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: copy-rect-rgba8-256 failed rung=lower\n"
+        );
+        return false;
+    };
+    let copy_start_tick = direct_rcs_now_tick();
+    let stats = submit_copy_rect_spans_with_stats(surface, surface, params);
+    let copy_ms = direct_rcs_elapsed_ms_since(copy_start_tick);
+    let samples_ok = direct_rcs_copy_rect_256_samples_ok(state);
+    let (src_preserved, copied) = direct_rcs_copy_rect_256_full_counts(state);
+    let src_head = direct_rcs_read_copy_rect_256_span(state, 0);
+    let dst_head = direct_rcs_read_copy_rect_256_span(state, COPY_RECT_256_WIDTH as usize);
+    let dst_tail = direct_rcs_read_copy_rect_256_span(
+        state,
+        COPY_RECT_256_WIDTH as usize + COPY_RECT_256_WIDTH as usize - 4,
+    );
+    let ok = stats.spans == COPY_RECT_256_EXPECTED_SPANS
+        && stats.submits == 1
+        && src_preserved == COPY_RECT_256_WIDTH as usize
+        && copied == COPY_RECT_256_WIDTH as usize
+        && samples_ok == COPY_RECT_256_SAMPLE_INDICES.len();
+
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/gpgpu: copy-rect-rgba8-256 ok={} copy_ms={} submits={}/1 spans={}/{} copied={}/{} src_preserved={}/{} samples={}/{} surface_gpu=0x{:X} surface_phys=0x{:X} rect={}x{} src_xy=0,0 dst_xy={},0 pitch={} src_head=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] dst_head=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] dst_tail=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] lowering=row-spans pixels_per_lane={} batched_walkers=1 max_span_px={} artifact={}\n",
+        ok as u8,
+        copy_ms,
+        stats.submits,
+        stats.spans,
+        COPY_RECT_256_EXPECTED_SPANS,
+        copied,
+        COPY_RECT_256_WIDTH,
+        src_preserved,
+        COPY_RECT_256_WIDTH,
+        samples_ok,
+        COPY_RECT_256_SAMPLE_INDICES.len(),
+        surface.gpu,
+        surface.phys,
+        COPY_RECT_256_WIDTH,
+        COPY_RECT_256_HEIGHT,
+        COPY_RECT_256_WIDTH,
+        COPY_RECT_256_PITCH_BYTES,
+        src_head[0],
+        src_head[1],
+        src_head[2],
+        src_head[3],
+        dst_head[0],
+        dst_head[1],
+        dst_head[2],
+        dst_head[3],
+        dst_tail[0],
+        dst_tail[1],
+        dst_tail[2],
+        dst_tail[3],
+        COPY_RECT_PIXELS_PER_LANE,
+        COPY_RECT_SPAN_PIXELS,
+        COPY_RECT_RGBA8_KERNEL_NAME,
+    );
+
+    ok
+}
+
+pub(crate) fn submit_copy_rect_rgba8_256x2_once() -> bool {
+    if !DIRECT_RCS_ENABLED || COPY_RECT_256X2_RAN.swap(true, Ordering::AcqRel) {
+        return false;
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: copy-rect-rgba8-256x2 skipped reason=no-claimed-device\n"
+        );
+        return false;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: copy-rect-rgba8-256x2 failed rung=alloc\n"
+        );
+        return false;
+    };
+    let Some(surface) = GpgpuRgba8Surface::new(
+        state.clear_test_phys,
+        DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
+        CLEAR_RECT_TEST_BYTES,
+        COPY_RECT_256X2_SURFACE_WIDTH,
+        COPY_RECT_256X2_HEIGHT,
+        COPY_RECT_256X2_PITCH_BYTES,
+    ) else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: copy-rect-rgba8-256x2 failed rung=surface\n"
+        );
+        return false;
+    };
+
+    direct_rcs_seed_copy_rect_256x2(state);
+    let Some(params) = lower_copy_rect(
+        surface,
+        GpgpuRect::new(0, 0, COPY_RECT_256X2_WIDTH, COPY_RECT_256X2_HEIGHT),
+        surface,
+        GpgpuPoint::new(COPY_RECT_256X2_WIDTH as i32, 0),
+    ) else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: copy-rect-rgba8-256x2 failed rung=lower\n"
+        );
+        return false;
+    };
+    let copy_start_tick = direct_rcs_now_tick();
+    let stats = submit_copy_rect_spans_with_stats(surface, surface, params);
+    let copy_ms = direct_rcs_elapsed_ms_since(copy_start_tick);
+    let samples_ok = direct_rcs_copy_rect_256x2_samples_ok(state);
+    let (src_preserved, copied) = direct_rcs_copy_rect_256x2_full_counts(state);
+    let row0_head = direct_rcs_read_copy_rect_256x2_span(state, 0, COPY_RECT_256X2_WIDTH as usize);
+    let row1_head = direct_rcs_read_copy_rect_256x2_span(state, 1, COPY_RECT_256X2_WIDTH as usize);
+    let row1_tail = direct_rcs_read_copy_rect_256x2_span(
+        state,
+        1,
+        COPY_RECT_256X2_WIDTH as usize + COPY_RECT_256X2_WIDTH as usize - 4,
+    );
+    let ok = stats.spans == COPY_RECT_256X2_EXPECTED_SPANS
+        && stats.submits == COPY_RECT_256X2_EXPECTED_SUBMITS
+        && src_preserved == (COPY_RECT_256X2_WIDTH * COPY_RECT_256X2_HEIGHT) as usize
+        && copied == (COPY_RECT_256X2_WIDTH * COPY_RECT_256X2_HEIGHT) as usize
+        && samples_ok == COPY_RECT_256X2_SAMPLE_POINTS.len();
+
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/gpgpu: copy-rect-rgba8-256x2 ok={} copy_ms={} submits={}/{} spans={}/{} copied={}/{} src_preserved={}/{} samples={}/{} surface_gpu=0x{:X} surface_phys=0x{:X} rect={}x{} src_xy=0,0 dst_xy={},0 pitch={} row0_dst_head=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row1_dst_head=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row1_dst_tail=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] lowering=row-spans pixels_per_lane={} batched_walkers=1 max_span_px={} artifact={}\n",
+        ok as u8,
+        copy_ms,
+        stats.submits,
+        COPY_RECT_256X2_EXPECTED_SUBMITS,
+        stats.spans,
+        COPY_RECT_256X2_EXPECTED_SPANS,
+        copied,
+        COPY_RECT_256X2_WIDTH * COPY_RECT_256X2_HEIGHT,
+        src_preserved,
+        COPY_RECT_256X2_WIDTH * COPY_RECT_256X2_HEIGHT,
+        samples_ok,
+        COPY_RECT_256X2_SAMPLE_POINTS.len(),
+        surface.gpu,
+        surface.phys,
+        COPY_RECT_256X2_WIDTH,
+        COPY_RECT_256X2_HEIGHT,
+        COPY_RECT_256X2_WIDTH,
+        COPY_RECT_256X2_PITCH_BYTES,
+        row0_head[0],
+        row0_head[1],
+        row0_head[2],
+        row0_head[3],
+        row1_head[0],
+        row1_head[1],
+        row1_head[2],
+        row1_head[3],
+        row1_tail[0],
+        row1_tail[1],
+        row1_tail[2],
+        row1_tail[3],
+        COPY_RECT_PIXELS_PER_LANE,
+        COPY_RECT_SPAN_PIXELS,
+        COPY_RECT_RGBA8_KERNEL_NAME,
+    );
+
+    ok
+}
+
+pub(crate) fn submit_rect_api_smoke_once() -> bool {
+    if !DIRECT_RCS_ENABLED || RECT_API_SMOKE_RAN.swap(true, Ordering::AcqRel) {
+        return false;
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu/rect-api: skipped reason=no-claimed-device\n"
+        );
+        return false;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu/rect-api: failed rung=alloc\n"
+        );
+        return false;
+    };
+    let Some(surface) = GpgpuRgba8Surface::new(
+        state.clear_test_phys,
+        DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
+        CLEAR_RECT_TEST_BYTES,
+        24,
+        1,
+        24 * core::mem::size_of::<u32>() as u32,
+    ) else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu/rect-api: failed rung=surface\n"
+        );
+        return false;
+    };
+
+    direct_rcs_seed_rect_api_smoke(state);
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/gpgpu/rect-api: ops=fill_rect_white,copy_rect,blit_glyph,copy_many_rects fill_artifact={} copy_artifact={} surface_gpu=0x{:X} surface_phys=0x{:X} surface={}x{} pitch={} lowering=row-spans copy_pixels_per_lane={} copy_max_span_px={} clear_max_span_px=16\n",
+        CLEAR_RECT_RGBA8_WHITE_KERNEL_NAME,
+        COPY_RECT_RGBA8_KERNEL_NAME,
+        surface.gpu,
+        surface.phys,
+        surface.width,
+        surface.height,
+        surface.pitch_bytes,
+        COPY_RECT_PIXELS_PER_LANE,
+        COPY_RECT_SPAN_PIXELS,
+    );
+
+    let rect_api_start_tick = direct_rcs_now_tick();
+    let fill_start_tick = direct_rcs_now_tick();
+    let fill_spans = fill_rect_white_rgba8(surface, GpgpuRect::new(20, 0, 4, 1));
+    let fill_ms = direct_rcs_elapsed_ms_since(fill_start_tick);
+    let fill_after = direct_rcs_read_rect_api_span(state, 20);
+    let fill_white = direct_rcs_count_white(fill_after);
+    let copy_start_tick = direct_rcs_now_tick();
+    let copy_stats =
+        copy_rect_rgba8_stats(surface, GpgpuRect::new(0, 0, 4, 1), surface, GpgpuPoint::new(4, 0));
+    let copy_ms = direct_rcs_elapsed_ms_since(copy_start_tick);
+    let blit_start_tick = direct_rcs_now_tick();
+    let blit_stats = blit_glyph_rgba8_stats(GpgpuGlyphBlit {
+        atlas: surface,
+        glyph_rect: GpgpuRect::new(8, 0, 4, 1),
+        dst: surface,
+        dst_xy: GpgpuPoint::new(12, 0),
+    });
+    let blit_ms = direct_rcs_elapsed_ms_since(blit_start_tick);
+    let many = [GpgpuCopyRect {
+        src: surface,
+        src_rect: GpgpuRect::new(16, 0, 4, 1),
+        dst: surface,
+        dst_xy: GpgpuPoint::new(20, 0),
+    }];
+    let many_start_tick = direct_rcs_now_tick();
+    let many_stats = copy_rects_rgba8_stats(&many);
+    let many_ms = direct_rcs_elapsed_ms_since(many_start_tick);
+    let total_ms = direct_rcs_elapsed_ms_since(rect_api_start_tick);
+
+    let src_a = direct_rcs_read_rect_api_span(state, 0);
+    let dst_a = direct_rcs_read_rect_api_span(state, 4);
+    let src_b = direct_rcs_read_rect_api_span(state, 8);
+    let dst_b = direct_rcs_read_rect_api_span(state, 12);
+    let src_c = direct_rcs_read_rect_api_span(state, 16);
+    let dst_c = direct_rcs_read_rect_api_span(state, 20);
+    let copy_ok = dst_a == src_a;
+    let blit_ok = dst_b == src_b;
+    let many_ok = dst_c == src_c;
+    let fill_ok = fill_spans == 1 && fill_white == 4;
+    let ok = fill_ok
+        && copy_stats.spans == 1
+        && copy_stats.submits == 1
+        && blit_stats.spans == 1
+        && blit_stats.submits == 1
+        && many_stats.spans == 1
+        && many_stats.submits == 1
+        && copy_ok
+        && blit_ok
+        && many_ok;
+
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/gpgpu/rect-api: result ok={} total_ms={} fill_ms={} copy_ms={} blit_ms={} many_ms={} fill_spans={} fill_submits={} fill_white={}/4 copy_spans={} copy_submits={} blit_spans={} blit_submits={} many_spans={} many_submits={} copy_ok={} blit_ok={} many_ok={} fill_after=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] copy_dst=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] blit_dst=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] many_dst=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
+        ok as u8,
+        total_ms,
+        fill_ms,
+        copy_ms,
+        blit_ms,
+        many_ms,
+        fill_spans,
+        fill_spans,
+        fill_white,
+        copy_stats.spans,
+        copy_stats.submits,
+        blit_stats.spans,
+        blit_stats.submits,
+        many_stats.spans,
+        many_stats.submits,
+        copy_ok as u8,
+        blit_ok as u8,
+        many_ok as u8,
+        fill_after[0],
+        fill_after[1],
+        fill_after[2],
+        fill_after[3],
+        dst_a[0],
+        dst_a[1],
+        dst_a[2],
+        dst_a[3],
+        dst_b[0],
+        dst_b[1],
+        dst_b[2],
+        dst_b[3],
+        dst_c[0],
+        dst_c[1],
+        dst_c[2],
+        dst_c[3],
+    );
+
+    ok
+}
+
+fn shell_surface_once() -> Option<GpgpuShellSurface> {
+    let mut guard = GPGPU_SHELL_SURFACE.lock();
+    if let Some(shell) = *guard {
+        return Some(shell);
+    }
+
+    let (phys, virt) = crate::dma::alloc(GPGPU_SHELL_SURFACE_BYTES, super::WARM_ALIGN)?;
+    unsafe {
+        core::ptr::write_bytes(virt, 0, GPGPU_SHELL_SURFACE_BYTES);
+    }
+    super::dma_flush(virt, GPGPU_SHELL_SURFACE_BYTES);
+
+    let Some(surface) = GpgpuRgba8Surface::new(
+        phys,
+        DIRECT_RCS_GPU_VA_SHELL_SURFACE_BASE,
+        GPGPU_SHELL_SURFACE_BYTES,
+        GPGPU_SHELL_SURFACE_WIDTH,
+        GPGPU_SHELL_SURFACE_HEIGHT,
+        GPGPU_SHELL_SURFACE_PITCH_BYTES,
+    ) else {
+        crate::dma::dealloc(virt, GPGPU_SHELL_SURFACE_BYTES);
+        return None;
+    };
+
+    let shell = GpgpuShellSurface { surface, virt };
+    *guard = Some(shell);
+    Some(shell)
+}
+
+fn shell_zero_surface(shell: GpgpuShellSurface) {
+    unsafe {
+        core::ptr::write_bytes(shell.virt, 0, shell.surface.bytes);
+    }
+}
+
+fn shell_seed_rect(shell: GpgpuShellSurface, rect: GpgpuRect) {
+    for y in 0..rect.height {
+        for x in 0..rect.width {
+            shell_write_pixel(
+                shell,
+                rect.x as u32 + x,
+                rect.y as u32 + y,
+                shell_pattern_pixel(x, y),
+            );
+        }
+    }
+}
+
+fn shell_seed_copy(shell: GpgpuShellSurface, src_rect: GpgpuRect, dst_xy: GpgpuPoint) {
+    for y in 0..src_rect.height {
+        for x in 0..src_rect.width {
+            let src_pixel = shell_pattern_pixel(x, y);
+            shell_write_pixel(shell, src_rect.x as u32 + x, src_rect.y as u32 + y, src_pixel);
+            shell_write_pixel(
+                shell,
+                dst_xy.x as u32 + x,
+                dst_xy.y as u32 + y,
+                shell_poison_pixel(x, y),
+            );
+        }
+    }
+}
+
+fn shell_read_rect_head(shell: GpgpuShellSurface, rect: GpgpuRect) -> [u32; 4] {
+    let mut out = [0u32; 4];
+    let count = (rect.width as usize).min(out.len());
+    for (index, slot) in out.iter_mut().enumerate().take(count) {
+        *slot = shell_read_pixel(shell, rect.x as u32 + index as u32, rect.y as u32);
+    }
+    out
+}
+
+fn shell_count_white(shell: GpgpuShellSurface, rect: GpgpuRect) -> usize {
+    let mut white = 0usize;
+    for y in 0..rect.height {
+        for x in 0..rect.width {
+            if shell_read_pixel(shell, rect.x as u32 + x, rect.y as u32 + y)
+                == CLEAR_RECT_EXPECTED_WHITE
+            {
+                white += 1;
+            }
+        }
+    }
+    white
+}
+
+fn shell_count_copy(
+    shell: GpgpuShellSurface,
+    src_rect: GpgpuRect,
+    dst_xy: GpgpuPoint,
+) -> (usize, usize) {
+    let mut src_preserved = 0usize;
+    let mut copied = 0usize;
+    for y in 0..src_rect.height {
+        for x in 0..src_rect.width {
+            let expected = shell_pattern_pixel(x, y);
+            let src = shell_read_pixel(shell, src_rect.x as u32 + x, src_rect.y as u32 + y);
+            let dst = shell_read_pixel(shell, dst_xy.x as u32 + x, dst_xy.y as u32 + y);
+            if src == expected {
+                src_preserved += 1;
+            }
+            if dst == expected {
+                copied += 1;
+            }
+        }
+    }
+    (src_preserved, copied)
+}
+
+fn shell_write_pixel(shell: GpgpuShellSurface, x: u32, y: u32, value: u32) {
+    let offset = (y as usize)
+        .saturating_mul(shell.surface.pitch_bytes as usize)
+        .saturating_add((x as usize).saturating_mul(core::mem::size_of::<u32>()));
+    unsafe {
+        core::ptr::write_volatile(shell.virt.add(offset) as *mut u32, value);
+    }
+}
+
+fn shell_read_pixel(shell: GpgpuShellSurface, x: u32, y: u32) -> u32 {
+    let offset = (y as usize)
+        .saturating_mul(shell.surface.pitch_bytes as usize)
+        .saturating_add((x as usize).saturating_mul(core::mem::size_of::<u32>()));
+    unsafe { core::ptr::read_volatile(shell.virt.add(offset) as *const u32) }
+}
+
+fn shell_pattern_pixel(x: u32, y: u32) -> u32 {
+    0xFF00_0000
+        | (((x.wrapping_mul(3).wrapping_add(y.wrapping_mul(85))) & 0xFF) << 16)
+        | (((0xFFu32.wrapping_sub(x).wrapping_add(y.wrapping_mul(17))) & 0xFF) << 8)
+        | ((x.wrapping_add(y.wrapping_mul(31))) & 0xFF)
+}
+
+fn shell_poison_pixel(x: u32, y: u32) -> u32 {
+    0xA500_0000 | ((y & 0xFF) << 16) | ((x & 0xFF) << 8) | 0x5A
+}
+
+fn rect_pixel_count(rect: GpgpuRect) -> usize {
+    (rect.width as usize).saturating_mul(rect.height as usize)
+}
+
+fn clear_rect_expected_spans(rect: GpgpuRect) -> usize {
+    (rect.width as usize)
+        .div_ceil(16)
+        .saturating_mul(rect.height as usize)
+}
+
+fn copy_rect_expected_spans(rect: GpgpuRect) -> usize {
+    (rect.width as usize)
+        .div_ceil(COPY_RECT_SPAN_PIXELS as usize)
+        .saturating_mul(rect.height as usize)
+}
+
+fn rect_is_inside(surface: GpgpuRgba8Surface, rect: GpgpuRect) -> bool {
+    if rect.is_empty() || rect.x < 0 || rect.y < 0 {
+        return false;
+    }
+    let x2 = rect.x as i64 + rect.width as i64;
+    let y2 = rect.y as i64 + rect.height as i64;
+    x2 <= surface.width as i64 && y2 <= surface.height as i64
+}
+
+fn copy_rect_is_inside(
+    surface: GpgpuRgba8Surface,
+    src_rect: GpgpuRect,
+    dst_xy: GpgpuPoint,
+) -> bool {
+    rect_is_inside(surface, src_rect)
+        && rect_is_inside(
+            surface,
+            GpgpuRect::new(dst_xy.x, dst_xy.y, src_rect.width, src_rect.height),
+        )
+}
+
+fn rects_overlap(a: GpgpuRect, b: GpgpuRect) -> bool {
+    let ax2 = a.x as i64 + a.width as i64;
+    let ay2 = a.y as i64 + a.height as i64;
+    let bx2 = b.x as i64 + b.width as i64;
+    let by2 = b.y as i64 + b.height as i64;
+    (a.x as i64) < bx2 && (b.x as i64) < ax2 && (a.y as i64) < by2 && (b.y as i64) < ay2
+}
+
+fn lower_clear_rect_white(
+    dst: GpgpuRgba8Surface,
+    rect: GpgpuRect,
+) -> Option<ClearRectRgba8WhiteParams> {
+    if !dst.is_valid() || rect.is_empty() {
+        return None;
+    }
+    let clipped = clip_rect_to_surface(rect, dst)?;
+    Some(ClearRectRgba8WhiteParams {
+        dst_gpu: dst.gpu,
+        dst_pitch_bytes: dst.pitch_bytes,
+        dst_x: clipped.x as u32,
+        dst_y: clipped.y as u32,
+        width: clipped.width,
+        height: clipped.height,
+    })
+}
+
+fn lower_copy_rect(
+    src: GpgpuRgba8Surface,
+    src_rect: GpgpuRect,
+    dst: GpgpuRgba8Surface,
+    dst_xy: GpgpuPoint,
+) -> Option<CopyRectRgba8Params> {
+    if !src.is_valid() || !dst.is_valid() || src_rect.is_empty() {
+        return None;
+    }
+
+    let mut sx = src_rect.x as i64;
+    let mut sy = src_rect.y as i64;
+    let mut dx = dst_xy.x as i64;
+    let mut dy = dst_xy.y as i64;
+    let mut width = src_rect.width as i64;
+    let mut height = src_rect.height as i64;
+
+    clip_copy_axis(&mut sx, &mut dx, &mut width, src.width as i64, dst.width as i64)?;
+    clip_copy_axis(&mut sy, &mut dy, &mut height, src.height as i64, dst.height as i64)?;
+
+    Some(CopyRectRgba8Params {
+        src_gpu: src.gpu,
+        dst_gpu: dst.gpu,
+        src_pitch_bytes: src.pitch_bytes,
+        dst_pitch_bytes: dst.pitch_bytes,
+        src_x: sx as u32,
+        src_y: sy as u32,
+        dst_x: dx as u32,
+        dst_y: dy as u32,
+        width: width as u32,
+        height: height as u32,
+    })
+}
+
+fn clip_rect_to_surface(rect: GpgpuRect, surface: GpgpuRgba8Surface) -> Option<GpgpuRect> {
+    let mut x = rect.x as i64;
+    let mut y = rect.y as i64;
+    let mut width = rect.width as i64;
+    let mut height = rect.height as i64;
+
+    if x < 0 {
+        width += x;
+        x = 0;
+    }
+    if y < 0 {
+        height += y;
+        y = 0;
+    }
+    width = width.min(surface.width as i64 - x);
+    height = height.min(surface.height as i64 - y);
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    Some(GpgpuRect::new(x as i32, y as i32, width as u32, height as u32))
+}
+
+fn clip_copy_axis(
+    src_pos: &mut i64,
+    dst_pos: &mut i64,
+    len: &mut i64,
+    src_limit: i64,
+    dst_limit: i64,
+) -> Option<()> {
+    if *src_pos < 0 {
+        let delta = -*src_pos;
+        *src_pos = 0;
+        *dst_pos += delta;
+        *len -= delta;
+    }
+    if *dst_pos < 0 {
+        let delta = -*dst_pos;
+        *dst_pos = 0;
+        *src_pos += delta;
+        *len -= delta;
+    }
+    *len = (*len).min(src_limit - *src_pos).min(dst_limit - *dst_pos);
+    if *len <= 0 { None } else { Some(()) }
+}
+
+fn submit_clear_rect_white_spans(
+    dst: GpgpuRgba8Surface,
+    params: ClearRectRgba8WhiteParams,
+) -> usize {
+    let mut submitted = 0usize;
+    for row in 0..params.height {
+        let mut x = 0u32;
+        while x < params.width {
+            let span = (params.width - x).min(16);
+            let span_params = ClearRectRgba8WhiteParams {
+                dst_x: params.dst_x + x,
+                dst_y: params.dst_y + row,
+                width: span,
+                height: 1,
+                ..params
+            };
+            if submit_clear_rect_white_span(dst, span_params) {
+                submitted = submitted.saturating_add(1);
+            }
+            x += span;
+        }
+    }
+    submitted
+}
+
+fn submit_copy_rect_spans_with_stats(
+    src: GpgpuRgba8Surface,
+    dst: GpgpuRgba8Surface,
+    params: CopyRectRgba8Params,
+) -> GpgpuSubmitStats {
+    let Some(total_spans) = copy_rect_span_count(params) else {
+        return GpgpuSubmitStats::default();
+    };
+    let mut stats = GpgpuSubmitStats::default();
+    let mut span_start = 0usize;
+    while span_start < total_spans {
+        let span_take = (total_spans - span_start).min(COPY_RECT_BATCH_MAX_SPANS);
+        if !submit_copy_rect_span_batch(src, dst, params, span_start, span_take) {
+            break;
+        }
+        stats.spans = stats.spans.saturating_add(span_take);
+        stats.submits = stats.submits.saturating_add(1);
+        span_start += span_take;
+    }
+    stats
+}
+
+fn copy_rect_span_count(params: CopyRectRgba8Params) -> Option<usize> {
+    if params.width == 0 || params.height == 0 {
+        return None;
+    }
+    let spans_per_row = (params.width as usize).div_ceil(COPY_RECT_SPAN_PIXELS as usize);
+    spans_per_row.checked_mul(params.height as usize)
+}
+
+fn copy_rect_span_params(
+    params: CopyRectRgba8Params,
+    span_index: usize,
+) -> Option<CopyRectRgba8Params> {
+    let spans_per_row = (params.width as usize).div_ceil(COPY_RECT_SPAN_PIXELS as usize);
+    if spans_per_row == 0 {
+        return None;
+    }
+    let row = span_index / spans_per_row;
+    if row >= params.height as usize {
+        return None;
+    }
+    let span_col = span_index % spans_per_row;
+    let x = (span_col as u32).saturating_mul(COPY_RECT_SPAN_PIXELS);
+    if x >= params.width {
+        return None;
+    }
+    let span_width = (params.width - x).min(COPY_RECT_SPAN_PIXELS);
+    Some(CopyRectRgba8Params {
+        src_x: params.src_x + x,
+        src_y: params.src_y + row as u32,
+        dst_x: params.dst_x + x,
+        dst_y: params.dst_y + row as u32,
+        width: span_width,
+        height: 1,
+        ..params
+    })
+}
+
+fn submit_clear_rect_white_span(dst: GpgpuRgba8Surface, params: ClearRectRgba8WhiteParams) -> bool {
+    if params.width == 0 || params.width > 16 || params.height != 1 {
+        return false;
+    }
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let Some(dev) = super::claimed_device() else {
+        return false;
+    };
+    let Some(upload) = upload_clear_rect_rgba8_white_kernel() else {
+        return false;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        return false;
+    };
+
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let dst_ppgtt_ok =
+        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
+    let batch_ok = dst_ppgtt_ok
+        && direct_rcs_encode_clear_rect_walker_batch(
+            state,
+            upload,
+            params,
+            dst.bytes,
+            clear_rect_walker_right_mask(params.width),
+        );
+    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
+    let observed = if submitted {
+        direct_rcs_poll_result_slot(state, CLEAR_RECT_POST_MARKER_SLOT, CLEAR_RECT_POST_MARKER)
+    } else {
+        0
+    };
+    observed == CLEAR_RECT_POST_MARKER
+}
+
+fn submit_copy_rect_span_batch(
+    src: GpgpuRgba8Surface,
+    dst: GpgpuRgba8Surface,
+    params: CopyRectRgba8Params,
+    span_start: usize,
+    span_count: usize,
+) -> bool {
+    if span_count == 0 || span_count > COPY_RECT_BATCH_MAX_SPANS {
+        return false;
+    }
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let Some(dev) = super::claimed_device() else {
+        return false;
+    };
+    let Some(upload) = upload_copy_rect_rgba8_kernel() else {
+        return false;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        return false;
+    };
+
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let src_ppgtt_ok =
+        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, src.gpu, src.phys, src.bytes);
+    let dst_ppgtt_ok =
+        src_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
+    let batch_ok = dst_ppgtt_ok
+        && direct_rcs_encode_copy_rect_multi_walker_batch(
+            state, upload, params, src.bytes, dst.bytes, span_start, span_count,
+        );
+    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
+    let observed = if submitted {
+        direct_rcs_poll_result_slot(state, COPY_RECT_POST_MARKER_SLOT, COPY_RECT_POST_MARKER)
+    } else {
+        0
+    };
+    observed == COPY_RECT_POST_MARKER
+}
+
+fn clear_rect_walker_right_mask(width: u32) -> u32 {
+    simd16_right_mask(width)
+}
+
+fn copy_rect_walker_right_mask(width: u32) -> u32 {
+    let lanes = width.div_ceil(COPY_RECT_PIXELS_PER_LANE);
+    simd16_right_mask(lanes)
+}
+
+fn simd16_right_mask(lanes: u32) -> u32 {
+    if lanes >= 16 {
+        GPGPU_WALKER_SIMD16_MASK
+    } else if lanes == 0 {
+        0
+    } else {
+        (1u32 << lanes) - 1
+    }
 }
 
 fn upload_artifact(
@@ -516,6 +2028,8 @@ struct DirectRcsState {
     batch_virt: *mut u8,
     result_phys: u64,
     result_virt: *mut u8,
+    clear_test_phys: u64,
+    clear_test_virt: *mut u8,
     ppgtt_phys: u64,
     ppgtt_virt: *mut u8,
 }
@@ -533,6 +2047,8 @@ fn direct_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
         crate::dma::alloc(DIRECT_RCS_CONTEXT_BYTES, super::WARM_ALIGN)?;
     let (batch_phys, batch_virt) = crate::dma::alloc(DIRECT_RCS_BATCH_BYTES, super::WARM_ALIGN)?;
     let (result_phys, result_virt) = crate::dma::alloc(DIRECT_RCS_RESULT_BYTES, super::WARM_ALIGN)?;
+    let (clear_test_phys, clear_test_virt) =
+        crate::dma::alloc(CLEAR_RECT_TEST_BYTES, super::WARM_ALIGN)?;
     let (ppgtt_phys, ppgtt_virt) = crate::dma::alloc(DIRECT_RCS_PPGTT_BYTES, super::WARM_ALIGN)?;
 
     unsafe {
@@ -540,6 +2056,7 @@ fn direct_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
         core::ptr::write_bytes(context_virt, 0, DIRECT_RCS_CONTEXT_BYTES);
         core::ptr::write_bytes(batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
         core::ptr::write_bytes(result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+        core::ptr::write_bytes(clear_test_virt, 0, CLEAR_RECT_TEST_BYTES);
         core::ptr::write_bytes(ppgtt_virt, 0, DIRECT_RCS_PPGTT_BYTES);
     }
 
@@ -552,6 +2069,8 @@ fn direct_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
         batch_virt,
         result_phys,
         result_virt,
+        clear_test_phys,
+        clear_test_virt,
         ppgtt_phys,
         ppgtt_virt,
     };
@@ -579,6 +2098,12 @@ fn direct_rcs_map_state(dev: super::Dev, state: DirectRcsState) -> bool {
                 state.result_phys,
                 DIRECT_RCS_RESULT_BYTES,
                 DIRECT_RCS_GPU_VA_RESULT_BASE,
+            )
+            && super::map_ggtt(
+                dev,
+                state.clear_test_phys,
+                CLEAR_RECT_TEST_BYTES,
+                DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
             );
     if mapped {
         super::ggtt_invalidate(dev);
@@ -845,6 +2370,944 @@ fn direct_rcs_encode_empty_eot_walker_batch(
     true
 }
 
+fn direct_rcs_encode_copy_rect_walker_batch(
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    params: CopyRectRgba8Params,
+    src_bytes: usize,
+    dst_bytes: usize,
+    right_mask: u32,
+) -> bool {
+    if COPY_RECT_PAYLOAD_OFFSET_BYTES + COPY_RECT_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+
+    unsafe {
+        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
+        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+    }
+
+    if !direct_rcs_write_copy_rect_interface_descriptor(state) {
+        return false;
+    }
+    if !direct_rcs_write_copy_rect_surface_states(
+        state,
+        params.src_gpu,
+        src_bytes,
+        params.dst_gpu,
+        dst_bytes,
+    ) {
+        return false;
+    }
+    if !direct_rcs_write_copy_rect_payload(state, params) {
+        return false;
+    }
+
+    let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
+    let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
+    let mut cursor = 0usize;
+    let mut ok = true;
+
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL | 1,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_3D);
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
+    );
+    ok &= direct_rcs_push_state_base_address(
+        batch,
+        &mut cursor,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        upload.gpu,
+    );
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_VFE_STATE_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW3_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW5_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_IDD_BYTES as u32);
+    ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_IDD_OFFSET_BYTES as u32);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        COPY_RECT_PRE_MARKER_SLOT,
+        COPY_RECT_PRE_MARKER,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_WALKER_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_INDIRECT_BYTES as u32);
+    ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_PAYLOAD_OFFSET_BYTES as u32);
+    ok &= direct_rcs_push(
+        batch,
+        &mut cursor,
+        (GPGPU_WALKER_SIMD16_SELECT << 30) | (GPGPU_WALKER_GROUP_THREADS - 1),
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 1);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 1);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_WALKER_GROUP_Z_DIM);
+    ok &= direct_rcs_push(batch, &mut cursor, right_mask);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_WALKER_BOTTOM_MASK);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        COPY_RECT_POST_MARKER_SLOT,
+        COPY_RECT_POST_MARKER,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, MI_BATCH_BUFFER_END);
+    ok &= direct_rcs_push(batch, &mut cursor, MI_NOOP);
+
+    if !ok {
+        return false;
+    }
+
+    super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
+    super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
+    true
+}
+
+fn direct_rcs_encode_copy_rect_multi_walker_batch(
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    params: CopyRectRgba8Params,
+    src_bytes: usize,
+    dst_bytes: usize,
+    span_start: usize,
+    span_count: usize,
+) -> bool {
+    if span_count == 0 || span_count > COPY_RECT_BATCH_MAX_SPANS {
+        return false;
+    }
+    let payload_end =
+        COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES + span_count * COPY_RECT_INDIRECT_BYTES;
+    if payload_end > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+
+    unsafe {
+        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
+        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+    }
+
+    if !direct_rcs_write_copy_rect_interface_descriptor_at(
+        state,
+        COPY_RECT_BATCH_IDD_OFFSET_BYTES,
+        COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES,
+    ) {
+        return false;
+    }
+    if !direct_rcs_write_copy_rect_surface_states_at(
+        state,
+        COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES,
+        COPY_RECT_BATCH_SRC_SURFACE_STATE_OFFSET_BYTES,
+        COPY_RECT_BATCH_DST_SURFACE_STATE_OFFSET_BYTES,
+        params.src_gpu,
+        src_bytes,
+        params.dst_gpu,
+        dst_bytes,
+    ) {
+        return false;
+    }
+    for span in 0..span_count {
+        let Some(span_params) = copy_rect_span_params(params, span_start + span) else {
+            return false;
+        };
+        let payload_offset =
+            COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES + span * COPY_RECT_INDIRECT_BYTES;
+        if !direct_rcs_write_copy_rect_payload_at(state, payload_offset, span_params) {
+            return false;
+        }
+    }
+
+    let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
+    let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
+    let mut cursor = 0usize;
+    let mut ok = true;
+
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL | 1,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_3D);
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
+    );
+    ok &= direct_rcs_push_state_base_address(
+        batch,
+        &mut cursor,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        upload.gpu,
+    );
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_VFE_STATE_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW3_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW5_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_IDD_BYTES as u32);
+    ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_BATCH_IDD_OFFSET_BYTES as u32);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        COPY_RECT_PRE_MARKER_SLOT,
+        COPY_RECT_PRE_MARKER,
+    );
+    for span in 0..span_count {
+        let Some(span_params) = copy_rect_span_params(params, span_start + span) else {
+            return false;
+        };
+        let payload_offset =
+            COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES + span * COPY_RECT_INDIRECT_BYTES;
+        ok &= direct_rcs_push_copy_rect_walker(
+            batch,
+            &mut cursor,
+            payload_offset,
+            copy_rect_walker_right_mask(span_params.width),
+        );
+        ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
+        ok &= direct_rcs_push(batch, &mut cursor, 0);
+    }
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        COPY_RECT_POST_MARKER_SLOT,
+        COPY_RECT_POST_MARKER,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, MI_BATCH_BUFFER_END);
+    ok &= direct_rcs_push(batch, &mut cursor, MI_NOOP);
+
+    if !ok {
+        return false;
+    }
+
+    super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
+    super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
+    true
+}
+
+fn direct_rcs_encode_clear_rect_walker_batch(
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    params: ClearRectRgba8WhiteParams,
+    dst_bytes: usize,
+    right_mask: u32,
+) -> bool {
+    if CLEAR_RECT_PAYLOAD_OFFSET_BYTES + CLEAR_RECT_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+
+    unsafe {
+        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
+        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+    }
+
+    if !direct_rcs_write_clear_rect_interface_descriptor(state) {
+        return false;
+    }
+    if !direct_rcs_write_clear_rect_surface_state(state, params.dst_gpu, dst_bytes) {
+        return false;
+    }
+    if !direct_rcs_write_clear_rect_payload(state, params) {
+        return false;
+    }
+
+    let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
+    let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
+    let mut cursor = 0usize;
+    let mut ok = true;
+
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL | 1,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_3D);
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
+    );
+    ok &= direct_rcs_push_state_base_address(
+        batch,
+        &mut cursor,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        upload.gpu,
+    );
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_VFE_STATE_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW3_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW5_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, CLEAR_RECT_IDD_BYTES as u32);
+    ok &= direct_rcs_push(batch, &mut cursor, CLEAR_RECT_IDD_OFFSET_BYTES as u32);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        CLEAR_RECT_PRE_MARKER_SLOT,
+        CLEAR_RECT_PRE_MARKER,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_WALKER_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, CLEAR_RECT_INDIRECT_BYTES as u32);
+    ok &= direct_rcs_push(batch, &mut cursor, CLEAR_RECT_PAYLOAD_OFFSET_BYTES as u32);
+    ok &= direct_rcs_push(
+        batch,
+        &mut cursor,
+        (GPGPU_WALKER_SIMD16_SELECT << 30) | (GPGPU_WALKER_GROUP_THREADS - 1),
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 1);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 1);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_WALKER_GROUP_Z_DIM);
+    ok &= direct_rcs_push(batch, &mut cursor, right_mask);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_WALKER_BOTTOM_MASK);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        CLEAR_RECT_POST_MARKER_SLOT,
+        CLEAR_RECT_POST_MARKER,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, MI_BATCH_BUFFER_END);
+    ok &= direct_rcs_push(batch, &mut cursor, MI_NOOP);
+
+    if !ok {
+        return false;
+    }
+
+    super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
+    super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
+    true
+}
+
+fn direct_rcs_write_copy_rect_interface_descriptor(state: DirectRcsState) -> bool {
+    direct_rcs_write_copy_rect_interface_descriptor_at(
+        state,
+        COPY_RECT_IDD_OFFSET_BYTES,
+        COPY_RECT_BINDING_TABLE_OFFSET_BYTES,
+    )
+}
+
+fn direct_rcs_write_copy_rect_interface_descriptor_at(
+    state: DirectRcsState,
+    idd_offset: usize,
+    binding_table_offset: usize,
+) -> bool {
+    if idd_offset + COPY_RECT_IDD_BYTES > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+    let idd = unsafe { state.batch_virt.add(idd_offset) as *mut u32 };
+    unsafe {
+        core::ptr::write_volatile(idd, COPY_RECT_RGBA8_TEXT_OFFSET_BYTES as u32);
+        core::ptr::write_volatile(idd.add(1), 0);
+        core::ptr::write_volatile(idd.add(2), IDD_THREAD_PREEMPTION_DISABLE);
+        core::ptr::write_volatile(idd.add(3), 0);
+        core::ptr::write_volatile(idd.add(4), (binding_table_offset as u32) | 2);
+        core::ptr::write_volatile(idd.add(5), 3 << 16);
+        core::ptr::write_volatile(idd.add(6), GPGPU_WALKER_GROUP_THREADS);
+        core::ptr::write_volatile(idd.add(7), 3);
+    }
+    true
+}
+
+fn direct_rcs_write_copy_rect_surface_states(
+    state: DirectRcsState,
+    src_gpu: u64,
+    src_bytes: usize,
+    dst_gpu: u64,
+    dst_bytes: usize,
+) -> bool {
+    direct_rcs_write_copy_rect_surface_states_at(
+        state,
+        COPY_RECT_BINDING_TABLE_OFFSET_BYTES,
+        COPY_RECT_SRC_SURFACE_STATE_OFFSET_BYTES,
+        COPY_RECT_DST_SURFACE_STATE_OFFSET_BYTES,
+        src_gpu,
+        src_bytes,
+        dst_gpu,
+        dst_bytes,
+    )
+}
+
+fn direct_rcs_write_copy_rect_surface_states_at(
+    state: DirectRcsState,
+    binding_table_offset: usize,
+    src_surface_offset: usize,
+    dst_surface_offset: usize,
+    src_gpu: u64,
+    src_bytes: usize,
+    dst_gpu: u64,
+    dst_bytes: usize,
+) -> bool {
+    let binding_end = binding_table_offset + 2 * core::mem::size_of::<u32>();
+    let surface_bytes = COPY_RECT_SURFACE_STATE_DWORDS * core::mem::size_of::<u32>();
+    let src_surface_end = src_surface_offset + surface_bytes;
+    let dst_surface_end = dst_surface_offset + surface_bytes;
+    if binding_end > DIRECT_RCS_BATCH_BYTES
+        || src_surface_end > DIRECT_RCS_BATCH_BYTES
+        || dst_surface_end > DIRECT_RCS_BATCH_BYTES
+    {
+        return false;
+    }
+
+    unsafe {
+        let binding = state.batch_virt.add(binding_table_offset) as *mut u32;
+        core::ptr::write_volatile(binding, src_surface_offset as u32);
+        core::ptr::write_volatile(binding.add(1), dst_surface_offset as u32);
+    }
+    direct_rcs_write_buffer_surface_state(state, src_surface_offset, src_gpu, src_bytes)
+        && direct_rcs_write_buffer_surface_state(state, dst_surface_offset, dst_gpu, dst_bytes)
+}
+
+fn direct_rcs_write_buffer_surface_state(
+    state: DirectRcsState,
+    surface_offset: usize,
+    gpu: u64,
+    target_bytes: usize,
+) -> bool {
+    let surface_bytes = COPY_RECT_SURFACE_STATE_DWORDS * core::mem::size_of::<u32>();
+    let surface_end = surface_offset + surface_bytes;
+    if surface_end > DIRECT_RCS_BATCH_BYTES || target_bytes == 0 {
+        return false;
+    }
+
+    let extent = target_bytes.saturating_sub(1);
+    let surface_width_minus1 = (extent & 0x7F) as u32;
+    let surface_height_minus1 = ((extent >> 7) & 0x3FFF) as u32;
+    let surface_depth_minus1 = ((extent >> 21) & 0x7FF) as u32;
+    let surface_dword0 = (SURFTYPE_BUFFER << 29) | (SURFACE_FORMAT_RAW << 18);
+    let surface_dword2 = (surface_height_minus1 << 16) | surface_width_minus1;
+    let surface_dword3 = surface_depth_minus1 << 21;
+
+    unsafe {
+        let surface = state.batch_virt.add(surface_offset) as *mut u32;
+        for index in 0..COPY_RECT_SURFACE_STATE_DWORDS {
+            core::ptr::write_volatile(surface.add(index), 0);
+        }
+        core::ptr::write_volatile(surface, surface_dword0);
+        core::ptr::write_volatile(surface.add(1), RENDER_MOCS << 24);
+        core::ptr::write_volatile(surface.add(2), surface_dword2);
+        core::ptr::write_volatile(surface.add(3), surface_dword3);
+        core::ptr::write_volatile(surface.add(8), gpu as u32);
+        core::ptr::write_volatile(surface.add(9), (gpu >> 32) as u32);
+    }
+    true
+}
+
+fn direct_rcs_write_copy_rect_payload(state: DirectRcsState, params: CopyRectRgba8Params) -> bool {
+    direct_rcs_write_copy_rect_payload_at(state, COPY_RECT_PAYLOAD_OFFSET_BYTES, params)
+}
+
+fn direct_rcs_write_copy_rect_payload_at(
+    state: DirectRcsState,
+    payload_offset: usize,
+    params: CopyRectRgba8Params,
+) -> bool {
+    if payload_offset + COPY_RECT_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+
+    unsafe {
+        let payload = state.batch_virt.add(payload_offset);
+        core::ptr::write_bytes(payload, 0, COPY_RECT_INDIRECT_BYTES);
+        let dwords = payload as *mut u32;
+        core::ptr::write_volatile(dwords.add(3), 16);
+        core::ptr::write_volatile(dwords.add(4), 1);
+        core::ptr::write_volatile(dwords.add(5), 1);
+        core::ptr::write_volatile(dwords.add(8), 16);
+        core::ptr::write_volatile(dwords.add(9), 1);
+        core::ptr::write_volatile(dwords.add(10), 1);
+        core::ptr::write_volatile(dwords.add(12), params.src_gpu as u32);
+        core::ptr::write_volatile(dwords.add(13), (params.src_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(14), params.dst_gpu as u32);
+        core::ptr::write_volatile(dwords.add(15), (params.dst_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(16), params.src_pitch_bytes);
+        core::ptr::write_volatile(dwords.add(17), params.dst_pitch_bytes);
+        core::ptr::write_volatile(dwords.add(18), params.src_x);
+        core::ptr::write_volatile(dwords.add(19), params.src_y);
+        core::ptr::write_volatile(dwords.add(20), params.dst_x);
+        core::ptr::write_volatile(dwords.add(21), params.dst_y);
+        core::ptr::write_volatile(dwords.add(22), params.width);
+        core::ptr::write_volatile(dwords.add(23), params.height);
+
+        let local_ids = payload.add(COPY_RECT_CROSS_THREAD_BYTES) as *mut u16;
+        for lane in 0..16usize {
+            core::ptr::write_volatile(local_ids.add(lane), lane as u16);
+            core::ptr::write_volatile(local_ids.add(16 + lane), 0);
+            core::ptr::write_volatile(local_ids.add(32 + lane), 0);
+        }
+    }
+    true
+}
+
+fn direct_rcs_write_clear_rect_interface_descriptor(state: DirectRcsState) -> bool {
+    if CLEAR_RECT_IDD_OFFSET_BYTES + CLEAR_RECT_IDD_BYTES > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+    let idd = unsafe { state.batch_virt.add(CLEAR_RECT_IDD_OFFSET_BYTES) as *mut u32 };
+    unsafe {
+        core::ptr::write_volatile(idd, CLEAR_RECT_RGBA8_WHITE_TEXT_OFFSET_BYTES as u32);
+        core::ptr::write_volatile(idd.add(1), 0);
+        core::ptr::write_volatile(idd.add(2), IDD_THREAD_PREEMPTION_DISABLE);
+        core::ptr::write_volatile(idd.add(3), 0);
+        core::ptr::write_volatile(idd.add(4), (CLEAR_RECT_BINDING_TABLE_OFFSET_BYTES as u32) | 1);
+        core::ptr::write_volatile(idd.add(5), 3 << 16);
+        core::ptr::write_volatile(idd.add(6), GPGPU_WALKER_GROUP_THREADS);
+        core::ptr::write_volatile(idd.add(7), 3);
+    }
+    true
+}
+
+fn direct_rcs_write_clear_rect_surface_state(
+    state: DirectRcsState,
+    dst_gpu: u64,
+    dst_bytes: usize,
+) -> bool {
+    let binding_end = CLEAR_RECT_BINDING_TABLE_OFFSET_BYTES + core::mem::size_of::<u32>();
+    let surface_bytes = CLEAR_RECT_SURFACE_STATE_DWORDS * core::mem::size_of::<u32>();
+    let surface_end = CLEAR_RECT_SURFACE_STATE_OFFSET_BYTES + surface_bytes;
+    if binding_end > DIRECT_RCS_BATCH_BYTES || surface_end > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+
+    if dst_bytes == 0 {
+        return false;
+    }
+
+    let extent = dst_bytes.saturating_sub(1);
+    let surface_width_minus1 = (extent & 0x7F) as u32;
+    let surface_height_minus1 = ((extent >> 7) & 0x3FFF) as u32;
+    let surface_depth_minus1 = ((extent >> 21) & 0x7FF) as u32;
+    let surface_dword0 = (SURFTYPE_BUFFER << 29) | (SURFACE_FORMAT_RAW << 18);
+    let surface_dword2 = (surface_height_minus1 << 16) | surface_width_minus1;
+    let surface_dword3 = surface_depth_minus1 << 21;
+
+    unsafe {
+        let binding = state.batch_virt.add(CLEAR_RECT_BINDING_TABLE_OFFSET_BYTES) as *mut u32;
+        core::ptr::write_volatile(binding, CLEAR_RECT_SURFACE_STATE_OFFSET_BYTES as u32);
+
+        let surface = state.batch_virt.add(CLEAR_RECT_SURFACE_STATE_OFFSET_BYTES) as *mut u32;
+        for index in 0..CLEAR_RECT_SURFACE_STATE_DWORDS {
+            core::ptr::write_volatile(surface.add(index), 0);
+        }
+        core::ptr::write_volatile(surface, surface_dword0);
+        core::ptr::write_volatile(surface.add(1), RENDER_MOCS << 24);
+        core::ptr::write_volatile(surface.add(2), surface_dword2);
+        core::ptr::write_volatile(surface.add(3), surface_dword3);
+        core::ptr::write_volatile(surface.add(8), dst_gpu as u32);
+        core::ptr::write_volatile(surface.add(9), (dst_gpu >> 32) as u32);
+    }
+    true
+}
+
+fn direct_rcs_write_clear_rect_payload(
+    state: DirectRcsState,
+    params: ClearRectRgba8WhiteParams,
+) -> bool {
+    if CLEAR_RECT_PAYLOAD_OFFSET_BYTES + CLEAR_RECT_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+
+    unsafe {
+        let payload = state.batch_virt.add(CLEAR_RECT_PAYLOAD_OFFSET_BYTES);
+        core::ptr::write_bytes(payload, 0, CLEAR_RECT_INDIRECT_BYTES);
+        let dwords = payload as *mut u32;
+        core::ptr::write_volatile(dwords.add(3), 16);
+        core::ptr::write_volatile(dwords.add(4), 1);
+        core::ptr::write_volatile(dwords.add(5), 1);
+        core::ptr::write_volatile(dwords.add(8), 16);
+        core::ptr::write_volatile(dwords.add(9), 1);
+        core::ptr::write_volatile(dwords.add(10), 1);
+        core::ptr::write_volatile(dwords.add(12), params.dst_gpu as u32);
+        core::ptr::write_volatile(dwords.add(13), (params.dst_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(14), params.dst_pitch_bytes);
+        core::ptr::write_volatile(dwords.add(15), params.dst_x);
+        core::ptr::write_volatile(dwords.add(16), params.dst_y);
+        core::ptr::write_volatile(dwords.add(17), params.width);
+        core::ptr::write_volatile(dwords.add(18), params.height);
+
+        let local_ids = payload.add(CLEAR_RECT_CROSS_THREAD_BYTES) as *mut u16;
+        for lane in 0..16usize {
+            core::ptr::write_volatile(local_ids.add(lane), lane as u16);
+            core::ptr::write_volatile(local_ids.add(16 + lane), 0);
+            core::ptr::write_volatile(local_ids.add(32 + lane), 0);
+        }
+    }
+    true
+}
+
+fn direct_rcs_seed_clear_rect_strip(state: DirectRcsState) -> [u32; 4] {
+    let values = [
+        CLEAR_RECT_RGBA_RED,
+        CLEAR_RECT_RGBA_GREEN,
+        CLEAR_RECT_RGBA_BLUE,
+        CLEAR_RECT_RGBA_BLACK,
+    ];
+    unsafe {
+        core::ptr::write_bytes(state.clear_test_virt, 0, CLEAR_RECT_TEST_BYTES);
+        let dst = state.clear_test_virt as *mut u32;
+        for (index, value) in values.iter().copied().enumerate() {
+            core::ptr::write_volatile(dst.add(index), value);
+        }
+    }
+    super::dma_flush(state.clear_test_virt, CLEAR_RECT_TEST_BYTES);
+    values
+}
+
+fn direct_rcs_seed_copy_rect_strip(state: DirectRcsState) -> ([u32; 4], [u32; 4]) {
+    let src_values = [
+        CLEAR_RECT_RGBA_RED,
+        CLEAR_RECT_RGBA_GREEN,
+        CLEAR_RECT_RGBA_BLUE,
+        CLEAR_RECT_RGBA_BLACK,
+    ];
+    let dst_values = [
+        COPY_RECT_DST_POISON0,
+        COPY_RECT_DST_POISON1,
+        COPY_RECT_DST_POISON2,
+        COPY_RECT_DST_POISON3,
+    ];
+    unsafe {
+        core::ptr::write_bytes(state.clear_test_virt, 0, CLEAR_RECT_TEST_BYTES);
+        let row = state.clear_test_virt as *mut u32;
+        for (index, value) in src_values.iter().copied().enumerate() {
+            core::ptr::write_volatile(row.add(index), value);
+        }
+        for (index, value) in dst_values.iter().copied().enumerate() {
+            core::ptr::write_volatile(row.add(index + COPY_RECT_TEST_PIXELS), value);
+        }
+    }
+    super::dma_flush(state.clear_test_virt, CLEAR_RECT_TEST_BYTES);
+    (src_values, dst_values)
+}
+
+fn direct_rcs_seed_rect_api_smoke(state: DirectRcsState) {
+    let values = [
+        CLEAR_RECT_RGBA_RED,
+        CLEAR_RECT_RGBA_GREEN,
+        CLEAR_RECT_RGBA_BLUE,
+        CLEAR_RECT_RGBA_BLACK,
+        COPY_RECT_DST_POISON0,
+        COPY_RECT_DST_POISON1,
+        COPY_RECT_DST_POISON2,
+        COPY_RECT_DST_POISON3,
+        0xFF11_2233,
+        0xFF44_5566,
+        0xFF77_8899,
+        0xFFAA_BBCC,
+        0x5555_5555,
+        0x6666_6666,
+        0x7777_7777,
+        0x8888_8888,
+        0xFF10_2030,
+        0xFF40_5060,
+        0xFF70_8090,
+        0xFFA0_B0C0,
+        0x9999_9999,
+        0xAAAA_AAAA,
+        0xBBBB_BBBB,
+        0xCCCC_CCCC,
+    ];
+    unsafe {
+        core::ptr::write_bytes(state.clear_test_virt, 0, CLEAR_RECT_TEST_BYTES);
+        let row = state.clear_test_virt as *mut u32;
+        for (index, value) in values.iter().copied().enumerate() {
+            core::ptr::write_volatile(row.add(index), value);
+        }
+    }
+    super::dma_flush(state.clear_test_virt, CLEAR_RECT_TEST_BYTES);
+}
+
+fn direct_rcs_copy_rect_256_src_pixel(index: usize) -> u32 {
+    let r = (index as u32) & 0xFF;
+    let g = 0xFFu32.wrapping_sub(r);
+    let b = ((index as u32).wrapping_mul(3)) & 0xFF;
+    0xFF00_0000 | (b << 16) | (g << 8) | r
+}
+
+fn direct_rcs_copy_rect_256x2_src_pixel(x: usize, y: usize) -> u32 {
+    let r = (x as u32) & 0xFF;
+    let g = (0xFFu32.wrapping_sub(r)).wrapping_sub((y as u32).wrapping_mul(0x31)) & 0xFF;
+    let b = ((x as u32).wrapping_mul(3) + (y as u32).wrapping_mul(0x55)) & 0xFF;
+    0xFF00_0000 | (b << 16) | (g << 8) | r
+}
+
+fn direct_rcs_copy_rect_256_poison_pixel(index: usize) -> u32 {
+    0xA500_0000 | ((index as u32) & 0x0000_FFFF)
+}
+
+fn direct_rcs_seed_copy_rect_256(state: DirectRcsState) {
+    unsafe {
+        core::ptr::write_bytes(state.clear_test_virt, 0, CLEAR_RECT_TEST_BYTES);
+        let row = state.clear_test_virt as *mut u32;
+        for index in 0..COPY_RECT_256_WIDTH as usize {
+            core::ptr::write_volatile(row.add(index), direct_rcs_copy_rect_256_src_pixel(index));
+            core::ptr::write_volatile(
+                row.add(index + COPY_RECT_256_WIDTH as usize),
+                direct_rcs_copy_rect_256_poison_pixel(index),
+            );
+        }
+    }
+    super::dma_flush(state.clear_test_virt, CLEAR_RECT_TEST_BYTES);
+}
+
+fn direct_rcs_seed_copy_rect_256x2(state: DirectRcsState) {
+    unsafe {
+        core::ptr::write_bytes(state.clear_test_virt, 0, CLEAR_RECT_TEST_BYTES);
+        let surface = state.clear_test_virt as *mut u32;
+        let pitch_pixels = COPY_RECT_256X2_SURFACE_WIDTH as usize;
+        for y in 0..COPY_RECT_256X2_HEIGHT as usize {
+            let row = surface.add(y * pitch_pixels);
+            for x in 0..COPY_RECT_256X2_WIDTH as usize {
+                core::ptr::write_volatile(row.add(x), direct_rcs_copy_rect_256x2_src_pixel(x, y));
+                core::ptr::write_volatile(
+                    row.add(x + COPY_RECT_256X2_WIDTH as usize),
+                    direct_rcs_copy_rect_256_poison_pixel(y * pitch_pixels + x),
+                );
+            }
+        }
+    }
+    super::dma_flush(state.clear_test_virt, CLEAR_RECT_TEST_BYTES);
+}
+
+fn direct_rcs_read_clear_rect_strip(state: DirectRcsState) -> [u32; 4] {
+    super::dma_flush(state.clear_test_virt, CLEAR_RECT_TEST_BYTES);
+    let mut values = [0u32; 4];
+    unsafe {
+        let src = state.clear_test_virt as *const u32;
+        for (index, value) in values.iter_mut().enumerate() {
+            *value = core::ptr::read_volatile(src.add(index));
+        }
+    }
+    values
+}
+
+fn direct_rcs_read_copy_rect_strip(state: DirectRcsState) -> ([u32; 4], [u32; 4]) {
+    super::dma_flush(state.clear_test_virt, CLEAR_RECT_TEST_BYTES);
+    let mut src_values = [0u32; 4];
+    let mut dst_values = [0u32; 4];
+    unsafe {
+        let row = state.clear_test_virt as *const u32;
+        for (index, value) in src_values.iter_mut().enumerate() {
+            *value = core::ptr::read_volatile(row.add(index));
+        }
+        for (index, value) in dst_values.iter_mut().enumerate() {
+            *value = core::ptr::read_volatile(row.add(index + COPY_RECT_TEST_PIXELS));
+        }
+    }
+    (src_values, dst_values)
+}
+
+fn direct_rcs_read_rect_api_span(state: DirectRcsState, start_pixel: usize) -> [u32; 4] {
+    super::dma_flush(state.clear_test_virt, CLEAR_RECT_TEST_BYTES);
+    let mut values = [0u32; 4];
+    unsafe {
+        let row = state.clear_test_virt as *const u32;
+        for (index, value) in values.iter_mut().enumerate() {
+            *value = core::ptr::read_volatile(row.add(start_pixel + index));
+        }
+    }
+    values
+}
+
+fn direct_rcs_read_copy_rect_256_span(state: DirectRcsState, start_pixel: usize) -> [u32; 4] {
+    super::dma_flush(state.clear_test_virt, CLEAR_RECT_TEST_BYTES);
+    let mut values = [0u32; 4];
+    unsafe {
+        let row = state.clear_test_virt as *const u32;
+        for (index, value) in values.iter_mut().enumerate() {
+            *value = core::ptr::read_volatile(row.add(start_pixel + index));
+        }
+    }
+    values
+}
+
+fn direct_rcs_read_copy_rect_256x2_span(
+    state: DirectRcsState,
+    row_index: usize,
+    start_pixel: usize,
+) -> [u32; 4] {
+    super::dma_flush(state.clear_test_virt, CLEAR_RECT_TEST_BYTES);
+    let mut values = [0u32; 4];
+    unsafe {
+        let surface = state.clear_test_virt as *const u32;
+        let row = surface.add(row_index * COPY_RECT_256X2_SURFACE_WIDTH as usize);
+        for (index, value) in values.iter_mut().enumerate() {
+            *value = core::ptr::read_volatile(row.add(start_pixel + index));
+        }
+    }
+    values
+}
+
+fn direct_rcs_copy_rect_256_samples_ok(state: DirectRcsState) -> usize {
+    super::dma_flush(state.clear_test_virt, CLEAR_RECT_TEST_BYTES);
+    let mut ok = 0usize;
+    unsafe {
+        let row = state.clear_test_virt as *const u32;
+        for sample in COPY_RECT_256_SAMPLE_INDICES {
+            let src = core::ptr::read_volatile(row.add(sample));
+            let dst = core::ptr::read_volatile(row.add(sample + COPY_RECT_256_WIDTH as usize));
+            if src == direct_rcs_copy_rect_256_src_pixel(sample)
+                && dst == direct_rcs_copy_rect_256_src_pixel(sample)
+            {
+                ok += 1;
+            }
+        }
+    }
+    ok
+}
+
+fn direct_rcs_copy_rect_256_full_counts(state: DirectRcsState) -> (usize, usize) {
+    super::dma_flush(state.clear_test_virt, CLEAR_RECT_TEST_BYTES);
+    let mut src_preserved = 0usize;
+    let mut copied = 0usize;
+    unsafe {
+        let row = state.clear_test_virt as *const u32;
+        for index in 0..COPY_RECT_256_WIDTH as usize {
+            let expected = direct_rcs_copy_rect_256_src_pixel(index);
+            let src = core::ptr::read_volatile(row.add(index));
+            let dst = core::ptr::read_volatile(row.add(index + COPY_RECT_256_WIDTH as usize));
+            if src == expected {
+                src_preserved += 1;
+            }
+            if dst == expected {
+                copied += 1;
+            }
+        }
+    }
+    (src_preserved, copied)
+}
+
+fn direct_rcs_copy_rect_256x2_samples_ok(state: DirectRcsState) -> usize {
+    super::dma_flush(state.clear_test_virt, CLEAR_RECT_TEST_BYTES);
+    let mut ok = 0usize;
+    unsafe {
+        let surface = state.clear_test_virt as *const u32;
+        let pitch_pixels = COPY_RECT_256X2_SURFACE_WIDTH as usize;
+        for (x, y) in COPY_RECT_256X2_SAMPLE_POINTS {
+            let row = surface.add(y * pitch_pixels);
+            let expected = direct_rcs_copy_rect_256x2_src_pixel(x, y);
+            let src = core::ptr::read_volatile(row.add(x));
+            let dst = core::ptr::read_volatile(row.add(x + COPY_RECT_256X2_WIDTH as usize));
+            if src == expected && dst == expected {
+                ok += 1;
+            }
+        }
+    }
+    ok
+}
+
+fn direct_rcs_copy_rect_256x2_full_counts(state: DirectRcsState) -> (usize, usize) {
+    super::dma_flush(state.clear_test_virt, CLEAR_RECT_TEST_BYTES);
+    let mut src_preserved = 0usize;
+    let mut copied = 0usize;
+    unsafe {
+        let surface = state.clear_test_virt as *const u32;
+        let pitch_pixels = COPY_RECT_256X2_SURFACE_WIDTH as usize;
+        for y in 0..COPY_RECT_256X2_HEIGHT as usize {
+            let row = surface.add(y * pitch_pixels);
+            for x in 0..COPY_RECT_256X2_WIDTH as usize {
+                let expected = direct_rcs_copy_rect_256x2_src_pixel(x, y);
+                let src = core::ptr::read_volatile(row.add(x));
+                let dst = core::ptr::read_volatile(row.add(x + COPY_RECT_256X2_WIDTH as usize));
+                if src == expected {
+                    src_preserved += 1;
+                }
+                if dst == expected {
+                    copied += 1;
+                }
+            }
+        }
+    }
+    (src_preserved, copied)
+}
+
+fn direct_rcs_count_white(values: [u32; 4]) -> usize {
+    let mut count = 0usize;
+    for value in values {
+        if value == CLEAR_RECT_EXPECTED_WHITE {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn direct_rcs_count_matching(values: [u32; 4], expected: [u32; 4]) -> usize {
+    let mut count = 0usize;
+    for index in 0..values.len() {
+        if values[index] == expected[index] {
+            count += 1;
+        }
+    }
+    count
+}
+
 fn direct_rcs_push(batch: &mut [u32], cursor: &mut usize, value: u32) -> bool {
     if *cursor >= batch.len() {
         return false;
@@ -885,6 +3348,33 @@ fn direct_rcs_push_store_marker(
         && direct_rcs_push(batch, cursor, value)
 }
 
+fn direct_rcs_push_copy_rect_walker(
+    batch: &mut [u32],
+    cursor: &mut usize,
+    payload_offset: usize,
+    right_mask: u32,
+) -> bool {
+    direct_rcs_push(batch, cursor, GPGPU_WALKER_CMD)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, COPY_RECT_INDIRECT_BYTES as u32)
+        && direct_rcs_push(batch, cursor, payload_offset as u32)
+        && direct_rcs_push(
+            batch,
+            cursor,
+            (GPGPU_WALKER_SIMD16_SELECT << 30) | (GPGPU_WALKER_GROUP_THREADS - 1),
+        )
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, 1)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, 1)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, GPGPU_WALKER_GROUP_Z_DIM)
+        && direct_rcs_push(batch, cursor, right_mask)
+        && direct_rcs_push(batch, cursor, GPGPU_WALKER_BOTTOM_MASK)
+}
+
 fn direct_rcs_push_state_base_address(
     batch: &mut [u32],
     cursor: &mut usize,
@@ -895,9 +3385,9 @@ fn direct_rcs_push_state_base_address(
     direct_rcs_push(batch, cursor, STATE_BASE_ADDRESS_CMD)
         && direct_rcs_push_sba_address(batch, cursor, true, RENDER_MOCS, indirect_object_base)
         && direct_rcs_push(batch, cursor, RENDER_MOCS << 16)
-        && direct_rcs_push_sba_address(batch, cursor, true, RENDER_MOCS, 0)
         && direct_rcs_push_sba_address(batch, cursor, true, RENDER_MOCS, dynamic_state_base)
-        && direct_rcs_push_sba_address(batch, cursor, true, RENDER_MOCS, 0)
+        && direct_rcs_push_sba_address(batch, cursor, true, RENDER_MOCS, dynamic_state_base)
+        && direct_rcs_push_sba_address(batch, cursor, true, RENDER_MOCS, indirect_object_base)
         && direct_rcs_push_sba_address(batch, cursor, true, RENDER_MOCS, instruction_base)
         && direct_rcs_push_sba_size(batch, cursor, true, 0xFFFF_F000)
         && direct_rcs_push_sba_size(batch, cursor, true, 0xFFFF_F000)
@@ -1019,6 +3509,16 @@ fn direct_rcs_poll_result_slot(state: DirectRcsState, slot: usize, expected: u32
     observed
 }
 
+fn direct_rcs_poll_result_slot_elapsed(
+    state: DirectRcsState,
+    slot: usize,
+    expected: u32,
+    start_tick: u64,
+) -> (u32, u64) {
+    let observed = direct_rcs_poll_result_slot(state, slot, expected);
+    (observed, direct_rcs_elapsed_ms_since(start_tick))
+}
+
 fn direct_rcs_read_result_slot(state: DirectRcsState, slot: usize) -> u32 {
     let offset = slot.saturating_mul(core::mem::size_of::<u32>());
     if offset + core::mem::size_of::<u32>() > DIRECT_RCS_RESULT_BYTES {
@@ -1026,6 +3526,20 @@ fn direct_rcs_read_result_slot(state: DirectRcsState, slot: usize) -> u32 {
     }
     super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
     unsafe { core::ptr::read_volatile(state.result_virt.add(offset) as *const u32) }
+}
+
+fn direct_rcs_now_tick() -> u64 {
+    embassy_time_driver::now()
+}
+
+fn direct_rcs_elapsed_ms_since(start_tick: u64) -> u64 {
+    let elapsed = direct_rcs_now_tick().saturating_sub(start_tick);
+    let hz = embassy_time_driver::TICK_HZ;
+    if hz == 0 {
+        0
+    } else {
+        elapsed.saturating_mul(1000) / hz
+    }
 }
 
 fn direct_rcs_init_lrc_context_image(
