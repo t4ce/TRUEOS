@@ -1,6 +1,7 @@
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use spin::Mutex;
+use spin::{Mutex, Once};
 
 pub(crate) const COPY_RECT_RGBA8_KERNEL_NAME: &str = "copy_rect_rgba8";
 pub(crate) const COPY_RECT_RGBA8_OPENCL_SOURCE: &str = include_str!("kernels/copy_rect_rgba8.cl");
@@ -251,6 +252,7 @@ static CLEAR_RECT_RGBA8_WHITE_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mu
 static EMPTY_EOT_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static DIRECT_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static GPGPU_SHELL_SURFACE: Mutex<Option<GpgpuShellSurface>> = Mutex::new(None);
+static GPGPU_TWEMOJI_ATLAS: Once<Option<GpgpuTwemojiAtlasCache>> = Once::new();
 static DIRECT_RCS_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 static DIRECT_RCS_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
 static EMPTY_EOT_WALKER_RAN: AtomicBool = AtomicBool::new(false);
@@ -260,7 +262,6 @@ static COPY_RECT_256_RAN: AtomicBool = AtomicBool::new(false);
 static COPY_RECT_256X2_RAN: AtomicBool = AtomicBool::new(false);
 static RECT_API_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
 static DIRECT_RCS_SUBMIT_COUNTER: AtomicU32 = AtomicU32::new(0);
-static DIRECT_RCS_RING_KICK_DWORD: AtomicU32 = AtomicU32::new(0);
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -485,6 +486,29 @@ pub(crate) struct GpgpuShellAtlasCopyResult {
     pub(crate) src_head: [u32; 4],
     pub(crate) dst_head: [u32; 4],
     pub(crate) presented: bool,
+    pub(crate) total_ms: u64,
+    pub(crate) stage_ms: u64,
+    pub(crate) copy_ms: u64,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuShellAtlasHotCopyResult {
+    pub(crate) ok: bool,
+    pub(crate) slot: u16,
+    pub(crate) atlas_src_rect: GpgpuRect,
+    pub(crate) dst_xy: GpgpuPoint,
+    pub(crate) primary_width: u32,
+    pub(crate) primary_height: u32,
+    pub(crate) pixels: usize,
+    pub(crate) spans: usize,
+    pub(crate) expected_spans: usize,
+    pub(crate) submits: usize,
+    pub(crate) expected_submits: usize,
+    pub(crate) staged: usize,
+    pub(crate) presented: bool,
+    pub(crate) total_ms: u64,
+    pub(crate) stage_ms: u64,
+    pub(crate) copy_ms: u64,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -495,6 +519,14 @@ struct GpgpuShellSurface {
 
 unsafe impl Send for GpgpuShellSurface {}
 unsafe impl Sync for GpgpuShellSurface {}
+
+#[derive(Clone, Debug)]
+struct GpgpuTwemojiAtlasCache {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+    xrgb: Vec<u32>,
+}
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct GpgpuKernelArtifact {
@@ -822,6 +854,7 @@ pub(crate) fn shell_copy_twemoji_atlas_slot_scanout(
     slot: u16,
     dst_xy_override: Option<GpgpuPoint>,
 ) -> Option<GpgpuShellAtlasCopyResult> {
+    let total_start_tick = direct_rcs_now_tick();
     let shell = shell_surface_once()?;
     let target = super::display::primary_surface_gpgpu_marker_target()?;
     let primary = GpgpuRgba8Surface::new(
@@ -836,9 +869,7 @@ pub(crate) fn shell_copy_twemoji_atlas_slot_scanout(
         return None;
     }
 
-    let atlas =
-        crate::gfx::png_codec::decode_png_rgba(crate::gfx::althlasfont::twemoji::TWEMOJI_ATLAS_PNG)
-            .ok()?;
+    let atlas = twemoji_atlas_cache_once()?;
     let region = crate::gfx::althlasfont::twemoji::twemoji_lookup_slot_region(slot)?;
     let src_rect = GpgpuRect::new(
         region.src_x as i32,
@@ -876,15 +907,18 @@ pub(crate) fn shell_copy_twemoji_atlas_slot_scanout(
     let stage_rect = GpgpuRect::new(0, 0, src_rect.width, src_rect.height);
 
     shell_zero_surface(shell);
-    let staged = shell_stage_rgba_atlas_strip_xrgb(shell, &atlas, src_rect)?;
+    let stage_start_tick = direct_rcs_now_tick();
+    let staged = shell_stage_atlas_over_scanout_xrgb(shell, atlas, src_rect, target, dst_xy)?;
+    let stage_ms = direct_rcs_elapsed_ms_since(stage_start_tick);
     let src_head = shell_read_rect_head(shell, stage_rect);
     super::dma_flush(shell.virt, shell.surface.bytes);
 
+    let copy_start_tick = direct_rcs_now_tick();
     let stats = copy_rect_rgba8_stats(shell.surface, stage_rect, primary, dst_xy);
+    let copy_ms = direct_rcs_elapsed_ms_since(copy_start_tick);
     let dst_rect = GpgpuRect::new(dst_xy.x, dst_xy.y, src_rect.width, src_rect.height);
     let dst_head = primary_read_rect_head(target, dst_rect);
-    let (src_preserved, copied) =
-        primary_count_atlas_copy(target, shell, &atlas, src_rect, stage_rect, dst_xy)?;
+    let (src_preserved, copied) = primary_count_shell_raw_copy(target, shell, stage_rect, dst_xy);
     let expected_spans = copy_rect_expected_spans(stage_rect);
     let expected_submits = expected_spans.div_ceil(COPY_RECT_BATCH_MAX_SPANS);
     let flush_offset = (dst_xy.y as usize)
@@ -929,6 +963,113 @@ pub(crate) fn shell_copy_twemoji_atlas_slot_scanout(
         src_head,
         dst_head,
         presented,
+        total_ms: direct_rcs_elapsed_ms_since(total_start_tick),
+        stage_ms,
+        copy_ms,
+    })
+}
+
+pub(crate) fn shell_copy_twemoji_atlas_slot_scanout_hot(
+    slot: u16,
+    dst_xy_override: Option<GpgpuPoint>,
+) -> Option<GpgpuShellAtlasHotCopyResult> {
+    let total_start_tick = direct_rcs_now_tick();
+    let shell = shell_surface_once()?;
+    let target = super::display::primary_surface_gpgpu_marker_target()?;
+    let primary = GpgpuRgba8Surface::new(
+        target.phys,
+        target.gpu,
+        target.byte_len,
+        target.width,
+        target.height,
+        target.pitch_bytes,
+    )?;
+    if target.virt.is_null() {
+        return None;
+    }
+
+    let atlas = twemoji_atlas_cache_once()?;
+    let region = crate::gfx::althlasfont::twemoji::twemoji_lookup_slot_region(slot)?;
+    let src_rect = GpgpuRect::new(
+        region.src_x as i32,
+        region.src_y as i32,
+        u32::from(region.src_w.max(1)),
+        u32::from(region.src_h.max(1)),
+    );
+    if !rect_is_inside_atlas(atlas.width, atlas.height, src_rect) {
+        return None;
+    }
+    if src_rect.width > shell.surface.width
+        || src_rect.height > shell.surface.height
+        || src_rect.width > primary.width
+        || src_rect.height > primary.height
+    {
+        return None;
+    }
+
+    let dst_xy = dst_xy_override.unwrap_or_else(|| {
+        GpgpuPoint::new(
+            primary
+                .width
+                .saturating_sub(src_rect.width)
+                .saturating_div(2) as i32,
+            primary
+                .height
+                .saturating_sub(src_rect.height)
+                .saturating_div(2) as i32,
+        )
+    });
+    if !rect_is_inside(primary, GpgpuRect::new(dst_xy.x, dst_xy.y, src_rect.width, src_rect.height))
+    {
+        return None;
+    }
+    let stage_rect = GpgpuRect::new(0, 0, src_rect.width, src_rect.height);
+
+    shell_zero_surface(shell);
+    let stage_start_tick = direct_rcs_now_tick();
+    let staged = shell_stage_atlas_over_scanout_xrgb(shell, atlas, src_rect, target, dst_xy)?;
+    let stage_ms = direct_rcs_elapsed_ms_since(stage_start_tick);
+    super::dma_flush(shell.virt, shell.surface.bytes);
+
+    let copy_start_tick = direct_rcs_now_tick();
+    let stats = copy_rect_rgba8_stats(shell.surface, stage_rect, primary, dst_xy);
+    let copy_ms = direct_rcs_elapsed_ms_since(copy_start_tick);
+    let expected_spans = copy_rect_expected_spans(stage_rect);
+    let expected_submits = expected_spans.div_ceil(COPY_RECT_BATCH_MAX_SPANS);
+    let flush_offset = (dst_xy.y as usize)
+        .saturating_mul(primary.pitch_bytes as usize)
+        .saturating_add((dst_xy.x as usize).saturating_mul(core::mem::size_of::<u32>()));
+    let flush_bytes = (src_rect.height as usize)
+        .saturating_sub(1)
+        .saturating_mul(primary.pitch_bytes as usize)
+        .saturating_add((src_rect.width as usize).saturating_mul(core::mem::size_of::<u32>()));
+    let presented = super::display::notify_primary_surface_external_write(
+        "gpgpu-twemoji-atlas-go",
+        flush_offset,
+        flush_bytes,
+    );
+    let pixels = rect_pixel_count(stage_rect);
+
+    Some(GpgpuShellAtlasHotCopyResult {
+        ok: staged == pixels
+            && stats.spans == expected_spans
+            && stats.submits == expected_submits
+            && presented,
+        slot,
+        atlas_src_rect: src_rect,
+        dst_xy,
+        primary_width: primary.width,
+        primary_height: primary.height,
+        pixels,
+        spans: stats.spans,
+        expected_spans,
+        submits: stats.submits,
+        expected_submits,
+        staged,
+        presented,
+        total_ms: direct_rcs_elapsed_ms_since(total_start_tick),
+        stage_ms,
+        copy_ms,
     })
 }
 
@@ -1794,10 +1935,38 @@ fn rect_is_inside_atlas(width: u32, height: u32, rect: GpgpuRect) -> bool {
     x2 <= width as i64 && y2 <= height as i64
 }
 
-fn shell_stage_rgba_atlas_strip_xrgb(
+fn twemoji_atlas_cache_once() -> Option<&'static GpgpuTwemojiAtlasCache> {
+    GPGPU_TWEMOJI_ATLAS
+        .call_once(|| {
+            let decoded = crate::gfx::png_codec::decode_png_rgba(
+                crate::gfx::althlasfont::twemoji::TWEMOJI_ATLAS_PNG,
+            )
+            .ok()?;
+            let pixels = (decoded.width as usize).checked_mul(decoded.height as usize)?;
+            let mut xrgb = Vec::with_capacity(pixels);
+            for idx in 0..pixels {
+                let off = idx.saturating_mul(4);
+                let r = *decoded.rgba.get(off)?;
+                let g = *decoded.rgba.get(off + 1)?;
+                let b = *decoded.rgba.get(off + 2)?;
+                xrgb.push(((r as u32) << 16) | ((g as u32) << 8) | b as u32);
+            }
+            Some(GpgpuTwemojiAtlasCache {
+                width: decoded.width,
+                height: decoded.height,
+                rgba: decoded.rgba,
+                xrgb,
+            })
+        })
+        .as_ref()
+}
+
+fn shell_stage_atlas_over_scanout_xrgb(
     shell: GpgpuShellSurface,
-    atlas: &crate::gfx::png_codec::DecodedPng,
+    atlas: &GpgpuTwemojiAtlasCache,
     src_rect: GpgpuRect,
+    target: super::display::PrimarySurfaceGpgpuTarget,
+    dst_xy: GpgpuPoint,
 ) -> Option<usize> {
     if !rect_is_inside(shell.surface, GpgpuRect::new(0, 0, src_rect.width, src_rect.height))
         || !rect_is_inside_atlas(atlas.width, atlas.height, src_rect)
@@ -1809,7 +1978,14 @@ fn shell_stage_rgba_atlas_strip_xrgb(
     let mut staged = 0usize;
     for y in 0..src_rect.height {
         for x in 0..src_rect.width {
-            let pixel = atlas_xrgb_pixel(atlas, src_rect, x, y)?;
+            let a = atlas_alpha(atlas, src_rect, x, y)?;
+            let xrgb = atlas_xrgb_pixel(atlas, src_rect, x, y)?;
+            let pixel = if a == 0xFF {
+                xrgb
+            } else {
+                let dst = primary_read_pixel(target, dst_xy.x as u32 + x, dst_xy.y as u32 + y);
+                blend_xrgb_over_xrgb(xrgb, a, dst)
+            };
             shell_write_pixel(shell, x, y, pixel);
             staged += 1;
         }
@@ -1818,19 +1994,47 @@ fn shell_stage_rgba_atlas_strip_xrgb(
 }
 
 fn atlas_xrgb_pixel(
-    atlas: &crate::gfx::png_codec::DecodedPng,
+    atlas: &GpgpuTwemojiAtlasCache,
     src_rect: GpgpuRect,
     x: u32,
     y: u32,
 ) -> Option<u32> {
+    let atlas_x = src_rect.x as u32 + x;
+    let atlas_y = src_rect.y as u32 + y;
+    let idx = (atlas_y as usize)
+        .saturating_mul(atlas.width as usize)
+        .saturating_add(atlas_x as usize);
+    atlas.xrgb.get(idx).copied()
+}
+
+fn atlas_alpha(atlas: &GpgpuTwemojiAtlasCache, src_rect: GpgpuRect, x: u32, y: u32) -> Option<u8> {
     let atlas_width = atlas.width as usize;
     let atlas_x = src_rect.x as u32 + x;
     let atlas_y = src_rect.y as u32 + y;
     let src_idx = ((atlas_y as usize).saturating_mul(atlas_width) + atlas_x as usize) * 4;
-    let r = *atlas.rgba.get(src_idx)?;
-    let g = *atlas.rgba.get(src_idx + 1)?;
-    let b = *atlas.rgba.get(src_idx + 2)?;
-    Some(((r as u32) << 16) | ((g as u32) << 8) | b as u32)
+    atlas.rgba.get(src_idx + 3).copied()
+}
+
+fn blend_xrgb_over_xrgb(src: u32, a: u8, dst: u32) -> u32 {
+    if a == 0 {
+        return dst & 0x00FF_FFFF;
+    }
+    if a == 0xFF {
+        return src & 0x00FF_FFFF;
+    }
+
+    let alpha = a as u32;
+    let inv_alpha = 255u32.saturating_sub(alpha);
+    let src_r = (src >> 16) & 0xFF;
+    let src_g = (src >> 8) & 0xFF;
+    let src_b = src & 0xFF;
+    let dst_r = (dst >> 16) & 0xFF;
+    let dst_g = (dst >> 8) & 0xFF;
+    let dst_b = dst & 0xFF;
+    let out_r = ((src_r * alpha) + (dst_r * inv_alpha) + 127) / 255;
+    let out_g = ((src_g * alpha) + (dst_g * inv_alpha) + 127) / 255;
+    let out_b = ((src_b * alpha) + (dst_b * inv_alpha) + 127) / 255;
+    (out_r << 16) | (out_g << 8) | out_b
 }
 
 fn shell_read_rect_head(shell: GpgpuShellSurface, rect: GpgpuRect) -> [u32; 4] {
@@ -1915,20 +2119,18 @@ fn primary_count_scanout_copy(
     (src_preserved, copied)
 }
 
-fn primary_count_atlas_copy(
+fn primary_count_shell_raw_copy(
     target: super::display::PrimarySurfaceGpgpuTarget,
     shell: GpgpuShellSurface,
-    atlas: &crate::gfx::png_codec::DecodedPng,
-    atlas_src_rect: GpgpuRect,
-    stage_rect: GpgpuRect,
+    src_rect: GpgpuRect,
     dst_xy: GpgpuPoint,
-) -> Option<(usize, usize)> {
+) -> (usize, usize) {
     let mut src_preserved = 0usize;
     let mut copied = 0usize;
-    for y in 0..stage_rect.height {
-        for x in 0..stage_rect.width {
-            let expected = atlas_xrgb_pixel(atlas, atlas_src_rect, x, y)?;
-            let src = shell_read_pixel(shell, stage_rect.x as u32 + x, stage_rect.y as u32 + y);
+    for y in 0..src_rect.height {
+        for x in 0..src_rect.width {
+            let expected = shell_read_pixel(shell, src_rect.x as u32 + x, src_rect.y as u32 + y);
+            let src = shell_read_pixel(shell, src_rect.x as u32 + x, src_rect.y as u32 + y);
             let dst = primary_read_pixel(target, dst_xy.x as u32 + x, dst_xy.y as u32 + y);
             if src == expected {
                 src_preserved += 1;
@@ -1938,7 +2140,7 @@ fn primary_count_atlas_copy(
             }
         }
     }
-    Some((src_preserved, copied))
+    (src_preserved, copied)
 }
 
 fn primary_read_pixel(target: super::display::PrimarySurfaceGpgpuTarget, x: u32, y: u32) -> u32 {
@@ -3822,14 +4024,7 @@ fn direct_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
 }
 
 fn direct_rcs_build_ring_batch_start(state: DirectRcsState, batch_gpu_addr: u64) -> usize {
-    let ring_dwords = DIRECT_RCS_RING_BYTES / core::mem::size_of::<u32>();
-    let slots = (ring_dwords / DIRECT_RCS_BATCH_START_DWORDS).max(1);
-    let slot = (DIRECT_RCS_RING_KICK_DWORD
-        .fetch_add(DIRECT_RCS_BATCH_START_DWORDS as u32, Ordering::AcqRel)
-        as usize
-        / DIRECT_RCS_BATCH_START_DWORDS)
-        % slots;
-    let start = slot * DIRECT_RCS_BATCH_START_DWORDS;
+    let start = 0usize;
     unsafe {
         let dwords = state.ring_virt as *mut u32;
         core::ptr::write_volatile(dwords.add(start), MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GTT);

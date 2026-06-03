@@ -135,6 +135,12 @@ pub fn twemoji_lookup_slot_region(slot: u16) -> Option<AthlasGlyphRegion> {
     })
 }
 
+pub fn twemoji_slot_count() -> u16 {
+    atlas_set()
+        .map(|set| set.atlas.slots.len().min(u16::MAX as usize) as u16)
+        .unwrap_or(0)
+}
+
 pub fn twemoji_resolve_glyph(ch: char) -> Option<AthlasResolvedGlyph> {
     let region = twemoji_lookup_glyph_region(ch)?;
     let runtime = TWEMOJI_RUNTIME.lock();
