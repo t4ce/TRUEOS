@@ -1068,13 +1068,6 @@ pub(crate) fn shell_copy_twemoji_atlas_slot_scanout_hot(
     slot: u16,
     dst_xy_override: Option<GpgpuPoint>,
 ) -> Option<GpgpuShellAtlasHotCopyResult> {
-    shell_copy_twemoji_atlas_slot_scanout_hot_with(slot, dst_xy_override, false)
-}
-
-pub(crate) fn shell_copy_twemoji_atlas_slot_scanout_hot_wide(
-    slot: u16,
-    dst_xy_override: Option<GpgpuPoint>,
-) -> Option<GpgpuShellAtlasHotCopyResult> {
     shell_copy_twemoji_atlas_slot_scanout_hot_with(slot, dst_xy_override, true)
 }
 
@@ -1162,11 +1155,7 @@ fn shell_copy_twemoji_atlas_slot_scanout_hot_with(
         .saturating_mul(primary.pitch_bytes as usize)
         .saturating_add((src_rect.width as usize).saturating_mul(core::mem::size_of::<u32>()));
     let presented = super::display::notify_primary_surface_external_write(
-        if wide {
-            "gpgpu-twemoji-atlas-go-wide"
-        } else {
-            "gpgpu-twemoji-atlas-go"
-        },
+        "gpgpu-twemoji-atlas-go",
         flush_offset,
         flush_bytes,
     );

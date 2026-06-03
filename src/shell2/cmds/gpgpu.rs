@@ -9,7 +9,7 @@ use crate::intel::gpgpu::{
     GpgpuPoint, GpgpuRect, clear_rect_rgba8_white_upload_status, copy_rect_rgba8_upload_status,
     copy_rect_rgba8_wide_upload_status, empty_eot_upload_status, shell_clear_white_rgba8,
     shell_copy_rgba8, shell_copy_scanout_center_rgba8, shell_copy_twemoji_atlas_slot_scanout,
-    shell_copy_twemoji_atlas_slot_scanout_hot, shell_copy_twemoji_atlas_slot_scanout_hot_wide,
+    shell_copy_twemoji_atlas_slot_scanout_hot,
 };
 use crate::shell2::shell2_cmd::ParseOutcome;
 use crate::tyche::SoftRng;
@@ -29,10 +29,8 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "gpgpu copy [sx sy dx dy w h]");
     print_shell_line(io, "gpgpu scanout");
     print_shell_line(io, "gpgpu atlas|athlas <id> [x,y]");
-    print_shell_line(io, "gpgpu atlas_wide|athlas_wide <id> [x,y]");
     print_shell_line(io, "gpgpu athlas go [duration_ms] [cadence_ms] [burst]");
     print_shell_line(io, "gpgpu athlas_go [duration_ms] [cadence_ms] [burst]");
-    print_shell_line(io, "gpgpu athlas_go_wide [duration_ms] [cadence_ms] [burst]");
     print_shell_line(io, "gpgpu smoke");
 }
 
@@ -291,7 +289,7 @@ fn run_scanout(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
     print_shell_line(io, msg.as_str());
 }
 
-fn run_atlas(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>, wide: bool) {
+fn run_atlas(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
     let mut lookahead = args.clone();
     if lookahead
         .next()
@@ -299,7 +297,7 @@ fn run_atlas(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>, wid
         .unwrap_or(false)
     {
         let _ = args.next();
-        run_atlas_go(io, args, wide);
+        run_atlas_go(io, args);
         return;
     }
 
@@ -307,36 +305,6 @@ fn run_atlas(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>, wid
         usage(io);
         return;
     };
-    if wide {
-        let Some(result) = shell_copy_twemoji_atlas_slot_scanout_hot_wide(slot, dst_xy) else {
-            print_shell_line(
-                io,
-                "gpgpu athlas_wide: no result (check slot id, primary surface, and destination bounds)",
-            );
-            return;
-        };
-        let msg = alloc::format!(
-            "gpgpu athlas_wide: ok={} id={} sprite={}x{} dst={},{} ms={} stage_ms={} copy_ms={} submits={}/{} spans={}/{} staged={}/{} presented={}",
-            result.ok as u8,
-            result.slot,
-            result.atlas_src_rect.width,
-            result.atlas_src_rect.height,
-            result.dst_xy.x,
-            result.dst_xy.y,
-            result.total_ms,
-            result.stage_ms,
-            result.copy_ms,
-            result.submits,
-            result.expected_submits,
-            result.spans,
-            result.expected_spans,
-            result.staged,
-            result.pixels,
-            result.presented as u8
-        );
-        print_shell_line(io, msg.as_str());
-        return;
-    }
     let Some(result) = shell_copy_twemoji_atlas_slot_scanout(slot, dst_xy) else {
         print_shell_line(
             io,
@@ -388,21 +356,14 @@ fn athlas_go_point(
     Some(GpgpuPoint::new(x as i32, y as i32))
 }
 
-fn run_atlas_go(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>, wide: bool) {
+fn run_atlas_go(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
     let Some((duration_ms, cadence_ms, burst)) = parse_atlas_go_args(args) else {
         usage(io);
         return;
     };
     let slot_count = twemoji_slot_count();
     if slot_count == 0 {
-        print_shell_line(
-            io,
-            if wide {
-                "gpgpu athlas_wide go: no twemoji slots"
-            } else {
-                "gpgpu athlas go: no twemoji slots"
-            },
-        );
+        print_shell_line(io, "gpgpu athlas go: no twemoji slots");
         return;
     }
 
@@ -451,12 +412,7 @@ fn run_atlas_go(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>, 
                 sprite_width,
                 sprite_height,
             );
-            let result = if wide {
-                shell_copy_twemoji_atlas_slot_scanout_hot_wide(slot, dst_xy)
-            } else {
-                shell_copy_twemoji_atlas_slot_scanout_hot(slot, dst_xy)
-            };
-            match result {
+            match shell_copy_twemoji_atlas_slot_scanout_hot(slot, dst_xy) {
                 Some(result) => {
                     primary_width = result.primary_width;
                     primary_height = result.primary_height;
@@ -517,14 +473,8 @@ fn run_atlas_go(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>, 
     };
     let elapsed_ms = elapsed_ms_since(start_tick);
     let end_seq = ATHLAS_GO_SEQUENCE.load(Ordering::Relaxed);
-    let label = if wide {
-        "gpgpu athlas_wide go"
-    } else {
-        "gpgpu athlas go"
-    };
     let msg = alloc::format!(
-        "{}: copies={} ok={} fail={} fail_none={} fail_not_ok={} timeoutish={} duration_ms={} elapsed_ms={} cadence_ms={} burst={} fail_backoff_ms={} seq={}..{} measured={} spans={} submits={} avg_ms={} avg_stage_ms={} avg_copy_ms={} max_ms={} max_stage_ms={} max_copy_ms={} last_id={} last_dst={},{} slots={}",
-        label,
+        "gpgpu athlas go: copies={} ok={} fail={} fail_none={} fail_not_ok={} timeoutish={} duration_ms={} elapsed_ms={} cadence_ms={} burst={} fail_backoff_ms={} seq={}..{} measured={} spans={} submits={} avg_ms={} avg_stage_ms={} avg_copy_ms={} max_ms={} max_stage_ms={} max_copy_ms={} last_id={} last_dst={},{} slots={}",
         copies,
         ok,
         fail,
@@ -577,13 +527,9 @@ pub(crate) fn try_parse(
     } else if cmd.eq_ignore_ascii_case("scanout") {
         run_scanout(io, args);
     } else if cmd.eq_ignore_ascii_case("atlas") || cmd.eq_ignore_ascii_case("athlas") {
-        run_atlas(io, args, false);
-    } else if cmd.eq_ignore_ascii_case("atlas_wide") || cmd.eq_ignore_ascii_case("athlas_wide") {
-        run_atlas(io, args, true);
+        run_atlas(io, args);
     } else if cmd.eq_ignore_ascii_case("athlas_go") {
-        run_atlas_go(io, args, false);
-    } else if cmd.eq_ignore_ascii_case("athlas_go_wide") {
-        run_atlas_go(io, args, true);
+        run_atlas_go(io, args);
     } else if cmd.eq_ignore_ascii_case("smoke") {
         if args.next().is_some() {
             usage(io);
