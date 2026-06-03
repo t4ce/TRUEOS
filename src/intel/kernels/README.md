@@ -36,6 +36,13 @@ binding, parameter packing, and walker submission.
 - no memory writes
 - useful as a compiled EOT/scheduler bring-up artifact
 
+The next embedded API seed artifacts are compiled but not exercised at boot:
+
+- `fill_rect_rgba8.cl`: parameterized RGBA8 fill
+- `blit_rgba8_nearest.cl`: nearest-neighbor RGBA8 rect blit
+- `alpha_blend_rgba8_over.cl`: source-over RGBA8 blend
+- `glyph_mask_rgba8.cl`: 8-bit coverage mask blended with packed RGBA8 color
+
 `artifacts/adls/copy_rect_rgba8.bin` is the current Alder Lake S build produced
 with Intel `ocloc`/IGC. Its SHA-256 is:
 
@@ -67,4 +74,10 @@ Generate the empty EOT kernel with:
 
 ```sh
 tools/intel_gpgpu/build_empty_eot.sh
+```
+
+Generate the embedded API seed artifacts with:
+
+```sh
+tools/intel_gpgpu/build_rect_api_artifacts.sh
 ```
