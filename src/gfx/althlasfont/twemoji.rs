@@ -113,6 +113,28 @@ pub fn twemoji_lookup_glyph_region(ch: char) -> Option<AthlasGlyphRegion> {
     })
 }
 
+pub fn twemoji_lookup_slot_region(slot: u16) -> Option<AthlasGlyphRegion> {
+    let atlas = &atlas_set()?.atlas;
+    if slot as usize >= atlas.slots.len() {
+        return None;
+    }
+    let grid_w = atlas.grid_w.max(1);
+    let atlas_w = atlas.cell_w.saturating_mul(grid_w);
+    let atlas_h = atlas.cell_h.saturating_mul(atlas.grid_h.max(1));
+    let src_x = atlas.cell_w.saturating_mul(slot % grid_w);
+    let src_y = atlas.cell_h.saturating_mul(slot / grid_w);
+    Some(AthlasGlyphRegion {
+        bucket: 0,
+        slot,
+        src_x,
+        src_y,
+        src_w: atlas.cell_w,
+        src_h: atlas.cell_h,
+        atlas_w,
+        atlas_h,
+    })
+}
+
 pub fn twemoji_resolve_glyph(ch: char) -> Option<AthlasResolvedGlyph> {
     let region = twemoji_lookup_glyph_region(ch)?;
     let runtime = TWEMOJI_RUNTIME.lock();

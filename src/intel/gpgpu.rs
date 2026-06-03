@@ -239,11 +239,12 @@ const DIRECT_RCS_GPU_VA_SHELL_SURFACE_BASE: u64 = 0x008A_0000;
 const DIRECT_RCS_GPU_VA_BATCH_BASE: u64 = 0x0180_0000;
 const DIRECT_RCS_SMOKE_MARKER: u32 = 0xC0DE_5101;
 const DIRECT_RCS_SMOKE_POLL_ITERS: usize = 262_144;
-const GPGPU_SHELL_SURFACE_BYTES: usize = 4096;
-pub(crate) const GPGPU_SHELL_SURFACE_WIDTH: u32 = 64;
-pub(crate) const GPGPU_SHELL_SURFACE_HEIGHT: u32 = 4;
+pub(crate) const GPGPU_SHELL_SURFACE_WIDTH: u32 = 256;
+pub(crate) const GPGPU_SHELL_SURFACE_HEIGHT: u32 = 64;
 pub(crate) const GPGPU_SHELL_SURFACE_PITCH_BYTES: u32 =
     GPGPU_SHELL_SURFACE_WIDTH * core::mem::size_of::<u32>() as u32;
+const GPGPU_SHELL_SURFACE_BYTES: usize =
+    (GPGPU_SHELL_SURFACE_PITCH_BYTES as usize) * (GPGPU_SHELL_SURFACE_HEIGHT as usize);
 
 static COPY_RECT_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static CLEAR_RECT_RGBA8_WHITE_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
@@ -436,6 +437,54 @@ pub(crate) struct GpgpuShellCopyResult {
     pub(crate) src_head: [u32; 4],
     pub(crate) dst_head: [u32; 4],
     pub(crate) surface: GpgpuRgba8Surface,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuShellScanoutCopyResult {
+    pub(crate) ok: bool,
+    pub(crate) src_rect: GpgpuRect,
+    pub(crate) dst_xy: GpgpuPoint,
+    pub(crate) primary_width: u32,
+    pub(crate) primary_height: u32,
+    pub(crate) primary_pitch_bytes: u32,
+    pub(crate) primary_gpu: u64,
+    pub(crate) primary_phys: u64,
+    pub(crate) pixels: usize,
+    pub(crate) spans: usize,
+    pub(crate) expected_spans: usize,
+    pub(crate) submits: usize,
+    pub(crate) expected_submits: usize,
+    pub(crate) copied: usize,
+    pub(crate) src_preserved: usize,
+    pub(crate) src_head: [u32; 4],
+    pub(crate) dst_head: [u32; 4],
+    pub(crate) presented: bool,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuShellAtlasCopyResult {
+    pub(crate) ok: bool,
+    pub(crate) slot: u16,
+    pub(crate) atlas_width: u32,
+    pub(crate) atlas_height: u32,
+    pub(crate) atlas_src_rect: GpgpuRect,
+    pub(crate) dst_xy: GpgpuPoint,
+    pub(crate) primary_width: u32,
+    pub(crate) primary_height: u32,
+    pub(crate) primary_pitch_bytes: u32,
+    pub(crate) primary_gpu: u64,
+    pub(crate) primary_phys: u64,
+    pub(crate) pixels: usize,
+    pub(crate) spans: usize,
+    pub(crate) expected_spans: usize,
+    pub(crate) submits: usize,
+    pub(crate) expected_submits: usize,
+    pub(crate) staged: usize,
+    pub(crate) copied: usize,
+    pub(crate) src_preserved: usize,
+    pub(crate) src_head: [u32; 4],
+    pub(crate) dst_head: [u32; 4],
+    pub(crate) presented: bool,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -693,6 +742,193 @@ pub(crate) fn shell_copy_rgba8(
         src_head,
         dst_head,
         surface: shell.surface,
+    })
+}
+
+pub(crate) fn shell_copy_scanout_center_rgba8() -> Option<GpgpuShellScanoutCopyResult> {
+    let shell = shell_surface_once()?;
+    let target = super::display::primary_surface_gpgpu_marker_target()?;
+    let primary = GpgpuRgba8Surface::new(
+        target.phys,
+        target.gpu,
+        target.byte_len,
+        target.width,
+        target.height,
+        target.pitch_bytes,
+    )?;
+    let width = GPGPU_SHELL_SURFACE_WIDTH.min(primary.width);
+    let height = GPGPU_SHELL_SURFACE_HEIGHT.min(primary.height);
+    if width == 0 || height == 0 || target.virt.is_null() {
+        return None;
+    }
+    let src_rect = GpgpuRect::new(0, 0, width, height);
+    let dst_xy = GpgpuPoint::new(
+        primary.width.saturating_sub(width).saturating_div(2) as i32,
+        primary.height.saturating_sub(height).saturating_div(2) as i32,
+    );
+
+    shell_zero_surface(shell);
+    shell_seed_rect(shell, src_rect);
+    let src_head = shell_read_rect_head(shell, src_rect);
+    super::dma_flush(shell.virt, shell.surface.bytes);
+
+    let stats = copy_rect_rgba8_stats(shell.surface, src_rect, primary, dst_xy);
+    let dst_rect = GpgpuRect::new(dst_xy.x, dst_xy.y, width, height);
+    let dst_head = primary_read_rect_head(target, dst_rect);
+    let (src_preserved, copied) = primary_count_scanout_copy(target, shell, src_rect, dst_xy);
+    let expected_spans = copy_rect_expected_spans(src_rect);
+    let expected_submits = expected_spans.div_ceil(COPY_RECT_BATCH_MAX_SPANS);
+    let flush_offset = (dst_xy.y as usize)
+        .saturating_mul(primary.pitch_bytes as usize)
+        .saturating_add((dst_xy.x as usize).saturating_mul(core::mem::size_of::<u32>()));
+    let flush_bytes = (height as usize)
+        .saturating_sub(1)
+        .saturating_mul(primary.pitch_bytes as usize)
+        .saturating_add((width as usize).saturating_mul(core::mem::size_of::<u32>()));
+    let presented = super::display::notify_primary_surface_external_write(
+        "gpgpu-copy-center",
+        flush_offset,
+        flush_bytes,
+    );
+    let pixels = rect_pixel_count(src_rect);
+
+    Some(GpgpuShellScanoutCopyResult {
+        ok: stats.spans == expected_spans
+            && stats.submits == expected_submits
+            && src_preserved == pixels
+            && copied == pixels
+            && presented,
+        src_rect,
+        dst_xy,
+        primary_width: primary.width,
+        primary_height: primary.height,
+        primary_pitch_bytes: primary.pitch_bytes,
+        primary_gpu: primary.gpu,
+        primary_phys: primary.phys,
+        pixels,
+        spans: stats.spans,
+        expected_spans,
+        submits: stats.submits,
+        expected_submits,
+        copied,
+        src_preserved,
+        src_head,
+        dst_head,
+        presented,
+    })
+}
+
+pub(crate) fn shell_copy_twemoji_atlas_slot_scanout(
+    slot: u16,
+    dst_xy_override: Option<GpgpuPoint>,
+) -> Option<GpgpuShellAtlasCopyResult> {
+    let shell = shell_surface_once()?;
+    let target = super::display::primary_surface_gpgpu_marker_target()?;
+    let primary = GpgpuRgba8Surface::new(
+        target.phys,
+        target.gpu,
+        target.byte_len,
+        target.width,
+        target.height,
+        target.pitch_bytes,
+    )?;
+    if target.virt.is_null() {
+        return None;
+    }
+
+    let atlas =
+        crate::gfx::png_codec::decode_png_rgba(crate::gfx::althlasfont::twemoji::TWEMOJI_ATLAS_PNG)
+            .ok()?;
+    let region = crate::gfx::althlasfont::twemoji::twemoji_lookup_slot_region(slot)?;
+    let src_rect = GpgpuRect::new(
+        region.src_x as i32,
+        region.src_y as i32,
+        u32::from(region.src_w.max(1)),
+        u32::from(region.src_h.max(1)),
+    );
+    if !rect_is_inside_atlas(atlas.width, atlas.height, src_rect) {
+        return None;
+    }
+    if src_rect.width > shell.surface.width
+        || src_rect.height > shell.surface.height
+        || src_rect.width > primary.width
+        || src_rect.height > primary.height
+    {
+        return None;
+    }
+
+    let dst_xy = dst_xy_override.unwrap_or_else(|| {
+        GpgpuPoint::new(
+            primary
+                .width
+                .saturating_sub(src_rect.width)
+                .saturating_div(2) as i32,
+            primary
+                .height
+                .saturating_sub(src_rect.height)
+                .saturating_div(2) as i32,
+        )
+    });
+    if !rect_is_inside(primary, GpgpuRect::new(dst_xy.x, dst_xy.y, src_rect.width, src_rect.height))
+    {
+        return None;
+    }
+    let stage_rect = GpgpuRect::new(0, 0, src_rect.width, src_rect.height);
+
+    shell_zero_surface(shell);
+    let staged = shell_stage_rgba_atlas_strip_xrgb(shell, &atlas, src_rect)?;
+    let src_head = shell_read_rect_head(shell, stage_rect);
+    super::dma_flush(shell.virt, shell.surface.bytes);
+
+    let stats = copy_rect_rgba8_stats(shell.surface, stage_rect, primary, dst_xy);
+    let dst_rect = GpgpuRect::new(dst_xy.x, dst_xy.y, src_rect.width, src_rect.height);
+    let dst_head = primary_read_rect_head(target, dst_rect);
+    let (src_preserved, copied) =
+        primary_count_atlas_copy(target, shell, &atlas, src_rect, stage_rect, dst_xy)?;
+    let expected_spans = copy_rect_expected_spans(stage_rect);
+    let expected_submits = expected_spans.div_ceil(COPY_RECT_BATCH_MAX_SPANS);
+    let flush_offset = (dst_xy.y as usize)
+        .saturating_mul(primary.pitch_bytes as usize)
+        .saturating_add((dst_xy.x as usize).saturating_mul(core::mem::size_of::<u32>()));
+    let flush_bytes = (src_rect.height as usize)
+        .saturating_sub(1)
+        .saturating_mul(primary.pitch_bytes as usize)
+        .saturating_add((src_rect.width as usize).saturating_mul(core::mem::size_of::<u32>()));
+    let presented = super::display::notify_primary_surface_external_write(
+        "gpgpu-twemoji-atlas-center",
+        flush_offset,
+        flush_bytes,
+    );
+    let pixels = rect_pixel_count(stage_rect);
+
+    Some(GpgpuShellAtlasCopyResult {
+        ok: staged == pixels
+            && stats.spans == expected_spans
+            && stats.submits == expected_submits
+            && src_preserved == pixels
+            && copied == pixels
+            && presented,
+        slot,
+        atlas_width: atlas.width,
+        atlas_height: atlas.height,
+        atlas_src_rect: src_rect,
+        dst_xy,
+        primary_width: primary.width,
+        primary_height: primary.height,
+        primary_pitch_bytes: primary.pitch_bytes,
+        primary_gpu: primary.gpu,
+        primary_phys: primary.phys,
+        pixels,
+        spans: stats.spans,
+        expected_spans,
+        submits: stats.submits,
+        expected_submits,
+        staged,
+        copied,
+        src_preserved,
+        src_head,
+        dst_head,
+        presented,
     })
 }
 
@@ -1549,6 +1785,54 @@ fn shell_seed_copy(shell: GpgpuShellSurface, src_rect: GpgpuRect, dst_xy: GpgpuP
     }
 }
 
+fn rect_is_inside_atlas(width: u32, height: u32, rect: GpgpuRect) -> bool {
+    if rect.is_empty() || rect.x < 0 || rect.y < 0 {
+        return false;
+    }
+    let x2 = rect.x as i64 + rect.width as i64;
+    let y2 = rect.y as i64 + rect.height as i64;
+    x2 <= width as i64 && y2 <= height as i64
+}
+
+fn shell_stage_rgba_atlas_strip_xrgb(
+    shell: GpgpuShellSurface,
+    atlas: &crate::gfx::png_codec::DecodedPng,
+    src_rect: GpgpuRect,
+) -> Option<usize> {
+    if !rect_is_inside(shell.surface, GpgpuRect::new(0, 0, src_rect.width, src_rect.height))
+        || !rect_is_inside_atlas(atlas.width, atlas.height, src_rect)
+    {
+        return None;
+    }
+
+    let atlas_width = atlas.width as usize;
+    let mut staged = 0usize;
+    for y in 0..src_rect.height {
+        for x in 0..src_rect.width {
+            let pixel = atlas_xrgb_pixel(atlas, src_rect, x, y)?;
+            shell_write_pixel(shell, x, y, pixel);
+            staged += 1;
+        }
+    }
+    Some(staged)
+}
+
+fn atlas_xrgb_pixel(
+    atlas: &crate::gfx::png_codec::DecodedPng,
+    src_rect: GpgpuRect,
+    x: u32,
+    y: u32,
+) -> Option<u32> {
+    let atlas_width = atlas.width as usize;
+    let atlas_x = src_rect.x as u32 + x;
+    let atlas_y = src_rect.y as u32 + y;
+    let src_idx = ((atlas_y as usize).saturating_mul(atlas_width) + atlas_x as usize) * 4;
+    let r = *atlas.rgba.get(src_idx)?;
+    let g = *atlas.rgba.get(src_idx + 1)?;
+    let b = *atlas.rgba.get(src_idx + 2)?;
+    Some(((r as u32) << 16) | ((g as u32) << 8) | b as u32)
+}
+
 fn shell_read_rect_head(shell: GpgpuShellSurface, rect: GpgpuRect) -> [u32; 4] {
     let mut out = [0u32; 4];
     let count = (rect.width as usize).min(out.len());
@@ -1593,6 +1877,80 @@ fn shell_count_copy(
         }
     }
     (src_preserved, copied)
+}
+
+fn primary_read_rect_head(
+    target: super::display::PrimarySurfaceGpgpuTarget,
+    rect: GpgpuRect,
+) -> [u32; 4] {
+    let mut out = [0u32; 4];
+    let count = (rect.width as usize).min(out.len());
+    for (index, slot) in out.iter_mut().enumerate().take(count) {
+        *slot = primary_read_pixel(target, rect.x as u32 + index as u32, rect.y as u32);
+    }
+    out
+}
+
+fn primary_count_scanout_copy(
+    target: super::display::PrimarySurfaceGpgpuTarget,
+    shell: GpgpuShellSurface,
+    src_rect: GpgpuRect,
+    dst_xy: GpgpuPoint,
+) -> (usize, usize) {
+    let mut src_preserved = 0usize;
+    let mut copied = 0usize;
+    for y in 0..src_rect.height {
+        for x in 0..src_rect.width {
+            let expected = shell_pattern_pixel(x, y);
+            let src = shell_read_pixel(shell, src_rect.x as u32 + x, src_rect.y as u32 + y);
+            let dst = primary_read_pixel(target, dst_xy.x as u32 + x, dst_xy.y as u32 + y);
+            if src == expected {
+                src_preserved += 1;
+            }
+            if dst == expected {
+                copied += 1;
+            }
+        }
+    }
+    (src_preserved, copied)
+}
+
+fn primary_count_atlas_copy(
+    target: super::display::PrimarySurfaceGpgpuTarget,
+    shell: GpgpuShellSurface,
+    atlas: &crate::gfx::png_codec::DecodedPng,
+    atlas_src_rect: GpgpuRect,
+    stage_rect: GpgpuRect,
+    dst_xy: GpgpuPoint,
+) -> Option<(usize, usize)> {
+    let mut src_preserved = 0usize;
+    let mut copied = 0usize;
+    for y in 0..stage_rect.height {
+        for x in 0..stage_rect.width {
+            let expected = atlas_xrgb_pixel(atlas, atlas_src_rect, x, y)?;
+            let src = shell_read_pixel(shell, stage_rect.x as u32 + x, stage_rect.y as u32 + y);
+            let dst = primary_read_pixel(target, dst_xy.x as u32 + x, dst_xy.y as u32 + y);
+            if src == expected {
+                src_preserved += 1;
+            }
+            if dst == expected {
+                copied += 1;
+            }
+        }
+    }
+    Some((src_preserved, copied))
+}
+
+fn primary_read_pixel(target: super::display::PrimarySurfaceGpgpuTarget, x: u32, y: u32) -> u32 {
+    let offset = (y as usize)
+        .saturating_mul(target.pitch_bytes as usize)
+        .saturating_add((x as usize).saturating_mul(core::mem::size_of::<u32>()));
+    if offset.saturating_add(core::mem::size_of::<u32>()) > target.byte_len {
+        return 0;
+    }
+    let ptr = unsafe { target.virt.add(offset) };
+    super::dma_flush(ptr, core::mem::size_of::<u32>());
+    unsafe { core::ptr::read_volatile(ptr as *const u32) }
 }
 
 fn shell_write_pixel(shell: GpgpuShellSurface, x: u32, y: u32, value: u32) {

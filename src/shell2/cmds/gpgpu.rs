@@ -6,6 +6,7 @@ use crate::intel::gpgpu::{
     GPGPU_SHELL_SURFACE_HEIGHT, GPGPU_SHELL_SURFACE_PITCH_BYTES, GPGPU_SHELL_SURFACE_WIDTH,
     GpgpuPoint, GpgpuRect, clear_rect_rgba8_white_upload_status, copy_rect_rgba8_upload_status,
     empty_eot_upload_status, shell_clear_white_rgba8, shell_copy_rgba8,
+    shell_copy_scanout_center_rgba8, shell_copy_twemoji_atlas_slot_scanout,
 };
 use crate::shell2::shell2_cmd::ParseOutcome;
 
@@ -13,6 +14,8 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "gpgpu status");
     print_shell_line(io, "gpgpu clear [x y w h]");
     print_shell_line(io, "gpgpu copy [sx sy dx dy w h]");
+    print_shell_line(io, "gpgpu scanout");
+    print_shell_line(io, "gpgpu atlas <id> [x,y]");
     print_shell_line(io, "gpgpu smoke");
 }
 
@@ -22,6 +25,15 @@ fn parse_i32(raw: Option<&str>) -> Option<i32> {
 
 fn parse_u32(raw: Option<&str>) -> Option<u32> {
     raw?.parse::<u32>().ok()
+}
+
+fn parse_slot_id(raw: Option<&str>) -> Option<u16> {
+    let raw = raw?.trim_matches('"');
+    if let Some(hex) = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
+        u16::from_str_radix(hex, 16).ok()
+    } else {
+        raw.parse::<u16>().ok()
+    }
 }
 
 fn parse_clear_rect(args: &mut SplitWhitespace<'_>) -> Option<GpgpuRect> {
@@ -52,6 +64,28 @@ fn parse_copy_rect(args: &mut SplitWhitespace<'_>) -> Option<(GpgpuRect, GpgpuPo
         return None;
     }
     Some((GpgpuRect::new(sx, sy, width, height), GpgpuPoint::new(dx, dy)))
+}
+
+fn parse_atlas_args(args: &mut SplitWhitespace<'_>) -> Option<(u16, Option<GpgpuPoint>)> {
+    let slot = parse_slot_id(args.next())?;
+    let Some(x_raw) = args.next() else {
+        return Some((slot, None));
+    };
+    if let Some((x_part, y_part)) = x_raw.split_once(',') {
+        let x = x_part.parse::<i32>().ok()?;
+        let y = y_part.parse::<i32>().ok()?;
+        if args.next().is_some() {
+            return None;
+        }
+        return Some((slot, Some(GpgpuPoint::new(x, y))));
+    }
+
+    let x = x_raw.parse::<i32>().ok()?;
+    let y = parse_i32(args.next())?;
+    if args.next().is_some() {
+        return None;
+    }
+    Some((slot, Some(GpgpuPoint::new(x, y))))
 }
 
 fn hex4(values: [u32; 4]) -> AllocString {
@@ -153,6 +187,92 @@ fn run_copy(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
     print_shell_line(io, msg.as_str());
 }
 
+fn run_scanout(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+    if args.next().is_some() {
+        usage(io);
+        return;
+    }
+    let Some(result) = shell_copy_scanout_center_rgba8() else {
+        print_shell_line(io, "gpgpu scanout: no result (check primary surface and iGPU claim)");
+        return;
+    };
+    let src = hex4(result.src_head);
+    let dst = hex4(result.dst_head);
+    let msg = alloc::format!(
+        "gpgpu scanout: ok={} rect={}x{} dst={},{} primary={}x{} pitch={} spans={}/{} submits={}/{} copied={}/{} src_preserved={}/{} presented={} primary_gpu=0x{:X} primary_phys=0x{:X} src_head={} dst_head={}",
+        result.ok as u8,
+        result.src_rect.width,
+        result.src_rect.height,
+        result.dst_xy.x,
+        result.dst_xy.y,
+        result.primary_width,
+        result.primary_height,
+        result.primary_pitch_bytes,
+        result.spans,
+        result.expected_spans,
+        result.submits,
+        result.expected_submits,
+        result.copied,
+        result.pixels,
+        result.src_preserved,
+        result.pixels,
+        result.presented as u8,
+        result.primary_gpu,
+        result.primary_phys,
+        src,
+        dst
+    );
+    print_shell_line(io, msg.as_str());
+}
+
+fn run_atlas(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+    let Some((slot, dst_xy)) = parse_atlas_args(args) else {
+        usage(io);
+        return;
+    };
+    let Some(result) = shell_copy_twemoji_atlas_slot_scanout(slot, dst_xy) else {
+        print_shell_line(
+            io,
+            "gpgpu atlas: no result (check slot id, primary surface, and destination bounds)",
+        );
+        return;
+    };
+    let src = hex4(result.src_head);
+    let dst = hex4(result.dst_head);
+    let msg = alloc::format!(
+        "gpgpu atlas: ok={} id={} atlas={}x{} src={},{} {}x{} dst={},{} primary={}x{} pitch={} spans={}/{} submits={}/{} staged={}/{} copied={}/{} src_preserved={}/{} presented={} primary_gpu=0x{:X} primary_phys=0x{:X} src_head={} dst_head={}",
+        result.ok as u8,
+        result.slot,
+        result.atlas_width,
+        result.atlas_height,
+        result.atlas_src_rect.x,
+        result.atlas_src_rect.y,
+        result.atlas_src_rect.width,
+        result.atlas_src_rect.height,
+        result.dst_xy.x,
+        result.dst_xy.y,
+        result.primary_width,
+        result.primary_height,
+        result.primary_pitch_bytes,
+        result.spans,
+        result.expected_spans,
+        result.submits,
+        result.expected_submits,
+        result.staged,
+        result.pixels,
+        result.copied,
+        result.pixels,
+        result.src_preserved,
+        result.pixels,
+        result.presented as u8,
+        result.primary_gpu,
+        result.primary_phys,
+        src,
+        dst
+    );
+    print_shell_line(io, msg.as_str());
+}
+
 pub(crate) fn try_parse(
     io: &'static dyn ShellBackend2,
     args: &mut SplitWhitespace<'_>,
@@ -172,6 +292,10 @@ pub(crate) fn try_parse(
         run_clear(io, args);
     } else if cmd.eq_ignore_ascii_case("copy") {
         run_copy(io, args);
+    } else if cmd.eq_ignore_ascii_case("scanout") {
+        run_scanout(io, args);
+    } else if cmd.eq_ignore_ascii_case("atlas") {
+        run_atlas(io, args);
     } else if cmd.eq_ignore_ascii_case("smoke") {
         if args.next().is_some() {
             usage(io);
