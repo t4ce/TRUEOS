@@ -2,6 +2,7 @@ mod display;
 mod dmc;
 pub(crate) mod format;
 mod fw_probe;
+pub(crate) mod gpgpu;
 mod guc;
 pub(crate) mod guc_ctb;
 pub mod hda;
@@ -171,6 +172,10 @@ pub fn init_once() {
         dev.mmio_len
     );
     *CLAIMED_DEVICE.lock() = Some(dev);
+    let _ = self::gpgpu::upload_copy_rect_rgba8_kernel();
+    let _ = self::gpgpu::upload_empty_eot_kernel();
+    let _ = self::gpgpu::submit_direct_rcs_smoke_once();
+    let _ = self::gpgpu::submit_empty_eot_walker_once();
     self::fw_probe::log_probe_modules(dev.device_id);
     self::dmc::wire_load_path(dev);
     let huc_fw = self::huc::load_fw();
