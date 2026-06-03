@@ -13,6 +13,112 @@ const GPGPU_CHUNKSTAMP_16PX_STAMPS: u32 = 44;
 const GPGPU_STAMP_PIXELS: u32 = 16;
 const GPGPU_CHUNKSTAMP_PIXELS: u32 = GPGPU_CHUNKSTAMP_16PX_STAMPS * GPGPU_STAMP_PIXELS;
 const GPGPU_ROWBURST_BAND_PIXELS: u32 = 1280;
+const GPGPU_XWALKER_FAST_CHUNK_ROWS: u32 = 81;
+const GPGPU_XWALKER_DEFAULT_CHUNK_ROWS: u32 = GPGPU_XWALKER_FAST_CHUNK_ROWS;
+
+#[embassy_executor::task(pool_size = GPGPU_SHELL_WORKER_TASK_POOL)]
+async fn xwalker_worker_task(
+    origin: &'static str,
+    requested_slot: u32,
+    queued_at_ms: u64,
+    start_row: u32,
+    rows: u32,
+    width: u32,
+    chunk_rows: u32,
+    color: u32,
+) {
+    let queued_ms = embassy_time::Instant::now()
+        .as_millis()
+        .saturating_sub(queued_at_ms);
+    if let Some(profile) = crate::cpu::CpuProfile::current() {
+        crate::log!(
+            "gpgpu/shell: worker begin origin={} slot={} lapic={} core={} requested_slot={} queued_ms={} impl=row2560-simd16-xwalker row={} rows={} chunk_rows={} rgb=0x{:06X}\n",
+            origin,
+            profile.slot(),
+            profile.lapic_id(),
+            profile.core_kind_name(),
+            requested_slot,
+            queued_ms,
+            start_row,
+            rows,
+            chunk_rows,
+            color & 0x00FF_FFFF,
+        );
+    } else {
+        crate::log!(
+            "gpgpu/shell: worker begin origin={} slot=? lapic=? core=? requested_slot={} queued_ms={} impl=row2560-simd16-xwalker row={} rows={} chunk_rows={} rgb=0x{:06X}\n",
+            origin,
+            requested_slot,
+            queued_ms,
+            start_row,
+            rows,
+            chunk_rows,
+            color & 0x00FF_FFFF,
+        );
+    }
+
+    let clear_ok = crate::intel::clear_primary_surface_color(0x0000_0000, "gpgpu-shell-full-clear");
+    let start_tick = embassy_time_driver::now();
+    let end_row = start_row.saturating_add(rows).saturating_sub(1);
+    let mut row = start_row;
+    let mut submitted = 0u32;
+    let mut accepted = 0u32;
+    let mut retired = 0u32;
+    let mut last_row = start_row;
+    let mut dispatch_delta = 0u64;
+    let mut last_proof = None;
+    while row <= end_row {
+        let chunk = core::cmp::min(chunk_rows, end_row.saturating_sub(row).saturating_add(1));
+        let proof =
+            crate::intel::submit_gpgpu_primary_scanout_row2560_simd16_xwalker(row, chunk, color);
+        submitted = submitted.saturating_add(proof.submitted as u32);
+        accepted = accepted.saturating_add(proof.readback_ok as u32);
+        if proof.finished && proof.finish_marker == proof.expected_finish_marker {
+            retired = retired.saturating_add(1);
+        }
+        dispatch_delta = dispatch_delta.saturating_add(proof.dispatch_delta);
+        last_row = row.saturating_add(chunk).saturating_sub(1);
+        last_proof = Some(proof);
+        if !proof.readback_ok {
+            break;
+        }
+        row = row.saturating_add(chunk);
+    }
+
+    let elapsed_ticks = embassy_time_driver::now().saturating_sub(start_tick);
+    let Some(proof) = last_proof else {
+        crate::log!(
+            "gpgpu/shell: worker done origin={} impl=row2560-simd16-xwalker row={} rows={} reason=no-rows\n",
+            origin,
+            start_row,
+            rows,
+        );
+        return;
+    };
+    crate::log!(
+        "gpgpu/shell: worker done origin={} scanout_width={} row={} rows={} chunk_rows={} rgb=0x{:06X} worker_slot={} clear_full={} impl=row2560-simd16-xwalker submitted={} accepted={} retired={} last={} fin={} hits=0x{:016X} reason={} elapsed_ms={} dispatch={} finish=0x{:08X}/0x{:08X} program={}\n",
+        origin,
+        width,
+        start_row,
+        rows,
+        chunk_rows,
+        color & 0x00FF_FFFF,
+        requested_slot,
+        clear_ok as u8,
+        submitted,
+        accepted,
+        retired,
+        last_row,
+        proof.finished as u8,
+        proof.output_hits_lo64,
+        proof.reason,
+        ticks_to_ms(elapsed_ticks),
+        dispatch_delta,
+        proof.finish_marker,
+        proof.expected_finish_marker,
+        proof.program_name,
+    );
+}
 
 #[embassy_executor::task(pool_size = GPGPU_SHELL_WORKER_TASK_POOL)]
 async fn row2560_worker_task(
@@ -107,6 +213,99 @@ async fn row2560_worker_task(
     );
 }
 
+#[embassy_executor::task(pool_size = GPGPU_SHELL_WORKER_TASK_POOL)]
+async fn row2560_fast_worker_task(
+    origin: &'static str,
+    requested_slot: u32,
+    queued_at_ms: u64,
+    start_row: u32,
+    rows: u32,
+    width: u32,
+    color: u32,
+) {
+    let queued_ms = embassy_time::Instant::now()
+        .as_millis()
+        .saturating_sub(queued_at_ms);
+    if let Some(profile) = crate::cpu::CpuProfile::current() {
+        crate::log!(
+            "gpgpu/shell: worker begin origin={} slot={} lapic={} core={} requested_slot={} queued_ms={} impl=row2560-simd16-rowloop-quiet row={} rows={} rgb=0x{:06X}\n",
+            origin,
+            profile.slot(),
+            profile.lapic_id(),
+            profile.core_kind_name(),
+            requested_slot,
+            queued_ms,
+            start_row,
+            rows,
+            color & 0x00FF_FFFF,
+        );
+    } else {
+        crate::log!(
+            "gpgpu/shell: worker begin origin={} slot=? lapic=? core=? requested_slot={} queued_ms={} impl=row2560-simd16-rowloop-quiet row={} rows={} rgb=0x{:06X}\n",
+            origin,
+            requested_slot,
+            queued_ms,
+            start_row,
+            rows,
+            color & 0x00FF_FFFF,
+        );
+    }
+
+    let start_tick = embassy_time_driver::now();
+    let mut row_index = 0u32;
+    let mut submitted = 0u32;
+    let mut accepted = 0u32;
+    let mut retired = 0u32;
+    let mut last_row = start_row;
+    let mut dispatch_delta = 0u64;
+    let mut last_proof = None;
+    while row_index < rows {
+        let row = start_row.saturating_add(row_index);
+        let proof = crate::intel::submit_gpgpu_primary_scanout_row2560_simd16_quiet(row, color);
+        submitted = submitted.saturating_add(proof.submitted as u32);
+        accepted = accepted.saturating_add(proof.readback_ok as u32);
+        if proof.finished && proof.finish_marker == proof.expected_finish_marker {
+            retired = retired.saturating_add(1);
+        }
+        dispatch_delta = dispatch_delta.saturating_add(proof.dispatch_delta);
+        last_row = row;
+        last_proof = Some(proof);
+        row_index = row_index.saturating_add(1);
+    }
+
+    let elapsed_ticks = embassy_time_driver::now().saturating_sub(start_tick);
+    let Some(proof) = last_proof else {
+        crate::log!(
+            "gpgpu/shell: worker done origin={} impl=row2560-simd16-rowloop-quiet row={} rows={} reason=no-rows\n",
+            origin,
+            start_row,
+            rows,
+        );
+        return;
+    };
+    crate::log!(
+        "gpgpu/shell: worker done origin={} scanout_width={} row={} rows={} rgb=0x{:06X} worker_slot={} impl=row2560-simd16-rowloop-quiet submitted={} accepted={} retired={} last={} fin={} hits=0x{:016X} reason={} elapsed_ms={} dispatch={} finish=0x{:08X}/0x{:08X} program={}\n",
+        origin,
+        width,
+        start_row,
+        rows,
+        color & 0x00FF_FFFF,
+        requested_slot,
+        submitted,
+        accepted,
+        retired,
+        last_row,
+        proof.finished as u8,
+        proof.output_hits_lo64,
+        proof.reason,
+        ticks_to_ms(elapsed_ticks),
+        dispatch_delta,
+        proof.finish_marker,
+        proof.expected_finish_marker,
+        proof.program_name,
+    );
+}
+
 pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     match args.next() {
@@ -114,6 +313,9 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
         Some("eot") => eot(io, &mut args),
         Some("vfe") => vfe(io, &mut args),
         Some("offscreen") | Some("legacy") => offscreen(io, &mut args),
+        Some("fast") => fast(io, &mut args),
+        Some("xwalker") => frame(io, &mut args),
+        Some("rowloop") => rowloop(io, &mut args),
         Some("rowpaint") => {
             let row = parse_u32(args.next()).unwrap_or(1);
             rowpaint(io, row, &mut args);
@@ -132,7 +334,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
             Some(row) => rowpaint(io, row, &mut args),
             None => usage(io),
         },
-        _ => usage(io),
+        _ => fast(io, &mut args),
     }
     ParseOutcome::Handled
 }
@@ -140,8 +342,93 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "gpgpu: usage `gpgpu frame [rgb]` | `gpgpu [row=1..1440] [rows=5]` | `gpgpu offscreen` | `gpgpu eot [0..10]` | `gpgpu vfe [0..3] [eot=6]` | `gpgpu rowpaint [row] [rows]` | `gpgpu tilewalker [row] [rows]` | `gpgpu status` | `gpgpu triangle` | debug: `gpgpu offscreen [group_x]` `gpgpu row2560 ...` `gpgpu walkrow ...` `gpgpu tilewalker ... x color stamps verify` `gpgpu rowburst ...` `gpgpu replay [0..2]`",
+        "gpgpu: usage `gpgpu [rgb]` | `gpgpu fast [rgb] [chunk_rows<=81]` | `gpgpu frame [rgb] [chunk_rows=81]` | `gpgpu xwalker [rgb] [chunk_rows=81]` | `gpgpu rowloop [row] [rows] [rgb]` | `gpgpu rowpaint [row] [rows] [chunk_rows=81] [rgb]` | debug: `gpgpu status` `gpgpu offscreen` `gpgpu eot` `gpgpu vfe` `gpgpu row2560` `gpgpu walkrow` `gpgpu tilewalker` `gpgpu rowburst` `gpgpu replay` `gpgpu triangle`",
     );
+}
+
+fn enqueue_row2560_fast_worker(
+    io: &'static dyn ShellBackend2,
+    origin: &'static str,
+    start_row: u32,
+    rows: u32,
+    width: u32,
+    color: u32,
+) {
+    let Some((slot, _kind, worker_spawner)) = crate::workers::pick_background_spawner_with_slot()
+    else {
+        print_shell_line(io, "gpgpu: worker handoff skipped reason=no-worker-ap-gt1");
+        return;
+    };
+    let queued_at_ms = embassy_time::Instant::now().as_millis() as u64;
+    match row2560_fast_worker_task(origin, slot, queued_at_ms, start_row, rows, width, color) {
+        Ok(token) => {
+            worker_spawner.spawn(token);
+            print_shell_line(
+                io,
+                format!(
+                    "gpgpu: {} enqueued target_slot={} mode=worker-ap-gt1 impl=row2560-simd16-rowloop-quiet row={} rows={} width={} rgb=0x{:06X}",
+                    origin,
+                    slot,
+                    start_row,
+                    rows,
+                    width,
+                    color & 0x00FF_FFFF,
+                )
+                .as_str(),
+            );
+        }
+        Err(err) => {
+            print_shell_line(
+                io,
+                format!("gpgpu: {} handoff failed target_slot={} err={:?}", origin, slot, err,)
+                    .as_str(),
+            );
+        }
+    }
+}
+
+fn enqueue_xwalker_worker(
+    io: &'static dyn ShellBackend2,
+    origin: &'static str,
+    start_row: u32,
+    rows: u32,
+    width: u32,
+    chunk_rows: u32,
+    color: u32,
+) {
+    let Some((slot, _kind, worker_spawner)) = crate::workers::pick_background_spawner_with_slot()
+    else {
+        print_shell_line(io, "gpgpu: worker handoff skipped reason=no-worker-ap-gt1");
+        return;
+    };
+    let queued_at_ms = embassy_time::Instant::now().as_millis() as u64;
+    match xwalker_worker_task(origin, slot, queued_at_ms, start_row, rows, width, chunk_rows, color)
+    {
+        Ok(token) => {
+            worker_spawner.spawn(token);
+            print_shell_line(
+                io,
+                format!(
+                    "gpgpu: {} enqueued target_slot={} mode=worker-ap-gt1 impl=row2560-simd16-xwalker row={} rows={} chunk_rows={} width={} rgb=0x{:06X}",
+                    origin,
+                    slot,
+                    start_row,
+                    rows,
+                    chunk_rows,
+                    width,
+                    color & 0x00FF_FFFF,
+                )
+                .as_str(),
+            );
+        }
+        Err(err) => {
+            print_shell_line(
+                io,
+                format!("gpgpu: {} handoff failed target_slot={} err={:?}", origin, slot, err,)
+                    .as_str(),
+            );
+        }
+    }
 }
 
 fn enqueue_row2560_worker(
@@ -186,9 +473,73 @@ fn enqueue_row2560_worker(
 }
 
 fn frame(io: &'static dyn ShellBackend2, args: &mut core::str::SplitWhitespace<'_>) {
-    let color = parse_scanout_rgb24(io, args.next()).unwrap_or_else(|| next_fill_color());
+    let color = match args.next() {
+        Some(arg) => {
+            let Some(color) = parse_scanout_rgb24(io, Some(arg)) else {
+                return;
+            };
+            color
+        }
+        None => next_fill_color(),
+    };
+    let chunk_rows = parse_u32(args.next())
+        .unwrap_or(GPGPU_XWALKER_DEFAULT_CHUNK_ROWS)
+        .clamp(1, 1440);
     let (width, height) = crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
-    enqueue_row2560_worker(io, "frame", 1, height, width, color);
+    enqueue_xwalker_worker(io, "frame", 1, height, width, chunk_rows, color);
+}
+
+fn fast(io: &'static dyn ShellBackend2, args: &mut core::str::SplitWhitespace<'_>) {
+    let color = match args.next() {
+        Some(arg) => {
+            let Some(color) = parse_scanout_rgb24(io, Some(arg)) else {
+                return;
+            };
+            color
+        }
+        None => next_fill_color(),
+    };
+    let chunk_rows = parse_u32(args.next())
+        .unwrap_or(GPGPU_XWALKER_FAST_CHUNK_ROWS)
+        .clamp(1, 1440);
+    if args.next().is_some() {
+        print_shell_line(
+            io,
+            "gpgpu: fast is full-frame xwalker now; use `gpgpu rowloop [row] [rows] [rgb]` for the old row-submit path",
+        );
+        return;
+    }
+    if chunk_rows > GPGPU_XWALKER_FAST_CHUNK_ROWS {
+        print_shell_line(
+            io,
+            "gpgpu: fast refuses chunk_rows>81; use `gpgpu frame [rgb] [chunk_rows]` for experiments",
+        );
+        return;
+    }
+    let (width, height) = crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
+    enqueue_xwalker_worker(io, "fast", 1, height, width, chunk_rows, color);
+}
+
+fn rowloop(io: &'static dyn ShellBackend2, args: &mut core::str::SplitWhitespace<'_>) {
+    let (width, height) = crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
+    let start_row = parse_u32(args.next()).unwrap_or(1);
+    let requested_rows = parse_u32(args.next()).unwrap_or(height).clamp(1, height);
+    let color = match args.next() {
+        Some(arg) => {
+            let Some(color) = parse_scanout_rgb24(io, Some(arg)) else {
+                return;
+            };
+            color
+        }
+        None => next_fill_color(),
+    };
+    if start_row == 0 || start_row > height {
+        print_shell_line(io, "gpgpu: rowloop row must be in visible scanout range");
+        return;
+    }
+
+    let rows = core::cmp::min(requested_rows, height.saturating_sub(start_row).saturating_add(1));
+    enqueue_row2560_fast_worker(io, "rowloop", start_row, rows, width, color);
 }
 
 fn status(io: &'static dyn ShellBackend2) {
@@ -310,7 +661,18 @@ fn rowpaint(
     args: &mut core::str::SplitWhitespace<'_>,
 ) {
     let requested_rows = parse_u32(args.next()).unwrap_or(5).clamp(1, 1440);
-    let color = next_fill_color();
+    let chunk_rows = parse_u32(args.next())
+        .unwrap_or(GPGPU_XWALKER_DEFAULT_CHUNK_ROWS)
+        .clamp(1, 1440);
+    let color = match args.next() {
+        Some(arg) => {
+            let Some(color) = parse_scanout_rgb24(io, Some(arg)) else {
+                return;
+            };
+            color
+        }
+        None => next_fill_color(),
+    };
     if !(1..=1440).contains(&start_row) {
         print_shell_line(io, "gpgpu: row must be in 1..=1440");
         return;
@@ -318,7 +680,7 @@ fn rowpaint(
 
     let (_width, height) = crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
     let rows = core::cmp::min(requested_rows, height.saturating_sub(start_row).saturating_add(1));
-    enqueue_row2560_worker(io, "rowpaint", start_row, rows, _width, color);
+    enqueue_xwalker_worker(io, "rowpaint", start_row, rows, _width, chunk_rows, color);
 }
 
 fn next_fill_color() -> u32 {
