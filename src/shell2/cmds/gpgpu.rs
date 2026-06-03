@@ -4,7 +4,7 @@ use core::str::SplitWhitespace;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use super::super::{ShellBackend2, print_shell_line};
-use crate::gfx::althlasfont::twemoji::twemoji_slot_count;
+use crate::gfx::althlasfont::twemoji::{twemoji_lookup_slot_region, twemoji_slot_count};
 use crate::intel::gpgpu::{
     GPGPU_SHELL_SURFACE_HEIGHT, GPGPU_SHELL_SURFACE_PITCH_BYTES, GPGPU_SHELL_SURFACE_WIDTH,
     GpgpuAtlasBatchRequest, GpgpuPoint, GpgpuRect, clear_rect_rgba8_white_upload_status,
@@ -379,6 +379,7 @@ fn run_atlas_go(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) 
     let mut fail_none = 0u32;
     let mut fail_not_ok = 0u32;
     let mut timeoutish = 0u32;
+    let mut presented = 0u32;
     let mut measured = 0u32;
     let mut total_ms_sum = 0u64;
     let mut total_stage_ms = 0u64;
@@ -388,6 +389,7 @@ fn run_atlas_go(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) 
     let mut max_copy_ms = 0u64;
     let mut total_spans = 0usize;
     let mut total_submits = 0usize;
+    let mut batches = 0u32;
     let mut primary_width = 0u32;
     let mut primary_height = 0u32;
     let mut sprite_width = 32u32;
@@ -400,28 +402,41 @@ fn run_atlas_go(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) 
             wait_until_tick(next_launch_tick);
         }
 
+        let mut requests = Vec::with_capacity(burst as usize);
         for _ in 0..burst {
             if now_ticks() >= deadline_tick {
                 break;
             }
             let _seq = ATHLAS_GO_SEQUENCE.fetch_add(1, Ordering::Relaxed);
             let slot = athlas_go_slot(&mut rng, slot_count);
-            let dst_xy = athlas_go_point(
-                &mut rng,
-                primary_width,
-                primary_height,
-                sprite_width,
-                sprite_height,
-            );
-            match shell_copy_twemoji_atlas_slot_scanout_hot(slot, dst_xy) {
+            let dst_xy = twemoji_lookup_slot_region(slot).and_then(|region| {
+                athlas_go_point(
+                    &mut rng,
+                    primary_width,
+                    primary_height,
+                    u32::from(region.src_w.max(1)),
+                    u32::from(region.src_h.max(1)),
+                )
+            });
+            requests.push(GpgpuAtlasBatchRequest {
+                slot,
+                dst_xy,
+                src_width: None,
+                src_height: None,
+            });
+        }
+
+        if !requests.is_empty() {
+            match shell_copy_twemoji_atlas_batch_scanout_hot(&requests) {
                 Some(result) => {
+                    batches = batches.saturating_add(1);
+                    measured = measured.saturating_add(1);
                     primary_width = result.primary_width;
                     primary_height = result.primary_height;
-                    sprite_width = result.atlas_src_rect.width;
-                    sprite_height = result.atlas_src_rect.height;
-                    last_slot = result.slot;
-                    last_xy = result.dst_xy;
-                    measured = measured.saturating_add(1);
+                    sprite_width = result.max_sprite_width.max(1);
+                    sprite_height = result.max_sprite_height.max(1);
+                    last_slot = result.last_slot;
+                    last_xy = result.last_dst_xy;
                     total_ms_sum = total_ms_sum.saturating_add(result.total_ms);
                     total_stage_ms = total_stage_ms.saturating_add(result.stage_ms);
                     total_copy_ms = total_copy_ms.saturating_add(result.copy_ms);
@@ -430,11 +445,14 @@ fn run_atlas_go(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) 
                     max_copy_ms = max_copy_ms.max(result.copy_ms);
                     total_spans = total_spans.saturating_add(result.spans);
                     total_submits = total_submits.saturating_add(result.submits);
+                    if result.presented {
+                        presented = presented.saturating_add(1);
+                    }
                     if result.ok {
-                        ok = ok.saturating_add(1);
+                        ok = ok.saturating_add(result.copied_copies as u32);
                     } else {
-                        fail = fail.saturating_add(1);
-                        fail_not_ok = fail_not_ok.saturating_add(1);
+                        fail = fail.saturating_add(result.requested as u32);
+                        fail_not_ok = fail_not_ok.saturating_add(result.requested as u32);
                         if result.copy_ms >= ATHLAS_GO_TIMEOUTISH_COPY_MS {
                             timeoutish = timeoutish.saturating_add(1);
                             wait_until_tick(
@@ -445,8 +463,8 @@ fn run_atlas_go(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) 
                     }
                 }
                 None => {
-                    fail = fail.saturating_add(1);
-                    fail_none = fail_none.saturating_add(1);
+                    fail = fail.saturating_add(requests.len() as u32);
+                    fail_none = fail_none.saturating_add(requests.len() as u32);
                 }
             }
         }
@@ -475,7 +493,7 @@ fn run_atlas_go(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) 
     let elapsed_ms = elapsed_ms_since(start_tick);
     let end_seq = ATHLAS_GO_SEQUENCE.load(Ordering::Relaxed);
     let msg = alloc::format!(
-        "gpgpu athlas go: copies={} ok={} fail={} fail_none={} fail_not_ok={} timeoutish={} duration_ms={} elapsed_ms={} cadence_ms={} burst={} fail_backoff_ms={} seq={}..{} measured={} spans={} submits={} avg_ms={} avg_stage_ms={} avg_copy_ms={} max_ms={} max_stage_ms={} max_copy_ms={} last_id={} last_dst={},{} slots={}",
+        "gpgpu athlas go: mode=batch-walkers copies={} ok={} fail={} fail_none={} fail_not_ok={} timeoutish={} duration_ms={} elapsed_ms={} cadence_ms={} burst={} batches={} presented={} fail_backoff_ms={} seq={}..{} measured={} spans={} submits={} avg_ms={} avg_stage_ms={} avg_copy_ms={} max_ms={} max_stage_ms={} max_copy_ms={} last_id={} last_dst={},{} sprite={}x{} primary={}x{} slots={}",
         copies,
         ok,
         fail,
@@ -486,6 +504,8 @@ fn run_atlas_go(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) 
         elapsed_ms,
         cadence_ms,
         burst,
+        batches,
+        presented,
         ATHLAS_GO_FAIL_BACKOFF_MS,
         start_seq,
         end_seq,
@@ -501,6 +521,10 @@ fn run_atlas_go(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) 
         last_slot,
         last_xy.x,
         last_xy.y,
+        sprite_width,
+        sprite_height,
+        primary_width,
+        primary_height,
         slot_count
     );
     print_shell_line(io, msg.as_str());

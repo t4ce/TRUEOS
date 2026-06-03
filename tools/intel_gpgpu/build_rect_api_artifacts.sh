@@ -26,9 +26,11 @@ fi
 
 kernels=(
     fill_rect_rgba8
+    fill_circle_rgba8
     blit_rgba8_nearest
     alpha_blend_rgba8_over
     glyph_mask_rgba8
+    stamp_mandel_rgba8
 )
 
 for kernel in "${kernels[@]}"; do

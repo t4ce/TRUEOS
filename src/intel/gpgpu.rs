@@ -15,6 +15,9 @@ pub(crate) const EMPTY_EOT_KERNEL_NAME: &str = "empty_eot";
 pub(crate) const EMPTY_EOT_OPENCL_SOURCE: &str = include_str!("kernels/empty_eot.cl");
 pub(crate) const FILL_RECT_RGBA8_KERNEL_NAME: &str = "fill_rect_rgba8";
 pub(crate) const FILL_RECT_RGBA8_OPENCL_SOURCE: &str = include_str!("kernels/fill_rect_rgba8.cl");
+pub(crate) const FILL_CIRCLE_RGBA8_KERNEL_NAME: &str = "fill_circle_rgba8";
+pub(crate) const FILL_CIRCLE_RGBA8_OPENCL_SOURCE: &str =
+    include_str!("kernels/fill_circle_rgba8.cl");
 pub(crate) const BLIT_RGBA8_NEAREST_KERNEL_NAME: &str = "blit_rgba8_nearest";
 pub(crate) const BLIT_RGBA8_NEAREST_OPENCL_SOURCE: &str =
     include_str!("kernels/blit_rgba8_nearest.cl");
@@ -23,6 +26,9 @@ pub(crate) const ALPHA_BLEND_RGBA8_OVER_OPENCL_SOURCE: &str =
     include_str!("kernels/alpha_blend_rgba8_over.cl");
 pub(crate) const GLYPH_MASK_RGBA8_KERNEL_NAME: &str = "glyph_mask_rgba8";
 pub(crate) const GLYPH_MASK_RGBA8_OPENCL_SOURCE: &str = include_str!("kernels/glyph_mask_rgba8.cl");
+pub(crate) const STAMP_MANDEL_RGBA8_KERNEL_NAME: &str = "stamp_mandel_rgba8";
+pub(crate) const STAMP_MANDEL_RGBA8_OPENCL_SOURCE: &str =
+    include_str!("kernels/stamp_mandel_rgba8.cl");
 pub(crate) const COPY_RECT_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/copy_rect_rgba8.bin");
 pub(crate) const COPY_RECT_RGBA8_ADLS_SPV: &[u8] =
@@ -41,6 +47,10 @@ pub(crate) const FILL_RECT_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/fill_rect_rgba8.bin");
 pub(crate) const FILL_RECT_RGBA8_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/fill_rect_rgba8.spv");
+pub(crate) const FILL_CIRCLE_RGBA8_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/fill_circle_rgba8.bin");
+pub(crate) const FILL_CIRCLE_RGBA8_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/fill_circle_rgba8.spv");
 pub(crate) const BLIT_RGBA8_NEAREST_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/blit_rgba8_nearest.bin");
 pub(crate) const BLIT_RGBA8_NEAREST_ADLS_SPV: &[u8] =
@@ -53,6 +63,10 @@ pub(crate) const GLYPH_MASK_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/glyph_mask_rgba8.bin");
 pub(crate) const GLYPH_MASK_RGBA8_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/glyph_mask_rgba8.spv");
+pub(crate) const STAMP_MANDEL_RGBA8_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/stamp_mandel_rgba8.bin");
+pub(crate) const STAMP_MANDEL_RGBA8_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/stamp_mandel_rgba8.spv");
 pub(crate) const COPY_RECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x10, 0x86, 0x60, 0x24, 0xAA, 0xFF, 0xAE, 0x96, 0xF9, 0x2C, 0xFC, 0x25, 0xA5, 0xFB, 0x18, 0x8C,
     0xA4, 0x21, 0x99, 0x47, 0x89, 0xAF, 0xBC, 0x4D, 0xBA, 0x3D, 0xDC, 0x29, 0x0B, 0xD5, 0x83, 0xAB,
@@ -73,6 +87,10 @@ pub(crate) const FILL_RECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0xAB, 0x51, 0x9A, 0x0E, 0x4E, 0x47, 0x31, 0xE5, 0x8F, 0xF6, 0x5D, 0x75, 0xBF, 0x92, 0x93, 0x4C,
     0xD7, 0x31, 0xA0, 0x88, 0x23, 0xB0, 0x40, 0x28, 0x62, 0x0E, 0x86, 0x54, 0x9F, 0x45, 0x06, 0xF4,
 ];
+pub(crate) const FILL_CIRCLE_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
+    0xB4, 0x17, 0x29, 0x7F, 0xD1, 0x60, 0x57, 0x21, 0xCC, 0x94, 0xA9, 0x88, 0x09, 0x3D, 0x8B, 0xA9,
+    0xD1, 0x21, 0x9E, 0x0E, 0x3E, 0x8F, 0x4B, 0x67, 0xCC, 0xE2, 0x8D, 0x6D, 0x33, 0xE1, 0x5E, 0x3B,
+];
 pub(crate) const BLIT_RGBA8_NEAREST_ADLS_BIN_SHA256: [u8; 32] = [
     0x55, 0xF9, 0x41, 0xC8, 0x53, 0x71, 0xC0, 0xD1, 0xDF, 0x59, 0x89, 0x50, 0x01, 0xE6, 0x41, 0x23,
     0x36, 0xA8, 0x7D, 0x65, 0xAD, 0x14, 0xD2, 0x7D, 0xB6, 0x4A, 0x31, 0xB3, 0x81, 0x36, 0x02, 0xE3,
@@ -84,6 +102,10 @@ pub(crate) const ALPHA_BLEND_RGBA8_OVER_ADLS_BIN_SHA256: [u8; 32] = [
 pub(crate) const GLYPH_MASK_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x90, 0x8D, 0xF0, 0x7D, 0x62, 0xB0, 0x69, 0xF3, 0x1A, 0x04, 0x6D, 0x29, 0x02, 0xDF, 0xF9, 0xA0,
     0xFA, 0x33, 0xE4, 0x9A, 0x1C, 0x25, 0x3B, 0x74, 0xA4, 0xE7, 0xCC, 0x18, 0xDF, 0x66, 0xD3, 0x78,
+];
+pub(crate) const STAMP_MANDEL_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
+    0x1E, 0x6F, 0xB6, 0xC8, 0x84, 0xCC, 0xB4, 0x19, 0x62, 0x32, 0x48, 0x1F, 0xC0, 0x95, 0xEC, 0xB5,
+    0xC9, 0xCC, 0x95, 0xF7, 0x3D, 0xD6, 0x7B, 0x93, 0xF0, 0xC5, 0x9D, 0xEA, 0xC7, 0xAF, 0xF1, 0xE1,
 ];
 
 const COPY_RECT_RGBA8_ADLS_GPU: u64 = 0x0D20_0000;
@@ -192,7 +214,7 @@ const COPY_RECT_PIXELS_PER_LANE: u32 = 2;
 const COPY_RECT_SPAN_PIXELS: u32 = 16 * COPY_RECT_PIXELS_PER_LANE;
 const COPY_RECT_WIDE_PIXELS_PER_LANE: u32 = 16;
 const COPY_RECT_WIDE_SPAN_PIXELS: u32 = 16 * COPY_RECT_WIDE_PIXELS_PER_LANE;
-const COPY_RECT_BATCH_MAX_SPANS: usize = 128;
+const COPY_RECT_BATCH_MAX_SPANS: usize = 32;
 const COPY_RECT_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
 const COPY_RECT_SURFACE_STATE_DWORDS: usize = 16;
 const COPY_RECT_CROSS_THREAD_BYTES: usize = 96;
@@ -350,6 +372,17 @@ pub(crate) struct ClearRectRgba8WhiteParams {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct StampMandelRgba8Params {
+    pub(crate) dst_gpu: u64,
+    pub(crate) dst_pitch_bytes: u32,
+    pub(crate) dst_x: u32,
+    pub(crate) dst_y: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct FillRectRgba8Params {
     pub(crate) dst_gpu: u64,
     pub(crate) dst_pitch_bytes: u32,
@@ -357,6 +390,21 @@ pub(crate) struct FillRectRgba8Params {
     pub(crate) dst_y: u32,
     pub(crate) width: u32,
     pub(crate) height: u32,
+    pub(crate) color_rgba: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct FillCircleRgba8Params {
+    pub(crate) dst_gpu: u64,
+    pub(crate) dst_pitch_bytes: u32,
+    pub(crate) dst_x: u32,
+    pub(crate) dst_y: u32,
+    pub(crate) rect_width: u32,
+    pub(crate) rect_height: u32,
+    pub(crate) center_x: i32,
+    pub(crate) center_y: i32,
+    pub(crate) radius: u32,
     pub(crate) color_rgba: u32,
 }
 
@@ -634,6 +682,8 @@ pub(crate) struct GpgpuShellAtlasHotCopyResult {
 pub(crate) struct GpgpuAtlasBatchRequest {
     pub(crate) slot: u16,
     pub(crate) dst_xy: Option<GpgpuPoint>,
+    pub(crate) src_width: Option<u32>,
+    pub(crate) src_height: Option<u32>,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -761,6 +811,14 @@ pub(crate) const FILL_RECT_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKerne
     bin_sha256: FILL_RECT_RGBA8_ADLS_BIN_SHA256,
 };
 
+pub(crate) const FILL_CIRCLE_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
+    name: FILL_CIRCLE_RGBA8_KERNEL_NAME,
+    target: "adls",
+    bin: FILL_CIRCLE_RGBA8_ADLS_BIN,
+    spv: FILL_CIRCLE_RGBA8_ADLS_SPV,
+    bin_sha256: FILL_CIRCLE_RGBA8_ADLS_BIN_SHA256,
+};
+
 pub(crate) const BLIT_RGBA8_NEAREST_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
     name: BLIT_RGBA8_NEAREST_KERNEL_NAME,
     target: "adls",
@@ -783,6 +841,14 @@ pub(crate) const GLYPH_MASK_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKern
     bin: GLYPH_MASK_RGBA8_ADLS_BIN,
     spv: GLYPH_MASK_RGBA8_ADLS_SPV,
     bin_sha256: GLYPH_MASK_RGBA8_ADLS_BIN_SHA256,
+};
+
+pub(crate) const STAMP_MANDEL_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
+    name: STAMP_MANDEL_RGBA8_KERNEL_NAME,
+    target: "adls",
+    bin: STAMP_MANDEL_RGBA8_ADLS_BIN,
+    spv: STAMP_MANDEL_RGBA8_ADLS_SPV,
+    bin_sha256: STAMP_MANDEL_RGBA8_ADLS_BIN_SHA256,
 };
 
 pub(crate) fn copy_rect_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
@@ -1318,8 +1384,8 @@ pub(crate) fn shell_copy_twemoji_atlas_batch_scanout_hot(
     let mut stage_x = 0u32;
     let mut stage_y = 0u32;
     let mut stage_row_h = 0u32;
-    let mut dst_x = 0u32;
-    let mut dst_y = 0u32;
+    let mut dst_x = primary.width.saturating_div(4);
+    let mut dst_y = primary.height.saturating_div(3);
     let mut dst_row_h = 0u32;
     let mut staged_pixels = 0usize;
     let mut max_sprite_width = 0u32;
@@ -1331,11 +1397,21 @@ pub(crate) fn shell_copy_twemoji_atlas_batch_scanout_hot(
         else {
             continue;
         };
+        let src_width = request
+            .src_width
+            .unwrap_or_else(|| u32::from(region.src_w))
+            .clamp(1, u32::from(region.src_w.max(1)));
+        let src_height = request
+            .src_height
+            .unwrap_or_else(|| u32::from(region.src_h))
+            .clamp(1, u32::from(region.src_h.max(1)));
+        let src_offset_x = u32::from(region.src_w).saturating_sub(src_width) / 2;
+        let src_offset_y = u32::from(region.src_h).saturating_sub(src_height) / 2;
         let src_rect = GpgpuRect::new(
-            region.src_x as i32,
-            region.src_y as i32,
-            u32::from(region.src_w.max(1)),
-            u32::from(region.src_h.max(1)),
+            region.src_x as i32 + src_offset_x as i32,
+            region.src_y as i32 + src_offset_y as i32,
+            src_width,
+            src_height,
         );
         if !rect_is_inside_atlas(atlas.width, atlas.height, src_rect)
             || src_rect.width > shell.surface.width

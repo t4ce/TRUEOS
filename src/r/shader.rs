@@ -153,9 +153,7 @@ async fn compile_path_async(path: String) -> Result<ShaderCompileReport, ShaderS
     let source = String::from_utf8(bytes).map_err(|_| ShaderServiceError::InvalidUtf8)?;
     let _program = trueos_c4::parse_program(source.as_str())
         .map_err(|err| ShaderServiceError::Parse(err.message))?;
-    Err(ShaderServiceError::Emit(
-        "C4 EU artifact backend removed".to_string(),
-    ))
+    Err(ShaderServiceError::Emit("C4 EU artifact backend removed".to_string()))
 }
 
 fn normalize_shader_path(path: &str) -> Result<String, ShaderServiceError> {
