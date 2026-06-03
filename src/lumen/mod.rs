@@ -737,7 +737,7 @@ fn generate_lumen_answer(
     let _bf16_prompt_context = crate::lumen::burn_baby::enter_lumen_prompt_bf16_context();
     state.all_tokens.extend_from_slice(&prompt_tokens);
     crate::log!(
-        "lumen: generation start prompt_tokens={} context_tokens={} max_new_tokens={} max_seq_len={} prefill_mode=incremental-decode-ap cgp_backend=local-gpgpu-burn-baby cgp_role=proof-first-accepted-prefix-capable note=first-token-is-prompt-ingest\n",
+        "lumen: generation start prompt_tokens={} context_tokens={} max_new_tokens={} max_seq_len={} prefill_mode=incremental-decode-ap compute_backend=ap-burn-baby note=first-token-is-prompt-ingest\n",
         prompt_tokens.len(),
         prefill_start_len,
         LUMEN_RUNTIME_MAX_NEW_TOKENS,
@@ -899,7 +899,7 @@ fn run_lumen_cgp_autorun_prefill(
     let _bf16_prompt_context = crate::lumen::burn_baby::enter_lumen_prompt_bf16_context();
     state.all_tokens.extend_from_slice(&prompt_tokens);
     crate::log!(
-        "lumen: cgp autorun begin prompt={:?} prompt_tokens={} context_tokens={} max_seq_len={} mode=prefill-only cgp_backend=local-gpgpu-burn-baby proof=boot-gpgpu-ladder-prefill-only\n",
+        "lumen: cgp autorun begin prompt={:?} prompt_tokens={} context_tokens={} max_seq_len={} mode=prefill-only compute_backend=ap-burn-baby proof=boot-prefill-only\n",
         prompt,
         prompt_tokens.len(),
         prefill_start_len,
@@ -929,7 +929,7 @@ fn run_lumen_cgp_autorun_prefill(
         }
         first_token_ms = elapsed_ms_since(first_token_start);
         crate::log!(
-            "lumen: cgp autorun done prompt={:?} prompt_tokens={} first_token={}ms total={}ms final_next_token={} proof=boot-gpgpu-ladder-prefill-only\n",
+            "lumen: cgp autorun done prompt={:?} prompt_tokens={} first_token={}ms total={}ms final_next_token={} proof=boot-prefill-only\n",
             prompt,
             prompt_tokens.len(),
             first_token_ms,
@@ -2741,7 +2741,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
             let autorun_start = embassy_time_driver::now();
             let compute_before = crate::lumen::burn_baby::stats();
             crate::log!(
-                "lumen: cgp autorun schedule session={} prompt={:?} mode=prefill-only proof=boot-gpgpu-ladder-prefill-only\n",
+                "lumen: cgp autorun schedule session={} prompt={:?} mode=prefill-only proof=boot-prefill-only\n",
                 session_id,
                 LUMEN_RUNTIME_BOOT_CGP_AUTORUN_PROMPT
             );
@@ -2777,7 +2777,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                         .polled_jobs
                         .saturating_sub(compute_before.polled_jobs);
                     crate::log!(
-                        "lumen: cgp autorun stats prompt={:?} prompt_tokens={} first_token={}ms infer={}ms jobs={}/{} polled={} queued={} proof=boot-gpgpu-ladder-prefill-only\n",
+                        "lumen: cgp autorun stats prompt={:?} prompt_tokens={} first_token={}ms infer={}ms jobs={}/{} polled={} queued={} proof=boot-prefill-only\n",
                         LUMEN_RUNTIME_BOOT_CGP_AUTORUN_PROMPT,
                         report.prompt_tokens,
                         report.first_token_ms,
@@ -2790,7 +2790,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                 }
                 Err(err) => {
                     crate::log!(
-                        "lumen: cgp autorun failed prompt={:?} err={} proof=boot-gpgpu-ladder-prefill-only\n",
+                        "lumen: cgp autorun failed prompt={:?} err={} proof=boot-prefill-only\n",
                         LUMEN_RUNTIME_BOOT_CGP_AUTORUN_PROMPT,
                         err
                     );
