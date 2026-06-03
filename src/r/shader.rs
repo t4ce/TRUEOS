@@ -11,8 +11,6 @@ use spin::Mutex;
 
 const SHADER_DIR: &str = "shader";
 const SERVICE_IDLE_MS: u64 = 100;
-const ARTIFACT_MAGIC: &[u8; 8] = b"TEU32\0\x01\0";
-const NO_DWORD: u32 = u32::MAX;
 
 static NEXT_JOB_ID: AtomicU64 = AtomicU64::new(1);
 static REQUESTS: Mutex<VecDeque<ShaderCompileRequest>> = Mutex::new(VecDeque::new());
@@ -152,58 +150,12 @@ async fn compile_path_async(path: String) -> Result<ShaderCompileReport, ShaderS
     let Some(bytes) = crate::r::fs::trueosfs::file_out_async(disk, path.as_str()).await? else {
         return Err(ShaderServiceError::NotFound);
     };
-    let source_bytes = bytes.len();
     let source = String::from_utf8(bytes).map_err(|_| ShaderServiceError::InvalidUtf8)?;
-    let program = trueos_c4::parse_program(source.as_str())
+    let _program = trueos_c4::parse_program(source.as_str())
         .map_err(|err| ShaderServiceError::Parse(err.message))?;
-    let object = trueos_c4::emit_eu32_object(&program)
-        .map_err(|err| ShaderServiceError::Emit(err.message))?;
-    let artifact = serialize_eu32_artifact(&object);
-    let artifact_path = artifact_path_for_source(path.as_str());
-    let ok =
-        crate::r::fs::trueosfs::file_in_async(disk, artifact_path.as_str(), artifact.as_slice())
-            .await?;
-    if !ok {
-        return Err(ShaderServiceError::WriteFailed);
-    }
-
-    Ok(ShaderCompileReport {
-        source_path: path,
-        artifact_path,
-        source_bytes,
-        artifact_bytes: artifact.len(),
-        words: object.words.len(),
-        expected_store_value: object.expected_store_value,
-    })
-}
-
-fn serialize_eu32_artifact(object: &trueos_c4::Eu32Object) -> Vec<u8> {
-    let mut out = Vec::with_capacity(24 + object.words.len() * core::mem::size_of::<u32>());
-    out.extend_from_slice(ARTIFACT_MAGIC);
-    push_u32(&mut out, object.words.len() as u32);
-    push_u32(&mut out, object.expected_store_value);
-    push_u32(
-        &mut out,
-        object
-            .store_send_dword
-            .map(|value| value as u32)
-            .unwrap_or(NO_DWORD),
-    );
-    push_u32(
-        &mut out,
-        object
-            .visible_seed_dword
-            .map(|value| value as u32)
-            .unwrap_or(NO_DWORD),
-    );
-    for word in object.words.iter().copied() {
-        push_u32(&mut out, word);
-    }
-    out
-}
-
-fn push_u32(out: &mut Vec<u8>, value: u32) {
-    out.extend_from_slice(&value.to_le_bytes());
+    Err(ShaderServiceError::Emit(
+        "C4 EU artifact backend removed".to_string(),
+    ))
 }
 
 fn normalize_shader_path(path: &str) -> Result<String, ShaderServiceError> {
@@ -242,7 +194,7 @@ fn artifact_path_for_source(path: &str) -> String {
 pub async fn shader_compile_service_task() {
     crate::log_info!(
         target: "service";
-        "shader-compile: service online dir=/{} subset=c4-out-const-eu32\n",
+        "shader-compile: service online dir=/{} status=disabled reason=c4-eu-backend-removed\n",
         SHADER_DIR
     );
     loop {

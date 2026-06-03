@@ -42,7 +42,6 @@ unicode-segmentation = { version = "1", default-features = false }
 log = { version = "0.4", default-features = false }
 trueos-qjs = { path = "crates/trueos-qjs", features = ["trueos", "yoga-native"] }
 trueos-gfx-core = { path = "crates/trueos-gfx-core", features = ["alloc"] }
-trueos-eu = { path = "crates/trueos-eu" }
 rustls = { version = "0.23", default-features = false, features = ["custom-provider", "tls12"] }
 rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "tls12", "zeroize"] }
 webpki-roots = { version = "1.0.7", default-features = false }

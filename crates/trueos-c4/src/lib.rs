@@ -10,14 +10,12 @@
 extern crate alloc;
 
 pub mod ast;
-pub mod backend_eu;
 pub mod backend_rust;
 pub mod backend_vm;
 pub mod lexer;
 pub mod parser;
 
 pub use ast::{AssignKind, Expr, ExprKind, Program, Stmt, StmtKind, Symbol, Type};
-pub use backend_eu::{Eu32EmitError, Eu32Object, emit_eu32_object};
 pub use backend_rust::emit_rust;
 pub use backend_vm::{
     VmLocalReport, VmObject, VmObjectError, VmRunError, VmRunReport, VmValue, emit_vm_object,

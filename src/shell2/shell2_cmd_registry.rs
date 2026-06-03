@@ -23,14 +23,12 @@ const TOOL_JSON_7Z: &str = r#"{"type":"object","properties":{"path":{"type":"str
 const TOOL_JSON_C4: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["file","inline"],"description":"Compile from a TRUEOSFS file or inline C4 source."},"path":{"type":"string","description":"TRUEOSFS source path when mode=file."},"source":{"type":"string","description":"Inline C4 source when mode=inline."}},"required":["mode"],"additionalProperties":false}"#;
 const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_FSLOG: &str = r#"{"type":"object","properties":{"disk_id":{"type":"string","description":"Optional disk id to scan. Omit for the primary TRUEOSFS root."},"max":{"type":"integer","minimum":1,"maximum":4096,"description":"Maximum raw records to print."}},"required":[],"additionalProperties":false}"#;
-const TOOL_JSON_GPGPU: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","frame","eot","vfe","offscreen","legacy","rowpaint","row2560","walkrow","tilewalker","rowburst","replay","triangle"],"description":"GPGPU action. `frame` submits one GPGPU scanout-store frame."},"variant":{"type":"integer","minimum":0,"maximum":10,"description":"Optional EOT catalog variant for `gpgpu eot` or `gpgpu vfe`. Defaults to 6."},"profile":{"type":"integer","minimum":0,"maximum":3,"description":"Optional VFE profile for `gpgpu vfe`: 0 legacy, 1 UOS dw3, 2 UOS dw5, 3 UOS both."},"group_x":{"type":"integer","minimum":0,"description":"Optional result-slot diagnostic group X dimension for offscreen/legacy. Omit or use 0 for the arena offscreen buffer probe."},"row":{"type":"integer","minimum":1,"maximum":1440,"description":"1-based scanout row. Normal shell form is `gpgpu ROW` or `gpgpu rowpaint ROW`."},"rows":{"type":"integer","minimum":1,"maximum":1440,"description":"Optional row count. Defaults to 5 for rowpaint, 1 for row2560, and 16 for tilewalker."},"x":{"type":"integer","minimum":0,"description":"Optional scanout x coordinate. For tilewalker, nonzero x selects the legacy stamp debug path."},"color":{"type":"integer","minimum":0,"maximum":16777215,"description":"Debug-only 24-bit RGB scanout color as 0xRRGGBB."},"stamps":{"oneOf":[{"type":"integer","minimum":1,"maximum":512},{"type":"string","enum":["full","row","all","max"]}],"description":"Optional walkrow/tilewalker stamp count. Supplying this selects the legacy stamp debug path."},"bands":{"oneOf":[{"type":"integer","minimum":1,"maximum":8},{"type":"string","enum":["full","row","all","max"]}],"description":"Optional rowburst band count. Defaults to 1."},"mode":{"type":"string","enum":["strict","loose","repair2","repair4","repair8","repair16","repair32","raw","raw-loose"],"description":"rowburst debug mode. strict/loose use one chunkstamp pass, repair modes add shifted chunkstamp passes, raw modes use the experimental artifact."},"verify":{"type":"boolean","description":"When true, poison and read back each stamp. For tilewalker this selects the legacy stamp debug path."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_HYPER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","probe"],"description":"Hyper transport view to print."},"url":{"type":"string","description":"Optional URL to download into TRUEOSFS."},"path":{"type":"string","description":"Optional TRUEOSFS destination path."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_LSD: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"Optional TRUEOSFS path to list."},"long":{"type":"boolean","description":"Show file kind and byte size."},"tree":{"type":"boolean","description":"Walk recursively from the path."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_MV: &str = r#"{"type":"object","properties":{"src":{"type":"string","description":"Source TRUEOSFS path."},"dst":{"type":"string","description":"Destination TRUEOSFS path."},"regex":{"type":"string","description":"Optional -regx pattern. When set, src and dst are directories."}},"required":["src","dst"],"additionalProperties":false}"#;
 const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["icmp","irc","nic","hostname"],"description":"net subcommand to run."},"target":{"type":"string","description":"Target host for net icmp."},"selector":{"type":"string","description":"Optional NIC selector like index, vid:pid, or bb:dd.f."},"host":{"type":"string","description":"Host for net irc."},"channel":{"type":"string","description":"Optional channel like #trueos for net irc."},"name":{"type":"string","description":"Optional hostname for net hostname."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_RM: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file or directory path."},"regex":{"type":"string","description":"Optional -regx pattern to match children under path."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"integer","minimum":50,"maximum":500,"description":"Shell line width."}},"required":["width"],"additionalProperties":false}"#;
-const TOOL_JSON_SHADER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["list","compile","demo","now"],"description":"Shader compiler service action."},"path":{"type":"string","description":"Optional /shader source path for compile or now."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"description":"Optional SMP slot. Omit to list all slots."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pcibar","mem","cpu","turbo","acpi","aml","facp","madt","hpet","mcfg","ssdt","uefi","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."},"signature":{"type":"string","minLength":4,"maxLength":4,"description":"Optional ACPI signature when target=acpi, for example SSDT or FACP."},"index":{"type":"integer","minimum":1,"description":"Optional 1-based instance index when target=acpi and the signature repeats."},"subcommand":{"type":"string","enum":["ec","symbol","prefix"],"description":"Optional AML subcommand when target=aml."},"path":{"type":"string","description":"Optional AML path or prefix when target=aml and subcommand is symbol or prefix."}},"required":["target"],"additionalProperties":false}"#;
 
@@ -86,10 +84,6 @@ fn dispatch_set(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Pars
     super::cmds::set::try_parse(io, &mut args)
 }
 
-fn dispatch_shader(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::shader::try_parse(io, rest)
-}
-
 fn dispatch_smp(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::smp::try_parse(io, &mut args)
@@ -116,10 +110,6 @@ fn dispatch_disc(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Par
 
 fn dispatch_fslog(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::fslog::try_parse(io, rest)
-}
-
-fn dispatch_gpgpu(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::gpgpu::try_parse(io, rest)
 }
 
 fn dispatch_net(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -192,17 +182,6 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_fslog,
         tool_description: Some("Print raw TRUEOSFS log records from the block device."),
         tool_parameters_json: Some(TOOL_JSON_FSLOG),
-    },
-    BuiltinShell2CmdEntry {
-        name: "gpgpu",
-        mode: "cmd",
-        color: Some((120, 210, 255)),
-        advertised: true,
-        handler: dispatch_gpgpu,
-        tool_description: Some(
-            "Inspect GPGPU status or run live scanout rowpaint/tilewalker GPGPU probes.",
-        ),
-        tool_parameters_json: Some(TOOL_JSON_GPGPU),
     },
     BuiltinShell2CmdEntry {
         name: "install",
@@ -331,15 +310,6 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_set,
         tool_description: Some("Set the shell line width."),
         tool_parameters_json: Some(TOOL_JSON_SET),
-    },
-    BuiltinShell2CmdEntry {
-        name: "shader",
-        mode: "cmd",
-        color: Some((255, 190, 90)),
-        advertised: true,
-        handler: dispatch_shader,
-        tool_description: Some("List or queue C4 shader files for the EU32 artifact compiler."),
-        tool_parameters_json: Some(TOOL_JSON_SHADER),
     },
     BuiltinShell2CmdEntry {
         name: "smp",
