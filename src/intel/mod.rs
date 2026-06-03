@@ -2,7 +2,6 @@ mod display;
 mod dmc;
 pub(crate) mod format;
 mod fw_probe;
-pub(crate) mod gpgpu;
 mod guc;
 pub(crate) mod guc_ctb;
 pub mod hda;
@@ -298,10 +297,6 @@ pub(crate) fn guc_ctb_enabled() -> bool {
 
 pub fn huc_ready() -> bool {
     self::huc::authenticated()
-}
-
-pub(crate) fn run_gpgpu_eu32_simd16_probe() -> self::gpgpu::Eu32Simd16ProbeReport {
-    self::gpgpu::run_eu32_simd16_probe()
 }
 
 pub fn has_claimed_device() -> bool {
