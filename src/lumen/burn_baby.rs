@@ -4,7 +4,6 @@ use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
-use crate::turbo::avx2_fma_sse2_help::bf16_to_f32;
 use spin::Mutex;
 
 const TARGET_CHUNKS_PER_WORKER: usize = 4;
@@ -65,14 +64,6 @@ impl Drop for LumenPromptBf16Context {
             LUMEN_PROMPT_BF16_DEPTH.fetch_sub(1, Ordering::AcqRel);
             self.active = false;
         }
-    }
-}
-
-fn bf16_matvec_source_label() -> &'static str {
-    if LUMEN_PROMPT_BF16_DEPTH.load(Ordering::Acquire) != 0 {
-        "lumen-prompt"
-    } else {
-        "runtime"
     }
 }
 
@@ -316,7 +307,6 @@ pub fn matvec_rowmajor_bf16(
         matvec_rows_bf16(x, w_rowmajor_bf16, k_dim, out, 0, n_rows);
         return Ok(());
     }
-    let source_label = bf16_matvec_source_label();
     let remote = crate::lumen::lumen_net::enqueue_remote_bf16_matvec_suffix(
         x,
         w_rowmajor_bf16,

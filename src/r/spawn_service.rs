@@ -1233,9 +1233,9 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 #[cfg(feature = "trueos_rdp")]
-const TASK_COUNT: usize = 74;
-#[cfg(not(feature = "trueos_rdp"))]
 const TASK_COUNT: usize = 72;
+#[cfg(not(feature = "trueos_rdp"))]
+const TASK_COUNT: usize = 70;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
