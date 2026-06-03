@@ -77,8 +77,6 @@ mod tga;
 mod tst;
 #[path = "tst/http_trueosfs.rs"]
 mod tst_http_trueosfs;
-#[path = "intel/gpgpu/mandelbrot_gpu_sidequest.rs"]
-mod tst_mandelbrot_gpu_sidequest;
 #[path = "tst/net_tcp_shell.rs"]
 mod tst_net_tcp_shell;
 #[path = "tst/tactics_srv.rs"]

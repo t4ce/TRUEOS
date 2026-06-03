@@ -19,7 +19,6 @@ static LOGGED_SERVICE_PROTECTED_LANE: AtomicBool = AtomicBool::new(false);
 static LOGGED_BF16_SLOT_SPREAD: AtomicBool = AtomicBool::new(false);
 static LOGGED_BF16_ARGMAX_BRIDGE: AtomicBool = AtomicBool::new(false);
 static LOGGED_BF16_DUAL_SILU_BRIDGE: AtomicBool = AtomicBool::new(false);
-static LOGGED_BF16_CGP_PROMPT_PATH: AtomicBool = AtomicBool::new(false);
 static LUMEN_PROMPT_BF16_DEPTH: AtomicUsize = AtomicUsize::new(0);
 static SERVICE_PROTECTED_SLOTS: AtomicU64 = AtomicU64::new(0);
 #[cfg(target_arch = "x86_64")]
@@ -102,33 +101,9 @@ struct MatvecRowsBf16 {
 }
 
 #[derive(Copy, Clone)]
-struct MatvecRowsBf16Suffix {
-    x: usize,
-    w_rowmajor_bf16: usize,
-    out: usize,
-    n_rows: usize,
-    k_dim: usize,
-    live_k_dim: usize,
-    prefix_rows: usize,
-    prefix_count: usize,
-    prefix_index_start: usize,
-    prefix_index_end: usize,
-    done: usize,
-}
-
-#[derive(Copy, Clone)]
 enum ComputeJob {
     MatvecRowsF32(MatvecRowsF32),
     MatvecRowsBf16(MatvecRowsBf16),
-    MatvecRowsBf16Suffix(MatvecRowsBf16Suffix),
-}
-
-#[derive(Copy, Clone, Debug, Default)]
-struct CgpPrefixSuffixSubmit {
-    accepted_rows: usize,
-    submitted_jobs: usize,
-    first_row: usize,
-    last_row: usize,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -342,36 +317,6 @@ pub fn matvec_rowmajor_bf16(
         return Ok(());
     }
     let source_label = bf16_matvec_source_label();
-    if source_label == "lumen-prompt" && !LOGGED_BF16_CGP_PROMPT_PATH.swap(true, Ordering::AcqRel) {
-        let backend = crate::lumen::cgp::gpu_burn_baby_backend();
-        crate::log!(
-            "burn-baby: cgp prompt path source={} backend={} label={} role={} output_owner={} contract={} dispatch_contract={} action=guarded-proof-before-prefix-ownership\n",
-            source_label,
-            backend.name,
-            backend.label,
-            backend.role.as_str(),
-            backend.output_owner,
-            backend.correctness_contract,
-            backend.dispatch_contract,
-        );
-    }
-    let local_gpu_proof = crate::lumen::gpu_shadow::observe_bf16_matvec_call(
-        source_label,
-        n_rows,
-        k_dim,
-        chunk_rows,
-        chunks,
-    );
-    crate::lumen::burn_baba::share_matvec_rowmajor_bf16(n_rows, k_dim, chunk_rows);
-    let cgp_prefix = crate::lumen::gpu_shadow::observe_live_bf16_matvec_probe(
-        x,
-        w_rowmajor_bf16,
-        n_rows,
-        k_dim,
-        chunk_rows,
-        chunks,
-        local_gpu_proof,
-    );
     let remote = crate::lumen::lumen_net::enqueue_remote_bf16_matvec_suffix(
         x,
         w_rowmajor_bf16,
@@ -408,29 +353,17 @@ pub fn matvec_rowmajor_bf16(
         poll_counts_for_slots(&spread_slots)
     };
 
-    let cgp_prefix_submit = submit_cgp_bf16_prefix_suffix_jobs(
-        source_label,
+    let submitted = submit_bf16_range_jobs(
         x_ptr,
         w_ptr,
         out_ptr,
         n_rows,
         k_dim,
+        chunk_rows,
+        0,
         local_row_end,
         done_ptr,
-        &cgp_prefix,
     );
-    let submitted = cgp_prefix_submit.submitted_jobs
-        + submit_bf16_jobs_skipping_cgp_prefix(
-            x_ptr,
-            w_ptr,
-            out_ptr,
-            n_rows,
-            k_dim,
-            chunk_rows,
-            local_row_end,
-            done_ptr,
-            &cgp_prefix,
-        );
 
     let wait_start = embassy_time_driver::now();
     let mut last_wait_log = wait_start;
@@ -455,32 +388,6 @@ pub fn matvec_rowmajor_bf16(
             spread
         );
     }
-    if cgp_prefix_submit.accepted_rows != 0 {
-        let first_output_bits = out
-            .get(cgp_prefix_submit.first_row)
-            .copied()
-            .unwrap_or(0.0)
-            .to_bits();
-        let last_output_bits = out
-            .get(cgp_prefix_submit.last_row)
-            .copied()
-            .unwrap_or(0.0)
-            .to_bits();
-        crate::log!(
-            "burn-baby: cgp accepted-prefix complete source={} rows={} first_row={} last_row={} live_k_dim={} k_dim={} suffix_jobs={} total_cpu_jobs={} first_output_bits=0x{:08X} last_output_bits=0x{:08X} output_owner=hybrid-cgp-prefix-cpu-ap-suffix action=cpu-ap-skipped-prefix-owned-rows\n",
-            source_label,
-            cgp_prefix_submit.accepted_rows,
-            cgp_prefix_submit.first_row,
-            cgp_prefix_submit.last_row,
-            cgp_prefix.live_k_dim,
-            k_dim,
-            cgp_prefix_submit.submitted_jobs,
-            submitted,
-            first_output_bits,
-            last_output_bits,
-        );
-    }
-
     if let Some(ticket) = remote
         && !crate::lumen::lumen_net::wait_remote_bf16_matvec(ticket)
     {
@@ -524,209 +431,6 @@ fn submit_bf16_range_jobs(
         }));
         submitted += 1;
         cursor = end;
-    }
-    submitted
-}
-
-fn submit_cgp_bf16_prefix_suffix_jobs(
-    source_label: &'static str,
-    x_ptr: usize,
-    w_ptr: usize,
-    out_ptr: usize,
-    n_rows: usize,
-    k_dim: usize,
-    local_row_end: usize,
-    done_ptr: usize,
-    cgp_prefix: &crate::lumen::cgp::CgpBf16PrefixContribution,
-) -> CgpPrefixSuffixSubmit {
-    if cgp_prefix.is_empty() || cgp_prefix.live_k_dim == 0 || cgp_prefix.live_k_dim > k_dim {
-        return CgpPrefixSuffixSubmit::default();
-    }
-
-    let mut accepted_indices = 0usize;
-    let mut first_row = usize::MAX;
-    let mut last_row = 0usize;
-    for contribution in cgp_prefix.rows.iter() {
-        let row = contribution.row;
-        if row >= local_row_end || row >= n_rows {
-            continue;
-        }
-        let base = row.saturating_mul(k_dim).saturating_mul(2);
-        let row_end = base.saturating_add(k_dim.saturating_mul(2));
-        let w_len = n_rows.saturating_mul(k_dim).saturating_mul(2);
-        if row_end > w_len {
-            continue;
-        }
-
-        if accepted_indices == 0 {
-            first_row = row;
-        }
-        last_row = row;
-        accepted_indices += 1;
-    }
-
-    if accepted_indices == 0 {
-        return CgpPrefixSuffixSubmit::default();
-    }
-
-    let chunk_rows = recommended_chunk_rows(accepted_indices).max(1);
-    let mut submitted_jobs = 0usize;
-    let mut prefix_index_start = 0usize;
-    while prefix_index_start < cgp_prefix.rows.len() {
-        let prefix_index_end = prefix_index_start
-            .saturating_add(chunk_rows)
-            .min(cgp_prefix.rows.len());
-        submit_job(ComputeJob::MatvecRowsBf16Suffix(MatvecRowsBf16Suffix {
-            x: x_ptr,
-            w_rowmajor_bf16: w_ptr,
-            out: out_ptr,
-            n_rows,
-            k_dim,
-            live_k_dim: cgp_prefix.live_k_dim,
-            prefix_rows: cgp_prefix.rows.as_ptr() as usize,
-            prefix_count: cgp_prefix.rows.len(),
-            prefix_index_start,
-            prefix_index_end,
-            done: done_ptr,
-        }));
-        submitted_jobs += 1;
-        prefix_index_start = prefix_index_end;
-    }
-
-    let suffix_k_dim = k_dim.saturating_sub(cgp_prefix.live_k_dim);
-    let gpu_prefix_values = accepted_indices.saturating_mul(cgp_prefix.live_k_dim);
-    let cpu_suffix_values = accepted_indices.saturating_mul(suffix_k_dim);
-    let cpu_full_row_values_avoided = accepted_indices.saturating_mul(k_dim);
-    let local_full_values = local_row_end.min(n_rows).saturating_mul(k_dim);
-    let gpu_prefix_local_bp = if local_full_values == 0 {
-        0
-    } else {
-        gpu_prefix_values.saturating_mul(10_000) / local_full_values
-    };
-    let gpu_prefix_accepted_row_bp = if k_dim == 0 {
-        0
-    } else {
-        cgp_prefix.live_k_dim.saturating_mul(10_000) / k_dim
-    };
-    let t8_frontier_rows = crate::lumen::gpu_shadow::t8_groupid_frontier_rows();
-    let t8_row_groups = if t8_frontier_rows == 0 {
-        0
-    } else {
-        accepted_indices / t8_frontier_rows
-    };
-    let t8_frontier_ready = t8_frontier_rows != 0;
-    let offload_action = if t8_frontier_ready {
-        "account-trusted-prefix-benefit"
-    } else {
-        "account-prefix-benefit-await-t8-frontier"
-    };
-
-    crate::log!(
-        "burn-baby: cgp accepted-prefix suffix-submit source={} mode={} rows={} first_row={} last_row={} live_k_dim={} k_dim={} suffix_jobs={} output_owner=hybrid-cgp-prefix-cpu-ap-suffix contract=scalar-bf16-reference action=parallel-cpu-suffix-skip-ap-full-row-recompute\n",
-        source_label,
-        cgp_prefix.mode.as_str(),
-        accepted_indices,
-        first_row,
-        last_row,
-        cgp_prefix.live_k_dim,
-        k_dim,
-        submitted_jobs,
-    );
-    crate::log!(
-        "burn-baby: cgp effective-offload source={} mode={} rows={} first_row={} last_row={} live_k_dim={} suffix_k_dim={} k_dim={} local_rows={} t8_frontier_ready={} t8_frontier_rows={} t8_row_groups={} gpu_prefix_t8_projected_submits={} gpu_prefix_values={} cpu_suffix_values={} cpu_full_row_values_avoided={} gpu_prefix_local_bp={} gpu_prefix_accepted_row_bp={} output_owner=hybrid-cgp-prefix-cpu-ap-suffix backend=local-gpu-burn-baby action={} next=prove-groupid-live32-or-fused-two-window-artifact\n",
-        source_label,
-        cgp_prefix.mode.as_str(),
-        accepted_indices,
-        first_row,
-        last_row,
-        cgp_prefix.live_k_dim,
-        suffix_k_dim,
-        k_dim,
-        local_row_end.min(n_rows),
-        t8_frontier_ready as u8,
-        t8_frontier_rows,
-        t8_row_groups,
-        t8_row_groups,
-        gpu_prefix_values,
-        cpu_suffix_values,
-        cpu_full_row_values_avoided,
-        gpu_prefix_local_bp,
-        gpu_prefix_accepted_row_bp,
-        offload_action,
-    );
-
-    CgpPrefixSuffixSubmit {
-        accepted_rows: accepted_indices,
-        submitted_jobs,
-        first_row,
-        last_row,
-    }
-}
-
-fn submit_bf16_jobs_skipping_cgp_prefix(
-    x_ptr: usize,
-    w_ptr: usize,
-    out_ptr: usize,
-    n_rows: usize,
-    k_dim: usize,
-    chunk_rows: usize,
-    local_row_end: usize,
-    done_ptr: usize,
-    cgp_prefix: &crate::lumen::cgp::CgpBf16PrefixContribution,
-) -> usize {
-    if cgp_prefix.is_empty() {
-        return submit_bf16_range_jobs(
-            x_ptr,
-            w_ptr,
-            out_ptr,
-            n_rows,
-            k_dim,
-            chunk_rows,
-            0,
-            local_row_end,
-            done_ptr,
-        );
-    }
-
-    let mut submitted = 0usize;
-    let mut cursor = 0usize;
-    let mut row_index = 0usize;
-    while cursor < local_row_end {
-        while row_index < cgp_prefix.rows.len() && cgp_prefix.rows[row_index].row < cursor {
-            row_index += 1;
-        }
-        let next_cgp_row = cgp_prefix
-            .rows
-            .get(row_index)
-            .map(|row| row.row.min(local_row_end))
-            .unwrap_or(local_row_end);
-        if cursor < next_cgp_row {
-            submitted += submit_bf16_range_jobs(
-                x_ptr,
-                w_ptr,
-                out_ptr,
-                n_rows,
-                k_dim,
-                chunk_rows,
-                cursor,
-                next_cgp_row,
-                done_ptr,
-            );
-            cursor = next_cgp_row;
-        }
-        if row_index >= cgp_prefix.rows.len() || cursor >= local_row_end {
-            break;
-        }
-
-        let mut skip_end = cgp_prefix.rows[row_index].row;
-        while row_index < cgp_prefix.rows.len()
-            && cgp_prefix.rows[row_index].row == skip_end
-            && skip_end < local_row_end
-        {
-            skip_end += 1;
-            row_index += 1;
-        }
-        cursor = skip_end.max(cursor.saturating_add(1)).min(local_row_end);
     }
     submitted
 }
@@ -1061,7 +765,6 @@ fn execute_job(job: ComputeJob) {
     match job {
         ComputeJob::MatvecRowsF32(job) => execute_matvec_rows_f32(job),
         ComputeJob::MatvecRowsBf16(job) => execute_matvec_rows_bf16(job),
-        ComputeJob::MatvecRowsBf16Suffix(job) => execute_matvec_rows_bf16_suffix(job),
     }
     COMPLETED_JOBS.fetch_add(1, Ordering::AcqRel);
 }
@@ -1093,48 +796,6 @@ fn execute_matvec_rows_bf16(job: MatvecRowsBf16) {
     let out = unsafe { core::slice::from_raw_parts_mut(job.out as *mut f32, job.n_rows) };
 
     matvec_rows_bf16(x, w, job.k_dim, out, job.row_start, job.row_end);
-    mark_done(job.done);
-}
-
-fn execute_matvec_rows_bf16_suffix(job: MatvecRowsBf16Suffix) {
-    if job.live_k_dim >= job.k_dim
-        || job.prefix_index_start >= job.prefix_index_end
-        || job.prefix_index_end > job.prefix_count
-    {
-        mark_done(job.done);
-        return;
-    }
-
-    let x = unsafe { core::slice::from_raw_parts(job.x as *const f32, job.k_dim) };
-    let w_len = job.n_rows.saturating_mul(job.k_dim).saturating_mul(2);
-    let w = unsafe { core::slice::from_raw_parts(job.w_rowmajor_bf16 as *const u8, w_len) };
-    let out = unsafe { core::slice::from_raw_parts_mut(job.out as *mut f32, job.n_rows) };
-    let prefix_rows = unsafe {
-        core::slice::from_raw_parts(
-            job.prefix_rows as *const crate::lumen::cgp::CgpBf16PrefixRow,
-            job.prefix_count,
-        )
-    };
-
-    for contribution in &prefix_rows[job.prefix_index_start..job.prefix_index_end] {
-        let row = contribution.row;
-        if row >= job.n_rows || row >= out.len() {
-            continue;
-        }
-        let base = row.saturating_mul(job.k_dim).saturating_mul(2);
-        let row_end = base.saturating_add(job.k_dim.saturating_mul(2));
-        if row_end > w.len() {
-            continue;
-        }
-        let weights = &w[base..row_end];
-        let mut acc = f32::from_bits(contribution.prefix_bits);
-        for idx in job.live_k_dim..job.k_dim {
-            let off = idx.saturating_mul(2);
-            let bits = u16::from_le_bytes([weights[off], weights[off + 1]]);
-            acc += x[idx] * bf16_to_f32(bits);
-        }
-        out[row] = acc;
-    }
     mark_done(job.done);
 }
 

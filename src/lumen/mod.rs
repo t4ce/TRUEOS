@@ -11,7 +11,6 @@ use ::lumen::precision::DType;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-pub(crate) mod burn_baba;
 pub(crate) mod burn_baby;
 pub(crate) mod cgp;
 pub(crate) mod gpu_shadow;
