@@ -54,6 +54,13 @@ const GUC_DMA_POLL_ITERS: usize = 20_000;
 const GUC_READY_POLL_ITERS: usize = 200_000;
 const GUC_RESET_POLL_ITERS: usize = 100_000;
 const GUC_ADS_ADDR_SHIFT: u32 = 1;
+const GUC_CTL_WA: usize = 1;
+const GUC_CTL_FEATURE: usize = 2;
+const GUC_CTL_DEBUG: usize = 3;
+const GUC_CTL_ADS: usize = 4;
+const GUC_CTL_DEVID: usize = 5;
+const GUC_CTL_DISABLE_SCHEDULER: u32 = 1 << 14;
+const GUC_LOG_DISABLED: u32 = 1 << 6;
 const GS_AUTH_STATUS_BAD: u32 = 1;
 const GRDOM_GUC: u32 = 1 << 3;
 const INTEL_GUC_LOAD_STATUS_READY: u32 = 0xF0;
@@ -399,18 +406,23 @@ fn build_ads(dev: crate::intel::Dev, ads: crate::intel::Buf) {
 }
 
 fn init_params(dev: crate::intel::Dev, ads: crate::intel::Buf) {
-    let vals = [
-        0,
-        0,
-        0,
-        0,
-        ((ads.gpu >> 12) as u32) << GUC_ADS_ADDR_SHIFT,
-        ((dev.device_id as u32) << 16) | dev.revision_id as u32,
-    ];
+    let mut vals = [0u32; 6];
+    vals[GUC_CTL_WA] = 0;
+    vals[GUC_CTL_FEATURE] = GUC_CTL_DISABLE_SCHEDULER;
+    vals[GUC_CTL_DEBUG] = GUC_LOG_DISABLED;
+    vals[GUC_CTL_ADS] = ((ads.gpu >> 12) as u32) << GUC_ADS_ADDR_SHIFT;
+    vals[GUC_CTL_DEVID] = ((dev.device_id as u32) << 16) | dev.revision_id as u32;
     crate::intel::mmio_write(dev, SOFT_SCRATCH_BASE, 0);
     for (i, v) in vals.iter().enumerate() {
         crate::intel::mmio_write(dev, SOFT_SCRATCH_BASE + (i + 1) * 4, *v);
     }
+    crate::log!(
+        "intel/guc: init-params feature=0x{:08X} debug=0x{:08X} ads=0x{:08X} devid=0x{:08X} scheduler=disabled reason=huc-auth-only\n",
+        vals[GUC_CTL_FEATURE],
+        vals[GUC_CTL_DEBUG],
+        vals[GUC_CTL_ADS],
+        vals[GUC_CTL_DEVID]
+    );
 }
 
 fn mirror_rsa(dev: crate::intel::Dev, fw: crate::intel::Buf) {

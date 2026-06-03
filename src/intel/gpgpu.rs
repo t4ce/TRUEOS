@@ -25,13 +25,19 @@ use surfaces::{
     prepare_gpgpu_store_surface_state, prepare_gpgpu_store_surface_state_for_target,
     prepare_gpgpu_store_surface_state_for_target_span,
 };
-use walker_command::encode_gfx12_gpgpu_walker_probe_batch;
+use walker_command::{
+    encode_gfx12_gpgpu_walker_probe_batch, encode_gfx12_gpgpu_walker_probe_batch_xy,
+};
 
 pub(crate) use mandelbrot::{
     submit_gpgpu_primary_scanout_chunkstamp704,
     submit_gpgpu_primary_scanout_chunkstamp704_unrolled,
-    submit_gpgpu_primary_scanout_fillrow_linear16, submit_gpgpu_primary_scanout_row2560_simd16,
-    submit_gpgpu_primary_scanout_rowburst1280, submit_gpgpu_primary_scanout_walkrow16,
+    submit_gpgpu_primary_scanout_fillrow_linear16, submit_gpgpu_primary_scanout_line1280_scalar,
+    submit_gpgpu_primary_scanout_row2560_simd16,
+    submit_gpgpu_primary_scanout_row2560_simd16_onestore,
+    submit_gpgpu_primary_scanout_row2560_simd16_quiet,
+    submit_gpgpu_primary_scanout_row2560_simd16_xwalker, submit_gpgpu_primary_scanout_rowburst1280,
+    submit_gpgpu_primary_scanout_walkrow16,
 };
 pub(crate) use matmul::{
     log_gpgpu_t63_first_tile_output_detail_once, stage_gpgpu_one_tile_record_probe,
@@ -130,8 +136,8 @@ const RCS_RING_HWS_PGA: usize = RCS_RING_BASE + 0x80;
 const GDRST: usize = 0x0000_941C;
 const WARM_RING_BYTES: usize = 4096;
 const WARM_CONTEXT_BYTES: usize = 22 * 4096;
-const WARM_BATCH_BYTES: usize = 512 * 4096;
-const WARM_DRAW_STATE_BYTES: usize = 16 * 4096;
+const WARM_BATCH_BYTES: usize = 1024 * 4096;
+const WARM_DRAW_STATE_BYTES: usize = 1024 * 4096;
 const WARM_VERTEX_BYTES: usize = 4096;
 const WARM_RESULT_BYTES: usize = 4096;
 const WARM_STREAMOUT_BYTES: usize = 4096;
@@ -145,14 +151,14 @@ const GPU_VA_CONTEXT_BASE: u64 = 0x0081_0000;
 const GPU_VA_BATCH_BASE: u64 = 0x0180_0000;
 const GPU_VA_RESULT_BASE: u64 = 0x0084_0000;
 const GPU_VA_DRAW_STATE_BASE: u64 = 0x0086_0000;
-const GPU_VA_VERTEX_BASE: u64 = 0x0087_0000;
-const GPU_VA_STREAMOUT_BASE: u64 = 0x0088_0000;
+const GPU_VA_VERTEX_BASE: u64 = 0x00C8_0000;
+const GPU_VA_STREAMOUT_BASE: u64 = 0x00C9_0000;
 const GPU_VA_GPGPU_TILE_ARENA_BASE: u64 = 0x0400_0000;
 const GPGPU_EU_KERNEL_OFFSET_BYTES: usize = 0x3000;
-// Keep dynamic walker state out of the EU program window.  The visible scanout
-// sidequest now uses a 1280-pixel scalar artifact; uploaded at 0x3000, that
-// body reaches past 0xD000, so IDD/CURBE live near the top of draw-state.
-const GPGPU_WALKER_SCRATCH_OFFSET_BYTES: usize = 0xE000;
+// Keep dynamic walker state far beyond the deliberately huge scanout paint
+// artifacts.  This path is a firehose: shader body first, IDD/CURBE/payload
+// high in draw-state, no accidental overlap gate.
+const GPGPU_WALKER_SCRATCH_OFFSET_BYTES: usize = 0x3C0000;
 const GPGPU_TILE_ROWS: usize = 256;
 const GPGPU_TILE_K_DIM: usize = 2048;
 const GPGPU_TILE_WEIGHT_BYTES_PER_ELEM: usize = 2;
@@ -753,13 +759,32 @@ fn submit_warm_render_batch(
     expected_result_slot_dword: usize,
     submit_name: &'static str,
 ) -> bool {
-    submit_warm_render_batch_observed(
+    submit_warm_render_batch_at(
+        dev,
+        warm,
+        expected_result,
+        expected_result_slot_dword,
+        submit_name,
+        GPU_VA_BATCH_BASE,
+    )
+}
+
+fn submit_warm_render_batch_at(
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+    expected_result: u32,
+    expected_result_slot_dword: usize,
+    submit_name: &'static str,
+    batch_gpu_addr: u64,
+) -> bool {
+    submit_warm_render_batch_observed_at(
         dev,
         warm,
         expected_result,
         expected_result_slot_dword,
         submit_name,
         false,
+        batch_gpu_addr,
     )
     .completed
 }
@@ -771,6 +796,26 @@ fn submit_warm_render_batch_observed(
     expected_result_slot_dword: usize,
     submit_name: &'static str,
     capture_dispatch: bool,
+) -> WarmRenderBatchSubmitProof {
+    submit_warm_render_batch_observed_at(
+        dev,
+        warm,
+        expected_result,
+        expected_result_slot_dword,
+        submit_name,
+        capture_dispatch,
+        GPU_VA_BATCH_BASE,
+    )
+}
+
+fn submit_warm_render_batch_observed_at(
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+    expected_result: u32,
+    expected_result_slot_dword: usize,
+    submit_name: &'static str,
+    capture_dispatch: bool,
+    batch_gpu_addr: u64,
 ) -> WarmRenderBatchSubmitProof {
     let log_submit = should_log_gpgpu_submit_name(submit_name);
     if needs_gpgpu_pre_submit_recovery(submit_name) {
@@ -803,7 +848,7 @@ fn submit_warm_render_batch_observed(
         };
     }
 
-    let ring_tail_bytes = build_ring_batch_start(warm, GPU_VA_BATCH_BASE);
+    let ring_tail_bytes = build_ring_batch_start(warm, batch_gpu_addr);
     let Some(ring_ctl) = ring_ctl_value(warm.ring_len) else {
         return WarmRenderBatchSubmitProof {
             completed: false,
@@ -847,6 +892,7 @@ fn submit_warm_render_batch_observed(
     };
     execlist_submit_port_push(dev, context_desc_lo, context_desc_hi, 0, 0);
     crate::intel::mmio_write(dev, RCS_RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
+    crate::intel::mmio_write(dev, RCS_RING_TAIL, ring_tail_bytes as u32);
 
     if log_submit {
         crate::log!(
@@ -864,6 +910,30 @@ fn submit_warm_render_batch_observed(
             ring_tail_bytes as u32,
             crate::intel::mmio_read(dev, RCS_RING_TAIL),
         );
+    }
+
+    if uses_visual_async_scanout_submit(submit_name) {
+        if log_submit {
+            crate::log!(
+                "intel/gpgpu: {} visual-async-submit tail_req=0x{:08X} head=0x{:08X} tail=0x{:08X} marker_slot={} marker_expected=0x{:08X} policy=fire-and-let-eu-work\n",
+                submit_name,
+                ring_tail_bytes as u32,
+                crate::intel::mmio_read(dev, RCS_RING_HEAD),
+                crate::intel::mmio_read(dev, RCS_RING_TAIL),
+                expected_result_slot_dword,
+                expected_result,
+            );
+        }
+        let dispatch_after = if capture_dispatch {
+            read_gpgpu_threads_dispatched(dev)
+        } else {
+            0
+        };
+        return WarmRenderBatchSubmitProof {
+            completed: true,
+            dispatch_before,
+            dispatch_after,
+        };
     }
 
     let gpgpu_submit = is_gpgpu_submit_name(submit_name);
@@ -1111,6 +1181,14 @@ fn is_gpgpu_submit_name(name: &str) -> bool {
             | "gpgpu-one-tile-sentinel"
             | "gpgpu-one-tile-compare"
             | "gpgpu-primary-scanout-walkrow16"
+            | "gpgpu-primary-scanout-chunkstamp704"
+            | "gpgpu-primary-scanout-chunkstamp704-unrolled"
+            | "gpgpu-primary-scanout-fillrow-linear16"
+            | "gpgpu-primary-scanout-line1280-scalar"
+            | "gpgpu-primary-scanout-row2560-simd16"
+            | "gpgpu-primary-scanout-row2560-simd16-xwalker"
+            | "gpgpu-primary-scanout-row2560-simd16-onestore"
+            | "gpgpu-primary-scanout-rowburst1280"
             | "gpgpu-primary-scanout-groupid-line1280-fullwidth"
             | "gpgpu-pre-submit"
     )
@@ -1157,6 +1235,7 @@ fn should_log_gpgpu_submit_name(name: &str) -> bool {
             | "gpgpu-primary-scanout-line1280-burst"
             | "gpgpu-primary-scanout-groupid-line1280-rows"
             | "gpgpu-primary-scanout-groupid-line1280-fullwidth"
+            | "gpgpu-primary-scanout-rowburst1280"
     )
 }
 
@@ -1164,9 +1243,41 @@ fn uses_extended_submit_poll(name: &str) -> bool {
     uses_gpgpu_pipeline_submit_name(name)
 }
 
+fn uses_scanout_row_submit_poll(name: &str) -> bool {
+    matches!(
+        name,
+        "gpgpu-primary-scanout-chunkstamp704"
+            | "gpgpu-primary-scanout-chunkstamp704-unrolled"
+            | "gpgpu-primary-scanout-fillrow-linear16"
+            | "gpgpu-primary-scanout-line1280-scalar"
+            | "gpgpu-primary-scanout-row2560-simd16"
+            | "gpgpu-primary-scanout-row2560-simd16-xwalker"
+            | "gpgpu-primary-scanout-row2560-simd16-onestore"
+            | "gpgpu-primary-scanout-rowburst1280"
+    )
+}
+
+fn uses_visual_async_scanout_submit(name: &str) -> bool {
+    GPGPU_VISUAL_ASYNC_SCANOUT_SUBMIT
+        && matches!(
+            name,
+            "gpgpu-primary-scanout-chunkstamp704"
+                | "gpgpu-primary-scanout-chunkstamp704-unrolled"
+                | "gpgpu-primary-scanout-fillrow-linear16"
+                | "gpgpu-primary-scanout-line1280-scalar"
+                | "gpgpu-primary-scanout-row2560-simd16"
+                | "gpgpu-primary-scanout-row2560-simd16-xwalker"
+                | "gpgpu-primary-scanout-row2560-simd16-onestore"
+                | "gpgpu-primary-scanout-rowburst1280"
+                | "gpgpu-primary-scanout-walkrow16"
+        )
+}
+
 fn submit_poll_limit(name: &str) -> usize {
     if name == "gpgpu-primary-scanout-groupid-line1280-fullwidth" {
         262_144
+    } else if uses_scanout_row_submit_poll(name) {
+        4096
     } else if uses_extended_submit_poll(name) {
         4 * 1024 * 1024
     } else {
@@ -1258,19 +1369,39 @@ fn recover_render_engine_after_nonretired_submit(
 }
 
 fn build_ring_batch_start(warm: RenderWarmState, batch_gpu_addr: u64) -> usize {
+    let ring_dwords = warm.ring_len / core::mem::size_of::<u32>();
+    if ring_dwords < BLT_RING_DWORDS {
+        return 0;
+    }
+    let slots = (ring_dwords / BLT_RING_DWORDS).max(1);
+    let slot = (GPGPU_RING_KICK_DWORD.fetch_add(BLT_RING_DWORDS as u32, Ordering::AcqRel) as usize
+        / BLT_RING_DWORDS)
+        % slots;
+    let start = slot * BLT_RING_DWORDS;
     let dwords =
-        unsafe { core::slice::from_raw_parts_mut(warm.ring_virt as *mut u32, BLT_RING_DWORDS) };
-    dwords[0] = MI_BATCH_BUFFER_START_GEN8
+        unsafe { core::slice::from_raw_parts_mut(warm.ring_virt as *mut u32, ring_dwords) };
+    dwords[start] = MI_BATCH_BUFFER_START_GEN8
         | if GPGPU_BATCH_START_IN_PPGTT {
             MI_BATCH_PPGTT
         } else {
             MI_BATCH_GTT
         };
-    dwords[1] = batch_gpu_addr as u32;
-    dwords[2] = (batch_gpu_addr >> 32) as u32;
-    dwords[3] = MI_NOOP;
-    crate::intel::dma_flush(warm.ring_virt, BLT_RING_TAIL_BYTES);
-    BLT_RING_TAIL_BYTES
+    dwords[start + 1] = batch_gpu_addr as u32;
+    dwords[start + 2] = (batch_gpu_addr >> 32) as u32;
+    dwords[start + 3] = MI_NOOP;
+    let tail_bytes = (start + BLT_RING_DWORDS) * core::mem::size_of::<u32>();
+    crate::intel::dma_flush(warm.ring_virt, warm.ring_len);
+    tail_bytes
+}
+
+fn next_visual_batch_slot(warm: RenderWarmState) -> Option<(usize, u64)> {
+    if warm.batch_len < GPGPU_VISUAL_BATCH_SLOT_BYTES {
+        return None;
+    }
+    let slots = (warm.batch_len / GPGPU_VISUAL_BATCH_SLOT_BYTES).max(1);
+    let slot = (GPGPU_VISUAL_BATCH_KICK_SLOT.fetch_add(1, Ordering::AcqRel) as usize) % slots;
+    let offset = slot * GPGPU_VISUAL_BATCH_SLOT_BYTES;
+    Some((offset, GPU_VA_BATCH_BASE + offset as u64))
 }
 
 fn build_ring_render_replay_ppgtt(warm: RenderWarmState, batch_gpu_addr: u64) -> usize {
@@ -1333,8 +1464,9 @@ fn build_execlist_context_descriptor(context_gpu_addr: u64) -> (u32, u32) {
         | GEN8_CTX_PRIVILEGE
         | GEN12_CTX_PRIORITY_NORMAL
         | (INTEL_LEGACY_64B_CONTEXT << GEN8_CTX_ADDRESSING_MODE_SHIFT);
-    let sw_context_id = (((context_gpu_addr >> 12) as u32) & 0x7FF).max(1);
-    let _ = RCS_SUBMIT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let submit_id = RCS_SUBMIT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let base_context_id = (((context_gpu_addr >> 12) as u32) & 0x3FF).max(1);
+    let sw_context_id = (((submit_id & 0x3FF) << 1) ^ base_context_id).max(1) & 0x7FF;
     let desc_hi = ((context_gpu_addr >> 32) as u32) | (sw_context_id << 7);
     (desc, desc_hi)
 }
@@ -1643,6 +1775,11 @@ const GPGPU_UOS_TIGHT_LAUNCH: bool = true;
 const GPGPU_MESA_POST_VFE_PIPE_CONTROL: bool = false;
 const GPGPU_USE_MINIMAL_PPGTT: bool = true;
 const GPGPU_BATCH_START_IN_PPGTT: bool = false;
+const GPGPU_VISUAL_ASYNC_SCANOUT_SUBMIT: bool = true;
+const GPGPU_VISUAL_BATCH_SLOT_BYTES: usize = 4096;
+const GPGPU_VISUAL_BATCH_SELF_LOOP: bool = true;
+const GPGPU_VISUAL_ROWBURST_Y_DUPLICATES: u32 = 32;
+const GPGPU_VISUAL_ROWBURST_BATCH_WALKER_REPEATS: u32 = 32;
 // ADL-S 8086:4680 is Gfx12.0/Xe-LP.  Keep the active milestone probe as the
 // smallest Mesa-shaped root thread: no CURBE payload, one SIMD8 group, TS EOT.
 const ACTIVE_GFX12_EOT_VARIANT: trueos_eu::gfx12::Gfx12EotVariant =
@@ -1730,7 +1867,6 @@ fn should_log_gpgpu_program_shape(name: &str) -> bool {
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_PROGRAM_NAME
         || name.contains("primary-scanout-groupid-line1280-rows-simd16")
-        || name == trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD8_BW_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD16_BW_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_SCALAR_BW_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_LINE320_SCALAR_BW_PROGRAM_NAME
@@ -1751,6 +1887,7 @@ fn should_log_gpgpu_surface_state(note: &str) -> bool {
         && !note.contains("t6-3-accum16-hi")
         && !note.contains("line1280-burst")
         && !note.contains("groupid-line1280")
+        && !note.contains("rowburst1280")
 }
 
 fn gpgpu_store_eot_program() -> GpgpuEuProgram {
@@ -1827,6 +1964,8 @@ static GPGPU_PREFLIGHT_DOT: AtomicU32 = AtomicU32::new(0);
 static GPGPU_PREFLIGHT_SUM_A: AtomicU32 = AtomicU32::new(0);
 static GPGPU_PREFLIGHT_SUM_B: AtomicU32 = AtomicU32::new(0);
 static GPGPU_PREFLIGHT_LANES_OBSERVED: AtomicU32 = AtomicU32::new(0);
+static GPGPU_RING_KICK_DWORD: AtomicU32 = AtomicU32::new(0);
+static GPGPU_VISUAL_BATCH_KICK_SLOT: AtomicU32 = AtomicU32::new(0);
 static GPGPU_WARM_BUFFERS_MAPPED: AtomicBool = AtomicBool::new(false);
 static GPGPU_TILE_ARENA_MAPPED: AtomicBool = AtomicBool::new(false);
 static GPGPU_TILE_ARENA_STATUS_LOGGED: AtomicBool = AtomicBool::new(false);

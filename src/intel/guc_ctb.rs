@@ -3,11 +3,16 @@ use spin::Mutex;
 
 const CT_DESC_BYTES: usize = 64;
 const CT_DESC_DWORDS: usize = CT_DESC_BYTES / 4;
+const CT_DESC_ALIGN_BYTES: usize = 2048;
+const CT_H2G_DESC_OFFSET: usize = 0;
+const CT_G2H_DESC_OFFSET: usize = CT_DESC_ALIGN_BYTES;
 const CT_H2G_OFFSET: usize = 4096;
 const CT_G2H_OFFSET: usize = 8192;
-const CT_RING_BYTES: usize = 4096;
-const CT_RING_DWORDS: usize = CT_RING_BYTES / 4;
-const CT_BLOB_BYTES: usize = CT_G2H_OFFSET + CT_RING_BYTES;
+const CT_H2G_RING_BYTES: usize = 4096;
+const CT_G2H_RING_BYTES: usize = 4 * CT_H2G_RING_BYTES;
+const CT_H2G_RING_DWORDS: usize = CT_H2G_RING_BYTES / 4;
+const CT_G2H_RING_DWORDS: usize = CT_G2H_RING_BYTES / 4;
+const CT_BLOB_BYTES: usize = CT_G2H_OFFSET + CT_G2H_RING_BYTES;
 const CT_DESC_HEAD: usize = 0;
 const CT_DESC_TAIL: usize = 4;
 const CT_DESC_STATUS: usize = 8;
@@ -81,8 +86,8 @@ pub(crate) fn init_and_enable(dev: crate::intel::Dev) -> bool {
         h2g_tail: 0,
         g2h_head: 0,
     };
-    write_desc(state, 0, 0, 0, 0);
-    write_desc(state, CT_DESC_BYTES, 0, 0, 0);
+    write_desc(state, CT_H2G_DESC_OFFSET, 0, 0, 0);
+    write_desc(state, CT_G2H_DESC_OFFSET, 0, 0, 0);
     crate::intel::dma_flush(virt, CT_BLOB_BYTES);
 
     if !crate::intel::map_ggtt(dev, phys, CT_BLOB_BYTES, state.gpu) {
@@ -96,17 +101,17 @@ pub(crate) fn init_and_enable(dev: crate::intel::Dev) -> bool {
     }
     super::ggtt_invalidate(dev);
 
-    let h2g_desc = state.gpu as u32;
-    let g2h_desc = (state.gpu + CT_DESC_BYTES as u64) as u32;
+    let h2g_desc = (state.gpu + CT_H2G_DESC_OFFSET as u64) as u32;
+    let g2h_desc = (state.gpu + CT_G2H_DESC_OFFSET as u64) as u32;
     let h2g_buf = (state.gpu + CT_H2G_OFFSET as u64) as u32;
     let g2h_buf = (state.gpu + CT_G2H_OFFSET as u64) as u32;
     let regs = [
         self_cfg64(dev, GUC_KLV_SELF_CFG_G2H_CTB_DESCRIPTOR_ADDR_KEY, g2h_desc as u64),
         self_cfg64(dev, GUC_KLV_SELF_CFG_G2H_CTB_ADDR_KEY, g2h_buf as u64),
-        self_cfg32(dev, GUC_KLV_SELF_CFG_G2H_CTB_SIZE_KEY, CT_RING_BYTES as u32),
+        self_cfg32(dev, GUC_KLV_SELF_CFG_G2H_CTB_SIZE_KEY, CT_G2H_RING_BYTES as u32),
         self_cfg64(dev, GUC_KLV_SELF_CFG_H2G_CTB_DESCRIPTOR_ADDR_KEY, h2g_desc as u64),
         self_cfg64(dev, GUC_KLV_SELF_CFG_H2G_CTB_ADDR_KEY, h2g_buf as u64),
-        self_cfg32(dev, GUC_KLV_SELF_CFG_H2G_CTB_SIZE_KEY, CT_RING_BYTES as u32),
+        self_cfg32(dev, GUC_KLV_SELF_CFG_H2G_CTB_SIZE_KEY, CT_H2G_RING_BYTES as u32),
     ];
     let regs_ok = regs.iter().all(|r| r.accepted);
     if !regs_ok {
@@ -137,16 +142,17 @@ pub(crate) fn init_and_enable(dev: crate::intel::Dev) -> bool {
         *STATE.lock() = Some(state);
     }
     crate::log!(
-        "intel/guc-ctb: setup accepted={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X} h2g_desc=0x{:X} h2g=0x{:X} g2h_desc=0x{:X} g2h=0x{:X} ring_bytes=0x{:X} control_response=0x{:08X} response_type={} error={} poll_iters={} next=huc-auth-ctb does_not_prove=guc_owned_render_submission\n",
+        "intel/guc-ctb: setup accepted={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X} h2g_desc=0x{:X} h2g=0x{:X} h2g_ring_bytes=0x{:X} g2h_desc=0x{:X} g2h=0x{:X} g2h_ring_bytes=0x{:X} control_response=0x{:08X} response_type={} error={} poll_iters={} next=huc-auth-ctb does_not_prove=guc_owned_render_submission\n",
         ok as u8,
         state.gpu,
         state.phys,
         state.len,
         h2g_desc,
         h2g_buf,
+        CT_H2G_RING_BYTES,
         g2h_desc,
         g2h_buf,
-        CT_RING_BYTES,
+        CT_G2H_RING_BYTES,
         enable.response,
         enable.response_type,
         enable.error,
@@ -183,15 +189,15 @@ pub(crate) fn send_hxg_action(dev: crate::intel::Dev, action: u32, args: &[u32])
     let total_len = 1usize.saturating_add(payload_len);
     let mut tail = state.h2g_tail as usize;
     write_ct_dw(state, CT_H2G_OFFSET, tail, ((fence as u32) << 16) | payload_len as u32);
-    tail = (tail + 1) % CT_RING_DWORDS;
+    tail = (tail + 1) % CT_H2G_RING_DWORDS;
     write_ct_dw(state, CT_H2G_OFFSET, tail, hxg_request_header(action));
-    tail = (tail + 1) % CT_RING_DWORDS;
+    tail = (tail + 1) % CT_H2G_RING_DWORDS;
     for value in args.iter().copied().take(payload_len.saturating_sub(1)) {
         write_ct_dw(state, CT_H2G_OFFSET, tail, value);
-        tail = (tail + 1) % CT_RING_DWORDS;
+        tail = (tail + 1) % CT_H2G_RING_DWORDS;
     }
     state.h2g_tail = tail as u32;
-    write_desc_tail(state, 0, state.h2g_tail);
+    write_desc_tail(state, CT_H2G_DESC_OFFSET, state.h2g_tail);
     crate::intel::dma_flush(state.virt, CT_BLOB_BYTES);
     crate::intel::mmio_write(dev, GEN11_GUC_HOST_INTERRUPT, GUC_SEND_TRIGGER);
 
@@ -201,15 +207,15 @@ pub(crate) fn send_hxg_action(dev: crate::intel::Dev, action: u32, args: &[u32])
     let mut g2h_poll_iters = 0usize;
     while g2h_poll_iters < CT_RESPONSE_POLL_ITERS {
         crate::intel::dma_flush(state.virt, CT_BLOB_BYTES);
-        let tail_now = read_desc_tail(state, CT_DESC_BYTES);
+        let tail_now = read_desc_tail(state, CT_G2H_DESC_OFFSET);
         while state.g2h_head != tail_now {
             let msg_head = state.g2h_head as usize;
             let hdr = read_ct_dw(state, CT_G2H_OFFSET, msg_head);
             let msg_fence = (hdr >> 16) as u16;
             let msg_len = (hdr & 0xFF) as usize;
-            let hxg = read_ct_dw(state, CT_G2H_OFFSET, (msg_head + 1) % CT_RING_DWORDS);
-            state.g2h_head = ((msg_head + 1 + msg_len) % CT_RING_DWORDS) as u32;
-            write_desc_head(state, CT_DESC_BYTES, state.g2h_head);
+            let hxg = read_ct_dw(state, CT_G2H_OFFSET, (msg_head + 1) % CT_G2H_RING_DWORDS);
+            state.g2h_head = ((msg_head + 1 + msg_len) % CT_G2H_RING_DWORDS) as u32;
+            write_desc_head(state, CT_G2H_DESC_OFFSET, state.g2h_head);
             if msg_fence == fence {
                 response = hxg;
                 response_type = hxg_type(hxg);
@@ -284,11 +290,11 @@ fn read_desc_tail(state: CtbState, desc_off: usize) -> u32 {
 }
 
 fn write_ct_dw(state: CtbState, base: usize, idx: usize, value: u32) {
-    write_blob_u32(state, base + (idx % CT_RING_DWORDS) * 4, value);
+    write_blob_u32(state, base + idx * 4, value);
 }
 
 fn read_ct_dw(state: CtbState, base: usize, idx: usize) -> u32 {
-    read_blob_u32(state, base + (idx % CT_RING_DWORDS) * 4)
+    read_blob_u32(state, base + idx * 4)
 }
 
 fn write_blob_u32(state: CtbState, off: usize, value: u32) {
