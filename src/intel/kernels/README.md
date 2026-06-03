@@ -13,6 +13,12 @@ Gen12/Alder Lake artifacts for TRUEOS.
 - rectangular copy only
 - one SIMD16 walker/subgroup copies up to 32 pixels, two adjacent pixels per lane/work-item
 
+`copy_rect_rgba8_wide.cl` is the opt-in wider sibling:
+
+- same linear RGBA8 copy contract
+- one SIMD16 walker/subgroup copies up to 256 pixels, sixteen adjacent pixels per lane/work-item
+- kept separate from `copy_rect_rgba8.cl` so the small, proven bring-up artifact remains available
+
 The CPU side owns resource lifetime, bounds/scissor clipping, GPU address/state
 binding, parameter packing, and walker submission.
 
@@ -37,10 +43,18 @@ with Intel `ocloc`/IGC. Its SHA-256 is:
 10866024aaffae96f92cfc25a5fb188ca421994789afbc4dba3ddc290bd583ab
 ```
 
+`artifacts/adls/copy_rect_rgba8_wide.bin` is the wider Alder Lake S build. Its
+SHA-256 is:
+
+```text
+f8097f59d7525c4fd6e4f6659e58d5279238a4f9652fea58065098540fa45bba
+```
+
 Regenerate it with:
 
 ```sh
 tools/intel_gpgpu/build_copy_rect_rgba8.sh
+tools/intel_gpgpu/build_copy_rect_rgba8_wide.sh
 ```
 
 Generate the clear kernel with:

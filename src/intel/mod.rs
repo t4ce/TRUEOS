@@ -173,6 +173,7 @@ pub fn init_once() {
     );
     *CLAIMED_DEVICE.lock() = Some(dev);
     let _ = self::gpgpu::upload_copy_rect_rgba8_kernel();
+    let _ = self::gpgpu::upload_copy_rect_rgba8_wide_kernel();
     let _ = self::gpgpu::upload_clear_rect_rgba8_white_kernel();
     let _ = self::gpgpu::upload_empty_eot_kernel();
     let _ = self::gpgpu::submit_direct_rcs_smoke_once();
@@ -181,6 +182,7 @@ pub fn init_once() {
     let _ = self::gpgpu::submit_copy_rect_rgba8_strip_once();
     let _ = self::gpgpu::submit_copy_rect_rgba8_256_once();
     let _ = self::gpgpu::submit_copy_rect_rgba8_256x2_once();
+    let _ = self::gpgpu::submit_copy_rect_rgba8_wide_256x2_once();
     let _ = self::gpgpu::submit_rect_api_smoke_once();
     self::fw_probe::log_probe_modules(dev.device_id);
     self::dmc::wire_load_path(dev);
