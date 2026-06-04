@@ -1,27 +1,24 @@
 use alloc::string::String as AllocString;
-use alloc::vec::Vec;
 use core::str::SplitWhitespace;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use super::super::{ShellBackend2, print_shell_line};
-use crate::gfx::althlasfont::twemoji::{twemoji_lookup_slot_region, twemoji_slot_count};
 use crate::intel::gpgpu::{
     GPGPU_SHELL_SURFACE_HEIGHT, GPGPU_SHELL_SURFACE_PITCH_BYTES, GPGPU_SHELL_SURFACE_WIDTH,
-    GpgpuAtlasBatchRequest, GpgpuPoint, GpgpuRect, clear_rect_rgba8_white_upload_status,
-    copy_rect_rgba8_upload_status, copy_rect_rgba8_wide_upload_status, empty_eot_upload_status,
-    shell_clear_white_rgba8, shell_copy_rgba8, shell_copy_scanout_center_rgba8,
-    shell_copy_twemoji_atlas_batch_scanout_hot, shell_copy_twemoji_atlas_slot_scanout,
-    shell_twemoji_atlas_wild_cpu_scanout,
+    GpgpuPoint, GpgpuRect, clear_rect_rgba8_white_upload_status, copy_rect_rgba8_upload_status,
+    copy_rect_rgba8_wide_upload_status, empty_eot_upload_status, shell_clear_white_rgba8,
+    shell_copy_rgba8, shell_copy_scanout_center_rgba8, shell_copy_twemoji_atlas_slot_scanout,
+    shell_twemoji_atlas_worklist_present_scanout, shell_twemoji_atlas_worklist_scanout,
+    shell_twemoji_atlas_worklist_scanout_present, sprite64_worklist_rgba8_upload_status,
 };
 use crate::shell2::shell2_cmd::ParseOutcome;
-use crate::tyche::SoftRng;
 
 const ATHLAS_GO_DEFAULT_DURATION_MS: u64 = 5_000;
 const ATHLAS_GO_DEFAULT_CADENCE_MS: u64 = 0;
-const ATHLAS_GO_DEFAULT_BURST: u32 = 1;
-const ATHLAS_GO_MAX_BURST: u32 = 16;
-const ATHLAS_GO_TIMEOUTISH_COPY_MS: u64 = 1_000;
-const ATHLAS_GO_FAIL_BACKOFF_MS: u64 = 3;
+const ATHLAS_GO_DEFAULT_COUNT: u32 = 256;
+const ATHLAS_GO_DEFAULT_PRESENT_EVERY: u32 = 1;
+const ATHLAS_GO_MAX_COUNT: u32 = 256;
+const ATHLAS_GO_MAX_PRESENT_EVERY: u32 = 1024;
 
 static ATHLAS_GO_SEQUENCE: AtomicU32 = AtomicU32::new(0);
 
@@ -31,9 +28,9 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "gpgpu copy [sx sy dx dy w h]");
     print_shell_line(io, "gpgpu scanout");
     print_shell_line(io, "gpgpu atlas|athlas <id> [x,y]");
-    print_shell_line(io, "gpgpu athlas go [duration_ms] [cadence_ms] [burst]");
-    print_shell_line(io, "gpgpu athlas go wild [duration_ms]");
-    print_shell_line(io, "gpgpu athlas_go [duration_ms] [cadence_ms] [burst]");
+    print_shell_line(io, "gpgpu athlas work [count]");
+    print_shell_line(io, "gpgpu athlas go [duration_ms] [cadence_ms] [count] [present_every]");
+    print_shell_line(io, "gpgpu athlas_go [duration_ms] [cadence_ms] [count] [present_every]");
     print_shell_line(io, "gpgpu smoke");
 }
 
@@ -106,7 +103,7 @@ fn parse_atlas_args(args: &mut SplitWhitespace<'_>) -> Option<(u16, Option<Gpgpu
     Some((slot, Some(GpgpuPoint::new(x, y))))
 }
 
-fn parse_atlas_go_args(args: &mut SplitWhitespace<'_>) -> Option<(u64, u64, u32)> {
+fn parse_atlas_go_args(args: &mut SplitWhitespace<'_>) -> Option<(u64, u64, u32, u32)> {
     let duration_ms = match args.next() {
         Some(raw) => raw.parse::<u64>().ok()?,
         None => ATHLAS_GO_DEFAULT_DURATION_MS,
@@ -115,26 +112,31 @@ fn parse_atlas_go_args(args: &mut SplitWhitespace<'_>) -> Option<(u64, u64, u32)
         Some(raw) => raw.parse::<u64>().ok()?,
         None => ATHLAS_GO_DEFAULT_CADENCE_MS,
     };
-    let burst = match args.next() {
+    let count = match args.next() {
         Some(raw) => raw.parse::<u32>().ok()?,
-        None => ATHLAS_GO_DEFAULT_BURST,
+        None => ATHLAS_GO_DEFAULT_COUNT,
     }
-    .clamp(1, ATHLAS_GO_MAX_BURST);
+    .clamp(1, ATHLAS_GO_MAX_COUNT);
+    let present_every = match args.next() {
+        Some(raw) => raw.parse::<u32>().ok()?,
+        None => ATHLAS_GO_DEFAULT_PRESENT_EVERY,
+    }
+    .clamp(1, ATHLAS_GO_MAX_PRESENT_EVERY);
     if args.next().is_some() {
         return None;
     }
-    Some((duration_ms, cadence_ms, burst))
+    Some((duration_ms, cadence_ms, count, present_every))
 }
 
-fn parse_atlas_go_wild_args(args: &mut SplitWhitespace<'_>) -> Option<u64> {
-    let duration_ms = match args.next() {
-        Some(raw) => raw.parse::<u64>().ok()?,
-        None => ATHLAS_GO_DEFAULT_DURATION_MS,
+fn parse_atlas_work_args(args: &mut SplitWhitespace<'_>) -> Option<u32> {
+    let count = match args.next() {
+        Some(raw) => raw.parse::<u32>().ok()?,
+        None => 16,
     };
     if args.next().is_some() {
         return None;
     }
-    Some(duration_ms)
+    Some(count.clamp(1, 256))
 }
 
 fn hex4(values: [u32; 4]) -> AllocString {
@@ -183,12 +185,14 @@ fn print_status(io: &'static dyn ShellBackend2) {
     let copy_wide = copy_rect_rgba8_wide_upload_status();
     let clear = clear_rect_rgba8_white_upload_status();
     let empty = empty_eot_upload_status();
+    let work = sprite64_worklist_rgba8_upload_status();
     let msg = alloc::format!(
-        "gpgpu: copy_upload={} copy_wide_upload={} clear_upload={} empty_upload={} shell_surface={}x{} pitch={} gpu=0x008A0000",
+        "gpgpu: copy_upload={} copy_wide_upload={} clear_upload={} empty_upload={} worklist_upload={} shell_surface={}x{} pitch={} gpu=0x008A0000",
         artifact_status(copy.is_some()),
         artifact_status(copy_wide.is_some()),
         artifact_status(clear.is_some()),
         artifact_status(empty.is_some()),
+        artifact_status(work.is_some()),
         GPGPU_SHELL_SURFACE_WIDTH,
         GPGPU_SHELL_SURFACE_HEIGHT,
         GPGPU_SHELL_SURFACE_PITCH_BYTES,
@@ -314,6 +318,16 @@ fn run_atlas(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
         run_atlas_go(io, args);
         return;
     }
+    if args
+        .clone()
+        .next()
+        .map(|raw| raw.eq_ignore_ascii_case("work"))
+        .unwrap_or(false)
+    {
+        let _ = args.next();
+        run_atlas_work(io, args);
+        return;
+    }
 
     let Some((slot, dst_xy)) = parse_atlas_args(args) else {
         usage(io);
@@ -346,113 +360,73 @@ fn run_atlas(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
     print_shell_line(io, msg.as_str());
 }
 
-fn athlas_go_slot(rng: &mut SoftRng, slot_count: u16) -> u16 {
-    if slot_count == 0 {
-        return 0;
-    }
-    rng.usize_below(slot_count as usize) as u16
-}
-
-fn athlas_go_point(
-    rng: &mut SoftRng,
-    primary_width: u32,
-    primary_height: u32,
-    sprite_width: u32,
-    sprite_height: u32,
-) -> Option<GpgpuPoint> {
-    if primary_width == 0 || primary_height == 0 {
-        return None;
-    }
-    let max_x = primary_width.saturating_sub(sprite_width).max(1);
-    let max_y = primary_height.saturating_sub(sprite_height).max(1);
-    let x = rng.usize_below(max_x as usize) as u32;
-    let y = rng.usize_below(max_y as usize) as u32;
-    Some(GpgpuPoint::new(x as i32, y as i32))
-}
-
-fn athlas_go_grid_point(
-    rng: &mut SoftRng,
-    index: u32,
-    total: u32,
-    primary_width: u32,
-    primary_height: u32,
-    sprite_width: u32,
-    sprite_height: u32,
-) -> Option<GpgpuPoint> {
-    if primary_width == 0 || primary_height == 0 {
-        return None;
-    }
-    let columns = if total <= 4 { 2 } else { 4 };
-    let rows = total.div_ceil(columns).max(1);
-    let cell_w = primary_width / columns;
-    let cell_h = primary_height / rows;
-    if cell_w == 0 || cell_h == 0 {
-        return None;
-    }
-
-    let col = index % columns;
-    let row = index / columns;
-    let cell_x = col.saturating_mul(cell_w);
-    let cell_y = row.saturating_mul(cell_h);
-    let local_max_x = cell_w.saturating_sub(sprite_width);
-    let local_max_y = cell_h.saturating_sub(sprite_height);
-    let x = cell_x
-        .saturating_add(rng.usize_below(local_max_x.saturating_add(1) as usize) as u32)
-        .min(primary_width.saturating_sub(sprite_width));
-    let y = cell_y
-        .saturating_add(rng.usize_below(local_max_y.saturating_add(1) as usize) as u32)
-        .min(primary_height.saturating_sub(sprite_height));
-    Some(GpgpuPoint::new(x as i32, y as i32))
-}
-
-fn run_atlas_go(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
-    if args
-        .clone()
-        .next()
-        .map(|raw| raw.eq_ignore_ascii_case("wild"))
-        .unwrap_or(false)
-    {
-        let _ = args.next();
-        run_atlas_go_wild(io, args);
-        return;
-    }
-
-    let Some((duration_ms, cadence_ms, burst)) = parse_atlas_go_args(args) else {
+fn run_atlas_work(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+    let Some(count) = parse_atlas_work_args(args) else {
         usage(io);
         return;
     };
-    let slot_count = twemoji_slot_count();
-    if slot_count == 0 {
-        print_shell_line(io, "gpgpu athlas go: no twemoji slots");
+    let Some(result) = shell_twemoji_atlas_worklist_scanout(count) else {
+        print_shell_line(
+            io,
+            "gpgpu athlas work: no result (check primary surface, atlas cache, and worklist artifact)",
+        );
         return;
-    }
+    };
+    let msg = alloc::format!(
+        "gpgpu athlas work: mode=sprite64-worklist ok={} requested={} desc={} walkers={} pixels={} submit_ms={} present_ms={} total_ms={} last_id={} last_dst={},{} primary={}x{} slots={} atlas_gpu=0x{:X} desc_gpu=0x{:X} presented={}",
+        result.ok as u8,
+        result.requested,
+        result.descriptors,
+        result.walkers,
+        result.copied_pixels,
+        result.submit_ms,
+        result.present_ms,
+        result.total_ms,
+        result.last_slot,
+        result.last_dst_xy.x,
+        result.last_dst_xy.y,
+        result.primary_width,
+        result.primary_height,
+        result.slots,
+        result.atlas_gpu,
+        result.desc_gpu,
+        result.presented as u8
+    );
+    print_shell_line(io, msg.as_str());
+}
+
+fn run_atlas_go(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+    let Some((duration_ms, cadence_ms, count, present_every)) = parse_atlas_go_args(args) else {
+        usage(io);
+        return;
+    };
 
     let start_tick = now_ticks();
     let deadline_tick = start_tick.saturating_add(ticks_from_ms(duration_ms));
     let cadence_ticks = ticks_from_ms(cadence_ms);
     let mut next_launch_tick = start_tick;
     let start_seq = ATHLAS_GO_SEQUENCE.load(Ordering::Relaxed);
-    let mut rng = crate::tyche::soft_rng();
-    let mut ok = 0u32;
-    let mut fail = 0u32;
+    let mut ok_batches = 0u32;
+    let mut fail_batches = 0u32;
     let mut fail_none = 0u32;
     let mut fail_not_ok = 0u32;
-    let mut timeoutish = 0u32;
     let mut presented = 0u32;
+    let mut final_presented = 0u32;
+    let mut pending_present = 0u32;
     let mut measured = 0u32;
     let mut total_ms_sum = 0u64;
-    let mut total_stage_ms = 0u64;
-    let mut total_copy_ms = 0u64;
+    let mut total_submit_ms = 0u64;
+    let mut total_present_ms = 0u64;
     let mut max_total_ms = 0u64;
-    let mut max_stage_ms = 0u64;
-    let mut max_copy_ms = 0u64;
-    let mut total_spans = 0usize;
-    let mut total_submits = 0usize;
-    let mut batches = 0u32;
+    let mut max_submit_ms = 0u64;
+    let mut max_present_ms = 0u64;
+    let mut total_desc = 0usize;
+    let mut ok_desc = 0usize;
+    let mut total_pixels = 0usize;
+    let mut total_walkers = 0usize;
     let mut primary_width = 0u32;
     let mut primary_height = 0u32;
-    let mut sprite_width = 32u32;
-    let mut sprite_height = 32u32;
+    let mut slots = 0u16;
     let mut last_slot = 0u16;
     let mut last_xy = GpgpuPoint::new(0, 0);
 
@@ -461,80 +435,47 @@ fn run_atlas_go(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) 
             wait_until_tick(next_launch_tick);
         }
 
-        let mut requests = Vec::with_capacity(burst as usize);
-        for burst_index in 0..burst {
-            if now_ticks() >= deadline_tick {
-                break;
-            }
-            let _seq = ATHLAS_GO_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-            let slot = athlas_go_slot(&mut rng, slot_count);
-            let dst_xy = twemoji_lookup_slot_region(slot).and_then(|region| {
-                let sprite_w = u32::from(region.src_w.max(1));
-                let sprite_h = u32::from(region.src_h.max(1));
-                if burst <= 1 {
-                    athlas_go_point(&mut rng, primary_width, primary_height, sprite_w, sprite_h)
-                } else {
-                    athlas_go_grid_point(
-                        &mut rng,
-                        burst_index,
-                        burst,
-                        primary_width,
-                        primary_height,
-                        sprite_w,
-                        sprite_h,
-                    )
-                }
-            });
-            requests.push(GpgpuAtlasBatchRequest {
-                slot,
-                dst_xy,
-                src_width: None,
-                src_height: None,
-            });
+        if now_ticks() >= deadline_tick {
+            break;
         }
 
-        if !requests.is_empty() {
-            match shell_copy_twemoji_atlas_batch_scanout_hot(&requests) {
-                Some(result) => {
-                    batches = batches.saturating_add(1);
-                    measured = measured.saturating_add(1);
-                    primary_width = result.primary_width;
-                    primary_height = result.primary_height;
-                    sprite_width = result.max_sprite_width.max(1);
-                    sprite_height = result.max_sprite_height.max(1);
-                    last_slot = result.last_slot;
-                    last_xy = result.last_dst_xy;
-                    total_ms_sum = total_ms_sum.saturating_add(result.total_ms);
-                    total_stage_ms = total_stage_ms.saturating_add(result.stage_ms);
-                    total_copy_ms = total_copy_ms.saturating_add(result.copy_ms);
-                    max_total_ms = max_total_ms.max(result.total_ms);
-                    max_stage_ms = max_stage_ms.max(result.stage_ms);
-                    max_copy_ms = max_copy_ms.max(result.copy_ms);
-                    total_spans = total_spans.saturating_add(result.spans);
-                    total_submits = total_submits.saturating_add(result.submits);
-                    if result.presented {
-                        presented = presented.saturating_add(1);
-                    }
-                    if result.ok {
-                        ok = ok.saturating_add(result.copied_copies as u32);
-                    } else {
-                        ok = ok.saturating_add(result.copied_copies as u32);
-                        let failed = result.requested.saturating_sub(result.copied_copies) as u32;
-                        fail = fail.saturating_add(failed);
-                        fail_not_ok = fail_not_ok.saturating_add(failed);
-                        if result.copy_ms >= ATHLAS_GO_TIMEOUTISH_COPY_MS {
-                            timeoutish = timeoutish.saturating_add(1);
-                            wait_until_tick(
-                                now_ticks()
-                                    .saturating_add(ticks_from_ms(ATHLAS_GO_FAIL_BACKOFF_MS)),
-                            );
-                        }
-                    }
+        let _seq = ATHLAS_GO_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let next_batch = ok_batches.saturating_add(fail_batches).saturating_add(1);
+        let should_present = next_batch % present_every == 0;
+        match shell_twemoji_atlas_worklist_scanout_present(count, should_present) {
+            Some(result) => {
+                measured = measured.saturating_add(1);
+                primary_width = result.primary_width;
+                primary_height = result.primary_height;
+                slots = result.slots;
+                last_slot = result.last_slot;
+                last_xy = result.last_dst_xy;
+                total_desc = total_desc.saturating_add(result.descriptors);
+                total_walkers = total_walkers.saturating_add(result.walkers);
+                total_pixels = total_pixels.saturating_add(result.copied_pixels);
+                total_ms_sum = total_ms_sum.saturating_add(result.total_ms);
+                total_submit_ms = total_submit_ms.saturating_add(result.submit_ms);
+                total_present_ms = total_present_ms.saturating_add(result.present_ms);
+                max_total_ms = max_total_ms.max(result.total_ms);
+                max_submit_ms = max_submit_ms.max(result.submit_ms);
+                max_present_ms = max_present_ms.max(result.present_ms);
+                if result.presented {
+                    presented = presented.saturating_add(1);
+                    pending_present = 0;
+                } else if result.submitted {
+                    pending_present = pending_present.saturating_add(1);
                 }
-                None => {
-                    fail = fail.saturating_add(requests.len() as u32);
-                    fail_none = fail_none.saturating_add(requests.len() as u32);
+                if result.ok {
+                    ok_batches = ok_batches.saturating_add(1);
+                    ok_desc = ok_desc.saturating_add(result.descriptors);
+                } else {
+                    fail_batches = fail_batches.saturating_add(1);
+                    fail_not_ok = fail_not_ok.saturating_add(1);
                 }
+            }
+            None => {
+                fail_batches = fail_batches.saturating_add(1);
+                fail_none = fail_none.saturating_add(1);
             }
         }
 
@@ -543,100 +484,66 @@ fn run_atlas_go(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) 
         }
     }
 
-    let copies = ok.saturating_add(fail);
-    let avg_copy_ms = if copies == 0 {
+    if pending_present != 0 {
+        if let Some(present_ms) = shell_twemoji_atlas_worklist_present_scanout() {
+            final_presented = 1;
+            presented = presented.saturating_add(1);
+            total_present_ms = total_present_ms.saturating_add(present_ms);
+            max_present_ms = max_present_ms.max(present_ms);
+        }
+    }
+
+    let batches = ok_batches.saturating_add(fail_batches);
+    let avg_total_ms = if measured == 0 {
         0
     } else {
-        total_copy_ms / u64::from(measured.max(1))
+        total_ms_sum / u64::from(measured)
     };
-    let avg_stage_ms = if copies == 0 {
+    let avg_submit_ms = if measured == 0 {
         0
     } else {
-        total_stage_ms / u64::from(measured.max(1))
+        total_submit_ms / u64::from(measured)
     };
-    let avg_total_ms = if copies == 0 {
+    let avg_present_ms = if presented == 0 {
         0
     } else {
-        total_ms_sum / u64::from(measured.max(1))
+        total_present_ms / u64::from(presented)
     };
     let elapsed_ms = elapsed_ms_since(start_tick);
     let end_seq = ATHLAS_GO_SEQUENCE.load(Ordering::Relaxed);
     let msg = alloc::format!(
-        "gpgpu athlas go: mode=batch-walkers copies={} ok={} fail={} fail_none={} fail_not_ok={} timeoutish={} duration_ms={} elapsed_ms={} cadence_ms={} burst={} batches={} presented={} fail_backoff_ms={} seq={}..{} measured={} spans={} submits={} avg_ms={} avg_stage_ms={} avg_copy_ms={} max_ms={} max_stage_ms={} max_copy_ms={} last_id={} last_dst={},{} sprite={}x{} primary={}x{} slots={}",
-        copies,
-        ok,
-        fail,
+        "gpgpu athlas go: mode=sprite64-worklist batches={} ok={} fail={} fail_none={} fail_not_ok={} duration_ms={} elapsed_ms={} cadence_ms={} count={} present_every={} final_present={} seq={}..{} measured={} desc={} ok_desc={} walkers={} pixels={} presented={} avg_ms={} avg_submit_ms={} avg_present_ms={} max_ms={} max_submit_ms={} max_present_ms={} last_id={} last_dst={},{} primary={}x{} slots={}",
+        batches,
+        ok_batches,
+        fail_batches,
         fail_none,
         fail_not_ok,
-        timeoutish,
         duration_ms,
         elapsed_ms,
         cadence_ms,
-        burst,
-        batches,
-        presented,
-        ATHLAS_GO_FAIL_BACKOFF_MS,
+        count,
+        present_every,
+        final_presented,
         start_seq,
         end_seq,
         measured,
-        total_spans,
-        total_submits,
+        total_desc,
+        ok_desc,
+        total_walkers,
+        total_pixels,
+        presented,
         avg_total_ms,
-        avg_stage_ms,
-        avg_copy_ms,
+        avg_submit_ms,
+        avg_present_ms,
         max_total_ms,
-        max_stage_ms,
-        max_copy_ms,
+        max_submit_ms,
+        max_present_ms,
         last_slot,
         last_xy.x,
         last_xy.y,
-        sprite_width,
-        sprite_height,
         primary_width,
         primary_height,
-        slot_count
-    );
-    print_shell_line(io, msg.as_str());
-}
-
-fn run_atlas_go_wild(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
-    let Some(duration_ms) = parse_atlas_go_wild_args(args) else {
-        usage(io);
-        return;
-    };
-    let Some(result) = shell_twemoji_atlas_wild_cpu_scanout(duration_ms) else {
-        print_shell_line(
-            io,
-            "gpgpu athlas go wild: no result (check primary surface, atlas cache, and AP workers)",
-        );
-        return;
-    };
-    let msg = alloc::format!(
-        "gpgpu athlas go wild: mode=cpu-ap-plus-gpu-throughput ok={} workers={}/{} done={} cpu_copies={} cpu_pixels={} gpu_copies={} gpu_ok={} gpu_fail={} gpu_batches={} gpu_presented={} gpu_spans={} gpu_submits={} gpu_avg_copy_ms={} gpu_max_copy_ms={} duration_ms={} elapsed_ms={} present_ms={} last_cpu_id={} last_cpu_dst={},{} primary={}x{} slots={}",
-        result.ok as u8,
-        result.workers,
-        result.requested_workers,
-        result.done_workers,
-        result.cpu_copies,
-        result.cpu_pixels,
-        result.gpu_copies,
-        result.gpu_ok,
-        result.gpu_fail,
-        result.gpu_batches,
-        result.gpu_presented,
-        result.gpu_spans,
-        result.gpu_submits,
-        result.gpu_avg_copy_ms,
-        result.gpu_max_copy_ms,
-        result.duration_ms,
-        result.elapsed_ms,
-        result.present_ms,
-        result.last_slot,
-        result.last_dst_xy.x,
-        result.last_dst_xy.y,
-        result.primary_width,
-        result.primary_height,
-        result.slots
+        slots
     );
     print_shell_line(io, msg.as_str());
 }

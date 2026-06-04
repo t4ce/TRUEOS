@@ -24,11 +24,13 @@ macro_rules! hw_pic_info {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HwPicCodec {
     Jpeg,
+    H264,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HwPicStatus {
     Ready,
+    Streamed,
     Failed,
 }
 
@@ -90,6 +92,10 @@ pub(crate) fn submit_encoded(codec: HwPicCodec, encoded: &[u8]) -> Result<u32, i
 
 pub(crate) fn submit_jpeg(encoded: &[u8]) -> Result<u32, i32> {
     submit_encoded(HwPicCodec::Jpeg, encoded)
+}
+
+pub(crate) fn submit_h264(encoded: &[u8]) -> Result<u32, i32> {
+    submit_encoded(HwPicCodec::H264, encoded)
 }
 
 pub(crate) fn output_for_id(id: u32) -> Option<HwPicOutput> {
@@ -175,6 +181,7 @@ async fn hw_pic_service_inner() {
 fn process_job(job: HwPicJob) -> HwPicOutput {
     match job.codec {
         HwPicCodec::Jpeg => process_jpeg_job(job),
+        HwPicCodec::H264 => process_h264_probe_job(job),
     }
 }
 
@@ -203,6 +210,119 @@ fn failed_output(job: &HwPicJob, code: i32) -> HwPicOutput {
         phys_addr: 0,
         virt_addr: 0,
         error_code: code,
+    }
+}
+
+fn count_annexb_nals(encoded: &[u8]) -> (usize, u32) {
+    let mut count = 0usize;
+    let mut type_mask = 0u32;
+    let mut idx = 0usize;
+    while idx + 4 <= encoded.len() {
+        let start_len = if encoded[idx..].starts_with(&[0, 0, 1]) {
+            3usize
+        } else if encoded[idx..].starts_with(&[0, 0, 0, 1]) {
+            4usize
+        } else {
+            idx += 1;
+            continue;
+        };
+        let nal_off = idx + start_len;
+        if let Some(&header) = encoded.get(nal_off) {
+            let nal_type = header & 0x1F;
+            if nal_type < 32 {
+                type_mask |= 1u32 << nal_type;
+            }
+            count += 1;
+        }
+        idx = nal_off.saturating_add(1);
+    }
+    (count, type_mask)
+}
+
+fn process_h264_probe_job(job: HwPicJob) -> HwPicOutput {
+    log_stage(job.id, "job-start", true, "codec=h264", 0);
+    let Some(dev) = super::claimed_device() else {
+        log_stage(job.id, "device", false, "claimed_device=none", -2);
+        return failed_output(&job, -2);
+    };
+    log_stage(job.id, "device", true, "claimed_device=ok", 0);
+
+    let (engine, windows) = super::xelp_media2_ngin_hw_pic::default_decode_engine_and_window();
+    hw_pic_info!(
+        "intel/hw_pic-stage: id={} stage=route accepted=1 codec=h264 engine={} ring_gpu=0x{:X} ctx_gpu=0x{:X} batch_gpu=0x{:X} bitstream_gpu=0x{:X} output_gpu=0x{:X} result_gpu=0x{:X}\n",
+        job.id,
+        engine.name,
+        windows.ring_gpu_addr,
+        windows.context_gpu_addr,
+        windows.batch_gpu_addr,
+        windows.bitstream_gpu_addr,
+        windows.output_surface_gpu_addr,
+        windows.result_gpu_addr
+    );
+
+    let Some(backing) = super::xelp_media2_ngin_hw_pic::ensure_decode_backing(dev, windows) else {
+        log_stage(job.id, "backing", false, "alloc-or-map-failed", -5);
+        return failed_output(&job, -5);
+    };
+    if job.encoded.len() > backing.bitstream_bytes {
+        log_stage(job.id, "input", false, "encoded-larger-than-bitstream", -12);
+        return failed_output(&job, -12);
+    }
+
+    let (nal_count, nal_type_mask) = count_annexb_nals(job.encoded.as_slice());
+    hw_pic_info!(
+        "intel/hw_pic-stage: id={} stage=input accepted=1 codec=h264 encoded=0x{:X} bitstream_capacity=0x{:X} annexb_nals={} nal_type_mask=0x{:08X}\n",
+        job.id,
+        job.encoded.len(),
+        backing.bitstream_bytes,
+        nal_count,
+        nal_type_mask
+    );
+
+    let Some(proof) = super::xelp_media2_ngin_hw_pic::stream_encoded_to_bitstream(
+        dev,
+        engine,
+        windows,
+        backing,
+        job.encoded.as_slice(),
+    ) else {
+        log_stage(job.id, "stream", false, "copy-to-bitstream-failed", -6);
+        return failed_output(&job, -6);
+    };
+
+    hw_pic_info!(
+        "intel/hw_pic: h264 stream-probe id={} engine={} bytes=0x{:X}/0x{:X} annexb_nals={} nal_type_mask=0x{:08X} bitstream_gpu=0x{:X} bitstream_phys=0x{:X} bitstream_virt=0x{:X} sig=0x{:08X} fw_engine_ack_reg=0x{:X} fw_engine_ack=0x{:08X} fw_engine_awake={} fw_global_ack=0x{:08X} fw_awake={}\n",
+        job.id,
+        proof.engine_name,
+        proof.bytes_written,
+        proof.capacity,
+        nal_count,
+        nal_type_mask,
+        proof.bitstream_gpu_addr,
+        proof.bitstream_phys,
+        proof.bitstream_virt,
+        proof.signature,
+        proof.forcewake_engine_ack_reg,
+        proof.forcewake_engine_ack,
+        proof.forcewake_engine_awake,
+        proof.forcewake_global_ack,
+        proof.forcewake_awake_count
+    );
+
+    log_stage(job.id, "submit", false, "h264-command-sequence-not-yet-emitted", -31);
+    HwPicOutput {
+        id: job.id,
+        codec: job.codec,
+        status: HwPicStatus::Streamed,
+        format: HwPicPixelFormat::Unknown,
+        width: 0,
+        height: 0,
+        pitch_bytes: 0,
+        byte_len: proof.bytes_written,
+        gpu_addr: windows.bitstream_gpu_addr,
+        phys_addr: backing.bitstream_phys,
+        virt_addr: backing.bitstream_virt as usize,
+        error_code: -31,
     }
 }
 

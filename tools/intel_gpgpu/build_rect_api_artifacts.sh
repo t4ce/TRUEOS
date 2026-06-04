@@ -31,6 +31,7 @@ kernels=(
     alpha_blend_rgba8_over
     glyph_mask_rgba8
     stamp_mandel_rgba8
+    sprite64_worklist_rgba8
 )
 
 for kernel in "${kernels[@]}"; do

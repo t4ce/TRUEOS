@@ -62,6 +62,7 @@ const DISPLAY_PLANE1_BOOT_DEMO_ENABLED: bool = true;
 const MEDIA_BOOT_DEMO_ENABLED: bool = false;
 const MEDIA_BOOT_DEMO_DELAY_MS: u64 = 5_000;
 const MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT: u32 = 3;
+const HW_VID_PROBE_H264: &[u8] = include_bytes!("../../tools/vid/x31_head_movie_first_frame.h264");
 static INIT: AtomicBool = AtomicBool::new(false);
 static CLAIMED_DEVICE: Mutex<Option<Dev>> = Mutex::new(None);
 
@@ -176,6 +177,7 @@ pub fn init_once() {
     let _ = self::gpgpu::upload_copy_rect_rgba8_wide_kernel();
     let _ = self::gpgpu::upload_clear_rect_rgba8_white_kernel();
     let _ = self::gpgpu::upload_empty_eot_kernel();
+    let _ = self::gpgpu::upload_sprite64_worklist_rgba8_kernel();
     let _ = self::gpgpu::submit_direct_rcs_smoke_once();
     let _ = self::gpgpu::submit_empty_eot_walker_once();
     let _ = self::gpgpu::submit_clear_rect_rgba8_white_strip_once();
@@ -376,6 +378,10 @@ pub(crate) fn hw_pic_submit_jpeg(encoded: &[u8]) -> Result<u32, i32> {
     self::hw_pic::submit_jpeg(encoded)
 }
 
+pub(crate) fn hw_pic_submit_h264(encoded: &[u8]) -> Result<u32, i32> {
+    self::hw_pic::submit_h264(encoded)
+}
+
 pub(crate) async fn hw_pic_wait_output_for_id(
     id: u32,
     timeout_ms: u64,
@@ -390,6 +396,53 @@ pub(crate) fn hw_pic_snapshot() -> self::hw_pic::HwPicQueueSnapshot {
 pub(crate) fn hw_logo_present_task()
 -> Result<embassy_executor::SpawnToken<impl Send>, embassy_executor::SpawnError> {
     self::display::hw_logo_present_task()
+}
+
+#[embassy_executor::task]
+pub(crate) async fn hw_vid_probe_task() {
+    crate::log!(
+        "intel/hw_vid: probe begin source=embedded-x31-first-frame codec=h264 bytes=0x{:X}\n",
+        HW_VID_PROBE_H264.len()
+    );
+    let id = match self::hw_pic_submit_h264(HW_VID_PROBE_H264) {
+        Ok(id) => id,
+        Err(code) => {
+            let snap = self::hw_pic_snapshot();
+            crate::log!(
+                "intel/hw_vid: submit failed code={} bytes=0x{:X} pending={} outputs={} service={}\n",
+                code,
+                HW_VID_PROBE_H264.len(),
+                snap.pending,
+                snap.outputs,
+                snap.service_started as u8
+            );
+            return;
+        }
+    };
+    crate::log!(
+        "intel/hw_vid: submit ok id={} bytes=0x{:X} source=embedded-x31-first-frame\n",
+        id,
+        HW_VID_PROBE_H264.len()
+    );
+    let Some(output) = self::hw_pic_wait_output_for_id(id, 5000).await else {
+        crate::log!("intel/hw_vid: output timeout id={}\n", id);
+        return;
+    };
+    crate::log!(
+        "intel/hw_vid: output id={} status={:?} fmt={:?} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} err={} note=stream-probe-only\n",
+        output.id,
+        output.status,
+        output.format,
+        output.byte_len,
+        output.gpu_addr,
+        output.phys_addr,
+        output.error_code
+    );
+}
+
+pub(crate) fn hw_vid_probe_task_spawn()
+-> Result<embassy_executor::SpawnToken<impl Send>, embassy_executor::SpawnError> {
+    self::hw_vid_probe_task()
 }
 
 pub async fn run_media_source_warmup_async() {

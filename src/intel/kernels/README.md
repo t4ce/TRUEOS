@@ -44,6 +44,7 @@ The next embedded API seed artifacts are compiled but not exercised at boot:
 - `alpha_blend_rgba8_over.cl`: source-over RGBA8 blend
 - `glyph_mask_rgba8.cl`: 8-bit coverage mask blended with packed RGBA8 color
 - `stamp_mandel_rgba8.cl`: ten-iteration Mandelbrot stamp using destination x/y as both stamp origin and view offset
+- `sprite64_worklist_rgba8.cl`: fixed 64x64 sprite descriptors copied/blended from atlas to destination; shell path batches descriptor slices as multiple walkers in one command buffer
 
 `artifacts/adls/copy_rect_rgba8.bin` is the current Alder Lake S build produced
 with Intel `ocloc`/IGC. Its SHA-256 is:
