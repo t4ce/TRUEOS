@@ -5,9 +5,12 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use super::super::{ShellBackend2, print_shell_line};
 use crate::intel::gpgpu::{
     GPGPU_SHELL_SURFACE_HEIGHT, GPGPU_SHELL_SURFACE_PITCH_BYTES, GPGPU_SHELL_SURFACE_WIDTH,
-    GpgpuPoint, GpgpuRect, clear_rect_rgba8_white_upload_status, copy_rect_rgba8_upload_status,
-    copy_rect_rgba8_wide_upload_status, empty_eot_upload_status, shell_clear_white_rgba8,
-    shell_copy_rgba8, shell_copy_scanout_center_rgba8, shell_copy_twemoji_atlas_slot_scanout,
+    GpgpuPoint, GpgpuRect, canvas512_3d_project_rgba8_upload_status,
+    canvas512_3d_rotate_quat_q16_upload_status, canvas512_3d_scale_q16_upload_status,
+    canvas512_3d_translate_q16_upload_status, clear_rect_rgba8_white_upload_status,
+    copy_rect_rgba8_upload_status, copy_rect_rgba8_wide_upload_status, empty_eot_upload_status,
+    shell_canvas512_3d_spin, shell_clear_white_rgba8, shell_copy_rgba8,
+    shell_copy_scanout_center_rgba8, shell_copy_twemoji_atlas_slot_scanout,
     shell_twemoji_atlas_worklist_present_scanout, shell_twemoji_atlas_worklist_scanout,
     shell_twemoji_atlas_worklist_scanout_present, sprite64_worklist_rgba8_upload_status,
 };
@@ -19,6 +22,8 @@ const ATHLAS_GO_DEFAULT_COUNT: u32 = 256;
 const ATHLAS_GO_DEFAULT_PRESENT_EVERY: u32 = 1;
 const ATHLAS_GO_MAX_COUNT: u32 = 256;
 const ATHLAS_GO_MAX_PRESENT_EVERY: u32 = 1024;
+const CANVAS_DEFAULT_DURATION_MS: u64 = 15_000;
+const CANVAS_DEFAULT_CADENCE_MS: u64 = 100;
 
 static ATHLAS_GO_SEQUENCE: AtomicU32 = AtomicU32::new(0);
 
@@ -31,6 +36,7 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "gpgpu athlas work [count]");
     print_shell_line(io, "gpgpu athlas go [duration_ms] [cadence_ms] [count] [present_every]");
     print_shell_line(io, "gpgpu athlas_go [duration_ms] [cadence_ms] [count] [present_every]");
+    print_shell_line(io, "gpgpu canvas [duration_ms] [cadence_ms]");
     print_shell_line(io, "gpgpu smoke");
 }
 
@@ -139,6 +145,21 @@ fn parse_atlas_work_args(args: &mut SplitWhitespace<'_>) -> Option<u32> {
     Some(count.clamp(1, 256))
 }
 
+fn parse_canvas_args(args: &mut SplitWhitespace<'_>) -> Option<(u64, u64)> {
+    let duration_ms = match args.next() {
+        Some(raw) => raw.parse::<u64>().ok()?,
+        None => CANVAS_DEFAULT_DURATION_MS,
+    };
+    let cadence_ms = match args.next() {
+        Some(raw) => raw.parse::<u64>().ok()?,
+        None => CANVAS_DEFAULT_CADENCE_MS,
+    };
+    if args.next().is_some() {
+        return None;
+    }
+    Some((duration_ms, cadence_ms))
+}
+
 fn hex4(values: [u32; 4]) -> AllocString {
     alloc::format!(
         "[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]",
@@ -186,13 +207,21 @@ fn print_status(io: &'static dyn ShellBackend2) {
     let clear = clear_rect_rgba8_white_upload_status();
     let empty = empty_eot_upload_status();
     let work = sprite64_worklist_rgba8_upload_status();
+    let canvas = canvas512_3d_project_rgba8_upload_status();
+    let translate = canvas512_3d_translate_q16_upload_status();
+    let scale = canvas512_3d_scale_q16_upload_status();
+    let rotate = canvas512_3d_rotate_quat_q16_upload_status();
     let msg = alloc::format!(
-        "gpgpu: copy_upload={} copy_wide_upload={} clear_upload={} empty_upload={} worklist_upload={} shell_surface={}x{} pitch={} gpu=0x008A0000",
+        "gpgpu: copy_upload={} copy_wide_upload={} clear_upload={} empty_upload={} worklist_upload={} canvas512_upload={} transform_uploads={}/{}/{} shell_surface={}x{} pitch={} gpu=0x008A0000",
         artifact_status(copy.is_some()),
         artifact_status(copy_wide.is_some()),
         artifact_status(clear.is_some()),
         artifact_status(empty.is_some()),
         artifact_status(work.is_some()),
+        artifact_status(canvas.is_some()),
+        artifact_status(translate.is_some()),
+        artifact_status(scale.is_some()),
+        artifact_status(rotate.is_some()),
         GPGPU_SHELL_SURFACE_WIDTH,
         GPGPU_SHELL_SURFACE_HEIGHT,
         GPGPU_SHELL_SURFACE_PITCH_BYTES,
@@ -548,6 +577,47 @@ fn run_atlas_go(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) 
     print_shell_line(io, msg.as_str());
 }
 
+fn run_canvas(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+    let Some((duration_ms, cadence_ms)) = parse_canvas_args(args) else {
+        usage(io);
+        return;
+    };
+    let Some(result) = shell_canvas512_3d_spin(duration_ms, cadence_ms) else {
+        print_shell_line(
+            io,
+            "gpgpu canvas: no result (check primary surface, iGPU claim, and canvas artifact)",
+        );
+        return;
+    };
+    let avg_submit_ms = if result.submitted == 0 {
+        0
+    } else {
+        result.total_submit_ms / u64::from(result.submitted)
+    };
+    let msg = alloc::format!(
+        "gpgpu canvas: mode=canvas512-cube-transform-project ok={} frames={} submitted={} presented={} duration_ms={} elapsed_ms={} cadence_ms={} avg_submit_ms={} max_submit_ms={} visible={} stamped={} vertices={} half_px={} canvas={},{} primary={}x{} last_angle={}",
+        result.ok as u8,
+        result.frames,
+        result.submitted,
+        result.presented,
+        result.duration_ms,
+        result.elapsed_ms,
+        result.cadence_ms,
+        avg_submit_ms,
+        result.max_submit_ms,
+        result.visible_points,
+        result.stamped_pixels,
+        result.vertex_count,
+        result.radius_px,
+        result.canvas_xy.x,
+        result.canvas_xy.y,
+        result.primary_width,
+        result.primary_height,
+        result.last_angle_deg,
+    );
+    print_shell_line(io, msg.as_str());
+}
+
 pub(crate) fn try_parse(
     io: &'static dyn ShellBackend2,
     args: &mut SplitWhitespace<'_>,
@@ -573,6 +643,8 @@ pub(crate) fn try_parse(
         run_atlas(io, args);
     } else if cmd.eq_ignore_ascii_case("athlas_go") {
         run_atlas_go(io, args);
+    } else if cmd.eq_ignore_ascii_case("canvas") {
+        run_canvas(io, args);
     } else if cmd.eq_ignore_ascii_case("smoke") {
         if args.next().is_some() {
             usage(io);
