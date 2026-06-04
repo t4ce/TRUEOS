@@ -178,6 +178,10 @@ pub fn init_once() {
     let _ = self::gpgpu::upload_clear_rect_rgba8_white_kernel();
     let _ = self::gpgpu::upload_empty_eot_kernel();
     let _ = self::gpgpu::upload_sprite64_worklist_rgba8_kernel();
+    let _ = self::gpgpu::upload_canvas512_3d_project_rgba8_kernel();
+    let _ = self::gpgpu::upload_canvas512_3d_translate_q16_kernel();
+    let _ = self::gpgpu::upload_canvas512_3d_scale_q16_kernel();
+    let _ = self::gpgpu::upload_canvas512_3d_rotate_quat_q16_kernel();
     let _ = self::gpgpu::submit_direct_rcs_smoke_once();
     let _ = self::gpgpu::submit_empty_eot_walker_once();
     let _ = self::gpgpu::submit_clear_rect_rgba8_white_strip_once();
@@ -186,6 +190,8 @@ pub fn init_once() {
     let _ = self::gpgpu::submit_copy_rect_rgba8_256x2_once();
     let _ = self::gpgpu::submit_copy_rect_rgba8_wide_256x2_once();
     let _ = self::gpgpu::submit_rect_api_smoke_once();
+    let _ = self::gpgpu::submit_canvas512_3d_project_once();
+    let _ = self::gpgpu::submit_canvas512_3d_transform_smoke_once();
     self::fw_probe::log_probe_modules(dev.device_id);
     self::dmc::wire_load_path(dev);
     let huc_fw = self::huc::load_fw();

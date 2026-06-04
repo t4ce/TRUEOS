@@ -36,7 +36,7 @@ binding, parameter packing, and walker submission.
 - no memory writes
 - useful as a compiled EOT/scheduler bring-up artifact
 
-The next embedded API seed artifacts are compiled but not exercised at boot:
+The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 
 - `fill_rect_rgba8.cl`: parameterized RGBA8 fill
 - `fill_circle_rgba8.cl`: parameterized RGBA8 circle fill clipped by a rect
@@ -45,6 +45,23 @@ The next embedded API seed artifacts are compiled but not exercised at boot:
 - `glyph_mask_rgba8.cl`: 8-bit coverage mask blended with packed RGBA8 color
 - `stamp_mandel_rgba8.cl`: ten-iteration Mandelbrot stamp using destination x/y as both stamp origin and view offset
 - `sprite64_worklist_rgba8.cl`: fixed 64x64 sprite descriptors copied/blended from atlas to destination; shell path batches descriptor slices as multiple walkers in one command buffer
+- `canvas512_3d_project_rgba8.cl`: fixed 512x512 Q16 vec3 projection into packed XY/RGBA point records
+- `canvas512_3d_translate_q16.cl`: range/subset Q16 vec3 translation from source int4 vertices to destination int4 vertices
+- `canvas512_3d_scale_q16.cl`: range/subset Q16 vec3 component scale from source int4 vertices to destination int4 vertices
+- `canvas512_3d_rotate_quat_q16.cl`: range/subset Q16 vec3 quaternion rotation from source int4 vertices to destination int4 vertices
+
+The canvas512 transform kernels use the same SIMD16 lane-stride shape. Their
+OpenCL cross-thread argument order is:
+
+```text
+src_vertices_q16, dst_vertices_q16, src_first_vertex, dst_first_vertex, vertex_count, delta_q16
+src_vertices_q16, dst_vertices_q16, src_first_vertex, dst_first_vertex, vertex_count, scale_q16
+src_vertices_q16, dst_vertices_q16, src_first_vertex, dst_first_vertex, vertex_count, quat_q16
+```
+
+The final `int4` argument is 16-byte aligned in the cross-thread payload.
+After the three `uint` fields, the CPU payload leaves one dword of padding
+before writing the `int4` lanes.
 
 `artifacts/adls/copy_rect_rgba8.bin` is the current Alder Lake S build produced
 with Intel `ocloc`/IGC. Its SHA-256 is:
