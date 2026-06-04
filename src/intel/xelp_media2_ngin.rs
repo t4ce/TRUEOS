@@ -549,7 +549,7 @@ fn current_topology() -> MediaTopology {
         default_workload: MediaWorkloadKind::DecodeFrame,
     };
     MediaTopology {
-        sku_name: "xelp-jpeg-only",
+        sku_name: "xelp-media-probe",
         active_engine_count: 1,
         planned_engine_count: 1,
         engines: [
@@ -565,7 +565,7 @@ fn current_topology() -> MediaTopology {
 
 fn current_api_shape(transport: MediaSubmissionTransport) -> MediaApiShape {
     let mut api = MediaApiShape::empty();
-    api.route_count = 2;
+    api.route_count = 3;
     api.routes[0] = MediaApiRoute {
         name: "media.jpeg.submit",
         workload: MediaWorkloadKind::DecodeBitstream,
@@ -574,6 +574,13 @@ fn current_api_shape(transport: MediaSubmissionTransport) -> MediaApiShape {
         summary: "submit one boot-logo JPEG through the VCS media path",
     };
     api.routes[1] = MediaApiRoute {
+        name: "media.h264.stream_probe",
+        workload: MediaWorkloadKind::DecodeBitstream,
+        preferred_engine_class: Some(MediaEngineClass::VideoDecode),
+        transport,
+        summary: "copy one embedded H.264 access unit into the VCS bitstream path",
+    };
+    api.routes[2] = MediaApiRoute {
         name: "media.observe.snapshot",
         workload: MediaWorkloadKind::SessionSnapshot,
         preferred_engine_class: None,

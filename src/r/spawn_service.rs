@@ -596,6 +596,10 @@ fn spawn_hw_pic_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| crate::intel::hw_pic_service())
 }
 
+fn spawn_hw_vid_probe_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |_worker_spawner| crate::intel::hw_vid_probe_task_spawn())
+}
+
 fn spawn_hw_logo_present_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| crate::intel::hw_logo_present_task())
 }
@@ -1233,9 +1237,9 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 #[cfg(feature = "trueos_rdp")]
-const TASK_COUNT: usize = 72;
+const TASK_COUNT: usize = 73;
 #[cfg(not(feature = "trueos_rdp"))]
-const TASK_COUNT: usize = 70;
+const TASK_COUNT: usize = 71;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1412,6 +1416,13 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         intel_media_engine_gate,
         &HW_PIC_SERVICE_STARTED,
         spawn_hw_pic_service,
+    ),
+    TaskSpec::enabled_gated(
+        "hw_vid_probe_task",
+        0,
+        intel_media_engine_gate,
+        &HW_VID_PROBE_STARTED,
+        spawn_hw_vid_probe_task,
     ),
     TaskSpec::enabled_gated(
         "hw_logo_present_task",

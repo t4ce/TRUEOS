@@ -29,6 +29,9 @@ pub(crate) const GLYPH_MASK_RGBA8_OPENCL_SOURCE: &str = include_str!("kernels/gl
 pub(crate) const STAMP_MANDEL_RGBA8_KERNEL_NAME: &str = "stamp_mandel_rgba8";
 pub(crate) const STAMP_MANDEL_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/stamp_mandel_rgba8.cl");
+pub(crate) const SPRITE64_WORKLIST_RGBA8_KERNEL_NAME: &str = "sprite64_worklist_rgba8";
+pub(crate) const SPRITE64_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
+    include_str!("kernels/sprite64_worklist_rgba8.cl");
 pub(crate) const COPY_RECT_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/copy_rect_rgba8.bin");
 pub(crate) const COPY_RECT_RGBA8_ADLS_SPV: &[u8] =
@@ -67,6 +70,10 @@ pub(crate) const STAMP_MANDEL_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/stamp_mandel_rgba8.bin");
 pub(crate) const STAMP_MANDEL_RGBA8_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/stamp_mandel_rgba8.spv");
+pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/sprite64_worklist_rgba8.bin");
+pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/sprite64_worklist_rgba8.spv");
 pub(crate) const COPY_RECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x10, 0x86, 0x60, 0x24, 0xAA, 0xFF, 0xAE, 0x96, 0xF9, 0x2C, 0xFC, 0x25, 0xA5, 0xFB, 0x18, 0x8C,
     0xA4, 0x21, 0x99, 0x47, 0x89, 0xAF, 0xBC, 0x4D, 0xBA, 0x3D, 0xDC, 0x29, 0x0B, 0xD5, 0x83, 0xAB,
@@ -107,14 +114,20 @@ pub(crate) const STAMP_MANDEL_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x1E, 0x6F, 0xB6, 0xC8, 0x84, 0xCC, 0xB4, 0x19, 0x62, 0x32, 0x48, 0x1F, 0xC0, 0x95, 0xEC, 0xB5,
     0xC9, 0xCC, 0x95, 0xF7, 0x3D, 0xD6, 0x7B, 0x93, 0xF0, 0xC5, 0x9D, 0xEA, 0xC7, 0xAF, 0xF1, 0xE1,
 ];
+pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
+    0xF2, 0x43, 0x59, 0x84, 0x03, 0x79, 0x48, 0x82, 0x10, 0x4E, 0x77, 0xEB, 0x0F, 0x3E, 0x14, 0xB4,
+    0xF1, 0x2C, 0x10, 0xBF, 0x8B, 0xD0, 0xB6, 0x8A, 0xB5, 0xFD, 0xED, 0x63, 0x04, 0x86, 0x87, 0x67,
+];
 
 const COPY_RECT_RGBA8_ADLS_GPU: u64 = 0x0D20_0000;
 const COPY_RECT_RGBA8_WIDE_ADLS_GPU: u64 = 0x0D23_0000;
 const CLEAR_RECT_RGBA8_WHITE_ADLS_GPU: u64 = 0x0D21_0000;
 const EMPTY_EOT_ADLS_GPU: u64 = 0x0D22_0000;
+const SPRITE64_WORKLIST_RGBA8_ADLS_GPU: u64 = 0x0D24_0000;
 const COPY_RECT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const CLEAR_RECT_RGBA8_WHITE_TEXT_OFFSET_BYTES: u64 = 0x40;
 const EMPTY_EOT_TEXT_OFFSET_BYTES: u64 = 0x40;
+const SPRITE64_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 
 const RCS_RING_BASE: usize = 0x0000_2000;
 const RCS_RING_TAIL: usize = RCS_RING_BASE + 0x30;
@@ -221,6 +234,31 @@ const COPY_RECT_SURFACE_STATE_DWORDS: usize = 16;
 const COPY_RECT_CROSS_THREAD_BYTES: usize = 96;
 const COPY_RECT_PER_THREAD_BYTES: usize = 96;
 const COPY_RECT_INDIRECT_BYTES: usize = COPY_RECT_CROSS_THREAD_BYTES + COPY_RECT_PER_THREAD_BYTES;
+const SPRITE64_WORKLIST_IDD_OFFSET_BYTES: usize = 0x1000;
+const SPRITE64_WORKLIST_BINDING_TABLE_OFFSET_BYTES: usize = 0x1040;
+const SPRITE64_WORKLIST_ATLAS_SURFACE_STATE_OFFSET_BYTES: usize = 0x1080;
+const SPRITE64_WORKLIST_DST_SURFACE_STATE_OFFSET_BYTES: usize = 0x10C0;
+const SPRITE64_WORKLIST_DESC_SURFACE_STATE_OFFSET_BYTES: usize = 0x1100;
+const SPRITE64_WORKLIST_PAYLOAD_OFFSET_BYTES: usize = 0x1200;
+const SPRITE64_WORKLIST_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
+const SPRITE64_WORKLIST_CROSS_THREAD_BYTES: usize = 96;
+const SPRITE64_WORKLIST_PER_THREAD_BYTES: usize = 96;
+const SPRITE64_WORKLIST_INDIRECT_BYTES: usize =
+    SPRITE64_WORKLIST_CROSS_THREAD_BYTES + SPRITE64_WORKLIST_PER_THREAD_BYTES;
+const SPRITE64_WORKLIST_PRE_MARKER_SLOT: usize = 7;
+const SPRITE64_WORKLIST_POST_MARKER_SLOT: usize = 6;
+const SPRITE64_WORKLIST_PRE_MARKER: u32 = 0xC0DE_5701;
+const SPRITE64_WORKLIST_POST_MARKER: u32 = 0xC0DE_5702;
+const SPRITE64_WORKLIST_ATLAS_GPU: u64 = 0x0400_0000;
+const SPRITE64_WORKLIST_DESC_GPU: u64 = 0x0580_0000;
+const SPRITE64_WORKLIST_CELL_PIXELS: u32 = 64;
+const SPRITE64_WORKLIST_ATLAS_COLUMNS: u32 = 16;
+const SPRITE64_WORKLIST_MAX_DESCS: usize = 256;
+const SPRITE64_WORKLIST_DESCS_PER_WALKER: usize = 16;
+const SPRITE64_WORKLIST_MAX_WALKERS: usize =
+    SPRITE64_WORKLIST_MAX_DESCS / SPRITE64_WORKLIST_DESCS_PER_WALKER;
+const SPRITE64_WORKLIST_DESC_BYTES: usize =
+    SPRITE64_WORKLIST_MAX_DESCS * core::mem::size_of::<Sprite64WorklistRgba8Desc>();
 const COPY_RECT_TEST_WIDTH: u32 = 4;
 const COPY_RECT_TEST_HEIGHT: u32 = 1;
 const COPY_RECT_TEST_PIXELS: usize =
@@ -326,24 +364,17 @@ pub(crate) const GPGPU_SHELL_SURFACE_PITCH_BYTES: u32 =
     GPGPU_SHELL_SURFACE_WIDTH * core::mem::size_of::<u32>() as u32;
 const GPGPU_SHELL_SURFACE_BYTES: usize =
     (GPGPU_SHELL_SURFACE_PITCH_BYTES as usize) * (GPGPU_SHELL_SURFACE_HEIGHT as usize);
-const ATHLAS_WILD_MAX_WORKERS: usize = 16;
-const ATHLAS_WILD_WORKER_TASK_POOL: usize = 16;
-const ATHLAS_WILD_PRESENT_PAD_MS: u64 = 100;
-const ATHLAS_WILD_GPU_BURST: u32 = 16;
 
 static COPY_RECT_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static COPY_RECT_RGBA8_WIDE_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static CLEAR_RECT_RGBA8_WHITE_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static EMPTY_EOT_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
+static SPRITE64_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static DIRECT_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static GPGPU_SHELL_SURFACE: Mutex<Option<GpgpuShellSurface>> = Mutex::new(None);
-static ATHLAS_WILD_JOB_ID: AtomicU32 = AtomicU32::new(1);
-static ATHLAS_WILD_DONE: AtomicU32 = AtomicU32::new(0);
-static ATHLAS_WILD_COPIES: AtomicU32 = AtomicU32::new(0);
-static ATHLAS_WILD_PIXELS: AtomicU32 = AtomicU32::new(0);
-static ATHLAS_WILD_LAST_SLOT: AtomicU32 = AtomicU32::new(0);
-static ATHLAS_WILD_LAST_X: AtomicU32 = AtomicU32::new(0);
-static ATHLAS_WILD_LAST_Y: AtomicU32 = AtomicU32::new(0);
+static GPGPU_SPRITE64_WORKLIST_ATLAS: Once<Option<GpgpuSprite64WorklistAtlasSurface>> = Once::new();
+static GPGPU_SPRITE64_WORKLIST_DESC: Mutex<Option<GpgpuSprite64WorklistDescBuffer>> =
+    Mutex::new(None);
 static GPGPU_TWEMOJI_ATLAS: Once<Option<GpgpuTwemojiAtlasCache>> = Once::new();
 static DIRECT_RCS_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 static DIRECT_RCS_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
@@ -391,6 +422,30 @@ pub(crate) struct StampMandelRgba8Params {
     pub(crate) dst_y: u32,
     pub(crate) width: u32,
     pub(crate) height: u32,
+}
+
+pub(crate) const SPRITE64_WORKLIST_FLAG_SRC_OVER: u32 = 1 << 0;
+pub(crate) const SPRITE64_WORKLIST_FLAG_TINT_RGB: u32 = 1 << 1;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct Sprite64WorklistRgba8Desc {
+    pub(crate) atlas_xy: u32,
+    pub(crate) dst_xy: u32,
+    pub(crate) flags: u32,
+    pub(crate) color_rgba: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct Sprite64WorklistRgba8Params {
+    pub(crate) atlas_gpu: u64,
+    pub(crate) dst_gpu: u64,
+    pub(crate) desc_gpu: u64,
+    pub(crate) atlas_pitch_bytes: u32,
+    pub(crate) dst_pitch_bytes: u32,
+    pub(crate) desc_base: u32,
+    pub(crate) desc_count: u32,
 }
 
 #[repr(C)]
@@ -691,64 +746,24 @@ pub(crate) struct GpgpuShellAtlasHotCopyResult {
 }
 
 #[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuAtlasBatchRequest {
-    pub(crate) slot: u16,
-    pub(crate) dst_xy: Option<GpgpuPoint>,
-    pub(crate) src_width: Option<u32>,
-    pub(crate) src_height: Option<u32>,
-}
-
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuShellAtlasBatchCopyResult {
+pub(crate) struct GpgpuShellAtlasWorklistResult {
     pub(crate) ok: bool,
+    pub(crate) submitted: bool,
     pub(crate) requested: usize,
-    pub(crate) staged_copies: usize,
-    pub(crate) copied_copies: usize,
-    pub(crate) failed_copies: usize,
-    pub(crate) last_slot: u16,
-    pub(crate) last_dst_xy: GpgpuPoint,
-    pub(crate) primary_width: u32,
-    pub(crate) primary_height: u32,
-    pub(crate) pixels: usize,
-    pub(crate) spans: usize,
-    pub(crate) expected_spans: usize,
-    pub(crate) submits: usize,
-    pub(crate) expected_submits: usize,
-    pub(crate) staged: usize,
-    pub(crate) copied: usize,
-    pub(crate) presented: bool,
-    pub(crate) total_ms: u64,
-    pub(crate) stage_ms: u64,
-    pub(crate) copy_ms: u64,
-    pub(crate) max_sprite_width: u32,
-    pub(crate) max_sprite_height: u32,
-}
-
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuShellAtlasWildCpuResult {
-    pub(crate) ok: bool,
-    pub(crate) workers: u32,
-    pub(crate) requested_workers: u32,
-    pub(crate) done_workers: u32,
-    pub(crate) cpu_copies: u32,
-    pub(crate) cpu_pixels: u32,
-    pub(crate) gpu_copies: u32,
-    pub(crate) gpu_ok: u32,
-    pub(crate) gpu_fail: u32,
-    pub(crate) gpu_batches: u32,
-    pub(crate) gpu_presented: u32,
-    pub(crate) gpu_spans: usize,
-    pub(crate) gpu_submits: usize,
-    pub(crate) gpu_avg_copy_ms: u64,
-    pub(crate) gpu_max_copy_ms: u64,
-    pub(crate) duration_ms: u64,
-    pub(crate) elapsed_ms: u64,
+    pub(crate) descriptors: usize,
+    pub(crate) walkers: usize,
+    pub(crate) copied_pixels: usize,
+    pub(crate) submit_ms: u64,
     pub(crate) present_ms: u64,
-    pub(crate) last_slot: u16,
-    pub(crate) last_dst_xy: GpgpuPoint,
+    pub(crate) total_ms: u64,
+    pub(crate) atlas_gpu: u64,
+    pub(crate) desc_gpu: u64,
     pub(crate) primary_width: u32,
     pub(crate) primary_height: u32,
     pub(crate) slots: u16,
+    pub(crate) last_slot: u16,
+    pub(crate) last_dst_xy: GpgpuPoint,
+    pub(crate) presented: bool,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -760,21 +775,33 @@ struct GpgpuShellSurface {
 unsafe impl Send for GpgpuShellSurface {}
 unsafe impl Sync for GpgpuShellSurface {}
 
+#[derive(Copy, Clone, Debug)]
+struct GpgpuSprite64WorklistAtlasSurface {
+    surface: GpgpuRgba8Surface,
+    columns: u32,
+    slots: u16,
+}
+
+unsafe impl Send for GpgpuSprite64WorklistAtlasSurface {}
+unsafe impl Sync for GpgpuSprite64WorklistAtlasSurface {}
+
+#[derive(Copy, Clone, Debug)]
+struct GpgpuSprite64WorklistDescBuffer {
+    phys: u64,
+    gpu: u64,
+    virt: *mut u8,
+    bytes: usize,
+}
+
+unsafe impl Send for GpgpuSprite64WorklistDescBuffer {}
+unsafe impl Sync for GpgpuSprite64WorklistDescBuffer {}
+
 #[derive(Clone, Debug)]
 struct GpgpuTwemojiAtlasCache {
     width: u32,
     height: u32,
     rgba: Vec<u8>,
     xrgb: Vec<u32>,
-}
-
-#[derive(Copy, Clone, Debug)]
-struct StagedAtlasCopy {
-    slot: u16,
-    atlas_src_rect: GpgpuRect,
-    stage_rect: GpgpuRect,
-    dst_xy: GpgpuPoint,
-    pixels: usize,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -891,6 +918,14 @@ pub(crate) const STAMP_MANDEL_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKe
     bin_sha256: STAMP_MANDEL_RGBA8_ADLS_BIN_SHA256,
 };
 
+pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
+    name: SPRITE64_WORKLIST_RGBA8_KERNEL_NAME,
+    target: "adls",
+    bin: SPRITE64_WORKLIST_RGBA8_ADLS_BIN,
+    spv: SPRITE64_WORKLIST_RGBA8_ADLS_SPV,
+    bin_sha256: SPRITE64_WORKLIST_RGBA8_ADLS_BIN_SHA256,
+};
+
 pub(crate) fn copy_rect_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *COPY_RECT_RGBA8_UPLOAD.lock()
 }
@@ -905,6 +940,10 @@ pub(crate) fn clear_rect_rgba8_white_upload_status() -> Option<UploadedKernelArt
 
 pub(crate) fn empty_eot_upload_status() -> Option<UploadedKernelArtifact> {
     *EMPTY_EOT_UPLOAD.lock()
+}
+
+pub(crate) fn sprite64_worklist_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
+    *SPRITE64_WORKLIST_RGBA8_UPLOAD.lock()
 }
 
 pub(crate) fn upload_copy_rect_rgba8_kernel() -> Option<UploadedKernelArtifact> {
@@ -981,6 +1020,28 @@ pub(crate) fn upload_empty_eot_kernel() -> Option<UploadedKernelArtifact> {
 
     let upload = upload_artifact(dev, EMPTY_EOT_ADLS_ARTIFACT, EMPTY_EOT_ADLS_GPU)?;
     *EMPTY_EOT_UPLOAD.lock() = Some(upload);
+    Some(upload)
+}
+
+pub(crate) fn upload_sprite64_worklist_rgba8_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *SPRITE64_WORKLIST_RGBA8_UPLOAD.lock() {
+        return Some(upload);
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: sprite64-worklist-rgba8 upload skipped reason=no-claimed-device\n"
+        );
+        return None;
+    };
+
+    let upload = upload_artifact(
+        dev,
+        SPRITE64_WORKLIST_RGBA8_ADLS_ARTIFACT,
+        SPRITE64_WORKLIST_RGBA8_ADLS_GPU,
+    )?;
+    *SPRITE64_WORKLIST_RGBA8_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
 
@@ -1395,16 +1456,24 @@ pub(crate) fn shell_copy_twemoji_atlas_slot_scanout_hot(
     shell_copy_twemoji_atlas_slot_scanout_hot_with(slot, dst_xy_override, true)
 }
 
-pub(crate) fn shell_copy_twemoji_atlas_batch_scanout_hot(
-    requests: &[GpgpuAtlasBatchRequest],
-) -> Option<GpgpuShellAtlasBatchCopyResult> {
+pub(crate) fn shell_twemoji_atlas_worklist_scanout(
+    requested_count: u32,
+) -> Option<GpgpuShellAtlasWorklistResult> {
+    shell_twemoji_atlas_worklist_scanout_present(requested_count, true)
+}
+
+pub(crate) fn shell_twemoji_atlas_worklist_scanout_present(
+    requested_count: u32,
+    present: bool,
+) -> Option<GpgpuShellAtlasWorklistResult> {
     let total_start_tick = direct_rcs_now_tick();
-    if requests.is_empty() {
+    let target = super::display::primary_surface_gpgpu_marker_target()?;
+    if target.virt.is_null()
+        || target.width < SPRITE64_WORKLIST_CELL_PIXELS
+        || target.height < SPRITE64_WORKLIST_CELL_PIXELS
+    {
         return None;
     }
-
-    let shell = shell_surface_once()?;
-    let target = super::display::primary_surface_gpgpu_marker_target()?;
     let primary = GpgpuRgba8Surface::new(
         target.phys,
         target.gpu,
@@ -1413,446 +1482,106 @@ pub(crate) fn shell_copy_twemoji_atlas_batch_scanout_hot(
         target.height,
         target.pitch_bytes,
     )?;
-    if target.virt.is_null() {
+    let atlas = sprite64_worklist_atlas_once()?;
+    let desc = sprite64_worklist_desc_buffer_once()?;
+    let count = (requested_count as usize)
+        .clamp(1, SPRITE64_WORKLIST_MAX_DESCS)
+        .min(atlas.slots as usize);
+    if count == 0 {
         return None;
     }
-    let atlas = twemoji_atlas_cache_once()?;
 
-    shell_zero_surface(shell);
-    let stage_start_tick = direct_rcs_now_tick();
-    let mut staged = Vec::with_capacity(requests.len());
-    let mut copies = Vec::with_capacity(requests.len());
-    let mut occupied_dst = Vec::with_capacity(requests.len());
-    let mut stage_x = 0u32;
-    let mut stage_y = 0u32;
-    let mut stage_row_h = 0u32;
-    let mut dst_x = primary.width.saturating_div(4);
-    let mut dst_y = primary.height.saturating_div(3);
-    let mut dst_row_h = 0u32;
-    let mut staged_pixels = 0usize;
-    let mut max_sprite_width = 0u32;
-    let mut max_sprite_height = 0u32;
-
-    for request in requests {
-        let Some(region) =
-            crate::gfx::althlasfont::twemoji::twemoji_lookup_slot_region(request.slot)
-        else {
-            continue;
-        };
-        let src_width = request
-            .src_width
-            .unwrap_or_else(|| u32::from(region.src_w))
-            .clamp(1, u32::from(region.src_w.max(1)));
-        let src_height = request
-            .src_height
-            .unwrap_or_else(|| u32::from(region.src_h))
-            .clamp(1, u32::from(region.src_h.max(1)));
-        let src_offset_x = u32::from(region.src_w).saturating_sub(src_width) / 2;
-        let src_offset_y = u32::from(region.src_h).saturating_sub(src_height) / 2;
-        let src_rect = GpgpuRect::new(
-            region.src_x as i32 + src_offset_x as i32,
-            region.src_y as i32 + src_offset_y as i32,
-            src_width,
-            src_height,
-        );
-        if !rect_is_inside_atlas(atlas.width, atlas.height, src_rect)
-            || src_rect.width > shell.surface.width
-            || src_rect.height > shell.surface.height
-            || src_rect.width > primary.width
-            || src_rect.height > primary.height
-        {
-            continue;
+    let mut rng = crate::tyche::soft_rng();
+    let mut last_slot = 0u16;
+    let mut last_dst_xy = GpgpuPoint::new(0, 0);
+    unsafe {
+        core::ptr::write_bytes(desc.virt, 0, desc.bytes);
+        let descs = desc.virt as *mut Sprite64WorklistRgba8Desc;
+        for index in 0..count {
+            let slot = rng.usize_below(atlas.slots as usize) as u16;
+            let atlas_x = (u32::from(slot) % atlas.columns) * SPRITE64_WORKLIST_CELL_PIXELS;
+            let atlas_y = (u32::from(slot) / atlas.columns) * SPRITE64_WORKLIST_CELL_PIXELS;
+            let max_x = target.width.saturating_sub(SPRITE64_WORKLIST_CELL_PIXELS);
+            let max_y = target.height.saturating_sub(SPRITE64_WORKLIST_CELL_PIXELS);
+            let dst_x = rng.usize_below(max_x.saturating_add(1) as usize) as u32;
+            let dst_y = rng.usize_below(max_y.saturating_add(1) as usize) as u32;
+            let desc_value = Sprite64WorklistRgba8Desc {
+                atlas_xy: ((atlas_y & 0xFFFF) << 16) | (atlas_x & 0xFFFF),
+                dst_xy: ((dst_y & 0xFFFF) << 16) | (dst_x & 0xFFFF),
+                flags: SPRITE64_WORKLIST_FLAG_SRC_OVER,
+                color_rgba: 0x00FF_FFFF,
+            };
+            core::ptr::write_volatile(descs.add(index), desc_value);
+            last_slot = slot;
+            last_dst_xy = GpgpuPoint::new(dst_x as i32, dst_y as i32);
         }
-
-        if stage_x.saturating_add(src_rect.width) > shell.surface.width {
-            stage_x = 0;
-            stage_y = stage_y.saturating_add(stage_row_h);
-            stage_row_h = 0;
-        }
-        if stage_y.saturating_add(src_rect.height) > shell.surface.height {
-            break;
-        }
-        let stage_xy = GpgpuPoint::new(stage_x as i32, stage_y as i32);
-        let stage_rect = GpgpuRect::new(stage_xy.x, stage_xy.y, src_rect.width, src_rect.height);
-        stage_x = stage_x.saturating_add(src_rect.width);
-        stage_row_h = stage_row_h.max(src_rect.height);
-
-        let dst_xy = if let Some(explicit) = request.dst_xy {
-            let dst_rect = GpgpuRect::new(explicit.x, explicit.y, src_rect.width, src_rect.height);
-            if !rect_is_inside(primary, dst_rect)
-                || occupied_dst
-                    .iter()
-                    .any(|used| rects_overlap(*used, dst_rect))
-            {
-                continue;
-            }
-            explicit
-        } else {
-            if dst_x.saturating_add(src_rect.width) > primary.width {
-                dst_x = 0;
-                dst_y = dst_y.saturating_add(dst_row_h);
-                dst_row_h = 0;
-            }
-            if dst_y.saturating_add(src_rect.height) > primary.height {
-                break;
-            }
-            let xy = GpgpuPoint::new(dst_x as i32, dst_y as i32);
-            dst_x = dst_x.saturating_add(src_rect.width);
-            dst_row_h = dst_row_h.max(src_rect.height);
-            xy
-        };
-        let dst_rect = GpgpuRect::new(dst_xy.x, dst_xy.y, src_rect.width, src_rect.height);
-
-        let pixels = shell_stage_atlas_over_scanout_xrgb_at(
-            shell, atlas, src_rect, target, dst_xy, stage_xy,
-        )?;
-        staged_pixels = staged_pixels.saturating_add(pixels);
-        max_sprite_width = max_sprite_width.max(src_rect.width);
-        max_sprite_height = max_sprite_height.max(src_rect.height);
-        occupied_dst.push(dst_rect);
-        staged.push(StagedAtlasCopy {
-            slot: request.slot,
-            atlas_src_rect: src_rect,
-            stage_rect,
-            dst_xy,
-            pixels,
-        });
-        copies.push(GpgpuCopyRect {
-            src: shell.surface,
-            src_rect: stage_rect,
-            dst: primary,
-            dst_xy,
-        });
     }
+    super::dma_flush(desc.virt, desc.bytes);
 
-    let stage_ms = direct_rcs_elapsed_ms_since(stage_start_tick);
-    if copies.is_empty() {
-        return None;
-    }
-    super::dma_flush(shell.virt, shell.surface.bytes);
+    let params = Sprite64WorklistRgba8Params {
+        atlas_gpu: atlas.surface.gpu,
+        dst_gpu: primary.gpu,
+        desc_gpu: desc.gpu,
+        atlas_pitch_bytes: atlas.surface.pitch_bytes,
+        dst_pitch_bytes: primary.pitch_bytes,
+        desc_base: 0,
+        desc_count: count as u32,
+    };
+    let walkers = sprite64_worklist_walker_count(count);
 
-    let copy_start_tick = direct_rcs_now_tick();
-    let stats = copy_rects_rgba8_wide_stats(&copies);
-    let copy_ms = direct_rcs_elapsed_ms_since(copy_start_tick);
-    let expected_spans = staged.iter().fold(0usize, |sum, copy| {
-        sum.saturating_add(copy_rect_wide_expected_spans(copy.stage_rect))
-    });
-    let expected_submits = expected_spans.div_ceil(COPY_RECT_BATCH_MAX_SPANS);
-    let copied_ok = stats.spans == expected_spans && stats.submits == expected_submits;
-    let copied_pixels = if copied_ok { staged_pixels } else { 0 };
-    let copied_copies = if copied_ok { staged.len() } else { 0 };
-    let (flush_offset, flush_bytes) = primary_flush_range_for_rects(primary, &occupied_dst)?;
-    let presented = super::display::notify_primary_surface_external_write(
-        "gpgpu-twemoji-atlas-go-batch",
-        flush_offset,
-        flush_bytes,
-    );
-    let last = staged.last().copied()?;
-    let failed_copies = requests.len().saturating_sub(staged.len());
+    let submit_start_tick = direct_rcs_now_tick();
+    let submitted = submit_sprite64_worklist(atlas.surface, primary, desc, params);
+    let submit_ms = direct_rcs_elapsed_ms_since(submit_start_tick);
+    let present_start_tick = direct_rcs_now_tick();
+    let presented = if submitted && present {
+        super::display::notify_primary_surface_external_write(
+            "gpgpu-athlas-worklist",
+            0,
+            target.byte_len,
+        )
+    } else {
+        false
+    };
+    let present_ms = direct_rcs_elapsed_ms_since(present_start_tick);
 
-    Some(GpgpuShellAtlasBatchCopyResult {
-        ok: failed_copies == 0 && copied_ok && presented,
-        requested: requests.len(),
-        staged_copies: staged.len(),
-        copied_copies,
-        failed_copies,
-        last_slot: last.slot,
-        last_dst_xy: last.dst_xy,
+    Some(GpgpuShellAtlasWorklistResult {
+        ok: submitted && (!present || presented),
+        submitted,
+        requested: requested_count as usize,
+        descriptors: count,
+        walkers,
+        copied_pixels: count
+            .saturating_mul(SPRITE64_WORKLIST_CELL_PIXELS as usize)
+            .saturating_mul(SPRITE64_WORKLIST_CELL_PIXELS as usize),
+        submit_ms,
+        present_ms,
+        total_ms: direct_rcs_elapsed_ms_since(total_start_tick),
+        atlas_gpu: atlas.surface.gpu,
+        desc_gpu: desc.gpu,
         primary_width: primary.width,
         primary_height: primary.height,
-        pixels: staged
-            .iter()
-            .fold(0usize, |sum, copy| sum.saturating_add(copy.pixels)),
-        spans: stats.spans,
-        expected_spans,
-        submits: stats.submits,
-        expected_submits,
-        staged: staged_pixels,
-        copied: copied_pixels,
+        slots: atlas.slots,
+        last_slot,
+        last_dst_xy,
         presented,
-        total_ms: direct_rcs_elapsed_ms_since(total_start_tick),
-        stage_ms,
-        copy_ms,
-        max_sprite_width,
-        max_sprite_height,
     })
 }
 
-pub(crate) fn shell_twemoji_atlas_wild_cpu_scanout(
-    duration_ms: u64,
-) -> Option<GpgpuShellAtlasWildCpuResult> {
-    let total_start_tick = direct_rcs_now_tick();
+pub(crate) fn shell_twemoji_atlas_worklist_present_scanout() -> Option<u64> {
     let target = super::display::primary_surface_gpgpu_marker_target()?;
-    if target.virt.is_null() || target.width == 0 || target.height == 0 {
+    if target.virt.is_null() || target.byte_len == 0 {
         return None;
     }
-    let atlas = twemoji_atlas_cache_once()?;
-    let slot_count = crate::gfx::althlasfont::twemoji::twemoji_slot_count();
-    if slot_count == 0 {
-        return None;
-    }
-
-    let mut worker_slots = crate::workers::background_worker_slots();
-    worker_slots.truncate(ATHLAS_WILD_MAX_WORKERS);
-    let requested_workers = worker_slots.len() as u32;
-    if worker_slots.is_empty() {
-        return Some(GpgpuShellAtlasWildCpuResult {
-            duration_ms,
-            elapsed_ms: direct_rcs_elapsed_ms_since(total_start_tick),
-            primary_width: target.width,
-            primary_height: target.height,
-            slots: slot_count,
-            ..GpgpuShellAtlasWildCpuResult::default()
-        });
-    }
-
-    let job_id = ATHLAS_WILD_JOB_ID.fetch_add(1, Ordering::Relaxed);
-    ATHLAS_WILD_DONE.store(0, Ordering::Release);
-    ATHLAS_WILD_COPIES.store(0, Ordering::Release);
-    ATHLAS_WILD_PIXELS.store(0, Ordering::Release);
-    ATHLAS_WILD_LAST_SLOT.store(0, Ordering::Release);
-    ATHLAS_WILD_LAST_X.store(0, Ordering::Release);
-    ATHLAS_WILD_LAST_Y.store(0, Ordering::Release);
-
-    let deadline_tick = total_start_tick.saturating_add(direct_rcs_ticks_from_ms(duration_ms));
-    let mut launched = 0u32;
-    for slot in worker_slots {
-        let Some(spawner) = crate::workers::spawner_for_slot(slot) else {
-            continue;
-        };
-        let seed = ((job_id as u64) << 32)
-            ^ ((slot as u64) << 16)
-            ^ direct_rcs_now_tick()
-            ^ 0xA747_11DA_C0DE_5150;
-        let Ok(token) = athlas_wild_cpu_worker_task(
-            job_id,
-            launched,
-            requested_workers.max(1),
-            deadline_tick,
-            seed,
-            target,
-            atlas,
-            slot_count,
-        ) else {
-            continue;
-        };
-        spawner.spawn(token);
-        launched = launched.saturating_add(1);
-    }
-
-    let mut gpu_rng = crate::tyche::SoftRng::from_seed(
-        ((job_id as u64) << 32) ^ direct_rcs_now_tick() ^ 0x6A09_E667_F3BC_C909,
-    );
-    let mut gpu_ok = 0u32;
-    let mut gpu_fail = 0u32;
-    let mut gpu_batches = 0u32;
-    let mut gpu_presented = 0u32;
-    let mut gpu_spans = 0usize;
-    let mut gpu_submits = 0usize;
-    let mut gpu_copy_ms_sum = 0u64;
-    let mut gpu_max_copy_ms = 0u64;
-
-    while direct_rcs_now_tick() < deadline_tick {
-        let mut requests = Vec::with_capacity(ATHLAS_WILD_GPU_BURST as usize);
-        for burst_index in 0..ATHLAS_WILD_GPU_BURST {
-            let slot = gpu_rng.usize_below(slot_count as usize) as u16;
-            let dst_xy = crate::gfx::althlasfont::twemoji::twemoji_lookup_slot_region(slot)
-                .and_then(|region| {
-                    athlas_wild_grid_point(
-                        &mut gpu_rng,
-                        burst_index,
-                        ATHLAS_WILD_GPU_BURST,
-                        target.width,
-                        target.height,
-                        u32::from(region.src_w.max(1)),
-                        u32::from(region.src_h.max(1)),
-                    )
-                });
-            requests.push(GpgpuAtlasBatchRequest {
-                slot,
-                dst_xy,
-                src_width: None,
-                src_height: None,
-            });
-        }
-
-        let Some(result) = shell_copy_twemoji_atlas_batch_scanout_hot(&requests) else {
-            gpu_fail = gpu_fail.saturating_add(requests.len() as u32);
-            continue;
-        };
-        gpu_batches = gpu_batches.saturating_add(1);
-        if result.presented {
-            gpu_presented = gpu_presented.saturating_add(1);
-        }
-        gpu_spans = gpu_spans.saturating_add(result.spans);
-        gpu_submits = gpu_submits.saturating_add(result.submits);
-        gpu_copy_ms_sum = gpu_copy_ms_sum.saturating_add(result.copy_ms);
-        gpu_max_copy_ms = gpu_max_copy_ms.max(result.copy_ms);
-        gpu_ok = gpu_ok.saturating_add(result.copied_copies as u32);
-        gpu_fail =
-            gpu_fail.saturating_add(result.requested.saturating_sub(result.copied_copies) as u32);
-    }
-
-    let wait_deadline =
-        deadline_tick.saturating_add(direct_rcs_ticks_from_ms(ATHLAS_WILD_PRESENT_PAD_MS));
-    while direct_rcs_now_tick() < wait_deadline
-        && ATHLAS_WILD_DONE.load(Ordering::Acquire) < launched
-    {
-        core::hint::spin_loop();
-    }
-
     let present_start_tick = direct_rcs_now_tick();
-    let presented = super::display::notify_primary_surface_external_write(
-        "gpgpu-athlas-wild-cpu",
+    if super::display::notify_primary_surface_external_write(
+        "gpgpu-athlas-worklist-final",
         0,
         target.byte_len,
-    );
-    let present_ms = direct_rcs_elapsed_ms_since(present_start_tick);
-    let done = ATHLAS_WILD_DONE.load(Ordering::Acquire);
-    let copies = ATHLAS_WILD_COPIES.load(Ordering::Acquire);
-    let pixels = ATHLAS_WILD_PIXELS.load(Ordering::Acquire);
-    let last_x = ATHLAS_WILD_LAST_X.load(Ordering::Acquire);
-    let last_y = ATHLAS_WILD_LAST_Y.load(Ordering::Acquire);
-    let gpu_avg_copy_ms = if gpu_batches == 0 {
-        0
+    ) {
+        Some(direct_rcs_elapsed_ms_since(present_start_tick))
     } else {
-        gpu_copy_ms_sum / u64::from(gpu_batches)
-    };
-
-    Some(GpgpuShellAtlasWildCpuResult {
-        ok: presented && launched != 0 && done == launched && gpu_fail == 0,
-        workers: launched,
-        requested_workers,
-        done_workers: done,
-        cpu_copies: copies,
-        cpu_pixels: pixels,
-        gpu_copies: gpu_ok.saturating_add(gpu_fail),
-        gpu_ok,
-        gpu_fail,
-        gpu_batches,
-        gpu_presented,
-        gpu_spans,
-        gpu_submits,
-        gpu_avg_copy_ms,
-        gpu_max_copy_ms,
-        duration_ms,
-        elapsed_ms: direct_rcs_elapsed_ms_since(total_start_tick),
-        present_ms,
-        last_slot: ATHLAS_WILD_LAST_SLOT.load(Ordering::Acquire) as u16,
-        last_dst_xy: GpgpuPoint::new(last_x as i32, last_y as i32),
-        primary_width: target.width,
-        primary_height: target.height,
-        slots: slot_count,
-    })
-}
-
-fn athlas_wild_grid_point(
-    rng: &mut crate::tyche::SoftRng,
-    index: u32,
-    total: u32,
-    primary_width: u32,
-    primary_height: u32,
-    sprite_width: u32,
-    sprite_height: u32,
-) -> Option<GpgpuPoint> {
-    if primary_width == 0 || primary_height == 0 {
-        return None;
+        None
     }
-    let columns = if total <= 4 { 2 } else { 4 };
-    let rows = total.div_ceil(columns).max(1);
-    let cell_w = primary_width / columns;
-    let cell_h = primary_height / rows;
-    if cell_w == 0 || cell_h == 0 {
-        return None;
-    }
-
-    let col = index % columns;
-    let row = index / columns;
-    let cell_x = col.saturating_mul(cell_w);
-    let cell_y = row.saturating_mul(cell_h);
-    let local_max_x = cell_w.saturating_sub(sprite_width);
-    let local_max_y = cell_h.saturating_sub(sprite_height);
-    let x = cell_x
-        .saturating_add(rng.usize_below(local_max_x.saturating_add(1) as usize) as u32)
-        .min(primary_width.saturating_sub(sprite_width));
-    let y = cell_y
-        .saturating_add(rng.usize_below(local_max_y.saturating_add(1) as usize) as u32)
-        .min(primary_height.saturating_sub(sprite_height));
-    Some(GpgpuPoint::new(x as i32, y as i32))
-}
-
-#[embassy_executor::task(pool_size = ATHLAS_WILD_WORKER_TASK_POOL)]
-async fn athlas_wild_cpu_worker_task(
-    _job_id: u32,
-    worker_index: u32,
-    worker_count: u32,
-    deadline_tick: u64,
-    seed: u64,
-    target: super::display::PrimarySurfaceGpgpuTarget,
-    atlas: &'static GpgpuTwemojiAtlasCache,
-    slot_count: u16,
-) {
-    let mut rng = crate::tyche::SoftRng::from_seed(seed);
-    let worker_count = worker_count.max(1);
-    let lane_start = target.width.saturating_mul(worker_index) / worker_count;
-    let lane_end = if worker_index + 1 >= worker_count {
-        target.width
-    } else {
-        target.width.saturating_mul(worker_index + 1) / worker_count
-    };
-    let lane_width = lane_end.saturating_sub(lane_start).max(1);
-    let mut copies = 0u32;
-    let mut pixels = 0u32;
-    let mut last_slot = 0u16;
-    let mut last_x = lane_start;
-    let mut last_y = 0u32;
-
-    while direct_rcs_now_tick() < deadline_tick {
-        let slot = rng.usize_below(slot_count as usize) as u16;
-        let Some(region) = crate::gfx::althlasfont::twemoji::twemoji_lookup_slot_region(slot)
-        else {
-            continue;
-        };
-        let src_rect = GpgpuRect::new(
-            region.src_x as i32,
-            region.src_y as i32,
-            u32::from(region.src_w.max(1)),
-            u32::from(region.src_h.max(1)),
-        );
-        if !rect_is_inside_atlas(atlas.width, atlas.height, src_rect)
-            || src_rect.width > target.width
-            || src_rect.height > target.height
-        {
-            continue;
-        }
-
-        let local_max_x = lane_width.saturating_sub(src_rect.width);
-        let x = lane_start
-            .saturating_add(rng.usize_below(local_max_x.saturating_add(1) as usize) as u32)
-            .min(target.width.saturating_sub(src_rect.width));
-        let y = rng.usize_below(
-            target
-                .height
-                .saturating_sub(src_rect.height)
-                .saturating_add(1) as usize,
-        ) as u32;
-        let dst_xy = GpgpuPoint::new(x as i32, y as i32);
-        let written = primary_blit_atlas_xrgb_volatile(target, atlas, src_rect, dst_xy);
-        if written != 0 {
-            copies = copies.saturating_add(1);
-            pixels = pixels.saturating_add(written as u32);
-            last_slot = slot;
-            last_x = x;
-            last_y = y;
-        }
-    }
-
-    ATHLAS_WILD_COPIES.fetch_add(copies, Ordering::AcqRel);
-    ATHLAS_WILD_PIXELS.fetch_add(pixels, Ordering::AcqRel);
-    ATHLAS_WILD_LAST_SLOT.store(last_slot as u32, Ordering::Release);
-    ATHLAS_WILD_LAST_X.store(last_x, Ordering::Release);
-    ATHLAS_WILD_LAST_Y.store(last_y, Ordering::Release);
-    ATHLAS_WILD_DONE.fetch_add(1, Ordering::AcqRel);
 }
 
 fn shell_copy_twemoji_atlas_slot_scanout_hot_with(
@@ -2915,6 +2644,118 @@ fn shell_surface_once() -> Option<GpgpuShellSurface> {
     Some(shell)
 }
 
+fn sprite64_worklist_atlas_once() -> Option<GpgpuSprite64WorklistAtlasSurface> {
+    GPGPU_SPRITE64_WORKLIST_ATLAS
+        .call_once(|| {
+            let atlas = twemoji_atlas_cache_once()?;
+            let slot_count = crate::gfx::althlasfont::twemoji::twemoji_slot_count();
+            if slot_count == 0 {
+                return None;
+            }
+            let columns = SPRITE64_WORKLIST_ATLAS_COLUMNS;
+            let rows = (u32::from(slot_count)).div_ceil(columns);
+            let width = columns.saturating_mul(SPRITE64_WORKLIST_CELL_PIXELS);
+            let height = rows.saturating_mul(SPRITE64_WORKLIST_CELL_PIXELS);
+            let pitch_bytes = width.checked_mul(core::mem::size_of::<u32>() as u32)?;
+            let bytes = (pitch_bytes as usize).checked_mul(height as usize)?;
+            let (phys, virt) = crate::dma::alloc(bytes, super::WARM_ALIGN)?;
+
+            unsafe {
+                core::ptr::write_bytes(virt, 0, bytes);
+            }
+
+            let dst = virt as *mut u32;
+            let dst_pitch_pixels = width as usize;
+            for slot in 0..slot_count {
+                let Some(region) =
+                    crate::gfx::althlasfont::twemoji::twemoji_lookup_slot_region(slot)
+                else {
+                    continue;
+                };
+                let src_w = u32::from(region.src_w)
+                    .min(SPRITE64_WORKLIST_CELL_PIXELS)
+                    .min(atlas.width.saturating_sub(u32::from(region.src_x)));
+                let src_h = u32::from(region.src_h)
+                    .min(SPRITE64_WORKLIST_CELL_PIXELS)
+                    .min(atlas.height.saturating_sub(u32::from(region.src_y)));
+                if src_w == 0 || src_h == 0 {
+                    continue;
+                }
+
+                let cell_x = (u32::from(slot) % columns) * SPRITE64_WORKLIST_CELL_PIXELS;
+                let cell_y = (u32::from(slot) / columns) * SPRITE64_WORKLIST_CELL_PIXELS;
+                let pad_x = (SPRITE64_WORKLIST_CELL_PIXELS - src_w) / 2;
+                let pad_y = (SPRITE64_WORKLIST_CELL_PIXELS - src_h) / 2;
+
+                for y in 0..src_h {
+                    for x in 0..src_w {
+                        let atlas_x = u32::from(region.src_x) + x;
+                        let atlas_y = u32::from(region.src_y) + y;
+                        let src_idx =
+                            ((atlas_y as usize) * (atlas.width as usize) + atlas_x as usize) * 4;
+                        let r = *atlas.rgba.get(src_idx)? as u32;
+                        let g = *atlas.rgba.get(src_idx + 1)? as u32;
+                        let b = *atlas.rgba.get(src_idx + 2)? as u32;
+                        let a = *atlas.rgba.get(src_idx + 3)? as u32;
+                        let out_x = cell_x + pad_x + x;
+                        let out_y = cell_y + pad_y + y;
+                        let dst_idx = (out_y as usize) * dst_pitch_pixels + out_x as usize;
+                        unsafe {
+                            core::ptr::write_volatile(
+                                dst.add(dst_idx),
+                                (a << 24) | (r << 16) | (g << 8) | b,
+                            );
+                        }
+                    }
+                }
+            }
+
+            super::dma_flush(virt, bytes);
+            let Some(surface) = GpgpuRgba8Surface::new(
+                phys,
+                SPRITE64_WORKLIST_ATLAS_GPU,
+                bytes,
+                width,
+                height,
+                pitch_bytes,
+            ) else {
+                crate::dma::dealloc(virt, bytes);
+                return None;
+            };
+
+            Some(GpgpuSprite64WorklistAtlasSurface {
+                surface,
+                columns,
+                slots: slot_count,
+            })
+        })
+        .as_ref()
+        .copied()
+}
+
+fn sprite64_worklist_desc_buffer_once() -> Option<GpgpuSprite64WorklistDescBuffer> {
+    let mut guard = GPGPU_SPRITE64_WORKLIST_DESC.lock();
+    if let Some(buffer) = *guard {
+        return Some(buffer);
+    }
+
+    let bytes = align_up(SPRITE64_WORKLIST_DESC_BYTES, super::WARM_ALIGN)?;
+    let (phys, virt) = crate::dma::alloc(bytes, super::WARM_ALIGN)?;
+    unsafe {
+        core::ptr::write_bytes(virt, 0, bytes);
+    }
+    super::dma_flush(virt, bytes);
+
+    let buffer = GpgpuSprite64WorklistDescBuffer {
+        phys,
+        gpu: SPRITE64_WORKLIST_DESC_GPU,
+        virt,
+        bytes,
+    };
+    *guard = Some(buffer);
+    Some(buffer)
+}
+
 fn shell_zero_surface(shell: GpgpuShellSurface) {
     unsafe {
         core::ptr::write_bytes(shell.virt, 0, shell.surface.bytes);
@@ -3184,41 +3025,6 @@ fn primary_count_shell_raw_copy(
     (src_preserved, copied)
 }
 
-fn primary_flush_range_for_rects(
-    primary: GpgpuRgba8Surface,
-    rects: &[GpgpuRect],
-) -> Option<(usize, usize)> {
-    let mut min_x = u32::MAX;
-    let mut min_y = u32::MAX;
-    let mut max_x = 0u32;
-    let mut max_y = 0u32;
-    for rect in rects {
-        if !rect_is_inside(primary, *rect) {
-            return None;
-        }
-        let x = rect.x as u32;
-        let y = rect.y as u32;
-        min_x = min_x.min(x);
-        min_y = min_y.min(y);
-        max_x = max_x.max(x.saturating_add(rect.width));
-        max_y = max_y.max(y.saturating_add(rect.height));
-    }
-    if min_x == u32::MAX || min_y == u32::MAX || max_x <= min_x || max_y <= min_y {
-        return None;
-    }
-    let row_count = max_y.saturating_sub(min_y) as usize;
-    let flush_offset = (min_y as usize)
-        .saturating_mul(primary.pitch_bytes as usize)
-        .saturating_add((min_x as usize).saturating_mul(core::mem::size_of::<u32>()));
-    let flush_bytes = row_count
-        .saturating_sub(1)
-        .saturating_mul(primary.pitch_bytes as usize)
-        .saturating_add(
-            (max_x.saturating_sub(min_x) as usize).saturating_mul(core::mem::size_of::<u32>()),
-        );
-    Some((flush_offset, flush_bytes))
-}
-
 fn primary_read_pixel(target: super::display::PrimarySurfaceGpgpuTarget, x: u32, y: u32) -> u32 {
     let offset = (y as usize)
         .saturating_mul(target.pitch_bytes as usize)
@@ -3229,76 +3035,6 @@ fn primary_read_pixel(target: super::display::PrimarySurfaceGpgpuTarget, x: u32,
     let ptr = unsafe { target.virt.add(offset) };
     super::dma_flush(ptr, core::mem::size_of::<u32>());
     unsafe { core::ptr::read_volatile(ptr as *const u32) }
-}
-
-fn primary_write_pixel_volatile(
-    target: super::display::PrimarySurfaceGpgpuTarget,
-    x: u32,
-    y: u32,
-    value: u32,
-) -> bool {
-    let offset = (y as usize)
-        .saturating_mul(target.pitch_bytes as usize)
-        .saturating_add((x as usize).saturating_mul(core::mem::size_of::<u32>()));
-    if offset.saturating_add(core::mem::size_of::<u32>()) > target.byte_len {
-        return false;
-    }
-    unsafe {
-        core::ptr::write_volatile(target.virt.add(offset) as *mut u32, value & 0x00FF_FFFF);
-    }
-    true
-}
-
-fn primary_blit_atlas_xrgb_volatile(
-    target: super::display::PrimarySurfaceGpgpuTarget,
-    atlas: &GpgpuTwemojiAtlasCache,
-    src_rect: GpgpuRect,
-    dst_xy: GpgpuPoint,
-) -> usize {
-    if !rect_is_inside_atlas(atlas.width, atlas.height, src_rect) {
-        return 0;
-    }
-    let dst_rect = GpgpuRect::new(dst_xy.x, dst_xy.y, src_rect.width, src_rect.height);
-    let Some(primary) = GpgpuRgba8Surface::new(
-        target.phys,
-        target.gpu,
-        target.byte_len,
-        target.width,
-        target.height,
-        target.pitch_bytes,
-    ) else {
-        return 0;
-    };
-    if !rect_is_inside(primary, dst_rect) {
-        return 0;
-    }
-
-    let mut written = 0usize;
-    for y in 0..src_rect.height {
-        for x in 0..src_rect.width {
-            let Some(a) = atlas_alpha(atlas, src_rect, x, y) else {
-                continue;
-            };
-            if a == 0 {
-                continue;
-            }
-            let Some(xrgb) = atlas_xrgb_pixel(atlas, src_rect, x, y) else {
-                continue;
-            };
-            let dst_x = dst_xy.x as u32 + x;
-            let dst_y = dst_xy.y as u32 + y;
-            let pixel = if a == 0xFF {
-                xrgb
-            } else {
-                let dst = primary_read_pixel(target, dst_x, dst_y);
-                blend_xrgb_over_xrgb(xrgb, a, dst)
-            };
-            if primary_write_pixel_volatile(target, dst_x, dst_y, pixel) {
-                written += 1;
-            }
-        }
-    }
-    written
 }
 
 fn shell_write_pixel(shell: GpgpuShellSurface, x: u32, y: u32, value: u32) {
@@ -3757,6 +3493,65 @@ fn submit_copy_rect_span_params_batch(
         0
     };
     observed == COPY_RECT_POST_MARKER
+}
+
+fn submit_sprite64_worklist(
+    atlas: GpgpuRgba8Surface,
+    dst: GpgpuRgba8Surface,
+    desc: GpgpuSprite64WorklistDescBuffer,
+    params: Sprite64WorklistRgba8Params,
+) -> bool {
+    if params.desc_count == 0 || params.desc_count as usize > SPRITE64_WORKLIST_MAX_DESCS {
+        return false;
+    }
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let Some(dev) = super::claimed_device() else {
+        return false;
+    };
+    let Some(upload) = upload_sprite64_worklist_rgba8_kernel() else {
+        return false;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        return false;
+    };
+
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let atlas_ppgtt_ok =
+        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, atlas.gpu, atlas.phys, atlas.bytes);
+    let dst_ppgtt_ok =
+        atlas_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
+    let desc_ppgtt_ok =
+        dst_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
+    let batch_ok = desc_ppgtt_ok
+        && direct_rcs_encode_sprite64_worklist_batch(
+            state,
+            upload,
+            params,
+            atlas.bytes,
+            dst.bytes,
+            desc.bytes,
+        );
+    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
+    let observed = if submitted {
+        direct_rcs_poll_result_slot(
+            state,
+            SPRITE64_WORKLIST_POST_MARKER_SLOT,
+            SPRITE64_WORKLIST_POST_MARKER,
+        )
+    } else {
+        0
+    };
+    observed == SPRITE64_WORKLIST_POST_MARKER
+}
+
+fn sprite64_worklist_walker_count(desc_count: usize) -> usize {
+    desc_count
+        .div_ceil(SPRITE64_WORKLIST_DESCS_PER_WALKER)
+        .min(SPRITE64_WORKLIST_MAX_WALKERS)
 }
 
 fn clear_rect_walker_right_mask(width: u32) -> u32 {
@@ -4605,6 +4400,146 @@ fn direct_rcs_encode_copy_rect_span_params_batch(
     true
 }
 
+fn direct_rcs_encode_sprite64_worklist_batch(
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    params: Sprite64WorklistRgba8Params,
+    atlas_bytes: usize,
+    dst_bytes: usize,
+    desc_bytes: usize,
+) -> bool {
+    let desc_count = params.desc_count as usize;
+    let walker_count = sprite64_worklist_walker_count(desc_count);
+    if desc_count == 0 || walker_count == 0 {
+        return false;
+    }
+    let payload_end =
+        SPRITE64_WORKLIST_PAYLOAD_OFFSET_BYTES + walker_count * SPRITE64_WORKLIST_INDIRECT_BYTES;
+    if payload_end > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+
+    unsafe {
+        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
+        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+    }
+
+    if !direct_rcs_write_sprite64_worklist_interface_descriptor(state) {
+        return false;
+    }
+    if !direct_rcs_write_sprite64_worklist_surface_states(
+        state,
+        params.atlas_gpu,
+        atlas_bytes,
+        params.dst_gpu,
+        dst_bytes,
+        params.desc_gpu,
+        desc_bytes,
+    ) {
+        return false;
+    }
+    for walker in 0..walker_count {
+        let desc_base = walker.saturating_mul(SPRITE64_WORKLIST_DESCS_PER_WALKER);
+        let local_count = desc_count
+            .saturating_sub(desc_base)
+            .min(SPRITE64_WORKLIST_DESCS_PER_WALKER);
+        let payload_offset =
+            SPRITE64_WORKLIST_PAYLOAD_OFFSET_BYTES + walker * SPRITE64_WORKLIST_INDIRECT_BYTES;
+        let payload_params = Sprite64WorklistRgba8Params {
+            desc_base: params.desc_base.saturating_add(desc_base as u32),
+            desc_count: local_count as u32,
+            ..params
+        };
+        if !direct_rcs_write_sprite64_worklist_payload_at(state, payload_offset, payload_params) {
+            return false;
+        }
+    }
+
+    let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
+    let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
+    let mut cursor = 0usize;
+    let mut ok = true;
+
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL | 1,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_3D);
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
+    );
+    ok &= direct_rcs_push_state_base_address(
+        batch,
+        &mut cursor,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        upload.gpu,
+    );
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_VFE_STATE_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW3_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW5_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, SPRITE64_WORKLIST_IDD_BYTES as u32);
+    ok &= direct_rcs_push(batch, &mut cursor, SPRITE64_WORKLIST_IDD_OFFSET_BYTES as u32);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        SPRITE64_WORKLIST_PRE_MARKER_SLOT,
+        SPRITE64_WORKLIST_PRE_MARKER,
+    );
+    for walker in 0..walker_count {
+        let desc_base = walker.saturating_mul(SPRITE64_WORKLIST_DESCS_PER_WALKER);
+        let local_count = desc_count
+            .saturating_sub(desc_base)
+            .min(SPRITE64_WORKLIST_DESCS_PER_WALKER);
+        let payload_offset =
+            SPRITE64_WORKLIST_PAYLOAD_OFFSET_BYTES + walker * SPRITE64_WORKLIST_INDIRECT_BYTES;
+        ok &= direct_rcs_push_sprite64_worklist_walker(
+            batch,
+            &mut cursor,
+            payload_offset,
+            simd16_right_mask(local_count as u32),
+        );
+    }
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        SPRITE64_WORKLIST_POST_MARKER_SLOT,
+        SPRITE64_WORKLIST_POST_MARKER,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, MI_BATCH_BUFFER_END);
+    ok &= direct_rcs_push(batch, &mut cursor, MI_NOOP);
+
+    if !ok {
+        return false;
+    }
+
+    super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
+    super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
+    true
+}
+
 fn direct_rcs_encode_clear_rect_walker_batch(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
@@ -4874,6 +4809,126 @@ fn direct_rcs_write_copy_rect_payload_at(
         core::ptr::write_volatile(dwords.add(23), params.height);
 
         let local_ids = payload.add(COPY_RECT_CROSS_THREAD_BYTES) as *mut u16;
+        for lane in 0..16usize {
+            core::ptr::write_volatile(local_ids.add(lane), lane as u16);
+            core::ptr::write_volatile(local_ids.add(16 + lane), 0);
+            core::ptr::write_volatile(local_ids.add(32 + lane), 0);
+        }
+    }
+    true
+}
+
+fn direct_rcs_write_sprite64_worklist_interface_descriptor(state: DirectRcsState) -> bool {
+    if SPRITE64_WORKLIST_IDD_OFFSET_BYTES + SPRITE64_WORKLIST_IDD_BYTES > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+    let idd = unsafe { state.batch_virt.add(SPRITE64_WORKLIST_IDD_OFFSET_BYTES) as *mut u32 };
+    unsafe {
+        core::ptr::write_volatile(idd, SPRITE64_WORKLIST_RGBA8_TEXT_OFFSET_BYTES as u32);
+        core::ptr::write_volatile(idd.add(1), 0);
+        core::ptr::write_volatile(idd.add(2), IDD_THREAD_PREEMPTION_DISABLE);
+        core::ptr::write_volatile(idd.add(3), 0);
+        core::ptr::write_volatile(
+            idd.add(4),
+            (SPRITE64_WORKLIST_BINDING_TABLE_OFFSET_BYTES as u32) | 3,
+        );
+        core::ptr::write_volatile(idd.add(5), 3 << 16);
+        core::ptr::write_volatile(idd.add(6), GPGPU_WALKER_GROUP_THREADS);
+        core::ptr::write_volatile(idd.add(7), 3);
+    }
+    true
+}
+
+fn direct_rcs_write_sprite64_worklist_surface_states(
+    state: DirectRcsState,
+    atlas_gpu: u64,
+    atlas_bytes: usize,
+    dst_gpu: u64,
+    dst_bytes: usize,
+    desc_gpu: u64,
+    desc_bytes: usize,
+) -> bool {
+    let binding_end =
+        SPRITE64_WORKLIST_BINDING_TABLE_OFFSET_BYTES + 3 * core::mem::size_of::<u32>();
+    let surface_bytes = COPY_RECT_SURFACE_STATE_DWORDS * core::mem::size_of::<u32>();
+    let atlas_surface_end = SPRITE64_WORKLIST_ATLAS_SURFACE_STATE_OFFSET_BYTES + surface_bytes;
+    let dst_surface_end = SPRITE64_WORKLIST_DST_SURFACE_STATE_OFFSET_BYTES + surface_bytes;
+    let desc_surface_end = SPRITE64_WORKLIST_DESC_SURFACE_STATE_OFFSET_BYTES + surface_bytes;
+    if binding_end > DIRECT_RCS_BATCH_BYTES
+        || atlas_surface_end > DIRECT_RCS_BATCH_BYTES
+        || dst_surface_end > DIRECT_RCS_BATCH_BYTES
+        || desc_surface_end > DIRECT_RCS_BATCH_BYTES
+    {
+        return false;
+    }
+
+    unsafe {
+        let binding = state
+            .batch_virt
+            .add(SPRITE64_WORKLIST_BINDING_TABLE_OFFSET_BYTES) as *mut u32;
+        core::ptr::write_volatile(
+            binding,
+            SPRITE64_WORKLIST_ATLAS_SURFACE_STATE_OFFSET_BYTES as u32,
+        );
+        core::ptr::write_volatile(
+            binding.add(1),
+            SPRITE64_WORKLIST_DST_SURFACE_STATE_OFFSET_BYTES as u32,
+        );
+        core::ptr::write_volatile(
+            binding.add(2),
+            SPRITE64_WORKLIST_DESC_SURFACE_STATE_OFFSET_BYTES as u32,
+        );
+    }
+
+    direct_rcs_write_buffer_surface_state(
+        state,
+        SPRITE64_WORKLIST_ATLAS_SURFACE_STATE_OFFSET_BYTES,
+        atlas_gpu,
+        atlas_bytes,
+    ) && direct_rcs_write_buffer_surface_state(
+        state,
+        SPRITE64_WORKLIST_DST_SURFACE_STATE_OFFSET_BYTES,
+        dst_gpu,
+        dst_bytes,
+    ) && direct_rcs_write_buffer_surface_state(
+        state,
+        SPRITE64_WORKLIST_DESC_SURFACE_STATE_OFFSET_BYTES,
+        desc_gpu,
+        desc_bytes,
+    )
+}
+
+fn direct_rcs_write_sprite64_worklist_payload_at(
+    state: DirectRcsState,
+    payload_offset: usize,
+    params: Sprite64WorklistRgba8Params,
+) -> bool {
+    if payload_offset + SPRITE64_WORKLIST_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+
+    unsafe {
+        let payload = state.batch_virt.add(payload_offset);
+        core::ptr::write_bytes(payload, 0, SPRITE64_WORKLIST_INDIRECT_BYTES);
+        let dwords = payload as *mut u32;
+        core::ptr::write_volatile(dwords.add(3), 16);
+        core::ptr::write_volatile(dwords.add(4), 1);
+        core::ptr::write_volatile(dwords.add(5), 1);
+        core::ptr::write_volatile(dwords.add(8), 16);
+        core::ptr::write_volatile(dwords.add(9), 1);
+        core::ptr::write_volatile(dwords.add(10), 1);
+        core::ptr::write_volatile(dwords.add(12), params.atlas_gpu as u32);
+        core::ptr::write_volatile(dwords.add(13), (params.atlas_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(14), params.dst_gpu as u32);
+        core::ptr::write_volatile(dwords.add(15), (params.dst_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(16), params.desc_gpu as u32);
+        core::ptr::write_volatile(dwords.add(17), (params.desc_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(18), params.atlas_pitch_bytes);
+        core::ptr::write_volatile(dwords.add(19), params.dst_pitch_bytes);
+        core::ptr::write_volatile(dwords.add(20), params.desc_base);
+        core::ptr::write_volatile(dwords.add(21), params.desc_count);
+
+        let local_ids = payload.add(SPRITE64_WORKLIST_CROSS_THREAD_BYTES) as *mut u16;
         for lane in 0..16usize {
             core::ptr::write_volatile(local_ids.add(lane), lane as u16);
             core::ptr::write_volatile(local_ids.add(16 + lane), 0);
@@ -5334,6 +5389,33 @@ fn direct_rcs_push_copy_rect_walker(
     direct_rcs_push(batch, cursor, GPGPU_WALKER_CMD)
         && direct_rcs_push(batch, cursor, 0)
         && direct_rcs_push(batch, cursor, COPY_RECT_INDIRECT_BYTES as u32)
+        && direct_rcs_push(batch, cursor, payload_offset as u32)
+        && direct_rcs_push(
+            batch,
+            cursor,
+            (GPGPU_WALKER_SIMD16_SELECT << 30) | (GPGPU_WALKER_GROUP_THREADS - 1),
+        )
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, 1)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, 1)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, GPGPU_WALKER_GROUP_Z_DIM)
+        && direct_rcs_push(batch, cursor, right_mask)
+        && direct_rcs_push(batch, cursor, GPGPU_WALKER_BOTTOM_MASK)
+}
+
+fn direct_rcs_push_sprite64_worklist_walker(
+    batch: &mut [u32],
+    cursor: &mut usize,
+    payload_offset: usize,
+    right_mask: u32,
+) -> bool {
+    direct_rcs_push(batch, cursor, GPGPU_WALKER_CMD)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, SPRITE64_WORKLIST_INDIRECT_BYTES as u32)
         && direct_rcs_push(batch, cursor, payload_offset as u32)
         && direct_rcs_push(
             batch,
