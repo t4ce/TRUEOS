@@ -1477,37 +1477,37 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &SURFER_PARSE_POOL_STARTED,
         spawn_truesurfer_parse_pool,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-athlas-third-demo",
         UI2_DEMO_READY,
         &UI2_ATHLAS_THIRD_DEMO_STARTED,
         spawn_ui2_athlas_third_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-athlas-half-demo",
         UI2_DEMO_READY,
         &UI2_ATHLAS_HALF_DEMO_STARTED,
         spawn_ui2_athlas_half_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-athlas-1x-demo",
         UI2_DEMO_READY,
         &UI2_ATHLAS_1X_DEMO_STARTED,
         spawn_ui2_athlas_1x_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-athlas-2x-demo",
         UI2_DEMO_READY,
         &UI2_ATHLAS_2X_DEMO_STARTED,
         spawn_ui2_athlas_2x_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-palatino-1x-demo",
         UI2_DEMO_READY,
         &UI2_PALATINO_1X_DEMO_STARTED,
         spawn_ui2_palatino_1x_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-twemoji-1x",
         crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY,
         &UI2_TWEMOJI_1X_STARTED,
@@ -1526,7 +1526,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_ui2_analog_clock_demo,
     ),
     TaskSpec::enabled("ui2-bgrt-demo", UI2_DEMO_READY, &UI2_BGRT_DEMO_STARTED, spawn_ui2_bgrt_demo),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-coreticks-demo",
         UI2_DEMO_READY,
         &UI2_CORETICKS_DEMO_STARTED,
@@ -1538,10 +1538,9 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &UI2_CURSORPICKER_DEMO_STARTED,
         spawn_ui2_cursorpicker_demo,
     ),
-    TaskSpec::enabled_gated(
+    TaskSpec::disabled(
         "ui2-gboi-demo",
         GBOI_DEMO_READY,
-        ui2_demo_task_gate,
         &UI2_GBOI_DEMO_STARTED,
         spawn_ui2_gboi_demo,
     ),
@@ -1565,7 +1564,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &UI2_RAPLE_DEMO_STARTED,
         spawn_ui2_raple_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-render-album-demo",
         UI2_DEMO_READY,
         &UI2_RENDER_ALBUM_DEMO_STARTED,

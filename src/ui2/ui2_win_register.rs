@@ -54,6 +54,11 @@ static OFFLINE_PILLS: Mutex<Vec<OfflinePillSlot>> = Mutex::new(Vec::new());
 
 /// Draw the offline-task dock on the right side and populate OFFLINE_PILLS for hit-testing.
 pub(super) fn draw_offline_dock(state: &Ui2State) {
+    if crate::gfx::is_intel_active() {
+        *OFFLINE_PILLS.lock() = Vec::new();
+        return;
+    }
+
     let mut pills: Vec<OfflinePillSlot> = Vec::new();
 
     // 1. Disabled tasks not yet started.

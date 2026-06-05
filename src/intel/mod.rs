@@ -176,6 +176,9 @@ pub fn init_once() {
     let _ = self::gpgpu::upload_copy_rect_rgba8_kernel();
     let _ = self::gpgpu::upload_copy_rect_rgba8_wide_kernel();
     let _ = self::gpgpu::upload_clear_rect_rgba8_white_kernel();
+    let _ = self::gpgpu::upload_fill_rect_rgba8_kernel();
+    let _ = self::gpgpu::upload_alpha_blend_rgba8_over_kernel();
+    let _ = self::gpgpu::upload_glyph_mask_rgba8_kernel();
     let _ = self::gpgpu::upload_empty_eot_kernel();
     let _ = self::gpgpu::upload_sprite64_worklist_rgba8_kernel();
     let _ = self::gpgpu::upload_canvas3d_project_rgba8_kernel();
@@ -375,8 +378,14 @@ pub fn plane_rebind_present_surface(
     false
 }
 
-pub fn rcs_present_rgba_frame(_rgba: &[u8], _width: usize, _height: usize) -> bool {
-    false
+pub fn rcs_present_rgba_frame(rgba: &[u8], width: usize, height: usize) -> bool {
+    let Ok(width) = u32::try_from(width) else {
+        return false;
+    };
+    let Ok(height) = u32::try_from(height) else {
+        return false;
+    };
+    self::gpgpu::present_rgba_frame_to_primary(rgba, width, height)
 }
 
 pub fn rcs_clear_rgba_surface(
@@ -437,6 +446,36 @@ pub fn present_rgba_overlay_top_right(
     src_pitch_bytes: usize,
 ) -> bool {
     self::display::present_rgba_overlay_top_right(src, src_width, src_height, src_pitch_bytes)
+}
+
+pub fn present_rgba_primary(
+    src: &[u8],
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+    reason: &str,
+) -> bool {
+    self::display::present_rgba_primary(src, src_width, src_height, src_pitch_bytes, reason)
+}
+
+pub fn present_rgba_primary_rot180(
+    src: &[u8],
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+    reason: &str,
+) -> bool {
+    self::display::present_rgba_primary_rot180(src, src_width, src_height, src_pitch_bytes, reason)
+}
+
+pub fn present_rgba_primary_flip_y(
+    src: &[u8],
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+    reason: &str,
+) -> bool {
+    self::display::present_rgba_primary_flip_y(src, src_width, src_height, src_pitch_bytes, reason)
 }
 
 pub fn present_rgba_primary_top_right(

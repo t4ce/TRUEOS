@@ -510,10 +510,11 @@ pub(crate) fn shell_cube20_project_spin(
             break;
         }
 
-        shell_canvas3d_seed_cube_vertices(state);
+        shell_canvas3d_seed_visual_vertices(state);
         let translate_x_q16 = shell_cube20_translate_x_q16(frames);
+        let translate_y_q16 = shell_tetra10_translate_y_q16(frames);
         let q = CANVAS3D_PROJECT_Q16_ONE;
-        let Some(transform_ms) = submit_canvas3d_transform_fused_frame_range(
+        let Some(cube_transform_ms) = submit_canvas3d_transform_fused_frame_range(
             dev,
             state,
             transform_upload,
@@ -547,22 +548,61 @@ pub(crate) fn shell_cube20_project_spin(
         ) else {
             break;
         };
+        let Some(tetra_transform_ms) = submit_canvas3d_transform_fused_frame_range(
+            dev,
+            state,
+            transform_upload,
+            DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
+            state.clear_test_phys,
+            CANVAS3D_TMP_GPU,
+            state.canvas3d_tmp_phys,
+            TETRA10_BASE_VERTEX as u32,
+            TETRA10_BASE_VERTEX as u32,
+            TETRA10_VERTEX_COUNT as u32,
+            Canvas3dVec3Q16 {
+                x: q,
+                y: q,
+                z: q,
+                pad: 0,
+            },
+            Canvas3dVec3Q16 {
+                x: 0,
+                y: 0,
+                z: 0,
+                pad: q,
+            },
+            Canvas3dVec3Q16 {
+                x: 0,
+                y: translate_y_q16,
+                z: 0,
+                pad: 0,
+            },
+            CANVAS3D_TRANSFORM_FUSED_PRE_MARKER,
+            CANVAS3D_TRANSFORM_FUSED_POST_MARKER,
+        ) else {
+            break;
+        };
         let Some(project_ms) = submit_canvas3d_project_frame_from(
             dev,
             state,
             project_upload,
             CANVAS3D_TMP_GPU,
             state.canvas3d_tmp_phys,
-            CUBE20_VISUAL_VERTEX_COUNT as u32,
+            CANVAS3D_VISUAL_VERTEX_COUNT as u32,
             target.width,
             target.height,
         ) else {
             break;
         };
-        submitted = submitted.saturating_add(2);
-        let submit_ms = transform_ms.saturating_add(project_ms);
+        submitted = submitted.saturating_add(3);
+        let submit_ms = cube_transform_ms
+            .saturating_add(tetra_transform_ms)
+            .saturating_add(project_ms);
         total_submit_ms = total_submit_ms.saturating_add(submit_ms);
-        max_submit_ms = max_submit_ms.max(transform_ms).max(project_ms);
+        max_submit_ms = max_submit_ms
+            .max(cube_transform_ms)
+            .max(tetra_transform_ms)
+            .max(project_ms);
 
         let (frame_visible, frame_stamped) =
             shell_canvas3d_cpu_copy_projected_points_to_primary(state, target, canvas_x, canvas_y);
@@ -582,7 +622,7 @@ pub(crate) fn shell_cube20_project_spin(
     }
 
     let elapsed_ms = direct_rcs_elapsed_ms_since(total_start_tick);
-    let expected_frame_submits = 2;
+    let expected_frame_submits = 3;
     Some(GpgpuShellCube20ProjectResult {
         ok: frames != 0
             && submitted == frames.saturating_mul(expected_frame_submits)
@@ -600,7 +640,7 @@ pub(crate) fn shell_cube20_project_spin(
         primary_width: target.width,
         primary_height: target.height,
         canvas_xy,
-        vertex_count: CUBE20_VISUAL_VERTEX_COUNT,
+        vertex_count: CANVAS3D_VISUAL_VERTEX_COUNT,
         radius_px: (CUBE20_HALF_Q16 as u32).saturating_mul(target.width.min(target.height))
             / CANVAS3D_PROJECT_Q16_ONE as u32,
         last_angle_deg: angle_deg,
@@ -620,7 +660,20 @@ fn shell_cube20_translate_x_q16(frame: u32) -> i32 {
     offset.clamp(-CUBE20_HALF_Q16, CUBE20_HALF_Q16)
 }
 
-fn shell_canvas3d_seed_cube_vertices(state: DirectRcsState) {
+fn shell_tetra10_translate_y_q16(frame: u32) -> i32 {
+    const PERIOD_FRAMES: u32 = 240;
+    let half_period = PERIOD_FRAMES / 2;
+    let phase = frame % PERIOD_FRAMES;
+    let span = CANVAS3D_PROJECT_Q16_ONE;
+    let offset = if phase < half_period {
+        -CUBE20_HALF_Q16 + ((span as i64 * phase as i64) / half_period as i64) as i32
+    } else {
+        CUBE20_HALF_Q16 - ((span as i64 * (phase - half_period) as i64) / half_period as i64) as i32
+    };
+    offset.clamp(-CUBE20_HALF_Q16, CUBE20_HALF_Q16)
+}
+
+fn shell_canvas3d_seed_visual_vertices(state: DirectRcsState) {
     unsafe {
         core::ptr::write_bytes(state.clear_test_virt, 0, CANVAS3D_PROJECT_TEST_BYTES);
         core::ptr::write_bytes(state.canvas3d_out_virt, 0, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
@@ -632,6 +685,10 @@ fn shell_canvas3d_seed_cube_vertices(state: DirectRcsState) {
                 let vertex = shell_canvas3d_seed_cube_vertex(cube_index, local_index);
                 core::ptr::write_volatile(vertices.add(base + local_index), vertex);
             }
+        }
+        for local_index in 0..TETRA10_VERTEX_COUNT {
+            let vertex = shell_canvas3d_seed_tetra_vertex(local_index);
+            core::ptr::write_volatile(vertices.add(TETRA10_BASE_VERTEX + local_index), vertex);
         }
     }
     intel::dma_flush(state.clear_test_virt, CANVAS3D_PROJECT_TEST_BYTES);
@@ -715,6 +772,59 @@ fn shell_canvas3d_seed_cube_vertex(cube_index: usize, local_index: usize) -> Can
     vertex
 }
 
+fn shell_canvas3d_seed_tetra_vertex(local_index: usize) -> Canvas3dVec3Q16 {
+    let half = CUBE20_HALF_Q16;
+    let corners = [
+        Canvas3dVec3Q16 {
+            x: half,
+            y: half,
+            z: half,
+            pad: 0,
+        },
+        Canvas3dVec3Q16 {
+            x: -half,
+            y: -half,
+            z: half,
+            pad: 1,
+        },
+        Canvas3dVec3Q16 {
+            x: -half,
+            y: half,
+            z: -half,
+            pad: 2,
+        },
+        Canvas3dVec3Q16 {
+            x: half,
+            y: -half,
+            z: -half,
+            pad: 3,
+        },
+    ];
+    let mut vertex = if local_index < TETRA10_CORNER_COUNT {
+        corners[local_index]
+    } else {
+        let edge_sample = local_index - TETRA10_CORNER_COUNT;
+        let edge_index = edge_sample / TETRA10_EDGE_SAMPLE_COUNT;
+        let sample_index = edge_sample % TETRA10_EDGE_SAMPLE_COUNT;
+        let (a, b) = TETRA10_EDGES[edge_index];
+        let va = corners[a];
+        let vb = corners[b];
+        let step = (sample_index + 1) as i32;
+        let denom = (TETRA10_EDGE_SAMPLE_COUNT + 1) as i32;
+        Canvas3dVec3Q16 {
+            x: va.x + ((vb.x - va.x) * step) / denom,
+            y: va.y + ((vb.y - va.y) * step) / denom,
+            z: va.z + ((vb.z - va.z) * step) / denom,
+            pad: local_index as i32,
+        }
+    };
+
+    vertex.x += CANVAS3D_PROJECT_Q16_ONE;
+    vertex.z += CANVAS3D_PROJECT_Q16_ONE * 2;
+    vertex.pad = (TETRA10_BASE_VERTEX + local_index) as i32;
+    vertex
+}
+
 fn shell_canvas3d_write_pixel(
     primary: *mut u32,
     pitch_pixels: usize,
@@ -769,8 +879,12 @@ fn shell_canvas3d_stamp_dot(
     stamped
 }
 
-fn shell_canvas3d_present_color(cube_index: usize) -> u32 {
-    CUBE20_PRESENT_COLORS[cube_index % CUBE20_PRESENT_COLORS.len()]
+fn shell_canvas3d_present_color(vertex_index: usize) -> u32 {
+    if vertex_index < CUBE20_VISUAL_VERTEX_COUNT {
+        CUBE20_PRESENT_COLORS[0]
+    } else {
+        0xFF30_D8FF
+    }
 }
 
 fn shell_canvas3d_cpu_copy_projected_points_to_primary(
@@ -787,8 +901,8 @@ fn shell_canvas3d_cpu_copy_projected_points_to_primary(
     let canvas_y = canvas_y as usize;
     let mut visible = 0usize;
     let mut stamped = 0usize;
-    let mut point_xy = [(0i32, 0i32); CUBE20_VISUAL_VERTEX_COUNT];
-    let mut point_visible = [false; CUBE20_VISUAL_VERTEX_COUNT];
+    let mut point_xy = [(0i32, 0i32); CANVAS3D_VISUAL_VERTEX_COUNT];
+    let mut point_visible = [false; CANVAS3D_VISUAL_VERTEX_COUNT];
 
     unsafe {
         let primary = target.virt as *mut u32;
@@ -800,13 +914,9 @@ fn shell_canvas3d_cpu_copy_projected_points_to_primary(
         }
 
         let out = state.canvas3d_out_virt as *const Canvas3dProjectedRgba8;
-        for index in 0..CUBE20_VISUAL_VERTEX_COUNT {
+        for index in 0..CANVAS3D_VISUAL_VERTEX_COUNT {
             let point = core::ptr::read_volatile(out.add(index));
             if (point.packed_xy & 0x8000_0000) == 0 {
-                continue;
-            }
-            let cube_index = index / CUBE20_VERTEX_COUNT;
-            if cube_index >= CUBE20_INSTANCE_COUNT {
                 continue;
             }
             visible = visible.saturating_add(1);
@@ -816,16 +926,12 @@ fn shell_canvas3d_cpu_copy_projected_points_to_primary(
             point_visible[index] = true;
         }
 
-        for index in 0..CUBE20_VISUAL_VERTEX_COUNT {
+        for index in 0..CANVAS3D_VISUAL_VERTEX_COUNT {
             if !point_visible[index] {
                 continue;
             }
-            let cube_index = index / CUBE20_VERTEX_COUNT;
-            if cube_index >= CUBE20_INSTANCE_COUNT {
-                continue;
-            }
             let (x, y) = point_xy[index];
-            let color = shell_canvas3d_present_color(cube_index);
+            let color = shell_canvas3d_present_color(index);
             stamped = stamped.saturating_add(shell_canvas3d_stamp_dot(
                 primary,
                 pitch_pixels,
