@@ -943,6 +943,162 @@ pub(super) fn notify_primary_surface_external_write(
     notify_primary_surface_present(surface, reason, byte_len)
 }
 
+pub(crate) fn present_rgba_primary(
+    src: &[u8],
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+    reason: &str,
+) -> bool {
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+        return false;
+    };
+    if surface.virt.is_null()
+        || src_width == 0
+        || src_height == 0
+        || src_pitch_bytes < src_width as usize * 4
+    {
+        return false;
+    }
+
+    let dst_width = surface.width as usize;
+    let dst_height = surface.height as usize;
+    let dst_pitch = surface.pitch_bytes as usize;
+    let copy_w = (src_width as usize).min(dst_width);
+    let copy_h = (src_height as usize).min(dst_height);
+    if copy_w == 0 || copy_h == 0 || dst_pitch < dst_width.saturating_mul(4) {
+        return false;
+    }
+
+    for row_idx in 0..copy_h {
+        let src_row_off = row_idx.saturating_mul(src_pitch_bytes);
+        let Some(src_row) = src.get(src_row_off..src_row_off + copy_w.saturating_mul(4)) else {
+            return false;
+        };
+        let dst_row_off = row_idx.saturating_mul(dst_pitch);
+        let dst_row = unsafe { surface.virt.add(dst_row_off) as *mut u32 };
+        for col_idx in 0..copy_w {
+            let src_off = col_idx.saturating_mul(4);
+            let r = src_row[src_off];
+            let g = src_row[src_off + 1];
+            let b = src_row[src_off + 2];
+            let pixel = u32::from_le_bytes([b, g, r, 0]);
+            unsafe {
+                core::ptr::write_volatile(dst_row.add(col_idx), pixel);
+            }
+        }
+        crate::intel::dma_flush(unsafe { surface.virt.add(dst_row_off) }, copy_w.saturating_mul(4));
+    }
+
+    let byte_len = dst_pitch.saturating_mul(dst_height);
+    notify_primary_surface_present(surface, reason, byte_len)
+}
+
+pub(crate) fn present_rgba_primary_rot180(
+    src: &[u8],
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+    reason: &str,
+) -> bool {
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+        return false;
+    };
+    if surface.virt.is_null()
+        || src_width == 0
+        || src_height == 0
+        || src_pitch_bytes < src_width as usize * 4
+    {
+        return false;
+    }
+
+    let dst_width = surface.width as usize;
+    let dst_height = surface.height as usize;
+    let dst_pitch = surface.pitch_bytes as usize;
+    let copy_w = (src_width as usize).min(dst_width);
+    let copy_h = (src_height as usize).min(dst_height);
+    if copy_w == 0 || copy_h == 0 || dst_pitch < dst_width.saturating_mul(4) {
+        return false;
+    }
+
+    for row_idx in 0..copy_h {
+        let src_y = copy_h.saturating_sub(1).saturating_sub(row_idx);
+        let src_row_off = src_y.saturating_mul(src_pitch_bytes);
+        let Some(src_row) = src.get(src_row_off..src_row_off + copy_w.saturating_mul(4)) else {
+            return false;
+        };
+        let dst_row_off = row_idx.saturating_mul(dst_pitch);
+        let dst_row = unsafe { surface.virt.add(dst_row_off) as *mut u32 };
+        for col_idx in 0..copy_w {
+            let src_x = copy_w.saturating_sub(1).saturating_sub(col_idx);
+            let src_off = src_x.saturating_mul(4);
+            let r = src_row[src_off];
+            let g = src_row[src_off + 1];
+            let b = src_row[src_off + 2];
+            let pixel = u32::from_le_bytes([b, g, r, 0]);
+            unsafe {
+                core::ptr::write_volatile(dst_row.add(col_idx), pixel);
+            }
+        }
+        crate::intel::dma_flush(unsafe { surface.virt.add(dst_row_off) }, copy_w.saturating_mul(4));
+    }
+
+    let byte_len = dst_pitch.saturating_mul(dst_height);
+    notify_primary_surface_present(surface, reason, byte_len)
+}
+
+pub(crate) fn present_rgba_primary_flip_y(
+    src: &[u8],
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+    reason: &str,
+) -> bool {
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+        return false;
+    };
+    if surface.virt.is_null()
+        || src_width == 0
+        || src_height == 0
+        || src_pitch_bytes < src_width as usize * 4
+    {
+        return false;
+    }
+
+    let dst_width = surface.width as usize;
+    let dst_height = surface.height as usize;
+    let dst_pitch = surface.pitch_bytes as usize;
+    let copy_w = (src_width as usize).min(dst_width);
+    let copy_h = (src_height as usize).min(dst_height);
+    if copy_w == 0 || copy_h == 0 || dst_pitch < dst_width.saturating_mul(4) {
+        return false;
+    }
+
+    for row_idx in 0..copy_h {
+        let src_y = copy_h.saturating_sub(1).saturating_sub(row_idx);
+        let src_row_off = src_y.saturating_mul(src_pitch_bytes);
+        let Some(src_row) = src.get(src_row_off..src_row_off + copy_w.saturating_mul(4)) else {
+            return false;
+        };
+        let dst_row_off = row_idx.saturating_mul(dst_pitch);
+        let dst_row = unsafe { surface.virt.add(dst_row_off) as *mut u32 };
+        for col_idx in 0..copy_w {
+            let src_off = col_idx.saturating_mul(4);
+            let r = src_row[src_off];
+            let g = src_row[src_off + 1];
+            let b = src_row[src_off + 2];
+            let pixel = u32::from_le_bytes([b, g, r, 0]);
+            unsafe {
+                core::ptr::write_volatile(dst_row.add(col_idx), pixel);
+            }
+        }
+        crate::intel::dma_flush(unsafe { surface.virt.add(dst_row_off) }, copy_w.saturating_mul(4));
+    }
+
+    let byte_len = dst_pitch.saturating_mul(dst_height);
+    notify_primary_surface_present(surface, reason, byte_len)
+}
+
 pub(crate) fn present_rgba_primary_top_right(
     src: &[u8],
     src_width: u32,

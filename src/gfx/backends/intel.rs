@@ -7,18 +7,19 @@ use trueos_gfx_core::{
     BlendDesc, BlendFactor, BufferDesc, BufferId, BufferUsage, Command, CommandBuffer, DeviceCaps,
     Error, FenceId, GfxDevice, GfxPresent, ImageDesc, ImageFormat, ImageId, ImageRegion,
     MemoryType, PipelineDesc, PipelineId, Result, SamplerDesc, SamplerFilter, SamplerWrap,
-    ScissorRect, ShaderDesc, ShaderId, SwapchainDesc, TexCoordFormat, read_rgb_vertex_f32_bytes,
-    read_tex_vertex_f32_bytes,
+    ScissorRect, ShaderDesc, ShaderId, SwapchainDesc, TexCoordFormat, TexVertexF32,
+    read_rgb_vertex_f32_bytes, read_tex_vertex_f32_bytes,
 };
 
 const TEX_PIPELINE_FS_MASK_TAG_RAW: u32 = 0x4D41_534B;
 const TEX_PIPELINE_FS_RGBA_TAG_RAW: u32 = 0x5247_4241;
 const TEX_PIPELINE_FS_PARTICLE_TAG_RAW: u32 = 0x5052_5443;
 const RCS_PRESENT_RETRY_COOLDOWN_PRESENTS: u32 = 600;
-const IMAGE_GPU_VA_BASE: u64 = 0x0400_0000;
+const IMAGE_GPU_VA_BASE: u64 = 0x0800_0000;
 const IMAGE_GPU_VA_ALIGN: u64 = 0x0040_0000;
 const MAX_BACKEND_IMAGE_DIM: u32 = 8192;
 const MAX_BACKEND_IMAGE_BYTES: usize = 256 * 1024 * 1024;
+const ENABLE_IMAGE_GPGPU_CLEAR: bool = false;
 
 static PRESENT_COMPLETED_SEQ: AtomicU32 = AtomicU32::new(0);
 
@@ -40,13 +41,103 @@ struct BufferEntry {
 }
 
 #[derive(Clone)]
+struct ImageDmaSurface {
+    phys: u64,
+    virt: *mut u8,
+    bytes: usize,
+    pitch_bytes: u32,
+}
+
+#[derive(Clone)]
 struct ImageEntry {
     width: u32,
     height: u32,
     format: ImageFormat,
     gpu_addr: u64,
+    mask_gpu_addr: u64,
+    dma: ImageDmaSurface,
+    mask_dma: Option<ImageDmaSurface>,
     gpu_dirty: bool,
     rgba: Vec<u8>,
+}
+
+impl ImageEntry {
+    fn gpgpu_surface(&self) -> Option<crate::intel::gpgpu::GpgpuRgba8Surface> {
+        crate::intel::gpgpu::GpgpuRgba8Surface::new(
+            self.dma.phys,
+            self.gpu_addr,
+            self.dma.bytes,
+            self.width,
+            self.height,
+            self.dma.pitch_bytes,
+        )
+    }
+
+    fn gpgpu_mask_surface(&self) -> Option<crate::intel::gpgpu::GpgpuMask8Surface> {
+        let dma = self.mask_dma.as_ref()?;
+        crate::intel::gpgpu::GpgpuMask8Surface::new(
+            dma.phys,
+            self.mask_gpu_addr,
+            dma.bytes,
+            self.width,
+            self.height,
+            dma.pitch_bytes,
+        )
+    }
+
+    fn copy_cpu_to_dma(&self) {
+        if self.dma.virt.is_null() || self.rgba.is_empty() {
+            return;
+        }
+        let len = self.rgba.len().min(self.dma.bytes);
+        unsafe {
+            core::ptr::copy_nonoverlapping(self.rgba.as_ptr(), self.dma.virt, len);
+        }
+        crate::intel::dma_cache_flush_range(self.dma.virt, len);
+    }
+
+    fn copy_dma_to_cpu(&mut self) {
+        if self.dma.virt.is_null() || self.rgba.is_empty() {
+            return;
+        }
+        let len = self.rgba.len().min(self.dma.bytes);
+        crate::intel::dma_cache_flush_range(self.dma.virt, len);
+        unsafe {
+            core::ptr::copy_nonoverlapping(self.dma.virt, self.rgba.as_mut_ptr(), len);
+        }
+    }
+
+    fn dma_rgba_slice(&self) -> Option<&[u8]> {
+        if self.dma.virt.is_null() || self.rgba.is_empty() {
+            return None;
+        }
+        let len = self.rgba.len().min(self.dma.bytes);
+        crate::intel::dma_cache_flush_range(self.dma.virt, len);
+        Some(unsafe { core::slice::from_raw_parts(self.dma.virt as *const u8, len) })
+    }
+
+    fn rebuild_mask_dma(&mut self) {
+        let Some(mask_dma) = self.mask_dma.as_ref() else {
+            return;
+        };
+        if mask_dma.virt.is_null() || self.rgba.is_empty() {
+            return;
+        }
+        let pixels = (self.width as usize).saturating_mul(self.height as usize);
+        let len = pixels.min(mask_dma.bytes);
+        unsafe {
+            let dst = core::slice::from_raw_parts_mut(mask_dma.virt, len);
+            for (idx, coverage) in dst.iter_mut().enumerate() {
+                let src = idx.saturating_mul(4);
+                if src + 4 > self.rgba.len() {
+                    break;
+                }
+                let alpha = self.rgba[src + 3];
+                *coverage = if alpha < 0xFF { alpha } else { self.rgba[src] };
+            }
+        }
+        crate::intel::dma_cache_flush_range(mask_dma.virt, len);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,6 +163,40 @@ enum RenderTarget {
     Image(ImageId),
 }
 
+#[derive(Clone, Copy)]
+enum CpuPresentMode {
+    PrimarySurface,
+    LimineFramebuffer,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TextureCopyQuad {
+    src_x: u32,
+    src_y: u32,
+    dst_x: i32,
+    dst_y: i32,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RgbFillQuad {
+    dst_x: i32,
+    dst_y: i32,
+    width: u32,
+    height: u32,
+    color_rgba: u32,
+}
+
+impl CpuPresentMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::PrimarySurface => "cpu-primary-surface",
+            Self::LimineFramebuffer => "cpu-limine-framebuffer",
+        }
+    }
+}
+
 pub struct IntelGfxBackend {
     swapchain_desc: SwapchainDesc,
     framebuffer_ptr: *mut u8,
@@ -80,8 +205,6 @@ pub struct IntelGfxBackend {
     framebuffer_height: u32,
     screen_rgba: Vec<u8>,
     screen_rgba_gpu_dirty: bool,
-    screen_scanout_rgba: Vec<u8>,
-    screen_scanout_gpu_dirty: bool,
     buffers: Vec<Option<BufferEntry>>,
     images: Vec<Option<ImageEntry>>,
     pipelines: Vec<Option<PipelineEntry>>,
@@ -102,23 +225,53 @@ impl IntelGfxBackend {
             return None;
         }
 
-        let fb = *framebuffers?.framebuffers().first()?;
-        if fb.memory_model != ::limine::framebuffer::FRAMEBUFFER_RGB
-            || fb.bpp != 32
-            || fb.address().is_null()
-        {
-            return None;
+        crate::log!("intel/gfx-backend: init starting\n");
+
+        let fb = framebuffers.and_then(|response| response.framebuffers().first().copied());
+        let mut framebuffer_ptr = core::ptr::null_mut();
+        let mut framebuffer_pitch = 0usize;
+        let mut framebuffer_width = 0u32;
+        let mut framebuffer_height = 0u32;
+        if let Some(fb) = fb {
+            if fb.memory_model == ::limine::framebuffer::FRAMEBUFFER_RGB
+                && fb.bpp == 32
+                && !fb.address().is_null()
+            {
+                let width = fb.width as u32;
+                let height = fb.height as u32;
+                let pitch = fb.pitch as usize;
+                if width != 0 && height != 0 && pitch >= width as usize * 4 {
+                    framebuffer_ptr = fb.address() as *mut u8;
+                    framebuffer_pitch = pitch;
+                    framebuffer_width = width;
+                    framebuffer_height = height;
+                } else {
+                    crate::log!(
+                        "intel/gfx-backend: limine framebuffer ignored bad geometry size={}x{} pitch=0x{:X}\n",
+                        width,
+                        height,
+                        pitch
+                    );
+                }
+            } else {
+                crate::log!(
+                    "intel/gfx-backend: limine framebuffer ignored model={} bpp={} addr_null={}\n",
+                    fb.memory_model,
+                    fb.bpp,
+                    fb.address().is_null() as u8
+                );
+            }
+        } else {
+            crate::log!(
+                "intel/gfx-backend: init without limine framebuffer; primary-surface fallback only\n"
+            );
         }
 
-        let framebuffer_width = fb.width as u32;
-        let framebuffer_height = fb.height as u32;
-        let (width, height) = crate::intel::active_scanout_dimensions()
-            .unwrap_or((framebuffer_width, framebuffer_height));
-        let pitch = fb.pitch as usize;
-        if framebuffer_width == 0
-            || framebuffer_height == 0
-            || pitch < framebuffer_width as usize * 4
-        {
+        let (width, height) = crate::intel::active_scanout_dimensions().or_else(|| {
+            (framebuffer_width != 0 && framebuffer_height != 0)
+                .then_some((framebuffer_width, framebuffer_height))
+        })?;
+        if width == 0 || height == 0 {
             return None;
         }
 
@@ -127,16 +280,21 @@ impl IntelGfxBackend {
             extent: trueos_gfx_core::Extent2D { width, height },
         };
         let screen_len = rgba_len(width, height)?;
+        crate::log!(
+            "intel/gfx-backend: init ok size={}x{} limine_fb={} pitch=0x{:X}\n",
+            width,
+            height,
+            (!framebuffer_ptr.is_null()) as u8,
+            framebuffer_pitch
+        );
         Some(Self {
             swapchain_desc,
-            framebuffer_ptr: fb.address() as *mut u8,
-            framebuffer_pitch: pitch,
+            framebuffer_ptr,
+            framebuffer_pitch,
             framebuffer_width,
             framebuffer_height,
             screen_rgba: alloc::vec![0; screen_len],
             screen_rgba_gpu_dirty: false,
-            screen_scanout_rgba: alloc::vec![0; screen_len],
-            screen_scanout_gpu_dirty: false,
             buffers: Vec::new(),
             images: Vec::new(),
             pipelines: Vec::new(),
@@ -156,8 +314,6 @@ impl IntelGfxBackend {
         if self.screen_rgba.len() != len {
             self.screen_rgba.resize(len, 0);
             self.screen_rgba_gpu_dirty = false;
-            self.screen_scanout_rgba.resize(len, 0);
-            self.screen_scanout_gpu_dirty = false;
         }
         Ok(())
     }
@@ -170,17 +326,6 @@ impl IntelGfxBackend {
         self.screen_rgba_gpu_dirty = false;
     }
 
-    fn rotate_screen_present_buffers(&mut self) {
-        core::mem::swap(&mut self.screen_rgba, &mut self.screen_scanout_rgba);
-        core::mem::swap(&mut self.screen_rgba_gpu_dirty, &mut self.screen_scanout_gpu_dirty);
-        if self.screen_rgba.len() == self.screen_scanout_rgba.len() {
-            self.screen_rgba
-                .copy_from_slice(self.screen_scanout_rgba.as_slice());
-        }
-        self.screen_rgba_gpu_dirty = false;
-        self.screen_scanout_gpu_dirty = false;
-    }
-
     fn sync_image_rgba_from_gpu(&mut self, id: ImageId) {
         let Some(image) = self.image_mut(id) else {
             return;
@@ -188,7 +333,7 @@ impl IntelGfxBackend {
         if !image.gpu_dirty || image.rgba.is_empty() {
             return;
         }
-        crate::intel::dma_cache_flush_range(image.rgba.as_ptr(), image.rgba.len());
+        image.copy_dma_to_cpu();
         image.gpu_dirty = false;
     }
 
@@ -225,6 +370,82 @@ impl IntelGfxBackend {
         self.images.get_mut(idx)?.as_mut()
     }
 
+    fn alloc_image_dma(width: u32, height: u32, len: usize) -> Result<ImageDmaSurface> {
+        let pitch_bytes = width
+            .checked_mul(core::mem::size_of::<u32>() as u32)
+            .ok_or(Error::Invalid)?;
+        let expected = (pitch_bytes as usize)
+            .checked_mul(height as usize)
+            .ok_or(Error::Invalid)?;
+        if expected != len {
+            return Err(Error::Invalid);
+        }
+        let bytes = align_up_usize(len, crate::intel::WARM_ALIGN).ok_or(Error::Invalid)?;
+        let (phys, virt) = crate::dma::alloc(bytes, crate::intel::WARM_ALIGN).ok_or_else(|| {
+            crate::log!(
+                "intel/gfx-backend: image dma alloc failed size={}x{} bytes=0x{:X}\n",
+                width,
+                height,
+                bytes
+            );
+            Error::OutOfMemory
+        })?;
+        unsafe {
+            core::ptr::write_bytes(virt, 0, bytes);
+        }
+        crate::intel::dma_cache_flush_range(virt, bytes);
+        Ok(ImageDmaSurface {
+            phys,
+            virt,
+            bytes,
+            pitch_bytes,
+        })
+    }
+
+    fn alloc_mask_dma(width: u32, height: u32) -> Result<ImageDmaSurface> {
+        let len = (width as usize)
+            .checked_mul(height as usize)
+            .ok_or(Error::Invalid)?;
+        let bytes = align_up_usize(len, crate::intel::WARM_ALIGN).ok_or(Error::Invalid)?;
+        let (phys, virt) = crate::dma::alloc(bytes, crate::intel::WARM_ALIGN).ok_or_else(|| {
+            crate::log!(
+                "intel/gfx-backend: mask dma alloc failed size={}x{} bytes=0x{:X}\n",
+                width,
+                height,
+                bytes
+            );
+            Error::OutOfMemory
+        })?;
+        unsafe {
+            core::ptr::write_bytes(virt, 0, bytes);
+        }
+        crate::intel::dma_cache_flush_range(virt, bytes);
+        Ok(ImageDmaSurface {
+            phys,
+            virt,
+            bytes,
+            pitch_bytes: width,
+        })
+    }
+
+    fn dealloc_image_dma(dma: &ImageDmaSurface) {
+        crate::dma::dealloc(dma.virt, dma.bytes);
+    }
+
+    fn ensure_image_mask_dma(&mut self, id: ImageId) -> bool {
+        let Some(image) = self.image_mut(id) else {
+            return false;
+        };
+        if image.mask_dma.is_none() {
+            let Ok(mask_dma) = Self::alloc_mask_dma(image.width, image.height) else {
+                return false;
+            };
+            image.mask_dma = Some(mask_dma);
+        }
+        image.rebuild_mask_dma();
+        image.gpgpu_mask_surface().is_some()
+    }
+
     fn pipeline(&self, id: PipelineId) -> Option<&PipelineEntry> {
         let idx = id.raw().checked_sub(1)? as usize;
         self.pipelines.get(idx)?.as_ref()
@@ -243,13 +464,45 @@ impl IntelGfxBackend {
                 Ok(f(self.screen_rgba.as_mut_slice(), width, height))
             }
             RenderTarget::Image(id) => {
+                self.sync_image_rgba_from_gpu(id);
                 let image = self.image_mut(id).ok_or(Error::NotFound)?;
-                Ok(f(image.rgba.as_mut_slice(), image.width, image.height))
+                let out = f(image.rgba.as_mut_slice(), image.width, image.height);
+                image.copy_cpu_to_dma();
+                image.gpu_dirty = false;
+                Ok(out)
             }
         }
     }
 
-    fn present_screen_cpu_fallback(&mut self) -> Result<()> {
+    fn present_screen_primary_surface_cpu(&self) -> bool {
+        if self.screen_rgba.is_empty() {
+            return false;
+        }
+        let width = self.swapchain_desc.extent.width;
+        let height = self.swapchain_desc.extent.height;
+        crate::intel::present_rgba_primary_flip_y(
+            self.screen_rgba.as_slice(),
+            width,
+            height,
+            width as usize * 4,
+            "gfx-cpu-primary-surface-flip-y",
+        )
+    }
+
+    fn present_scanout_extent(&self) -> (usize, usize) {
+        let (dst_w, dst_h) = crate::intel::active_scanout_dimensions()
+            .or_else(|| {
+                (self.framebuffer_width != 0 && self.framebuffer_height != 0)
+                    .then_some((self.framebuffer_width, self.framebuffer_height))
+            })
+            .unwrap_or((self.swapchain_desc.extent.width, self.swapchain_desc.extent.height));
+        (
+            self.swapchain_desc.extent.width.min(dst_w) as usize,
+            self.swapchain_desc.extent.height.min(dst_h) as usize,
+        )
+    }
+
+    fn present_screen_limine_framebuffer_cpu(&mut self) -> Result<()> {
         self.ensure_screen_rgba()?;
         if self.framebuffer_ptr.is_null() || self.framebuffer_pitch == 0 {
             return Err(Error::Invalid);
@@ -286,60 +539,29 @@ impl IntelGfxBackend {
     }
 
     fn present_screen(&mut self) -> Result<()> {
+        let present_start_ms = embassy_time::Instant::now().as_millis();
         self.ensure_screen_rgba()?;
         self.sync_screen_rgba_from_gpu();
-        let copy_w = self.swapchain_desc.extent.width.min(self.framebuffer_width) as usize;
-        let copy_h = self
-            .swapchain_desc
-            .extent
-            .height
-            .min(self.framebuffer_height) as usize;
+        let (copy_w, copy_h) = self.present_scanout_extent();
         self.present_seq = self.present_seq.wrapping_add(1);
 
-        if let Some(surface_gpu_addr) = crate::intel::primary_present_surface_gpu_addr() {
-            crate::intel::dma_cache_flush_range(self.screen_rgba.as_ptr(), self.screen_rgba.len());
-            let mapped = crate::intel::ggtt_map_screen_rgba_surface(
-                self.screen_rgba.as_slice(),
-                self.swapchain_desc.extent.width,
-                self.swapchain_desc.extent.height,
-                surface_gpu_addr,
-            );
-            if mapped
-                && crate::intel::plane_rebind_present_surface(
-                    surface_gpu_addr,
-                    self.swapchain_desc.extent.width,
-                    self.swapchain_desc.extent.height,
-                    self.swapchain_desc.extent.width.saturating_mul(4),
-                )
-            {
-                mark_present_completed(self.present_seq);
-                self.rotate_screen_present_buffers();
-                if self.present_seq <= 8 || self.present_seq.is_multiple_of(120) {
-                    crate::log!(
-                        "intel/gfx-backend: present seq={} mode=plane-rebind-backbuffer size={}x{} gpu=0x{:X}\n",
-                        self.present_seq,
-                        copy_w,
-                        copy_h,
-                        surface_gpu_addr
-                    );
-                }
-                return Ok(());
-            }
-        }
-
         let guc_ready = crate::intel::guc_ready();
-        let allow_rcs_retry = guc_ready && self.present_seq >= self.rcs_retry_after_present_seq;
+        let allow_rcs_retry = self.present_seq >= self.rcs_retry_after_present_seq;
         if allow_rcs_retry {
             if crate::intel::rcs_present_rgba_frame(self.screen_rgba.as_slice(), copy_w, copy_h) {
                 self.rcs_retry_after_present_seq = 0;
                 self.rcs_present_failures = 0;
                 mark_present_completed(self.present_seq);
                 if self.present_seq <= 8 || self.present_seq.is_multiple_of(120) {
+                    let elapsed_ms = embassy_time::Instant::now()
+                        .as_millis()
+                        .saturating_sub(present_start_ms);
                     crate::log!(
-                        "intel/gfx-backend: present seq={} mode=rcs-execlist-store size={}x{}\n",
+                        "intel/gfx-backend: present seq={} mode=rcs-execlist-store size={}x{} elapsed_ms={}\n",
                         self.present_seq,
                         copy_w,
-                        copy_h
+                        copy_h,
+                        elapsed_ms
                     );
                 }
                 return Ok(());
@@ -364,7 +586,7 @@ impl IntelGfxBackend {
                 .map(crate::intel::guc_status)
                 .unwrap_or(0);
             crate::log!(
-                "intel/gfx-backend: present seq={} waiting-for-guc status=0x{:08X} size={}x{}\n",
+                "intel/gfx-backend: present seq={} direct-rcs-miss guc_ready=0 guc_status=0x{:08X} fallback=cpu-next size={}x{}\n",
                 self.present_seq,
                 guc_status,
                 copy_w,
@@ -372,65 +594,117 @@ impl IntelGfxBackend {
             );
         }
 
-        let fallback = self.present_screen_cpu_fallback();
-        if fallback.is_ok() {
+        let fallback_mode = if self.present_screen_primary_surface_cpu() {
+            Some(CpuPresentMode::PrimarySurface)
+        } else if self.present_screen_limine_framebuffer_cpu().is_ok() {
+            Some(CpuPresentMode::LimineFramebuffer)
+        } else {
+            None
+        };
+        if fallback_mode.is_some() {
             mark_present_completed(self.present_seq);
         }
-        if fallback.is_ok() && (self.present_seq <= 8 || self.present_seq.is_multiple_of(120)) {
+        if let Some(mode) = fallback_mode
+            && (self.present_seq <= 8 || self.present_seq.is_multiple_of(120))
+        {
+            let elapsed_ms = embassy_time::Instant::now()
+                .as_millis()
+                .saturating_sub(present_start_ms);
             crate::log!(
-                "intel/gfx-backend: present seq={} fallback=cpu-scanout guc_ready={} rcs_retry_ready={} size={}x{}\n",
+                "intel/gfx-backend: present seq={} fallback={} guc_ready={} rcs_retry_ready={} size={}x{} elapsed_ms={}\n",
                 self.present_seq,
+                mode.label(),
                 guc_ready as u8,
                 allow_rcs_retry as u8,
                 copy_w,
-                copy_h
+                copy_h,
+                elapsed_ms
             );
         }
-        fallback
+        fallback_mode.map(|_| ()).ok_or(Error::Invalid)
     }
 
     fn present_image_target(&mut self, id: ImageId) -> Result<()> {
-        self.sync_image_rgba_from_gpu(id);
+        let present_start_ms = embassy_time::Instant::now().as_millis();
         let image = self.image(id).ok_or(Error::NotFound)?.clone();
         if image.width == 0 || image.height == 0 {
             return Err(Error::Invalid);
         }
+        let Some(src_rgba) = image.dma_rgba_slice() else {
+            return Err(Error::Invalid);
+        };
 
         self.present_seq = self.present_seq.wrapping_add(1);
-        crate::intel::dma_cache_flush_range(image.rgba.as_ptr(), image.rgba.len());
 
-        if let Some(surface_gpu_addr) = crate::intel::primary_present_shadow_surface_gpu_addr() {
-            let mapped = crate::intel::ggtt_map_screen_rgba_surface(
-                image.rgba.as_slice(),
-                image.width,
-                image.height,
-                surface_gpu_addr,
-            );
-            if mapped
-                && crate::intel::plane_rebind_present_surface(
-                    surface_gpu_addr,
-                    image.width,
-                    image.height,
-                    image.width.saturating_mul(4),
-                )
-            {
+        let allow_rcs_retry = self.present_seq >= self.rcs_retry_after_present_seq;
+        if allow_rcs_retry {
+            if crate::intel::rcs_present_rgba_frame(
+                src_rgba,
+                image.width as usize,
+                image.height as usize,
+            ) {
+                self.rcs_retry_after_present_seq = 0;
+                self.rcs_present_failures = 0;
                 mark_present_completed(self.present_seq);
                 if self.present_seq <= 8 || self.present_seq.is_multiple_of(120) {
+                    let elapsed_ms = embassy_time::Instant::now()
+                        .as_millis()
+                        .saturating_sub(present_start_ms);
                     crate::log!(
-                        "intel/gfx-backend: present seq={} complete_seq={} mode=plane-rebind-image-target-fixed-surface size={}x{} src_gpu=0x{:X} gpu=0x{:X}\n",
+                        "intel/gfx-backend: present seq={} complete_seq={} mode=rcs-execlist-image-dma-target size={}x{} src_gpu=0x{:X} elapsed_ms={}\n",
                         self.present_seq,
                         present_completed_seq(),
                         image.width,
                         image.height,
                         image.gpu_addr,
-                        surface_gpu_addr
+                        elapsed_ms
                     );
                 }
                 return Ok(());
             }
+
+            self.rcs_present_failures = self.rcs_present_failures.saturating_add(1);
+            self.rcs_retry_after_present_seq = self
+                .present_seq
+                .saturating_add(RCS_PRESENT_RETRY_COOLDOWN_PRESENTS);
+            crate::log!(
+                "intel/gfx-backend: present seq={} image-rcs-present-failed failures={} cooldown_until_seq={} size={}x{} src_gpu=0x{:X}\n",
+                self.present_seq,
+                self.rcs_present_failures,
+                self.rcs_retry_after_present_seq,
+                image.width,
+                image.height,
+                image.gpu_addr
+            );
         }
 
-        Err(Error::Unsupported)
+        if crate::intel::present_rgba_primary(
+            src_rgba,
+            image.width,
+            image.height,
+            image.width as usize * 4,
+            "gfx-cpu-primary-image-target",
+        ) {
+            mark_present_completed(self.present_seq);
+            if self.present_seq <= 8 || self.present_seq.is_multiple_of(120) {
+                let elapsed_ms = embassy_time::Instant::now()
+                    .as_millis()
+                    .saturating_sub(present_start_ms);
+                crate::log!(
+                    "intel/gfx-backend: present seq={} complete_seq={} fallback=cpu-primary-image-dma-target rcs_retry_ready={} size={}x{} src_gpu=0x{:X} elapsed_ms={}\n",
+                    self.present_seq,
+                    present_completed_seq(),
+                    allow_rcs_retry as u8,
+                    image.width,
+                    image.height,
+                    image.gpu_addr,
+                    elapsed_ms
+                );
+            }
+            return Ok(());
+        }
+
+        Err(Error::Invalid)
     }
 
     fn draw_rgb(
@@ -450,6 +724,23 @@ impl IntelGfxBackend {
             return Err(Error::Invalid);
         }
         let verts = buffer.bytes[start..start + need].to_vec();
+        if let RenderTarget::Image(dst_id) = target
+            && let Some((quads, spans, dst_gpu_addr)) =
+                self.rgb_quads_to_image(dst_id, verts.as_slice(), scissor, blend)
+        {
+            if let Some(image) = self.image_mut(dst_id) {
+                image.gpu_dirty = true;
+            }
+            if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) {
+                crate::log!(
+                    "intel/gfx-backend: draw-rgb mode=gpgpu-fill-quads quads={} spans={} dst_gpu=0x{:X}\n",
+                    quads,
+                    spans,
+                    dst_gpu_addr
+                );
+            }
+            return Ok(());
+        }
         let fast_ok = match target {
             RenderTarget::Screen => {
                 let screen_surface_gpu =
@@ -542,12 +833,13 @@ impl IntelGfxBackend {
         scissor: Option<ScissorRect>,
         blend: BlendDesc,
     ) -> Result<()> {
+        let draw_start_ms = embassy_time::Instant::now().as_millis();
         if matches!(target, RenderTarget::Screen) {
             self.sync_screen_rgba_from_gpu();
         }
         self.sync_image_rgba_from_gpu(source);
         let buffer = self.buffer(buffer).ok_or(Error::NotFound)?;
-        let source = self.image(source).ok_or(Error::NotFound)?.clone();
+        let source_id = source;
         let start = byte_offset as usize + first_vertex as usize * trueos_gfx_core::TEX_VERTEX_SIZE;
         let need = vertex_count as usize * trueos_gfx_core::TEX_VERTEX_SIZE;
         if start > buffer.bytes.len() || start.saturating_add(need) > buffer.bytes.len() {
@@ -562,6 +854,127 @@ impl IntelGfxBackend {
             }
             PipelineKind::Rgb => return Err(Error::Invalid),
         };
+        if sample_kind == SampleKind::Mask {
+            let _ = self.ensure_image_mask_dma(source_id);
+        }
+        let source = self.image(source_id).ok_or(Error::NotFound)?.clone();
+        if let RenderTarget::Image(dst_id) = target
+            && let Some((quads, spans, submits, dst_gpu_addr)) = self.copy_tex_quads_to_image(
+                dst_id,
+                &source,
+                verts.as_slice(),
+                sampler,
+                blend,
+                sample_kind,
+                scissor,
+            )
+        {
+            if let Some(image) = self.image_mut(dst_id) {
+                image.gpu_dirty = true;
+            }
+            let elapsed_ms = embassy_time::Instant::now()
+                .as_millis()
+                .saturating_sub(draw_start_ms);
+            if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) || elapsed_ms >= 20 {
+                crate::log!(
+                    "intel/gfx-backend: draw-tex mode=gpgpu-copy-rect target=image quads={} spans={} submits={} elapsed_ms={} dst_gpu=0x{:X} src_gpu=0x{:X}\n",
+                    quads,
+                    spans,
+                    submits,
+                    elapsed_ms,
+                    dst_gpu_addr,
+                    source.gpu_addr
+                );
+            }
+            return Ok(());
+        }
+        if let RenderTarget::Image(dst_id) = target
+            && let Some((quads, spans, submits, dst_gpu_addr)) = self.mask_tex_quads_to_image(
+                dst_id,
+                &source,
+                verts.as_slice(),
+                sampler,
+                blend,
+                sample_kind,
+                scissor,
+            )
+        {
+            if let Some(image) = self.image_mut(dst_id) {
+                image.gpu_dirty = true;
+            }
+            let elapsed_ms = embassy_time::Instant::now()
+                .as_millis()
+                .saturating_sub(draw_start_ms);
+            if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) || elapsed_ms >= 20 {
+                crate::log!(
+                    "intel/gfx-backend: draw-tex mode=gpgpu-glyph-mask target=image quads={} spans={} submits={} elapsed_ms={} dst_gpu=0x{:X} mask_gpu=0x{:X}\n",
+                    quads,
+                    spans,
+                    submits,
+                    elapsed_ms,
+                    dst_gpu_addr,
+                    source.mask_gpu_addr
+                );
+            }
+            return Ok(());
+        }
+        if let RenderTarget::Image(dst_id) = target
+            && let Some((quads, spans, submits, dst_gpu_addr)) = self.alpha_tex_quads_to_image(
+                dst_id,
+                &source,
+                verts.as_slice(),
+                sampler,
+                blend,
+                sample_kind,
+                scissor,
+            )
+        {
+            if let Some(image) = self.image_mut(dst_id) {
+                image.gpu_dirty = true;
+            }
+            let elapsed_ms = embassy_time::Instant::now()
+                .as_millis()
+                .saturating_sub(draw_start_ms);
+            if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) || elapsed_ms >= 20 {
+                crate::log!(
+                    "intel/gfx-backend: draw-tex mode=gpgpu-alpha-over target=image quads={} spans={} submits={} elapsed_ms={} dst_gpu=0x{:X} src_gpu=0x{:X}\n",
+                    quads,
+                    spans,
+                    submits,
+                    elapsed_ms,
+                    dst_gpu_addr,
+                    source.gpu_addr
+                );
+            }
+            return Ok(());
+        }
+        if matches!(target, RenderTarget::Screen)
+            && let Some((quads, bytes)) = self.copy_tex_quads_to_screen(
+                &source,
+                verts.as_slice(),
+                sampler,
+                blend,
+                sample_kind,
+                scissor,
+            )
+        {
+            let elapsed_ms = embassy_time::Instant::now()
+                .as_millis()
+                .saturating_sub(draw_start_ms);
+            if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) || elapsed_ms >= 20 {
+                crate::log!(
+                    "intel/gfx-backend: draw-tex mode=cpu-copy-rect target=screen quads={} bytes=0x{:X} source={}x{} target={}x{} elapsed_ms={}\n",
+                    quads,
+                    bytes,
+                    source.width,
+                    source.height,
+                    self.swapchain_desc.extent.width,
+                    self.swapchain_desc.extent.height,
+                    elapsed_ms
+                );
+            }
+            return Ok(());
+        }
         let screen_surface_gpu =
             crate::intel::primary_present_surface_gpu_addr().unwrap_or(0x0200_0000);
         if matches!(target, RenderTarget::Screen)
@@ -584,12 +997,22 @@ impl IntelGfxBackend {
             )
         {
             self.screen_rgba_gpu_dirty = true;
-            if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) {
+            let elapsed_ms = embassy_time::Instant::now()
+                .as_millis()
+                .saturating_sub(draw_start_ms);
+            if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) || elapsed_ms >= 20 {
                 crate::log!(
-                    "intel/gfx-backend: draw-tex mode=rcs-store triangles={} size={}x{} gpu=0x{:X}\n",
+                    "intel/gfx-backend: draw-tex mode=rcs-store target=screen sample={} triangles={} source={}x{} target={}x{} elapsed_ms={} gpu=0x{:X}\n",
+                    match sample_kind {
+                        SampleKind::Mask => "mask",
+                        SampleKind::Rgba => "rgba",
+                    },
                     verts.len() / (3 * trueos_gfx_core::TEX_VERTEX_SIZE),
+                    source.width,
+                    source.height,
                     self.swapchain_desc.extent.width,
                     self.swapchain_desc.extent.height,
+                    elapsed_ms,
                     screen_surface_gpu
                 );
             }
@@ -627,7 +1050,351 @@ impl IntelGfxBackend {
                 off += 3 * trueos_gfx_core::TEX_VERTEX_SIZE;
             }
         })?;
+        let elapsed_ms = embassy_time::Instant::now()
+            .as_millis()
+            .saturating_sub(draw_start_ms);
+        if self.submit_seq <= 8
+            || self.submit_seq.is_multiple_of(120)
+            || matches!(target, RenderTarget::Screen)
+            || elapsed_ms >= 20
+        {
+            crate::log!(
+                "intel/gfx-backend: draw-tex mode=cpu target={} sample={} triangles={} source={}x{} elapsed_ms={}\n",
+                render_target_label(target),
+                match sample_kind {
+                    SampleKind::Mask => "mask",
+                    SampleKind::Rgba => "rgba",
+                },
+                verts.len() / (3 * trueos_gfx_core::TEX_VERTEX_SIZE),
+                source.width,
+                source.height,
+                elapsed_ms
+            );
+        }
         Ok(())
+    }
+
+    fn copy_tex_quads_to_screen(
+        &mut self,
+        source: &ImageEntry,
+        verts: &[u8],
+        sampler: SamplerDesc,
+        blend: BlendDesc,
+        sample_kind: SampleKind,
+        scissor: Option<ScissorRect>,
+    ) -> Option<(usize, usize)> {
+        if sample_kind != SampleKind::Rgba
+            || blend != BlendDesc::disabled()
+            || sampler.wrap_s != SamplerWrap::ClampToEdge
+            || sampler.wrap_t != SamplerWrap::ClampToEdge
+            || !sampler_filter_is_texel_center_equivalent(sampler)
+            || verts.is_empty()
+            || !verts
+                .len()
+                .is_multiple_of(6 * trueos_gfx_core::TEX_VERTEX_SIZE)
+        {
+            return None;
+        }
+
+        self.ensure_screen_rgba().ok()?;
+        let dst_width = self.swapchain_desc.extent.width;
+        let dst_height = self.swapchain_desc.extent.height;
+        let mut quads = 0usize;
+        let mut bytes = 0usize;
+        let mut off = 0usize;
+        while off + (6 * trueos_gfx_core::TEX_VERTEX_SIZE) <= verts.len() {
+            let quad = decode_copy_tex_quad(
+                verts,
+                off,
+                source.width,
+                source.height,
+                dst_width,
+                dst_height,
+            )?;
+            let quad = clip_texture_copy_quad_to_scissor(quad, scissor)?;
+            if quad.dst_x < 0 || quad.dst_y < 0 {
+                return None;
+            }
+            let dst_x = quad.dst_x as usize;
+            let dst_y = quad.dst_y as usize;
+            let src_x = quad.src_x as usize;
+            let src_y = quad.src_y as usize;
+            let width = quad.width as usize;
+            let height = quad.height as usize;
+            if dst_x.saturating_add(width) > dst_width as usize
+                || dst_y.saturating_add(height) > dst_height as usize
+                || src_x.saturating_add(width) > source.width as usize
+                || src_y.saturating_add(height) > source.height as usize
+            {
+                return None;
+            }
+
+            let row_bytes = width.checked_mul(4)?;
+            let src_pitch = (source.width as usize).checked_mul(4)?;
+            let dst_pitch = (dst_width as usize).checked_mul(4)?;
+            for row in 0..height {
+                let src_off = src_y
+                    .checked_add(row)?
+                    .checked_mul(src_pitch)?
+                    .checked_add(src_x.checked_mul(4)?)?;
+                let dst_off = dst_y
+                    .checked_add(row)?
+                    .checked_mul(dst_pitch)?
+                    .checked_add(dst_x.checked_mul(4)?)?;
+                let src_end = src_off.checked_add(row_bytes)?;
+                let dst_end = dst_off.checked_add(row_bytes)?;
+                if src_end > source.rgba.len() || dst_end > self.screen_rgba.len() {
+                    return None;
+                }
+                self.screen_rgba[dst_off..dst_end].copy_from_slice(&source.rgba[src_off..src_end]);
+                bytes = bytes.saturating_add(row_bytes);
+            }
+            quads = quads.saturating_add(1);
+            off = off.saturating_add(6 * trueos_gfx_core::TEX_VERTEX_SIZE);
+        }
+
+        if quads == 0 {
+            return None;
+        }
+        self.screen_rgba_gpu_dirty = false;
+        Some((quads, bytes))
+    }
+
+    fn rgb_quads_to_image(
+        &self,
+        dst_id: ImageId,
+        verts: &[u8],
+        scissor: Option<ScissorRect>,
+        blend: BlendDesc,
+    ) -> Option<(usize, usize, u64)> {
+        if blend != BlendDesc::disabled()
+            || verts.is_empty()
+            || !verts
+                .len()
+                .is_multiple_of(6 * trueos_gfx_core::RGB_VERTEX_SIZE)
+        {
+            return None;
+        }
+        let dst = self.image(dst_id)?;
+        let dst_surface = dst.gpgpu_surface()?;
+        let mut total_spans = 0usize;
+        let mut quads = 0usize;
+        let mut off = 0usize;
+        while off + (6 * trueos_gfx_core::RGB_VERTEX_SIZE) <= verts.len() {
+            let quad = decode_rgb_fill_quad_shape(verts, off, dst.width, dst.height)?;
+            let quad = clip_rgb_fill_quad_to_scissor(quad, scissor)?;
+            let spans = crate::intel::gpgpu::fill_rect_rgba8(
+                dst_surface,
+                crate::intel::gpgpu::GpgpuRect::new(
+                    quad.dst_x,
+                    quad.dst_y,
+                    quad.width,
+                    quad.height,
+                ),
+                quad.color_rgba,
+            );
+            if spans == 0 {
+                return None;
+            }
+            total_spans = total_spans.saturating_add(spans);
+            quads = quads.saturating_add(1);
+            off = off.saturating_add(6 * trueos_gfx_core::RGB_VERTEX_SIZE);
+        }
+        (quads > 0).then_some((quads, total_spans, dst.gpu_addr))
+    }
+
+    fn copy_tex_quads_to_image(
+        &self,
+        dst_id: ImageId,
+        source: &ImageEntry,
+        verts: &[u8],
+        sampler: SamplerDesc,
+        blend: BlendDesc,
+        sample_kind: SampleKind,
+        scissor: Option<ScissorRect>,
+    ) -> Option<(usize, usize, usize, u64)> {
+        if sample_kind != SampleKind::Rgba
+            || blend != BlendDesc::disabled()
+            || sampler.wrap_s != SamplerWrap::ClampToEdge
+            || sampler.wrap_t != SamplerWrap::ClampToEdge
+            || !sampler_filter_is_texel_center_equivalent(sampler)
+            || verts.is_empty()
+            || !verts
+                .len()
+                .is_multiple_of(6 * trueos_gfx_core::TEX_VERTEX_SIZE)
+        {
+            return None;
+        }
+        let dst = self.image(dst_id)?;
+        if dst.gpu_addr == source.gpu_addr {
+            return None;
+        }
+        let src_surface = source.gpgpu_surface()?;
+        let dst_surface = dst.gpgpu_surface()?;
+        let mut copies = Vec::new();
+        let mut off = 0usize;
+        while off + (6 * trueos_gfx_core::TEX_VERTEX_SIZE) <= verts.len() {
+            let quad = decode_copy_tex_quad(
+                verts,
+                off,
+                source.width,
+                source.height,
+                dst.width,
+                dst.height,
+            )?;
+            let quad = clip_texture_copy_quad_to_scissor(quad, scissor)?;
+            copies.push(crate::intel::gpgpu::GpgpuCopyRect {
+                src: src_surface,
+                src_rect: crate::intel::gpgpu::GpgpuRect::new(
+                    quad.src_x as i32,
+                    quad.src_y as i32,
+                    quad.width,
+                    quad.height,
+                ),
+                dst: dst_surface,
+                dst_xy: crate::intel::gpgpu::GpgpuPoint::new(quad.dst_x, quad.dst_y),
+            });
+            off = off.saturating_add(6 * trueos_gfx_core::TEX_VERTEX_SIZE);
+        }
+        if copies.is_empty() {
+            return None;
+        }
+        let stats = crate::intel::gpgpu::copy_rects_rgba8_wide_stats(copies.as_slice());
+        if stats.submits == 0 || stats.spans == 0 {
+            return None;
+        }
+        Some((copies.len(), stats.spans, stats.submits, dst.gpu_addr))
+    }
+
+    fn alpha_tex_quads_to_image(
+        &self,
+        dst_id: ImageId,
+        source: &ImageEntry,
+        verts: &[u8],
+        sampler: SamplerDesc,
+        blend: BlendDesc,
+        sample_kind: SampleKind,
+        scissor: Option<ScissorRect>,
+    ) -> Option<(usize, usize, usize, u64)> {
+        if sample_kind != SampleKind::Rgba
+            || blend != BlendDesc::straight_alpha()
+            || sampler.wrap_s != SamplerWrap::ClampToEdge
+            || sampler.wrap_t != SamplerWrap::ClampToEdge
+            || !sampler_filter_is_texel_center_equivalent(sampler)
+            || verts.is_empty()
+            || !verts
+                .len()
+                .is_multiple_of(6 * trueos_gfx_core::TEX_VERTEX_SIZE)
+        {
+            return None;
+        }
+        let dst = self.image(dst_id)?;
+        if dst.gpu_addr == source.gpu_addr {
+            return None;
+        }
+        let src_surface = source.gpgpu_surface()?;
+        let dst_surface = dst.gpgpu_surface()?;
+        let mut total_spans = 0usize;
+        let mut total_submits = 0usize;
+        let mut quads = 0usize;
+        let mut off = 0usize;
+        while off + (6 * trueos_gfx_core::TEX_VERTEX_SIZE) <= verts.len() {
+            let quad = decode_copy_tex_quad(
+                verts,
+                off,
+                source.width,
+                source.height,
+                dst.width,
+                dst.height,
+            )?;
+            let quad = clip_texture_copy_quad_to_scissor(quad, scissor)?;
+            let stats = crate::intel::gpgpu::alpha_blend_rgba8_over_stats(
+                src_surface,
+                crate::intel::gpgpu::GpgpuRect::new(
+                    quad.src_x as i32,
+                    quad.src_y as i32,
+                    quad.width,
+                    quad.height,
+                ),
+                dst_surface,
+                crate::intel::gpgpu::GpgpuPoint::new(quad.dst_x, quad.dst_y),
+            );
+            if stats.submits == 0 || stats.spans == 0 {
+                return None;
+            }
+            total_spans = total_spans.saturating_add(stats.spans);
+            total_submits = total_submits.saturating_add(stats.submits);
+            quads = quads.saturating_add(1);
+            off = off.saturating_add(6 * trueos_gfx_core::TEX_VERTEX_SIZE);
+        }
+        (quads > 0).then_some((quads, total_spans, total_submits, dst.gpu_addr))
+    }
+
+    fn mask_tex_quads_to_image(
+        &self,
+        dst_id: ImageId,
+        source: &ImageEntry,
+        verts: &[u8],
+        sampler: SamplerDesc,
+        blend: BlendDesc,
+        sample_kind: SampleKind,
+        scissor: Option<ScissorRect>,
+    ) -> Option<(usize, usize, usize, u64)> {
+        if sample_kind != SampleKind::Mask
+            || blend != BlendDesc::straight_alpha()
+            || sampler.wrap_s != SamplerWrap::ClampToEdge
+            || sampler.wrap_t != SamplerWrap::ClampToEdge
+            || !sampler_filter_is_texel_center_equivalent(sampler)
+            || verts.is_empty()
+            || !verts
+                .len()
+                .is_multiple_of(6 * trueos_gfx_core::TEX_VERTEX_SIZE)
+        {
+            return None;
+        }
+        let dst = self.image(dst_id)?;
+        if dst.gpu_addr == source.gpu_addr {
+            return None;
+        }
+        let mask_surface = source.gpgpu_mask_surface()?;
+        let dst_surface = dst.gpgpu_surface()?;
+        let mut total_spans = 0usize;
+        let mut total_submits = 0usize;
+        let mut quads = 0usize;
+        let mut off = 0usize;
+        while off + (6 * trueos_gfx_core::TEX_VERTEX_SIZE) <= verts.len() {
+            let (quad, color_rgba) = decode_mask_tex_quad(
+                verts,
+                off,
+                source.width,
+                source.height,
+                dst.width,
+                dst.height,
+            )?;
+            let quad = clip_texture_copy_quad_to_scissor(quad, scissor)?;
+            let stats = crate::intel::gpgpu::glyph_mask_rgba8_stats(
+                crate::intel::gpgpu::GpgpuGlyphMaskBlit {
+                    mask: mask_surface,
+                    mask_rect: crate::intel::gpgpu::GpgpuRect::new(
+                        quad.src_x as i32,
+                        quad.src_y as i32,
+                        quad.width,
+                        quad.height,
+                    ),
+                    dst: dst_surface,
+                    dst_xy: crate::intel::gpgpu::GpgpuPoint::new(quad.dst_x, quad.dst_y),
+                    color_rgba,
+                },
+            );
+            if stats.submits == 0 || stats.spans == 0 {
+                return None;
+            }
+            total_spans = total_spans.saturating_add(stats.spans);
+            total_submits = total_submits.saturating_add(stats.submits);
+            quads = quads.saturating_add(1);
+            off = off.saturating_add(6 * trueos_gfx_core::TEX_VERTEX_SIZE);
+        }
+        (quads > 0).then_some((quads, total_spans, total_submits, dst.gpu_addr))
     }
 
     fn draw_mandelbrot(
@@ -787,9 +1554,15 @@ impl GfxDevice for IntelGfxBackend {
         }
         let gpu_addr = self.next_image_gpu_addr;
         let alloc_span = u64::try_from(len).map_err(|_| Error::Invalid)?;
+        let mask_len = (desc.width as usize)
+            .checked_mul(desc.height as usize)
+            .ok_or(Error::Invalid)?;
+        let mask_span = u64::try_from(mask_len).map_err(|_| Error::Invalid)?;
+        let mask_gpu_addr =
+            align_up_u64(gpu_addr.saturating_add(alloc_span), crate::intel::WARM_ALIGN as u64);
         self.next_image_gpu_addr = align_up_u64(
-            gpu_addr
-                .saturating_add(alloc_span)
+            mask_gpu_addr
+                .saturating_add(mask_span)
                 .saturating_add(IMAGE_GPU_VA_ALIGN.saturating_sub(1)),
             IMAGE_GPU_VA_ALIGN,
         );
@@ -800,6 +1573,9 @@ impl GfxDevice for IntelGfxBackend {
                 height: desc.height,
                 format: desc.format,
                 gpu_addr,
+                mask_gpu_addr,
+                dma: Self::alloc_image_dma(desc.width, desc.height, len)?,
+                mask_dma: None,
                 gpu_dirty: false,
                 rgba: alloc::vec![0; len],
             },
@@ -813,6 +1589,12 @@ impl GfxDevice for IntelGfxBackend {
             .checked_sub(1)
             .and_then(|idx| self.images.get_mut(idx as usize))
         {
+            if let Some(image) = slot.as_ref() {
+                Self::dealloc_image_dma(&image.dma);
+                if let Some(mask_dma) = image.mask_dma.as_ref() {
+                    Self::dealloc_image_dma(mask_dma);
+                }
+            }
             *slot = None;
         }
     }
@@ -827,6 +1609,8 @@ impl GfxDevice for IntelGfxBackend {
         if image.format == ImageFormat::Rgbx8888 {
             force_opaque_alpha(image.rgba.as_mut_slice());
         }
+        image.copy_cpu_to_dma();
+        image.rebuild_mask_dma();
         image.gpu_dirty = false;
         Ok(())
     }
@@ -857,6 +1641,8 @@ impl GfxDevice for IntelGfxBackend {
         if image.format == ImageFormat::Rgbx8888 {
             force_opaque_alpha(image.rgba.as_mut_slice());
         }
+        image.copy_cpu_to_dma();
+        image.rebuild_mask_dma();
         image.gpu_dirty = false;
         Ok(())
     }
@@ -876,7 +1662,30 @@ impl GfxDevice for IntelGfxBackend {
     }
 
     fn submit(&mut self, cmds: CommandBuffer<'_>) -> Result<FenceId> {
-        self.ensure_screen_rgba()?;
+        let submit_start_ms = embassy_time::Instant::now().as_millis();
+        static SUBMIT_ENTRY_LOGS: core::sync::atomic::AtomicU32 =
+            core::sync::atomic::AtomicU32::new(0);
+        let entry_n = SUBMIT_ENTRY_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if entry_n < 16 {
+            crate::log!(
+                "intel/gfx-backend: submit entry n={} cmds={} extent={}x{}\n",
+                entry_n + 1,
+                cmds.commands.len(),
+                self.swapchain_desc.extent.width,
+                self.swapchain_desc.extent.height
+            );
+        }
+        if let Err(err) = self.ensure_screen_rgba() {
+            if entry_n < 16 {
+                crate::log!(
+                    "intel/gfx-backend: submit ensure_screen_rgba failed err={:?} extent={}x{}\n",
+                    err,
+                    self.swapchain_desc.extent.width,
+                    self.swapchain_desc.extent.height
+                );
+            }
+            return Err(err);
+        }
 
         let mut target = RenderTarget::Screen;
         let mut scissor: Option<ScissorRect> = None;
@@ -887,8 +1696,20 @@ impl GfxDevice for IntelGfxBackend {
         let mut bound_offset = 0u64;
         let mut bound_image = ImageId::invalid();
         let mut unsupported = 0u32;
+        let mut present_cmds = 0u32;
 
-        for cmd in cmds.commands {
+        let trace_commands = entry_n < 4;
+        for (cmd_idx, cmd) in cmds.commands.iter().enumerate() {
+            if trace_commands {
+                crate::log!(
+                    "intel/gfx-backend: cmd-enter submit={} idx={} op={} target={} unsupported={}\n",
+                    entry_n + 1,
+                    cmd_idx,
+                    command_label(cmd),
+                    render_target_label(target),
+                    unsupported
+                );
+            }
             match *cmd {
                 Command::ClearColor { rgb } => {
                     let fast_ok = match target {
@@ -909,20 +1730,23 @@ impl GfxDevice for IntelGfxBackend {
                                 screen_surface_gpu,
                             ))
                         }
-                        RenderTarget::Image(id) => self.image(id).and_then(|image| {
-                            crate::intel::rcs_clear_rgba_surface(
-                                image.rgba.as_slice(),
-                                image.width,
-                                image.height,
-                                image.gpu_addr,
-                                rgb,
-                            )
-                            .then_some((
-                                image.width,
-                                image.height,
-                                image.gpu_addr,
-                            ))
-                        }),
+                        RenderTarget::Image(id) if ENABLE_IMAGE_GPGPU_CLEAR => {
+                            self.image(id).and_then(|image| {
+                                let surface = image.gpgpu_surface()?;
+                                let spans = crate::intel::gpgpu::fill_rect_rgba8(
+                                    surface,
+                                    crate::intel::gpgpu::GpgpuRect::new(
+                                        0,
+                                        0,
+                                        image.width,
+                                        image.height,
+                                    ),
+                                    rgb_to_kernel_rgba(rgb, 0xFF),
+                                );
+                                (spans > 0).then_some((image.width, image.height, image.gpu_addr))
+                            })
+                        }
+                        RenderTarget::Image(_) => None,
                     };
                     if let Some((target_w, target_h, target_gpu_addr)) = fast_ok {
                         match target {
@@ -952,20 +1776,60 @@ impl GfxDevice for IntelGfxBackend {
                     }
                 }
                 Command::ClearColorRgba { rgba: clear } => {
-                    if matches!(target, RenderTarget::Screen) {
-                        self.sync_screen_rgba_from_gpu();
-                    }
-                    self.with_target_mut(target, |rgba, width, height| {
-                        for px in rgba
-                            .chunks_exact_mut(4)
-                            .take((width as usize).saturating_mul(height as usize))
-                        {
-                            px[0] = clear.r;
-                            px[1] = clear.g;
-                            px[2] = clear.b;
-                            px[3] = clear.a;
+                    let fast_ok = match target {
+                        RenderTarget::Screen => None,
+                        RenderTarget::Image(id) if ENABLE_IMAGE_GPGPU_CLEAR => {
+                            self.image(id).and_then(|image| {
+                                let surface = image.gpgpu_surface()?;
+                                let spans = crate::intel::gpgpu::fill_rect_rgba8(
+                                    surface,
+                                    crate::intel::gpgpu::GpgpuRect::new(
+                                        0,
+                                        0,
+                                        image.width,
+                                        image.height,
+                                    ),
+                                    rgba_to_kernel_rgba(clear.r, clear.g, clear.b, clear.a),
+                                );
+                                (spans > 0).then_some((image.width, image.height, image.gpu_addr))
+                            })
                         }
-                    })?;
+                        RenderTarget::Image(_) => None,
+                    };
+                    if let Some((target_w, target_h, target_gpu_addr)) = fast_ok {
+                        if let RenderTarget::Image(id) = target
+                            && let Some(image) = self.image_mut(id)
+                        {
+                            image.gpu_dirty = true;
+                        }
+                        if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) {
+                            crate::log!(
+                                "intel/gfx-backend: clear-rgba mode=gpgpu-fill size={}x{} rgba=[{},{},{},{}] gpu=0x{:X}\n",
+                                target_w,
+                                target_h,
+                                clear.r,
+                                clear.g,
+                                clear.b,
+                                clear.a,
+                                target_gpu_addr
+                            );
+                        }
+                    } else {
+                        if matches!(target, RenderTarget::Screen) {
+                            self.sync_screen_rgba_from_gpu();
+                        }
+                        self.with_target_mut(target, |rgba, width, height| {
+                            for px in rgba
+                                .chunks_exact_mut(4)
+                                .take((width as usize).saturating_mul(height as usize))
+                            {
+                                px[0] = clear.r;
+                                px[1] = clear.g;
+                                px[2] = clear.b;
+                                px[3] = clear.a;
+                            }
+                        })?;
+                    }
                 }
                 Command::ClearRect {
                     rgb,
@@ -974,10 +1838,18 @@ impl GfxDevice for IntelGfxBackend {
                     width,
                     height,
                 } => {
-                    if matches!(target, RenderTarget::Screen) {
-                        self.sync_screen_rgba_from_gpu();
-                    }
-                    self.with_target_mut(target, |rgba, target_w, target_h| {
+                    let target_dims = match target {
+                        RenderTarget::Screen => Some((
+                            self.swapchain_desc.extent.width,
+                            self.swapchain_desc.extent.height,
+                            0,
+                        )),
+                        RenderTarget::Image(id) => self
+                            .image(id)
+                            .map(|image| (image.width, image.height, image.gpu_addr)),
+                    };
+                    let mut fast_ok = None;
+                    if let Some((target_w, target_h, target_gpu_addr)) = target_dims {
                         let mut x0 = x.min(target_w);
                         let mut y0 = y.min(target_h);
                         let mut x1 = x.saturating_add(width).min(target_w);
@@ -989,18 +1861,76 @@ impl GfxDevice for IntelGfxBackend {
                             y1 = y1.min(scissor.y.saturating_add(scissor.height).min(target_h));
                         }
                         if x0 < x1 && y0 < y1 {
-                            clear_rgba_rect(
-                                rgba,
+                            if ENABLE_IMAGE_GPGPU_CLEAR
+                                && let RenderTarget::Image(id) = target
+                                && let Some(image) = self.image(id)
+                                && let Some(surface) = image.gpgpu_surface()
+                            {
+                                let spans = crate::intel::gpgpu::fill_rect_rgba8(
+                                    surface,
+                                    crate::intel::gpgpu::GpgpuRect::new(
+                                        x0 as i32,
+                                        y0 as i32,
+                                        x1 - x0,
+                                        y1 - y0,
+                                    ),
+                                    rgb_to_kernel_rgba(rgb, 0xFF),
+                                );
+                                if spans > 0 {
+                                    fast_ok =
+                                        Some((target_w, target_h, target_gpu_addr, x0, y0, x1, y1));
+                                }
+                            }
+                        }
+                    }
+                    if let Some((target_w, target_h, target_gpu_addr, x0, y0, x1, y1)) = fast_ok {
+                        if let RenderTarget::Image(id) = target
+                            && let Some(image) = self.image_mut(id)
+                        {
+                            image.gpu_dirty = true;
+                        }
+                        if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) {
+                            crate::log!(
+                                "intel/gfx-backend: clear-rect mode=gpgpu-fill size={}x{} rect={}x{}+{},{} rgb=0x{:06X} gpu=0x{:X}\n",
                                 target_w,
                                 target_h,
-                                x0,
-                                y0,
                                 x1 - x0,
                                 y1 - y0,
-                                rgb,
+                                x0,
+                                y0,
+                                rgb & 0x00FF_FFFF,
+                                target_gpu_addr
                             );
                         }
-                    })?;
+                    } else {
+                        if matches!(target, RenderTarget::Screen) {
+                            self.sync_screen_rgba_from_gpu();
+                        }
+                        self.with_target_mut(target, |rgba, target_w, target_h| {
+                            let mut x0 = x.min(target_w);
+                            let mut y0 = y.min(target_h);
+                            let mut x1 = x.saturating_add(width).min(target_w);
+                            let mut y1 = y.saturating_add(height).min(target_h);
+                            if let Some(scissor) = scissor {
+                                x0 = x0.max(scissor.x.min(target_w));
+                                y0 = y0.max(scissor.y.min(target_h));
+                                x1 = x1.min(scissor.x.saturating_add(scissor.width).min(target_w));
+                                y1 = y1.min(scissor.y.saturating_add(scissor.height).min(target_h));
+                            }
+                            if x0 < x1 && y0 < y1 {
+                                clear_rgba_rect(
+                                    rgba,
+                                    target_w,
+                                    target_h,
+                                    x0,
+                                    y0,
+                                    x1 - x0,
+                                    y1 - y0,
+                                    rgb,
+                                );
+                            }
+                        })?;
+                    }
                 }
                 Command::BindPipeline(id) => {
                     if let Some(entry) = self.pipeline(id) {
@@ -1087,6 +2017,7 @@ impl GfxDevice for IntelGfxBackend {
                     }
                 }
                 Command::Present => {
+                    present_cmds = present_cmds.saturating_add(1);
                     let present_res = match target {
                         RenderTarget::Screen => self.present_screen(),
                         RenderTarget::Image(id) => self.present_image_target(id),
@@ -1096,19 +2027,39 @@ impl GfxDevice for IntelGfxBackend {
                     }
                 }
             }
+            if trace_commands {
+                crate::log!(
+                    "intel/gfx-backend: cmd-exit submit={} idx={} op={} target={} unsupported={}\n",
+                    entry_n + 1,
+                    cmd_idx,
+                    command_label(cmd),
+                    render_target_label(target),
+                    unsupported
+                );
+            }
         }
 
         self.submit_seq = self.submit_seq.wrapping_add(1);
-        if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) || unsupported != 0 {
+        let elapsed_ms = embassy_time::Instant::now()
+            .as_millis()
+            .saturating_sub(submit_start_ms);
+        if self.submit_seq <= 8
+            || self.submit_seq.is_multiple_of(120)
+            || unsupported != 0
+            || present_cmds != 0
+            || elapsed_ms >= 20
+        {
             crate::log!(
-                "intel/gfx-backend: submit seq={} cmds={} unsupported={} target={}\n",
+                "intel/gfx-backend: submit seq={} cmds={} present_cmds={} unsupported={} target={} elapsed_ms={}\n",
                 self.submit_seq,
                 cmds.commands.len(),
+                present_cmds,
                 unsupported,
                 match target {
                     RenderTarget::Screen => "screen",
                     RenderTarget::Image(_) => "image",
-                }
+                },
+                elapsed_ms
             );
         }
 
@@ -1204,6 +2155,46 @@ fn force_opaque_alpha(rgba: &mut [u8]) {
     }
 }
 
+fn command_label(cmd: &Command) -> &'static str {
+    match *cmd {
+        Command::ClearColor { .. } => "ClearColor",
+        Command::ClearColorRgba { .. } => "ClearColorRgba",
+        Command::ClearRect { .. } => "ClearRect",
+        Command::BindPipeline(_) => "BindPipeline",
+        Command::BindVertexBuffer { .. } => "BindVertexBuffer",
+        Command::BindImage(_) => "BindImage",
+        Command::SetRenderTarget(_) => "SetRenderTarget",
+        Command::SetSampler(_) => "SetSampler",
+        Command::SetBlend(_) => "SetBlend",
+        Command::SetViewport(_) => "SetViewport",
+        Command::SetScissor(_) => "SetScissor",
+        Command::Draw { .. } => "Draw",
+        Command::Present => "Present",
+    }
+}
+
+fn render_target_label(target: RenderTarget) -> &'static str {
+    match target {
+        RenderTarget::Screen => "screen",
+        RenderTarget::Image(_) => "image",
+    }
+}
+
+#[inline]
+fn rgba_to_kernel_rgba(r: u8, g: u8, b: u8, a: u8) -> u32 {
+    ((a as u32) << 24) | ((b as u32) << 16) | ((g as u32) << 8) | (r as u32)
+}
+
+#[inline]
+fn rgb_to_kernel_rgba(rgb: u32, alpha: u8) -> u32 {
+    rgba_to_kernel_rgba(
+        ((rgb >> 16) & 0xFF) as u8,
+        ((rgb >> 8) & 0xFF) as u8,
+        (rgb & 0xFF) as u8,
+        alpha,
+    )
+}
+
 #[inline]
 fn align_up_u64(value: u64, align: u64) -> u64 {
     if align <= 1 {
@@ -1214,6 +2205,20 @@ fn align_up_u64(value: u64, align: u64) -> u64 {
             value
         } else {
             value.saturating_add(align - rem)
+        }
+    }
+}
+
+#[inline]
+fn align_up_usize(value: usize, align: usize) -> Option<usize> {
+    if align <= 1 {
+        Some(value)
+    } else {
+        let rem = value % align;
+        if rem == 0 {
+            Some(value)
+        } else {
+            value.checked_add(align - rem)
         }
     }
 }
@@ -1242,6 +2247,398 @@ fn ndc_to_target_x(x: f32, width: u32) -> f32 {
 #[inline]
 fn ndc_to_target_y(y: f32, height: u32) -> f32 {
     ((1.0 - y) * 0.5) * height as f32
+}
+
+fn decode_rgb_fill_quad_shape(
+    bytes: &[u8],
+    off: usize,
+    dst_width: u32,
+    dst_height: u32,
+) -> Option<RgbFillQuad> {
+    let v0 = read_rgb_vertex_f32_bytes(bytes, off)?;
+    let v1 = read_rgb_vertex_f32_bytes(bytes, off + trueos_gfx_core::RGB_VERTEX_SIZE)?;
+    let v2 = read_rgb_vertex_f32_bytes(bytes, off + 2 * trueos_gfx_core::RGB_VERTEX_SIZE)?;
+    let v3 = read_rgb_vertex_f32_bytes(bytes, off + 3 * trueos_gfx_core::RGB_VERTEX_SIZE)?;
+    let v4 = read_rgb_vertex_f32_bytes(bytes, off + 4 * trueos_gfx_core::RGB_VERTEX_SIZE)?;
+    let v5 = read_rgb_vertex_f32_bytes(bytes, off + 5 * trueos_gfx_core::RGB_VERTEX_SIZE)?;
+    let verts = [v0, v1, v2, v3, v4, v5];
+    let color_rgba = constant_rgb_vertex_color_rgba(&verts)?;
+
+    let left = ndc_to_target_x(v0.x, dst_width);
+    let top = ndc_to_target_y(v0.y, dst_height);
+    let right = ndc_to_target_x(v1.x, dst_width);
+    let bottom = ndc_to_target_y(v2.y, dst_height);
+    if !(left.is_finite()
+        && right.is_finite()
+        && top.is_finite()
+        && bottom.is_finite()
+        && left < right
+        && top < bottom)
+    {
+        return None;
+    }
+
+    let expected_xy = [
+        (left, top),
+        (right, top),
+        (right, bottom),
+        (left, top),
+        (right, bottom),
+        (left, bottom),
+    ];
+    for (vertex, (expected_x, expected_y)) in verts.iter().zip(expected_xy) {
+        let px = ndc_to_target_x(vertex.x, dst_width);
+        let py = ndc_to_target_y(vertex.y, dst_height);
+        if !nearly_eq_px(px, expected_x) || !nearly_eq_px(py, expected_y) {
+            return None;
+        }
+    }
+
+    let dst_x = round_i32_if_near(left)?;
+    let dst_y = round_i32_if_near(top)?;
+    let width = round_u32_if_near(right - left)?;
+    let height = round_u32_if_near(bottom - top)?;
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    Some(RgbFillQuad {
+        dst_x,
+        dst_y,
+        width,
+        height,
+        color_rgba,
+    })
+}
+
+fn clip_rgb_fill_quad_to_scissor(
+    quad: RgbFillQuad,
+    scissor: Option<ScissorRect>,
+) -> Option<RgbFillQuad> {
+    let Some(scissor) = scissor else {
+        return Some(quad);
+    };
+    if scissor.width == 0 || scissor.height == 0 {
+        return None;
+    }
+
+    let dst_x0 = quad.dst_x as i64;
+    let dst_y0 = quad.dst_y as i64;
+    let dst_x1 = dst_x0.saturating_add(quad.width as i64);
+    let dst_y1 = dst_y0.saturating_add(quad.height as i64);
+    let clip_x0 = scissor.x as i64;
+    let clip_y0 = scissor.y as i64;
+    let clip_x1 = scissor.x.saturating_add(scissor.width) as i64;
+    let clip_y1 = scissor.y.saturating_add(scissor.height) as i64;
+
+    let out_x0 = dst_x0.max(clip_x0);
+    let out_y0 = dst_y0.max(clip_y0);
+    let out_x1 = dst_x1.min(clip_x1);
+    let out_y1 = dst_y1.min(clip_y1);
+    if out_x0 >= out_x1 || out_y0 >= out_y1 {
+        return None;
+    }
+
+    Some(RgbFillQuad {
+        dst_x: i32::try_from(out_x0).ok()?,
+        dst_y: i32::try_from(out_y0).ok()?,
+        width: u32::try_from(out_x1.saturating_sub(out_x0)).ok()?,
+        height: u32::try_from(out_y1.saturating_sub(out_y0)).ok()?,
+        color_rgba: quad.color_rgba,
+    })
+}
+
+fn decode_copy_tex_quad(
+    bytes: &[u8],
+    off: usize,
+    src_width: u32,
+    src_height: u32,
+    dst_width: u32,
+    dst_height: u32,
+) -> Option<TextureCopyQuad> {
+    let (quad, verts) =
+        decode_tex_quad_shape(bytes, off, src_width, src_height, dst_width, dst_height)?;
+    if !verts.iter().all(tex_vertex_is_untinted_white) {
+        return None;
+    }
+    Some(quad)
+}
+
+fn decode_mask_tex_quad(
+    bytes: &[u8],
+    off: usize,
+    src_width: u32,
+    src_height: u32,
+    dst_width: u32,
+    dst_height: u32,
+) -> Option<(TextureCopyQuad, u32)> {
+    let (quad, verts) =
+        decode_tex_quad_shape(bytes, off, src_width, src_height, dst_width, dst_height)?;
+    let color_rgba = constant_tex_vertex_color_rgba(&verts)?;
+    Some((quad, color_rgba))
+}
+
+fn clip_texture_copy_quad_to_scissor(
+    quad: TextureCopyQuad,
+    scissor: Option<ScissorRect>,
+) -> Option<TextureCopyQuad> {
+    let Some(scissor) = scissor else {
+        return Some(quad);
+    };
+    if scissor.width == 0 || scissor.height == 0 {
+        return None;
+    }
+
+    let dst_x0 = quad.dst_x as i64;
+    let dst_y0 = quad.dst_y as i64;
+    let dst_x1 = dst_x0.saturating_add(quad.width as i64);
+    let dst_y1 = dst_y0.saturating_add(quad.height as i64);
+    let clip_x0 = scissor.x as i64;
+    let clip_y0 = scissor.y as i64;
+    let clip_x1 = scissor.x.saturating_add(scissor.width) as i64;
+    let clip_y1 = scissor.y.saturating_add(scissor.height) as i64;
+
+    let out_x0 = dst_x0.max(clip_x0);
+    let out_y0 = dst_y0.max(clip_y0);
+    let out_x1 = dst_x1.min(clip_x1);
+    let out_y1 = dst_y1.min(clip_y1);
+    if out_x0 >= out_x1 || out_y0 >= out_y1 {
+        return None;
+    }
+
+    let trim_left = u32::try_from(out_x0.saturating_sub(dst_x0)).ok()?;
+    let trim_top = u32::try_from(out_y0.saturating_sub(dst_y0)).ok()?;
+    Some(TextureCopyQuad {
+        src_x: quad.src_x.saturating_add(trim_left),
+        src_y: quad.src_y.saturating_add(trim_top),
+        dst_x: i32::try_from(out_x0).ok()?,
+        dst_y: i32::try_from(out_y0).ok()?,
+        width: u32::try_from(out_x1.saturating_sub(out_x0)).ok()?,
+        height: u32::try_from(out_y1.saturating_sub(out_y0)).ok()?,
+    })
+}
+
+fn decode_tex_quad_shape(
+    bytes: &[u8],
+    off: usize,
+    src_width: u32,
+    src_height: u32,
+    dst_width: u32,
+    dst_height: u32,
+) -> Option<(TextureCopyQuad, [TexVertexF32; 6])> {
+    let v0 = read_tex_vertex_f32_bytes(bytes, off)?;
+    let v1 = read_tex_vertex_f32_bytes(bytes, off + trueos_gfx_core::TEX_VERTEX_SIZE)?;
+    let v2 = read_tex_vertex_f32_bytes(bytes, off + 2 * trueos_gfx_core::TEX_VERTEX_SIZE)?;
+    let v3 = read_tex_vertex_f32_bytes(bytes, off + 3 * trueos_gfx_core::TEX_VERTEX_SIZE)?;
+    let v4 = read_tex_vertex_f32_bytes(bytes, off + 4 * trueos_gfx_core::TEX_VERTEX_SIZE)?;
+    let v5 = read_tex_vertex_f32_bytes(bytes, off + 5 * trueos_gfx_core::TEX_VERTEX_SIZE)?;
+    let verts = [v0, v1, v2, v3, v4, v5];
+
+    let left = ndc_to_target_x(v0.x, dst_width);
+    let right = ndc_to_target_x(v1.x, dst_width);
+    let bottom = ndc_to_target_y(v0.y, dst_height);
+    let top = ndc_to_target_y(v2.y, dst_height);
+    if !(left.is_finite()
+        && right.is_finite()
+        && top.is_finite()
+        && bottom.is_finite()
+        && left < right
+        && top < bottom)
+    {
+        return None;
+    }
+
+    let expected_xy = [
+        (left, bottom),
+        (right, bottom),
+        (right, top),
+        (left, bottom),
+        (right, top),
+        (left, top),
+    ];
+    for (vertex, (expected_x, expected_y)) in verts.iter().zip(expected_xy) {
+        let px = ndc_to_target_x(vertex.x, dst_width);
+        let py = ndc_to_target_y(vertex.y, dst_height);
+        if !nearly_eq_px(px, expected_x) || !nearly_eq_px(py, expected_y) {
+            return None;
+        }
+    }
+
+    let u0 = v0.u;
+    let u1 = v1.u;
+    let tex_top = v2.v;
+    let tex_bottom = v0.v;
+    if !(u0.is_finite()
+        && u1.is_finite()
+        && tex_top.is_finite()
+        && tex_bottom.is_finite()
+        && u0 >= 0.0
+        && tex_top >= 0.0
+        && u1 <= 1.0
+        && tex_bottom <= 1.0
+        && u0 < u1
+        && tex_top < tex_bottom)
+    {
+        return None;
+    }
+    let expected_uv = [
+        (u0, tex_bottom),
+        (u1, tex_bottom),
+        (u1, tex_top),
+        (u0, tex_bottom),
+        (u1, tex_top),
+        (u0, tex_top),
+    ];
+    for (vertex, (expected_u, expected_v)) in verts.iter().zip(expected_uv) {
+        if !nearly_eq_uv(vertex.u, expected_u) || !nearly_eq_uv(vertex.v, expected_v) {
+            return None;
+        }
+    }
+
+    let dst_x = round_i32_if_near(left)?;
+    let dst_y = round_i32_if_near(top)?;
+    let dst_w = round_u32_if_near(right - left)?;
+    let dst_h = round_u32_if_near(bottom - top)?;
+    let src_x = round_u32_if_near(u0 * src_width as f32)?;
+    let src_y = round_u32_if_near(tex_top * src_height as f32)?;
+    let src_w = round_u32_if_near((u1 - u0) * src_width as f32)?;
+    let src_h = round_u32_if_near((tex_bottom - tex_top) * src_height as f32)?;
+    if dst_w == 0
+        || dst_h == 0
+        || dst_w != src_w
+        || dst_h != src_h
+        || src_x.saturating_add(src_w) > src_width
+        || src_y.saturating_add(src_h) > src_height
+    {
+        return None;
+    }
+
+    Some((
+        TextureCopyQuad {
+            src_x,
+            src_y,
+            dst_x,
+            dst_y,
+            width: dst_w,
+            height: dst_h,
+        },
+        verts,
+    ))
+}
+
+#[inline]
+fn sampler_filter_is_texel_center_equivalent(sampler: SamplerDesc) -> bool {
+    matches!(sampler.min_filter, SamplerFilter::Nearest | SamplerFilter::Linear)
+        && matches!(sampler.mag_filter, SamplerFilter::Nearest | SamplerFilter::Linear)
+}
+
+#[inline]
+fn tex_vertex_is_untinted_white(vertex: &TexVertexF32) -> bool {
+    nearly_eq_unit(vertex.r)
+        && nearly_eq_unit(vertex.g)
+        && nearly_eq_unit(vertex.b)
+        && nearly_eq_unit(vertex.a)
+}
+
+fn constant_tex_vertex_color_rgba(verts: &[TexVertexF32; 6]) -> Option<u32> {
+    let first = verts[0];
+    if !tex_vertex_color_is_finite(first) {
+        return None;
+    }
+    for vertex in verts.iter().skip(1) {
+        if !tex_vertex_color_is_finite(*vertex)
+            || !nearly_eq_color(vertex.r, first.r)
+            || !nearly_eq_color(vertex.g, first.g)
+            || !nearly_eq_color(vertex.b, first.b)
+            || !nearly_eq_color(vertex.a, first.a)
+        {
+            return None;
+        }
+    }
+    Some(rgba_to_kernel_rgba(
+        unit_float_to_u8(first.r),
+        unit_float_to_u8(first.g),
+        unit_float_to_u8(first.b),
+        unit_float_to_u8(first.a),
+    ))
+}
+
+fn constant_rgb_vertex_color_rgba(verts: &[trueos_gfx_core::RgbVertexF32; 6]) -> Option<u32> {
+    let first = verts[0];
+    if !rgb_vertex_color_is_finite(first) {
+        return None;
+    }
+    for vertex in verts.iter().skip(1) {
+        if !rgb_vertex_color_is_finite(*vertex)
+            || !nearly_eq_color(vertex.r, first.r)
+            || !nearly_eq_color(vertex.g, first.g)
+            || !nearly_eq_color(vertex.b, first.b)
+            || !nearly_eq_color(vertex.a, first.a)
+        {
+            return None;
+        }
+    }
+    Some(rgba_to_kernel_rgba(
+        unit_float_to_u8(first.r),
+        unit_float_to_u8(first.g),
+        unit_float_to_u8(first.b),
+        unit_float_to_u8(first.a),
+    ))
+}
+
+#[inline]
+fn tex_vertex_color_is_finite(vertex: TexVertexF32) -> bool {
+    vertex.r.is_finite() && vertex.g.is_finite() && vertex.b.is_finite() && vertex.a.is_finite()
+}
+
+#[inline]
+fn rgb_vertex_color_is_finite(vertex: trueos_gfx_core::RgbVertexF32) -> bool {
+    vertex.r.is_finite() && vertex.g.is_finite() && vertex.b.is_finite() && vertex.a.is_finite()
+}
+
+#[inline]
+fn nearly_eq_color(a: f32, b: f32) -> bool {
+    a.is_finite() && b.is_finite() && (a - b).abs() <= (1.0 / 255.0)
+}
+
+#[inline]
+fn unit_float_to_u8(value: f32) -> u8 {
+    libm::roundf(clamp01(value) * 255.0) as u8
+}
+
+#[inline]
+fn nearly_eq_unit(value: f32) -> bool {
+    value.is_finite() && (value - 1.0).abs() <= (1.0 / 255.0)
+}
+
+#[inline]
+fn nearly_eq_px(a: f32, b: f32) -> bool {
+    a.is_finite() && b.is_finite() && (a - b).abs() <= 0.05
+}
+
+#[inline]
+fn nearly_eq_uv(a: f32, b: f32) -> bool {
+    a.is_finite() && b.is_finite() && (a - b).abs() <= 0.000_01
+}
+
+#[inline]
+fn round_i32_if_near(value: f32) -> Option<i32> {
+    if !value.is_finite() {
+        return None;
+    }
+    let rounded = libm::roundf(value);
+    ((value - rounded).abs() <= 0.05 && rounded >= i32::MIN as f32 && rounded <= i32::MAX as f32)
+        .then_some(rounded as i32)
+}
+
+#[inline]
+fn round_u32_if_near(value: f32) -> Option<u32> {
+    if !value.is_finite() {
+        return None;
+    }
+    let rounded = libm::roundf(value);
+    ((value - rounded).abs() <= 0.05 && rounded >= 0.0 && rounded <= u32::MAX as f32)
+        .then_some(rounded as u32)
 }
 
 #[inline]
@@ -1368,7 +2765,7 @@ fn sample_texture_rgba(texture: &ImageEntry, sampler: SamplerDesc, u: f32, v: f3
     out
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SampleKind {
     Mask,
     Rgba,

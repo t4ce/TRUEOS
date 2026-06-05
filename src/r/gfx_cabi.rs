@@ -9263,6 +9263,22 @@ pub mod cabi {
                     ) {
                         return -11;
                     }
+                    static END_FRAME_PASS_LOGS: core::sync::atomic::AtomicU32 =
+                        core::sync::atomic::AtomicU32::new(0);
+                    let log_n =
+                        END_FRAME_PASS_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                    if log_n < 16 {
+                        crate::log!(
+                            "gfx-cabi: submit end_frame_pass n={} seq={} cmds={} rgb_bytes={} tex_bytes={} screen_present={} target_image={}\n",
+                            log_n + 1,
+                            seq,
+                            cmds.len(),
+                            rgb_blob.len(),
+                            tex_blob.len(),
+                            is_screen_present_frame as u8,
+                            pass_final_target_image.map(|id| id.raw()).unwrap_or(0)
+                        );
+                    }
                     let submit_res = ctx.submit(CommandBuffer {
                         commands: cmds.as_slice(),
                     });
@@ -9298,6 +9314,20 @@ pub mod cabi {
                     }
                     if !check_submit_budget(0, cmds.len(), "end_frame_clear_only") {
                         return -11;
+                    }
+                    static END_FRAME_CLEAR_LOGS: core::sync::atomic::AtomicU32 =
+                        core::sync::atomic::AtomicU32::new(0);
+                    let log_n =
+                        END_FRAME_CLEAR_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                    if log_n < 16 {
+                        crate::log!(
+                            "gfx-cabi: submit end_frame_clear_only n={} seq={} cmds={} screen_present={} target_image={}\n",
+                            log_n + 1,
+                            seq,
+                            cmds.len(),
+                            is_screen_present_frame as u8,
+                            current_target_image.map(|id| id.raw()).unwrap_or(0)
+                        );
                     }
                     let submit_res = ctx.submit(CommandBuffer {
                         commands: cmds.as_slice(),

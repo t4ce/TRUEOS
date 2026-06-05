@@ -9,8 +9,9 @@ use crate::intel::gpgpu::{
     canvas3d_rotate_quat_q16_upload_status, canvas3d_scale_q16_upload_status,
     canvas3d_transform_q16_upload_status, canvas3d_translate_q16_upload_status,
     clear_rect_rgba8_white_upload_status, copy_rect_rgba8_upload_status,
-    copy_rect_rgba8_wide_upload_status, empty_eot_upload_status, shell_clear_white_rgba8,
-    shell_copy_rgba8, shell_copy_scanout_center_rgba8, shell_copy_twemoji_atlas_slot_scanout,
+    copy_rect_rgba8_wide_upload_status, empty_eot_upload_status, fill_rect_rgba8_upload_status,
+    glyph_mask_rgba8_upload_status, shell_clear_white_rgba8, shell_copy_rgba8,
+    shell_copy_scanout_center_rgba8, shell_copy_twemoji_atlas_slot_scanout,
     shell_cube20_project_spin, shell_twemoji_atlas_worklist_present_scanout,
     shell_twemoji_atlas_worklist_scanout, shell_twemoji_atlas_worklist_scanout_present,
     sprite64_worklist_rgba8_upload_status,
@@ -249,6 +250,8 @@ fn print_status(io: &'static dyn ShellBackend2) {
     let copy = copy_rect_rgba8_upload_status();
     let copy_wide = copy_rect_rgba8_wide_upload_status();
     let clear = clear_rect_rgba8_white_upload_status();
+    let fill = fill_rect_rgba8_upload_status();
+    let glyph = glyph_mask_rgba8_upload_status();
     let empty = empty_eot_upload_status();
     let work = sprite64_worklist_rgba8_upload_status();
     let canvas = canvas3d_project_rgba8_upload_status();
@@ -257,10 +260,12 @@ fn print_status(io: &'static dyn ShellBackend2) {
     let rotate = canvas3d_rotate_quat_q16_upload_status();
     let transform = canvas3d_transform_q16_upload_status();
     let msg = alloc::format!(
-        "gpgpu: copy_upload={} copy_wide_upload={} clear_upload={} empty_upload={} worklist_upload={} canvas3d_upload={} transform_uploads={}/{}/{}/{} shell_surface={}x{} pitch={} gpu=0x008A0000",
+        "gpgpu: copy_upload={} copy_wide_upload={} clear_upload={} fill_upload={} glyph_mask_upload={} empty_upload={} worklist_upload={} canvas3d_upload={} transform_uploads={}/{}/{}/{} shell_surface={}x{} pitch={} gpu=0x008A0000",
         artifact_status(copy.is_some()),
         artifact_status(copy_wide.is_some()),
         artifact_status(clear.is_some()),
+        artifact_status(fill.is_some()),
+        artifact_status(glyph.is_some()),
         artifact_status(empty.is_some()),
         artifact_status(work.is_some()),
         artifact_status(canvas.is_some()),
@@ -641,7 +646,7 @@ fn run_canvas(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
         result.total_submit_ms / u64::from(result.submitted)
     };
     let msg = alloc::format!(
-        "gpgpu canvas: mode=cube20-transform-project-fullscreen ok={} frames={} submitted={} presented={} duration_ms={} elapsed_ms={} cadence_us={} avg_submit_ms={} max_submit_ms={} visible={} stamped={} vertices={} half_px={} canvas={},{} primary={}x{} last_angle={}",
+        "gpgpu canvas: mode=cube20-tetra10-transform-project-fullscreen ok={} frames={} submitted={} presented={} duration_ms={} elapsed_ms={} cadence_us={} avg_submit_ms={} max_submit_ms={} visible={} stamped={} vertices={} half_px={} canvas={},{} primary={}x{} last_angle={}",
         result.ok as u8,
         result.frames,
         result.submitted,

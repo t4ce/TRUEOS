@@ -3051,6 +3051,7 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
     let compose_started_at = Instant::now();
     let mut surface_timings = Vec::new();
     let mut frame_ok = false;
+    let intel_skip_overlay_layer = crate::gfx::is_intel_active();
     let scene_dirty = !present_to_screen
         || !state.first_compose_signaled
         || state.windows.iter().any(|w| w.dirty);
@@ -3064,7 +3065,7 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
         crate::log!("ui2: scene render-target ensure failed\n");
         return false;
     }
-    if present_to_screen {
+    if present_to_screen && !intel_skip_overlay_layer {
         if !ensure_ui2_layer_render_target(
             UI2_OVERLAY_TARGET_TEX_ID,
             state.view_w,
@@ -3078,8 +3079,15 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
 
     let lock_result = crate::gfx::try_with_cabi_frame_lock(20_000, || {
         if scene_dirty {
-            let begin_rc =
-                unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame_no_present(0xE9EEF2) };
+            let intel_preserve_scene =
+                crate::gfx::is_intel_active() && state.first_compose_signaled;
+            let begin_rc = unsafe {
+                if intel_preserve_scene {
+                    crate::r::io::cabi::trueos_cabi_gfx_begin_frame_preserve_no_present(0xE9EEF2)
+                } else {
+                    crate::r::io::cabi::trueos_cabi_gfx_begin_frame_no_present(0xE9EEF2)
+                }
+            };
             if begin_rc != 0 {
                 crate::log!("ui2: scene begin_frame-no-present failed rc={}\n", begin_rc);
                 return;
@@ -3092,13 +3100,17 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
                 let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
                 return;
             }
-            let scene_clear_rc = unsafe {
-                crate::r::io::cabi::trueos_cabi_gfx_clear_rgba_no_present(0xE9, 0xEE, 0xF2, 0xFF)
-            };
-            if scene_clear_rc != 0 {
-                crate::log!("ui2: scene render-target clear failed rc={}\n", scene_clear_rc);
-                let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
-                return;
+            if !intel_preserve_scene {
+                let scene_clear_rc = unsafe {
+                    crate::r::io::cabi::trueos_cabi_gfx_clear_rgba_no_present(
+                        0xE9, 0xEE, 0xF2, 0xFF,
+                    )
+                };
+                if scene_clear_rc != 0 {
+                    crate::log!("ui2: scene render-target clear failed rc={}\n", scene_clear_rc);
+                    let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
+                    return;
+                }
             }
 
             ui2_win_register::draw_offline_dock(state);
@@ -3126,36 +3138,44 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
             return;
         }
 
-        let overlay_begin_rc =
-            unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame_no_present(0) };
-        if overlay_begin_rc != 0 {
-            crate::log!("ui2: overlay begin_frame-no-present failed rc={}\n", overlay_begin_rc);
-            return;
-        }
-        let overlay_rt_rc = unsafe {
-            crate::r::io::cabi::trueos_cabi_gfx_set_render_target(UI2_OVERLAY_TARGET_TEX_ID)
-        };
-        if overlay_rt_rc != 0 {
-            crate::log!("ui2: overlay render-target bind failed rc={}\n", overlay_rt_rc);
-            let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
-            return;
-        }
-        let clear_overlay_rc =
-            unsafe { crate::r::io::cabi::trueos_cabi_gfx_clear_rgba_no_present(0, 0, 0, 0) };
-        if clear_overlay_rc != 0 {
-            crate::log!("ui2: overlay clear failed rc={}\n", clear_overlay_rc);
-            let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
-            return;
-        }
-        draw_cursor_overlay_layer(state);
-        if scene_dirty {
-            draw_resize_preview_outline(state);
-        }
-        unsafe {
-            crate::r::io::cabi::trueos_cabi_gfx_end_frame();
+        if !intel_skip_overlay_layer {
+            let overlay_begin_rc =
+                unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame_no_present(0) };
+            if overlay_begin_rc != 0 {
+                crate::log!("ui2: overlay begin_frame-no-present failed rc={}\n", overlay_begin_rc);
+                return;
+            }
+            let overlay_rt_rc = unsafe {
+                crate::r::io::cabi::trueos_cabi_gfx_set_render_target(UI2_OVERLAY_TARGET_TEX_ID)
+            };
+            if overlay_rt_rc != 0 {
+                crate::log!("ui2: overlay render-target bind failed rc={}\n", overlay_rt_rc);
+                let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
+                return;
+            }
+            let clear_overlay_rc =
+                unsafe { crate::r::io::cabi::trueos_cabi_gfx_clear_rgba_no_present(0, 0, 0, 0) };
+            if clear_overlay_rc != 0 {
+                crate::log!("ui2: overlay clear failed rc={}\n", clear_overlay_rc);
+                let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
+                return;
+            }
+            draw_cursor_overlay_layer(state);
+            if scene_dirty {
+                draw_resize_preview_outline(state);
+            }
+            unsafe {
+                crate::r::io::cabi::trueos_cabi_gfx_end_frame();
+            }
         }
 
-        let present_begin_rc = unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame(0xE9EEF2) };
+        let present_begin_rc = unsafe {
+            if crate::gfx::is_intel_active() {
+                crate::r::io::cabi::trueos_cabi_gfx_begin_frame_preserve(0xE9EEF2)
+            } else {
+                crate::r::io::cabi::trueos_cabi_gfx_begin_frame(0xE9EEF2)
+            }
+        };
         if present_begin_rc != 0 {
             crate::log!("ui2: layered present begin_frame failed rc={}\n", present_begin_rc);
             return;
@@ -3174,17 +3194,18 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
             false,
             255,
         );
-        let overlay_drawn = draw_texture_rect_no_present(
-            UI2_OVERLAY_TARGET_TEX_ID,
-            0.0,
-            0.0,
-            state.view_w as f32,
-            state.view_h as f32,
-            state.view_w,
-            state.view_h,
-            true,
-            255,
-        );
+        let overlay_drawn = intel_skip_overlay_layer
+            || draw_texture_rect_no_present(
+                UI2_OVERLAY_TARGET_TEX_ID,
+                0.0,
+                0.0,
+                state.view_w as f32,
+                state.view_h as f32,
+                state.view_w,
+                state.view_h,
+                true,
+                255,
+            );
         if !scene_drawn || !overlay_drawn {
             crate::log!(
                 "ui2: layered present draw failed scene={} overlay={}\n",

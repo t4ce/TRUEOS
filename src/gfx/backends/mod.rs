@@ -4,9 +4,9 @@ use trueos_gfx_core::{
     Result, ShaderDesc, ShaderId, SwapchainDesc,
 };
 
+pub mod intel;
 #[cfg(feature = "trueos_rdp")]
 pub mod rdp;
-pub mod intel;
 
 use crate::gfx::virtio_gpu_3d;
 
@@ -141,6 +141,7 @@ impl Backend {
         {
             if let Some(intel) = intel::IntelGfxBackend::init(framebuffers) {
                 crate::log_info!(target: "gfx"; "gfx: using intel+rdp backend (auto)\n");
+                crate::log!("gfx: using intel+rdp backend (auto)\n");
                 return Backend::IntelRdp(RdpMirrorBackend::new(
                     intel,
                     rdp::RdpGfxBackend::init(framebuffers),
@@ -305,9 +306,45 @@ impl<T: GfxDevice> GfxDevice for RdpMirrorBackend<T> {
     }
 
     fn submit(&mut self, cmds: CommandBuffer<'_>) -> Result<FenceId> {
-        let fence = self.primary.submit(cmds)?;
-        let _ = self.rdp.submit(cmds);
-        Ok(fence)
+        static SUBMIT_LOGS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+        let n = SUBMIT_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if n < 16 {
+            crate::log!(
+                "gfx/rdp-mirror: submit n={} cmds={} primary_then_rdp=1 rdp_fallback=1\n",
+                n + 1,
+                cmds.commands.len()
+            );
+        }
+        let primary_res = self.primary.submit(cmds);
+        let rdp_res = self.rdp.submit(cmds);
+        match (primary_res, rdp_res) {
+            (Ok(fence), Ok(_)) => Ok(fence),
+            (Ok(fence), Err(err)) => {
+                if n < 16 {
+                    crate::log!("gfx/rdp-mirror: rdp submit failed err={:?}\n", err);
+                }
+                Ok(fence)
+            }
+            (Err(primary_err), Ok(fence)) => {
+                if n < 16 {
+                    crate::log!(
+                        "gfx/rdp-mirror: primary submit failed err={:?}; rdp submit ok\n",
+                        primary_err
+                    );
+                }
+                Ok(fence)
+            }
+            (Err(primary_err), Err(rdp_err)) => {
+                if n < 16 {
+                    crate::log!(
+                        "gfx/rdp-mirror: submit failed primary_err={:?} rdp_err={:?}\n",
+                        primary_err,
+                        rdp_err
+                    );
+                }
+                Err(primary_err)
+            }
+        }
     }
 
     fn poll(&mut self, fence: FenceId) -> bool {
