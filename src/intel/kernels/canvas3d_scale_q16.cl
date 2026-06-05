@@ -15,7 +15,7 @@ static inline int q16_mul(int a, int b)
 }
 
 __attribute__((intel_reqd_sub_group_size(16)))
-__kernel void canvas512_3d_scale_q16(
+__kernel void canvas3d_scale_q16(
     __global const int4 *src_vertices_q16,
     __global int4 *dst_vertices_q16,
     uint src_first_vertex,

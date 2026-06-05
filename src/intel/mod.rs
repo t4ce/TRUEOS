@@ -178,10 +178,12 @@ pub fn init_once() {
     let _ = self::gpgpu::upload_clear_rect_rgba8_white_kernel();
     let _ = self::gpgpu::upload_empty_eot_kernel();
     let _ = self::gpgpu::upload_sprite64_worklist_rgba8_kernel();
-    let _ = self::gpgpu::upload_canvas512_3d_project_rgba8_kernel();
-    let _ = self::gpgpu::upload_canvas512_3d_translate_q16_kernel();
-    let _ = self::gpgpu::upload_canvas512_3d_scale_q16_kernel();
-    let _ = self::gpgpu::upload_canvas512_3d_rotate_quat_q16_kernel();
+    let _ = self::gpgpu::upload_canvas3d_project_rgba8_kernel();
+    let _ = self::gpgpu::upload_canvas3d_translate_q16_kernel();
+    let _ = self::gpgpu::upload_canvas3d_scale_q16_kernel();
+    let _ = self::gpgpu::upload_canvas3d_rotate_quat_q16_kernel();
+    let _ = self::gpgpu::upload_canvas3d_transform_q16_kernel();
+    let _ = self::gpgpu::upload_canvas3d_clip_box_q16_kernel();
     let _ = self::gpgpu::submit_direct_rcs_smoke_once();
     let _ = self::gpgpu::submit_empty_eot_walker_once();
     let _ = self::gpgpu::submit_clear_rect_rgba8_white_strip_once();
@@ -190,8 +192,9 @@ pub fn init_once() {
     let _ = self::gpgpu::submit_copy_rect_rgba8_256x2_once();
     let _ = self::gpgpu::submit_copy_rect_rgba8_wide_256x2_once();
     let _ = self::gpgpu::submit_rect_api_smoke_once();
-    let _ = self::gpgpu::submit_canvas512_3d_project_once();
-    let _ = self::gpgpu::submit_canvas512_3d_transform_smoke_once();
+    let _ = self::gpgpu::submit_canvas3d_project_once();
+    let _ = self::gpgpu::submit_canvas3d_transform_smoke_once();
+    let _ = self::gpgpu::submit_canvas3d_clip_box_q16_once();
     self::fw_probe::log_probe_modules(dev.device_id);
     self::dmc::wire_load_path(dev);
     let huc_fw = self::huc::load_fw();
@@ -334,6 +337,93 @@ pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
 
 pub fn primary_surface_gpu_addr() -> Option<u64> {
     self::display::primary_surface_gpu_addr()
+}
+
+pub fn primary_present_surface_gpu_addr() -> Option<u64> {
+    primary_surface_gpu_addr()
+}
+
+pub fn primary_present_shadow_surface_gpu_addr() -> Option<u64> {
+    primary_surface_gpu_addr()
+}
+
+pub fn dma_cache_flush_range(ptr: *const u8, len: usize) {
+    dma_flush(ptr as *mut u8, len)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TextureStoreSampleKind {
+    Mask,
+    Rgba,
+}
+
+pub fn ggtt_map_screen_rgba_surface(
+    _rgba: &[u8],
+    _width: u32,
+    _height: u32,
+    _surface_gpu_addr: u64,
+) -> bool {
+    false
+}
+
+pub fn plane_rebind_present_surface(
+    _surface_gpu_addr: u64,
+    _width: u32,
+    _height: u32,
+    _pitch_bytes: u32,
+) -> bool {
+    false
+}
+
+pub fn rcs_present_rgba_frame(_rgba: &[u8], _width: usize, _height: usize) -> bool {
+    false
+}
+
+pub fn rcs_clear_rgba_surface(
+    _rgba: &[u8],
+    _width: u32,
+    _height: u32,
+    _gpu_addr: u64,
+    _rgb: u32,
+) -> bool {
+    false
+}
+
+pub fn rcs_draw_rgba_rgb_triangles(
+    _target_rgba: &[u8],
+    _vertices: &[u8],
+    _width: u32,
+    _height: u32,
+    _target_gpu_addr: u64,
+    _scissor: Option<trueos_gfx_core::ScissorRect>,
+    _blend: trueos_gfx_core::BlendDesc,
+) -> bool {
+    false
+}
+
+pub fn rcs_draw_screen_tex_triangles(
+    _target_rgba: &[u8],
+    _source_rgba: &[u8],
+    _source_width: u32,
+    _source_height: u32,
+    _vertices: &[u8],
+    _target_width: u32,
+    _target_height: u32,
+    _target_gpu_addr: u64,
+    _scissor: Option<trueos_gfx_core::ScissorRect>,
+    _blend: trueos_gfx_core::BlendDesc,
+    _sampler: trueos_gfx_core::SamplerDesc,
+    _sample_kind: TextureStoreSampleKind,
+) -> bool {
+    false
+}
+
+pub fn warm_state() -> Option<()> {
+    None
+}
+
+pub fn guc_status(_state: ()) -> u32 {
+    0
 }
 
 pub(crate) fn clear_primary_surface_color(color: u32, reason: &str) -> bool {
