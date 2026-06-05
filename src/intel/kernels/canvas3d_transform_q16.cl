@@ -6,9 +6,10 @@
 // - The walker transforms the source subset
 //   [src_first_vertex, src_first_vertex + vertex_count) into the destination
 //   subset [dst_first_vertex, dst_first_vertex + vertex_count).
+// - scale_q16 is int4 { sx, sy, sz, ignored } in Q16 units.
 // - quat_q16 is int4 { x, y, z, w } in Q16 units.
-// - Rotation uses q * v * q^-1 through the equivalent vector formula. Non-zero
-//   quaternions do not need to be pre-normalized; a zero quaternion copies input.
+// - delta_q16 is int4 { dx, dy, dz, ignored } in Q16 units.
+// - Transform order is scale, quaternion rotate, translate.
 // - The pad lane is preserved from the source vertex.
 
 static inline int q16_mul(int a, int b)
@@ -41,13 +42,15 @@ static inline int4 q16_cross(int4 a, int4 b)
 }
 
 __attribute__((intel_reqd_sub_group_size(16)))
-__kernel void canvas512_3d_rotate_quat_q16(
+__kernel void canvas3d_transform_q16(
     __global const int4 *src_vertices_q16,
     __global int4 *dst_vertices_q16,
     uint src_first_vertex,
     uint dst_first_vertex,
     uint vertex_count,
-    int4 quat_q16)
+    int4 scale_q16,
+    int4 quat_q16,
+    int4 delta_q16)
 {
     uint lane = get_global_id(0);
 
@@ -63,19 +66,27 @@ __kernel void canvas512_3d_rotate_quat_q16(
 
     for (uint offset = lane; offset < vertex_count; offset += 16u) {
         int4 v = src_vertices_q16[src_first_vertex + offset];
+        int4 scaled = (int4)(
+            q16_mul(v.x, scale_q16.x),
+            q16_mul(v.y, scale_q16.y),
+            q16_mul(v.z, scale_q16.z),
+            v.w);
 
-        if (norm_q16 == 0) {
-            dst_vertices_q16[dst_first_vertex + offset] = v;
-            continue;
+        int4 rotated = scaled;
+        if (norm_q16 != 0) {
+            int4 uv = q16_cross(quat_q16, scaled);
+            int4 uuv = q16_cross(quat_q16, uv);
+            rotated = (int4)(
+                scaled.x + q16_div(q16_mul2(quat_q16.w, uv.x), norm_q16) + q16_div2(uuv.x, norm_q16),
+                scaled.y + q16_div(q16_mul2(quat_q16.w, uv.y), norm_q16) + q16_div2(uuv.y, norm_q16),
+                scaled.z + q16_div(q16_mul2(quat_q16.w, uv.z), norm_q16) + q16_div2(uuv.z, norm_q16),
+                scaled.w);
         }
 
-        int4 uv = q16_cross(quat_q16, v);
-        int4 uuv = q16_cross(quat_q16, uv);
-
         dst_vertices_q16[dst_first_vertex + offset] = (int4)(
-            v.x + q16_div(q16_mul2(quat_q16.w, uv.x), norm_q16) + q16_div2(uuv.x, norm_q16),
-            v.y + q16_div(q16_mul2(quat_q16.w, uv.y), norm_q16) + q16_div2(uuv.y, norm_q16),
-            v.z + q16_div(q16_mul2(quat_q16.w, uv.z), norm_q16) + q16_div2(uuv.z, norm_q16),
+            rotated.x + delta_q16.x,
+            rotated.y + delta_q16.y,
+            rotated.z + delta_q16.z,
             v.w);
     }
 }

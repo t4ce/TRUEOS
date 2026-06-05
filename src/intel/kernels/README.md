@@ -45,23 +45,30 @@ The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 - `glyph_mask_rgba8.cl`: 8-bit coverage mask blended with packed RGBA8 color
 - `stamp_mandel_rgba8.cl`: ten-iteration Mandelbrot stamp using destination x/y as both stamp origin and view offset
 - `sprite64_worklist_rgba8.cl`: fixed 64x64 sprite descriptors copied/blended from atlas to destination; shell path batches descriptor slices as multiple walkers in one command buffer
-- `canvas512_3d_project_rgba8.cl`: fixed 512x512 Q16 vec3 projection into packed XY/RGBA point records
-- `canvas512_3d_translate_q16.cl`: range/subset Q16 vec3 translation from source int4 vertices to destination int4 vertices
-- `canvas512_3d_scale_q16.cl`: range/subset Q16 vec3 component scale from source int4 vertices to destination int4 vertices
-- `canvas512_3d_rotate_quat_q16.cl`: range/subset Q16 vec3 quaternion rotation from source int4 vertices to destination int4 vertices
+- `canvas3d_3d_project_rgba8.cl`: Q16 vec3 projection into packed XY/RGBA point records with source/output ranges and dynamic canvas dimensions
+- `canvas3d_3d_translate_q16.cl`: range/subset Q16 vec3 translation from source int4 vertices to destination int4 vertices
+- `canvas3d_3d_scale_q16.cl`: range/subset Q16 vec3 component scale from source int4 vertices to destination int4 vertices
+- `canvas3d_3d_rotate_quat_q16.cl`: range/subset Q16 vec3 quaternion rotation from source int4 vertices to destination int4 vertices
+- `canvas3d_3d_transform_q16.cl`: range/subset Q16 vec3 fused scale, quaternion rotation, and translation from source int4 vertices to destination int4 vertices
+- `canvas3d_clip_box_q16.cl`: idempotent Q16 vec3 source-to-sink box clip for presentation-safe geometry before projection
 
-The canvas512 transform kernels use the same SIMD16 lane-stride shape. Their
-OpenCL cross-thread argument order is:
+The canvas3d projector and transform kernels use the same SIMD16 lane-stride
+shape. Their OpenCL cross-thread argument order is:
 
 ```text
+vertices_q16, out_points, src_first_vertex, out_first_point, vertex_count, canvas_width, canvas_height
 src_vertices_q16, dst_vertices_q16, src_first_vertex, dst_first_vertex, vertex_count, delta_q16
 src_vertices_q16, dst_vertices_q16, src_first_vertex, dst_first_vertex, vertex_count, scale_q16
+src_vertices_q16, dst_vertices_q16, src_first_vertex, dst_first_vertex, vertex_count, scale_q16, quat_q16, delta_q16
 src_vertices_q16, dst_vertices_q16, src_first_vertex, dst_first_vertex, vertex_count, quat_q16
+src_vertices_q16, dst_vertices_q16, src_first_vertex, dst_first_vertex, vertex_count, min_q16, max_q16
 ```
 
-The final `int4` argument is 16-byte aligned in the cross-thread payload.
-After the three `uint` fields, the CPU payload leaves one dword of padding
-before writing the `int4` lanes.
+For the transform kernels, vector arguments in the cross-thread payload are 16-byte
+aligned. After the three `uint` fields, the CPU payload leaves one dword of
+padding before the first `int4`, then writes each additional `int4` on the next
+16-byte slot. The current artifact metadata reports by-value vector offsets at
+80, 96, and 112 bytes.
 
 `artifacts/adls/copy_rect_rgba8.bin` is the current Alder Lake S build produced
 with Intel `ocloc`/IGC. Its SHA-256 is:

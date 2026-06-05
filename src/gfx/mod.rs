@@ -189,8 +189,12 @@ impl System {
 fn backend_kind_raw(backend: &backends::Backend) -> u8 {
     match backend {
         #[cfg(not(feature = "trueos_rdp"))]
+        backends::Backend::Intel(_) => 5,
+        #[cfg(not(feature = "trueos_rdp"))]
         backends::Backend::Virgl(_) => 1,
         backends::Backend::None(_) => 2,
+        #[cfg(feature = "trueos_rdp")]
+        backends::Backend::IntelRdp(_) => 6,
         #[cfg(feature = "trueos_rdp")]
         backends::Backend::VirglRdp(_) => 3,
         #[cfg(feature = "trueos_rdp")]
@@ -212,6 +216,9 @@ fn backend_kind_cached() -> Option<BackendKind> {
         3 => Some(BackendKind::VirglRdp),
         #[cfg(feature = "trueos_rdp")]
         4 => Some(BackendKind::Rdp),
+        5 => Some(BackendKind::Intel),
+        #[cfg(feature = "trueos_rdp")]
+        6 => Some(BackendKind::IntelRdp),
         _ => None,
     }
 }
@@ -224,7 +231,11 @@ pub fn init(framebuffers: Option<&'static crate::limine::FramebufferResponse>) {
         let backend = backends::Backend::init_auto(framebuffers);
         let backend_name = match &backend {
             #[cfg(not(feature = "trueos_rdp"))]
+            backends::Backend::Intel(_) => "intel",
+            #[cfg(not(feature = "trueos_rdp"))]
             backends::Backend::Virgl(_) => "virgl",
+            #[cfg(feature = "trueos_rdp")]
+            backends::Backend::IntelRdp(_) => "intel+rdp",
             #[cfg(feature = "trueos_rdp")]
             backends::Backend::VirglRdp(_) => "virgl+rdp",
             #[cfg(feature = "trueos_rdp")]
@@ -592,7 +603,10 @@ pub fn rdp_monitor_draw_tex_triangles(
 #[cfg(feature = "trueos_rdp")]
 #[inline]
 fn rdp_sideband_enabled() -> bool {
-    !matches!(backend_kind_cached(), Some(BackendKind::VirglRdp) | Some(BackendKind::Rdp))
+    !matches!(
+        backend_kind_cached(),
+        Some(BackendKind::IntelRdp) | Some(BackendKind::VirglRdp) | Some(BackendKind::Rdp)
+    )
 }
 
 pub fn with_framebuffers<R>(
@@ -627,6 +641,16 @@ pub fn is_rdp_only_active() -> bool {
 }
 
 pub fn is_intel_active() -> bool {
+    let kind = backend_kind_cached();
+    if matches!(kind, Some(BackendKind::Intel)) {
+        return true;
+    }
+    #[cfg(feature = "trueos_rdp")]
+    {
+        if matches!(kind, Some(BackendKind::IntelRdp)) {
+            return true;
+        }
+    }
     false
 }
 
@@ -667,7 +691,10 @@ pub fn switch_to_virgl() -> bool {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BackendKind {
+    Intel,
     Virgl,
+    #[cfg(feature = "trueos_rdp")]
+    IntelRdp,
     #[cfg(feature = "trueos_rdp")]
     VirglRdp,
     #[cfg(feature = "trueos_rdp")]

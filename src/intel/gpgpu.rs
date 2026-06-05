@@ -2,7 +2,12 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use spin::{Mutex, Once};
-use trueos_math::{cos_f32, sin_f32};
+mod test_gpgpu;
+
+pub(crate) use test_gpgpu::{
+    GpgpuShellCube20ProjectResult, shell_cube20_project_spin, submit_canvas3d_clip_box_q16_once,
+    submit_canvas3d_project_once, submit_canvas3d_transform_smoke_once,
+};
 
 pub(crate) const COPY_RECT_RGBA8_KERNEL_NAME: &str = "copy_rect_rgba8";
 pub(crate) const COPY_RECT_RGBA8_OPENCL_SOURCE: &str = include_str!("kernels/copy_rect_rgba8.cl");
@@ -33,18 +38,24 @@ pub(crate) const STAMP_MANDEL_RGBA8_OPENCL_SOURCE: &str =
 pub(crate) const SPRITE64_WORKLIST_RGBA8_KERNEL_NAME: &str = "sprite64_worklist_rgba8";
 pub(crate) const SPRITE64_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/sprite64_worklist_rgba8.cl");
-pub(crate) const CANVAS512_3D_PROJECT_RGBA8_KERNEL_NAME: &str = "canvas512_3d_project_rgba8";
-pub(crate) const CANVAS512_3D_PROJECT_RGBA8_OPENCL_SOURCE: &str =
-    include_str!("kernels/canvas512_3d_project_rgba8.cl");
-pub(crate) const CANVAS512_3D_TRANSLATE_Q16_KERNEL_NAME: &str = "canvas512_3d_translate_q16";
-pub(crate) const CANVAS512_3D_TRANSLATE_Q16_OPENCL_SOURCE: &str =
-    include_str!("kernels/canvas512_3d_translate_q16.cl");
-pub(crate) const CANVAS512_3D_SCALE_Q16_KERNEL_NAME: &str = "canvas512_3d_scale_q16";
-pub(crate) const CANVAS512_3D_SCALE_Q16_OPENCL_SOURCE: &str =
-    include_str!("kernels/canvas512_3d_scale_q16.cl");
-pub(crate) const CANVAS512_3D_ROTATE_QUAT_Q16_KERNEL_NAME: &str = "canvas512_3d_rotate_quat_q16";
-pub(crate) const CANVAS512_3D_ROTATE_QUAT_Q16_OPENCL_SOURCE: &str =
-    include_str!("kernels/canvas512_3d_rotate_quat_q16.cl");
+pub(crate) const CANVAS3D_PROJECT_RGBA8_KERNEL_NAME: &str = "canvas3d_project_rgba8";
+pub(crate) const CANVAS3D_PROJECT_RGBA8_OPENCL_SOURCE: &str =
+    include_str!("kernels/canvas3d_project_rgba8.cl");
+pub(crate) const CANVAS3D_TRANSLATE_Q16_KERNEL_NAME: &str = "canvas3d_translate_q16";
+pub(crate) const CANVAS3D_TRANSLATE_Q16_OPENCL_SOURCE: &str =
+    include_str!("kernels/canvas3d_translate_q16.cl");
+pub(crate) const CANVAS3D_SCALE_Q16_KERNEL_NAME: &str = "canvas3d_scale_q16";
+pub(crate) const CANVAS3D_SCALE_Q16_OPENCL_SOURCE: &str =
+    include_str!("kernels/canvas3d_scale_q16.cl");
+pub(crate) const CANVAS3D_ROTATE_QUAT_Q16_KERNEL_NAME: &str = "canvas3d_rotate_quat_q16";
+pub(crate) const CANVAS3D_ROTATE_QUAT_Q16_OPENCL_SOURCE: &str =
+    include_str!("kernels/canvas3d_rotate_quat_q16.cl");
+pub(crate) const CANVAS3D_TRANSFORM_Q16_KERNEL_NAME: &str = "canvas3d_transform_q16";
+pub(crate) const CANVAS3D_TRANSFORM_Q16_OPENCL_SOURCE: &str =
+    include_str!("kernels/canvas3d_transform_q16.cl");
+pub(crate) const CANVAS3D_CLIP_BOX_Q16_KERNEL_NAME: &str = "canvas3d_clip_box_q16";
+pub(crate) const CANVAS3D_CLIP_BOX_Q16_OPENCL_SOURCE: &str =
+    include_str!("kernels/canvas3d_clip_box_q16.cl");
 pub(crate) const COPY_RECT_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/copy_rect_rgba8.bin");
 pub(crate) const COPY_RECT_RGBA8_ADLS_SPV: &[u8] =
@@ -87,22 +98,30 @@ pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/sprite64_worklist_rgba8.bin");
 pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/sprite64_worklist_rgba8.spv");
-pub(crate) const CANVAS512_3D_PROJECT_RGBA8_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/canvas512_3d_project_rgba8.bin");
-pub(crate) const CANVAS512_3D_PROJECT_RGBA8_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/canvas512_3d_project_rgba8.spv");
-pub(crate) const CANVAS512_3D_TRANSLATE_Q16_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/canvas512_3d_translate_q16.bin");
-pub(crate) const CANVAS512_3D_TRANSLATE_Q16_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/canvas512_3d_translate_q16.spv");
-pub(crate) const CANVAS512_3D_SCALE_Q16_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/canvas512_3d_scale_q16.bin");
-pub(crate) const CANVAS512_3D_SCALE_Q16_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/canvas512_3d_scale_q16.spv");
-pub(crate) const CANVAS512_3D_ROTATE_QUAT_Q16_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/canvas512_3d_rotate_quat_q16.bin");
-pub(crate) const CANVAS512_3D_ROTATE_QUAT_Q16_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/canvas512_3d_rotate_quat_q16.spv");
+pub(crate) const CANVAS3D_PROJECT_RGBA8_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/canvas3d_project_rgba8.bin");
+pub(crate) const CANVAS3D_PROJECT_RGBA8_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/canvas3d_project_rgba8.spv");
+pub(crate) const CANVAS3D_TRANSLATE_Q16_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/canvas3d_translate_q16.bin");
+pub(crate) const CANVAS3D_TRANSLATE_Q16_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/canvas3d_translate_q16.spv");
+pub(crate) const CANVAS3D_SCALE_Q16_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/canvas3d_scale_q16.bin");
+pub(crate) const CANVAS3D_SCALE_Q16_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/canvas3d_scale_q16.spv");
+pub(crate) const CANVAS3D_ROTATE_QUAT_Q16_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/canvas3d_rotate_quat_q16.bin");
+pub(crate) const CANVAS3D_ROTATE_QUAT_Q16_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/canvas3d_rotate_quat_q16.spv");
+pub(crate) const CANVAS3D_TRANSFORM_Q16_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/canvas3d_transform_q16.bin");
+pub(crate) const CANVAS3D_TRANSFORM_Q16_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/canvas3d_transform_q16.spv");
+pub(crate) const CANVAS3D_CLIP_BOX_Q16_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/canvas3d_clip_box_q16.bin");
+pub(crate) const CANVAS3D_CLIP_BOX_Q16_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/canvas3d_clip_box_q16.spv");
 pub(crate) const COPY_RECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x10, 0x86, 0x60, 0x24, 0xAA, 0xFF, 0xAE, 0x96, 0xF9, 0x2C, 0xFC, 0x25, 0xA5, 0xFB, 0x18, 0x8C,
     0xA4, 0x21, 0x99, 0x47, 0x89, 0xAF, 0xBC, 0x4D, 0xBA, 0x3D, 0xDC, 0x29, 0x0B, 0xD5, 0x83, 0xAB,
@@ -147,21 +166,29 @@ pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0xF2, 0x43, 0x59, 0x84, 0x03, 0x79, 0x48, 0x82, 0x10, 0x4E, 0x77, 0xEB, 0x0F, 0x3E, 0x14, 0xB4,
     0xF1, 0x2C, 0x10, 0xBF, 0x8B, 0xD0, 0xB6, 0x8A, 0xB5, 0xFD, 0xED, 0x63, 0x04, 0x86, 0x87, 0x67,
 ];
-pub(crate) const CANVAS512_3D_PROJECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
-    0x41, 0xC9, 0x25, 0x9F, 0x05, 0xF7, 0xC1, 0x3C, 0x47, 0x7D, 0x2B, 0x01, 0x59, 0x51, 0xF5, 0x4D,
-    0x75, 0x6A, 0x70, 0xD5, 0x25, 0x1D, 0xF8, 0x46, 0x16, 0x03, 0x38, 0x87, 0x44, 0x09, 0x1D, 0xD7,
+pub(crate) const CANVAS3D_PROJECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
+    0xDA, 0xF0, 0x15, 0xA0, 0xB9, 0x8A, 0x45, 0xF7, 0x02, 0xD5, 0xD7, 0x87, 0xCA, 0x19, 0x59, 0xBA,
+    0xAC, 0x7C, 0x02, 0xFE, 0x97, 0x93, 0xAC, 0x6E, 0x48, 0xA7, 0x87, 0x18, 0xAE, 0x3D, 0x3E, 0xB6,
 ];
-pub(crate) const CANVAS512_3D_TRANSLATE_Q16_ADLS_BIN_SHA256: [u8; 32] = [
+pub(crate) const CANVAS3D_TRANSLATE_Q16_ADLS_BIN_SHA256: [u8; 32] = [
     0x1C, 0x3A, 0xF3, 0x11, 0xC1, 0xEE, 0x40, 0xC1, 0xAD, 0x34, 0x47, 0xFD, 0x9E, 0xE7, 0x1C, 0xA7,
     0x7C, 0x5D, 0x47, 0x74, 0xA2, 0x00, 0x2D, 0x74, 0xEA, 0xD9, 0xBB, 0x50, 0x05, 0x6A, 0xEE, 0xB0,
 ];
-pub(crate) const CANVAS512_3D_SCALE_Q16_ADLS_BIN_SHA256: [u8; 32] = [
+pub(crate) const CANVAS3D_SCALE_Q16_ADLS_BIN_SHA256: [u8; 32] = [
     0x43, 0xBF, 0xA5, 0x1A, 0x06, 0x84, 0xD4, 0xF6, 0xA0, 0x07, 0x6A, 0x10, 0x70, 0x5C, 0xB3, 0x50,
     0xC9, 0x72, 0x00, 0x29, 0xC4, 0x61, 0x6F, 0x6C, 0xE5, 0xC4, 0x49, 0x84, 0xB2, 0x8F, 0xFB, 0x67,
 ];
-pub(crate) const CANVAS512_3D_ROTATE_QUAT_Q16_ADLS_BIN_SHA256: [u8; 32] = [
+pub(crate) const CANVAS3D_ROTATE_QUAT_Q16_ADLS_BIN_SHA256: [u8; 32] = [
     0xCA, 0xCF, 0x30, 0x74, 0x80, 0x3E, 0x8A, 0x40, 0xB7, 0x7A, 0xCE, 0x13, 0x23, 0x42, 0x47, 0x75,
     0x9E, 0x6A, 0x8E, 0xDD, 0x27, 0xF5, 0x69, 0x88, 0x89, 0x08, 0x21, 0x43, 0x9F, 0xB5, 0x04, 0x50,
+];
+pub(crate) const CANVAS3D_TRANSFORM_Q16_ADLS_BIN_SHA256: [u8; 32] = [
+    0x2C, 0x94, 0x28, 0x73, 0xA2, 0xB5, 0x4C, 0xA2, 0xBB, 0xBD, 0x17, 0xDA, 0x25, 0xFD, 0x1D, 0x22,
+    0x0E, 0x86, 0x34, 0x87, 0xAE, 0xD5, 0x9A, 0xE2, 0xA5, 0xE4, 0xF3, 0x0D, 0x41, 0x8F, 0x1D, 0x4D,
+];
+pub(crate) const CANVAS3D_CLIP_BOX_Q16_ADLS_BIN_SHA256: [u8; 32] = [
+    0x7E, 0x28, 0xD6, 0xB4, 0xF7, 0xF3, 0x7C, 0x95, 0x37, 0x4C, 0x27, 0x4B, 0x37, 0x02, 0x81, 0x30,
+    0x11, 0x61, 0xED, 0xF7, 0xD4, 0xA7, 0x17, 0x51, 0x86, 0x8F, 0x9A, 0x2B, 0x56, 0x59, 0xEA, 0x5F,
 ];
 
 const COPY_RECT_RGBA8_ADLS_GPU: u64 = 0x0D20_0000;
@@ -169,18 +196,22 @@ const COPY_RECT_RGBA8_WIDE_ADLS_GPU: u64 = 0x0D23_0000;
 const CLEAR_RECT_RGBA8_WHITE_ADLS_GPU: u64 = 0x0D21_0000;
 const EMPTY_EOT_ADLS_GPU: u64 = 0x0D22_0000;
 const SPRITE64_WORKLIST_RGBA8_ADLS_GPU: u64 = 0x0D24_0000;
-const CANVAS512_3D_PROJECT_RGBA8_ADLS_GPU: u64 = 0x0D25_0000;
-const CANVAS512_3D_TRANSLATE_Q16_ADLS_GPU: u64 = 0x0D26_0000;
-const CANVAS512_3D_SCALE_Q16_ADLS_GPU: u64 = 0x0D27_0000;
-const CANVAS512_3D_ROTATE_QUAT_Q16_ADLS_GPU: u64 = 0x0D28_0000;
+const CANVAS3D_PROJECT_RGBA8_ADLS_GPU: u64 = 0x0D25_0000;
+const CANVAS3D_TRANSLATE_Q16_ADLS_GPU: u64 = 0x0D26_0000;
+const CANVAS3D_SCALE_Q16_ADLS_GPU: u64 = 0x0D27_0000;
+const CANVAS3D_ROTATE_QUAT_Q16_ADLS_GPU: u64 = 0x0D28_0000;
+const CANVAS3D_CLIP_BOX_Q16_ADLS_GPU: u64 = 0x0D29_0000;
+const CANVAS3D_TRANSFORM_Q16_ADLS_GPU: u64 = 0x0D2A_0000;
 const COPY_RECT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const CLEAR_RECT_RGBA8_WHITE_TEXT_OFFSET_BYTES: u64 = 0x40;
 const EMPTY_EOT_TEXT_OFFSET_BYTES: u64 = 0x40;
 const SPRITE64_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
-const CANVAS512_3D_PROJECT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
-const CANVAS512_3D_TRANSLATE_Q16_TEXT_OFFSET_BYTES: u64 = 0x40;
-const CANVAS512_3D_SCALE_Q16_TEXT_OFFSET_BYTES: u64 = 0x40;
-const CANVAS512_3D_ROTATE_QUAT_Q16_TEXT_OFFSET_BYTES: u64 = 0x40;
+const CANVAS3D_PROJECT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
+const CANVAS3D_TRANSLATE_Q16_TEXT_OFFSET_BYTES: u64 = 0x40;
+const CANVAS3D_SCALE_Q16_TEXT_OFFSET_BYTES: u64 = 0x40;
+const CANVAS3D_ROTATE_QUAT_Q16_TEXT_OFFSET_BYTES: u64 = 0x40;
+const CANVAS3D_TRANSFORM_Q16_TEXT_OFFSET_BYTES: u64 = 0x40;
+const CANVAS3D_CLIP_BOX_Q16_TEXT_OFFSET_BYTES: u64 = 0x40;
 
 const RCS_RING_BASE: usize = 0x0000_2000;
 const RCS_RING_TAIL: usize = RCS_RING_BASE + 0x30;
@@ -312,70 +343,100 @@ const SPRITE64_WORKLIST_MAX_WALKERS: usize =
     SPRITE64_WORKLIST_MAX_DESCS / SPRITE64_WORKLIST_DESCS_PER_WALKER;
 const SPRITE64_WORKLIST_DESC_BYTES: usize =
     SPRITE64_WORKLIST_MAX_DESCS * core::mem::size_of::<Sprite64WorklistRgba8Desc>();
-const CANVAS512_3D_PROJECT_IDD_OFFSET_BYTES: usize = 0x2000;
-const CANVAS512_3D_PROJECT_BINDING_TABLE_OFFSET_BYTES: usize = 0x2040;
-const CANVAS512_3D_PROJECT_VERTICES_SURFACE_STATE_OFFSET_BYTES: usize = 0x2080;
-const CANVAS512_3D_PROJECT_OUT_SURFACE_STATE_OFFSET_BYTES: usize = 0x20C0;
-const CANVAS512_3D_PROJECT_PAYLOAD_OFFSET_BYTES: usize = 0x2200;
-const CANVAS512_3D_PROJECT_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
-const CANVAS512_3D_PROJECT_CROSS_THREAD_BYTES: usize = 96;
-const CANVAS512_3D_PROJECT_PER_THREAD_BYTES: usize = 96;
-const CANVAS512_3D_PROJECT_INDIRECT_BYTES: usize =
-    CANVAS512_3D_PROJECT_CROSS_THREAD_BYTES + CANVAS512_3D_PROJECT_PER_THREAD_BYTES;
-const CANVAS512_3D_PROJECT_PRE_MARKER_SLOT: usize = 9;
-const CANVAS512_3D_PROJECT_POST_MARKER_SLOT: usize = 8;
-const CANVAS512_3D_PROJECT_PRE_MARKER: u32 = 0xC0DE_3501;
-const CANVAS512_3D_PROJECT_POST_MARKER: u32 = 0xC0DE_3502;
-const CANVAS512_3D_PROJECT_VERTEX_COUNT: usize = 100;
-const CANVAS512_3D_PROJECT_SAMPLE_COUNT: usize = 8;
-const CANVAS512_3D_PROJECT_Q16_ONE: i32 = 65_536;
-const CANVAS512_3D_PROJECT_VERTEX_BYTES: usize =
-    CANVAS512_3D_PROJECT_VERTEX_COUNT * core::mem::size_of::<Canvas512Vec3Q16>();
-const CANVAS512_3D_PROJECT_OUT_BYTES: usize =
-    CANVAS512_3D_PROJECT_VERTEX_COUNT * core::mem::size_of::<Canvas512ProjectedRgba8>();
-const CANVAS512_3D_PROJECT_TEST_BYTES: usize = CANVAS512_3D_PROJECT_VERTEX_BYTES;
-const CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES: usize = 4096;
-const CANVAS512_3D_PROJECT_OUT_GPU: u64 = DIRECT_RCS_GPU_VA_CANVAS512_OUT_BASE;
-const CANVAS512_3D_TMP_GPU: u64 = DIRECT_RCS_GPU_VA_CANVAS512_TMP_BASE;
-const CANVAS512_3D_TRANSFORM_IDD_OFFSET_BYTES: usize = 0x3000;
-const CANVAS512_3D_TRANSFORM_BINDING_TABLE_OFFSET_BYTES: usize = 0x3040;
-const CANVAS512_3D_TRANSFORM_SRC_SURFACE_STATE_OFFSET_BYTES: usize = 0x3080;
-const CANVAS512_3D_TRANSFORM_DST_SURFACE_STATE_OFFSET_BYTES: usize = 0x30C0;
-const CANVAS512_3D_TRANSFORM_PAYLOAD_OFFSET_BYTES: usize = 0x3200;
-const CANVAS512_3D_TRANSFORM_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
-const CANVAS512_3D_TRANSFORM_CROSS_THREAD_BYTES: usize = 96;
-const CANVAS512_3D_TRANSFORM_PER_THREAD_BYTES: usize = 96;
-const CANVAS512_3D_TRANSFORM_INDIRECT_BYTES: usize =
-    CANVAS512_3D_TRANSFORM_CROSS_THREAD_BYTES + CANVAS512_3D_TRANSFORM_PER_THREAD_BYTES;
-const CANVAS512_3D_TRANSFORM_PRE_MARKER_SLOT: usize = 11;
-const CANVAS512_3D_TRANSFORM_POST_MARKER_SLOT: usize = 10;
-const CANVAS512_3D_TRANSFORM_TRANSLATE_PRE_MARKER: u32 = 0xC0DE_3611;
-const CANVAS512_3D_TRANSFORM_TRANSLATE_POST_MARKER: u32 = 0xC0DE_3612;
-const CANVAS512_3D_TRANSFORM_SCALE_PRE_MARKER: u32 = 0xC0DE_3621;
-const CANVAS512_3D_TRANSFORM_SCALE_POST_MARKER: u32 = 0xC0DE_3622;
-const CANVAS512_3D_TRANSFORM_ROTATE_PRE_MARKER: u32 = 0xC0DE_3631;
-const CANVAS512_3D_TRANSFORM_ROTATE_POST_MARKER: u32 = 0xC0DE_3632;
-const CANVAS512_3D_TRANSFORM_SRC_FIRST: u32 = 10;
-const CANVAS512_3D_TRANSFORM_DST_FIRST: u32 = 40;
-const CANVAS512_3D_TRANSFORM_TEST_COUNT: u32 = 8;
-const CANVAS512_3D_TRANSFORM_TEST_COUNT_USIZE: usize = 8;
-const CANVAS512_3D_TRANSFORM_DST_POISON: Canvas512Vec3Q16 = Canvas512Vec3Q16 {
+const CANVAS3D_PROJECT_IDD_OFFSET_BYTES: usize = 0x2000;
+const CANVAS3D_PROJECT_BINDING_TABLE_OFFSET_BYTES: usize = 0x2040;
+const CANVAS3D_PROJECT_VERTICES_SURFACE_STATE_OFFSET_BYTES: usize = 0x2080;
+const CANVAS3D_PROJECT_OUT_SURFACE_STATE_OFFSET_BYTES: usize = 0x20C0;
+const CANVAS3D_PROJECT_PAYLOAD_OFFSET_BYTES: usize = 0x2200;
+const CANVAS3D_PROJECT_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
+const CANVAS3D_PROJECT_CROSS_THREAD_BYTES: usize = 96;
+const CANVAS3D_PROJECT_PER_THREAD_BYTES: usize = 96;
+const CANVAS3D_PROJECT_INDIRECT_BYTES: usize =
+    CANVAS3D_PROJECT_CROSS_THREAD_BYTES + CANVAS3D_PROJECT_PER_THREAD_BYTES;
+const CANVAS3D_PROJECT_PRE_MARKER_SLOT: usize = 9;
+const CANVAS3D_PROJECT_POST_MARKER_SLOT: usize = 8;
+const CANVAS3D_PROJECT_PRE_MARKER: u32 = 0xC0DE_3501;
+const CANVAS3D_PROJECT_POST_MARKER: u32 = 0xC0DE_3502;
+const CANVAS3D_PROJECT_VERTEX_COUNT: usize = 64;
+const CANVAS3D_PROJECT_SAMPLE_COUNT: usize = 8;
+const CANVAS3D_PROJECT_SMOKE_SRC_FIRST: u32 = 10;
+const CANVAS3D_PROJECT_SMOKE_OUT_FIRST: u32 = 40;
+const CANVAS3D_PROJECT_SMOKE_CANVAS_WIDTH: u32 = 640;
+const CANVAS3D_PROJECT_SMOKE_CANVAS_HEIGHT: u32 = 480;
+const CANVAS3D_PROJECT_Q16_ONE: i32 = 65_536;
+const CANVAS3D_PROJECT_VERTEX_BYTES: usize =
+    CANVAS3D_PROJECT_VERTEX_COUNT * core::mem::size_of::<Canvas3dVec3Q16>();
+const CANVAS3D_PROJECT_OUT_BYTES: usize =
+    CANVAS3D_PROJECT_VERTEX_COUNT * core::mem::size_of::<Canvas3dProjectedRgba8>();
+const CANVAS3D_PROJECT_TEST_BYTES: usize = CANVAS3D_PROJECT_VERTEX_BYTES;
+const CANVAS3D_PROJECT_OUT_ALLOC_BYTES: usize = 16 * 1024;
+const CANVAS3D_PROJECT_OUT_GPU: u64 = DIRECT_RCS_GPU_VA_CANVAS3D_OUT_BASE;
+const CANVAS3D_TMP_GPU: u64 = DIRECT_RCS_GPU_VA_CANVAS3D_TMP_BASE;
+const CANVAS3D_TRANSFORM_IDD_OFFSET_BYTES: usize = 0x3000;
+const CANVAS3D_TRANSFORM_BINDING_TABLE_OFFSET_BYTES: usize = 0x3040;
+const CANVAS3D_TRANSFORM_SRC_SURFACE_STATE_OFFSET_BYTES: usize = 0x3080;
+const CANVAS3D_TRANSFORM_DST_SURFACE_STATE_OFFSET_BYTES: usize = 0x30C0;
+const CANVAS3D_TRANSFORM_PAYLOAD_OFFSET_BYTES: usize = 0x3200;
+const CANVAS3D_TRANSFORM_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
+const CANVAS3D_TRANSFORM_CROSS_THREAD_BYTES: usize = 96;
+const CANVAS3D_TRANSFORM_PER_THREAD_BYTES: usize = 96;
+const CANVAS3D_TRANSFORM_INDIRECT_BYTES: usize =
+    CANVAS3D_TRANSFORM_CROSS_THREAD_BYTES + CANVAS3D_TRANSFORM_PER_THREAD_BYTES;
+const CANVAS3D_TRANSFORM_FUSED_CROSS_THREAD_BYTES: usize = 128;
+const CANVAS3D_TRANSFORM_FUSED_PER_THREAD_BYTES: usize = 96;
+const CANVAS3D_TRANSFORM_FUSED_INDIRECT_BYTES: usize =
+    CANVAS3D_TRANSFORM_FUSED_CROSS_THREAD_BYTES + CANVAS3D_TRANSFORM_FUSED_PER_THREAD_BYTES;
+const CANVAS3D_TRANSFORM_PRE_MARKER_SLOT: usize = 11;
+const CANVAS3D_TRANSFORM_POST_MARKER_SLOT: usize = 10;
+const CANVAS3D_TRANSFORM_TRANSLATE_PRE_MARKER: u32 = 0xC0DE_3611;
+const CANVAS3D_TRANSFORM_TRANSLATE_POST_MARKER: u32 = 0xC0DE_3612;
+const CANVAS3D_TRANSFORM_SCALE_PRE_MARKER: u32 = 0xC0DE_3621;
+const CANVAS3D_TRANSFORM_SCALE_POST_MARKER: u32 = 0xC0DE_3622;
+const CANVAS3D_TRANSFORM_ROTATE_PRE_MARKER: u32 = 0xC0DE_3631;
+const CANVAS3D_TRANSFORM_ROTATE_POST_MARKER: u32 = 0xC0DE_3632;
+const CANVAS3D_TRANSFORM_FUSED_PRE_MARKER: u32 = 0xC0DE_3641;
+const CANVAS3D_TRANSFORM_FUSED_POST_MARKER: u32 = 0xC0DE_3642;
+const CANVAS3D_CLIP_BOX_IDD_OFFSET_BYTES: usize = 0x3400;
+const CANVAS3D_CLIP_BOX_BINDING_TABLE_OFFSET_BYTES: usize = 0x3440;
+const CANVAS3D_CLIP_BOX_SRC_SURFACE_STATE_OFFSET_BYTES: usize = 0x3480;
+const CANVAS3D_CLIP_BOX_DST_SURFACE_STATE_OFFSET_BYTES: usize = 0x34C0;
+const CANVAS3D_CLIP_BOX_PAYLOAD_OFFSET_BYTES: usize = 0x3600;
+const CANVAS3D_CLIP_BOX_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
+const CANVAS3D_CLIP_BOX_CROSS_THREAD_BYTES: usize = 128;
+const CANVAS3D_CLIP_BOX_PER_THREAD_BYTES: usize = 96;
+const CANVAS3D_CLIP_BOX_INDIRECT_BYTES: usize =
+    CANVAS3D_CLIP_BOX_CROSS_THREAD_BYTES + CANVAS3D_CLIP_BOX_PER_THREAD_BYTES;
+const CANVAS3D_CLIP_BOX_PRE_MARKER_SLOT: usize = 13;
+const CANVAS3D_CLIP_BOX_POST_MARKER_SLOT: usize = 12;
+const CANVAS3D_CLIP_BOX_PRE_MARKER: u32 = 0xC0DE_3651;
+const CANVAS3D_CLIP_BOX_POST_MARKER: u32 = 0xC0DE_3652;
+const CANVAS3D_TRANSFORM_SRC_FIRST: u32 = 10;
+const CANVAS3D_TRANSFORM_DST_FIRST: u32 = 40;
+const CANVAS3D_TRANSFORM_TEST_COUNT: u32 = 8;
+const CANVAS3D_TRANSFORM_TEST_COUNT_USIZE: usize = 8;
+const CANVAS3D_TRANSFORM_DST_POISON: Canvas3dVec3Q16 = Canvas3dVec3Q16 {
     x: 0x1357_0001,
     y: 0x2468_0002,
     z: 0x3579_0003,
     pad: 0x468A_0004,
 };
-const CANVAS512_VISUAL_SIZE: u32 = 512;
-const CANVAS512_VISUAL_RADIUS_PX: u32 = 64;
-const CANVAS512_VISUAL_DOT_RADIUS: i32 = 1;
-const CANVAS512_VISUAL_DEFAULT_CADENCE_MS: u64 = 100;
-const CANVAS512_VISUAL_MAX_DURATION_MS: u64 = 60_000;
-const CANVAS512_VISUAL_TAU: f32 = 6.283_185_5;
-const CANVAS512_VISUAL_DEG_TO_RAD: f32 = 0.017_453_292;
-const CANVAS512_CUBE_CORNER_COUNT: usize = 8;
-const CANVAS512_CUBE_EDGE_COUNT: usize = 12;
-const CANVAS512_CUBE_HALF_Q16: i32 = CANVAS512_3D_PROJECT_Q16_ONE / 2;
-const CANVAS512_CUBE_EDGES: [(usize, usize); CANVAS512_CUBE_EDGE_COUNT] = [
+const CUBE20_PROJECT_TILE_SIZE: u32 = 128;
+const CUBE20_PROJECT_RADIUS_PX: u32 = 64;
+const CUBE20_PROJECT_DOT_RADIUS: i32 = 1;
+const CUBE20_PROJECT_DEFAULT_CADENCE_US: u64 = 100_000;
+const CUBE20_PROJECT_MIN_CADENCE_US: u64 = 100;
+const CUBE20_PROJECT_MAX_CADENCE_US: u64 = 200_000;
+const CUBE20_PROJECT_MAX_DURATION_MS: u64 = 60_000;
+const CUBE20_CORNER_COUNT: usize = 8;
+const CUBE20_EDGE_COUNT: usize = 12;
+const CUBE20_EDGE_SAMPLE_COUNT: usize = 1;
+const CUBE20_VERTEX_COUNT: usize =
+    CUBE20_CORNER_COUNT + CUBE20_EDGE_COUNT * CUBE20_EDGE_SAMPLE_COUNT;
+const CUBE20_INSTANCE_COUNT: usize = 1;
+const CUBE20_VISUAL_VERTEX_COUNT: usize = CUBE20_VERTEX_COUNT * CUBE20_INSTANCE_COUNT;
+const CUBE20_HALF_Q16: i32 = CANVAS3D_PROJECT_Q16_ONE / 2;
+const CUBE20_PRESENT_COLORS: [u32; CUBE20_INSTANCE_COUNT] = [0xFFFF_3048];
+const CUBE20_EDGES: [(usize, usize); CUBE20_EDGE_COUNT] = [
     (0, 1),
     (1, 3),
     (3, 2),
@@ -452,7 +513,7 @@ const CLEAR_RECT_CROSS_THREAD_BYTES: usize = 96;
 const CLEAR_RECT_PER_THREAD_BYTES: usize = 96;
 const CLEAR_RECT_INDIRECT_BYTES: usize =
     CLEAR_RECT_CROSS_THREAD_BYTES + CLEAR_RECT_PER_THREAD_BYTES;
-const CLEAR_RECT_TEST_BYTES: usize = 4096;
+const CLEAR_RECT_TEST_BYTES: usize = 16 * 1024;
 const CLEAR_RECT_TEST_WIDTH: u32 = 4;
 const CLEAR_RECT_TEST_HEIGHT: u32 = 1;
 const CLEAR_RECT_TEST_PIXELS: usize =
@@ -485,8 +546,8 @@ const DIRECT_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x0081_0000;
 const DIRECT_RCS_GPU_VA_RESULT_BASE: u64 = 0x0084_0000;
 const DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE: u64 = 0x0089_0000;
 const DIRECT_RCS_GPU_VA_SHELL_SURFACE_BASE: u64 = 0x008A_0000;
-const DIRECT_RCS_GPU_VA_CANVAS512_OUT_BASE: u64 = 0x008F_0000;
-const DIRECT_RCS_GPU_VA_CANVAS512_TMP_BASE: u64 = 0x0090_0000;
+const DIRECT_RCS_GPU_VA_CANVAS3D_OUT_BASE: u64 = 0x008F_0000;
+const DIRECT_RCS_GPU_VA_CANVAS3D_TMP_BASE: u64 = 0x0090_0000;
 const DIRECT_RCS_GPU_VA_BATCH_BASE: u64 = 0x0180_0000;
 const DIRECT_RCS_SMOKE_MARKER: u32 = 0xC0DE_5101;
 const DIRECT_RCS_SMOKE_POLL_ITERS: usize = 262_144;
@@ -502,11 +563,12 @@ static COPY_RECT_RGBA8_WIDE_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mute
 static CLEAR_RECT_RGBA8_WHITE_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static EMPTY_EOT_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SPRITE64_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static CANVAS512_3D_PROJECT_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static CANVAS512_3D_TRANSLATE_Q16_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static CANVAS512_3D_SCALE_Q16_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static CANVAS512_3D_ROTATE_QUAT_Q16_UPLOAD: Mutex<Option<UploadedKernelArtifact>> =
-    Mutex::new(None);
+static CANVAS3D_PROJECT_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
+static CANVAS3D_TRANSLATE_Q16_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
+static CANVAS3D_SCALE_Q16_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
+static CANVAS3D_ROTATE_QUAT_Q16_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
+static CANVAS3D_TRANSFORM_Q16_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
+static CANVAS3D_CLIP_BOX_Q16_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static DIRECT_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static GPGPU_SHELL_SURFACE: Mutex<Option<GpgpuShellSurface>> = Mutex::new(None);
 static GPGPU_SPRITE64_WORKLIST_ATLAS: Once<Option<GpgpuSprite64WorklistAtlasSurface>> = Once::new();
@@ -522,8 +584,9 @@ static COPY_RECT_256_RAN: AtomicBool = AtomicBool::new(false);
 static COPY_RECT_256X2_RAN: AtomicBool = AtomicBool::new(false);
 static COPY_RECT_WIDE_256X2_RAN: AtomicBool = AtomicBool::new(false);
 static RECT_API_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
-static CANVAS512_3D_PROJECT_RAN: AtomicBool = AtomicBool::new(false);
-static CANVAS512_3D_TRANSFORM_RAN: AtomicBool = AtomicBool::new(false);
+static CANVAS3D_PROJECT_RAN: AtomicBool = AtomicBool::new(false);
+static CANVAS3D_TRANSFORM_RAN: AtomicBool = AtomicBool::new(false);
+static CANVAS3D_CLIP_BOX_RAN: AtomicBool = AtomicBool::new(false);
 static DIRECT_RCS_SUBMIT_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 #[repr(C)]
@@ -589,7 +652,7 @@ pub(crate) struct Sprite64WorklistRgba8Params {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct Canvas512Vec3Q16 {
+pub(crate) struct Canvas3dVec3Q16 {
     pub(crate) x: i32,
     pub(crate) y: i32,
     pub(crate) z: i32,
@@ -598,7 +661,7 @@ pub(crate) struct Canvas512Vec3Q16 {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct Canvas512ProjectedRgba8 {
+pub(crate) struct Canvas3dProjectedRgba8 {
     pub(crate) packed_xy: u32,
     pub(crate) rgba: u32,
     pub(crate) z_q16: u32,
@@ -607,21 +670,50 @@ pub(crate) struct Canvas512ProjectedRgba8 {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct Canvas512ProjectRgba8Params {
+pub(crate) struct Canvas3dProjectRgba8Params {
     pub(crate) vertices_gpu: u64,
     pub(crate) out_gpu: u64,
+    pub(crate) src_first_vertex: u32,
+    pub(crate) out_first_point: u32,
     pub(crate) vertex_count: u32,
+    pub(crate) canvas_width: u32,
+    pub(crate) canvas_height: u32,
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct Canvas512TransformQ16Params {
+pub(crate) struct Canvas3dTransformQ16Params {
     pub(crate) src_gpu: u64,
     pub(crate) dst_gpu: u64,
     pub(crate) src_first_vertex: u32,
     pub(crate) dst_first_vertex: u32,
     pub(crate) vertex_count: u32,
-    pub(crate) param_q16: Canvas512Vec3Q16,
+    pub(crate) param_q16: Canvas3dVec3Q16,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct Canvas3dTransformFusedQ16Params {
+    pub(crate) src_gpu: u64,
+    pub(crate) dst_gpu: u64,
+    pub(crate) src_first_vertex: u32,
+    pub(crate) dst_first_vertex: u32,
+    pub(crate) vertex_count: u32,
+    pub(crate) scale_q16: Canvas3dVec3Q16,
+    pub(crate) rotate_q16: Canvas3dVec3Q16,
+    pub(crate) translate_q16: Canvas3dVec3Q16,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct Canvas3dClipBoxQ16Params {
+    pub(crate) src_gpu: u64,
+    pub(crate) dst_gpu: u64,
+    pub(crate) src_first_vertex: u32,
+    pub(crate) dst_first_vertex: u32,
+    pub(crate) vertex_count: u32,
+    pub(crate) min_q16: Canvas3dVec3Q16,
+    pub(crate) max_q16: Canvas3dVec3Q16,
 }
 
 #[repr(C)]
@@ -942,27 +1034,6 @@ pub(crate) struct GpgpuShellAtlasWorklistResult {
     pub(crate) presented: bool,
 }
 
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuShellCanvas512SpinResult {
-    pub(crate) ok: bool,
-    pub(crate) frames: u32,
-    pub(crate) submitted: u32,
-    pub(crate) presented: u32,
-    pub(crate) visible_points: usize,
-    pub(crate) stamped_pixels: usize,
-    pub(crate) duration_ms: u64,
-    pub(crate) elapsed_ms: u64,
-    pub(crate) cadence_ms: u64,
-    pub(crate) total_submit_ms: u64,
-    pub(crate) max_submit_ms: u64,
-    pub(crate) primary_width: u32,
-    pub(crate) primary_height: u32,
-    pub(crate) canvas_xy: GpgpuPoint,
-    pub(crate) vertex_count: usize,
-    pub(crate) radius_px: u32,
-    pub(crate) last_angle_deg: u32,
-}
-
 #[derive(Copy, Clone, Debug)]
 struct GpgpuShellSurface {
     surface: GpgpuRgba8Surface,
@@ -1123,40 +1194,54 @@ pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = Gp
     bin_sha256: SPRITE64_WORKLIST_RGBA8_ADLS_BIN_SHA256,
 };
 
-pub(crate) const CANVAS512_3D_PROJECT_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact {
-        name: CANVAS512_3D_PROJECT_RGBA8_KERNEL_NAME,
-        target: "adls",
-        bin: CANVAS512_3D_PROJECT_RGBA8_ADLS_BIN,
-        spv: CANVAS512_3D_PROJECT_RGBA8_ADLS_SPV,
-        bin_sha256: CANVAS512_3D_PROJECT_RGBA8_ADLS_BIN_SHA256,
-    };
-
-pub(crate) const CANVAS512_3D_TRANSLATE_Q16_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact {
-        name: CANVAS512_3D_TRANSLATE_Q16_KERNEL_NAME,
-        target: "adls",
-        bin: CANVAS512_3D_TRANSLATE_Q16_ADLS_BIN,
-        spv: CANVAS512_3D_TRANSLATE_Q16_ADLS_SPV,
-        bin_sha256: CANVAS512_3D_TRANSLATE_Q16_ADLS_BIN_SHA256,
-    };
-
-pub(crate) const CANVAS512_3D_SCALE_Q16_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
-    name: CANVAS512_3D_SCALE_Q16_KERNEL_NAME,
+pub(crate) const CANVAS3D_PROJECT_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
+    name: CANVAS3D_PROJECT_RGBA8_KERNEL_NAME,
     target: "adls",
-    bin: CANVAS512_3D_SCALE_Q16_ADLS_BIN,
-    spv: CANVAS512_3D_SCALE_Q16_ADLS_SPV,
-    bin_sha256: CANVAS512_3D_SCALE_Q16_ADLS_BIN_SHA256,
+    bin: CANVAS3D_PROJECT_RGBA8_ADLS_BIN,
+    spv: CANVAS3D_PROJECT_RGBA8_ADLS_SPV,
+    bin_sha256: CANVAS3D_PROJECT_RGBA8_ADLS_BIN_SHA256,
 };
 
-pub(crate) const CANVAS512_3D_ROTATE_QUAT_Q16_ADLS_ARTIFACT: GpgpuKernelArtifact =
+pub(crate) const CANVAS3D_TRANSLATE_Q16_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
+    name: CANVAS3D_TRANSLATE_Q16_KERNEL_NAME,
+    target: "adls",
+    bin: CANVAS3D_TRANSLATE_Q16_ADLS_BIN,
+    spv: CANVAS3D_TRANSLATE_Q16_ADLS_SPV,
+    bin_sha256: CANVAS3D_TRANSLATE_Q16_ADLS_BIN_SHA256,
+};
+
+pub(crate) const CANVAS3D_SCALE_Q16_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
+    name: CANVAS3D_SCALE_Q16_KERNEL_NAME,
+    target: "adls",
+    bin: CANVAS3D_SCALE_Q16_ADLS_BIN,
+    spv: CANVAS3D_SCALE_Q16_ADLS_SPV,
+    bin_sha256: CANVAS3D_SCALE_Q16_ADLS_BIN_SHA256,
+};
+
+pub(crate) const CANVAS3D_ROTATE_QUAT_Q16_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact {
-        name: CANVAS512_3D_ROTATE_QUAT_Q16_KERNEL_NAME,
+        name: CANVAS3D_ROTATE_QUAT_Q16_KERNEL_NAME,
         target: "adls",
-        bin: CANVAS512_3D_ROTATE_QUAT_Q16_ADLS_BIN,
-        spv: CANVAS512_3D_ROTATE_QUAT_Q16_ADLS_SPV,
-        bin_sha256: CANVAS512_3D_ROTATE_QUAT_Q16_ADLS_BIN_SHA256,
+        bin: CANVAS3D_ROTATE_QUAT_Q16_ADLS_BIN,
+        spv: CANVAS3D_ROTATE_QUAT_Q16_ADLS_SPV,
+        bin_sha256: CANVAS3D_ROTATE_QUAT_Q16_ADLS_BIN_SHA256,
     };
+
+pub(crate) const CANVAS3D_TRANSFORM_Q16_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
+    name: CANVAS3D_TRANSFORM_Q16_KERNEL_NAME,
+    target: "adls",
+    bin: CANVAS3D_TRANSFORM_Q16_ADLS_BIN,
+    spv: CANVAS3D_TRANSFORM_Q16_ADLS_SPV,
+    bin_sha256: CANVAS3D_TRANSFORM_Q16_ADLS_BIN_SHA256,
+};
+
+pub(crate) const CANVAS3D_CLIP_BOX_Q16_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
+    name: CANVAS3D_CLIP_BOX_Q16_KERNEL_NAME,
+    target: "adls",
+    bin: CANVAS3D_CLIP_BOX_Q16_ADLS_BIN,
+    spv: CANVAS3D_CLIP_BOX_Q16_ADLS_SPV,
+    bin_sha256: CANVAS3D_CLIP_BOX_Q16_ADLS_BIN_SHA256,
+};
 
 pub(crate) fn copy_rect_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *COPY_RECT_RGBA8_UPLOAD.lock()
@@ -1178,20 +1263,28 @@ pub(crate) fn sprite64_worklist_rgba8_upload_status() -> Option<UploadedKernelAr
     *SPRITE64_WORKLIST_RGBA8_UPLOAD.lock()
 }
 
-pub(crate) fn canvas512_3d_project_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
-    *CANVAS512_3D_PROJECT_RGBA8_UPLOAD.lock()
+pub(crate) fn canvas3d_project_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
+    *CANVAS3D_PROJECT_RGBA8_UPLOAD.lock()
 }
 
-pub(crate) fn canvas512_3d_translate_q16_upload_status() -> Option<UploadedKernelArtifact> {
-    *CANVAS512_3D_TRANSLATE_Q16_UPLOAD.lock()
+pub(crate) fn canvas3d_translate_q16_upload_status() -> Option<UploadedKernelArtifact> {
+    *CANVAS3D_TRANSLATE_Q16_UPLOAD.lock()
 }
 
-pub(crate) fn canvas512_3d_scale_q16_upload_status() -> Option<UploadedKernelArtifact> {
-    *CANVAS512_3D_SCALE_Q16_UPLOAD.lock()
+pub(crate) fn canvas3d_scale_q16_upload_status() -> Option<UploadedKernelArtifact> {
+    *CANVAS3D_SCALE_Q16_UPLOAD.lock()
 }
 
-pub(crate) fn canvas512_3d_rotate_quat_q16_upload_status() -> Option<UploadedKernelArtifact> {
-    *CANVAS512_3D_ROTATE_QUAT_Q16_UPLOAD.lock()
+pub(crate) fn canvas3d_rotate_quat_q16_upload_status() -> Option<UploadedKernelArtifact> {
+    *CANVAS3D_ROTATE_QUAT_Q16_UPLOAD.lock()
+}
+
+pub(crate) fn canvas3d_transform_q16_upload_status() -> Option<UploadedKernelArtifact> {
+    *CANVAS3D_TRANSFORM_Q16_UPLOAD.lock()
+}
+
+pub(crate) fn canvas3d_clip_box_q16_upload_status() -> Option<UploadedKernelArtifact> {
+    *CANVAS3D_CLIP_BOX_Q16_UPLOAD.lock()
 }
 
 pub(crate) fn upload_copy_rect_rgba8_kernel() -> Option<UploadedKernelArtifact> {
@@ -1293,91 +1386,129 @@ pub(crate) fn upload_sprite64_worklist_rgba8_kernel() -> Option<UploadedKernelAr
     Some(upload)
 }
 
-pub(crate) fn upload_canvas512_3d_project_rgba8_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *CANVAS512_3D_PROJECT_RGBA8_UPLOAD.lock() {
+pub(crate) fn upload_canvas3d_project_rgba8_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *CANVAS3D_PROJECT_RGBA8_UPLOAD.lock() {
         return Some(upload);
     }
 
     let Some(dev) = super::claimed_device() else {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: canvas512-3d-project-rgba8 upload skipped reason=no-claimed-device\n"
+            "intel/gpgpu: canvas3d-project-rgba8 upload skipped reason=no-claimed-device\n"
         );
         return None;
     };
 
     let upload = upload_artifact(
         dev,
-        CANVAS512_3D_PROJECT_RGBA8_ADLS_ARTIFACT,
-        CANVAS512_3D_PROJECT_RGBA8_ADLS_GPU,
+        CANVAS3D_PROJECT_RGBA8_ADLS_ARTIFACT,
+        CANVAS3D_PROJECT_RGBA8_ADLS_GPU,
     )?;
-    *CANVAS512_3D_PROJECT_RGBA8_UPLOAD.lock() = Some(upload);
+    *CANVAS3D_PROJECT_RGBA8_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
 
-pub(crate) fn upload_canvas512_3d_translate_q16_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *CANVAS512_3D_TRANSLATE_Q16_UPLOAD.lock() {
+pub(crate) fn upload_canvas3d_translate_q16_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *CANVAS3D_TRANSLATE_Q16_UPLOAD.lock() {
         return Some(upload);
     }
 
     let Some(dev) = super::claimed_device() else {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: canvas512-3d-translate-q16 upload skipped reason=no-claimed-device\n"
+            "intel/gpgpu: canvas3d-translate-q16 upload skipped reason=no-claimed-device\n"
         );
         return None;
     };
 
     let upload = upload_artifact(
         dev,
-        CANVAS512_3D_TRANSLATE_Q16_ADLS_ARTIFACT,
-        CANVAS512_3D_TRANSLATE_Q16_ADLS_GPU,
+        CANVAS3D_TRANSLATE_Q16_ADLS_ARTIFACT,
+        CANVAS3D_TRANSLATE_Q16_ADLS_GPU,
     )?;
-    *CANVAS512_3D_TRANSLATE_Q16_UPLOAD.lock() = Some(upload);
+    *CANVAS3D_TRANSLATE_Q16_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
 
-pub(crate) fn upload_canvas512_3d_scale_q16_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *CANVAS512_3D_SCALE_Q16_UPLOAD.lock() {
+pub(crate) fn upload_canvas3d_scale_q16_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *CANVAS3D_SCALE_Q16_UPLOAD.lock() {
         return Some(upload);
     }
 
     let Some(dev) = super::claimed_device() else {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: canvas512-3d-scale-q16 upload skipped reason=no-claimed-device\n"
+            "intel/gpgpu: canvas3d-scale-q16 upload skipped reason=no-claimed-device\n"
         );
         return None;
     };
 
-    let upload = upload_artifact(
-        dev,
-        CANVAS512_3D_SCALE_Q16_ADLS_ARTIFACT,
-        CANVAS512_3D_SCALE_Q16_ADLS_GPU,
-    )?;
-    *CANVAS512_3D_SCALE_Q16_UPLOAD.lock() = Some(upload);
+    let upload =
+        upload_artifact(dev, CANVAS3D_SCALE_Q16_ADLS_ARTIFACT, CANVAS3D_SCALE_Q16_ADLS_GPU)?;
+    *CANVAS3D_SCALE_Q16_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
 
-pub(crate) fn upload_canvas512_3d_rotate_quat_q16_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *CANVAS512_3D_ROTATE_QUAT_Q16_UPLOAD.lock() {
+pub(crate) fn upload_canvas3d_rotate_quat_q16_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *CANVAS3D_ROTATE_QUAT_Q16_UPLOAD.lock() {
         return Some(upload);
     }
 
     let Some(dev) = super::claimed_device() else {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: canvas512-3d-rotate-quat-q16 upload skipped reason=no-claimed-device\n"
+            "intel/gpgpu: canvas3d-rotate-quat-q16 upload skipped reason=no-claimed-device\n"
         );
         return None;
     };
 
     let upload = upload_artifact(
         dev,
-        CANVAS512_3D_ROTATE_QUAT_Q16_ADLS_ARTIFACT,
-        CANVAS512_3D_ROTATE_QUAT_Q16_ADLS_GPU,
+        CANVAS3D_ROTATE_QUAT_Q16_ADLS_ARTIFACT,
+        CANVAS3D_ROTATE_QUAT_Q16_ADLS_GPU,
     )?;
-    *CANVAS512_3D_ROTATE_QUAT_Q16_UPLOAD.lock() = Some(upload);
+    *CANVAS3D_ROTATE_QUAT_Q16_UPLOAD.lock() = Some(upload);
+    Some(upload)
+}
+
+pub(crate) fn upload_canvas3d_transform_q16_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *CANVAS3D_TRANSFORM_Q16_UPLOAD.lock() {
+        return Some(upload);
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: canvas3d-transform-q16 upload skipped reason=no-claimed-device\n"
+        );
+        return None;
+    };
+
+    let upload = upload_artifact(
+        dev,
+        CANVAS3D_TRANSFORM_Q16_ADLS_ARTIFACT,
+        CANVAS3D_TRANSFORM_Q16_ADLS_GPU,
+    )?;
+    *CANVAS3D_TRANSFORM_Q16_UPLOAD.lock() = Some(upload);
+    Some(upload)
+}
+
+pub(crate) fn upload_canvas3d_clip_box_q16_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *CANVAS3D_CLIP_BOX_Q16_UPLOAD.lock() {
+        return Some(upload);
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: canvas3d-clip-box-q16 upload skipped reason=no-claimed-device\n"
+        );
+        return None;
+    };
+
+    let upload =
+        upload_artifact(dev, CANVAS3D_CLIP_BOX_Q16_ADLS_ARTIFACT, CANVAS3D_CLIP_BOX_Q16_ADLS_GPU)?;
+    *CANVAS3D_CLIP_BOX_Q16_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
 
@@ -2951,710 +3082,6 @@ pub(crate) fn submit_rect_api_smoke_once() -> bool {
     ok
 }
 
-pub(crate) fn submit_canvas512_3d_project_once() -> bool {
-    if !DIRECT_RCS_ENABLED || CANVAS512_3D_PROJECT_RAN.swap(true, Ordering::AcqRel) {
-        return false;
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: canvas512-3d-project skipped reason=no-claimed-device\n"
-        );
-        return false;
-    };
-    let Some(upload) = upload_canvas512_3d_project_rgba8_kernel() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: canvas512-3d-project skipped reason=no-kernel-upload\n"
-        );
-        return false;
-    };
-    let Some(state) = direct_rcs_state_once(dev) else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: canvas512-3d-project failed rung=alloc\n"
-        );
-        return false;
-    };
-    if CANVAS512_3D_PROJECT_TEST_BYTES > CLEAR_RECT_TEST_BYTES {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: canvas512-3d-project failed rung=test-buffer bytes={} cap={}\n",
-            CANVAS512_3D_PROJECT_TEST_BYTES,
-            CLEAR_RECT_TEST_BYTES,
-        );
-        return false;
-    }
-    if CANVAS512_3D_PROJECT_OUT_BYTES > CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: canvas512-3d-project failed rung=out-buffer bytes={} cap={}\n",
-            CANVAS512_3D_PROJECT_OUT_BYTES,
-            CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES,
-        );
-        return false;
-    }
-
-    let expected = direct_rcs_seed_canvas512_3d_project(state);
-    let forcewake_ok = direct_rcs_forcewake(dev);
-    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
-    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
-    let kernel_ppgtt_ok = ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    let vertices_ppgtt_ok = kernel_ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(
-            state,
-            DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
-            state.clear_test_phys,
-            CLEAR_RECT_TEST_BYTES,
-        );
-    let out_ppgtt_ok = vertices_ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(
-            state,
-            CANVAS512_3D_PROJECT_OUT_GPU,
-            state.canvas512_out_phys,
-            CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES,
-        );
-    let params = Canvas512ProjectRgba8Params {
-        vertices_gpu: DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
-        out_gpu: CANVAS512_3D_PROJECT_OUT_GPU,
-        vertex_count: CANVAS512_3D_PROJECT_VERTEX_COUNT as u32,
-    };
-    let batch_ok = out_ppgtt_ok
-        && direct_rcs_encode_canvas512_3d_project_batch(
-            state,
-            upload,
-            params,
-            CANVAS512_3D_PROJECT_VERTEX_BYTES,
-            CANVAS512_3D_PROJECT_OUT_BYTES,
-        );
-    let submit_start_tick = direct_rcs_now_tick();
-    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
-    let (observed, retire_ms) = if submitted {
-        direct_rcs_poll_result_slot_elapsed(
-            state,
-            CANVAS512_3D_PROJECT_POST_MARKER_SLOT,
-            CANVAS512_3D_PROJECT_POST_MARKER,
-            submit_start_tick,
-        )
-    } else {
-        (0, 0)
-    };
-    let pre_marker = direct_rcs_read_result_slot(state, CANVAS512_3D_PROJECT_PRE_MARKER_SLOT);
-    let after = direct_rcs_read_canvas512_3d_project_samples(state);
-    let retired = observed == CANVAS512_3D_PROJECT_POST_MARKER;
-    let samples_ok = direct_rcs_canvas512_3d_project_count_matching(after, expected);
-    let visible = direct_rcs_canvas512_3d_project_count_visible(after);
-    let ok = retired && samples_ok == CANVAS512_3D_PROJECT_SAMPLE_COUNT;
-
-    crate::log_info!(
-        target: "gpgpu";
-        "intel/gpgpu: canvas512-3d-project forcewake={} ggtt={} ppgtt={} kernel_ppgtt={} vertices_ppgtt={} out_ppgtt={} batch={} submitted={} retired={} retire_ms={} ok={} samples={}/{} visible={}/{} vertex_count={} canvas=512x512 pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} vertices_gpu=0x{:X} out_gpu=0x{:X} vertex_bytes=0x{:X} out_bytes=0x{:X} idd_off=0x{:X} payload_off=0x{:X} out0=[xy=0x{:08X},rgba=0x{:08X}] out1=[xy=0x{:08X},rgba=0x{:08X}] out2=[xy=0x{:08X},rgba=0x{:08X}] out6=[xy=0x{:08X},rgba=0x{:08X}] ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=direct-execlist no_guc_submit=1 next=canvas-lines-or-cpu-copy\n",
-        forcewake_ok as u8,
-        mapped_ok as u8,
-        ppgtt_ok as u8,
-        kernel_ppgtt_ok as u8,
-        vertices_ppgtt_ok as u8,
-        out_ppgtt_ok as u8,
-        batch_ok as u8,
-        submitted as u8,
-        retired as u8,
-        retire_ms,
-        ok as u8,
-        samples_ok,
-        CANVAS512_3D_PROJECT_SAMPLE_COUNT,
-        visible,
-        CANVAS512_3D_PROJECT_SAMPLE_COUNT,
-        CANVAS512_3D_PROJECT_VERTEX_COUNT,
-        pre_marker,
-        observed,
-        CANVAS512_3D_PROJECT_POST_MARKER,
-        upload.gpu,
-        upload.gpu + CANVAS512_3D_PROJECT_RGBA8_TEXT_OFFSET_BYTES,
-        DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
-        CANVAS512_3D_PROJECT_OUT_GPU,
-        CANVAS512_3D_PROJECT_VERTEX_BYTES,
-        CANVAS512_3D_PROJECT_OUT_BYTES,
-        CANVAS512_3D_PROJECT_IDD_OFFSET_BYTES,
-        CANVAS512_3D_PROJECT_PAYLOAD_OFFSET_BYTES,
-        after[0].packed_xy,
-        after[0].rgba,
-        after[1].packed_xy,
-        after[1].rgba,
-        after[2].packed_xy,
-        after[2].rgba,
-        after[6].packed_xy,
-        after[6].rgba,
-        DIRECT_RCS_GPU_VA_RING_BASE,
-        DIRECT_RCS_GPU_VA_BATCH_BASE,
-        DIRECT_RCS_GPU_VA_RESULT_BASE,
-        super::mmio_read(dev, RCS_RING_HEAD),
-        super::mmio_read(dev, RCS_RING_TAIL),
-        super::mmio_read(dev, RCS_RING_ACTHD),
-        super::mmio_read(dev, RCS_RING_IPEIR),
-        super::mmio_read(dev, RCS_RING_IPEHR),
-        super::mmio_read(dev, RCS_RING_EIR),
-    );
-
-    ok
-}
-
-pub(crate) fn submit_canvas512_3d_transform_smoke_once() -> bool {
-    if !DIRECT_RCS_ENABLED || CANVAS512_3D_TRANSFORM_RAN.swap(true, Ordering::AcqRel) {
-        return false;
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: canvas512-3d-transform skipped reason=no-claimed-device\n"
-        );
-        return false;
-    };
-    let Some(state) = direct_rcs_state_once(dev) else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: canvas512-3d-transform failed rung=alloc\n"
-        );
-        return false;
-    };
-    if CANVAS512_3D_PROJECT_VERTEX_BYTES > CLEAR_RECT_TEST_BYTES
-        || CANVAS512_3D_PROJECT_VERTEX_BYTES > CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES
-    {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: canvas512-3d-transform failed rung=buffer-cap vertex_bytes=0x{:X} src_cap=0x{:X} dst_cap=0x{:X}\n",
-            CANVAS512_3D_PROJECT_VERTEX_BYTES,
-            CLEAR_RECT_TEST_BYTES,
-            CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES,
-        );
-        return false;
-    }
-
-    let q = CANVAS512_3D_PROJECT_Q16_ONE;
-    let translate = Canvas512Vec3Q16 {
-        x: q / 4,
-        y: -(q / 8),
-        z: q / 2,
-        pad: 0,
-    };
-    let scale = Canvas512Vec3Q16 {
-        x: q * 2,
-        y: -q,
-        z: q / 2,
-        pad: 0,
-    };
-    let rotate_z_180 = Canvas512Vec3Q16 {
-        x: 0,
-        y: 0,
-        z: q,
-        pad: 0,
-    };
-
-    let translate_ok = submit_canvas512_3d_transform_smoke(
-        dev,
-        state,
-        upload_canvas512_3d_translate_q16_kernel(),
-        "translate_q16",
-        CANVAS512_3D_TRANSFORM_TRANSLATE_PRE_MARKER,
-        CANVAS512_3D_TRANSFORM_TRANSLATE_POST_MARKER,
-        translate,
-        direct_rcs_transform_translate_expected,
-    );
-    let scale_ok = submit_canvas512_3d_transform_smoke(
-        dev,
-        state,
-        upload_canvas512_3d_scale_q16_kernel(),
-        "scale_q16",
-        CANVAS512_3D_TRANSFORM_SCALE_PRE_MARKER,
-        CANVAS512_3D_TRANSFORM_SCALE_POST_MARKER,
-        scale,
-        direct_rcs_transform_scale_expected,
-    );
-    let rotate_ok = submit_canvas512_3d_transform_smoke(
-        dev,
-        state,
-        upload_canvas512_3d_rotate_quat_q16_kernel(),
-        "rotate_quat_q16",
-        CANVAS512_3D_TRANSFORM_ROTATE_PRE_MARKER,
-        CANVAS512_3D_TRANSFORM_ROTATE_POST_MARKER,
-        rotate_z_180,
-        direct_rcs_transform_rotate_z_180_expected,
-    );
-
-    translate_ok && scale_ok && rotate_ok
-}
-
-pub(crate) fn shell_canvas512_3d_spin(
-    duration_ms: u64,
-    cadence_ms: u64,
-) -> Option<GpgpuShellCanvas512SpinResult> {
-    let total_start_tick = direct_rcs_now_tick();
-    let duration_ms = duration_ms.clamp(1, CANVAS512_VISUAL_MAX_DURATION_MS);
-    let cadence_ms = if cadence_ms == 0 {
-        CANVAS512_VISUAL_DEFAULT_CADENCE_MS
-    } else {
-        cadence_ms
-    };
-    let Some(dev) = super::claimed_device() else {
-        return None;
-    };
-    let Some(project_upload) = upload_canvas512_3d_project_rgba8_kernel() else {
-        return None;
-    };
-    let Some(scale_upload) = upload_canvas512_3d_scale_q16_kernel() else {
-        return None;
-    };
-    let Some(rotate_upload) = upload_canvas512_3d_rotate_quat_q16_kernel() else {
-        return None;
-    };
-    let Some(translate_upload) = upload_canvas512_3d_translate_q16_kernel() else {
-        return None;
-    };
-    let Some(state) = direct_rcs_state_once(dev) else {
-        return None;
-    };
-    let target = super::display::primary_surface_gpgpu_marker_target()?;
-    if target.virt.is_null()
-        || target.width < CANVAS512_VISUAL_SIZE
-        || target.height < CANVAS512_VISUAL_SIZE
-        || CANVAS512_3D_PROJECT_TEST_BYTES > CLEAR_RECT_TEST_BYTES
-        || CANVAS512_3D_PROJECT_OUT_BYTES > CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES
-    {
-        return None;
-    }
-
-    let canvas_x = target.width.saturating_sub(CANVAS512_VISUAL_SIZE) / 2;
-    let canvas_y = target.height.saturating_sub(CANVAS512_VISUAL_SIZE) / 2;
-    let canvas_xy = GpgpuPoint::new(canvas_x as i32, canvas_y as i32);
-    let flush_offset = (canvas_y as usize)
-        .saturating_mul(target.pitch_bytes as usize)
-        .saturating_add((canvas_x as usize).saturating_mul(core::mem::size_of::<u32>()));
-    let flush_bytes = (CANVAS512_VISUAL_SIZE as usize)
-        .saturating_sub(1)
-        .saturating_mul(target.pitch_bytes as usize)
-        .saturating_add(
-            (CANVAS512_VISUAL_SIZE as usize).saturating_mul(core::mem::size_of::<u32>()),
-        );
-    let deadline_tick = total_start_tick.saturating_add(direct_rcs_ticks_from_ms(duration_ms));
-    let cadence_ticks = direct_rcs_ticks_from_ms(cadence_ms);
-    let mut next_tick = total_start_tick;
-    let mut frames = 0u32;
-    let mut submitted = 0u32;
-    let mut presented = 0u32;
-    let mut visible_points = 0usize;
-    let mut stamped_pixels = 0usize;
-    let mut total_submit_ms = 0u64;
-    let mut max_submit_ms = 0u64;
-    let mut angle_deg = 0u32;
-
-    while direct_rcs_now_tick() < deadline_tick {
-        while direct_rcs_now_tick() < next_tick {
-            core::hint::spin_loop();
-        }
-        if direct_rcs_now_tick() >= deadline_tick {
-            break;
-        }
-
-        shell_canvas512_seed_cube_vertices(state);
-        let (scale_q16, rotate_q16, translate_q16) = shell_canvas512_cube_anim_params(frames);
-        let Some(scale_ms) = submit_canvas512_3d_transform_frame(
-            dev,
-            state,
-            scale_upload,
-            DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
-            state.clear_test_phys,
-            CANVAS512_3D_TMP_GPU,
-            state.canvas512_tmp_phys,
-            scale_q16,
-            CANVAS512_3D_TRANSFORM_SCALE_PRE_MARKER,
-            CANVAS512_3D_TRANSFORM_SCALE_POST_MARKER,
-        ) else {
-            break;
-        };
-        let Some(rotate_ms) = submit_canvas512_3d_transform_frame(
-            dev,
-            state,
-            rotate_upload,
-            CANVAS512_3D_TMP_GPU,
-            state.canvas512_tmp_phys,
-            DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
-            state.clear_test_phys,
-            rotate_q16,
-            CANVAS512_3D_TRANSFORM_ROTATE_PRE_MARKER,
-            CANVAS512_3D_TRANSFORM_ROTATE_POST_MARKER,
-        ) else {
-            break;
-        };
-        let Some(translate_ms) = submit_canvas512_3d_transform_frame(
-            dev,
-            state,
-            translate_upload,
-            DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
-            state.clear_test_phys,
-            CANVAS512_3D_TMP_GPU,
-            state.canvas512_tmp_phys,
-            translate_q16,
-            CANVAS512_3D_TRANSFORM_TRANSLATE_PRE_MARKER,
-            CANVAS512_3D_TRANSFORM_TRANSLATE_POST_MARKER,
-        ) else {
-            break;
-        };
-        let Some(project_ms) = submit_canvas512_3d_project_frame_from(
-            dev,
-            state,
-            project_upload,
-            CANVAS512_3D_TMP_GPU,
-            state.canvas512_tmp_phys,
-        ) else {
-            break;
-        };
-        submitted = submitted.saturating_add(4);
-        let submit_ms = scale_ms
-            .saturating_add(rotate_ms)
-            .saturating_add(translate_ms)
-            .saturating_add(project_ms);
-        total_submit_ms = total_submit_ms.saturating_add(submit_ms);
-        max_submit_ms = max_submit_ms
-            .max(scale_ms)
-            .max(rotate_ms)
-            .max(translate_ms)
-            .max(project_ms);
-
-        let (frame_visible, frame_stamped) =
-            shell_canvas512_cpu_copy_projected_points_to_primary(state, target, canvas_x, canvas_y);
-        visible_points = frame_visible;
-        stamped_pixels = frame_stamped;
-        if super::display::notify_primary_surface_external_write(
-            "gpgpu-canvas512-spin",
-            flush_offset,
-            flush_bytes,
-        ) {
-            presented = presented.saturating_add(1);
-        }
-
-        frames = frames.saturating_add(1);
-        angle_deg = angle_deg.wrapping_add(1) % 360;
-        next_tick = next_tick.saturating_add(cadence_ticks);
-    }
-
-    let elapsed_ms = direct_rcs_elapsed_ms_since(total_start_tick);
-    Some(GpgpuShellCanvas512SpinResult {
-        ok: frames != 0 && submitted == frames.saturating_mul(4) && presented != 0,
-        frames,
-        submitted,
-        presented,
-        visible_points,
-        stamped_pixels,
-        duration_ms,
-        elapsed_ms,
-        cadence_ms,
-        total_submit_ms,
-        max_submit_ms,
-        primary_width: target.width,
-        primary_height: target.height,
-        canvas_xy,
-        vertex_count: CANVAS512_3D_PROJECT_VERTEX_COUNT,
-        radius_px: (CANVAS512_CUBE_HALF_Q16 as u32).saturating_mul(256)
-            / CANVAS512_3D_PROJECT_Q16_ONE as u32,
-        last_angle_deg: angle_deg,
-    })
-}
-
-fn shell_canvas512_seed_cube_vertices(state: DirectRcsState) {
-    unsafe {
-        core::ptr::write_bytes(state.clear_test_virt, 0, CANVAS512_3D_PROJECT_TEST_BYTES);
-        core::ptr::write_bytes(state.canvas512_out_virt, 0, CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES);
-        core::ptr::write_bytes(state.canvas512_tmp_virt, 0, CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES);
-        let vertices = state.clear_test_virt as *mut Canvas512Vec3Q16;
-        let half = CANVAS512_CUBE_HALF_Q16;
-        let corners = [
-            Canvas512Vec3Q16 {
-                x: -half,
-                y: -half,
-                z: -half,
-                pad: 0,
-            },
-            Canvas512Vec3Q16 {
-                x: half,
-                y: -half,
-                z: -half,
-                pad: 1,
-            },
-            Canvas512Vec3Q16 {
-                x: -half,
-                y: half,
-                z: -half,
-                pad: 2,
-            },
-            Canvas512Vec3Q16 {
-                x: half,
-                y: half,
-                z: -half,
-                pad: 3,
-            },
-            Canvas512Vec3Q16 {
-                x: -half,
-                y: -half,
-                z: half,
-                pad: 4,
-            },
-            Canvas512Vec3Q16 {
-                x: half,
-                y: -half,
-                z: half,
-                pad: 5,
-            },
-            Canvas512Vec3Q16 {
-                x: -half,
-                y: half,
-                z: half,
-                pad: 6,
-            },
-            Canvas512Vec3Q16 {
-                x: half,
-                y: half,
-                z: half,
-                pad: 7,
-            },
-        ];
-        for (index, vertex) in corners.iter().copied().enumerate() {
-            core::ptr::write_volatile(vertices.add(index), vertex);
-        }
-        for index in 0..CANVAS512_3D_PROJECT_VERTEX_COUNT {
-            if index < CANVAS512_CUBE_CORNER_COUNT {
-                continue;
-            }
-            let edge_sample = index - CANVAS512_CUBE_CORNER_COUNT;
-            let edge = CANVAS512_CUBE_EDGES[edge_sample % CANVAS512_CUBE_EDGE_COUNT];
-            let step = ((edge_sample / CANVAS512_CUBE_EDGE_COUNT) % 8) as i32 + 1;
-            let a = corners[edge.0];
-            let b = corners[edge.1];
-            let vertex = Canvas512Vec3Q16 {
-                x: a.x + ((b.x - a.x) * step) / 9,
-                y: a.y + ((b.y - a.y) * step) / 9,
-                z: a.z + ((b.z - a.z) * step) / 9,
-                pad: index as i32,
-            };
-            core::ptr::write_volatile(vertices.add(index), vertex);
-        }
-    }
-    super::dma_flush(state.clear_test_virt, CANVAS512_3D_PROJECT_TEST_BYTES);
-    super::dma_flush(state.canvas512_out_virt, CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES);
-    super::dma_flush(state.canvas512_tmp_virt, CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES);
-}
-
-fn shell_canvas512_cube_anim_params(
-    frame: u32,
-) -> (Canvas512Vec3Q16, Canvas512Vec3Q16, Canvas512Vec3Q16) {
-    let q = CANVAS512_3D_PROJECT_Q16_ONE as f32;
-    let phase = (frame as f32) * 0.11;
-    let scale = 1.0 + 0.25 * sin_f32(phase);
-    let yaw = 25.0 * CANVAS512_VISUAL_DEG_TO_RAD * sin_f32(phase * 0.83);
-    let pitch = 10.0 * CANVAS512_VISUAL_DEG_TO_RAD * sin_f32(phase * 1.17);
-    let tx = 0.10 * q * sin_f32(phase * 0.71);
-    let half_yaw = yaw * 0.5;
-    let half_pitch = pitch * 0.5;
-    let sy = sin_f32(half_yaw);
-    let cy = cos_f32(half_yaw);
-    let sx = sin_f32(half_pitch);
-    let cx = cos_f32(half_pitch);
-    let scale_q16 = (scale * q) as i32;
-
-    (
-        Canvas512Vec3Q16 {
-            x: scale_q16,
-            y: scale_q16,
-            z: scale_q16,
-            pad: 0,
-        },
-        Canvas512Vec3Q16 {
-            x: (cy * sx * q) as i32,
-            y: (sy * cx * q) as i32,
-            z: (-sy * sx * q) as i32,
-            pad: (cy * cx * q) as i32,
-        },
-        Canvas512Vec3Q16 {
-            x: tx as i32,
-            y: 0,
-            z: CANVAS512_3D_PROJECT_Q16_ONE * 2,
-            pad: 0,
-        },
-    )
-}
-
-fn shell_canvas512_write_pixel(
-    primary: *mut u32,
-    pitch_pixels: usize,
-    canvas_x: usize,
-    canvas_y: usize,
-    x: i32,
-    y: i32,
-    color: u32,
-) -> bool {
-    if x < 0 || y < 0 || x >= CANVAS512_VISUAL_SIZE as i32 || y >= CANVAS512_VISUAL_SIZE as i32 {
-        return false;
-    }
-    unsafe {
-        let dst = primary.add((canvas_y + y as usize) * pitch_pixels + canvas_x + x as usize);
-        core::ptr::write_volatile(dst, color);
-    }
-    true
-}
-
-fn shell_canvas512_stamp_dot(
-    primary: *mut u32,
-    pitch_pixels: usize,
-    canvas_x: usize,
-    canvas_y: usize,
-    x: i32,
-    y: i32,
-    radius: i32,
-    color: u32,
-) -> usize {
-    let mut stamped = 0usize;
-    for dy in -radius..=radius {
-        for dx in -radius..=radius {
-            if shell_canvas512_write_pixel(
-                primary,
-                pitch_pixels,
-                canvas_x,
-                canvas_y,
-                x + dx,
-                y + dy,
-                color,
-            ) {
-                stamped = stamped.saturating_add(1);
-            }
-        }
-    }
-    stamped
-}
-
-fn shell_canvas512_draw_line(
-    primary: *mut u32,
-    pitch_pixels: usize,
-    canvas_x: usize,
-    canvas_y: usize,
-    mut x0: i32,
-    mut y0: i32,
-    x1: i32,
-    y1: i32,
-    color: u32,
-) -> usize {
-    let mut stamped = 0usize;
-    let dx = (x1 - x0).abs();
-    let sx = if x0 < x1 { 1 } else { -1 };
-    let dy = -((y1 - y0).abs());
-    let sy = if y0 < y1 { 1 } else { -1 };
-    let mut err = dx + dy;
-
-    loop {
-        if shell_canvas512_write_pixel(primary, pitch_pixels, canvas_x, canvas_y, x0, y0, color) {
-            stamped = stamped.saturating_add(1);
-        }
-        if x0 == x1 && y0 == y1 {
-            break;
-        }
-        let e2 = err.saturating_mul(2);
-        if e2 >= dy {
-            err += dy;
-            x0 += sx;
-        }
-        if e2 <= dx {
-            err += dx;
-            y0 += sy;
-        }
-    }
-
-    stamped
-}
-
-fn shell_canvas512_cpu_copy_projected_points_to_primary(
-    state: DirectRcsState,
-    target: super::display::PrimarySurfaceGpgpuTarget,
-    canvas_x: u32,
-    canvas_y: u32,
-) -> (usize, usize) {
-    super::dma_flush(state.canvas512_out_virt, CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES);
-    let pitch_pixels = (target.pitch_bytes as usize) / core::mem::size_of::<u32>();
-    let canvas_size = CANVAS512_VISUAL_SIZE as usize;
-    let canvas_x = canvas_x as usize;
-    let canvas_y = canvas_y as usize;
-    let mut visible = 0usize;
-    let mut stamped = 0usize;
-    let mut corner_xy = [(0i32, 0i32); CANVAS512_CUBE_CORNER_COUNT];
-    let mut corner_visible = [false; CANVAS512_CUBE_CORNER_COUNT];
-
-    unsafe {
-        let primary = target.virt as *mut u32;
-        for y in 0..canvas_size {
-            let row = primary.add((canvas_y + y) * pitch_pixels + canvas_x);
-            for x in 0..canvas_size {
-                core::ptr::write_volatile(row.add(x), 0xFF08_0810);
-            }
-        }
-
-        let out = state.canvas512_out_virt as *const Canvas512ProjectedRgba8;
-        for index in 0..CANVAS512_3D_PROJECT_VERTEX_COUNT {
-            let point = core::ptr::read_volatile(out.add(index));
-            if (point.packed_xy & 0x8000_0000) == 0 {
-                continue;
-            }
-            visible = visible.saturating_add(1);
-            let x = (point.packed_xy & 0xFFFF) as i32;
-            let y = ((point.packed_xy >> 16) & 0x7FFF) as i32;
-            if index < CANVAS512_CUBE_CORNER_COUNT {
-                corner_xy[index] = (x, y);
-                corner_visible[index] = true;
-                stamped = stamped.saturating_add(shell_canvas512_stamp_dot(
-                    primary,
-                    pitch_pixels,
-                    canvas_x,
-                    canvas_y,
-                    x,
-                    y,
-                    CANVAS512_VISUAL_DOT_RADIUS,
-                    0xFFFF_F6C0,
-                ));
-            } else {
-                stamped = stamped.saturating_add(shell_canvas512_stamp_dot(
-                    primary,
-                    pitch_pixels,
-                    canvas_x,
-                    canvas_y,
-                    x,
-                    y,
-                    0,
-                    0xFF5C_C8FF,
-                ));
-            }
-        }
-
-        for (a, b) in CANVAS512_CUBE_EDGES {
-            if !corner_visible[a] || !corner_visible[b] {
-                continue;
-            }
-            let (x0, y0) = corner_xy[a];
-            let (x1, y1) = corner_xy[b];
-            stamped = stamped.saturating_add(shell_canvas512_draw_line(
-                primary,
-                pitch_pixels,
-                canvas_x,
-                canvas_y,
-                x0,
-                y0,
-                x1,
-                y1,
-                0xFFFF_FFFF,
-            ));
-        }
-    }
-
-    (visible, stamped)
-}
-
 fn shell_surface_once() -> Option<GpgpuShellSurface> {
     let mut guard = GPGPU_SHELL_SURFACE.lock();
     if let Some(shell) = *guard {
@@ -4588,274 +4015,6 @@ fn submit_sprite64_worklist(
     observed == SPRITE64_WORKLIST_POST_MARKER
 }
 
-fn submit_canvas512_3d_transform_smoke(
-    dev: super::Dev,
-    state: DirectRcsState,
-    upload: Option<UploadedKernelArtifact>,
-    label: &str,
-    pre_marker_value: u32,
-    post_marker_value: u32,
-    param_q16: Canvas512Vec3Q16,
-    expected_fn: fn(Canvas512Vec3Q16, Canvas512Vec3Q16) -> Canvas512Vec3Q16,
-) -> bool {
-    let Some(upload) = upload else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: canvas512-3d-transform-{} skipped reason=no-kernel-upload\n",
-            label,
-        );
-        return false;
-    };
-
-    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
-    let expected = direct_rcs_seed_canvas512_3d_transform(state, param_q16, expected_fn);
-    let params = Canvas512TransformQ16Params {
-        src_gpu: DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
-        dst_gpu: CANVAS512_3D_PROJECT_OUT_GPU,
-        src_first_vertex: CANVAS512_3D_TRANSFORM_SRC_FIRST,
-        dst_first_vertex: CANVAS512_3D_TRANSFORM_DST_FIRST,
-        vertex_count: CANVAS512_3D_TRANSFORM_TEST_COUNT,
-        param_q16,
-    };
-    let forcewake_ok = direct_rcs_forcewake(dev);
-    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
-    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
-    let kernel_ppgtt_ok = ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    let src_ppgtt_ok = kernel_ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(
-            state,
-            DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
-            state.clear_test_phys,
-            CLEAR_RECT_TEST_BYTES,
-        );
-    let dst_ppgtt_ok = src_ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(
-            state,
-            CANVAS512_3D_PROJECT_OUT_GPU,
-            state.canvas512_out_phys,
-            CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES,
-        );
-    let batch_ok = dst_ppgtt_ok
-        && direct_rcs_encode_canvas512_3d_transform_batch(
-            state,
-            upload,
-            params,
-            pre_marker_value,
-            post_marker_value,
-            CANVAS512_3D_PROJECT_VERTEX_BYTES,
-            CANVAS512_3D_PROJECT_VERTEX_BYTES,
-        );
-    let submit_start_tick = direct_rcs_now_tick();
-    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
-    let (observed, retire_ms) = if submitted {
-        direct_rcs_poll_result_slot_elapsed(
-            state,
-            CANVAS512_3D_TRANSFORM_POST_MARKER_SLOT,
-            post_marker_value,
-            submit_start_tick,
-        )
-    } else {
-        (0, 0)
-    };
-    let pre_marker = direct_rcs_read_result_slot(state, CANVAS512_3D_TRANSFORM_PRE_MARKER_SLOT);
-    let (matches, src_preserved, guards_ok, first, last) =
-        direct_rcs_read_canvas512_3d_transform_result(state, expected);
-    let retired = observed == post_marker_value;
-    let ok = retired
-        && pre_marker == pre_marker_value
-        && matches == CANVAS512_3D_TRANSFORM_TEST_COUNT as usize
-        && src_preserved == CANVAS512_3D_TRANSFORM_TEST_COUNT as usize
-        && guards_ok;
-
-    crate::log_info!(
-        target: "gpgpu";
-        "intel/gpgpu: canvas512-3d-transform-{} forcewake={} ggtt={} ppgtt={} kernel_ppgtt={} src_ppgtt={} dst_ppgtt={} batch={} submitted={} retired={} retire_ms={} ok={} matched={}/{} src_preserved={}/{} guards_ok={} src_first={} dst_first={} count={} pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} src_gpu=0x{:X} dst_gpu=0x{:X} first=[{}, {}, {}, {}] last=[{}, {}, {}, {}] param=[{}, {}, {}, {}] ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=direct-execlist no_guc_submit=1 next=project-or-visual\n",
-        label,
-        forcewake_ok as u8,
-        mapped_ok as u8,
-        ppgtt_ok as u8,
-        kernel_ppgtt_ok as u8,
-        src_ppgtt_ok as u8,
-        dst_ppgtt_ok as u8,
-        batch_ok as u8,
-        submitted as u8,
-        retired as u8,
-        retire_ms,
-        ok as u8,
-        matches,
-        CANVAS512_3D_TRANSFORM_TEST_COUNT,
-        src_preserved,
-        CANVAS512_3D_TRANSFORM_TEST_COUNT,
-        guards_ok as u8,
-        CANVAS512_3D_TRANSFORM_SRC_FIRST,
-        CANVAS512_3D_TRANSFORM_DST_FIRST,
-        CANVAS512_3D_TRANSFORM_TEST_COUNT,
-        pre_marker,
-        observed,
-        post_marker_value,
-        upload.gpu,
-        upload.gpu + 0x40,
-        DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
-        CANVAS512_3D_PROJECT_OUT_GPU,
-        first.x,
-        first.y,
-        first.z,
-        first.pad,
-        last.x,
-        last.y,
-        last.z,
-        last.pad,
-        param_q16.x,
-        param_q16.y,
-        param_q16.z,
-        param_q16.pad,
-        DIRECT_RCS_GPU_VA_RING_BASE,
-        DIRECT_RCS_GPU_VA_BATCH_BASE,
-        DIRECT_RCS_GPU_VA_RESULT_BASE,
-        super::mmio_read(dev, RCS_RING_HEAD),
-        super::mmio_read(dev, RCS_RING_TAIL),
-        super::mmio_read(dev, RCS_RING_ACTHD),
-        super::mmio_read(dev, RCS_RING_IPEIR),
-        super::mmio_read(dev, RCS_RING_IPEHR),
-        super::mmio_read(dev, RCS_RING_EIR),
-    );
-
-    ok
-}
-
-fn submit_canvas512_3d_transform_frame(
-    dev: super::Dev,
-    state: DirectRcsState,
-    upload: UploadedKernelArtifact,
-    src_gpu: u64,
-    src_phys: u64,
-    dst_gpu: u64,
-    dst_phys: u64,
-    param_q16: Canvas512Vec3Q16,
-    pre_marker_value: u32,
-    post_marker_value: u32,
-) -> Option<u64> {
-    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
-    let params = Canvas512TransformQ16Params {
-        src_gpu,
-        dst_gpu,
-        src_first_vertex: 0,
-        dst_first_vertex: 0,
-        vertex_count: CANVAS512_3D_PROJECT_VERTEX_COUNT as u32,
-        param_q16,
-    };
-    let forcewake_ok = direct_rcs_forcewake(dev);
-    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
-    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
-    let kernel_ppgtt_ok = ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    let src_ppgtt_ok = kernel_ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, src_gpu, src_phys, CANVAS512_3D_PROJECT_VERTEX_BYTES);
-    let dst_ppgtt_ok = src_ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, dst_gpu, dst_phys, CANVAS512_3D_PROJECT_VERTEX_BYTES);
-    let batch_ok = dst_ppgtt_ok
-        && direct_rcs_encode_canvas512_3d_transform_batch(
-            state,
-            upload,
-            params,
-            pre_marker_value,
-            post_marker_value,
-            CANVAS512_3D_PROJECT_VERTEX_BYTES,
-            CANVAS512_3D_PROJECT_VERTEX_BYTES,
-        );
-    let submit_start_tick = direct_rcs_now_tick();
-    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
-    let (observed, retire_ms) = if submitted {
-        direct_rcs_poll_result_slot_elapsed(
-            state,
-            CANVAS512_3D_TRANSFORM_POST_MARKER_SLOT,
-            post_marker_value,
-            submit_start_tick,
-        )
-    } else {
-        (0, 0)
-    };
-    if observed == post_marker_value {
-        Some(retire_ms)
-    } else {
-        None
-    }
-}
-
-fn submit_canvas512_3d_project_frame(
-    dev: super::Dev,
-    state: DirectRcsState,
-    upload: UploadedKernelArtifact,
-) -> Option<u64> {
-    submit_canvas512_3d_project_frame_from(
-        dev,
-        state,
-        upload,
-        DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
-        state.clear_test_phys,
-    )
-}
-
-fn submit_canvas512_3d_project_frame_from(
-    dev: super::Dev,
-    state: DirectRcsState,
-    upload: UploadedKernelArtifact,
-    vertices_gpu: u64,
-    vertices_phys: u64,
-) -> Option<u64> {
-    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
-    let params = Canvas512ProjectRgba8Params {
-        vertices_gpu,
-        out_gpu: CANVAS512_3D_PROJECT_OUT_GPU,
-        vertex_count: CANVAS512_3D_PROJECT_VERTEX_COUNT as u32,
-    };
-    let forcewake_ok = direct_rcs_forcewake(dev);
-    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
-    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
-    let kernel_ppgtt_ok = ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    let vertices_ppgtt_ok = kernel_ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(
-            state,
-            vertices_gpu,
-            vertices_phys,
-            CANVAS512_3D_PROJECT_VERTEX_BYTES,
-        );
-    let out_ppgtt_ok = vertices_ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(
-            state,
-            CANVAS512_3D_PROJECT_OUT_GPU,
-            state.canvas512_out_phys,
-            CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES,
-        );
-    let batch_ok = out_ppgtt_ok
-        && direct_rcs_encode_canvas512_3d_project_batch(
-            state,
-            upload,
-            params,
-            CANVAS512_3D_PROJECT_VERTEX_BYTES,
-            CANVAS512_3D_PROJECT_OUT_BYTES,
-        );
-    let submit_start_tick = direct_rcs_now_tick();
-    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
-    let (observed, retire_ms) = if submitted {
-        direct_rcs_poll_result_slot_elapsed(
-            state,
-            CANVAS512_3D_PROJECT_POST_MARKER_SLOT,
-            CANVAS512_3D_PROJECT_POST_MARKER,
-            submit_start_tick,
-        )
-    } else {
-        (0, 0)
-    };
-    if observed == CANVAS512_3D_PROJECT_POST_MARKER {
-        Some(retire_ms)
-    } else {
-        None
-    }
-}
-
 fn sprite64_worklist_walker_count(desc_count: usize) -> usize {
     desc_count
         .div_ceil(SPRITE64_WORKLIST_DESCS_PER_WALKER)
@@ -4966,10 +4125,10 @@ struct DirectRcsState {
     result_virt: *mut u8,
     clear_test_phys: u64,
     clear_test_virt: *mut u8,
-    canvas512_out_phys: u64,
-    canvas512_out_virt: *mut u8,
-    canvas512_tmp_phys: u64,
-    canvas512_tmp_virt: *mut u8,
+    canvas3d_out_phys: u64,
+    canvas3d_out_virt: *mut u8,
+    canvas3d_tmp_phys: u64,
+    canvas3d_tmp_virt: *mut u8,
     ppgtt_phys: u64,
     ppgtt_virt: *mut u8,
 }
@@ -4989,10 +4148,10 @@ fn direct_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
     let (result_phys, result_virt) = crate::dma::alloc(DIRECT_RCS_RESULT_BYTES, super::WARM_ALIGN)?;
     let (clear_test_phys, clear_test_virt) =
         crate::dma::alloc(CLEAR_RECT_TEST_BYTES, super::WARM_ALIGN)?;
-    let (canvas512_out_phys, canvas512_out_virt) =
-        crate::dma::alloc(CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES, super::WARM_ALIGN)?;
-    let (canvas512_tmp_phys, canvas512_tmp_virt) =
-        crate::dma::alloc(CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES, super::WARM_ALIGN)?;
+    let (canvas3d_out_phys, canvas3d_out_virt) =
+        crate::dma::alloc(CANVAS3D_PROJECT_OUT_ALLOC_BYTES, super::WARM_ALIGN)?;
+    let (canvas3d_tmp_phys, canvas3d_tmp_virt) =
+        crate::dma::alloc(CANVAS3D_PROJECT_OUT_ALLOC_BYTES, super::WARM_ALIGN)?;
     let (ppgtt_phys, ppgtt_virt) = crate::dma::alloc(DIRECT_RCS_PPGTT_BYTES, super::WARM_ALIGN)?;
 
     unsafe {
@@ -5001,8 +4160,8 @@ fn direct_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
         core::ptr::write_bytes(batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
         core::ptr::write_bytes(result_virt, 0, DIRECT_RCS_RESULT_BYTES);
         core::ptr::write_bytes(clear_test_virt, 0, CLEAR_RECT_TEST_BYTES);
-        core::ptr::write_bytes(canvas512_out_virt, 0, CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES);
-        core::ptr::write_bytes(canvas512_tmp_virt, 0, CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES);
+        core::ptr::write_bytes(canvas3d_out_virt, 0, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
+        core::ptr::write_bytes(canvas3d_tmp_virt, 0, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
         core::ptr::write_bytes(ppgtt_virt, 0, DIRECT_RCS_PPGTT_BYTES);
     }
 
@@ -5017,10 +4176,10 @@ fn direct_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
         result_virt,
         clear_test_phys,
         clear_test_virt,
-        canvas512_out_phys,
-        canvas512_out_virt,
-        canvas512_tmp_phys,
-        canvas512_tmp_virt,
+        canvas3d_out_phys,
+        canvas3d_out_virt,
+        canvas3d_tmp_phys,
+        canvas3d_tmp_virt,
         ppgtt_phys,
         ppgtt_virt,
     };
@@ -5057,15 +4216,15 @@ fn direct_rcs_map_state(dev: super::Dev, state: DirectRcsState) -> bool {
             )
             && super::map_ggtt(
                 dev,
-                state.canvas512_out_phys,
-                CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES,
-                DIRECT_RCS_GPU_VA_CANVAS512_OUT_BASE,
+                state.canvas3d_out_phys,
+                CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+                DIRECT_RCS_GPU_VA_CANVAS3D_OUT_BASE,
             )
             && super::map_ggtt(
                 dev,
-                state.canvas512_tmp_phys,
-                CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES,
-                DIRECT_RCS_GPU_VA_CANVAS512_TMP_BASE,
+                state.canvas3d_tmp_phys,
+                CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+                DIRECT_RCS_GPU_VA_CANVAS3D_TMP_BASE,
             );
     if mapped {
         super::ggtt_invalidate(dev);
@@ -5874,15 +5033,15 @@ fn direct_rcs_encode_sprite64_worklist_batch(
     true
 }
 
-fn direct_rcs_encode_canvas512_3d_project_batch(
+fn direct_rcs_encode_canvas3d_project_batch(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
-    params: Canvas512ProjectRgba8Params,
+    params: Canvas3dProjectRgba8Params,
     vertices_bytes: usize,
     out_bytes: usize,
 ) -> bool {
     if params.vertex_count == 0
-        || CANVAS512_3D_PROJECT_PAYLOAD_OFFSET_BYTES + CANVAS512_3D_PROJECT_INDIRECT_BYTES
+        || CANVAS3D_PROJECT_PAYLOAD_OFFSET_BYTES + CANVAS3D_PROJECT_INDIRECT_BYTES
             > DIRECT_RCS_BATCH_BYTES
     {
         return false;
@@ -5896,17 +5055,17 @@ fn direct_rcs_encode_canvas512_3d_project_batch(
 
     if !direct_rcs_write_copy_rect_interface_descriptor_at(
         state,
-        CANVAS512_3D_PROJECT_IDD_OFFSET_BYTES,
-        CANVAS512_3D_PROJECT_BINDING_TABLE_OFFSET_BYTES,
-        CANVAS512_3D_PROJECT_RGBA8_TEXT_OFFSET_BYTES,
+        CANVAS3D_PROJECT_IDD_OFFSET_BYTES,
+        CANVAS3D_PROJECT_BINDING_TABLE_OFFSET_BYTES,
+        CANVAS3D_PROJECT_RGBA8_TEXT_OFFSET_BYTES,
     ) {
         return false;
     }
     if !direct_rcs_write_copy_rect_surface_states_at(
         state,
-        CANVAS512_3D_PROJECT_BINDING_TABLE_OFFSET_BYTES,
-        CANVAS512_3D_PROJECT_VERTICES_SURFACE_STATE_OFFSET_BYTES,
-        CANVAS512_3D_PROJECT_OUT_SURFACE_STATE_OFFSET_BYTES,
+        CANVAS3D_PROJECT_BINDING_TABLE_OFFSET_BYTES,
+        CANVAS3D_PROJECT_VERTICES_SURFACE_STATE_OFFSET_BYTES,
+        CANVAS3D_PROJECT_OUT_SURFACE_STATE_OFFSET_BYTES,
         params.vertices_gpu,
         vertices_bytes,
         params.out_gpu,
@@ -5914,7 +5073,7 @@ fn direct_rcs_encode_canvas512_3d_project_batch(
     ) {
         return false;
     }
-    if !direct_rcs_write_canvas512_3d_project_payload(state, params) {
+    if !direct_rcs_write_canvas3d_project_payload(state, params) {
         return false;
     }
 
@@ -5959,23 +5118,23 @@ fn direct_rcs_encode_canvas512_3d_project_batch(
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push(batch, &mut cursor, CANVAS512_3D_PROJECT_IDD_BYTES as u32);
-    ok &= direct_rcs_push(batch, &mut cursor, CANVAS512_3D_PROJECT_IDD_OFFSET_BYTES as u32);
+    ok &= direct_rcs_push(batch, &mut cursor, CANVAS3D_PROJECT_IDD_BYTES as u32);
+    ok &= direct_rcs_push(batch, &mut cursor, CANVAS3D_PROJECT_IDD_OFFSET_BYTES as u32);
     ok &= direct_rcs_push_store_marker(
         batch,
         &mut cursor,
-        CANVAS512_3D_PROJECT_PRE_MARKER_SLOT,
-        CANVAS512_3D_PROJECT_PRE_MARKER,
+        CANVAS3D_PROJECT_PRE_MARKER_SLOT,
+        CANVAS3D_PROJECT_PRE_MARKER,
     );
-    ok &= direct_rcs_push_canvas512_3d_project_walker(batch, &mut cursor);
+    ok &= direct_rcs_push_canvas3d_project_walker(batch, &mut cursor);
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
     ok &= direct_rcs_push_store_marker(
         batch,
         &mut cursor,
-        CANVAS512_3D_PROJECT_POST_MARKER_SLOT,
-        CANVAS512_3D_PROJECT_POST_MARKER,
+        CANVAS3D_PROJECT_POST_MARKER_SLOT,
+        CANVAS3D_PROJECT_POST_MARKER,
     );
     ok &= direct_rcs_push(batch, &mut cursor, MI_BATCH_BUFFER_END);
     ok &= direct_rcs_push(batch, &mut cursor, MI_NOOP);
@@ -5989,17 +5148,17 @@ fn direct_rcs_encode_canvas512_3d_project_batch(
     true
 }
 
-fn direct_rcs_encode_canvas512_3d_transform_batch(
+fn direct_rcs_encode_canvas3d_transform_batch(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
-    params: Canvas512TransformQ16Params,
+    params: Canvas3dTransformQ16Params,
     pre_marker_value: u32,
     post_marker_value: u32,
     src_bytes: usize,
     dst_bytes: usize,
 ) -> bool {
     if params.vertex_count == 0
-        || CANVAS512_3D_TRANSFORM_PAYLOAD_OFFSET_BYTES + CANVAS512_3D_TRANSFORM_INDIRECT_BYTES
+        || CANVAS3D_TRANSFORM_PAYLOAD_OFFSET_BYTES + CANVAS3D_TRANSFORM_INDIRECT_BYTES
             > DIRECT_RCS_BATCH_BYTES
     {
         return false;
@@ -6013,17 +5172,17 @@ fn direct_rcs_encode_canvas512_3d_transform_batch(
 
     if !direct_rcs_write_copy_rect_interface_descriptor_at(
         state,
-        CANVAS512_3D_TRANSFORM_IDD_OFFSET_BYTES,
-        CANVAS512_3D_TRANSFORM_BINDING_TABLE_OFFSET_BYTES,
+        CANVAS3D_TRANSFORM_IDD_OFFSET_BYTES,
+        CANVAS3D_TRANSFORM_BINDING_TABLE_OFFSET_BYTES,
         0x40,
     ) {
         return false;
     }
     if !direct_rcs_write_copy_rect_surface_states_at(
         state,
-        CANVAS512_3D_TRANSFORM_BINDING_TABLE_OFFSET_BYTES,
-        CANVAS512_3D_TRANSFORM_SRC_SURFACE_STATE_OFFSET_BYTES,
-        CANVAS512_3D_TRANSFORM_DST_SURFACE_STATE_OFFSET_BYTES,
+        CANVAS3D_TRANSFORM_BINDING_TABLE_OFFSET_BYTES,
+        CANVAS3D_TRANSFORM_SRC_SURFACE_STATE_OFFSET_BYTES,
+        CANVAS3D_TRANSFORM_DST_SURFACE_STATE_OFFSET_BYTES,
         params.src_gpu,
         src_bytes,
         params.dst_gpu,
@@ -6031,7 +5190,7 @@ fn direct_rcs_encode_canvas512_3d_transform_batch(
     ) {
         return false;
     }
-    if !direct_rcs_write_canvas512_3d_transform_payload(state, params) {
+    if !direct_rcs_write_canvas3d_transform_payload(state, params) {
         return false;
     }
 
@@ -6076,23 +5235,257 @@ fn direct_rcs_encode_canvas512_3d_transform_batch(
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push(batch, &mut cursor, CANVAS512_3D_TRANSFORM_IDD_BYTES as u32);
-    ok &= direct_rcs_push(batch, &mut cursor, CANVAS512_3D_TRANSFORM_IDD_OFFSET_BYTES as u32);
+    ok &= direct_rcs_push(batch, &mut cursor, CANVAS3D_TRANSFORM_IDD_BYTES as u32);
+    ok &= direct_rcs_push(batch, &mut cursor, CANVAS3D_TRANSFORM_IDD_OFFSET_BYTES as u32);
     ok &= direct_rcs_push_store_marker(
         batch,
         &mut cursor,
-        CANVAS512_3D_TRANSFORM_PRE_MARKER_SLOT,
+        CANVAS3D_TRANSFORM_PRE_MARKER_SLOT,
         pre_marker_value,
     );
-    ok &= direct_rcs_push_canvas512_3d_transform_walker(batch, &mut cursor);
+    ok &= direct_rcs_push_canvas3d_transform_walker(batch, &mut cursor);
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
     ok &= direct_rcs_push_store_marker(
         batch,
         &mut cursor,
-        CANVAS512_3D_TRANSFORM_POST_MARKER_SLOT,
+        CANVAS3D_TRANSFORM_POST_MARKER_SLOT,
         post_marker_value,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, MI_BATCH_BUFFER_END);
+    ok &= direct_rcs_push(batch, &mut cursor, MI_NOOP);
+
+    if !ok {
+        return false;
+    }
+
+    super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
+    super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
+    true
+}
+
+fn direct_rcs_encode_canvas3d_transform_fused_batch(
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    params: Canvas3dTransformFusedQ16Params,
+    pre_marker_value: u32,
+    post_marker_value: u32,
+    src_bytes: usize,
+    dst_bytes: usize,
+) -> bool {
+    if params.vertex_count == 0
+        || CANVAS3D_TRANSFORM_PAYLOAD_OFFSET_BYTES + CANVAS3D_TRANSFORM_FUSED_INDIRECT_BYTES
+            > DIRECT_RCS_BATCH_BYTES
+    {
+        return false;
+    }
+
+    unsafe {
+        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
+        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+    }
+
+    if !direct_rcs_write_copy_rect_interface_descriptor_at_with_cross_thread_grfs(
+        state,
+        CANVAS3D_TRANSFORM_IDD_OFFSET_BYTES,
+        CANVAS3D_TRANSFORM_BINDING_TABLE_OFFSET_BYTES,
+        CANVAS3D_TRANSFORM_Q16_TEXT_OFFSET_BYTES,
+        4,
+    ) {
+        return false;
+    }
+    if !direct_rcs_write_copy_rect_surface_states_at(
+        state,
+        CANVAS3D_TRANSFORM_BINDING_TABLE_OFFSET_BYTES,
+        CANVAS3D_TRANSFORM_SRC_SURFACE_STATE_OFFSET_BYTES,
+        CANVAS3D_TRANSFORM_DST_SURFACE_STATE_OFFSET_BYTES,
+        params.src_gpu,
+        src_bytes,
+        params.dst_gpu,
+        dst_bytes,
+    ) {
+        return false;
+    }
+    if !direct_rcs_write_canvas3d_transform_fused_payload(state, params) {
+        return false;
+    }
+
+    let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
+    let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
+    let mut cursor = 0usize;
+    let mut ok = true;
+
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL | 1,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_3D);
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
+    );
+    ok &= direct_rcs_push_state_base_address(
+        batch,
+        &mut cursor,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        upload.gpu,
+    );
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_VFE_STATE_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW3_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW5_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, CANVAS3D_TRANSFORM_IDD_BYTES as u32);
+    ok &= direct_rcs_push(batch, &mut cursor, CANVAS3D_TRANSFORM_IDD_OFFSET_BYTES as u32);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        CANVAS3D_TRANSFORM_PRE_MARKER_SLOT,
+        pre_marker_value,
+    );
+    ok &= direct_rcs_push_canvas3d_transform_fused_walker(batch, &mut cursor);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        CANVAS3D_TRANSFORM_POST_MARKER_SLOT,
+        post_marker_value,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, MI_BATCH_BUFFER_END);
+    ok &= direct_rcs_push(batch, &mut cursor, MI_NOOP);
+
+    if !ok {
+        return false;
+    }
+
+    super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
+    super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
+    true
+}
+
+fn direct_rcs_encode_canvas3d_clip_box_batch(
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    params: Canvas3dClipBoxQ16Params,
+    src_bytes: usize,
+    dst_bytes: usize,
+) -> bool {
+    if params.vertex_count == 0
+        || CANVAS3D_CLIP_BOX_PAYLOAD_OFFSET_BYTES + CANVAS3D_CLIP_BOX_INDIRECT_BYTES
+            > DIRECT_RCS_BATCH_BYTES
+    {
+        return false;
+    }
+
+    unsafe {
+        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
+        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+    }
+
+    if !direct_rcs_write_copy_rect_interface_descriptor_at_with_cross_thread_grfs(
+        state,
+        CANVAS3D_CLIP_BOX_IDD_OFFSET_BYTES,
+        CANVAS3D_CLIP_BOX_BINDING_TABLE_OFFSET_BYTES,
+        CANVAS3D_CLIP_BOX_Q16_TEXT_OFFSET_BYTES,
+        4,
+    ) {
+        return false;
+    }
+    if !direct_rcs_write_copy_rect_surface_states_at(
+        state,
+        CANVAS3D_CLIP_BOX_BINDING_TABLE_OFFSET_BYTES,
+        CANVAS3D_CLIP_BOX_SRC_SURFACE_STATE_OFFSET_BYTES,
+        CANVAS3D_CLIP_BOX_DST_SURFACE_STATE_OFFSET_BYTES,
+        params.src_gpu,
+        src_bytes,
+        params.dst_gpu,
+        dst_bytes,
+    ) {
+        return false;
+    }
+    if !direct_rcs_write_canvas3d_clip_box_payload(state, params) {
+        return false;
+    }
+
+    let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
+    let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
+    let mut cursor = 0usize;
+    let mut ok = true;
+
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL | 1,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_3D);
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
+    );
+    ok &= direct_rcs_push_state_base_address(
+        batch,
+        &mut cursor,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        upload.gpu,
+    );
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_VFE_STATE_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW3_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW5_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, CANVAS3D_CLIP_BOX_IDD_BYTES as u32);
+    ok &= direct_rcs_push(batch, &mut cursor, CANVAS3D_CLIP_BOX_IDD_OFFSET_BYTES as u32);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        CANVAS3D_CLIP_BOX_PRE_MARKER_SLOT,
+        CANVAS3D_CLIP_BOX_PRE_MARKER,
+    );
+    ok &= direct_rcs_push_canvas3d_clip_box_walker(batch, &mut cursor);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        CANVAS3D_CLIP_BOX_POST_MARKER_SLOT,
+        CANVAS3D_CLIP_BOX_POST_MARKER,
     );
     ok &= direct_rcs_push(batch, &mut cursor, MI_BATCH_BUFFER_END);
     ok &= direct_rcs_push(batch, &mut cursor, MI_NOOP);
@@ -6237,6 +5630,22 @@ fn direct_rcs_write_copy_rect_interface_descriptor_at(
     binding_table_offset: usize,
     text_offset_bytes: u64,
 ) -> bool {
+    direct_rcs_write_copy_rect_interface_descriptor_at_with_cross_thread_grfs(
+        state,
+        idd_offset,
+        binding_table_offset,
+        text_offset_bytes,
+        3,
+    )
+}
+
+fn direct_rcs_write_copy_rect_interface_descriptor_at_with_cross_thread_grfs(
+    state: DirectRcsState,
+    idd_offset: usize,
+    binding_table_offset: usize,
+    text_offset_bytes: u64,
+    cross_thread_grfs: u32,
+) -> bool {
     if idd_offset + COPY_RECT_IDD_BYTES > DIRECT_RCS_BATCH_BYTES {
         return false;
     }
@@ -6249,7 +5658,7 @@ fn direct_rcs_write_copy_rect_interface_descriptor_at(
         core::ptr::write_volatile(idd.add(4), (binding_table_offset as u32) | 2);
         core::ptr::write_volatile(idd.add(5), 3 << 16);
         core::ptr::write_volatile(idd.add(6), GPGPU_WALKER_GROUP_THREADS);
-        core::ptr::write_volatile(idd.add(7), 3);
+        core::ptr::write_volatile(idd.add(7), cross_thread_grfs);
     }
     true
 }
@@ -6564,21 +5973,19 @@ fn direct_rcs_write_clear_rect_surface_state(
     true
 }
 
-fn direct_rcs_write_canvas512_3d_project_payload(
+fn direct_rcs_write_canvas3d_project_payload(
     state: DirectRcsState,
-    params: Canvas512ProjectRgba8Params,
+    params: Canvas3dProjectRgba8Params,
 ) -> bool {
-    if CANVAS512_3D_PROJECT_PAYLOAD_OFFSET_BYTES + CANVAS512_3D_PROJECT_INDIRECT_BYTES
+    if CANVAS3D_PROJECT_PAYLOAD_OFFSET_BYTES + CANVAS3D_PROJECT_INDIRECT_BYTES
         > DIRECT_RCS_BATCH_BYTES
     {
         return false;
     }
 
     unsafe {
-        let payload = state
-            .batch_virt
-            .add(CANVAS512_3D_PROJECT_PAYLOAD_OFFSET_BYTES);
-        core::ptr::write_bytes(payload, 0, CANVAS512_3D_PROJECT_INDIRECT_BYTES);
+        let payload = state.batch_virt.add(CANVAS3D_PROJECT_PAYLOAD_OFFSET_BYTES);
+        core::ptr::write_bytes(payload, 0, CANVAS3D_PROJECT_INDIRECT_BYTES);
         let dwords = payload as *mut u32;
         core::ptr::write_volatile(dwords.add(3), 16);
         core::ptr::write_volatile(dwords.add(4), 1);
@@ -6590,9 +5997,13 @@ fn direct_rcs_write_canvas512_3d_project_payload(
         core::ptr::write_volatile(dwords.add(13), (params.vertices_gpu >> 32) as u32);
         core::ptr::write_volatile(dwords.add(14), params.out_gpu as u32);
         core::ptr::write_volatile(dwords.add(15), (params.out_gpu >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(16), params.vertex_count);
+        core::ptr::write_volatile(dwords.add(16), params.src_first_vertex);
+        core::ptr::write_volatile(dwords.add(17), params.out_first_point);
+        core::ptr::write_volatile(dwords.add(18), params.vertex_count);
+        core::ptr::write_volatile(dwords.add(19), params.canvas_width);
+        core::ptr::write_volatile(dwords.add(20), params.canvas_height);
 
-        let local_ids = payload.add(CANVAS512_3D_PROJECT_CROSS_THREAD_BYTES) as *mut u16;
+        let local_ids = payload.add(CANVAS3D_PROJECT_CROSS_THREAD_BYTES) as *mut u16;
         for lane in 0..16usize {
             core::ptr::write_volatile(local_ids.add(lane), lane as u16);
             core::ptr::write_volatile(local_ids.add(16 + lane), 0);
@@ -6602,11 +6013,11 @@ fn direct_rcs_write_canvas512_3d_project_payload(
     true
 }
 
-fn direct_rcs_write_canvas512_3d_transform_payload(
+fn direct_rcs_write_canvas3d_transform_payload(
     state: DirectRcsState,
-    params: Canvas512TransformQ16Params,
+    params: Canvas3dTransformQ16Params,
 ) -> bool {
-    if CANVAS512_3D_TRANSFORM_PAYLOAD_OFFSET_BYTES + CANVAS512_3D_TRANSFORM_INDIRECT_BYTES
+    if CANVAS3D_TRANSFORM_PAYLOAD_OFFSET_BYTES + CANVAS3D_TRANSFORM_INDIRECT_BYTES
         > DIRECT_RCS_BATCH_BYTES
     {
         return false;
@@ -6615,8 +6026,8 @@ fn direct_rcs_write_canvas512_3d_transform_payload(
     unsafe {
         let payload = state
             .batch_virt
-            .add(CANVAS512_3D_TRANSFORM_PAYLOAD_OFFSET_BYTES);
-        core::ptr::write_bytes(payload, 0, CANVAS512_3D_TRANSFORM_INDIRECT_BYTES);
+            .add(CANVAS3D_TRANSFORM_PAYLOAD_OFFSET_BYTES);
+        core::ptr::write_bytes(payload, 0, CANVAS3D_TRANSFORM_INDIRECT_BYTES);
         let dwords = payload as *mut u32;
         core::ptr::write_volatile(dwords.add(3), 16);
         core::ptr::write_volatile(dwords.add(4), 1);
@@ -6637,7 +6048,107 @@ fn direct_rcs_write_canvas512_3d_transform_payload(
         core::ptr::write_volatile(dwords.add(22), params.param_q16.z as u32);
         core::ptr::write_volatile(dwords.add(23), params.param_q16.pad as u32);
 
-        let local_ids = payload.add(CANVAS512_3D_TRANSFORM_CROSS_THREAD_BYTES) as *mut u16;
+        let local_ids = payload.add(CANVAS3D_TRANSFORM_CROSS_THREAD_BYTES) as *mut u16;
+        for lane in 0..16usize {
+            core::ptr::write_volatile(local_ids.add(lane), lane as u16);
+            core::ptr::write_volatile(local_ids.add(16 + lane), 0);
+            core::ptr::write_volatile(local_ids.add(32 + lane), 0);
+        }
+    }
+    true
+}
+
+fn direct_rcs_write_canvas3d_transform_fused_payload(
+    state: DirectRcsState,
+    params: Canvas3dTransformFusedQ16Params,
+) -> bool {
+    if CANVAS3D_TRANSFORM_PAYLOAD_OFFSET_BYTES + CANVAS3D_TRANSFORM_FUSED_INDIRECT_BYTES
+        > DIRECT_RCS_BATCH_BYTES
+    {
+        return false;
+    }
+
+    unsafe {
+        let payload = state
+            .batch_virt
+            .add(CANVAS3D_TRANSFORM_PAYLOAD_OFFSET_BYTES);
+        core::ptr::write_bytes(payload, 0, CANVAS3D_TRANSFORM_FUSED_INDIRECT_BYTES);
+        let dwords = payload as *mut u32;
+        core::ptr::write_volatile(dwords.add(3), 16);
+        core::ptr::write_volatile(dwords.add(4), 1);
+        core::ptr::write_volatile(dwords.add(5), 1);
+        core::ptr::write_volatile(dwords.add(8), 16);
+        core::ptr::write_volatile(dwords.add(9), 1);
+        core::ptr::write_volatile(dwords.add(10), 1);
+        core::ptr::write_volatile(dwords.add(12), params.src_gpu as u32);
+        core::ptr::write_volatile(dwords.add(13), (params.src_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(14), params.dst_gpu as u32);
+        core::ptr::write_volatile(dwords.add(15), (params.dst_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(16), params.src_first_vertex);
+        core::ptr::write_volatile(dwords.add(17), params.dst_first_vertex);
+        core::ptr::write_volatile(dwords.add(18), params.vertex_count);
+        core::ptr::write_volatile(dwords.add(19), 0);
+        core::ptr::write_volatile(dwords.add(20), params.scale_q16.x as u32);
+        core::ptr::write_volatile(dwords.add(21), params.scale_q16.y as u32);
+        core::ptr::write_volatile(dwords.add(22), params.scale_q16.z as u32);
+        core::ptr::write_volatile(dwords.add(23), params.scale_q16.pad as u32);
+        core::ptr::write_volatile(dwords.add(24), params.rotate_q16.x as u32);
+        core::ptr::write_volatile(dwords.add(25), params.rotate_q16.y as u32);
+        core::ptr::write_volatile(dwords.add(26), params.rotate_q16.z as u32);
+        core::ptr::write_volatile(dwords.add(27), params.rotate_q16.pad as u32);
+        core::ptr::write_volatile(dwords.add(28), params.translate_q16.x as u32);
+        core::ptr::write_volatile(dwords.add(29), params.translate_q16.y as u32);
+        core::ptr::write_volatile(dwords.add(30), params.translate_q16.z as u32);
+        core::ptr::write_volatile(dwords.add(31), params.translate_q16.pad as u32);
+
+        let local_ids = payload.add(CANVAS3D_TRANSFORM_FUSED_CROSS_THREAD_BYTES) as *mut u16;
+        for lane in 0..16usize {
+            core::ptr::write_volatile(local_ids.add(lane), lane as u16);
+            core::ptr::write_volatile(local_ids.add(16 + lane), 0);
+            core::ptr::write_volatile(local_ids.add(32 + lane), 0);
+        }
+    }
+    true
+}
+
+fn direct_rcs_write_canvas3d_clip_box_payload(
+    state: DirectRcsState,
+    params: Canvas3dClipBoxQ16Params,
+) -> bool {
+    if CANVAS3D_CLIP_BOX_PAYLOAD_OFFSET_BYTES + CANVAS3D_CLIP_BOX_INDIRECT_BYTES
+        > DIRECT_RCS_BATCH_BYTES
+    {
+        return false;
+    }
+
+    unsafe {
+        let payload = state.batch_virt.add(CANVAS3D_CLIP_BOX_PAYLOAD_OFFSET_BYTES);
+        core::ptr::write_bytes(payload, 0, CANVAS3D_CLIP_BOX_INDIRECT_BYTES);
+        let dwords = payload as *mut u32;
+        core::ptr::write_volatile(dwords.add(3), 16);
+        core::ptr::write_volatile(dwords.add(4), 1);
+        core::ptr::write_volatile(dwords.add(5), 1);
+        core::ptr::write_volatile(dwords.add(8), 16);
+        core::ptr::write_volatile(dwords.add(9), 1);
+        core::ptr::write_volatile(dwords.add(10), 1);
+        core::ptr::write_volatile(dwords.add(12), params.src_gpu as u32);
+        core::ptr::write_volatile(dwords.add(13), (params.src_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(14), params.dst_gpu as u32);
+        core::ptr::write_volatile(dwords.add(15), (params.dst_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(16), params.src_first_vertex);
+        core::ptr::write_volatile(dwords.add(17), params.dst_first_vertex);
+        core::ptr::write_volatile(dwords.add(18), params.vertex_count);
+        core::ptr::write_volatile(dwords.add(19), 0);
+        core::ptr::write_volatile(dwords.add(20), params.min_q16.x as u32);
+        core::ptr::write_volatile(dwords.add(21), params.min_q16.y as u32);
+        core::ptr::write_volatile(dwords.add(22), params.min_q16.z as u32);
+        core::ptr::write_volatile(dwords.add(23), params.min_q16.pad as u32);
+        core::ptr::write_volatile(dwords.add(24), params.max_q16.x as u32);
+        core::ptr::write_volatile(dwords.add(25), params.max_q16.y as u32);
+        core::ptr::write_volatile(dwords.add(26), params.max_q16.z as u32);
+        core::ptr::write_volatile(dwords.add(27), params.max_q16.pad as u32);
+
+        let local_ids = payload.add(CANVAS3D_CLIP_BOX_CROSS_THREAD_BYTES) as *mut u16;
         for lane in 0..16usize {
             core::ptr::write_volatile(local_ids.add(lane), lane as u16);
             core::ptr::write_volatile(local_ids.add(16 + lane), 0);
@@ -6726,222 +6237,6 @@ fn direct_rcs_seed_copy_rect_strip(state: DirectRcsState) -> ([u32; 4], [u32; 4]
     }
     super::dma_flush(state.clear_test_virt, CLEAR_RECT_TEST_BYTES);
     (src_values, dst_values)
-}
-
-fn direct_rcs_canvas512_3d_project_color(index: u32, z_q16: u32) -> u32 {
-    let shade = 96u32 + ((index.wrapping_mul(29)) & 0x7F);
-    let depth = (z_q16 >> 10) & 0x7F;
-    let r = shade;
-    let g = 255u32.saturating_sub(depth);
-    let b = 96u32 + depth;
-    0xFF00_0000 | (b << 16) | (g << 8) | r
-}
-
-fn direct_rcs_canvas512_3d_project_expected(
-    index: usize,
-    vertex: Canvas512Vec3Q16,
-) -> Canvas512ProjectedRgba8 {
-    let mut out = Canvas512ProjectedRgba8 {
-        packed_xy: 0,
-        rgba: 0,
-        z_q16: vertex.z as u32,
-        source_index: index as u32,
-    };
-    if vertex.z <= 0 {
-        return out;
-    }
-
-    let sx_delta = ((vertex.x as i64) * 256) / (vertex.z as i64);
-    let sy_delta = ((vertex.y as i64) * 256) / (vertex.z as i64);
-    let sx = 256 + sx_delta as i32;
-    let sy = 256 - sy_delta as i32;
-    if (0..512).contains(&sx) && (0..512).contains(&sy) {
-        out.packed_xy = 0x8000_0000 | (((sy as u32) & 0xFFFF) << 16) | ((sx as u32) & 0xFFFF);
-        out.rgba = direct_rcs_canvas512_3d_project_color(index as u32, vertex.z as u32);
-    }
-    out
-}
-
-fn direct_rcs_canvas512_3d_project_seed_vertex(index: usize) -> Canvas512Vec3Q16 {
-    let q = CANVAS512_3D_PROJECT_Q16_ONE;
-    match index {
-        0 => Canvas512Vec3Q16 {
-            x: 0,
-            y: 0,
-            z: q,
-            pad: 0,
-        },
-        1 => Canvas512Vec3Q16 {
-            x: q / 2,
-            y: 0,
-            z: q,
-            pad: 0,
-        },
-        2 => Canvas512Vec3Q16 {
-            x: -(q / 2),
-            y: 0,
-            z: q,
-            pad: 0,
-        },
-        3 => Canvas512Vec3Q16 {
-            x: 0,
-            y: q / 2,
-            z: q,
-            pad: 0,
-        },
-        4 => Canvas512Vec3Q16 {
-            x: 0,
-            y: -(q / 2),
-            z: q,
-            pad: 0,
-        },
-        5 => Canvas512Vec3Q16 {
-            x: q / 2,
-            y: q / 2,
-            z: q * 2,
-            pad: 0,
-        },
-        6 => Canvas512Vec3Q16 {
-            x: q,
-            y: 0,
-            z: q,
-            pad: 0,
-        },
-        7 => Canvas512Vec3Q16 {
-            x: 0,
-            y: 0,
-            z: -q,
-            pad: 0,
-        },
-        _ => {
-            let ix = (index as i32 % 11) - 5;
-            let iy = ((index as i32 / 11) % 11) - 5;
-            let iz = 1 + (index as i32 % 5);
-            Canvas512Vec3Q16 {
-                x: ix * (q / 8),
-                y: iy * (q / 8),
-                z: q + iz * (q / 4),
-                pad: index as i32,
-            }
-        }
-    }
-}
-
-fn direct_rcs_seed_canvas512_3d_project(
-    state: DirectRcsState,
-) -> [Canvas512ProjectedRgba8; CANVAS512_3D_PROJECT_SAMPLE_COUNT] {
-    let mut expected = [Canvas512ProjectedRgba8 {
-        packed_xy: 0,
-        rgba: 0,
-        z_q16: 0,
-        source_index: 0,
-    }; CANVAS512_3D_PROJECT_SAMPLE_COUNT];
-
-    unsafe {
-        core::ptr::write_bytes(state.clear_test_virt, 0, CANVAS512_3D_PROJECT_TEST_BYTES);
-        core::ptr::write_bytes(state.canvas512_out_virt, 0, CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES);
-        let vertices = state.clear_test_virt as *mut Canvas512Vec3Q16;
-        let out = state.canvas512_out_virt as *mut Canvas512ProjectedRgba8;
-        for index in 0..CANVAS512_3D_PROJECT_VERTEX_COUNT {
-            let vertex = direct_rcs_canvas512_3d_project_seed_vertex(index);
-            core::ptr::write_volatile(vertices.add(index), vertex);
-            core::ptr::write_volatile(
-                out.add(index),
-                Canvas512ProjectedRgba8 {
-                    packed_xy: 0xDEAD_0000 | index as u32,
-                    rgba: 0xA5A5_0000 | index as u32,
-                    z_q16: 0,
-                    source_index: 0xFFFF_FFFF,
-                },
-            );
-            if index < CANVAS512_3D_PROJECT_SAMPLE_COUNT {
-                expected[index] = direct_rcs_canvas512_3d_project_expected(index, vertex);
-            }
-        }
-    }
-    super::dma_flush(state.clear_test_virt, CANVAS512_3D_PROJECT_TEST_BYTES);
-    super::dma_flush(state.canvas512_out_virt, CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES);
-    expected
-}
-
-fn direct_rcs_q16_mul(a: i32, b: i32) -> i32 {
-    (((a as i64) * (b as i64)) >> 16) as i32
-}
-
-fn direct_rcs_transform_seed_vertex(index: usize) -> Canvas512Vec3Q16 {
-    let q = CANVAS512_3D_PROJECT_Q16_ONE;
-    let x_step = ((index as i32 % 17) - 8) * (q / 8);
-    let y_step = (((index as i32 * 3) % 19) - 9) * (q / 16);
-    let z_step = q + ((index as i32 % 11) * (q / 16));
-    Canvas512Vec3Q16 {
-        x: x_step,
-        y: y_step,
-        z: z_step,
-        pad: 0x5100 + index as i32,
-    }
-}
-
-fn direct_rcs_transform_translate_expected(
-    vertex: Canvas512Vec3Q16,
-    delta: Canvas512Vec3Q16,
-) -> Canvas512Vec3Q16 {
-    Canvas512Vec3Q16 {
-        x: vertex.x + delta.x,
-        y: vertex.y + delta.y,
-        z: vertex.z + delta.z,
-        pad: vertex.pad,
-    }
-}
-
-fn direct_rcs_transform_scale_expected(
-    vertex: Canvas512Vec3Q16,
-    scale: Canvas512Vec3Q16,
-) -> Canvas512Vec3Q16 {
-    Canvas512Vec3Q16 {
-        x: direct_rcs_q16_mul(vertex.x, scale.x),
-        y: direct_rcs_q16_mul(vertex.y, scale.y),
-        z: direct_rcs_q16_mul(vertex.z, scale.z),
-        pad: vertex.pad,
-    }
-}
-
-fn direct_rcs_transform_rotate_z_180_expected(
-    vertex: Canvas512Vec3Q16,
-    _quat: Canvas512Vec3Q16,
-) -> Canvas512Vec3Q16 {
-    Canvas512Vec3Q16 {
-        x: -vertex.x,
-        y: -vertex.y,
-        z: vertex.z,
-        pad: vertex.pad,
-    }
-}
-
-fn direct_rcs_seed_canvas512_3d_transform(
-    state: DirectRcsState,
-    param_q16: Canvas512Vec3Q16,
-    expected_fn: fn(Canvas512Vec3Q16, Canvas512Vec3Q16) -> Canvas512Vec3Q16,
-) -> [Canvas512Vec3Q16; CANVAS512_3D_TRANSFORM_TEST_COUNT_USIZE] {
-    let mut expected = [Canvas512Vec3Q16::default(); CANVAS512_3D_TRANSFORM_TEST_COUNT_USIZE];
-
-    unsafe {
-        core::ptr::write_bytes(state.clear_test_virt, 0, CANVAS512_3D_PROJECT_VERTEX_BYTES);
-        core::ptr::write_bytes(state.canvas512_out_virt, 0, CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES);
-        let src = state.clear_test_virt as *mut Canvas512Vec3Q16;
-        let dst = state.canvas512_out_virt as *mut Canvas512Vec3Q16;
-        for index in 0..CANVAS512_3D_PROJECT_VERTEX_COUNT {
-            let vertex = direct_rcs_transform_seed_vertex(index);
-            core::ptr::write_volatile(src.add(index), vertex);
-            core::ptr::write_volatile(dst.add(index), CANVAS512_3D_TRANSFORM_DST_POISON);
-        }
-        for offset in 0..CANVAS512_3D_TRANSFORM_TEST_COUNT_USIZE {
-            let src_index = CANVAS512_3D_TRANSFORM_SRC_FIRST as usize + offset;
-            expected[offset] = expected_fn(direct_rcs_transform_seed_vertex(src_index), param_q16);
-        }
-    }
-    super::dma_flush(state.clear_test_virt, CANVAS512_3D_PROJECT_VERTEX_BYTES);
-    super::dma_flush(state.canvas512_out_virt, CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES);
-    expected
 }
 
 fn direct_rcs_seed_rect_api_smoke(state: DirectRcsState) {
@@ -7059,70 +6354,6 @@ fn direct_rcs_read_copy_rect_strip(state: DirectRcsState) -> ([u32; 4], [u32; 4]
         }
     }
     (src_values, dst_values)
-}
-
-fn direct_rcs_read_canvas512_3d_project_samples(
-    state: DirectRcsState,
-) -> [Canvas512ProjectedRgba8; CANVAS512_3D_PROJECT_SAMPLE_COUNT] {
-    super::dma_flush(state.clear_test_virt, CLEAR_RECT_TEST_BYTES);
-    let mut values = [Canvas512ProjectedRgba8 {
-        packed_xy: 0,
-        rgba: 0,
-        z_q16: 0,
-        source_index: 0,
-    }; CANVAS512_3D_PROJECT_SAMPLE_COUNT];
-    unsafe {
-        let out = state.canvas512_out_virt as *const Canvas512ProjectedRgba8;
-        for (index, value) in values.iter_mut().enumerate() {
-            *value = core::ptr::read_volatile(out.add(index));
-        }
-    }
-    values
-}
-
-fn direct_rcs_read_canvas512_3d_transform_result(
-    state: DirectRcsState,
-    expected: [Canvas512Vec3Q16; CANVAS512_3D_TRANSFORM_TEST_COUNT_USIZE],
-) -> (usize, usize, bool, Canvas512Vec3Q16, Canvas512Vec3Q16) {
-    super::dma_flush(state.clear_test_virt, CANVAS512_3D_PROJECT_VERTEX_BYTES);
-    super::dma_flush(state.canvas512_out_virt, CANVAS512_3D_PROJECT_OUT_ALLOC_BYTES);
-    let mut matches = 0usize;
-    let mut src_preserved = 0usize;
-    let mut guards_ok = true;
-    let mut first = Canvas512Vec3Q16::default();
-    let mut last = Canvas512Vec3Q16::default();
-
-    unsafe {
-        let src = state.clear_test_virt as *const Canvas512Vec3Q16;
-        let dst = state.canvas512_out_virt as *const Canvas512Vec3Q16;
-        for offset in 0..CANVAS512_3D_TRANSFORM_TEST_COUNT_USIZE {
-            let src_index = CANVAS512_3D_TRANSFORM_SRC_FIRST as usize + offset;
-            let dst_index = CANVAS512_3D_TRANSFORM_DST_FIRST as usize + offset;
-            let src_value = core::ptr::read_volatile(src.add(src_index));
-            let dst_value = core::ptr::read_volatile(dst.add(dst_index));
-            if src_value == direct_rcs_transform_seed_vertex(src_index) {
-                src_preserved += 1;
-            }
-            if dst_value == expected[offset] {
-                matches += 1;
-            }
-            if offset == 0 {
-                first = dst_value;
-            }
-            if offset + 1 == CANVAS512_3D_TRANSFORM_TEST_COUNT_USIZE {
-                last = dst_value;
-            }
-        }
-        let before_index = CANVAS512_3D_TRANSFORM_DST_FIRST as usize - 1;
-        let after_index =
-            CANVAS512_3D_TRANSFORM_DST_FIRST as usize + CANVAS512_3D_TRANSFORM_TEST_COUNT_USIZE;
-        guards_ok &=
-            core::ptr::read_volatile(dst.add(before_index)) == CANVAS512_3D_TRANSFORM_DST_POISON;
-        guards_ok &=
-            core::ptr::read_volatile(dst.add(after_index)) == CANVAS512_3D_TRANSFORM_DST_POISON;
-    }
-
-    (matches, src_preserved, guards_ok, first, last)
 }
 
 fn direct_rcs_read_rect_api_span(state: DirectRcsState, start_pixel: usize) -> [u32; 4] {
@@ -7269,31 +6500,6 @@ fn direct_rcs_count_matching(values: [u32; 4], expected: [u32; 4]) -> usize {
     count
 }
 
-fn direct_rcs_canvas512_3d_project_count_matching(
-    values: [Canvas512ProjectedRgba8; CANVAS512_3D_PROJECT_SAMPLE_COUNT],
-    expected: [Canvas512ProjectedRgba8; CANVAS512_3D_PROJECT_SAMPLE_COUNT],
-) -> usize {
-    let mut count = 0usize;
-    for index in 0..values.len() {
-        if values[index] == expected[index] {
-            count += 1;
-        }
-    }
-    count
-}
-
-fn direct_rcs_canvas512_3d_project_count_visible(
-    values: [Canvas512ProjectedRgba8; CANVAS512_3D_PROJECT_SAMPLE_COUNT],
-) -> usize {
-    let mut count = 0usize;
-    for value in values {
-        if (value.packed_xy & 0x8000_0000) != 0 {
-            count += 1;
-        }
-    }
-    count
-}
-
 fn direct_rcs_push(batch: &mut [u32], cursor: &mut usize, value: u32) -> bool {
     if *cursor >= batch.len() {
         return false;
@@ -7388,11 +6594,11 @@ fn direct_rcs_push_sprite64_worklist_walker(
         && direct_rcs_push(batch, cursor, GPGPU_WALKER_BOTTOM_MASK)
 }
 
-fn direct_rcs_push_canvas512_3d_project_walker(batch: &mut [u32], cursor: &mut usize) -> bool {
+fn direct_rcs_push_canvas3d_project_walker(batch: &mut [u32], cursor: &mut usize) -> bool {
     direct_rcs_push(batch, cursor, GPGPU_WALKER_CMD)
         && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, CANVAS512_3D_PROJECT_INDIRECT_BYTES as u32)
-        && direct_rcs_push(batch, cursor, CANVAS512_3D_PROJECT_PAYLOAD_OFFSET_BYTES as u32)
+        && direct_rcs_push(batch, cursor, CANVAS3D_PROJECT_INDIRECT_BYTES as u32)
+        && direct_rcs_push(batch, cursor, CANVAS3D_PROJECT_PAYLOAD_OFFSET_BYTES as u32)
         && direct_rcs_push(
             batch,
             cursor,
@@ -7410,11 +6616,55 @@ fn direct_rcs_push_canvas512_3d_project_walker(batch: &mut [u32], cursor: &mut u
         && direct_rcs_push(batch, cursor, GPGPU_WALKER_BOTTOM_MASK)
 }
 
-fn direct_rcs_push_canvas512_3d_transform_walker(batch: &mut [u32], cursor: &mut usize) -> bool {
+fn direct_rcs_push_canvas3d_transform_walker(batch: &mut [u32], cursor: &mut usize) -> bool {
     direct_rcs_push(batch, cursor, GPGPU_WALKER_CMD)
         && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, CANVAS512_3D_TRANSFORM_INDIRECT_BYTES as u32)
-        && direct_rcs_push(batch, cursor, CANVAS512_3D_TRANSFORM_PAYLOAD_OFFSET_BYTES as u32)
+        && direct_rcs_push(batch, cursor, CANVAS3D_TRANSFORM_INDIRECT_BYTES as u32)
+        && direct_rcs_push(batch, cursor, CANVAS3D_TRANSFORM_PAYLOAD_OFFSET_BYTES as u32)
+        && direct_rcs_push(
+            batch,
+            cursor,
+            (GPGPU_WALKER_SIMD16_SELECT << 30) | (GPGPU_WALKER_GROUP_THREADS - 1),
+        )
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, 1)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, 1)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, GPGPU_WALKER_GROUP_Z_DIM)
+        && direct_rcs_push(batch, cursor, GPGPU_WALKER_SIMD16_MASK)
+        && direct_rcs_push(batch, cursor, GPGPU_WALKER_BOTTOM_MASK)
+}
+
+fn direct_rcs_push_canvas3d_transform_fused_walker(batch: &mut [u32], cursor: &mut usize) -> bool {
+    direct_rcs_push(batch, cursor, GPGPU_WALKER_CMD)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, CANVAS3D_TRANSFORM_FUSED_INDIRECT_BYTES as u32)
+        && direct_rcs_push(batch, cursor, CANVAS3D_TRANSFORM_PAYLOAD_OFFSET_BYTES as u32)
+        && direct_rcs_push(
+            batch,
+            cursor,
+            (GPGPU_WALKER_SIMD16_SELECT << 30) | (GPGPU_WALKER_GROUP_THREADS - 1),
+        )
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, 1)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, 1)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, GPGPU_WALKER_GROUP_Z_DIM)
+        && direct_rcs_push(batch, cursor, GPGPU_WALKER_SIMD16_MASK)
+        && direct_rcs_push(batch, cursor, GPGPU_WALKER_BOTTOM_MASK)
+}
+
+fn direct_rcs_push_canvas3d_clip_box_walker(batch: &mut [u32], cursor: &mut usize) -> bool {
+    direct_rcs_push(batch, cursor, GPGPU_WALKER_CMD)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, CANVAS3D_CLIP_BOX_INDIRECT_BYTES as u32)
+        && direct_rcs_push(batch, cursor, CANVAS3D_CLIP_BOX_PAYLOAD_OFFSET_BYTES as u32)
         && direct_rcs_push(
             batch,
             cursor,
@@ -7589,6 +6839,18 @@ fn direct_rcs_ticks_from_ms(ms: u64) -> u64 {
     }
     let ticks = ((ms as u128).saturating_mul(hz as u128).saturating_add(999) / 1000) as u64;
     if ms == 0 { 0 } else { ticks.max(1) }
+}
+
+fn direct_rcs_ticks_from_us(us: u64) -> u64 {
+    let hz = embassy_time_driver::TICK_HZ;
+    if hz == 0 {
+        return us.max(1);
+    }
+    let ticks = ((us as u128)
+        .saturating_mul(hz as u128)
+        .saturating_add(999_999)
+        / 1_000_000) as u64;
+    if us == 0 { 0 } else { ticks.max(1) }
 }
 
 fn direct_rcs_elapsed_ms_since(start_tick: u64) -> u64 {
