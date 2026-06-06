@@ -720,8 +720,8 @@ static UI2_STARTED: AtomicBool = AtomicBool::new(false);
 static UI2_DIRTY: AtomicBool = AtomicBool::new(false);
 static UI2_BROWSER_WINDOW_ID: AtomicU32 = AtomicU32::new(0);
 static UI2_CURSOR_SPRITE64_LOGS: AtomicU32 = AtomicU32::new(0);
-static UI2_CHROME_SOLID_RECT_LOGS: AtomicU32 = AtomicU32::new(0);
 static UI2_CHROME_GRADIENT_RECT_LOGS: AtomicU32 = AtomicU32::new(0);
+static UI2_CHROME_SOLID_RECT_LOGS: AtomicU32 = AtomicU32::new(0);
 
 #[inline]
 fn boot_probe_ms() -> u64 {
@@ -1360,11 +1360,76 @@ fn draw_cursor_overlay_layer_intel_sprite64(
     ok
 }
 
-fn draw_chrome_solid_rects_intel_gpgpu(state: &Ui2State) -> bool {
-    draw_chrome_solid_rects_intel_gpgpu_with_skip(state, false)
+fn draw_chrome_gradient_rects_intel_gpgpu(state: &Ui2State) -> bool {
+    if !crate::gfx::is_intel_active() {
+        return false;
+    }
+    if !intel_ui2_chrome_rect_path_enabled() {
+        let log_n = UI2_CHROME_GRADIENT_RECT_LOGS.fetch_add(1, Ordering::Relaxed);
+        if log_n < 8 {
+            crate::log!("ui2: chrome gradients-gpgpu disabled reason=chrome-rect-path-disabled\n");
+        }
+        let _ = state;
+        return false;
+    }
+
+    let mut rects = Vec::new();
+    let mut window_count = 0usize;
+    for idx in sorted_window_indices(state) {
+        let window = &state.windows[idx];
+        if !window_is_renderable(window) {
+            continue;
+        }
+        let added = collect_window_chrome_gradient_rects(
+            state,
+            window,
+            effective_window_rect(state, window),
+            &mut rects,
+        );
+        if added > 0 {
+            window_count = window_count.saturating_add(1);
+        }
+    }
+    let dock_rects = ui2_win_register::collect_offline_dock_gradient_rects(state, &mut rects);
+    if rects.is_empty() {
+        return true;
+    }
+
+    let Some(result) = crate::intel::gpgpu::gradient_rects_rgba8_over_primary(&rects, false) else {
+        return false;
+    };
+    let ok = result.ok;
+    let log_n = UI2_CHROME_GRADIENT_RECT_LOGS.fetch_add(1, Ordering::Relaxed);
+    if log_n < 16 || !ok {
+        let mode = if result.blend_descs == 0 {
+            "direct-primary"
+        } else {
+            "alpha-over-primary"
+        };
+        crate::log!(
+            "ui2: chrome gradients-gpgpu ok={} mode={} windows={} dock_rects={} rects={} artifacts=gradient_rect_worklist_rgba8,alpha_blend_worklist_rgba8 gradient_descs={} gradient_walkers={} gradient_submits={} gradient_ms={} blend_descs={} blend_walkers={} blend_submits={} blend_ms={} present={} present_ms={} total_ms={}\n",
+            ok as u8,
+            mode,
+            window_count,
+            dock_rects,
+            result.rects,
+            result.fill_descs,
+            result.fill_walkers,
+            result.fill_submits,
+            result.fill_ms,
+            result.blend_descs,
+            result.blend_walkers,
+            result.blend_submits,
+            result.blend_ms,
+            result.presented as u8,
+            result.present_ms,
+            result.total_ms
+        );
+    }
+    ok
 }
 
-fn draw_chrome_solid_rects_intel_gpgpu_with_skip(state: &Ui2State, skip_bands: bool) -> bool {
+fn draw_chrome_solid_rects_intel_gpgpu(state: &Ui2State, skip_bands: bool) -> bool {
     if !crate::gfx::is_intel_active() {
         return false;
     }
@@ -1397,78 +1462,30 @@ fn draw_chrome_solid_rects_intel_gpgpu_with_skip(state: &Ui2State, skip_bands: b
             window_count = window_count.saturating_add(1);
         }
     }
-    let dock_rects = 0usize;
+    let dock_rects = if skip_bands {
+        0
+    } else {
+        ui2_win_register::collect_offline_dock_solid_rects(state, &mut rects)
+    };
     if rects.is_empty() {
         return true;
     }
 
-    let Some(result) = crate::intel::gpgpu::solid_rects_rgba8_over_primary(&rects, true) else {
+    let Some(result) = crate::intel::gpgpu::solid_rects_rgba8_over_primary(&rects, false) else {
         return false;
     };
     let ok = result.ok;
     let log_n = UI2_CHROME_SOLID_RECT_LOGS.fetch_add(1, Ordering::Relaxed);
     if log_n < 16 || !ok {
+        let mode = if result.blend_descs == 0 {
+            "direct-primary"
+        } else {
+            "alpha-over-primary"
+        };
         crate::log!(
-            "ui2: chrome solid-rects-gpgpu ok={} windows={} dock_rects={} rects={} artifacts=fill_rect_worklist_rgba8,alpha_blend_worklist_rgba8 fill_descs={} fill_walkers={} fill_submits={} fill_ms={} blend_descs={} blend_walkers={} blend_submits={} blend_ms={} present={} present_ms={} total_ms={}\n",
+            "ui2: chrome solid-rects-gpgpu ok={} mode={} windows={} dock_rects={} rects={} artifacts=fill_rect_worklist_rgba8,alpha_blend_worklist_rgba8 fill_descs={} fill_walkers={} fill_submits={} fill_ms={} blend_descs={} blend_walkers={} blend_submits={} blend_ms={} present={} present_ms={} total_ms={}\n",
             ok as u8,
-            window_count,
-            dock_rects,
-            result.rects,
-            result.fill_descs,
-            result.fill_walkers,
-            result.fill_submits,
-            result.fill_ms,
-            result.blend_descs,
-            result.blend_walkers,
-            result.blend_submits,
-            result.blend_ms,
-            result.presented as u8,
-            result.present_ms,
-            result.total_ms
-        );
-    }
-    ok
-}
-
-fn draw_chrome_gradient_rects_intel_gpgpu(state: &Ui2State) -> bool {
-    if !crate::gfx::is_intel_active() || !intel_ui2_chrome_rect_path_enabled() {
-        return false;
-    }
-    if !crate::intel::gpgpu::gradient_rect_worklist_probe_ok() {
-        return false;
-    }
-
-    let mut rects = Vec::new();
-    let mut window_count = 0usize;
-    for idx in sorted_window_indices(state) {
-        let window = &state.windows[idx];
-        if !window_is_renderable(window) {
-            continue;
-        }
-        let added = collect_window_chrome_gradient_rects(
-            state,
-            window,
-            effective_window_rect(state, window),
-            &mut rects,
-        );
-        if added > 0 {
-            window_count = window_count.saturating_add(1);
-        }
-    }
-    let dock_rects = ui2_win_register::collect_offline_dock_gradient_rects(state, &mut rects);
-    if rects.is_empty() {
-        return true;
-    }
-
-    let Some(result) = crate::intel::gpgpu::gradient_rects_rgba8_over_primary(&rects, true) else {
-        return false;
-    };
-    let ok = result.ok;
-    let log_n = UI2_CHROME_GRADIENT_RECT_LOGS.fetch_add(1, Ordering::Relaxed);
-    if log_n < 16 || !ok {
-        crate::log!(
-            "ui2: chrome gradients-gpgpu ok={} windows={} dock_rects={} rects={} artifacts=gradient_rect_worklist_rgba8,alpha_blend_worklist_rgba8 gradient_descs={} gradient_walkers={} gradient_submits={} gradient_ms={} blend_descs={} blend_walkers={} blend_submits={} blend_ms={} present={} present_ms={} total_ms={}\n",
-            ok as u8,
+            mode,
             window_count,
             dock_rects,
             result.rects,
@@ -3093,6 +3110,7 @@ fn draw_window_frame(
     window: &Ui2Window,
     skip_twemoji_sprite64_chrome: bool,
     skip_lyon_rects: bool,
+    force_content_locked: bool,
 ) -> Ui2WindowDrawTiming {
     if !window_is_renderable(window) {
         return Ui2WindowDrawTiming::default();
@@ -3105,12 +3123,16 @@ fn draw_window_frame(
 
     let chrome_ms = elapsed_ms_since(chrome_started_at);
 
-    if !window_content_participates_in_composition(window) {
+    if force_content_locked || !window_content_participates_in_composition(window) {
         return Ui2WindowDrawTiming {
             chrome_ms,
             texture_ms: 0,
             placeholder_ms: 0,
-            content_path: "locked",
+            content_path: if force_content_locked {
+                "intel-chrome-baseline"
+            } else {
+                "locked"
+            },
         };
     }
 
@@ -3321,44 +3343,10 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
         if intel_direct_screen {
             let chrome_gradients_gpgpu = draw_chrome_gradient_rects_intel_gpgpu(state);
             let chrome_rects_gpgpu =
-                draw_chrome_solid_rects_intel_gpgpu_with_skip(state, chrome_gradients_gpgpu);
-            let begin_rc = unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame_preserve(0) };
-            if begin_rc != 0 {
-                crate::log!("ui2: intel direct-window begin_frame failed rc={}\n", begin_rc);
-                return;
-            }
-            let _ = unsafe {
-                crate::r::io::cabi::trueos_cabi_gfx_suppress_cursor_overlay_for_current_frame()
-            };
-            let set_rt_rc = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_render_target(0) };
-            if set_rt_rc != 0 {
-                crate::log!("ui2: intel direct-window screen target failed rc={}\n", set_rt_rc);
-                let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
-                return;
-            }
-            for idx in sorted_window_indices(state) {
-                let window = &state.windows[idx];
-                if !window_is_renderable(window) {
-                    continue;
-                }
-                let timing = draw_window_frame(state, window, true, true);
-                surface_timings.push(Ui2ComposeSurfaceTiming {
-                    id: window.id,
-                    chrome_ms: timing.chrome_ms,
-                    texture_ms: timing.texture_ms,
-                    placeholder_ms: timing.placeholder_ms,
-                    path: timing.content_path,
-                });
-            }
-            if scene_dirty {
-                draw_resize_preview_outline(state);
-            }
-            unsafe {
-                crate::r::io::cabi::trueos_cabi_gfx_end_frame();
-            }
+                draw_chrome_solid_rects_intel_gpgpu(state, chrome_gradients_gpgpu);
             let surroundings_sprite64 = draw_cursor_overlay_layer_intel_sprite64(state, true, true);
             crate::log!(
-                "ui2: intel direct-window-present seq={} windows={} scene_layer=0 fullscreen_alpha=0 chrome_gradients_gpgpu={} chrome_rects_gpgpu={} surroundings_sprite64={}\n",
+                "ui2: intel direct-window-present seq={} windows={} hotloop=gradients+rect-lines+sprite64 scene_layer=0 fullscreen_alpha=0 content_baseline=0 chrome_gradients_gpgpu={} chrome_rects_gpgpu={} surroundings_sprite64={}\n",
                 compose_seq,
                 stats.visible_windows,
                 chrome_gradients_gpgpu as u8,
@@ -3410,7 +3398,7 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
                 if !window_is_renderable(window) {
                     continue;
                 }
-                let timing = draw_window_frame(state, window, false, false);
+                let timing = draw_window_frame(state, window, false, false, false);
                 surface_timings.push(Ui2ComposeSurfaceTiming {
                     id: window.id,
                     chrome_ms: timing.chrome_ms,

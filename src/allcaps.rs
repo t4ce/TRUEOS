@@ -15,6 +15,7 @@ pub mod probes {
     pub const HYPER_BOOT_PROBE: bool = false;
     pub const HYPER_HTTP1_NET_PROBE: bool = false;
     pub const INTEL_GPGPU_PREFLIGHT_BOOT_PROBE: bool = false;
+    pub const INTEL_GPGPU_ARTIFACT_BOOT_SMOKETESTS: bool = true;
     pub const UAS_SKHYNIX_ROUTE_BOOT_PROBE: bool = false;
     pub const TOKIO_NET_WRITABLE_TIMEOUT_MS: u64 = 1000;
 }
@@ -129,4 +130,5 @@ pub mod input {
     pub const HID_MOUSE_RING_CAP: usize = 2048;
     pub const HID_KEYBOARD_RING_CAP: usize = 512;
     pub const HID_TABLET_RING_CAP: usize = 1024;
+    pub const HID_UDP_DEVICE_STATE_CAP: usize = 128;
 }

@@ -14,6 +14,7 @@ pub enum Ui2DemoTexId {
     AnalogClock = 4_727,
     Gboi = 4_728,
     RenderAlbum = 4_729,
+    IntelCanvas3d = 4_730,
 }
 
 impl Ui2DemoTexId {

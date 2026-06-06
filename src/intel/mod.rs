@@ -173,7 +173,6 @@ pub fn init_once() {
         dev.mmio_len
     );
     *CLAIMED_DEVICE.lock() = Some(dev);
-    let _ = self::gpgpu::upload_copy_rect_rgba8_kernel();
     let _ = self::gpgpu::upload_copy_rect_rgba8_wide_kernel();
     let _ = self::gpgpu::upload_clear_rect_rgba8_white_kernel();
     let _ = self::gpgpu::upload_fill_rect_worklist_rgba8_kernel();
@@ -186,29 +185,30 @@ pub fn init_once() {
     let _ = self::gpgpu::upload_canvas3d_project_rgba8_kernel();
     let _ = self::gpgpu::upload_canvas3d_transform_q16_kernel();
     let _ = self::gpgpu::upload_canvas3d_clip_box_q16_kernel();
-    let _ = self::gpgpu::submit_direct_rcs_smoke_once();
-    let _ = self::gpgpu::submit_empty_eot_walker_once();
-    let _ = self::gpgpu::submit_clear_rect_rgba8_white_strip_once();
-    let _ = self::gpgpu::submit_copy_rect_rgba8_strip_once();
-    let _ = self::gpgpu::submit_copy_rect_rgba8_256_once();
-    let _ = self::gpgpu::submit_copy_rect_rgba8_256x2_once();
-    let _ = self::gpgpu::submit_copy_rect_rgba8_wide_256x2_once();
-    let _ = self::gpgpu::submit_fill_rect_worklist_rgba8_probe_once();
-    let _ = self::gpgpu::submit_gradient_rect_worklist_rgba8_probe_once();
-    let _ = self::gpgpu::submit_alpha_blend_worklist_rgba8_probe_once();
-    crate::log!(
-        "intel/gpgpu: rect-worklist-probes fill_ran={} fill_ok={} gradient_ran={} gradient_ok={} alpha_ran={} alpha_ok={} ready={}\n",
-        self::gpgpu::fill_rect_worklist_probe_ran() as u8,
-        self::gpgpu::fill_rect_worklist_probe_ok() as u8,
-        self::gpgpu::gradient_rect_worklist_probe_ran() as u8,
-        self::gpgpu::gradient_rect_worklist_probe_ok() as u8,
-        self::gpgpu::alpha_blend_worklist_probe_ran() as u8,
-        self::gpgpu::alpha_blend_worklist_probe_ok() as u8,
-        self::gpgpu::rect_worklist_probe_ready() as u8
-    );
-    let _ = self::gpgpu::submit_canvas3d_project_once();
-    let _ = self::gpgpu::submit_canvas3d_transform_smoke_once();
-    let _ = self::gpgpu::submit_canvas3d_clip_box_q16_once();
+    if crate::allcaps::probes::INTEL_GPGPU_ARTIFACT_BOOT_SMOKETESTS {
+        let _ = self::gpgpu::submit_direct_rcs_smoke_once();
+        let _ = self::gpgpu::submit_empty_eot_walker_once();
+        let _ = self::gpgpu::submit_clear_rect_rgba8_white_strip_once();
+        let _ = self::gpgpu::submit_copy_rect_rgba8_wide_256x2_once();
+        let _ = self::gpgpu::submit_fill_rect_worklist_rgba8_probe_once();
+        let _ = self::gpgpu::submit_gradient_rect_worklist_rgba8_probe_once();
+        let _ = self::gpgpu::submit_alpha_blend_worklist_rgba8_probe_once();
+        crate::log!(
+            "intel/gpgpu: rect-worklist-probes fill_ran={} fill_ok={} gradient_ran={} gradient_ok={} alpha_ran={} alpha_ok={} ready={}\n",
+            self::gpgpu::fill_rect_worklist_probe_ran() as u8,
+            self::gpgpu::fill_rect_worklist_probe_ok() as u8,
+            self::gpgpu::gradient_rect_worklist_probe_ran() as u8,
+            self::gpgpu::gradient_rect_worklist_probe_ok() as u8,
+            self::gpgpu::alpha_blend_worklist_probe_ran() as u8,
+            self::gpgpu::alpha_blend_worklist_probe_ok() as u8,
+            self::gpgpu::rect_worklist_probe_ready() as u8
+        );
+        let _ = self::gpgpu::submit_canvas3d_project_once();
+        let _ = self::gpgpu::submit_canvas3d_transform_smoke_once();
+        let _ = self::gpgpu::submit_canvas3d_clip_box_q16_once();
+    } else {
+        crate::log!("intel/gpgpu: artifact boot smoketests skipped allcaps=0\n");
+    }
     self::fw_probe::log_probe_modules(dev.device_id);
     self::dmc::wire_load_path(dev);
     let huc_fw = self::huc::load_fw();

@@ -35,6 +35,9 @@ const UI2_OFFLINE_PILL_GAP: f32 = 4.0;
 const UI2_OFFLINE_PILL_PAD: f32 = 8.0;
 const UI2_OFFLINE_PILL_PLAY_SIZE: f32 = UI2_BAR_H;
 const UI2_OFFLINE_PILL_BG: (u8, u8, u8, u8) = (0x52, 0xD2, 0x7A, 0xD8);
+const UI2_OFFLINE_PILL_LINE: (u8, u8, u8, u8) = (0x52, 0xD2, 0x7A, 0xFF);
+const UI2_OFFLINE_PILL_GRAD_LEFT: (u8, u8, u8, u8) = (0xC8, 0xCC, 0xC8, 0xFF);
+const UI2_OFFLINE_PILL_GRAD_RIGHT: (u8, u8, u8, u8) = (0xF2, 0xF4, 0xF2, 0xFF);
 const UI2_OFFLINE_PILL_TEXT: (u8, u8, u8, u8) = (0x30, 0x30, 0x30, 0xFF);
 /// Play button: ▶ U+25B6
 const UI2_OFFLINE_PLAY_TWEMOJI: char = '\u{23EF}';
@@ -123,7 +126,12 @@ pub(super) fn collect_offline_dock_solid_rects(
     }
 
     for pill in pills.iter() {
-        let _ = super::ui2_win_deco::push_chrome_solid_rect(out, pill.rect, UI2_OFFLINE_PILL_BG);
+        let _ = super::ui2_win_deco::push_chrome_solid_outline(
+            out,
+            pill.rect,
+            UI2_OFFLINE_PILL_LINE,
+            2.0,
+        );
     }
     sync_offline_pill_hit_slots(&pills);
     out.len().saturating_sub(before)
@@ -140,22 +148,12 @@ pub(super) fn collect_offline_dock_gradient_rects(
         return 0;
     }
 
-    let frame_base_rgba = (0xD9, 0xDE, 0xE5, 0xFF);
-    let frame_left_rgba = super::modulate_rgba_alpha(
-        super::blend_rgba_over((0x00, 0x00, 0x00, 0x52), frame_base_rgba),
-        0xD8,
-    );
-    let frame_right_rgba = super::modulate_rgba_alpha(
-        super::blend_rgba_over((0xFF, 0xFF, 0xFF, 0x52), frame_base_rgba),
-        0xD8,
-    );
-
     for pill in pills.iter() {
         let _ = super::ui2_win_deco::push_chrome_gradient_rect(
             out,
             pill.rect,
-            frame_left_rgba,
-            frame_right_rgba,
+            UI2_OFFLINE_PILL_GRAD_LEFT,
+            UI2_OFFLINE_PILL_GRAD_RIGHT,
             false,
         );
     }

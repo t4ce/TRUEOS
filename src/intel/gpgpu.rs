@@ -7,6 +7,7 @@ mod test_gpgpu;
 pub(crate) use test_gpgpu::{
     GpgpuShellCube20ProjectResult, shell_cube20_project_spin, submit_canvas3d_clip_box_q16_once,
     submit_canvas3d_project_once, submit_canvas3d_transform_smoke_once,
+    ui2_canvas3d_archaeology_project_frame,
 };
 
 pub(crate) const COPY_RECT_RGBA8_KERNEL_NAME: &str = "copy_rect_rgba8";
@@ -151,12 +152,12 @@ pub(crate) const FILL_RECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0xD7, 0x31, 0xA0, 0x88, 0x23, 0xB0, 0x40, 0x28, 0x62, 0x0E, 0x86, 0x54, 0x9F, 0x45, 0x06, 0xF4,
 ];
 pub(crate) const FILL_RECT_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
-    0x5E, 0x28, 0xE1, 0xA3, 0x9C, 0x3B, 0x15, 0x4E, 0xA6, 0xD7, 0xBC, 0x55, 0xFB, 0xBC, 0x99, 0xCF,
-    0xDC, 0xA3, 0x40, 0xEA, 0xF7, 0xA5, 0x21, 0xB0, 0x6B, 0xC7, 0x52, 0x9B, 0x7A, 0x1C, 0x53, 0x2B,
+    0x30, 0x08, 0x5C, 0x66, 0x74, 0x13, 0xC0, 0x8E, 0xD8, 0x12, 0x82, 0x66, 0x6F, 0xB4, 0xEF, 0x47,
+    0xFC, 0x07, 0x6F, 0x3C, 0xC0, 0xC2, 0x6C, 0x31, 0x5B, 0x71, 0xB2, 0xA8, 0xE2, 0x70, 0x0A, 0x78,
 ];
 pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
-    0xD3, 0xE6, 0xD5, 0xEC, 0x26, 0xC2, 0xB7, 0x89, 0xD4, 0x3D, 0x33, 0x08, 0xCF, 0x74, 0x09, 0x77,
-    0xCE, 0x52, 0xF5, 0xB4, 0xDF, 0x23, 0x25, 0xA2, 0x7C, 0x92, 0xA6, 0x87, 0x79, 0x6D, 0x91, 0x49,
+    0xC0, 0x3A, 0xEE, 0xFC, 0x4D, 0x20, 0x23, 0xD5, 0xEE, 0x70, 0x3C, 0x5D, 0xBB, 0xB3, 0x1E, 0xBC,
+    0x20, 0x93, 0xB1, 0x04, 0xBE, 0x00, 0xDB, 0x2B, 0xC7, 0x8D, 0x29, 0xC5, 0x30, 0xF4, 0x27, 0x37,
 ];
 pub(crate) const FILL_CIRCLE_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0xB4, 0x17, 0x29, 0x7F, 0xD1, 0x60, 0x57, 0x21, 0xCC, 0x94, 0xA9, 0x88, 0x09, 0x3D, 0x8B, 0xA9,
@@ -171,8 +172,8 @@ pub(crate) const ALPHA_BLEND_RGBA8_OVER_ADLS_BIN_SHA256: [u8; 32] = [
     0x77, 0x15, 0xF4, 0xA7, 0xA3, 0x68, 0xA8, 0x9F, 0xD1, 0x13, 0x87, 0xFB, 0x54, 0x0F, 0x48, 0x1C,
 ];
 pub(crate) const ALPHA_BLEND_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
-    0xA0, 0x49, 0x10, 0x3E, 0x53, 0x8A, 0x9E, 0x9B, 0x75, 0x0A, 0x78, 0x28, 0x61, 0xDB, 0xE9, 0x73,
-    0x4C, 0x9D, 0xB0, 0xD9, 0x20, 0xB1, 0x3E, 0x08, 0xBF, 0x56, 0xBD, 0xB7, 0x46, 0xF2, 0xD8, 0x3E,
+    0x76, 0x85, 0xA0, 0x32, 0xB8, 0x9E, 0x03, 0xF0, 0x25, 0x06, 0x32, 0xB9, 0x15, 0xED, 0xDF, 0x70,
+    0x49, 0xCE, 0x6F, 0x47, 0x1D, 0x6E, 0xB5, 0xAC, 0x3F, 0xC6, 0x32, 0x43, 0x2C, 0x70, 0xB3, 0x89,
 ];
 pub(crate) const GLYPH_MASK_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x90, 0x8D, 0xF0, 0x7D, 0x62, 0xB0, 0x69, 0xF3, 0x1A, 0x04, 0x6D, 0x29, 0x02, 0xDF, 0xF9, 0xA0,
@@ -380,7 +381,7 @@ const RECT_WORKLIST_DESC_SURFACE_STATE_OFFSET_BYTES: usize = 0x1500;
 const RECT_WORKLIST_PAYLOAD_OFFSET_BYTES: usize = 0x1600;
 const RECT_WORKLIST_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
 const RECT_WORKLIST_CROSS_THREAD_GRFS: u32 = 3;
-const RECT_WORKLIST_CROSS_THREAD_BYTES: usize = 128;
+const RECT_WORKLIST_CROSS_THREAD_BYTES: usize = RECT_WORKLIST_CROSS_THREAD_GRFS as usize * 32;
 const RECT_WORKLIST_PER_THREAD_BYTES: usize = 96;
 const RECT_WORKLIST_INDIRECT_BYTES: usize =
     RECT_WORKLIST_CROSS_THREAD_BYTES + RECT_WORKLIST_PER_THREAD_BYTES;
@@ -411,7 +412,7 @@ const CANVAS3D_PROJECT_PRE_MARKER_SLOT: usize = 9;
 const CANVAS3D_PROJECT_POST_MARKER_SLOT: usize = 8;
 const CANVAS3D_PROJECT_PRE_MARKER: u32 = 0xC0DE_3501;
 const CANVAS3D_PROJECT_POST_MARKER: u32 = 0xC0DE_3502;
-const CANVAS3D_PROJECT_VERTEX_COUNT: usize = 64;
+const CANVAS3D_PROJECT_VERTEX_COUNT: usize = 128;
 const CANVAS3D_PROJECT_SAMPLE_COUNT: usize = 8;
 const CANVAS3D_PROJECT_SMOKE_SRC_FIRST: u32 = 10;
 const CANVAS3D_PROJECT_SMOKE_OUT_FIRST: u32 = 40;
@@ -485,6 +486,9 @@ const TETRA10_VERTEX_COUNT: usize =
     TETRA10_CORNER_COUNT + TETRA10_EDGE_COUNT * TETRA10_EDGE_SAMPLE_COUNT;
 const TETRA10_BASE_VERTEX: usize = CUBE20_VISUAL_VERTEX_COUNT;
 const CANVAS3D_VISUAL_VERTEX_COUNT: usize = CUBE20_VISUAL_VERTEX_COUNT + TETRA10_VERTEX_COUNT;
+const ICO30_CORNER_COUNT: usize = 30;
+const ICO60_EDGE_COUNT: usize = 60;
+const ICO90_VERTEX_COUNT: usize = ICO30_CORNER_COUNT + ICO60_EDGE_COUNT;
 const CUBE20_HALF_Q16: i32 = CANVAS3D_PROJECT_Q16_ONE / 2;
 const CUBE20_PRESENT_COLORS: [u32; CUBE20_INSTANCE_COUNT] = [0xFFFF_3048];
 const CUBE20_EDGES: [(usize, usize); CUBE20_EDGE_COUNT] = [
@@ -1944,7 +1948,7 @@ pub(crate) fn copy_rect_rgba8_stats(
     let Some(params) = lower_copy_rect(src, src_rect, dst, dst_xy) else {
         return GpgpuSubmitStats::default();
     };
-    let Some(flavor) = copy_rect_kernel_flavor_narrow() else {
+    let Some(flavor) = copy_rect_kernel_flavor_wide() else {
         return GpgpuSubmitStats::default();
     };
     submit_copy_rect_spans_with_stats(src, dst, params, flavor)
@@ -2371,6 +2375,66 @@ pub(crate) fn solid_rects_rgba8_over_primary(
         });
     }
 
+    let opaque = clipped
+        .iter()
+        .all(|(solid, _, _)| rgba8_alpha(solid.color_rgba) == 0xFF);
+    if opaque {
+        let mut fill_descs = Vec::with_capacity(clipped.len());
+        for (solid, dst_rect, _) in clipped.iter().copied() {
+            if dst_rect.width > u16::MAX as u32 || dst_rect.height > u16::MAX as u32 {
+                continue;
+            }
+            let Ok(dst_x_i16) = i16::try_from(dst_rect.x) else {
+                continue;
+            };
+            let Ok(dst_y_i16) = i16::try_from(dst_rect.y) else {
+                continue;
+            };
+            fill_descs.push(FillRectWorklistRgba8Desc {
+                dst_xy: pack_i16_pair_u32(dst_x_i16, dst_y_i16),
+                size: pack_u16_pair_u32(dst_rect.width as u16, dst_rect.height as u16),
+                color_rgba: solid.color_rgba,
+            });
+        }
+        if fill_descs.is_empty() {
+            return Some(GpgpuSolidRectOverlayResult {
+                ok: true,
+                ..GpgpuSolidRectOverlayResult::default()
+            });
+        }
+
+        let fill_start_tick = direct_rcs_now_tick();
+        let fill = fill_rect_worklist_rgba8_stats(primary, fill_descs.as_slice());
+        let fill_ms = direct_rcs_elapsed_ms_since(fill_start_tick);
+        let present_start_tick = direct_rcs_now_tick();
+        let presented = if present && fill.submits > 0 {
+            super::display::notify_primary_surface_external_write(
+                "gpgpu-solid-rects-direct-primary",
+                0,
+                target.byte_len,
+            )
+        } else {
+            false
+        };
+        let present_ms = direct_rcs_elapsed_ms_since(present_start_tick);
+
+        return Some(GpgpuSolidRectOverlayResult {
+            ok: fill.submits > 0 && (!present || presented),
+            rects: fill_descs.len(),
+            fill_descs: fill.descs,
+            fill_walkers: fill.walkers,
+            fill_submits: fill.submits,
+            fill_ms,
+            blend_descs: 0,
+            blend_walkers: 0,
+            blend_submits: 0,
+            blend_ms: 0,
+            presented,
+            present_ms,
+            total_ms: direct_rcs_elapsed_ms_since(total_start_tick),
+        });
+    }
+
     let source = solid_rect_source_surface_once(primary.width, packed_h)?;
     let mut fill_descs = Vec::with_capacity(clipped.len());
     let mut blend_descs = Vec::with_capacity(clipped.len());
@@ -2489,6 +2553,72 @@ pub(crate) fn gradient_rects_rgba8_over_primary(
         });
     }
 
+    let opaque = clipped.iter().all(|(gradient, _, _)| {
+        rgba8_alpha(gradient.color0_rgba) == 0xFF && rgba8_alpha(gradient.color1_rgba) == 0xFF
+    });
+    if opaque {
+        let mut gradient_descs = Vec::with_capacity(clipped.len());
+        for (gradient, dst_rect, _) in clipped.iter().copied() {
+            if dst_rect.width > u16::MAX as u32 || dst_rect.height > u16::MAX as u32 {
+                continue;
+            }
+            let Ok(dst_x_i16) = i16::try_from(dst_rect.x) else {
+                continue;
+            };
+            let Ok(dst_y_i16) = i16::try_from(dst_rect.y) else {
+                continue;
+            };
+            gradient_descs.push(GradientRectWorklistRgba8Desc {
+                dst_xy: pack_i16_pair_u32(dst_x_i16, dst_y_i16),
+                size: pack_u16_pair_u32(dst_rect.width as u16, dst_rect.height as u16),
+                color0_rgba: gradient.color0_rgba,
+                color1_rgba: gradient.color1_rgba,
+                flags: if gradient.vertical {
+                    GRADIENT_RECT_WORKLIST_FLAG_VERTICAL
+                } else {
+                    0
+                },
+            });
+        }
+        if gradient_descs.is_empty() {
+            return Some(GpgpuSolidRectOverlayResult {
+                ok: true,
+                ..GpgpuSolidRectOverlayResult::default()
+            });
+        }
+
+        let fill_start_tick = direct_rcs_now_tick();
+        let fill = gradient_rect_worklist_rgba8_stats(primary, gradient_descs.as_slice());
+        let fill_ms = direct_rcs_elapsed_ms_since(fill_start_tick);
+        let present_start_tick = direct_rcs_now_tick();
+        let presented = if present && fill.submits > 0 {
+            super::display::notify_primary_surface_external_write(
+                "gpgpu-gradient-rects-direct-primary",
+                0,
+                target.byte_len,
+            )
+        } else {
+            false
+        };
+        let present_ms = direct_rcs_elapsed_ms_since(present_start_tick);
+
+        return Some(GpgpuSolidRectOverlayResult {
+            ok: fill.submits > 0 && (!present || presented),
+            rects: gradient_descs.len(),
+            fill_descs: fill.descs,
+            fill_walkers: fill.walkers,
+            fill_submits: fill.submits,
+            fill_ms,
+            blend_descs: 0,
+            blend_walkers: 0,
+            blend_submits: 0,
+            blend_ms: 0,
+            presented,
+            present_ms,
+            total_ms: direct_rcs_elapsed_ms_since(total_start_tick),
+        });
+    }
+
     let source = solid_rect_source_surface_once(primary.width, packed_h)?;
     let mut gradient_descs = Vec::with_capacity(clipped.len());
     let mut blend_descs = Vec::with_capacity(clipped.len());
@@ -2595,7 +2725,7 @@ pub(crate) fn copy_rects_rgba8(copies: &[GpgpuCopyRect]) -> usize {
 }
 
 pub(crate) fn copy_rects_rgba8_stats(copies: &[GpgpuCopyRect]) -> GpgpuSubmitStats {
-    copy_rects_rgba8_stats_with_flavor(copies, false)
+    copy_rects_rgba8_stats_with_flavor(copies, true)
 }
 
 pub(crate) fn copy_rects_rgba8_wide_stats(copies: &[GpgpuCopyRect]) -> GpgpuSubmitStats {
@@ -3242,13 +3372,6 @@ pub(crate) fn submit_direct_rcs_smoke_once() -> bool {
         );
         return false;
     };
-    let Some(upload) = copy_rect_rgba8_upload_status() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: direct-rcs-smoke skipped reason=no-kernel-upload\n"
-        );
-        return false;
-    };
     let Some(state) = direct_rcs_state_once(dev) else {
         crate::log_info!(
             target: "gpgpu";
@@ -3277,7 +3400,7 @@ pub(crate) fn submit_direct_rcs_smoke_once() -> bool {
 
     crate::log_info!(
         target: "gpgpu";
-        "intel/gpgpu: direct-rcs-smoke forcewake={} ggtt={} ppgtt={} batch={} submitted={} retired={} retire_ms={} observed=0x{:08X} expected=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=direct-execlist no_guc_submit=1 next=gpgpu-walker\n",
+        "intel/gpgpu: direct-rcs-smoke forcewake={} ggtt={} ppgtt={} batch={} submitted={} retired={} retire_ms={} observed=0x{:08X} expected=0x{:08X} ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=direct-execlist no_guc_submit=1 next=gpgpu-walker\n",
         forcewake_ok as u8,
         mapped_ok as u8,
         ppgtt_ok as u8,
@@ -3287,8 +3410,6 @@ pub(crate) fn submit_direct_rcs_smoke_once() -> bool {
         retire_ms,
         observed,
         DIRECT_RCS_SMOKE_MARKER,
-        upload.gpu,
-        upload.gpu + COPY_RECT_RGBA8_TEXT_OFFSET_BYTES,
         DIRECT_RCS_GPU_VA_RING_BASE,
         DIRECT_RCS_GPU_VA_BATCH_BASE,
         DIRECT_RCS_GPU_VA_RESULT_BASE,
@@ -5144,6 +5265,11 @@ fn rect_is_inside(surface: GpgpuRgba8Surface, rect: GpgpuRect) -> bool {
     let x2 = rect.x as i64 + rect.width as i64;
     let y2 = rect.y as i64 + rect.height as i64;
     x2 <= surface.width as i64 && y2 <= surface.height as i64
+}
+
+#[inline]
+fn rgba8_alpha(color_rgba: u32) -> u8 {
+    (color_rgba >> 24) as u8
 }
 
 fn clip_gpgpu_rect_to_surface(rect: GpgpuRect, width: u32, height: u32) -> Option<GpgpuRect> {

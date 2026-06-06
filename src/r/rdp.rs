@@ -50,8 +50,8 @@ const MSG_RESOURCE_SNAPSHOT_ACK: u16 = 103;
 const CAP_ONE_WAY_MONITOR: u32 = 1;
 const CAP_GFX_COMMAND_STREAM: u32 = 1 << 1;
 const CAP_RESOURCE_SNAPSHOT: u32 = 1 << 2;
-const CAP_ABSOLUTE_TABLET_INPUT: u32 = 1 << 3;
 const CAP_SHADER_PIPELINES: u32 = 1 << 4;
+const CAP_UDP_HID_INPUT: u32 = 1 << 5;
 const RDP_TEXTURE_CACHE_CAP: usize = 512;
 const RDP_INPUT_MAX_FRAME_BYTES: usize = 1024;
 
@@ -150,8 +150,8 @@ fn hello_frame() -> Vec<u8> {
     let caps = CAP_ONE_WAY_MONITOR
         | CAP_GFX_COMMAND_STREAM
         | CAP_RESOURCE_SNAPSHOT
-        | CAP_ABSOLUTE_TABLET_INPUT
-        | CAP_SHADER_PIPELINES;
+        | CAP_SHADER_PIPELINES
+        | CAP_UDP_HID_INPUT;
 
     let mut payload = begin_payload(MSG_HELLO, 16);
     push_u32(&mut payload, view_w);
@@ -200,65 +200,15 @@ fn handle_client_payload(handle: NetHandle, payload: &[u8]) {
     let body = &payload[8..];
 
     match msg {
-        MSG_INPUT_TABLET_ABS => {
-            if body.len() < 20 {
-                return;
-            }
-
-            let slot_id = crate::usb3::hid::rdp_tablet_slot_id();
-            let x_q16 = read_u32(body, 4).unwrap_or(0).min(65535);
-            let y_q16 = read_u32(body, 8).unwrap_or(0).min(65535);
-            let buttons_down = read_u32(body, 12).unwrap_or(0);
-            let flags = read_u32(body, 16).unwrap_or(0);
-            let x = f64::from(x_q16) / 65535.0;
-            let y = f64::from(y_q16) / 65535.0;
-            crate::usb3::hid::inject_virtual_tablet_absolute_event(
-                slot_id,
-                x,
-                y,
-                buttons_down,
-                flags,
-            );
-
-            static TABLET_INPUT_LOGS: AtomicU32 = AtomicU32::new(0);
-            let n = TABLET_INPUT_LOGS.fetch_add(1, Ordering::Relaxed);
-            if n < 8 {
+        MSG_INPUT_TABLET_ABS | MSG_INPUT_KEYBOARD_BOOT => {
+            static LEGACY_INPUT_LOGS: AtomicU32 = AtomicU32::new(0);
+            let n = LEGACY_INPUT_LOGS.fetch_add(1, Ordering::Relaxed) + 1;
+            if n <= 8 || n.is_power_of_two() {
                 crate::log!(
-                    "trueos-rdp: input tablet handle={} slot={} x={} y={} buttons=0x{:X} flags=0x{:X}\n",
+                    "trueos-rdp: ignored legacy tcp input handle={} msg={} count={} reason=hid-udp\n",
                     handle.0,
-                    slot_id,
-                    x_q16,
-                    y_q16,
-                    buttons_down,
-                    flags
-                );
-            }
-        }
-        MSG_INPUT_KEYBOARD_BOOT => {
-            if body.len() < 16 {
-                return;
-            }
-            let modifiers = read_u32(body, 4).unwrap_or(0).min(u8::MAX as u32) as u8;
-            let keys_lo = read_u32(body, 8).unwrap_or(0).to_le_bytes();
-            let keys_hi = read_u32(body, 12).unwrap_or(0).to_le_bytes();
-            let keys = [
-                keys_lo[0], keys_lo[1], keys_lo[2], keys_lo[3], keys_hi[0], keys_hi[1],
-            ];
-            crate::usb3::hid::inject_virtual_keyboard_boot_report(modifiers, keys);
-
-            static KEYBOARD_INPUT_LOGS: AtomicU32 = AtomicU32::new(0);
-            let n = KEYBOARD_INPUT_LOGS.fetch_add(1, Ordering::Relaxed);
-            if n < 8 {
-                crate::log!(
-                    "trueos-rdp: input keyboard handle={} mods=0x{:02X} keys=[{},{},{},{},{},{}]\n",
-                    handle.0,
-                    modifiers,
-                    keys[0],
-                    keys[1],
-                    keys[2],
-                    keys[3],
-                    keys[4],
-                    keys[5],
+                    msg,
+                    n
                 );
             }
         }
@@ -342,9 +292,6 @@ fn remove_client_handle(
     if clients.len() == before {
         return false;
     }
-    if clients.is_empty() {
-        crate::usb3::hid::remove_rdp_tablet();
-    }
     publish_client_handles(ready_clients.as_slice());
     true
 }
@@ -363,7 +310,6 @@ fn clear_client_handles(
     input_buffers.clear();
     TRUEOS_RDP_SNAPSHOT_ACKS.lock().clear();
     TRUEOS_RDP_CLIENT_SNAPSHOT_SEQS.lock().clear();
-    crate::usb3::hid::remove_rdp_tablet();
     publish_client_handles(ready_clients.as_slice());
     cleared
 }

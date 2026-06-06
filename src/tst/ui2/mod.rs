@@ -4,6 +4,7 @@ pub(crate) mod coreticks_demo;
 pub(crate) mod cursorpicker_demo;
 pub(crate) mod gboi_demo;
 pub(crate) mod ids;
+pub(crate) mod intel_canvas3d_demo;
 pub(crate) mod mandelbrot_demo;
 pub(crate) mod player_demo;
 pub(crate) mod raple_demo;

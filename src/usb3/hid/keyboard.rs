@@ -124,6 +124,20 @@ fn hid_boot_keycode_to_ascii(key: u8, shift: bool) -> Option<char> {
     }
 }
 
+pub(crate) fn boot_ascii_for_keys(modifiers: u8, keys: [u8; 6]) -> [u8; 6] {
+    let shift = hid_kbd_shift(modifiers);
+    let mut ascii = [0u8; 6];
+    for (dst, &key) in ascii.iter_mut().zip(keys.iter()) {
+        if key == 0 {
+            continue;
+        }
+        *dst = hid_boot_keycode_to_ascii(key, shift)
+            .and_then(|ch| if ch.is_ascii() { Some(ch as u8) } else { None })
+            .unwrap_or(0);
+    }
+    ascii
+}
+
 pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) {
     if data.len() < 8 {
         if HID_DEBUG_REPORT_LOGS {
@@ -144,17 +158,7 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
     let mut keys = [0u8; 6];
     keys.copy_from_slice(&data[2..8]);
 
-    let shift = hid_kbd_shift(modifiers);
-    let mut ascii = [0u8; 6];
-    for (dst, &k) in ascii.iter_mut().zip(keys.iter()) {
-        if k == 0 {
-            *dst = 0;
-            continue;
-        }
-        *dst = hid_boot_keycode_to_ascii(k, shift)
-            .and_then(|ch| if ch.is_ascii() { Some(ch as u8) } else { None })
-            .unwrap_or(0);
-    }
+    let ascii = boot_ascii_for_keys(modifiers, keys);
     if keys.iter().any(|&k| k != 0) || modifiers != 0 {
         runtime.last_nonzero_seq = runtime.seq;
     }
