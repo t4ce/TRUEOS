@@ -9,7 +9,6 @@ pub(crate) mod intel_canvas3d_plane_patch_demo;
 pub(crate) mod mandelbrot_demo;
 pub(crate) mod player_demo;
 pub(crate) mod raple_demo;
-pub(crate) mod render_album_demo;
 pub(crate) mod shell_demo;
 pub(crate) mod smiley_fountain_demo;
 pub(crate) mod swarm;

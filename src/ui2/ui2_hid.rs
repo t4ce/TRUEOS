@@ -407,6 +407,11 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
         }
     });
     let hover_decoration_button = decoration_hover_button_at(state, press_hit, px, py);
+    let hover_offline_dock_play_rect = if press_hit.is_none() {
+        ui2_win_register::offline_dock_play_button_hover_rect_at(px, py)
+    } else {
+        None
+    };
     let press_window_id = if (event.buttons_down & UI2_PRIMARY_BUTTON_MASK) != 0 {
         press_hit.map(|target| target.owner_window_id).unwrap_or(0)
     } else {
@@ -433,6 +438,7 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
     let mut try_offline_dock = false;
     let mut cursor_capture_window_id = 0u32;
     let mut cursor_overlay_changed = false;
+    let mut offline_dock_hover_changed = false;
     let mut hover_dirty_prev: Option<(u32, Ui2DecorationHoverButton)> = None;
     let mut hover_dirty_next: Option<(u32, Ui2DecorationHoverButton)> = None;
     {
@@ -465,6 +471,10 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
                 cursor.hover_window_id = 0;
                 cursor.hover_decoration_button = None;
             }
+        }
+        if cursor.hover_offline_dock_play_rect != hover_offline_dock_play_rect {
+            cursor.hover_offline_dock_play_rect = hover_offline_dock_play_rect;
+            offline_dock_hover_changed = true;
         }
 
         if !primary_was_down && primary_is_down {
@@ -528,6 +538,9 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
 
     if cursor_overlay_changed {
         note_cursor_overlay_dirty(state, "cursor-overlay");
+    }
+    if offline_dock_hover_changed {
+        note_offline_dock_chrome_dirty(state, "offline-dock-button-hover");
     }
     if crate::gfx::is_intel_active() {
         if let Some((window_id, button)) = hover_dirty_prev
@@ -1091,6 +1104,7 @@ fn begin_move_drag_for_cursor(
             cursor_slot_id: slot_id,
             grab_dx: cursor_x - next_rect.x,
             grab_dy: cursor_y - next_rect.y,
+            start_rect: next_rect,
             raise_on_move,
             edge_actions_armed: window_edge_drop_action(state, cursor_x, cursor_y).is_none(),
         },
@@ -1505,6 +1519,22 @@ fn update_move_drag_for_cursor(
         return;
     };
     if (buttons_down & UI2_PRIMARY_BUTTON_MASK) == 0 {
+        let drag = state.move_drags[drag_idx];
+        let moved = state
+            .windows
+            .iter()
+            .find(|window| window.id == drag.window_id)
+            .map(|window| window.rect != drag.start_rect)
+            .unwrap_or(false);
+        if moved {
+            state.compose_reason = "window-move-commit";
+            let _ = commit_window_geometry_change(state, drag.window_id, "window-move-commit");
+            let _ = note_window_content_present_after_geometry(
+                state,
+                drag.window_id,
+                "window-move-commit",
+            );
+        }
         state.move_drags.remove(drag_idx);
         return;
     }
@@ -1570,13 +1600,41 @@ fn update_resize_drag_for_cursor(
     };
     if (buttons_down & UI2_PRIMARY_BUTTON_MASK) == 0 {
         let drag = state.resize_drags[drag_idx];
-        if drag.active && !drag.live_apply && drag.preview_rect != drag.start_rect {
-            if let Some(window) = window_mut(state, drag.window_id) {
-                window.rect = drag.preview_rect;
-                window.restore_rect = drag.preview_rect;
+        if drag.active {
+            if !drag.live_apply && drag.preview_rect != drag.start_rect {
+                if let Some(window) = window_mut(state, drag.window_id) {
+                    window.rect = drag.preview_rect;
+                    window.restore_rect = drag.preview_rect;
+                }
+                state.compose_reason = "window-resize-commit";
+                let _ =
+                    commit_window_geometry_change(state, drag.window_id, "window-resize-commit");
+                let _ = note_window_content_present_after_geometry(
+                    state,
+                    drag.window_id,
+                    "window-resize-commit",
+                );
+            } else if drag.live_apply {
+                let resized = state
+                    .windows
+                    .iter()
+                    .find(|window| window.id == drag.window_id)
+                    .map(|window| window.rect != drag.start_rect)
+                    .unwrap_or(false);
+                if resized {
+                    state.compose_reason = "window-resize-commit";
+                    let _ = commit_window_geometry_change(
+                        state,
+                        drag.window_id,
+                        "window-resize-commit",
+                    );
+                    let _ = note_window_content_present_after_geometry(
+                        state,
+                        drag.window_id,
+                        "window-resize-commit",
+                    );
+                }
             }
-            state.compose_reason = "window-resize-commit";
-            let _ = commit_window_geometry_change(state, drag.window_id, "window-resize-commit");
         }
         state.resize_drags.remove(drag_idx);
         return;

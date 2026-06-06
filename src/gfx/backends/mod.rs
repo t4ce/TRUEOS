@@ -223,7 +223,7 @@ impl Backend {
     }
 
     pub(crate) fn intel_image_gpgpu_mask_surface(
-        &self,
+        &mut self,
         id: ImageId,
     ) -> Option<crate::intel::gpgpu::GpgpuMask8Surface> {
         match self {

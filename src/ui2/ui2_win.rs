@@ -272,7 +272,11 @@ pub(super) fn set_window_rect_in_state(
     window.state = Ui2WindowStateKind::Normal;
     state.compose_reason = reason;
     clear_window_drag_claims(state, id);
-    commit_window_geometry_change(state, id, reason)
+    let noted = commit_window_geometry_change(state, id, reason);
+    if noted {
+        let _ = note_window_content_present_after_geometry(state, id, reason);
+    }
+    noted
 }
 
 pub(super) fn commit_window_geometry_change(
@@ -325,7 +329,11 @@ pub(super) fn maximize_window_in_state(state: &mut Ui2State, id: u32) -> bool {
     window.state = Ui2WindowStateKind::Maximized;
     state.compose_reason = "maximize-window";
     clear_window_drag_claims(state, id);
-    commit_window_geometry_change(state, id, "maximize-window")
+    let noted = commit_window_geometry_change(state, id, "maximize-window");
+    if noted {
+        let _ = note_window_content_present_after_geometry(state, id, "maximize-window");
+    }
+    noted
 }
 
 pub(super) fn restore_window_in_state(state: &mut Ui2State, id: u32) -> bool {
@@ -343,7 +351,11 @@ pub(super) fn restore_window_in_state(state: &mut Ui2State, id: u32) -> bool {
     }
     window.state = Ui2WindowStateKind::Normal;
     state.compose_reason = "restore-window";
-    commit_window_geometry_change(state, id, "restore-window")
+    let noted = commit_window_geometry_change(state, id, "restore-window");
+    if noted {
+        let _ = note_window_content_present_after_geometry(state, id, "restore-window");
+    }
+    noted
 }
 
 pub(super) fn set_window_visible_in_state(state: &mut Ui2State, id: u32, visible: bool) -> bool {
@@ -362,6 +374,9 @@ pub(super) fn set_window_visible_in_state(state: &mut Ui2State, id: u32, visible
     }
     let noted = note_window_dirty(state, id, reason);
     if noted {
+        if visible {
+            let _ = note_window_content_present_after_geometry(state, id, reason);
+        }
         let _ = note_window_viewport_sync_needed(state, id);
         refresh_window_hit_entries(state, id);
     }
@@ -1947,6 +1962,7 @@ pub fn move_window(id: u32, x: f32, y: f32) -> bool {
     state.compose_reason = "move-window";
     let noted = note_window_dirty(&mut state, id, "move-window");
     if noted {
+        let _ = note_window_content_present_after_geometry(&mut state, id, "move-window");
         let _ = note_window_viewport_sync_needed(&mut state, id);
         refresh_window_hit_entries(&mut state, id);
     }
@@ -1971,6 +1987,7 @@ pub fn resize_window(id: u32, w: f32, h: f32) -> bool {
     state.compose_reason = "resize-window";
     let noted = note_window_dirty(&mut state, id, "resize-window");
     if noted {
+        let _ = note_window_content_present_after_geometry(&mut state, id, "resize-window");
         let _ = note_window_viewport_sync_needed(&mut state, id);
         refresh_window_hit_entries(&mut state, id);
     }
@@ -2010,6 +2027,7 @@ pub fn resize_window_content(id: u32, w: f32, h: f32) -> bool {
     state.compose_reason = "resize-window-content";
     let noted = note_window_dirty(&mut state, id, "resize-window-content");
     if noted {
+        let _ = note_window_content_present_after_geometry(&mut state, id, "resize-window-content");
         let _ = note_window_viewport_sync_needed(&mut state, id);
         refresh_window_hit_entries(&mut state, id);
     }
@@ -2277,6 +2295,12 @@ pub fn begin_window_move(id: u32) -> bool {
     }
     clear_window_drag_claims(&mut state, id);
     clear_other_drag_modes_for_slot(&mut state, cursor_slot_id);
+    let start_rect = state
+        .windows
+        .iter()
+        .find(|window| window.id == id)
+        .map(|window| window.rect)
+        .unwrap_or_default();
     upsert_move_drag(
         &mut state,
         Ui2WindowMoveDrag {
@@ -2285,6 +2309,7 @@ pub fn begin_window_move(id: u32) -> bool {
             cursor_slot_id,
             grab_dx,
             grab_dy,
+            start_rect,
             raise_on_move: false,
             edge_actions_armed,
         },

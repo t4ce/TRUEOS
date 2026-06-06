@@ -61,6 +61,17 @@ fn upload_bgrt_texture(
     )
 }
 
+async fn wait_bgrt_texture_ready(tex_id: u32, attempts: usize) -> bool {
+    const ASYNC_TEX_STATUS_READY: i32 = 2;
+    for _ in 0..attempts {
+        if crate::r::io::cabi::trueos_cabi_gfx_texture_status(tex_id) == ASYNC_TEX_STATUS_READY {
+            return true;
+        }
+        embassy_time::Timer::after(embassy_time::Duration::from_millis(1)).await;
+    }
+    false
+}
+
 #[embassy_executor::task]
 pub async fn ui2_bgrt_demo_task() {
     let _task_guard = crate::r::spawn_service::task_run_guard("ui2-bgrt-demo");
@@ -127,14 +138,22 @@ pub async fn ui2_bgrt_demo_task() {
         );
         return;
     }
+    let ready = wait_bgrt_texture_ready(UI2_BGRT_TEX_ID, 120).await;
+    let present = if ready {
+        crate::r::ui2::request_window_content_present(window_id, "ui2-bgrt-demo-ready")
+    } else {
+        false
+    };
 
     crate::log!(
-        "ui2-bgrt-demo: window={} tex={} size={}x{} mode={}\n",
+        "ui2-bgrt-demo: window={} tex={} size={}x{} mode={} ready={} present={}\n",
         surface.window_id(),
         surface.tex_id(),
         width,
         height,
-        if intel_direct { "direct" } else { "queued" }
+        if intel_direct { "direct" } else { "queued" },
+        ready as u8,
+        present as u8
     );
 
     let mut uploaded_w = width_u32;

@@ -1197,6 +1197,7 @@ pub(crate) fn submit_canvas3d_plane_patch_worklist_rgba8_once() -> bool {
         make_desc(q, 0, 32, 0, 32, 48, 0xFF40_D060),
         make_desc(0, -q / 2, 16, 12, 32, 24, 0xFF44_88FF),
     ];
+    let (group_x, group_y, group_z) = canvas3d_plane_patch_worklist_groups_for_descs(&descs);
 
     let poison = 0x1020_3040u32;
     unsafe {
@@ -1223,6 +1224,9 @@ pub(crate) fn submit_canvas3d_plane_patch_worklist_rgba8_once() -> bool {
         desc_gpu: CANVAS3D_TMP_GPU,
         desc_base: 0,
         desc_count: CANVAS3D_PLANE_PATCH_WORKLIST_TEST_DESCS as u32,
+        group_x,
+        group_y,
+        group_z,
     };
 
     let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
@@ -1308,7 +1312,7 @@ pub(crate) fn submit_canvas3d_plane_patch_worklist_rgba8_once() -> bool {
 
     crate::log_info!(
         target: "gpgpu";
-        "intel/gpgpu: canvas3d-plane-patch-worklist forcewake={} ggtt={} ppgtt={} kernel_ppgtt={} dst_ppgtt={} desc_ppgtt={} batch={} submitted={} retired={} retire_ms={} ok={} changed={} red={} green={} blue={} corner=0x{:08X} first_changed={} first_value=0x{:08X} poison=0x{:08X} dst={}x{} pitch={} descs={} desc_dwords={} desc_bytes=0x{:X} canvas={}x{} pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} dst_gpu=0x{:X} desc_gpu=0x{:X} idd_off=0x{:X} payload_off=0x{:X} ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=direct-execlist no_guc_submit=1 next=patch-worklist-shade-or-depth\n",
+        "intel/gpgpu: canvas3d-plane-patch-worklist forcewake={} ggtt={} ppgtt={} kernel_ppgtt={} dst_ppgtt={} desc_ppgtt={} batch={} submitted={} retired={} retire_ms={} ok={} changed={} red={} green={} blue={} corner=0x{:08X} first_changed={} first_value=0x{:08X} poison=0x{:08X} dst={}x{} pitch={} descs={} groups={}x{}x{} desc_dwords={} desc_bytes=0x{:X} canvas={}x{} pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} dst_gpu=0x{:X} desc_gpu=0x{:X} idd_off=0x{:X} payload_off=0x{:X} ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=direct-execlist no_guc_submit=1 next=patch-worklist-shade-or-depth\n",
         forcewake_ok as u8,
         mapped_ok as u8,
         ppgtt_ok as u8,
@@ -1332,6 +1336,9 @@ pub(crate) fn submit_canvas3d_plane_patch_worklist_rgba8_once() -> bool {
         CANVAS3D_PLANE_FILL_TEST_HEIGHT,
         CANVAS3D_PLANE_FILL_TEST_PITCH_BYTES,
         params.desc_count,
+        params.group_x,
+        params.group_y,
+        params.group_z,
         CANVAS3D_PLANE_PATCH_WORKLIST_DESC_DWORDS,
         CANVAS3D_PLANE_PATCH_WORKLIST_DESC_BYTES,
         CANVAS3D_PLANE_FILL_TEST_WIDTH,
@@ -1935,7 +1942,7 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
         ];
         let face_descs = [
             canvas3d_plane_patch_ui2_face_desc(
-                staging,
+                staging.surface,
                 width,
                 height,
                 canvas3d_vec3_add(center, forward),
@@ -1945,7 +1952,7 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
                 0xFF22_3355,
             ),
             canvas3d_plane_patch_ui2_face_desc(
-                staging,
+                staging.surface,
                 width,
                 height,
                 canvas3d_vec3_sub(center, right),
@@ -1955,7 +1962,7 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
                 0xFF2F_80ED,
             ),
             canvas3d_plane_patch_ui2_face_desc(
-                staging,
+                staging.surface,
                 width,
                 height,
                 canvas3d_vec3_sub(center, up),
@@ -1965,7 +1972,7 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
                 0xFF36_4A58,
             ),
             canvas3d_plane_patch_ui2_face_desc(
-                staging,
+                staging.surface,
                 width,
                 height,
                 canvas3d_vec3_add(center, right),
@@ -1975,7 +1982,7 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
                 0xFFFF_8844,
             ),
             canvas3d_plane_patch_ui2_face_desc(
-                staging,
+                staging.surface,
                 width,
                 height,
                 canvas3d_vec3_add(center, up),
@@ -1985,7 +1992,7 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
                 0xFFFF_D166,
             ),
             canvas3d_plane_patch_ui2_face_desc(
-                staging,
+                staging.surface,
                 width,
                 height,
                 canvas3d_vec3_sub(center, forward),
@@ -1995,6 +2002,22 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
                 0xFF66_CCFF,
             ),
         ];
+        let mut visible_face_descs = [face_descs[0]; 6];
+        let mut visible_face_count = 0usize;
+        for desc in face_descs.iter().copied() {
+            if canvas3d_plane_patch_faces_camera(desc) {
+                visible_face_descs[visible_face_count] = desc;
+                visible_face_count += 1;
+            }
+        }
+        if visible_face_count == 0 {
+            visible_face_descs[0] = canvas3d_nearest_face_desc(face_descs);
+            visible_face_count = 1;
+        }
+        canvas3d_sort_face_descs_far_to_near(&mut visible_face_descs[..visible_face_count]);
+        let (group_x, group_y, group_z) = canvas3d_plane_patch_worklist_groups_for_descs(
+            &visible_face_descs[..visible_face_count],
+        );
         unsafe {
             core::ptr::write_bytes(
                 state.canvas3d_tmp_virt,
@@ -2002,7 +2025,11 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
                 CANVAS3D_PLANE_PATCH_WORKLIST_DESC_BYTES,
             );
             let desc_dst = state.canvas3d_tmp_virt as *mut Canvas3dPlanePatchWorklistRgba8Desc;
-            for (index, desc) in face_descs.iter().copied().enumerate() {
+            for (index, desc) in visible_face_descs[..visible_face_count]
+                .iter()
+                .copied()
+                .enumerate()
+            {
                 core::ptr::write_volatile(desc_dst.add(index), desc);
             }
         }
@@ -2018,7 +2045,10 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
             dst_gpu: staging.surface.gpu,
             desc_gpu: CANVAS3D_TMP_GPU,
             desc_base: 0,
-            desc_count: face_descs.len() as u32,
+            desc_count: visible_face_count as u32,
+            group_x,
+            group_y,
+            group_z,
         };
         let batch_ok = desc_ppgtt_ok
             && direct_rcs_encode_canvas3d_plane_patch_worklist_batch(
@@ -2104,6 +2134,273 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
     })
 }
 
+pub(crate) fn ui2_canvas3d_plane_patch_render_surface_frame(
+    frame: u32,
+    dst: GpgpuRgba8Surface,
+) -> Option<GpgpuShellCube20ProjectResult> {
+    const CADENCE_US: u64 = 33_000;
+
+    if !dst.is_valid() || dst.width > 512 || dst.height > 512 {
+        return None;
+    }
+
+    let total_start_tick = direct_rcs_now_tick();
+    let clear_spans =
+        fill_rect_rgba8(dst, GpgpuRect::new(0, 0, dst.width, dst.height), 0xFF10_1010);
+    if clear_spans == 0 {
+        return None;
+    }
+
+    let Some(dev) = intel::claimed_device() else {
+        return None;
+    };
+    let Some(upload) = upload_canvas3d_plane_patch_worklist_rgba8_kernel() else {
+        return None;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        return None;
+    };
+
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let dst_ppgtt_ok =
+        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
+    let mut submitted_count = 0u32;
+    let mut retired_count = 0u32;
+    let mut total_submit_ms = 0u64;
+    let mut max_submit_ms = 0u64;
+    let q = CANVAS3D_PROJECT_Q16_ONE;
+    let half = (q * 5) / 8;
+    if dst_ppgtt_ok {
+        let center = Canvas3dVec3Q16 {
+            x: 0,
+            y: 0,
+            z: (q * 11) / 4,
+            pad: 0,
+        };
+        let right = Canvas3dVec3Q16 {
+            x: (half * 82) / 100,
+            y: 0,
+            z: -(half * 36) / 100,
+            pad: 0,
+        };
+        let up = Canvas3dVec3Q16 {
+            x: -(half * 10) / 100,
+            y: (half * 94) / 100,
+            z: -(half * 22) / 100,
+            pad: 0,
+        };
+        let forward = Canvas3dVec3Q16 {
+            x: (half * 34) / 100,
+            y: (half * 24) / 100,
+            z: (half * 91) / 100,
+            pad: 0,
+        };
+        let angle_deg = frame.wrapping_mul(4) % 360;
+        let roll_deg = frame % 360;
+        let right =
+            canvas3d_vec3_rotate_z_q16(canvas3d_vec3_rotate_y_q16(right, angle_deg), roll_deg);
+        let up = canvas3d_vec3_rotate_z_q16(canvas3d_vec3_rotate_y_q16(up, angle_deg), roll_deg);
+        let forward =
+            canvas3d_vec3_rotate_z_q16(canvas3d_vec3_rotate_y_q16(forward, angle_deg), roll_deg);
+        let constraints = [
+            Canvas3dVec3Q16 {
+                x: q,
+                y: 0,
+                z: q,
+                pad: 0,
+            },
+            Canvas3dVec3Q16 {
+                x: -q,
+                y: 0,
+                z: q,
+                pad: 0,
+            },
+            Canvas3dVec3Q16 {
+                x: 0,
+                y: q,
+                z: q,
+                pad: 0,
+            },
+            Canvas3dVec3Q16 {
+                x: 0,
+                y: -q,
+                z: q,
+                pad: 0,
+            },
+        ];
+        let face_descs = [
+            canvas3d_plane_patch_ui2_face_desc(
+                dst,
+                dst.width,
+                dst.height,
+                canvas3d_vec3_add(center, forward),
+                right,
+                up,
+                constraints,
+                0xFF22_3355,
+            ),
+            canvas3d_plane_patch_ui2_face_desc(
+                dst,
+                dst.width,
+                dst.height,
+                canvas3d_vec3_sub(center, right),
+                forward,
+                up,
+                constraints,
+                0xFF2F_80ED,
+            ),
+            canvas3d_plane_patch_ui2_face_desc(
+                dst,
+                dst.width,
+                dst.height,
+                canvas3d_vec3_sub(center, up),
+                right,
+                forward,
+                constraints,
+                0xFF36_4A58,
+            ),
+            canvas3d_plane_patch_ui2_face_desc(
+                dst,
+                dst.width,
+                dst.height,
+                canvas3d_vec3_add(center, right),
+                up,
+                forward,
+                constraints,
+                0xFFFF_8844,
+            ),
+            canvas3d_plane_patch_ui2_face_desc(
+                dst,
+                dst.width,
+                dst.height,
+                canvas3d_vec3_add(center, up),
+                forward,
+                right,
+                constraints,
+                0xFFFF_D166,
+            ),
+            canvas3d_plane_patch_ui2_face_desc(
+                dst,
+                dst.width,
+                dst.height,
+                canvas3d_vec3_sub(center, forward),
+                up,
+                right,
+                constraints,
+                0xFF66_CCFF,
+            ),
+        ];
+        let mut visible_face_descs = [face_descs[0]; 6];
+        let mut visible_face_count = 0usize;
+        for desc in face_descs.iter().copied() {
+            if canvas3d_plane_patch_faces_camera(desc) {
+                visible_face_descs[visible_face_count] = desc;
+                visible_face_count += 1;
+            }
+        }
+        if visible_face_count == 0 {
+            visible_face_descs[0] = canvas3d_nearest_face_desc(face_descs);
+            visible_face_count = 1;
+        }
+        canvas3d_sort_face_descs_far_to_near(&mut visible_face_descs[..visible_face_count]);
+        let (group_x, group_y, group_z) = canvas3d_plane_patch_worklist_groups_for_descs(
+            &visible_face_descs[..visible_face_count],
+        );
+        unsafe {
+            core::ptr::write_bytes(
+                state.canvas3d_tmp_virt,
+                0,
+                CANVAS3D_PLANE_PATCH_WORKLIST_DESC_BYTES,
+            );
+            let desc_dst = state.canvas3d_tmp_virt as *mut Canvas3dPlanePatchWorklistRgba8Desc;
+            for (index, desc) in visible_face_descs[..visible_face_count]
+                .iter()
+                .copied()
+                .enumerate()
+            {
+                core::ptr::write_volatile(desc_dst.add(index), desc);
+            }
+        }
+        intel::dma_flush(state.canvas3d_tmp_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
+
+        let desc_ppgtt_ok = direct_rcs_map_ppgtt_kernel(
+            state,
+            CANVAS3D_TMP_GPU,
+            state.canvas3d_tmp_phys,
+            CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+        );
+        let params = Canvas3dPlanePatchWorklistRgba8Params {
+            dst_gpu: dst.gpu,
+            desc_gpu: CANVAS3D_TMP_GPU,
+            desc_base: 0,
+            desc_count: visible_face_count as u32,
+            group_x,
+            group_y,
+            group_z,
+        };
+        let batch_ok = desc_ppgtt_ok
+            && direct_rcs_encode_canvas3d_plane_patch_worklist_batch(
+                state,
+                upload,
+                params,
+                dst.bytes,
+                CANVAS3D_PLANE_PATCH_WORKLIST_DESC_BYTES,
+            );
+        let submit_start_tick = direct_rcs_now_tick();
+        let submitted_ok = batch_ok && direct_rcs_submit_batch(dev, state);
+        if submitted_ok {
+            submitted_count = submitted_count.saturating_add(1);
+        }
+        let (observed, submit_ms) = if submitted_ok {
+            direct_rcs_poll_result_slot_elapsed(
+                state,
+                CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER_SLOT,
+                CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER,
+                submit_start_tick,
+            )
+        } else {
+            (0, 0)
+        };
+        total_submit_ms = total_submit_ms.saturating_add(submit_ms);
+        max_submit_ms = max_submit_ms.max(submit_ms);
+        let pre_marker =
+            direct_rcs_read_result_slot(state, CANVAS3D_PLANE_PATCH_WORKLIST_PRE_MARKER_SLOT);
+        if observed == CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER
+            && pre_marker == CANVAS3D_PLANE_PATCH_WORKLIST_PRE_MARKER
+        {
+            retired_count = retired_count.saturating_add(1);
+        }
+    }
+
+    let retired = submitted_count > 0 && submitted_count == retired_count;
+    let elapsed_ms = direct_rcs_elapsed_ms_since(total_start_tick);
+    Some(GpgpuShellCube20ProjectResult {
+        ok: retired,
+        frames: 1,
+        submitted: submitted_count,
+        presented: 0,
+        visible_points: if retired { 6 } else { 0 },
+        stamped_pixels: 0,
+        duration_ms: 0,
+        elapsed_ms,
+        cadence_us: CADENCE_US,
+        total_submit_ms,
+        max_submit_ms,
+        primary_width: dst.width,
+        primary_height: dst.height,
+        canvas_xy: GpgpuPoint::new(0, 0),
+        vertex_count: 6,
+        radius_px: (half as u32).saturating_mul(dst.width.min(dst.height))
+            / CANVAS3D_PROJECT_Q16_ONE as u32,
+        last_angle_deg: frame.wrapping_mul(4) % 360,
+    })
+}
+
 fn canvas3d_vec3_add(a: Canvas3dVec3Q16, b: Canvas3dVec3Q16) -> Canvas3dVec3Q16 {
     Canvas3dVec3Q16 {
         x: a.x.saturating_add(b.x),
@@ -2162,7 +2459,7 @@ fn canvas3d_vec3_rotate_z_q16(vertex: Canvas3dVec3Q16, deg: u32) -> Canvas3dVec3
 }
 
 fn canvas3d_plane_patch_ui2_face_desc(
-    staging: GpgpuPresentStagingSurface,
+    surface: GpgpuRgba8Surface,
     width: u32,
     height: u32,
     origin_q16: Canvas3dVec3Q16,
@@ -2172,7 +2469,7 @@ fn canvas3d_plane_patch_ui2_face_desc(
     color_rgba: u32,
 ) -> Canvas3dPlanePatchWorklistRgba8Desc {
     Canvas3dPlanePatchWorklistRgba8Desc {
-        dst_pitch_bytes: staging.surface.pitch_bytes,
+        dst_pitch_bytes: surface.pitch_bytes,
         dst_width: width,
         dst_height: height,
         rect_x: 0,
@@ -2192,6 +2489,53 @@ fn canvas3d_plane_patch_ui2_face_desc(
         constraint_count: 4,
         color_rgba,
     }
+}
+
+fn canvas3d_plane_patch_faces_camera(desc: Canvas3dPlanePatchWorklistRgba8Desc) -> bool {
+    let normal = canvas3d_vec3_cross_q16(desc.axis_u_q16, desc.axis_v_q16);
+    canvas3d_vec3_dot_q16(normal, desc.origin_q16) < 0
+}
+
+fn canvas3d_nearest_face_desc(
+    descs: [Canvas3dPlanePatchWorklistRgba8Desc; 6],
+) -> Canvas3dPlanePatchWorklistRgba8Desc {
+    let mut nearest = descs[0];
+    for desc in descs.iter().copied().skip(1) {
+        if desc.origin_q16.z < nearest.origin_q16.z {
+            nearest = desc;
+        }
+    }
+    nearest
+}
+
+fn canvas3d_sort_face_descs_far_to_near(descs: &mut [Canvas3dPlanePatchWorklistRgba8Desc]) {
+    let mut index = 0usize;
+    while index < descs.len() {
+        let mut farthest = index;
+        let mut scan = index + 1;
+        while scan < descs.len() {
+            if descs[scan].origin_q16.z > descs[farthest].origin_q16.z {
+                farthest = scan;
+            }
+            scan += 1;
+        }
+        descs.swap(index, farthest);
+        index += 1;
+    }
+}
+
+fn canvas3d_vec3_cross_q16(a: Canvas3dVec3Q16, b: Canvas3dVec3Q16) -> Canvas3dVec3Q16 {
+    Canvas3dVec3Q16 {
+        x: ((((a.y as i64) * (b.z as i64)) - ((a.z as i64) * (b.y as i64))) >> 16) as i32,
+        y: ((((a.z as i64) * (b.x as i64)) - ((a.x as i64) * (b.z as i64))) >> 16) as i32,
+        z: ((((a.x as i64) * (b.y as i64)) - ((a.y as i64) * (b.x as i64))) >> 16) as i32,
+        pad: 0,
+    }
+}
+
+fn canvas3d_vec3_dot_q16(a: Canvas3dVec3Q16, b: Canvas3dVec3Q16) -> i64 {
+    (((a.x as i64) * (b.x as i64)) + ((a.y as i64) * (b.y as i64)) + ((a.z as i64) * (b.z as i64)))
+        >> 16
 }
 
 fn shell_cube20_translate_x_q16(frame: u32) -> i32 {

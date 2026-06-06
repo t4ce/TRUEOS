@@ -11,7 +11,8 @@ pub(crate) use test_gpgpu::{
     submit_canvas3d_plane_patch_worklist_rgba8_once, submit_canvas3d_plane_sample_rgba8_once,
     submit_canvas3d_project_once, submit_canvas3d_transform_smoke_once,
     ui2_canvas3d_archaeology_project_frame, ui2_canvas3d_archaeology_project_frame_in_rect,
-    ui2_canvas3d_archaeology_project_texture_frame, ui2_canvas3d_plane_patch_texture_frame,
+    ui2_canvas3d_archaeology_project_texture_frame, ui2_canvas3d_plane_patch_render_surface_frame,
+    ui2_canvas3d_plane_patch_texture_frame,
 };
 
 pub(crate) const COPY_RECT_RGBA8_KERNEL_NAME: &str = "copy_rect_rgba8";
@@ -250,8 +251,8 @@ pub(crate) const CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     0x0E, 0xB1, 0xFD, 0xB3, 0x63, 0x49, 0xBE, 0x28, 0xFD, 0x62, 0xD1, 0x36, 0x01, 0xA8, 0x58, 0x07,
 ];
 pub(crate) const CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
-    0xD6, 0xD7, 0x20, 0x60, 0xB6, 0xD3, 0x38, 0xD0, 0x85, 0x3D, 0x53, 0xCD, 0xB2, 0x9F, 0xB2, 0x1A,
-    0x57, 0x97, 0x0E, 0x19, 0xF8, 0x5F, 0xA4, 0x45, 0x56, 0x85, 0xE9, 0x8B, 0xFB, 0xF0, 0xA7, 0x42,
+    0xF3, 0x66, 0x04, 0xF0, 0x4A, 0x7D, 0xE6, 0x4D, 0xAC, 0x32, 0x92, 0xCF, 0x1B, 0xB4, 0x22, 0x0D,
+    0x15, 0x48, 0xDC, 0x1A, 0x35, 0xCA, 0xD8, 0x14, 0x73, 0x38, 0xCD, 0x76, 0x8F, 0x2B, 0x13, 0x23,
 ];
 
 const COPY_RECT_RGBA8_ADLS_GPU: u64 = 0x0D20_0000;
@@ -564,6 +565,8 @@ const CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER: u32 = 0xC0DE_3692;
 const CANVAS3D_PLANE_PATCH_WORKLIST_DESC_DWORDS: usize = 40;
 const CANVAS3D_PLANE_PATCH_WORKLIST_MAX_DESCS: usize = 16;
 const CANVAS3D_PLANE_PATCH_WORKLIST_TEST_DESCS: usize = 3;
+const CANVAS3D_PLANE_PATCH_WORKLIST_PIXELS_PER_LANE: u32 = 4;
+const CANVAS3D_PLANE_PATCH_WORKLIST_TILE_ROWS: u32 = 8;
 const CANVAS3D_PLANE_PATCH_WORKLIST_DESC_BYTES: usize = CANVAS3D_PLANE_PATCH_WORKLIST_MAX_DESCS
     * CANVAS3D_PLANE_PATCH_WORKLIST_DESC_DWORDS
     * core::mem::size_of::<u32>();
@@ -1035,6 +1038,9 @@ pub(crate) struct Canvas3dPlanePatchWorklistRgba8Params {
     pub(crate) desc_gpu: u64,
     pub(crate) desc_base: u32,
     pub(crate) desc_count: u32,
+    pub(crate) group_x: u32,
+    pub(crate) group_y: u32,
+    pub(crate) group_z: u32,
 }
 
 #[repr(C)]
@@ -1059,6 +1065,32 @@ pub(crate) struct Canvas3dPlanePatchWorklistRgba8Desc {
     pub(crate) constraint3_q16: Canvas3dVec3Q16,
     pub(crate) constraint_count: u32,
     pub(crate) color_rgba: u32,
+}
+
+pub(crate) fn canvas3d_plane_patch_worklist_groups_for_descs(
+    descs: &[Canvas3dPlanePatchWorklistRgba8Desc],
+) -> (u32, u32, u32) {
+    if descs.is_empty() {
+        return (1, 1, 1);
+    }
+
+    let mut max_width = 1u32;
+    let mut max_height = 1u32;
+    for desc in descs {
+        max_width = max_width.max(desc.rect_width);
+        max_height = max_height.max(desc.rect_height);
+    }
+
+    let tile_cols = max_width.saturating_add(CANVAS3D_PLANE_PATCH_WORKLIST_PIXELS_PER_LANE - 1)
+        / CANVAS3D_PLANE_PATCH_WORKLIST_PIXELS_PER_LANE;
+    let tile_rows = max_height.saturating_add(CANVAS3D_PLANE_PATCH_WORKLIST_TILE_ROWS - 1)
+        / CANVAS3D_PLANE_PATCH_WORKLIST_TILE_ROWS;
+    let work_items = tile_cols.saturating_mul(tile_rows);
+    let group_x = work_items.saturating_add(15) / 16;
+    let group_y = 1u32;
+    let group_z = 1u32;
+
+    (group_x.max(1), group_y.max(1), group_z.max(1))
 }
 
 #[repr(C)]
@@ -9140,6 +9172,9 @@ fn direct_rcs_encode_canvas3d_plane_patch_worklist_batch(
 ) -> bool {
     if params.desc_count == 0
         || params.desc_count as usize > CANVAS3D_PLANE_PATCH_WORKLIST_MAX_DESCS
+        || params.group_x == 0
+        || params.group_y == 0
+        || params.group_z == 0
         || CANVAS3D_PLANE_FILL_PAYLOAD_OFFSET_BYTES + CANVAS3D_PLANE_PATCH_WORKLIST_INDIRECT_BYTES
             > DIRECT_RCS_BATCH_BYTES
     {
@@ -9217,7 +9252,13 @@ fn direct_rcs_encode_canvas3d_plane_patch_worklist_batch(
         CANVAS3D_PLANE_PATCH_WORKLIST_PRE_MARKER_SLOT,
         CANVAS3D_PLANE_PATCH_WORKLIST_PRE_MARKER,
     );
-    ok &= direct_rcs_push_canvas3d_plane_patch_worklist_walker(batch, &mut cursor);
+    ok &= direct_rcs_push_canvas3d_plane_patch_worklist_walker(
+        batch,
+        &mut cursor,
+        params.group_x,
+        params.group_y,
+        params.group_z,
+    );
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
@@ -10710,12 +10751,13 @@ fn direct_rcs_write_canvas3d_plane_patch_worklist_payload(
             .add(CANVAS3D_PLANE_FILL_PAYLOAD_OFFSET_BYTES);
         core::ptr::write_bytes(payload, 0, CANVAS3D_PLANE_PATCH_WORKLIST_INDIRECT_BYTES);
         let dwords = payload as *mut u32;
-        core::ptr::write_volatile(dwords.add(3), 16);
-        core::ptr::write_volatile(dwords.add(4), 1);
-        core::ptr::write_volatile(dwords.add(5), 1);
-        core::ptr::write_volatile(dwords.add(8), 16);
-        core::ptr::write_volatile(dwords.add(9), 1);
-        core::ptr::write_volatile(dwords.add(10), 1);
+        let global_x = params.group_x.saturating_mul(16);
+        core::ptr::write_volatile(dwords.add(3), global_x);
+        core::ptr::write_volatile(dwords.add(4), params.group_y);
+        core::ptr::write_volatile(dwords.add(5), params.group_z);
+        core::ptr::write_volatile(dwords.add(8), global_x);
+        core::ptr::write_volatile(dwords.add(9), params.group_y);
+        core::ptr::write_volatile(dwords.add(10), params.group_z);
         core::ptr::write_volatile(dwords.add(12), params.dst_gpu as u32);
         core::ptr::write_volatile(dwords.add(13), (params.dst_gpu >> 32) as u32);
         core::ptr::write_volatile(dwords.add(14), params.dst_gpu as u32);
@@ -11451,6 +11493,9 @@ fn direct_rcs_push_canvas3d_plane_fill_walker(batch: &mut [u32], cursor: &mut us
 fn direct_rcs_push_canvas3d_plane_patch_worklist_walker(
     batch: &mut [u32],
     cursor: &mut usize,
+    group_x: u32,
+    group_y: u32,
+    group_z: u32,
 ) -> bool {
     direct_rcs_push(batch, cursor, GPGPU_WALKER_CMD)
         && direct_rcs_push(batch, cursor, 0)
@@ -11463,12 +11508,12 @@ fn direct_rcs_push_canvas3d_plane_patch_worklist_walker(
         )
         && direct_rcs_push(batch, cursor, 0)
         && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, 1)
+        && direct_rcs_push(batch, cursor, group_x)
         && direct_rcs_push(batch, cursor, 0)
         && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, 1)
+        && direct_rcs_push(batch, cursor, group_y)
         && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, GPGPU_WALKER_GROUP_Z_DIM)
+        && direct_rcs_push(batch, cursor, group_z)
         && direct_rcs_push(batch, cursor, GPGPU_WALKER_SIMD16_MASK)
         && direct_rcs_push(batch, cursor, GPGPU_WALKER_BOTTOM_MASK)
 }
