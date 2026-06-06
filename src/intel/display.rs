@@ -44,6 +44,17 @@ const TRANS_PSR_CTL_A: usize = 0x60800;
 const TRANS_PSR_STATUS_A: usize = 0x60840;
 const TRANS_PSR2_CTL_A: usize = 0x60900;
 const TRANS_PSR2_STATUS_A: usize = 0x60940;
+const HSW_PWR_WELL_CTL1: usize = 0x45400;
+const HSW_PWR_WELL_CTL2: usize = 0x45404;
+const HSW_PWR_WELL_CTL3: usize = 0x45408;
+const HSW_PWR_WELL_CTL4: usize = 0x4540C;
+const ICL_PWR_WELL_CTL_AUX1: usize = 0x45440;
+const ICL_PWR_WELL_CTL_AUX2: usize = 0x45444;
+const ICL_PWR_WELL_CTL_AUX4: usize = 0x4544C;
+const ICL_PWR_WELL_CTL_DDI1: usize = 0x45450;
+const ICL_PWR_WELL_CTL_DDI2: usize = 0x45454;
+const ICL_PWR_WELL_CTL_DDI4: usize = 0x4545C;
+const SKL_FUSE_STATUS: usize = 0x42000;
 const CUR_SURFLIVE_A: usize = 0x700AC;
 const PIPE_FRMCOUNT_A: usize = 0x70040;
 const PIPE_MMIO_STRIDE: usize = 0x1000;
@@ -64,11 +75,20 @@ const UNI_PLANE_OFFSET_OFF: usize = 0x24;
 const UNI_PLANE_SURFLIVE_OFF: usize = 0x2C;
 const UNI_PLANE_AUX_DIST_OFF: usize = 0x40;
 const UNI_PLANE_AUX_OFFSET_OFF: usize = 0x44;
+const UNI_PLANE_CUS_CTL_OFF: usize = 0x48;
 const UNI_PLANE_COLOR_CTL_OFF: usize = 0x4C;
+const UNI_PLANE_WM_0_OFF: usize = 0xC0;
+const UNI_PLANE_WM_LEVELS: usize = 8;
+const UNI_PLANE_WM_SAGV_OFF: usize = 0xD8;
+const UNI_PLANE_WM_SAGV_TRANS_OFF: usize = 0xDC;
+const UNI_PLANE_WM_TRANS_OFF: usize = 0xE8;
 const UNI_PLANE_BUF_CFG_OFF: usize = 0xFC;
 const PLANE_CTL_ENABLE: u32 = 1 << 31;
+const PLANE_CTL_ARB_SLOTS_MASK: u32 = 0x07 << 28;
+const PLANE_CTL_ARB_SLOTS_4BPP: u32 = 1 << 28;
 const PLANE_CTL_FORMAT_MASK_SKL: u32 = 0x0F << 24;
 const PLANE_CTL_ORDER_RGBX: u32 = 1 << 20;
+const PLANE_CTL_KEY_ENABLE_MASK: u32 = 0x03 << 21;
 const PLANE_CTL_TILED_MASK: u32 = 0x07 << 10;
 const PLANE_CTL_ROTATE_MASK: u32 = 0x03;
 const PLANE_CTL_FORMAT_XRGB_8888: u32 = 4 << 24;
@@ -77,6 +97,19 @@ const PLANE_COLOR_ALPHA_MASK: u32 = 0x03 << 4;
 const PLANE_COLOR_ALPHA_DISABLE: u32 = 0x00 << 4;
 const PLANE_COLOR_ALPHA_SW_PREMULT: u32 = 0x02 << 4;
 const PLANE_COLOR_ALPHA_HW_PREMULT: u32 = 0x03 << 4;
+const PLANE_COLOR_PLANE_GAMMA_DISABLE: u32 = 1 << 13;
+const PLANE_CUS_ENABLE: u32 = 1 << 31;
+const PLANE_CUS_Y_PLANE: u32 = 1 << 30;
+const PLANE_CUS_HPHASE_SIGN_NEGATIVE: u32 = 1 << 19;
+const PLANE_CUS_HPHASE_MASK: u32 = 0x03 << 16;
+const PLANE_CUS_VPHASE_SIGN_NEGATIVE: u32 = 1 << 15;
+const PLANE_CUS_VPHASE_MASK: u32 = 0x03 << 12;
+const PLANE_WM_ENABLE: u32 = 1 << 31;
+const PLANE_WM_LEVEL0_BOOT_SAFE: u32 = PLANE_WM_ENABLE | (2 << 14) | 160;
+const PLANE_DBUF_PRIMARY_STACK_START: u16 = 0;
+const PLANE_DBUF_PRIMARY_STACK_END: u16 = 511;
+const PLANE_DBUF_OVERLAY_STACK_START: u16 = 512;
+const PLANE_DBUF_OVERLAY_STACK_END: u16 = 1023;
 // PIPE_BOTTOM_COLOR is not A/R/G/B bytes. PRM layout is:
 // bit31 gamma enable, bit30 CSC enable, bits29:20 R/V, bits19:10 G/Y, bits9:0 B/U.
 // The color channels are unsigned U0.10, so white is 0x3FF in each channel.
@@ -105,6 +138,11 @@ const PRIMARY_REARM_RGB_PLANE_PROBE_SLOT_MASK: u8 = 1 << 2;
 const OVERLAY_PLANE_SLOT: usize = 1;
 const OVERLAY_MARGIN_X: u32 = 0;
 const OVERLAY_MARGIN_Y: u32 = 0;
+const OVERLAY_COMPOSITION_PROOF_MARKER_ENABLED: bool = true;
+const OVERLAY_COMPOSITION_PROOF_MARKER_SIZE: u32 = 96;
+const OVERLAY_COMPOSITION_PROOF_MARKER_GAP: u32 = 16;
+const OVERLAY_COMPOSITION_PROOF_MARKER_X: u32 = 48;
+const OVERLAY_COMPOSITION_PROOF_MARKER_Y: u32 = 48;
 const RGB_PLANE_PROBE_SLOT_COUNT: usize = 3;
 const RGB_PLANE_PROBE_GPU_BASE: u64 = crate::intel::GPU_VA_DISPLAY_OVERLAY_BASE;
 const RGB_PLANE_PROBE_GPU_STRIDE: u64 = 0x0010_0000;
@@ -210,6 +248,12 @@ struct OverlaySurface {
 
 unsafe impl Send for OverlaySurface {}
 unsafe impl Sync for OverlaySurface {}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum OverlayAlphaMode {
+    Opaque,
+    Straight,
+}
 
 #[derive(Copy, Clone)]
 struct RgbPlaneProbeSurface {
@@ -457,41 +501,12 @@ fn probe_hw_logo_decode() -> bool {
     submit_next_hw_logo_stage()
 }
 
-fn run_primary_display_warmup(surface: PrimarySurface, release_render_after: bool) -> bool {
-    if surface.virt.is_null()
-        || surface.width == 0
-        || surface.height == 0
-        || surface.pitch_bytes == 0
-    {
-        return false;
-    }
-
-    let byte_len = (surface.pitch_bytes as usize).saturating_mul(surface.height as usize);
-    if byte_len == 0 {
-        return false;
-    }
-
-    let color = 0x00FF_FFFF;
-    fill_surface_color(
-        surface.virt,
-        surface.pitch_bytes as usize,
-        surface.width,
-        surface.height,
-        color,
-    );
-    crate::intel::dma_flush(surface.virt, byte_len);
-    let ok = notify_primary_surface_present(surface, "display-warmup-white", byte_len);
-    crate::log!(
-        "intel/display: primary-display-warmup stage=display-warmup-white color=0x{:08X} bytes=0x{:X} presented={}\n",
-        color,
-        byte_len,
-        ok as u8
-    );
-
+fn run_primary_display_warmup(_surface: PrimarySurface, release_render_after: bool) -> bool {
     if release_render_after {
         mark_hw_logo_sequence_done("display-warmup");
     }
-    ok
+    crate::log!("intel/display: primary-display-warmup skipped reason=no-initial-white-fill\n");
+    true
 }
 
 pub(crate) async fn wait_hw_logo_sequence_done() {
@@ -994,6 +1009,251 @@ pub(crate) fn present_rgba_primary(
     notify_primary_surface_present(surface, reason, byte_len)
 }
 
+pub(crate) fn blend_rgba_primary_rect(
+    src: &[u8],
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+    src_x: u32,
+    src_y: u32,
+    dst_x: i32,
+    dst_y: i32,
+    width: u32,
+    height: u32,
+    reason: &str,
+) -> bool {
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+        return false;
+    };
+    if surface.virt.is_null()
+        || src_width == 0
+        || src_height == 0
+        || width == 0
+        || height == 0
+        || src_pitch_bytes < src_width as usize * 4
+    {
+        return false;
+    }
+
+    let mut sx = src_x as i64;
+    let mut sy = src_y as i64;
+    let mut dx = dst_x as i64;
+    let mut dy = dst_y as i64;
+    let mut w = width as i64;
+    let mut h = height as i64;
+
+    if dx < 0 {
+        sx -= dx;
+        w += dx;
+        dx = 0;
+    }
+    if dy < 0 {
+        sy -= dy;
+        h += dy;
+        dy = 0;
+    }
+
+    let src_max_w = src_width as i64 - sx;
+    let src_max_h = src_height as i64 - sy;
+    let dst_max_w = surface.width as i64 - dx;
+    let dst_max_h = surface.height as i64 - dy;
+    w = w.min(src_max_w).min(dst_max_w);
+    h = h.min(src_max_h).min(dst_max_h);
+    if sx < 0 || sy < 0 || w <= 0 || h <= 0 {
+        return false;
+    }
+
+    let dst_pitch = surface.pitch_bytes as usize;
+    let copy_w = w as usize;
+    let copy_h = h as usize;
+    let sx = sx as usize;
+    let sy = sy as usize;
+    let dx = dx as usize;
+    let dy = dy as usize;
+
+    for row in 0..copy_h {
+        let src_off = sy
+            .saturating_add(row)
+            .saturating_mul(src_pitch_bytes)
+            .saturating_add(sx.saturating_mul(4));
+        let Some(src_row) = src.get(src_off..src_off.saturating_add(copy_w.saturating_mul(4)))
+        else {
+            return false;
+        };
+        let dst_row_off = dy
+            .saturating_add(row)
+            .saturating_mul(dst_pitch)
+            .saturating_add(dx.saturating_mul(4));
+        let dst_row = unsafe { surface.virt.add(dst_row_off) as *mut u32 };
+        for col in 0..copy_w {
+            let src_px = col.saturating_mul(4);
+            let sa = src_row[src_px + 3] as u32;
+            if sa == 0 {
+                continue;
+            }
+            let sr = src_row[src_px] as u32;
+            let sg = src_row[src_px + 1] as u32;
+            let sb = src_row[src_px + 2] as u32;
+            let pixel = if sa == 0xFF {
+                u32::from_le_bytes([sb as u8, sg as u8, sr as u8, 0])
+            } else {
+                let dst = unsafe { core::ptr::read_volatile(dst_row.add(col)) };
+                let db = dst & 0xFF;
+                let dg = (dst >> 8) & 0xFF;
+                let dr = (dst >> 16) & 0xFF;
+                let inv = 255 - sa;
+                let out_r = (sr * sa + dr * inv + 127) / 255;
+                let out_g = (sg * sa + dg * inv + 127) / 255;
+                let out_b = (sb * sa + db * inv + 127) / 255;
+                u32::from_le_bytes([out_b as u8, out_g as u8, out_r as u8, 0])
+            };
+            unsafe {
+                core::ptr::write_volatile(dst_row.add(col), pixel);
+            }
+        }
+        crate::intel::dma_flush(unsafe { surface.virt.add(dst_row_off) }, copy_w.saturating_mul(4));
+    }
+
+    let flush_offset = dy.saturating_mul(dst_pitch).saturating_add(dx.saturating_mul(4));
+    let flush_bytes = copy_h
+        .saturating_sub(1)
+        .saturating_mul(dst_pitch)
+        .saturating_add(copy_w.saturating_mul(4));
+    notify_primary_surface_external_write(reason, flush_offset, flush_bytes)
+}
+
+pub(crate) fn blend_rgba_primary_rect_scaled(
+    src: &[u8],
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+    src_x: u32,
+    src_y: u32,
+    src_w: u32,
+    src_h: u32,
+    dst_x: i32,
+    dst_y: i32,
+    dst_w: u32,
+    dst_h: u32,
+    reason: &str,
+) -> bool {
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+        return false;
+    };
+    if surface.virt.is_null()
+        || src_width == 0
+        || src_height == 0
+        || src_w == 0
+        || src_h == 0
+        || dst_w == 0
+        || dst_h == 0
+        || src_pitch_bytes < src_width as usize * 4
+        || src_x.saturating_add(src_w) > src_width
+        || src_y.saturating_add(src_h) > src_height
+    {
+        return false;
+    }
+
+    let mut dx = dst_x as i64;
+    let mut dy = dst_y as i64;
+    let mut clip_x0 = 0i64;
+    let mut clip_y0 = 0i64;
+    let mut copy_w = dst_w as i64;
+    let mut copy_h = dst_h as i64;
+
+    if dx < 0 {
+        clip_x0 = -dx;
+        copy_w += dx;
+        dx = 0;
+    }
+    if dy < 0 {
+        clip_y0 = -dy;
+        copy_h += dy;
+        dy = 0;
+    }
+
+    copy_w = copy_w.min(surface.width as i64 - dx);
+    copy_h = copy_h.min(surface.height as i64 - dy);
+    if copy_w <= 0 || copy_h <= 0 {
+        return false;
+    }
+
+    let dst_pitch = surface.pitch_bytes as usize;
+    let dx = dx as usize;
+    let dy = dy as usize;
+    let copy_w = copy_w as usize;
+    let copy_h = copy_h as usize;
+    let clip_x0 = clip_x0 as usize;
+    let clip_y0 = clip_y0 as usize;
+    let src_x = src_x as usize;
+    let src_y = src_y as usize;
+    let src_w = src_w as usize;
+    let src_h = src_h as usize;
+    let dst_w = dst_w as usize;
+    let dst_h = dst_h as usize;
+
+    for row in 0..copy_h {
+        let mapped_y = src_y.saturating_add(
+            (clip_y0.saturating_add(row))
+                .saturating_mul(src_h)
+                .checked_div(dst_h)
+                .unwrap_or(0)
+                .min(src_h.saturating_sub(1)),
+        );
+        let dst_row_off = dy
+            .saturating_add(row)
+            .saturating_mul(dst_pitch)
+            .saturating_add(dx.saturating_mul(4));
+        let dst_row = unsafe { surface.virt.add(dst_row_off) as *mut u32 };
+        for col in 0..copy_w {
+            let mapped_x = src_x.saturating_add(
+                (clip_x0.saturating_add(col))
+                    .saturating_mul(src_w)
+                    .checked_div(dst_w)
+                    .unwrap_or(0)
+                    .min(src_w.saturating_sub(1)),
+            );
+            let src_off = mapped_y
+                .saturating_mul(src_pitch_bytes)
+                .saturating_add(mapped_x.saturating_mul(4));
+            let Some(src_px) = src.get(src_off..src_off.saturating_add(4)) else {
+                return false;
+            };
+            let sa = src_px[3] as u32;
+            if sa == 0 {
+                continue;
+            }
+            let sr = src_px[0] as u32;
+            let sg = src_px[1] as u32;
+            let sb = src_px[2] as u32;
+            let pixel = if sa == 0xFF {
+                u32::from_le_bytes([sb as u8, sg as u8, sr as u8, 0])
+            } else {
+                let dst = unsafe { core::ptr::read_volatile(dst_row.add(col)) };
+                let db = dst & 0xFF;
+                let dg = (dst >> 8) & 0xFF;
+                let dr = (dst >> 16) & 0xFF;
+                let inv = 255 - sa;
+                let out_r = (sr * sa + dr * inv + 127) / 255;
+                let out_g = (sg * sa + dg * inv + 127) / 255;
+                let out_b = (sb * sa + db * inv + 127) / 255;
+                u32::from_le_bytes([out_b as u8, out_g as u8, out_r as u8, 0])
+            };
+            unsafe {
+                core::ptr::write_volatile(dst_row.add(col), pixel);
+            }
+        }
+        crate::intel::dma_flush(unsafe { surface.virt.add(dst_row_off) }, copy_w.saturating_mul(4));
+    }
+
+    let flush_offset = dy.saturating_mul(dst_pitch).saturating_add(dx.saturating_mul(4));
+    let flush_bytes = copy_h
+        .saturating_sub(1)
+        .saturating_mul(dst_pitch)
+        .saturating_add(copy_w.saturating_mul(4));
+    notify_primary_surface_external_write(reason, flush_offset, flush_bytes)
+}
+
 pub(crate) fn present_rgba_primary_rot180(
     src: &[u8],
     src_width: u32,
@@ -1159,6 +1419,107 @@ pub(crate) fn present_rgba_overlay_top_right(
     src_height: u32,
     src_pitch_bytes: usize,
 ) -> bool {
+    present_rgba_overlay(src, src_width, src_height, src_pitch_bytes, None, false, "camera-overlay")
+}
+
+pub(crate) fn present_rgba_overlay_at(
+    src: &[u8],
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+    x: u32,
+    y: u32,
+    preserve_alpha: bool,
+    reason: &str,
+) -> bool {
+    present_rgba_overlay(
+        src,
+        src_width,
+        src_height,
+        src_pitch_bytes,
+        Some((x, y)),
+        preserve_alpha,
+        reason,
+    )
+}
+
+pub(crate) fn log_display_plane_ladder_probe(label: &str) {
+    crate::log!(
+        "intel/display: display-ladder label={} stage=read-only begin\n",
+        label
+    );
+    log_primary_surface_samples("display-ladder-primary");
+    log_active_pipe_raw_state("display-ladder");
+    log_pipe_live_scanout_state("display-ladder");
+    log_display_power_well_snapshot("display-ladder");
+    crate::log!(
+        "intel/display: display-ladder label={} stage=read-only end\n",
+        label
+    );
+}
+
+fn log_active_pipe_raw_state(label: &str) {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return;
+    };
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+        return;
+    };
+    let pipe = surface.pipe;
+    let pipeconf_off = PIPECONF_A + pipe.slot.saturating_mul(PIPE_MMIO_STRIDE);
+    let htotal_off = TRANS_HTOTAL_A + pipe.slot.saturating_mul(PIPE_MMIO_STRIDE);
+    let hsync_off = TRANS_HSYNC_A + pipe.slot.saturating_mul(PIPE_MMIO_STRIDE);
+    let vtotal_off = TRANS_VTOTAL_A + pipe.slot.saturating_mul(PIPE_MMIO_STRIDE);
+    let vsync_off = TRANS_VSYNC_A + pipe.slot.saturating_mul(PIPE_MMIO_STRIDE);
+    let ddi_func_ctl_off = TRANS_DDI_FUNC_CTL_A + pipe.slot.saturating_mul(PIPE_MMIO_STRIDE);
+    let psr_ctl_off = TRANS_PSR_CTL_A + pipe.slot.saturating_mul(PIPE_MMIO_STRIDE);
+    let psr_status_off = TRANS_PSR_STATUS_A + pipe.slot.saturating_mul(PIPE_MMIO_STRIDE);
+    let psr2_ctl_off = TRANS_PSR2_CTL_A + pipe.slot.saturating_mul(PIPE_MMIO_STRIDE);
+    let psr2_status_off = TRANS_PSR2_STATUS_A + pipe.slot.saturating_mul(PIPE_MMIO_STRIDE);
+    let cur_surflive_off = CUR_SURFLIVE_A + pipe.slot.saturating_mul(PIPE_MMIO_STRIDE);
+    let frmcount_off = PIPE_FRMCOUNT_A + pipe.slot.saturating_mul(PIPE_MMIO_STRIDE);
+    let bottom_color_off = SKL_BOTTOM_COLOR_A + pipe.slot.saturating_mul(SKL_BOTTOM_COLOR_PIPE_STRIDE);
+
+    crate::log!(
+        "intel/display: pipe-raw label={} pipe={} pipe_src@0x{:05X}=0x{:08X} pipeconf@0x{:05X}=0x{:08X} frm@0x{:05X}=0x{:08X} cur_live@0x{:05X}=0x{:08X} bottom@0x{:05X}=0x{:08X} ddi_ctl@0x{:05X}=0x{:08X} htotal@0x{:05X}=0x{:08X} hsync@0x{:05X}=0x{:08X} vtotal@0x{:05X}=0x{:08X} vsync@0x{:05X}=0x{:08X} psr=0x{:08X}/0x{:08X} psr2=0x{:08X}/0x{:08X}\n",
+        label,
+        pipe.name,
+        pipe.pipe_src_off,
+        crate::intel::mmio_read(dev, pipe.pipe_src_off),
+        pipeconf_off,
+        crate::intel::mmio_read(dev, pipeconf_off),
+        frmcount_off,
+        crate::intel::mmio_read(dev, frmcount_off),
+        cur_surflive_off,
+        crate::intel::mmio_read(dev, cur_surflive_off),
+        bottom_color_off,
+        crate::intel::mmio_read(dev, bottom_color_off),
+        ddi_func_ctl_off,
+        crate::intel::mmio_read(dev, ddi_func_ctl_off),
+        htotal_off,
+        crate::intel::mmio_read(dev, htotal_off),
+        hsync_off,
+        crate::intel::mmio_read(dev, hsync_off),
+        vtotal_off,
+        crate::intel::mmio_read(dev, vtotal_off),
+        vsync_off,
+        crate::intel::mmio_read(dev, vsync_off),
+        crate::intel::mmio_read(dev, psr_ctl_off),
+        crate::intel::mmio_read(dev, psr_status_off),
+        crate::intel::mmio_read(dev, psr2_ctl_off),
+        crate::intel::mmio_read(dev, psr2_status_off)
+    );
+}
+
+fn present_rgba_overlay(
+    src: &[u8],
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+    position: Option<(u32, u32)>,
+    preserve_alpha: bool,
+    reason: &str,
+) -> bool {
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };
@@ -1169,28 +1530,47 @@ pub(crate) fn present_rgba_overlay_top_right(
     let Some(surface) = ensure_overlay_surface(dev, src_width, src_height) else {
         return false;
     };
+    let alpha = if preserve_alpha {
+        OverlayAlphaMode::Straight
+    } else {
+        OverlayAlphaMode::Opaque
+    };
 
-    if !copy_rgba_into_overlay(surface, src, src_width, src_height, src_pitch_bytes) {
+    if !copy_rgba_into_overlay(surface, src, src_width, src_height, src_pitch_bytes, alpha) {
         return false;
+    }
+    if reason == "gfx-full-scene-alpha-overlay" {
+        stamp_overlay_composition_proof_marker(surface, alpha, reason);
     }
 
     let byte_len = (surface.pitch_bytes as usize).saturating_mul(surface.height as usize);
     crate::intel::dma_flush(surface.virt, byte_len);
 
-    if overlay_plane_needs_rearm(dev, surface) {
-        if !arm_overlay_plane(dev, surface, "camera-overlay") {
+    let (pos_x, pos_y) = position
+        .map(|(x, y)| overlay_plane_clamped_position(surface, x, y))
+        .unwrap_or_else(|| overlay_plane_top_right_position(surface));
+    if overlay_plane_needs_rearm(dev, surface, pos_x, pos_y, alpha) {
+        program_two_plane_stack_resources(dev, surface.pipe, surface.plane_slot, reason);
+        if !arm_overlay_plane(dev, surface, pos_x, pos_y, alpha, reason) {
             return false;
         }
     }
 
     let seq = OVERLAY_PRESENT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     if seq <= 8 || seq.is_multiple_of(60) {
+        log_primary_surface_samples("under-overlay-present");
+        log_pipe_live_scanout_state("overlay-present");
+        log_display_power_well_snapshot("overlay-present");
         let plane_base = overlay_plane_base(surface.pipe, surface.plane_slot);
         crate::log!(
-            "intel/display: overlay-present seq={} pipe={} slot={} size={}x{} pitch=0x{:X} gpu=0x{:X} phys=0x{:X} surf=0x{:08X} surf_live=0x{:08X}\n",
+            "intel/display: overlay-present seq={} reason={} pipe={} slot={} alpha={:?} pos={}x{} size={}x{} pitch=0x{:X} gpu=0x{:X} phys=0x{:X} surf=0x{:08X} surf_live=0x{:08X}\n",
             seq,
+            reason,
             surface.pipe.name,
             surface.plane_slot,
+            alpha,
+            pos_x,
+            pos_y,
             surface.width,
             surface.height,
             surface.pitch_bytes,
@@ -1694,10 +2074,13 @@ fn primary_plane_ctl_enabled(ctl_before: u32) -> u32 {
     };
     (ctl_before
         & !(PLANE_CTL_ENABLE
+            | PLANE_CTL_ARB_SLOTS_MASK
             | PLANE_CTL_FORMAT_MASK_SKL
+            | PLANE_CTL_KEY_ENABLE_MASK
             | PLANE_CTL_TILED_MASK
             | PLANE_CTL_ORDER_RGBX))
         | PLANE_CTL_ENABLE
+        | PLANE_CTL_ARB_SLOTS_4BPP
         | PLANE_CTL_FORMAT_XRGB_8888
         | PLANE_CTL_TILED_LINEAR
         | order_bits
@@ -1707,8 +2090,91 @@ fn overlay_plane_ctl_enabled(ctl_before: u32) -> u32 {
     primary_plane_ctl_enabled(ctl_before)
 }
 
-fn plane_color_ctl_alpha_disabled(color_ctl: u32) -> u32 {
-    color_ctl & !PLANE_COLOR_ALPHA_MASK
+fn plane_color_ctl_alpha(color_ctl: u32, alpha: OverlayAlphaMode) -> u32 {
+    let alpha_bits = match alpha {
+        OverlayAlphaMode::Opaque => PLANE_COLOR_ALPHA_DISABLE,
+        OverlayAlphaMode::Straight => PLANE_COLOR_ALPHA_SW_PREMULT,
+    };
+    (color_ctl & !PLANE_COLOR_ALPHA_MASK) | PLANE_COLOR_PLANE_GAMMA_DISABLE | alpha_bits
+}
+
+fn plane_buf_cfg_value(start: u16, end_inclusive: u16) -> u32 {
+    ((u32::from(end_inclusive) & 0x1FFF) << 16) | (u32::from(start) & 0x1FFF)
+}
+
+fn program_plane_watermark_boot_safe(dev: crate::intel::Dev, plane_base: usize, enable: bool) {
+    crate::intel::mmio_write(
+        dev,
+        plane_base + UNI_PLANE_WM_0_OFF,
+        if enable { PLANE_WM_LEVEL0_BOOT_SAFE } else { 0 },
+    );
+
+    let mut level = 1usize;
+    while level < UNI_PLANE_WM_LEVELS {
+        crate::intel::mmio_write(dev, plane_base + UNI_PLANE_WM_0_OFF + level * 4, 0);
+        level += 1;
+    }
+
+    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_WM_TRANS_OFF, 0);
+    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_WM_SAGV_OFF, 0);
+    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_WM_SAGV_TRANS_OFF, 0);
+}
+
+fn program_plane_buf_cfg(
+    dev: crate::intel::Dev,
+    plane_base: usize,
+    start: u16,
+    end_inclusive: u16,
+) -> (u32, u32) {
+    let before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_BUF_CFG_OFF);
+    let after = plane_buf_cfg_value(start, end_inclusive);
+    if before != after {
+        crate::intel::mmio_write(dev, plane_base + UNI_PLANE_BUF_CFG_OFF, after);
+    }
+    (before, crate::intel::mmio_read(dev, plane_base + UNI_PLANE_BUF_CFG_OFF))
+}
+
+fn program_two_plane_stack_resources(
+    dev: crate::intel::Dev,
+    pipe: PipeInfo,
+    overlay_slot: usize,
+    reason: &str,
+) {
+    let primary_base = overlay_plane_base(pipe, 0);
+    let overlay_base = overlay_plane_base(pipe, overlay_slot);
+
+    program_plane_watermark_boot_safe(dev, primary_base, true);
+    let (primary_buf_before, primary_buf_after) = program_plane_buf_cfg(
+        dev,
+        primary_base,
+        PLANE_DBUF_PRIMARY_STACK_START,
+        PLANE_DBUF_PRIMARY_STACK_END,
+    );
+
+    if primary_buf_before != primary_buf_after {
+        let _ = wait_for_pipe_next_frame(dev, pipe);
+    }
+
+    program_plane_watermark_boot_safe(dev, overlay_base, true);
+    let (overlay_buf_before, overlay_buf_after) = program_plane_buf_cfg(
+        dev,
+        overlay_base,
+        PLANE_DBUF_OVERLAY_STACK_START,
+        PLANE_DBUF_OVERLAY_STACK_END,
+    );
+
+    crate::log!(
+        "intel/display: plane-stack-resources reason={} pipe={} primary_slot=0 buf=0x{:08X}=>0x{:08X} wm0=0x{:08X} overlay_slot={} buf=0x{:08X}=>0x{:08X} wm0=0x{:08X}\n",
+        reason,
+        pipe.name,
+        primary_buf_before,
+        primary_buf_after,
+        crate::intel::mmio_read(dev, primary_base + UNI_PLANE_WM_0_OFF),
+        overlay_slot,
+        overlay_buf_before,
+        overlay_buf_after,
+        crate::intel::mmio_read(dev, overlay_base + UNI_PLANE_WM_0_OFF),
+    );
 }
 
 fn disable_non_primary_universal_planes(dev: crate::intel::Dev, pipe: PipeInfo, reason: &str) {
@@ -1720,7 +2186,7 @@ fn disable_non_primary_universal_planes(dev: crate::intel::Dev, pipe: PipeInfo, 
         let live_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURFLIVE_OFF);
         let color_ctl_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_COLOR_CTL_OFF);
         let ctl_disabled = ctl_before & !PLANE_CTL_ENABLE;
-        let color_ctl_disabled = plane_color_ctl_alpha_disabled(color_ctl_before);
+        let color_ctl_disabled = plane_color_ctl_alpha(color_ctl_before, OverlayAlphaMode::Opaque);
 
         crate::intel::mmio_write(dev, plane_base + UNI_PLANE_CTL_OFF, ctl_disabled);
         crate::intel::mmio_write(dev, plane_base + UNI_PLANE_SURF_OFF, 0);
@@ -1875,7 +2341,7 @@ fn arm_rgb_plane_probe(
     let ctl_enabled = overlay_plane_ctl_enabled(ctl_before);
     let color_ctl_off = plane_base + UNI_PLANE_COLOR_CTL_OFF;
     let color_ctl_before = crate::intel::mmio_read(dev, color_ctl_off);
-    let color_ctl_enabled = plane_color_ctl_alpha_disabled(color_ctl_before);
+    let color_ctl_enabled = plane_color_ctl_alpha(color_ctl_before, OverlayAlphaMode::Opaque);
     let surf_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURF_OFF);
     let live_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURFLIVE_OFF);
 
@@ -1978,7 +2444,7 @@ fn program_primary_plane_and_wait(
     let ctl_enabled = primary_plane_ctl_enabled(ctl_before);
     let color_ctl_off = pipe.plane_ctl_off + UNI_PLANE_COLOR_CTL_OFF;
     let color_ctl_before = crate::intel::mmio_read(dev, color_ctl_off);
-    let color_ctl_enabled = plane_color_ctl_alpha_disabled(color_ctl_before);
+    let color_ctl_enabled = plane_color_ctl_alpha(color_ctl_before, OverlayAlphaMode::Opaque);
 
     if PRIMARY_REARM_PRESERVE_NON_PRIMARY_PLANES {
         intel_display_verbose_log!(
@@ -2110,7 +2576,7 @@ pub(crate) fn log_pipe_live_scanout_state(label: &str) {
     let pipe = surface.pipe;
     let pipe_src_raw = crate::intel::mmio_read(dev, pipe.pipe_src_off);
     let (pipe_w, pipe_h) = decode_pipe_src(pipe_src_raw).unwrap_or((0, 0));
-    intel_display_verbose_log!(
+    crate::log!(
         "intel/display: live-scanout label={} pipe={} pipe_src=0x{:08X} dims={}x{} primary_surf_gpu=0x{:08X}\n",
         label,
         pipe.name,
@@ -2127,12 +2593,24 @@ pub(crate) fn log_pipe_live_scanout_state(label: &str) {
         let stride = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_STRIDE_OFF);
         let pos = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_POS_OFF);
         let size = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SIZE_OFF);
+        let keyval = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYVAL_OFF);
+        let keymsk = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYMSK_OFF);
         let surf = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURF_OFF);
+        let keymax = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYMAX_OFF);
+        let offset = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_OFFSET_OFF);
         let surf_live = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURFLIVE_OFF);
+        let aux_dist = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_AUX_DIST_OFF);
+        let aux_offset = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_AUX_OFFSET_OFF);
+        let cus_ctl = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_CUS_CTL_OFF);
         let color_ctl = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_COLOR_CTL_OFF);
+        let wm0 = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_WM_0_OFF);
+        let wm_sagv = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_WM_SAGV_OFF);
+        let wm_sagv_trans =
+            crate::intel::mmio_read(dev, plane_base + UNI_PLANE_WM_SAGV_TRANS_OFF);
+        let wm_trans = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_WM_TRANS_OFF);
         let buf_cfg = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_BUF_CFG_OFF);
-        intel_display_verbose_log!(
-            "intel/display: live-plane label={} pipe={} slot={} enabled={} format={} tiled={} rot={} rgbx={} stride=0x{:08X} pos={}x{} size={}x{} surf=0x{:08X} surf_live=0x{:08X} color_ctl=0x{:08X} color_alpha={} buf_cfg=0x{:08X}\n",
+        crate::log!(
+            "intel/display: live-plane label={} pipe={} slot={} enabled={} format={} tiled={} rot={} rgbx={} stride=0x{:08X} pos={}x{} size={}x{} surf=0x{:08X} surf_live=0x{:08X} cus_ctl=0x{:08X} cus_en={} cus_y={} cus_h={} cus_v={} color_ctl=0x{:08X} color_alpha={} buf_cfg=0x{:08X}\n",
             label,
             pipe.name,
             slot,
@@ -2148,12 +2626,110 @@ pub(crate) fn log_pipe_live_scanout_state(label: &str) {
             decode_xy_y(size).saturating_add(1),
             surf,
             surf_live,
+            cus_ctl,
+            ((cus_ctl & PLANE_CUS_ENABLE) != 0) as u8,
+            ((cus_ctl & PLANE_CUS_Y_PLANE) != 0) as u8,
+            decode_plane_cus_phase(cus_ctl, PLANE_CUS_HPHASE_MASK, PLANE_CUS_HPHASE_SIGN_NEGATIVE),
+            decode_plane_cus_phase(cus_ctl, PLANE_CUS_VPHASE_MASK, PLANE_CUS_VPHASE_SIGN_NEGATIVE),
             color_ctl,
             decode_plane_color_alpha(color_ctl),
             buf_cfg
         );
+        crate::log!(
+            "intel/display: plane-raw label={} pipe={} slot={} base=0x{:05X} ctl=0x{:08X} stride=0x{:08X} pos=0x{:08X} size=0x{:08X} key=0x{:08X}/0x{:08X}/0x{:08X} offset=0x{:08X} surf=0x{:08X} live=0x{:08X} aux=0x{:08X}/0x{:08X} cus=0x{:08X} color=0x{:08X} wm0=0x{:08X} wm_sagv=0x{:08X} wm_sagv_trans=0x{:08X} wm_trans=0x{:08X} buf=0x{:08X}\n",
+            label,
+            pipe.name,
+            slot,
+            plane_base,
+            ctl,
+            stride,
+            pos,
+            size,
+            keyval,
+            keymsk,
+            keymax,
+            offset,
+            surf,
+            surf_live,
+            aux_dist,
+            aux_offset,
+            cus_ctl,
+            color_ctl,
+            wm0,
+            wm_sagv,
+            wm_sagv_trans,
+            wm_trans,
+            buf_cfg
+        );
         slot += 1;
     }
+}
+
+fn log_display_power_well_snapshot(label: &str) {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return;
+    };
+
+    let main_bios = crate::intel::mmio_read(dev, HSW_PWR_WELL_CTL1);
+    let main_driver = crate::intel::mmio_read(dev, HSW_PWR_WELL_CTL2);
+    let main_kvmr = crate::intel::mmio_read(dev, HSW_PWR_WELL_CTL3);
+    let main_debug = crate::intel::mmio_read(dev, HSW_PWR_WELL_CTL4);
+    let aux_bios = crate::intel::mmio_read(dev, ICL_PWR_WELL_CTL_AUX1);
+    let aux_driver = crate::intel::mmio_read(dev, ICL_PWR_WELL_CTL_AUX2);
+    let aux_debug = crate::intel::mmio_read(dev, ICL_PWR_WELL_CTL_AUX4);
+    let ddi_bios = crate::intel::mmio_read(dev, ICL_PWR_WELL_CTL_DDI1);
+    let ddi_driver = crate::intel::mmio_read(dev, ICL_PWR_WELL_CTL_DDI2);
+    let ddi_debug = crate::intel::mmio_read(dev, ICL_PWR_WELL_CTL_DDI4);
+    let fuse = crate::intel::mmio_read(dev, SKL_FUSE_STATUS);
+
+    crate::log!(
+        "intel/display: power-wells label={} main_ctl=[bios=0x{:08X},driver=0x{:08X},kvmr=0x{:08X},debug=0x{:08X}] main_state_pg1..5=[{},{},{},{},{}] main_req_pg1..5=[{},{},{},{},{}] aux_ctl=[bios=0x{:08X},driver=0x{:08X},debug=0x{:08X}] ddi_ctl=[bios=0x{:08X},driver=0x{:08X},debug=0x{:08X}] fuse=0x{:08X} fuse_pg1..5=[{},{},{},{},{}]\n",
+        label,
+        main_bios,
+        main_driver,
+        main_kvmr,
+        main_debug,
+        power_well_state_bit(main_driver, 0),
+        power_well_state_bit(main_driver, 1),
+        power_well_state_bit(main_driver, 2),
+        power_well_state_bit(main_driver, 3),
+        power_well_state_bit(main_driver, 4),
+        power_well_request_bit(main_driver, 0),
+        power_well_request_bit(main_driver, 1),
+        power_well_request_bit(main_driver, 2),
+        power_well_request_bit(main_driver, 3),
+        power_well_request_bit(main_driver, 4),
+        aux_bios,
+        aux_driver,
+        aux_debug,
+        ddi_bios,
+        ddi_driver,
+        ddi_debug,
+        fuse,
+        fuse_pg_distribution_done(fuse, 1),
+        fuse_pg_distribution_done(fuse, 2),
+        fuse_pg_distribution_done(fuse, 3),
+        fuse_pg_distribution_done(fuse, 4),
+        fuse_pg_distribution_done(fuse, 5)
+    );
+}
+
+#[inline]
+fn power_well_state_bit(raw: u32, index: u32) -> u8 {
+    ((raw >> index.saturating_mul(2)) & 0x1) as u8
+}
+
+#[inline]
+fn power_well_request_bit(raw: u32, index: u32) -> u8 {
+    ((raw >> index.saturating_mul(2).saturating_add(1)) & 0x1) as u8
+}
+
+#[inline]
+fn fuse_pg_distribution_done(raw: u32, pg: u32) -> u8 {
+    if pg > 27 {
+        return 0;
+    }
+    ((raw >> (27 - pg)) & 0x1) as u8
 }
 
 fn log_primary_scanout_pte_window(dev: crate::intel::Dev, label: &str, byte_len: usize) {
@@ -2184,7 +2760,7 @@ fn overlay_plane_base(pipe: PipeInfo, plane_slot: usize) -> usize {
     pipe.plane_ctl_off + plane_slot.saturating_mul(UNI_PLANE_SLOT_STRIDE)
 }
 
-fn overlay_plane_position(surface: OverlaySurface) -> (u32, u32) {
+fn overlay_plane_top_right_position(surface: OverlaySurface) -> (u32, u32) {
     let (scanout_w, scanout_h) = active_scanout_dimensions()
         .or_else(|| {
             PRIMARY_SURFACE
@@ -2198,6 +2774,21 @@ fn overlay_plane_position(surface: OverlaySurface) -> (u32, u32) {
         .saturating_sub(OVERLAY_MARGIN_X);
     let y = OVERLAY_MARGIN_Y.min(scanout_h.saturating_sub(surface.height));
     (x, y)
+}
+
+fn overlay_plane_clamped_position(surface: OverlaySurface, x: u32, y: u32) -> (u32, u32) {
+    let (scanout_w, scanout_h) = active_scanout_dimensions()
+        .or_else(|| {
+            PRIMARY_SURFACE
+                .lock()
+                .as_ref()
+                .map(|primary| (primary.width, primary.height))
+        })
+        .unwrap_or((surface.width, surface.height));
+    (
+        x.min(scanout_w.saturating_sub(surface.width)),
+        y.min(scanout_h.saturating_sub(surface.height)),
+    )
 }
 
 fn ensure_overlay_surface(
@@ -2273,6 +2864,7 @@ fn copy_rgba_into_overlay(
     src_width: u32,
     src_height: u32,
     src_pitch_bytes: usize,
+    alpha: OverlayAlphaMode,
 ) -> bool {
     let dst_pitch = surface.pitch_bytes as usize;
     if src_width != surface.width || src_height != surface.height {
@@ -2290,12 +2882,16 @@ fn copy_rgba_into_overlay(
         let dst_row = unsafe { surface.virt.add(row_idx.saturating_mul(dst_pitch)) as *mut u32 };
         for col_idx in 0..(src_width as usize) {
             let src_off = col_idx.saturating_mul(4);
-            let pixel = u32::from_le_bytes([
-                src_row[src_off],
-                src_row[src_off + 1],
-                src_row[src_off + 2],
-                src_row[src_off + 3],
-            ]) & 0x00FF_FFFF;
+            let r = src_row[src_off];
+            let g = src_row[src_off + 1];
+            let b = src_row[src_off + 2];
+            let a = src_row[src_off + 3];
+            let pixel = match alpha {
+                OverlayAlphaMode::Opaque => u32::from_le_bytes([b, g, r, 0]),
+                OverlayAlphaMode::Straight => {
+                    u32::from_le_bytes([premul_u8(b, a), premul_u8(g, a), premul_u8(r, a), a])
+                }
+            };
             unsafe {
                 core::ptr::write_volatile(dst_row.add(col_idx), pixel);
             }
@@ -2305,9 +2901,127 @@ fn copy_rgba_into_overlay(
     true
 }
 
-fn overlay_plane_needs_rearm(dev: crate::intel::Dev, surface: OverlaySurface) -> bool {
+#[inline]
+fn premul_u8(color: u8, alpha: u8) -> u8 {
+    (((color as u16) * (alpha as u16) + 127) / 255) as u8
+}
+
+fn stamp_overlay_composition_proof_marker(
+    surface: OverlaySurface,
+    alpha: OverlayAlphaMode,
+    reason: &str,
+) -> bool {
+    if !OVERLAY_COMPOSITION_PROOF_MARKER_ENABLED || alpha != OverlayAlphaMode::Straight {
+        return false;
+    }
+
+    let size = OVERLAY_COMPOSITION_PROOF_MARKER_SIZE;
+    let gap = OVERLAY_COMPOSITION_PROOF_MARKER_GAP;
+    let x0 = OVERLAY_COMPOSITION_PROOF_MARKER_X;
+    let y0 = OVERLAY_COMPOSITION_PROOF_MARKER_Y;
+    let x1 = x0.saturating_add(size).saturating_add(gap);
+    let x2 = x1.saturating_add(size).saturating_add(gap);
+    if x2.saturating_add(size) > surface.width || y0.saturating_add(size) > surface.height {
+        crate::log!(
+            "intel/display: overlay-proof skipped reason={} cause=surface-too-small size={}x{} marker={}x{}@{},{}\n",
+            reason,
+            surface.width,
+            surface.height,
+            size.saturating_mul(3).saturating_add(gap.saturating_mul(2)),
+            size,
+            x0,
+            y0
+        );
+        return false;
+    }
+
+    let transparent = overlay_scanout_pixel_bgra_premul(0xFF, 0x00, 0xFF, 0x00);
+    let half_red = overlay_scanout_pixel_bgra_premul(0xFF, 0x00, 0x00, 0x80);
+    let opaque_green = overlay_scanout_pixel_bgra_premul(0x00, 0xFF, 0x00, 0xFF);
+    fill_overlay_rect(surface, x0, y0, size, size, transparent);
+    fill_overlay_rect(surface, x1, y0, size, size, half_red);
+    fill_overlay_rect(surface, x2, y0, size, size, opaque_green);
+
+    let cy = y0.saturating_add(size / 2);
+    let transparent_cx = x0.saturating_add(size / 2);
+    let half_red_cx = x1.saturating_add(size / 2);
+    let opaque_green_cx = x2.saturating_add(size / 2);
+    let overlay_transparent = sample_overlay_surface_pixel(surface, transparent_cx, cy);
+    let overlay_half_red = sample_overlay_surface_pixel(surface, half_red_cx, cy);
+    let overlay_opaque_green = sample_overlay_surface_pixel(surface, opaque_green_cx, cy);
+    let primary_transparent =
+        sample_primary_surface_pixel(transparent_cx, cy).unwrap_or_default();
+    let primary_half_red = sample_primary_surface_pixel(half_red_cx, cy).unwrap_or_default();
+    let primary_opaque_green = sample_primary_surface_pixel(opaque_green_cx, cy).unwrap_or_default();
+
+    crate::log!(
+        "intel/display: overlay-proof reason={} pipe={} slot={} badge={}x{}@{},{} cells=transparent,half-red,opaque-green overlay=[0x{:08X},0x{:08X},0x{:08X}] primary_under=[0x{:08X},0x{:08X},0x{:08X}] expectation=alpha-ok:underlay/red-blend/green alpha-ignored:black/dark-red/green\n",
+        reason,
+        surface.pipe.name,
+        surface.plane_slot,
+        size.saturating_mul(3).saturating_add(gap.saturating_mul(2)),
+        size,
+        x0,
+        y0,
+        overlay_transparent,
+        overlay_half_red,
+        overlay_opaque_green,
+        primary_transparent,
+        primary_half_red,
+        primary_opaque_green
+    );
+    true
+}
+
+#[inline]
+fn overlay_scanout_pixel_bgra_premul(r: u8, g: u8, b: u8, a: u8) -> u32 {
+    u32::from_le_bytes([premul_u8(b, a), premul_u8(g, a), premul_u8(r, a), a])
+}
+
+fn fill_overlay_rect(surface: OverlaySurface, x: u32, y: u32, width: u32, height: u32, pixel: u32) {
+    if surface.virt.is_null() || surface.pitch_bytes < surface.width.saturating_mul(4) {
+        return;
+    }
+    let x0 = x.min(surface.width);
+    let y0 = y.min(surface.height);
+    let x1 = x0.saturating_add(width).min(surface.width);
+    let y1 = y0.saturating_add(height).min(surface.height);
+    let pitch_pixels = (surface.pitch_bytes as usize) / 4;
+    for row_idx in y0 as usize..y1 as usize {
+        let row = unsafe { (surface.virt as *mut u32).add(row_idx.saturating_mul(pitch_pixels)) };
+        for col_idx in x0 as usize..x1 as usize {
+            unsafe {
+                core::ptr::write_volatile(row.add(col_idx), pixel);
+            }
+        }
+    }
+}
+
+fn sample_overlay_surface_pixel(surface: OverlaySurface, x: u32, y: u32) -> u32 {
+    if surface.virt.is_null()
+        || x >= surface.width
+        || y >= surface.height
+        || surface.pitch_bytes < surface.width.saturating_mul(4)
+    {
+        return 0;
+    }
+    let pitch_pixels = (surface.pitch_bytes as usize) / 4;
+    unsafe {
+        core::ptr::read_volatile(
+            (surface.virt as *const u32)
+                .add((y as usize).saturating_mul(pitch_pixels).saturating_add(x as usize)),
+        )
+    }
+}
+
+fn overlay_plane_needs_rearm(
+    dev: crate::intel::Dev,
+    surface: OverlaySurface,
+    pos_x: u32,
+    pos_y: u32,
+    alpha: OverlayAlphaMode,
+) -> bool {
     let plane_base = overlay_plane_base(surface.pipe, surface.plane_slot);
-    let (pos_x, pos_y) = overlay_plane_position(surface);
     let want_pos = plane_pos_reg_value(pos_x, pos_y);
     let want_size = plane_size_reg_value(surface.width, surface.height);
     let want_surf = u32::try_from(crate::intel::GPU_VA_DISPLAY_OVERLAY_BASE).unwrap_or(0);
@@ -2316,15 +3030,25 @@ fn overlay_plane_needs_rearm(dev: crate::intel::Dev, surface: OverlaySurface) ->
     let size = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SIZE_OFF);
     let surf = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURF_OFF);
     let surf_live = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURFLIVE_OFF);
+    let color_ctl = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_COLOR_CTL_OFF);
+    let want_color_ctl = plane_color_ctl_alpha(color_ctl, alpha);
 
     (ctl & PLANE_CTL_ENABLE) == 0
         || pos != want_pos
         || size != want_size
         || surf != want_surf
         || surf_live != want_surf
+        || (color_ctl & PLANE_COLOR_ALPHA_MASK) != (want_color_ctl & PLANE_COLOR_ALPHA_MASK)
 }
 
-fn arm_overlay_plane(dev: crate::intel::Dev, surface: OverlaySurface, reason: &str) -> bool {
+fn arm_overlay_plane(
+    dev: crate::intel::Dev,
+    surface: OverlaySurface,
+    pos_x: u32,
+    pos_y: u32,
+    alpha: OverlayAlphaMode,
+    reason: &str,
+) -> bool {
     let plane_base = overlay_plane_base(surface.pipe, surface.plane_slot);
     let Some(surface_reg) = u32::try_from(crate::intel::GPU_VA_DISPLAY_OVERLAY_BASE).ok() else {
         return false;
@@ -2332,13 +3056,12 @@ fn arm_overlay_plane(dev: crate::intel::Dev, surface: OverlaySurface, reason: &s
     let Some(stride_reg) = plane_stride_reg_value(surface.pitch_bytes) else {
         return false;
     };
-    let (pos_x, pos_y) = overlay_plane_position(surface);
     let ctl_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_CTL_OFF);
     let ctl_disabled = ctl_before & !PLANE_CTL_ENABLE;
     let ctl_enabled = overlay_plane_ctl_enabled(ctl_before);
     let color_ctl_off = plane_base + UNI_PLANE_COLOR_CTL_OFF;
     let color_ctl_before = crate::intel::mmio_read(dev, color_ctl_off);
-    let color_ctl_enabled = plane_color_ctl_alpha_disabled(color_ctl_before);
+    let color_ctl_enabled = plane_color_ctl_alpha(color_ctl_before, alpha);
     let surf_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURF_OFF);
     let live_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURFLIVE_OFF);
 
@@ -2355,17 +3078,29 @@ fn arm_overlay_plane(dev: crate::intel::Dev, surface: OverlaySurface, reason: &s
         plane_base + UNI_PLANE_SIZE_OFF,
         plane_size_reg_value(surface.width, surface.height),
     );
+    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_KEYVAL_OFF, 0);
+    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_KEYMSK_OFF, 0);
+    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_KEYMAX_OFF, 0xFF00_0000);
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_OFFSET_OFF, plane_pos_reg_value(0, 0));
+    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_AUX_DIST_OFF, 0);
+    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_AUX_OFFSET_OFF, 0);
     crate::intel::mmio_write(dev, color_ctl_off, color_ctl_enabled);
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_CTL_OFF, ctl_enabled);
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_SURF_OFF, surface_reg);
 
+    let (frame_before, frame_after, frame_iters) = wait_for_pipe_next_frame(dev, surface.pipe);
     let (live_after, live_iters) = wait_for_plane_live(dev, plane_base, surface_reg, 20_000);
+    let keyval_after = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYVAL_OFF);
+    let keymsk_after = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYMSK_OFF);
+    let keymax_after = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYMAX_OFF);
+    let aux_dist_after = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_AUX_DIST_OFF);
+    let aux_offset_after = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_AUX_OFFSET_OFF);
     crate::log!(
-        "intel/display: overlay-arm reason={} pipe={} slot={} ctl_before=0x{:08X} ctl_enabled=0x{:08X} color_ctl=0x{:08X}=>0x{:08X} color_alpha={}=>{} pos={}x{} size={}x{} stride=0x{:08X} surf_before=0x{:08X} surf_after=0x{:08X} surf_live_before=0x{:08X} surf_live_after=0x{:08X} live_iters={}\n",
+        "intel/display: overlay-arm reason={} pipe={} slot={} alpha={:?} ctl_before=0x{:08X} ctl_enabled=0x{:08X} color_ctl=0x{:08X}=>0x{:08X} color_alpha={}=>{} pos={}x{} size={}x{} stride=0x{:08X} key=0x{:08X}/0x{:08X}/0x{:08X} aux=0x{:08X}/0x{:08X} surf_before=0x{:08X} surf_after=0x{:08X} surf_live_before=0x{:08X} surf_live_after=0x{:08X} frame={}=>{} frame_wait={} live_iters={}\n",
         reason,
         surface.pipe.name,
         surface.plane_slot,
+        alpha,
         ctl_before,
         ctl_enabled,
         color_ctl_before,
@@ -2377,10 +3112,18 @@ fn arm_overlay_plane(dev: crate::intel::Dev, surface: OverlaySurface, reason: &s
         surface.width,
         surface.height,
         stride_reg,
+        keyval_after,
+        keymsk_after,
+        keymax_after,
+        aux_dist_after,
+        aux_offset_after,
         surf_before,
         crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURF_OFF),
         live_before,
         live_after,
+        frame_before,
+        frame_after,
+        frame_iters,
         live_iters
     );
 
@@ -2502,6 +3245,16 @@ fn decode_plane_color_alpha(color_ctl: u32) -> &'static str {
         PLANE_COLOR_ALPHA_SW_PREMULT => "sw-premul",
         PLANE_COLOR_ALPHA_HW_PREMULT => "hw-premul",
         _ => "unknown",
+    }
+}
+
+fn decode_plane_cus_phase(cus_ctl: u32, mask: u32, sign_bit: u32) -> i32 {
+    let shift = mask.trailing_zeros();
+    let magnitude = ((cus_ctl & mask) >> shift) as i32;
+    if (cus_ctl & sign_bit) != 0 {
+        -magnitude
+    } else {
+        magnitude
     }
 }
 

@@ -30,6 +30,7 @@ kernels=(
     blit_rgba8_nearest
     alpha_blend_rgba8_over
     glyph_mask_rgba8
+    present_rgba8_to_primary_xrgb_rect
     stamp_mandel_rgba8
     sprite64_worklist_rgba8
     canvas3d_project_rgba8

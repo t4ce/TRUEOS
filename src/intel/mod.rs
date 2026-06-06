@@ -179,6 +179,7 @@ pub fn init_once() {
     let _ = self::gpgpu::upload_fill_rect_rgba8_kernel();
     let _ = self::gpgpu::upload_alpha_blend_rgba8_over_kernel();
     let _ = self::gpgpu::upload_glyph_mask_rgba8_kernel();
+    let _ = self::gpgpu::upload_present_rgba8_to_primary_xrgb_rect_kernel();
     let _ = self::gpgpu::upload_empty_eot_kernel();
     let _ = self::gpgpu::upload_sprite64_worklist_rgba8_kernel();
     let _ = self::gpgpu::upload_canvas3d_project_rgba8_kernel();
@@ -448,6 +449,32 @@ pub fn present_rgba_overlay_top_right(
     self::display::present_rgba_overlay_top_right(src, src_width, src_height, src_pitch_bytes)
 }
 
+pub fn present_rgba_overlay_at(
+    src: &[u8],
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+    x: u32,
+    y: u32,
+    preserve_alpha: bool,
+    reason: &str,
+) -> bool {
+    self::display::present_rgba_overlay_at(
+        src,
+        src_width,
+        src_height,
+        src_pitch_bytes,
+        x,
+        y,
+        preserve_alpha,
+        reason,
+    )
+}
+
+pub fn log_display_plane_ladder_probe(label: &str) {
+    self::display::log_display_plane_ladder_probe(label)
+}
+
 pub fn present_rgba_primary(
     src: &[u8],
     src_width: u32,
@@ -456,6 +483,66 @@ pub fn present_rgba_primary(
     reason: &str,
 ) -> bool {
     self::display::present_rgba_primary(src, src_width, src_height, src_pitch_bytes, reason)
+}
+
+pub fn blend_rgba_primary_rect(
+    src: &[u8],
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+    src_x: u32,
+    src_y: u32,
+    dst_x: i32,
+    dst_y: i32,
+    width: u32,
+    height: u32,
+    reason: &str,
+) -> bool {
+    self::display::blend_rgba_primary_rect(
+        src,
+        src_width,
+        src_height,
+        src_pitch_bytes,
+        src_x,
+        src_y,
+        dst_x,
+        dst_y,
+        width,
+        height,
+        reason,
+    )
+}
+
+pub fn blend_rgba_primary_rect_scaled(
+    src: &[u8],
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+    src_x: u32,
+    src_y: u32,
+    src_w: u32,
+    src_h: u32,
+    dst_x: i32,
+    dst_y: i32,
+    dst_w: u32,
+    dst_h: u32,
+    reason: &str,
+) -> bool {
+    self::display::blend_rgba_primary_rect_scaled(
+        src,
+        src_width,
+        src_height,
+        src_pitch_bytes,
+        src_x,
+        src_y,
+        src_w,
+        src_h,
+        dst_x,
+        dst_y,
+        dst_w,
+        dst_h,
+        reason,
+    )
 }
 
 pub fn present_rgba_primary_rot180(

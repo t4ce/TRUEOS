@@ -20,6 +20,7 @@ const IMAGE_GPU_VA_ALIGN: u64 = 0x0040_0000;
 const MAX_BACKEND_IMAGE_DIM: u32 = 8192;
 const MAX_BACKEND_IMAGE_BYTES: usize = 256 * 1024 * 1024;
 const ENABLE_IMAGE_GPGPU_CLEAR: bool = false;
+const ENABLE_HW_PLANE_ALPHA_OVERLAY: bool = false;
 
 static PRESENT_COMPLETED_SEQ: AtomicU32 = AtomicU32::new(0);
 
@@ -177,6 +178,18 @@ struct TextureCopyQuad {
     dst_y: i32,
     width: u32,
     height: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TextureScaleQuad {
+    src_x: u32,
+    src_y: u32,
+    src_w: u32,
+    src_h: u32,
+    dst_x: i32,
+    dst_y: i32,
+    dst_w: u32,
+    dst_h: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -541,87 +554,39 @@ impl IntelGfxBackend {
     fn present_screen(&mut self) -> Result<()> {
         let present_start_ms = embassy_time::Instant::now().as_millis();
         self.ensure_screen_rgba()?;
-        self.sync_screen_rgba_from_gpu();
         let (copy_w, copy_h) = self.present_scanout_extent();
         self.present_seq = self.present_seq.wrapping_add(1);
-
-        let guc_ready = crate::intel::guc_ready();
-        let allow_rcs_retry = self.present_seq >= self.rcs_retry_after_present_seq;
-        if allow_rcs_retry {
-            if crate::intel::rcs_present_rgba_frame(self.screen_rgba.as_slice(), copy_w, copy_h) {
-                self.rcs_retry_after_present_seq = 0;
-                self.rcs_present_failures = 0;
-                mark_present_completed(self.present_seq);
-                if self.present_seq <= 8 || self.present_seq.is_multiple_of(120) {
-                    let elapsed_ms = embassy_time::Instant::now()
-                        .as_millis()
-                        .saturating_sub(present_start_ms);
-                    crate::log!(
-                        "intel/gfx-backend: present seq={} mode=rcs-execlist-store size={}x{} elapsed_ms={}\n",
-                        self.present_seq,
-                        copy_w,
-                        copy_h,
-                        elapsed_ms
-                    );
-                }
-                return Ok(());
-            }
-
-            self.rcs_present_failures = self.rcs_present_failures.saturating_add(1);
-            self.rcs_retry_after_present_seq = self
-                .present_seq
-                .saturating_add(RCS_PRESENT_RETRY_COOLDOWN_PRESENTS);
-            crate::log!(
-                "intel/gfx-backend: present seq={} rcs-present-failed failures={} cooldown_until_seq={} size={}x{}\n",
-                self.present_seq,
-                self.rcs_present_failures,
-                self.rcs_retry_after_present_seq,
-                copy_w,
-                copy_h
-            );
-        }
-
-        if !guc_ready && (self.present_seq <= 8 || self.present_seq.is_multiple_of(120)) {
-            let guc_status = crate::intel::warm_state()
-                .map(crate::intel::guc_status)
-                .unwrap_or(0);
-            crate::log!(
-                "intel/gfx-backend: present seq={} direct-rcs-miss guc_ready=0 guc_status=0x{:08X} fallback=cpu-next size={}x{}\n",
-                self.present_seq,
-                guc_status,
-                copy_w,
-                copy_h
-            );
-        }
-
-        let fallback_mode = if self.present_screen_primary_surface_cpu() {
-            Some(CpuPresentMode::PrimarySurface)
-        } else if self.present_screen_limine_framebuffer_cpu().is_ok() {
-            Some(CpuPresentMode::LimineFramebuffer)
-        } else {
-            None
-        };
-        if fallback_mode.is_some() {
+        if self.screen_rgba_gpu_dirty {
+            self.screen_rgba_gpu_dirty = false;
             mark_present_completed(self.present_seq);
+            if self.present_seq <= 8 || self.present_seq.is_multiple_of(120) {
+                let elapsed_ms = embassy_time::Instant::now()
+                    .as_millis()
+                    .saturating_sub(present_start_ms);
+                crate::log!(
+                    "intel/gfx-backend: present seq={} mode=primary-already-updated size={}x{} elapsed_ms={}\n",
+                    self.present_seq,
+                    copy_w,
+                    copy_h,
+                    elapsed_ms
+                );
+            }
+            return Ok(());
         }
-        if let Some(mode) = fallback_mode
-            && (self.present_seq <= 8 || self.present_seq.is_multiple_of(120))
-        {
+        mark_present_completed(self.present_seq);
+        if self.present_seq <= 8 || self.present_seq.is_multiple_of(120) {
             let elapsed_ms = embassy_time::Instant::now()
                 .as_millis()
                 .saturating_sub(present_start_ms);
             crate::log!(
-                "intel/gfx-backend: present seq={} fallback={} guc_ready={} rcs_retry_ready={} size={}x{} elapsed_ms={}\n",
+                "intel/gfx-backend: present seq={} mode=no-primary-damage size={}x{} elapsed_ms={}\n",
                 self.present_seq,
-                mode.label(),
-                guc_ready as u8,
-                allow_rcs_retry as u8,
                 copy_w,
                 copy_h,
                 elapsed_ms
             );
         }
-        fallback_mode.map(|_| ()).ok_or(Error::Invalid)
+        Ok(())
     }
 
     fn present_image_target(&mut self, id: ImageId) -> Result<()> {
@@ -949,7 +914,7 @@ impl IntelGfxBackend {
             return Ok(());
         }
         if matches!(target, RenderTarget::Screen)
-            && let Some((quads, bytes)) = self.copy_tex_quads_to_screen(
+            && let Some((quads, bytes, mode)) = self.copy_tex_quads_to_screen(
                 &source,
                 verts.as_slice(),
                 sampler,
@@ -963,17 +928,58 @@ impl IntelGfxBackend {
                 .saturating_sub(draw_start_ms);
             if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) || elapsed_ms >= 20 {
                 crate::log!(
-                    "intel/gfx-backend: draw-tex mode=cpu-copy-rect target=screen quads={} bytes=0x{:X} source={}x{} target={}x{} elapsed_ms={}\n",
+                    "intel/gfx-backend: draw-tex mode={} target=screen quads={} bytes=0x{:X} source={}x{} target={}x{} elapsed_ms={} samples=[0x{:08X},0x{:08X},0x{:08X}]\n",
+                    mode,
                     quads,
                     bytes,
                     source.width,
                     source.height,
                     self.swapchain_desc.extent.width,
                     self.swapchain_desc.extent.height,
-                    elapsed_ms
+                    elapsed_ms,
+                    sample_rgba_word(
+                        self.screen_rgba.as_slice(),
+                        self.swapchain_desc.extent.width,
+                        0,
+                        0,
+                    ),
+                    sample_rgba_word(
+                        self.screen_rgba.as_slice(),
+                        self.swapchain_desc.extent.width,
+                        self.swapchain_desc.extent.width.saturating_div(2),
+                        self.swapchain_desc.extent.height.saturating_div(2),
+                    ),
+                    sample_rgba_word(
+                        self.screen_rgba.as_slice(),
+                        self.swapchain_desc.extent.width,
+                        self.swapchain_desc.extent.width.saturating_sub(1),
+                        self.swapchain_desc.extent.height.saturating_sub(1),
+                    )
                 );
             }
             return Ok(());
+        }
+        if matches!(target, RenderTarget::Screen)
+            && (self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120))
+        {
+            crate::log!(
+                "intel/gfx-backend: draw-tex cpu-copy-rect-miss target=screen sample={} blend_enabled={} sampler=({:?},{:?},{:?},{:?}) verts={} source={}x{} target={}x{} scissor={}\n",
+                match sample_kind {
+                    SampleKind::Mask => "mask",
+                    SampleKind::Rgba => "rgba",
+                },
+                blend.enabled as u8,
+                sampler.wrap_s,
+                sampler.wrap_t,
+                sampler.min_filter,
+                sampler.mag_filter,
+                verts.len() / trueos_gfx_core::TEX_VERTEX_SIZE,
+                source.width,
+                source.height,
+                self.swapchain_desc.extent.width,
+                self.swapchain_desc.extent.height,
+                scissor.is_some() as u8
+            );
         }
         let screen_surface_gpu =
             crate::intel::primary_present_surface_gpu_addr().unwrap_or(0x0200_0000);
@@ -1018,6 +1024,9 @@ impl IntelGfxBackend {
             }
             return Ok(());
         }
+        let RenderTarget::Image(_) = target else {
+            return Err(Error::Unsupported);
+        };
         self.with_target_mut(target, |rgba, width, height| {
             let mut off = 0usize;
             while off + (3 * trueos_gfx_core::TEX_VERTEX_SIZE) <= verts.len() {
@@ -1053,14 +1062,9 @@ impl IntelGfxBackend {
         let elapsed_ms = embassy_time::Instant::now()
             .as_millis()
             .saturating_sub(draw_start_ms);
-        if self.submit_seq <= 8
-            || self.submit_seq.is_multiple_of(120)
-            || matches!(target, RenderTarget::Screen)
-            || elapsed_ms >= 20
-        {
+        if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) || elapsed_ms >= 20 {
             crate::log!(
-                "intel/gfx-backend: draw-tex mode=cpu target={} sample={} triangles={} source={}x{} elapsed_ms={}\n",
-                render_target_label(target),
+                "intel/gfx-backend: draw-tex mode=cpu target=image sample={} triangles={} source={}x{} elapsed_ms={}\n",
                 match sample_kind {
                     SampleKind::Mask => "mask",
                     SampleKind::Rgba => "rgba",
@@ -1082,9 +1086,9 @@ impl IntelGfxBackend {
         blend: BlendDesc,
         sample_kind: SampleKind,
         scissor: Option<ScissorRect>,
-    ) -> Option<(usize, usize)> {
+    ) -> Option<(usize, usize, &'static str)> {
         if sample_kind != SampleKind::Rgba
-            || blend != BlendDesc::disabled()
+            || !(blend == BlendDesc::disabled() || blend == BlendDesc::straight_alpha())
             || sampler.wrap_s != SamplerWrap::ClampToEdge
             || sampler.wrap_t != SamplerWrap::ClampToEdge
             || !sampler_filter_is_texel_center_equivalent(sampler)
@@ -1099,6 +1103,368 @@ impl IntelGfxBackend {
         self.ensure_screen_rgba().ok()?;
         let dst_width = self.swapchain_desc.extent.width;
         let dst_height = self.swapchain_desc.extent.height;
+        let full_scene_alpha_candidate = blend == BlendDesc::straight_alpha()
+            && source.width == dst_width
+            && source.height == dst_height
+            && scissor.is_none()
+            && verts.len() == 6 * trueos_gfx_core::TEX_VERTEX_SIZE;
+        let full_scene_alpha_quad_ok =
+            tex_quad_is_full_target_white_rgb(verts, dst_width, dst_height);
+        if full_scene_alpha_candidate
+            && (self.submit_seq <= 16 || self.submit_seq.is_multiple_of(60))
+        {
+            let src = source.dma_rgba_slice().unwrap_or(source.rgba.as_slice());
+            let src_pitch = source.dma.pitch_bytes as usize;
+            let alpha = rgba_alpha_summary(src, source.width, source.height, src_pitch);
+            crate::log!(
+                "intel/gfx-backend: scene-present probe source={}x{} target={}x{} pitch=0x{:X} rgba_len={} dma_bytes={} gpu_dirty={} surface={} decode_alpha={} full_target={} alpha_min={} alpha_max={} alpha_zero={} alpha_mid={} alpha_opaque={} first_nonzero={} {}x{}:0x{:08X} first_opaque={} {}x{}:0x{:08X} samples=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
+                source.width,
+                source.height,
+                dst_width,
+                dst_height,
+                src_pitch,
+                source.rgba.len(),
+                source.dma.bytes,
+                source.gpu_dirty as u8,
+                source.gpgpu_surface().is_some() as u8,
+                decode_alpha_tex_quad(verts, 0, source.width, source.height, dst_width, dst_height)
+                    .is_some() as u8,
+                full_scene_alpha_quad_ok as u8,
+                alpha.min,
+                alpha.max,
+                alpha.zero,
+                alpha.mid,
+                alpha.opaque,
+                alpha.first_nonzero_valid as u8,
+                alpha.first_nonzero_x,
+                alpha.first_nonzero_y,
+                alpha.first_nonzero,
+                alpha.first_opaque_valid as u8,
+                alpha.first_opaque_x,
+                alpha.first_opaque_y,
+                alpha.first_opaque,
+                alpha.tl,
+                alpha.center,
+                alpha.br,
+                alpha.q1,
+                alpha.q3
+            );
+            if full_scene_alpha_quad_ok {
+                crate::intel::log_display_plane_ladder_probe("gfx-full-scene-alpha-candidate");
+            }
+        }
+        if ENABLE_HW_PLANE_ALPHA_OVERLAY && full_scene_alpha_candidate && full_scene_alpha_quad_ok {
+            if self.submit_seq <= 16 || self.submit_seq.is_multiple_of(60) {
+                crate::log!(
+                    "intel/gfx-backend: scene-present skip stage=hw-plane-alpha-overlay reason=ladder-log-only size={}x{}\n",
+                    source.width,
+                    source.height
+                );
+            }
+        } else if full_scene_alpha_candidate
+            && (self.submit_seq <= 16 || self.submit_seq.is_multiple_of(60))
+        {
+            crate::log!(
+                "intel/gfx-backend: scene-present skip stage=hw-plane-alpha-overlay reason={} source={}x{} target={}x{}\n",
+                if ENABLE_HW_PLANE_ALPHA_OVERLAY {
+                    "quad-decode"
+                } else {
+                    "disabled"
+                },
+                source.width,
+                source.height,
+                dst_width,
+                dst_height
+            );
+        }
+        let prefer_cpu_alpha_rect_primary =
+            blend == BlendDesc::straight_alpha() && !full_scene_alpha_candidate;
+        if !prefer_cpu_alpha_rect_primary
+            && let Some(src_surface) = source.gpgpu_surface()
+        {
+            if full_scene_alpha_candidate && full_scene_alpha_quad_ok {
+                if let Some(stats) = crate::intel::gpgpu::alpha_blend_rgba8_over_primary_stats(
+                    src_surface,
+                    crate::intel::gpgpu::GpgpuRect::new(0, 0, source.width, source.height),
+                    crate::intel::gpgpu::GpgpuPoint::new(0, 0),
+                ) {
+                    self.screen_rgba_gpu_dirty = true;
+                    if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) {
+                        crate::log!(
+                            "intel/gfx-backend: draw-tex mode=gpgpu-full-alpha-over-primary target=screen spans={} submits={} source={}x{} target={}x{}\n",
+                            stats.spans,
+                            stats.submits,
+                            source.width,
+                            source.height,
+                            dst_width,
+                            dst_height
+                        );
+                        crate::intel::log_display_plane_ladder_probe(
+                            "gfx-after-gpgpu-full-alpha-over-primary",
+                        );
+                    }
+                    return Some((
+                        1,
+                        (source.width as usize)
+                            .saturating_mul(source.height as usize)
+                            .saturating_mul(4),
+                        "gpgpu-full-alpha-over-primary",
+                    ));
+                }
+            }
+            let mut quads = 0usize;
+            let mut submits = 0usize;
+            let mut spans = 0usize;
+            let mut pixels = 0usize;
+            let mut off = 0usize;
+            let mode = if blend == BlendDesc::straight_alpha() {
+                "gpgpu-alpha-over-primary"
+            } else {
+                "gpgpu-primary-xrgb-rect"
+            };
+            while off + (6 * trueos_gfx_core::TEX_VERTEX_SIZE) <= verts.len() {
+                let Some(quad) = (if blend == BlendDesc::straight_alpha() {
+                    decode_alpha_tex_quad(
+                        verts,
+                        off,
+                        source.width,
+                        source.height,
+                        dst_width,
+                        dst_height,
+                    )
+                } else {
+                    decode_copy_tex_quad(
+                        verts,
+                        off,
+                        source.width,
+                        source.height,
+                        dst_width,
+                        dst_height,
+                    )
+                }) else {
+                    if full_scene_alpha_candidate {
+                        crate::log!(
+                            "intel/gfx-backend: scene-present miss stage=decode mode={} off={}\n",
+                            mode,
+                            off
+                        );
+                    }
+                    return None;
+                };
+                let Some(quad) = clip_texture_copy_quad_to_scissor(quad, scissor) else {
+                    if full_scene_alpha_candidate {
+                        crate::log!(
+                            "intel/gfx-backend: scene-present miss stage=scissor mode={} off={}\n",
+                            mode,
+                            off
+                        );
+                    }
+                    return None;
+                };
+                let src_rect = crate::intel::gpgpu::GpgpuRect::new(
+                    quad.src_x as i32,
+                    quad.src_y as i32,
+                    quad.width,
+                    quad.height,
+                );
+                let dst_xy = crate::intel::gpgpu::GpgpuPoint::new(quad.dst_x, quad.dst_y);
+                let Some(stats) = (if blend == BlendDesc::straight_alpha() {
+                    crate::intel::gpgpu::alpha_blend_rgba8_over_primary_stats(
+                        src_surface,
+                        src_rect,
+                        dst_xy,
+                    )
+                } else {
+                    crate::intel::gpgpu::present_rgba8_rect_to_primary_xrgb_stats(
+                        src_surface,
+                        src_rect,
+                        dst_xy,
+                    )
+                }) else {
+                    if full_scene_alpha_candidate {
+                        crate::log!(
+                            "intel/gfx-backend: scene-present miss stage=submit mode={} src_rect={}x{}@{},{} dst={},{}\n",
+                            mode,
+                            src_rect.width,
+                            src_rect.height,
+                            src_rect.x,
+                            src_rect.y,
+                            dst_xy.x,
+                            dst_xy.y
+                        );
+                    }
+                    return None;
+                };
+                quads = quads.saturating_add(1);
+                submits = submits.saturating_add(stats.submits);
+                spans = spans.saturating_add(stats.spans);
+                pixels = pixels
+                    .saturating_add((quad.width as usize).saturating_mul(quad.height as usize));
+                off = off.saturating_add(6 * trueos_gfx_core::TEX_VERTEX_SIZE);
+            }
+            if quads > 0 && submits > 0 {
+                self.screen_rgba_gpu_dirty = true;
+                if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) {
+                    crate::log!(
+                        "intel/gfx-backend: draw-tex mode={} target=screen quads={} spans={} submits={} pixels={} source={}x{} target={}x{}\n",
+                        mode,
+                        quads,
+                        spans,
+                        submits,
+                        pixels,
+                        source.width,
+                        source.height,
+                        dst_width,
+                        dst_height
+                    );
+                }
+                return Some((quads, pixels.saturating_mul(4), mode));
+            }
+            if full_scene_alpha_candidate {
+                crate::log!(
+                    "intel/gfx-backend: scene-present miss stage=no-submits mode={} quads={} spans={} submits={}\n",
+                    mode,
+                    quads,
+                    spans,
+                    submits
+                );
+            }
+        }
+
+        if blend == BlendDesc::straight_alpha() && !full_scene_alpha_candidate {
+            let src = source.dma_rgba_slice().unwrap_or(source.rgba.as_slice());
+            let src_pitch = source.dma.pitch_bytes as usize;
+            let mut quads = 0usize;
+            let mut bytes = 0usize;
+            let mut off = 0usize;
+            while off + (6 * trueos_gfx_core::TEX_VERTEX_SIZE) <= verts.len() {
+                let Some(quad) = decode_tex_quad_bounds(
+                    verts,
+                    off,
+                    source.width,
+                    source.height,
+                    dst_width,
+                    dst_height,
+                ) else {
+                    if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) {
+                        crate::log!(
+                            "intel/gfx-backend: draw-tex cpu-alpha-rect-miss stage=decode off={} source={}x{} target={}x{}\n",
+                            off,
+                            source.width,
+                            source.height,
+                            dst_width,
+                            dst_height
+                        );
+                    }
+                    return None;
+                };
+                let Some(quad) = clip_texture_scale_quad_to_scissor(quad, scissor) else {
+                    if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) {
+                        crate::log!(
+                            "intel/gfx-backend: draw-tex cpu-alpha-rect-miss stage=scissor off={} dst={}x{}@{},{}\n",
+                            off,
+                            quad.dst_w,
+                            quad.dst_h,
+                            quad.dst_x,
+                            quad.dst_y
+                        );
+                    }
+                    return None;
+                };
+                if crate::intel::blend_rgba_primary_rect_scaled(
+                    src,
+                    source.width,
+                    source.height,
+                    src_pitch,
+                    quad.src_x,
+                    quad.src_y,
+                    quad.src_w,
+                    quad.src_h,
+                    quad.dst_x,
+                    quad.dst_y,
+                    quad.dst_w,
+                    quad.dst_h,
+                    "gfx-alpha-rect-primary",
+                ) {
+                    quads = quads.saturating_add(1);
+                    bytes = bytes.saturating_add(
+                        (quad.dst_w as usize)
+                            .saturating_mul(quad.dst_h as usize)
+                            .saturating_mul(4),
+                    );
+                } else {
+                    if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) {
+                        crate::log!(
+                            "intel/gfx-backend: draw-tex cpu-alpha-rect-miss stage=blend off={} src={}x{}@{},{} dst={}x{}@{},{} pitch=0x{:X} src_len=0x{:X}\n",
+                            off,
+                            quad.src_w,
+                            quad.src_h,
+                            quad.src_x,
+                            quad.src_y,
+                            quad.dst_w,
+                            quad.dst_h,
+                            quad.dst_x,
+                            quad.dst_y,
+                            src_pitch,
+                            src.len()
+                        );
+                    }
+                    return None;
+                }
+                off = off.saturating_add(6 * trueos_gfx_core::TEX_VERTEX_SIZE);
+            }
+            if quads > 0 {
+                self.screen_rgba_gpu_dirty = true;
+                if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) {
+                    crate::log!(
+                        "intel/gfx-backend: draw-tex mode=cpu-alpha-rect-primary target=screen quads={} bytes=0x{:X} source={}x{} target={}x{}\n",
+                        quads,
+                        bytes,
+                        source.width,
+                        source.height,
+                        dst_width,
+                        dst_height
+                    );
+                }
+                return Some((quads, bytes, "cpu-alpha-rect-primary"));
+            }
+        }
+
+        if source.width == dst_width
+            && source.height == dst_height
+            && scissor.is_none()
+            && verts.len() == 6 * trueos_gfx_core::TEX_VERTEX_SIZE
+            && tex_quad_is_full_target_untinted(verts, dst_width, dst_height)
+        {
+            let src = source.dma_rgba_slice().unwrap_or(source.rgba.as_slice());
+            let bytes = self.screen_rgba.len().min(src.len());
+            self.screen_rgba[..bytes].copy_from_slice(&src[..bytes]);
+            self.screen_rgba_gpu_dirty = false;
+            return Some((1, bytes, "cpu-shadow-full"));
+        }
+        if full_scene_alpha_candidate {
+            let src = source.dma_rgba_slice().unwrap_or(source.rgba.as_slice());
+            if crate::intel::present_rgba_primary(
+                src,
+                source.width,
+                source.height,
+                source.dma.pitch_bytes as usize,
+                "gfx-full-scene-primary-recovery",
+            ) {
+                self.screen_rgba_gpu_dirty = true;
+                if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) {
+                    crate::log!(
+                        "intel/gfx-backend: draw-tex mode=cpu-primary-recovery target=screen source={}x{} target={}x{}\n",
+                        source.width,
+                        source.height,
+                        dst_width,
+                        dst_height
+                    );
+                }
+                return Some((1, src.len(), "cpu-primary-recovery"));
+            }
+        }
+
         let mut quads = 0usize;
         let mut bytes = 0usize;
         let mut off = 0usize;
@@ -1154,10 +1520,13 @@ impl IntelGfxBackend {
         }
 
         if quads == 0 {
+            if full_scene_alpha_candidate {
+                crate::log!("intel/gfx-backend: scene-present miss stage=cpu-copy-empty\n");
+            }
             return None;
         }
         self.screen_rgba_gpu_dirty = false;
-        Some((quads, bytes))
+        Some((quads, bytes, "cpu-copy-rect"))
     }
 
     fn rgb_quads_to_image(
@@ -1231,7 +1600,7 @@ impl IntelGfxBackend {
         }
         let src_surface = source.gpgpu_surface()?;
         let dst_surface = dst.gpgpu_surface()?;
-        let mut copies = Vec::new();
+        let mut ops = Vec::new();
         let mut off = 0usize;
         while off + (6 * trueos_gfx_core::TEX_VERTEX_SIZE) <= verts.len() {
             let quad = decode_copy_tex_quad(
@@ -1243,7 +1612,7 @@ impl IntelGfxBackend {
                 dst.height,
             )?;
             let quad = clip_texture_copy_quad_to_scissor(quad, scissor)?;
-            copies.push(crate::intel::gpgpu::GpgpuCopyRect {
+            ops.push(crate::intel::gpgpu::GpgpuCompositeRect {
                 src: src_surface,
                 src_rect: crate::intel::gpgpu::GpgpuRect::new(
                     quad.src_x as i32,
@@ -1253,17 +1622,18 @@ impl IntelGfxBackend {
                 ),
                 dst: dst_surface,
                 dst_xy: crate::intel::gpgpu::GpgpuPoint::new(quad.dst_x, quad.dst_y),
+                mode: crate::intel::gpgpu::GpgpuCompositeMode::Copy,
             });
             off = off.saturating_add(6 * trueos_gfx_core::TEX_VERTEX_SIZE);
         }
-        if copies.is_empty() {
+        if ops.is_empty() {
             return None;
         }
-        let stats = crate::intel::gpgpu::copy_rects_rgba8_wide_stats(copies.as_slice());
+        let stats = crate::intel::gpgpu::composite_rects_rgba8_stats(ops.as_slice());
         if stats.submits == 0 || stats.spans == 0 {
             return None;
         }
-        Some((copies.len(), stats.spans, stats.submits, dst.gpu_addr))
+        Some((ops.len(), stats.spans, stats.submits, dst.gpu_addr))
     }
 
     fn alpha_tex_quads_to_image(
@@ -1308,16 +1678,19 @@ impl IntelGfxBackend {
                 dst.height,
             )?;
             let quad = clip_texture_copy_quad_to_scissor(quad, scissor)?;
-            let stats = crate::intel::gpgpu::alpha_blend_rgba8_over_stats(
-                src_surface,
-                crate::intel::gpgpu::GpgpuRect::new(
-                    quad.src_x as i32,
-                    quad.src_y as i32,
-                    quad.width,
-                    quad.height,
-                ),
-                dst_surface,
-                crate::intel::gpgpu::GpgpuPoint::new(quad.dst_x, quad.dst_y),
+            let stats = crate::intel::gpgpu::composite_rect_rgba8_stats(
+                crate::intel::gpgpu::GpgpuCompositeRect {
+                    src: src_surface,
+                    src_rect: crate::intel::gpgpu::GpgpuRect::new(
+                        quad.src_x as i32,
+                        quad.src_y as i32,
+                        quad.width,
+                        quad.height,
+                    ),
+                    dst: dst_surface,
+                    dst_xy: crate::intel::gpgpu::GpgpuPoint::new(quad.dst_x, quad.dst_y),
+                    mode: crate::intel::gpgpu::GpgpuCompositeMode::SrcOver,
+                },
             );
             if stats.submits == 0 || stats.spans == 0 {
                 return None;
@@ -2106,6 +2479,164 @@ fn pack_xrgb(r: u8, g: u8, b: u8) -> u32 {
 }
 
 #[inline]
+fn sample_rgba_word(rgba: &[u8], width: u32, x: u32, y: u32) -> u32 {
+    if width == 0 {
+        return 0;
+    }
+    let Some(idx) = (y as usize)
+        .checked_mul(width as usize)
+        .and_then(|row| row.checked_add(x as usize))
+        .and_then(|pixel| pixel.checked_mul(4))
+    else {
+        return 0;
+    };
+    if idx + 4 > rgba.len() {
+        return 0;
+    }
+    ((rgba[idx] as u32) << 24)
+        | ((rgba[idx + 1] as u32) << 16)
+        | ((rgba[idx + 2] as u32) << 8)
+        | rgba[idx + 3] as u32
+}
+
+#[derive(Clone, Copy)]
+struct RgbaAlphaSummary {
+    min: u8,
+    max: u8,
+    zero: usize,
+    mid: usize,
+    opaque: usize,
+    first_nonzero_valid: bool,
+    first_nonzero_x: u32,
+    first_nonzero_y: u32,
+    first_nonzero: u32,
+    first_opaque_valid: bool,
+    first_opaque_x: u32,
+    first_opaque_y: u32,
+    first_opaque: u32,
+    tl: u32,
+    center: u32,
+    br: u32,
+    q1: u32,
+    q3: u32,
+}
+
+fn rgba_alpha_summary(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    pitch_bytes: usize,
+) -> RgbaAlphaSummary {
+    let tl = sample_rgba_word_pitched(rgba, pitch_bytes, 0, 0);
+    let center = sample_rgba_word_pitched(rgba, pitch_bytes, width / 2, height / 2);
+    let br = sample_rgba_word_pitched(
+        rgba,
+        pitch_bytes,
+        width.saturating_sub(1),
+        height.saturating_sub(1),
+    );
+    let q1 = sample_rgba_word_pitched(rgba, pitch_bytes, width / 4, height / 4);
+    let q3 = sample_rgba_word_pitched(
+        rgba,
+        pitch_bytes,
+        width.saturating_mul(3) / 4,
+        height.saturating_mul(3) / 4,
+    );
+
+    let mut out = RgbaAlphaSummary {
+        min: 0,
+        max: 0,
+        zero: 0,
+        mid: 0,
+        opaque: 0,
+        first_nonzero_valid: false,
+        first_nonzero_x: 0,
+        first_nonzero_y: 0,
+        first_nonzero: 0,
+        first_opaque_valid: false,
+        first_opaque_x: 0,
+        first_opaque_y: 0,
+        first_opaque: 0,
+        tl,
+        center,
+        br,
+        q1,
+        q3,
+    };
+    if width == 0 || height == 0 {
+        return out;
+    }
+    let row_bytes = width as usize * 4;
+    if pitch_bytes < row_bytes {
+        return out;
+    }
+
+    let mut saw_pixel = false;
+    let mut min_a = u8::MAX;
+    let mut max_a = 0u8;
+    for y in 0..height as usize {
+        let row_off = y.saturating_mul(pitch_bytes);
+        let Some(row) = rgba.get(row_off..row_off.saturating_add(row_bytes)) else {
+            break;
+        };
+        for x in 0..width as usize {
+            let off = x.saturating_mul(4);
+            let a = row[off + 3];
+            saw_pixel = true;
+            min_a = min_a.min(a);
+            max_a = max_a.max(a);
+            if a == 0 {
+                out.zero = out.zero.saturating_add(1);
+            } else if a == 0xFF {
+                out.opaque = out.opaque.saturating_add(1);
+                if !out.first_opaque_valid {
+                    out.first_opaque_valid = true;
+                    out.first_opaque_x = x as u32;
+                    out.first_opaque_y = y as u32;
+                    out.first_opaque = ((row[off] as u32) << 24)
+                        | ((row[off + 1] as u32) << 16)
+                        | ((row[off + 2] as u32) << 8)
+                        | row[off + 3] as u32;
+                }
+            } else {
+                out.mid = out.mid.saturating_add(1);
+            }
+            if a != 0 && !out.first_nonzero_valid {
+                out.first_nonzero_valid = true;
+                out.first_nonzero_x = x as u32;
+                out.first_nonzero_y = y as u32;
+                out.first_nonzero = ((row[off] as u32) << 24)
+                    | ((row[off + 1] as u32) << 16)
+                    | ((row[off + 2] as u32) << 8)
+                    | row[off + 3] as u32;
+            }
+        }
+    }
+    if saw_pixel {
+        out.min = min_a;
+        out.max = max_a;
+    }
+    out
+}
+
+#[inline]
+fn sample_rgba_word_pitched(rgba: &[u8], pitch_bytes: usize, x: u32, y: u32) -> u32 {
+    let Some(idx) = (y as usize)
+        .checked_mul(pitch_bytes)
+        .and_then(|row| row.checked_add((x as usize).saturating_mul(4)))
+    else {
+        return 0;
+    };
+    if idx + 4 > rgba.len() {
+        return 0;
+    }
+    ((rgba[idx] as u32) << 24)
+        | ((rgba[idx + 1] as u32) << 16)
+        | ((rgba[idx + 2] as u32) << 8)
+        | rgba[idx + 3] as u32
+}
+
+#[inline]
 fn clear_rgba_buffer(rgba: &mut [u8], width: u32, height: u32, rgb: u32) {
     clear_rgba_rect(rgba, width, height, 0, 0, width, height, rgb);
 }
@@ -2364,6 +2895,22 @@ fn decode_copy_tex_quad(
     Some(quad)
 }
 
+fn decode_alpha_tex_quad(
+    bytes: &[u8],
+    off: usize,
+    src_width: u32,
+    src_height: u32,
+    dst_width: u32,
+    dst_height: u32,
+) -> Option<TextureCopyQuad> {
+    let (quad, verts) =
+        decode_tex_quad_shape(bytes, off, src_width, src_height, dst_width, dst_height)?;
+    if !verts.iter().all(tex_vertex_is_white_rgb) {
+        return None;
+    }
+    Some(quad)
+}
+
 fn decode_mask_tex_quad(
     bytes: &[u8],
     off: usize,
@@ -2415,6 +2962,72 @@ fn clip_texture_copy_quad_to_scissor(
         dst_y: i32::try_from(out_y0).ok()?,
         width: u32::try_from(out_x1.saturating_sub(out_x0)).ok()?,
         height: u32::try_from(out_y1.saturating_sub(out_y0)).ok()?,
+    })
+}
+
+fn clip_texture_scale_quad_to_scissor(
+    quad: TextureScaleQuad,
+    scissor: Option<ScissorRect>,
+) -> Option<TextureScaleQuad> {
+    let Some(scissor) = scissor else {
+        return Some(quad);
+    };
+    if scissor.width == 0 || scissor.height == 0 || quad.dst_w == 0 || quad.dst_h == 0 {
+        return None;
+    }
+
+    let dst_x0 = quad.dst_x as i64;
+    let dst_y0 = quad.dst_y as i64;
+    let dst_x1 = dst_x0.saturating_add(quad.dst_w as i64);
+    let dst_y1 = dst_y0.saturating_add(quad.dst_h as i64);
+    let clip_x0 = scissor.x as i64;
+    let clip_y0 = scissor.y as i64;
+    let clip_x1 = scissor.x.saturating_add(scissor.width) as i64;
+    let clip_y1 = scissor.y.saturating_add(scissor.height) as i64;
+
+    let out_x0 = dst_x0.max(clip_x0);
+    let out_y0 = dst_y0.max(clip_y0);
+    let out_x1 = dst_x1.min(clip_x1);
+    let out_y1 = dst_y1.min(clip_y1);
+    if out_x0 >= out_x1 || out_y0 >= out_y1 {
+        return None;
+    }
+
+    let trim_left = u32::try_from(out_x0.saturating_sub(dst_x0)).ok()?;
+    let trim_top = u32::try_from(out_y0.saturating_sub(dst_y0)).ok()?;
+    let trim_right = u32::try_from(dst_x1.saturating_sub(out_x1)).ok()?;
+    let trim_bottom = u32::try_from(dst_y1.saturating_sub(out_y1)).ok()?;
+    let src_x0 = (trim_left as u64)
+        .saturating_mul(quad.src_w as u64)
+        .checked_div(quad.dst_w as u64)
+        .and_then(|v| u32::try_from(v).ok())?;
+    let src_y0 = (trim_top as u64)
+        .saturating_mul(quad.src_h as u64)
+        .checked_div(quad.dst_h as u64)
+        .and_then(|v| u32::try_from(v).ok())?;
+    let src_x1_trim = (trim_right as u64)
+        .saturating_mul(quad.src_w as u64)
+        .checked_div(quad.dst_w as u64)
+        .and_then(|v| u32::try_from(v).ok())?;
+    let src_y1_trim = (trim_bottom as u64)
+        .saturating_mul(quad.src_h as u64)
+        .checked_div(quad.dst_h as u64)
+        .and_then(|v| u32::try_from(v).ok())?;
+    let src_w = quad.src_w.saturating_sub(src_x0).saturating_sub(src_x1_trim);
+    let src_h = quad.src_h.saturating_sub(src_y0).saturating_sub(src_y1_trim);
+    if src_w == 0 || src_h == 0 {
+        return None;
+    }
+
+    Some(TextureScaleQuad {
+        src_x: quad.src_x.saturating_add(src_x0),
+        src_y: quad.src_y.saturating_add(src_y0),
+        src_w,
+        src_h,
+        dst_x: i32::try_from(out_x0).ok()?,
+        dst_y: i32::try_from(out_y0).ok()?,
+        dst_w: u32::try_from(out_x1.saturating_sub(out_x0)).ok()?,
+        dst_h: u32::try_from(out_y1.saturating_sub(out_y0)).ok()?,
     })
 }
 
@@ -2526,6 +3139,178 @@ fn decode_tex_quad_shape(
     ))
 }
 
+fn decode_tex_quad_bounds(
+    bytes: &[u8],
+    off: usize,
+    src_width: u32,
+    src_height: u32,
+    dst_width: u32,
+    dst_height: u32,
+) -> Option<TextureScaleQuad> {
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    let mut min_u = f32::INFINITY;
+    let mut max_u = f32::NEG_INFINITY;
+    let mut min_v = f32::INFINITY;
+    let mut max_v = f32::NEG_INFINITY;
+
+    for lane in 0..6usize {
+        let vertex =
+            read_tex_vertex_f32_bytes(bytes, off + lane * trueos_gfx_core::TEX_VERTEX_SIZE)?;
+        let px = ndc_to_target_x(vertex.x, dst_width);
+        let py = ndc_to_target_y(vertex.y, dst_height);
+        if !(px.is_finite() && py.is_finite() && vertex.u.is_finite() && vertex.v.is_finite()) {
+            return None;
+        }
+        min_x = min_x.min(px);
+        max_x = max_x.max(px);
+        min_y = min_y.min(py);
+        max_y = max_y.max(py);
+        min_u = min_u.min(vertex.u);
+        max_u = max_u.max(vertex.u);
+        min_v = min_v.min(vertex.v);
+        max_v = max_v.max(vertex.v);
+    }
+    if !(min_x < max_x
+        && min_y < max_y
+        && min_u >= 0.0
+        && min_v >= 0.0
+        && max_u <= 1.0
+        && max_v <= 1.0
+        && min_u < max_u
+        && min_v < max_v)
+    {
+        return None;
+    }
+
+    let dst_x = round_i32_if_near(min_x)?;
+    let dst_y = round_i32_if_near(min_y)?;
+    let dst_w = round_u32_if_near(max_x - min_x)?;
+    let dst_h = round_u32_if_near(max_y - min_y)?;
+    let src_x = round_u32_if_near(min_u * src_width as f32)?;
+    let src_y = round_u32_if_near(min_v * src_height as f32)?;
+    let src_w = round_u32_if_near((max_u - min_u) * src_width as f32)?;
+    let src_h = round_u32_if_near((max_v - min_v) * src_height as f32)?;
+    if dst_w == 0
+        || dst_h == 0
+        || src_w == 0
+        || src_h == 0
+        || src_x.saturating_add(src_w) > src_width
+        || src_y.saturating_add(src_h) > src_height
+    {
+        return None;
+    }
+
+    Some(TextureScaleQuad {
+        src_x,
+        src_y,
+        src_w,
+        src_h,
+        dst_x,
+        dst_y,
+        dst_w,
+        dst_h,
+    })
+}
+
+fn tex_quad_is_full_target_untinted(bytes: &[u8], dst_width: u32, dst_height: u32) -> bool {
+    if bytes.len() < 6 * trueos_gfx_core::TEX_VERTEX_SIZE {
+        return false;
+    }
+
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    let mut min_u = f32::INFINITY;
+    let mut max_u = f32::NEG_INFINITY;
+    let mut min_v = f32::INFINITY;
+    let mut max_v = f32::NEG_INFINITY;
+
+    for lane in 0..6usize {
+        let Some(vertex) =
+            read_tex_vertex_f32_bytes(bytes, lane * trueos_gfx_core::TEX_VERTEX_SIZE)
+        else {
+            return false;
+        };
+        if !tex_vertex_is_untinted_white(&vertex) {
+            return false;
+        }
+        let px = ndc_to_target_x(vertex.x, dst_width);
+        let py = ndc_to_target_y(vertex.y, dst_height);
+        if !(px.is_finite() && py.is_finite() && vertex.u.is_finite() && vertex.v.is_finite()) {
+            return false;
+        }
+        min_x = min_x.min(px);
+        max_x = max_x.max(px);
+        min_y = min_y.min(py);
+        max_y = max_y.max(py);
+        min_u = min_u.min(vertex.u);
+        max_u = max_u.max(vertex.u);
+        min_v = min_v.min(vertex.v);
+        max_v = max_v.max(vertex.v);
+    }
+
+    nearly_eq_px(min_x, 0.0)
+        && nearly_eq_px(max_x, dst_width as f32)
+        && nearly_eq_px(min_y, 0.0)
+        && nearly_eq_px(max_y, dst_height as f32)
+        && nearly_eq_uv(min_u, 0.0)
+        && nearly_eq_uv(max_u, 1.0)
+        && nearly_eq_uv(min_v, 0.0)
+        && nearly_eq_uv(max_v, 1.0)
+}
+
+fn tex_quad_is_full_target_white_rgb(bytes: &[u8], dst_width: u32, dst_height: u32) -> bool {
+    if bytes.len() < 6 * trueos_gfx_core::TEX_VERTEX_SIZE {
+        return false;
+    }
+
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    let mut min_u = f32::INFINITY;
+    let mut max_u = f32::NEG_INFINITY;
+    let mut min_v = f32::INFINITY;
+    let mut max_v = f32::NEG_INFINITY;
+
+    for lane in 0..6usize {
+        let Some(vertex) =
+            read_tex_vertex_f32_bytes(bytes, lane * trueos_gfx_core::TEX_VERTEX_SIZE)
+        else {
+            return false;
+        };
+        if !tex_vertex_is_white_rgb(&vertex) {
+            return false;
+        }
+        let px = ndc_to_target_x(vertex.x, dst_width);
+        let py = ndc_to_target_y(vertex.y, dst_height);
+        if !(px.is_finite() && py.is_finite() && vertex.u.is_finite() && vertex.v.is_finite()) {
+            return false;
+        }
+        min_x = min_x.min(px);
+        max_x = max_x.max(px);
+        min_y = min_y.min(py);
+        max_y = max_y.max(py);
+        min_u = min_u.min(vertex.u);
+        max_u = max_u.max(vertex.u);
+        min_v = min_v.min(vertex.v);
+        max_v = max_v.max(vertex.v);
+    }
+
+    nearly_eq_px(min_x, 0.0)
+        && nearly_eq_px(max_x, dst_width as f32)
+        && nearly_eq_px(min_y, 0.0)
+        && nearly_eq_px(max_y, dst_height as f32)
+        && nearly_eq_uv(min_u, 0.0)
+        && nearly_eq_uv(max_u, 1.0)
+        && nearly_eq_uv(min_v, 0.0)
+        && nearly_eq_uv(max_v, 1.0)
+}
+
 #[inline]
 fn sampler_filter_is_texel_center_equivalent(sampler: SamplerDesc) -> bool {
     matches!(sampler.min_filter, SamplerFilter::Nearest | SamplerFilter::Linear)
@@ -2538,6 +3323,11 @@ fn tex_vertex_is_untinted_white(vertex: &TexVertexF32) -> bool {
         && nearly_eq_unit(vertex.g)
         && nearly_eq_unit(vertex.b)
         && nearly_eq_unit(vertex.a)
+}
+
+#[inline]
+fn tex_vertex_is_white_rgb(vertex: &TexVertexF32) -> bool {
+    nearly_eq_unit(vertex.r) && nearly_eq_unit(vertex.g) && nearly_eq_unit(vertex.b)
 }
 
 fn constant_tex_vertex_color_rgba(verts: &[TexVertexF32; 6]) -> Option<u32> {
