@@ -378,6 +378,13 @@ impl IntelGfxBackend {
         self.images.get(idx)?.as_ref()
     }
 
+    pub(crate) fn image_gpgpu_surface(
+        &self,
+        id: ImageId,
+    ) -> Option<crate::intel::gpgpu::GpgpuRgba8Surface> {
+        self.image(id)?.gpgpu_surface()
+    }
+
     fn image_mut(&mut self, id: ImageId) -> Option<&mut ImageEntry> {
         let idx = id.raw().checked_sub(1)? as usize;
         self.images.get_mut(idx)?.as_mut()

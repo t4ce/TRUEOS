@@ -129,6 +129,7 @@ pub enum SystemLockOwner {
     IsIntelActive = 10,
     SwitchToVirgl = 11,
     BackendKind = 12,
+    IntelImageSurface = 13,
 }
 
 impl SystemLockOwner {
@@ -147,6 +148,7 @@ impl SystemLockOwner {
             Self::IsIntelActive => "is_intel_active",
             Self::SwitchToVirgl => "switch_to_virgl",
             Self::BackendKind => "backend_kind",
+            Self::IntelImageSurface => "intel_image_surface",
         }
     }
 
@@ -164,6 +166,7 @@ impl SystemLockOwner {
             x if x == Self::IsIntelActive as u32 => Self::IsIntelActive,
             x if x == Self::SwitchToVirgl as u32 => Self::SwitchToVirgl,
             x if x == Self::BackendKind as u32 => Self::BackendKind,
+            x if x == Self::IntelImageSurface as u32 => Self::IntelImageSurface,
             _ => Self::Unknown,
         }
     }
@@ -397,6 +400,15 @@ pub fn with_context_tag<R>(
     f: impl FnOnce(&mut dyn GfxContext) -> R,
 ) -> Option<R> {
     with_system_tag(owner, |sys| f(sys.context_mut()))
+}
+
+pub(crate) fn intel_image_gpgpu_surface(
+    id: trueos_gfx_core::ImageId,
+) -> Option<crate::intel::gpgpu::GpgpuRgba8Surface> {
+    with_system_tag(SystemLockOwner::IntelImageSurface, |sys| {
+        sys.backend.intel_image_gpgpu_surface(id)
+    })
+    .flatten()
 }
 
 #[inline]

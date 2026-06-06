@@ -5446,6 +5446,26 @@ pub mod cabi {
         texture_dimensions_inner(tex_id).is_some()
     }
 
+    pub fn texture_gpgpu_rgba8_surface(
+        tex_id: u32,
+    ) -> Option<crate::intel::gpgpu::GpgpuRgba8Surface> {
+        if tex_id == 0 {
+            return None;
+        }
+        if reject_unreasonable_tex_id(tex_id, "texture-gpgpu-surface") {
+            return None;
+        }
+        let idx = tex_id.saturating_sub(1) as usize;
+        let image = GFX_CABI_STATE
+            .lock()
+            .tex_images
+            .as_ref()
+            .and_then(|images| images.get(idx))
+            .and_then(|entry| entry.as_ref())
+            .map(|img| img.image)?;
+        crate::gfx::intel_image_gpgpu_surface(image)
+    }
+
     #[inline]
     fn clear_rgba_buffer(rgba: &mut [u8], rgb: u32) {
         let r = ((rgb >> 16) & 0xFF) as u8;

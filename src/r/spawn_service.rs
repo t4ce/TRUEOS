@@ -1564,7 +1564,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &UI2_GBOI_DEMO_STARTED,
         spawn_ui2_gboi_demo,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "ui2-intel-canvas3d-demo",
         UI2_DEMO_READY | crate::r::readiness::GFX_BACKEND_READY,
         &UI2_INTEL_CANVAS3D_DEMO_STARTED,

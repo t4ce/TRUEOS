@@ -44,7 +44,7 @@ The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 - `fill_circle_rgba8.cl`: parameterized RGBA8 circle fill clipped by a rect
 - `blit_rgba8_nearest.cl`: nearest-neighbor RGBA8 rect blit
 - `alpha_blend_rgba8_over.cl`: source-over RGBA8 blend
-- `alpha_blend_worklist_rgba8.cl`: descriptor worklist source-over RGBA8 blends; source/destination rects are unscaled and batched like the fill worklist
+- `alpha_blend_worklist_rgba8.cl`: descriptor worklist RGBA8 composites; source/destination rects are unscaled and batched like the fill worklist
 - `glyph_mask_rgba8.cl`: 8-bit coverage mask blended with packed RGBA8 color
 - `present_rgba8_to_primary_xrgb_rect.cl`: RGBA8 scene rect to primary XRGB rect with optional source Y flip
 - `stamp_mandel_rgba8.cl`: ten-iteration Mandelbrot stamp using destination x/y as both stamp origin and view offset
@@ -78,7 +78,7 @@ The rect worklist evo kernels share a descriptor-driven shape with the
   multi-descriptor probes prove the CPU/GPGPU ABI before lane sharding returns
 - `fill_rect_worklist_rgba8.cl` descriptors are `{ dst_xy, size, color_rgba }`
 - `gradient_rect_worklist_rgba8.cl` descriptors are `{ dst_xy, size, color0_rgba, color1_rgba, flags }`, with `flags bit0` selecting vertical instead of horizontal
-- `alpha_blend_worklist_rgba8.cl` descriptors are `{ src_xy, dst_xy, size }`
+- `alpha_blend_worklist_rgba8.cl` descriptors are `{ src_xy, dst_xy, size, flags, color_rgba }`, with flags for direct copy, source-over, RGB tint, alpha tint, and premultiplied source
 - packed coordinates use 16-bit lanes; destination coordinates are signed
 
 These are intended to replace the old single-rect stage-1 fill/alpha path for
@@ -113,11 +113,11 @@ evo build for UI2 chrome bands and procedural strips. Its SHA-256 is:
 d3e6d5ec26c2b789d43d3308cf740977ce52f5b4df2325a27c92a687796d9149
 ```
 
-`artifacts/adls/alpha_blend_worklist_rgba8.bin` is the descriptor source-over
+`artifacts/adls/alpha_blend_worklist_rgba8.bin` is the descriptor composite
 evo build. Its SHA-256 is:
 
 ```text
-a049103e538a9e9b750a782861dbe9734c9db0d920b13e08bf56bdb746f2d83e
+636bd6dd2dde9e184d26c185ea04f6692476c1dec2c5fa26bf5f5b670cc1eb7e
 ```
 
 Regenerate it with:

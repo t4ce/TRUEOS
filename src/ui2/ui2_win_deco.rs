@@ -652,6 +652,15 @@ pub(super) fn push_chrome_gradient_rect(
     true
 }
 
+fn animate_window_chrome_gradient(
+    window: &Ui2Window,
+    left: (u8, u8, u8, u8),
+    right: (u8, u8, u8, u8),
+) -> ((u8, u8, u8, u8), (u8, u8, u8, u8)) {
+    let _ = window;
+    (left, right)
+}
+
 pub(super) fn collect_window_chrome_gradient_rects(
     state: &Ui2State,
     window: &Ui2Window,
@@ -668,6 +677,7 @@ pub(super) fn collect_window_chrome_gradient_rects(
     } else {
         ((0xC8, 0xCC, 0xC8, 0xFF), (0xF2, 0xF4, 0xF2, 0xFF))
     };
+    let (left, right) = animate_window_chrome_gradient(window, left, right);
     let titleband_h = if window.titlebar_visible {
         if window.state == Ui2WindowStateKind::Minimized {
             rect.h

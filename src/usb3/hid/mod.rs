@@ -95,7 +95,6 @@ impl HidRuntime {
 static HID_RUNTIMES: Mutex<Vec<HidRuntime>> = Mutex::new(Vec::new());
 static CURSOR_EVENT_RING: Mutex<CursorEventRing> = Mutex::new(CursorEventRing::new());
 static CURSOR_EVENT_POP_SEQ: Mutex<u64> = Mutex::new(0);
-static RDP_TABLET_SLOT_ID: Mutex<Option<u32>> = Mutex::new(None);
 
 pub(crate) const HID_UDP_CONTROLLER_ID: u32 = 0x5544_5048; // "UDPH"
 const HID_UDP_SLOT_BASE: u32 = 0x5500_0000;
@@ -288,108 +287,6 @@ pub(crate) fn inject_virtual_cursor_event(
         "ai",
         true,
     );
-}
-
-pub(crate) const RDP_TABLET_CONTROLLER_ID: u32 = 0x5244_5030;
-
-fn hid_slot_id_in_use(slot_id: u32) -> bool {
-    HID_RUNTIMES
-        .lock()
-        .iter()
-        .any(|runtime| runtime.slot_id == slot_id)
-}
-
-pub(crate) fn rdp_tablet_slot_id() -> u32 {
-    let mut guard = RDP_TABLET_SLOT_ID.lock();
-    if let Some(slot_id) = *guard {
-        return slot_id;
-    }
-
-    let mut slot_id = 1u32;
-    while hid_slot_id_in_use(slot_id) || crate::r::cursor::slot_id_in_use(slot_id) {
-        slot_id = slot_id.saturating_add(1);
-    }
-    *guard = Some(slot_id);
-    slot_id
-}
-
-pub(crate) fn remove_rdp_tablet() {
-    let Some(slot_id) = *RDP_TABLET_SLOT_ID.lock() else {
-        return;
-    };
-    remove_hid_slot(RDP_TABLET_CONTROLLER_ID, slot_id);
-}
-
-pub(crate) fn inject_virtual_tablet_absolute_event(
-    slot_id: u32,
-    x: f64,
-    y: f64,
-    buttons_down: u32,
-    flags: u32,
-) {
-    let x = clamp01(x);
-    let y = clamp01(y);
-    let x_raw = ((x * 65535.0) + 0.5).clamp(0.0, 65535.0) as u16;
-    let y_raw = ((y * 65535.0) + 0.5).clamp(0.0, 65535.0) as u16;
-    let buttons = buttons_down.min(u8::MAX as u32) as u8;
-    let event = TrueosHidCursorEvent {
-        t_ms: now_ms_u32(),
-        seq: 0,
-        controller_id: RDP_TABLET_CONTROLLER_ID,
-        slot_id,
-        ep_target: 0,
-        hid_kind: HID_KIND_TABLET,
-        reserved0: 0,
-        reserved1: 0,
-        buttons_down,
-        wheel: 0,
-        reserved2: 0,
-        x,
-        y,
-        flags,
-    };
-    push_cursor_event(event);
-    self::input::push_event(self::input::InputEvent::Tablet(self::input::TabletEvent {
-        slot_id,
-        buttons,
-        report_id: 0,
-        x_raw,
-        y_raw,
-        x_norm_q15: ((x * 32767.0) + 0.5).clamp(0.0, 32767.0) as u16,
-        y_norm_q15: ((y * 32767.0) + 0.5).clamp(0.0, 32767.0) as u16,
-        flags: flags.min(u8::MAX as u32) as u8,
-    }));
-    crate::r::cursor::upsert_snapshot(
-        RDP_TABLET_CONTROLLER_ID,
-        slot_id,
-        0,
-        HID_KIND_TABLET,
-        x,
-        y,
-        buttons_down,
-    );
-    self::hut::upsert_tablet_state(
-        RDP_TABLET_CONTROLLER_ID,
-        slot_id,
-        0,
-        x,
-        y,
-        x_raw,
-        y_raw,
-        buttons_down,
-        0,
-        self::hut::HidSourceKind::Ai,
-        "rdp",
-        true,
-    );
-}
-
-pub(crate) fn inject_virtual_keyboard_boot_report(modifiers: u8, keys: [u8; 6]) {
-    let slot_id = rdp_tablet_slot_id();
-    let report = [
-        modifiers, 0, keys[0], keys[1], keys[2], keys[3], keys[4], keys[5],
-    ];
-    handle_keyboard_boot_report(RDP_TABLET_CONTROLLER_ID, slot_id, 0, &report);
 }
 
 #[inline]

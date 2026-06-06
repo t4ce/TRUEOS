@@ -16,6 +16,51 @@ fn bgrt_pixels_to_rgba(pixels: &[u32]) -> Vec<u8> {
     rgba
 }
 
+fn scale_rgba_nearest(
+    src: &[u8],
+    src_w: u32,
+    src_h: u32,
+    dst_w: u32,
+    dst_h: u32,
+) -> Option<Vec<u8>> {
+    if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
+        return None;
+    }
+    let src_pixels = (src_w as usize).checked_mul(src_h as usize)?;
+    if src.len() != src_pixels.checked_mul(4)? {
+        return None;
+    }
+    let dst_pixels = (dst_w as usize).checked_mul(dst_h as usize)?;
+    let mut dst = vec![0u8; dst_pixels.checked_mul(4)?];
+    for y in 0..dst_h {
+        let sy = (y as u64 * src_h as u64 / dst_h as u64) as usize;
+        for x in 0..dst_w {
+            let sx = (x as u64 * src_w as u64 / dst_w as u64) as usize;
+            let src_off = (sy * src_w as usize + sx) * 4;
+            let dst_off = (y as usize * dst_w as usize + x as usize) * 4;
+            dst[dst_off..dst_off + 4].copy_from_slice(&src[src_off..src_off + 4]);
+        }
+    }
+    Some(dst)
+}
+
+fn upload_bgrt_texture(
+    tex_id: u32,
+    window_id: u32,
+    rgba: Vec<u8>,
+    width: u32,
+    height: u32,
+) -> bool {
+    crate::r::io::cabi::queue_texture_rgba_image_upload_owned(
+        tex_id,
+        width,
+        height,
+        rgba,
+        window_id,
+        "ui2-bgrt-demo-upload",
+    )
+}
+
 #[embassy_executor::task]
 pub async fn ui2_bgrt_demo_task() {
     let _task_guard = crate::r::spawn_service::task_run_guard("ui2-bgrt-demo");
@@ -34,28 +79,6 @@ pub async fn ui2_bgrt_demo_task() {
         w: width as f32,
         h: height as f32,
     };
-
-    if intel_direct {
-        let rc = unsafe {
-            crate::r::io::cabi::trueos_cabi_gfx_upload_texture_rgba_image(
-                UI2_BGRT_TEX_ID,
-                width_u32,
-                height_u32,
-                rgba.as_ptr(),
-                rgba.len(),
-            )
-        };
-        if rc != 0 {
-            crate::log!(
-                "ui2-bgrt-demo: direct upload failed tex={} size={}x{} rc={}\n",
-                UI2_BGRT_TEX_ID,
-                width,
-                height,
-                rc
-            );
-            return;
-        }
-    }
 
     let surface = if intel_direct {
         crate::r::ui2::Ui2SurfaceWindow::create_from_existing_texture_with_size(
@@ -91,11 +114,8 @@ pub async fn ui2_bgrt_demo_task() {
     let _ = crate::r::ui2::set_window_bottom_scrollbar_visible(window_id, false);
     let _ = crate::r::ui2::set_window_resize_maintain_aspect(window_id, true);
 
-    let upload_ok = if intel_direct {
-        true
-    } else {
-        surface.upload_rgba_owned(rgba, "ui2-bgrt-demo-upload")
-    };
+    let upload_ok =
+        upload_bgrt_texture(UI2_BGRT_TEX_ID, window_id, rgba.clone(), width_u32, height_u32);
 
     if !upload_ok {
         crate::log!(
@@ -117,8 +137,44 @@ pub async fn ui2_bgrt_demo_task() {
         if intel_direct { "direct" } else { "queued" }
     );
 
+    let mut uploaded_w = width_u32;
+    let mut uploaded_h = height_u32;
     loop {
-        if crate::r::spawn_service::wait_task_or_timeout_ms("ui2-bgrt-demo", 3_600_000).await {
+        if let Some(content) = crate::r::ui2::window_content_rect_by_id(window_id) {
+            let next_w = (content.w.max(1.0) + 0.5) as u32;
+            let next_h = (content.h.max(1.0) + 0.5) as u32;
+            if next_w != uploaded_w || next_h != uploaded_h {
+                let Some(resized) =
+                    scale_rgba_nearest(&rgba, width_u32, height_u32, next_w, next_h)
+                else {
+                    crate::log!(
+                        "ui2-bgrt-demo: resize scale failed tex={} size={}x{}\n",
+                        UI2_BGRT_TEX_ID,
+                        next_w,
+                        next_h
+                    );
+                    break;
+                };
+                if !upload_bgrt_texture(UI2_BGRT_TEX_ID, window_id, resized, next_w, next_h) {
+                    crate::log!(
+                        "ui2-bgrt-demo: resize upload failed tex={} size={}x{}\n",
+                        UI2_BGRT_TEX_ID,
+                        next_w,
+                        next_h
+                    );
+                    break;
+                }
+                uploaded_w = next_w;
+                uploaded_h = next_h;
+                crate::log!(
+                    "ui2-bgrt-demo: resized tex={} size={}x{}\n",
+                    UI2_BGRT_TEX_ID,
+                    uploaded_w,
+                    uploaded_h
+                );
+            }
+        }
+        if crate::r::spawn_service::wait_task_or_timeout_ms("ui2-bgrt-demo", 33).await {
             break;
         }
     }
