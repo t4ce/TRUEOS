@@ -30,6 +30,8 @@ pub(crate) const GPU_VA_GUC_FW_BASE: u64 = 0x0085_0000;
 pub(crate) const GPU_VA_GUC_ADS_BASE: u64 = 0x0100_0000;
 pub(crate) const GPU_VA_DISPLAY_PRIMARY_BASE: u64 = 0x0200_0000;
 pub(crate) const GPU_VA_DISPLAY_OVERLAY_BASE: u64 = 0x0300_0000;
+pub(crate) const GPU_VA_DISPLAY_UI2_BASE_BASE: u64 = 0x0400_0000;
+pub(crate) const GPU_VA_DISPLAY_UI2_FRAME_BASE: u64 = 0x0500_0000;
 pub(crate) const GPU_VA_DISPLAY_CURSOR_BASE: u64 = 0x0600_0000;
 pub(crate) const WARM_ALIGN: usize = 4096;
 const GGTT_ALIAS_BASE_OFF: usize = 0x0080_0000;
@@ -185,6 +187,7 @@ pub fn init_once() {
     let _ = self::gpgpu::upload_canvas3d_project_rgba8_kernel();
     let _ = self::gpgpu::upload_canvas3d_transform_q16_kernel();
     let _ = self::gpgpu::upload_canvas3d_clip_box_q16_kernel();
+    let _ = self::gpgpu::upload_canvas3d_plane_sample_rgba8_kernel();
     if crate::allcaps::probes::INTEL_GPGPU_ARTIFACT_BOOT_SMOKETESTS {
         let _ = self::gpgpu::submit_direct_rcs_smoke_once();
         let _ = self::gpgpu::submit_empty_eot_walker_once();
@@ -206,6 +209,7 @@ pub fn init_once() {
         let _ = self::gpgpu::submit_canvas3d_project_once();
         let _ = self::gpgpu::submit_canvas3d_transform_smoke_once();
         let _ = self::gpgpu::submit_canvas3d_clip_box_q16_once();
+        let _ = self::gpgpu::submit_canvas3d_plane_sample_rgba8_once();
     } else {
         crate::log!("intel/gpgpu: artifact boot smoketests skipped allcaps=0\n");
     }

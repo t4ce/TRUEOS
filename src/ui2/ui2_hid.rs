@@ -516,14 +516,28 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
     if cursor_overlay_changed {
         note_cursor_overlay_dirty(state, "cursor-overlay");
     }
-    if let Some((window_id, button)) = hover_dirty_prev {
-        if decoration_hover_button_rect(state, window_id, button).is_some() {
-            let _ = note_window_dirty(state, window_id, "decor-button-hover");
+    if crate::gfx::is_intel_active() {
+        if hover_dirty_prev
+            .and_then(|(window_id, button)| decoration_hover_button_rect(state, window_id, button))
+            .is_some()
+            || hover_dirty_next
+                .and_then(|(window_id, button)| {
+                    decoration_hover_button_rect(state, window_id, button)
+                })
+                .is_some()
+        {
+            note_chrome_overlay_dirty(state);
         }
-    }
-    if let Some((window_id, button)) = hover_dirty_next {
-        if decoration_hover_button_rect(state, window_id, button).is_some() {
-            let _ = note_window_dirty(state, window_id, "decor-button-hover");
+    } else {
+        if let Some((window_id, button)) = hover_dirty_prev {
+            if decoration_hover_button_rect(state, window_id, button).is_some() {
+                let _ = note_window_dirty(state, window_id, "decor-button-hover");
+            }
+        }
+        if let Some((window_id, button)) = hover_dirty_next {
+            if decoration_hover_button_rect(state, window_id, button).is_some() {
+                let _ = note_window_dirty(state, window_id, "decor-button-hover");
+            }
         }
     }
 

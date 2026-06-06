@@ -19,7 +19,7 @@ pub async fn ui2_intel_canvas3d_demo_task() {
             h: UI2_INTEL_CANVAS3D_WINDOW_H as f32,
         },
         UI2_INTEL_CANVAS3D_WINDOW_Z,
-        220,
+        255,
         UI2_INTEL_CANVAS3D_TEX_ID,
         false,
         [0x08, 0x08, 0x10, 0xFF],

@@ -45,6 +45,7 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "gpgpu athlas go [duration_ms] [cadence_ms] [count] [present_every]");
     print_shell_line(io, "gpgpu athlas_go [duration_ms] [cadence_ms] [count] [present_every]");
     print_shell_line(io, "gpgpu canvas [duration_ms] [cadence_ms:0.1..200]");
+    print_shell_line(io, "gpgpu plane [half_q16]");
     print_shell_line(io, "gpgpu rectprobe");
     print_shell_line(io, "gpgpu smoke");
 }
@@ -210,9 +211,30 @@ fn parse_canvas_args(args: &mut SplitWhitespace<'_>) -> Option<(u64, u64)> {
     Some((duration_ms, cadence_us))
 }
 
+fn parse_plane_args(args: &mut SplitWhitespace<'_>) -> Option<i32> {
+    let half_q16 = match args.next() {
+        Some(raw) => raw.parse::<i32>().ok()?,
+        None => 32_768,
+    };
+    if args.next().is_some() {
+        return None;
+    }
+    Some(half_q16.clamp(1, 65_536 * 8))
+}
+
 fn hex4(values: [u32; 4]) -> AllocString {
     alloc::format!(
         "[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]",
+        values[0],
+        values[1],
+        values[2],
+        values[3]
+    )
+}
+
+fn vec3_text(values: [i32; 4]) -> AllocString {
+    alloc::format!(
+        "[{},{},{},{}]",
         values[0],
         values[1],
         values[2],
@@ -709,6 +731,52 @@ fn run_canvas(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
     print_shell_line(io, msg.as_str());
 }
 
+fn run_plane(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+    let Some(h) = parse_plane_args(args) else {
+        usage(io);
+        return;
+    };
+
+    let q = 65_536;
+    let constraints = [
+        [q, 0, q, 0],
+        [-q, 0, q, 0],
+        [0, q, q, 0],
+        [0, -q, q, 0],
+    ];
+    let faces: [(&str, [i32; 4], [i32; 4], [i32; 4]); 6] = [
+        ("front", [0, 0, h, 0], [h, 0, 0, 0], [0, h, 0, 0]),
+        ("back", [0, 0, -h, 0], [-h, 0, 0, 0], [0, h, 0, 0]),
+        ("right", [h, 0, 0, 0], [0, 0, -h, 0], [0, h, 0, 0]),
+        ("left", [-h, 0, 0, 0], [0, 0, h, 0], [0, h, 0, 0]),
+        ("top", [0, h, 0, 0], [h, 0, 0, 0], [0, 0, -h, 0]),
+        ("bottom", [0, -h, 0, 0], [h, 0, 0, 0], [0, 0, h, 0]),
+    ];
+
+    let header = alloc::format!(
+        "gpgpu plane: mode=cube6-face-math half_q16={} q16_one={} constraints c0={} c1={} c2={} c3={}",
+        h,
+        q,
+        vec3_text(constraints[0]),
+        vec3_text(constraints[1]),
+        vec3_text(constraints[2]),
+        vec3_text(constraints[3]),
+    );
+    print_shell_line(io, header.as_str());
+
+    for (index, (name, origin, axis_u, axis_v)) in faces.iter().copied().enumerate() {
+        let line = alloc::format!(
+            "gpgpu plane face={} name={} origin={} axis_u={} axis_v={} local=P(origin+u*axis_u+v*axis_v) u,v=-1..1",
+            index,
+            name,
+            vec3_text(origin),
+            vec3_text(axis_u),
+            vec3_text(axis_v),
+        );
+        print_shell_line(io, line.as_str());
+    }
+}
+
 pub(crate) fn try_parse(
     io: &'static dyn ShellBackend2,
     args: &mut SplitWhitespace<'_>,
@@ -736,6 +804,8 @@ pub(crate) fn try_parse(
         run_atlas_go(io, args);
     } else if cmd.eq_ignore_ascii_case("canvas") {
         run_canvas(io, args);
+    } else if cmd.eq_ignore_ascii_case("plane") {
+        run_plane(io, args);
     } else if cmd.eq_ignore_ascii_case("rectprobe") {
         run_rect_probe(io, args);
     } else if cmd.eq_ignore_ascii_case("smoke") {
