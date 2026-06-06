@@ -51,15 +51,6 @@ pub(crate) const SPRITE64_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
 pub(crate) const CANVAS3D_PROJECT_RGBA8_KERNEL_NAME: &str = "canvas3d_project_rgba8";
 pub(crate) const CANVAS3D_PROJECT_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/canvas3d_project_rgba8.cl");
-pub(crate) const CANVAS3D_TRANSLATE_Q16_KERNEL_NAME: &str = "canvas3d_translate_q16";
-pub(crate) const CANVAS3D_TRANSLATE_Q16_OPENCL_SOURCE: &str =
-    include_str!("kernels/canvas3d_translate_q16.cl");
-pub(crate) const CANVAS3D_SCALE_Q16_KERNEL_NAME: &str = "canvas3d_scale_q16";
-pub(crate) const CANVAS3D_SCALE_Q16_OPENCL_SOURCE: &str =
-    include_str!("kernels/canvas3d_scale_q16.cl");
-pub(crate) const CANVAS3D_ROTATE_QUAT_Q16_KERNEL_NAME: &str = "canvas3d_rotate_quat_q16";
-pub(crate) const CANVAS3D_ROTATE_QUAT_Q16_OPENCL_SOURCE: &str =
-    include_str!("kernels/canvas3d_rotate_quat_q16.cl");
 pub(crate) const CANVAS3D_TRANSFORM_Q16_KERNEL_NAME: &str = "canvas3d_transform_q16";
 pub(crate) const CANVAS3D_TRANSFORM_Q16_OPENCL_SOURCE: &str =
     include_str!("kernels/canvas3d_transform_q16.cl");
@@ -124,18 +115,6 @@ pub(crate) const CANVAS3D_PROJECT_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/canvas3d_project_rgba8.bin");
 pub(crate) const CANVAS3D_PROJECT_RGBA8_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/canvas3d_project_rgba8.spv");
-pub(crate) const CANVAS3D_TRANSLATE_Q16_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/canvas3d_translate_q16.bin");
-pub(crate) const CANVAS3D_TRANSLATE_Q16_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/canvas3d_translate_q16.spv");
-pub(crate) const CANVAS3D_SCALE_Q16_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/canvas3d_scale_q16.bin");
-pub(crate) const CANVAS3D_SCALE_Q16_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/canvas3d_scale_q16.spv");
-pub(crate) const CANVAS3D_ROTATE_QUAT_Q16_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/canvas3d_rotate_quat_q16.bin");
-pub(crate) const CANVAS3D_ROTATE_QUAT_Q16_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/canvas3d_rotate_quat_q16.spv");
 pub(crate) const CANVAS3D_TRANSFORM_Q16_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/canvas3d_transform_q16.bin");
 pub(crate) const CANVAS3D_TRANSFORM_Q16_ADLS_SPV: &[u8] =
@@ -204,18 +183,6 @@ pub(crate) const CANVAS3D_PROJECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0xDA, 0xF0, 0x15, 0xA0, 0xB9, 0x8A, 0x45, 0xF7, 0x02, 0xD5, 0xD7, 0x87, 0xCA, 0x19, 0x59, 0xBA,
     0xAC, 0x7C, 0x02, 0xFE, 0x97, 0x93, 0xAC, 0x6E, 0x48, 0xA7, 0x87, 0x18, 0xAE, 0x3D, 0x3E, 0xB6,
 ];
-pub(crate) const CANVAS3D_TRANSLATE_Q16_ADLS_BIN_SHA256: [u8; 32] = [
-    0x1C, 0x3A, 0xF3, 0x11, 0xC1, 0xEE, 0x40, 0xC1, 0xAD, 0x34, 0x47, 0xFD, 0x9E, 0xE7, 0x1C, 0xA7,
-    0x7C, 0x5D, 0x47, 0x74, 0xA2, 0x00, 0x2D, 0x74, 0xEA, 0xD9, 0xBB, 0x50, 0x05, 0x6A, 0xEE, 0xB0,
-];
-pub(crate) const CANVAS3D_SCALE_Q16_ADLS_BIN_SHA256: [u8; 32] = [
-    0x43, 0xBF, 0xA5, 0x1A, 0x06, 0x84, 0xD4, 0xF6, 0xA0, 0x07, 0x6A, 0x10, 0x70, 0x5C, 0xB3, 0x50,
-    0xC9, 0x72, 0x00, 0x29, 0xC4, 0x61, 0x6F, 0x6C, 0xE5, 0xC4, 0x49, 0x84, 0xB2, 0x8F, 0xFB, 0x67,
-];
-pub(crate) const CANVAS3D_ROTATE_QUAT_Q16_ADLS_BIN_SHA256: [u8; 32] = [
-    0xCA, 0xCF, 0x30, 0x74, 0x80, 0x3E, 0x8A, 0x40, 0xB7, 0x7A, 0xCE, 0x13, 0x23, 0x42, 0x47, 0x75,
-    0x9E, 0x6A, 0x8E, 0xDD, 0x27, 0xF5, 0x69, 0x88, 0x89, 0x08, 0x21, 0x43, 0x9F, 0xB5, 0x04, 0x50,
-];
 pub(crate) const CANVAS3D_TRANSFORM_Q16_ADLS_BIN_SHA256: [u8; 32] = [
     0x2C, 0x94, 0x28, 0x73, 0xA2, 0xB5, 0x4C, 0xA2, 0xBB, 0xBD, 0x17, 0xDA, 0x25, 0xFD, 0x1D, 0x22,
     0x0E, 0x86, 0x34, 0x87, 0xAE, 0xD5, 0x9A, 0xE2, 0xA5, 0xE4, 0xF3, 0x0D, 0x41, 0x8F, 0x1D, 0x4D,
@@ -237,9 +204,6 @@ const PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_ADLS_GPU: u64 = 0x0D2E_0000;
 const FILL_RECT_WORKLIST_RGBA8_ADLS_GPU: u64 = 0x0D2F_0000;
 const ALPHA_BLEND_WORKLIST_RGBA8_ADLS_GPU: u64 = 0x0D30_0000;
 const CANVAS3D_PROJECT_RGBA8_ADLS_GPU: u64 = 0x0D25_0000;
-const CANVAS3D_TRANSLATE_Q16_ADLS_GPU: u64 = 0x0D26_0000;
-const CANVAS3D_SCALE_Q16_ADLS_GPU: u64 = 0x0D27_0000;
-const CANVAS3D_ROTATE_QUAT_Q16_ADLS_GPU: u64 = 0x0D28_0000;
 const CANVAS3D_CLIP_BOX_Q16_ADLS_GPU: u64 = 0x0D29_0000;
 const CANVAS3D_TRANSFORM_Q16_ADLS_GPU: u64 = 0x0D2A_0000;
 const COPY_RECT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
@@ -253,9 +217,6 @@ const ALPHA_BLEND_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const GLYPH_MASK_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_TEXT_OFFSET_BYTES: u64 = 0x40;
 const CANVAS3D_PROJECT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
-const CANVAS3D_TRANSLATE_Q16_TEXT_OFFSET_BYTES: u64 = 0x40;
-const CANVAS3D_SCALE_Q16_TEXT_OFFSET_BYTES: u64 = 0x40;
-const CANVAS3D_ROTATE_QUAT_Q16_TEXT_OFFSET_BYTES: u64 = 0x40;
 const CANVAS3D_TRANSFORM_Q16_TEXT_OFFSET_BYTES: u64 = 0x40;
 const CANVAS3D_CLIP_BOX_Q16_TEXT_OFFSET_BYTES: u64 = 0x40;
 
@@ -456,22 +417,12 @@ const CANVAS3D_TRANSFORM_SRC_SURFACE_STATE_OFFSET_BYTES: usize = 0x3080;
 const CANVAS3D_TRANSFORM_DST_SURFACE_STATE_OFFSET_BYTES: usize = 0x30C0;
 const CANVAS3D_TRANSFORM_PAYLOAD_OFFSET_BYTES: usize = 0x3200;
 const CANVAS3D_TRANSFORM_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
-const CANVAS3D_TRANSFORM_CROSS_THREAD_BYTES: usize = 96;
-const CANVAS3D_TRANSFORM_PER_THREAD_BYTES: usize = 96;
-const CANVAS3D_TRANSFORM_INDIRECT_BYTES: usize =
-    CANVAS3D_TRANSFORM_CROSS_THREAD_BYTES + CANVAS3D_TRANSFORM_PER_THREAD_BYTES;
 const CANVAS3D_TRANSFORM_FUSED_CROSS_THREAD_BYTES: usize = 128;
 const CANVAS3D_TRANSFORM_FUSED_PER_THREAD_BYTES: usize = 96;
 const CANVAS3D_TRANSFORM_FUSED_INDIRECT_BYTES: usize =
     CANVAS3D_TRANSFORM_FUSED_CROSS_THREAD_BYTES + CANVAS3D_TRANSFORM_FUSED_PER_THREAD_BYTES;
 const CANVAS3D_TRANSFORM_PRE_MARKER_SLOT: usize = 11;
 const CANVAS3D_TRANSFORM_POST_MARKER_SLOT: usize = 10;
-const CANVAS3D_TRANSFORM_TRANSLATE_PRE_MARKER: u32 = 0xC0DE_3611;
-const CANVAS3D_TRANSFORM_TRANSLATE_POST_MARKER: u32 = 0xC0DE_3612;
-const CANVAS3D_TRANSFORM_SCALE_PRE_MARKER: u32 = 0xC0DE_3621;
-const CANVAS3D_TRANSFORM_SCALE_POST_MARKER: u32 = 0xC0DE_3622;
-const CANVAS3D_TRANSFORM_ROTATE_PRE_MARKER: u32 = 0xC0DE_3631;
-const CANVAS3D_TRANSFORM_ROTATE_POST_MARKER: u32 = 0xC0DE_3632;
 const CANVAS3D_TRANSFORM_FUSED_PRE_MARKER: u32 = 0xC0DE_3641;
 const CANVAS3D_TRANSFORM_FUSED_POST_MARKER: u32 = 0xC0DE_3642;
 const CANVAS3D_CLIP_BOX_IDD_OFFSET_BYTES: usize = 0x3400;
@@ -660,9 +611,6 @@ static PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_UPLOAD: Mutex<Option<UploadedKernelArt
 static EMPTY_EOT_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SPRITE64_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static CANVAS3D_PROJECT_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static CANVAS3D_TRANSLATE_Q16_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static CANVAS3D_SCALE_Q16_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static CANVAS3D_ROTATE_QUAT_Q16_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static CANVAS3D_TRANSFORM_Q16_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static CANVAS3D_CLIP_BOX_Q16_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static DIRECT_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
@@ -823,17 +771,6 @@ pub(crate) struct Canvas3dProjectRgba8Params {
     pub(crate) vertex_count: u32,
     pub(crate) canvas_width: u32,
     pub(crate) canvas_height: u32,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct Canvas3dTransformQ16Params {
-    pub(crate) src_gpu: u64,
-    pub(crate) dst_gpu: u64,
-    pub(crate) src_first_vertex: u32,
-    pub(crate) dst_first_vertex: u32,
-    pub(crate) vertex_count: u32,
-    pub(crate) param_q16: Canvas3dVec3Q16,
 }
 
 #[repr(C)]
@@ -1531,31 +1468,6 @@ pub(crate) const CANVAS3D_PROJECT_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = Gpg
     bin_sha256: CANVAS3D_PROJECT_RGBA8_ADLS_BIN_SHA256,
 };
 
-pub(crate) const CANVAS3D_TRANSLATE_Q16_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
-    name: CANVAS3D_TRANSLATE_Q16_KERNEL_NAME,
-    target: "adls",
-    bin: CANVAS3D_TRANSLATE_Q16_ADLS_BIN,
-    spv: CANVAS3D_TRANSLATE_Q16_ADLS_SPV,
-    bin_sha256: CANVAS3D_TRANSLATE_Q16_ADLS_BIN_SHA256,
-};
-
-pub(crate) const CANVAS3D_SCALE_Q16_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
-    name: CANVAS3D_SCALE_Q16_KERNEL_NAME,
-    target: "adls",
-    bin: CANVAS3D_SCALE_Q16_ADLS_BIN,
-    spv: CANVAS3D_SCALE_Q16_ADLS_SPV,
-    bin_sha256: CANVAS3D_SCALE_Q16_ADLS_BIN_SHA256,
-};
-
-pub(crate) const CANVAS3D_ROTATE_QUAT_Q16_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact {
-        name: CANVAS3D_ROTATE_QUAT_Q16_KERNEL_NAME,
-        target: "adls",
-        bin: CANVAS3D_ROTATE_QUAT_Q16_ADLS_BIN,
-        spv: CANVAS3D_ROTATE_QUAT_Q16_ADLS_SPV,
-        bin_sha256: CANVAS3D_ROTATE_QUAT_Q16_ADLS_BIN_SHA256,
-    };
-
 pub(crate) const CANVAS3D_TRANSFORM_Q16_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
     name: CANVAS3D_TRANSFORM_Q16_KERNEL_NAME,
     target: "adls",
@@ -1614,18 +1526,6 @@ pub(crate) fn sprite64_worklist_rgba8_upload_status() -> Option<UploadedKernelAr
 
 pub(crate) fn canvas3d_project_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *CANVAS3D_PROJECT_RGBA8_UPLOAD.lock()
-}
-
-pub(crate) fn canvas3d_translate_q16_upload_status() -> Option<UploadedKernelArtifact> {
-    *CANVAS3D_TRANSLATE_Q16_UPLOAD.lock()
-}
-
-pub(crate) fn canvas3d_scale_q16_upload_status() -> Option<UploadedKernelArtifact> {
-    *CANVAS3D_SCALE_Q16_UPLOAD.lock()
-}
-
-pub(crate) fn canvas3d_rotate_quat_q16_upload_status() -> Option<UploadedKernelArtifact> {
-    *CANVAS3D_ROTATE_QUAT_Q16_UPLOAD.lock()
 }
 
 pub(crate) fn canvas3d_transform_q16_upload_status() -> Option<UploadedKernelArtifact> {
@@ -1878,69 +1778,6 @@ pub(crate) fn upload_canvas3d_project_rgba8_kernel() -> Option<UploadedKernelArt
         CANVAS3D_PROJECT_RGBA8_ADLS_GPU,
     )?;
     *CANVAS3D_PROJECT_RGBA8_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
-pub(crate) fn upload_canvas3d_translate_q16_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *CANVAS3D_TRANSLATE_Q16_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: canvas3d-translate-q16 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload = upload_artifact(
-        dev,
-        CANVAS3D_TRANSLATE_Q16_ADLS_ARTIFACT,
-        CANVAS3D_TRANSLATE_Q16_ADLS_GPU,
-    )?;
-    *CANVAS3D_TRANSLATE_Q16_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
-pub(crate) fn upload_canvas3d_scale_q16_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *CANVAS3D_SCALE_Q16_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: canvas3d-scale-q16 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload =
-        upload_artifact(dev, CANVAS3D_SCALE_Q16_ADLS_ARTIFACT, CANVAS3D_SCALE_Q16_ADLS_GPU)?;
-    *CANVAS3D_SCALE_Q16_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
-pub(crate) fn upload_canvas3d_rotate_quat_q16_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *CANVAS3D_ROTATE_QUAT_Q16_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: canvas3d-rotate-quat-q16 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload = upload_artifact(
-        dev,
-        CANVAS3D_ROTATE_QUAT_Q16_ADLS_ARTIFACT,
-        CANVAS3D_ROTATE_QUAT_Q16_ADLS_GPU,
-    )?;
-    *CANVAS3D_ROTATE_QUAT_Q16_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
 
@@ -7643,123 +7480,6 @@ fn direct_rcs_encode_canvas3d_project_batch(
     true
 }
 
-fn direct_rcs_encode_canvas3d_transform_batch(
-    state: DirectRcsState,
-    upload: UploadedKernelArtifact,
-    params: Canvas3dTransformQ16Params,
-    pre_marker_value: u32,
-    post_marker_value: u32,
-    src_bytes: usize,
-    dst_bytes: usize,
-) -> bool {
-    if params.vertex_count == 0
-        || CANVAS3D_TRANSFORM_PAYLOAD_OFFSET_BYTES + CANVAS3D_TRANSFORM_INDIRECT_BYTES
-            > DIRECT_RCS_BATCH_BYTES
-    {
-        return false;
-    }
-
-    unsafe {
-        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
-        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
-        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
-    }
-
-    if !direct_rcs_write_copy_rect_interface_descriptor_at(
-        state,
-        CANVAS3D_TRANSFORM_IDD_OFFSET_BYTES,
-        CANVAS3D_TRANSFORM_BINDING_TABLE_OFFSET_BYTES,
-        0x40,
-    ) {
-        return false;
-    }
-    if !direct_rcs_write_copy_rect_surface_states_at(
-        state,
-        CANVAS3D_TRANSFORM_BINDING_TABLE_OFFSET_BYTES,
-        CANVAS3D_TRANSFORM_SRC_SURFACE_STATE_OFFSET_BYTES,
-        CANVAS3D_TRANSFORM_DST_SURFACE_STATE_OFFSET_BYTES,
-        params.src_gpu,
-        src_bytes,
-        params.dst_gpu,
-        dst_bytes,
-    ) {
-        return false;
-    }
-    if !direct_rcs_write_canvas3d_transform_payload(state, params) {
-        return false;
-    }
-
-    let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
-    let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
-    let mut cursor = 0usize;
-    let mut ok = true;
-
-    ok &= direct_rcs_push_pipe_control_full(
-        batch,
-        &mut cursor,
-        (1 << 9) | (1 << 11),
-        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL | 1,
-    );
-    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
-    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
-    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_3D);
-    ok &= direct_rcs_push_pipe_control_full(
-        batch,
-        &mut cursor,
-        (1 << 9) | (1 << 11),
-        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
-    );
-    ok &= direct_rcs_push_state_base_address(
-        batch,
-        &mut cursor,
-        DIRECT_RCS_GPU_VA_BATCH_BASE,
-        DIRECT_RCS_GPU_VA_BATCH_BASE,
-        upload.gpu,
-    );
-    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
-    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
-    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
-    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_VFE_STATE_CMD);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW3_UOS);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW5_UOS);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push(batch, &mut cursor, CANVAS3D_TRANSFORM_IDD_BYTES as u32);
-    ok &= direct_rcs_push(batch, &mut cursor, CANVAS3D_TRANSFORM_IDD_OFFSET_BYTES as u32);
-    ok &= direct_rcs_push_store_marker(
-        batch,
-        &mut cursor,
-        CANVAS3D_TRANSFORM_PRE_MARKER_SLOT,
-        pre_marker_value,
-    );
-    ok &= direct_rcs_push_canvas3d_transform_walker(batch, &mut cursor);
-    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
-    ok &= direct_rcs_push_store_marker(
-        batch,
-        &mut cursor,
-        CANVAS3D_TRANSFORM_POST_MARKER_SLOT,
-        post_marker_value,
-    );
-    ok &= direct_rcs_push(batch, &mut cursor, MI_BATCH_BUFFER_END);
-    ok &= direct_rcs_push(batch, &mut cursor, MI_NOOP);
-
-    if !ok {
-        return false;
-    }
-
-    super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
-    super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
-    true
-}
-
 fn direct_rcs_encode_canvas3d_transform_fused_batch(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
@@ -9080,51 +8800,6 @@ fn direct_rcs_write_canvas3d_project_payload(
     true
 }
 
-fn direct_rcs_write_canvas3d_transform_payload(
-    state: DirectRcsState,
-    params: Canvas3dTransformQ16Params,
-) -> bool {
-    if CANVAS3D_TRANSFORM_PAYLOAD_OFFSET_BYTES + CANVAS3D_TRANSFORM_INDIRECT_BYTES
-        > DIRECT_RCS_BATCH_BYTES
-    {
-        return false;
-    }
-
-    unsafe {
-        let payload = state
-            .batch_virt
-            .add(CANVAS3D_TRANSFORM_PAYLOAD_OFFSET_BYTES);
-        core::ptr::write_bytes(payload, 0, CANVAS3D_TRANSFORM_INDIRECT_BYTES);
-        let dwords = payload as *mut u32;
-        core::ptr::write_volatile(dwords.add(3), 16);
-        core::ptr::write_volatile(dwords.add(4), 1);
-        core::ptr::write_volatile(dwords.add(5), 1);
-        core::ptr::write_volatile(dwords.add(8), 16);
-        core::ptr::write_volatile(dwords.add(9), 1);
-        core::ptr::write_volatile(dwords.add(10), 1);
-        core::ptr::write_volatile(dwords.add(12), params.src_gpu as u32);
-        core::ptr::write_volatile(dwords.add(13), (params.src_gpu >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(14), params.dst_gpu as u32);
-        core::ptr::write_volatile(dwords.add(15), (params.dst_gpu >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(16), params.src_first_vertex);
-        core::ptr::write_volatile(dwords.add(17), params.dst_first_vertex);
-        core::ptr::write_volatile(dwords.add(18), params.vertex_count);
-        core::ptr::write_volatile(dwords.add(19), 0);
-        core::ptr::write_volatile(dwords.add(20), params.param_q16.x as u32);
-        core::ptr::write_volatile(dwords.add(21), params.param_q16.y as u32);
-        core::ptr::write_volatile(dwords.add(22), params.param_q16.z as u32);
-        core::ptr::write_volatile(dwords.add(23), params.param_q16.pad as u32);
-
-        let local_ids = payload.add(CANVAS3D_TRANSFORM_CROSS_THREAD_BYTES) as *mut u16;
-        for lane in 0..16usize {
-            core::ptr::write_volatile(local_ids.add(lane), lane as u16);
-            core::ptr::write_volatile(local_ids.add(16 + lane), 0);
-            core::ptr::write_volatile(local_ids.add(32 + lane), 0);
-        }
-    }
-    true
-}
-
 fn direct_rcs_write_canvas3d_transform_fused_payload(
     state: DirectRcsState,
     params: Canvas3dTransformFusedQ16Params,
@@ -9833,28 +9508,6 @@ fn direct_rcs_push_canvas3d_project_walker(batch: &mut [u32], cursor: &mut usize
         && direct_rcs_push(batch, cursor, 0)
         && direct_rcs_push(batch, cursor, CANVAS3D_PROJECT_INDIRECT_BYTES as u32)
         && direct_rcs_push(batch, cursor, CANVAS3D_PROJECT_PAYLOAD_OFFSET_BYTES as u32)
-        && direct_rcs_push(
-            batch,
-            cursor,
-            (GPGPU_WALKER_SIMD16_SELECT << 30) | (GPGPU_WALKER_GROUP_THREADS - 1),
-        )
-        && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, 1)
-        && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, 1)
-        && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, GPGPU_WALKER_GROUP_Z_DIM)
-        && direct_rcs_push(batch, cursor, GPGPU_WALKER_SIMD16_MASK)
-        && direct_rcs_push(batch, cursor, GPGPU_WALKER_BOTTOM_MASK)
-}
-
-fn direct_rcs_push_canvas3d_transform_walker(batch: &mut [u32], cursor: &mut usize) -> bool {
-    direct_rcs_push(batch, cursor, GPGPU_WALKER_CMD)
-        && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, CANVAS3D_TRANSFORM_INDIRECT_BYTES as u32)
-        && direct_rcs_push(batch, cursor, CANVAS3D_TRANSFORM_PAYLOAD_OFFSET_BYTES as u32)
         && direct_rcs_push(
             batch,
             cursor,

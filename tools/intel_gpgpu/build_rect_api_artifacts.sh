@@ -36,9 +36,6 @@ kernels=(
     stamp_mandel_rgba8
     sprite64_worklist_rgba8
     canvas3d_project_rgba8
-    canvas3d_translate_q16
-    canvas3d_scale_q16
-    canvas3d_rotate_quat_q16
     canvas3d_transform_q16
     canvas3d_clip_box_q16
 )
