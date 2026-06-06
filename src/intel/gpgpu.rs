@@ -5,9 +5,10 @@ use spin::{Mutex, Once};
 mod test_gpgpu;
 
 pub(crate) use test_gpgpu::{
-    GpgpuShellCube20ProjectResult, shell_cube20_project_spin, submit_canvas3d_clip_box_q16_once,
-    submit_canvas3d_project_once, submit_canvas3d_transform_smoke_once,
-    ui2_canvas3d_archaeology_project_frame,
+    GpgpuCanvas3dUi2TextureFrame, GpgpuShellCube20ProjectResult, shell_cube20_project_spin,
+    submit_canvas3d_clip_box_q16_once, submit_canvas3d_project_once,
+    submit_canvas3d_transform_smoke_once, ui2_canvas3d_archaeology_project_frame,
+    ui2_canvas3d_archaeology_project_frame_in_rect, ui2_canvas3d_archaeology_project_texture_frame,
 };
 
 pub(crate) const COPY_RECT_RGBA8_KERNEL_NAME: &str = "copy_rect_rgba8";
@@ -172,8 +173,8 @@ pub(crate) const ALPHA_BLEND_RGBA8_OVER_ADLS_BIN_SHA256: [u8; 32] = [
     0x77, 0x15, 0xF4, 0xA7, 0xA3, 0x68, 0xA8, 0x9F, 0xD1, 0x13, 0x87, 0xFB, 0x54, 0x0F, 0x48, 0x1C,
 ];
 pub(crate) const ALPHA_BLEND_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
-    0x76, 0x85, 0xA0, 0x32, 0xB8, 0x9E, 0x03, 0xF0, 0x25, 0x06, 0x32, 0xB9, 0x15, 0xED, 0xDF, 0x70,
-    0x49, 0xCE, 0x6F, 0x47, 0x1D, 0x6E, 0xB5, 0xAC, 0x3F, 0xC6, 0x32, 0x43, 0x2C, 0x70, 0xB3, 0x89,
+    0x63, 0x6B, 0xD6, 0xDD, 0x2D, 0xDE, 0x9E, 0x18, 0x4D, 0x26, 0xC1, 0x85, 0xEA, 0x04, 0xF6, 0x69,
+    0x24, 0x76, 0xC1, 0xDE, 0xC2, 0xC5, 0xFA, 0x26, 0xBF, 0x5F, 0x5B, 0x67, 0x0C, 0xC1, 0xEB, 0x7E,
 ];
 pub(crate) const GLYPH_MASK_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x90, 0x8D, 0xF0, 0x7D, 0x62, 0xB0, 0x69, 0xF3, 0x1A, 0x04, 0x6D, 0x29, 0x02, 0xDF, 0xF9, 0xA0,
@@ -490,6 +491,8 @@ const ICO30_CORNER_COUNT: usize = 30;
 const ICO60_EDGE_COUNT: usize = 60;
 const ICO90_VERTEX_COUNT: usize = ICO30_CORNER_COUNT + ICO60_EDGE_COUNT;
 const CUBE20_HALF_Q16: i32 = CANVAS3D_PROJECT_Q16_ONE / 2;
+const CUBE20_SEED_SCALE: i32 = 2;
+const CUBE20_SEED_HALF_Q16: i32 = CUBE20_HALF_Q16 * CUBE20_SEED_SCALE;
 const CUBE20_PRESENT_COLORS: [u32; CUBE20_INSTANCE_COUNT] = [0xFFFF_3048];
 const CUBE20_EDGES: [(usize, usize); CUBE20_EDGE_COUNT] = [
     (0, 1),
@@ -774,7 +777,16 @@ pub(crate) struct AlphaBlendWorklistRgba8Desc {
     pub(crate) src_xy: u32,
     pub(crate) dst_xy: u32,
     pub(crate) size: u32,
+    pub(crate) flags: u32,
+    pub(crate) color_rgba: u32,
 }
+
+pub(crate) const COMPOSITE_WORKLIST_FLAG_COPY: u32 = 1 << 0;
+pub(crate) const COMPOSITE_WORKLIST_FLAG_SRC_OVER: u32 = 1 << 1;
+pub(crate) const COMPOSITE_WORKLIST_FLAG_TINT_RGB: u32 = 1 << 2;
+pub(crate) const COMPOSITE_WORKLIST_FLAG_TINT_ALPHA: u32 = 1 << 3;
+pub(crate) const COMPOSITE_WORKLIST_FLAG_PREMUL_SRC: u32 = 1 << 4;
+pub(crate) const COMPOSITE_WORKLIST_NEUTRAL_COLOR_RGBA: u32 = 0xFFFF_FFFF;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -2148,6 +2160,24 @@ pub(crate) fn alpha_blend_worklist_rgba8_over_submit_stats(
     dst: GpgpuRgba8Surface,
     dst_xy: GpgpuPoint,
 ) -> GpgpuSubmitStats {
+    alpha_blend_worklist_rgba8_over_submit_stats_with_flags(
+        src,
+        src_rect,
+        dst,
+        dst_xy,
+        COMPOSITE_WORKLIST_FLAG_SRC_OVER,
+        COMPOSITE_WORKLIST_NEUTRAL_COLOR_RGBA,
+    )
+}
+
+pub(crate) fn alpha_blend_worklist_rgba8_over_submit_stats_with_flags(
+    src: GpgpuRgba8Surface,
+    src_rect: GpgpuRect,
+    dst: GpgpuRgba8Surface,
+    dst_xy: GpgpuPoint,
+    flags: u32,
+    color_rgba: u32,
+) -> GpgpuSubmitStats {
     if src_rect.x < 0 || src_rect.y < 0 {
         return GpgpuSubmitStats::default();
     }
@@ -2170,6 +2200,8 @@ pub(crate) fn alpha_blend_worklist_rgba8_over_submit_stats(
         src_xy: pack_u16_pair_u32(src_rect.x as u16, src_rect.y as u16),
         dst_xy: pack_i16_pair_u32(dst_xy.x as i16, dst_xy.y as i16),
         size: pack_u16_pair_u32(src_rect.width as u16, src_rect.height as u16),
+        flags,
+        color_rgba,
     };
     let stats = alpha_blend_worklist_rgba8_over_stats(src, dst, core::slice::from_ref(&desc));
     GpgpuSubmitStats {
@@ -2287,6 +2319,55 @@ pub(crate) fn alpha_blend_rgba8_over_primary_stats(
     src_rect: GpgpuRect,
     dst_xy: GpgpuPoint,
 ) -> Option<GpgpuSubmitStats> {
+    alpha_blend_rgba8_over_primary_with_flags_stats(
+        src,
+        src_rect,
+        dst_xy,
+        COMPOSITE_WORKLIST_FLAG_SRC_OVER,
+        COMPOSITE_WORKLIST_NEUTRAL_COLOR_RGBA,
+    )
+}
+
+pub(crate) fn alpha_blend_rgba8_over_primary_with_flags_stats(
+    src: GpgpuRgba8Surface,
+    src_rect: GpgpuRect,
+    dst_xy: GpgpuPoint,
+    flags: u32,
+    color_rgba: u32,
+) -> Option<GpgpuSubmitStats> {
+    alpha_blend_rgba8_tiled_over_primary_with_flags_stats(
+        src,
+        src_rect,
+        dst_xy,
+        src_rect.width,
+        src_rect.height,
+        flags,
+        color_rgba,
+    )
+}
+
+pub(crate) fn alpha_blend_rgba8_tiled_over_primary_with_flags_stats(
+    src: GpgpuRgba8Surface,
+    src_rect: GpgpuRect,
+    dst_xy: GpgpuPoint,
+    tile_width: u32,
+    tile_height: u32,
+    flags: u32,
+    color_rgba: u32,
+) -> Option<GpgpuSubmitStats> {
+    if src_rect.is_empty()
+        || src_rect.x < 0
+        || src_rect.y < 0
+        || tile_width == 0
+        || tile_height == 0
+        || dst_xy.x < i16::MIN as i32
+        || dst_xy.x > i16::MAX as i32
+        || dst_xy.y < i16::MIN as i32
+        || dst_xy.y > i16::MAX as i32
+    {
+        return None;
+    }
+
     let target = super::display::primary_surface_gpgpu_marker_target()?;
     let primary = GpgpuRgba8Surface::new(
         target.phys,
@@ -2296,7 +2377,49 @@ pub(crate) fn alpha_blend_rgba8_over_primary_stats(
         target.height,
         target.pitch_bytes,
     )?;
-    let stats = alpha_blend_worklist_rgba8_over_submit_stats(src, src_rect, primary, dst_xy);
+
+    let mut descs = Vec::new();
+    let mut y = 0u32;
+    while y < src_rect.height {
+        let h = tile_height.min(src_rect.height.saturating_sub(y));
+        let mut x = 0u32;
+        while x < src_rect.width {
+            let w = tile_width.min(src_rect.width.saturating_sub(x));
+            let sx = (src_rect.x as u32).saturating_add(x);
+            let sy = (src_rect.y as u32).saturating_add(y);
+            let dx = dst_xy.x.saturating_add(x as i32);
+            let dy = dst_xy.y.saturating_add(y as i32);
+            if sx <= u16::MAX as u32
+                && sy <= u16::MAX as u32
+                && w <= u16::MAX as u32
+                && h <= u16::MAX as u32
+                && dx >= i16::MIN as i32
+                && dx <= i16::MAX as i32
+                && dy >= i16::MIN as i32
+                && dy <= i16::MAX as i32
+            {
+                descs.push(AlphaBlendWorklistRgba8Desc {
+                    src_xy: pack_u16_pair_u32(sx as u16, sy as u16),
+                    dst_xy: pack_i16_pair_u32(dx as i16, dy as i16),
+                    size: pack_u16_pair_u32(w as u16, h as u16),
+                    flags,
+                    color_rgba,
+                });
+            }
+            x = x.saturating_add(w);
+        }
+        y = y.saturating_add(h);
+    }
+
+    if descs.is_empty() {
+        return None;
+    }
+
+    let worklist_stats = alpha_blend_worklist_rgba8_over_stats(src, primary, descs.as_slice());
+    let stats = GpgpuSubmitStats {
+        spans: worklist_stats.descs,
+        submits: worklist_stats.submits,
+    };
     if stats.spans == 0 || stats.submits == 0 {
         return None;
     }
@@ -2465,6 +2588,8 @@ pub(crate) fn solid_rects_rgba8_over_primary(
             src_xy: pack_u16_pair_u32(0, src_y_u16),
             dst_xy: pack_i16_pair_u32(dst_x_i16, dst_y_i16),
             size: pack_u16_pair_u32(width, height),
+            flags: COMPOSITE_WORKLIST_FLAG_SRC_OVER,
+            color_rgba: COMPOSITE_WORKLIST_NEUTRAL_COLOR_RGBA,
         });
     }
     if fill_descs.is_empty() || blend_descs.is_empty() {
@@ -2655,6 +2780,8 @@ pub(crate) fn gradient_rects_rgba8_over_primary(
             src_xy: pack_u16_pair_u32(0, src_y_u16),
             dst_xy: pack_i16_pair_u32(dst_x_i16, dst_y_i16),
             size: pack_u16_pair_u32(width, height),
+            flags: COMPOSITE_WORKLIST_FLAG_SRC_OVER,
+            color_rgba: COMPOSITE_WORKLIST_NEUTRAL_COLOR_RGBA,
         });
     }
     if gradient_descs.is_empty() || blend_descs.is_empty() {
@@ -4667,6 +4794,7 @@ fn submit_alpha_blend_worklist_rgba8_probe(force: bool) -> bool {
 
     let _desc_guard = RECT_WORKLIST_DESC_SUBMIT_LOCK.lock();
     let src_values = [0x8000_00FF, 0x8000_FF00, 0x80FF_0000, 0x4000_FFFF];
+    let copy_values = [0x7F11_2233, 0x8044_5566, 0xC077_8899, 0xFFA0_B0C0];
     let dst_values = [0xFF00_0000, 0xFF00_0000, 0xFF00_0000, 0xFF20_2020];
     let mut expected = [0u32; 4];
     for index in 0..expected.len() {
@@ -4679,7 +4807,9 @@ fn submit_alpha_blend_worklist_rgba8_probe(force: bool) -> bool {
         let pixels = state.clear_test_virt as *mut u32;
         for index in 0..4usize {
             core::ptr::write_volatile(pixels.add(index), src_values[index]);
+            core::ptr::write_volatile(pixels.add(4 + index), copy_values[index]);
             core::ptr::write_volatile(pixels.add(8 + index), dst_values[index]);
+            core::ptr::write_volatile(pixels.add(16 + index), 0xCC00_0000 | index as u32);
         }
         let descs = desc.virt as *mut AlphaBlendWorklistRgba8Desc;
         core::ptr::write_volatile(
@@ -4688,6 +4818,18 @@ fn submit_alpha_blend_worklist_rgba8_probe(force: bool) -> bool {
                 src_xy: pack_u16_pair_u32(0, 0),
                 dst_xy: pack_i16_pair_u32(8, 0),
                 size: pack_u16_pair_u32(4, 1),
+                flags: COMPOSITE_WORKLIST_FLAG_SRC_OVER,
+                color_rgba: COMPOSITE_WORKLIST_NEUTRAL_COLOR_RGBA,
+            },
+        );
+        core::ptr::write_volatile(
+            descs.add(1),
+            AlphaBlendWorklistRgba8Desc {
+                src_xy: pack_u16_pair_u32(4, 0),
+                dst_xy: pack_i16_pair_u32(16, 0),
+                size: pack_u16_pair_u32(4, 1),
+                flags: COMPOSITE_WORKLIST_FLAG_COPY,
+                color_rgba: COMPOSITE_WORKLIST_NEUTRAL_COLOR_RGBA,
             },
         );
     }
@@ -4701,7 +4843,7 @@ fn submit_alpha_blend_worklist_rgba8_probe(force: bool) -> bool {
         src_pitch_bytes: surface.pitch_bytes,
         dst_pitch_bytes: surface.pitch_bytes,
         desc_base: 0,
-        desc_count: 1,
+        desc_count: 2,
     };
     let start_tick = direct_rcs_now_tick();
     let submitted = submit_alpha_blend_worklist(surface, surface, desc, params);
@@ -4710,19 +4852,24 @@ fn submit_alpha_blend_worklist_rgba8_probe(force: bool) -> bool {
     let post_marker = direct_rcs_read_result_slot(state, RECT_WORKLIST_POST_MARKER_SLOT);
     let src_after = direct_rcs_read_worklist_probe_span(state, 0, 0);
     let dst_after = direct_rcs_read_worklist_probe_span(state, 0, 8);
+    let copy_after = direct_rcs_read_worklist_probe_span(state, 0, 16);
     let ok = submitted
         && pre_marker == ALPHA_BLEND_WORKLIST_PRE_MARKER
         && post_marker == ALPHA_BLEND_WORKLIST_POST_MARKER
         && src_after == src_values
-        && dst_after == expected;
+        && dst_after == expected
+        && copy_after == copy_values;
 
     crate::log_info!(
         target: "gpgpu";
-        "intel/gpgpu: alpha-blend-worklist-rgba8 forcewake=1 ggtt=1 ppgtt=1 kernel_ppgtt=1 src_ppgtt=1 dst_ppgtt=1 desc_ppgtt=1 batch=1 submitted={} ok={} submit_ms={} descs=1 walkers={} pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} src_gpu=0x{:X} dst_gpu=0x{:X} desc_gpu=0x{:X} src_after=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] dst_after=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] expected=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] artifact={}\n",
+        "intel/gpgpu: alpha-blend-worklist-rgba8 forcewake=1 ggtt=1 ppgtt=1 kernel_ppgtt=1 src_ppgtt=1 dst_ppgtt=1 desc_ppgtt=1 batch=1 submitted={} ok={} submit_ms={} descs=2 walkers={} flags_src_over=0x{:X} flags_copy=0x{:X} color=0x{:08X} pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} src_gpu=0x{:X} dst_gpu=0x{:X} desc_gpu=0x{:X} src_after=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] dst_after=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] expected=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] copy_after=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] artifact={}\n",
         submitted as u8,
         ok as u8,
         submit_ms,
-        rect_worklist_walker_count(1),
+        rect_worklist_walker_count(2),
+        COMPOSITE_WORKLIST_FLAG_SRC_OVER,
+        COMPOSITE_WORKLIST_FLAG_COPY,
+        COMPOSITE_WORKLIST_NEUTRAL_COLOR_RGBA,
         pre_marker,
         post_marker,
         ALPHA_BLEND_WORKLIST_POST_MARKER,
@@ -4743,6 +4890,10 @@ fn submit_alpha_blend_worklist_rgba8_probe(force: bool) -> bool {
         expected[1],
         expected[2],
         expected[3],
+        copy_after[0],
+        copy_after[1],
+        copy_after[2],
+        copy_after[3],
         ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME,
     );
 

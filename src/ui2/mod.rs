@@ -722,6 +722,7 @@ static UI2_BROWSER_WINDOW_ID: AtomicU32 = AtomicU32::new(0);
 static UI2_CURSOR_SPRITE64_LOGS: AtomicU32 = AtomicU32::new(0);
 static UI2_CHROME_GRADIENT_RECT_LOGS: AtomicU32 = AtomicU32::new(0);
 static UI2_CHROME_SOLID_RECT_LOGS: AtomicU32 = AtomicU32::new(0);
+static UI2_CONTENT_GPGPU_LOGS: AtomicU32 = AtomicU32::new(0);
 
 #[inline]
 fn boot_probe_ms() -> u64 {
@@ -734,6 +735,11 @@ fn elapsed_ms_since(started_at: Instant) -> u64 {
     Instant::now()
         .saturating_duration_since(started_at)
         .as_millis() as u64
+}
+
+#[inline]
+fn ui2_now_ms() -> u64 {
+    Instant::now().as_millis() as u64
 }
 
 fn init_state() -> &'static Mutex<Ui2State> {
@@ -1500,6 +1506,171 @@ fn draw_chrome_solid_rects_intel_gpgpu(state: &Ui2State, skip_bands: bool) -> bo
             result.presented as u8,
             result.present_ms,
             result.total_ms
+        );
+    }
+    ok
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+struct Ui2IntelContentGpgpuStats {
+    candidates: usize,
+    submitted: usize,
+    skipped: usize,
+    spans: usize,
+    submits: usize,
+    pixels: usize,
+}
+
+fn clip_texture_content_to_primary(
+    state: &Ui2State,
+    content: Ui2Rect,
+    draw_x: f32,
+    draw_y: f32,
+    draw_w: f32,
+    draw_h: f32,
+    tex_w: u32,
+    tex_h: u32,
+) -> Option<(crate::intel::gpgpu::GpgpuRect, crate::intel::gpgpu::GpgpuPoint)> {
+    if tex_w == 0 || tex_h == 0 || !(draw_w > 0.0 && draw_h > 0.0) {
+        return None;
+    }
+
+    let clip_x0 = libm::floorf(draw_x.max(content.x).max(0.0));
+    let clip_y0 = libm::floorf(draw_y.max(content.y).max(0.0));
+    let clip_x1 = libm::ceilf(
+        (draw_x + draw_w)
+            .min(content.x + content.w)
+            .min(state.view_w as f32),
+    );
+    let clip_y1 = libm::ceilf(
+        (draw_y + draw_h)
+            .min(content.y + content.h)
+            .min(state.view_h as f32),
+    );
+    if clip_x1 <= clip_x0 || clip_y1 <= clip_y0 {
+        return None;
+    }
+
+    let src_x = (clip_x0 - draw_x).max(0.0) as u32;
+    let src_y = (clip_y0 - draw_y).max(0.0) as u32;
+    if src_x >= tex_w || src_y >= tex_h {
+        return None;
+    }
+
+    let mut width = (clip_x1 - clip_x0) as u32;
+    let mut height = (clip_y1 - clip_y0) as u32;
+    width = width.min(tex_w.saturating_sub(src_x));
+    height = height.min(tex_h.saturating_sub(src_y));
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    Some((
+        crate::intel::gpgpu::GpgpuRect::new(src_x as i32, src_y as i32, width, height),
+        crate::intel::gpgpu::GpgpuPoint::new(clip_x0 as i32, clip_y0 as i32),
+    ))
+}
+
+fn draw_window_content_textures_intel_gpgpu(state: &Ui2State) -> bool {
+    if !crate::gfx::is_intel_active() {
+        return false;
+    }
+
+    let mut stats = Ui2IntelContentGpgpuStats::default();
+    for idx in sorted_window_indices(state) {
+        let window = &state.windows[idx];
+        if !window_is_renderable(window)
+            || !window_content_participates_in_composition(window)
+            || window.state == Ui2WindowStateKind::Minimized
+            || window.content_tex_id == 0
+        {
+            continue;
+        }
+        let Some(content) = window_content_rect(state, window) else {
+            continue;
+        };
+        if !(content.w > 0.0 && content.h > 0.0) || !texture_is_drawable(window.content_tex_id) {
+            continue;
+        }
+        stats.candidates = stats.candidates.saturating_add(1);
+
+        let Some((tex_w, tex_h)) = texture_dimensions(window.content_tex_id) else {
+            stats.skipped = stats.skipped.saturating_add(1);
+            continue;
+        };
+        let Some(src_surface) =
+            crate::r::io::cabi::texture_gpgpu_rgba8_surface(window.content_tex_id)
+        else {
+            stats.skipped = stats.skipped.saturating_add(1);
+            continue;
+        };
+
+        let (draw_x, draw_y, draw_w, draw_h) = if window.content_preserve_scale {
+            let draw_w = tex_w as f32;
+            let draw_h = tex_h as f32;
+            (
+                content.x + (content.w - draw_w) * 0.5,
+                content.y + (content.h - draw_h) * 0.5,
+                draw_w,
+                draw_h,
+            )
+        } else {
+            (content.x, content.y, content.w, content.h)
+        };
+
+        let Some((src_rect, dst_xy)) = clip_texture_content_to_primary(
+            state, content, draw_x, draw_y, draw_w, draw_h, tex_w, tex_h,
+        ) else {
+            stats.skipped = stats.skipped.saturating_add(1);
+            continue;
+        };
+
+        let mut flags = if window.content_tex_blend || window.alpha < 255 {
+            crate::intel::gpgpu::COMPOSITE_WORKLIST_FLAG_SRC_OVER
+        } else {
+            crate::intel::gpgpu::COMPOSITE_WORKLIST_FLAG_COPY
+        };
+        let color_rgba = if window.alpha < 255 {
+            flags |= crate::intel::gpgpu::COMPOSITE_WORKLIST_FLAG_TINT_ALPHA;
+            ((window.alpha as u32) << 24) | 0x00FF_FFFF
+        } else {
+            crate::intel::gpgpu::COMPOSITE_WORKLIST_NEUTRAL_COLOR_RGBA
+        };
+
+        let Some(submit_stats) =
+            crate::intel::gpgpu::alpha_blend_rgba8_tiled_over_primary_with_flags_stats(
+                src_surface,
+                src_rect,
+                dst_xy,
+                64,
+                16,
+                flags,
+                color_rgba,
+            )
+        else {
+            stats.skipped = stats.skipped.saturating_add(1);
+            continue;
+        };
+        stats.submitted = stats.submitted.saturating_add(1);
+        stats.spans = stats.spans.saturating_add(submit_stats.spans);
+        stats.submits = stats.submits.saturating_add(submit_stats.submits);
+        stats.pixels = stats
+            .pixels
+            .saturating_add((src_rect.width as usize).saturating_mul(src_rect.height as usize));
+    }
+
+    let ok = stats.skipped == 0;
+    let log_n = UI2_CONTENT_GPGPU_LOGS.fetch_add(1, Ordering::Relaxed);
+    if log_n < 24 || !ok {
+        crate::log!(
+            "ui2: content-gpgpu ok={} candidates={} submitted={} skipped={} spans={} submits={} pixels={} artifact=alpha_blend_worklist_rgba8 path=texture-to-primary\n",
+            ok as u8,
+            stats.candidates,
+            stats.submitted,
+            stats.skipped,
+            stats.spans,
+            stats.submits,
+            stats.pixels
         );
     }
     ok
@@ -3344,15 +3515,19 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
             let chrome_gradients_gpgpu = draw_chrome_gradient_rects_intel_gpgpu(state);
             let chrome_rects_gpgpu =
                 draw_chrome_solid_rects_intel_gpgpu(state, chrome_gradients_gpgpu);
+            let content_gpgpu = draw_window_content_textures_intel_gpgpu(state);
             let surroundings_sprite64 = draw_cursor_overlay_layer_intel_sprite64(state, true, true);
-            crate::log!(
-                "ui2: intel direct-window-present seq={} windows={} hotloop=gradients+rect-lines+sprite64 scene_layer=0 fullscreen_alpha=0 content_baseline=0 chrome_gradients_gpgpu={} chrome_rects_gpgpu={} surroundings_sprite64={}\n",
-                compose_seq,
-                stats.visible_windows,
-                chrome_gradients_gpgpu as u8,
-                chrome_rects_gpgpu as u8,
-                surroundings_sprite64 as u8
-            );
+            if compose_seq <= 16 || compose_seq.is_multiple_of(120) {
+                crate::log!(
+                    "ui2: intel direct-window-present seq={} windows={} hotloop=gradients+rect-lines+content+sprite64 scene_layer=0 fullscreen_alpha=0 content_gpgpu={} chrome_gradients_gpgpu={} chrome_rects_gpgpu={} surroundings_sprite64={}\n",
+                    compose_seq,
+                    stats.visible_windows,
+                    content_gpgpu as u8,
+                    chrome_gradients_gpgpu as u8,
+                    chrome_rects_gpgpu as u8,
+                    surroundings_sprite64 as u8
+                );
+            }
             frame_ok = true;
             return;
         }

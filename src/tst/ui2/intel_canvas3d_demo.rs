@@ -27,7 +27,10 @@ pub async fn ui2_intel_canvas3d_demo_task() {
         return;
     };
     let _ = surface.bind_spawn_task(TASK_NAME);
-    let _ = crate::r::ui2::set_window_title(surface.window_id(), "Intel Canvas3D");
+    let window_id = surface.window_id();
+    let _ = crate::r::ui2::set_window_title(window_id, "Intel Canvas3D");
+    let _ = crate::r::ui2::set_window_left_scrollbar_visible(window_id, false);
+    let _ = crate::r::ui2::set_window_bottom_scrollbar_visible(window_id, false);
 
     Timer::after(EmbassyDuration::from_millis(1)).await;
     let mut frame = 0u32;
@@ -38,26 +41,44 @@ pub async fn ui2_intel_canvas3d_demo_task() {
             break;
         }
 
-        match crate::intel::gpgpu::ui2_canvas3d_archaeology_project_frame(frame) {
-            Some(result) => {
+        let Some(content_rect) = crate::r::ui2::window_content_rect_by_id(window_id) else {
+            Timer::after(EmbassyDuration::from_millis(1)).await;
+            continue;
+        };
+        let rect_w = content_rect.w.max(1.0) as u32;
+        let rect_h = content_rect.h.max(1.0) as u32;
+
+        match crate::intel::gpgpu::ui2_canvas3d_archaeology_project_texture_frame(
+            frame, rect_w, rect_h,
+        ) {
+            Some(texture_frame) => {
+                let result = texture_frame.result;
                 if !logged_start {
                     logged_start = true;
                     crate::log!(
-                        "ui2-intel-canvas3d-demo: mode=ico90-transform-project ok={} primary={}x{} vertices={} cadence_us={}\n",
+                        "ui2-intel-canvas3d-demo: mode=ico90-transform-project-ui2-texture ok={} texture={}x{} vertices={} cadence_us={}\n",
                         result.ok as u8,
-                        result.primary_width,
-                        result.primary_height,
+                        texture_frame.width,
+                        texture_frame.height,
                         result.vertex_count,
                         result.cadence_us
                     );
                 }
+                if !crate::r::io::cabi::queue_texture_rgba_image_upload_owned(
+                    surface.tex_id(),
+                    texture_frame.width,
+                    texture_frame.height,
+                    texture_frame.rgba,
+                    window_id,
+                    "ui2-intel-canvas3d-demo-present",
+                ) {
+                    crate::log!("ui2-intel-canvas3d-demo: texture upload failed\n");
+                    break;
+                }
                 frame = frame.wrapping_add(1);
             }
             None => {
-                let _ = crate::r::ui2::set_window_title(
-                    surface.window_id(),
-                    "Intel Canvas3D unavailable",
-                );
+                let _ = crate::r::ui2::set_window_title(window_id, "Intel Canvas3D unavailable");
                 crate::log!("ui2-intel-canvas3d-demo: frame failed\n");
                 break;
             }

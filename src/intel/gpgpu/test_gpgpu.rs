@@ -1,3 +1,5 @@
+use alloc::vec;
+use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 
 use super::super as intel;
@@ -22,6 +24,13 @@ pub(crate) struct GpgpuShellCube20ProjectResult {
     pub(crate) vertex_count: usize,
     pub(crate) radius_px: u32,
     pub(crate) last_angle_deg: u32,
+}
+
+pub(crate) struct GpgpuCanvas3dUi2TextureFrame {
+    pub(crate) result: GpgpuShellCube20ProjectResult,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) rgba: Vec<u8>,
 }
 pub(crate) fn submit_canvas3d_project_once() -> bool {
     if !DIRECT_RCS_ENABLED || CANVAS3D_PROJECT_RAN.swap(true, Ordering::AcqRel) {
@@ -615,7 +624,7 @@ pub(crate) fn shell_cube20_project_spin(
         primary_height: target.height,
         canvas_xy,
         vertex_count: CANVAS3D_VISUAL_VERTEX_COUNT,
-        radius_px: (CUBE20_HALF_Q16 as u32).saturating_mul(target.width.min(target.height))
+        radius_px: (CUBE20_SEED_HALF_Q16 as u32).saturating_mul(target.width.min(target.height))
             / CANVAS3D_PROJECT_Q16_ONE as u32,
         last_angle_deg: angle_deg,
     })
@@ -623,6 +632,17 @@ pub(crate) fn shell_cube20_project_spin(
 
 pub(crate) fn ui2_canvas3d_archaeology_project_frame(
     frame: u32,
+) -> Option<GpgpuShellCube20ProjectResult> {
+    let target = intel::display::primary_surface_gpgpu_marker_target()?;
+    ui2_canvas3d_archaeology_project_frame_in_rect(frame, 0, 0, target.width, target.height)
+}
+
+pub(crate) fn ui2_canvas3d_archaeology_project_frame_in_rect(
+    frame: u32,
+    rect_x: i32,
+    rect_y: i32,
+    rect_w: u32,
+    rect_h: u32,
 ) -> Option<GpgpuShellCube20ProjectResult> {
     const CADENCE_US: u64 = 33_000;
 
@@ -649,14 +669,24 @@ pub(crate) fn ui2_canvas3d_archaeology_project_frame(
         return None;
     }
 
-    let canvas_x = 0;
-    let canvas_y = 0;
+    let canvas_x = rect_x.max(0) as u32;
+    let canvas_y = rect_y.max(0) as u32;
+    if canvas_x >= target.width || canvas_y >= target.height {
+        return None;
+    }
+    let canvas_width = rect_w.min(target.width.saturating_sub(canvas_x));
+    let canvas_height = rect_h.min(target.height.saturating_sub(canvas_y));
+    if canvas_width == 0 || canvas_height == 0 {
+        return None;
+    }
     let canvas_xy = GpgpuPoint::new(canvas_x as i32, canvas_y as i32);
-    let flush_offset = 0;
-    let flush_bytes = (target.height as usize)
+    let flush_offset = (canvas_y as usize)
+        .saturating_mul(target.pitch_bytes as usize)
+        .saturating_add((canvas_x as usize).saturating_mul(core::mem::size_of::<u32>()));
+    let flush_bytes = (canvas_height as usize)
         .saturating_sub(1)
         .saturating_mul(target.pitch_bytes as usize)
-        .saturating_add((target.width as usize).saturating_mul(core::mem::size_of::<u32>()));
+        .saturating_add((canvas_width as usize).saturating_mul(core::mem::size_of::<u32>()));
 
     shell_canvas3d_seed_archaeology_vertices(state);
     let y_spin_half_deg = frame % 180;
@@ -696,8 +726,8 @@ pub(crate) fn ui2_canvas3d_archaeology_project_frame(
         CANVAS3D_TMP_GPU,
         state.canvas3d_tmp_phys,
         ICO90_VERTEX_COUNT as u32,
-        target.width,
-        target.height,
+        canvas_width,
+        canvas_height,
     )?;
     let (visible_points, stamped_pixels) =
         shell_canvas3d_cpu_copy_projected_points_to_primary_count(
@@ -705,6 +735,8 @@ pub(crate) fn ui2_canvas3d_archaeology_project_frame(
             target,
             canvas_x,
             canvas_y,
+            canvas_width,
+            canvas_height,
             ICO90_VERTEX_COUNT,
             true,
         );
@@ -732,9 +764,120 @@ pub(crate) fn ui2_canvas3d_archaeology_project_frame(
         primary_height: target.height,
         canvas_xy,
         vertex_count: ICO90_VERTEX_COUNT,
-        radius_px: (CUBE20_HALF_Q16 as u32).saturating_mul(target.width.min(target.height))
+        radius_px: (CUBE20_SEED_HALF_Q16 as u32).saturating_mul(canvas_width.min(canvas_height))
             / CANVAS3D_PROJECT_Q16_ONE as u32,
         last_angle_deg: frame.wrapping_mul(2) % 360,
+    })
+}
+
+pub(crate) fn ui2_canvas3d_archaeology_project_texture_frame(
+    frame: u32,
+    width: u32,
+    height: u32,
+) -> Option<GpgpuCanvas3dUi2TextureFrame> {
+    const CADENCE_US: u64 = 33_000;
+
+    let width = width.max(1);
+    let height = height.max(1);
+    let pixel_count = (width as usize).checked_mul(height as usize)?;
+    let byte_count = pixel_count.checked_mul(core::mem::size_of::<u32>())?;
+    let total_start_tick = direct_rcs_now_tick();
+    let Some(dev) = intel::claimed_device() else {
+        return None;
+    };
+    let Some(project_upload) = upload_canvas3d_project_rgba8_kernel() else {
+        return None;
+    };
+    let Some(transform_upload) = upload_canvas3d_transform_q16_kernel() else {
+        return None;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        return None;
+    };
+    if CANVAS3D_PROJECT_TEST_BYTES > CLEAR_RECT_TEST_BYTES
+        || CANVAS3D_PROJECT_OUT_BYTES > CANVAS3D_PROJECT_OUT_ALLOC_BYTES
+    {
+        return None;
+    }
+
+    shell_canvas3d_seed_archaeology_vertices(state);
+    let y_spin_half_deg = frame % 180;
+    let rotate_q16 = shell_canvas3d_y_quat_q16(y_spin_half_deg, true);
+    let scene_scale_q16 = shell_canvas3d_cube_scale_pulse_q16(u64::from(frame) * 33);
+    let transform_ms = submit_canvas3d_transform_fused_frame_range(
+        dev,
+        state,
+        transform_upload,
+        DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
+        state.clear_test_phys,
+        CANVAS3D_TMP_GPU,
+        state.canvas3d_tmp_phys,
+        0,
+        0,
+        ICO90_VERTEX_COUNT as u32,
+        Canvas3dVec3Q16 {
+            x: scene_scale_q16,
+            y: scene_scale_q16,
+            z: scene_scale_q16,
+            pad: 0,
+        },
+        rotate_q16,
+        Canvas3dVec3Q16 {
+            x: 0,
+            y: 0,
+            z: CANVAS3D_PROJECT_Q16_ONE * 2,
+            pad: 0,
+        },
+        CANVAS3D_TRANSFORM_FUSED_PRE_MARKER,
+        CANVAS3D_TRANSFORM_FUSED_POST_MARKER,
+    )?;
+    let project_ms = submit_canvas3d_project_frame_from(
+        dev,
+        state,
+        project_upload,
+        CANVAS3D_TMP_GPU,
+        state.canvas3d_tmp_phys,
+        ICO90_VERTEX_COUNT as u32,
+        width,
+        height,
+    )?;
+    let mut rgba = vec![0u8; byte_count];
+    let (visible_points, stamped_pixels) = shell_canvas3d_copy_projected_points_to_rgba8(
+        state,
+        width as usize,
+        height as usize,
+        ICO90_VERTEX_COUNT,
+        true,
+        rgba.as_mut_slice(),
+    );
+    let submitted = 2;
+    let total_submit_ms = transform_ms.saturating_add(project_ms);
+    let result = GpgpuShellCube20ProjectResult {
+        ok: visible_points != 0 && stamped_pixels != 0,
+        frames: 1,
+        submitted,
+        presented: 0,
+        visible_points,
+        stamped_pixels,
+        duration_ms: 0,
+        elapsed_ms: direct_rcs_elapsed_ms_since(total_start_tick),
+        cadence_us: CADENCE_US,
+        total_submit_ms,
+        max_submit_ms: transform_ms.max(project_ms),
+        primary_width: width,
+        primary_height: height,
+        canvas_xy: GpgpuPoint::new(0, 0),
+        vertex_count: ICO90_VERTEX_COUNT,
+        radius_px: (CUBE20_SEED_HALF_Q16 as u32).saturating_mul(width.min(height))
+            / CANVAS3D_PROJECT_Q16_ONE as u32,
+        last_angle_deg: frame.wrapping_mul(2) % 360,
+    };
+
+    Some(GpgpuCanvas3dUi2TextureFrame {
+        result,
+        width,
+        height,
+        rgba,
     })
 }
 
@@ -1096,13 +1239,13 @@ fn shell_canvas3d_seed_archaeology_vertices(state: DirectRcsState) {
 
         let vertices = state.clear_test_virt as *mut Canvas3dVec3Q16;
         for (index, vertex) in ICO30_VERTS_Q16.iter().copied().enumerate() {
-            let mut vertex = vertex;
+            let mut vertex = shell_canvas3d_scale_seed_vertex(vertex);
             vertex.pad = index as i32;
             core::ptr::write_volatile(vertices.add(index), vertex);
         }
         for (edge_index, &(a, b)) in ICO60_EDGES.iter().enumerate() {
-            let va = ICO30_VERTS_Q16[a];
-            let vb = ICO30_VERTS_Q16[b];
+            let va = shell_canvas3d_scale_seed_vertex(ICO30_VERTS_Q16[a]);
+            let vb = shell_canvas3d_scale_seed_vertex(ICO30_VERTS_Q16[b]);
             let out_index = ICO30_CORNER_COUNT + edge_index;
             core::ptr::write_volatile(
                 vertices.add(out_index),
@@ -1120,8 +1263,17 @@ fn shell_canvas3d_seed_archaeology_vertices(state: DirectRcsState) {
     intel::dma_flush(state.canvas3d_tmp_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
 }
 
+fn shell_canvas3d_scale_seed_vertex(vertex: Canvas3dVec3Q16) -> Canvas3dVec3Q16 {
+    Canvas3dVec3Q16 {
+        x: vertex.x.saturating_mul(CUBE20_SEED_SCALE),
+        y: vertex.y.saturating_mul(CUBE20_SEED_SCALE),
+        z: vertex.z.saturating_mul(CUBE20_SEED_SCALE),
+        pad: vertex.pad,
+    }
+}
+
 fn shell_canvas3d_seed_cube_vertex(cube_index: usize, local_index: usize) -> Canvas3dVec3Q16 {
-    let half = CUBE20_HALF_Q16;
+    let half = CUBE20_SEED_HALF_Q16;
     let corners = [
         Canvas3dVec3Q16 {
             x: -half,
@@ -1303,6 +1455,48 @@ fn shell_canvas3d_stamp_dot(
     stamped
 }
 
+fn shell_canvas3d_write_rgba_pixel(
+    rgba: &mut [u8],
+    width: usize,
+    height: usize,
+    x: i32,
+    y: i32,
+    color: u32,
+) -> bool {
+    if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
+        return false;
+    }
+    let offset = ((y as usize) * width + x as usize) * core::mem::size_of::<u32>();
+    if offset + 3 >= rgba.len() {
+        return false;
+    }
+    rgba[offset] = ((color >> 16) & 0xFF) as u8;
+    rgba[offset + 1] = ((color >> 8) & 0xFF) as u8;
+    rgba[offset + 2] = (color & 0xFF) as u8;
+    rgba[offset + 3] = ((color >> 24) & 0xFF) as u8;
+    true
+}
+
+fn shell_canvas3d_stamp_rgba_dot(
+    rgba: &mut [u8],
+    width: usize,
+    height: usize,
+    x: i32,
+    y: i32,
+    radius: i32,
+    color: u32,
+) -> usize {
+    let mut stamped = 0usize;
+    for dy in -radius..=radius {
+        for dx in -radius..=radius {
+            if shell_canvas3d_write_rgba_pixel(rgba, width, height, x + dx, y + dy, color) {
+                stamped = stamped.saturating_add(1);
+            }
+        }
+    }
+    stamped
+}
+
 fn shell_canvas3d_present_color(vertex_index: usize) -> u32 {
     if vertex_index < CUBE20_VISUAL_VERTEX_COUNT {
         CUBE20_PRESENT_COLORS[0]
@@ -1333,11 +1527,15 @@ fn shell_canvas3d_cpu_copy_projected_points_to_primary(
     canvas_x: u32,
     canvas_y: u32,
 ) -> (usize, usize) {
+    let canvas_width = target.width.saturating_sub(canvas_x);
+    let canvas_height = target.height.saturating_sub(canvas_y);
     shell_canvas3d_cpu_copy_projected_points_to_primary_count(
         state,
         target,
         canvas_x,
         canvas_y,
+        canvas_width,
+        canvas_height,
         CANVAS3D_VISUAL_VERTEX_COUNT,
         false,
     )
@@ -1348,15 +1546,25 @@ fn shell_canvas3d_cpu_copy_projected_points_to_primary_count(
     target: intel::display::PrimarySurfaceGpgpuTarget,
     canvas_x: u32,
     canvas_y: u32,
+    canvas_width: u32,
+    canvas_height: u32,
     vertex_count: usize,
     archaeology_colors: bool,
 ) -> (usize, usize) {
     intel::dma_flush(state.canvas3d_out_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
     let pitch_pixels = (target.pitch_bytes as usize) / core::mem::size_of::<u32>();
-    let canvas_width = target.width as usize;
-    let canvas_height = target.height as usize;
     let canvas_x = canvas_x as usize;
     let canvas_y = canvas_y as usize;
+    if canvas_x >= target.width as usize || canvas_y >= target.height as usize {
+        return (0, 0);
+    }
+    let canvas_width =
+        (canvas_width as usize).min((target.width as usize).saturating_sub(canvas_x));
+    let canvas_height =
+        (canvas_height as usize).min((target.height as usize).saturating_sub(canvas_y));
+    if canvas_width == 0 || canvas_height == 0 {
+        return (0, 0);
+    }
     let mut visible = 0usize;
     let mut stamped = 0usize;
     let vertex_count = vertex_count.min(CANVAS3D_PROJECT_VERTEX_COUNT);
@@ -1402,6 +1610,59 @@ fn shell_canvas3d_cpu_copy_projected_points_to_primary_count(
                 canvas_y,
                 canvas_width,
                 canvas_height,
+                x,
+                y,
+                CUBE20_PROJECT_DOT_RADIUS,
+                color,
+            ));
+        }
+    }
+
+    (visible, stamped)
+}
+
+fn shell_canvas3d_copy_projected_points_to_rgba8(
+    state: DirectRcsState,
+    width: usize,
+    height: usize,
+    vertex_count: usize,
+    archaeology_colors: bool,
+    rgba: &mut [u8],
+) -> (usize, usize) {
+    intel::dma_flush(state.canvas3d_out_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
+    if width == 0 || height == 0 {
+        return (0, 0);
+    }
+    for pixel in rgba.chunks_exact_mut(core::mem::size_of::<u32>()) {
+        pixel[0] = 0x08;
+        pixel[1] = 0x08;
+        pixel[2] = 0x10;
+        pixel[3] = 0xFF;
+    }
+
+    let mut visible = 0usize;
+    let mut stamped = 0usize;
+    let vertex_count = vertex_count.min(CANVAS3D_PROJECT_VERTEX_COUNT);
+
+    unsafe {
+        let out = state.canvas3d_out_virt as *const Canvas3dProjectedRgba8;
+        for index in 0..vertex_count {
+            let point = core::ptr::read_volatile(out.add(index));
+            if (point.packed_xy & 0x8000_0000) == 0 {
+                continue;
+            }
+            visible = visible.saturating_add(1);
+            let x = (point.packed_xy & 0xFFFF) as i32;
+            let y = ((point.packed_xy >> 16) & 0x7FFF) as i32;
+            let color = if archaeology_colors {
+                shell_canvas3d_archaeology_present_color(index)
+            } else {
+                shell_canvas3d_present_color(index)
+            };
+            stamped = stamped.saturating_add(shell_canvas3d_stamp_rgba_dot(
+                rgba,
+                width,
+                height,
                 x,
                 y,
                 CUBE20_PROJECT_DOT_RADIUS,
