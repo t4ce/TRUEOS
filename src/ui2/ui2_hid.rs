@@ -298,6 +298,7 @@ fn set_cursor_selected_window(state: &mut Ui2State, slot_id: u32, next_window_id
                 if let Some(window) = window_mut(state, window_id) {
                     window.dirty = true;
                     window.content_present_dirty = false;
+                    window.content_present_dirty_rect = None;
                 }
             }
             UI2_DIRTY.store(true, Ordering::Release);
@@ -1063,18 +1064,22 @@ fn begin_move_drag_for_cursor(
             (cursor_x - (next_rect.w * cursor_ratio_x)).clamp(0.0, (view_w - next_rect.w).max(0.0));
         next_rect.y = (cursor_y - grab_dy).clamp(0.0, (view_h - next_rect.h).max(0.0));
     }
+    let was_maximized = window.state == Ui2WindowStateKind::Maximized;
+    let raise_on_move = window.z < top_z;
     if let Some(window_mut) = window_mut(state, window_id) {
-        if window.state == Ui2WindowStateKind::Maximized {
+        if was_maximized {
             window_mut.rect = next_rect;
             window_mut.restore_rect = next_rect;
             window_mut.state = Ui2WindowStateKind::Normal;
         }
-        window_mut.z = top_z.saturating_add(1);
     }
     let _ = set_cursor_selected_window(state, slot_id, window_id);
-    let _ = note_window_dirty(state, window_id, "begin-window-move");
-    if window.state == Ui2WindowStateKind::Maximized {
-        let _ = note_window_viewport_sync_needed(state, window_id);
+    let needs_full_compose = was_maximized;
+    if needs_full_compose {
+        let _ = note_window_dirty(state, window_id, "begin-window-move");
+        if was_maximized {
+            let _ = note_window_viewport_sync_needed(state, window_id);
+        }
     }
     clear_window_drag_claims(state, window_id);
     clear_other_drag_modes_for_slot(state, slot_id);
@@ -1086,11 +1091,14 @@ fn begin_move_drag_for_cursor(
             cursor_slot_id: slot_id,
             grab_dx: cursor_x - next_rect.x,
             grab_dy: cursor_y - next_rect.y,
+            raise_on_move,
             edge_actions_armed: window_edge_drop_action(state, cursor_x, cursor_y).is_none(),
         },
     );
-    state.compose_reason = "begin-window-move";
-    refresh_window_hit_entries(state, window_id);
+    if needs_full_compose {
+        state.compose_reason = "begin-window-move";
+        refresh_window_hit_entries(state, window_id);
+    }
     true
 }
 
@@ -1514,6 +1522,7 @@ fn update_move_drag_for_cursor(
     let next_x = cursor_x - state.move_drags[drag_idx].grab_dx;
     let next_y = cursor_y - state.move_drags[drag_idx].grab_dy;
     let window_id = state.move_drags[drag_idx].window_id;
+    let raise_on_move = state.move_drags[drag_idx].raise_on_move;
     let Some(window) = window_mut(state, window_id) else {
         state.move_drags.remove(drag_idx);
         return;
@@ -1524,6 +1533,18 @@ fn update_move_drag_for_cursor(
         window.rect.y = next_y;
         window.restore_rect = window.rect;
         moved = true;
+    }
+    if moved && raise_on_move {
+        let top_z = state
+            .windows
+            .iter()
+            .map(|window| window.z)
+            .max()
+            .unwrap_or(0);
+        if let Some(window) = window_mut(state, window_id) {
+            window.z = top_z.saturating_add(1);
+        }
+        state.move_drags[drag_idx].raise_on_move = false;
     }
     if moved {
         state.compose_reason = "window-drag";

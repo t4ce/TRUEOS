@@ -455,6 +455,7 @@ struct Ui2WindowMoveDrag {
     cursor_slot_id: u32,
     grab_dx: f32,
     grab_dy: f32,
+    raise_on_move: bool,
     edge_actions_armed: bool,
 }
 
@@ -578,6 +579,7 @@ struct Ui2Window {
     selected_cursor_slots: Vec<u32>,
     dirty: bool,
     content_present_dirty: bool,
+    content_present_dirty_rect: Option<Ui2Rect>,
     chrome_titlebar_dirty: bool,
     chrome_hover_clear_button: Option<Ui2DecorationHoverButton>,
     dirty_seq: u32,
@@ -1088,6 +1090,7 @@ fn apply_hosted_browser_dirty(state: &mut Ui2State, dirty: HostedBrowserDirtyMas
         if content_dirty && !window.composition_locked {
             window.dirty = true;
             window.content_present_dirty = true;
+            window.content_present_dirty_rect = None;
             window.last_reason = "browser-content";
             UI2_DIRTY.store(true, Ordering::Release);
             state.compose_reason = "browser-content";
@@ -1109,14 +1112,11 @@ fn window_is_renderable(window: &Ui2Window) -> bool {
 }
 
 fn window_content_participates_in_composition(window: &Ui2Window) -> bool {
-    window.visible && !window.composition_locked
+    window.visible && !window.composition_locked && window.state != Ui2WindowStateKind::Minimized
 }
 
 fn window_content_can_patch_primary(window: &Ui2Window) -> bool {
-    !window.content_tex_blend
-        && window.alpha == 255
-        && window.content_rotation_quadrants == 0
-        && window_content_participates_in_composition(window)
+    window.content_rotation_quadrants == 0 && window_content_participates_in_composition(window)
 }
 
 fn intel_direct_content_only_dirty(state: &Ui2State) -> bool {
@@ -1835,6 +1835,8 @@ fn draw_chrome_solid_rects_intel_gpgpu(state: &Ui2State, skip_bands: bool) -> bo
 #[derive(Copy, Clone, Debug, Default)]
 struct Ui2IntelContentGpgpuStats {
     candidates: usize,
+    tile_windows: usize,
+    tile_masks: usize,
     submitted: usize,
     skipped: usize,
     spans: usize,
@@ -1843,6 +1845,130 @@ struct Ui2IntelContentGpgpuStats {
     present_ms: u64,
     total_ms: u64,
     pixels: usize,
+}
+
+fn draw_hosted_surface_tiles_intel_gpgpu(
+    state: &Ui2State,
+    window: &Ui2Window,
+    content: Ui2Rect,
+    dirty_texture_rect: Option<Ui2Rect>,
+    stats: &mut Ui2IntelContentGpgpuStats,
+) -> bool {
+    let Some(snapshot) = window_scroll_snapshot(window) else {
+        return false;
+    };
+    let viewport_w = snapshot.viewport_width.max(1);
+    let viewport_h = snapshot.viewport_height.max(1);
+    let scroll_x = normalized_hosted_browser_scroll_x(&snapshot);
+    let scroll_y = normalized_hosted_browser_scroll(&snapshot);
+    let mut vis_x0 = i64::from(scroll_x);
+    let mut vis_y0 = i64::from(scroll_y);
+    let mut vis_x1 = vis_x0.saturating_add(i64::from(viewport_w));
+    let mut vis_y1 = vis_y0.saturating_add(i64::from(viewport_h));
+    if let Some(dirty) = dirty_texture_rect
+        && dirty.w > 0.0
+        && dirty.h > 0.0
+    {
+        vis_x0 = vis_x0.max(dirty.x.max(0.0) as i64);
+        vis_y0 = vis_y0.max(dirty.y.max(0.0) as i64);
+        vis_x1 = vis_x1.min((dirty.x + dirty.w).max(0.0) as i64);
+        vis_y1 = vis_y1.min((dirty.y + dirty.h).max(0.0) as i64);
+    }
+    if vis_x0 >= vis_x1 || vis_y0 >= vis_y1 {
+        return true;
+    }
+
+    let scale_x = content.w / viewport_w as f32;
+    let scale_y = content.h / viewport_h as f32;
+    if (scale_x - 1.0).abs() > 0.5 || (scale_y - 1.0).abs() > 0.5 {
+        return false;
+    }
+
+    let bg = window.hosted_surface_bg_rgba;
+    if bg[3] != 0 {
+        let bg_rect = Ui2Rect::new(
+            content.x + (vis_x0 - i64::from(scroll_x)) as f32 * scale_x,
+            content.y + (vis_y0 - i64::from(scroll_y)) as f32 * scale_y,
+            (vis_x1 - vis_x0) as f32 * scale_x,
+            (vis_y1 - vis_y0) as f32 * scale_y,
+        );
+        let mut rects = Vec::new();
+        let rgba = (bg[0], bg[1], bg[2], modulate_alpha(bg[3], window.alpha));
+        let _ = push_chrome_solid_rect(&mut rects, bg_rect, rgba);
+        if !rects.is_empty() {
+            let Some(result) = crate::intel::gpgpu::solid_rects_rgba8_over_primary(&rects, true)
+            else {
+                return false;
+            };
+            if !result.ok {
+                return false;
+            }
+            stats.spans = stats.spans.saturating_add(result.fill_descs);
+            stats.submits = stats.submits.saturating_add(result.fill_submits);
+            stats.submit_ms = stats.submit_ms.saturating_add(result.fill_ms);
+            stats.present_ms = stats.present_ms.saturating_add(result.present_ms);
+            stats.total_ms = stats.total_ms.saturating_add(result.total_ms);
+        }
+    }
+
+    let fg = window.hosted_surface_fg_rgba;
+    let color_rgba =
+        pack_ui2_rgba_for_kernel((fg[0], fg[1], fg[2], modulate_alpha(fg[3], window.alpha)));
+    let mut drew_any = false;
+    let mut all_ok = true;
+    for tile in &window.hosted_surface_tiles {
+        if tile.tex_id == 0
+            || tile.width == 0
+            || tile.height == 0
+            || !texture_is_drawable(tile.tex_id)
+        {
+            continue;
+        }
+
+        let tile_x0 = i64::from(tile.x);
+        let tile_y0 = i64::from(tile.y);
+        let tile_x1 = tile_x0.saturating_add(i64::from(tile.width));
+        let tile_y1 = tile_y0.saturating_add(i64::from(tile.height));
+        let clip_x0 = tile_x0.max(vis_x0);
+        let clip_y0 = tile_y0.max(vis_y0);
+        let clip_x1 = tile_x1.min(vis_x1);
+        let clip_y1 = tile_y1.min(vis_y1);
+        if clip_x0 >= clip_x1 || clip_y0 >= clip_y1 {
+            continue;
+        }
+
+        let Some(mask) = crate::r::io::cabi::texture_gpgpu_mask8_surface(tile.tex_id) else {
+            all_ok = false;
+            continue;
+        };
+        let mask_x = (clip_x0 - tile_x0) as i32;
+        let mask_y = (clip_y0 - tile_y0) as i32;
+        let width = (clip_x1 - clip_x0) as u32;
+        let height = (clip_y1 - clip_y0) as u32;
+        let dst_x = content.x + (clip_x0 - i64::from(scroll_x)) as f32 * scale_x;
+        let dst_y = content.y + (clip_y0 - i64::from(scroll_y)) as f32 * scale_y;
+        let Some(submit_stats) = crate::intel::gpgpu::glyph_mask_rgba8_over_primary_stats(
+            mask,
+            crate::intel::gpgpu::GpgpuRect::new(mask_x, mask_y, width, height),
+            crate::intel::gpgpu::GpgpuPoint::new(dst_x as i32, dst_y as i32),
+            color_rgba,
+        ) else {
+            all_ok = false;
+            continue;
+        };
+        drew_any = true;
+        stats.tile_masks = stats.tile_masks.saturating_add(1);
+        stats.spans = stats.spans.saturating_add(submit_stats.spans);
+        stats.submits = stats.submits.saturating_add(submit_stats.submits);
+        stats.submit_ms = stats.submit_ms.saturating_add(submit_stats.submit_ms);
+        stats.present_ms = stats.present_ms.saturating_add(submit_stats.present_ms);
+        stats.total_ms = stats.total_ms.saturating_add(submit_stats.total_ms);
+        stats.pixels = stats
+            .pixels
+            .saturating_add((width as usize).saturating_mul(height as usize));
+    }
+
+    all_ok && (drew_any || bg[3] != 0)
 }
 
 fn clip_texture_content_to_primary(
@@ -1854,23 +1980,37 @@ fn clip_texture_content_to_primary(
     draw_h: f32,
     tex_w: u32,
     tex_h: u32,
+    dirty_texture_rect: Option<Ui2Rect>,
 ) -> Option<(crate::intel::gpgpu::GpgpuRect, crate::intel::gpgpu::GpgpuPoint)> {
     if tex_w == 0 || tex_h == 0 || !(draw_w > 0.0 && draw_h > 0.0) {
         return None;
     }
 
-    let clip_x0 = libm::floorf(draw_x.max(content.x).max(0.0));
-    let clip_y0 = libm::floorf(draw_y.max(content.y).max(0.0));
-    let clip_x1 = libm::ceilf(
-        (draw_x + draw_w)
-            .min(content.x + content.w)
-            .min(state.view_w as f32),
-    );
-    let clip_y1 = libm::ceilf(
-        (draw_y + draw_h)
-            .min(content.y + content.h)
-            .min(state.view_h as f32),
-    );
+    let mut clip_x0 = draw_x.max(content.x).max(0.0);
+    let mut clip_y0 = draw_y.max(content.y).max(0.0);
+    let mut clip_x1 = (draw_x + draw_w)
+        .min(content.x + content.w)
+        .min(state.view_w as f32);
+    let mut clip_y1 = (draw_y + draw_h)
+        .min(content.y + content.h)
+        .min(state.view_h as f32);
+
+    let one_to_one = (draw_w - tex_w as f32).abs() <= 0.5 && (draw_h - tex_h as f32).abs() <= 0.5;
+    if one_to_one
+        && let Some(dirty) = dirty_texture_rect
+        && dirty.w > 0.0
+        && dirty.h > 0.0
+    {
+        clip_x0 = clip_x0.max(draw_x + dirty.x.max(0.0));
+        clip_y0 = clip_y0.max(draw_y + dirty.y.max(0.0));
+        clip_x1 = clip_x1.min(draw_x + (dirty.x + dirty.w).min(tex_w as f32));
+        clip_y1 = clip_y1.min(draw_y + (dirty.y + dirty.h).min(tex_h as f32));
+    }
+
+    let clip_x0 = libm::floorf(clip_x0);
+    let clip_y0 = libm::floorf(clip_y0);
+    let clip_x1 = libm::ceilf(clip_x1);
+    let clip_y1 = libm::ceilf(clip_y1);
     if clip_x1 <= clip_x0 || clip_y1 <= clip_y0 {
         return None;
     }
@@ -1909,17 +2049,42 @@ fn draw_window_content_textures_intel_gpgpu(state: &Ui2State, dirty_only: bool) 
         if !window_is_renderable(window)
             || !window_content_participates_in_composition(window)
             || window.state == Ui2WindowStateKind::Minimized
-            || window.content_tex_id == 0
         {
             continue;
         }
         let Some(content) = window_content_rect(state, window) else {
             continue;
         };
-        if !(content.w > 0.0 && content.h > 0.0) || !texture_is_drawable(window.content_tex_id) {
+        if !(content.w > 0.0 && content.h > 0.0) {
             continue;
         }
         stats.candidates = stats.candidates.saturating_add(1);
+
+        if !window.hosted_surface_tiles.is_empty() {
+            stats.tile_windows = stats.tile_windows.saturating_add(1);
+            let ok = draw_hosted_surface_tiles_intel_gpgpu(
+                state,
+                window,
+                content,
+                if dirty_only {
+                    window.content_present_dirty_rect
+                } else {
+                    None
+                },
+                &mut stats,
+            );
+            if ok {
+                stats.submitted = stats.submitted.saturating_add(1);
+            } else {
+                stats.skipped = stats.skipped.saturating_add(1);
+            }
+            continue;
+        }
+
+        if window.content_tex_id == 0 || !texture_is_drawable(window.content_tex_id) {
+            stats.skipped = stats.skipped.saturating_add(1);
+            continue;
+        }
 
         let Some((tex_w, tex_h)) = texture_dimensions(window.content_tex_id) else {
             stats.skipped = stats.skipped.saturating_add(1);
@@ -1946,7 +2111,19 @@ fn draw_window_content_textures_intel_gpgpu(state: &Ui2State, dirty_only: bool) 
         };
 
         let Some((src_rect, dst_xy)) = clip_texture_content_to_primary(
-            state, content, draw_x, draw_y, draw_w, draw_h, tex_w, tex_h,
+            state,
+            content,
+            draw_x,
+            draw_y,
+            draw_w,
+            draw_h,
+            tex_w,
+            tex_h,
+            if dirty_only {
+                window.content_present_dirty_rect
+            } else {
+                None
+            },
         ) else {
             stats.skipped = stats.skipped.saturating_add(1);
             continue;
@@ -1993,7 +2170,7 @@ fn draw_window_content_textures_intel_gpgpu(state: &Ui2State, dirty_only: bool) 
     let log_n = UI2_CONTENT_GPGPU_LOGS.fetch_add(1, Ordering::Relaxed);
     if log_n < 24 || !ok {
         crate::log!(
-            "ui2: content-gpgpu ok={} candidates={} submitted={} skipped={} spans={} submits={} submit_ms={} present_ms={} total_ms={} pixels={} artifact=alpha_blend_worklist_rgba8 path={}\n",
+            "ui2: content-gpgpu ok={} candidates={} submitted={} skipped={} spans={} submits={} submit_ms={} present_ms={} total_ms={} pixels={} tile_windows={} tile_masks={} artifact=alpha_blend_worklist_rgba8,glyph_mask_rgba8 path={}\n",
             ok as u8,
             stats.candidates,
             stats.submitted,
@@ -2004,6 +2181,8 @@ fn draw_window_content_textures_intel_gpgpu(state: &Ui2State, dirty_only: bool) 
             stats.present_ms,
             stats.total_ms,
             stats.pixels,
+            stats.tile_windows,
+            stats.tile_masks,
             if dirty_only {
                 "dirty-texture-to-primary"
             } else {
@@ -2079,6 +2258,7 @@ fn note_window_dirty(state: &mut Ui2State, id: u32, reason: &'static str) -> boo
     };
     window.dirty = true;
     window.content_present_dirty = false;
+    window.content_present_dirty_rect = None;
     window.last_reason = reason;
     UI2_DIRTY.store(true, Ordering::Release);
     true
@@ -2089,9 +2269,40 @@ fn note_window_content_present_dirty(state: &mut Ui2State, id: u32, reason: &'st
         return false;
     };
     let was_dirty = window.dirty;
+    let was_content_dirty = window.content_present_dirty;
     window.dirty = true;
-    if !was_dirty {
+    if !was_dirty || was_content_dirty {
         window.content_present_dirty = true;
+        window.content_present_dirty_rect = None;
+    }
+    window.last_reason = reason;
+    UI2_DIRTY.store(true, Ordering::Release);
+    true
+}
+
+fn note_window_content_region_present_dirty(
+    state: &mut Ui2State,
+    id: u32,
+    rect: Ui2Rect,
+    reason: &'static str,
+) -> bool {
+    let Some(window) = window_mut(state, id) else {
+        return false;
+    };
+    if !(rect.w > 0.0 && rect.h > 0.0) {
+        return false;
+    }
+
+    let was_dirty = window.dirty;
+    let was_content_dirty = window.content_present_dirty;
+    window.dirty = true;
+    if !was_dirty || was_content_dirty {
+        window.content_present_dirty = true;
+        window.content_present_dirty_rect = match window.content_present_dirty_rect {
+            Some(existing) => Some(union_rect(existing, rect)),
+            None if was_content_dirty => None,
+            None => Some(rect),
+        };
     }
     window.last_reason = reason;
     UI2_DIRTY.store(true, Ordering::Release);
@@ -2124,6 +2335,7 @@ fn note_window_chrome_hover_event(
             window.last_reason = reason;
             window.dirty = true;
             window.content_present_dirty = false;
+            window.content_present_dirty_rect = None;
         }
         state.chrome_overlay_dirty = true;
         state.compose_reason = reason;
@@ -3974,7 +4186,23 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
                     surroundings_sprite64 as u8
                 );
             }
-            frame_ok = true;
+            frame_ok = (content_only_dirty || primary_clear.is_some())
+                && chrome_gradients_gpgpu
+                && chrome_rects_gpgpu
+                && content_gpgpu
+                && surroundings_sprite64;
+            if !frame_ok {
+                crate::log!(
+                    "ui2: intel direct-window-present failed seq={} reason={} clear={} gradients={} rects={} content={} sprites={}\n",
+                    compose_seq,
+                    compose_reason,
+                    (content_only_dirty || primary_clear.is_some()) as u8,
+                    chrome_gradients_gpgpu as u8,
+                    chrome_rects_gpgpu as u8,
+                    content_gpgpu as u8,
+                    surroundings_sprite64 as u8
+                );
+            }
             return;
         }
 
@@ -4143,6 +4371,7 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
         if scene_dirty && window.dirty {
             window.dirty = false;
             window.content_present_dirty = false;
+            window.content_present_dirty_rect = None;
             window.dirty_seq = window.dirty_seq.wrapping_add(1);
             window.last_logged_dirty_seq = window.dirty_seq;
             window.last_logged_reason = window.last_reason;

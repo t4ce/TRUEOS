@@ -3216,6 +3216,55 @@ pub(crate) fn glyph_mask_rgba8_stats(blit: GpgpuGlyphMaskBlit) -> GpgpuSubmitSta
     submit_glyph_mask_spans_with_stats(blit.mask, blit.dst, params, blit.color_rgba, flavor)
 }
 
+pub(crate) fn glyph_mask_rgba8_over_primary_stats(
+    mask: GpgpuMask8Surface,
+    mask_rect: GpgpuRect,
+    dst_xy: GpgpuPoint,
+    color_rgba: u32,
+) -> Option<GpgpuSubmitStats> {
+    let total_start_tick = direct_rcs_now_tick();
+    let target = super::display::primary_surface_gpgpu_marker_target()?;
+    let primary = GpgpuRgba8Surface::new(
+        target.phys,
+        target.gpu,
+        target.byte_len,
+        target.width,
+        target.height,
+        target.pitch_bytes,
+    )?;
+    let mut stats = glyph_mask_rgba8_stats(GpgpuGlyphMaskBlit {
+        mask,
+        mask_rect,
+        dst: primary,
+        dst_xy,
+        color_rgba,
+    });
+    if stats.spans == 0 || stats.submits == 0 {
+        return None;
+    }
+
+    let x = dst_xy.x.max(0) as usize;
+    let y = dst_xy.y.max(0) as usize;
+    let flush_offset = y
+        .saturating_mul(primary.pitch_bytes as usize)
+        .saturating_add(x.saturating_mul(core::mem::size_of::<u32>()));
+    let flush_bytes = (mask_rect.height as usize)
+        .saturating_sub(1)
+        .saturating_mul(primary.pitch_bytes as usize)
+        .saturating_add((mask_rect.width as usize).saturating_mul(core::mem::size_of::<u32>()));
+    let present_start_tick = direct_rcs_now_tick();
+    if !super::display::notify_primary_surface_external_write(
+        "gpgpu-glyph-mask-primary",
+        flush_offset,
+        flush_bytes,
+    ) {
+        return None;
+    }
+    stats.present_ms = direct_rcs_elapsed_ms_since(present_start_tick);
+    stats.total_ms = direct_rcs_elapsed_ms_since(total_start_tick);
+    Some(stats)
+}
+
 #[allow(dead_code)]
 pub(crate) fn blit_glyph_rgba8(blit: GpgpuGlyphBlit) -> usize {
     blit_glyph_rgba8_stats(blit).spans

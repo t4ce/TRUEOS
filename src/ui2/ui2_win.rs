@@ -138,6 +138,7 @@ pub(super) fn alloc_window(
         selected_cursor_slots: Vec::new(),
         dirty: true,
         content_present_dirty: false,
+        content_present_dirty_rect: None,
         chrome_titlebar_dirty: false,
         chrome_hover_clear_button: None,
         dirty_seq: 0,
@@ -2284,6 +2285,7 @@ pub fn begin_window_move(id: u32) -> bool {
             cursor_slot_id,
             grab_dx,
             grab_dy,
+            raise_on_move: false,
             edge_actions_armed,
         },
     );
@@ -2359,6 +2361,30 @@ pub fn request_window_content_present(id: u32, reason: &'static str) -> bool {
     note_window_content_present_dirty(&mut state, id, reason)
 }
 
+pub fn request_window_content_region_present(
+    id: u32,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    reason: &'static str,
+) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    state.compose_reason = reason;
+    note_window_content_region_present_dirty(
+        &mut state,
+        id,
+        Ui2Rect {
+            x: x as f32,
+            y: y as f32,
+            w: width as f32,
+            h: height as f32,
+        },
+        reason,
+    )
+}
+
 pub fn request_window_repaint(id: u32, reason: &'static str) -> bool {
     request_window_content_present(id, reason)
 }
@@ -2389,6 +2415,7 @@ pub fn request_full_recompose(reason: &'static str) {
     for window in &mut state.windows {
         window.dirty = true;
         window.content_present_dirty = false;
+        window.content_present_dirty_rect = None;
         window.last_reason = reason;
     }
     UI2_DIRTY.store(true, Ordering::Release);

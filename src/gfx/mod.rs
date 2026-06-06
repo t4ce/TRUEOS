@@ -411,6 +411,15 @@ pub(crate) fn intel_image_gpgpu_surface(
     .flatten()
 }
 
+pub(crate) fn intel_image_gpgpu_mask_surface(
+    id: trueos_gfx_core::ImageId,
+) -> Option<crate::intel::gpgpu::GpgpuMask8Surface> {
+    with_system_tag(SystemLockOwner::IntelImageSurface, |sys| {
+        sys.backend.intel_image_gpgpu_mask_surface(id)
+    })
+    .flatten()
+}
+
 #[inline]
 pub fn rdp_monitor_begin_frame(seq: u32, flags: u32, clear_rgb: u32) {
     #[cfg(feature = "trueos_rdp")]

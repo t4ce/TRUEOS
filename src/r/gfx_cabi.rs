@@ -3013,7 +3013,12 @@ pub mod cabi {
 
     const SUPPRESS_TEXTURE_WORK_REPAINT_WINDOW_ID: u32 = u32::MAX;
 
-    fn request_texture_work_present(window_id: u32, host_tex_id: u32, reason: &'static str) {
+    fn request_texture_work_present(
+        window_id: u32,
+        host_tex_id: u32,
+        region: Option<ImageRegion>,
+        reason: &'static str,
+    ) {
         if window_id == SUPPRESS_TEXTURE_WORK_REPAINT_WINDOW_ID {
             return;
         }
@@ -3025,7 +3030,18 @@ pub mod cabi {
             return;
         }
         let host_window_id = crate::hv::host_blueprint_app_window_id(window_id);
-        if !crate::r::ui2::request_window_content_present(host_window_id, reason) {
+        let requested = match region {
+            Some(region) => crate::r::ui2::request_window_content_region_present(
+                host_window_id,
+                region.x,
+                region.y,
+                region.width,
+                region.height,
+                reason,
+            ),
+            None => crate::r::ui2::request_window_content_present(host_window_id, reason),
+        };
+        if !requested {
             let _ = crate::hv::request_deferred_blueprint_app_windows_for_host_texture(
                 host_tex_id,
                 reason,
@@ -4117,7 +4133,7 @@ pub mod cabi {
             if update_async_status {
                 set_async_tex_status(host_tex_id, ASYNC_TEX_STATUS_READY);
             }
-            request_texture_work_present(repaint_window_id, host_tex_id, repaint_reason);
+            request_texture_work_present(repaint_window_id, host_tex_id, region, repaint_reason);
             return true;
         }
         record_vm_texture_dimensions(tex_id, width, height);
@@ -4670,6 +4686,7 @@ pub mod cabi {
                         request_texture_work_present(
                             req.repaint_window_id,
                             req.tex_id,
+                            req.region,
                             req.repaint_reason,
                         );
                     } else {
@@ -4694,6 +4711,7 @@ pub mod cabi {
                         request_texture_work_present(
                             req.repaint_window_id,
                             req.tex_id,
+                            None,
                             req.repaint_reason,
                         );
                     } else {
@@ -4725,6 +4743,7 @@ pub mod cabi {
                         request_texture_work_present(
                             req.repaint_window_id,
                             req.tex_id,
+                            None,
                             req.repaint_reason,
                         );
                     } else {
@@ -4751,6 +4770,7 @@ pub mod cabi {
                         request_texture_work_present(
                             req.repaint_window_id,
                             req.target_tex_id,
+                            None,
                             req.repaint_reason,
                         );
                     } else {
@@ -5464,6 +5484,26 @@ pub mod cabi {
             .and_then(|entry| entry.as_ref())
             .map(|img| img.image)?;
         crate::gfx::intel_image_gpgpu_surface(image)
+    }
+
+    pub fn texture_gpgpu_mask8_surface(
+        tex_id: u32,
+    ) -> Option<crate::intel::gpgpu::GpgpuMask8Surface> {
+        if tex_id == 0 {
+            return None;
+        }
+        if reject_unreasonable_tex_id(tex_id, "texture-gpgpu-mask-surface") {
+            return None;
+        }
+        let idx = tex_id.saturating_sub(1) as usize;
+        let image = GFX_CABI_STATE
+            .lock()
+            .tex_images
+            .as_ref()
+            .and_then(|images| images.get(idx))
+            .and_then(|entry| entry.as_ref())
+            .map(|img| img.image)?;
+        crate::gfx::intel_image_gpgpu_mask_surface(image)
     }
 
     #[inline]

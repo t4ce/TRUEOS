@@ -1506,31 +1506,31 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &SURFER_PARSE_POOL_STARTED,
         spawn_truesurfer_parse_pool,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "ui2-athlas-third-demo",
         UI2_DEMO_READY,
         &UI2_ATHLAS_THIRD_DEMO_STARTED,
         spawn_ui2_athlas_third_demo,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "ui2-athlas-half-demo",
         UI2_DEMO_READY,
         &UI2_ATHLAS_HALF_DEMO_STARTED,
         spawn_ui2_athlas_half_demo,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "ui2-athlas-1x-demo",
         UI2_DEMO_READY,
         &UI2_ATHLAS_1X_DEMO_STARTED,
         spawn_ui2_athlas_1x_demo,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "ui2-athlas-2x-demo",
         UI2_DEMO_READY,
         &UI2_ATHLAS_2X_DEMO_STARTED,
         spawn_ui2_athlas_2x_demo,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "ui2-palatino-1x-demo",
         UI2_DEMO_READY,
         &UI2_PALATINO_1X_DEMO_STARTED,
@@ -1542,7 +1542,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &UI2_TWEMOJI_1X_STARTED,
         spawn_ui2_twemoji_1x,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "ui2-text-input-demo",
         UI2_DEMO_READY,
         &UI2_TEXT_INPUT_DEMO_STARTED,
@@ -1579,7 +1579,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &UI2_INTEL_CANVAS3D_DEMO_STARTED,
         spawn_ui2_intel_canvas3d_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-intel-canvas3d-plane-patch-demo",
         UI2_DEMO_READY | crate::r::readiness::GFX_BACKEND_READY,
         &UI2_INTEL_CANVAS3D_PLANE_PATCH_DEMO_STARTED,
