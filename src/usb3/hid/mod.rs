@@ -97,6 +97,9 @@ static CURSOR_EVENT_RING: Mutex<CursorEventRing> = Mutex::new(CursorEventRing::n
 static CURSOR_EVENT_POP_SEQ: Mutex<u64> = Mutex::new(0);
 static RDP_TABLET_SLOT_ID: Mutex<Option<u32>> = Mutex::new(None);
 
+pub(crate) const HID_UDP_CONTROLLER_ID: u32 = 0x5544_5048; // "UDPH"
+const HID_UDP_SLOT_BASE: u32 = 0x5500_0000;
+
 #[inline]
 fn clamp01(value: f64) -> f64 {
     if value < 0.0 {
@@ -387,6 +390,156 @@ pub(crate) fn inject_virtual_keyboard_boot_report(modifiers: u8, keys: [u8; 6]) 
         modifiers, 0, keys[0], keys[1], keys[2], keys[3], keys[4], keys[5],
     ];
     handle_keyboard_boot_report(RDP_TABLET_CONTROLLER_ID, slot_id, 0, &report);
+}
+
+#[inline]
+pub(crate) const fn hid_udp_slot_id(udp_device_id: u16) -> u32 {
+    HID_UDP_SLOT_BASE | (udp_device_id as u32)
+}
+
+pub(crate) fn inject_udp_mouse_boot_report(
+    udp_device_id: u16,
+    buttons: u8,
+    dx: i8,
+    dy: i8,
+    wheel: i8,
+) {
+    let slot_id = hid_udp_slot_id(udp_device_id);
+    let report = [buttons, dx as u8, dy as u8, wheel as u8];
+    handle_mouse_boot_report(HID_UDP_CONTROLLER_ID, slot_id, 0, &report);
+    if let Some((x, y)) =
+        crate::r::cursor::cursor_source_pos(HID_UDP_CONTROLLER_ID, slot_id, 0, HID_KIND_MOUSE)
+    {
+        self::hut::upsert_mouse_state(
+            HID_UDP_CONTROLLER_ID,
+            slot_id,
+            0,
+            x,
+            y,
+            buttons as u32,
+            self::hut::HidSourceKind::Ai,
+            "udp",
+            true,
+        );
+    }
+}
+
+pub(crate) fn inject_udp_keyboard_boot_report(udp_device_id: u16, modifiers: u8, keys: [u8; 6]) {
+    let slot_id = hid_udp_slot_id(udp_device_id);
+    let report = [
+        modifiers, 0, keys[0], keys[1], keys[2], keys[3], keys[4], keys[5],
+    ];
+    handle_keyboard_boot_report(HID_UDP_CONTROLLER_ID, slot_id, 0, &report);
+    self::hut::upsert_keyboard_state(
+        HID_UDP_CONTROLLER_ID,
+        slot_id,
+        0,
+        modifiers,
+        keys,
+        self::keyboard::boot_ascii_for_keys(modifiers, keys),
+        self::hut::HidSourceKind::Ai,
+        "udp",
+        true,
+    );
+}
+
+pub(crate) fn inject_udp_tablet_absolute_event(
+    udp_device_id: u16,
+    x: f64,
+    y: f64,
+    buttons_down: u32,
+    flags: u32,
+) {
+    let slot_id = hid_udp_slot_id(udp_device_id);
+    let x = clamp01(x);
+    let y = clamp01(y);
+    let x_raw = ((x * 65535.0) + 0.5).clamp(0.0, 65535.0) as u16;
+    let y_raw = ((y * 65535.0) + 0.5).clamp(0.0, 65535.0) as u16;
+    let q15_x = ((x * 32767.0) + 0.5).clamp(0.0, 32767.0) as u16;
+    let q15_y = ((y * 32767.0) + 0.5).clamp(0.0, 32767.0) as u16;
+    let buttons = buttons_down.min(u8::MAX as u32) as u8;
+    let now_ms = now_ms_u32();
+
+    let seq = {
+        let mut runtimes = HID_RUNTIMES.lock();
+        let runtime = runtime_mut_or_insert(
+            &mut runtimes,
+            HID_UDP_CONTROLLER_ID,
+            slot_id,
+            0,
+            HID_KIND_TABLET,
+        );
+        runtime.seq = runtime.seq.wrapping_add(1);
+        runtime.mouse_x = x;
+        runtime.mouse_y = y;
+        runtime.mouse_buttons_down = buttons_down;
+        runtime
+            .tablet_ring
+            .push(self::tablet::TrueosHidTabletSample {
+                t_ms: now_ms,
+                seq: runtime.seq as u32,
+                slot_id,
+                buttons,
+                report_id: 0,
+                flags: flags.min(u8::MAX as u32) as u8,
+                reserved0: 0,
+                x_raw,
+                y_raw,
+                x_norm_q15: q15_x,
+                y_norm_q15: q15_y,
+            });
+        runtime.seq as u32
+    };
+
+    push_cursor_event(TrueosHidCursorEvent {
+        t_ms: now_ms,
+        seq,
+        controller_id: HID_UDP_CONTROLLER_ID,
+        slot_id,
+        ep_target: 0,
+        hid_kind: HID_KIND_TABLET,
+        reserved0: 0,
+        reserved1: 0,
+        buttons_down,
+        wheel: 0,
+        reserved2: 0,
+        x,
+        y,
+        flags,
+    });
+    self::input::push_event(self::input::InputEvent::Tablet(self::input::TabletEvent {
+        slot_id,
+        buttons,
+        report_id: 0,
+        x_raw,
+        y_raw,
+        x_norm_q15: q15_x,
+        y_norm_q15: q15_y,
+        flags: flags.min(u8::MAX as u32) as u8,
+    }));
+    crate::r::cursor::upsert_snapshot(
+        HID_UDP_CONTROLLER_ID,
+        slot_id,
+        0,
+        HID_KIND_TABLET,
+        x,
+        y,
+        buttons_down,
+    );
+    self::hut::upsert_tablet_state(
+        HID_UDP_CONTROLLER_ID,
+        slot_id,
+        0,
+        x,
+        y,
+        x_raw,
+        y_raw,
+        buttons_down,
+        0,
+        self::hut::HidSourceKind::Ai,
+        "udp",
+        true,
+    );
 }
 
 pub(crate) fn handle_keyboard_boot_report(

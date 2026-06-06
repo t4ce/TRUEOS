@@ -38,15 +38,15 @@ __kernel void gradient_rect_worklist_rgba8(
     uint desc_base,
     uint desc_count)
 {
-    uint worker = get_global_id(0);
+    uint lane = get_global_id(0);
 
-    if (worker != 0u) {
+    if (lane >= 16u) {
         return;
     }
 
     uint dst_pitch_pixels = dst_pitch_bytes >> 2;
 
-    for (uint local_desc_id = 0u; local_desc_id < desc_count; local_desc_id++) {
+    for (uint local_desc_id = lane; local_desc_id < desc_count; local_desc_id += 16u) {
         uint desc_index = (desc_base + local_desc_id) * 5u;
         uint dst_xy = descs[desc_index + 0u];
         uint size = descs[desc_index + 1u];

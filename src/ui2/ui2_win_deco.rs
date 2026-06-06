@@ -5,6 +5,7 @@ use super::*;
 const UI2_CHROME_TEXT_RGBA: (u8, u8, u8, u8) = (0x00, 0x00, 0x00, 0xFF);
 const UI2_CHROME_TITLE_FONT_TIER: Ui2FontTier = Ui2FontTier::Half;
 const UI2_VM_HINT_ACCENT_RGBA: (u8, u8, u8, u8) = (0xFF, 0x37, 0xFF, 0xFF);
+const UI2_CHROME_HIGHLIGHT_WHITE_RGBA: (u8, u8, u8, u8) = (0xFF, 0xFF, 0xFF, 0xFF);
 
 fn title_text_with_ellipsis(text: &str, max_width_px: f32) -> alloc::string::String {
     if text.is_empty() || max_width_px <= 0.0 {
@@ -595,6 +596,36 @@ pub(super) fn push_chrome_solid_rect(
     true
 }
 
+pub(super) fn push_chrome_solid_outline(
+    out: &mut Vec<crate::intel::gpgpu::GpgpuSolidRect>,
+    rect: Ui2Rect,
+    rgba: (u8, u8, u8, u8),
+    stroke: f32,
+) -> usize {
+    if !(rect.w > 0.0 && rect.h > 0.0) {
+        return 0;
+    }
+    let before = out.len();
+    let s = stroke.max(1.0).min(rect.w).min(rect.h);
+    let _ = push_chrome_solid_rect(out, Ui2Rect::new(rect.x, rect.y, rect.w, s), rgba);
+    if rect.h > s {
+        let _ =
+            push_chrome_solid_rect(out, Ui2Rect::new(rect.x, rect.y + rect.h - s, rect.w, s), rgba);
+    }
+    if rect.h > 2.0 * s {
+        let side_h = rect.h - 2.0 * s;
+        let _ = push_chrome_solid_rect(out, Ui2Rect::new(rect.x, rect.y + s, s, side_h), rgba);
+        if rect.w > s {
+            let _ = push_chrome_solid_rect(
+                out,
+                Ui2Rect::new(rect.x + rect.w - s, rect.y + s, s, side_h),
+                rgba,
+            );
+        }
+    }
+    out.len().saturating_sub(before)
+}
+
 pub(super) fn push_chrome_gradient_rect(
     out: &mut Vec<crate::intel::gpgpu::GpgpuGradientRect>,
     rect: Ui2Rect,
@@ -632,23 +663,11 @@ pub(super) fn collect_window_chrome_gradient_rects(
         return 0;
     }
 
-    let frame_base_rgba = if window.vm_origin_hint {
-        blend_rgba_over(
-            (UI2_VM_HINT_ACCENT_RGBA.0, UI2_VM_HINT_ACCENT_RGBA.1, UI2_VM_HINT_ACCENT_RGBA.2, 0x44),
-            (0xF7, 0xF7, 0xFB, 0xFF),
-        )
+    let (left, right) = if window.vm_origin_hint {
+        ((0xC4, 0xA8, 0xC8, 0xFF), (0xF0, 0xF2, 0xF4, 0xFF))
     } else {
-        (0xD9, 0xDE, 0xE5, 0xFF)
+        ((0xC8, 0xCC, 0xC8, 0xFF), (0xF2, 0xF4, 0xF2, 0xFF))
     };
-    let frame_left_rgba = modulate_rgba_alpha(
-        blend_rgba_over((0x00, 0x00, 0x00, 0x52), frame_base_rgba),
-        window.alpha,
-    );
-    let frame_right_rgba = modulate_rgba_alpha(
-        blend_rgba_over((0xFF, 0xFF, 0xFF, 0x52), frame_base_rgba),
-        window.alpha,
-    );
-
     let titleband_h = if window.titlebar_visible {
         if window.state == Ui2WindowStateKind::Minimized {
             rect.h
@@ -662,125 +681,14 @@ pub(super) fn collect_window_chrome_gradient_rects(
         let _ = push_chrome_gradient_rect(
             out,
             Ui2Rect::new(rect.x, rect.y, rect.w, titleband_h),
-            frame_left_rgba,
-            frame_right_rgba,
+            left,
+            right,
             false,
         );
     }
 
     if let Some(bottom_bar) = window_bottom_bar_rect(state, window) {
-        let _ =
-            push_chrome_gradient_rect(out, bottom_bar, frame_left_rgba, frame_right_rgba, false);
-    }
-
-    out.len().saturating_sub(before)
-}
-
-pub(super) fn collect_window_chrome_solid_rects(
-    state: &Ui2State,
-    window: &Ui2Window,
-    rect: Ui2Rect,
-    out: &mut Vec<crate::intel::gpgpu::GpgpuSolidRect>,
-    skip_bands: bool,
-) -> usize {
-    let before = out.len();
-    if window.decoration_mode != Ui2WindowDecorationMode::System {
-        return 0;
-    }
-
-    let white = modulate_rgba_alpha((0xFF, 0xFF, 0xFF, 0xFF), window.alpha);
-    let titleband_h = if window.titlebar_visible {
-        if window.state == Ui2WindowStateKind::Minimized {
-            rect.h
-        } else {
-            UI2_TITLE_H.min(rect.h)
-        }
-    } else {
-        0.0
-    };
-    if titleband_h > 0.0 && !skip_bands {
-        let _ =
-            push_chrome_solid_rect(out, Ui2Rect::new(rect.x, rect.y, rect.w, titleband_h), white);
-    }
-
-    let body_y = rect.y + titleband_h;
-    let body_h = (rect.h - titleband_h).max(0.0);
-    if body_h > 0.0 {
-        let body_alpha = if window.content_preserve_scale {
-            ((u16::from(window.alpha) * 85) / 100) as u8
-        } else {
-            window.alpha
-        };
-        let _ = push_chrome_solid_rect(
-            out,
-            Ui2Rect::new(rect.x, body_y, rect.w, body_h),
-            modulate_rgba_alpha((0xFF, 0xFF, 0xFF, 0xFF), body_alpha),
-        );
-    }
-
-    if !skip_bands && let Some(bottom_bar) = window_bottom_bar_rect(state, window) {
-        let _ = push_chrome_solid_rect(out, bottom_bar, white);
-    }
-
-    let track = modulate_rgba_alpha((0xEA, 0xEC, 0xEF, 0xFF), window.alpha);
-    let thumb = modulate_rgba_alpha((0xB6, 0xBC, 0xC4, 0xFF), window.alpha);
-    let inset = modulate_rgba_alpha((0xD7, 0xDB, 0xE1, 0xFF), window.alpha);
-    if let Some(vbar) = window_vertical_scrollbar_rect(state, window) {
-        let _ = push_chrome_solid_rect(out, vbar, track);
-        let thumb_h = if let Some(snapshot) = window_scroll_snapshot(window) {
-            let viewport_h = snapshot.viewport_height.max(1) as f32;
-            let content_h = snapshot.content_height.max(snapshot.viewport_height.max(1)) as f32;
-            libm::fmaxf(10.0, (vbar.h * (viewport_h / content_h)).min(vbar.h))
-        } else {
-            libm::fminf(vbar.h, 18.0)
-        };
-        let thumb_y = if let Some(snapshot) = window_scroll_snapshot(window) {
-            let scroll_range = hosted_browser_scroll_max(&snapshot) as f32;
-            let avail = (vbar.h - thumb_h).max(0.0);
-            if scroll_range > 0.0 {
-                vbar.y
-                    + (avail
-                        * ((normalized_hosted_browser_scroll(&snapshot) as f32) / scroll_range))
-            } else {
-                vbar.y
-            }
-        } else {
-            vbar.y
-        };
-        let _ = push_chrome_solid_rect(
-            out,
-            Ui2Rect::new(vbar.x + 1.0, thumb_y, (vbar.w - 2.0).max(1.0), thumb_h),
-            thumb,
-        );
-    }
-
-    if let Some(hbar) = window_horizontal_scrollbar_rect(state, window) {
-        let _ = push_chrome_solid_rect(out, hbar, track);
-        let thumb_w = if let Some(snapshot) = window_scroll_snapshot(window) {
-            let viewport_w = snapshot.viewport_width.max(1) as f32;
-            let content_w = snapshot.content_width.max(snapshot.viewport_width.max(1)) as f32;
-            libm::fmaxf(10.0, (hbar.w * (viewport_w / content_w)).min(hbar.w))
-        } else {
-            libm::fminf((hbar.w - 2.0).max(8.0), 18.0)
-        };
-        let thumb_x = if let Some(snapshot) = window_scroll_snapshot(window) {
-            let scroll_range = hosted_browser_scroll_x_max(&snapshot) as f32;
-            let avail = (hbar.w - thumb_w).max(0.0);
-            if scroll_range > 0.0 {
-                hbar.x
-                    + (avail
-                        * ((normalized_hosted_browser_scroll_x(&snapshot) as f32) / scroll_range))
-            } else {
-                hbar.x
-            }
-        } else {
-            hbar.x + ((hbar.w - thumb_w) * 0.5)
-        };
-        let _ = push_chrome_solid_rect(
-            out,
-            Ui2Rect::new(thumb_x, hbar.y + 1.0, thumb_w, (hbar.h - 2.0).max(1.0)),
-            inset,
-        );
+        let _ = push_chrome_gradient_rect(out, bottom_bar, left, right, false);
     }
 
     if !window.selected_cursor_slots.is_empty() {
@@ -802,10 +710,106 @@ pub(super) fn collect_window_chrome_solid_rects(
                 if seg_w <= 0.0 {
                     continue;
                 }
+                let cursor_rgba = super::ui2_hid::cursor_color(*slot_id);
+                let _ = push_chrome_gradient_rect(
+                    out,
+                    Ui2Rect::new(seg_x, bar_span.y - 2.0, seg_w, 2.0),
+                    UI2_CHROME_HIGHLIGHT_WHITE_RGBA,
+                    (cursor_rgba.0, cursor_rgba.1, cursor_rgba.2, 0xFF),
+                    false,
+                );
+            }
+        }
+    }
+
+    for cursor in &state.cursors {
+        if cursor.hover_window_id != window.id {
+            continue;
+        }
+        let Some(button) = cursor.hover_decoration_button else {
+            continue;
+        };
+        let Some(button_rect) = decoration_hover_button_rect(state, window.id, button) else {
+            continue;
+        };
+        let cursor_rgba = super::ui2_hid::cursor_color(cursor.slot_id);
+        let highlight_y = button_rect.y + 1.0;
+        let highlight_h = (button_rect.h - 2.0).max(1.0);
+        let _ = push_chrome_gradient_rect(
+            out,
+            Ui2Rect::new(button_rect.x, highlight_y, button_rect.w, highlight_h),
+            UI2_CHROME_HIGHLIGHT_WHITE_RGBA,
+            (cursor_rgba.0, cursor_rgba.1, cursor_rgba.2, 0xFF),
+            true,
+        );
+    }
+
+    out.len().saturating_sub(before)
+}
+
+pub(super) fn collect_window_chrome_solid_rects(
+    state: &Ui2State,
+    window: &Ui2Window,
+    rect: Ui2Rect,
+    out: &mut Vec<crate::intel::gpgpu::GpgpuSolidRect>,
+    skip_bands: bool,
+) -> usize {
+    let before = out.len();
+    if window.decoration_mode != Ui2WindowDecorationMode::System {
+        return 0;
+    }
+
+    let line = if window.vm_origin_hint {
+        (0xB4, 0x3C, 0xB8, 0xFF)
+    } else {
+        (0xB8, 0xBE, 0xC6, 0xFF)
+    };
+    let titleband_h = if window.titlebar_visible {
+        if window.state == Ui2WindowStateKind::Minimized {
+            rect.h
+        } else {
+            UI2_TITLE_H.min(rect.h)
+        }
+    } else {
+        0.0
+    };
+    if titleband_h > 0.0 && !skip_bands {
+        let _ = push_chrome_solid_outline(
+            out,
+            Ui2Rect::new(rect.x, rect.y, rect.w, titleband_h),
+            line,
+            2.0,
+        );
+    }
+
+    if !skip_bands && let Some(bottom_bar) = window_bottom_bar_rect(state, window) {
+        let _ = push_chrome_solid_outline(out, bottom_bar, line, 2.0);
+    }
+
+    if !skip_bands && !window.selected_cursor_slots.is_empty() {
+        let bar_span = if window.titlebar_visible {
+            window_decoration_rect(state, window).unwrap_or(rect)
+        } else {
+            rect
+        };
+        let cursor_count = window.selected_cursor_slots.len() as f32;
+        if bar_span.w > 0.0 && cursor_count > 0.0 {
+            for (idx, slot_id) in window.selected_cursor_slots.iter().enumerate() {
+                let seg_x = bar_span.x + (bar_span.w * (idx as f32 / cursor_count));
+                let seg_right = if idx + 1 == window.selected_cursor_slots.len() {
+                    bar_span.x + bar_span.w
+                } else {
+                    bar_span.x + (bar_span.w * ((idx + 1) as f32 / cursor_count))
+                };
+                let seg_w = (seg_right - seg_x).max(0.0);
+                if seg_w <= 0.0 {
+                    continue;
+                }
+                let cursor_rgba = super::ui2_hid::cursor_color(*slot_id);
                 let _ = push_chrome_solid_rect(
                     out,
                     Ui2Rect::new(seg_x, bar_span.y - 2.0, seg_w, 2.0),
-                    modulate_rgba_alpha(super::ui2_hid::cursor_color(*slot_id), window.alpha),
+                    (cursor_rgba.0, cursor_rgba.1, cursor_rgba.2, 0xFF),
                 );
             }
         }

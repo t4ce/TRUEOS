@@ -35,6 +35,7 @@ pub mod services {
     pub const LOGTOTCP_TCP_PORT: u16 = 1;
     pub const WS_TIME_TCP_PORT: u16 = 2;
     pub const TRUEOS_RDP_TCP_PORT: u16 = 100;
+    pub const TRUEOS_HID_UDP_PORT: u16 = TRUEOS_RDP_TCP_PORT;
     pub const NET_SHELL_TCP_PORT: u16 = 4245;
     pub const FTP_SERVER_PORT: u16 = 21;
     pub const FTP_SERVER_PASV_MIN: u16 = 40_000;

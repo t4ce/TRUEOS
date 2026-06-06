@@ -45,6 +45,7 @@ define_started_flags!(
     SNTP_SERVICE_STARTED,
     NET_SHELL_STARTED,
     TACTICS_SRV_STARTED,
+    HID_UDP_SRV_STARTED,
     AI_QJS_ONESHOT_STARTED,
     HTTP_TRUEOSFS_STARTED,
     HYPER_HTTP1_PROBE_STARTED,
@@ -79,6 +80,7 @@ define_started_flags!(
     UI2_CORETICKS_DEMO_STARTED,
     UI2_CURSORPICKER_DEMO_STARTED,
     UI2_GBOI_DEMO_STARTED,
+    UI2_INTEL_CANVAS3D_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
     UI2_PLAYER_DEMO_STARTED,
     UI2_RAPLE_DEMO_STARTED,
@@ -121,6 +123,7 @@ define_stop_flags!(
     STOP_UI2_CORETICKS_DEMO,
     STOP_UI2_CURSORPICKER_DEMO,
     STOP_UI2_GBOI_DEMO,
+    STOP_UI2_INTEL_CANVAS3D_DEMO,
     STOP_UI2_MANDELBROT_DEMO,
     STOP_UI2_PLAYER_DEMO,
     STOP_UI2_RAPLE_DEMO,
@@ -138,6 +141,7 @@ fn stop_flag_by_task_name(name: &str) -> Option<&'static AtomicBool> {
         "ui2-coreticks-demo" => Some(&STOP_UI2_CORETICKS_DEMO),
         "ui2-cursorpicker-demo" => Some(&STOP_UI2_CURSORPICKER_DEMO),
         "ui2-gboi-demo" => Some(&STOP_UI2_GBOI_DEMO),
+        "ui2-intel-canvas3d-demo" => Some(&STOP_UI2_INTEL_CANVAS3D_DEMO),
         "ui2-mandelbrot-demo" => Some(&STOP_UI2_MANDELBROT_DEMO),
         "ui2-player-demo" => Some(&STOP_UI2_PLAYER_DEMO),
         "ui2-raple-demo" => Some(&STOP_UI2_RAPLE_DEMO),
@@ -454,6 +458,10 @@ fn spawn_tactics_srv(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::tst_tactics_srv::tactics_srv_task())
 }
 
+fn spawn_hid_udp_srv(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::r::hid_udp_srv::hid_udp_srv_task())
+}
+
 #[cfg(feature = "trueos_rdp")]
 fn spawn_resource_monitor(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::resource_monitor::resource_monitor_task())
@@ -765,6 +773,12 @@ fn spawn_ui2_cursorpicker_demo(spawner: Spawner) -> SpawnAttempt {
 fn spawn_ui2_gboi_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |_worker_spawner| {
         crate::tst::ui2::gboi_demo::ui2_gboi_demo_task()
+    })
+}
+
+fn spawn_ui2_intel_canvas3d_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |_worker_spawner| {
+        crate::tst::ui2::intel_canvas3d_demo::ui2_intel_canvas3d_demo_task()
     })
 }
 
@@ -1237,9 +1251,9 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 #[cfg(feature = "trueos_rdp")]
-const TASK_COUNT: usize = 73;
+const TASK_COUNT: usize = 75;
 #[cfg(not(feature = "trueos_rdp"))]
-const TASK_COUNT: usize = 71;
+const TASK_COUNT: usize = 73;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1302,6 +1316,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::NET_ANY_CONFIGURED,
         &TACTICS_SRV_STARTED,
         spawn_tactics_srv,
+    ),
+    TaskSpec::enabled(
+        "hid-udp-srv",
+        crate::r::readiness::NET_ANY_CONFIGURED,
+        &HID_UDP_SRV_STARTED,
+        spawn_hid_udp_srv,
     ),
     #[cfg(feature = "trueos_rdp")]
     TaskSpec::enabled("resource-monitor", 0, &RESOURCE_MONITOR_STARTED, spawn_resource_monitor),
@@ -1543,6 +1563,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         GBOI_DEMO_READY,
         &UI2_GBOI_DEMO_STARTED,
         spawn_ui2_gboi_demo,
+    ),
+    TaskSpec::disabled(
+        "ui2-intel-canvas3d-demo",
+        UI2_DEMO_READY | crate::r::readiness::GFX_BACKEND_READY,
+        &UI2_INTEL_CANVAS3D_DEMO_STARTED,
+        spawn_ui2_intel_canvas3d_demo,
     ),
     TaskSpec::disabled(
         "ui2-mandelbrot-demo",

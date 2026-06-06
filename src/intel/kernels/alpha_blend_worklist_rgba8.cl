@@ -57,16 +57,16 @@ __kernel void alpha_blend_worklist_rgba8(
     uint desc_base,
     uint desc_count)
 {
-    uint worker = get_global_id(0);
+    uint lane = get_global_id(0);
 
-    if (worker != 0u) {
+    if (lane >= 16u) {
         return;
     }
 
     uint src_pitch_pixels = src_pitch_bytes >> 2;
     uint dst_pitch_pixels = dst_pitch_bytes >> 2;
 
-    for (uint local_desc_id = 0u; local_desc_id < desc_count; local_desc_id++) {
+    for (uint local_desc_id = lane; local_desc_id < desc_count; local_desc_id += 16u) {
         uint desc_index = (desc_base + local_desc_id) * 3u;
         uint src_xy = descs[desc_index + 0u];
         uint dst_xy = descs[desc_index + 1u];
