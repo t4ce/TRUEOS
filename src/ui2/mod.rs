@@ -685,6 +685,8 @@ struct Ui2State {
     last_athlas_small_ready_seq: u32,
     first_compose_signaled: bool,
     cursor_overlay_dirty: bool,
+    chrome_overlay_dirty: bool,
+    last_chrome_overlay_anim_ms: u64,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -723,6 +725,8 @@ static UI2_CURSOR_SPRITE64_LOGS: AtomicU32 = AtomicU32::new(0);
 static UI2_CHROME_GRADIENT_RECT_LOGS: AtomicU32 = AtomicU32::new(0);
 static UI2_CHROME_SOLID_RECT_LOGS: AtomicU32 = AtomicU32::new(0);
 static UI2_CONTENT_GPGPU_LOGS: AtomicU32 = AtomicU32::new(0);
+
+const UI2_CHROME_OVERLAY_ANIM_FRAME_MS: u64 = 66;
 
 #[inline]
 fn boot_probe_ms() -> u64 {
@@ -774,6 +778,8 @@ fn init_state() -> &'static Mutex<Ui2State> {
             last_athlas_small_ready_seq: 0,
             first_compose_signaled: false,
             cursor_overlay_dirty: false,
+            chrome_overlay_dirty: false,
+            last_chrome_overlay_anim_ms: 0,
         };
 
         refresh_all_window_hit_entries(&mut state);
@@ -1091,6 +1097,35 @@ fn window_content_participates_in_composition(window: &Ui2Window) -> bool {
     window.visible && !window.composition_locked
 }
 
+fn window_content_can_patch_primary(window: &Ui2Window) -> bool {
+    !window.content_tex_blend
+        && window.alpha == 255
+        && window.content_rotation_quadrants == 0
+        && window_content_participates_in_composition(window)
+}
+
+fn intel_direct_content_only_dirty(state: &Ui2State) -> bool {
+    if !state.first_compose_signaled || state.cursor_overlay_dirty || state.chrome_overlay_dirty {
+        return false;
+    }
+
+    let mut dirty_count = 0usize;
+    for window in &state.windows {
+        if !window.dirty {
+            continue;
+        }
+        dirty_count = dirty_count.saturating_add(1);
+        if !window.content_present_dirty
+            || !window_is_renderable(window)
+            || !window_content_can_patch_primary(window)
+        {
+            return false;
+        }
+    }
+
+    dirty_count != 0
+}
+
 fn is_simple_click(press_x: f32, press_y: f32, release_x: f32, release_y: f32) -> bool {
     let dx = release_x - press_x;
     let dy = release_y - press_y;
@@ -1276,9 +1311,23 @@ fn draw_cursor_cross_overlay(state: &Ui2State, center_x: f32, center_y: f32, col
     );
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum Ui2ChromeSpriteScope {
+    None,
+    All,
+    Active,
+}
+
+fn window_has_active_chrome_overlay(state: &Ui2State, window: &Ui2Window) -> bool {
+    !window.selected_cursor_slots.is_empty()
+        || state.cursors.iter().any(|cursor| {
+            cursor.hover_window_id == window.id && cursor.hover_decoration_button.is_some()
+        })
+}
+
 fn draw_cursor_overlay_layer_intel_sprite64(
     state: &Ui2State,
-    include_chrome: bool,
+    chrome_scope: Ui2ChromeSpriteScope,
     present: bool,
 ) -> bool {
     if !crate::gfx::is_intel_active() {
@@ -1288,10 +1337,15 @@ fn draw_cursor_overlay_layer_intel_sprite64(
     let mut placements = Vec::new();
     let mut chrome_count = 0usize;
     let mut dock_count = 0usize;
-    if include_chrome {
+    if chrome_scope != Ui2ChromeSpriteScope::None {
         for idx in sorted_window_indices(state) {
             let window = &state.windows[idx];
             if !window_is_renderable(window) {
+                continue;
+            }
+            if chrome_scope == Ui2ChromeSpriteScope::Active
+                && !window_has_active_chrome_overlay(state, window)
+            {
                 continue;
             }
             chrome_count = chrome_count.saturating_add(collect_window_chrome_sprite64_placements(
@@ -1301,8 +1355,10 @@ fn draw_cursor_overlay_layer_intel_sprite64(
                 &mut placements,
             ));
         }
-        dock_count =
-            ui2_win_register::collect_offline_dock_sprite64_placements(state, &mut placements);
+        if chrome_scope == Ui2ChromeSpriteScope::All {
+            dock_count =
+                ui2_win_register::collect_offline_dock_sprite64_placements(state, &mut placements);
+        }
     }
 
     let cursors = crate::r::cursor::ordered_cursor_snapshot_with_slots();
@@ -1435,6 +1491,81 @@ fn draw_chrome_gradient_rects_intel_gpgpu(state: &Ui2State) -> bool {
     ok
 }
 
+fn draw_active_chrome_overlay_intel_gpgpu(state: &mut Ui2State) -> bool {
+    if !crate::gfx::is_intel_active()
+        || !state.first_compose_signaled
+        || !intel_ui2_chrome_rect_path_enabled()
+    {
+        return false;
+    }
+
+    let mut rects = Vec::new();
+    let mut window_count = 0usize;
+    for idx in sorted_window_indices(state) {
+        let window = &state.windows[idx];
+        if !window_is_renderable(window) || !window_has_active_chrome_overlay(state, window) {
+            continue;
+        }
+        let added = collect_window_chrome_gradient_rects(
+            state,
+            window,
+            effective_window_rect(state, window),
+            &mut rects,
+        );
+        if added > 0 {
+            window_count = window_count.saturating_add(1);
+        }
+    }
+
+    if rects.is_empty() {
+        let ok =
+            draw_cursor_overlay_layer_intel_sprite64(state, Ui2ChromeSpriteScope::Active, true);
+        state.chrome_overlay_dirty = !ok;
+        if ok {
+            state.cursor_overlay_dirty = false;
+        }
+        return ok;
+    }
+
+    let Some(result) = crate::intel::gpgpu::gradient_rects_rgba8_over_primary(&rects, false) else {
+        return false;
+    };
+    let sprites_ok =
+        draw_cursor_overlay_layer_intel_sprite64(state, Ui2ChromeSpriteScope::Active, true);
+    let ok = result.ok && sprites_ok;
+    state.chrome_overlay_dirty = !ok;
+    if ok {
+        state.cursor_overlay_dirty = false;
+    }
+    let log_n = UI2_CHROME_GRADIENT_RECT_LOGS.fetch_add(1, Ordering::Relaxed);
+    if log_n < 16 || !ok {
+        crate::log!(
+            "ui2: active chrome overlay-gpgpu ok={} windows={} rects={} gradient_ms={} sprites_present={} total_ms={}\n",
+            ok as u8,
+            window_count,
+            result.rects,
+            result.fill_ms.saturating_add(result.blend_ms),
+            sprites_ok as u8,
+            result.total_ms
+        );
+    }
+    ok
+}
+
+fn active_chrome_overlay_due(state: &Ui2State, now_ms: u64) -> bool {
+    if state.chrome_overlay_dirty {
+        return true;
+    }
+    state.first_compose_signaled
+        && crate::gfx::is_intel_active()
+        && now_ms.saturating_sub(state.last_chrome_overlay_anim_ms)
+            >= UI2_CHROME_OVERLAY_ANIM_FRAME_MS
+        && state
+            .windows
+            .iter()
+            .any(|window| window_is_renderable(window) && !window.selected_cursor_slots.is_empty())
+}
+
 fn draw_chrome_solid_rects_intel_gpgpu(state: &Ui2State, skip_bands: bool) -> bool {
     if !crate::gfx::is_intel_active() {
         return false;
@@ -1518,6 +1649,9 @@ struct Ui2IntelContentGpgpuStats {
     skipped: usize,
     spans: usize,
     submits: usize,
+    submit_ms: u64,
+    present_ms: u64,
+    total_ms: u64,
     pixels: usize,
 }
 
@@ -1571,7 +1705,7 @@ fn clip_texture_content_to_primary(
     ))
 }
 
-fn draw_window_content_textures_intel_gpgpu(state: &Ui2State) -> bool {
+fn draw_window_content_textures_intel_gpgpu(state: &Ui2State, dirty_only: bool) -> bool {
     if !crate::gfx::is_intel_active() {
         return false;
     }
@@ -1579,6 +1713,9 @@ fn draw_window_content_textures_intel_gpgpu(state: &Ui2State) -> bool {
     let mut stats = Ui2IntelContentGpgpuStats::default();
     for idx in sorted_window_indices(state) {
         let window = &state.windows[idx];
+        if dirty_only && !window.content_present_dirty {
+            continue;
+        }
         if !window_is_renderable(window)
             || !window_content_participates_in_composition(window)
             || window.state == Ui2WindowStateKind::Minimized
@@ -1654,6 +1791,9 @@ fn draw_window_content_textures_intel_gpgpu(state: &Ui2State) -> bool {
         stats.submitted = stats.submitted.saturating_add(1);
         stats.spans = stats.spans.saturating_add(submit_stats.spans);
         stats.submits = stats.submits.saturating_add(submit_stats.submits);
+        stats.submit_ms = stats.submit_ms.saturating_add(submit_stats.submit_ms);
+        stats.present_ms = stats.present_ms.saturating_add(submit_stats.present_ms);
+        stats.total_ms = stats.total_ms.saturating_add(submit_stats.total_ms);
         stats.pixels = stats
             .pixels
             .saturating_add((src_rect.width as usize).saturating_mul(src_rect.height as usize));
@@ -1663,14 +1803,22 @@ fn draw_window_content_textures_intel_gpgpu(state: &Ui2State) -> bool {
     let log_n = UI2_CONTENT_GPGPU_LOGS.fetch_add(1, Ordering::Relaxed);
     if log_n < 24 || !ok {
         crate::log!(
-            "ui2: content-gpgpu ok={} candidates={} submitted={} skipped={} spans={} submits={} pixels={} artifact=alpha_blend_worklist_rgba8 path=texture-to-primary\n",
+            "ui2: content-gpgpu ok={} candidates={} submitted={} skipped={} spans={} submits={} submit_ms={} present_ms={} total_ms={} pixels={} artifact=alpha_blend_worklist_rgba8 path={}\n",
             ok as u8,
             stats.candidates,
             stats.submitted,
             stats.skipped,
             stats.spans,
             stats.submits,
-            stats.pixels
+            stats.submit_ms,
+            stats.present_ms,
+            stats.total_ms,
+            stats.pixels,
+            if dirty_only {
+                "dirty-texture-to-primary"
+            } else {
+                "texture-to-primary"
+            }
         );
     }
     ok
@@ -1681,7 +1829,7 @@ fn intel_ui2_chrome_rect_path_enabled() -> bool {
 }
 
 fn draw_cursor_overlay_layer(state: &Ui2State) {
-    if draw_cursor_overlay_layer_intel_sprite64(state, false, false) {
+    if draw_cursor_overlay_layer_intel_sprite64(state, Ui2ChromeSpriteScope::None, false) {
         return;
     }
 
@@ -1763,7 +1911,15 @@ fn note_window_content_present_dirty(state: &mut Ui2State, id: u32, reason: &'st
 fn note_cursor_overlay_dirty(state: &mut Ui2State, reason: &'static str) {
     state.cursor_overlay_dirty = true;
     state.compose_reason = reason;
-    UI2_DIRTY.store(true, Ordering::Release);
+    if crate::gfx::is_intel_active() && state.first_compose_signaled {
+        state.chrome_overlay_dirty = true;
+    } else {
+        UI2_DIRTY.store(true, Ordering::Release);
+    }
+}
+
+fn note_chrome_overlay_dirty(state: &mut Ui2State) {
+    state.chrome_overlay_dirty = true;
 }
 
 fn note_window_viewport_sync_needed(state: &mut Ui2State, id: u32) -> bool {
@@ -3512,16 +3668,57 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
 
     let lock_result = crate::gfx::try_with_cabi_frame_lock(20_000, || {
         if intel_direct_screen {
-            let chrome_gradients_gpgpu = draw_chrome_gradient_rects_intel_gpgpu(state);
-            let chrome_rects_gpgpu =
-                draw_chrome_solid_rects_intel_gpgpu(state, chrome_gradients_gpgpu);
-            let content_gpgpu = draw_window_content_textures_intel_gpgpu(state);
-            let surroundings_sprite64 = draw_cursor_overlay_layer_intel_sprite64(state, true, true);
+            let content_only_dirty = intel_direct_content_only_dirty(state);
+            let primary_clear = if content_only_dirty {
+                None
+            } else {
+                crate::intel::gpgpu::clear_primary_rgba8_white_stats()
+            };
+            let chrome_gradients_gpgpu = if content_only_dirty {
+                true
+            } else {
+                draw_chrome_gradient_rects_intel_gpgpu(state)
+            };
+            let chrome_rects_gpgpu = if content_only_dirty {
+                true
+            } else {
+                draw_chrome_solid_rects_intel_gpgpu(state, chrome_gradients_gpgpu)
+            };
+            let content_gpgpu =
+                draw_window_content_textures_intel_gpgpu(state, content_only_dirty);
+            let surroundings_sprite64 = if content_only_dirty {
+                true
+            } else {
+                draw_cursor_overlay_layer_intel_sprite64(state, Ui2ChromeSpriteScope::All, true)
+            };
             if compose_seq <= 16 || compose_seq.is_multiple_of(120) {
                 crate::log!(
-                    "ui2: intel direct-window-present seq={} windows={} hotloop=gradients+rect-lines+content+sprite64 scene_layer=0 fullscreen_alpha=0 content_gpgpu={} chrome_gradients_gpgpu={} chrome_rects_gpgpu={} surroundings_sprite64={}\n",
+                    "ui2: intel direct-window-present seq={} windows={} hotloop={} scene_layer=0 fullscreen_alpha=0 primary_clear={} clear_descs={} clear_submits={} clear_submit_ms={} clear_present_ms={} clear_total_ms={} content_gpgpu={} chrome_gradients_gpgpu={} chrome_rects_gpgpu={} surroundings_sprite64={}\n",
                     compose_seq,
                     stats.visible_windows,
+                    if content_only_dirty {
+                        "content-dirty-only"
+                    } else {
+                        "primary-clear+gradients+rect-lines+content+sprite64"
+                    },
+                    primary_clear.is_some() as u8,
+                    primary_clear.as_ref().map(|stats| stats.spans).unwrap_or(0),
+                    primary_clear
+                        .as_ref()
+                        .map(|stats| stats.submits)
+                        .unwrap_or(0),
+                    primary_clear
+                        .as_ref()
+                        .map(|stats| stats.submit_ms)
+                        .unwrap_or(0),
+                    primary_clear
+                        .as_ref()
+                        .map(|stats| stats.present_ms)
+                        .unwrap_or(0),
+                    primary_clear
+                        .as_ref()
+                        .map(|stats| stats.total_ms)
+                        .unwrap_or(0),
                     content_gpgpu as u8,
                     chrome_gradients_gpgpu as u8,
                     chrome_rects_gpgpu as u8,
@@ -3689,6 +3886,7 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
         state.windows.iter().filter(|window| window.dirty).count();
     UI2_DIRTY.store(false, Ordering::Release);
     state.cursor_overlay_dirty = false;
+    state.chrome_overlay_dirty = false;
     for window in &mut state.windows {
         if scene_dirty && window.dirty {
             window.dirty = false;
@@ -3790,6 +3988,12 @@ pub async fn ui2_task() {
 
             if should_compose {
                 did_compose = compose_ui2_frame(&mut state, true);
+            } else {
+                let now_ms = ui2_now_ms();
+                if active_chrome_overlay_due(&state, now_ms) {
+                    state.last_chrome_overlay_anim_ms = now_ms;
+                    did_compose = draw_active_chrome_overlay_intel_gpgpu(&mut state);
+                }
             }
         }
 

@@ -6,6 +6,7 @@ const UI2_CHROME_TEXT_RGBA: (u8, u8, u8, u8) = (0x00, 0x00, 0x00, 0xFF);
 const UI2_CHROME_TITLE_FONT_TIER: Ui2FontTier = Ui2FontTier::Half;
 const UI2_VM_HINT_ACCENT_RGBA: (u8, u8, u8, u8) = (0xFF, 0x37, 0xFF, 0xFF);
 const UI2_CHROME_HIGHLIGHT_WHITE_RGBA: (u8, u8, u8, u8) = (0xFF, 0xFF, 0xFF, 0xFF);
+const UI2_CHROME_GRADIENT_ANIM_PERIOD_MS: u64 = 1_800;
 
 fn title_text_with_ellipsis(text: &str, max_width_px: f32) -> alloc::string::String {
     if text.is_empty() || max_width_px <= 0.0 {
@@ -657,8 +658,41 @@ fn animate_window_chrome_gradient(
     left: (u8, u8, u8, u8),
     right: (u8, u8, u8, u8),
 ) -> ((u8, u8, u8, u8), (u8, u8, u8, u8)) {
-    let _ = window;
-    (left, right)
+    if window.selected_cursor_slots.is_empty() {
+        return (left, right);
+    }
+    let phase = chrome_gradient_pingpong_phase(ui2_now_ms());
+    let warm = blend_rgba_over((0xFF, 0xFF, 0xFF, 0x36), left);
+    let cool = blend_rgba_over((0x70, 0xD8, 0xFF, 0x26), right);
+    (lerp_rgba(left, warm, phase), lerp_rgba(right, cool, phase))
+}
+
+#[inline]
+fn lerp_u8(a: u8, b: u8, phase: u8) -> u8 {
+    let inv = 255u32.saturating_sub(phase as u32);
+    (((a as u32 * inv) + (b as u32 * phase as u32) + 127) / 255) as u8
+}
+
+#[inline]
+fn lerp_rgba(a: (u8, u8, u8, u8), b: (u8, u8, u8, u8), phase: u8) -> (u8, u8, u8, u8) {
+    (
+        lerp_u8(a.0, b.0, phase),
+        lerp_u8(a.1, b.1, phase),
+        lerp_u8(a.2, b.2, phase),
+        lerp_u8(a.3, b.3, phase),
+    )
+}
+
+#[inline]
+fn chrome_gradient_pingpong_phase(now_ms: u64) -> u8 {
+    let half = (UI2_CHROME_GRADIENT_ANIM_PERIOD_MS / 2).max(1);
+    let t = now_ms % UI2_CHROME_GRADIENT_ANIM_PERIOD_MS.max(1);
+    let wave = if t <= half {
+        t
+    } else {
+        UI2_CHROME_GRADIENT_ANIM_PERIOD_MS.saturating_sub(t)
+    };
+    ((wave.saturating_mul(255)) / half).min(255) as u8
 }
 
 pub(super) fn collect_window_chrome_gradient_rects(

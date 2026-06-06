@@ -428,6 +428,187 @@ pub(crate) fn submit_canvas3d_clip_box_q16_once() -> bool {
     ok
 }
 
+pub(crate) fn submit_canvas3d_plane_sample_rgba8_once() -> bool {
+    if !DIRECT_RCS_ENABLED || CANVAS3D_PLANE_SAMPLE_RAN.swap(true, Ordering::AcqRel) {
+        return false;
+    }
+
+    let Some(dev) = intel::claimed_device() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: canvas3d-plane-sample skipped reason=no-claimed-device\n"
+        );
+        return false;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: canvas3d-plane-sample failed rung=alloc\n"
+        );
+        return false;
+    };
+    let Some(upload) = upload_canvas3d_plane_sample_rgba8_kernel() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: canvas3d-plane-sample skipped reason=no-kernel-upload\n"
+        );
+        return false;
+    };
+    if CANVAS3D_PROJECT_OUT_BYTES > CANVAS3D_PROJECT_OUT_ALLOC_BYTES {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: canvas3d-plane-sample failed rung=buffer-cap out_bytes=0x{:X} out_cap=0x{:X}\n",
+            CANVAS3D_PROJECT_OUT_BYTES,
+            CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+        );
+        return false;
+    }
+
+    let q = CANVAS3D_PROJECT_Q16_ONE;
+    let params = Canvas3dPlaneSampleRgba8Params {
+        out_gpu: CANVAS3D_PROJECT_OUT_GPU,
+        out_first_point: CANVAS3D_PLANE_SAMPLE_OUT_FIRST,
+        sample_count: CANVAS3D_PLANE_SAMPLE_COUNT_U32,
+        canvas_width: CANVAS3D_PROJECT_SMOKE_CANVAS_WIDTH,
+        canvas_height: CANVAS3D_PROJECT_SMOKE_CANVAS_HEIGHT,
+        origin_q16: Canvas3dVec3Q16 {
+            x: 0,
+            y: 0,
+            z: q * 2,
+            pad: 0,
+        },
+        axis_u_q16: Canvas3dVec3Q16 {
+            x: q / 2,
+            y: 0,
+            z: 0,
+            pad: 0,
+        },
+        axis_v_q16: Canvas3dVec3Q16 {
+            x: 0,
+            y: q / 2,
+            z: 0,
+            pad: 0,
+        },
+        constraint0_q16: Canvas3dVec3Q16 {
+            x: q,
+            y: 0,
+            z: q / 2,
+            pad: 0,
+        },
+        constraint1_q16: Canvas3dVec3Q16 {
+            x: 0,
+            y: -q,
+            z: q / 2,
+            pad: 0,
+        },
+        constraint2_q16: Canvas3dVec3Q16 {
+            x: -q,
+            y: -q,
+            z: q,
+            pad: 0,
+        },
+        constraint3_q16: Canvas3dVec3Q16::default(),
+        constraint_count: 3,
+        u_steps: CANVAS3D_PLANE_SAMPLE_GRID_U,
+        v_steps: CANVAS3D_PLANE_SAMPLE_GRID_V,
+        color_rgba: CANVAS3D_PLANE_SAMPLE_COLOR,
+    };
+
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let expected = direct_rcs_seed_canvas3d_plane_sample(state, params);
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let out_ppgtt_ok = kernel_ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(
+            state,
+            CANVAS3D_PROJECT_OUT_GPU,
+            state.canvas3d_out_phys,
+            CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+        );
+    let batch_ok = out_ppgtt_ok
+        && direct_rcs_encode_canvas3d_plane_sample_batch(
+            state,
+            upload,
+            params,
+            CANVAS3D_PROJECT_OUT_BYTES,
+        );
+    let submit_start_tick = direct_rcs_now_tick();
+    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
+    let (observed, retire_ms) = if submitted {
+        direct_rcs_poll_result_slot_elapsed(
+            state,
+            CANVAS3D_PLANE_SAMPLE_POST_MARKER_SLOT,
+            CANVAS3D_PLANE_SAMPLE_POST_MARKER,
+            submit_start_tick,
+        )
+    } else {
+        (0, 0)
+    };
+    let pre_marker = direct_rcs_read_result_slot(state, CANVAS3D_PLANE_SAMPLE_PRE_MARKER_SLOT);
+    let after = direct_rcs_read_canvas3d_plane_sample_result(state);
+    let retired = observed == CANVAS3D_PLANE_SAMPLE_POST_MARKER;
+    let matched = direct_rcs_canvas3d_plane_sample_count_matching(after, expected);
+    let visible = direct_rcs_canvas3d_plane_sample_count_visible(after);
+    let ok = retired
+        && pre_marker == CANVAS3D_PLANE_SAMPLE_PRE_MARKER
+        && matched == CANVAS3D_PLANE_SAMPLE_COUNT;
+
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/gpgpu: canvas3d-plane-sample forcewake={} ggtt={} ppgtt={} kernel_ppgtt={} out_ppgtt={} batch={} submitted={} retired={} retire_ms={} ok={} matched={}/{} visible={}/{} out_first={} samples={} grid={}x{} constraints={} canvas={}x{} pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} out_gpu=0x{:X} out_bytes=0x{:X} idd_off=0x{:X} payload_off=0x{:X} out0=[xy=0x{:08X},rgba=0x{:08X}] out5=[xy=0x{:08X},rgba=0x{:08X}] out15=[xy=0x{:08X},rgba=0x{:08X}] ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=direct-execlist no_guc_submit=1 next=plane-worklist-or-fill\n",
+        forcewake_ok as u8,
+        mapped_ok as u8,
+        ppgtt_ok as u8,
+        kernel_ppgtt_ok as u8,
+        out_ppgtt_ok as u8,
+        batch_ok as u8,
+        submitted as u8,
+        retired as u8,
+        retire_ms,
+        ok as u8,
+        matched,
+        CANVAS3D_PLANE_SAMPLE_COUNT,
+        visible,
+        CANVAS3D_PLANE_SAMPLE_COUNT,
+        params.out_first_point,
+        params.sample_count,
+        params.u_steps,
+        params.v_steps,
+        params.constraint_count,
+        params.canvas_width,
+        params.canvas_height,
+        pre_marker,
+        observed,
+        CANVAS3D_PLANE_SAMPLE_POST_MARKER,
+        upload.gpu,
+        upload.gpu + CANVAS3D_PLANE_SAMPLE_RGBA8_TEXT_OFFSET_BYTES,
+        CANVAS3D_PROJECT_OUT_GPU,
+        CANVAS3D_PROJECT_OUT_BYTES,
+        CANVAS3D_PLANE_SAMPLE_IDD_OFFSET_BYTES,
+        CANVAS3D_PLANE_SAMPLE_PAYLOAD_OFFSET_BYTES,
+        after[0].packed_xy,
+        after[0].rgba,
+        after[5].packed_xy,
+        after[5].rgba,
+        after[15].packed_xy,
+        after[15].rgba,
+        DIRECT_RCS_GPU_VA_RING_BASE,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        DIRECT_RCS_GPU_VA_RESULT_BASE,
+        intel::mmio_read(dev, RCS_RING_HEAD),
+        intel::mmio_read(dev, RCS_RING_TAIL),
+        intel::mmio_read(dev, RCS_RING_ACTHD),
+        intel::mmio_read(dev, RCS_RING_IPEIR),
+        intel::mmio_read(dev, RCS_RING_IPEHR),
+        intel::mmio_read(dev, RCS_RING_EIR),
+    );
+
+    ok
+}
+
 pub(crate) fn shell_cube20_project_spin(
     duration_ms: u64,
     cadence_us: u64,
@@ -2174,6 +2355,129 @@ fn direct_rcs_seed_canvas3d_project(
     expected
 }
 
+fn direct_rcs_plane_sample_q16_lerp(index: u32, count: u32) -> i32 {
+    if count <= 1 {
+        0
+    } else {
+        -CANVAS3D_PROJECT_Q16_ONE
+            + ((2 * CANVAS3D_PROJECT_Q16_ONE as i64 * index as i64) / (count - 1) as i64) as i32
+    }
+}
+
+fn direct_rcs_plane_sample_constraint_ok(
+    constraint: Canvas3dVec3Q16,
+    u_q16: i32,
+    v_q16: i32,
+) -> bool {
+    (((constraint.x as i64 * u_q16 as i64) >> 16)
+        + ((constraint.y as i64 * v_q16 as i64) >> 16)
+        + constraint.z as i64)
+        >= 0
+}
+
+fn direct_rcs_plane_sample_dither_color(color_rgba: u32, u_index: u32, v_index: u32) -> u32 {
+    let d = ((u_index ^ (v_index * 3)) & 3) * 10;
+    let r = (color_rgba & 0xFF).saturating_add(d).min(255);
+    let g = ((color_rgba >> 8) & 0xFF).saturating_add(d).min(255);
+    let b = ((color_rgba >> 16) & 0xFF).saturating_add(d).min(255);
+    let a = (color_rgba >> 24) & 0xFF;
+    (a << 24) | (b << 16) | (g << 8) | r
+}
+
+fn direct_rcs_canvas3d_plane_sample_expected(
+    params: Canvas3dPlaneSampleRgba8Params,
+    offset: u32,
+) -> Canvas3dProjectedRgba8 {
+    let mut out = Canvas3dProjectedRgba8 {
+        packed_xy: 0,
+        rgba: 0,
+        z_q16: 0,
+        source_index: offset,
+    };
+    if params.u_steps == 0 || params.v_steps == 0 {
+        return out;
+    }
+
+    let u_index = offset % params.u_steps;
+    let v_index = offset / params.u_steps;
+    if v_index >= params.v_steps {
+        return out;
+    }
+
+    let u_q16 = direct_rcs_plane_sample_q16_lerp(u_index, params.u_steps);
+    let v_q16 = direct_rcs_plane_sample_q16_lerp(v_index, params.v_steps);
+    let constraints = [
+        params.constraint0_q16,
+        params.constraint1_q16,
+        params.constraint2_q16,
+        params.constraint3_q16,
+    ];
+    let mut keep = true;
+    for index in 0..params.constraint_count.min(4) as usize {
+        keep &= direct_rcs_plane_sample_constraint_ok(constraints[index], u_q16, v_q16);
+    }
+
+    let x = params.origin_q16.x
+        + direct_rcs_q16_mul(params.axis_u_q16.x, u_q16)
+        + direct_rcs_q16_mul(params.axis_v_q16.x, v_q16);
+    let y = params.origin_q16.y
+        + direct_rcs_q16_mul(params.axis_u_q16.y, u_q16)
+        + direct_rcs_q16_mul(params.axis_v_q16.y, v_q16);
+    let z = params.origin_q16.z
+        + direct_rcs_q16_mul(params.axis_u_q16.z, u_q16)
+        + direct_rcs_q16_mul(params.axis_v_q16.z, v_q16);
+    out.z_q16 = z as u32;
+
+    let focal = params.canvas_width.min(params.canvas_height) / 2;
+    if keep && z > 0 && params.canvas_width > 0 && params.canvas_height > 0 && focal > 0 {
+        let sx_delta = ((x as i64) * focal as i64) / z as i64;
+        let sy_delta = ((y as i64) * focal as i64) / z as i64;
+        let sx = (params.canvas_width / 2) as i32 + sx_delta as i32;
+        let sy = (params.canvas_height / 2) as i32 - sy_delta as i32;
+        if (0..params.canvas_width as i32).contains(&sx)
+            && (0..params.canvas_height as i32).contains(&sy)
+        {
+            out.packed_xy = 0x8000_0000 | (((sy as u32) & 0xFFFF) << 16) | ((sx as u32) & 0xFFFF);
+            out.rgba = direct_rcs_plane_sample_dither_color(params.color_rgba, u_index, v_index);
+        }
+    }
+
+    out
+}
+
+fn direct_rcs_seed_canvas3d_plane_sample(
+    state: DirectRcsState,
+    params: Canvas3dPlaneSampleRgba8Params,
+) -> [Canvas3dProjectedRgba8; CANVAS3D_PLANE_SAMPLE_COUNT] {
+    let mut expected = [Canvas3dProjectedRgba8 {
+        packed_xy: 0,
+        rgba: 0,
+        z_q16: 0,
+        source_index: 0,
+    }; CANVAS3D_PLANE_SAMPLE_COUNT];
+
+    unsafe {
+        core::ptr::write_bytes(state.canvas3d_out_virt, 0, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
+        let out = state.canvas3d_out_virt as *mut Canvas3dProjectedRgba8;
+        for index in 0..CANVAS3D_PROJECT_VERTEX_COUNT {
+            core::ptr::write_volatile(
+                out.add(index),
+                Canvas3dProjectedRgba8 {
+                    packed_xy: 0xDEAD_1000 | index as u32,
+                    rgba: 0xA5A5_1000 | index as u32,
+                    z_q16: 0,
+                    source_index: 0xFFFF_FFFF,
+                },
+            );
+        }
+        for offset in 0..CANVAS3D_PLANE_SAMPLE_COUNT {
+            expected[offset] = direct_rcs_canvas3d_plane_sample_expected(params, offset as u32);
+        }
+    }
+    intel::dma_flush(state.canvas3d_out_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
+    expected
+}
+
 fn direct_rcs_q16_mul(a: i32, b: i32) -> i32 {
     (((a as i64) * (b as i64)) >> 16) as i32
 }
@@ -2366,6 +2670,26 @@ fn direct_rcs_read_canvas3d_project_samples(
     values
 }
 
+fn direct_rcs_read_canvas3d_plane_sample_result(
+    state: DirectRcsState,
+) -> [Canvas3dProjectedRgba8; CANVAS3D_PLANE_SAMPLE_COUNT] {
+    intel::dma_flush(state.canvas3d_out_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
+    let mut values = [Canvas3dProjectedRgba8 {
+        packed_xy: 0,
+        rgba: 0,
+        z_q16: 0,
+        source_index: 0,
+    }; CANVAS3D_PLANE_SAMPLE_COUNT];
+    unsafe {
+        let out = state.canvas3d_out_virt as *const Canvas3dProjectedRgba8;
+        for (index, value) in values.iter_mut().enumerate() {
+            *value =
+                core::ptr::read_volatile(out.add(CANVAS3D_PLANE_SAMPLE_OUT_FIRST as usize + index));
+        }
+    }
+    values
+}
+
 fn direct_rcs_read_canvas3d_transform_result(
     state: DirectRcsState,
     expected: [Canvas3dVec3Q16; CANVAS3D_TRANSFORM_TEST_COUNT_USIZE],
@@ -2471,6 +2795,31 @@ fn direct_rcs_canvas3d_project_count_matching(
 
 fn direct_rcs_canvas3d_project_count_visible(
     values: [Canvas3dProjectedRgba8; CANVAS3D_PROJECT_SAMPLE_COUNT],
+) -> usize {
+    let mut count = 0usize;
+    for value in values {
+        if (value.packed_xy & 0x8000_0000) != 0 {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn direct_rcs_canvas3d_plane_sample_count_matching(
+    values: [Canvas3dProjectedRgba8; CANVAS3D_PLANE_SAMPLE_COUNT],
+    expected: [Canvas3dProjectedRgba8; CANVAS3D_PLANE_SAMPLE_COUNT],
+) -> usize {
+    let mut count = 0usize;
+    for index in 0..values.len() {
+        if values[index] == expected[index] {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn direct_rcs_canvas3d_plane_sample_count_visible(
+    values: [Canvas3dProjectedRgba8; CANVAS3D_PLANE_SAMPLE_COUNT],
 ) -> usize {
     let mut count = 0usize;
     for value in values {

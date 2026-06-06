@@ -150,6 +150,8 @@ const RGB_PLANE_PROBE_GPU_STRIDE: u64 = 0x0010_0000;
 static PRIMARY_BOOT_SURFACE_INIT: AtomicBool = AtomicBool::new(false);
 static PRIMARY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
 static PRIMARY_SURFACE: Mutex<Option<PrimarySurface>> = Mutex::new(None);
+static UI2_BASE_SURFACE: Mutex<Option<DisplayRgba8Surface>> = Mutex::new(None);
+static UI2_FRAME_SURFACE: Mutex<Option<DisplayRgba8Surface>> = Mutex::new(None);
 static OVERLAY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
 static OVERLAY_SURFACE: Mutex<Option<OverlaySurface>> = Mutex::new(None);
 static RGB_PLANE_PROBE_SURFACES: Mutex<[Option<RgbPlaneProbeSurface>; RGB_PLANE_PROBE_SLOT_COUNT]> =
@@ -214,6 +216,30 @@ struct PrimarySurface {
 
 unsafe impl Send for PrimarySurface {}
 unsafe impl Sync for PrimarySurface {}
+
+#[derive(Copy, Clone)]
+struct DisplayRgba8Surface {
+    width: u32,
+    height: u32,
+    pitch_bytes: u32,
+    phys: u64,
+    virt: *mut u8,
+    gpu: u64,
+    byte_len: usize,
+}
+
+unsafe impl Send for DisplayRgba8Surface {}
+unsafe impl Sync for DisplayRgba8Surface {}
+
+#[derive(Copy, Clone)]
+pub(super) struct DisplayRgba8GpgpuSurface {
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) pitch_bytes: u32,
+    pub(super) phys: u64,
+    pub(super) gpu: u64,
+    pub(super) byte_len: usize,
+}
 
 #[derive(Copy, Clone)]
 #[allow(dead_code)]
@@ -456,6 +482,8 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         pipe,
     };
     *PRIMARY_SURFACE.lock() = Some(primary_surface);
+    let ui2_base_ok = init_ui2_base_surface(dev, width, height, pitch_bytes, byte_len);
+    let ui2_frame_ok = init_ui2_frame_surface(dev, width, height, pitch_bytes, byte_len);
     log_primary_scanout_pte_window(dev, "after-primary-init", byte_len);
 
     let logo_ok = if PRIMARY_BOOT_LOGO_ENABLED {
@@ -479,7 +507,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     }
 
     crate::log!(
-        "intel/display: primary-boot-surface pipe={} size={}x{} pitch=0x{:X} gpu=0x{:X} phys=0x{:X} plane_enabled={} ctl_before=0x{:08X} ctl_after=0x{:08X} surf_before=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ok={} logo={}\n",
+        "intel/display: primary-boot-surface pipe={} size={}x{} pitch=0x{:X} gpu=0x{:X} phys=0x{:X} plane_enabled={} ctl_before=0x{:08X} ctl_after=0x{:08X} surf_before=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ok={} logo={} ui2_base={} ui2_frame={}\n",
         pipe.name,
         width,
         height,
@@ -493,8 +521,82 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         surf_armed,
         surf_live,
         ok as u8,
-        logo_ok as u8
+        logo_ok as u8,
+        ui2_base_ok as u8,
+        ui2_frame_ok as u8
     );
+}
+
+fn init_ui2_base_surface(
+    dev: crate::intel::Dev,
+    width: u32,
+    height: u32,
+    pitch_bytes: u32,
+    byte_len: usize,
+) -> bool {
+    let Some((phys, virt)) = crate::dma::alloc(byte_len, crate::intel::WARM_ALIGN) else {
+        crate::log!("intel/display: ui2-base-surface alloc failed bytes=0x{:X}\n", byte_len);
+        return false;
+    };
+
+    fill_surface_color(virt, pitch_bytes as usize, width, height, 0x00FF_FFFF);
+    crate::intel::dma_flush(virt, byte_len);
+
+    if !crate::intel::map_ggtt(dev, phys, byte_len, crate::intel::GPU_VA_DISPLAY_UI2_BASE_BASE) {
+        crate::log!(
+            "intel/display: ui2-base-surface ggtt map failed bytes=0x{:X} gpu=0x{:X}\n",
+            byte_len,
+            crate::intel::GPU_VA_DISPLAY_UI2_BASE_BASE
+        );
+        return false;
+    }
+
+    *UI2_BASE_SURFACE.lock() = Some(DisplayRgba8Surface {
+        width,
+        height,
+        pitch_bytes,
+        phys,
+        virt,
+        gpu: crate::intel::GPU_VA_DISPLAY_UI2_BASE_BASE,
+        byte_len,
+    });
+    true
+}
+
+fn init_ui2_frame_surface(
+    dev: crate::intel::Dev,
+    width: u32,
+    height: u32,
+    pitch_bytes: u32,
+    byte_len: usize,
+) -> bool {
+    let Some((phys, virt)) = crate::dma::alloc(byte_len, crate::intel::WARM_ALIGN) else {
+        crate::log!("intel/display: ui2-frame-surface alloc failed bytes=0x{:X}\n", byte_len);
+        return false;
+    };
+
+    fill_surface_color(virt, pitch_bytes as usize, width, height, 0x00FF_FFFF);
+    crate::intel::dma_flush(virt, byte_len);
+
+    if !crate::intel::map_ggtt(dev, phys, byte_len, crate::intel::GPU_VA_DISPLAY_UI2_FRAME_BASE) {
+        crate::log!(
+            "intel/display: ui2-frame-surface ggtt map failed bytes=0x{:X} gpu=0x{:X}\n",
+            byte_len,
+            crate::intel::GPU_VA_DISPLAY_UI2_FRAME_BASE
+        );
+        return false;
+    }
+
+    *UI2_FRAME_SURFACE.lock() = Some(DisplayRgba8Surface {
+        width,
+        height,
+        pitch_bytes,
+        phys,
+        virt,
+        gpu: crate::intel::GPU_VA_DISPLAY_UI2_FRAME_BASE,
+        byte_len,
+    });
+    true
 }
 
 fn probe_hw_logo_decode() -> bool {
@@ -622,7 +724,7 @@ pub(crate) async fn hw_logo_present_task() {
                 (0, 0, 0, 0, 0, 0)
             };
 
-        let presented = if output.status == crate::intel::hw_pic::HwPicStatus::Ready
+        let stored = if output.status == crate::intel::hw_pic::HwPicStatus::Ready
             && matches!(output.format, crate::intel::hw_pic::HwPicPixelFormat::Imc3)
             && output.width != 0
             && output.height != 0
@@ -651,7 +753,7 @@ pub(crate) async fn hw_logo_present_task() {
         };
 
         crate::log!(
-            "intel/display: hw-logo output id={} status={:?} fmt={:?} decoded={}x{} target={}x{} pitch=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} presented={} err={}\n",
+            "intel/display: hw-logo output id={} status={:?} fmt={:?} decoded={}x{} target={}x{} pitch=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} stored={} err={}\n",
             output.id,
             output.status,
             output.format,
@@ -663,11 +765,11 @@ pub(crate) async fn hw_logo_present_task() {
             output.byte_len,
             output.gpu_addr,
             output.phys_addr,
-            presented as u8,
+            stored as u8,
             output.error_code,
         );
 
-        if presented {
+        if stored {
             Timer::after(EmbassyDuration::from_millis(PRIMARY_BOOT_LOGO_PRESENT_HOLD_MS)).await;
         }
         if !submit_next_hw_logo_stage() {
@@ -939,6 +1041,36 @@ pub(super) fn primary_surface_gpgpu_marker_target() -> Option<PrimarySurfaceGpgp
         marker_offset,
         marker_x,
         marker_y,
+    })
+}
+
+pub(super) fn ui2_base_surface_gpgpu() -> Option<DisplayRgba8GpgpuSurface> {
+    let surface = (*UI2_BASE_SURFACE.lock())?;
+    if surface.virt.is_null() || surface.byte_len == 0 {
+        return None;
+    }
+    Some(DisplayRgba8GpgpuSurface {
+        width: surface.width,
+        height: surface.height,
+        pitch_bytes: surface.pitch_bytes,
+        phys: surface.phys,
+        gpu: surface.gpu,
+        byte_len: surface.byte_len,
+    })
+}
+
+pub(super) fn ui2_frame_surface_gpgpu() -> Option<DisplayRgba8GpgpuSurface> {
+    let surface = (*UI2_FRAME_SURFACE.lock())?;
+    if surface.virt.is_null() || surface.byte_len == 0 {
+        return None;
+    }
+    Some(DisplayRgba8GpgpuSurface {
+        width: surface.width,
+        height: surface.height,
+        pitch_bytes: surface.pitch_bytes,
+        phys: surface.phys,
+        gpu: surface.gpu,
+        byte_len: surface.byte_len,
     })
 }
 
@@ -1644,7 +1776,7 @@ pub(crate) fn present_imc3_surface_center(
     visible_height: u32,
     src_pitch_bytes: usize,
 ) -> bool {
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+    let Some(surface) = *UI2_BASE_SURFACE.lock() else {
         return false;
     };
     if surface.virt.is_null() || coded_width == 0 || coded_height == 0 {
@@ -1751,7 +1883,7 @@ pub(crate) fn present_imc3_surface_center(
 
     let byte_len = dst_pitch.saturating_mul(dst_height);
     crate::intel::dma_flush(surface.virt, byte_len);
-    notify_primary_surface_present(surface, "imc3-center", byte_len)
+    true
 }
 
 pub(crate) fn present_nv12_surface_center(
