@@ -39,7 +39,8 @@ binding, parameter packing, and walker submission.
 The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 
 - `fill_rect_rgba8.cl`: parameterized RGBA8 fill
-- `fill_rect_worklist_rgba8.cl`: descriptor worklist RGBA8 fills; one SIMD16 walker consumes up to 16 rect descriptors and each lane handles one descriptor stream
+- `fill_rect_worklist_rgba8.cl`: descriptor worklist RGBA8 fills; one walker consumes the descriptor slice serially
+- `gradient_rect_worklist_rgba8.cl`: descriptor worklist procedural RGBA8 gradients; each descriptor writes one horizontal or vertical rect from two endpoint colors
 - `fill_circle_rgba8.cl`: parameterized RGBA8 circle fill clipped by a rect
 - `blit_rgba8_nearest.cl`: nearest-neighbor RGBA8 rect blit
 - `alpha_blend_rgba8_over.cl`: source-over RGBA8 blend
@@ -72,11 +73,11 @@ The rect worklist evo kernels share a descriptor-driven shape with the
 
 - the CPU owns clipping, surface binding, descriptor allocation, and descriptor
   chunking
-- one SIMD16 walker receives a descriptor slice through `desc_base` and
-  `desc_count`
-- lane `N` processes descriptors `desc_base + N`, `desc_base + N + 16`, and so
-  on
+- one walker receives a descriptor slice through `desc_base` and `desc_count`
+- the current bring-up kernel shape has work-item 0 walk the slice serially so
+  multi-descriptor probes prove the CPU/GPGPU ABI before lane sharding returns
 - `fill_rect_worklist_rgba8.cl` descriptors are `{ dst_xy, size, color_rgba }`
+- `gradient_rect_worklist_rgba8.cl` descriptors are `{ dst_xy, size, color0_rgba, color1_rgba, flags }`, with `flags bit0` selecting vertical instead of horizontal
 - `alpha_blend_worklist_rgba8.cl` descriptors are `{ src_xy, dst_xy, size }`
 - packed coordinates use 16-bit lanes; destination coordinates are signed
 
@@ -102,14 +103,21 @@ c94853560fdcad31703b8d556f303df1922ec645c236b55113a08b1ac367badd
 Its SHA-256 is:
 
 ```text
-07a38da4fc0272f8ed9bffd2833965f2cc937da52af8f353e5543d77b280e246
+5e28e1a39c3b154ea6d7bc55fbbc99cfdca340eaf7a521b06bc7529b7a1c532b
+```
+
+`artifacts/adls/gradient_rect_worklist_rgba8.bin` is the descriptor gradient
+evo build for UI2 chrome bands and procedural strips. Its SHA-256 is:
+
+```text
+d3e6d5ec26c2b789d43d3308cf740977ce52f5b4df2325a27c92a687796d9149
 ```
 
 `artifacts/adls/alpha_blend_worklist_rgba8.bin` is the descriptor source-over
 evo build. Its SHA-256 is:
 
 ```text
-3485f2283c1510df619a1159d454af871cb847e0c79ee012f9e95da079d088c9
+a049103e538a9e9b750a782861dbe9734c9db0d920b13e08bf56bdb746f2d83e
 ```
 
 Regenerate it with:

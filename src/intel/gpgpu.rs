@@ -24,6 +24,9 @@ pub(crate) const FILL_RECT_RGBA8_OPENCL_SOURCE: &str = include_str!("kernels/fil
 pub(crate) const FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME: &str = "fill_rect_worklist_rgba8";
 pub(crate) const FILL_RECT_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/fill_rect_worklist_rgba8.cl");
+pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME: &str = "gradient_rect_worklist_rgba8";
+pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
+    include_str!("kernels/gradient_rect_worklist_rgba8.cl");
 pub(crate) const FILL_CIRCLE_RGBA8_KERNEL_NAME: &str = "fill_circle_rgba8";
 pub(crate) const FILL_CIRCLE_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/fill_circle_rgba8.cl");
@@ -79,6 +82,10 @@ pub(crate) const FILL_RECT_WORKLIST_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/fill_rect_worklist_rgba8.bin");
 pub(crate) const FILL_RECT_WORKLIST_RGBA8_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/fill_rect_worklist_rgba8.spv");
+pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/gradient_rect_worklist_rgba8.bin");
+pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/gradient_rect_worklist_rgba8.spv");
 pub(crate) const FILL_CIRCLE_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/fill_circle_rgba8.bin");
 pub(crate) const FILL_CIRCLE_RGBA8_ADLS_SPV: &[u8] =
@@ -144,8 +151,12 @@ pub(crate) const FILL_RECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0xD7, 0x31, 0xA0, 0x88, 0x23, 0xB0, 0x40, 0x28, 0x62, 0x0E, 0x86, 0x54, 0x9F, 0x45, 0x06, 0xF4,
 ];
 pub(crate) const FILL_RECT_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
-    0x07, 0xA3, 0x8D, 0xA4, 0xFC, 0x02, 0x72, 0xF8, 0xED, 0x9B, 0xFF, 0xD2, 0x83, 0x39, 0x65, 0xF2,
-    0xCC, 0x93, 0x7D, 0xA5, 0x2A, 0xF8, 0xF3, 0x53, 0xE5, 0x54, 0x3D, 0x77, 0xB2, 0x80, 0xE2, 0x46,
+    0x5E, 0x28, 0xE1, 0xA3, 0x9C, 0x3B, 0x15, 0x4E, 0xA6, 0xD7, 0xBC, 0x55, 0xFB, 0xBC, 0x99, 0xCF,
+    0xDC, 0xA3, 0x40, 0xEA, 0xF7, 0xA5, 0x21, 0xB0, 0x6B, 0xC7, 0x52, 0x9B, 0x7A, 0x1C, 0x53, 0x2B,
+];
+pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
+    0xD3, 0xE6, 0xD5, 0xEC, 0x26, 0xC2, 0xB7, 0x89, 0xD4, 0x3D, 0x33, 0x08, 0xCF, 0x74, 0x09, 0x77,
+    0xCE, 0x52, 0xF5, 0xB4, 0xDF, 0x23, 0x25, 0xA2, 0x7C, 0x92, 0xA6, 0x87, 0x79, 0x6D, 0x91, 0x49,
 ];
 pub(crate) const FILL_CIRCLE_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0xB4, 0x17, 0x29, 0x7F, 0xD1, 0x60, 0x57, 0x21, 0xCC, 0x94, 0xA9, 0x88, 0x09, 0x3D, 0x8B, 0xA9,
@@ -160,8 +171,8 @@ pub(crate) const ALPHA_BLEND_RGBA8_OVER_ADLS_BIN_SHA256: [u8; 32] = [
     0x77, 0x15, 0xF4, 0xA7, 0xA3, 0x68, 0xA8, 0x9F, 0xD1, 0x13, 0x87, 0xFB, 0x54, 0x0F, 0x48, 0x1C,
 ];
 pub(crate) const ALPHA_BLEND_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
-    0x34, 0x85, 0xF2, 0x28, 0x3C, 0x15, 0x10, 0xDF, 0x61, 0x9A, 0x11, 0x59, 0xD4, 0x54, 0xAF, 0x87,
-    0x1C, 0xB8, 0x47, 0xE0, 0xC7, 0x9E, 0xE0, 0x12, 0xF9, 0xE9, 0x5D, 0xA0, 0x79, 0xD0, 0x88, 0xC9,
+    0xA0, 0x49, 0x10, 0x3E, 0x53, 0x8A, 0x9E, 0x9B, 0x75, 0x0A, 0x78, 0x28, 0x61, 0xDB, 0xE9, 0x73,
+    0x4C, 0x9D, 0xB0, 0xD9, 0x20, 0xB1, 0x3E, 0x08, 0xBF, 0x56, 0xBD, 0xB7, 0x46, 0xF2, 0xD8, 0x3E,
 ];
 pub(crate) const GLYPH_MASK_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x90, 0x8D, 0xF0, 0x7D, 0x62, 0xB0, 0x69, 0xF3, 0x1A, 0x04, 0x6D, 0x29, 0x02, 0xDF, 0xF9, 0xA0,
@@ -203,6 +214,7 @@ const GLYPH_MASK_RGBA8_ADLS_GPU: u64 = 0x0D2D_0000;
 const PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_ADLS_GPU: u64 = 0x0D2E_0000;
 const FILL_RECT_WORKLIST_RGBA8_ADLS_GPU: u64 = 0x0D2F_0000;
 const ALPHA_BLEND_WORKLIST_RGBA8_ADLS_GPU: u64 = 0x0D30_0000;
+const GRADIENT_RECT_WORKLIST_RGBA8_ADLS_GPU: u64 = 0x0D31_0000;
 const CANVAS3D_PROJECT_RGBA8_ADLS_GPU: u64 = 0x0D25_0000;
 const CANVAS3D_CLIP_BOX_Q16_ADLS_GPU: u64 = 0x0D29_0000;
 const CANVAS3D_TRANSFORM_Q16_ADLS_GPU: u64 = 0x0D2A_0000;
@@ -210,6 +222,7 @@ const COPY_RECT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const CLEAR_RECT_RGBA8_WHITE_TEXT_OFFSET_BYTES: u64 = 0x40;
 const FILL_RECT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const FILL_RECT_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
+const GRADIENT_RECT_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const EMPTY_EOT_TEXT_OFFSET_BYTES: u64 = 0x40;
 const SPRITE64_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const ALPHA_BLEND_RGBA8_OVER_TEXT_OFFSET_BYTES: u64 = 0x40;
@@ -377,11 +390,13 @@ const FILL_RECT_WORKLIST_PRE_MARKER: u32 = 0xC0DE_5801;
 const FILL_RECT_WORKLIST_POST_MARKER: u32 = 0xC0DE_5802;
 const ALPHA_BLEND_WORKLIST_PRE_MARKER: u32 = 0xC0DE_5901;
 const ALPHA_BLEND_WORKLIST_POST_MARKER: u32 = 0xC0DE_5902;
+const GRADIENT_RECT_WORKLIST_PRE_MARKER: u32 = 0xC0DE_5A01;
+const GRADIENT_RECT_WORKLIST_POST_MARKER: u32 = 0xC0DE_5A02;
 const RECT_WORKLIST_DESC_GPU: u64 = 0x05A0_0000;
 const RECT_WORKLIST_MAX_DESCS: usize = 256;
 const RECT_WORKLIST_DESCS_PER_WALKER: usize = 16;
 const RECT_WORKLIST_MAX_WALKERS: usize = RECT_WORKLIST_MAX_DESCS / RECT_WORKLIST_DESCS_PER_WALKER;
-const RECT_WORKLIST_DESC_BYTES: usize = 4096;
+const RECT_WORKLIST_DESC_BYTES: usize = 8192;
 const CANVAS3D_PROJECT_IDD_OFFSET_BYTES: usize = 0x2000;
 const CANVAS3D_PROJECT_BINDING_TABLE_OFFSET_BYTES: usize = 0x2040;
 const CANVAS3D_PROJECT_VERTICES_SURFACE_STATE_OFFSET_BYTES: usize = 0x2080;
@@ -603,6 +618,8 @@ static COPY_RECT_RGBA8_WIDE_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mute
 static CLEAR_RECT_RGBA8_WHITE_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static FILL_RECT_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static FILL_RECT_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
+static GRADIENT_RECT_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> =
+    Mutex::new(None);
 static ALPHA_BLEND_RGBA8_OVER_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static ALPHA_BLEND_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static GLYPH_MASK_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
@@ -635,8 +652,10 @@ static COPY_RECT_256X2_RAN: AtomicBool = AtomicBool::new(false);
 static COPY_RECT_WIDE_256X2_RAN: AtomicBool = AtomicBool::new(false);
 static RECT_API_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
 static FILL_RECT_WORKLIST_RAN: AtomicBool = AtomicBool::new(false);
+static GRADIENT_RECT_WORKLIST_RAN: AtomicBool = AtomicBool::new(false);
 static ALPHA_BLEND_WORKLIST_RAN: AtomicBool = AtomicBool::new(false);
 static FILL_RECT_WORKLIST_OK: AtomicBool = AtomicBool::new(false);
+static GRADIENT_RECT_WORKLIST_OK: AtomicBool = AtomicBool::new(false);
 static ALPHA_BLEND_WORKLIST_OK: AtomicBool = AtomicBool::new(false);
 static RECT_WORKLIST_NOT_READY_LOGS: AtomicU32 = AtomicU32::new(0);
 static CANVAS3D_PROJECT_RAN: AtomicBool = AtomicBool::new(false);
@@ -716,6 +735,28 @@ pub(crate) struct FillRectWorklistRgba8Desc {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct FillRectWorklistRgba8Params {
+    pub(crate) dst_gpu: u64,
+    pub(crate) desc_gpu: u64,
+    pub(crate) dst_pitch_bytes: u32,
+    pub(crate) desc_base: u32,
+    pub(crate) desc_count: u32,
+}
+
+pub(crate) const GRADIENT_RECT_WORKLIST_FLAG_VERTICAL: u32 = 1 << 0;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GradientRectWorklistRgba8Desc {
+    pub(crate) dst_xy: u32,
+    pub(crate) size: u32,
+    pub(crate) color0_rgba: u32,
+    pub(crate) color1_rgba: u32,
+    pub(crate) flags: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GradientRectWorklistRgba8Params {
     pub(crate) dst_gpu: u64,
     pub(crate) desc_gpu: u64,
     pub(crate) dst_pitch_bytes: u32,
@@ -1099,6 +1140,14 @@ pub(crate) struct GpgpuSolidRect {
 }
 
 #[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuGradientRect {
+    pub(crate) rect: GpgpuRect,
+    pub(crate) color0_rgba: u32,
+    pub(crate) color1_rgba: u32,
+    pub(crate) vertical: bool,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct GpgpuSolidRectOverlayResult {
     pub(crate) ok: bool,
     pub(crate) rects: usize,
@@ -1165,55 +1214,6 @@ pub(crate) struct GpgpuShellScanoutCopyResult {
     pub(crate) src_head: [u32; 4],
     pub(crate) dst_head: [u32; 4],
     pub(crate) presented: bool,
-}
-
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuShellAtlasCopyResult {
-    pub(crate) ok: bool,
-    pub(crate) slot: u16,
-    pub(crate) atlas_width: u32,
-    pub(crate) atlas_height: u32,
-    pub(crate) atlas_src_rect: GpgpuRect,
-    pub(crate) dst_xy: GpgpuPoint,
-    pub(crate) primary_width: u32,
-    pub(crate) primary_height: u32,
-    pub(crate) primary_pitch_bytes: u32,
-    pub(crate) primary_gpu: u64,
-    pub(crate) primary_phys: u64,
-    pub(crate) pixels: usize,
-    pub(crate) spans: usize,
-    pub(crate) expected_spans: usize,
-    pub(crate) submits: usize,
-    pub(crate) expected_submits: usize,
-    pub(crate) staged: usize,
-    pub(crate) copied: usize,
-    pub(crate) src_preserved: usize,
-    pub(crate) src_head: [u32; 4],
-    pub(crate) dst_head: [u32; 4],
-    pub(crate) presented: bool,
-    pub(crate) total_ms: u64,
-    pub(crate) stage_ms: u64,
-    pub(crate) copy_ms: u64,
-}
-
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuShellAtlasHotCopyResult {
-    pub(crate) ok: bool,
-    pub(crate) slot: u16,
-    pub(crate) atlas_src_rect: GpgpuRect,
-    pub(crate) dst_xy: GpgpuPoint,
-    pub(crate) primary_width: u32,
-    pub(crate) primary_height: u32,
-    pub(crate) pixels: usize,
-    pub(crate) spans: usize,
-    pub(crate) expected_spans: usize,
-    pub(crate) submits: usize,
-    pub(crate) expected_submits: usize,
-    pub(crate) staged: usize,
-    pub(crate) presented: bool,
-    pub(crate) total_ms: u64,
-    pub(crate) stage_ms: u64,
-    pub(crate) copy_ms: u64,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -1308,7 +1308,6 @@ struct GpgpuTwemojiAtlasCache {
     width: u32,
     height: u32,
     rgba: Vec<u8>,
-    xrgb: Vec<u32>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -1392,6 +1391,15 @@ pub(crate) const FILL_RECT_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
         bin: FILL_RECT_WORKLIST_RGBA8_ADLS_BIN,
         spv: FILL_RECT_WORKLIST_RGBA8_ADLS_SPV,
         bin_sha256: FILL_RECT_WORKLIST_RGBA8_ADLS_BIN_SHA256,
+    };
+
+pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
+    GpgpuKernelArtifact {
+        name: GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME,
+        target: "adls",
+        bin: GRADIENT_RECT_WORKLIST_RGBA8_ADLS_BIN,
+        spv: GRADIENT_RECT_WORKLIST_RGBA8_ADLS_SPV,
+        bin_sha256: GRADIENT_RECT_WORKLIST_RGBA8_ADLS_BIN_SHA256,
     };
 
 pub(crate) const FILL_CIRCLE_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
@@ -1502,6 +1510,10 @@ pub(crate) fn fill_rect_rgba8_upload_status() -> Option<UploadedKernelArtifact> 
 
 pub(crate) fn fill_rect_worklist_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *FILL_RECT_WORKLIST_RGBA8_UPLOAD.lock()
+}
+
+pub(crate) fn gradient_rect_worklist_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
+    *GRADIENT_RECT_WORKLIST_RGBA8_UPLOAD.lock()
 }
 
 pub(crate) fn alpha_blend_worklist_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
@@ -1632,6 +1644,28 @@ pub(crate) fn upload_fill_rect_worklist_rgba8_kernel() -> Option<UploadedKernelA
         FILL_RECT_WORKLIST_RGBA8_ADLS_GPU,
     )?;
     *FILL_RECT_WORKLIST_RGBA8_UPLOAD.lock() = Some(upload);
+    Some(upload)
+}
+
+pub(crate) fn upload_gradient_rect_worklist_rgba8_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *GRADIENT_RECT_WORKLIST_RGBA8_UPLOAD.lock() {
+        return Some(upload);
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: gradient-rect-worklist-rgba8 upload skipped reason=no-claimed-device\n"
+        );
+        return None;
+    };
+
+    let upload = upload_artifact(
+        dev,
+        GRADIENT_RECT_WORKLIST_RGBA8_ADLS_ARTIFACT,
+        GRADIENT_RECT_WORKLIST_RGBA8_ADLS_GPU,
+    )?;
+    *GRADIENT_RECT_WORKLIST_RGBA8_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
 
@@ -1994,6 +2028,72 @@ pub(crate) fn fill_rect_worklist_rgba8_stats(
     stats
 }
 
+pub(crate) fn fill_rect_worklist_rgba8(
+    dst: GpgpuRgba8Surface,
+    rect: GpgpuRect,
+    color_rgba: u32,
+) -> usize {
+    let Some(rect) = clip_gpgpu_rect_to_surface(rect, dst.width, dst.height) else {
+        return 0;
+    };
+    let Ok(dst_x) = i16::try_from(rect.x) else {
+        return 0;
+    };
+    let Ok(dst_y) = i16::try_from(rect.y) else {
+        return 0;
+    };
+    if rect.width > u16::MAX as u32 || rect.height > u16::MAX as u32 {
+        return 0;
+    }
+    let desc = FillRectWorklistRgba8Desc {
+        dst_xy: pack_i16_pair_u32(dst_x, dst_y),
+        size: pack_u16_pair_u32(rect.width as u16, rect.height as u16),
+        color_rgba,
+    };
+    fill_rect_worklist_rgba8_stats(dst, core::slice::from_ref(&desc)).descs
+}
+
+pub(crate) fn gradient_rect_worklist_rgba8_stats(
+    dst: GpgpuRgba8Surface,
+    descs: &[GradientRectWorklistRgba8Desc],
+) -> GpgpuWorklistSubmitStats {
+    let Some(desc_buffer) = rect_worklist_desc_buffer_once() else {
+        return GpgpuWorklistSubmitStats::default();
+    };
+    let mut stats = GpgpuWorklistSubmitStats::default();
+    for chunk in descs.chunks(RECT_WORKLIST_MAX_DESCS) {
+        if chunk.is_empty() {
+            continue;
+        }
+        let _desc_guard = RECT_WORKLIST_DESC_SUBMIT_LOCK.lock();
+        unsafe {
+            core::ptr::write_bytes(desc_buffer.virt, 0, desc_buffer.bytes);
+            let out = desc_buffer.virt as *mut GradientRectWorklistRgba8Desc;
+            for (index, desc) in chunk.iter().copied().enumerate() {
+                core::ptr::write_volatile(out.add(index), desc);
+            }
+        }
+        super::dma_flush(desc_buffer.virt, desc_buffer.bytes);
+
+        let params = GradientRectWorklistRgba8Params {
+            dst_gpu: dst.gpu,
+            desc_gpu: desc_buffer.gpu,
+            dst_pitch_bytes: dst.pitch_bytes,
+            desc_base: 0,
+            desc_count: chunk.len() as u32,
+        };
+        if !submit_gradient_rect_worklist(dst, desc_buffer, params) {
+            break;
+        }
+        stats.descs = stats.descs.saturating_add(chunk.len());
+        stats.walkers = stats
+            .walkers
+            .saturating_add(rect_worklist_walker_count(chunk.len()));
+        stats.submits = stats.submits.saturating_add(1);
+    }
+    stats
+}
+
 pub(crate) fn alpha_blend_worklist_rgba8_over_stats(
     src: GpgpuRgba8Surface,
     dst: GpgpuRgba8Surface,
@@ -2038,13 +2138,49 @@ pub(crate) fn alpha_blend_worklist_rgba8_over_stats(
     stats
 }
 
+pub(crate) fn alpha_blend_worklist_rgba8_over_submit_stats(
+    src: GpgpuRgba8Surface,
+    src_rect: GpgpuRect,
+    dst: GpgpuRgba8Surface,
+    dst_xy: GpgpuPoint,
+) -> GpgpuSubmitStats {
+    if src_rect.x < 0 || src_rect.y < 0 {
+        return GpgpuSubmitStats::default();
+    }
+    if dst_xy.x < i16::MIN as i32 || dst_xy.x > i16::MAX as i32 {
+        return GpgpuSubmitStats::default();
+    }
+    if dst_xy.y < i16::MIN as i32 || dst_xy.y > i16::MAX as i32 {
+        return GpgpuSubmitStats::default();
+    }
+    if src_rect.width == 0
+        || src_rect.height == 0
+        || src_rect.width > u16::MAX as u32
+        || src_rect.height > u16::MAX as u32
+        || src_rect.x as u32 > u16::MAX as u32
+        || src_rect.y as u32 > u16::MAX as u32
+    {
+        return GpgpuSubmitStats::default();
+    }
+    let desc = AlphaBlendWorklistRgba8Desc {
+        src_xy: pack_u16_pair_u32(src_rect.x as u16, src_rect.y as u16),
+        dst_xy: pack_i16_pair_u32(dst_xy.x as i16, dst_xy.y as i16),
+        size: pack_u16_pair_u32(src_rect.width as u16, src_rect.height as u16),
+    };
+    let stats = alpha_blend_worklist_rgba8_over_stats(src, dst, core::slice::from_ref(&desc));
+    GpgpuSubmitStats {
+        spans: stats.descs,
+        submits: stats.submits,
+    }
+}
+
 pub(crate) fn composite_rect_rgba8_stats(op: GpgpuCompositeRect) -> GpgpuSubmitStats {
     match op.mode {
         GpgpuCompositeMode::Copy => {
             copy_rect_rgba8_wide_stats(op.src, op.src_rect, op.dst, op.dst_xy)
         }
         GpgpuCompositeMode::SrcOver => {
-            alpha_blend_rgba8_over_stats(op.src, op.src_rect, op.dst, op.dst_xy)
+            alpha_blend_worklist_rgba8_over_submit_stats(op.src, op.src_rect, op.dst, op.dst_xy)
         }
     }
 }
@@ -2065,6 +2201,14 @@ pub(crate) fn fill_rect_worklist_probe_ok() -> bool {
 
 pub(crate) fn fill_rect_worklist_probe_ran() -> bool {
     FILL_RECT_WORKLIST_RAN.load(Ordering::Acquire)
+}
+
+pub(crate) fn gradient_rect_worklist_probe_ok() -> bool {
+    GRADIENT_RECT_WORKLIST_OK.load(Ordering::Acquire)
+}
+
+pub(crate) fn gradient_rect_worklist_probe_ran() -> bool {
+    GRADIENT_RECT_WORKLIST_RAN.load(Ordering::Acquire)
 }
 
 pub(crate) fn alpha_blend_worklist_probe_ok() -> bool {
@@ -2148,7 +2292,7 @@ pub(crate) fn alpha_blend_rgba8_over_primary_stats(
         target.height,
         target.pitch_bytes,
     )?;
-    let stats = alpha_blend_rgba8_over_stats(src, src_rect, primary, dst_xy);
+    let stats = alpha_blend_worklist_rgba8_over_submit_stats(src, src_rect, primary, dst_xy);
     if stats.spans == 0 || stats.submits == 0 {
         return None;
     }
@@ -2277,6 +2421,130 @@ pub(crate) fn solid_rects_rgba8_over_primary(
     let presented = if present && blend.submits > 0 {
         super::display::notify_primary_surface_external_write(
             "gpgpu-solid-rects-over-primary",
+            0,
+            target.byte_len,
+        )
+    } else {
+        false
+    };
+    let present_ms = direct_rcs_elapsed_ms_since(present_start_tick);
+
+    Some(GpgpuSolidRectOverlayResult {
+        ok: fill.submits > 0 && blend.submits > 0 && (!present || presented),
+        rects: blend_descs.len(),
+        fill_descs: fill.descs,
+        fill_walkers: fill.walkers,
+        fill_submits: fill.submits,
+        fill_ms,
+        blend_descs: blend.descs,
+        blend_walkers: blend.walkers,
+        blend_submits: blend.submits,
+        blend_ms,
+        presented,
+        present_ms,
+        total_ms: direct_rcs_elapsed_ms_since(total_start_tick),
+    })
+}
+
+pub(crate) fn gradient_rects_rgba8_over_primary(
+    rects: &[GpgpuGradientRect],
+    present: bool,
+) -> Option<GpgpuSolidRectOverlayResult> {
+    if !rect_worklist_probe_ready() || !gradient_rect_worklist_probe_ok() {
+        return None;
+    }
+    let total_start_tick = direct_rcs_now_tick();
+    let target = super::display::primary_surface_gpgpu_marker_target()?;
+    if target.virt.is_null() || rects.is_empty() {
+        return None;
+    }
+    let primary = GpgpuRgba8Surface::new(
+        target.phys,
+        target.gpu,
+        target.byte_len,
+        target.width,
+        target.height,
+        target.pitch_bytes,
+    )?;
+
+    let mut clipped = Vec::with_capacity(rects.len());
+    let mut packed_h = 0u32;
+    for rect in rects {
+        let Some(clipped_rect) =
+            clip_gpgpu_rect_to_surface(rect.rect, primary.width, primary.height)
+        else {
+            continue;
+        };
+        if clipped_rect.width == 0 || clipped_rect.height == 0 {
+            continue;
+        }
+        let src_y = packed_h;
+        packed_h = packed_h.checked_add(clipped_rect.height)?;
+        clipped.push((*rect, clipped_rect, src_y));
+    }
+    if clipped.is_empty() || packed_h == 0 {
+        return Some(GpgpuSolidRectOverlayResult {
+            ok: true,
+            ..GpgpuSolidRectOverlayResult::default()
+        });
+    }
+
+    let source = solid_rect_source_surface_once(primary.width, packed_h)?;
+    let mut gradient_descs = Vec::with_capacity(clipped.len());
+    let mut blend_descs = Vec::with_capacity(clipped.len());
+    for (gradient, dst_rect, src_y) in clipped.iter().copied() {
+        if dst_rect.width > u16::MAX as u32 || dst_rect.height > u16::MAX as u32 {
+            continue;
+        }
+        let Ok(src_y_i16) = i16::try_from(src_y) else {
+            continue;
+        };
+        let Ok(src_y_u16) = u16::try_from(src_y) else {
+            continue;
+        };
+        let Ok(dst_x_i16) = i16::try_from(dst_rect.x) else {
+            continue;
+        };
+        let Ok(dst_y_i16) = i16::try_from(dst_rect.y) else {
+            continue;
+        };
+        let width = dst_rect.width as u16;
+        let height = dst_rect.height as u16;
+        gradient_descs.push(GradientRectWorklistRgba8Desc {
+            dst_xy: pack_i16_pair_u32(0, src_y_i16),
+            size: pack_u16_pair_u32(width, height),
+            color0_rgba: gradient.color0_rgba,
+            color1_rgba: gradient.color1_rgba,
+            flags: if gradient.vertical {
+                GRADIENT_RECT_WORKLIST_FLAG_VERTICAL
+            } else {
+                0
+            },
+        });
+        blend_descs.push(AlphaBlendWorklistRgba8Desc {
+            src_xy: pack_u16_pair_u32(0, src_y_u16),
+            dst_xy: pack_i16_pair_u32(dst_x_i16, dst_y_i16),
+            size: pack_u16_pair_u32(width, height),
+        });
+    }
+    if gradient_descs.is_empty() || blend_descs.is_empty() {
+        return Some(GpgpuSolidRectOverlayResult {
+            ok: true,
+            ..GpgpuSolidRectOverlayResult::default()
+        });
+    }
+
+    let fill_start_tick = direct_rcs_now_tick();
+    let fill = gradient_rect_worklist_rgba8_stats(source.surface, gradient_descs.as_slice());
+    let fill_ms = direct_rcs_elapsed_ms_since(fill_start_tick);
+    let blend_start_tick = direct_rcs_now_tick();
+    let blend =
+        alpha_blend_worklist_rgba8_over_stats(source.surface, primary, blend_descs.as_slice());
+    let blend_ms = direct_rcs_elapsed_ms_since(blend_start_tick);
+    let present_start_tick = direct_rcs_now_tick();
+    let presented = if present && blend.submits > 0 {
+        super::display::notify_primary_surface_external_write(
+            "gpgpu-gradient-rects-over-primary",
             0,
             target.byte_len,
         )
@@ -2690,130 +2958,38 @@ pub(crate) fn shell_copy_scanout_center_rgba8() -> Option<GpgpuShellScanoutCopyR
     })
 }
 
-pub(crate) fn shell_copy_twemoji_atlas_slot_scanout(
+pub(crate) fn shell_twemoji_atlas_worklist_slot_scanout(
     slot: u16,
     dst_xy_override: Option<GpgpuPoint>,
-) -> Option<GpgpuShellAtlasCopyResult> {
-    let total_start_tick = direct_rcs_now_tick();
-    let shell = shell_surface_once()?;
+) -> Option<GpgpuShellAtlasWorklistResult> {
     let target = super::display::primary_surface_gpgpu_marker_target()?;
-    let primary = GpgpuRgba8Surface::new(
-        target.phys,
-        target.gpu,
-        target.byte_len,
-        target.width,
-        target.height,
-        target.pitch_bytes,
-    )?;
-    if target.virt.is_null() {
-        return None;
-    }
-
-    let atlas = twemoji_atlas_cache_once()?;
-    let region = crate::gfx::althlasfont::twemoji::twemoji_lookup_slot_region(slot)?;
-    let src_rect = GpgpuRect::new(
-        region.src_x as i32,
-        region.src_y as i32,
-        u32::from(region.src_w.max(1)),
-        u32::from(region.src_h.max(1)),
-    );
-    if !rect_is_inside_atlas(atlas.width, atlas.height, src_rect) {
-        return None;
-    }
-    if src_rect.width > shell.surface.width
-        || src_rect.height > shell.surface.height
-        || src_rect.width > primary.width
-        || src_rect.height > primary.height
+    if target.virt.is_null()
+        || target.width < SPRITE64_WORKLIST_CELL_PIXELS
+        || target.height < SPRITE64_WORKLIST_CELL_PIXELS
     {
         return None;
     }
 
     let dst_xy = dst_xy_override.unwrap_or_else(|| {
         GpgpuPoint::new(
-            primary
+            target
                 .width
-                .saturating_sub(src_rect.width)
+                .saturating_sub(SPRITE64_WORKLIST_CELL_PIXELS)
                 .saturating_div(2) as i32,
-            primary
+            target
                 .height
-                .saturating_sub(src_rect.height)
+                .saturating_sub(SPRITE64_WORKLIST_CELL_PIXELS)
                 .saturating_div(2) as i32,
         )
     });
-    if !rect_is_inside(primary, GpgpuRect::new(dst_xy.x, dst_xy.y, src_rect.width, src_rect.height))
-    {
-        return None;
-    }
-    let stage_rect = GpgpuRect::new(0, 0, src_rect.width, src_rect.height);
-
-    shell_zero_surface(shell);
-    let stage_start_tick = direct_rcs_now_tick();
-    let staged = shell_stage_atlas_over_scanout_xrgb(shell, atlas, src_rect, target, dst_xy)?;
-    let stage_ms = direct_rcs_elapsed_ms_since(stage_start_tick);
-    let src_head = shell_read_rect_head(shell, stage_rect);
-    super::dma_flush(shell.virt, shell.surface.bytes);
-
-    let copy_start_tick = direct_rcs_now_tick();
-    let stats = copy_rect_rgba8_stats(shell.surface, stage_rect, primary, dst_xy);
-    let copy_ms = direct_rcs_elapsed_ms_since(copy_start_tick);
-    let dst_rect = GpgpuRect::new(dst_xy.x, dst_xy.y, src_rect.width, src_rect.height);
-    let dst_head = primary_read_rect_head(target, dst_rect);
-    let (src_preserved, copied) = primary_count_shell_raw_copy(target, shell, stage_rect, dst_xy);
-    let expected_spans = copy_rect_expected_spans(stage_rect);
-    let expected_submits = expected_spans.div_ceil(COPY_RECT_BATCH_MAX_SPANS);
-    let flush_offset = (dst_xy.y as usize)
-        .saturating_mul(primary.pitch_bytes as usize)
-        .saturating_add((dst_xy.x as usize).saturating_mul(core::mem::size_of::<u32>()));
-    let flush_bytes = (src_rect.height as usize)
-        .saturating_sub(1)
-        .saturating_mul(primary.pitch_bytes as usize)
-        .saturating_add((src_rect.width as usize).saturating_mul(core::mem::size_of::<u32>()));
-    let presented = super::display::notify_primary_surface_external_write(
-        "gpgpu-twemoji-atlas-center",
-        flush_offset,
-        flush_bytes,
-    );
-    let pixels = rect_pixel_count(stage_rect);
-
-    Some(GpgpuShellAtlasCopyResult {
-        ok: staged == pixels
-            && stats.spans == expected_spans
-            && stats.submits == expected_submits
-            && src_preserved == pixels
-            && copied == pixels
-            && presented,
-        slot,
-        atlas_width: atlas.width,
-        atlas_height: atlas.height,
-        atlas_src_rect: src_rect,
-        dst_xy,
-        primary_width: primary.width,
-        primary_height: primary.height,
-        primary_pitch_bytes: primary.pitch_bytes,
-        primary_gpu: primary.gpu,
-        primary_phys: primary.phys,
-        pixels,
-        spans: stats.spans,
-        expected_spans,
-        submits: stats.submits,
-        expected_submits,
-        staged,
-        copied,
-        src_preserved,
-        src_head,
-        dst_head,
-        presented,
-        total_ms: direct_rcs_elapsed_ms_since(total_start_tick),
-        stage_ms,
-        copy_ms,
-    })
-}
-
-pub(crate) fn shell_copy_twemoji_atlas_slot_scanout_hot(
-    slot: u16,
-    dst_xy_override: Option<GpgpuPoint>,
-) -> Option<GpgpuShellAtlasHotCopyResult> {
-    shell_copy_twemoji_atlas_slot_scanout_hot_with(slot, dst_xy_override, true)
+    twemoji_sprite64_worklist_primary(
+        &[GpgpuTwemojiSprite64Placement {
+            slot,
+            dst_x: dst_xy.x,
+            dst_y: dst_xy.y,
+        }],
+        true,
+    )
 }
 
 pub(crate) fn shell_twemoji_atlas_worklist_scanout(
@@ -3052,119 +3228,6 @@ pub(crate) fn shell_twemoji_atlas_worklist_present_scanout() -> Option<u64> {
     } else {
         None
     }
-}
-
-fn shell_copy_twemoji_atlas_slot_scanout_hot_with(
-    slot: u16,
-    dst_xy_override: Option<GpgpuPoint>,
-    wide: bool,
-) -> Option<GpgpuShellAtlasHotCopyResult> {
-    let total_start_tick = direct_rcs_now_tick();
-    let shell = shell_surface_once()?;
-    let target = super::display::primary_surface_gpgpu_marker_target()?;
-    let primary = GpgpuRgba8Surface::new(
-        target.phys,
-        target.gpu,
-        target.byte_len,
-        target.width,
-        target.height,
-        target.pitch_bytes,
-    )?;
-    if target.virt.is_null() {
-        return None;
-    }
-
-    let atlas = twemoji_atlas_cache_once()?;
-    let region = crate::gfx::althlasfont::twemoji::twemoji_lookup_slot_region(slot)?;
-    let src_rect = GpgpuRect::new(
-        region.src_x as i32,
-        region.src_y as i32,
-        u32::from(region.src_w.max(1)),
-        u32::from(region.src_h.max(1)),
-    );
-    if !rect_is_inside_atlas(atlas.width, atlas.height, src_rect) {
-        return None;
-    }
-    if src_rect.width > shell.surface.width
-        || src_rect.height > shell.surface.height
-        || src_rect.width > primary.width
-        || src_rect.height > primary.height
-    {
-        return None;
-    }
-
-    let dst_xy = dst_xy_override.unwrap_or_else(|| {
-        GpgpuPoint::new(
-            primary
-                .width
-                .saturating_sub(src_rect.width)
-                .saturating_div(2) as i32,
-            primary
-                .height
-                .saturating_sub(src_rect.height)
-                .saturating_div(2) as i32,
-        )
-    });
-    if !rect_is_inside(primary, GpgpuRect::new(dst_xy.x, dst_xy.y, src_rect.width, src_rect.height))
-    {
-        return None;
-    }
-    let stage_rect = GpgpuRect::new(0, 0, src_rect.width, src_rect.height);
-
-    shell_zero_surface(shell);
-    let stage_start_tick = direct_rcs_now_tick();
-    let staged = shell_stage_atlas_over_scanout_xrgb(shell, atlas, src_rect, target, dst_xy)?;
-    let stage_ms = direct_rcs_elapsed_ms_since(stage_start_tick);
-    super::dma_flush(shell.virt, shell.surface.bytes);
-
-    let copy_start_tick = direct_rcs_now_tick();
-    let stats = if wide {
-        copy_rect_rgba8_wide_stats(shell.surface, stage_rect, primary, dst_xy)
-    } else {
-        copy_rect_rgba8_stats(shell.surface, stage_rect, primary, dst_xy)
-    };
-    let copy_ms = direct_rcs_elapsed_ms_since(copy_start_tick);
-    let expected_spans = if wide {
-        copy_rect_wide_expected_spans(stage_rect)
-    } else {
-        copy_rect_expected_spans(stage_rect)
-    };
-    let expected_submits = expected_spans.div_ceil(COPY_RECT_BATCH_MAX_SPANS);
-    let flush_offset = (dst_xy.y as usize)
-        .saturating_mul(primary.pitch_bytes as usize)
-        .saturating_add((dst_xy.x as usize).saturating_mul(core::mem::size_of::<u32>()));
-    let flush_bytes = (src_rect.height as usize)
-        .saturating_sub(1)
-        .saturating_mul(primary.pitch_bytes as usize)
-        .saturating_add((src_rect.width as usize).saturating_mul(core::mem::size_of::<u32>()));
-    let presented = super::display::notify_primary_surface_external_write(
-        "gpgpu-twemoji-atlas-go",
-        flush_offset,
-        flush_bytes,
-    );
-    let pixels = rect_pixel_count(stage_rect);
-
-    Some(GpgpuShellAtlasHotCopyResult {
-        ok: staged == pixels
-            && stats.spans == expected_spans
-            && stats.submits == expected_submits
-            && presented,
-        slot,
-        atlas_src_rect: src_rect,
-        dst_xy,
-        primary_width: primary.width,
-        primary_height: primary.height,
-        pixels,
-        spans: stats.spans,
-        expected_spans,
-        submits: stats.submits,
-        expected_submits,
-        staged,
-        presented,
-        total_ms: direct_rcs_elapsed_ms_since(total_start_tick),
-        stage_ms,
-        copy_ms,
-    })
 }
 
 pub(crate) fn submit_direct_rcs_smoke_once() -> bool {
@@ -4278,6 +4341,152 @@ fn submit_fill_rect_worklist_rgba8_probe(force: bool) -> bool {
     ok
 }
 
+pub(crate) fn submit_gradient_rect_worklist_rgba8_probe_once() -> bool {
+    submit_gradient_rect_worklist_rgba8_probe(false)
+}
+
+pub(crate) fn submit_gradient_rect_worklist_rgba8_probe_now() -> bool {
+    submit_gradient_rect_worklist_rgba8_probe(true)
+}
+
+fn submit_gradient_rect_worklist_rgba8_probe(force: bool) -> bool {
+    if !DIRECT_RCS_ENABLED {
+        if force {
+            GRADIENT_RECT_WORKLIST_OK.store(false, Ordering::Release);
+        }
+        return false;
+    }
+    if !force && GRADIENT_RECT_WORKLIST_RAN.swap(true, Ordering::AcqRel) {
+        return false;
+    }
+    GRADIENT_RECT_WORKLIST_RAN.store(true, Ordering::Release);
+    GRADIENT_RECT_WORKLIST_OK.store(false, Ordering::Release);
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: gradient-rect-worklist-rgba8 skipped reason=no-claimed-device\n"
+        );
+        return false;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: gradient-rect-worklist-rgba8 failed rung=alloc\n"
+        );
+        return false;
+    };
+    let Some(desc) = rect_worklist_desc_buffer_once() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: gradient-rect-worklist-rgba8 failed rung=desc-buffer\n"
+        );
+        return false;
+    };
+    let Some(surface) = GpgpuRgba8Surface::new(
+        state.clear_test_phys,
+        DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
+        CLEAR_RECT_TEST_BYTES,
+        64,
+        4,
+        64 * core::mem::size_of::<u32>() as u32,
+    ) else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: gradient-rect-worklist-rgba8 failed rung=surface\n"
+        );
+        return false;
+    };
+
+    let _desc_guard = RECT_WORKLIST_DESC_SUBMIT_LOCK.lock();
+    unsafe {
+        core::ptr::write_bytes(state.clear_test_virt, 0, CLEAR_RECT_TEST_BYTES);
+        core::ptr::write_bytes(desc.virt, 0, desc.bytes);
+        let descs = desc.virt as *mut GradientRectWorklistRgba8Desc;
+        core::ptr::write_volatile(
+            descs,
+            GradientRectWorklistRgba8Desc {
+                dst_xy: pack_i16_pair_u32(0, 0),
+                size: pack_u16_pair_u32(4, 1),
+                color0_rgba: 0xFF00_0000,
+                color1_rgba: 0xFFFF_FFFF,
+                flags: 0,
+            },
+        );
+        core::ptr::write_volatile(
+            descs.add(1),
+            GradientRectWorklistRgba8Desc {
+                dst_xy: pack_i16_pair_u32(8, 0),
+                size: pack_u16_pair_u32(4, 4),
+                color0_rgba: 0xFF00_0000,
+                color1_rgba: 0xFFFF_FFFF,
+                flags: GRADIENT_RECT_WORKLIST_FLAG_VERTICAL,
+            },
+        );
+    }
+    super::dma_flush(state.clear_test_virt, CLEAR_RECT_TEST_BYTES);
+    super::dma_flush(desc.virt, desc.bytes);
+
+    let params = GradientRectWorklistRgba8Params {
+        dst_gpu: surface.gpu,
+        desc_gpu: desc.gpu,
+        dst_pitch_bytes: surface.pitch_bytes,
+        desc_base: 0,
+        desc_count: 2,
+    };
+    let start_tick = direct_rcs_now_tick();
+    let submitted = submit_gradient_rect_worklist(surface, desc, params);
+    let submit_ms = direct_rcs_elapsed_ms_since(start_tick);
+    let pre_marker = direct_rcs_read_result_slot(state, RECT_WORKLIST_PRE_MARKER_SLOT);
+    let post_marker = direct_rcs_read_result_slot(state, RECT_WORKLIST_POST_MARKER_SLOT);
+    let horizontal = direct_rcs_read_worklist_probe_span(state, 0, 0);
+    let vertical0 = direct_rcs_read_worklist_probe_span(state, 0, 8);
+    let vertical1 = direct_rcs_read_worklist_probe_span(state, 1, 8);
+    let vertical2 = direct_rcs_read_worklist_probe_span(state, 2, 8);
+    let vertical3 = direct_rcs_read_worklist_probe_span(state, 3, 8);
+    let ramp = [0xFF00_0000, 0xFF55_5555, 0xFFAA_AAAA, 0xFFFF_FFFF];
+    let ok = submitted
+        && pre_marker == GRADIENT_RECT_WORKLIST_PRE_MARKER
+        && post_marker == GRADIENT_RECT_WORKLIST_POST_MARKER
+        && horizontal == ramp
+        && vertical0 == [ramp[0]; 4]
+        && vertical1 == [ramp[1]; 4]
+        && vertical2 == [ramp[2]; 4]
+        && vertical3 == [ramp[3]; 4];
+
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/gpgpu: gradient-rect-worklist-rgba8 forcewake=1 ggtt=1 ppgtt=1 kernel_ppgtt=1 dst_ppgtt=1 desc_ppgtt=1 batch=1 submitted={} ok={} submit_ms={} descs=2 walkers={} pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} dst_gpu=0x{:X} desc_gpu=0x{:X} horizontal=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] vertical0=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] vertical3=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] artifact={}\n",
+        submitted as u8,
+        ok as u8,
+        submit_ms,
+        rect_worklist_walker_count(2),
+        pre_marker,
+        post_marker,
+        GRADIENT_RECT_WORKLIST_POST_MARKER,
+        GRADIENT_RECT_WORKLIST_RGBA8_ADLS_GPU,
+        GRADIENT_RECT_WORKLIST_RGBA8_ADLS_GPU + GRADIENT_RECT_WORKLIST_RGBA8_TEXT_OFFSET_BYTES,
+        surface.gpu,
+        desc.gpu,
+        horizontal[0],
+        horizontal[1],
+        horizontal[2],
+        horizontal[3],
+        vertical0[0],
+        vertical0[1],
+        vertical0[2],
+        vertical0[3],
+        vertical3[0],
+        vertical3[1],
+        vertical3[2],
+        vertical3[3],
+        GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME,
+    );
+
+    GRADIENT_RECT_WORKLIST_OK.store(ok, Ordering::Release);
+    ok
+}
+
 pub(crate) fn submit_alpha_blend_worklist_rgba8_probe_once() -> bool {
     submit_alpha_blend_worklist_rgba8_probe(false)
 }
@@ -4774,117 +4983,13 @@ fn twemoji_atlas_cache_once() -> Option<&'static GpgpuTwemojiAtlasCache> {
                 crate::gfx::althlasfont::twemoji::TWEMOJI_ATLAS_PNG,
             )
             .ok()?;
-            let pixels = (decoded.width as usize).checked_mul(decoded.height as usize)?;
-            let mut xrgb = Vec::with_capacity(pixels);
-            for idx in 0..pixels {
-                let off = idx.saturating_mul(4);
-                let r = *decoded.rgba.get(off)?;
-                let g = *decoded.rgba.get(off + 1)?;
-                let b = *decoded.rgba.get(off + 2)?;
-                xrgb.push(((r as u32) << 16) | ((g as u32) << 8) | b as u32);
-            }
             Some(GpgpuTwemojiAtlasCache {
                 width: decoded.width,
                 height: decoded.height,
                 rgba: decoded.rgba,
-                xrgb,
             })
         })
         .as_ref()
-}
-
-fn shell_stage_atlas_over_scanout_xrgb(
-    shell: GpgpuShellSurface,
-    atlas: &GpgpuTwemojiAtlasCache,
-    src_rect: GpgpuRect,
-    target: super::display::PrimarySurfaceGpgpuTarget,
-    dst_xy: GpgpuPoint,
-) -> Option<usize> {
-    shell_stage_atlas_over_scanout_xrgb_at(
-        shell,
-        atlas,
-        src_rect,
-        target,
-        dst_xy,
-        GpgpuPoint::new(0, 0),
-    )
-}
-
-fn shell_stage_atlas_over_scanout_xrgb_at(
-    shell: GpgpuShellSurface,
-    atlas: &GpgpuTwemojiAtlasCache,
-    src_rect: GpgpuRect,
-    target: super::display::PrimarySurfaceGpgpuTarget,
-    dst_xy: GpgpuPoint,
-    stage_xy: GpgpuPoint,
-) -> Option<usize> {
-    let stage_rect = GpgpuRect::new(stage_xy.x, stage_xy.y, src_rect.width, src_rect.height);
-    if !rect_is_inside(shell.surface, stage_rect)
-        || !rect_is_inside_atlas(atlas.width, atlas.height, src_rect)
-    {
-        return None;
-    }
-
-    let mut staged = 0usize;
-    for y in 0..src_rect.height {
-        for x in 0..src_rect.width {
-            let a = atlas_alpha(atlas, src_rect, x, y)?;
-            let xrgb = atlas_xrgb_pixel(atlas, src_rect, x, y)?;
-            let pixel = if a == 0xFF {
-                xrgb
-            } else {
-                let dst = primary_read_pixel(target, dst_xy.x as u32 + x, dst_xy.y as u32 + y);
-                blend_xrgb_over_xrgb(xrgb, a, dst)
-            };
-            shell_write_pixel(shell, stage_xy.x as u32 + x, stage_xy.y as u32 + y, pixel);
-            staged += 1;
-        }
-    }
-    Some(staged)
-}
-
-fn atlas_xrgb_pixel(
-    atlas: &GpgpuTwemojiAtlasCache,
-    src_rect: GpgpuRect,
-    x: u32,
-    y: u32,
-) -> Option<u32> {
-    let atlas_x = src_rect.x as u32 + x;
-    let atlas_y = src_rect.y as u32 + y;
-    let idx = (atlas_y as usize)
-        .saturating_mul(atlas.width as usize)
-        .saturating_add(atlas_x as usize);
-    atlas.xrgb.get(idx).copied()
-}
-
-fn atlas_alpha(atlas: &GpgpuTwemojiAtlasCache, src_rect: GpgpuRect, x: u32, y: u32) -> Option<u8> {
-    let atlas_width = atlas.width as usize;
-    let atlas_x = src_rect.x as u32 + x;
-    let atlas_y = src_rect.y as u32 + y;
-    let src_idx = ((atlas_y as usize).saturating_mul(atlas_width) + atlas_x as usize) * 4;
-    atlas.rgba.get(src_idx + 3).copied()
-}
-
-fn blend_xrgb_over_xrgb(src: u32, a: u8, dst: u32) -> u32 {
-    if a == 0 {
-        return dst & 0x00FF_FFFF;
-    }
-    if a == 0xFF {
-        return src & 0x00FF_FFFF;
-    }
-
-    let alpha = a as u32;
-    let inv_alpha = 255u32.saturating_sub(alpha);
-    let src_r = (src >> 16) & 0xFF;
-    let src_g = (src >> 8) & 0xFF;
-    let src_b = src & 0xFF;
-    let dst_r = (dst >> 16) & 0xFF;
-    let dst_g = (dst >> 8) & 0xFF;
-    let dst_b = dst & 0xFF;
-    let out_r = ((src_r * alpha) + (dst_r * inv_alpha) + 127) / 255;
-    let out_g = ((src_g * alpha) + (dst_g * inv_alpha) + 127) / 255;
-    let out_b = ((src_b * alpha) + (dst_b * inv_alpha) + 127) / 255;
-    (out_r << 16) | (out_g << 8) | out_b
 }
 
 fn shell_read_rect_head(shell: GpgpuShellSurface, rect: GpgpuRect) -> [u32; 4] {
@@ -4956,30 +5061,6 @@ fn primary_count_scanout_copy(
     for y in 0..src_rect.height {
         for x in 0..src_rect.width {
             let expected = shell_pattern_pixel(x, y);
-            let src = shell_read_pixel(shell, src_rect.x as u32 + x, src_rect.y as u32 + y);
-            let dst = primary_read_pixel(target, dst_xy.x as u32 + x, dst_xy.y as u32 + y);
-            if src == expected {
-                src_preserved += 1;
-            }
-            if dst == expected {
-                copied += 1;
-            }
-        }
-    }
-    (src_preserved, copied)
-}
-
-fn primary_count_shell_raw_copy(
-    target: super::display::PrimarySurfaceGpgpuTarget,
-    shell: GpgpuShellSurface,
-    src_rect: GpgpuRect,
-    dst_xy: GpgpuPoint,
-) -> (usize, usize) {
-    let mut src_preserved = 0usize;
-    let mut copied = 0usize;
-    for y in 0..src_rect.height {
-        for x in 0..src_rect.width {
-            let expected = shell_read_pixel(shell, src_rect.x as u32 + x, src_rect.y as u32 + y);
             let src = shell_read_pixel(shell, src_rect.x as u32 + x, src_rect.y as u32 + y);
             let dst = primary_read_pixel(target, dst_xy.x as u32 + x, dst_xy.y as u32 + y);
             if src == expected {
@@ -5940,6 +6021,51 @@ fn submit_fill_rect_worklist(
         0
     };
     observed == FILL_RECT_WORKLIST_POST_MARKER
+}
+
+fn submit_gradient_rect_worklist(
+    dst: GpgpuRgba8Surface,
+    desc: GpgpuRectWorklistDescBuffer,
+    params: GradientRectWorklistRgba8Params,
+) -> bool {
+    if params.desc_count == 0 || params.desc_count as usize > RECT_WORKLIST_MAX_DESCS {
+        return false;
+    }
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let Some(dev) = super::claimed_device() else {
+        return false;
+    };
+    let Some(upload) = upload_gradient_rect_worklist_rgba8_kernel() else {
+        return false;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        return false;
+    };
+
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let dst_ppgtt_ok =
+        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
+    let desc_ppgtt_ok =
+        dst_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
+    let batch_ok = desc_ppgtt_ok
+        && direct_rcs_encode_gradient_rect_worklist_batch(
+            state, upload, params, dst.bytes, desc.bytes,
+        );
+    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
+    let observed = if submitted {
+        direct_rcs_poll_result_slot(
+            state,
+            RECT_WORKLIST_POST_MARKER_SLOT,
+            GRADIENT_RECT_WORKLIST_POST_MARKER,
+        )
+    } else {
+        0
+    };
+    observed == GRADIENT_RECT_WORKLIST_POST_MARKER
 }
 
 fn submit_alpha_blend_worklist(
@@ -7210,6 +7336,73 @@ fn direct_rcs_encode_fill_rect_worklist_batch(
     )
 }
 
+fn direct_rcs_encode_gradient_rect_worklist_batch(
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    params: GradientRectWorklistRgba8Params,
+    dst_bytes: usize,
+    desc_bytes: usize,
+) -> bool {
+    let desc_count = params.desc_count as usize;
+    let walker_count = rect_worklist_walker_count(desc_count);
+    if desc_count == 0 || walker_count == 0 {
+        return false;
+    }
+    let payload_end =
+        RECT_WORKLIST_PAYLOAD_OFFSET_BYTES + walker_count * RECT_WORKLIST_INDIRECT_BYTES;
+    if payload_end > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+
+    unsafe {
+        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
+        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+    }
+
+    if !direct_rcs_write_gradient_rect_worklist_interface_descriptor(state) {
+        return false;
+    }
+    if !direct_rcs_write_fill_rect_worklist_surface_states(
+        state,
+        params.dst_gpu,
+        dst_bytes,
+        params.desc_gpu,
+        desc_bytes,
+    ) {
+        return false;
+    }
+    for walker in 0..walker_count {
+        let desc_base = walker.saturating_mul(RECT_WORKLIST_DESCS_PER_WALKER);
+        let local_count = desc_count
+            .saturating_sub(desc_base)
+            .min(RECT_WORKLIST_DESCS_PER_WALKER);
+        let payload_offset =
+            RECT_WORKLIST_PAYLOAD_OFFSET_BYTES + walker * RECT_WORKLIST_INDIRECT_BYTES;
+        let payload_params = GradientRectWorklistRgba8Params {
+            desc_base: params.desc_base.saturating_add(desc_base as u32),
+            desc_count: local_count as u32,
+            ..params
+        };
+        if !direct_rcs_write_gradient_rect_worklist_payload_at(
+            state,
+            payload_offset,
+            payload_params,
+        ) {
+            return false;
+        }
+    }
+
+    direct_rcs_encode_rect_worklist_command_stream(
+        state,
+        upload,
+        walker_count,
+        desc_count,
+        GRADIENT_RECT_WORKLIST_PRE_MARKER,
+        GRADIENT_RECT_WORKLIST_POST_MARKER,
+    )
+}
+
 fn direct_rcs_encode_alpha_blend_worklist_batch(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
@@ -8473,6 +8666,15 @@ fn direct_rcs_write_fill_rect_worklist_interface_descriptor(state: DirectRcsStat
     )
 }
 
+fn direct_rcs_write_gradient_rect_worklist_interface_descriptor(state: DirectRcsState) -> bool {
+    direct_rcs_write_rect_worklist_interface_descriptor(
+        state,
+        GRADIENT_RECT_WORKLIST_RGBA8_TEXT_OFFSET_BYTES,
+        2,
+        RECT_WORKLIST_CROSS_THREAD_GRFS,
+    )
+}
+
 fn direct_rcs_write_alpha_blend_worklist_interface_descriptor(state: DirectRcsState) -> bool {
     direct_rcs_write_rect_worklist_interface_descriptor(
         state,
@@ -8609,6 +8811,43 @@ fn direct_rcs_write_fill_rect_worklist_payload_at(
     state: DirectRcsState,
     payload_offset: usize,
     params: FillRectWorklistRgba8Params,
+) -> bool {
+    if payload_offset + RECT_WORKLIST_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+
+    unsafe {
+        let payload = state.batch_virt.add(payload_offset);
+        core::ptr::write_bytes(payload, 0, RECT_WORKLIST_INDIRECT_BYTES);
+        let dwords = payload as *mut u32;
+        core::ptr::write_volatile(dwords.add(3), 16);
+        core::ptr::write_volatile(dwords.add(4), 1);
+        core::ptr::write_volatile(dwords.add(5), 1);
+        core::ptr::write_volatile(dwords.add(8), 16);
+        core::ptr::write_volatile(dwords.add(9), 1);
+        core::ptr::write_volatile(dwords.add(10), 1);
+        core::ptr::write_volatile(dwords.add(12), params.dst_gpu as u32);
+        core::ptr::write_volatile(dwords.add(13), (params.dst_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(14), params.desc_gpu as u32);
+        core::ptr::write_volatile(dwords.add(15), (params.desc_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(16), params.dst_pitch_bytes);
+        core::ptr::write_volatile(dwords.add(17), params.desc_base);
+        core::ptr::write_volatile(dwords.add(18), params.desc_count);
+
+        let local_ids = payload.add(RECT_WORKLIST_CROSS_THREAD_BYTES) as *mut u16;
+        for lane in 0..16usize {
+            core::ptr::write_volatile(local_ids.add(lane), lane as u16);
+            core::ptr::write_volatile(local_ids.add(16 + lane), 0);
+            core::ptr::write_volatile(local_ids.add(32 + lane), 0);
+        }
+    }
+    true
+}
+
+fn direct_rcs_write_gradient_rect_worklist_payload_at(
+    state: DirectRcsState,
+    payload_offset: usize,
+    params: GradientRectWorklistRgba8Params,
 ) -> bool {
     if payload_offset + RECT_WORKLIST_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
         return false;

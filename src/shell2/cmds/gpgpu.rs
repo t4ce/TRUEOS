@@ -9,14 +9,16 @@ use crate::intel::gpgpu::{
     alpha_blend_worklist_rgba8_upload_status, canvas3d_project_rgba8_upload_status,
     canvas3d_transform_q16_upload_status, clear_rect_rgba8_white_upload_status,
     copy_rect_rgba8_upload_status, copy_rect_rgba8_wide_upload_status, empty_eot_upload_status,
-    fill_rect_rgba8_upload_status, fill_rect_worklist_probe_ok, fill_rect_worklist_probe_ran,
+    fill_rect_worklist_probe_ok, fill_rect_worklist_probe_ran,
     fill_rect_worklist_rgba8_upload_status, glyph_mask_rgba8_upload_status,
-    present_rgba8_to_primary_xrgb_rect_upload_status, rect_worklist_probe_ready,
-    shell_clear_white_rgba8, shell_copy_rgba8, shell_copy_scanout_center_rgba8,
-    shell_copy_twemoji_atlas_slot_scanout, shell_cube20_project_spin,
+    gradient_rect_worklist_probe_ok, gradient_rect_worklist_probe_ran,
+    gradient_rect_worklist_rgba8_upload_status, present_rgba8_to_primary_xrgb_rect_upload_status,
+    rect_worklist_probe_ready, shell_clear_white_rgba8, shell_copy_rgba8,
+    shell_copy_scanout_center_rgba8, shell_cube20_project_spin,
     shell_twemoji_atlas_worklist_present_scanout, shell_twemoji_atlas_worklist_scanout,
-    shell_twemoji_atlas_worklist_scanout_present, sprite64_worklist_rgba8_upload_status,
-    submit_alpha_blend_worklist_rgba8_probe_now, submit_fill_rect_worklist_rgba8_probe_now,
+    shell_twemoji_atlas_worklist_scanout_present, shell_twemoji_atlas_worklist_slot_scanout,
+    sprite64_worklist_rgba8_upload_status, submit_alpha_blend_worklist_rgba8_probe_now,
+    submit_fill_rect_worklist_rgba8_probe_now, submit_gradient_rect_worklist_rgba8_probe_now,
 };
 use crate::shell2::shell2_cmd::ParseOutcome;
 
@@ -253,8 +255,8 @@ fn print_status(io: &'static dyn ShellBackend2) {
     let copy = copy_rect_rgba8_upload_status();
     let copy_wide = copy_rect_rgba8_wide_upload_status();
     let clear = clear_rect_rgba8_white_upload_status();
-    let fill = fill_rect_rgba8_upload_status();
     let fill_worklist = fill_rect_worklist_rgba8_upload_status();
+    let gradient_worklist = gradient_rect_worklist_rgba8_upload_status();
     let alpha_worklist = alpha_blend_worklist_rgba8_upload_status();
     let glyph = glyph_mask_rgba8_upload_status();
     let present = present_rgba8_to_primary_xrgb_rect_upload_status();
@@ -263,14 +265,16 @@ fn print_status(io: &'static dyn ShellBackend2) {
     let canvas = canvas3d_project_rgba8_upload_status();
     let transform = canvas3d_transform_q16_upload_status();
     let msg = alloc::format!(
-        "gpgpu: copy_upload={} copy_wide_upload={} clear_upload={} fill_upload={} fill_worklist_upload={} fill_worklist_ran={} fill_worklist_probe={} alpha_worklist_upload={} alpha_worklist_ran={} alpha_worklist_probe={} rect_worklist_ready={} glyph_mask_upload={} present_xrgb_upload={} empty_upload={} worklist_upload={} canvas3d_upload={} canvas3d_transform_upload={} shell_surface={}x{} pitch={} gpu=0x008A0000",
+        "gpgpu: copy_upload={} copy_wide_upload={} clear_upload={} fill_worklist_upload={} fill_worklist_ran={} fill_worklist_probe={} gradient_worklist_upload={} gradient_worklist_ran={} gradient_worklist_probe={} alpha_worklist_upload={} alpha_worklist_ran={} alpha_worklist_probe={} rect_worklist_ready={} glyph_mask_upload={} present_xrgb_upload={} empty_upload={} worklist_upload={} canvas3d_upload={} canvas3d_transform_upload={} shell_surface={}x{} pitch={} gpu=0x008A0000",
         artifact_status(copy.is_some()),
         artifact_status(copy_wide.is_some()),
         artifact_status(clear.is_some()),
-        artifact_status(fill.is_some()),
         artifact_status(fill_worklist.is_some()),
         artifact_status(fill_rect_worklist_probe_ran()),
         artifact_status(fill_rect_worklist_probe_ok()),
+        artifact_status(gradient_worklist.is_some()),
+        artifact_status(gradient_rect_worklist_probe_ran()),
+        artifact_status(gradient_rect_worklist_probe_ok()),
         artifact_status(alpha_worklist.is_some()),
         artifact_status(alpha_blend_worklist_probe_ran()),
         artifact_status(alpha_blend_worklist_probe_ok()),
@@ -295,14 +299,18 @@ fn run_rect_probe(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>
     }
 
     let fill = submit_fill_rect_worklist_rgba8_probe_now();
+    let gradient = submit_gradient_rect_worklist_rgba8_probe_now();
     let alpha = submit_alpha_blend_worklist_rgba8_probe_now();
     let msg = alloc::format!(
-        "gpgpu rectprobe: fill={} alpha={} fill_ran={} alpha_ran={} fill_ready={} alpha_ready={} ready={}",
+        "gpgpu rectprobe: fill={} gradient={} alpha={} fill_ran={} gradient_ran={} alpha_ran={} fill_ready={} gradient_ready={} alpha_ready={} ready={}",
         fill as u8,
+        gradient as u8,
         alpha as u8,
         fill_rect_worklist_probe_ran() as u8,
+        gradient_rect_worklist_probe_ran() as u8,
         alpha_blend_worklist_probe_ran() as u8,
         fill_rect_worklist_probe_ok() as u8,
+        gradient_rect_worklist_probe_ok() as u8,
         alpha_blend_worklist_probe_ok() as u8,
         rect_worklist_probe_ready() as u8
     );
@@ -442,28 +450,31 @@ fn run_atlas(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
         usage(io);
         return;
     };
-    let Some(result) = shell_copy_twemoji_atlas_slot_scanout(slot, dst_xy) else {
+    let Some(result) = shell_twemoji_atlas_worklist_slot_scanout(slot, dst_xy) else {
         print_shell_line(
             io,
-            "gpgpu atlas: no result (check slot id, primary surface, and destination bounds)",
+            "gpgpu atlas: no result (check slot id, primary surface, destination bounds, and worklist artifact)",
         );
         return;
     };
     let msg = alloc::format!(
-        "gpgpu athlas: ok={} id={} sprite={}x{} dst={},{} ms={} stage_ms={} copy_ms={} submits={}/{} copied={}/{} presented={}",
+        "gpgpu athlas: mode=sprite64-worklist ok={} requested_id={} desc={} walkers={} pixels={} submit_ms={} present_ms={} total_ms={} id={} dst={},{} primary={}x{} slots={} atlas_gpu=0x{:X} desc_gpu=0x{:X} presented={}",
         result.ok as u8,
-        result.slot,
-        result.atlas_src_rect.width,
-        result.atlas_src_rect.height,
-        result.dst_xy.x,
-        result.dst_xy.y,
+        slot,
+        result.descriptors,
+        result.walkers,
+        result.copied_pixels,
+        result.submit_ms,
+        result.present_ms,
         result.total_ms,
-        result.stage_ms,
-        result.copy_ms,
-        result.submits,
-        result.expected_submits,
-        result.copied,
-        result.pixels,
+        result.last_slot,
+        result.last_dst_xy.x,
+        result.last_dst_xy.y,
+        result.primary_width,
+        result.primary_height,
+        result.slots,
+        result.atlas_gpu,
+        result.desc_gpu,
         result.presented as u8
     );
     print_shell_line(io, msg.as_str());

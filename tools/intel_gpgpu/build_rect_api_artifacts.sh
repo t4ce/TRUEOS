@@ -27,6 +27,7 @@ fi
 kernels=(
     fill_rect_rgba8
     fill_rect_worklist_rgba8
+    gradient_rect_worklist_rgba8
     fill_circle_rgba8
     blit_rgba8_nearest
     alpha_blend_rgba8_over
