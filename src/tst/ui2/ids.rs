@@ -15,6 +15,7 @@ pub enum Ui2DemoTexId {
     Gboi = 4_728,
     RenderAlbum = 4_729,
     IntelCanvas3d = 4_730,
+    IntelCanvas3dPlanePatch = 4_731,
 }
 
 impl Ui2DemoTexId {

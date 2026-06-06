@@ -278,8 +278,6 @@ fn set_cursor_selected_window(state: &mut Ui2State, slot_id: u32, next_window_id
             let next_z = top_z.saturating_add(1);
             if window.z != next_z {
                 window.z = next_z;
-                window.dirty = true;
-                window.content_present_dirty = false;
                 window.last_reason = "cursor-select";
                 raised = true;
             }
@@ -292,8 +290,7 @@ fn set_cursor_selected_window(state: &mut Ui2State, slot_id: u32, next_window_id
         if raised && next_window_id != 0 {
             refresh_window_hit_entries(state, next_window_id);
         }
-        let titlebar_only =
-            !raised && crate::gfx::is_intel_active() && state.first_compose_signaled;
+        let titlebar_only = crate::gfx::is_intel_active() && state.first_compose_signaled;
         if titlebar_only {
             state.chrome_overlay_dirty = true;
         } else {
@@ -535,17 +532,24 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
         if let Some((window_id, button)) = hover_dirty_prev
             && decoration_hover_button_rect(state, window_id, button).is_some()
         {
-            let _ = note_window_chrome_hover_clear_dirty(
+            let _ = note_window_chrome_hover_event(
                 state,
                 window_id,
                 button,
+                true,
                 "decor-button-hover",
             );
         }
         if let Some((window_id, button)) = hover_dirty_next
             && decoration_hover_button_rect(state, window_id, button).is_some()
         {
-            let _ = note_window_titlebar_chrome_dirty(state, window_id, "decor-button-hover");
+            let _ = note_window_chrome_hover_event(
+                state,
+                window_id,
+                button,
+                false,
+                "decor-button-hover",
+            );
         }
     } else {
         if let Some((window_id, button)) = hover_dirty_prev {
@@ -1143,21 +1147,23 @@ pub(super) fn begin_window_resize_for_cursor(
             preview_rect: window.rect,
         },
     );
-    state.compose_reason = "begin-window-resize";
     let top_z = state
         .windows
         .iter()
         .map(|window| window.z)
         .max()
         .unwrap_or(0);
-    if let Some(window_mut) = window_mut(state, window_id) {
+    let raised = window.z < top_z;
+    if raised && let Some(window_mut) = window_mut(state, window_id) {
         window_mut.z = top_z.saturating_add(1);
     }
-    let noted = note_window_dirty(state, window_id, "begin-window-resize");
-    if noted {
+    if raised {
+        state.compose_reason = "begin-window-resize";
+        let noted = note_window_dirty(state, window_id, "begin-window-resize");
         refresh_window_hit_entries(state, window_id);
+        return noted;
     }
-    noted
+    true
 }
 
 fn browser_vertical_scrollbar_metrics(
@@ -1550,9 +1556,6 @@ fn update_resize_drag_for_cursor(
             }
             state.compose_reason = "window-resize-commit";
             let _ = commit_window_geometry_change(state, drag.window_id, "window-resize-commit");
-        } else if drag.active && !drag.live_apply {
-            state.compose_reason = "window-resize-cancel";
-            let _ = note_window_dirty(state, drag.window_id, "window-resize-cancel");
         }
         state.resize_drags.remove(drag_idx);
         return;
