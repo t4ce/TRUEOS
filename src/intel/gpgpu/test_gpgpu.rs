@@ -1817,7 +1817,7 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
     width: u32,
     height: u32,
 ) -> Option<GpgpuCanvas3dUi2TextureFrame> {
-    const CADENCE_US: u64 = 500_000;
+    const CADENCE_US: u64 = 33_000;
 
     let width = width.clamp(1, 512);
     let height = height.clamp(1, 512);
@@ -1900,6 +1900,13 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
             z: (half * 91) / 100,
             pad: 0,
         };
+        let angle_deg = frame.wrapping_mul(4) % 360;
+        let roll_deg = frame % 360;
+        let right =
+            canvas3d_vec3_rotate_z_q16(canvas3d_vec3_rotate_y_q16(right, angle_deg), roll_deg);
+        let up = canvas3d_vec3_rotate_z_q16(canvas3d_vec3_rotate_y_q16(up, angle_deg), roll_deg);
+        let forward =
+            canvas3d_vec3_rotate_z_q16(canvas3d_vec3_rotate_y_q16(forward, angle_deg), roll_deg);
         let constraints = [
             Canvas3dVec3Q16 {
                 x: q,
@@ -1962,8 +1969,8 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
                 width,
                 height,
                 canvas3d_vec3_add(center, right),
-                forward,
                 up,
+                forward,
                 constraints,
                 0xFFFF_8844,
             ),
@@ -1972,8 +1979,8 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
                 width,
                 height,
                 canvas3d_vec3_add(center, up),
-                right,
                 forward,
+                right,
                 constraints,
                 0xFFFF_D166,
             ),
@@ -1982,8 +1989,8 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
                 width,
                 height,
                 canvas3d_vec3_sub(center, forward),
-                right,
                 up,
+                right,
                 constraints,
                 0xFF66_CCFF,
             ),
@@ -2086,7 +2093,7 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
         vertex_count: 6,
         radius_px: (half as u32).saturating_mul(width.min(height))
             / CANVAS3D_PROJECT_Q16_ONE as u32,
-        last_angle_deg: frame % 360,
+        last_angle_deg: frame.wrapping_mul(4) % 360,
     };
 
     Some(GpgpuCanvas3dUi2TextureFrame {
@@ -2111,6 +2118,45 @@ fn canvas3d_vec3_sub(a: Canvas3dVec3Q16, b: Canvas3dVec3Q16) -> Canvas3dVec3Q16 
         x: a.x.saturating_sub(b.x),
         y: a.y.saturating_sub(b.y),
         z: a.z.saturating_sub(b.z),
+        pad: 0,
+    }
+}
+
+fn canvas3d_sin_360_q16(deg: u32) -> i32 {
+    let deg = deg % 360;
+    if deg < 180 {
+        shell_canvas3d_sin_0_180_q16(deg)
+    } else {
+        -shell_canvas3d_sin_0_180_q16(deg - 180)
+    }
+}
+
+fn canvas3d_cos_360_q16(deg: u32) -> i32 {
+    canvas3d_sin_360_q16(deg.wrapping_add(90))
+}
+
+fn canvas3d_vec3_rotate_y_q16(vertex: Canvas3dVec3Q16, deg: u32) -> Canvas3dVec3Q16 {
+    let sin = canvas3d_sin_360_q16(deg) as i64;
+    let cos = canvas3d_cos_360_q16(deg) as i64;
+    let x = vertex.x as i64;
+    let z = vertex.z as i64;
+    Canvas3dVec3Q16 {
+        x: (((x * cos) + (z * sin)) >> 16) as i32,
+        y: vertex.y,
+        z: (((z * cos) - (x * sin)) >> 16) as i32,
+        pad: 0,
+    }
+}
+
+fn canvas3d_vec3_rotate_z_q16(vertex: Canvas3dVec3Q16, deg: u32) -> Canvas3dVec3Q16 {
+    let sin = canvas3d_sin_360_q16(deg) as i64;
+    let cos = canvas3d_cos_360_q16(deg) as i64;
+    let x = vertex.x as i64;
+    let y = vertex.y as i64;
+    Canvas3dVec3Q16 {
+        x: (((x * cos) - (y * sin)) >> 16) as i32,
+        y: (((x * sin) + (y * cos)) >> 16) as i32,
+        z: vertex.z,
         pad: 0,
     }
 }

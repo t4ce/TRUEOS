@@ -23,6 +23,14 @@ const UI2_TEXT_INPUT_TEXT_RGBA: [u8; 4] = [0xF1, 0xF4, 0xF8, 0xFF];
 const UI2_TEXT_INPUT_CURSOR_RGBA: [u8; 4] = [0xF8, 0xFB, 0xFF, 0xFF];
 const UI2_TEXT_INPUT_TEXT: &str = "Hello";
 
+#[derive(Clone, Copy, Debug)]
+struct DirtyRect {
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+}
+
 fn ui2_text_input_rt_h() -> u32 {
     u32::from(ui2::ui2_font_native_line_height_px(UI2_TEXT_INPUT_FONT_TIER))
         .saturating_add((UI2_TEXT_INPUT_PAD_Y as u32).saturating_mul(2))
@@ -205,6 +213,62 @@ fn handle_keyboard_event(
     }
 }
 
+fn diff_dirty_rect_rgba(prev: &[u8], next: &[u8], width: u32, height: u32) -> Option<DirtyRect> {
+    if width == 0 || height == 0 || prev.len() != next.len() {
+        return Some(DirtyRect {
+            x: 0,
+            y: 0,
+            w: width.max(1),
+            h: height.max(1),
+        });
+    }
+
+    let width_usize = width as usize;
+    let height_usize = height as usize;
+    let mut min_x = width_usize;
+    let mut min_y = height_usize;
+    let mut max_x = 0usize;
+    let mut max_y = 0usize;
+    let mut dirty = false;
+
+    for y in 0..height_usize {
+        for x in 0..width_usize {
+            let idx = (y * width_usize + x) * 4;
+            if prev.get(idx..idx + 4) != next.get(idx..idx + 4) {
+                dirty = true;
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+    }
+
+    dirty.then_some(DirtyRect {
+        x: min_x as u32,
+        y: min_y as u32,
+        w: max_x.saturating_sub(min_x).saturating_add(1) as u32,
+        h: max_y.saturating_sub(min_y).saturating_add(1) as u32,
+    })
+}
+
+fn copy_rect_rgba(pixels: &[u8], width: u32, rect: DirtyRect) -> Vec<u8> {
+    let width_usize = width as usize;
+    let x = rect.x as usize;
+    let y = rect.y as usize;
+    let w = rect.w as usize;
+    let h = rect.h as usize;
+    let mut region = Vec::with_capacity(w.saturating_mul(h).saturating_mul(4));
+    for row in y..y.saturating_add(h) {
+        let start = (row.saturating_mul(width_usize).saturating_add(x)).saturating_mul(4);
+        let end = start.saturating_add(w.saturating_mul(4));
+        if let Some(slice) = pixels.get(start..end) {
+            region.extend_from_slice(slice);
+        }
+    }
+    region
+}
+
 fn render_text_input(
     atlases: &ui2::Ui2FontCpuAtlases,
     text: &str,
@@ -324,6 +388,7 @@ pub async fn ui2_text_input_demo_task() {
     let mut keyboard_read_seq = 0u64;
     let mut last_click_seq = 0u32;
     let mut needs_render = true;
+    let mut rendered_pixels: Option<Vec<u8>> = None;
     let mut raw_events = [crate::r::keyboard::TrueosKeyboardOutputEvent::default(); 16];
 
     loop {
@@ -365,11 +430,34 @@ pub async fn ui2_text_input_demo_task() {
 
         if needs_render {
             cursor_idx = cursor_idx.min(char_count(text.as_str()));
-            let pixels = render_text_input(&atlases, text.as_str(), cursor_idx, focused);
-            if !surface.upload_rgba_owned(pixels, "ui2-text-input-demo") {
+            let next_pixels = render_text_input(&atlases, text.as_str(), cursor_idx, focused);
+            let uploaded = if let Some(prev_pixels) = rendered_pixels.as_ref() {
+                if let Some(dirty) = diff_dirty_rect_rgba(
+                    prev_pixels.as_slice(),
+                    next_pixels.as_slice(),
+                    UI2_TEXT_INPUT_RT_W,
+                    height,
+                ) {
+                    let region = copy_rect_rgba(next_pixels.as_slice(), UI2_TEXT_INPUT_RT_W, dirty);
+                    surface.upload_rgba_region(
+                        dirty.x,
+                        dirty.y,
+                        dirty.w,
+                        dirty.h,
+                        region.as_slice(),
+                        "ui2-text-input-demo-dirty",
+                    )
+                } else {
+                    true
+                }
+            } else {
+                surface.upload_rgba(next_pixels.as_slice(), "ui2-text-input-demo")
+            };
+            if !uploaded {
                 crate::log!("ui2-text-input-demo: upload failed tex={}\n", surface.tex_id());
                 break;
             }
+            rendered_pixels = Some(next_pixels);
             needs_render = false;
         }
 

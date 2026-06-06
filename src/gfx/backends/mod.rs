@@ -221,6 +221,19 @@ impl Backend {
             _ => None,
         }
     }
+
+    pub(crate) fn intel_image_gpgpu_mask_surface(
+        &self,
+        id: ImageId,
+    ) -> Option<crate::intel::gpgpu::GpgpuMask8Surface> {
+        match self {
+            #[cfg(not(feature = "trueos_rdp"))]
+            Backend::Intel(b) => b.image_gpgpu_mask_surface(id),
+            #[cfg(feature = "trueos_rdp")]
+            Backend::IntelRdp(b) => b.primary.image_gpgpu_mask_surface(id),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(feature = "trueos_rdp")]
