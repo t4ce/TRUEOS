@@ -233,36 +233,6 @@ pub(crate) fn submit_canvas3d_transform_smoke_once() -> bool {
         pad: 0,
     };
 
-    let translate_ok = submit_canvas3d_transform_smoke(
-        dev,
-        state,
-        upload_canvas3d_translate_q16_kernel(),
-        "translate_q16",
-        CANVAS3D_TRANSFORM_TRANSLATE_PRE_MARKER,
-        CANVAS3D_TRANSFORM_TRANSLATE_POST_MARKER,
-        translate,
-        direct_rcs_transform_translate_expected,
-    );
-    let scale_ok = submit_canvas3d_transform_smoke(
-        dev,
-        state,
-        upload_canvas3d_scale_q16_kernel(),
-        "scale_q16",
-        CANVAS3D_TRANSFORM_SCALE_PRE_MARKER,
-        CANVAS3D_TRANSFORM_SCALE_POST_MARKER,
-        scale,
-        direct_rcs_transform_scale_expected,
-    );
-    let rotate_ok = submit_canvas3d_transform_smoke(
-        dev,
-        state,
-        upload_canvas3d_rotate_quat_q16_kernel(),
-        "rotate_quat_q16",
-        CANVAS3D_TRANSFORM_ROTATE_PRE_MARKER,
-        CANVAS3D_TRANSFORM_ROTATE_POST_MARKER,
-        rotate_z_180,
-        direct_rcs_transform_rotate_z_180_expected,
-    );
     let fused_ok = submit_canvas3d_transform_fused_smoke(
         dev,
         state,
@@ -272,7 +242,7 @@ pub(crate) fn submit_canvas3d_transform_smoke_once() -> bool {
         translate,
     );
 
-    translate_ok && scale_ok && rotate_ok && fused_ok
+    fused_ok
 }
 
 pub(crate) fn submit_canvas3d_clip_box_q16_once() -> bool {
@@ -516,9 +486,8 @@ pub(crate) fn shell_cube20_project_spin(
         let y_spin_half_deg = (angle_deg / 2) % 180;
         let cube_rotate_q16 = shell_canvas3d_y_quat_q16(y_spin_half_deg, true);
         let tetra_rotate_q16 = shell_canvas3d_y_quat_q16(y_spin_half_deg, false);
-        let cube_scale_q16 =
+        let scene_scale_q16 =
             shell_canvas3d_cube_scale_pulse_q16(direct_rcs_elapsed_ms_since(total_start_tick));
-        let q = CANVAS3D_PROJECT_Q16_ONE;
         let Some(cube_transform_ms) = submit_canvas3d_transform_fused_frame_range(
             dev,
             state,
@@ -531,9 +500,9 @@ pub(crate) fn shell_cube20_project_spin(
             0,
             CUBE20_VISUAL_VERTEX_COUNT as u32,
             Canvas3dVec3Q16 {
-                x: cube_scale_q16,
-                y: cube_scale_q16,
-                z: cube_scale_q16,
+                x: scene_scale_q16,
+                y: scene_scale_q16,
+                z: scene_scale_q16,
                 pad: 0,
             },
             Canvas3dVec3Q16 {
@@ -565,9 +534,9 @@ pub(crate) fn shell_cube20_project_spin(
             TETRA10_BASE_VERTEX as u32,
             TETRA10_VERTEX_COUNT as u32,
             Canvas3dVec3Q16 {
-                x: q,
-                y: q,
-                z: q,
+                x: scene_scale_q16,
+                y: scene_scale_q16,
+                z: scene_scale_q16,
                 pad: 0,
             },
             Canvas3dVec3Q16 {
@@ -1010,142 +979,6 @@ fn shell_canvas3d_cpu_copy_projected_points_to_primary(
     (visible, stamped)
 }
 
-fn submit_canvas3d_transform_smoke(
-    dev: intel::Dev,
-    state: DirectRcsState,
-    upload: Option<UploadedKernelArtifact>,
-    label: &str,
-    pre_marker_value: u32,
-    post_marker_value: u32,
-    param_q16: Canvas3dVec3Q16,
-    expected_fn: fn(Canvas3dVec3Q16, Canvas3dVec3Q16) -> Canvas3dVec3Q16,
-) -> bool {
-    let Some(upload) = upload else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: canvas3d-transform-{} skipped reason=no-kernel-upload\n",
-            label,
-        );
-        return false;
-    };
-
-    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
-    let expected = direct_rcs_seed_canvas3d_transform(state, param_q16, expected_fn);
-    let params = Canvas3dTransformQ16Params {
-        src_gpu: DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
-        dst_gpu: CANVAS3D_PROJECT_OUT_GPU,
-        src_first_vertex: CANVAS3D_TRANSFORM_SRC_FIRST,
-        dst_first_vertex: CANVAS3D_TRANSFORM_DST_FIRST,
-        vertex_count: CANVAS3D_TRANSFORM_TEST_COUNT,
-        param_q16,
-    };
-    let forcewake_ok = direct_rcs_forcewake(dev);
-    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
-    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
-    let kernel_ppgtt_ok = ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    let src_ppgtt_ok = kernel_ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(
-            state,
-            DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
-            state.clear_test_phys,
-            CLEAR_RECT_TEST_BYTES,
-        );
-    let dst_ppgtt_ok = src_ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(
-            state,
-            CANVAS3D_PROJECT_OUT_GPU,
-            state.canvas3d_out_phys,
-            CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
-        );
-    let batch_ok = dst_ppgtt_ok
-        && direct_rcs_encode_canvas3d_transform_batch(
-            state,
-            upload,
-            params,
-            pre_marker_value,
-            post_marker_value,
-            CANVAS3D_PROJECT_VERTEX_BYTES,
-            CANVAS3D_PROJECT_VERTEX_BYTES,
-        );
-    let submit_start_tick = direct_rcs_now_tick();
-    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
-    let (observed, retire_ms) = if submitted {
-        direct_rcs_poll_result_slot_elapsed(
-            state,
-            CANVAS3D_TRANSFORM_POST_MARKER_SLOT,
-            post_marker_value,
-            submit_start_tick,
-        )
-    } else {
-        (0, 0)
-    };
-    let pre_marker = direct_rcs_read_result_slot(state, CANVAS3D_TRANSFORM_PRE_MARKER_SLOT);
-    let (matches, src_preserved, guards_ok, first, last) =
-        direct_rcs_read_canvas3d_transform_result(state, expected);
-    let retired = observed == post_marker_value;
-    let ok = retired
-        && pre_marker == pre_marker_value
-        && matches == CANVAS3D_TRANSFORM_TEST_COUNT as usize
-        && src_preserved == CANVAS3D_TRANSFORM_TEST_COUNT as usize
-        && guards_ok;
-
-    crate::log_info!(
-        target: "gpgpu";
-        "intel/gpgpu: canvas3d-transform-{} forcewake={} ggtt={} ppgtt={} kernel_ppgtt={} src_ppgtt={} dst_ppgtt={} batch={} submitted={} retired={} retire_ms={} ok={} matched={}/{} src_preserved={}/{} guards_ok={} src_first={} dst_first={} count={} pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} src_gpu=0x{:X} dst_gpu=0x{:X} first=[{}, {}, {}, {}] last=[{}, {}, {}, {}] param=[{}, {}, {}, {}] ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=direct-execlist no_guc_submit=1 next=project-or-visual\n",
-        label,
-        forcewake_ok as u8,
-        mapped_ok as u8,
-        ppgtt_ok as u8,
-        kernel_ppgtt_ok as u8,
-        src_ppgtt_ok as u8,
-        dst_ppgtt_ok as u8,
-        batch_ok as u8,
-        submitted as u8,
-        retired as u8,
-        retire_ms,
-        ok as u8,
-        matches,
-        CANVAS3D_TRANSFORM_TEST_COUNT,
-        src_preserved,
-        CANVAS3D_TRANSFORM_TEST_COUNT,
-        guards_ok as u8,
-        CANVAS3D_TRANSFORM_SRC_FIRST,
-        CANVAS3D_TRANSFORM_DST_FIRST,
-        CANVAS3D_TRANSFORM_TEST_COUNT,
-        pre_marker,
-        observed,
-        post_marker_value,
-        upload.gpu,
-        upload.gpu + 0x40,
-        DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
-        CANVAS3D_PROJECT_OUT_GPU,
-        first.x,
-        first.y,
-        first.z,
-        first.pad,
-        last.x,
-        last.y,
-        last.z,
-        last.pad,
-        param_q16.x,
-        param_q16.y,
-        param_q16.z,
-        param_q16.pad,
-        DIRECT_RCS_GPU_VA_RING_BASE,
-        DIRECT_RCS_GPU_VA_BATCH_BASE,
-        DIRECT_RCS_GPU_VA_RESULT_BASE,
-        intel::mmio_read(dev, RCS_RING_HEAD),
-        intel::mmio_read(dev, RCS_RING_TAIL),
-        intel::mmio_read(dev, RCS_RING_ACTHD),
-        intel::mmio_read(dev, RCS_RING_IPEIR),
-        intel::mmio_read(dev, RCS_RING_IPEHR),
-        intel::mmio_read(dev, RCS_RING_EIR),
-    );
-
-    ok
-}
-
 fn submit_canvas3d_transform_fused_smoke(
     dev: intel::Dev,
     state: DirectRcsState,
@@ -1287,97 +1120,6 @@ fn submit_canvas3d_transform_fused_smoke(
     );
 
     ok
-}
-
-fn submit_canvas3d_transform_frame(
-    dev: intel::Dev,
-    state: DirectRcsState,
-    upload: UploadedKernelArtifact,
-    src_gpu: u64,
-    src_phys: u64,
-    dst_gpu: u64,
-    dst_phys: u64,
-    param_q16: Canvas3dVec3Q16,
-    pre_marker_value: u32,
-    post_marker_value: u32,
-) -> Option<u64> {
-    submit_canvas3d_transform_frame_range(
-        dev,
-        state,
-        upload,
-        src_gpu,
-        src_phys,
-        dst_gpu,
-        dst_phys,
-        0,
-        0,
-        CANVAS3D_PROJECT_VERTEX_COUNT as u32,
-        param_q16,
-        pre_marker_value,
-        post_marker_value,
-    )
-}
-
-fn submit_canvas3d_transform_frame_range(
-    dev: intel::Dev,
-    state: DirectRcsState,
-    upload: UploadedKernelArtifact,
-    src_gpu: u64,
-    src_phys: u64,
-    dst_gpu: u64,
-    dst_phys: u64,
-    src_first_vertex: u32,
-    dst_first_vertex: u32,
-    vertex_count: u32,
-    param_q16: Canvas3dVec3Q16,
-    pre_marker_value: u32,
-    post_marker_value: u32,
-) -> Option<u64> {
-    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
-    let params = Canvas3dTransformQ16Params {
-        src_gpu,
-        dst_gpu,
-        src_first_vertex,
-        dst_first_vertex,
-        vertex_count,
-        param_q16,
-    };
-    let forcewake_ok = direct_rcs_forcewake(dev);
-    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
-    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
-    let kernel_ppgtt_ok = ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    let src_ppgtt_ok = kernel_ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, src_gpu, src_phys, CANVAS3D_PROJECT_VERTEX_BYTES);
-    let dst_ppgtt_ok = src_ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, dst_gpu, dst_phys, CANVAS3D_PROJECT_VERTEX_BYTES);
-    let batch_ok = dst_ppgtt_ok
-        && direct_rcs_encode_canvas3d_transform_batch(
-            state,
-            upload,
-            params,
-            pre_marker_value,
-            post_marker_value,
-            CANVAS3D_PROJECT_VERTEX_BYTES,
-            CANVAS3D_PROJECT_VERTEX_BYTES,
-        );
-    let submit_start_tick = direct_rcs_now_tick();
-    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
-    let (observed, retire_ms) = if submitted {
-        direct_rcs_poll_result_slot_elapsed(
-            state,
-            CANVAS3D_TRANSFORM_POST_MARKER_SLOT,
-            post_marker_value,
-            submit_start_tick,
-        )
-    } else {
-        (0, 0)
-    };
-    if observed == post_marker_value {
-        Some(retire_ms)
-    } else {
-        None
-    }
 }
 
 fn submit_canvas3d_transform_fused_frame_range(

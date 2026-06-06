@@ -7,11 +7,9 @@ use crate::intel::gpgpu::{
     GPGPU_SHELL_SURFACE_HEIGHT, GPGPU_SHELL_SURFACE_PITCH_BYTES, GPGPU_SHELL_SURFACE_WIDTH,
     GpgpuPoint, GpgpuRect, alpha_blend_worklist_probe_ok, alpha_blend_worklist_probe_ran,
     alpha_blend_worklist_rgba8_upload_status, canvas3d_project_rgba8_upload_status,
-    canvas3d_rotate_quat_q16_upload_status, canvas3d_scale_q16_upload_status,
-    canvas3d_transform_q16_upload_status, canvas3d_translate_q16_upload_status,
-    clear_rect_rgba8_white_upload_status, copy_rect_rgba8_upload_status,
-    copy_rect_rgba8_wide_upload_status, empty_eot_upload_status, fill_rect_rgba8_upload_status,
-    fill_rect_worklist_probe_ok, fill_rect_worklist_probe_ran,
+    canvas3d_transform_q16_upload_status, clear_rect_rgba8_white_upload_status,
+    copy_rect_rgba8_upload_status, copy_rect_rgba8_wide_upload_status, empty_eot_upload_status,
+    fill_rect_rgba8_upload_status, fill_rect_worklist_probe_ok, fill_rect_worklist_probe_ran,
     fill_rect_worklist_rgba8_upload_status, glyph_mask_rgba8_upload_status,
     present_rgba8_to_primary_xrgb_rect_upload_status, rect_worklist_probe_ready,
     shell_clear_white_rgba8, shell_copy_rgba8, shell_copy_scanout_center_rgba8,
@@ -263,12 +261,9 @@ fn print_status(io: &'static dyn ShellBackend2) {
     let empty = empty_eot_upload_status();
     let work = sprite64_worklist_rgba8_upload_status();
     let canvas = canvas3d_project_rgba8_upload_status();
-    let translate = canvas3d_translate_q16_upload_status();
-    let scale = canvas3d_scale_q16_upload_status();
-    let rotate = canvas3d_rotate_quat_q16_upload_status();
     let transform = canvas3d_transform_q16_upload_status();
     let msg = alloc::format!(
-        "gpgpu: copy_upload={} copy_wide_upload={} clear_upload={} fill_upload={} fill_worklist_upload={} fill_worklist_ran={} fill_worklist_probe={} alpha_worklist_upload={} alpha_worklist_ran={} alpha_worklist_probe={} rect_worklist_ready={} glyph_mask_upload={} present_xrgb_upload={} empty_upload={} worklist_upload={} canvas3d_upload={} transform_uploads={}/{}/{}/{} shell_surface={}x{} pitch={} gpu=0x008A0000",
+        "gpgpu: copy_upload={} copy_wide_upload={} clear_upload={} fill_upload={} fill_worklist_upload={} fill_worklist_ran={} fill_worklist_probe={} alpha_worklist_upload={} alpha_worklist_ran={} alpha_worklist_probe={} rect_worklist_ready={} glyph_mask_upload={} present_xrgb_upload={} empty_upload={} worklist_upload={} canvas3d_upload={} canvas3d_transform_upload={} shell_surface={}x{} pitch={} gpu=0x008A0000",
         artifact_status(copy.is_some()),
         artifact_status(copy_wide.is_some()),
         artifact_status(clear.is_some()),
@@ -285,9 +280,6 @@ fn print_status(io: &'static dyn ShellBackend2) {
         artifact_status(empty.is_some()),
         artifact_status(work.is_some()),
         artifact_status(canvas.is_some()),
-        artifact_status(translate.is_some()),
-        artifact_status(scale.is_some()),
-        artifact_status(rotate.is_some()),
         artifact_status(transform.is_some()),
         GPGPU_SHELL_SURFACE_WIDTH,
         GPGPU_SHELL_SURFACE_HEIGHT,

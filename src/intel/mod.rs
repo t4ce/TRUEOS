@@ -183,9 +183,6 @@ pub fn init_once() {
     let _ = self::gpgpu::upload_empty_eot_kernel();
     let _ = self::gpgpu::upload_sprite64_worklist_rgba8_kernel();
     let _ = self::gpgpu::upload_canvas3d_project_rgba8_kernel();
-    let _ = self::gpgpu::upload_canvas3d_translate_q16_kernel();
-    let _ = self::gpgpu::upload_canvas3d_scale_q16_kernel();
-    let _ = self::gpgpu::upload_canvas3d_rotate_quat_q16_kernel();
     let _ = self::gpgpu::upload_canvas3d_transform_q16_kernel();
     let _ = self::gpgpu::upload_canvas3d_clip_box_q16_kernel();
     let _ = self::gpgpu::submit_direct_rcs_smoke_once();
