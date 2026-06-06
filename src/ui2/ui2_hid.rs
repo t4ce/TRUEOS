@@ -228,8 +228,8 @@ fn ensure_cursor_index(state: &mut Ui2State, slot_id: u32) -> Option<usize> {
 }
 
 pub(super) fn note_selection_change(window: &mut Ui2Window) {
-    window.dirty = true;
-    window.content_present_dirty = false;
+    window.chrome_titlebar_dirty = true;
+    window.chrome_hover_clear_button = None;
     window.last_reason = "cursor-select";
 }
 
@@ -242,6 +242,7 @@ fn set_cursor_selected_window(state: &mut Ui2State, slot_id: u32, next_window_id
     }
 
     let mut changed = false;
+    let mut changed_window_ids = Vec::new();
     let top_z = state
         .windows
         .iter()
@@ -257,6 +258,7 @@ fn set_cursor_selected_window(state: &mut Ui2State, slot_id: u32, next_window_id
         {
             window.selected_cursor_slots.remove(pos);
             note_selection_change(window);
+            changed_window_ids.push(window.id);
             changed = true;
         }
     }
@@ -270,6 +272,7 @@ fn set_cursor_selected_window(state: &mut Ui2State, slot_id: u32, next_window_id
             {
                 window.selected_cursor_slots.push(slot_id);
                 note_selection_change(window);
+                changed_window_ids.push(window.id);
                 changed = true;
             }
             let next_z = top_z.saturating_add(1);
@@ -289,7 +292,19 @@ fn set_cursor_selected_window(state: &mut Ui2State, slot_id: u32, next_window_id
         if raised && next_window_id != 0 {
             refresh_window_hit_entries(state, next_window_id);
         }
-        UI2_DIRTY.store(true, Ordering::Release);
+        let titlebar_only =
+            !raised && crate::gfx::is_intel_active() && state.first_compose_signaled;
+        if titlebar_only {
+            state.chrome_overlay_dirty = true;
+        } else {
+            for window_id in changed_window_ids {
+                if let Some(window) = window_mut(state, window_id) {
+                    window.dirty = true;
+                    window.content_present_dirty = false;
+                }
+            }
+            UI2_DIRTY.store(true, Ordering::Release);
+        }
         crate::log!("ui2: cursor-select slot={} window={}\n", slot_id, next_window_id);
     }
     changed
@@ -517,16 +532,20 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
         note_cursor_overlay_dirty(state, "cursor-overlay");
     }
     if crate::gfx::is_intel_active() {
-        if hover_dirty_prev
-            .and_then(|(window_id, button)| decoration_hover_button_rect(state, window_id, button))
-            .is_some()
-            || hover_dirty_next
-                .and_then(|(window_id, button)| {
-                    decoration_hover_button_rect(state, window_id, button)
-                })
-                .is_some()
+        if let Some((window_id, button)) = hover_dirty_prev
+            && decoration_hover_button_rect(state, window_id, button).is_some()
         {
-            note_chrome_overlay_dirty(state);
+            let _ = note_window_chrome_hover_clear_dirty(
+                state,
+                window_id,
+                button,
+                "decor-button-hover",
+            );
+        }
+        if let Some((window_id, button)) = hover_dirty_next
+            && decoration_hover_button_rect(state, window_id, button).is_some()
+        {
+            let _ = note_window_titlebar_chrome_dirty(state, window_id, "decor-button-hover");
         }
     } else {
         if let Some((window_id, button)) = hover_dirty_prev {

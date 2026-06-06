@@ -188,6 +188,7 @@ pub fn init_once() {
     let _ = self::gpgpu::upload_canvas3d_transform_q16_kernel();
     let _ = self::gpgpu::upload_canvas3d_clip_box_q16_kernel();
     let _ = self::gpgpu::upload_canvas3d_plane_sample_rgba8_kernel();
+    let _ = self::gpgpu::upload_canvas3d_plane_fill_rgba8_kernel();
     if crate::allcaps::probes::INTEL_GPGPU_ARTIFACT_BOOT_SMOKETESTS {
         let _ = self::gpgpu::submit_direct_rcs_smoke_once();
         let _ = self::gpgpu::submit_empty_eot_walker_once();
@@ -210,6 +211,7 @@ pub fn init_once() {
         let _ = self::gpgpu::submit_canvas3d_transform_smoke_once();
         let _ = self::gpgpu::submit_canvas3d_clip_box_q16_once();
         let _ = self::gpgpu::submit_canvas3d_plane_sample_rgba8_once();
+        let _ = self::gpgpu::submit_canvas3d_plane_fill_rgba8_once();
     } else {
         crate::log!("intel/gpgpu: artifact boot smoketests skipped allcaps=0\n");
     }

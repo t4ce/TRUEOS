@@ -40,6 +40,7 @@ kernels=(
     canvas3d_transform_q16
     canvas3d_clip_box_q16
     canvas3d_plane_sample_rgba8
+    canvas3d_plane_fill_rgba8
 )
 
 for kernel in "${kernels[@]}"; do
