@@ -3,8 +3,10 @@
 // Contract:
 // - Stage1 affine plane patch worklist fill: each descriptor is one 3D plane
 //   patch with up to four local half-space cuts.
-// - Descriptors are processed in order. Each descriptor uses all SIMD16 lanes
-//   across its pixels, which keeps painter-order behavior simple for bringup.
+// - One work item covers a 4x8 pixel tile. The walker is flattened onto X,
+//   because this baremetal path has proven X global ids; Y/Z stay at 1.
+// - Each pixel worker walks descriptors in order, preserving painter-order
+//   behavior while still fanning the expensive plane math across the surface.
 // - One destination RGBA8/XRGB-style surface per dispatch.
 // - Camera convention matches canvas3d_project_rgba8:
 //     screen_x = center_x + x * focal / z
@@ -15,6 +17,8 @@
 //   with a,b,c in Q16.
 
 #define PATCH_DESC_DWORDS 40u
+#define PATCH_TILE_PIXELS_PER_LANE 4u
+#define PATCH_TILE_ROWS 8u
 
 static inline long dot3_q16(int4 a, int4 b)
 {
@@ -66,8 +70,8 @@ __kernel void canvas3d_plane_patch_worklist_rgba8(
 {
     (void)unused_src;
 
-    uint lane = get_global_id(0);
-    if (lane >= 16u) {
+    uint work_index = get_global_id(0);
+    if (desc_count == 0u) {
         return;
     }
 
@@ -112,6 +116,18 @@ __kernel void canvas3d_plane_patch_worklist_rgba8(
             max_h = dst_height - rect_y;
         }
 
+        uint tile_cols = (max_w + PATCH_TILE_PIXELS_PER_LANE - 1u) / PATCH_TILE_PIXELS_PER_LANE;
+        uint tile_rows = (max_h + PATCH_TILE_ROWS - 1u) / PATCH_TILE_ROWS;
+        if (work_index >= tile_cols * tile_rows) {
+            continue;
+        }
+
+        uint tile_x = (work_index % tile_cols) * PATCH_TILE_PIXELS_PER_LANE;
+        uint tile_y = (work_index / tile_cols) * PATCH_TILE_ROWS;
+        if (tile_x >= max_w || tile_y >= max_h) {
+            continue;
+        }
+
         int center_x = (int)(canvas_width >> 1);
         int center_y = (int)(canvas_height >> 1);
         int4 normal_q16 = cross3_q16(axis_u_q16, axis_v_q16);
@@ -125,54 +141,61 @@ __kernel void canvas3d_plane_patch_worklist_rgba8(
         }
 
         uint cuts = min(constraint_count, 4u);
-        uint total = max_w * max_h;
-        for (uint offset = lane; offset < total; offset += 16u) {
-            uint lx = offset % max_w;
-            uint ly = offset / max_w;
-            uint sx_u = rect_x + lx;
-            uint sy_u = rect_y + ly;
-            int sx = (int)sx_u;
-            int sy = (int)sy_u;
-
-            int4 ray_q16;
-            ray_q16.x = (int)((((long)(sx - center_x)) << 16) / (long)focal);
-            ray_q16.y = (int)((((long)(center_y - sy)) << 16) / (long)focal);
-            ray_q16.z = 65536;
-            ray_q16.w = 0;
-
-            long denom = dot3_q16(normal_q16, ray_q16);
-            if (denom == 0) {
-                continue;
+        for (uint row = 0u; row < PATCH_TILE_ROWS; row++) {
+            uint ly = tile_y + row;
+            if (ly >= max_h) {
+                break;
             }
-            long t_q16 = (plane_dot << 16) / denom;
-            if (t_q16 <= 0) {
-                continue;
-            }
+            for (uint pixel = 0u; pixel < PATCH_TILE_PIXELS_PER_LANE; pixel++) {
+                uint lx = tile_x + pixel;
+                if (lx >= max_w) {
+                    continue;
+                }
+                uint sx_u = rect_x + lx;
+                uint sy_u = rect_y + ly;
+                int sx = (int)sx_u;
+                int sy = (int)sy_u;
 
-            int4 hit_q16;
-            hit_q16.x = (int)q16_mul_long(ray_q16.x, t_q16);
-            hit_q16.y = (int)q16_mul_long(ray_q16.y, t_q16);
-            hit_q16.z = (int)q16_mul_long(ray_q16.z, t_q16);
-            hit_q16.w = 0;
+                int4 ray_q16;
+                ray_q16.x = (int)((((long)(sx - center_x)) << 16) / (long)focal);
+                ray_q16.y = (int)((((long)(center_y - sy)) << 16) / (long)focal);
+                ray_q16.z = 65536;
+                ray_q16.w = 0;
 
-            int4 delta_q16;
-            delta_q16.x = hit_q16.x - origin_q16.x;
-            delta_q16.y = hit_q16.y - origin_q16.y;
-            delta_q16.z = hit_q16.z - origin_q16.z;
-            delta_q16.w = 0;
+                long denom = dot3_q16(normal_q16, ray_q16);
+                if (denom == 0) {
+                    continue;
+                }
+                long t_q16 = (plane_dot << 16) / denom;
+                if (t_q16 <= 0) {
+                    continue;
+                }
 
-            long du = dot3_q16(delta_q16, axis_u_q16);
-            long dv = dot3_q16(delta_q16, axis_v_q16);
-            int u_q16 = (int)(((du * vv - dv * uv) << 16) / det);
-            int v_q16 = (int)(((dv * uu - du * uv) << 16) / det);
+                int4 hit_q16;
+                hit_q16.x = (int)q16_mul_long(ray_q16.x, t_q16);
+                hit_q16.y = (int)q16_mul_long(ray_q16.y, t_q16);
+                hit_q16.z = (int)q16_mul_long(ray_q16.z, t_q16);
+                hit_q16.w = 0;
 
-            int keep = 1;
-            if (cuts > 0u) keep &= constraint_ok(constraint0_q16, u_q16, v_q16);
-            if (cuts > 1u) keep &= constraint_ok(constraint1_q16, u_q16, v_q16);
-            if (cuts > 2u) keep &= constraint_ok(constraint2_q16, u_q16, v_q16);
-            if (cuts > 3u) keep &= constraint_ok(constraint3_q16, u_q16, v_q16);
-            if (keep) {
-                dst_rgba[sy_u * pitch_pixels + sx_u] = color_rgba;
+                int4 delta_q16;
+                delta_q16.x = hit_q16.x - origin_q16.x;
+                delta_q16.y = hit_q16.y - origin_q16.y;
+                delta_q16.z = hit_q16.z - origin_q16.z;
+                delta_q16.w = 0;
+
+                long du = dot3_q16(delta_q16, axis_u_q16);
+                long dv = dot3_q16(delta_q16, axis_v_q16);
+                int u_q16 = (int)(((du * vv - dv * uv) << 16) / det);
+                int v_q16 = (int)(((dv * uu - du * uv) << 16) / det);
+
+                int keep = 1;
+                if (cuts > 0u) keep &= constraint_ok(constraint0_q16, u_q16, v_q16);
+                if (cuts > 1u) keep &= constraint_ok(constraint1_q16, u_q16, v_q16);
+                if (cuts > 2u) keep &= constraint_ok(constraint2_q16, u_q16, v_q16);
+                if (cuts > 3u) keep &= constraint_ok(constraint3_q16, u_q16, v_q16);
+                if (keep) {
+                    dst_rgba[sy_u * pitch_pixels + sx_u] = color_rgba;
+                }
             }
         }
     }

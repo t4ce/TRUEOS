@@ -19,12 +19,10 @@ const UI2_PALATINO_BUCKET_DEMO_VARIANT_COUNT: usize = 1;
 const UI2_ATHLAS_BUCKET_DEMO_WINDOW_Z: i16 = 32;
 const UI2_ATHLAS_BUCKET_DEMO_CONTENT_ID_BASE: u32 = 40;
 const UI2_ATHLAS_BUCKET_DEMO_TILE_TEX_ID_BASE: u32 = 4_800;
-const UI2_ATHLAS_BUCKET_DEMO_WINDOW_ALPHA: u8 = 220;
+const UI2_ATHLAS_BUCKET_DEMO_WINDOW_ALPHA: u8 = 0xFF;
 const UI2_ATHLAS_BUCKET_DEMO_WINDOW_SIZE_PX: f32 = 400.0;
-const UI2_ATHLAS_BUCKET_DEMO_LIGHT_BG_RGBA: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
-const UI2_ATHLAS_BUCKET_DEMO_LIGHT_FG_RGBA: [u8; 4] = [0x16, 0x18, 0x1E, 0xFF];
-const UI2_ATHLAS_BUCKET_DEMO_DARK_BG_RGBA: [u8; 4] = [0x08, 0x09, 0x0C, 0xFF];
-const UI2_ATHLAS_BUCKET_DEMO_DARK_FG_RGBA: [u8; 4] = [0xF4, 0xF6, 0xFA, 0xFF];
+const UI2_ATHLAS_BUCKET_DEMO_BG_RGBA: [u8; 4] = [0x00, 0x00, 0x00, 0xFF];
+const UI2_ATHLAS_BUCKET_DEMO_FG_RGBA: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
 const UI2_ATHLAS_BUCKET_DEMO_GAP_PX: u32 = 12;
 const UI2_ATHLAS_BUCKET_DEMO_DEFER_MS: u64 = 16;
 const UI2_ATHLAS_BUCKET_DEMO_UPLOAD_YIELD_MS: u64 = 1;
@@ -114,11 +112,8 @@ fn athlas_variant_title(size_case: usize) -> Option<&'static str> {
 }
 
 fn athlas_variant_colors(size_case: usize) -> ([u8; 4], [u8; 4]) {
-    if size_case == 0 {
-        (UI2_ATHLAS_BUCKET_DEMO_LIGHT_BG_RGBA, UI2_ATHLAS_BUCKET_DEMO_LIGHT_FG_RGBA)
-    } else {
-        (UI2_ATHLAS_BUCKET_DEMO_DARK_BG_RGBA, UI2_ATHLAS_BUCKET_DEMO_DARK_FG_RGBA)
-    }
+    let _ = size_case;
+    (UI2_ATHLAS_BUCKET_DEMO_BG_RGBA, UI2_ATHLAS_BUCKET_DEMO_FG_RGBA)
 }
 
 fn athlas_variant_content_id(size_case: usize) -> u32 {
@@ -299,10 +294,17 @@ fn bucket_demo_window_size(spec: &BucketDemoSpec, content_w: u32, content_h: u32
 }
 
 fn bucket_demo_window_alpha(spec: &BucketDemoSpec) -> u8 {
-    if spec.start_minimized {
-        UI2_ATHLAS_BUCKET_DEMO_WINDOW_ALPHA
-    } else {
-        0xFF
+    let _ = spec;
+    UI2_ATHLAS_BUCKET_DEMO_WINDOW_ALPHA
+}
+
+fn normalize_bucket_demo_rgba_to_white_coverage(rgba: &mut [u8]) {
+    for px in rgba.chunks_exact_mut(4) {
+        let coverage = if px[3] < 0xFF { px[3] } else { px[0] };
+        px[0] = 0xFF;
+        px[1] = 0xFF;
+        px[2] = 0xFF;
+        px[3] = coverage;
     }
 }
 
@@ -379,7 +381,8 @@ async fn run_bucket_demo(
 
     Timer::after(EmbassyDuration::from_millis(UI2_ATHLAS_BUCKET_DEMO_DEFER_MS)).await;
 
-    for (bucket, image) in decoded.into_iter().enumerate() {
+    for (bucket, mut image) in decoded.into_iter().enumerate() {
+        normalize_bucket_demo_rgba_to_white_coverage(image.rgba.as_mut_slice());
         if !crate::r::io::cabi::queue_texture_mask_image_upload_copy(
             bucket_demo_tile_tex_id(&spec, bucket),
             image.width,
@@ -504,8 +507,7 @@ async fn run_palatino_bucket_demo() {
     let Some(decoded) = decode_palatino_bucket_variant() else {
         return;
     };
-    let (bg_rgba, fg_rgba) =
-        (UI2_ATHLAS_BUCKET_DEMO_LIGHT_BG_RGBA, UI2_ATHLAS_BUCKET_DEMO_LIGHT_FG_RGBA);
+    let (bg_rgba, fg_rgba) = (UI2_ATHLAS_BUCKET_DEMO_BG_RGBA, UI2_ATHLAS_BUCKET_DEMO_FG_RGBA);
     run_bucket_demo(palatino_demo_spec(), decoded, bg_rgba, fg_rgba).await;
 }
 

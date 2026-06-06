@@ -13,7 +13,6 @@ pub enum Ui2DemoTexId {
     TextInput = 4_726,
     AnalogClock = 4_727,
     Gboi = 4_728,
-    RenderAlbum = 4_729,
     IntelCanvas3d = 4_730,
     IntelCanvas3dPlanePatch = 4_731,
 }

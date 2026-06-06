@@ -41,6 +41,15 @@ const UI2_OFFLINE_PILL_GRAD_RIGHT: (u8, u8, u8, u8) = (0xF2, 0xF4, 0xF2, 0xFF);
 const UI2_OFFLINE_PILL_TEXT: (u8, u8, u8, u8) = (0x30, 0x30, 0x30, 0xFF);
 /// Play button: ▶ U+25B6
 const UI2_OFFLINE_PLAY_TWEMOJI: char = '\u{23EF}';
+const UI2_OFFLINE_APP_FALLBACK_TWEMOJI: char = '\u{25FC}';
+const UI2_OFFLINE_APP_FONT_TWEMOJI: char = '\u{1F524}';
+const UI2_OFFLINE_APP_CANVAS_TWEMOJI: char = '\u{1F4A0}';
+const UI2_OFFLINE_APP_PLAYER_TWEMOJI: char = '\u{24C2}';
+const UI2_OFFLINE_APP_RAPLE_TWEMOJI: char = '\u{26A1}';
+const UI2_OFFLINE_APP_SHELL_TWEMOJI: char = '\u{1F40C}';
+const UI2_OFFLINE_APP_SWARM_TWEMOJI: char = '\u{1F47D}';
+const UI2_OFFLINE_APP_SMILEY_TWEMOJI: char = '\u{1F600}';
+const UI2_OFFLINE_APP_PLAYABLE_TWEMOJI: char = '\u{23F5}';
 
 /// One entry in the offline dock.
 #[derive(Copy, Clone)]
@@ -114,6 +123,106 @@ fn sync_offline_pill_hit_slots(pills: &[OfflinePillSlot]) {
     *OFFLINE_PILLS.lock() = pills.to_vec();
 }
 
+fn offline_pill_play_rect(pill: &OfflinePillSlot) -> Ui2Rect {
+    Ui2Rect::new(
+        pill.rect.x + pill.rect.w - UI2_OFFLINE_PILL_PLAY_SIZE,
+        pill.rect.y,
+        UI2_OFFLINE_PILL_PLAY_SIZE,
+        UI2_OFFLINE_PILL_PLAY_SIZE,
+    )
+}
+
+pub(super) fn offline_dock_play_button_hover_rect_at(x: f32, y: f32) -> Option<Ui2Rect> {
+    let pills = OFFLINE_PILLS.lock().clone();
+    for pill in pills.iter() {
+        let play_rect = offline_pill_play_rect(pill);
+        if rect_contains_point(play_rect, x, y) {
+            return Some(play_rect);
+        }
+    }
+    None
+}
+
+fn offline_pill_title<'a>(state: &'a Ui2State, pill: &OfflinePillSlot) -> &'a str {
+    if pill.window_id != 0 {
+        state
+            .windows
+            .iter()
+            .find(|w| w.id == pill.window_id)
+            .map(|w| w.title.as_str())
+            .unwrap_or("?")
+    } else if pill.task_index < usize::MAX {
+        crate::r::spawn_service::task_name_by_index(pill.task_index).unwrap_or("?")
+    } else {
+        "?"
+    }
+}
+
+fn offline_task_icon_char(task_name: &str) -> char {
+    if task_name.contains("athlas")
+        || task_name.contains("palatino")
+        || task_name.contains("twemoji")
+        || task_name.contains("text-input")
+    {
+        UI2_OFFLINE_APP_FONT_TWEMOJI
+    } else if task_name.contains("coreticks")
+        || task_name.contains("canvas3d")
+        || task_name.contains("mandelbrot")
+        || task_name.contains("render-album")
+    {
+        UI2_OFFLINE_APP_CANVAS_TWEMOJI
+    } else if task_name.contains("player") {
+        UI2_OFFLINE_APP_PLAYER_TWEMOJI
+    } else if task_name.contains("raple") {
+        UI2_OFFLINE_APP_RAPLE_TWEMOJI
+    } else if task_name.contains("shell") {
+        UI2_OFFLINE_APP_SHELL_TWEMOJI
+    } else if task_name.contains("swarm") {
+        UI2_OFFLINE_APP_SWARM_TWEMOJI
+    } else if task_name.contains("smiley") {
+        UI2_OFFLINE_APP_SMILEY_TWEMOJI
+    } else if task_name.contains("gboi") {
+        UI2_OFFLINE_APP_PLAYABLE_TWEMOJI
+    } else {
+        UI2_OFFLINE_APP_FALLBACK_TWEMOJI
+    }
+}
+
+fn offline_pill_icon_char(state: &Ui2State, pill: &OfflinePillSlot) -> char {
+    if pill.window_id != 0
+        && let Some(ch) = state
+            .windows
+            .iter()
+            .find(|w| w.id == pill.window_id)
+            .filter(|w| w.title_icon_visible && w.title_twemoji != '\0')
+            .map(|w| w.title_twemoji)
+    {
+        return ch;
+    }
+    if pill.task_index < usize::MAX
+        && let Some(task_name) = crate::r::spawn_service::task_name_by_index(pill.task_index)
+    {
+        return offline_task_icon_char(task_name);
+    }
+    UI2_OFFLINE_APP_FALLBACK_TWEMOJI
+}
+
+fn push_offline_twemoji_sprite64_placement(
+    out: &mut Vec<crate::intel::gpgpu::GpgpuTwemojiSprite64Placement>,
+    ch: char,
+    rect: Ui2Rect,
+) -> bool {
+    if super::ui2_win_deco::push_chrome_twemoji_sprite64_placement(out, ch, rect) {
+        return true;
+    }
+    ch != UI2_OFFLINE_APP_FALLBACK_TWEMOJI
+        && super::ui2_win_deco::push_chrome_twemoji_sprite64_placement(
+            out,
+            UI2_OFFLINE_APP_FALLBACK_TWEMOJI,
+            rect,
+        )
+}
+
 pub(super) fn collect_offline_dock_solid_rects(
     state: &Ui2State,
     out: &mut Vec<crate::intel::gpgpu::GpgpuSolidRect>,
@@ -161,6 +270,26 @@ pub(super) fn collect_offline_dock_gradient_rects(
     out.len().saturating_sub(before)
 }
 
+pub(super) fn collect_offline_dock_hover_gradient_rects(
+    state: &Ui2State,
+    out: &mut Vec<crate::intel::gpgpu::GpgpuGradientRect>,
+) -> usize {
+    let before = out.len();
+    for cursor in &state.cursors {
+        let Some(hover_rect) = cursor.hover_offline_dock_play_rect else {
+            continue;
+        };
+        let _ = super::ui2_win_deco::push_chrome_gradient_rect(
+            out,
+            hover_rect,
+            (0x00, 0x00, 0x00, 0xFF),
+            (0xFF, 0xFF, 0xFF, 0xFF),
+            true,
+        );
+    }
+    out.len().saturating_sub(before)
+}
+
 pub(super) fn collect_offline_dock_sprite64_placements(
     state: &Ui2State,
     out: &mut Vec<crate::intel::gpgpu::GpgpuTwemojiSprite64Placement>,
@@ -173,17 +302,20 @@ pub(super) fn collect_offline_dock_sprite64_placements(
     }
 
     for pill in pills.iter() {
-        let play_rect = Ui2Rect::new(
-            pill.rect.x + pill.rect.w - UI2_OFFLINE_PILL_PLAY_SIZE,
+        let icon_rect = Ui2Rect::new(
+            pill.rect.x,
             pill.rect.y,
             UI2_OFFLINE_PILL_PLAY_SIZE,
             UI2_OFFLINE_PILL_PLAY_SIZE,
         );
-        let _ = super::ui2_win_deco::push_chrome_twemoji_sprite64_placement(
+        let _ = push_offline_twemoji_sprite64_placement(
             out,
-            UI2_OFFLINE_PLAY_TWEMOJI,
-            play_rect,
+            offline_pill_icon_char(state, pill),
+            icon_rect,
         );
+
+        let play_rect = offline_pill_play_rect(pill);
+        let _ = push_offline_twemoji_sprite64_placement(out, UI2_OFFLINE_PLAY_TWEMOJI, play_rect);
     }
     sync_offline_pill_hit_slots(&pills);
     out.len().saturating_sub(before)
@@ -216,23 +348,33 @@ pub(super) fn draw_offline_dock(state: &Ui2State) {
             state.view_h,
         );
 
-        // Title text (left side of pill).
-        let title: &str = if pill.window_id != 0 {
-            state
-                .windows
-                .iter()
-                .find(|w| w.id == pill.window_id)
-                .map(|w| w.title.as_str())
-                .unwrap_or("?")
-        } else if pill.task_index < usize::MAX {
-            crate::r::spawn_service::task_name_by_index(pill.task_index).unwrap_or("?")
-        } else {
-            "?"
-        };
-        let title_rect = Ui2Rect::new(
-            pill.rect.x + 4.0,
+        // App icon (left side of pill).
+        let icon_rect = Ui2Rect::new(
+            pill.rect.x,
             pill.rect.y,
-            (pill.rect.w - UI2_OFFLINE_PILL_PLAY_SIZE - 8.0).max(1.0),
+            UI2_OFFLINE_PILL_PLAY_SIZE,
+            UI2_OFFLINE_PILL_PLAY_SIZE,
+        );
+        if !draw_window_twemoji_button_standalone(
+            state,
+            icon_rect,
+            offline_pill_icon_char(state, pill),
+            0xFF,
+        ) {
+            let _ = draw_window_twemoji_button_standalone(
+                state,
+                icon_rect,
+                UI2_OFFLINE_APP_FALLBACK_TWEMOJI,
+                0xFF,
+            );
+        }
+
+        // Title text (between app icon and play button).
+        let title = offline_pill_title(state, pill);
+        let title_rect = Ui2Rect::new(
+            pill.rect.x + UI2_OFFLINE_PILL_PLAY_SIZE + 4.0,
+            pill.rect.y,
+            (pill.rect.w - (UI2_OFFLINE_PILL_PLAY_SIZE * 2.0) - 8.0).max(1.0),
             pill.rect.h,
         );
         let title_display = pill_title_with_ellipsis(title, title_rect.w);
@@ -248,12 +390,22 @@ pub(super) fn draw_offline_dock(state: &Ui2State) {
         );
 
         // Play button (right side of pill).
-        let play_rect = Ui2Rect::new(
-            pill.rect.x + pill.rect.w - UI2_OFFLINE_PILL_PLAY_SIZE,
-            pill.rect.y,
-            UI2_OFFLINE_PILL_PLAY_SIZE,
-            UI2_OFFLINE_PILL_PLAY_SIZE,
-        );
+        let play_rect = offline_pill_play_rect(pill);
+        if state
+            .cursors
+            .iter()
+            .any(|cursor| cursor.hover_offline_dock_play_rect == Some(play_rect))
+        {
+            let _ = crate::gfx::lyon::draw_solid_rect_no_present(
+                play_rect.x,
+                play_rect.y,
+                play_rect.w,
+                play_rect.h,
+                (0x00, 0x00, 0x00, 0x40),
+                state.view_w,
+                state.view_h,
+            );
+        }
         draw_window_twemoji_button_standalone(state, play_rect, UI2_OFFLINE_PLAY_TWEMOJI, 0xFF);
     }
 

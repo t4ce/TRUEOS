@@ -386,9 +386,10 @@ impl IntelGfxBackend {
     }
 
     pub(crate) fn image_gpgpu_mask_surface(
-        &self,
+        &mut self,
         id: ImageId,
     ) -> Option<crate::intel::gpgpu::GpgpuMask8Surface> {
+        let _ = self.ensure_image_mask_dma(id);
         self.image(id)?.gpgpu_mask_surface()
     }
 
