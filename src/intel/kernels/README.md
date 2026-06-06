@@ -39,9 +39,11 @@ binding, parameter packing, and walker submission.
 The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 
 - `fill_rect_rgba8.cl`: parameterized RGBA8 fill
+- `fill_rect_worklist_rgba8.cl`: descriptor worklist RGBA8 fills; one SIMD16 walker consumes up to 16 rect descriptors and each lane handles one descriptor stream
 - `fill_circle_rgba8.cl`: parameterized RGBA8 circle fill clipped by a rect
 - `blit_rgba8_nearest.cl`: nearest-neighbor RGBA8 rect blit
 - `alpha_blend_rgba8_over.cl`: source-over RGBA8 blend
+- `alpha_blend_worklist_rgba8.cl`: descriptor worklist source-over RGBA8 blends; source/destination rects are unscaled and batched like the fill worklist
 - `glyph_mask_rgba8.cl`: 8-bit coverage mask blended with packed RGBA8 color
 - `present_rgba8_to_primary_xrgb_rect.cl`: RGBA8 scene rect to primary XRGB rect with optional source Y flip
 - `stamp_mandel_rgba8.cl`: ten-iteration Mandelbrot stamp using destination x/y as both stamp origin and view offset
@@ -71,6 +73,23 @@ padding before the first `int4`, then writes each additional `int4` on the next
 16-byte slot. The current artifact metadata reports by-value vector offsets at
 80, 96, and 112 bytes.
 
+The rect worklist evo kernels share a descriptor-driven shape with the
+`sprite64_worklist_rgba8.cl` path:
+
+- the CPU owns clipping, surface binding, descriptor allocation, and descriptor
+  chunking
+- one SIMD16 walker receives a descriptor slice through `desc_base` and
+  `desc_count`
+- lane `N` processes descriptors `desc_base + N`, `desc_base + N + 16`, and so
+  on
+- `fill_rect_worklist_rgba8.cl` descriptors are `{ dst_xy, size, color_rgba }`
+- `alpha_blend_worklist_rgba8.cl` descriptors are `{ src_xy, dst_xy, size }`
+- packed coordinates use 16-bit lanes; destination coordinates are signed
+
+These are intended to replace the old single-rect stage-1 fill/alpha path for
+batched UI2 chrome/overlay subsets while keeping the smaller kernels available
+for targeted bring-up.
+
 `artifacts/adls/copy_rect_rgba8.bin` is the current Alder Lake S build produced
 with Intel `ocloc`/IGC. Its SHA-256 is:
 
@@ -83,6 +102,20 @@ SHA-256 is:
 
 ```text
 c94853560fdcad31703b8d556f303df1922ec645c236b55113a08b1ac367badd
+```
+
+`artifacts/adls/fill_rect_worklist_rgba8.bin` is the descriptor fill evo build.
+Its SHA-256 is:
+
+```text
+07a38da4fc0272f8ed9bffd2833965f2cc937da52af8f353e5543d77b280e246
+```
+
+`artifacts/adls/alpha_blend_worklist_rgba8.bin` is the descriptor source-over
+evo build. Its SHA-256 is:
+
+```text
+3485f2283c1510df619a1159d454af871cb847e0c79ee012f9e95da079d088c9
 ```
 
 Regenerate it with:

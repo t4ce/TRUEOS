@@ -349,9 +349,7 @@ pub(super) fn draw_window_chrome(
             state.view_h,
         );
     }
-    if !skip_lyon_rects
-        && let Some(bottom_bar) = window_bottom_bar_rect(state, window)
-    {
+    if !skip_lyon_rects && let Some(bottom_bar) = window_bottom_bar_rect(state, window) {
         let _ = crate::gfx::lyon::draw_horizontal_three_stop_rect_no_present(
             bottom_bar.x,
             bottom_bar.y,
@@ -521,7 +519,12 @@ pub(super) fn draw_window_chrome(
             Ui2SystemButtonAction::ToggleComposition,
             skip_twemoji_sprite64,
         );
-        draw_window_system_button(state, window, Ui2SystemButtonAction::Fork, skip_twemoji_sprite64);
+        draw_window_system_button(
+            state,
+            window,
+            Ui2SystemButtonAction::Fork,
+            skip_twemoji_sprite64,
+        );
         draw_window_system_button(
             state,
             window,
@@ -546,7 +549,12 @@ pub(super) fn draw_window_chrome(
             Ui2SystemButtonAction::PreserveVm,
             skip_twemoji_sprite64,
         );
-        draw_window_system_button(state, window, Ui2SystemButtonAction::Close, skip_twemoji_sprite64);
+        draw_window_system_button(
+            state,
+            window,
+            Ui2SystemButtonAction::Close,
+            skip_twemoji_sprite64,
+        );
     }
     if window.decoration_mode == Ui2WindowDecorationMode::System {
         if !skip_lyon_rects {
@@ -609,11 +617,8 @@ pub(super) fn collect_window_chrome_solid_rects(
         0.0
     };
     if titleband_h > 0.0 {
-        let _ = push_chrome_solid_rect(
-            out,
-            Ui2Rect::new(rect.x, rect.y, rect.w, titleband_h),
-            white,
-        );
+        let _ =
+            push_chrome_solid_rect(out, Ui2Rect::new(rect.x, rect.y, rect.w, titleband_h), white);
     }
 
     let body_y = rect.y + titleband_h;
@@ -765,13 +770,17 @@ pub(super) fn collect_window_chrome_sprite64_placements(
         if titleband_h > 0.0 {
             let has_title_texture_icon =
                 window.title_icon_visible && texture_is_drawable(window.title_icon_tex_id);
-            let has_title_twemoji =
-                window.title_icon_visible && !has_title_texture_icon && window.title_twemoji != '\0';
+            let has_title_twemoji = window.title_icon_visible
+                && !has_title_texture_icon
+                && window.title_twemoji != '\0';
             if has_title_twemoji {
                 let title_icon_rect =
                     Ui2Rect::new(rect.x, rect.y, titleband_h.max(1.0), titleband_h.max(1.0));
-                let _ =
-                    push_chrome_twemoji_sprite64_placement(out, window.title_twemoji, title_icon_rect);
+                let _ = push_chrome_twemoji_sprite64_placement(
+                    out,
+                    window.title_twemoji,
+                    title_icon_rect,
+                );
             }
         }
 

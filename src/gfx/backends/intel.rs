@@ -1179,9 +1179,7 @@ impl IntelGfxBackend {
         }
         let prefer_cpu_alpha_rect_primary =
             blend == BlendDesc::straight_alpha() && !full_scene_alpha_candidate;
-        if !prefer_cpu_alpha_rect_primary
-            && let Some(src_surface) = source.gpgpu_surface()
-        {
+        if !prefer_cpu_alpha_rect_primary && let Some(src_surface) = source.gpgpu_surface() {
             if full_scene_alpha_candidate && full_scene_alpha_quad_ok {
                 if let Some(stats) = crate::intel::gpgpu::alpha_blend_rgba8_over_primary_stats(
                     src_surface,
@@ -3013,8 +3011,14 @@ fn clip_texture_scale_quad_to_scissor(
         .saturating_mul(quad.src_h as u64)
         .checked_div(quad.dst_h as u64)
         .and_then(|v| u32::try_from(v).ok())?;
-    let src_w = quad.src_w.saturating_sub(src_x0).saturating_sub(src_x1_trim);
-    let src_h = quad.src_h.saturating_sub(src_y0).saturating_sub(src_y1_trim);
+    let src_w = quad
+        .src_w
+        .saturating_sub(src_x0)
+        .saturating_sub(src_x1_trim);
+    let src_h = quad
+        .src_h
+        .saturating_sub(src_y0)
+        .saturating_sub(src_y1_trim);
     if src_w == 0 || src_h == 0 {
         return None;
     }

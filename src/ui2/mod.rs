@@ -1398,21 +1398,28 @@ fn draw_chrome_solid_rects_intel_gpgpu(state: &Ui2State) -> bool {
     let log_n = UI2_CHROME_SOLID_RECT_LOGS.fetch_add(1, Ordering::Relaxed);
     if log_n < 16 || !ok {
         crate::log!(
-            "ui2: chrome solid-rects-gpgpu ok={} windows={} rects={} fill_spans={} blend_spans={} blend_submits={} present={}\n",
+            "ui2: chrome solid-rects-gpgpu ok={} windows={} rects={} artifacts=fill_rect_worklist_rgba8,alpha_blend_worklist_rgba8 fill_descs={} fill_walkers={} fill_submits={} fill_ms={} blend_descs={} blend_walkers={} blend_submits={} blend_ms={} present={} present_ms={} total_ms={}\n",
             ok as u8,
             window_count,
             result.rects,
-            result.fill_spans,
-            result.blend_spans,
+            result.fill_descs,
+            result.fill_walkers,
+            result.fill_submits,
+            result.fill_ms,
+            result.blend_descs,
+            result.blend_walkers,
             result.blend_submits,
-            result.presented as u8
+            result.blend_ms,
+            result.presented as u8,
+            result.present_ms,
+            result.total_ms
         );
     }
     ok
 }
 
 fn intel_ui2_chrome_rect_path_enabled() -> bool {
-    false
+    true
 }
 
 fn draw_cursor_overlay_layer(state: &Ui2State) {
@@ -3024,13 +3031,7 @@ fn draw_window_frame(
     let chrome_started_at = Instant::now();
     let rect = effective_window_rect(state, window);
     let content_rect = window_content_rect(state, window);
-    draw_window_chrome(
-        state,
-        window,
-        rect,
-        skip_twemoji_sprite64_chrome,
-        skip_lyon_rects,
-    );
+    draw_window_chrome(state, window, rect, skip_twemoji_sprite64_chrome, skip_lyon_rects);
 
     let chrome_ms = elapsed_ms_since(chrome_started_at);
 

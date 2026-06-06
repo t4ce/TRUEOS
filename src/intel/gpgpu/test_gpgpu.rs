@@ -513,6 +513,11 @@ pub(crate) fn shell_cube20_project_spin(
         shell_canvas3d_seed_visual_vertices(state);
         let translate_x_q16 = shell_cube20_translate_x_q16(frames);
         let translate_y_q16 = shell_tetra10_translate_y_q16(frames);
+        let y_spin_half_deg = (angle_deg / 2) % 180;
+        let cube_rotate_q16 = shell_canvas3d_y_quat_q16(y_spin_half_deg, true);
+        let tetra_rotate_q16 = shell_canvas3d_y_quat_q16(y_spin_half_deg, false);
+        let cube_scale_q16 =
+            shell_canvas3d_cube_scale_pulse_q16(direct_rcs_elapsed_ms_since(total_start_tick));
         let q = CANVAS3D_PROJECT_Q16_ONE;
         let Some(cube_transform_ms) = submit_canvas3d_transform_fused_frame_range(
             dev,
@@ -526,21 +531,21 @@ pub(crate) fn shell_cube20_project_spin(
             0,
             CUBE20_VISUAL_VERTEX_COUNT as u32,
             Canvas3dVec3Q16 {
-                x: q,
-                y: q,
-                z: q,
+                x: cube_scale_q16,
+                y: cube_scale_q16,
+                z: cube_scale_q16,
                 pad: 0,
             },
             Canvas3dVec3Q16 {
-                x: 0,
-                y: 0,
-                z: 0,
-                pad: q,
+                x: cube_rotate_q16.x,
+                y: cube_rotate_q16.y,
+                z: cube_rotate_q16.z,
+                pad: cube_rotate_q16.pad,
             },
             Canvas3dVec3Q16 {
                 x: translate_x_q16,
                 y: 0,
-                z: 0,
+                z: CANVAS3D_PROJECT_Q16_ONE * 2,
                 pad: 0,
             },
             CANVAS3D_TRANSFORM_FUSED_PRE_MARKER,
@@ -566,15 +571,15 @@ pub(crate) fn shell_cube20_project_spin(
                 pad: 0,
             },
             Canvas3dVec3Q16 {
-                x: 0,
-                y: 0,
-                z: 0,
-                pad: q,
+                x: tetra_rotate_q16.x,
+                y: tetra_rotate_q16.y,
+                z: tetra_rotate_q16.z,
+                pad: tetra_rotate_q16.pad,
             },
             Canvas3dVec3Q16 {
-                x: 0,
+                x: CANVAS3D_PROJECT_Q16_ONE,
                 y: translate_y_q16,
-                z: 0,
+                z: CANVAS3D_PROJECT_Q16_ONE * 2,
                 pad: 0,
             },
             CANVAS3D_TRANSFORM_FUSED_PRE_MARKER,
@@ -617,7 +622,7 @@ pub(crate) fn shell_cube20_project_spin(
         }
 
         frames = frames.saturating_add(1);
-        angle_deg = angle_deg.wrapping_add(1) % 360;
+        angle_deg = angle_deg.wrapping_add(2) % 360;
         next_tick = next_tick.saturating_add(cadence_ticks);
     }
 
@@ -671,6 +676,61 @@ fn shell_tetra10_translate_y_q16(frame: u32) -> i32 {
         CUBE20_HALF_Q16 - ((span as i64 * (phase - half_period) as i64) / half_period as i64) as i32
     };
     offset.clamp(-CUBE20_HALF_Q16, CUBE20_HALF_Q16)
+}
+
+fn shell_canvas3d_cube_scale_pulse_q16(elapsed_ms: u64) -> i32 {
+    const PERIOD_MS: u64 = 5_000;
+    const MIN_SCALE_Q16: u64 = CANVAS3D_PROJECT_Q16_ONE as u64 / 10;
+    let half_period = PERIOD_MS / 2;
+    let phase = elapsed_ms % PERIOD_MS;
+    let max_scale = CANVAS3D_PROJECT_Q16_ONE as u64;
+    let span = max_scale - MIN_SCALE_Q16;
+    if phase < half_period {
+        (max_scale - (span * phase) / half_period) as i32
+    } else {
+        (MIN_SCALE_Q16 + (span * (phase - half_period)) / half_period) as i32
+    }
+}
+
+const CANVAS3D_SIN_Q16_DEG_0_90: [i32; 91] = [
+    0, 1144, 2287, 3430, 4572, 5712, 6850, 7987, 9121, 10252, 11380, 12505, 13626, 14742, 15855,
+    16962, 18064, 19161, 20252, 21336, 22415, 23486, 24550, 25607, 26656, 27697, 28729, 29753,
+    30767, 31772, 32768, 33754, 34729, 35693, 36647, 37590, 38521, 39441, 40348, 41243, 42126,
+    42995, 43852, 44695, 45525, 46341, 47143, 47930, 48703, 49461, 50203, 50931, 51643, 52339,
+    53020, 53684, 54332, 54963, 55578, 56175, 56756, 57319, 57865, 58393, 58903, 59396, 59870,
+    60326, 60764, 61183, 61584, 61966, 62328, 62672, 62997, 63303, 63589, 63856, 64104, 64332,
+    64540, 64729, 64898, 65048, 65177, 65287, 65376, 65446, 65496, 65526, 65536,
+];
+
+fn shell_canvas3d_sin_0_180_q16(deg: u32) -> i32 {
+    let deg = deg % 180;
+    if deg <= 90 {
+        CANVAS3D_SIN_Q16_DEG_0_90[deg as usize]
+    } else {
+        CANVAS3D_SIN_Q16_DEG_0_90[(180 - deg) as usize]
+    }
+}
+
+fn shell_canvas3d_cos_0_180_q16(deg: u32) -> i32 {
+    let deg = deg % 180;
+    if deg <= 90 {
+        CANVAS3D_SIN_Q16_DEG_0_90[(90 - deg) as usize]
+    } else {
+        -CANVAS3D_SIN_Q16_DEG_0_90[(deg - 90) as usize]
+    }
+}
+
+fn shell_canvas3d_y_quat_q16(half_angle_deg: u32, clockwise: bool) -> Canvas3dVec3Q16 {
+    let mut y = shell_canvas3d_sin_0_180_q16(half_angle_deg);
+    if clockwise {
+        y = -y;
+    }
+    Canvas3dVec3Q16 {
+        x: 0,
+        y,
+        z: 0,
+        pad: shell_canvas3d_cos_0_180_q16(half_angle_deg),
+    }
 }
 
 fn shell_canvas3d_seed_visual_vertices(state: DirectRcsState) {
@@ -767,36 +827,38 @@ fn shell_canvas3d_seed_cube_vertex(cube_index: usize, local_index: usize) -> Can
         }
     };
 
-    vertex.z += CANVAS3D_PROJECT_Q16_ONE * 2;
     vertex.pad = (cube_index * CUBE20_VERTEX_COUNT + local_index) as i32;
     vertex
 }
 
 fn shell_canvas3d_seed_tetra_vertex(local_index: usize) -> Canvas3dVec3Q16 {
     let half = CUBE20_HALF_Q16;
+    let base_x = ((half as i64 * 56_756) / CANVAS3D_PROJECT_Q16_ONE as i64) as i32;
+    let base_y = -half / 2;
     let corners = [
+        // Apex sits on the local y-axis; the base triangle centroid is x=0,z=0.
         Canvas3dVec3Q16 {
-            x: half,
+            x: 0,
             y: half,
-            z: half,
+            z: 0,
             pad: 0,
         },
         Canvas3dVec3Q16 {
-            x: -half,
-            y: -half,
+            x: 0,
+            y: base_y,
             z: half,
             pad: 1,
         },
         Canvas3dVec3Q16 {
-            x: -half,
-            y: half,
-            z: -half,
+            x: -base_x,
+            y: base_y,
+            z: -half / 2,
             pad: 2,
         },
         Canvas3dVec3Q16 {
-            x: half,
-            y: -half,
-            z: -half,
+            x: base_x,
+            y: base_y,
+            z: -half / 2,
             pad: 3,
         },
     ];
@@ -819,8 +881,6 @@ fn shell_canvas3d_seed_tetra_vertex(local_index: usize) -> Canvas3dVec3Q16 {
         }
     };
 
-    vertex.x += CANVAS3D_PROJECT_Q16_ONE;
-    vertex.z += CANVAS3D_PROJECT_Q16_ONE * 2;
     vertex.pad = (TETRA10_BASE_VERTEX + local_index) as i32;
     vertex
 }
