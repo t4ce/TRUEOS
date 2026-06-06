@@ -836,6 +836,529 @@ pub(crate) fn submit_canvas3d_plane_fill_rgba8_once() -> bool {
     ok
 }
 
+pub(crate) fn submit_canvas3d_plane_patch_fill_cut_rgba8_once() -> bool {
+    if !DIRECT_RCS_ENABLED || CANVAS3D_PLANE_PATCH_FILL_CUT_RAN.swap(true, Ordering::AcqRel) {
+        return false;
+    }
+
+    let Some(dev) = intel::claimed_device() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: canvas3d-plane-patch-fill-cut skipped reason=no-claimed-device\n"
+        );
+        return false;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: canvas3d-plane-patch-fill-cut failed rung=alloc\n"
+        );
+        return false;
+    };
+    let Some(upload) = upload_canvas3d_plane_patch_fill_cut_rgba8_kernel() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: canvas3d-plane-patch-fill-cut skipped reason=no-kernel-upload\n"
+        );
+        return false;
+    };
+    if CANVAS3D_PLANE_FILL_TEST_BYTES > CANVAS3D_PROJECT_OUT_ALLOC_BYTES {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: canvas3d-plane-patch-fill-cut failed rung=buffer-cap dst_bytes=0x{:X} dst_cap=0x{:X}\n",
+            CANVAS3D_PLANE_FILL_TEST_BYTES,
+            CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+        );
+        return false;
+    }
+
+    let q = CANVAS3D_PROJECT_Q16_ONE;
+    let params = Canvas3dPlaneFillRgba8Params {
+        dst_gpu: CANVAS3D_PROJECT_OUT_GPU,
+        dst_pitch_bytes: CANVAS3D_PLANE_FILL_TEST_PITCH_BYTES,
+        dst_width: CANVAS3D_PLANE_FILL_TEST_WIDTH,
+        dst_height: CANVAS3D_PLANE_FILL_TEST_HEIGHT,
+        rect_x: 0,
+        rect_y: 0,
+        rect_width: CANVAS3D_PLANE_FILL_TEST_WIDTH,
+        rect_height: CANVAS3D_PLANE_FILL_TEST_HEIGHT,
+        canvas_width: CANVAS3D_PLANE_FILL_TEST_WIDTH,
+        canvas_height: CANVAS3D_PLANE_FILL_TEST_HEIGHT,
+        origin_q16: Canvas3dVec3Q16 {
+            x: 0,
+            y: 0,
+            z: q * 2,
+            pad: 0,
+        },
+        axis_u_q16: Canvas3dVec3Q16 {
+            x: (q * 3) / 4,
+            y: 0,
+            z: q / 4,
+            pad: 0,
+        },
+        axis_v_q16: Canvas3dVec3Q16 {
+            x: 0,
+            y: (q * 5) / 8,
+            z: 0,
+            pad: 0,
+        },
+        constraint0_q16: Canvas3dVec3Q16 {
+            x: q,
+            y: 0,
+            z: q,
+            pad: 0,
+        },
+        constraint1_q16: Canvas3dVec3Q16 {
+            x: -q,
+            y: 0,
+            z: q,
+            pad: 0,
+        },
+        constraint2_q16: Canvas3dVec3Q16 {
+            x: 0,
+            y: q,
+            z: q,
+            pad: 0,
+        },
+        constraint3_q16: Canvas3dVec3Q16 {
+            x: 0,
+            y: -q,
+            z: q,
+            pad: 0,
+        },
+        constraint_count: 4,
+        color_rgba: 0xFFFF_8844,
+    };
+
+    let poison = 0x1020_3040u32;
+    unsafe {
+        let dst = state.canvas3d_out_virt as *mut u32;
+        for index in 0..(CANVAS3D_PLANE_FILL_TEST_BYTES / core::mem::size_of::<u32>()) {
+            core::ptr::write_volatile(dst.add(index), poison);
+        }
+    }
+    intel::dma_flush(state.canvas3d_out_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
+
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let dst_ppgtt_ok = kernel_ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(
+            state,
+            CANVAS3D_PROJECT_OUT_GPU,
+            state.canvas3d_out_phys,
+            CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+        );
+    let batch_ok = dst_ppgtt_ok
+        && direct_rcs_encode_canvas3d_plane_patch_fill_cut_batch(
+            state,
+            upload,
+            params,
+            CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+        );
+    let submit_start_tick = direct_rcs_now_tick();
+    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
+    let (observed, retire_ms) = if submitted {
+        direct_rcs_poll_result_slot_elapsed(
+            state,
+            CANVAS3D_PLANE_PATCH_FILL_CUT_POST_MARKER_SLOT,
+            CANVAS3D_PLANE_PATCH_FILL_CUT_POST_MARKER,
+            submit_start_tick,
+        )
+    } else {
+        (0, 0)
+    };
+    let pre_marker =
+        direct_rcs_read_result_slot(state, CANVAS3D_PLANE_PATCH_FILL_CUT_PRE_MARKER_SLOT);
+    intel::dma_flush(state.canvas3d_out_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
+
+    let pitch_pixels =
+        (CANVAS3D_PLANE_FILL_TEST_PITCH_BYTES / core::mem::size_of::<u32>() as u32) as usize;
+    let center_index = (CANVAS3D_PLANE_FILL_TEST_HEIGHT as usize / 2) * pitch_pixels
+        + CANVAS3D_PLANE_FILL_TEST_WIDTH as usize / 2;
+    let corner_index = 0usize;
+    let mut changed = 0usize;
+    let mut colored = 0usize;
+    let mut first_changed_index = usize::MAX;
+    let mut first_changed = poison;
+    let (center, corner) = unsafe {
+        let dst = state.canvas3d_out_virt as *const u32;
+        for index in 0..(CANVAS3D_PLANE_FILL_TEST_BYTES / core::mem::size_of::<u32>()) {
+            let value = core::ptr::read_volatile(dst.add(index));
+            if value != poison {
+                changed += 1;
+                if first_changed_index == usize::MAX {
+                    first_changed_index = index;
+                    first_changed = value;
+                }
+            }
+            if value == params.color_rgba {
+                colored += 1;
+            }
+        }
+        (
+            core::ptr::read_volatile(dst.add(center_index)),
+            core::ptr::read_volatile(dst.add(corner_index)),
+        )
+    };
+
+    let retired = observed == CANVAS3D_PLANE_PATCH_FILL_CUT_POST_MARKER;
+    let ok = retired
+        && pre_marker == CANVAS3D_PLANE_PATCH_FILL_CUT_PRE_MARKER
+        && changed > 0
+        && colored > 0
+        && center == params.color_rgba
+        && corner == poison;
+
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/gpgpu: canvas3d-plane-patch-fill-cut forcewake={} ggtt={} ppgtt={} kernel_ppgtt={} dst_ppgtt={} batch={} submitted={} retired={} retire_ms={} ok={} changed={} colored={} center=0x{:08X} corner=0x{:08X} first_changed={} first_value=0x{:08X} poison=0x{:08X} dst={}x{} pitch={} rect={}x{} constraints={} canvas={}x{} pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} dst_gpu=0x{:X} dst_bytes=0x{:X} idd_off=0x{:X} payload_off=0x{:X} origin=[{}, {}, {}, {}] axis_u=[{}, {}, {}, {}] axis_v=[{}, {}, {}, {}] color=0x{:08X} ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=direct-execlist no_guc_submit=1 next=patch-worklist-or-shade\n",
+        forcewake_ok as u8,
+        mapped_ok as u8,
+        ppgtt_ok as u8,
+        kernel_ppgtt_ok as u8,
+        dst_ppgtt_ok as u8,
+        batch_ok as u8,
+        submitted as u8,
+        retired as u8,
+        retire_ms,
+        ok as u8,
+        changed,
+        colored,
+        center,
+        corner,
+        first_changed_index,
+        first_changed,
+        poison,
+        params.dst_width,
+        params.dst_height,
+        params.dst_pitch_bytes,
+        params.rect_width,
+        params.rect_height,
+        params.constraint_count,
+        params.canvas_width,
+        params.canvas_height,
+        pre_marker,
+        observed,
+        CANVAS3D_PLANE_PATCH_FILL_CUT_POST_MARKER,
+        upload.gpu,
+        upload.gpu + CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_TEXT_OFFSET_BYTES,
+        CANVAS3D_PROJECT_OUT_GPU,
+        CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+        CANVAS3D_PLANE_FILL_IDD_OFFSET_BYTES,
+        CANVAS3D_PLANE_FILL_PAYLOAD_OFFSET_BYTES,
+        params.origin_q16.x,
+        params.origin_q16.y,
+        params.origin_q16.z,
+        params.origin_q16.pad,
+        params.axis_u_q16.x,
+        params.axis_u_q16.y,
+        params.axis_u_q16.z,
+        params.axis_u_q16.pad,
+        params.axis_v_q16.x,
+        params.axis_v_q16.y,
+        params.axis_v_q16.z,
+        params.axis_v_q16.pad,
+        params.color_rgba,
+        DIRECT_RCS_GPU_VA_RING_BASE,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        DIRECT_RCS_GPU_VA_RESULT_BASE,
+        intel::mmio_read(dev, RCS_RING_HEAD),
+        intel::mmio_read(dev, RCS_RING_TAIL),
+        intel::mmio_read(dev, RCS_RING_ACTHD),
+        intel::mmio_read(dev, RCS_RING_IPEIR),
+        intel::mmio_read(dev, RCS_RING_IPEHR),
+        intel::mmio_read(dev, RCS_RING_EIR),
+    );
+
+    ok
+}
+
+pub(crate) fn submit_canvas3d_plane_patch_worklist_rgba8_once() -> bool {
+    if !DIRECT_RCS_ENABLED || CANVAS3D_PLANE_PATCH_WORKLIST_RAN.swap(true, Ordering::AcqRel) {
+        return false;
+    }
+
+    let Some(dev) = intel::claimed_device() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: canvas3d-plane-patch-worklist skipped reason=no-claimed-device\n"
+        );
+        return false;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: canvas3d-plane-patch-worklist failed rung=alloc\n"
+        );
+        return false;
+    };
+    let Some(upload) = upload_canvas3d_plane_patch_worklist_rgba8_kernel() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: canvas3d-plane-patch-worklist skipped reason=no-kernel-upload\n"
+        );
+        return false;
+    };
+    if CANVAS3D_PLANE_FILL_TEST_BYTES > CANVAS3D_PROJECT_OUT_ALLOC_BYTES
+        || CANVAS3D_PLANE_PATCH_WORKLIST_DESC_BYTES > CANVAS3D_PROJECT_OUT_ALLOC_BYTES
+        || core::mem::size_of::<Canvas3dPlanePatchWorklistRgba8Desc>()
+            != CANVAS3D_PLANE_PATCH_WORKLIST_DESC_DWORDS * core::mem::size_of::<u32>()
+    {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: canvas3d-plane-patch-worklist failed rung=buffer-cap dst_bytes=0x{:X} desc_bytes=0x{:X} cap=0x{:X} desc_struct=0x{:X}\n",
+            CANVAS3D_PLANE_FILL_TEST_BYTES,
+            CANVAS3D_PLANE_PATCH_WORKLIST_DESC_BYTES,
+            CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+            core::mem::size_of::<Canvas3dPlanePatchWorklistRgba8Desc>(),
+        );
+        return false;
+    }
+
+    let q = CANVAS3D_PROJECT_Q16_ONE;
+    let square_constraints = (
+        Canvas3dVec3Q16 {
+            x: q,
+            y: 0,
+            z: q,
+            pad: 0,
+        },
+        Canvas3dVec3Q16 {
+            x: -q,
+            y: 0,
+            z: q,
+            pad: 0,
+        },
+        Canvas3dVec3Q16 {
+            x: 0,
+            y: q,
+            z: q,
+            pad: 0,
+        },
+        Canvas3dVec3Q16 {
+            x: 0,
+            y: -q,
+            z: q,
+            pad: 0,
+        },
+    );
+    let make_desc = |origin_x: i32,
+                     origin_y: i32,
+                     rect_x: u32,
+                     rect_y: u32,
+                     rect_width: u32,
+                     rect_height: u32,
+                     color_rgba: u32|
+     -> Canvas3dPlanePatchWorklistRgba8Desc {
+        Canvas3dPlanePatchWorklistRgba8Desc {
+            dst_pitch_bytes: CANVAS3D_PLANE_FILL_TEST_PITCH_BYTES,
+            dst_width: CANVAS3D_PLANE_FILL_TEST_WIDTH,
+            dst_height: CANVAS3D_PLANE_FILL_TEST_HEIGHT,
+            rect_x,
+            rect_y,
+            rect_width,
+            rect_height,
+            canvas_width: CANVAS3D_PLANE_FILL_TEST_WIDTH,
+            canvas_height: CANVAS3D_PLANE_FILL_TEST_HEIGHT,
+            reserved0: 0,
+            origin_q16: Canvas3dVec3Q16 {
+                x: origin_x,
+                y: origin_y,
+                z: q * 2,
+                pad: 0,
+            },
+            axis_u_q16: Canvas3dVec3Q16 {
+                x: (q * 3) / 4,
+                y: 0,
+                z: q / 4,
+                pad: 0,
+            },
+            axis_v_q16: Canvas3dVec3Q16 {
+                x: 0,
+                y: (q * 5) / 8,
+                z: 0,
+                pad: 0,
+            },
+            constraint0_q16: square_constraints.0,
+            constraint1_q16: square_constraints.1,
+            constraint2_q16: square_constraints.2,
+            constraint3_q16: square_constraints.3,
+            constraint_count: 4,
+            color_rgba,
+        }
+    };
+
+    let descs = [
+        make_desc(-q, 0, 0, 0, 32, 48, 0xFFFF_3048),
+        make_desc(q, 0, 32, 0, 32, 48, 0xFF40_D060),
+        make_desc(0, -q / 2, 16, 12, 32, 24, 0xFF44_88FF),
+    ];
+
+    let poison = 0x1020_3040u32;
+    unsafe {
+        let dst = state.canvas3d_out_virt as *mut u32;
+        for index in 0..(CANVAS3D_PLANE_FILL_TEST_BYTES / core::mem::size_of::<u32>()) {
+            core::ptr::write_volatile(dst.add(index), poison);
+        }
+
+        core::ptr::write_bytes(
+            state.canvas3d_tmp_virt,
+            0,
+            CANVAS3D_PLANE_PATCH_WORKLIST_DESC_BYTES,
+        );
+        let desc_dst = state.canvas3d_tmp_virt as *mut Canvas3dPlanePatchWorklistRgba8Desc;
+        for (index, desc) in descs.iter().copied().enumerate() {
+            core::ptr::write_volatile(desc_dst.add(index), desc);
+        }
+    }
+    intel::dma_flush(state.canvas3d_out_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
+    intel::dma_flush(state.canvas3d_tmp_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
+
+    let params = Canvas3dPlanePatchWorklistRgba8Params {
+        dst_gpu: CANVAS3D_PROJECT_OUT_GPU,
+        desc_gpu: CANVAS3D_TMP_GPU,
+        desc_base: 0,
+        desc_count: CANVAS3D_PLANE_PATCH_WORKLIST_TEST_DESCS as u32,
+    };
+
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let dst_ppgtt_ok = kernel_ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(
+            state,
+            CANVAS3D_PROJECT_OUT_GPU,
+            state.canvas3d_out_phys,
+            CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+        );
+    let desc_ppgtt_ok = dst_ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(
+            state,
+            CANVAS3D_TMP_GPU,
+            state.canvas3d_tmp_phys,
+            CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+        );
+    let batch_ok = desc_ppgtt_ok
+        && direct_rcs_encode_canvas3d_plane_patch_worklist_batch(
+            state,
+            upload,
+            params,
+            CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+            CANVAS3D_PLANE_PATCH_WORKLIST_DESC_BYTES,
+        );
+    let submit_start_tick = direct_rcs_now_tick();
+    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
+    let (observed, retire_ms) = if submitted {
+        direct_rcs_poll_result_slot_elapsed(
+            state,
+            CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER_SLOT,
+            CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER,
+            submit_start_tick,
+        )
+    } else {
+        (0, 0)
+    };
+    let pre_marker =
+        direct_rcs_read_result_slot(state, CANVAS3D_PLANE_PATCH_WORKLIST_PRE_MARKER_SLOT);
+    intel::dma_flush(state.canvas3d_out_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
+
+    let mut changed = 0usize;
+    let mut red = 0usize;
+    let mut green = 0usize;
+    let mut blue = 0usize;
+    let mut first_changed_index = usize::MAX;
+    let mut first_changed = poison;
+    let corner = unsafe {
+        let dst = state.canvas3d_out_virt as *const u32;
+        for index in 0..(CANVAS3D_PLANE_FILL_TEST_BYTES / core::mem::size_of::<u32>()) {
+            let value = core::ptr::read_volatile(dst.add(index));
+            if value != poison {
+                changed += 1;
+                if first_changed_index == usize::MAX {
+                    first_changed_index = index;
+                    first_changed = value;
+                }
+            }
+            if value == descs[0].color_rgba {
+                red += 1;
+            } else if value == descs[1].color_rgba {
+                green += 1;
+            } else if value == descs[2].color_rgba {
+                blue += 1;
+            }
+        }
+        core::ptr::read_volatile(dst)
+    };
+
+    let retired = observed == CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER;
+    let ok = retired
+        && pre_marker == CANVAS3D_PLANE_PATCH_WORKLIST_PRE_MARKER
+        && changed > 0
+        && red > 0
+        && green > 0
+        && blue > 0
+        && corner == poison;
+
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/gpgpu: canvas3d-plane-patch-worklist forcewake={} ggtt={} ppgtt={} kernel_ppgtt={} dst_ppgtt={} desc_ppgtt={} batch={} submitted={} retired={} retire_ms={} ok={} changed={} red={} green={} blue={} corner=0x{:08X} first_changed={} first_value=0x{:08X} poison=0x{:08X} dst={}x{} pitch={} descs={} desc_dwords={} desc_bytes=0x{:X} canvas={}x{} pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} dst_gpu=0x{:X} desc_gpu=0x{:X} idd_off=0x{:X} payload_off=0x{:X} ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=direct-execlist no_guc_submit=1 next=patch-worklist-shade-or-depth\n",
+        forcewake_ok as u8,
+        mapped_ok as u8,
+        ppgtt_ok as u8,
+        kernel_ppgtt_ok as u8,
+        dst_ppgtt_ok as u8,
+        desc_ppgtt_ok as u8,
+        batch_ok as u8,
+        submitted as u8,
+        retired as u8,
+        retire_ms,
+        ok as u8,
+        changed,
+        red,
+        green,
+        blue,
+        corner,
+        first_changed_index,
+        first_changed,
+        poison,
+        CANVAS3D_PLANE_FILL_TEST_WIDTH,
+        CANVAS3D_PLANE_FILL_TEST_HEIGHT,
+        CANVAS3D_PLANE_FILL_TEST_PITCH_BYTES,
+        params.desc_count,
+        CANVAS3D_PLANE_PATCH_WORKLIST_DESC_DWORDS,
+        CANVAS3D_PLANE_PATCH_WORKLIST_DESC_BYTES,
+        CANVAS3D_PLANE_FILL_TEST_WIDTH,
+        CANVAS3D_PLANE_FILL_TEST_HEIGHT,
+        pre_marker,
+        observed,
+        CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER,
+        upload.gpu,
+        upload.gpu + CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_TEXT_OFFSET_BYTES,
+        CANVAS3D_PROJECT_OUT_GPU,
+        CANVAS3D_TMP_GPU,
+        CANVAS3D_PLANE_FILL_IDD_OFFSET_BYTES,
+        CANVAS3D_PLANE_FILL_PAYLOAD_OFFSET_BYTES,
+        DIRECT_RCS_GPU_VA_RING_BASE,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        DIRECT_RCS_GPU_VA_RESULT_BASE,
+        intel::mmio_read(dev, RCS_RING_HEAD),
+        intel::mmio_read(dev, RCS_RING_TAIL),
+        intel::mmio_read(dev, RCS_RING_ACTHD),
+        intel::mmio_read(dev, RCS_RING_IPEIR),
+        intel::mmio_read(dev, RCS_RING_IPEHR),
+        intel::mmio_read(dev, RCS_RING_EIR),
+    );
+
+    ok
+}
+
 pub(crate) fn shell_cube20_project_spin(
     duration_ms: u64,
     cadence_us: u64,
@@ -1287,6 +1810,342 @@ pub(crate) fn ui2_canvas3d_archaeology_project_texture_frame(
         height,
         rgba,
     })
+}
+
+pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
+    frame: u32,
+    width: u32,
+    height: u32,
+) -> Option<GpgpuCanvas3dUi2TextureFrame> {
+    const CADENCE_US: u64 = 500_000;
+
+    let width = width.clamp(1, 512);
+    let height = height.clamp(1, 512);
+    let pixel_count = (width as usize).checked_mul(height as usize)?;
+    let byte_count = pixel_count.checked_mul(core::mem::size_of::<u32>())?;
+    let total_start_tick = direct_rcs_now_tick();
+    let Some(dev) = intel::claimed_device() else {
+        return None;
+    };
+    let Some(upload) = upload_canvas3d_plane_patch_worklist_rgba8_kernel() else {
+        return None;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        return None;
+    };
+    let Some(staging) = present_staging_surface_once(width, height) else {
+        return None;
+    };
+    if byte_count > staging.surface.bytes {
+        return None;
+    }
+
+    unsafe {
+        let dst = staging.virt as *mut u32;
+        for y in 0..height as usize {
+            let row = dst.add(y * width as usize);
+            for x in 0..width as usize {
+                let checker = (((x >> 5) ^ (y >> 5)) & 1) as u32;
+                let shade = if checker == 0 { 0x10 } else { 0x18 };
+                core::ptr::write_volatile(
+                    row.add(x),
+                    0xFF00_0000 | (shade << 16) | (shade << 8) | shade,
+                );
+            }
+        }
+    }
+    intel::dma_flush(staging.virt, byte_count);
+
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let dst_ppgtt_ok = kernel_ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(
+            state,
+            staging.surface.gpu,
+            staging.surface.phys,
+            staging.surface.bytes,
+        );
+    let mut submitted_count = 0u32;
+    let mut retired_count = 0u32;
+    let mut total_submit_ms = 0u64;
+    let mut max_submit_ms = 0u64;
+    let q = CANVAS3D_PROJECT_Q16_ONE;
+    let half = (q * 5) / 8;
+    if dst_ppgtt_ok {
+        let center = Canvas3dVec3Q16 {
+            x: 0,
+            y: 0,
+            z: (q * 11) / 4,
+            pad: 0,
+        };
+        let right = Canvas3dVec3Q16 {
+            x: (half * 82) / 100,
+            y: 0,
+            z: -(half * 36) / 100,
+            pad: 0,
+        };
+        let up = Canvas3dVec3Q16 {
+            x: -(half * 10) / 100,
+            y: (half * 94) / 100,
+            z: -(half * 22) / 100,
+            pad: 0,
+        };
+        let forward = Canvas3dVec3Q16 {
+            x: (half * 34) / 100,
+            y: (half * 24) / 100,
+            z: (half * 91) / 100,
+            pad: 0,
+        };
+        let constraints = [
+            Canvas3dVec3Q16 {
+                x: q,
+                y: 0,
+                z: q,
+                pad: 0,
+            },
+            Canvas3dVec3Q16 {
+                x: -q,
+                y: 0,
+                z: q,
+                pad: 0,
+            },
+            Canvas3dVec3Q16 {
+                x: 0,
+                y: q,
+                z: q,
+                pad: 0,
+            },
+            Canvas3dVec3Q16 {
+                x: 0,
+                y: -q,
+                z: q,
+                pad: 0,
+            },
+        ];
+        let face_descs = [
+            canvas3d_plane_patch_ui2_face_desc(
+                staging,
+                width,
+                height,
+                canvas3d_vec3_add(center, forward),
+                right,
+                up,
+                constraints,
+                0xFF22_3355,
+            ),
+            canvas3d_plane_patch_ui2_face_desc(
+                staging,
+                width,
+                height,
+                canvas3d_vec3_sub(center, right),
+                forward,
+                up,
+                constraints,
+                0xFF2F_80ED,
+            ),
+            canvas3d_plane_patch_ui2_face_desc(
+                staging,
+                width,
+                height,
+                canvas3d_vec3_sub(center, up),
+                right,
+                forward,
+                constraints,
+                0xFF36_4A58,
+            ),
+            canvas3d_plane_patch_ui2_face_desc(
+                staging,
+                width,
+                height,
+                canvas3d_vec3_add(center, right),
+                forward,
+                up,
+                constraints,
+                0xFFFF_8844,
+            ),
+            canvas3d_plane_patch_ui2_face_desc(
+                staging,
+                width,
+                height,
+                canvas3d_vec3_add(center, up),
+                right,
+                forward,
+                constraints,
+                0xFFFF_D166,
+            ),
+            canvas3d_plane_patch_ui2_face_desc(
+                staging,
+                width,
+                height,
+                canvas3d_vec3_sub(center, forward),
+                right,
+                up,
+                constraints,
+                0xFF66_CCFF,
+            ),
+        ];
+        unsafe {
+            core::ptr::write_bytes(
+                state.canvas3d_tmp_virt,
+                0,
+                CANVAS3D_PLANE_PATCH_WORKLIST_DESC_BYTES,
+            );
+            let desc_dst = state.canvas3d_tmp_virt as *mut Canvas3dPlanePatchWorklistRgba8Desc;
+            for (index, desc) in face_descs.iter().copied().enumerate() {
+                core::ptr::write_volatile(desc_dst.add(index), desc);
+            }
+        }
+        intel::dma_flush(state.canvas3d_tmp_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
+
+        let desc_ppgtt_ok = direct_rcs_map_ppgtt_kernel(
+            state,
+            CANVAS3D_TMP_GPU,
+            state.canvas3d_tmp_phys,
+            CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+        );
+        let params = Canvas3dPlanePatchWorklistRgba8Params {
+            dst_gpu: staging.surface.gpu,
+            desc_gpu: CANVAS3D_TMP_GPU,
+            desc_base: 0,
+            desc_count: face_descs.len() as u32,
+        };
+        let batch_ok = desc_ppgtt_ok
+            && direct_rcs_encode_canvas3d_plane_patch_worklist_batch(
+                state,
+                upload,
+                params,
+                staging.surface.bytes,
+                CANVAS3D_PLANE_PATCH_WORKLIST_DESC_BYTES,
+            );
+        let submit_start_tick = direct_rcs_now_tick();
+        let submitted_ok = batch_ok && direct_rcs_submit_batch(dev, state);
+        if submitted_ok {
+            submitted_count = submitted_count.saturating_add(1);
+        }
+        let (observed, submit_ms) = if submitted_ok {
+            direct_rcs_poll_result_slot_elapsed(
+                state,
+                CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER_SLOT,
+                CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER,
+                submit_start_tick,
+            )
+        } else {
+            (0, 0)
+        };
+        total_submit_ms = total_submit_ms.saturating_add(submit_ms);
+        max_submit_ms = max_submit_ms.max(submit_ms);
+        let pre_marker =
+            direct_rcs_read_result_slot(state, CANVAS3D_PLANE_PATCH_WORKLIST_PRE_MARKER_SLOT);
+        if observed == CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER
+            && pre_marker == CANVAS3D_PLANE_PATCH_WORKLIST_PRE_MARKER
+        {
+            retired_count = retired_count.saturating_add(1);
+        }
+    }
+    intel::dma_flush(staging.virt, byte_count);
+
+    let mut rgba = vec![0u8; byte_count];
+    let mut colored = 0usize;
+    unsafe {
+        let src = staging.virt as *const u8;
+        core::ptr::copy_nonoverlapping(src, rgba.as_mut_ptr(), byte_count);
+        let pixels = staging.virt as *const u32;
+        for y in 0..height as usize {
+            for x in 0..width as usize {
+                let index = y * width as usize + x;
+                let checker = (((x >> 5) ^ (y >> 5)) & 1) as u32;
+                let shade = if checker == 0 { 0x10 } else { 0x18 };
+                let background = 0xFF00_0000 | (shade << 16) | (shade << 8) | shade;
+                if core::ptr::read_volatile(pixels.add(index)) != background {
+                    colored += 1;
+                }
+            }
+        }
+    }
+    let retired = submitted_count > 0 && submitted_count == retired_count;
+    let elapsed_ms = direct_rcs_elapsed_ms_since(total_start_tick);
+    let result = GpgpuShellCube20ProjectResult {
+        ok: retired && colored > 0,
+        frames: 1,
+        submitted: submitted_count,
+        presented: 0,
+        visible_points: colored,
+        stamped_pixels: colored,
+        duration_ms: 0,
+        elapsed_ms,
+        cadence_us: CADENCE_US,
+        total_submit_ms,
+        max_submit_ms,
+        primary_width: width,
+        primary_height: height,
+        canvas_xy: GpgpuPoint::new(0, 0),
+        vertex_count: 6,
+        radius_px: (half as u32).saturating_mul(width.min(height))
+            / CANVAS3D_PROJECT_Q16_ONE as u32,
+        last_angle_deg: frame % 360,
+    };
+
+    Some(GpgpuCanvas3dUi2TextureFrame {
+        result,
+        width,
+        height,
+        rgba,
+    })
+}
+
+fn canvas3d_vec3_add(a: Canvas3dVec3Q16, b: Canvas3dVec3Q16) -> Canvas3dVec3Q16 {
+    Canvas3dVec3Q16 {
+        x: a.x.saturating_add(b.x),
+        y: a.y.saturating_add(b.y),
+        z: a.z.saturating_add(b.z),
+        pad: 0,
+    }
+}
+
+fn canvas3d_vec3_sub(a: Canvas3dVec3Q16, b: Canvas3dVec3Q16) -> Canvas3dVec3Q16 {
+    Canvas3dVec3Q16 {
+        x: a.x.saturating_sub(b.x),
+        y: a.y.saturating_sub(b.y),
+        z: a.z.saturating_sub(b.z),
+        pad: 0,
+    }
+}
+
+fn canvas3d_plane_patch_ui2_face_desc(
+    staging: GpgpuPresentStagingSurface,
+    width: u32,
+    height: u32,
+    origin_q16: Canvas3dVec3Q16,
+    axis_u_q16: Canvas3dVec3Q16,
+    axis_v_q16: Canvas3dVec3Q16,
+    constraints: [Canvas3dVec3Q16; 4],
+    color_rgba: u32,
+) -> Canvas3dPlanePatchWorklistRgba8Desc {
+    Canvas3dPlanePatchWorklistRgba8Desc {
+        dst_pitch_bytes: staging.surface.pitch_bytes,
+        dst_width: width,
+        dst_height: height,
+        rect_x: 0,
+        rect_y: 0,
+        rect_width: width,
+        rect_height: height,
+        canvas_width: width,
+        canvas_height: height,
+        reserved0: 0,
+        origin_q16,
+        axis_u_q16,
+        axis_v_q16,
+        constraint0_q16: constraints[0],
+        constraint1_q16: constraints[1],
+        constraint2_q16: constraints[2],
+        constraint3_q16: constraints[3],
+        constraint_count: 4,
+        color_rgba,
+    }
 }
 
 fn shell_cube20_translate_x_q16(frame: u32) -> i32 {

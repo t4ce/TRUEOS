@@ -766,35 +766,73 @@ pub(super) fn collect_window_chrome_gradient_rects(
         }
     }
 
-    if let Some(button) = window.chrome_hover_clear_button
-        && let Some(button_rect) = decoration_hover_button_rect(state, window.id, button)
-    {
-        let _ = push_chrome_gradient_rect(out, button_rect, left, right, false);
-    }
-
-    for cursor in &state.cursors {
-        if cursor.hover_window_id != window.id {
-            continue;
-        }
-        let Some(button) = cursor.hover_decoration_button else {
-            continue;
-        };
-        let Some(button_rect) = decoration_hover_button_rect(state, window.id, button) else {
-            continue;
-        };
-        let _ = push_chrome_gradient_rect(
-            out,
-            button_rect,
-            (0x00, 0x00, 0x00, 0xFF),
-            UI2_CHROME_HIGHLIGHT_WHITE_RGBA,
-            true,
-        );
-    }
-
     out.len().saturating_sub(before)
 }
 
-pub(super) fn collect_window_titlebar_chrome_gradient_rects(
+#[inline]
+fn window_chrome_gradient_colors(window: &Ui2Window) -> ((u8, u8, u8, u8), (u8, u8, u8, u8)) {
+    let (left, right) = if window.vm_origin_hint {
+        ((0xC4, 0xA8, 0xC8, 0xFF), (0xF0, 0xF2, 0xF4, 0xFF))
+    } else {
+        ((0xC8, 0xCC, 0xC8, 0xFF), (0xF2, 0xF4, 0xF2, 0xFF))
+    };
+    animate_window_chrome_gradient(window, left, right)
+}
+
+#[inline]
+fn window_titlebar_band_rect(window: &Ui2Window, rect: Ui2Rect) -> Option<Ui2Rect> {
+    if !window.titlebar_visible {
+        return None;
+    }
+    let h = if window.state == Ui2WindowStateKind::Minimized {
+        rect.h
+    } else {
+        UI2_TITLE_H.min(rect.h)
+    };
+    if h > 0.0 {
+        Some(Ui2Rect::new(rect.x, rect.y, rect.w, h))
+    } else {
+        None
+    }
+}
+
+#[inline]
+fn rect_center_is_inside(rect: Ui2Rect, bar: Ui2Rect) -> bool {
+    let cx = rect.x + rect.w * 0.5;
+    let cy = rect.y + rect.h * 0.5;
+    cx >= bar.x && cx <= bar.x + bar.w && cy >= bar.y && cy <= bar.y + bar.h
+}
+
+#[inline]
+fn decoration_button_needs_bottom_bar(
+    state: &Ui2State,
+    window: &Ui2Window,
+    button: Ui2DecorationHoverButton,
+) -> bool {
+    let Some(button_rect) = decoration_hover_button_rect(state, window.id, button) else {
+        return false;
+    };
+    window_bottom_bar_rect(state, window)
+        .map(|bar| rect_center_is_inside(button_rect, bar))
+        .unwrap_or(false)
+}
+
+#[inline]
+fn decoration_button_needs_titlebar(
+    state: &Ui2State,
+    window: &Ui2Window,
+    rect: Ui2Rect,
+    button: Ui2DecorationHoverButton,
+) -> bool {
+    let Some(button_rect) = decoration_hover_button_rect(state, window.id, button) else {
+        return false;
+    };
+    window_titlebar_band_rect(window, rect)
+        .map(|bar| rect_center_is_inside(button_rect, bar))
+        .unwrap_or(false)
+}
+
+pub(super) fn collect_window_active_chrome_base_gradient_rects(
     state: &Ui2State,
     window: &Ui2Window,
     rect: Ui2Rect,
@@ -805,32 +843,35 @@ pub(super) fn collect_window_titlebar_chrome_gradient_rects(
         return 0;
     }
 
-    let (left, right) = if window.vm_origin_hint {
-        ((0xC4, 0xA8, 0xC8, 0xFF), (0xF0, 0xF2, 0xF4, 0xFF))
-    } else {
-        ((0xC8, 0xCC, 0xC8, 0xFF), (0xF2, 0xF4, 0xF2, 0xFF))
-    };
-    let (left, right) = animate_window_chrome_gradient(window, left, right);
-    let titleband_h = if window.titlebar_visible {
-        if window.state == Ui2WindowStateKind::Minimized {
-            rect.h
-        } else {
-            UI2_TITLE_H.min(rect.h)
-        }
-    } else {
-        0.0
-    };
-    if titleband_h > 0.0 {
-        let _ = push_chrome_gradient_rect(
-            out,
-            Ui2Rect::new(rect.x, rect.y, rect.w, titleband_h),
-            left,
-            right,
-            false,
-        );
+    let (left, right) = window_chrome_gradient_colors(window);
+    let mut redraw_titlebar =
+        window.chrome_titlebar_dirty || !window.selected_cursor_slots.is_empty();
+    let mut redraw_bottombar = false;
+
+    if let Some(button) = window.chrome_hover_clear_button {
+        redraw_titlebar |= decoration_button_needs_titlebar(state, window, rect, button);
+        redraw_bottombar |= decoration_button_needs_bottom_bar(state, window, button);
     }
 
-    if !window.selected_cursor_slots.is_empty() {
+    for cursor in &state.cursors {
+        if cursor.hover_window_id != window.id {
+            continue;
+        }
+        let Some(button) = cursor.hover_decoration_button else {
+            continue;
+        };
+        redraw_titlebar |= decoration_button_needs_titlebar(state, window, rect, button);
+        redraw_bottombar |= decoration_button_needs_bottom_bar(state, window, button);
+    }
+
+    if redraw_titlebar && let Some(titlebar) = window_titlebar_band_rect(window, rect) {
+        let _ = push_chrome_gradient_rect(out, titlebar, left, right, false);
+    }
+    if redraw_bottombar && let Some(bottom_bar) = window_bottom_bar_rect(state, window) {
+        let _ = push_chrome_gradient_rect(out, bottom_bar, left, right, false);
+    }
+
+    if redraw_titlebar && !window.selected_cursor_slots.is_empty() {
         let bar_span = if window.titlebar_visible {
             window_decoration_rect(state, window).unwrap_or(rect)
         } else {
@@ -861,15 +902,17 @@ pub(super) fn collect_window_titlebar_chrome_gradient_rects(
         }
     }
 
-    let titlebar_bottom = rect.y + titleband_h.max(0.0);
-    if let Some(button) = window.chrome_hover_clear_button
-        && let Some(button_rect) = decoration_hover_button_rect(state, window.id, button)
-    {
-        let in_titlebar =
-            button_rect.y >= rect.y && button_rect.y + button_rect.h <= titlebar_bottom + 0.5;
-        if in_titlebar || matches!(button, Ui2DecorationHoverButton::Resize) {
-            let _ = push_chrome_gradient_rect(out, button_rect, left, right, false);
-        }
+    out.len().saturating_sub(before)
+}
+
+pub(super) fn collect_window_active_chrome_hover_gradient_rects(
+    state: &Ui2State,
+    window: &Ui2Window,
+    out: &mut Vec<crate::intel::gpgpu::GpgpuGradientRect>,
+) -> usize {
+    let before = out.len();
+    if window.decoration_mode != Ui2WindowDecorationMode::System {
+        return 0;
     }
 
     for cursor in &state.cursors {
@@ -882,11 +925,6 @@ pub(super) fn collect_window_titlebar_chrome_gradient_rects(
         let Some(button_rect) = decoration_hover_button_rect(state, window.id, button) else {
             continue;
         };
-        let in_titlebar =
-            button_rect.y >= rect.y && button_rect.y + button_rect.h <= titlebar_bottom + 0.5;
-        if !in_titlebar && !matches!(button, Ui2DecorationHoverButton::Resize) {
-            continue;
-        }
         let _ = push_chrome_gradient_rect(
             out,
             button_rect,
