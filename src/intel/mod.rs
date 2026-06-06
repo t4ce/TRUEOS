@@ -176,8 +176,8 @@ pub fn init_once() {
     let _ = self::gpgpu::upload_copy_rect_rgba8_kernel();
     let _ = self::gpgpu::upload_copy_rect_rgba8_wide_kernel();
     let _ = self::gpgpu::upload_clear_rect_rgba8_white_kernel();
-    let _ = self::gpgpu::upload_fill_rect_rgba8_kernel();
-    let _ = self::gpgpu::upload_alpha_blend_rgba8_over_kernel();
+    let _ = self::gpgpu::upload_fill_rect_worklist_rgba8_kernel();
+    let _ = self::gpgpu::upload_alpha_blend_worklist_rgba8_kernel();
     let _ = self::gpgpu::upload_glyph_mask_rgba8_kernel();
     let _ = self::gpgpu::upload_present_rgba8_to_primary_xrgb_rect_kernel();
     let _ = self::gpgpu::upload_empty_eot_kernel();
@@ -195,7 +195,16 @@ pub fn init_once() {
     let _ = self::gpgpu::submit_copy_rect_rgba8_256_once();
     let _ = self::gpgpu::submit_copy_rect_rgba8_256x2_once();
     let _ = self::gpgpu::submit_copy_rect_rgba8_wide_256x2_once();
-    let _ = self::gpgpu::submit_rect_api_smoke_once();
+    let _ = self::gpgpu::submit_fill_rect_worklist_rgba8_probe_once();
+    let _ = self::gpgpu::submit_alpha_blend_worklist_rgba8_probe_once();
+    crate::log!(
+        "intel/gpgpu: rect-worklist-probes fill_ran={} fill_ok={} alpha_ran={} alpha_ok={} ready={}\n",
+        self::gpgpu::fill_rect_worklist_probe_ran() as u8,
+        self::gpgpu::fill_rect_worklist_probe_ok() as u8,
+        self::gpgpu::alpha_blend_worklist_probe_ran() as u8,
+        self::gpgpu::alpha_blend_worklist_probe_ok() as u8,
+        self::gpgpu::rect_worklist_probe_ready() as u8
+    );
     let _ = self::gpgpu::submit_canvas3d_project_once();
     let _ = self::gpgpu::submit_canvas3d_transform_smoke_once();
     let _ = self::gpgpu::submit_canvas3d_clip_box_q16_once();

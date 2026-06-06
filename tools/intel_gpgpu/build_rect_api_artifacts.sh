@@ -26,9 +26,11 @@ fi
 
 kernels=(
     fill_rect_rgba8
+    fill_rect_worklist_rgba8
     fill_circle_rgba8
     blit_rgba8_nearest
     alpha_blend_rgba8_over
+    alpha_blend_worklist_rgba8
     glyph_mask_rgba8
     present_rgba8_to_primary_xrgb_rect
     stamp_mandel_rgba8

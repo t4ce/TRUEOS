@@ -1114,7 +1114,9 @@ pub(crate) fn blend_rgba_primary_rect(
         crate::intel::dma_flush(unsafe { surface.virt.add(dst_row_off) }, copy_w.saturating_mul(4));
     }
 
-    let flush_offset = dy.saturating_mul(dst_pitch).saturating_add(dx.saturating_mul(4));
+    let flush_offset = dy
+        .saturating_mul(dst_pitch)
+        .saturating_add(dx.saturating_mul(4));
     let flush_bytes = copy_h
         .saturating_sub(1)
         .saturating_mul(dst_pitch)
@@ -1246,7 +1248,9 @@ pub(crate) fn blend_rgba_primary_rect_scaled(
         crate::intel::dma_flush(unsafe { surface.virt.add(dst_row_off) }, copy_w.saturating_mul(4));
     }
 
-    let flush_offset = dy.saturating_mul(dst_pitch).saturating_add(dx.saturating_mul(4));
+    let flush_offset = dy
+        .saturating_mul(dst_pitch)
+        .saturating_add(dx.saturating_mul(4));
     let flush_bytes = copy_h
         .saturating_sub(1)
         .saturating_mul(dst_pitch)
@@ -1444,18 +1448,12 @@ pub(crate) fn present_rgba_overlay_at(
 }
 
 pub(crate) fn log_display_plane_ladder_probe(label: &str) {
-    crate::log!(
-        "intel/display: display-ladder label={} stage=read-only begin\n",
-        label
-    );
+    crate::log!("intel/display: display-ladder label={} stage=read-only begin\n", label);
     log_primary_surface_samples("display-ladder-primary");
     log_active_pipe_raw_state("display-ladder");
     log_pipe_live_scanout_state("display-ladder");
     log_display_power_well_snapshot("display-ladder");
-    crate::log!(
-        "intel/display: display-ladder label={} stage=read-only end\n",
-        label
-    );
+    crate::log!("intel/display: display-ladder label={} stage=read-only end\n", label);
 }
 
 fn log_active_pipe_raw_state(label: &str) {
@@ -1478,7 +1476,8 @@ fn log_active_pipe_raw_state(label: &str) {
     let psr2_status_off = TRANS_PSR2_STATUS_A + pipe.slot.saturating_mul(PIPE_MMIO_STRIDE);
     let cur_surflive_off = CUR_SURFLIVE_A + pipe.slot.saturating_mul(PIPE_MMIO_STRIDE);
     let frmcount_off = PIPE_FRMCOUNT_A + pipe.slot.saturating_mul(PIPE_MMIO_STRIDE);
-    let bottom_color_off = SKL_BOTTOM_COLOR_A + pipe.slot.saturating_mul(SKL_BOTTOM_COLOR_PIPE_STRIDE);
+    let bottom_color_off =
+        SKL_BOTTOM_COLOR_A + pipe.slot.saturating_mul(SKL_BOTTOM_COLOR_PIPE_STRIDE);
 
     crate::log!(
         "intel/display: pipe-raw label={} pipe={} pipe_src@0x{:05X}=0x{:08X} pipeconf@0x{:05X}=0x{:08X} frm@0x{:05X}=0x{:08X} cur_live@0x{:05X}=0x{:08X} bottom@0x{:05X}=0x{:08X} ddi_ctl@0x{:05X}=0x{:08X} htotal@0x{:05X}=0x{:08X} hsync@0x{:05X}=0x{:08X} vtotal@0x{:05X}=0x{:08X} vsync@0x{:05X}=0x{:08X} psr=0x{:08X}/0x{:08X} psr2=0x{:08X}/0x{:08X}\n",
@@ -2605,8 +2604,7 @@ pub(crate) fn log_pipe_live_scanout_state(label: &str) {
         let color_ctl = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_COLOR_CTL_OFF);
         let wm0 = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_WM_0_OFF);
         let wm_sagv = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_WM_SAGV_OFF);
-        let wm_sagv_trans =
-            crate::intel::mmio_read(dev, plane_base + UNI_PLANE_WM_SAGV_TRANS_OFF);
+        let wm_sagv_trans = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_WM_SAGV_TRANS_OFF);
         let wm_trans = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_WM_TRANS_OFF);
         let buf_cfg = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_BUF_CFG_OFF);
         crate::log!(
@@ -2949,10 +2947,10 @@ fn stamp_overlay_composition_proof_marker(
     let overlay_transparent = sample_overlay_surface_pixel(surface, transparent_cx, cy);
     let overlay_half_red = sample_overlay_surface_pixel(surface, half_red_cx, cy);
     let overlay_opaque_green = sample_overlay_surface_pixel(surface, opaque_green_cx, cy);
-    let primary_transparent =
-        sample_primary_surface_pixel(transparent_cx, cy).unwrap_or_default();
+    let primary_transparent = sample_primary_surface_pixel(transparent_cx, cy).unwrap_or_default();
     let primary_half_red = sample_primary_surface_pixel(half_red_cx, cy).unwrap_or_default();
-    let primary_opaque_green = sample_primary_surface_pixel(opaque_green_cx, cy).unwrap_or_default();
+    let primary_opaque_green =
+        sample_primary_surface_pixel(opaque_green_cx, cy).unwrap_or_default();
 
     crate::log!(
         "intel/display: overlay-proof reason={} pipe={} slot={} badge={}x{}@{},{} cells=transparent,half-red,opaque-green overlay=[0x{:08X},0x{:08X},0x{:08X}] primary_under=[0x{:08X},0x{:08X},0x{:08X}] expectation=alpha-ok:underlay/red-blend/green alpha-ignored:black/dark-red/green\n",
@@ -3008,8 +3006,11 @@ fn sample_overlay_surface_pixel(surface: OverlaySurface, x: u32, y: u32) -> u32 
     let pitch_pixels = (surface.pitch_bytes as usize) / 4;
     unsafe {
         core::ptr::read_volatile(
-            (surface.virt as *const u32)
-                .add((y as usize).saturating_mul(pitch_pixels).saturating_add(x as usize)),
+            (surface.virt as *const u32).add(
+                (y as usize)
+                    .saturating_mul(pitch_pixels)
+                    .saturating_add(x as usize),
+            ),
         )
     }
 }
