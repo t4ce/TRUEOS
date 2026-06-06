@@ -43,6 +43,7 @@ The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 - `blit_rgba8_nearest.cl`: nearest-neighbor RGBA8 rect blit
 - `alpha_blend_rgba8_over.cl`: source-over RGBA8 blend
 - `glyph_mask_rgba8.cl`: 8-bit coverage mask blended with packed RGBA8 color
+- `present_rgba8_to_primary_xrgb_rect.cl`: RGBA8 scene rect to primary XRGB rect with optional source Y flip
 - `stamp_mandel_rgba8.cl`: ten-iteration Mandelbrot stamp using destination x/y as both stamp origin and view offset
 - `sprite64_worklist_rgba8.cl`: fixed 64x64 sprite descriptors copied/blended from atlas to destination; shell path batches descriptor slices as multiple walkers in one command buffer
 - `canvas3d_3d_project_rgba8.cl`: Q16 vec3 projection into packed XY/RGBA point records with source/output ranges and dynamic canvas dimensions

@@ -47,7 +47,10 @@ use trueos_gfx_core::{
     push_tex_quad_px, push_tex_vertex_bytes,
 };
 
-const UI2_BAR_H: f32 = 26.0;
+const UI2_TWEMOJI_ICON_H: f32 = 64.0;
+const UI2_SPRITE64_CELL_PX: f32 = 64.0;
+const UI2_BAR_PAD_Y: f32 = 1.0;
+const UI2_BAR_H: f32 = UI2_TWEMOJI_ICON_H + UI2_BAR_PAD_Y * 2.0;
 const UI2_TITLE_H: f32 = UI2_BAR_H;
 const UI2_BOTTOM_BAR_H: f32 = UI2_BAR_H;
 const UI2_SYSTEM_VERTICAL_SCROLLBAR_W: f32 = UI2_TITLE_H * 0.5;
@@ -716,6 +719,8 @@ static UI2_STATE: Once<Mutex<Ui2State>> = Once::new();
 static UI2_STARTED: AtomicBool = AtomicBool::new(false);
 static UI2_DIRTY: AtomicBool = AtomicBool::new(false);
 static UI2_BROWSER_WINDOW_ID: AtomicU32 = AtomicU32::new(0);
+static UI2_CURSOR_SPRITE64_LOGS: AtomicU32 = AtomicU32::new(0);
+static UI2_CHROME_SOLID_RECT_LOGS: AtomicU32 = AtomicU32::new(0);
 
 #[inline]
 fn boot_probe_ms() -> u64 {
@@ -1264,7 +1269,157 @@ fn draw_cursor_cross_overlay(state: &Ui2State, center_x: f32, center_y: f32, col
     );
 }
 
+fn draw_cursor_overlay_layer_intel_sprite64(
+    state: &Ui2State,
+    include_chrome: bool,
+    present: bool,
+) -> bool {
+    if !crate::gfx::is_intel_active() {
+        return false;
+    }
+
+    let mut placements = Vec::new();
+    let mut chrome_count = 0usize;
+    if include_chrome {
+        for idx in sorted_window_indices(state) {
+            let window = &state.windows[idx];
+            if !window_is_renderable(window) {
+                continue;
+            }
+            chrome_count = chrome_count.saturating_add(collect_window_chrome_sprite64_placements(
+                state,
+                window,
+                effective_window_rect(state, window),
+                &mut placements,
+            ));
+        }
+    }
+
+    let cursors = crate::r::cursor::ordered_cursor_snapshot_with_slots();
+    if cursors.is_empty() && placements.is_empty() {
+        return true;
+    }
+
+    let cursor_count = cursors.len();
+    for (idx, (slot_id, cx, cy)) in cursors.into_iter().enumerate() {
+        let cursor_id = (idx as u32).saturating_add(1);
+        let Some(ch) =
+            cursor_spirit_glyph(slot_id).or_else(|| cursor_spirit_glyph_for_cursor_id(cursor_id))
+        else {
+            return false;
+        };
+        let Some(region) = crate::gfx::althlasfont::twemoji::twemoji_lookup_glyph_region(ch) else {
+            return false;
+        };
+
+        let nx = if cx.is_finite() {
+            cx.clamp(0.0, 1.0) as f32
+        } else {
+            0.0
+        };
+        let ny = if cy.is_finite() {
+            cy.clamp(0.0, 1.0) as f32
+        } else {
+            0.0
+        };
+        let (center_x, center_y) = cursor_overlay_center_px(nx, ny, state.view_w, state.view_h);
+        placements.push(crate::intel::gpgpu::GpgpuTwemojiSprite64Placement {
+            slot: region.slot,
+            dst_x: libm::roundf(center_x - 32.0) as i32,
+            dst_y: libm::roundf(center_y - 32.0) as i32,
+        });
+    }
+
+    let Some(result) = crate::intel::gpgpu::twemoji_sprite64_worklist_primary(&placements, present)
+    else {
+        return false;
+    };
+    let ok = result.ok && result.submitted;
+    let log_n = UI2_CURSOR_SPRITE64_LOGS.fetch_add(1, Ordering::Relaxed);
+    if log_n < 12 || !ok {
+        crate::log!(
+            "ui2: surroundings sprite64-worklist ok={} chrome={} cursors={} desc={} walkers={} submit_ms={} present={} present_ms={} last_slot={} last_dst={},{}\n",
+            ok as u8,
+            chrome_count,
+            cursor_count,
+            result.descriptors,
+            result.walkers,
+            result.submit_ms,
+            result.presented as u8,
+            result.present_ms,
+            result.last_slot,
+            result.last_dst_xy.x,
+            result.last_dst_xy.y
+        );
+    }
+    ok
+}
+
+fn draw_chrome_solid_rects_intel_gpgpu(state: &Ui2State) -> bool {
+    if !crate::gfx::is_intel_active() {
+        return false;
+    }
+    if !intel_ui2_chrome_rect_path_enabled() {
+        let log_n = UI2_CHROME_SOLID_RECT_LOGS.fetch_add(1, Ordering::Relaxed);
+        if log_n < 8 {
+            crate::log!(
+                "ui2: chrome solid-rects-gpgpu disabled reason=span-shaped-artifacts-regress-frame-pacing\n"
+            );
+        }
+        let _ = state;
+        return false;
+    }
+
+    let mut rects = Vec::new();
+    let mut window_count = 0usize;
+    for idx in sorted_window_indices(state) {
+        let window = &state.windows[idx];
+        if !window_is_renderable(window) {
+            continue;
+        }
+        let added = collect_window_chrome_solid_rects(
+            state,
+            window,
+            effective_window_rect(state, window),
+            &mut rects,
+        );
+        if added > 0 {
+            window_count = window_count.saturating_add(1);
+        }
+    }
+    if rects.is_empty() {
+        return true;
+    }
+
+    let Some(result) = crate::intel::gpgpu::solid_rects_rgba8_over_primary(&rects, true) else {
+        return false;
+    };
+    let ok = result.ok;
+    let log_n = UI2_CHROME_SOLID_RECT_LOGS.fetch_add(1, Ordering::Relaxed);
+    if log_n < 16 || !ok {
+        crate::log!(
+            "ui2: chrome solid-rects-gpgpu ok={} windows={} rects={} fill_spans={} blend_spans={} blend_submits={} present={}\n",
+            ok as u8,
+            window_count,
+            result.rects,
+            result.fill_spans,
+            result.blend_spans,
+            result.blend_submits,
+            result.presented as u8
+        );
+    }
+    ok
+}
+
+fn intel_ui2_chrome_rect_path_enabled() -> bool {
+    false
+}
+
 fn draw_cursor_overlay_layer(state: &Ui2State) {
+    if draw_cursor_overlay_layer_intel_sprite64(state, false, false) {
+        return;
+    }
+
     let cursors = crate::r::cursor::ordered_cursor_snapshot_with_slots();
     for (idx, (slot_id, cx, cy)) in cursors.into_iter().enumerate() {
         let cursor_id = (idx as u32).saturating_add(1);
@@ -1859,7 +2014,7 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_size(
         let _ = crate::hv::note_deferred_blueprint_app_window_size(window_id, width, height);
         return rc;
     }
-    if resize_window(window_id, width as f32, height as f32) {
+    if resize_window_content(window_id, width as f32, height as f32) {
         0
     } else {
         -1
@@ -2856,7 +3011,12 @@ fn draw_window_texture_content(
     }
 }
 
-fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTiming {
+fn draw_window_frame(
+    state: &Ui2State,
+    window: &Ui2Window,
+    skip_twemoji_sprite64_chrome: bool,
+    skip_lyon_rects: bool,
+) -> Ui2WindowDrawTiming {
     if !window_is_renderable(window) {
         return Ui2WindowDrawTiming::default();
     }
@@ -2864,7 +3024,13 @@ fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTimin
     let chrome_started_at = Instant::now();
     let rect = effective_window_rect(state, window);
     let content_rect = window_content_rect(state, window);
-    draw_window_chrome(state, window, rect);
+    draw_window_chrome(
+        state,
+        window,
+        rect,
+        skip_twemoji_sprite64_chrome,
+        skip_lyon_rects,
+    );
 
     let chrome_ms = elapsed_ms_since(chrome_started_at);
 
@@ -3051,21 +3217,24 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
     let compose_started_at = Instant::now();
     let mut surface_timings = Vec::new();
     let mut frame_ok = false;
+    let intel_direct_screen = crate::gfx::is_intel_active() && present_to_screen;
     let intel_skip_overlay_layer = crate::gfx::is_intel_active();
     let scene_dirty = !present_to_screen
         || !state.first_compose_signaled
         || state.windows.iter().any(|w| w.dirty);
 
-    if !ensure_ui2_layer_render_target(
-        UI2_SCENE_TARGET_TEX_ID,
-        state.view_w,
-        state.view_h,
-        "ui2-scene-target",
-    ) {
+    if !intel_direct_screen
+        && !ensure_ui2_layer_render_target(
+            UI2_SCENE_TARGET_TEX_ID,
+            state.view_w,
+            state.view_h,
+            "ui2-scene-target",
+        )
+    {
         crate::log!("ui2: scene render-target ensure failed\n");
         return false;
     }
-    if present_to_screen && !intel_skip_overlay_layer {
+    if present_to_screen && !intel_skip_overlay_layer && !intel_direct_screen {
         if !ensure_ui2_layer_render_target(
             UI2_OVERLAY_TARGET_TEX_ID,
             state.view_w,
@@ -3078,14 +3247,63 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
     }
 
     let lock_result = crate::gfx::try_with_cabi_frame_lock(20_000, || {
+        if intel_direct_screen {
+            let chrome_rects_gpgpu = draw_chrome_solid_rects_intel_gpgpu(state);
+            let begin_rc = unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame_preserve(0) };
+            if begin_rc != 0 {
+                crate::log!("ui2: intel direct-window begin_frame failed rc={}\n", begin_rc);
+                return;
+            }
+            let _ = unsafe {
+                crate::r::io::cabi::trueos_cabi_gfx_suppress_cursor_overlay_for_current_frame()
+            };
+            let set_rt_rc = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_render_target(0) };
+            if set_rt_rc != 0 {
+                crate::log!("ui2: intel direct-window screen target failed rc={}\n", set_rt_rc);
+                let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
+                return;
+            }
+            ui2_win_register::draw_offline_dock(state);
+            for idx in sorted_window_indices(state) {
+                let window = &state.windows[idx];
+                if !window_is_renderable(window) {
+                    continue;
+                }
+                let timing = draw_window_frame(state, window, true, true);
+                surface_timings.push(Ui2ComposeSurfaceTiming {
+                    id: window.id,
+                    chrome_ms: timing.chrome_ms,
+                    texture_ms: timing.texture_ms,
+                    placeholder_ms: timing.placeholder_ms,
+                    path: timing.content_path,
+                });
+            }
+            if scene_dirty {
+                draw_resize_preview_outline(state);
+            }
+            unsafe {
+                crate::r::io::cabi::trueos_cabi_gfx_end_frame();
+            }
+            let surroundings_sprite64 = draw_cursor_overlay_layer_intel_sprite64(state, true, true);
+            crate::log!(
+                "ui2: intel direct-window-present seq={} windows={} scene_layer=0 fullscreen_alpha=0 chrome_rects_gpgpu={} surroundings_sprite64={}\n",
+                compose_seq,
+                stats.visible_windows,
+                chrome_rects_gpgpu as u8,
+                surroundings_sprite64 as u8
+            );
+            frame_ok = true;
+            return;
+        }
+
         if scene_dirty {
             let intel_preserve_scene =
                 crate::gfx::is_intel_active() && state.first_compose_signaled;
             let begin_rc = unsafe {
                 if intel_preserve_scene {
-                    crate::r::io::cabi::trueos_cabi_gfx_begin_frame_preserve_no_present(0xE9EEF2)
+                    crate::r::io::cabi::trueos_cabi_gfx_begin_frame_preserve_no_present(0)
                 } else {
-                    crate::r::io::cabi::trueos_cabi_gfx_begin_frame_no_present(0xE9EEF2)
+                    crate::r::io::cabi::trueos_cabi_gfx_begin_frame_no_present(0)
                 }
             };
             if begin_rc != 0 {
@@ -3100,26 +3318,26 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
                 let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
                 return;
             }
-            if !intel_preserve_scene {
+            if crate::gfx::is_intel_active() || !intel_preserve_scene {
                 let scene_clear_rc = unsafe {
-                    crate::r::io::cabi::trueos_cabi_gfx_clear_rgba_no_present(
-                        0xE9, 0xEE, 0xF2, 0xFF,
-                    )
+                    crate::r::io::cabi::trueos_cabi_gfx_clear_rgba_no_present(0, 0, 0, 0)
                 };
                 if scene_clear_rc != 0 {
-                    crate::log!("ui2: scene render-target clear failed rc={}\n", scene_clear_rc);
+                    crate::log!(
+                        "ui2: scene render-target transparent clear failed rc={}\n",
+                        scene_clear_rc
+                    );
                     let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
                     return;
                 }
             }
-
             ui2_win_register::draw_offline_dock(state);
             for idx in sorted_window_indices(state) {
                 let window = &state.windows[idx];
                 if !window_is_renderable(window) {
                     continue;
                 }
-                let timing = draw_window_frame(state, window);
+                let timing = draw_window_frame(state, window, false, false);
                 surface_timings.push(Ui2ComposeSurfaceTiming {
                     id: window.id,
                     chrome_ms: timing.chrome_ms,
@@ -3169,13 +3387,8 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
             }
         }
 
-        let present_begin_rc = unsafe {
-            if crate::gfx::is_intel_active() {
-                crate::r::io::cabi::trueos_cabi_gfx_begin_frame_preserve(0xE9EEF2)
-            } else {
-                crate::r::io::cabi::trueos_cabi_gfx_begin_frame(0xE9EEF2)
-            }
-        };
+        let present_begin_rc =
+            unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame_preserve(0) };
         if present_begin_rc != 0 {
             crate::log!("ui2: layered present begin_frame failed rc={}\n", present_begin_rc);
             return;
@@ -3191,7 +3404,7 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
             state.view_h as f32,
             state.view_w,
             state.view_h,
-            false,
+            crate::gfx::is_intel_active(),
             255,
         );
         let overlay_drawn = intel_skip_overlay_layer

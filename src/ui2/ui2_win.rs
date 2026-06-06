@@ -1974,6 +1974,45 @@ pub fn resize_window(id: u32, w: f32, h: f32) -> bool {
     noted
 }
 
+pub fn resize_window_content(id: u32, w: f32, h: f32) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(index) = state.windows.iter().position(|window| window.id == id) else {
+        return false;
+    };
+    let content_origin = {
+        let window = &state.windows[index];
+        window_content_rect(&state, window)
+            .map(|content| (content.x, content.y))
+            .unwrap_or((window.rect.x, window.rect.y))
+    };
+
+    {
+        let window = &mut state.windows[index];
+        if window.state != Ui2WindowStateKind::Normal {
+            window.state = Ui2WindowStateKind::Normal;
+        }
+        let content_rect = Ui2Rect::new(content_origin.0, content_origin.1, w.max(1.0), h.max(1.0));
+        let outer_rect = window_rect_for_content(window.decoration_mode, content_rect);
+        let (min_w, min_h) = ui2_window_min_size(window);
+        window.rect.x = outer_rect.x;
+        window.rect.y = outer_rect.y;
+        window.rect.w = outer_rect.w.max(min_w);
+        window.rect.h = outer_rect.h.max(min_h);
+        if window.state == Ui2WindowStateKind::Normal {
+            window.restore_rect = window.rect;
+        }
+    }
+
+    state.compose_reason = "resize-window-content";
+    let noted = note_window_dirty(&mut state, id, "resize-window-content");
+    if noted {
+        let _ = note_window_viewport_sync_needed(&mut state, id);
+        refresh_window_hit_entries(&mut state, id);
+    }
+    noted
+}
+
 pub fn set_window_title(id: u32, title: &str) -> bool {
     let state_lock = init_state();
     let mut state = state_lock.lock();

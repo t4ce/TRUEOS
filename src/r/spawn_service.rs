@@ -1507,9 +1507,9 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &UI2_PALATINO_1X_DEMO_STARTED,
         spawn_ui2_palatino_1x_demo,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "ui2-twemoji-1x",
-        crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY,
+        UI2_DEMO_READY,
         &UI2_TWEMOJI_1X_STARTED,
         spawn_ui2_twemoji_1x,
     ),
