@@ -766,6 +766,12 @@ pub(super) fn collect_window_chrome_gradient_rects(
         }
     }
 
+    if let Some(button) = window.chrome_hover_clear_button
+        && let Some(button_rect) = decoration_hover_button_rect(state, window.id, button)
+    {
+        let _ = push_chrome_gradient_rect(out, button_rect, left, right, false);
+    }
+
     for cursor in &state.cursors {
         if cursor.hover_window_id != window.id {
             continue;
@@ -776,14 +782,116 @@ pub(super) fn collect_window_chrome_gradient_rects(
         let Some(button_rect) = decoration_hover_button_rect(state, window.id, button) else {
             continue;
         };
-        let cursor_rgba = super::ui2_hid::cursor_color(cursor.slot_id);
-        let highlight_y = button_rect.y + 1.0;
-        let highlight_h = (button_rect.h - 2.0).max(1.0);
         let _ = push_chrome_gradient_rect(
             out,
-            Ui2Rect::new(button_rect.x, highlight_y, button_rect.w, highlight_h),
+            button_rect,
+            (0x00, 0x00, 0x00, 0xFF),
             UI2_CHROME_HIGHLIGHT_WHITE_RGBA,
-            (cursor_rgba.0, cursor_rgba.1, cursor_rgba.2, 0xFF),
+            true,
+        );
+    }
+
+    out.len().saturating_sub(before)
+}
+
+pub(super) fn collect_window_titlebar_chrome_gradient_rects(
+    state: &Ui2State,
+    window: &Ui2Window,
+    rect: Ui2Rect,
+    out: &mut Vec<crate::intel::gpgpu::GpgpuGradientRect>,
+) -> usize {
+    let before = out.len();
+    if window.decoration_mode != Ui2WindowDecorationMode::System {
+        return 0;
+    }
+
+    let (left, right) = if window.vm_origin_hint {
+        ((0xC4, 0xA8, 0xC8, 0xFF), (0xF0, 0xF2, 0xF4, 0xFF))
+    } else {
+        ((0xC8, 0xCC, 0xC8, 0xFF), (0xF2, 0xF4, 0xF2, 0xFF))
+    };
+    let (left, right) = animate_window_chrome_gradient(window, left, right);
+    let titleband_h = if window.titlebar_visible {
+        if window.state == Ui2WindowStateKind::Minimized {
+            rect.h
+        } else {
+            UI2_TITLE_H.min(rect.h)
+        }
+    } else {
+        0.0
+    };
+    if titleband_h > 0.0 {
+        let _ = push_chrome_gradient_rect(
+            out,
+            Ui2Rect::new(rect.x, rect.y, rect.w, titleband_h),
+            left,
+            right,
+            false,
+        );
+    }
+
+    if !window.selected_cursor_slots.is_empty() {
+        let bar_span = if window.titlebar_visible {
+            window_decoration_rect(state, window).unwrap_or(rect)
+        } else {
+            rect
+        };
+        let cursor_count = window.selected_cursor_slots.len() as f32;
+        if bar_span.w > 0.0 && cursor_count > 0.0 {
+            for (idx, slot_id) in window.selected_cursor_slots.iter().enumerate() {
+                let seg_x = bar_span.x + (bar_span.w * (idx as f32 / cursor_count));
+                let seg_right = if idx + 1 == window.selected_cursor_slots.len() {
+                    bar_span.x + bar_span.w
+                } else {
+                    bar_span.x + (bar_span.w * ((idx + 1) as f32 / cursor_count))
+                };
+                let seg_w = (seg_right - seg_x).max(0.0);
+                if seg_w <= 0.0 {
+                    continue;
+                }
+                let cursor_rgba = super::ui2_hid::cursor_color(*slot_id);
+                let _ = push_chrome_gradient_rect(
+                    out,
+                    Ui2Rect::new(seg_x, bar_span.y - 2.0, seg_w, 2.0),
+                    UI2_CHROME_HIGHLIGHT_WHITE_RGBA,
+                    (cursor_rgba.0, cursor_rgba.1, cursor_rgba.2, 0xFF),
+                    false,
+                );
+            }
+        }
+    }
+
+    let titlebar_bottom = rect.y + titleband_h.max(0.0);
+    if let Some(button) = window.chrome_hover_clear_button
+        && let Some(button_rect) = decoration_hover_button_rect(state, window.id, button)
+    {
+        let in_titlebar =
+            button_rect.y >= rect.y && button_rect.y + button_rect.h <= titlebar_bottom + 0.5;
+        if in_titlebar || matches!(button, Ui2DecorationHoverButton::Resize) {
+            let _ = push_chrome_gradient_rect(out, button_rect, left, right, false);
+        }
+    }
+
+    for cursor in &state.cursors {
+        if cursor.hover_window_id != window.id {
+            continue;
+        }
+        let Some(button) = cursor.hover_decoration_button else {
+            continue;
+        };
+        let Some(button_rect) = decoration_hover_button_rect(state, window.id, button) else {
+            continue;
+        };
+        let in_titlebar =
+            button_rect.y >= rect.y && button_rect.y + button_rect.h <= titlebar_bottom + 0.5;
+        if !in_titlebar && !matches!(button, Ui2DecorationHoverButton::Resize) {
+            continue;
+        }
+        let _ = push_chrome_gradient_rect(
+            out,
+            button_rect,
+            (0x00, 0x00, 0x00, 0xFF),
+            UI2_CHROME_HIGHLIGHT_WHITE_RGBA,
             true,
         );
     }
@@ -880,18 +988,19 @@ pub(super) fn push_chrome_twemoji_sprite64_placement(
     true
 }
 
-pub(super) fn collect_window_chrome_sprite64_placements(
+pub(super) fn collect_window_titlebar_chrome_sprite64_placements(
     state: &Ui2State,
     window: &Ui2Window,
     rect: Ui2Rect,
     out: &mut Vec<crate::intel::gpgpu::GpgpuTwemojiSprite64Placement>,
+    skip_titlebar_sprites: bool,
 ) -> usize {
     let before = out.len();
     if window.decoration_mode != Ui2WindowDecorationMode::System {
         return 0;
     }
 
-    if window.titlebar_visible {
+    if window.titlebar_visible && !skip_titlebar_sprites {
         let titleband_h = if window.state == Ui2WindowStateKind::Minimized {
             rect.h
         } else {
@@ -913,7 +1022,9 @@ pub(super) fn collect_window_chrome_sprite64_placements(
                 );
             }
         }
+    }
 
+    if !skip_titlebar_sprites {
         for action in [
             Ui2SystemButtonAction::ToggleComposition,
             Ui2SystemButtonAction::Fork,
@@ -937,6 +1048,34 @@ pub(super) fn collect_window_chrome_sprite64_placements(
             }
         }
     }
+
+    let resize_hovered = state.cursors.iter().any(|cursor| {
+        cursor.hover_window_id == window.id
+            && cursor.hover_decoration_button == Some(Ui2DecorationHoverButton::Resize)
+    });
+    let resize_clear = window.chrome_hover_clear_button == Some(Ui2DecorationHoverButton::Resize);
+    if (resize_hovered || resize_clear)
+        && let Some(rect) = window_bottom_resize_button_rect(state, window)
+        && let Ui2BtnIco::TwemojiFit(ch) | Ui2BtnIco::TwemojiFullCell(ch) = ui2_btn_ico_for_resize()
+    {
+        let _ = push_chrome_twemoji_sprite64_placement(out, ch, rect);
+    }
+
+    out.len().saturating_sub(before)
+}
+
+pub(super) fn collect_window_chrome_sprite64_placements(
+    state: &Ui2State,
+    window: &Ui2Window,
+    rect: Ui2Rect,
+    out: &mut Vec<crate::intel::gpgpu::GpgpuTwemojiSprite64Placement>,
+) -> usize {
+    let before = out.len();
+    if window.decoration_mode != Ui2WindowDecorationMode::System {
+        return 0;
+    }
+
+    let _ = collect_window_titlebar_chrome_sprite64_placements(state, window, rect, out, false);
 
     if let Some(rect) = window_bottom_resize_button_rect(state, window) {
         if let Ui2BtnIco::TwemojiFit(ch) | Ui2BtnIco::TwemojiFullCell(ch) = ui2_btn_ico_for_resize()

@@ -609,6 +609,233 @@ pub(crate) fn submit_canvas3d_plane_sample_rgba8_once() -> bool {
     ok
 }
 
+pub(crate) fn submit_canvas3d_plane_fill_rgba8_once() -> bool {
+    if !DIRECT_RCS_ENABLED || CANVAS3D_PLANE_FILL_RAN.swap(true, Ordering::AcqRel) {
+        return false;
+    }
+
+    let Some(dev) = intel::claimed_device() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: canvas3d-plane-fill skipped reason=no-claimed-device\n"
+        );
+        return false;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: canvas3d-plane-fill failed rung=alloc\n"
+        );
+        return false;
+    };
+    let Some(upload) = upload_canvas3d_plane_fill_rgba8_kernel() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: canvas3d-plane-fill skipped reason=no-kernel-upload\n"
+        );
+        return false;
+    };
+    if CANVAS3D_PLANE_FILL_TEST_BYTES > CANVAS3D_PROJECT_OUT_ALLOC_BYTES {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: canvas3d-plane-fill failed rung=buffer-cap dst_bytes=0x{:X} dst_cap=0x{:X}\n",
+            CANVAS3D_PLANE_FILL_TEST_BYTES,
+            CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+        );
+        return false;
+    }
+
+    let q = CANVAS3D_PROJECT_Q16_ONE;
+    let params = Canvas3dPlaneFillRgba8Params {
+        dst_gpu: CANVAS3D_PROJECT_OUT_GPU,
+        dst_pitch_bytes: CANVAS3D_PLANE_FILL_TEST_PITCH_BYTES,
+        dst_width: CANVAS3D_PLANE_FILL_TEST_WIDTH,
+        dst_height: CANVAS3D_PLANE_FILL_TEST_HEIGHT,
+        rect_x: 0,
+        rect_y: 0,
+        rect_width: CANVAS3D_PLANE_FILL_TEST_WIDTH,
+        rect_height: CANVAS3D_PLANE_FILL_TEST_HEIGHT,
+        canvas_width: CANVAS3D_PLANE_FILL_TEST_WIDTH,
+        canvas_height: CANVAS3D_PLANE_FILL_TEST_HEIGHT,
+        origin_q16: Canvas3dVec3Q16 {
+            x: 0,
+            y: 0,
+            z: q * 2,
+            pad: 0,
+        },
+        axis_u_q16: Canvas3dVec3Q16 {
+            x: q / 2,
+            y: 0,
+            z: 0,
+            pad: 0,
+        },
+        axis_v_q16: Canvas3dVec3Q16 {
+            x: 0,
+            y: q / 2,
+            z: 0,
+            pad: 0,
+        },
+        constraint0_q16: Canvas3dVec3Q16 {
+            x: q,
+            y: 0,
+            z: q,
+            pad: 0,
+        },
+        constraint1_q16: Canvas3dVec3Q16 {
+            x: -q,
+            y: 0,
+            z: q,
+            pad: 0,
+        },
+        constraint2_q16: Canvas3dVec3Q16 {
+            x: 0,
+            y: q,
+            z: q,
+            pad: 0,
+        },
+        constraint3_q16: Canvas3dVec3Q16 {
+            x: 0,
+            y: -q,
+            z: q,
+            pad: 0,
+        },
+        constraint_count: 4,
+        color_rgba: CANVAS3D_PLANE_FILL_TEST_COLOR,
+    };
+
+    let poison = 0x1020_3040u32;
+    unsafe {
+        let dst = state.canvas3d_out_virt as *mut u32;
+        for index in 0..(CANVAS3D_PLANE_FILL_TEST_BYTES / core::mem::size_of::<u32>()) {
+            core::ptr::write_volatile(dst.add(index), poison);
+        }
+    }
+    intel::dma_flush(state.canvas3d_out_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
+
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let dst_ppgtt_ok = kernel_ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(
+            state,
+            CANVAS3D_PROJECT_OUT_GPU,
+            state.canvas3d_out_phys,
+            CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+        );
+    let batch_ok = dst_ppgtt_ok
+        && direct_rcs_encode_canvas3d_plane_fill_batch(
+            state,
+            upload,
+            params,
+            CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+        );
+    let submit_start_tick = direct_rcs_now_tick();
+    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
+    let (observed, retire_ms) = if submitted {
+        direct_rcs_poll_result_slot_elapsed(
+            state,
+            CANVAS3D_PLANE_FILL_POST_MARKER_SLOT,
+            CANVAS3D_PLANE_FILL_POST_MARKER,
+            submit_start_tick,
+        )
+    } else {
+        (0, 0)
+    };
+    let pre_marker = direct_rcs_read_result_slot(state, CANVAS3D_PLANE_FILL_PRE_MARKER_SLOT);
+    intel::dma_flush(state.canvas3d_out_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
+
+    let pitch_pixels =
+        (CANVAS3D_PLANE_FILL_TEST_PITCH_BYTES / core::mem::size_of::<u32>() as u32) as usize;
+    let center_index = (CANVAS3D_PLANE_FILL_TEST_HEIGHT as usize / 2) * pitch_pixels
+        + CANVAS3D_PLANE_FILL_TEST_WIDTH as usize / 2;
+    let corner_index = 0usize;
+    let mut changed = 0usize;
+    let mut colored = 0usize;
+    let mut first_changed_index = usize::MAX;
+    let mut first_changed = poison;
+    let (center, corner) = unsafe {
+        let dst = state.canvas3d_out_virt as *const u32;
+        for index in 0..(CANVAS3D_PLANE_FILL_TEST_BYTES / core::mem::size_of::<u32>()) {
+            let value = core::ptr::read_volatile(dst.add(index));
+            if value != poison {
+                changed += 1;
+                if first_changed_index == usize::MAX {
+                    first_changed_index = index;
+                    first_changed = value;
+                }
+            }
+            if value == CANVAS3D_PLANE_FILL_TEST_COLOR {
+                colored += 1;
+            }
+        }
+        (
+            core::ptr::read_volatile(dst.add(center_index)),
+            core::ptr::read_volatile(dst.add(corner_index)),
+        )
+    };
+
+    let retired = observed == CANVAS3D_PLANE_FILL_POST_MARKER;
+    let ok = retired
+        && pre_marker == CANVAS3D_PLANE_FILL_PRE_MARKER
+        && changed > 0
+        && colored > 0
+        && center == CANVAS3D_PLANE_FILL_TEST_COLOR;
+
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/gpgpu: canvas3d-plane-fill forcewake={} ggtt={} ppgtt={} kernel_ppgtt={} dst_ppgtt={} batch={} submitted={} retired={} retire_ms={} ok={} changed={} colored={} center=0x{:08X} corner=0x{:08X} first_changed={} first_value=0x{:08X} poison=0x{:08X} dst={}x{} pitch={} rect={}x{} constraints={} canvas={}x{} pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} dst_gpu=0x{:X} dst_bytes=0x{:X} idd_off=0x{:X} payload_off=0x{:X} color=0x{:08X} ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=direct-execlist no_guc_submit=1 next=plane-worklist-or-z\n",
+        forcewake_ok as u8,
+        mapped_ok as u8,
+        ppgtt_ok as u8,
+        kernel_ppgtt_ok as u8,
+        dst_ppgtt_ok as u8,
+        batch_ok as u8,
+        submitted as u8,
+        retired as u8,
+        retire_ms,
+        ok as u8,
+        changed,
+        colored,
+        center,
+        corner,
+        first_changed_index,
+        first_changed,
+        poison,
+        params.dst_width,
+        params.dst_height,
+        params.dst_pitch_bytes,
+        params.rect_width,
+        params.rect_height,
+        params.constraint_count,
+        params.canvas_width,
+        params.canvas_height,
+        pre_marker,
+        observed,
+        CANVAS3D_PLANE_FILL_POST_MARKER,
+        upload.gpu,
+        upload.gpu + CANVAS3D_PLANE_FILL_RGBA8_TEXT_OFFSET_BYTES,
+        CANVAS3D_PROJECT_OUT_GPU,
+        CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+        CANVAS3D_PLANE_FILL_IDD_OFFSET_BYTES,
+        CANVAS3D_PLANE_FILL_PAYLOAD_OFFSET_BYTES,
+        params.color_rgba,
+        DIRECT_RCS_GPU_VA_RING_BASE,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        DIRECT_RCS_GPU_VA_RESULT_BASE,
+        intel::mmio_read(dev, RCS_RING_HEAD),
+        intel::mmio_read(dev, RCS_RING_TAIL),
+        intel::mmio_read(dev, RCS_RING_ACTHD),
+        intel::mmio_read(dev, RCS_RING_IPEIR),
+        intel::mmio_read(dev, RCS_RING_IPEHR),
+        intel::mmio_read(dev, RCS_RING_EIR),
+    );
+
+    ok
+}
+
 pub(crate) fn shell_cube20_project_spin(
     duration_ms: u64,
     cadence_us: u64,

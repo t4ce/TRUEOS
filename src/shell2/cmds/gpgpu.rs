@@ -6,19 +6,20 @@ use super::super::{ShellBackend2, print_shell_line};
 use crate::intel::gpgpu::{
     GPGPU_SHELL_SURFACE_HEIGHT, GPGPU_SHELL_SURFACE_PITCH_BYTES, GPGPU_SHELL_SURFACE_WIDTH,
     GpgpuPoint, GpgpuRect, alpha_blend_worklist_probe_ok, alpha_blend_worklist_probe_ran,
-    alpha_blend_worklist_rgba8_upload_status, canvas3d_project_rgba8_upload_status,
-    canvas3d_transform_q16_upload_status, clear_rect_rgba8_white_upload_status,
-    copy_rect_rgba8_upload_status, copy_rect_rgba8_wide_upload_status, empty_eot_upload_status,
-    fill_rect_worklist_probe_ok, fill_rect_worklist_probe_ran,
-    fill_rect_worklist_rgba8_upload_status, glyph_mask_rgba8_upload_status,
-    gradient_rect_worklist_probe_ok, gradient_rect_worklist_probe_ran,
-    gradient_rect_worklist_rgba8_upload_status, present_rgba8_to_primary_xrgb_rect_upload_status,
-    rect_worklist_probe_ready, shell_clear_white_rgba8, shell_copy_rgba8,
-    shell_copy_scanout_center_rgba8, shell_cube20_project_spin,
-    shell_twemoji_atlas_worklist_present_scanout, shell_twemoji_atlas_worklist_scanout,
-    shell_twemoji_atlas_worklist_scanout_present, shell_twemoji_atlas_worklist_slot_scanout,
-    sprite64_worklist_rgba8_upload_status, submit_alpha_blend_worklist_rgba8_probe_now,
-    submit_fill_rect_worklist_rgba8_probe_now, submit_gradient_rect_worklist_rgba8_probe_now,
+    alpha_blend_worklist_rgba8_upload_status, canvas3d_plane_fill_rgba8_upload_status,
+    canvas3d_project_rgba8_upload_status, canvas3d_transform_q16_upload_status,
+    clear_rect_rgba8_white_upload_status, copy_rect_rgba8_upload_status,
+    copy_rect_rgba8_wide_upload_status, empty_eot_upload_status, fill_rect_worklist_probe_ok,
+    fill_rect_worklist_probe_ran, fill_rect_worklist_rgba8_upload_status,
+    glyph_mask_rgba8_upload_status, gradient_rect_worklist_probe_ok,
+    gradient_rect_worklist_probe_ran, gradient_rect_worklist_rgba8_upload_status,
+    present_rgba8_to_primary_xrgb_rect_upload_status, rect_worklist_probe_ready,
+    shell_clear_white_rgba8, shell_copy_rgba8, shell_copy_scanout_center_rgba8,
+    shell_cube20_project_spin, shell_twemoji_atlas_worklist_present_scanout,
+    shell_twemoji_atlas_worklist_scanout, shell_twemoji_atlas_worklist_scanout_present,
+    shell_twemoji_atlas_worklist_slot_scanout, sprite64_worklist_rgba8_upload_status,
+    submit_alpha_blend_worklist_rgba8_probe_now, submit_fill_rect_worklist_rgba8_probe_now,
+    submit_gradient_rect_worklist_rgba8_probe_now,
 };
 use crate::shell2::shell2_cmd::ParseOutcome;
 
@@ -233,13 +234,7 @@ fn hex4(values: [u32; 4]) -> AllocString {
 }
 
 fn vec3_text(values: [i32; 4]) -> AllocString {
-    alloc::format!(
-        "[{},{},{},{}]",
-        values[0],
-        values[1],
-        values[2],
-        values[3]
-    )
+    alloc::format!("[{},{},{},{}]", values[0], values[1], values[2], values[3])
 }
 
 fn artifact_status(uploaded: bool) -> u8 {
@@ -286,8 +281,9 @@ fn print_status(io: &'static dyn ShellBackend2) {
     let work = sprite64_worklist_rgba8_upload_status();
     let canvas = canvas3d_project_rgba8_upload_status();
     let transform = canvas3d_transform_q16_upload_status();
+    let plane_fill = canvas3d_plane_fill_rgba8_upload_status();
     let msg = alloc::format!(
-        "gpgpu: copy_upload={} copy_wide_upload={} clear_upload={} fill_worklist_upload={} fill_worklist_ran={} fill_worklist_probe={} gradient_worklist_upload={} gradient_worklist_ran={} gradient_worklist_probe={} alpha_worklist_upload={} alpha_worklist_ran={} alpha_worklist_probe={} rect_worklist_ready={} glyph_mask_upload={} present_xrgb_upload={} empty_upload={} worklist_upload={} canvas3d_upload={} canvas3d_transform_upload={} shell_surface={}x{} pitch={} gpu=0x008A0000",
+        "gpgpu: copy_upload={} copy_wide_upload={} clear_upload={} fill_worklist_upload={} fill_worklist_ran={} fill_worklist_probe={} gradient_worklist_upload={} gradient_worklist_ran={} gradient_worklist_probe={} alpha_worklist_upload={} alpha_worklist_ran={} alpha_worklist_probe={} rect_worklist_ready={} glyph_mask_upload={} present_xrgb_upload={} empty_upload={} worklist_upload={} canvas3d_upload={} canvas3d_transform_upload={} canvas3d_plane_fill_upload={} shell_surface={}x{} pitch={} gpu=0x008A0000",
         artifact_status(copy.is_some()),
         artifact_status(copy_wide.is_some()),
         artifact_status(clear.is_some()),
@@ -307,6 +303,7 @@ fn print_status(io: &'static dyn ShellBackend2) {
         artifact_status(work.is_some()),
         artifact_status(canvas.is_some()),
         artifact_status(transform.is_some()),
+        artifact_status(plane_fill.is_some()),
         GPGPU_SHELL_SURFACE_WIDTH,
         GPGPU_SHELL_SURFACE_HEIGHT,
         GPGPU_SHELL_SURFACE_PITCH_BYTES,
@@ -738,12 +735,7 @@ fn run_plane(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
     };
 
     let q = 65_536;
-    let constraints = [
-        [q, 0, q, 0],
-        [-q, 0, q, 0],
-        [0, q, q, 0],
-        [0, -q, q, 0],
-    ];
+    let constraints = [[q, 0, q, 0], [-q, 0, q, 0], [0, q, q, 0], [0, -q, q, 0]];
     let faces: [(&str, [i32; 4], [i32; 4], [i32; 4]); 6] = [
         ("front", [0, 0, h, 0], [h, 0, 0, 0], [0, h, 0, 0]),
         ("back", [0, 0, -h, 0], [-h, 0, 0, 0], [0, h, 0, 0]),

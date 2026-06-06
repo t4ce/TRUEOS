@@ -138,6 +138,8 @@ pub(super) fn alloc_window(
         selected_cursor_slots: Vec::new(),
         dirty: true,
         content_present_dirty: false,
+        chrome_titlebar_dirty: false,
+        chrome_hover_clear_button: None,
         dirty_seq: 0,
         last_reason: "create",
         last_logged_dirty_seq: 0,

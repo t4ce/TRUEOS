@@ -571,6 +571,8 @@ struct Ui2Window {
     selected_cursor_slots: Vec<u32>,
     dirty: bool,
     content_present_dirty: bool,
+    chrome_titlebar_dirty: bool,
+    chrome_hover_clear_button: Option<Ui2DecorationHoverButton>,
     dirty_seq: u32,
     last_reason: &'static str,
     last_logged_dirty_seq: u32,
@@ -1105,7 +1107,14 @@ fn window_content_can_patch_primary(window: &Ui2Window) -> bool {
 }
 
 fn intel_direct_content_only_dirty(state: &Ui2State) -> bool {
-    if !state.first_compose_signaled || state.cursor_overlay_dirty || state.chrome_overlay_dirty {
+    if !state.first_compose_signaled {
+        return false;
+    }
+    if state.chrome_overlay_dirty
+        && !state.windows.iter().any(|window| {
+            window_is_renderable(window) && window_has_titlebar_chrome_overlay(state, window)
+        })
+    {
         return false;
     }
 
@@ -1316,6 +1325,7 @@ enum Ui2ChromeSpriteScope {
     None,
     All,
     Active,
+    ActiveTitlebar,
 }
 
 fn window_has_active_chrome_overlay(state: &Ui2State, window: &Ui2Window) -> bool {
@@ -1323,6 +1333,12 @@ fn window_has_active_chrome_overlay(state: &Ui2State, window: &Ui2Window) -> boo
         || state.cursors.iter().any(|cursor| {
             cursor.hover_window_id == window.id && cursor.hover_decoration_button.is_some()
         })
+}
+
+fn window_has_titlebar_chrome_overlay(state: &Ui2State, window: &Ui2Window) -> bool {
+    window.chrome_titlebar_dirty
+        || window.chrome_hover_clear_button.is_some()
+        || window_has_active_chrome_overlay(state, window)
 }
 
 fn draw_cursor_overlay_layer_intel_sprite64(
@@ -1348,12 +1364,28 @@ fn draw_cursor_overlay_layer_intel_sprite64(
             {
                 continue;
             }
-            chrome_count = chrome_count.saturating_add(collect_window_chrome_sprite64_placements(
-                state,
-                window,
-                effective_window_rect(state, window),
-                &mut placements,
-            ));
+            if chrome_scope == Ui2ChromeSpriteScope::ActiveTitlebar {
+                if !window_has_titlebar_chrome_overlay(state, window) {
+                    continue;
+                }
+                chrome_count = chrome_count.saturating_add(
+                    collect_window_titlebar_chrome_sprite64_placements(
+                        state,
+                        window,
+                        effective_window_rect(state, window),
+                        &mut placements,
+                        true,
+                    ),
+                );
+            } else {
+                chrome_count =
+                    chrome_count.saturating_add(collect_window_chrome_sprite64_placements(
+                        state,
+                        window,
+                        effective_window_rect(state, window),
+                        &mut placements,
+                    ));
+            }
         }
         if chrome_scope == Ui2ChromeSpriteScope::All {
             dock_count =
@@ -1503,10 +1535,10 @@ fn draw_active_chrome_overlay_intel_gpgpu(state: &mut Ui2State) -> bool {
     let mut window_count = 0usize;
     for idx in sorted_window_indices(state) {
         let window = &state.windows[idx];
-        if !window_is_renderable(window) || !window_has_active_chrome_overlay(state, window) {
+        if !window_is_renderable(window) || !window_has_titlebar_chrome_overlay(state, window) {
             continue;
         }
-        let added = collect_window_chrome_gradient_rects(
+        let added = collect_window_titlebar_chrome_gradient_rects(
             state,
             window,
             effective_window_rect(state, window),
@@ -1518,11 +1550,18 @@ fn draw_active_chrome_overlay_intel_gpgpu(state: &mut Ui2State) -> bool {
     }
 
     if rects.is_empty() {
-        let ok =
-            draw_cursor_overlay_layer_intel_sprite64(state, Ui2ChromeSpriteScope::Active, true);
+        let ok = draw_cursor_overlay_layer_intel_sprite64(
+            state,
+            Ui2ChromeSpriteScope::ActiveTitlebar,
+            true,
+        );
         state.chrome_overlay_dirty = !ok;
         if ok {
             state.cursor_overlay_dirty = false;
+            for window in &mut state.windows {
+                window.chrome_titlebar_dirty = false;
+                window.chrome_hover_clear_button = None;
+            }
         }
         return ok;
     }
@@ -1531,16 +1570,20 @@ fn draw_active_chrome_overlay_intel_gpgpu(state: &mut Ui2State) -> bool {
         return false;
     };
     let sprites_ok =
-        draw_cursor_overlay_layer_intel_sprite64(state, Ui2ChromeSpriteScope::Active, true);
+        draw_cursor_overlay_layer_intel_sprite64(state, Ui2ChromeSpriteScope::ActiveTitlebar, true);
     let ok = result.ok && sprites_ok;
     state.chrome_overlay_dirty = !ok;
     if ok {
         state.cursor_overlay_dirty = false;
+        for window in &mut state.windows {
+            window.chrome_titlebar_dirty = false;
+            window.chrome_hover_clear_button = None;
+        }
     }
     let log_n = UI2_CHROME_GRADIENT_RECT_LOGS.fetch_add(1, Ordering::Relaxed);
     if log_n < 16 || !ok {
         crate::log!(
-            "ui2: active chrome overlay-gpgpu ok={} windows={} rects={} gradient_ms={} sprites_present={} total_ms={}\n",
+            "ui2: active titlebar chrome overlay-gpgpu ok={} windows={} rects={} gradient_ms={} sprites_present={} total_ms={}\n",
             ok as u8,
             window_count,
             result.rects,
@@ -1553,7 +1596,17 @@ fn draw_active_chrome_overlay_intel_gpgpu(state: &mut Ui2State) -> bool {
 }
 
 fn active_chrome_overlay_due(state: &Ui2State, now_ms: u64) -> bool {
+    if state.cursor_overlay_dirty {
+        return true;
+    }
     if state.chrome_overlay_dirty {
+        return true;
+    }
+    if state
+        .windows
+        .iter()
+        .any(|window| window_is_renderable(window) && window.chrome_titlebar_dirty)
+    {
         return true;
     }
     state.first_compose_signaled
@@ -1911,15 +1964,57 @@ fn note_window_content_present_dirty(state: &mut Ui2State, id: u32, reason: &'st
 fn note_cursor_overlay_dirty(state: &mut Ui2State, reason: &'static str) {
     state.cursor_overlay_dirty = true;
     state.compose_reason = reason;
-    if crate::gfx::is_intel_active() && state.first_compose_signaled {
-        state.chrome_overlay_dirty = true;
-    } else {
+    if !crate::gfx::is_intel_active() || !state.first_compose_signaled {
         UI2_DIRTY.store(true, Ordering::Release);
     }
 }
 
-fn note_chrome_overlay_dirty(state: &mut Ui2State) {
+fn note_window_titlebar_chrome_dirty(state: &mut Ui2State, id: u32, reason: &'static str) -> bool {
+    let force_full = !crate::gfx::is_intel_active() || !state.first_compose_signaled;
+    {
+        let Some(window) = window_mut(state, id) else {
+            return false;
+        };
+        window.chrome_titlebar_dirty = true;
+        window.last_reason = reason;
+        if force_full {
+            window.dirty = true;
+            window.content_present_dirty = false;
+        }
+    }
     state.chrome_overlay_dirty = true;
+    state.compose_reason = reason;
+    if force_full {
+        UI2_DIRTY.store(true, Ordering::Release);
+    }
+    true
+}
+
+fn note_window_chrome_hover_clear_dirty(
+    state: &mut Ui2State,
+    id: u32,
+    button: Ui2DecorationHoverButton,
+    reason: &'static str,
+) -> bool {
+    let force_full = !crate::gfx::is_intel_active() || !state.first_compose_signaled;
+    {
+        let Some(window) = window_mut(state, id) else {
+            return false;
+        };
+        window.chrome_titlebar_dirty = true;
+        window.chrome_hover_clear_button = Some(button);
+        window.last_reason = reason;
+        if force_full {
+            window.dirty = true;
+            window.content_present_dirty = false;
+        }
+    }
+    state.chrome_overlay_dirty = true;
+    state.compose_reason = reason;
+    if force_full {
+        UI2_DIRTY.store(true, Ordering::Release);
+    }
+    true
 }
 
 fn note_window_viewport_sync_needed(state: &mut Ui2State, id: u32) -> bool {
@@ -3684,10 +3779,24 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
             } else {
                 draw_chrome_solid_rects_intel_gpgpu(state, chrome_gradients_gpgpu)
             };
-            let content_gpgpu =
-                draw_window_content_textures_intel_gpgpu(state, content_only_dirty);
+            let content_gpgpu = draw_window_content_textures_intel_gpgpu(state, content_only_dirty);
             let surroundings_sprite64 = if content_only_dirty {
-                true
+                if state.chrome_overlay_dirty
+                    || state
+                        .windows
+                        .iter()
+                        .any(|window| window_is_renderable(window) && window.chrome_titlebar_dirty)
+                {
+                    draw_active_chrome_overlay_intel_gpgpu(state)
+                } else if state.cursor_overlay_dirty {
+                    draw_cursor_overlay_layer_intel_sprite64(
+                        state,
+                        Ui2ChromeSpriteScope::None,
+                        true,
+                    )
+                } else {
+                    true
+                }
             } else {
                 draw_cursor_overlay_layer_intel_sprite64(state, Ui2ChromeSpriteScope::All, true)
             };
@@ -3888,6 +3997,8 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
     state.cursor_overlay_dirty = false;
     state.chrome_overlay_dirty = false;
     for window in &mut state.windows {
+        window.chrome_titlebar_dirty = false;
+        window.chrome_hover_clear_button = None;
         if scene_dirty && window.dirty {
             window.dirty = false;
             window.content_present_dirty = false;
