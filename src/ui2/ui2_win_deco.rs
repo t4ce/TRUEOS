@@ -566,14 +566,14 @@ pub(super) fn draw_window_chrome(
     }
 }
 
-fn pack_ui2_rgba_for_kernel(rgba: (u8, u8, u8, u8)) -> u32 {
+pub(super) fn pack_ui2_rgba_for_kernel(rgba: (u8, u8, u8, u8)) -> u32 {
     (u32::from(rgba.3) << 24)
         | (u32::from(rgba.2) << 16)
         | (u32::from(rgba.1) << 8)
         | u32::from(rgba.0)
 }
 
-fn push_chrome_solid_rect(
+pub(super) fn push_chrome_solid_rect(
     out: &mut Vec<crate::intel::gpgpu::GpgpuSolidRect>,
     rect: Ui2Rect,
     rgba: (u8, u8, u8, u8),
@@ -595,11 +595,93 @@ fn push_chrome_solid_rect(
     true
 }
 
+pub(super) fn push_chrome_gradient_rect(
+    out: &mut Vec<crate::intel::gpgpu::GpgpuGradientRect>,
+    rect: Ui2Rect,
+    color0: (u8, u8, u8, u8),
+    color1: (u8, u8, u8, u8),
+    vertical: bool,
+) -> bool {
+    if !(rect.w > 0.0 && rect.h > 0.0) {
+        return false;
+    }
+    let x0 = libm::floorf(rect.x) as i32;
+    let y0 = libm::floorf(rect.y) as i32;
+    let x1 = libm::ceilf(rect.x + rect.w) as i32;
+    let y1 = libm::ceilf(rect.y + rect.h) as i32;
+    if x1 <= x0 || y1 <= y0 {
+        return false;
+    }
+    out.push(crate::intel::gpgpu::GpgpuGradientRect {
+        rect: crate::intel::gpgpu::GpgpuRect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32),
+        color0_rgba: pack_ui2_rgba_for_kernel(color0),
+        color1_rgba: pack_ui2_rgba_for_kernel(color1),
+        vertical,
+    });
+    true
+}
+
+pub(super) fn collect_window_chrome_gradient_rects(
+    state: &Ui2State,
+    window: &Ui2Window,
+    rect: Ui2Rect,
+    out: &mut Vec<crate::intel::gpgpu::GpgpuGradientRect>,
+) -> usize {
+    let before = out.len();
+    if window.decoration_mode != Ui2WindowDecorationMode::System {
+        return 0;
+    }
+
+    let frame_base_rgba = if window.vm_origin_hint {
+        blend_rgba_over(
+            (UI2_VM_HINT_ACCENT_RGBA.0, UI2_VM_HINT_ACCENT_RGBA.1, UI2_VM_HINT_ACCENT_RGBA.2, 0x44),
+            (0xF7, 0xF7, 0xFB, 0xFF),
+        )
+    } else {
+        (0xD9, 0xDE, 0xE5, 0xFF)
+    };
+    let frame_left_rgba = modulate_rgba_alpha(
+        blend_rgba_over((0x00, 0x00, 0x00, 0x52), frame_base_rgba),
+        window.alpha,
+    );
+    let frame_right_rgba = modulate_rgba_alpha(
+        blend_rgba_over((0xFF, 0xFF, 0xFF, 0x52), frame_base_rgba),
+        window.alpha,
+    );
+
+    let titleband_h = if window.titlebar_visible {
+        if window.state == Ui2WindowStateKind::Minimized {
+            rect.h
+        } else {
+            UI2_TITLE_H.min(rect.h)
+        }
+    } else {
+        0.0
+    };
+    if titleband_h > 0.0 {
+        let _ = push_chrome_gradient_rect(
+            out,
+            Ui2Rect::new(rect.x, rect.y, rect.w, titleband_h),
+            frame_left_rgba,
+            frame_right_rgba,
+            false,
+        );
+    }
+
+    if let Some(bottom_bar) = window_bottom_bar_rect(state, window) {
+        let _ =
+            push_chrome_gradient_rect(out, bottom_bar, frame_left_rgba, frame_right_rgba, false);
+    }
+
+    out.len().saturating_sub(before)
+}
+
 pub(super) fn collect_window_chrome_solid_rects(
     state: &Ui2State,
     window: &Ui2Window,
     rect: Ui2Rect,
     out: &mut Vec<crate::intel::gpgpu::GpgpuSolidRect>,
+    skip_bands: bool,
 ) -> usize {
     let before = out.len();
     if window.decoration_mode != Ui2WindowDecorationMode::System {
@@ -616,7 +698,7 @@ pub(super) fn collect_window_chrome_solid_rects(
     } else {
         0.0
     };
-    if titleband_h > 0.0 {
+    if titleband_h > 0.0 && !skip_bands {
         let _ =
             push_chrome_solid_rect(out, Ui2Rect::new(rect.x, rect.y, rect.w, titleband_h), white);
     }
@@ -636,7 +718,7 @@ pub(super) fn collect_window_chrome_solid_rects(
         );
     }
 
-    if let Some(bottom_bar) = window_bottom_bar_rect(state, window) {
+    if !skip_bands && let Some(bottom_bar) = window_bottom_bar_rect(state, window) {
         let _ = push_chrome_solid_rect(out, bottom_bar, white);
     }
 
@@ -732,7 +814,7 @@ pub(super) fn collect_window_chrome_solid_rects(
     out.len().saturating_sub(before)
 }
 
-fn push_chrome_twemoji_sprite64_placement(
+pub(super) fn push_chrome_twemoji_sprite64_placement(
     out: &mut Vec<crate::intel::gpgpu::GpgpuTwemojiSprite64Placement>,
     ch: char,
     rect: Ui2Rect,

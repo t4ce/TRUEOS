@@ -1550,7 +1550,7 @@ impl IntelGfxBackend {
         while off + (6 * trueos_gfx_core::RGB_VERTEX_SIZE) <= verts.len() {
             let quad = decode_rgb_fill_quad_shape(verts, off, dst.width, dst.height)?;
             let quad = clip_rgb_fill_quad_to_scissor(quad, scissor)?;
-            let spans = crate::intel::gpgpu::fill_rect_rgba8(
+            let spans = crate::intel::gpgpu::fill_rect_worklist_rgba8(
                 dst_surface,
                 crate::intel::gpgpu::GpgpuRect::new(
                     quad.dst_x,
@@ -2104,7 +2104,7 @@ impl GfxDevice for IntelGfxBackend {
                         RenderTarget::Image(id) if ENABLE_IMAGE_GPGPU_CLEAR => {
                             self.image(id).and_then(|image| {
                                 let surface = image.gpgpu_surface()?;
-                                let spans = crate::intel::gpgpu::fill_rect_rgba8(
+                                let spans = crate::intel::gpgpu::fill_rect_worklist_rgba8(
                                     surface,
                                     crate::intel::gpgpu::GpgpuRect::new(
                                         0,
@@ -2152,7 +2152,7 @@ impl GfxDevice for IntelGfxBackend {
                         RenderTarget::Image(id) if ENABLE_IMAGE_GPGPU_CLEAR => {
                             self.image(id).and_then(|image| {
                                 let surface = image.gpgpu_surface()?;
-                                let spans = crate::intel::gpgpu::fill_rect_rgba8(
+                                let spans = crate::intel::gpgpu::fill_rect_worklist_rgba8(
                                     surface,
                                     crate::intel::gpgpu::GpgpuRect::new(
                                         0,
@@ -2237,7 +2237,7 @@ impl GfxDevice for IntelGfxBackend {
                                 && let Some(image) = self.image(id)
                                 && let Some(surface) = image.gpgpu_surface()
                             {
-                                let spans = crate::intel::gpgpu::fill_rect_rgba8(
+                                let spans = crate::intel::gpgpu::fill_rect_worklist_rgba8(
                                     surface,
                                     crate::intel::gpgpu::GpgpuRect::new(
                                         x0 as i32,

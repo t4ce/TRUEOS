@@ -34,7 +34,7 @@ const UI2_OFFLINE_PILL_H: f32 = UI2_BAR_H;
 const UI2_OFFLINE_PILL_GAP: f32 = 4.0;
 const UI2_OFFLINE_PILL_PAD: f32 = 8.0;
 const UI2_OFFLINE_PILL_PLAY_SIZE: f32 = UI2_BAR_H;
-const UI2_OFFLINE_PILL_BG: (u8, u8, u8, u8) = (0xD9, 0xDE, 0xE5, 0xD0);
+const UI2_OFFLINE_PILL_BG: (u8, u8, u8, u8) = (0x52, 0xD2, 0x7A, 0xD8);
 const UI2_OFFLINE_PILL_TEXT: (u8, u8, u8, u8) = (0x30, 0x30, 0x30, 0xFF);
 /// Play button: ▶ U+25B6
 const UI2_OFFLINE_PLAY_TWEMOJI: char = '\u{23EF}';
@@ -52,16 +52,9 @@ struct OfflinePillSlot {
 /// Offline pills rebuilt every frame.
 static OFFLINE_PILLS: Mutex<Vec<OfflinePillSlot>> = Mutex::new(Vec::new());
 
-/// Draw the offline-task dock on the right side and populate OFFLINE_PILLS for hit-testing.
-pub(super) fn draw_offline_dock(state: &Ui2State) {
-    if crate::gfx::is_intel_active() {
-        *OFFLINE_PILLS.lock() = Vec::new();
-        return;
-    }
-
+fn collect_offline_pill_slots(state: &Ui2State) -> Vec<OfflinePillSlot> {
     let mut pills: Vec<OfflinePillSlot> = Vec::new();
 
-    // 1. Disabled tasks not yet started.
     for entry in crate::r::spawn_service::offline_ui2_demo_tasks() {
         let window_id = state
             .windows
@@ -81,7 +74,6 @@ pub(super) fn draw_offline_dock(state: &Ui2State) {
         });
     }
 
-    // 2. Hidden (X-closed) windows.
     for window in &state.windows {
         if window.visible || window.title.is_empty() {
             continue;
@@ -89,7 +81,6 @@ pub(super) fn draw_offline_dock(state: &Ui2State) {
         if window.spawn_task_index.is_some() {
             continue;
         }
-        // Only show hosted-surface windows (demo apps) that were X-closed.
         if window.kind != Ui2WindowKind::HostedSurface {
             continue;
         }
@@ -101,11 +92,9 @@ pub(super) fn draw_offline_dock(state: &Ui2State) {
     }
 
     if pills.is_empty() {
-        *OFFLINE_PILLS.lock() = Vec::new();
-        return;
+        return pills;
     }
 
-    // Layout: stack top-to-bottom, right-aligned.
     let pill_w = UI2_OFFLINE_PILL_W.min((state.view_w as f32) - UI2_OFFLINE_PILL_PAD * 2.0);
     let base_x = (state.view_w as f32) - pill_w - UI2_OFFLINE_PILL_PAD;
     let mut y = UI2_OFFLINE_PILL_PAD;
@@ -113,6 +102,107 @@ pub(super) fn draw_offline_dock(state: &Ui2State) {
     for pill in pills.iter_mut() {
         pill.rect = Ui2Rect::new(base_x, y, pill_w, UI2_OFFLINE_PILL_H);
         y += UI2_OFFLINE_PILL_H + UI2_OFFLINE_PILL_GAP;
+    }
+
+    pills
+}
+
+fn sync_offline_pill_hit_slots(pills: &[OfflinePillSlot]) {
+    *OFFLINE_PILLS.lock() = pills.to_vec();
+}
+
+pub(super) fn collect_offline_dock_solid_rects(
+    state: &Ui2State,
+    out: &mut Vec<crate::intel::gpgpu::GpgpuSolidRect>,
+) -> usize {
+    let before = out.len();
+    let pills = collect_offline_pill_slots(state);
+    if pills.is_empty() {
+        sync_offline_pill_hit_slots(&pills);
+        return 0;
+    }
+
+    for pill in pills.iter() {
+        let _ = super::ui2_win_deco::push_chrome_solid_rect(out, pill.rect, UI2_OFFLINE_PILL_BG);
+    }
+    sync_offline_pill_hit_slots(&pills);
+    out.len().saturating_sub(before)
+}
+
+pub(super) fn collect_offline_dock_gradient_rects(
+    state: &Ui2State,
+    out: &mut Vec<crate::intel::gpgpu::GpgpuGradientRect>,
+) -> usize {
+    let before = out.len();
+    let pills = collect_offline_pill_slots(state);
+    if pills.is_empty() {
+        sync_offline_pill_hit_slots(&pills);
+        return 0;
+    }
+
+    let frame_base_rgba = (0xD9, 0xDE, 0xE5, 0xFF);
+    let frame_left_rgba = super::modulate_rgba_alpha(
+        super::blend_rgba_over((0x00, 0x00, 0x00, 0x52), frame_base_rgba),
+        0xD8,
+    );
+    let frame_right_rgba = super::modulate_rgba_alpha(
+        super::blend_rgba_over((0xFF, 0xFF, 0xFF, 0x52), frame_base_rgba),
+        0xD8,
+    );
+
+    for pill in pills.iter() {
+        let _ = super::ui2_win_deco::push_chrome_gradient_rect(
+            out,
+            pill.rect,
+            frame_left_rgba,
+            frame_right_rgba,
+            false,
+        );
+    }
+    sync_offline_pill_hit_slots(&pills);
+    out.len().saturating_sub(before)
+}
+
+pub(super) fn collect_offline_dock_sprite64_placements(
+    state: &Ui2State,
+    out: &mut Vec<crate::intel::gpgpu::GpgpuTwemojiSprite64Placement>,
+) -> usize {
+    let before = out.len();
+    let pills = collect_offline_pill_slots(state);
+    if pills.is_empty() {
+        sync_offline_pill_hit_slots(&pills);
+        return 0;
+    }
+
+    for pill in pills.iter() {
+        let play_rect = Ui2Rect::new(
+            pill.rect.x + pill.rect.w - UI2_OFFLINE_PILL_PLAY_SIZE,
+            pill.rect.y,
+            UI2_OFFLINE_PILL_PLAY_SIZE,
+            UI2_OFFLINE_PILL_PLAY_SIZE,
+        );
+        let _ = super::ui2_win_deco::push_chrome_twemoji_sprite64_placement(
+            out,
+            UI2_OFFLINE_PLAY_TWEMOJI,
+            play_rect,
+        );
+    }
+    sync_offline_pill_hit_slots(&pills);
+    out.len().saturating_sub(before)
+}
+
+/// Draw the offline-task dock on the right side and populate OFFLINE_PILLS for hit-testing.
+pub(super) fn draw_offline_dock(state: &Ui2State) {
+    if crate::gfx::is_intel_active() {
+        let pills = collect_offline_pill_slots(state);
+        sync_offline_pill_hit_slots(&pills);
+        return;
+    }
+
+    let pills = collect_offline_pill_slots(state);
+    if pills.is_empty() {
+        sync_offline_pill_hit_slots(&pills);
+        return;
     }
 
     // Draw.
@@ -169,7 +259,7 @@ pub(super) fn draw_offline_dock(state: &Ui2State) {
         draw_window_twemoji_button_standalone(state, play_rect, UI2_OFFLINE_PLAY_TWEMOJI, 0xFF);
     }
 
-    *OFFLINE_PILLS.lock() = pills;
+    sync_offline_pill_hit_slots(&pills);
 }
 
 const UI2_OFFLINE_TITLE_FONT_TIER: Ui2FontTier = Ui2FontTier::Third;
