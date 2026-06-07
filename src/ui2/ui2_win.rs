@@ -134,11 +134,13 @@ pub(super) fn alloc_window(
         last_clicked_item_seq: 0,
         last_clicked_cursor_slot: 0,
         cursor_events: Vec::new(),
+        keyboard_events: Vec::new(),
         container_sync_needed: true,
         selected_cursor_slots: Vec::new(),
         dirty: true,
         content_present_dirty: false,
         content_present_dirty_rect: None,
+        geometry_dirty: true,
         chrome_titlebar_dirty: false,
         chrome_hover_clear_button: None,
         dirty_seq: 0,
@@ -286,6 +288,9 @@ pub(super) fn commit_window_geometry_change(
 ) -> bool {
     let noted = note_window_dirty(state, id, reason);
     if noted {
+        if let Some(window) = window_mut(state, id) {
+            window.geometry_dirty = true;
+        }
         let _ = note_window_viewport_sync_needed(state, id);
         refresh_window_hit_entries(state, id);
     }
@@ -1211,6 +1216,27 @@ pub fn set_window_hosted_surface_tiles(
     noted
 }
 
+pub fn set_window_hosted_surface_bg(id: u32, bg_rgba: [u8; 4]) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    if window.kind != Ui2WindowKind::HostedSurface {
+        return false;
+    }
+    if window.hosted_surface_bg_rgba == bg_rgba {
+        return true;
+    }
+    window.hosted_surface_bg_rgba = bg_rgba;
+    state.compose_reason = "surface-bg-window";
+    let noted = note_window_content_present_dirty(&mut state, id, "surface-bg-window");
+    if noted {
+        let _ = note_window_viewport_sync_needed(&mut state, id);
+    }
+    noted
+}
+
 pub fn set_window_hosted_surface_interactives(
     id: u32,
     interactives: &[Ui2HostedInteractiveRect],
@@ -1943,6 +1969,49 @@ pub fn take_window_last_clicked_item_with_cursor(id: u32) -> Option<(u32, u32, u
     window.last_clicked_item_id = 0;
     window.last_clicked_cursor_slot = 0;
     Some((seq, item_id, cursor_slot))
+}
+
+pub(super) fn note_window_keyboard_event(
+    state: &mut Ui2State,
+    id: u32,
+    event: crate::r::keyboard::TrueosKeyboardOutputEvent,
+) -> bool {
+    let Some(window) = window_mut(state, id) else {
+        return false;
+    };
+    if window.kind != Ui2WindowKind::HostedSurface {
+        return false;
+    }
+    const MAX_WINDOW_KEYBOARD_EVENTS: usize = 64;
+    if window.keyboard_events.len() >= MAX_WINDOW_KEYBOARD_EVENTS {
+        window.keyboard_events.remove(0);
+    }
+    window.keyboard_events.push(event);
+    true
+}
+
+pub fn take_window_keyboard_events(
+    id: u32,
+    out: &mut [crate::r::keyboard::TrueosKeyboardOutputEvent],
+) -> usize {
+    if out.is_empty() {
+        return 0;
+    }
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return 0;
+    };
+    let count = out.len().min(window.keyboard_events.len());
+    for (dst, src) in out
+        .iter_mut()
+        .zip(window.keyboard_events.iter())
+        .take(count)
+    {
+        *dst = *src;
+    }
+    window.keyboard_events.drain(0..count);
+    count
 }
 
 pub fn move_window(id: u32, x: f32, y: f32) -> bool {

@@ -175,14 +175,11 @@ pub fn init_once() {
         dev.mmio_len
     );
     *CLAIMED_DEVICE.lock() = Some(dev);
-    let _ = self::gpgpu::upload_copy_rect_rgba8_wide_kernel();
-    let _ = self::gpgpu::upload_clear_rect_rgba8_white_kernel();
     let _ = self::gpgpu::upload_fill_rect_worklist_rgba8_kernel();
     let _ = self::gpgpu::upload_gradient_rect_worklist_rgba8_kernel();
     let _ = self::gpgpu::upload_alpha_blend_worklist_rgba8_kernel();
     let _ = self::gpgpu::upload_glyph_mask_rgba8_kernel();
     let _ = self::gpgpu::upload_present_rgba8_to_primary_xrgb_rect_kernel();
-    let _ = self::gpgpu::upload_empty_eot_kernel();
     let _ = self::gpgpu::upload_sprite64_worklist_rgba8_kernel();
     let _ = self::gpgpu::upload_canvas3d_project_rgba8_kernel();
     let _ = self::gpgpu::upload_canvas3d_transform_q16_kernel();
@@ -193,9 +190,6 @@ pub fn init_once() {
     let _ = self::gpgpu::upload_canvas3d_plane_patch_worklist_rgba8_kernel();
     if crate::allcaps::probes::INTEL_GPGPU_ARTIFACT_BOOT_SMOKETESTS {
         let _ = self::gpgpu::submit_direct_rcs_smoke_once();
-        let _ = self::gpgpu::submit_empty_eot_walker_once();
-        let _ = self::gpgpu::submit_clear_rect_rgba8_white_strip_once();
-        let _ = self::gpgpu::submit_copy_rect_rgba8_wide_256x2_once();
         let _ = self::gpgpu::submit_fill_rect_worklist_rgba8_probe_once();
         let _ = self::gpgpu::submit_gradient_rect_worklist_rgba8_probe_once();
         let _ = self::gpgpu::submit_alpha_blend_worklist_rgba8_probe_once();

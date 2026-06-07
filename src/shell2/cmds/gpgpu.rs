@@ -8,14 +8,13 @@ use crate::intel::gpgpu::{
     GpgpuPoint, GpgpuRect, alpha_blend_worklist_probe_ok, alpha_blend_worklist_probe_ran,
     alpha_blend_worklist_rgba8_upload_status, canvas3d_plane_fill_rgba8_upload_status,
     canvas3d_project_rgba8_upload_status, canvas3d_transform_q16_upload_status,
-    clear_rect_rgba8_white_upload_status, copy_rect_rgba8_upload_status,
-    copy_rect_rgba8_wide_upload_status, empty_eot_upload_status, fill_rect_worklist_probe_ok,
-    fill_rect_worklist_probe_ran, fill_rect_worklist_rgba8_upload_status,
-    glyph_mask_rgba8_upload_status, gradient_rect_worklist_probe_ok,
-    gradient_rect_worklist_probe_ran, gradient_rect_worklist_rgba8_upload_status,
+    copy_rect_rgba8_upload_status, fill_rect_worklist_probe_ok, fill_rect_worklist_probe_ran,
+    fill_rect_worklist_rgba8_upload_status, glyph_mask_rgba8_upload_status,
+    gradient_rect_worklist_probe_ok, gradient_rect_worklist_probe_ran,
+    gradient_rect_worklist_rgba8_upload_status,
     present_rgba8_to_primary_xrgb_rect_upload_status, rect_worklist_probe_ready,
-    shell_clear_white_rgba8, shell_copy_rgba8, shell_copy_scanout_center_rgba8,
-    shell_cube20_project_spin, shell_twemoji_atlas_worklist_present_scanout,
+    shell_copy_rgba8, shell_copy_scanout_center_rgba8, shell_cube20_project_spin,
+    shell_twemoji_atlas_worklist_present_scanout,
     shell_twemoji_atlas_worklist_scanout, shell_twemoji_atlas_worklist_scanout_present,
     shell_twemoji_atlas_worklist_slot_scanout, sprite64_worklist_rgba8_upload_status,
     submit_alpha_blend_worklist_rgba8_probe_now, submit_fill_rect_worklist_rgba8_probe_now,
@@ -38,7 +37,6 @@ static ATHLAS_GO_SEQUENCE: AtomicU32 = AtomicU32::new(0);
 
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "gpgpu status");
-    print_shell_line(io, "gpgpu clear [x y w h]");
     print_shell_line(io, "gpgpu copy [sx sy dx dy w h]");
     print_shell_line(io, "gpgpu scanout");
     print_shell_line(io, "gpgpu atlas|athlas <id> [x,y]");
@@ -66,20 +64,6 @@ fn parse_slot_id(raw: Option<&str>) -> Option<u16> {
     } else {
         raw.parse::<u16>().ok()
     }
-}
-
-fn parse_clear_rect(args: &mut SplitWhitespace<'_>) -> Option<GpgpuRect> {
-    let Some(x_raw) = args.next() else {
-        return Some(GpgpuRect::new(0, 0, 4, 1));
-    };
-    let x = x_raw.parse::<i32>().ok()?;
-    let y = parse_i32(args.next())?;
-    let width = parse_u32(args.next())?;
-    let height = parse_u32(args.next())?;
-    if args.next().is_some() {
-        return None;
-    }
-    Some(GpgpuRect::new(x, y, width, height))
 }
 
 fn parse_copy_rect(args: &mut SplitWhitespace<'_>) -> Option<(GpgpuRect, GpgpuPoint)> {
@@ -270,23 +254,18 @@ fn wait_until_tick(deadline: u64) {
 
 fn print_status(io: &'static dyn ShellBackend2) {
     let copy = copy_rect_rgba8_upload_status();
-    let copy_wide = copy_rect_rgba8_wide_upload_status();
-    let clear = clear_rect_rgba8_white_upload_status();
     let fill_worklist = fill_rect_worklist_rgba8_upload_status();
     let gradient_worklist = gradient_rect_worklist_rgba8_upload_status();
     let alpha_worklist = alpha_blend_worklist_rgba8_upload_status();
     let glyph = glyph_mask_rgba8_upload_status();
     let present = present_rgba8_to_primary_xrgb_rect_upload_status();
-    let empty = empty_eot_upload_status();
     let work = sprite64_worklist_rgba8_upload_status();
     let canvas = canvas3d_project_rgba8_upload_status();
     let transform = canvas3d_transform_q16_upload_status();
     let plane_fill = canvas3d_plane_fill_rgba8_upload_status();
     let msg = alloc::format!(
-        "gpgpu: copy_upload={} copy_wide_upload={} clear_upload={} fill_worklist_upload={} fill_worklist_ran={} fill_worklist_probe={} gradient_worklist_upload={} gradient_worklist_ran={} gradient_worklist_probe={} alpha_worklist_upload={} alpha_worklist_ran={} alpha_worklist_probe={} rect_worklist_ready={} glyph_mask_upload={} present_xrgb_upload={} empty_upload={} worklist_upload={} canvas3d_upload={} canvas3d_transform_upload={} canvas3d_plane_fill_upload={} shell_surface={}x{} pitch={} gpu=0x008A0000",
+        "gpgpu: copy_upload={} fill_worklist_upload={} fill_worklist_ran={} fill_worklist_probe={} gradient_worklist_upload={} gradient_worklist_ran={} gradient_worklist_probe={} alpha_worklist_upload={} alpha_worklist_ran={} alpha_worklist_probe={} rect_worklist_ready={} glyph_mask_upload={} present_xrgb_upload={} worklist_upload={} canvas3d_upload={} canvas3d_transform_upload={} canvas3d_plane_fill_upload={} shell_surface={}x{} pitch={} gpu=0x008A0000",
         artifact_status(copy.is_some()),
-        artifact_status(copy_wide.is_some()),
-        artifact_status(clear.is_some()),
         artifact_status(fill_worklist.is_some()),
         artifact_status(fill_rect_worklist_probe_ran()),
         artifact_status(fill_rect_worklist_probe_ok()),
@@ -299,7 +278,6 @@ fn print_status(io: &'static dyn ShellBackend2) {
         artifact_status(rect_worklist_probe_ready()),
         artifact_status(glyph.is_some()),
         artifact_status(present.is_some()),
-        artifact_status(empty.is_some()),
         artifact_status(work.is_some()),
         artifact_status(canvas.is_some()),
         artifact_status(transform.is_some()),
@@ -332,36 +310,6 @@ fn run_rect_probe(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>
         gradient_rect_worklist_probe_ok() as u8,
         alpha_blend_worklist_probe_ok() as u8,
         rect_worklist_probe_ready() as u8
-    );
-    print_shell_line(io, msg.as_str());
-}
-
-fn run_clear(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
-    let Some(rect) = parse_clear_rect(args) else {
-        usage(io);
-        return;
-    };
-    let Some(result) = shell_clear_white_rgba8(rect) else {
-        print_shell_line(io, "gpgpu clear: no result (check iGPU claim, DMA, and rect bounds)");
-        return;
-    };
-    let before = hex4(result.before_head);
-    let after = hex4(result.after_head);
-    let msg = alloc::format!(
-        "gpgpu clear: ok={} rect={}x{}@{},{} spans={}/{} white={}/{} gpu=0x{:X} phys=0x{:X} before={} after={}",
-        result.ok as u8,
-        result.rect.width,
-        result.rect.height,
-        result.rect.x,
-        result.rect.y,
-        result.spans,
-        result.expected_spans,
-        result.white,
-        result.pixels,
-        result.surface.gpu,
-        result.surface.phys,
-        before,
-        after
     );
     print_shell_line(io, msg.as_str());
 }
@@ -784,8 +732,6 @@ pub(crate) fn try_parse(
         } else {
             print_status(io);
         }
-    } else if cmd.eq_ignore_ascii_case("clear") {
-        run_clear(io, args);
     } else if cmd.eq_ignore_ascii_case("copy") {
         run_copy(io, args);
     } else if cmd.eq_ignore_ascii_case("scanout") {
@@ -804,10 +750,8 @@ pub(crate) fn try_parse(
         if args.next().is_some() {
             usage(io);
         } else {
-            let mut clear_args = "".split_whitespace();
-            let mut copy_args = "".split_whitespace();
-            run_clear(io, &mut clear_args);
-            run_copy(io, &mut copy_args);
+            let mut probe_args = "".split_whitespace();
+            run_rect_probe(io, &mut probe_args);
         }
     } else {
         usage(io);

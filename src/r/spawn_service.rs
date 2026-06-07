@@ -76,6 +76,7 @@ define_started_flags!(
     UI2_TWEMOJI_1X_STARTED,
     UI2_ANALOG_CLOCK_DEMO_STARTED,
     UI2_TEXT_INPUT_DEMO_STARTED,
+    UI2_TEXT_AREA_DEMO_STARTED,
     UI2_BGRT_DEMO_STARTED,
     UI2_CORETICKS_DEMO_STARTED,
     UI2_CURSORPICKER_DEMO_STARTED,
@@ -118,6 +119,7 @@ macro_rules! define_stop_flags {
 
 define_stop_flags!(
     STOP_UI2_TEXT_INPUT_DEMO,
+    STOP_UI2_TEXT_AREA_DEMO,
     STOP_UI2_ANALOG_CLOCK_DEMO,
     STOP_UI2_BGRT_DEMO,
     STOP_UI2_CORETICKS_DEMO,
@@ -136,6 +138,7 @@ define_stop_flags!(
 fn stop_flag_by_task_name(name: &str) -> Option<&'static AtomicBool> {
     match name {
         "ui2-text-input-demo" => Some(&STOP_UI2_TEXT_INPUT_DEMO),
+        "ui2-text-area-demo" => Some(&STOP_UI2_TEXT_AREA_DEMO),
         "ui2-analog-clock-demo" => Some(&STOP_UI2_ANALOG_CLOCK_DEMO),
         "ui2-bgrt-demo" => Some(&STOP_UI2_BGRT_DEMO),
         "ui2-coreticks-demo" => Some(&STOP_UI2_CORETICKS_DEMO),
@@ -1252,7 +1255,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
 #[cfg(feature = "trueos_rdp")]
 const TASK_COUNT: usize = 75;
 #[cfg(not(feature = "trueos_rdp"))]
-const TASK_COUNT: usize = 73;
+const TASK_COUNT: usize = 74;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
