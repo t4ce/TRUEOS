@@ -7,6 +7,10 @@ pub async fn html_demo_task() {
         String::from(trueos_qjs::html_demo::UI_HTML),
     );
 
-    let handed_off = super::html_shack::handoff_html_to_truesurfer(html).await;
-    crate::log!("html-demo: handed_off={}\n", if handed_off { 1 } else { 0 });
+    let (ready_len, handed_off) = super::html_shack::enqueue_ready_html_for_browser(html).await;
+    crate::log!(
+        "html-demo: enqueued ready_queue={} handed_off={}\n",
+        ready_len,
+        if handed_off { 1 } else { 0 }
+    );
 }

@@ -22,6 +22,9 @@ const BODY_HIERARCHY_ROOT_LIMIT = TRUESURFER_SUBSET_PROFILE.maxBodyHierarchyRoot
 const BODY_HIERARCHY_CHILD_LIMIT = TRUESURFER_SUBSET_PROFILE.maxBodyHierarchyChildrenPerNode;
 const BODY_HIERARCHY_DEPTH_LIMIT = TRUESURFER_SUBSET_PROFILE.maxBodyHierarchyDepth;
 const GADGET_SNAPSHOT_LIMIT = 48;
+const UI3_SCENE_NODE_LIMIT = 96;
+const UI3_SCENE_VIEWPORT_WIDTH = 1920;
+const UI3_SCENE_VIEWPORT_HEIGHT = 1080;
 const DEFAULT_GADGET_FONT_PX = 14;
 const DEFAULT_GADGET_LINE_HEIGHT_PX = 20;
 const LINK_GADGET_PAD_X = 10;
@@ -521,6 +524,119 @@ function buildGadgetSnapshot(bodyHierarchy, backgroundColorRgb = 0, limit = GADG
   };
 }
 
+function ui3TagFillRgb(tag, buttonLike) {
+  const name = collapseWhitespace(tag).toLowerCase();
+  if (buttonLike) return 0xe7eefc;
+  if (name === 'a') return 0xeef6ff;
+  if (name === 'input' || name === 'textarea' || name === 'select') return 0xffffff;
+  if (name === 'img' || name === 'canvas' || name === 'svg') return 0xfef3c7;
+  if (name === 'table' || name === 'tr' || name === 'td' || name === 'th') return 0xf3f4f6;
+  if (/^h[1-6]$/.test(name)) return 0xf7e8ff;
+  return 0xf8fafc;
+}
+
+function ui3TagStrokeRgb(tag, buttonLike) {
+  const name = collapseWhitespace(tag).toLowerCase();
+  if (buttonLike) return 0x7c9be8;
+  if (name === 'a') return 0x60a5fa;
+  if (name === 'input' || name === 'textarea' || name === 'select') return 0x94a3b8;
+  if (/^h[1-6]$/.test(name)) return 0xa855f7;
+  return 0xcbd5e1;
+}
+
+function buildUi3Scene(bodyHierarchy, backgroundColorRgb = 0, limit = UI3_SCENE_NODE_LIMIT) {
+  const items = Array.isArray(bodyHierarchy) ? bodyHierarchy : [];
+  const ops = [];
+  const rootId = 1;
+  const backgroundId = 2;
+  const contentRootId = 3;
+  const bgRgb = Math.max(0, Number(backgroundColorRgb || 0) >>> 0) & 0xFFFFFF;
+  let yCursor = 24;
+  let emitted = 0;
+
+  const node = (id, kind) => ops.push({ code: 1, node: id, a: kind });
+  const addChild = (parent, child) => ops.push({ code: 2, node: parent, a: child });
+  const position = (id, x, y) => ops.push({ code: 3, node: id, a: x, b: y });
+  const clear = (id) => ops.push({ code: 4, node: id });
+  const rect = (id, x, y, w, h) => ops.push({ code: 5, node: id, a: x, b: y, c: w, d: h });
+  const fill = (id, color, alpha = 1) => ops.push({ code: 6, node: id, a: color, b: alpha });
+  const stroke = (id, color, alpha = 1, width = 1) => ops.push({ code: 7, node: id, a: color, b: alpha, c: width });
+  const text = (id, value) => ops.push({ code: 8, node: id, text: safeString(value) });
+  const textFill = (id, color, alpha = 1) => ops.push({ code: 9, node: id, a: color, b: alpha });
+
+  node(rootId, 0);
+  node(backgroundId, 1);
+  node(contentRootId, 0);
+  addChild(rootId, backgroundId);
+  addChild(rootId, contentRootId);
+  position(rootId, 0, 0);
+  position(backgroundId, 0, 0);
+  position(contentRootId, 0, 0);
+  clear(backgroundId);
+  rect(backgroundId, 0, 0, UI3_SCENE_VIEWPORT_WIDTH, UI3_SCENE_VIEWPORT_HEIGHT);
+  fill(backgroundId, bgRgb || 0xf8fafc, 1);
+
+  for (let index = 0; index < items.length && emitted < limit; index += 1) {
+    const entry = items[index] || {};
+    const tag = collapseWhitespace(entry.tag).toLowerCase();
+    if (!tag || tag === '#text') continue;
+
+    const depth = Math.max(0, Number(entry.depth) || 0);
+    const innerText = collectGadgetInnerText(items, index, depth);
+    const label = gadgetTextForEntry(entry, innerText) || `<${tag}>`;
+    if (!label) continue;
+
+    const style = gadgetResolvedStyle(entry, index);
+    const buttonLike = gadgetIsButtonLike(entry);
+    const fontSizePx = Math.max(1, Math.round(Number(style && style.fontSizePx || gadgetFontSizePx(tag))));
+    const lineHeightPx = Math.max(1, Math.round(Number(style && style.lineHeightPx || gadgetLineHeightPx(tag))));
+    const paddingX = buttonLike || tag === 'a' ? 14 : 10;
+    const paddingY = buttonLike || tag === 'a' ? 7 : 5;
+    const xPx = 24 + depth * 22;
+    const textWidthPx = estimateTextWidthPx(label, fontSizePx);
+    const widthPx = Math.min(
+      Math.max(48, textWidthPx + paddingX * 2),
+      Math.max(48, UI3_SCENE_VIEWPORT_WIDTH - xPx - 32),
+    );
+    const heightPx = Math.max(lineHeightPx + paddingY * 2, buttonLike ? 34 : 26);
+    const groupId = 1000 + emitted * 3;
+    const graphicsId = groupId + 1;
+    const textId = groupId + 2;
+    const fillRgb = cssColorToRgbInt(style && style.backgroundColor) || ui3TagFillRgb(tag, buttonLike);
+    const strokeRgb = ui3TagStrokeRgb(tag, buttonLike);
+    const textRgb = gadgetTextColorRgb(tag, style) || 0x111827;
+
+    node(groupId, 0);
+    node(graphicsId, 1);
+    node(textId, 2);
+    addChild(contentRootId, groupId);
+    addChild(groupId, graphicsId);
+    addChild(groupId, textId);
+    position(groupId, xPx, yCursor);
+    position(graphicsId, 0, 0);
+    position(textId, paddingX, paddingY);
+    clear(graphicsId);
+    rect(graphicsId, 0, 0, widthPx, heightPx);
+    fill(graphicsId, fillRgb, buttonLike || tag === 'a' ? 1 : 0.92);
+    stroke(graphicsId, strokeRgb, 1, buttonLike ? 2 : 1);
+    text(textId, label);
+    textFill(textId, textRgb, 1);
+
+    yCursor += heightPx + 8;
+    emitted += 1;
+  }
+
+  return {
+    version: 1,
+    rootId,
+    viewportWidth: UI3_SCENE_VIEWPORT_WIDTH,
+    viewportHeight: UI3_SCENE_VIEWPORT_HEIGHT,
+    contentHeight: Math.max(UI3_SCENE_VIEWPORT_HEIGHT, yCursor + 24),
+    opCount: ops.length,
+    ops,
+  };
+}
+
 function collectStyleArtifacts(source) {
   const html = safeString(source);
   const styles = [];
@@ -612,6 +728,7 @@ function extractDocumentArtifacts(source) {
   const shellHtml = buildMinimalShell(title);
   const parseMs = Date.now() - startedAt;
   const gadgetSnapshot = buildGadgetSnapshot(bodyHierarchy, bodyBackgroundColorRgb);
+  const ui3Scene = buildUi3Scene(bodyHierarchy, bodyBackgroundColorRgb);
 
   let styleBytes = 0;
   for (const style of styles) {
@@ -640,6 +757,7 @@ function extractDocumentArtifacts(source) {
     bodyHierarchy,
     bodyHierarchySummary,
     gadgetSnapshot,
+    ui3Scene,
     styleCount: styles.length,
     styleBytes,
     styleSlotCount: styleIndex.styleSlotCount,

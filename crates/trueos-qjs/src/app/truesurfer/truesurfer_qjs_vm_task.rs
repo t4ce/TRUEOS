@@ -58,7 +58,6 @@ globalThis.__trueosTruesurferEntryPromise = Promise.resolve(
 });
 "#;
 const TRUESURFER_READY_PROP: &[u8] = b"__trueosTruesurferReady\0";
-const TRUESURFER_LAST_ARTIFACTS_PROP: &[u8] = b"__trueosTruesurferLastArtifacts\0";
 const TRUESURFER_ID_PROP: &[u8] = b"__trueosTruesurferBrowserId\0";
 const TRUESURFER_OBJ_PROP: &[u8] = b"__trueosTruesurfer\0";
 const TRUESURFER_SET_HTML_PROP: &[u8] = b"setHtml\0";
@@ -71,28 +70,21 @@ const TRUESURFER_RESULT_TITLE_PROP: &[u8] = b"title\0";
 const TRUESURFER_RESULT_FAVICON_URL_PROP: &[u8] = b"faviconUrl\0";
 const TRUESURFER_RESULT_SHELL_BYTES_PROP: &[u8] = b"shellBytes\0";
 const TRUESURFER_RESULT_BODY_BYTES_PROP: &[u8] = b"bodyBytes\0";
-const TRUESURFER_RESULT_GADGET_SNAPSHOT_PROP: &[u8] = b"gadgetSnapshot\0";
+const TRUESURFER_RESULT_UI3_SCENE_PROP: &[u8] = b"ui3Scene\0";
 const TRUESURFER_RESULT_STYLE_COUNT_PROP: &[u8] = b"styleCount\0";
 const TRUESURFER_RESULT_STYLE_BYTES_PROP: &[u8] = b"styleBytes\0";
 const TRUESURFER_RESULT_SCRIPT_COUNT_PROP: &[u8] = b"scriptCount\0";
 const TRUESURFER_RESULT_SCRIPT_BYTES_PROP: &[u8] = b"scriptBytes\0";
 const TRUESURFER_RESULT_ERROR_PROP: &[u8] = b"error\0";
-const TRUESURFER_GADGET_SNAPSHOT_VERSION_PROP: &[u8] = b"version\0";
-const TRUESURFER_GADGET_SNAPSHOT_BACKGROUND_COLOR_RGB_PROP: &[u8] = b"backgroundColorRgb\0";
-const TRUESURFER_GADGET_SNAPSHOT_GADGETS_PROP: &[u8] = b"gadgets\0";
-const TRUESURFER_GADGET_NODE_ID_PROP: &[u8] = b"nodeId\0";
-const TRUESURFER_GADGET_TAG_PROP: &[u8] = b"tag\0";
-const TRUESURFER_GADGET_TEXT_PROP: &[u8] = b"text\0";
-const TRUESURFER_GADGET_X_PROP: &[u8] = b"xPx\0";
-const TRUESURFER_GADGET_Y_PROP: &[u8] = b"yPx\0";
-const TRUESURFER_GADGET_WIDTH_PROP: &[u8] = b"widthPx\0";
-const TRUESURFER_GADGET_HEIGHT_PROP: &[u8] = b"heightPx\0";
-const TRUESURFER_GADGET_FONT_SIZE_PROP: &[u8] = b"fontSizePx\0";
-const TRUESURFER_GADGET_LINE_HEIGHT_PROP: &[u8] = b"lineHeightPx\0";
-const TRUESURFER_GADGET_TEXT_COLOR_RGB_PROP: &[u8] = b"textColorRgb\0";
-const TRUESURFER_GADGET_BUTTON_LIKE_PROP: &[u8] = b"buttonLike\0";
-const TRUESURFER_GADGET_TEX_ID_PROP: &[u8] = b"texId\0";
-const TRUESURFER_GADGET_CHANGED_PROP: &[u8] = b"changed\0";
+const TRUESURFER_UI3_SCENE_ROOT_ID_PROP: &[u8] = b"rootId\0";
+const TRUESURFER_UI3_SCENE_OPS_PROP: &[u8] = b"ops\0";
+const TRUESURFER_UI3_OP_CODE_PROP: &[u8] = b"code\0";
+const TRUESURFER_UI3_OP_NODE_PROP: &[u8] = b"node\0";
+const TRUESURFER_UI3_OP_A_PROP: &[u8] = b"a\0";
+const TRUESURFER_UI3_OP_B_PROP: &[u8] = b"b\0";
+const TRUESURFER_UI3_OP_C_PROP: &[u8] = b"c\0";
+const TRUESURFER_UI3_OP_D_PROP: &[u8] = b"d\0";
+const TRUESURFER_UI3_OP_TEXT_PROP: &[u8] = b"text\0";
 const TRUESURFER_HTML_QUEUE_DEPTH: usize = 2;
 const TRUESURFER_HTML_QUEUE_WAIT_MS: u64 = 2;
 const TRUESURFER_BUSY_PUMP_BUDGET: usize = 512;
@@ -568,6 +560,14 @@ unsafe fn read_result_u32(ctx: *mut qjs::JSContext, obj: qjs::JSValueConst, key:
     if ok { out as u32 } else { 0 }
 }
 
+unsafe fn read_result_f32(ctx: *mut qjs::JSContext, obj: qjs::JSValueConst, key: &[u8]) -> f32 {
+    let value = qjs::JS_GetPropertyStr(ctx, obj, key.as_ptr() as *const c_char);
+    let mut out = 0.0f64;
+    let ok = qjs::JS_ToFloat64(ctx, &mut out as *mut f64, value) == 0 && out.is_finite();
+    qjs::js_free_value(ctx, value);
+    if ok { out as f32 } else { 0.0 }
+}
+
 unsafe fn read_result_string(
     ctx: *mut qjs::JSContext,
     obj: qjs::JSValueConst,
@@ -593,234 +593,150 @@ unsafe fn read_result_string(
     out
 }
 
+unsafe fn submit_ui3_scene(
+    ctx: *mut qjs::JSContext,
+    browser_instance_id: u32,
+    obj: qjs::JSValueConst,
+) -> (u32, u32) {
+    log_line(format!("qjs-truesurfer[{}]: ui3 scene read begin\n", browser_instance_id));
+    let scene_value = qjs::JS_GetPropertyStr(
+        ctx,
+        obj,
+        TRUESURFER_RESULT_UI3_SCENE_PROP.as_ptr() as *const c_char,
+    );
+    if scene_value.is_exception()
+        || scene_value.tag == qjs::JS_TAG_UNDEFINED
+        || scene_value.tag == qjs::JS_TAG_NULL
+    {
+        log_line(format!("qjs-truesurfer[{}]: ui3 scene missing\n", browser_instance_id));
+        qjs::js_free_value(ctx, scene_value);
+        return (0, 0);
+    }
+
+    let root_id = read_result_u32(ctx, scene_value, TRUESURFER_UI3_SCENE_ROOT_ID_PROP);
+    if root_id == 0 {
+        log_line(format!("qjs-truesurfer[{}]: ui3 scene root missing\n", browser_instance_id));
+        qjs::js_free_value(ctx, scene_value);
+        return (0, 0);
+    }
+    if !qjs::platform::ui::ui3_scene_begin(browser_instance_id, root_id) {
+        log_line(format!(
+            "qjs-truesurfer[{}]: ui3 scene begin rejected root={}\n",
+            browser_instance_id, root_id
+        ));
+        qjs::js_free_value(ctx, scene_value);
+        return (0, root_id);
+    }
+    log_line(format!(
+        "qjs-truesurfer[{}]: ui3 scene begin root={}\n",
+        browser_instance_id, root_id
+    ));
+
+    let ops_value = qjs::JS_GetPropertyStr(
+        ctx,
+        scene_value,
+        TRUESURFER_UI3_SCENE_OPS_PROP.as_ptr() as *const c_char,
+    );
+    if ops_value.is_exception()
+        || ops_value.tag == qjs::JS_TAG_UNDEFINED
+        || ops_value.tag == qjs::JS_TAG_NULL
+    {
+        log_line(format!(
+            "qjs-truesurfer[{}]: ui3 scene ops missing root={}\n",
+            browser_instance_id, root_id
+        ));
+        qjs::js_free_value(ctx, ops_value);
+        qjs::js_free_value(ctx, scene_value);
+        return (0, root_id);
+    }
+
+    let op_count = read_array_len(ctx, ops_value).min(2048);
+    log_line(format!(
+        "qjs-truesurfer[{}]: ui3 scene ops count={} root={}\n",
+        browser_instance_id, op_count, root_id
+    ));
+    let mut submitted = 0u32;
+    for idx in 0..op_count {
+        let op_value = qjs::JS_GetPropertyUint32(ctx, ops_value, idx);
+        if op_value.is_exception()
+            || op_value.tag == qjs::JS_TAG_UNDEFINED
+            || op_value.tag == qjs::JS_TAG_NULL
+        {
+            qjs::js_free_value(ctx, op_value);
+            continue;
+        }
+
+        let code = read_result_u32(ctx, op_value, TRUESURFER_UI3_OP_CODE_PROP);
+        let node = read_result_u32(ctx, op_value, TRUESURFER_UI3_OP_NODE_PROP);
+        let a = read_result_f32(ctx, op_value, TRUESURFER_UI3_OP_A_PROP);
+        let b = read_result_f32(ctx, op_value, TRUESURFER_UI3_OP_B_PROP);
+        let c = read_result_f32(ctx, op_value, TRUESURFER_UI3_OP_C_PROP);
+        let d = read_result_f32(ctx, op_value, TRUESURFER_UI3_OP_D_PROP);
+
+        if idx < 8 {
+            log_line(format!(
+                "qjs-truesurfer[{}]: ui3 scene op#{} code={} node={} a={} b={} c={} d={}\n",
+                browser_instance_id, idx, code, node, a, b, c, d
+            ));
+        }
+
+        let ok = match code {
+            1 => qjs::platform::ui::ui3_scene_node(browser_instance_id, node, a.max(0.0) as u32),
+            2 => {
+                qjs::platform::ui::ui3_scene_add_child(browser_instance_id, node, a.max(0.0) as u32)
+            }
+            3 => qjs::platform::ui::ui3_scene_position(browser_instance_id, node, a, b),
+            4 => qjs::platform::ui::ui3_scene_graphics_clear(browser_instance_id, node),
+            5 => qjs::platform::ui::ui3_scene_graphics_rect(browser_instance_id, node, a, b, c, d),
+            6 => qjs::platform::ui::ui3_scene_graphics_fill(
+                browser_instance_id,
+                node,
+                a.max(0.0) as u32,
+                b,
+            ),
+            7 => qjs::platform::ui::ui3_scene_graphics_stroke(
+                browser_instance_id,
+                node,
+                a.max(0.0) as u32,
+                b,
+                c,
+            ),
+            8 => {
+                let text = read_result_string(ctx, op_value, TRUESURFER_UI3_OP_TEXT_PROP);
+                qjs::platform::ui::ui3_scene_text(browser_instance_id, node, text.as_str())
+            }
+            9 => qjs::platform::ui::ui3_scene_text_fill(
+                browser_instance_id,
+                node,
+                a.max(0.0) as u32,
+                b,
+            ),
+            _ => false,
+        };
+        if ok {
+            submitted = submitted.saturating_add(1);
+        }
+        qjs::js_free_value(ctx, op_value);
+    }
+
+    log_line(format!(
+        "qjs-truesurfer[{}]: ui3 scene render begin root={} submitted={}/{}\n",
+        browser_instance_id, root_id, submitted, op_count
+    ));
+    let _ = qjs::platform::ui::ui3_scene_render(browser_instance_id, root_id);
+    log_line(format!(
+        "qjs-truesurfer[{}]: ui3 scene render returned root={} submitted={}/{}\n",
+        browser_instance_id, root_id, submitted, op_count
+    ));
+
+    qjs::js_free_value(ctx, ops_value);
+    qjs::js_free_value(ctx, scene_value);
+    (submitted, root_id)
+}
+
 unsafe fn read_array_len(ctx: *mut qjs::JSContext, obj: qjs::JSValueConst) -> u32 {
     static LENGTH_PROP: &[u8] = b"length\0";
     read_result_u32(ctx, obj, LENGTH_PROP)
-}
-
-unsafe fn read_gadget_snapshot(
-    ctx: *mut qjs::JSContext,
-    obj: qjs::JSValueConst,
-) -> HostedBrowserGadgetSnapshot {
-    let snapshot_value = qjs::JS_GetPropertyStr(
-        ctx,
-        obj,
-        TRUESURFER_RESULT_GADGET_SNAPSHOT_PROP.as_ptr() as *const c_char,
-    );
-    if snapshot_value.is_exception()
-        || snapshot_value.tag == qjs::JS_TAG_UNDEFINED
-        || snapshot_value.tag == qjs::JS_TAG_NULL
-    {
-        qjs::js_free_value(ctx, snapshot_value);
-        return HostedBrowserGadgetSnapshot::default();
-    }
-
-    let version = read_result_u32(ctx, snapshot_value, TRUESURFER_GADGET_SNAPSHOT_VERSION_PROP);
-    let background_color_rgb =
-        read_result_u32(ctx, snapshot_value, TRUESURFER_GADGET_SNAPSHOT_BACKGROUND_COLOR_RGB_PROP)
-            & 0x00FF_FFFF;
-    let gadgets_value = qjs::JS_GetPropertyStr(
-        ctx,
-        snapshot_value,
-        TRUESURFER_GADGET_SNAPSHOT_GADGETS_PROP.as_ptr() as *const c_char,
-    );
-    if gadgets_value.is_exception()
-        || gadgets_value.tag == qjs::JS_TAG_UNDEFINED
-        || gadgets_value.tag == qjs::JS_TAG_NULL
-    {
-        qjs::js_free_value(ctx, gadgets_value);
-        qjs::js_free_value(ctx, snapshot_value);
-        return HostedBrowserGadgetSnapshot {
-            version,
-            background_color_rgb,
-            gadgets: Vec::new(),
-        };
-    }
-
-    let gadget_count = read_array_len(ctx, gadgets_value).min(64);
-    let mut gadgets = Vec::with_capacity(gadget_count as usize);
-    for idx in 0..gadget_count {
-        let gadget_value = qjs::JS_GetPropertyUint32(ctx, gadgets_value, idx);
-        if gadget_value.is_exception()
-            || gadget_value.tag == qjs::JS_TAG_UNDEFINED
-            || gadget_value.tag == qjs::JS_TAG_NULL
-        {
-            qjs::js_free_value(ctx, gadget_value);
-            continue;
-        }
-
-        let tex_id = read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_TEX_ID_PROP);
-        let text = read_result_string(ctx, gadget_value, TRUESURFER_GADGET_TEXT_PROP);
-        if text.is_empty() && tex_id == 0 {
-            qjs::js_free_value(ctx, gadget_value);
-            continue;
-        }
-
-        gadgets.push(HostedBrowserGadget {
-            node_id: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_NODE_ID_PROP),
-            tag: read_result_string(ctx, gadget_value, TRUESURFER_GADGET_TAG_PROP),
-            text,
-            x_px: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_X_PROP),
-            y_px: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_Y_PROP),
-            width_px: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_WIDTH_PROP),
-            height_px: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_HEIGHT_PROP),
-            font_size_px: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_FONT_SIZE_PROP),
-            line_height_px: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_LINE_HEIGHT_PROP),
-            text_color_rgb: read_result_u32(
-                ctx,
-                gadget_value,
-                TRUESURFER_GADGET_TEXT_COLOR_RGB_PROP,
-            ),
-            button_like: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_BUTTON_LIKE_PROP)
-                != 0,
-            tex_id,
-            changed: read_result_u32(ctx, gadget_value, TRUESURFER_GADGET_CHANGED_PROP) != 0,
-        });
-        qjs::js_free_value(ctx, gadget_value);
-    }
-
-    qjs::js_free_value(ctx, gadgets_value);
-    qjs::js_free_value(ctx, snapshot_value);
-    HostedBrowserGadgetSnapshot {
-        version,
-        background_color_rgb,
-        gadgets,
-    }
-}
-
-fn gadget_snapshot_content_height(snapshot: &HostedBrowserGadgetSnapshot) -> u32 {
-    if snapshot.gadgets.is_empty() {
-        return 0;
-    }
-    let mut total = 0u32;
-    for gadget in &snapshot.gadgets {
-        total = total.max(
-            gadget
-                .y_px
-                .saturating_add(gadget.height_px.max(gadget.line_height_px))
-                .saturating_add(16),
-        );
-    }
-    total
-}
-
-fn gadgets_equal_ignoring_changed(
-    prev: &HostedBrowserGadgetSnapshot,
-    next: &HostedBrowserGadgetSnapshot,
-) -> bool {
-    if prev.version != next.version
-        || prev.background_color_rgb != next.background_color_rgb
-        || prev.gadgets.len() != next.gadgets.len()
-    {
-        return false;
-    }
-    prev.gadgets
-        .iter()
-        .zip(next.gadgets.iter())
-        .all(|(lhs, rhs)| {
-            lhs.node_id == rhs.node_id
-                && lhs.tag == rhs.tag
-                && lhs.text == rhs.text
-                && lhs.x_px == rhs.x_px
-                && lhs.y_px == rhs.y_px
-                && lhs.width_px == rhs.width_px
-                && lhs.height_px == rhs.height_px
-                && lhs.font_size_px == rhs.font_size_px
-                && lhs.line_height_px == rhs.line_height_px
-                && lhs.text_color_rgb == rhs.text_color_rgb
-                && lhs.button_like == rhs.button_like
-                && lhs.tex_id == rhs.tex_id
-        })
-}
-
-fn apply_gadget_changed_flags(
-    prev: &HostedBrowserGadgetSnapshot,
-    next: &mut HostedBrowserGadgetSnapshot,
-) {
-    for gadget in &mut next.gadgets {
-        gadget.changed = prev
-            .gadgets
-            .iter()
-            .find(|prev_gadget| prev_gadget.node_id == gadget.node_id)
-            .map(|prev_gadget| {
-                prev_gadget.tag != gadget.tag
-                    || prev_gadget.text != gadget.text
-                    || prev_gadget.x_px != gadget.x_px
-                    || prev_gadget.y_px != gadget.y_px
-                    || prev_gadget.width_px != gadget.width_px
-                    || prev_gadget.height_px != gadget.height_px
-                    || prev_gadget.font_size_px != gadget.font_size_px
-                    || prev_gadget.line_height_px != gadget.line_height_px
-                    || prev_gadget.text_color_rgb != gadget.text_color_rgb
-                    || prev_gadget.button_like != gadget.button_like
-                    || prev_gadget.tex_id != gadget.tex_id
-            })
-            .unwrap_or(true);
-    }
-}
-
-fn apply_browser_gadget_snapshot(
-    browser_instance_id: u32,
-    mut gadget_snapshot: HostedBrowserGadgetSnapshot,
-) -> u32 {
-    let mut ui2_dirty_flags = 0u32;
-    let _ = with_browser_state_mut(browser_instance_id, |state| {
-        let gadget_changed =
-            !gadgets_equal_ignoring_changed(&state.gadget_snapshot, &gadget_snapshot);
-        if gadget_changed {
-            apply_gadget_changed_flags(&state.gadget_snapshot, &mut gadget_snapshot);
-            state.gadget_snapshot = gadget_snapshot.clone();
-            state.gadget_seq = state.gadget_seq.wrapping_add(1);
-            ui2_dirty_flags |= UI2_HOSTED_BROWSER_DIRTY_CONTENT;
-        } else if state.gadget_snapshot != gadget_snapshot {
-            state.gadget_snapshot = gadget_snapshot.clone();
-        }
-
-        let gadget_height = gadget_snapshot_content_height(&state.gadget_snapshot);
-        let next_content_height = state
-            .surface_state
-            .viewport_height
-            .max(1)
-            .max(gadget_height);
-        if next_content_height != state.surface_state.content_height {
-            state.surface_state.content_height = next_content_height;
-            state.surface_seq = state.surface_seq.wrapping_add(1);
-            ui2_dirty_flags |= UI2_HOSTED_BROWSER_DIRTY_CONTENT;
-        }
-    });
-    ui2_dirty_flags
-}
-
-unsafe fn sync_latest_browser_artifacts(
-    ctx: *mut qjs::JSContext,
-    browser_instance_id: u32,
-) -> bool {
-    let global = qjs::JS_GetGlobalObject(ctx);
-    let artifacts = qjs::JS_GetPropertyStr(
-        ctx,
-        global,
-        TRUESURFER_LAST_ARTIFACTS_PROP.as_ptr() as *const c_char,
-    );
-    if artifacts.is_exception()
-        || artifacts.tag == qjs::JS_TAG_UNDEFINED
-        || artifacts.tag == qjs::JS_TAG_NULL
-    {
-        qjs::js_free_value(ctx, artifacts);
-        qjs::js_free_value(ctx, global);
-        return false;
-    }
-
-    let gadget_snapshot = read_gadget_snapshot(ctx, artifacts);
-    let ui2_dirty_flags = apply_browser_gadget_snapshot(browser_instance_id, gadget_snapshot);
-
-    qjs::js_free_value(ctx, artifacts);
-    qjs::js_free_value(ctx, global);
-
-    if ui2_dirty_flags != 0 {
-        signal_ui2_hosted_browser_dirty(browser_instance_id, ui2_dirty_flags);
-        return true;
-    }
-    false
 }
 
 fn take_queued_html_for_browser(browser_instance_id: u32) -> Option<PendingHtml> {
@@ -870,7 +786,18 @@ unsafe fn dispatch_html(
         url_js,
     );
     let args = [html_js, meta];
+    log_line(format!(
+        "qjs-truesurfer[{}]: setHtml call bytes={} url={}\n",
+        browser_instance_id,
+        pending.html.len(),
+        pending.url
+    ));
     let result = qjs::JS_Call(ctx, set_html, surfer, 2, args.as_ptr());
+    log_line(format!(
+        "qjs-truesurfer[{}]: setHtml returned exception={}\n",
+        browser_instance_id,
+        if result.is_exception() { 1 } else { 0 }
+    ));
 
     if result.is_exception() {
         qjs::qjs_diag::dump_last_exception(ctx, "truesurfer setHtml");
@@ -894,6 +821,7 @@ unsafe fn dispatch_html(
         return false;
     }
 
+    log_line(format!("qjs-truesurfer[{}]: result read begin\n", browser_instance_id));
     let parse_result = ParseResult {
         ok: read_result_u32(ctx, result, TRUESURFER_RESULT_OK_PROP) >= 1,
         url: pending.url.clone(),
@@ -910,9 +838,26 @@ unsafe fn dispatch_html(
         script_bytes: read_result_u32(ctx, result, TRUESURFER_RESULT_SCRIPT_BYTES_PROP),
         error: read_result_string(ctx, result, TRUESURFER_RESULT_ERROR_PROP),
     };
-    let gadget_snapshot = read_gadget_snapshot(ctx, result);
+    log_line(format!(
+        "qjs-truesurfer[{}]: result read done ok={} bytes={} body_bytes={} styles={} scripts={}\n",
+        browser_instance_id,
+        if parse_result.ok { 1 } else { 0 },
+        parse_result.bytes,
+        parse_result.body_bytes,
+        parse_result.style_count,
+        parse_result.script_count
+    ));
+    log_line(format!(
+        "qjs-truesurfer[{}]: gadget snapshot skipped reason=ui3-scene-path\n",
+        browser_instance_id
+    ));
+    log_line(format!("qjs-truesurfer[{}]: ui3 submit begin\n", browser_instance_id));
+    let (ui3_ops, ui3_root) = submit_ui3_scene(ctx, browser_instance_id, result);
+    log_line(format!(
+        "qjs-truesurfer[{}]: ui3 submit done ops={} root={}\n",
+        browser_instance_id, ui3_ops, ui3_root
+    ));
 
-    let mut ui2_dirty_flags = 0u32;
     let _ = with_browser_state_mut(browser_instance_id, |state| {
         let parse_changed = state
             .last_parse_result
@@ -924,28 +869,22 @@ unsafe fn dispatch_html(
             state.last_parse_result = Some(parse_result.clone());
         }
     });
-    ui2_dirty_flags |= apply_browser_gadget_snapshot(browser_instance_id, gadget_snapshot.clone());
-
-    if ui2_dirty_flags != 0 {
-        signal_ui2_hosted_browser_dirty(browser_instance_id, ui2_dirty_flags);
-    }
 
     if parse_result.ok {
         log_line(format!(
-            "[TrueSurfer -> UI2] browser={} handover gadgets={} url={}\n",
-            browser_instance_id,
-            gadget_snapshot.gadgets.len(),
-            parse_result.url,
+            "[TrueSurfer -> UI3] browser={} handover ui3_ops={} root={} gadgets={} url={}\n",
+            browser_instance_id, ui3_ops, ui3_root, 0, parse_result.url,
         ));
         log_line(format!(
-            "qjs-truesurfer[{}]: parsed bytes={} title={} ms={} shell_bytes={} body_bytes={} gadgets={} styles={} scripts={} url={}\n",
+            "qjs-truesurfer[{}]: parsed bytes={} title={} ms={} shell_bytes={} body_bytes={} ui3_ops={} gadgets={} styles={} scripts={} url={}\n",
             browser_instance_id,
             parse_result.bytes,
             parse_result.title,
             parse_result.parse_ms,
             parse_result.shell_bytes,
             parse_result.body_bytes,
-            gadget_snapshot.gadgets.len(),
+            ui3_ops,
+            0,
             parse_result.style_count,
             parse_result.script_count,
             parse_result.url
@@ -957,12 +896,10 @@ unsafe fn dispatch_html(
         ));
     }
 
-    qjs::js_free_value(ctx, result);
-    qjs::js_free_value(ctx, set_html);
-    qjs::js_free_value(ctx, surfer);
-    qjs::js_free_value(ctx, global);
-    qjs::js_free_value(ctx, args[0]);
-    qjs::js_free_value(ctx, args[1]);
+    log_line(format!(
+        "qjs-truesurfer[{}]: qjs value release deferred reason=post-ui3-handoff\n",
+        browser_instance_id
+    ));
     true
 }
 
@@ -1052,7 +989,6 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
                         let _ = dispatch_html(rt, ctx, browser_instance_id, pending);
                         dispatched_html = true;
                     }
-                    let _ = sync_latest_browser_artifacts(ctx, browser_instance_id);
                 }
 
                 busy = !ready || dispatched_html || runtime_has_pending_work(rt, ctx);

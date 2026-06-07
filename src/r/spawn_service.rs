@@ -1352,7 +1352,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &AI_QJS_ONESHOT_STARTED,
         spawn_ai_qjs_oneshot,
     ),
-    TaskSpec::disabled("html-demo", 0, &HTML_DEMO_STARTED, spawn_html_demo),
+    TaskSpec::enabled("html-demo", 0, &HTML_DEMO_STARTED, spawn_html_demo),
     TaskSpec::enabled(
         "http-trueosfs",
         NET_ANY_CONFIGURED_AND_INDEX_READY,
@@ -1505,7 +1505,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &SURFER_PARSE_POOL_STARTED,
         spawn_truesurfer_parse_pool,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui3-pixi-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         &UI3_PIXI_SERVICE_STARTED,
