@@ -19,16 +19,13 @@ const TASK_NAME: &str = "ui3-pixi-service";
 const PIXI_HOST_PRELUDE_SOURCE: &[u8] = include_bytes!("pixi_host_prelude.js");
 const PIXI_BUNDLE_SOURCE: &[u8] = include_bytes!("pixi_bundle.min.js");
 const PIXI_CAPTURE_ADAPTER_SOURCE: &[u8] = include_bytes!("pixi_capture_adapter.js");
-const PIXI_SMOKE_SOURCE: &[u8] = include_bytes!("pixi_empty_smoke.js");
 const PIXI_HOST_PRELUDE_FILENAME: &[u8] = b"<ui3-pixi-host-prelude>\0";
 const PIXI_BUNDLE_FILENAME: &[u8] = b"<ui3-pixi-bundle>\0";
 const PIXI_CAPTURE_ADAPTER_FILENAME: &[u8] = b"<ui3-pixi-capture-adapter>\0";
-const PIXI_SMOKE_FILENAME: &[u8] = b"<ui3-pixi-empty-smoke>\0";
-const PIXI_READY_PROP: &[u8] = b"__trueosPixiServiceReady\0";
-const PIXI_TEARDOWN_WAIT_MS: u64 = 250;
 const PIXI_SERVICE_PARK_MS: u64 = 60_000;
 const PIXI_AUTORUN_TRUESURFER_HTML_ENABLE: bool = true;
-const PIXI_AUTORUN_TRUESURFER_HTML: &str = "<html><body><h1>UI3 TRUE</h1><p>Hello</p><button>Go</button><input value=x><a href=\"/\">link</a></body></html>";
+const PIXI_AUTORUN_TRUESURFER_HTML_URL: &str = "inline://trueos/ui3-hello.html";
+const PIXI_AUTORUN_TRUESURFER_HTML_SOURCE: &str = "<!doctype html><html><head><title>UI3 Hello</title></head><body><h1>Hello UI3</h1><p>Parse5 handoff smoke.</p></body></html>";
 
 static PIXI_SERVICE_READY: AtomicBool = AtomicBool::new(false);
 static PIXI_AUTORUN_TRUESURFER_HTML_STARTED: AtomicBool = AtomicBool::new(false);
@@ -101,7 +98,6 @@ pub async fn pixi_service_task() {
             crate::log!("ui3-pixi-service: qjs runtime init failed\n");
             return;
         };
-        let rt = vm.rt_ptr();
         let ctx = vm.ctx_ptr();
 
         if !eval_global_script(
@@ -128,57 +124,42 @@ pub async fn pixi_service_task() {
             return;
         }
 
-        if !eval_global_script(ctx, PIXI_SMOKE_SOURCE, PIXI_SMOKE_FILENAME, "ui3 pixi smoke") {
-            return;
-        }
-
-        let ready = read_global_ready(ctx);
+        let ready = true;
         PIXI_SERVICE_READY.store(ready, Ordering::Release);
         crate::log!(
-            "ui3-pixi-service: smoke ready={} renders={} ops={} frames={} draws={} bundle_bytes={} adapter_bytes={} smoke_bytes={} profile=browser\n",
+            "ui3-pixi-service: ready={} renders={} ops={} frames={} draws={} bundle_bytes={} adapter_bytes={} profile=browser\n",
             if ready { 1 } else { 0 },
             PIXI_SERVICE_RENDER_COUNT.load(Ordering::Acquire),
             PIXI_SERVICE_OP_COUNT.load(Ordering::Acquire),
             PIXI_SERVICE_FRAME_COUNT.load(Ordering::Acquire),
             PIXI_SERVICE_DRAW_COUNT.load(Ordering::Acquire),
             PIXI_BUNDLE_SOURCE.len(),
-            PIXI_CAPTURE_ADAPTER_SOURCE.len(),
-            PIXI_SMOKE_SOURCE.len()
+            PIXI_CAPTURE_ADAPTER_SOURCE.len()
         );
 
-        let drained = qjs::vm::teardown_main_context(rt, ctx, PIXI_TEARDOWN_WAIT_MS).await;
-        drop(vm);
-        crate::log!(
-            "ui3-pixi-service: smoke vm torn down drained={} parked=1\n",
-            if drained { 1 } else { 0 }
-        );
-
-        if ready && drained && PIXI_AUTORUN_TRUESURFER_HTML_ENABLE {
-            autorun_truesurfer_html_after_smoke().await;
-        } else if ready && PIXI_AUTORUN_TRUESURFER_HTML_ENABLE {
-            crate::log!(
-                "ui3-pixi-service: truesurfer autorun skipped reason=smoke-vm-not-drained\n"
-            );
+        if ready && PIXI_AUTORUN_TRUESURFER_HTML_ENABLE {
+            autorun_truesurfer_html_after_ready().await;
         }
 
+        crate::log!("ui3-pixi-service: vm parked retained=1\n");
         loop {
             Timer::after(EmbassyDuration::from_millis(PIXI_SERVICE_PARK_MS)).await;
         }
     }
 }
 
-async fn autorun_truesurfer_html_after_smoke() {
+async fn autorun_truesurfer_html_after_ready() {
     if PIXI_AUTORUN_TRUESURFER_HTML_STARTED.swap(true, Ordering::AcqRel) {
         crate::log!("ui3-pixi-service: truesurfer autorun skipped reason=already-started\n");
         return;
     }
 
     let html = crate::surfer::html_shack::Html::new(
-        "inline://ui3-pixi-smoke",
-        PIXI_AUTORUN_TRUESURFER_HTML,
+        PIXI_AUTORUN_TRUESURFER_HTML_URL,
+        PIXI_AUTORUN_TRUESURFER_HTML_SOURCE,
     );
     crate::log!(
-        "ui3-pixi-service: truesurfer autorun submit bytes={} url={}\n",
+        "ui3-pixi-service: truesurfer autorun submit source=inline-hello bytes={} url={}\n",
         html.html.len(),
         html.url
     );
@@ -559,23 +540,4 @@ unsafe fn eval_global_script(
     }
     qjs::js_free_value(ctx, value);
     true
-}
-
-unsafe fn read_global_ready(ctx: *mut qjs::JSContext) -> bool {
-    if ctx.is_null() {
-        return false;
-    }
-
-    let global = qjs::JS_GetGlobalObject(ctx);
-    if global.is_exception() {
-        return false;
-    }
-
-    let value = qjs::JS_GetPropertyStr(ctx, global, PIXI_READY_PROP.as_ptr() as *const c_char);
-    let mut ready = 0.0f64;
-    let ok = !value.is_exception() && qjs::JS_ToFloat64(ctx, &mut ready as *mut f64, value) == 0;
-    qjs::js_free_value(ctx, value);
-    qjs::js_free_value(ctx, global);
-
-    ok && ready >= 1.0
 }

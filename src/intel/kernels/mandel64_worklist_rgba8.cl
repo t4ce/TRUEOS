@@ -2,12 +2,14 @@
 //
 // Contract:
 // - Destination is a linear RGBA8 buffer packed as AABBGGRR in a u32.
-// - Each descriptor draws one fixed 64x64 Mandelbrot tile.
+// - Each descriptor draws one fixed 64x4 Mandelbrot row-band.
 // - desc.src_xy is a signed 16-bit Mandelbrot-space pixel offset.
 // - desc.dst_xy is a signed 16-bit destination pixel coordinate.
 // - One SIMD16 walker consumes a descriptor slice:
 //   lane N draws descriptors desc_base + N, desc_base + N+16, ...
 // - Each output pixel runs up to 256 Mandelbrot iterations.
+
+#define MANDEL64_BAND_ROWS 4u
 
 typedef struct Mandel64Desc {
     uint src_xy;
@@ -81,7 +83,7 @@ __kernel void mandel64_worklist_rgba8(
         int dst_x = unpack_i16(desc.dst_xy);
         int dst_y = unpack_i16(desc.dst_xy >> 16);
 
-        for (uint y = 0u; y < 64u; y++) {
+        for (uint y = 0u; y < MANDEL64_BAND_ROWS; y++) {
             int out_y = dst_y + (int)y;
             if (out_y < 0) {
                 continue;

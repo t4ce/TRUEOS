@@ -134,6 +134,11 @@ pub unsafe fn log_exception_value(ctx: *mut qjs::JSContext, label: &str, value: 
 
     log_named_prop(ctx, value, b"name\0", "quickjs: name: ");
     log_named_prop(ctx, value, b"message\0", "quickjs: message: ");
+    log_named_prop(ctx, value, b"fileName\0", "quickjs: fileName: ");
+    log_named_prop(ctx, value, b"lineNumber\0", "quickjs: lineNumber: ");
+    log_named_prop(ctx, value, b"columnNumber\0", "quickjs: columnNumber: ");
+    log_named_prop(ctx, value, b"line\0", "quickjs: line: ");
+    log_named_prop(ctx, value, b"column\0", "quickjs: column: ");
     log_named_prop(ctx, value, b"stack\0", "quickjs: stack: ");
 }
 

@@ -1499,7 +1499,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &SURFER_PARSE_POOL_STARTED,
         spawn_truesurfer_parse_pool,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "ui3-pixi-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         &UI3_PIXI_SERVICE_STARTED,
