@@ -33,24 +33,42 @@ const TRUESURFER_PIXI_HOST_PRELUDE_FILENAME: &[u8] = b"<truesurfer-pixi-host-pre
 const TRUESURFER_PIXI_BUNDLE_FILENAME: &[u8] = b"<truesurfer-pixi-bundle>\0";
 const TRUESURFER_PIXI_COLLECTOR_FILENAME: &[u8] = b"<truesurfer-pixi-collector>\0";
 const TRUESURFER_PIXI_CAPTURE_ADAPTER_FILENAME: &[u8] = b"<truesurfer-pixi-capture-adapter>\0";
-const TRUESURFER_PARSE5_VITE_HOST_FILENAME: &[u8] = b"<truesurfer-parse5-vite-host>\0";
-const TRUESURFER_PARSE5_VITE_APP_FILENAME: &[u8] = b"<truesurfer-parse5-vite-app.mjs>\0";
-const TRUESURFER_PARSE5_VITE_HOST_CORE_FILENAME: &[u8] = b"<truesurfer-parse5-vite-host-core>\0";
-const TRUESURFER_PARSE5_VITE_HOST_EVENT_FILENAME: &[u8] = b"<truesurfer-parse5-vite-host-event>\0";
+const TRUESURFER_PARSE5_TRUEOS_APP_FILENAME: &[u8] = b"<truesurfer-parse5-trueos-app.js>\0";
+const TRUESURFER_PARSE5_VITE_HOST_CORE_FILENAME: &[u8] = b"<truesurfer-parse5-trueos-host-core>\0";
+const TRUESURFER_PARSE5_VITE_HOST_EVENT_FILENAME: &[u8] =
+    b"<truesurfer-parse5-trueos-host-event>\0";
 const TRUESURFER_PARSE5_VITE_HOST_CANVAS_FILENAME: &[u8] =
-    b"<truesurfer-parse5-vite-host-canvas>\0";
-const TRUESURFER_PARSE5_VITE_HOST_DOM_FILENAME: &[u8] = b"<truesurfer-parse5-vite-host-dom>\0";
-const TRUESURFER_PARSE5_VITE_HOST_FETCH_FILENAME: &[u8] = b"<truesurfer-parse5-vite-host-fetch>\0";
+    b"<truesurfer-parse5-trueos-host-canvas>\0";
+const TRUESURFER_PARSE5_VITE_HOST_DOM_FILENAME: &[u8] = b"<truesurfer-parse5-trueos-host-dom>\0";
+const TRUESURFER_PARSE5_VITE_HOST_FETCH_FILENAME: &[u8] =
+    b"<truesurfer-parse5-trueos-host-fetch>\0";
 const TRUESURFER_PARSE5_VITE_HOST_CAPTURE_FILENAME: &[u8] =
-    b"<truesurfer-parse5-vite-host-capture>\0";
+    b"<truesurfer-parse5-trueos-host-capture>\0";
 const TRUESURFER_PIXI_HOST_PRELUDE_SOURCE: &[u8] =
     include_bytes!("../../../../../src/ui3/pixi_host_prelude.js");
 const TRUESURFER_PIXI_BUNDLE_SOURCE: &[u8] =
     include_bytes!("../../../../../src/ui3/pixi_bundle.min.js");
 const TRUESURFER_PIXI_CAPTURE_ADAPTER_SOURCE: &[u8] =
     include_bytes!("../../../../../src/ui3/pixi_capture_adapter.js");
-const TRUESURFER_PARSE5_VITE_APP_SOURCE: &[u8] =
-    include_bytes!("../../../../../../Parse5/dist/assets/index.js");
+const TRUESURFER_PARSE5_TRUEOS_APP_SOURCE: &[u8] =
+    include_bytes!("../../../../../../Parse5/dist/trueos/index.js");
+
+fn fnv1a32(bytes: &[u8]) -> u32 {
+    let mut hash = 0x811c9dc5u32;
+    for b in bytes {
+        hash ^= *b as u32;
+        hash = hash.wrapping_mul(0x01000193);
+    }
+    hash
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty()
+        && haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
+}
+
 const TRUESURFER_PIXI_COLLECTOR_SOURCE: &[u8] = br#"
 (function (G) {
   "use strict";
@@ -123,6 +141,7 @@ const TRUESURFER_PIXI_COLLECTOR_SOURCE: &[u8] = br#"
   };
 })(typeof globalThis !== "undefined" ? globalThis : this);
 "#;
+#[allow(dead_code)]
 const TRUESURFER_PARSE5_VITE_HOST_SOURCE: &[u8] = br##"
 (function (G) {
   "use strict";
@@ -391,7 +410,7 @@ const TRUESURFER_PARSE5_VITE_HOST_SOURCE: &[u8] = br##"
       ok: 1,
       ui3Scene: {
         version: 1,
-        commandSource: "parse5-vite-pixi",
+        commandSource: "parse5-trueos-pixi",
         rootId: rootId,
         opCount: ops.length,
         ops: ops
@@ -576,6 +595,7 @@ if (typeof G.__TRUEOS_INPUT_HTML__ !== "string") G.__TRUEOS_INPUT_HTML__ = "";
 G.__TRUEOS_PIXI_APP = undefined;
 G.__TRUEOS_PIXI_APP_READY__ = false;
 G.__TRUEOS_PIXI_APP_ERROR__ = "";
+G.__TRUEOS_PIXI_APP_PHASE__ = "host:fetch-ready";
 if (typeof G.Response !== "function") {
   G.Response = function Response(body, init) {
     this._body = String(body == null ? "" : body);
@@ -646,6 +666,7 @@ G.__trueosParse5BuildSceneFromCapture = function () {
       break;
     }
   }
+  var hasSnapshot = !!snapshot;
   if (snapshot) rootId = __trueosPushSnapshotNode(snapshot, 0, ops, seen) || rootId;
   for (i = 0; i < commands.length; i += 1) {
     var cmd = commands[i] || {};
@@ -664,16 +685,28 @@ G.__trueosParse5BuildSceneFromCapture = function () {
       case "lineTo": ops.push({ code: 20, node: id, a: __trueosNum(args[0], 0), b: __trueosNum(args[1], 0) }); break;
       case "fill": ops.push({ code: 6, node: id, a: __trueosColorArg(args[0], 0xffffff), b: __trueosAlphaArg(args[0]) }); break;
       case "stroke": ops.push({ code: 7, node: id, a: __trueosColorArg(args[0], 0xffffff), b: __trueosAlphaArg(args[0]), c: __trueosWidthArg(args[0]) }); break;
-      case "removeChildren": ops.push({ code: 14, node: id }); break;
-      case "removeAllListeners": ops.push({ code: 17, node: id }); break;
-      case "on": if (cmd.event) ops.push({ code: 16, node: id, text: String(cmd.event) }); break;
-      case "text.text.set": ops.push({ code: 8, node: id, text: String(args[0] == null ? "" : args[0]) }); break;
+      case "addChild":
+        if (!hasSnapshot && __trueosNum(args[0], 0) > 0) ops.push({ code: 2, node: id, a: __trueosNum(args[0], 0) });
+        break;
+      case "addChildAt":
+        if (!hasSnapshot && __trueosNum(args[0], 0) > 0) ops.push({ code: 10, node: id, a: __trueosNum(args[0], 0), b: __trueosNum(args[1], 0) });
+        break;
+      case "setChildIndex":
+        if (!hasSnapshot && __trueosNum(args[0], 0) > 0) ops.push({ code: 11, node: id, a: __trueosNum(args[0], 0), b: __trueosNum(args[1], 0) });
+        break;
+      case "removeChild":
+        if (!hasSnapshot && __trueosNum(args[0], 0) > 0) ops.push({ code: 12, node: id, a: __trueosNum(args[0], 0) });
+        break;
+      case "removeChildren": if (!hasSnapshot) ops.push({ code: 14, node: id }); break;
+      case "removeAllListeners": if (!hasSnapshot) ops.push({ code: 17, node: id }); break;
+      case "on": if (!hasSnapshot && cmd.event) ops.push({ code: 16, node: id, text: String(cmd.event) }); break;
+      case "text.text.set": if (!hasSnapshot) ops.push({ code: 8, node: id, text: String(args[0] == null ? "" : args[0]) }); break;
       case "text.style.set":
         if (args[0] && typeof args[0].fill !== "undefined") ops.push({ code: 9, node: id, a: __trueosColorArg(args[0].fill, 0xffffff), b: 1 });
         break;
     }
   }
-  return { ok: 1, ui3Scene: { version: 1, commandSource: "parse5-vite-pixi", rootId: rootId, opCount: ops.length, ops: ops } };
+  return { ok: 1, ui3Scene: { version: 1, commandSource: "parse5-trueos-pixi", rootId: rootId, opCount: ops.length, ops: ops } };
 };
 "##;
 const TRUESURFER_IMPORT_SOURCE: &[u8] = br#"
@@ -726,6 +759,10 @@ const TRUESURFER_RESULT_ERROR_PROP: &[u8] = b"error\0";
 const TRUESURFER_TRUEOS_INPUT_HTML_PROP: &[u8] = b"__TRUEOS_INPUT_HTML__\0";
 const TRUESURFER_TRUEOS_PIXI_APP_READY_PROP: &[u8] = b"__TRUEOS_PIXI_APP_READY__\0";
 const TRUESURFER_TRUEOS_PIXI_APP_ERROR_PROP: &[u8] = b"__TRUEOS_PIXI_APP_ERROR__\0";
+const TRUESURFER_TRUEOS_PIXI_APP_PHASE_PROP: &[u8] = b"__TRUEOS_PIXI_APP_PHASE__\0";
+const TRUESURFER_TRUEOS_PIXI_CAPTURE_ERROR_PROP: &[u8] = b"__TRUEOS_PIXI_CAPTURE_ERROR__\0";
+const TRUESURFER_TRUEOS_PIXI_CAPTURE_STEP_PROP: &[u8] = b"__TRUEOS_PIXI_CAPTURE_STEP__\0";
+const TRUESURFER_TRUEOS_PIXI_LAYOUT_STEP_PROP: &[u8] = b"__TRUEOS_PIXI_LAYOUT_STEP__\0";
 const TRUESURFER_PARSE5_BUILD_SCENE_PROP: &[u8] = b"__trueosParse5BuildSceneFromCapture\0";
 const TRUESURFER_UI3_SCENE_COMMAND_SOURCE_PROP: &[u8] = b"commandSource\0";
 const TRUESURFER_UI3_SCENE_ROOT_ID_PROP: &[u8] = b"rootId\0";
@@ -1427,10 +1464,9 @@ unsafe fn submit_ui3_scene(
             13 => qjs::platform::ui::ui3_scene_remove_from_parent(browser_instance_id, node),
             14 => qjs::platform::ui::ui3_scene_remove_children(browser_instance_id, node),
             15 => qjs::platform::ui::ui3_scene_visible(browser_instance_id, node, a != 0.0),
-            16 => {
-                let event = read_result_string(ctx, op_value, TRUESURFER_UI3_OP_TEXT_PROP);
-                qjs::platform::ui::ui3_scene_listen(browser_instance_id, node, event.as_str())
-            }
+            // Listener registration is Pixi vocabulary, but first-frame rendering does not
+            // need event dispatch wired yet. Keep it accepted so visual submit cannot hang.
+            16 => true,
             17 => qjs::platform::ui::ui3_scene_remove_all_listeners(browser_instance_id, node),
             18 => qjs::platform::ui::ui3_scene_graphics_circle(browser_instance_id, node, a, b, c),
             19 => qjs::platform::ui::ui3_scene_graphics_move_to(browser_instance_id, node, a, b),
@@ -1439,6 +1475,11 @@ unsafe fn submit_ui3_scene(
         };
         if ok {
             submitted = submitted.saturating_add(1);
+        } else if idx < 32 {
+            log_line(format!(
+                "qjs-truesurfer[{}]: ui3 scene op#{} rejected code={} node={} a={} b={} c={} d={}\n",
+                browser_instance_id, idx, code, node, a, b, c, d
+            ));
         }
         qjs::js_free_value(ctx, op_value);
     }
@@ -1458,7 +1499,7 @@ unsafe fn submit_ui3_scene(
     (submitted, root_id)
 }
 
-unsafe fn submit_parse5_vite_pixi_scene(
+unsafe fn submit_parse5_trueos_pixi_scene(
     rt: *mut qjs::JSRuntime,
     ctx: *mut qjs::JSContext,
     browser_instance_id: u32,
@@ -1468,32 +1509,32 @@ unsafe fn submit_parse5_vite_pixi_scene(
         (
             TRUESURFER_PARSE5_VITE_HOST_CORE_SOURCE,
             TRUESURFER_PARSE5_VITE_HOST_CORE_FILENAME,
-            "truesurfer parse5 vite host core",
+            "truesurfer parse5 trueos host core",
         ),
         (
             TRUESURFER_PARSE5_VITE_HOST_EVENT_SOURCE,
             TRUESURFER_PARSE5_VITE_HOST_EVENT_FILENAME,
-            "truesurfer parse5 vite host event",
+            "truesurfer parse5 trueos host event",
         ),
         (
             TRUESURFER_PARSE5_VITE_HOST_CANVAS_SOURCE,
             TRUESURFER_PARSE5_VITE_HOST_CANVAS_FILENAME,
-            "truesurfer parse5 vite host canvas",
+            "truesurfer parse5 trueos host canvas",
         ),
         (
             TRUESURFER_PARSE5_VITE_HOST_DOM_SOURCE,
             TRUESURFER_PARSE5_VITE_HOST_DOM_FILENAME,
-            "truesurfer parse5 vite host dom",
+            "truesurfer parse5 trueos host dom",
         ),
         (
             TRUESURFER_PARSE5_VITE_HOST_FETCH_SOURCE,
             TRUESURFER_PARSE5_VITE_HOST_FETCH_FILENAME,
-            "truesurfer parse5 vite host fetch",
+            "truesurfer parse5 trueos host fetch",
         ),
         (
             TRUESURFER_PARSE5_VITE_HOST_CAPTURE_SOURCE,
             TRUESURFER_PARSE5_VITE_HOST_CAPTURE_FILENAME,
-            "truesurfer parse5 vite host capture",
+            "truesurfer parse5 trueos host capture",
         ),
     ];
     for (source, filename, label) in host_chunks {
@@ -1512,38 +1553,51 @@ unsafe fn submit_parse5_vite_pixi_scene(
     }
     set_global_string(ctx, TRUESURFER_TRUEOS_INPUT_HTML_PROP, html);
     log_line(format!(
-        "qjs-truesurfer[{}]: parse5 vite host ok chunks={} html_bytes={}\n",
+        "qjs-truesurfer[{}]: parse5 trueos host ok chunks={} html_bytes={}\n",
         browser_instance_id,
         host_chunks.len(),
         html.len()
     ));
 
     log_line(format!(
-        "qjs-truesurfer[{}]: parse5 vite app compile begin bytes={}\n",
+        "qjs-truesurfer[{}]: parse5 trueos app eval begin bytes={} hash=0x{:08x} bundled_parse5={}\n",
         browser_instance_id,
-        TRUESURFER_PARSE5_VITE_APP_SOURCE.len()
+        TRUESURFER_PARSE5_TRUEOS_APP_SOURCE.len(),
+        fnv1a32(TRUESURFER_PARSE5_TRUEOS_APP_SOURCE),
+        contains_bytes(TRUESURFER_PARSE5_TRUEOS_APP_SOURCE, b"TAG_ID") as u8
     ));
-    let app_fun = qjs::js_eval_bytes(
+    let app = qjs::js_eval_bytes(
         ctx,
-        TRUESURFER_PARSE5_VITE_APP_SOURCE,
-        TRUESURFER_PARSE5_VITE_APP_FILENAME.as_ptr() as *const c_char,
-        qjs::JS_EVAL_TYPE_MODULE | qjs::JS_EVAL_FLAG_COMPILE_ONLY,
+        TRUESURFER_PARSE5_TRUEOS_APP_SOURCE,
+        TRUESURFER_PARSE5_TRUEOS_APP_FILENAME.as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_GLOBAL,
     );
-    if app_fun.is_exception() {
-        qjs::qjs_diag::dump_last_exception(ctx, "truesurfer parse5 vite app compile");
-        qjs::js_free_value(ctx, app_fun);
-        return (0, 0);
-    }
-    log_line(format!("qjs-truesurfer[{}]: parse5 vite app compile ok\n", browser_instance_id));
-
-    let app = qjs::JS_EvalFunction(ctx, app_fun);
     if app.is_exception() {
-        qjs::qjs_diag::dump_last_exception(ctx, "truesurfer parse5 vite app eval");
+        qjs::qjs_diag::dump_last_exception(ctx, "truesurfer parse5 trueos app eval");
         qjs::js_free_value(ctx, app);
         return (0, 0);
     }
     qjs::js_free_value(ctx, app);
-    log_line(format!("qjs-truesurfer[{}]: parse5 vite app eval returned\n", browser_instance_id));
+    log_line(format!("qjs-truesurfer[{}]: parse5 trueos app eval returned\n", browser_instance_id));
+
+    let immediate_app_ready = read_global_bool(ctx, TRUESURFER_TRUEOS_PIXI_APP_READY_PROP);
+    let immediate_app_error = read_global_string(ctx, TRUESURFER_TRUEOS_PIXI_APP_ERROR_PROP);
+    if !immediate_app_ready && !immediate_app_error.is_empty() {
+        let app_phase = read_global_string(ctx, TRUESURFER_TRUEOS_PIXI_APP_PHASE_PROP);
+        let capture_error = read_global_string(ctx, TRUESURFER_TRUEOS_PIXI_CAPTURE_ERROR_PROP);
+        let capture_step = read_global_string(ctx, TRUESURFER_TRUEOS_PIXI_CAPTURE_STEP_PROP);
+        let layout_step = read_global_string(ctx, TRUESURFER_TRUEOS_PIXI_LAYOUT_STEP_PROP);
+        log_line(format!(
+            "qjs-truesurfer[{}]: parse5 trueos app not ready pump_iters=0 pump_stopped=1 phase={} layout_step={} capture_step={} capture_error={} error={}\n",
+            browser_instance_id,
+            app_phase,
+            layout_step,
+            capture_step,
+            capture_error,
+            immediate_app_error
+        ));
+        return (0, 0);
+    }
 
     let mut pump_iters = 0u32;
     let mut pump_stopped = false;
@@ -1551,7 +1605,7 @@ unsafe fn submit_parse5_vite_pixi_scene(
         if read_global_bool(ctx, TRUESURFER_TRUEOS_PIXI_APP_READY_PROP) {
             break;
         }
-        if !qjs::vm::pump_runtime_once(rt, ctx, "truesurfer-parse5-vite") {
+        if !qjs::vm::pump_runtime_once(rt, ctx, "truesurfer-parse5-trueos") {
             pump_stopped = true;
             break;
         }
@@ -1566,14 +1620,25 @@ unsafe fn submit_parse5_vite_pixi_scene(
 
     if !read_global_bool(ctx, TRUESURFER_TRUEOS_PIXI_APP_READY_PROP) {
         let app_error = read_global_string(ctx, TRUESURFER_TRUEOS_PIXI_APP_ERROR_PROP);
+        let app_phase = read_global_string(ctx, TRUESURFER_TRUEOS_PIXI_APP_PHASE_PROP);
+        let capture_error = read_global_string(ctx, TRUESURFER_TRUEOS_PIXI_CAPTURE_ERROR_PROP);
+        let capture_step = read_global_string(ctx, TRUESURFER_TRUEOS_PIXI_CAPTURE_STEP_PROP);
+        let layout_step = read_global_string(ctx, TRUESURFER_TRUEOS_PIXI_LAYOUT_STEP_PROP);
         log_line(format!(
-            "qjs-truesurfer[{}]: parse5 vite app not ready pump_iters={} pump_stopped={} error={}\n",
-            browser_instance_id, pump_iters, pump_stopped as u8, app_error
+            "qjs-truesurfer[{}]: parse5 trueos app not ready pump_iters={} pump_stopped={} phase={} layout_step={} capture_step={} capture_error={} error={}\n",
+            browser_instance_id,
+            pump_iters,
+            pump_stopped as u8,
+            app_phase,
+            layout_step,
+            capture_step,
+            capture_error,
+            app_error
         ));
         return (0, 0);
     }
     log_line(format!(
-        "qjs-truesurfer[{}]: parse5 vite app ready pump_iters={}\n",
+        "qjs-truesurfer[{}]: parse5 trueos app ready pump_iters={}\n",
         browser_instance_id, pump_iters
     ));
 
@@ -1590,7 +1655,7 @@ unsafe fn submit_parse5_vite_pixi_scene(
         qjs::js_free_value(ctx, build_scene);
         qjs::js_free_value(ctx, global);
         log_line(format!(
-            "qjs-truesurfer[{}]: parse5 vite scene builder missing\n",
+            "qjs-truesurfer[{}]: parse5 trueos scene builder missing\n",
             browser_instance_id
         ));
         return (0, 0);
@@ -1600,7 +1665,7 @@ unsafe fn submit_parse5_vite_pixi_scene(
     qjs::js_free_value(ctx, build_scene);
     qjs::js_free_value(ctx, global);
     if wrapper.is_exception() {
-        qjs::qjs_diag::dump_last_exception(ctx, "truesurfer parse5 vite scene build");
+        qjs::qjs_diag::dump_last_exception(ctx, "truesurfer parse5 trueos scene build");
         qjs::js_free_value(ctx, wrapper);
         return (0, 0);
     }
@@ -1608,7 +1673,7 @@ unsafe fn submit_parse5_vite_pixi_scene(
     let (ops, root) = submit_ui3_scene(ctx, browser_instance_id, wrapper);
     qjs::js_free_value(ctx, wrapper);
     log_line(format!(
-        "qjs-truesurfer[{}]: parse5 vite ui3 submit ops={} root={}\n",
+        "qjs-truesurfer[{}]: parse5 trueos ui3 submit ops={} root={}\n",
         browser_instance_id, ops, root
     ));
     (ops, root)
@@ -1728,15 +1793,15 @@ unsafe fn dispatch_html(
         parse_result.script_count
     ));
     log_line(format!(
-        "qjs-truesurfer[{}]: gadget snapshot skipped reason=parse5-vite-pixi-path\n",
+        "qjs-truesurfer[{}]: gadget snapshot skipped reason=parse5-trueos-pixi-path\n",
         browser_instance_id
     ));
     log_line(format!("qjs-truesurfer[{}]: ui3 submit begin\n", browser_instance_id));
     let (ui3_ops, ui3_root) =
-        submit_parse5_vite_pixi_scene(rt, ctx, browser_instance_id, pending.html.as_str());
+        submit_parse5_trueos_pixi_scene(rt, ctx, browser_instance_id, pending.html.as_str());
     if ui3_ops == 0 || ui3_root == 0 {
         log_line(format!(
-            "qjs-truesurfer[{}]: parse5 vite ui3 unavailable; no fallback scene submitted\n",
+            "qjs-truesurfer[{}]: parse5 trueos ui3 unavailable; no fallback scene submitted\n",
             browser_instance_id
         ));
     }

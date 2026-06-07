@@ -154,7 +154,8 @@ impl Ui3PixiHost {
                     root,
                     ordered_nodes: Vec::new(),
                 };
-                self.collect_ordered(root, &mut frame.ordered_nodes);
+                let mut visited = Vec::new();
+                self.collect_ordered(root, &mut frame.ordered_nodes, &mut visited);
                 self.hit_scene = Ui3HitScene::from_ordered_nodes(&self.nodes, &frame.ordered_nodes);
                 self.last_frame = Some(frame);
                 return self.last_frame.as_ref();
@@ -164,6 +165,10 @@ impl Ui3PixiHost {
     }
 
     fn attach(&mut self, parent: Ui3NodeId, child: Ui3NodeId, index: Option<usize>) {
+        if parent == child || self.would_create_cycle(parent, child) {
+            return;
+        }
+
         self.ensure_node(parent, Ui3NodeKind::Container);
         self.ensure_node(child, Ui3NodeKind::Container);
 
@@ -193,6 +198,22 @@ impl Ui3PixiHost {
             .get_mut(&child)
             .expect("ui3 child exists after ensure_node")
             .parent = Some(parent);
+    }
+
+    fn would_create_cycle(&self, parent: Ui3NodeId, child: Ui3NodeId) -> bool {
+        let mut cursor = Some(parent);
+        let mut guard = 0usize;
+        while let Some(node_id) = cursor {
+            if node_id == child {
+                return true;
+            }
+            guard += 1;
+            if guard > self.nodes.len() {
+                return true;
+            }
+            cursor = self.nodes.get(&node_id).and_then(|node| node.parent);
+        }
+        false
     }
 
     fn detach_child(&mut self, parent: Ui3NodeId, child: Ui3NodeId) {
@@ -238,7 +259,16 @@ impl Ui3PixiHost {
         }
     }
 
-    fn collect_ordered(&self, node_id: Ui3NodeId, out: &mut Vec<Ui3NodeId>) {
+    fn collect_ordered(
+        &self,
+        node_id: Ui3NodeId,
+        out: &mut Vec<Ui3NodeId>,
+        visited: &mut Vec<Ui3NodeId>,
+    ) {
+        if visited.contains(&node_id) {
+            return;
+        }
+        visited.push(node_id);
         let Some(node) = self.nodes.get(&node_id) else {
             return;
         };
@@ -247,7 +277,7 @@ impl Ui3PixiHost {
         }
         out.push(node_id);
         for child in &node.children {
-            self.collect_ordered(*child, out);
+            self.collect_ordered(*child, out, visited);
         }
     }
 }
