@@ -3,8 +3,8 @@
 // Contract:
 // - Stage1 affine plane patch worklist fill: each descriptor is one 3D plane
 //   patch with up to four local half-space cuts.
-// - One work item covers a 4x8 pixel tile. The walker is flattened onto X,
-//   because this baremetal path has proven X global ids; Y/Z stay at 1.
+// - One work item covers an 8x16 pixel tile. The CPU emits multiple proven
+//   single-group walkers and passes a base tile index per walker.
 // - Each pixel worker walks descriptors in order, preserving painter-order
 //   behavior while still fanning the expensive plane math across the surface.
 // - One destination RGBA8/XRGB-style surface per dispatch.
@@ -17,8 +17,8 @@
 //   with a,b,c in Q16.
 
 #define PATCH_DESC_DWORDS 40u
-#define PATCH_TILE_PIXELS_PER_LANE 4u
-#define PATCH_TILE_ROWS 8u
+#define PATCH_TILE_PIXELS_PER_LANE 8u
+#define PATCH_TILE_ROWS 16u
 
 static inline long dot3_q16(int4 a, int4 b)
 {
@@ -66,11 +66,17 @@ __kernel void canvas3d_plane_patch_worklist_rgba8(
     __global uint *dst_rgba,
     __global const uint *descs,
     uint desc_base,
-    uint desc_count)
+    uint desc_count,
+    uint work_base)
 {
     (void)unused_src;
 
-    uint work_index = get_global_id(0);
+    uint lane = get_global_id(0);
+    if (lane >= 16u) {
+        return;
+    }
+
+    uint work_index = work_base + lane;
     if (desc_count == 0u) {
         return;
     }

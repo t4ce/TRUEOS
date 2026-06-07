@@ -974,6 +974,7 @@ pub(super) fn pump_keyboard_input(state: &mut Ui2State) {
                             ) {
                                 continue;
                             }
+                            let _ = note_window_keyboard_event(state, target_window_id, event);
                         }
                     }
                 }

@@ -577,11 +577,13 @@ struct Ui2Window {
     last_clicked_item_seq: u32,
     last_clicked_cursor_slot: u32,
     cursor_events: Vec<Ui2WindowCursorEvent>,
+    keyboard_events: Vec<crate::r::keyboard::TrueosKeyboardOutputEvent>,
     container_sync_needed: bool,
     selected_cursor_slots: Vec<u32>,
     dirty: bool,
     content_present_dirty: bool,
     content_present_dirty_rect: Option<Ui2Rect>,
+    geometry_dirty: bool,
     chrome_titlebar_dirty: bool,
     chrome_hover_clear_button: Option<Ui2DecorationHoverButton>,
     dirty_seq: u32,
@@ -1171,20 +1173,9 @@ fn intel_direct_content_dirty_needs_chrome(state: &Ui2State) -> bool {
         && state.windows.iter().any(|window| {
             window.dirty
                 && window.content_present_dirty
+                && window.geometry_dirty
                 && window_is_renderable(window)
                 && window_has_presentable_hosted_surface_content(window)
-                && matches!(
-                    window.last_reason,
-                    "move-window"
-                        | "resize-window"
-                        | "resize-window-content"
-                        | "restore-window"
-                        | "show-window"
-                        | "maximize-window"
-                        | "window-move-commit"
-                        | "window-resize-commit"
-                        | "surface-window-reveal"
-                )
         })
 }
 
@@ -2103,6 +2094,53 @@ fn draw_hosted_surface_tiles_intel_gpgpu(
     all_ok && (drew_any || bg[3] != 0)
 }
 
+fn fill_hosted_surface_texture_bg_intel_gpgpu(
+    window: &Ui2Window,
+    content: Ui2Rect,
+    dirty_texture_rect: Option<Ui2Rect>,
+    stats: &mut Ui2IntelContentGpgpuStats,
+) -> bool {
+    let bg = window.hosted_surface_bg_rgba;
+    if bg[3] == 0 {
+        return true;
+    }
+
+    let mut fill_rect = content;
+    if let Some(dirty) = dirty_texture_rect
+        && dirty.w > 0.0
+        && dirty.h > 0.0
+    {
+        let x0 = (content.x + dirty.x.max(0.0)).max(content.x);
+        let y0 = (content.y + dirty.y.max(0.0)).max(content.y);
+        let x1 = (content.x + (dirty.x + dirty.w).max(0.0)).min(content.x + content.w);
+        let y1 = (content.y + (dirty.y + dirty.h).max(0.0)).min(content.y + content.h);
+        if !(x1 > x0 && y1 > y0) {
+            return true;
+        }
+        fill_rect = Ui2Rect::new(x0, y0, x1 - x0, y1 - y0);
+    }
+
+    let mut rects = Vec::new();
+    let rgba = (bg[0], bg[1], bg[2], modulate_alpha(bg[3], window.alpha));
+    let _ = push_chrome_solid_rect(&mut rects, fill_rect, rgba);
+    if rects.is_empty() {
+        return true;
+    }
+
+    let Some(result) = crate::intel::gpgpu::solid_rects_rgba8_over_primary(&rects, true) else {
+        return false;
+    };
+    if !result.ok {
+        return false;
+    }
+    stats.spans = stats.spans.saturating_add(result.fill_descs);
+    stats.submits = stats.submits.saturating_add(result.fill_submits);
+    stats.submit_ms = stats.submit_ms.saturating_add(result.fill_ms);
+    stats.present_ms = stats.present_ms.saturating_add(result.present_ms);
+    stats.total_ms = stats.total_ms.saturating_add(result.total_ms);
+    true
+}
+
 fn clip_texture_content_to_primary(
     state: &Ui2State,
     content: Ui2Rect,
@@ -2214,6 +2252,22 @@ fn draw_window_content_textures_intel_gpgpu(state: &Ui2State, dirty_only: bool) 
         }
 
         if window.content_tex_id == 0 || !texture_is_drawable(window.content_tex_id) {
+            stats.skipped = stats.skipped.saturating_add(1);
+            continue;
+        }
+
+        if window.kind == Ui2WindowKind::HostedSurface
+            && !fill_hosted_surface_texture_bg_intel_gpgpu(
+                window,
+                content,
+                if dirty_only {
+                    window.content_present_dirty_rect
+                } else {
+                    None
+                },
+                &mut stats,
+            )
+        {
             stats.skipped = stats.skipped.saturating_add(1);
             continue;
         }
@@ -2450,6 +2504,7 @@ fn note_window_content_present_after_geometry(
         return false;
     }
     window.dirty = true;
+    window.geometry_dirty = true;
     window.content_present_dirty = true;
     window.content_present_dirty_rect = None;
     window.last_reason = reason;
@@ -3910,42 +3965,59 @@ fn draw_window_texture_content(
     content: Ui2Rect,
     tex_id: u32,
 ) -> bool {
+    let mut drew_bg = false;
+    if window.kind == Ui2WindowKind::HostedSurface {
+        let bg = window.hosted_surface_bg_rgba;
+        if bg[3] != 0 {
+            drew_bg |= draw_rgb_rect_no_present(
+                content.x,
+                content.y,
+                content.w,
+                content.h,
+                Rgba8::new(bg[0], bg[1], bg[2], modulate_alpha(bg[3], window.alpha)),
+                state.view_w,
+                state.view_h,
+            );
+        }
+    }
+
     if window.kind == Ui2WindowKind::HostedSurface {
         if let Some(snapshot) = window_scroll_snapshot(window) {
             let viewport_w = snapshot.viewport_width.max(1);
             let content_w = snapshot.content_width.max(viewport_w);
             if content_w > viewport_w && window.content_rotation_quadrants % 4 == 0 {
                 let Some((_tex_w, _tex_h)) = texture_dimensions(tex_id) else {
-                    return false;
+                    return drew_bg;
                 };
                 let scroll_x = normalized_hosted_browser_scroll_x(&snapshot).min(content_w);
                 let visible_w = viewport_w.min(content_w.saturating_sub(scroll_x)).max(1);
                 let u0 = scroll_x as f32 / content_w as f32;
                 let u1 = scroll_x.saturating_add(visible_w) as f32 / content_w as f32;
                 let draw_w = content.w * (visible_w as f32 / viewport_w as f32);
-                return draw_texture_rect_uv_no_present(
-                    tex_id,
-                    content.x,
-                    content.y,
-                    draw_w,
-                    content.h,
-                    u0.clamp(0.0, 1.0),
-                    0.0,
-                    u1.clamp(0.0, 1.0),
-                    1.0,
-                    state.view_w,
-                    state.view_h,
-                    window.content_tex_blend,
-                    window.alpha,
-                );
+                return drew_bg
+                    | draw_texture_rect_uv_no_present(
+                        tex_id,
+                        content.x,
+                        content.y,
+                        draw_w,
+                        content.h,
+                        u0.clamp(0.0, 1.0),
+                        0.0,
+                        u1.clamp(0.0, 1.0),
+                        1.0,
+                        state.view_w,
+                        state.view_h,
+                        window.content_tex_blend,
+                        window.alpha,
+                    );
             }
         }
     }
 
     let rotation = window.content_rotation_quadrants % 4;
     if !window.content_preserve_scale {
-        if rotation != 0 {
-            return draw_texture_rect_uv_rotated_no_present(
+        let drew_texture = if rotation != 0 {
+            draw_texture_rect_uv_rotated_no_present(
                 tex_id,
                 content.x,
                 content.y,
@@ -3960,23 +4032,25 @@ fn draw_window_texture_content(
                 state.view_h,
                 window.content_tex_blend,
                 window.alpha,
-            );
-        }
-        return draw_texture_rect_no_present(
-            tex_id,
-            content.x,
-            content.y,
-            content.w,
-            content.h,
-            state.view_w,
-            state.view_h,
-            window.content_tex_blend,
-            window.alpha,
-        );
+            )
+        } else {
+            draw_texture_rect_no_present(
+                tex_id,
+                content.x,
+                content.y,
+                content.w,
+                content.h,
+                state.view_w,
+                state.view_h,
+                window.content_tex_blend,
+                window.alpha,
+            )
+        };
+        return drew_bg | drew_texture;
     }
 
     let Some((tex_w, tex_h)) = texture_dimensions(tex_id) else {
-        return false;
+        return drew_bg;
     };
     let draw_w = tex_w as f32;
     let draw_h = tex_h as f32;
@@ -3989,7 +4063,7 @@ fn draw_window_texture_content(
     let visible_w = (visible_x1 - visible_x0).max(0.0);
     let visible_h = (visible_y1 - visible_y0).max(0.0);
     if !(visible_w > 0.0 && visible_h > 0.0) {
-        return false;
+        return drew_bg;
     }
 
     let u0 = (visible_x0 - draw_x) / draw_w;
@@ -3997,7 +4071,7 @@ fn draw_window_texture_content(
     let u1 = (visible_x1 - draw_x) / draw_w;
     let v1 = (visible_y1 - draw_y) / draw_h;
 
-    if rotation != 0 {
+    let drew_texture = if rotation != 0 {
         draw_texture_rect_uv_rotated_no_present(
             tex_id,
             visible_x0,
@@ -4030,7 +4104,8 @@ fn draw_window_texture_content(
             window.content_tex_blend,
             window.alpha,
         )
-    }
+    };
+    drew_bg | drew_texture
 }
 
 fn draw_window_frame(
@@ -4612,6 +4687,7 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
             window.dirty = false;
             window.content_present_dirty = false;
             window.content_present_dirty_rect = None;
+            window.geometry_dirty = false;
             window.dirty_seq = window.dirty_seq.wrapping_add(1);
             window.last_logged_dirty_seq = window.dirty_seq;
             window.last_logged_reason = window.last_reason;
