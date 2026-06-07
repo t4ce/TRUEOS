@@ -118,6 +118,17 @@ fn inferred_concept_for_rendered(rendered: &str) -> Option<&'static str> {
     if rendered.starts_with("crabusb:") || rendered.starts_with("crabusb/") {
         return Some("usb");
     }
+    if rendered.starts_with("net:")
+        || rendered.starts_with("net/")
+        || rendered.starts_with("dns:")
+        || rendered.starts_with("dhcp:")
+        || rendered.starts_with("tls:")
+        || rendered.starts_with("icmp:")
+        || rendered.starts_with("http-hyper:")
+        || rendered.starts_with("vnet_stream:")
+    {
+        return Some("net");
+    }
     if rendered.starts_with("gfx-cabi:") || rendered.starts_with("gfx-cabi/") {
         return Some("gfx");
     }
