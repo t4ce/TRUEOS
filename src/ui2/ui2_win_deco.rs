@@ -297,7 +297,7 @@ pub(super) fn draw_window_chrome(
     let frame_left_rgba = modulate_rgba_alpha(frame_left_rgba, window.alpha);
     let frame_mid_rgba = modulate_rgba_alpha(frame_mid_rgba, window.alpha);
     let frame_right_rgba = modulate_rgba_alpha(frame_right_rgba, window.alpha);
-    let body_alpha = if window.content_preserve_scale {
+    let body_alpha = if window.content_preserve_scale || window.content_fit_scale {
         ((u16::from(window.alpha) * 85) / 100) as u8
     } else {
         window.alpha
@@ -1368,6 +1368,24 @@ pub fn set_window_content_preserve_scale(id: u32, preserve_scale: bool) -> bool 
     window.content_preserve_scale = preserve_scale;
     state.compose_reason = "decor-content-scale-window";
     let noted = note_window_dirty(&mut state, id, "decor-content-scale-window");
+    if noted {
+        refresh_window_hit_entries(&mut state, id);
+    }
+    noted
+}
+
+pub fn set_window_content_fit_scale(id: u32, fit_scale: bool) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    if window.content_fit_scale == fit_scale {
+        return true;
+    }
+    window.content_fit_scale = fit_scale;
+    state.compose_reason = "decor-content-fit-scale-window";
+    let noted = note_window_dirty(&mut state, id, "decor-content-fit-scale-window");
     if noted {
         refresh_window_hit_entries(&mut state, id);
     }
