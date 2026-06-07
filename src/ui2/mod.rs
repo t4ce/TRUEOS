@@ -564,6 +564,7 @@ struct Ui2Window {
     resize_mode: Ui2WindowResizeMode,
     resize_maintain_aspect: bool,
     content_preserve_scale: bool,
+    content_fit_scale: bool,
     vertical_scrollbar_side: Ui2WindowVerticalScrollbarSide,
     horizontal_scrollbar_side: Ui2WindowHorizontalScrollbarSide,
     state: Ui2WindowStateKind,
@@ -2292,9 +2293,60 @@ fn draw_window_content_textures_intel_gpgpu(state: &Ui2State, dirty_only: bool) 
                 draw_w,
                 draw_h,
             )
+        } else if window.content_fit_scale {
+            let tex_wf = tex_w.max(1) as f32;
+            let tex_hf = tex_h.max(1) as f32;
+            let scale = libm::fminf(content.w / tex_wf, content.h / tex_hf);
+            if !(scale.is_finite() && scale > 0.0) {
+                stats.skipped = stats.skipped.saturating_add(1);
+                continue;
+            }
+            let draw_w = libm::fmaxf(1.0, tex_wf * scale);
+            let draw_h = libm::fmaxf(1.0, tex_hf * scale);
+            (
+                content.x + (content.w - draw_w) * 0.5,
+                content.y + (content.h - draw_h) * 0.5,
+                draw_w,
+                draw_h,
+            )
         } else {
             (content.x, content.y, content.w, content.h)
         };
+
+        if window.content_fit_scale {
+            let dst_x = libm::floorf(draw_x) as i32;
+            let dst_y = libm::floorf(draw_y) as i32;
+            let dst_x1 = libm::ceilf(draw_x + draw_w) as i32;
+            let dst_y1 = libm::ceilf(draw_y + draw_h) as i32;
+            if dst_x1 <= dst_x || dst_y1 <= dst_y {
+                stats.skipped = stats.skipped.saturating_add(1);
+                continue;
+            }
+            let dst_rect = crate::intel::gpgpu::GpgpuRect::new(
+                dst_x,
+                dst_y,
+                (dst_x1 - dst_x) as u32,
+                (dst_y1 - dst_y) as u32,
+            );
+            let Some(submit_stats) = crate::intel::gpgpu::blit_rgba8_nearest_to_primary_stats(
+                src_surface,
+                crate::intel::gpgpu::GpgpuRect::new(0, 0, tex_w, tex_h),
+                dst_rect,
+            ) else {
+                stats.skipped = stats.skipped.saturating_add(1);
+                continue;
+            };
+            stats.submitted = stats.submitted.saturating_add(1);
+            stats.spans = stats.spans.saturating_add(submit_stats.spans);
+            stats.submits = stats.submits.saturating_add(submit_stats.submits);
+            stats.submit_ms = stats.submit_ms.saturating_add(submit_stats.submit_ms);
+            stats.present_ms = stats.present_ms.saturating_add(submit_stats.present_ms);
+            stats.total_ms = stats.total_ms.saturating_add(submit_stats.total_ms);
+            stats.pixels = stats
+                .pixels
+                .saturating_add((dst_rect.width as usize).saturating_mul(dst_rect.height as usize));
+            continue;
+        }
 
         let Some((src_rect, dst_xy)) = clip_texture_content_to_primary(
             state,
@@ -2356,7 +2408,7 @@ fn draw_window_content_textures_intel_gpgpu(state: &Ui2State, dirty_only: bool) 
     let log_n = UI2_CONTENT_GPGPU_LOGS.fetch_add(1, Ordering::Relaxed);
     if log_n < 24 || !ok {
         crate::log!(
-            "ui2: content-gpgpu ok={} candidates={} submitted={} skipped={} spans={} submits={} submit_ms={} present_ms={} total_ms={} pixels={} tile_windows={} tile_rgba={} tile_masks={} artifact=alpha_blend_worklist_rgba8,glyph_mask_rgba8 path={}\n",
+            "ui2: content-gpgpu ok={} candidates={} submitted={} skipped={} spans={} submits={} submit_ms={} present_ms={} total_ms={} pixels={} tile_windows={} tile_rgba={} tile_masks={} artifact=alpha_blend_worklist_rgba8,glyph_mask_rgba8,blit_rgba8_nearest path={}\n",
             ok as u8,
             stats.candidates,
             stats.submitted,
@@ -4015,6 +4067,53 @@ fn draw_window_texture_content(
     }
 
     let rotation = window.content_rotation_quadrants % 4;
+    if window.content_fit_scale {
+        let Some((tex_w, tex_h)) = texture_dimensions(tex_id) else {
+            return drew_bg;
+        };
+        let tex_w = tex_w.max(1) as f32;
+        let tex_h = tex_h.max(1) as f32;
+        let scale = libm::fminf(content.w / tex_w, content.h / tex_h);
+        if !(scale.is_finite() && scale > 0.0) {
+            return drew_bg;
+        }
+        let draw_w = libm::fmaxf(1.0, tex_w * scale);
+        let draw_h = libm::fmaxf(1.0, tex_h * scale);
+        let draw_x = content.x + (content.w - draw_w) * 0.5;
+        let draw_y = content.y + (content.h - draw_h) * 0.5;
+        let drew_texture = if rotation != 0 {
+            draw_texture_rect_uv_rotated_no_present(
+                tex_id,
+                draw_x,
+                draw_y,
+                draw_w,
+                draw_h,
+                0.0,
+                0.0,
+                1.0,
+                1.0,
+                rotation,
+                state.view_w,
+                state.view_h,
+                window.content_tex_blend,
+                window.alpha,
+            )
+        } else {
+            draw_texture_rect_no_present(
+                tex_id,
+                draw_x,
+                draw_y,
+                draw_w,
+                draw_h,
+                state.view_w,
+                state.view_h,
+                window.content_tex_blend,
+                window.alpha,
+            )
+        };
+        return drew_bg | drew_texture;
+    }
+
     if !window.content_preserve_scale {
         let drew_texture = if rotation != 0 {
             draw_texture_rect_uv_rotated_no_present(

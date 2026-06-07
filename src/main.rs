@@ -86,6 +86,7 @@ mod tst_ws_time;
 mod turbo;
 #[allow(non_snake_case)]
 mod tyche;
+mod ui3;
 #[path = "usb3/mod.rs"]
 pub(crate) mod usb3;
 mod wait;

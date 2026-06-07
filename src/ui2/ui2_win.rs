@@ -121,6 +121,7 @@ pub(super) fn alloc_window(
         resize_mode: Ui2WindowResizeMode::Auto,
         resize_maintain_aspect: false,
         content_preserve_scale: false,
+        content_fit_scale: false,
         vertical_scrollbar_side: Ui2WindowVerticalScrollbarSide::Left,
         horizontal_scrollbar_side: Ui2WindowHorizontalScrollbarSide::Bottom,
         state: Ui2WindowStateKind::Normal,
@@ -702,6 +703,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
     let next_resize_mode = source_window.resize_mode;
     let next_resize_maintain_aspect = source_window.resize_maintain_aspect;
     let next_content_preserve_scale = source_window.content_preserve_scale;
+    let next_content_fit_scale = source_window.content_fit_scale;
     let next_vertical_scrollbar_side = source_window.vertical_scrollbar_side;
     let next_horizontal_scrollbar_side = source_window.horizontal_scrollbar_side;
     let next_content_tex_blend = source_window.content_tex_blend;
@@ -774,6 +776,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
         window.resize_mode = next_resize_mode;
         window.resize_maintain_aspect = next_resize_maintain_aspect;
         window.content_preserve_scale = next_content_preserve_scale;
+        window.content_fit_scale = next_content_fit_scale;
         window.vertical_scrollbar_side = next_vertical_scrollbar_side;
         window.horizontal_scrollbar_side = next_horizontal_scrollbar_side;
         window.state = Ui2WindowStateKind::Normal;

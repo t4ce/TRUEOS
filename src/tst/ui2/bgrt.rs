@@ -16,34 +16,6 @@ fn bgrt_pixels_to_rgba(pixels: &[u32]) -> Vec<u8> {
     rgba
 }
 
-fn scale_rgba_nearest(
-    src: &[u8],
-    src_w: u32,
-    src_h: u32,
-    dst_w: u32,
-    dst_h: u32,
-) -> Option<Vec<u8>> {
-    if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
-        return None;
-    }
-    let src_pixels = (src_w as usize).checked_mul(src_h as usize)?;
-    if src.len() != src_pixels.checked_mul(4)? {
-        return None;
-    }
-    let dst_pixels = (dst_w as usize).checked_mul(dst_h as usize)?;
-    let mut dst = vec![0u8; dst_pixels.checked_mul(4)?];
-    for y in 0..dst_h {
-        let sy = (y as u64 * src_h as u64 / dst_h as u64) as usize;
-        for x in 0..dst_w {
-            let sx = (x as u64 * src_w as u64 / dst_w as u64) as usize;
-            let src_off = (sy * src_w as usize + sx) * 4;
-            let dst_off = (y as usize * dst_w as usize + x as usize) * 4;
-            dst[dst_off..dst_off + 4].copy_from_slice(&src[src_off..src_off + 4]);
-        }
-    }
-    Some(dst)
-}
-
 fn upload_bgrt_texture(
     tex_id: u32,
     window_id: u32,
@@ -123,10 +95,9 @@ pub async fn ui2_bgrt_demo_task() {
     let window_id = surface.window_id();
     let _ = crate::r::ui2::set_window_left_scrollbar_visible(window_id, false);
     let _ = crate::r::ui2::set_window_bottom_scrollbar_visible(window_id, false);
-    let _ = crate::r::ui2::set_window_resize_maintain_aspect(window_id, true);
+    let _ = crate::r::ui2::set_window_content_fit_scale(window_id, true);
 
-    let upload_ok =
-        upload_bgrt_texture(UI2_BGRT_TEX_ID, window_id, rgba.clone(), width_u32, height_u32);
+    let upload_ok = upload_bgrt_texture(UI2_BGRT_TEX_ID, window_id, rgba, width_u32, height_u32);
 
     if !upload_ok {
         crate::log!(
@@ -156,43 +127,7 @@ pub async fn ui2_bgrt_demo_task() {
         present as u8
     );
 
-    let mut uploaded_w = width_u32;
-    let mut uploaded_h = height_u32;
     loop {
-        if let Some(content) = crate::r::ui2::window_content_rect_by_id(window_id) {
-            let next_w = (content.w.max(1.0) + 0.5) as u32;
-            let next_h = (content.h.max(1.0) + 0.5) as u32;
-            if next_w != uploaded_w || next_h != uploaded_h {
-                let Some(resized) =
-                    scale_rgba_nearest(&rgba, width_u32, height_u32, next_w, next_h)
-                else {
-                    crate::log!(
-                        "ui2-bgrt-demo: resize scale failed tex={} size={}x{}\n",
-                        UI2_BGRT_TEX_ID,
-                        next_w,
-                        next_h
-                    );
-                    break;
-                };
-                if !upload_bgrt_texture(UI2_BGRT_TEX_ID, window_id, resized, next_w, next_h) {
-                    crate::log!(
-                        "ui2-bgrt-demo: resize upload failed tex={} size={}x{}\n",
-                        UI2_BGRT_TEX_ID,
-                        next_w,
-                        next_h
-                    );
-                    break;
-                }
-                uploaded_w = next_w;
-                uploaded_h = next_h;
-                crate::log!(
-                    "ui2-bgrt-demo: resized tex={} size={}x{}\n",
-                    UI2_BGRT_TEX_ID,
-                    uploaded_w,
-                    uploaded_h
-                );
-            }
-        }
         if crate::r::spawn_service::wait_task_or_timeout_ms("ui2-bgrt-demo", 33).await {
             break;
         }
