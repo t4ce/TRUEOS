@@ -29,6 +29,653 @@ pub const HOSTED_KEYBOARD_MOD_ALT: u8 = 1 << 2;
 pub const HOSTED_KEYBOARD_MOD_META: u8 = 1 << 3;
 
 const TRUESURFER_IMPORT_FILENAME: &[u8] = b"<truesurfer-init>\0";
+const TRUESURFER_PIXI_HOST_PRELUDE_FILENAME: &[u8] = b"<truesurfer-pixi-host-prelude>\0";
+const TRUESURFER_PIXI_BUNDLE_FILENAME: &[u8] = b"<truesurfer-pixi-bundle>\0";
+const TRUESURFER_PIXI_COLLECTOR_FILENAME: &[u8] = b"<truesurfer-pixi-collector>\0";
+const TRUESURFER_PIXI_CAPTURE_ADAPTER_FILENAME: &[u8] = b"<truesurfer-pixi-capture-adapter>\0";
+const TRUESURFER_PARSE5_VITE_HOST_FILENAME: &[u8] = b"<truesurfer-parse5-vite-host>\0";
+const TRUESURFER_PARSE5_VITE_APP_FILENAME: &[u8] = b"<truesurfer-parse5-vite-app.mjs>\0";
+const TRUESURFER_PARSE5_VITE_HOST_CORE_FILENAME: &[u8] = b"<truesurfer-parse5-vite-host-core>\0";
+const TRUESURFER_PARSE5_VITE_HOST_EVENT_FILENAME: &[u8] = b"<truesurfer-parse5-vite-host-event>\0";
+const TRUESURFER_PARSE5_VITE_HOST_CANVAS_FILENAME: &[u8] =
+    b"<truesurfer-parse5-vite-host-canvas>\0";
+const TRUESURFER_PARSE5_VITE_HOST_DOM_FILENAME: &[u8] = b"<truesurfer-parse5-vite-host-dom>\0";
+const TRUESURFER_PARSE5_VITE_HOST_FETCH_FILENAME: &[u8] = b"<truesurfer-parse5-vite-host-fetch>\0";
+const TRUESURFER_PARSE5_VITE_HOST_CAPTURE_FILENAME: &[u8] =
+    b"<truesurfer-parse5-vite-host-capture>\0";
+const TRUESURFER_PIXI_HOST_PRELUDE_SOURCE: &[u8] =
+    include_bytes!("../../../../../src/ui3/pixi_host_prelude.js");
+const TRUESURFER_PIXI_BUNDLE_SOURCE: &[u8] =
+    include_bytes!("../../../../../src/ui3/pixi_bundle.min.js");
+const TRUESURFER_PIXI_CAPTURE_ADAPTER_SOURCE: &[u8] =
+    include_bytes!("../../../../../src/ui3/pixi_capture_adapter.js");
+const TRUESURFER_PARSE5_VITE_APP_SOURCE: &[u8] =
+    include_bytes!("../../../../../../Parse5/dist/assets/index.js");
+const TRUESURFER_PIXI_COLLECTOR_SOURCE: &[u8] = br#"
+(function (G) {
+  "use strict";
+  var ops = [];
+  var rootId = 0;
+
+  function num(value, fallback) {
+    var out = Number(value);
+    return Number.isFinite(out) ? out : fallback;
+  }
+
+  function kindCode(kind) {
+    kind = String(kind || "Container");
+    if (kind === "Graphics") return 1;
+    if (kind === "Text") return 2;
+    return 0;
+  }
+
+  function push(op) {
+    ops.push(op);
+    return ops.length;
+  }
+
+  G.__trueosPixiResetScene = function () {
+    ops = [];
+    rootId = 0;
+  };
+
+  G.__trueosPixiTakeScene = function () {
+    return {
+      version: 1,
+      commandSource: "pixi",
+      rootId: rootId,
+      opCount: ops.length,
+      ops: ops.slice(),
+    };
+  };
+
+  G.__trueosPixiOp = function (name) {
+    name = String(name || "");
+    var node = num(arguments[1], 0);
+    switch (name) {
+      case "node": return push({ code: 1, node: node, a: kindCode(arguments[2]) });
+      case "addChild": return push({ code: 2, node: node, a: num(arguments[2], 0) });
+      case "addChildAt": return push({ code: 10, node: node, a: num(arguments[2], 0), b: num(arguments[3], 0) });
+      case "setChildIndex": return push({ code: 11, node: node, a: num(arguments[2], 0), b: num(arguments[3], 0) });
+      case "removeChild": return push({ code: 12, node: node, a: num(arguments[2], 0) });
+      case "removeFromParent": return push({ code: 13, node: node });
+      case "removeChildren": return push({ code: 14, node: node });
+      case "position": return push({ code: 3, node: node, a: num(arguments[2], 0), b: num(arguments[3], 0) });
+      case "visible": return push({ code: 15, node: node, a: num(arguments[2], 1) });
+      case "listen": return push({ code: 16, node: node, text: String(arguments[2] || "") });
+      case "removeAllListeners": return push({ code: 17, node: node });
+      case "clear": return push({ code: 4, node: node });
+      case "rect": return push({ code: 5, node: node, a: num(arguments[2], 0), b: num(arguments[3], 0), c: num(arguments[4], 0), d: num(arguments[5], 0) });
+      case "circle": return push({ code: 18, node: node, a: num(arguments[2], 0), b: num(arguments[3], 0), c: num(arguments[4], 0) });
+      case "moveTo": return push({ code: 19, node: node, a: num(arguments[2], 0), b: num(arguments[3], 0) });
+      case "lineTo": return push({ code: 20, node: node, a: num(arguments[2], 0), b: num(arguments[3], 0) });
+      case "fill": return push({ code: 6, node: node, a: num(arguments[2], 0xffffff), b: num(arguments[3], 1) });
+      case "stroke": return push({ code: 7, node: node, a: num(arguments[2], 0xffffff), b: num(arguments[3], 1), c: num(arguments[4], 1) });
+      case "text": return push({ code: 8, node: node, text: String(arguments[2] == null ? "" : arguments[2]) });
+      case "textFill": return push({ code: 9, node: node, a: num(arguments[2], 0xffffff), b: num(arguments[3], 1) });
+      default: return ops.length;
+    }
+  };
+
+  G.__trueosRender = function (root) {
+    rootId = root && root.__trueosPixiId ? Number(root.__trueosPixiId) || 0 : 0;
+    return rootId;
+  };
+})(typeof globalThis !== "undefined" ? globalThis : this);
+"#;
+const TRUESURFER_PARSE5_VITE_HOST_SOURCE: &[u8] = br##"
+(function (G) {
+  "use strict";
+
+  function num(value, fallback) {
+    var out = Number(value);
+    return Number.isFinite(out) ? out : fallback;
+  }
+
+  function makeEvent(type, init) {
+    this.type = String(type || "");
+    this.cancelable = !!(init && init.cancelable);
+    this.defaultPrevented = false;
+  }
+  makeEvent.prototype.preventDefault = function () {
+    if (this.cancelable) this.defaultPrevented = true;
+  };
+  if (typeof G.Event !== "function") G.Event = makeEvent;
+
+  function CanvasContext2D() {
+    this.font = "16px sans-serif";
+    this.fillStyle = "black";
+    this.strokeStyle = "black";
+    this.shadowColor = "black";
+    this.shadowBlur = 0;
+    this.shadowOffsetX = 0;
+    this.shadowOffsetY = 0;
+    this.textBaseline = "alphabetic";
+  }
+  CanvasContext2D.prototype.measureText = function (text) {
+    var s = String(text == null ? "" : text);
+    var m = /(\d+(?:\.\d+)?)px/.exec(String(this.font || ""));
+    var px = m ? Number(m[1]) : 16;
+    var width = s.length * px * 0.58;
+    return {
+      width: width,
+      actualBoundingBoxLeft: 0,
+      actualBoundingBoxRight: width,
+      actualBoundingBoxAscent: px * 0.8,
+      actualBoundingBoxDescent: px * 0.2
+    };
+  };
+  CanvasContext2D.prototype.createImageData = function (w, h) {
+    return { width: w, height: h, data: new Uint8ClampedArray(Math.max(0, w * h * 4)) };
+  };
+  CanvasContext2D.prototype.putImageData = function () {};
+  CanvasContext2D.prototype.clearRect = function () {};
+  CanvasContext2D.prototype.fillRect = function () {};
+  CanvasContext2D.prototype.drawImage = function () {};
+  CanvasContext2D.prototype.fillText = function () {};
+  CanvasContext2D.prototype.strokeText = function () {};
+  CanvasContext2D.prototype.resetTransform = function () {};
+  CanvasContext2D.prototype.scale = function () {};
+  CanvasContext2D.prototype.getImageData = function (x, y, w, h) {
+    return { width: w, height: h, data: new Uint8ClampedArray(Math.max(0, w * h * 4)) };
+  };
+  CanvasContext2D.prototype.createPattern = function () { return { setTransform: function () {} }; };
+  CanvasContext2D.prototype.createLinearGradient = function () { return { addColorStop: function () {} }; };
+  CanvasContext2D.prototype.createRadialGradient = function () { return { addColorStop: function () {} }; };
+  G.CanvasRenderingContext2D = G.CanvasRenderingContext2D || CanvasContext2D;
+
+  function Element(tag) {
+    this.tagName = String(tag || "div").toUpperCase();
+    this.nodeName = this.tagName;
+    this.children = [];
+    this.childNodes = this.children;
+    this.style = {};
+    this.relList = { supports: function () { return true; } };
+    this.listeners = Object.create(null);
+    this.parentNode = null;
+    this.textContent = "";
+    this.href = "";
+    this.rel = "";
+    this.as = "";
+    this.crossOrigin = "";
+    this.width = 0;
+    this.height = 0;
+  }
+  Element.prototype.appendChild = function (child) {
+    if (child) {
+      child.parentNode = this;
+      this.children.push(child);
+    }
+    return child;
+  };
+  Element.prototype.removeChild = function (child) {
+    var idx = this.children.indexOf(child);
+    if (idx >= 0) this.children.splice(idx, 1);
+    if (child) child.parentNode = null;
+    return child;
+  };
+  Element.prototype.addEventListener = function (type, fn) {
+    this.listeners[String(type || "")] = fn;
+  };
+  Element.prototype.removeEventListener = function () {};
+  Element.prototype.dispatchEvent = function (ev) {
+    var fn = this.listeners[String(ev && ev.type || "")];
+    if (typeof fn === "function") fn(ev);
+    return !(ev && ev.defaultPrevented);
+  };
+  Element.prototype.setAttribute = function (name, value) {
+    this[String(name || "")] = String(value == null ? "" : value);
+  };
+  Element.prototype.getAttribute = function (name) {
+    var v = this[String(name || "")];
+    return v == null ? null : String(v);
+  };
+  Element.prototype.getContext = function (kind) {
+    if (String(kind || "").toLowerCase() !== "2d") return null;
+    return new G.CanvasRenderingContext2D();
+  };
+
+  if (typeof G.HTMLCanvasElement !== "function") G.HTMLCanvasElement = Element;
+  if (typeof G.MutationObserver !== "function") {
+    G.MutationObserver = function () {};
+    G.MutationObserver.prototype.observe = function () {};
+    G.MutationObserver.prototype.disconnect = function () {};
+  }
+
+  var body = new Element("body");
+  var head = new Element("head");
+  var document = {
+    body: body,
+    head: head,
+    createElement: function (tag) { return new Element(tag); },
+    getElementById: function (id) {
+      if (String(id || "") === "app") return body;
+      return null;
+    },
+    querySelector: function () { return null; },
+    querySelectorAll: function () { return []; },
+    getElementsByTagName: function (name) {
+      name = String(name || "").toLowerCase();
+      if (name === "body") return [body];
+      if (name === "head") return [head];
+      if (name === "link") return [];
+      return [];
+    },
+    contains: function () { return true; },
+    addEventListener: function () {},
+    removeEventListener: function () {}
+  };
+  G.document = document;
+  G.window = G;
+  G.self = G;
+  G.innerWidth = Math.max(1, num(G.innerWidth, 1920) | 0);
+  G.innerHeight = Math.max(1, num(G.innerHeight, 1080) | 0);
+  G.dispatchEvent = G.dispatchEvent || function () { return true; };
+  G.addEventListener = G.addEventListener || function () {};
+  G.removeEventListener = G.removeEventListener || function () {};
+  G.requestAnimationFrame = G.requestAnimationFrame || function (fn) {
+    if (typeof fn === "function") fn((G.performance && G.performance.now && G.performance.now()) || 0);
+    return 1;
+  };
+  G.cancelAnimationFrame = G.cancelAnimationFrame || function () {};
+  if (!G.navigator) G.navigator = {};
+  G.navigator.userAgent = G.navigator.userAgent || "TRUEOS Browser-OS";
+  G.navigator.sendBeacon = function () { return true; };
+  G["__pixiCapture"] = undefined;
+  G["__TRUEOS_CAPTURE_ONLY__"] = true;
+  if (typeof G["__TRUEOS_INPUT_HTML__"] !== "string") G["__TRUEOS_INPUT_HTML__"] = "";
+  G["__TRUEOS_PIXI_APP"] = undefined;
+  G["__TRUEOS_PIXI_APP_READY__"] = false;
+
+  if (typeof G.Response !== "function") {
+    G.Response = function Response(body, init) {
+      this._body = String(body == null ? "" : body);
+      this.status = init && init.status ? Number(init.status) | 0 : 200;
+      this.ok = this.status >= 200 && this.status < 300;
+    };
+    G.Response.prototype.text = function () { return Promise.resolve(this._body); };
+    G.Response.prototype.json = function () { return Promise.resolve(JSON.parse(this._body)); };
+  }
+  G.fetch = function (input, init) {
+    var url = String(input && input.url ? input.url : input || "");
+    if (url === "/input.html" || url.endsWith("/input.html")) {
+      return Promise.resolve(new G.Response(String(G["__TRUEOS_INPUT_HTML__"] || ""), { status: 200 }));
+    }
+    if (url === "/__pixi_capture") {
+      return Promise.resolve(new G.Response("", { status: 204 }));
+    }
+    return Promise.resolve(new G.Response("", { status: 200 }));
+  };
+
+  function pushNodeFromSnapshot(node, parent, ops, seen) {
+    if (!node || typeof node !== "object") return 0;
+    var id = num(node.id, 0) | 0;
+    if (id <= 0) return 0;
+    if (!seen[id]) {
+      var type = String(node.type || "");
+      var kind = type.indexOf("Graphics") >= 0 ? 1 : type.indexOf("Text") >= 0 ? 2 : 0;
+      ops.push({ code: 1, node: id, a: kind });
+      seen[id] = true;
+    }
+    if (parent > 0) ops.push({ code: 2, node: parent, a: id });
+    ops.push({ code: 3, node: id, a: num(node.x, 0), b: num(node.y, 0) });
+    if (node.visible === false) ops.push({ code: 15, node: id, a: 0 });
+    if (typeof node.text === "string" && node.text.length > 0) ops.push({ code: 8, node: id, text: node.text });
+    var children = Array.isArray(node.children) ? node.children : [];
+    for (var i = 0; i < children.length; i += 1) pushNodeFromSnapshot(children[i], id, ops, seen);
+    return id;
+  }
+
+  function colorArg(value, fallback) {
+    if (typeof value === "number") return value >>> 0;
+    if (value && typeof value.color === "number") return value.color >>> 0;
+    if (typeof value === "string" && value.charAt(0) === "#") return parseInt(value.slice(1), 16) >>> 0;
+    return fallback;
+  }
+  function alphaArg(value) {
+    return value && typeof value.alpha === "number" ? num(value.alpha, 1) : 1;
+  }
+  function widthArg(value) {
+    return value && typeof value.width === "number" ? num(value.width, 1) : 1;
+  }
+  function commandKind(target) {
+    target = String(target || "");
+    if (target.indexOf("Graphics") >= 0) return 1;
+    if (target.indexOf("Text") >= 0) return 2;
+    return 0;
+  }
+
+  G.__trueosParse5BuildSceneFromCapture = function () {
+    var cap = G["__pixiCapture"];
+    var commands = cap && Array.isArray(cap.commands) ? cap.commands : [];
+    var ops = [];
+    var seen = Object.create(null);
+    var rootId = 0;
+    var snapshot = null;
+    for (var i = commands.length - 1; i >= 0; i -= 1) {
+      if (commands[i] && commands[i].op === "snapshot" && commands[i].args && commands[i].args[0]) {
+        snapshot = commands[i].args[0];
+        rootId = num(commands[i].id, num(snapshot.id, 0)) | 0;
+        break;
+      }
+    }
+    if (snapshot) rootId = pushNodeFromSnapshot(snapshot, 0, ops, seen) || rootId;
+
+    for (var j = 0; j < commands.length; j += 1) {
+      var cmd = commands[j] || {};
+      var id = num(cmd.id, 0) | 0;
+      if (id <= 0) continue;
+      if (!seen[id]) {
+        ops.push({ code: 1, node: id, a: commandKind(cmd.target) });
+        seen[id] = true;
+      }
+      var args = Array.isArray(cmd.args) ? cmd.args : [];
+      switch (cmd.op) {
+        case "clear": ops.push({ code: 4, node: id }); break;
+        case "rect": ops.push({ code: 5, node: id, a: num(args[0], 0), b: num(args[1], 0), c: num(args[2], 0), d: num(args[3], 0) }); break;
+        case "circle": ops.push({ code: 18, node: id, a: num(args[0], 0), b: num(args[1], 0), c: num(args[2], 0) }); break;
+        case "moveTo": ops.push({ code: 19, node: id, a: num(args[0], 0), b: num(args[1], 0) }); break;
+        case "lineTo": ops.push({ code: 20, node: id, a: num(args[0], 0), b: num(args[1], 0) }); break;
+        case "fill": ops.push({ code: 6, node: id, a: colorArg(args[0], 0xffffff), b: alphaArg(args[0]) }); break;
+        case "stroke": ops.push({ code: 7, node: id, a: colorArg(args[0], 0xffffff), b: alphaArg(args[0]), c: widthArg(args[0]) }); break;
+        case "removeChildren": ops.push({ code: 14, node: id }); break;
+        case "removeAllListeners": ops.push({ code: 17, node: id }); break;
+        case "on": if (cmd.event) ops.push({ code: 16, node: id, text: String(cmd.event) }); break;
+        case "text.text.set": ops.push({ code: 8, node: id, text: String(args[0] == null ? "" : args[0]) }); break;
+        case "text.style.set":
+          if (args[0] && typeof args[0].fill !== "undefined") ops.push({ code: 9, node: id, a: colorArg(args[0].fill, 0xffffff), b: 1 });
+          break;
+      }
+    }
+    return {
+      ok: 1,
+      ui3Scene: {
+        version: 1,
+        commandSource: "parse5-vite-pixi",
+        rootId: rootId,
+        opCount: ops.length,
+        ops: ops
+      }
+    };
+  };
+})(typeof globalThis !== "undefined" ? globalThis : this);
+"##;
+const TRUESURFER_PARSE5_VITE_HOST_CORE_SOURCE: &[u8] = br##"
+var G = (typeof globalThis !== "undefined") ? globalThis : this;
+function __trueosNum(value, fallback) {
+  var out = Number(value);
+  return Number.isFinite(out) ? out : fallback;
+}
+"##;
+const TRUESURFER_PARSE5_VITE_HOST_EVENT_SOURCE: &[u8] = br##"
+var G = (typeof globalThis !== "undefined") ? globalThis : this;
+function Event(type, init) {
+  this.type = String(type || "");
+  this.cancelable = !!(init && init.cancelable);
+  this.defaultPrevented = false;
+}
+Event.prototype.preventDefault = function () {
+  if (this.cancelable) this.defaultPrevented = true;
+};
+if (typeof G.Event !== "function") G.Event = Event;
+"##;
+const TRUESURFER_PARSE5_VITE_HOST_CANVAS_SOURCE: &[u8] = br##"
+var G = (typeof globalThis !== "undefined") ? globalThis : this;
+function CanvasRenderingContext2D() {
+  this.font = "16px sans-serif";
+  this.fillStyle = "black";
+  this.strokeStyle = "black";
+  this.textBaseline = "alphabetic";
+}
+CanvasRenderingContext2D.prototype.measureText = function (text) {
+  var s = String(text == null ? "" : text);
+  var font = String(this.font || "");
+  var px_at = font.indexOf("px");
+  var start = px_at;
+  while (start > 0) {
+    var ch = font.charCodeAt(start - 1);
+    if (ch < 48 || ch > 57) break;
+    start -= 1;
+  }
+  var px = px_at > start ? Number(font.slice(start, px_at)) : 16;
+  var width = s.length * px * 0.58;
+  var out = {};
+  out.width = width;
+  out.actualBoundingBoxLeft = 0;
+  out.actualBoundingBoxRight = width;
+  out.actualBoundingBoxAscent = px * 0.8;
+  out.actualBoundingBoxDescent = px * 0.2;
+  return out;
+};
+CanvasRenderingContext2D.prototype.createImageData = function (w, h) {
+  return { width: w, height: h, data: new Uint8ClampedArray(Math.max(0, w * h * 4)) };
+};
+CanvasRenderingContext2D.prototype.getImageData = function (x, y, w, h) {
+  return { width: w, height: h, data: new Uint8ClampedArray(Math.max(0, w * h * 4)) };
+};
+CanvasRenderingContext2D.prototype.putImageData = function () {};
+CanvasRenderingContext2D.prototype.clearRect = function () {};
+CanvasRenderingContext2D.prototype.fillRect = function () {};
+CanvasRenderingContext2D.prototype.drawImage = function () {};
+CanvasRenderingContext2D.prototype.fillText = function () {};
+CanvasRenderingContext2D.prototype.strokeText = function () {};
+CanvasRenderingContext2D.prototype.resetTransform = function () {};
+CanvasRenderingContext2D.prototype.scale = function () {};
+CanvasRenderingContext2D.prototype.createPattern = function () { return { setTransform: function () {} }; };
+CanvasRenderingContext2D.prototype.createLinearGradient = function () { return { addColorStop: function () {} }; };
+CanvasRenderingContext2D.prototype.createRadialGradient = function () { return { addColorStop: function () {} }; };
+G.CanvasRenderingContext2D = G.CanvasRenderingContext2D || CanvasRenderingContext2D;
+"##;
+const TRUESURFER_PARSE5_VITE_HOST_DOM_SOURCE: &[u8] = br##"
+var G = (typeof globalThis !== "undefined") ? globalThis : this;
+function Element(tag) {
+  this.tagName = String(tag || "div").toUpperCase();
+  this.nodeName = this.tagName;
+  this.children = [];
+  this.childNodes = this.children;
+  this.style = {};
+  this.relList = { supports: function () { return true; } };
+  this.listeners = {};
+  this.parentNode = null;
+  this.textContent = "";
+  this.href = "";
+  this.rel = "";
+  this.as = "";
+  this.crossOrigin = "";
+  this.width = 0;
+  this.height = 0;
+}
+Element.prototype.appendChild = function (child) {
+  if (child) {
+    child.parentNode = this;
+    this.children.push(child);
+  }
+  return child;
+};
+Element.prototype.removeChild = function (child) {
+  var idx = this.children.indexOf(child);
+  if (idx >= 0) this.children.splice(idx, 1);
+  if (child) child.parentNode = null;
+  return child;
+};
+Element.prototype.addEventListener = function (type, fn) {
+  this.listeners[String(type || "")] = fn;
+};
+Element.prototype.removeEventListener = function () {};
+Element.prototype.dispatchEvent = function (ev) {
+  var fn = this.listeners[String((ev && ev.type) || "")];
+  if (typeof fn === "function") fn(ev);
+  return !(ev && ev.defaultPrevented);
+};
+Element.prototype.setAttribute = function (name, value) {
+  this[String(name || "")] = String(value == null ? "" : value);
+};
+Element.prototype.getAttribute = function (name) {
+  var v = this[String(name || "")];
+  return v == null ? null : String(v);
+};
+Element.prototype.getContext = function (kind) {
+  if (String(kind || "").toLowerCase() !== "2d") return null;
+  return new G.CanvasRenderingContext2D();
+};
+G.HTMLCanvasElement = G.HTMLCanvasElement || Element;
+G.HTMLElement = G.HTMLElement || Element;
+G.Element = G.Element || Element;
+if (typeof G.MutationObserver !== "function") {
+  G.MutationObserver = function () {};
+  G.MutationObserver.prototype.observe = function () {};
+  G.MutationObserver.prototype.disconnect = function () {};
+}
+var __trueosBody = new Element("body");
+var __trueosHead = new Element("head");
+G.document = {
+  body: __trueosBody,
+  head: __trueosHead,
+  createElement: function (tag) { return new Element(tag); },
+  getElementById: function (id) { return String(id || "") === "app" ? __trueosBody : null; },
+  querySelector: function () { return null; },
+  querySelectorAll: function () { return []; },
+  getElementsByTagName: function (name) {
+    name = String(name || "").toLowerCase();
+    if (name === "body") return [__trueosBody];
+    if (name === "head") return [__trueosHead];
+    if (name === "link") return [];
+    return [];
+  },
+  contains: function () { return true; },
+  addEventListener: function () {},
+  removeEventListener: function () {}
+};
+G.window = G;
+G.self = G;
+G.innerWidth = Math.max(1, __trueosNum(G.innerWidth, 1920) | 0);
+G.innerHeight = Math.max(1, __trueosNum(G.innerHeight, 1080) | 0);
+G.addEventListener = G.addEventListener || function () {};
+G.removeEventListener = G.removeEventListener || function () {};
+G.dispatchEvent = G.dispatchEvent || function () { return true; };
+G.performance = G.performance || { now: function () { return 0; } };
+G.requestAnimationFrame = G.requestAnimationFrame || function (fn) {
+  if (typeof fn === "function") fn(G.performance.now());
+  return 1;
+};
+G.cancelAnimationFrame = G.cancelAnimationFrame || function () {};
+G.setTimeout = G.setTimeout || function (fn) { if (typeof fn === "function") fn(); return 1; };
+G.clearTimeout = G.clearTimeout || function () {};
+G.setInterval = G.setInterval || function () { return 1; };
+G.clearInterval = G.clearInterval || function () {};
+G.navigator = G.navigator || {};
+G.navigator.userAgent = G.navigator.userAgent || "TRUEOS Browser-OS";
+G.navigator.sendBeacon = function () { return true; };
+G.Blob = G.Blob || function Blob(parts, init) { this.parts = parts || []; this.type = init && init.type || ""; };
+"##;
+const TRUESURFER_PARSE5_VITE_HOST_FETCH_SOURCE: &[u8] = br##"
+var G = (typeof globalThis !== "undefined") ? globalThis : this;
+G.__pixiCapture = undefined;
+G.__TRUEOS_CAPTURE_ONLY__ = true;
+if (typeof G.__TRUEOS_INPUT_HTML__ !== "string") G.__TRUEOS_INPUT_HTML__ = "";
+G.__TRUEOS_PIXI_APP = undefined;
+G.__TRUEOS_PIXI_APP_READY__ = false;
+G.__TRUEOS_PIXI_APP_ERROR__ = "";
+if (typeof G.Response !== "function") {
+  G.Response = function Response(body, init) {
+    this._body = String(body == null ? "" : body);
+    this.status = init && init.status ? Number(init.status) | 0 : 200;
+    this.ok = this.status >= 200 && this.status < 300;
+  };
+  G.Response.prototype.text = function () { return Promise.resolve(this._body); };
+  G.Response.prototype.json = function () { return Promise.resolve(JSON.parse(this._body)); };
+}
+G.fetch = function (input, init) {
+  var url = String(input && input.url ? input.url : input || "");
+  if (url === "/input.html" || url.slice(-11) === "/input.html") {
+    return Promise.resolve(new G.Response(String(G.__TRUEOS_INPUT_HTML__ || ""), { status: 200 }));
+  }
+  return Promise.resolve(new G.Response("", { status: url === "/__pixi_capture" ? 204 : 200 }));
+};
+"##;
+const TRUESURFER_PARSE5_VITE_HOST_CAPTURE_SOURCE: &[u8] = br##"
+var G = (typeof globalThis !== "undefined") ? globalThis : this;
+function __trueosColorArg(value, fallback) {
+  if (typeof value === "number") return value >>> 0;
+  if (value && typeof value.color === "number") return value.color >>> 0;
+  if (typeof value === "string" && value.charAt(0) === "#") return parseInt(value.slice(1), 16) >>> 0;
+  return fallback;
+}
+function __trueosAlphaArg(value) {
+  return value && typeof value.alpha === "number" ? __trueosNum(value.alpha, 1) : 1;
+}
+function __trueosWidthArg(value) {
+  return value && typeof value.width === "number" ? __trueosNum(value.width, 1) : 1;
+}
+function __trueosCommandKind(target) {
+  target = String(target || "");
+  if (target.indexOf("Graphics") >= 0) return 1;
+  if (target.indexOf("Text") >= 0) return 2;
+  return 0;
+}
+function __trueosPushSnapshotNode(node, parent, ops, seen) {
+  if (!node || typeof node !== "object") return 0;
+  var id = __trueosNum(node.id, 0) | 0;
+  if (id <= 0) return 0;
+  if (!seen[id]) {
+    var type = String(node.type || "");
+    var kind = type.indexOf("Graphics") >= 0 ? 1 : (type.indexOf("Text") >= 0 ? 2 : 0);
+    ops.push({ code: 1, node: id, a: kind });
+    seen[id] = true;
+  }
+  if (parent > 0) ops.push({ code: 2, node: parent, a: id });
+  ops.push({ code: 3, node: id, a: __trueosNum(node.x, 0), b: __trueosNum(node.y, 0) });
+  if (node.visible === false) ops.push({ code: 15, node: id, a: 0 });
+  if (typeof node.text === "string" && node.text.length > 0) ops.push({ code: 8, node: id, text: node.text });
+  var children = node.children && node.children.length ? node.children : [];
+  for (var i = 0; i < children.length; i += 1) __trueosPushSnapshotNode(children[i], id, ops, seen);
+  return id;
+}
+G.__trueosParse5BuildSceneFromCapture = function () {
+  var cap = G.__pixiCapture;
+  var commands = cap && cap.commands && cap.commands.length ? cap.commands : [];
+  var ops = [];
+  var seen = {};
+  var rootId = 0;
+  var snapshot = null;
+  var i;
+  for (i = commands.length - 1; i >= 0; i -= 1) {
+    if (commands[i] && commands[i].op === "snapshot" && commands[i].args && commands[i].args[0]) {
+      snapshot = commands[i].args[0];
+      rootId = __trueosNum(commands[i].id, __trueosNum(snapshot.id, 0)) | 0;
+      break;
+    }
+  }
+  if (snapshot) rootId = __trueosPushSnapshotNode(snapshot, 0, ops, seen) || rootId;
+  for (i = 0; i < commands.length; i += 1) {
+    var cmd = commands[i] || {};
+    var id = __trueosNum(cmd.id, 0) | 0;
+    if (id <= 0) continue;
+    if (!seen[id]) {
+      ops.push({ code: 1, node: id, a: __trueosCommandKind(cmd.target) });
+      seen[id] = true;
+    }
+    var args = cmd.args && cmd.args.length ? cmd.args : [];
+    switch (cmd.op) {
+      case "clear": ops.push({ code: 4, node: id }); break;
+      case "rect": ops.push({ code: 5, node: id, a: __trueosNum(args[0], 0), b: __trueosNum(args[1], 0), c: __trueosNum(args[2], 0), d: __trueosNum(args[3], 0) }); break;
+      case "circle": ops.push({ code: 18, node: id, a: __trueosNum(args[0], 0), b: __trueosNum(args[1], 0), c: __trueosNum(args[2], 0) }); break;
+      case "moveTo": ops.push({ code: 19, node: id, a: __trueosNum(args[0], 0), b: __trueosNum(args[1], 0) }); break;
+      case "lineTo": ops.push({ code: 20, node: id, a: __trueosNum(args[0], 0), b: __trueosNum(args[1], 0) }); break;
+      case "fill": ops.push({ code: 6, node: id, a: __trueosColorArg(args[0], 0xffffff), b: __trueosAlphaArg(args[0]) }); break;
+      case "stroke": ops.push({ code: 7, node: id, a: __trueosColorArg(args[0], 0xffffff), b: __trueosAlphaArg(args[0]), c: __trueosWidthArg(args[0]) }); break;
+      case "removeChildren": ops.push({ code: 14, node: id }); break;
+      case "removeAllListeners": ops.push({ code: 17, node: id }); break;
+      case "on": if (cmd.event) ops.push({ code: 16, node: id, text: String(cmd.event) }); break;
+      case "text.text.set": ops.push({ code: 8, node: id, text: String(args[0] == null ? "" : args[0]) }); break;
+      case "text.style.set":
+        if (args[0] && typeof args[0].fill !== "undefined") ops.push({ code: 9, node: id, a: __trueosColorArg(args[0].fill, 0xffffff), b: 1 });
+        break;
+    }
+  }
+  return { ok: 1, ui3Scene: { version: 1, commandSource: "parse5-vite-pixi", rootId: rootId, opCount: ops.length, ops: ops } };
+};
+"##;
 const TRUESURFER_IMPORT_SOURCE: &[u8] = br#"
 globalThis.__trueosTruesurferReady = 0;
 globalThis.__trueosTruesurferWarmup = {
@@ -76,6 +723,11 @@ const TRUESURFER_RESULT_STYLE_BYTES_PROP: &[u8] = b"styleBytes\0";
 const TRUESURFER_RESULT_SCRIPT_COUNT_PROP: &[u8] = b"scriptCount\0";
 const TRUESURFER_RESULT_SCRIPT_BYTES_PROP: &[u8] = b"scriptBytes\0";
 const TRUESURFER_RESULT_ERROR_PROP: &[u8] = b"error\0";
+const TRUESURFER_TRUEOS_INPUT_HTML_PROP: &[u8] = b"__TRUEOS_INPUT_HTML__\0";
+const TRUESURFER_TRUEOS_PIXI_APP_READY_PROP: &[u8] = b"__TRUEOS_PIXI_APP_READY__\0";
+const TRUESURFER_TRUEOS_PIXI_APP_ERROR_PROP: &[u8] = b"__TRUEOS_PIXI_APP_ERROR__\0";
+const TRUESURFER_PARSE5_BUILD_SCENE_PROP: &[u8] = b"__trueosParse5BuildSceneFromCapture\0";
+const TRUESURFER_UI3_SCENE_COMMAND_SOURCE_PROP: &[u8] = b"commandSource\0";
 const TRUESURFER_UI3_SCENE_ROOT_ID_PROP: &[u8] = b"rootId\0";
 const TRUESURFER_UI3_SCENE_OPS_PROP: &[u8] = b"ops\0";
 const TRUESURFER_UI3_OP_CODE_PROP: &[u8] = b"code\0";
@@ -506,6 +1158,48 @@ unsafe fn set_global_i32(ctx: *mut qjs::JSContext, key: &[u8], value: i32) {
     qjs::js_free_value(ctx, global);
 }
 
+unsafe fn set_global_string(ctx: *mut qjs::JSContext, key: &[u8], value: &str) {
+    let global = qjs::JS_GetGlobalObject(ctx);
+    let value_js = qjs::JS_NewStringLen(ctx, value.as_ptr() as *const c_char, value.len());
+    let _ = qjs::JS_SetPropertyStr(ctx, global, key.as_ptr() as *const c_char, value_js);
+    qjs::js_free_value(ctx, global);
+}
+
+unsafe fn read_global_bool(ctx: *mut qjs::JSContext, key: &[u8]) -> bool {
+    let global = qjs::JS_GetGlobalObject(ctx);
+    let value = qjs::JS_GetPropertyStr(ctx, global, key.as_ptr() as *const c_char);
+    let mut out = 0.0f64;
+    let ok = qjs::JS_ToFloat64(ctx, &mut out as *mut f64, value) == 0 && out.is_finite();
+    qjs::js_free_value(ctx, value);
+    qjs::js_free_value(ctx, global);
+    ok && out != 0.0
+}
+
+unsafe fn read_global_string(ctx: *mut qjs::JSContext, key: &[u8]) -> String {
+    let global = qjs::JS_GetGlobalObject(ctx);
+    let value = qjs::JS_GetPropertyStr(ctx, global, key.as_ptr() as *const c_char);
+    if value.is_exception() || value.tag == qjs::JS_TAG_UNDEFINED || value.tag == qjs::JS_TAG_NULL {
+        qjs::js_free_value(ctx, value);
+        qjs::js_free_value(ctx, global);
+        return String::new();
+    }
+    let cstr = qjs::js_to_cstring(ctx, value);
+    if cstr.is_null() {
+        qjs::js_free_value(ctx, value);
+        qjs::js_free_value(ctx, global);
+        return String::new();
+    }
+    let out = core::ffi::CStr::from_ptr(cstr)
+        .to_str()
+        .ok()
+        .map(String::from)
+        .unwrap_or_default();
+    qjs::JS_FreeCString(ctx, cstr);
+    qjs::js_free_value(ctx, value);
+    qjs::js_free_value(ctx, global);
+    out
+}
+
 unsafe fn truesurfer_ready(ctx: *mut qjs::JSContext) -> bool {
     let global = qjs::JS_GetGlobalObject(ctx);
     let ready =
@@ -628,8 +1322,10 @@ unsafe fn submit_ui3_scene(
         return (0, root_id);
     }
     log_line(format!(
-        "qjs-truesurfer[{}]: ui3 scene begin root={}\n",
-        browser_instance_id, root_id
+        "qjs-truesurfer[{}]: ui3 scene begin root={} source={}\n",
+        browser_instance_id,
+        root_id,
+        read_result_string(ctx, scene_value, TRUESURFER_UI3_SCENE_COMMAND_SOURCE_PROP)
     ));
 
     let ops_value = qjs::JS_GetPropertyStr(
@@ -711,6 +1407,34 @@ unsafe fn submit_ui3_scene(
                 a.max(0.0) as u32,
                 b,
             ),
+            10 => qjs::platform::ui::ui3_scene_add_child_at(
+                browser_instance_id,
+                node,
+                a.max(0.0) as u32,
+                b.max(0.0) as u32,
+            ),
+            11 => qjs::platform::ui::ui3_scene_set_child_index(
+                browser_instance_id,
+                node,
+                a.max(0.0) as u32,
+                b.max(0.0) as u32,
+            ),
+            12 => qjs::platform::ui::ui3_scene_remove_child(
+                browser_instance_id,
+                node,
+                a.max(0.0) as u32,
+            ),
+            13 => qjs::platform::ui::ui3_scene_remove_from_parent(browser_instance_id, node),
+            14 => qjs::platform::ui::ui3_scene_remove_children(browser_instance_id, node),
+            15 => qjs::platform::ui::ui3_scene_visible(browser_instance_id, node, a != 0.0),
+            16 => {
+                let event = read_result_string(ctx, op_value, TRUESURFER_UI3_OP_TEXT_PROP);
+                qjs::platform::ui::ui3_scene_listen(browser_instance_id, node, event.as_str())
+            }
+            17 => qjs::platform::ui::ui3_scene_remove_all_listeners(browser_instance_id, node),
+            18 => qjs::platform::ui::ui3_scene_graphics_circle(browser_instance_id, node, a, b, c),
+            19 => qjs::platform::ui::ui3_scene_graphics_move_to(browser_instance_id, node, a, b),
+            20 => qjs::platform::ui::ui3_scene_graphics_line_to(browser_instance_id, node, a, b),
             _ => false,
         };
         if ok {
@@ -732,6 +1456,162 @@ unsafe fn submit_ui3_scene(
     qjs::js_free_value(ctx, ops_value);
     qjs::js_free_value(ctx, scene_value);
     (submitted, root_id)
+}
+
+unsafe fn submit_parse5_vite_pixi_scene(
+    rt: *mut qjs::JSRuntime,
+    ctx: *mut qjs::JSContext,
+    browser_instance_id: u32,
+    html: &str,
+) -> (u32, u32) {
+    let host_chunks: [(&[u8], &[u8], &str); 6] = [
+        (
+            TRUESURFER_PARSE5_VITE_HOST_CORE_SOURCE,
+            TRUESURFER_PARSE5_VITE_HOST_CORE_FILENAME,
+            "truesurfer parse5 vite host core",
+        ),
+        (
+            TRUESURFER_PARSE5_VITE_HOST_EVENT_SOURCE,
+            TRUESURFER_PARSE5_VITE_HOST_EVENT_FILENAME,
+            "truesurfer parse5 vite host event",
+        ),
+        (
+            TRUESURFER_PARSE5_VITE_HOST_CANVAS_SOURCE,
+            TRUESURFER_PARSE5_VITE_HOST_CANVAS_FILENAME,
+            "truesurfer parse5 vite host canvas",
+        ),
+        (
+            TRUESURFER_PARSE5_VITE_HOST_DOM_SOURCE,
+            TRUESURFER_PARSE5_VITE_HOST_DOM_FILENAME,
+            "truesurfer parse5 vite host dom",
+        ),
+        (
+            TRUESURFER_PARSE5_VITE_HOST_FETCH_SOURCE,
+            TRUESURFER_PARSE5_VITE_HOST_FETCH_FILENAME,
+            "truesurfer parse5 vite host fetch",
+        ),
+        (
+            TRUESURFER_PARSE5_VITE_HOST_CAPTURE_SOURCE,
+            TRUESURFER_PARSE5_VITE_HOST_CAPTURE_FILENAME,
+            "truesurfer parse5 vite host capture",
+        ),
+    ];
+    for (source, filename, label) in host_chunks {
+        let host = qjs::js_eval_bytes(
+            ctx,
+            source,
+            filename.as_ptr() as *const c_char,
+            qjs::JS_EVAL_TYPE_GLOBAL,
+        );
+        if host.is_exception() {
+            qjs::qjs_diag::dump_last_exception(ctx, label);
+            qjs::js_free_value(ctx, host);
+            return (0, 0);
+        }
+        qjs::js_free_value(ctx, host);
+    }
+    set_global_string(ctx, TRUESURFER_TRUEOS_INPUT_HTML_PROP, html);
+    log_line(format!(
+        "qjs-truesurfer[{}]: parse5 vite host ok chunks={} html_bytes={}\n",
+        browser_instance_id,
+        host_chunks.len(),
+        html.len()
+    ));
+
+    log_line(format!(
+        "qjs-truesurfer[{}]: parse5 vite app compile begin bytes={}\n",
+        browser_instance_id,
+        TRUESURFER_PARSE5_VITE_APP_SOURCE.len()
+    ));
+    let app_fun = qjs::js_eval_bytes(
+        ctx,
+        TRUESURFER_PARSE5_VITE_APP_SOURCE,
+        TRUESURFER_PARSE5_VITE_APP_FILENAME.as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_MODULE | qjs::JS_EVAL_FLAG_COMPILE_ONLY,
+    );
+    if app_fun.is_exception() {
+        qjs::qjs_diag::dump_last_exception(ctx, "truesurfer parse5 vite app compile");
+        qjs::js_free_value(ctx, app_fun);
+        return (0, 0);
+    }
+    log_line(format!("qjs-truesurfer[{}]: parse5 vite app compile ok\n", browser_instance_id));
+
+    let app = qjs::JS_EvalFunction(ctx, app_fun);
+    if app.is_exception() {
+        qjs::qjs_diag::dump_last_exception(ctx, "truesurfer parse5 vite app eval");
+        qjs::js_free_value(ctx, app);
+        return (0, 0);
+    }
+    qjs::js_free_value(ctx, app);
+    log_line(format!("qjs-truesurfer[{}]: parse5 vite app eval returned\n", browser_instance_id));
+
+    let mut pump_iters = 0u32;
+    let mut pump_stopped = false;
+    for _ in 0..4096 {
+        if read_global_bool(ctx, TRUESURFER_TRUEOS_PIXI_APP_READY_PROP) {
+            break;
+        }
+        if !qjs::vm::pump_runtime_once(rt, ctx, "truesurfer-parse5-vite") {
+            pump_stopped = true;
+            break;
+        }
+        pump_iters = pump_iters.saturating_add(1);
+        if !runtime_has_pending_work(rt, ctx)
+            && !read_global_bool(ctx, TRUESURFER_TRUEOS_PIXI_APP_READY_PROP)
+        {
+            pump_stopped = true;
+            break;
+        }
+    }
+
+    if !read_global_bool(ctx, TRUESURFER_TRUEOS_PIXI_APP_READY_PROP) {
+        let app_error = read_global_string(ctx, TRUESURFER_TRUEOS_PIXI_APP_ERROR_PROP);
+        log_line(format!(
+            "qjs-truesurfer[{}]: parse5 vite app not ready pump_iters={} pump_stopped={} error={}\n",
+            browser_instance_id, pump_iters, pump_stopped as u8, app_error
+        ));
+        return (0, 0);
+    }
+    log_line(format!(
+        "qjs-truesurfer[{}]: parse5 vite app ready pump_iters={}\n",
+        browser_instance_id, pump_iters
+    ));
+
+    let global = qjs::JS_GetGlobalObject(ctx);
+    let build_scene = qjs::JS_GetPropertyStr(
+        ctx,
+        global,
+        TRUESURFER_PARSE5_BUILD_SCENE_PROP.as_ptr() as *const c_char,
+    );
+    if build_scene.is_exception()
+        || build_scene.tag == qjs::JS_TAG_UNDEFINED
+        || build_scene.tag == qjs::JS_TAG_NULL
+    {
+        qjs::js_free_value(ctx, build_scene);
+        qjs::js_free_value(ctx, global);
+        log_line(format!(
+            "qjs-truesurfer[{}]: parse5 vite scene builder missing\n",
+            browser_instance_id
+        ));
+        return (0, 0);
+    }
+
+    let wrapper = qjs::JS_Call(ctx, build_scene, global, 0, core::ptr::null());
+    qjs::js_free_value(ctx, build_scene);
+    qjs::js_free_value(ctx, global);
+    if wrapper.is_exception() {
+        qjs::qjs_diag::dump_last_exception(ctx, "truesurfer parse5 vite scene build");
+        qjs::js_free_value(ctx, wrapper);
+        return (0, 0);
+    }
+
+    let (ops, root) = submit_ui3_scene(ctx, browser_instance_id, wrapper);
+    qjs::js_free_value(ctx, wrapper);
+    log_line(format!(
+        "qjs-truesurfer[{}]: parse5 vite ui3 submit ops={} root={}\n",
+        browser_instance_id, ops, root
+    ));
+    (ops, root)
 }
 
 unsafe fn read_array_len(ctx: *mut qjs::JSContext, obj: qjs::JSValueConst) -> u32 {
@@ -765,7 +1645,7 @@ async fn wait_for_queued_html(browser_instance_id: u32) {
 }
 
 unsafe fn dispatch_html(
-    _rt: *mut qjs::JSRuntime,
+    rt: *mut qjs::JSRuntime,
     ctx: *mut qjs::JSContext,
     browser_instance_id: u32,
     pending: PendingHtml,
@@ -848,11 +1728,18 @@ unsafe fn dispatch_html(
         parse_result.script_count
     ));
     log_line(format!(
-        "qjs-truesurfer[{}]: gadget snapshot skipped reason=ui3-scene-path\n",
+        "qjs-truesurfer[{}]: gadget snapshot skipped reason=parse5-vite-pixi-path\n",
         browser_instance_id
     ));
     log_line(format!("qjs-truesurfer[{}]: ui3 submit begin\n", browser_instance_id));
-    let (ui3_ops, ui3_root) = submit_ui3_scene(ctx, browser_instance_id, result);
+    let (ui3_ops, ui3_root) =
+        submit_parse5_vite_pixi_scene(rt, ctx, browser_instance_id, pending.html.as_str());
+    if ui3_ops == 0 || ui3_root == 0 {
+        log_line(format!(
+            "qjs-truesurfer[{}]: parse5 vite ui3 unavailable; no fallback scene submitted\n",
+            browser_instance_id
+        ));
+    }
     log_line(format!(
         "qjs-truesurfer[{}]: ui3 submit done ops={} root={}\n",
         browser_instance_id, ui3_ops, ui3_root
@@ -936,6 +1823,51 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
         let rt = vm.rt_ptr();
 
         set_global_i32(ctx, TRUESURFER_ID_PROP, browser_instance_id as i32);
+
+        for (source, filename, label) in [
+            (
+                TRUESURFER_PIXI_HOST_PRELUDE_SOURCE,
+                TRUESURFER_PIXI_HOST_PRELUDE_FILENAME,
+                "truesurfer pixi host prelude",
+            ),
+            (
+                TRUESURFER_PIXI_BUNDLE_SOURCE,
+                TRUESURFER_PIXI_BUNDLE_FILENAME,
+                "truesurfer pixi bundle",
+            ),
+            (
+                TRUESURFER_PIXI_COLLECTOR_SOURCE,
+                TRUESURFER_PIXI_COLLECTOR_FILENAME,
+                "truesurfer pixi collector",
+            ),
+            (
+                TRUESURFER_PIXI_CAPTURE_ADAPTER_SOURCE,
+                TRUESURFER_PIXI_CAPTURE_ADAPTER_FILENAME,
+                "truesurfer pixi capture adapter",
+            ),
+        ] {
+            let value = qjs::js_eval_bytes(
+                ctx,
+                source,
+                filename.as_ptr() as *const c_char,
+                qjs::JS_EVAL_TYPE_GLOBAL,
+            );
+            if value.is_exception() {
+                qjs::qjs_diag::dump_last_exception(ctx, label);
+                qjs::js_free_value(ctx, value);
+                let _ = with_browser_state_mut(browser_instance_id, |state| {
+                    state.started = false;
+                });
+                return;
+            }
+            qjs::js_free_value(ctx, value);
+        }
+        log_line(format!(
+            "qjs-truesurfer[{}]: pixi hotpath loaded bundle_bytes={} adapter_bytes={}\n",
+            browser_instance_id,
+            TRUESURFER_PIXI_BUNDLE_SOURCE.len(),
+            TRUESURFER_PIXI_CAPTURE_ADAPTER_SOURCE.len()
+        ));
 
         let boot = qjs::js_eval_bytes(
             ctx,

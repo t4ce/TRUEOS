@@ -29,6 +29,7 @@ The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 - `present_rgba8_to_primary_xrgb_rect.cl`: RGBA8 scene rect to primary XRGB rect with optional source Y flip
 - `stamp_mandel_rgba8.cl`: ten-iteration Mandelbrot stamp using destination x/y as both stamp origin and view offset
 - `sprite64_worklist_rgba8.cl`: fixed 64x64 sprite descriptors copied/blended from atlas to destination; shell path batches descriptor slices as multiple walkers in one command buffer
+- `mandel64_worklist_rgba8.cl`: fixed 64x64 Mandelbrot descriptors; source x/y supplies Mandelbrot-space offset and destination x/y supplies the output tile origin
 - `canvas3d_project_rgba8.cl`: Q16 vec3 projection into packed XY/RGBA point records with source/output ranges and dynamic canvas dimensions
 - `canvas3d_transform_q16.cl`: range/subset Q16 vec3 fused scale, quaternion rotation, and translation from source int4 vertices to destination int4 vertices
 - `canvas3d_clip_box_q16.cl`: idempotent Q16 vec3 source-to-sink box clip for presentation-safe geometry before projection
@@ -91,6 +92,14 @@ evo build. Its SHA-256 is:
 
 ```text
 636bd6dd2dde9e184d26c185ea04f6692476c1dec2c5fa26bf5f5b670cc1eb7e
+```
+
+`artifacts/adls/mandel64_worklist_rgba8.bin` is the descriptor Mandelbrot
+tile worklist build with 256-iteration grayscale escape coloring. Its SHA-256
+is:
+
+```text
+c7bbf601f6030bd8a5acdfa0ccf21d22ea2130e0914d4e24da8d0a838189058f
 ```
 
 Regenerate it with:

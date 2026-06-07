@@ -102,7 +102,6 @@ define_started_flags!(
     SHADER_COMPILE_SERVICE_STARTED,
     SILK_SERVICE_STARTED,
     ATOMIC_BOMB_STARTED,
-    HTML_DEMO_STARTED,
     SURFER_PARSE_POOL_STARTED,
     UI3_PIXI_SERVICE_STARTED
 );
@@ -495,10 +494,6 @@ fn spawn_silk_service(spawner: Spawner) -> SpawnAttempt {
 fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
     SpawnAttempt::Skipped
-}
-
-fn spawn_html_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_bool_result_to_attempt(crate::surfer::spawn_html_demo(spawner))
 }
 
 fn spawn_http_trueosfs(spawner: Spawner) -> SpawnAttempt {
@@ -1259,7 +1254,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 #[cfg(feature = "trueos_rdp")]
-const TASK_COUNT: usize = 76;
+const TASK_COUNT: usize = 75;
 #[cfg(not(feature = "trueos_rdp"))]
 const TASK_COUNT: usize = 75;
 static TASKS: [TaskSpec; TASK_COUNT] = [
@@ -1352,7 +1347,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &AI_QJS_ONESHOT_STARTED,
         spawn_ai_qjs_oneshot,
     ),
-    TaskSpec::enabled("html-demo", 0, &HTML_DEMO_STARTED, spawn_html_demo),
     TaskSpec::enabled(
         "http-trueosfs",
         NET_ANY_CONFIGURED_AND_INDEX_READY,

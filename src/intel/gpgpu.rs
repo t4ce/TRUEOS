@@ -49,6 +49,9 @@ pub(crate) const STAMP_MANDEL_RGBA8_OPENCL_SOURCE: &str =
 pub(crate) const SPRITE64_WORKLIST_RGBA8_KERNEL_NAME: &str = "sprite64_worklist_rgba8";
 pub(crate) const SPRITE64_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/sprite64_worklist_rgba8.cl");
+pub(crate) const MANDEL64_WORKLIST_RGBA8_KERNEL_NAME: &str = "mandel64_worklist_rgba8";
+pub(crate) const MANDEL64_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
+    include_str!("kernels/mandel64_worklist_rgba8.cl");
 pub(crate) const CANVAS3D_PROJECT_RGBA8_KERNEL_NAME: &str = "canvas3d_project_rgba8";
 pub(crate) const CANVAS3D_PROJECT_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/canvas3d_project_rgba8.cl");
@@ -120,6 +123,10 @@ pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/sprite64_worklist_rgba8.bin");
 pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/sprite64_worklist_rgba8.spv");
+pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/mandel64_worklist_rgba8.bin");
+pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/mandel64_worklist_rgba8.spv");
 pub(crate) const CANVAS3D_PROJECT_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/canvas3d_project_rgba8.bin");
 pub(crate) const CANVAS3D_PROJECT_RGBA8_ADLS_SPV: &[u8] =
@@ -196,6 +203,10 @@ pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0xF2, 0x43, 0x59, 0x84, 0x03, 0x79, 0x48, 0x82, 0x10, 0x4E, 0x77, 0xEB, 0x0F, 0x3E, 0x14, 0xB4,
     0xF1, 0x2C, 0x10, 0xBF, 0x8B, 0xD0, 0xB6, 0x8A, 0xB5, 0xFD, 0xED, 0x63, 0x04, 0x86, 0x87, 0x67,
 ];
+pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
+    0xC7, 0xBB, 0xF6, 0x01, 0xF6, 0x03, 0x0B, 0xD8, 0xA5, 0xAC, 0xDF, 0xA0, 0xCC, 0xF2, 0x1D, 0x22,
+    0xEA, 0x21, 0x30, 0xE0, 0x91, 0x4D, 0x4E, 0x24, 0xDA, 0x8D, 0x0A, 0x83, 0x81, 0x89, 0x05, 0x8F,
+];
 pub(crate) const CANVAS3D_PROJECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0xDA, 0xF0, 0x15, 0xA0, 0xB9, 0x8A, 0x45, 0xF7, 0x02, 0xD5, 0xD7, 0x87, 0xCA, 0x19, 0x59, 0xBA,
     0xAC, 0x7C, 0x02, 0xFE, 0x97, 0x93, 0xAC, 0x6E, 0x48, 0xA7, 0x87, 0x18, 0xAE, 0x3D, 0x3E, 0xB6,
@@ -228,6 +239,7 @@ pub(crate) const CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
 const COPY_RECT_RGBA8_ADLS_GPU: u64 = 0x0D20_0000;
 const BLIT_RGBA8_NEAREST_ADLS_GPU: u64 = 0x0D21_0000;
 const SPRITE64_WORKLIST_RGBA8_ADLS_GPU: u64 = 0x0D24_0000;
+const MANDEL64_WORKLIST_RGBA8_ADLS_GPU: u64 = 0x0D36_0000;
 const FILL_RECT_RGBA8_ADLS_GPU: u64 = 0x0D2B_0000;
 const ALPHA_BLEND_RGBA8_OVER_ADLS_GPU: u64 = 0x0D2C_0000;
 const GLYPH_MASK_RGBA8_ADLS_GPU: u64 = 0x0D2D_0000;
@@ -248,6 +260,7 @@ const FILL_RECT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const FILL_RECT_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const GRADIENT_RECT_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const SPRITE64_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
+const MANDEL64_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const ALPHA_BLEND_RGBA8_OVER_TEXT_OFFSET_BYTES: u64 = 0x40;
 const ALPHA_BLEND_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const GLYPH_MASK_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
@@ -416,11 +429,15 @@ const ALPHA_BLEND_WORKLIST_PRE_MARKER: u32 = 0xC0DE_5901;
 const ALPHA_BLEND_WORKLIST_POST_MARKER: u32 = 0xC0DE_5902;
 const GRADIENT_RECT_WORKLIST_PRE_MARKER: u32 = 0xC0DE_5A01;
 const GRADIENT_RECT_WORKLIST_POST_MARKER: u32 = 0xC0DE_5A02;
+const MANDEL64_WORKLIST_PRE_MARKER: u32 = 0xC0DE_6401;
+const MANDEL64_WORKLIST_POST_MARKER: u32 = 0xC0DE_6402;
 const RECT_WORKLIST_DESC_GPU: u64 = 0x05A0_0000;
+const MANDEL64_WORKLIST_DESC_GPU: u64 = 0x05B0_0000;
 const RECT_WORKLIST_MAX_DESCS: usize = 256;
 const RECT_WORKLIST_DESCS_PER_WALKER: usize = 16;
 const RECT_WORKLIST_MAX_WALKERS: usize = RECT_WORKLIST_MAX_DESCS / RECT_WORKLIST_DESCS_PER_WALKER;
 const RECT_WORKLIST_DESC_BYTES: usize = 8192;
+const MANDEL64_WORKLIST_CELL_PIXELS: u32 = 64;
 const CANVAS3D_PROJECT_IDD_OFFSET_BYTES: usize = 0x2000;
 const CANVAS3D_PROJECT_BINDING_TABLE_OFFSET_BYTES: usize = 0x2040;
 const CANVAS3D_PROJECT_VERTICES_SURFACE_STATE_OFFSET_BYTES: usize = 0x2080;
@@ -704,6 +721,7 @@ static GLYPH_MASK_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::n
 static PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_UPLOAD: Mutex<Option<UploadedKernelArtifact>> =
     Mutex::new(None);
 static SPRITE64_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
+static MANDEL64_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static CANVAS3D_PROJECT_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static CANVAS3D_TRANSFORM_Q16_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static CANVAS3D_CLIP_BOX_Q16_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
@@ -722,6 +740,7 @@ static GPGPU_SPRITE64_WORKLIST_ATLAS: Once<Option<GpgpuSprite64WorklistAtlasSurf
 static GPGPU_SPRITE64_WORKLIST_DESC: Mutex<Option<GpgpuSprite64WorklistDescBuffer>> =
     Mutex::new(None);
 static GPGPU_RECT_WORKLIST_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> = Mutex::new(None);
+static GPGPU_MANDEL64_WORKLIST_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> = Mutex::new(None);
 static RECT_WORKLIST_DESC_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 static GPGPU_TWEMOJI_ATLAS: Once<Option<GpgpuTwemojiAtlasCache>> = Once::new();
 static DIRECT_RCS_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
@@ -792,6 +811,25 @@ pub(crate) struct Sprite64WorklistRgba8Params {
     pub(crate) dst_gpu: u64,
     pub(crate) desc_gpu: u64,
     pub(crate) atlas_pitch_bytes: u32,
+    pub(crate) dst_pitch_bytes: u32,
+    pub(crate) desc_base: u32,
+    pub(crate) desc_count: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct Mandel64WorklistRgba8Desc {
+    pub(crate) src_xy: u32,
+    pub(crate) dst_xy: u32,
+    pub(crate) flags: u32,
+    pub(crate) color_rgba: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct Mandel64WorklistRgba8Params {
+    pub(crate) dst_gpu: u64,
+    pub(crate) desc_gpu: u64,
     pub(crate) dst_pitch_bytes: u32,
     pub(crate) desc_base: u32,
     pub(crate) desc_count: u32,
@@ -1418,8 +1456,35 @@ pub(crate) struct GpgpuShellAtlasWorklistResult {
 }
 
 #[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuShellMandel64WorklistResult {
+    pub(crate) ok: bool,
+    pub(crate) submitted: bool,
+    pub(crate) requested: usize,
+    pub(crate) descriptors: usize,
+    pub(crate) walkers: usize,
+    pub(crate) pixels: usize,
+    pub(crate) submit_ms: u64,
+    pub(crate) present_ms: u64,
+    pub(crate) total_ms: u64,
+    pub(crate) desc_gpu: u64,
+    pub(crate) primary_width: u32,
+    pub(crate) primary_height: u32,
+    pub(crate) last_src_xy: GpgpuPoint,
+    pub(crate) last_dst_xy: GpgpuPoint,
+    pub(crate) presented: bool,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct GpgpuTwemojiSprite64Placement {
     pub(crate) slot: u16,
+    pub(crate) dst_x: i32,
+    pub(crate) dst_y: i32,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuMandel64Placement {
+    pub(crate) src_x: i32,
+    pub(crate) src_y: i32,
     pub(crate) dst_x: i32,
     pub(crate) dst_y: i32,
 }
@@ -1624,6 +1689,14 @@ pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = Gp
     bin_sha256: SPRITE64_WORKLIST_RGBA8_ADLS_BIN_SHA256,
 };
 
+pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
+    name: MANDEL64_WORKLIST_RGBA8_KERNEL_NAME,
+    target: "adls",
+    bin: MANDEL64_WORKLIST_RGBA8_ADLS_BIN,
+    spv: MANDEL64_WORKLIST_RGBA8_ADLS_SPV,
+    bin_sha256: MANDEL64_WORKLIST_RGBA8_ADLS_BIN_SHA256,
+};
+
 pub(crate) const CANVAS3D_PROJECT_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
     name: CANVAS3D_PROJECT_RGBA8_KERNEL_NAME,
     target: "adls",
@@ -1718,6 +1791,10 @@ pub(crate) fn present_rgba8_to_primary_xrgb_rect_upload_status() -> Option<Uploa
 
 pub(crate) fn sprite64_worklist_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *SPRITE64_WORKLIST_RGBA8_UPLOAD.lock()
+}
+
+pub(crate) fn mandel64_worklist_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
+    *MANDEL64_WORKLIST_RGBA8_UPLOAD.lock()
 }
 
 pub(crate) fn canvas3d_project_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
@@ -1952,6 +2029,28 @@ pub(crate) fn upload_sprite64_worklist_rgba8_kernel() -> Option<UploadedKernelAr
         SPRITE64_WORKLIST_RGBA8_ADLS_GPU,
     )?;
     *SPRITE64_WORKLIST_RGBA8_UPLOAD.lock() = Some(upload);
+    Some(upload)
+}
+
+pub(crate) fn upload_mandel64_worklist_rgba8_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *MANDEL64_WORKLIST_RGBA8_UPLOAD.lock() {
+        return Some(upload);
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: mandel64-worklist-rgba8 upload skipped reason=no-claimed-device\n"
+        );
+        return None;
+    };
+
+    let upload = upload_artifact(
+        dev,
+        MANDEL64_WORKLIST_RGBA8_ADLS_ARTIFACT,
+        MANDEL64_WORKLIST_RGBA8_ADLS_GPU,
+    )?;
+    *MANDEL64_WORKLIST_RGBA8_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
 
@@ -4067,6 +4166,191 @@ pub(crate) fn twemoji_sprite64_worklist_primary(
     })
 }
 
+pub(crate) fn shell_mandel64_worklist_scanout(
+    requested_count: u32,
+) -> Option<GpgpuShellMandel64WorklistResult> {
+    let target = super::display::primary_surface_gpgpu_marker_target()?;
+    if target.virt.is_null()
+        || target.width < MANDEL64_WORKLIST_CELL_PIXELS
+        || target.height < MANDEL64_WORKLIST_CELL_PIXELS
+    {
+        return None;
+    }
+
+    let columns = (target.width / MANDEL64_WORKLIST_CELL_PIXELS).max(1);
+    let rows = (target.height / MANDEL64_WORKLIST_CELL_PIXELS).max(1);
+    let count = (requested_count as usize).clamp(1, columns.saturating_mul(rows) as usize);
+    if count == 0 {
+        return None;
+    }
+
+    let total_start_tick = direct_rcs_now_tick();
+    let mut placements = Vec::new();
+    let mut submitted = true;
+    let mut descriptors = 0usize;
+    let mut walkers = 0usize;
+    let mut pixels = 0usize;
+    let mut submit_ms = 0u64;
+    let mut desc_gpu = 0u64;
+    let mut last_src_xy = GpgpuPoint::new(0, 0);
+    let mut last_dst_xy = GpgpuPoint::new(0, 0);
+    let mut index = 0usize;
+    while index < count {
+        let end = index.saturating_add(RECT_WORKLIST_MAX_DESCS).min(count);
+        placements.clear();
+        for tile_index in index..end {
+            let tile_x = (tile_index as u32) % columns;
+            let tile_y = (tile_index as u32) / columns;
+            placements.push(GpgpuMandel64Placement {
+                src_x: tile_x.saturating_mul(MANDEL64_WORKLIST_CELL_PIXELS) as i32,
+                src_y: tile_y.saturating_mul(MANDEL64_WORKLIST_CELL_PIXELS) as i32,
+                dst_x: tile_x.saturating_mul(MANDEL64_WORKLIST_CELL_PIXELS) as i32,
+                dst_y: tile_y.saturating_mul(MANDEL64_WORKLIST_CELL_PIXELS) as i32,
+            });
+        }
+
+        let result = mandel64_worklist_primary(placements.as_slice(), false)?;
+        submitted &= result.submitted;
+        descriptors = descriptors.saturating_add(result.descriptors);
+        walkers = walkers.saturating_add(result.walkers);
+        pixels = pixels.saturating_add(result.pixels);
+        submit_ms = submit_ms.saturating_add(result.submit_ms);
+        desc_gpu = result.desc_gpu;
+        last_src_xy = result.last_src_xy;
+        last_dst_xy = result.last_dst_xy;
+        if !result.ok {
+            break;
+        }
+        index = end;
+    }
+
+    let present_start_tick = direct_rcs_now_tick();
+    let presented = submitted
+        && descriptors == count
+        && super::display::notify_primary_surface_external_write(
+            "gpgpu-mandel64-worklist",
+            0,
+            target.byte_len,
+        );
+    let present_ms = direct_rcs_elapsed_ms_since(present_start_tick);
+
+    Some(GpgpuShellMandel64WorklistResult {
+        ok: submitted && descriptors == count && presented,
+        submitted,
+        requested: count,
+        descriptors,
+        walkers,
+        pixels,
+        submit_ms,
+        present_ms,
+        total_ms: direct_rcs_elapsed_ms_since(total_start_tick),
+        desc_gpu,
+        primary_width: target.width,
+        primary_height: target.height,
+        last_src_xy,
+        last_dst_xy,
+        presented,
+    })
+}
+
+pub(crate) fn mandel64_worklist_primary(
+    placements: &[GpgpuMandel64Placement],
+    present: bool,
+) -> Option<GpgpuShellMandel64WorklistResult> {
+    let total_start_tick = direct_rcs_now_tick();
+    let target = super::display::primary_surface_gpgpu_marker_target()?;
+    if target.virt.is_null()
+        || target.width < MANDEL64_WORKLIST_CELL_PIXELS
+        || target.height < MANDEL64_WORKLIST_CELL_PIXELS
+        || placements.is_empty()
+    {
+        return None;
+    }
+    let primary = GpgpuRgba8Surface::new(
+        target.phys,
+        target.gpu,
+        target.byte_len,
+        target.width,
+        target.height,
+        target.pitch_bytes,
+    )?;
+    let desc = mandel64_worklist_desc_buffer_once()?;
+    let count = placements.len().min(RECT_WORKLIST_MAX_DESCS);
+    if count == 0 {
+        return None;
+    }
+
+    let max_x = target.width.saturating_sub(MANDEL64_WORKLIST_CELL_PIXELS) as i32;
+    let max_y = target.height.saturating_sub(MANDEL64_WORKLIST_CELL_PIXELS) as i32;
+    let mut last_src_xy = GpgpuPoint::new(0, 0);
+    let mut last_dst_xy = GpgpuPoint::new(0, 0);
+    let _desc_guard = RECT_WORKLIST_DESC_SUBMIT_LOCK.lock();
+    unsafe {
+        core::ptr::write_bytes(desc.virt, 0, desc.bytes);
+        let descs = desc.virt as *mut Mandel64WorklistRgba8Desc;
+        for (index, placement) in placements.iter().take(count).enumerate() {
+            let src_x = placement.src_x.clamp(i16::MIN as i32, i16::MAX as i32);
+            let src_y = placement.src_y.clamp(i16::MIN as i32, i16::MAX as i32);
+            let dst_x = placement.dst_x.clamp(0, max_x);
+            let dst_y = placement.dst_y.clamp(0, max_y);
+            let desc_value = Mandel64WorklistRgba8Desc {
+                src_xy: pack_i16_pair_u32(src_x as i16, src_y as i16),
+                dst_xy: pack_i16_pair_u32(dst_x as i16, dst_y as i16),
+                flags: 0,
+                color_rgba: 0,
+            };
+            core::ptr::write_volatile(descs.add(index), desc_value);
+            last_src_xy = GpgpuPoint::new(src_x, src_y);
+            last_dst_xy = GpgpuPoint::new(dst_x, dst_y);
+        }
+    }
+    super::dma_flush(desc.virt, desc.bytes);
+
+    let params = Mandel64WorklistRgba8Params {
+        dst_gpu: primary.gpu,
+        desc_gpu: desc.gpu,
+        dst_pitch_bytes: primary.pitch_bytes,
+        desc_base: 0,
+        desc_count: count as u32,
+    };
+    let walkers = rect_worklist_walker_count(count);
+
+    let submit_start_tick = direct_rcs_now_tick();
+    let submitted = submit_mandel64_worklist(primary, desc, params);
+    let submit_ms = direct_rcs_elapsed_ms_since(submit_start_tick);
+    let present_start_tick = direct_rcs_now_tick();
+    let presented = if submitted && present {
+        super::display::notify_primary_surface_external_write(
+            "gpgpu-mandel64-worklist",
+            0,
+            target.byte_len,
+        )
+    } else {
+        false
+    };
+    let present_ms = direct_rcs_elapsed_ms_since(present_start_tick);
+
+    Some(GpgpuShellMandel64WorklistResult {
+        ok: submitted && (!present || presented),
+        submitted,
+        requested: placements.len(),
+        descriptors: count,
+        walkers,
+        pixels: count
+            .saturating_mul(MANDEL64_WORKLIST_CELL_PIXELS as usize)
+            .saturating_mul(MANDEL64_WORKLIST_CELL_PIXELS as usize),
+        submit_ms,
+        present_ms,
+        total_ms: direct_rcs_elapsed_ms_since(total_start_tick),
+        desc_gpu: desc.gpu,
+        primary_width: primary.width,
+        primary_height: primary.height,
+        last_src_xy,
+        last_dst_xy,
+        presented,
+    })
+}
+
 pub(crate) fn shell_twemoji_atlas_worklist_present_scanout() -> Option<u64> {
     let target = super::display::primary_surface_gpgpu_marker_target()?;
     if target.virt.is_null() || target.byte_len == 0 {
@@ -5478,6 +5762,29 @@ fn rect_worklist_desc_buffer_once() -> Option<GpgpuRectWorklistDescBuffer> {
     Some(buffer)
 }
 
+fn mandel64_worklist_desc_buffer_once() -> Option<GpgpuRectWorklistDescBuffer> {
+    let mut guard = GPGPU_MANDEL64_WORKLIST_DESC.lock();
+    if let Some(buffer) = *guard {
+        return Some(buffer);
+    }
+
+    let bytes = align_up(RECT_WORKLIST_DESC_BYTES, super::WARM_ALIGN)?;
+    let (phys, virt) = crate::dma::alloc(bytes, super::WARM_ALIGN)?;
+    unsafe {
+        core::ptr::write_bytes(virt, 0, bytes);
+    }
+    super::dma_flush(virt, bytes);
+
+    let buffer = GpgpuRectWorklistDescBuffer {
+        phys,
+        gpu: MANDEL64_WORKLIST_DESC_GPU,
+        virt,
+        bytes,
+    };
+    *guard = Some(buffer);
+    Some(buffer)
+}
+
 fn shell_zero_surface(shell: GpgpuShellSurface) {
     unsafe {
         core::ptr::write_bytes(shell.virt, 0, shell.surface.bytes);
@@ -6708,6 +7015,49 @@ fn submit_gradient_rect_worklist(
         0
     };
     observed == GRADIENT_RECT_WORKLIST_POST_MARKER
+}
+
+fn submit_mandel64_worklist(
+    dst: GpgpuRgba8Surface,
+    desc: GpgpuRectWorklistDescBuffer,
+    params: Mandel64WorklistRgba8Params,
+) -> bool {
+    if params.desc_count == 0 || params.desc_count as usize > RECT_WORKLIST_MAX_DESCS {
+        return false;
+    }
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let Some(dev) = super::claimed_device() else {
+        return false;
+    };
+    let Some(upload) = upload_mandel64_worklist_rgba8_kernel() else {
+        return false;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        return false;
+    };
+
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let dst_ppgtt_ok =
+        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
+    let desc_ppgtt_ok =
+        dst_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
+    let batch_ok = desc_ppgtt_ok
+        && direct_rcs_encode_mandel64_worklist_batch(state, upload, params, dst.bytes, desc.bytes);
+    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
+    let observed = if submitted {
+        direct_rcs_poll_result_slot(
+            state,
+            RECT_WORKLIST_POST_MARKER_SLOT,
+            MANDEL64_WORKLIST_POST_MARKER,
+        )
+    } else {
+        0
+    };
+    observed == MANDEL64_WORKLIST_POST_MARKER
 }
 
 fn submit_alpha_blend_worklist(
@@ -8058,6 +8408,69 @@ fn direct_rcs_encode_gradient_rect_worklist_batch(
         desc_count,
         GRADIENT_RECT_WORKLIST_PRE_MARKER,
         GRADIENT_RECT_WORKLIST_POST_MARKER,
+    )
+}
+
+fn direct_rcs_encode_mandel64_worklist_batch(
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    params: Mandel64WorklistRgba8Params,
+    dst_bytes: usize,
+    desc_bytes: usize,
+) -> bool {
+    let desc_count = params.desc_count as usize;
+    let walker_count = rect_worklist_walker_count(desc_count);
+    if desc_count == 0 || walker_count == 0 {
+        return false;
+    }
+    let payload_end =
+        RECT_WORKLIST_PAYLOAD_OFFSET_BYTES + walker_count * RECT_WORKLIST_INDIRECT_BYTES;
+    if payload_end > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+
+    unsafe {
+        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
+        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+    }
+
+    if !direct_rcs_write_mandel64_worklist_interface_descriptor(state) {
+        return false;
+    }
+    if !direct_rcs_write_fill_rect_worklist_surface_states(
+        state,
+        params.dst_gpu,
+        dst_bytes,
+        params.desc_gpu,
+        desc_bytes,
+    ) {
+        return false;
+    }
+    for walker in 0..walker_count {
+        let desc_base = walker.saturating_mul(RECT_WORKLIST_DESCS_PER_WALKER);
+        let local_count = desc_count
+            .saturating_sub(desc_base)
+            .min(RECT_WORKLIST_DESCS_PER_WALKER);
+        let payload_offset =
+            RECT_WORKLIST_PAYLOAD_OFFSET_BYTES + walker * RECT_WORKLIST_INDIRECT_BYTES;
+        let payload_params = Mandel64WorklistRgba8Params {
+            desc_base: params.desc_base.saturating_add(desc_base as u32),
+            desc_count: local_count as u32,
+            ..params
+        };
+        if !direct_rcs_write_mandel64_worklist_payload_at(state, payload_offset, payload_params) {
+            return false;
+        }
+    }
+
+    direct_rcs_encode_rect_worklist_command_stream(
+        state,
+        upload,
+        walker_count,
+        desc_count,
+        MANDEL64_WORKLIST_PRE_MARKER,
+        MANDEL64_WORKLIST_POST_MARKER,
     )
 }
 
@@ -9737,6 +10150,15 @@ fn direct_rcs_write_gradient_rect_worklist_interface_descriptor(state: DirectRcs
     )
 }
 
+fn direct_rcs_write_mandel64_worklist_interface_descriptor(state: DirectRcsState) -> bool {
+    direct_rcs_write_rect_worklist_interface_descriptor(
+        state,
+        MANDEL64_WORKLIST_RGBA8_TEXT_OFFSET_BYTES,
+        2,
+        RECT_WORKLIST_CROSS_THREAD_GRFS,
+    )
+}
+
 fn direct_rcs_write_alpha_blend_worklist_interface_descriptor(state: DirectRcsState) -> bool {
     direct_rcs_write_rect_worklist_interface_descriptor(
         state,
@@ -9910,6 +10332,43 @@ fn direct_rcs_write_gradient_rect_worklist_payload_at(
     state: DirectRcsState,
     payload_offset: usize,
     params: GradientRectWorklistRgba8Params,
+) -> bool {
+    if payload_offset + RECT_WORKLIST_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+
+    unsafe {
+        let payload = state.batch_virt.add(payload_offset);
+        core::ptr::write_bytes(payload, 0, RECT_WORKLIST_INDIRECT_BYTES);
+        let dwords = payload as *mut u32;
+        core::ptr::write_volatile(dwords.add(3), 16);
+        core::ptr::write_volatile(dwords.add(4), 1);
+        core::ptr::write_volatile(dwords.add(5), 1);
+        core::ptr::write_volatile(dwords.add(8), 16);
+        core::ptr::write_volatile(dwords.add(9), 1);
+        core::ptr::write_volatile(dwords.add(10), 1);
+        core::ptr::write_volatile(dwords.add(12), params.dst_gpu as u32);
+        core::ptr::write_volatile(dwords.add(13), (params.dst_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(14), params.desc_gpu as u32);
+        core::ptr::write_volatile(dwords.add(15), (params.desc_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(16), params.dst_pitch_bytes);
+        core::ptr::write_volatile(dwords.add(17), params.desc_base);
+        core::ptr::write_volatile(dwords.add(18), params.desc_count);
+
+        let local_ids = payload.add(RECT_WORKLIST_CROSS_THREAD_BYTES) as *mut u16;
+        for lane in 0..16usize {
+            core::ptr::write_volatile(local_ids.add(lane), lane as u16);
+            core::ptr::write_volatile(local_ids.add(16 + lane), 0);
+            core::ptr::write_volatile(local_ids.add(32 + lane), 0);
+        }
+    }
+    true
+}
+
+fn direct_rcs_write_mandel64_worklist_payload_at(
+    state: DirectRcsState,
+    payload_offset: usize,
+    params: Mandel64WorklistRgba8Params,
 ) -> bool {
     if payload_offset + RECT_WORKLIST_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
         return false;
