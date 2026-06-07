@@ -103,7 +103,8 @@ define_started_flags!(
     SILK_SERVICE_STARTED,
     ATOMIC_BOMB_STARTED,
     HTML_DEMO_STARTED,
-    SURFER_PARSE_POOL_STARTED
+    SURFER_PARSE_POOL_STARTED,
+    UI3_PIXI_SERVICE_STARTED
 );
 
 #[cfg(feature = "trueos_rdp")]
@@ -663,6 +664,10 @@ fn spawn_truesurfer_parse_pool(spawner: Spawner) -> SpawnAttempt {
     spawn_bool_result_to_attempt(crate::surfer::spawn_truesurfer_parse_pool(spawner))
 }
 
+fn spawn_ui3_pixi_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_ap1(spawner, |_ap1_spawner| crate::ui3::pixi_service_task())
+}
+
 fn spawn_ui2(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |_ap1_spawner| crate::r::ui2::ui2_task())
 }
@@ -676,6 +681,7 @@ fn spawn_ui2_hosted(spawner: Spawner) -> SpawnAttempt {
 }
 
 const UI2_DEMOS_ENABLED: bool = true;
+const UI2_BAREMETAL_GFX_ENABLED: bool = false;
 
 #[inline]
 fn gfx_backend_boot_gate() -> bool {
@@ -694,7 +700,7 @@ fn intel_media_engine_gate() -> bool {
 
 #[inline]
 fn ui2_core_task_gate() -> bool {
-    true
+    UI2_BAREMETAL_GFX_ENABLED
 }
 
 #[inline]
@@ -1253,9 +1259,9 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 #[cfg(feature = "trueos_rdp")]
-const TASK_COUNT: usize = 75;
+const TASK_COUNT: usize = 76;
 #[cfg(not(feature = "trueos_rdp"))]
-const TASK_COUNT: usize = 74;
+const TASK_COUNT: usize = 75;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1498,6 +1504,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         0,
         &SURFER_PARSE_POOL_STARTED,
         spawn_truesurfer_parse_pool,
+    ),
+    TaskSpec::enabled(
+        "ui3-pixi-service",
+        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        &UI3_PIXI_SERVICE_STARTED,
+        spawn_ui3_pixi_service,
     ),
     TaskSpec::enabled(
         "ui2-athlas-third-demo",

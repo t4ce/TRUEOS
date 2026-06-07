@@ -1,0 +1,509 @@
+use alloc::string::String;
+use alloc::vec;
+use core::ffi::{c_char, c_int};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+use embassy_time::{Duration as EmbassyDuration, Timer};
+use spin::{Mutex, Once};
+
+use trueos_qjs as qjs;
+
+use super::pixi_host::pointer_event_kind_from_name;
+use super::{
+    Ui3Color, Ui3Command, Ui3NodeKind, Ui3PixiHost, Ui3Point, Ui3Rect, Ui3TextParam,
+    lower_ui3_frame_geometry,
+};
+
+const TASK_NAME: &str = "ui3-pixi-service";
+const PIXI_HOST_PRELUDE_SOURCE: &[u8] = include_bytes!("pixi_host_prelude.js");
+const PIXI_BUNDLE_SOURCE: &[u8] = include_bytes!("pixi_bundle.min.js");
+const PIXI_CAPTURE_ADAPTER_SOURCE: &[u8] = include_bytes!("pixi_capture_adapter.js");
+const PIXI_SMOKE_SOURCE: &[u8] = include_bytes!("pixi_empty_smoke.js");
+const PIXI_HOST_PRELUDE_FILENAME: &[u8] = b"<ui3-pixi-host-prelude>\0";
+const PIXI_BUNDLE_FILENAME: &[u8] = b"<ui3-pixi-bundle>\0";
+const PIXI_CAPTURE_ADAPTER_FILENAME: &[u8] = b"<ui3-pixi-capture-adapter>\0";
+const PIXI_SMOKE_FILENAME: &[u8] = b"<ui3-pixi-empty-smoke>\0";
+const PIXI_READY_PROP: &[u8] = b"__trueosPixiServiceReady\0";
+const PIXI_BUSY_PUMP_BUDGET: usize = 16;
+const PIXI_SERVICE_IDLE_MS: u64 = 250;
+
+static PIXI_SERVICE_READY: AtomicBool = AtomicBool::new(false);
+static PIXI_SERVICE_PUMP_COUNT: AtomicU32 = AtomicU32::new(0);
+static PIXI_SERVICE_RENDER_COUNT: AtomicU32 = AtomicU32::new(0);
+static PIXI_SERVICE_OP_COUNT: AtomicU32 = AtomicU32::new(0);
+static PIXI_SERVICE_FRAME_COUNT: AtomicU32 = AtomicU32::new(0);
+static PIXI_SERVICE_DRAW_COUNT: AtomicU32 = AtomicU32::new(0);
+static PIXI_SERVICE_RUNTIME: Once<Mutex<Ui3PixiServiceRuntime>> = Once::new();
+
+struct Ui3PixiServiceRuntime {
+    host: Ui3PixiHost,
+    op_count: u32,
+    frame_count: u32,
+    last_draw_count: u32,
+}
+
+impl Ui3PixiServiceRuntime {
+    fn new() -> Self {
+        Self {
+            host: Ui3PixiHost::new(),
+            op_count: 0,
+            frame_count: 0,
+            last_draw_count: 0,
+        }
+    }
+}
+
+pub fn pixi_service_ready() -> bool {
+    PIXI_SERVICE_READY.load(Ordering::Acquire)
+}
+
+pub fn pixi_service_pump_count() -> u32 {
+    PIXI_SERVICE_PUMP_COUNT.load(Ordering::Acquire)
+}
+
+pub fn pixi_service_render_count() -> u32 {
+    PIXI_SERVICE_RENDER_COUNT.load(Ordering::Acquire)
+}
+
+pub fn pixi_service_op_count() -> u32 {
+    PIXI_SERVICE_OP_COUNT.load(Ordering::Acquire)
+}
+
+pub fn pixi_service_frame_count() -> u32 {
+    PIXI_SERVICE_FRAME_COUNT.load(Ordering::Acquire)
+}
+
+pub fn pixi_service_draw_count() -> u32 {
+    PIXI_SERVICE_DRAW_COUNT.load(Ordering::Acquire)
+}
+
+#[embassy_executor::task]
+pub async fn pixi_service_task() {
+    let _task_guard = crate::r::spawn_service::task_run_guard(TASK_NAME);
+    PIXI_SERVICE_READY.store(false, Ordering::Release);
+    PIXI_SERVICE_PUMP_COUNT.store(0, Ordering::Release);
+    PIXI_SERVICE_RENDER_COUNT.store(0, Ordering::Release);
+    PIXI_SERVICE_OP_COUNT.store(0, Ordering::Release);
+    PIXI_SERVICE_FRAME_COUNT.store(0, Ordering::Release);
+    PIXI_SERVICE_DRAW_COUNT.store(0, Ordering::Release);
+    *pixi_runtime().lock() = Ui3PixiServiceRuntime::new();
+    crate::log!("ui3-pixi-service: starting qjs host on ap1\n");
+
+    unsafe {
+        let Some(vm) = qjs::vm::QjsVm::new_node_with_profile(qjs::node::RuntimeProfile::Browser)
+        else {
+            crate::log!("ui3-pixi-service: qjs runtime init failed\n");
+            return;
+        };
+        let rt = vm.rt_ptr();
+        let ctx = vm.ctx_ptr();
+
+        if !eval_global_script(
+            ctx,
+            PIXI_HOST_PRELUDE_SOURCE,
+            PIXI_HOST_PRELUDE_FILENAME,
+            "ui3 pixi host prelude",
+        ) {
+            return;
+        }
+
+        if !eval_global_script(ctx, PIXI_BUNDLE_SOURCE, PIXI_BUNDLE_FILENAME, "ui3 pixi bundle") {
+            return;
+        }
+
+        install_native_hooks(ctx);
+
+        if !eval_global_script(
+            ctx,
+            PIXI_CAPTURE_ADAPTER_SOURCE,
+            PIXI_CAPTURE_ADAPTER_FILENAME,
+            "ui3 pixi capture adapter",
+        ) {
+            return;
+        }
+
+        if !eval_global_script(ctx, PIXI_SMOKE_SOURCE, PIXI_SMOKE_FILENAME, "ui3 pixi smoke") {
+            return;
+        }
+
+        let ready = read_global_ready(ctx);
+        PIXI_SERVICE_READY.store(ready, Ordering::Release);
+        crate::log!(
+            "ui3-pixi-service: smoke ready={} renders={} ops={} frames={} draws={} bundle_bytes={} adapter_bytes={} smoke_bytes={} profile=browser\n",
+            if ready { 1 } else { 0 },
+            PIXI_SERVICE_RENDER_COUNT.load(Ordering::Acquire),
+            PIXI_SERVICE_OP_COUNT.load(Ordering::Acquire),
+            PIXI_SERVICE_FRAME_COUNT.load(Ordering::Acquire),
+            PIXI_SERVICE_DRAW_COUNT.load(Ordering::Acquire),
+            PIXI_BUNDLE_SOURCE.len(),
+            PIXI_CAPTURE_ADAPTER_SOURCE.len(),
+            PIXI_SMOKE_SOURCE.len()
+        );
+
+        loop {
+            for _ in 0..PIXI_BUSY_PUMP_BUDGET {
+                if !qjs::vm::pump_runtime_once(rt, ctx, "ui3 pixi service") {
+                    crate::log!("ui3-pixi-service: qjs pump failed\n");
+                    let _ = qjs::vm::teardown_main_context(rt, ctx, 250).await;
+                    PIXI_SERVICE_READY.store(false, Ordering::Release);
+                    return;
+                }
+                PIXI_SERVICE_PUMP_COUNT.fetch_add(1, Ordering::AcqRel);
+            }
+
+            let ready = read_global_ready(ctx);
+            PIXI_SERVICE_READY.store(ready, Ordering::Release);
+            Timer::after(EmbassyDuration::from_millis(PIXI_SERVICE_IDLE_MS)).await;
+        }
+    }
+}
+
+fn pixi_runtime() -> &'static Mutex<Ui3PixiServiceRuntime> {
+    PIXI_SERVICE_RUNTIME.call_once(|| Mutex::new(Ui3PixiServiceRuntime::new()))
+}
+
+unsafe fn install_native_hooks(ctx: *mut qjs::JSContext) {
+    if ctx.is_null() {
+        return;
+    }
+    let global = qjs::JS_GetGlobalObject(ctx);
+    if global.is_exception() {
+        return;
+    }
+    let _ = qjs::jsbind::install_fn(ctx, global, b"__trueosPixiOp\0", 6, Some(trueos_pixi_op));
+    let _ = qjs::jsbind::install_fn(ctx, global, b"__trueosRender\0", 1, Some(trueos_render));
+    qjs::js_free_value(ctx, global);
+}
+
+unsafe extern "C" fn trueos_pixi_op(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let Some(op) = read_arg_string(ctx, argc, argv, 0) else {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    };
+
+    let mut runtime = pixi_runtime().lock();
+    runtime.op_count = runtime.op_count.wrapping_add(1).max(1);
+    PIXI_SERVICE_OP_COUNT.store(runtime.op_count, Ordering::Release);
+
+    if runtime.op_count <= 16 {
+        let id = read_arg_u32(ctx, argc, argv, 1).unwrap_or(0);
+        crate::log!("ui3-pixi-service: pixi-op #{} {} id={}\n", runtime.op_count, op.as_str(), id);
+    }
+
+    match op.as_str() {
+        "node" => {
+            if let (Some(node), Some(kind)) =
+                (read_arg_u32(ctx, argc, argv, 1), read_arg_string(ctx, argc, argv, 2))
+            {
+                runtime.host.declare_node(node, node_kind_from_name(&kind));
+            }
+        }
+        _ => {
+            if let Some(command) = command_from_pixi_op(ctx, argc, argv, &op)
+                && let Some(frame) = runtime.host.apply(command).cloned()
+            {
+                runtime.frame_count = runtime.frame_count.wrapping_add(1).max(1);
+                let geometry = lower_ui3_frame_geometry(&runtime.host, &frame);
+                runtime.last_draw_count = geometry.draws.len().min(u32::MAX as usize) as u32;
+                PIXI_SERVICE_FRAME_COUNT.store(runtime.frame_count, Ordering::Release);
+                PIXI_SERVICE_DRAW_COUNT.store(runtime.last_draw_count, Ordering::Release);
+            }
+        }
+    }
+
+    qjs::JS_NewFloat64(ctx, runtime.op_count as f64)
+}
+
+unsafe extern "C" fn trueos_render(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let call = PIXI_SERVICE_RENDER_COUNT
+        .fetch_add(1, Ordering::AcqRel)
+        .saturating_add(1);
+    let children = if argc > 0 && !argv.is_null() {
+        read_stage_child_count(ctx, *argv)
+    } else {
+        0
+    };
+    let root = if argc > 0 && !argv.is_null() {
+        read_trueos_id(ctx, *argv).unwrap_or(0)
+    } else {
+        0
+    };
+    if root != 0 {
+        let mut runtime = pixi_runtime().lock();
+        if let Some(frame) = runtime.host.apply(Ui3Command::Render { root }).cloned() {
+            runtime.frame_count = runtime.frame_count.wrapping_add(1).max(1);
+            let geometry = lower_ui3_frame_geometry(&runtime.host, &frame);
+            runtime.last_draw_count = geometry.draws.len().min(u32::MAX as usize) as u32;
+            PIXI_SERVICE_FRAME_COUNT.store(runtime.frame_count, Ordering::Release);
+            PIXI_SERVICE_DRAW_COUNT.store(runtime.last_draw_count, Ordering::Release);
+        }
+    }
+
+    if call <= 4 {
+        crate::log!(
+            "ui3-pixi-service: __trueosRender call={} root={} root_children={} ops={} draws={}\n",
+            call,
+            root,
+            children,
+            PIXI_SERVICE_OP_COUNT.load(Ordering::Acquire),
+            PIXI_SERVICE_DRAW_COUNT.load(Ordering::Acquire)
+        );
+    }
+
+    qjs::JS_NewFloat64(ctx, call as f64)
+}
+
+unsafe fn command_from_pixi_op(
+    ctx: *mut qjs::JSContext,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+    op: &str,
+) -> Option<Ui3Command> {
+    match op {
+        "addChild" => Some(Ui3Command::AddChild {
+            parent: read_arg_u32(ctx, argc, argv, 1)?,
+            child: read_arg_u32(ctx, argc, argv, 2)?,
+        }),
+        "addChildAt" => Some(Ui3Command::AddChildAt {
+            parent: read_arg_u32(ctx, argc, argv, 1)?,
+            child: read_arg_u32(ctx, argc, argv, 2)?,
+            index: read_arg_usize(ctx, argc, argv, 3).unwrap_or(0),
+        }),
+        "setChildIndex" => Some(Ui3Command::SetChildIndex {
+            parent: read_arg_u32(ctx, argc, argv, 1)?,
+            child: read_arg_u32(ctx, argc, argv, 2)?,
+            index: read_arg_usize(ctx, argc, argv, 3).unwrap_or(0),
+        }),
+        "removeChildren" => Some(Ui3Command::RemoveChildren {
+            parent: read_arg_u32(ctx, argc, argv, 1)?,
+        }),
+        "listen" => Some(Ui3Command::Listen {
+            node: read_arg_u32(ctx, argc, argv, 1)?,
+            event: pointer_event_kind_from_name(&read_arg_string(ctx, argc, argv, 2)?),
+        }),
+        "removeAllListeners" => Some(Ui3Command::RemoveAllListeners {
+            node: read_arg_u32(ctx, argc, argv, 1)?,
+        }),
+        "clear" => Some(Ui3Command::GraphicsClear {
+            node: read_arg_u32(ctx, argc, argv, 1)?,
+        }),
+        "rect" => Some(Ui3Command::GraphicsRect {
+            node: read_arg_u32(ctx, argc, argv, 1)?,
+            rect: Ui3Rect {
+                x: read_arg_f32(ctx, argc, argv, 2).unwrap_or(0.0),
+                y: read_arg_f32(ctx, argc, argv, 3).unwrap_or(0.0),
+                w: read_arg_f32(ctx, argc, argv, 4).unwrap_or(0.0),
+                h: read_arg_f32(ctx, argc, argv, 5).unwrap_or(0.0),
+            },
+        }),
+        "circle" => Some(Ui3Command::GraphicsCircle {
+            node: read_arg_u32(ctx, argc, argv, 1)?,
+            center: Ui3Point {
+                x: read_arg_f32(ctx, argc, argv, 2).unwrap_or(0.0),
+                y: read_arg_f32(ctx, argc, argv, 3).unwrap_or(0.0),
+            },
+            radius: read_arg_f32(ctx, argc, argv, 4).unwrap_or(0.0),
+        }),
+        "moveTo" => Some(Ui3Command::GraphicsMoveTo {
+            node: read_arg_u32(ctx, argc, argv, 1)?,
+            to: Ui3Point {
+                x: read_arg_f32(ctx, argc, argv, 2).unwrap_or(0.0),
+                y: read_arg_f32(ctx, argc, argv, 3).unwrap_or(0.0),
+            },
+        }),
+        "lineTo" => Some(Ui3Command::GraphicsLineTo {
+            node: read_arg_u32(ctx, argc, argv, 1)?,
+            to: Ui3Point {
+                x: read_arg_f32(ctx, argc, argv, 2).unwrap_or(0.0),
+                y: read_arg_f32(ctx, argc, argv, 3).unwrap_or(0.0),
+            },
+        }),
+        "fill" => Some(Ui3Command::GraphicsFill {
+            node: read_arg_u32(ctx, argc, argv, 1)?,
+            color: pixi_color(
+                read_arg_u32(ctx, argc, argv, 2).unwrap_or(0x00ff_ffff),
+                read_arg_f32(ctx, argc, argv, 3).unwrap_or(1.0),
+            ),
+        }),
+        "stroke" => Some(Ui3Command::GraphicsStroke {
+            node: read_arg_u32(ctx, argc, argv, 1)?,
+            color: pixi_color(
+                read_arg_u32(ctx, argc, argv, 2).unwrap_or(0x00ff_ffff),
+                read_arg_f32(ctx, argc, argv, 3).unwrap_or(1.0),
+            ),
+            width: read_arg_f32(ctx, argc, argv, 4).unwrap_or(1.0),
+        }),
+        "text" => Some(Ui3Command::Text {
+            node: read_arg_u32(ctx, argc, argv, 1)?,
+            params: vec![Ui3TextParam::Text(
+                read_arg_string(ctx, argc, argv, 2).unwrap_or_default(),
+            )],
+        }),
+        _ => None,
+    }
+}
+
+fn node_kind_from_name(kind: &str) -> Ui3NodeKind {
+    match kind.as_bytes() {
+        b"Graphics" => Ui3NodeKind::Graphics,
+        b"Text" => Ui3NodeKind::Text,
+        _ => Ui3NodeKind::Container,
+    }
+}
+
+fn pixi_color(rgb: u32, alpha: f32) -> Ui3Color {
+    Ui3Color {
+        rgba: 0xff00_0000 | (rgb & 0x00ff_ffff),
+        alpha,
+    }
+}
+
+unsafe fn read_arg_value(
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+    index: usize,
+) -> Option<qjs::JSValueConst> {
+    if argv.is_null() || index >= argc.max(0) as usize {
+        return None;
+    }
+    Some(*argv.add(index))
+}
+
+unsafe fn read_arg_f64(
+    ctx: *mut qjs::JSContext,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+    index: usize,
+) -> Option<f64> {
+    let value = read_arg_value(argc, argv, index)?;
+    let mut out = 0.0f64;
+    if qjs::JS_ToFloat64(ctx, &mut out as *mut f64, value) == 0 && out.is_finite() {
+        Some(out)
+    } else {
+        None
+    }
+}
+
+unsafe fn read_arg_f32(
+    ctx: *mut qjs::JSContext,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+    index: usize,
+) -> Option<f32> {
+    read_arg_f64(ctx, argc, argv, index).map(|value| value as f32)
+}
+
+unsafe fn read_arg_u32(
+    ctx: *mut qjs::JSContext,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+    index: usize,
+) -> Option<u32> {
+    let value = read_arg_f64(ctx, argc, argv, index)?;
+    if value >= 0.0 {
+        Some(value.min(u32::MAX as f64) as u32)
+    } else {
+        None
+    }
+}
+
+unsafe fn read_arg_usize(
+    ctx: *mut qjs::JSContext,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+    index: usize,
+) -> Option<usize> {
+    let value = read_arg_f64(ctx, argc, argv, index)?;
+    if value >= 0.0 {
+        Some(value.min(usize::MAX as f64) as usize)
+    } else {
+        None
+    }
+}
+
+unsafe fn read_arg_string(
+    ctx: *mut qjs::JSContext,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+    index: usize,
+) -> Option<String> {
+    qjs::jsbind::to_string(ctx, read_arg_value(argc, argv, index)?)
+}
+
+unsafe fn read_trueos_id(ctx: *mut qjs::JSContext, object: qjs::JSValueConst) -> Option<u32> {
+    let id = qjs::JS_GetPropertyStr(ctx, object, b"__trueosPixiId\0".as_ptr() as *const c_char);
+    let mut out = 0.0f64;
+    let ok = !id.is_exception() && qjs::JS_ToFloat64(ctx, &mut out as *mut f64, id) == 0;
+    qjs::js_free_value(ctx, id);
+    if ok && out.is_finite() && out > 0.0 {
+        Some(out.min(u32::MAX as f64) as u32)
+    } else {
+        None
+    }
+}
+
+unsafe fn read_stage_child_count(ctx: *mut qjs::JSContext, stage: qjs::JSValueConst) -> u32 {
+    let children = qjs::JS_GetPropertyStr(ctx, stage, b"children\0".as_ptr() as *const c_char);
+    if children.is_exception() {
+        return 0;
+    }
+    let length = qjs::JS_GetPropertyStr(ctx, children, b"length\0".as_ptr() as *const c_char);
+    let mut out = 0.0f64;
+    let ok = !length.is_exception() && qjs::JS_ToFloat64(ctx, &mut out as *mut f64, length) == 0;
+    qjs::js_free_value(ctx, length);
+    qjs::js_free_value(ctx, children);
+    if ok && out.is_finite() && out > 0.0 {
+        out.min(u32::MAX as f64) as u32
+    } else {
+        0
+    }
+}
+
+unsafe fn eval_global_script(
+    ctx: *mut qjs::JSContext,
+    source: &[u8],
+    filename: &[u8],
+    diag_label: &str,
+) -> bool {
+    let value = qjs::js_eval_bytes(
+        ctx,
+        source,
+        filename.as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_GLOBAL,
+    );
+    if value.is_exception() {
+        qjs::qjs_diag::dump_last_exception(ctx, diag_label);
+        qjs::js_free_value(ctx, value);
+        return false;
+    }
+    qjs::js_free_value(ctx, value);
+    true
+}
+
+unsafe fn read_global_ready(ctx: *mut qjs::JSContext) -> bool {
+    if ctx.is_null() {
+        return false;
+    }
+
+    let global = qjs::JS_GetGlobalObject(ctx);
+    if global.is_exception() {
+        return false;
+    }
+
+    let value = qjs::JS_GetPropertyStr(ctx, global, PIXI_READY_PROP.as_ptr() as *const c_char);
+    let mut ready = 0.0f64;
+    let ok = !value.is_exception() && qjs::JS_ToFloat64(ctx, &mut ready as *mut f64, value) == 0;
+    qjs::js_free_value(ctx, value);
+    qjs::js_free_value(ctx, global);
+
+    ok && ready >= 1.0
+}

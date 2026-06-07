@@ -124,6 +124,8 @@ const PRIMARY_BASELINE_COLOR: u32 = 0x00FF_37FF;
 const VIDEO_NV12_BLACK_PROOF_LIFT: bool = false;
 const PRIMARY_BOOT_LOGO_JPEG: &[u8] = include_bytes!("../../logo.jpg");
 const PRIMARY_BOOT_LOGO_ENABLED: bool = true;
+const PRIMARY_BOOT_LOGO_DECODE_MODE: PrimaryBootLogoDecodeMode =
+    PrimaryBootLogoDecodeMode::ZuneJpeg;
 const PRIMARY_BOOT_LOGO_WAIT_TIMEOUT_MS: u64 = 5000;
 const PRIMARY_BOOT_LOGO_PRESENT_HOLD_MS: u64 = 3000;
 const PRIMARY_BOOT_DISPLAY_WARMUP_ENABLED: bool = true;
@@ -161,6 +163,12 @@ static HW_LOGO_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 static HW_LOGO_NEXT_STAGE: AtomicU32 = AtomicU32::new(0);
 static HW_LOGO_SEQUENCE_DONE: AtomicBool = AtomicBool::new(false);
 static HW_LOGO_SEQUENCE_DONE_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum PrimaryBootLogoDecodeMode {
+    HwPic,
+    ZuneJpeg,
+}
 
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct PrimarySurfaceSampleSet {
@@ -482,8 +490,8 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         pipe,
     };
     *PRIMARY_SURFACE.lock() = Some(primary_surface);
-    let ui2_base_ok = init_ui2_base_surface(dev, width, height, pitch_bytes, byte_len);
-    let ui2_frame_ok = init_ui2_frame_surface(dev, width, height, pitch_bytes, byte_len);
+    let ui2_base_ok = false;
+    let ui2_frame_ok = false;
     log_primary_scanout_pte_window(dev, "after-primary-init", byte_len);
 
     let logo_ok = if PRIMARY_BOOT_LOGO_ENABLED {
@@ -492,7 +500,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         } else {
             false
         };
-        let logo_submitted = probe_hw_logo_decode();
+        let logo_submitted = probe_boot_logo_decode();
         if !logo_submitted && warmup_ok {
             mark_hw_logo_sequence_done("display-warmup-no-logo");
         }
@@ -599,8 +607,50 @@ fn init_ui2_frame_surface(
     true
 }
 
+fn probe_boot_logo_decode() -> bool {
+    match PRIMARY_BOOT_LOGO_DECODE_MODE {
+        PrimaryBootLogoDecodeMode::HwPic => probe_hw_logo_decode(),
+        PrimaryBootLogoDecodeMode::ZuneJpeg => probe_zune_boot_logo_decode(),
+    }
+}
+
 fn probe_hw_logo_decode() -> bool {
-    submit_next_hw_logo_stage()
+    let submitted = submit_next_hw_logo_stage();
+    crate::log!("intel/display: boot-logo decode mode=hw_pic submitted={}\n", submitted as u8);
+    submitted
+}
+
+fn probe_zune_boot_logo_decode() -> bool {
+    let decoded = match crate::gfx::jpeg_codec::decode_jpeg_rgba(PRIMARY_BOOT_LOGO_JPEG) {
+        Ok(decoded) => decoded,
+        Err(err) => {
+            crate::log!(
+                "intel/display: boot-logo decode mode=zune_jpeg failed code={} bytes=0x{:X}\n",
+                err.code(),
+                PRIMARY_BOOT_LOGO_JPEG.len()
+            );
+            return false;
+        }
+    };
+
+    let stored = present_rgba_primary_center(
+        decoded.rgba.as_slice(),
+        decoded.width,
+        decoded.height,
+        decoded.width as usize * 4,
+        "boot-logo-zune-jpeg-center",
+    );
+    crate::log!(
+        "intel/display: boot-logo decode mode=zune_jpeg decoded={}x{} bytes=0x{:X} stored={}\n",
+        decoded.width,
+        decoded.height,
+        decoded.rgba.len(),
+        stored as u8
+    );
+    if stored {
+        mark_hw_logo_sequence_done("zune-logo-presented");
+    }
+    stored
 }
 
 fn run_primary_display_warmup(_surface: PrimarySurface, release_render_after: bool) -> bool {
@@ -1138,6 +1188,76 @@ pub(crate) fn present_rgba_primary(
     }
 
     let byte_len = dst_pitch.saturating_mul(dst_height);
+    notify_primary_surface_present(surface, reason, byte_len)
+}
+
+fn present_rgba_primary_center(
+    src: &[u8],
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+    reason: &str,
+) -> bool {
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+        return false;
+    };
+    if surface.virt.is_null()
+        || src_width == 0
+        || src_height == 0
+        || src_pitch_bytes < src_width as usize * 4
+    {
+        return false;
+    }
+
+    let src_width = src_width as usize;
+    let src_height = src_height as usize;
+    let dst_width = surface.width as usize;
+    let dst_height = surface.height as usize;
+    let dst_pitch = surface.pitch_bytes as usize;
+    if dst_width == 0 || dst_height == 0 || dst_pitch < dst_width.saturating_mul(4) {
+        return false;
+    }
+
+    let (copy_w, copy_h) = aspect_fit_size(src_width, src_height, dst_width, dst_height);
+    if copy_w == 0 || copy_h == 0 {
+        return false;
+    }
+    let dst_x = dst_width.saturating_sub(copy_w) / 2;
+    let dst_y = dst_height.saturating_sub(copy_h) / 2;
+
+    for row_idx in 0..copy_h {
+        let src_y = row_idx
+            .saturating_mul(src_height)
+            .checked_div(copy_h.max(1))
+            .unwrap_or(0)
+            .min(src_height.saturating_sub(1));
+        let src_row_off = src_y.saturating_mul(src_pitch_bytes);
+        let Some(src_row) = src.get(src_row_off..src_row_off + src_width.saturating_mul(4)) else {
+            return false;
+        };
+        let dst_row_off = (dst_y + row_idx)
+            .saturating_mul(dst_pitch)
+            .saturating_add(dst_x.saturating_mul(4));
+        let dst_row = unsafe { surface.virt.add(dst_row_off) as *mut u32 };
+        for col_idx in 0..copy_w {
+            let src_x = col_idx
+                .saturating_mul(src_width)
+                .checked_div(copy_w.max(1))
+                .unwrap_or(0)
+                .min(src_width.saturating_sub(1));
+            let src_off = src_x.saturating_mul(4);
+            let r = src_row[src_off];
+            let g = src_row[src_off + 1];
+            let b = src_row[src_off + 2];
+            let pixel = u32::from_le_bytes([b, g, r, 0]);
+            unsafe {
+                core::ptr::write_volatile(dst_row.add(col_idx), pixel);
+            }
+        }
+    }
+
+    let byte_len = dst_pitch.saturating_mul(dst_height);
+    crate::intel::dma_flush(surface.virt, byte_len);
     notify_primary_surface_present(surface, reason, byte_len)
 }
 
@@ -1776,7 +1896,7 @@ pub(crate) fn present_imc3_surface_center(
     visible_height: u32,
     src_pitch_bytes: usize,
 ) -> bool {
-    let Some(surface) = *UI2_BASE_SURFACE.lock() else {
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
         return false;
     };
     if surface.virt.is_null() || coded_width == 0 || coded_height == 0 {
@@ -1883,6 +2003,7 @@ pub(crate) fn present_imc3_surface_center(
 
     let byte_len = dst_pitch.saturating_mul(dst_height);
     crate::intel::dma_flush(surface.virt, byte_len);
+    notify_primary_surface_present(surface, "hw-logo-imc3-center", byte_len);
     true
 }
 

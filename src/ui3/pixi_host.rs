@@ -2,8 +2,8 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use super::{
-    Ui3Color, Ui3Command, Ui3Node, Ui3NodeId, Ui3NodeKind, Ui3Point, Ui3PointerEventKind, Ui3Rect,
-    Ui3TextParam,
+    Ui3Color, Ui3Command, Ui3HitScene, Ui3Node, Ui3NodeId, Ui3NodeKind, Ui3Point,
+    Ui3PointerEventKind, Ui3Rect, Ui3TextParam,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -26,6 +26,7 @@ pub struct Ui3RenderFrame {
 pub struct Ui3PixiHost {
     nodes: BTreeMap<Ui3NodeId, Ui3Node>,
     last_frame: Option<Ui3RenderFrame>,
+    hit_scene: Ui3HitScene,
 }
 
 impl Ui3PixiHost {
@@ -39,12 +40,25 @@ impl Ui3PixiHost {
             .or_insert_with(|| Ui3Node::new(id, kind, alloc::format!("ui3-node-{}", id)))
     }
 
+    pub fn declare_node(&mut self, id: Ui3NodeId, kind: Ui3NodeKind) {
+        let node = self.ensure_node(id, kind.clone());
+        node.kind = kind;
+    }
+
     pub fn node(&self, id: Ui3NodeId) -> Option<&Ui3Node> {
         self.nodes.get(&id)
     }
 
+    pub(super) fn nodes(&self) -> &BTreeMap<Ui3NodeId, Ui3Node> {
+        &self.nodes
+    }
+
     pub fn last_frame(&self) -> Option<&Ui3RenderFrame> {
         self.last_frame.as_ref()
+    }
+
+    pub fn hit_scene(&self) -> &Ui3HitScene {
+        &self.hit_scene
     }
 
     pub fn apply(&mut self, command: Ui3Command) -> Option<&Ui3RenderFrame> {
@@ -67,9 +81,7 @@ impl Ui3PixiHost {
                 self.attach(parent, child, Some(index));
             }
             Ui3Command::RemoveChildren { parent } => {
-                self.ensure_node(parent, Ui3NodeKind::Container)
-                    .children
-                    .clear();
+                self.remove_children(parent);
             }
             Ui3Command::Listen { node, event } => {
                 let n = self.ensure_node(node, Ui3NodeKind::Container);
@@ -125,11 +137,13 @@ impl Ui3PixiHost {
                 self.apply_text(node, params);
             }
             Ui3Command::Render { root } => {
+                self.ensure_node(root, Ui3NodeKind::Container);
                 let mut frame = Ui3RenderFrame {
                     root,
                     ordered_nodes: Vec::new(),
                 };
                 self.collect_ordered(root, &mut frame.ordered_nodes);
+                self.hit_scene = Ui3HitScene::from_ordered_nodes(&self.nodes, &frame.ordered_nodes);
                 self.last_frame = Some(frame);
                 return self.last_frame.as_ref();
             }
@@ -138,8 +152,22 @@ impl Ui3PixiHost {
     }
 
     fn attach(&mut self, parent: Ui3NodeId, child: Ui3NodeId, index: Option<usize>) {
+        self.ensure_node(parent, Ui3NodeKind::Container);
         self.ensure_node(child, Ui3NodeKind::Container);
-        let parent_node = self.ensure_node(parent, Ui3NodeKind::Container);
+
+        let old_parent = self.nodes.get(&child).and_then(|node| node.parent);
+        if let Some(old_parent) = old_parent
+            && let Some(old_parent_node) = self.nodes.get_mut(&old_parent)
+        {
+            old_parent_node
+                .children
+                .retain(|existing| *existing != child);
+        }
+
+        let parent_node = self
+            .nodes
+            .get_mut(&parent)
+            .expect("ui3 parent exists after ensure_node");
         parent_node.children.retain(|existing| *existing != child);
         match index {
             Some(index) => {
@@ -147,6 +175,25 @@ impl Ui3PixiHost {
                 parent_node.children.insert(index, child);
             }
             None => parent_node.children.push(child),
+        }
+
+        self.nodes
+            .get_mut(&child)
+            .expect("ui3 child exists after ensure_node")
+            .parent = Some(parent);
+    }
+
+    fn remove_children(&mut self, parent: Ui3NodeId) {
+        let children = self
+            .ensure_node(parent, Ui3NodeKind::Container)
+            .children
+            .split_off(0);
+        for child in children {
+            if let Some(child_node) = self.nodes.get_mut(&child)
+                && child_node.parent == Some(parent)
+            {
+                child_node.parent = None;
+            }
         }
     }
 

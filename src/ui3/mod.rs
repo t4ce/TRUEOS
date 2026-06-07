@@ -1,16 +1,27 @@
 //! UI3: Pixi-style 2D command host.
 //!
-//! This module is intentionally not wired into boot yet.  It defines the small
-//! retained-scene vocabulary observed from the Parse5/Pixi command trace.
+//! It defines the small retained-scene vocabulary observed from the Parse5/Pixi
+//! command trace and the AP1 Pixi/QJS smoke host.
 
 #![allow(dead_code)]
 
+mod geometry;
+mod hit_scene;
 mod pixi_host;
+mod pixi_service;
 
 use alloc::string::String;
 use alloc::vec::Vec;
 
+pub use self::geometry::{
+    Ui3GeometryFrame, Ui3LoweredDraw, Ui3MeshKind, lower_ui3_frame_geometry, push_ui3_rgb_bytes,
+};
+pub use self::hit_scene::{Ui3HitEntry, Ui3HitKind, Ui3HitScene, Ui3HitTarget};
 pub use self::pixi_host::{Ui3GraphicsOp, Ui3PixiHost, Ui3RenderFrame};
+pub use self::pixi_service::{
+    pixi_service_draw_count, pixi_service_frame_count, pixi_service_op_count,
+    pixi_service_pump_count, pixi_service_ready, pixi_service_render_count, pixi_service_task,
+};
 
 pub type Ui3NodeId = u32;
 
@@ -136,6 +147,7 @@ pub struct Ui3Node {
     pub id: Ui3NodeId,
     pub kind: Ui3NodeKind,
     pub label: String,
+    pub parent: Option<Ui3NodeId>,
     pub position: Ui3Point,
     pub visible: bool,
     pub children: Vec<Ui3NodeId>,
@@ -151,6 +163,7 @@ impl Ui3Node {
             id,
             kind,
             label,
+            parent: None,
             position: Ui3Point::default(),
             visible: true,
             children: Vec::new(),
