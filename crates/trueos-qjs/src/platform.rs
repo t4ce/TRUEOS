@@ -109,10 +109,119 @@ pub mod gfx {
 pub mod ui {
     unsafe extern "C" {
         fn trueos_cabi_ui2_signal_hosted_browser_dirty(content_id: u32, flags: u32);
+        fn trueos_cabi_ui3_scene_begin(browser_id: u32, root_id: u32) -> i32;
+        fn trueos_cabi_ui3_scene_node(browser_id: u32, node_id: u32, kind: u32) -> i32;
+        fn trueos_cabi_ui3_scene_add_child(browser_id: u32, parent: u32, child: u32) -> i32;
+        fn trueos_cabi_ui3_scene_position(browser_id: u32, node_id: u32, x: f32, y: f32) -> i32;
+        fn trueos_cabi_ui3_scene_graphics_clear(browser_id: u32, node_id: u32) -> i32;
+        fn trueos_cabi_ui3_scene_graphics_rect(
+            browser_id: u32,
+            node_id: u32,
+            x: f32,
+            y: f32,
+            w: f32,
+            h: f32,
+        ) -> i32;
+        fn trueos_cabi_ui3_scene_graphics_fill(
+            browser_id: u32,
+            node_id: u32,
+            rgb: u32,
+            alpha: f32,
+        ) -> i32;
+        fn trueos_cabi_ui3_scene_graphics_stroke(
+            browser_id: u32,
+            node_id: u32,
+            rgb: u32,
+            alpha: f32,
+            width: f32,
+        ) -> i32;
+        fn trueos_cabi_ui3_scene_text(
+            browser_id: u32,
+            node_id: u32,
+            text_ptr: *const u8,
+            text_len: usize,
+        ) -> i32;
+        fn trueos_cabi_ui3_scene_text_fill(
+            browser_id: u32,
+            node_id: u32,
+            rgb: u32,
+            alpha: f32,
+        ) -> i32;
+        fn trueos_cabi_ui3_scene_render(browser_id: u32, root_id: u32) -> i32;
     }
 
     #[inline]
     pub fn signal_hosted_browser_dirty(content_id: u32, flags: u32) {
         unsafe { trueos_cabi_ui2_signal_hosted_browser_dirty(content_id, flags) };
+    }
+
+    #[inline]
+    pub fn ui3_scene_begin(browser_id: u32, root_id: u32) -> bool {
+        unsafe { trueos_cabi_ui3_scene_begin(browser_id, root_id) >= 0 }
+    }
+
+    #[inline]
+    pub fn ui3_scene_node(browser_id: u32, node_id: u32, kind: u32) -> bool {
+        unsafe { trueos_cabi_ui3_scene_node(browser_id, node_id, kind) >= 0 }
+    }
+
+    #[inline]
+    pub fn ui3_scene_add_child(browser_id: u32, parent: u32, child: u32) -> bool {
+        unsafe { trueos_cabi_ui3_scene_add_child(browser_id, parent, child) >= 0 }
+    }
+
+    #[inline]
+    pub fn ui3_scene_position(browser_id: u32, node_id: u32, x: f32, y: f32) -> bool {
+        unsafe { trueos_cabi_ui3_scene_position(browser_id, node_id, x, y) >= 0 }
+    }
+
+    #[inline]
+    pub fn ui3_scene_graphics_clear(browser_id: u32, node_id: u32) -> bool {
+        unsafe { trueos_cabi_ui3_scene_graphics_clear(browser_id, node_id) >= 0 }
+    }
+
+    #[inline]
+    pub fn ui3_scene_graphics_rect(
+        browser_id: u32,
+        node_id: u32,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    ) -> bool {
+        unsafe { trueos_cabi_ui3_scene_graphics_rect(browser_id, node_id, x, y, w, h) >= 0 }
+    }
+
+    #[inline]
+    pub fn ui3_scene_graphics_fill(browser_id: u32, node_id: u32, rgb: u32, alpha: f32) -> bool {
+        unsafe { trueos_cabi_ui3_scene_graphics_fill(browser_id, node_id, rgb, alpha) >= 0 }
+    }
+
+    #[inline]
+    pub fn ui3_scene_graphics_stroke(
+        browser_id: u32,
+        node_id: u32,
+        rgb: u32,
+        alpha: f32,
+        width: f32,
+    ) -> bool {
+        unsafe {
+            trueos_cabi_ui3_scene_graphics_stroke(browser_id, node_id, rgb, alpha, width) >= 0
+        }
+    }
+
+    #[inline]
+    pub fn ui3_scene_text(browser_id: u32, node_id: u32, text: &str) -> bool {
+        unsafe { trueos_cabi_ui3_scene_text(browser_id, node_id, text.as_ptr(), text.len()) >= 0 }
+    }
+
+    #[inline]
+    pub fn ui3_scene_text_fill(browser_id: u32, node_id: u32, rgb: u32, alpha: f32) -> bool {
+        unsafe { trueos_cabi_ui3_scene_text_fill(browser_id, node_id, rgb, alpha) >= 0 }
+    }
+
+    #[inline]
+    pub fn ui3_scene_render(browser_id: u32, root_id: u32) -> bool {
+        unsafe { trueos_cabi_ui3_scene_render(browser_id, root_id) >= 0 }
     }
 }

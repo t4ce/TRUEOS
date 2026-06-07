@@ -95,7 +95,7 @@ pub fn lower_ui3_frame_geometry(host: &Ui3PixiHost, frame: &Ui3RenderFrame) -> U
                 node: node.id,
                 origin,
                 text: node.text.clone(),
-                color: Rgba8::new(255, 255, 255, 255),
+                color: color_to_rgba8(node.text_fill),
             }),
             Ui3NodeKind::Container | Ui3NodeKind::Text => {}
         }
@@ -418,11 +418,18 @@ fn translate_rect(rect: Ui3Rect, origin: Ui3Point) -> Ui3Rect {
 
 #[inline]
 fn color_to_rgba8(color: Ui3Color) -> Rgba8 {
-    let mut rgba = Rgba8::from_rgba_u32(color.rgba);
-    if rgba.a == 0 && color.alpha > 0.0 {
-        rgba.a = 255;
-    }
+    let mut rgba = argb_to_rgba8(color.rgba);
     rgba.scale_alpha(alpha_u8(color.alpha))
+}
+
+#[inline]
+fn argb_to_rgba8(argb: u32) -> Rgba8 {
+    Rgba8::new(
+        ((argb >> 16) & 0xFF) as u8,
+        ((argb >> 8) & 0xFF) as u8,
+        (argb & 0xFF) as u8,
+        ((argb >> 24) & 0xFF) as u8,
+    )
 }
 
 #[inline]

@@ -320,7 +320,7 @@ pub fn init() {
     if crate::logflag::BOOT_INFO_LOGS {
         for dev in r8139::detect_all() {
             dormant_detected += 1;
-            crate::log!(
+            crate::log_info!(target: "net";
                 "net: detected rtl8139 bdf={:02x}:{:02x}.{} vid={:04x} did={:04x} (not wired)\n",
                 dev.bus,
                 dev.slot,
@@ -346,16 +346,16 @@ pub fn init() {
         }
         PRIMARY_DEVICE_INDEX.store(chosen, Ordering::Relaxed);
         if crate::logflag::BOOT_INFO_LOGS {
-            crate::log!("net: primary={} (link-up preference)\n", chosen);
+            crate::log_info!(target: "net"; "net: primary={} (link-up preference)\n", chosen);
         }
     }
 
     if added == 0 {
         if crate::logflag::BOOT_INFO_LOGS {
             if dormant_detected == 0 {
-                crate::log!("net: no supported NIC detected.\n");
+                crate::log_info!(target: "net"; "net: no supported NIC detected.\n");
             } else {
-                crate::log!(
+                crate::log_info!(target: "net";
                     "net: no supported NIC detected; {} rtl candidate(s) present but not wired.\n",
                     dormant_detected
                 );
@@ -363,7 +363,7 @@ pub fn init() {
         }
     } else {
         if crate::logflag::BOOT_INFO_LOGS {
-            crate::log!("net: detected {} NIC(s)\n", added);
+            crate::log_info!(target: "net"; "net: detected {} NIC(s)\n", added);
 
             // Device inventory helps interpret logs like "tx-batch dev=0".
             let count = device_count();
@@ -372,7 +372,7 @@ pub fn init() {
                 let link_up = link_state_at(idx).map(|ls| ls.up as u8).unwrap_or(0);
                 let bdf = bdf_at(idx);
                 if let Some((bus, slot, func)) = bdf {
-                    crate::log!(
+                    crate::log_info!(target: "net";
                         "net: dev{} {} bdf={:02x}:{:02x}.{} link_up={}\n",
                         idx,
                         name,
@@ -382,14 +382,14 @@ pub fn init() {
                         link_up
                     );
                 } else {
-                    crate::log!("net: dev{} {} bdf=? link_up={}\n", idx, name, link_up);
+                    crate::log_info!(target: "net"; "net: dev{} {} bdf=? link_up={}\n", idx, name, link_up);
                 }
             }
         }
     }
 
     if crate::logflag::BOOT_INFO_LOGS {
-        crate::log!(
+        crate::log_info!(target: "net";
             "net: hint: prefer virtio-net in QEMU (e.g. -netdev user,id=net0,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net0)\n"
         );
     }
@@ -444,7 +444,7 @@ pub fn transmit_batch_at(index: usize, packets: impl Iterator<Item = alloc::vec:
         // If this ever triggers, the stack is producing frames but the NIC backend
         // is rejecting them (most commonly: TX ring full / wedged DMA).
         if err_count != 0 {
-            crate::log!("net: tx-batch dev={} ok={} err={}\n", index, ok_count, err_count);
+            crate::log_warn!(target: "net"; "net: tx-batch dev={} ok={} err={}\n", index, ok_count, err_count);
         }
     });
 }

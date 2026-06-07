@@ -8,10 +8,11 @@ use spin::{Mutex, Once};
 
 use trueos_qjs as qjs;
 
+use super::intel_present::{Ui3IntelPresentSummary, present_ui3_frame_to_intel_primary};
 use super::pixi_host::pointer_event_kind_from_name;
 use super::{
-    Ui3Color, Ui3Command, Ui3NodeKind, Ui3PixiHost, Ui3Point, Ui3Rect, Ui3TextParam,
-    lower_ui3_frame_geometry,
+    Ui3Color, Ui3Command, Ui3NodeKind, Ui3PixiHost, Ui3Point, Ui3Rect, Ui3RenderFrame,
+    Ui3TextParam, lower_ui3_frame_geometry,
 };
 
 const TASK_NAME: &str = "ui3-pixi-service";
@@ -24,10 +25,13 @@ const PIXI_BUNDLE_FILENAME: &[u8] = b"<ui3-pixi-bundle>\0";
 const PIXI_CAPTURE_ADAPTER_FILENAME: &[u8] = b"<ui3-pixi-capture-adapter>\0";
 const PIXI_SMOKE_FILENAME: &[u8] = b"<ui3-pixi-empty-smoke>\0";
 const PIXI_READY_PROP: &[u8] = b"__trueosPixiServiceReady\0";
-const PIXI_BUSY_PUMP_BUDGET: usize = 16;
-const PIXI_SERVICE_IDLE_MS: u64 = 250;
+const PIXI_TEARDOWN_WAIT_MS: u64 = 250;
+const PIXI_SERVICE_PARK_MS: u64 = 60_000;
+const PIXI_AUTORUN_TRUESURFER_HTML_ENABLE: bool = true;
+const PIXI_AUTORUN_TRUESURFER_HTML: &str = "<html><body><h1>UI3 TRUE</h1><p>Hello</p><button>Go</button><input value=x><a href=\"/\">link</a></body></html>";
 
 static PIXI_SERVICE_READY: AtomicBool = AtomicBool::new(false);
+static PIXI_AUTORUN_TRUESURFER_HTML_STARTED: AtomicBool = AtomicBool::new(false);
 static PIXI_SERVICE_PUMP_COUNT: AtomicU32 = AtomicU32::new(0);
 static PIXI_SERVICE_RENDER_COUNT: AtomicU32 = AtomicU32::new(0);
 static PIXI_SERVICE_OP_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -40,6 +44,7 @@ struct Ui3PixiServiceRuntime {
     op_count: u32,
     frame_count: u32,
     last_draw_count: u32,
+    last_present: Ui3IntelPresentSummary,
 }
 
 impl Ui3PixiServiceRuntime {
@@ -49,6 +54,7 @@ impl Ui3PixiServiceRuntime {
             op_count: 0,
             frame_count: 0,
             last_draw_count: 0,
+            last_present: Ui3IntelPresentSummary::default(),
         }
     }
 }
@@ -140,22 +146,44 @@ pub async fn pixi_service_task() {
             PIXI_SMOKE_SOURCE.len()
         );
 
-        loop {
-            for _ in 0..PIXI_BUSY_PUMP_BUDGET {
-                if !qjs::vm::pump_runtime_once(rt, ctx, "ui3 pixi service") {
-                    crate::log!("ui3-pixi-service: qjs pump failed\n");
-                    let _ = qjs::vm::teardown_main_context(rt, ctx, 250).await;
-                    PIXI_SERVICE_READY.store(false, Ordering::Release);
-                    return;
-                }
-                PIXI_SERVICE_PUMP_COUNT.fetch_add(1, Ordering::AcqRel);
-            }
+        let drained = qjs::vm::teardown_main_context(rt, ctx, PIXI_TEARDOWN_WAIT_MS).await;
+        drop(vm);
+        crate::log!(
+            "ui3-pixi-service: smoke vm torn down drained={} parked=1\n",
+            if drained { 1 } else { 0 }
+        );
 
-            let ready = read_global_ready(ctx);
-            PIXI_SERVICE_READY.store(ready, Ordering::Release);
-            Timer::after(EmbassyDuration::from_millis(PIXI_SERVICE_IDLE_MS)).await;
+        if ready && drained && PIXI_AUTORUN_TRUESURFER_HTML_ENABLE {
+            autorun_truesurfer_html_after_smoke().await;
+        } else if ready && PIXI_AUTORUN_TRUESURFER_HTML_ENABLE {
+            crate::log!(
+                "ui3-pixi-service: truesurfer autorun skipped reason=smoke-vm-not-drained\n"
+            );
+        }
+
+        loop {
+            Timer::after(EmbassyDuration::from_millis(PIXI_SERVICE_PARK_MS)).await;
         }
     }
+}
+
+async fn autorun_truesurfer_html_after_smoke() {
+    if PIXI_AUTORUN_TRUESURFER_HTML_STARTED.swap(true, Ordering::AcqRel) {
+        crate::log!("ui3-pixi-service: truesurfer autorun skipped reason=already-started\n");
+        return;
+    }
+
+    let html = crate::surfer::html_shack::Html::new(
+        "inline://ui3-pixi-smoke",
+        PIXI_AUTORUN_TRUESURFER_HTML,
+    );
+    crate::log!(
+        "ui3-pixi-service: truesurfer autorun submit bytes={} url={}\n",
+        html.html.len(),
+        html.url
+    );
+    let ok = crate::surfer::html_shack::handoff_html_to_truesurfer(html).await;
+    crate::log!("ui3-pixi-service: truesurfer autorun queued={}\n", if ok { 1 } else { 0 });
 }
 
 fn pixi_runtime() -> &'static Mutex<Ui3PixiServiceRuntime> {
@@ -206,11 +234,7 @@ unsafe extern "C" fn trueos_pixi_op(
             if let Some(command) = command_from_pixi_op(ctx, argc, argv, &op)
                 && let Some(frame) = runtime.host.apply(command).cloned()
             {
-                runtime.frame_count = runtime.frame_count.wrapping_add(1).max(1);
-                let geometry = lower_ui3_frame_geometry(&runtime.host, &frame);
-                runtime.last_draw_count = geometry.draws.len().min(u32::MAX as usize) as u32;
-                PIXI_SERVICE_FRAME_COUNT.store(runtime.frame_count, Ordering::Release);
-                PIXI_SERVICE_DRAW_COUNT.store(runtime.last_draw_count, Ordering::Release);
+                lower_present_and_count(&mut runtime, &frame);
             }
         }
     }
@@ -240,26 +264,40 @@ unsafe extern "C" fn trueos_render(
     if root != 0 {
         let mut runtime = pixi_runtime().lock();
         if let Some(frame) = runtime.host.apply(Ui3Command::Render { root }).cloned() {
-            runtime.frame_count = runtime.frame_count.wrapping_add(1).max(1);
-            let geometry = lower_ui3_frame_geometry(&runtime.host, &frame);
-            runtime.last_draw_count = geometry.draws.len().min(u32::MAX as usize) as u32;
-            PIXI_SERVICE_FRAME_COUNT.store(runtime.frame_count, Ordering::Release);
-            PIXI_SERVICE_DRAW_COUNT.store(runtime.last_draw_count, Ordering::Release);
+            lower_present_and_count(&mut runtime, &frame);
         }
     }
 
     if call <= 4 {
+        let present = pixi_runtime().lock().last_present;
         crate::log!(
-            "ui3-pixi-service: __trueosRender call={} root={} root_children={} ops={} draws={}\n",
+            "ui3-pixi-service: __trueosRender call={} root={} root_children={} ops={} draws={} solid_rects={} meshes={} text={} presented={} fill_descs={} blend_descs={} present_ms={} total_ms={}\n",
             call,
             root,
             children,
             PIXI_SERVICE_OP_COUNT.load(Ordering::Acquire),
-            PIXI_SERVICE_DRAW_COUNT.load(Ordering::Acquire)
+            PIXI_SERVICE_DRAW_COUNT.load(Ordering::Acquire),
+            present.solid_rects,
+            present.mesh_draws,
+            present.text_runs,
+            present.presented as u8,
+            present.fill_descs,
+            present.blend_descs,
+            present.present_ms,
+            present.total_ms
         );
     }
 
     qjs::JS_NewFloat64(ctx, call as f64)
+}
+
+fn lower_present_and_count(runtime: &mut Ui3PixiServiceRuntime, frame: &Ui3RenderFrame) {
+    runtime.frame_count = runtime.frame_count.wrapping_add(1).max(1);
+    let geometry = lower_ui3_frame_geometry(&runtime.host, frame);
+    runtime.last_draw_count = geometry.draws.len().min(u32::MAX as usize) as u32;
+    runtime.last_present = present_ui3_frame_to_intel_primary(&geometry);
+    PIXI_SERVICE_FRAME_COUNT.store(runtime.frame_count, Ordering::Release);
+    PIXI_SERVICE_DRAW_COUNT.store(runtime.last_draw_count, Ordering::Release);
 }
 
 unsafe fn command_from_pixi_op(
@@ -283,8 +321,26 @@ unsafe fn command_from_pixi_op(
             child: read_arg_u32(ctx, argc, argv, 2)?,
             index: read_arg_usize(ctx, argc, argv, 3).unwrap_or(0),
         }),
+        "removeChild" => Some(Ui3Command::RemoveChild {
+            parent: read_arg_u32(ctx, argc, argv, 1)?,
+            child: read_arg_u32(ctx, argc, argv, 2)?,
+        }),
+        "removeFromParent" => Some(Ui3Command::RemoveFromParent {
+            node: read_arg_u32(ctx, argc, argv, 1)?,
+        }),
         "removeChildren" => Some(Ui3Command::RemoveChildren {
             parent: read_arg_u32(ctx, argc, argv, 1)?,
+        }),
+        "position" => Some(Ui3Command::SetPosition {
+            node: read_arg_u32(ctx, argc, argv, 1)?,
+            position: Ui3Point {
+                x: read_arg_f32(ctx, argc, argv, 2).unwrap_or(0.0),
+                y: read_arg_f32(ctx, argc, argv, 3).unwrap_or(0.0),
+            },
+        }),
+        "visible" => Some(Ui3Command::SetVisible {
+            node: read_arg_u32(ctx, argc, argv, 1)?,
+            visible: read_arg_bool(ctx, argc, argv, 2).unwrap_or(true),
         }),
         "listen" => Some(Ui3Command::Listen {
             node: read_arg_u32(ctx, argc, argv, 1)?,
@@ -347,6 +403,13 @@ unsafe fn command_from_pixi_op(
             params: vec![Ui3TextParam::Text(
                 read_arg_string(ctx, argc, argv, 2).unwrap_or_default(),
             )],
+        }),
+        "textFill" => Some(Ui3Command::Text {
+            node: read_arg_u32(ctx, argc, argv, 1)?,
+            params: vec![Ui3TextParam::Fill(pixi_color(
+                read_arg_u32(ctx, argc, argv, 2).unwrap_or(0x00ff_ffff),
+                read_arg_f32(ctx, argc, argv, 3).unwrap_or(1.0),
+            ))],
         }),
         _ => None,
     }
@@ -428,6 +491,15 @@ unsafe fn read_arg_usize(
     } else {
         None
     }
+}
+
+unsafe fn read_arg_bool(
+    ctx: *mut qjs::JSContext,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+    index: usize,
+) -> Option<bool> {
+    read_arg_f64(ctx, argc, argv, index).map(|value| value != 0.0)
 }
 
 unsafe fn read_arg_string(

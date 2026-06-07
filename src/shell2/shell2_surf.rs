@@ -38,6 +38,14 @@ pub(crate) enum SurfSubmit {
     Html(String),
 }
 
+#[embassy_executor::task(pool_size = 4)]
+async fn surf_handoff_html_task(html: html_shack::Html) {
+    let url = html.url.clone();
+    if !html_shack::handoff_html_to_truesurfer(html).await {
+        crate::log!("shell2-surf: handoff failed url={}\n", url);
+    }
+}
+
 pub(crate) fn try_inline_html(line: &str) -> Option<String> {
     let candidate = strip_wrapping_quotes(line.trim());
     if !looks_like_inline_html(candidate) {
@@ -80,14 +88,22 @@ pub(crate) fn try_file_reference(line: &str) -> Option<String> {
     Some(String::from(path))
 }
 
-pub(crate) fn load_inline_html(io: &'static dyn ShellBackend2, html: String) {
-    let _ = html_shack::get_ready_inline_html(html);
-    print_shell_line(io, "shack enque");
+pub(crate) fn load_inline_html(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    html: String,
+) {
+    let html = html_shack::prepare_ready_inline_html(html);
+    enqueue_and_handoff_html(spawner, io, html);
 }
 
-pub(crate) fn load_file_reference(io: &'static dyn ShellBackend2, file_ref: &str) {
-    match html_shack::get_ready_file_html(file_ref) {
-        Ok(_) => print_shell_line(io, "shack enque"),
+pub(crate) fn load_file_reference(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    file_ref: &str,
+) {
+    match html_shack::prepare_ready_file_html(file_ref) {
+        Ok(html) => enqueue_and_handoff_html(spawner, io, html),
         Err(HtmlShackFileError::NoRoot) => {
             print_shell_line(io, "surf: no TRUEOSFS root mounted");
         }
@@ -96,6 +112,25 @@ pub(crate) fn load_file_reference(io: &'static dyn ShellBackend2, file_ref: &str
         }
         Err(HtmlShackFileError::ReadFailed) => {
             print_shell_line(io, "surf: file read failed");
+        }
+    }
+}
+
+fn enqueue_and_handoff_html(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    html: html_shack::Html,
+) {
+    let url = html.url.clone();
+    let _ = html_shack::with_html_shack(|shack| shack.put_ready_html(html.clone()));
+    match surf_handoff_html_task(html) {
+        Ok(token) => {
+            let _ = spawner.spawn(token);
+            print_shell_line(io, "surf: handoff enque");
+        }
+        Err(_) => {
+            print_shell_line(io, "surf: handoff busy");
+            crate::log!("shell2-surf: handoff task busy url={}\n", url);
         }
     }
 }

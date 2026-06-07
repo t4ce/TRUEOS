@@ -168,11 +168,30 @@ pub fn with_html_shack<R>(f: impl FnOnce(&mut HtmlShack) -> R) -> R {
 }
 
 pub fn get_ready_inline_html(html: impl Into<String>) -> usize {
-    with_html_shack(|shack| shack.get_ready_inline_html(html))
+    let html = prepare_ready_inline_html(html);
+    with_html_shack(|shack| shack.put_ready_html(html))
+}
+
+pub fn prepare_ready_inline_html(html: impl Into<String>) -> Html {
+    Html::new("inline", html)
 }
 
 pub fn get_ready_file_html(file_ref: &str) -> Result<usize, HtmlShackFileError> {
-    with_html_shack(|shack| shack.get_ready_file_html(file_ref))
+    let html = prepare_ready_file_html(file_ref)?;
+    Ok(with_html_shack(|shack| shack.put_ready_html(html)))
+}
+
+pub fn prepare_ready_file_html(file_ref: &str) -> Result<Html, HtmlShackFileError> {
+    let path = normalize_file_reference(file_ref);
+    let bytes = match crate::r::io::kfs::read_file(path.as_str()) {
+        Ok(bytes) => bytes,
+        Err(crate::r::io::kfs::FsError::NoRoot) => return Err(HtmlShackFileError::NoRoot),
+        Err(crate::r::io::kfs::FsError::NotFound) => return Err(HtmlShackFileError::NotFound),
+        Err(_) => return Err(HtmlShackFileError::ReadFailed),
+    };
+
+    let source = String::from_utf8_lossy(bytes.as_slice()).into_owned();
+    Ok(Html::new(alloc::format!("file://{}", path), source))
 }
 
 fn pop_latest_request() -> Option<(HtmlRequest, usize)> {
@@ -180,13 +199,19 @@ fn pop_latest_request() -> Option<(HtmlRequest, usize)> {
 }
 
 async fn store_ready_html(html: Html) -> usize {
+    let (ready_len, _) = enqueue_ready_html_for_browser(html).await;
+    ready_len
+}
+
+pub async fn enqueue_ready_html_for_browser(html: Html) -> (usize, bool) {
     let ready_len = with_html_shack(|shack| shack.put_ready_html(html.clone()));
-    if HTML_SHACK_BROWSER_HANDOFF_ENABLE {
-        let _ = handoff_html_to_truesurfer(html).await;
+    let handed_off = if HTML_SHACK_BROWSER_HANDOFF_ENABLE {
+        handoff_html_to_truesurfer(html).await
     } else {
         crate::log!("html_shack: browser_handoff disabled url={}\n", html.url);
-    }
-    ready_len
+        false
+    };
+    (ready_len, handed_off)
 }
 
 pub async fn handoff_html_to_truesurfer(html: Html) -> bool {

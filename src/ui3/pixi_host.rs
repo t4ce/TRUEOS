@@ -80,8 +80,20 @@ impl Ui3PixiHost {
             } => {
                 self.attach(parent, child, Some(index));
             }
+            Ui3Command::RemoveChild { parent, child } => {
+                self.detach_child(parent, child);
+            }
+            Ui3Command::RemoveFromParent { node } => {
+                self.detach_from_parent(node);
+            }
             Ui3Command::RemoveChildren { parent } => {
                 self.remove_children(parent);
+            }
+            Ui3Command::SetPosition { node, position } => {
+                self.ensure_node(node, Ui3NodeKind::Container).position = position;
+            }
+            Ui3Command::SetVisible { node, visible } => {
+                self.ensure_node(node, Ui3NodeKind::Container).visible = visible;
             }
             Ui3Command::Listen { node, event } => {
                 let n = self.ensure_node(node, Ui3NodeKind::Container);
@@ -181,6 +193,24 @@ impl Ui3PixiHost {
             .get_mut(&child)
             .expect("ui3 child exists after ensure_node")
             .parent = Some(parent);
+    }
+
+    fn detach_child(&mut self, parent: Ui3NodeId, child: Ui3NodeId) {
+        if let Some(parent_node) = self.nodes.get_mut(&parent) {
+            parent_node.children.retain(|existing| *existing != child);
+        }
+        if let Some(child_node) = self.nodes.get_mut(&child)
+            && child_node.parent == Some(parent)
+        {
+            child_node.parent = None;
+        }
+    }
+
+    fn detach_from_parent(&mut self, node: Ui3NodeId) {
+        let parent = self.nodes.get(&node).and_then(|node| node.parent);
+        if let Some(parent) = parent {
+            self.detach_child(parent, node);
+        }
     }
 
     fn remove_children(&mut self, parent: Ui3NodeId) {

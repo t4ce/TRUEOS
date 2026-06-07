@@ -221,7 +221,7 @@ pub(super) async fn connect_hyper_tcp_stream(
     vnet_stream::connect_tcp_v4_stream(profile, remote, timeout_ms, 64 * 1024, "http-hyper")
         .await
         .map_err(|err| {
-            crate::log!(
+            crate::log_warn!(target: "net";
                 "http-hyper: connect failed host={} ip={}.{}.{}.{} port={} stage={}\n",
                 parsed.host,
                 ip[0],
@@ -311,7 +311,7 @@ async fn request_http_body_hyper(
     let connection = tokio::spawn(async move { connection.await });
 
     sender.ready().await.map_err(|_| HttpFetchError::TimedOut)?;
-    crate::log!(
+    crate::log_info!(target: "net";
         "http-hyper: request method={} host={} path={}\n",
         method.as_str(),
         parsed.host,
@@ -377,6 +377,6 @@ async fn request_http_body_hyper(
 
     drop(sender);
     let _ = tokio::time::timeout(core::time::Duration::from_millis(250), connection).await;
-    crate::log!("http-hyper: body-complete host={} bytes={}\n", parsed.host, out.len());
+    crate::log_info!(target: "net"; "http-hyper: body-complete host={} bytes={}\n", parsed.host, out.len());
     Ok(out)
 }

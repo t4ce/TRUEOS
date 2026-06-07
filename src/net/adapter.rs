@@ -14,8 +14,6 @@ use smoltcp::wire::{
     Ipv6Repr, NdiscPrefixInfoFlags, NdiscRepr, RawHardwareAddress,
 };
 
-use crate::log;
-
 // Internal netbench (kernel-side) ------------------------------------------------
 //
 // `bench.net` via vnet is convenient but it copies payload bytes multiple times:
@@ -730,7 +728,7 @@ impl<'a> Device for AdapterDeviceAt<'a> {
                 .map(|c| c.fetch_add(1, Ordering::Relaxed) + 1)
                 .unwrap_or(new_total);
             if (new_total & NET_FRAME_LOG_MASK) == 0 {
-                log!("net: rx frames={}\n", new_total);
+                crate::log_info!(target: "net"; "net: rx frames={}\n", new_total);
             }
 
             // DHCP offer/ack detector (UDP 67 -> 68). Rate-limited so we can leave
@@ -1404,7 +1402,7 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
         self.tx_buffer.push_back(buf);
 
         if (new_total & NET_FRAME_LOG_MASK) == 0 {
-            log!(
+            crate::log_info!(target: "net";
                 "net: tx frames={} dropped={}\n",
                 new_total,
                 NET_TX_DROPPED.load(Ordering::Relaxed)

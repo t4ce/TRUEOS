@@ -947,10 +947,10 @@ fn handle_submit(
             if let Some(parsed) = shell2_surf::try_parse_with_prefix(submitted, surf_prefix) {
                 match parsed {
                     shell2_surf::SurfSubmit::Html(html) => {
-                        shell2_surf::load_inline_html(io, html);
+                        shell2_surf::load_inline_html(spawner, io, html);
                     }
                     shell2_surf::SurfSubmit::File(file_ref) => {
-                        shell2_surf::load_file_reference(io, file_ref.as_str());
+                        shell2_surf::load_file_reference(spawner, io, file_ref.as_str());
                     }
                     shell2_surf::SurfSubmit::Url(url) => {
                         shell2_surf::prepare_call_with_url(spawner, io, url.as_str());
