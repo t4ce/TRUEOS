@@ -181,6 +181,7 @@ pub fn init_once() {
     let _ = self::gpgpu::upload_glyph_mask_rgba8_kernel();
     let _ = self::gpgpu::upload_present_rgba8_to_primary_xrgb_rect_kernel();
     let _ = self::gpgpu::upload_sprite64_worklist_rgba8_kernel();
+    let _ = self::gpgpu::upload_mandel64_worklist_rgba8_kernel();
     let _ = self::gpgpu::upload_canvas3d_project_rgba8_kernel();
     let _ = self::gpgpu::upload_canvas3d_transform_q16_kernel();
     let _ = self::gpgpu::upload_canvas3d_clip_box_q16_kernel();

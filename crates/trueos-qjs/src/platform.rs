@@ -112,6 +112,29 @@ pub mod ui {
         fn trueos_cabi_ui3_scene_begin(browser_id: u32, root_id: u32) -> i32;
         fn trueos_cabi_ui3_scene_node(browser_id: u32, node_id: u32, kind: u32) -> i32;
         fn trueos_cabi_ui3_scene_add_child(browser_id: u32, parent: u32, child: u32) -> i32;
+        fn trueos_cabi_ui3_scene_add_child_at(
+            browser_id: u32,
+            parent: u32,
+            child: u32,
+            index: u32,
+        ) -> i32;
+        fn trueos_cabi_ui3_scene_set_child_index(
+            browser_id: u32,
+            parent: u32,
+            child: u32,
+            index: u32,
+        ) -> i32;
+        fn trueos_cabi_ui3_scene_remove_child(browser_id: u32, parent: u32, child: u32) -> i32;
+        fn trueos_cabi_ui3_scene_remove_from_parent(browser_id: u32, node_id: u32) -> i32;
+        fn trueos_cabi_ui3_scene_remove_children(browser_id: u32, parent: u32) -> i32;
+        fn trueos_cabi_ui3_scene_visible(browser_id: u32, node_id: u32, visible: bool) -> i32;
+        fn trueos_cabi_ui3_scene_listen(
+            browser_id: u32,
+            node_id: u32,
+            event_ptr: *const u8,
+            event_len: usize,
+        ) -> i32;
+        fn trueos_cabi_ui3_scene_remove_all_listeners(browser_id: u32, node_id: u32) -> i32;
         fn trueos_cabi_ui3_scene_position(browser_id: u32, node_id: u32, x: f32, y: f32) -> i32;
         fn trueos_cabi_ui3_scene_graphics_clear(browser_id: u32, node_id: u32) -> i32;
         fn trueos_cabi_ui3_scene_graphics_rect(
@@ -134,6 +157,25 @@ pub mod ui {
             rgb: u32,
             alpha: f32,
             width: f32,
+        ) -> i32;
+        fn trueos_cabi_ui3_scene_graphics_circle(
+            browser_id: u32,
+            node_id: u32,
+            x: f32,
+            y: f32,
+            radius: f32,
+        ) -> i32;
+        fn trueos_cabi_ui3_scene_graphics_move_to(
+            browser_id: u32,
+            node_id: u32,
+            x: f32,
+            y: f32,
+        ) -> i32;
+        fn trueos_cabi_ui3_scene_graphics_line_to(
+            browser_id: u32,
+            node_id: u32,
+            x: f32,
+            y: f32,
         ) -> i32;
         fn trueos_cabi_ui3_scene_text(
             browser_id: u32,
@@ -168,6 +210,48 @@ pub mod ui {
     #[inline]
     pub fn ui3_scene_add_child(browser_id: u32, parent: u32, child: u32) -> bool {
         unsafe { trueos_cabi_ui3_scene_add_child(browser_id, parent, child) >= 0 }
+    }
+
+    #[inline]
+    pub fn ui3_scene_add_child_at(browser_id: u32, parent: u32, child: u32, index: u32) -> bool {
+        unsafe { trueos_cabi_ui3_scene_add_child_at(browser_id, parent, child, index) >= 0 }
+    }
+
+    #[inline]
+    pub fn ui3_scene_set_child_index(browser_id: u32, parent: u32, child: u32, index: u32) -> bool {
+        unsafe { trueos_cabi_ui3_scene_set_child_index(browser_id, parent, child, index) >= 0 }
+    }
+
+    #[inline]
+    pub fn ui3_scene_remove_child(browser_id: u32, parent: u32, child: u32) -> bool {
+        unsafe { trueos_cabi_ui3_scene_remove_child(browser_id, parent, child) >= 0 }
+    }
+
+    #[inline]
+    pub fn ui3_scene_remove_from_parent(browser_id: u32, node_id: u32) -> bool {
+        unsafe { trueos_cabi_ui3_scene_remove_from_parent(browser_id, node_id) >= 0 }
+    }
+
+    #[inline]
+    pub fn ui3_scene_remove_children(browser_id: u32, parent: u32) -> bool {
+        unsafe { trueos_cabi_ui3_scene_remove_children(browser_id, parent) >= 0 }
+    }
+
+    #[inline]
+    pub fn ui3_scene_visible(browser_id: u32, node_id: u32, visible: bool) -> bool {
+        unsafe { trueos_cabi_ui3_scene_visible(browser_id, node_id, visible) >= 0 }
+    }
+
+    #[inline]
+    pub fn ui3_scene_listen(browser_id: u32, node_id: u32, event: &str) -> bool {
+        unsafe {
+            trueos_cabi_ui3_scene_listen(browser_id, node_id, event.as_ptr(), event.len()) >= 0
+        }
+    }
+
+    #[inline]
+    pub fn ui3_scene_remove_all_listeners(browser_id: u32, node_id: u32) -> bool {
+        unsafe { trueos_cabi_ui3_scene_remove_all_listeners(browser_id, node_id) >= 0 }
     }
 
     #[inline]
@@ -208,6 +292,27 @@ pub mod ui {
         unsafe {
             trueos_cabi_ui3_scene_graphics_stroke(browser_id, node_id, rgb, alpha, width) >= 0
         }
+    }
+
+    #[inline]
+    pub fn ui3_scene_graphics_circle(
+        browser_id: u32,
+        node_id: u32,
+        x: f32,
+        y: f32,
+        radius: f32,
+    ) -> bool {
+        unsafe { trueos_cabi_ui3_scene_graphics_circle(browser_id, node_id, x, y, radius) >= 0 }
+    }
+
+    #[inline]
+    pub fn ui3_scene_graphics_move_to(browser_id: u32, node_id: u32, x: f32, y: f32) -> bool {
+        unsafe { trueos_cabi_ui3_scene_graphics_move_to(browser_id, node_id, x, y) >= 0 }
+    }
+
+    #[inline]
+    pub fn ui3_scene_graphics_line_to(browser_id: u32, node_id: u32, x: f32, y: f32) -> bool {
+        unsafe { trueos_cabi_ui3_scene_graphics_line_to(browser_id, node_id, x, y) >= 0 }
     }
 
     #[inline]

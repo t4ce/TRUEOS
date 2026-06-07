@@ -217,7 +217,7 @@ fn ui3_scene_kind(kind: u32) -> Ui3NodeKind {
 
 fn ui3_scene_color(rgb: u32, alpha: f32) -> Ui3Color {
     Ui3Color {
-        rgba: 0xff00_0000 | (rgb & 0x00ff_ffff),
+        rgba: ((rgb & 0x00ff_ffff) << 8) | 0xff,
         alpha,
     }
 }
@@ -284,6 +284,101 @@ pub extern "C" fn trueos_cabi_ui3_scene_node(browser_id: u32, node_id: u32, kind
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_ui3_scene_add_child(browser_id: u32, parent: u32, child: u32) -> i32 {
     ui3_scene_apply(browser_id, Ui3Command::AddChild { parent, child })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_ui3_scene_add_child_at(
+    browser_id: u32,
+    parent: u32,
+    child: u32,
+    index: u32,
+) -> i32 {
+    ui3_scene_apply(
+        browser_id,
+        Ui3Command::AddChildAt {
+            parent,
+            child,
+            index: index as usize,
+        },
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_ui3_scene_set_child_index(
+    browser_id: u32,
+    parent: u32,
+    child: u32,
+    index: u32,
+) -> i32 {
+    ui3_scene_apply(
+        browser_id,
+        Ui3Command::SetChildIndex {
+            parent,
+            child,
+            index: index as usize,
+        },
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_ui3_scene_remove_child(
+    browser_id: u32,
+    parent: u32,
+    child: u32,
+) -> i32 {
+    ui3_scene_apply(browser_id, Ui3Command::RemoveChild { parent, child })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_ui3_scene_remove_from_parent(browser_id: u32, node_id: u32) -> i32 {
+    ui3_scene_apply(browser_id, Ui3Command::RemoveFromParent { node: node_id })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_ui3_scene_remove_children(browser_id: u32, parent: u32) -> i32 {
+    ui3_scene_apply(browser_id, Ui3Command::RemoveChildren { parent })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_ui3_scene_visible(
+    browser_id: u32,
+    node_id: u32,
+    visible: bool,
+) -> i32 {
+    ui3_scene_apply(
+        browser_id,
+        Ui3Command::SetVisible {
+            node: node_id,
+            visible,
+        },
+    )
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui3_scene_listen(
+    browser_id: u32,
+    node_id: u32,
+    event_ptr: *const u8,
+    event_len: usize,
+) -> i32 {
+    let event = if event_ptr.is_null() || event_len == 0 {
+        String::new()
+    } else {
+        let bytes = unsafe { core::slice::from_raw_parts(event_ptr, event_len) };
+        String::from_utf8_lossy(bytes).into_owned()
+    };
+    ui3_scene_apply(
+        browser_id,
+        Ui3Command::Listen {
+            node: node_id,
+            event: self::pixi_host::pointer_event_kind_from_name(event.as_str()),
+        },
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_ui3_scene_remove_all_listeners(browser_id: u32, node_id: u32) -> i32 {
+    ui3_scene_apply(browser_id, Ui3Command::RemoveAllListeners { node: node_id })
 }
 
 #[unsafe(no_mangle)]
@@ -355,6 +450,56 @@ pub extern "C" fn trueos_cabi_ui3_scene_graphics_stroke(
             node: node_id,
             color: ui3_scene_color(rgb, alpha),
             width,
+        },
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_ui3_scene_graphics_circle(
+    browser_id: u32,
+    node_id: u32,
+    x: f32,
+    y: f32,
+    radius: f32,
+) -> i32 {
+    ui3_scene_apply(
+        browser_id,
+        Ui3Command::GraphicsCircle {
+            node: node_id,
+            center: Ui3Point { x, y },
+            radius,
+        },
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_ui3_scene_graphics_move_to(
+    browser_id: u32,
+    node_id: u32,
+    x: f32,
+    y: f32,
+) -> i32 {
+    ui3_scene_apply(
+        browser_id,
+        Ui3Command::GraphicsMoveTo {
+            node: node_id,
+            to: Ui3Point { x, y },
+        },
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_ui3_scene_graphics_line_to(
+    browser_id: u32,
+    node_id: u32,
+    x: f32,
+    y: f32,
+) -> i32 {
+    ui3_scene_apply(
+        browser_id,
+        Ui3Command::GraphicsLineTo {
+            node: node_id,
+            to: Ui3Point { x, y },
         },
     )
 }

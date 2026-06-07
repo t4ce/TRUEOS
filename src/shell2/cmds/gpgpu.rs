@@ -5,19 +5,21 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use super::super::{ShellBackend2, print_shell_line};
 use crate::intel::gpgpu::{
     GPGPU_SHELL_SURFACE_HEIGHT, GPGPU_SHELL_SURFACE_PITCH_BYTES, GPGPU_SHELL_SURFACE_WIDTH,
-    GpgpuPoint, GpgpuRect, alpha_blend_worklist_probe_ok, alpha_blend_worklist_probe_ran,
-    alpha_blend_worklist_rgba8_upload_status, canvas3d_plane_fill_rgba8_upload_status,
-    canvas3d_project_rgba8_upload_status, canvas3d_transform_q16_upload_status,
-    copy_rect_rgba8_upload_status, fill_rect_worklist_probe_ok, fill_rect_worklist_probe_ran,
+    GpgpuMandel64Placement, GpgpuPoint, GpgpuRect, alpha_blend_worklist_probe_ok,
+    alpha_blend_worklist_probe_ran, alpha_blend_worklist_rgba8_upload_status,
+    canvas3d_plane_fill_rgba8_upload_status, canvas3d_project_rgba8_upload_status,
+    canvas3d_transform_q16_upload_status, copy_rect_rgba8_upload_status,
+    fill_rect_worklist_probe_ok, fill_rect_worklist_probe_ran,
     fill_rect_worklist_rgba8_upload_status, glyph_mask_rgba8_upload_status,
     gradient_rect_worklist_probe_ok, gradient_rect_worklist_probe_ran,
-    gradient_rect_worklist_rgba8_upload_status, present_rgba8_to_primary_xrgb_rect_upload_status,
+    gradient_rect_worklist_rgba8_upload_status, mandel64_worklist_primary,
+    mandel64_worklist_rgba8_upload_status, present_rgba8_to_primary_xrgb_rect_upload_status,
     rect_worklist_probe_ready, shell_copy_rgba8, shell_copy_scanout_center_rgba8,
-    shell_cube20_project_spin, shell_twemoji_atlas_worklist_present_scanout,
-    shell_twemoji_atlas_worklist_scanout, shell_twemoji_atlas_worklist_scanout_present,
-    shell_twemoji_atlas_worklist_slot_scanout, sprite64_worklist_rgba8_upload_status,
-    submit_alpha_blend_worklist_rgba8_probe_now, submit_fill_rect_worklist_rgba8_probe_now,
-    submit_gradient_rect_worklist_rgba8_probe_now,
+    shell_cube20_project_spin, shell_mandel64_worklist_scanout,
+    shell_twemoji_atlas_worklist_present_scanout, shell_twemoji_atlas_worklist_scanout,
+    shell_twemoji_atlas_worklist_scanout_present, shell_twemoji_atlas_worklist_slot_scanout,
+    sprite64_worklist_rgba8_upload_status, submit_alpha_blend_worklist_rgba8_probe_now,
+    submit_fill_rect_worklist_rgba8_probe_now, submit_gradient_rect_worklist_rgba8_probe_now,
 };
 use crate::shell2::shell2_cmd::ParseOutcome;
 
@@ -42,6 +44,8 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "gpgpu athlas work [count]");
     print_shell_line(io, "gpgpu athlas go [duration_ms] [cadence_ms] [count] [present_every]");
     print_shell_line(io, "gpgpu athlas_go [duration_ms] [cadence_ms] [count] [present_every]");
+    print_shell_line(io, "gpgpu mandel64 [count]");
+    print_shell_line(io, "gpgpu mandel64 <src_x> <src_y> <dst_x> <dst_y>");
     print_shell_line(io, "gpgpu canvas [duration_ms] [cadence_ms:0.1..200]");
     print_shell_line(io, "gpgpu plane [half_q16]");
     print_shell_line(io, "gpgpu rectprobe");
@@ -259,11 +263,12 @@ fn print_status(io: &'static dyn ShellBackend2) {
     let glyph = glyph_mask_rgba8_upload_status();
     let present = present_rgba8_to_primary_xrgb_rect_upload_status();
     let work = sprite64_worklist_rgba8_upload_status();
+    let mandel64 = mandel64_worklist_rgba8_upload_status();
     let canvas = canvas3d_project_rgba8_upload_status();
     let transform = canvas3d_transform_q16_upload_status();
     let plane_fill = canvas3d_plane_fill_rgba8_upload_status();
     let msg = alloc::format!(
-        "gpgpu: copy_upload={} fill_worklist_upload={} fill_worklist_ran={} fill_worklist_probe={} gradient_worklist_upload={} gradient_worklist_ran={} gradient_worklist_probe={} alpha_worklist_upload={} alpha_worklist_ran={} alpha_worklist_probe={} rect_worklist_ready={} glyph_mask_upload={} present_xrgb_upload={} worklist_upload={} canvas3d_upload={} canvas3d_transform_upload={} canvas3d_plane_fill_upload={} shell_surface={}x{} pitch={} gpu=0x008A0000",
+        "gpgpu: copy_upload={} fill_worklist_upload={} fill_worklist_ran={} fill_worklist_probe={} gradient_worklist_upload={} gradient_worklist_ran={} gradient_worklist_probe={} alpha_worklist_upload={} alpha_worklist_ran={} alpha_worklist_probe={} rect_worklist_ready={} glyph_mask_upload={} present_xrgb_upload={} worklist_upload={} mandel64_worklist_upload={} canvas3d_upload={} canvas3d_transform_upload={} canvas3d_plane_fill_upload={} shell_surface={}x{} pitch={} gpu=0x008A0000",
         artifact_status(copy.is_some()),
         artifact_status(fill_worklist.is_some()),
         artifact_status(fill_rect_worklist_probe_ran()),
@@ -278,6 +283,7 @@ fn print_status(io: &'static dyn ShellBackend2) {
         artifact_status(glyph.is_some()),
         artifact_status(present.is_some()),
         artifact_status(work.is_some()),
+        artifact_status(mandel64.is_some()),
         artifact_status(canvas.is_some()),
         artifact_status(transform.is_some()),
         artifact_status(plane_fill.is_some()),
@@ -475,6 +481,78 @@ fn run_atlas_work(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>
         result.primary_height,
         result.slots,
         result.atlas_gpu,
+        result.desc_gpu,
+        result.presented as u8
+    );
+    print_shell_line(io, msg.as_str());
+}
+
+fn run_mandel64(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+    let first = args.next();
+    let result = if let Some(raw) = first {
+        if args.clone().count() == 3 {
+            let Some(src_x) = raw.parse::<i32>().ok() else {
+                usage(io);
+                return;
+            };
+            let Some(src_y) = parse_i32(args.next()) else {
+                usage(io);
+                return;
+            };
+            let Some(dst_x) = parse_i32(args.next()) else {
+                usage(io);
+                return;
+            };
+            let Some(dst_y) = parse_i32(args.next()) else {
+                usage(io);
+                return;
+            };
+            mandel64_worklist_primary(
+                &[GpgpuMandel64Placement {
+                    src_x,
+                    src_y,
+                    dst_x,
+                    dst_y,
+                }],
+                true,
+            )
+        } else if args.next().is_none() {
+            let Some(count) = raw.parse::<u32>().ok() else {
+                usage(io);
+                return;
+            };
+            shell_mandel64_worklist_scanout(count)
+        } else {
+            usage(io);
+            return;
+        }
+    } else {
+        shell_mandel64_worklist_scanout(u32::MAX)
+    };
+
+    let Some(result) = result else {
+        print_shell_line(
+            io,
+            "gpgpu mandel64: no result (check primary surface, iGPU claim, and mandel64 artifact)",
+        );
+        return;
+    };
+    let msg = alloc::format!(
+        "gpgpu mandel64: mode=mandel64-worklist ok={} requested={} desc={} walkers={} pixels={} submit_ms={} present_ms={} total_ms={} last_src={},{} last_dst={},{} primary={}x{} desc_gpu=0x{:X} presented={}",
+        result.ok as u8,
+        result.requested,
+        result.descriptors,
+        result.walkers,
+        result.pixels,
+        result.submit_ms,
+        result.present_ms,
+        result.total_ms,
+        result.last_src_xy.x,
+        result.last_src_xy.y,
+        result.last_dst_xy.x,
+        result.last_dst_xy.y,
+        result.primary_width,
+        result.primary_height,
         result.desc_gpu,
         result.presented as u8
     );
@@ -739,6 +817,8 @@ pub(crate) fn try_parse(
         run_atlas(io, args);
     } else if cmd.eq_ignore_ascii_case("athlas_go") {
         run_atlas_go(io, args);
+    } else if cmd.eq_ignore_ascii_case("mandel64") {
+        run_mandel64(io, args);
     } else if cmd.eq_ignore_ascii_case("canvas") {
         run_canvas(io, args);
     } else if cmd.eq_ignore_ascii_case("plane") {

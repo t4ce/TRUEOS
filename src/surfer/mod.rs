@@ -1,6 +1,5 @@
 extern crate alloc;
 
-pub(crate) mod html_demo;
 pub(crate) mod html_shack;
 
 use alloc::string::String;
@@ -277,12 +276,6 @@ fn spawn_truesurfer_on_worker(browser_instance_id: u32) -> Result<bool, SpawnErr
     };
     let token = trueos_qjs::browser_task::truesurfer_task(browser_instance_id)?;
     worker_spawner.spawn(token);
-    Ok(true)
-}
-
-pub(crate) fn spawn_html_demo(spawner: Spawner) -> Result<bool, SpawnError> {
-    let token = html_demo::html_demo_task()?;
-    spawner.spawn(token);
     Ok(true)
 }
 
