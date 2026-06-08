@@ -6,7 +6,6 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::{Mutex, Once};
-use trueos_gfx_core::Rgba8;
 
 use trueos_qjs as qjs;
 
@@ -481,8 +480,7 @@ fn lower_present_and_count(
 ) {
     runtime.frame_count = runtime.frame_count.wrapping_add(1).max(1);
     let lower_start_ms = super::now_ms();
-    let mut geometry = lower_ui3_frame_geometry(&runtime.host, frame);
-    let (cursor_draws, cursor_hits) = append_kernel_cursor_overlays(&runtime.host, &mut geometry);
+    let geometry = lower_ui3_frame_geometry(&runtime.host, frame);
     let lower_ms = super::now_ms().saturating_sub(lower_start_ms);
     let present_start_ms = super::now_ms();
     let present = present_ui3_frame_to_intel_primary(&geometry);
@@ -526,15 +524,13 @@ fn lower_present_and_count(
             }
         }
         crate::log!(
-            "ui3-pixi-service: render browser={} root={} ops={} filtered_ops={} draws={} nodes={} cursor_draws={} cursor_hits={} solid_rects={} meshes={} textures={} text={} presented={} fill_descs={} blend_descs={} apply_ms={} lower_ms={} present_wall_ms={} rect_ms={} mesh_ms={} sprite_ms={} publish_ms={} present_ms={} total_ms={} gap_ms={}\n",
+            "ui3-pixi-service: render browser={} root={} ops={} filtered_ops={} draws={} nodes={} solid_rects={} meshes={} textures={} text={} presented={} fill_descs={} blend_descs={} apply_ms={} lower_ms={} present_wall_ms={} rect_ms={} mesh_ms={} sprite_ms={} publish_ms={} present_ms={} total_ms={} gap_ms={}\n",
             browser_id,
             frame.root,
             runtime.op_count,
             runtime.filtered_op_count,
             geometry.draws.len(),
             frame.ordered_nodes.len(),
-            cursor_draws,
-            cursor_hits,
             present.solid_rects,
             present.mesh_draws,
             present.texture_draws,
@@ -566,87 +562,6 @@ fn lower_present_and_count(
             present.text_runs
         );
     }
-}
-
-fn append_kernel_cursor_overlays(
-    host: &Ui3PixiHost,
-    geometry: &mut super::Ui3GeometryFrame,
-) -> (usize, usize) {
-    let cursors = crate::r::cursor::ordered_cursor_snapshot_with_slot_buttons();
-    if cursors.is_empty() {
-        return (0, 0);
-    }
-    let (view_w, view_h) = crate::intel::active_scanout_dimensions()
-        .map(|(w, h)| (w.max(1) as f32, h.max(1) as f32))
-        .unwrap_or((1920.0, 1080.0));
-    let mut draw_count = 0usize;
-    let mut hit_count = 0usize;
-    for (idx, (slot_id, nx, ny, buttons)) in cursors.iter().copied().enumerate() {
-        let cursor_id = (idx as u32).saturating_add(1);
-        let x = (nx as f32 * view_w).clamp(0.0, view_w - 1.0);
-        let y = (ny as f32 * view_h).clamp(0.0, view_h - 1.0);
-        let color = crate::r::ui2::cursor_color_rgba8_for_cursor_id(cursor_id);
-        let target = host.hit_scene().hit_at(x, y);
-        if target.is_some() {
-            hit_count = hit_count.saturating_add(1);
-        }
-        append_cursor_cross(geometry, cursor_id, x, y, color, buttons != 0);
-        draw_count = draw_count.saturating_add(3);
-        if idx < 4 {
-            crate::log!(
-                "ui3-pixi-service: cursor slot={} cursor={} x={} y={} buttons=0x{:x} hit_node={}\n",
-                slot_id,
-                cursor_id,
-                x as i32,
-                y as i32,
-                buttons,
-                target.map(|hit| hit.node).unwrap_or(0)
-            );
-        }
-    }
-    (draw_count, hit_count)
-}
-
-fn append_cursor_cross(
-    geometry: &mut super::Ui3GeometryFrame,
-    cursor_id: u32,
-    x: f32,
-    y: f32,
-    color: Rgba8,
-    pressed: bool,
-) {
-    let size = if pressed { 14.0 } else { 11.0 };
-    let arm = if pressed { 3.0 } else { 2.0 };
-    let dark = Rgba8::new(0, 0, 0, 220);
-    push_cursor_rect(geometry, cursor_id, x - size, y - arm * 0.5, size * 2.0, arm, dark);
-    push_cursor_rect(geometry, cursor_id, x - arm * 0.5, y - size, arm, size * 2.0, dark);
-    push_cursor_rect(
-        geometry,
-        cursor_id,
-        x - size + 1.0,
-        y - arm * 0.5 + 1.0,
-        size * 2.0 - 2.0,
-        arm.max(1.0),
-        color,
-    );
-}
-
-fn push_cursor_rect(
-    geometry: &mut super::Ui3GeometryFrame,
-    cursor_id: u32,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    color: Rgba8,
-) {
-    geometry.draws.push(super::Ui3LoweredDraw::SolidRect {
-        node: 0xC000_0000 | cursor_id,
-        rect: Ui3Rect { x, y, w, h },
-        color,
-        kind: super::Ui3SolidRectKind::Fill,
-        clip: None,
-    });
 }
 
 fn pixi_light_filter_command(runtime: &mut Ui3PixiServiceRuntime, command: &Ui3Command) -> bool {
