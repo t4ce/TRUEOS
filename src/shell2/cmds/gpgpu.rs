@@ -513,6 +513,8 @@ fn run_mandel64(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) 
                     src_y,
                     dst_x,
                     dst_y,
+                    width: 64,
+                    height: 64,
                 }],
                 true,
             )

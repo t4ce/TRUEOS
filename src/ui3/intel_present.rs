@@ -5,8 +5,6 @@ use trueos_gfx_core::Rgba8;
 
 use super::{Ui3GeometryFrame, Ui3LoweredDraw, Ui3Rect};
 
-const UI3_SMILEY_TEXT_ADVANCE_PX: f32 = 64.0;
-
 #[derive(Copy, Clone, Debug, Default)]
 pub(super) struct Ui3IntelPresentSummary {
     pub solid_rects: usize,
@@ -19,6 +17,10 @@ pub(super) struct Ui3IntelPresentSummary {
     pub blend_submits: usize,
     pub present_ms: u64,
     pub total_ms: u64,
+    pub rect_ms: u64,
+    pub sprite_ms: u64,
+    pub publish_ms: u64,
+    primary_dirty: bool,
 }
 
 pub(super) fn present_ui3_frame_to_intel_primary(
@@ -27,12 +29,10 @@ pub(super) fn present_ui3_frame_to_intel_primary(
     let mut summary = Ui3IntelPresentSummary::default();
     let mut rects = Vec::new();
     let mut rect_run_opaque = true;
-    let mut smileys = Vec::new();
 
     for draw in &frame.draws {
         match draw {
             Ui3LoweredDraw::SolidRect { rect, color, .. } => {
-                flush_smiley_run(&mut smileys, &mut summary);
                 if let Some(rect) = lower_rect(*rect) {
                     let color_rgba = rgba8_to_kernel_rgba(*color);
                     let opaque = kernel_rgba_alpha(color_rgba) == 0xff;
@@ -47,16 +47,21 @@ pub(super) fn present_ui3_frame_to_intel_primary(
                 flush_rect_run(&mut rects, &mut summary);
                 summary.mesh_draws = summary.mesh_draws.saturating_add(1);
             }
-            Ui3LoweredDraw::TextRun { origin, text, .. } => {
+            Ui3LoweredDraw::TextRun {
+                origin,
+                text,
+                color,
+                ..
+            } => {
                 flush_rect_run(&mut rects, &mut summary);
                 summary.text_runs = summary.text_runs.saturating_add(1);
-                push_smiley_text_run(&mut smileys, origin.x, origin.y, text.as_str());
+                draw_font_text_run(origin.x, origin.y, text.as_str(), *color, &mut summary);
             }
         }
     }
 
     flush_rect_run(&mut rects, &mut summary);
-    flush_smiley_run(&mut smileys, &mut summary);
+    publish_frame(&mut summary);
 
     summary
 }
@@ -70,63 +75,78 @@ fn flush_rect_run(
     }
 
     summary.solid_rects = summary.solid_rects.saturating_add(rects.len());
-    if let Some(result) = crate::intel::gpgpu::solid_rects_rgba8_over_primary(rects, true) {
-        summary.presented |= result.ok && result.presented;
-        summary.fill_descs = summary.fill_descs.saturating_add(result.fill_descs);
-        summary.fill_submits = summary.fill_submits.saturating_add(result.fill_submits);
-        summary.blend_descs = summary.blend_descs.saturating_add(result.blend_descs);
-        summary.blend_submits = summary.blend_submits.saturating_add(result.blend_submits);
-        summary.present_ms = summary.present_ms.saturating_add(result.present_ms);
-        summary.total_ms = summary.total_ms.saturating_add(result.total_ms);
+    let result = crate::intel::gpgpu::cpu_solid_rects_rgba8_over_primary(rects)
+        .or_else(|| crate::intel::gpgpu::solid_rects_rgba8_over_primary(rects, false));
+    if let Some(result) = result {
+        accumulate_rect_result(summary, result);
     }
     rects.clear();
 }
 
-fn flush_smiley_run(
-    placements: &mut Vec<crate::intel::gpgpu::GpgpuTwemojiSprite64Placement>,
+fn accumulate_rect_result(
     summary: &mut Ui3IntelPresentSummary,
+    result: crate::intel::gpgpu::GpgpuSolidRectOverlayResult,
 ) {
-    if placements.is_empty() {
-        return;
-    }
-
-    if let Some(result) = crate::intel::gpgpu::twemoji_sprite64_worklist_primary(placements, true) {
-        summary.presented |= result.ok && result.presented;
-        summary.total_ms = summary.total_ms.saturating_add(result.total_ms);
-        summary.present_ms = summary.present_ms.saturating_add(result.present_ms);
-    }
-    placements.clear();
+    summary.primary_dirty |= result.ok && result.rects > 0;
+    summary.fill_descs = summary.fill_descs.saturating_add(result.fill_descs);
+    summary.fill_submits = summary.fill_submits.saturating_add(result.fill_submits);
+    summary.blend_descs = summary.blend_descs.saturating_add(result.blend_descs);
+    summary.blend_submits = summary.blend_submits.saturating_add(result.blend_submits);
+    summary.present_ms = summary.present_ms.saturating_add(result.present_ms);
+    summary.total_ms = summary.total_ms.saturating_add(result.total_ms);
+    summary.rect_ms = summary.rect_ms.saturating_add(result.total_ms);
 }
 
-fn push_smiley_text_run(
-    out: &mut Vec<crate::intel::gpgpu::GpgpuTwemojiSprite64Placement>,
+fn draw_font_text_run(
     x: f32,
     y: f32,
     text: &str,
+    color: Rgba8,
+    summary: &mut Ui3IntelPresentSummary,
 ) {
-    let slots = crate::gfx::althlasfont::twemoji::twemoji_slot_count().max(1);
-    let mut pen_x = x;
-    for byte in text.bytes() {
-        if matches!(byte, b' ' | b'\t' | b'\n' | b'\r') {
-            pen_x += UI3_SMILEY_TEXT_ADVANCE_PX;
-            continue;
-        }
-        push_smiley_slot(out, u16::from(byte) % slots, pen_x, y);
-        pen_x += UI3_SMILEY_TEXT_ADVANCE_PX;
+    if text.is_empty() || !x.is_finite() || !y.is_finite() {
+        return;
+    }
+
+    let begin_rc =
+        unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame_preserve_no_present(0) };
+    if begin_rc != 0 {
+        return;
+    }
+
+    let (view_w, view_h) = crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
+    let max_width_px = if x < view_w as f32 {
+        (view_w as f32 - x.max(0.0)).max(1.0)
+    } else {
+        view_w as f32
+    };
+    let drew = crate::r::ui2::ui2_font_draw_text_line_with_tier_rgba_no_present(
+        text,
+        x,
+        y,
+        max_width_px,
+        crate::r::ui2::Ui2FontTier::OneX,
+        view_w,
+        view_h,
+        (color.r, color.g, color.b, color.a),
+    );
+    let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
+    if drew {
+        summary.primary_dirty = true;
     }
 }
 
-fn push_smiley_slot(
-    out: &mut Vec<crate::intel::gpgpu::GpgpuTwemojiSprite64Placement>,
-    slot: u16,
-    x: f32,
-    y: f32,
-) {
-    out.push(crate::intel::gpgpu::GpgpuTwemojiSprite64Placement {
-        slot,
-        dst_x: libm::roundf(x) as i32,
-        dst_y: libm::roundf(y) as i32,
-    });
+fn publish_frame(summary: &mut Ui3IntelPresentSummary) {
+    if !summary.primary_dirty {
+        return;
+    }
+
+    if let Some(present_ms) = crate::intel::gpgpu::present_primary_external_write("ui3-frame") {
+        summary.presented = true;
+        summary.present_ms = summary.present_ms.saturating_add(present_ms);
+        summary.total_ms = summary.total_ms.saturating_add(present_ms);
+        summary.publish_ms = summary.publish_ms.saturating_add(present_ms);
+    }
 }
 
 fn lower_rect(rect: Ui3Rect) -> Option<crate::intel::gpgpu::GpgpuRect> {

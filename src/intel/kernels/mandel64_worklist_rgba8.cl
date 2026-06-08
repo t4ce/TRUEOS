@@ -2,7 +2,7 @@
 //
 // Contract:
 // - Destination is a linear RGBA8 buffer packed as AABBGGRR in a u32.
-// - Each descriptor draws one fixed 64x4 Mandelbrot row-band.
+// - Each descriptor draws one clipped Mandelbrot row-band, up to 64x4 pixels.
 // - desc.src_xy is a signed 16-bit Mandelbrot-space pixel offset.
 // - desc.dst_xy is a signed 16-bit destination pixel coordinate.
 // - One SIMD16 walker consumes a descriptor slice:
@@ -10,6 +10,10 @@
 // - Each output pixel runs up to 256 Mandelbrot iterations.
 
 #define MANDEL64_BAND_ROWS 4u
+#define MANDEL64_BAND_COLS 64u
+#define MANDEL64_FLAG_ROWS_MASK 0x000000FFu
+#define MANDEL64_FLAG_COLS_SHIFT 8u
+#define MANDEL64_FLAG_COLS_MASK 0x0000FF00u
 
 typedef struct Mandel64Desc {
     uint src_xy;
@@ -25,24 +29,24 @@ static inline int unpack_i16(uint value)
 
 static inline uint mandel256_gray(int src_x, int src_y, uint local_x, uint local_y, uint color_rgba)
 {
-    // Q12 fixed-point mapping over the current 2560x1408 full-tile scanout:
+    // Q12 fixed-point mapping over the current 2560x1440 scanout:
     // real [-2, +1], imaginary [-1, +1].
     int cr = -8192 + ((src_x + (int)local_x) * 12288) / 2560;
-    int ci = -4096 + ((src_y + (int)local_y) * 8192) / 1408;
+    int ci = -4096 + ((src_y + (int)local_y) * 8192) / 1440;
     int zr = 0;
     int zi = 0;
     uint iter = 0;
 
     for (; iter < 256u; iter++) {
-        long zr2 = ((long)zr * (long)zr) >> 12;
-        long zi2 = ((long)zi * (long)zi) >> 12;
+        int zr2 = (zr * zr) >> 12;
+        int zi2 = (zi * zi) >> 12;
         if (zr2 + zi2 > 16384) {
             break;
         }
 
-        long zri = ((long)zr * (long)zi) >> 11;
-        zr = (int)(zr2 - zi2) + cr;
-        zi = (int)zri + ci;
+        int zri = (zr * zi) >> 11;
+        zr = zr2 - zi2 + cr;
+        zi = zri + ci;
     }
 
     if (iter == 256u) {
@@ -82,14 +86,22 @@ __kernel void mandel64_worklist_rgba8(
         int src_y = unpack_i16(desc.src_xy >> 16);
         int dst_x = unpack_i16(desc.dst_xy);
         int dst_y = unpack_i16(desc.dst_xy >> 16);
+        uint band_rows = desc.flags & MANDEL64_FLAG_ROWS_MASK;
+        uint band_cols = (desc.flags & MANDEL64_FLAG_COLS_MASK) >> MANDEL64_FLAG_COLS_SHIFT;
+        if (band_rows == 0u || band_rows > MANDEL64_BAND_ROWS) {
+            band_rows = MANDEL64_BAND_ROWS;
+        }
+        if (band_cols == 0u || band_cols > MANDEL64_BAND_COLS) {
+            band_cols = MANDEL64_BAND_COLS;
+        }
 
-        for (uint y = 0u; y < MANDEL64_BAND_ROWS; y++) {
+        for (uint y = 0u; y < band_rows; y++) {
             int out_y = dst_y + (int)y;
             if (out_y < 0) {
                 continue;
             }
 
-            for (uint x = 0u; x < 64u; x++) {
+            for (uint x = 0u; x < band_cols; x++) {
                 int out_x = dst_x + (int)x;
                 if (out_x < 0) {
                     continue;

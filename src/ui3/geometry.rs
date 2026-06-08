@@ -32,6 +32,7 @@ pub enum Ui3LoweredDraw {
         node: Ui3NodeId,
         rect: Ui3Rect,
         color: Rgba8,
+        kind: Ui3SolidRectKind,
     },
     Mesh {
         node: Ui3NodeId,
@@ -45,6 +46,13 @@ pub enum Ui3LoweredDraw {
         text: String,
         color: Rgba8,
     },
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum Ui3SolidRectKind {
+    Fill,
+    RectStroke,
+    AxisLineStroke,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -181,6 +189,7 @@ fn emit_fill(node: Ui3NodeId, path: &PendingPath, color: Rgba8, draws: &mut Vec<
             node,
             rect: *rect,
             color,
+            kind: Ui3SolidRectKind::Fill,
         });
     }
 
@@ -231,8 +240,9 @@ fn emit_stroke(
         }
     }
 
+    let fallback_subpaths = emit_axis_aligned_stroke_subpaths(node, &path.subpaths, color, width, draws);
     if let Some((vertices, indices)) =
-        tessellate_stroke_path(&subpaths_to_path(&path.subpaths, false), color, width)
+        tessellate_stroke_path(&subpaths_to_path(&fallback_subpaths, false), color, width)
     {
         draws.push(Ui3LoweredDraw::Mesh {
             node,
@@ -241,6 +251,93 @@ fn emit_stroke(
             indices,
         });
     }
+}
+
+fn emit_axis_aligned_stroke_subpaths(
+    node: Ui3NodeId,
+    subpaths: &[Vec<Ui3Point>],
+    color: Rgba8,
+    width: f32,
+    draws: &mut Vec<Ui3LoweredDraw>,
+) -> Vec<Vec<Ui3Point>> {
+    let mut fallback = Vec::new();
+    for subpath in subpaths {
+        if subpath.len() < 2 {
+            continue;
+        }
+        if emit_axis_aligned_stroke_subpath(node, subpath, color, width, draws) {
+            continue;
+        }
+        fallback.push(subpath.clone());
+    }
+    fallback
+}
+
+fn emit_axis_aligned_stroke_subpath(
+    node: Ui3NodeId,
+    subpath: &[Ui3Point],
+    color: Rgba8,
+    width: f32,
+    draws: &mut Vec<Ui3LoweredDraw>,
+) -> bool {
+    let mut rects = Vec::new();
+    for pair in subpath.windows(2) {
+        let a = pair[0];
+        let b = pair[1];
+        let Some(rect) = axis_aligned_segment_rect(a, b, width) else {
+            return false;
+        };
+        rects.push(rect);
+    }
+
+    for rect in rects {
+        draws.push(Ui3LoweredDraw::SolidRect {
+            node,
+            rect,
+            color,
+            kind: Ui3SolidRectKind::AxisLineStroke,
+        });
+    }
+    true
+}
+
+fn axis_aligned_segment_rect(a: Ui3Point, b: Ui3Point, width: f32) -> Option<Ui3Rect> {
+    if !a.x.is_finite() || !a.y.is_finite() || !b.x.is_finite() || !b.y.is_finite() {
+        return None;
+    }
+    let w = width.max(UI3_DEFAULT_STROKE_WIDTH);
+    let half = w * 0.5;
+    if nearly_equal(a.y, b.y) {
+        let x0 = a.x.min(b.x);
+        let x1 = a.x.max(b.x);
+        if x1 <= x0 {
+            return None;
+        }
+        return Some(Ui3Rect {
+            x: x0,
+            y: a.y - half,
+            w: x1 - x0,
+            h: w,
+        });
+    }
+    if nearly_equal(a.x, b.x) {
+        let y0 = a.y.min(b.y);
+        let y1 = a.y.max(b.y);
+        if y1 <= y0 {
+            return None;
+        }
+        return Some(Ui3Rect {
+            x: a.x - half,
+            y: y0,
+            w,
+            h: y1 - y0,
+        });
+    }
+    None
+}
+
+fn nearly_equal(a: f32, b: f32) -> bool {
+    (a - b).abs() <= 0.01
 }
 
 fn emit_rect_stroke(
@@ -287,6 +384,7 @@ fn emit_rect_stroke(
             node,
             rect: span,
             color,
+            kind: Ui3SolidRectKind::RectStroke,
         });
     }
 }
