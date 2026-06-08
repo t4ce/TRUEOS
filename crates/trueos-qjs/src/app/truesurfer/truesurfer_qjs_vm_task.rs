@@ -1935,13 +1935,28 @@ unsafe fn dispatch_html(
         browser_instance_id
     ));
     log_line(format!("qjs-truesurfer[{}]: ui3 submit begin\n", browser_instance_id));
-    let (ui3_ops, ui3_root) =
+    let (mut ui3_ops, mut ui3_root) =
         submit_parse5_trueos_pixi_scene(rt, ctx, browser_instance_id, pending.html.as_str());
     if ui3_ops == 0 || ui3_root == 0 {
         log_line(format!(
-            "qjs-truesurfer[{}]: parse5 trueos ui3 unavailable; no fallback scene submitted\n",
+            "qjs-truesurfer[{}]: parse5 trueos ui3 unavailable; trying native hello widget fallback\n",
             browser_instance_id
         ));
+        let native_ops =
+            qjs::platform::ui::ui3_native_hello_scene(browser_instance_id, pending.html.as_str());
+        if native_ops > 0 {
+            ui3_ops = native_ops as u32;
+            ui3_root = 1;
+            log_line(format!(
+                "qjs-truesurfer[{}]: native hello widget fallback submitted ops={} root={}\n",
+                browser_instance_id, ui3_ops, ui3_root
+            ));
+        } else {
+            log_line(format!(
+                "qjs-truesurfer[{}]: native hello widget fallback unavailable\n",
+                browser_instance_id
+            ));
+        }
     }
     log_line(format!(
         "qjs-truesurfer[{}]: ui3 submit done ops={} root={}\n",

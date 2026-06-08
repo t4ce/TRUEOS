@@ -7,6 +7,7 @@
 
 mod geometry;
 mod hit_scene;
+mod html_widgets;
 mod intel_present;
 mod pixi_host;
 mod pixi_service;
@@ -633,4 +634,30 @@ pub extern "C" fn trueos_cabi_ui3_scene_render(browser_id: u32, root_id: u32) ->
         now_ms().saturating_sub(start_ms)
     );
     result
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui3_native_hello_scene(
+    browser_id: u32,
+    html_ptr: *const u8,
+    html_len: usize,
+) -> i32 {
+    let html = if html_ptr.is_null() || html_len == 0 {
+        ""
+    } else {
+        let bytes = unsafe { core::slice::from_raw_parts(html_ptr, html_len) };
+        core::str::from_utf8(bytes).unwrap_or("")
+    };
+    let (ops, root) = html_widgets::submit_native_hello_scene(browser_id, html);
+    crate::log!(
+        "ui3-html-widgets: native hello submitted browser={} root={} ops={}\n",
+        browser_id,
+        root,
+        ops
+    );
+    if ops == 0 {
+        -1
+    } else {
+        ops.min(i32::MAX as u32) as i32
+    }
 }

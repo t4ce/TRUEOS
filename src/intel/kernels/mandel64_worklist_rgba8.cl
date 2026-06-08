@@ -14,6 +14,7 @@
 #define MANDEL64_FLAG_ROWS_MASK 0x000000FFu
 #define MANDEL64_FLAG_COLS_SHIFT 8u
 #define MANDEL64_FLAG_COLS_MASK 0x0000FF00u
+#define MANDEL64_FLAG_MIRROR_HEIGHT_SHIFT 16u
 
 typedef struct Mandel64Desc {
     uint src_xy;
@@ -27,12 +28,18 @@ static inline int unpack_i16(uint value)
     return (int)((short)(value & 0xFFFFu));
 }
 
-static inline uint mandel256_gray(int src_x, int src_y, uint local_x, uint local_y, uint color_rgba)
+static inline uint mandel256_gray(
+    int src_x,
+    int src_y,
+    uint local_x,
+    uint local_y,
+    uint view_height,
+    uint color_rgba)
 {
-    // Q12 fixed-point mapping over the current 2560x1440 scanout:
+    // Q12 fixed-point mapping over the current scanout:
     // real [-2, +1], imaginary [-1, +1].
     int cr = -8192 + ((src_x + (int)local_x) * 12288) / 2560;
-    int ci = -4096 + ((src_y + (int)local_y) * 8192) / 1440;
+    int ci = -4096 + ((src_y + (int)local_y) * 8192) / (int)view_height;
     int zr = 0;
     int zi = 0;
     uint iter = 0;
@@ -88,6 +95,8 @@ __kernel void mandel64_worklist_rgba8(
         int dst_y = unpack_i16(desc.dst_xy >> 16);
         uint band_rows = desc.flags & MANDEL64_FLAG_ROWS_MASK;
         uint band_cols = (desc.flags & MANDEL64_FLAG_COLS_MASK) >> MANDEL64_FLAG_COLS_SHIFT;
+        uint mirror_height = desc.flags >> MANDEL64_FLAG_MIRROR_HEIGHT_SHIFT;
+        uint view_height = mirror_height == 0u ? 1440u : mirror_height;
         if (band_rows == 0u || band_rows > MANDEL64_BAND_ROWS) {
             band_rows = MANDEL64_BAND_ROWS;
         }
@@ -107,9 +116,16 @@ __kernel void mandel64_worklist_rgba8(
                     continue;
                 }
 
-                uint color = mandel256_gray(src_x, src_y, x, y, desc.color_rgba);
+                uint color = mandel256_gray(src_x, src_y, x, y, view_height, desc.color_rgba);
                 uint dst_index = (uint)out_y * dst_pitch_pixels + (uint)out_x;
                 dst_rgba[dst_index] = color;
+                if (mirror_height != 0u) {
+                    int mirror_y = (int)mirror_height - 1 - out_y;
+                    if (mirror_y >= 0 && mirror_y != out_y) {
+                        uint mirror_index = (uint)mirror_y * dst_pitch_pixels + (uint)out_x;
+                        dst_rgba[mirror_index] = color;
+                    }
+                }
             }
         }
     }

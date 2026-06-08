@@ -490,6 +490,9 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         pipe,
     };
     *PRIMARY_SURFACE.lock() = Some(primary_surface);
+    if ok {
+        crate::r::readiness::set(crate::r::readiness::UI3_INTEL_PRESENT_READY);
+    }
     let ui2_base_ok = false;
     let ui2_frame_ok = false;
     log_primary_scanout_pte_window(dev, "after-primary-init", byte_len);
