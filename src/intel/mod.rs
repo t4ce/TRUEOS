@@ -9,6 +9,7 @@ pub mod hda;
 mod huc;
 mod hw_cursor;
 pub(crate) mod hw_pic;
+pub(crate) mod opencl;
 pub(crate) mod ppgtt;
 pub(crate) mod state;
 pub(crate) mod stats;

@@ -287,6 +287,11 @@
     });
 
     var gp = pixi.Graphics && pixi.Graphics.prototype;
+    if (gp && typeof gp.image !== "function") {
+        gp.image = function () {
+            return this;
+        };
+    }
     patch(gp, "clear", function (node) {
         emit("clear", id(node, "Graphics"));
     });
@@ -318,6 +323,17 @@
     });
     patch(gp, "lineTo", function (node, args) {
         emit("lineTo", id(node, "Graphics"), num(args[0], 0), num(args[1], 0));
+    });
+    patch(gp, "image", function (node, args) {
+        emit(
+            "image",
+            id(node, "Graphics"),
+            num(args[0], 0),
+            num(args[1], 0),
+            num(args[2], 0),
+            num(args[3], 0),
+            num(args[4], 0)
+        );
     });
     patch(gp, "fill", function (node, args) {
         var style = args[0];

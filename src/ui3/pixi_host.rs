@@ -9,11 +9,22 @@ use super::{
 #[derive(Clone, Debug, PartialEq)]
 pub enum Ui3GraphicsOp {
     Rect(Ui3Rect),
-    Circle { center: Ui3Point, radius: f32 },
+    Circle {
+        center: Ui3Point,
+        radius: f32,
+    },
     MoveTo(Ui3Point),
     LineTo(Ui3Point),
     Fill(Ui3Color),
-    Stroke { color: Ui3Color, width: f32 },
+    Stroke {
+        color: Ui3Color,
+        width: f32,
+    },
+    TextureRect {
+        tex_id: u32,
+        rect: Ui3Rect,
+        alpha: f32,
+    },
 }
 
 #[derive(Clone, Debug, Default)]
@@ -144,6 +155,20 @@ impl Ui3PixiHost {
                 self.ensure_node(node, Ui3NodeKind::Graphics)
                     .graphics
                     .push(Ui3GraphicsOp::Stroke { color, width });
+            }
+            Ui3Command::TextureRect {
+                node,
+                tex_id,
+                rect,
+                alpha,
+            } => {
+                self.ensure_node(node, Ui3NodeKind::Graphics).graphics.push(
+                    Ui3GraphicsOp::TextureRect {
+                        tex_id,
+                        rect,
+                        alpha,
+                    },
+                );
             }
             Ui3Command::Text { node, params } => {
                 self.apply_text(node, params);

@@ -36,8 +36,8 @@ pub use self::ui3_asset_service::{ui3_asset_service_ready, ui3_asset_service_tas
 
 pub type Ui3NodeId = u32;
 
-pub(crate) const TRUESURFER_SMOKE_HTML_URL: &str = "inline://trueos/ui3-hello.html";
-pub(crate) const TRUESURFER_SMOKE_HTML_SOURCE: &str = "<!doctype html><html><head><title>UI3 Hello</title></head><body><h1>Hello UI3</h1><div><p>Parse5 handoff smoke.</p><button type=\"button\">Kernel Button</button></div></body></html>";
+pub(crate) const TRUESURFER_SMOKE_HTML_URL: &str = "inline://trueos/parse5-demo-input.html";
+pub(crate) const TRUESURFER_SMOKE_HTML_SOURCE: &str = include_str!("truesurfer_demo_input.html");
 
 #[inline]
 fn now_ms() -> u64 {
@@ -161,6 +161,12 @@ pub enum Ui3Command {
         color: Ui3Color,
         width: f32,
     },
+    TextureRect {
+        node: Ui3NodeId,
+        tex_id: u32,
+        rect: Ui3Rect,
+        alpha: f32,
+    },
     Text {
         node: Ui3NodeId,
         params: Vec<Ui3TextParam>,
@@ -171,10 +177,8 @@ pub enum Ui3Command {
 }
 
 fn ui3_light_filter_reason(command: &Ui3Command) -> Option<&'static str> {
-    match command {
-        Ui3Command::GraphicsCircle { .. } => Some("graphics-path-op"),
-        _ => None,
-    }
+    let _ = command;
+    None
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -227,7 +231,7 @@ fn ui3_scene_kind(kind: u32) -> Ui3NodeKind {
 
 fn ui3_scene_color(rgb: u32, alpha: f32) -> Ui3Color {
     Ui3Color {
-        rgba: ((rgb & 0x00ff_ffff) << 8) | 0xff,
+        rgba: 0xff00_0000 | (rgb & 0x00ff_ffff),
         alpha,
     }
 }
@@ -387,6 +391,25 @@ pub unsafe extern "C" fn trueos_cabi_ui3_pixi_op(
             },
         ),
         21 => pixi_service::queue_scene_command(browser_id, Ui3Command::Render { root: node }),
+        22 => pixi_service::queue_scene_command(
+            browser_id,
+            Ui3Command::TextureRect {
+                node,
+                tex_id: a.max(0.0) as u32,
+                rect: Ui3Rect {
+                    x: b,
+                    y: c,
+                    w: d,
+                    h: if text_ptr.is_null() || text_len == 0 {
+                        d
+                    } else {
+                        let bytes = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
+                        String::from_utf8_lossy(bytes).parse::<f32>().unwrap_or(d)
+                    },
+                },
+                alpha: 1.0,
+            },
+        ),
         _ => -1,
     }
 }

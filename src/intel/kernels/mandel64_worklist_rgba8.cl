@@ -7,7 +7,7 @@
 // - desc.dst_xy is a signed 16-bit destination pixel coordinate.
 // - One SIMD16 walker consumes a descriptor slice:
 //   lane N draws descriptors desc_base + N, desc_base + N+16, ...
-// - desc.color_rgba supplies the per-pixel iteration cap.
+// - desc.color_rgba packs the per-pixel iteration cap and grayscale scale.
 
 #define MANDEL64_BAND_ROWS 4u
 #define MANDEL64_BAND_COLS 64u
@@ -15,6 +15,9 @@
 #define MANDEL64_FLAG_COLS_SHIFT 8u
 #define MANDEL64_FLAG_COLS_MASK 0x0000FF00u
 #define MANDEL64_FLAG_MIRROR_HEIGHT_SHIFT 16u
+#define MANDEL64_DEFAULT_ITER 32u
+#define MANDEL64_MAX_ITER 512u
+#define MANDEL64_DEFAULT_GRAY_SCALE 2040u
 
 typedef struct Mandel64Desc {
     uint src_xy;
@@ -34,7 +37,8 @@ static inline uint mandel_gray(
     uint local_x,
     uint local_y,
     uint view_height,
-    uint max_iter)
+    uint max_iter,
+    uint gray_scale)
 {
     // Q12 fixed-point mapping over the current scanout:
     // real [-2, +1], imaginary [-1, +1].
@@ -44,7 +48,10 @@ static inline uint mandel_gray(
     int zi = 0;
     uint iter = 0;
 
-    for (; iter < max_iter; iter++) {
+    for (; iter < MANDEL64_MAX_ITER; iter++) {
+        if (iter >= max_iter) {
+            break;
+        }
         int zr2 = (zr * zr) >> 12;
         int zi2 = (zi * zi) >> 12;
         if (zr2 + zi2 > 16384) {
@@ -56,11 +63,14 @@ static inline uint mandel_gray(
         zi = zri + ci;
     }
 
-    if (iter == max_iter) {
+    if (iter >= max_iter) {
         return 0xFF000000u;
     }
 
-    uint shade = (iter * 255u) / max_iter;
+    uint shade = (iter * gray_scale) >> 8;
+    if (shade > 255u) {
+        shade = 255u;
+    }
     uint color = 0xFF000000u | (shade << 16) | (shade << 8) | shade;
     return color;
 }
@@ -92,7 +102,8 @@ __kernel void mandel64_worklist_rgba8(
         uint band_cols = (desc.flags & MANDEL64_FLAG_COLS_MASK) >> MANDEL64_FLAG_COLS_SHIFT;
         uint mirror_height = desc.flags >> MANDEL64_FLAG_MIRROR_HEIGHT_SHIFT;
         uint view_height = mirror_height == 0u ? 1440u : mirror_height;
-        uint max_iter = desc.color_rgba;
+        uint max_iter = desc.color_rgba & 0xFFFFu;
+        uint gray_scale = desc.color_rgba >> 16;
         if (band_rows == 0u || band_rows > MANDEL64_BAND_ROWS) {
             band_rows = MANDEL64_BAND_ROWS;
         }
@@ -100,7 +111,13 @@ __kernel void mandel64_worklist_rgba8(
             band_cols = MANDEL64_BAND_COLS;
         }
         if (max_iter == 0u) {
-            max_iter = 32u;
+            max_iter = MANDEL64_DEFAULT_ITER;
+        }
+        if (max_iter > MANDEL64_MAX_ITER) {
+            max_iter = MANDEL64_MAX_ITER;
+        }
+        if (gray_scale == 0u) {
+            gray_scale = MANDEL64_DEFAULT_GRAY_SCALE;
         }
 
         for (uint y = 0u; y < band_rows; y++) {
@@ -115,7 +132,7 @@ __kernel void mandel64_worklist_rgba8(
                     continue;
                 }
 
-                uint color = mandel_gray(src_x, src_y, x, y, view_height, max_iter);
+                uint color = mandel_gray(src_x, src_y, x, y, view_height, max_iter, gray_scale);
                 uint dst_index = (uint)out_y * dst_pitch_pixels + (uint)out_x;
                 dst_rgba[dst_index] = color;
                 if (mirror_height != 0u) {

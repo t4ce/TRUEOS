@@ -136,6 +136,9 @@ fn graphics_bounds(ops: &[Ui3GraphicsOp]) -> Option<Ui3Rect> {
                     },
                 );
             }
+            Ui3GraphicsOp::TextureRect { rect: next, .. } => {
+                rect = union_optional_rect(rect, next);
+            }
             Ui3GraphicsOp::MoveTo(_)
             | Ui3GraphicsOp::LineTo(_)
             | Ui3GraphicsOp::Fill(_)

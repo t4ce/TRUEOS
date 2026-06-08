@@ -66,6 +66,8 @@ pub const ATHLAS_SPRITE64_FONT_FACES: [AthlasFontFace; 6] = [
     },
 ];
 
+pub const ATHLAS_UI3_SPRITE64_FONT_FACES: [AthlasFontFace; 1] = [ATHLAS_FONT_FACE_LUCIDA_1X];
+
 #[derive(Debug, Deserialize)]
 struct AthlasMetricsSet {
     tables: Vec<AthlasMetricsTable>,
@@ -196,7 +198,9 @@ pub fn athlas_lookup_glyph_region(face: AthlasFontFace, ch: char) -> Option<Athl
         if unplaced.binary_search(&codepoint).is_ok() {
             continue;
         }
-        let slot = slots.binary_search(&codepoint).ok()?;
+        let Some(slot) = slots.iter().position(|slot| *slot == codepoint) else {
+            continue;
+        };
         let slot = u16::try_from(slot).ok()?;
         let atlas = athlas_font_bucket_atlas_metrics(face, bucket)?;
         let grid_w = u32::from(atlas.grid_w.max(1));
@@ -219,15 +223,26 @@ pub fn athlas_lookup_glyph_region(face: AthlasFontFace, ch: char) -> Option<Athl
 }
 
 pub fn athlas_validate_sprite64_faces(cell_px: u16) -> Option<AthlasFontSprite64Inventory> {
+    athlas_validate_sprite64_face_list(cell_px, &ATHLAS_SPRITE64_FONT_FACES)
+}
+
+pub fn athlas_validate_ui3_sprite64_faces(cell_px: u16) -> Option<AthlasFontSprite64Inventory> {
+    athlas_validate_sprite64_face_list(cell_px, &ATHLAS_UI3_SPRITE64_FONT_FACES)
+}
+
+fn athlas_validate_sprite64_face_list(
+    cell_px: u16,
+    faces: &[AthlasFontFace],
+) -> Option<AthlasFontSprite64Inventory> {
     let mut inventory = AthlasFontSprite64Inventory {
-        face_count: ATHLAS_SPRITE64_FONT_FACES.len(),
+        face_count: faces.len(),
         bucket_count: ATHLAS_BUCKET_COUNT,
         ..AthlasFontSprite64Inventory::default()
     };
 
-    for face in ATHLAS_SPRITE64_FONT_FACES {
+    for face in faces {
         for bucket in 0..ATHLAS_BUCKET_COUNT {
-            let metrics = athlas_font_bucket_atlas_metrics(face, bucket)?;
+            let metrics = athlas_font_bucket_atlas_metrics(*face, bucket)?;
             if metrics.cell_w == 0 || metrics.cell_h == 0 || metrics.cell_h > cell_px {
                 return None;
             }
