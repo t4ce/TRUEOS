@@ -133,6 +133,7 @@ const TRUESURFER_PIXI_COLLECTOR_SOURCE: &[u8] = br#"
       case "circle": return push({ code: 18, node: node, a: num(arguments[2], 0), b: num(arguments[3], 0), c: num(arguments[4], 0) });
       case "moveTo": return push({ code: 19, node: node, a: num(arguments[2], 0), b: num(arguments[3], 0) });
       case "lineTo": return push({ code: 20, node: node, a: num(arguments[2], 0), b: num(arguments[3], 0) });
+      case "image": return push({ code: 22, node: node, a: num(arguments[2], 0), b: num(arguments[3], 0), c: num(arguments[4], 0), d: num(arguments[5], 0), text: String(num(arguments[6], 0)) });
       case "fill": return push({ code: 6, node: node, a: num(arguments[2], 0xffffff), b: num(arguments[3], 1) });
       case "stroke": return push({ code: 7, node: node, a: num(arguments[2], 0xffffff), b: num(arguments[3], 1), c: num(arguments[4], 1) });
       case "text": return push({ code: 8, node: node, text: String(arguments[2] == null ? "" : arguments[2]) });
@@ -415,11 +416,7 @@ const TRUESURFER_PARSE5_VITE_HOST_SOURCE: &[u8] = br##"
     if (snapshot) rootId = pushNodeFromSnapshot(snapshot, 0, ops, seen, snapshotSeen, textSlots) || rootId;
 
     function mappedTextNode(commandId, textValueHasInk, commandWasSnapshotSeen) {
-      if (!hasSnapshot || commandWasSnapshotSeen) return commandId;
-      if (!textMap[commandId] && textValueHasInk && textSlots.length > 0) {
-        textMap[commandId] = textSlots.shift();
-      }
-      return textMap[commandId] || commandId;
+      return commandId;
     }
 
     for (var j = 0; j < commands.length; j += 1) {
@@ -434,15 +431,42 @@ const TRUESURFER_PARSE5_VITE_HOST_SOURCE: &[u8] = br##"
       var args = Array.isArray(cmd.args) ? cmd.args : [];
       switch (cmd.op) {
         case "clear": ops.push({ code: 4, node: id }); break;
-        case "rect": ops.push({ code: 5, node: id, a: num(args[0], 0), b: num(args[1], 0), c: num(args[2], 0), d: num(args[3], 0) }); break;
+        case "rect":
+        case "roundRect":
+          ops.push({ code: 5, node: id, a: num(args[0], 0), b: num(args[1], 0), c: num(args[2], 0), d: num(args[3], 0) });
+          break;
         case "circle": ops.push({ code: 18, node: id, a: num(args[0], 0), b: num(args[1], 0), c: num(args[2], 0) }); break;
+        case "ellipse": ops.push({ code: 18, node: id, a: num(args[0], 0), b: num(args[1], 0), c: Math.max(num(args[2], 0), num(args[3], 0)) }); break;
         case "moveTo": ops.push({ code: 19, node: id, a: num(args[0], 0), b: num(args[1], 0) }); break;
-        case "lineTo": ops.push({ code: 20, node: id, a: num(args[0], 0), b: num(args[1], 0) }); break;
+      case "lineTo": ops.push({ code: 20, node: id, a: num(args[0], 0), b: num(args[1], 0) }); break;
+      case "image": ops.push({ code: 22, node: id, a: num(args[0], 0), b: num(args[1], 0), c: num(args[2], 0), d: num(args[3], 0), text: String(num(args[4], 0)) }); break;
+      case "poly":
+          var points = Array.isArray(args[0]) ? args[0] : [];
+          if (points.length >= 2) {
+            ops.push({ code: 19, node: id, a: num(points[0], 0), b: num(points[1], 0) });
+            for (var pi = 2; pi + 1 < points.length; pi += 2) {
+              ops.push({ code: 20, node: id, a: num(points[pi], 0), b: num(points[pi + 1], 0) });
+            }
+          }
+          break;
+        case "closePath": break;
         case "fill": ops.push({ code: 6, node: id, a: colorArg(args[0], 0xffffff), b: alphaArg(args[0]) }); break;
         case "stroke": ops.push({ code: 7, node: id, a: colorArg(args[0], 0xffffff), b: alphaArg(args[0]), c: widthArg(args[0]) }); break;
-        case "removeChildren": ops.push({ code: 14, node: id }); break;
-        case "removeAllListeners": ops.push({ code: 17, node: id }); break;
-        case "on": if (cmd.event) ops.push({ code: 16, node: id, text: String(cmd.event) }); break;
+        case "addChild":
+          if (num(args[0], 0) > 0) ops.push({ code: 2, node: id, a: num(args[0], 0) });
+          break;
+        case "addChildAt":
+          if (num(args[0], 0) > 0) ops.push({ code: 10, node: id, a: num(args[0], 0), b: num(args[1], 0) });
+          break;
+        case "setChildIndex":
+          if (num(args[0], 0) > 0) ops.push({ code: 11, node: id, a: num(args[0], 0), b: num(args[1], 0) });
+          break;
+        case "removeChild":
+          if (!hasSnapshot && num(args[0], 0) > 0) ops.push({ code: 12, node: id, a: num(args[0], 0) });
+          break;
+        case "removeChildren": if (!hasSnapshot) ops.push({ code: 14, node: id }); break;
+        case "removeAllListeners": if (!hasSnapshot) ops.push({ code: 17, node: id }); break;
+        case "on": if (!hasSnapshot && cmd.event) ops.push({ code: 16, node: id, text: String(cmd.event) }); break;
         case "text.text.set":
           var textValue = String(args[0] == null ? "" : args[0]);
           var hasInk = textHasInk(textValue);
@@ -767,11 +791,7 @@ G.__trueosParse5BuildSceneFromCapture = function () {
   var hasSnapshot = !!snapshot;
   if (snapshot) rootId = __trueosPushSnapshotNode(snapshot, 0, ops, seen, snapshotSeen, textSlots) || rootId;
   function __trueosMappedTextNode(commandId, textValueHasInk, commandWasSnapshotSeen) {
-    if (!hasSnapshot || commandWasSnapshotSeen) return commandId;
-    if (!textMap[commandId] && textValueHasInk && textSlots.length > 0) {
-      textMap[commandId] = textSlots.shift();
-    }
-    return textMap[commandId] || commandId;
+    return commandId;
   }
   for (i = 0; i < commands.length; i += 1) {
     var cmd = commands[i] || {};
@@ -785,20 +805,35 @@ G.__trueosParse5BuildSceneFromCapture = function () {
     var args = cmd.args && cmd.args.length ? cmd.args : [];
     switch (cmd.op) {
       case "clear": ops.push({ code: 4, node: id }); break;
-      case "rect": ops.push({ code: 5, node: id, a: __trueosNum(args[0], 0), b: __trueosNum(args[1], 0), c: __trueosNum(args[2], 0), d: __trueosNum(args[3], 0) }); break;
+      case "rect":
+      case "roundRect":
+        ops.push({ code: 5, node: id, a: __trueosNum(args[0], 0), b: __trueosNum(args[1], 0), c: __trueosNum(args[2], 0), d: __trueosNum(args[3], 0) });
+        break;
       case "circle": ops.push({ code: 18, node: id, a: __trueosNum(args[0], 0), b: __trueosNum(args[1], 0), c: __trueosNum(args[2], 0) }); break;
+      case "ellipse": ops.push({ code: 18, node: id, a: __trueosNum(args[0], 0), b: __trueosNum(args[1], 0), c: Math.max(__trueosNum(args[2], 0), __trueosNum(args[3], 0)) }); break;
       case "moveTo": ops.push({ code: 19, node: id, a: __trueosNum(args[0], 0), b: __trueosNum(args[1], 0) }); break;
       case "lineTo": ops.push({ code: 20, node: id, a: __trueosNum(args[0], 0), b: __trueosNum(args[1], 0) }); break;
+      case "image": ops.push({ code: 22, node: id, a: __trueosNum(args[0], 0), b: __trueosNum(args[1], 0), c: __trueosNum(args[2], 0), d: __trueosNum(args[3], 0), text: String(__trueosNum(args[4], 0)) }); break;
+      case "poly":
+        var points = args[0] && args[0].length ? args[0] : [];
+        if (points.length >= 2) {
+          ops.push({ code: 19, node: id, a: __trueosNum(points[0], 0), b: __trueosNum(points[1], 0) });
+          for (var pi = 2; pi + 1 < points.length; pi += 2) {
+            ops.push({ code: 20, node: id, a: __trueosNum(points[pi], 0), b: __trueosNum(points[pi + 1], 0) });
+          }
+        }
+        break;
+      case "closePath": break;
       case "fill": ops.push({ code: 6, node: id, a: __trueosColorArg(args[0], 0xffffff), b: __trueosAlphaArg(args[0]) }); break;
       case "stroke": ops.push({ code: 7, node: id, a: __trueosColorArg(args[0], 0xffffff), b: __trueosAlphaArg(args[0]), c: __trueosWidthArg(args[0]) }); break;
       case "addChild":
-        if (!hasSnapshot && __trueosNum(args[0], 0) > 0) ops.push({ code: 2, node: id, a: __trueosNum(args[0], 0) });
+        if (__trueosNum(args[0], 0) > 0) ops.push({ code: 2, node: id, a: __trueosNum(args[0], 0) });
         break;
       case "addChildAt":
-        if (!hasSnapshot && __trueosNum(args[0], 0) > 0) ops.push({ code: 10, node: id, a: __trueosNum(args[0], 0), b: __trueosNum(args[1], 0) });
+        if (__trueosNum(args[0], 0) > 0) ops.push({ code: 10, node: id, a: __trueosNum(args[0], 0), b: __trueosNum(args[1], 0) });
         break;
       case "setChildIndex":
-        if (!hasSnapshot && __trueosNum(args[0], 0) > 0) ops.push({ code: 11, node: id, a: __trueosNum(args[0], 0), b: __trueosNum(args[1], 0) });
+        if (__trueosNum(args[0], 0) > 0) ops.push({ code: 11, node: id, a: __trueosNum(args[0], 0), b: __trueosNum(args[1], 0) });
         break;
       case "removeChild":
         if (!hasSnapshot && __trueosNum(args[0], 0) > 0) ops.push({ code: 12, node: id, a: __trueosNum(args[0], 0) });
@@ -936,6 +971,9 @@ const TRUESURFER_HTML_QUEUE_DEPTH: usize = 2;
 const TRUESURFER_HTML_QUEUE_WAIT_MS: u64 = 2;
 const TRUESURFER_BUSY_PUMP_BUDGET: usize = 512;
 const TRUESURFER_BUSY_SLEEP_MS: u64 = 1;
+const TRUESURFER_PARSE5_ASSET_PUMP_BUDGET: usize = 8192;
+const TRUESURFER_PARSE5_ASSET_WAIT_MS: u64 = 2500;
+const TRUESURFER_UI3_SCENE_OP_LIMIT: u32 = 8192;
 const UI2_HOSTED_BROWSER_DIRTY_CONTENT: u32 = 1 << 0;
 const UI2_HOSTED_BROWSER_DIRTY_INTERACTIVE: u32 = 1 << 1;
 
@@ -1674,6 +1712,7 @@ unsafe fn submit_ui3_scene(
     }
     let command_source =
         read_result_string(ctx, scene_value, TRUESURFER_UI3_SCENE_COMMAND_SOURCE_PROP);
+    let skip_empty_text_ops = command_source == "parse5-trueos-pixi";
     if !qjs::platform::ui::ui3_scene_begin(browser_instance_id, root_id) {
         log_line(format!(
             "qjs-truesurfer[{}]: ui3 scene begin rejected root={}\n",
@@ -1705,16 +1744,17 @@ unsafe fn submit_ui3_scene(
         return (0, root_id);
     }
 
-    let op_count = read_array_len(ctx, ops_value).min(2048);
+    let op_count = read_array_len(ctx, ops_value).min(TRUESURFER_UI3_SCENE_OP_LIMIT);
     log_line(format!(
         "qjs-truesurfer[{}]: ui3 scene ops count={} root={}\n",
         browser_instance_id, op_count, root_id
     ));
     let op_submit_start_ms = now_ms();
     let mut submitted = 0u32;
-    let mut op_code_counts = [0u32; 21];
+    let mut op_code_counts = [0u32; 23];
     let mut unknown_op_count = 0u32;
     let mut text_sample_count = 0u32;
+    let mut skipped_empty_text_count = 0u32;
     for idx in 0..op_count {
         let op_value = qjs::JS_GetPropertyUint32(ctx, ops_value, idx);
         if op_value.is_exception()
@@ -1780,7 +1820,12 @@ unsafe fn submit_ui3_scene(
                     ));
                 }
                 text_sample_count = text_sample_count.saturating_add(1);
-                qjs::platform::ui::ui3_scene_text(browser_instance_id, node, text.as_str())
+                if skip_empty_text_ops && text.is_empty() {
+                    skipped_empty_text_count = skipped_empty_text_count.saturating_add(1);
+                    true
+                } else {
+                    qjs::platform::ui::ui3_scene_text(browser_instance_id, node, text.as_str())
+                }
             }
             9 => qjs::platform::ui::ui3_scene_text_fill(
                 browser_instance_id,
@@ -1815,6 +1860,20 @@ unsafe fn submit_ui3_scene(
             18 => qjs::platform::ui::ui3_scene_graphics_circle(browser_instance_id, node, a, b, c),
             19 => qjs::platform::ui::ui3_scene_graphics_move_to(browser_instance_id, node, a, b),
             20 => qjs::platform::ui::ui3_scene_graphics_line_to(browser_instance_id, node, a, b),
+            22 => {
+                let h = read_result_string(ctx, op_value, TRUESURFER_UI3_OP_TEXT_PROP)
+                    .parse::<f32>()
+                    .unwrap_or(d);
+                qjs::platform::ui::ui3_scene_texture_rect(
+                    browser_instance_id,
+                    node,
+                    a.max(0.0) as u32,
+                    b,
+                    c,
+                    d,
+                    h,
+                )
+            }
             _ => false,
         };
         if ok {
@@ -1829,7 +1888,7 @@ unsafe fn submit_ui3_scene(
     }
     let op_submit_ms = now_ms().saturating_sub(op_submit_start_ms);
     log_line(format!(
-        "qjs-truesurfer[{}]: ui3 scene op-counts node={} addChild={} position={} clear={} rect={} fill={} stroke={} text={} textFill={} addChildAt={} setChildIndex={} removeChild={} removeFromParent={} removeChildren={} visible={} listen={} removeAllListeners={} circle={} moveTo={} lineTo={} unknown={}\n",
+        "qjs-truesurfer[{}]: ui3 scene op-counts node={} addChild={} position={} clear={} rect={} fill={} stroke={} text={} textFill={} addChildAt={} setChildIndex={} removeChild={} removeFromParent={} removeChildren={} visible={} listen={} removeAllListeners={} circle={} moveTo={} lineTo={} texture={} unknown={}\n",
         browser_instance_id,
         op_code_counts[1],
         op_code_counts[2],
@@ -1851,8 +1910,15 @@ unsafe fn submit_ui3_scene(
         op_code_counts[18],
         op_code_counts[19],
         op_code_counts[20],
+        op_code_counts[22],
         unknown_op_count
     ));
+    if skipped_empty_text_count != 0 {
+        log_line(format!(
+            "qjs-truesurfer[{}]: ui3 scene skipped_empty_text={} source={}\n",
+            browser_instance_id, skipped_empty_text_count, command_source
+        ));
+    }
 
     log_line(format!(
         "qjs-truesurfer[{}]: ui3 scene render begin root={} submitted={}/{} op_submit_ms={}\n",
@@ -2120,6 +2186,37 @@ unsafe fn submit_parse5_trueos_pixi_scene(
         "qjs-truesurfer[{}]: parse5 trueos app ready pump_iters={} pump_ms={}\n",
         browser_instance_id, pump_iters, pump_ms
     ));
+
+    let asset_wait_start_ms = now_ms();
+    let mut asset_pump_iters = 0u32;
+    let mut asset_pump_stopped = false;
+    let had_asset_pending = qjs::async_ops::has_pending(ctx);
+    if had_asset_pending {
+        for _ in 0..TRUESURFER_PARSE5_ASSET_PUMP_BUDGET {
+            if !runtime_has_pending_work(rt, ctx) {
+                break;
+            }
+            if now_ms().saturating_sub(asset_wait_start_ms) >= TRUESURFER_PARSE5_ASSET_WAIT_MS {
+                asset_pump_stopped = true;
+                break;
+            }
+            if !qjs::vm::pump_runtime_once(rt, ctx, "truesurfer-parse5-trueos-assets") {
+                asset_pump_stopped = true;
+                break;
+            }
+            asset_pump_iters = asset_pump_iters.saturating_add(1);
+        }
+        log_line(format!(
+            "qjs-truesurfer[{}]: parse5 trueos asset wait pending_before={} pending_after={} runtime_pending={} pump_iters={} pump_stopped={} pump_ms={}\n",
+            browser_instance_id,
+            had_asset_pending as u8,
+            qjs::async_ops::has_pending(ctx) as u8,
+            runtime_has_pending_work(rt, ctx) as u8,
+            asset_pump_iters,
+            asset_pump_stopped as u8,
+            now_ms().saturating_sub(asset_wait_start_ms)
+        ));
+    }
 
     let global = qjs::JS_GetGlobalObject(ctx);
     let build_scene = qjs::JS_GetPropertyStr(

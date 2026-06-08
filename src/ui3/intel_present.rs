@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use libm::{ceilf, floorf};
-use trueos_gfx_core::Rgba8;
+use trueos_gfx_core::{Rgba8, TEX_VERTEX_SIZE, ViewTransform, push_tex_quad_px};
 
 use super::{Ui3GeometryFrame, Ui3LoweredDraw, Ui3Rect};
 
@@ -9,6 +9,7 @@ use super::{Ui3GeometryFrame, Ui3LoweredDraw, Ui3Rect};
 pub(super) struct Ui3IntelPresentSummary {
     pub solid_rects: usize,
     pub mesh_draws: usize,
+    pub texture_draws: usize,
     pub text_runs: usize,
     pub presented: bool,
     pub fill_descs: usize,
@@ -18,6 +19,7 @@ pub(super) struct Ui3IntelPresentSummary {
     pub present_ms: u64,
     pub total_ms: u64,
     pub rect_ms: u64,
+    pub mesh_ms: u64,
     pub sprite_ms: u64,
     pub publish_ms: u64,
     primary_dirty: bool,
@@ -43,9 +45,20 @@ pub(super) fn present_ui3_frame_to_intel_primary(
                     rects.push(crate::intel::gpgpu::GpgpuSolidRect { rect, color_rgba });
                 }
             }
-            Ui3LoweredDraw::Mesh { .. } => {
+            Ui3LoweredDraw::Mesh {
+                vertices, indices, ..
+            } => {
                 flush_rect_run(&mut rects, &mut summary);
-                summary.mesh_draws = summary.mesh_draws.saturating_add(1);
+                draw_rgb_mesh(vertices, indices, &mut summary);
+            }
+            Ui3LoweredDraw::TextureRect {
+                tex_id,
+                rect,
+                alpha,
+                ..
+            } => {
+                flush_rect_run(&mut rects, &mut summary);
+                draw_texture_rect(*tex_id, *rect, *alpha, &mut summary);
             }
             Ui3LoweredDraw::TextRun {
                 origin,
@@ -64,6 +77,87 @@ pub(super) fn present_ui3_frame_to_intel_primary(
     publish_frame(&mut summary);
 
     summary
+}
+
+fn draw_texture_rect(
+    tex_id: u32,
+    rect: super::Ui3Rect,
+    alpha: f32,
+    summary: &mut Ui3IntelPresentSummary,
+) {
+    if tex_id == 0 || rect.w <= 0.0 || rect.h <= 0.0 {
+        return;
+    }
+    if crate::r::io::cabi::trueos_cabi_gfx_texture_status(tex_id) != 2 {
+        return;
+    }
+
+    let (view_w, view_h) = crate::intel::active_scanout_dimensions()
+        .map(|(w, h)| (w.max(1), h.max(1)))
+        .unwrap_or((1920, 1080));
+    let alpha_u8 = (alpha.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    let mut verts = Vec::with_capacity(6 * TEX_VERTEX_SIZE);
+    push_tex_quad_px(
+        &mut verts,
+        ViewTransform::from_extent(view_w, view_h),
+        rect.x,
+        rect.y,
+        rect.x + rect.w,
+        rect.y + rect.h,
+        [0.0, 0.0, 1.0, 1.0],
+        Rgba8::new(255, 255, 255, alpha_u8),
+    );
+    let begin_rc = unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame_preserve(0) };
+    if begin_rc != 0 {
+        return;
+    }
+    let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_sampler(0, 0, 0, 0) };
+    let _ = unsafe {
+        crate::r::io::cabi::trueos_cabi_gfx_set_blend(
+            if alpha_u8 < 255 { 1 } else { 0 },
+            0x0302,
+            0x0303,
+            0x0302,
+            0x0303,
+            0,
+            0,
+        )
+    };
+    let rc = unsafe {
+        crate::r::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(
+            tex_id,
+            verts.as_ptr(),
+            verts.len(),
+        )
+    };
+    let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
+    let end_rc = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
+    if rc == 0 && end_rc == 0 {
+        summary.texture_draws = summary.texture_draws.saturating_add(1);
+        summary.primary_dirty = true;
+    }
+}
+
+fn draw_rgb_mesh(
+    vertices: &[trueos_gfx_core::RgbVertexPx],
+    indices: &[u16],
+    summary: &mut Ui3IntelPresentSummary,
+) {
+    if vertices.is_empty() || indices.len() < 3 {
+        return;
+    }
+
+    summary.mesh_draws = summary.mesh_draws.saturating_add(1);
+    let mesh = crate::intel::gpgpu::GpgpuRgbMesh {
+        vertices: vertices.to_vec(),
+        indices: indices.to_vec(),
+    };
+    let Some(result) = crate::intel::gpgpu::cpu_rgb_meshes_rgba8_over_primary(&[mesh]) else {
+        return;
+    };
+    summary.primary_dirty |= result.ok && result.pixels > 0;
+    summary.total_ms = summary.total_ms.saturating_add(result.total_ms);
+    summary.mesh_ms = summary.mesh_ms.saturating_add(result.total_ms);
 }
 
 fn flush_rect_run(

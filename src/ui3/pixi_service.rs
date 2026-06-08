@@ -497,6 +497,7 @@ fn lower_present_and_count(
         let mut axis_line_draws = 0usize;
         let mut mesh_fill_draws = 0usize;
         let mut mesh_stroke_draws = 0usize;
+        let mut texture_draws = 0usize;
         for draw in &geometry.draws {
             match draw {
                 super::Ui3LoweredDraw::SolidRect { kind, .. } => match kind {
@@ -516,11 +517,14 @@ fn lower_present_and_count(
                         mesh_stroke_draws = mesh_stroke_draws.saturating_add(1)
                     }
                 },
+                super::Ui3LoweredDraw::TextureRect { .. } => {
+                    texture_draws = texture_draws.saturating_add(1)
+                }
                 super::Ui3LoweredDraw::TextRun { .. } => {}
             }
         }
         crate::log!(
-            "ui3-pixi-service: render browser={} root={} ops={} filtered_ops={} draws={} nodes={} solid_rects={} meshes={} text={} presented={} fill_descs={} blend_descs={} apply_ms={} lower_ms={} present_wall_ms={} rect_ms={} sprite_ms={} publish_ms={} present_ms={} total_ms={} gap_ms={}\n",
+            "ui3-pixi-service: render browser={} root={} ops={} filtered_ops={} draws={} nodes={} solid_rects={} meshes={} textures={} text={} presented={} fill_descs={} blend_descs={} apply_ms={} lower_ms={} present_wall_ms={} rect_ms={} mesh_ms={} sprite_ms={} publish_ms={} present_ms={} total_ms={} gap_ms={}\n",
             browser_id,
             frame.root,
             runtime.op_count,
@@ -529,6 +533,7 @@ fn lower_present_and_count(
             frame.ordered_nodes.len(),
             present.solid_rects,
             present.mesh_draws,
+            present.texture_draws,
             present.text_runs,
             present.presented as u8,
             present.fill_descs,
@@ -537,6 +542,7 @@ fn lower_present_and_count(
             lower_ms,
             present_wall_ms,
             present.rect_ms,
+            present.mesh_ms,
             present.sprite_ms,
             present.publish_ms,
             present.present_ms,
@@ -544,7 +550,7 @@ fn lower_present_and_count(
             present_gap_ms
         );
         crate::log!(
-            "ui3-pixi-service: materialized browser={} root={} rect_fill={} rect_stroke={} axis_line={} mesh_fill={} mesh_stroke={} ignored_meshes={} text={}\n",
+            "ui3-pixi-service: materialized browser={} root={} rect_fill={} rect_stroke={} axis_line={} mesh_fill={} mesh_stroke={} texture={} text={}\n",
             browser_id,
             frame.root,
             rect_fill_draws,
@@ -552,7 +558,7 @@ fn lower_present_and_count(
             axis_line_draws,
             mesh_fill_draws,
             mesh_stroke_draws,
-            mesh_fill_draws.saturating_add(mesh_stroke_draws),
+            texture_draws,
             present.text_runs
         );
     }

@@ -40,6 +40,12 @@ pub enum Ui3LoweredDraw {
         vertices: Vec<RgbVertexPx>,
         indices: Vec<u16>,
     },
+    TextureRect {
+        node: Ui3NodeId,
+        tex_id: u32,
+        rect: Ui3Rect,
+        alpha: f32,
+    },
     TextRun {
         node: Ui3NodeId,
         origin: Ui3Point,
@@ -132,6 +138,7 @@ pub fn push_ui3_rgb_bytes(frame: &Ui3GeometryFrame, view_w: u32, view_h: u32, ou
             } => {
                 push_indexed_rgb_mesh_px(out, transform, vertices, indices);
             }
+            Ui3LoweredDraw::TextureRect { .. } => {}
             Ui3LoweredDraw::TextRun { .. } => {}
         }
     }
@@ -178,6 +185,22 @@ fn lower_graphics_node(node: &Ui3Node, origin: Ui3Point, draws: &mut Vec<Ui3Lowe
                         pending.clear();
                     }
                 }
+            }
+            Ui3GraphicsOp::TextureRect {
+                tex_id,
+                rect,
+                alpha,
+            } => {
+                if !pending.is_empty() {
+                    last_painted = pending.clone();
+                    pending.clear();
+                }
+                draws.push(Ui3LoweredDraw::TextureRect {
+                    node: node.id,
+                    tex_id,
+                    rect: translate_rect(rect, origin),
+                    alpha,
+                });
             }
         }
     }

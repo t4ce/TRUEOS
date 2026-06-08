@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
+use libm::{ceilf, floorf, roundf};
 use spin::{Mutex, Once};
 mod test_gpgpu;
 
@@ -204,8 +205,8 @@ pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0xF1, 0x2C, 0x10, 0xBF, 0x8B, 0xD0, 0xB6, 0x8A, 0xB5, 0xFD, 0xED, 0x63, 0x04, 0x86, 0x87, 0x67,
 ];
 pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
-    0xD3, 0xB2, 0x38, 0x15, 0x2C, 0x11, 0x0D, 0x87, 0x5F, 0x69, 0x0F, 0xE8, 0x5B, 0xE5, 0xA6, 0xA4,
-    0x6F, 0xA7, 0xDE, 0x0C, 0x18, 0x29, 0x6A, 0x65, 0xC0, 0xD0, 0x6C, 0x3B, 0x20, 0x0C, 0x51, 0x05,
+    0x79, 0xC7, 0xD4, 0x17, 0x05, 0x40, 0x65, 0x04, 0x17, 0x48, 0x9A, 0x88, 0x2E, 0x52, 0xC5, 0x2B,
+    0x1A, 0x47, 0xF8, 0x51, 0x82, 0x79, 0x0D, 0xFC, 0x1C, 0x3A, 0x22, 0xAD, 0x64, 0xA6, 0x24, 0x8D,
 ];
 pub(crate) const CANVAS3D_PROJECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0xDA, 0xF0, 0x15, 0xA0, 0xB9, 0x8A, 0x45, 0xF7, 0x02, 0xD5, 0xD7, 0x87, 0xCA, 0x19, 0x59, 0xBA,
@@ -553,6 +554,12 @@ const CANVAS3D_TRANSFORM_PAYLOAD_OFFSET_BYTES: usize = 0x3200;
 const CANVAS3D_TRANSFORM_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
 const CANVAS3D_TRANSFORM_FUSED_CROSS_THREAD_BYTES: usize = 128;
 const CANVAS3D_TRANSFORM_FUSED_PER_THREAD_BYTES: usize = 96;
+
+fn pack_mandel64_iterations(iterations: u32) -> u32 {
+    let max_iter = iterations.clamp(1, MANDEL64_WORKLIST_MAX_ITERATIONS);
+    let gray_scale = (255u32 * 256u32) / max_iter;
+    max_iter | (gray_scale << 16)
+}
 const CANVAS3D_TRANSFORM_FUSED_INDIRECT_BYTES: usize =
     CANVAS3D_TRANSFORM_FUSED_CROSS_THREAD_BYTES + CANVAS3D_TRANSFORM_FUSED_PER_THREAD_BYTES;
 const CANVAS3D_TRANSFORM_PRE_MARKER_SLOT: usize = 11;
@@ -1449,6 +1456,12 @@ pub(crate) struct GpgpuSolidRect {
     pub(crate) color_rgba: u32,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct GpgpuRgbMesh {
+    pub(crate) vertices: Vec<trueos_gfx_core::RgbVertexPx>,
+    pub(crate) indices: Vec<u16>,
+}
+
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct GpgpuGradientRect {
     pub(crate) rect: GpgpuRect,
@@ -1471,6 +1484,15 @@ pub(crate) struct GpgpuSolidRectOverlayResult {
     pub(crate) blend_ms: u64,
     pub(crate) presented: bool,
     pub(crate) present_ms: u64,
+    pub(crate) total_ms: u64,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuMeshOverlayResult {
+    pub(crate) ok: bool,
+    pub(crate) meshes: usize,
+    pub(crate) triangles: usize,
+    pub(crate) pixels: usize,
     pub(crate) total_ms: u64,
 }
 
@@ -2966,6 +2988,44 @@ pub(crate) fn cpu_solid_rects_rgba8_over_primary(
     })
 }
 
+pub(crate) fn cpu_rgb_meshes_rgba8_over_primary(
+    meshes: &[GpgpuRgbMesh],
+) -> Option<GpgpuMeshOverlayResult> {
+    let total_start_tick = direct_rcs_now_tick();
+    let target = super::display::primary_surface_gpgpu_marker_target()?;
+    if target.virt.is_null() || meshes.is_empty() {
+        return None;
+    }
+
+    let mut result = GpgpuMeshOverlayResult {
+        ok: true,
+        meshes: meshes.len(),
+        ..GpgpuMeshOverlayResult::default()
+    };
+
+    unsafe {
+        for mesh in meshes {
+            for tri in mesh.indices.chunks_exact(3) {
+                let Some(v0) = mesh.vertices.get(tri[0] as usize).copied() else {
+                    continue;
+                };
+                let Some(v1) = mesh.vertices.get(tri[1] as usize).copied() else {
+                    continue;
+                };
+                let Some(v2) = mesh.vertices.get(tri[2] as usize).copied() else {
+                    continue;
+                };
+                let pixels = raster_rgb_triangle_over_primary(target, v0, v1, v2);
+                result.triangles = result.triangles.saturating_add(1);
+                result.pixels = result.pixels.saturating_add(pixels);
+            }
+        }
+    }
+
+    result.total_ms = direct_rcs_elapsed_ms_since(total_start_tick);
+    Some(result)
+}
+
 pub(crate) fn present_rgba8_to_primary_xrgb_rect_stats(
     src: GpgpuRgba8Surface,
     src_rect: GpgpuRect,
@@ -3019,6 +3079,121 @@ pub(crate) fn present_rgba8_rect_to_primary_xrgb_stats(
         return None;
     }
     Some(stats)
+}
+
+unsafe fn raster_rgb_triangle_over_primary(
+    target: super::display::PrimarySurfaceGpgpuTarget,
+    v0: trueos_gfx_core::RgbVertexPx,
+    v1: trueos_gfx_core::RgbVertexPx,
+    v2: trueos_gfx_core::RgbVertexPx,
+) -> usize {
+    if !v0.x.is_finite()
+        || !v0.y.is_finite()
+        || !v1.x.is_finite()
+        || !v1.y.is_finite()
+        || !v2.x.is_finite()
+        || !v2.y.is_finite()
+    {
+        return 0;
+    }
+
+    let area = edge_fn(v0.x, v0.y, v1.x, v1.y, v2.x, v2.y);
+    if area.abs() <= 0.0001 {
+        return 0;
+    }
+
+    let min_x = floorf(v0.x.min(v1.x).min(v2.x)).max(0.0) as i32;
+    let min_y = floorf(v0.y.min(v1.y).min(v2.y)).max(0.0) as i32;
+    let max_x = ceilf(v0.x.max(v1.x).max(v2.x)).min(target.width as f32) as i32;
+    let max_y = ceilf(v0.y.max(v1.y).max(v2.y)).min(target.height as f32) as i32;
+    if max_x <= min_x || max_y <= min_y {
+        return 0;
+    }
+
+    let mut pixels = 0usize;
+    for y in min_y..max_y {
+        let row = target
+            .virt
+            .add((y as usize).saturating_mul(target.pitch_bytes as usize))
+            as *mut u32;
+        let py = y as f32 + 0.5;
+        for x in min_x..max_x {
+            let px = x as f32 + 0.5;
+            let w0 = edge_fn(v1.x, v1.y, v2.x, v2.y, px, py);
+            let w1 = edge_fn(v2.x, v2.y, v0.x, v0.y, px, py);
+            let w2 = edge_fn(v0.x, v0.y, v1.x, v1.y, px, py);
+            if (area > 0.0 && (w0 < 0.0 || w1 < 0.0 || w2 < 0.0))
+                || (area < 0.0 && (w0 > 0.0 || w1 > 0.0 || w2 > 0.0))
+            {
+                continue;
+            }
+
+            let inv_area = 1.0 / area;
+            let b0 = w0 * inv_area;
+            let b1 = w1 * inv_area;
+            let b2 = w2 * inv_area;
+            let color = interpolate_rgb_vertex_color(v0.color, v1.color, v2.color, b0, b1, b2);
+            if color.a == 0 {
+                continue;
+            }
+            let dst = core::ptr::read_volatile(row.add(x as usize));
+            core::ptr::write_volatile(
+                row.add(x as usize),
+                blend_rgba8_over_kernel_rgba(color, dst),
+            );
+            pixels = pixels.saturating_add(1);
+        }
+    }
+    pixels
+}
+
+#[inline]
+fn edge_fn(ax: f32, ay: f32, bx: f32, by: f32, px: f32, py: f32) -> f32 {
+    (px - ax) * (by - ay) - (py - ay) * (bx - ax)
+}
+
+#[inline]
+fn interpolate_rgb_vertex_color(
+    c0: trueos_gfx_core::Rgba8,
+    c1: trueos_gfx_core::Rgba8,
+    c2: trueos_gfx_core::Rgba8,
+    w0: f32,
+    w1: f32,
+    w2: f32,
+) -> trueos_gfx_core::Rgba8 {
+    trueos_gfx_core::Rgba8 {
+        r: interpolate_u8(c0.r, c1.r, c2.r, w0, w1, w2),
+        g: interpolate_u8(c0.g, c1.g, c2.g, w0, w1, w2),
+        b: interpolate_u8(c0.b, c1.b, c2.b, w0, w1, w2),
+        a: interpolate_u8(c0.a, c1.a, c2.a, w0, w1, w2),
+    }
+}
+
+#[inline]
+fn interpolate_u8(a: u8, b: u8, c: u8, w0: f32, w1: f32, w2: f32) -> u8 {
+    let value = (a as f32) * w0 + (b as f32) * w1 + (c as f32) * w2;
+    roundf(value.max(0.0).min(255.0)) as u8
+}
+
+#[inline]
+fn blend_rgba8_over_kernel_rgba(src: trueos_gfx_core::Rgba8, dst: u32) -> u32 {
+    let sa = src.a as u32;
+    if sa == 0xff {
+        return rgba8_to_kernel_rgba(src);
+    }
+    let inv = 0xff - sa;
+    let dr = dst & 0xff;
+    let dg = (dst >> 8) & 0xff;
+    let db = (dst >> 16) & 0xff;
+    let r = ((src.r as u32) * sa + dr * inv + 127) / 255;
+    let g = ((src.g as u32) * sa + dg * inv + 127) / 255;
+    let b = ((src.b as u32) * sa + db * inv + 127) / 255;
+    0xff00_0000 | (b << 16) | (g << 8) | r
+}
+
+#[inline]
+fn rgba8_to_kernel_rgba(color: trueos_gfx_core::Rgba8) -> u32 {
+    ((color.a as u32) << 24) | ((color.b as u32) << 16) | ((color.g as u32) << 8) | (color.r as u32)
 }
 
 pub(crate) fn alpha_blend_rgba8_over_primary_stats(
@@ -4359,7 +4534,7 @@ fn sprite64_font_bucket_base(
     }
 
     let mut base = u32::from(crate::gfx::althlasfont::twemoji::twemoji_slot_count());
-    for prior_face in crate::gfx::althlasfont::bitmapfont::ATHLAS_SPRITE64_FONT_FACES {
+    for prior_face in crate::gfx::althlasfont::bitmapfont::ATHLAS_UI3_SPRITE64_FONT_FACES {
         if prior_face == face {
             break;
         }
@@ -4400,7 +4575,7 @@ fn sprite64_font_bucket_pngs(
 
 pub(crate) fn sprite64_font_slot_count() -> Option<u32> {
     let mut count = 0u32;
-    for face in crate::gfx::althlasfont::bitmapfont::ATHLAS_SPRITE64_FONT_FACES {
+    for face in crate::gfx::althlasfont::bitmapfont::ATHLAS_UI3_SPRITE64_FONT_FACES {
         count = count
             .checked_add(crate::gfx::althlasfont::bitmapfont::athlas_font_face_cell_count(face)?)?;
     }
@@ -4744,6 +4919,7 @@ pub(crate) fn mandel64_worklist_primary(
             let iterations = placement
                 .iterations
                 .clamp(1, MANDEL64_WORKLIST_MAX_ITERATIONS);
+            let iteration_payload = pack_mandel64_iterations(iterations);
             if width == 0 || height == 0 {
                 continue;
             }
@@ -4776,7 +4952,7 @@ pub(crate) fn mandel64_worklist_primary(
                             .clamp(0, target.height as i32 - 1) as i16,
                     ),
                     flags,
-                    color_rgba: iterations,
+                    color_rgba: iteration_payload,
                 };
                 core::ptr::write_volatile(descs.add(desc_count), desc_value);
                 desc_count = desc_count.saturating_add(1);
@@ -6185,7 +6361,7 @@ fn sprite64_worklist_atlas_once() -> Option<GpgpuSprite64WorklistAtlasSurface> {
                 }
             }
 
-            for face in crate::gfx::althlasfont::bitmapfont::ATHLAS_SPRITE64_FONT_FACES {
+            for face in crate::gfx::althlasfont::bitmapfont::ATHLAS_UI3_SPRITE64_FONT_FACES {
                 let bucket_pngs = sprite64_font_bucket_pngs(face)?;
                 for (bucket, png) in bucket_pngs.iter().enumerate() {
                     let decoded = crate::gfx::png_codec::decode_png_rgba(png).ok()?;

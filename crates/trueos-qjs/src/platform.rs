@@ -261,6 +261,20 @@ pub mod ui {
     }
 
     #[inline]
+    pub fn ui3_scene_texture_rect(
+        browser_id: u32,
+        node_id: u32,
+        tex_id: u32,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    ) -> bool {
+        let h_text = alloc::format!("{}", h);
+        ui3_pixi_op(browser_id, 22, node_id, tex_id as f32, x, y, w, Some(h_text.as_str()))
+    }
+
+    #[inline]
     pub fn ui3_scene_text(browser_id: u32, node_id: u32, text: &str) -> bool {
         ui3_pixi_op(browser_id, 8, node_id, 0.0, 0.0, 0.0, 0.0, Some(text))
     }
