@@ -5,6 +5,9 @@ use super::{
     queue::{CommandKind, CommandQueue},
     registry,
     types::{ClError, ClResult, NdRange},
+    validation::{
+        KnownAotValidationReport, validate_known_aot_registry, validate_known_aot_status,
+    },
 };
 use crate::intel::gpgpu;
 
@@ -330,5 +333,13 @@ impl IntelOpenClBackend {
         kernel_name: &str,
     ) -> Option<&'static registry::KnownAotKernel> {
         registry::known_aot_kernel(kernel_name)
+    }
+
+    pub(crate) fn validate_known_aot_registry(&self) -> KnownAotValidationReport {
+        validate_known_aot_registry()
+    }
+
+    pub(crate) fn validate_known_aot_status(&self) -> KnownAotValidationReport {
+        validate_known_aot_status()
     }
 }

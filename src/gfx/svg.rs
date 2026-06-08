@@ -383,6 +383,7 @@ pub fn rasterize_svg_bytes_rgba(bytes: &[u8]) -> Result<(SvgTextureInfo, Vec<u8>
 }
 
 pub fn tessellate_svg_text(svg_text: &str) -> Result<SvgMeshDocument, i32> {
+    let svg_text = normalize_svg_text(svg_text);
     let tree = match Tree::from_str(svg_text, &Options::default()) {
         Ok(tree) => tree,
         Err(err) => {
@@ -398,6 +399,28 @@ pub fn tessellate_svg_text(svg_text: &str) -> Result<SvgMeshDocument, i32> {
     };
     let (width, height, svg_w, svg_h) = choose_output_size(&tree)?;
     tessellate_svg_tree_with_size(&tree, width, height, svg_w, svg_h)
+}
+
+fn normalize_svg_text(svg_text: &str) -> &str {
+    let mut text = svg_text.trim_start_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}');
+    if starts_with_xml_decl(text)
+        && let Some(end) = text.find("?>")
+    {
+        text = text[end + 2..].trim_start_matches(|ch: char| ch.is_whitespace());
+    }
+    text
+}
+
+fn starts_with_xml_decl(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    if bytes.len() < 5 {
+        return false;
+    }
+    bytes[0] == b'<'
+        && bytes[1] == b'?'
+        && bytes[2].eq_ignore_ascii_case(&b'x')
+        && bytes[3].eq_ignore_ascii_case(&b'm')
+        && bytes[4].eq_ignore_ascii_case(&b'l')
 }
 
 fn tessellate_svg_tree_with_size(

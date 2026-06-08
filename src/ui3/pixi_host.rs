@@ -9,12 +9,22 @@ use super::{
 #[derive(Clone, Debug, PartialEq)]
 pub enum Ui3GraphicsOp {
     Rect(Ui3Rect),
+    RoundRect {
+        rect: Ui3Rect,
+        radius: f32,
+    },
     Circle {
         center: Ui3Point,
         radius: f32,
     },
+    Ellipse {
+        center: Ui3Point,
+        rx: f32,
+        ry: f32,
+    },
     MoveTo(Ui3Point),
     LineTo(Ui3Point),
+    ClosePath,
     Fill(Ui3Color),
     Stroke {
         color: Ui3Color,
@@ -106,6 +116,18 @@ impl Ui3PixiHost {
             Ui3Command::SetVisible { node, visible } => {
                 self.ensure_node(node, Ui3NodeKind::Container).visible = visible;
             }
+            Ui3Command::SetAlpha { node, alpha } => {
+                self.ensure_node(node, Ui3NodeKind::Container).alpha = alpha.clamp(0.0, 1.0);
+            }
+            Ui3Command::SetScale { node, scale } => {
+                self.ensure_node(node, Ui3NodeKind::Container).scale = Ui3Point {
+                    x: sanitize_scale(scale.x),
+                    y: sanitize_scale(scale.y),
+                };
+            }
+            Ui3Command::SetMask { node, mask } => {
+                self.ensure_node(node, Ui3NodeKind::Container).mask = mask;
+            }
             Ui3Command::Listen { node, event } => {
                 let n = self.ensure_node(node, Ui3NodeKind::Container);
                 if !n.listeners.contains(&event) {
@@ -127,6 +149,14 @@ impl Ui3PixiHost {
                     .graphics
                     .push(Ui3GraphicsOp::Rect(rect));
             }
+            Ui3Command::GraphicsRoundRect { node, rect, radius } => {
+                self.ensure_node(node, Ui3NodeKind::Graphics).graphics.push(
+                    Ui3GraphicsOp::RoundRect {
+                        rect,
+                        radius: radius.max(0.0),
+                    },
+                );
+            }
             Ui3Command::GraphicsCircle {
                 node,
                 center,
@@ -135,6 +165,16 @@ impl Ui3PixiHost {
                 self.ensure_node(node, Ui3NodeKind::Graphics)
                     .graphics
                     .push(Ui3GraphicsOp::Circle { center, radius });
+            }
+            Ui3Command::GraphicsEllipse {
+                node,
+                center,
+                rx,
+                ry,
+            } => {
+                self.ensure_node(node, Ui3NodeKind::Graphics)
+                    .graphics
+                    .push(Ui3GraphicsOp::Ellipse { center, rx, ry });
             }
             Ui3Command::GraphicsMoveTo { node, to } => {
                 self.ensure_node(node, Ui3NodeKind::Graphics)
@@ -145,6 +185,11 @@ impl Ui3PixiHost {
                 self.ensure_node(node, Ui3NodeKind::Graphics)
                     .graphics
                     .push(Ui3GraphicsOp::LineTo(to));
+            }
+            Ui3Command::GraphicsClosePath { node } => {
+                self.ensure_node(node, Ui3NodeKind::Graphics)
+                    .graphics
+                    .push(Ui3GraphicsOp::ClosePath);
             }
             Ui3Command::GraphicsFill { node, color } => {
                 self.ensure_node(node, Ui3NodeKind::Graphics)
@@ -305,6 +350,10 @@ impl Ui3PixiHost {
             self.collect_ordered(*child, out, visited);
         }
     }
+}
+
+fn sanitize_scale(value: f32) -> f32 {
+    if value.is_finite() { value } else { 1.0 }
 }
 
 pub const fn pointer_event_kind_from_name(name: &str) -> Ui3PointerEventKind {

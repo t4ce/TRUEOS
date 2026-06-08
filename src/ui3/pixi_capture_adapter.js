@@ -93,6 +93,13 @@
         emit("position", id(obj, kindOf(obj)), num(obj.position.x, 0), num(obj.position.y, 0));
     }
 
+    function emitScale(obj) {
+        if (!obj || !obj.scale) {
+            return;
+        }
+        emit("scale", id(obj, kindOf(obj)), num(obj.scale.x, 1), num(obj.scale.y, 1));
+    }
+
     function patchSetters(proto) {
         if (!proto || proto.__trueosPixiSettersPatched) {
             return;
@@ -118,6 +125,25 @@
                         visibleDesc.set.call(this, value);
                     } else {
                         visibleDesc.value = value;
+                    }
+                },
+            });
+        }
+
+        var alphaDesc = Object.getOwnPropertyDescriptor(proto, "alpha");
+        if (alphaDesc && (alphaDesc.set || alphaDesc.get)) {
+            Object.defineProperty(proto, "alpha", {
+                enumerable: alphaDesc.enumerable,
+                configurable: true,
+                get: function () {
+                    return alphaDesc.get ? alphaDesc.get.call(this) : alphaDesc.value;
+                },
+                set: function (value) {
+                    emit("alpha", id(this, kindOf(this)), num(value, 1));
+                    if (alphaDesc.set) {
+                        alphaDesc.set.call(this, value);
+                    } else {
+                        alphaDesc.value = value;
                     }
                 },
             });
@@ -154,6 +180,36 @@
         }
     }
 
+    function patchScale(obj) {
+        var p = obj && obj.scale;
+        if (!p || p.__trueosPixiScalePatched) {
+            return;
+        }
+        Object.defineProperty(p, "__trueosPixiScalePatched", {
+            value: true,
+            enumerable: false,
+            configurable: true,
+            writable: true,
+        });
+
+        if (typeof p.set === "function") {
+            var setOrig = p.set;
+            p.set = function () {
+                var out = setOrig.apply(this, arguments);
+                emitScale(obj);
+                return out;
+            };
+        }
+        if (typeof p.copyFrom === "function") {
+            var copyOrig = p.copyFrom;
+            p.copyFrom = function () {
+                var out = copyOrig.apply(this, arguments);
+                emitScale(obj);
+                return out;
+            };
+        }
+    }
+
     function wrapCtor(name, kind, after) {
         var Native = pixi[name];
         if (typeof Native !== "function") {
@@ -164,6 +220,7 @@
             var self = Reflect.construct(Native, args, new.target || Wrapped);
             id(self, kind);
             patchPosition(self);
+            patchScale(self);
             emitPosition(self);
             if (after) {
                 after(self, args);
@@ -299,13 +356,21 @@
         emit("rect", id(node, "Graphics"), num(args[0], 0), num(args[1], 0), num(args[2], 0), num(args[3], 0));
     });
     patch(gp, "roundRect", function (node, args) {
-        emit("rect", id(node, "Graphics"), num(args[0], 0), num(args[1], 0), num(args[2], 0), num(args[3], 0));
+        emit(
+            "roundRect",
+            id(node, "Graphics"),
+            num(args[0], 0),
+            num(args[1], 0),
+            num(args[2], 0),
+            num(args[3], 0),
+            num(args[4], 0)
+        );
     });
     patch(gp, "circle", function (node, args) {
         emit("circle", id(node, "Graphics"), num(args[0], 0), num(args[1], 0), num(args[2], 0));
     });
     patch(gp, "ellipse", function (node, args) {
-        emit("circle", id(node, "Graphics"), num(args[0], 0), num(args[1], 0), Math.max(num(args[2], 0), num(args[3], 0)));
+        emit("ellipse", id(node, "Graphics"), num(args[0], 0), num(args[1], 0), num(args[2], 0), num(args[3], 0));
     });
     patch(gp, "poly", function (node, args) {
         var points = args[0];
@@ -317,7 +382,9 @@
             emit("lineTo", id(node, "Graphics"), num(points[i], 0), num(points[i + 1], 0));
         }
     });
-    patch(gp, "closePath", function () {});
+    patch(gp, "closePath", function (node) {
+        emit("closePath", id(node, "Graphics"));
+    });
     patch(gp, "moveTo", function (node, args) {
         emit("moveTo", id(node, "Graphics"), num(args[0], 0), num(args[1], 0));
     });
@@ -350,6 +417,9 @@
     });
     patchGetterSetter(tp, "style", function (node, value) {
         emit("textFill", id(node, "Text"), color(value && value.fill), alpha(value && value.fill));
+    });
+    patchGetterSetter(cp, "mask", function (node, value) {
+        emit("mask", id(node, kindOf(node)), id(value, kindOf(value)));
     });
 
     G.__trueosPixiCaptureReady = 1;

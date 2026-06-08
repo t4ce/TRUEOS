@@ -622,6 +622,24 @@ unsafe fn command_from_pixi_op(
             node: read_arg_u32(ctx, argc, argv, 1)?,
             visible: read_arg_bool(ctx, argc, argv, 2).unwrap_or(true),
         }),
+        "alpha" => Some(Ui3Command::SetAlpha {
+            node: read_arg_u32(ctx, argc, argv, 1)?,
+            alpha: read_arg_f32(ctx, argc, argv, 2).unwrap_or(1.0),
+        }),
+        "scale" => Some(Ui3Command::SetScale {
+            node: read_arg_u32(ctx, argc, argv, 1)?,
+            scale: Ui3Point {
+                x: read_arg_f32(ctx, argc, argv, 2).unwrap_or(1.0),
+                y: read_arg_f32(ctx, argc, argv, 3).unwrap_or(1.0),
+            },
+        }),
+        "mask" => {
+            let mask_id = read_arg_u32(ctx, argc, argv, 2).unwrap_or(0);
+            Some(Ui3Command::SetMask {
+                node: read_arg_u32(ctx, argc, argv, 1)?,
+                mask: if mask_id > 0 { Some(mask_id) } else { None },
+            })
+        }
         "listen" => Some(Ui3Command::Listen {
             node: read_arg_u32(ctx, argc, argv, 1)?,
             event: pointer_event_kind_from_name(&read_arg_string(ctx, argc, argv, 2)?),
@@ -641,6 +659,16 @@ unsafe fn command_from_pixi_op(
                 h: read_arg_f32(ctx, argc, argv, 5).unwrap_or(0.0),
             },
         }),
+        "roundRect" => Some(Ui3Command::GraphicsRoundRect {
+            node: read_arg_u32(ctx, argc, argv, 1)?,
+            rect: Ui3Rect {
+                x: read_arg_f32(ctx, argc, argv, 2).unwrap_or(0.0),
+                y: read_arg_f32(ctx, argc, argv, 3).unwrap_or(0.0),
+                w: read_arg_f32(ctx, argc, argv, 4).unwrap_or(0.0),
+                h: read_arg_f32(ctx, argc, argv, 5).unwrap_or(0.0),
+            },
+            radius: read_arg_f32(ctx, argc, argv, 6).unwrap_or(0.0),
+        }),
         "circle" => Some(Ui3Command::GraphicsCircle {
             node: read_arg_u32(ctx, argc, argv, 1)?,
             center: Ui3Point {
@@ -648,6 +676,15 @@ unsafe fn command_from_pixi_op(
                 y: read_arg_f32(ctx, argc, argv, 3).unwrap_or(0.0),
             },
             radius: read_arg_f32(ctx, argc, argv, 4).unwrap_or(0.0),
+        }),
+        "ellipse" => Some(Ui3Command::GraphicsEllipse {
+            node: read_arg_u32(ctx, argc, argv, 1)?,
+            center: Ui3Point {
+                x: read_arg_f32(ctx, argc, argv, 2).unwrap_or(0.0),
+                y: read_arg_f32(ctx, argc, argv, 3).unwrap_or(0.0),
+            },
+            rx: read_arg_f32(ctx, argc, argv, 4).unwrap_or(0.0),
+            ry: read_arg_f32(ctx, argc, argv, 5).unwrap_or(0.0),
         }),
         "moveTo" => Some(Ui3Command::GraphicsMoveTo {
             node: read_arg_u32(ctx, argc, argv, 1)?,
@@ -662,6 +699,9 @@ unsafe fn command_from_pixi_op(
                 x: read_arg_f32(ctx, argc, argv, 2).unwrap_or(0.0),
                 y: read_arg_f32(ctx, argc, argv, 3).unwrap_or(0.0),
             },
+        }),
+        "closePath" => Some(Ui3Command::GraphicsClosePath {
+            node: read_arg_u32(ctx, argc, argv, 1)?,
         }),
         "fill" => Some(Ui3Command::GraphicsFill {
             node: read_arg_u32(ctx, argc, argv, 1)?,

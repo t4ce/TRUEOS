@@ -16,11 +16,13 @@ pub(crate) mod memory;
 pub(crate) mod queue;
 pub(crate) mod registry;
 pub(crate) mod types;
+pub(crate) mod validation;
 
 pub(crate) use api::{
     KnownKernelInfo, trueos_cl_known_kernel_count, trueos_cl_known_kernel_info,
     trueos_cl_known_kernel_uploaded, trueos_cl_probe_known_aot_queue,
-    trueos_cl_upload_known_kernel,
+    trueos_cl_upload_known_kernel, trueos_cl_validate_known_aot_registry,
+    trueos_cl_validate_known_aot_status,
 };
 pub(crate) use artifact::{
     BuiltProgram, KernelArgDesc, KernelArgKind, KernelMetadata, KernelObject, ProgramArtifact,
@@ -33,6 +35,10 @@ pub(crate) use registry::{KnownAotKernel, KnownKernelRole};
 pub(crate) use types::{
     AccessFlags, ClError, ClResult, ContextId, DeviceId, DeviceKind, EventId, KernelId, MemFlags,
     MemId, NdRange, PlatformId, ProgramId, QueueId, QueueProperties,
+};
+pub(crate) use validation::{
+    KnownAotValidationIssue, KnownAotValidationIssueKind, KnownAotValidationReport,
+    validate_known_aot_registry, validate_known_aot_status,
 };
 
 pub(crate) const TRUEOS_OPENCL_PLATFORM_NAME: &str = "TRUEOS Intel OpenCL AOT Runtime";

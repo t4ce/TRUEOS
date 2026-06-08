@@ -125,6 +125,18 @@ pub enum Ui3Command {
         node: Ui3NodeId,
         visible: bool,
     },
+    SetAlpha {
+        node: Ui3NodeId,
+        alpha: f32,
+    },
+    SetScale {
+        node: Ui3NodeId,
+        scale: Ui3Point,
+    },
+    SetMask {
+        node: Ui3NodeId,
+        mask: Option<Ui3NodeId>,
+    },
     Listen {
         node: Ui3NodeId,
         event: Ui3PointerEventKind,
@@ -139,10 +151,21 @@ pub enum Ui3Command {
         node: Ui3NodeId,
         rect: Ui3Rect,
     },
+    GraphicsRoundRect {
+        node: Ui3NodeId,
+        rect: Ui3Rect,
+        radius: f32,
+    },
     GraphicsCircle {
         node: Ui3NodeId,
         center: Ui3Point,
         radius: f32,
+    },
+    GraphicsEllipse {
+        node: Ui3NodeId,
+        center: Ui3Point,
+        rx: f32,
+        ry: f32,
     },
     GraphicsMoveTo {
         node: Ui3NodeId,
@@ -151,6 +174,9 @@ pub enum Ui3Command {
     GraphicsLineTo {
         node: Ui3NodeId,
         to: Ui3Point,
+    },
+    GraphicsClosePath {
+        node: Ui3NodeId,
     },
     GraphicsFill {
         node: Ui3NodeId,
@@ -195,7 +221,10 @@ pub struct Ui3Node {
     pub label: String,
     pub parent: Option<Ui3NodeId>,
     pub position: Ui3Point,
+    pub scale: Ui3Point,
     pub visible: bool,
+    pub alpha: f32,
+    pub mask: Option<Ui3NodeId>,
     pub children: Vec<Ui3NodeId>,
     pub listeners: Vec<Ui3PointerEventKind>,
     pub graphics: Vec<Ui3GraphicsOp>,
@@ -211,7 +240,10 @@ impl Ui3Node {
             label,
             parent: None,
             position: Ui3Point::default(),
+            scale: Ui3Point { x: 1.0, y: 1.0 },
             visible: true,
+            alpha: 1.0,
+            mask: None,
             children: Vec::new(),
             listeners: Vec::new(),
             graphics: Vec::new(),
@@ -275,6 +307,24 @@ pub unsafe extern "C" fn trueos_cabi_ui3_pixi_op(
                     y: b,
                     w: c,
                     h: d,
+                },
+            },
+        ),
+        24 => pixi_service::queue_scene_command(
+            browser_id,
+            Ui3Command::GraphicsRoundRect {
+                node,
+                rect: Ui3Rect {
+                    x: a,
+                    y: b,
+                    w: c,
+                    h: d,
+                },
+                radius: if text_ptr.is_null() || text_len == 0 {
+                    0.0
+                } else {
+                    let bytes = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
+                    String::from_utf8_lossy(bytes).parse::<f32>().unwrap_or(0.0)
                 },
             },
         ),
@@ -350,6 +400,23 @@ pub unsafe extern "C" fn trueos_cabi_ui3_pixi_op(
                 visible: a != 0.0,
             },
         ),
+        23 => {
+            pixi_service::queue_scene_command(browser_id, Ui3Command::SetAlpha { node, alpha: a })
+        }
+        28 => pixi_service::queue_scene_command(
+            browser_id,
+            Ui3Command::SetScale {
+                node,
+                scale: Ui3Point { x: a, y: b },
+            },
+        ),
+        27 => pixi_service::queue_scene_command(
+            browser_id,
+            Ui3Command::SetMask {
+                node,
+                mask: if a > 0.0 { Some(a as u32) } else { None },
+            },
+        ),
         16 => {
             let event = if text_ptr.is_null() || text_len == 0 {
                 String::new()
@@ -376,6 +443,15 @@ pub unsafe extern "C" fn trueos_cabi_ui3_pixi_op(
                 radius: c,
             },
         ),
+        26 => pixi_service::queue_scene_command(
+            browser_id,
+            Ui3Command::GraphicsEllipse {
+                node,
+                center: Ui3Point { x: a, y: b },
+                rx: c,
+                ry: d,
+            },
+        ),
         19 => pixi_service::queue_scene_command(
             browser_id,
             Ui3Command::GraphicsMoveTo {
@@ -390,6 +466,7 @@ pub unsafe extern "C" fn trueos_cabi_ui3_pixi_op(
                 to: Ui3Point { x: a, y: b },
             },
         ),
+        25 => pixi_service::queue_scene_command(browser_id, Ui3Command::GraphicsClosePath { node }),
         21 => pixi_service::queue_scene_command(browser_id, Ui3Command::Render { root: node }),
         22 => pixi_service::queue_scene_command(
             browser_id,
