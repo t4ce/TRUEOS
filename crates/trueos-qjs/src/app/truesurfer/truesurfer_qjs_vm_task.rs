@@ -1894,18 +1894,9 @@ unsafe fn submit_ui3_scene(
             23 => qjs::platform::ui::ui3_scene_alpha(browser_instance_id, node, a),
             28 => qjs::platform::ui::ui3_scene_scale(browser_instance_id, node, a, b),
             27 => qjs::platform::ui::ui3_scene_mask(browser_instance_id, node, a.max(0.0) as u32),
-            16 => {
-                let event = read_result_string(ctx, op_value, TRUESURFER_UI3_OP_TEXT_PROP);
-                if event.is_empty() {
-                    true
-                } else {
-                    qjs::platform::ui::ui3_scene_listen(
-                        browser_instance_id,
-                        node,
-                        event.as_str(),
-                    )
-                }
-            }
+            // Listener registration is Pixi vocabulary, but first-frame rendering does not
+            // need event dispatch wired yet. Keep it accepted so visual submit cannot hang.
+            16 => true,
             17 => qjs::platform::ui::ui3_scene_remove_all_listeners(browser_instance_id, node),
             18 => qjs::platform::ui::ui3_scene_graphics_circle(browser_instance_id, node, a, b, c),
             26 => {

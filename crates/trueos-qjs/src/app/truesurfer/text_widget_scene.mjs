@@ -432,10 +432,6 @@ function textFill(nodeId, rgb, alpha = 1) {
   return { code: 9, node: nodeId, a: rgb >>> 0, b: alpha };
 }
 
-function textFontSizeTier(nodeId, tier) {
-  return { code: 29, node: nodeId, a: tier };
-}
-
 function listen(nodeId, event) {
   return { code: 16, node: nodeId, text: String(event ?? '') };
 }
@@ -443,10 +439,6 @@ function listen(nodeId, event) {
 function textFillForContext(ctx) {
   if (ctx && typeof ctx.textFill === 'number') return ctx.textFill >>> 0;
   return ctx && ctx.bold ? 0x111111 : 0x333333;
-}
-
-function textTierForContext(ctx) {
-  return ctx && ctx.bold ? 2 : 1;
 }
 
 function estimateTextHeight(value) {
@@ -514,7 +506,7 @@ function appendTextNode(value, parentId, state, x, y, ctx = state.context) {
   const id = state.nextId;
   state.nextId += 1;
   state.ops.push(node(id, KIND_TEXT), addChild(parentId, id), position(id, x, y));
-  state.ops.push(textFill(id, textFillForContext(ctx), 1), textFontSizeTier(id, textTierForContext(ctx)), text(id, textValue));
+  state.ops.push(textFill(id, textFillForContext(ctx), 1), text(id, textValue));
   state.textCount += 1;
   state.textBytes += textValue.length;
   return id;
@@ -629,7 +621,7 @@ function appendWidgetOps(renderNode, parentId, state, layout, depth = 0) {
     const value = normalizeWhitespace(renderNode.text);
     if (value.length === 0) return;
     state.ops.push(node(id, KIND_TEXT), addChild(parentId, id), position(id, layout.childX + 12, layout.nextY + 6));
-    state.ops.push(textFill(id, textFillForContext(state.context), 1), textFontSizeTier(id, textTierForContext(state.context)), text(id, value));
+    state.ops.push(textFill(id, textFillForContext(state.context), 1), text(id, value));
     state.textCount += 1;
     state.textBytes += value.length;
     layout.nextY += 24;
@@ -699,28 +691,8 @@ function appendWidgetOps(renderNode, parentId, state, layout, depth = 0) {
   } else if (tagName === 'iframe' && !iframeRoot) {
     appendTextNode(String(renderNode.attrs?.srcdoc ?? '').trim().length > 0 ? 'iframe (srcdoc)' : 'iframe (empty)', id, state, 8, 6, { textFill: THEME.mutedText });
   }
-  const rowLike = tagName === 'p' || tagName === 'label' || tagName === 'barrow' || tagName === 'searchrow' || tagName === 'tr';
-  if (rowLike) {
-    let rowX = childLayout.childX;
-    let rowY = childLayout.nextY;
-    let rowH = 0;
-    for (let i = 0; i < children.length; i += 1) {
-      const child = children[i];
-      const childSize = widgetSize(child);
-      const itemLayout = { childX: rowX, nextY: rowY };
-      appendWidgetOps(child, id, state, itemLayout, depth + 1);
-      rowX += Math.max(24, childSize.w) + 8;
-      rowH = Math.max(rowH, Math.max(24, childSize.h));
-      if (rowX > 560 && tagName !== 'tr') {
-        rowX = childLayout.childX;
-        rowY += rowH + 8;
-        rowH = 0;
-      }
-    }
-  } else {
-    for (let i = 0; i < children.length; i += 1) {
-      appendWidgetOps(children[i], id, state, childLayout, depth + 1);
-    }
+  for (let i = 0; i < children.length; i += 1) {
+    appendWidgetOps(children[i], id, state, childLayout, depth + 1);
   }
   state.context = previousContext;
 }
@@ -754,8 +726,8 @@ export function buildTextWidgetScene(html) {
       buttonHelper: '/qjs/truesurfer/widgets/button.mjs',
       headingHelper: '/qjs/truesurfer/widgets/headings.mjs',
       iframeHelper: '/qjs/truesurfer/widgets/iframe.mjs',
-      renderer: 'parse5-widget-subset',
-      tags: 'iframe,h1-h6,p,label,button,input,textarea,select,search,details,summary,dialog,hr,progress,meter,slider,number,color,table,tr,td,th,img,svg,canvas',
+      renderer: 'parse5-render-tree-subset',
+      tags: 'iframe,h1,p,button',
       iframeCount: state.iframeCount,
       iframeSrcdocCount: state.iframeSrcdocCount,
       buttonCount: state.buttonCount,
