@@ -20,6 +20,10 @@ pub(crate) enum CommandKind {
         kernel: types::KernelId,
         nd_range: types::NdRange,
     },
+    KnownKernel {
+        kernel_name: &'static str,
+        nd_range: types::NdRange,
+    },
 }
 
 impl CommandKind {
@@ -27,7 +31,7 @@ impl CommandKind {
         match self {
             Self::WriteBuffer { bytes, .. } => bytes.len(),
             Self::ReadBuffer { byte_len, .. } => *byte_len,
-            Self::Kernel { .. } => 0,
+            Self::Kernel { .. } | Self::KnownKernel { .. } => 0,
         }
     }
 }
@@ -132,6 +136,23 @@ impl CommandQueue {
         wait_for: &[types::EventId],
     ) -> types::ClResult<types::EventId> {
         self.enqueue(event, CommandKind::Kernel { kernel, nd_range }, wait_for)
+    }
+
+    pub(crate) fn enqueue_known_kernel(
+        &mut self,
+        event: types::EventId,
+        kernel_name: &'static str,
+        nd_range: types::NdRange,
+        wait_for: &[types::EventId],
+    ) -> types::ClResult<types::EventId> {
+        self.enqueue(
+            event,
+            CommandKind::KnownKernel {
+                kernel_name,
+                nd_range,
+            },
+            wait_for,
+        )
     }
 
     pub(crate) fn finish_with<F>(&mut self, mut backend: F) -> types::ClResult<usize>

@@ -8,13 +8,20 @@
 
 #![allow(dead_code, unused_imports)]
 
+pub(crate) mod api;
 pub(crate) mod artifact;
 pub(crate) mod backend;
 pub(crate) mod example;
 pub(crate) mod memory;
 pub(crate) mod queue;
+pub(crate) mod registry;
 pub(crate) mod types;
 
+pub(crate) use api::{
+    KnownKernelInfo, trueos_cl_known_kernel_count, trueos_cl_known_kernel_info,
+    trueos_cl_known_kernel_uploaded, trueos_cl_probe_known_aot_queue,
+    trueos_cl_upload_known_kernel,
+};
 pub(crate) use artifact::{
     BuiltProgram, KernelArgDesc, KernelArgKind, KernelMetadata, KernelObject, ProgramArtifact,
     ProgramBinaryKind,
@@ -22,6 +29,7 @@ pub(crate) use artifact::{
 pub(crate) use backend::{BackendCaps, BackendCommand, IntelOpenClBackend, UploadedKernelRef};
 pub(crate) use memory::{BufferObject, BufferRegistry};
 pub(crate) use queue::{Command, CommandKind, CommandQueue, EventRecord, EventStatus};
+pub(crate) use registry::{KnownAotKernel, KnownKernelRole};
 pub(crate) use types::{
     AccessFlags, ClError, ClResult, ContextId, DeviceId, DeviceKind, EventId, KernelId, MemFlags,
     MemId, NdRange, PlatformId, ProgramId, QueueId, QueueProperties,

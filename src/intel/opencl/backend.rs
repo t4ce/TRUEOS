@@ -1,7 +1,11 @@
 //! Minimal bridge from the future OpenCL runtime to the existing Intel GPGPU
 //! AOT artifact upload path.
 
-use super::types::{ClError, ClResult, NdRange};
+use super::{
+    queue::{CommandKind, CommandQueue},
+    registry,
+    types::{ClError, ClResult, NdRange},
+};
 use crate::intel::gpgpu;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -141,22 +145,32 @@ impl IntelOpenClBackend {
     }
 
     pub(crate) fn upload_status(&self, kernel_name: &str) -> Option<UploadedKernelRef> {
-        known_upload_status(kernel_name).map(UploadedKernelRef::from)
+        registry::known_aot_kernel(kernel_name)
+            .and_then(|kernel| kernel.status())
+            .map(UploadedKernelRef::from)
     }
 
     pub(crate) fn upload_known_aot(&self, kernel_name: &str) -> Option<UploadedKernelRef> {
-        upload_known_aot(kernel_name).map(UploadedKernelRef::from)
+        registry::known_aot_kernel(kernel_name)
+            .and_then(|kernel| kernel.upload())
+            .map(UploadedKernelRef::from)
     }
 
     pub(crate) fn require_known_aot_upload(
         &self,
         kernel_name: &str,
     ) -> ClResult<UploadedKernelRef> {
-        if !is_known_aot_kernel(kernel_name) {
+        if !registry::is_known_aot_kernel(kernel_name) {
             return Err(ClError::InvalidKernelName);
         }
-        self.upload_known_aot(kernel_name)
-            .ok_or(ClError::OutOfResources)
+        let upload = self
+            .upload_known_aot(kernel_name)
+            .ok_or(ClError::OutOfResources)?;
+        if upload.is_ready() {
+            Ok(upload)
+        } else {
+            Err(ClError::InvalidBinary)
+        }
     }
 
     pub(crate) fn upload_fill_rect_worklist_rgba8(&self) -> Option<UploadedKernelRef> {
@@ -181,9 +195,12 @@ impl IntelOpenClBackend {
     ) -> (usize, usize) {
         let mut attempted = 0usize;
         let mut uploaded = 0usize;
-        for (slot, kernel_name) in out.iter_mut().zip(KNOWN_AOT_KERNELS.iter().copied()) {
+        for (slot, kernel) in out
+            .iter_mut()
+            .zip(registry::KNOWN_AOT_KERNELS.iter().copied())
+        {
             attempted = attempted.saturating_add(1);
-            *slot = self.upload_known_aot(kernel_name);
+            *slot = kernel.upload().map(UploadedKernelRef::from);
             if slot.is_some() {
                 uploaded = uploaded.saturating_add(1);
             }
@@ -196,7 +213,7 @@ impl IntelOpenClBackend {
         kernel_name: &'static str,
         _nd_range: NdRange,
     ) -> BackendExecutionStub {
-        if !is_known_aot_kernel(kernel_name) {
+        if !registry::is_known_aot_kernel(kernel_name) {
             return BackendExecutionStub::unknown(kernel_name);
         }
         BackendExecutionStub::recognized(kernel_name, self.upload_status(kernel_name))
@@ -274,119 +291,44 @@ impl IntelOpenClBackend {
             BackendCommand::UploadKnownAot { kernel_name } => self
                 .require_known_aot_upload(kernel_name)
                 .map(|upload| BackendCommandResult::UploadStatus(Some(upload))),
+            BackendCommand::ExecuteKnownKernelStub {
+                kernel_name,
+                nd_range,
+            } => {
+                nd_range.validate()?;
+                let upload = self.require_known_aot_upload(kernel_name)?;
+                Ok(BackendCommandResult::ExecuteStub(BackendExecutionStub::recognized(
+                    kernel_name,
+                    Some(upload),
+                )))
+            }
             other => Ok(self.dispatch(other)),
         }
     }
-}
 
-pub(crate) const KNOWN_AOT_KERNELS: &[&str] = &[
-    gpgpu::COPY_RECT_RGBA8_KERNEL_NAME,
-    gpgpu::FILL_RECT_RGBA8_KERNEL_NAME,
-    gpgpu::FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME,
-    gpgpu::GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME,
-    gpgpu::BLIT_RGBA8_NEAREST_KERNEL_NAME,
-    gpgpu::ALPHA_BLEND_RGBA8_OVER_KERNEL_NAME,
-    gpgpu::ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME,
-    gpgpu::GLYPH_MASK_RGBA8_KERNEL_NAME,
-    gpgpu::PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_KERNEL_NAME,
-    gpgpu::SPRITE64_WORKLIST_RGBA8_KERNEL_NAME,
-    gpgpu::MANDEL64_WORKLIST_RGBA8_KERNEL_NAME,
-    gpgpu::CANVAS3D_PROJECT_RGBA8_KERNEL_NAME,
-    gpgpu::CANVAS3D_TRANSFORM_Q16_KERNEL_NAME,
-    gpgpu::CANVAS3D_CLIP_BOX_Q16_KERNEL_NAME,
-    gpgpu::CANVAS3D_PLANE_SAMPLE_RGBA8_KERNEL_NAME,
-    gpgpu::CANVAS3D_PLANE_FILL_RGBA8_KERNEL_NAME,
-    gpgpu::CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_KERNEL_NAME,
-    gpgpu::CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_KERNEL_NAME,
-];
-
-pub(crate) fn is_known_aot_kernel(kernel_name: &str) -> bool {
-    KNOWN_AOT_KERNELS.iter().any(|known| *known == kernel_name)
-}
-
-fn known_upload_status(kernel_name: &str) -> Option<gpgpu::UploadedKernelArtifact> {
-    match kernel_name {
-        gpgpu::COPY_RECT_RGBA8_KERNEL_NAME => gpgpu::copy_rect_rgba8_upload_status(),
-        gpgpu::FILL_RECT_RGBA8_KERNEL_NAME => gpgpu::fill_rect_rgba8_upload_status(),
-        gpgpu::FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME => {
-            gpgpu::fill_rect_worklist_rgba8_upload_status()
-        }
-        gpgpu::GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME => {
-            gpgpu::gradient_rect_worklist_rgba8_upload_status()
-        }
-        gpgpu::BLIT_RGBA8_NEAREST_KERNEL_NAME => gpgpu::blit_rgba8_nearest_upload_status(),
-        gpgpu::ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME => {
-            gpgpu::alpha_blend_worklist_rgba8_upload_status()
-        }
-        gpgpu::GLYPH_MASK_RGBA8_KERNEL_NAME => gpgpu::glyph_mask_rgba8_upload_status(),
-        gpgpu::PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_KERNEL_NAME => {
-            gpgpu::present_rgba8_to_primary_xrgb_rect_upload_status()
-        }
-        gpgpu::SPRITE64_WORKLIST_RGBA8_KERNEL_NAME => {
-            gpgpu::sprite64_worklist_rgba8_upload_status()
-        }
-        gpgpu::MANDEL64_WORKLIST_RGBA8_KERNEL_NAME => {
-            gpgpu::mandel64_worklist_rgba8_upload_status()
-        }
-        gpgpu::CANVAS3D_PROJECT_RGBA8_KERNEL_NAME => gpgpu::canvas3d_project_rgba8_upload_status(),
-        gpgpu::CANVAS3D_TRANSFORM_Q16_KERNEL_NAME => gpgpu::canvas3d_transform_q16_upload_status(),
-        gpgpu::CANVAS3D_CLIP_BOX_Q16_KERNEL_NAME => gpgpu::canvas3d_clip_box_q16_upload_status(),
-        gpgpu::CANVAS3D_PLANE_SAMPLE_RGBA8_KERNEL_NAME => {
-            gpgpu::canvas3d_plane_sample_rgba8_upload_status()
-        }
-        gpgpu::CANVAS3D_PLANE_FILL_RGBA8_KERNEL_NAME => {
-            gpgpu::canvas3d_plane_fill_rgba8_upload_status()
-        }
-        gpgpu::CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_KERNEL_NAME => {
-            gpgpu::canvas3d_plane_patch_fill_cut_rgba8_upload_status()
-        }
-        gpgpu::CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_KERNEL_NAME => {
-            gpgpu::canvas3d_plane_patch_worklist_rgba8_upload_status()
-        }
-        _ => None,
+    pub(crate) fn finish_known_queue(&self, queue: &mut CommandQueue) -> ClResult<usize> {
+        queue.finish_with(|command| match &command.kind {
+            CommandKind::WriteBuffer { .. } | CommandKind::ReadBuffer { .. } => Ok(()),
+            CommandKind::KnownKernel {
+                kernel_name,
+                nd_range,
+            } => {
+                nd_range.validate()?;
+                self.require_known_aot_upload(kernel_name)?;
+                Ok(())
+            }
+            CommandKind::Kernel { .. } => Err(ClError::InvalidKernel),
+        })
     }
-}
 
-fn upload_known_aot(kernel_name: &str) -> Option<gpgpu::UploadedKernelArtifact> {
-    match kernel_name {
-        gpgpu::COPY_RECT_RGBA8_KERNEL_NAME => gpgpu::upload_copy_rect_rgba8_kernel(),
-        gpgpu::FILL_RECT_RGBA8_KERNEL_NAME => gpgpu::upload_fill_rect_rgba8_kernel(),
-        gpgpu::FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME => {
-            gpgpu::upload_fill_rect_worklist_rgba8_kernel()
-        }
-        gpgpu::GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME => {
-            gpgpu::upload_gradient_rect_worklist_rgba8_kernel()
-        }
-        gpgpu::BLIT_RGBA8_NEAREST_KERNEL_NAME => gpgpu::upload_blit_rgba8_nearest_kernel(),
-        gpgpu::ALPHA_BLEND_RGBA8_OVER_KERNEL_NAME => gpgpu::upload_alpha_blend_rgba8_over_kernel(),
-        gpgpu::ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME => {
-            gpgpu::upload_alpha_blend_worklist_rgba8_kernel()
-        }
-        gpgpu::GLYPH_MASK_RGBA8_KERNEL_NAME => gpgpu::upload_glyph_mask_rgba8_kernel(),
-        gpgpu::PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_KERNEL_NAME => {
-            gpgpu::upload_present_rgba8_to_primary_xrgb_rect_kernel()
-        }
-        gpgpu::SPRITE64_WORKLIST_RGBA8_KERNEL_NAME => {
-            gpgpu::upload_sprite64_worklist_rgba8_kernel()
-        }
-        gpgpu::MANDEL64_WORKLIST_RGBA8_KERNEL_NAME => {
-            gpgpu::upload_mandel64_worklist_rgba8_kernel()
-        }
-        gpgpu::CANVAS3D_PROJECT_RGBA8_KERNEL_NAME => gpgpu::upload_canvas3d_project_rgba8_kernel(),
-        gpgpu::CANVAS3D_TRANSFORM_Q16_KERNEL_NAME => gpgpu::upload_canvas3d_transform_q16_kernel(),
-        gpgpu::CANVAS3D_CLIP_BOX_Q16_KERNEL_NAME => gpgpu::upload_canvas3d_clip_box_q16_kernel(),
-        gpgpu::CANVAS3D_PLANE_SAMPLE_RGBA8_KERNEL_NAME => {
-            gpgpu::upload_canvas3d_plane_sample_rgba8_kernel()
-        }
-        gpgpu::CANVAS3D_PLANE_FILL_RGBA8_KERNEL_NAME => {
-            gpgpu::upload_canvas3d_plane_fill_rgba8_kernel()
-        }
-        gpgpu::CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_KERNEL_NAME => {
-            gpgpu::upload_canvas3d_plane_patch_fill_cut_rgba8_kernel()
-        }
-        gpgpu::CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_KERNEL_NAME => {
-            gpgpu::upload_canvas3d_plane_patch_worklist_rgba8_kernel()
-        }
-        _ => None,
+    pub(crate) fn known_kernel_count(&self) -> usize {
+        registry::KNOWN_AOT_KERNELS.len()
+    }
+
+    pub(crate) fn known_kernel(
+        &self,
+        kernel_name: &str,
+    ) -> Option<&'static registry::KnownAotKernel> {
+        registry::known_aot_kernel(kernel_name)
     }
 }

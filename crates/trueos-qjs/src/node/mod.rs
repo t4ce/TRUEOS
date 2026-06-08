@@ -10,6 +10,62 @@ use crate as qjs;
 
 static FETCH_TMP_SEQ: AtomicU32 = AtomicU32::new(1);
 
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn percent_decode_data_url_payload(payload: &[u8]) -> Result<Vec<u8>, i32> {
+    let mut out = Vec::with_capacity(payload.len());
+    let mut i = 0usize;
+    while i < payload.len() {
+        if payload[i] == b'%' {
+            if i + 2 >= payload.len() {
+                return Err(-7);
+            }
+            let hi = hex_nibble(payload[i + 1]).ok_or(-7)?;
+            let lo = hex_nibble(payload[i + 2]).ok_or(-7)?;
+            out.push((hi << 4) | lo);
+            i += 3;
+        } else {
+            out.push(payload[i]);
+            i += 1;
+        }
+    }
+    Ok(out)
+}
+
+fn data_url_image_payload(url: &[u8]) -> Result<(Vec<u8>, Vec<u8>), i32> {
+    if !url.starts_with(b"data:") {
+        return Err(-7);
+    }
+    let comma = url.iter().position(|b| *b == b',').ok_or(-7)?;
+    let meta = &url[5..comma];
+    let payload = &url[comma + 1..];
+    let mut meta_lc = Vec::with_capacity(meta.len());
+    for b in meta.iter().copied() {
+        meta_lc.push(b.to_ascii_lowercase());
+    }
+    if !meta_lc.starts_with(b"image/") || meta_lc.windows(7).any(|w| w == b";base64") {
+        return Err(-7);
+    }
+    let mut path = Vec::new();
+    if meta_lc.starts_with(b"image/svg+xml") {
+        path.extend_from_slice(b"inline.svg");
+    } else if meta_lc.starts_with(b"image/png") {
+        path.extend_from_slice(b"inline.png");
+    } else if meta_lc.starts_with(b"image/jpeg") || meta_lc.starts_with(b"image/jpg") {
+        path.extend_from_slice(b"inline.jpg");
+    } else {
+        return Err(-7);
+    }
+    Ok((path, percent_decode_data_url_payload(payload)?))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeProfile {
     Default,
@@ -654,15 +710,30 @@ unsafe extern "C" fn trueos_resolve_ready_image_texture(
     }
 
     if url.starts_with(b"data:") {
-        qjs::cmd_stream::release_managed_tex_id(tex_id);
-        let code_js = js_int32(-1);
-        let _ = qjs::JS_Call(
-            ctx,
-            reject,
-            qjs::JSValue::undefined(),
-            1,
-            &code_js as *const qjs::JSValue,
-        );
+        match data_url_image_payload(url) {
+            Ok((path, bytes)) => {
+                qjs::async_ops::register_ready_image_texture_bytes(
+                    ctx,
+                    resolve,
+                    reject,
+                    path,
+                    bytes,
+                    tex_id,
+                    qjs::async_ops::ImageRequestSource::InlineData,
+                );
+            }
+            Err(code) => {
+                qjs::cmd_stream::release_managed_tex_id(tex_id);
+                let code_js = js_int32(code);
+                let _ = qjs::JS_Call(
+                    ctx,
+                    reject,
+                    qjs::JSValue::undefined(),
+                    1,
+                    &code_js as *const qjs::JSValue,
+                );
+            }
+        }
     } else if url.first().copied() == Some(b'/') {
         match qjs::async_ops::start_read_file(url) {
             Ok(op_id) => {

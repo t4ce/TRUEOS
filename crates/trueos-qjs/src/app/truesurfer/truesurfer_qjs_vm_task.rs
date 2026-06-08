@@ -365,7 +365,8 @@ const TRUESURFER_PARSE5_VITE_HOST_SOURCE: &[u8] = br##"
     return value && typeof value.alpha === "number" ? num(value.alpha, 1) : 1;
   }
   function widthArg(value) {
-    return value && typeof value.width === "number" ? num(value.width, 1) : 1;
+    if (value && typeof value.width === "number") return num(value.width, 1);
+    return value && typeof value.w === "number" ? num(value.w, 1) : 1;
   }
   function commandKind(target) {
     target = String(target || "");
@@ -711,7 +712,8 @@ function __trueosAlphaArg(value) {
   return value && typeof value.alpha === "number" ? __trueosNum(value.alpha, 1) : 1;
 }
 function __trueosWidthArg(value) {
-  return value && typeof value.width === "number" ? __trueosNum(value.width, 1) : 1;
+  if (value && typeof value.width === "number") return __trueosNum(value.width, 1);
+  return value && typeof value.w === "number" ? __trueosNum(value.w, 1) : 1;
 }
 function __trueosCommandKind(target) {
   target = String(target || "");
