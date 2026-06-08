@@ -103,6 +103,7 @@ define_started_flags!(
     SILK_SERVICE_STARTED,
     ATOMIC_BOMB_STARTED,
     SURFER_PARSE_POOL_STARTED,
+    UI3_ASSET_SERVICE_STARTED,
     UI3_PIXI_SERVICE_STARTED
 );
 
@@ -212,7 +213,6 @@ fn task_exited(name: &str) {
             spec.started.store(false, Ordering::Release);
         }
     }
-
 }
 
 pub async fn wait_task_or_timeout_ms(name: &str, total_ms: u64) -> bool {
@@ -360,7 +360,6 @@ fn spawn_qjs_async_fs_service(spawner: Spawner) -> SpawnAttempt {
             SpawnAttempt::Failed(e)
         }
     }
-
 }
 
 fn spawn_trueosfs_mount_service(spawner: Spawner) -> SpawnAttempt {
@@ -663,6 +662,10 @@ fn spawn_truesurfer_parse_pool(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_ui3_pixi_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |_ap1_spawner| crate::ui3::pixi_service_task())
+}
+
+fn spawn_ui3_asset_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_ap1(spawner, |_ap1_spawner| crate::ui3::ui3_asset_service_task())
 }
 
 fn spawn_ui2(spawner: Spawner) -> SpawnAttempt {
@@ -1197,7 +1200,10 @@ async fn bp_autostart_task() {
         }
     }
 
-    let html = crate::surfer::html_shack::Html::new("inline://trueos/ui3-hello.html", "<!doctype html><html><head><title>UI3 Hello</title></head><body><h1>Hello UI3</h1><p>Parse5 handoff smoke.</p></body></html>");
+    let html = crate::surfer::html_shack::Html::new(
+        "inline://trueos/ui3-hello.html",
+        "<!doctype html><html><head><title>UI3 Hello</title></head><body><h1>Hello UI3</h1><p>Parse5 handoff smoke.</p></body></html>",
+    );
     let _ = crate::surfer::html_shack::enqueue_ready_html_for_browser(html).await;
 }
 
@@ -1259,9 +1265,9 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 #[cfg(feature = "trueos_rdp")]
-const TASK_COUNT: usize = 75;
+const TASK_COUNT: usize = 76;
 #[cfg(not(feature = "trueos_rdp"))]
-const TASK_COUNT: usize = 75;
+const TASK_COUNT: usize = 76;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1505,11 +1511,20 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_truesurfer_parse_pool,
     ),
     TaskSpec::enabled(
+        "ui3-asset-service",
+        crate::r::readiness::BACKGROUND_AP_WORKER_READY
+            | crate::r::readiness::GFX_BACKEND_READY
+            | crate::r::readiness::UI3_INTEL_PRESENT_READY,
+        &UI3_ASSET_SERVICE_STARTED,
+        spawn_ui3_asset_service,
+    ),
+    TaskSpec::enabled(
         "ui3-pixi-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY
             | crate::r::readiness::GFX_BACKEND_READY
             | crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY
-            | crate::r::readiness::UI3_INTEL_PRESENT_READY,
+            | crate::r::readiness::UI3_INTEL_PRESENT_READY
+            | crate::r::readiness::UI3_ASSET_SERVICE_READY,
         &UI3_PIXI_SERVICE_STARTED,
         spawn_ui3_pixi_service,
     ),

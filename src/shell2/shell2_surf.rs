@@ -88,11 +88,7 @@ pub(crate) fn try_file_reference(line: &str) -> Option<String> {
     Some(String::from(path))
 }
 
-pub(crate) fn load_inline_html(
-    spawner: &Spawner,
-    io: &'static dyn ShellBackend2,
-    html: String,
-) {
+pub(crate) fn load_inline_html(spawner: &Spawner, io: &'static dyn ShellBackend2, html: String) {
     let html = html_shack::prepare_ready_inline_html(html);
     enqueue_and_handoff_html(spawner, io, html);
 }

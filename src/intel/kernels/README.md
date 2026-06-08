@@ -96,11 +96,11 @@ evo build. Its SHA-256 is:
 
 `artifacts/adls/mandel64_worklist_rgba8.bin` is the descriptor Mandelbrot
 tile worklist build with clipped 64x4 row-band descriptors, mirrored half-scanout,
-32-bit Q12 arithmetic, and 256-iteration grayscale escape coloring. Its SHA-256
-is:
+32-bit Q12 arithmetic, and descriptor-controlled grayscale escape coloring. Its
+SHA-256 is:
 
 ```text
-6f3062d704f8107202e1415dd820a0ed8c37cc7c52d2af0a6d0da831ea3ab464
+d3b238152c110d875f690fe85be5a6a46fa7de0c18296a65c0d06c3b200c5105
 ```
 
 Regenerate it with:

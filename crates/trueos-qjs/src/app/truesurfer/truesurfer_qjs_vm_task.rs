@@ -789,11 +789,18 @@ const TRUESURFER_TRUEOS_PIXI_CAPTURE_STEP_PROP: &[u8] = b"__TRUEOS_PIXI_CAPTURE_
 const TRUESURFER_TRUEOS_PIXI_LAYOUT_STEP_PROP: &[u8] = b"__TRUEOS_PIXI_LAYOUT_STEP__\0";
 const TRUESURFER_TRUEOS_PIXI_BRIDGE_STATS_PROP: &[u8] = b"__TRUEOS_PIXI_BRIDGE_STATS__\0";
 const TRUESURFER_PARSE5_BUILD_SCENE_PROP: &[u8] = b"__trueosParse5BuildSceneFromCapture\0";
-const TRUESURFER_BUILD_DEMO_TEXT_WIDGET_SCENE_PROP: &[u8] =
-    b"__trueosBuildDemoTextWidgetScene\0";
+const TRUESURFER_BUILD_TEXT_WIDGET_SCENE_PROP: &[u8] = b"__trueosBuildTextWidgetScene\0";
+const TRUESURFER_BUILD_DEMO_TEXT_WIDGET_SCENE_PROP: &[u8] = b"__trueosBuildDemoTextWidgetScene\0";
 const TRUESURFER_UI3_SCENE_COMMAND_SOURCE_PROP: &[u8] = b"commandSource\0";
 const TRUESURFER_UI3_SCENE_ROOT_ID_PROP: &[u8] = b"rootId\0";
 const TRUESURFER_UI3_SCENE_OPS_PROP: &[u8] = b"ops\0";
+const TRUESURFER_WIDGET_PROP: &[u8] = b"widget\0";
+const TRUESURFER_WIDGET_RENDERER_PROP: &[u8] = b"renderer\0";
+const TRUESURFER_WIDGET_BUTTON_COUNT_PROP: &[u8] = b"buttonCount\0";
+const TRUESURFER_WIDGET_IFRAME_COUNT_PROP: &[u8] = b"iframeCount\0";
+const TRUESURFER_WIDGET_IFRAME_SRCDOC_COUNT_PROP: &[u8] = b"iframeSrcdocCount\0";
+const TRUESURFER_WIDGET_TEXT_COUNT_PROP: &[u8] = b"textCount\0";
+const TRUESURFER_WIDGET_TEXT_BYTES_PROP: &[u8] = b"textBytes\0";
 const TRUESURFER_UI3_OP_CODE_PROP: &[u8] = b"code\0";
 const TRUESURFER_UI3_OP_NODE_PROP: &[u8] = b"node\0";
 const TRUESURFER_UI3_OP_A_PROP: &[u8] = b"a\0";
@@ -1261,21 +1268,10 @@ unsafe fn read_global_string(ctx: *mut qjs::JSContext, key: &[u8]) -> String {
         qjs::js_free_value(ctx, global);
         return String::new();
     }
-    let cstr = qjs::js_to_cstring(ctx, value);
-    if cstr.is_null() {
-        qjs::js_free_value(ctx, value);
-        qjs::js_free_value(ctx, global);
-        return String::new();
-    }
-    let out = core::ffi::CStr::from_ptr(cstr)
-        .to_str()
-        .ok()
-        .map(String::from)
-        .unwrap_or_default();
-    qjs::JS_FreeCString(ctx, cstr);
+    let out = js_value_to_string(ctx, value);
     qjs::js_free_value(ctx, value);
     qjs::js_free_value(ctx, global);
-    out
+    strip_trueos_host_markers(out.as_str())
 }
 
 unsafe fn truesurfer_ready(ctx: *mut qjs::JSContext) -> bool {
@@ -1350,19 +1346,87 @@ unsafe fn read_result_string(
         qjs::js_free_value(ctx, value);
         return String::new();
     }
-    let cstr = qjs::js_to_cstring(ctx, value);
+    let out = js_value_to_string(ctx, value);
+    qjs::js_free_value(ctx, value);
+    strip_trueos_host_markers(out.as_str())
+}
+
+unsafe fn js_value_to_string(ctx: *mut qjs::JSContext, value: qjs::JSValueConst) -> String {
+    let mut len = 0usize;
+    let cstr = qjs::JS_ToCStringLen2(ctx, &mut len as *mut usize, value, 0);
     if cstr.is_null() {
-        qjs::js_free_value(ctx, value);
         return String::new();
     }
-    let out = core::ffi::CStr::from_ptr(cstr)
-        .to_str()
-        .ok()
-        .map(String::from)
-        .unwrap_or_default();
+    let bytes = core::slice::from_raw_parts(cstr as *const u8, len);
+    let out = String::from_utf8_lossy(bytes).into_owned();
     qjs::JS_FreeCString(ctx, cstr);
-    qjs::js_free_value(ctx, value);
     out
+}
+
+fn strip_trueos_host_markers(text: &str) -> String {
+    const MARKER: &str = "<truesurfer-";
+    const KNOWN_MARKERS: [&str; 13] = [
+        "<truesurfer-parse5-trueos-host-core>",
+        "<truesurfer-parse5-trueos-host-core",
+        "<truesurfer-parse5-trueos-host-cor",
+        "<truesurfer-parse5-trueos-host-event>",
+        "<truesurfer-parse5-trueos-host-canvas>",
+        "<truesurfer-parse5-trueos-host-dom>",
+        "<truesurfer-parse5-trueos-host-fetch>",
+        "<truesurfer-parse5-trueos-host-capture>",
+        "<truesurfer-parse5-trueos-app.js>",
+        "<truesurfer-parse5-trueos-app",
+        "<truesurfer-init>",
+        "<truesurfer-pixi-host-prelude>",
+        "<truesurfer-pixi-capture-adapter>",
+    ];
+
+    let mut cleaned = String::from(text);
+    strip_trueos_bare_symbols(&mut cleaned);
+    if !cleaned.contains(MARKER) {
+        return cleaned;
+    }
+
+    for marker in KNOWN_MARKERS {
+        while let Some(idx) = cleaned.find(marker) {
+            cleaned.replace_range(idx..idx + marker.len(), "");
+        }
+    }
+
+    if !cleaned.contains(MARKER) {
+        return cleaned;
+    }
+
+    let mut out = String::with_capacity(cleaned.len());
+    let mut rest = cleaned.as_str();
+    while let Some(idx) = rest.find(MARKER) {
+        out.push_str(&rest[..idx]);
+        let marker_tail = &rest[idx..];
+        if let Some(end_rel) = marker_tail.find('>') {
+            let marker_candidate = &marker_tail[..=end_rel];
+            let marker_body = &marker_candidate[1..marker_candidate.len().saturating_sub(1)];
+            if marker_body
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '.' || ch == '_')
+            {
+                rest = &marker_tail[end_rel + 1..];
+                continue;
+            }
+        }
+        out.push_str(MARKER);
+        rest = &marker_tail[MARKER.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn strip_trueos_bare_symbols(text: &mut String) {
+    const SYMBOLS: [&str; 3] = ["__trueosNum", "__trueosNu", "__trueosN"];
+    for symbol in SYMBOLS {
+        while let Some(idx) = text.find(symbol) {
+            text.replace_range(idx..idx + symbol.len(), "");
+        }
+    }
 }
 
 fn compact_log_text_sample(text: &str, max_chars: usize) -> String {
@@ -1412,8 +1476,7 @@ unsafe fn log_parse5_trueos_bridge_stats(ctx: *mut qjs::JSContext, browser_insta
     let layout_blocks = read_result_u32(ctx, stats, TRUESURFER_BRIDGE_LAYOUT_BLOCKS_PROP);
     let layout_text = read_result_u32(ctx, stats, TRUESURFER_BRIDGE_LAYOUT_TEXT_PROP);
     let layout_max_depth = read_result_u32(ctx, stats, TRUESURFER_BRIDGE_LAYOUT_MAX_DEPTH_PROP);
-    let measure_text_calls =
-        read_result_u32(ctx, stats, TRUESURFER_BRIDGE_MEASURE_TEXT_CALLS_PROP);
+    let measure_text_calls = read_result_u32(ctx, stats, TRUESURFER_BRIDGE_MEASURE_TEXT_CALLS_PROP);
     let pixi_commands = read_result_u32(ctx, stats, TRUESURFER_BRIDGE_PIXI_COMMANDS_PROP);
     let render_tags = read_result_string(ctx, stats, TRUESURFER_BRIDGE_RENDER_TAGS_PROP);
     let render_text_samples =
@@ -1436,14 +1499,26 @@ unsafe fn log_parse5_trueos_bridge_stats(ctx: *mut qjs::JSContext, browser_insta
         layout_max_depth,
         measure_text_calls,
         pixi_commands,
-        if pixi_unsupported.is_empty() { "none" } else { pixi_unsupported.as_str() }
+        if pixi_unsupported.is_empty() {
+            "none"
+        } else {
+            pixi_unsupported.as_str()
+        }
     ));
     if !render_tags.is_empty() || !pixi_ops.is_empty() {
         log_line(format!(
             "qjs-truesurfer[{}]: parse5 trueos bridge-tags render_tags={} pixi_ops={}\n",
             browser_instance_id,
-            if render_tags.is_empty() { "none" } else { render_tags.as_str() },
-            if pixi_ops.is_empty() { "none" } else { pixi_ops.as_str() }
+            if render_tags.is_empty() {
+                "none"
+            } else {
+                render_tags.as_str()
+            },
+            if pixi_ops.is_empty() {
+                "none"
+            } else {
+                pixi_ops.as_str()
+            }
         ));
     }
     if !render_text_samples.is_empty() {
@@ -1488,7 +1563,8 @@ unsafe fn submit_ui3_scene(
         qjs::js_free_value(ctx, scene_value);
         return (0, 0);
     }
-    let command_source = read_result_string(ctx, scene_value, TRUESURFER_UI3_SCENE_COMMAND_SOURCE_PROP);
+    let command_source =
+        read_result_string(ctx, scene_value, TRUESURFER_UI3_SCENE_COMMAND_SOURCE_PROP);
     if command_source.contains("pixi") {
         let (mut submitted, mut root) =
             submit_qjs_demo_text_widget_scene(ctx, browser_instance_id, html);
@@ -1501,13 +1577,8 @@ unsafe fn submit_ui3_scene(
             "rust-cabi-fallback"
         };
         log_line(format!(
-            "qjs-truesurfer[{}]: ui3 scene text-widget-bridge source={} scene_root={} root={} ops={} bridge={} tags=h1,p structure=root>iframe>h1>text,p>text reason=parse5-pixi-demo-tags-to-ui3-widgets\n",
-            browser_instance_id,
-            command_source,
-            root_id,
-            root,
-            submitted,
-            bridge_kind
+            "qjs-truesurfer[{}]: ui3 scene text-widget-bridge source={} scene_root={} root={} ops={} bridge={} widgets=iframe,h1,p,button structure=root>iframe>widgets>text reason=parse5-render-tree-to-qjs-widgets\n",
+            browser_instance_id, command_source, root_id, root, submitted, bridge_kind
         ));
         qjs::js_free_value(ctx, scene_value);
         return (submitted, root);
@@ -1522,9 +1593,7 @@ unsafe fn submit_ui3_scene(
     }
     log_line(format!(
         "qjs-truesurfer[{}]: ui3 scene begin root={} source={}\n",
-        browser_instance_id,
-        root_id,
-        command_source
+        browser_instance_id, root_id, command_source
     ));
 
     let ops_value = qjs::JS_GetPropertyStr(
@@ -1722,12 +1791,25 @@ unsafe fn submit_qjs_demo_text_widget_scene(
     html: &str,
 ) -> (u32, u32) {
     let global = qjs::JS_GetGlobalObject(ctx);
-    let builder = qjs::JS_GetPropertyStr(
+    let mut builder = qjs::JS_GetPropertyStr(
         ctx,
         global,
-        TRUESURFER_BUILD_DEMO_TEXT_WIDGET_SCENE_PROP.as_ptr() as *const c_char,
+        TRUESURFER_BUILD_TEXT_WIDGET_SCENE_PROP.as_ptr() as *const c_char,
     );
-    if builder.is_exception() || builder.tag == qjs::JS_TAG_UNDEFINED || builder.tag == qjs::JS_TAG_NULL
+    if builder.is_exception()
+        || builder.tag == qjs::JS_TAG_UNDEFINED
+        || builder.tag == qjs::JS_TAG_NULL
+    {
+        qjs::js_free_value(ctx, builder);
+        builder = qjs::JS_GetPropertyStr(
+            ctx,
+            global,
+            TRUESURFER_BUILD_DEMO_TEXT_WIDGET_SCENE_PROP.as_ptr() as *const c_char,
+        );
+    }
+    if builder.is_exception()
+        || builder.tag == qjs::JS_TAG_UNDEFINED
+        || builder.tag == qjs::JS_TAG_NULL
     {
         qjs::js_free_value(ctx, builder);
         qjs::js_free_value(ctx, global);
@@ -1749,6 +1831,35 @@ unsafe fn submit_qjs_demo_text_widget_scene(
         qjs::js_free_value(ctx, widget_wrapper);
         return (0, 0);
     }
+
+    let widget_meta = qjs::JS_GetPropertyStr(
+        ctx,
+        widget_wrapper,
+        TRUESURFER_WIDGET_PROP.as_ptr() as *const c_char,
+    );
+    if !widget_meta.is_exception()
+        && widget_meta.tag != qjs::JS_TAG_UNDEFINED
+        && widget_meta.tag != qjs::JS_TAG_NULL
+    {
+        let renderer = read_result_string(ctx, widget_meta, TRUESURFER_WIDGET_RENDERER_PROP);
+        let button_count = read_result_u32(ctx, widget_meta, TRUESURFER_WIDGET_BUTTON_COUNT_PROP);
+        let iframe_count = read_result_u32(ctx, widget_meta, TRUESURFER_WIDGET_IFRAME_COUNT_PROP);
+        let iframe_srcdoc_count =
+            read_result_u32(ctx, widget_meta, TRUESURFER_WIDGET_IFRAME_SRCDOC_COUNT_PROP);
+        let text_count = read_result_u32(ctx, widget_meta, TRUESURFER_WIDGET_TEXT_COUNT_PROP);
+        let text_bytes = read_result_u32(ctx, widget_meta, TRUESURFER_WIDGET_TEXT_BYTES_PROP);
+        log_line(format!(
+            "qjs-truesurfer[{}]: qjs text widget meta renderer={} button_count={} iframe_count={} iframe_srcdoc_count={} text_count={} text_bytes={}\n",
+            browser_instance_id,
+            renderer,
+            button_count,
+            iframe_count,
+            iframe_srcdoc_count,
+            text_count,
+            text_bytes
+        ));
+    }
+    qjs::js_free_value(ctx, widget_meta);
 
     let submit_start_ms = now_ms();
     let (ops, root) = submit_ui3_scene(ctx, browser_instance_id, widget_wrapper, html);
