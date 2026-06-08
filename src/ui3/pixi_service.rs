@@ -155,7 +155,12 @@ pub async fn pixi_service_task() {
         crate::log!("ui3-pixi-service: vm parked retained=1\n");
         loop {
             if crate::r::spawn_service::task_stop_requested(TASK_NAME) {
-                crate::log!("ui3-pixi-service: stop requested; exiting\n");
+                crate::log!("ui3-pixi-service: stop requested; teardown begin\n");
+                let drained = qjs::vm::teardown_main_context(vm.rt_ptr(), ctx, 500).await;
+                crate::log!(
+                    "ui3-pixi-service: teardown done drained={}; exiting\n",
+                    if drained { 1 } else { 0 }
+                );
                 break;
             }
             Timer::after(EmbassyDuration::from_millis(PIXI_SERVICE_PARK_MS)).await;

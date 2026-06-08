@@ -5,17 +5,15 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use super::super::{ShellBackend2, print_shell_line};
 use crate::intel::gpgpu::{
     GPGPU_SHELL_SURFACE_HEIGHT, GPGPU_SHELL_SURFACE_PITCH_BYTES, GPGPU_SHELL_SURFACE_WIDTH,
-    GpgpuMandel64Placement, GpgpuPoint, GpgpuRect, alpha_blend_worklist_probe_ok,
-    alpha_blend_worklist_probe_ran, alpha_blend_worklist_rgba8_upload_status,
-    canvas3d_plane_fill_rgba8_upload_status, canvas3d_project_rgba8_upload_status,
-    canvas3d_transform_q16_upload_status, copy_rect_rgba8_upload_status,
-    fill_rect_worklist_probe_ok, fill_rect_worklist_probe_ran,
+    GpgpuPoint, GpgpuRect, alpha_blend_worklist_probe_ok, alpha_blend_worklist_probe_ran,
+    alpha_blend_worklist_rgba8_upload_status, canvas3d_plane_fill_rgba8_upload_status,
+    canvas3d_project_rgba8_upload_status, canvas3d_transform_q16_upload_status,
+    copy_rect_rgba8_upload_status, fill_rect_worklist_probe_ok, fill_rect_worklist_probe_ran,
     fill_rect_worklist_rgba8_upload_status, glyph_mask_rgba8_upload_status,
     gradient_rect_worklist_probe_ok, gradient_rect_worklist_probe_ran,
-    gradient_rect_worklist_rgba8_upload_status, mandel64_worklist_primary,
-    mandel64_worklist_rgba8_upload_status, present_rgba8_to_primary_xrgb_rect_upload_status,
-    rect_worklist_probe_ready, shell_copy_rgba8, shell_copy_scanout_center_rgba8,
-    shell_cube20_project_spin, shell_mandel64_worklist_scanout,
+    gradient_rect_worklist_rgba8_upload_status, mandel64_worklist_rgba8_upload_status,
+    present_rgba8_to_primary_xrgb_rect_upload_status, rect_worklist_probe_ready, shell_copy_rgba8,
+    shell_copy_scanout_center_rgba8, shell_cube20_project_spin, shell_mandel64_worklist_scanout,
     shell_twemoji_atlas_worklist_present_scanout, shell_twemoji_atlas_worklist_scanout,
     shell_twemoji_atlas_worklist_scanout_present, shell_twemoji_atlas_worklist_slot_scanout,
     sprite64_worklist_rgba8_upload_status, submit_alpha_blend_worklist_rgba8_probe_now,
@@ -33,6 +31,8 @@ const CANVAS_DEFAULT_DURATION_MS: u64 = 15_000;
 const CANVAS_DEFAULT_CADENCE_US: u64 = 100_000;
 const CANVAS_MIN_CADENCE_US: u64 = 100;
 const CANVAS_MAX_CADENCE_US: u64 = 200_000;
+const MANDEL_DEFAULT_COUNT: u32 = 32;
+const MANDEL_MAX_COUNT: u32 = 512;
 
 static ATHLAS_GO_SEQUENCE: AtomicU32 = AtomicU32::new(0);
 
@@ -44,8 +44,7 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "gpgpu athlas work [count]");
     print_shell_line(io, "gpgpu athlas go [duration_ms] [cadence_ms] [count] [present_every]");
     print_shell_line(io, "gpgpu athlas_go [duration_ms] [cadence_ms] [count] [present_every]");
-    print_shell_line(io, "gpgpu mandel64 [count]");
-    print_shell_line(io, "gpgpu mandel64 <src_x> <src_y> <dst_x> <dst_y>");
+    print_shell_line(io, "gpgpu mandel [count]");
     print_shell_line(io, "gpgpu canvas [duration_ms] [cadence_ms:0.1..200]");
     print_shell_line(io, "gpgpu plane [half_q16]");
     print_shell_line(io, "gpgpu rectprobe");
@@ -487,60 +486,31 @@ fn run_atlas_work(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>
     print_shell_line(io, msg.as_str());
 }
 
-fn run_mandel64(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+fn run_mandel(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
     let first = args.next();
     let result = if let Some(raw) = first {
-        if args.clone().count() == 3 {
-            let Some(src_x) = raw.parse::<i32>().ok() else {
-                usage(io);
-                return;
-            };
-            let Some(src_y) = parse_i32(args.next()) else {
-                usage(io);
-                return;
-            };
-            let Some(dst_x) = parse_i32(args.next()) else {
-                usage(io);
-                return;
-            };
-            let Some(dst_y) = parse_i32(args.next()) else {
-                usage(io);
-                return;
-            };
-            mandel64_worklist_primary(
-                &[GpgpuMandel64Placement {
-                    src_x,
-                    src_y,
-                    dst_x,
-                    dst_y,
-                    width: 64,
-                    height: 64,
-                }],
-                true,
-            )
-        } else if args.next().is_none() {
-            let Some(count) = raw.parse::<u32>().ok() else {
-                usage(io);
-                return;
-            };
-            shell_mandel64_worklist_scanout(count)
-        } else {
+        if args.next().is_some() {
             usage(io);
             return;
         }
+        let Some(count) = raw.parse::<u32>().ok() else {
+            usage(io);
+            return;
+        };
+        shell_mandel64_worklist_scanout(count.clamp(1, MANDEL_MAX_COUNT))
     } else {
-        shell_mandel64_worklist_scanout(u32::MAX)
+        shell_mandel64_worklist_scanout(MANDEL_DEFAULT_COUNT)
     };
 
     let Some(result) = result else {
         print_shell_line(
             io,
-            "gpgpu mandel64: no result (check primary surface, iGPU claim, and mandel64 artifact)",
+            "gpgpu mandel: no result (check primary surface, iGPU claim, and mandel artifact)",
         );
         return;
     };
     let msg = alloc::format!(
-        "gpgpu mandel64: mode=mandel64-worklist ok={} requested={} desc={} walkers={} pixels={} submit_ms={} present_ms={} total_ms={} last_src={},{} last_dst={},{} primary={}x{} desc_gpu=0x{:X} presented={}",
+        "gpgpu mandel: mode=mandel-worklist ok={} requested={} desc={} walkers={} pixels={} submit_ms={} present_ms={} total_ms={} last_src={},{} last_dst={},{} primary={}x{} desc_gpu=0x{:X} presented={}",
         result.ok as u8,
         result.requested,
         result.descriptors,
@@ -819,8 +789,8 @@ pub(crate) fn try_parse(
         run_atlas(io, args);
     } else if cmd.eq_ignore_ascii_case("athlas_go") {
         run_atlas_go(io, args);
-    } else if cmd.eq_ignore_ascii_case("mandel64") {
-        run_mandel64(io, args);
+    } else if cmd.eq_ignore_ascii_case("mandel") {
+        run_mandel(io, args);
     } else if cmd.eq_ignore_ascii_case("canvas") {
         run_canvas(io, args);
     } else if cmd.eq_ignore_ascii_case("plane") {

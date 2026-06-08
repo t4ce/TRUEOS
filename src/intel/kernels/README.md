@@ -29,7 +29,7 @@ The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 - `present_rgba8_to_primary_xrgb_rect.cl`: RGBA8 scene rect to primary XRGB rect with optional source Y flip
 - `stamp_mandel_rgba8.cl`: ten-iteration Mandelbrot stamp using destination x/y as both stamp origin and view offset
 - `sprite64_worklist_rgba8.cl`: fixed 64x64 sprite descriptors copied/blended from atlas to destination; shell path batches descriptor slices as multiple walkers in one command buffer
-- `mandel64_worklist_rgba8.cl`: fixed 64x4 Mandelbrot row-band descriptors; shell path expands each 64x64 tile into 16 bands
+- `mandel64_worklist_rgba8.cl`: clipped 64x4 Mandelbrot row-band descriptors; shell scanout computes the top half and mirrors it across the real axis
 - `canvas3d_project_rgba8.cl`: Q16 vec3 projection into packed XY/RGBA point records with source/output ranges and dynamic canvas dimensions
 - `canvas3d_transform_q16.cl`: range/subset Q16 vec3 fused scale, quaternion rotation, and translation from source int4 vertices to destination int4 vertices
 - `canvas3d_clip_box_q16.cl`: idempotent Q16 vec3 source-to-sink box clip for presentation-safe geometry before projection
@@ -95,11 +95,12 @@ evo build. Its SHA-256 is:
 ```
 
 `artifacts/adls/mandel64_worklist_rgba8.bin` is the descriptor Mandelbrot
-tile worklist build with 64x4 row-band descriptors, 32-bit Q12 arithmetic, and
-256-iteration grayscale escape coloring. Its SHA-256 is:
+tile worklist build with clipped 64x4 row-band descriptors, mirrored half-scanout,
+32-bit Q12 arithmetic, and 256-iteration grayscale escape coloring. Its SHA-256
+is:
 
 ```text
-8c98b459a26fb4a2f2f42e64683f6009f75c499cfa5f68fa81044012b11a4833
+6f3062d704f8107202e1415dd820a0ed8c37cc7c52d2af0a6d0da831ea3ab464
 ```
 
 Regenerate it with:

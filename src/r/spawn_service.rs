@@ -1501,7 +1501,9 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     TaskSpec::enabled(
         "ui3-pixi-service",
-        crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::GFX_BACKEND_READY,
+        crate::r::readiness::BACKGROUND_AP_WORKER_READY
+            | crate::r::readiness::GFX_BACKEND_READY
+            | crate::r::readiness::UI3_INTEL_PRESENT_READY,
         &UI3_PIXI_SERVICE_STARTED,
         spawn_ui3_pixi_service,
     ),

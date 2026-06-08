@@ -190,6 +190,11 @@ pub mod ui {
             alpha: f32,
         ) -> i32;
         fn trueos_cabi_ui3_scene_render(browser_id: u32, root_id: u32) -> i32;
+        fn trueos_cabi_ui3_native_hello_scene(
+            browser_id: u32,
+            html_ptr: *const u8,
+            html_len: usize,
+        ) -> i32;
     }
 
     #[inline]
@@ -328,5 +333,10 @@ pub mod ui {
     #[inline]
     pub fn ui3_scene_render(browser_id: u32, root_id: u32) -> bool {
         unsafe { trueos_cabi_ui3_scene_render(browser_id, root_id) >= 0 }
+    }
+
+    #[inline]
+    pub fn ui3_native_hello_scene(browser_id: u32, html: &str) -> i32 {
+        unsafe { trueos_cabi_ui3_native_hello_scene(browser_id, html.as_ptr(), html.len()) }
     }
 }
