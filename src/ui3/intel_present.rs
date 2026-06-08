@@ -34,8 +34,10 @@ pub(super) fn present_ui3_frame_to_intel_primary(
 
     for draw in &frame.draws {
         match draw {
-            Ui3LoweredDraw::SolidRect { rect, color, .. } => {
-                if let Some(rect) = lower_rect(*rect) {
+            Ui3LoweredDraw::SolidRect {
+                rect, color, clip, ..
+            } => {
+                if let Some(rect) = clipped_rect(*rect, *clip).and_then(lower_rect) {
                     let color_rgba = rgba8_to_kernel_rgba(*color);
                     let opaque = kernel_rgba_alpha(color_rgba) == 0xff;
                     if !rects.is_empty() && opaque != rect_run_opaque {
@@ -46,8 +48,16 @@ pub(super) fn present_ui3_frame_to_intel_primary(
                 }
             }
             Ui3LoweredDraw::Mesh {
-                vertices, indices, ..
+                vertices,
+                indices,
+                clip,
+                ..
             } => {
+                if let Some(clip) = clip
+                    && !mesh_intersects_clip(vertices, *clip)
+                {
+                    continue;
+                }
                 flush_rect_run(&mut rects, &mut summary);
                 draw_rgb_mesh(vertices, indices, &mut summary);
             }
@@ -55,17 +65,22 @@ pub(super) fn present_ui3_frame_to_intel_primary(
                 tex_id,
                 rect,
                 alpha,
+                clip,
                 ..
             } => {
                 flush_rect_run(&mut rects, &mut summary);
-                draw_texture_rect(*tex_id, *rect, *alpha, &mut summary);
+                draw_texture_rect(*tex_id, *rect, *alpha, *clip, &mut summary);
             }
             Ui3LoweredDraw::TextRun {
                 origin,
                 text,
                 color,
+                clip,
                 ..
             } => {
+                if !text_intersects_clip(*origin, text.as_str(), *clip) {
+                    continue;
+                }
                 flush_rect_run(&mut rects, &mut summary);
                 summary.text_runs = summary.text_runs.saturating_add(1);
                 draw_sprite64_text_run(*origin, text.as_str(), *color, &mut summary);
@@ -83,11 +98,15 @@ fn draw_texture_rect(
     tex_id: u32,
     rect: super::Ui3Rect,
     alpha: f32,
+    clip: Option<super::Ui3Rect>,
     summary: &mut Ui3IntelPresentSummary,
 ) {
     if tex_id == 0 || rect.w <= 0.0 || rect.h <= 0.0 {
         return;
     }
+    let Some(dst_rect) = clipped_rect(rect, clip) else {
+        return;
+    };
     if crate::r::io::cabi::trueos_cabi_gfx_texture_status(tex_id) != 2 {
         return;
     }
@@ -96,15 +115,19 @@ fn draw_texture_rect(
         .map(|(w, h)| (w.max(1), h.max(1)))
         .unwrap_or((1920, 1080));
     let alpha_u8 = (alpha.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    let u0 = ((dst_rect.x - rect.x) / rect.w).clamp(0.0, 1.0);
+    let v0 = ((dst_rect.y - rect.y) / rect.h).clamp(0.0, 1.0);
+    let u1 = ((dst_rect.x + dst_rect.w - rect.x) / rect.w).clamp(0.0, 1.0);
+    let v1 = ((dst_rect.y + dst_rect.h - rect.y) / rect.h).clamp(0.0, 1.0);
     let mut verts = Vec::with_capacity(6 * TEX_VERTEX_SIZE);
     push_tex_quad_px(
         &mut verts,
         ViewTransform::from_extent(view_w, view_h),
-        rect.x,
-        rect.y,
-        rect.x + rect.w,
-        rect.y + rect.h,
-        [0.0, 0.0, 1.0, 1.0],
+        dst_rect.x,
+        dst_rect.y,
+        dst_rect.x + dst_rect.w,
+        dst_rect.y + dst_rect.h,
+        [u0, v0, u1, v1],
         Rgba8::new(255, 255, 255, alpha_u8),
     );
     let begin_rc = unsafe { crate::r::io::cabi::trueos_cabi_gfx_begin_frame_preserve(0) };
@@ -226,6 +249,69 @@ fn publish_frame(summary: &mut Ui3IntelPresentSummary) {
         summary.total_ms = summary.total_ms.saturating_add(present_ms);
         summary.publish_ms = summary.publish_ms.saturating_add(present_ms);
     }
+}
+
+fn clipped_rect(rect: Ui3Rect, clip: Option<Ui3Rect>) -> Option<Ui3Rect> {
+    match clip {
+        Some(clip) => intersect_rect(rect, clip),
+        None => Some(rect),
+    }
+}
+
+fn intersect_rect(a: Ui3Rect, b: Ui3Rect) -> Option<Ui3Rect> {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = (a.x + a.w).min(b.x + b.w);
+    let y1 = (a.y + a.h).min(b.y + b.h);
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    Some(Ui3Rect {
+        x: x0,
+        y: y0,
+        w: x1 - x0,
+        h: y1 - y0,
+    })
+}
+
+fn mesh_intersects_clip(vertices: &[trueos_gfx_core::RgbVertexPx], clip: Ui3Rect) -> bool {
+    let Some(bounds) = mesh_bounds(vertices) else {
+        return false;
+    };
+    intersect_rect(bounds, clip).is_some()
+}
+
+fn mesh_bounds(vertices: &[trueos_gfx_core::RgbVertexPx]) -> Option<Ui3Rect> {
+    let first = vertices.first()?;
+    let mut x0 = first.x;
+    let mut y0 = first.y;
+    let mut x1 = first.x;
+    let mut y1 = first.y;
+    for vertex in vertices.iter().skip(1) {
+        x0 = x0.min(vertex.x);
+        y0 = y0.min(vertex.y);
+        x1 = x1.max(vertex.x);
+        y1 = y1.max(vertex.y);
+    }
+    Some(Ui3Rect {
+        x: x0,
+        y: y0,
+        w: (x1 - x0).max(0.01),
+        h: (y1 - y0).max(0.01),
+    })
+}
+
+fn text_intersects_clip(origin: super::Ui3Point, text: &str, clip: Option<Ui3Rect>) -> bool {
+    let Some(clip) = clip else {
+        return true;
+    };
+    let rect = Ui3Rect {
+        x: origin.x,
+        y: origin.y,
+        w: (text.len() as f32 * 9.0).max(1.0),
+        h: 16.0,
+    };
+    intersect_rect(rect, clip).is_some()
 }
 
 fn lower_rect(rect: Ui3Rect) -> Option<crate::intel::gpgpu::GpgpuRect> {

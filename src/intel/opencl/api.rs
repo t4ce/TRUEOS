@@ -5,10 +5,11 @@
 //! letting the external ABI leak into the early runtime internals.
 
 use super::{
-    ClError, ClResult, IntelOpenClBackend, KnownKernelRole,
+    ClError, ClResult, IntelOpenClBackend, KnownAotValidationReport, KnownKernelRole,
     backend::UploadedKernelRef,
     example::{KnownAotQueueProbe, fill_rect_worklist_queue_probe},
     registry::{KNOWN_AOT_KERNELS, known_aot_kernel},
+    validation::{validate_known_aot_registry, validate_known_aot_status},
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -56,4 +57,12 @@ pub(crate) fn trueos_cl_known_kernel_uploaded(name: &str) -> ClResult<bool> {
 
 pub(crate) fn trueos_cl_probe_known_aot_queue() -> ClResult<KnownAotQueueProbe> {
     fill_rect_worklist_queue_probe()
+}
+
+pub(crate) fn trueos_cl_validate_known_aot_registry() -> KnownAotValidationReport {
+    validate_known_aot_registry()
+}
+
+pub(crate) fn trueos_cl_validate_known_aot_status() -> KnownAotValidationReport {
+    validate_known_aot_status()
 }
