@@ -6,11 +6,15 @@
 #![allow(dead_code)]
 
 mod geometry;
+mod font {
+    pub(super) mod gpgpu_font;
+}
 mod hit_scene;
 mod html_widgets;
 mod intel_present;
 mod pixi_host;
 mod pixi_service;
+mod ui3_asset_service;
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -27,6 +31,7 @@ pub use self::pixi_service::{
     pixi_service_op_count, pixi_service_pump_count, pixi_service_ready, pixi_service_render_count,
     pixi_service_task,
 };
+pub use self::ui3_asset_service::{ui3_asset_service_ready, ui3_asset_service_task};
 
 pub type Ui3NodeId = u32;
 
@@ -163,10 +168,7 @@ pub enum Ui3Command {
 
 fn ui3_light_filter_reason(command: &Ui3Command) -> Option<&'static str> {
     match command {
-        Ui3Command::GraphicsCircle { .. }
-        | Ui3Command::GraphicsMoveTo { .. }
-        | Ui3Command::GraphicsLineTo { .. }
-        | Ui3Command::GraphicsStroke { .. } => Some("graphics-path-op"),
+        Ui3Command::GraphicsCircle { .. } => Some("graphics-path-op"),
         _ => None,
     }
 }

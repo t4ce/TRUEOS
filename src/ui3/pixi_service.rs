@@ -101,9 +101,13 @@ pub async fn pixi_service_task() {
     *pixi_runtime().lock() = Ui3PixiServiceRuntime::new();
 
     if PIXI_SERVICE_NOOP_AFTER_SPAWN {
+        let font_assets = super::ui3_asset_service::ui3_font_sprite64_asset_status();
         PIXI_SERVICE_READY.store(true, Ordering::Release);
         crate::log!(
-            "ui3-pixi-service: spawned noop=1 ready=1 reason=qjs-pixi-path-disabled renders=0 ops=0 filtered_ops=0 frames=0 draws=0 bundle_bytes={} adapter_bytes={}\n",
+            "ui3-pixi-service: spawned noop=1 ready=1 reason=qjs-pixi-path-disabled renders=0 ops=0 filtered_ops=0 frames=0 draws=0 font_sprite64_ready={} font_ready_seq={} font_slots={} bundle_bytes={} adapter_bytes={}\n",
+            font_assets.ready as u8,
+            font_assets.ready_seq,
+            font_assets.atlas_slots,
             PIXI_BUNDLE_SOURCE.len(),
             PIXI_CAPTURE_ADAPTER_SOURCE.len()
         );
@@ -153,14 +157,18 @@ pub async fn pixi_service_task() {
 
         let ready = true;
         PIXI_SERVICE_READY.store(ready, Ordering::Release);
+        let font_assets = super::ui3_asset_service::ui3_font_sprite64_asset_status();
         crate::log!(
-            "ui3-pixi-service: ready={} renders={} ops={} filtered_ops={} frames={} draws={} bundle_bytes={} adapter_bytes={} profile=browser\n",
+            "ui3-pixi-service: ready={} renders={} ops={} filtered_ops={} frames={} draws={} font_sprite64_ready={} font_ready_seq={} font_slots={} bundle_bytes={} adapter_bytes={} profile=browser\n",
             if ready { 1 } else { 0 },
             PIXI_SERVICE_RENDER_COUNT.load(Ordering::Acquire),
             PIXI_SERVICE_OP_COUNT.load(Ordering::Acquire),
             PIXI_SERVICE_FILTERED_OP_COUNT.load(Ordering::Acquire),
             PIXI_SERVICE_FRAME_COUNT.load(Ordering::Acquire),
             PIXI_SERVICE_DRAW_COUNT.load(Ordering::Acquire),
+            font_assets.ready as u8,
+            font_assets.ready_seq,
+            font_assets.atlas_slots,
             PIXI_BUNDLE_SOURCE.len(),
             PIXI_CAPTURE_ADAPTER_SOURCE.len()
         );
@@ -270,8 +278,9 @@ unsafe extern "C" fn trueos_render(
 
     if call <= 4 {
         let present = pixi_runtime().lock().last_present;
+        let font_assets = super::ui3_asset_service::ui3_font_sprite64_asset_status();
         crate::log!(
-            "ui3-pixi-service: __trueosRender call={} root={} root_children={} ops={} filtered_ops={} draws={} solid_rects={} meshes={} text={} presented={} fill_descs={} blend_descs={} rect_ms={} sprite_ms={} publish_ms={} present_ms={} total_ms={} ignored=pixi-service-noop\n",
+            "ui3-pixi-service: __trueosRender call={} root={} root_children={} ops={} filtered_ops={} draws={} solid_rects={} meshes={} text={} presented={} fill_descs={} blend_descs={} rect_ms={} sprite_ms={} publish_ms={} present_ms={} total_ms={} font_sprite64_ready={} font_ready_seq={} ignored=pixi-service-noop\n",
             call,
             root,
             children,
@@ -288,7 +297,9 @@ unsafe extern "C" fn trueos_render(
             present.sprite_ms,
             present.publish_ms,
             present.present_ms,
-            present.total_ms
+            present.total_ms,
+            font_assets.ready as u8,
+            font_assets.ready_seq
         );
     }
 

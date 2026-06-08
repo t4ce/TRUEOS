@@ -27,7 +27,7 @@ const TRUESURFER_FALLBACK_IMAGE_SIZE_PX = 96;
 let truesurferSubsetProfile = null;
 let extractDocumentArtifactsFn = null;
 let createBrowserAssetManagerFn = null;
-let buildDemoTextWidgetSceneFn = null;
+let buildTextWidgetSceneFn = null;
 let browserAssetManager = null;
 let currentNavigationUrl = '';
 let currentBaseGadgetSnapshot = { version: 1, gadgets: [] };
@@ -270,7 +270,10 @@ async function warmBrowserPipelineModules() {
   const extractReady = !!extractMod && typeof extractMod.extractDocumentArtifacts === 'function';
   const assetsReady = !!assetsMod && typeof assetsMod.createBrowserAssetManager === 'function';
   const cssReady = !!cssMod && typeof cssMod.extractCssSection === 'function';
-  const textWidgetReady = !!textWidgetMod && typeof textWidgetMod.buildDemoTextWidgetScene === 'function';
+  const textWidgetReady =
+    !!textWidgetMod &&
+    (typeof textWidgetMod.buildTextWidgetScene === 'function' ||
+      typeof textWidgetMod.buildDemoTextWidgetScene === 'function');
   if (!extractReady || !assetsReady || !cssReady || !textWidgetReady) {
     throw new Error(
       `browser pipeline warmup incomplete extract_ready=${extractReady ? 1 : 0} assets_ready=${assetsReady ? 1 : 0} css_ready=${cssReady ? 1 : 0} text_widget_ready=${textWidgetReady ? 1 : 0}`,
@@ -280,8 +283,9 @@ async function warmBrowserPipelineModules() {
   truesurferSubsetProfile = extractMod.TRUESURFER_SUBSET_PROFILE || null;
   extractDocumentArtifactsFn = extractMod.extractDocumentArtifacts;
   createBrowserAssetManagerFn = assetsMod.createBrowserAssetManager;
-  buildDemoTextWidgetSceneFn = textWidgetMod.buildDemoTextWidgetScene;
-  root.__trueosBuildDemoTextWidgetScene = buildDemoTextWidgetSceneFn;
+  buildTextWidgetSceneFn = textWidgetMod.buildTextWidgetScene || textWidgetMod.buildDemoTextWidgetScene;
+  root.__trueosBuildTextWidgetScene = buildTextWidgetSceneFn;
+  root.__trueosBuildDemoTextWidgetScene = buildTextWidgetSceneFn;
   root.__trueosTruesurferModules = {
     extractReady: 1,
     assetsReady: 1,

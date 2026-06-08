@@ -409,6 +409,18 @@ const SPRITE64_WORKLIST_MAX_WALKERS: usize =
     SPRITE64_WORKLIST_MAX_DESCS / SPRITE64_WORKLIST_DESCS_PER_WALKER;
 const SPRITE64_WORKLIST_DESC_BYTES: usize =
     SPRITE64_WORKLIST_MAX_DESCS * core::mem::size_of::<Sprite64WorklistRgba8Desc>();
+const SPRITE64_LUCIDA_1X_SIZE_CASE: usize = 1;
+const SPRITE64_LUCIDA_1X_BUCKET_PNGS: [&[u8];
+    crate::gfx::althlasfont::athlasmetrics::ATHLAS_BUCKET_COUNT] = [
+    include_bytes!("../gfx/althlasfont/lucida-1x/atlas-g00.png"),
+    include_bytes!("../gfx/althlasfont/lucida-1x/atlas-g01.png"),
+    include_bytes!("../gfx/althlasfont/lucida-1x/atlas-g02.png"),
+    include_bytes!("../gfx/althlasfont/lucida-1x/atlas-g03.png"),
+    include_bytes!("../gfx/althlasfont/lucida-1x/atlas-g04.png"),
+    include_bytes!("../gfx/althlasfont/lucida-1x/atlas-g05.png"),
+    include_bytes!("../gfx/althlasfont/lucida-1x/atlas-g06.png"),
+    include_bytes!("../gfx/althlasfont/lucida-1x/atlas-g07.png"),
+];
 const RECT_WORKLIST_IDD_OFFSET_BYTES: usize = 0x1400;
 const RECT_WORKLIST_BINDING_TABLE_OFFSET_BYTES: usize = 0x1440;
 const RECT_WORKLIST_SRC_SURFACE_STATE_OFFSET_BYTES: usize = 0x1480;
@@ -1469,6 +1481,18 @@ pub(crate) struct GpgpuShellAtlasWorklistResult {
 }
 
 #[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuSprite64AtlasWarmResult {
+    pub(crate) ok: bool,
+    pub(crate) slots: u16,
+    pub(crate) columns: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) pitch_bytes: u32,
+    pub(crate) bytes: usize,
+    pub(crate) atlas_gpu: u64,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct GpgpuShellMandel64WorklistResult {
     pub(crate) ok: bool,
     pub(crate) submitted: bool,
@@ -1492,6 +1516,106 @@ pub(crate) struct GpgpuTwemojiSprite64Placement {
     pub(crate) slot: u16,
     pub(crate) dst_x: i32,
     pub(crate) dst_y: i32,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuSprite64Placement {
+    slot: u16,
+    dst_x: i32,
+    dst_y: i32,
+    flags: u32,
+    color_rgba: u32,
+}
+
+impl GpgpuSprite64Placement {
+    #[inline]
+    pub(crate) const fn src_over(slot: u16, dst_x: i32, dst_y: i32) -> Self {
+        Self {
+            slot,
+            dst_x,
+            dst_y,
+            flags: SPRITE64_WORKLIST_FLAG_SRC_OVER,
+            color_rgba: 0x00FF_FFFF,
+        }
+    }
+
+    #[inline]
+    pub(crate) const fn tinted_src_over(
+        slot: u16,
+        dst_x: i32,
+        dst_y: i32,
+        color_rgba: u32,
+    ) -> Self {
+        Self {
+            slot,
+            dst_x,
+            dst_y,
+            flags: SPRITE64_WORKLIST_FLAG_SRC_OVER | SPRITE64_WORKLIST_FLAG_TINT_RGB,
+            color_rgba,
+        }
+    }
+}
+
+trait Sprite64PlacementDesc {
+    fn slot(&self) -> u16;
+    fn dst_x(&self) -> i32;
+    fn dst_y(&self) -> i32;
+    fn flags(&self) -> u32;
+    fn color_rgba(&self) -> u32;
+}
+
+impl Sprite64PlacementDesc for GpgpuTwemojiSprite64Placement {
+    #[inline]
+    fn slot(&self) -> u16 {
+        self.slot
+    }
+
+    #[inline]
+    fn dst_x(&self) -> i32 {
+        self.dst_x
+    }
+
+    #[inline]
+    fn dst_y(&self) -> i32 {
+        self.dst_y
+    }
+
+    #[inline]
+    fn flags(&self) -> u32 {
+        SPRITE64_WORKLIST_FLAG_SRC_OVER
+    }
+
+    #[inline]
+    fn color_rgba(&self) -> u32 {
+        0x00FF_FFFF
+    }
+}
+
+impl Sprite64PlacementDesc for GpgpuSprite64Placement {
+    #[inline]
+    fn slot(&self) -> u16 {
+        self.slot
+    }
+
+    #[inline]
+    fn dst_x(&self) -> i32 {
+        self.dst_x
+    }
+
+    #[inline]
+    fn dst_y(&self) -> i32 {
+        self.dst_y
+    }
+
+    #[inline]
+    fn flags(&self) -> u32 {
+        self.flags
+    }
+
+    #[inline]
+    fn color_rgba(&self) -> u32 {
+        self.color_rgba
+    }
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -4154,9 +4278,76 @@ pub(crate) fn shell_twemoji_atlas_worklist_scanout_present(
     })
 }
 
+pub(crate) fn sprite64_lucida1x_slot_for_region(
+    region: crate::gfx::althlasfont::athlasmetrics::AthlasGlyphRegion,
+) -> Option<u16> {
+    if region.bucket as usize >= SPRITE64_LUCIDA_1X_BUCKET_PNGS.len() {
+        return None;
+    }
+    let base = sprite64_lucida1x_bucket_base(region.bucket as usize)?;
+    base.checked_add(region.slot)
+}
+
+fn sprite64_lucida1x_bucket_base(bucket: usize) -> Option<u16> {
+    if bucket >= SPRITE64_LUCIDA_1X_BUCKET_PNGS.len() {
+        return None;
+    }
+    let mut base = u32::from(crate::gfx::althlasfont::twemoji::twemoji_slot_count());
+    for prior_bucket in 0..bucket {
+        base = base.checked_add(sprite64_lucida1x_bucket_cell_count(prior_bucket)?)?;
+    }
+    u16::try_from(base).ok()
+}
+
+fn sprite64_lucida1x_bucket_cell_count(bucket: usize) -> Option<u32> {
+    let metrics = crate::gfx::althlasfont::athlasmetrics::athlas_bucket_atlas_metrics(
+        SPRITE64_LUCIDA_1X_SIZE_CASE,
+        bucket,
+    )?;
+    Some(u32::from(metrics.grid_w.max(1)).saturating_mul(u32::from(metrics.grid_h.max(1))))
+}
+
+fn sprite64_lucida1x_slot_count() -> Option<u32> {
+    let mut count = 0u32;
+    for bucket in 0..SPRITE64_LUCIDA_1X_BUCKET_PNGS.len() {
+        count = count.checked_add(sprite64_lucida1x_bucket_cell_count(bucket)?)?;
+    }
+    Some(count)
+}
+
+pub(crate) fn warm_sprite64_font_atlas() -> Option<GpgpuSprite64AtlasWarmResult> {
+    let atlas = sprite64_worklist_atlas_once()?;
+    Some(GpgpuSprite64AtlasWarmResult {
+        ok: true,
+        slots: atlas.slots,
+        columns: atlas.columns,
+        width: atlas.surface.width,
+        height: atlas.surface.height,
+        pitch_bytes: atlas.surface.pitch_bytes,
+        bytes: atlas.surface.bytes,
+        atlas_gpu: atlas.surface.gpu,
+    })
+}
+
 pub(crate) fn twemoji_sprite64_worklist_primary(
     placements: &[GpgpuTwemojiSprite64Placement],
     present: bool,
+) -> Option<GpgpuShellAtlasWorklistResult> {
+    sprite64_worklist_primary_inner(placements, present, "ui2-cursor-sprite64-worklist")
+}
+
+pub(crate) fn sprite64_worklist_primary(
+    placements: &[GpgpuSprite64Placement],
+    present: bool,
+    present_reason: &str,
+) -> Option<GpgpuShellAtlasWorklistResult> {
+    sprite64_worklist_primary_inner(placements, present, present_reason)
+}
+
+fn sprite64_worklist_primary_inner<T: Sprite64PlacementDesc>(
+    placements: &[T],
+    present: bool,
+    present_reason: &str,
 ) -> Option<GpgpuShellAtlasWorklistResult> {
     let total_start_tick = direct_rcs_now_tick();
     let target_start_tick = direct_rcs_now_tick();
@@ -4196,27 +4387,27 @@ pub(crate) fn twemoji_sprite64_worklist_primary(
     let mut last_slot = 0u16;
     let mut last_dst_xy = GpgpuPoint::new(0, 0);
     let desc_write_start_tick = direct_rcs_now_tick();
+    let _desc_guard = RECT_WORKLIST_DESC_SUBMIT_LOCK.lock();
     unsafe {
         core::ptr::write_bytes(desc.virt, 0, desc.bytes);
         let descs = desc.virt as *mut Sprite64WorklistRgba8Desc;
         for (index, placement) in placements.iter().take(count).enumerate() {
-            if placement.slot >= atlas.slots {
+            let slot = placement.slot();
+            if slot >= atlas.slots {
                 return None;
             }
-            let atlas_x =
-                (u32::from(placement.slot) % atlas.columns) * SPRITE64_WORKLIST_CELL_PIXELS;
-            let atlas_y =
-                (u32::from(placement.slot) / atlas.columns) * SPRITE64_WORKLIST_CELL_PIXELS;
-            let dst_x = placement.dst_x.clamp(0, max_x);
-            let dst_y = placement.dst_y.clamp(0, max_y);
+            let atlas_x = (u32::from(slot) % atlas.columns) * SPRITE64_WORKLIST_CELL_PIXELS;
+            let atlas_y = (u32::from(slot) / atlas.columns) * SPRITE64_WORKLIST_CELL_PIXELS;
+            let dst_x = placement.dst_x().clamp(0, max_x);
+            let dst_y = placement.dst_y().clamp(0, max_y);
             let desc_value = Sprite64WorklistRgba8Desc {
                 atlas_xy: ((atlas_y & 0xFFFF) << 16) | (atlas_x & 0xFFFF),
                 dst_xy: (((dst_y as u32) & 0xFFFF) << 16) | ((dst_x as u32) & 0xFFFF),
-                flags: SPRITE64_WORKLIST_FLAG_SRC_OVER,
-                color_rgba: 0x00FF_FFFF,
+                flags: placement.flags(),
+                color_rgba: placement.color_rgba(),
             };
             core::ptr::write_volatile(descs.add(index), desc_value);
-            last_slot = placement.slot;
+            last_slot = slot;
             last_dst_xy = GpgpuPoint::new(dst_x, dst_y);
         }
     }
@@ -4239,11 +4430,7 @@ pub(crate) fn twemoji_sprite64_worklist_primary(
     let submit_ms = direct_rcs_elapsed_ms_since(submit_start_tick);
     let present_start_tick = direct_rcs_now_tick();
     let presented = if submitted && present {
-        super::display::notify_primary_surface_external_write(
-            "ui2-cursor-sprite64-worklist",
-            0,
-            target.byte_len,
-        )
+        super::display::notify_primary_surface_external_write(present_reason, 0, target.byte_len)
     } else {
         false
     };
@@ -5840,13 +6027,15 @@ fn stage_rgba_scene(
 fn sprite64_worklist_atlas_once() -> Option<GpgpuSprite64WorklistAtlasSurface> {
     GPGPU_SPRITE64_WORKLIST_ATLAS
         .call_once(|| {
-            let atlas = twemoji_atlas_cache_once()?;
-            let slot_count = crate::gfx::althlasfont::twemoji::twemoji_slot_count();
-            if slot_count == 0 {
+            let twemoji_atlas = twemoji_atlas_cache_once()?;
+            let twemoji_slot_count = crate::gfx::althlasfont::twemoji::twemoji_slot_count();
+            let lucida_slot_count = sprite64_lucida1x_slot_count()?;
+            let slot_count = u32::from(twemoji_slot_count).checked_add(lucida_slot_count)?;
+            if slot_count == 0 || slot_count > u32::from(u16::MAX) {
                 return None;
             }
             let columns = SPRITE64_WORKLIST_ATLAS_COLUMNS;
-            let rows = (u32::from(slot_count)).div_ceil(columns);
+            let rows = slot_count.div_ceil(columns);
             let width = columns.saturating_mul(SPRITE64_WORKLIST_CELL_PIXELS);
             let height = rows.saturating_mul(SPRITE64_WORKLIST_CELL_PIXELS);
             let pitch_bytes = width.checked_mul(core::mem::size_of::<u32>() as u32)?;
@@ -5859,7 +6048,7 @@ fn sprite64_worklist_atlas_once() -> Option<GpgpuSprite64WorklistAtlasSurface> {
 
             let dst = virt as *mut u32;
             let dst_pitch_pixels = width as usize;
-            for slot in 0..slot_count {
+            for slot in 0..twemoji_slot_count {
                 let Some(region) =
                     crate::gfx::althlasfont::twemoji::twemoji_lookup_slot_region(slot)
                 else {
@@ -5867,10 +6056,10 @@ fn sprite64_worklist_atlas_once() -> Option<GpgpuSprite64WorklistAtlasSurface> {
                 };
                 let src_w = u32::from(region.src_w)
                     .min(SPRITE64_WORKLIST_CELL_PIXELS)
-                    .min(atlas.width.saturating_sub(u32::from(region.src_x)));
+                    .min(twemoji_atlas.width.saturating_sub(u32::from(region.src_x)));
                 let src_h = u32::from(region.src_h)
                     .min(SPRITE64_WORKLIST_CELL_PIXELS)
-                    .min(atlas.height.saturating_sub(u32::from(region.src_y)));
+                    .min(twemoji_atlas.height.saturating_sub(u32::from(region.src_y)));
                 if src_w == 0 || src_h == 0 {
                     continue;
                 }
@@ -5884,12 +6073,13 @@ fn sprite64_worklist_atlas_once() -> Option<GpgpuSprite64WorklistAtlasSurface> {
                     for x in 0..src_w {
                         let atlas_x = u32::from(region.src_x) + x;
                         let atlas_y = u32::from(region.src_y) + y;
-                        let src_idx =
-                            ((atlas_y as usize) * (atlas.width as usize) + atlas_x as usize) * 4;
-                        let r = *atlas.rgba.get(src_idx)? as u32;
-                        let g = *atlas.rgba.get(src_idx + 1)? as u32;
-                        let b = *atlas.rgba.get(src_idx + 2)? as u32;
-                        let a = *atlas.rgba.get(src_idx + 3)? as u32;
+                        let src_idx = ((atlas_y as usize) * (twemoji_atlas.width as usize)
+                            + atlas_x as usize)
+                            * 4;
+                        let r = *twemoji_atlas.rgba.get(src_idx)? as u32;
+                        let g = *twemoji_atlas.rgba.get(src_idx + 1)? as u32;
+                        let b = *twemoji_atlas.rgba.get(src_idx + 2)? as u32;
+                        let a = *twemoji_atlas.rgba.get(src_idx + 3)? as u32;
                         let out_x = cell_x + pad_x + x;
                         let out_y = cell_y + pad_y + y;
                         let dst_idx = (out_y as usize) * dst_pitch_pixels + out_x as usize;
@@ -5898,6 +6088,66 @@ fn sprite64_worklist_atlas_once() -> Option<GpgpuSprite64WorklistAtlasSurface> {
                                 dst.add(dst_idx),
                                 (a << 24) | (r << 16) | (g << 8) | b,
                             );
+                        }
+                    }
+                }
+            }
+
+            for (bucket, png) in SPRITE64_LUCIDA_1X_BUCKET_PNGS.iter().enumerate() {
+                let decoded = crate::gfx::png_codec::decode_png_rgba(png).ok()?;
+                let metrics = crate::gfx::althlasfont::athlasmetrics::athlas_bucket_atlas_metrics(
+                    SPRITE64_LUCIDA_1X_SIZE_CASE,
+                    bucket,
+                )?;
+                let base_slot = u32::from(sprite64_lucida1x_bucket_base(bucket)?);
+                let bucket_slots = u32::from(metrics.grid_w.max(1))
+                    .saturating_mul(u32::from(metrics.grid_h.max(1)));
+                let src_w = u32::from(metrics.cell_w).min(SPRITE64_WORKLIST_CELL_PIXELS);
+                let src_h = u32::from(metrics.cell_h).min(SPRITE64_WORKLIST_CELL_PIXELS);
+                if src_w == 0 || src_h == 0 {
+                    continue;
+                }
+
+                for slot in 0..bucket_slots {
+                    let src_cell_x = (slot % u32::from(metrics.grid_w.max(1)))
+                        .saturating_mul(u32::from(metrics.cell_w));
+                    let src_cell_y = (slot / u32::from(metrics.grid_w.max(1)))
+                        .saturating_mul(u32::from(metrics.cell_h));
+                    let global_slot = base_slot.saturating_add(slot);
+                    let cell_x = (global_slot % columns) * SPRITE64_WORKLIST_CELL_PIXELS;
+                    let cell_y = (global_slot / columns) * SPRITE64_WORKLIST_CELL_PIXELS;
+
+                    for y in 0..src_h {
+                        let atlas_y = src_cell_y + y;
+                        if atlas_y >= decoded.height {
+                            continue;
+                        }
+                        for x in 0..src_w {
+                            let atlas_x = src_cell_x + x;
+                            if atlas_x >= decoded.width {
+                                continue;
+                            }
+                            let src_idx = ((atlas_y as usize) * (decoded.width as usize)
+                                + atlas_x as usize)
+                                * 4;
+                            let r = *decoded.rgba.get(src_idx)? as u32;
+                            let g = *decoded.rgba.get(src_idx + 1)? as u32;
+                            let b = *decoded.rgba.get(src_idx + 2)? as u32;
+                            let src_a = *decoded.rgba.get(src_idx + 3)? as u32;
+                            let mask = r.max(g).max(b);
+                            let a = (mask.saturating_mul(src_a).saturating_add(127)) / 255;
+                            if a == 0 {
+                                continue;
+                            }
+                            let out_x = cell_x + x;
+                            let out_y = cell_y + y;
+                            let dst_idx = (out_y as usize) * dst_pitch_pixels + out_x as usize;
+                            unsafe {
+                                core::ptr::write_volatile(
+                                    dst.add(dst_idx),
+                                    (a << 24) | 0x00FF_FFFF,
+                                );
+                            }
                         }
                     }
                 }
@@ -5919,7 +6169,7 @@ fn sprite64_worklist_atlas_once() -> Option<GpgpuSprite64WorklistAtlasSurface> {
             Some(GpgpuSprite64WorklistAtlasSurface {
                 surface,
                 columns,
-                slots: slot_count,
+                slots: slot_count as u16,
             })
         })
         .as_ref()

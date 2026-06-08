@@ -1086,10 +1086,79 @@ unsafe fn log_js_args(
                 log_str("<toString failed>");
                 continue;
             };
-            log_bytes(text.as_bytes());
+            log_bytes(strip_truesurfer_synthetic_markers(text.as_bytes()).as_bytes());
         }
     }
     log_str("\n");
+}
+
+fn strip_truesurfer_synthetic_markers(bytes: &[u8]) -> String {
+    const MARKER: &str = "<truesurfer-";
+    const KNOWN_MARKERS: [&str; 13] = [
+        "<truesurfer-parse5-trueos-host-core>",
+        "<truesurfer-parse5-trueos-host-core",
+        "<truesurfer-parse5-trueos-host-cor",
+        "<truesurfer-parse5-trueos-host-event>",
+        "<truesurfer-parse5-trueos-host-canvas>",
+        "<truesurfer-parse5-trueos-host-dom>",
+        "<truesurfer-parse5-trueos-host-fetch>",
+        "<truesurfer-parse5-trueos-host-capture>",
+        "<truesurfer-parse5-trueos-app.js>",
+        "<truesurfer-parse5-trueos-app",
+        "<truesurfer-init>",
+        "<truesurfer-pixi-host-prelude>",
+        "<truesurfer-pixi-capture-adapter>",
+    ];
+
+    let Ok(text) = core::str::from_utf8(bytes) else {
+        return String::from_utf8_lossy(bytes).into_owned();
+    };
+    let mut cleaned = String::from(text);
+    strip_trueos_bare_symbols(&mut cleaned);
+    if !cleaned.contains(MARKER) {
+        return cleaned;
+    }
+
+    for marker in KNOWN_MARKERS {
+        while let Some(idx) = cleaned.find(marker) {
+            cleaned.replace_range(idx..idx + marker.len(), "");
+        }
+    }
+
+    if !cleaned.contains(MARKER) {
+        return cleaned;
+    }
+
+    let mut out = String::with_capacity(cleaned.len());
+    let mut rest = cleaned.as_str();
+    while let Some(idx) = rest.find(MARKER) {
+        out.push_str(&rest[..idx]);
+        let marker_tail = &rest[idx..];
+        if let Some(end_rel) = marker_tail.find('>') {
+            let marker_candidate = &marker_tail[..=end_rel];
+            let marker_body = &marker_candidate[1..marker_candidate.len().saturating_sub(1)];
+            if marker_body
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '.' || ch == '_')
+            {
+                rest = &marker_tail[end_rel + 1..];
+                continue;
+            }
+        }
+        out.push_str(MARKER);
+        rest = &marker_tail[MARKER.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn strip_trueos_bare_symbols(text: &mut String) {
+    const SYMBOLS: [&str; 3] = ["__trueosNum", "__trueosNu", "__trueosN"];
+    for symbol in SYMBOLS {
+        while let Some(idx) = text.find(symbol) {
+            text.replace_range(idx..idx + symbol.len(), "");
+        }
+    }
 }
 
 unsafe extern "C" fn console_log(

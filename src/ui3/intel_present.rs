@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use libm::{ceilf, floorf, roundf};
+use libm::{ceilf, floorf};
 use trueos_gfx_core::Rgba8;
 
 use super::{Ui3GeometryFrame, Ui3LoweredDraw, Ui3Rect};
@@ -47,10 +47,15 @@ pub(super) fn present_ui3_frame_to_intel_primary(
                 flush_rect_run(&mut rects, &mut summary);
                 summary.mesh_draws = summary.mesh_draws.saturating_add(1);
             }
-            Ui3LoweredDraw::TextRun { origin, text, .. } => {
+            Ui3LoweredDraw::TextRun {
+                origin,
+                text,
+                color,
+                ..
+            } => {
                 flush_rect_run(&mut rects, &mut summary);
                 summary.text_runs = summary.text_runs.saturating_add(1);
-                draw_twemoji_text_run(origin.x, origin.y, text.as_str(), &mut summary);
+                draw_sprite64_text_run(*origin, text.as_str(), *color, &mut summary);
             }
         }
     }
@@ -92,64 +97,18 @@ fn accumulate_rect_result(
     summary.rect_ms = summary.rect_ms.saturating_add(result.total_ms);
 }
 
-fn draw_twemoji_text_run(x: f32, y: f32, text: &str, summary: &mut Ui3IntelPresentSummary) {
-    if text.is_empty() || !x.is_finite() || !y.is_finite() {
-        return;
-    }
-
-    let mut placements = Vec::new();
-    let origin_x = x;
-    let mut pen_x = x;
-    let mut pen_y = y;
-    for ch in text.chars() {
-        match ch {
-            '\r' => continue,
-            '\n' => {
-                pen_x = origin_x;
-                pen_y += 64.0;
-                continue;
-            }
-            ' ' | '\t' => {
-                pen_x += 64.0;
-                continue;
-            }
-            _ => {}
-        }
-
-        if let Some(slot) = twemoji_slot_for_char(ch) {
-            placements.push(crate::intel::gpgpu::GpgpuTwemojiSprite64Placement {
-                slot,
-                dst_x: roundf(pen_x) as i32,
-                dst_y: roundf(pen_y) as i32,
-            });
-        }
-        pen_x += 64.0;
-    }
-
-    let Some(result) = crate::intel::gpgpu::twemoji_sprite64_worklist_primary(&placements, false)
-    else {
-        return;
-    };
-    if result.ok && result.submitted && result.descriptors > 0 {
+fn draw_sprite64_text_run(
+    origin: super::Ui3Point,
+    text: &str,
+    color: Rgba8,
+    summary: &mut Ui3IntelPresentSummary,
+) {
+    let result = super::font::gpgpu_font::draw_ui3_text_run_sprite64(origin, text, color);
+    if result.submitted && result.descriptors > 0 {
         summary.primary_dirty = true;
     }
     summary.sprite_ms = summary.sprite_ms.saturating_add(result.total_ms);
     summary.total_ms = summary.total_ms.saturating_add(result.total_ms);
-}
-
-fn twemoji_slot_for_char(ch: char) -> Option<u16> {
-    if let Some(region) = crate::gfx::althlasfont::twemoji::twemoji_lookup_glyph_region(ch) {
-        return Some(region.slot);
-    }
-    if ch.is_control() || ch.is_whitespace() {
-        return None;
-    }
-    let slots = crate::gfx::althlasfont::twemoji::twemoji_slot_count();
-    if slots == 0 {
-        None
-    } else {
-        Some((u32::from(ch) % u32::from(slots)) as u16)
-    }
 }
 
 fn publish_frame(summary: &mut Ui3IntelPresentSummary) {

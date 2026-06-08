@@ -70,7 +70,8 @@ pub(crate) fn try_parse(
         action if action.eq_ignore_ascii_case("status") => pixi_status(io),
         action if action.eq_ignore_ascii_case("start") => {
             crate::r::spawn_service::enable_task_by_index(index);
-            let msg = alloc::format!("ui3 pixi: enabled task={} name={}", index, UI3_PIXI_TASK_NAME);
+            let msg =
+                alloc::format!("ui3 pixi: enabled task={} name={}", index, UI3_PIXI_TASK_NAME);
             print_shell_line(io, msg.as_str());
         }
         action if action.eq_ignore_ascii_case("stop") => {
