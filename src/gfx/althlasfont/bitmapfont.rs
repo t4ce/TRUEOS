@@ -37,6 +37,16 @@ pub struct AthlasFontSprite64Inventory {
     pub max_cell_h: u16,
 }
 
+pub const ATHLAS_FONT_FACE_LUCIDA_THIRD: AthlasFontFace = AthlasFontFace {
+    family: AthlasFontFamily::Lucida,
+    tier: AthlasFontTier::Third,
+};
+
+pub const ATHLAS_FONT_FACE_LUCIDA_HALF: AthlasFontFace = AthlasFontFace {
+    family: AthlasFontFamily::Lucida,
+    tier: AthlasFontTier::Half,
+};
+
 pub const ATHLAS_FONT_FACE_LUCIDA_1X: AthlasFontFace = AthlasFontFace {
     family: AthlasFontFamily::Lucida,
     tier: AthlasFontTier::OneX,
@@ -66,7 +76,11 @@ pub const ATHLAS_SPRITE64_FONT_FACES: [AthlasFontFace; 6] = [
     },
 ];
 
-pub const ATHLAS_UI3_SPRITE64_FONT_FACES: [AthlasFontFace; 1] = [ATHLAS_FONT_FACE_LUCIDA_1X];
+pub const ATHLAS_UI3_SPRITE64_FONT_FACES: [AthlasFontFace; 3] = [
+    ATHLAS_FONT_FACE_LUCIDA_THIRD,
+    ATHLAS_FONT_FACE_LUCIDA_HALF,
+    ATHLAS_FONT_FACE_LUCIDA_1X,
+];
 
 #[derive(Debug, Deserialize)]
 struct AthlasMetricsSet {

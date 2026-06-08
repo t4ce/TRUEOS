@@ -1224,7 +1224,18 @@ fn strip_truesurfer_synthetic_markers(bytes: &[u8]) -> String {
 }
 
 fn strip_trueos_bare_symbols(text: &mut String) {
-    const SYMBOLS: [&str; 3] = ["__trueosNum", "__trueosNu", "__trueosN"];
+    const SYMBOLS: [&str; 10] = [
+        "__TRUEOS_HOST_READY__",
+        "__trueosNumberValue",
+        "__trueosHostNum",
+        "__trueosNum",
+        "__trueosNu",
+        "__trueosN",
+        "tsNutsNutsNutsNu",
+        "tsNutsNutsNu",
+        "tsNutsNu",
+        "tsNum",
+    ];
     for symbol in SYMBOLS {
         while let Some(idx) = text.find(symbol) {
             text.replace_range(idx..idx + symbol.len(), "");

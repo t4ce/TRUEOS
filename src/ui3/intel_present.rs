@@ -75,6 +75,7 @@ pub(super) fn present_ui3_frame_to_intel_primary(
                 origin,
                 text,
                 color,
+                font_tier,
                 clip,
                 ..
             } => {
@@ -83,7 +84,7 @@ pub(super) fn present_ui3_frame_to_intel_primary(
                 }
                 flush_rect_run(&mut rects, &mut summary);
                 summary.text_runs = summary.text_runs.saturating_add(1);
-                draw_sprite64_text_run(*origin, text.as_str(), *color, &mut summary);
+                draw_sprite64_text_run(*origin, text.as_str(), *color, *font_tier, &mut summary);
             }
         }
     }
@@ -218,10 +219,12 @@ fn draw_sprite64_text_run(
     origin: super::Ui3Point,
     text: &str,
     color: Rgba8,
+    font_tier: u8,
     summary: &mut Ui3IntelPresentSummary,
 ) {
-    let batches =
-        super::font::gpgpu_font::collect_ui3_text_run_sprite64_batches(origin, text, color);
+    let batches = super::font::gpgpu_font::collect_ui3_text_run_sprite64_batches(
+        origin, text, color, font_tier,
+    );
     for batch in batches {
         let Some(result) = crate::intel::gpgpu::sprite64_worklist_primary(
             batch.placements.as_slice(),

@@ -1192,6 +1192,82 @@ impl IntelGfxBackend {
                 dst_height
             );
         }
+        if sample_kind == SampleKind::Rgba
+            && blend == BlendDesc::disabled()
+            && sampler.wrap_s == SamplerWrap::ClampToEdge
+            && sampler.wrap_t == SamplerWrap::ClampToEdge
+            && sampler.min_filter == SamplerFilter::Nearest
+            && sampler.mag_filter == SamplerFilter::Nearest
+            && let Some(src_surface) = source.gpgpu_surface()
+        {
+            let mut quads = 0usize;
+            let mut submits = 0usize;
+            let mut spans = 0usize;
+            let mut pixels = 0usize;
+            let mut off = 0usize;
+            while off + (6 * trueos_gfx_core::TEX_VERTEX_SIZE) <= verts.len() {
+                let v0 = read_tex_vertex_f32_bytes(verts, off)?;
+                let v1 = read_tex_vertex_f32_bytes(verts, off + trueos_gfx_core::TEX_VERTEX_SIZE)?;
+                let v2 =
+                    read_tex_vertex_f32_bytes(verts, off + 2 * trueos_gfx_core::TEX_VERTEX_SIZE)?;
+                let v3 =
+                    read_tex_vertex_f32_bytes(verts, off + 3 * trueos_gfx_core::TEX_VERTEX_SIZE)?;
+                let v4 =
+                    read_tex_vertex_f32_bytes(verts, off + 4 * trueos_gfx_core::TEX_VERTEX_SIZE)?;
+                let v5 =
+                    read_tex_vertex_f32_bytes(verts, off + 5 * trueos_gfx_core::TEX_VERTEX_SIZE)?;
+                if ![v0, v1, v2, v3, v4, v5]
+                    .iter()
+                    .all(tex_vertex_is_untinted_white)
+                {
+                    return None;
+                }
+                let quad = decode_tex_quad_bounds(
+                    verts,
+                    off,
+                    source.width,
+                    source.height,
+                    dst_width,
+                    dst_height,
+                )?;
+                let quad = clip_texture_scale_quad_to_scissor(quad, scissor)?;
+                let stats = crate::intel::gpgpu::blit_rgba8_nearest_to_primary_stats(
+                    src_surface,
+                    crate::intel::gpgpu::GpgpuRect::new(
+                        quad.src_x as i32,
+                        quad.src_y as i32,
+                        quad.src_w,
+                        quad.src_h,
+                    ),
+                    crate::intel::gpgpu::GpgpuRect::new(
+                        quad.dst_x, quad.dst_y, quad.dst_w, quad.dst_h,
+                    ),
+                )?;
+                quads = quads.saturating_add(1);
+                submits = submits.saturating_add(stats.submits);
+                spans = spans.saturating_add(stats.spans);
+                pixels = pixels
+                    .saturating_add((quad.dst_w as usize).saturating_mul(quad.dst_h as usize));
+                off = off.saturating_add(6 * trueos_gfx_core::TEX_VERTEX_SIZE);
+            }
+            if quads > 0 && submits > 0 {
+                self.screen_rgba_gpu_dirty = true;
+                if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) {
+                    crate::log!(
+                        "intel/gfx-backend: draw-tex mode=gpgpu-blit-nearest-primary target=screen quads={} spans={} submits={} pixels={} source={}x{} target={}x{}\n",
+                        quads,
+                        spans,
+                        submits,
+                        pixels,
+                        source.width,
+                        source.height,
+                        dst_width,
+                        dst_height
+                    );
+                }
+                return Some((quads, pixels.saturating_mul(4), "gpgpu-blit-nearest-primary"));
+            }
+        }
         let prefer_cpu_alpha_rect_primary =
             blend == BlendDesc::straight_alpha() && !full_scene_alpha_candidate;
         if !prefer_cpu_alpha_rect_primary && let Some(src_surface) = source.gpgpu_surface() {
@@ -1344,13 +1420,48 @@ impl IntelGfxBackend {
             }
         }
 
-        if blend == BlendDesc::straight_alpha() && !full_scene_alpha_candidate {
+        let prefer_cpu_scaled_primary = blend == BlendDesc::straight_alpha()
+            || (sample_kind == SampleKind::Rgba
+                && blend == BlendDesc::disabled()
+                && sampler.wrap_s == SamplerWrap::ClampToEdge
+                && sampler.wrap_t == SamplerWrap::ClampToEdge
+                && sampler.min_filter == SamplerFilter::Nearest
+                && sampler.mag_filter == SamplerFilter::Nearest);
+        if prefer_cpu_scaled_primary && !full_scene_alpha_candidate {
             let src = source.dma_rgba_slice().unwrap_or(source.rgba.as_slice());
             let src_pitch = source.dma.pitch_bytes as usize;
             let mut quads = 0usize;
             let mut bytes = 0usize;
+            let mode = if blend == BlendDesc::straight_alpha() {
+                "cpu-alpha-rect-primary"
+            } else {
+                "cpu-rgba-rect-primary"
+            };
             let mut off = 0usize;
             while off + (6 * trueos_gfx_core::TEX_VERTEX_SIZE) <= verts.len() {
+                let v0 = read_tex_vertex_f32_bytes(verts, off)?;
+                let v1 = read_tex_vertex_f32_bytes(verts, off + trueos_gfx_core::TEX_VERTEX_SIZE)?;
+                let v2 =
+                    read_tex_vertex_f32_bytes(verts, off + 2 * trueos_gfx_core::TEX_VERTEX_SIZE)?;
+                let v3 =
+                    read_tex_vertex_f32_bytes(verts, off + 3 * trueos_gfx_core::TEX_VERTEX_SIZE)?;
+                let v4 =
+                    read_tex_vertex_f32_bytes(verts, off + 4 * trueos_gfx_core::TEX_VERTEX_SIZE)?;
+                let v5 =
+                    read_tex_vertex_f32_bytes(verts, off + 5 * trueos_gfx_core::TEX_VERTEX_SIZE)?;
+                if ![v0, v1, v2, v3, v4, v5]
+                    .iter()
+                    .all(tex_vertex_is_untinted_white)
+                {
+                    if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) {
+                        crate::log!(
+                            "intel/gfx-backend: draw-tex cpu-scaled-rect-miss stage=tint mode={} off={}\n",
+                            mode,
+                            off
+                        );
+                    }
+                    return None;
+                }
                 let Some(quad) = decode_tex_quad_bounds(
                     verts,
                     off,
@@ -1430,7 +1541,8 @@ impl IntelGfxBackend {
                 self.screen_rgba_gpu_dirty = true;
                 if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) {
                     crate::log!(
-                        "intel/gfx-backend: draw-tex mode=cpu-alpha-rect-primary target=screen quads={} bytes=0x{:X} source={}x{} target={}x{}\n",
+                        "intel/gfx-backend: draw-tex mode={} target=screen quads={} bytes=0x{:X} source={}x{} target={}x{}\n",
+                        mode,
                         quads,
                         bytes,
                         source.width,
@@ -1439,7 +1551,7 @@ impl IntelGfxBackend {
                         dst_height
                     );
                 }
-                return Some((quads, bytes, "cpu-alpha-rect-primary"));
+                return Some((quads, bytes, mode));
             }
         }
 
