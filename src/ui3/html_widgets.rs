@@ -42,7 +42,7 @@ pub(super) fn submit_h1_p_text_widget_scene(browser_id: u32, html: &str) -> (u32
     let doc = DemoTextDocument::from_html(html);
     let mut submitted = 0u32;
 
-    if super::trueos_cabi_ui3_scene_begin(browser_id, ROOT_ID) < 0 {
+    if submit_begin(browser_id, ROOT_ID) == 0 {
         return (0, ROOT_ID);
     }
 
@@ -69,7 +69,7 @@ pub(super) fn submit_h1_p_text_widget_scene(browser_id: u32, html: &str) -> (u32
     submitted += submit_text_fill(browser_id, P_TEXT_ID, 0x333333, 1.0);
     submitted += submit_text(browser_id, P_TEXT_ID, doc.p.as_str());
 
-    if super::trueos_cabi_ui3_scene_render(browser_id, ROOT_ID) >= 0 {
+    if submit_render(browser_id, ROOT_ID) > 0 {
         submitted = submitted.saturating_add(1);
     }
 
@@ -86,24 +86,49 @@ pub(super) fn submit_h1_p_text_widget_scene(browser_id: u32, html: &str) -> (u32
 }
 
 fn submit_node(browser_id: u32, node_id: u32, kind: u32) -> u32 {
-    (super::trueos_cabi_ui3_scene_node(browser_id, node_id, kind) >= 0) as u32
+    pixi_op(browser_id, 1, node_id, kind as f32, 0.0, 0.0, 0.0, None)
 }
 
 fn submit_add_child(browser_id: u32, parent: u32, child: u32) -> u32 {
-    (super::trueos_cabi_ui3_scene_add_child(browser_id, parent, child) >= 0) as u32
+    pixi_op(browser_id, 2, parent, child as f32, 0.0, 0.0, 0.0, None)
 }
 
 fn submit_position(browser_id: u32, node_id: u32, x: f32, y: f32) -> u32 {
-    (super::trueos_cabi_ui3_scene_position(browser_id, node_id, x, y) >= 0) as u32
+    pixi_op(browser_id, 3, node_id, x, y, 0.0, 0.0, None)
 }
 
 fn submit_text(browser_id: u32, node_id: u32, text: &str) -> u32 {
-    (unsafe { super::trueos_cabi_ui3_scene_text(browser_id, node_id, text.as_ptr(), text.len()) }
-        >= 0) as u32
+    pixi_op(browser_id, 8, node_id, 0.0, 0.0, 0.0, 0.0, Some(text))
 }
 
 fn submit_text_fill(browser_id: u32, node_id: u32, rgb: u32, alpha: f32) -> u32 {
-    (super::trueos_cabi_ui3_scene_text_fill(browser_id, node_id, rgb, alpha) >= 0) as u32
+    pixi_op(browser_id, 9, node_id, rgb as f32, alpha, 0.0, 0.0, None)
+}
+
+fn submit_begin(browser_id: u32, root_id: u32) -> u32 {
+    pixi_op(browser_id, 0, root_id, 0.0, 0.0, 0.0, 0.0, None)
+}
+
+fn submit_render(browser_id: u32, root_id: u32) -> u32 {
+    pixi_op(browser_id, 21, root_id, 0.0, 0.0, 0.0, 0.0, None)
+}
+
+fn pixi_op(
+    browser_id: u32,
+    op_code: u32,
+    node: u32,
+    a: f32,
+    b: f32,
+    c: f32,
+    d: f32,
+    text: Option<&str>,
+) -> u32 {
+    let (text_ptr, text_len) = text
+        .map(|text| (text.as_ptr(), text.len()))
+        .unwrap_or((core::ptr::null(), 0));
+    (unsafe {
+        super::trueos_cabi_ui3_pixi_op(browser_id, op_code, node, a, b, c, d, text_ptr, text_len)
+    } >= 0) as u32
 }
 
 fn extract_tag_text(html: &str, tag: &str) -> Option<String> {

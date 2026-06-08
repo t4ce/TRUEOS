@@ -5,7 +5,6 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 const TASK_NAME: &str = "ui3-asset-service";
 const UI3_ASSET_SERVICE_PARK_MS: u64 = 1_000;
 const UI3_ASSET_SERVICE_RETRY_MS: u64 = 50;
-const UI3_FONT_LUCIDA_1X_SIZE_CASE: usize = 1;
 const UI3_FONT_SPRITE64_CELL_PX: u16 = 64;
 
 static UI3_ASSET_SERVICE_READY: AtomicBool = AtomicBool::new(false);
@@ -52,8 +51,8 @@ pub async fn ui3_asset_service_task() {
     UI3_FONT_SPRITE64_READY.store(false, Ordering::Release);
 
     crate::log!(
-        "ui3-asset-service: starting font_backend=sprite64 lucida_size_case={} cell={}px\n",
-        UI3_FONT_LUCIDA_1X_SIZE_CASE,
+        "ui3-asset-service: starting font_backend=sprite64 faces={} cell={}px omit=2x\n",
+        crate::gfx::althlasfont::bitmapfont::ATHLAS_SPRITE64_FONT_FACES.len(),
         UI3_FONT_SPRITE64_CELL_PX
     );
 
@@ -93,7 +92,7 @@ pub async fn ui3_asset_service_task() {
 }
 
 fn warm_font_sprite64_assets(attempt: u32) -> Option<Ui3FontSprite64AssetStatus> {
-    let (bucket_count, cell_count, max_w, max_h) = validate_lucida1x_metrics()?;
+    let inventory = validate_sprite64_font_metrics()?;
     let warm = crate::intel::gpgpu::warm_sprite64_font_atlas()?;
     if !warm.ok {
         return None;
@@ -112,12 +111,14 @@ fn warm_font_sprite64_assets(attempt: u32) -> Option<Ui3FontSprite64AssetStatus>
     };
 
     crate::log!(
-        "ui3-asset-service: font warm ok attempt={} buckets={} lucida_cells={} max_cell={}x{} atlas={}x{} pitch={} slots={} bytes={} gpu=0x{:X}\n",
+        "ui3-asset-service: font warm ok attempt={} faces={} buckets={} font_cells={} wide_cells={} max_cell={}x{} atlas={}x{} pitch={} slots={} bytes={} gpu=0x{:X}\n",
         attempt,
-        bucket_count,
-        cell_count,
-        max_w,
-        max_h,
+        inventory.face_count,
+        inventory.bucket_count,
+        inventory.cell_count,
+        inventory.wide_cell_count,
+        inventory.max_cell_w,
+        inventory.max_cell_h,
         warm.width,
         warm.height,
         warm.pitch_bytes,
@@ -137,34 +138,7 @@ fn publish_font_sprite64_ready(status: Ui3FontSprite64AssetStatus) {
     UI3_FONT_SPRITE64_READY.store(true, Ordering::Release);
 }
 
-fn validate_lucida1x_metrics() -> Option<(usize, u32, u16, u16)> {
-    let mut cell_count = 0u32;
-    let mut max_w = 0u16;
-    let mut max_h = 0u16;
-    let bucket_count = crate::gfx::althlasfont::athlasmetrics::ATHLAS_BUCKET_COUNT;
-
-    for bucket in 0..bucket_count {
-        let bucket_metrics = crate::gfx::althlasfont::athlasmetrics::athlas_bucket_metrics(bucket)?;
-        if !bucket_metrics.uniform_width {
-            return None;
-        }
-        let atlas = crate::gfx::althlasfont::athlasmetrics::athlas_bucket_atlas_metrics(
-            UI3_FONT_LUCIDA_1X_SIZE_CASE,
-            bucket,
-        )?;
-        if atlas.cell_w == 0
-            || atlas.cell_h == 0
-            || atlas.cell_w > UI3_FONT_SPRITE64_CELL_PX
-            || atlas.cell_h > UI3_FONT_SPRITE64_CELL_PX
-        {
-            return None;
-        }
-        max_w = max_w.max(atlas.cell_w);
-        max_h = max_h.max(atlas.cell_h);
-        cell_count = cell_count.checked_add(
-            u32::from(atlas.grid_w.max(1)).saturating_mul(u32::from(atlas.grid_h.max(1))),
-        )?;
-    }
-
-    Some((bucket_count, cell_count, max_w, max_h))
+fn validate_sprite64_font_metrics()
+-> Option<crate::gfx::althlasfont::bitmapfont::AthlasFontSprite64Inventory> {
+    crate::gfx::althlasfont::bitmapfont::athlas_validate_sprite64_faces(UI3_FONT_SPRITE64_CELL_PX)
 }

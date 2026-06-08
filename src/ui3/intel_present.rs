@@ -103,12 +103,22 @@ fn draw_sprite64_text_run(
     color: Rgba8,
     summary: &mut Ui3IntelPresentSummary,
 ) {
-    let result = super::font::gpgpu_font::draw_ui3_text_run_sprite64(origin, text, color);
-    if result.submitted && result.descriptors > 0 {
-        summary.primary_dirty = true;
+    let batches =
+        super::font::gpgpu_font::collect_ui3_text_run_sprite64_batches(origin, text, color);
+    for batch in batches {
+        let Some(result) = crate::intel::gpgpu::sprite64_worklist_primary(
+            batch.placements.as_slice(),
+            false,
+            "ui3-font-sprite64-worklist",
+        ) else {
+            continue;
+        };
+        if result.submitted && result.descriptors > 0 {
+            summary.primary_dirty = true;
+        }
+        summary.sprite_ms = summary.sprite_ms.saturating_add(result.total_ms);
+        summary.total_ms = summary.total_ms.saturating_add(result.total_ms);
     }
-    summary.sprite_ms = summary.sprite_ms.saturating_add(result.total_ms);
-    summary.total_ms = summary.total_ms.saturating_add(result.total_ms);
 }
 
 fn publish_frame(summary: &mut Ui3IntelPresentSummary) {

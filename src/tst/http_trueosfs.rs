@@ -356,6 +356,42 @@ async fn http_submit_body_bytes(vnet: &VNet, handle: api::NetHandle, bytes: &[u8
     submitted
 }
 
+async fn http_stream_memory_bytes(
+    vnet: &VNet,
+    server: &mut vhttp_srv::HttpServer,
+    handle: api::NetHandle,
+    bytes: &[u8],
+    perf: &mut HttpPerf,
+) -> bool {
+    let mut commands = 0usize;
+    for chunk in bytes.chunks(api::MAX_MSG) {
+        if commands % HTTP_TRUEOSFS_SEND_YIELD_COMMANDS == 0
+            && !http_stream_drain_events(vnet, server, handle)
+        {
+            return false;
+        }
+
+        let t0 = tsc_now();
+        let ok = vnet
+            .submit(api::Command::SendTcp {
+                handle,
+                data: api::ByteBuf::from_slice_trunc(chunk),
+            })
+            .is_ok();
+        let t1 = tsc_now();
+        if !ok {
+            return false;
+        }
+        perf.record_submit(t1.wrapping_sub(t0), chunk.len());
+
+        commands = commands.saturating_add(1);
+        if commands % HTTP_TRUEOSFS_SEND_YIELD_COMMANDS == 0 {
+            Timer::after(EmbassyDuration::from_micros(0)).await;
+        }
+    }
+    true
+}
+
 async fn http_stream_file_range(
     vnet: &VNet,
     server: &mut vhttp_srv::HttpServer,
@@ -450,6 +486,45 @@ fn http_plain_response(status: &'static str, msg: &'static str) -> HttpResponseP
         extra_headers: String::new(),
         body_len: body.len() as u64,
         body: HttpBodyPlan::Bytes(body),
+    }
+}
+
+fn http_ui3_latest_bmp_response() -> HttpResponsePlan {
+    match crate::ui3::latest_pixi_primary_bmp() {
+        Ok(image) => {
+            let mut extra_headers = String::new();
+            extra_headers.push_str("Cache-Control: no-store\r\n");
+            extra_headers.push_str(
+                format!("Content-Disposition: inline; filename=\"{}\"\r\n", image.filename)
+                    .as_str(),
+            );
+            extra_headers.push_str(
+                format!(
+                    "X-TRUEOS-UI3-Frame-Count: {}\r\nX-TRUEOS-UI3-Width: {}\r\nX-TRUEOS-UI3-Height: {}\r\n",
+                    crate::ui3::pixi_service_frame_count(),
+                    image.width,
+                    image.height
+                )
+                .as_str(),
+            );
+            HttpResponsePlan {
+                status: "HTTP/1.1 200 OK\r\n",
+                content_type: image.content_type,
+                extra_headers,
+                body_len: image.bytes.len() as u64,
+                body: HttpBodyPlan::Bytes(image.bytes),
+            }
+        }
+        Err(crate::ui3::Ui3DebugCaptureError::NoFrame) => {
+            http_plain_response("HTTP/1.1 404 Not Found\r\n", "no ui3 frame rendered yet\n")
+        }
+        Err(crate::ui3::Ui3DebugCaptureError::NoSurface) => http_plain_response(
+            "HTTP/1.1 503 Service Unavailable\r\n",
+            "primary surface unavailable\n",
+        ),
+        Err(crate::ui3::Ui3DebugCaptureError::TooLarge) => {
+            http_plain_response("HTTP/1.1 500 Internal Server Error\r\n", "ui3 capture too large\n")
+        }
     }
 }
 
@@ -845,13 +920,17 @@ pub async fn http_trueosfs_task() {
                         let body_bytes = request.body_bytes();
                         let roots = crate::r::fs::trueosfs::list_roots();
 
+                        let path_only = vhttp_srv::path_only(target.as_str());
                         let response: HttpResponsePlan = if method == "GET"
-                            && vhttp_srv::path_only(target.as_str()).starts_with("/dl/")
+                            && path_only == "/api/ui3/latest.bmp"
+                        {
+                            http_ui3_latest_bmp_response()
+                        } else if method == "GET"
+                            && path_only.starts_with("/dl/")
                         {
                             // Download endpoint: /dl/<root_raw>/<path>
                             // (where <root_raw> is the DiscId raw value as decimal)
                             'resp: {
-                                let path_only = vhttp_srv::path_only(target.as_str());
                                 let rest = path_only.strip_prefix("/dl/").unwrap_or("");
 
                                 let (root_raw_s, enc_path) = match rest.split_once('/') {
@@ -1139,9 +1218,14 @@ pub async fn http_trueosfs_task() {
 
                         match body {
                             HttpBodyPlan::Bytes(bytes) => {
-                                let mut cmds = Vec::new();
-                                vhttp_srv::queue_send_bytes(&mut cmds, handle, bytes.as_slice());
-                                http_submit_commands(&endpoint.vnet, cmds);
+                                let _ = http_stream_memory_bytes(
+                                    &endpoint.vnet,
+                                    &mut endpoint.server,
+                                    handle,
+                                    bytes.as_slice(),
+                                    &mut perf,
+                                )
+                                .await;
                             }
                             HttpBodyPlan::File {
                                 disk,

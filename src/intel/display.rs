@@ -9,7 +9,7 @@
 // pipeline rendered that memory; render must separately produce `ps-rt-proof
 // accepted=1` before a displayed pixel can be attributed to GPU rendering.
 
-use alloc::collections::VecDeque;
+use alloc::{collections::VecDeque, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
@@ -179,6 +179,13 @@ pub(crate) struct PrimarySurfaceSampleSet {
     pub(crate) centroid: u32,
     pub(crate) left: u32,
     pub(crate) right: u32,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PrimarySurfaceBgra8Snapshot {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) pixels: Vec<u8>,
 }
 
 impl PrimarySurfaceSampleSet {
@@ -937,6 +944,44 @@ pub(crate) fn log_primary_surface_samples(label: &str) {
 pub(crate) fn capture_primary_surface_samples() -> Option<PrimarySurfaceSampleSet> {
     let surface = (*PRIMARY_SURFACE.lock())?;
     capture_surface_samples(surface)
+}
+
+pub(crate) fn capture_primary_surface_bgra8() -> Option<PrimarySurfaceBgra8Snapshot> {
+    let surface = (*PRIMARY_SURFACE.lock())?;
+    let width = surface.width as usize;
+    let height = surface.height as usize;
+    let pitch_bytes = surface.pitch_bytes as usize;
+    if width == 0 || height == 0 || pitch_bytes < width.checked_mul(4)? || surface.virt.is_null() {
+        return None;
+    }
+
+    let row_bytes = width.checked_mul(4)?;
+    let byte_len = pitch_bytes.checked_mul(height)?;
+    let pixel_bytes = row_bytes.checked_mul(height)?;
+    let mut pixels = Vec::new();
+    if pixels.try_reserve_exact(pixel_bytes).is_err() {
+        return None;
+    }
+    pixels.resize(pixel_bytes, 0);
+
+    crate::intel::dma_flush(surface.virt, byte_len);
+    for y in 0..height {
+        let src_off = y.checked_mul(pitch_bytes)?;
+        let dst_off = y.checked_mul(row_bytes)?;
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                surface.virt.add(src_off),
+                pixels.as_mut_ptr().add(dst_off),
+                row_bytes,
+            );
+        }
+    }
+
+    Some(PrimarySurfaceBgra8Snapshot {
+        width: surface.width,
+        height: surface.height,
+        pixels,
+    })
 }
 
 pub(crate) fn sample_primary_surface_pixel(x: u32, y: u32) -> Option<u32> {

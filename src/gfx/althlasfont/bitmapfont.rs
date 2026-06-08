@@ -1,0 +1,246 @@
+use alloc::{collections::BTreeMap, string::String, vec::Vec};
+
+use serde::Deserialize;
+use spin::Once;
+
+use super::athlasmetrics::{ATHLAS_BUCKET_COUNT, AthlasBucketAtlasMetrics, AthlasGlyphRegion};
+
+const LUCIDA_METRICS_JSON: &str = include_str!("lucida-metrics.json");
+const PALATINO_METRICS_JSON: &str = include_str!("palatino-metrics.json");
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AthlasFontFamily {
+    Lucida,
+    Palatino,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AthlasFontTier {
+    Third,
+    Half,
+    OneX,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AthlasFontFace {
+    pub family: AthlasFontFamily,
+    pub tier: AthlasFontTier,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AthlasFontSprite64Inventory {
+    pub face_count: usize,
+    pub bucket_count: usize,
+    pub cell_count: u32,
+    pub wide_cell_count: u32,
+    pub max_cell_w: u16,
+    pub max_cell_h: u16,
+}
+
+pub const ATHLAS_FONT_FACE_LUCIDA_1X: AthlasFontFace = AthlasFontFace {
+    family: AthlasFontFamily::Lucida,
+    tier: AthlasFontTier::OneX,
+};
+
+pub const ATHLAS_SPRITE64_FONT_FACES: [AthlasFontFace; 6] = [
+    AthlasFontFace {
+        family: AthlasFontFamily::Lucida,
+        tier: AthlasFontTier::Third,
+    },
+    AthlasFontFace {
+        family: AthlasFontFamily::Lucida,
+        tier: AthlasFontTier::Half,
+    },
+    ATHLAS_FONT_FACE_LUCIDA_1X,
+    AthlasFontFace {
+        family: AthlasFontFamily::Palatino,
+        tier: AthlasFontTier::Third,
+    },
+    AthlasFontFace {
+        family: AthlasFontFamily::Palatino,
+        tier: AthlasFontTier::Half,
+    },
+    AthlasFontFace {
+        family: AthlasFontFamily::Palatino,
+        tier: AthlasFontTier::OneX,
+    },
+];
+
+#[derive(Debug, Deserialize)]
+struct AthlasMetricsSet {
+    tables: Vec<AthlasMetricsTable>,
+    variants: BTreeMap<String, AthlasMetricsVariant>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AthlasMetricsVariant {
+    tables: Vec<AthlasMetricsTable>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AthlasMetricsTable {
+    bucket: u8,
+    slots: Option<Vec<u32>>,
+    unplaced: Option<Vec<u32>>,
+    cell_w: Option<u16>,
+    cell_h: Option<u16>,
+    grid_w: Option<u16>,
+    grid_h: Option<u16>,
+}
+
+static LUCIDA_METRICS: Once<Option<AthlasMetricsSet>> = Once::new();
+static PALATINO_METRICS: Once<Option<AthlasMetricsSet>> = Once::new();
+
+#[inline]
+pub const fn athlas_font_family_name(family: AthlasFontFamily) -> &'static str {
+    match family {
+        AthlasFontFamily::Lucida => "lucida",
+        AthlasFontFamily::Palatino => "palatino",
+    }
+}
+
+#[inline]
+pub const fn athlas_font_tier_name(tier: AthlasFontTier) -> &'static str {
+    match tier {
+        AthlasFontTier::Third => "third",
+        AthlasFontTier::Half => "half",
+        AthlasFontTier::OneX => "1x",
+    }
+}
+
+fn metrics_set(family: AthlasFontFamily) -> Option<&'static AthlasMetricsSet> {
+    let slot = match family {
+        AthlasFontFamily::Lucida => &LUCIDA_METRICS,
+        AthlasFontFamily::Palatino => &PALATINO_METRICS,
+    };
+    let json = match family {
+        AthlasFontFamily::Lucida => LUCIDA_METRICS_JSON,
+        AthlasFontFamily::Palatino => PALATINO_METRICS_JSON,
+    };
+    let name = athlas_font_family_name(family);
+
+    slot.call_once(|| match serde_json::from_str(json) {
+        Ok(set) => Some(set),
+        Err(err) => {
+            crate::log!("athlas-font: metrics parse failed family={} err={}\n", name, err);
+            None
+        }
+    })
+    .as_ref()
+}
+
+#[inline]
+fn table_by_bucket(tables: &[AthlasMetricsTable], bucket: u8) -> Option<&AthlasMetricsTable> {
+    tables.iter().find(|table| table.bucket == bucket)
+}
+
+#[inline]
+fn variant_for_face(set: &AthlasMetricsSet, face: AthlasFontFace) -> Option<&AthlasMetricsVariant> {
+    set.variants.get(athlas_font_tier_name(face.tier))
+}
+
+pub fn athlas_font_bucket_atlas_metrics(
+    face: AthlasFontFace,
+    bucket: usize,
+) -> Option<AthlasBucketAtlasMetrics> {
+    let bucket = u8::try_from(bucket).ok()?;
+    let set = metrics_set(face.family)?;
+    let variant = variant_for_face(set, face)?;
+    let table = table_by_bucket(&variant.tables, bucket)?;
+
+    Some(AthlasBucketAtlasMetrics {
+        cell_w: table.cell_w?,
+        cell_h: table.cell_h?,
+        grid_w: table.grid_w?,
+        grid_h: table.grid_h?,
+    })
+}
+
+#[inline]
+pub fn athlas_font_line_height_px(face: AthlasFontFace) -> Option<u16> {
+    athlas_font_bucket_atlas_metrics(face, 0).map(|metrics| metrics.cell_h)
+}
+
+pub fn athlas_font_bucket_cell_count(face: AthlasFontFace, bucket: usize) -> Option<u32> {
+    let metrics = athlas_font_bucket_atlas_metrics(face, bucket)?;
+    Some(u32::from(metrics.grid_w.max(1)).saturating_mul(u32::from(metrics.grid_h.max(1))))
+}
+
+pub fn athlas_font_face_cell_count(face: AthlasFontFace) -> Option<u32> {
+    let mut count = 0u32;
+    for bucket in 0..ATHLAS_BUCKET_COUNT {
+        count = count.checked_add(athlas_font_bucket_cell_count(face, bucket)?)?;
+    }
+    Some(count)
+}
+
+pub fn athlas_lookup_glyph_region(face: AthlasFontFace, ch: char) -> Option<AthlasGlyphRegion> {
+    let codepoint = u32::from(ch);
+    let set = metrics_set(face.family)?;
+    let variant = variant_for_face(set, face)?;
+
+    for bucket in 0..ATHLAS_BUCKET_COUNT {
+        let bucket_u8 = bucket as u8;
+        let variant_table = table_by_bucket(&variant.tables, bucket_u8)?;
+        let shared_table = table_by_bucket(&set.tables, bucket_u8)?;
+        let slots = variant_table
+            .slots
+            .as_deref()
+            .or(shared_table.slots.as_deref())?;
+        let unplaced = variant_table
+            .unplaced
+            .as_deref()
+            .or(shared_table.unplaced.as_deref())
+            .unwrap_or(&[]);
+
+        if unplaced.binary_search(&codepoint).is_ok() {
+            continue;
+        }
+        let slot = slots.binary_search(&codepoint).ok()?;
+        let slot = u16::try_from(slot).ok()?;
+        let atlas = athlas_font_bucket_atlas_metrics(face, bucket)?;
+        let grid_w = u32::from(atlas.grid_w.max(1));
+        let slot_u32 = u32::from(slot);
+        let src_x = (slot_u32 % grid_w).saturating_mul(u32::from(atlas.cell_w));
+        let src_y = (slot_u32 / grid_w).saturating_mul(u32::from(atlas.cell_h));
+        return Some(AthlasGlyphRegion {
+            bucket: bucket_u8,
+            slot,
+            src_x: src_x.min(u32::from(u16::MAX)) as u16,
+            src_y: src_y.min(u32::from(u16::MAX)) as u16,
+            src_w: atlas.cell_w,
+            src_h: atlas.cell_h,
+            atlas_w: atlas.cell_w.saturating_mul(atlas.grid_w),
+            atlas_h: atlas.cell_h.saturating_mul(atlas.grid_h),
+        });
+    }
+
+    None
+}
+
+pub fn athlas_validate_sprite64_faces(cell_px: u16) -> Option<AthlasFontSprite64Inventory> {
+    let mut inventory = AthlasFontSprite64Inventory {
+        face_count: ATHLAS_SPRITE64_FONT_FACES.len(),
+        bucket_count: ATHLAS_BUCKET_COUNT,
+        ..AthlasFontSprite64Inventory::default()
+    };
+
+    for face in ATHLAS_SPRITE64_FONT_FACES {
+        for bucket in 0..ATHLAS_BUCKET_COUNT {
+            let metrics = athlas_font_bucket_atlas_metrics(face, bucket)?;
+            if metrics.cell_w == 0 || metrics.cell_h == 0 || metrics.cell_h > cell_px {
+                return None;
+            }
+            let cells =
+                u32::from(metrics.grid_w.max(1)).saturating_mul(u32::from(metrics.grid_h.max(1)));
+            if metrics.cell_w > cell_px {
+                inventory.wide_cell_count = inventory.wide_cell_count.checked_add(cells)?;
+            }
+            inventory.cell_count = inventory.cell_count.checked_add(cells)?;
+            inventory.max_cell_w = inventory.max_cell_w.max(metrics.cell_w);
+            inventory.max_cell_h = inventory.max_cell_h.max(metrics.cell_h);
+        }
+    }
+
+    Some(inventory)
+}
