@@ -7,7 +7,7 @@
 // - desc.dst_xy is a signed 16-bit destination pixel coordinate.
 // - One SIMD16 walker consumes a descriptor slice:
 //   lane N draws descriptors desc_base + N, desc_base + N+16, ...
-// - Each output pixel runs up to 256 Mandelbrot iterations.
+// - desc.color_rgba supplies the per-pixel iteration cap.
 
 #define MANDEL64_BAND_ROWS 4u
 #define MANDEL64_BAND_COLS 64u
@@ -28,13 +28,13 @@ static inline int unpack_i16(uint value)
     return (int)((short)(value & 0xFFFFu));
 }
 
-static inline uint mandel256_gray(
+static inline uint mandel_gray(
     int src_x,
     int src_y,
     uint local_x,
     uint local_y,
     uint view_height,
-    uint color_rgba)
+    uint max_iter)
 {
     // Q12 fixed-point mapping over the current scanout:
     // real [-2, +1], imaginary [-1, +1].
@@ -44,7 +44,7 @@ static inline uint mandel256_gray(
     int zi = 0;
     uint iter = 0;
 
-    for (; iter < 256u; iter++) {
+    for (; iter < max_iter; iter++) {
         int zr2 = (zr * zr) >> 12;
         int zi2 = (zi * zi) >> 12;
         if (zr2 + zi2 > 16384) {
@@ -56,17 +56,12 @@ static inline uint mandel256_gray(
         zi = zri + ci;
     }
 
-    if (iter == 256u) {
+    if (iter == max_iter) {
         return 0xFF000000u;
     }
 
-    uint shade = iter & 0xFFu;
+    uint shade = (iter * 255u) / max_iter;
     uint color = 0xFF000000u | (shade << 16) | (shade << 8) | shade;
-
-    if (color_rgba != 0u) {
-        color ^= color_rgba & 0x00FFFFFFu;
-        color |= 0xFF000000u;
-    }
     return color;
 }
 
@@ -97,11 +92,15 @@ __kernel void mandel64_worklist_rgba8(
         uint band_cols = (desc.flags & MANDEL64_FLAG_COLS_MASK) >> MANDEL64_FLAG_COLS_SHIFT;
         uint mirror_height = desc.flags >> MANDEL64_FLAG_MIRROR_HEIGHT_SHIFT;
         uint view_height = mirror_height == 0u ? 1440u : mirror_height;
+        uint max_iter = desc.color_rgba;
         if (band_rows == 0u || band_rows > MANDEL64_BAND_ROWS) {
             band_rows = MANDEL64_BAND_ROWS;
         }
         if (band_cols == 0u || band_cols > MANDEL64_BAND_COLS) {
             band_cols = MANDEL64_BAND_COLS;
+        }
+        if (max_iter == 0u) {
+            max_iter = 32u;
         }
 
         for (uint y = 0u; y < band_rows; y++) {
@@ -116,7 +115,7 @@ __kernel void mandel64_worklist_rgba8(
                     continue;
                 }
 
-                uint color = mandel256_gray(src_x, src_y, x, y, view_height, desc.color_rgba);
+                uint color = mandel_gray(src_x, src_y, x, y, view_height, max_iter);
                 uint dst_index = (uint)out_y * dst_pitch_pixels + (uint)out_x;
                 dst_rgba[dst_index] = color;
                 if (mirror_height != 0u) {

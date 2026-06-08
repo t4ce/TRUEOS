@@ -27,6 +27,7 @@ const TRUESURFER_FALLBACK_IMAGE_SIZE_PX = 96;
 let truesurferSubsetProfile = null;
 let extractDocumentArtifactsFn = null;
 let createBrowserAssetManagerFn = null;
+let buildDemoTextWidgetSceneFn = null;
 let browserAssetManager = null;
 let currentNavigationUrl = '';
 let currentBaseGadgetSnapshot = { version: 1, gadgets: [] };
@@ -253,44 +254,51 @@ async function warmBrowserPipelineModules() {
     './truesurfer_extract.mjs',
     './truesurfer_assets.mjs',
     './css.mjs',
+    './text_widget_scene.mjs',
   ];
   for (let index = 0; index < imports.length; index += 1) {
     await helpers.prefetch(imports[index]);
   }
 
-  const [extractMod, assetsMod, cssMod] = await Promise.all([
+  const [extractMod, assetsMod, cssMod, textWidgetMod] = await Promise.all([
     helpers.import('./truesurfer_extract.mjs'),
     helpers.import('./truesurfer_assets.mjs'),
     helpers.import('./css.mjs'),
+    helpers.import('./text_widget_scene.mjs'),
   ]);
 
   const extractReady = !!extractMod && typeof extractMod.extractDocumentArtifacts === 'function';
   const assetsReady = !!assetsMod && typeof assetsMod.createBrowserAssetManager === 'function';
   const cssReady = !!cssMod && typeof cssMod.extractCssSection === 'function';
-  if (!extractReady || !assetsReady || !cssReady) {
+  const textWidgetReady = !!textWidgetMod && typeof textWidgetMod.buildDemoTextWidgetScene === 'function';
+  if (!extractReady || !assetsReady || !cssReady || !textWidgetReady) {
     throw new Error(
-      `browser pipeline warmup incomplete extract_ready=${extractReady ? 1 : 0} assets_ready=${assetsReady ? 1 : 0} css_ready=${cssReady ? 1 : 0}`,
+      `browser pipeline warmup incomplete extract_ready=${extractReady ? 1 : 0} assets_ready=${assetsReady ? 1 : 0} css_ready=${cssReady ? 1 : 0} text_widget_ready=${textWidgetReady ? 1 : 0}`,
     );
   }
 
   truesurferSubsetProfile = extractMod.TRUESURFER_SUBSET_PROFILE || null;
   extractDocumentArtifactsFn = extractMod.extractDocumentArtifacts;
   createBrowserAssetManagerFn = assetsMod.createBrowserAssetManager;
+  buildDemoTextWidgetSceneFn = textWidgetMod.buildDemoTextWidgetScene;
+  root.__trueosBuildDemoTextWidgetScene = buildDemoTextWidgetSceneFn;
   root.__trueosTruesurferModules = {
     extractReady: 1,
     assetsReady: 1,
     cssReady: 1,
+    textWidgetReady: 1,
   };
 }
 
 async function bootstrapTruesurfer() {
   root.__trueosTruesurferWarmup = {
-    status: 'warming',
-    extractReady: 0,
-    assetsReady: 0,
-    cssReady: 0,
-    baseUrl: TRUESURFER_MODULE_BASE,
-  };
+      status: 'warming',
+      extractReady: 0,
+      assetsReady: 0,
+      cssReady: 0,
+      textWidgetReady: 0,
+      baseUrl: TRUESURFER_MODULE_BASE,
+    };
   try {
     log(`[truesurfer bootstrap] browser=${browserId} warming modules base=${TRUESURFER_MODULE_BASE}`);
     await warmBrowserPipelineModules();
@@ -301,11 +309,12 @@ async function bootstrapTruesurfer() {
       extractReady: modules.extractReady ? 1 : 0,
       assetsReady: modules.assetsReady ? 1 : 0,
       cssReady: modules.cssReady ? 1 : 0,
+      textWidgetReady: modules.textWidgetReady ? 1 : 0,
       baseUrl: TRUESURFER_MODULE_BASE,
     };
     root.__trueosTruesurferReady = 1;
     log(
-      `[truesurfer bootstrap] browser=${browserId} ready extract=${modules.extractReady ? 1 : 0} assets=${modules.assetsReady ? 1 : 0} css=${modules.cssReady ? 1 : 0}`,
+      `[truesurfer bootstrap] browser=${browserId} ready extract=${modules.extractReady ? 1 : 0} assets=${modules.assetsReady ? 1 : 0} css=${modules.cssReady ? 1 : 0} text_widget=${modules.textWidgetReady ? 1 : 0}`,
     );
   } catch (error) {
     const message = error && error.stack ? String(error.stack) : String(error || 'unknown bootstrap error');

@@ -1,32 +1,35 @@
 use alloc::string::String;
 
 const ROOT_ID: u32 = 1;
-const BACKGROUND_ID: u32 = 2;
-const BODY_ID: u32 = 3;
+const ROOT_IFRAME_ID: u32 = 2;
+const H1_BLOCK_ID: u32 = 3;
 const H1_TEXT_ID: u32 = 4;
-const P_TEXT_ID: u32 = 5;
+const P_BLOCK_ID: u32 = 5;
+const P_TEXT_ID: u32 = 6;
 
 const KIND_CONTAINER: u32 = 0;
-const KIND_GRAPHICS: u32 = 1;
 const KIND_TEXT: u32 = 2;
 
-const VIEW_W: f32 = 1920.0;
-const VIEW_H: f32 = 1080.0;
-
-const BODY_X: f32 = 32.0;
-const BODY_Y: f32 = 32.0;
-const H1_Y: f32 = 0.0;
-const P_Y: f32 = 42.0;
+const ROOT_X: f32 = 32.0;
+const ROOT_Y: f32 = 32.0;
+const H1_BLOCK_X: f32 = 0.0;
+const H1_BLOCK_Y: f32 = 0.0;
+const H1_TEXT_X: f32 = 12.0;
+const H1_TEXT_Y: f32 = 6.0;
+const P_BLOCK_X: f32 = 0.0;
+const P_BLOCK_Y: f32 = 56.0;
+const P_TEXT_X: f32 = 12.0;
+const P_TEXT_Y: f32 = 4.0;
 
 const DEFAULT_H1: &str = "Hello UI3";
 const DEFAULT_P: &str = "Parse5 native widget baseline.";
 
-struct HelloDocument {
+struct DemoTextDocument {
     h1: String,
     p: String,
 }
 
-impl HelloDocument {
+impl DemoTextDocument {
     fn from_html(html: &str) -> Self {
         Self {
             h1: extract_tag_text(html, "h1").unwrap_or_else(|| String::from(DEFAULT_H1)),
@@ -35,31 +38,31 @@ impl HelloDocument {
     }
 }
 
-pub(super) fn submit_native_hello_scene(browser_id: u32, html: &str) -> (u32, u32) {
-    let doc = HelloDocument::from_html(html);
+pub(super) fn submit_h1_p_text_widget_scene(browser_id: u32, html: &str) -> (u32, u32) {
+    let doc = DemoTextDocument::from_html(html);
     let mut submitted = 0u32;
 
     if super::trueos_cabi_ui3_scene_begin(browser_id, ROOT_ID) < 0 {
         return (0, ROOT_ID);
     }
 
-    submitted += submit_node(browser_id, BACKGROUND_ID, KIND_GRAPHICS);
-    submitted += submit_node(browser_id, BODY_ID, KIND_CONTAINER);
+    submitted += submit_node(browser_id, ROOT_IFRAME_ID, KIND_CONTAINER);
+    submitted += submit_node(browser_id, H1_BLOCK_ID, KIND_CONTAINER);
     submitted += submit_node(browser_id, H1_TEXT_ID, KIND_TEXT);
+    submitted += submit_node(browser_id, P_BLOCK_ID, KIND_CONTAINER);
     submitted += submit_node(browser_id, P_TEXT_ID, KIND_TEXT);
 
-    submitted += submit_add_child(browser_id, ROOT_ID, BACKGROUND_ID);
-    submitted += submit_add_child(browser_id, ROOT_ID, BODY_ID);
-    submitted += submit_add_child(browser_id, BODY_ID, H1_TEXT_ID);
-    submitted += submit_add_child(browser_id, BODY_ID, P_TEXT_ID);
+    submitted += submit_add_child(browser_id, ROOT_ID, ROOT_IFRAME_ID);
+    submitted += submit_add_child(browser_id, ROOT_IFRAME_ID, H1_BLOCK_ID);
+    submitted += submit_add_child(browser_id, H1_BLOCK_ID, H1_TEXT_ID);
+    submitted += submit_add_child(browser_id, ROOT_IFRAME_ID, P_BLOCK_ID);
+    submitted += submit_add_child(browser_id, P_BLOCK_ID, P_TEXT_ID);
 
-    submitted += submit_position(browser_id, BODY_ID, BODY_X, BODY_Y);
-    submitted += submit_position(browser_id, H1_TEXT_ID, 0.0, H1_Y);
-    submitted += submit_position(browser_id, P_TEXT_ID, 0.0, P_Y);
-
-    submitted += submit_graphics_clear(browser_id, BACKGROUND_ID);
-    submitted += submit_graphics_rect(browser_id, BACKGROUND_ID, 0.0, 0.0, VIEW_W, VIEW_H);
-    submitted += submit_graphics_fill(browser_id, BACKGROUND_ID, 0xffffff, 1.0);
+    submitted += submit_position(browser_id, ROOT_IFRAME_ID, ROOT_X, ROOT_Y);
+    submitted += submit_position(browser_id, H1_BLOCK_ID, H1_BLOCK_X, H1_BLOCK_Y);
+    submitted += submit_position(browser_id, H1_TEXT_ID, H1_TEXT_X, H1_TEXT_Y);
+    submitted += submit_position(browser_id, P_BLOCK_ID, P_BLOCK_X, P_BLOCK_Y);
+    submitted += submit_position(browser_id, P_TEXT_ID, P_TEXT_X, P_TEXT_Y);
 
     submitted += submit_text_fill(browser_id, H1_TEXT_ID, 0x111111, 1.0);
     submitted += submit_text(browser_id, H1_TEXT_ID, doc.h1.as_str());
@@ -71,7 +74,7 @@ pub(super) fn submit_native_hello_scene(browser_id: u32, html: &str) -> (u32, u3
     }
 
     crate::log!(
-        "ui3-html-widgets: native hello scene browser={} root={} ops={} h1_bytes={} p_bytes={}\n",
+        "ui3-html-widgets: h1-p text widget scene browser={} root={} ops={} h1_bytes={} p_bytes={} structure=root>iframe>h1>text,p>text\n",
         browser_id,
         ROOT_ID,
         submitted,
@@ -92,18 +95,6 @@ fn submit_add_child(browser_id: u32, parent: u32, child: u32) -> u32 {
 
 fn submit_position(browser_id: u32, node_id: u32, x: f32, y: f32) -> u32 {
     (super::trueos_cabi_ui3_scene_position(browser_id, node_id, x, y) >= 0) as u32
-}
-
-fn submit_graphics_clear(browser_id: u32, node_id: u32) -> u32 {
-    (super::trueos_cabi_ui3_scene_graphics_clear(browser_id, node_id) >= 0) as u32
-}
-
-fn submit_graphics_rect(browser_id: u32, node_id: u32, x: f32, y: f32, w: f32, h: f32) -> u32 {
-    (super::trueos_cabi_ui3_scene_graphics_rect(browser_id, node_id, x, y, w, h) >= 0) as u32
-}
-
-fn submit_graphics_fill(browser_id: u32, node_id: u32, rgb: u32, alpha: f32) -> u32 {
-    (super::trueos_cabi_ui3_scene_graphics_fill(browser_id, node_id, rgb, alpha) >= 0) as u32
 }
 
 fn submit_text(browser_id: u32, node_id: u32, text: &str) -> u32 {

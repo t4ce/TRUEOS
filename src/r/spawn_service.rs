@@ -212,6 +212,7 @@ fn task_exited(name: &str) {
             spec.started.store(false, Ordering::Release);
         }
     }
+
 }
 
 pub async fn wait_task_or_timeout_ms(name: &str, total_ms: u64) -> bool {
@@ -359,6 +360,7 @@ fn spawn_qjs_async_fs_service(spawner: Spawner) -> SpawnAttempt {
             SpawnAttempt::Failed(e)
         }
     }
+
 }
 
 fn spawn_trueosfs_mount_service(spawner: Spawner) -> SpawnAttempt {
@@ -1194,6 +1196,9 @@ async fn bp_autostart_task() {
             ),
         }
     }
+
+    let html = crate::surfer::html_shack::Html::new("inline://trueos/ui3-hello.html", "<!doctype html><html><head><title>UI3 Hello</title></head><body><h1>Hello UI3</h1><p>Parse5 handoff smoke.</p></body></html>");
+    let _ = crate::surfer::html_shack::enqueue_ready_html_for_browser(html).await;
 }
 
 fn spawn_bp_autostart(spawner: Spawner) -> SpawnAttempt {
@@ -1503,6 +1508,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         "ui3-pixi-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY
             | crate::r::readiness::GFX_BACKEND_READY
+            | crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY
             | crate::r::readiness::UI3_INTEL_PRESENT_READY,
         &UI3_PIXI_SERVICE_STARTED,
         spawn_ui3_pixi_service,
