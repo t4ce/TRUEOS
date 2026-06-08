@@ -1,7 +1,7 @@
 //! Minimal bridge from the future OpenCL runtime to the existing Intel GPGPU
 //! AOT artifact upload path.
 
-use super::types::{self, ClError, ClResult, NdRange};
+use super::types::{ClError, ClResult, NdRange};
 use crate::intel::gpgpu;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

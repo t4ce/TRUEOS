@@ -6,6 +6,8 @@
 //! execution hooks. The first target is `clCreateProgramWithBinary`-style AOT
 //! execution over the direct RCS path in `crate::intel::gpgpu`.
 
+#![allow(dead_code, unused_imports)]
+
 pub(crate) mod artifact;
 pub(crate) mod backend;
 pub(crate) mod example;
