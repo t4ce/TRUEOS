@@ -1,4 +1,5 @@
 pub mod athlasmetrics;
+pub mod bitmapfont;
 pub mod twemoji;
 
 use spin::Mutex;

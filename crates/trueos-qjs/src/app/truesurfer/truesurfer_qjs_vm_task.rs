@@ -332,22 +332,25 @@ const TRUESURFER_PARSE5_VITE_HOST_SOURCE: &[u8] = br##"
     return Promise.resolve(new G.Response("", { status: 200 }));
   };
 
-  function pushNodeFromSnapshot(node, parent, ops, seen) {
+  function pushNodeFromSnapshot(node, parent, ops, seen, snapshotSeen, textSlots) {
     if (!node || typeof node !== "object") return 0;
     var id = num(node.id, 0) | 0;
     if (id <= 0) return 0;
+    var kind = 0;
     if (!seen[id]) {
       var type = String(node.type || "");
-      var kind = type.indexOf("Graphics") >= 0 ? 1 : type.indexOf("Text") >= 0 ? 2 : 0;
+      kind = type.indexOf("Graphics") >= 0 ? 1 : type.indexOf("Text") >= 0 ? 2 : 0;
       ops.push({ code: 1, node: id, a: kind });
       seen[id] = true;
     }
+    snapshotSeen[id] = true;
+    if (kind === 2 && textSlots) textSlots.push(id);
     if (parent > 0) ops.push({ code: 2, node: parent, a: id });
     ops.push({ code: 3, node: id, a: num(node.x, 0), b: num(node.y, 0) });
     if (node.visible === false) ops.push({ code: 15, node: id, a: 0 });
-    if (typeof node.text === "string" && node.text.length > 0) ops.push({ code: 8, node: id, text: node.text });
+    if (typeof node.text === "string" && textHasInk(node.text)) ops.push({ code: 8, node: id, text: node.text });
     var children = Array.isArray(node.children) ? node.children : [];
-    for (var i = 0; i < children.length; i += 1) pushNodeFromSnapshot(children[i], id, ops, seen);
+    for (var i = 0; i < children.length; i += 1) pushNodeFromSnapshot(children[i], id, ops, seen, snapshotSeen, textSlots);
     return id;
   }
 
@@ -369,12 +372,36 @@ const TRUESURFER_PARSE5_VITE_HOST_SOURCE: &[u8] = br##"
     if (target.indexOf("Text") >= 0) return 2;
     return 0;
   }
+  function textHasInk(value) {
+    var text = String(value == null ? "" : value);
+    for (var i = 0; i < text.length; i += 1) {
+      var code = text.charCodeAt(i);
+      if (
+        code > 32 &&
+        !(code >= 127 && code <= 160) &&
+        code !== 5760 &&
+        !(code >= 8192 && code <= 8207) &&
+        !(code >= 8232 && code <= 8238) &&
+        code !== 8239 &&
+        !(code >= 8287 && code <= 8298) &&
+        code !== 12288 &&
+        !(code >= 65024 && code <= 65039) &&
+        code !== 65279
+      ) return true;
+    }
+    return false;
+  }
 
   G.__trueosParse5BuildSceneFromCapture = function () {
     var cap = G["__pixiCapture"];
     var commands = cap && Array.isArray(cap.commands) ? cap.commands : [];
     var ops = [];
     var seen = Object.create(null);
+    var snapshotSeen = Object.create(null);
+    var textSlots = [];
+    var textMap = Object.create(null);
+    var textHasFill = Object.create(null);
+    var pendingTextFill = Object.create(null);
     var rootId = 0;
     var snapshot = null;
     for (var i = commands.length - 1; i >= 0; i -= 1) {
@@ -384,12 +411,22 @@ const TRUESURFER_PARSE5_VITE_HOST_SOURCE: &[u8] = br##"
         break;
       }
     }
-    if (snapshot) rootId = pushNodeFromSnapshot(snapshot, 0, ops, seen) || rootId;
+    var hasSnapshot = !!snapshot;
+    if (snapshot) rootId = pushNodeFromSnapshot(snapshot, 0, ops, seen, snapshotSeen, textSlots) || rootId;
+
+    function mappedTextNode(commandId, textValueHasInk, commandWasSnapshotSeen) {
+      if (!hasSnapshot || commandWasSnapshotSeen) return commandId;
+      if (!textMap[commandId] && textValueHasInk && textSlots.length > 0) {
+        textMap[commandId] = textSlots.shift();
+      }
+      return textMap[commandId] || commandId;
+    }
 
     for (var j = 0; j < commands.length; j += 1) {
       var cmd = commands[j] || {};
       var id = num(cmd.id, 0) | 0;
       if (id <= 0) continue;
+      var wasSnapshotSeen = !!snapshotSeen[id];
       if (!seen[id]) {
         ops.push({ code: 1, node: id, a: commandKind(cmd.target) });
         seen[id] = true;
@@ -406,9 +443,28 @@ const TRUESURFER_PARSE5_VITE_HOST_SOURCE: &[u8] = br##"
         case "removeChildren": ops.push({ code: 14, node: id }); break;
         case "removeAllListeners": ops.push({ code: 17, node: id }); break;
         case "on": if (cmd.event) ops.push({ code: 16, node: id, text: String(cmd.event) }); break;
-        case "text.text.set": ops.push({ code: 8, node: id, text: String(args[0] == null ? "" : args[0]) }); break;
+        case "text.text.set":
+          var textValue = String(args[0] == null ? "" : args[0]);
+          var hasInk = textHasInk(textValue);
+          if (hasSnapshot && !hasInk) break;
+          var textNode = mappedTextNode(id, hasInk, wasSnapshotSeen);
+          if (typeof pendingTextFill[id] === "number") {
+            ops.push({ code: 9, node: textNode, a: pendingTextFill[id], b: 1 });
+            textHasFill[textNode] = true;
+            delete pendingTextFill[id];
+          }
+          if (!textHasFill[textNode]) ops.push({ code: 9, node: textNode, a: 0x111111, b: 1 });
+          ops.push({ code: 8, node: textNode, text: textValue });
+          break;
         case "text.style.set":
-          if (args[0] && typeof args[0].fill !== "undefined") ops.push({ code: 9, node: id, a: colorArg(args[0].fill, 0xffffff), b: 1 });
+          if (args[0] && typeof args[0].fill !== "undefined") {
+            var fill = colorArg(args[0].fill, 0xffffff);
+            var mapped = textMap[id] || (wasSnapshotSeen ? id : 0);
+            if (mapped) {
+              ops.push({ code: 9, node: mapped, a: fill, b: 1 });
+              textHasFill[mapped] = true;
+            } else pendingTextFill[id] = fill;
+          }
           break;
       }
     }
@@ -639,6 +695,25 @@ function __trueosCommandKind(target) {
   if (target.indexOf("Text") >= 0) return 2;
   return 0;
 }
+function __trueosTextHasInk(value) {
+  var text = String(value == null ? "" : value);
+  for (var i = 0; i < text.length; i += 1) {
+    var code = text.charCodeAt(i);
+    if (
+      code > 32 &&
+      !(code >= 127 && code <= 160) &&
+      code !== 5760 &&
+      !(code >= 8192 && code <= 8207) &&
+      !(code >= 8232 && code <= 8238) &&
+      code !== 8239 &&
+      !(code >= 8287 && code <= 8298) &&
+      code !== 12288 &&
+      !(code >= 65024 && code <= 65039) &&
+      code !== 65279
+    ) return true;
+  }
+  return false;
+}
 function __trueosLogTextSample(value) {
   var s = String(value == null ? "" : value);
   var out = "";
@@ -648,22 +723,25 @@ function __trueosLogTextSample(value) {
   }
   return out;
 }
-function __trueosPushSnapshotNode(node, parent, ops, seen) {
+function __trueosPushSnapshotNode(node, parent, ops, seen, snapshotSeen, textSlots) {
   if (!node || typeof node !== "object") return 0;
   var id = __trueosNum(node.id, 0) | 0;
   if (id <= 0) return 0;
+  var kind = 0;
   if (!seen[id]) {
     var type = String(node.type || "");
-    var kind = type.indexOf("Graphics") >= 0 ? 1 : (type.indexOf("Text") >= 0 ? 2 : 0);
+    kind = type.indexOf("Graphics") >= 0 ? 1 : (type.indexOf("Text") >= 0 ? 2 : 0);
     ops.push({ code: 1, node: id, a: kind });
     seen[id] = true;
   }
+  snapshotSeen[id] = true;
+  if (kind === 2 && textSlots) textSlots.push(id);
   if (parent > 0) ops.push({ code: 2, node: parent, a: id });
   ops.push({ code: 3, node: id, a: __trueosNum(node.x, 0), b: __trueosNum(node.y, 0) });
   if (node.visible === false) ops.push({ code: 15, node: id, a: 0 });
-  if (typeof node.text === "string" && node.text.length > 0) ops.push({ code: 8, node: id, text: node.text });
+  if (typeof node.text === "string" && __trueosTextHasInk(node.text)) ops.push({ code: 8, node: id, text: node.text });
   var children = node.children && node.children.length ? node.children : [];
-  for (var i = 0; i < children.length; i += 1) __trueosPushSnapshotNode(children[i], id, ops, seen);
+  for (var i = 0; i < children.length; i += 1) __trueosPushSnapshotNode(children[i], id, ops, seen, snapshotSeen, textSlots);
   return id;
 }
 G.__trueosParse5BuildSceneFromCapture = function () {
@@ -671,6 +749,11 @@ G.__trueosParse5BuildSceneFromCapture = function () {
   var commands = cap && cap.commands && cap.commands.length ? cap.commands : [];
   var ops = [];
   var seen = {};
+  var snapshotSeen = {};
+  var textSlots = [];
+  var textMap = {};
+  var textHasFill = {};
+  var pendingTextFill = {};
   var rootId = 0;
   var snapshot = null;
   var i;
@@ -682,11 +765,19 @@ G.__trueosParse5BuildSceneFromCapture = function () {
     }
   }
   var hasSnapshot = !!snapshot;
-  if (snapshot) rootId = __trueosPushSnapshotNode(snapshot, 0, ops, seen) || rootId;
+  if (snapshot) rootId = __trueosPushSnapshotNode(snapshot, 0, ops, seen, snapshotSeen, textSlots) || rootId;
+  function __trueosMappedTextNode(commandId, textValueHasInk, commandWasSnapshotSeen) {
+    if (!hasSnapshot || commandWasSnapshotSeen) return commandId;
+    if (!textMap[commandId] && textValueHasInk && textSlots.length > 0) {
+      textMap[commandId] = textSlots.shift();
+    }
+    return textMap[commandId] || commandId;
+  }
   for (i = 0; i < commands.length; i += 1) {
     var cmd = commands[i] || {};
     var id = __trueosNum(cmd.id, 0) | 0;
     if (id <= 0) continue;
+    var wasSnapshotSeen = !!snapshotSeen[id];
     if (!seen[id]) {
       ops.push({ code: 1, node: id, a: __trueosCommandKind(cmd.target) });
       seen[id] = true;
@@ -715,9 +806,28 @@ G.__trueosParse5BuildSceneFromCapture = function () {
       case "removeChildren": if (!hasSnapshot) ops.push({ code: 14, node: id }); break;
       case "removeAllListeners": if (!hasSnapshot) ops.push({ code: 17, node: id }); break;
       case "on": if (!hasSnapshot && cmd.event) ops.push({ code: 16, node: id, text: String(cmd.event) }); break;
-      case "text.text.set": if (!hasSnapshot) ops.push({ code: 8, node: id, text: String(args[0] == null ? "" : args[0]) }); break;
+      case "text.text.set":
+        var textValue = String(args[0] == null ? "" : args[0]);
+        var hasInk = __trueosTextHasInk(textValue);
+        if (hasSnapshot && !hasInk) break;
+        var textNode = __trueosMappedTextNode(id, hasInk, wasSnapshotSeen);
+        if (typeof pendingTextFill[id] === "number") {
+          ops.push({ code: 9, node: textNode, a: pendingTextFill[id], b: 1 });
+          textHasFill[textNode] = true;
+          delete pendingTextFill[id];
+        }
+        if (!textHasFill[textNode]) ops.push({ code: 9, node: textNode, a: 0x111111, b: 1 });
+        ops.push({ code: 8, node: textNode, text: textValue });
+        break;
       case "text.style.set":
-        if (args[0] && typeof args[0].fill !== "undefined") ops.push({ code: 9, node: id, a: __trueosColorArg(args[0].fill, 0xffffff), b: 1 });
+        if (args[0] && typeof args[0].fill !== "undefined") {
+          var fill = __trueosColorArg(args[0].fill, 0xffffff);
+          var mapped = textMap[id] || (wasSnapshotSeen ? id : 0);
+          if (mapped) {
+            ops.push({ code: 9, node: mapped, a: fill, b: 1 });
+            textHasFill[mapped] = true;
+          } else pendingTextFill[id] = fill;
+        }
         break;
     }
   }
@@ -1539,7 +1649,6 @@ unsafe fn submit_ui3_scene(
     ctx: *mut qjs::JSContext,
     browser_instance_id: u32,
     obj: qjs::JSValueConst,
-    html: &str,
 ) -> (u32, u32) {
     let scene_submit_start_ms = now_ms();
     log_line(format!("qjs-truesurfer[{}]: ui3 scene read begin\n", browser_instance_id));
@@ -1565,24 +1674,6 @@ unsafe fn submit_ui3_scene(
     }
     let command_source =
         read_result_string(ctx, scene_value, TRUESURFER_UI3_SCENE_COMMAND_SOURCE_PROP);
-    if command_source.contains("pixi") {
-        let (mut submitted, mut root) =
-            submit_qjs_demo_text_widget_scene(ctx, browser_instance_id, html);
-        let bridge_kind = if submitted > 0 {
-            "qjs-mjs-widget"
-        } else {
-            let ops = qjs::platform::ui::ui3_native_hello_scene(browser_instance_id, html);
-            submitted = if ops > 0 { ops as u32 } else { 0 };
-            root = if submitted > 0 { 1 } else { 0 };
-            "rust-cabi-fallback"
-        };
-        log_line(format!(
-            "qjs-truesurfer[{}]: ui3 scene text-widget-bridge source={} scene_root={} root={} ops={} bridge={} widgets=iframe,h1,p,button structure=root>iframe>widgets>text reason=parse5-render-tree-to-qjs-widgets\n",
-            browser_instance_id, command_source, root_id, root, submitted, bridge_kind
-        ));
-        qjs::js_free_value(ctx, scene_value);
-        return (submitted, root);
-    }
     if !qjs::platform::ui::ui3_scene_begin(browser_instance_id, root_id) {
         log_line(format!(
             "qjs-truesurfer[{}]: ui3 scene begin rejected root={}\n",
@@ -1862,7 +1953,7 @@ unsafe fn submit_qjs_demo_text_widget_scene(
     qjs::js_free_value(ctx, widget_meta);
 
     let submit_start_ms = now_ms();
-    let (ops, root) = submit_ui3_scene(ctx, browser_instance_id, widget_wrapper, html);
+    let (ops, root) = submit_ui3_scene(ctx, browser_instance_id, widget_wrapper);
     let submit_ms = now_ms().saturating_sub(submit_start_ms);
     qjs::js_free_value(ctx, widget_wrapper);
     log_line(format!(
@@ -2066,7 +2157,7 @@ unsafe fn submit_parse5_trueos_pixi_scene(
     log_parse5_trueos_bridge_stats(ctx, browser_instance_id);
 
     let scene_submit_start_ms = now_ms();
-    let (ops, root) = submit_ui3_scene(ctx, browser_instance_id, wrapper, html);
+    let (ops, root) = submit_ui3_scene(ctx, browser_instance_id, wrapper);
     let scene_submit_ms = now_ms().saturating_sub(scene_submit_start_ms);
     qjs::js_free_value(ctx, wrapper);
     log_line(format!(
@@ -2205,11 +2296,11 @@ unsafe fn dispatch_html(
             "qjs-truesurfer[{}]: parse5 trueos ui3 unavailable; trying h1/p text widget fallback\n",
             browser_instance_id
         ));
-        let native_ops =
-            qjs::platform::ui::ui3_native_hello_scene(browser_instance_id, pending.html.as_str());
-        if native_ops > 0 {
-            ui3_ops = native_ops as u32;
-            ui3_root = 1;
+        let (fallback_ops, fallback_root) =
+            submit_qjs_demo_text_widget_scene(ctx, browser_instance_id, pending.html.as_str());
+        if fallback_ops > 0 && fallback_root != 0 {
+            ui3_ops = fallback_ops;
+            ui3_root = fallback_root;
             log_line(format!(
                 "qjs-truesurfer[{}]: h1/p text widget fallback submitted ops={} root={}\n",
                 browser_instance_id, ui3_ops, ui3_root

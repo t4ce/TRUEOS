@@ -409,7 +409,28 @@ const SPRITE64_WORKLIST_MAX_WALKERS: usize =
     SPRITE64_WORKLIST_MAX_DESCS / SPRITE64_WORKLIST_DESCS_PER_WALKER;
 const SPRITE64_WORKLIST_DESC_BYTES: usize =
     SPRITE64_WORKLIST_MAX_DESCS * core::mem::size_of::<Sprite64WorklistRgba8Desc>();
-const SPRITE64_LUCIDA_1X_SIZE_CASE: usize = 1;
+const SPRITE64_LUCIDA_THIRD_BUCKET_PNGS: [&[u8];
+    crate::gfx::althlasfont::athlasmetrics::ATHLAS_BUCKET_COUNT] = [
+    include_bytes!("../gfx/althlasfont/lucida-third/atlas-g00.png"),
+    include_bytes!("../gfx/althlasfont/lucida-third/atlas-g01.png"),
+    include_bytes!("../gfx/althlasfont/lucida-third/atlas-g02.png"),
+    include_bytes!("../gfx/althlasfont/lucida-third/atlas-g03.png"),
+    include_bytes!("../gfx/althlasfont/lucida-third/atlas-g04.png"),
+    include_bytes!("../gfx/althlasfont/lucida-third/atlas-g05.png"),
+    include_bytes!("../gfx/althlasfont/lucida-third/atlas-g06.png"),
+    include_bytes!("../gfx/althlasfont/lucida-third/atlas-g07.png"),
+];
+const SPRITE64_LUCIDA_HALF_BUCKET_PNGS: [&[u8];
+    crate::gfx::althlasfont::athlasmetrics::ATHLAS_BUCKET_COUNT] = [
+    include_bytes!("../gfx/althlasfont/lucida-half/atlas-g00.png"),
+    include_bytes!("../gfx/althlasfont/lucida-half/atlas-g01.png"),
+    include_bytes!("../gfx/althlasfont/lucida-half/atlas-g02.png"),
+    include_bytes!("../gfx/althlasfont/lucida-half/atlas-g03.png"),
+    include_bytes!("../gfx/althlasfont/lucida-half/atlas-g04.png"),
+    include_bytes!("../gfx/althlasfont/lucida-half/atlas-g05.png"),
+    include_bytes!("../gfx/althlasfont/lucida-half/atlas-g06.png"),
+    include_bytes!("../gfx/althlasfont/lucida-half/atlas-g07.png"),
+];
 const SPRITE64_LUCIDA_1X_BUCKET_PNGS: [&[u8];
     crate::gfx::althlasfont::athlasmetrics::ATHLAS_BUCKET_COUNT] = [
     include_bytes!("../gfx/althlasfont/lucida-1x/atlas-g00.png"),
@@ -420,6 +441,39 @@ const SPRITE64_LUCIDA_1X_BUCKET_PNGS: [&[u8];
     include_bytes!("../gfx/althlasfont/lucida-1x/atlas-g05.png"),
     include_bytes!("../gfx/althlasfont/lucida-1x/atlas-g06.png"),
     include_bytes!("../gfx/althlasfont/lucida-1x/atlas-g07.png"),
+];
+const SPRITE64_PALATINO_THIRD_BUCKET_PNGS: [&[u8];
+    crate::gfx::althlasfont::athlasmetrics::ATHLAS_BUCKET_COUNT] = [
+    include_bytes!("../gfx/althlasfont/palatino-third/atlas-g00.png"),
+    include_bytes!("../gfx/althlasfont/palatino-third/atlas-g01.png"),
+    include_bytes!("../gfx/althlasfont/palatino-third/atlas-g02.png"),
+    include_bytes!("../gfx/althlasfont/palatino-third/atlas-g03.png"),
+    include_bytes!("../gfx/althlasfont/palatino-third/atlas-g04.png"),
+    include_bytes!("../gfx/althlasfont/palatino-third/atlas-g05.png"),
+    include_bytes!("../gfx/althlasfont/palatino-third/atlas-g06.png"),
+    include_bytes!("../gfx/althlasfont/palatino-third/atlas-g07.png"),
+];
+const SPRITE64_PALATINO_HALF_BUCKET_PNGS: [&[u8];
+    crate::gfx::althlasfont::athlasmetrics::ATHLAS_BUCKET_COUNT] = [
+    include_bytes!("../gfx/althlasfont/palatino-half/atlas-g00.png"),
+    include_bytes!("../gfx/althlasfont/palatino-half/atlas-g01.png"),
+    include_bytes!("../gfx/althlasfont/palatino-half/atlas-g02.png"),
+    include_bytes!("../gfx/althlasfont/palatino-half/atlas-g03.png"),
+    include_bytes!("../gfx/althlasfont/palatino-half/atlas-g04.png"),
+    include_bytes!("../gfx/althlasfont/palatino-half/atlas-g05.png"),
+    include_bytes!("../gfx/althlasfont/palatino-half/atlas-g06.png"),
+    include_bytes!("../gfx/althlasfont/palatino-half/atlas-g07.png"),
+];
+const SPRITE64_PALATINO_1X_BUCKET_PNGS: [&[u8];
+    crate::gfx::althlasfont::athlasmetrics::ATHLAS_BUCKET_COUNT] = [
+    include_bytes!("../gfx/althlasfont/palatino-1x/atlas-g00.png"),
+    include_bytes!("../gfx/althlasfont/palatino-1x/atlas-g01.png"),
+    include_bytes!("../gfx/althlasfont/palatino-1x/atlas-g02.png"),
+    include_bytes!("../gfx/althlasfont/palatino-1x/atlas-g03.png"),
+    include_bytes!("../gfx/althlasfont/palatino-1x/atlas-g04.png"),
+    include_bytes!("../gfx/althlasfont/palatino-1x/atlas-g05.png"),
+    include_bytes!("../gfx/althlasfont/palatino-1x/atlas-g06.png"),
+    include_bytes!("../gfx/althlasfont/palatino-1x/atlas-g07.png"),
 ];
 const RECT_WORKLIST_IDD_OFFSET_BYTES: usize = 0x1400;
 const RECT_WORKLIST_BINDING_TABLE_OFFSET_BYTES: usize = 0x1440;
@@ -4278,39 +4332,77 @@ pub(crate) fn shell_twemoji_atlas_worklist_scanout_present(
     })
 }
 
-pub(crate) fn sprite64_lucida1x_slot_for_region(
+pub(crate) fn sprite64_font_slot_for_region(
+    face: crate::gfx::althlasfont::bitmapfont::AthlasFontFace,
     region: crate::gfx::althlasfont::athlasmetrics::AthlasGlyphRegion,
 ) -> Option<u16> {
-    if region.bucket as usize >= SPRITE64_LUCIDA_1X_BUCKET_PNGS.len() {
+    if region.bucket as usize >= crate::gfx::althlasfont::athlasmetrics::ATHLAS_BUCKET_COUNT {
         return None;
     }
-    let base = sprite64_lucida1x_bucket_base(region.bucket as usize)?;
+    let bucket_cells = crate::gfx::althlasfont::bitmapfont::athlas_font_bucket_cell_count(
+        face,
+        region.bucket as usize,
+    )?;
+    if u32::from(region.slot) >= bucket_cells {
+        return None;
+    }
+    let base = sprite64_font_bucket_base(face, region.bucket as usize)?;
     base.checked_add(region.slot)
 }
 
-fn sprite64_lucida1x_bucket_base(bucket: usize) -> Option<u16> {
-    if bucket >= SPRITE64_LUCIDA_1X_BUCKET_PNGS.len() {
+fn sprite64_font_bucket_base(
+    face: crate::gfx::althlasfont::bitmapfont::AthlasFontFace,
+    bucket: usize,
+) -> Option<u16> {
+    if bucket >= crate::gfx::althlasfont::athlasmetrics::ATHLAS_BUCKET_COUNT {
         return None;
     }
+
     let mut base = u32::from(crate::gfx::althlasfont::twemoji::twemoji_slot_count());
+    for prior_face in crate::gfx::althlasfont::bitmapfont::ATHLAS_SPRITE64_FONT_FACES {
+        if prior_face == face {
+            break;
+        }
+        base = base.checked_add(
+            crate::gfx::althlasfont::bitmapfont::athlas_font_face_cell_count(prior_face)?,
+        )?;
+    }
     for prior_bucket in 0..bucket {
-        base = base.checked_add(sprite64_lucida1x_bucket_cell_count(prior_bucket)?)?;
+        base = base.checked_add(
+            crate::gfx::althlasfont::bitmapfont::athlas_font_bucket_cell_count(face, prior_bucket)?,
+        )?;
     }
     u16::try_from(base).ok()
 }
 
-fn sprite64_lucida1x_bucket_cell_count(bucket: usize) -> Option<u32> {
-    let metrics = crate::gfx::althlasfont::athlasmetrics::athlas_bucket_atlas_metrics(
-        SPRITE64_LUCIDA_1X_SIZE_CASE,
-        bucket,
-    )?;
-    Some(u32::from(metrics.grid_w.max(1)).saturating_mul(u32::from(metrics.grid_h.max(1))))
+fn sprite64_font_bucket_pngs(
+    face: crate::gfx::althlasfont::bitmapfont::AthlasFontFace,
+) -> Option<&'static [&'static [u8]; crate::gfx::althlasfont::athlasmetrics::ATHLAS_BUCKET_COUNT]> {
+    use crate::gfx::althlasfont::bitmapfont::{AthlasFontFamily, AthlasFontTier};
+
+    match (face.family, face.tier) {
+        (AthlasFontFamily::Lucida, AthlasFontTier::Third) => {
+            Some(&SPRITE64_LUCIDA_THIRD_BUCKET_PNGS)
+        }
+        (AthlasFontFamily::Lucida, AthlasFontTier::Half) => Some(&SPRITE64_LUCIDA_HALF_BUCKET_PNGS),
+        (AthlasFontFamily::Lucida, AthlasFontTier::OneX) => Some(&SPRITE64_LUCIDA_1X_BUCKET_PNGS),
+        (AthlasFontFamily::Palatino, AthlasFontTier::Third) => {
+            Some(&SPRITE64_PALATINO_THIRD_BUCKET_PNGS)
+        }
+        (AthlasFontFamily::Palatino, AthlasFontTier::Half) => {
+            Some(&SPRITE64_PALATINO_HALF_BUCKET_PNGS)
+        }
+        (AthlasFontFamily::Palatino, AthlasFontTier::OneX) => {
+            Some(&SPRITE64_PALATINO_1X_BUCKET_PNGS)
+        }
+    }
 }
 
-fn sprite64_lucida1x_slot_count() -> Option<u32> {
+pub(crate) fn sprite64_font_slot_count() -> Option<u32> {
     let mut count = 0u32;
-    for bucket in 0..SPRITE64_LUCIDA_1X_BUCKET_PNGS.len() {
-        count = count.checked_add(sprite64_lucida1x_bucket_cell_count(bucket)?)?;
+    for face in crate::gfx::althlasfont::bitmapfont::ATHLAS_SPRITE64_FONT_FACES {
+        count = count
+            .checked_add(crate::gfx::althlasfont::bitmapfont::athlas_font_face_cell_count(face)?)?;
     }
     Some(count)
 }
@@ -6029,8 +6121,8 @@ fn sprite64_worklist_atlas_once() -> Option<GpgpuSprite64WorklistAtlasSurface> {
         .call_once(|| {
             let twemoji_atlas = twemoji_atlas_cache_once()?;
             let twemoji_slot_count = crate::gfx::althlasfont::twemoji::twemoji_slot_count();
-            let lucida_slot_count = sprite64_lucida1x_slot_count()?;
-            let slot_count = u32::from(twemoji_slot_count).checked_add(lucida_slot_count)?;
+            let font_slot_count = sprite64_font_slot_count()?;
+            let slot_count = u32::from(twemoji_slot_count).checked_add(font_slot_count)?;
             if slot_count == 0 || slot_count > u32::from(u16::MAX) {
                 return None;
             }
@@ -6093,60 +6185,63 @@ fn sprite64_worklist_atlas_once() -> Option<GpgpuSprite64WorklistAtlasSurface> {
                 }
             }
 
-            for (bucket, png) in SPRITE64_LUCIDA_1X_BUCKET_PNGS.iter().enumerate() {
-                let decoded = crate::gfx::png_codec::decode_png_rgba(png).ok()?;
-                let metrics = crate::gfx::althlasfont::athlasmetrics::athlas_bucket_atlas_metrics(
-                    SPRITE64_LUCIDA_1X_SIZE_CASE,
-                    bucket,
-                )?;
-                let base_slot = u32::from(sprite64_lucida1x_bucket_base(bucket)?);
-                let bucket_slots = u32::from(metrics.grid_w.max(1))
-                    .saturating_mul(u32::from(metrics.grid_h.max(1)));
-                let src_w = u32::from(metrics.cell_w).min(SPRITE64_WORKLIST_CELL_PIXELS);
-                let src_h = u32::from(metrics.cell_h).min(SPRITE64_WORKLIST_CELL_PIXELS);
-                if src_w == 0 || src_h == 0 {
-                    continue;
-                }
+            for face in crate::gfx::althlasfont::bitmapfont::ATHLAS_SPRITE64_FONT_FACES {
+                let bucket_pngs = sprite64_font_bucket_pngs(face)?;
+                for (bucket, png) in bucket_pngs.iter().enumerate() {
+                    let decoded = crate::gfx::png_codec::decode_png_rgba(png).ok()?;
+                    let metrics =
+                        crate::gfx::althlasfont::bitmapfont::athlas_font_bucket_atlas_metrics(
+                            face, bucket,
+                        )?;
+                    let base_slot = u32::from(sprite64_font_bucket_base(face, bucket)?);
+                    let bucket_slots = u32::from(metrics.grid_w.max(1))
+                        .saturating_mul(u32::from(metrics.grid_h.max(1)));
+                    let src_w = u32::from(metrics.cell_w).min(SPRITE64_WORKLIST_CELL_PIXELS);
+                    let src_h = u32::from(metrics.cell_h).min(SPRITE64_WORKLIST_CELL_PIXELS);
+                    if src_w == 0 || src_h == 0 {
+                        continue;
+                    }
 
-                for slot in 0..bucket_slots {
-                    let src_cell_x = (slot % u32::from(metrics.grid_w.max(1)))
-                        .saturating_mul(u32::from(metrics.cell_w));
-                    let src_cell_y = (slot / u32::from(metrics.grid_w.max(1)))
-                        .saturating_mul(u32::from(metrics.cell_h));
-                    let global_slot = base_slot.saturating_add(slot);
-                    let cell_x = (global_slot % columns) * SPRITE64_WORKLIST_CELL_PIXELS;
-                    let cell_y = (global_slot / columns) * SPRITE64_WORKLIST_CELL_PIXELS;
+                    for slot in 0..bucket_slots {
+                        let src_cell_x = (slot % u32::from(metrics.grid_w.max(1)))
+                            .saturating_mul(u32::from(metrics.cell_w));
+                        let src_cell_y = (slot / u32::from(metrics.grid_w.max(1)))
+                            .saturating_mul(u32::from(metrics.cell_h));
+                        let global_slot = base_slot.saturating_add(slot);
+                        let cell_x = (global_slot % columns) * SPRITE64_WORKLIST_CELL_PIXELS;
+                        let cell_y = (global_slot / columns) * SPRITE64_WORKLIST_CELL_PIXELS;
 
-                    for y in 0..src_h {
-                        let atlas_y = src_cell_y + y;
-                        if atlas_y >= decoded.height {
-                            continue;
-                        }
-                        for x in 0..src_w {
-                            let atlas_x = src_cell_x + x;
-                            if atlas_x >= decoded.width {
+                        for y in 0..src_h {
+                            let atlas_y = src_cell_y + y;
+                            if atlas_y >= decoded.height {
                                 continue;
                             }
-                            let src_idx = ((atlas_y as usize) * (decoded.width as usize)
-                                + atlas_x as usize)
-                                * 4;
-                            let r = *decoded.rgba.get(src_idx)? as u32;
-                            let g = *decoded.rgba.get(src_idx + 1)? as u32;
-                            let b = *decoded.rgba.get(src_idx + 2)? as u32;
-                            let src_a = *decoded.rgba.get(src_idx + 3)? as u32;
-                            let mask = r.max(g).max(b);
-                            let a = (mask.saturating_mul(src_a).saturating_add(127)) / 255;
-                            if a == 0 {
-                                continue;
-                            }
-                            let out_x = cell_x + x;
-                            let out_y = cell_y + y;
-                            let dst_idx = (out_y as usize) * dst_pitch_pixels + out_x as usize;
-                            unsafe {
-                                core::ptr::write_volatile(
-                                    dst.add(dst_idx),
-                                    (a << 24) | 0x00FF_FFFF,
-                                );
+                            for x in 0..src_w {
+                                let atlas_x = src_cell_x + x;
+                                if atlas_x >= decoded.width {
+                                    continue;
+                                }
+                                let src_idx = ((atlas_y as usize) * (decoded.width as usize)
+                                    + atlas_x as usize)
+                                    * 4;
+                                let r = *decoded.rgba.get(src_idx)? as u32;
+                                let g = *decoded.rgba.get(src_idx + 1)? as u32;
+                                let b = *decoded.rgba.get(src_idx + 2)? as u32;
+                                let src_a = *decoded.rgba.get(src_idx + 3)? as u32;
+                                let mask = r.max(g).max(b);
+                                let a = (mask.saturating_mul(src_a).saturating_add(127)) / 255;
+                                if a == 0 {
+                                    continue;
+                                }
+                                let out_x = cell_x + x;
+                                let out_y = cell_y + y;
+                                let dst_idx = (out_y as usize) * dst_pitch_pixels + out_x as usize;
+                                unsafe {
+                                    core::ptr::write_volatile(
+                                        dst.add(dst_idx),
+                                        (a << 24) | 0x00FF_FFFF,
+                                    );
+                                }
                             }
                         }
                     }

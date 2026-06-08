@@ -160,7 +160,7 @@ baremetal-reboot-log:
 
 FORCE:
 
-iso: baremetal-reboot-log artifacts images limine
+iso: artifacts images limine
 	rm -rf $(ISO_BOOT_DIR)
 	rm -f $(ISO_PATH)
 	mkdir -p $(ISO_BOOT_DIR)
@@ -250,6 +250,7 @@ iso: baremetal-reboot-log artifacts images limine
 		-e $(ISO_EFI_IMG) -no-emul-boot \
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
 		-o $(ISO_PATH) $(ISO_BOOT_DIR)
+	$(MAKE) --no-print-directory baremetal-reboot-log
 
 
 release: BUILD_MODE := release

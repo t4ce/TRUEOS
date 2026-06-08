@@ -455,6 +455,11 @@ pub(crate) fn clear_primary_surface_color(color: u32, reason: &str) -> bool {
     self::display::clear_primary_surface_color(color, reason)
 }
 
+pub(crate) fn capture_primary_surface_bgra8() -> Option<self::display::PrimarySurfaceBgra8Snapshot>
+{
+    self::display::capture_primary_surface_bgra8()
+}
+
 pub fn present_rgba_overlay_top_right(
     src: &[u8],
     src_width: u32,

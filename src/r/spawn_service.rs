@@ -1201,8 +1201,8 @@ async fn bp_autostart_task() {
     }
 
     let html = crate::surfer::html_shack::Html::new(
-        "inline://trueos/ui3-hello.html",
-        "<!doctype html><html><head><title>UI3 Hello</title></head><body><h1>Hello UI3</h1><p>Parse5 handoff smoke.</p></body></html>",
+        crate::ui3::TRUESURFER_SMOKE_HTML_URL,
+        crate::ui3::TRUESURFER_SMOKE_HTML_SOURCE,
     );
     let _ = crate::surfer::html_shack::enqueue_ready_html_for_browser(html).await;
 }

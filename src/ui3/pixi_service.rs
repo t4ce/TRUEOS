@@ -1,3 +1,4 @@
+use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec;
 use core::ffi::{c_char, c_int};
@@ -23,13 +24,11 @@ const PIXI_HOST_PRELUDE_FILENAME: &[u8] = b"<ui3-pixi-host-prelude>\0";
 const PIXI_BUNDLE_FILENAME: &[u8] = b"<ui3-pixi-bundle>\0";
 const PIXI_CAPTURE_ADAPTER_FILENAME: &[u8] = b"<ui3-pixi-capture-adapter>\0";
 const PIXI_SERVICE_PARK_MS: u64 = 1_000;
+const PIXI_SERVICE_EXEC_POLL_MS: u64 = 1;
+const PIXI_SERVICE_MAX_DRAIN_PER_TICK: usize = 512;
 const PIXI_SERVICE_NOOP_AFTER_SPAWN: bool = true;
-const PIXI_AUTORUN_TRUESURFER_HTML_ENABLE: bool = false;
-const PIXI_AUTORUN_TRUESURFER_HTML_URL: &str = "inline://trueos/ui3-hello.html";
-const PIXI_AUTORUN_TRUESURFER_HTML_SOURCE: &str = "<!doctype html><html><head><title>UI3 Hello</title></head><body><h1>Hello UI3</h1><p>Parse5 handoff smoke.</p></body></html>";
 
 static PIXI_SERVICE_READY: AtomicBool = AtomicBool::new(false);
-static PIXI_AUTORUN_TRUESURFER_HTML_STARTED: AtomicBool = AtomicBool::new(false);
 static PIXI_SERVICE_PUMP_COUNT: AtomicU32 = AtomicU32::new(0);
 static PIXI_SERVICE_RENDER_COUNT: AtomicU32 = AtomicU32::new(0);
 static PIXI_SERVICE_OP_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -37,9 +36,29 @@ static PIXI_SERVICE_FILTERED_OP_COUNT: AtomicU32 = AtomicU32::new(0);
 static PIXI_SERVICE_FRAME_COUNT: AtomicU32 = AtomicU32::new(0);
 static PIXI_SERVICE_DRAW_COUNT: AtomicU32 = AtomicU32::new(0);
 static PIXI_SERVICE_RUNTIME: Once<Mutex<Ui3PixiServiceRuntime>> = Once::new();
+static PIXI_SERVICE_QUEUE: Once<Mutex<VecDeque<Ui3PixiServiceRequest>>> = Once::new();
+
+enum Ui3PixiServiceRequest {
+    Begin {
+        browser_id: u32,
+        root_id: u32,
+    },
+    DeclareNode {
+        browser_id: u32,
+        node_id: u32,
+        kind: Ui3NodeKind,
+    },
+    Command {
+        browser_id: u32,
+        command: Ui3Command,
+    },
+}
 
 struct Ui3PixiServiceRuntime {
     host: Ui3PixiHost,
+    browser_id: u32,
+    root_id: u32,
+    scene_started: bool,
     op_count: u32,
     filtered_op_count: u32,
     frame_count: u32,
@@ -51,6 +70,9 @@ impl Ui3PixiServiceRuntime {
     fn new() -> Self {
         Self {
             host: Ui3PixiHost::new(),
+            browser_id: 0,
+            root_id: 0,
+            scene_started: false,
             op_count: 0,
             filtered_op_count: 0,
             frame_count: 0,
@@ -99,12 +121,13 @@ pub async fn pixi_service_task() {
     PIXI_SERVICE_FRAME_COUNT.store(0, Ordering::Release);
     PIXI_SERVICE_DRAW_COUNT.store(0, Ordering::Release);
     *pixi_runtime().lock() = Ui3PixiServiceRuntime::new();
+    pixi_queue().lock().clear();
 
     if PIXI_SERVICE_NOOP_AFTER_SPAWN {
         let font_assets = super::ui3_asset_service::ui3_font_sprite64_asset_status();
         PIXI_SERVICE_READY.store(true, Ordering::Release);
         crate::log!(
-            "ui3-pixi-service: spawned noop=1 ready=1 reason=qjs-pixi-path-disabled renders=0 ops=0 filtered_ops=0 frames=0 draws=0 font_sprite64_ready={} font_ready_seq={} font_slots={} bundle_bytes={} adapter_bytes={}\n",
+            "ui3-pixi-service: spawned executor=1 qjs_host=0 ready=1 reason=qjs-pixi-path-disabled renders=0 ops=0 filtered_ops=0 frames=0 draws=0 font_sprite64_ready={} font_ready_seq={} font_slots={} bundle_bytes={} adapter_bytes={}\n",
             font_assets.ready as u8,
             font_assets.ready_seq,
             font_assets.atlas_slots,
@@ -113,10 +136,16 @@ pub async fn pixi_service_task() {
         );
         loop {
             if crate::r::spawn_service::task_stop_requested(TASK_NAME) {
-                crate::log!("ui3-pixi-service: stop requested; noop exit\n");
+                crate::log!("ui3-pixi-service: stop requested; executor exit\n");
                 break;
             }
-            Timer::after(EmbassyDuration::from_millis(PIXI_SERVICE_PARK_MS)).await;
+            let drained = drain_service_queue(PIXI_SERVICE_MAX_DRAIN_PER_TICK);
+            let delay = if drained > 0 {
+                PIXI_SERVICE_EXEC_POLL_MS
+            } else {
+                PIXI_SERVICE_PARK_MS
+            };
+            Timer::after(EmbassyDuration::from_millis(delay)).await;
         }
         return;
     }
@@ -173,10 +202,6 @@ pub async fn pixi_service_task() {
             PIXI_CAPTURE_ADAPTER_SOURCE.len()
         );
 
-        if ready && PIXI_AUTORUN_TRUESURFER_HTML_ENABLE {
-            autorun_truesurfer_html_after_ready().await;
-        }
-
         crate::log!("ui3-pixi-service: vm parked retained=1\n");
         loop {
             if crate::r::spawn_service::task_stop_requested(TASK_NAME) {
@@ -188,32 +213,172 @@ pub async fn pixi_service_task() {
                 );
                 break;
             }
-            Timer::after(EmbassyDuration::from_millis(PIXI_SERVICE_PARK_MS)).await;
+            let drained = drain_service_queue(PIXI_SERVICE_MAX_DRAIN_PER_TICK);
+            let delay = if drained > 0 {
+                PIXI_SERVICE_EXEC_POLL_MS
+            } else {
+                PIXI_SERVICE_PARK_MS
+            };
+            Timer::after(EmbassyDuration::from_millis(delay)).await;
         }
     }
 }
 
-async fn autorun_truesurfer_html_after_ready() {
-    if PIXI_AUTORUN_TRUESURFER_HTML_STARTED.swap(true, Ordering::AcqRel) {
-        crate::log!("ui3-pixi-service: truesurfer autorun skipped reason=already-started\n");
-        return;
-    }
-
-    let html = crate::surfer::html_shack::Html::new(
-        PIXI_AUTORUN_TRUESURFER_HTML_URL,
-        PIXI_AUTORUN_TRUESURFER_HTML_SOURCE,
-    );
-    crate::log!(
-        "ui3-pixi-service: truesurfer autorun submit source=inline-hello bytes={} url={}\n",
-        html.html.len(),
-        html.url
-    );
-    let ok = crate::surfer::html_shack::handoff_html_to_truesurfer(html).await;
-    crate::log!("ui3-pixi-service: truesurfer autorun queued={}\n", if ok { 1 } else { 0 });
-}
-
 fn pixi_runtime() -> &'static Mutex<Ui3PixiServiceRuntime> {
     PIXI_SERVICE_RUNTIME.call_once(|| Mutex::new(Ui3PixiServiceRuntime::new()))
+}
+
+fn pixi_queue() -> &'static Mutex<VecDeque<Ui3PixiServiceRequest>> {
+    PIXI_SERVICE_QUEUE.call_once(|| Mutex::new(VecDeque::new()))
+}
+
+fn enqueue_request(request: Ui3PixiServiceRequest) -> i32 {
+    pixi_queue().lock().push_back(request);
+    0
+}
+
+pub(super) fn queue_scene_begin(browser_id: u32, root_id: u32) -> i32 {
+    enqueue_request(Ui3PixiServiceRequest::Begin {
+        browser_id,
+        root_id,
+    })
+}
+
+pub(super) fn queue_scene_node(browser_id: u32, node_id: u32, kind: Ui3NodeKind) -> i32 {
+    enqueue_request(Ui3PixiServiceRequest::DeclareNode {
+        browser_id,
+        node_id,
+        kind,
+    })
+}
+
+pub(super) fn queue_scene_command(browser_id: u32, command: Ui3Command) -> i32 {
+    enqueue_request(Ui3PixiServiceRequest::Command {
+        browser_id,
+        command,
+    })
+}
+
+fn drain_service_queue(max_requests: usize) -> usize {
+    let mut drained = 0usize;
+    while drained < max_requests {
+        let request = {
+            let mut queue = pixi_queue().lock();
+            queue.pop_front()
+        };
+        let Some(request) = request else {
+            break;
+        };
+        apply_service_request(request);
+        drained += 1;
+    }
+    if drained > 0 {
+        PIXI_SERVICE_PUMP_COUNT.fetch_add(1, Ordering::AcqRel);
+    }
+    drained
+}
+
+fn reset_runtime_for_scene(
+    runtime: &mut Ui3PixiServiceRuntime,
+    browser_id: u32,
+    root_id: u32,
+    scene_started: bool,
+) {
+    runtime.host = Ui3PixiHost::new();
+    runtime.browser_id = browser_id;
+    runtime.root_id = root_id;
+    runtime.scene_started = scene_started;
+    runtime.op_count = 0;
+    runtime.filtered_op_count = 0;
+    runtime.frame_count = 0;
+    runtime.last_draw_count = 0;
+    runtime.last_present = Ui3IntelPresentSummary::default();
+    PIXI_SERVICE_OP_COUNT.store(0, Ordering::Release);
+    PIXI_SERVICE_FILTERED_OP_COUNT.store(0, Ordering::Release);
+    PIXI_SERVICE_FRAME_COUNT.store(0, Ordering::Release);
+    PIXI_SERVICE_DRAW_COUNT.store(0, Ordering::Release);
+    crate::log!(
+        "ui3-pixi-service: scene runtime reset browser={} root={} started={}\n",
+        browser_id,
+        root_id,
+        scene_started as u8
+    );
+}
+
+fn apply_service_request(request: Ui3PixiServiceRequest) {
+    match request {
+        Ui3PixiServiceRequest::Begin {
+            browser_id,
+            root_id,
+        } => {
+            let mut runtime = pixi_runtime().lock();
+            reset_runtime_for_scene(&mut runtime, browser_id, root_id, true);
+            runtime.host.declare_node(root_id, Ui3NodeKind::Container);
+            crate::log!("ui3-pixi-service: scene begin browser={} root={}\n", browser_id, root_id);
+        }
+        Ui3PixiServiceRequest::DeclareNode {
+            browser_id,
+            node_id,
+            kind,
+        } => {
+            let mut runtime = pixi_runtime().lock();
+            if !runtime.scene_started || runtime.browser_id != browser_id {
+                // A node without a preceding begin is still accepted, but starts a
+                // fresh service-owned scene for this producer.
+                reset_runtime_for_scene(&mut runtime, browser_id, node_id, true);
+            }
+            runtime.host.declare_node(node_id, kind);
+            runtime.op_count = runtime.op_count.wrapping_add(1).max(1);
+            PIXI_SERVICE_OP_COUNT.store(runtime.op_count, Ordering::Release);
+        }
+        Ui3PixiServiceRequest::Command {
+            browser_id,
+            command,
+        } => {
+            apply_service_command(browser_id, command);
+        }
+    }
+}
+
+fn apply_service_command(browser_id: u32, command: Ui3Command) -> i32 {
+    let mut runtime = pixi_runtime().lock();
+    if !runtime.scene_started || runtime.browser_id != browser_id {
+        let root_id = match &command {
+            Ui3Command::Render { root } => *root,
+            _ => 0,
+        };
+        reset_runtime_for_scene(&mut runtime, browser_id, root_id, true);
+        if root_id != 0 {
+            runtime.host.declare_node(root_id, Ui3NodeKind::Container);
+        }
+    }
+    runtime.op_count = runtime.op_count.wrapping_add(1).max(1);
+    PIXI_SERVICE_OP_COUNT.store(runtime.op_count, Ordering::Release);
+    if pixi_light_filter_command(&mut runtime, &command) {
+        return 0;
+    }
+
+    let is_render = matches!(command, Ui3Command::Render { .. });
+    let apply_start_ms = if is_render { super::now_ms() } else { 0 };
+    if is_render {
+        crate::log!(
+            "ui3-pixi-service: render request browser={} ops={} filtered_ops={} frames={}\n",
+            browser_id,
+            runtime.op_count,
+            runtime.filtered_op_count,
+            runtime.frame_count
+        );
+    }
+    let frame = runtime.host.apply(command).cloned();
+    let apply_ms = if is_render {
+        super::now_ms().saturating_sub(apply_start_ms)
+    } else {
+        0
+    };
+    if let Some(frame) = frame {
+        lower_present_and_count(&mut runtime, browser_id, &frame, apply_ms, is_render);
+    }
+    0
 }
 
 unsafe fn install_native_hooks(ctx: *mut qjs::JSContext) {
@@ -306,13 +471,91 @@ unsafe extern "C" fn trueos_render(
     qjs::JS_NewFloat64(ctx, call as f64)
 }
 
-fn lower_present_and_count(runtime: &mut Ui3PixiServiceRuntime, frame: &Ui3RenderFrame) {
+fn lower_present_and_count(
+    runtime: &mut Ui3PixiServiceRuntime,
+    browser_id: u32,
+    frame: &Ui3RenderFrame,
+    apply_ms: u64,
+    force_log: bool,
+) {
     runtime.frame_count = runtime.frame_count.wrapping_add(1).max(1);
+    let lower_start_ms = super::now_ms();
     let geometry = lower_ui3_frame_geometry(&runtime.host, frame);
+    let lower_ms = super::now_ms().saturating_sub(lower_start_ms);
+    let present_start_ms = super::now_ms();
+    let present = present_ui3_frame_to_intel_primary(&geometry);
+    let present_wall_ms = super::now_ms().saturating_sub(present_start_ms);
+    let present_gap_ms = present_wall_ms.saturating_sub(present.total_ms);
     runtime.last_draw_count = geometry.draws.len().min(u32::MAX as usize) as u32;
-    runtime.last_present = present_ui3_frame_to_intel_primary(&geometry);
+    runtime.last_present = present;
     PIXI_SERVICE_FRAME_COUNT.store(runtime.frame_count, Ordering::Release);
     PIXI_SERVICE_DRAW_COUNT.store(runtime.last_draw_count, Ordering::Release);
+
+    if runtime.frame_count <= 4 || force_log {
+        let mut rect_fill_draws = 0usize;
+        let mut rect_stroke_draws = 0usize;
+        let mut axis_line_draws = 0usize;
+        let mut mesh_fill_draws = 0usize;
+        let mut mesh_stroke_draws = 0usize;
+        for draw in &geometry.draws {
+            match draw {
+                super::Ui3LoweredDraw::SolidRect { kind, .. } => match kind {
+                    super::Ui3SolidRectKind::Fill => {
+                        rect_fill_draws = rect_fill_draws.saturating_add(1)
+                    }
+                    super::Ui3SolidRectKind::RectStroke => {
+                        rect_stroke_draws = rect_stroke_draws.saturating_add(1)
+                    }
+                    super::Ui3SolidRectKind::AxisLineStroke => {
+                        axis_line_draws = axis_line_draws.saturating_add(1)
+                    }
+                },
+                super::Ui3LoweredDraw::Mesh { kind, .. } => match kind {
+                    super::Ui3MeshKind::Fill => mesh_fill_draws = mesh_fill_draws.saturating_add(1),
+                    super::Ui3MeshKind::Stroke => {
+                        mesh_stroke_draws = mesh_stroke_draws.saturating_add(1)
+                    }
+                },
+                super::Ui3LoweredDraw::TextRun { .. } => {}
+            }
+        }
+        crate::log!(
+            "ui3-pixi-service: render browser={} root={} ops={} filtered_ops={} draws={} nodes={} solid_rects={} meshes={} text={} presented={} fill_descs={} blend_descs={} apply_ms={} lower_ms={} present_wall_ms={} rect_ms={} sprite_ms={} publish_ms={} present_ms={} total_ms={} gap_ms={}\n",
+            browser_id,
+            frame.root,
+            runtime.op_count,
+            runtime.filtered_op_count,
+            geometry.draws.len(),
+            frame.ordered_nodes.len(),
+            present.solid_rects,
+            present.mesh_draws,
+            present.text_runs,
+            present.presented as u8,
+            present.fill_descs,
+            present.blend_descs,
+            apply_ms,
+            lower_ms,
+            present_wall_ms,
+            present.rect_ms,
+            present.sprite_ms,
+            present.publish_ms,
+            present.present_ms,
+            present.total_ms,
+            present_gap_ms
+        );
+        crate::log!(
+            "ui3-pixi-service: materialized browser={} root={} rect_fill={} rect_stroke={} axis_line={} mesh_fill={} mesh_stroke={} ignored_meshes={} text={}\n",
+            browser_id,
+            frame.root,
+            rect_fill_draws,
+            rect_stroke_draws,
+            axis_line_draws,
+            mesh_fill_draws,
+            mesh_stroke_draws,
+            mesh_fill_draws.saturating_add(mesh_stroke_draws),
+            present.text_runs
+        );
+    }
 }
 
 fn pixi_light_filter_command(runtime: &mut Ui3PixiServiceRuntime, command: &Ui3Command) -> bool {

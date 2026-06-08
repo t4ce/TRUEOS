@@ -5,6 +5,7 @@
 
 #![allow(dead_code)]
 
+mod debug_capture;
 mod geometry;
 mod font {
     pub(super) mod gpgpu_font;
@@ -18,8 +19,8 @@ mod ui3_asset_service;
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use spin::{Mutex, Once};
 
+pub(crate) use self::debug_capture::{Ui3DebugCaptureError, latest_pixi_primary_bmp};
 pub use self::geometry::{
     Ui3GeometryFrame, Ui3LoweredDraw, Ui3MeshKind, Ui3SolidRectKind, lower_ui3_frame_geometry,
     push_ui3_rgb_bytes,
@@ -34,6 +35,9 @@ pub use self::pixi_service::{
 pub use self::ui3_asset_service::{ui3_asset_service_ready, ui3_asset_service_task};
 
 pub type Ui3NodeId = u32;
+
+pub(crate) const TRUESURFER_SMOKE_HTML_URL: &str = "inline://trueos/ui3-hello.html";
+pub(crate) const TRUESURFER_SMOKE_HTML_SOURCE: &str = "<!doctype html><html><head><title>UI3 Hello</title></head><body><h1>Hello UI3</h1><div><p>Parse5 handoff smoke.</p><button type=\"button\">Kernel Button</button></div></body></html>";
 
 #[inline]
 fn now_ms() -> u64 {
@@ -213,22 +217,6 @@ impl Ui3Node {
     }
 }
 
-#[derive(Default)]
-struct Ui3TruesurferRuntime {
-    host: Ui3PixiHost,
-    browser_id: u32,
-    root_id: Ui3NodeId,
-    op_count: u32,
-    filtered_op_count: u32,
-    frame_count: u32,
-}
-
-static UI3_TRUESURFER_RUNTIME: Once<Mutex<Ui3TruesurferRuntime>> = Once::new();
-
-fn ui3_truesurfer_runtime() -> &'static Mutex<Ui3TruesurferRuntime> {
-    UI3_TRUESURFER_RUNTIME.call_once(|| Mutex::new(Ui3TruesurferRuntime::default()))
-}
-
 fn ui3_scene_kind(kind: u32) -> Ui3NodeKind {
     match kind {
         1 => Ui3NodeKind::Graphics,
@@ -244,449 +232,161 @@ fn ui3_scene_color(rgb: u32, alpha: f32) -> Ui3Color {
     }
 }
 
-fn ui3_scene_apply(browser_id: u32, command: Ui3Command) -> i32 {
-    let mut runtime = ui3_truesurfer_runtime().lock();
-    if runtime.browser_id != browser_id {
-        runtime.browser_id = browser_id;
-        runtime.root_id = 0;
-        runtime.op_count = 0;
-        runtime.filtered_op_count = 0;
-        runtime.frame_count = 0;
-        runtime.host = Ui3PixiHost::new();
-    }
-    runtime.op_count = runtime.op_count.wrapping_add(1).max(1);
-    if let Some(reason) = ui3_light_filter_reason(&command) {
-        runtime.filtered_op_count = runtime.filtered_op_count.wrapping_add(1).max(1);
-        if runtime.filtered_op_count <= 8 {
-            crate::log!(
-                "ui3-truesurfer: light-filter op={} reason={}\n",
-                runtime.filtered_op_count,
-                reason
-            );
-        }
-        return 0;
-    }
-    let is_render = matches!(command, Ui3Command::Render { .. });
-    let apply_start_ms = if is_render { now_ms() } else { 0 };
-    let frame = runtime.host.apply(command).cloned();
-    let apply_ms = if is_render {
-        now_ms().saturating_sub(apply_start_ms)
-    } else {
-        0
-    };
-    if let Some(frame) = frame {
-        runtime.frame_count = runtime.frame_count.wrapping_add(1).max(1);
-        let lower_start_ms = now_ms();
-        let geometry = lower_ui3_frame_geometry(&runtime.host, &frame);
-        let lower_ms = now_ms().saturating_sub(lower_start_ms);
-        let present_start_ms = now_ms();
-        let present = self::intel_present::present_ui3_frame_to_intel_primary(&geometry);
-        let present_wall_ms = now_ms().saturating_sub(present_start_ms);
-        let present_gap_ms = present_wall_ms.saturating_sub(present.total_ms);
-        if runtime.frame_count <= 4 || is_render {
-            let mut rect_fill_draws = 0usize;
-            let mut rect_stroke_draws = 0usize;
-            let mut axis_line_draws = 0usize;
-            let mut mesh_fill_draws = 0usize;
-            let mut mesh_stroke_draws = 0usize;
-            for draw in &geometry.draws {
-                match draw {
-                    Ui3LoweredDraw::SolidRect { kind, .. } => match kind {
-                        Ui3SolidRectKind::Fill => {
-                            rect_fill_draws = rect_fill_draws.saturating_add(1)
-                        }
-                        Ui3SolidRectKind::RectStroke => {
-                            rect_stroke_draws = rect_stroke_draws.saturating_add(1)
-                        }
-                        Ui3SolidRectKind::AxisLineStroke => {
-                            axis_line_draws = axis_line_draws.saturating_add(1)
-                        }
-                    },
-                    Ui3LoweredDraw::Mesh { kind, .. } => match kind {
-                        Ui3MeshKind::Fill => mesh_fill_draws = mesh_fill_draws.saturating_add(1),
-                        Ui3MeshKind::Stroke => {
-                            mesh_stroke_draws = mesh_stroke_draws.saturating_add(1)
-                        }
-                    },
-                    Ui3LoweredDraw::TextRun { .. } => {}
-                }
-            }
-            crate::log!(
-                "ui3-truesurfer: render browser={} root={} ops={} filtered_ops={} draws={} nodes={} solid_rects={} meshes={} text={} presented={} fill_descs={} blend_descs={} apply_ms={} lower_ms={} present_wall_ms={} rect_ms={} sprite_ms={} publish_ms={} present_ms={} total_ms={} gap_ms={}\n",
-                browser_id,
-                frame.root,
-                runtime.op_count,
-                runtime.filtered_op_count,
-                geometry.draws.len(),
-                frame.ordered_nodes.len(),
-                present.solid_rects,
-                present.mesh_draws,
-                present.text_runs,
-                present.presented as u8,
-                present.fill_descs,
-                present.blend_descs,
-                apply_ms,
-                lower_ms,
-                present_wall_ms,
-                present.rect_ms,
-                present.sprite_ms,
-                present.publish_ms,
-                present.present_ms,
-                present.total_ms,
-                present_gap_ms
-            );
-            crate::log!(
-                "ui3-truesurfer: materialized browser={} root={} rect_fill={} rect_stroke={} axis_line={} mesh_fill={} mesh_stroke={} ignored_meshes={} text={}\n",
-                browser_id,
-                frame.root,
-                rect_fill_draws,
-                rect_stroke_draws,
-                axis_line_draws,
-                mesh_fill_draws,
-                mesh_stroke_draws,
-                mesh_fill_draws.saturating_add(mesh_stroke_draws),
-                present.text_runs
-            );
-        }
-    }
-    0
-}
-
 #[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_ui3_scene_begin(browser_id: u32, root_id: u32) -> i32 {
-    let mut runtime = ui3_truesurfer_runtime().lock();
-    runtime.browser_id = browser_id;
-    runtime.root_id = root_id;
-    runtime.op_count = 0;
-    runtime.filtered_op_count = 0;
-    runtime.frame_count = 0;
-    runtime.host = Ui3PixiHost::new();
-    runtime.host.declare_node(root_id, Ui3NodeKind::Container);
-    crate::log!("ui3-truesurfer: scene begin browser={} root={}\n", browser_id, root_id);
-    0
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_ui3_scene_node(browser_id: u32, node_id: u32, kind: u32) -> i32 {
-    let mut runtime = ui3_truesurfer_runtime().lock();
-    if runtime.browser_id != browser_id {
-        runtime.browser_id = browser_id;
-        runtime.host = Ui3PixiHost::new();
-    }
-    runtime.host.declare_node(node_id, ui3_scene_kind(kind));
-    runtime.op_count = runtime.op_count.wrapping_add(1).max(1);
-    0
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_ui3_scene_add_child(browser_id: u32, parent: u32, child: u32) -> i32 {
-    ui3_scene_apply(browser_id, Ui3Command::AddChild { parent, child })
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_ui3_scene_add_child_at(
+pub unsafe extern "C" fn trueos_cabi_ui3_pixi_op(
     browser_id: u32,
-    parent: u32,
-    child: u32,
-    index: u32,
-) -> i32 {
-    ui3_scene_apply(
-        browser_id,
-        Ui3Command::AddChildAt {
-            parent,
-            child,
-            index: index as usize,
-        },
-    )
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_ui3_scene_set_child_index(
-    browser_id: u32,
-    parent: u32,
-    child: u32,
-    index: u32,
-) -> i32 {
-    ui3_scene_apply(
-        browser_id,
-        Ui3Command::SetChildIndex {
-            parent,
-            child,
-            index: index as usize,
-        },
-    )
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_ui3_scene_remove_child(
-    browser_id: u32,
-    parent: u32,
-    child: u32,
-) -> i32 {
-    ui3_scene_apply(browser_id, Ui3Command::RemoveChild { parent, child })
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_ui3_scene_remove_from_parent(browser_id: u32, node_id: u32) -> i32 {
-    ui3_scene_apply(browser_id, Ui3Command::RemoveFromParent { node: node_id })
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_ui3_scene_remove_children(browser_id: u32, parent: u32) -> i32 {
-    ui3_scene_apply(browser_id, Ui3Command::RemoveChildren { parent })
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_ui3_scene_visible(
-    browser_id: u32,
-    node_id: u32,
-    visible: bool,
-) -> i32 {
-    ui3_scene_apply(
-        browser_id,
-        Ui3Command::SetVisible {
-            node: node_id,
-            visible,
-        },
-    )
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_ui3_scene_listen(
-    browser_id: u32,
-    node_id: u32,
-    event_ptr: *const u8,
-    event_len: usize,
-) -> i32 {
-    let event = if event_ptr.is_null() || event_len == 0 {
-        String::new()
-    } else {
-        let bytes = unsafe { core::slice::from_raw_parts(event_ptr, event_len) };
-        String::from_utf8_lossy(bytes).into_owned()
-    };
-    ui3_scene_apply(
-        browser_id,
-        Ui3Command::Listen {
-            node: node_id,
-            event: self::pixi_host::pointer_event_kind_from_name(event.as_str()),
-        },
-    )
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_ui3_scene_remove_all_listeners(browser_id: u32, node_id: u32) -> i32 {
-    ui3_scene_apply(browser_id, Ui3Command::RemoveAllListeners { node: node_id })
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_ui3_scene_position(
-    browser_id: u32,
-    node_id: u32,
-    x: f32,
-    y: f32,
-) -> i32 {
-    ui3_scene_apply(
-        browser_id,
-        Ui3Command::SetPosition {
-            node: node_id,
-            position: Ui3Point { x, y },
-        },
-    )
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_ui3_scene_graphics_clear(browser_id: u32, node_id: u32) -> i32 {
-    ui3_scene_apply(browser_id, Ui3Command::GraphicsClear { node: node_id })
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_ui3_scene_graphics_rect(
-    browser_id: u32,
-    node_id: u32,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-) -> i32 {
-    ui3_scene_apply(
-        browser_id,
-        Ui3Command::GraphicsRect {
-            node: node_id,
-            rect: Ui3Rect { x, y, w, h },
-        },
-    )
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_ui3_scene_graphics_fill(
-    browser_id: u32,
-    node_id: u32,
-    rgb: u32,
-    alpha: f32,
-) -> i32 {
-    ui3_scene_apply(
-        browser_id,
-        Ui3Command::GraphicsFill {
-            node: node_id,
-            color: ui3_scene_color(rgb, alpha),
-        },
-    )
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_ui3_scene_graphics_stroke(
-    browser_id: u32,
-    node_id: u32,
-    rgb: u32,
-    alpha: f32,
-    width: f32,
-) -> i32 {
-    ui3_scene_apply(
-        browser_id,
-        Ui3Command::GraphicsStroke {
-            node: node_id,
-            color: ui3_scene_color(rgb, alpha),
-            width,
-        },
-    )
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_ui3_scene_graphics_circle(
-    browser_id: u32,
-    node_id: u32,
-    x: f32,
-    y: f32,
-    radius: f32,
-) -> i32 {
-    ui3_scene_apply(
-        browser_id,
-        Ui3Command::GraphicsCircle {
-            node: node_id,
-            center: Ui3Point { x, y },
-            radius,
-        },
-    )
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_ui3_scene_graphics_move_to(
-    browser_id: u32,
-    node_id: u32,
-    x: f32,
-    y: f32,
-) -> i32 {
-    ui3_scene_apply(
-        browser_id,
-        Ui3Command::GraphicsMoveTo {
-            node: node_id,
-            to: Ui3Point { x, y },
-        },
-    )
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_ui3_scene_graphics_line_to(
-    browser_id: u32,
-    node_id: u32,
-    x: f32,
-    y: f32,
-) -> i32 {
-    ui3_scene_apply(
-        browser_id,
-        Ui3Command::GraphicsLineTo {
-            node: node_id,
-            to: Ui3Point { x, y },
-        },
-    )
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_ui3_scene_text(
-    browser_id: u32,
-    node_id: u32,
+    op_code: u32,
+    node: u32,
+    a: f32,
+    b: f32,
+    c: f32,
+    d: f32,
     text_ptr: *const u8,
     text_len: usize,
 ) -> i32 {
-    let text = if text_ptr.is_null() || text_len == 0 {
-        String::new()
-    } else {
-        let bytes = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
-        String::from_utf8_lossy(bytes).into_owned()
-    };
-    ui3_scene_apply(
-        browser_id,
-        Ui3Command::Text {
-            node: node_id,
-            params: Vec::from([Ui3TextParam::Text(text)]),
-        },
-    )
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_ui3_scene_text_fill(
-    browser_id: u32,
-    node_id: u32,
-    rgb: u32,
-    alpha: f32,
-) -> i32 {
-    ui3_scene_apply(
-        browser_id,
-        Ui3Command::Text {
-            node: node_id,
-            params: Vec::from([Ui3TextParam::Fill(ui3_scene_color(rgb, alpha))]),
-        },
-    )
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_ui3_scene_render(browser_id: u32, root_id: u32) -> i32 {
-    let (queued_ops, filtered_ops, frame_count) = {
-        let runtime = ui3_truesurfer_runtime().lock();
-        (runtime.op_count, runtime.filtered_op_count, runtime.frame_count)
-    };
-    crate::log!(
-        "ui3-truesurfer: render request browser={} root={} queued_ops={} filtered_ops={} frames={}\n",
-        browser_id,
-        root_id,
-        queued_ops,
-        filtered_ops,
-        frame_count
-    );
-    let start_ms = now_ms();
-    let result = ui3_scene_apply(browser_id, Ui3Command::Render { root: root_id });
-    crate::log!(
-        "ui3-truesurfer: render request returned browser={} root={} result={} elapsed_ms={}\n",
-        browser_id,
-        root_id,
-        result,
-        now_ms().saturating_sub(start_ms)
-    );
-    result
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_ui3_native_hello_scene(
-    browser_id: u32,
-    html_ptr: *const u8,
-    html_len: usize,
-) -> i32 {
-    let html = if html_ptr.is_null() || html_len == 0 {
-        ""
-    } else {
-        let bytes = unsafe { core::slice::from_raw_parts(html_ptr, html_len) };
-        core::str::from_utf8(bytes).unwrap_or("")
-    };
-    let (ops, root) = html_widgets::submit_h1_p_text_widget_scene(browser_id, html);
-    crate::log!(
-        "ui3-html-widgets: h1-p text widgets submitted browser={} root={} ops={}\n",
-        browser_id,
-        root,
-        ops
-    );
-    if ops == 0 {
-        -1
-    } else {
-        ops.min(i32::MAX as u32) as i32
+    match op_code {
+        0 => pixi_service::queue_scene_begin(browser_id, node),
+        1 => pixi_service::queue_scene_node(browser_id, node, ui3_scene_kind(a.max(0.0) as u32)),
+        2 => pixi_service::queue_scene_command(
+            browser_id,
+            Ui3Command::AddChild {
+                parent: node,
+                child: a.max(0.0) as u32,
+            },
+        ),
+        3 => pixi_service::queue_scene_command(
+            browser_id,
+            Ui3Command::SetPosition {
+                node,
+                position: Ui3Point { x: a, y: b },
+            },
+        ),
+        4 => pixi_service::queue_scene_command(browser_id, Ui3Command::GraphicsClear { node }),
+        5 => pixi_service::queue_scene_command(
+            browser_id,
+            Ui3Command::GraphicsRect {
+                node,
+                rect: Ui3Rect {
+                    x: a,
+                    y: b,
+                    w: c,
+                    h: d,
+                },
+            },
+        ),
+        6 => pixi_service::queue_scene_command(
+            browser_id,
+            Ui3Command::GraphicsFill {
+                node,
+                color: ui3_scene_color(a.max(0.0) as u32, b),
+            },
+        ),
+        7 => pixi_service::queue_scene_command(
+            browser_id,
+            Ui3Command::GraphicsStroke {
+                node,
+                color: ui3_scene_color(a.max(0.0) as u32, b),
+                width: c,
+            },
+        ),
+        8 => {
+            let text = if text_ptr.is_null() || text_len == 0 {
+                String::new()
+            } else {
+                let bytes = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
+                String::from_utf8_lossy(bytes).into_owned()
+            };
+            pixi_service::queue_scene_command(
+                browser_id,
+                Ui3Command::Text {
+                    node,
+                    params: Vec::from([Ui3TextParam::Text(text)]),
+                },
+            )
+        }
+        9 => pixi_service::queue_scene_command(
+            browser_id,
+            Ui3Command::Text {
+                node,
+                params: Vec::from([Ui3TextParam::Fill(ui3_scene_color(a.max(0.0) as u32, b))]),
+            },
+        ),
+        10 => pixi_service::queue_scene_command(
+            browser_id,
+            Ui3Command::AddChildAt {
+                parent: node,
+                child: a.max(0.0) as u32,
+                index: b.max(0.0) as usize,
+            },
+        ),
+        11 => pixi_service::queue_scene_command(
+            browser_id,
+            Ui3Command::SetChildIndex {
+                parent: node,
+                child: a.max(0.0) as u32,
+                index: b.max(0.0) as usize,
+            },
+        ),
+        12 => pixi_service::queue_scene_command(
+            browser_id,
+            Ui3Command::RemoveChild {
+                parent: node,
+                child: a.max(0.0) as u32,
+            },
+        ),
+        13 => pixi_service::queue_scene_command(browser_id, Ui3Command::RemoveFromParent { node }),
+        14 => pixi_service::queue_scene_command(
+            browser_id,
+            Ui3Command::RemoveChildren { parent: node },
+        ),
+        15 => pixi_service::queue_scene_command(
+            browser_id,
+            Ui3Command::SetVisible {
+                node,
+                visible: a != 0.0,
+            },
+        ),
+        16 => {
+            let event = if text_ptr.is_null() || text_len == 0 {
+                String::new()
+            } else {
+                let bytes = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
+                String::from_utf8_lossy(bytes).into_owned()
+            };
+            pixi_service::queue_scene_command(
+                browser_id,
+                Ui3Command::Listen {
+                    node,
+                    event: self::pixi_host::pointer_event_kind_from_name(event.as_str()),
+                },
+            )
+        }
+        17 => {
+            pixi_service::queue_scene_command(browser_id, Ui3Command::RemoveAllListeners { node })
+        }
+        18 => pixi_service::queue_scene_command(
+            browser_id,
+            Ui3Command::GraphicsCircle {
+                node,
+                center: Ui3Point { x: a, y: b },
+                radius: c,
+            },
+        ),
+        19 => pixi_service::queue_scene_command(
+            browser_id,
+            Ui3Command::GraphicsMoveTo {
+                node,
+                to: Ui3Point { x: a, y: b },
+            },
+        ),
+        20 => pixi_service::queue_scene_command(
+            browser_id,
+            Ui3Command::GraphicsLineTo {
+                node,
+                to: Ui3Point { x: a, y: b },
+            },
+        ),
+        21 => pixi_service::queue_scene_command(browser_id, Ui3Command::Render { root: node }),
+        _ => -1,
     }
 }
