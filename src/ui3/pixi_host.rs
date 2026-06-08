@@ -324,7 +324,6 @@ impl Ui3PixiHost {
             match param {
                 Ui3TextParam::Text(text) => n.text = text,
                 Ui3TextParam::Fill(fill) => n.text_fill = fill,
-                Ui3TextParam::FontSizeTier(_) => {}
             }
         }
     }

@@ -88,7 +88,6 @@ impl Ui3Color {
 pub enum Ui3TextParam {
     Text(String),
     Fill(Ui3Color),
-    FontSizeTier(u8),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -230,6 +229,7 @@ pub struct Ui3Node {
     pub graphics: Vec<Ui3GraphicsOp>,
     pub text: String,
     pub text_fill: Ui3Color,
+    pub text_font_tier: u8,
 }
 
 impl Ui3Node {
@@ -249,6 +249,7 @@ impl Ui3Node {
             graphics: Vec::new(),
             text: String::new(),
             text_fill: Ui3Color::WHITE,
+            text_font_tier: 1,
         }
     }
 }
@@ -365,6 +366,7 @@ pub unsafe extern "C" fn trueos_cabi_ui3_pixi_op(
                 params: Vec::from([Ui3TextParam::Fill(ui3_scene_color(a.max(0.0) as u32, b))]),
             },
         ),
+        29 => 0,
         10 => pixi_service::queue_scene_command(
             browser_id,
             Ui3Command::AddChildAt {

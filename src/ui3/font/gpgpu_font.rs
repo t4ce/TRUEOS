@@ -5,8 +5,9 @@ use libm::roundf;
 use trueos_gfx_core::Rgba8;
 
 use crate::gfx::althlasfont::bitmapfont::{
-    ATHLAS_FONT_FACE_LUCIDA_1X, AthlasFontFace, athlas_font_bucket_atlas_metrics,
-    athlas_font_line_height_px, athlas_lookup_glyph_region,
+    ATHLAS_FONT_FACE_LUCIDA_1X, ATHLAS_FONT_FACE_LUCIDA_HALF, ATHLAS_FONT_FACE_LUCIDA_THIRD,
+    AthlasFontFace, athlas_font_bucket_atlas_metrics, athlas_font_line_height_px,
+    athlas_lookup_glyph_region,
 };
 
 use super::super::Ui3Point;
@@ -21,8 +22,14 @@ pub(in crate::ui3) fn collect_ui3_text_run_sprite64_batches(
     origin: Ui3Point,
     text: &str,
     color: Rgba8,
+    font_tier: u8,
 ) -> Vec<Ui3Sprite64TextBatch> {
-    collect_ui3_text_run_sprite64_batches_for_face(ATHLAS_FONT_FACE_LUCIDA_1X, origin, text, color)
+    collect_ui3_text_run_sprite64_batches_for_face(
+        font_face_for_tier(font_tier),
+        origin,
+        text,
+        color,
+    )
 }
 
 pub(in crate::ui3) fn collect_ui3_text_run_sprite64_batches_for_face(
@@ -110,6 +117,15 @@ fn flush_sprite64_font_batch(
     out.push(Ui3Sprite64TextBatch {
         placements: core::mem::take(placements),
     });
+}
+
+#[inline]
+fn font_face_for_tier(tier: u8) -> AthlasFontFace {
+    match tier {
+        0 => ATHLAS_FONT_FACE_LUCIDA_THIRD,
+        2 => ATHLAS_FONT_FACE_LUCIDA_1X,
+        _ => ATHLAS_FONT_FACE_LUCIDA_HALF,
+    }
 }
 
 #[derive(Copy, Clone, Debug)]

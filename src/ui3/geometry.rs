@@ -54,6 +54,7 @@ pub enum Ui3LoweredDraw {
         origin: Ui3Point,
         text: String,
         color: Rgba8,
+        font_tier: u8,
         clip: Option<Ui3Rect>,
     },
 }
@@ -158,6 +159,7 @@ pub fn lower_ui3_frame_geometry(host: &Ui3PixiHost, frame: &Ui3RenderFrame) -> U
                 origin: transform_point(Ui3Point::default(), transform),
                 text: node.text.clone(),
                 color: color_to_rgba8_with_alpha(node.text_fill, alpha),
+                font_tier: node.text_font_tier,
                 clip,
             }),
             Ui3NodeKind::Container | Ui3NodeKind::Text => {}

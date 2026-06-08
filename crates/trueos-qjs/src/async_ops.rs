@@ -393,9 +393,93 @@ fn path_has_svg_suffix(path: &[u8]) -> bool {
     lower.ends_with(b".svg") || lower.ends_with(b".svgz")
 }
 
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn percent_decode_bytes(bytes: &[u8]) -> Result<Vec<u8>, i32> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 2 >= bytes.len() {
+                return Err(-7);
+            }
+            let hi = hex_nibble(bytes[i + 1]).ok_or(-7)?;
+            let lo = hex_nibble(bytes[i + 2]).ok_or(-7)?;
+            out.push((hi << 4) | lo);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    Ok(out)
+}
+
+fn data_url_svg_payload(bytes: &[u8]) -> Option<&[u8]> {
+    let mut start = 0usize;
+    while start < bytes.len() && matches!(bytes[start], b' ' | b'\t' | b'\r' | b'\n') {
+        start += 1;
+    }
+    let trimmed = &bytes[start..];
+    if trimmed.len() < 5 || !trimmed[..5].eq_ignore_ascii_case(b"data:") {
+        return None;
+    }
+    let comma = trimmed.iter().position(|b| *b == b',')?;
+    let meta = &trimmed[5..comma];
+    let mut is_svg = false;
+    for window in meta.windows(b"image/svg+xml".len()) {
+        if window.eq_ignore_ascii_case(b"image/svg+xml") {
+            is_svg = true;
+            break;
+        }
+    }
+    if !is_svg {
+        return None;
+    }
+    Some(&trimmed[comma + 1..])
+}
+
+fn normalized_svg_upload_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
+    if svg_like_bytes(bytes) {
+        return None;
+    }
+
+    if let Some(payload) = data_url_svg_payload(bytes) {
+        if let Ok(decoded) = percent_decode_bytes(payload)
+            && svg_like_bytes(&decoded)
+        {
+            return Some(decoded);
+        }
+        return None;
+    }
+
+    if bytes.iter().any(|b| *b == b'%')
+        && let Ok(decoded) = percent_decode_bytes(bytes)
+        && svg_like_bytes(&decoded)
+    {
+        return Some(decoded);
+    }
+
+    None
+}
+
 fn queue_svg_texture_upload(tex_id: u32, bytes: &[u8]) -> Result<(), i32> {
-    let rc =
-        unsafe { platform::gfx::upload_texture_svg_async(tex_id, bytes.as_ptr(), bytes.len()) };
+    let decoded = normalized_svg_upload_bytes(bytes);
+    let upload_bytes = decoded.as_deref().unwrap_or(bytes);
+    let rc = unsafe {
+        platform::gfx::upload_texture_svg_async(
+            tex_id,
+            upload_bytes.as_ptr(),
+            upload_bytes.len(),
+        )
+    };
     if rc != 0 {
         return Err(rc);
     }
@@ -407,7 +491,7 @@ fn queue_image_texture_upload(
     path: &[u8],
     bytes: &[u8],
 ) -> Result<(), i32> {
-    let is_svg = path_has_svg_suffix(path) || svg_like_bytes(bytes);
+    let is_svg = path_has_svg_suffix(path) || svg_like_bytes(bytes) || data_url_svg_payload(bytes).is_some();
     let is_jpeg = !is_svg && (path_has_jpeg_suffix(path) || jpeg_like_bytes(bytes));
     if is_svg {
         queue_svg_texture_upload(op.tex_id, bytes).map(|_| {
