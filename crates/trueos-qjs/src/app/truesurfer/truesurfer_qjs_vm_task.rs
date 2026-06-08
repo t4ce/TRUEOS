@@ -69,6 +69,12 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
             .any(|window| window == needle)
 }
 
+#[inline]
+fn now_ms() -> u64 {
+    let hz = embassy_time_driver::TICK_HZ.max(1);
+    embassy_time_driver::now().saturating_mul(1000) / hz
+}
+
 const TRUESURFER_PIXI_COLLECTOR_SOURCE: &[u8] = br#"
 (function (G) {
   "use strict";
@@ -763,6 +769,7 @@ const TRUESURFER_TRUEOS_PIXI_APP_PHASE_PROP: &[u8] = b"__TRUEOS_PIXI_APP_PHASE__
 const TRUESURFER_TRUEOS_PIXI_CAPTURE_ERROR_PROP: &[u8] = b"__TRUEOS_PIXI_CAPTURE_ERROR__\0";
 const TRUESURFER_TRUEOS_PIXI_CAPTURE_STEP_PROP: &[u8] = b"__TRUEOS_PIXI_CAPTURE_STEP__\0";
 const TRUESURFER_TRUEOS_PIXI_LAYOUT_STEP_PROP: &[u8] = b"__TRUEOS_PIXI_LAYOUT_STEP__\0";
+const TRUESURFER_TRUEOS_PIXI_BRIDGE_STATS_PROP: &[u8] = b"__TRUEOS_PIXI_BRIDGE_STATS__\0";
 const TRUESURFER_PARSE5_BUILD_SCENE_PROP: &[u8] = b"__trueosParse5BuildSceneFromCapture\0";
 const TRUESURFER_UI3_SCENE_COMMAND_SOURCE_PROP: &[u8] = b"commandSource\0";
 const TRUESURFER_UI3_SCENE_ROOT_ID_PROP: &[u8] = b"rootId\0";
@@ -774,6 +781,18 @@ const TRUESURFER_UI3_OP_B_PROP: &[u8] = b"b\0";
 const TRUESURFER_UI3_OP_C_PROP: &[u8] = b"c\0";
 const TRUESURFER_UI3_OP_D_PROP: &[u8] = b"d\0";
 const TRUESURFER_UI3_OP_TEXT_PROP: &[u8] = b"text\0";
+const TRUESURFER_BRIDGE_RENDER_NODES_PROP: &[u8] = b"renderNodes\0";
+const TRUESURFER_BRIDGE_RENDER_BLOCKS_PROP: &[u8] = b"renderBlocks\0";
+const TRUESURFER_BRIDGE_RENDER_TEXT_PROP: &[u8] = b"renderText\0";
+const TRUESURFER_BRIDGE_RENDER_TAGS_PROP: &[u8] = b"renderTags\0";
+const TRUESURFER_BRIDGE_LAYOUT_BOXES_PROP: &[u8] = b"layoutBoxes\0";
+const TRUESURFER_BRIDGE_LAYOUT_BLOCKS_PROP: &[u8] = b"layoutBlocks\0";
+const TRUESURFER_BRIDGE_LAYOUT_TEXT_PROP: &[u8] = b"layoutText\0";
+const TRUESURFER_BRIDGE_LAYOUT_MAX_DEPTH_PROP: &[u8] = b"layoutMaxDepth\0";
+const TRUESURFER_BRIDGE_MEASURE_TEXT_CALLS_PROP: &[u8] = b"measureTextCalls\0";
+const TRUESURFER_BRIDGE_PIXI_COMMANDS_PROP: &[u8] = b"pixiCommands\0";
+const TRUESURFER_BRIDGE_PIXI_OPS_PROP: &[u8] = b"pixiOps\0";
+const TRUESURFER_BRIDGE_PIXI_UNSUPPORTED_PROP: &[u8] = b"pixiUnsupported\0";
 const TRUESURFER_HTML_QUEUE_DEPTH: usize = 2;
 const TRUESURFER_HTML_QUEUE_WAIT_MS: u64 = 2;
 const TRUESURFER_BUSY_PUMP_BUDGET: usize = 512;
@@ -1324,11 +1343,64 @@ unsafe fn read_result_string(
     out
 }
 
+unsafe fn log_parse5_trueos_bridge_stats(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
+    let global = qjs::JS_GetGlobalObject(ctx);
+    let stats = qjs::JS_GetPropertyStr(
+        ctx,
+        global,
+        TRUESURFER_TRUEOS_PIXI_BRIDGE_STATS_PROP.as_ptr() as *const c_char,
+    );
+    qjs::js_free_value(ctx, global);
+    if stats.is_exception() || stats.tag == qjs::JS_TAG_UNDEFINED || stats.tag == qjs::JS_TAG_NULL {
+        qjs::js_free_value(ctx, stats);
+        return;
+    }
+
+    let render_nodes = read_result_u32(ctx, stats, TRUESURFER_BRIDGE_RENDER_NODES_PROP);
+    let render_blocks = read_result_u32(ctx, stats, TRUESURFER_BRIDGE_RENDER_BLOCKS_PROP);
+    let render_text = read_result_u32(ctx, stats, TRUESURFER_BRIDGE_RENDER_TEXT_PROP);
+    let layout_boxes = read_result_u32(ctx, stats, TRUESURFER_BRIDGE_LAYOUT_BOXES_PROP);
+    let layout_blocks = read_result_u32(ctx, stats, TRUESURFER_BRIDGE_LAYOUT_BLOCKS_PROP);
+    let layout_text = read_result_u32(ctx, stats, TRUESURFER_BRIDGE_LAYOUT_TEXT_PROP);
+    let layout_max_depth = read_result_u32(ctx, stats, TRUESURFER_BRIDGE_LAYOUT_MAX_DEPTH_PROP);
+    let measure_text_calls =
+        read_result_u32(ctx, stats, TRUESURFER_BRIDGE_MEASURE_TEXT_CALLS_PROP);
+    let pixi_commands = read_result_u32(ctx, stats, TRUESURFER_BRIDGE_PIXI_COMMANDS_PROP);
+    let render_tags = read_result_string(ctx, stats, TRUESURFER_BRIDGE_RENDER_TAGS_PROP);
+    let pixi_ops = read_result_string(ctx, stats, TRUESURFER_BRIDGE_PIXI_OPS_PROP);
+    let pixi_unsupported = read_result_string(ctx, stats, TRUESURFER_BRIDGE_PIXI_UNSUPPORTED_PROP);
+    qjs::js_free_value(ctx, stats);
+
+    log_line(format!(
+        "qjs-truesurfer[{}]: parse5 trueos bridge-stats render_nodes={} render_blocks={} render_text={} layout_boxes={} layout_blocks={} layout_text={} layout_depth={} measure_text_calls={} pixi_commands={} unsupported={}\n",
+        browser_instance_id,
+        render_nodes,
+        render_blocks,
+        render_text,
+        layout_boxes,
+        layout_blocks,
+        layout_text,
+        layout_max_depth,
+        measure_text_calls,
+        pixi_commands,
+        if pixi_unsupported.is_empty() { "none" } else { pixi_unsupported.as_str() }
+    ));
+    if !render_tags.is_empty() || !pixi_ops.is_empty() {
+        log_line(format!(
+            "qjs-truesurfer[{}]: parse5 trueos bridge-tags render_tags={} pixi_ops={}\n",
+            browser_instance_id,
+            if render_tags.is_empty() { "none" } else { render_tags.as_str() },
+            if pixi_ops.is_empty() { "none" } else { pixi_ops.as_str() }
+        ));
+    }
+}
+
 unsafe fn submit_ui3_scene(
     ctx: *mut qjs::JSContext,
     browser_instance_id: u32,
     obj: qjs::JSValueConst,
 ) -> (u32, u32) {
+    let scene_submit_start_ms = now_ms();
     log_line(format!("qjs-truesurfer[{}]: ui3 scene read begin\n", browser_instance_id));
     let scene_value = qjs::JS_GetPropertyStr(
         ctx,
@@ -1388,7 +1460,10 @@ unsafe fn submit_ui3_scene(
         "qjs-truesurfer[{}]: ui3 scene ops count={} root={}\n",
         browser_instance_id, op_count, root_id
     ));
+    let op_submit_start_ms = now_ms();
     let mut submitted = 0u32;
+    let mut op_code_counts = [0u32; 21];
+    let mut unknown_op_count = 0u32;
     for idx in 0..op_count {
         let op_value = qjs::JS_GetPropertyUint32(ctx, ops_value, idx);
         if op_value.is_exception()
@@ -1405,6 +1480,11 @@ unsafe fn submit_ui3_scene(
         let b = read_result_f32(ctx, op_value, TRUESURFER_UI3_OP_B_PROP);
         let c = read_result_f32(ctx, op_value, TRUESURFER_UI3_OP_C_PROP);
         let d = read_result_f32(ctx, op_value, TRUESURFER_UI3_OP_D_PROP);
+        if (code as usize) < op_code_counts.len() {
+            op_code_counts[code as usize] = op_code_counts[code as usize].saturating_add(1);
+        } else {
+            unknown_op_count = unknown_op_count.saturating_add(1);
+        }
 
         if idx < 8 {
             log_line(format!(
@@ -1483,15 +1563,48 @@ unsafe fn submit_ui3_scene(
         }
         qjs::js_free_value(ctx, op_value);
     }
+    let op_submit_ms = now_ms().saturating_sub(op_submit_start_ms);
+    log_line(format!(
+        "qjs-truesurfer[{}]: ui3 scene op-counts node={} addChild={} position={} clear={} rect={} fill={} stroke={} text={} textFill={} addChildAt={} setChildIndex={} removeChild={} removeFromParent={} removeChildren={} visible={} listen={} removeAllListeners={} circle={} moveTo={} lineTo={} unknown={}\n",
+        browser_instance_id,
+        op_code_counts[1],
+        op_code_counts[2],
+        op_code_counts[3],
+        op_code_counts[4],
+        op_code_counts[5],
+        op_code_counts[6],
+        op_code_counts[7],
+        op_code_counts[8],
+        op_code_counts[9],
+        op_code_counts[10],
+        op_code_counts[11],
+        op_code_counts[12],
+        op_code_counts[13],
+        op_code_counts[14],
+        op_code_counts[15],
+        op_code_counts[16],
+        op_code_counts[17],
+        op_code_counts[18],
+        op_code_counts[19],
+        op_code_counts[20],
+        unknown_op_count
+    ));
 
     log_line(format!(
-        "qjs-truesurfer[{}]: ui3 scene render begin root={} submitted={}/{}\n",
-        browser_instance_id, root_id, submitted, op_count
+        "qjs-truesurfer[{}]: ui3 scene render begin root={} submitted={}/{} op_submit_ms={}\n",
+        browser_instance_id, root_id, submitted, op_count, op_submit_ms
     ));
+    let render_start_ms = now_ms();
     let _ = qjs::platform::ui::ui3_scene_render(browser_instance_id, root_id);
+    let render_ms = now_ms().saturating_sub(render_start_ms);
     log_line(format!(
-        "qjs-truesurfer[{}]: ui3 scene render returned root={} submitted={}/{}\n",
-        browser_instance_id, root_id, submitted, op_count
+        "qjs-truesurfer[{}]: ui3 scene render returned root={} submitted={}/{} render_ms={} total_submit_ms={}\n",
+        browser_instance_id,
+        root_id,
+        submitted,
+        op_count,
+        render_ms,
+        now_ms().saturating_sub(scene_submit_start_ms)
     ));
 
     qjs::js_free_value(ctx, ops_value);
@@ -1505,6 +1618,7 @@ unsafe fn submit_parse5_trueos_pixi_scene(
     browser_instance_id: u32,
     html: &str,
 ) -> (u32, u32) {
+    let total_start_ms = now_ms();
     let host_chunks: [(&[u8], &[u8], &str); 6] = [
         (
             TRUESURFER_PARSE5_VITE_HOST_CORE_SOURCE,
@@ -1537,6 +1651,7 @@ unsafe fn submit_parse5_trueos_pixi_scene(
             "truesurfer parse5 trueos host capture",
         ),
     ];
+    let host_start_ms = now_ms();
     for (source, filename, label) in host_chunks {
         let host = qjs::js_eval_bytes(
             ctx,
@@ -1551,12 +1666,14 @@ unsafe fn submit_parse5_trueos_pixi_scene(
         }
         qjs::js_free_value(ctx, host);
     }
+    let host_ms = now_ms().saturating_sub(host_start_ms);
     set_global_string(ctx, TRUESURFER_TRUEOS_INPUT_HTML_PROP, html);
     log_line(format!(
-        "qjs-truesurfer[{}]: parse5 trueos host ok chunks={} html_bytes={}\n",
+        "qjs-truesurfer[{}]: parse5 trueos host ok chunks={} html_bytes={} host_ms={}\n",
         browser_instance_id,
         host_chunks.len(),
-        html.len()
+        html.len(),
+        host_ms
     ));
 
     log_line(format!(
@@ -1566,6 +1683,7 @@ unsafe fn submit_parse5_trueos_pixi_scene(
         fnv1a32(TRUESURFER_PARSE5_TRUEOS_APP_SOURCE),
         contains_bytes(TRUESURFER_PARSE5_TRUEOS_APP_SOURCE, b"TAG_ID") as u8
     ));
+    let app_eval_start_ms = now_ms();
     let app = qjs::js_eval_bytes(
         ctx,
         TRUESURFER_PARSE5_TRUEOS_APP_SOURCE,
@@ -1578,7 +1696,11 @@ unsafe fn submit_parse5_trueos_pixi_scene(
         return (0, 0);
     }
     qjs::js_free_value(ctx, app);
-    log_line(format!("qjs-truesurfer[{}]: parse5 trueos app eval returned\n", browser_instance_id));
+    let app_eval_ms = now_ms().saturating_sub(app_eval_start_ms);
+    log_line(format!(
+        "qjs-truesurfer[{}]: parse5 trueos app eval returned app_eval_ms={}\n",
+        browser_instance_id, app_eval_ms
+    ));
 
     let immediate_app_ready = read_global_bool(ctx, TRUESURFER_TRUEOS_PIXI_APP_READY_PROP);
     let immediate_app_error = read_global_string(ctx, TRUESURFER_TRUEOS_PIXI_APP_ERROR_PROP);
@@ -1601,6 +1723,7 @@ unsafe fn submit_parse5_trueos_pixi_scene(
 
     let mut pump_iters = 0u32;
     let mut pump_stopped = false;
+    let pump_start_ms = now_ms();
     for _ in 0..4096 {
         if read_global_bool(ctx, TRUESURFER_TRUEOS_PIXI_APP_READY_PROP) {
             break;
@@ -1617,6 +1740,7 @@ unsafe fn submit_parse5_trueos_pixi_scene(
             break;
         }
     }
+    let pump_ms = now_ms().saturating_sub(pump_start_ms);
 
     if !read_global_bool(ctx, TRUESURFER_TRUEOS_PIXI_APP_READY_PROP) {
         let app_error = read_global_string(ctx, TRUESURFER_TRUEOS_PIXI_APP_ERROR_PROP);
@@ -1625,10 +1749,11 @@ unsafe fn submit_parse5_trueos_pixi_scene(
         let capture_step = read_global_string(ctx, TRUESURFER_TRUEOS_PIXI_CAPTURE_STEP_PROP);
         let layout_step = read_global_string(ctx, TRUESURFER_TRUEOS_PIXI_LAYOUT_STEP_PROP);
         log_line(format!(
-            "qjs-truesurfer[{}]: parse5 trueos app not ready pump_iters={} pump_stopped={} phase={} layout_step={} capture_step={} capture_error={} error={}\n",
+            "qjs-truesurfer[{}]: parse5 trueos app not ready pump_iters={} pump_stopped={} pump_ms={} phase={} layout_step={} capture_step={} capture_error={} error={}\n",
             browser_instance_id,
             pump_iters,
             pump_stopped as u8,
+            pump_ms,
             app_phase,
             layout_step,
             capture_step,
@@ -1638,8 +1763,8 @@ unsafe fn submit_parse5_trueos_pixi_scene(
         return (0, 0);
     }
     log_line(format!(
-        "qjs-truesurfer[{}]: parse5 trueos app ready pump_iters={}\n",
-        browser_instance_id, pump_iters
+        "qjs-truesurfer[{}]: parse5 trueos app ready pump_iters={} pump_ms={}\n",
+        browser_instance_id, pump_iters, pump_ms
     ));
 
     let global = qjs::JS_GetGlobalObject(ctx);
@@ -1661,7 +1786,9 @@ unsafe fn submit_parse5_trueos_pixi_scene(
         return (0, 0);
     }
 
+    let scene_build_start_ms = now_ms();
     let wrapper = qjs::JS_Call(ctx, build_scene, global, 0, core::ptr::null());
+    let scene_build_ms = now_ms().saturating_sub(scene_build_start_ms);
     qjs::js_free_value(ctx, build_scene);
     qjs::js_free_value(ctx, global);
     if wrapper.is_exception() {
@@ -1669,12 +1796,23 @@ unsafe fn submit_parse5_trueos_pixi_scene(
         qjs::js_free_value(ctx, wrapper);
         return (0, 0);
     }
+    log_line(format!(
+        "qjs-truesurfer[{}]: parse5 trueos scene build returned scene_build_ms={}\n",
+        browser_instance_id, scene_build_ms
+    ));
+    log_parse5_trueos_bridge_stats(ctx, browser_instance_id);
 
+    let scene_submit_start_ms = now_ms();
     let (ops, root) = submit_ui3_scene(ctx, browser_instance_id, wrapper);
+    let scene_submit_ms = now_ms().saturating_sub(scene_submit_start_ms);
     qjs::js_free_value(ctx, wrapper);
     log_line(format!(
-        "qjs-truesurfer[{}]: parse5 trueos ui3 submit ops={} root={}\n",
-        browser_instance_id, ops, root
+        "qjs-truesurfer[{}]: parse5 trueos ui3 submit ops={} root={} scene_submit_ms={} total_ms={}\n",
+        browser_instance_id,
+        ops,
+        root,
+        scene_submit_ms,
+        now_ms().saturating_sub(total_start_ms)
     ));
     (ops, root)
 }

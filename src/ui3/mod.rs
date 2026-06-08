@@ -16,7 +16,8 @@ use alloc::vec::Vec;
 use spin::{Mutex, Once};
 
 pub use self::geometry::{
-    Ui3GeometryFrame, Ui3LoweredDraw, Ui3MeshKind, lower_ui3_frame_geometry, push_ui3_rgb_bytes,
+    Ui3GeometryFrame, Ui3LoweredDraw, Ui3MeshKind, Ui3SolidRectKind, lower_ui3_frame_geometry,
+    push_ui3_rgb_bytes,
 };
 pub use self::hit_scene::{Ui3HitEntry, Ui3HitKind, Ui3HitScene, Ui3HitTarget};
 pub use self::pixi_host::{Ui3GraphicsOp, Ui3PixiHost, Ui3RenderFrame};
@@ -26,6 +27,12 @@ pub use self::pixi_service::{
 };
 
 pub type Ui3NodeId = u32;
+
+#[inline]
+fn now_ms() -> u64 {
+    let hz = embassy_time_driver::TICK_HZ.max(1);
+    embassy_time_driver::now().saturating_mul(1000) / hz
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Ui3PointerEventKind {
@@ -232,24 +239,85 @@ fn ui3_scene_apply(browser_id: u32, command: Ui3Command) -> i32 {
         runtime.host = Ui3PixiHost::new();
     }
     runtime.op_count = runtime.op_count.wrapping_add(1).max(1);
+    let is_render = matches!(command, Ui3Command::Render { .. });
+    let apply_start_ms = if is_render { now_ms() } else { 0 };
     let frame = runtime.host.apply(command).cloned();
+    let apply_ms = if is_render {
+        now_ms().saturating_sub(apply_start_ms)
+    } else {
+        0
+    };
     if let Some(frame) = frame {
         runtime.frame_count = runtime.frame_count.wrapping_add(1).max(1);
+        let lower_start_ms = now_ms();
         let geometry = lower_ui3_frame_geometry(&runtime.host, &frame);
+        let lower_ms = now_ms().saturating_sub(lower_start_ms);
+        let present_start_ms = now_ms();
         let present = self::intel_present::present_ui3_frame_to_intel_primary(&geometry);
-        if runtime.frame_count <= 4 {
+        let present_wall_ms = now_ms().saturating_sub(present_start_ms);
+        let present_gap_ms = present_wall_ms.saturating_sub(present.total_ms);
+        if runtime.frame_count <= 4 || is_render {
+            let mut rect_fill_draws = 0usize;
+            let mut rect_stroke_draws = 0usize;
+            let mut axis_line_draws = 0usize;
+            let mut mesh_fill_draws = 0usize;
+            let mut mesh_stroke_draws = 0usize;
+            for draw in &geometry.draws {
+                match draw {
+                    Ui3LoweredDraw::SolidRect { kind, .. } => match kind {
+                        Ui3SolidRectKind::Fill => {
+                            rect_fill_draws = rect_fill_draws.saturating_add(1)
+                        }
+                        Ui3SolidRectKind::RectStroke => {
+                            rect_stroke_draws = rect_stroke_draws.saturating_add(1)
+                        }
+                        Ui3SolidRectKind::AxisLineStroke => {
+                            axis_line_draws = axis_line_draws.saturating_add(1)
+                        }
+                    },
+                    Ui3LoweredDraw::Mesh { kind, .. } => match kind {
+                        Ui3MeshKind::Fill => mesh_fill_draws = mesh_fill_draws.saturating_add(1),
+                        Ui3MeshKind::Stroke => {
+                            mesh_stroke_draws = mesh_stroke_draws.saturating_add(1)
+                        }
+                    },
+                    Ui3LoweredDraw::TextRun { .. } => {}
+                }
+            }
             crate::log!(
-                "ui3-truesurfer: render browser={} root={} ops={} draws={} solid_rects={} meshes={} text={} presented={} fill_descs={} blend_descs={}\n",
+                "ui3-truesurfer: render browser={} root={} ops={} draws={} nodes={} solid_rects={} meshes={} text={} presented={} fill_descs={} blend_descs={} apply_ms={} lower_ms={} present_wall_ms={} rect_ms={} sprite_ms={} publish_ms={} present_ms={} total_ms={} gap_ms={}\n",
                 browser_id,
                 frame.root,
                 runtime.op_count,
                 geometry.draws.len(),
+                frame.ordered_nodes.len(),
                 present.solid_rects,
                 present.mesh_draws,
                 present.text_runs,
                 present.presented as u8,
                 present.fill_descs,
-                present.blend_descs
+                present.blend_descs,
+                apply_ms,
+                lower_ms,
+                present_wall_ms,
+                present.rect_ms,
+                present.sprite_ms,
+                present.publish_ms,
+                present.present_ms,
+                present.total_ms,
+                present_gap_ms
+            );
+            crate::log!(
+                "ui3-truesurfer: materialized browser={} root={} rect_fill={} rect_stroke={} axis_line={} mesh_fill={} mesh_stroke={} ignored_meshes={} text={}\n",
+                browser_id,
+                frame.root,
+                rect_fill_draws,
+                rect_stroke_draws,
+                axis_line_draws,
+                mesh_fill_draws,
+                mesh_stroke_draws,
+                mesh_fill_draws.saturating_add(mesh_stroke_draws),
+                present.text_runs
             );
         }
     }
@@ -544,13 +612,25 @@ pub extern "C" fn trueos_cabi_ui3_scene_text_fill(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_ui3_scene_render(browser_id: u32, root_id: u32) -> i32 {
-    crate::log!("ui3-truesurfer: render request browser={} root={}\n", browser_id, root_id);
-    let result = ui3_scene_apply(browser_id, Ui3Command::Render { root: root_id });
+    let (queued_ops, frame_count) = {
+        let runtime = ui3_truesurfer_runtime().lock();
+        (runtime.op_count, runtime.frame_count)
+    };
     crate::log!(
-        "ui3-truesurfer: render request returned browser={} root={} result={}\n",
+        "ui3-truesurfer: render request browser={} root={} queued_ops={} frames={}\n",
         browser_id,
         root_id,
-        result
+        queued_ops,
+        frame_count
+    );
+    let start_ms = now_ms();
+    let result = ui3_scene_apply(browser_id, Ui3Command::Render { root: root_id });
+    crate::log!(
+        "ui3-truesurfer: render request returned browser={} root={} result={} elapsed_ms={}\n",
+        browser_id,
+        root_id,
+        result,
+        now_ms().saturating_sub(start_ms)
     );
     result
 }

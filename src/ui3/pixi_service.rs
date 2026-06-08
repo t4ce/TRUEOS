@@ -19,11 +19,13 @@ const TASK_NAME: &str = "ui3-pixi-service";
 const PIXI_HOST_PRELUDE_SOURCE: &[u8] = include_bytes!("pixi_host_prelude.js");
 const PIXI_BUNDLE_SOURCE: &[u8] = include_bytes!("pixi_bundle.min.js");
 const PIXI_CAPTURE_ADAPTER_SOURCE: &[u8] = include_bytes!("pixi_capture_adapter.js");
+const PIXI_EMPTY_SMOKE_SOURCE: &[u8] = include_bytes!("pixi_empty_smoke.js");
 const PIXI_HOST_PRELUDE_FILENAME: &[u8] = b"<ui3-pixi-host-prelude>\0";
 const PIXI_BUNDLE_FILENAME: &[u8] = b"<ui3-pixi-bundle>\0";
 const PIXI_CAPTURE_ADAPTER_FILENAME: &[u8] = b"<ui3-pixi-capture-adapter>\0";
-const PIXI_SERVICE_PARK_MS: u64 = 60_000;
-const PIXI_AUTORUN_TRUESURFER_HTML_ENABLE: bool = true;
+const PIXI_EMPTY_SMOKE_FILENAME: &[u8] = b"<ui3-pixi-empty-smoke>\0";
+const PIXI_SERVICE_PARK_MS: u64 = 1_000;
+const PIXI_AUTORUN_TRUESURFER_HTML_ENABLE: bool = false;
 const PIXI_AUTORUN_TRUESURFER_HTML_URL: &str = "inline://trueos/ui3-hello.html";
 const PIXI_AUTORUN_TRUESURFER_HTML_SOURCE: &str = "<!doctype html><html><head><title>UI3 Hello</title></head><body><h1>Hello UI3</h1><p>Parse5 handoff smoke.</p></body></html>";
 
@@ -124,6 +126,15 @@ pub async fn pixi_service_task() {
             return;
         }
 
+        if !eval_global_script(
+            ctx,
+            PIXI_EMPTY_SMOKE_SOURCE,
+            PIXI_EMPTY_SMOKE_FILENAME,
+            "ui3 pixi empty smoke",
+        ) {
+            return;
+        }
+
         let ready = true;
         PIXI_SERVICE_READY.store(ready, Ordering::Release);
         crate::log!(
@@ -143,6 +154,10 @@ pub async fn pixi_service_task() {
 
         crate::log!("ui3-pixi-service: vm parked retained=1\n");
         loop {
+            if crate::r::spawn_service::task_stop_requested(TASK_NAME) {
+                crate::log!("ui3-pixi-service: stop requested; exiting\n");
+                break;
+            }
             Timer::after(EmbassyDuration::from_millis(PIXI_SERVICE_PARK_MS)).await;
         }
     }
@@ -252,7 +267,7 @@ unsafe extern "C" fn trueos_render(
     if call <= 4 {
         let present = pixi_runtime().lock().last_present;
         crate::log!(
-            "ui3-pixi-service: __trueosRender call={} root={} root_children={} ops={} draws={} solid_rects={} meshes={} text={} presented={} fill_descs={} blend_descs={} present_ms={} total_ms={}\n",
+            "ui3-pixi-service: __trueosRender call={} root={} root_children={} ops={} draws={} solid_rects={} meshes={} text={} presented={} fill_descs={} blend_descs={} rect_ms={} sprite_ms={} publish_ms={} present_ms={} total_ms={}\n",
             call,
             root,
             children,
@@ -264,6 +279,9 @@ unsafe extern "C" fn trueos_render(
             present.presented as u8,
             present.fill_descs,
             present.blend_descs,
+            present.rect_ms,
+            present.sprite_ms,
+            present.publish_ms,
             present.present_ms,
             present.total_ms
         );
