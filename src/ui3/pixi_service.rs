@@ -19,12 +19,11 @@ const TASK_NAME: &str = "ui3-pixi-service";
 const PIXI_HOST_PRELUDE_SOURCE: &[u8] = include_bytes!("pixi_host_prelude.js");
 const PIXI_BUNDLE_SOURCE: &[u8] = include_bytes!("pixi_bundle.min.js");
 const PIXI_CAPTURE_ADAPTER_SOURCE: &[u8] = include_bytes!("pixi_capture_adapter.js");
-const PIXI_EMPTY_SMOKE_SOURCE: &[u8] = include_bytes!("pixi_empty_smoke.js");
 const PIXI_HOST_PRELUDE_FILENAME: &[u8] = b"<ui3-pixi-host-prelude>\0";
 const PIXI_BUNDLE_FILENAME: &[u8] = b"<ui3-pixi-bundle>\0";
 const PIXI_CAPTURE_ADAPTER_FILENAME: &[u8] = b"<ui3-pixi-capture-adapter>\0";
-const PIXI_EMPTY_SMOKE_FILENAME: &[u8] = b"<ui3-pixi-empty-smoke>\0";
 const PIXI_SERVICE_PARK_MS: u64 = 1_000;
+const PIXI_SERVICE_NOOP_AFTER_SPAWN: bool = true;
 const PIXI_AUTORUN_TRUESURFER_HTML_ENABLE: bool = false;
 const PIXI_AUTORUN_TRUESURFER_HTML_URL: &str = "inline://trueos/ui3-hello.html";
 const PIXI_AUTORUN_TRUESURFER_HTML_SOURCE: &str = "<!doctype html><html><head><title>UI3 Hello</title></head><body><h1>Hello UI3</h1><p>Parse5 handoff smoke.</p></body></html>";
@@ -34,6 +33,7 @@ static PIXI_AUTORUN_TRUESURFER_HTML_STARTED: AtomicBool = AtomicBool::new(false)
 static PIXI_SERVICE_PUMP_COUNT: AtomicU32 = AtomicU32::new(0);
 static PIXI_SERVICE_RENDER_COUNT: AtomicU32 = AtomicU32::new(0);
 static PIXI_SERVICE_OP_COUNT: AtomicU32 = AtomicU32::new(0);
+static PIXI_SERVICE_FILTERED_OP_COUNT: AtomicU32 = AtomicU32::new(0);
 static PIXI_SERVICE_FRAME_COUNT: AtomicU32 = AtomicU32::new(0);
 static PIXI_SERVICE_DRAW_COUNT: AtomicU32 = AtomicU32::new(0);
 static PIXI_SERVICE_RUNTIME: Once<Mutex<Ui3PixiServiceRuntime>> = Once::new();
@@ -41,6 +41,7 @@ static PIXI_SERVICE_RUNTIME: Once<Mutex<Ui3PixiServiceRuntime>> = Once::new();
 struct Ui3PixiServiceRuntime {
     host: Ui3PixiHost,
     op_count: u32,
+    filtered_op_count: u32,
     frame_count: u32,
     last_draw_count: u32,
     last_present: Ui3IntelPresentSummary,
@@ -51,6 +52,7 @@ impl Ui3PixiServiceRuntime {
         Self {
             host: Ui3PixiHost::new(),
             op_count: 0,
+            filtered_op_count: 0,
             frame_count: 0,
             last_draw_count: 0,
             last_present: Ui3IntelPresentSummary::default(),
@@ -74,6 +76,10 @@ pub fn pixi_service_op_count() -> u32 {
     PIXI_SERVICE_OP_COUNT.load(Ordering::Acquire)
 }
 
+pub fn pixi_service_filtered_op_count() -> u32 {
+    PIXI_SERVICE_FILTERED_OP_COUNT.load(Ordering::Acquire)
+}
+
 pub fn pixi_service_frame_count() -> u32 {
     PIXI_SERVICE_FRAME_COUNT.load(Ordering::Acquire)
 }
@@ -89,9 +95,28 @@ pub async fn pixi_service_task() {
     PIXI_SERVICE_PUMP_COUNT.store(0, Ordering::Release);
     PIXI_SERVICE_RENDER_COUNT.store(0, Ordering::Release);
     PIXI_SERVICE_OP_COUNT.store(0, Ordering::Release);
+    PIXI_SERVICE_FILTERED_OP_COUNT.store(0, Ordering::Release);
     PIXI_SERVICE_FRAME_COUNT.store(0, Ordering::Release);
     PIXI_SERVICE_DRAW_COUNT.store(0, Ordering::Release);
     *pixi_runtime().lock() = Ui3PixiServiceRuntime::new();
+
+    if PIXI_SERVICE_NOOP_AFTER_SPAWN {
+        PIXI_SERVICE_READY.store(true, Ordering::Release);
+        crate::log!(
+            "ui3-pixi-service: spawned noop=1 ready=1 reason=qjs-pixi-path-disabled renders=0 ops=0 filtered_ops=0 frames=0 draws=0 bundle_bytes={} adapter_bytes={}\n",
+            PIXI_BUNDLE_SOURCE.len(),
+            PIXI_CAPTURE_ADAPTER_SOURCE.len()
+        );
+        loop {
+            if crate::r::spawn_service::task_stop_requested(TASK_NAME) {
+                crate::log!("ui3-pixi-service: stop requested; noop exit\n");
+                break;
+            }
+            Timer::after(EmbassyDuration::from_millis(PIXI_SERVICE_PARK_MS)).await;
+        }
+        return;
+    }
+
     crate::log!("ui3-pixi-service: starting qjs host on ap1\n");
 
     unsafe {
@@ -126,22 +151,14 @@ pub async fn pixi_service_task() {
             return;
         }
 
-        if !eval_global_script(
-            ctx,
-            PIXI_EMPTY_SMOKE_SOURCE,
-            PIXI_EMPTY_SMOKE_FILENAME,
-            "ui3 pixi empty smoke",
-        ) {
-            return;
-        }
-
         let ready = true;
         PIXI_SERVICE_READY.store(ready, Ordering::Release);
         crate::log!(
-            "ui3-pixi-service: ready={} renders={} ops={} frames={} draws={} bundle_bytes={} adapter_bytes={} profile=browser\n",
+            "ui3-pixi-service: ready={} renders={} ops={} filtered_ops={} frames={} draws={} bundle_bytes={} adapter_bytes={} profile=browser\n",
             if ready { 1 } else { 0 },
             PIXI_SERVICE_RENDER_COUNT.load(Ordering::Acquire),
             PIXI_SERVICE_OP_COUNT.load(Ordering::Acquire),
+            PIXI_SERVICE_FILTERED_OP_COUNT.load(Ordering::Acquire),
             PIXI_SERVICE_FRAME_COUNT.load(Ordering::Acquire),
             PIXI_SERVICE_DRAW_COUNT.load(Ordering::Acquire),
             PIXI_BUNDLE_SOURCE.len(),
@@ -220,24 +237,12 @@ unsafe extern "C" fn trueos_pixi_op(
 
     if runtime.op_count <= 16 {
         let id = read_arg_u32(ctx, argc, argv, 1).unwrap_or(0);
-        crate::log!("ui3-pixi-service: pixi-op #{} {} id={}\n", runtime.op_count, op.as_str(), id);
-    }
-
-    match op.as_str() {
-        "node" => {
-            if let (Some(node), Some(kind)) =
-                (read_arg_u32(ctx, argc, argv, 1), read_arg_string(ctx, argc, argv, 2))
-            {
-                runtime.host.declare_node(node, node_kind_from_name(&kind));
-            }
-        }
-        _ => {
-            if let Some(command) = command_from_pixi_op(ctx, argc, argv, &op)
-                && let Some(frame) = runtime.host.apply(command).cloned()
-            {
-                lower_present_and_count(&mut runtime, &frame);
-            }
-        }
+        crate::log!(
+            "ui3-pixi-service: pixi-op #{} {} id={} ignored reason=pixi-service-noop\n",
+            runtime.op_count,
+            op.as_str(),
+            id
+        );
     }
 
     qjs::JS_NewFloat64(ctx, runtime.op_count as f64)
@@ -262,21 +267,16 @@ unsafe extern "C" fn trueos_render(
     } else {
         0
     };
-    if root != 0 {
-        let mut runtime = pixi_runtime().lock();
-        if let Some(frame) = runtime.host.apply(Ui3Command::Render { root }).cloned() {
-            lower_present_and_count(&mut runtime, &frame);
-        }
-    }
 
     if call <= 4 {
         let present = pixi_runtime().lock().last_present;
         crate::log!(
-            "ui3-pixi-service: __trueosRender call={} root={} root_children={} ops={} draws={} solid_rects={} meshes={} text={} presented={} fill_descs={} blend_descs={} rect_ms={} sprite_ms={} publish_ms={} present_ms={} total_ms={}\n",
+            "ui3-pixi-service: __trueosRender call={} root={} root_children={} ops={} filtered_ops={} draws={} solid_rects={} meshes={} text={} presented={} fill_descs={} blend_descs={} rect_ms={} sprite_ms={} publish_ms={} present_ms={} total_ms={} ignored=pixi-service-noop\n",
             call,
             root,
             children,
             PIXI_SERVICE_OP_COUNT.load(Ordering::Acquire),
+            PIXI_SERVICE_FILTERED_OP_COUNT.load(Ordering::Acquire),
             PIXI_SERVICE_DRAW_COUNT.load(Ordering::Acquire),
             present.solid_rects,
             present.mesh_draws,
@@ -302,6 +302,22 @@ fn lower_present_and_count(runtime: &mut Ui3PixiServiceRuntime, frame: &Ui3Rende
     runtime.last_present = present_ui3_frame_to_intel_primary(&geometry);
     PIXI_SERVICE_FRAME_COUNT.store(runtime.frame_count, Ordering::Release);
     PIXI_SERVICE_DRAW_COUNT.store(runtime.last_draw_count, Ordering::Release);
+}
+
+fn pixi_light_filter_command(runtime: &mut Ui3PixiServiceRuntime, command: &Ui3Command) -> bool {
+    let Some(reason) = super::ui3_light_filter_reason(command) else {
+        return false;
+    };
+    runtime.filtered_op_count = runtime.filtered_op_count.wrapping_add(1).max(1);
+    PIXI_SERVICE_FILTERED_OP_COUNT.store(runtime.filtered_op_count, Ordering::Release);
+    if runtime.filtered_op_count <= 8 {
+        crate::log!(
+            "ui3-pixi-service: light-filter op={} reason={}\n",
+            runtime.filtered_op_count,
+            reason
+        );
+    }
+    true
 }
 
 unsafe fn command_from_pixi_op(

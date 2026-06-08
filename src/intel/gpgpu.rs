@@ -204,8 +204,8 @@ pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0xF1, 0x2C, 0x10, 0xBF, 0x8B, 0xD0, 0xB6, 0x8A, 0xB5, 0xFD, 0xED, 0x63, 0x04, 0x86, 0x87, 0x67,
 ];
 pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
-    0x6F, 0x30, 0x62, 0xD7, 0x04, 0xF8, 0x10, 0x72, 0x02, 0xE1, 0x41, 0x5D, 0xD8, 0x20, 0xA0, 0xED,
-    0x8C, 0x37, 0xCC, 0x7C, 0x52, 0xD2, 0xAF, 0x0A, 0x6D, 0x0D, 0xA8, 0x31, 0xEA, 0x3A, 0xB4, 0x64,
+    0xD3, 0xB2, 0x38, 0x15, 0x2C, 0x11, 0x0D, 0x87, 0x5F, 0x69, 0x0F, 0xE8, 0x5B, 0xE5, 0xA6, 0xA4,
+    0x6F, 0xA7, 0xDE, 0x0C, 0x18, 0x29, 0x6A, 0x65, 0xC0, 0xD0, 0x6C, 0x3B, 0x20, 0x0C, 0x51, 0x05,
 ];
 pub(crate) const CANVAS3D_PROJECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0xDA, 0xF0, 0x15, 0xA0, 0xB9, 0x8A, 0x45, 0xF7, 0x02, 0xD5, 0xD7, 0x87, 0xCA, 0x19, 0x59, 0xBA,
@@ -448,6 +448,8 @@ const MANDEL64_WORKLIST_MAX_WALKERS: usize =
 const MANDEL64_WORKLIST_FLAG_ROWS_MASK: u32 = 0x0000_00FF;
 const MANDEL64_WORKLIST_FLAG_COLS_SHIFT: u32 = 8;
 const MANDEL64_WORKLIST_FLAG_MIRROR_HEIGHT_SHIFT: u32 = 16;
+pub(crate) const MANDEL64_WORKLIST_DEFAULT_ITERATIONS: u32 = 32;
+pub(crate) const MANDEL64_WORKLIST_MAX_ITERATIONS: u32 = 512;
 const CANVAS3D_PROJECT_IDD_OFFSET_BYTES: usize = 0x2000;
 const CANVAS3D_PROJECT_BINDING_TABLE_OFFSET_BYTES: usize = 0x2040;
 const CANVAS3D_PROJECT_VERTICES_SURFACE_STATE_OFFSET_BYTES: usize = 0x2080;
@@ -1501,6 +1503,7 @@ pub(crate) struct GpgpuMandel64Placement {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) mirror_height: u32,
+    pub(crate) iterations: u32,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -4294,7 +4297,7 @@ pub(crate) fn twemoji_sprite64_worklist_primary(
 }
 
 pub(crate) fn shell_mandel64_worklist_scanout(
-    requested_count: u32,
+    iterations: u32,
 ) -> Option<GpgpuShellMandel64WorklistResult> {
     let target = super::display::primary_surface_gpgpu_marker_target()?;
     if target.virt.is_null()
@@ -4307,10 +4310,11 @@ pub(crate) fn shell_mandel64_worklist_scanout(
     let columns = target.width.div_ceil(MANDEL64_WORKLIST_CELL_PIXELS).max(1);
     let render_height = target.height.div_ceil(2).max(1);
     let rows = render_height.div_ceil(MANDEL64_WORKLIST_CELL_PIXELS).max(1);
-    let count = (requested_count as usize).clamp(1, columns.saturating_mul(rows) as usize);
+    let count = columns.saturating_mul(rows) as usize;
     if count == 0 {
         return None;
     }
+    let iterations = iterations.clamp(1, MANDEL64_WORKLIST_MAX_ITERATIONS);
 
     let total_start_tick = direct_rcs_now_tick();
     let mut placements = Vec::new();
@@ -4348,6 +4352,7 @@ pub(crate) fn shell_mandel64_worklist_scanout(
                 width,
                 height,
                 mirror_height: target.height,
+                iterations,
             });
         }
 
@@ -4457,6 +4462,9 @@ pub(crate) fn mandel64_worklist_primary(
             let height = requested_height
                 .min(MANDEL64_WORKLIST_CELL_PIXELS)
                 .min(target.height.saturating_sub(dst_y as u32));
+            let iterations = placement
+                .iterations
+                .clamp(1, MANDEL64_WORKLIST_MAX_ITERATIONS);
             if width == 0 || height == 0 {
                 continue;
             }
@@ -4489,7 +4497,7 @@ pub(crate) fn mandel64_worklist_primary(
                             .clamp(0, target.height as i32 - 1) as i16,
                     ),
                     flags,
-                    color_rgba: 0,
+                    color_rgba: iterations,
                 };
                 core::ptr::write_volatile(descs.add(desc_count), desc_value);
                 desc_count = desc_count.saturating_add(1);

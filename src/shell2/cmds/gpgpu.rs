@@ -5,7 +5,8 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use super::super::{ShellBackend2, print_shell_line};
 use crate::intel::gpgpu::{
     GPGPU_SHELL_SURFACE_HEIGHT, GPGPU_SHELL_SURFACE_PITCH_BYTES, GPGPU_SHELL_SURFACE_WIDTH,
-    GpgpuPoint, GpgpuRect, alpha_blend_worklist_probe_ok, alpha_blend_worklist_probe_ran,
+    GpgpuPoint, GpgpuRect, MANDEL64_WORKLIST_DEFAULT_ITERATIONS, MANDEL64_WORKLIST_MAX_ITERATIONS,
+    alpha_blend_worklist_probe_ok, alpha_blend_worklist_probe_ran,
     alpha_blend_worklist_rgba8_upload_status, canvas3d_plane_fill_rgba8_upload_status,
     canvas3d_project_rgba8_upload_status, canvas3d_transform_q16_upload_status,
     copy_rect_rgba8_upload_status, fill_rect_worklist_probe_ok, fill_rect_worklist_probe_ran,
@@ -31,8 +32,6 @@ const CANVAS_DEFAULT_DURATION_MS: u64 = 15_000;
 const CANVAS_DEFAULT_CADENCE_US: u64 = 100_000;
 const CANVAS_MIN_CADENCE_US: u64 = 100;
 const CANVAS_MAX_CADENCE_US: u64 = 200_000;
-const MANDEL_DEFAULT_COUNT: u32 = 32;
-const MANDEL_MAX_COUNT: u32 = 512;
 
 static ATHLAS_GO_SEQUENCE: AtomicU32 = AtomicU32::new(0);
 
@@ -44,7 +43,7 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "gpgpu athlas work [count]");
     print_shell_line(io, "gpgpu athlas go [duration_ms] [cadence_ms] [count] [present_every]");
     print_shell_line(io, "gpgpu athlas_go [duration_ms] [cadence_ms] [count] [present_every]");
-    print_shell_line(io, "gpgpu mandel [count]");
+    print_shell_line(io, "gpgpu mandel [iterations]");
     print_shell_line(io, "gpgpu canvas [duration_ms] [cadence_ms:0.1..200]");
     print_shell_line(io, "gpgpu plane [half_q16]");
     print_shell_line(io, "gpgpu rectprobe");
@@ -493,13 +492,13 @@ fn run_mandel(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
             usage(io);
             return;
         }
-        let Some(count) = raw.parse::<u32>().ok() else {
+        let Some(iterations) = raw.parse::<u32>().ok() else {
             usage(io);
             return;
         };
-        shell_mandel64_worklist_scanout(count.clamp(1, MANDEL_MAX_COUNT))
+        shell_mandel64_worklist_scanout(iterations.clamp(1, MANDEL64_WORKLIST_MAX_ITERATIONS))
     } else {
-        shell_mandel64_worklist_scanout(MANDEL_DEFAULT_COUNT)
+        shell_mandel64_worklist_scanout(MANDEL64_WORKLIST_DEFAULT_ITERATIONS)
     };
 
     let Some(result) = result else {

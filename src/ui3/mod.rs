@@ -23,8 +23,9 @@ pub use self::geometry::{
 pub use self::hit_scene::{Ui3HitEntry, Ui3HitKind, Ui3HitScene, Ui3HitTarget};
 pub use self::pixi_host::{Ui3GraphicsOp, Ui3PixiHost, Ui3RenderFrame};
 pub use self::pixi_service::{
-    pixi_service_draw_count, pixi_service_frame_count, pixi_service_op_count,
-    pixi_service_pump_count, pixi_service_ready, pixi_service_render_count, pixi_service_task,
+    pixi_service_draw_count, pixi_service_filtered_op_count, pixi_service_frame_count,
+    pixi_service_op_count, pixi_service_pump_count, pixi_service_ready, pixi_service_render_count,
+    pixi_service_task,
 };
 
 pub type Ui3NodeId = u32;
@@ -160,6 +161,16 @@ pub enum Ui3Command {
     },
 }
 
+fn ui3_light_filter_reason(command: &Ui3Command) -> Option<&'static str> {
+    match command {
+        Ui3Command::GraphicsCircle { .. }
+        | Ui3Command::GraphicsMoveTo { .. }
+        | Ui3Command::GraphicsLineTo { .. }
+        | Ui3Command::GraphicsStroke { .. } => Some("graphics-path-op"),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Ui3NodeKind {
     Container,
@@ -206,6 +217,7 @@ struct Ui3TruesurferRuntime {
     browser_id: u32,
     root_id: Ui3NodeId,
     op_count: u32,
+    filtered_op_count: u32,
     frame_count: u32,
 }
 
@@ -236,10 +248,22 @@ fn ui3_scene_apply(browser_id: u32, command: Ui3Command) -> i32 {
         runtime.browser_id = browser_id;
         runtime.root_id = 0;
         runtime.op_count = 0;
+        runtime.filtered_op_count = 0;
         runtime.frame_count = 0;
         runtime.host = Ui3PixiHost::new();
     }
     runtime.op_count = runtime.op_count.wrapping_add(1).max(1);
+    if let Some(reason) = ui3_light_filter_reason(&command) {
+        runtime.filtered_op_count = runtime.filtered_op_count.wrapping_add(1).max(1);
+        if runtime.filtered_op_count <= 8 {
+            crate::log!(
+                "ui3-truesurfer: light-filter op={} reason={}\n",
+                runtime.filtered_op_count,
+                reason
+            );
+        }
+        return 0;
+    }
     let is_render = matches!(command, Ui3Command::Render { .. });
     let apply_start_ms = if is_render { now_ms() } else { 0 };
     let frame = runtime.host.apply(command).cloned();
@@ -286,10 +310,11 @@ fn ui3_scene_apply(browser_id: u32, command: Ui3Command) -> i32 {
                 }
             }
             crate::log!(
-                "ui3-truesurfer: render browser={} root={} ops={} draws={} nodes={} solid_rects={} meshes={} text={} presented={} fill_descs={} blend_descs={} apply_ms={} lower_ms={} present_wall_ms={} rect_ms={} sprite_ms={} publish_ms={} present_ms={} total_ms={} gap_ms={}\n",
+                "ui3-truesurfer: render browser={} root={} ops={} filtered_ops={} draws={} nodes={} solid_rects={} meshes={} text={} presented={} fill_descs={} blend_descs={} apply_ms={} lower_ms={} present_wall_ms={} rect_ms={} sprite_ms={} publish_ms={} present_ms={} total_ms={} gap_ms={}\n",
                 browser_id,
                 frame.root,
                 runtime.op_count,
+                runtime.filtered_op_count,
                 geometry.draws.len(),
                 frame.ordered_nodes.len(),
                 present.solid_rects,
@@ -331,6 +356,7 @@ pub extern "C" fn trueos_cabi_ui3_scene_begin(browser_id: u32, root_id: u32) -> 
     runtime.browser_id = browser_id;
     runtime.root_id = root_id;
     runtime.op_count = 0;
+    runtime.filtered_op_count = 0;
     runtime.frame_count = 0;
     runtime.host = Ui3PixiHost::new();
     runtime.host.declare_node(root_id, Ui3NodeKind::Container);
@@ -613,15 +639,16 @@ pub extern "C" fn trueos_cabi_ui3_scene_text_fill(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_ui3_scene_render(browser_id: u32, root_id: u32) -> i32 {
-    let (queued_ops, frame_count) = {
+    let (queued_ops, filtered_ops, frame_count) = {
         let runtime = ui3_truesurfer_runtime().lock();
-        (runtime.op_count, runtime.frame_count)
+        (runtime.op_count, runtime.filtered_op_count, runtime.frame_count)
     };
     crate::log!(
-        "ui3-truesurfer: render request browser={} root={} queued_ops={} frames={}\n",
+        "ui3-truesurfer: render request browser={} root={} queued_ops={} filtered_ops={} frames={}\n",
         browser_id,
         root_id,
         queued_ops,
+        filtered_ops,
         frame_count
     );
     let start_ms = now_ms();
@@ -648,9 +675,9 @@ pub unsafe extern "C" fn trueos_cabi_ui3_native_hello_scene(
         let bytes = unsafe { core::slice::from_raw_parts(html_ptr, html_len) };
         core::str::from_utf8(bytes).unwrap_or("")
     };
-    let (ops, root) = html_widgets::submit_native_hello_scene(browser_id, html);
+    let (ops, root) = html_widgets::submit_h1_p_text_widget_scene(browser_id, html);
     crate::log!(
-        "ui3-html-widgets: native hello submitted browser={} root={} ops={}\n",
+        "ui3-html-widgets: h1-p text widgets submitted browser={} root={} ops={}\n",
         browser_id,
         root,
         ops

@@ -240,7 +240,8 @@ fn emit_stroke(
         }
     }
 
-    let fallback_subpaths = emit_axis_aligned_stroke_subpaths(node, &path.subpaths, color, width, draws);
+    let fallback_subpaths =
+        emit_axis_aligned_stroke_subpaths(node, &path.subpaths, color, width, draws);
     if let Some((vertices, indices)) =
         tessellate_stroke_path(&subpaths_to_path(&fallback_subpaths, false), color, width)
     {

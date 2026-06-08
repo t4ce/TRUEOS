@@ -639,6 +639,15 @@ function __trueosCommandKind(target) {
   if (target.indexOf("Text") >= 0) return 2;
   return 0;
 }
+function __trueosLogTextSample(value) {
+  var s = String(value == null ? "" : value);
+  var out = "";
+  for (var i = 0; i < s.length && out.length < 96; i += 1) {
+    var ch = s.charAt(i);
+    out += (ch === "\r" || ch === "\n" || ch === "\t" || ch === "|" || ch === "\"" || ch === "\\") ? "_" : ch;
+  }
+  return out;
+}
 function __trueosPushSnapshotNode(node, parent, ops, seen) {
   if (!node || typeof node !== "object") return 0;
   var id = __trueosNum(node.id, 0) | 0;
@@ -712,6 +721,15 @@ G.__trueosParse5BuildSceneFromCapture = function () {
         break;
     }
   }
+  if (G.console && typeof G.console.log === "function") {
+    var textLog = [];
+    for (i = 0; i < ops.length && textLog.length < 12; i += 1) {
+      if (ops[i] && ops[i].code === 8) {
+        textLog.push("#" + textLog.length + "@node=" + ops[i].node + " chars=" + String(ops[i].text || "").length + " sample=\"" + __trueosLogTextSample(ops[i].text) + "\"");
+      }
+    }
+    G.console.log("[parse5 trueos host] ui3-scene-text " + textLog.join("|"));
+  }
   return { ok: 1, ui3Scene: { version: 1, commandSource: "parse5-trueos-pixi", rootId: rootId, opCount: ops.length, ops: ops } };
 };
 "##;
@@ -771,6 +789,8 @@ const TRUESURFER_TRUEOS_PIXI_CAPTURE_STEP_PROP: &[u8] = b"__TRUEOS_PIXI_CAPTURE_
 const TRUESURFER_TRUEOS_PIXI_LAYOUT_STEP_PROP: &[u8] = b"__TRUEOS_PIXI_LAYOUT_STEP__\0";
 const TRUESURFER_TRUEOS_PIXI_BRIDGE_STATS_PROP: &[u8] = b"__TRUEOS_PIXI_BRIDGE_STATS__\0";
 const TRUESURFER_PARSE5_BUILD_SCENE_PROP: &[u8] = b"__trueosParse5BuildSceneFromCapture\0";
+const TRUESURFER_BUILD_DEMO_TEXT_WIDGET_SCENE_PROP: &[u8] =
+    b"__trueosBuildDemoTextWidgetScene\0";
 const TRUESURFER_UI3_SCENE_COMMAND_SOURCE_PROP: &[u8] = b"commandSource\0";
 const TRUESURFER_UI3_SCENE_ROOT_ID_PROP: &[u8] = b"rootId\0";
 const TRUESURFER_UI3_SCENE_OPS_PROP: &[u8] = b"ops\0";
@@ -785,10 +805,12 @@ const TRUESURFER_BRIDGE_RENDER_NODES_PROP: &[u8] = b"renderNodes\0";
 const TRUESURFER_BRIDGE_RENDER_BLOCKS_PROP: &[u8] = b"renderBlocks\0";
 const TRUESURFER_BRIDGE_RENDER_TEXT_PROP: &[u8] = b"renderText\0";
 const TRUESURFER_BRIDGE_RENDER_TAGS_PROP: &[u8] = b"renderTags\0";
+const TRUESURFER_BRIDGE_RENDER_TEXT_SAMPLES_PROP: &[u8] = b"renderTextSamples\0";
 const TRUESURFER_BRIDGE_LAYOUT_BOXES_PROP: &[u8] = b"layoutBoxes\0";
 const TRUESURFER_BRIDGE_LAYOUT_BLOCKS_PROP: &[u8] = b"layoutBlocks\0";
 const TRUESURFER_BRIDGE_LAYOUT_TEXT_PROP: &[u8] = b"layoutText\0";
 const TRUESURFER_BRIDGE_LAYOUT_MAX_DEPTH_PROP: &[u8] = b"layoutMaxDepth\0";
+const TRUESURFER_BRIDGE_LAYOUT_TEXT_SAMPLES_PROP: &[u8] = b"layoutTextSamples\0";
 const TRUESURFER_BRIDGE_MEASURE_TEXT_CALLS_PROP: &[u8] = b"measureTextCalls\0";
 const TRUESURFER_BRIDGE_PIXI_COMMANDS_PROP: &[u8] = b"pixiCommands\0";
 const TRUESURFER_BRIDGE_PIXI_OPS_PROP: &[u8] = b"pixiOps\0";
@@ -1343,6 +1365,33 @@ unsafe fn read_result_string(
     out
 }
 
+fn compact_log_text_sample(text: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    let mut previous_space = false;
+    for ch in text.chars() {
+        if out.chars().count() >= max_chars {
+            break;
+        }
+        let mapped = match ch {
+            '\r' | '\n' | '\t' => ' ',
+            '"' | '\\' | '|' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        };
+        if mapped == ' ' {
+            if out.is_empty() || previous_space {
+                continue;
+            }
+            previous_space = true;
+            out.push(mapped);
+            continue;
+        }
+        previous_space = false;
+        out.push(mapped);
+    }
+    out
+}
+
 unsafe fn log_parse5_trueos_bridge_stats(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
     let global = qjs::JS_GetGlobalObject(ctx);
     let stats = qjs::JS_GetPropertyStr(
@@ -1367,6 +1416,10 @@ unsafe fn log_parse5_trueos_bridge_stats(ctx: *mut qjs::JSContext, browser_insta
         read_result_u32(ctx, stats, TRUESURFER_BRIDGE_MEASURE_TEXT_CALLS_PROP);
     let pixi_commands = read_result_u32(ctx, stats, TRUESURFER_BRIDGE_PIXI_COMMANDS_PROP);
     let render_tags = read_result_string(ctx, stats, TRUESURFER_BRIDGE_RENDER_TAGS_PROP);
+    let render_text_samples =
+        read_result_string(ctx, stats, TRUESURFER_BRIDGE_RENDER_TEXT_SAMPLES_PROP);
+    let layout_text_samples =
+        read_result_string(ctx, stats, TRUESURFER_BRIDGE_LAYOUT_TEXT_SAMPLES_PROP);
     let pixi_ops = read_result_string(ctx, stats, TRUESURFER_BRIDGE_PIXI_OPS_PROP);
     let pixi_unsupported = read_result_string(ctx, stats, TRUESURFER_BRIDGE_PIXI_UNSUPPORTED_PROP);
     qjs::js_free_value(ctx, stats);
@@ -1393,12 +1446,25 @@ unsafe fn log_parse5_trueos_bridge_stats(ctx: *mut qjs::JSContext, browser_insta
             if pixi_ops.is_empty() { "none" } else { pixi_ops.as_str() }
         ));
     }
+    if !render_text_samples.is_empty() {
+        log_line(format!(
+            "qjs-truesurfer[{}]: parse5 trueos bridge-render-text samples={}\n",
+            browser_instance_id, render_text_samples
+        ));
+    }
+    if !layout_text_samples.is_empty() {
+        log_line(format!(
+            "qjs-truesurfer[{}]: parse5 trueos bridge-layout-text samples={}\n",
+            browser_instance_id, layout_text_samples
+        ));
+    }
 }
 
 unsafe fn submit_ui3_scene(
     ctx: *mut qjs::JSContext,
     browser_instance_id: u32,
     obj: qjs::JSValueConst,
+    html: &str,
 ) -> (u32, u32) {
     let scene_submit_start_ms = now_ms();
     log_line(format!("qjs-truesurfer[{}]: ui3 scene read begin\n", browser_instance_id));
@@ -1422,6 +1488,30 @@ unsafe fn submit_ui3_scene(
         qjs::js_free_value(ctx, scene_value);
         return (0, 0);
     }
+    let command_source = read_result_string(ctx, scene_value, TRUESURFER_UI3_SCENE_COMMAND_SOURCE_PROP);
+    if command_source.contains("pixi") {
+        let (mut submitted, mut root) =
+            submit_qjs_demo_text_widget_scene(ctx, browser_instance_id, html);
+        let bridge_kind = if submitted > 0 {
+            "qjs-mjs-widget"
+        } else {
+            let ops = qjs::platform::ui::ui3_native_hello_scene(browser_instance_id, html);
+            submitted = if ops > 0 { ops as u32 } else { 0 };
+            root = if submitted > 0 { 1 } else { 0 };
+            "rust-cabi-fallback"
+        };
+        log_line(format!(
+            "qjs-truesurfer[{}]: ui3 scene text-widget-bridge source={} scene_root={} root={} ops={} bridge={} tags=h1,p structure=root>iframe>h1>text,p>text reason=parse5-pixi-demo-tags-to-ui3-widgets\n",
+            browser_instance_id,
+            command_source,
+            root_id,
+            root,
+            submitted,
+            bridge_kind
+        ));
+        qjs::js_free_value(ctx, scene_value);
+        return (submitted, root);
+    }
     if !qjs::platform::ui::ui3_scene_begin(browser_instance_id, root_id) {
         log_line(format!(
             "qjs-truesurfer[{}]: ui3 scene begin rejected root={}\n",
@@ -1434,7 +1524,7 @@ unsafe fn submit_ui3_scene(
         "qjs-truesurfer[{}]: ui3 scene begin root={} source={}\n",
         browser_instance_id,
         root_id,
-        read_result_string(ctx, scene_value, TRUESURFER_UI3_SCENE_COMMAND_SOURCE_PROP)
+        command_source
     ));
 
     let ops_value = qjs::JS_GetPropertyStr(
@@ -1464,6 +1554,7 @@ unsafe fn submit_ui3_scene(
     let mut submitted = 0u32;
     let mut op_code_counts = [0u32; 21];
     let mut unknown_op_count = 0u32;
+    let mut text_sample_count = 0u32;
     for idx in 0..op_count {
         let op_value = qjs::JS_GetPropertyUint32(ctx, ops_value, idx);
         if op_value.is_exception()
@@ -1516,6 +1607,19 @@ unsafe fn submit_ui3_scene(
             ),
             8 => {
                 let text = read_result_string(ctx, op_value, TRUESURFER_UI3_OP_TEXT_PROP);
+                if text_sample_count < 12 {
+                    log_line(format!(
+                        "qjs-truesurfer[{}]: ui3 scene text-op#{} op_index={} node={} chars={} bytes={} sample=\"{}\"\n",
+                        browser_instance_id,
+                        text_sample_count,
+                        idx,
+                        node,
+                        text.chars().count(),
+                        text.len(),
+                        compact_log_text_sample(text.as_str(), 96)
+                    ));
+                }
+                text_sample_count = text_sample_count.saturating_add(1);
                 qjs::platform::ui::ui3_scene_text(browser_instance_id, node, text.as_str())
             }
             9 => qjs::platform::ui::ui3_scene_text_fill(
@@ -1612,6 +1716,51 @@ unsafe fn submit_ui3_scene(
     (submitted, root_id)
 }
 
+unsafe fn submit_qjs_demo_text_widget_scene(
+    ctx: *mut qjs::JSContext,
+    browser_instance_id: u32,
+    html: &str,
+) -> (u32, u32) {
+    let global = qjs::JS_GetGlobalObject(ctx);
+    let builder = qjs::JS_GetPropertyStr(
+        ctx,
+        global,
+        TRUESURFER_BUILD_DEMO_TEXT_WIDGET_SCENE_PROP.as_ptr() as *const c_char,
+    );
+    if builder.is_exception() || builder.tag == qjs::JS_TAG_UNDEFINED || builder.tag == qjs::JS_TAG_NULL
+    {
+        qjs::js_free_value(ctx, builder);
+        qjs::js_free_value(ctx, global);
+        log_line(format!(
+            "qjs-truesurfer[{}]: qjs text widget builder unavailable\n",
+            browser_instance_id
+        ));
+        return (0, 0);
+    }
+
+    let arg = qjs::JS_NewStringLen(ctx, html.as_ptr() as *const c_char, html.len());
+    let widget_wrapper = qjs::JS_Call(ctx, builder, global, 1, &arg as *const qjs::JSValue);
+    qjs::js_free_value(ctx, arg);
+    qjs::js_free_value(ctx, builder);
+    qjs::js_free_value(ctx, global);
+
+    if widget_wrapper.is_exception() {
+        qjs::qjs_diag::dump_last_exception(ctx, "truesurfer qjs text widget scene build");
+        qjs::js_free_value(ctx, widget_wrapper);
+        return (0, 0);
+    }
+
+    let submit_start_ms = now_ms();
+    let (ops, root) = submit_ui3_scene(ctx, browser_instance_id, widget_wrapper, html);
+    let submit_ms = now_ms().saturating_sub(submit_start_ms);
+    qjs::js_free_value(ctx, widget_wrapper);
+    log_line(format!(
+        "qjs-truesurfer[{}]: qjs text widget scene submitted ops={} root={} submit_ms={}\n",
+        browser_instance_id, ops, root, submit_ms
+    ));
+    (ops, root)
+}
+
 unsafe fn submit_parse5_trueos_pixi_scene(
     rt: *mut qjs::JSRuntime,
     ctx: *mut qjs::JSContext,
@@ -1668,12 +1817,15 @@ unsafe fn submit_parse5_trueos_pixi_scene(
     }
     let host_ms = now_ms().saturating_sub(host_start_ms);
     set_global_string(ctx, TRUESURFER_TRUEOS_INPUT_HTML_PROP, html);
+    let input_html_after_set = read_global_string(ctx, TRUESURFER_TRUEOS_INPUT_HTML_PROP);
     log_line(format!(
-        "qjs-truesurfer[{}]: parse5 trueos host ok chunks={} html_bytes={} host_ms={}\n",
+        "qjs-truesurfer[{}]: parse5 trueos host ok chunks={} html_bytes={} host_ms={} input_global_bytes={} input_global_sample=\"{}\"\n",
         browser_instance_id,
         host_chunks.len(),
         html.len(),
-        host_ms
+        host_ms,
+        input_html_after_set.len(),
+        compact_log_text_sample(input_html_after_set.as_str(), 120)
     ));
 
     log_line(format!(
@@ -1803,7 +1955,7 @@ unsafe fn submit_parse5_trueos_pixi_scene(
     log_parse5_trueos_bridge_stats(ctx, browser_instance_id);
 
     let scene_submit_start_ms = now_ms();
-    let (ops, root) = submit_ui3_scene(ctx, browser_instance_id, wrapper);
+    let (ops, root) = submit_ui3_scene(ctx, browser_instance_id, wrapper, html);
     let scene_submit_ms = now_ms().saturating_sub(scene_submit_start_ms);
     qjs::js_free_value(ctx, wrapper);
     log_line(format!(
@@ -1939,7 +2091,7 @@ unsafe fn dispatch_html(
         submit_parse5_trueos_pixi_scene(rt, ctx, browser_instance_id, pending.html.as_str());
     if ui3_ops == 0 || ui3_root == 0 {
         log_line(format!(
-            "qjs-truesurfer[{}]: parse5 trueos ui3 unavailable; trying native hello widget fallback\n",
+            "qjs-truesurfer[{}]: parse5 trueos ui3 unavailable; trying h1/p text widget fallback\n",
             browser_instance_id
         ));
         let native_ops =
@@ -1948,12 +2100,12 @@ unsafe fn dispatch_html(
             ui3_ops = native_ops as u32;
             ui3_root = 1;
             log_line(format!(
-                "qjs-truesurfer[{}]: native hello widget fallback submitted ops={} root={}\n",
+                "qjs-truesurfer[{}]: h1/p text widget fallback submitted ops={} root={}\n",
                 browser_instance_id, ui3_ops, ui3_root
             ));
         } else {
             log_line(format!(
-                "qjs-truesurfer[{}]: native hello widget fallback unavailable\n",
+                "qjs-truesurfer[{}]: h1/p text widget fallback unavailable\n",
                 browser_instance_id
             ));
         }
