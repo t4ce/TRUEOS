@@ -9414,6 +9414,305 @@ pub mod cabi {
         end_frame_host_inner()
     }
 
+    // --- Retired UI2 C-ABI tombstones ---
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_ui2_window_create(
+        _title_ptr: *const u8,
+        _title_len: usize,
+        _x: i32,
+        _y: i32,
+        _width: u32,
+        _height: u32,
+        _z: i32,
+        _alpha: u32,
+    ) -> u32 {
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_ui2_surface_window_create(
+        _title_ptr: *const u8,
+        _title_len: usize,
+        _x: i32,
+        _y: i32,
+        _width: u32,
+        _height: u32,
+        _z: i32,
+        _alpha: u32,
+        _tex_id: u32,
+        _blend_enabled: u32,
+    ) -> u32 {
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_app_window_create(
+        _title_ptr: *const u8,
+        _title_len: usize,
+        _x: i32,
+        _y: i32,
+        _width: u32,
+        _height: u32,
+        _z: i32,
+        _alpha: u32,
+    ) -> u32 {
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_app_surface_window_create(
+        _title_ptr: *const u8,
+        _title_len: usize,
+        _x: i32,
+        _y: i32,
+        _width: u32,
+        _height: u32,
+        _z: i32,
+        _alpha: u32,
+        _tex_id: u32,
+        _blend_enabled: u32,
+    ) -> u32 {
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_ui2_window_info(
+        _window_id: u32,
+        _out_info: *mut crate::r::ui2::TrueosUi2WindowInfo,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_ui2_window_take_cursor_events(
+        _window_id: u32,
+        _out: *mut u8,
+        _out_cap: u32,
+    ) -> u32 {
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_ui2_window_set_title(
+        _window_id: u32,
+        _title_ptr: *const u8,
+        _title_len: usize,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_request_repaint(_window_id: u32) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_set_icon(_window_id: u32, _icon_id: u32) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_set_position(
+        _window_id: u32,
+        _x: i32,
+        _y: i32,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_set_size(
+        _window_id: u32,
+        _width: u32,
+        _height: u32,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_set_decorations(_window_id: u32, _mode: u32) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_set_titlebar_visible(
+        _window_id: u32,
+        _visible: u32,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_set_bottom_bar_visible(
+        _window_id: u32,
+        _visible: u32,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_set_title_icon_visible(
+        _window_id: u32,
+        _visible: u32,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_set_decoration_button_visible(
+        _window_id: u32,
+        _button: u32,
+        _visible: u32,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_set_resize_button_visible(
+        _window_id: u32,
+        _visible: u32,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_set_hit_test_visible(
+        _window_id: u32,
+        _visible: u32,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_set_vertical_scrollbar_visible(
+        _window_id: u32,
+        _visible: u32,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_set_horizontal_scrollbar_visible(
+        _window_id: u32,
+        _visible: u32,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_set_resize_maintain_aspect(
+        _window_id: u32,
+        _maintain_aspect: u32,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_set_content_preserve_scale(
+        _window_id: u32,
+        _preserve_scale: u32,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_set_resize_mode(_window_id: u32, _mode: u32) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_set_vertical_scrollbar_side(
+        _window_id: u32,
+        _side: u32,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_set_horizontal_scrollbar_side(
+        _window_id: u32,
+        _side: u32,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_set_rotate_buttons_visible(
+        _window_id: u32,
+        _visible: u32,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_set_content_rotation_quadrants(
+        _window_id: u32,
+        _quadrants: u32,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_minimize(_window_id: u32) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_maximize(_window_id: u32) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_restore(_window_id: u32) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_focus(_window_id: u32) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_close(_window_id: u32) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_begin_move(_window_id: u32) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_window_begin_resize(_window_id: u32, _edge_mask: u32) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_font_line_height_px(_tier: u32) -> u32 {
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_ui2_font_blit_text_rgba(
+        _dst_ptr: *mut u8,
+        _dst_len: usize,
+        _dst_width: u32,
+        _dst_height: u32,
+        _tier: u32,
+        _x: u32,
+        _y: u32,
+        _max_width_px: u32,
+        _text_ptr: *const u8,
+        _text_len: usize,
+        _r: u32,
+        _g: u32,
+        _b: u32,
+        _a: u32,
+    ) -> usize {
+        0
+    }
+
     // --- Input C-ABI ---
 
     #[unsafe(no_mangle)]

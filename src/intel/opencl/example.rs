@@ -5,12 +5,24 @@
 //! GPGPU submission details.
 
 use super::{
-    BackendCommand, BufferRegistry, BuiltProgram, ClError, ClResult, CommandQueue, ContextId,
-    DeviceId, EventId, IntelOpenClBackend, KernelArgDesc, KernelArgKind, KernelId, KernelMetadata,
-    MemFlags, NdRange, ProgramArtifact, ProgramBinaryKind, QueueId, QueueProperties,
+    BufferRegistry, BuiltProgram, ClError, ClResult, CommandQueue, ContextId, DeviceId, EventId,
+    IntelOpenClBackend, KernelArgDesc, KernelArgKind, KernelMetadata, MemFlags, NdRange,
+    ProgramArtifact, QueueId, QueueProperties,
 };
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct KnownAotQueueProbe {
+    pub(crate) known_kernels: usize,
+    pub(crate) completed_commands: usize,
+    pub(crate) fill_rect_uploaded: bool,
+}
+
 pub(crate) fn fill_rect_worklist_runtime_example() -> ClResult<()> {
+    let _ = fill_rect_worklist_queue_probe()?;
+    Ok(())
+}
+
+pub(crate) fn fill_rect_worklist_queue_probe() -> ClResult<KnownAotQueueProbe> {
     let device = DeviceId::from_raw(1);
     let backend = IntelOpenClBackend::new();
     let caps = backend.caps();
@@ -28,7 +40,7 @@ pub(crate) fn fill_rect_worklist_runtime_example() -> ClResult<()> {
     const PROGRAM: ProgramArtifact<'_> = ProgramArtifact::new(
         "trueos.ui.primitives",
         "adls",
-        ProgramBinaryKind::IntelGenBinary,
+        super::ProgramBinaryKind::IntelGenBinary,
         crate::intel::gpgpu::FILL_RECT_WORKLIST_RGBA8_ADLS_BIN,
         KERNELS,
     );
@@ -49,18 +61,18 @@ pub(crate) fn fill_rect_worklist_runtime_example() -> ClResult<()> {
         QueueProperties::EMPTY,
     );
     queue.enqueue_write_buffer(EventId::from_raw(1), descs, 0, &[], &[])?;
-    queue.enqueue_kernel(EventId::from_raw(2), KernelId::from_raw(1), NdRange::new_1d(16), &[])?;
+    queue.enqueue_known_kernel(EventId::from_raw(2), kernel.name(), NdRange::new_1d(16), &[])?;
     queue.enqueue_read_buffer(EventId::from_raw(3), dst, 0, 0, &[])?;
 
-    backend.require_known_aot_upload("fill_rect_worklist_rgba8")?;
-    let result = backend.dispatch(BackendCommand::ExecuteKnownKernelStub {
-        kernel_name: kernel.name(),
-        nd_range: NdRange::new_1d(16),
-    });
-    match result {
-        super::backend::BackendCommandResult::ExecuteStub(stub) if stub.recognized => {}
-        _ => return Err(ClError::InvalidKernel),
-    }
-    queue.finish_with(|_| Ok(()))?;
-    Ok(())
+    let completed_commands = backend.finish_known_queue(&mut queue)?;
+    let fill_rect_uploaded = backend
+        .fill_rect_worklist_upload_status()
+        .map(|upload| upload.is_ready())
+        .unwrap_or(false);
+
+    Ok(KnownAotQueueProbe {
+        known_kernels: backend.known_kernel_count(),
+        completed_commands,
+        fill_rect_uploaded,
+    })
 }

@@ -223,10 +223,7 @@ pub fn set_window_bottom_scrollbar_visible(_id: u32, _visible: bool) -> bool {
     false
 }
 
-pub fn set_window_vertical_scrollbar_side(
-    _id: u32,
-    _side: Ui2WindowVerticalScrollbarSide,
-) -> bool {
+pub fn set_window_vertical_scrollbar_side(_id: u32, _side: Ui2WindowVerticalScrollbarSide) -> bool {
     false
 }
 
