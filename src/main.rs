@@ -32,8 +32,6 @@ mod exceptions;
 #[cfg(not(target_arch = "x86_64"))]
 #[path = "exceptions_disabled.rs"]
 mod exceptions;
-#[path = "tst/ui2/gboi.rs"]
-pub(crate) mod gboi;
 mod gfx;
 mod globalog;
 #[cfg(target_arch = "x86_64")]

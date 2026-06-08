@@ -471,11 +471,6 @@ fn spawn_resource_monitor(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::resource_monitor::resource_monitor_task())
 }
 
-#[cfg(feature = "trueos_rdp")]
-fn spawn_trueos_rdp(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::r::rdp::trueos_rdp_task())
-}
-
 fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::globalog::logtotcp::logtotcp_task())
 }
@@ -668,21 +663,6 @@ fn spawn_ui3_asset_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |_ap1_spawner| crate::ui3::ui3_asset_service_task())
 }
 
-fn spawn_ui2(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |_ap1_spawner| crate::r::ui2::ui2_task())
-}
-
-fn spawn_ui2_hit(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |_ap1_spawner| crate::r::ui2::ui2_hit_task())
-}
-
-fn spawn_ui2_hosted(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |_ap1_spawner| crate::r::ui2::ui2_hosted_task())
-}
-
-const UI2_DEMOS_ENABLED: bool = true;
-const UI2_BAREMETAL_GFX_ENABLED: bool = false;
-
 #[inline]
 fn gfx_backend_boot_gate() -> bool {
     true
@@ -696,151 +676,6 @@ fn intel_cursor_service_gate() -> bool {
 #[inline]
 fn intel_media_engine_gate() -> bool {
     crate::intel::has_media_decode_engine()
-}
-
-#[inline]
-fn ui2_core_task_gate() -> bool {
-    UI2_BAREMETAL_GFX_ENABLED
-}
-
-#[inline]
-fn ui2_demo_task_gate() -> bool {
-    UI2_DEMOS_ENABLED
-}
-
-#[inline]
-fn spawn_ui2_demo_on_worker<S: Send, F>(spawner: Spawner, spawn: F) -> SpawnAttempt
-where
-    F: FnOnce(SendSpawner) -> Result<SpawnToken<S>, SpawnError>,
-{
-    spawn_on_worker(spawner, spawn)
-}
-
-fn spawn_ui2_athlas_half_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |_ap1_spawner| crate::r::ui2::ui2_font_bucketproducer_demo_task(0))
-}
-
-fn spawn_ui2_athlas_third_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |_ap1_spawner| crate::r::ui2::ui2_font_bucketproducer_demo_task(3))
-}
-
-fn spawn_ui2_athlas_1x_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |_ap1_spawner| crate::r::ui2::ui2_font_bucketproducer_demo_task(1))
-}
-
-fn spawn_ui2_athlas_2x_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |_ap1_spawner| crate::r::ui2::ui2_font_bucketproducer_demo_task(2))
-}
-
-fn spawn_ui2_palatino_1x_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |ap1_spawner| {
-        let token = crate::r::ui2::ui2_font_bucketproducer_palatino_demo_task()?;
-        ap1_spawner.spawn(token);
-        crate::r::ui2::ui2_font_bucketproducer_palatino_bw_demo_task()
-    })
-}
-
-fn spawn_ui2_twemoji_1x(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |_ap1_spawner| crate::r::ui2::ui2_font_twemoji_loader_task())
-}
-
-fn spawn_ui2_text_input_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::tst::ui2::text_input_demo::ui2_text_input_demo_task()
-    })
-}
-
-fn spawn_ui2_analog_clock_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::tst::ui2::analog_clock_demo::ui2_analog_clock_demo_task()
-    })
-}
-
-fn spawn_ui2_bgrt_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::tst::ui2::bgrt::ui2_bgrt_demo_task()
-    })
-}
-
-fn spawn_ui2_coreticks_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::tst::ui2::coreticks_demo::ui2_coreticks_demo_task()
-    })
-}
-
-fn spawn_ui2_cursorpicker_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::tst::ui2::cursorpicker_demo::ui2_cursorpicker_demo_task()
-    })
-}
-
-fn spawn_ui2_gboi_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |_worker_spawner| {
-        crate::tst::ui2::gboi_demo::ui2_gboi_demo_task()
-    })
-}
-
-fn spawn_ui2_intel_canvas3d_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |_worker_spawner| {
-        crate::tst::ui2::intel_canvas3d_demo::ui2_intel_canvas3d_demo_task()
-    })
-}
-
-fn spawn_ui2_intel_canvas3d_plane_patch_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |_worker_spawner| {
-        crate::tst::ui2::intel_canvas3d_plane_patch_demo::ui2_intel_canvas3d_plane_patch_demo_task()
-    })
-}
-
-fn spawn_ui2_mandelbrot_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::tst::ui2::mandelbrot_demo::ui2_mandelbrot_demo_task()
-    })
-}
-
-fn spawn_ui2_player_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::tst::ui2::player_demo::ui2_player_demo_task()
-    })
-}
-
-fn spawn_ui2_raple_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::tst::ui2::raple_demo::ui2_raple_demo_task()
-    })
-}
-
-fn spawn_ui2_smiley_fountain_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::tst::ui2::smiley_fountain_demo::ui2_smiley_fountain_demo_task()
-    })
-}
-
-fn spawn_ui2_shell_demo(spawner: Spawner) -> SpawnAttempt {
-    match crate::shell2::task(spawner, &crate::shell2::UI2_SHELL_BACKEND) {
-        Ok(token) => spawner.spawn(token),
-        Err(e) => return SpawnAttempt::Failed(e),
-    }
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::tst::ui2::shell_demo::ui2_shell_demo_task()
-    })
-}
-
-fn spawn_ui2_swarm_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::tst::ui2::swarm::ui2_swarm_demo_task()
-    })
 }
 
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
@@ -1265,9 +1100,9 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 #[cfg(feature = "trueos_rdp")]
-const TASK_COUNT: usize = 76;
+const TASK_COUNT: usize = 52;
 #[cfg(not(feature = "trueos_rdp"))]
-const TASK_COUNT: usize = 76;
+const TASK_COUNT: usize = 52;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1339,13 +1174,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     #[cfg(feature = "trueos_rdp")]
     TaskSpec::enabled("resource-monitor", 0, &RESOURCE_MONITOR_STARTED, spawn_resource_monitor),
-    #[cfg(feature = "trueos_rdp")]
-    TaskSpec::enabled(
-        "trueos-rdp",
-        crate::r::readiness::NET_ANY_CONFIGURED,
-        &TRUEOS_RDP_STARTED,
-        spawn_trueos_rdp,
-    ),
     TaskSpec::enabled(
         "logtotcp",
         crate::r::readiness::NET_ANY_CONFIGURED,
@@ -1483,27 +1311,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
         spawn_gfx_texture_upload_service,
     ),
-    TaskSpec::enabled_gated(
-        "ui2",
-        crate::r::readiness::GFX_BACKEND_READY,
-        ui2_core_task_gate,
-        &UI2_STARTED,
-        spawn_ui2,
-    ),
-    TaskSpec::enabled_gated(
-        "ui2-hosted",
-        crate::r::readiness::GFX_BACKEND_READY,
-        ui2_core_task_gate,
-        &UI2_HOSTED_SYNC_TASK_STARTED,
-        spawn_ui2_hosted,
-    ),
-    TaskSpec::enabled_gated(
-        "ui2-hit",
-        crate::r::readiness::GFX_BACKEND_READY,
-        ui2_core_task_gate,
-        &UI2_HIT_TASK_STARTED,
-        spawn_ui2_hit,
-    ),
     TaskSpec::enabled(
         "truesurfer-parse-pool",
         0,
@@ -1527,123 +1334,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
             | crate::r::readiness::UI3_ASSET_SERVICE_READY,
         &UI3_PIXI_SERVICE_STARTED,
         spawn_ui3_pixi_service,
-    ),
-    TaskSpec::enabled(
-        "ui2-athlas-third-demo",
-        UI2_DEMO_READY,
-        &UI2_ATHLAS_THIRD_DEMO_STARTED,
-        spawn_ui2_athlas_third_demo,
-    ),
-    TaskSpec::enabled(
-        "ui2-athlas-half-demo",
-        UI2_DEMO_READY,
-        &UI2_ATHLAS_HALF_DEMO_STARTED,
-        spawn_ui2_athlas_half_demo,
-    ),
-    TaskSpec::enabled(
-        "ui2-athlas-1x-demo",
-        UI2_DEMO_READY,
-        &UI2_ATHLAS_1X_DEMO_STARTED,
-        spawn_ui2_athlas_1x_demo,
-    ),
-    TaskSpec::enabled(
-        "ui2-athlas-2x-demo",
-        UI2_DEMO_READY,
-        &UI2_ATHLAS_2X_DEMO_STARTED,
-        spawn_ui2_athlas_2x_demo,
-    ),
-    TaskSpec::enabled(
-        "ui2-palatino-1x-demo",
-        UI2_DEMO_READY,
-        &UI2_PALATINO_1X_DEMO_STARTED,
-        spawn_ui2_palatino_1x_demo,
-    ),
-    TaskSpec::enabled(
-        "ui2-twemoji-1x",
-        UI2_DEMO_READY,
-        &UI2_TWEMOJI_1X_STARTED,
-        spawn_ui2_twemoji_1x,
-    ),
-    TaskSpec::enabled(
-        "ui2-text-input-demo",
-        UI2_DEMO_READY,
-        &UI2_TEXT_INPUT_DEMO_STARTED,
-        spawn_ui2_text_input_demo,
-    ),
-    TaskSpec::disabled(
-        "ui2-analog-clock-demo",
-        UI2_DEMO_READY,
-        &UI2_ANALOG_CLOCK_DEMO_STARTED,
-        spawn_ui2_analog_clock_demo,
-    ),
-    TaskSpec::enabled("ui2-bgrt-demo", UI2_DEMO_READY, &UI2_BGRT_DEMO_STARTED, spawn_ui2_bgrt_demo),
-    TaskSpec::disabled(
-        "ui2-coreticks-demo",
-        UI2_DEMO_READY,
-        &UI2_CORETICKS_DEMO_STARTED,
-        spawn_ui2_coreticks_demo,
-    ),
-    TaskSpec::disabled(
-        "ui2-cursorpicker-demo",
-        UI2_DEMO_READY,
-        &UI2_CURSORPICKER_DEMO_STARTED,
-        spawn_ui2_cursorpicker_demo,
-    ),
-    TaskSpec::disabled(
-        "ui2-gboi-demo",
-        GBOI_DEMO_READY,
-        &UI2_GBOI_DEMO_STARTED,
-        spawn_ui2_gboi_demo,
-    ),
-    TaskSpec::enabled(
-        "ui2-intel-canvas3d-demo",
-        UI2_DEMO_READY | crate::r::readiness::GFX_BACKEND_READY,
-        &UI2_INTEL_CANVAS3D_DEMO_STARTED,
-        spawn_ui2_intel_canvas3d_demo,
-    ),
-    TaskSpec::disabled(
-        "ui2-intel-canvas3d-plane-patch-demo",
-        UI2_DEMO_READY | crate::r::readiness::GFX_BACKEND_READY,
-        &UI2_INTEL_CANVAS3D_PLANE_PATCH_DEMO_STARTED,
-        spawn_ui2_intel_canvas3d_plane_patch_demo,
-    ),
-    TaskSpec::disabled(
-        "ui2-mandelbrot-demo",
-        UI2_DEMO_READY,
-        &UI2_MANDELBROT_DEMO_STARTED,
-        spawn_ui2_mandelbrot_demo,
-    ),
-    // Keep the player demo opt-in because it opens the audio player on boot.
-    // HDA is currently a single-owner stream; emulator audio should not race it.
-    TaskSpec::disabled(
-        "ui2-player-demo",
-        UI2_DEMO_READY,
-        &UI2_PLAYER_DEMO_STARTED,
-        spawn_ui2_player_demo,
-    ),
-    TaskSpec::disabled(
-        "ui2-raple-demo",
-        UI2_DEMO_READY,
-        &UI2_RAPLE_DEMO_STARTED,
-        spawn_ui2_raple_demo,
-    ),
-    TaskSpec::disabled(
-        "ui2-smiley-fountain-demo",
-        UI2_DEMO_READY,
-        &UI2_SMILEY_FOUNTAIN_DEMO_STARTED,
-        spawn_ui2_smiley_fountain_demo,
-    ),
-    TaskSpec::disabled(
-        "ui2-shell-demo",
-        UI2_DEMO_READY,
-        &UI2_SHELL_DEMO_STARTED,
-        spawn_ui2_shell_demo,
-    ),
-    TaskSpec::disabled(
-        "ui2-swarm-demo",
-        UI2_DEMO_READY | crate::r::readiness::NET_ANY_CONFIGURED,
-        &UI2_SWARM_DEMO_STARTED,
-        spawn_ui2_swarm_demo,
     ),
     TaskSpec::disabled(
         "trueosfs-ready-hook",

@@ -14,7 +14,6 @@ pub mod io;
 pub mod keyboard;
 pub mod net;
 pub mod path;
-#[cfg(feature = "trueos_rdp")]
 pub mod rdp;
 pub mod readiness;
 #[cfg(feature = "trueos_rdp")]
@@ -26,5 +25,4 @@ pub mod spawn_spec;
 pub mod stream;
 pub mod sync;
 pub mod time;
-#[path = "../ui2/mod.rs"]
 pub mod ui2;
