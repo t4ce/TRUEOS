@@ -5,6 +5,12 @@ use trueos_gfx_core::{Rgba8, TEX_VERTEX_SIZE, ViewTransform, push_tex_quad_px};
 
 use super::{Ui3GeometryFrame, Ui3LoweredDraw, Ui3Rect};
 
+const PIXI_CURSOR_HALF_SPAN_VIEWPORT_RATIO: f32 = 0.010;
+const PIXI_CURSOR_HALF_SPAN_MIN_PX: f32 = 10.0;
+const PIXI_CURSOR_HALF_SPAN_MAX_PX: f32 = 18.0;
+const PIXI_CURSOR_HALF_THICKNESS_PX: f32 = 1.0;
+const PIXI_CURSOR_TILT_INV_SQRT2: f32 = 0.70710677;
+
 #[derive(Copy, Clone, Debug, Default)]
 pub(super) struct Ui3IntelPresentSummary {
     pub solid_rects: usize,
@@ -29,16 +35,29 @@ pub(super) struct Ui3IntelPresentSummary {
 pub(super) fn present_ui3_frame_to_intel_primary(
     frame: &Ui3GeometryFrame,
 ) -> Ui3IntelPresentSummary {
+    present_ui3_geometry_to_intel_primary(frame, None)
+}
+
+pub(super) fn present_ui3_frame_damage_to_intel_primary(
+    frame: &Ui3GeometryFrame,
+    damage: Ui3Rect,
+) -> Ui3IntelPresentSummary {
+    present_ui3_geometry_to_intel_primary(frame, Some(damage))
+}
+
+fn present_ui3_geometry_to_intel_primary(
+    frame: &Ui3GeometryFrame,
+    damage: Option<Ui3Rect>,
+) -> Ui3IntelPresentSummary {
     let mut summary = Ui3IntelPresentSummary::default();
     let mut rects = Vec::new();
     let mut rect_run_opaque = true;
 
     for draw in &frame.draws {
+        let effective_clip = merge_clip(*draw_clip(draw), damage);
         match draw {
-            Ui3LoweredDraw::SolidRect {
-                rect, color, clip, ..
-            } => {
-                if let Some(rect) = clipped_rect(*rect, *clip).and_then(lower_rect) {
+            Ui3LoweredDraw::SolidRect { rect, color, .. } => {
+                if let Some(rect) = clipped_rect(*rect, effective_clip).and_then(lower_rect) {
                     let color_rgba = rgba8_to_kernel_rgba(*color);
                     let opaque = kernel_rgba_alpha(color_rgba) == 0xff;
                     if !rects.is_empty() && opaque != rect_run_opaque {
@@ -49,13 +68,10 @@ pub(super) fn present_ui3_frame_to_intel_primary(
                 }
             }
             Ui3LoweredDraw::Mesh {
-                vertices,
-                indices,
-                clip,
-                ..
+                vertices, indices, ..
             } => {
-                if let Some(clip) = clip
-                    && !mesh_intersects_clip(vertices, *clip)
+                if let Some(clip) = effective_clip
+                    && !mesh_intersects_clip(vertices, clip)
                 {
                     continue;
                 }
@@ -66,21 +82,19 @@ pub(super) fn present_ui3_frame_to_intel_primary(
                 tex_id,
                 rect,
                 alpha,
-                clip,
                 ..
             } => {
                 flush_rect_run(&mut rects, &mut summary);
-                draw_texture_rect(*tex_id, *rect, *alpha, *clip, &mut summary);
+                draw_texture_rect(*tex_id, *rect, *alpha, effective_clip, &mut summary);
             }
             Ui3LoweredDraw::TextRun {
                 origin,
                 text,
                 color,
                 font_tier,
-                clip,
                 ..
             } => {
-                if !text_intersects_clip(*origin, text.as_str(), *clip) {
+                if !text_intersects_clip(*origin, text.as_str(), effective_clip) {
                     continue;
                 }
                 flush_rect_run(&mut rects, &mut summary);
@@ -91,16 +105,35 @@ pub(super) fn present_ui3_frame_to_intel_primary(
     }
 
     flush_rect_run(&mut rects, &mut summary);
-    append_kernel_cursor_rects(&mut rects, &mut summary);
+    append_pixi_cursor_crosses(&mut rects, &mut summary, damage);
     flush_rect_run(&mut rects, &mut summary);
     publish_frame(&mut summary);
 
     summary
 }
 
-fn append_kernel_cursor_rects(
+fn draw_clip(draw: &Ui3LoweredDraw) -> &Option<Ui3Rect> {
+    match draw {
+        Ui3LoweredDraw::SolidRect { clip, .. }
+        | Ui3LoweredDraw::Mesh { clip, .. }
+        | Ui3LoweredDraw::TextureRect { clip, .. }
+        | Ui3LoweredDraw::TextRun { clip, .. } => clip,
+    }
+}
+
+fn merge_clip(existing: Option<Ui3Rect>, damage: Option<Ui3Rect>) -> Option<Ui3Rect> {
+    match (existing, damage) {
+        (Some(existing), Some(damage)) => intersect_rect(existing, damage),
+        (Some(existing), None) => Some(existing),
+        (None, Some(damage)) => Some(damage),
+        (None, None) => None,
+    }
+}
+
+fn append_pixi_cursor_crosses(
     rects: &mut Vec<crate::intel::gpgpu::GpgpuSolidRect>,
     summary: &mut Ui3IntelPresentSummary,
+    damage: Option<Ui3Rect>,
 ) {
     let (view_w, view_h) = crate::intel::active_scanout_dimensions()
         .map(|(w, h)| (w.max(1), h.max(1)))
@@ -110,35 +143,156 @@ fn append_kernel_cursor_rects(
         return;
     }
 
-    for (idx, (_slot_id, nx, ny, _buttons)) in cursors.into_iter().enumerate() {
+    let half_span = pixi_cursor_half_span_px(view_h);
+    let half_thickness = PIXI_CURSOR_HALF_THICKNESS_PX;
+
+    for (idx, (_slot_id, nx, ny, buttons)) in cursors.into_iter().enumerate() {
         if !nx.is_finite() || !ny.is_finite() {
             continue;
         }
         let cursor_id = (idx as u32).saturating_add(1);
-        let color =
-            rgba8_to_kernel_rgba(crate::r::ui2::cursor_color_rgba8_for_cursor_id(cursor_id));
+        let color = crate::r::ui2::cursor_color_rgba8_for_cursor_id(cursor_id);
         let x = (nx.clamp(0.0, 1.0) as f32) * view_w.saturating_sub(1).max(1) as f32;
         let y = (ny.clamp(0.0, 1.0) as f32) * view_h.saturating_sub(1).max(1) as f32;
-        let half = ((view_h as f32) * 0.013).clamp(12.0, 24.0);
-        let thickness = (half * 0.22).clamp(2.0, 6.0);
-        push_cursor_rect(rects, x - half, y - thickness, half * 2.0, thickness * 2.0, color);
-        push_cursor_rect(rects, x - thickness, y - half, thickness * 2.0, half * 2.0, color);
+        let bounds = Ui3Rect {
+            x: x - half_span - half_thickness,
+            y: y - half_span - half_thickness,
+            w: (half_span + half_thickness) * 2.0,
+            h: (half_span + half_thickness) * 2.0,
+        };
+        if let Some(damage) = damage
+            && intersect_rect(bounds, damage).is_none()
+        {
+            continue;
+        }
+
+        if buttons != 0 {
+            flush_rect_run(rects, summary);
+            draw_tilted_pixi_cursor_cross(x, y, half_span, half_thickness, color, summary);
+            summary.cursor_rects = summary.cursor_rects.saturating_add(2);
+            continue;
+        }
+
+        let color_rgba = rgba8_to_kernel_rgba(color);
+        push_cursor_rect(
+            rects,
+            Ui3Rect {
+                x: x - half_span,
+                y: y - half_thickness,
+                w: half_span * 2.0,
+                h: half_thickness * 2.0,
+            },
+            damage,
+            color_rgba,
+        );
+        push_cursor_rect(
+            rects,
+            Ui3Rect {
+                x: x - half_thickness,
+                y: y - half_span,
+                w: half_thickness * 2.0,
+                h: half_span * 2.0,
+            },
+            damage,
+            color_rgba,
+        );
         summary.cursor_rects = summary.cursor_rects.saturating_add(2);
     }
 }
 
+fn pixi_cursor_half_span_px(view_h: u32) -> f32 {
+    ((view_h as f32) * PIXI_CURSOR_HALF_SPAN_VIEWPORT_RATIO)
+        .clamp(PIXI_CURSOR_HALF_SPAN_MIN_PX, PIXI_CURSOR_HALF_SPAN_MAX_PX)
+}
+
 fn push_cursor_rect(
     rects: &mut Vec<crate::intel::gpgpu::GpgpuSolidRect>,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
+    rect: Ui3Rect,
+    damage: Option<Ui3Rect>,
     color_rgba: u32,
 ) {
-    let Some(rect) = lower_rect(Ui3Rect { x, y, w, h }) else {
+    let Some(rect) = clipped_rect(rect, damage).and_then(lower_rect) else {
         return;
     };
     rects.push(crate::intel::gpgpu::GpgpuSolidRect { rect, color_rgba });
+}
+
+fn draw_tilted_pixi_cursor_cross(
+    x: f32,
+    y: f32,
+    half_span: f32,
+    half_thickness: f32,
+    color: Rgba8,
+    summary: &mut Ui3IntelPresentSummary,
+) {
+    let mut vertices = Vec::with_capacity(8);
+    let mut indices = Vec::with_capacity(12);
+    push_cursor_stroke_quad(
+        &mut vertices,
+        &mut indices,
+        x,
+        y,
+        PIXI_CURSOR_TILT_INV_SQRT2,
+        PIXI_CURSOR_TILT_INV_SQRT2,
+        half_span,
+        half_thickness,
+        color,
+    );
+    push_cursor_stroke_quad(
+        &mut vertices,
+        &mut indices,
+        x,
+        y,
+        PIXI_CURSOR_TILT_INV_SQRT2,
+        -PIXI_CURSOR_TILT_INV_SQRT2,
+        half_span,
+        half_thickness,
+        color,
+    );
+    draw_rgb_mesh(vertices.as_slice(), indices.as_slice(), summary);
+}
+
+fn push_cursor_stroke_quad(
+    vertices: &mut Vec<trueos_gfx_core::RgbVertexPx>,
+    indices: &mut Vec<u16>,
+    x: f32,
+    y: f32,
+    dir_x: f32,
+    dir_y: f32,
+    half_span: f32,
+    half_thickness: f32,
+    color: Rgba8,
+) {
+    let base = vertices.len();
+    if base > (u16::MAX as usize).saturating_sub(4) {
+        return;
+    }
+    let norm_x = -dir_y * half_thickness;
+    let norm_y = dir_x * half_thickness;
+    let span_x = dir_x * half_span;
+    let span_y = dir_y * half_span;
+    vertices.push(trueos_gfx_core::RgbVertexPx {
+        x: x - span_x - norm_x,
+        y: y - span_y - norm_y,
+        color,
+    });
+    vertices.push(trueos_gfx_core::RgbVertexPx {
+        x: x + span_x - norm_x,
+        y: y + span_y - norm_y,
+        color,
+    });
+    vertices.push(trueos_gfx_core::RgbVertexPx {
+        x: x + span_x + norm_x,
+        y: y + span_y + norm_y,
+        color,
+    });
+    vertices.push(trueos_gfx_core::RgbVertexPx {
+        x: x - span_x + norm_x,
+        y: y - span_y + norm_y,
+        color,
+    });
+    let base = base as u16;
+    indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 }
 
 fn draw_texture_rect(

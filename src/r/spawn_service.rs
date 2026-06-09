@@ -52,6 +52,7 @@ define_started_flags!(
     WS_TIME_STARTED,
     ESP_GATE_STARTED,
     ESP_GATE_REGISTRY_STARTED,
+    ESP_PIANO_AUDIO_STARTED,
     ESP_PIANO_UDP_STARTED,
     FTP_SERVER_STARTED,
     TGA_TASK_STARTED,
@@ -518,6 +519,10 @@ fn spawn_esp_gate_registry(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_esp_piano_udp(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::net::esp::esp_piano_udp_task())
+}
+
+fn spawn_esp_piano_audio(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |_worker_spawner| crate::aud::live_piano::task())
 }
 
 fn spawn_ftp_server(spawner: Spawner) -> SpawnAttempt {
@@ -1100,9 +1105,9 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 #[cfg(feature = "trueos_rdp")]
-const TASK_COUNT: usize = 52;
+const TASK_COUNT: usize = 53;
 #[cfg(not(feature = "trueos_rdp"))]
-const TASK_COUNT: usize = 52;
+const TASK_COUNT: usize = 53;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1238,8 +1243,13 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     TaskSpec::enabled("esp-gate", 0, &ESP_GATE_STARTED, spawn_esp_gate),
     TaskSpec::enabled("esp-gate-registry", 0, &ESP_GATE_REGISTRY_STARTED, spawn_esp_gate_registry),
-    // Keep piano input opt-in while emulator audio owns the single HDA stream.
-    TaskSpec::disabled(
+    TaskSpec::enabled(
+        "esp-piano-audio",
+        0,
+        &ESP_PIANO_AUDIO_STARTED,
+        spawn_esp_piano_audio,
+    ),
+    TaskSpec::enabled(
         "esp-piano-udp",
         crate::r::readiness::NET_ANY_CONFIGURED,
         &ESP_PIANO_UDP_STARTED,

@@ -4,7 +4,7 @@
 //! Features:
 //!   - 5 waveforms: Sine, Square, Sawtooth, Triangle, Noise
 //!   - ADSR envelope generator
-//!   - Polyphonic voice engine (up to 8 simultaneous voices)
+//!   - Polyphonic voice engine (up to 32 simultaneous voices)
 //!   - Phase accumulator with Q16.16 fixed-point precision
 //!
 //! Audio format: 48 kHz, 16-bit signed, stereo interleaved
@@ -21,7 +21,7 @@ pub const CHANNELS: u32 = 2;
 /// Bytes per sample (16-bit)
 pub const BYTES_PER_SAMPLE: u32 = 2;
 /// Maximum simultaneous voices
-pub const MAX_VOICES: usize = 8;
+pub const MAX_VOICES: usize = 32;
 /// Fixed-point fractional bits for phase accumulator
 const FRAC_BITS: u32 = 16;
 /// Sine table size
@@ -658,7 +658,6 @@ impl SynthEngine {
         for voice in &mut self.voices {
             if voice.active && voice.note == note {
                 voice.note_off();
-                break;
             }
         }
     }

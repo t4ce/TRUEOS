@@ -1728,9 +1728,13 @@ pub async fn esp_piano_udp_task() {
                     }
                     v::vnet::Event::UdpPacket { handle, from, data } => {
                         let handled = piano.on_packet(handle, data.as_slice(), |event| {
-                            let duration_ms = 45 + (u32::from(event.velocity) * 140 / 127);
+                            let kind = match event.kind {
+                                trueos_esp::piano::PianoNoteEventKind::Down => "down",
+                                trueos_esp::piano::PianoNoteEventKind::Up => "up",
+                            };
                             crate::log!(
-                                "esp-piano: note key={} note={} velocity={} delta={} from={}.{}.{}.{}\n",
+                                "esp-piano: note {} key={} note={} velocity={} delta={} from={}.{}.{}.{}\n",
+                                kind,
                                 event.key_index,
                                 event.note,
                                 event.velocity,
@@ -1740,10 +1744,14 @@ pub async fn esp_piano_udp_task() {
                                 from.addr[2],
                                 from.addr[3]
                             );
-                            if let Err(err) =
-                                crate::aud::play_midi_note(event.note, event.velocity, duration_ms)
-                            {
-                                crate::log!("esp-piano: note play err={}\n", err);
+
+                            match event.kind {
+                                trueos_esp::piano::PianoNoteEventKind::Down => {
+                                    crate::aud::live_piano::note_on(event.note, event.velocity);
+                                }
+                                trueos_esp::piano::PianoNoteEventKind::Up => {
+                                    crate::aud::live_piano::note_off(event.note);
+                                }
                             }
                         });
                         if !handled {

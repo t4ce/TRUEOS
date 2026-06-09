@@ -8,10 +8,10 @@ In Truesurfer:
 - Lightning CSS enrichment of the document and DOM subset
 - Pipeline channel handoff to Yoga for layout enrichment
 
-In UI2:
-- N-window compositor-pattern UI that can already render the minimal demo
+Hosted UI:
+- N-window compositor-pattern UI fed by TrueSurfer's DOM-derived widget tree
 - Conceptually the full bridge is in place: acquired HTML can flow through parse,
-  enrichment, layout, and minimal hosted composition for visual feedback
+  enrichment, layout, and hosted composition for visual feedback
 */
 
 const root = globalThis;
@@ -27,7 +27,6 @@ const TRUESURFER_FALLBACK_IMAGE_SIZE_PX = 96;
 let truesurferSubsetProfile = null;
 let extractDocumentArtifactsFn = null;
 let createBrowserAssetManagerFn = null;
-let buildTextWidgetSceneFn = null;
 let browserAssetManager = null;
 let currentNavigationUrl = '';
 let currentBaseGadgetSnapshot = { version: 1, gadgets: [] };
@@ -254,43 +253,34 @@ async function warmBrowserPipelineModules() {
     './truesurfer_extract.mjs',
     './truesurfer_assets.mjs',
     './css.mjs',
-    './text_widget_scene.mjs',
   ];
   for (let index = 0; index < imports.length; index += 1) {
     await helpers.prefetch(imports[index]);
   }
 
-  const [extractMod, assetsMod, cssMod, textWidgetMod] = await Promise.all([
+  const [extractMod, assetsMod, cssMod] = await Promise.all([
     helpers.import('./truesurfer_extract.mjs'),
     helpers.import('./truesurfer_assets.mjs'),
     helpers.import('./css.mjs'),
-    helpers.import('./text_widget_scene.mjs'),
   ]);
 
   const extractReady = !!extractMod && typeof extractMod.extractDocumentArtifacts === 'function';
   const assetsReady = !!assetsMod && typeof assetsMod.createBrowserAssetManager === 'function';
   const cssReady = !!cssMod && typeof cssMod.extractCssSection === 'function';
-  const textWidgetReady =
-    !!textWidgetMod &&
-    (typeof textWidgetMod.buildTextWidgetScene === 'function' ||
-      typeof textWidgetMod.buildDemoTextWidgetScene === 'function');
-  if (!extractReady || !assetsReady || !cssReady || !textWidgetReady) {
+  if (!extractReady || !assetsReady || !cssReady) {
     throw new Error(
-      `browser pipeline warmup incomplete extract_ready=${extractReady ? 1 : 0} assets_ready=${assetsReady ? 1 : 0} css_ready=${cssReady ? 1 : 0} text_widget_ready=${textWidgetReady ? 1 : 0}`,
+      `browser pipeline warmup incomplete extract_ready=${extractReady ? 1 : 0} assets_ready=${assetsReady ? 1 : 0} css_ready=${cssReady ? 1 : 0}`,
     );
   }
 
   truesurferSubsetProfile = extractMod.TRUESURFER_SUBSET_PROFILE || null;
   extractDocumentArtifactsFn = extractMod.extractDocumentArtifacts;
   createBrowserAssetManagerFn = assetsMod.createBrowserAssetManager;
-  buildTextWidgetSceneFn = textWidgetMod.buildTextWidgetScene || textWidgetMod.buildDemoTextWidgetScene;
-  root.__trueosBuildTextWidgetScene = buildTextWidgetSceneFn;
-  root.__trueosBuildDemoTextWidgetScene = buildTextWidgetSceneFn;
   root.__trueosTruesurferModules = {
     extractReady: 1,
     assetsReady: 1,
     cssReady: 1,
-    textWidgetReady: 1,
+    textWidgetReady: 0,
   };
 }
 
@@ -348,6 +338,7 @@ function setHtml(nextHtml, meta) {
   }
 
   if (typeof extractDocumentArtifactsFn !== 'function') {
+    root.__TRUEOS_WIDGET_RENDER_TREE__ = null;
     return {
       ok: 0,
       bytes: html.length,
@@ -373,6 +364,7 @@ function setHtml(nextHtml, meta) {
       bodyBytes: parsed.bodyBytes,
       bodyHierarchy: parsed.bodyHierarchy,
       bodyHierarchySummary: parsed.bodyHierarchySummary,
+      widgetRenderTree: parsed.widgetRenderTree,
       gadgetSnapshot: currentBaseGadgetSnapshot,
       ui3Scene: parsed.ui3Scene,
       styleCount: parsed.styleCount,
@@ -383,6 +375,7 @@ function setHtml(nextHtml, meta) {
       scriptCount: parsed.scriptCount,
       scriptBytes: parsed.scriptBytes,
     };
+    root.__TRUEOS_WIDGET_RENDER_TREE__ = parsed.widgetRenderTree;
     const composedGadgetSnapshot = publishLatestArtifactsSnapshot() || composeCurrentGadgetSnapshot();
     const imageSummary = assetManager
       ? assetManager.summarizeImageUrls(currentSceneImageUrls)
@@ -403,6 +396,7 @@ function setHtml(nextHtml, meta) {
       faviconUrl: resolveNavigationUrl(url, parsed.faviconHref),
       shellBytes: parsed.shellBytes,
       bodyBytes: parsed.bodyBytes,
+      widgetRenderTree: parsed.widgetRenderTree,
       gadgetSnapshot: composedGadgetSnapshot,
       ui3Scene: parsed.ui3Scene,
       styleCount: parsed.styleCount,
@@ -417,6 +411,7 @@ function setHtml(nextHtml, meta) {
     const message =
       error && error.stack ? String(error.stack) : error ? String(error) : 'unknown minimal extract error';
     log(`[truesurfer extract] browser=${browserId} fail error=${message}`);
+    root.__TRUEOS_WIDGET_RENDER_TREE__ = null;
     return {
       ok: 0,
       bytes: html.length,

@@ -54,6 +54,7 @@ pub enum Ui3PointerEventKind {
     PointerOut,
     PointerUpOutside,
     ContextMenu,
+    Wheel,
     Unknown,
 }
 
@@ -135,6 +136,10 @@ pub enum Ui3Command {
     SetMask {
         node: Ui3NodeId,
         mask: Option<Ui3NodeId>,
+    },
+    SetHitArea {
+        node: Ui3NodeId,
+        rect: Option<Ui3Rect>,
     },
     Listen {
         node: Ui3NodeId,
@@ -224,6 +229,7 @@ pub struct Ui3Node {
     pub visible: bool,
     pub alpha: f32,
     pub mask: Option<Ui3NodeId>,
+    pub hit_area: Option<Ui3Rect>,
     pub children: Vec<Ui3NodeId>,
     pub listeners: Vec<Ui3PointerEventKind>,
     pub graphics: Vec<Ui3GraphicsOp>,
@@ -244,6 +250,7 @@ impl Ui3Node {
             visible: true,
             alpha: 1.0,
             mask: None,
+            hit_area: None,
             children: Vec::new(),
             listeners: Vec::new(),
             graphics: Vec::new(),
@@ -366,7 +373,18 @@ pub unsafe extern "C" fn trueos_cabi_ui3_pixi_op(
                 params: Vec::from([Ui3TextParam::Fill(ui3_scene_color(a.max(0.0) as u32, b))]),
             },
         ),
-        29 => 0,
+        29 => pixi_service::queue_scene_command(
+            browser_id,
+            Ui3Command::SetHitArea {
+                node,
+                rect: (c > 0.0 && d > 0.0).then_some(Ui3Rect {
+                    x: a,
+                    y: b,
+                    w: c,
+                    h: d,
+                }),
+            },
+        ),
         10 => pixi_service::queue_scene_command(
             browser_id,
             Ui3Command::AddChildAt {
@@ -470,7 +488,8 @@ pub unsafe extern "C" fn trueos_cabi_ui3_pixi_op(
         ),
         25 => pixi_service::queue_scene_command(browser_id, Ui3Command::GraphicsClosePath { node }),
         21 => {
-            let rc = pixi_service::queue_scene_command(browser_id, Ui3Command::Render { root: node });
+            let rc =
+                pixi_service::queue_scene_command(browser_id, Ui3Command::Render { root: node });
             if rc >= 0 {
                 let _ = pixi_service::flush_service_queue(8192);
             }

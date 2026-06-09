@@ -176,24 +176,24 @@ fn node_kind_code(kind: &Ui3NodeKind) -> u32 {
 }
 
 fn local_node_bounds(node: &Ui3Node) -> Option<Ui3Rect> {
+    let mut rect = node.hit_area;
     if let Some(rect) = graphics_bounds(&node.graphics) {
-        return Some(rect);
+        return union_optional_rect(node.hit_area, rect);
     }
     if !node.text.is_empty() {
         let w = (node.text.len() as f32 * 9.0).max(1.0);
-        return Some(Ui3Rect {
-            x: 0.0,
-            y: 0.0,
-            w,
-            h: 16.0,
-        });
+        rect = union_optional_rect(
+            rect,
+            Ui3Rect {
+                x: 0.0,
+                y: 0.0,
+                w,
+                h: 16.0,
+            },
+        );
     }
 
-    match node.kind {
-        Ui3NodeKind::Graphics => graphics_bounds(&node.graphics),
-        Ui3NodeKind::Text => None,
-        _ => None,
-    }
+    rect
 }
 
 fn graphics_bounds(ops: &[Ui3GraphicsOp]) -> Option<Ui3Rect> {
