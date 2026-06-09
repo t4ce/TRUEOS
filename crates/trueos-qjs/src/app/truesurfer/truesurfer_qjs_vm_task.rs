@@ -1297,8 +1297,10 @@ G.__trueosParse5BuildSceneFromCapture = function () {
     }
   }
   var hasSnapshot = !!snapshot;
+  var snapshotDiag = __trueosSnapshotDiag(snapshot, 0, { nodes: 0, text: 0, renderableText: 0, nonArrayChildren: 0, maxDepth: 0, samples: [] });
+  var snapshotRenderableText = snapshotDiag && snapshotDiag.renderableText ? snapshotDiag.renderableText : 0;
   if (G.console && typeof G.console.log === "function") {
-    var diag = __trueosSnapshotDiag(snapshot, 0, { nodes: 0, text: 0, renderableText: 0, nonArrayChildren: 0, maxDepth: 0, samples: [] });
+    var diag = snapshotDiag;
     var textSetAll = 0;
     var textSetReplay = 0;
     var textSetRenderable = 0;
@@ -1539,29 +1541,32 @@ G.__trueosParse5BuildSceneFromCapture = function () {
       }
   }
   if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=replay done final_text=" + finalTextOrder.length + " ops=" + ops.length + " text_seen=" + replayTextSeen + " listeners_skipped=" + replayListenersSkipped + " state=" + replayStateSeen + " skipped_snapshot_commands=" + replaySkippedSnapshotCommands);
-  if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=final-text begin count=" + finalTextOrder.length);
-  for (var ti = 0; ti < finalTextOrder.length; ti += 1) {
-    var finalId = finalTextOrder[ti] | 0;
-    var finalText = finalTextById[finalId];
-    finalText = __trueosRepairCapturedText(finalText);
-    if (!finalText || !__trueosTextHasInk(finalText)) continue;
-    var finalTextNode = __trueosMappedTextNode(finalId, true, !!snapshotSeen[finalId]);
-    var worldText = hasSnapshot ? snapshotTextWorld[finalId] : null;
-    if (worldText) {
-      finalTextNode = 800000 + finalId;
-      ops.push({ code: 1, node: finalTextNode, a: 2 });
-      if (rootId > 0) ops.push({ code: 2, node: rootId, a: finalTextNode });
-      ops.push({ code: 3, node: finalTextNode, a: __trueosNum(worldText.x, 0), b: __trueosNum(worldText.y, 0) });
-    } else {
-      __trueosDeclareTextNode(finalTextNode);
+  var finalTextOverlayEnabled = !(hasSnapshot && snapshotRenderableText > 0);
+  if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=final-text begin count=" + finalTextOrder.length + " overlay_enabled=" + (finalTextOverlayEnabled ? 1 : 0) + " snapshot_renderable_text=" + snapshotRenderableText);
+  if (finalTextOverlayEnabled) {
+    for (var ti = 0; ti < finalTextOrder.length; ti += 1) {
+      var finalId = finalTextOrder[ti] | 0;
+      var finalText = finalTextById[finalId];
+      finalText = __trueosRepairCapturedText(finalText);
+      if (!finalText || !__trueosTextHasInk(finalText)) continue;
+      var finalTextNode = __trueosMappedTextNode(finalId, true, !!snapshotSeen[finalId]);
+      var worldText = hasSnapshot ? snapshotTextWorld[finalId] : null;
+      if (worldText) {
+        finalTextNode = 800000 + finalId;
+        ops.push({ code: 1, node: finalTextNode, a: 2 });
+        if (rootId > 0) ops.push({ code: 2, node: rootId, a: finalTextNode });
+        ops.push({ code: 3, node: finalTextNode, a: __trueosNum(worldText.x, 0), b: __trueosNum(worldText.y, 0) });
+      } else {
+        __trueosDeclareTextNode(finalTextNode);
+      }
+      if (typeof pendingTextFill[finalId] === "number") {
+        ops.push({ code: 9, node: finalTextNode, a: pendingTextFill[finalId], b: 1 });
+        textHasFill[finalTextNode] = true;
+      }
+      if (!textHasFill[finalTextNode]) ops.push({ code: 9, node: finalTextNode, a: 0x111111, b: 1 });
+      ops.push({ code: 8, node: finalTextNode, text: finalText });
+      replayTextEmitted += 1;
     }
-    if (typeof pendingTextFill[finalId] === "number") {
-      ops.push({ code: 9, node: finalTextNode, a: pendingTextFill[finalId], b: 1 });
-      textHasFill[finalTextNode] = true;
-    }
-    if (!textHasFill[finalTextNode]) ops.push({ code: 9, node: finalTextNode, a: 0x111111, b: 1 });
-    ops.push({ code: 8, node: finalTextNode, text: finalText });
-    replayTextEmitted += 1;
   }
   if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=final-text done emitted=" + replayTextEmitted + " ops=" + ops.length);
   var flatTextOverlays = G.__TRUEOS_PIXI_LAYOUT_TEXT_OVERLAYS__;
@@ -1858,6 +1863,7 @@ static TRUESURFER_UI3_KEYBOARD_QUEUE_LOGS: AtomicU32 = AtomicU32::new(0);
 
 const TRUESURFER_UI3_POINTER_QUEUE_DEPTH: usize = 256;
 const TRUESURFER_UI3_POINTER_FRESH_INPUT_DEPTH: usize = 64;
+const TRUESURFER_UI3_POINTER_DISPATCH_BUDGET: u32 = TRUESURFER_UI3_POINTER_FRESH_INPUT_DEPTH as u32;
 const TRUESURFER_UI3_KEYBOARD_QUEUE_DEPTH: usize = 256;
 
 fn html_handoff_queues() -> &'static Vec<BrowserHtmlQueue> {
@@ -2106,14 +2112,22 @@ fn queue_ui3_pointer_event_for_browser_inner(
     let depth = {
         let mut guard = queue.queue.lock();
         let is_motion = kind == "pointermove" && wheel_delta_y == 0;
+        let is_transient_pointer = |event: &QueuedUi3PointerEvent| {
+            event.wheel_delta_y == 0
+                && (event.kind == "pointermove"
+                    || event.kind == "pointerover"
+                    || event.kind == "pointerout")
+        };
         if is_motion {
             guard.retain(|event| {
                 !(event.kind == "pointermove"
                     && event.wheel_delta_y == 0
                     && event.pointer_id == pointer_id)
             });
+        } else if wheel_delta_y != 0 {
+            guard.retain(|event| !is_transient_pointer(event));
         } else if guard.len() >= TRUESURFER_UI3_POINTER_FRESH_INPUT_DEPTH {
-            guard.retain(|event| !(event.kind == "pointermove" && event.wheel_delta_y == 0));
+            guard.retain(|event| !is_transient_pointer(event));
             while guard.len() >= TRUESURFER_UI3_POINTER_FRESH_INPUT_DEPTH {
                 guard.pop_front();
             }
@@ -2875,6 +2889,17 @@ fn collect_trueos_html_text_rows(html: &str) -> Vec<String> {
     rows
 }
 
+fn collect_trueos_text_rows_from_lines(text: &str) -> Vec<String> {
+    let mut rows = Vec::new();
+    for row in text.lines() {
+        push_trueos_html_text_row(&mut rows, row);
+        if rows.len() >= 512 {
+            break;
+        }
+    }
+    rows
+}
+
 fn push_json_escaped_string(out: &mut String, value: &str) {
     for ch in value.chars() {
         match ch {
@@ -3525,27 +3550,29 @@ unsafe fn submit_parse5_trueos_pixi_scene(
     let host_ms = now_ms().saturating_sub(host_start_ms);
     set_global_string(ctx, TRUESURFER_TRUEOS_INPUT_HTML_PROP, html);
     let rust_text_rows = collect_trueos_html_text_rows(html);
+    let published_text_rows = collect_trueos_text_rows_from_lines(widget_text_rows_text);
+    let repair_text_rows = if published_text_rows.is_empty() {
+        rust_text_rows.as_slice()
+    } else {
+        published_text_rows.as_slice()
+    };
     let repaired_widget_render_tree_json =
-        replace_widget_tree_json_text_rows(widget_render_tree_json, rust_text_rows.as_slice());
+        replace_widget_tree_json_text_rows(widget_render_tree_json, repair_text_rows);
     set_global_string(
         ctx,
         TRUESURFER_TRUEOS_WIDGET_RENDER_TREE_JSON_PROP,
         repaired_widget_render_tree_json.as_str(),
     );
-    let text_rows_text = if widget_text_rows_text.trim().is_empty() {
-        rust_text_rows.join("\n")
-    } else {
-        String::from(widget_text_rows_text)
-    };
+    let text_rows_text = repair_text_rows.join("\n");
     set_global_string(ctx, TRUESURFER_TRUEOS_WIDGET_TEXT_ROWS_TEXT_PROP, text_rows_text.as_str());
     set_global_string_array(
         ctx,
         TRUESURFER_TRUEOS_WIDGET_TEXT_ROWS_PROP,
-        rust_text_rows.as_slice(),
+        repair_text_rows,
     );
     let input_html_after_set = read_global_string(ctx, TRUESURFER_TRUEOS_INPUT_HTML_PROP);
     let mut text_row_samples = String::new();
-    for (idx, row) in rust_text_rows.iter().take(8).enumerate() {
+    for (idx, row) in repair_text_rows.iter().take(8).enumerate() {
         if !text_row_samples.is_empty() {
             text_row_samples.push('|');
         }
@@ -3554,7 +3581,7 @@ unsafe fn submit_parse5_trueos_pixi_scene(
         text_row_samples.push('"');
     }
     log_line(format!(
-        "qjs-truesurfer[{}]: parse5 trueos host ok chunks={} html_bytes={} host_ms={} input_global_bytes={} input_global_sample=\"{}\" tree_json_bytes={} repaired_tree_json_bytes={} tree_text_fields={} rust_text_rows={} text_rows_text_bytes={} samples={}\n",
+        "qjs-truesurfer[{}]: parse5 trueos host ok chunks={} html_bytes={} host_ms={} input_global_bytes={} input_global_sample=\"{}\" tree_json_bytes={} repaired_tree_json_bytes={} tree_text_fields={} rust_text_rows={} published_text_rows={} repair_text_rows={} text_rows_text_bytes={} samples={}\n",
         browser_instance_id,
         host_chunks.len(),
         html.len(),
@@ -3565,6 +3592,8 @@ unsafe fn submit_parse5_trueos_pixi_scene(
         repaired_widget_render_tree_json.len(),
         count_widget_tree_json_text_fields(repaired_widget_render_tree_json.as_str()),
         rust_text_rows.len(),
+        published_text_rows.len(),
+        repair_text_rows.len(),
         text_rows_text.len(),
         if text_row_samples.is_empty() {
             "none"
@@ -3917,7 +3946,7 @@ unsafe fn dispatch_queued_ui3_pointer_events(
     let mut needs_rebuild = false;
     let mut rebuilt = false;
 
-    while dispatched < 32 {
+    while dispatched < TRUESURFER_UI3_POINTER_DISPATCH_BUDGET {
         let Some(event) = take_queued_ui3_pointer_event_for_browser(browser_instance_id) else {
             break;
         };
