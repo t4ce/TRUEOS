@@ -143,6 +143,26 @@ function findTagClose(source, openStart) {
   return -1;
 }
 
+function findClosingTagOutsideQuotes(source, tagName, startIndex) {
+  const html = safeString(source);
+  const lower = html.toLowerCase();
+  const needle = `</${safeString(tagName).toLowerCase()}>`;
+  let inQuote = '';
+  for (let index = Math.max(0, Number(startIndex) || 0); index < html.length; index += 1) {
+    const ch = html[index];
+    if (inQuote) {
+      if (ch === inQuote) inQuote = '';
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      inQuote = ch;
+      continue;
+    }
+    if (lower.startsWith(needle, index)) return index;
+  }
+  return -1;
+}
+
 function extractTagBlock(source, tagName) {
   const html = safeString(source);
   const lower = html.toLowerCase();
@@ -155,7 +175,7 @@ function extractTagBlock(source, tagName) {
     return null;
   }
   const closeNeedle = `</${tagName}>`;
-  const closeStart = lower.indexOf(closeNeedle, openEnd + 1);
+  const closeStart = findClosingTagOutsideQuotes(html, tagName, openEnd + 1);
   if (closeStart < 0) {
     return {
       openTag: html.slice(openStart, openEnd + 1),

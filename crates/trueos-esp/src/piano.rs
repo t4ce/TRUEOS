@@ -10,6 +10,11 @@ pub const PIANO_MASK_BYTES: usize = PIANO_KEY_COUNT / 8;
 pub const PIANO_DELTA_BYTES: usize = PIANO_KEY_COUNT * 2;
 pub const PIANO_FRAME_LEN: usize = 14 + PIANO_MASK_BYTES + PIANO_DELTA_BYTES;
 pub const PIANO_STATE_FRAME_LEN: usize = 14 + PIANO_MASK_BYTES;
+const PIANO_ATTACK_FULL_RISE_DELTA: i16 = 48;
+const PIANO_ATTACK_BONUS_MAX: u8 = 10;
+const PIANO_DELTA_NOISE_FLOOR: i16 = 8;
+const PIANO_DELTA_ACTIVE_MIN: i16 = 12;
+const PIANO_DELTA_VELOCITY_MAX: i16 = 100;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PianoFrame {
@@ -40,6 +45,7 @@ pub struct PianoNoteEvent {
 pub struct PianoUdpReceiver {
     udp_handle: Option<api::NetHandle>,
     prev_mask: [u8; PIANO_MASK_BYTES],
+    prev_deltas: [i16; PIANO_KEY_COUNT],
 }
 
 impl Default for PianoUdpReceiver {
@@ -53,6 +59,7 @@ impl PianoUdpReceiver {
         Self {
             udp_handle: None,
             prev_mask: [0; PIANO_MASK_BYTES],
+            prev_deltas: [0; PIANO_KEY_COUNT],
         }
     }
 
@@ -69,6 +76,7 @@ impl PianoUdpReceiver {
     pub fn bind(&mut self, handle: api::NetHandle) {
         self.udp_handle = Some(handle);
         self.prev_mask = [0; PIANO_MASK_BYTES];
+        self.prev_deltas = [0; PIANO_KEY_COUNT];
     }
 
     pub fn unbind(&mut self, handle: api::NetHandle) -> bool {
@@ -77,6 +85,7 @@ impl PianoUdpReceiver {
         }
         self.udp_handle = None;
         self.prev_mask = [0; PIANO_MASK_BYTES];
+        self.prev_deltas = [0; PIANO_KEY_COUNT];
         true
     }
 
@@ -92,11 +101,21 @@ impl PianoUdpReceiver {
             return false;
         };
 
+        let mut active_mask = [0u8; PIANO_MASK_BYTES];
         for key_index in 0..PIANO_KEY_COUNT {
-            let now_down = mask_bit(&frame.touch_mask, key_index);
             let was_down = mask_bit(&self.prev_mask, key_index);
+            let delta = frame.deltas[key_index];
+            let now_down = key_active(&frame.touch_mask, key_index, delta, was_down);
+            if now_down {
+                set_mask_bit(&mut active_mask, key_index);
+            }
             if now_down != was_down {
                 let note = frame.base_note.saturating_add(key_index as u8);
+                let velocity = if now_down {
+                    delta_to_velocity_with_attack(delta, self.prev_deltas[key_index])
+                } else {
+                    delta_to_velocity(delta)
+                };
                 on_note_event(PianoNoteEvent {
                     kind: if now_down {
                         PianoNoteEventKind::Down
@@ -105,13 +124,14 @@ impl PianoUdpReceiver {
                     },
                     key_index: key_index as u8,
                     note,
-                    delta: frame.deltas[key_index],
-                    velocity: delta_to_velocity(frame.deltas[key_index]),
+                    delta,
+                    velocity,
                 });
             }
         }
 
-        self.prev_mask = frame.touch_mask;
+        self.prev_mask = active_mask;
+        self.prev_deltas = frame.deltas;
         true
     }
 }
@@ -188,6 +208,8 @@ fn parse_text_piano_frame(data: &[u8]) -> Option<PianoFrame> {
     let mut seq = 0u16;
     let mut mask = 0u128;
     let mut saw_mask = false;
+    let mut deltas = [0i16; PIANO_KEY_COUNT];
+    let mut saw_deltas = false;
 
     for part in parts {
         let Some((key, value)) = part.split_once('=') else {
@@ -200,6 +222,10 @@ fn parse_text_piano_frame(data: &[u8]) -> Option<PianoFrame> {
             "mask" => {
                 mask = parse_mask_token(value)?;
                 saw_mask = true;
+            }
+            "deltas" => {
+                parse_deltas_token(value, &mut deltas)?;
+                saw_deltas = true;
             }
             _ => {}
         }
@@ -214,10 +240,11 @@ fn parse_text_piano_frame(data: &[u8]) -> Option<PianoFrame> {
         *byte = ((mask >> (idx * 8)) & 0xFF) as u8;
     }
 
-    let mut deltas = [0i16; PIANO_KEY_COUNT];
-    for (idx, delta) in deltas.iter_mut().enumerate() {
-        if mask_bit(&touch_mask, idx) {
-            *delta = 64;
+    if !saw_deltas {
+        for (idx, delta) in deltas.iter_mut().enumerate() {
+            if mask_bit(&touch_mask, idx) {
+                *delta = 64;
+            }
         }
     }
 
@@ -255,15 +282,82 @@ fn parse_mask_token(value: &str) -> Option<u128> {
     }
 }
 
+fn parse_i16_token(value: &str) -> Option<i16> {
+    let parsed = if let Some(hex) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
+        i32::from_str_radix(hex, 16).ok()?
+    } else {
+        i32::from_str_radix(value, 10).ok()?
+    };
+    Some(parsed.clamp(i16::MIN as i32, i16::MAX as i32) as i16)
+}
+
+fn parse_deltas_token(value: &str, deltas: &mut [i16; PIANO_KEY_COUNT]) -> Option<()> {
+    for (idx, token) in value.split(',').enumerate() {
+        if idx >= PIANO_KEY_COUNT {
+            return None;
+        }
+        if token.is_empty() {
+            return None;
+        }
+        deltas[idx] = parse_i16_token(token)?;
+    }
+    Some(())
+}
+
 #[inline]
 fn mask_bit(mask: &[u8; PIANO_MASK_BYTES], key_index: usize) -> bool {
     (mask[key_index / 8] & (1 << (key_index % 8))) != 0
 }
 
+#[inline]
+fn set_mask_bit(mask: &mut [u8; PIANO_MASK_BYTES], key_index: usize) {
+    mask[key_index / 8] |= 1 << (key_index % 8);
+}
+
+fn key_active(
+    touch_mask: &[u8; PIANO_MASK_BYTES],
+    key_index: usize,
+    delta: i16,
+    was_active: bool,
+) -> bool {
+    if !mask_bit(touch_mask, key_index) {
+        return false;
+    }
+
+    if was_active {
+        delta > PIANO_DELTA_NOISE_FLOOR
+    } else {
+        delta >= PIANO_DELTA_ACTIVE_MIN
+    }
+}
+
 fn delta_to_velocity(delta: i16) -> u8 {
-    let delta = delta.max(0) as u16;
-    let scaled = 32 + (delta.min(96) * 95 / 96);
-    scaled.min(127) as u8
+    if delta <= PIANO_DELTA_NOISE_FLOOR {
+        return 0;
+    }
+
+    let delta = delta.clamp(PIANO_DELTA_ACTIVE_MIN, PIANO_DELTA_VELOCITY_MAX) as u16;
+    let min = PIANO_DELTA_ACTIVE_MIN as u16;
+    let max = PIANO_DELTA_VELOCITY_MAX as u16;
+    let span = max - min;
+    let pos = delta.saturating_sub(min);
+
+    let linear_q8 = pos * 255 / span;
+    let square_q8 = linear_q8 * linear_q8 / 255;
+    let curve_q8 = (linear_q8 + square_q8) / 2;
+    1 + (curve_q8 * 126 / 255) as u8
+}
+
+fn delta_to_velocity_with_attack(delta: i16, prev_delta: i16) -> u8 {
+    let pressure_velocity = delta_to_velocity(delta);
+    let rise = delta.saturating_sub(prev_delta).max(0);
+    let attack_bonus = (rise.min(PIANO_ATTACK_FULL_RISE_DELTA) as u16
+        * PIANO_ATTACK_BONUS_MAX as u16
+        / PIANO_ATTACK_FULL_RISE_DELTA as u16) as u8;
+    pressure_velocity.saturating_add(attack_bonus).min(127)
 }
 
 #[cfg(test)]
@@ -296,7 +390,7 @@ mod tests {
                 key_index: 1,
                 note: 25,
                 delta: 64,
-                velocity: 95,
+                velocity: 69,
             })
         );
 
@@ -313,7 +407,7 @@ mod tests {
                 key_index: 1,
                 note: 25,
                 delta: 64,
-                velocity: 95,
+                velocity: 59,
             })
         );
     }
@@ -346,5 +440,76 @@ mod tests {
         assert!(mask_bit(&frame.touch_mask, 0));
         assert!(mask_bit(&frame.touch_mask, 12));
         assert_eq!(frame.deltas[0], 64);
+    }
+
+    #[test]
+    fn parses_text_state_frame_with_deltas() {
+        let data =
+            b"piano seq=42 mask=0x000040 deltas=0,0,1,0,4,0,81,3,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,0";
+        let frame = parse_piano_frame(data).expect("text frame with deltas");
+        assert_eq!(frame.seq, 42);
+        assert!(mask_bit(&frame.touch_mask, 6));
+        assert_eq!(frame.deltas[6], 81);
+        assert_eq!(delta_to_velocity(frame.deltas[6]), 88);
+        assert_eq!(frame.deltas[24], 0);
+    }
+
+    #[test]
+    fn parses_text_state_frame_with_board_b_delta() {
+        let data =
+            b"piano seq=43 mask=0x080000 deltas=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,86,0,0,0,0";
+        let frame = parse_piano_frame(data).expect("board b text frame");
+        assert_eq!(frame.seq, 43);
+        assert!(mask_bit(&frame.touch_mask, 19));
+        assert_eq!(frame.deltas[19], 86);
+        assert_eq!(delta_to_velocity(frame.deltas[19]), 97);
+    }
+
+    #[test]
+    fn note_on_velocity_gets_gentle_attack_bonus() {
+        let mut rx = PianoUdpReceiver::new();
+        rx.bind(api::NetHandle(7));
+
+        let idle = b"piano seq=1 mask=0x000000 deltas=0,0,0,0,0,0,40";
+        let mut seen = None;
+        assert!(rx.on_packet(api::NetHandle(7), idle, |event| seen = Some(event)));
+        assert_eq!(seen, None);
+
+        let down = b"piano seq=2 mask=0x000040 deltas=0,0,0,0,0,0,45";
+        assert!(rx.on_packet(api::NetHandle(7), down, |event| seen = Some(event)));
+        assert_eq!(
+            seen,
+            Some(PianoNoteEvent {
+                kind: PianoNoteEventKind::Down,
+                key_index: 6,
+                note: 42,
+                delta: 45,
+                velocity: 34,
+            })
+        );
+    }
+
+    #[test]
+    fn held_delta_crossing_noise_floor_can_start_note() {
+        let mut rx = PianoUdpReceiver::new();
+        rx.bind(api::NetHandle(7));
+
+        let below_floor = b"piano seq=1 mask=0x000040 deltas=0,0,0,0,0,0,9";
+        let mut seen = None;
+        assert!(rx.on_packet(api::NetHandle(7), below_floor, |event| seen = Some(event)));
+        assert_eq!(seen, None);
+
+        let active = b"piano seq=2 mask=0x000040 deltas=0,0,0,0,0,0,45";
+        assert!(rx.on_packet(api::NetHandle(7), active, |event| seen = Some(event)));
+        assert_eq!(
+            seen,
+            Some(PianoNoteEvent {
+                kind: PianoNoteEventKind::Down,
+                key_index: 6,
+                note: 42,
+                delta: 45,
+                velocity: 40,
+            })
+        );
     }
 }

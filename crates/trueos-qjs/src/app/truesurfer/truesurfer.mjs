@@ -340,6 +340,8 @@ function setHtml(nextHtml, meta) {
   if (typeof extractDocumentArtifactsFn !== 'function') {
     root.__TRUEOS_WIDGET_RENDER_TREE__ = null;
     root.__TRUEOS_WIDGET_TEXT_ROWS__ = [];
+    root.__TRUEOS_WIDGET_RENDER_TREE_JSON__ = '';
+    root.__TRUEOS_WIDGET_TEXT_ROWS_TEXT__ = '';
     return {
       ok: 0,
       bytes: html.length,
@@ -379,6 +381,8 @@ function setHtml(nextHtml, meta) {
     };
     root.__TRUEOS_WIDGET_RENDER_TREE__ = parsed.widgetRenderTree;
     root.__TRUEOS_WIDGET_TEXT_ROWS__ = Array.isArray(parsed.widgetTextRows) ? parsed.widgetTextRows : [];
+    root.__TRUEOS_WIDGET_RENDER_TREE_JSON__ = JSON.stringify(parsed.widgetRenderTree || []);
+    root.__TRUEOS_WIDGET_TEXT_ROWS_TEXT__ = root.__TRUEOS_WIDGET_TEXT_ROWS__.join('\n');
     const composedGadgetSnapshot = publishLatestArtifactsSnapshot() || composeCurrentGadgetSnapshot();
     const imageSummary = assetManager
       ? assetManager.summarizeImageUrls(currentSceneImageUrls)
@@ -417,6 +421,8 @@ function setHtml(nextHtml, meta) {
     log(`[truesurfer extract] browser=${browserId} fail error=${message}`);
     root.__TRUEOS_WIDGET_RENDER_TREE__ = null;
     root.__TRUEOS_WIDGET_TEXT_ROWS__ = [];
+    root.__TRUEOS_WIDGET_RENDER_TREE_JSON__ = '';
+    root.__TRUEOS_WIDGET_TEXT_ROWS_TEXT__ = '';
     return {
       ok: 0,
       bytes: html.length,

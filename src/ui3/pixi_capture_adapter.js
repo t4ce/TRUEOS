@@ -77,11 +77,11 @@
         if (typeof arg === "string") {
             return arg;
         }
-        if (arg && typeof arg.text !== "undefined") {
-            return String(arg.text);
+        if (arg && typeof arg.text === "string") {
+            return arg.text;
         }
-        if (obj && typeof obj.text !== "undefined") {
-            return String(obj.text);
+        if (obj && typeof obj.text === "string") {
+            return obj.text;
         }
         return "";
     }
@@ -337,7 +337,7 @@
         emit("removeChildren", id(parent, "Container"));
     });
     patch(cp, "on", function (node, args) {
-        emit("listen", id(node, kindOf(node)), String(args[0] || ""));
+        emit("listen", id(node, kindOf(node)), typeof args[0] === "string" ? args[0] : "");
     });
     patch(cp, "removeAllListeners", function (node) {
         emit("removeAllListeners", id(node, kindOf(node)));
@@ -413,7 +413,7 @@
 
     var tp = pixi.Text && pixi.Text.prototype;
     patchGetterSetter(tp, "text", function (node, value) {
-        emit("text", id(node, "Text"), String(value == null ? "" : value));
+        emit("text", id(node, "Text"), typeof value === "string" ? value : "");
     });
     patchGetterSetter(tp, "style", function (node, value) {
         emit("textFill", id(node, "Text"), color(value && value.fill), alpha(value && value.fill));

@@ -154,7 +154,7 @@ const TRUESURFER_PIXI_COLLECTOR_SOURCE: &[u8] = br#"
       case "image": return push({ code: 22, node: node, a: num(arguments[2], 0), b: num(arguments[3], 0), c: num(arguments[4], 0), d: num(arguments[5], 0), text: String(num(arguments[6], 0)) });
       case "fill": return push({ code: 6, node: node, a: num(arguments[2], 0xffffff), b: num(arguments[3], 1) });
       case "stroke": return push({ code: 7, node: node, a: num(arguments[2], 0xffffff), b: num(arguments[3], 1), c: num(arguments[4], 1) });
-      case "text": return push({ code: 8, node: node, text: String(arguments[2] == null ? "" : arguments[2]) });
+      case "text": return push({ code: 8, node: node, text: typeof arguments[2] === "string" ? arguments[2] : "" });
       case "textFill": return push({ code: 9, node: node, a: num(arguments[2], 0xffffff), b: num(arguments[3], 1) });
       default: return ops.length;
     }
@@ -566,7 +566,7 @@ const TRUESURFER_PARSE5_VITE_HOST_SOURCE: &[u8] = br##"
         case "alpha": ops.push({ code: 23, node: id, a: num(args[0], 1) }); break;
         case "mask": ops.push({ code: 27, node: id, a: num(args[0], 0) }); break;
         case "text.text.set":
-          var textValue = String(args[0] == null ? "" : args[0]);
+          var textValue = typeof args[0] === "string" ? args[0] : "";
           var hasInk = textHasInk(textValue);
           if (hasSnapshot && !hasInk) break;
           var textNode = mappedTextNode(id, hasInk, wasSnapshotSeen);
@@ -1276,6 +1276,8 @@ G.__trueosParse5BuildSceneFromCapture = function () {
   var finalTextById = {};
   var finalTextQueued = {};
   var finalTextOrder = [];
+  var trustedTextRows = G.__TRUEOS_WIDGET_TEXT_ROWS__ && G.__TRUEOS_WIDGET_TEXT_ROWS__.length ? G.__TRUEOS_WIDGET_TEXT_ROWS__ : [];
+  var trustedTextRowIndex = 0;
   var replayTextEmitted = 0;
   var rootId = 0;
   var snapshot = null;
@@ -1330,6 +1332,24 @@ G.__trueosParse5BuildSceneFromCapture = function () {
     }
     seen[nodeId] = true;
   }
+  function __trueosNextTrustedTextRow() {
+    while (trustedTextRowIndex < trustedTextRows.length) {
+      var row = trustedTextRows[trustedTextRowIndex++];
+      if (typeof row !== "string" || !row) continue;
+      if (row.indexOf("<truesurfer-") === 0 || row.indexOf("__trueo") === 0) continue;
+      return row;
+    }
+    return "";
+  }
+  function __trueosRepairCapturedText(text) {
+    if (typeof text !== "string") text = "";
+    var sample = __trueosTrimStart(__trueosLogTextSample(text));
+    if (!text || sample.indexOf("<truesurfer-") === 0 || sample.indexOf("__trueo") === 0) {
+      var trusted = __trueosNextTrustedTextRow();
+      if (trusted) return trusted;
+    }
+    return text;
+  }
   var prepassStart = 0;
   if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=text-prepass begin commands=" + commands.length + " replay_start=" + replayStart + " mode=text-set-only");
   var preRawRenderable = 0;
@@ -1383,8 +1403,6 @@ G.__trueosParse5BuildSceneFromCapture = function () {
     }
     if (hasSnapshot) {
       if (
-        replayOp === "on" ||
-        replayOp === "removeAllListeners" ||
         replayOp === "addChild" ||
         replayOp === "addChildAt" ||
         replayOp === "setChildIndex" ||
@@ -1411,6 +1429,8 @@ G.__trueosParse5BuildSceneFromCapture = function () {
         replayOp !== "image" &&
         replayOp !== "text.text.set" &&
         replayOp !== "text.style.set" &&
+        replayOp !== "on" &&
+        replayOp !== "removeAllListeners" &&
         replayOp !== "visible" &&
         replayOp !== "alpha" &&
         replayOp !== "position" &&
@@ -1471,9 +1491,11 @@ G.__trueosParse5BuildSceneFromCapture = function () {
         if (!hasSnapshot && __trueosNum(args[0], 0) > 0) ops.push({ code: 12, node: id, a: __trueosNum(args[0], 0) });
         break;
       case "removeChildren": if (!hasSnapshot) ops.push({ code: 14, node: id }); break;
-      case "removeAllListeners": if (!hasSnapshot) ops.push({ code: 17, node: id }); break;
+      case "removeAllListeners":
+        ops.push({ code: 17, node: id });
+        break;
       case "on":
-        replayListenersSkipped += 1;
+        ops.push({ code: 16, node: id, a: __trueosPointerEventCode(args[0]) });
         break;
       case "visible":
         replayStateSeen += 1;
@@ -1521,6 +1543,7 @@ G.__trueosParse5BuildSceneFromCapture = function () {
   for (var ti = 0; ti < finalTextOrder.length; ti += 1) {
     var finalId = finalTextOrder[ti] | 0;
     var finalText = finalTextById[finalId];
+    finalText = __trueosRepairCapturedText(finalText);
     if (!finalText || !__trueosTextHasInk(finalText)) continue;
     var finalTextNode = __trueosMappedTextNode(finalId, true, !!snapshotSeen[finalId]);
     var worldText = hasSnapshot ? snapshotTextWorld[finalId] : null;
@@ -1622,6 +1645,10 @@ const TRUESURFER_RESULT_SCRIPT_COUNT_PROP: &[u8] = b"scriptCount\0";
 const TRUESURFER_RESULT_SCRIPT_BYTES_PROP: &[u8] = b"scriptBytes\0";
 const TRUESURFER_RESULT_ERROR_PROP: &[u8] = b"error\0";
 const TRUESURFER_TRUEOS_INPUT_HTML_PROP: &[u8] = b"__TRUEOS_INPUT_HTML__\0";
+const TRUESURFER_TRUEOS_WIDGET_TEXT_ROWS_PROP: &[u8] = b"__TRUEOS_WIDGET_TEXT_ROWS__\0";
+const TRUESURFER_TRUEOS_WIDGET_TEXT_ROWS_TEXT_PROP: &[u8] = b"__TRUEOS_WIDGET_TEXT_ROWS_TEXT__\0";
+const TRUESURFER_TRUEOS_WIDGET_RENDER_TREE_JSON_PROP: &[u8] =
+    b"__TRUEOS_WIDGET_RENDER_TREE_JSON__\0";
 const TRUESURFER_TRUEOS_PIXI_APP_READY_PROP: &[u8] = b"__TRUEOS_PIXI_APP_READY__\0";
 const TRUESURFER_TRUEOS_PIXI_APP_ERROR_PROP: &[u8] = b"__TRUEOS_PIXI_APP_ERROR__\0";
 const TRUESURFER_TRUEOS_PIXI_APP_PHASE_PROP: &[u8] = b"__TRUEOS_PIXI_APP_PHASE__\0";
@@ -2324,6 +2351,17 @@ unsafe fn set_global_string(ctx: *mut qjs::JSContext, key: &[u8], value: &str) {
     qjs::js_free_value(ctx, global);
 }
 
+unsafe fn set_global_string_array(ctx: *mut qjs::JSContext, key: &[u8], rows: &[String]) {
+    let global = qjs::JS_GetGlobalObject(ctx);
+    let arr = qjs::JS_NewArray(ctx);
+    for (idx, row) in rows.iter().enumerate() {
+        let value_js = qjs::JS_NewStringLen(ctx, row.as_ptr() as *const c_char, row.len());
+        let _ = qjs::JS_SetPropertyUint32(ctx, arr, idx as u32, value_js);
+    }
+    let _ = qjs::JS_SetPropertyStr(ctx, global, key.as_ptr() as *const c_char, arr);
+    qjs::js_free_value(ctx, global);
+}
+
 unsafe fn read_global_bool(ctx: *mut qjs::JSContext, key: &[u8]) -> bool {
     let global = qjs::JS_GetGlobalObject(ctx);
     let value = qjs::JS_GetPropertyStr(ctx, global, key.as_ptr() as *const c_char);
@@ -2671,6 +2709,233 @@ fn compact_log_text_sample(text: &str, max_chars: usize) -> String {
         out.push(mapped);
     }
     out
+}
+
+fn normalize_trueos_html_text_row(text: &str) -> String {
+    let mut out = String::new();
+    let mut previous_space = false;
+    let decoded = text
+        .replace("&nbsp;", " ")
+        .replace("&NBSP;", " ")
+        .replace("&quot;", "\"")
+        .replace("&QUOT;", "\"")
+        .replace("&#34;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&APOS;", "'")
+        .replace("&lt;", "<")
+        .replace("&LT;", "<")
+        .replace("&gt;", ">")
+        .replace("&GT;", ">")
+        .replace("&amp;", "&")
+        .replace("&AMP;", "&");
+    for ch in decoded.chars() {
+        if ch.is_whitespace() {
+            if !out.is_empty() && !previous_space {
+                out.push(' ');
+            }
+            previous_space = true;
+            continue;
+        }
+        previous_space = false;
+        out.push(ch);
+    }
+    while out.ends_with(' ') {
+        out.pop();
+    }
+    out
+}
+
+fn push_trueos_html_text_row(rows: &mut Vec<String>, text: &str) {
+    if rows.len() >= 512 {
+        return;
+    }
+    let row = normalize_trueos_html_text_row(text);
+    if row.is_empty() || row.starts_with("<truesurfer-") || row.starts_with("__trueo") {
+        return;
+    }
+    rows.push(row);
+}
+
+fn find_trueos_html_tag_close(html: &str, open_start: usize) -> Option<usize> {
+    let bytes = html.as_bytes();
+    let mut quote = 0u8;
+    let mut index = open_start.min(bytes.len());
+    while index < bytes.len() {
+        let ch = bytes[index];
+        if quote != 0 {
+            if ch == quote {
+                quote = 0;
+            }
+            index = index.saturating_add(1);
+            continue;
+        }
+        if ch == b'"' || ch == b'\'' {
+            quote = ch;
+            index = index.saturating_add(1);
+            continue;
+        }
+        if ch == b'>' {
+            return Some(index);
+        }
+        index = index.saturating_add(1);
+    }
+    None
+}
+
+fn find_trueos_html_close_tag_outside_quotes(lower: &str, tag_name: &str, start: usize) -> Option<usize> {
+    let needle = {
+        let mut s = String::with_capacity(tag_name.len().saturating_add(3));
+        s.push_str("</");
+        s.push_str(tag_name);
+        s.push('>');
+        s
+    };
+    let bytes = lower.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    let mut quote = 0u8;
+    let mut index = start.min(bytes.len());
+    while index < bytes.len() {
+        let ch = bytes[index];
+        if quote != 0 {
+            if ch == quote {
+                quote = 0;
+            }
+            index = index.saturating_add(1);
+            continue;
+        }
+        if ch == b'"' || ch == b'\'' {
+            quote = ch;
+            index = index.saturating_add(1);
+            continue;
+        }
+        if index.saturating_add(needle_bytes.len()) <= bytes.len()
+            && &bytes[index..index.saturating_add(needle_bytes.len())] == needle_bytes
+        {
+            return Some(index);
+        }
+        index = index.saturating_add(1);
+    }
+    None
+}
+
+fn collect_trueos_html_text_rows(html: &str) -> Vec<String> {
+    let lower = html.to_ascii_lowercase();
+    let mut start = 0usize;
+    if let Some(body_idx) = lower.find("<body") {
+        if let Some(open_end) = find_trueos_html_tag_close(html, body_idx) {
+            start = open_end.saturating_add(1);
+        }
+    }
+    let stop = find_trueos_html_close_tag_outside_quotes(lower.as_str(), "body", start)
+        .unwrap_or(html.len());
+    let source = &html[start..stop];
+    let source_lower = source.to_ascii_lowercase();
+    let mut rows = Vec::new();
+    let mut text = String::new();
+    let mut index = 0usize;
+    while index < source.len() && rows.len() < 512 {
+        let rest = &source[index..];
+        if rest.as_bytes().first().copied() == Some(b'<') {
+            push_trueos_html_text_row(&mut rows, text.as_str());
+            text.clear();
+            let Some(tag_end_abs) = find_trueos_html_tag_close(source, index) else {
+                break;
+            };
+            let tag_end = tag_end_abs.saturating_add(1);
+            let tag_lower = &source_lower[index..tag_end];
+            if tag_lower.starts_with("<script")
+                || tag_lower.starts_with("<style")
+                || tag_lower.starts_with("<template")
+            {
+                let close_tag = if tag_lower.starts_with("<script") {
+                    "</script>"
+                } else if tag_lower.starts_with("<style") {
+                    "</style>"
+                } else {
+                    "</template>"
+                };
+                if let Some(close_rel) = source_lower[tag_end..].find(close_tag) {
+                    index = tag_end
+                        .saturating_add(close_rel)
+                        .saturating_add(close_tag.len());
+                    continue;
+                }
+            }
+            index = tag_end;
+            continue;
+        }
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
+        text.push(ch);
+        index = index.saturating_add(ch.len_utf8());
+    }
+    push_trueos_html_text_row(&mut rows, text.as_str());
+    rows
+}
+
+fn push_json_escaped_string(out: &mut String, value: &str) {
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch if ch < ' ' => {
+                let _ = core::fmt::Write::write_fmt(out, format_args!("\\u{:04x}", ch as u32));
+            }
+            _ => out.push(ch),
+        }
+    }
+}
+
+fn replace_widget_tree_json_text_rows(json: &str, rows: &[String]) -> String {
+    const NEEDLE: &str = "\"text\":\"";
+    if json.is_empty() || rows.is_empty() {
+        return String::from(json);
+    }
+    let mut out = String::with_capacity(json.len().saturating_add(rows.len() * 16));
+    let mut cursor = 0usize;
+    let mut row_index = 0usize;
+    while cursor < json.len() {
+        let Some(rel) = json[cursor..].find(NEEDLE) else {
+            out.push_str(&json[cursor..]);
+            break;
+        };
+        let field_start = cursor.saturating_add(rel);
+        let value_start = field_start.saturating_add(NEEDLE.len());
+        out.push_str(&json[cursor..value_start]);
+
+        let bytes = json.as_bytes();
+        let mut value_end = value_start;
+        let mut escaped = false;
+        while value_end < json.len() {
+            let b = bytes[value_end];
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                break;
+            }
+            value_end = value_end.saturating_add(1);
+        }
+
+        if row_index < rows.len() {
+            push_json_escaped_string(&mut out, rows[row_index].as_str());
+            row_index = row_index.saturating_add(1);
+        } else {
+            out.push_str(&json[value_start..value_end]);
+        }
+        cursor = value_end;
+    }
+    out
+}
+
+fn count_widget_tree_json_text_fields(json: &str) -> usize {
+    json.match_indices("\"text\":\"").count()
 }
 
 unsafe fn log_parse5_trueos_bridge_stats(ctx: *mut qjs::JSContext, browser_instance_id: u32) {
@@ -3195,6 +3460,8 @@ unsafe fn submit_parse5_trueos_pixi_scene(
     ctx: *mut qjs::JSContext,
     browser_instance_id: u32,
     html: &str,
+    widget_render_tree_json: &str,
+    widget_text_rows_text: &str,
 ) -> (u32, u32) {
     let total_start_ms = now_ms();
     let host_chunks: [(&[u8], &[u8], &str); 6] = [
@@ -3230,7 +3497,14 @@ unsafe fn submit_parse5_trueos_pixi_scene(
         ),
     ];
     let host_start_ms = now_ms();
-    for (source, filename, label) in host_chunks {
+    for (idx, (source, filename, label)) in host_chunks.iter().enumerate() {
+        log_line(format!(
+            "qjs-truesurfer[{}]: parse5 trueos host chunk begin idx={} label={} bytes={}\n",
+            browser_instance_id,
+            idx,
+            label,
+            source.len()
+        ));
         let host = qjs::js_eval_bytes(
             ctx,
             source,
@@ -3243,18 +3517,60 @@ unsafe fn submit_parse5_trueos_pixi_scene(
             return (0, 0);
         }
         qjs::js_free_value(ctx, host);
+        log_line(format!(
+            "qjs-truesurfer[{}]: parse5 trueos host chunk done idx={} label={}\n",
+            browser_instance_id, idx, label
+        ));
     }
     let host_ms = now_ms().saturating_sub(host_start_ms);
     set_global_string(ctx, TRUESURFER_TRUEOS_INPUT_HTML_PROP, html);
+    let rust_text_rows = collect_trueos_html_text_rows(html);
+    let repaired_widget_render_tree_json =
+        replace_widget_tree_json_text_rows(widget_render_tree_json, rust_text_rows.as_slice());
+    set_global_string(
+        ctx,
+        TRUESURFER_TRUEOS_WIDGET_RENDER_TREE_JSON_PROP,
+        repaired_widget_render_tree_json.as_str(),
+    );
+    let text_rows_text = if widget_text_rows_text.trim().is_empty() {
+        rust_text_rows.join("\n")
+    } else {
+        String::from(widget_text_rows_text)
+    };
+    set_global_string(ctx, TRUESURFER_TRUEOS_WIDGET_TEXT_ROWS_TEXT_PROP, text_rows_text.as_str());
+    set_global_string_array(
+        ctx,
+        TRUESURFER_TRUEOS_WIDGET_TEXT_ROWS_PROP,
+        rust_text_rows.as_slice(),
+    );
     let input_html_after_set = read_global_string(ctx, TRUESURFER_TRUEOS_INPUT_HTML_PROP);
+    let mut text_row_samples = String::new();
+    for (idx, row) in rust_text_rows.iter().take(8).enumerate() {
+        if !text_row_samples.is_empty() {
+            text_row_samples.push('|');
+        }
+        text_row_samples.push_str(format!("#{}=\"", idx).as_str());
+        text_row_samples.push_str(compact_log_text_sample(row.as_str(), 64).as_str());
+        text_row_samples.push('"');
+    }
     log_line(format!(
-        "qjs-truesurfer[{}]: parse5 trueos host ok chunks={} html_bytes={} host_ms={} input_global_bytes={} input_global_sample=\"{}\"\n",
+        "qjs-truesurfer[{}]: parse5 trueos host ok chunks={} html_bytes={} host_ms={} input_global_bytes={} input_global_sample=\"{}\" tree_json_bytes={} repaired_tree_json_bytes={} tree_text_fields={} rust_text_rows={} text_rows_text_bytes={} samples={}\n",
         browser_instance_id,
         host_chunks.len(),
         html.len(),
         host_ms,
         input_html_after_set.len(),
-        compact_log_text_sample(input_html_after_set.as_str(), 120)
+        compact_log_text_sample(input_html_after_set.as_str(), 120),
+        widget_render_tree_json.len(),
+        repaired_widget_render_tree_json.len(),
+        count_widget_tree_json_text_fields(repaired_widget_render_tree_json.as_str()),
+        rust_text_rows.len(),
+        text_rows_text.len(),
+        if text_row_samples.is_empty() {
+            "none"
+        } else {
+            text_row_samples.as_str()
+        }
     ));
 
     log_line(format!(
@@ -3896,9 +4212,19 @@ unsafe fn dispatch_html(
         "qjs-truesurfer[{}]: gadget snapshot skipped reason=parse5-trueos-pixi-path\n",
         browser_instance_id
     ));
+    let widget_render_tree_json =
+        read_global_string(ctx, TRUESURFER_TRUEOS_WIDGET_RENDER_TREE_JSON_PROP);
+    let widget_text_rows_text =
+        read_global_string(ctx, TRUESURFER_TRUEOS_WIDGET_TEXT_ROWS_TEXT_PROP);
     log_line(format!("qjs-truesurfer[{}]: ui3 submit begin\n", browser_instance_id));
-    let (ui3_ops, ui3_root) =
-        submit_parse5_trueos_pixi_scene(rt, ctx, browser_instance_id, pending.html.as_str());
+    let (ui3_ops, ui3_root) = submit_parse5_trueos_pixi_scene(
+        rt,
+        ctx,
+        browser_instance_id,
+        pending.html.as_str(),
+        widget_render_tree_json.as_str(),
+        widget_text_rows_text.as_str(),
+    );
     if ui3_ops == 0 || ui3_root == 0 {
         log_line(format!(
             "qjs-truesurfer[{}]: parse5 trueos ui3 unavailable; legacy text widget fallback disabled\n",
