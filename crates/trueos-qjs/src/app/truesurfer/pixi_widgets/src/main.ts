@@ -1231,6 +1231,8 @@ function createCaptureOnlyYoga() {
   const EDGE_BOTTOM = 3;
   const FLEX_DIRECTION_COLUMN = 0;
   const FLEX_DIRECTION_ROW = 1;
+  const POSITION_TYPE_RELATIVE = 0;
+  const POSITION_TYPE_ABSOLUTE = 1;
   const MEASURE_MODE_UNDEFINED = 0;
 
   class Node {
@@ -1249,6 +1251,11 @@ function createCaptureOnlyYoga() {
     minWidth: number;
     minHeight: number;
     flexDirection: number;
+    positionType: number;
+    positionLeft: number | null;
+    positionTop: number | null;
+    positionRight: number | null;
+    positionBottom: number | null;
     computed: { left: number; top: number; width: number; height: number };
 
     constructor() {
@@ -1267,6 +1274,11 @@ function createCaptureOnlyYoga() {
       this.minWidth = 0;
       this.minHeight = 0;
       this.flexDirection = FLEX_DIRECTION_COLUMN;
+      this.positionType = POSITION_TYPE_RELATIVE;
+      this.positionLeft = null;
+      this.positionTop = null;
+      this.positionRight = null;
+      this.positionBottom = null;
       this.computed = { left: 0, top: 0, width: 0, height: 0 };
     }
 
@@ -1296,8 +1308,16 @@ function createCaptureOnlyYoga() {
     setFlexGrow(_value: number) {}
     setFlexShrink(_value: number) {}
     setAlignSelf(_value: number) {}
-    setPositionType(_value: number) {}
-    setPosition(_edge: number, _value: number) {}
+    setPositionType(value: number) {
+      this.positionType = Number(value) === POSITION_TYPE_ABSOLUTE ? POSITION_TYPE_ABSOLUTE : POSITION_TYPE_RELATIVE;
+    }
+    setPosition(edge: number, value: number) {
+      const v = Number(value) || 0;
+      if (edge === EDGE_LEFT) this.positionLeft = v;
+      else if (edge === EDGE_TOP) this.positionTop = v;
+      else if (edge === EDGE_RIGHT) this.positionRight = v;
+      else if (edge === EDGE_BOTTOM) this.positionBottom = v;
+    }
     setWidth(value: number) { this.width = Math.max(0, Number(value) || 0); }
     setHeight(value: number) { this.height = Math.max(0, Number(value) || 0); }
     setMinWidth(value: number) { this.minWidth = Math.max(0, Number(value) || 0); }
@@ -1336,8 +1356,24 @@ function createCaptureOnlyYoga() {
       if (this.flexDirection === FLEX_DIRECTION_ROW) {
         let cx = this.paddingLeft;
         let rowH = 0;
+        const flowChildren = this.children.filter((child) => child.positionType !== POSITION_TYPE_ABSOLUTE);
+        const flowCount = Math.max(1, flowChildren.length);
         for (const child of this.children) {
-          const childW = child.width || child.minWidth || Math.max(24, (ownW - padX) / Math.max(1, this.children.length));
+          if (child.positionType === POSITION_TYPE_ABSOLUTE) {
+            const childW = child.width || child.minWidth || Math.max(0, ownW - padX - child.marginLeft - child.marginRight);
+            const childH = child.height || child.minHeight || availableH;
+            const ax =
+              child.positionLeft != null
+                ? this.paddingLeft + child.positionLeft
+                : Math.max(0, ownW - this.paddingRight - (child.positionRight ?? 0) - childW);
+            const ay =
+              child.positionTop != null
+                ? this.paddingTop + child.positionTop
+                : Math.max(0, ownH - this.paddingBottom - (child.positionBottom ?? 0) - childH);
+            child.layout(ax + child.marginLeft, ay + child.marginTop, childW, childH);
+            continue;
+          }
+          const childW = child.width || child.minWidth || Math.max(24, (ownW - padX) / flowCount);
           child.layout(cx + child.marginLeft, this.paddingTop + child.marginTop, childW, availableH);
           cx += child.computed.width + child.marginLeft + child.marginRight;
           rowH = Math.max(rowH, child.computed.height + child.marginTop + child.marginBottom);
@@ -1346,6 +1382,20 @@ function createCaptureOnlyYoga() {
       } else {
         let cy = this.paddingTop;
         for (const child of this.children) {
+          if (child.positionType === POSITION_TYPE_ABSOLUTE) {
+            const childW = child.width || child.minWidth || Math.max(0, ownW - padX - child.marginLeft - child.marginRight);
+            const childH = child.height || child.minHeight || availableH;
+            const ax =
+              child.positionLeft != null
+                ? this.paddingLeft + child.positionLeft
+                : Math.max(0, ownW - this.paddingRight - (child.positionRight ?? 0) - childW);
+            const ay =
+              child.positionTop != null
+                ? this.paddingTop + child.positionTop
+                : Math.max(0, ownH - this.paddingBottom - (child.positionBottom ?? 0) - childH);
+            child.layout(ax + child.marginLeft, ay + child.marginTop, childW, childH);
+            continue;
+          }
           const childW = Math.max(0, ownW - padX - child.marginLeft - child.marginRight);
           child.layout(this.paddingLeft + child.marginLeft, cy + child.marginTop, childW, availableH);
           cy += child.computed.height + child.marginTop + child.marginBottom;
@@ -1373,7 +1423,8 @@ function createCaptureOnlyYoga() {
     JUSTIFY_SPACE_BETWEEN: 2,
     WRAP_WRAP: 1,
     WRAP_NO_WRAP: 0,
-    POSITION_TYPE_ABSOLUTE: 1,
+    POSITION_TYPE_RELATIVE,
+    POSITION_TYPE_ABSOLUTE,
     DIRECTION_LTR: 0,
     MEASURE_MODE_UNDEFINED,
   };
@@ -1544,6 +1595,37 @@ function normalizePublishedRenderTree(value: unknown, fallbackRowsOrHtml?: unkno
     if (node) out.push(node);
   }
   return out;
+}
+
+function applyTrustedTextRowsToRenderTree(nodes: RenderNode[], rows: string[]): number {
+  if (!Array.isArray(rows) || rows.length === 0) return 0;
+  let rowIndex = 0;
+  let applied = 0;
+  const walk = (node: RenderNode) => {
+    if (node.kind === 'text') {
+      if (rowIndex < rows.length) {
+        const replacement = rows[rowIndex];
+        rowIndex += 1;
+        if (
+          typeof replacement === 'string' &&
+          replacement.length > 0 &&
+          replacement.indexOf('<truesurfer-') !== 0 &&
+          replacement.indexOf('__trueo') !== 0
+        ) {
+          node.text = replacement;
+          applied += 1;
+        }
+      }
+      return;
+    }
+    for (let index = 0; index < node.children.length; index += 1) {
+      walk(node.children[index]);
+    }
+  };
+  for (let index = 0; index < nodes.length; index += 1) {
+    walk(nodes[index]);
+  }
+  return applied;
 }
 
 function createTextMeasurer(font: string) {
@@ -2011,12 +2093,10 @@ function renderToPixi(app: Application, box: LayoutBox, sceneRoot?: Container) {
   {
     const scrollState = (uiState as any).scroll;
     const scrollY = scrollState ? Number(scrollState.y || 0) || 0 : 0;
-    if (scrollY !== 0) {
-      const pos = (contentRoot as any).position;
-      if (pos) {
-        pos.x = 0;
-        pos.y = -scrollY;
-      }
+    const pos = (contentRoot as any).position;
+    if (pos) {
+      pos.x = 0;
+      pos.y = -scrollY;
     }
   }
   setTrueosLayoutStep('render:content-position-done');
@@ -2403,6 +2483,7 @@ function renderToPixi(app: Application, box: LayoutBox, sceneRoot?: Container) {
           });
         }
       } else if (node.tagName === 'button') {
+        const label = normalizeWhitespace(collectLayoutBoxText(node));
         if (node.key) {
           uiState.hoverRects.push({ key: node.key, kind: 'button', cursor: 'pointer', x: nodeAbsX, y: nodeAbsY, w, h });
         }
@@ -2411,7 +2492,9 @@ function renderToPixi(app: Application, box: LayoutBox, sceneRoot?: Container) {
           graphics: g,
           w,
           h,
-          label: normalizeWhitespace(collectLayoutBoxText(node)),
+          // In capture-only mode, let the real layout text child carry the label.
+          // The retained Pixi path still uses the widget-local label for centering.
+          label: isTrueosCaptureOnly() ? '' : label,
           theme,
           registerHoverHandlers: node.key
             ? (handlers) => {
@@ -2596,7 +2679,7 @@ function renderToPixi(app: Application, box: LayoutBox, sceneRoot?: Container) {
         const child = (node.children ?? [])[ci];
         if (child.kind === 'block' && child.tagName === 'dialog') {
           childSink.push(child);
-        } else if (node.tagName === 'button' && child.kind === 'text') {
+        } else if (node.tagName === 'button' && child.kind === 'text' && !isTrueosCaptureOnly()) {
           continue;
         } else {
           drawNode(child, childParent, nextTextCtx, childAbsX, childAbsY, childSink, childDialogClampRect, `${path}.${ci}`, childOrder++);
@@ -2897,6 +2980,14 @@ async function main() {
     (e) => {
       const x = (e as any).offsetX ?? 0;
       const y = (e as any).offsetY ?? 0;
+      const logWheelRoute = (message: string) => {
+        if (!isTrueosCaptureOnly()) return;
+        const win = window as any;
+        const count = Number(win.__TRUEOS_WHEEL_ROUTE_LOG_COUNT__ ?? 0) || 0;
+        if (count >= 32) return;
+        win.__TRUEOS_WHEEL_ROUTE_LOG_COUNT__ = count + 1;
+        console.log(`[trueos pixi widgets] wheel-route ${message}`);
+      };
 
       // Deepest iframe under pointer wins.
       let iframeKey: string | null = null;
@@ -2908,26 +2999,51 @@ async function main() {
         }
       }
 
+      let routedToIframe = false;
       if (iframeKey) {
         const st = uiState.iframeScroll.get(iframeKey);
         if (st) {
           const maxScroll = Math.max(0, st.contentHeight - st.viewportHeight);
+          logWheelRoute(
+            `hit=iframe x=${Math.round(x)} y=${Math.round(y)} delta=${Math.round(e.deltaY)} y0=${Math.round(st.y)} max=${Math.round(maxScroll)}`
+          );
           if (maxScroll > 0) {
-            st.y = Math.max(0, Math.min(maxScroll, st.y + e.deltaY));
-            uiState.iframeScroll.set(iframeKey, st);
-            requestPaint?.();
-            e.preventDefault();
+            const nextY = Math.max(0, Math.min(maxScroll, st.y + e.deltaY));
+            if (nextY !== st.y) {
+              st.y = nextY;
+              uiState.iframeScroll.set(iframeKey, st);
+              requestPaint?.();
+              e.preventDefault();
+              routedToIframe = true;
+              logWheelRoute(`owner=iframe y1=${Math.round(nextY)} repaint=1`);
+            }
           }
-          return;
         }
       }
+      if (routedToIframe) return;
 
       const maxScroll = Math.max(0, uiState.scroll.contentHeight - uiState.scroll.viewportHeight);
-      if (maxScroll <= 0) return;
+      if (maxScroll <= 0) {
+        logWheelRoute(
+          `owner=none x=${Math.round(x)} y=${Math.round(y)} delta=${Math.round(e.deltaY)} root_y=${Math.round(uiState.scroll.y)} root_max=0`
+        );
+        return;
+      }
 
-      uiState.scroll.y = Math.max(0, Math.min(maxScroll, uiState.scroll.y + e.deltaY));
-      requestPaint?.();
-      e.preventDefault();
+      const nextRootY = Math.max(0, Math.min(maxScroll, uiState.scroll.y + e.deltaY));
+      if (nextRootY !== uiState.scroll.y) {
+        const prevRootY = uiState.scroll.y;
+        uiState.scroll.y = nextRootY;
+        requestPaint?.();
+        e.preventDefault();
+        logWheelRoute(
+          `owner=root x=${Math.round(x)} y=${Math.round(y)} delta=${Math.round(e.deltaY)} y0=${Math.round(prevRootY)} y1=${Math.round(nextRootY)} max=${Math.round(maxScroll)} repaint=1`
+        );
+      } else {
+        logWheelRoute(
+          `owner=root-boundary x=${Math.round(x)} y=${Math.round(y)} delta=${Math.round(e.deltaY)} y0=${Math.round(uiState.scroll.y)} max=${Math.round(maxScroll)}`
+        );
+      }
     },
     { passive: false }
   );
@@ -3061,12 +3177,13 @@ async function main() {
   const textFallback = readTrueosWidgetTextRows(html);
   const renderTree = readTrueosWidgetRenderTree();
   const renderNodes = normalizePublishedRenderTree(renderTree.tree, textFallback.rows);
+  const trustedTextApplied = applyTrustedTextRowsToRenderTree(renderNodes, textFallback.rows);
   if (isTrueosCaptureOnly()) {
     console.log(
       `[trueos pixi widgets] text-fallback source=${textFallback.source} rows=${textFallback.rows.length} samples=${sampleHtmlTextFallbacks(textFallback.rows)}`
     );
     console.log(
-      `[trueos pixi widgets] render-tree source=${renderTree.source} nodes=${renderNodes.length}`
+      `[trueos pixi widgets] render-tree source=${renderTree.source} nodes=${renderNodes.length} trusted_text_applied=${trustedTextApplied}`
     );
   }
   if (renderNodes.length === 0) {
