@@ -74,6 +74,7 @@ declare global {
     __TRUEOS_PIXI_LAST_LAYOUT__?: LayoutBox;
     __TRUEOS_PIXI_LAYOUT_TEXT_OVERLAYS__?: Array<{ x: number; y: number; text: string }>;
     __TRUEOS_WIDGET_RENDER_TREE__?: unknown;
+    __TRUEOS_WIDGET_TEXT_ROWS__?: unknown;
   }
 }
 
@@ -571,6 +572,105 @@ function decodeBasicHtmlEntities(value: string): string {
 
 function stripTagsToText(value: string): string {
   return normalizeWhitespace(decodeBasicHtmlEntities(String(value ?? '').replace(/<[^>]*>/g, ' ')));
+}
+
+function collectHtmlTextFallbacks(value: unknown): string[] {
+  const html = String(value ?? '')
+    .replace(/<script\b[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[\s\S]*?<\/style>/gi, ' ');
+  const out: string[] = [];
+  const wantedTags = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'summary', 'p', 'button', 'label', 'legend', 'option']);
+  const push = (text: string) => {
+    const cleaned = stripTagsToText(text);
+    if (cleaned.length === 0) return;
+    if (cleaned.startsWith('<truesurfer-') || cleaned.startsWith('__trueo')) return;
+    out.push(cleaned);
+  };
+  const stack: Array<{ tag: string; wanted: boolean; text: string }> = [];
+  const tokenRe = /<\/?([a-zA-Z0-9:-]+)\b[^>]*>|([^<]+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = tokenRe.exec(html)) && out.length < TRUEOS_LAYOUT_TEXT_OVERLAY_LIMIT) {
+    const textChunk = match[2];
+    if (textChunk != null) {
+      const text = decodeBasicHtmlEntities(textChunk);
+      if (!text) continue;
+      for (let index = stack.length - 1; index >= 0; index -= 1) {
+        if (stack[index].wanted) {
+          stack[index].text += ` ${text}`;
+          break;
+        }
+      }
+      continue;
+    }
+    const full = match[0] ?? '';
+    const tag = String(match[1] ?? '').toLowerCase();
+    const closing = full.charAt(1) === '/';
+    if (closing) {
+      for (let index = stack.length - 1; index >= 0; index -= 1) {
+        const entry = stack.pop();
+        if (entry?.wanted) push(entry.text);
+        if (entry?.tag === tag) break;
+      }
+      continue;
+    }
+    if (tag === 'input') {
+      const type = attrValueFromTag(full, 'type').toLowerCase();
+      if (type === 'button' || type === 'submit' || type === 'reset') push(attrValueFromTag(full, 'value'));
+    }
+    let end = full.length - 1;
+    while (end >= 0 && full.charCodeAt(end) <= 32) end -= 1;
+    const selfClosing =
+      (end >= 1 && full.charAt(end) === '>' && full.charAt(end - 1) === '/') ||
+      tag === 'input' ||
+      tag === 'br' ||
+      tag === 'hr' ||
+      tag === 'img';
+    if (!selfClosing) {
+      stack.push({ tag, wanted: wantedTags.has(tag), text: '' });
+    }
+  }
+  while (stack.length && out.length < TRUEOS_LAYOUT_TEXT_OVERLAY_LIMIT) {
+    const entry = stack.pop();
+    if (entry?.wanted) push(entry.text);
+  }
+  if (out.length === 0) {
+    const lower = html.toLowerCase();
+    let start = lower.indexOf('<body');
+    if (start >= 0) {
+      const bodyOpenEnd = html.indexOf('>', start);
+      start = bodyOpenEnd >= 0 ? bodyOpenEnd + 1 : start;
+    } else {
+      start = 0;
+    }
+    const endBody = lower.indexOf('</body>', start);
+    const stop = endBody >= 0 ? endBody : html.length;
+    let inTag = false;
+    let text = '';
+    for (let index = start; index < stop && out.length < TRUEOS_LAYOUT_TEXT_OVERLAY_LIMIT; index += 1) {
+      const ch = html.charAt(index);
+      if (ch === '<') {
+        push(text);
+        text = '';
+        inTag = true;
+        continue;
+      }
+      if (ch === '>') {
+        inTag = false;
+        continue;
+      }
+      if (!inTag) text += ch;
+    }
+    push(text);
+  }
+  return out;
+}
+
+function sampleHtmlTextFallbacks(rows: string[], limit = 8): string {
+  const samples: string[] = [];
+  for (let index = 0; index < rows.length && samples.length < limit; index += 1) {
+    samples.push(`#${index}="${sampleRawTextForLog(rows[index], 48)}"`);
+  }
+  return samples.join('|');
 }
 
 function attrValueFromTag(tag: string, name: string): string {
@@ -1158,12 +1258,31 @@ function cloneRenderAttrs(value: unknown): Record<string, string> | undefined {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-function normalizePublishedRenderNode(value: unknown, path: string): RenderNode | null {
+function normalizePublishedRenderNode(
+  value: unknown,
+  path: string,
+  fallbackText?: { rows: string[]; index: number }
+): RenderNode | null {
   if (!value || typeof value !== 'object') return null;
   const node = value as Record<string, unknown>;
   const kind = String(node.kind ?? '');
   if (kind === 'text') {
-    const text = normalizeWhitespace(String(node.text ?? ''));
+    const raw = String(node.text ?? '');
+    let text = normalizeWhitespace(cleanTrueosOverlayText(raw));
+    const polluted =
+      raw.indexOf('<truesurfer-') >= 0 ||
+      raw.indexOf('__trueo') >= 0 ||
+      text.startsWith('<truesurfer-') ||
+      text.startsWith('__trueo');
+    if (polluted) {
+      const replacement = fallbackText?.rows[fallbackText.index] ?? '';
+      if (fallbackText) fallbackText.index += 1;
+      text = replacement;
+    } else if (text.length === 0) {
+      const replacement = fallbackText?.rows[fallbackText.index] ?? '';
+      if (fallbackText && replacement) fallbackText.index += 1;
+      if (replacement) text = replacement;
+    }
     return text.length > 0 ? { kind: 'text', text } : null;
   }
   if (kind !== 'block') return null;
@@ -1174,7 +1293,7 @@ function normalizePublishedRenderNode(value: unknown, path: string): RenderNode 
   const children: RenderNode[] = [];
   const rawChildren = Array.isArray(node.children) ? node.children : [];
   for (let index = 0; index < rawChildren.length; index += 1) {
-    const child = normalizePublishedRenderNode(rawChildren[index], `${path}.${index}`);
+    const child = normalizePublishedRenderNode(rawChildren[index], `${path}.${index}`, fallbackText);
     if (child) children.push(child);
   }
   return {
@@ -1186,15 +1305,19 @@ function normalizePublishedRenderNode(value: unknown, path: string): RenderNode 
   };
 }
 
-function normalizePublishedRenderTree(value: unknown): RenderNode[] {
+function normalizePublishedRenderTree(value: unknown, fallbackRowsOrHtml?: unknown): RenderNode[] {
   const raw = Array.isArray(value)
     ? value
     : value && typeof value === 'object' && Array.isArray((value as any).widgetRenderTree)
       ? (value as any).widgetRenderTree
       : [];
+  const fallbackRows = Array.isArray(fallbackRowsOrHtml)
+    ? sanitizeTextRows(fallbackRowsOrHtml)
+    : collectHtmlTextFallbacks(fallbackRowsOrHtml);
+  const fallbackText = { rows: fallbackRows, index: 0 };
   const out: RenderNode[] = [];
   for (let index = 0; index < raw.length; index += 1) {
-    const node = normalizePublishedRenderNode(raw[index], `0.${index}`);
+    const node = normalizePublishedRenderNode(raw[index], `0.${index}`, fallbackText);
     if (node) out.push(node);
   }
   return out;
@@ -2712,8 +2835,17 @@ async function main() {
 
   setTrueosPhase('main:render-tree');
   trueosIframeSrcdocRowsByKey.clear();
-  const renderNodes = normalizePublishedRenderTree(window.__TRUEOS_WIDGET_RENDER_TREE__);
+  const publishedTextRows = Array.isArray(window.__TRUEOS_WIDGET_TEXT_ROWS__)
+    ? sanitizeTextRows(window.__TRUEOS_WIDGET_TEXT_ROWS__ as unknown[])
+    : [];
+  const trueosTextFallbackRows = publishedTextRows.length > 0
+    ? publishedTextRows
+    : collectHtmlTextFallbacks(html);
+  const renderNodes = normalizePublishedRenderTree(window.__TRUEOS_WIDGET_RENDER_TREE__, trueosTextFallbackRows);
   if (isTrueosCaptureOnly()) {
+    console.log(
+      `[trueos pixi widgets] text-fallback source=${publishedTextRows.length > 0 ? 'truesurfer' : 'html'} rows=${trueosTextFallbackRows.length} samples=${sampleHtmlTextFallbacks(trueosTextFallbackRows)}`
+    );
     console.log(
       `[trueos pixi widgets] render-tree source=truesurfer nodes=${renderNodes.length}`
     );

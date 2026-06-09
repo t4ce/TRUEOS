@@ -11,11 +11,14 @@ use super::dmg::DmgAudioStream;
 use super::synth::{CHANNELS, Envelope, SAMPLE_RATE, SynthEngine, Waveform};
 
 const MIDI_NOTE_COUNT: usize = 128;
-const RENDER_MS: u32 = 10;
+const RENDER_MS: u32 = 5;
 const RENDER_FRAMES: usize = (SAMPLE_RATE as usize * RENDER_MS as usize) / 1_000;
 const RENDER_SAMPLES: usize = RENDER_FRAMES * CHANNELS as usize;
+const STREAM_START_AHEAD_FRAMES: usize = SAMPLE_RATE as usize / 200;
+const STREAM_GUARD_SAMPLES: usize = (SAMPLE_RATE as usize / 200) * CHANNELS as usize;
+const STREAM_TARGET_QUEUED_SAMPLES: usize =
+    ((SAMPLE_RATE as usize * 10) / 1_000) * CHANNELS as usize;
 const INIT_RETRY_MS: u64 = 500;
-const IDLE_POLL_MS: u64 = 4;
 
 #[derive(Clone, Copy)]
 struct LiveNote {
@@ -90,7 +93,7 @@ fn has_held_note(notes: &[LiveNote; MIDI_NOTE_COUNT]) -> bool {
 
 fn configure_engine() -> SynthEngine {
     let mut engine = SynthEngine::new();
-    engine.waveform = Waveform::Triangle;
+    engine.waveform = Waveform::TriSine;
     engine.envelope = Envelope::new(3, 45, 72, 80);
     engine.master_volume = 96;
     engine
@@ -143,7 +146,7 @@ pub async fn task() {
     );
 
     let mut engine = configure_engine();
-    let mut stream = DmgAudioStream::new();
+    let mut stream = DmgAudioStream::new_with_start_ahead_frames(STREAM_START_AHEAD_FRAMES);
     let mut buffer: Vec<i16> = alloc::vec![0; RENDER_SAMPLES];
     let mut active = [false; MIDI_NOTE_COUNT];
     let mut last_velocity = [0u8; MIDI_NOTE_COUNT];
@@ -157,14 +160,34 @@ pub async fn task() {
             last_seq = state.seq;
         }
 
-        let voice_count = engine.active_voice_count();
-        if voice_count == 0 && !has_held_note(&state.notes) {
-            Timer::after(Duration::from_millis(IDLE_POLL_MS)).await;
+        let active_audio = engine.active_voice_count() != 0 || has_held_note(&state.notes);
+        if !active_audio {
+            if stream.is_started() {
+                stream.stop_reset();
+                crate::log!("esp-piano-audio: stream idle stop/reset\n");
+            }
+            Timer::after(Duration::from_millis(1)).await;
             continue;
+        }
+
+        if stream.is_started() {
+            if let Some(writable) = stream.writable_samples(STREAM_GUARD_SAMPLES) {
+                if writable < RENDER_SAMPLES {
+                    Timer::after(Duration::from_millis(1)).await;
+                    continue;
+                }
+            }
+            if let Some(queued) = stream.queued_samples() {
+                if queued >= STREAM_TARGET_QUEUED_SAMPLES {
+                    Timer::after(Duration::from_millis(1)).await;
+                    continue;
+                }
+            }
         }
 
         buffer.fill(0);
         engine.render(buffer.as_mut_slice(), RENDER_FRAMES);
+
         if let Err(err) = stream.push_samples(buffer.as_slice()) {
             if !logged_push_err {
                 logged_push_err = true;

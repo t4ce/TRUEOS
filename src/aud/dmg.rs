@@ -11,18 +11,69 @@ const STREAM_START_AHEAD_FRAMES: usize = SAMPLE_RATE_HZ as usize / 10;
 pub struct DmgAudioStream {
     started: bool,
     disabled: bool,
+    start_ahead_frames: usize,
     write_cursor: usize,
     dma_len_samples: usize,
 }
 
 impl DmgAudioStream {
     pub const fn new() -> Self {
+        Self::new_with_start_ahead_frames(STREAM_START_AHEAD_FRAMES)
+    }
+
+    pub const fn new_with_start_ahead_frames(start_ahead_frames: usize) -> Self {
         Self {
             started: false,
             disabled: false,
+            start_ahead_frames,
             write_cursor: 0,
             dma_len_samples: 0,
         }
+    }
+
+    pub fn is_started(&self) -> bool {
+        self.started
+    }
+
+    pub fn stop_reset(&mut self) {
+        let _ = crate::hda::stop();
+        crate::hda::reset_stream();
+        self.started = false;
+        self.disabled = false;
+        self.write_cursor = 0;
+        self.dma_len_samples = 0;
+    }
+
+    pub fn writable_samples(&self, guard_samples: usize) -> Option<usize> {
+        if !self.started {
+            return Some(usize::MAX);
+        }
+
+        let cap = self.dma_len_samples;
+        if cap == 0 {
+            return None;
+        }
+
+        let play_cursor = self.play_cursor(cap);
+        let queued = cursor_distance(play_cursor, self.write_cursor, cap);
+        Some(
+            cap.saturating_sub(queued)
+                .saturating_sub(guard_samples.min(cap)),
+        )
+    }
+
+    pub fn queued_samples(&self) -> Option<usize> {
+        if !self.started {
+            return Some(0);
+        }
+
+        let cap = self.dma_len_samples;
+        if cap == 0 {
+            return None;
+        }
+
+        let play_cursor = self.play_cursor(cap);
+        Some(cursor_distance(play_cursor, self.write_cursor, cap))
     }
 
     pub fn push_samples(&mut self, samples: &[i16]) -> Result<(), &'static str> {
@@ -34,8 +85,9 @@ impl DmgAudioStream {
             return Ok(());
         }
 
-        if !self.started {
-            if let Err(err) = self.start() {
+        let needs_start = !self.started;
+        if needs_start {
+            if let Err(err) = self.prepare_start() {
                 self.disabled = true;
                 return Err(err);
             }
@@ -63,14 +115,22 @@ impl DmgAudioStream {
         }
 
         crate::hda::clear_stream_status();
-        let _ = crate::hda::ensure_running();
+        if needs_start {
+            crate::hda::start_dma()?;
+            self.started = true;
+        } else {
+            let _ = crate::hda::ensure_running();
+        }
         Ok(())
     }
 
-    fn start(&mut self) -> Result<(), &'static str> {
+    fn prepare_start(&mut self) -> Result<(), &'static str> {
         if !crate::hda::is_initialized() {
             return Ok(());
         }
+
+        let _ = crate::hda::stop();
+        crate::hda::reset_stream();
 
         let Some((buf, cap)) = crate::hda::get_dma_buffer_info() else {
             return Err("HDA: DMA buffer not initialized");
@@ -84,10 +144,20 @@ impl DmgAudioStream {
         }
 
         self.dma_len_samples = cap;
-        self.write_cursor = (STREAM_START_AHEAD_FRAMES * 2).min(cap.saturating_sub(2)) & !1;
-        crate::hda::start_dma()?;
-        self.started = true;
+        self.write_cursor = (self.start_ahead_frames * 2).min(cap.saturating_sub(2)) & !1;
         Ok(())
+    }
+
+    fn play_cursor(&self, cap: usize) -> usize {
+        ((crate::hda::get_playback_position() as usize) / core::mem::size_of::<i16>()) % cap
+    }
+}
+
+fn cursor_distance(from: usize, to: usize, cap: usize) -> usize {
+    if to >= from {
+        to - from
+    } else {
+        cap - from + to
     }
 }
 
