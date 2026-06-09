@@ -75,6 +75,8 @@ declare global {
     __TRUEOS_PIXI_LAYOUT_TEXT_OVERLAYS__?: Array<{ x: number; y: number; text: string }>;
     __TRUEOS_WIDGET_RENDER_TREE__?: unknown;
     __TRUEOS_WIDGET_TEXT_ROWS__?: unknown;
+    __TRUEOS_WIDGET_RENDER_TREE_JSON__?: string;
+    __TRUEOS_WIDGET_TEXT_ROWS_TEXT__?: string;
   }
 }
 
@@ -309,7 +311,7 @@ function compactCounts(counts: Record<string, number>, limit = 16): string {
 }
 
 function stripTrueosCapturePrefix(value: unknown): string {
-  let s = String(value ?? '');
+  let s = typeof value === 'string' ? value : '';
   if (s.indexOf('<truesurfer-') >= 0) {
     s = s.replace(/<truesurfer-[A-Za-z0-9._-]+>/g, '');
   }
@@ -504,9 +506,13 @@ function summarizeRenderTextSamples(nodes: RenderNode[], limit = 12): string {
     }
     const nextTag = stripTrueosCapturePrefix(node.tagName || 'block') || 'block';
     const nextKey = node.key || '';
-    for (const child of node.children) walk(child, nextTag, nextKey);
+    for (let index = 0; index < node.children.length; index += 1) {
+      walk(node.children[index], nextTag, nextKey);
+    }
   };
-  for (const node of nodes) walk(node, 'root', '');
+  for (let index = 0; index < nodes.length; index += 1) {
+    walk(nodes[index], 'root', '');
+  }
   return samples.join('|');
 }
 
@@ -523,7 +529,9 @@ function summarizeLayoutTextSamples(root: LayoutBox, limit = 12): string {
     }
     const nextTag = stripTrueosCapturePrefix(box.tagName || 'block') || 'block';
     const nextKey = box.key || '';
-    for (const child of box.children) walk(child, nextTag, nextKey);
+    for (let index = 0; index < box.children.length; index += 1) {
+      walk(box.children[index], nextTag, nextKey);
+    }
   };
   walk(root, 'root', '');
   return samples.join('|');
@@ -560,7 +568,8 @@ function trueosIframeLeafText(box: LayoutBox): string {
 }
 
 function decodeBasicHtmlEntities(value: string): string {
-  return String(value ?? '')
+  const source = typeof value === 'string' ? value : '';
+  return source
     .replace(/&quot;/g, '"')
     .replace(/&#34;/g, '"')
     .replace(/&#39;/g, "'")
@@ -571,15 +580,51 @@ function decodeBasicHtmlEntities(value: string): string {
 }
 
 function stripTagsToText(value: string): string {
-  return normalizeWhitespace(decodeBasicHtmlEntities(String(value ?? '').replace(/<[^>]*>/g, ' ')));
+  const source = typeof value === 'string' ? value : '';
+  return normalizeWhitespace(decodeBasicHtmlEntities(source.replace(/<[^>]*>/g, ' ')));
+}
+
+function trueosTagNameFromMarkup(tagMarkup: string): string {
+  let index = 0;
+  const tag = String(tagMarkup ?? '');
+  while (index < tag.length && tag.charCodeAt(index) <= 32) index += 1;
+  if (tag.charAt(index) === '/') index += 1;
+  while (index < tag.length && tag.charCodeAt(index) <= 32) index += 1;
+  const start = index;
+  while (index < tag.length) {
+    const code = tag.charCodeAt(index);
+    const isName =
+      (code >= 48 && code <= 57) ||
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122) ||
+      code === 45 ||
+      code === 58;
+    if (!isName) break;
+    index += 1;
+  }
+  return tag.slice(start, index).toLowerCase();
+}
+
+function trueosWantsHtmlTextTag(tag: string): boolean {
+  return (
+    tag === 'h1' ||
+    tag === 'h2' ||
+    tag === 'h3' ||
+    tag === 'h4' ||
+    tag === 'h5' ||
+    tag === 'h6' ||
+    tag === 'summary' ||
+    tag === 'p' ||
+    tag === 'button' ||
+    tag === 'label' ||
+    tag === 'legend' ||
+    tag === 'option'
+  );
 }
 
 function collectHtmlTextFallbacks(value: unknown): string[] {
-  const html = String(value ?? '')
-    .replace(/<script\b[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style\b[\s\S]*?<\/style>/gi, ' ');
+  const html = typeof value === 'string' ? value : '';
   const out: string[] = [];
-  const wantedTags = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'summary', 'p', 'button', 'label', 'legend', 'option']);
   const push = (text: string) => {
     const cleaned = stripTagsToText(text);
     if (cleaned.length === 0) return;
@@ -587,32 +632,61 @@ function collectHtmlTextFallbacks(value: unknown): string[] {
     out.push(cleaned);
   };
   const stack: Array<{ tag: string; wanted: boolean; text: string }> = [];
-  const tokenRe = /<\/?([a-zA-Z0-9:-]+)\b[^>]*>|([^<]+)/g;
-  let match: RegExpExecArray | null;
-  while ((match = tokenRe.exec(html)) && out.length < TRUEOS_LAYOUT_TEXT_OVERLAY_LIMIT) {
-    const textChunk = match[2];
-    if (textChunk != null) {
-      const text = decodeBasicHtmlEntities(textChunk);
-      if (!text) continue;
-      for (let index = stack.length - 1; index >= 0; index -= 1) {
-        if (stack[index].wanted) {
-          stack[index].text += ` ${text}`;
+
+  const lower = html.toLowerCase();
+  let index = lower.indexOf('<body');
+  if (index >= 0) {
+    const bodyOpenEnd = html.indexOf('>', index);
+    index = bodyOpenEnd >= 0 ? bodyOpenEnd + 1 : index;
+  } else {
+    index = 0;
+  }
+  const endBody = lower.indexOf('</body>', index);
+  const stop = endBody >= 0 ? endBody : html.length;
+  let text = '';
+
+  while (index < stop && out.length < TRUEOS_LAYOUT_TEXT_OVERLAY_LIMIT) {
+    const ch = html.charAt(index);
+    if (ch !== '<') {
+      text += ch;
+      index += 1;
+      continue;
+    }
+
+    const textChunk = decodeBasicHtmlEntities(text);
+    if (textChunk.length > 0) {
+      for (let stackIndex = stack.length - 1; stackIndex >= 0; stackIndex -= 1) {
+        if (stack[stackIndex].wanted) {
+          stack[stackIndex].text += ` ${textChunk}`;
           break;
         }
       }
-      continue;
     }
-    const full = match[0] ?? '';
-    const tag = String(match[1] ?? '').toLowerCase();
-    const closing = full.charAt(1) === '/';
+    text = '';
+
+    const close = html.indexOf('>', index + 1);
+    if (close < 0) break;
+    const full = html.slice(index, close + 1);
+    const inner = html.slice(index + 1, close);
+    const tag = trueosTagNameFromMarkup(inner);
+    const closing = inner.trimStart().charAt(0) === '/';
     if (closing) {
-      for (let index = stack.length - 1; index >= 0; index -= 1) {
+      for (let stackIndex = stack.length - 1; stackIndex >= 0; stackIndex -= 1) {
         const entry = stack.pop();
         if (entry?.wanted) push(entry.text);
         if (entry?.tag === tag) break;
       }
+      index = close + 1;
       continue;
     }
+
+    if (tag === 'script' || tag === 'style' || tag === 'template') {
+      const endTag = `</${tag}>`;
+      const skipTo = lower.indexOf(endTag, close + 1);
+      index = skipTo >= 0 ? skipTo + endTag.length : close + 1;
+      continue;
+    }
+
     if (tag === 'input') {
       const type = attrValueFromTag(full, 'type').toLowerCase();
       if (type === 'button' || type === 'submit' || type === 'reset') push(attrValueFromTag(full, 'value'));
@@ -626,7 +700,17 @@ function collectHtmlTextFallbacks(value: unknown): string[] {
       tag === 'hr' ||
       tag === 'img';
     if (!selfClosing) {
-      stack.push({ tag, wanted: wantedTags.has(tag), text: '' });
+      stack.push({ tag, wanted: trueosWantsHtmlTextTag(tag), text: '' });
+    }
+    index = close + 1;
+  }
+  if (text.length > 0) {
+    const textChunk = decodeBasicHtmlEntities(text);
+    for (let stackIndex = stack.length - 1; stackIndex >= 0; stackIndex -= 1) {
+      if (stack[stackIndex].wanted) {
+        stack[stackIndex].text += ` ${textChunk}`;
+        break;
+      }
     }
   }
   while (stack.length && out.length < TRUEOS_LAYOUT_TEXT_OVERLAY_LIMIT) {
@@ -634,7 +718,6 @@ function collectHtmlTextFallbacks(value: unknown): string[] {
     if (entry?.wanted) push(entry.text);
   }
   if (out.length === 0) {
-    const lower = html.toLowerCase();
     let start = lower.indexOf('<body');
     if (start >= 0) {
       const bodyOpenEnd = html.indexOf('>', start);
@@ -665,6 +748,12 @@ function collectHtmlTextFallbacks(value: unknown): string[] {
   return out;
 }
 
+function readTrueosGlobalValue(name: string): unknown {
+  const fromWindow = (window as any)?.[name];
+  if (fromWindow !== undefined) return fromWindow;
+  return (globalThis as any)?.[name];
+}
+
 function sampleHtmlTextFallbacks(rows: string[], limit = 8): string {
   const samples: string[] = [];
   for (let index = 0; index < rows.length && samples.length < limit; index += 1) {
@@ -681,13 +770,141 @@ function attrValueFromTag(tag: string, name: string): string {
 
 function sanitizeTextRows(rows: unknown[]): string[] {
   const out: string[] = [];
-  for (const row of rows) {
-    const text = normalizeWhitespace(String(row ?? ''));
-    if (text.length === 0) continue;
-    if (out.includes(text)) continue;
-    out.push(text);
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    if (typeof row !== 'string') continue;
+    pushSanitizedTextRow(out, row);
   }
   return out;
+}
+
+function normalizeTextRowForFallback(row: string): string {
+  let out = '';
+  let inWs = false;
+  for (let index = 0; index < row.length; index += 1) {
+    const code = row.charCodeAt(index);
+    const ws = code === 32 || code === 9 || code === 10 || code === 13 || code === 12;
+    if (ws) {
+      inWs = true;
+      continue;
+    }
+    if (inWs && out.length > 0) out += ' ';
+    out += row.charAt(index);
+    inWs = false;
+  }
+  return out;
+}
+
+function pushSanitizedTextRow(out: string[], row: string): void {
+  const text = normalizeTextRowForFallback(row);
+  if (text.length === 0) return;
+  if (text.indexOf('<truesurfer-') === 0 || text.indexOf('__trueo') === 0) return;
+  for (let index = 0; index < out.length; index += 1) {
+    if (out[index] === text) return;
+  }
+  out.push(text);
+}
+
+function parseTextRowsText(value: unknown): string[] {
+  if (typeof value !== 'string' || value.length === 0) return [];
+  const out: string[] = [];
+  let row = '';
+  for (let index = 0; index < value.length; index += 1) {
+    const ch = value.charAt(index);
+    if (ch === '\r' || ch === '\n') {
+      pushSanitizedTextRow(out, row);
+      row = '';
+      if (ch === '\r' && value.charAt(index + 1) === '\n') index += 1;
+      continue;
+    }
+    row += ch;
+  }
+  pushSanitizedTextRow(out, row);
+  return out;
+}
+
+function parseTextRowsArray(value: unknown): string[] {
+  const out: string[] = [];
+  if (!Array.isArray(value)) return out;
+  for (let index = 0; index < value.length; index += 1) {
+    const row = value[index];
+    if (typeof row === 'string') pushSanitizedTextRow(out, row);
+  }
+  return out;
+}
+
+function readTrustedStringRowsArray(value: unknown): string[] {
+  const out: string[] = [];
+  if (!Array.isArray(value)) return out;
+  for (let index = 0; index < value.length; index += 1) {
+    const row = value[index];
+    if (typeof row !== 'string' || row.length === 0) continue;
+    if (row.indexOf('<truesurfer-') === 0 || row.indexOf('__trueo') === 0) continue;
+    out[out.length] = row;
+  }
+  return out;
+}
+
+function readTrustedRowsText(value: unknown): string[] {
+  const out: string[] = [];
+  if (typeof value !== 'string' || value.length === 0) return out;
+  let row = '';
+  for (let index = 0; index < value.length; index += 1) {
+    const ch = value.charAt(index);
+    if (ch === '\r' || ch === '\n') {
+      if (row.length > 0 && row.indexOf('<truesurfer-') !== 0 && row.indexOf('__trueo') !== 0) {
+        out[out.length] = row;
+      }
+      row = '';
+      if (ch === '\r' && value.charAt(index + 1) === '\n') index += 1;
+      continue;
+    }
+    row += ch;
+  }
+  if (row.length > 0 && row.indexOf('<truesurfer-') !== 0 && row.indexOf('__trueo') !== 0) {
+    out[out.length] = row;
+  }
+  return out;
+}
+
+function readTrueosWidgetTextRows(html: string): { source: string; rows: string[] } {
+  const textRowsValue = readTrueosGlobalValue('__TRUEOS_WIDGET_TEXT_ROWS_TEXT__');
+  const arrayRowsValue = readTrueosGlobalValue('__TRUEOS_WIDGET_TEXT_ROWS__');
+  const trustedRows = readTrustedStringRowsArray(arrayRowsValue);
+  if (trustedRows.length > 0) return { source: 'array-trusted', rows: trustedRows };
+  const trustedTextRows = readTrustedRowsText(textRowsValue);
+  if (trustedTextRows.length > 0) return { source: 'text-trusted', rows: trustedTextRows };
+  const textRows = parseTextRowsText(textRowsValue);
+  if (textRows.length > 0) return { source: 'text', rows: textRows };
+  const publishedRows = parseTextRowsArray(arrayRowsValue);
+  if (publishedRows.length > 0) return { source: 'array', rows: publishedRows };
+  const htmlRows = collectHtmlTextFallbacks(html);
+  if (isTrueosCaptureOnly()) {
+    const arraySample =
+      Array.isArray(arrayRowsValue) && typeof arrayRowsValue[0] === 'string'
+        ? sampleRawTextForLog(arrayRowsValue[0] as string, 72)
+        : '';
+    const textSample =
+      typeof textRowsValue === 'string' ? sampleRawTextForLog(textRowsValue, 72) : '';
+    console.log(
+      `[trueos pixi widgets] text-fallback-globals text_type=${typeof textRowsValue} text_len=${typeof textRowsValue === 'string' ? textRowsValue.length : 0} text_rows=${textRows.length} text_sample="${textSample}" array=${Array.isArray(arrayRowsValue) ? (arrayRowsValue as unknown[]).length : -1} array_rows=${publishedRows.length} array0="${arraySample}" html_len=${html.length} html_rows=${htmlRows.length}`
+    );
+  }
+  return { source: 'html', rows: htmlRows };
+}
+
+function readTrueosWidgetRenderTree(): { source: string; tree: unknown } {
+  const json = readTrueosGlobalValue('__TRUEOS_WIDGET_RENDER_TREE_JSON__');
+  if (typeof json === 'string' && json.length > 0) {
+    try {
+      return { source: 'json', tree: JSON.parse(json) };
+    } catch (err) {
+      if (isTrueosCaptureOnly()) {
+        console.log(`[trueos pixi widgets] render-tree-json parse failed err=${String((err as any)?.message ?? err)}`);
+      }
+    }
+  }
+  return { source: 'window', tree: readTrueosGlobalValue('__TRUEOS_WIDGET_RENDER_TREE__') };
 }
 
 function collectIframeSrcdocTextRowsFromMarkup(srcdoc: string): string[] {
@@ -1233,7 +1450,7 @@ function collectRadioGroups(root: LayoutBox): Map<string, string[]> {
 function normalizeWhitespace(text: string): string {
   let out = '';
   let inWs = false;
-  const s = String(text ?? '');
+  const s = typeof text === 'string' ? text : '';
   for (let i = 0; i < s.length; i += 1) {
     const c = s.charCodeAt(i);
     const ws = c === 32 || c === 9 || c === 10 || c === 13 || c === 12;
@@ -1253,7 +1470,7 @@ function cloneRenderAttrs(value: unknown): Record<string, string> | undefined {
   const out: Record<string, string> = {};
   for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
     if (typeof key !== 'string' || key.length === 0) continue;
-    out[key] = String(raw ?? '');
+    out[key] = typeof raw === 'string' ? raw : '';
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
@@ -1265,31 +1482,37 @@ function normalizePublishedRenderNode(
 ): RenderNode | null {
   if (!value || typeof value !== 'object') return null;
   const node = value as Record<string, unknown>;
-  const kind = String(node.kind ?? '');
+  const kind = typeof node.kind === 'string' ? node.kind : '';
   if (kind === 'text') {
-    const raw = String(node.text ?? '');
-    let text = normalizeWhitespace(cleanTrueosOverlayText(raw));
+    const raw = typeof node.text === 'string' ? node.text : '';
+    let text = '';
+    const replacement = fallbackText?.rows[fallbackText.index] ?? '';
+    let usedReplacement = false;
+    if (fallbackText && fallbackText.index < fallbackText.rows.length) {
+      fallbackText.index += 1;
+      text = replacement;
+      usedReplacement = true;
+    } else {
+      text = normalizeWhitespace(cleanTrueosOverlayText(raw));
+    }
     const polluted =
-      raw.indexOf('<truesurfer-') >= 0 ||
-      raw.indexOf('__trueo') >= 0 ||
+      (!usedReplacement && (raw.indexOf('<truesurfer-') >= 0 || raw.indexOf('__trueo') >= 0)) ||
       text.startsWith('<truesurfer-') ||
       text.startsWith('__trueo');
     if (polluted) {
-      const replacement = fallbackText?.rows[fallbackText.index] ?? '';
-      if (fallbackText) fallbackText.index += 1;
-      text = replacement;
+      text = '';
     } else if (text.length === 0) {
-      const replacement = fallbackText?.rows[fallbackText.index] ?? '';
-      if (fallbackText && replacement) fallbackText.index += 1;
-      if (replacement) text = replacement;
+      const lateReplacement = fallbackText?.rows[fallbackText.index] ?? '';
+      if (fallbackText && lateReplacement) fallbackText.index += 1;
+      if (lateReplacement) text = lateReplacement;
     }
     return text.length > 0 ? { kind: 'text', text } : null;
   }
   if (kind !== 'block') return null;
 
-  const tagName = String(node.tagName ?? '').toLowerCase();
+  const tagName = typeof node.tagName === 'string' ? node.tagName.toLowerCase() : '';
   if (tagName.length === 0) return null;
-  const key = String(node.key ?? `${path}:${tagName}`);
+  const key = typeof node.key === 'string' ? node.key : `${path}:${tagName}`;
   const children: RenderNode[] = [];
   const rawChildren = Array.isArray(node.children) ? node.children : [];
   for (let index = 0; index < rawChildren.length; index += 1) {
@@ -2835,19 +3058,15 @@ async function main() {
 
   setTrueosPhase('main:render-tree');
   trueosIframeSrcdocRowsByKey.clear();
-  const publishedTextRows = Array.isArray(window.__TRUEOS_WIDGET_TEXT_ROWS__)
-    ? sanitizeTextRows(window.__TRUEOS_WIDGET_TEXT_ROWS__ as unknown[])
-    : [];
-  const trueosTextFallbackRows = publishedTextRows.length > 0
-    ? publishedTextRows
-    : collectHtmlTextFallbacks(html);
-  const renderNodes = normalizePublishedRenderTree(window.__TRUEOS_WIDGET_RENDER_TREE__, trueosTextFallbackRows);
+  const textFallback = readTrueosWidgetTextRows(html);
+  const renderTree = readTrueosWidgetRenderTree();
+  const renderNodes = normalizePublishedRenderTree(renderTree.tree, textFallback.rows);
   if (isTrueosCaptureOnly()) {
     console.log(
-      `[trueos pixi widgets] text-fallback source=${publishedTextRows.length > 0 ? 'truesurfer' : 'html'} rows=${trueosTextFallbackRows.length} samples=${sampleHtmlTextFallbacks(trueosTextFallbackRows)}`
+      `[trueos pixi widgets] text-fallback source=${textFallback.source} rows=${textFallback.rows.length} samples=${sampleHtmlTextFallbacks(textFallback.rows)}`
     );
     console.log(
-      `[trueos pixi widgets] render-tree source=truesurfer nodes=${renderNodes.length}`
+      `[trueos pixi widgets] render-tree source=${renderTree.source} nodes=${renderNodes.length}`
     );
   }
   if (renderNodes.length === 0) {
