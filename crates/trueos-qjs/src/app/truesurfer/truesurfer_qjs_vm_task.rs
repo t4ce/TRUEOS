@@ -1047,6 +1047,54 @@ function __trueosCleanRenderableText(value) {
   if (__trueosTextIsRenderable(raw) && !__trueosTextLooksInternal(raw)) return raw;
   return "";
 }
+function __trueosCleanCapturedLabel(value) {
+  var text = String(value == null ? "" : value);
+  if (text.length > 4096) text = text.slice(0, 4096);
+  var start = 0;
+  while (start < text.length) {
+    var startCode = text.charCodeAt(start);
+    if (startCode !== 32 && startCode !== 9 && startCode !== 10 && startCode !== 13 && startCode !== 12) break;
+    start += 1;
+  }
+  if (start > 0) text = text.slice(start);
+  if (text.indexOf("<truesurfer-") === 0 || text.indexOf("__trueo") === 0) return "";
+  var out = "";
+  for (var ci = 0; ci < text.length && out.length < 240; ci += 1) {
+    var code = text.charCodeAt(ci);
+    if (code === 10 || code === 13 || code === 9) {
+      if (out.length && out.charAt(out.length - 1) !== " ") out += " ";
+      continue;
+    }
+    if (code === 0) continue;
+    out += text.charAt(ci);
+  }
+  while (out.length && out.charCodeAt(out.length - 1) <= 32) out = out.slice(0, out.length - 1);
+  if (!__trueosTextHasInk(out)) return "";
+  if (out === "true" || out === "false") return "";
+  if (out === "N" || out === "Nu" || out === "Num") return "";
+  return out;
+}
+function __trueosFallbackCapturedLabel(value) {
+  var raw = String(value == null ? "" : value);
+  if (raw.length > 4096) raw = raw.slice(0, 4096);
+  var trimmed = __trueosTrimStart(raw);
+  if (trimmed.indexOf("<truesurfer-") === 0 || trimmed.indexOf("__trueo") === 0) return "";
+  var sample = __trueosLogTextSample(raw);
+  while (sample.length && sample.charCodeAt(0) <= 32) sample = sample.slice(1);
+  while (sample.length && sample.charCodeAt(sample.length - 1) <= 32) sample = sample.slice(0, sample.length - 1);
+  if (sample.length > 240) sample = sample.slice(0, 240);
+  if (sample.indexOf("<truesurfer-") === 0 || sample.indexOf("__trueo") === 0) return "";
+  if (!__trueosTextHasInk(sample)) return "";
+  if (sample === "true" || sample === "false") return "";
+  if (sample === "N" || sample === "Nu" || sample === "Num") return "";
+  return sample;
+}
+function __trueosResolveCapturedLabel(value) {
+  var clean = __trueosCleanCapturedLabel(value);
+  var trimmed = __trueosTrimStart(clean);
+  if (clean && trimmed.indexOf("<truesurfer-") !== 0 && trimmed.indexOf("__trueo") !== 0) return clean;
+  return __trueosFallbackCapturedLabel(value);
+}
 function __trueosOverlayTextIsRenderable(value) {
   var text = __trueosStripHostMarkers(value);
   if (!__trueosTextHasInk(text)) return false;
@@ -1107,6 +1155,11 @@ function __trueosPushSnapshotNode(node, parent, ops, seen, snapshotSeen, snapsho
   if (!node || typeof node !== "object") return 0;
   var id = __trueosNum(node.id, 0) | 0;
   if (id <= 0) return 0;
+  var pushCount = (G.__trueosSnapshotPushCount || 0) + 1;
+  G.__trueosSnapshotPushCount = pushCount;
+  if ((pushCount === 1 || pushCount === 32 || pushCount === 64 || pushCount === 96 || pushCount === 128) && G.console && typeof G.console.log === "function") {
+    G.console.log("[parse5 trueos host] scene-build phase=snapshot-push progress count=" + pushCount + " id=" + id);
+  }
   if (snapshotSeen[id]) {
     if (parent > 0) ops.push({ code: 2, node: parent, a: id });
     return id;
@@ -1122,7 +1175,8 @@ function __trueosPushSnapshotNode(node, parent, ops, seen, snapshotSeen, snapsho
   }
   var type = String(node.type || "");
   var isTextNode = type.indexOf("Text") >= 0;
-  var cleanedText = typeof node.text === "string" ? __trueosCleanRenderableText(node.text) : "";
+  var cleanedText = typeof node.text === "string" ? node.text : "";
+  if (cleanedText.length > 240) cleanedText = cleanedText.slice(0, 240);
   var hasRenderableText = cleanedText && __trueosTextIsRenderable(cleanedText);
   var hasVisibleText = hasRenderableText && __trueosTextWithinVisibleSurface(worldX, worldY);
   if (isTextNode && __trueosTextWithinVisibleSurface(worldX, worldY)) {
@@ -1262,6 +1316,7 @@ G.__trueosParse5BuildSceneFromCapture = function () {
     if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=snapshot-visibility begin");
     __trueosCollectSnapshotVisibility(snapshot, 0, 0, true, snapshotNodeVisible);
     if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=snapshot-push begin");
+    G.__trueosSnapshotPushCount = 0;
     rootId = __trueosPushSnapshotNode(snapshot, 0, ops, seen, snapshotSeen, snapshotTextVisible, snapshotTextWorld, textSlots, 0, 0) || rootId;
     if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=snapshot-push done ops=" + ops.length);
   }
@@ -1275,8 +1330,8 @@ G.__trueosParse5BuildSceneFromCapture = function () {
     }
     seen[nodeId] = true;
   }
-  var prepassStart = commands.length;
-  if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=text-prepass skipped commands=" + commands.length + " replay_start=" + replayStart + " reason=replay-handles-text");
+  var prepassStart = 0;
+  if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=text-prepass begin commands=" + commands.length + " replay_start=" + replayStart + " mode=text-set-only");
   var preRawRenderable = 0;
   var preCleanRenderable = 0;
   var preTextSamples = [];
@@ -1294,9 +1349,13 @@ G.__trueosParse5BuildSceneFromCapture = function () {
     var preTextArgs = preTextCmd.args && preTextCmd.args.length ? preTextCmd.args : [];
     var preTextRaw = String(preTextArgs[0] == null ? "" : preTextArgs[0]);
     var preTextRawSample = preTextRaw.length > 4096 ? preTextRaw.slice(0, 4096) : preTextRaw;
-    var preTextValue = __trueosCleanRenderableText(preTextRaw);
-    var preRawHasInk = __trueosTextIsRenderable(preTextRawSample);
-    var preCleanHasInk = __trueosTextIsRenderable(preTextValue);
+    var preTextValue = __trueosLogTextSample(preTextRaw);
+    while (preTextValue.length && preTextValue.charCodeAt(0) <= 32) preTextValue = preTextValue.slice(1);
+    while (preTextValue.length && preTextValue.charCodeAt(preTextValue.length - 1) <= 32) preTextValue = preTextValue.slice(0, preTextValue.length - 1);
+    var preTextTrimmed = __trueosTrimStart(preTextValue);
+    if (preTextTrimmed.indexOf("<truesurfer-") === 0 || preTextTrimmed.indexOf("__trueo") === 0) preTextValue = "";
+    var preRawHasInk = __trueosTextHasInk(preTextRawSample);
+    var preCleanHasInk = preTextValue !== "";
     if (preRawHasInk) preRawRenderable += 1;
     if (preCleanHasInk) preCleanRenderable += 1;
     if (preTextSamples.length < 24 && (preRawHasInk || preCleanHasInk)) {
@@ -1310,9 +1369,9 @@ G.__trueosParse5BuildSceneFromCapture = function () {
     finalTextById[preTextId] = preTextValue;
   }
   if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=text-prepass done final_text=" + finalTextOrder.length + " text_seen=" + preTextSeen + " raw_renderable=" + preRawRenderable + " clean_renderable=" + preCleanRenderable + " samples=" + preTextSamples.join("|"));
-  var replayLoopStart = hasSnapshot ? commands.length : replayStart;
-  if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=replay begin start=" + replayLoopStart + " original_start=" + replayStart + " commands=" + commands.length + " snapshot_delta=" + (hasSnapshot ? 0 : 1));
-  var replaySkippedSnapshotGeometry = 0;
+  var replayLoopStart = replayStart;
+  if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=replay begin start=" + replayLoopStart + " original_start=" + replayStart + " commands=" + commands.length + " snapshot_delta=" + (hasSnapshot ? "graphics-text-state" : "full"));
+  var replaySkippedSnapshotCommands = 0;
   var replayTextSeen = 0;
   var replayListenersSkipped = 0;
   var replayStateSeen = 0;
@@ -1323,11 +1382,33 @@ G.__trueosParse5BuildSceneFromCapture = function () {
       if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=replay progress i=" + i + " op=\"" + __trueosLogTextSample(replayOp) + "\"");
     }
     if (hasSnapshot) {
-      if (replayOp === "on") {
+      if (
+        replayOp === "on" ||
+        replayOp === "removeAllListeners" ||
+        replayOp === "addChild" ||
+        replayOp === "addChildAt" ||
+        replayOp === "setChildIndex" ||
+        replayOp === "removeChild" ||
+        replayOp === "removeChildren" ||
+        replayOp === "render" ||
+        replayOp === "snapshot"
+      ) {
         replayListenersSkipped += 1;
         continue;
       }
       if (
+        replayOp !== "clear" &&
+        replayOp !== "rect" &&
+        replayOp !== "roundRect" &&
+        replayOp !== "circle" &&
+        replayOp !== "ellipse" &&
+        replayOp !== "moveTo" &&
+        replayOp !== "lineTo" &&
+        replayOp !== "closePath" &&
+        replayOp !== "poly" &&
+        replayOp !== "fill" &&
+        replayOp !== "stroke" &&
+        replayOp !== "image" &&
         replayOp !== "text.text.set" &&
         replayOp !== "text.style.set" &&
         replayOp !== "visible" &&
@@ -1336,7 +1417,7 @@ G.__trueosParse5BuildSceneFromCapture = function () {
         replayOp !== "scale" &&
         replayOp !== "mask"
       ) {
-        replaySkippedSnapshotGeometry += 1;
+        replaySkippedSnapshotCommands += 1;
         continue;
       }
     }
@@ -1412,14 +1493,20 @@ G.__trueosParse5BuildSceneFromCapture = function () {
         break;
       case "text.text.set":
         replayTextSeen += 1;
-        var textValue = __trueosCleanRenderableText(args[0]);
-        var hasInk = __trueosTextIsRenderable(textValue);
+        var textValue = __trueosResolveCapturedLabel(args[0]);
+        var hasInk = textValue !== "";
         if (hasSnapshot && (!wasSnapshotSeen || !snapshotNodeVisible[id])) break;
         if (!finalTextQueued[id]) {
           finalTextQueued[id] = true;
           finalTextOrder.push(id);
         }
-        if (hasInk || !__trueosTextIsRenderable(finalTextById[id])) finalTextById[id] = hasInk ? textValue : "";
+        if (hasInk) {
+          var existingText = finalTextById[id] || "";
+          var existingTrimmed = __trueosTrimStart(existingText);
+          if (!existingText || existingTrimmed.indexOf("<truesurfer-") === 0 || existingTrimmed.indexOf("__trueo") === 0) finalTextById[id] = textValue;
+        } else if (!finalTextById[id]) {
+          finalTextById[id] = "";
+        }
         break;
       case "text.style.set":
         if (args[0] && typeof args[0].fill !== "undefined") {
@@ -1429,12 +1516,12 @@ G.__trueosParse5BuildSceneFromCapture = function () {
         break;
       }
   }
-  if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=replay done final_text=" + finalTextOrder.length + " ops=" + ops.length + " text_seen=" + replayTextSeen + " listeners_skipped=" + replayListenersSkipped + " state=" + replayStateSeen + " skipped_snapshot_geometry=" + replaySkippedSnapshotGeometry);
+  if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=replay done final_text=" + finalTextOrder.length + " ops=" + ops.length + " text_seen=" + replayTextSeen + " listeners_skipped=" + replayListenersSkipped + " state=" + replayStateSeen + " skipped_snapshot_commands=" + replaySkippedSnapshotCommands);
   if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=final-text begin count=" + finalTextOrder.length);
   for (var ti = 0; ti < finalTextOrder.length; ti += 1) {
     var finalId = finalTextOrder[ti] | 0;
     var finalText = finalTextById[finalId];
-    if (!__trueosTextIsRenderable(finalText)) continue;
+    if (!finalText || !__trueosTextHasInk(finalText)) continue;
     var finalTextNode = __trueosMappedTextNode(finalId, true, !!snapshotSeen[finalId]);
     var worldText = hasSnapshot ? snapshotTextWorld[finalId] : null;
     if (worldText) {

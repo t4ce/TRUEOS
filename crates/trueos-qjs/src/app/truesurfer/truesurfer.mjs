@@ -339,6 +339,7 @@ function setHtml(nextHtml, meta) {
 
   if (typeof extractDocumentArtifactsFn !== 'function') {
     root.__TRUEOS_WIDGET_RENDER_TREE__ = null;
+    root.__TRUEOS_WIDGET_TEXT_ROWS__ = [];
     return {
       ok: 0,
       bytes: html.length,
@@ -365,6 +366,7 @@ function setHtml(nextHtml, meta) {
       bodyHierarchy: parsed.bodyHierarchy,
       bodyHierarchySummary: parsed.bodyHierarchySummary,
       widgetRenderTree: parsed.widgetRenderTree,
+      widgetTextRows: parsed.widgetTextRows,
       gadgetSnapshot: currentBaseGadgetSnapshot,
       ui3Scene: parsed.ui3Scene,
       styleCount: parsed.styleCount,
@@ -376,6 +378,7 @@ function setHtml(nextHtml, meta) {
       scriptBytes: parsed.scriptBytes,
     };
     root.__TRUEOS_WIDGET_RENDER_TREE__ = parsed.widgetRenderTree;
+    root.__TRUEOS_WIDGET_TEXT_ROWS__ = Array.isArray(parsed.widgetTextRows) ? parsed.widgetTextRows : [];
     const composedGadgetSnapshot = publishLatestArtifactsSnapshot() || composeCurrentGadgetSnapshot();
     const imageSummary = assetManager
       ? assetManager.summarizeImageUrls(currentSceneImageUrls)
@@ -397,6 +400,7 @@ function setHtml(nextHtml, meta) {
       shellBytes: parsed.shellBytes,
       bodyBytes: parsed.bodyBytes,
       widgetRenderTree: parsed.widgetRenderTree,
+      widgetTextRows: parsed.widgetTextRows,
       gadgetSnapshot: composedGadgetSnapshot,
       ui3Scene: parsed.ui3Scene,
       styleCount: parsed.styleCount,
@@ -412,6 +416,7 @@ function setHtml(nextHtml, meta) {
       error && error.stack ? String(error.stack) : error ? String(error) : 'unknown minimal extract error';
     log(`[truesurfer extract] browser=${browserId} fail error=${message}`);
     root.__TRUEOS_WIDGET_RENDER_TREE__ = null;
+    root.__TRUEOS_WIDGET_TEXT_ROWS__ = [];
     return {
       ok: 0,
       bytes: html.length,

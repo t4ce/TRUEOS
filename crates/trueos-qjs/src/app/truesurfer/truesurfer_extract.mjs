@@ -735,6 +735,28 @@ function buildWidgetRenderTree(bodyHtml) {
   }];
 }
 
+function collectWidgetTextRows(nodes) {
+  const rows = [];
+  const push = (text) => {
+    const cleaned = normalizeWhitespace(safeString(text));
+    if (!cleaned) return;
+    if (cleaned.indexOf('<truesurfer-') === 0 || cleaned.indexOf('__trueo') === 0) return;
+    rows.push(cleaned);
+  };
+  const walk = (node) => {
+    if (!node || typeof node !== 'object' || rows.length >= 512) return;
+    if (node.kind === 'text') {
+      push(node.text);
+      return;
+    }
+    const children = Array.isArray(node.children) ? node.children : [];
+    for (const child of children) walk(child);
+  };
+  const roots = Array.isArray(nodes) ? nodes : [];
+  for (const node of roots) walk(node);
+  return rows;
+}
+
 function summarizeBodyHierarchy(bodyHierarchy) {
   if (!Array.isArray(bodyHierarchy) || bodyHierarchy.length === 0) {
     return 'body';
@@ -1014,6 +1036,7 @@ function extractDocumentArtifacts(source) {
     ? collectBodyHierarchy(bodyHtml, BODY_HIERARCHY_ROOT_LIMIT)
     : [];
   const widgetRenderTree = buildWidgetRenderTree(bodyHtml);
+  const widgetTextRows = collectWidgetTextRows(widgetRenderTree);
   const bodyHierarchySummary = summarizeBodyHierarchy(bodyHierarchy);
   const styles = TRUESURFER_SUBSET_PROFILE.includeStyles ? collectStyleArtifacts(html) : [];
   const scripts = TRUESURFER_SUBSET_PROFILE.includeScripts ? collectScriptArtifacts(html) : [];
@@ -1052,6 +1075,7 @@ function extractDocumentArtifacts(source) {
     bodyHierarchy,
     bodyHierarchySummary,
     widgetRenderTree,
+    widgetTextRows,
     gadgetSnapshot,
     ui3Scene,
     styleCount: styles.length,

@@ -28,6 +28,10 @@ const FRAC_BITS: u32 = 16;
 const TABLE_SIZE: u32 = 256;
 /// LFSR seed for noise generator
 const LFSR_SEED: u16 = 0xACE1;
+/// Gentle mix limiter knee. Samples below this are unchanged.
+const SOFT_LIMIT_THRESHOLD: i32 = 22_000;
+/// Compression ratio for samples above the knee: 4 means 4:1.
+const SOFT_LIMIT_RATIO: i32 = 4;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Waveform Types
@@ -40,7 +44,20 @@ pub enum Waveform {
     Square,
     Sawtooth,
     Triangle,
+    TriSine,
     Noise,
+}
+
+fn soft_limit(sample: i32) -> i32 {
+    let sign = if sample < 0 { -1 } else { 1 };
+    let abs = sample.abs();
+    if abs <= SOFT_LIMIT_THRESHOLD {
+        return sample;
+    }
+
+    let over = abs - SOFT_LIMIT_THRESHOLD;
+    let limited = SOFT_LIMIT_THRESHOLD + over / SOFT_LIMIT_RATIO;
+    sign * limited.min(32767)
 }
 
 impl Waveform {
@@ -51,6 +68,7 @@ impl Waveform {
             "square" | "sq" | "q" => Some(Waveform::Square),
             "saw" | "sawtooth" | "w" => Some(Waveform::Sawtooth),
             "triangle" | "tri" | "t" => Some(Waveform::Triangle),
+            "trisine" | "tri-sine" | "tris" | "ts" => Some(Waveform::TriSine),
             "noise" | "n" => Some(Waveform::Noise),
             _ => None,
         }
@@ -63,6 +81,7 @@ impl Waveform {
             Waveform::Square => "Sqr",
             Waveform::Sawtooth => "Saw",
             Waveform::Triangle => "Tri",
+            Waveform::TriSine => "TrS",
             Waveform::Noise => "Noi",
         }
     }
@@ -73,6 +92,7 @@ impl Waveform {
             Waveform::Square => "Square",
             Waveform::Sawtooth => "Sawtooth",
             Waveform::Triangle => "Triangle",
+            Waveform::TriSine => "TriSine",
             Waveform::Noise => "Noise",
         }
     }
@@ -312,6 +332,7 @@ impl Oscillator {
             Waveform::Square => self.gen_square(),
             Waveform::Sawtooth => self.gen_sawtooth(),
             Waveform::Triangle => self.gen_triangle(),
+            Waveform::TriSine => self.gen_trisine(),
             Waveform::Noise => self.gen_noise(),
         };
 
@@ -323,8 +344,12 @@ impl Oscillator {
 
     /// Sine wave via table lookup with linear interpolation
     fn gen_sine(&self) -> i16 {
-        let table_idx = (self.phase >> FRAC_BITS) as usize & 0xFF;
-        let frac = (self.phase & 0xFFFF) as i32;
+        Self::gen_sine_at_phase(self.phase)
+    }
+
+    fn gen_sine_at_phase(phase: u32) -> i16 {
+        let table_idx = (phase >> FRAC_BITS) as usize & 0xFF;
+        let frac = (phase & 0xFFFF) as i32;
 
         let s0 = SINE_TABLE[table_idx] as i32;
         let s1 = SINE_TABLE[(table_idx + 1) & 0xFF] as i32;
@@ -412,6 +437,15 @@ impl Oscillator {
             let rev = ((TABLE_SIZE << FRAC_BITS) as u32).wrapping_sub(p);
             ((rev as i64 * 48000 / half as i64) - 24000) as i16
         }
+    }
+
+    /// Mostly triangle with a small sine component to round the peaks.
+    fn gen_trisine(&self) -> i16 {
+        let triangle = self.gen_triangle() as i32;
+        let sine = self.gen_sine() as i32;
+        let body = (triangle * 7 + sine) / 8;
+        let octave = Self::gen_sine_at_phase(self.phase.wrapping_mul(2)) as i32;
+        ((body * 95 + octave * 5) / 100).clamp(-32767, 32767) as i16
     }
 
     /// White noise via 16-bit LFSR (Galois)
@@ -523,9 +557,9 @@ impl Voice {
         self.base_inc = self.osc.phase_inc;
         self.drift_phase = 0;
 
-        // Detuned second oscillator (+0.5%) for unison width
-        let freq2 = freq + (freq / 200).max(1);
-        self.osc2 = Oscillator::new(waveform, freq2);
+        // Detuned second oscillator (+0.4%) for subtle unison width
+        self.osc2 = Oscillator::new(waveform, freq);
+        self.osc2.phase_inc = self.base_inc + (self.base_inc / 250).max(1);
 
         self.env = envelope;
         self.env.note_on();
@@ -540,7 +574,7 @@ impl Voice {
                 // Sine is already pure — bypass
                 self.filter = LowPassFilter::bypass();
             }
-            Waveform::Triangle => {
+            Waveform::Triangle | Waveform::TriSine => {
                 // Fairly clean — gentle filtering
                 let cutoff = (freq * 12).max(400).min(16000);
                 self.filter.set_cutoff(cutoff);
@@ -685,6 +719,7 @@ impl SynthEngine {
 
             // Apply master volume
             mix = mix * self.master_volume as i32 / 255;
+            mix = soft_limit(mix);
 
             // Clamp to 16-bit range
             let sample = mix.clamp(-32767, 32767) as i16;

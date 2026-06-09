@@ -1243,12 +1243,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     TaskSpec::enabled("esp-gate", 0, &ESP_GATE_STARTED, spawn_esp_gate),
     TaskSpec::enabled("esp-gate-registry", 0, &ESP_GATE_REGISTRY_STARTED, spawn_esp_gate_registry),
-    TaskSpec::enabled(
-        "esp-piano-audio",
-        0,
-        &ESP_PIANO_AUDIO_STARTED,
-        spawn_esp_piano_audio,
-    ),
+    TaskSpec::enabled("esp-piano-audio", 0, &ESP_PIANO_AUDIO_STARTED, spawn_esp_piano_audio),
     TaskSpec::enabled(
         "esp-piano-udp",
         crate::r::readiness::NET_ANY_CONFIGURED,
