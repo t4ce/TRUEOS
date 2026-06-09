@@ -406,6 +406,32 @@ export function createBrowserAssetManager(options = {}) {
     };
   }
 
+  function sharedReadyImageTexture(url) {
+    const key = String(url || '').trim();
+    if (!key) return null;
+    let cache = host.__TRUEOS_READY_IMAGE_TEXTURE_CACHE__;
+    if (!cache || typeof cache.get !== 'function' || typeof cache.set !== 'function') {
+      cache = new Map();
+      host.__TRUEOS_READY_IMAGE_TEXTURE_CACHE__ = cache;
+    }
+    const cached = cache.get(key);
+    if (cached) return cached;
+    const result = host.__trueosResolveReadyImageTexture(key);
+    if (result && typeof result.then === 'function') {
+      const task = result.then((ready) => {
+        cache.set(key, ready);
+        return ready;
+      }).catch((err) => {
+        cache.delete(key);
+        throw err;
+      });
+      cache.set(key, task);
+      return task;
+    }
+    cache.set(key, result);
+    return result;
+  }
+
   async function requestReadyImageTexture(url) {
     const value = String(url || '').trim();
     if (!value) {
@@ -433,7 +459,10 @@ export function createBrowserAssetManager(options = {}) {
       });
     }
 
-    const result = await host.__trueosResolveReadyImageTexture(value);
+    const maybeResult = sharedReadyImageTexture(value);
+    const result = maybeResult && typeof maybeResult.then === 'function'
+      ? await maybeResult
+      : maybeResult;
     const texId = Math.max(0, Number(result && result.texId || 0) | 0);
     if (texId <= 0) {
       raiseBrowserError('TRUEOS_BROWSER_IMAGE_NATIVE_FAILED', 'Native image request did not yield a texture id', {
@@ -525,7 +554,9 @@ export function createBrowserAssetManager(options = {}) {
       } finally {
         imageTextureLoads.delete(cacheKey);
         try { onAssetStateChanged(cacheKey); } catch (_) {}
-        queueRepaint();
+        if (!host.__TRUEOS_CAPTURE_ONLY__) {
+          queueRepaint();
+        }
       }
     })();
 
@@ -542,7 +573,10 @@ export function createBrowserAssetManager(options = {}) {
       if (cached && (cached.state === 'ready' || cached.state === 'loading' || cached.state === 'error')) {
         continue;
       }
-      void ensureImageTexture(resolvedSrc).catch(() => {});
+      const load = ensureImageTexture(resolvedSrc);
+      if (!host.__TRUEOS_CAPTURE_ONLY__ && load && typeof load.catch === 'function') {
+        void load.catch(() => {});
+      }
     }
   }
 
@@ -554,6 +588,10 @@ export function createBrowserAssetManager(options = {}) {
         flushQueuedImagePrimes();
       } catch (_) {}
     };
+    if (host.__TRUEOS_CAPTURE_ONLY__) {
+      job();
+      return;
+    }
     if (typeof Promise === 'function' && typeof Promise.resolve === 'function') {
       Promise.resolve().then(job).catch(() => {
         imagePrimeScheduled = false;
@@ -698,10 +736,35 @@ export function createBrowserAssetManager(options = {}) {
     };
   }
 
+  function adoptSharedReadyImageTexture(url) {
+    const key = String(url || '').trim();
+    if (!key) return null;
+    const shared = host.__TRUEOS_READY_IMAGE_TEXTURE_CACHE__;
+    if (!shared || typeof shared.get !== 'function') return null;
+    const result = shared.get(key);
+    if (!result || typeof result.then === 'function') return null;
+    const texId = Math.max(0, Number(result.texId || 0) | 0);
+    if (texId <= 0) return null;
+    const ready = {
+      state: 'ready',
+      texId,
+      url: key,
+      mime: String(result.mime || 'image/png'),
+      pixelWidth: Math.max(0, Number(result.pixelWidth || result.width || 0) | 0),
+      pixelHeight: Math.max(0, Number(result.pixelHeight || result.height || 0) | 0),
+      error: '',
+    };
+    imageTextureCache.set(key, ready);
+    imageTextureLoads.delete(key);
+    return ready;
+  }
+
   function getCachedImageTexture(url) {
     const key = String(url || '').trim();
     if (!key) return null;
-    return imageTextureCache.get(key) || null;
+    const cached = imageTextureCache.get(key) || null;
+    if (cached && String(cached.state || '') === 'ready') return cached;
+    return adoptSharedReadyImageTexture(key) || cached;
   }
 
   return {

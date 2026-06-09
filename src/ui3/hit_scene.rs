@@ -86,6 +86,16 @@ impl Ui3HitScene {
         }
 
         let mut entries = Vec::new();
+        let mut listener_nodes = 0usize;
+        let mut listener_with_world_bounds = 0usize;
+        let mut listener_missing_world_bounds = 0usize;
+        let mut listener_clipped = 0usize;
+        let mut sample_node = 0u32;
+        let mut sample_kind = 0u32;
+        let mut sample_children = 0usize;
+        let mut sample_graphics = 0usize;
+        let mut sample_text_len = 0usize;
+        let mut sample_mask = 0u32;
         for (order, node_id) in ordered_nodes.iter().copied().enumerate() {
             let Some(node) = nodes.get(&node_id) else {
                 continue;
@@ -93,10 +103,22 @@ impl Ui3HitScene {
             if node.listeners.is_empty() {
                 continue;
             }
+            listener_nodes = listener_nodes.saturating_add(1);
+            if sample_node == 0 {
+                sample_node = node_id;
+                sample_kind = node_kind_code(&node.kind);
+                sample_children = node.children.len();
+                sample_graphics = node.graphics.len();
+                sample_text_len = node.text.len();
+                sample_mask = node.mask.unwrap_or(0);
+            }
             let Some(rect) = world_bounds.get(&node_id).copied() else {
+                listener_missing_world_bounds = listener_missing_world_bounds.saturating_add(1);
                 continue;
             };
+            listener_with_world_bounds = listener_with_world_bounds.saturating_add(1);
             let Some(rect) = clipped_by_inherited_masks(nodes, node_id, rect) else {
+                listener_clipped = listener_clipped.saturating_add(1);
                 continue;
             };
             entries.push(Ui3HitEntry {
@@ -105,6 +127,24 @@ impl Ui3HitScene {
                 rect,
                 order: order as u32,
             });
+        }
+
+        if listener_nodes > 0 && entries.is_empty() {
+            crate::log!(
+                "ui3-hit-scene: listeners={} with_world_bounds={} missing_world_bounds={} clipped={} ordered_nodes={} world_bounds={} sample node={} kind={} children={} graphics={} text_len={} mask={}\n",
+                listener_nodes,
+                listener_with_world_bounds,
+                listener_missing_world_bounds,
+                listener_clipped,
+                ordered_nodes.len(),
+                world_bounds.len(),
+                sample_node,
+                sample_kind,
+                sample_children,
+                sample_graphics,
+                sample_text_len,
+                sample_mask
+            );
         }
 
         Self { entries }
@@ -127,18 +167,31 @@ impl Ui3HitScene {
     }
 }
 
+fn node_kind_code(kind: &Ui3NodeKind) -> u32 {
+    match kind {
+        Ui3NodeKind::Container => 0,
+        Ui3NodeKind::Graphics => 1,
+        Ui3NodeKind::Text => 2,
+    }
+}
+
 fn local_node_bounds(node: &Ui3Node) -> Option<Ui3Rect> {
+    if let Some(rect) = graphics_bounds(&node.graphics) {
+        return Some(rect);
+    }
+    if !node.text.is_empty() {
+        let w = (node.text.len() as f32 * 9.0).max(1.0);
+        return Some(Ui3Rect {
+            x: 0.0,
+            y: 0.0,
+            w,
+            h: 16.0,
+        });
+    }
+
     match node.kind {
         Ui3NodeKind::Graphics => graphics_bounds(&node.graphics),
-        Ui3NodeKind::Text if !node.text.is_empty() => {
-            let w = (node.text.len() as f32 * 9.0).max(1.0);
-            Some(Ui3Rect {
-                x: 0.0,
-                y: 0.0,
-                w,
-                h: 16.0,
-            })
-        }
+        Ui3NodeKind::Text => None,
         _ => None,
     }
 }

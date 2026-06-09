@@ -469,7 +469,13 @@ pub unsafe extern "C" fn trueos_cabi_ui3_pixi_op(
             },
         ),
         25 => pixi_service::queue_scene_command(browser_id, Ui3Command::GraphicsClosePath { node }),
-        21 => pixi_service::queue_scene_command(browser_id, Ui3Command::Render { root: node }),
+        21 => {
+            let rc = pixi_service::queue_scene_command(browser_id, Ui3Command::Render { root: node });
+            if rc >= 0 {
+                let _ = pixi_service::flush_service_queue(8192);
+            }
+            rc
+        }
         22 => pixi_service::queue_scene_command(
             browser_id,
             Ui3Command::TextureRect {

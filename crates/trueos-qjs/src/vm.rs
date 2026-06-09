@@ -105,6 +105,40 @@ pub(crate) unsafe fn drain_pending_jobs(
     true
 }
 
+pub(crate) unsafe fn drain_pending_jobs_bounded(
+    rt: *mut qjs::JSRuntime,
+    fallback_ctx: *mut qjs::JSContext,
+    label: &str,
+    max_jobs: usize,
+) -> bool {
+    if rt.is_null() {
+        return true;
+    }
+    let mut jobs = 0usize;
+    while jobs < max_jobs {
+        let mut job_ctx: *mut qjs::JSContext = core::ptr::null_mut();
+        let rc = qjs::JS_ExecutePendingJob(rt, &mut job_ctx as *mut *mut qjs::JSContext);
+        if rc > 0 {
+            jobs = jobs.saturating_add(1);
+            qjs::trueos_shims::trueos_cabi_poll_once();
+            continue;
+        }
+        if rc < 0 {
+            let ctx = if !job_ctx.is_null() {
+                job_ctx
+            } else {
+                fallback_ctx
+            };
+            if !ctx.is_null() {
+                qjs::qjs_diag::dump_last_exception(ctx, label);
+            }
+            return false;
+        }
+        break;
+    }
+    true
+}
+
 pub unsafe fn pump_runtime_once(
     rt: *mut qjs::JSRuntime,
     ctx: *mut qjs::JSContext,
@@ -116,6 +150,33 @@ pub unsafe fn pump_runtime_once(
     progress |= qjs::workers::pump(ctx);
     progress |= qjs::timers::pump(ctx);
     if !drain_pending_jobs(rt, ctx, label) {
+        return false;
+    }
+    if qjs::JS_IsJobPending(rt) > 0
+        || qjs::workers::has_pending_for_ctx(ctx)
+        || qjs::async_ops::has_pending(ctx)
+        || had_async_pending
+    {
+        qjs::trueos_shims::trueos_cabi_poll_once();
+        if !progress {
+            qjs::trueos_shims::trueos_cabi_poll_once();
+        }
+    }
+    true
+}
+
+pub unsafe fn pump_runtime_once_bounded_jobs(
+    rt: *mut qjs::JSRuntime,
+    ctx: *mut qjs::JSContext,
+    label: &str,
+    max_jobs: usize,
+) -> bool {
+    let mut progress = false;
+    let had_async_pending = qjs::async_ops::has_pending(ctx);
+    progress |= qjs::async_ops::pump(ctx);
+    progress |= qjs::workers::pump(ctx);
+    progress |= qjs::timers::pump(ctx);
+    if !drain_pending_jobs_bounded(rt, ctx, label, max_jobs) {
         return false;
     }
     if qjs::JS_IsJobPending(rt) > 0

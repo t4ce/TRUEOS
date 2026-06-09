@@ -61,6 +61,9 @@ pub enum ImageRequestSource {
 }
 
 enum PendingImageStage {
+    CachedReady {
+        cached: ReadyImageCacheEntry,
+    },
     InlineBytes {
         path: Vec<u8>,
         bytes: Vec<u8>,
@@ -76,6 +79,7 @@ enum PendingImageStage {
 
 struct PendingImageOp {
     stage: PendingImageStage,
+    cache_key: Option<Vec<u8>>,
     tex_id: u32,
     width: u32,
     height: u32,
@@ -87,7 +91,18 @@ struct PendingImageOp {
 unsafe impl Send for PendingImageOp {}
 
 static PENDING_IMAGES: Mutex<BTreeMap<usize, Vec<PendingImageOp>>> = Mutex::new(BTreeMap::new());
+static READY_IMAGE_CACHE: Mutex<BTreeMap<usize, Vec<ReadyImageCacheEntry>>> =
+    Mutex::new(BTreeMap::new());
 static IMAGE_DIAG_LOGS: AtomicU32 = AtomicU32::new(0);
+
+#[derive(Clone)]
+struct ReadyImageCacheEntry {
+    key: Vec<u8>,
+    tex_id: u32,
+    width: u32,
+    height: u32,
+    mime: String,
+}
 
 #[inline]
 fn image_diag_log(msg: &str) {
@@ -178,12 +193,17 @@ pub unsafe fn register_ready_image_texture_request(
             op_id
         ));
     }
+    let cache_key = match source {
+        ImageRequestSource::InlineData => None,
+        ImageRequestSource::LocalPath | ImageRequestSource::RemoteUrl => Some(path.clone()),
+    };
     let op = PendingImageOp {
         stage: PendingImageStage::SourceBytes {
             op_id,
             path,
             source,
         },
+        cache_key,
         tex_id,
         width: 0,
         height: 0,
@@ -222,6 +242,7 @@ pub unsafe fn register_ready_image_texture_bytes(
             bytes,
             source,
         },
+        cache_key: None,
         tex_id,
         width: 0,
         height: 0,
@@ -538,6 +559,121 @@ unsafe fn resolve_image_op(ctx: *mut qjs::JSContext, op: &PendingImageOp) {
     qjs::js_free_value(ctx, obj);
 }
 
+unsafe fn resolve_cached_image(
+    ctx: *mut qjs::JSContext,
+    resolve: qjs::JSValue,
+    cached: &ReadyImageCacheEntry,
+) {
+    let obj = cached_image_object(ctx, cached);
+    let _ = qjs::jsbind::call1(ctx, resolve, qjs::JSValue::undefined(), obj);
+    qjs::js_free_value(ctx, obj);
+}
+
+unsafe fn cached_image_object(
+    ctx: *mut qjs::JSContext,
+    cached: &ReadyImageCacheEntry,
+) -> qjs::JSValue {
+    let obj = qjs::JS_NewObject(ctx);
+    let _ = qjs::jsbind::set_prop(
+        ctx,
+        obj,
+        b"texId\0",
+        qjs::JS_NewFloat64(ctx, cached.tex_id as f64),
+    );
+    let _ = qjs::jsbind::set_prop(
+        ctx,
+        obj,
+        b"width\0",
+        qjs::JS_NewFloat64(ctx, cached.width as f64),
+    );
+    let _ = qjs::jsbind::set_prop(
+        ctx,
+        obj,
+        b"height\0",
+        qjs::JS_NewFloat64(ctx, cached.height as f64),
+    );
+    let _ = qjs::jsbind::set_str_prop(ctx, obj, b"mime\0", cached.mime.as_str());
+    obj
+}
+
+pub unsafe fn cached_ready_image_texture_object(
+    ctx: *mut qjs::JSContext,
+    key: &[u8],
+) -> Option<qjs::JSValue> {
+    if key.is_empty() {
+        return None;
+    }
+    let cached = {
+        let cache = READY_IMAGE_CACHE.lock();
+        cache
+            .get(&(ctx as usize))
+            .and_then(|entries| entries.iter().find(|entry| entry.key.as_slice() == key).cloned())
+    }?;
+    if image_diag_allowed() {
+        image_diag_log(&format!(
+            "img-async: cache-hit tex_id={} path_len={}\n",
+            cached.tex_id,
+            key.len()
+        ));
+    }
+    Some(cached_image_object(ctx, &cached))
+}
+
+pub unsafe fn try_resolve_cached_ready_image_texture(
+    ctx: *mut qjs::JSContext,
+    resolve: qjs::JSValue,
+    key: &[u8],
+    unused_tex_id: u32,
+) -> bool {
+    if key.is_empty() {
+        return false;
+    }
+    let cached = {
+        let cache = READY_IMAGE_CACHE.lock();
+        cache
+            .get(&(ctx as usize))
+            .and_then(|entries| entries.iter().find(|entry| entry.key.as_slice() == key).cloned())
+    };
+    if let Some(cached) = cached {
+        if image_diag_allowed() {
+            image_diag_log(&format!(
+                "img-async: cache-hit tex_id={} path_len={}\n",
+                cached.tex_id,
+                key.len()
+            ));
+        }
+        resolve_cached_image(ctx, resolve, &cached);
+        crate::cmd_stream::release_managed_tex_id(unused_tex_id);
+        return true;
+    }
+    false
+}
+
+fn remember_ready_image(ctx: *mut qjs::JSContext, op: &PendingImageOp) {
+    let Some(key) = &op.cache_key else {
+        return;
+    };
+    if key.is_empty() || op.tex_id == 0 || op.width == 0 || op.height == 0 {
+        return;
+    }
+    let mut cache = READY_IMAGE_CACHE.lock();
+    let entries = cache.entry(ctx as usize).or_default();
+    if let Some(entry) = entries.iter_mut().find(|entry| entry.key == *key) {
+        entry.tex_id = op.tex_id;
+        entry.width = op.width;
+        entry.height = op.height;
+        entry.mime = op.mime.clone();
+        return;
+    }
+    entries.push(ReadyImageCacheEntry {
+        key: key.clone(),
+        tex_id: op.tex_id,
+        width: op.width,
+        height: op.height,
+        mime: op.mime.clone(),
+    });
+}
+
 unsafe fn reject_image_op(ctx: *mut qjs::JSContext, op: &PendingImageOp, code: i32) {
     let arg = js_int32(code);
     let _ = qjs::jsbind::call1(ctx, op.reject, qjs::JSValue::undefined(), arg);
@@ -557,6 +693,10 @@ unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
     for mut op in ops {
         let mut keep = false;
         match &mut op.stage {
+            PendingImageStage::CachedReady { cached } => {
+                progress = true;
+                resolve_cached_image(ctx, op.resolve, cached);
+            }
             PendingImageStage::InlineBytes {
                 path,
                 bytes,
@@ -700,6 +840,7 @@ unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
                             op.mime.as_str()
                         ));
                     }
+                    remember_ready_image(ctx, &op);
                     resolve_image_op(ctx, &op);
                 } else if status < 0 {
                     progress = true;
@@ -730,6 +871,17 @@ unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
     }
 
     progress
+}
+
+/// Pump only image texture requests for callers that need bounded scene progress.
+///
+/// This intentionally avoids resolving unrelated JS jobs/timers/workers; image
+/// fidelity must not be able to block a page scene handoff.
+pub unsafe fn pump_images(ctx: *mut qjs::JSContext) -> bool {
+    if ctx.is_null() {
+        return false;
+    }
+    pump_image_requests(ctx)
 }
 
 unsafe fn pump_net_fetch_text(ctx: *mut qjs::JSContext) -> bool {
@@ -1113,10 +1265,14 @@ pub unsafe fn drain_all_for_context(ctx: *mut qjs::JSContext) {
         .remove(&(ctx as usize))
         .unwrap_or_default();
     for op in pending_images {
-        reject_image_op(ctx, &op, -2);
+        let release_tex = !matches!(op.stage, PendingImageStage::CachedReady { .. });
+        if release_tex {
+            reject_image_op(ctx, &op, -2);
+        }
         qjs::js_free_value(ctx, op.resolve);
         qjs::js_free_value(ctx, op.reject);
         match op.stage {
+            PendingImageStage::CachedReady { .. } => {}
             PendingImageStage::InlineBytes { .. } => {}
             PendingImageStage::SourceBytes { op_id, path, .. } => {
                 let _ = async_fs::discard(op_id);
@@ -1126,7 +1282,9 @@ pub unsafe fn drain_all_for_context(ctx: *mut qjs::JSContext) {
             }
             PendingImageStage::Upload => {}
         }
-        crate::cmd_stream::release_managed_tex_id(op.tex_id);
+        if release_tex {
+            crate::cmd_stream::release_managed_tex_id(op.tex_id);
+        }
     }
 
     let discard_ids = COMPLETED.lock().remove(&(ctx as usize)).unwrap_or_default();

@@ -320,6 +320,7 @@ impl Ui3PixiHost {
 
     fn apply_text(&mut self, node: Ui3NodeId, params: Vec<Ui3TextParam>) {
         let n = self.ensure_node(node, Ui3NodeKind::Text);
+        n.kind = Ui3NodeKind::Text;
         for param in params {
             match param {
                 Ui3TextParam::Text(text) => n.text = text,
