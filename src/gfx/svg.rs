@@ -1,3 +1,4 @@
+use alloc::borrow::Cow;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::str;
@@ -384,14 +385,28 @@ pub fn rasterize_svg_bytes_rgba(bytes: &[u8]) -> Result<(SvgTextureInfo, Vec<u8>
 
 pub fn tessellate_svg_text(svg_text: &str) -> Result<SvgMeshDocument, i32> {
     let svg_text = normalize_svg_text(svg_text);
-    let tree = match Tree::from_str(svg_text, &Options::default()) {
+    let tree = match Tree::from_str(svg_text.as_ref(), &Options::default()) {
         Ok(tree) => tree,
         Err(err) => {
-            let trimmed = svg_text.trim_start();
+            let trimmed = svg_text.as_ref().trim_start();
+            let mut sample = [0u8; 48];
+            let sample_len = trimmed.as_bytes().len().min(sample.len());
+            for (dst, src) in sample
+                .iter_mut()
+                .zip(trimmed.as_bytes().iter().copied().take(sample_len))
+            {
+                *dst = match src {
+                    0x20..=0x7e => src,
+                    b'\n' | b'\r' | b'\t' => b' ',
+                    _ => b'?',
+                };
+            }
+            let sample_text = core::str::from_utf8(&sample[..sample_len]).unwrap_or("");
             crate::log!(
-                "gfx-svg: parse failed len={} starts_svg={} err={}\n",
-                svg_text.len(),
+                "gfx-svg: parse failed len={} starts_svg={} sample=\"{}\" err={}\n",
+                svg_text.as_ref().len(),
                 trimmed.starts_with("<svg") as u8,
+                sample_text,
                 err
             );
             return Err(ERR_SVG_PARSE);
@@ -401,14 +416,18 @@ pub fn tessellate_svg_text(svg_text: &str) -> Result<SvgMeshDocument, i32> {
     tessellate_svg_tree_with_size(&tree, width, height, svg_w, svg_h)
 }
 
-fn normalize_svg_text(svg_text: &str) -> &str {
+fn normalize_svg_text(svg_text: &str) -> Cow<'_, str> {
     let mut text = svg_text.trim_start_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}');
     if starts_with_xml_decl(text)
         && let Some(end) = text.find("?>")
     {
         text = text[end + 2..].trim_start_matches(|ch: char| ch.is_whitespace());
     }
-    text
+    if text.contains("__trueosNu") {
+        Cow::Owned(text.replace("__trueosNum", "").replace("__trueosNu", ""))
+    } else {
+        Cow::Borrowed(text)
+    }
 }
 
 fn starts_with_xml_decl(text: &str) -> bool {

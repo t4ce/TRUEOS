@@ -1,6 +1,30 @@
 import { buttonLayoutDefaults, buttonSceneStyle } from './widgets/button.mjs';
+import { detailsIsOpen, detailsSummarySceneStyle, summaryLayoutDefaults } from './widgets/detailsSummary.mjs';
+import { colorLayoutDefaults, colorSceneStyle } from './widgets/color.mjs';
+import {
+  controlSceneStyle,
+  inputLayoutDefaults,
+  numberLayoutDefaults,
+  searchButtonLayoutDefaults,
+  selectLayoutDefaults,
+  selectedOptionLabel,
+  textareaLayoutDefaults,
+} from './widgets/formControls.mjs';
 import { headingTextContext, isHeadingTag } from './widgets/headings.mjs';
 import { iframeContentOffset, iframeLayoutDefaults, iframeSceneOffset, isRootIframe } from './widgets/iframe.mjs';
+import { progressMeterLayoutDefaults, progressMeterRatio, progressMeterSceneStyle } from './widgets/progressMeter.mjs';
+import { replacedElementLayoutDefaults, replacedElementSceneStyle } from './widgets/replacedElements.mjs';
+import { sliderLabelLayoutDefaults, sliderLayoutDefaults, sliderRatio, sliderSceneStyle } from './widgets/slider.mjs';
+import { tableCellLayoutDefaults, tableSceneStyle } from './widgets/table.mjs';
+import {
+  temporalDatePart,
+  temporalDisplayValue,
+  temporalKindFromTag,
+  temporalLayoutDefaults,
+  temporalSceneStyle,
+  temporalTagForInputType,
+  temporalTimePart,
+} from './widgets/temporal.mjs';
 import * as parse5 from 'parse5';
 
 const ROOT_ID = 1;
@@ -29,12 +53,16 @@ const BLOCK_TAGS = new Set([
   'dialog', 'div', 'dl', 'fieldset', 'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3',
   'h4', 'h5', 'h6', 'header', 'hr', 'iframe', 'img', 'input', 'label', 'main', 'meter', 'nav',
   'number', 'ol', 'p', 'progress', 'search', 'section', 'select', 'slider', 'stub', 'summary',
-  'svg', 'table', 'tbody', 'td', 'textarea', 'tfoot', 'th', 'thead', 'tr', 'ul',
+  'svg', 'table', 'tbody', 'td', 'textarea', 'tfoot', 'th', 'thead', 'timeinput', 'tr', 'ul',
+  'dateinput', 'monthinput', 'weekinput', 'datetimelocalinput',
 ]);
 
 const INTERACTIVE_TAGS = new Set([
   'button', 'input', 'textarea', 'select', 'slider', 'number', 'color', 'searchbutton', 'summary',
+  'timeinput', 'dateinput', 'monthinput', 'weekinput', 'datetimelocalinput',
 ]);
+
+const ROW_TAGS = new Set(['barrow', 'searchrow', 'tr']);
 
 const TRUEOS_SYNTHETIC_MARKERS = [
   '<truesurfer-parse5-trueos-host-core>',
@@ -253,7 +281,15 @@ function toWidgetRenderTree(node, path = '0') {
     ];
   }
 
-  if (tagName === 'img' || tagName === 'canvas' || tagName === 'input' || tagName === 'number') {
+  if (tagName === 'input') {
+    const temporalTag = temporalTagForInputType(attrs?.type ?? 'text');
+    if (temporalTag) {
+      return [{ kind: 'block', key: `${path}:input`, tagName: temporalTag, attrs, children: [] }];
+    }
+    return [{ kind: 'block', key: `${path}:${tagName}`, tagName, attrs, children: [] }];
+  }
+
+  if (tagName === 'img' || tagName === 'canvas' || tagName === 'number') {
     return [{ kind: 'block', key: `${path}:${tagName}`, tagName, attrs, children: [] }];
   }
 
@@ -293,7 +329,7 @@ function toWidgetRenderTree(node, path = '0') {
       kind: 'block',
       key: `${path}:summary`,
       tagName: 'summary',
-      attrs: { ...(attrsToMap(summaryEl) ?? {}), 'data-details-key': detailsKey },
+      attrs: { ...(attrsToMap(summaryEl) ?? {}), 'data-details-key': detailsKey, 'data-details-open': hasAttr(attrs, 'open') ? '1' : '0' },
       children: toSummaryChildren(summaryEl, summaryFallback, `${path}:summary`),
     }];
     if (hasAttr(attrs, 'open')) {
@@ -433,7 +469,19 @@ function textFill(nodeId, rgb, alpha = 1) {
 }
 
 function listen(nodeId, event) {
-  return { code: 16, node: nodeId, text: String(event ?? '') };
+  return { code: 16, node: nodeId, a: pointerEventCode(event) };
+}
+
+function pointerEventCode(event) {
+  const e = String(event ?? '');
+  if (e === 'pointerdown') return 1;
+  if (e === 'pointerup') return 2;
+  if (e === 'pointermove') return 3;
+  if (e === 'pointerover') return 4;
+  if (e === 'pointerout') return 5;
+  if (e === 'pointerupoutside') return 6;
+  if (e === 'contextmenu') return 7;
+  return 1;
 }
 
 function textFillForContext(ctx) {
@@ -454,25 +502,66 @@ function widgetSize(renderNode) {
   if (tag === 'button') return { w: Math.max(132, estimateInlineText(renderNode) * 8 + 36), h: 42 };
   if (tag === 'input') {
     const type = String(attrs.type ?? 'text').toLowerCase();
-    if (type === 'checkbox' || type === 'radio') return { w: 18, h: 18 };
-    return { w: numberAttr(attrs, 'width', 260), h: 36 };
+    const defaults = inputLayoutDefaults(type);
+    if (type === 'checkbox' || type === 'radio') return { w: numberAttr(attrs, 'width', defaults.width), h: numberAttr(attrs, 'height', defaults.height) };
+    return { w: numberAttr(attrs, 'width', defaults.width), h: numberAttr(attrs, 'height', defaults.height) };
   }
-  if (tag === 'textarea') return { w: numberAttr(attrs, 'width', 320), h: numberAttr(attrs, 'height', 108) };
-  if (tag === 'select') return { w: numberAttr(attrs, 'width', 220), h: 36 };
-  if (tag === 'progress' || tag === 'meter' || tag === 'slider') return { w: numberAttr(attrs, 'width', 240), h: 24 };
-  if (tag === 'sliderlabel') return { w: 56, h: 24 };
-  if (tag === 'number') return { w: 84, h: 32 };
-  if (tag === 'color') return { w: 260, h: 172 };
-  if (tag === 'searchbutton') return { w: 36, h: 36 };
-  if (tag === 'searchrow' || tag === 'barrow') return { w: 620, h: estimateChildrenHeight(renderNode.children, 8, 36) + 8 };
-  if (tag === 'img') return { w: numberAttr(attrs, 'width', 160), h: numberAttr(attrs, 'height', 120) };
-  if (tag === 'svg' || tag === 'canvas') return { w: numberAttr(attrs, 'width', 300), h: numberAttr(attrs, 'height', 150) };
+  const temporalKind = temporalKindFromTag(tag);
+  if (temporalKind) {
+    const defaults = temporalLayoutDefaults(temporalKind);
+    return { w: numberAttr(attrs, 'width', defaults.width), h: numberAttr(attrs, 'height', defaults.height) };
+  }
+  if (tag === 'textarea') {
+    const defaults = textareaLayoutDefaults();
+    return { w: numberAttr(attrs, 'width', defaults.width), h: numberAttr(attrs, 'height', defaults.height) };
+  }
+  if (tag === 'select') {
+    const defaults = selectLayoutDefaults();
+    return { w: numberAttr(attrs, 'width', defaults.width), h: numberAttr(attrs, 'height', defaults.height) };
+  }
+  if (tag === 'progress' || tag === 'meter') {
+    const defaults = progressMeterLayoutDefaults();
+    return { w: numberAttr(attrs, 'width', defaults.width), h: numberAttr(attrs, 'height', defaults.height) };
+  }
+  if (tag === 'slider') {
+    const defaults = sliderLayoutDefaults();
+    return { w: numberAttr(attrs, 'width', defaults.width), h: numberAttr(attrs, 'height', defaults.height) };
+  }
+  if (tag === 'sliderlabel') {
+    const defaults = sliderLabelLayoutDefaults();
+    return { w: defaults.width, h: defaults.height };
+  }
+  if (tag === 'number') {
+    const defaults = numberLayoutDefaults();
+    return { w: numberAttr(attrs, 'width', defaults.width), h: numberAttr(attrs, 'height', defaults.height) };
+  }
+  if (tag === 'color') {
+    const defaults = colorLayoutDefaults(attrs);
+    return { w: numberAttr(attrs, 'width', defaults.width), h: numberAttr(attrs, 'height', defaults.height) };
+  }
+  if (tag === 'searchbutton') {
+    const defaults = searchButtonLayoutDefaults();
+    return { w: defaults.width, h: defaults.height };
+  }
+  if (tag === 'searchrow' || tag === 'barrow') return { w: 620, h: estimateRowHeight(renderNode.children, 36) + 8 };
+  if (tag === 'img') {
+    const defaults = replacedElementLayoutDefaults(attrs, tag);
+    return { w: numberAttr(attrs, 'width', defaults.width), h: numberAttr(attrs, 'height', defaults.height) };
+  }
+  if (tag === 'svg' || tag === 'canvas') {
+    const defaults = replacedElementLayoutDefaults(attrs, tag);
+    return { w: numberAttr(attrs, 'width', defaults.width), h: numberAttr(attrs, 'height', defaults.height) };
+  }
   if (tag === 'iframe') {
     if (isRootIframe(renderNode)) return { w: 0, h: 0 };
     return { w: numberAttr(attrs, 'width', 420), h: numberAttr(attrs, 'height', 240) };
   }
-  if (tag === 'td' || tag === 'th') return { w: 220, h: estimateChildrenHeight(renderNode.children, 4, 34) + 12 };
-  if (tag === 'tr') return { w: 620, h: estimateChildrenHeight(renderNode.children, 0, 38) };
+  if (tag === 'td' || tag === 'th') {
+    const defaults = tableCellLayoutDefaults();
+    return { w: 220, h: estimateChildrenHeight(renderNode.children, 4, 34) + defaults.paddingTop + defaults.paddingBottom };
+  }
+  if (tag === 'tr') return { w: estimateRowWidth(renderNode.children, 620), h: estimateRowHeight(renderNode.children, 38) };
+  if (tag === 'summary') return { w: 620, h: Math.max(summaryLayoutDefaults().minHeight, estimateChildrenHeight(renderNode.children, 4, 24) + 12) };
   if (tag === 'h1') return { w: 620, h: 48 };
   if (tag === 'h2') return { w: 620, h: 42 };
   if (isHeadingTag(tag)) return { w: 620, h: 38 };
@@ -500,6 +589,25 @@ function estimateChildrenHeight(children, gap, minHeight) {
   return Math.max(minHeight, h);
 }
 
+function estimateRowHeight(children, minHeight) {
+  const list = Array.isArray(children) ? children : [];
+  let h = 0;
+  for (let i = 0; i < list.length; i += 1) {
+    h = Math.max(h, list[i].kind === 'text' ? estimateTextHeight(list[i].text) : widgetSize(list[i]).h);
+  }
+  return Math.max(minHeight, h);
+}
+
+function estimateRowWidth(children, fallback) {
+  const list = Array.isArray(children) ? children : [];
+  let w = 0;
+  for (let i = 0; i < list.length; i += 1) {
+    w += list[i].kind === 'text' ? Math.max(32, normalizeWhitespace(list[i].text).length * 8) : widgetSize(list[i]).w;
+    if (i + 1 < list.length) w += 8;
+  }
+  return Math.max(fallback, w);
+}
+
 function appendTextNode(value, parentId, state, x, y, ctx = state.context) {
   const textValue = normalizeWhitespace(value);
   if (textValue.length === 0) return 0;
@@ -510,6 +618,26 @@ function appendTextNode(value, parentId, state, x, y, ctx = state.context) {
   state.textCount += 1;
   state.textBytes += textValue.length;
   return id;
+}
+
+function appendRowChildren(children, parentId, state, startX, startY, gap) {
+  const list = Array.isArray(children) ? children : [];
+  let x = startX;
+  for (let i = 0; i < list.length; i += 1) {
+    const child = list[i];
+    if (!child) continue;
+    if (child.kind === 'text') {
+      const value = normalizeWhitespace(child.text);
+      if (value.length === 0) continue;
+      appendTextNode(value, parentId, state, x, startY + 6);
+      x += Math.max(32, value.length * 8) + gap;
+      continue;
+    }
+    const size = widgetSize(child);
+    const itemLayout = { childX: x, nextY: startY };
+    appendWidgetOps(child, parentId, state, itemLayout, 0);
+    x += Math.max(0, size.w) + gap;
+  }
 }
 
 function drawBox(state, id, w, h, fill, stroke = THEME.border, radius = 0) {
@@ -542,54 +670,82 @@ function drawWidgetChrome(tagName, renderNode, id, state, size) {
   }
   if (tagName === 'input') {
     const type = String(attrs.type ?? 'text').toLowerCase();
+    const style = controlSceneStyle();
     if (type === 'checkbox') {
-      drawBox(state, id, size.w, size.h, THEME.controlBg, THEME.controlBorder, 0);
+      drawBox(state, id, size.w, size.h, style.background, style.border, style.radius);
       if (hasAttr(attrs, 'checked')) {
-        state.ops.push(graphicsRect(id, 4, 4, Math.max(0, size.w - 8), Math.max(0, size.h - 8)), graphicsFill(id, THEME.accent, 1));
+        state.ops.push(graphicsRect(id, 4, 4, Math.max(0, size.w - 8), Math.max(0, size.h - 8)), graphicsFill(id, style.accent, 1));
+      } else if (hasAttr(attrs, 'indeterminate')) {
+        state.ops.push(graphicsMoveTo(id, 4, 4), graphicsLineTo(id, Math.max(4, size.w - 4), Math.max(4, size.h - 4)), graphicsStroke(id, style.accent, 1, 2));
+        state.ops.push(graphicsMoveTo(id, Math.max(4, size.w - 4), 4), graphicsLineTo(id, 4, Math.max(4, size.h - 4)), graphicsStroke(id, style.accent, 1, 2));
       }
     } else if (type === 'radio') {
       state.ops.push(graphicsClear(id), graphicsCircle(id, size.w / 2, size.h / 2, Math.min(size.w, size.h) / 2 - 1));
-      state.ops.push(graphicsFill(id, THEME.controlBg, 1), graphicsStroke(id, THEME.controlBorder, 1, 1));
+      state.ops.push(graphicsFill(id, style.background, 1), graphicsStroke(id, style.border, 1, 1));
       if (hasAttr(attrs, 'checked')) {
-        state.ops.push(graphicsCircle(id, size.w / 2, size.h / 2, Math.min(size.w, size.h) / 2 - 5), graphicsFill(id, THEME.accent, 1));
+        state.ops.push(graphicsCircle(id, size.w / 2, size.h / 2, Math.min(size.w, size.h) / 2 - 5), graphicsFill(id, style.accent, 1));
       }
     } else {
-      drawBox(state, id, size.w, size.h, THEME.controlBg, THEME.controlBorder, 0);
+      drawBox(state, id, size.w, size.h, style.background, style.border, style.radius);
     }
     return;
   }
+  const temporalKind = temporalKindFromTag(tagName);
+  if (temporalKind) {
+    const style = temporalSceneStyle();
+    drawBox(state, id, size.w, size.h, style.background, style.border, style.radius);
+    if (temporalKind === 'datetime-local') {
+      const sepX = Math.max(1, Math.round(size.w * 0.52));
+      state.ops.push(graphicsMoveTo(id, sepX, 0), graphicsLineTo(id, sepX, size.h), graphicsStroke(id, style.border, 1, 1));
+      state.ops.push(graphicsRect(id, Math.max(sepX, size.w - 30), 0, Math.max(0, size.w - Math.max(sepX, size.w - 30)), size.h), graphicsFill(id, style.insetFill, 1));
+    } else {
+      state.ops.push(graphicsRect(id, Math.max(0, size.w - 30), 0, 30, size.h), graphicsFill(id, style.insetFill, 1), graphicsStroke(id, THEME.border, 1, 1));
+    }
+    const chevronX = Math.max(0, size.w - 20);
+    state.ops.push(graphicsMoveTo(id, chevronX, 14), graphicsLineTo(id, chevronX + 5, 20), graphicsLineTo(id, chevronX + 10, 14), graphicsStroke(id, style.text, 1, 2));
+    return;
+  }
   if (tagName === 'textarea' || tagName === 'select' || tagName === 'number') {
-    drawBox(state, id, size.w, size.h, THEME.controlBg, THEME.controlBorder, 0);
+    const style = controlSceneStyle();
+    drawBox(state, id, size.w, size.h, style.background, style.border, style.radius);
     if (tagName === 'select') {
-      state.ops.push(graphicsMoveTo(id, size.w - 24, 14), graphicsLineTo(id, size.w - 17, 22), graphicsLineTo(id, size.w - 10, 14), graphicsStroke(id, THEME.mutedText, 1, 1));
+      state.ops.push(graphicsRect(id, Math.max(0, size.w - 24), 0, 24, size.h), graphicsFill(id, style.insetFill, 1), graphicsStroke(id, THEME.border, 1, 1));
+      state.ops.push(graphicsMoveTo(id, size.w - 21, 14), graphicsLineTo(id, size.w - 17, 20), graphicsLineTo(id, size.w - 13, 14), graphicsStroke(id, style.muted, 1, 2));
     }
     if (tagName === 'number') {
-      state.ops.push(graphicsRect(id, size.w - 24, 0, 24, size.h), graphicsFill(id, 0xf7f7f7, 1), graphicsStroke(id, THEME.border, 1, 1));
+      state.ops.push(graphicsRect(id, size.w - 24, 0, 24, size.h), graphicsFill(id, style.insetFill, 1), graphicsStroke(id, THEME.border, 1, 1));
+      state.ops.push(graphicsMoveTo(id, size.w - 20, 13), graphicsLineTo(id, size.w - 12, 7), graphicsLineTo(id, size.w - 4, 13), graphicsStroke(id, THEME.text, 1, 1));
+      state.ops.push(graphicsMoveTo(id, size.w - 20, size.h - 13), graphicsLineTo(id, size.w - 12, size.h - 7), graphicsLineTo(id, size.w - 4, size.h - 13), graphicsStroke(id, THEME.text, 1, 1));
     }
     return;
   }
   if (tagName === 'progress' || tagName === 'meter' || tagName === 'slider') {
-    drawBox(state, id, size.w, size.h, THEME.controlBg, THEME.controlBorder, 0);
-    const pct = progressValue(attrs, tagName === 'slider' ? 'meter' : tagName);
-    const fillW = Math.max(0, Math.floor((size.w - 4) * pct));
-    state.ops.push(graphicsRect(id, 2, 2, fillW, Math.max(0, size.h - 4)), graphicsFill(id, THEME.accent, 1));
+    const style = tagName === 'slider' ? sliderSceneStyle() : progressMeterSceneStyle();
+    drawBox(state, id, size.w, size.h, style.background, style.border, 0);
+    const pct = tagName === 'slider' ? sliderRatio(attrs) : progressMeterRatio(attrs, tagName);
+    const pad = Number(style.innerPad ?? 3);
+    const fillW = Math.max(0, Math.floor((size.w - pad * 2) * pct));
+    state.ops.push(graphicsRect(id, pad, pad, fillW, Math.max(0, size.h - pad * 2)), graphicsFill(id, style.fill, 1));
     if (tagName === 'slider') {
-      const knobX = 2 + fillW;
-      state.ops.push(graphicsCircle(id, knobX, size.h / 2, 8), graphicsFill(id, 0xffffff, 1), graphicsStroke(id, THEME.accent, 1, 2));
+      const knobX = pad + fillW;
+      state.ops.push(graphicsMoveTo(id, knobX, -Math.max(3, size.h * 0.35)), graphicsLineTo(id, knobX, size.h + Math.max(3, size.h * 0.35)), graphicsStroke(id, style.indicator, 1, 2));
     }
     return;
   }
   if (tagName === 'color') {
+    const style = colorSceneStyle();
     state.ops.push(graphicsClear(id));
-    state.ops.push(graphicsRect(id, 0, 0, size.w, size.h), graphicsFill(id, 0xffffff, 1), graphicsStroke(id, THEME.controlBorder, 1, 1));
-    state.ops.push(graphicsRect(id, 12, 12, size.w - 24, size.h - 48), graphicsFill(id, 0xff0000, 1));
-    state.ops.push(graphicsRect(id, 12, size.h - 28, size.w - 24, 12), graphicsFill(id, 0x111111, 1));
+    state.ops.push(graphicsRect(id, 0, 0, size.w, size.h), graphicsFill(id, style.background, 1), graphicsStroke(id, style.border, 1, 1));
+    state.ops.push(graphicsRect(id, 12, 12, Math.max(0, size.w - 24), Math.max(0, size.h - 54)), graphicsFill(id, style.swatch, 1));
+    state.ops.push(graphicsRect(id, 12, Math.max(12, size.h - 36), Math.max(0, size.w - 24), 12), graphicsFill(id, style.rail, 1));
+    state.ops.push(graphicsRect(id, 12, Math.max(12, size.h - 20), Math.max(0, size.w - 24), 8), graphicsFill(id, style.railLight, 1), graphicsStroke(id, style.border, 1, 1));
     return;
   }
   if (tagName === 'img' || tagName === 'svg' || tagName === 'canvas') {
-    drawBox(state, id, size.w, size.h, 0xffffff, THEME.controlBorder, 0);
+    const style = replacedElementSceneStyle();
+    drawBox(state, id, size.w, size.h, style.background, style.border, 0);
     if (tagName === 'canvas') {
-      state.ops.push(graphicsMoveTo(id, 8, size.h - 8), graphicsLineTo(id, size.w - 8, 8), graphicsStroke(id, THEME.border, 1, 1));
+      state.ops.push(graphicsMoveTo(id, 8, size.h - 8), graphicsLineTo(id, size.w - 8, 8), graphicsStroke(id, style.guide, 1, 1));
     }
     return;
   }
@@ -603,12 +759,30 @@ function drawWidgetChrome(tagName, renderNode, id, state, size) {
     state.ops.push(graphicsRect(id, 1, 1, Math.max(0, size.w - 2), 26), graphicsFill(id, 0xf7f7f7, 1));
     return;
   }
+  if (tagName === 'summary') {
+    const style = detailsSummarySceneStyle(String(attrs['data-details-open'] ?? '') === '1' || detailsIsOpen(attrs));
+    state.ops.push(graphicsClear(id), graphicsRect(id, 0, 0, Math.max(0, size.w), Math.max(0, size.h)), graphicsFill(id, 0xffffff, 0));
+    const arrowY = Math.max(0, (size.h - style.arrowSize) / 2);
+    const x0 = 4 + style.arrowPad;
+    const x1 = 4 + style.arrowSize - style.arrowPad;
+    const y0 = arrowY + style.arrowPad;
+    const y1 = arrowY + style.arrowSize - style.arrowPad;
+    if (style.arrowOpen) {
+      state.ops.push(graphicsMoveTo(id, x0, y0), graphicsLineTo(id, (x0 + x1) / 2, y1), graphicsLineTo(id, x1, y0));
+    } else {
+      state.ops.push(graphicsMoveTo(id, x0, y0), graphicsLineTo(id, x1, (y0 + y1) / 2), graphicsLineTo(id, x0, y1));
+    }
+    state.ops.push(graphicsStroke(id, THEME.text, 1, style.arrowStroke));
+    return;
+  }
   if (tagName === 'table') {
-    drawBox(state, id, size.w, size.h, 0xffffff, 0x999999, 0);
+    const style = tableSceneStyle();
+    drawBox(state, id, size.w, size.h, style.background, style.border, 0);
     return;
   }
   if (tagName === 'td' || tagName === 'th') {
-    drawBox(state, id, size.w, size.h, tagName === 'th' ? THEME.tableHeader : 0xffffff, 0xb0b0b0, 0);
+    const style = tableSceneStyle();
+    drawBox(state, id, size.w, size.h, tagName === 'th' ? style.headerFill : style.background, style.cellBorder, 0);
   }
 }
 
@@ -630,6 +804,7 @@ function appendWidgetOps(renderNode, parentId, state, layout, depth = 0) {
 
   if (renderNode.kind !== 'block') return;
   const tagName = String(renderNode.tagName ?? 'block').toLowerCase();
+  state.tagCounts[tagName] = (state.tagCounts[tagName] ?? 0) + 1;
   const iframeRoot = tagName === 'iframe' && isRootIframe(renderNode);
   const iframeOffset = tagName === 'iframe' ? iframeSceneOffset(renderNode) : null;
   const y = iframeRoot ? iframeOffset.y : layout.nextY;
@@ -649,11 +824,13 @@ function appendWidgetOps(renderNode, parentId, state, layout, depth = 0) {
     || tagName === 'textarea' || tagName === 'select' || tagName === 'number' || tagName === 'progress'
     || tagName === 'meter' || tagName === 'slider' || tagName === 'color' || tagName === 'img'
     || tagName === 'svg' || tagName === 'canvas' || tagName === 'dialog' || tagName === 'table'
-    || tagName === 'td' || tagName === 'th' || (tagName === 'iframe' && !iframeRoot);
+    || tagName === 'td' || tagName === 'th' || tagName === 'summary' || temporalKindFromTag(tagName)
+    || (tagName === 'iframe' && !iframeRoot);
   state.ops.push(node(id, draws ? KIND_GRAPHICS : KIND_CONTAINER), addChild(parentId, id), position(id, x, y));
   if (draws) drawWidgetChrome(tagName, renderNode, id, state, size);
+  if (draws || INTERACTIVE_TAGS.has(tagName)) state.widgetCount += 1;
   if (INTERACTIVE_TAGS.has(tagName)) {
-    state.ops.push(listen(id, 'pointerdown'), listen(id, 'pointermove'), listen(id, 'pointerup'));
+    state.ops.push(listen(id, 'pointerover'), listen(id, 'pointerout'), listen(id, 'pointerdown'), listen(id, 'pointermove'), listen(id, 'pointerup'));
   }
   if (tagName === 'button') {
     buttonLayoutDefaults();
@@ -671,28 +848,36 @@ function appendWidgetOps(renderNode, parentId, state, layout, depth = 0) {
   }
   if (tagName !== 'iframe') childLayout = { childX: tagName === 'p' || tagName === 'label' ? 4 : 12, nextY: tagName === 'dialog' ? 32 : 8 };
   if (tagName === 'button') childLayout = { childX: 14, nextY: 9 };
-  if (tagName === 'summary') childLayout = { childX: 18, nextY: 6 };
+  if (tagName === 'summary') childLayout = { childX: detailsSummarySceneStyle(false).textInset, nextY: 6 };
   if (tagName === 'td' || tagName === 'th') childLayout = { childX: 8, nextY: 6 };
   if (tagName === 'iframe' && !iframeRoot) childLayout = { childX: 8, nextY: 34 };
   const children = Array.isArray(renderNode.children) ? renderNode.children : [];
+  const temporalKindForText = temporalKindFromTag(tagName);
   if ((tagName === 'input' || tagName === 'textarea') && String(renderNode.attrs?.type ?? 'text').toLowerCase() !== 'checkbox' && String(renderNode.attrs?.type ?? 'text').toLowerCase() !== 'radio') {
     appendTextNode(renderNode.attrs?.value ?? renderNode.attrs?.placeholder ?? '', id, state, 8, 8, { textFill: THEME.text });
+  } else if (temporalKindForText === 'datetime-local') {
+    const sepX = Math.max(1, Math.round(size.w * 0.52));
+    appendTextNode(temporalDatePart(renderNode.attrs), id, state, 8, 8, { textFill: THEME.text });
+    appendTextNode(temporalTimePart(renderNode.attrs), id, state, sepX + 8, 8, { textFill: THEME.text });
+  } else if (temporalKindForText) {
+    appendTextNode(temporalDisplayValue(renderNode.attrs, temporalKindForText), id, state, 8, 8, { textFill: THEME.text });
   } else if (tagName === 'select') {
-    const opts = String(renderNode.attrs?.['data-options'] ?? '').split('\n').filter(Boolean);
-    const idx = clamp(Number(renderNode.attrs?.['data-selected-index'] ?? 0), 0, Math.max(0, opts.length - 1));
-    appendTextNode(opts[idx] ?? '', id, state, 8, 8, { textFill: THEME.text });
+    appendTextNode(selectedOptionLabel(renderNode.attrs), id, state, 8, 8, { textFill: THEME.text });
   } else if (tagName === 'number') {
     appendTextNode(renderNode.attrs?.value ?? '0', id, state, 8, 7, { textFill: THEME.text });
   } else if (tagName === 'sliderlabel') {
-    const raw = Number(renderNode.attrs?.['data-slider-init'] ?? 0);
-    appendTextNode(`${Math.round(clamp(raw, 0, 1) * 100)}%`, id, state, 0, 2, { textFill: THEME.mutedText });
+    appendTextNode(`${Math.round(sliderRatio({ value: renderNode.attrs?.['data-slider-init'] ?? 0 }) * 100)}`, id, state, 0, 2, { textFill: THEME.mutedText });
   } else if (tagName === 'img' || tagName === 'svg' || tagName === 'canvas') {
     appendTextNode(renderNode.attrs?.alt ?? tagName, id, state, 8, 8, { textFill: THEME.mutedText });
   } else if (tagName === 'iframe' && !iframeRoot) {
     appendTextNode(String(renderNode.attrs?.srcdoc ?? '').trim().length > 0 ? 'iframe (srcdoc)' : 'iframe (empty)', id, state, 8, 6, { textFill: THEME.mutedText });
   }
-  for (let i = 0; i < children.length; i += 1) {
-    appendWidgetOps(children[i], id, state, childLayout, depth + 1);
+  if (ROW_TAGS.has(tagName)) {
+    appendRowChildren(children, id, state, tagName === 'tr' ? 0 : 8, tagName === 'tr' ? 0 : 4, tagName === 'tr' ? 0 : 8);
+  } else {
+    for (let i = 0; i < children.length; i += 1) {
+      appendWidgetOps(children[i], id, state, childLayout, depth + 1);
+    }
   }
   state.context = previousContext;
 }
@@ -706,11 +891,15 @@ export function buildTextWidgetScene(html) {
     iframeCount: 0,
     iframeSrcdocCount: 0,
     buttonCount: 0,
+    widgetCount: 0,
+    tagCounts: {},
     textCount: 0,
     textBytes: 0,
   };
   const rootLayout = { childX: 0, nextY: 0 };
   for (let i = 0; i < renderTree.length; i += 1) appendWidgetOps(renderTree[i], ROOT_ID, state, rootLayout);
+  const tagNames = Object.keys(state.tagCounts).sort();
+  const tagCounts = tagNames.map((tag) => `${tag}:${state.tagCounts[tag]}`).join(',');
 
   return {
     ok: 1,
@@ -724,13 +913,23 @@ export function buildTextWidgetScene(html) {
     widget: {
       module: '/qjs/truesurfer/text_widget_scene.mjs',
       buttonHelper: '/qjs/truesurfer/widgets/button.mjs',
+      detailsSummaryHelper: '/qjs/truesurfer/widgets/detailsSummary.mjs',
+      formControlHelper: '/qjs/truesurfer/widgets/formControls.mjs',
       headingHelper: '/qjs/truesurfer/widgets/headings.mjs',
       iframeHelper: '/qjs/truesurfer/widgets/iframe.mjs',
+      progressMeterHelper: '/qjs/truesurfer/widgets/progressMeter.mjs',
+      sliderHelper: '/qjs/truesurfer/widgets/slider.mjs',
+      colorHelper: '/qjs/truesurfer/widgets/color.mjs',
+      replacedElementHelper: '/qjs/truesurfer/widgets/replacedElements.mjs',
+      tableHelper: '/qjs/truesurfer/widgets/table.mjs',
+      temporalHelper: '/qjs/truesurfer/widgets/temporal.mjs',
       renderer: 'parse5-render-tree-subset',
-      tags: 'iframe,h1,p,button',
+      tags: tagNames.join(','),
+      tagCounts,
       iframeCount: state.iframeCount,
       iframeSrcdocCount: state.iframeSrcdocCount,
       buttonCount: state.buttonCount,
+      widgetCount: state.widgetCount,
       textCount: state.textCount,
       textBytes: state.textBytes,
     },

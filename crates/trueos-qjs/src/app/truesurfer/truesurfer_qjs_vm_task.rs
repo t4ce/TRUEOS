@@ -3,7 +3,7 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, VecDeque};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
@@ -14,7 +14,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_sync::signal::Signal;
 use embassy_sync::zerocopy_channel::{Channel, Receiver, Sender};
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Timer, with_timeout};
 use spin::{Mutex, Once};
 
 use crate as qjs;
@@ -93,6 +93,18 @@ const TRUESURFER_PIXI_COLLECTOR_SOURCE: &[u8] = br#"
     return 0;
   }
 
+  function pointerEventCode(event) {
+    event = String(event || "");
+    if (event === "pointerdown") return 1;
+    if (event === "pointerup") return 2;
+    if (event === "pointermove") return 3;
+    if (event === "pointerover") return 4;
+    if (event === "pointerout") return 5;
+    if (event === "pointerupoutside") return 6;
+    if (event === "contextmenu") return 7;
+    return 1;
+  }
+
   function push(op) {
     ops.push(op);
     return ops.length;
@@ -129,7 +141,7 @@ const TRUESURFER_PIXI_COLLECTOR_SOURCE: &[u8] = br#"
       case "alpha": return push({ code: 23, node: node, a: num(arguments[2], 1) });
       case "scale": return push({ code: 28, node: node, a: num(arguments[2], 1), b: num(arguments[3], 1) });
       case "mask": return push({ code: 27, node: node, a: num(arguments[2], 0) });
-      case "listen": return push({ code: 16, node: node, text: String(arguments[2] || "") });
+      case "listen": return push({ code: 16, node: node, a: pointerEventCode(arguments[2]) });
       case "removeAllListeners": return push({ code: 17, node: node });
       case "clear": return push({ code: 4, node: node });
       case "rect": return push({ code: 5, node: node, a: num(arguments[2], 0), b: num(arguments[3], 0), c: num(arguments[4], 0), d: num(arguments[5], 0) });
@@ -300,13 +312,64 @@ const TRUESURFER_PARSE5_VITE_HOST_SOURCE: &[u8] = br##"
   G.document = document;
   G.window = G;
   G.self = G;
-  G.innerWidth = Math.max(1, num(G.innerWidth, 1920) | 0);
-  G.innerHeight = Math.max(1, num(G.innerHeight, 1080) | 0);
-  G.dispatchEvent = G.dispatchEvent || function () { return true; };
-  G.addEventListener = G.addEventListener || function () {};
-  G.removeEventListener = G.removeEventListener || function () {};
+  G.innerWidth = Math.max(1, num(G.innerWidth, 2560) | 0);
+  G.innerHeight = Math.max(1, num(G.innerHeight, 1440) | 0);
+  G.__trueosWindowListeners = G.__trueosWindowListeners || Object.create(null);
+  G.addEventListener = function (type, fn) {
+    type = String(type || "");
+    if (typeof fn !== "function") return;
+    var list = G.__trueosWindowListeners[type];
+    if (!list) list = G.__trueosWindowListeners[type] = [];
+    list.push(fn);
+  };
+  G.removeEventListener = function (type, fn) {
+    type = String(type || "");
+    var list = G.__trueosWindowListeners[type];
+    if (!list || typeof fn !== "function") return;
+    for (var i = list.length - 1; i >= 0; i -= 1) {
+      if (list[i] === fn) list.splice(i, 1);
+    }
+  };
+  G.dispatchEvent = function (ev) {
+    var type = String((ev && ev.type) || "");
+    var list = G.__trueosWindowListeners[type] || [];
+    for (var i = 0; i < list.length; i += 1) list[i].call(G, ev);
+    return !(ev && ev.defaultPrevented);
+  };
+  G.__TRUEOS_DISPATCH_KEYDOWN__ = function (key, pointerId, modifiers, slotId) {
+    modifiers = Number(modifiers) || 0;
+    var ev = {
+      type: "keydown",
+      key: String(key || ""),
+      pointerId: Number(pointerId) || 1,
+      slotId: Number(slotId) || 0,
+      shiftKey: !!(modifiers & 0x22),
+      ctrlKey: !!(modifiers & 0x11),
+      altKey: !!(modifiers & 0x44),
+      metaKey: !!(modifiers & 0x88),
+      defaultPrevented: false,
+      preventDefault: function () { this.defaultPrevented = true; },
+      stopPropagation: function () { this.propagationStopped = true; }
+    };
+    var before = (G.__pixiCapture && G.__pixiCapture.commands && G.__pixiCapture.commands.length) || 0;
+    G.dispatchEvent(ev);
+    var repainted = 0;
+    if (G.__TRUEOS_PIXI_DIRTY__ && typeof G.__TRUEOS_REPAINT_NOW__ === "function") {
+      G.__TRUEOS_REPAINT_NOW__();
+      repainted = 1;
+    }
+    var after = (G.__pixiCapture && G.__pixiCapture.commands && G.__pixiCapture.commands.length) || before;
+    var listeners = (G.__trueosWindowListeners.keydown || []).length;
+    return { handled: listeners > 0 ? 1 : 0, listenerCount: listeners, painted: (after > before || repainted) ? 1 : 0, defaultPrevented: ev.defaultPrevented ? 1 : 0 };
+  };
   G.requestAnimationFrame = G.requestAnimationFrame || function (fn) {
-    if (typeof fn === "function") fn((G.performance && G.performance.now && G.performance.now()) || 0);
+    if (typeof fn !== "function") return 0;
+    if (typeof G.setTimeout === "function") {
+      return G.setTimeout(function () {
+        fn((G.performance && G.performance.now && G.performance.now()) || 0);
+      }, 16);
+    }
+    fn((G.performance && G.performance.now && G.performance.now()) || 0);
     return 1;
   };
   G.cancelAnimationFrame = G.cancelAnimationFrame || function () {};
@@ -387,6 +450,17 @@ const TRUESURFER_PARSE5_VITE_HOST_SOURCE: &[u8] = br##"
     if (target.indexOf("Graphics") >= 0) return 1;
     if (target.indexOf("Text") >= 0) return 2;
     return 0;
+  }
+  function pointerEventCode(event) {
+    event = String(event || "");
+    if (event === "pointerdown") return 1;
+    if (event === "pointerup") return 2;
+    if (event === "pointermove") return 3;
+    if (event === "pointerover") return 4;
+    if (event === "pointerout") return 5;
+    if (event === "pointerupoutside") return 6;
+    if (event === "contextmenu") return 7;
+    return 1;
   }
   function textHasInk(value) {
     var text = String(value == null ? "" : value);
@@ -483,7 +557,7 @@ const TRUESURFER_PARSE5_VITE_HOST_SOURCE: &[u8] = br##"
           break;
         case "removeChildren": if (!hasSnapshot) ops.push({ code: 14, node: id }); break;
         case "removeAllListeners": if (!hasSnapshot) ops.push({ code: 17, node: id }); break;
-        case "on": if (!hasSnapshot && cmd.event) ops.push({ code: 16, node: id, text: String(cmd.event) }); break;
+        case "on": if (cmd.event) ops.push({ code: 16, node: id, a: pointerEventCode(cmd.event) }); break;
         case "alpha": ops.push({ code: 23, node: id, a: num(args[0], 1) }); break;
         case "mask": ops.push({ code: 27, node: id, a: num(args[0], 0) }); break;
         case "text.text.set":
@@ -672,14 +746,63 @@ G.document = {
 };
 G.window = G;
 G.self = G;
-G.innerWidth = Math.max(1, __trueosNum(G.innerWidth, 1920) | 0);
-G.innerHeight = Math.max(1, __trueosNum(G.innerHeight, 1080) | 0);
-G.addEventListener = G.addEventListener || function () {};
-G.removeEventListener = G.removeEventListener || function () {};
-G.dispatchEvent = G.dispatchEvent || function () { return true; };
+G.innerWidth = Math.max(1, __trueosNum(G.innerWidth, 2560) | 0);
+G.innerHeight = Math.max(1, __trueosNum(G.innerHeight, 1440) | 0);
+G.__trueosWindowListeners = G.__trueosWindowListeners || Object.create(null);
+G.addEventListener = function (type, fn) {
+  type = String(type || "");
+  if (typeof fn !== "function") return;
+  var list = G.__trueosWindowListeners[type];
+  if (!list) list = G.__trueosWindowListeners[type] = [];
+  list.push(fn);
+};
+G.removeEventListener = function (type, fn) {
+  type = String(type || "");
+  var list = G.__trueosWindowListeners[type];
+  if (!list || typeof fn !== "function") return;
+  for (var i = list.length - 1; i >= 0; i -= 1) {
+    if (list[i] === fn) list.splice(i, 1);
+  }
+};
+G.dispatchEvent = function (ev) {
+  var type = String((ev && ev.type) || "");
+  var list = G.__trueosWindowListeners[type] || [];
+  for (var i = 0; i < list.length; i += 1) list[i].call(G, ev);
+  return !(ev && ev.defaultPrevented);
+};
+G.__TRUEOS_DISPATCH_KEYDOWN__ = function (key, pointerId, modifiers, slotId) {
+  modifiers = Number(modifiers) || 0;
+  var ev = {
+    type: "keydown",
+    key: String(key || ""),
+    pointerId: Number(pointerId) || 1,
+    slotId: Number(slotId) || 0,
+    shiftKey: !!(modifiers & 0x22),
+    ctrlKey: !!(modifiers & 0x11),
+    altKey: !!(modifiers & 0x44),
+    metaKey: !!(modifiers & 0x88),
+    defaultPrevented: false,
+    preventDefault: function () { this.defaultPrevented = true; },
+    stopPropagation: function () { this.propagationStopped = true; }
+  };
+  var before = (G.__pixiCapture && G.__pixiCapture.commands && G.__pixiCapture.commands.length) || 0;
+  G.dispatchEvent(ev);
+  var repainted = 0;
+  if (G.__TRUEOS_PIXI_DIRTY__ && typeof G.__TRUEOS_REPAINT_NOW__ === "function") {
+    G.__TRUEOS_REPAINT_NOW__();
+    repainted = 1;
+  }
+  var after = (G.__pixiCapture && G.__pixiCapture.commands && G.__pixiCapture.commands.length) || before;
+  var listeners = (G.__trueosWindowListeners.keydown || []).length;
+  return { handled: listeners > 0 ? 1 : 0, listenerCount: listeners, painted: (after > before || repainted) ? 1 : 0, defaultPrevented: ev.defaultPrevented ? 1 : 0 };
+};
 G.performance = G.performance || { now: function () { return 0; } };
 G.requestAnimationFrame = G.requestAnimationFrame || function (fn) {
-  if (typeof fn === "function") fn(G.performance.now());
+  if (typeof fn !== "function") return 0;
+  if (typeof G.setTimeout === "function") {
+    return G.setTimeout(function () { fn(G.performance.now()); }, 16);
+  }
+  fn(G.performance.now());
   return 1;
 };
 G.cancelAnimationFrame = G.cancelAnimationFrame || function () {};
@@ -739,6 +862,17 @@ function __trueosCommandKind(target) {
   if (target.indexOf("Text") >= 0) return 2;
   return 0;
 }
+function __trueosPointerEventCode(event) {
+  event = String(event || "");
+  if (event === "pointerdown") return 1;
+  if (event === "pointerup") return 2;
+  if (event === "pointermove") return 3;
+  if (event === "pointerover") return 4;
+  if (event === "pointerout") return 5;
+  if (event === "pointerupoutside") return 6;
+  if (event === "contextmenu") return 7;
+  return 1;
+}
 function __trueosTextHasInk(value) {
   var text = String(value == null ? "" : value);
   for (var i = 0; i < text.length; i += 1) {
@@ -758,6 +892,137 @@ function __trueosTextHasInk(value) {
   }
   return false;
 }
+function __trueosStripHostMarkers(value) {
+  var text = String(value == null ? "" : value);
+  var markers = [
+    "<truesurfer-parse5-trueos-host-core>",
+    "<truesurfer-parse5-trueos-host-event>",
+    "<truesurfer-parse5-trueos-host-canvas>",
+    "<truesurfer-parse5-trueos-host-dom>",
+    "<truesurfer-parse5-trueos-host-fetch>",
+    "<truesurfer-parse5-trueos-host-capture>",
+    "<truesurfer-parse5-trueos-app.js>",
+    "<truesurfer-init>",
+    "<node-fetch-shim>"
+  ];
+  var changed = true;
+  while (changed) {
+    changed = false;
+    for (var i = 0; i < markers.length; i += 1) {
+      var marker = markers[i];
+      if (text.indexOf(marker) >= 0) {
+        text = text.split(marker).join("");
+        changed = true;
+      }
+    }
+  }
+  if (text.indexOf("<truesurfer-") === 0) return "";
+  var strippedPrefix = true;
+  while (strippedPrefix) {
+    strippedPrefix = false;
+    while (text.indexOf("__trueosNum") === 0) {
+      text = text.slice("__trueosNum".length);
+      strippedPrefix = true;
+    }
+    while (text.indexOf("__trueosNu") === 0) {
+      text = text.slice("__trueosNu".length);
+      strippedPrefix = true;
+    }
+    while (text.indexOf("__trueosN") === 0) {
+      text = text.slice("__trueosN".length);
+      strippedPrefix = true;
+    }
+    while (text.indexOf("__trueos") === 0) {
+      text = text.slice("__trueos".length);
+      strippedPrefix = true;
+    }
+    while (text.indexOf("Num") === 0) {
+      text = text.slice("Num".length);
+      strippedPrefix = true;
+    }
+    while (text.indexOf("Nu") === 0) {
+      text = text.slice("Nu".length);
+      strippedPrefix = true;
+    }
+    while (text.indexOf("N") === 0 && (text.length === 1 || text.indexOf("__trueos") === 1)) {
+      text = text.slice("N".length);
+      strippedPrefix = true;
+    }
+  }
+  if (text.indexOf("__trueo") === 0) return "";
+  if (text === "N" || text === "Nu" || text === "Num") return "";
+  return text;
+}
+function __trueosNormalizeCommandOp(value) {
+  var op = String(value == null ? "" : value);
+  var strippedPrefix = true;
+  while (strippedPrefix) {
+    strippedPrefix = false;
+    while (op.indexOf("__trueosNum") === 0) {
+      op = op.slice("__trueosNum".length);
+      strippedPrefix = true;
+    }
+    while (op.indexOf("__trueosNu") === 0) {
+      op = op.slice("__trueosNu".length);
+      strippedPrefix = true;
+    }
+    while (op.indexOf("__trueosN") === 0) {
+      op = op.slice("__trueosN".length);
+      strippedPrefix = true;
+    }
+    while (op.indexOf("__trueos") === 0) {
+      op = op.slice("__trueos".length);
+      strippedPrefix = true;
+    }
+    while (op.indexOf("Num") === 0) {
+      op = op.slice("Num".length);
+      strippedPrefix = true;
+    }
+    while (op.indexOf("Nu") === 0) {
+      op = op.slice("Nu".length);
+      strippedPrefix = true;
+    }
+    while (op.indexOf("N") === 0) {
+      op = op.slice("N".length);
+      strippedPrefix = true;
+    }
+  }
+  return op;
+}
+function __trueosTextLooksInternal(value) {
+  var text = String(value == null ? "" : value);
+  if (text.indexOf("<truesurfer-") >= 0) return true;
+  if (text.indexOf("__trueo") >= 0) return true;
+  if (text.indexOf("function __trueos") >= 0) return true;
+  if (text.indexOf("G.__trueos") >= 0) return true;
+  return false;
+}
+function __trueosTextIsRenderable(value) {
+  var text = String(value == null ? "" : value);
+  if (!__trueosTextHasInk(text)) return false;
+  if (text === "true" || text === "false") return false;
+  if (text === "N" || text === "Nu" || text === "Num") return false;
+  if (__trueosTextLooksInternal(text)) return false;
+  return true;
+}
+function __trueosCleanRenderableText(value) {
+  var raw = String(value == null ? "" : value);
+  var stripped = __trueosStripHostMarkers(raw);
+  if (__trueosTextIsRenderable(stripped)) return stripped;
+  if (__trueosTextIsRenderable(raw) && !__trueosTextLooksInternal(raw)) return raw;
+  return "";
+}
+function __trueosOverlayTextIsRenderable(value) {
+  var text = __trueosStripHostMarkers(value);
+  if (!__trueosTextHasInk(text)) return false;
+  if (text === "true" || text === "false") return false;
+  if (text === "N" || text === "Nu" || text === "Num") return false;
+  if (__trueosTextLooksInternal(text)) return false;
+  return true;
+}
+function __trueosTextWithinVisibleSurface(x, y) {
+  return x >= 0 && y >= 0 && x < 2560 && y < 1440;
+}
 function __trueosLogTextSample(value) {
   var s = String(value == null ? "" : value);
   var out = "";
@@ -767,21 +1032,80 @@ function __trueosLogTextSample(value) {
   }
   return out;
 }
-function __trueosPushSnapshotNode(node, parent, ops, seen, snapshotSeen, textSlots) {
+function __trueosSnapshotDiag(node, depth, out) {
+  if (!node || typeof node !== "object") return out;
+  if (depth > out.maxDepth) out.maxDepth = depth;
+  out.nodes += 1;
+  var text = typeof node.text === "string" ? node.text : "";
+  if (text) out.text += 1;
+  if (__trueosTextIsRenderable(text)) {
+    out.renderableText += 1;
+    if (out.samples.length < 12) out.samples.push("#" + out.samples.length + "@node=" + (__trueosNum(node.id, 0) | 0) + " sample=\"" + __trueosLogTextSample(text) + "\"");
+  }
+  var children = node.children && node.children.length ? node.children : [];
+  if (!children.length && node.children) out.nonArrayChildren += 1;
+  for (var i = 0; i < children.length; i += 1) __trueosSnapshotDiag(children[i], depth + 1, out);
+  return out;
+}
+function __trueosCollectSnapshotVisibility(node, ox, oy, inheritedVisible, out) {
+  if (!node || typeof node !== "object") return;
+  var id = __trueosNum(node.id, 0) | 0;
+  if (id > 0) {
+    var seenKey = "__seen_" + id;
+    if (out[seenKey]) return;
+    out[seenKey] = true;
+  }
+  var localX = __trueosNum(node.x, 0);
+  var localY = __trueosNum(node.y, 0);
+  var worldX = __trueosNum(ox, 0) + localX;
+  var worldY = __trueosNum(oy, 0) + localY;
+  if (typeof node.globalX === "number" && typeof node.globalY === "number") {
+    worldX = __trueosNum(node.globalX, worldX);
+    worldY = __trueosNum(node.globalY, worldY);
+  }
+  var visible = inheritedVisible && node.visible !== false && __trueosNum(node.alpha, 1) > 0;
+  if (id > 0 && visible && __trueosTextWithinVisibleSurface(worldX, worldY)) out[id] = true;
+  var children = node.children && node.children.length ? node.children : [];
+  for (var i = 0; i < children.length; i += 1) __trueosCollectSnapshotVisibility(children[i], worldX, worldY, visible, out);
+}
+function __trueosPushSnapshotNode(node, parent, ops, seen, snapshotSeen, snapshotTextVisible, snapshotTextWorld, textSlots, ox, oy) {
   if (!node || typeof node !== "object") return 0;
   var id = __trueosNum(node.id, 0) | 0;
   if (id <= 0) return 0;
+  if (snapshotSeen[id]) {
+    if (parent > 0) ops.push({ code: 2, node: parent, a: id });
+    return id;
+  }
   var kind = 0;
+  var localX = __trueosNum(node.x, 0);
+  var localY = __trueosNum(node.y, 0);
+  var worldX = __trueosNum(ox, 0) + localX;
+  var worldY = __trueosNum(oy, 0) + localY;
+  if (typeof node.globalX === "number" && typeof node.globalY === "number") {
+    worldX = __trueosNum(node.globalX, worldX);
+    worldY = __trueosNum(node.globalY, worldY);
+  }
+  var type = String(node.type || "");
+  var isTextNode = type.indexOf("Text") >= 0;
+  var cleanedText = typeof node.text === "string" ? node.text : "";
+  var hasRenderableText = cleanedText && __trueosTextIsRenderable(cleanedText);
+  var hasVisibleText = hasRenderableText && __trueosTextWithinVisibleSurface(worldX, worldY);
+  if (isTextNode && __trueosTextWithinVisibleSurface(worldX, worldY)) {
+    snapshotTextWorld[id] = { x: worldX, y: worldY };
+  }
   if (!seen[id]) {
-    var type = String(node.type || "");
-    kind = type.indexOf("Graphics") >= 0 ? 1 : (type.indexOf("Text") >= 0 ? 2 : 0);
+    kind = hasVisibleText ? 2 : (type.indexOf("Graphics") >= 0 ? 1 : (isTextNode ? 2 : 0));
     ops.push({ code: 1, node: id, a: kind });
     seen[id] = true;
   }
   snapshotSeen[id] = true;
+  if (hasVisibleText) {
+    snapshotTextVisible[id] = true;
+    snapshotTextWorld[id] = { x: worldX, y: worldY };
+  }
   if (kind === 2 && textSlots) textSlots.push(id);
   if (parent > 0) ops.push({ code: 2, node: parent, a: id });
-  ops.push({ code: 3, node: id, a: __trueosNum(node.x, 0), b: __trueosNum(node.y, 0) });
+  ops.push({ code: 3, node: id, a: localX, b: localY });
   if (typeof node.scaleX === "number" || typeof node.scaleY === "number") {
     var sx = __trueosNum(node.scaleX, 1);
     var sy = __trueosNum(node.scaleY, sx);
@@ -790,7 +1114,6 @@ function __trueosPushSnapshotNode(node, parent, ops, seen, snapshotSeen, textSlo
   if (node.visible === false) ops.push({ code: 15, node: id, a: 0 });
   if (typeof node.alpha === "number" && node.alpha !== 1) ops.push({ code: 23, node: id, a: __trueosNum(node.alpha, 1) });
   if (__trueosNum(node.maskId, 0) > 0) ops.push({ code: 27, node: id, a: __trueosNum(node.maskId, 0) });
-  if (typeof node.text === "string" && __trueosTextHasInk(node.text)) ops.push({ code: 8, node: id, text: node.text });
   var children = node.children && node.children.length ? node.children : [];
   if (node.sortableChildren === true && children.length > 1) {
     children = children.slice();
@@ -798,8 +1121,45 @@ function __trueosPushSnapshotNode(node, parent, ops, seen, snapshotSeen, textSlo
       return __trueosNum(a && a.zIndex, 0) - __trueosNum(b && b.zIndex, 0);
     });
   }
-  for (var i = 0; i < children.length; i += 1) __trueosPushSnapshotNode(children[i], id, ops, seen, snapshotSeen, textSlots);
+  for (var i = 0; i < children.length; i += 1) __trueosPushSnapshotNode(children[i], id, ops, seen, snapshotSeen, snapshotTextVisible, snapshotTextWorld, textSlots, worldX, worldY);
   return id;
+}
+function __trueosPushLayoutTextOverlays(node, parentId, ox, oy, ops, state) {
+  if (!node || typeof node !== "object") return;
+  var x = ox + __trueosNum(node.x, 0);
+  var y = oy + __trueosNum(node.y, 0);
+  var cleanedText = __trueosStripHostMarkers(node.text);
+  if (node.kind === "text" && __trueosOverlayTextIsRenderable(cleanedText)) {
+    var id = state.nextId++;
+    var text = cleanedText;
+    ops.push({ code: 1, node: id, a: 2 });
+    if (parentId > 0) ops.push({ code: 2, node: parentId, a: id });
+    ops.push({ code: 3, node: id, a: x, b: y });
+    ops.push({ code: 9, node: id, a: 0x111111, b: 1 });
+    ops.push({ code: 8, node: id, text: text });
+    state.text += 1;
+    if (state.samples.length < 12) state.samples.push("#" + state.samples.length + "@node=" + id + " sample=\"" + __trueosLogTextSample(text) + "\"");
+  }
+  var children = node.children && node.children.length ? node.children : [];
+  for (var i = 0; i < children.length; i += 1) __trueosPushLayoutTextOverlays(children[i], parentId, x, y, ops, state);
+}
+function __trueosPushFlatTextOverlay(item, parentId, ops, state) {
+  if (!item || typeof item !== "object") return;
+  var text = __trueosStripHostMarkers(item.text);
+  var visibleSample = __trueosLogTextSample(text);
+  if (!visibleSample) return;
+  if (visibleSample === "true" || visibleSample === "false") return;
+  if (visibleSample.indexOf("<truesurfer-") === 0) return;
+  if (visibleSample.indexOf("__trueo") === 0) return;
+  if (!__trueosOverlayTextIsRenderable(text)) return;
+  var id = state.nextId++;
+  ops.push({ code: 1, node: id, a: 2 });
+  if (parentId > 0) ops.push({ code: 2, node: parentId, a: id });
+  ops.push({ code: 3, node: id, a: __trueosNum(item.x, 0), b: __trueosNum(item.y, 0) });
+  ops.push({ code: 9, node: id, a: 0x111111, b: 1 });
+  ops.push({ code: 8, node: id, text: text });
+  state.text += 1;
+  if (state.samples.length < 12) state.samples.push("#" + state.samples.length + "@node=" + id + " sample=\"" + __trueosLogTextSample(text) + "\"");
 }
 G.__trueosParse5BuildSceneFromCapture = function () {
   var cap = G.__pixiCapture;
@@ -807,36 +1167,108 @@ G.__trueosParse5BuildSceneFromCapture = function () {
   var ops = [];
   var seen = {};
   var snapshotSeen = {};
+  var snapshotTextVisible = {};
+  var snapshotTextWorld = {};
+  var snapshotNodeVisible = {};
   var textSlots = [];
   var textMap = {};
   var textHasFill = {};
   var pendingTextFill = {};
+  var declaredText = {};
+  var finalTextById = {};
+  var finalTextQueued = {};
+  var finalTextOrder = [];
+  var replayTextEmitted = 0;
   var rootId = 0;
   var snapshot = null;
+  var replayStart = 0;
   var i;
   for (i = commands.length - 1; i >= 0; i -= 1) {
-    if (commands[i] && commands[i].op === "snapshot" && commands[i].args && commands[i].args[0]) {
+    if (commands[i] && __trueosNormalizeCommandOp(commands[i].op) === "snapshot" && commands[i].args && commands[i].args[0]) {
       snapshot = commands[i].args[0];
       rootId = __trueosNum(commands[i].id, __trueosNum(snapshot.id, 0)) | 0;
+      for (var si = i - 1; si >= 0; si -= 1) {
+        if (commands[si] && __trueosNormalizeCommandOp(commands[si].op) === "snapshot") {
+          replayStart = si + 1;
+          break;
+        }
+      }
       break;
     }
   }
   var hasSnapshot = !!snapshot;
-  if (snapshot) rootId = __trueosPushSnapshotNode(snapshot, 0, ops, seen, snapshotSeen, textSlots) || rootId;
+  if (G.console && typeof G.console.log === "function") {
+    var diag = __trueosSnapshotDiag(snapshot, 0, { nodes: 0, text: 0, renderableText: 0, nonArrayChildren: 0, maxDepth: 0, samples: [] });
+    var textSetAll = 0;
+    var textSetReplay = 0;
+    var textSetRenderable = 0;
+    var textSetSamples = [];
+    for (var ci = 0; ci < commands.length; ci += 1) {
+      if (commands[ci] && __trueosNormalizeCommandOp(commands[ci].op) === "text.text.set") {
+        textSetAll += 1;
+        var textSetValue = String(commands[ci].args && commands[ci].args.length ? commands[ci].args[0] : "");
+        if (__trueosTextIsRenderable(textSetValue)) textSetRenderable += 1;
+        if (textSetSamples.length < 18) textSetSamples.push("#" + textSetSamples.length + "@id=" + (__trueosNum(commands[ci].id, 0) | 0) + " target=\"" + __trueosLogTextSample(commands[ci].target) + "\" value=\"" + __trueosLogTextSample(textSetValue) + "\"");
+        if (ci >= replayStart) textSetReplay += 1;
+      }
+    }
+    G.console.log("[parse5 trueos host] snapshot-diag has=" + (hasSnapshot ? 1 : 0) + " nodes=" + diag.nodes + " text=" + diag.text + " renderable_text=" + diag.renderableText + " max_depth=" + diag.maxDepth + " non_array_children=" + diag.nonArrayChildren + " commands=" + commands.length + " replay_start=" + replayStart + " text_set_all=" + textSetAll + " text_set_replay=" + textSetReplay + " text_set_renderable=" + textSetRenderable + " samples=" + diag.samples.join("|") + " text_sets=" + textSetSamples.join("|"));
+  }
+  if (snapshot) {
+    if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=snapshot-visibility begin");
+    __trueosCollectSnapshotVisibility(snapshot, 0, 0, true, snapshotNodeVisible);
+    if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=snapshot-push begin");
+    rootId = __trueosPushSnapshotNode(snapshot, 0, ops, seen, snapshotSeen, snapshotTextVisible, snapshotTextWorld, textSlots, 0, 0) || rootId;
+    if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=snapshot-push done ops=" + ops.length);
+  }
   function __trueosMappedTextNode(commandId, textValueHasInk, commandWasSnapshotSeen) {
     return commandId;
   }
-  for (i = 0; i < commands.length; i += 1) {
+  function __trueosDeclareTextNode(nodeId) {
+    if (!declaredText[nodeId]) {
+      ops.push({ code: 1, node: nodeId, a: 2 });
+      declaredText[nodeId] = true;
+    }
+    seen[nodeId] = true;
+  }
+  if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=text-prepass begin commands=" + commands.length);
+  var preRawRenderable = 0;
+  var preCleanRenderable = 0;
+  var preTextSamples = [];
+  for (var preTextIndex = 0; preTextIndex < commands.length; preTextIndex += 1) {
+    var preTextCmd = commands[preTextIndex] || {};
+    if (__trueosNormalizeCommandOp(preTextCmd.op) !== "text.text.set") continue;
+    var preTextId = __trueosNum(preTextCmd.id, 0) | 0;
+    if (preTextId <= 0) continue;
+    var preTextArgs = preTextCmd.args && preTextCmd.args.length ? preTextCmd.args : [];
+    var preTextRaw = String(preTextArgs[0] == null ? "" : preTextArgs[0]);
+    var preTextValue = __trueosCleanRenderableText(preTextRaw);
+    if (__trueosTextIsRenderable(preTextRaw)) preRawRenderable += 1;
+    if (__trueosTextIsRenderable(preTextValue)) preCleanRenderable += 1;
+    if (preTextSamples.length < 24 && (__trueosTextIsRenderable(preTextRaw) || __trueosTextIsRenderable(preTextValue))) {
+      preTextSamples.push("#" + preTextSamples.length + "@i=" + preTextIndex + " id=" + preTextId + " raw=\"" + __trueosLogTextSample(preTextRaw) + "\" clean=\"" + __trueosLogTextSample(preTextValue) + "\"");
+    }
+    if (!__trueosTextIsRenderable(preTextValue)) continue;
+    if (!finalTextQueued[preTextId]) {
+      finalTextQueued[preTextId] = true;
+      finalTextOrder.push(preTextId);
+    }
+    finalTextById[preTextId] = preTextValue;
+  }
+  if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=text-prepass done final_text=" + finalTextOrder.length + " raw_renderable=" + preRawRenderable + " clean_renderable=" + preCleanRenderable + " samples=" + preTextSamples.join("|"));
+  if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=replay begin start=" + replayStart + " commands=" + commands.length);
+  for (i = replayStart; i < commands.length; i += 1) {
     var cmd = commands[i] || {};
     var id = __trueosNum(cmd.id, 0) | 0;
     if (id <= 0) continue;
     var wasSnapshotSeen = !!snapshotSeen[id];
+    var wasSnapshotTextVisible = !!snapshotTextVisible[id];
     if (!seen[id]) {
       ops.push({ code: 1, node: id, a: __trueosCommandKind(cmd.target) });
       seen[id] = true;
     }
     var args = cmd.args && cmd.args.length ? cmd.args : [];
-    switch (cmd.op) {
+    switch (__trueosNormalizeCommandOp(cmd.op)) {
       case "clear": ops.push({ code: 4, node: id }); break;
       case "rect":
         ops.push({ code: 5, node: id, a: __trueosNum(args[0], 0), b: __trueosNum(args[1], 0), c: __trueosNum(args[2], 0), d: __trueosNum(args[3], 0) });
@@ -870,50 +1302,92 @@ G.__trueosParse5BuildSceneFromCapture = function () {
       case "setChildIndex":
         if (__trueosNum(args[0], 0) > 0) ops.push({ code: 11, node: id, a: __trueosNum(args[0], 0), b: __trueosNum(args[1], 0) });
         break;
+      case "position":
+        ops.push({ code: 3, node: id, a: __trueosNum(args[0], 0), b: __trueosNum(args[1], 0) });
+        break;
       case "removeChild":
         if (!hasSnapshot && __trueosNum(args[0], 0) > 0) ops.push({ code: 12, node: id, a: __trueosNum(args[0], 0) });
         break;
       case "removeChildren": if (!hasSnapshot) ops.push({ code: 14, node: id }); break;
       case "removeAllListeners": if (!hasSnapshot) ops.push({ code: 17, node: id }); break;
-      case "on": if (!hasSnapshot && cmd.event) ops.push({ code: 16, node: id, text: String(cmd.event) }); break;
+      case "on": if (cmd.event) ops.push({ code: 16, node: id, a: __trueosPointerEventCode(cmd.event) }); break;
       case "alpha": ops.push({ code: 23, node: id, a: __trueosNum(args[0], 1) }); break;
       case "scale": ops.push({ code: 28, node: id, a: __trueosNum(args[0], 1), b: __trueosNum(args[1], __trueosNum(args[0], 1)) }); break;
       case "mask": ops.push({ code: 27, node: id, a: __trueosNum(args[0], 0) }); break;
       case "text.text.set":
-        var textValue = String(args[0] == null ? "" : args[0]);
-        var hasInk = __trueosTextHasInk(textValue);
-        if (hasSnapshot && !hasInk) break;
-        var textNode = __trueosMappedTextNode(id, hasInk, wasSnapshotSeen);
-        if (typeof pendingTextFill[id] === "number") {
-          ops.push({ code: 9, node: textNode, a: pendingTextFill[id], b: 1 });
-          textHasFill[textNode] = true;
-          delete pendingTextFill[id];
+        var textValue = __trueosCleanRenderableText(args[0]);
+        var hasInk = __trueosTextIsRenderable(textValue);
+        if (hasSnapshot && (!wasSnapshotSeen || !snapshotNodeVisible[id])) break;
+        if (!finalTextQueued[id]) {
+          finalTextQueued[id] = true;
+          finalTextOrder.push(id);
         }
-        if (!textHasFill[textNode]) ops.push({ code: 9, node: textNode, a: 0x111111, b: 1 });
-        ops.push({ code: 8, node: textNode, text: textValue });
+        if (hasInk || !__trueosTextIsRenderable(finalTextById[id])) finalTextById[id] = hasInk ? textValue : "";
         break;
       case "text.style.set":
         if (args[0] && typeof args[0].fill !== "undefined") {
           var fill = __trueosColorArg(args[0].fill, 0xffffff);
-          var mapped = textMap[id] || (wasSnapshotSeen ? id : 0);
-          if (mapped) {
-            ops.push({ code: 9, node: mapped, a: fill, b: 1 });
-            textHasFill[mapped] = true;
-          } else pendingTextFill[id] = fill;
+          pendingTextFill[id] = fill;
         }
         break;
+      }
+  }
+  if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=replay done final_text=" + finalTextOrder.length + " ops=" + ops.length);
+  if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=final-text begin count=" + finalTextOrder.length);
+  for (var ti = 0; ti < finalTextOrder.length; ti += 1) {
+    var finalId = finalTextOrder[ti] | 0;
+    var finalText = finalTextById[finalId];
+    if (!__trueosTextIsRenderable(finalText)) continue;
+    var finalTextNode = __trueosMappedTextNode(finalId, true, !!snapshotSeen[finalId]);
+    var worldText = hasSnapshot ? snapshotTextWorld[finalId] : null;
+    if (worldText) {
+      finalTextNode = 800000 + finalId;
+      ops.push({ code: 1, node: finalTextNode, a: 2 });
+      if (rootId > 0) ops.push({ code: 2, node: rootId, a: finalTextNode });
+      ops.push({ code: 3, node: finalTextNode, a: __trueosNum(worldText.x, 0), b: __trueosNum(worldText.y, 0) });
+    } else {
+      __trueosDeclareTextNode(finalTextNode);
     }
+    if (typeof pendingTextFill[finalId] === "number") {
+      ops.push({ code: 9, node: finalTextNode, a: pendingTextFill[finalId], b: 1 });
+      textHasFill[finalTextNode] = true;
+    }
+    if (!textHasFill[finalTextNode]) ops.push({ code: 9, node: finalTextNode, a: 0x111111, b: 1 });
+    ops.push({ code: 8, node: finalTextNode, text: finalText });
+    replayTextEmitted += 1;
+  }
+  if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=final-text done emitted=" + replayTextEmitted + " ops=" + ops.length);
+  var flatTextOverlays = G.__TRUEOS_PIXI_LAYOUT_TEXT_OVERLAYS__;
+  var layoutOverlay = G.__TRUEOS_PIXI_LAST_LAYOUT__;
+  var layoutOverlayState = { nextId: 900000, text: 0, samples: [] };
+  var enableJsLayoutTextOverlay = false;
+  if (enableJsLayoutTextOverlay && flatTextOverlays && flatTextOverlays.length) {
+    for (var oi = 0; oi < flatTextOverlays.length; oi += 1) {
+      __trueosPushFlatTextOverlay(flatTextOverlays[oi], rootId || 1, ops, layoutOverlayState);
+    }
+  } else if (enableJsLayoutTextOverlay && layoutOverlay) {
+    __trueosPushLayoutTextOverlays(layoutOverlay, rootId || 1, 0, 0, ops, layoutOverlayState);
   }
   if (G.console && typeof G.console.log === "function") {
+    if ((flatTextOverlays && flatTextOverlays.length) || layoutOverlayState.text > 0) {
+      var flatSamples = [];
+      if (flatTextOverlays && flatTextOverlays.length) {
+        for (var fi = 0; fi < flatTextOverlays.length && flatSamples.length < 8; fi += 1) {
+          var flatItem = flatTextOverlays[fi] || {};
+          flatSamples.push("#" + flatSamples.length + " x=" + __trueosNum(flatItem.x, 0) + " y=" + __trueosNum(flatItem.y, 0) + " text=\"" + __trueosLogTextSample(flatItem.text) + "\"");
+        }
+      }
+      G.console.log("[parse5 trueos host] layout-text-overlay flat_len=" + (flatTextOverlays && flatTextOverlays.length ? flatTextOverlays.length : 0) + " count=" + layoutOverlayState.text + " samples=" + layoutOverlayState.samples.join("|") + " flat_samples=" + flatSamples.join("|"));
+    }
     var textLog = [];
     for (i = 0; i < ops.length && textLog.length < 12; i += 1) {
       if (ops[i] && ops[i].code === 8) {
         textLog.push("#" + textLog.length + "@node=" + ops[i].node + " chars=" + String(ops[i].text || "").length + " sample=\"" + __trueosLogTextSample(ops[i].text) + "\"");
       }
     }
-    G.console.log("[parse5 trueos host] ui3-scene-text " + textLog.join("|"));
+    G.console.log("[parse5 trueos host] ui3-scene-text emitted=" + replayTextEmitted + " " + textLog.join("|"));
   }
-  return { ok: 1, ui3Scene: { version: 1, commandSource: "parse5-trueos-pixi", rootId: rootId, opCount: ops.length, ops: ops } };
+  return { ok: 1, ui3Scene: { version: 1, commandSource: "parse5-trueos-pixi", rootId: rootId, opCount: ops.length, layoutTextOps: layoutOverlayState.text, ops: ops } };
 };
 "##;
 const TRUESURFER_IMPORT_SOURCE: &[u8] = br#"
@@ -971,14 +1445,23 @@ const TRUESURFER_TRUEOS_PIXI_CAPTURE_ERROR_PROP: &[u8] = b"__TRUEOS_PIXI_CAPTURE
 const TRUESURFER_TRUEOS_PIXI_CAPTURE_STEP_PROP: &[u8] = b"__TRUEOS_PIXI_CAPTURE_STEP__\0";
 const TRUESURFER_TRUEOS_PIXI_LAYOUT_STEP_PROP: &[u8] = b"__TRUEOS_PIXI_LAYOUT_STEP__\0";
 const TRUESURFER_TRUEOS_PIXI_BRIDGE_STATS_PROP: &[u8] = b"__TRUEOS_PIXI_BRIDGE_STATS__\0";
+const TRUESURFER_TRUEOS_PIXI_LAYOUT_TEXT_OVERLAYS_PROP: &[u8] =
+    b"__TRUEOS_PIXI_LAYOUT_TEXT_OVERLAYS__\0";
+const TRUESURFER_TRUEOS_PIXI_POINTER_DISPATCH_PROP: &[u8] = b"__TRUEOS_DISPATCH_PIXI_POINTER__\0";
+const TRUESURFER_TRUEOS_PIXI_KEYDOWN_DISPATCH_PROP: &[u8] = b"__TRUEOS_DISPATCH_KEYDOWN__\0";
+const TRUESURFER_TRUEOS_PIXI_REPAINT_NOW_PROP: &[u8] = b"__TRUEOS_REPAINT_NOW__\0";
 const TRUESURFER_PARSE5_BUILD_SCENE_PROP: &[u8] = b"__trueosParse5BuildSceneFromCapture\0";
 const TRUESURFER_BUILD_TEXT_WIDGET_SCENE_PROP: &[u8] = b"__trueosBuildTextWidgetScene\0";
 const TRUESURFER_BUILD_DEMO_TEXT_WIDGET_SCENE_PROP: &[u8] = b"__trueosBuildDemoTextWidgetScene\0";
 const TRUESURFER_UI3_SCENE_COMMAND_SOURCE_PROP: &[u8] = b"commandSource\0";
 const TRUESURFER_UI3_SCENE_ROOT_ID_PROP: &[u8] = b"rootId\0";
+const TRUESURFER_UI3_SCENE_LAYOUT_TEXT_OPS_PROP: &[u8] = b"layoutTextOps\0";
 const TRUESURFER_UI3_SCENE_OPS_PROP: &[u8] = b"ops\0";
 const TRUESURFER_WIDGET_PROP: &[u8] = b"widget\0";
 const TRUESURFER_WIDGET_RENDERER_PROP: &[u8] = b"renderer\0";
+const TRUESURFER_WIDGET_TAGS_PROP: &[u8] = b"tags\0";
+const TRUESURFER_WIDGET_TAG_COUNTS_PROP: &[u8] = b"tagCounts\0";
+const TRUESURFER_WIDGET_COUNT_PROP: &[u8] = b"widgetCount\0";
 const TRUESURFER_WIDGET_BUTTON_COUNT_PROP: &[u8] = b"buttonCount\0";
 const TRUESURFER_WIDGET_IFRAME_COUNT_PROP: &[u8] = b"iframeCount\0";
 const TRUESURFER_WIDGET_IFRAME_SRCDOC_COUNT_PROP: &[u8] = b"iframeSrcdocCount\0";
@@ -991,6 +1474,8 @@ const TRUESURFER_UI3_OP_B_PROP: &[u8] = b"b\0";
 const TRUESURFER_UI3_OP_C_PROP: &[u8] = b"c\0";
 const TRUESURFER_UI3_OP_D_PROP: &[u8] = b"d\0";
 const TRUESURFER_UI3_OP_TEXT_PROP: &[u8] = b"text\0";
+const TRUESURFER_LAYOUT_TEXT_X_PROP: &[u8] = b"x\0";
+const TRUESURFER_LAYOUT_TEXT_Y_PROP: &[u8] = b"y\0";
 const TRUESURFER_BRIDGE_RENDER_NODES_PROP: &[u8] = b"renderNodes\0";
 const TRUESURFER_BRIDGE_RENDER_BLOCKS_PROP: &[u8] = b"renderBlocks\0";
 const TRUESURFER_BRIDGE_RENDER_TEXT_PROP: &[u8] = b"renderText\0";
@@ -1009,9 +1494,11 @@ const TRUESURFER_HTML_QUEUE_DEPTH: usize = 2;
 const TRUESURFER_HTML_QUEUE_WAIT_MS: u64 = 2;
 const TRUESURFER_BUSY_PUMP_BUDGET: usize = 512;
 const TRUESURFER_BUSY_SLEEP_MS: u64 = 1;
-const TRUESURFER_PARSE5_ASSET_PUMP_BUDGET: usize = 8192;
-const TRUESURFER_PARSE5_ASSET_WAIT_MS: u64 = 2500;
+const TRUESURFER_PARSE5_ASSET_PUMP_BUDGET: usize = 1024;
+const TRUESURFER_PARSE5_ASSET_WAIT_MS: u64 = 850;
 const TRUESURFER_UI3_SCENE_OP_LIMIT: u32 = 8192;
+const TRUESURFER_PARSE5_VISIBLE_TEXT_WIDTH: f32 = 2560.0;
+const TRUESURFER_PARSE5_VISIBLE_TEXT_HEIGHT: f32 = 1440.0;
 const UI2_HOSTED_BROWSER_DIRTY_CONTENT: u32 = 1 << 0;
 const UI2_HOSTED_BROWSER_DIRTY_INTERACTIVE: u32 = 1 << 1;
 
@@ -1104,6 +1591,24 @@ struct PendingHtml {
     url: String,
 }
 
+#[derive(Clone, Debug)]
+struct QueuedUi3PointerEvent {
+    target_node: u32,
+    kind: String,
+    x: i32,
+    y: i32,
+    pointer_id: u32,
+    buttons: u32,
+}
+
+#[derive(Clone, Debug)]
+struct QueuedUi3KeyboardEvent {
+    key: String,
+    slot_id: u32,
+    pointer_id: u32,
+    modifiers: u32,
+}
+
 #[derive(Clone, Default)]
 struct HtmlHandoffSlot {
     html: String,
@@ -1113,6 +1618,14 @@ struct HtmlHandoffSlot {
 struct BrowserHtmlQueue {
     sender: Mutex<Sender<'static, SpinRawMutex, HtmlHandoffSlot>>,
     receiver: Mutex<Receiver<'static, SpinRawMutex, HtmlHandoffSlot>>,
+}
+
+struct BrowserUi3PointerQueue {
+    queue: Mutex<VecDeque<QueuedUi3PointerEvent>>,
+}
+
+struct BrowserUi3KeyboardQueue {
+    queue: Mutex<VecDeque<QueuedUi3KeyboardEvent>>,
 }
 
 #[derive(Default)]
@@ -1132,8 +1645,16 @@ struct BrowserInstanceState {
 static TRUESURFER_STATE: Mutex<BTreeMap<u32, BrowserInstanceState>> = Mutex::new(BTreeMap::new());
 static BROWSER_RPC_SEQ: AtomicU32 = AtomicU32::new(1);
 static TRUESURFER_HTML_QUEUES: Once<Vec<BrowserHtmlQueue>> = Once::new();
+static TRUESURFER_UI3_POINTER_QUEUES: Once<Vec<BrowserUi3PointerQueue>> = Once::new();
+static TRUESURFER_UI3_KEYBOARD_QUEUES: Once<Vec<BrowserUi3KeyboardQueue>> = Once::new();
 static TRUESURFER_HTML_READY: [Signal<SpinRawMutex, ()>; MAX_BROWSER_INSTANCE_ID as usize] =
     [const { Signal::new() }; MAX_BROWSER_INSTANCE_ID as usize];
+static TRUESURFER_UI3_POINTER_QUEUE_LOGS: AtomicU32 = AtomicU32::new(0);
+static TRUESURFER_UI3_POINTER_LOOP_LOGS: AtomicU32 = AtomicU32::new(0);
+static TRUESURFER_UI3_KEYBOARD_QUEUE_LOGS: AtomicU32 = AtomicU32::new(0);
+
+const TRUESURFER_UI3_POINTER_QUEUE_DEPTH: usize = 256;
+const TRUESURFER_UI3_KEYBOARD_QUEUE_DEPTH: usize = 256;
 
 fn html_handoff_queues() -> &'static Vec<BrowserHtmlQueue> {
     TRUESURFER_HTML_QUEUES.call_once(|| {
@@ -1159,6 +1680,44 @@ fn html_handoff_queue(browser_instance_id: u32) -> Option<&'static BrowserHtmlQu
         return None;
     }
     html_handoff_queues().get(browser_instance_id.saturating_sub(1) as usize)
+}
+
+fn ui3_pointer_queues() -> &'static Vec<BrowserUi3PointerQueue> {
+    TRUESURFER_UI3_POINTER_QUEUES.call_once(|| {
+        let mut queues = Vec::with_capacity(MAX_BROWSER_INSTANCE_ID as usize);
+        for _ in 0..MAX_BROWSER_INSTANCE_ID {
+            queues.push(BrowserUi3PointerQueue {
+                queue: Mutex::new(VecDeque::with_capacity(TRUESURFER_UI3_POINTER_QUEUE_DEPTH)),
+            });
+        }
+        queues
+    })
+}
+
+fn ui3_keyboard_queues() -> &'static Vec<BrowserUi3KeyboardQueue> {
+    TRUESURFER_UI3_KEYBOARD_QUEUES.call_once(|| {
+        let mut queues = Vec::with_capacity(MAX_BROWSER_INSTANCE_ID as usize);
+        for _ in 0..MAX_BROWSER_INSTANCE_ID {
+            queues.push(BrowserUi3KeyboardQueue {
+                queue: Mutex::new(VecDeque::with_capacity(TRUESURFER_UI3_KEYBOARD_QUEUE_DEPTH)),
+            });
+        }
+        queues
+    })
+}
+
+fn ui3_pointer_queue(browser_instance_id: u32) -> Option<&'static BrowserUi3PointerQueue> {
+    if !browser_valid(browser_instance_id) {
+        return None;
+    }
+    ui3_pointer_queues().get(browser_instance_id.saturating_sub(1) as usize)
+}
+
+fn ui3_keyboard_queue(browser_instance_id: u32) -> Option<&'static BrowserUi3KeyboardQueue> {
+    if !browser_valid(browser_instance_id) {
+        return None;
+    }
+    ui3_keyboard_queues().get(browser_instance_id.saturating_sub(1) as usize)
 }
 
 fn html_ready_signal(browser_instance_id: u32) -> Option<&'static Signal<SpinRawMutex, ()>> {
@@ -1276,6 +1835,94 @@ pub async fn queue_set_html_with_url_for_browser(
 
         Timer::after(EmbassyDuration::from_millis(TRUESURFER_HTML_QUEUE_WAIT_MS)).await;
     }
+}
+
+pub fn queue_ui3_pointer_event_for_browser(
+    browser_instance_id: u32,
+    target_node: u32,
+    kind: &str,
+    x: i32,
+    y: i32,
+    pointer_id: u32,
+    buttons: u32,
+) -> bool {
+    if target_node == 0 || !browser_valid(browser_instance_id) {
+        return false;
+    }
+    let Some(queue) = ui3_pointer_queue(browser_instance_id) else {
+        return false;
+    };
+    let Some(ready_signal) = html_ready_signal(browser_instance_id) else {
+        return false;
+    };
+
+    let depth = {
+        let mut guard = queue.queue.lock();
+        while guard.len() >= TRUESURFER_UI3_POINTER_QUEUE_DEPTH {
+            guard.pop_front();
+        }
+        guard.push_back(QueuedUi3PointerEvent {
+            target_node,
+            kind: String::from(kind),
+            x,
+            y,
+            pointer_id,
+            buttons,
+        });
+        guard.len()
+    };
+    ready_signal.signal(());
+
+    let log_idx = TRUESURFER_UI3_POINTER_QUEUE_LOGS.fetch_add(1, Ordering::Relaxed);
+    if kind != "pointermove" || buttons != 0 || log_idx < 96 {
+        log_line(format!(
+            "qjs-truesurfer[{}]: ui3 pointer queued target={} kind={} x={} y={} pointer={} buttons=0x{:X} depth={}\n",
+            browser_instance_id, target_node, kind, x, y, pointer_id, buttons, depth
+        ));
+    }
+    true
+}
+
+pub fn queue_ui3_keyboard_event_for_browser(
+    browser_instance_id: u32,
+    key: String,
+    slot_id: u32,
+    pointer_id: u32,
+    modifiers: u32,
+) -> bool {
+    if key.is_empty() || !browser_valid(browser_instance_id) {
+        return false;
+    }
+    let Some(queue) = ui3_keyboard_queue(browser_instance_id) else {
+        return false;
+    };
+    let Some(ready_signal) = html_ready_signal(browser_instance_id) else {
+        return false;
+    };
+
+    let depth = {
+        let mut guard = queue.queue.lock();
+        while guard.len() >= TRUESURFER_UI3_KEYBOARD_QUEUE_DEPTH {
+            guard.pop_front();
+        }
+        guard.push_back(QueuedUi3KeyboardEvent {
+            key: key.clone(),
+            slot_id,
+            pointer_id,
+            modifiers,
+        });
+        guard.len()
+    };
+    ready_signal.signal(());
+
+    let log_idx = TRUESURFER_UI3_KEYBOARD_QUEUE_LOGS.fetch_add(1, Ordering::Relaxed);
+    if log_idx < 96 || key != "ArrowLeft" && key != "ArrowRight" {
+        log_line(format!(
+            "qjs-truesurfer[{}]: ui3 keyboard queued key={} slot={} pointer={} modifiers=0x{:X} depth={}\n",
+            browser_instance_id, key, slot_id, pointer_id, modifiers, depth
+        ));
+    }
+    true
 }
 
 pub fn queue_browser_rpc(_method: String, _args_json: String, _browser_window_id: u32) -> u32 {
@@ -1550,6 +2197,12 @@ unsafe fn js_value_to_string(ctx: *mut qjs::JSContext, value: qjs::JSValueConst)
 }
 
 fn strip_trueos_host_markers(text: &str) -> String {
+    let mut cleaned = strip_trueos_angle_markers(text);
+    strip_trueos_bare_symbols(&mut cleaned);
+    cleaned
+}
+
+fn strip_trueos_angle_markers(text: &str) -> String {
     const MARKER: &str = "<truesurfer-";
     const KNOWN_MARKERS: [&str; 13] = [
         "<truesurfer-parse5-trueos-host-core>",
@@ -1568,7 +2221,6 @@ fn strip_trueos_host_markers(text: &str) -> String {
     ];
 
     let mut cleaned = String::from(text);
-    strip_trueos_bare_symbols(&mut cleaned);
     if !cleaned.contains(MARKER) {
         return cleaned;
     }
@@ -1607,11 +2259,101 @@ fn strip_trueos_host_markers(text: &str) -> String {
 }
 
 fn strip_trueos_bare_symbols(text: &mut String) {
-    const SYMBOLS: [&str; 3] = ["__trueosNum", "__trueosNu", "__trueosN"];
-    for symbol in SYMBOLS {
-        while let Some(idx) = text.find(symbol) {
-            text.replace_range(idx..idx + symbol.len(), "");
+    const PREFIX: &str = "__trueos";
+    const NUM_RESIDUE: &str = "Num";
+    const NU_RESIDUE: &str = "Nu";
+    const N_RESIDUE: &str = "N";
+    strip_trueos_num_runs(text);
+    loop {
+        let before = text.len();
+        while text.starts_with(PREFIX) {
+            text.replace_range(0..PREFIX.len(), "");
         }
+        while text.starts_with(NUM_RESIDUE) {
+            text.replace_range(0..NUM_RESIDUE.len(), "");
+        }
+        while text.starts_with(NU_RESIDUE) {
+            text.replace_range(0..NU_RESIDUE.len(), "");
+        }
+        while text == N_RESIDUE {
+            text.clear();
+        }
+        if text.len() == before {
+            break;
+        }
+    }
+    if text.starts_with("__trueo") {
+        text.clear();
+    }
+}
+
+fn strip_trueos_num_runs(text: &mut String) {
+    const RUN_PREFIX: &str = "__trueosN";
+    while let Some(idx) = text.find(RUN_PREFIX) {
+        let mut end = idx + RUN_PREFIX.len();
+        while end < text.len() {
+            let b = text.as_bytes()[end];
+            if b != b'u' && b != b'm' {
+                break;
+            }
+            end += 1;
+        }
+        text.replace_range(idx..end, "");
+    }
+}
+
+fn clean_parse5_overlay_text(text: &str) -> String {
+    const KNOWN_SYMBOLS: [&str; 5] = [
+        "__trueosNumberValue",
+        "__trueosHostNum",
+        "__trueosNum",
+        "__trueosNu",
+        "__trueosN",
+    ];
+    let mut out = strip_trueos_host_markers(text);
+    while out.contains("N__trueos") {
+        out = out.replace("N__trueos", "__trueos");
+    }
+    for symbol in KNOWN_SYMBOLS {
+        while out.contains(symbol) {
+            out = out.replace(symbol, "");
+        }
+    }
+    while out.starts_with('N') && out.contains("__trueos") {
+        out.remove(0);
+    }
+    let mut out = String::from(out.trim());
+    let residue_len = out
+        .bytes()
+        .take_while(|b| *b == b'u' || *b == b'm')
+        .count();
+    let next = out.as_bytes().get(residue_len).copied();
+    if residue_len >= 2
+        && next.map_or(true, |b| {
+            b == b'('
+                || b == b'['
+                || b == b'{'
+                || b == b'"'
+                || b == b'\''
+                || b.is_ascii_uppercase()
+                || b.is_ascii_digit()
+        })
+    {
+        out.replace_range(0..residue_len, "");
+    }
+    out
+}
+
+fn ui3_pointer_event_from_code(code: u32) -> &'static str {
+    match code {
+        1 => "pointerdown",
+        2 => "pointerup",
+        3 => "pointermove",
+        4 => "pointerover",
+        5 => "pointerout",
+        6 => "pointerupoutside",
+        7 => "contextmenu",
+        _ => "pointerdown",
     }
 }
 
@@ -1721,6 +2463,113 @@ unsafe fn log_parse5_trueos_bridge_stats(ctx: *mut qjs::JSContext, browser_insta
     }
 }
 
+unsafe fn submit_parse5_layout_text_overlays(
+    ctx: *mut qjs::JSContext,
+    browser_instance_id: u32,
+    root_id: u32,
+) -> u32 {
+    if root_id == 0 {
+        return 0;
+    }
+
+    let global = qjs::JS_GetGlobalObject(ctx);
+    let overlays = qjs::JS_GetPropertyStr(
+        ctx,
+        global,
+        TRUESURFER_TRUEOS_PIXI_LAYOUT_TEXT_OVERLAYS_PROP.as_ptr() as *const c_char,
+    );
+    qjs::js_free_value(ctx, global);
+    if overlays.is_exception()
+        || overlays.tag == qjs::JS_TAG_UNDEFINED
+        || overlays.tag == qjs::JS_TAG_NULL
+    {
+        qjs::js_free_value(ctx, overlays);
+        return 0;
+    }
+
+    let source_len = read_array_len(ctx, overlays);
+    let overlay_count = source_len.min(512);
+    let mut submitted = 0u32;
+    let mut skipped = 0u32;
+    let mut offscreen = 0u32;
+    let mut samples = String::new();
+    for idx in 0..overlay_count {
+        let item = qjs::JS_GetPropertyUint32(ctx, overlays, idx);
+        if item.is_exception() || item.tag == qjs::JS_TAG_UNDEFINED || item.tag == qjs::JS_TAG_NULL
+        {
+            qjs::js_free_value(ctx, item);
+            skipped = skipped.saturating_add(1);
+            continue;
+        }
+
+        let text = clean_parse5_overlay_text(
+            read_result_string(ctx, item, TRUESURFER_UI3_OP_TEXT_PROP).as_str(),
+        );
+        let sample = compact_log_text_sample(text.as_str(), 96);
+        if sample.is_empty()
+            || sample == "true"
+            || sample == "false"
+            || sample.starts_with("<truesurfer-")
+            || sample.starts_with("__trueos")
+        {
+            qjs::js_free_value(ctx, item);
+            skipped = skipped.saturating_add(1);
+            continue;
+        }
+
+        let x = read_result_f32(ctx, item, TRUESURFER_LAYOUT_TEXT_X_PROP);
+        let y = read_result_f32(ctx, item, TRUESURFER_LAYOUT_TEXT_Y_PROP);
+        if !(0.0..TRUESURFER_PARSE5_VISIBLE_TEXT_WIDTH).contains(&x)
+            || !(0.0..TRUESURFER_PARSE5_VISIBLE_TEXT_HEIGHT).contains(&y)
+        {
+            qjs::js_free_value(ctx, item);
+            offscreen = offscreen.saturating_add(1);
+            skipped = skipped.saturating_add(1);
+            continue;
+        }
+
+        let node = 900_000u32.saturating_add(idx);
+        let ok = qjs::platform::ui::ui3_scene_node(browser_instance_id, node, 2)
+            && qjs::platform::ui::ui3_scene_add_child(browser_instance_id, root_id, node)
+            && qjs::platform::ui::ui3_scene_position(browser_instance_id, node, x, y)
+            && qjs::platform::ui::ui3_scene_text_fill(browser_instance_id, node, 0x111111, 1.0)
+            && qjs::platform::ui::ui3_scene_text(browser_instance_id, node, text.as_str());
+        if ok {
+            if submitted < 12 {
+                if !samples.is_empty() {
+                    samples.push('|');
+                }
+                samples.push_str(
+                    format!("#{}@{}:{},{}", submitted, node, x as i32, y as i32).as_str(),
+                );
+                samples.push_str("=\"");
+                samples.push_str(sample.as_str());
+                samples.push('"');
+            }
+            submitted = submitted.saturating_add(1);
+        } else {
+            skipped = skipped.saturating_add(1);
+        }
+        qjs::js_free_value(ctx, item);
+    }
+    qjs::js_free_value(ctx, overlays);
+
+    log_line(format!(
+        "qjs-truesurfer[{}]: parse5 trueos rust-layout-text source_len={} submitted={} skipped={} offscreen={} samples={}\n",
+        browser_instance_id,
+        source_len,
+        submitted,
+        skipped,
+        offscreen,
+        if samples.is_empty() {
+            "none"
+        } else {
+            samples.as_str()
+        }
+    ));
+    submitted
+}
+
 unsafe fn submit_ui3_scene(
     ctx: *mut qjs::JSContext,
     browser_instance_id: u32,
@@ -1750,6 +2599,8 @@ unsafe fn submit_ui3_scene(
     }
     let command_source =
         read_result_string(ctx, scene_value, TRUESURFER_UI3_SCENE_COMMAND_SOURCE_PROP);
+    let scene_layout_text_ops =
+        read_result_u32(ctx, scene_value, TRUESURFER_UI3_SCENE_LAYOUT_TEXT_OPS_PROP);
     let skip_empty_text_ops = command_source == "parse5-trueos-pixi";
     if !qjs::platform::ui::ui3_scene_begin(browser_instance_id, root_id) {
         log_line(format!(
@@ -1792,6 +2643,8 @@ unsafe fn submit_ui3_scene(
     let mut op_code_counts = [0u32; 29];
     let mut unknown_op_count = 0u32;
     let mut text_sample_count = 0u32;
+    let mut listen_sample_count = 0u32;
+    let mut texture_sample_count = 0u32;
     let mut skipped_empty_text_count = 0u32;
     for idx in 0..op_count {
         let op_value = qjs::JS_GetPropertyUint32(ctx, ops_value, idx);
@@ -1894,9 +2747,22 @@ unsafe fn submit_ui3_scene(
             23 => qjs::platform::ui::ui3_scene_alpha(browser_instance_id, node, a),
             28 => qjs::platform::ui::ui3_scene_scale(browser_instance_id, node, a, b),
             27 => qjs::platform::ui::ui3_scene_mask(browser_instance_id, node, a.max(0.0) as u32),
-            // Listener registration is Pixi vocabulary, but first-frame rendering does not
-            // need event dispatch wired yet. Keep it accepted so visual submit cannot hang.
-            16 => true,
+            16 => {
+                let event = ui3_pointer_event_from_code(a.max(0.0) as u32);
+                if listen_sample_count < 16 {
+                    log_line(format!(
+                        "qjs-truesurfer[{}]: ui3 scene listen-op#{} op_index={} node={} event={} event_code={}\n",
+                        browser_instance_id,
+                        listen_sample_count,
+                        idx,
+                        node,
+                        event,
+                        a.max(0.0) as u32
+                    ));
+                }
+                listen_sample_count = listen_sample_count.saturating_add(1);
+                qjs::platform::ui::ui3_scene_listen(browser_instance_id, node, event)
+            }
             17 => qjs::platform::ui::ui3_scene_remove_all_listeners(browser_instance_id, node),
             18 => qjs::platform::ui::ui3_scene_graphics_circle(browser_instance_id, node, a, b, c),
             26 => {
@@ -1923,6 +2789,21 @@ unsafe fn submit_ui3_scene(
                 let h = read_result_string(ctx, op_value, TRUESURFER_UI3_OP_TEXT_PROP)
                     .parse::<f32>()
                     .unwrap_or(d);
+                if texture_sample_count < 8 {
+                    log_line(format!(
+                        "qjs-truesurfer[{}]: ui3 scene texture-op#{} op_index={} node={} tex={} x={} y={} w={} h={}\n",
+                        browser_instance_id,
+                        texture_sample_count,
+                        idx,
+                        node,
+                        a.max(0.0) as u32,
+                        b,
+                        c,
+                        d,
+                        h
+                    ));
+                }
+                texture_sample_count = texture_sample_count.saturating_add(1);
                 qjs::platform::ui::ui3_scene_texture_rect(
                     browser_instance_id,
                     node,
@@ -1984,10 +2865,16 @@ unsafe fn submit_ui3_scene(
             browser_instance_id, skipped_empty_text_count, command_source
         ));
     }
+    let mut layout_text_submitted = scene_layout_text_ops;
+    if command_source.starts_with("parse5-trueos-pix") {
+        layout_text_submitted = layout_text_submitted.saturating_add(
+            submit_parse5_layout_text_overlays(ctx, browser_instance_id, root_id),
+        );
+    }
 
     log_line(format!(
-        "qjs-truesurfer[{}]: ui3 scene render begin root={} submitted={}/{} op_submit_ms={}\n",
-        browser_instance_id, root_id, submitted, op_count, op_submit_ms
+        "qjs-truesurfer[{}]: ui3 scene render begin root={} submitted={}/{} layout_text={} op_submit_ms={}\n",
+        browser_instance_id, root_id, submitted, op_count, layout_text_submitted, op_submit_ms
     ));
     let render_start_ms = now_ms();
     let _ = qjs::platform::ui::ui3_scene_render(browser_instance_id, root_id);
@@ -2064,6 +2951,9 @@ unsafe fn submit_qjs_demo_text_widget_scene(
         && widget_meta.tag != qjs::JS_TAG_NULL
     {
         let renderer = read_result_string(ctx, widget_meta, TRUESURFER_WIDGET_RENDERER_PROP);
+        let tags = read_result_string(ctx, widget_meta, TRUESURFER_WIDGET_TAGS_PROP);
+        let tag_counts = read_result_string(ctx, widget_meta, TRUESURFER_WIDGET_TAG_COUNTS_PROP);
+        let widget_count = read_result_u32(ctx, widget_meta, TRUESURFER_WIDGET_COUNT_PROP);
         let button_count = read_result_u32(ctx, widget_meta, TRUESURFER_WIDGET_BUTTON_COUNT_PROP);
         let iframe_count = read_result_u32(ctx, widget_meta, TRUESURFER_WIDGET_IFRAME_COUNT_PROP);
         let iframe_srcdoc_count =
@@ -2071,14 +2961,17 @@ unsafe fn submit_qjs_demo_text_widget_scene(
         let text_count = read_result_u32(ctx, widget_meta, TRUESURFER_WIDGET_TEXT_COUNT_PROP);
         let text_bytes = read_result_u32(ctx, widget_meta, TRUESURFER_WIDGET_TEXT_BYTES_PROP);
         log_line(format!(
-            "qjs-truesurfer[{}]: qjs text widget meta renderer={} button_count={} iframe_count={} iframe_srcdoc_count={} text_count={} text_bytes={}\n",
+            "qjs-truesurfer[{}]: qjs text widget meta renderer={} widget_count={} button_count={} iframe_count={} iframe_srcdoc_count={} text_count={} text_bytes={} tags={} tag_counts={}\n",
             browser_instance_id,
             renderer,
+            widget_count,
             button_count,
             iframe_count,
             iframe_srcdoc_count,
             text_count,
-            text_bytes
+            text_bytes,
+            tags,
+            tag_counts
         ));
     }
     qjs::js_free_value(ctx, widget_meta);
@@ -2255,22 +3148,36 @@ unsafe fn submit_parse5_trueos_pixi_scene(
     let asset_wait_start_ms = now_ms();
     let mut asset_pump_iters = 0u32;
     let mut asset_pump_stopped = false;
+    log_line(format!("qjs-truesurfer[{}]: parse5 trueos asset probe begin\n", browser_instance_id));
     let had_asset_pending = qjs::async_ops::has_pending(ctx);
+    log_line(format!(
+        "qjs-truesurfer[{}]: parse5 trueos asset probe returned pending={}\n",
+        browser_instance_id, had_asset_pending as u8
+    ));
     if had_asset_pending {
         for _ in 0..TRUESURFER_PARSE5_ASSET_PUMP_BUDGET {
-            if !runtime_has_pending_work(rt, ctx) {
+            log_line(format!(
+                "qjs-truesurfer[{}]: parse5 trueos asset pump iter={} begin\n",
+                browser_instance_id, asset_pump_iters
+            ));
+            if !qjs::async_ops::has_pending(ctx) {
                 break;
             }
             if now_ms().saturating_sub(asset_wait_start_ms) >= TRUESURFER_PARSE5_ASSET_WAIT_MS {
                 asset_pump_stopped = true;
                 break;
             }
-            if !qjs::vm::pump_runtime_once(rt, ctx, "truesurfer-parse5-trueos-assets") {
-                asset_pump_stopped = true;
+            let made_asset_progress = qjs::async_ops::pump_images(ctx);
+            qjs::trueos_shims::trueos_cabi_poll_once();
+            asset_pump_iters = asset_pump_iters.saturating_add(1);
+            if !qjs::async_ops::has_pending(ctx) {
                 break;
             }
-            asset_pump_iters = asset_pump_iters.saturating_add(1);
+            if !made_asset_progress {
+                qjs::trueos_shims::trueos_cabi_poll_once();
+            }
         }
+        asset_pump_stopped |= qjs::async_ops::has_pending(ctx);
         log_line(format!(
             "qjs-truesurfer[{}]: parse5 trueos asset wait pending_before={} pending_after={} runtime_pending={} pump_iters={} pump_stopped={} pump_ms={}\n",
             browser_instance_id,
@@ -2282,6 +3189,43 @@ unsafe fn submit_parse5_trueos_pixi_scene(
             now_ms().saturating_sub(asset_wait_start_ms)
         ));
     }
+    let asset_jobs_before = qjs::JS_IsJobPending(rt) > 0;
+    if asset_jobs_before {
+        log_line(format!(
+            "qjs-truesurfer[{}]: parse5 trueos asset jobs drain skipped before=1 async_pending={} reason=native-assets-ready\n",
+            browser_instance_id,
+            qjs::async_ops::has_pending(ctx) as u8
+        ));
+        let global = qjs::JS_GetGlobalObject(ctx);
+        let repaint = qjs::JS_GetPropertyStr(
+            ctx,
+            global,
+            TRUESURFER_TRUEOS_PIXI_REPAINT_NOW_PROP.as_ptr() as *const c_char,
+        );
+        if !repaint.is_exception()
+            && repaint.tag != qjs::JS_TAG_UNDEFINED
+            && repaint.tag != qjs::JS_TAG_NULL
+        {
+            let repaint_result = qjs::JS_Call(ctx, repaint, global, 0, core::ptr::null());
+            let repaint_exception = repaint_result.is_exception();
+            log_line(format!(
+                "qjs-truesurfer[{}]: parse5 trueos asset repaint returned exception={} async_pending={}\n",
+                browser_instance_id,
+                repaint_exception as u8,
+                qjs::async_ops::has_pending(ctx) as u8
+            ));
+            if repaint_exception {
+                qjs::qjs_diag::dump_last_exception(ctx, "truesurfer trueos asset repaint");
+            }
+            qjs::js_free_value(ctx, repaint_result);
+        }
+        qjs::js_free_value(ctx, repaint);
+        qjs::js_free_value(ctx, global);
+    }
+    log_line(format!(
+        "qjs-truesurfer[{}]: parse5 trueos scene builder lookup begin\n",
+        browser_instance_id
+    ));
 
     let global = qjs::JS_GetGlobalObject(ctx);
     let build_scene = qjs::JS_GetPropertyStr(
@@ -2357,10 +3301,294 @@ fn take_queued_html_for_browser(browser_instance_id: u32) -> Option<PendingHtml>
 }
 
 async fn wait_for_queued_html(browser_instance_id: u32) {
-    let Some(signal) = html_ready_signal(browser_instance_id) else {
+    let Some(ready_signal) = html_ready_signal(browser_instance_id) else {
+        Timer::after(EmbassyDuration::from_millis(8)).await;
         return;
     };
-    signal.wait().await;
+    let _ = with_timeout(EmbassyDuration::from_millis(8), ready_signal.wait()).await;
+}
+
+fn take_queued_ui3_pointer_event_for_browser(
+    browser_instance_id: u32,
+) -> Option<QueuedUi3PointerEvent> {
+    let queue = ui3_pointer_queue(browser_instance_id)?;
+    let mut guard = queue.queue.lock();
+    guard.pop_front()
+}
+
+fn ui3_pointer_queue_len_for_browser(browser_instance_id: u32) -> usize {
+    let Some(queue) = ui3_pointer_queue(browser_instance_id) else {
+        return 0;
+    };
+    queue.queue.lock().len()
+}
+
+fn take_queued_ui3_keyboard_event_for_browser(
+    browser_instance_id: u32,
+) -> Option<QueuedUi3KeyboardEvent> {
+    let queue = ui3_keyboard_queue(browser_instance_id)?;
+    let mut guard = queue.queue.lock();
+    guard.pop_front()
+}
+
+fn ui3_keyboard_queue_len_for_browser(browser_instance_id: u32) -> usize {
+    let Some(queue) = ui3_keyboard_queue(browser_instance_id) else {
+        return 0;
+    };
+    queue.queue.lock().len()
+}
+
+unsafe fn submit_parse5_trueos_pixi_scene_from_capture(
+    ctx: *mut qjs::JSContext,
+    browser_instance_id: u32,
+    reason: &str,
+) -> (u32, u32) {
+    let global = qjs::JS_GetGlobalObject(ctx);
+    let build_scene = qjs::JS_GetPropertyStr(
+        ctx,
+        global,
+        TRUESURFER_PARSE5_BUILD_SCENE_PROP.as_ptr() as *const c_char,
+    );
+    if build_scene.is_exception()
+        || build_scene.tag == qjs::JS_TAG_UNDEFINED
+        || build_scene.tag == qjs::JS_TAG_NULL
+    {
+        qjs::js_free_value(ctx, build_scene);
+        qjs::js_free_value(ctx, global);
+        log_line(format!(
+            "qjs-truesurfer[{}]: parse5 trueos scene builder missing reason={}\n",
+            browser_instance_id, reason
+        ));
+        return (0, 0);
+    }
+
+    let scene_build_start_ms = now_ms();
+    let wrapper = qjs::JS_Call(ctx, build_scene, global, 0, core::ptr::null());
+    let scene_build_ms = now_ms().saturating_sub(scene_build_start_ms);
+    qjs::js_free_value(ctx, build_scene);
+    qjs::js_free_value(ctx, global);
+    if wrapper.is_exception() {
+        qjs::qjs_diag::dump_last_exception(ctx, "truesurfer parse5 trueos scene build");
+        qjs::js_free_value(ctx, wrapper);
+        return (0, 0);
+    }
+    log_line(format!(
+        "qjs-truesurfer[{}]: parse5 trueos scene build returned reason={} scene_build_ms={}\n",
+        browser_instance_id, reason, scene_build_ms
+    ));
+    log_parse5_trueos_bridge_stats(ctx, browser_instance_id);
+
+    let scene_submit_start_ms = now_ms();
+    let (ops, root) = submit_ui3_scene(ctx, browser_instance_id, wrapper);
+    let scene_submit_ms = now_ms().saturating_sub(scene_submit_start_ms);
+    qjs::js_free_value(ctx, wrapper);
+    log_line(format!(
+        "qjs-truesurfer[{}]: parse5 trueos ui3 submit reason={} ops={} root={} scene_submit_ms={}\n",
+        browser_instance_id, reason, ops, root, scene_submit_ms
+    ));
+    (ops, root)
+}
+
+unsafe fn dispatch_queued_ui3_pointer_events(
+    _rt: *mut qjs::JSRuntime,
+    ctx: *mut qjs::JSContext,
+    browser_instance_id: u32,
+) -> bool {
+    let mut dispatched = 0u32;
+    let mut needs_rebuild = false;
+    let mut rebuilt = false;
+
+    while dispatched < 32 {
+        let Some(event) = take_queued_ui3_pointer_event_for_browser(browser_instance_id) else {
+            break;
+        };
+        let global = qjs::JS_GetGlobalObject(ctx);
+        let dispatch = qjs::JS_GetPropertyStr(
+            ctx,
+            global,
+            TRUESURFER_TRUEOS_PIXI_POINTER_DISPATCH_PROP.as_ptr() as *const c_char,
+        );
+        if dispatch.is_exception()
+            || dispatch.tag == qjs::JS_TAG_UNDEFINED
+            || dispatch.tag == qjs::JS_TAG_NULL
+        {
+            qjs::js_free_value(ctx, dispatch);
+            qjs::js_free_value(ctx, global);
+            log_line(format!(
+                "qjs-truesurfer[{}]: ui3 pointer dispatch missing target={} kind={}\n",
+                browser_instance_id, event.target_node, event.kind
+            ));
+            continue;
+        }
+
+        let kind_js =
+            qjs::JS_NewStringLen(ctx, event.kind.as_ptr() as *const c_char, event.kind.len());
+        let args = [
+            qjs::JS_NewFloat64(ctx, event.target_node as f64),
+            kind_js,
+            qjs::JS_NewFloat64(ctx, event.x as f64),
+            qjs::JS_NewFloat64(ctx, event.y as f64),
+            qjs::JS_NewFloat64(ctx, event.pointer_id as f64),
+            qjs::JS_NewFloat64(ctx, event.buttons as f64),
+        ];
+        if event.kind != "pointermove" || event.buttons != 0 || dispatched < 8 {
+            log_line(format!(
+                "qjs-truesurfer[{}]: ui3 pointer dispatch call target={} kind={} x={} y={} pointer={} buttons=0x{:X}\n",
+                browser_instance_id,
+                event.target_node,
+                event.kind,
+                event.x,
+                event.y,
+                event.pointer_id,
+                event.buttons
+            ));
+        }
+        let result = qjs::JS_Call(ctx, dispatch, global, args.len() as i32, args.as_ptr());
+        if event.kind != "pointermove" || event.buttons != 0 || dispatched < 8 {
+            log_line(format!(
+                "qjs-truesurfer[{}]: ui3 pointer dispatch returned target={} kind={} exception={}\n",
+                browser_instance_id,
+                event.target_node,
+                event.kind,
+                result.is_exception() as u8
+            ));
+        }
+        qjs::js_free_value(ctx, args[1]);
+        qjs::js_free_value(ctx, dispatch);
+        qjs::js_free_value(ctx, global);
+
+        if result.is_exception() {
+            qjs::qjs_diag::dump_last_exception(ctx, "truesurfer trueos pixi pointer dispatch");
+            qjs::js_free_value(ctx, result);
+            continue;
+        }
+
+        let handled = read_result_u32(ctx, result, b"handled\0");
+        let listener_count = read_result_u32(ctx, result, b"listenerCount\0");
+        let painted = read_result_u32(ctx, result, b"painted\0");
+        let target_found = read_result_u32(ctx, result, b"targetFound\0");
+        qjs::js_free_value(ctx, result);
+        dispatched = dispatched.saturating_add(1);
+
+        if event.kind != "pointermove" || event.buttons != 0 || dispatched <= 8 {
+            log_line(format!(
+                "qjs-truesurfer[{}]: ui3 pointer dispatched target={} kind={} x={} y={} pointer={} buttons=0x{:X} target_found={} handled={} listeners={} painted={}\n",
+                browser_instance_id,
+                event.target_node,
+                event.kind,
+                event.x,
+                event.y,
+                event.pointer_id,
+                event.buttons,
+                target_found,
+                handled,
+                listener_count,
+                painted
+            ));
+        }
+
+        needs_rebuild |= target_found != 0 && painted != 0;
+    }
+
+    if needs_rebuild {
+        let (ops, root) =
+            submit_parse5_trueos_pixi_scene_from_capture(ctx, browser_instance_id, "ui3-pointer");
+        rebuilt = ops != 0 && root != 0;
+    }
+
+    dispatched != 0 || rebuilt
+}
+
+unsafe fn dispatch_queued_ui3_keyboard_events(
+    _rt: *mut qjs::JSRuntime,
+    ctx: *mut qjs::JSContext,
+    browser_instance_id: u32,
+) -> bool {
+    let mut dispatched = 0u32;
+    let mut needs_rebuild = false;
+    let mut rebuilt = false;
+
+    while dispatched < 32 {
+        let Some(event) = take_queued_ui3_keyboard_event_for_browser(browser_instance_id) else {
+            break;
+        };
+        let global = qjs::JS_GetGlobalObject(ctx);
+        let dispatch = qjs::JS_GetPropertyStr(
+            ctx,
+            global,
+            TRUESURFER_TRUEOS_PIXI_KEYDOWN_DISPATCH_PROP.as_ptr() as *const c_char,
+        );
+        if dispatch.is_exception()
+            || dispatch.tag == qjs::JS_TAG_UNDEFINED
+            || dispatch.tag == qjs::JS_TAG_NULL
+        {
+            qjs::js_free_value(ctx, dispatch);
+            qjs::js_free_value(ctx, global);
+            log_line(format!(
+                "qjs-truesurfer[{}]: ui3 keyboard dispatch missing key={} slot={} pointer={}\n",
+                browser_instance_id, event.key, event.slot_id, event.pointer_id
+            ));
+            continue;
+        }
+
+        let key_js =
+            qjs::JS_NewStringLen(ctx, event.key.as_ptr() as *const c_char, event.key.len());
+        let args = [
+            key_js,
+            qjs::JS_NewFloat64(ctx, event.pointer_id as f64),
+            qjs::JS_NewFloat64(ctx, event.modifiers as f64),
+            qjs::JS_NewFloat64(ctx, event.slot_id as f64),
+        ];
+        log_line(format!(
+            "qjs-truesurfer[{}]: ui3 keyboard dispatch call key={} slot={} pointer={} modifiers=0x{:X}\n",
+            browser_instance_id, event.key, event.slot_id, event.pointer_id, event.modifiers
+        ));
+        let result = qjs::JS_Call(ctx, dispatch, global, args.len() as i32, args.as_ptr());
+        log_line(format!(
+            "qjs-truesurfer[{}]: ui3 keyboard dispatch returned key={} exception={}\n",
+            browser_instance_id,
+            event.key,
+            result.is_exception() as u8
+        ));
+        qjs::js_free_value(ctx, args[0]);
+        qjs::js_free_value(ctx, dispatch);
+        qjs::js_free_value(ctx, global);
+
+        if result.is_exception() {
+            qjs::qjs_diag::dump_last_exception(ctx, "truesurfer trueos pixi keyboard dispatch");
+            qjs::js_free_value(ctx, result);
+            continue;
+        }
+
+        let handled = read_result_u32(ctx, result, b"handled\0");
+        let listener_count = read_result_u32(ctx, result, b"listenerCount\0");
+        let painted = read_result_u32(ctx, result, b"painted\0");
+        let default_prevented = read_result_u32(ctx, result, b"defaultPrevented\0");
+        qjs::js_free_value(ctx, result);
+        dispatched = dispatched.saturating_add(1);
+
+        log_line(format!(
+            "qjs-truesurfer[{}]: ui3 keyboard dispatched key={} slot={} pointer={} handled={} listeners={} painted={} default_prevented={}\n",
+            browser_instance_id,
+            event.key,
+            event.slot_id,
+            event.pointer_id,
+            handled,
+            listener_count,
+            painted,
+            default_prevented
+        ));
+
+        needs_rebuild |= handled != 0 || painted != 0 || default_prevented != 0;
+    }
+
+    if needs_rebuild {
+        let (ops, root) =
+            submit_parse5_trueos_pixi_scene_from_capture(ctx, browser_instance_id, "ui3-keyboard");
+        rebuilt = ops != 0 && root != 0;
+    }
+
+    dispatched != 0 || rebuilt
 }
 
 unsafe fn dispatch_html(
@@ -2531,6 +3759,11 @@ unsafe fn runtime_has_pending_work(rt: *mut qjs::JSRuntime, ctx: *mut qjs::JSCon
         || qjs::workers::has_pending_for_ctx(ctx)
 }
 
+unsafe fn runtime_has_schedulable_work(rt: *mut qjs::JSRuntime, ctx: *mut qjs::JSContext) -> bool {
+    let _ = ctx;
+    qjs::JS_IsJobPending(rt) > 0
+}
+
 #[embassy_executor::task(pool_size = TRUESURFER_TASK_POOL_SIZE)]
 pub async fn truesurfer_task(browser_instance_id: u32) {
     if !browser_valid(browser_instance_id) {
@@ -2624,8 +3857,59 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
         loop {
             let mut busy = false;
             let mut runtime_alive = true;
+            let queued_pointer_depth = ui3_pointer_queue_len_for_browser(browser_instance_id);
+            let queued_keyboard_depth = ui3_keyboard_queue_len_for_browser(browser_instance_id);
+            if queued_pointer_depth != 0 || queued_keyboard_depth != 0 {
+                let log_idx = TRUESURFER_UI3_POINTER_LOOP_LOGS.fetch_add(1, Ordering::Relaxed);
+                if log_idx < 64 || log_idx % 128 == 0 {
+                    log_line(format!(
+                        "qjs-truesurfer[{}]: ui3 input loop pointer_depth={} keyboard_depth={} ready={} js_jobs={} async_pending={} timers_pending={} workers_pending={}\n",
+                        browser_instance_id,
+                        queued_pointer_depth,
+                        queued_keyboard_depth,
+                        truesurfer_ready(ctx) as u8,
+                        (qjs::JS_IsJobPending(rt) > 0) as u8,
+                        qjs::async_ops::has_pending(ctx) as u8,
+                        qjs::timers::has_pending(ctx) as u8,
+                        qjs::workers::has_pending_for_ctx(ctx) as u8
+                    ));
+                }
+            }
+
+            if truesurfer_ready(ctx)
+                && queued_pointer_depth == 0
+                && queued_keyboard_depth == 0
+            {
+                if let Some(pending) = take_queued_html_for_browser(browser_instance_id) {
+                    let _ = dispatch_html(rt, ctx, browser_instance_id, pending);
+                    continue;
+                }
+                wait_for_queued_html(browser_instance_id).await;
+                continue;
+            }
+
+            if dispatch_queued_ui3_pointer_events(rt, ctx, browser_instance_id) {
+                busy = true;
+            }
+            if dispatch_queued_ui3_keyboard_events(rt, ctx, browser_instance_id) {
+                busy = true;
+            }
+
+            if busy && truesurfer_ready(ctx) {
+                Timer::after(EmbassyDuration::from_millis(TRUESURFER_BUSY_SLEEP_MS)).await;
+                continue;
+            }
 
             for _ in 0..TRUESURFER_BUSY_PUMP_BUDGET {
+                if dispatch_queued_ui3_pointer_events(rt, ctx, browser_instance_id) {
+                    busy = true;
+                }
+                if dispatch_queued_ui3_keyboard_events(rt, ctx, browser_instance_id) {
+                    busy = true;
+                }
+                if truesurfer_ready(ctx) && !runtime_has_schedulable_work(rt, ctx) {
+                    break;
+                }
                 if !qjs::vm::pump_runtime_once(rt, ctx, "truesurfer") {
                     runtime_alive = false;
                     break;
@@ -2650,14 +3934,32 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
                     state.api_ready = ready;
                 });
                 let mut dispatched_html = false;
+                let mut dispatched_ui3_pointer = false;
+                let mut dispatched_ui3_keyboard = false;
                 if ready {
                     while let Some(pending) = take_queued_html_for_browser(browser_instance_id) {
                         let _ = dispatch_html(rt, ctx, browser_instance_id, pending);
                         dispatched_html = true;
                     }
+                    if dispatched_html {
+                        log_line(format!(
+                            "qjs-truesurfer[{}]: html dispatch returned to input loop\n",
+                            browser_instance_id
+                        ));
+                        busy = true;
+                        break;
+                    }
+                    dispatched_ui3_pointer =
+                        dispatch_queued_ui3_pointer_events(rt, ctx, browser_instance_id);
+                    dispatched_ui3_keyboard =
+                        dispatch_queued_ui3_keyboard_events(rt, ctx, browser_instance_id);
                 }
 
-                busy = !ready || dispatched_html || runtime_has_pending_work(rt, ctx);
+                busy = !ready
+                    || dispatched_html
+                    || dispatched_ui3_pointer
+                    || dispatched_ui3_keyboard
+                    || runtime_has_schedulable_work(rt, ctx);
                 if !busy {
                     break;
                 }
@@ -2667,9 +3969,17 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
                 break;
             }
 
-            if !busy && !runtime_has_pending_work(rt, ctx) && truesurfer_ready(ctx) {
-                if let Some(pending) = take_queued_html_for_browser(browser_instance_id) {
-                    let _ = dispatch_html(rt, ctx, browser_instance_id, pending);
+            if !busy && !runtime_has_schedulable_work(rt, ctx) {
+                if truesurfer_ready(ctx) {
+                    if let Some(pending) = take_queued_html_for_browser(browser_instance_id) {
+                        let _ = dispatch_html(rt, ctx, browser_instance_id, pending);
+                        continue;
+                    }
+                }
+                if dispatch_queued_ui3_pointer_events(rt, ctx, browser_instance_id) {
+                    continue;
+                }
+                if dispatch_queued_ui3_keyboard_events(rt, ctx, browser_instance_id) {
                     continue;
                 }
                 wait_for_queued_html(browser_instance_id).await;

@@ -759,7 +759,8 @@ fn subpaths_to_path(subpaths: &[Vec<Ui3Point>], close: bool) -> Path {
 
 fn push_line_to(path: &mut PendingPath, to: Ui3Point) {
     if path.subpaths.is_empty() {
-        path.subpaths.push(Vec::from([Ui3Point::default()]));
+        path.subpaths.push(Vec::from([to]));
+        return;
     }
     if let Some(subpath) = path.subpaths.last_mut() {
         subpath.push(to);

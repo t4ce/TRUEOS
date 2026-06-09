@@ -8,6 +8,7 @@ use super::{Ui3GeometryFrame, Ui3LoweredDraw, Ui3Rect};
 #[derive(Copy, Clone, Debug, Default)]
 pub(super) struct Ui3IntelPresentSummary {
     pub solid_rects: usize,
+    pub cursor_rects: usize,
     pub mesh_draws: usize,
     pub texture_draws: usize,
     pub text_runs: usize,
@@ -90,9 +91,54 @@ pub(super) fn present_ui3_frame_to_intel_primary(
     }
 
     flush_rect_run(&mut rects, &mut summary);
+    append_kernel_cursor_rects(&mut rects, &mut summary);
+    flush_rect_run(&mut rects, &mut summary);
     publish_frame(&mut summary);
 
     summary
+}
+
+fn append_kernel_cursor_rects(
+    rects: &mut Vec<crate::intel::gpgpu::GpgpuSolidRect>,
+    summary: &mut Ui3IntelPresentSummary,
+) {
+    let (view_w, view_h) = crate::intel::active_scanout_dimensions()
+        .map(|(w, h)| (w.max(1), h.max(1)))
+        .unwrap_or((1920, 1080));
+    let cursors = crate::r::cursor::ordered_cursor_snapshot_with_slot_buttons();
+    if cursors.is_empty() {
+        return;
+    }
+
+    for (idx, (_slot_id, nx, ny, _buttons)) in cursors.into_iter().enumerate() {
+        if !nx.is_finite() || !ny.is_finite() {
+            continue;
+        }
+        let cursor_id = (idx as u32).saturating_add(1);
+        let color =
+            rgba8_to_kernel_rgba(crate::r::ui2::cursor_color_rgba8_for_cursor_id(cursor_id));
+        let x = (nx.clamp(0.0, 1.0) as f32) * view_w.saturating_sub(1).max(1) as f32;
+        let y = (ny.clamp(0.0, 1.0) as f32) * view_h.saturating_sub(1).max(1) as f32;
+        let half = ((view_h as f32) * 0.013).clamp(12.0, 24.0);
+        let thickness = (half * 0.22).clamp(2.0, 6.0);
+        push_cursor_rect(rects, x - half, y - thickness, half * 2.0, thickness * 2.0, color);
+        push_cursor_rect(rects, x - thickness, y - half, thickness * 2.0, half * 2.0, color);
+        summary.cursor_rects = summary.cursor_rects.saturating_add(2);
+    }
+}
+
+fn push_cursor_rect(
+    rects: &mut Vec<crate::intel::gpgpu::GpgpuSolidRect>,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    color_rgba: u32,
+) {
+    let Some(rect) = lower_rect(Ui3Rect { x, y, w, h }) else {
+        return;
+    };
+    rects.push(crate::intel::gpgpu::GpgpuSolidRect { rect, color_rgba });
 }
 
 fn draw_texture_rect(
