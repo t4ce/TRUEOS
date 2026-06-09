@@ -579,6 +579,19 @@ function estimateInlineText(renderNode) {
   return out;
 }
 
+function collectInlineText(renderNode) {
+  const parts = [];
+  const children = Array.isArray(renderNode?.children) ? renderNode.children : [];
+  for (let i = 0; i < children.length; i += 1) {
+    const child = children[i];
+    if (child.kind === 'text') {
+      const text = normalizeWhitespace(child.text);
+      if (text.length > 0) parts.push(text);
+    }
+  }
+  return parts.join(' ');
+}
+
 function estimateChildrenHeight(children, gap, minHeight) {
   const list = Array.isArray(children) ? children : [];
   let h = 0;
@@ -836,6 +849,7 @@ function appendWidgetOps(renderNode, parentId, state, layout, depth = 0) {
     buttonLayoutDefaults();
     const style = buttonSceneStyle();
     blockAdvance = Math.max(blockAdvance, Number(style.height || 42) + 14);
+    appendTextNode(collectInlineText(renderNode), id, state, 14, 10, { textFill: style.textFill });
     state.buttonCount += 1;
   }
   if (!iframeRoot) layout.nextY += blockAdvance;
@@ -876,6 +890,7 @@ function appendWidgetOps(renderNode, parentId, state, layout, depth = 0) {
     appendRowChildren(children, id, state, tagName === 'tr' ? 0 : 8, tagName === 'tr' ? 0 : 4, tagName === 'tr' ? 0 : 8);
   } else {
     for (let i = 0; i < children.length; i += 1) {
+      if (tagName === 'button' && children[i]?.kind === 'text') continue;
       appendWidgetOps(children[i], id, state, childLayout, depth + 1);
     }
   }
@@ -937,5 +952,3 @@ export function buildTextWidgetScene(html) {
 }
 
 export const buildDemoTextWidgetScene = buildTextWidgetScene;
-globalThis.__trueosBuildTextWidgetScene = buildTextWidgetScene;
-globalThis.__trueosBuildDemoTextWidgetScene = buildDemoTextWidgetScene;

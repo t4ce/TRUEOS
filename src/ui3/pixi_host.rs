@@ -128,6 +128,10 @@ impl Ui3PixiHost {
             Ui3Command::SetMask { node, mask } => {
                 self.ensure_node(node, Ui3NodeKind::Container).mask = mask;
             }
+            Ui3Command::SetHitArea { node, rect } => {
+                self.ensure_node(node, Ui3NodeKind::Container).hit_area =
+                    rect.filter(|rect| rect.w > 0.0 && rect.h > 0.0);
+            }
             Ui3Command::Listen { node, event } => {
                 let n = self.ensure_node(node, Ui3NodeKind::Container);
                 if !n.listeners.contains(&event) {
@@ -365,6 +369,7 @@ pub const fn pointer_event_kind_from_name(name: &str) -> Ui3PointerEventKind {
         b"pointerout" => Ui3PointerEventKind::PointerOut,
         b"pointerupoutside" => Ui3PointerEventKind::PointerUpOutside,
         b"contextmenu" => Ui3PointerEventKind::ContextMenu,
+        b"wheel" => Ui3PointerEventKind::Wheel,
         _ => Ui3PointerEventKind::Unknown,
     }
 }

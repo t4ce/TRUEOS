@@ -207,6 +207,18 @@ pub mod ui {
     }
 
     #[inline]
+    pub fn ui3_scene_hit_area(
+        browser_id: u32,
+        node_id: u32,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    ) -> bool {
+        ui3_pixi_op(browser_id, 29, node_id, x, y, w, h, None)
+    }
+
+    #[inline]
     pub fn ui3_scene_listen(browser_id: u32, node_id: u32, event: &str) -> bool {
         ui3_pixi_op(browser_id, 16, node_id, 0.0, 0.0, 0.0, 0.0, Some(event))
     }

@@ -6,15 +6,19 @@ use core::ffi::{c_char, c_int};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
+use libm::{ceilf, floorf};
 use spin::{Mutex, Once};
 
 use trueos_qjs as qjs;
 
-use super::intel_present::{Ui3IntelPresentSummary, present_ui3_frame_to_intel_primary};
+use super::intel_present::{
+    Ui3IntelPresentSummary, present_ui3_frame_damage_to_intel_primary,
+    present_ui3_frame_to_intel_primary,
+};
 use super::pixi_host::pointer_event_kind_from_name;
 use super::{
-    Ui3Color, Ui3Command, Ui3NodeKind, Ui3PixiHost, Ui3Point, Ui3PointerEventKind, Ui3Rect,
-    Ui3RenderFrame, Ui3TextParam, lower_ui3_frame_geometry,
+    Ui3Color, Ui3Command, Ui3GeometryFrame, Ui3NodeKind, Ui3PixiHost, Ui3Point,
+    Ui3PointerEventKind, Ui3Rect, Ui3RenderFrame, Ui3TextParam, lower_ui3_frame_geometry,
 };
 
 const TASK_NAME: &str = "ui3-pixi-service";
@@ -29,6 +33,10 @@ const PIXI_SERVICE_EXEC_POLL_MS: u64 = 1;
 const PIXI_SERVICE_CURSOR_POLL_MS: u64 = 33;
 const PIXI_SERVICE_MAX_DRAIN_PER_TICK: usize = 512;
 const PIXI_SERVICE_NOOP_AFTER_SPAWN: bool = true;
+const PIXI_CURSOR_DAMAGE_HALF_RATIO: f32 = 0.010;
+const PIXI_CURSOR_DAMAGE_HALF_MIN_PX: f32 = 10.0;
+const PIXI_CURSOR_DAMAGE_HALF_MAX_PX: f32 = 18.0;
+const PIXI_CURSOR_DAMAGE_MARGIN_PX: f32 = 3.0;
 
 static PIXI_SERVICE_READY: AtomicBool = AtomicBool::new(false);
 static PIXI_SERVICE_PUMP_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -68,6 +76,7 @@ struct Ui3PixiServiceRuntime {
     frame_count: u32,
     last_draw_count: u32,
     last_present: Ui3IntelPresentSummary,
+    last_geometry: Option<Ui3GeometryFrame>,
     last_cursor_signature: u64,
     last_cursor_event_seq: u64,
     last_keyboard_seq: u64,
@@ -100,6 +109,7 @@ impl Ui3PixiServiceRuntime {
             frame_count: 0,
             last_draw_count: 0,
             last_present: Ui3IntelPresentSummary::default(),
+            last_geometry: None,
             last_cursor_signature: 0,
             last_cursor_event_seq: 0,
             last_keyboard_seq: 0,
@@ -369,6 +379,7 @@ fn reset_runtime_for_scene(
     runtime.frame_count = 0;
     runtime.last_draw_count = 0;
     runtime.last_present = Ui3IntelPresentSummary::default();
+    runtime.last_geometry = None;
     runtime.last_cursor_signature = cursor_snapshot_signature();
     runtime.last_cursor_event_seq = previous_cursor_event_seq;
     runtime.last_keyboard_seq = previous_keyboard_seq;
@@ -431,7 +442,7 @@ fn drain_kernel_cursor_events_for_qjs() -> bool {
 
     if let Some(frame) = runtime.host.last_frame().cloned() {
         let browser_id = runtime.browser_id;
-        lower_present_and_count(&mut runtime, browser_id, &frame, 0, false);
+        present_cursor_damage_or_fallback(&mut runtime, browser_id, &frame);
         runtime.last_cursor_signature = cursor_snapshot_signature();
     }
 
@@ -462,8 +473,73 @@ fn refresh_retained_scene_for_cursor_changes() -> bool {
     };
     runtime.last_cursor_signature = signature;
     let browser_id = runtime.browser_id;
-    lower_present_and_count(&mut runtime, browser_id, &frame, 0, false);
+    present_cursor_damage_or_fallback(&mut runtime, browser_id, &frame);
     update_cursor_hits(&mut runtime);
+    true
+}
+
+fn present_cursor_damage_or_fallback(
+    runtime: &mut Ui3PixiServiceRuntime,
+    browser_id: u32,
+    frame: &Ui3RenderFrame,
+) {
+    if present_cached_cursor_damage(runtime, browser_id, frame.root) {
+        return;
+    }
+    lower_present_and_count(runtime, browser_id, frame, 0, false);
+}
+
+fn present_cached_cursor_damage(
+    runtime: &mut Ui3PixiServiceRuntime,
+    browser_id: u32,
+    root_id: u32,
+) -> bool {
+    let Some(damage) = cursor_damage_rect(runtime) else {
+        return false;
+    };
+    let Some(geometry) = runtime.last_geometry.as_ref() else {
+        return false;
+    };
+
+    let present_start_ms = super::now_ms();
+    let present = present_ui3_frame_damage_to_intel_primary(geometry, damage);
+    let present_wall_ms = super::now_ms().saturating_sub(present_start_ms);
+    let present_gap_ms = present_wall_ms.saturating_sub(present.total_ms);
+    let draw_count = geometry.draws.len();
+    runtime.frame_count = runtime.frame_count.wrapping_add(1).max(1);
+    runtime.last_draw_count = draw_count.min(u32::MAX as usize) as u32;
+    runtime.last_present = present;
+    PIXI_SERVICE_FRAME_COUNT.store(runtime.frame_count, Ordering::Release);
+    PIXI_SERVICE_DRAW_COUNT.store(runtime.last_draw_count, Ordering::Release);
+
+    if runtime.frame_count <= 4 || runtime.cursor_hit_log_count < 8 {
+        crate::log!(
+            "ui3-pixi-service: cursor-damage-present browser={} root={} damage={}x{}@{},{} cached_draws={} solid_rects={} cursor_rects={} meshes={} textures={} text={} presented={} fill_descs={} blend_descs={} present_wall_ms={} rect_ms={} mesh_ms={} sprite_ms={} publish_ms={} present_ms={} total_ms={} gap_ms={}\n",
+            browser_id,
+            root_id,
+            damage.w as i32,
+            damage.h as i32,
+            damage.x as i32,
+            damage.y as i32,
+            draw_count,
+            present.solid_rects,
+            present.cursor_rects,
+            present.mesh_draws,
+            present.texture_draws,
+            present.text_runs,
+            present.presented as u8,
+            present.fill_descs,
+            present.blend_descs,
+            present_wall_ms,
+            present.rect_ms,
+            present.mesh_ms,
+            present.sprite_ms,
+            present.publish_ms,
+            present.present_ms,
+            present.total_ms,
+            present_gap_ms
+        );
+    }
     true
 }
 
@@ -499,6 +575,29 @@ fn process_cursor_event_for_qjs(
         .find(|prev| ui3_cursor_source_matches(*prev, state));
 
     emit_cursor_events(runtime, previous, state, entry_count);
+    if event.wheel != 0 {
+        let wheel_target_node = if target_node != 0 {
+            target_node
+        } else {
+            runtime
+                .host
+                .last_frame()
+                .map(|frame| frame.root)
+                .unwrap_or(0)
+        };
+        if wheel_target_node != 0 {
+            let delta_y = (event.wheel as i32).saturating_mul(-96);
+            let _ = qjs::browser_task::queue_ui3_wheel_event_for_browser(
+                runtime.browser_id,
+                wheel_target_node,
+                state.x,
+                state.y,
+                ui3_pointer_id_for_cursor(state),
+                state.buttons,
+                delta_y,
+            );
+        }
+    }
 
     if let Some(pos) = runtime
         .cursor_hits
@@ -717,6 +816,71 @@ fn update_cursor_hits(runtime: &mut Ui3PixiServiceRuntime) {
     runtime.cursor_hits = next;
 }
 
+fn cursor_damage_rect(runtime: &Ui3PixiServiceRuntime) -> Option<Ui3Rect> {
+    let (view_w, view_h) = crate::intel::active_scanout_dimensions()
+        .map(|(w, h)| (w.max(1), h.max(1)))
+        .unwrap_or((1920, 1080));
+    let half = ((view_h as f32) * PIXI_CURSOR_DAMAGE_HALF_RATIO)
+        .clamp(PIXI_CURSOR_DAMAGE_HALF_MIN_PX, PIXI_CURSOR_DAMAGE_HALF_MAX_PX)
+        + PIXI_CURSOR_DAMAGE_MARGIN_PX;
+    let mut damage: Option<Ui3Rect> = None;
+
+    for previous in &runtime.cursor_hits {
+        let x = previous.x as f32;
+        let y = previous.y as f32;
+        damage = union_damage_rect(damage, cursor_damage_rect_at(x, y, half, view_w, view_h));
+    }
+
+    let cursors = crate::r::cursor::ordered_cursor_snapshot_with_slot_buttons();
+    for (_slot_id, nx, ny, _buttons) in cursors {
+        if !nx.is_finite() || !ny.is_finite() {
+            continue;
+        }
+        let x = (nx.clamp(0.0, 1.0) as f32) * view_w.saturating_sub(1).max(1) as f32;
+        let y = (ny.clamp(0.0, 1.0) as f32) * view_h.saturating_sub(1).max(1) as f32;
+        damage = union_damage_rect(damage, cursor_damage_rect_at(x, y, half, view_w, view_h));
+    }
+
+    damage
+}
+
+fn cursor_damage_rect_at(x: f32, y: f32, half: f32, view_w: u32, view_h: u32) -> Option<Ui3Rect> {
+    let max_w = view_w as f32;
+    let max_h = view_h as f32;
+    let x0 = floorf(x - half).max(0.0).min(max_w);
+    let y0 = floorf(y - half).max(0.0).min(max_h);
+    let x1 = ceilf(x + half).max(0.0).min(max_w);
+    let y1 = ceilf(y + half).max(0.0).min(max_h);
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    Some(Ui3Rect {
+        x: x0,
+        y: y0,
+        w: x1 - x0,
+        h: y1 - y0,
+    })
+}
+
+fn union_damage_rect(current: Option<Ui3Rect>, next: Option<Ui3Rect>) -> Option<Ui3Rect> {
+    match (current, next) {
+        (Some(a), Some(b)) => {
+            let x0 = a.x.min(b.x);
+            let y0 = a.y.min(b.y);
+            let x1 = (a.x + a.w).max(b.x + b.w);
+            let y1 = (a.y + a.h).max(b.y + b.h);
+            Some(Ui3Rect {
+                x: x0,
+                y: y0,
+                w: x1 - x0,
+                h: y1 - y0,
+            })
+        }
+        (Some(rect), None) | (None, Some(rect)) => Some(rect),
+        (None, None) => None,
+    }
+}
+
 fn emit_cursor_events(
     runtime: &mut Ui3PixiServiceRuntime,
     previous: Option<Ui3CursorHitState>,
@@ -849,6 +1013,17 @@ fn emit_cursor_event(
     entry_count: usize,
 ) {
     runtime.cursor_event_log_count = runtime.cursor_event_log_count.saturating_add(1);
+    let target_node = if target_node != 0 {
+        target_node
+    } else if kind == Ui3PointerEventKind::PointerDown {
+        runtime
+            .host
+            .last_frame()
+            .map(|frame| frame.root)
+            .unwrap_or(0)
+    } else {
+        0
+    };
     let listener_count = runtime
         .host
         .node(target_node)
@@ -861,9 +1036,11 @@ fn emit_cursor_event(
         .unwrap_or(false);
     let should_queue = target_node != 0
         && (exact_listener
+            || kind == Ui3PointerEventKind::PointerDown
             || (kind == Ui3PointerEventKind::PointerMove && state.buttons != 0)
             || kind == Ui3PointerEventKind::PointerUp
-            || kind == Ui3PointerEventKind::PointerUpOutside);
+            || kind == Ui3PointerEventKind::PointerUpOutside
+            || kind == Ui3PointerEventKind::Wheel);
     let pointer_id = ui3_pointer_id_for_cursor(state);
     if should_queue {
         let _ = qjs::browser_task::queue_ui3_pointer_event_for_browser(
@@ -940,6 +1117,7 @@ const fn pointer_event_kind_name(kind: Ui3PointerEventKind) -> &'static str {
         Ui3PointerEventKind::PointerOut => "pointerout",
         Ui3PointerEventKind::PointerUpOutside => "pointerupoutside",
         Ui3PointerEventKind::ContextMenu => "contextmenu",
+        Ui3PointerEventKind::Wheel => "wheel",
         Ui3PointerEventKind::Unknown => "unknown",
     }
 }
@@ -1234,6 +1412,7 @@ fn lower_present_and_count(
             present.text_runs
         );
     }
+    runtime.last_geometry = Some(geometry);
 }
 
 fn pixi_light_filter_command(runtime: &mut Ui3PixiServiceRuntime, command: &Ui3Command) -> bool {

@@ -11,6 +11,7 @@
 #![allow(dead_code)]
 
 pub mod dmg;
+pub mod live_piano;
 pub mod pattern;
 pub mod player;
 pub mod synth;
