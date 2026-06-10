@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use libm::{ceilf, floorf};
 use trueos_gfx_core::{Rgba8, TEX_VERTEX_SIZE, ViewTransform, push_tex_quad_px};
 
-use super::{Ui3GeometryFrame, Ui3LoweredDraw, Ui3Rect};
+use super::{Ui3GeometryFrame, Ui3LoweredDraw, Ui3MeshKind, Ui3Rect, Ui3SolidRectKind};
 
 const PIXI_CURSOR_HALF_SPAN_VIEWPORT_RATIO: f32 = 0.010;
 const PIXI_CURSOR_HALF_SPAN_MIN_PX: f32 = 10.0;
@@ -51,14 +51,23 @@ fn present_ui3_geometry_to_intel_primary(
 ) -> Ui3IntelPresentSummary {
     let mut summary = Ui3IntelPresentSummary::default();
     let mut rects = Vec::new();
+    let mut text_placements = Vec::new();
+    let mut text_bounds = Vec::new();
     let mut rect_run_opaque = true;
     let viewport = active_viewport_clip();
 
     for draw in &frame.draws {
         let effective_clip = merge_clip(merge_clip(*draw_clip(draw), damage), Some(viewport));
         match draw {
-            Ui3LoweredDraw::SolidRect { rect, color, .. } => {
+            Ui3LoweredDraw::SolidRect {
+                rect, color, kind, ..
+            } => {
                 if let Some(rect) = clipped_rect(*rect, effective_clip).and_then(lower_rect) {
+                    if *kind == Ui3SolidRectKind::Fill
+                        && rect_intersects_pending_text(rect, text_bounds.as_slice())
+                    {
+                        flush_text_run(&mut text_placements, &mut text_bounds, &mut summary);
+                    }
                     let color_rgba = rgba8_to_kernel_rgba(*color);
                     let opaque = kernel_rgba_alpha(color_rgba) == 0xff;
                     if !rects.is_empty() && opaque != rect_run_opaque {
@@ -69,12 +78,20 @@ fn present_ui3_geometry_to_intel_primary(
                 }
             }
             Ui3LoweredDraw::Mesh {
-                vertices, indices, ..
+                vertices,
+                indices,
+                kind,
+                ..
             } => {
                 if let Some(clip) = effective_clip
                     && !mesh_intersects_clip(vertices, clip)
                 {
                     continue;
+                }
+                if *kind == Ui3MeshKind::Fill
+                    && mesh_intersects_pending_text(vertices, text_bounds.as_slice())
+                {
+                    flush_text_run(&mut text_placements, &mut text_bounds, &mut summary);
                 }
                 flush_rect_run(&mut rects, &mut summary);
                 draw_rgb_mesh(vertices, indices, &mut summary);
@@ -85,6 +102,9 @@ fn present_ui3_geometry_to_intel_primary(
                 alpha,
                 ..
             } => {
+                if rect_intersects_pending_text_rect(*rect, text_bounds.as_slice()) {
+                    flush_text_run(&mut text_placements, &mut text_bounds, &mut summary);
+                }
                 flush_rect_run(&mut rects, &mut summary);
                 draw_texture_rect(*tex_id, *rect, *alpha, effective_clip, &mut summary);
             }
@@ -95,17 +115,27 @@ fn present_ui3_geometry_to_intel_primary(
                 font_tier,
                 ..
             } => {
-                if !text_intersects_clip(*origin, text.as_str(), effective_clip) {
+                let Some(bounds) =
+                    text_run_bounds_for_clip(*origin, text.as_str(), *font_tier, effective_clip)
+                else {
                     continue;
-                }
+                };
                 flush_rect_run(&mut rects, &mut summary);
                 summary.text_runs = summary.text_runs.saturating_add(1);
-                draw_sprite64_text_run(*origin, text.as_str(), *color, *font_tier, &mut summary);
+                super::font::gpgpu_font::append_ui3_text_run_sprite64_placements(
+                    &mut text_placements,
+                    *origin,
+                    text.as_str(),
+                    *color,
+                    *font_tier,
+                );
+                text_bounds.push(bounds);
             }
         }
     }
 
     flush_rect_run(&mut rects, &mut summary);
+    flush_text_run(&mut text_placements, &mut text_bounds, &mut summary);
     append_pixi_cursor_crosses(&mut rects, &mut summary, damage);
     flush_rect_run(&mut rects, &mut summary);
     publish_frame(&mut summary);
@@ -428,19 +458,19 @@ fn accumulate_rect_result(
     summary.rect_ms = summary.rect_ms.saturating_add(result.total_ms);
 }
 
-fn draw_sprite64_text_run(
-    origin: super::Ui3Point,
-    text: &str,
-    color: Rgba8,
-    font_tier: u8,
+fn flush_text_run(
+    placements: &mut Vec<crate::intel::gpgpu::GpgpuSprite64Placement>,
+    bounds: &mut Vec<Ui3Rect>,
     summary: &mut Ui3IntelPresentSummary,
 ) {
-    let batches = super::font::gpgpu_font::collect_ui3_text_run_sprite64_batches(
-        origin, text, color, font_tier,
-    );
-    for batch in batches {
+    if placements.is_empty() {
+        bounds.clear();
+        return;
+    }
+
+    for chunk in placements.chunks(super::font::gpgpu_font::UI3_FONT_SPRITE64_BATCH_MAX) {
         let Some(result) = crate::intel::gpgpu::sprite64_worklist_primary(
-            batch.placements.as_slice(),
+            chunk,
             false,
             "ui3-font-sprite64-worklist",
         ) else {
@@ -452,6 +482,8 @@ fn draw_sprite64_text_run(
         summary.sprite_ms = summary.sprite_ms.saturating_add(result.total_ms);
         summary.total_ms = summary.total_ms.saturating_add(result.total_ms);
     }
+    placements.clear();
+    bounds.clear();
 }
 
 fn publish_frame(summary: &mut Ui3IntelPresentSummary) {
@@ -517,17 +549,44 @@ fn mesh_bounds(vertices: &[trueos_gfx_core::RgbVertexPx]) -> Option<Ui3Rect> {
     })
 }
 
-fn text_intersects_clip(origin: super::Ui3Point, text: &str, clip: Option<Ui3Rect>) -> bool {
-    let Some(clip) = clip else {
-        return true;
-    };
+fn rect_intersects_pending_text(
+    rect: crate::intel::gpgpu::GpgpuRect,
+    pending_text: &[Ui3Rect],
+) -> bool {
     let rect = Ui3Rect {
-        x: origin.x,
-        y: origin.y,
-        w: (text.len() as f32 * 9.0).max(1.0),
-        h: 16.0,
+        x: rect.x as f32,
+        y: rect.y as f32,
+        w: rect.width as f32,
+        h: rect.height as f32,
     };
-    intersect_rect(rect, clip).is_some()
+    rect_intersects_pending_text_rect(rect, pending_text)
+}
+
+fn rect_intersects_pending_text_rect(rect: Ui3Rect, pending_text: &[Ui3Rect]) -> bool {
+    pending_text
+        .iter()
+        .copied()
+        .any(|pending| intersect_rect(rect, pending).is_some())
+}
+
+fn mesh_intersects_pending_text(
+    vertices: &[trueos_gfx_core::RgbVertexPx],
+    pending_text: &[Ui3Rect],
+) -> bool {
+    let Some(bounds) = mesh_bounds(vertices) else {
+        return false;
+    };
+    rect_intersects_pending_text_rect(bounds, pending_text)
+}
+
+fn text_run_bounds_for_clip(
+    origin: super::Ui3Point,
+    text: &str,
+    font_tier: u8,
+    clip: Option<Ui3Rect>,
+) -> Option<Ui3Rect> {
+    let rect = super::font::gpgpu_font::ui3_text_run_sprite64_bounds(origin, text, font_tier)?;
+    clipped_rect(rect, clip)
 }
 
 fn lower_rect(rect: Ui3Rect) -> Option<crate::intel::gpgpu::GpgpuRect> {

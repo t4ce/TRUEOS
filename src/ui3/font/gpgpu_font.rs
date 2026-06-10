@@ -10,9 +10,10 @@ use crate::gfx::althlasfont::bitmapfont::{
     athlas_lookup_glyph_region,
 };
 
-use super::super::Ui3Point;
+use super::super::{Ui3Point, Ui3Rect};
 
 static UI3_FONT_SPRITE64_NOT_READY_LOGS: AtomicU32 = AtomicU32::new(0);
+pub(in crate::ui3) const UI3_FONT_SPRITE64_BATCH_MAX: usize = 256;
 
 pub(in crate::ui3) struct Ui3Sprite64TextBatch {
     pub(in crate::ui3) placements: Vec<crate::intel::gpgpu::GpgpuSprite64Placement>,
@@ -38,8 +39,49 @@ pub(in crate::ui3) fn collect_ui3_text_run_sprite64_batches_for_face(
     text: &str,
     color: Rgba8,
 ) -> Vec<Ui3Sprite64TextBatch> {
+    let mut placements = Vec::new();
+    append_ui3_text_run_sprite64_placements_for_face(&mut placements, face, origin, text, color);
+    placements
+        .chunks(UI3_FONT_SPRITE64_BATCH_MAX)
+        .map(|chunk| Ui3Sprite64TextBatch {
+            placements: chunk.to_vec(),
+        })
+        .collect()
+}
+
+pub(in crate::ui3) fn append_ui3_text_run_sprite64_placements(
+    out: &mut Vec<crate::intel::gpgpu::GpgpuSprite64Placement>,
+    origin: Ui3Point,
+    text: &str,
+    color: Rgba8,
+    font_tier: u8,
+) {
+    append_ui3_text_run_sprite64_placements_for_face(
+        out,
+        font_face_for_tier(font_tier),
+        origin,
+        text,
+        color,
+    );
+}
+
+pub(in crate::ui3) fn ui3_text_run_sprite64_bounds(
+    origin: Ui3Point,
+    text: &str,
+    font_tier: u8,
+) -> Option<Ui3Rect> {
+    text_run_bounds_for_face(font_face_for_tier(font_tier), origin, text)
+}
+
+pub(in crate::ui3) fn append_ui3_text_run_sprite64_placements_for_face(
+    out: &mut Vec<crate::intel::gpgpu::GpgpuSprite64Placement>,
+    face: AthlasFontFace,
+    origin: Ui3Point,
+    text: &str,
+    color: Rgba8,
+) {
     if text.is_empty() || !origin.x.is_finite() || !origin.y.is_finite() {
-        return Vec::new();
+        return;
     }
     if !super::super::ui3_asset_service::ui3_font_sprite64_assets_ready() {
         let count = UI3_FONT_SPRITE64_NOT_READY_LOGS.fetch_add(1, Ordering::Relaxed) + 1;
@@ -50,11 +92,9 @@ pub(in crate::ui3) fn collect_ui3_text_run_sprite64_batches_for_face(
                 text.chars().count()
             );
         }
-        return Vec::new();
+        return;
     }
 
-    let mut batches = Vec::new();
-    let mut placements = Vec::new();
     let origin_x = origin.x;
     let mut pen_x = origin.x;
     let mut pen_y = origin.y;
@@ -65,7 +105,6 @@ pub(in crate::ui3) fn collect_ui3_text_run_sprite64_batches_for_face(
         match ch {
             '\r' => continue,
             '\n' => {
-                flush_sprite64_font_batch(&mut placements, &mut batches);
                 pen_x = origin_x;
                 pen_y += line_height;
                 continue;
@@ -78,7 +117,7 @@ pub(in crate::ui3) fn collect_ui3_text_run_sprite64_batches_for_face(
         }
 
         if let Some(glyph) = font_glyph(face, ch) {
-            placements.push(crate::intel::gpgpu::GpgpuSprite64Placement::tinted_src_over(
+            out.push(crate::intel::gpgpu::GpgpuSprite64Placement::tinted_src_over(
                 glyph.sprite64_slot,
                 roundf(pen_x) as i32,
                 roundf(pen_y) as i32,
@@ -88,7 +127,7 @@ pub(in crate::ui3) fn collect_ui3_text_run_sprite64_batches_for_face(
         } else if let Some(region) =
             crate::gfx::althlasfont::twemoji::twemoji_lookup_glyph_region(ch)
         {
-            placements.push(crate::intel::gpgpu::GpgpuSprite64Placement::src_over(
+            out.push(crate::intel::gpgpu::GpgpuSprite64Placement::src_over(
                 region.slot,
                 roundf(pen_x) as i32,
                 roundf(pen_y) as i32,
@@ -97,26 +136,55 @@ pub(in crate::ui3) fn collect_ui3_text_run_sprite64_batches_for_face(
         } else {
             pen_x += f32::from(font_fallback_advance_px(face, ch));
         }
-
-        if placements.len() >= 256 {
-            flush_sprite64_font_batch(&mut placements, &mut batches);
-        }
     }
-
-    flush_sprite64_font_batch(&mut placements, &mut batches);
-    batches
 }
 
-fn flush_sprite64_font_batch(
-    placements: &mut Vec<crate::intel::gpgpu::GpgpuSprite64Placement>,
-    out: &mut Vec<Ui3Sprite64TextBatch>,
-) {
-    if placements.is_empty() {
-        return;
+fn text_run_bounds_for_face(face: AthlasFontFace, origin: Ui3Point, text: &str) -> Option<Ui3Rect> {
+    if text.is_empty() || !origin.x.is_finite() || !origin.y.is_finite() {
+        return None;
     }
-    out.push(Ui3Sprite64TextBatch {
-        placements: core::mem::take(placements),
-    });
+
+    let origin_x = origin.x;
+    let mut pen_x = origin.x;
+    let mut pen_y = origin.y;
+    let line_height = font_line_height_px(face) as f32;
+    let mut bounds = None;
+
+    for ch in text.chars() {
+        match ch {
+            '\r' => continue,
+            '\n' => {
+                pen_x = origin_x;
+                pen_y += line_height;
+                continue;
+            }
+            _ if is_virtual_spacing_char(ch) => {
+                pen_x += f32::from(font_spacing_advance_px(face, ch));
+                continue;
+            }
+            _ => {}
+        }
+
+        let advance = if let Some(glyph) = font_glyph(face, ch) {
+            glyph.advance_px
+        } else if let Some(region) =
+            crate::gfx::althlasfont::twemoji::twemoji_lookup_glyph_region(ch)
+        {
+            region.src_w.max(font_line_height_px(face))
+        } else {
+            font_fallback_advance_px(face, ch)
+        };
+        let glyph_rect = Ui3Rect {
+            x: pen_x,
+            y: pen_y,
+            w: f32::from(advance.max(1)),
+            h: line_height.max(1.0),
+        };
+        bounds = union_optional_rects(bounds, Some(glyph_rect));
+        pen_x += f32::from(advance);
+    }
+
+    bounds
 }
 
 #[inline]
@@ -170,6 +238,28 @@ fn font_fallback_advance_px(face: AthlasFontFace, ch: char) -> u16 {
         font_spacing_advance_px(face, ch)
     } else {
         font_line_height_px(face).saturating_div(2).max(1)
+    }
+}
+
+fn union_optional_rects(a: Option<Ui3Rect>, b: Option<Ui3Rect>) -> Option<Ui3Rect> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(union_rects(a, b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
+}
+
+fn union_rects(a: Ui3Rect, b: Ui3Rect) -> Ui3Rect {
+    let x0 = a.x.min(b.x);
+    let y0 = a.y.min(b.y);
+    let x1 = (a.x + a.w).max(b.x + b.w);
+    let y1 = (a.y + a.h).max(b.y + b.h);
+    Ui3Rect {
+        x: x0,
+        y: y0,
+        w: x1 - x0,
+        h: y1 - y0,
     }
 }
 
