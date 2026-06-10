@@ -969,12 +969,11 @@ function __trueosStripHostMarkers(value) {
   return text;
 }
 function __trueosTextFontTierArg(style) {
-  if (!style || typeof style !== "object") return 1;
+  if (!style || typeof style !== "object") return 0;
   var fontSize = __trueosNum(style.fontSize, 16);
-  var weight = String(style.fontWeight || "");
-  if (fontSize >= 18 || weight === "700" || weight === "bold") return 2;
-  if (fontSize <= 11) return 0;
-  return 1;
+  if (fontSize >= 32) return 2;
+  if (fontSize >= 22) return 1;
+  return 0;
 }
 function __trueosNormalizeCommandOp(value) {
   var op = String(value == null ? "" : value);
@@ -3594,9 +3593,15 @@ unsafe fn submit_ui3_scene(
         ));
     }
     let mut layout_text_submitted = scene_layout_text_ops;
-    if command_source.starts_with("parse5-trueos-pix") {
+    let submitted_text_ops = op_code_counts[8].saturating_sub(skipped_empty_text_count);
+    if command_source.starts_with("parse5-trueos-pix") && submitted_text_ops == 0 {
         layout_text_submitted = layout_text_submitted
             .saturating_add(submit_parse5_layout_text_overlays(ctx, browser_instance_id, root_id));
+    } else if command_source.starts_with("parse5-trueos-pix") {
+        log_line(format!(
+            "qjs-truesurfer[{}]: parse5 trueos rust-layout-text skipped reason=scene-text-present text_ops={} layout_text_ops={}\n",
+            browser_instance_id, submitted_text_ops, scene_layout_text_ops
+        ));
     }
 
     log_line(format!(
@@ -4197,6 +4202,12 @@ unsafe fn dispatch_queued_ui3_pointer_events(
         let listener_count = read_result_u32(ctx, result, b"listenerCount\0");
         let painted = read_result_u32(ctx, result, b"painted\0");
         let target_found = read_result_u32(ctx, result, b"targetFound\0");
+        let scroll_fast_painted =
+            target_found != 0 && painted != 0 && submit_ui3_scroll_fast_path(ctx, browser_instance_id, result);
+        let graphics_fast_painted = target_found != 0
+            && painted != 0
+            && !scroll_fast_painted
+            && submit_ui3_graphics_rect_fast_path(ctx, browser_instance_id, result);
         qjs::js_free_value(ctx, result);
         dispatched = dispatched.saturating_add(1);
 
@@ -4206,7 +4217,7 @@ unsafe fn dispatch_queued_ui3_pointer_events(
             || dispatched <= 8
         {
             log_line(format!(
-                "qjs-truesurfer[{}]: ui3 pointer dispatched target={} kind={} x={} y={} pointer={} buttons=0x{:X} wheel_delta_y={} target_found={} handled={} listeners={} painted={}\n",
+                "qjs-truesurfer[{}]: ui3 pointer dispatched target={} kind={} x={} y={} pointer={} buttons=0x{:X} wheel_delta_y={} target_found={} handled={} listeners={} painted={} scroll_fast={} graphics_fast={}\n",
                 browser_instance_id,
                 event.target_node,
                 event.kind,
@@ -4218,11 +4229,13 @@ unsafe fn dispatch_queued_ui3_pointer_events(
                 target_found,
                 handled,
                 listener_count,
-                painted
+                painted,
+                scroll_fast_painted as u8,
+                graphics_fast_painted as u8
             ));
         }
 
-        needs_rebuild |= target_found != 0 && painted != 0;
+        needs_rebuild |= target_found != 0 && painted != 0 && !scroll_fast_painted && !graphics_fast_painted;
     }
 
     if needs_rebuild {
@@ -4232,6 +4245,168 @@ unsafe fn dispatch_queued_ui3_pointer_events(
     }
 
     dispatched != 0 || rebuilt
+}
+
+unsafe fn submit_ui3_scroll_fast_path(
+    ctx: *mut qjs::JSContext,
+    browser_instance_id: u32,
+    result: qjs::JSValueConst,
+) -> bool {
+    if read_result_u32(ctx, result, b"scrollFastPath\0") == 0 {
+        return false;
+    }
+
+    let root_node = read_result_u32(ctx, result, b"rootNode\0");
+    let content_node = read_result_u32(ctx, result, b"contentNode\0");
+    let scrollbar_node = read_result_u32(ctx, result, b"scrollbarNode\0");
+    let content_y = read_result_f32(ctx, result, b"contentY\0");
+    let scrollbar_visible = read_result_u32(ctx, result, b"scrollbarVisible\0") != 0;
+    let track_x = read_result_f32(ctx, result, b"trackX\0");
+    let track_y = read_result_f32(ctx, result, b"trackY\0");
+    let track_w = read_result_f32(ctx, result, b"trackW\0");
+    let track_h = read_result_f32(ctx, result, b"trackH\0");
+    let thumb_x = read_result_f32(ctx, result, b"thumbX\0");
+    let thumb_y = read_result_f32(ctx, result, b"thumbY\0");
+    let thumb_w = read_result_f32(ctx, result, b"thumbW\0");
+    let thumb_h = read_result_f32(ctx, result, b"thumbH\0");
+
+    let geometry_ok = root_node != 0
+        && content_node != 0
+        && scrollbar_node != 0
+        && content_y.is_finite()
+        && (!scrollbar_visible
+            || (track_x.is_finite()
+                && track_y.is_finite()
+                && track_w.is_finite()
+                && track_h.is_finite()
+                && thumb_x.is_finite()
+                && thumb_y.is_finite()
+                && thumb_w.is_finite()
+                && thumb_h.is_finite()
+                && track_w > 0.0
+                && track_h > 0.0
+                && thumb_w > 0.0
+                && thumb_h > 0.0));
+    if !geometry_ok {
+        log_line(format!(
+            "qjs-truesurfer[{}]: ui3 scroll-fast rejected root={} content={} scrollbar={} visible={} content_y={}\n",
+            browser_instance_id, root_node, content_node, scrollbar_node, scrollbar_visible as u8, content_y
+        ));
+        return false;
+    }
+
+    let mut ok = qjs::platform::ui::ui3_scene_position(browser_instance_id, content_node, 0.0, content_y)
+        && qjs::platform::ui::ui3_scene_graphics_clear(browser_instance_id, scrollbar_node);
+    if scrollbar_visible {
+        ok &= qjs::platform::ui::ui3_scene_graphics_rect(
+            browser_instance_id,
+            scrollbar_node,
+            track_x,
+            track_y,
+            track_w,
+            track_h,
+        ) && qjs::platform::ui::ui3_scene_graphics_fill(browser_instance_id, scrollbar_node, 0x000000, 0.06)
+            && qjs::platform::ui::ui3_scene_graphics_rect(
+                browser_instance_id,
+                scrollbar_node,
+                thumb_x,
+                thumb_y,
+                thumb_w,
+                thumb_h,
+            )
+            && qjs::platform::ui::ui3_scene_graphics_fill(browser_instance_id, scrollbar_node, 0x000000, 0.25);
+    }
+    ok &= qjs::platform::ui::ui3_scene_render(browser_instance_id, root_node);
+
+    log_line(format!(
+        "qjs-truesurfer[{}]: ui3 scroll-fast root={} content={} content_y={} scrollbar={} visible={} track={}x{}@{},{} thumb={}x{}@{},{} ok={}\n",
+        browser_instance_id,
+        root_node,
+        content_node,
+        content_y,
+        scrollbar_node,
+        scrollbar_visible as u8,
+        track_w,
+        track_h,
+        track_x,
+        track_y,
+        thumb_w,
+        thumb_h,
+        thumb_x,
+        thumb_y,
+        ok as u8
+    ));
+    ok
+}
+
+unsafe fn submit_ui3_graphics_rect_fast_path(
+    ctx: *mut qjs::JSContext,
+    browser_instance_id: u32,
+    result: qjs::JSValueConst,
+) -> bool {
+    if read_result_u32(ctx, result, b"graphicsFastPath\0") == 0 {
+        return false;
+    }
+
+    let root_node = read_result_u32(ctx, result, b"rootNode\0");
+    let graphics_node = read_result_u32(ctx, result, b"graphicsNode\0");
+    let rect_x = read_result_f32(ctx, result, b"rectX\0");
+    let rect_y = read_result_f32(ctx, result, b"rectY\0");
+    let rect_w = read_result_f32(ctx, result, b"rectW\0");
+    let rect_h = read_result_f32(ctx, result, b"rectH\0");
+    let fill_color = read_result_u32(ctx, result, b"fillColor\0");
+    let fill_alpha = read_result_f32(ctx, result, b"fillAlpha\0");
+
+    let geometry_ok = root_node != 0
+        && graphics_node != 0
+        && rect_x.is_finite()
+        && rect_y.is_finite()
+        && rect_w.is_finite()
+        && rect_h.is_finite()
+        && fill_alpha.is_finite()
+        && rect_w > 0.0
+        && rect_h > 0.0
+        && fill_alpha >= 0.0
+        && fill_alpha <= 1.0;
+    if !geometry_ok {
+        log_line(format!(
+            "qjs-truesurfer[{}]: ui3 graphics-rect-fast rejected root={} graphics={} rect={}x{}@{},{} color=0x{:06X} alpha={}\n",
+            browser_instance_id, root_node, graphics_node, rect_w, rect_h, rect_x, rect_y, fill_color, fill_alpha
+        ));
+        return false;
+    }
+
+    let mut ok = qjs::platform::ui::ui3_scene_graphics_clear(browser_instance_id, graphics_node)
+        && qjs::platform::ui::ui3_scene_graphics_rect(
+            browser_instance_id,
+            graphics_node,
+            rect_x,
+            rect_y,
+            rect_w,
+            rect_h,
+        )
+        && qjs::platform::ui::ui3_scene_graphics_fill(
+            browser_instance_id,
+            graphics_node,
+            fill_color,
+            fill_alpha,
+        );
+    ok &= qjs::platform::ui::ui3_scene_render(browser_instance_id, root_node);
+
+    log_line(format!(
+        "qjs-truesurfer[{}]: ui3 graphics-rect-fast root={} graphics={} rect={}x{}@{},{} color=0x{:06X} alpha={} ok={}\n",
+        browser_instance_id,
+        root_node,
+        graphics_node,
+        rect_w,
+        rect_h,
+        rect_x,
+        rect_y,
+        fill_color,
+        fill_alpha,
+        ok as u8
+    ));
+    ok
 }
 
 unsafe fn dispatch_queued_ui3_keyboard_events(

@@ -29,6 +29,7 @@ type PixiCaptureApi = {
   persist: boolean;
   commands: PixiCommand[];
   counts: Record<string, number>;
+  objectId(target: object): number;
   clear(): void;
   dump(limit?: number): PixiCommand[];
   flush(): void;
@@ -46,7 +47,7 @@ declare global {
       pointerId: number,
       buttons: number,
       wheelDeltaY?: number
-    ) => { handled: number; listenerCount: number; painted: number; targetFound: number };
+    ) => Record<string, number>;
   }
 }
 
@@ -492,6 +493,29 @@ function installTrueosPointerDispatcher(): void {
       const listenerCount = Array.isArray(listener) ? listener.length : typeof listener === 'function' ? 1 : 0;
       const handled = ev.defaultPrevented || listenerCount > 0 ? 1 : 0;
       diag(`wheel-done handled=${handled} listeners=${listenerCount} painted=${painted}`);
+      const scrollFastPath = (window as any).__TRUEOS_PIXI_LAST_SCROLL_FAST_PATH__;
+      if (scrollFastPath?.owner === 'root' || scrollFastPath?.owner === 'iframe') {
+        return {
+          handled,
+          listenerCount,
+          painted: 1,
+          targetFound: 1,
+          scrollFastPath: 1,
+          rootNode: Number(scrollFastPath.rootNode) || 0,
+          contentNode: Number(scrollFastPath.contentNode) || 0,
+          contentY: Number(scrollFastPath.contentY) || 0,
+          scrollbarNode: Number(scrollFastPath.scrollbarNode) || 0,
+          scrollbarVisible: Number(scrollFastPath.scrollbarVisible) || 0,
+          trackX: Number(scrollFastPath.trackX) || 0,
+          trackY: Number(scrollFastPath.trackY) || 0,
+          trackW: Number(scrollFastPath.trackW) || 0,
+          trackH: Number(scrollFastPath.trackH) || 0,
+          thumbX: Number(scrollFastPath.thumbX) || 0,
+          thumbY: Number(scrollFastPath.thumbY) || 0,
+          thumbW: Number(scrollFastPath.thumbW) || 0,
+          thumbH: Number(scrollFastPath.thumbH) || 0,
+        };
+      }
       return { handled, listenerCount, painted: after > before || painted ? 1 : 0, targetFound: 1 };
     }
     const target = objectsById.get(Number(nodeId) || 0);
@@ -503,6 +527,7 @@ function installTrueosPointerDispatcher(): void {
       return { handled, listenerCount, painted, targetFound: 0 };
     }
 
+    (window as any).__TRUEOS_PIXI_LAST_GRAPHICS_FAST_PATH__ = null;
     const ev: any = {
       type: String(event || ''),
       button: Number(buttons) & 2 ? 2 : 0,
@@ -562,6 +587,56 @@ function installTrueosPointerDispatcher(): void {
     }
 
     const after = window.__pixiCapture?.commands?.length ?? before;
+    const scrollFastPath = (window as any).__TRUEOS_PIXI_LAST_SCROLL_FAST_PATH__;
+    if (scrollFastPath?.owner === 'root' || scrollFastPath?.owner === 'iframe') {
+      diag(`scroll-fast owner=${scrollFastPath.owner}`);
+      return {
+        handled,
+        listenerCount,
+        painted: 1,
+        targetFound: 1,
+        scrollFastPath: 1,
+        rootNode: Number(scrollFastPath.rootNode) || 0,
+        contentNode: Number(scrollFastPath.contentNode) || 0,
+        contentY: Number(scrollFastPath.contentY) || 0,
+        scrollbarNode: Number(scrollFastPath.scrollbarNode) || 0,
+        scrollbarVisible: Number(scrollFastPath.scrollbarVisible) || 0,
+        trackX: Number(scrollFastPath.trackX) || 0,
+        trackY: Number(scrollFastPath.trackY) || 0,
+        trackW: Number(scrollFastPath.trackW) || 0,
+        trackH: Number(scrollFastPath.trackH) || 0,
+        thumbX: Number(scrollFastPath.thumbX) || 0,
+        thumbY: Number(scrollFastPath.thumbY) || 0,
+        thumbW: Number(scrollFastPath.thumbW) || 0,
+        thumbH: Number(scrollFastPath.thumbH) || 0,
+      };
+    }
+    const graphicsFastPath = (window as any).__TRUEOS_PIXI_LAST_GRAPHICS_FAST_PATH__;
+    if (
+      graphicsFastPath?.owner === 'context-menu-hover' &&
+      (ev.type === 'pointerover' || ev.type === 'pointerout') &&
+      after > before
+    ) {
+      if (window.__pixiCapture?.commands) {
+        window.__pixiCapture.commands.splice(before, after - before);
+      }
+      diag(`graphics-fast owner=${graphicsFastPath.owner}`);
+      return {
+        handled,
+        listenerCount,
+        painted: 1,
+        targetFound: 1,
+        graphicsFastPath: 1,
+        rootNode: Number(graphicsFastPath.rootNode) || 0,
+        graphicsNode: Number(graphicsFastPath.graphicsNode) || 0,
+        rectX: Number(graphicsFastPath.x) || 0,
+        rectY: Number(graphicsFastPath.y) || 0,
+        rectW: Number(graphicsFastPath.w) || 0,
+        rectH: Number(graphicsFastPath.h) || 0,
+        fillColor: Number(graphicsFastPath.fillColor) || 0,
+        fillAlpha: Number(graphicsFastPath.fillAlpha) || 0,
+      };
+    }
     painted = after > before || painted ? 1 : 0;
     diag(`done handled=${handled} listeners=${listenerCount} painted=${painted}`);
     return { handled, listenerCount, painted, targetFound: 1 };
@@ -726,6 +801,9 @@ export function installPixiCommandCapture(): PixiCaptureApi {
     persist: !(window as any).__TRUEOS_CAPTURE_ONLY__,
     commands: [],
     counts: Object.create(null),
+    objectId(target: object) {
+      return objectId(target);
+    },
     clear() {
       this.commands.length = 0;
       this.counts = Object.create(null);

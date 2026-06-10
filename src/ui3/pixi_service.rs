@@ -10,7 +10,7 @@ use spin::{Mutex, Once};
 use trueos_qjs as qjs;
 
 use super::intel_present::{
-    Ui3IntelPresentSummary, present_ui3_frame_damage_list_to_intel_primary,
+    Ui3IntelPresentSummary, present_ui3_frame_damage_to_intel_primary,
     present_ui3_frame_to_intel_primary,
 };
 use super::{
@@ -393,17 +393,15 @@ fn present_cached_cursor_damage(
     browser_id: u32,
     root_id: u32,
 ) -> bool {
-    let damage_rects = cursor_damage_rects(runtime);
-    if damage_rects.is_empty() {
+    let Some(damage) = cursor_damage_rect(runtime) else {
         return false;
-    }
+    };
     let Some(geometry) = runtime.last_geometry.as_ref() else {
         return false;
     };
-    let damage_union = union_damage_rects(damage_rects.as_slice()).unwrap_or(damage_rects[0]);
 
     let present_start_ms = super::now_ms();
-    let present = present_ui3_frame_damage_list_to_intel_primary(geometry, damage_rects.as_slice());
+    let present = present_ui3_frame_damage_to_intel_primary(geometry, damage);
     let present_wall_ms = super::now_ms().saturating_sub(present_start_ms);
     let present_gap_ms = present_wall_ms.saturating_sub(present.total_ms);
     let draw_count = geometry.draws.len();
@@ -415,18 +413,13 @@ fn present_cached_cursor_damage(
 
     if runtime.frame_count <= 4 || runtime.cursor_hit_log_count < 8 {
         crate::log!(
-            "ui3-pixi-service: cursor-damage-present browser={} root={} damage_rects={} damage={}x{}@{},{} damage_union={}x{}@{},{} cached_draws={} solid_rects={} cursor_rects={} meshes={} textures={} text={} presented={} fill_descs={} blend_descs={} present_wall_ms={} rect_ms={} mesh_ms={} sprite_ms={} publish_ms={} present_ms={} total_ms={} gap_ms={}\n",
+            "ui3-pixi-service: cursor-damage-present browser={} root={} damage={}x{}@{},{} cached_draws={} solid_rects={} cursor_rects={} meshes={} textures={} text={} presented={} fill_descs={} blend_descs={} present_wall_ms={} rect_ms={} mesh_ms={} sprite_ms={} publish_ms={} present_ms={} total_ms={} gap_ms={}\n",
             browser_id,
             root_id,
-            damage_rects.len(),
-            damage_rects[0].w as i32,
-            damage_rects[0].h as i32,
-            damage_rects[0].x as i32,
-            damage_rects[0].y as i32,
-            damage_union.w as i32,
-            damage_union.h as i32,
-            damage_union.x as i32,
-            damage_union.y as i32,
+            damage.w as i32,
+            damage.h as i32,
+            damage.x as i32,
+            damage.y as i32,
             draw_count,
             present.solid_rects,
             present.cursor_rects,
@@ -722,22 +715,19 @@ fn update_cursor_hits(runtime: &mut Ui3PixiServiceRuntime) {
     runtime.cursor_hits = next;
 }
 
-fn cursor_damage_rects(runtime: &Ui3PixiServiceRuntime) -> Vec<Ui3Rect> {
+fn cursor_damage_rect(runtime: &Ui3PixiServiceRuntime) -> Option<Ui3Rect> {
     let (view_w, view_h) = crate::intel::active_scanout_dimensions()
         .map(|(w, h)| (w.max(1), h.max(1)))
         .unwrap_or((1920, 1080));
     let half = ((view_h as f32) * PIXI_CURSOR_DAMAGE_HALF_RATIO)
         .clamp(PIXI_CURSOR_DAMAGE_HALF_MIN_PX, PIXI_CURSOR_DAMAGE_HALF_MAX_PX)
         + PIXI_CURSOR_DAMAGE_MARGIN_PX;
-    let mut damage = Vec::new();
+    let mut damage = None;
 
     for previous in &runtime.cursor_hits {
         let x = previous.x as f32;
         let y = previous.y as f32;
-        push_cursor_damage_rect(
-            &mut damage,
-            cursor_damage_rect_at(x, y, half, view_w, view_h),
-        );
+        damage = union_damage_rect(damage, cursor_damage_rect_at(x, y, half, view_w, view_h));
     }
 
     let cursors = crate::r::cursor::ordered_cursor_snapshot_with_slot_buttons();
@@ -747,10 +737,7 @@ fn cursor_damage_rects(runtime: &Ui3PixiServiceRuntime) -> Vec<Ui3Rect> {
         }
         let x = (nx.clamp(0.0, 1.0) as f32) * view_w.saturating_sub(1).max(1) as f32;
         let y = (ny.clamp(0.0, 1.0) as f32) * view_h.saturating_sub(1).max(1) as f32;
-        push_cursor_damage_rect(
-            &mut damage,
-            cursor_damage_rect_at(x, y, half, view_w, view_h),
-        );
+        damage = union_damage_rect(damage, cursor_damage_rect_at(x, y, half, view_w, view_h));
     }
 
     damage
@@ -774,36 +761,13 @@ fn cursor_damage_rect_at(x: f32, y: f32, half: f32, view_w: u32, view_h: u32) ->
     })
 }
 
-fn push_cursor_damage_rect(out: &mut Vec<Ui3Rect>, rect: Option<Ui3Rect>) {
-    let Some(rect) = rect else {
-        return;
-    };
-    for existing in out.iter_mut() {
-        if rects_touch_or_overlap(*existing, rect) {
-            *existing = union_rect(*existing, rect);
-            return;
-        }
+fn union_damage_rect(a: Option<Ui3Rect>, b: Option<Ui3Rect>) -> Option<Ui3Rect> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(union_rect(a, b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
     }
-    out.push(rect);
-}
-
-fn rects_touch_or_overlap(a: Ui3Rect, b: Ui3Rect) -> bool {
-    let margin = 2.0;
-    a.x <= b.x + b.w + margin
-        && b.x <= a.x + a.w + margin
-        && a.y <= b.y + b.h + margin
-        && b.y <= a.y + a.h + margin
-}
-
-fn union_damage_rects(rects: &[Ui3Rect]) -> Option<Ui3Rect> {
-    let first = *rects.first()?;
-    Some(
-        rects
-            .iter()
-            .copied()
-            .skip(1)
-            .fold(first, union_rect),
-    )
 }
 
 fn union_rect(a: Ui3Rect, b: Ui3Rect) -> Ui3Rect {

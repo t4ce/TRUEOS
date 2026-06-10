@@ -71,6 +71,35 @@ declare global {
     __TRUEOS_PIXI_DIRTY__?: boolean;
     __TRUEOS_PIXI_REPAINT_REQUIRED__?: boolean;
     __TRUEOS_PIXI_SCROLL_REPAINT_REQUIRED__?: boolean;
+    __TRUEOS_PIXI_SCROLL_REPAINT_OWNER__?: 'root' | 'iframe' | '';
+    __TRUEOS_PIXI_SCROLL_REPAINT_IFRAME_KEY__?: string;
+    __TRUEOS_PIXI_LAST_SCROLL_FAST_PATH__?: {
+      owner: 'root' | 'iframe';
+      rootNode: number;
+      contentNode: number;
+      contentY: number;
+      scrollbarNode: number;
+      scrollbarVisible: number;
+      trackX: number;
+      trackY: number;
+      trackW: number;
+      trackH: number;
+      thumbX: number;
+      thumbY: number;
+      thumbW: number;
+      thumbH: number;
+    } | null;
+    __TRUEOS_PIXI_LAST_GRAPHICS_FAST_PATH__?: {
+      owner: 'context-menu-hover';
+      rootNode: number;
+      graphicsNode: number;
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      fillColor: number;
+      fillAlpha: number;
+    } | null;
     __TRUEOS_REPAINT_NOW__?: () => void;
     __TRUEOS_PIXI_BRIDGE_STATS__?: TrueosBridgeStats;
     __TRUEOS_PIXI_LAST_LAYOUT__?: LayoutBox;
@@ -2982,6 +3011,11 @@ function renderToPixi(app: Application, box: LayoutBox, sceneRoot?: Container) {
             st.draggingPointerId = pid;
             st.dragOffsetY = gy - targetTop;
             uiState.iframeScroll.set(iframeKey, st);
+            if (isTrueosCaptureOnly()) {
+              window.__TRUEOS_PIXI_SCROLL_REPAINT_REQUIRED__ = true;
+              window.__TRUEOS_PIXI_SCROLL_REPAINT_OWNER__ = 'iframe';
+              window.__TRUEOS_PIXI_SCROLL_REPAINT_IFRAME_KEY__ = iframeKey;
+            }
             requestPaint?.();
             ev.stopPropagation?.();
           });
@@ -3192,18 +3226,37 @@ function renderToPixi(app: Application, box: LayoutBox, sceneRoot?: Container) {
       hit.addChild(tt);
 
       const isOwnerEvent = (ev: any) => getEffectivePointerId(ev) === ownerPid;
+      const publishHoverFastPath = (fillColor: number) => {
+        if (!isTrueosCaptureOnly()) return;
+        const capture = window.__pixiCapture;
+        const getId = capture && typeof capture.objectId === 'function' ? capture.objectId.bind(capture) : null;
+        if (!getId) return;
+        window.__TRUEOS_PIXI_LAST_GRAPHICS_FAST_PATH__ = {
+          owner: 'context-menu-hover',
+          rootNode: getId(app.stage as any),
+          graphicsNode: getId(gg as any),
+          x: 0,
+          y: 0,
+          w: itemW,
+          h: itemH,
+          fillColor,
+          fillAlpha: 1,
+        };
+      };
 
       hit.on('pointerover', (ev: any) => {
         if (!isOwnerEvent(ev)) return;
         gg.clear();
         gg.rect(0, 0, itemW, itemH);
         gg.fill(0xf2f2f2);
+        publishHoverFastPath(0xf2f2f2);
       });
       hit.on('pointerout', (ev: any) => {
         if (!isOwnerEvent(ev)) return;
         gg.clear();
         gg.rect(0, 0, itemW, itemH);
         gg.fill(0xffffff);
+        publishHoverFastPath(0xffffff);
       });
       hit.on('pointerdown', (ev: any) => {
         if (!isOwnerEvent(ev)) return;
@@ -3363,7 +3416,11 @@ async function main() {
             if (nextY !== st.y) {
               st.y = nextY;
               uiState.iframeScroll.set(iframeKey, st);
-              if (isTrueosCaptureOnly()) window.__TRUEOS_PIXI_SCROLL_REPAINT_REQUIRED__ = true;
+              if (isTrueosCaptureOnly()) {
+                window.__TRUEOS_PIXI_SCROLL_REPAINT_REQUIRED__ = true;
+                window.__TRUEOS_PIXI_SCROLL_REPAINT_OWNER__ = 'iframe';
+                window.__TRUEOS_PIXI_SCROLL_REPAINT_IFRAME_KEY__ = iframeKey;
+              }
               requestPaint?.();
               e.preventDefault();
               routedToIframe = true;
@@ -3386,7 +3443,11 @@ async function main() {
       if (nextRootY !== uiState.scroll.y) {
         const prevRootY = uiState.scroll.y;
         uiState.scroll.y = nextRootY;
-        if (isTrueosCaptureOnly()) window.__TRUEOS_PIXI_SCROLL_REPAINT_REQUIRED__ = true;
+        if (isTrueosCaptureOnly()) {
+          window.__TRUEOS_PIXI_SCROLL_REPAINT_REQUIRED__ = true;
+          window.__TRUEOS_PIXI_SCROLL_REPAINT_OWNER__ = 'root';
+          window.__TRUEOS_PIXI_SCROLL_REPAINT_IFRAME_KEY__ = '';
+        }
         requestPaint?.();
         e.preventDefault();
         logWheelRoute(
@@ -3691,6 +3752,8 @@ async function main() {
   };
 
   const paintScrollOnly = () => {
+    const scrollOwner = window.__TRUEOS_PIXI_SCROLL_REPAINT_OWNER__ || '';
+    const scrollIframeKey = window.__TRUEOS_PIXI_SCROLL_REPAINT_IFRAME_KEY__ || '';
     setTrueosPhase('main:scroll-paint:clamp');
     clampScroll();
     setTrueosPhase('main:scroll-paint:content-position');
@@ -3698,8 +3761,56 @@ async function main() {
     setDisplayPosition(contentRoot, 0, -uiState.scroll.y);
     setTrueosPhase('main:scroll-paint:scrollbar');
     updateScrollbarVisuals();
+    window.__TRUEOS_PIXI_LAST_SCROLL_FAST_PATH__ = null;
+    if (scrollOwner === 'root') {
+      const capture = window.__pixiCapture;
+      const getId = capture && typeof capture.objectId === 'function' ? capture.objectId.bind(capture) : null;
+      if (getId) {
+        window.__TRUEOS_PIXI_LAST_SCROLL_FAST_PATH__ = {
+          owner: 'root',
+          rootNode: getId(app.stage as any),
+          contentNode: getId(contentRoot as any),
+          contentY: -uiState.scroll.y,
+          scrollbarNode: getId(scrollbarG as any),
+          scrollbarVisible: uiState.scroll.track.h > 0 ? 1 : 0,
+          trackX: uiState.scroll.track.x,
+          trackY: uiState.scroll.track.y,
+          trackW: uiState.scroll.track.w,
+          trackH: uiState.scroll.track.h,
+          thumbX: uiState.scroll.thumb.x,
+          thumbY: uiState.scroll.thumb.y,
+          thumbW: uiState.scroll.thumb.w,
+          thumbH: uiState.scroll.thumb.h,
+        };
+      }
+    }
     setTrueosPhase('main:scroll-paint:iframe-scrollbars');
     updateIframeScrollVisuals();
+    if (scrollOwner === 'iframe' && scrollIframeKey) {
+      const capture = window.__pixiCapture;
+      const getId = capture && typeof capture.objectId === 'function' ? capture.objectId.bind(capture) : null;
+      const iframeScrollRoot = uiState.iframeScrollRoots.get(scrollIframeKey);
+      const iframeScrollbar = uiState.iframeScrollbarGraphics.get(scrollIframeKey);
+      const st = uiState.iframeScroll.get(scrollIframeKey);
+      if (getId && iframeScrollRoot && iframeScrollbar && st) {
+        window.__TRUEOS_PIXI_LAST_SCROLL_FAST_PATH__ = {
+          owner: 'iframe',
+          rootNode: getId(app.stage as any),
+          contentNode: getId(iframeScrollRoot as any),
+          contentY: -st.y,
+          scrollbarNode: getId(iframeScrollbar as any),
+          scrollbarVisible: st.track.h > 0 ? 1 : 0,
+          trackX: st.track.h > 0 ? st.track.x - st.rect.x : 0,
+          trackY: st.track.h > 0 ? st.track.y - st.rect.y : 0,
+          trackW: st.track.w,
+          trackH: st.track.h,
+          thumbX: st.thumb.h > 0 ? st.thumb.x - st.rect.x : 0,
+          thumbY: st.thumb.h > 0 ? st.thumb.y - st.rect.y : 0,
+          thumbW: st.thumb.w,
+          thumbH: st.thumb.h,
+        };
+      }
+    }
     setTrueosPhase('main:scroll-paint:renderer-render');
     app.renderer.render(app.stage);
     publishTrueosBridgeStats(
@@ -3718,6 +3829,8 @@ async function main() {
       window.__TRUEOS_PIXI_DIRTY__ = false;
       window.__TRUEOS_PIXI_REPAINT_REQUIRED__ = false;
       window.__TRUEOS_PIXI_SCROLL_REPAINT_REQUIRED__ = false;
+      if (!scrollOnly) window.__TRUEOS_PIXI_LAST_SCROLL_FAST_PATH__ = null;
+      if (!scrollOnly) window.__TRUEOS_PIXI_LAST_GRAPHICS_FAST_PATH__ = null;
       const repaintLogCount = Number((window as any).__TRUEOS_REPAINT_NOW_LOG_COUNT__ ?? 0) || 0;
       if (repaintLogCount < 24) {
         (window as any).__TRUEOS_REPAINT_NOW_LOG_COUNT__ = repaintLogCount + 1;
@@ -3725,6 +3838,8 @@ async function main() {
       }
       if (scrollOnly) paintScrollOnly();
       else paint();
+      window.__TRUEOS_PIXI_SCROLL_REPAINT_OWNER__ = '';
+      window.__TRUEOS_PIXI_SCROLL_REPAINT_IFRAME_KEY__ = '';
       if (repaintLogCount < 24) {
         console.log(`[trueos pixi widgets] repaint-now scrollOnly=${scrollOnly ? 1 : 0} done`);
       }
@@ -4154,6 +4269,11 @@ async function main() {
 
     uiState.scroll.draggingPointerId = pid;
     uiState.scroll.dragOffsetY = gy - targetTop;
+    if (isTrueosCaptureOnly()) {
+      window.__TRUEOS_PIXI_SCROLL_REPAINT_REQUIRED__ = true;
+      window.__TRUEOS_PIXI_SCROLL_REPAINT_OWNER__ = 'root';
+      window.__TRUEOS_PIXI_SCROLL_REPAINT_IFRAME_KEY__ = '';
+    }
     requestPaint?.();
     ev.stopPropagation?.();
   });
@@ -4273,13 +4393,17 @@ async function main() {
               uiState.scroll.y = Math.max(0, Math.min(maxScroll, ratio * maxScroll));
               didUpdate = true;
               scrollOnlyUpdate = true;
+              if (isTrueosCaptureOnly()) {
+                window.__TRUEOS_PIXI_SCROLL_REPAINT_OWNER__ = 'root';
+                window.__TRUEOS_PIXI_SCROLL_REPAINT_IFRAME_KEY__ = '';
+              }
             }
           }
         }
 
         // Iframe scrollbar thumb drag.
         {
-          for (const st of uiState.iframeScroll.values()) {
+          for (const [iframeKey, st] of uiState.iframeScroll.entries()) {
             if (st.draggingPointerId == null || st.draggingPointerId !== pid) continue;
 
             const maxScroll = Math.max(0, st.contentHeight - st.viewportHeight);
@@ -4292,6 +4416,10 @@ async function main() {
             st.y = Math.max(0, Math.min(maxScroll, ratio * maxScroll));
             didUpdate = true;
             scrollOnlyUpdate = true;
+            if (isTrueosCaptureOnly()) {
+              window.__TRUEOS_PIXI_SCROLL_REPAINT_OWNER__ = 'iframe';
+              window.__TRUEOS_PIXI_SCROLL_REPAINT_IFRAME_KEY__ = iframeKey;
+            }
           }
         }
     {
