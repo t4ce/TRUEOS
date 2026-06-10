@@ -27,6 +27,12 @@ body {
   padding: 10px;
 }
 
+#status {
+  padding: 8px 10px 0;
+  font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #333333;
+}
+
 .panel {
   min-width: 0;
   display: grid;

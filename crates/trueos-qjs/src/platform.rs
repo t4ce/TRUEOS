@@ -343,6 +343,11 @@ pub mod ui {
     }
 
     #[inline]
+    pub fn ui3_scene_text_font_tier(browser_id: u32, node_id: u32, tier: u32) -> bool {
+        ui3_pixi_op(browser_id, 30, node_id, tier.min(2) as f32, 0.0, 0.0, 0.0, None)
+    }
+
+    #[inline]
     pub fn ui3_scene_render(browser_id: u32, root_id: u32) -> bool {
         ui3_pixi_op(browser_id, 21, root_id, 0.0, 0.0, 0.0, 0.0, None)
     }
