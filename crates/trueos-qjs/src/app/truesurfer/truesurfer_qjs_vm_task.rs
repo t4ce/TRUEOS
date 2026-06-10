@@ -968,6 +968,14 @@ function __trueosStripHostMarkers(value) {
   if (text === "N" || text === "Nu" || text === "Num") return "";
   return text;
 }
+function __trueosTextFontTierArg(style) {
+  if (!style || typeof style !== "object") return 1;
+  var fontSize = __trueosNum(style.fontSize, 16);
+  var weight = String(style.fontWeight || "");
+  if (fontSize >= 18 || weight === "700" || weight === "bold") return 2;
+  if (fontSize <= 11) return 0;
+  return 1;
+}
 function __trueosNormalizeCommandOp(value) {
   var op = String(value == null ? "" : value);
   if (op.length > 128) op = op.slice(0, 128);
@@ -1266,7 +1274,7 @@ function __trueosPushSnapshotNode(node, parent, ops, seen, snapshotSeen, snapsho
   }
   var type = String(node.type || "");
   var isTextNode = type.indexOf("Text") >= 0;
-  var cleanedText = __trueosRepairCapturedTextWithState(node.text, trustedTextState);
+  var cleanedText = isTextNode ? __trueosRepairCapturedTextWithState(node.text, trustedTextState) : "";
   if (cleanedText.length > 240) cleanedText = cleanedText.slice(0, 240);
   var hasRenderableText = cleanedText && __trueosTextIsRenderable(cleanedText);
   var hasVisibleText = hasRenderableText && __trueosTextWithinVisibleSurface(worldX, worldY);
@@ -1306,7 +1314,10 @@ function __trueosPushSnapshotNode(node, parent, ops, seen, snapshotSeen, snapsho
   }
   __trueosPushSnapshotGraphicsCommands(node, ops);
   if (hasRenderableText) {
-    ops.push({ code: 9, node: id, a: 0x111111, b: 1 });
+    if (node.textStyle && typeof node.textStyle === "object") {
+      ops.push({ code: 30, node: id, a: __trueosTextFontTierArg(node.textStyle) });
+    }
+    ops.push({ code: 9, node: id, a: __trueosColorArg(node.textStyle && node.textStyle.fill, 0x111111), b: 1 });
     ops.push({ code: 8, node: id, text: cleanedText });
   }
   var children = node.children && node.children.length ? node.children : [];
@@ -3349,7 +3360,7 @@ unsafe fn submit_ui3_scene(
     ));
     let op_submit_start_ms = now_ms();
     let mut submitted = 0u32;
-    let mut op_code_counts = [0u32; 30];
+    let mut op_code_counts = [0u32; 31];
     let mut unknown_op_count = 0u32;
     let mut text_sample_count = 0u32;
     let mut listen_sample_count = 0u32;
@@ -3432,6 +3443,11 @@ unsafe fn submit_ui3_scene(
                 node,
                 a.max(0.0) as u32,
                 b,
+            ),
+            30 => qjs::platform::ui::ui3_scene_text_font_tier(
+                browser_instance_id,
+                node,
+                a.max(0.0).min(2.0) as u32,
             ),
             10 => qjs::platform::ui::ui3_scene_add_child_at(
                 browser_instance_id,
@@ -3538,7 +3554,7 @@ unsafe fn submit_ui3_scene(
     }
     let op_submit_ms = now_ms().saturating_sub(op_submit_start_ms);
     log_line(format!(
-        "qjs-truesurfer[{}]: ui3 scene op-counts node={} addChild={} position={} clear={} rect={} fill={} stroke={} text={} textFill={} addChildAt={} setChildIndex={} removeChild={} removeFromParent={} removeChildren={} visible={} listen={} removeAllListeners={} circle={} moveTo={} lineTo={} texture={} alpha={} roundRect={} closePath={} ellipse={} mask={} scale={} hitArea={} unknown={}\n",
+        "qjs-truesurfer[{}]: ui3 scene op-counts node={} addChild={} position={} clear={} rect={} fill={} stroke={} text={} textFill={} addChildAt={} setChildIndex={} removeChild={} removeFromParent={} removeChildren={} visible={} listen={} removeAllListeners={} circle={} moveTo={} lineTo={} texture={} alpha={} roundRect={} closePath={} ellipse={} mask={} scale={} hitArea={} textFontTier={} unknown={}\n",
         browser_instance_id,
         op_code_counts[1],
         op_code_counts[2],
@@ -3568,6 +3584,7 @@ unsafe fn submit_ui3_scene(
         op_code_counts[27],
         op_code_counts[28],
         op_code_counts[29],
+        op_code_counts[30],
         unknown_op_count
     ));
     if skipped_empty_text_count != 0 {

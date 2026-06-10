@@ -701,7 +701,17 @@ function snapshotNode(node: any, depth = 0): unknown {
   if (node instanceof Graphics && Array.isArray(node.commands) && node.commands.length > 0) {
     out.commands = node.commands.slice(-256).map((command: unknown) => snapshotArg(command, 0));
   }
-  if (typeof node.text === 'string') out.text = node.text.slice(0, 120);
+  if (typeof node.text === 'string') {
+    out.text = node.text.slice(0, 120);
+    if (node instanceof Text && node.style && typeof node.style === 'object') {
+      const style: Record<string, unknown> = {};
+      const rawStyle = node.style as any;
+      if (typeof rawStyle.fontSize !== 'undefined') style.fontSize = snapshotArg(rawStyle.fontSize, 0);
+      if (typeof rawStyle.fontWeight !== 'undefined') style.fontWeight = snapshotArg(rawStyle.fontWeight, 0);
+      if (typeof rawStyle.fill !== 'undefined') style.fill = snapshotArg(rawStyle.fill, 0);
+      if (Object.keys(style).length > 0) out.textStyle = style;
+    }
+  }
   if (Array.isArray(node.children) && node.children.length) {
     out.children = node.children.map((child: unknown) => snapshotNode(child, depth + 1));
   }

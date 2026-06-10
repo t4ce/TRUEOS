@@ -10,6 +10,7 @@ if (!appHost) throw new Error('missing #app');
 appHost.innerHTML = `
   <main class="shell">
     <section class="viewport">
+      <div id="status">starting pixi probe...</div>
       <div id="pixi"></div>
     </section>
     <aside class="panel">
@@ -25,6 +26,7 @@ appHost.innerHTML = `
 
 const pixiHost = document.querySelector<HTMLDivElement>('#pixi')!;
 const dumpEl = document.querySelector<HTMLPreElement>('#dump')!;
+const statusEl = document.querySelector<HTMLDivElement>('#status')!;
 
 async function main(): Promise<void> {
   const app = new Application();
@@ -33,8 +35,10 @@ async function main(): Promise<void> {
     height: 420,
     background: 0xf7f7f7,
     antialias: true,
+    preference: 'webgl',
   });
   pixiHost.appendChild(app.canvas);
+  statusEl.textContent = 'pixi ready: stage -> parent -> rectangle + text child';
 
   markNode(app.stage, 'stage');
 
@@ -110,5 +114,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  dumpEl.textContent = String(error?.stack || error);
+  const message = String(error?.stack || error);
+  statusEl.textContent = 'pixi init failed';
+  dumpEl.textContent = message;
 });
