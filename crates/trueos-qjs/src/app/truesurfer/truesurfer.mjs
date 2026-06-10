@@ -75,6 +75,36 @@ function log(line) {
   }
 }
 
+function stableHashText(text) {
+  const s = safeString(text);
+  let h = (2166136261 ^ s.length) >>> 0;
+  for (let i = 0; i < s.length; i += 1) {
+    h ^= s.charCodeAt(i) & 0xffff;
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return `0x${h.toString(16).padStart(8, '0')}`;
+}
+
+function dumpWidgetRenderTreeJson(json, url) {
+  const text = safeString(json);
+  const chunkSize = 900;
+  const total = Math.max(1, Math.ceil(text.length / chunkSize));
+  const hash = stableHashText(text);
+  log(
+    `[truesurfer widget-tree-dump begin] browser=${browserId} bytes=${text.length} hash=${hash} chunks=${total} url=${safeString(url)}`,
+  );
+  for (let index = 0; index < total; index += 1) {
+    const start = index * chunkSize;
+    const chunk = text.slice(start, start + chunkSize);
+    log(
+      `[truesurfer widget-tree-dump chunk] browser=${browserId} index=${index + 1}/${total} json=${chunk}`,
+    );
+  }
+  log(
+    `[truesurfer widget-tree-dump end] browser=${browserId} bytes=${text.length} hash=${hash} chunks=${total} url=${safeString(url)}`,
+  );
+}
+
 function globalLogLine(line) {
   if (typeof root.__trueosGlobalLogLine !== 'function') return;
   try {
@@ -383,6 +413,7 @@ function setHtml(nextHtml, meta) {
     root.__TRUEOS_WIDGET_TEXT_ROWS__ = Array.isArray(parsed.widgetTextRows) ? parsed.widgetTextRows : [];
     root.__TRUEOS_WIDGET_RENDER_TREE_JSON__ = JSON.stringify(parsed.widgetRenderTree || []);
     root.__TRUEOS_WIDGET_TEXT_ROWS_TEXT__ = root.__TRUEOS_WIDGET_TEXT_ROWS__.join('\n');
+    dumpWidgetRenderTreeJson(root.__TRUEOS_WIDGET_RENDER_TREE_JSON__, url);
     const composedGadgetSnapshot = publishLatestArtifactsSnapshot() || composeCurrentGadgetSnapshot();
     const imageSummary = assetManager
       ? assetManager.summarizeImageUrls(currentSceneImageUrls)

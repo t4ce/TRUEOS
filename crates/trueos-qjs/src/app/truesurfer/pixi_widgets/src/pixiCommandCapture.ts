@@ -426,6 +426,12 @@ function invokeCapturedMethod(target: any, op: string, args: unknown[]): unknown
 }
 
 function installTrueosPointerDispatcher(): void {
+  const captureRepaintPending = () =>
+    Boolean(
+      (window as any).__TRUEOS_PIXI_REPAINT_REQUIRED__ ||
+        (window as any).__TRUEOS_PIXI_SCROLL_REPAINT_REQUIRED__,
+    );
+
   window.__TRUEOS_DISPATCH_PIXI_POINTER__ = (nodeId, event, x, y, pointerId, buttons, wheelDeltaY = 0) => {
     const diag = (step: string) => {
       try {
@@ -471,7 +477,7 @@ function installTrueosPointerDispatcher(): void {
       let painted = 0;
       if ((window as any).__TRUEOS_CAPTURE_ONLY__) {
         const repaintNow = (window as any).__TRUEOS_REPAINT_NOW__;
-        if ((window as any).__TRUEOS_PIXI_DIRTY__ && typeof repaintNow === 'function') {
+        if (captureRepaintPending() && typeof repaintNow === 'function') {
           diag('wheel-repaint-call');
           repaintNow();
           diag('wheel-repaint-return');
@@ -521,6 +527,7 @@ function installTrueosPointerDispatcher(): void {
       },
     };
 
+    const before = window.__pixiCapture?.commands?.length ?? 0;
     diag(`target-found label=${String(target.label ?? '')}`);
     for (let node: any = target; node; node = node.parent) {
       ev.currentTarget = node;
@@ -541,7 +548,7 @@ function installTrueosPointerDispatcher(): void {
 
     if ((window as any).__TRUEOS_CAPTURE_ONLY__) {
       const repaintNow = (window as any).__TRUEOS_REPAINT_NOW__;
-      if ((window as any).__TRUEOS_PIXI_DIRTY__ && typeof repaintNow === 'function') {
+      if (captureRepaintPending() && typeof repaintNow === 'function') {
         diag('capture-repaint-call');
         repaintNow();
         diag('capture-repaint-return');
@@ -554,6 +561,8 @@ function installTrueosPointerDispatcher(): void {
       painted = 1;
     }
 
+    const after = window.__pixiCapture?.commands?.length ?? before;
+    painted = after > before || painted ? 1 : 0;
     diag(`done handled=${handled} listeners=${listenerCount} painted=${painted}`);
     return { handled, listenerCount, painted, targetFound: 1 };
   };
@@ -682,6 +691,16 @@ function snapshotNode(node: any, depth = 0): unknown {
   };
   const hitArea = snapshotRect(node.hitArea);
   if (hitArea) out.hitArea = hitArea;
+  if (node.listeners && typeof node.listeners === 'object') {
+    const events = Object.keys(node.listeners).filter((name) => {
+      const listeners = node.listeners?.[name];
+      return Array.isArray(listeners) && listeners.length > 0;
+    });
+    if (events.length > 0) out.listeners = events.slice(0, 16);
+  }
+  if (node instanceof Graphics && Array.isArray(node.commands) && node.commands.length > 0) {
+    out.commands = node.commands.slice(-256).map((command: unknown) => snapshotArg(command, 0));
+  }
   if (typeof node.text === 'string') out.text = node.text.slice(0, 120);
   if (Array.isArray(node.children) && node.children.length) {
     out.children = node.children.map((child: unknown) => snapshotNode(child, depth + 1));
@@ -777,6 +796,9 @@ export function attachPixiRenderCapture(app: Application): void {
         ? (root as any).container
         : root || app.stage;
     frame++;
+    if ((window as any).__TRUEOS_CAPTURE_ONLY__) {
+      window.__pixiCapture?.clear();
+    }
     record(renderRoot, 'render', []);
     record(renderRoot, 'snapshot', [snapshotNode(renderRoot)]);
     if ((window as any).__TRUEOS_CAPTURE_ONLY__) return renderRoot;

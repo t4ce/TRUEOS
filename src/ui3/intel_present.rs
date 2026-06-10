@@ -52,9 +52,10 @@ fn present_ui3_geometry_to_intel_primary(
     let mut summary = Ui3IntelPresentSummary::default();
     let mut rects = Vec::new();
     let mut rect_run_opaque = true;
+    let viewport = active_viewport_clip();
 
     for draw in &frame.draws {
-        let effective_clip = merge_clip(*draw_clip(draw), damage);
+        let effective_clip = merge_clip(merge_clip(*draw_clip(draw), damage), Some(viewport));
         match draw {
             Ui3LoweredDraw::SolidRect { rect, color, .. } => {
                 if let Some(rect) = clipped_rect(*rect, effective_clip).and_then(lower_rect) {
@@ -110,6 +111,18 @@ fn present_ui3_geometry_to_intel_primary(
     publish_frame(&mut summary);
 
     summary
+}
+
+fn active_viewport_clip() -> Ui3Rect {
+    let (view_w, view_h) = crate::intel::active_scanout_dimensions()
+        .map(|(w, h)| (w.max(1), h.max(1)))
+        .unwrap_or((1920, 1080));
+    Ui3Rect {
+        x: 0.0,
+        y: 0.0,
+        w: view_w as f32,
+        h: view_h as f32,
+    }
 }
 
 fn draw_clip(draw: &Ui3LoweredDraw) -> &Option<Ui3Rect> {

@@ -1,7 +1,7 @@
 //! UI3: Pixi-style 2D command host.
 //!
-//! It defines the small retained-scene vocabulary observed from the Parse5/Pixi
-//! command trace and the AP1 Pixi/QJS smoke host.
+//! It defines the retained-scene vocabulary consumed from the TrueSurfer/Pixi
+//! command stream and owns composition, hit routing, and presentation.
 
 #![allow(dead_code)]
 
