@@ -31,7 +31,7 @@ const LINK_GADGET_TEXT_COLOR_RGB = 0x1d4ed8;
 const BODY_STYLE_TAG_RE = /<style\b[^>]*>([\s\S]*?)<\/style>/gi;
 const DEFAULT_HEAD_SHELL = '<head></head>';
 const DEFAULT_BODY_SHELL = '<body></body>';
-const TRUESURFER_WIDGET_SVG_ENABLED = false;
+const TRUESURFER_WIDGET_SVG_ENABLED = true;
 const COMMON_BODY_TAGS_FALLBACK = new Set([
   'div', 'p', 'span', 'a', 'ul', 'ol', 'li', 'table', 'thead', 'tbody',
   'tr', 'td', 'th', 'section', 'article', 'header', 'footer', 'main', 'nav',
@@ -42,6 +42,12 @@ const VOID_HTML_TAGS = new Set([
   'param', 'source', 'track', 'wbr',
 ]);
 const RAW_TEXT_TAGS = new Set(['script', 'style', 'template']);
+const P_IMPLIED_END_TAG_OPENERS = new Set([
+  'address', 'article', 'aside', 'blockquote', 'details', 'dialog', 'div', 'dl',
+  'fieldset', 'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4',
+  'h5', 'h6', 'header', 'hgroup', 'hr', 'main', 'menu', 'nav', 'ol', 'p', 'pre',
+  'search', 'section', 'table', 'ul',
+]);
 
 function emptyStyleIndex() {
   return {
@@ -393,7 +399,12 @@ function appendDomText(parent, rawText) {
 }
 
 function buildBodyDomTree(bodyHtml) {
-  const source = stripCommentAndRawTextNoise(bodyHtml);
+  const rawBodyHtml = safeString(bodyHtml);
+  const shouldUnwrapBody =
+    /^\s*(?:<!doctype\b[^>]*>\s*)?<html\b/i.test(rawBodyHtml) ||
+    /^\s*<body\b/i.test(rawBodyHtml);
+  const bodyBlock = shouldUnwrapBody ? extractTagBlock(rawBodyHtml, 'body') : null;
+  const source = stripCommentAndRawTextNoise(bodyBlock ? bodyBlock.inner : rawBodyHtml);
   const root = { nodeName: 'body', tagName: 'body', attrs: [], childNodes: [] };
   const stack = [root];
   let index = 0;
@@ -429,11 +440,21 @@ function buildBodyDomTree(bodyHtml) {
 
     const isClose = /^<\s*\//.test(tagHtml);
     if (isClose) {
+      let found = false;
       for (let scan = stack.length - 1; scan >= 1; scan -= 1) {
         if (stack[scan].tagName === tagName) {
           stack.length = scan;
+          found = true;
           break;
         }
+      }
+      if (!found && tagName === 'p') {
+        stack[stack.length - 1].childNodes.push({
+          nodeName: 'p',
+          tagName: 'p',
+          attrs: [],
+          childNodes: [],
+        });
       }
       index = close + 1;
       continue;
@@ -452,6 +473,13 @@ function buildBodyDomTree(bodyHtml) {
       attrs: parseTagAttributes(tagHtml),
       childNodes: [],
     };
+    if (
+      P_IMPLIED_END_TAG_OPENERS.has(tagName) &&
+      stack.length > 1 &&
+      stack[stack.length - 1].tagName === 'p'
+    ) {
+      stack.pop();
+    }
     stack[stack.length - 1].childNodes.push(node);
 
     const isSelfClosing = /\/\s*>$/.test(tagHtml) || VOID_HTML_TAGS.has(tagName);
@@ -487,6 +515,10 @@ function extractDomText(node) {
   return node.childNodes.map(extractDomText).join(' ');
 }
 
+function stripTagsToText(markup) {
+  return normalizeWhitespace(decodeBasicEntities(safeString(markup).replace(/<[^>]*>/g, ' ')));
+}
+
 function escapeHtmlAttr(value) {
   return safeString(value)
     .replace(/&/g, '&amp;')
@@ -512,6 +544,17 @@ function serializeDomNode(node) {
 
 function collectIframeSrcdocTextRows(srcdoc) {
   const rows = [];
+  const cleaned = safeString(srcdoc)
+    .replace(/<script[^]*?<\/script>/gi, ' ')
+    .replace(/<style[^]*?<\/style>/gi, ' ');
+  const tokenRe = /<(h[1-6]|p|label|button)\b[^>]*>([^]*?)<\/\1>|<input\b[^>]*>/gi;
+  let match;
+  while ((match = tokenRe.exec(cleaned)) && rows.length < 16) {
+    const full = match[0] || '';
+    if (full.toLowerCase().startsWith('<input')) continue;
+    const text = stripTagsToText(match[2] || '');
+    if (text) rows.push(text);
+  }
   const doc = buildBodyDomTree(srcdoc);
   const pushUnique = (text) => {
     const cleaned = normalizeWhitespace(text);
@@ -582,7 +625,13 @@ function toWidgetRenderTree(node, path = '0') {
     if (!TRUESURFER_WIDGET_SVG_ENABLED) {
       return [];
     }
-    return [{ kind: 'block', key: `${path}:${tagName}`, tagName, attrs: { ...(attrs || {}), 'data-svg': serializeDomNode(node) }, children: [] }];
+    return [{
+      kind: 'block',
+      key: `${path}:${tagName}`,
+      tagName,
+      attrs: { ...(attrs || {}), 'data-svg': node.childNodes.map(serializeDomNode).join('') },
+      children: [],
+    }];
   }
 
   if (tagName === 'iframe') {
@@ -714,6 +763,64 @@ function toWidgetRenderTree(node, path = '0') {
       if (BLOCK_TAGS.has(childTag)) children.push(...toWidgetRenderTree(child, childPath));
     }
     return [{ kind: 'block', key: detailsKey, tagName: 'details', attrs, children }];
+  }
+
+  if (tagName === 'table') {
+    const children = [];
+    let inlineText = '';
+    let elementIndex = 0;
+    let implicitTbody = null;
+    let implicitTbodyPath = '';
+
+    const flushInlineText = () => {
+      const text = normalizeWhitespace(inlineText);
+      if (text) children.push({ kind: 'text', text });
+      inlineText = '';
+    };
+    const flushImplicitTbody = () => {
+      if (implicitTbody && implicitTbody.children.length > 0) {
+        children.push(implicitTbody);
+      }
+      implicitTbody = null;
+    };
+
+    for (const child of node.childNodes) {
+      if (isDomText(child)) {
+        inlineText += child.value;
+        continue;
+      }
+      if (!isDomElement(child)) continue;
+      const childTag = safeString(child.tagName || child.nodeName).toLowerCase();
+      const childPath = `${path}.${elementIndex}`;
+      elementIndex += 1;
+
+      if (childTag === 'tr') {
+        flushInlineText();
+        if (!implicitTbody) {
+          implicitTbodyPath = childPath;
+          implicitTbody = {
+            kind: 'block',
+            key: `${implicitTbodyPath}:tbody`,
+            tagName: 'tbody',
+            children: [],
+          };
+        }
+        implicitTbody.children.push(...toWidgetRenderTree(child, `${implicitTbodyPath}.${implicitTbody.children.length}`));
+        continue;
+      }
+
+      flushImplicitTbody();
+      if (BLOCK_TAGS.has(childTag)) {
+        flushInlineText();
+        children.push(...toWidgetRenderTree(child, childPath));
+      } else {
+        inlineText += extractDomText(child) + ' ';
+      }
+    }
+
+    flushImplicitTbody();
+    flushInlineText();
+    return [{ kind: 'block', key: `${path}:${tagName}`, tagName, attrs, children }];
   }
 
   const children = [];

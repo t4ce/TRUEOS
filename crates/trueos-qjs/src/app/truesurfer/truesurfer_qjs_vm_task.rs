@@ -1151,13 +1151,104 @@ function __trueosCollectSnapshotVisibility(node, ox, oy, inheritedVisible, out) 
   var children = node.children && node.children.length ? node.children : [];
   for (var i = 0; i < children.length; i += 1) __trueosCollectSnapshotVisibility(children[i], worldX, worldY, visible, out);
 }
-function __trueosPushSnapshotNode(node, parent, ops, seen, snapshotSeen, snapshotTextVisible, snapshotTextWorld, textSlots, ox, oy) {
+function __trueosTakeTrustedTextRow(state) {
+  if (!state || !state.rows) return "";
+  while (state.index < state.rows.length) {
+    var row = state.rows[state.index++];
+    if (typeof row !== "string" || !row) continue;
+    if (row.indexOf("<truesurfer-") === 0 || row.indexOf("__trueo") === 0) continue;
+    return row;
+  }
+  return "";
+}
+function __trueosRepairCapturedTextWithState(text, state) {
+  if (typeof text !== "string") text = "";
+  var trimmed = __trueosTrimStart(text.length > 4096 ? text.slice(0, 4096) : text);
+  if (!text || trimmed.indexOf("<truesurfer-") === 0 || trimmed.indexOf("__trueo") === 0) {
+    var trusted = __trueosTakeTrustedTextRow(state);
+    if (trusted) return trusted;
+  }
+  var cleaned = __trueosStripHostMarkers(text);
+  if (cleaned && __trueosTextIsRenderable(cleaned)) return cleaned;
+  return text;
+}
+function __trueosPushSnapshotGraphicsCommands(node, ops) {
+  var commands = node && node.commands && node.commands.length ? node.commands : [];
+  if (!commands.length) return 0;
+  var id = __trueosNum(node.id, 0) | 0;
+  if (id <= 0) return 0;
+  var emitted = 0;
+  for (var gi = 0; gi < commands.length && gi < 512; gi += 1) {
+    var command = commands[gi];
+    if (!command || !command.length) continue;
+    var op = __trueosNormalizeCommandOp(command[0]);
+    switch (op) {
+      case "clear":
+        ops.push({ code: 4, node: id });
+        emitted += 1;
+        break;
+      case "rect":
+        ops.push({ code: 5, node: id, a: __trueosNum(command[1], 0), b: __trueosNum(command[2], 0), c: __trueosNum(command[3], 0), d: __trueosNum(command[4], 0) });
+        emitted += 1;
+        break;
+      case "roundRect":
+        ops.push({ code: 24, node: id, a: __trueosNum(command[1], 0), b: __trueosNum(command[2], 0), c: __trueosNum(command[3], 0), d: __trueosNum(command[4], 0), text: String(__trueosNum(command[5], 0)) });
+        emitted += 1;
+        break;
+      case "circle":
+        ops.push({ code: 18, node: id, a: __trueosNum(command[1], 0), b: __trueosNum(command[2], 0), c: __trueosNum(command[3], 0) });
+        emitted += 1;
+        break;
+      case "ellipse":
+        ops.push({ code: 26, node: id, a: __trueosNum(command[1], 0), b: __trueosNum(command[2], 0), c: __trueosNum(command[3], 0), d: __trueosNum(command[4], 0) });
+        emitted += 1;
+        break;
+      case "moveTo":
+        ops.push({ code: 19, node: id, a: __trueosNum(command[1], 0), b: __trueosNum(command[2], 0) });
+        emitted += 1;
+        break;
+      case "lineTo":
+        ops.push({ code: 20, node: id, a: __trueosNum(command[1], 0), b: __trueosNum(command[2], 0) });
+        emitted += 1;
+        break;
+      case "closePath":
+        ops.push({ code: 25, node: id });
+        emitted += 1;
+        break;
+      case "poly":
+        var points = command[1] && command[1].length ? command[1] : [];
+        if (points.length >= 2) {
+          ops.push({ code: 19, node: id, a: __trueosNum(points[0], 0), b: __trueosNum(points[1], 0) });
+          emitted += 1;
+          for (var pi = 2; pi + 1 < points.length && pi < 512; pi += 2) {
+            ops.push({ code: 20, node: id, a: __trueosNum(points[pi], 0), b: __trueosNum(points[pi + 1], 0) });
+            emitted += 1;
+          }
+        }
+        break;
+      case "fill":
+        ops.push({ code: 6, node: id, a: __trueosColorArg(command[1], 0xffffff), b: __trueosAlphaArg(command[1]) });
+        emitted += 1;
+        break;
+      case "stroke":
+        ops.push({ code: 7, node: id, a: __trueosColorArg(command[1], 0xffffff), b: __trueosAlphaArg(command[1]), c: __trueosWidthArg(command[1]) });
+        emitted += 1;
+        break;
+      case "image":
+        ops.push({ code: 22, node: id, a: __trueosNum(command[1], 0), b: __trueosNum(command[2], 0), c: __trueosNum(command[3], 0), d: __trueosNum(command[4], 0), text: String(__trueosNum(command[5], 0)) });
+        emitted += 1;
+        break;
+    }
+  }
+  return emitted;
+}
+function __trueosPushSnapshotNode(node, parent, ops, seen, snapshotSeen, snapshotTextVisible, snapshotTextWorld, textSlots, trustedTextState, ox, oy) {
   if (!node || typeof node !== "object") return 0;
   var id = __trueosNum(node.id, 0) | 0;
   if (id <= 0) return 0;
   var pushCount = (G.__trueosSnapshotPushCount || 0) + 1;
   G.__trueosSnapshotPushCount = pushCount;
-  if ((pushCount === 1 || pushCount === 32 || pushCount === 64 || pushCount === 96 || pushCount === 128) && G.console && typeof G.console.log === "function") {
+  if (G.__TRUEOS_PIXI_VERBOSE_SNAPSHOT__ && (pushCount === 1 || pushCount === 32 || pushCount === 64 || pushCount === 96 || pushCount === 128) && G.console && typeof G.console.log === "function") {
     G.console.log("[parse5 trueos host] scene-build phase=snapshot-push progress count=" + pushCount + " id=" + id);
   }
   if (snapshotSeen[id]) {
@@ -1175,7 +1266,7 @@ function __trueosPushSnapshotNode(node, parent, ops, seen, snapshotSeen, snapsho
   }
   var type = String(node.type || "");
   var isTextNode = type.indexOf("Text") >= 0;
-  var cleanedText = typeof node.text === "string" ? node.text : "";
+  var cleanedText = __trueosRepairCapturedTextWithState(node.text, trustedTextState);
   if (cleanedText.length > 240) cleanedText = cleanedText.slice(0, 240);
   var hasRenderableText = cleanedText && __trueosTextIsRenderable(cleanedText);
   var hasVisibleText = hasRenderableText && __trueosTextWithinVisibleSurface(worldX, worldY);
@@ -1208,6 +1299,12 @@ function __trueosPushSnapshotNode(node, parent, ops, seen, snapshotSeen, snapsho
     var hitH = __trueosNum(node.hitArea.h, __trueosNum(node.hitArea.height, 0));
     if (hitW > 0 && hitH > 0) ops.push({ code: 29, node: id, a: __trueosNum(node.hitArea.x, 0), b: __trueosNum(node.hitArea.y, 0), c: hitW, d: hitH });
   }
+  if (node.listeners && node.listeners.length) {
+    for (var li = 0; li < node.listeners.length; li += 1) {
+      ops.push({ code: 16, node: id, a: __trueosPointerEventCode(node.listeners[li]) });
+    }
+  }
+  __trueosPushSnapshotGraphicsCommands(node, ops);
   if (hasRenderableText) {
     ops.push({ code: 9, node: id, a: 0x111111, b: 1 });
     ops.push({ code: 8, node: id, text: cleanedText });
@@ -1219,7 +1316,7 @@ function __trueosPushSnapshotNode(node, parent, ops, seen, snapshotSeen, snapsho
       return __trueosNum(a && a.zIndex, 0) - __trueosNum(b && b.zIndex, 0);
     });
   }
-  for (var i = 0; i < children.length; i += 1) __trueosPushSnapshotNode(children[i], id, ops, seen, snapshotSeen, snapshotTextVisible, snapshotTextWorld, textSlots, worldX, worldY);
+  for (var i = 0; i < children.length; i += 1) __trueosPushSnapshotNode(children[i], id, ops, seen, snapshotSeen, snapshotTextVisible, snapshotTextWorld, textSlots, trustedTextState, worldX, worldY);
   return id;
 }
 function __trueosPushLayoutTextOverlays(node, parentId, ox, oy, ops, state) {
@@ -1277,6 +1374,7 @@ G.__trueosParse5BuildSceneFromCapture = function () {
   var finalTextQueued = {};
   var finalTextOrder = [];
   var trustedTextRows = G.__TRUEOS_WIDGET_TEXT_ROWS__ && G.__TRUEOS_WIDGET_TEXT_ROWS__.length ? G.__TRUEOS_WIDGET_TEXT_ROWS__ : [];
+  var snapshotTrustedTextState = { rows: trustedTextRows, index: 0 };
   var trustedTextRowIndex = 0;
   var replayTextEmitted = 0;
   var rootId = 0;
@@ -1319,10 +1417,10 @@ G.__trueosParse5BuildSceneFromCapture = function () {
   if (snapshot) {
     if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=snapshot-visibility begin");
     __trueosCollectSnapshotVisibility(snapshot, 0, 0, true, snapshotNodeVisible);
-    if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=snapshot-push begin");
+    if (G.__TRUEOS_PIXI_VERBOSE_SNAPSHOT__ && G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=snapshot-push begin");
     G.__trueosSnapshotPushCount = 0;
-    rootId = __trueosPushSnapshotNode(snapshot, 0, ops, seen, snapshotSeen, snapshotTextVisible, snapshotTextWorld, textSlots, 0, 0) || rootId;
-    if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=snapshot-push done ops=" + ops.length);
+    rootId = __trueosPushSnapshotNode(snapshot, 0, ops, seen, snapshotSeen, snapshotTextVisible, snapshotTextWorld, textSlots, snapshotTrustedTextState, 0, 0) || rootId;
+    if (G.__TRUEOS_PIXI_VERBOSE_SNAPSHOT__ && G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=snapshot-push done ops=" + ops.length);
   }
   function __trueosMappedTextNode(commandId, textValueHasInk, commandWasSnapshotSeen) {
     return commandId;
@@ -1541,7 +1639,7 @@ G.__trueosParse5BuildSceneFromCapture = function () {
       }
   }
   if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=replay done final_text=" + finalTextOrder.length + " ops=" + ops.length + " text_seen=" + replayTextSeen + " listeners_skipped=" + replayListenersSkipped + " state=" + replayStateSeen + " skipped_snapshot_commands=" + replaySkippedSnapshotCommands);
-  var finalTextOverlayEnabled = !(hasSnapshot && snapshotRenderableText > 0);
+  var finalTextOverlayEnabled = !(hasSnapshot && (snapshotRenderableText > 0 || textSlots.length > 0));
   if (G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=final-text begin count=" + finalTextOrder.length + " overlay_enabled=" + (finalTextOverlayEnabled ? 1 : 0) + " snapshot_renderable_text=" + snapshotRenderableText);
   if (finalTextOverlayEnabled) {
     for (var ti = 0; ti < finalTextOrder.length; ti += 1) {
@@ -1690,6 +1788,10 @@ const TRUESURFER_BRIDGE_LAYOUT_BLOCKS_PROP: &[u8] = b"layoutBlocks\0";
 const TRUESURFER_BRIDGE_LAYOUT_TEXT_PROP: &[u8] = b"layoutText\0";
 const TRUESURFER_BRIDGE_LAYOUT_MAX_DEPTH_PROP: &[u8] = b"layoutMaxDepth\0";
 const TRUESURFER_BRIDGE_LAYOUT_TEXT_SAMPLES_PROP: &[u8] = b"layoutTextSamples\0";
+const TRUESURFER_BRIDGE_PREPIX_HASH_PROP: &[u8] = b"prePixiHash\0";
+const TRUESURFER_BRIDGE_PREPIX_RENDER_HASH_PROP: &[u8] = b"prePixiRenderHash\0";
+const TRUESURFER_BRIDGE_PREPIX_LAYOUT_HASH_PROP: &[u8] = b"prePixiLayoutHash\0";
+const TRUESURFER_BRIDGE_PREPIX_TRACE_BYTES_PROP: &[u8] = b"prePixiTraceBytes\0";
 const TRUESURFER_BRIDGE_MEASURE_TEXT_CALLS_PROP: &[u8] = b"measureTextCalls\0";
 const TRUESURFER_BRIDGE_SCROLLBAR_VISIBLE_PROP: &[u8] = b"scrollbarVisible\0";
 const TRUESURFER_BRIDGE_SCROLLBAR_TRACK_PROP: &[u8] = b"scrollbarTrack\0";
@@ -2125,7 +2227,15 @@ fn queue_ui3_pointer_event_for_browser_inner(
                     && event.pointer_id == pointer_id)
             });
         } else if wheel_delta_y != 0 {
-            guard.retain(|event| !is_transient_pointer(event));
+            guard.retain(|event| {
+                !is_transient_pointer(event)
+                    && !(event.kind == "wheel"
+                        && event.pointer_id == pointer_id
+                        && event.target_node == target_node)
+            });
+            while guard.len() >= TRUESURFER_UI3_POINTER_FRESH_INPUT_DEPTH {
+                guard.pop_front();
+            }
         } else if guard.len() >= TRUESURFER_UI3_POINTER_FRESH_INPUT_DEPTH {
             guard.retain(|event| !is_transient_pointer(event));
             while guard.len() >= TRUESURFER_UI3_POINTER_FRESH_INPUT_DEPTH {
@@ -2397,7 +2507,7 @@ unsafe fn read_global_string(ctx: *mut qjs::JSContext, key: &[u8]) -> String {
     let out = js_value_to_string(ctx, value);
     qjs::js_free_value(ctx, value);
     qjs::js_free_value(ctx, global);
-    strip_trueos_host_markers(out.as_str())
+    out
 }
 
 unsafe fn truesurfer_ready(ctx: *mut qjs::JSContext) -> bool {
@@ -2474,7 +2584,7 @@ unsafe fn read_result_string(
     }
     let out = js_value_to_string(ctx, value);
     qjs::js_free_value(ctx, value);
-    strip_trueos_host_markers(out.as_str())
+    out
 }
 
 unsafe fn js_value_to_string(ctx: *mut qjs::JSContext, value: qjs::JSValueConst) -> String {
@@ -2797,7 +2907,11 @@ fn find_trueos_html_tag_close(html: &str, open_start: usize) -> Option<usize> {
     None
 }
 
-fn find_trueos_html_close_tag_outside_quotes(lower: &str, tag_name: &str, start: usize) -> Option<usize> {
+fn find_trueos_html_close_tag_outside_quotes(
+    lower: &str,
+    tag_name: &str,
+    start: usize,
+) -> Option<usize> {
     let needle = {
         let mut s = String::with_capacity(tag_name.len().saturating_add(3));
         s.push_str("</");
@@ -2993,12 +3107,18 @@ unsafe fn log_parse5_trueos_bridge_stats(ctx: *mut qjs::JSContext, browser_insta
         read_result_string(ctx, stats, TRUESURFER_BRIDGE_RENDER_TEXT_SAMPLES_PROP);
     let layout_text_samples =
         read_result_string(ctx, stats, TRUESURFER_BRIDGE_LAYOUT_TEXT_SAMPLES_PROP);
+    let prepix_hash = read_result_string(ctx, stats, TRUESURFER_BRIDGE_PREPIX_HASH_PROP);
+    let prepix_render_hash =
+        read_result_string(ctx, stats, TRUESURFER_BRIDGE_PREPIX_RENDER_HASH_PROP);
+    let prepix_layout_hash =
+        read_result_string(ctx, stats, TRUESURFER_BRIDGE_PREPIX_LAYOUT_HASH_PROP);
+    let prepix_trace_bytes = read_result_u32(ctx, stats, TRUESURFER_BRIDGE_PREPIX_TRACE_BYTES_PROP);
     let pixi_ops = read_result_string(ctx, stats, TRUESURFER_BRIDGE_PIXI_OPS_PROP);
     let pixi_unsupported = read_result_string(ctx, stats, TRUESURFER_BRIDGE_PIXI_UNSUPPORTED_PROP);
     qjs::js_free_value(ctx, stats);
 
     log_line(format!(
-        "qjs-truesurfer[{}]: parse5 trueos bridge-stats render_nodes={} render_blocks={} render_text={} layout_boxes={} layout_blocks={} layout_text={} layout_depth={} measure_text_calls={} scrollbar_visible={} scrollbar_track={} scrollbar_thumb={} pixi_commands={} unsupported={}\n",
+        "qjs-truesurfer[{}]: parse5 trueos bridge-stats render_nodes={} render_blocks={} render_text={} layout_boxes={} layout_blocks={} layout_text={} layout_depth={} prepixi_hash={} prepixi_render_hash={} prepixi_layout_hash={} prepixi_bytes={} measure_text_calls={} scrollbar_visible={} scrollbar_track={} scrollbar_thumb={} pixi_commands={} unsupported={}\n",
         browser_instance_id,
         render_nodes,
         render_blocks,
@@ -3007,6 +3127,10 @@ unsafe fn log_parse5_trueos_bridge_stats(ctx: *mut qjs::JSContext, browser_insta
         layout_blocks,
         layout_text,
         layout_max_depth,
+        prepix_hash,
+        prepix_render_hash,
+        prepix_layout_hash,
+        prepix_trace_bytes,
         measure_text_calls,
         scrollbar_visible,
         scrollbar_track,
@@ -3548,7 +3672,16 @@ unsafe fn submit_parse5_trueos_pixi_scene(
         ));
     }
     let host_ms = now_ms().saturating_sub(host_start_ms);
+    log_line(format!(
+        "qjs-truesurfer[{}]: parse5 trueos host globals set input_html begin bytes={}\n",
+        browser_instance_id,
+        html.len()
+    ));
     set_global_string(ctx, TRUESURFER_TRUEOS_INPUT_HTML_PROP, html);
+    log_line(format!(
+        "qjs-truesurfer[{}]: parse5 trueos host globals set input_html done\n",
+        browser_instance_id
+    ));
     let rust_text_rows = collect_trueos_html_text_rows(html);
     let published_text_rows = collect_trueos_text_rows_from_lines(widget_text_rows_text);
     let repair_text_rows = if published_text_rows.is_empty() {
@@ -3558,18 +3691,36 @@ unsafe fn submit_parse5_trueos_pixi_scene(
     };
     let repaired_widget_render_tree_json =
         replace_widget_tree_json_text_rows(widget_render_tree_json, repair_text_rows);
+    log_line(format!(
+        "qjs-truesurfer[{}]: parse5 trueos host globals set tree_json begin bytes={}\n",
+        browser_instance_id,
+        repaired_widget_render_tree_json.len()
+    ));
     set_global_string(
         ctx,
         TRUESURFER_TRUEOS_WIDGET_RENDER_TREE_JSON_PROP,
         repaired_widget_render_tree_json.as_str(),
     );
+    log_line(format!(
+        "qjs-truesurfer[{}]: parse5 trueos host globals set tree_json done\n",
+        browser_instance_id
+    ));
     let text_rows_text = repair_text_rows.join("\n");
-    set_global_string(ctx, TRUESURFER_TRUEOS_WIDGET_TEXT_ROWS_TEXT_PROP, text_rows_text.as_str());
-    set_global_string_array(
-        ctx,
-        TRUESURFER_TRUEOS_WIDGET_TEXT_ROWS_PROP,
-        repair_text_rows,
-    );
+    log_line(format!(
+        "qjs-truesurfer[{}]: parse5 trueos host globals set text_rows_text skipped bytes={} reason=trusted-array\n",
+        browser_instance_id,
+        text_rows_text.len()
+    ));
+    log_line(format!(
+        "qjs-truesurfer[{}]: parse5 trueos host globals set text_rows_array begin rows={}\n",
+        browser_instance_id,
+        repair_text_rows.len()
+    ));
+    set_global_string_array(ctx, TRUESURFER_TRUEOS_WIDGET_TEXT_ROWS_PROP, repair_text_rows);
+    log_line(format!(
+        "qjs-truesurfer[{}]: parse5 trueos host globals set text_rows_array done\n",
+        browser_instance_id
+    ));
     let input_html_after_set = read_global_string(ctx, TRUESURFER_TRUEOS_INPUT_HTML_PROP);
     let mut text_row_samples = String::new();
     for (idx, row) in repair_text_rows.iter().take(8).enumerate() {
@@ -3950,6 +4101,10 @@ unsafe fn dispatch_queued_ui3_pointer_events(
         let Some(event) = take_queued_ui3_pointer_event_for_browser(browser_instance_id) else {
             break;
         };
+        if event.kind == "pointermove" && event.buttons == 0 && event.wheel_delta_y == 0 {
+            dispatched = dispatched.saturating_add(1);
+            continue;
+        }
         let global = qjs::JS_GetGlobalObject(ctx);
         let dispatch = qjs::JS_GetPropertyStr(
             ctx,

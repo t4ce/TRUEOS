@@ -69,9 +69,15 @@ declare global {
     __TRUEOS_PIXI_APP_PHASE__?: string;
     __TRUEOS_PIXI_LAYOUT_STEP__?: string;
     __TRUEOS_PIXI_DIRTY__?: boolean;
+    __TRUEOS_PIXI_REPAINT_REQUIRED__?: boolean;
+    __TRUEOS_PIXI_SCROLL_REPAINT_REQUIRED__?: boolean;
     __TRUEOS_REPAINT_NOW__?: () => void;
     __TRUEOS_PIXI_BRIDGE_STATS__?: TrueosBridgeStats;
     __TRUEOS_PIXI_LAST_LAYOUT__?: LayoutBox;
+    __TRUEOS_PIXI_PREPIX_TRACE__?: string;
+    __TRUEOS_PIXI_PREPIX_HASH__?: string;
+    __TRUEOS_PIXI_PREPIX_RENDER_HASH__?: string;
+    __TRUEOS_PIXI_PREPIX_LAYOUT_HASH__?: string;
     __TRUEOS_PIXI_LAYOUT_TEXT_OVERLAYS__?: Array<{ x: number; y: number; text: string }>;
     __TRUEOS_WIDGET_RENDER_TREE__?: unknown;
     __TRUEOS_WIDGET_TEXT_ROWS__?: unknown;
@@ -123,6 +129,11 @@ type TrueosBridgeStats = {
   layoutText: number;
   layoutMaxDepth: number;
   layoutTextSamples: string;
+  layoutWidgetSamples: string;
+  prePixiHash: string;
+  prePixiRenderHash: string;
+  prePixiLayoutHash: string;
+  prePixiTraceBytes: number;
   measureTextCalls: number;
   scrollbarVisible: number;
   scrollbarTrack: string;
@@ -138,6 +149,13 @@ type TrueosTreeStats = {
   text: number;
   maxDepth: number;
   tags: Record<string, number>;
+};
+
+type PrePixiTraceInfo = {
+  hash: string;
+  renderHash: string;
+  layoutHash: string;
+  bytes: number;
 };
 
 const SCROLLBAR_PAD = 6;
@@ -239,6 +257,8 @@ const uiState = {
       rect: { x: number; y: number; w: number; h: number };
     }
   >(),
+  iframeScrollRoots: new Map<string, Container>(),
+  iframeScrollbarGraphics: new Map<string, Graphics>(),
   // Frame-ordered iframe rects for event routing (deepest wins by iterating from end).
   iframeRects: [] as Array<{ key: string; x: number; y: number; w: number; h: number }>,
 
@@ -308,6 +328,140 @@ function compactCounts(counts: Record<string, number>, limit = 16): string {
     .slice(0, limit)
     .map(([name, count]) => `${name}:${count}`)
     .join(',');
+}
+
+function stableHashText(value: string): string {
+  let h = (0x811c9dc5 ^ value.length) >>> 0;
+  const mixRange = (start: number, end: number) => {
+    for (let i = start; i < end; i += 1) {
+      const code = value.charCodeAt(i);
+      h = (h + (code & 0xffff)) >>> 0;
+      h = (h + (h << 10)) >>> 0;
+      h ^= h >>> 6;
+    }
+  };
+  const len = value.length;
+  const windowSize = 4096;
+  if (len <= windowSize * 3) {
+    mixRange(0, len);
+  } else {
+    mixRange(0, windowSize);
+    const mid = Math.max(windowSize, Math.floor((len - windowSize) / 2));
+    mixRange(mid, Math.min(len, mid + windowSize));
+    mixRange(Math.max(0, len - windowSize), len);
+  }
+  h = (h + (h << 3)) >>> 0;
+  h ^= h >>> 11;
+  h = (h + (h << 15)) >>> 0;
+  return `0x${h.toString(16).padStart(8, '0')}`;
+}
+
+function exactStableHashText(value: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    h ^= code & 0xff;
+    h = Math.imul(h, 0x01000193) >>> 0;
+    const hi = code >>> 8;
+    if (hi !== 0) {
+      h ^= hi & 0xff;
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+  }
+  return `0x${h.toString(16).padStart(8, '0')}`;
+}
+
+function canonicalAttrs(attrs?: Record<string, string>): Record<string, string> | undefined {
+  if (!attrs) return undefined;
+  const out: Record<string, string> = {};
+  for (const key of Object.keys(attrs).sort()) {
+    out[key] = typeof attrs[key] === 'string' ? attrs[key] : String(attrs[key] ?? '');
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function canonicalRenderNode(node: RenderNode): unknown {
+  if (node.kind === 'text') return { kind: 'text', text: node.text };
+  return {
+    kind: 'block',
+    key: node.key,
+    tagName: node.tagName,
+    attrs: canonicalAttrs(node.attrs),
+    children: node.children.map(canonicalRenderNode),
+  };
+}
+
+function canonicalLayoutBox(box: LayoutBox): unknown {
+  if (box.kind === 'text') {
+    return {
+      kind: 'text',
+      text: box.text ?? '',
+      x: box.x,
+      y: box.y,
+      width: box.width,
+      height: box.height,
+      children: [],
+    };
+  }
+  return {
+    kind: 'block',
+    key: box.key ?? '',
+    tagName: box.tagName ?? '',
+    attrs: canonicalAttrs(box.attrs),
+    x: box.x,
+    y: box.y,
+    width: box.width,
+    height: box.height,
+    children: box.children.map(canonicalLayoutBox),
+  };
+}
+
+function publishPrePixiTrace(
+  source: string,
+  renderNodes: RenderNode[],
+  layout: LayoutBox,
+  viewportWidth: number,
+  viewportHeight: number
+): PrePixiTraceInfo {
+  logTrueosCapture('[trueos pixi widgets] prepixi stage=canonical-render begin');
+  const renderCanonical = renderNodes.map(canonicalRenderNode);
+  logTrueosCapture('[trueos pixi widgets] prepixi stage=canonical-render done');
+  logTrueosCapture('[trueos pixi widgets] prepixi stage=canonical-layout begin');
+  const layoutCanonical = canonicalLayoutBox(layout);
+  logTrueosCapture('[trueos pixi widgets] prepixi stage=canonical-layout done');
+  logTrueosCapture('[trueos pixi widgets] prepixi stage=stringify begin');
+  const renderJson = JSON.stringify(renderCanonical);
+  const layoutJson = JSON.stringify(layoutCanonical);
+  logTrueosCapture(
+    `[trueos pixi widgets] prepixi stage=stringify done render_bytes=${renderJson.length} layout_bytes=${layoutJson.length}`
+  );
+  logTrueosCapture('[trueos pixi widgets] prepixi stage=hash begin');
+  const renderHash = stableHashText(renderJson);
+  const layoutHash = stableHashText(layoutJson);
+  const hash = stableHashText(`${renderJson}\n${layoutJson}`);
+  logTrueosCapture('[trueos pixi widgets] prepixi stage=hash done');
+  logTrueosCapture('[trueos pixi widgets] prepixi stage=trace-stringify begin');
+  const trace = JSON.stringify({
+    version: 1,
+    source,
+    viewport: { width: viewportWidth, height: viewportHeight },
+    renderHash,
+    layoutHash,
+    hash,
+    renderNodes: renderCanonical,
+    layout: layoutCanonical,
+  });
+  logTrueosCapture(`[trueos pixi widgets] prepixi stage=trace-stringify done bytes=${trace.length}`);
+  window.__TRUEOS_PIXI_PREPIX_TRACE__ = trace;
+  window.__TRUEOS_PIXI_PREPIX_HASH__ = hash;
+  window.__TRUEOS_PIXI_PREPIX_RENDER_HASH__ = renderHash;
+  window.__TRUEOS_PIXI_PREPIX_LAYOUT_HASH__ = layoutHash;
+  if (isTrueosCaptureOnly()) {
+    console.log(
+      `[trueos pixi widgets] prepixi source=${source} hash=${hash} render_hash=${renderHash} layout_hash=${layoutHash} bytes=${trace.length}`
+    );
+  }
+  return { hash, renderHash, layoutHash, bytes: trace.length };
 }
 
 function stripTrueosCapturePrefix(value: unknown): string {
@@ -494,6 +648,13 @@ function sampleRawTextForLog(text: string, limit = 120): string {
   return out;
 }
 
+function isUsableTrueosInputHtml(value: string): boolean {
+  if (value.length <= 0 || value.length > 1_000_000) return false;
+  if (value.indexOf('\0') >= 0) return false;
+  const sample = value.slice(0, 256).trimStart().toLowerCase();
+  return sample.startsWith('<!doctype') || sample.startsWith('<html') || sample.startsWith('<body') || sample.startsWith('<');
+}
+
 function summarizeRenderTextSamples(nodes: RenderNode[], limit = 12): string {
   const samples: string[] = [];
   const walk = (node: RenderNode, parentTag: string, parentKey: string) => {
@@ -534,6 +695,40 @@ function summarizeLayoutTextSamples(root: LayoutBox, limit = 12): string {
     }
   };
   walk(root, 'root', '');
+  return samples.join('|');
+}
+
+function summarizeLayoutWidgetSamples(root: LayoutBox, limit = 24): string {
+  const samples: string[] = [];
+  const interesting = new Set([
+    'label',
+    'input',
+    'timeinput',
+    'dateinput',
+    'monthinput',
+    'weekinput',
+    'datetimelocalinput',
+    'button',
+    'select',
+    'searchrow',
+    'searchbutton',
+  ]);
+  const walk = (box: LayoutBox, parentTag: string, ox: number, oy: number) => {
+    if (samples.length >= limit) return;
+    const x = ox + box.x;
+    const y = oy + box.y;
+    if (box.kind === 'block') {
+      const tag = stripTrueosCapturePrefix(box.tagName || 'block') || 'block';
+      if (interesting.has(tag)) {
+        const text = sampleTextForLog(collectLayoutBoxText(box), 36);
+        samples.push(
+          `#${samples.length}@${parentTag}>${tag}:${box.key ?? ''} box=${Math.round(x)},${Math.round(y)},${Math.round(box.width)},${Math.round(box.height)} text="${text}"`
+        );
+      }
+      for (const child of box.children) walk(child, tag, x, y);
+    }
+  };
+  walk(root, 'root', 0, 0);
   return samples.join('|');
 }
 
@@ -1051,7 +1246,9 @@ function publishTrueosBridgeStats(
   renderStats: TrueosTreeStats,
   layoutStats: TrueosTreeStats,
   renderTextSamples: string,
-  layoutTextSamples: string
+  layoutTextSamples: string,
+  layoutWidgetSamples = '',
+  prePixi: PrePixiTraceInfo = { hash: '', renderHash: '', layoutHash: '', bytes: 0 }
 ): void {
   if (!isTrueosCaptureOnly()) return;
   const pixi = summarizePixiCommands();
@@ -1066,6 +1263,11 @@ function publishTrueosBridgeStats(
     layoutText: layoutStats.text,
     layoutMaxDepth: layoutStats.maxDepth,
     layoutTextSamples,
+    layoutWidgetSamples,
+    prePixiHash: prePixi.hash,
+    prePixiRenderHash: prePixi.renderHash,
+    prePixiLayoutHash: prePixi.layoutHash,
+    prePixiTraceBytes: prePixi.bytes,
     measureTextCalls: trueosMeasureTextCalls,
     scrollbarVisible: uiState.scroll.track.h > 0 ? 1 : 0,
     scrollbarTrack: `${Math.round(uiState.scroll.track.x)},${Math.round(uiState.scroll.track.y)},${Math.round(uiState.scroll.track.w)},${Math.round(uiState.scroll.track.h)}`,
@@ -1172,11 +1374,56 @@ function isTrueosCaptureOnly(): boolean {
 }
 
 function setTrueosPhase(phase: string): void {
-  if (isTrueosCaptureOnly()) window.__TRUEOS_PIXI_APP_PHASE__ = phase;
+  if (!isTrueosCaptureOnly()) return;
+  window.__TRUEOS_PIXI_APP_PHASE__ = phase;
+  const tracePhases: Record<string, true> = {
+    'main:start': true,
+    'main:yoga': true,
+    'main:create-app': true,
+    'main:attach-capture': true,
+    'main:append-canvas': true,
+    'main:capture-flags': true,
+    'main:canvas-listeners': true,
+    'main:stage:done': true,
+    'main:roots': true,
+    'main:text-measure': true,
+    'main:html': true,
+    'main:render-tree': true,
+    'main:first-rerender': true,
+    'main:layout-build': true,
+    'main:layout-commit': true,
+    'main:paint:clamp': true,
+    'main:paint:render-to-pixi': true,
+    'main:paint:scrollbar': true,
+    'main:paint:renderer-render': true,
+    'main:paint:done': true,
+    'main:cursor-setup': true,
+    'main:input-listeners': true,
+    'main:done': true,
+  };
+  if (!tracePhases[phase]) return;
+  const win = window as any;
+  const seen = win.__TRUEOS_PIXI_PHASE_TRACE_SEEN__ ?? (win.__TRUEOS_PIXI_PHASE_TRACE_SEEN__ = {});
+  if (seen[phase]) return;
+  seen[phase] = 1;
+  console.log(`[Trace] [pixi] phase=${phase}`);
 }
 
 function setTrueosLayoutStep(step: string): void {
   if (isTrueosCaptureOnly()) window.__TRUEOS_PIXI_LAYOUT_STEP__ = step;
+}
+
+function logTrueosCapture(message: string): void {
+  if (isTrueosCaptureOnly()) console.log(message);
+}
+
+function logTrueosCaptureBounded(key: string, limit: number, message: string): void {
+  if (!isTrueosCaptureOnly()) return;
+  const countKey = `__TRUEOS_${key}_LOG_COUNT__`;
+  const count = Number((window as any)[countKey] ?? 0) || 0;
+  if (count >= limit) return;
+  (window as any)[countKey] = count + 1;
+  console.log(message);
 }
 
 function describeStartupError(err: unknown): string {
@@ -1231,12 +1478,23 @@ function createCaptureOnlyYoga() {
   const EDGE_BOTTOM = 3;
   const FLEX_DIRECTION_COLUMN = 0;
   const FLEX_DIRECTION_ROW = 1;
+  const ALIGN_STRETCH = 0;
+  const ALIGN_CENTER = 1;
+  const ALIGN_FLEX_START = 2;
+  const JUSTIFY_CENTER = 0;
+  const JUSTIFY_FLEX_START = 1;
+  const JUSTIFY_SPACE_BETWEEN = 2;
+  const WRAP_WRAP = 1;
+  const WRAP_NO_WRAP = 0;
   const POSITION_TYPE_RELATIVE = 0;
   const POSITION_TYPE_ABSOLUTE = 1;
   const MEASURE_MODE_UNDEFINED = 0;
+  let layoutCallCount = 0;
+  let layoutLogCount = 0;
+  const layoutCallBudget = 20000;
 
-  class Node {
-    children: Node[];
+  type CaptureYogaNode = {
+    children: CaptureYogaNode[];
     measureFunc: ((width: number, widthMode: number) => { width: number; height: number }) | null;
     paddingLeft: number;
     paddingTop: number;
@@ -1251,92 +1509,132 @@ function createCaptureOnlyYoga() {
     minWidth: number;
     minHeight: number;
     flexDirection: number;
+    alignItems: number;
+    justifyContent: number;
+    flexWrap: number;
     positionType: number;
     positionLeft: number | null;
     positionTop: number | null;
     positionRight: number | null;
     positionBottom: number | null;
     computed: { left: number; top: number; width: number; height: number };
+    debugLabel: string;
+    setMeasureFunc(fn: CaptureYogaNode['measureFunc']): void;
+    setMargin(edge: number, value: number): void;
+    setPadding(edge: number, value: number): void;
+    setFlexDirection(value: number): void;
+    setAlignItems(value: number): void;
+    setJustifyContent(value: number): void;
+    setFlexWrap(value: number): void;
+    setFlexGrow(value: number): void;
+    setFlexShrink(value: number): void;
+    setAlignSelf(value: number): void;
+    setPositionType(value: number): void;
+    setPosition(edge: number, value: number): void;
+    setWidth(value: number): void;
+    setHeight(value: number): void;
+    setMinWidth(value: number): void;
+    setMinHeight(value: number): void;
+    insertChild(child: CaptureYogaNode, index: number): void;
+    getChildCount(): number;
+    getComputedLeft(): number;
+    getComputedTop(): number;
+    getComputedWidth(): number;
+    getComputedHeight(): number;
+    freeRecursive(): void;
+    calculateLayout(width?: number, height?: number): void;
+    layout(x: number, y: number, availableW: number, availableH: number): void;
+  };
 
-    constructor() {
-      this.children = [];
-      this.measureFunc = null;
-      this.paddingLeft = 0;
-      this.paddingTop = 0;
-      this.paddingRight = 0;
-      this.paddingBottom = 0;
-      this.marginLeft = 0;
-      this.marginTop = 0;
-      this.marginRight = 0;
-      this.marginBottom = 0;
-      this.width = 0;
-      this.height = 0;
-      this.minWidth = 0;
-      this.minHeight = 0;
-      this.flexDirection = FLEX_DIRECTION_COLUMN;
-      this.positionType = POSITION_TYPE_RELATIVE;
-      this.positionLeft = null;
-      this.positionTop = null;
-      this.positionRight = null;
-      this.positionBottom = null;
-      this.computed = { left: 0, top: 0, width: 0, height: 0 };
-    }
-
-    static create() {
-      return new Node();
-    }
-
-    setMeasureFunc(fn: Node['measureFunc']) { this.measureFunc = fn; }
-    setMargin(edge: number, value: number) {
+  const createNode = (): CaptureYogaNode => ({
+    children: [],
+    measureFunc: null,
+    paddingLeft: 0,
+    paddingTop: 0,
+    paddingRight: 0,
+    paddingBottom: 0,
+    marginLeft: 0,
+    marginTop: 0,
+    marginRight: 0,
+    marginBottom: 0,
+    width: 0,
+    height: 0,
+    minWidth: 0,
+    minHeight: 0,
+    flexDirection: FLEX_DIRECTION_COLUMN,
+    alignItems: ALIGN_STRETCH,
+    justifyContent: JUSTIFY_FLEX_START,
+    flexWrap: WRAP_NO_WRAP,
+    positionType: POSITION_TYPE_RELATIVE,
+    positionLeft: null,
+    positionTop: null,
+    positionRight: null,
+    positionBottom: null,
+    computed: { left: 0, top: 0, width: 0, height: 0 },
+    debugLabel: 'node',
+    setMeasureFunc(fn) { this.measureFunc = fn; },
+    setMargin(edge, value) {
       const v = Number(value) || 0;
       if (edge === EDGE_LEFT) this.marginLeft = v;
       else if (edge === EDGE_TOP) this.marginTop = v;
       else if (edge === EDGE_RIGHT) this.marginRight = v;
       else if (edge === EDGE_BOTTOM) this.marginBottom = v;
-    }
-    setPadding(edge: number, value: number) {
+    },
+    setPadding(edge, value) {
       const v = Number(value) || 0;
       if (edge === EDGE_LEFT) this.paddingLeft = v;
       else if (edge === EDGE_TOP) this.paddingTop = v;
       else if (edge === EDGE_RIGHT) this.paddingRight = v;
       else if (edge === EDGE_BOTTOM) this.paddingBottom = v;
-    }
-    setFlexDirection(value: number) { this.flexDirection = value; }
-    setAlignItems(_value: number) {}
-    setJustifyContent(_value: number) {}
-    setFlexWrap(_value: number) {}
-    setFlexGrow(_value: number) {}
-    setFlexShrink(_value: number) {}
-    setAlignSelf(_value: number) {}
-    setPositionType(value: number) {
+    },
+    setFlexDirection(value) { this.flexDirection = value; },
+    setAlignItems(value) { this.alignItems = Number(value) || ALIGN_STRETCH; },
+    setJustifyContent(value) { this.justifyContent = Number(value) || JUSTIFY_CENTER; },
+    setFlexWrap(value) { this.flexWrap = Number(value) === WRAP_WRAP ? WRAP_WRAP : WRAP_NO_WRAP; },
+    setFlexGrow(_value) {},
+    setFlexShrink(_value) {},
+    setAlignSelf(_value) {},
+    setPositionType(value) {
       this.positionType = Number(value) === POSITION_TYPE_ABSOLUTE ? POSITION_TYPE_ABSOLUTE : POSITION_TYPE_RELATIVE;
-    }
-    setPosition(edge: number, value: number) {
+    },
+    setPosition(edge, value) {
       const v = Number(value) || 0;
       if (edge === EDGE_LEFT) this.positionLeft = v;
       else if (edge === EDGE_TOP) this.positionTop = v;
       else if (edge === EDGE_RIGHT) this.positionRight = v;
       else if (edge === EDGE_BOTTOM) this.positionBottom = v;
-    }
-    setWidth(value: number) { this.width = Math.max(0, Number(value) || 0); }
-    setHeight(value: number) { this.height = Math.max(0, Number(value) || 0); }
-    setMinWidth(value: number) { this.minWidth = Math.max(0, Number(value) || 0); }
-    setMinHeight(value: number) { this.minHeight = Math.max(0, Number(value) || 0); }
-    insertChild(child: Node, index: number) {
+    },
+    setWidth(value) { this.width = Math.max(0, Number(value) || 0); },
+    setHeight(value) { this.height = Math.max(0, Number(value) || 0); },
+    setMinWidth(value) { this.minWidth = Math.max(0, Number(value) || 0); },
+    setMinHeight(value) { this.minHeight = Math.max(0, Number(value) || 0); },
+    insertChild(child, index) {
       this.children.splice(Math.max(0, Math.min(index, this.children.length)), 0, child);
-    }
-    getChildCount() { return this.children.length; }
-    getComputedLeft() { return this.computed.left; }
-    getComputedTop() { return this.computed.top; }
-    getComputedWidth() { return this.computed.width; }
-    getComputedHeight() { return this.computed.height; }
-    freeRecursive() {}
-
-    calculateLayout(width = this.width, height = this.height) {
+    },
+    getChildCount() { return this.children.length; },
+    getComputedLeft() { return this.computed.left; },
+    getComputedTop() { return this.computed.top; },
+    getComputedWidth() { return this.computed.width; },
+    getComputedHeight() { return this.computed.height; },
+    freeRecursive() {},
+    calculateLayout(this: CaptureYogaNode, width = this.width, height = this.height) {
       this.layout(0, 0, Math.max(1, Number(width) || this.width || 1), Math.max(1, Number(height) || this.height || 1));
-    }
-
-    private layout(x: number, y: number, availableW: number, availableH: number) {
+    },
+    layout(this: CaptureYogaNode, x, y, availableW, availableH) {
+      layoutCallCount += 1;
+      if (layoutCallCount <= 80 || layoutCallCount % 500 === 0) {
+        layoutLogCount += 1;
+        if (layoutLogCount <= 140) {
+          logTrueosCapture(
+            `[trueos pixi widgets] yoga-layout-call #${layoutCallCount} label="${this.debugLabel}" children=${this.children.length} flex=${this.flexDirection} pos=${this.positionType} xy=${Math.round(x)},${Math.round(y)} avail=${Math.round(availableW)}x${Math.round(availableH)} own=${Math.round(this.width)}x${Math.round(this.height)} min=${Math.round(this.minWidth)}x${Math.round(this.minHeight)}`
+          );
+        }
+      }
+      if (layoutCallCount > layoutCallBudget) {
+        throw new Error(
+          `capture yoga layout budget exceeded count=${layoutCallCount} label="${this.debugLabel}" children=${this.children.length} flex=${this.flexDirection} pos=${this.positionType} avail=${Math.round(availableW)}x${Math.round(availableH)}`
+        );
+      }
       const padX = this.paddingLeft + this.paddingRight;
       const padY = this.paddingTop + this.paddingBottom;
       const ownW = Math.max(this.minWidth, this.width || availableW);
@@ -1356,8 +1654,15 @@ function createCaptureOnlyYoga() {
       if (this.flexDirection === FLEX_DIRECTION_ROW) {
         let cx = this.paddingLeft;
         let rowH = 0;
-        const flowChildren = this.children.filter((child) => child.positionType !== POSITION_TYPE_ABSOLUTE);
-        const flowCount = Math.max(1, flowChildren.length);
+        const childCount = Math.max(1, this.children.length);
+        for (const child of this.children) {
+          if (child.positionType === POSITION_TYPE_ABSOLUTE) continue;
+          const childW = child.width || child.minWidth || Math.max(24, (ownW - padX) / childCount);
+          child.layout(cx + child.marginLeft, this.paddingTop + child.marginTop, childW, availableH);
+          cx += child.computed.width + child.marginLeft + child.marginRight;
+          rowH = Math.max(rowH, child.computed.height + child.marginTop + child.marginBottom);
+        }
+
         for (const child of this.children) {
           if (child.positionType === POSITION_TYPE_ABSOLUTE) {
             const childW = child.width || child.minWidth || Math.max(0, ownW - padX - child.marginLeft - child.marginRight);
@@ -1371,12 +1676,7 @@ function createCaptureOnlyYoga() {
                 ? this.paddingTop + child.positionTop
                 : Math.max(0, ownH - this.paddingBottom - (child.positionBottom ?? 0) - childH);
             child.layout(ax + child.marginLeft, ay + child.marginTop, childW, childH);
-            continue;
           }
-          const childW = child.width || child.minWidth || Math.max(24, (ownW - padX) / flowCount);
-          child.layout(cx + child.marginLeft, this.paddingTop + child.marginTop, childW, availableH);
-          cx += child.computed.width + child.marginLeft + child.marginRight;
-          rowH = Math.max(rowH, child.computed.height + child.marginTop + child.marginBottom);
         }
         ownH = Math.max(ownH, rowH + padY);
       } else {
@@ -1403,8 +1703,12 @@ function createCaptureOnlyYoga() {
         ownH = Math.max(ownH, cy + this.paddingBottom);
       }
       this.computed.height = Math.max(this.minHeight, ownH);
-    }
-  }
+    },
+  });
+
+  const Node = {
+    create: createNode,
+  };
 
   return {
     Node,
@@ -1415,14 +1719,14 @@ function createCaptureOnlyYoga() {
     FLEX_DIRECTION_COLUMN,
     FLEX_DIRECTION_ROW,
     FLEX_DIRECTION_ROW_REVERSE: FLEX_DIRECTION_ROW,
-    ALIGN_STRETCH: 0,
-    ALIGN_CENTER: 1,
-    ALIGN_FLEX_START: 2,
-    JUSTIFY_CENTER: 0,
-    JUSTIFY_FLEX_START: 1,
-    JUSTIFY_SPACE_BETWEEN: 2,
-    WRAP_WRAP: 1,
-    WRAP_NO_WRAP: 0,
+    ALIGN_STRETCH,
+    ALIGN_CENTER,
+    ALIGN_FLEX_START,
+    JUSTIFY_CENTER,
+    JUSTIFY_FLEX_START,
+    JUSTIFY_SPACE_BETWEEN,
+    WRAP_WRAP,
+    WRAP_NO_WRAP,
     POSITION_TYPE_RELATIVE,
     POSITION_TYPE_ABSOLUTE,
     DIRECTION_LTR: 0,
@@ -1680,6 +1984,10 @@ function createTextMeasurer(font: string) {
 
 function buildLayoutTree(renderNodes: RenderNode[], viewportWidth: number, viewportHeight: number): LayoutBox {
   setTrueosLayoutStep(`build:start nodes=${renderNodes.length} viewport=${viewportWidth}x${viewportHeight}`);
+  (window as any).__TRUEOS_PIXI_LAYOUT_BUILD_COUNT__ = 0;
+  logTrueosCapture(
+    `[trueos pixi widgets] layout-build begin nodes=${renderNodes.length} viewport=${viewportWidth}x${viewportHeight}`
+  );
   const padding = 12;
   const gap = 8;
 
@@ -1696,11 +2004,23 @@ function buildLayoutTree(renderNodes: RenderNode[], viewportWidth: number, viewp
     return gap;
   }
 
+  let layoutBoxBuildCount = 0;
+  function noteLayoutBoxBuild(label: string): void {
+    layoutBoxBuildCount += 1;
+    if (layoutBoxBuildCount <= 140 || layoutBoxBuildCount % 250 === 0) {
+      logTrueosCapture(`[trueos pixi widgets] layout-box-build #${layoutBoxBuildCount} label="${label}"`);
+    }
+    if (layoutBoxBuildCount > 5000) {
+      throw new Error(`layout box build budget exceeded count=${layoutBoxBuildCount} label="${label}"`);
+    }
+  }
+
   function yogaForNode(node: RenderNode): { yogaNode: any; buildBox: () => LayoutBox } {
     const nodeLabel = node.kind === 'text' ? `text:${node.text.slice(0, 24)}` : `${node.tagName}:${node.key}`;
     setTrueosLayoutStep(`node:${nodeLabel}:start`);
     if (node.kind === 'text') {
       const yogaNode = Yoga.Node.create();
+      (yogaNode as any).debugLabel = nodeLabel;
       setTrueosLayoutStep(`node:${nodeLabel}:measure-func`);
       yogaNode.setMeasureFunc((width: number, widthMode: number) => {
         setTrueosLayoutStep(`node:${nodeLabel}:measure-call`);
@@ -1714,15 +2034,18 @@ function buildLayoutTree(renderNodes: RenderNode[], viewportWidth: number, viewp
 
       return {
         yogaNode,
-        buildBox: () => ({
-          kind: 'text',
-          text: node.text,
-          x: yogaNode.getComputedLeft(),
-          y: yogaNode.getComputedTop(),
-          width: yogaNode.getComputedWidth(),
-          height: yogaNode.getComputedHeight(),
-          children: [],
-        }),
+        buildBox: () => {
+          noteLayoutBoxBuild(nodeLabel);
+          return {
+            kind: 'text',
+            text: node.text,
+            x: yogaNode.getComputedLeft(),
+            y: yogaNode.getComputedTop(),
+            width: yogaNode.getComputedWidth(),
+            height: yogaNode.getComputedHeight(),
+            children: [],
+          };
+        },
       };
     }
 
@@ -1734,6 +2057,7 @@ function buildLayoutTree(renderNodes: RenderNode[], viewportWidth: number, viewp
 
     setTrueosLayoutStep(`node:${node.tagName}:${node.key}:create`);
     const yogaNode = Yoga.Node.create();
+    (yogaNode as any).debugLabel = nodeLabel;
 
     setTrueosLayoutStep(`node:${node.tagName}:${node.key}:base-defaults`);
     yogaNode.setFlexDirection(Yoga.FLEX_DIRECTION_COLUMN);
@@ -1904,9 +2228,21 @@ function buildLayoutTree(renderNodes: RenderNode[], viewportWidth: number, viewp
 
     setTrueosLayoutStep(`node:${node.tagName}:${node.key}:children-effective`);
     const effectiveChildren = getEffectiveDetailsChildren(node as any, uiState.detailsOpen) as RenderNode[];
+    const buildCount = Number(((window as any).__TRUEOS_PIXI_LAYOUT_BUILD_COUNT__ ?? 0)) + 1;
+    (window as any).__TRUEOS_PIXI_LAYOUT_BUILD_COUNT__ = buildCount;
+    if (buildCount <= 120 || buildCount % 50 === 0) {
+      logTrueosCapture(
+        `[trueos pixi widgets] layout-build-node #${buildCount} label="${nodeLabel}" children=${node.children.length} effective=${effectiveChildren.length}`
+      );
+    }
 
     setTrueosLayoutStep(`node:${node.tagName}:${node.key}:children-map count=${effectiveChildren.length}`);
     const childPairs = effectiveChildren.map(yogaForNode);
+    if (buildCount <= 120 || buildCount % 50 === 0) {
+      logTrueosCapture(
+        `[trueos pixi widgets] layout-build-node-mapped #${buildCount} label="${nodeLabel}" pairs=${childPairs.length}`
+      );
+    }
     setTrueosLayoutStep(`node:${node.tagName}:${node.key}:children-insert`);
     for (let i = 0; i < childPairs.length; i++) {
       const childRender = effectiveChildren[i];
@@ -1920,21 +2256,25 @@ function buildLayoutTree(renderNodes: RenderNode[], viewportWidth: number, viewp
 
     return {
       yogaNode,
-      buildBox: () => ({
-        kind: 'block',
-        key: node.key,
-        tagName: node.tagName,
-        attrs: node.attrs,
-        x: yogaNode.getComputedLeft(),
-        y: yogaNode.getComputedTop(),
-        width: yogaNode.getComputedWidth(),
-        height: yogaNode.getComputedHeight(),
-        children: childPairs.map((c) => c.buildBox()),
-      }),
+      buildBox: () => {
+        noteLayoutBoxBuild(nodeLabel);
+        return {
+          kind: 'block',
+          key: node.key,
+          tagName: node.tagName,
+          attrs: node.attrs,
+          x: yogaNode.getComputedLeft(),
+          y: yogaNode.getComputedTop(),
+          width: yogaNode.getComputedWidth(),
+          height: yogaNode.getComputedHeight(),
+          children: childPairs.map((c) => c.buildBox()),
+        };
+      },
     };
   }
 
   const rootYoga = Yoga.Node.create();
+  (rootYoga as any).debugLabel = 'root';
   setTrueosLayoutStep('root:flex-direction');
   rootYoga.setFlexDirection(Yoga.FLEX_DIRECTION_COLUMN);
   setTrueosLayoutStep('root:align-items');
@@ -1954,8 +2294,10 @@ function buildLayoutTree(renderNodes: RenderNode[], viewportWidth: number, viewp
   rootYoga.setPadding(Yoga.EDGE_BOTTOM, 16);
 
   setTrueosLayoutStep(`root:children-map count=${renderNodes.length}`);
+  logTrueosCapture(`[trueos pixi widgets] layout-root children-map count=${renderNodes.length}`);
   const pairs = renderNodes.map(yogaForNode);
   setTrueosLayoutStep('root:children-insert');
+  logTrueosCapture(`[trueos pixi widgets] layout-root children-insert pairs=${pairs.length}`);
   for (let i = 0; i < pairs.length; i++) {
     const renderNode = renderNodes[i];
     const pair = pairs[i];
@@ -1967,9 +2309,13 @@ function buildLayoutTree(renderNodes: RenderNode[], viewportWidth: number, viewp
   }
 
   setTrueosLayoutStep('root:calculate');
+  logTrueosCapture('[trueos pixi widgets] layout-root calculate begin');
   rootYoga.calculateLayout(viewportWidth, viewportHeight, Yoga.DIRECTION_LTR);
+  logTrueosCapture('[trueos pixi widgets] layout-root calculate done');
 
   setTrueosLayoutStep('root:build-box');
+  logTrueosCapture('[trueos pixi widgets] layout-root build-box begin');
+  noteLayoutBoxBuild('root');
   const box: LayoutBox = {
     kind: 'block',
     tagName: 'root',
@@ -1979,6 +2325,7 @@ function buildLayoutTree(renderNodes: RenderNode[], viewportWidth: number, viewp
     height: rootYoga.getComputedHeight(),
     children: pairs.map((p) => p.buildBox()),
   };
+  logTrueosCapture(`[trueos pixi widgets] layout-root build-box done boxes=${layoutBoxBuildCount}`);
 
   // Cleanup yoga nodes to avoid leaks.
   // IMPORTANT: don't manually free children; Yoga's freeRecursive handles the whole subtree.
@@ -2031,6 +2378,8 @@ function renderToPixi(app: Application, box: LayoutBox, sceneRoot?: Container) {
   uiState.hoverRects.length = 0;
   uiState.hoverHandlers.clear();
   uiState.iframeRects.length = 0;
+  uiState.iframeScrollRoots.clear();
+  uiState.iframeScrollbarGraphics.clear();
 
   setTrueosLayoutStep('render:node-cache');
   const nodeCache = retainedNodeCache.get(stage) ?? new Map<string, Container>();
@@ -2575,9 +2924,11 @@ function renderToPixi(app: Application, box: LayoutBox, sceneRoot?: Container) {
         // Scroll root (translated).
         iframeScrollRoot = getOrCreateContainer(iframeContentRoot, '__iframeScrollRoot');
         setDisplayPosition(iframeScrollRoot, 0, -st.y);
+        if (iframeKey) uiState.iframeScrollRoots.set(iframeKey, iframeScrollRoot);
 
         // Draw iframe-local scrollbar.
         const scrollbar = getOrCreateGraphics(container, '__iframeScrollbar');
+        if (iframeKey) uiState.iframeScrollbarGraphics.set(iframeKey, scrollbar);
         clearGraphics(scrollbar);
         scrollbar.eventMode = 'static';
         // Place it inside the iframe content area.
@@ -3012,6 +3363,7 @@ async function main() {
             if (nextY !== st.y) {
               st.y = nextY;
               uiState.iframeScroll.set(iframeKey, st);
+              if (isTrueosCaptureOnly()) window.__TRUEOS_PIXI_SCROLL_REPAINT_REQUIRED__ = true;
               requestPaint?.();
               e.preventDefault();
               routedToIframe = true;
@@ -3034,6 +3386,7 @@ async function main() {
       if (nextRootY !== uiState.scroll.y) {
         const prevRootY = uiState.scroll.y;
         uiState.scroll.y = nextRootY;
+        if (isTrueosCaptureOnly()) window.__TRUEOS_PIXI_SCROLL_REPAINT_REQUIRED__ = true;
         requestPaint?.();
         e.preventDefault();
         logWheelRoute(
@@ -3162,13 +3515,14 @@ async function main() {
   const dragLineHeight = defaultTheme.fontSize * 1.25;
 
   setTrueosPhase('main:html');
-  const html =
+  const rawHtml =
     typeof window.__TRUEOS_INPUT_HTML__ === 'string'
       ? window.__TRUEOS_INPUT_HTML__
       : await fetch('/input.html').then((r) => r.text());
+  const html = isUsableTrueosInputHtml(rawHtml) ? rawHtml : '';
   if (isTrueosCaptureOnly()) {
     console.log(
-      `[trueos pixi widgets] input-html chars=${html.length} sample="${sampleRawTextForLog(html)}"`
+      `[trueos pixi widgets] input-html chars=${rawHtml.length} usable=${html ? 1 : 0} sample="${sampleRawTextForLog(rawHtml)}"`
     );
   }
 
@@ -3193,6 +3547,7 @@ async function main() {
 
   let lastLayout: LayoutBox | null = null;
   let lastLayoutStats: TrueosTreeStats = { nodes: 0, blocks: 0, text: 0, maxDepth: 0, tags: {} };
+  let lastPrePixiTrace: PrePixiTraceInfo = { hash: '', renderHash: '', layoutHash: '', bytes: 0 };
   let trueosLayoutOverlayLogCount = 0;
 
   const clampScroll = () => {
@@ -3241,24 +3596,86 @@ async function main() {
     scrollbarG.fill({ color: 0x000000, alpha: 0.25 });
   };
 
+  const updateIframeScrollVisuals = () => {
+    const IFRAME_CHROME_TOP = 34;
+    const pad = SCROLLBAR_PAD;
+    const trackW = SCROLLBAR_W;
+
+    for (const [key, root] of uiState.iframeScrollRoots.entries()) {
+      const st = uiState.iframeScroll.get(key);
+      if (!st) continue;
+
+      const maxScroll = Math.max(0, st.contentHeight - st.viewportHeight);
+      st.y = Math.max(0, Math.min(st.y, maxScroll));
+      setDisplayPosition(root, 0, -st.y);
+
+      const scrollbar = uiState.iframeScrollbarGraphics.get(key);
+      if (!scrollbar) {
+        uiState.iframeScroll.set(key, st);
+        continue;
+      }
+
+      const w = Math.max(0, st.rect.w);
+      const h = Math.max(0, st.rect.h);
+      const trackX = Math.max(0, w - trackW - pad);
+      const trackY = IFRAME_CHROME_TOP + pad;
+      const trackH = Math.max(0, h - IFRAME_CHROME_TOP - pad * 2);
+      const show = maxScroll > 0.5 && trackH > 1;
+
+      scrollbar.clear();
+      scrollbar.visible = show;
+      if (!show) {
+        st.track = { x: 0, y: 0, w: trackW, h: 0 };
+        st.thumb = { x: 0, y: 0, w: trackW, h: 0 };
+        uiState.iframeScroll.set(key, st);
+        continue;
+      }
+
+      const minThumbH = 24;
+      const thumbH = Math.max(minThumbH, ((st.viewportHeight || 1) / Math.max(1, st.contentHeight)) * trackH);
+      const travel = Math.max(1, trackH - thumbH);
+      const ratio = maxScroll <= 0 ? 0 : st.y / maxScroll;
+      const thumbY = trackY + travel * ratio;
+
+      st.track = { x: st.rect.x + trackX, y: st.rect.y + trackY, w: trackW, h: trackH };
+      st.thumb = { x: st.rect.x + trackX, y: st.rect.y + thumbY, w: trackW, h: thumbH };
+
+      scrollbar.rect(trackX, trackY, trackW, trackH);
+      scrollbar.fill({ color: 0x000000, alpha: 0.06 });
+      scrollbar.rect(trackX, thumbY, trackW, thumbH);
+      scrollbar.fill({ color: 0x000000, alpha: 0.25 });
+      uiState.iframeScroll.set(key, st);
+    }
+  };
+
   const paint = () => {
     if (!lastLayout) return;
+    logTrueosCaptureBounded('PIXI_PAINT_STEP', 96, '[trueos pixi widgets] paint-step clamp begin');
     setTrueosPhase('main:paint:clamp');
     clampScroll();
+    logTrueosCaptureBounded('PIXI_PAINT_STEP', 96, '[trueos pixi widgets] paint-step render-to-pixi begin');
     setTrueosPhase('main:paint:render-to-pixi');
     renderToPixi(app, lastLayout, sceneRoot);
+    logTrueosCaptureBounded('PIXI_PAINT_STEP', 96, '[trueos pixi widgets] paint-step render-to-pixi done');
     setTrueosPhase('main:paint:scrollbar');
+    logTrueosCaptureBounded('PIXI_PAINT_STEP', 96, '[trueos pixi widgets] paint-step scrollbar begin');
     updateScrollbarVisuals();
     // Manual render (ticker is stopped).
     setTrueosPhase('main:paint:renderer-render');
+    logTrueosCaptureBounded('PIXI_PAINT_STEP', 96, '[trueos pixi widgets] paint-step renderer-render begin');
     app.renderer.render(app.stage);
+    logTrueosCaptureBounded('PIXI_PAINT_STEP', 96, '[trueos pixi widgets] paint-step publish-stats begin');
     publishTrueosBridgeStats(
       renderTreeStats,
       lastLayoutStats,
       summarizeRenderTextSamples(renderNodes),
-      summarizeLayoutTextSamples(lastLayout)
+      summarizeLayoutTextSamples(lastLayout),
+      summarizeLayoutWidgetSamples(lastLayout),
+      lastPrePixiTrace
     );
+    logTrueosCaptureBounded('PIXI_PAINT_STEP', 96, '[trueos pixi widgets] paint-step publish-stats done');
     if (isTrueosCaptureOnly()) {
+      logTrueosCaptureBounded('PIXI_PAINT_STEP', 96, '[trueos pixi widgets] paint-step overlays begin');
       const overlays = collectLayoutTextOverlays(lastLayout);
       window.__TRUEOS_PIXI_LAYOUT_TEXT_OVERLAYS__ = overlays;
       if (trueosLayoutOverlayLogCount < 4) {
@@ -3267,30 +3684,82 @@ async function main() {
           `[trueos pixi widgets] layout-text-overlays count=${overlays.length} samples=${summarizeTrueosLayoutTextOverlays(overlays)}`
         );
       }
+      logTrueosCaptureBounded('PIXI_PAINT_STEP', 96, '[trueos pixi widgets] paint-step overlays done');
     }
     setTrueosPhase('main:paint:done');
+    logTrueosCaptureBounded('PIXI_PAINT_STEP', 96, '[trueos pixi widgets] paint-step done');
+  };
+
+  const paintScrollOnly = () => {
+    setTrueosPhase('main:scroll-paint:clamp');
+    clampScroll();
+    setTrueosPhase('main:scroll-paint:content-position');
+    const contentRoot = getOrCreateContainer(sceneRoot, '__contentRoot');
+    setDisplayPosition(contentRoot, 0, -uiState.scroll.y);
+    setTrueosPhase('main:scroll-paint:scrollbar');
+    updateScrollbarVisuals();
+    setTrueosPhase('main:scroll-paint:iframe-scrollbars');
+    updateIframeScrollVisuals();
+    setTrueosPhase('main:scroll-paint:renderer-render');
+    app.renderer.render(app.stage);
+    publishTrueosBridgeStats(
+      renderTreeStats,
+      lastLayoutStats,
+      summarizeRenderTextSamples(renderNodes),
+      lastLayout ? summarizeLayoutTextSamples(lastLayout) : '',
+      lastLayout ? summarizeLayoutWidgetSamples(lastLayout) : ''
+    );
+    setTrueosPhase('main:scroll-paint:done');
   };
 
   if (isTrueosCaptureOnly()) {
     window.__TRUEOS_REPAINT_NOW__ = () => {
+      const scrollOnly = window.__TRUEOS_PIXI_SCROLL_REPAINT_REQUIRED__ === true;
       window.__TRUEOS_PIXI_DIRTY__ = false;
-      paint();
+      window.__TRUEOS_PIXI_REPAINT_REQUIRED__ = false;
+      window.__TRUEOS_PIXI_SCROLL_REPAINT_REQUIRED__ = false;
+      const repaintLogCount = Number((window as any).__TRUEOS_REPAINT_NOW_LOG_COUNT__ ?? 0) || 0;
+      if (repaintLogCount < 24) {
+        (window as any).__TRUEOS_REPAINT_NOW_LOG_COUNT__ = repaintLogCount + 1;
+        console.log(`[trueos pixi widgets] repaint-now scrollOnly=${scrollOnly ? 1 : 0} begin`);
+      }
+      if (scrollOnly) paintScrollOnly();
+      else paint();
+      if (repaintLogCount < 24) {
+        console.log(`[trueos pixi widgets] repaint-now scrollOnly=${scrollOnly ? 1 : 0} done`);
+      }
     };
   }
 
   const rerender = () => {
     setTrueosPhase('main:layout-build');
+    logTrueosCapture('[trueos pixi widgets] rerender layout-build begin');
     const layout = buildLayoutTree(renderNodes, window.innerWidth, window.innerHeight);
+    logTrueosCapture('[trueos pixi widgets] rerender layout-build done');
+    logTrueosCapture('[trueos pixi widgets] rerender prepixi begin');
+    lastPrePixiTrace = publishPrePixiTrace(
+      renderTree.source,
+      renderNodes,
+      layout,
+      window.innerWidth,
+      window.innerHeight
+    );
+    logTrueosCapture('[trueos pixi widgets] rerender prepixi done');
     setTrueosPhase('main:layout-commit');
     lastLayout = layout;
     if (isTrueosCaptureOnly()) {
       window.__TRUEOS_PIXI_LAST_LAYOUT__ = layout;
       window.__TRUEOS_PIXI_LAYOUT_TEXT_OVERLAYS__ = [];
     }
+    logTrueosCapture('[trueos pixi widgets] rerender stats begin');
     lastLayoutStats = summarizeLayoutBoxes(layout);
+    logTrueosCapture('[trueos pixi widgets] rerender stats done');
+    logTrueosCapture('[trueos pixi widgets] rerender scroll-height begin');
     uiState.scroll.contentHeight = computeScrollableContentHeight(layout);
     uiState.scroll.viewportHeight = window.innerHeight;
+    logTrueosCapture('[trueos pixi widgets] rerender paint begin');
     paint();
+    logTrueosCapture('[trueos pixi widgets] rerender paint done');
   };
 
   requestRerender = () => {
@@ -3317,6 +3786,7 @@ async function main() {
     if (paintScheduled) return;
     if (isTrueosCaptureOnly()) {
       window.__TRUEOS_PIXI_DIRTY__ = true;
+      window.__TRUEOS_PIXI_REPAINT_REQUIRED__ = true;
       return;
     }
     paintScheduled = true;
@@ -3714,6 +4184,7 @@ async function main() {
     const pid = getEffectivePointerId(ev);
     if (pid <= 0) return;
     let didUpdate = false;
+    let scrollOnlyUpdate = false;
 
     // Text selection drag.
     {
@@ -3801,6 +4272,7 @@ async function main() {
               const ratio = (top - track.y) / travel;
               uiState.scroll.y = Math.max(0, Math.min(maxScroll, ratio * maxScroll));
               didUpdate = true;
+              scrollOnlyUpdate = true;
             }
           }
         }
@@ -3819,6 +4291,7 @@ async function main() {
             const ratio = (top - st.track.y) / travel;
             st.y = Math.max(0, Math.min(maxScroll, ratio * maxScroll));
             didUpdate = true;
+            scrollOnlyUpdate = true;
           }
         }
     {
@@ -3840,7 +4313,10 @@ async function main() {
       }
     }
 
-    if (didUpdate) requestPaint?.();
+    if (didUpdate) {
+      if (scrollOnlyUpdate && isTrueosCaptureOnly()) window.__TRUEOS_PIXI_SCROLL_REPAINT_REQUIRED__ = true;
+      requestPaint?.();
+    }
   });
 
   setTrueosPhase('main:input-listeners');
