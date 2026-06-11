@@ -29,7 +29,6 @@ parry2d = { version = "0.26", default-features = false, features = ["dim2", "f32
 
 [features]
 default = []
-yoga-native = []
 lightningcss-native = ["dep:lightningcss"]
 
 # TRUEOS-only helpers (kernel logging via trueos_cabi_write + Complex-backed module smoke).

@@ -1,5 +1,5 @@
 // QJS-facing render tree artifact builder.
-// This is the pre-Yoga/pre-Pixi bridge: widlib widgets in, expanded render-tree out.
+// This is the render-tree bridge: widlib widgets in, expanded render-tree out.
 
 import { parse as parseHtml } from 'parse5';
 import { domToWidgets } from '../widlib/index.mjs';
@@ -573,8 +573,8 @@ export function createRenderTreeTrace(widgetTree, options = {}) {
       renderNodes,
       layout,
     };
-    artifact.prepixi = {
-      op: 'prepixi',
+    artifact.layoutTrace = {
+      op: 'layout-trace',
       trace: {
         ...traceBody,
         hash: hashText(JSON.stringify(traceBody)),
@@ -588,14 +588,14 @@ export function createRenderTreeTrace(widgetTree, options = {}) {
 export function renderTreeNdjson(widgetTree, options = {}) {
   const artifact = createRenderTreeTrace(widgetTree, options);
   const lines = [JSON.stringify(artifact.renderTree)];
-  if (artifact.prepixi) lines.push(JSON.stringify(artifact.prepixi));
+  if (artifact.layoutTrace) lines.push(JSON.stringify(artifact.layoutTrace));
   return lines.join('\n');
 }
 
 export function summarizeRenderTreeTrace(artifact) {
   const renderTree = artifact && artifact.renderTree ? artifact.renderTree : {};
-  const prepixi = artifact && artifact.prepixi ? artifact.prepixi : {};
-  const trace = prepixi.trace && typeof prepixi.trace === 'object' ? prepixi.trace : {};
+  const layoutTrace = artifact && artifact.layoutTrace ? artifact.layoutTrace : {};
+  const trace = layoutTrace.trace && typeof layoutTrace.trace === 'object' ? layoutTrace.trace : {};
   return {
     renderNodes: countRenderNodes(renderTree.renderNodes),
     renderHash: renderTree.hash ?? trace.renderHash ?? '',
