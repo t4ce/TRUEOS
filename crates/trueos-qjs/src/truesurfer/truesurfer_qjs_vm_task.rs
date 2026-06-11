@@ -45,11 +45,11 @@ const TRUESURFER_PARSE5_VITE_HOST_FETCH_FILENAME: &[u8] =
 const TRUESURFER_PARSE5_VITE_HOST_CAPTURE_FILENAME: &[u8] =
     b"<truesurfer-parse5-trueos-host-capture>\0";
 const TRUESURFER_PIXI_HOST_PRELUDE_SOURCE: &[u8] =
-    include_bytes!("../../../../src/ui3/pixi_host_prelude.js");
+    include_bytes!("../pixi/pixi_host_prelude.js");
 const TRUESURFER_PIXI_BUNDLE_SOURCE: &[u8] =
-    include_bytes!("../../../../src/ui3/pixi_bundle.min.js");
+    include_bytes!("../pixi/pixi_bundle.min.js");
 const TRUESURFER_PIXI_CAPTURE_ADAPTER_SOURCE: &[u8] =
-    include_bytes!("../../../../src/ui3/pixi_capture_adapter.js");
+    include_bytes!("../pixi/pixi_capture_adapter.js");
 const TRUESURFER_PARSE5_TRUEOS_APP_SOURCE: &[u8] = b"";
 
 fn fnv1a32(bytes: &[u8]) -> u32 {
