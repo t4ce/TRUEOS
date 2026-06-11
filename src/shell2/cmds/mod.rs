@@ -20,7 +20,6 @@ pub(crate) mod smp;
 pub(crate) mod tlb;
 pub(crate) mod tlb_helper;
 pub(crate) mod txt;
-pub(crate) mod ui3;
 pub(crate) mod update;
 
 pub(crate) fn command_registry_json() -> AllocString {

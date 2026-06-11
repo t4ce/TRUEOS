@@ -489,45 +489,6 @@ fn http_plain_response(status: &'static str, msg: &'static str) -> HttpResponseP
     }
 }
 
-fn http_ui3_latest_bmp_response() -> HttpResponsePlan {
-    match crate::ui3::latest_pixi_primary_bmp() {
-        Ok(image) => {
-            let mut extra_headers = String::new();
-            extra_headers.push_str("Cache-Control: no-store\r\n");
-            extra_headers.push_str(
-                format!("Content-Disposition: inline; filename=\"{}\"\r\n", image.filename)
-                    .as_str(),
-            );
-            extra_headers.push_str(
-                format!(
-                    "X-TRUEOS-UI3-Frame-Count: {}\r\nX-TRUEOS-UI3-Width: {}\r\nX-TRUEOS-UI3-Height: {}\r\n",
-                    crate::ui3::pixi_service_frame_count(),
-                    image.width,
-                    image.height
-                )
-                .as_str(),
-            );
-            HttpResponsePlan {
-                status: "HTTP/1.1 200 OK\r\n",
-                content_type: image.content_type,
-                extra_headers,
-                body_len: image.bytes.len() as u64,
-                body: HttpBodyPlan::Bytes(image.bytes),
-            }
-        }
-        Err(crate::ui3::Ui3DebugCaptureError::NoFrame) => {
-            http_plain_response("HTTP/1.1 404 Not Found\r\n", "no ui3 frame rendered yet\n")
-        }
-        Err(crate::ui3::Ui3DebugCaptureError::NoSurface) => http_plain_response(
-            "HTTP/1.1 503 Service Unavailable\r\n",
-            "primary surface unavailable\n",
-        ),
-        Err(crate::ui3::Ui3DebugCaptureError::TooLarge) => {
-            http_plain_response("HTTP/1.1 500 Internal Server Error\r\n", "ui3 capture too large\n")
-        }
-    }
-}
-
 fn http_normalize_rel_path(raw: &str, max_len: usize) -> Option<String> {
     let mut out = String::new();
     for seg in raw.split('/') {
@@ -922,10 +883,6 @@ pub async fn http_trueosfs_task() {
 
                         let path_only = vhttp_srv::path_only(target.as_str());
                         let response: HttpResponsePlan = if method == "GET"
-                            && path_only == "/api/ui3/latest.bmp"
-                        {
-                            http_ui3_latest_bmp_response()
-                        } else if method == "GET"
                             && path_only.starts_with("/dl/")
                         {
                             // Download endpoint: /dl/<root_raw>/<path>
