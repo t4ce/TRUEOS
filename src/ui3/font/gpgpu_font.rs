@@ -4,7 +4,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use libm::roundf;
 use trueos_gfx_core::Rgba8;
 
-use crate::gfx::althlasfont::bitmapfont::{
+use crate::ui3::althlasfont::bitmapfont::{
     ATHLAS_FONT_FACE_LUCIDA_1X, ATHLAS_FONT_FACE_LUCIDA_HALF, ATHLAS_FONT_FACE_LUCIDA_THIRD,
     AthlasFontFace, athlas_font_bucket_atlas_metrics, athlas_font_line_height_px,
     athlas_lookup_glyph_region,
@@ -125,7 +125,7 @@ pub(in crate::ui3) fn append_ui3_text_run_sprite64_placements_for_face(
             ));
             pen_x += f32::from(glyph.advance_px);
         } else if let Some(region) =
-            crate::gfx::althlasfont::twemoji::twemoji_lookup_glyph_region(ch)
+            crate::ui3::althlasfont::twemoji::twemoji_lookup_glyph_region(ch)
         {
             out.push(crate::intel::gpgpu::GpgpuSprite64Placement::src_over(
                 region.slot,
@@ -168,7 +168,7 @@ fn text_run_bounds_for_face(face: AthlasFontFace, origin: Ui3Point, text: &str) 
         let advance = if let Some(glyph) = font_glyph(face, ch) {
             glyph.advance_px
         } else if let Some(region) =
-            crate::gfx::althlasfont::twemoji::twemoji_lookup_glyph_region(ch)
+            crate::ui3::althlasfont::twemoji::twemoji_lookup_glyph_region(ch)
         {
             region.src_w.max(font_line_height_px(face))
         } else {
