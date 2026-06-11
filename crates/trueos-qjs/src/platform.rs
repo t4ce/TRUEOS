@@ -192,33 +192,6 @@ pub mod ui {
     }
 
     #[inline]
-    pub fn ui3_scene_alpha(browser_id: u32, node_id: u32, alpha: f32) -> bool {
-        ui3_pixi_op(browser_id, 23, node_id, alpha, 0.0, 0.0, 0.0, None)
-    }
-
-    #[inline]
-    pub fn ui3_scene_scale(browser_id: u32, node_id: u32, x: f32, y: f32) -> bool {
-        ui3_pixi_op(browser_id, 28, node_id, x, y, 0.0, 0.0, None)
-    }
-
-    #[inline]
-    pub fn ui3_scene_mask(browser_id: u32, node_id: u32, mask_id: u32) -> bool {
-        ui3_pixi_op(browser_id, 27, node_id, mask_id as f32, 0.0, 0.0, 0.0, None)
-    }
-
-    #[inline]
-    pub fn ui3_scene_hit_area(
-        browser_id: u32,
-        node_id: u32,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
-    ) -> bool {
-        ui3_pixi_op(browser_id, 29, node_id, x, y, w, h, None)
-    }
-
-    #[inline]
     pub fn ui3_scene_listen(browser_id: u32, node_id: u32, event: &str) -> bool {
         ui3_pixi_op(browser_id, 16, node_id, 0.0, 0.0, 0.0, 0.0, Some(event))
     }
@@ -251,20 +224,6 @@ pub mod ui {
     }
 
     #[inline]
-    pub fn ui3_scene_graphics_round_rect(
-        browser_id: u32,
-        node_id: u32,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
-        radius: f32,
-    ) -> bool {
-        let radius_text = alloc::format!("{}", radius);
-        ui3_pixi_op(browser_id, 24, node_id, x, y, w, h, Some(radius_text.as_str()))
-    }
-
-    #[inline]
     pub fn ui3_scene_graphics_fill(browser_id: u32, node_id: u32, rgb: u32, alpha: f32) -> bool {
         ui3_pixi_op(browser_id, 6, node_id, rgb as f32, alpha, 0.0, 0.0, None)
     }
@@ -292,18 +251,6 @@ pub mod ui {
     }
 
     #[inline]
-    pub fn ui3_scene_graphics_ellipse(
-        browser_id: u32,
-        node_id: u32,
-        x: f32,
-        y: f32,
-        rx: f32,
-        ry: f32,
-    ) -> bool {
-        ui3_pixi_op(browser_id, 26, node_id, x, y, rx, ry, None)
-    }
-
-    #[inline]
     pub fn ui3_scene_graphics_move_to(browser_id: u32, node_id: u32, x: f32, y: f32) -> bool {
         ui3_pixi_op(browser_id, 19, node_id, x, y, 0.0, 0.0, None)
     }
@@ -311,11 +258,6 @@ pub mod ui {
     #[inline]
     pub fn ui3_scene_graphics_line_to(browser_id: u32, node_id: u32, x: f32, y: f32) -> bool {
         ui3_pixi_op(browser_id, 20, node_id, x, y, 0.0, 0.0, None)
-    }
-
-    #[inline]
-    pub fn ui3_scene_graphics_close_path(browser_id: u32, node_id: u32) -> bool {
-        ui3_pixi_op(browser_id, 25, node_id, 0.0, 0.0, 0.0, 0.0, None)
     }
 
     #[inline]
@@ -343,24 +285,7 @@ pub mod ui {
     }
 
     #[inline]
-    pub fn ui3_scene_text_font_tier(browser_id: u32, node_id: u32, tier: u32) -> bool {
-        ui3_pixi_op(browser_id, 30, node_id, tier.min(2) as f32, 0.0, 0.0, 0.0, None)
-    }
-
-    #[inline]
     pub fn ui3_scene_render(browser_id: u32, root_id: u32) -> bool {
         ui3_pixi_op(browser_id, 21, root_id, 0.0, 0.0, 0.0, 0.0, None)
-    }
-
-    #[inline]
-    pub fn ui3_scene_render_damage(
-        browser_id: u32,
-        root_id: u32,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
-    ) -> bool {
-        ui3_pixi_op(browser_id, 31, root_id, x, y, w, h, None)
     }
 }

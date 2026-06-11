@@ -10,62 +10,6 @@ use crate as qjs;
 
 static FETCH_TMP_SEQ: AtomicU32 = AtomicU32::new(1);
 
-fn hex_nibble(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
-    }
-}
-
-fn percent_decode_data_url_payload(payload: &[u8]) -> Result<Vec<u8>, i32> {
-    let mut out = Vec::with_capacity(payload.len());
-    let mut i = 0usize;
-    while i < payload.len() {
-        if payload[i] == b'%' {
-            if i + 2 >= payload.len() {
-                return Err(-7);
-            }
-            let hi = hex_nibble(payload[i + 1]).ok_or(-7)?;
-            let lo = hex_nibble(payload[i + 2]).ok_or(-7)?;
-            out.push((hi << 4) | lo);
-            i += 3;
-        } else {
-            out.push(payload[i]);
-            i += 1;
-        }
-    }
-    Ok(out)
-}
-
-fn data_url_image_payload(url: &[u8]) -> Result<(Vec<u8>, Vec<u8>), i32> {
-    if !url.starts_with(b"data:") {
-        return Err(-7);
-    }
-    let comma = url.iter().position(|b| *b == b',').ok_or(-7)?;
-    let meta = &url[5..comma];
-    let payload = &url[comma + 1..];
-    let mut meta_lc = Vec::with_capacity(meta.len());
-    for b in meta.iter().copied() {
-        meta_lc.push(b.to_ascii_lowercase());
-    }
-    if !meta_lc.starts_with(b"image/") || meta_lc.windows(7).any(|w| w == b";base64") {
-        return Err(-7);
-    }
-    let mut path = Vec::new();
-    if meta_lc.starts_with(b"image/svg+xml") {
-        path.extend_from_slice(b"inline.svg");
-    } else if meta_lc.starts_with(b"image/png") {
-        path.extend_from_slice(b"inline.png");
-    } else if meta_lc.starts_with(b"image/jpeg") || meta_lc.starts_with(b"image/jpg") {
-        path.extend_from_slice(b"inline.jpg");
-    } else {
-        return Err(-7);
-    }
-    Ok((path, percent_decode_data_url_payload(payload)?))
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeProfile {
     Default,
@@ -675,8 +619,8 @@ unsafe extern "C" fn trueos_resolve_ready_image_texture(
     argc: c_int,
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
+    let (promise, resolve, reject) = qjs::async_ops::new_promise(ctx);
     if argv.is_null() || argc <= 0 {
-        let (promise, resolve, reject) = qjs::async_ops::new_promise(ctx);
         let code = js_int32(-1);
         let _ =
             qjs::JS_Call(ctx, reject, qjs::JSValue::undefined(), 1, &code as *const qjs::JSValue);
@@ -689,7 +633,6 @@ unsafe extern "C" fn trueos_resolve_ready_image_texture(
     let mut url_len: usize = 0;
     let url_c = qjs::JS_ToCStringLen2(ctx, &mut url_len as *mut usize, args[0], 0);
     if url_c.is_null() {
-        let (promise, resolve, reject) = qjs::async_ops::new_promise(ctx);
         let code = js_int32(-1);
         let _ =
             qjs::JS_Call(ctx, reject, qjs::JSValue::undefined(), 1, &code as *const qjs::JSValue);
@@ -699,12 +642,6 @@ unsafe extern "C" fn trueos_resolve_ready_image_texture(
     }
 
     let url = core::slice::from_raw_parts(url_c as *const u8, url_len);
-    if let Some(cached) = qjs::async_ops::cached_ready_image_texture_object(ctx, url) {
-        qjs::JS_FreeCString(ctx, url_c);
-        return cached;
-    }
-
-    let (promise, resolve, reject) = qjs::async_ops::new_promise(ctx);
     let tex_id = qjs::cmd_stream::alloc_managed_tex_id();
     if tex_id == 0 {
         let code = js_int32(-1);
@@ -717,30 +654,15 @@ unsafe extern "C" fn trueos_resolve_ready_image_texture(
     }
 
     if url.starts_with(b"data:") {
-        match data_url_image_payload(url) {
-            Ok((path, bytes)) => {
-                qjs::async_ops::register_ready_image_texture_bytes(
-                    ctx,
-                    resolve,
-                    reject,
-                    path,
-                    bytes,
-                    tex_id,
-                    qjs::async_ops::ImageRequestSource::InlineData,
-                );
-            }
-            Err(code) => {
-                qjs::cmd_stream::release_managed_tex_id(tex_id);
-                let code_js = js_int32(code);
-                let _ = qjs::JS_Call(
-                    ctx,
-                    reject,
-                    qjs::JSValue::undefined(),
-                    1,
-                    &code_js as *const qjs::JSValue,
-                );
-            }
-        }
+        qjs::cmd_stream::release_managed_tex_id(tex_id);
+        let code_js = js_int32(-1);
+        let _ = qjs::JS_Call(
+            ctx,
+            reject,
+            qjs::JSValue::undefined(),
+            1,
+            &code_js as *const qjs::JSValue,
+        );
     } else if url.first().copied() == Some(b'/') {
         match qjs::async_ops::start_read_file(url) {
             Ok(op_id) => {
@@ -797,37 +719,6 @@ unsafe extern "C" fn trueos_resolve_ready_image_texture(
     qjs::js_free_value(ctx, resolve);
     qjs::js_free_value(ctx, reject);
     promise
-}
-
-#[inline]
-fn js_null() -> qjs::JSValue {
-    qjs::JSValue {
-        u: qjs::JSValueUnion { int32: 0 },
-        tag: qjs::JS_TAG_NULL,
-    }
-}
-
-unsafe extern "C" fn trueos_peek_ready_image_texture(
-    ctx: *mut qjs::JSContext,
-    _this_val: qjs::JSValueConst,
-    argc: c_int,
-    argv: *const qjs::JSValueConst,
-) -> qjs::JSValue {
-    if argv.is_null() || argc <= 0 {
-        return js_null();
-    }
-
-    let args = core::slice::from_raw_parts(argv, argc as usize);
-    let mut url_len: usize = 0;
-    let url_c = qjs::JS_ToCStringLen2(ctx, &mut url_len as *mut usize, args[0], 0);
-    if url_c.is_null() {
-        return js_null();
-    }
-
-    let url = core::slice::from_raw_parts(url_c as *const u8, url_len);
-    let out = qjs::async_ops::cached_ready_image_texture_object(ctx, url).unwrap_or_else(js_null);
-    qjs::JS_FreeCString(ctx, url_c);
-    out
 }
 
 fn read_fs_len(path: &[u8]) -> isize {
@@ -966,7 +857,6 @@ unsafe fn ensure_global_fetch(ctx: *mut qjs::JSContext) {
         (b"__trueosPrewarmUrl\0", trueos_prewarm_url, 1),
         (b"__trueosGlobalLogLine\0", trueos_global_log_line, 1),
         (b"__trueosResolveReadyImageTexture\0", trueos_resolve_ready_image_texture, 1),
-        (b"__trueosPeekReadyImageTexture\0", trueos_peek_ready_image_texture, 1),
         (b"__trueosPrefetchModule\0", trueos_prefetch_module, 2),
     ];
     for &(name, func, argc) in helpers {
@@ -1263,38 +1153,11 @@ fn strip_truesurfer_synthetic_markers(bytes: &[u8]) -> String {
 }
 
 fn strip_trueos_bare_symbols(text: &mut String) {
-    const SYMBOLS: [&str; 10] = [
-        "__TRUEOS_HOST_READY__",
-        "__trueosNumberValue",
-        "__trueosHostNum",
-        "__trueosNum",
-        "__trueosNu",
-        "__trueosN",
-        "tsNutsNutsNutsNu",
-        "tsNutsNutsNu",
-        "tsNutsNu",
-        "tsNum",
-    ];
-    strip_trueos_num_runs(text);
+    const SYMBOLS: [&str; 3] = ["__trueosNum", "__trueosNu", "__trueosN"];
     for symbol in SYMBOLS {
         while let Some(idx) = text.find(symbol) {
             text.replace_range(idx..idx + symbol.len(), "");
         }
-    }
-}
-
-fn strip_trueos_num_runs(text: &mut String) {
-    const RUN_PREFIX: &str = "__trueosN";
-    while let Some(idx) = text.find(RUN_PREFIX) {
-        let mut end = idx + RUN_PREFIX.len();
-        while end < text.len() {
-            let b = text.as_bytes()[end];
-            if b != b'u' && b != b'm' {
-                break;
-            }
-            end += 1;
-        }
-        text.replace_range(idx..end, "");
     }
 }
 

@@ -8,10 +8,10 @@ In Truesurfer:
 - Lightning CSS enrichment of the document and DOM subset
 - Pipeline channel handoff to Yoga for layout enrichment
 
-Hosted UI:
-- N-window compositor-pattern UI fed by TrueSurfer's DOM-derived widget tree
+In UI2:
+- N-window compositor-pattern UI that can already render the minimal demo
 - Conceptually the full bridge is in place: acquired HTML can flow through parse,
-  enrichment, layout, and hosted composition for visual feedback
+  enrichment, layout, and minimal hosted composition for visual feedback
 */
 
 const root = globalThis;
@@ -27,6 +27,7 @@ const TRUESURFER_FALLBACK_IMAGE_SIZE_PX = 96;
 let truesurferSubsetProfile = null;
 let extractDocumentArtifactsFn = null;
 let createBrowserAssetManagerFn = null;
+let buildTextWidgetSceneFn = null;
 let browserAssetManager = null;
 let currentNavigationUrl = '';
 let currentBaseGadgetSnapshot = { version: 1, gadgets: [] };
@@ -73,36 +74,6 @@ function log(line) {
   if (typeof console !== 'undefined' && console && typeof console.log === 'function') {
     console.log(line);
   }
-}
-
-function stableHashText(text) {
-  const s = safeString(text);
-  let h = (2166136261 ^ s.length) >>> 0;
-  for (let i = 0; i < s.length; i += 1) {
-    h ^= s.charCodeAt(i) & 0xffff;
-    h = Math.imul(h, 16777619) >>> 0;
-  }
-  return `0x${h.toString(16).padStart(8, '0')}`;
-}
-
-function dumpWidgetRenderTreeJson(json, url) {
-  const text = safeString(json);
-  const chunkSize = 900;
-  const total = Math.max(1, Math.ceil(text.length / chunkSize));
-  const hash = stableHashText(text);
-  log(
-    `[truesurfer widget-tree-dump begin] browser=${browserId} bytes=${text.length} hash=${hash} chunks=${total} url=${safeString(url)}`,
-  );
-  for (let index = 0; index < total; index += 1) {
-    const start = index * chunkSize;
-    const chunk = text.slice(start, start + chunkSize);
-    log(
-      `[truesurfer widget-tree-dump chunk] browser=${browserId} index=${index + 1}/${total} json=${chunk}`,
-    );
-  }
-  log(
-    `[truesurfer widget-tree-dump end] browser=${browserId} bytes=${text.length} hash=${hash} chunks=${total} url=${safeString(url)}`,
-  );
 }
 
 function globalLogLine(line) {
@@ -283,34 +254,43 @@ async function warmBrowserPipelineModules() {
     './truesurfer_extract.mjs',
     './truesurfer_assets.mjs',
     './css.mjs',
+    './text_widget_scene.mjs',
   ];
   for (let index = 0; index < imports.length; index += 1) {
     await helpers.prefetch(imports[index]);
   }
 
-  const [extractMod, assetsMod, cssMod] = await Promise.all([
+  const [extractMod, assetsMod, cssMod, textWidgetMod] = await Promise.all([
     helpers.import('./truesurfer_extract.mjs'),
     helpers.import('./truesurfer_assets.mjs'),
     helpers.import('./css.mjs'),
+    helpers.import('./text_widget_scene.mjs'),
   ]);
 
   const extractReady = !!extractMod && typeof extractMod.extractDocumentArtifacts === 'function';
   const assetsReady = !!assetsMod && typeof assetsMod.createBrowserAssetManager === 'function';
   const cssReady = !!cssMod && typeof cssMod.extractCssSection === 'function';
-  if (!extractReady || !assetsReady || !cssReady) {
+  const textWidgetReady =
+    !!textWidgetMod &&
+    (typeof textWidgetMod.buildTextWidgetScene === 'function' ||
+      typeof textWidgetMod.buildDemoTextWidgetScene === 'function');
+  if (!extractReady || !assetsReady || !cssReady || !textWidgetReady) {
     throw new Error(
-      `browser pipeline warmup incomplete extract_ready=${extractReady ? 1 : 0} assets_ready=${assetsReady ? 1 : 0} css_ready=${cssReady ? 1 : 0}`,
+      `browser pipeline warmup incomplete extract_ready=${extractReady ? 1 : 0} assets_ready=${assetsReady ? 1 : 0} css_ready=${cssReady ? 1 : 0} text_widget_ready=${textWidgetReady ? 1 : 0}`,
     );
   }
 
   truesurferSubsetProfile = extractMod.TRUESURFER_SUBSET_PROFILE || null;
   extractDocumentArtifactsFn = extractMod.extractDocumentArtifacts;
   createBrowserAssetManagerFn = assetsMod.createBrowserAssetManager;
+  buildTextWidgetSceneFn = textWidgetMod.buildTextWidgetScene || textWidgetMod.buildDemoTextWidgetScene;
+  root.__trueosBuildTextWidgetScene = buildTextWidgetSceneFn;
+  root.__trueosBuildDemoTextWidgetScene = buildTextWidgetSceneFn;
   root.__trueosTruesurferModules = {
     extractReady: 1,
     assetsReady: 1,
     cssReady: 1,
-    textWidgetReady: 0,
+    textWidgetReady: 1,
   };
 }
 
@@ -368,10 +348,6 @@ function setHtml(nextHtml, meta) {
   }
 
   if (typeof extractDocumentArtifactsFn !== 'function') {
-    root.__TRUEOS_WIDGET_RENDER_TREE__ = null;
-    root.__TRUEOS_WIDGET_TEXT_ROWS__ = [];
-    root.__TRUEOS_WIDGET_RENDER_TREE_JSON__ = '';
-    root.__TRUEOS_WIDGET_TEXT_ROWS_TEXT__ = '';
     return {
       ok: 0,
       bytes: html.length,
@@ -397,8 +373,6 @@ function setHtml(nextHtml, meta) {
       bodyBytes: parsed.bodyBytes,
       bodyHierarchy: parsed.bodyHierarchy,
       bodyHierarchySummary: parsed.bodyHierarchySummary,
-      widgetRenderTree: parsed.widgetRenderTree,
-      widgetTextRows: parsed.widgetTextRows,
       gadgetSnapshot: currentBaseGadgetSnapshot,
       ui3Scene: parsed.ui3Scene,
       styleCount: parsed.styleCount,
@@ -409,11 +383,6 @@ function setHtml(nextHtml, meta) {
       scriptCount: parsed.scriptCount,
       scriptBytes: parsed.scriptBytes,
     };
-    root.__TRUEOS_WIDGET_RENDER_TREE__ = parsed.widgetRenderTree;
-    root.__TRUEOS_WIDGET_TEXT_ROWS__ = Array.isArray(parsed.widgetTextRows) ? parsed.widgetTextRows : [];
-    root.__TRUEOS_WIDGET_RENDER_TREE_JSON__ = JSON.stringify(parsed.widgetRenderTree || []);
-    root.__TRUEOS_WIDGET_TEXT_ROWS_TEXT__ = root.__TRUEOS_WIDGET_TEXT_ROWS__.join('\n');
-    dumpWidgetRenderTreeJson(root.__TRUEOS_WIDGET_RENDER_TREE_JSON__, url);
     const composedGadgetSnapshot = publishLatestArtifactsSnapshot() || composeCurrentGadgetSnapshot();
     const imageSummary = assetManager
       ? assetManager.summarizeImageUrls(currentSceneImageUrls)
@@ -434,8 +403,6 @@ function setHtml(nextHtml, meta) {
       faviconUrl: resolveNavigationUrl(url, parsed.faviconHref),
       shellBytes: parsed.shellBytes,
       bodyBytes: parsed.bodyBytes,
-      widgetRenderTree: parsed.widgetRenderTree,
-      widgetTextRows: parsed.widgetTextRows,
       gadgetSnapshot: composedGadgetSnapshot,
       ui3Scene: parsed.ui3Scene,
       styleCount: parsed.styleCount,
@@ -450,10 +417,6 @@ function setHtml(nextHtml, meta) {
     const message =
       error && error.stack ? String(error.stack) : error ? String(error) : 'unknown minimal extract error';
     log(`[truesurfer extract] browser=${browserId} fail error=${message}`);
-    root.__TRUEOS_WIDGET_RENDER_TREE__ = null;
-    root.__TRUEOS_WIDGET_TEXT_ROWS__ = [];
-    root.__TRUEOS_WIDGET_RENDER_TREE_JSON__ = '';
-    root.__TRUEOS_WIDGET_TEXT_ROWS_TEXT__ = '';
     return {
       ok: 0,
       bytes: html.length,

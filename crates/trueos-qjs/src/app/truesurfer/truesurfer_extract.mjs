@@ -1,5 +1,4 @@
 import { cssColorToRgbInt, resolveInlineStyle } from './css.mjs';
-import { BLOCK_TAGS } from './htmlDefaults.mjs';
 
 const TRUESURFER_SUBSET_PROFILE = Object.freeze({
   includeHead: true,
@@ -18,7 +17,7 @@ const TRUESURFER_SUBSET_PROFILE = Object.freeze({
   ]),
 });
 
-const COMMON_BODY_TAGS = new Set([...TRUESURFER_SUBSET_PROFILE.bodyTags, ...BLOCK_TAGS]);
+const COMMON_BODY_TAGS = new Set(TRUESURFER_SUBSET_PROFILE.bodyTags);
 const BODY_HIERARCHY_ROOT_LIMIT = TRUESURFER_SUBSET_PROFILE.maxBodyHierarchyRoots;
 const BODY_HIERARCHY_CHILD_LIMIT = TRUESURFER_SUBSET_PROFILE.maxBodyHierarchyChildrenPerNode;
 const BODY_HIERARCHY_DEPTH_LIMIT = TRUESURFER_SUBSET_PROFILE.maxBodyHierarchyDepth;
@@ -31,7 +30,6 @@ const LINK_GADGET_TEXT_COLOR_RGB = 0x1d4ed8;
 const BODY_STYLE_TAG_RE = /<style\b[^>]*>([\s\S]*?)<\/style>/gi;
 const DEFAULT_HEAD_SHELL = '<head></head>';
 const DEFAULT_BODY_SHELL = '<body></body>';
-const TRUESURFER_WIDGET_SVG_ENABLED = true;
 const COMMON_BODY_TAGS_FALLBACK = new Set([
   'div', 'p', 'span', 'a', 'ul', 'ol', 'li', 'table', 'thead', 'tbody',
   'tr', 'td', 'th', 'section', 'article', 'header', 'footer', 'main', 'nav',
@@ -40,13 +38,6 @@ const COMMON_BODY_TAGS_FALLBACK = new Set([
 const VOID_HTML_TAGS = new Set([
   'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta',
   'param', 'source', 'track', 'wbr',
-]);
-const RAW_TEXT_TAGS = new Set(['script', 'style', 'template']);
-const P_IMPLIED_END_TAG_OPENERS = new Set([
-  'address', 'article', 'aside', 'blockquote', 'details', 'dialog', 'div', 'dl',
-  'fieldset', 'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4',
-  'h5', 'h6', 'header', 'hgroup', 'hr', 'main', 'menu', 'nav', 'ol', 'p', 'pre',
-  'search', 'section', 'table', 'ul',
 ]);
 
 function emptyStyleIndex() {
@@ -92,8 +83,6 @@ function decodeBasicEntities(text) {
 function collapseWhitespace(text) {
   return safeString(text).replace(/\s+/g, ' ').trim();
 }
-
-const normalizeWhitespace = collapseWhitespace;
 
 function stripTags(text) {
   return safeString(text).replace(/<[^>]+>/g, '');
@@ -149,26 +138,6 @@ function findTagClose(source, openStart) {
   return -1;
 }
 
-function findClosingTagOutsideQuotes(source, tagName, startIndex) {
-  const html = safeString(source);
-  const lower = html.toLowerCase();
-  const needle = `</${safeString(tagName).toLowerCase()}>`;
-  let inQuote = '';
-  for (let index = Math.max(0, Number(startIndex) || 0); index < html.length; index += 1) {
-    const ch = html[index];
-    if (inQuote) {
-      if (ch === inQuote) inQuote = '';
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      inQuote = ch;
-      continue;
-    }
-    if (lower.startsWith(needle, index)) return index;
-  }
-  return -1;
-}
-
 function extractTagBlock(source, tagName) {
   const html = safeString(source);
   const lower = html.toLowerCase();
@@ -181,7 +150,7 @@ function extractTagBlock(source, tagName) {
     return null;
   }
   const closeNeedle = `</${tagName}>`;
-  const closeStart = findClosingTagOutsideQuotes(html, tagName, openEnd + 1);
+  const closeStart = lower.indexOf(closeNeedle, openEnd + 1);
   if (closeStart < 0) {
     return {
       openTag: html.slice(openStart, openEnd + 1),
@@ -354,534 +323,6 @@ function collectBodyHierarchy(bodyHtml, limit = BODY_HIERARCHY_ROOT_LIMIT) {
   }
 
   return out;
-}
-
-function attrArrayToMap(attrs) {
-  const out = {};
-  const items = Array.isArray(attrs) ? attrs : [];
-  for (const attr of items) {
-    if (!attr || typeof attr.name !== 'string') continue;
-    out[attr.name] = safeString(attr.value);
-  }
-  return Object.keys(out).length > 0 ? out : undefined;
-}
-
-function parseTagName(tagHtml) {
-  const match = /^<\s*\/?\s*([a-zA-Z0-9:-]+)/.exec(safeString(tagHtml));
-  return match ? safeString(match[1]).toLowerCase() : '';
-}
-
-function parseTagAttributes(tagHtml) {
-  const source = safeString(tagHtml);
-  const tagName = parseTagName(source);
-  if (!tagName) return [];
-  let body = source.slice(source.indexOf(tagName) + tagName.length);
-  if (body.endsWith('>')) body = body.slice(0, -1);
-  if (body.endsWith('/')) body = body.slice(0, -1);
-  const attrs = [];
-  const attrRe = /([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
-  let match;
-  while ((match = attrRe.exec(body))) {
-    const name = safeString(match[1]);
-    if (!name) continue;
-    attrs.push({
-      name,
-      value: decodeBasicEntities(match[2] ?? match[3] ?? match[4] ?? ''),
-    });
-  }
-  return attrs;
-}
-
-function appendDomText(parent, rawText) {
-  const text = decodeBasicEntities(safeString(rawText));
-  if (!text) return;
-  parent.childNodes.push({ nodeName: '#text', value: text });
-}
-
-function buildBodyDomTree(bodyHtml) {
-  const rawBodyHtml = safeString(bodyHtml);
-  const shouldUnwrapBody =
-    /^\s*(?:<!doctype\b[^>]*>\s*)?<html\b/i.test(rawBodyHtml) ||
-    /^\s*<body\b/i.test(rawBodyHtml);
-  const bodyBlock = shouldUnwrapBody ? extractTagBlock(rawBodyHtml, 'body') : null;
-  const source = stripCommentAndRawTextNoise(bodyBlock ? bodyBlock.inner : rawBodyHtml);
-  const root = { nodeName: 'body', tagName: 'body', attrs: [], childNodes: [] };
-  const stack = [root];
-  let index = 0;
-
-  while (index < source.length) {
-    const open = source.indexOf('<', index);
-    if (open < 0) {
-      appendDomText(stack[stack.length - 1], source.slice(index));
-      break;
-    }
-    if (open > index) {
-      appendDomText(stack[stack.length - 1], source.slice(index, open));
-    }
-
-    if (source.slice(open, open + 4) === '<!--') {
-      const end = source.indexOf('-->', open + 4);
-      index = end >= 0 ? end + 3 : source.length;
-      continue;
-    }
-
-    const close = findTagClose(source, open);
-    if (close < 0) {
-      appendDomText(stack[stack.length - 1], source.slice(open));
-      break;
-    }
-
-    const tagHtml = source.slice(open, close + 1);
-    const tagName = parseTagName(tagHtml);
-    if (!tagName) {
-      index = close + 1;
-      continue;
-    }
-
-    const isClose = /^<\s*\//.test(tagHtml);
-    if (isClose) {
-      let found = false;
-      for (let scan = stack.length - 1; scan >= 1; scan -= 1) {
-        if (stack[scan].tagName === tagName) {
-          stack.length = scan;
-          found = true;
-          break;
-        }
-      }
-      if (!found && tagName === 'p') {
-        stack[stack.length - 1].childNodes.push({
-          nodeName: 'p',
-          tagName: 'p',
-          attrs: [],
-          childNodes: [],
-        });
-      }
-      index = close + 1;
-      continue;
-    }
-
-    if (RAW_TEXT_TAGS.has(tagName)) {
-      const closeNeedle = `</${tagName}>`;
-      const rawClose = source.toLowerCase().indexOf(closeNeedle, close + 1);
-      index = rawClose >= 0 ? rawClose + closeNeedle.length : close + 1;
-      continue;
-    }
-
-    const node = {
-      nodeName: tagName,
-      tagName,
-      attrs: parseTagAttributes(tagHtml),
-      childNodes: [],
-    };
-    if (
-      P_IMPLIED_END_TAG_OPENERS.has(tagName) &&
-      stack.length > 1 &&
-      stack[stack.length - 1].tagName === 'p'
-    ) {
-      stack.pop();
-    }
-    stack[stack.length - 1].childNodes.push(node);
-
-    const isSelfClosing = /\/\s*>$/.test(tagHtml) || VOID_HTML_TAGS.has(tagName);
-    if (!isSelfClosing) {
-      stack.push(node);
-    }
-    index = close + 1;
-  }
-
-  return root;
-}
-
-function isDomElement(node) {
-  return node && typeof node === 'object' && typeof node.nodeName === 'string' && Array.isArray(node.childNodes);
-}
-
-function isDomText(node) {
-  return node && typeof node === 'object' && node.nodeName === '#text' && typeof node.value === 'string';
-}
-
-function directTextFromDomNode(node) {
-  if (!isDomElement(node)) return '';
-  let text = '';
-  for (const child of node.childNodes) {
-    if (isDomText(child)) text += child.value;
-  }
-  return normalizeWhitespace(text);
-}
-
-function extractDomText(node) {
-  if (isDomText(node)) return node.value;
-  if (!isDomElement(node)) return '';
-  return node.childNodes.map(extractDomText).join(' ');
-}
-
-function stripTagsToText(markup) {
-  return normalizeWhitespace(decodeBasicEntities(safeString(markup).replace(/<[^>]*>/g, ' ')));
-}
-
-function escapeHtmlAttr(value) {
-  return safeString(value)
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-function serializeDomNode(node) {
-  if (isDomText(node)) return escapeHtmlText(node.value);
-  if (!isDomElement(node)) return '';
-  const tagName = safeString(node.tagName || node.nodeName).toLowerCase();
-  if (!tagName || tagName === 'body' || tagName === 'html') {
-    return node.childNodes.map(serializeDomNode).join('');
-  }
-  const attrs = Array.isArray(node.attrs) ? node.attrs : [];
-  const attrText = attrs
-    .map((attr) => attr && attr.name ? ` ${attr.name}="${escapeHtmlAttr(attr.value)}"` : '')
-    .join('');
-  if (VOID_HTML_TAGS.has(tagName)) return `<${tagName}${attrText}>`;
-  return `<${tagName}${attrText}>${node.childNodes.map(serializeDomNode).join('')}</${tagName}>`;
-}
-
-function collectIframeSrcdocTextRows(srcdoc) {
-  const rows = [];
-  const cleaned = safeString(srcdoc)
-    .replace(/<script[^]*?<\/script>/gi, ' ')
-    .replace(/<style[^]*?<\/style>/gi, ' ');
-  const tokenRe = /<(h[1-6]|p|label|button)\b[^>]*>([^]*?)<\/\1>|<input\b[^>]*>/gi;
-  let match;
-  while ((match = tokenRe.exec(cleaned)) && rows.length < 16) {
-    const full = match[0] || '';
-    if (full.toLowerCase().startsWith('<input')) continue;
-    const text = stripTagsToText(match[2] || '');
-    if (text) rows.push(text);
-  }
-  const doc = buildBodyDomTree(srcdoc);
-  const pushUnique = (text) => {
-    const cleaned = normalizeWhitespace(text);
-    if (!cleaned || rows.includes(cleaned)) return;
-    rows.push(cleaned);
-  };
-  const walk = (node) => {
-    if (rows.length >= 16 || !isDomElement(node)) return;
-    const tag = safeString(node.tagName || node.nodeName).toLowerCase();
-    if (/^h[1-6]$/.test(tag) || tag === 'label' || tag === 'p') {
-      pushUnique(directTextFromDomNode(node));
-    } else if (tag === 'button') {
-      pushUnique(extractDomText(node));
-    }
-    for (const child of node.childNodes) walk(child);
-  };
-  walk(doc);
-  return rows;
-}
-
-function toWidgetRenderTree(node, path = '0') {
-  if (!isDomElement(node)) return [];
-
-  const tagName = safeString(node.tagName || node.nodeName).toLowerCase();
-  const attrs = attrArrayToMap(node.attrs);
-
-  if (tagName === 'textarea') {
-    const value = extractDomText(node);
-    return [{ kind: 'block', key: `${path}:${tagName}`, tagName, attrs: { ...(attrs || {}), value }, children: [] }];
-  }
-
-  if (tagName === 'input') {
-    const inputType = safeString(attrs && attrs.type || 'text').toLowerCase();
-    if (inputType === 'time') return [{ kind: 'block', key: `${path}:input`, tagName: 'timeinput', attrs, children: [] }];
-    if (inputType === 'month') return [{ kind: 'block', key: `${path}:input`, tagName: 'monthinput', attrs, children: [] }];
-    if (inputType === 'week') return [{ kind: 'block', key: `${path}:input`, tagName: 'weekinput', attrs, children: [] }];
-    if (inputType === 'date') return [{ kind: 'block', key: `${path}:input`, tagName: 'dateinput', attrs, children: [] }];
-    if (inputType === 'datetime-local') return [{ kind: 'block', key: `${path}:input`, tagName: 'datetimelocalinput', attrs, children: [] }];
-  }
-
-  if (tagName === 'progress' || tagName === 'meter') {
-    const fallbackText = normalizeWhitespace(extractDomText(node));
-    const children = [];
-    if (fallbackText) children.push({ kind: 'text', text: fallbackText });
-    children.push({ kind: 'block', key: `${path}:${tagName}`, tagName, attrs, children: [] });
-    return [{ kind: 'block', key: `${path}:${tagName}-row`, tagName: 'barrow', attrs: { 'data-kind': tagName }, children }];
-  }
-
-  if (tagName === 'slider') {
-    const sliderKey = `${path}:${tagName}`;
-    return [{
-      kind: 'block',
-      key: `${path}:${tagName}-row`,
-      tagName: 'barrow',
-      attrs: { 'data-kind': tagName },
-      children: [
-        { kind: 'block', key: `${path}:${tagName}-label`, tagName: 'sliderlabel', attrs: { 'data-slider-key': sliderKey, 'data-slider-init': safeString(attrs && attrs.value) }, children: [] },
-        { kind: 'block', key: sliderKey, tagName, attrs, children: [] },
-      ],
-    }];
-  }
-
-  if (tagName === 'img' || tagName === 'canvas' || tagName === 'number') {
-    return [{ kind: 'block', key: `${path}:${tagName}`, tagName, attrs, children: [] }];
-  }
-
-  if (tagName === 'svg') {
-    if (!TRUESURFER_WIDGET_SVG_ENABLED) {
-      return [];
-    }
-    return [{
-      kind: 'block',
-      key: `${path}:${tagName}`,
-      tagName,
-      attrs: { ...(attrs || {}), 'data-svg': node.childNodes.map(serializeDomNode).join('') },
-      children: [],
-    }];
-  }
-
-  if (tagName === 'iframe') {
-    const iframeKey = `${path}:${tagName}`;
-    const srcdoc = safeString(attrs && attrs.srcdoc);
-    const rows = collectIframeSrcdocTextRows(srcdoc);
-    const iframeAttrs = rows.length > 0
-      ? { ...(attrs || {}), 'data-trueos-srcdoc-text': rows.join('\n') }
-      : attrs;
-    const children = srcdoc.trim()
-      ? toWidgetRenderTree(buildBodyDomTree(srcdoc), `${path}:iframe-doc`)
-      : [];
-    return [{ kind: 'block', key: iframeKey, tagName, attrs: iframeAttrs, children }];
-  }
-
-  if (tagName === 'select') {
-    const options = [];
-    let selectedIndex = 0;
-    for (const child of node.childNodes) {
-      if (!isDomElement(child)) continue;
-      const childTag = safeString(child.tagName || child.nodeName).toLowerCase();
-      if (childTag !== 'option') continue;
-      const label = normalizeWhitespace(extractDomText(child));
-      if (label) options.push(label);
-      const optionAttrs = attrArrayToMap(child.attrs) || {};
-      if (Object.prototype.hasOwnProperty.call(optionAttrs, 'selected')) selectedIndex = Math.max(0, options.length - 1);
-    }
-    return [{
-      kind: 'block',
-      key: `${path}:${tagName}`,
-      tagName,
-      attrs: { ...(attrs || {}), 'data-options': options.join('\n'), 'data-selected-index': safeString(selectedIndex) },
-      children: [],
-    }];
-  }
-
-  if (tagName === 'color') {
-    const mkSpin = (channel, value) => ({
-      kind: 'block',
-      key: `${path}:color-${channel}`,
-      tagName: 'number',
-      attrs: { channel, min: '0', max: '255', step: '1', value },
-      children: [],
-    });
-    return [
-      { kind: 'block', key: `${path}:color`, tagName: 'color', attrs, children: [] },
-      {
-        kind: 'block',
-        key: `${path}:color-controls`,
-        tagName: 'p',
-        attrs: {},
-        children: [mkSpin('r', '255'), mkSpin('g', '0'), mkSpin('b', '0'), mkSpin('a', '255')],
-      },
-    ];
-  }
-
-  if (tagName === 'search') {
-    const inputKey = `${path}:search-input`;
-    return [{
-      kind: 'block',
-      key: `${path}:search-row`,
-      tagName: 'searchrow',
-      attrs: {},
-      children: [
-        { kind: 'block', key: `${path}:search-btn`, tagName: 'searchbutton', attrs: { 'data-focus-key': inputKey }, children: [] },
-        { kind: 'block', key: inputKey, tagName: 'input', attrs: { ...(attrs || {}), type: 'text' }, children: [] },
-      ],
-    }];
-  }
-
-  if (tagName === 'details' || tagName === 'stub') {
-    const detailsKey = `${path}:${tagName}`;
-    const summaryEl = node.childNodes.find((child) => isDomElement(child) && safeString(child.tagName || child.nodeName).toLowerCase() === 'summary');
-    const summaryAttrs = attrArrayToMap(summaryEl && summaryEl.attrs) || {};
-    const summaryTextFallback = summaryEl
-      ? normalizeWhitespace(extractDomText(summaryEl))
-      : normalizeWhitespace(safeString(attrs && (attrs.summary || attrs.title))) || 'Details';
-
-    const buildSummaryChildren = () => {
-      if (!summaryEl) return summaryTextFallback ? [{ kind: 'text', text: summaryTextFallback }] : [];
-      const keep = [];
-      const trailing = [];
-      let inlineText = '';
-      let elementIndex = 0;
-      for (const child of summaryEl.childNodes) {
-        if (isDomText(child)) {
-          inlineText += child.value;
-          continue;
-        }
-        if (!isDomElement(child)) continue;
-        const childTag = safeString(child.tagName || child.nodeName).toLowerCase();
-        const childPath = `${path}:summary.${elementIndex}`;
-        elementIndex += 1;
-        if (childTag === 'input' || childTag === 'button' || childTag === 'select' || childTag === 'textarea') {
-          const nodes = toWidgetRenderTree(child, childPath);
-          const childAttrs = attrArrayToMap(child.attrs) || {};
-          const inputType = safeString(childAttrs.type || 'text').toLowerCase();
-          if (childTag === 'input' && (inputType === 'checkbox' || inputType === 'radio')) trailing.push(...nodes);
-          else keep.push(...nodes);
-        } else {
-          inlineText += extractDomText(child) + ' ';
-        }
-      }
-      const text = normalizeWhitespace(inlineText);
-      const textNodes = text ? [{ kind: 'text', text }] : [];
-      const out = [...textNodes, ...keep, ...trailing];
-      return out.length > 0 ? out : summaryTextFallback ? [{ kind: 'text', text: summaryTextFallback }] : [];
-    };
-
-    const children = [{
-      kind: 'block',
-      key: `${path}:summary`,
-      tagName: 'summary',
-      attrs: {
-        ...summaryAttrs,
-        'data-details-key': detailsKey,
-        ...(attrs && Object.prototype.hasOwnProperty.call(attrs, 'open') ? { 'data-details-open': '1' } : {}),
-      },
-      children: buildSummaryChildren(),
-    }];
-
-    let elementIndex = 0;
-    for (const child of node.childNodes) {
-      if (!isDomElement(child)) continue;
-      const childTag = safeString(child.tagName || child.nodeName).toLowerCase();
-      const childPath = `${path}.${elementIndex}`;
-      elementIndex += 1;
-      if (childTag === 'summary') continue;
-      if (BLOCK_TAGS.has(childTag)) children.push(...toWidgetRenderTree(child, childPath));
-    }
-    return [{ kind: 'block', key: detailsKey, tagName: 'details', attrs, children }];
-  }
-
-  if (tagName === 'table') {
-    const children = [];
-    let inlineText = '';
-    let elementIndex = 0;
-    let implicitTbody = null;
-    let implicitTbodyPath = '';
-
-    const flushInlineText = () => {
-      const text = normalizeWhitespace(inlineText);
-      if (text) children.push({ kind: 'text', text });
-      inlineText = '';
-    };
-    const flushImplicitTbody = () => {
-      if (implicitTbody && implicitTbody.children.length > 0) {
-        children.push(implicitTbody);
-      }
-      implicitTbody = null;
-    };
-
-    for (const child of node.childNodes) {
-      if (isDomText(child)) {
-        inlineText += child.value;
-        continue;
-      }
-      if (!isDomElement(child)) continue;
-      const childTag = safeString(child.tagName || child.nodeName).toLowerCase();
-      const childPath = `${path}.${elementIndex}`;
-      elementIndex += 1;
-
-      if (childTag === 'tr') {
-        flushInlineText();
-        if (!implicitTbody) {
-          implicitTbodyPath = childPath;
-          implicitTbody = {
-            kind: 'block',
-            key: `${implicitTbodyPath}:tbody`,
-            tagName: 'tbody',
-            children: [],
-          };
-        }
-        implicitTbody.children.push(...toWidgetRenderTree(child, `${implicitTbodyPath}.${implicitTbody.children.length}`));
-        continue;
-      }
-
-      flushImplicitTbody();
-      if (BLOCK_TAGS.has(childTag)) {
-        flushInlineText();
-        children.push(...toWidgetRenderTree(child, childPath));
-      } else {
-        inlineText += extractDomText(child) + ' ';
-      }
-    }
-
-    flushImplicitTbody();
-    flushInlineText();
-    return [{ kind: 'block', key: `${path}:${tagName}`, tagName, attrs, children }];
-  }
-
-  const children = [];
-  let inlineText = '';
-  let elementIndex = 0;
-  for (const child of node.childNodes) {
-    if (isDomText(child)) {
-      inlineText += child.value;
-      continue;
-    }
-    if (!isDomElement(child)) continue;
-    const childTag = safeString(child.tagName || child.nodeName).toLowerCase();
-    const childPath = `${path}.${elementIndex}`;
-    elementIndex += 1;
-    if (BLOCK_TAGS.has(childTag)) {
-      const text = normalizeWhitespace(inlineText);
-      if (text) children.push({ kind: 'text', text });
-      inlineText = '';
-      children.push(...toWidgetRenderTree(child, childPath));
-    } else {
-      inlineText += extractDomText(child) + ' ';
-    }
-  }
-
-  const tail = normalizeWhitespace(inlineText);
-  if (tail) children.push({ kind: 'text', text: tail });
-  if (tagName === 'html' || tagName === 'body') return children;
-  return [{ kind: 'block', key: `${path}:${tagName}`, tagName, attrs, children }];
-}
-
-function buildWidgetRenderTree(bodyHtml) {
-  const inner = toWidgetRenderTree(buildBodyDomTree(bodyHtml), '0');
-  return [{
-    kind: 'block',
-    key: 'root:internal-iframe',
-    tagName: 'iframe',
-    attrs: { 'data-root': '1' },
-    children: inner,
-  }];
-}
-
-function collectWidgetTextRows(nodes) {
-  const rows = [];
-  const push = (text) => {
-    const cleaned = normalizeWhitespace(safeString(text));
-    if (!cleaned) return;
-    if (cleaned.indexOf('<truesurfer-') === 0 || cleaned.indexOf('__trueo') === 0) return;
-    rows.push(cleaned);
-  };
-  const walk = (node) => {
-    if (!node || typeof node !== 'object' || rows.length >= 512) return;
-    if (node.kind === 'text') {
-      push(node.text);
-      return;
-    }
-    const children = Array.isArray(node.children) ? node.children : [];
-    for (const child of children) walk(child);
-  };
-  const roots = Array.isArray(nodes) ? nodes : [];
-  for (const node of roots) walk(node);
-  return rows;
 }
 
 function summarizeBodyHierarchy(bodyHierarchy) {
@@ -1162,8 +603,6 @@ function extractDocumentArtifacts(source) {
   const bodyHierarchy = TRUESURFER_SUBSET_PROFILE.includeBodyHierarchy
     ? collectBodyHierarchy(bodyHtml, BODY_HIERARCHY_ROOT_LIMIT)
     : [];
-  const widgetRenderTree = buildWidgetRenderTree(bodyHtml);
-  const widgetTextRows = collectWidgetTextRows(widgetRenderTree);
   const bodyHierarchySummary = summarizeBodyHierarchy(bodyHierarchy);
   const styles = TRUESURFER_SUBSET_PROFILE.includeStyles ? collectStyleArtifacts(html) : [];
   const scripts = TRUESURFER_SUBSET_PROFILE.includeScripts ? collectScriptArtifacts(html) : [];
@@ -1201,8 +640,6 @@ function extractDocumentArtifacts(source) {
     bodyBytes: bodyHtml.length,
     bodyHierarchy,
     bodyHierarchySummary,
-    widgetRenderTree,
-    widgetTextRows,
     gadgetSnapshot,
     ui3Scene,
     styleCount: styles.length,

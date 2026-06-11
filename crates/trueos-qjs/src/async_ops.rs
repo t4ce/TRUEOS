@@ -55,20 +55,11 @@ static COMPLETED: Mutex<BTreeMap<usize, Vec<u32>>> = Mutex::new(BTreeMap::new())
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImageRequestSource {
-    InlineData,
     LocalPath,
     RemoteUrl,
 }
 
 enum PendingImageStage {
-    CachedReady {
-        cached: ReadyImageCacheEntry,
-    },
-    InlineBytes {
-        path: Vec<u8>,
-        bytes: Vec<u8>,
-        source: ImageRequestSource,
-    },
     SourceBytes {
         op_id: u32,
         path: Vec<u8>,
@@ -79,7 +70,6 @@ enum PendingImageStage {
 
 struct PendingImageOp {
     stage: PendingImageStage,
-    cache_key: Option<Vec<u8>>,
     tex_id: u32,
     width: u32,
     height: u32,
@@ -91,18 +81,7 @@ struct PendingImageOp {
 unsafe impl Send for PendingImageOp {}
 
 static PENDING_IMAGES: Mutex<BTreeMap<usize, Vec<PendingImageOp>>> = Mutex::new(BTreeMap::new());
-static READY_IMAGE_CACHE: Mutex<BTreeMap<usize, Vec<ReadyImageCacheEntry>>> =
-    Mutex::new(BTreeMap::new());
 static IMAGE_DIAG_LOGS: AtomicU32 = AtomicU32::new(0);
-
-#[derive(Clone)]
-struct ReadyImageCacheEntry {
-    key: Vec<u8>,
-    tex_id: u32,
-    width: u32,
-    height: u32,
-    mime: String,
-}
 
 #[inline]
 fn image_diag_log(msg: &str) {
@@ -193,56 +172,12 @@ pub unsafe fn register_ready_image_texture_request(
             op_id
         ));
     }
-    let cache_key = match source {
-        ImageRequestSource::InlineData => None,
-        ImageRequestSource::LocalPath | ImageRequestSource::RemoteUrl => Some(path.clone()),
-    };
     let op = PendingImageOp {
         stage: PendingImageStage::SourceBytes {
             op_id,
             path,
             source,
         },
-        cache_key,
-        tex_id,
-        width: 0,
-        height: 0,
-        mime: String::new(),
-        resolve: qjs::js_dup_value(ctx, resolve),
-        reject: qjs::js_dup_value(ctx, reject),
-    };
-    PENDING_IMAGES
-        .lock()
-        .entry(ctx as usize)
-        .or_default()
-        .push(op);
-}
-
-pub unsafe fn register_ready_image_texture_bytes(
-    ctx: *mut qjs::JSContext,
-    resolve: qjs::JSValue,
-    reject: qjs::JSValue,
-    path: Vec<u8>,
-    bytes: Vec<u8>,
-    tex_id: u32,
-    source: ImageRequestSource,
-) {
-    if image_diag_allowed() {
-        image_diag_log(&format!(
-            "img-async: register tex_id={} source={:?} path_len={} bytes={}\n",
-            tex_id,
-            source,
-            path.len(),
-            bytes.len()
-        ));
-    }
-    let op = PendingImageOp {
-        stage: PendingImageStage::InlineBytes {
-            path,
-            bytes,
-            source,
-        },
-        cache_key: None,
         tex_id,
         width: 0,
         height: 0,
@@ -414,125 +349,13 @@ fn path_has_svg_suffix(path: &[u8]) -> bool {
     lower.ends_with(b".svg") || lower.ends_with(b".svgz")
 }
 
-fn hex_nibble(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
-    }
-}
-
-fn percent_decode_bytes(bytes: &[u8]) -> Result<Vec<u8>, i32> {
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0usize;
-    while i < bytes.len() {
-        if bytes[i] == b'%' {
-            if i + 2 >= bytes.len() {
-                return Err(-7);
-            }
-            let hi = hex_nibble(bytes[i + 1]).ok_or(-7)?;
-            let lo = hex_nibble(bytes[i + 2]).ok_or(-7)?;
-            out.push((hi << 4) | lo);
-            i += 3;
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    Ok(out)
-}
-
-fn data_url_svg_payload(bytes: &[u8]) -> Option<&[u8]> {
-    let mut start = 0usize;
-    while start < bytes.len() && matches!(bytes[start], b' ' | b'\t' | b'\r' | b'\n') {
-        start += 1;
-    }
-    let trimmed = &bytes[start..];
-    if trimmed.len() < 5 || !trimmed[..5].eq_ignore_ascii_case(b"data:") {
-        return None;
-    }
-    let comma = trimmed.iter().position(|b| *b == b',')?;
-    let meta = &trimmed[5..comma];
-    let mut is_svg = false;
-    for window in meta.windows(b"image/svg+xml".len()) {
-        if window.eq_ignore_ascii_case(b"image/svg+xml") {
-            is_svg = true;
-            break;
-        }
-    }
-    if !is_svg {
-        return None;
-    }
-    Some(&trimmed[comma + 1..])
-}
-
-fn normalized_svg_upload_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
-    if svg_like_bytes(bytes) {
-        return None;
-    }
-
-    if let Some(payload) = data_url_svg_payload(bytes) {
-        if let Ok(decoded) = percent_decode_bytes(payload)
-            && svg_like_bytes(&decoded)
-        {
-            return Some(decoded);
-        }
-        return None;
-    }
-
-    if bytes.iter().any(|b| *b == b'%')
-        && let Ok(decoded) = percent_decode_bytes(bytes)
-        && svg_like_bytes(&decoded)
-    {
-        return Some(decoded);
-    }
-
-    None
-}
-
 fn queue_svg_texture_upload(tex_id: u32, bytes: &[u8]) -> Result<(), i32> {
-    let decoded = normalized_svg_upload_bytes(bytes);
-    let upload_bytes = decoded.as_deref().unwrap_or(bytes);
-    let rc = unsafe {
-        platform::gfx::upload_texture_svg_async(
-            tex_id,
-            upload_bytes.as_ptr(),
-            upload_bytes.len(),
-        )
-    };
+    let rc =
+        unsafe { platform::gfx::upload_texture_svg_async(tex_id, bytes.as_ptr(), bytes.len()) };
     if rc != 0 {
         return Err(rc);
     }
     Ok(())
-}
-
-fn queue_image_texture_upload(
-    op: &mut PendingImageOp,
-    path: &[u8],
-    bytes: &[u8],
-) -> Result<(), i32> {
-    let is_svg = path_has_svg_suffix(path) || svg_like_bytes(bytes) || data_url_svg_payload(bytes).is_some();
-    let is_jpeg = !is_svg && (path_has_jpeg_suffix(path) || jpeg_like_bytes(bytes));
-    if is_svg {
-        queue_svg_texture_upload(op.tex_id, bytes).map(|_| {
-            op.mime = String::from("image/svg+xml");
-            op.width = 0;
-            op.height = 0;
-        })
-    } else if is_jpeg {
-        queue_jpeg_texture_upload(op.tex_id, bytes).map(|_| {
-            op.mime = String::from("image/jpeg");
-            op.width = 0;
-            op.height = 0;
-        })
-    } else {
-        queue_png_texture_upload(op.tex_id, bytes).map(|(width, height)| {
-            op.mime = String::from("image/png");
-            op.width = width;
-            op.height = height;
-        })
-    }
 }
 
 fn texture_dimensions(tex_id: u32) -> Option<(u32, u32)> {
@@ -559,121 +382,6 @@ unsafe fn resolve_image_op(ctx: *mut qjs::JSContext, op: &PendingImageOp) {
     qjs::js_free_value(ctx, obj);
 }
 
-unsafe fn resolve_cached_image(
-    ctx: *mut qjs::JSContext,
-    resolve: qjs::JSValue,
-    cached: &ReadyImageCacheEntry,
-) {
-    let obj = cached_image_object(ctx, cached);
-    let _ = qjs::jsbind::call1(ctx, resolve, qjs::JSValue::undefined(), obj);
-    qjs::js_free_value(ctx, obj);
-}
-
-unsafe fn cached_image_object(
-    ctx: *mut qjs::JSContext,
-    cached: &ReadyImageCacheEntry,
-) -> qjs::JSValue {
-    let obj = qjs::JS_NewObject(ctx);
-    let _ = qjs::jsbind::set_prop(
-        ctx,
-        obj,
-        b"texId\0",
-        qjs::JS_NewFloat64(ctx, cached.tex_id as f64),
-    );
-    let _ = qjs::jsbind::set_prop(
-        ctx,
-        obj,
-        b"width\0",
-        qjs::JS_NewFloat64(ctx, cached.width as f64),
-    );
-    let _ = qjs::jsbind::set_prop(
-        ctx,
-        obj,
-        b"height\0",
-        qjs::JS_NewFloat64(ctx, cached.height as f64),
-    );
-    let _ = qjs::jsbind::set_str_prop(ctx, obj, b"mime\0", cached.mime.as_str());
-    obj
-}
-
-pub unsafe fn cached_ready_image_texture_object(
-    ctx: *mut qjs::JSContext,
-    key: &[u8],
-) -> Option<qjs::JSValue> {
-    if key.is_empty() {
-        return None;
-    }
-    let cached = {
-        let cache = READY_IMAGE_CACHE.lock();
-        cache
-            .get(&(ctx as usize))
-            .and_then(|entries| entries.iter().find(|entry| entry.key.as_slice() == key).cloned())
-    }?;
-    if image_diag_allowed() {
-        image_diag_log(&format!(
-            "img-async: cache-hit tex_id={} path_len={}\n",
-            cached.tex_id,
-            key.len()
-        ));
-    }
-    Some(cached_image_object(ctx, &cached))
-}
-
-pub unsafe fn try_resolve_cached_ready_image_texture(
-    ctx: *mut qjs::JSContext,
-    resolve: qjs::JSValue,
-    key: &[u8],
-    unused_tex_id: u32,
-) -> bool {
-    if key.is_empty() {
-        return false;
-    }
-    let cached = {
-        let cache = READY_IMAGE_CACHE.lock();
-        cache
-            .get(&(ctx as usize))
-            .and_then(|entries| entries.iter().find(|entry| entry.key.as_slice() == key).cloned())
-    };
-    if let Some(cached) = cached {
-        if image_diag_allowed() {
-            image_diag_log(&format!(
-                "img-async: cache-hit tex_id={} path_len={}\n",
-                cached.tex_id,
-                key.len()
-            ));
-        }
-        resolve_cached_image(ctx, resolve, &cached);
-        crate::cmd_stream::release_managed_tex_id(unused_tex_id);
-        return true;
-    }
-    false
-}
-
-fn remember_ready_image(ctx: *mut qjs::JSContext, op: &PendingImageOp) {
-    let Some(key) = &op.cache_key else {
-        return;
-    };
-    if key.is_empty() || op.tex_id == 0 || op.width == 0 || op.height == 0 {
-        return;
-    }
-    let mut cache = READY_IMAGE_CACHE.lock();
-    let entries = cache.entry(ctx as usize).or_default();
-    if let Some(entry) = entries.iter_mut().find(|entry| entry.key == *key) {
-        entry.tex_id = op.tex_id;
-        entry.width = op.width;
-        entry.height = op.height;
-        entry.mime = op.mime.clone();
-        return;
-    }
-    entries.push(ReadyImageCacheEntry {
-        key: key.clone(),
-        tex_id: op.tex_id,
-        width: op.width,
-        height: op.height,
-        mime: op.mime.clone(),
-    });
-}
-
 unsafe fn reject_image_op(ctx: *mut qjs::JSContext, op: &PendingImageOp, code: i32) {
     let arg = js_int32(code);
     let _ = qjs::jsbind::call1(ctx, op.reject, qjs::JSValue::undefined(), arg);
@@ -693,50 +401,6 @@ unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
     for mut op in ops {
         let mut keep = false;
         match &mut op.stage {
-            PendingImageStage::CachedReady { cached } => {
-                progress = true;
-                resolve_cached_image(ctx, op.resolve, cached);
-            }
-            PendingImageStage::InlineBytes {
-                path,
-                bytes,
-                source,
-            } => {
-                progress = true;
-                if image_diag_allowed() {
-                    image_diag_log(&format!(
-                        "img-async: bytes-inline tex_id={} source={:?} len={}\n",
-                        op.tex_id,
-                        source,
-                        bytes.len()
-                    ));
-                }
-                let path = core::mem::take(path);
-                let bytes = core::mem::take(bytes);
-                match queue_image_texture_upload(&mut op, path.as_slice(), bytes.as_slice()) {
-                    Ok(()) => {
-                        if image_diag_allowed() {
-                            image_diag_log(&format!(
-                                "img-async: upload-queued tex_id={} mime={}\n",
-                                op.tex_id,
-                                op.mime.as_str()
-                            ));
-                        }
-                        op.stage = PendingImageStage::Upload;
-                        keep = true;
-                    }
-                    Err(code) => {
-                        if image_diag_allowed() {
-                            image_diag_log(&format!(
-                                "img-async: upload-queue-error tex_id={} code={}\n",
-                                op.tex_id, code
-                            ));
-                        }
-                        reject_image_op(ctx, &op, code);
-                        crate::cmd_stream::release_managed_tex_id(op.tex_id);
-                    }
-                }
-            }
             PendingImageStage::SourceBytes {
                 op_id,
                 path,
@@ -759,7 +423,6 @@ unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
                 } else {
                     progress = true;
                     match source {
-                        ImageRequestSource::InlineData => {}
                         ImageRequestSource::RemoteUrl => {
                             if image_diag_allowed() {
                                 image_diag_log(&format!(
@@ -779,12 +442,33 @@ unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
                     }
                     match read_completion_bytes(*op_id, rc_or_done as usize) {
                         Ok(bytes) => {
-                            let path = core::mem::take(path);
-                            match queue_image_texture_upload(
-                                &mut op,
-                                path.as_slice(),
-                                bytes.as_slice(),
-                            ) {
+                            let is_svg = path_has_svg_suffix(path.as_slice())
+                                || svg_like_bytes(bytes.as_slice());
+                            let is_jpeg = !is_svg
+                                && (path_has_jpeg_suffix(path.as_slice())
+                                    || jpeg_like_bytes(bytes.as_slice()));
+                            let queued = if is_svg {
+                                queue_svg_texture_upload(op.tex_id, bytes.as_slice()).map(|_| {
+                                    op.mime = String::from("image/svg+xml");
+                                    op.width = 0;
+                                    op.height = 0;
+                                })
+                            } else if is_jpeg {
+                                queue_jpeg_texture_upload(op.tex_id, bytes.as_slice()).map(|_| {
+                                    op.mime = String::from("image/jpeg");
+                                    op.width = 0;
+                                    op.height = 0;
+                                })
+                            } else {
+                                queue_png_texture_upload(op.tex_id, bytes.as_slice()).map(
+                                    |(width, height)| {
+                                        op.mime = String::from("image/png");
+                                        op.width = width;
+                                        op.height = height;
+                                    },
+                                )
+                            };
+                            match queued {
                                 Ok(()) => {
                                     if image_diag_allowed() {
                                         image_diag_log(&format!(
@@ -840,7 +524,6 @@ unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
                             op.mime.as_str()
                         ));
                     }
-                    remember_ready_image(ctx, &op);
                     resolve_image_op(ctx, &op);
                 } else if status < 0 {
                     progress = true;
@@ -871,17 +554,6 @@ unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
     }
 
     progress
-}
-
-/// Pump only image texture requests for callers that need bounded scene progress.
-///
-/// This intentionally avoids resolving unrelated JS jobs/timers/workers; image
-/// fidelity must not be able to block a page scene handoff.
-pub unsafe fn pump_images(ctx: *mut qjs::JSContext) -> bool {
-    if ctx.is_null() {
-        return false;
-    }
-    pump_image_requests(ctx)
 }
 
 unsafe fn pump_net_fetch_text(ctx: *mut qjs::JSContext) -> bool {
@@ -1265,15 +937,10 @@ pub unsafe fn drain_all_for_context(ctx: *mut qjs::JSContext) {
         .remove(&(ctx as usize))
         .unwrap_or_default();
     for op in pending_images {
-        let release_tex = !matches!(op.stage, PendingImageStage::CachedReady { .. });
-        if release_tex {
-            reject_image_op(ctx, &op, -2);
-        }
+        reject_image_op(ctx, &op, -2);
         qjs::js_free_value(ctx, op.resolve);
         qjs::js_free_value(ctx, op.reject);
         match op.stage {
-            PendingImageStage::CachedReady { .. } => {}
-            PendingImageStage::InlineBytes { .. } => {}
             PendingImageStage::SourceBytes { op_id, path, .. } => {
                 let _ = async_fs::discard(op_id);
                 if !path.is_empty() {
@@ -1282,9 +949,7 @@ pub unsafe fn drain_all_for_context(ctx: *mut qjs::JSContext) {
             }
             PendingImageStage::Upload => {}
         }
-        if release_tex {
-            crate::cmd_stream::release_managed_tex_id(op.tex_id);
-        }
+        crate::cmd_stream::release_managed_tex_id(op.tex_id);
     }
 
     let discard_ids = COMPLETED.lock().remove(&(ctx as usize)).unwrap_or_default();

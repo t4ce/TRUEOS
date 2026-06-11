@@ -23,6 +23,7 @@ const PIXI_SERVICE_PARK_MS: u64 = 1_000;
 const PIXI_SERVICE_EXEC_POLL_MS: u64 = 1;
 const PIXI_SERVICE_CURSOR_POLL_MS: u64 = 33;
 const PIXI_SERVICE_MAX_DRAIN_PER_TICK: usize = 512;
+const PIXI_STATIC_SCROLL_ONLY: bool = true;
 const PIXI_CURSOR_DAMAGE_HALF_RATIO: f32 = 0.010;
 const PIXI_CURSOR_DAMAGE_HALF_MIN_PX: f32 = 10.0;
 const PIXI_CURSOR_DAMAGE_HALF_MAX_PX: f32 = 18.0;
@@ -171,7 +172,7 @@ pub async fn pixi_service_task() {
         } else {
             false
         };
-        let keyboard_queued = if drained == 0 {
+        let keyboard_queued = if drained == 0 && !PIXI_STATIC_SCROLL_ONLY {
             queue_kernel_keyboard_events_for_qjs()
         } else {
             false
@@ -340,7 +341,7 @@ fn drain_kernel_cursor_events_for_qjs() -> bool {
         );
     }
 
-    if let Some(frame) = runtime.host.last_frame().cloned() {
+    if !PIXI_STATIC_SCROLL_ONLY && let Some(frame) = runtime.host.last_frame().cloned() {
         let browser_id = runtime.browser_id;
         present_cursor_damage_or_fallback(&mut runtime, browser_id, &frame);
         runtime.last_cursor_signature = cursor_snapshot_signature();
@@ -358,6 +359,9 @@ fn drain_kernel_cursor_events_for_qjs() -> bool {
 }
 
 fn refresh_retained_scene_for_cursor_changes() -> bool {
+    if PIXI_STATIC_SCROLL_ONLY {
+        return false;
+    }
     let signature = cursor_snapshot_signature();
     let mut runtime = pixi_runtime().lock();
     if !runtime.scene_started
@@ -488,7 +492,6 @@ fn process_cursor_event_for_qjs(
         .copied()
         .find(|prev| ui3_cursor_source_matches(*prev, state));
 
-    emit_cursor_events(runtime, previous, state, entry_count);
     if event.wheel != 0 {
         let wheel_target_node = if target_node != 0 {
             target_node
@@ -512,6 +515,11 @@ fn process_cursor_event_for_qjs(
             );
         }
     }
+    if PIXI_STATIC_SCROLL_ONLY {
+        return;
+    }
+
+    emit_cursor_events(runtime, previous, state, entry_count);
 
     if let Some(pos) = runtime
         .cursor_hits
