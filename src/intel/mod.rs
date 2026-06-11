@@ -34,6 +34,7 @@ pub(crate) const GPU_VA_DISPLAY_OVERLAY_BASE: u64 = 0x0300_0000;
 pub(crate) const GPU_VA_DISPLAY_UI2_BASE_BASE: u64 = 0x0400_0000;
 pub(crate) const GPU_VA_DISPLAY_UI2_FRAME_BASE: u64 = 0x0500_0000;
 pub(crate) const GPU_VA_DISPLAY_CURSOR_BASE: u64 = 0x0600_0000;
+pub(crate) const GPU_VA_DISPLAY_UI3_TEXT_BASE: u64 = 0x1000_0000;
 pub(crate) const WARM_ALIGN: usize = 4096;
 const GGTT_ALIAS_BASE_OFF: usize = 0x0080_0000;
 const GGTT_ALIAS_BYTES: usize = 0x0080_0000;
@@ -353,6 +354,12 @@ pub(crate) fn claimed_device() -> Option<Dev> {
 
 pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
     self::display::active_scanout_dimensions()
+}
+
+pub(crate) use self::display::{PrimaryPlaneSource, PrimaryPlaneSourceFormat};
+
+pub(crate) fn set_primary_plane_source(source: PrimaryPlaneSource, reason: &str) -> bool {
+    self::display::set_primary_plane_source(source, reason)
 }
 
 pub fn primary_surface_gpu_addr() -> Option<u64> {
