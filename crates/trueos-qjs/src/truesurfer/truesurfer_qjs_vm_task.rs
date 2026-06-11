@@ -1,4 +1,5 @@
 #![cfg(feature = "trueos")]
+#![allow(dead_code)]
 
 extern crate alloc;
 
@@ -20,8 +21,8 @@ use spin::{Mutex, Once};
 use crate as qjs;
 
 pub const MAX_BROWSER_INSTANCE_ID: u32 = 50;
-pub const TRUESURFER_TASK_POOL_SIZE: usize = 100;
-pub const BOOT_BROWSER_INSTANCE_IDS: [u32; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+pub const TRUESURFER_TASK_POOL_SIZE: usize = 4;
+pub const BOOT_BROWSER_INSTANCE_IDS: [u32; 1] = [1];
 
 pub const HOSTED_KEYBOARD_MOD_SHIFT: u8 = 1 << 0;
 pub const HOSTED_KEYBOARD_MOD_CTRL: u8 = 1 << 1;
@@ -1896,6 +1897,7 @@ unsafe fn submit_ui3_scene(
     (submitted, root_id)
 }
 
+#[allow(unreachable_code)]
 unsafe fn submit_parse5_trueos_pixi_scene(
     rt: *mut qjs::JSRuntime,
     ctx: *mut qjs::JSContext,
@@ -1904,7 +1906,7 @@ unsafe fn submit_parse5_trueos_pixi_scene(
 ) -> (u32, u32) {
     let _ = (rt, ctx, html);
     log_line(format!(
-        "qjs-truesurfer[{}]: parse5 trueos vite app disabled; using text widget fallback\n",
+        "qjs-truesurfer[{}]: legacy capture bridge disabled; widget inspection runs in truesurfer.mjs\n",
         browser_instance_id
     ));
     return (0, 0);
@@ -2173,10 +2175,10 @@ async fn wait_for_queued_html(browser_instance_id: u32) {
 }
 
 unsafe fn dispatch_html(
-    rt: *mut qjs::JSRuntime,
+    _rt: *mut qjs::JSRuntime,
     ctx: *mut qjs::JSContext,
     browser_instance_id: u32,
-    pending: PendingHtml,
+    mut pending: PendingHtml,
 ) -> bool {
     let global = qjs::JS_GetGlobalObject(ctx);
     let surfer = qjs::JS_GetPropertyStr(ctx, global, TRUESURFER_OBJ_PROP.as_ptr() as *const c_char);
@@ -2255,11 +2257,9 @@ unsafe fn dispatch_html(
         parse_result.style_count,
         parse_result.script_count
     ));
-    log_line(format!("qjs-truesurfer[{}]: raw ui3 submit begin\n", browser_instance_id));
-    let (ui3_ops, ui3_root) =
-        submit_parse5_trueos_pixi_scene(rt, ctx, browser_instance_id, pending.html.as_str());
+    let (ui3_ops, ui3_root) = (0, 0);
     log_line(format!(
-        "qjs-truesurfer[{}]: raw ui3 submit done ops={} root={}\n",
+        "qjs-truesurfer[{}]: pixi widget inspect done; ui3 handoff pending ops={} root={}\n",
         browser_instance_id, ui3_ops, ui3_root
     ));
 
@@ -2300,8 +2300,20 @@ unsafe fn dispatch_html(
         ));
     }
 
+    qjs::js_free_value(ctx, result);
+    qjs::js_free_value(ctx, set_html);
+    qjs::js_free_value(ctx, surfer);
+    qjs::js_free_value(ctx, global);
+    qjs::js_free_value(ctx, args[0]);
+    qjs::js_free_value(ctx, args[1]);
+    pending.html.clear();
+    pending.url.clear();
     log_line(format!(
-        "qjs-truesurfer[{}]: qjs value release deferred reason=post-ui3-handoff\n",
+        "qjs-truesurfer[{}]: qjs values released reason=widget-inspect-complete\n",
+        browser_instance_id
+    ));
+    log_line(format!(
+        "qjs-truesurfer[{}]: pending html released reason=widget-inspect-complete\n",
         browser_instance_id
     ));
     true
@@ -2341,49 +2353,9 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
 
         set_global_i32(ctx, TRUESURFER_ID_PROP, browser_instance_id as i32);
 
-        for (source, filename, label) in [
-            (
-                TRUESURFER_PIXI_HOST_PRELUDE_SOURCE,
-                TRUESURFER_PIXI_HOST_PRELUDE_FILENAME,
-                "truesurfer pixi host prelude",
-            ),
-            (
-                TRUESURFER_PIXI_BUNDLE_SOURCE,
-                TRUESURFER_PIXI_BUNDLE_FILENAME,
-                "truesurfer pixi bundle",
-            ),
-            (
-                TRUESURFER_PIXI_COLLECTOR_SOURCE,
-                TRUESURFER_PIXI_COLLECTOR_FILENAME,
-                "truesurfer pixi collector",
-            ),
-            (
-                TRUESURFER_PIXI_CAPTURE_ADAPTER_SOURCE,
-                TRUESURFER_PIXI_CAPTURE_ADAPTER_FILENAME,
-                "truesurfer pixi capture adapter",
-            ),
-        ] {
-            let value = qjs::js_eval_bytes(
-                ctx,
-                source,
-                filename.as_ptr() as *const c_char,
-                qjs::JS_EVAL_TYPE_GLOBAL,
-            );
-            if value.is_exception() {
-                qjs::qjs_diag::dump_last_exception(ctx, label);
-                qjs::js_free_value(ctx, value);
-                let _ = with_browser_state_mut(browser_instance_id, |state| {
-                    state.started = false;
-                });
-                return;
-            }
-            qjs::js_free_value(ctx, value);
-        }
         log_line(format!(
-            "qjs-truesurfer[{}]: pixi hotpath loaded bundle_bytes={} adapter_bytes={}\n",
-            browser_instance_id,
-            TRUESURFER_PIXI_BUNDLE_SOURCE.len(),
-            TRUESURFER_PIXI_CAPTURE_ADAPTER_SOURCE.len()
+            "qjs-truesurfer[{}]: pixi hotpath disabled reason=widget-inspect-only\n",
+            browser_instance_id
         ));
 
         let boot = qjs::js_eval_bytes(
@@ -2407,6 +2379,7 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
         loop {
             let mut busy = false;
             let mut runtime_alive = true;
+            let mut dispatched_this_cycle = false;
 
             for _ in 0..TRUESURFER_BUSY_PUMP_BUDGET {
                 if !qjs::vm::pump_runtime_once(rt, ctx, "truesurfer") {
@@ -2436,8 +2409,22 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
                 if ready {
                     while let Some(pending) = take_queued_html_for_browser(browser_instance_id) {
                         let _ = dispatch_html(rt, ctx, browser_instance_id, pending);
+                        log_line(format!(
+                            "qjs-truesurfer[{}]: dispatch returned source=ready-loop\n",
+                            browser_instance_id
+                        ));
                         dispatched_html = true;
+                        dispatched_this_cycle = true;
                     }
+                }
+
+                if dispatched_html {
+                    busy = false;
+                    log_line(format!(
+                        "qjs-truesurfer[{}]: dispatch loop park ready=1\n",
+                        browser_instance_id
+                    ));
+                    break;
                 }
 
                 busy = !ready || dispatched_html || runtime_has_pending_work(rt, ctx);
@@ -2450,9 +2437,22 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
                 break;
             }
 
+            if dispatched_this_cycle {
+                log_line(format!(
+                    "qjs-truesurfer[{}]: waiting after widget inspect\n",
+                    browser_instance_id
+                ));
+                wait_for_queued_html(browser_instance_id).await;
+                continue;
+            }
+
             if !busy && !runtime_has_pending_work(rt, ctx) && truesurfer_ready(ctx) {
                 if let Some(pending) = take_queued_html_for_browser(browser_instance_id) {
                     let _ = dispatch_html(rt, ctx, browser_instance_id, pending);
+                    log_line(format!(
+                        "qjs-truesurfer[{}]: dispatch returned source=idle-loop\n",
+                        browser_instance_id
+                    ));
                     continue;
                 }
                 wait_for_queued_html(browser_instance_id).await;

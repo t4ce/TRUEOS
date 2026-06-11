@@ -23,6 +23,10 @@ const TRUESURFER_MAX_SCENE_IMAGES = 5;
 let truesurferSubsetProfile = null;
 let extractDocumentArtifactsFn = null;
 let createBrowserAssetManagerFn = null;
+let parseDocumentFn = null;
+let domToWidgetsFn = null;
+let collectWidgetStatsFn = null;
+let flattenWidgetTreeFn = null;
 let browserAssetManager = null;
 let currentNavigationUrl = '';
 let currentSceneImageUrls = [];
@@ -133,8 +137,106 @@ function publishLatestArtifacts() {
 function logSyncPipeline(url, parsed) {
   const profile = truesurferSubsetProfile || {};
   log(
-    `[truesurfer pipeline] browser=${browserId} mode=minimal_subset entry=signal stages=subset_scan>head+title>body_outline shell_bytes=${parsed.shellBytes} body_bytes=${parsed.bodyBytes} body_nodes=${parsed.bodyHierarchy.length} max_roots=${Number(profile.maxBodyHierarchyRoots || 0)} max_children=${Number(profile.maxBodyHierarchyChildrenPerNode || 0)} max_depth=${Number(profile.maxBodyHierarchyDepth || 0)} url=${url}`,
+    `[truesurfer pipeline] browser=${browserId} mode=minimal_subset entry=signal stages=subset_scan>head+title>body_outline shell_bytes=${parsed.shellBytes} body_bytes=${parsed.bodyBytes} subset_body_roots=${parsed.bodyHierarchy.length} max_roots=${Number(profile.maxBodyHierarchyRoots || 0)} max_children=${Number(profile.maxBodyHierarchyChildrenPerNode || 0)} max_depth=${Number(profile.maxBodyHierarchyDepth || 0)} url=${url}`,
   );
+}
+
+function compactLogText(value, maxLength = 48) {
+  const text = safeString(value).replace(/\s+/g, ' ').trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 1))}~`;
+}
+
+function sortedCountPairs(counts, maxItems = 12) {
+  return Object.keys(counts || {})
+    .sort((a, b) => {
+      const delta = Number(counts[b] || 0) - Number(counts[a] || 0);
+      return delta || a.localeCompare(b);
+    })
+    .slice(0, maxItems)
+    .map((key) => `${key}:${Number(counts[key] || 0)}`)
+    .join(',');
+}
+
+function compactLogValue(value) {
+  if (value === true || value === false) return value ? 'true' : 'false';
+  if (value === null) return 'null';
+  if (value === undefined) return 'undefined';
+  if (Array.isArray(value)) return `[${value.length}]`;
+  if (typeof value === 'object') return `{${Object.keys(value).length}}`;
+  const text = compactLogText(value, 32).replace(/"/g, "'");
+  if (text.length === 0) return '""';
+  return text.includes(' ') ? `"${text}"` : text;
+}
+
+function compactKeyValuePairs(object, maxItems = 8) {
+  if (!object || typeof object !== 'object') return '-';
+  const keys = Object.keys(object).sort().slice(0, maxItems);
+  if (keys.length === 0) return '-';
+  return keys.map((key) => `${key}:${compactLogValue(object[key])}`).join(',');
+}
+
+function widgetRowSummary(entry, index) {
+  const node = entry && entry.node ? entry.node : {};
+  const depth = Math.max(0, Number(entry && entry.depth) || 0);
+  const rowId = node.kind === 'widget-root' ? 'root' : String(index);
+  if (node.kind === 'text') {
+    return [
+      `#=${rowId}`,
+      `depth=${depth}`,
+      'kind=text',
+      'key=-',
+      'tag=#text',
+      `chars=${safeString(node.text).length}`,
+      `text="${compactLogText(node.text)}"`,
+    ].join(' ');
+  }
+
+  const attrs = node.attrs && typeof node.attrs === 'object' ? node.attrs : {};
+  const props = node.props && typeof node.props === 'object' ? node.props : {};
+  const attrKeys = Object.keys(attrs).sort().slice(0, 8).join(',');
+  return [
+    `#=${rowId}`,
+    `depth=${depth}`,
+    `kind=${safeString(node.kind || '')}`,
+    `key=${safeString(node.key || '-')}`,
+    `tag=${safeString(node.tag || '')}`,
+    `widget=${safeString(node.widget || '')}`,
+    `category=${safeString(node.category || '')}`,
+    `role=${safeString(node.role || '')}`,
+    `children=${Array.isArray(node.children) ? node.children.length : 0}`,
+    `attrs=${attrKeys || '-'}`,
+    `props=${compactKeyValuePairs(props)}`,
+  ].join(' ');
+}
+
+function logWidgetTable(url, widgetTree, startedAt) {
+  if (!widgetTree || typeof collectWidgetStatsFn !== 'function' || typeof flattenWidgetTreeFn !== 'function') {
+    log(`[truesurfer widgets] browser=${browserId} status=unavailable url=${url}`);
+    return;
+  }
+
+  const stats = collectWidgetStatsFn(widgetTree);
+  const flat = flattenWidgetTreeFn(widgetTree);
+  const rootRow = flat.find((entry) => entry && entry.node && entry.node.kind === 'widget-root');
+  const rows = flat.filter((entry) => entry && entry.node && entry.node.kind !== 'widget-root');
+  const maxRows = 80;
+  const elapsed = Date.now() - startedAt;
+
+  log(
+    `[truesurfer widgets] browser=${browserId} widget_nodes=${stats.nodes} widgets=${stats.widgets} text=${stats.text} complex=${stats.complex} interactive=${stats.interactive} tags=${sortedCountPairs(stats.tags)} categories=${sortedCountPairs(stats.categories)} rows=${rows.length} shown=${Math.min(rows.length, maxRows)} ms=${elapsed} url=${url}`,
+  );
+  log('[truesurfer widgets table] columns="# depth kind key tag widget category role children attrs props/text"');
+  if (rootRow) {
+    log(`[truesurfer widgets row] browser=${browserId} ${widgetRowSummary(rootRow, 0)}`);
+  }
+
+  for (let index = 0; index < rows.length && index < maxRows; index += 1) {
+    log(`[truesurfer widgets row] browser=${browserId} ${widgetRowSummary(rows[index], index)}`);
+  }
+  if (rows.length > maxRows) {
+    log(`[truesurfer widgets table] browser=${browserId} truncated=${rows.length - maxRows}`);
+  }
 }
 
 function getImportHelpers(baseUrl) {
@@ -157,33 +259,49 @@ async function warmBrowserPipelineModules() {
     './truesurfer_extract.mjs',
     './truesurfer_assets.mjs',
     './css.mjs',
+    'parse5',
+    '../widlib/index.mjs',
   ];
   for (let index = 0; index < imports.length; index += 1) {
     await helpers.prefetch(imports[index]);
   }
 
-  const [extractMod, assetsMod, cssMod] = await Promise.all([
+  const [extractMod, assetsMod, cssMod, parse5Mod, widMod] = await Promise.all([
     helpers.import('./truesurfer_extract.mjs'),
     helpers.import('./truesurfer_assets.mjs'),
     helpers.import('./css.mjs'),
+    helpers.import('parse5'),
+    helpers.import('../widlib/index.mjs'),
   ]);
 
   const extractReady = !!extractMod && typeof extractMod.extractDocumentArtifacts === 'function';
   const assetsReady = !!assetsMod && typeof assetsMod.createBrowserAssetManager === 'function';
   const cssReady = !!cssMod && typeof cssMod.extractCssSection === 'function';
-  if (!extractReady || !assetsReady || !cssReady) {
+  const parseReady = !!parse5Mod && typeof parse5Mod.parse === 'function';
+  const widgetsReady =
+    !!widMod
+    && typeof widMod.domToWidgets === 'function'
+    && typeof widMod.collectWidgetStats === 'function'
+    && typeof widMod.flattenWidgetTree === 'function';
+  if (!extractReady || !assetsReady || !cssReady || !parseReady || !widgetsReady) {
     throw new Error(
-      `browser pipeline warmup incomplete extract_ready=${extractReady ? 1 : 0} assets_ready=${assetsReady ? 1 : 0} css_ready=${cssReady ? 1 : 0}`,
+      `browser pipeline warmup incomplete extract_ready=${extractReady ? 1 : 0} assets_ready=${assetsReady ? 1 : 0} css_ready=${cssReady ? 1 : 0} parse_ready=${parseReady ? 1 : 0} widgets_ready=${widgetsReady ? 1 : 0}`,
     );
   }
 
   truesurferSubsetProfile = extractMod.TRUESURFER_SUBSET_PROFILE || null;
   extractDocumentArtifactsFn = extractMod.extractDocumentArtifacts;
   createBrowserAssetManagerFn = assetsMod.createBrowserAssetManager;
+  parseDocumentFn = parse5Mod.parse;
+  domToWidgetsFn = widMod.domToWidgets;
+  collectWidgetStatsFn = widMod.collectWidgetStats;
+  flattenWidgetTreeFn = widMod.flattenWidgetTree;
   root.__trueosTruesurferModules = {
     extractReady: 1,
     assetsReady: 1,
     cssReady: 1,
+    parseReady: 1,
+    widgetsReady: 1,
   };
 }
 
@@ -193,6 +311,8 @@ async function bootstrapTruesurfer() {
       extractReady: 0,
       assetsReady: 0,
       cssReady: 0,
+      parseReady: 0,
+      widgetsReady: 0,
       baseUrl: TRUESURFER_MODULE_BASE,
     };
   try {
@@ -205,11 +325,13 @@ async function bootstrapTruesurfer() {
       extractReady: modules.extractReady ? 1 : 0,
       assetsReady: modules.assetsReady ? 1 : 0,
       cssReady: modules.cssReady ? 1 : 0,
+      parseReady: modules.parseReady ? 1 : 0,
+      widgetsReady: modules.widgetsReady ? 1 : 0,
       baseUrl: TRUESURFER_MODULE_BASE,
     };
     root.__trueosTruesurferReady = 1;
     log(
-      `[truesurfer bootstrap] browser=${browserId} ready extract=${modules.extractReady ? 1 : 0} assets=${modules.assetsReady ? 1 : 0} css=${modules.cssReady ? 1 : 0}`,
+      `[truesurfer bootstrap] browser=${browserId} ready extract=${modules.extractReady ? 1 : 0} assets=${modules.assetsReady ? 1 : 0} css=${modules.cssReady ? 1 : 0} parse=${modules.parseReady ? 1 : 0} widgets=${modules.widgetsReady ? 1 : 0}`,
     );
   } catch (error) {
     const message = error && error.stack ? String(error.stack) : String(error || 'unknown bootstrap error');
@@ -218,6 +340,8 @@ async function bootstrapTruesurfer() {
       extractReady: 0,
       assetsReady: 0,
       cssReady: 0,
+      parseReady: 0,
+      widgetsReady: 0,
       baseUrl: TRUESURFER_MODULE_BASE,
       error: message,
     };
@@ -230,31 +354,24 @@ function setHtml(nextHtml, meta) {
   const html = safeString(nextHtml);
   const url = safeString(meta && meta.url);
   const lines = countLines(html);
-  const assetManager = ensureBrowserAssetManager();
 
   currentNavigationUrl = url;
   currentSceneImageUrls = [];
-  if (assetManager && typeof assetManager.beginPageLoad === 'function') {
-    assetManager.beginPageLoad();
-  }
 
-  if (typeof extractDocumentArtifactsFn !== 'function') {
+  if (typeof extractDocumentArtifactsFn !== 'function' || typeof parseDocumentFn !== 'function' || typeof domToWidgetsFn !== 'function') {
     return {
       ok: 0,
       bytes: html.length,
       lines,
-      error: 'truesurfer extractor is not ready',
+      error: 'truesurfer extractor/widgets are not ready',
     };
   }
 
   try {
+    const widgetStart = Date.now();
+    const parsedDocument = parseDocumentFn(html);
+    const widgetTree = domToWidgetsFn(parsedDocument);
     const parsed = extractDocumentArtifactsFn(html);
-    if (assetManager && typeof assetManager.traceHtmlVideoSources === 'function') {
-      assetManager.traceHtmlVideoSources(html, { pageUrl: url });
-    }
-    currentSceneImageUrls = assetManager
-      ? assetManager.primeHtmlImageUrls(html, { maxCount: TRUESURFER_MAX_SCENE_IMAGES })
-      : [];
     currentArtifactsState = {
       url,
       title: parsed.title,
@@ -272,13 +389,12 @@ function setHtml(nextHtml, meta) {
       scriptBytes: parsed.scriptBytes,
     };
     publishLatestArtifacts();
-    const imageSummary = assetManager
-      ? assetManager.summarizeImageUrls(currentSceneImageUrls)
-      : { total: 0, pending: 0, ready: 0, error: 0 };
+    const imageSummary = { total: 0, pending: 0, ready: 0, error: 0 };
     logSyncPipeline(url, parsed);
     root.__trueosTruesurferLastStyleIndex = parsed.styleIndex;
+    logWidgetTable(url, widgetTree, widgetStart);
     log(
-      `[truesurfer extract] browser=${browserId} title=${parsed.title} shell_bytes=${parsed.shellBytes} body_bytes=${parsed.bodyBytes} body_nodes=${parsed.bodyHierarchy.length} body_outline=${parsed.bodyHierarchySummary} style_count=${parsed.styleCount} style_slots=${parsed.styleSlotCount} styled_nodes=${parsed.styledNodeCount} style_rules=${parsed.styleRuleCount} script_count=${parsed.scriptCount} images=${imageSummary.total} image_pending=${imageSummary.pending} image_ready=${imageSummary.ready} dom_ms=${parsed.domParseMs} css_ms=${parsed.styleIndexMs} ms=${parsed.parseMs} url=${url}`,
+      `[truesurfer extract] browser=${browserId} title=${parsed.title} shell_bytes=${parsed.shellBytes} body_bytes=${parsed.bodyBytes} subset_body_roots=${parsed.bodyHierarchy.length} body_outline=${parsed.bodyHierarchySummary} style_count=${parsed.styleCount} style_slots=${parsed.styleSlotCount} styled_nodes=${parsed.styledNodeCount} style_rules=${parsed.styleRuleCount} script_count=${parsed.scriptCount} images=${imageSummary.total} image_pending=${imageSummary.pending} image_ready=${imageSummary.ready} dom_ms=${parsed.domParseMs} css_ms=${parsed.styleIndexMs} ms=${parsed.parseMs} url=${url}`,
     );
     return {
       ok: 1,

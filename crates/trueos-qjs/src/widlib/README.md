@@ -2,12 +2,12 @@
 
 `wid` is the renderer-agnostic widget description layer.
 
-It does not know about Pixi, Yoga, retained scenes, pointer harnesses, popup state, or capture handoff. It only turns parse5 HTML/DOM into a small tree of widget descriptors that another runtime can lay out and render.
+It does not know about Pixi, Yoga, retained scenes, pointer harnesses, popup state, or capture handoff. It only turns an already-parsed DOM into a small tree of widget descriptors that another runtime can lay out and render.
 
 ## Files
 
 - `index.mjs`: public exports
-- `fromDom.mjs`: parse5 HTML/DOM to widget descriptor tree
+- `fromDom.mjs`: parsed DOM to widget descriptor tree
 - `registry.mjs`: generic registry engine
 - `widgets/forms.mjs`: form/control widget definitions and helpers
 - `widgets/values.mjs`: value/rich-control widget definitions and helpers
@@ -35,35 +35,28 @@ import {
   defaultRegistry,
   domToWidgets,
   flattenWidgetTree,
-  parseHtmlToWidgets,
   walkWidgets,
 } from './src/wid/index.mjs';
 
-const treeFromHtml = parseHtmlToWidgets('<p><button>Go</button></p>');
-const stats = collectWidgetStats(treeFromHtml);
-
-// Or, if parse5 already produced a document:
 const treeFromDom = domToWidgets(parse5Document, {
   registry: defaultRegistry,
-  parseIframeSrcdoc: false,
 });
+const stats = collectWidgetStats(treeFromDom);
 ```
 
 Flow:
 
-1. `parseHtmlToWidgets(html, options)` parses HTML with parse5.
-2. `domToWidgets(dom, options)` finds the document body and starts traversal.
-3. `nodeToWidgets(node, path, options)` normalizes each DOM node.
-4. `attrsToObject(node)` converts parse5 attributes into plain objects.
-5. Inline text is folded into `{ kind: "text", text }`.
-6. Block/control elements become `{ kind: "widget", tag, attrs, props, meta, children }`.
-7. The registry classifies widget tags into renderer-neutral categories.
-8. `walkWidgets`, `flattenWidgetTree`, and `collectWidgetStats` inspect the descriptor tree.
-9. A renderer/layout runtime consumes the descriptor tree.
+1. `domToWidgets(dom, options)` finds the document body and starts traversal.
+2. `nodeToWidgets(node, path, options)` normalizes each DOM node.
+3. `attrsToObject(node)` converts DOM attributes into plain objects.
+4. Inline text is folded into `{ kind: "text", text }`.
+5. Block/control elements become `{ kind: "widget", tag, attrs, props, meta, children }`.
+6. The registry classifies widget tags into renderer-neutral categories.
+7. `walkWidgets`, `flattenWidgetTree`, and `collectWidgetStats` inspect the descriptor tree.
+8. A renderer/layout runtime consumes the descriptor tree.
 
 Public calls:
 
-- `parseHtmlToWidgets(html, options)`
 - `domToWidgets(parse5DocumentOrNode, options)`
 - `nodeToWidgets(parse5Node, path, options)`
 - `createWidgetRegistry(definitions)`
@@ -173,7 +166,7 @@ Complex or represent-only widgets:
 - `details` / `summary`: keep open/toggle semantics; runtime decides collapse behavior.
 - `dialog`: descriptor only; dragging, z-order, and focus trapping are runtime work.
 - `img` / `svg`: descriptor plus source/markup; async texture/image loading is renderer work.
-- `iframe`: descriptor plus `srcdoc`; nested parsing is opt-in via `parseIframeSrcdoc`.
+- `iframe`: descriptor plus `srcdoc`; nested parsing/root scene ownership stays outside this layer.
 - Temporal inputs: stay as `input[type=date|time|month|week|datetime-local]` with `currentStatus: "defer-special-ui"`.
 
 Legacy synthetic entries are registered so the existing app can be mapped later:

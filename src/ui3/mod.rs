@@ -11,7 +11,6 @@ mod font {
     pub(super) mod gpgpu_font;
 }
 mod hit_scene;
-mod html_widgets;
 mod intel_present;
 mod pixi_host;
 mod pixi_service;
@@ -36,8 +35,9 @@ pub use self::ui3_asset_service::{ui3_asset_service_ready, ui3_asset_service_tas
 
 pub type Ui3NodeId = u32;
 
-pub(crate) const TRUESURFER_SMOKE_HTML_URL: &str = "inline://trueos/parse5-demo-input.html";
-pub(crate) const TRUESURFER_SMOKE_HTML_SOURCE: &str = include_str!("truesurfer_demo_input.html");
+pub(crate) const TRUESURFER_SMOKE_HTML_URL: &str = "inline://trueos/input.html";
+pub(crate) const TRUESURFER_SMOKE_HTML_SOURCE: &str =
+    include_str!("../../crates/trueos-qjs/src/html/input.html");
 
 #[inline]
 fn now_ms() -> u64 {

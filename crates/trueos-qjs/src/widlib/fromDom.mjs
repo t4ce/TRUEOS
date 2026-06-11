@@ -144,7 +144,6 @@ export function nodeToWidgets(node, path = '0', options = {}) {
   const opts = {
     registry: options.registry ?? defaultRegistry,
     keepUnknownElements: Boolean(options.keepUnknownElements),
-    parseIframeSrcdoc: Boolean(options.parseIframeSrcdoc),
   };
 
   if (isText(node)) {
@@ -188,14 +187,6 @@ export function nodeToWidgets(node, path = '0', options = {}) {
     props = { dimensions: replacedDimensionsFromAttrs(attrs) };
   } else if (tag === 'iframe') {
     props = { ...iframeSrcdocProps(attrs), dimensions: replacedDimensionsFromAttrs(attrs) };
-    if (opts.parseIframeSrcdoc && props.srcdoc.trim().length > 0) {
-      try {
-        const doc = parse5.parse(props.srcdoc);
-        children = domToWidgets(doc, { ...opts, rootKey: `${path}:iframe-doc` }).children;
-      } catch {
-        children = [makeText('(iframe srcdoc parse error)')];
-      }
-    }
   } else if (tag === 'input') {
     const inputType = String(attrs.type ?? 'text').toLowerCase();
     if (inputType === 'date' || inputType === 'time' || inputType === 'month' || inputType === 'week' || inputType === 'datetime-local') {
@@ -230,8 +221,4 @@ export function domToWidgets(dom, options = {}) {
     children,
     registry: registry.entries(),
   };
-}
-
-export function parseHtmlToWidgets(html, options = {}) {
-  return domToWidgets(parse5.parse(String(html ?? '')), options);
 }
