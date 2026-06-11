@@ -12,7 +12,6 @@ use spin::Mutex;
 
 pub(crate) type HostedSurfaceState = trueos_qjs::browser_task::HostedBrowserSurfaceState;
 pub(crate) type HostedInteractiveState = trueos_qjs::browser_task::HostedBrowserInteractiveState;
-pub(crate) type HostedGadgetSnapshot = trueos_qjs::browser_task::HostedBrowserGadgetSnapshot;
 pub(crate) type HostedKeyboardEvent = trueos_qjs::browser_task::HostedKeyboardEvent;
 pub(crate) type ParseResult = trueos_qjs::browser_task::ParseResult;
 
@@ -168,10 +167,6 @@ pub(crate) fn hosted_surface_state(browser_instance_id: u32) -> HostedSurfaceSta
 
 pub(crate) fn hosted_interactive_state(browser_instance_id: u32) -> HostedInteractiveState {
     trueos_qjs::browser_task::hosted_interactive_state_for_browser(browser_instance_id)
-}
-
-pub(crate) fn hosted_gadget_snapshot(browser_instance_id: u32) -> HostedGadgetSnapshot {
-    trueos_qjs::browser_task::hosted_gadget_snapshot_for_browser(browser_instance_id)
 }
 
 pub(crate) fn set_hosted_viewport(

@@ -8,10 +8,9 @@ In Truesurfer:
 - Lightning CSS enrichment of the document and DOM subset
 - Pipeline channel handoff to Yoga for layout enrichment
 
-In UI2:
-- N-window compositor-pattern UI that can already render the minimal demo
-- Conceptually the full bridge is in place: acquired HTML can flow through parse,
-  enrichment, layout, and minimal hosted composition for visual feedback
+Runtime surface:
+- Raw Parse5/Lightning/Yoga extraction state for the kernel renderer
+- No migrated control layer and no hosted handoff
 */
 
 const root = globalThis;
@@ -20,20 +19,14 @@ const TRUESURFER_MODULE_BASE = typeof import.meta === 'object' && import.meta &&
   ? String(import.meta.url)
   : '/qjs/truesurfer/truesurfer.mjs';
 const TRUESURFER_MAX_SCENE_IMAGES = 5;
-const TRUESURFER_IMAGE_VERTICAL_GAP_PX = 12;
-const TRUESURFER_IMAGE_NODE_ID_BASE = 0x01000000;
-const TRUESURFER_FALLBACK_IMAGE_SIZE_PX = 96;
 
 let truesurferSubsetProfile = null;
 let extractDocumentArtifactsFn = null;
 let createBrowserAssetManagerFn = null;
-let buildTextWidgetSceneFn = null;
 let browserAssetManager = null;
 let currentNavigationUrl = '';
-let currentBaseGadgetSnapshot = { version: 1, gadgets: [] };
 let currentSceneImageUrls = [];
 let currentArtifactsState = null;
-let currentGadgetSnapshotVersion = 1;
 
 function getUrlOrigin(url) {
   const value = typeof url === 'string' ? url.trim() : '';
@@ -106,52 +99,13 @@ function countLines(source) {
   return lines;
 }
 
-function cloneGadgetSnapshot(snapshot) {
-  const source = snapshot && typeof snapshot === 'object' ? snapshot : null;
-  const gadgets = source && Array.isArray(source.gadgets)
-    ? source.gadgets.map((gadget) => Object.assign({}, gadget || {}))
-    : [];
-  const version = Math.max(1, Number(source && source.version || 0) | 0);
-  const backgroundColorRgb = Math.max(0, Number(source && source.backgroundColorRgb || 0) >>> 0) & 0xFFFFFF;
-  return { version, backgroundColorRgb, gadgets };
-}
-
-function nextGadgetSnapshotVersion() {
-  currentGadgetSnapshotVersion = (currentGadgetSnapshotVersion + 1) >>> 0;
-  if (currentGadgetSnapshotVersion <= 0) {
-    currentGadgetSnapshotVersion = 1;
-  }
-  return currentGadgetSnapshotVersion;
-}
-
-function gadgetBottomPx(gadget) {
-  const item = gadget && typeof gadget === 'object' ? gadget : null;
-  if (!item) return 0;
-  const yPx = Math.max(0, Number(item.yPx || 0) | 0);
-  const heightPx = Math.max(
-    Number(item.heightPx || 0) | 0,
-    Number(item.lineHeightPx || 0) | 0,
-    0,
-  );
-  return yPx + heightPx;
-}
-
-function snapshotBottomPx(snapshot) {
-  const items = snapshot && Array.isArray(snapshot.gadgets) ? snapshot.gadgets : [];
-  let bottom = 0;
-  for (let index = 0; index < items.length; index += 1) {
-    bottom = Math.max(bottom, gadgetBottomPx(items[index]));
-  }
-  return bottom;
-}
-
 function ensureBrowserAssetManager() {
   if (browserAssetManager || typeof createBrowserAssetManagerFn !== 'function') {
     return browserAssetManager;
   }
   const publish = () => {
     try {
-      publishLatestArtifactsSnapshot();
+      publishLatestArtifacts();
     } catch (_) {}
   };
   browserAssetManager = createBrowserAssetManagerFn({
@@ -165,66 +119,15 @@ function ensureBrowserAssetManager() {
   return browserAssetManager;
 }
 
-function buildSceneImageGadgets(imageUrls) {
-  const urls = Array.isArray(imageUrls) ? imageUrls : [];
-  const manager = ensureBrowserAssetManager();
-  if (!manager) return [];
-
-  const out = [];
-  let yCursor = snapshotBottomPx(currentBaseGadgetSnapshot);
-  for (let index = 0; index < urls.length && out.length < TRUESURFER_MAX_SCENE_IMAGES; index += 1) {
-    const resolvedUrl = String(urls[index] || '').trim();
-    if (!resolvedUrl) continue;
-    const cached = manager.getCachedImageTexture(resolvedUrl);
-    if (!cached || String(cached.state || '') !== 'ready') continue;
-    const texId = Math.max(0, Number(cached.texId || 0) | 0);
-    if (texId <= 0) continue;
-
-    const widthPx = Math.max(1, Number(cached.pixelWidth || 0) | 0 || TRUESURFER_FALLBACK_IMAGE_SIZE_PX);
-    const heightPx = Math.max(1, Number(cached.pixelHeight || 0) | 0 || TRUESURFER_FALLBACK_IMAGE_SIZE_PX);
-    if (yCursor > 0) {
-      yCursor += TRUESURFER_IMAGE_VERTICAL_GAP_PX;
-    }
-    out.push({
-      nodeId: TRUESURFER_IMAGE_NODE_ID_BASE + out.length + 1,
-      tag: 'img',
-      text: '',
-      xPx: 0,
-      yPx: yCursor,
-      widthPx,
-      heightPx,
-      fontSizePx: 0,
-      lineHeightPx: heightPx,
-      textColorRgb: 0,
-      buttonLike: false,
-      changed: false,
-      texId,
-    });
-    yCursor += heightPx;
-  }
-  return out;
-}
-
-function composeCurrentGadgetSnapshot() {
-  const snapshot = cloneGadgetSnapshot(currentBaseGadgetSnapshot);
-  const imageGadgets = buildSceneImageGadgets(currentSceneImageUrls);
-  if (imageGadgets.length > 0) {
-    snapshot.gadgets = snapshot.gadgets.concat(imageGadgets);
-  }
-  snapshot.version = nextGadgetSnapshotVersion();
-  return snapshot;
-}
-
-function publishLatestArtifactsSnapshot() {
+function publishLatestArtifacts() {
   if (!currentArtifactsState) return null;
   const nextArtifacts = Object.assign({}, currentArtifactsState);
-  nextArtifacts.gadgetSnapshot = composeCurrentGadgetSnapshot();
   if (browserAssetManager) {
     nextArtifacts.imageSummary = browserAssetManager.summarizeImageUrls(currentSceneImageUrls);
   }
   root.__trueosTruesurferLastArtifacts = nextArtifacts;
   currentArtifactsState = nextArtifacts;
-  return nextArtifacts.gadgetSnapshot;
+  return nextArtifacts;
 }
 
 function logSyncPipeline(url, parsed) {
@@ -254,43 +157,33 @@ async function warmBrowserPipelineModules() {
     './truesurfer_extract.mjs',
     './truesurfer_assets.mjs',
     './css.mjs',
-    './text_widget_scene.mjs',
   ];
   for (let index = 0; index < imports.length; index += 1) {
     await helpers.prefetch(imports[index]);
   }
 
-  const [extractMod, assetsMod, cssMod, textWidgetMod] = await Promise.all([
+  const [extractMod, assetsMod, cssMod] = await Promise.all([
     helpers.import('./truesurfer_extract.mjs'),
     helpers.import('./truesurfer_assets.mjs'),
     helpers.import('./css.mjs'),
-    helpers.import('./text_widget_scene.mjs'),
   ]);
 
   const extractReady = !!extractMod && typeof extractMod.extractDocumentArtifacts === 'function';
   const assetsReady = !!assetsMod && typeof assetsMod.createBrowserAssetManager === 'function';
   const cssReady = !!cssMod && typeof cssMod.extractCssSection === 'function';
-  const textWidgetReady =
-    !!textWidgetMod &&
-    (typeof textWidgetMod.buildTextWidgetScene === 'function' ||
-      typeof textWidgetMod.buildDemoTextWidgetScene === 'function');
-  if (!extractReady || !assetsReady || !cssReady || !textWidgetReady) {
+  if (!extractReady || !assetsReady || !cssReady) {
     throw new Error(
-      `browser pipeline warmup incomplete extract_ready=${extractReady ? 1 : 0} assets_ready=${assetsReady ? 1 : 0} css_ready=${cssReady ? 1 : 0} text_widget_ready=${textWidgetReady ? 1 : 0}`,
+      `browser pipeline warmup incomplete extract_ready=${extractReady ? 1 : 0} assets_ready=${assetsReady ? 1 : 0} css_ready=${cssReady ? 1 : 0}`,
     );
   }
 
   truesurferSubsetProfile = extractMod.TRUESURFER_SUBSET_PROFILE || null;
   extractDocumentArtifactsFn = extractMod.extractDocumentArtifacts;
   createBrowserAssetManagerFn = assetsMod.createBrowserAssetManager;
-  buildTextWidgetSceneFn = textWidgetMod.buildTextWidgetScene || textWidgetMod.buildDemoTextWidgetScene;
-  root.__trueosBuildTextWidgetScene = buildTextWidgetSceneFn;
-  root.__trueosBuildDemoTextWidgetScene = buildTextWidgetSceneFn;
   root.__trueosTruesurferModules = {
     extractReady: 1,
     assetsReady: 1,
     cssReady: 1,
-    textWidgetReady: 1,
   };
 }
 
@@ -300,7 +193,6 @@ async function bootstrapTruesurfer() {
       extractReady: 0,
       assetsReady: 0,
       cssReady: 0,
-      textWidgetReady: 0,
       baseUrl: TRUESURFER_MODULE_BASE,
     };
   try {
@@ -313,12 +205,11 @@ async function bootstrapTruesurfer() {
       extractReady: modules.extractReady ? 1 : 0,
       assetsReady: modules.assetsReady ? 1 : 0,
       cssReady: modules.cssReady ? 1 : 0,
-      textWidgetReady: modules.textWidgetReady ? 1 : 0,
       baseUrl: TRUESURFER_MODULE_BASE,
     };
     root.__trueosTruesurferReady = 1;
     log(
-      `[truesurfer bootstrap] browser=${browserId} ready extract=${modules.extractReady ? 1 : 0} assets=${modules.assetsReady ? 1 : 0} css=${modules.cssReady ? 1 : 0} text_widget=${modules.textWidgetReady ? 1 : 0}`,
+      `[truesurfer bootstrap] browser=${browserId} ready extract=${modules.extractReady ? 1 : 0} assets=${modules.assetsReady ? 1 : 0} css=${modules.cssReady ? 1 : 0}`,
     );
   } catch (error) {
     const message = error && error.stack ? String(error.stack) : String(error || 'unknown bootstrap error');
@@ -358,7 +249,6 @@ function setHtml(nextHtml, meta) {
 
   try {
     const parsed = extractDocumentArtifactsFn(html);
-    currentBaseGadgetSnapshot = cloneGadgetSnapshot(parsed.gadgetSnapshot);
     if (assetManager && typeof assetManager.traceHtmlVideoSources === 'function') {
       assetManager.traceHtmlVideoSources(html, { pageUrl: url });
     }
@@ -373,8 +263,6 @@ function setHtml(nextHtml, meta) {
       bodyBytes: parsed.bodyBytes,
       bodyHierarchy: parsed.bodyHierarchy,
       bodyHierarchySummary: parsed.bodyHierarchySummary,
-      gadgetSnapshot: currentBaseGadgetSnapshot,
-      ui3Scene: parsed.ui3Scene,
       styleCount: parsed.styleCount,
       styleBytes: parsed.styleBytes,
       styleSlotCount: parsed.styleSlotCount,
@@ -383,7 +271,7 @@ function setHtml(nextHtml, meta) {
       scriptCount: parsed.scriptCount,
       scriptBytes: parsed.scriptBytes,
     };
-    const composedGadgetSnapshot = publishLatestArtifactsSnapshot() || composeCurrentGadgetSnapshot();
+    publishLatestArtifacts();
     const imageSummary = assetManager
       ? assetManager.summarizeImageUrls(currentSceneImageUrls)
       : { total: 0, pending: 0, ready: 0, error: 0 };
@@ -403,8 +291,6 @@ function setHtml(nextHtml, meta) {
       faviconUrl: resolveNavigationUrl(url, parsed.faviconHref),
       shellBytes: parsed.shellBytes,
       bodyBytes: parsed.bodyBytes,
-      gadgetSnapshot: composedGadgetSnapshot,
-      ui3Scene: parsed.ui3Scene,
       styleCount: parsed.styleCount,
       styleBytes: parsed.styleBytes,
       styleSlotCount: parsed.styleSlotCount,

@@ -45,11 +45,11 @@ const TRUESURFER_PARSE5_VITE_HOST_FETCH_FILENAME: &[u8] =
 const TRUESURFER_PARSE5_VITE_HOST_CAPTURE_FILENAME: &[u8] =
     b"<truesurfer-parse5-trueos-host-capture>\0";
 const TRUESURFER_PIXI_HOST_PRELUDE_SOURCE: &[u8] =
-    include_bytes!("../../../../../src/ui3/pixi_host_prelude.js");
+    include_bytes!("../../../../src/ui3/pixi_host_prelude.js");
 const TRUESURFER_PIXI_BUNDLE_SOURCE: &[u8] =
-    include_bytes!("../../../../../src/ui3/pixi_bundle.min.js");
+    include_bytes!("../../../../src/ui3/pixi_bundle.min.js");
 const TRUESURFER_PIXI_CAPTURE_ADAPTER_SOURCE: &[u8] =
-    include_bytes!("../../../../../src/ui3/pixi_capture_adapter.js");
+    include_bytes!("../../../../src/ui3/pixi_capture_adapter.js");
 const TRUESURFER_PARSE5_TRUEOS_APP_SOURCE: &[u8] = b"";
 
 fn fnv1a32(bytes: &[u8]) -> u32 {
@@ -933,18 +933,9 @@ const TRUESURFER_TRUEOS_PIXI_CAPTURE_STEP_PROP: &[u8] = b"__TRUEOS_PIXI_CAPTURE_
 const TRUESURFER_TRUEOS_PIXI_LAYOUT_STEP_PROP: &[u8] = b"__TRUEOS_PIXI_LAYOUT_STEP__\0";
 const TRUESURFER_TRUEOS_PIXI_BRIDGE_STATS_PROP: &[u8] = b"__TRUEOS_PIXI_BRIDGE_STATS__\0";
 const TRUESURFER_PARSE5_BUILD_SCENE_PROP: &[u8] = b"__trueosParse5BuildSceneFromCapture\0";
-const TRUESURFER_BUILD_TEXT_WIDGET_SCENE_PROP: &[u8] = b"__trueosBuildTextWidgetScene\0";
-const TRUESURFER_BUILD_DEMO_TEXT_WIDGET_SCENE_PROP: &[u8] = b"__trueosBuildDemoTextWidgetScene\0";
 const TRUESURFER_UI3_SCENE_COMMAND_SOURCE_PROP: &[u8] = b"commandSource\0";
 const TRUESURFER_UI3_SCENE_ROOT_ID_PROP: &[u8] = b"rootId\0";
 const TRUESURFER_UI3_SCENE_OPS_PROP: &[u8] = b"ops\0";
-const TRUESURFER_WIDGET_PROP: &[u8] = b"widget\0";
-const TRUESURFER_WIDGET_RENDERER_PROP: &[u8] = b"renderer\0";
-const TRUESURFER_WIDGET_BUTTON_COUNT_PROP: &[u8] = b"buttonCount\0";
-const TRUESURFER_WIDGET_IFRAME_COUNT_PROP: &[u8] = b"iframeCount\0";
-const TRUESURFER_WIDGET_IFRAME_SRCDOC_COUNT_PROP: &[u8] = b"iframeSrcdocCount\0";
-const TRUESURFER_WIDGET_TEXT_COUNT_PROP: &[u8] = b"textCount\0";
-const TRUESURFER_WIDGET_TEXT_BYTES_PROP: &[u8] = b"textBytes\0";
 const TRUESURFER_UI3_OP_CODE_PROP: &[u8] = b"code\0";
 const TRUESURFER_UI3_OP_NODE_PROP: &[u8] = b"node\0";
 const TRUESURFER_UI3_OP_A_PROP: &[u8] = b"a\0";
@@ -973,8 +964,8 @@ const TRUESURFER_BUSY_SLEEP_MS: u64 = 1;
 const TRUESURFER_PARSE5_ASSET_PUMP_BUDGET: usize = 8192;
 const TRUESURFER_PARSE5_ASSET_WAIT_MS: u64 = 2500;
 const TRUESURFER_UI3_SCENE_OP_LIMIT: u32 = 8192;
-const UI2_HOSTED_BROWSER_DIRTY_CONTENT: u32 = 1 << 0;
-const UI2_HOSTED_BROWSER_DIRTY_INTERACTIVE: u32 = 1 << 1;
+const HOSTED_BROWSER_DIRTY_CONTENT: u32 = 1 << 0;
+const HOSTED_BROWSER_DIRTY_INTERACTIVE: u32 = 1 << 1;
 
 struct SpinRawMutex(Mutex<()>);
 
@@ -1009,30 +1000,6 @@ pub struct HostedBrowserInteractiveItem {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct HostedBrowserInteractiveState {
     pub interactives: alloc::vec::Vec<HostedBrowserInteractiveItem>,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct HostedBrowserGadget {
-    pub node_id: u32,
-    pub tag: String,
-    pub text: String,
-    pub x_px: u32,
-    pub y_px: u32,
-    pub width_px: u32,
-    pub height_px: u32,
-    pub font_size_px: u32,
-    pub line_height_px: u32,
-    pub text_color_rgb: u32,
-    pub button_like: bool,
-    pub tex_id: u32,
-    pub changed: bool,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct HostedBrowserGadgetSnapshot {
-    pub version: u32,
-    pub background_color_rgb: u32,
-    pub gadgets: Vec<HostedBrowserGadget>,
 }
 
 #[derive(Clone, Debug)]
@@ -1081,12 +1048,10 @@ struct BrowserInstanceState {
     started: bool,
     api_ready: bool,
     last_parse_result: Option<ParseResult>,
-    gadget_snapshot: HostedBrowserGadgetSnapshot,
     window_id: u32,
     render_tex_id: u32,
     surface_seq: u32,
     interactive_seq: u32,
-    gadget_seq: u32,
     surface_state: HostedBrowserSurfaceState,
 }
 
@@ -1150,7 +1115,6 @@ fn with_browser_state_mut<R>(
     let state = guard
         .entry(browser_instance_id)
         .or_insert_with(|| BrowserInstanceState {
-            gadget_snapshot: HostedBrowserGadgetSnapshot::default(),
             render_tex_id: default_render_tex_id(browser_instance_id),
             surface_state: HostedBrowserSurfaceState {
                 viewport_width: 512,
@@ -1177,7 +1141,7 @@ fn with_browser_state<R>(
 }
 
 #[inline]
-fn signal_ui2_hosted_browser_dirty(browser_instance_id: u32, flags: u32) {
+fn signal_hosted_browser_dirty(browser_instance_id: u32, flags: u32) {
     if browser_valid(browser_instance_id) && flags != 0 {
         qjs::platform::ui::signal_hosted_browser_dirty(browser_instance_id, flags);
     }
@@ -1255,10 +1219,6 @@ pub fn hosted_interactive_seq_for_browser(browser_instance_id: u32) -> u32 {
     with_browser_state(browser_instance_id, |state| state.interactive_seq).unwrap_or(0)
 }
 
-pub fn hosted_gadget_seq_for_browser(browser_instance_id: u32) -> u32 {
-    with_browser_state(browser_instance_id, |state| state.gadget_seq).unwrap_or(0)
-}
-
 pub fn hosted_surface_state_for_browser(browser_instance_id: u32) -> HostedBrowserSurfaceState {
     with_browser_state(browser_instance_id, |state| state.surface_state).unwrap_or_default()
 }
@@ -1267,11 +1227,6 @@ pub fn hosted_interactive_state_for_browser(
     _browser_instance_id: u32,
 ) -> HostedBrowserInteractiveState {
     HostedBrowserInteractiveState::default()
-}
-
-pub fn hosted_gadget_snapshot_for_browser(browser_instance_id: u32) -> HostedBrowserGadgetSnapshot {
-    with_browser_state(browser_instance_id, |state| state.gadget_snapshot.clone())
-        .unwrap_or_default()
 }
 
 pub fn set_hosted_viewport_for_browser(
@@ -1303,7 +1258,7 @@ pub fn set_hosted_viewport_for_browser(
     })
     .unwrap_or(false);
     if dirty {
-        signal_ui2_hosted_browser_dirty(browser_instance_id, UI2_HOSTED_BROWSER_DIRTY_CONTENT);
+        signal_hosted_browser_dirty(browser_instance_id, HOSTED_BROWSER_DIRTY_CONTENT);
     }
     ok
 }
@@ -1326,7 +1281,7 @@ pub fn set_hosted_scroll_for_browser(
     })
     .unwrap_or(false);
     if dirty {
-        signal_ui2_hosted_browser_dirty(browser_instance_id, UI2_HOSTED_BROWSER_DIRTY_CONTENT);
+        signal_hosted_browser_dirty(browser_instance_id, HOSTED_BROWSER_DIRTY_CONTENT);
     }
     ok
 }
@@ -1374,7 +1329,7 @@ pub fn queue_hosted_keyboard_events(
     })
     .unwrap_or(false);
     if queued {
-        signal_ui2_hosted_browser_dirty(browser_instance_id, UI2_HOSTED_BROWSER_DIRTY_INTERACTIVE);
+        signal_hosted_browser_dirty(browser_instance_id, HOSTED_BROWSER_DIRTY_INTERACTIVE);
     }
     queued
 }
@@ -1941,93 +1896,6 @@ unsafe fn submit_ui3_scene(
     (submitted, root_id)
 }
 
-unsafe fn submit_qjs_demo_text_widget_scene(
-    ctx: *mut qjs::JSContext,
-    browser_instance_id: u32,
-    html: &str,
-) -> (u32, u32) {
-    let global = qjs::JS_GetGlobalObject(ctx);
-    let mut builder = qjs::JS_GetPropertyStr(
-        ctx,
-        global,
-        TRUESURFER_BUILD_TEXT_WIDGET_SCENE_PROP.as_ptr() as *const c_char,
-    );
-    if builder.is_exception()
-        || builder.tag == qjs::JS_TAG_UNDEFINED
-        || builder.tag == qjs::JS_TAG_NULL
-    {
-        qjs::js_free_value(ctx, builder);
-        builder = qjs::JS_GetPropertyStr(
-            ctx,
-            global,
-            TRUESURFER_BUILD_DEMO_TEXT_WIDGET_SCENE_PROP.as_ptr() as *const c_char,
-        );
-    }
-    if builder.is_exception()
-        || builder.tag == qjs::JS_TAG_UNDEFINED
-        || builder.tag == qjs::JS_TAG_NULL
-    {
-        qjs::js_free_value(ctx, builder);
-        qjs::js_free_value(ctx, global);
-        log_line(format!(
-            "qjs-truesurfer[{}]: qjs text widget builder unavailable\n",
-            browser_instance_id
-        ));
-        return (0, 0);
-    }
-
-    let arg = qjs::JS_NewStringLen(ctx, html.as_ptr() as *const c_char, html.len());
-    let widget_wrapper = qjs::JS_Call(ctx, builder, global, 1, &arg as *const qjs::JSValue);
-    qjs::js_free_value(ctx, arg);
-    qjs::js_free_value(ctx, builder);
-    qjs::js_free_value(ctx, global);
-
-    if widget_wrapper.is_exception() {
-        qjs::qjs_diag::dump_last_exception(ctx, "truesurfer qjs text widget scene build");
-        qjs::js_free_value(ctx, widget_wrapper);
-        return (0, 0);
-    }
-
-    let widget_meta = qjs::JS_GetPropertyStr(
-        ctx,
-        widget_wrapper,
-        TRUESURFER_WIDGET_PROP.as_ptr() as *const c_char,
-    );
-    if !widget_meta.is_exception()
-        && widget_meta.tag != qjs::JS_TAG_UNDEFINED
-        && widget_meta.tag != qjs::JS_TAG_NULL
-    {
-        let renderer = read_result_string(ctx, widget_meta, TRUESURFER_WIDGET_RENDERER_PROP);
-        let button_count = read_result_u32(ctx, widget_meta, TRUESURFER_WIDGET_BUTTON_COUNT_PROP);
-        let iframe_count = read_result_u32(ctx, widget_meta, TRUESURFER_WIDGET_IFRAME_COUNT_PROP);
-        let iframe_srcdoc_count =
-            read_result_u32(ctx, widget_meta, TRUESURFER_WIDGET_IFRAME_SRCDOC_COUNT_PROP);
-        let text_count = read_result_u32(ctx, widget_meta, TRUESURFER_WIDGET_TEXT_COUNT_PROP);
-        let text_bytes = read_result_u32(ctx, widget_meta, TRUESURFER_WIDGET_TEXT_BYTES_PROP);
-        log_line(format!(
-            "qjs-truesurfer[{}]: qjs text widget meta renderer={} button_count={} iframe_count={} iframe_srcdoc_count={} text_count={} text_bytes={}\n",
-            browser_instance_id,
-            renderer,
-            button_count,
-            iframe_count,
-            iframe_srcdoc_count,
-            text_count,
-            text_bytes
-        ));
-    }
-    qjs::js_free_value(ctx, widget_meta);
-
-    let submit_start_ms = now_ms();
-    let (ops, root) = submit_ui3_scene(ctx, browser_instance_id, widget_wrapper);
-    let submit_ms = now_ms().saturating_sub(submit_start_ms);
-    qjs::js_free_value(ctx, widget_wrapper);
-    log_line(format!(
-        "qjs-truesurfer[{}]: qjs text widget scene submitted ops={} root={} submit_ms={}\n",
-        browser_instance_id, ops, root, submit_ms
-    ));
-    (ops, root)
-}
-
 unsafe fn submit_parse5_trueos_pixi_scene(
     rt: *mut qjs::JSRuntime,
     ctx: *mut qjs::JSContext,
@@ -2387,36 +2255,11 @@ unsafe fn dispatch_html(
         parse_result.style_count,
         parse_result.script_count
     ));
-    log_line(format!(
-        "qjs-truesurfer[{}]: gadget snapshot skipped reason=parse5-trueos-pixi-path\n",
-        browser_instance_id
-    ));
-    log_line(format!("qjs-truesurfer[{}]: ui3 submit begin\n", browser_instance_id));
-    let (mut ui3_ops, mut ui3_root) =
+    log_line(format!("qjs-truesurfer[{}]: raw ui3 submit begin\n", browser_instance_id));
+    let (ui3_ops, ui3_root) =
         submit_parse5_trueos_pixi_scene(rt, ctx, browser_instance_id, pending.html.as_str());
-    if ui3_ops == 0 || ui3_root == 0 {
-        log_line(format!(
-            "qjs-truesurfer[{}]: parse5 trueos ui3 unavailable; trying h1/p text widget fallback\n",
-            browser_instance_id
-        ));
-        let (fallback_ops, fallback_root) =
-            submit_qjs_demo_text_widget_scene(ctx, browser_instance_id, pending.html.as_str());
-        if fallback_ops > 0 && fallback_root != 0 {
-            ui3_ops = fallback_ops;
-            ui3_root = fallback_root;
-            log_line(format!(
-                "qjs-truesurfer[{}]: h1/p text widget fallback submitted ops={} root={}\n",
-                browser_instance_id, ui3_ops, ui3_root
-            ));
-        } else {
-            log_line(format!(
-                "qjs-truesurfer[{}]: h1/p text widget fallback unavailable\n",
-                browser_instance_id
-            ));
-        }
-    }
     log_line(format!(
-        "qjs-truesurfer[{}]: ui3 submit done ops={} root={}\n",
+        "qjs-truesurfer[{}]: raw ui3 submit done ops={} root={}\n",
         browser_instance_id, ui3_ops, ui3_root
     ));
 
@@ -2434,11 +2277,11 @@ unsafe fn dispatch_html(
 
     if parse_result.ok {
         log_line(format!(
-            "[TrueSurfer -> UI3] browser={} handover ui3_ops={} root={} gadgets={} url={}\n",
-            browser_instance_id, ui3_ops, ui3_root, 0, parse_result.url,
+            "[TrueSurfer raw] browser={} ui3_ops={} root={} url={}\n",
+            browser_instance_id, ui3_ops, ui3_root, parse_result.url,
         ));
         log_line(format!(
-            "qjs-truesurfer[{}]: parsed bytes={} title={} ms={} shell_bytes={} body_bytes={} ui3_ops={} gadgets={} styles={} scripts={} url={}\n",
+            "qjs-truesurfer[{}]: parsed bytes={} title={} ms={} shell_bytes={} body_bytes={} ui3_ops={} styles={} scripts={} url={}\n",
             browser_instance_id,
             parse_result.bytes,
             parse_result.title,
@@ -2446,7 +2289,6 @@ unsafe fn dispatch_html(
             parse_result.shell_bytes,
             parse_result.body_bytes,
             ui3_ops,
-            0,
             parse_result.style_count,
             parse_result.script_count,
             parse_result.url

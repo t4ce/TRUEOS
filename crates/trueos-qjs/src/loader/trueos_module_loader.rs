@@ -481,8 +481,8 @@ fn qjs_vendor_specifier(spec: &[u8]) -> Option<&'static [u8]> {
     match spec {
         b"@svgdotjs/svg.js" => Some(b"/qjs/svgjs/index.mjs"),
         b"svgdom" => Some(b"/qjs/svgjs/dom-lite.mjs"),
-        b"parse5" => Some(b"/qjs/vendor/parse5.mjs"),
-        b"yoga-layout" => Some(b"/qjs/vendor/yoga.mjs"),
+        b"parse5" => Some(b"/qjs/parse5/parse5.mjs"),
+        b"yoga-layout" => Some(b"/qjs/yoga/yoga.mjs"),
         b"three" => Some(b"https://esm.sh/three@0.162.0"),
         _ => None,
     }
@@ -685,7 +685,7 @@ unsafe fn load_url_module(
     trace_bytes(&cache_path);
     trace_nl();
 
-    // If the URL cache file is provided as an embedded module (via crates/trueos-qjs/src/app/cdn/*),
+    // If the URL cache file is provided as an embedded module (via crates/trueos-qjs/src/cdn/*),
     // prefer that over touching the filesystem or network.
     if let Some(em) = embedded::find(&cache_path) {
         // Fast-path: build-time bytecode.
