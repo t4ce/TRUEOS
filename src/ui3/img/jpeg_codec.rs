@@ -35,7 +35,7 @@ pub fn decode_jpeg_rgba(bytes: &[u8]) -> Result<DecodedJpeg, JpegDecodeError> {
         .jpeg_set_out_colorspace(ColorSpace::RGBA)
         .set_use_unsafe(true);
     if !JPEG_DECODE_GATE_LOGGED.swap(true, Ordering::AcqRel) {
-        let layout = crate::gfx::jpeg_layout::classify_jpeg_layout(bytes);
+        let layout = crate::ui3::img::jpeg_layout::classify_jpeg_layout(bytes);
         crate::log!(
             "jpeg: zune gate use_unsafe={} use_avx2={} bytes={} layout={} sof={}x{} components={} prove=logo-zune-gate\n",
             options.use_unsafe(),
