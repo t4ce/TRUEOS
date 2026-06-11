@@ -9494,6 +9494,11 @@ pub mod cabi {
     }
 
     #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_signal_hosted_browser_dirty(content_id: u32, flags: u32) {
+        crate::surfer::signal_hosted_browser_dirty(content_id, flags);
+    }
+
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_ui2_window_set_title(
         _window_id: u32,
         _title_ptr: *const u8,
