@@ -5,6 +5,7 @@ const ROOT_PAD = 16;
 const SCROLLBAR_PAD = 6;
 const BLOCK_GAP = 8;
 const INLINE_GAP = 6;
+const OVERLAY_PAD = 24;
 
 const CONTROL_TAGS = new Set([
   'input',
@@ -124,6 +125,11 @@ function layoutDefaultsFor(sourceNode) {
   return { ...defaults, ...layout };
 }
 
+function overlaysFor(sourceNode) {
+  const meta = sourceNode && sourceNode.meta && typeof sourceNode.meta === 'object' ? sourceNode.meta : {};
+  return Array.isArray(meta.overlays) ? meta.overlays : [];
+}
+
 function attrsOf(node) {
   return node && node.attrs && typeof node.attrs === 'object' ? node.attrs : {};
 }
@@ -167,6 +173,14 @@ function isRowNode(node, tagName) {
   return ROW_TAGS.has(tagName)
     || tagName === 'summary'
     || ((tagName === 'p' || tagName === 'label') && hasInlineChild(node));
+}
+
+function isOutOfFlowNode(node, sourceMap) {
+  if (!node || node.kind !== 'block') return false;
+  const tagName = String(node.tagName ?? '').toLowerCase();
+  if (tagName === 'dialog') return true;
+  const sourceNode = sourceMap.get(String(node.key ?? ''));
+  return overlaysFor(sourceNode).length > 0;
 }
 
 function gapAfter(child) {
@@ -218,6 +232,43 @@ function heightForNode(node, tagName, defaults, contentHeight, padding) {
   if (tagName === 'textarea') return Math.max(108, minHeight, contentHeight);
   if (LEAF_TAGS.has(tagName)) return Math.max(minHeight, contentHeight, 36);
   return Math.max(minHeight, contentHeight + padding.bottom);
+}
+
+function explicitHeightHintForNode(node, tagName, defaults) {
+  const attrHeight = attrSize(node, 'height');
+  const explicit = attrHeight ?? defaults.height;
+  if (explicit != null && explicit !== '') return sizeFrom(explicit, 0);
+  return 0;
+}
+
+function outOfFlowPosition(box, container) {
+  const attrs = attrsOf(box);
+  const explicitX = attrs.x ?? attrs.left ?? attrs['data-layout-x'];
+  const explicitY = attrs.y ?? attrs.top ?? attrs['data-layout-y'];
+  const maxX = container.innerX + Math.max(0, container.innerWidth - box.width);
+  const centerX = container.innerX + Math.max(0, Math.floor((container.innerWidth - box.width) / 2));
+  const x = explicitX != null && explicitX !== ''
+    ? sizeFrom(explicitX, centerX)
+    : centerX;
+
+  const maxY = container.innerY + Math.max(0, container.heightHint - box.height - OVERLAY_PAD);
+  const centerY = container.heightHint > 0
+    ? container.innerY + Math.max(OVERLAY_PAD, Math.floor((container.heightHint - box.height) / 2))
+    : container.innerY + OVERLAY_PAD;
+  const y = explicitY != null && explicitY !== ''
+    ? sizeFrom(explicitY, centerY)
+    : centerY;
+
+  return {
+    x: Math.max(container.innerX, Math.min(maxX, x)),
+    y: Math.max(container.innerY, container.heightHint > 0 ? Math.min(maxY, y) : y),
+  };
+}
+
+function markOutOfFlow(box) {
+  const attrs = box.attrs && typeof box.attrs === 'object' ? box.attrs : {};
+  box.attrs = { ...attrs, 'data-layout-out-of-flow': '1' };
+  return box;
 }
 
 function childRenderList(node) {
@@ -282,6 +333,7 @@ function layoutBlockNode(renderNode, sourceMap, x, y, availableWidth, options, m
   const innerX = LEAF_TAGS.has(tagName) ? 0 : padding.left;
   const innerY = LEAF_TAGS.has(tagName) ? 0 : padding.top;
   const innerWidth = Math.max(1, width - padding.left - padding.right);
+  const explicitHeightHint = explicitHeightHintForNode(renderNode, tagName, defaults);
   const children = [];
   const renderChildren = childRenderList(renderNode);
 
@@ -292,6 +344,15 @@ function layoutBlockNode(renderNode, sourceMap, x, y, availableWidth, options, m
     const gap = rowGapForTag(tagName);
     for (let i = 0; i < renderChildren.length; i += 1) {
       const child = renderChildren[i];
+      if (isOutOfFlowNode(child, sourceMap)) {
+        const box = layoutNode(child, sourceMap, 0, 0, innerWidth, options, measurer);
+        if (!box) continue;
+        const pos = outOfFlowPosition(box, { innerX, innerY, innerWidth, heightHint: explicitHeightHint });
+        box.x = pos.x;
+        box.y = pos.y;
+        children.push(markOutOfFlow(box));
+        continue;
+      }
       const remaining = Math.max(1, innerWidth - (cursorX - innerX));
       const childWidth = inlineWidthForChild(
         child,
@@ -311,6 +372,15 @@ function layoutBlockNode(renderNode, sourceMap, x, y, availableWidth, options, m
   } else {
     let cursorY = innerY;
     for (const child of renderChildren) {
+      if (isOutOfFlowNode(child, sourceMap)) {
+        const box = layoutNode(child, sourceMap, 0, 0, innerWidth, options, measurer);
+        if (!box) continue;
+        const pos = outOfFlowPosition(box, { innerX, innerY, innerWidth, heightHint: explicitHeightHint });
+        box.x = pos.x;
+        box.y = pos.y;
+        children.push(markOutOfFlow(box));
+        continue;
+      }
       const box = layoutNode(child, sourceMap, innerX, cursorY, innerWidth, options, measurer);
       if (!box) continue;
       children.push(box);
@@ -350,6 +420,20 @@ export function renderNodesToLayout(renderNodes, options = {}) {
   let cursorY = ROOT_PAD;
 
   for (const node of renderNodes ?? []) {
+    if (isOutOfFlowNode(node, sourceMap)) {
+      const box = layoutNode(node, sourceMap, 0, 0, contentWidth, options, measurer);
+      if (!box) continue;
+      const pos = outOfFlowPosition(box, {
+        innerX: ROOT_PAD,
+        innerY: ROOT_PAD,
+        innerWidth: contentWidth,
+        heightHint: Math.max(0, viewport.height - ROOT_PAD * 2),
+      });
+      box.x = pos.x;
+      box.y = pos.y;
+      children.push(markOutOfFlow(box));
+      continue;
+    }
     const box = layoutNode(node, sourceMap, ROOT_PAD, cursorY, contentWidth, options, measurer);
     if (!box) continue;
     children.push(box);

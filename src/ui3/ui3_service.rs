@@ -101,7 +101,7 @@ fn consume_render_tree_frame(
     let present = redraw_layout_text_primary(scene, scroll_redraw);
     let frame = &scene.frame;
     crate::log!(
-        "ui3-service: frame taken={} browser={} seq={} render_hash={} layout_hash={} render_bytes={} layout_bytes={} scroll_y={} scroll_redraw={} content_height={} viewport={}x{} text_nodes={} placements={} clipped={} skipped_containers={} skipped_text_nodes={} batches={} clear_ok={} clear_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
+        "ui3-service: frame taken={} browser={} seq={} render_hash={} layout_hash={} render_bytes={} layout_bytes={} scroll_y={} scroll_redraw={} content_height={} viewport={}x{} text_nodes={} placements={} clipped={} batches={} clear_ok={} clear_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
         taken_seq,
         frame.browser_instance_id,
         frame.seq,
@@ -117,8 +117,6 @@ fn consume_render_tree_frame(
         present.text_nodes,
         present.placements,
         present.clipped,
-        present.skipped_containers,
-        present.skipped_text_nodes,
         present.batches,
         present.clear_ok as u8,
         present.clear_ms,
@@ -136,8 +134,6 @@ struct Ui3LayoutPresentResult {
     text_nodes: usize,
     placements: usize,
     clipped: usize,
-    skipped_containers: usize,
-    skipped_text_nodes: usize,
     batches: usize,
     clear_ok: bool,
     clear_ms: u64,
@@ -200,13 +196,10 @@ fn redraw_layout_text_primary(
     let clear_ok = clear.as_ref().is_some_and(|stats| stats.submits > 0);
     let clear_ms = clear.as_ref().map(|stats| stats.total_ms).unwrap_or(0);
     if state.placements.is_empty() {
-        log_layout_text_skips(frame, &state);
         return Ui3LayoutPresentResult {
             text_nodes: state.text_nodes,
             placements: collected_placements,
             clipped,
-            skipped_containers: state.skipped_containers,
-            skipped_text_nodes: state.skipped_text_nodes,
             clear_ok,
             clear_ms,
             presented: clear_ok,
@@ -218,13 +211,10 @@ fn redraw_layout_text_primary(
 
     let Some(draw) = submit_primary_text_placements(state.placements.as_slice(), scroll_redraw)
     else {
-        log_layout_text_skips(frame, &state);
         return Ui3LayoutPresentResult {
             text_nodes: state.text_nodes,
             placements: collected_placements,
             clipped,
-            skipped_containers: state.skipped_containers,
-            skipped_text_nodes: state.skipped_text_nodes,
             clear_ok,
             clear_ms,
             submit_ok: false,
@@ -233,13 +223,10 @@ fn redraw_layout_text_primary(
         };
     };
 
-    log_layout_text_skips(frame, &state);
     Ui3LayoutPresentResult {
         text_nodes: state.text_nodes,
         placements: collected_placements,
         clipped,
-        skipped_containers: state.skipped_containers,
-        skipped_text_nodes: state.skipped_text_nodes,
         batches: draw.batches,
         clear_ok,
         clear_ms,
@@ -306,8 +293,6 @@ fn sprite64_placement_inside_primary(
 #[derive(Default)]
 struct Ui3LayoutTextCollectState {
     text_nodes: usize,
-    skipped_containers: usize,
-    skipped_text_nodes: usize,
     placements: Vec<crate::intel::gpgpu::GpgpuSprite64Placement>,
 }
 
@@ -325,13 +310,6 @@ fn collect_layout_text_placements(
 
     let x = parent_x + json_f32_field(node, "x").unwrap_or(0.0);
     let y = parent_y + json_f32_field(node, "y").unwrap_or(0.0);
-    if should_skip_layout_text_container(node) {
-        state.skipped_containers = state.skipped_containers.saturating_add(1);
-        state.skipped_text_nodes = state
-            .skipped_text_nodes
-            .saturating_add(count_text_nodes_in_layout_subtree(node));
-        return;
-    }
 
     if node.get("kind").and_then(Value::as_str) == Some("text") {
         if let Some(text) = node.get("text").and_then(Value::as_str)
@@ -363,53 +341,6 @@ fn collect_layout_text_placements(
             break;
         }
     }
-}
-
-fn should_skip_layout_text_container(node: &Value) -> bool {
-    let tag_name = node.get("tagName").and_then(Value::as_str).unwrap_or("");
-    if tag_name == "dialog" {
-        return true;
-    }
-    if tag_name != "iframe" {
-        return false;
-    }
-
-    node.get("key").and_then(Value::as_str) != Some("root:internal-iframe")
-}
-
-fn count_text_nodes_in_layout_subtree(node: &Value) -> usize {
-    let mut total = 0usize;
-    if node.get("kind").and_then(Value::as_str) == Some("text")
-        && node
-            .get("text")
-            .and_then(Value::as_str)
-            .is_some_and(|text| !text.is_empty())
-    {
-        total = total.saturating_add(1);
-    }
-
-    if let Some(children) = node.get("children").and_then(Value::as_array) {
-        for child in children {
-            total = total.saturating_add(count_text_nodes_in_layout_subtree(child));
-        }
-    }
-    total
-}
-
-fn log_layout_text_skips(
-    frame: &crate::surfer::Ui3RenderTreeFrame,
-    state: &Ui3LayoutTextCollectState,
-) {
-    if state.skipped_containers == 0 {
-        return;
-    }
-    crate::log!(
-        "ui3-service: TODO skipped floating/embedded layout text browser={} seq={} containers={} text_nodes={} reason=needs-window-plane-or-embedded-surface-concept\n",
-        frame.browser_instance_id,
-        frame.seq,
-        state.skipped_containers,
-        state.skipped_text_nodes
-    );
 }
 
 fn json_f32_field(node: &Value, key: &str) -> Option<f32> {
