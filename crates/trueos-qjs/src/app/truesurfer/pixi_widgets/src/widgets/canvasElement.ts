@@ -1,5 +1,6 @@
 import type { Container, Graphics } from 'pixi.js';
-import { makeThemedText, TEXT_BASELINE_NUDGE_Y } from '../text';
+import { TEXT_BASELINE_NUDGE_Y } from '../text';
+import { getOrCreateText } from '../pixiReuse';
 
 export function applyYogaDefaultsCanvas(yogaNode: any, node: { attrs?: Record<string, string> }, Yoga: any): void {
   yogaNode.setPadding(Yoga.EDGE_LEFT, 0);
@@ -50,13 +51,15 @@ export function renderCanvasElement(opts: {
   g.lineTo(w - 6, 6);
   g.stroke({ width: 1, color: 0x000000, alpha: 0.1 });
 
-  const t = makeThemedText({
-    text: 'canvas',
-    fontFamily: theme.fontFamily,
-    fontSize: Math.max(10, Math.floor(theme.fontSize * 0.85)),
-    fill: theme.mutedText,
-    wordWrap: false,
+  const t = getOrCreateText(container, '__label', (tt) => {
+    (tt as any).style = {
+      fontFamily: theme.fontFamily,
+      fontSize: Math.max(10, Math.floor(theme.fontSize * 0.85)),
+      fill: theme.mutedText,
+      fontWeight: '400',
+      wordWrap: false,
+    };
   });
+  t.text = 'canvas';
   t.position.set(8, 8 + TEXT_BASELINE_NUDGE_Y);
-  container.addChild(t);
 }

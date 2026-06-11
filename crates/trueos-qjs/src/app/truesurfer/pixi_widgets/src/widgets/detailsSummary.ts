@@ -3,8 +3,22 @@ import { Rectangle } from 'pixi.js';
 import { TEXT_BASELINE_NUDGE_Y } from '../text';
 import { clearContainerEvents, clearGraphics, getOrCreateText } from '../pixiReuse';
 
+const armedSummaryByPointer = new Map<number, string>();
+
+function defaultOpenFromSummaryAttr(attrs?: Record<string, string>): boolean {
+  if (!attrs || !Object.prototype.hasOwnProperty.call(attrs, 'data-details-open')) return false;
+  const raw = String(attrs['data-details-open'] ?? '').trim().toLowerCase();
+  return raw !== '0' && raw !== 'false' && raw !== 'no';
+}
+
+function owningDetailsKey(node: { key?: string; attrs?: Record<string, string> }): string | undefined {
+  const summaryKey = node.key;
+  if (summaryKey && summaryKey.endsWith(':summary')) return `${summaryKey.slice(0, -':summary'.length)}:details`;
+  return node.attrs?.['data-details-key'];
+}
+
 export function renderSummary(opts: {
-  node: { attrs?: Record<string, string> };
+  node: { key?: string; attrs?: Record<string, string> };
   container: Container;
   w: number;
   h: number;
@@ -14,9 +28,11 @@ export function renderSummary(opts: {
 }): void {
   const { node, container, w, h, theme, detailsOpen, requestRerender } = opts;
 
-  const detailsKey = node.attrs?.['data-details-key'];
-  const defaultOpen = node.attrs ? Object.prototype.hasOwnProperty.call(node.attrs, 'data-details-open') : false;
+  const detailsKey = owningDetailsKey(node);
+  const defaultOpen = defaultOpenFromSummaryAttr(node.attrs);
   const isOpen = detailsKey && detailsOpen.has(detailsKey) ? detailsOpen.get(detailsKey) === true : defaultOpen;
+
+  const pointerIdForEvent = (ev: any): number => Number(ev?.pointerId ?? ev?.data?.pointerId ?? 1) || 1;
 
   const toggle = (ev?: any) => {
     if (!detailsKey) return;
@@ -57,7 +73,23 @@ export function renderSummary(opts: {
     container.eventMode = 'static';
     container.cursor = 'pointer';
     container.hitArea = new Rectangle(0, 0, Math.max(0, w), Math.max(0, h));
-    container.on('pointerdown', toggle);
+    container.on('pointerdown', (ev: any) => {
+      if (ev?.button === 2) return;
+      armedSummaryByPointer.set(pointerIdForEvent(ev), detailsKey);
+      ev.stopPropagation?.();
+    });
+    container.on('pointerup', (ev: any) => {
+      if (ev?.button === 2) return;
+      const pid = pointerIdForEvent(ev);
+      const armed = armedSummaryByPointer.get(pid);
+      armedSummaryByPointer.delete(pid);
+      if (armed !== detailsKey) return;
+      toggle(ev);
+    });
+    container.on('pointerupoutside', (ev: any) => {
+      const pid = pointerIdForEvent(ev);
+      if (armedSummaryByPointer.get(pid) === detailsKey) armedSummaryByPointer.delete(pid);
+    });
   }
 }
 

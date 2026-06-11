@@ -30,6 +30,7 @@ type PixiCaptureApi = {
   commands: PixiCommand[];
   counts: Record<string, number>;
   objectId(target: object): number;
+  snapshotNode(target: object): unknown;
   clear(): void;
   dump(limit?: number): PixiCommand[];
   flush(): void;
@@ -427,6 +428,8 @@ function invokeCapturedMethod(target: any, op: string, args: unknown[]): unknown
 }
 
 function installTrueosPointerDispatcher(): void {
+  const renderSerial = () => Number((window as any).__TRUEOS_PIXI_RENDER_SERIAL__ ?? 0) || 0;
+
   const captureRepaintPending = () =>
     Boolean(
       (window as any).__TRUEOS_PIXI_REPAINT_REQUIRED__ ||
@@ -475,6 +478,7 @@ function installTrueosPointerDispatcher(): void {
         },
       };
       diag(`wheel-dispatch deltaY=${ev.deltaY}`);
+      const beforeRenderSerial = renderSerial();
       canvas.dispatchEvent(ev);
       let painted = 0;
       if ((window as any).__TRUEOS_CAPTURE_ONLY__) {
@@ -490,6 +494,7 @@ function installTrueosPointerDispatcher(): void {
         painted = 1;
       }
       const after = window.__pixiCapture?.commands?.length ?? before;
+      const rendered = renderSerial() !== beforeRenderSerial;
       const listener = canvas.listeners?.wheel;
       const listenerCount = Array.isArray(listener) ? listener.length : typeof listener === 'function' ? 1 : 0;
       const handled = ev.defaultPrevented || listenerCount > 0 ? 1 : 0;
@@ -517,7 +522,7 @@ function installTrueosPointerDispatcher(): void {
           thumbH: Number(scrollFastPath.thumbH) || 0,
         };
       }
-      return { handled, listenerCount, painted: after > before || painted ? 1 : 0, targetFound: 1 };
+      return { handled, listenerCount, painted: after > before || rendered || painted ? 1 : 0, targetFound: 1 };
     }
     const target = objectsById.get(Number(nodeId) || 0);
     let handled = 0;
@@ -530,6 +535,7 @@ function installTrueosPointerDispatcher(): void {
 
     (window as any).__TRUEOS_PIXI_LAST_GRAPHICS_FAST_PATH__ = null;
     (window as any).__TRUEOS_PIXI_LAST_OVERLAY_FAST_PATH__ = null;
+    (window as any).__TRUEOS_PIXI_LAST_SCROLL_FAST_PATH__ = null;
     const ev: any = {
       type: String(event || ''),
       button: Number(buttons) & 2 ? 2 : 0,
@@ -555,6 +561,7 @@ function installTrueosPointerDispatcher(): void {
     };
 
     const before = window.__pixiCapture?.commands?.length ?? 0;
+    const beforeRenderSerial = renderSerial();
     diag(`target-found label=${String(target.label ?? '')}`);
     for (let node: any = target; node; node = node.parent) {
       ev.currentTarget = node;
@@ -589,6 +596,7 @@ function installTrueosPointerDispatcher(): void {
     }
 
     const after = window.__pixiCapture?.commands?.length ?? before;
+    const rendered = renderSerial() !== beforeRenderSerial;
     const scrollFastPath = (window as any).__TRUEOS_PIXI_LAST_SCROLL_FAST_PATH__;
     if (scrollFastPath?.owner === 'root' || scrollFastPath?.owner === 'iframe') {
       diag(`scroll-fast owner=${scrollFastPath.owner}`);
@@ -614,9 +622,13 @@ function installTrueosPointerDispatcher(): void {
       };
     }
     const graphicsFastPath = (window as any).__TRUEOS_PIXI_LAST_GRAPHICS_FAST_PATH__;
+    const graphicsFastEvent =
+      graphicsFastPath?.owner === 'button-hover'
+        ? ev.type === 'pointerover' || ev.type === 'pointerout' || ev.type === 'pointerdown' || ev.type === 'pointerup'
+        : ev.type === 'pointerover' || ev.type === 'pointerout';
     if (
-      graphicsFastPath?.owner === 'context-menu-hover' &&
-      (ev.type === 'pointerover' || ev.type === 'pointerout') &&
+      (graphicsFastPath?.owner === 'context-menu-hover' || graphicsFastPath?.owner === 'button-hover') &&
+      graphicsFastEvent &&
       after > before
     ) {
       if (window.__pixiCapture?.commands) {
@@ -641,6 +653,9 @@ function installTrueosPointerDispatcher(): void {
         damageH: Number(graphicsFastPath.h) || 0,
         fillColor: Number(graphicsFastPath.fillColor) || 0,
         fillAlpha: Number(graphicsFastPath.fillAlpha) || 0,
+        strokeColor: Number(graphicsFastPath.strokeColor) || 0,
+        strokeAlpha: Number(graphicsFastPath.strokeAlpha) || 0,
+        strokeWidth: Number(graphicsFastPath.strokeWidth) || 0,
       };
     }
     const overlayFastPath = (window as any).__TRUEOS_PIXI_LAST_OVERLAY_FAST_PATH__;
@@ -659,7 +674,7 @@ function installTrueosPointerDispatcher(): void {
         damageH: Number(overlayFastPath.damageH) || 0,
       };
     }
-    painted = after > before || painted ? 1 : 0;
+    painted = after > before || rendered || painted ? 1 : 0;
     diag(`done handled=${handled} listeners=${listenerCount} painted=${painted}`);
     return { handled, listenerCount, painted, targetFound: 1 };
   };
@@ -826,6 +841,9 @@ export function installPixiCommandCapture(): PixiCaptureApi {
     objectId(target: object) {
       return objectId(target);
     },
+    snapshotNode(target: object) {
+      return snapshotNode(target);
+    },
     clear() {
       this.commands.length = 0;
       this.counts = Object.create(null);
@@ -906,6 +924,7 @@ export function attachPixiRenderCapture(app: Application): void {
         ? (root as any).container
         : root || app.stage;
     frame++;
+    (window as any).__TRUEOS_PIXI_RENDER_SERIAL__ = (Number((window as any).__TRUEOS_PIXI_RENDER_SERIAL__ ?? 0) || 0) + 1;
     if ((window as any).__TRUEOS_CAPTURE_ONLY__) {
       window.__pixiCapture?.clear();
     }
