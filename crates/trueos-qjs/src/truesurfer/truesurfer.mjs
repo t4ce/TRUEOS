@@ -253,6 +253,7 @@ function logRenderTreeArtifact(url, bytes, widgetTree, startedAt) {
     const artifact = createRenderTreeTraceFn(widgetTree, {
       source: 'parse5',
       bytes,
+      includeLayout: true,
     });
     const summary =
       typeof summarizeRenderTreeTraceFn === 'function'
@@ -260,7 +261,7 @@ function logRenderTreeArtifact(url, bytes, widgetTree, startedAt) {
         : { renderNodes: 0, renderHash: artifact.renderTree && artifact.renderTree.hash };
     const elapsed = Date.now() - startedAt;
     log(
-      `[truesurfer render-tree] browser=${browserId} status=ready nodes=${Number(summary.renderNodes || 0)} render_hash=${safeString(summary.renderHash)} ms=${elapsed} url=${url}`,
+      `[truesurfer render-tree] browser=${browserId} status=ready nodes=${Number(summary.renderNodes || 0)} render_hash=${safeString(summary.renderHash)} layout_hash=${safeString(summary.layoutHash)} ms=${elapsed} url=${url}`,
     );
     log(`[truesurfer render-tree ndjson] browser=${browserId} ${JSON.stringify(artifact.renderTree)}`);
     if (artifact.layoutTrace) {

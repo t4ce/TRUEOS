@@ -3,7 +3,7 @@
 
 import { parse as parseHtml } from 'parse5';
 import { domToWidgets } from '../widlib/index.mjs';
-import { defaultLayoutMetrics, defaultTheme } from './renderTheme.mjs';
+import { widgetTreeToLayout as buildWidgetTreeLayout } from './layout.mjs';
 import {
   RENDER_TRACE_VERSION,
   blockNode,
@@ -11,6 +11,8 @@ import {
   stableObject,
   textNode,
 } from './renderTypes.mjs';
+
+export { renderNodesToLayout, widgetTreeToLayout } from './layout.mjs';
 
 const DEFAULT_MAX_IFRAME_DEPTH = 4;
 const TEMPORAL_INPUT_TAGS = Object.freeze({
@@ -343,187 +345,6 @@ function numberFrom(value, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
-function clampSize(value, fallback) {
-  return Math.max(0, Math.round(numberFrom(value, fallback)));
-}
-
-function textWidth(text, maxWidth) {
-  const width = String(text ?? '').length * Math.max(1, defaultTheme.fontSize * 0.5) + 4;
-  return Math.max(1, Math.min(Math.max(1, maxWidth), width));
-}
-
-function layoutDefaultsFor(node) {
-  const meta = node && node.meta && typeof node.meta === 'object' ? node.meta : {};
-  const defaults = meta.layoutDefaults && typeof meta.layoutDefaults === 'object' ? meta.layoutDefaults : {};
-  return defaults;
-}
-
-function tagLayoutDefaults(tagName) {
-  return defaultLayoutMetrics.tagDefaults[tagName] ?? {};
-}
-
-function explicitSizeFromAttrs(node, axis) {
-  const attrs = node && node.attrs && typeof node.attrs === 'object' ? node.attrs : {};
-  return attrs[axis] ?? attrs[axis === 'width' ? 'w' : 'h'];
-}
-
-function isRowTag(tagName) {
-  return tagName === 'tr' || tagName === 'barrow' || tagName === 'searchrow';
-}
-
-function isLeafTag(tagName) {
-  return tagName === 'input'
-    || tagName === 'button'
-    || tagName === 'textarea'
-    || tagName === 'select'
-    || tagName === 'img'
-    || tagName === 'svg'
-    || tagName === 'canvas'
-    || tagName === 'iframe'
-    || tagName === 'hr'
-    || tagName === 'progress'
-    || tagName === 'meter'
-    || tagName === 'slider'
-    || tagName === 'sliderlabel'
-    || tagName === 'searchbutton'
-    || tagName === 'number'
-    || tagName === 'color'
-    || tagName === 'timeinput'
-    || tagName === 'dateinput'
-    || tagName === 'monthinput'
-    || tagName === 'weekinput'
-    || tagName === 'datetimelocalinput';
-}
-
-function boxHeightForTag(tagName, defaults, childrenHeight) {
-  const explicit = numberFrom(defaults.height, NaN);
-  if (Number.isFinite(explicit)) return Math.round(explicit);
-  if (tagName === 'hr') return 1;
-  if (tagName === 'h1' || tagName === 'h2' || tagName === 'h3') return Math.max(36, childrenHeight);
-  if (tagName === 'textarea') return 108;
-  if (tagName === 'color') return 200;
-  if (tagName === 'img' || tagName === 'svg' || tagName === 'canvas' || tagName === 'iframe') return Math.max(36, childrenHeight);
-  if (isLeafTag(tagName)) return Math.max(clampSize(defaults.minHeight, 36), childrenHeight || 0);
-  return Math.max(clampSize(defaults.minHeight, 0), childrenHeight);
-}
-
-function sourceNodeByKey(widgetTree) {
-  const map = new Map();
-  const walk = (node) => {
-    if (!node || typeof node !== 'object') return;
-    if (node.key != null) map.set(String(node.key), node);
-    for (const child of node.children ?? []) walk(child);
-  };
-  walk(widgetTree);
-  return map;
-}
-
-function layoutNode(renderNode, sourceMap, x, y, width, options) {
-  if (!renderNode || typeof renderNode !== 'object') return null;
-  if (renderNode.kind === 'text') {
-    return {
-      kind: 'text',
-      text: String(renderNode.text ?? ''),
-      x,
-      y,
-      width: textWidth(renderNode.text, width),
-      height: Math.ceil(defaultTheme.fontSize * 1.25),
-      children: [],
-    };
-  }
-
-  const tagName = String(renderNode.tagName ?? 'div');
-  const sourceNode = sourceMap.get(String(renderNode.key ?? ''));
-  const defaults = { ...tagLayoutDefaults(tagName), ...layoutDefaultsFor(sourceNode) };
-  const attrs = renderNode.attrs && typeof renderNode.attrs === 'object' ? renderNode.attrs : {};
-  const explicitWidth = explicitSizeFromAttrs(renderNode, 'width') ?? attrs.width ?? defaults.width ?? defaults.minWidth;
-  const ownWidth = Math.min(width, clampSize(explicitWidth, width));
-  const paddingLeft = clampSize(defaults.paddingLeft ?? defaults.paddingX, tagName === 'summary' ? 26 : 0);
-  const paddingRight = clampSize(defaults.paddingRight ?? defaults.paddingX, 0);
-  const paddingTop = clampSize(defaults.paddingTop ?? defaults.paddingY, isLeafTag(tagName) ? 0 : 0);
-  const paddingBottom = clampSize(defaults.paddingBottom ?? defaults.paddingY, 0);
-  const innerX = isLeafTag(tagName) ? 0 : paddingLeft;
-  const innerY = isLeafTag(tagName) ? 0 : paddingTop;
-  const innerWidth = Math.max(1, ownWidth - paddingLeft - paddingRight);
-  const children = [];
-  const rawChildren = Array.isArray(renderNode.children) ? renderNode.children : [];
-  const layoutChildren =
-    tagName === 'details' && !(attrs.open != null || attrs['data-details-open'] === '1')
-      ? rawChildren.filter((child) => child && child.kind === 'block' && child.tagName === 'summary')
-      : rawChildren;
-
-  let cursorX = innerX;
-  let cursorY = innerY;
-  let maxBottom = 0;
-  if (isRowTag(tagName)) {
-    const gap = tagName === 'searchrow' ? 6 : 0;
-    for (const child of layoutChildren) {
-      const remaining = Math.max(1, innerWidth - cursorX);
-      const childLayout = layoutNode(child, sourceMap, cursorX, innerY, remaining, options);
-      if (!childLayout) continue;
-      children.push(childLayout);
-      cursorX += childLayout.width + gap;
-      maxBottom = Math.max(maxBottom, childLayout.y + childLayout.height);
-    }
-  } else {
-    for (const child of layoutChildren) {
-      const childLayout = layoutNode(child, sourceMap, innerX, cursorY, innerWidth, options);
-      if (!childLayout) continue;
-      children.push(childLayout);
-      cursorY += childLayout.height + 8;
-      maxBottom = Math.max(maxBottom, childLayout.y + childLayout.height);
-    }
-  }
-
-  const explicitHeight = explicitSizeFromAttrs(renderNode, 'height') ?? attrs.height;
-  const childrenHeight = maxBottom + paddingBottom;
-  const computedHeight = boxHeightForTag(tagName, defaults, childrenHeight);
-  const ownHeight = clampSize(explicitHeight, computedHeight);
-  const out = {
-    kind: 'block',
-    key: String(renderNode.key ?? ''),
-    tagName,
-    x,
-    y,
-    width: ownWidth,
-    height: Math.max(ownHeight, computedHeight),
-    children,
-  };
-  if (renderNode.attrs && Object.keys(renderNode.attrs).length > 0) out.attrs = renderNode.attrs;
-  return out;
-}
-
-export function renderNodesToLayout(renderNodes, options = {}) {
-  const viewport = normalizeViewport(options.viewport);
-  const sourceMap = options.sourceMap instanceof Map ? options.sourceMap : new Map();
-  const children = [];
-  let cursorY = 16;
-  const contentWidth = Math.max(1, viewport.width - 38);
-  for (const node of renderNodes ?? []) {
-    const child = layoutNode(node, sourceMap, 16, cursorY, contentWidth, options);
-    if (!child) continue;
-    children.push(child);
-    cursorY += child.height + 8;
-  }
-  return {
-    kind: 'block',
-    key: '',
-    tagName: 'root',
-    x: 0,
-    y: 0,
-    width: viewport.width,
-    height: Math.max(viewport.height, cursorY + 16),
-    children,
-  };
-}
-
-export function widgetTreeToLayout(widgetTree, renderNodes, options = {}) {
-  return renderNodesToLayout(renderNodes ?? widgetTreeToRenderNodes(widgetTree, options), {
-    ...options,
-    sourceMap: sourceNodeByKey(widgetTree),
-  });
-}
-
 export function hashText(text) {
   let hash = 0x811c9dc5;
   const value = String(text ?? '');
@@ -562,7 +383,7 @@ export function createRenderTreeTrace(widgetTree, options = {}) {
   };
 
   if (options.includeLayout === true) {
-    const layout = widgetTreeToLayout(widgetTree, renderNodes, { ...options, viewport });
+    const layout = buildWidgetTreeLayout(widgetTree, renderNodes, { ...options, viewport });
     const layoutHash = hashText(JSON.stringify(layout));
     const traceBody = {
       version: RENDER_TRACE_VERSION,
