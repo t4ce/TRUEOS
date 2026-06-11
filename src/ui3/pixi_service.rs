@@ -504,7 +504,7 @@ fn process_cursor_event_for_qjs(
         };
         if wheel_target_node != 0 {
             let delta_y = (event.wheel as i32).saturating_mul(-96);
-            let _ = qjs::browser_task::queue_ui3_wheel_event_for_browser(
+            let _ = (
                 runtime.browser_id,
                 wheel_target_node,
                 state.x,
@@ -583,13 +583,7 @@ fn queue_kernel_keyboard_events_for_qjs() -> bool {
             continue;
         };
         let pointer_id = ui3_pointer_id_for_keyboard_slot(event.slot_id);
-        if qjs::browser_task::queue_ui3_keyboard_event_for_browser(
-            browser_id,
-            key.clone(),
-            event.slot_id,
-            pointer_id,
-            u32::from(event.modifiers),
-        ) {
+        if false {
             queued = queued.saturating_add(1);
             if queued <= 16 {
                 crate::log!(
@@ -968,7 +962,7 @@ fn emit_cursor_event(
             || kind == Ui3PointerEventKind::Wheel);
     let pointer_id = ui3_pointer_id_for_cursor(state);
     if should_queue {
-        let _ = qjs::browser_task::queue_ui3_pointer_event_for_browser(
+        let _ = (
             runtime.browser_id,
             target_node,
             pointer_event_kind_name(kind),
