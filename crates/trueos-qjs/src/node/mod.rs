@@ -1094,7 +1094,7 @@ unsafe fn log_js_args(
 
 fn strip_truesurfer_synthetic_markers(bytes: &[u8]) -> String {
     const MARKER: &str = "<truesurfer-";
-    const KNOWN_MARKERS: [&str; 13] = [
+    const KNOWN_MARKERS: [&str; 11] = [
         "<truesurfer-parse5-trueos-host-core>",
         "<truesurfer-parse5-trueos-host-core",
         "<truesurfer-parse5-trueos-host-cor",
@@ -1106,8 +1106,6 @@ fn strip_truesurfer_synthetic_markers(bytes: &[u8]) -> String {
         "<truesurfer-parse5-trueos-app.js>",
         "<truesurfer-parse5-trueos-app",
         "<truesurfer-init>",
-        "<truesurfer-pixi-host-prelude>",
-        "<truesurfer-pixi-capture-adapter>",
     ];
 
     let Ok(text) = core::str::from_utf8(bytes) else {

@@ -30,10 +30,6 @@ pub const HOSTED_KEYBOARD_MOD_ALT: u8 = 1 << 2;
 pub const HOSTED_KEYBOARD_MOD_META: u8 = 1 << 3;
 
 const TRUESURFER_IMPORT_FILENAME: &[u8] = b"<truesurfer-init>\0";
-const TRUESURFER_PIXI_HOST_PRELUDE_FILENAME: &[u8] = b"<truesurfer-pixi-host-prelude>\0";
-const TRUESURFER_PIXI_BUNDLE_FILENAME: &[u8] = b"<truesurfer-pixi-bundle>\0";
-const TRUESURFER_PIXI_COLLECTOR_FILENAME: &[u8] = b"<truesurfer-pixi-collector>\0";
-const TRUESURFER_PIXI_CAPTURE_ADAPTER_FILENAME: &[u8] = b"<truesurfer-pixi-capture-adapter>\0";
 const TRUESURFER_PARSE5_TRUEOS_APP_FILENAME: &[u8] = b"<truesurfer-parse5-trueos-app.js>\0";
 const TRUESURFER_PARSE5_VITE_HOST_CORE_FILENAME: &[u8] = b"<truesurfer-parse5-trueos-host-core>\0";
 const TRUESURFER_PARSE5_VITE_HOST_EVENT_FILENAME: &[u8] =
@@ -45,12 +41,6 @@ const TRUESURFER_PARSE5_VITE_HOST_FETCH_FILENAME: &[u8] =
     b"<truesurfer-parse5-trueos-host-fetch>\0";
 const TRUESURFER_PARSE5_VITE_HOST_CAPTURE_FILENAME: &[u8] =
     b"<truesurfer-parse5-trueos-host-capture>\0";
-const TRUESURFER_PIXI_HOST_PRELUDE_SOURCE: &[u8] =
-    include_bytes!("../pixi/pixi_host_prelude.js");
-const TRUESURFER_PIXI_BUNDLE_SOURCE: &[u8] =
-    include_bytes!("../pixi/pixi_bundle.min.js");
-const TRUESURFER_PIXI_CAPTURE_ADAPTER_SOURCE: &[u8] =
-    include_bytes!("../pixi/pixi_capture_adapter.js");
 const TRUESURFER_PARSE5_TRUEOS_APP_SOURCE: &[u8] = b"";
 
 fn fnv1a32(bytes: &[u8]) -> u32 {
@@ -1468,7 +1458,7 @@ unsafe fn js_value_to_string(ctx: *mut qjs::JSContext, value: qjs::JSValueConst)
 
 fn strip_trueos_host_markers(text: &str) -> String {
     const MARKER: &str = "<truesurfer-";
-    const KNOWN_MARKERS: [&str; 13] = [
+    const KNOWN_MARKERS: [&str; 11] = [
         "<truesurfer-parse5-trueos-host-core>",
         "<truesurfer-parse5-trueos-host-core",
         "<truesurfer-parse5-trueos-host-cor",
@@ -1480,8 +1470,6 @@ fn strip_trueos_host_markers(text: &str) -> String {
         "<truesurfer-parse5-trueos-app.js>",
         "<truesurfer-parse5-trueos-app",
         "<truesurfer-init>",
-        "<truesurfer-pixi-host-prelude>",
-        "<truesurfer-pixi-capture-adapter>",
     ];
 
     let mut cleaned = String::from(text);
@@ -1643,258 +1631,12 @@ unsafe fn submit_ui3_scene(
     browser_instance_id: u32,
     obj: qjs::JSValueConst,
 ) -> (u32, u32) {
-    let scene_submit_start_ms = now_ms();
-    log_line(format!("qjs-truesurfer[{}]: ui3 scene read begin\n", browser_instance_id));
-    let scene_value = qjs::JS_GetPropertyStr(
-        ctx,
-        obj,
-        TRUESURFER_RESULT_UI3_SCENE_PROP.as_ptr() as *const c_char,
-    );
-    if scene_value.is_exception()
-        || scene_value.tag == qjs::JS_TAG_UNDEFINED
-        || scene_value.tag == qjs::JS_TAG_NULL
-    {
-        log_line(format!("qjs-truesurfer[{}]: ui3 scene missing\n", browser_instance_id));
-        qjs::js_free_value(ctx, scene_value);
-        return (0, 0);
-    }
-
-    let root_id = read_result_u32(ctx, scene_value, TRUESURFER_UI3_SCENE_ROOT_ID_PROP);
-    if root_id == 0 {
-        log_line(format!("qjs-truesurfer[{}]: ui3 scene root missing\n", browser_instance_id));
-        qjs::js_free_value(ctx, scene_value);
-        return (0, 0);
-    }
-    let command_source =
-        read_result_string(ctx, scene_value, TRUESURFER_UI3_SCENE_COMMAND_SOURCE_PROP);
-    let skip_empty_text_ops = command_source == "parse5-trueos-pixi";
-    if !qjs::platform::ui::ui3_scene_begin(browser_instance_id, root_id) {
-        log_line(format!(
-            "qjs-truesurfer[{}]: ui3 scene begin rejected root={}\n",
-            browser_instance_id, root_id
-        ));
-        qjs::js_free_value(ctx, scene_value);
-        return (0, root_id);
-    }
+    let _ = (ctx, obj);
     log_line(format!(
-        "qjs-truesurfer[{}]: ui3 scene begin root={} source={}\n",
-        browser_instance_id, root_id, command_source
+        "qjs-truesurfer[{}]: ui3 scene submit disabled reason=pixi-host-removed\n",
+        browser_instance_id
     ));
-
-    let ops_value = qjs::JS_GetPropertyStr(
-        ctx,
-        scene_value,
-        TRUESURFER_UI3_SCENE_OPS_PROP.as_ptr() as *const c_char,
-    );
-    if ops_value.is_exception()
-        || ops_value.tag == qjs::JS_TAG_UNDEFINED
-        || ops_value.tag == qjs::JS_TAG_NULL
-    {
-        log_line(format!(
-            "qjs-truesurfer[{}]: ui3 scene ops missing root={}\n",
-            browser_instance_id, root_id
-        ));
-        qjs::js_free_value(ctx, ops_value);
-        qjs::js_free_value(ctx, scene_value);
-        return (0, root_id);
-    }
-
-    let op_count = read_array_len(ctx, ops_value).min(TRUESURFER_UI3_SCENE_OP_LIMIT);
-    log_line(format!(
-        "qjs-truesurfer[{}]: ui3 scene ops count={} root={}\n",
-        browser_instance_id, op_count, root_id
-    ));
-    let op_submit_start_ms = now_ms();
-    let mut submitted = 0u32;
-    let mut op_code_counts = [0u32; 23];
-    let mut unknown_op_count = 0u32;
-    let mut text_sample_count = 0u32;
-    let mut skipped_empty_text_count = 0u32;
-    for idx in 0..op_count {
-        let op_value = qjs::JS_GetPropertyUint32(ctx, ops_value, idx);
-        if op_value.is_exception()
-            || op_value.tag == qjs::JS_TAG_UNDEFINED
-            || op_value.tag == qjs::JS_TAG_NULL
-        {
-            qjs::js_free_value(ctx, op_value);
-            continue;
-        }
-
-        let code = read_result_u32(ctx, op_value, TRUESURFER_UI3_OP_CODE_PROP);
-        let node = read_result_u32(ctx, op_value, TRUESURFER_UI3_OP_NODE_PROP);
-        let a = read_result_f32(ctx, op_value, TRUESURFER_UI3_OP_A_PROP);
-        let b = read_result_f32(ctx, op_value, TRUESURFER_UI3_OP_B_PROP);
-        let c = read_result_f32(ctx, op_value, TRUESURFER_UI3_OP_C_PROP);
-        let d = read_result_f32(ctx, op_value, TRUESURFER_UI3_OP_D_PROP);
-        if (code as usize) < op_code_counts.len() {
-            op_code_counts[code as usize] = op_code_counts[code as usize].saturating_add(1);
-        } else {
-            unknown_op_count = unknown_op_count.saturating_add(1);
-        }
-
-        if idx < 8 {
-            log_line(format!(
-                "qjs-truesurfer[{}]: ui3 scene op#{} code={} node={} a={} b={} c={} d={}\n",
-                browser_instance_id, idx, code, node, a, b, c, d
-            ));
-        }
-
-        let ok = match code {
-            1 => qjs::platform::ui::ui3_scene_node(browser_instance_id, node, a.max(0.0) as u32),
-            2 => {
-                qjs::platform::ui::ui3_scene_add_child(browser_instance_id, node, a.max(0.0) as u32)
-            }
-            3 => qjs::platform::ui::ui3_scene_position(browser_instance_id, node, a, b),
-            4 => qjs::platform::ui::ui3_scene_graphics_clear(browser_instance_id, node),
-            5 => qjs::platform::ui::ui3_scene_graphics_rect(browser_instance_id, node, a, b, c, d),
-            6 => qjs::platform::ui::ui3_scene_graphics_fill(
-                browser_instance_id,
-                node,
-                a.max(0.0) as u32,
-                b,
-            ),
-            7 => qjs::platform::ui::ui3_scene_graphics_stroke(
-                browser_instance_id,
-                node,
-                a.max(0.0) as u32,
-                b,
-                c,
-            ),
-            8 => {
-                let text = read_result_string(ctx, op_value, TRUESURFER_UI3_OP_TEXT_PROP);
-                if text_sample_count < 12 {
-                    log_line(format!(
-                        "qjs-truesurfer[{}]: ui3 scene text-op#{} op_index={} node={} chars={} bytes={} sample=\"{}\"\n",
-                        browser_instance_id,
-                        text_sample_count,
-                        idx,
-                        node,
-                        text.chars().count(),
-                        text.len(),
-                        compact_log_text_sample(text.as_str(), 96)
-                    ));
-                }
-                text_sample_count = text_sample_count.saturating_add(1);
-                if skip_empty_text_ops && text.is_empty() {
-                    skipped_empty_text_count = skipped_empty_text_count.saturating_add(1);
-                    true
-                } else {
-                    qjs::platform::ui::ui3_scene_text(browser_instance_id, node, text.as_str())
-                }
-            }
-            9 => qjs::platform::ui::ui3_scene_text_fill(
-                browser_instance_id,
-                node,
-                a.max(0.0) as u32,
-                b,
-            ),
-            10 => qjs::platform::ui::ui3_scene_add_child_at(
-                browser_instance_id,
-                node,
-                a.max(0.0) as u32,
-                b.max(0.0) as u32,
-            ),
-            11 => qjs::platform::ui::ui3_scene_set_child_index(
-                browser_instance_id,
-                node,
-                a.max(0.0) as u32,
-                b.max(0.0) as u32,
-            ),
-            12 => qjs::platform::ui::ui3_scene_remove_child(
-                browser_instance_id,
-                node,
-                a.max(0.0) as u32,
-            ),
-            13 => qjs::platform::ui::ui3_scene_remove_from_parent(browser_instance_id, node),
-            14 => qjs::platform::ui::ui3_scene_remove_children(browser_instance_id, node),
-            15 => qjs::platform::ui::ui3_scene_visible(browser_instance_id, node, a != 0.0),
-            // Listener registration is Pixi vocabulary, but first-frame rendering does not
-            // need event dispatch wired yet. Keep it accepted so visual submit cannot hang.
-            16 => true,
-            17 => qjs::platform::ui::ui3_scene_remove_all_listeners(browser_instance_id, node),
-            18 => qjs::platform::ui::ui3_scene_graphics_circle(browser_instance_id, node, a, b, c),
-            19 => qjs::platform::ui::ui3_scene_graphics_move_to(browser_instance_id, node, a, b),
-            20 => qjs::platform::ui::ui3_scene_graphics_line_to(browser_instance_id, node, a, b),
-            22 => {
-                let h = read_result_string(ctx, op_value, TRUESURFER_UI3_OP_TEXT_PROP)
-                    .parse::<f32>()
-                    .unwrap_or(d);
-                qjs::platform::ui::ui3_scene_texture_rect(
-                    browser_instance_id,
-                    node,
-                    a.max(0.0) as u32,
-                    b,
-                    c,
-                    d,
-                    h,
-                )
-            }
-            _ => false,
-        };
-        if ok {
-            submitted = submitted.saturating_add(1);
-        } else if idx < 32 {
-            log_line(format!(
-                "qjs-truesurfer[{}]: ui3 scene op#{} rejected code={} node={} a={} b={} c={} d={}\n",
-                browser_instance_id, idx, code, node, a, b, c, d
-            ));
-        }
-        qjs::js_free_value(ctx, op_value);
-    }
-    let op_submit_ms = now_ms().saturating_sub(op_submit_start_ms);
-    log_line(format!(
-        "qjs-truesurfer[{}]: ui3 scene op-counts node={} addChild={} position={} clear={} rect={} fill={} stroke={} text={} textFill={} addChildAt={} setChildIndex={} removeChild={} removeFromParent={} removeChildren={} visible={} listen={} removeAllListeners={} circle={} moveTo={} lineTo={} texture={} unknown={}\n",
-        browser_instance_id,
-        op_code_counts[1],
-        op_code_counts[2],
-        op_code_counts[3],
-        op_code_counts[4],
-        op_code_counts[5],
-        op_code_counts[6],
-        op_code_counts[7],
-        op_code_counts[8],
-        op_code_counts[9],
-        op_code_counts[10],
-        op_code_counts[11],
-        op_code_counts[12],
-        op_code_counts[13],
-        op_code_counts[14],
-        op_code_counts[15],
-        op_code_counts[16],
-        op_code_counts[17],
-        op_code_counts[18],
-        op_code_counts[19],
-        op_code_counts[20],
-        op_code_counts[22],
-        unknown_op_count
-    ));
-    if skipped_empty_text_count != 0 {
-        log_line(format!(
-            "qjs-truesurfer[{}]: ui3 scene skipped_empty_text={} source={}\n",
-            browser_instance_id, skipped_empty_text_count, command_source
-        ));
-    }
-
-    log_line(format!(
-        "qjs-truesurfer[{}]: ui3 scene render begin root={} submitted={}/{} op_submit_ms={}\n",
-        browser_instance_id, root_id, submitted, op_count, op_submit_ms
-    ));
-    let render_start_ms = now_ms();
-    let _ = qjs::platform::ui::ui3_scene_render(browser_instance_id, root_id);
-    let render_ms = now_ms().saturating_sub(render_start_ms);
-    log_line(format!(
-        "qjs-truesurfer[{}]: ui3 scene render returned root={} submitted={}/{} render_ms={} total_submit_ms={}\n",
-        browser_instance_id,
-        root_id,
-        submitted,
-        op_count,
-        render_ms,
-        now_ms().saturating_sub(scene_submit_start_ms)
-    ));
-
-    qjs::js_free_value(ctx, ops_value);
-    qjs::js_free_value(ctx, scene_value);
-    (submitted, root_id)
+    (0, 0)
 }
 
 #[allow(unreachable_code)]

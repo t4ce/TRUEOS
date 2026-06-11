@@ -12,6 +12,7 @@ import {
 import { defaultRegistry } from './registry.mjs';
 import {
   iframeSrcdocProps,
+  normalizeImageProps,
   normalizeColorRgba,
   normalizeMeterRatio,
   normalizeNumberValue,
@@ -183,7 +184,9 @@ export function nodeToWidgets(node, path = '0', options = {}) {
   } else if (tag === 'details') {
     props = { open: 'open' in attrs };
     children = detailsChildren(node, path, opts);
-  } else if (tag === 'img' || tag === 'canvas') {
+  } else if (tag === 'img') {
+    props = normalizeImageProps(attrs);
+  } else if (tag === 'canvas') {
     props = { dimensions: replacedDimensionsFromAttrs(attrs) };
   } else if (tag === 'iframe') {
     props = { ...iframeSrcdocProps(attrs), dimensions: replacedDimensionsFromAttrs(attrs) };

@@ -121,10 +121,6 @@ export function stripUnsupportedSvgText(svg = '') {
   return stripTagBlock(stripTagBlock(String(svg ?? ''), 'tspan'), 'text');
 }
 
-export function svgDataUrl(svg = '') {
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(String(svg ?? ''))}`;
-}
-
 export function normalizeImageProps(attrs = {}) {
   const source = normalizeAttrs(attrs);
   const src = String(source.src ?? '');
@@ -132,14 +128,18 @@ export function normalizeImageProps(attrs = {}) {
   const trimmedSrc = src.trim();
   const trimmedAlt = alt.trim();
   const svgMarkup = decodeSvgDataUri(src);
+  const hasSrc = trimmedSrc.length > 0;
 
   return {
     src,
     alt,
-    hasSrc: trimmedSrc.length > 0,
-    label: trimmedAlt.length > 0 ? alt : trimmedSrc.length > 0 ? src : 'img',
+    hasSrc,
+    label: trimmedAlt.length > 0 ? alt : hasSrc ? src : 'img',
     svgMarkup,
     isSvgDataUri: svgMarkup != null,
+    placeholder: hasSrc
+      ? { kind: 'rect-x', fill: '#f6f6f6', stroke: '#999999', cross: '#c8c8c8' }
+      : { kind: 'rect', fill: '#ff66c4' },
     crossOrigin: String(source.crossorigin ?? source.crossOrigin ?? ''),
     decoding: String(source.decoding ?? ''),
     loading: String(source.loading ?? ''),
