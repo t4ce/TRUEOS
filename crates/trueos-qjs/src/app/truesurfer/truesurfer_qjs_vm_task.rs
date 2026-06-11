@@ -50,8 +50,7 @@ const TRUESURFER_PIXI_BUNDLE_SOURCE: &[u8] =
     include_bytes!("../../../../../src/ui3/pixi_bundle.min.js");
 const TRUESURFER_PIXI_CAPTURE_ADAPTER_SOURCE: &[u8] =
     include_bytes!("../../../../../src/ui3/pixi_capture_adapter.js");
-const TRUESURFER_PARSE5_TRUEOS_APP_SOURCE: &[u8] =
-    include_bytes!("../../../../../../Parse5/dist/trueos/index.js");
+const TRUESURFER_PARSE5_TRUEOS_APP_SOURCE: &[u8] = b"";
 
 fn fnv1a32(bytes: &[u8]) -> u32 {
     let mut hash = 0x811c9dc5u32;
@@ -2035,6 +2034,13 @@ unsafe fn submit_parse5_trueos_pixi_scene(
     browser_instance_id: u32,
     html: &str,
 ) -> (u32, u32) {
+    let _ = (rt, ctx, html);
+    log_line(format!(
+        "qjs-truesurfer[{}]: parse5 trueos vite app disabled; using text widget fallback\n",
+        browser_instance_id
+    ));
+    return (0, 0);
+
     let total_start_ms = now_ms();
     let host_chunks: [(&[u8], &[u8], &str); 6] = [
         (
