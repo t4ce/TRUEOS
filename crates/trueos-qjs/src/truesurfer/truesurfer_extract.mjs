@@ -1,5 +1,3 @@
-import { cssColorToRgbInt, resolveInlineStyle } from './css.mjs';
-
 const TRUESURFER_SUBSET_PROFILE = Object.freeze({
   includeHead: true,
   includeTitle: true,
@@ -21,13 +19,6 @@ const COMMON_BODY_TAGS = new Set(TRUESURFER_SUBSET_PROFILE.bodyTags);
 const BODY_HIERARCHY_ROOT_LIMIT = TRUESURFER_SUBSET_PROFILE.maxBodyHierarchyRoots;
 const BODY_HIERARCHY_CHILD_LIMIT = TRUESURFER_SUBSET_PROFILE.maxBodyHierarchyChildrenPerNode;
 const BODY_HIERARCHY_DEPTH_LIMIT = TRUESURFER_SUBSET_PROFILE.maxBodyHierarchyDepth;
-const GADGET_SNAPSHOT_LIMIT = 48;
-const DEFAULT_GADGET_FONT_PX = 14;
-const DEFAULT_GADGET_LINE_HEIGHT_PX = 20;
-const LINK_GADGET_PAD_X = 10;
-const LINK_GADGET_PAD_Y = 6;
-const LINK_GADGET_TEXT_COLOR_RGB = 0x1d4ed8;
-const BODY_STYLE_TAG_RE = /<style\b[^>]*>([\s\S]*?)<\/style>/gi;
 const DEFAULT_HEAD_SHELL = '<head></head>';
 const DEFAULT_BODY_SHELL = '<body></body>';
 const COMMON_BODY_TAGS_FALLBACK = new Set([
@@ -209,42 +200,6 @@ function stripCommentAndRawTextNoise(html) {
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '');
 }
 
-function extractBodyBackgroundColorFromStyles(sourceHtml) {
-  const html = safeString(sourceHtml);
-  if (!html) {
-    return 0;
-  }
-  let backgroundColorRgb = 0;
-  let match;
-  while ((match = BODY_STYLE_TAG_RE.exec(html))) {
-    const cssText = safeString(match[1]);
-    const bodyRuleRe = /(^|[^a-z0-9_-])body\s*\{([\s\S]*?)\}/gi;
-    let bodyRuleMatch;
-    while ((bodyRuleMatch = bodyRuleRe.exec(cssText))) {
-      const declarations = safeString(bodyRuleMatch[2]);
-      const backgroundDeclRe = /(background-color|background)\s*:\s*([^;]+)\s*;?/gi;
-      let backgroundDeclMatch;
-      while ((backgroundDeclMatch = backgroundDeclRe.exec(declarations))) {
-        const nextRgb = cssColorToRgbInt(backgroundDeclMatch[2]);
-        if (nextRgb !== 0) {
-          backgroundColorRgb = nextRgb;
-        }
-      }
-    }
-  }
-  return backgroundColorRgb;
-}
-
-function extractBodyBackgroundColorRgb(sourceHtml, bodyOpenTag) {
-  let backgroundColorRgb = extractBodyBackgroundColorFromStyles(sourceHtml);
-  const inlineBodyStyle = resolveInlineStyle('body', 'body', extractAttrValue(bodyOpenTag, 'style'), null);
-  const inlineRgb = cssColorToRgbInt(inlineBodyStyle && inlineBodyStyle.backgroundColor);
-  if (inlineRgb !== 0) {
-    backgroundColorRgb = inlineRgb;
-  }
-  return backgroundColorRgb;
-}
-
 function collectBodyHierarchy(bodyHtml, limit = BODY_HIERARCHY_ROOT_LIMIT) {
   const source = stripCommentAndRawTextNoise(bodyHtml);
   const tokenRe = /<\/?([a-zA-Z0-9:-]+)\b[^>]*>|([^<]+)/g;
@@ -340,187 +295,6 @@ function summarizeBodyHierarchy(bodyHierarchy) {
   return parts.join(' > ');
 }
 
-function estimateTextWidthPx(text, fontPx) {
-  const value = collapseWhitespace(text);
-  if (!value) {
-    return Math.max(1, Math.round(fontPx * 0.56));
-  }
-  const glyphPx = Math.max(6, Math.round(Number(fontPx || 14) * 0.56));
-  return Math.max(glyphPx, value.length * glyphPx);
-}
-
-function gadgetUsesInnerText(tag) {
-  const name = safeString(tag).toLowerCase();
-  return name === 'p' || name === 'span' || name === 'a' || name === 'button' || /^h[1-6]$/.test(name);
-}
-
-function gadgetIsLinkLike(tag) {
-  return safeString(tag).toLowerCase() === 'a';
-}
-
-function collectGadgetInnerText(bodyHierarchy, startIndex, parentDepth) {
-  const parts = [];
-  const items = Array.isArray(bodyHierarchy) ? bodyHierarchy : [];
-  for (let index = startIndex + 1; index < items.length; index += 1) {
-    const entry = items[index] || {};
-    const depth = Math.max(0, Number(entry.depth) || 0);
-    if (depth <= parentDepth) {
-      break;
-    }
-    if (collapseWhitespace(entry.tag) !== '#text') {
-      continue;
-    }
-    const text = collapseWhitespace(entry.text);
-    if (text) {
-      parts.push(text);
-    }
-  }
-  return collapseWhitespace(parts.join(' '));
-}
-
-function gadgetFontSizePx(tag) {
-  const name = safeString(tag).toLowerCase();
-  if (!/^h[1-6]$/.test(name)) {
-    return DEFAULT_GADGET_FONT_PX;
-  }
-  const level = Number(name[1] || 1);
-  return Math.max(DEFAULT_GADGET_FONT_PX, 24 - ((level - 1) * 2));
-}
-
-function gadgetLineHeightPx(tag) {
-  const fontPx = gadgetFontSizePx(tag);
-  return Math.max(DEFAULT_GADGET_LINE_HEIGHT_PX, fontPx + 4);
-}
-
-function gadgetDisplayText(tag, innerText) {
-  const name = safeString(tag).toLowerCase();
-  const text = collapseWhitespace(innerText);
-  if (gadgetUsesInnerText(name) && text) {
-    return text;
-  }
-  if (!name || name === '#text') {
-    return text;
-  }
-  return `<${name}>`;
-}
-
-function gadgetIsButtonLike(entry) {
-  const tag = collapseWhitespace(entry && entry.tag).toLowerCase();
-  if (tag === 'button') {
-    return true;
-  }
-  if (tag !== 'input') {
-    return false;
-  }
-  const inputType = collapseWhitespace(entry && entry.inputType).toLowerCase();
-  return inputType === 'button' || inputType === 'submit' || inputType === 'reset';
-}
-
-function fallbackInputButtonLabel(inputType) {
-  const kind = collapseWhitespace(inputType).toLowerCase();
-  if (kind === 'submit') return 'Submit';
-  if (kind === 'reset') return 'Reset';
-  return 'Button';
-}
-
-function gadgetTextForEntry(entry, innerText) {
-  if (gadgetIsLinkLike(entry && entry.tag)) {
-    const text = collapseWhitespace(innerText);
-    if (text) {
-      return text;
-    }
-    const title = collapseWhitespace(entry && entry.title);
-    if (title) {
-      return title;
-    }
-  }
-  if (gadgetIsButtonLike(entry)) {
-    const value = collapseWhitespace(entry && entry.value);
-    return value || fallbackInputButtonLabel(entry && entry.inputType);
-  }
-  return gadgetDisplayText(entry && entry.tag, innerText);
-}
-
-function gadgetResolvedStyle(entry, index) {
-  const tag = collapseWhitespace(entry && entry.tag).toLowerCase();
-  return resolveInlineStyle(tag, `gadget.${index}`, entry && entry.styleText || '', null);
-}
-
-function gadgetTextColorRgb(tag, style) {
-  if (gadgetIsLinkLike(tag)) {
-    return LINK_GADGET_TEXT_COLOR_RGB;
-  }
-  return cssColorToRgbInt(style && style.color);
-}
-
-function buildGadgetSnapshot(bodyHierarchy, backgroundColorRgb = 0, limit = GADGET_SNAPSHOT_LIMIT) {
-  const gadgets = [];
-  const items = Array.isArray(bodyHierarchy) ? bodyHierarchy : [];
-  let yCursor = 0;
-
-  for (let index = 0; index < items.length && gadgets.length < limit; index += 1) {
-    const entry = items[index] || {};
-    const tag = collapseWhitespace(entry.tag).toLowerCase();
-    if (!tag || tag === '#text') {
-      continue;
-    }
-
-    const depth = Math.max(0, Number(entry.depth) || 0);
-    const innerText = collectGadgetInnerText(items, index, depth);
-    const text = gadgetTextForEntry(entry, innerText);
-    if (!text) {
-      continue;
-    }
-
-    const style = gadgetResolvedStyle(entry, index);
-    const buttonLike = gadgetIsButtonLike(entry);
-    const linkLike = gadgetIsLinkLike(tag);
-    const fontSizePx = linkLike
-      ? DEFAULT_GADGET_FONT_PX
-      : Math.max(1, Math.round(Number(style && style.fontSizePx || gadgetFontSizePx(tag))));
-    const lineHeightPx = linkLike
-      ? DEFAULT_GADGET_LINE_HEIGHT_PX
-      : Math.max(1, Math.round(Number(style && style.lineHeightPx || gadgetLineHeightPx(tag))));
-    const paddingLeftPx = Math.max(0, Math.round(Number(style && style.paddingLeftPx || 0)));
-    const paddingRightPx = Math.max(0, Math.round(Number(style && style.paddingRightPx || 0)));
-    const paddingTopPx = Math.max(0, Math.round(Number(style && style.paddingTopPx || 0)));
-    const paddingBottomPx = Math.max(0, Math.round(Number(style && style.paddingBottomPx || 0)));
-    const xPx = depth * 12;
-    const textWidthPx = estimateTextWidthPx(text, fontSizePx);
-    const widthPx = buttonLike
-      ? textWidthPx + paddingLeftPx + paddingRightPx
-      : (linkLike
-        ? textWidthPx + (LINK_GADGET_PAD_X * 2)
-        : textWidthPx);
-    const heightPx = buttonLike
-      ? Math.max(lineHeightPx, lineHeightPx + paddingTopPx + paddingBottomPx)
-      : (linkLike
-        ? Math.max(lineHeightPx + (LINK_GADGET_PAD_Y * 2), lineHeightPx)
-        : lineHeightPx);
-    gadgets.push({
-      nodeId: Math.max(1, Number(entry.nodeId) || (index + 1)),
-      tag,
-      text,
-      xPx,
-      yPx: yCursor,
-      widthPx,
-      heightPx,
-      fontSizePx,
-      lineHeightPx,
-      textColorRgb: gadgetTextColorRgb(tag, style),
-      buttonLike,
-      changed: false,
-    });
-    yCursor += heightPx;
-  }
-
-  return {
-    version: 1,
-    backgroundColorRgb: Math.max(0, Number(backgroundColorRgb || 0) >>> 0) & 0xFFFFFF,
-    gadgets,
-  };
-}
-
 function collectStyleArtifacts(source) {
   const html = safeString(source);
   const styles = [];
@@ -599,7 +373,6 @@ function extractDocumentArtifacts(source) {
   const bodyHtml = TRUESURFER_SUBSET_PROFILE.includeBody
     ? (bodyBlock ? bodyBlock.inner : html)
     : '';
-  const bodyBackgroundColorRgb = extractBodyBackgroundColorRgb(html, bodyBlock ? bodyBlock.openTag : '');
   const bodyHierarchy = TRUESURFER_SUBSET_PROFILE.includeBodyHierarchy
     ? collectBodyHierarchy(bodyHtml, BODY_HIERARCHY_ROOT_LIMIT)
     : [];
@@ -611,8 +384,6 @@ function extractDocumentArtifacts(source) {
   const styleIndexMs = 0;
   const shellHtml = buildMinimalShell(title);
   const parseMs = Date.now() - startedAt;
-  const gadgetSnapshot = buildGadgetSnapshot(bodyHierarchy, bodyBackgroundColorRgb);
-  const ui3Scene = null;
 
   let styleBytes = 0;
   for (const style of styles) {
@@ -640,8 +411,6 @@ function extractDocumentArtifacts(source) {
     bodyBytes: bodyHtml.length,
     bodyHierarchy,
     bodyHierarchySummary,
-    gadgetSnapshot,
-    ui3Scene,
     styleCount: styles.length,
     styleBytes,
     styleSlotCount: styleIndex.styleSlotCount,

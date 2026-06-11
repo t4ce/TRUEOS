@@ -17,7 +17,7 @@ pub mod async_fs;
 pub mod trueos_module_loader;
 
 #[cfg(feature = "trueos")]
-#[path = "app/truesurfer/truesurfer_qjs_vm_task.rs"]
+#[path = "truesurfer/truesurfer_qjs_vm_task.rs"]
 pub mod truesurfer_qjs_vm_task;
 
 #[cfg(feature = "trueos")]
@@ -51,7 +51,7 @@ pub mod qjs_diag;
 pub mod platform;
 
 #[cfg(feature = "trueos")]
-#[path = "lightning/lightningcss_native.rs"]
+#[path = "lightning/lightningcss.rs"]
 pub mod lightningcss_native;
 
 #[cfg(feature = "trueos")]
