@@ -6,10 +6,10 @@ html shack -> N-Browsers (Truesurfers)
 In Truesurfer:
 - Parse5 + CSS parse, JavaScript in parallel isolated
 - Lightning CSS enrichment of the document and DOM subset
-- Pipeline channel handoff to Yoga for layout enrichment
+- Render-tree extraction for the kernel renderer
 
 Runtime surface:
-- Raw Parse5/Lightning/Yoga extraction state for the kernel renderer
+- Raw Parse5/Lightning extraction state for the kernel renderer
 - No migrated control layer and no hosted handoff
 */
 
@@ -263,8 +263,8 @@ function logRenderTreeArtifact(url, bytes, widgetTree, startedAt) {
       `[truesurfer render-tree] browser=${browserId} status=ready nodes=${Number(summary.renderNodes || 0)} render_hash=${safeString(summary.renderHash)} ms=${elapsed} url=${url}`,
     );
     log(`[truesurfer render-tree ndjson] browser=${browserId} ${JSON.stringify(artifact.renderTree)}`);
-    if (artifact.prepixi) {
-      log(`[truesurfer render-tree ndjson] browser=${browserId} ${JSON.stringify(artifact.prepixi)}`);
+    if (artifact.layoutTrace) {
+      log(`[truesurfer render-tree ndjson] browser=${browserId} ${JSON.stringify(artifact.layoutTrace)}`);
     }
     renderTreeArtifactLogged = true;
   } catch (error) {

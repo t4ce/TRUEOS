@@ -120,11 +120,6 @@ unsafe fn load_native_module(
         return core::ptr::null_mut();
     }
 
-    let yoga_mod = unsafe { crate::yoga::try_create_native_module(ctx, module_name) };
-    if !yoga_mod.is_null() {
-        return yoga_mod;
-    }
-
     let workers_mod = unsafe { crate::workers::try_create_native_module(ctx, module_name) };
     if !workers_mod.is_null() {
         return workers_mod;
@@ -482,8 +477,6 @@ fn qjs_vendor_specifier(spec: &[u8]) -> Option<&'static [u8]> {
         b"@svgdotjs/svg.js" => Some(b"/qjs/svgjs/index.mjs"),
         b"svgdom" => Some(b"/qjs/svgjs/dom-lite.mjs"),
         b"parse5" => Some(b"/qjs/parse5/parse5.mjs"),
-        b"pixi" | b"pixi.js" => Some(b"/qjs/pixi/pixi.mjs"),
-        b"yoga-layout" => Some(b"/qjs/yoga/yoga.mjs"),
         b"three" => Some(b"https://esm.sh/three@0.162.0"),
         _ => None,
     }
@@ -583,8 +576,6 @@ pub(crate) unsafe fn normalize_with_mode(
             || spec == b"cmd_stream"
             || spec == b"trueos:cmd_stream"
             || spec == b"worker_threads"
-            || spec == b"trueos:yoga"
-            || spec == b"yoga-native"
             || spec == b"process"
             || spec == b"node:process"
             || spec == b"node:worker_threads"

@@ -36,9 +36,6 @@ pub mod node;
 pub mod trueos_shims;
 
 #[cfg(feature = "trueos")]
-pub mod yoga;
-
-#[cfg(feature = "trueos")]
 pub mod vm;
 
 #[cfg(feature = "trueos")]
