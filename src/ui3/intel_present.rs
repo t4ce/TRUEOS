@@ -56,6 +56,10 @@ fn present_ui3_geometry_to_intel_primary(
     let mut rect_run_opaque = true;
     let viewport = active_viewport_clip();
 
+    if damage.is_none() {
+        clear_full_frame(viewport, &mut summary);
+    }
+
     for draw in &frame.draws {
         let effective_clip = merge_clip(merge_clip(*draw_clip(draw), damage), Some(viewport));
         match draw {
@@ -442,6 +446,24 @@ fn flush_rect_run(
         accumulate_rect_result(summary, result);
     }
     rects.clear();
+}
+
+fn clear_full_frame(viewport: Ui3Rect, summary: &mut Ui3IntelPresentSummary) {
+    let Some(rect) = lower_rect(viewport) else {
+        return;
+    };
+    let clear = crate::intel::gpgpu::GpgpuSolidRect {
+        rect,
+        color_rgba: rgba8_to_kernel_rgba(Rgba8::new(255, 255, 255, 255)),
+    };
+    let result = crate::intel::gpgpu::solid_rects_rgba8_over_primary(&[clear], false)
+        .or_else(|| crate::intel::gpgpu::cpu_solid_rects_rgba8_over_primary(&[clear]));
+    if let Some(result) = result {
+        if result.ok && result.rects > 0 {
+            summary.solid_rects = summary.solid_rects.saturating_add(result.rects);
+        }
+        accumulate_rect_result(summary, result);
+    }
 }
 
 fn accumulate_rect_result(

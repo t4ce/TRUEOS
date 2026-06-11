@@ -27,6 +27,7 @@ const PIXI_CURSOR_DAMAGE_HALF_RATIO: f32 = 0.010;
 const PIXI_CURSOR_DAMAGE_HALF_MIN_PX: f32 = 10.0;
 const PIXI_CURSOR_DAMAGE_HALF_MAX_PX: f32 = 18.0;
 const PIXI_CURSOR_DAMAGE_MARGIN_PX: f32 = 3.0;
+const PIXI_CURSOR_DAMAGE_FAST_MAX_PX: f32 = 96.0;
 
 static PIXI_SERVICE_READY: AtomicBool = AtomicBool::new(false);
 static PIXI_SERVICE_PUMP_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -396,6 +397,20 @@ fn present_cached_cursor_damage(
     let Some(damage) = cursor_damage_rect(runtime) else {
         return false;
     };
+    if damage.w > PIXI_CURSOR_DAMAGE_FAST_MAX_PX || damage.h > PIXI_CURSOR_DAMAGE_FAST_MAX_PX {
+        if runtime.cursor_hit_log_count < 8 {
+            crate::log!(
+                "ui3-pixi-service: cursor-damage-skip browser={} root={} reason=large-damage damage={}x{}@{},{}\n",
+                browser_id,
+                root_id,
+                damage.w as i32,
+                damage.h as i32,
+                damage.x as i32,
+                damage.y as i32
+            );
+        }
+        return false;
+    }
     let Some(geometry) = runtime.last_geometry.as_ref() else {
         return false;
     };

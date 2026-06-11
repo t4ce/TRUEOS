@@ -91,7 +91,7 @@ declare global {
       thumbH: number;
     } | null;
     __TRUEOS_PIXI_LAST_GRAPHICS_FAST_PATH__?: {
-      owner: 'context-menu-hover';
+      owner: 'context-menu-hover' | 'button-hover';
       rootNode: number;
       graphicsNode: number;
       x: number;
@@ -102,6 +102,9 @@ declare global {
       worldY: number;
       fillColor: number;
       fillAlpha: number;
+      strokeColor?: number;
+      strokeAlpha?: number;
+      strokeWidth?: number;
     } | null;
     __TRUEOS_PIXI_LAST_OVERLAY_FAST_PATH__?: {
       rootNode: number;
@@ -1431,6 +1434,12 @@ function unionOverlayRect(a: OverlayRect | null, b: OverlayRect | null): Overlay
   const x1 = Math.max(a.x + a.w, b.x + b.w);
   const y1 = Math.max(a.y + a.h, b.y + b.h);
   return { x: x0, y: y0, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) };
+}
+
+function overlayRectContains(outer: OverlayRect | null, inner: OverlayRect | null): boolean {
+  if (!inner) return true;
+  if (!outer) return false;
+  return inner.x >= outer.x && inner.y >= outer.y && inner.x + inner.w <= outer.x + outer.w && inner.y + inner.h <= outer.y + outer.h;
 }
 
 function translateOverlayRect(r: OverlayRect, dx: number, dy: number): OverlayRect {
@@ -2973,6 +2982,29 @@ function renderToPixi(app: Application, box: LayoutBox, sceneRoot?: Container) {
           h,
           label,
           theme,
+          publishFastPath: (fillColor) => {
+            if (!isTrueosCaptureOnly()) return;
+            const capture = window.__pixiCapture;
+            const getId = capture && typeof capture.objectId === 'function' ? capture.objectId.bind(capture) : null;
+            if (!getId) return;
+            const world = typeof (g as any).getGlobalPosition === 'function' ? (g as any).getGlobalPosition() : { x: nodeAbsX, y: nodeAbsY };
+            window.__TRUEOS_PIXI_LAST_GRAPHICS_FAST_PATH__ = {
+              owner: 'button-hover',
+              rootNode: getId(app.stage as any),
+              graphicsNode: getId(g as any),
+              x: 0.5,
+              y: 0.5,
+              w: Math.max(0, w - 1),
+              h: Math.max(0, h - 1),
+              worldX: Number(world?.x) || nodeAbsX,
+              worldY: Number(world?.y) || nodeAbsY,
+              fillColor,
+              fillAlpha: 1,
+              strokeColor: theme.control.button.border,
+              strokeAlpha: 1,
+              strokeWidth: 1,
+            };
+          },
           registerHoverHandlers: node.key
             ? (handlers) => {
                 uiState.hoverHandlers.set(node.key!, handlers);
@@ -4024,11 +4056,29 @@ async function main() {
       window.__TRUEOS_PIXI_INCREMENTAL_ROOT__ = 0;
       window.__TRUEOS_PIXI_INCREMENTAL_DAMAGE__ = null;
       if (commands && damage && damage.w > 0 && damage.h > 0) {
-        const delta = commands.slice(beforeCommands);
-        commands.splice(beforeCommands, delta.length);
-        const capObj = window.__pixiCapture;
+        const commandDelta = commands.slice(beforeCommands);
+        commands.splice(beforeCommands, commandDelta.length);
+        const capObj = window.__pixiCapture as any;
         const getId = capObj && typeof capObj.objectId === 'function' ? capObj.objectId.bind(capObj) : null;
-        const rootNode = getId ? getId(app.stage as any) : 0;
+        const snapshotOverlayRoot = capObj && typeof capObj.snapshotNode === 'function' ? capObj.snapshotNode.bind(capObj) : null;
+        const stageRootNode = getId ? getId(app.stage as any) : 0;
+        const overlaySnapshot = snapshotOverlayRoot ? snapshotOverlayRoot(overlayRoot as any) : null;
+        const overlayRootNode = getId ? getId(overlayRoot as any) : 0;
+        const canDrawOverlayOnly = afterBounds && overlayRootNode > 0 && (!beforeBounds || overlayRectContains(afterBounds, beforeBounds));
+        const rootNode = canDrawOverlayOnly ? overlayRootNode : stageRootNode;
+        const delta =
+          overlaySnapshot && overlayRootNode > 0
+            ? [
+                {
+                  frame: 0,
+                  seq: 0,
+                  op: 'snapshot',
+                  id: overlayRootNode,
+                  target: 'Container:__overlayRoot',
+                  args: [overlaySnapshot],
+                },
+              ]
+            : commandDelta;
         window.__TRUEOS_PIXI_INCREMENTAL_COMMANDS__ = delta;
         window.__TRUEOS_PIXI_INCREMENTAL_ROOT__ = rootNode;
         window.__TRUEOS_PIXI_INCREMENTAL_DAMAGE__ = damage;

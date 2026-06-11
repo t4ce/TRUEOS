@@ -25,8 +25,9 @@ export function renderButton(opts: {
 
   // Optional hover bridge for non-mouse cursors.
   registerHoverHandlers?: (handlers: { over: () => void; out: () => void }) => void;
+  publishFastPath?: (fill: number) => void;
 }): void {
-  const { container, graphics: g, w, h, label, theme, registerHoverHandlers } = opts;
+  const { container, graphics: g, w, h, label, theme, registerHoverHandlers, publishFastPath } = opts;
 
   const drawButton = (fill: number) => {
     g.clear();
@@ -37,6 +38,10 @@ export function renderButton(opts: {
     else g.rect(inset, inset, Math.max(0, w - sw), Math.max(0, h - sw));
     g.fill(fill);
     g.stroke({ width: sw, color: theme.control.button.border });
+  };
+  const drawButtonFast = (fill: number) => {
+    drawButton(fill);
+    publishFastPath?.(fill);
   };
 
   drawButton(theme.control.button.fill);
@@ -70,8 +75,8 @@ export function renderButton(opts: {
     Math.max(0, Math.floor((h - (measuredH > 0 ? measuredH : fallbackLineH)) / 2)) + TEXT_BASELINE_NUDGE_Y
   );
 
-  const over = () => drawButton(theme.control.button.hoverFill);
-  const out = () => drawButton(theme.control.button.fill);
+  const over = () => drawButtonFast(theme.control.button.hoverFill);
+  const out = () => drawButtonFast(theme.control.button.fill);
   registerHoverHandlers?.({ over, out });
 
   // Lightweight interactivity: hover/active state.
@@ -80,8 +85,8 @@ export function renderButton(opts: {
   container.cursor = 'pointer';
   container.on('pointerover', over);
   container.on('pointerout', out);
-  container.on('pointerdown', () => drawButton(theme.control.button.activeFill));
-  container.on('pointerup', () => drawButton(theme.control.button.hoverFill));
+  container.on('pointerdown', () => drawButtonFast(theme.control.button.activeFill));
+  container.on('pointerup', () => drawButtonFast(theme.control.button.hoverFill));
 }
 
 export function applyYogaDefaultsButton(yogaNode: any, Yoga: any): void {

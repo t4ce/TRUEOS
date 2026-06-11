@@ -1293,6 +1293,9 @@ function __trueosPushSnapshotNode(node, parent, ops, seen, snapshotSeen, snapsho
   if (kind === 2 && textSlots) textSlots.push(id);
   if (parent > 0) ops.push({ code: 2, node: parent, a: id });
   ops.push({ code: 3, node: id, a: localX, b: localY });
+  if (G.__trueosSnapshotReplaceChildren && type.indexOf("Container") >= 0) {
+    ops.push({ code: 14, node: id });
+  }
   if (typeof node.scaleX === "number" || typeof node.scaleY === "number") {
     var sx = __trueosNum(node.scaleX, 1);
     var sy = __trueosNum(node.scaleY, sx);
@@ -1390,25 +1393,25 @@ G.__trueosParse5BuildSceneFromCapture = function () {
   var snapshotTrustedTextState = { rows: trustedTextRows, index: 0 };
   var trustedTextRowIndex = 0;
   var replayTextEmitted = 0;
-  var rootId = incrementalMode ? (__trueosNum(G.__TRUEOS_PIXI_INCREMENTAL_ROOT__, 0) | 0) : 0;
+  var incrementalRootId = incrementalMode ? (__trueosNum(G.__TRUEOS_PIXI_INCREMENTAL_ROOT__, 0) | 0) : 0;
+  var rootId = incrementalRootId;
   var snapshot = null;
   var replayStart = 0;
   var i;
-  if (!incrementalMode) {
-    for (i = commands.length - 1; i >= 0; i -= 1) {
-      if (commands[i] && __trueosNormalizeCommandOp(commands[i].op) === "snapshot" && commands[i].args && commands[i].args[0]) {
-        snapshot = commands[i].args[0];
-        rootId = __trueosNum(commands[i].id, __trueosNum(snapshot.id, 0)) | 0;
-        for (var si = i - 1; si >= 0; si -= 1) {
-          if (commands[si] && __trueosNormalizeCommandOp(commands[si].op) === "snapshot") {
-            replayStart = si + 1;
-            break;
-          }
+  for (i = commands.length - 1; i >= 0; i -= 1) {
+    if (commands[i] && __trueosNormalizeCommandOp(commands[i].op) === "snapshot" && commands[i].args && commands[i].args[0]) {
+      snapshot = commands[i].args[0];
+      if (!incrementalMode) rootId = __trueosNum(commands[i].id, __trueosNum(snapshot.id, 0)) | 0;
+      for (var si = i - 1; si >= 0; si -= 1) {
+        if (commands[si] && __trueosNormalizeCommandOp(commands[si].op) === "snapshot") {
+          replayStart = si + 1;
+          break;
         }
-        break;
       }
+      break;
     }
   }
+  if (incrementalMode && rootId <= 0) rootId = __trueosNum(snapshot && snapshot.id, 0) | 0;
   var hasSnapshot = !!snapshot;
   var snapshotDiag = __trueosSnapshotDiag(snapshot, 0, { nodes: 0, text: 0, renderableText: 0, nonArrayChildren: 0, maxDepth: 0, samples: [] });
   var snapshotRenderableText = snapshotDiag && snapshotDiag.renderableText ? snapshotDiag.renderableText : 0;
@@ -1434,7 +1437,11 @@ G.__trueosParse5BuildSceneFromCapture = function () {
     __trueosCollectSnapshotVisibility(snapshot, 0, 0, true, snapshotNodeVisible);
     if (G.__TRUEOS_PIXI_VERBOSE_SNAPSHOT__ && G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=snapshot-push begin");
     G.__trueosSnapshotPushCount = 0;
-    rootId = __trueosPushSnapshotNode(snapshot, 0, ops, seen, snapshotSeen, snapshotTextVisible, snapshotTextWorld, textSlots, snapshotTrustedTextState, 0, 0) || rootId;
+    G.__trueosSnapshotReplaceChildren = true;
+    var pushedSnapshotRoot = __trueosPushSnapshotNode(snapshot, 0, ops, seen, snapshotSeen, snapshotTextVisible, snapshotTextWorld, textSlots, snapshotTrustedTextState, 0, 0);
+    G.__trueosSnapshotReplaceChildren = false;
+    if (!incrementalMode) rootId = pushedSnapshotRoot || rootId;
+    if (incrementalMode && incrementalRootId > 0) rootId = incrementalRootId;
     if (G.__TRUEOS_PIXI_VERBOSE_SNAPSHOT__ && G.console && typeof G.console.log === "function") G.console.log("[parse5 trueos host] scene-build phase=snapshot-push done ops=" + ops.length);
   }
   function __trueosMappedTextNode(commandId, textValueHasInk, commandWasSnapshotSeen) {
@@ -4396,6 +4403,9 @@ unsafe fn submit_ui3_graphics_rect_fast_path(
     let damage_h = read_result_f32(ctx, result, b"damageH\0");
     let fill_color = read_result_u32(ctx, result, b"fillColor\0");
     let fill_alpha = read_result_f32(ctx, result, b"fillAlpha\0");
+    let stroke_color = read_result_u32(ctx, result, b"strokeColor\0");
+    let stroke_alpha = read_result_f32(ctx, result, b"strokeAlpha\0");
+    let stroke_width = read_result_f32(ctx, result, b"strokeWidth\0");
 
     let geometry_ok = root_node != 0
         && graphics_node != 0
@@ -4413,7 +4423,9 @@ unsafe fn submit_ui3_graphics_rect_fast_path(
         && damage_w > 0.0
         && damage_h > 0.0
         && fill_alpha >= 0.0
-        && fill_alpha <= 1.0;
+        && fill_alpha <= 1.0
+        && (!stroke_alpha.is_finite() || (stroke_alpha >= 0.0 && stroke_alpha <= 1.0))
+        && (!stroke_width.is_finite() || stroke_width >= 0.0);
     if !geometry_ok {
         log_line(format!(
             "qjs-truesurfer[{}]: ui3 graphics-rect-fast rejected root={} graphics={} rect={}x{}@{},{} color=0x{:06X} alpha={}\n",
@@ -4437,6 +4449,15 @@ unsafe fn submit_ui3_graphics_rect_fast_path(
             fill_color,
             fill_alpha,
         );
+    if ok && stroke_width.is_finite() && stroke_width > 0.0 {
+        ok &= qjs::platform::ui::ui3_scene_graphics_stroke(
+            browser_instance_id,
+            graphics_node,
+            stroke_color,
+            if stroke_alpha.is_finite() { stroke_alpha } else { 1.0 },
+            stroke_width,
+        );
+    }
     let damage_pad = 2.0;
     ok &= qjs::platform::ui::ui3_scene_render_damage(
         browser_instance_id,
