@@ -3,8 +3,15 @@
 
 import { parse as parseHtml } from 'parse5';
 import { domToWidgets } from '../widlib/index.mjs';
+import { defaultLayoutMetrics, defaultTheme } from './renderTheme.mjs';
+import {
+  RENDER_TRACE_VERSION,
+  blockNode,
+  normalizeViewport,
+  stableObject,
+  textNode,
+} from './renderTypes.mjs';
 
-const DEFAULT_VIEWPORT = Object.freeze({ width: 2560, height: 1224 });
 const DEFAULT_MAX_IFRAME_DEPTH = 4;
 const TEMPORAL_INPUT_TAGS = Object.freeze({
   time: 'timeinput',
@@ -13,36 +20,6 @@ const TEMPORAL_INPUT_TAGS = Object.freeze({
   week: 'weekinput',
   'datetime-local': 'datetimelocalinput',
 });
-const TAG_LAYOUT_DEFAULTS = Object.freeze({
-  input: { height: 36, minWidth: 220 },
-  button: { height: 36, minWidth: 100 },
-  textarea: { height: 108, minWidth: 220 },
-  select: { height: 36, minWidth: 220 },
-  searchbutton: { width: 36, height: 36, minWidth: 36, minHeight: 36 },
-  progress: { height: 14, minWidth: 240 },
-  meter: { height: 14, minWidth: 240 },
-  slider: { height: 14, minWidth: 240 },
-  number: { height: 36, minWidth: 140 },
-  color: { width: 240, height: 200, minWidth: 240, minHeight: 200 },
-  timeinput: { height: 36, minWidth: 220 },
-  dateinput: { height: 36, minWidth: 220 },
-  monthinput: { height: 36, minWidth: 220 },
-  weekinput: { height: 36, minWidth: 220 },
-  datetimelocalinput: { height: 36, minWidth: 340 },
-});
-
-function stableObject(source) {
-  if (!source || typeof source !== 'object' || Array.isArray(source)) return {};
-  const out = {};
-  const keys = Object.keys(source).sort();
-  for (const key of keys) {
-    const value = source[key];
-    if (value === undefined || typeof value === 'function') continue;
-    out[key] = value === null ? '' : String(value);
-  }
-  return out;
-}
-
 function cleanChildren(children, options) {
   const out = [];
   for (const child of children ?? []) {
@@ -130,28 +107,25 @@ function searchRenderNode(node) {
   if (attrs.placeholder) inputAttrs.placeholder = attrs.placeholder;
   if (attrs.disabled) inputAttrs.disabled = attrs.disabled;
 
-  return {
-    kind: 'block',
+  return blockNode({
     key: `${key}:search-row`,
     tagName: 'searchrow',
     attrs: {},
     children: [
-      {
-        kind: 'block',
+      blockNode({
         key: `${key}:search-btn`,
         tagName: 'searchbutton',
         attrs: { 'data-focus-key': inputKey },
         children: [],
-      },
-      {
-        kind: 'block',
+      }),
+      blockNode({
         key: inputKey,
         tagName: 'input',
         attrs: stableObject(inputAttrs),
         children: [],
-      },
+      }),
     ],
-  };
+  });
 }
 
 function barRowRenderNode(node, tagName) {
@@ -162,34 +136,30 @@ function barRowRenderNode(node, tagName) {
       ? String(node.props.fallbackText).replace(/\s+/g, ' ').trim()
       : '';
   const rowChildren = [];
-  if (fallbackText.length > 0) rowChildren.push({ kind: 'text', text: fallbackText });
-  rowChildren.push({
-    kind: 'block',
+  if (fallbackText.length > 0) rowChildren.push(textNode(fallbackText));
+  rowChildren.push(blockNode({
     key,
     tagName,
     attrs,
     children: [],
-  });
-  return {
-    kind: 'block',
+  }));
+  return blockNode({
     key: `${key}-row`,
     tagName: 'barrow',
     attrs: { 'data-kind': tagName },
     children: rowChildren,
-  };
+  });
 }
 
 function sliderRenderNode(node) {
   const attrs = attrsWithWidgetProps(node, 'slider');
   const key = String(node.key ?? 'slider');
-  return {
-    kind: 'block',
+  return blockNode({
     key: `${key}-row`,
     tagName: 'barrow',
     attrs: { 'data-kind': 'slider' },
     children: [
-      {
-        kind: 'block',
+      blockNode({
         key: `${key}-label`,
         tagName: 'sliderlabel',
         attrs: {
@@ -197,16 +167,15 @@ function sliderRenderNode(node) {
           'data-slider-key': key,
         },
         children: [],
-      },
-      {
-        kind: 'block',
+      }),
+      blockNode({
         key,
         tagName: 'slider',
         attrs,
         children: [],
-      },
+      }),
     ],
-  };
+  });
 }
 
 function colorChannelValue(node, channel) {
@@ -220,34 +189,32 @@ function colorChannelValue(node, channel) {
 function colorRenderNodes(node) {
   const attrs = attrsWithWidgetProps(node, 'color');
   const key = String(node.key ?? 'color');
-  const mkSpin = (channel) => ({
-    kind: 'block',
-    key: `${key}-${channel}`,
-    tagName: 'number',
-    attrs: {
-      channel,
-      max: '255',
-      min: '0',
-      step: '1',
-      value: colorChannelValue(node, channel),
-    },
-    children: [],
-  });
+  const mkSpin = (channel) =>
+    blockNode({
+      key: `${key}-${channel}`,
+      tagName: 'number',
+      attrs: {
+        channel,
+        max: '255',
+        min: '0',
+        step: '1',
+        value: colorChannelValue(node, channel),
+      },
+      children: [],
+    });
   return [
-    {
-      kind: 'block',
+    blockNode({
       key,
       tagName: 'color',
       attrs,
       children: [],
-    },
-    {
-      kind: 'block',
+    }),
+    blockNode({
       key: `${key}-controls`,
       tagName: 'p',
       attrs: {},
       children: [mkSpin('r'), mkSpin('g'), mkSpin('b'), mkSpin('a')],
-    },
+    }),
   ];
 }
 
@@ -260,13 +227,12 @@ function detailsRenderNode(node, options) {
   const children = hasSummary
     ? rawChildren
     : [
-        {
-          kind: 'block',
+        blockNode({
           key: `${widgetKeyPath(key)}:summary`,
           tagName: 'summary',
           attrs: { 'data-details-key': key },
-          children: [{ kind: 'text', text: String(attrs.summary ?? attrs.title ?? 'Details') }],
-        },
+          children: [textNode(String(attrs.summary ?? attrs.title ?? 'Details'))],
+        }),
         ...rawChildren,
       ];
 
@@ -281,13 +247,12 @@ function detailsRenderNode(node, options) {
     }
   }
 
-  return {
-    kind: 'block',
+  return blockNode({
     key,
     tagName: 'details',
     attrs,
     children,
-  };
+  });
 }
 
 function iframeRenderNode(node, options) {
@@ -309,23 +274,22 @@ function iframeRenderNode(node, options) {
       }
       children.push(...cleanChildren(nestedTree.children, { ...options, iframeDepth: depth + 1 }));
     } catch (_) {
-      children.push({ kind: 'text', text: '(iframe srcdoc parse error)' });
+      children.push(textNode('(iframe srcdoc parse error)'));
     }
   }
 
-  return {
-    kind: 'block',
+  return blockNode({
     key,
     tagName: 'iframe',
     attrs: stableObject(attrs),
     children,
-  };
+  });
 }
 
 export function widgetNodeToRenderNode(node, options = {}) {
   if (!node || typeof node !== 'object') return null;
   if (node.kind === 'text') {
-    return { kind: 'text', text: String(node.text ?? '') };
+    return textNode(node.text);
   }
   if (node.kind !== 'widget') return null;
 
@@ -341,15 +305,14 @@ export function widgetNodeToRenderNode(node, options = {}) {
 
   const baseAttrs = stableObject(node.attrs);
   const tagName = temporalTagName(node, baseAttrs) || sourceTag;
-  const renderNode = {
-    kind: 'block',
+  const renderNode = blockNode({
     key: String(node.key ?? ''),
     tagName,
     children: cleanChildren(node.children, options),
-  };
+  });
   const attrs = attrsWithWidgetProps(node, tagName);
   if (tagName === 'details' && node.props && node.props.open && attrs.open == null) attrs.open = '';
-  if (Object.keys(attrs).length > 0) renderNode.attrs = attrs;
+  if (Object.keys(attrs).length > 0) renderNode.attrs = stableObject(attrs);
   if (tagName === 'details' && attrs.open != null) {
     for (const child of renderNode.children) {
       if (child && child.kind === 'block' && child.tagName === 'summary') {
@@ -366,13 +329,12 @@ export function widgetTreeToRenderNodes(widgetTree, options = {}) {
   const children = cleanChildren(widgetTree && widgetTree.children, options);
   if (options.wrapRoot === false) return children;
   return [
-    {
-      kind: 'block',
+    blockNode({
       key: String(options.rootKey ?? 'root:internal-iframe'),
       tagName: String(options.rootTagName ?? 'iframe'),
       attrs: { 'data-root': '1' },
       children,
-    },
+    }),
   ];
 }
 
@@ -386,7 +348,7 @@ function clampSize(value, fallback) {
 }
 
 function textWidth(text, maxWidth) {
-  const width = String(text ?? '').length * 8 + 4;
+  const width = String(text ?? '').length * Math.max(1, defaultTheme.fontSize * 0.5) + 4;
   return Math.max(1, Math.min(Math.max(1, maxWidth), width));
 }
 
@@ -397,7 +359,7 @@ function layoutDefaultsFor(node) {
 }
 
 function tagLayoutDefaults(tagName) {
-  return TAG_LAYOUT_DEFAULTS[tagName] ?? {};
+  return defaultLayoutMetrics.tagDefaults[tagName] ?? {};
 }
 
 function explicitSizeFromAttrs(node, axis) {
@@ -465,7 +427,7 @@ function layoutNode(renderNode, sourceMap, x, y, width, options) {
       x,
       y,
       width: textWidth(renderNode.text, width),
-      height: 20,
+      height: Math.ceil(defaultTheme.fontSize * 1.25),
       children: [],
     };
   }
@@ -562,14 +524,6 @@ export function widgetTreeToLayout(widgetTree, renderNodes, options = {}) {
   });
 }
 
-function normalizeViewport(viewport) {
-  const source = viewport && typeof viewport === 'object' ? viewport : DEFAULT_VIEWPORT;
-  return {
-    width: clampSize(source.width, DEFAULT_VIEWPORT.width),
-    height: clampSize(source.height, DEFAULT_VIEWPORT.height),
-  };
-}
-
 export function hashText(text) {
   let hash = 0x811c9dc5;
   const value = String(text ?? '');
@@ -611,7 +565,7 @@ export function createRenderTreeTrace(widgetTree, options = {}) {
     const layout = widgetTreeToLayout(widgetTree, renderNodes, { ...options, viewport });
     const layoutHash = hashText(JSON.stringify(layout));
     const traceBody = {
-      version: 1,
+      version: RENDER_TRACE_VERSION,
       source,
       viewport,
       renderHash,
