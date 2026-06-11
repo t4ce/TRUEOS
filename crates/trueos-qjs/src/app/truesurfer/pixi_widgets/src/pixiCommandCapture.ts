@@ -430,7 +430,8 @@ function installTrueosPointerDispatcher(): void {
   const captureRepaintPending = () =>
     Boolean(
       (window as any).__TRUEOS_PIXI_REPAINT_REQUIRED__ ||
-        (window as any).__TRUEOS_PIXI_SCROLL_REPAINT_REQUIRED__,
+        (window as any).__TRUEOS_PIXI_SCROLL_REPAINT_REQUIRED__ ||
+        (window as any).__TRUEOS_PIXI_OVERLAY_REPAINT_REQUIRED__,
     );
 
   window.__TRUEOS_DISPATCH_PIXI_POINTER__ = (nodeId, event, x, y, pointerId, buttons, wheelDeltaY = 0) => {
@@ -528,6 +529,7 @@ function installTrueosPointerDispatcher(): void {
     }
 
     (window as any).__TRUEOS_PIXI_LAST_GRAPHICS_FAST_PATH__ = null;
+    (window as any).__TRUEOS_PIXI_LAST_OVERLAY_FAST_PATH__ = null;
     const ev: any = {
       type: String(event || ''),
       button: Number(buttons) & 2 ? 2 : 0,
@@ -633,8 +635,28 @@ function installTrueosPointerDispatcher(): void {
         rectY: Number(graphicsFastPath.y) || 0,
         rectW: Number(graphicsFastPath.w) || 0,
         rectH: Number(graphicsFastPath.h) || 0,
+        damageX: Number(graphicsFastPath.worldX) + Number(graphicsFastPath.x) || 0,
+        damageY: Number(graphicsFastPath.worldY) + Number(graphicsFastPath.y) || 0,
+        damageW: Number(graphicsFastPath.w) || 0,
+        damageH: Number(graphicsFastPath.h) || 0,
         fillColor: Number(graphicsFastPath.fillColor) || 0,
         fillAlpha: Number(graphicsFastPath.fillAlpha) || 0,
+      };
+    }
+    const overlayFastPath = (window as any).__TRUEOS_PIXI_LAST_OVERLAY_FAST_PATH__;
+    if (overlayFastPath && Number(overlayFastPath.rootNode) > 0 && Number(overlayFastPath.damageW) > 0 && Number(overlayFastPath.damageH) > 0) {
+      diag('overlay-fast');
+      return {
+        handled,
+        listenerCount,
+        painted: 1,
+        targetFound: 1,
+        overlayFastPath: 1,
+        rootNode: Number(overlayFastPath.rootNode) || 0,
+        damageX: Number(overlayFastPath.damageX) || 0,
+        damageY: Number(overlayFastPath.damageY) || 0,
+        damageW: Number(overlayFastPath.damageW) || 0,
+        damageH: Number(overlayFastPath.damageH) || 0,
       };
     }
     painted = after > before || painted ? 1 : 0;

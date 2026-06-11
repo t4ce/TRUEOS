@@ -1368,7 +1368,10 @@ function __trueosPushFlatTextOverlay(item, parentId, ops, state) {
 }
 G.__trueosParse5BuildSceneFromCapture = function () {
   var cap = G.__pixiCapture;
-  var commands = cap && cap.commands && cap.commands.length ? cap.commands : [];
+  var incrementalCommands = G.__TRUEOS_PIXI_INCREMENTAL_COMMANDS__;
+  var incrementalMode = incrementalCommands && incrementalCommands.length ? true : false;
+  var incrementalDamage = G.__TRUEOS_PIXI_INCREMENTAL_DAMAGE__ || {};
+  var commands = incrementalMode ? incrementalCommands : (cap && cap.commands && cap.commands.length ? cap.commands : []);
   var ops = [];
   var seen = {};
   var snapshotSeen = {};
@@ -1387,21 +1390,23 @@ G.__trueosParse5BuildSceneFromCapture = function () {
   var snapshotTrustedTextState = { rows: trustedTextRows, index: 0 };
   var trustedTextRowIndex = 0;
   var replayTextEmitted = 0;
-  var rootId = 0;
+  var rootId = incrementalMode ? (__trueosNum(G.__TRUEOS_PIXI_INCREMENTAL_ROOT__, 0) | 0) : 0;
   var snapshot = null;
   var replayStart = 0;
   var i;
-  for (i = commands.length - 1; i >= 0; i -= 1) {
-    if (commands[i] && __trueosNormalizeCommandOp(commands[i].op) === "snapshot" && commands[i].args && commands[i].args[0]) {
-      snapshot = commands[i].args[0];
-      rootId = __trueosNum(commands[i].id, __trueosNum(snapshot.id, 0)) | 0;
-      for (var si = i - 1; si >= 0; si -= 1) {
-        if (commands[si] && __trueosNormalizeCommandOp(commands[si].op) === "snapshot") {
-          replayStart = si + 1;
-          break;
+  if (!incrementalMode) {
+    for (i = commands.length - 1; i >= 0; i -= 1) {
+      if (commands[i] && __trueosNormalizeCommandOp(commands[i].op) === "snapshot" && commands[i].args && commands[i].args[0]) {
+        snapshot = commands[i].args[0];
+        rootId = __trueosNum(commands[i].id, __trueosNum(snapshot.id, 0)) | 0;
+        for (var si = i - 1; si >= 0; si -= 1) {
+          if (commands[si] && __trueosNormalizeCommandOp(commands[si].op) === "snapshot") {
+            replayStart = si + 1;
+            break;
+          }
         }
+        break;
       }
-      break;
     }
   }
   var hasSnapshot = !!snapshot;
@@ -1707,7 +1712,12 @@ G.__trueosParse5BuildSceneFromCapture = function () {
     }
     G.console.log("[parse5 trueos host] ui3-scene-text emitted=" + replayTextEmitted + " " + textLog.join("|"));
   }
-  return { ok: 1, ui3Scene: { version: 1, commandSource: "parse5-trueos-pixi", rootId: rootId, opCount: ops.length, layoutTextOps: layoutOverlayState.text, ops: ops } };
+  if (incrementalMode) {
+    G.__TRUEOS_PIXI_INCREMENTAL_COMMANDS__ = [];
+    G.__TRUEOS_PIXI_INCREMENTAL_DAMAGE__ = null;
+    G.__TRUEOS_PIXI_INCREMENTAL_ROOT__ = 0;
+  }
+  return { ok: 1, ui3Scene: { version: 1, commandSource: incrementalMode ? "parse5-trueos-pixi-overlay-delta" : "parse5-trueos-pixi", rootId: rootId, opCount: ops.length, layoutTextOps: layoutOverlayState.text, damageX: __trueosNum(incrementalDamage.x, 0), damageY: __trueosNum(incrementalDamage.y, 0), damageW: __trueosNum(incrementalDamage.w, 0), damageH: __trueosNum(incrementalDamage.h, 0), ops: ops } };
 };
 "##;
 const TRUESURFER_IMPORT_SOURCE: &[u8] = br#"
@@ -3320,8 +3330,13 @@ unsafe fn submit_ui3_scene(
         read_result_string(ctx, scene_value, TRUESURFER_UI3_SCENE_COMMAND_SOURCE_PROP);
     let scene_layout_text_ops =
         read_result_u32(ctx, scene_value, TRUESURFER_UI3_SCENE_LAYOUT_TEXT_OPS_PROP);
+    let overlay_delta = command_source == "parse5-trueos-pixi-overlay-delta";
+    let damage_x = read_result_f32(ctx, scene_value, b"damageX\0");
+    let damage_y = read_result_f32(ctx, scene_value, b"damageY\0");
+    let damage_w = read_result_f32(ctx, scene_value, b"damageW\0");
+    let damage_h = read_result_f32(ctx, scene_value, b"damageH\0");
     let skip_empty_text_ops = command_source == "parse5-trueos-pixi";
-    if !qjs::platform::ui::ui3_scene_begin(browser_instance_id, root_id) {
+    if !overlay_delta && !qjs::platform::ui::ui3_scene_begin(browser_instance_id, root_id) {
         log_line(format!(
             "qjs-truesurfer[{}]: ui3 scene begin rejected root={}\n",
             browser_instance_id, root_id
@@ -3330,8 +3345,8 @@ unsafe fn submit_ui3_scene(
         return (0, root_id);
     }
     log_line(format!(
-        "qjs-truesurfer[{}]: ui3 scene begin root={} source={}\n",
-        browser_instance_id, root_id, command_source
+        "qjs-truesurfer[{}]: ui3 scene begin root={} source={} delta={}\n",
+        browser_instance_id, root_id, command_source, overlay_delta as u8
     ));
 
     let ops_value = qjs::JS_GetPropertyStr(
@@ -3594,10 +3609,10 @@ unsafe fn submit_ui3_scene(
     }
     let mut layout_text_submitted = scene_layout_text_ops;
     let submitted_text_ops = op_code_counts[8].saturating_sub(skipped_empty_text_count);
-    if command_source.starts_with("parse5-trueos-pix") && submitted_text_ops == 0 {
+    if !overlay_delta && command_source.starts_with("parse5-trueos-pix") && submitted_text_ops == 0 {
         layout_text_submitted = layout_text_submitted
             .saturating_add(submit_parse5_layout_text_overlays(ctx, browser_instance_id, root_id));
-    } else if command_source.starts_with("parse5-trueos-pix") {
+    } else if !overlay_delta && command_source.starts_with("parse5-trueos-pix") {
         log_line(format!(
             "qjs-truesurfer[{}]: parse5 trueos rust-layout-text skipped reason=scene-text-present text_ops={} layout_text_ops={}\n",
             browser_instance_id, submitted_text_ops, scene_layout_text_ops
@@ -3609,7 +3624,18 @@ unsafe fn submit_ui3_scene(
         browser_instance_id, root_id, submitted, op_count, layout_text_submitted, op_submit_ms
     ));
     let render_start_ms = now_ms();
-    let _ = qjs::platform::ui::ui3_scene_render(browser_instance_id, root_id);
+    let _ = if overlay_delta && damage_w.is_finite() && damage_h.is_finite() && damage_w > 0.0 && damage_h > 0.0 {
+        qjs::platform::ui::ui3_scene_render_damage(
+            browser_instance_id,
+            root_id,
+            damage_x,
+            damage_y,
+            damage_w,
+            damage_h,
+        )
+    } else {
+        qjs::platform::ui::ui3_scene_render(browser_instance_id, root_id)
+    };
     let render_ms = now_ms().saturating_sub(render_start_ms);
     log_line(format!(
         "qjs-truesurfer[{}]: ui3 scene render returned root={} submitted={}/{} render_ms={} total_submit_ms={}\n",
@@ -4208,6 +4234,11 @@ unsafe fn dispatch_queued_ui3_pointer_events(
             && painted != 0
             && !scroll_fast_painted
             && submit_ui3_graphics_rect_fast_path(ctx, browser_instance_id, result);
+        let overlay_fast_painted = target_found != 0
+            && painted != 0
+            && !scroll_fast_painted
+            && !graphics_fast_painted
+            && submit_ui3_overlay_delta_fast_path(ctx, browser_instance_id, result);
         qjs::js_free_value(ctx, result);
         dispatched = dispatched.saturating_add(1);
 
@@ -4217,7 +4248,7 @@ unsafe fn dispatch_queued_ui3_pointer_events(
             || dispatched <= 8
         {
             log_line(format!(
-                "qjs-truesurfer[{}]: ui3 pointer dispatched target={} kind={} x={} y={} pointer={} buttons=0x{:X} wheel_delta_y={} target_found={} handled={} listeners={} painted={} scroll_fast={} graphics_fast={}\n",
+                "qjs-truesurfer[{}]: ui3 pointer dispatched target={} kind={} x={} y={} pointer={} buttons=0x{:X} wheel_delta_y={} target_found={} handled={} listeners={} painted={} scroll_fast={} graphics_fast={} overlay_fast={}\n",
                 browser_instance_id,
                 event.target_node,
                 event.kind,
@@ -4231,11 +4262,16 @@ unsafe fn dispatch_queued_ui3_pointer_events(
                 listener_count,
                 painted,
                 scroll_fast_painted as u8,
-                graphics_fast_painted as u8
+                graphics_fast_painted as u8,
+                overlay_fast_painted as u8
             ));
         }
 
-        needs_rebuild |= target_found != 0 && painted != 0 && !scroll_fast_painted && !graphics_fast_painted;
+        needs_rebuild |= target_found != 0
+            && painted != 0
+            && !scroll_fast_painted
+            && !graphics_fast_painted
+            && !overlay_fast_painted;
     }
 
     if needs_rebuild {
@@ -4354,6 +4390,10 @@ unsafe fn submit_ui3_graphics_rect_fast_path(
     let rect_y = read_result_f32(ctx, result, b"rectY\0");
     let rect_w = read_result_f32(ctx, result, b"rectW\0");
     let rect_h = read_result_f32(ctx, result, b"rectH\0");
+    let damage_x = read_result_f32(ctx, result, b"damageX\0");
+    let damage_y = read_result_f32(ctx, result, b"damageY\0");
+    let damage_w = read_result_f32(ctx, result, b"damageW\0");
+    let damage_h = read_result_f32(ctx, result, b"damageH\0");
     let fill_color = read_result_u32(ctx, result, b"fillColor\0");
     let fill_alpha = read_result_f32(ctx, result, b"fillAlpha\0");
 
@@ -4363,9 +4403,15 @@ unsafe fn submit_ui3_graphics_rect_fast_path(
         && rect_y.is_finite()
         && rect_w.is_finite()
         && rect_h.is_finite()
+        && damage_x.is_finite()
+        && damage_y.is_finite()
+        && damage_w.is_finite()
+        && damage_h.is_finite()
         && fill_alpha.is_finite()
         && rect_w > 0.0
         && rect_h > 0.0
+        && damage_w > 0.0
+        && damage_h > 0.0
         && fill_alpha >= 0.0
         && fill_alpha <= 1.0;
     if !geometry_ok {
@@ -4391,10 +4437,18 @@ unsafe fn submit_ui3_graphics_rect_fast_path(
             fill_color,
             fill_alpha,
         );
-    ok &= qjs::platform::ui::ui3_scene_render(browser_instance_id, root_node);
+    let damage_pad = 2.0;
+    ok &= qjs::platform::ui::ui3_scene_render_damage(
+        browser_instance_id,
+        root_node,
+        damage_x - damage_pad,
+        damage_y - damage_pad,
+        damage_w + damage_pad * 2.0,
+        damage_h + damage_pad * 2.0,
+    );
 
     log_line(format!(
-        "qjs-truesurfer[{}]: ui3 graphics-rect-fast root={} graphics={} rect={}x{}@{},{} color=0x{:06X} alpha={} ok={}\n",
+        "qjs-truesurfer[{}]: ui3 graphics-rect-fast root={} graphics={} rect={}x{}@{},{} damage={}x{}@{},{} color=0x{:06X} alpha={} ok={}\n",
         browser_instance_id,
         root_node,
         graphics_node,
@@ -4402,9 +4456,51 @@ unsafe fn submit_ui3_graphics_rect_fast_path(
         rect_h,
         rect_x,
         rect_y,
+        damage_w,
+        damage_h,
+        damage_x,
+        damage_y,
         fill_color,
         fill_alpha,
         ok as u8
+    ));
+    ok
+}
+
+unsafe fn submit_ui3_overlay_delta_fast_path(
+    ctx: *mut qjs::JSContext,
+    browser_instance_id: u32,
+    result: qjs::JSValueConst,
+) -> bool {
+    if read_result_u32(ctx, result, b"overlayFastPath\0") == 0 {
+        return false;
+    }
+    let root_node = read_result_u32(ctx, result, b"rootNode\0");
+    let damage_x = read_result_f32(ctx, result, b"damageX\0");
+    let damage_y = read_result_f32(ctx, result, b"damageY\0");
+    let damage_w = read_result_f32(ctx, result, b"damageW\0");
+    let damage_h = read_result_f32(ctx, result, b"damageH\0");
+    if root_node == 0
+        || !damage_x.is_finite()
+        || !damage_y.is_finite()
+        || !damage_w.is_finite()
+        || !damage_h.is_finite()
+        || damage_w <= 0.0
+        || damage_h <= 0.0
+    {
+        log_line(format!(
+            "qjs-truesurfer[{}]: ui3 overlay-delta rejected root={} damage={}x{}@{},{}\n",
+            browser_instance_id, root_node, damage_w, damage_h, damage_x, damage_y
+        ));
+        return false;
+    }
+
+    let (ops, root) =
+        submit_parse5_trueos_pixi_scene_from_capture(ctx, browser_instance_id, "ui3-overlay-delta");
+    let ok = ops != 0 && root != 0;
+    log_line(format!(
+        "qjs-truesurfer[{}]: ui3 overlay-delta root={} damage={}x{}@{},{} ops={} ok={}\n",
+        browser_instance_id, root, damage_w, damage_h, damage_x, damage_y, ops, ok as u8
     ));
     ok
 }

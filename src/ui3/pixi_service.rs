@@ -1090,6 +1090,7 @@ fn apply_service_command(browser_id: u32, command: Ui3Command) -> i32 {
     if !runtime.scene_started || runtime.browser_id != browser_id {
         let root_id = match &command {
             Ui3Command::Render { root } => *root,
+            Ui3Command::RenderDamage { root, .. } => *root,
             _ => 0,
         };
         reset_runtime_for_scene(&mut runtime, browser_id, root_id, true);
@@ -1103,7 +1104,11 @@ fn apply_service_command(browser_id: u32, command: Ui3Command) -> i32 {
         return 0;
     }
 
-    let is_render = matches!(command, Ui3Command::Render { .. });
+    let render_damage = match &command {
+        Ui3Command::RenderDamage { damage, .. } => Some(*damage),
+        _ => None,
+    };
+    let is_render = matches!(command, Ui3Command::Render { .. } | Ui3Command::RenderDamage { .. });
     let apply_start_ms = if is_render { super::now_ms() } else { 0 };
     if is_render {
         crate::log!(
@@ -1121,7 +1126,18 @@ fn apply_service_command(browser_id: u32, command: Ui3Command) -> i32 {
         0
     };
     if let Some(frame) = frame {
-        lower_present_and_count(&mut runtime, browser_id, &frame, apply_ms, is_render);
+        if let Some(damage) = render_damage {
+            lower_present_damage_and_count(
+                &mut runtime,
+                browser_id,
+                &frame,
+                damage,
+                apply_ms,
+                is_render,
+            );
+        } else {
+            lower_present_and_count(&mut runtime, browser_id, &frame, apply_ms, is_render);
+        }
     }
     if is_render {
         runtime.scene_building = false;
@@ -1222,6 +1238,64 @@ fn lower_present_and_count(
             mesh_stroke_draws,
             texture_draws,
             present.text_runs
+        );
+    }
+    runtime.last_geometry = Some(geometry);
+}
+
+fn lower_present_damage_and_count(
+    runtime: &mut Ui3PixiServiceRuntime,
+    browser_id: u32,
+    frame: &Ui3RenderFrame,
+    damage: Ui3Rect,
+    apply_ms: u64,
+    force_log: bool,
+) {
+    runtime.frame_count = runtime.frame_count.wrapping_add(1).max(1);
+    let lower_start_ms = super::now_ms();
+    let geometry = lower_ui3_frame_geometry(&runtime.host, frame);
+    let lower_ms = super::now_ms().saturating_sub(lower_start_ms);
+    let present_start_ms = super::now_ms();
+    let present = present_ui3_frame_damage_to_intel_primary(&geometry, damage);
+    let present_wall_ms = super::now_ms().saturating_sub(present_start_ms);
+    let present_gap_ms = present_wall_ms.saturating_sub(present.total_ms);
+    runtime.last_draw_count = geometry.draws.len().min(u32::MAX as usize) as u32;
+    runtime.last_present = present;
+    PIXI_SERVICE_FRAME_COUNT.store(runtime.frame_count, Ordering::Release);
+    PIXI_SERVICE_DRAW_COUNT.store(runtime.last_draw_count, Ordering::Release);
+
+    if runtime.frame_count <= 4 || force_log {
+        crate::log!(
+            "ui3-pixi-service: render-damage browser={} root={} damage={}x{}@{},{} ops={} filtered_ops={} cached_draws={} nodes={} hit_entries={} solid_rects={} cursor_rects={} meshes={} textures={} text={} presented={} fill_descs={} blend_descs={} apply_ms={} lower_ms={} present_wall_ms={} rect_ms={} mesh_ms={} sprite_ms={} publish_ms={} present_ms={} total_ms={} gap_ms={}\n",
+            browser_id,
+            frame.root,
+            damage.w as i32,
+            damage.h as i32,
+            damage.x as i32,
+            damage.y as i32,
+            runtime.op_count,
+            runtime.filtered_op_count,
+            geometry.draws.len(),
+            frame.ordered_nodes.len(),
+            runtime.host.hit_scene().entries().len(),
+            present.solid_rects,
+            present.cursor_rects,
+            present.mesh_draws,
+            present.texture_draws,
+            present.text_runs,
+            present.presented as u8,
+            present.fill_descs,
+            present.blend_descs,
+            apply_ms,
+            lower_ms,
+            present_wall_ms,
+            present.rect_ms,
+            present.mesh_ms,
+            present.sprite_ms,
+            present.publish_ms,
+            present.present_ms,
+            present.total_ms,
+            present_gap_ms
         );
     }
     runtime.last_geometry = Some(geometry);

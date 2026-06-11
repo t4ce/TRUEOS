@@ -205,6 +205,10 @@ pub enum Ui3Command {
     Render {
         root: Ui3NodeId,
     },
+    RenderDamage {
+        root: Ui3NodeId,
+        damage: Ui3Rect,
+    },
 }
 
 fn ui3_light_filter_reason(command: &Ui3Command) -> Option<&'static str> {
@@ -498,6 +502,24 @@ pub unsafe extern "C" fn trueos_cabi_ui3_pixi_op(
         21 => {
             let rc =
                 pixi_service::queue_scene_command(browser_id, Ui3Command::Render { root: node });
+            if rc >= 0 {
+                let _ = pixi_service::flush_service_queue(8192);
+            }
+            rc
+        }
+        31 => {
+            let rc = pixi_service::queue_scene_command(
+                browser_id,
+                Ui3Command::RenderDamage {
+                    root: node,
+                    damage: Ui3Rect {
+                        x: a,
+                        y: b,
+                        w: c,
+                        h: d,
+                    },
+                },
+            );
             if rc >= 0 {
                 let _ = pixi_service::flush_service_queue(8192);
             }

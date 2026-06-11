@@ -351,4 +351,16 @@ pub mod ui {
     pub fn ui3_scene_render(browser_id: u32, root_id: u32) -> bool {
         ui3_pixi_op(browser_id, 21, root_id, 0.0, 0.0, 0.0, 0.0, None)
     }
+
+    #[inline]
+    pub fn ui3_scene_render_damage(
+        browser_id: u32,
+        root_id: u32,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    ) -> bool {
+        ui3_pixi_op(browser_id, 31, root_id, x, y, w, h, None)
+    }
 }
