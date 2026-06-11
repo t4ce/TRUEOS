@@ -4,7 +4,7 @@ use serde::Deserialize;
 use spin::{Mutex, Once};
 
 use super::{AthlasBucketTexture, AthlasResolvedGlyph};
-use crate::gfx::althlasfont::athlasmetrics::AthlasGlyphRegion;
+use crate::ui3::althlasfont::athlasmetrics::AthlasGlyphRegion;
 
 pub const TWEMOJI_TEX_ID: u32 = 4_840;
 pub const TWEMOJI_ATLAS_PNG: &[u8] = include_bytes!("twemoji-1x/atlas.png");

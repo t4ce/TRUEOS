@@ -52,7 +52,7 @@ pub async fn ui3_asset_service_task() {
 
     crate::log!(
         "ui3-asset-service: starting font_backend=sprite64 faces={} cell={}px omit=2x\n",
-        crate::gfx::althlasfont::bitmapfont::ATHLAS_UI3_SPRITE64_FONT_FACES.len(),
+        crate::ui3::althlasfont::bitmapfont::ATHLAS_UI3_SPRITE64_FONT_FACES.len(),
         UI3_FONT_SPRITE64_CELL_PX
     );
 
@@ -139,8 +139,8 @@ fn publish_font_sprite64_ready(status: Ui3FontSprite64AssetStatus) {
 }
 
 fn validate_sprite64_font_metrics()
--> Option<crate::gfx::althlasfont::bitmapfont::AthlasFontSprite64Inventory> {
-    crate::gfx::althlasfont::bitmapfont::athlas_validate_ui3_sprite64_faces(
+-> Option<crate::ui3::althlasfont::bitmapfont::AthlasFontSprite64Inventory> {
+    crate::ui3::althlasfont::bitmapfont::athlas_validate_ui3_sprite64_faces(
         UI3_FONT_SPRITE64_CELL_PX,
     )
 }

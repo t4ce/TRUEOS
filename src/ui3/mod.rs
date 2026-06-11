@@ -1,3 +1,4 @@
+pub mod althlasfont;
 mod font;
 mod ui3_asset_service;
 mod ui3_service;
