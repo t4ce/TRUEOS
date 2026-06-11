@@ -243,10 +243,10 @@ function logWidgetTable(url, widgetTree, startedAt) {
 }
 
 function logRenderTreeArtifact(url, bytes, widgetTree, startedAt) {
-  if (renderTreeArtifactLogged) return;
+  if (renderTreeArtifactLogged) return null;
   if (typeof createRenderTreeTraceFn !== 'function') {
     log(`[truesurfer render-tree] browser=${browserId} status=unavailable url=${url}`);
-    return;
+    return null;
   }
 
   try {
@@ -268,9 +268,16 @@ function logRenderTreeArtifact(url, bytes, widgetTree, startedAt) {
       log(`[truesurfer render-tree ndjson] browser=${browserId} ${JSON.stringify(artifact.layoutTrace)}`);
     }
     renderTreeArtifactLogged = true;
+    return {
+      renderHash: safeString(summary.renderHash || (artifact.renderTree && artifact.renderTree.hash) || ''),
+      layoutHash: safeString(summary.layoutHash || (artifact.layoutTrace && artifact.layoutTrace.trace && artifact.layoutTrace.trace.layoutHash) || ''),
+      renderTreeJson: JSON.stringify(artifact.renderTree || null),
+      layoutTraceJson: artifact.layoutTrace ? JSON.stringify(artifact.layoutTrace) : '',
+    };
   } catch (error) {
     const message = error && error.stack ? String(error.stack) : String(error || 'unknown render-tree error');
     log(`[truesurfer render-tree] browser=${browserId} status=failed error=${message} url=${url}`);
+    return null;
   }
 }
 
@@ -440,7 +447,7 @@ function setHtml(nextHtml, meta) {
     logSyncPipeline(url, parsed);
     root.__trueosTruesurferLastStyleIndex = parsed.styleIndex;
     logWidgetTable(url, widgetTree, widgetStart);
-    logRenderTreeArtifact(url, html.length, widgetTree, widgetStart);
+    const renderTreeArtifact = logRenderTreeArtifact(url, html.length, widgetTree, widgetStart);
     log(
       `[truesurfer extract] browser=${browserId} title=${parsed.title} shell_bytes=${parsed.shellBytes} body_bytes=${parsed.bodyBytes} subset_body_roots=${parsed.bodyHierarchy.length} body_outline=${parsed.bodyHierarchySummary} style_count=${parsed.styleCount} style_slots=${parsed.styleSlotCount} styled_nodes=${parsed.styledNodeCount} style_rules=${parsed.styleRuleCount} script_count=${parsed.scriptCount} images=${imageSummary.total} image_pending=${imageSummary.pending} image_ready=${imageSummary.ready} dom_ms=${parsed.domParseMs} css_ms=${parsed.styleIndexMs} ms=${parsed.parseMs} url=${url}`,
     );
@@ -462,6 +469,10 @@ function setHtml(nextHtml, meta) {
       styleRuleCount: parsed.styleRuleCount,
       scriptCount: parsed.scriptCount,
       scriptBytes: parsed.scriptBytes,
+      renderHash: renderTreeArtifact ? renderTreeArtifact.renderHash : '',
+      layoutHash: renderTreeArtifact ? renderTreeArtifact.layoutHash : '',
+      renderTreeJson: renderTreeArtifact ? renderTreeArtifact.renderTreeJson : '',
+      layoutTraceJson: renderTreeArtifact ? renderTreeArtifact.layoutTraceJson : '',
     };
   } catch (error) {
     const message =

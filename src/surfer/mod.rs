@@ -14,6 +14,7 @@ pub(crate) type HostedSurfaceState = trueos_qjs::browser_task::HostedBrowserSurf
 pub(crate) type HostedInteractiveState = trueos_qjs::browser_task::HostedBrowserInteractiveState;
 pub(crate) type HostedKeyboardEvent = trueos_qjs::browser_task::HostedKeyboardEvent;
 pub(crate) type ParseResult = trueos_qjs::browser_task::ParseResult;
+pub(crate) type Ui3RenderTreeFrame = trueos_qjs::browser_task::Ui3RenderTreeFrame;
 
 pub(crate) const MAX_BROWSER_INSTANCE_ID: u32 = trueos_qjs::browser_task::MAX_BROWSER_INSTANCE_ID;
 pub(crate) const HOSTED_KEYBOARD_MOD_SHIFT: u8 =
@@ -229,6 +230,12 @@ pub(crate) fn render_tex_id_for_browser_instance(browser_instance_id: u32) -> u3
 
 pub(crate) fn latest_parse_result_for_browser(browser_instance_id: u32) -> Option<ParseResult> {
     trueos_qjs::browser_task::latest_parse_result_for_browser(browser_instance_id)
+}
+
+pub(crate) fn take_ui3_render_tree_frame_for_browser(
+    browser_instance_id: u32,
+) -> Option<Ui3RenderTreeFrame> {
+    trueos_qjs::browser_task::take_ui3_render_tree_frame_for_browser(browser_instance_id)
 }
 
 pub(crate) async fn queue_html_for_browser(

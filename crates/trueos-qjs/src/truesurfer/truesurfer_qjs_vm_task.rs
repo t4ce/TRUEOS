@@ -76,6 +76,10 @@ const TRUESURFER_RESULT_STYLE_BYTES_PROP: &[u8] = b"styleBytes\0";
 const TRUESURFER_RESULT_SCRIPT_COUNT_PROP: &[u8] = b"scriptCount\0";
 const TRUESURFER_RESULT_SCRIPT_BYTES_PROP: &[u8] = b"scriptBytes\0";
 const TRUESURFER_RESULT_ERROR_PROP: &[u8] = b"error\0";
+const TRUESURFER_RESULT_RENDER_HASH_PROP: &[u8] = b"renderHash\0";
+const TRUESURFER_RESULT_LAYOUT_HASH_PROP: &[u8] = b"layoutHash\0";
+const TRUESURFER_RESULT_RENDER_TREE_JSON_PROP: &[u8] = b"renderTreeJson\0";
+const TRUESURFER_RESULT_LAYOUT_TRACE_JSON_PROP: &[u8] = b"layoutTraceJson\0";
 const TRUESURFER_HTML_QUEUE_DEPTH: usize = 2;
 const TRUESURFER_HTML_QUEUE_WAIT_MS: u64 = 2;
 const TRUESURFER_BUSY_PUMP_BUDGET: usize = 512;
@@ -142,6 +146,17 @@ pub struct ParseResult {
     pub error: String,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Ui3RenderTreeFrame {
+    pub browser_instance_id: u32,
+    pub seq: u32,
+    pub url: String,
+    pub render_hash: String,
+    pub layout_hash: String,
+    pub render_tree_json: String,
+    pub layout_trace_json: String,
+}
+
 #[derive(Clone, Debug)]
 struct PendingHtml {
     html: String,
@@ -168,6 +183,8 @@ struct BrowserInstanceState {
     render_tex_id: u32,
     surface_seq: u32,
     interactive_seq: u32,
+    ui3_render_tree_seq: u32,
+    pending_ui3_render_tree_frame: Option<Ui3RenderTreeFrame>,
     surface_state: HostedBrowserSurfaceState,
 }
 
@@ -279,6 +296,15 @@ pub fn default_browser_started() -> bool {
 
 pub fn latest_parse_result_for_browser(browser_instance_id: u32) -> Option<ParseResult> {
     with_browser_state(browser_instance_id, |state| state.last_parse_result.clone()).flatten()
+}
+
+pub fn take_ui3_render_tree_frame_for_browser(
+    browser_instance_id: u32,
+) -> Option<Ui3RenderTreeFrame> {
+    with_browser_state_mut(browser_instance_id, |state| {
+        state.pending_ui3_render_tree_frame.take()
+    })
+    .flatten()
 }
 
 pub async fn queue_set_html_with_url_for_browser(
@@ -425,6 +451,35 @@ pub fn set_browser_render_target_tex_id_for_browser(browser_instance_id: u32, te
 pub fn render_tex_id_for_browser_instance(browser_instance_id: u32) -> u32 {
     with_browser_state(browser_instance_id, |state| state.render_tex_id)
         .unwrap_or_else(|| default_render_tex_id(browser_instance_id))
+}
+
+fn publish_ui3_render_tree_frame_for_browser(
+    browser_instance_id: u32,
+    url: String,
+    render_hash: String,
+    layout_hash: String,
+    render_tree_json: String,
+    layout_trace_json: String,
+) -> Option<u32> {
+    if render_tree_json.is_empty() && layout_trace_json.is_empty() {
+        return None;
+    }
+    let seq = with_browser_state_mut(browser_instance_id, |state| {
+        state.ui3_render_tree_seq = state.ui3_render_tree_seq.wrapping_add(1).max(1);
+        let seq = state.ui3_render_tree_seq;
+        state.pending_ui3_render_tree_frame = Some(Ui3RenderTreeFrame {
+            browser_instance_id,
+            seq,
+            url,
+            render_hash,
+            layout_hash,
+            render_tree_json,
+            layout_trace_json,
+        });
+        seq
+    })?;
+    signal_hosted_browser_dirty(browser_instance_id, HOSTED_BROWSER_DIRTY_CONTENT);
+    Some(seq)
 }
 
 pub fn queue_hosted_keyboard_events(
@@ -776,6 +831,12 @@ unsafe fn dispatch_html(
         script_bytes: read_result_u32(ctx, result, TRUESURFER_RESULT_SCRIPT_BYTES_PROP),
         error: read_result_string(ctx, result, TRUESURFER_RESULT_ERROR_PROP),
     };
+    let ui3_render_hash = read_result_string(ctx, result, TRUESURFER_RESULT_RENDER_HASH_PROP);
+    let ui3_layout_hash = read_result_string(ctx, result, TRUESURFER_RESULT_LAYOUT_HASH_PROP);
+    let ui3_render_tree_json =
+        read_result_string(ctx, result, TRUESURFER_RESULT_RENDER_TREE_JSON_PROP);
+    let ui3_layout_trace_json =
+        read_result_string(ctx, result, TRUESURFER_RESULT_LAYOUT_TRACE_JSON_PROP);
     log_line(format!(
         "qjs-truesurfer[{}]: result read done ok={} bytes={} body_bytes={} styles={} scripts={}\n",
         browser_instance_id,
@@ -785,9 +846,22 @@ unsafe fn dispatch_html(
         parse_result.style_count,
         parse_result.script_count
     ));
+    let ui3_seq = if parse_result.ok {
+        publish_ui3_render_tree_frame_for_browser(
+            browser_instance_id,
+            parse_result.url.clone(),
+            ui3_render_hash,
+            ui3_layout_hash,
+            ui3_render_tree_json,
+            ui3_layout_trace_json,
+        )
+        .unwrap_or(0)
+    } else {
+        0
+    };
     log_line(format!(
-        "qjs-truesurfer[{}]: widget inspect done; ui3 handoff disabled\n",
-        browser_instance_id
+        "qjs-truesurfer[{}]: widget inspect done; ui3 handoff seq={}\n",
+        browser_instance_id, ui3_seq
     ));
 
     let _ = with_browser_state_mut(browser_instance_id, |state| {
