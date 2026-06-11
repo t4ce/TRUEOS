@@ -1230,17 +1230,18 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &SURFER_PARSE_POOL_STARTED,
         spawn_truesurfer_parse_pool,
     ),
-    TaskSpec::enabled(
+    TaskSpec::enabled_gated(
         "ui3-asset-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY
-            | crate::r::readiness::GFX_BACKEND_READY
             | crate::r::readiness::UI3_INTEL_PRESENT_READY,
+        intel_cursor_service_gate,
         &UI3_ASSET_SERVICE_STARTED,
         spawn_ui3_asset_service,
     ),
-    TaskSpec::enabled(
+    TaskSpec::enabled_gated(
         "ui3-service",
-        crate::r::readiness::UI3_ASSET_SERVICE_READY,
+        crate::r::readiness::UI3_INTEL_PRESENT_READY,
+        intel_cursor_service_gate,
         &UI3_SERVICE_STARTED,
         spawn_ui3_service,
     ),

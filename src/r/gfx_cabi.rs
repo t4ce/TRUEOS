@@ -2136,6 +2136,171 @@ pub mod cabi {
     const TEX_PIPELINE_FS_MASK_TAG_RAW: u32 = 0x4D41_534B;
     const TEX_PIPELINE_FS_RGBA_TAG_RAW: u32 = 0x5247_4241;
     const TEX_PIPELINE_FS_PARTICLE_TAG_RAW: u32 = 0x5052_5443;
+    mod gfx_host {
+        use super::{GfxContext, ImageId, Vec};
+
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        pub enum SystemLockOwner {
+            DrawRgbTriangles,
+            DrawMandelbrot,
+            UploadTexture,
+            EndFrame,
+        }
+
+        pub fn init(_: Option<()>) {}
+
+        pub fn backend_epoch() -> u64 {
+            0
+        }
+
+        pub fn is_virgl_active() -> bool {
+            false
+        }
+
+        pub fn is_rdp_only_active() -> bool {
+            false
+        }
+
+        pub fn with_context_tag<R, F>(_owner: SystemLockOwner, _f: F) -> Option<R>
+        where
+            F: FnOnce(&mut dyn GfxContext) -> R,
+        {
+            None
+        }
+
+        pub fn with_cabi_frame_lock<R, F>(f: F) -> R
+        where
+            F: FnOnce() -> R,
+        {
+            f()
+        }
+
+        pub fn intel_image_gpgpu_surface(
+            _image: ImageId,
+        ) -> Option<crate::intel::gpgpu::GpgpuRgba8Surface> {
+            None
+        }
+
+        pub fn intel_image_gpgpu_mask_surface(
+            _image: ImageId,
+        ) -> Option<crate::intel::gpgpu::GpgpuMask8Surface> {
+            None
+        }
+
+        pub fn screenshot_capture_armed() -> bool {
+            false
+        }
+
+        pub fn publish_screenshot_rgba_buffer(_width: u32, _height: u32, _rgba: &[u8]) -> bool {
+            false
+        }
+
+        pub fn rdp_monitor_texture_rgba(
+            _tex_id: u32,
+            _width: u32,
+            _height: u32,
+            _flags: u32,
+            _region: Option<(u32, u32, u32, u32)>,
+            _rgba: &[u8],
+        ) {
+        }
+
+        pub fn rdp_monitor_texture_png(_tex_id: u32, _flags: u32, _data: &[u8]) {}
+
+        pub fn rdp_monitor_texture_jpeg(_tex_id: u32, _flags: u32, _data: &[u8]) {}
+
+        pub fn rdp_monitor_texture_svg(_tex_id: u32, _flags: u32, _data: &[u8]) {}
+
+        pub fn rdp_monitor_set_blend(
+            _frame_seq: u32,
+            _enabled: u32,
+            _src_rgb: u32,
+            _dst_rgb: u32,
+            _src_alpha: u32,
+            _dst_alpha: u32,
+        ) {
+        }
+
+        pub fn rdp_monitor_set_sampler(
+            _frame_seq: u32,
+            _wrap_s: u32,
+            _wrap_t: u32,
+            _min_filter: u32,
+            _mag_filter: u32,
+        ) {
+        }
+
+        pub fn rdp_monitor_set_scissor(
+            _frame_seq: u32,
+            _x: u32,
+            _y: u32,
+            _width: u32,
+            _height: u32,
+        ) {
+        }
+
+        pub fn rdp_monitor_clear_scissor(_frame_seq: u32) {}
+
+        pub fn rdp_monitor_clear_rect(
+            _frame_seq: u32,
+            _rgb: u32,
+            _x: u32,
+            _y: u32,
+            _width: u32,
+            _height: u32,
+        ) {
+        }
+
+        pub fn rdp_monitor_clear_color_rgba(_frame_seq: u32, _r: u32, _g: u32, _b: u32, _a: u32) {}
+
+        pub fn rdp_monitor_set_render_target(_frame_seq: u32, _tex_id: u32) {}
+
+        pub fn rdp_monitor_clear_render_target(_frame_seq: u32) {}
+
+        pub fn rdp_monitor_begin_frame(_seq: u32, _flags: u32, _clear_rgb: u32) {}
+
+        pub fn rdp_monitor_draw_rgb_triangles(_frame_seq: u32, _vcount: u32, _bytes: &[u8]) {}
+
+        pub fn rdp_monitor_draw_tex_triangles(
+            _frame_seq: u32,
+            _tex_id: u32,
+            _vcount: u32,
+            _sampler_flags: u32,
+            _sample_kind: u32,
+            _bytes: &[u8],
+        ) {
+        }
+
+        pub fn rdp_monitor_end_frame(
+            _seq: u32,
+            _end_flags: u32,
+            _rgb_draws: u32,
+            _tex_draws: u32,
+            _draw_bytes: u32,
+        ) {
+        }
+
+        pub mod mandelbrot {
+            use super::Vec;
+
+            pub const MANDELBROT_PIPELINE_FS_TAG_RAW: u32 = 0x4D42_524F;
+            pub const JULIA_PIPELINE_FS_TAG_RAW: u32 = 0x4A55_4C49;
+            pub const BURNING_SHIP_PIPELINE_FS_TAG_RAW: u32 = 0x4253_4849;
+
+            pub fn fullscreen_quad_rgba_bytes_for_view(_ticks: u64, _tick_hz: u64) -> Vec<u8> {
+                Vec::new()
+            }
+
+            pub fn fullscreen_quad_rgba_bytes_for_julia_view() -> Vec<u8> {
+                Vec::new()
+            }
+
+            pub fn fullscreen_quad_rgba_bytes_for_burning_ship_view() -> Vec<u8> {
+                Vec::new()
+            }
+        }
+    }
+
     const ASYNC_TEX_STATUS_UNKNOWN: i32 = 0;
     const ASYNC_TEX_STATUS_PENDING: i32 = 1;
     const ASYNC_TEX_STATUS_READY: i32 = 2;
@@ -4118,7 +4283,7 @@ pub mod cabi {
         if rgba.len() < expected {
             return false;
         }
-        crate::gfx::rdp_monitor_texture_rgba(
+        gfx_host::rdp_monitor_texture_rgba(
             host_tex_id,
             width,
             height,
@@ -5126,7 +5291,7 @@ pub mod cabi {
 
     #[inline]
     fn render_target_tex_origin() -> TexCoordOrigin {
-        if crate::gfx::is_rdp_only_active() {
+        if gfx_host::is_rdp_only_active() {
             TexCoordOrigin::TopLeft
         } else {
             TexCoordOrigin::BottomLeft
@@ -5466,7 +5631,7 @@ pub mod cabi {
         texture_dimensions_inner(tex_id).is_some()
     }
 
-    pub fn texture_gpgpu_rgba8_surface(
+    pub(crate) fn texture_gpgpu_rgba8_surface(
         tex_id: u32,
     ) -> Option<crate::intel::gpgpu::GpgpuRgba8Surface> {
         if tex_id == 0 {
@@ -5483,10 +5648,10 @@ pub mod cabi {
             .and_then(|images| images.get(idx))
             .and_then(|entry| entry.as_ref())
             .map(|img| img.image)?;
-        crate::gfx::intel_image_gpgpu_surface(image)
+        gfx_host::intel_image_gpgpu_surface(image)
     }
 
-    pub fn texture_gpgpu_mask8_surface(
+    pub(crate) fn texture_gpgpu_mask8_surface(
         tex_id: u32,
     ) -> Option<crate::intel::gpgpu::GpgpuMask8Surface> {
         if tex_id == 0 {
@@ -5503,7 +5668,7 @@ pub mod cabi {
             .and_then(|images| images.get(idx))
             .and_then(|entry| entry.as_ref())
             .map(|img| img.image)?;
-        crate::gfx::intel_image_gpgpu_mask_surface(image)
+        gfx_host::intel_image_gpgpu_mask_surface(image)
     }
 
     #[inline]
@@ -5961,7 +6126,7 @@ pub mod cabi {
             return;
         }
 
-        if !crate::gfx::screenshot_capture_armed() {
+        if !gfx_host::screenshot_capture_armed() {
             return;
         }
 
@@ -6219,7 +6384,7 @@ pub mod cabi {
             }
         }
 
-        let _ = crate::gfx::publish_screenshot_rgba_buffer(screen_w, screen_h, screen.as_slice());
+        let _ = gfx_host::publish_screenshot_rgba_buffer(screen_w, screen_h, screen.as_slice());
     }
 
     #[inline]
@@ -6271,7 +6436,7 @@ pub mod cabi {
             _src_alpha,
             _dst_alpha,
         );
-        crate::gfx::rdp_monitor_set_blend(
+        gfx_host::rdp_monitor_set_blend(
             frame_seq, enabled, src_rgb, dst_rgb, _src_alpha, _dst_alpha,
         );
         0
@@ -6330,7 +6495,7 @@ pub mod cabi {
             min_filter,
             mag_filter,
         );
-        crate::gfx::rdp_monitor_set_sampler(frame_seq, wrap_s, wrap_t, min_filter, mag_filter);
+        gfx_host::rdp_monitor_set_sampler(frame_seq, wrap_s, wrap_t, min_filter, mag_filter);
         0
     }
 
@@ -6367,7 +6532,7 @@ pub mod cabi {
         let frame_seq = st.frame_seq;
         drop(st);
         gfx_trace_record(GFX_TRACE_OP_SET_SCISSOR, frame_seq, 0, x, y, width, height);
-        crate::gfx::rdp_monitor_set_scissor(frame_seq, x, y, width, height);
+        gfx_host::rdp_monitor_set_scissor(frame_seq, x, y, width, height);
         0
     }
 
@@ -6385,7 +6550,7 @@ pub mod cabi {
         let frame_seq = st.frame_seq;
         drop(st);
         gfx_trace_record(GFX_TRACE_OP_CLEAR_SCISSOR, frame_seq, 0, 0, 0, 0, 0);
-        crate::gfx::rdp_monitor_clear_scissor(frame_seq);
+        gfx_host::rdp_monitor_clear_scissor(frame_seq);
         0
     }
 
@@ -6425,7 +6590,7 @@ pub mod cabi {
             width,
             height,
         );
-        crate::gfx::rdp_monitor_clear_rect(frame_seq, rgb, x, y, width, height);
+        gfx_host::rdp_monitor_clear_rect(frame_seq, rgb, x, y, width, height);
         0
     }
 
@@ -6450,7 +6615,7 @@ pub mod cabi {
         });
         let frame_seq = st.frame_seq;
         drop(st);
-        crate::gfx::rdp_monitor_clear_color_rgba(frame_seq, r, g, b, a);
+        gfx_host::rdp_monitor_clear_color_rgba(frame_seq, r, g, b, a);
         0
     }
 
@@ -6483,7 +6648,7 @@ pub mod cabi {
             let frame_seq = st.frame_seq;
             drop(st);
             gfx_trace_record(GFX_TRACE_OP_SET_RENDER_TARGET, frame_seq, 0, 0, 0, 0, 0);
-            crate::gfx::rdp_monitor_set_render_target(frame_seq, 0);
+            gfx_host::rdp_monitor_set_render_target(frame_seq, 0);
             return 0;
         }
         let idx = tex_id.saturating_sub(1) as usize;
@@ -6508,7 +6673,7 @@ pub mod cabi {
         let frame_seq = st.frame_seq;
         drop(st);
         gfx_trace_record(GFX_TRACE_OP_SET_RENDER_TARGET, frame_seq, 0, tex_id, 0, 0, 0);
-        crate::gfx::rdp_monitor_set_render_target(frame_seq, tex_id);
+        gfx_host::rdp_monitor_set_render_target(frame_seq, tex_id);
         0
     }
 
@@ -6537,7 +6702,7 @@ pub mod cabi {
         let frame_seq = st.frame_seq;
         drop(st);
         gfx_trace_record(GFX_TRACE_OP_CLEAR_RENDER_TARGET, frame_seq, 0, 0, 0, 0, 0);
-        crate::gfx::rdp_monitor_clear_render_target(frame_seq);
+        gfx_host::rdp_monitor_clear_render_target(frame_seq);
         0
     }
 
@@ -6573,7 +6738,7 @@ pub mod cabi {
         ctx: &mut dyn GfxContext,
         need_bytes: usize,
     ) -> Option<(PipelineId, BufferId, bool)> {
-        let epoch = crate::gfx::backend_epoch();
+        let epoch = gfx_host::backend_epoch();
         let swap = ctx.swapchain_desc();
         if swap.extent.width == 0 || swap.extent.height == 0 {
             return None;
@@ -6670,7 +6835,7 @@ pub mod cabi {
         need_bytes: usize,
         pipeline_kind: TexPipelineKind,
     ) -> Option<(PipelineId, BufferId, bool)> {
-        let epoch = crate::gfx::backend_epoch();
+        let epoch = gfx_host::backend_epoch();
         let swap = ctx.swapchain_desc();
         if swap.extent.width == 0 || swap.extent.height == 0 {
             return None;
@@ -6737,13 +6902,13 @@ pub mod cabi {
                 TexPipelineKind::Rgba => ShaderId::from_raw(TEX_PIPELINE_FS_RGBA_TAG_RAW),
                 TexPipelineKind::Particle => ShaderId::from_raw(TEX_PIPELINE_FS_PARTICLE_TAG_RAW),
                 TexPipelineKind::Mandelbrot => {
-                    ShaderId::from_raw(crate::gfx::mandelbrot::MANDELBROT_PIPELINE_FS_TAG_RAW)
+                    ShaderId::from_raw(gfx_host::mandelbrot::MANDELBROT_PIPELINE_FS_TAG_RAW)
                 }
                 TexPipelineKind::Julia => {
-                    ShaderId::from_raw(crate::gfx::mandelbrot::JULIA_PIPELINE_FS_TAG_RAW)
+                    ShaderId::from_raw(gfx_host::mandelbrot::JULIA_PIPELINE_FS_TAG_RAW)
                 }
                 TexPipelineKind::BurningShip => {
-                    ShaderId::from_raw(crate::gfx::mandelbrot::BURNING_SHIP_PIPELINE_FS_TAG_RAW)
+                    ShaderId::from_raw(gfx_host::mandelbrot::BURNING_SHIP_PIPELINE_FS_TAG_RAW)
                 }
             };
             let p = ctx
@@ -6802,7 +6967,7 @@ pub mod cabi {
         if gfx_cabi_vm_context() {
             return GFX_CABI_VM_HOST_ONLY_RC;
         }
-        crate::gfx::init(None);
+        gfx_host::init(None);
 
         if vtx_ptr.is_null() {
             return if vtx_len == 0 { 0 } else { -1 };
@@ -6823,7 +6988,7 @@ pub mod cabi {
         }
 
         let Some(ret) =
-            crate::gfx::with_context_tag(crate::gfx::SystemLockOwner::DrawRgbTriangles, |ctx| {
+            gfx_host::with_context_tag(gfx_host::SystemLockOwner::DrawRgbTriangles, |ctx| {
                 let (pipeline, vbuf, need_set_viewport) = match ensure_gfx_resources(ctx, usable) {
                     Some(v) => v,
                     None => return -3,
@@ -6898,7 +7063,7 @@ pub mod cabi {
     const PRESERVE_RENDER_TARGET_CLEAR_RGB: u32 = u32::MAX;
 
     fn render_rgb_triangles_to_texture_now(tex_id: u32, clear_rgb: u32, vtx: &[u8]) -> i32 {
-        crate::gfx::init(None);
+        gfx_host::init(None);
 
         if tex_id == 0 {
             return -1;
@@ -6939,10 +7104,9 @@ pub mod cabi {
             return -6;
         }
 
-        crate::gfx::with_cabi_frame_lock(|| {
-            let Some(ret) = crate::gfx::with_context_tag(
-                crate::gfx::SystemLockOwner::DrawRgbTriangles,
-                |ctx| {
+        gfx_host::with_cabi_frame_lock(|| {
+            let Some(ret) =
+                gfx_host::with_context_tag(gfx_host::SystemLockOwner::DrawRgbTriangles, |ctx| {
                     let (pipeline, vbuf, _) = match ensure_gfx_resources(ctx, usable) {
                         Some(v) => v,
                         None => return -3,
@@ -7005,8 +7169,8 @@ pub mod cabi {
                         return -8;
                     }
                     0
-                },
-            ) else {
+                })
+            else {
                 return -9;
             };
             let mut rdp_texture_update = None;
@@ -7065,14 +7229,7 @@ pub mod cabi {
                 st.viewport_configured = false;
             }
             if let Some((tex_id, width, height, rgba)) = rdp_texture_update {
-                crate::gfx::rdp_monitor_texture_rgba(
-                    tex_id,
-                    width,
-                    height,
-                    1,
-                    None,
-                    rgba.as_slice(),
-                );
+                gfx_host::rdp_monitor_texture_rgba(tex_id, width, height, 1, None, rgba.as_slice());
             }
             ret
         })
@@ -7088,7 +7245,7 @@ pub mod cabi {
         tick_hz: u64,
         kind: FractalRenderKind,
     ) -> i32 {
-        crate::gfx::init(None);
+        gfx_host::init(None);
 
         if tex_id == 0 {
             return -1;
@@ -7096,7 +7253,7 @@ pub mod cabi {
         if reject_unreasonable_tex_id(tex_id, "render-mandelbrot-now") {
             return -8;
         }
-        if !crate::gfx::is_virgl_active() && !crate::gfx::is_rdp_only_active() {
+        if !gfx_host::is_virgl_active() && !gfx_host::is_rdp_only_active() {
             return -2;
         }
 
@@ -7120,15 +7277,15 @@ pub mod cabi {
 
         let verts = match kind {
             FractalRenderKind::Mandelbrot => {
-                crate::gfx::mandelbrot::fullscreen_quad_rgba_bytes_for_view(ticks, tick_hz)
+                gfx_host::mandelbrot::fullscreen_quad_rgba_bytes_for_view(ticks, tick_hz)
             }
             FractalRenderKind::Julia => {
                 let _ = (ticks, tick_hz);
-                crate::gfx::mandelbrot::fullscreen_quad_rgba_bytes_for_julia_view()
+                gfx_host::mandelbrot::fullscreen_quad_rgba_bytes_for_julia_view()
             }
             FractalRenderKind::BurningShip => {
                 let _ = (ticks, tick_hz);
-                crate::gfx::mandelbrot::fullscreen_quad_rgba_bytes_for_burning_ship_view()
+                gfx_host::mandelbrot::fullscreen_quad_rgba_bytes_for_burning_ship_view()
             }
         };
         let usable = verts.len();
@@ -7136,9 +7293,9 @@ pub mod cabi {
             return -3;
         }
 
-        crate::gfx::with_cabi_frame_lock(|| {
+        gfx_host::with_cabi_frame_lock(|| {
             let Some(ret) =
-                crate::gfx::with_context_tag(crate::gfx::SystemLockOwner::DrawMandelbrot, |ctx| {
+                gfx_host::with_context_tag(gfx_host::SystemLockOwner::DrawMandelbrot, |ctx| {
                     let pipeline_kind = match kind {
                         FractalRenderKind::Mandelbrot => TexPipelineKind::Mandelbrot,
                         FractalRenderKind::Julia => TexPipelineKind::Julia,
@@ -7201,7 +7358,7 @@ pub mod cabi {
         vtx: &[u8],
         particle_shader: bool,
     ) -> i32 {
-        crate::gfx::init(None);
+        gfx_host::init(None);
 
         if target_tex_id == 0 || source_tex_id == 0 {
             return -1;
@@ -7269,9 +7426,9 @@ pub mod cabi {
             return -5;
         }
 
-        crate::gfx::with_cabi_frame_lock(|| {
+        gfx_host::with_cabi_frame_lock(|| {
             let Some(ret) =
-                crate::gfx::with_context_tag(crate::gfx::SystemLockOwner::UploadTexture, |ctx| {
+                gfx_host::with_context_tag(gfx_host::SystemLockOwner::UploadTexture, |ctx| {
                     let (pipeline, vbuf, _) =
                         match ensure_gfx_resources_tex(ctx, usable, pipeline_kind) {
                             Some(v) => v,
@@ -7453,14 +7610,7 @@ pub mod cabi {
                 st.viewport_configured = false;
             }
             if let Some((tex_id, width, height, rgba)) = rdp_texture_update {
-                crate::gfx::rdp_monitor_texture_rgba(
-                    tex_id,
-                    width,
-                    height,
-                    1,
-                    None,
-                    rgba.as_slice(),
-                );
+                gfx_host::rdp_monitor_texture_rgba(tex_id, width, height, 1, None, rgba.as_slice());
             }
             ret
         })
@@ -7534,7 +7684,7 @@ pub mod cabi {
             );
         }
         if call_init {
-            crate::gfx::init(None);
+            gfx_host::init(None);
         }
         gfx_trace_record(
             GFX_TRACE_OP_UPLOAD_TEXTURE_RGBA,
@@ -7570,7 +7720,7 @@ pub mod cabi {
             return -3;
         }
         let data = unsafe { core::slice::from_raw_parts(data_ptr, expected) };
-        crate::gfx::rdp_monitor_texture_rgba(
+        gfx_host::rdp_monitor_texture_rgba(
             tex_id,
             width,
             height,
@@ -7586,10 +7736,10 @@ pub mod cabi {
         }
 
         wait_for_end_frame_idle();
-        let Some(ret) = crate::gfx::with_context_tag(
-            crate::gfx::SystemLockOwner::UploadTexture,
+        let Some(ret) = gfx_host::with_context_tag(
+            gfx_host::SystemLockOwner::UploadTexture,
             |ctx| {
-                let epoch = crate::gfx::backend_epoch();
+                let epoch = gfx_host::backend_epoch();
                 let mut st = GFX_CABI_STATE.lock();
                 if st.epoch != epoch {
                     // Backend changed (or first use). Drop cached IDs so future draws don't
@@ -7904,7 +8054,7 @@ pub mod cabi {
         data_len: usize,
     ) -> i32 {
         if !gfx_cabi_vm_context() {
-            crate::gfx::init(None);
+            gfx_host::init(None);
         }
         gfx_trace_record(
             GFX_TRACE_OP_UPLOAD_TEXTURE_RGBA,
@@ -7929,7 +8079,7 @@ pub mod cabi {
             return -3;
         }
         let data = unsafe { core::slice::from_raw_parts(data_ptr, expected) };
-        crate::gfx::rdp_monitor_texture_rgba(tex_id, width, height, 0x8000_0001, None, data);
+        gfx_host::rdp_monitor_texture_rgba(tex_id, width, height, 0x8000_0001, None, data);
         if finish_rdp_only_virtual_texture(tex_id, width, height, TexSampleKind::Rgba) {
             return 0;
         }
@@ -7956,7 +8106,7 @@ pub mod cabi {
         data_len: usize,
     ) -> i32 {
         if !gfx_cabi_vm_context() {
-            crate::gfx::init(None);
+            gfx_host::init(None);
         }
         gfx_trace_record(
             GFX_TRACE_OP_UPLOAD_TEXTURE_PNG,
@@ -7975,7 +8125,7 @@ pub mod cabi {
             return -2;
         }
         let data = core::slice::from_raw_parts(data_ptr, data_len);
-        crate::gfx::rdp_monitor_texture_png(tex_id, 0, data);
+        gfx_host::rdp_monitor_texture_png(tex_id, 0, data);
         #[cfg(feature = "trueos_rdp")]
         crate::r::resource_monitor::preserve_encoded_texture(
             tex_id,
@@ -8011,7 +8161,7 @@ pub mod cabi {
         if gfx_cabi_vm_context() {
             return unsafe { trueos_cabi_gfx_upload_texture_png(tex_id, data_ptr, data_len) };
         }
-        crate::gfx::init(None);
+        gfx_host::init(None);
         gfx_trace_record(
             GFX_TRACE_OP_UPLOAD_TEXTURE_PNG,
             0,
@@ -8032,7 +8182,7 @@ pub mod cabi {
             return -3;
         }
         let bytes = unsafe { core::slice::from_raw_parts(data_ptr, data_len) }.to_vec();
-        crate::gfx::rdp_monitor_texture_png(tex_id, 0x8000_0000, bytes.as_slice());
+        gfx_host::rdp_monitor_texture_png(tex_id, 0x8000_0000, bytes.as_slice());
         #[cfg(feature = "trueos_rdp")]
         crate::r::resource_monitor::preserve_encoded_texture(
             tex_id,
@@ -8053,7 +8203,7 @@ pub mod cabi {
         data_len: usize,
     ) -> i32 {
         if !gfx_cabi_vm_context() {
-            crate::gfx::init(None);
+            gfx_host::init(None);
         }
         gfx_trace_record(
             GFX_TRACE_OP_UPLOAD_TEXTURE_JPEG,
@@ -8072,7 +8222,7 @@ pub mod cabi {
             return -2;
         }
         let data = core::slice::from_raw_parts(data_ptr, data_len);
-        crate::gfx::rdp_monitor_texture_jpeg(tex_id, 0, data);
+        gfx_host::rdp_monitor_texture_jpeg(tex_id, 0, data);
         #[cfg(feature = "trueos_rdp")]
         crate::r::resource_monitor::preserve_encoded_texture(
             tex_id,
@@ -8108,7 +8258,7 @@ pub mod cabi {
         if gfx_cabi_vm_context() {
             return unsafe { trueos_cabi_gfx_upload_texture_jpeg(tex_id, data_ptr, data_len) };
         }
-        crate::gfx::init(None);
+        gfx_host::init(None);
         gfx_trace_record(
             GFX_TRACE_OP_UPLOAD_TEXTURE_JPEG,
             0,
@@ -8129,7 +8279,7 @@ pub mod cabi {
             return -3;
         }
         let bytes = unsafe { core::slice::from_raw_parts(data_ptr, data_len) }.to_vec();
-        crate::gfx::rdp_monitor_texture_jpeg(tex_id, 0x8000_0000, bytes.as_slice());
+        gfx_host::rdp_monitor_texture_jpeg(tex_id, 0x8000_0000, bytes.as_slice());
         #[cfg(feature = "trueos_rdp")]
         crate::r::resource_monitor::preserve_encoded_texture(
             tex_id,
@@ -8153,7 +8303,7 @@ pub mod cabi {
         data_len: usize,
     ) -> i32 {
         if !gfx_cabi_vm_context() {
-            crate::gfx::init(None);
+            gfx_host::init(None);
         }
         gfx_trace_record(
             GFX_TRACE_OP_UPLOAD_TEXTURE_SVG,
@@ -8172,7 +8322,7 @@ pub mod cabi {
             return -2;
         }
         let data = core::slice::from_raw_parts(data_ptr, data_len);
-        crate::gfx::rdp_monitor_texture_svg(tex_id, 0, data);
+        gfx_host::rdp_monitor_texture_svg(tex_id, 0, data);
         #[cfg(feature = "trueos_rdp")]
         crate::r::resource_monitor::preserve_encoded_texture(
             tex_id,
@@ -8237,7 +8387,7 @@ pub mod cabi {
         if gfx_cabi_vm_context() {
             return unsafe { trueos_cabi_gfx_upload_texture_svg(tex_id, data_ptr, data_len) };
         }
-        crate::gfx::init(None);
+        gfx_host::init(None);
         gfx_trace_record(
             GFX_TRACE_OP_UPLOAD_TEXTURE_SVG,
             0,
@@ -8258,7 +8408,7 @@ pub mod cabi {
             return -3;
         }
         let bytes = unsafe { core::slice::from_raw_parts(data_ptr, data_len) }.to_vec();
-        crate::gfx::rdp_monitor_texture_svg(tex_id, 0x8000_0000, bytes.as_slice());
+        gfx_host::rdp_monitor_texture_svg(tex_id, 0x8000_0000, bytes.as_slice());
         #[cfg(feature = "trueos_rdp")]
         crate::r::resource_monitor::preserve_encoded_texture(
             tex_id,
@@ -8364,7 +8514,7 @@ pub mod cabi {
         allow_screen_present: bool,
     ) -> i32 {
         wait_for_end_frame_idle();
-        crate::gfx::init(None);
+        gfx_host::init(None);
 
         let wait_start_ticks = embassy_time_driver::now();
         let wait_timeout_ticks = (embassy_time_driver::TICK_HZ / 2).max(1);
@@ -8381,7 +8531,7 @@ pub mod cabi {
         };
         // Keep CABI epoch aligned at frame start so first-use texture upload does not
         // treat initial bootstrap as a backend switch and invalidate this frame.
-        st.epoch = crate::gfx::backend_epoch();
+        st.epoch = gfx_host::backend_epoch();
         st.frame_seq = st.frame_seq.wrapping_add(1);
         st.frame_active = true;
         st.frame_allow_screen_present = allow_screen_present;
@@ -8413,7 +8563,7 @@ pub mod cabi {
             flags |= 2;
         }
         gfx_trace_record(GFX_TRACE_OP_BEGIN_FRAME, seq, flags, clear_rgb & 0x00FF_FFFF, 0, 0, 0);
-        crate::gfx::rdp_monitor_begin_frame(seq, flags, clear_rgb & 0x00FF_FFFF);
+        gfx_host::rdp_monitor_begin_frame(seq, flags, clear_rgb & 0x00FF_FFFF);
         0
     }
 
@@ -8516,7 +8666,7 @@ pub mod cabi {
             0,
             0,
         );
-        crate::gfx::rdp_monitor_draw_rgb_triangles(frame_seq, vcount, bytes);
+        gfx_host::rdp_monitor_draw_rgb_triangles(frame_seq, vcount, bytes);
         0
     }
 
@@ -8687,7 +8837,7 @@ pub mod cabi {
                 TexSampleKind::Rgba => 1,
             },
         );
-        crate::gfx::rdp_monitor_draw_tex_triangles(
+        gfx_host::rdp_monitor_draw_tex_triangles(
             frame_seq,
             tex_id,
             vcount,
@@ -8713,7 +8863,7 @@ pub mod cabi {
 
     fn end_frame_host_inner() -> i32 {
         let _host_alloc_domain = crate::allocators::enter_host_alloc_domain_current_cpu();
-        crate::gfx::init(None);
+        gfx_host::init(None);
 
         let (
             seq,
@@ -8772,7 +8922,7 @@ pub mod cabi {
             draw_bytes.min(u32::MAX as usize) as u32,
             0,
         );
-        crate::gfx::rdp_monitor_end_frame(
+        gfx_host::rdp_monitor_end_frame(
             seq,
             end_flags,
             rgb_draws,
@@ -8816,7 +8966,7 @@ pub mod cabi {
         let mut screenshot_overlay_extent: Option<(u32, u32)> = None;
 
         let Some(ret) = ({
-            crate::gfx::with_context_tag(crate::gfx::SystemLockOwner::EndFrame, |ctx| {
+            gfx_host::with_context_tag(gfx_host::SystemLockOwner::EndFrame, |ctx| {
                 let (_p, _v, _need_set_viewport) = match ensure_gfx_resources(ctx, 0) {
                     Some(v) => v,
                     None => return -1,
@@ -9337,7 +9487,7 @@ pub mod cabi {
             if submitted_passes != 0 {
                 st.ring_idx = (st.ring_idx + submitted_passes) % GFX_CABI_VBUF_RING_LEN;
             }
-            if crate::gfx::is_virgl_active() {
+            if gfx_host::is_virgl_active() {
                 let first = !crate::logflag::GFX_CABI_VIRGL_FIRST_FRAME_SEEN
                     .swap(true, core::sync::atomic::Ordering::AcqRel);
                 if first {
@@ -9380,7 +9530,7 @@ pub mod cabi {
                     screenshot_tex.as_slice(),
                 );
             }
-        } else if crate::gfx::is_virgl_active() {
+        } else if gfx_host::is_virgl_active() {
             let n = crate::logflag::GFX_CABI_VIRGL_END_FRAME_DIAG_LOGS
                 .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             if crate::logflag::GFX_FRAME_PROGRESS_LOGS && n < 12 {
