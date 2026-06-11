@@ -132,19 +132,13 @@ impl JSValue {
     }
 }
 
-#[inline]
-unsafe fn js_ref_count_header(ptr: *mut c_void) -> *mut JSRefCountHeader {
-    // quickjs.h __js_rc(): (JSRefCountHeader *)((uint32_t *)ptr - 1)
-    (ptr as *mut u32).offset(-1) as *mut JSRefCountHeader
-}
-
 /// Mirrors the `JS_FreeValue` inline in `quickjs.h` for the non-NAN-boxing (PTR64) ABI.
 ///
 /// Safety: `ctx` must be a live context and `v` must be a valid value for that context.
 #[inline]
 pub unsafe fn js_free_value(ctx: *mut JSContext, v: JSValue) {
     if v.tag >= JS_TAG_FIRST && v.tag < 0 {
-        let p = js_ref_count_header(unsafe { v.u.ptr });
+        let p = unsafe { v.u.ptr } as *mut JSRefCountHeader;
         unsafe {
             (*p).ref_count -= 1;
             if (*p).ref_count <= 0 {
@@ -160,7 +154,7 @@ pub unsafe fn js_free_value(ctx: *mut JSContext, v: JSValue) {
 #[inline]
 pub unsafe fn js_dup_value(_ctx: *mut JSContext, v: JSValue) -> JSValue {
     if v.tag >= JS_TAG_FIRST && v.tag < 0 {
-        let p = js_ref_count_header(unsafe { v.u.ptr });
+        let p = unsafe { v.u.ptr } as *mut JSRefCountHeader;
         unsafe {
             (*p).ref_count += 1;
         }

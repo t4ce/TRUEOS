@@ -10,6 +10,7 @@ const PIXI_CURSOR_HALF_SPAN_MIN_PX: f32 = 10.0;
 const PIXI_CURSOR_HALF_SPAN_MAX_PX: f32 = 18.0;
 const PIXI_CURSOR_HALF_THICKNESS_PX: f32 = 1.0;
 const PIXI_CURSOR_TILT_INV_SQRT2: f32 = 0.70710677;
+const PIXI_DRAW_CURSOR_CROSSES: bool = false;
 
 #[derive(Copy, Clone, Debug, Default)]
 pub(super) struct Ui3IntelPresentSummary {
@@ -140,7 +141,9 @@ fn present_ui3_geometry_to_intel_primary(
 
     flush_rect_run(&mut rects, &mut summary);
     flush_text_run(&mut text_placements, &mut text_bounds, &mut summary);
-    append_pixi_cursor_crosses(&mut rects, &mut summary, damage);
+    if PIXI_DRAW_CURSOR_CROSSES {
+        append_pixi_cursor_crosses(&mut rects, &mut summary, damage);
+    }
     flush_rect_run(&mut rects, &mut summary);
     publish_frame(&mut summary);
 
