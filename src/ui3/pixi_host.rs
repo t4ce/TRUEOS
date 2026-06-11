@@ -222,7 +222,7 @@ impl Ui3PixiHost {
             Ui3Command::Text { node, params } => {
                 self.apply_text(node, params);
             }
-            Ui3Command::Render { root } => {
+            Ui3Command::Render { root } | Ui3Command::RenderDamage { root, .. } => {
                 self.ensure_node(root, Ui3NodeKind::Container);
                 let mut frame = Ui3RenderFrame {
                     root,

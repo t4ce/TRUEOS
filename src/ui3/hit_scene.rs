@@ -177,8 +177,8 @@ fn node_kind_code(kind: &Ui3NodeKind) -> u32 {
 
 fn local_node_bounds(node: &Ui3Node) -> Option<Ui3Rect> {
     let mut rect = node.hit_area;
-    if let Some(rect) = graphics_bounds(&node.graphics) {
-        return union_optional_rect(node.hit_area, rect);
+    if let Some(graphics_rect) = graphics_bounds(&node.graphics) {
+        rect = union_optional_rect(rect, graphics_rect);
     }
     if !node.text.is_empty() {
         let w = (node.text.len() as f32 * 9.0).max(1.0);
@@ -198,6 +198,8 @@ fn local_node_bounds(node: &Ui3Node) -> Option<Ui3Rect> {
 
 fn graphics_bounds(ops: &[Ui3GraphicsOp]) -> Option<Ui3Rect> {
     let mut rect = None;
+    let mut current_path = None;
+    let mut subpath_start = None;
     for op in ops {
         match *op {
             Ui3GraphicsOp::Rect(next) => {
@@ -231,14 +233,47 @@ fn graphics_bounds(ops: &[Ui3GraphicsOp]) -> Option<Ui3Rect> {
             Ui3GraphicsOp::TextureRect { rect: next, .. } => {
                 rect = union_optional_rect(rect, next);
             }
-            Ui3GraphicsOp::MoveTo(_)
-            | Ui3GraphicsOp::LineTo(_)
-            | Ui3GraphicsOp::ClosePath
-            | Ui3GraphicsOp::Fill(_)
-            | Ui3GraphicsOp::Stroke { .. } => {}
+            Ui3GraphicsOp::MoveTo(to) => {
+                current_path = Some((to.x, to.y));
+                subpath_start = Some((to.x, to.y));
+            }
+            Ui3GraphicsOp::LineTo(to) => {
+                if let Some((from_x, from_y)) = current_path {
+                    rect = union_optional_rect(
+                        rect,
+                        stroked_segment_bounds(from_x, from_y, to.x, to.y),
+                    );
+                }
+                current_path = Some((to.x, to.y));
+            }
+            Ui3GraphicsOp::ClosePath => {
+                if let (Some((from_x, from_y)), Some((to_x, to_y))) = (current_path, subpath_start)
+                {
+                    rect = union_optional_rect(
+                        rect,
+                        stroked_segment_bounds(from_x, from_y, to_x, to_y),
+                    );
+                    current_path = Some((to_x, to_y));
+                }
+            }
+            Ui3GraphicsOp::Fill(_) | Ui3GraphicsOp::Stroke { .. } => {}
         }
     }
     rect
+}
+
+fn stroked_segment_bounds(x0: f32, y0: f32, x1: f32, y1: f32) -> Ui3Rect {
+    let pad = 4.0;
+    let min_x = x0.min(x1) - pad;
+    let min_y = y0.min(y1) - pad;
+    let max_x = x0.max(x1) + pad;
+    let max_y = y0.max(y1) + pad;
+    Ui3Rect {
+        x: min_x,
+        y: min_y,
+        w: (max_x - min_x).max(1.0),
+        h: (max_y - min_y).max(1.0),
+    }
 }
 
 fn union_optional_rect(current: Option<Ui3Rect>, next: Ui3Rect) -> Option<Ui3Rect> {

@@ -39,7 +39,7 @@ function drawDownChevron(g: Graphics, x: number, y: number, w: number, h: number
   g.stroke({ width: 2, color });
 }
 
-function parseOptions(attrs?: Record<string, string>): string[] {
+export function parseSelectOptions(attrs?: Record<string, string>): string[] {
   const raw = String(attrs?.['data-options'] ?? '');
   const lines = raw
     .split('\n')
@@ -48,7 +48,7 @@ function parseOptions(attrs?: Record<string, string>): string[] {
   return lines.length > 0 ? lines : ['(empty)'];
 }
 
-function parseInitSelectedIndex(attrs?: Record<string, string>): number {
+export function parseSelectInitSelectedIndex(attrs?: Record<string, string>): number {
   const raw = Number(attrs?.['data-selected-index'] ?? '0');
   return Number.isFinite(raw) ? Math.max(0, raw | 0) : 0;
 }
@@ -81,18 +81,19 @@ export function renderSelect(opts: {
   getCursorColor: (pointerId: number) => number;
 
   requestPaint: (() => void) | null;
+  requestOverlayPaint?: (() => void) | null;
 
   // Collect open popup requests so they can be drawn last (above siblings).
   popupSink: SelectPopup[];
 }): void {
-  const { node, container, graphics: g, w, h, absX, absY, theme, selectStates, uiState, getPointerId, getCursorColor, requestPaint, popupSink } =
+  const { node, container, graphics: g, w, h, absX, absY, theme, selectStates, uiState, getPointerId, getCursorColor, requestPaint, requestOverlayPaint, popupSink } =
     opts;
 
   const key = node.key;
   if (!key) return;
 
-  const options = parseOptions(node.attrs);
-  const initIdx = parseInitSelectedIndex(node.attrs);
+  const options = parseSelectOptions(node.attrs);
+  const initIdx = parseSelectInitSelectedIndex(node.attrs);
   const st = getOrInitSelectState(selectStates, key, initIdx);
   st.selectedIndex = Math.max(0, Math.min(options.length - 1, st.selectedIndex | 0));
 
@@ -150,7 +151,7 @@ export function renderSelect(opts: {
     uiState.keyboardOwnerPointerId = pid;
 
     st.open = !st.open;
-    requestPaint?.();
+    (requestOverlayPaint ?? requestPaint)?.();
     ev.stopPropagation?.();
   });
 

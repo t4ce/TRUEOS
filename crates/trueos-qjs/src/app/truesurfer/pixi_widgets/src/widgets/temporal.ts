@@ -298,6 +298,7 @@ export function renderTemporalInput(opts: {
   getOrInitInputValue: (key: string, attrs?: Record<string, string>) => { value?: string };
 
   requestPaint: (() => void) | null;
+  requestOverlayPaint?: (() => void) | null;
 
   popupSink: TemporalPopup[];
 }): void {
@@ -317,6 +318,7 @@ export function renderTemporalInput(opts: {
     yearSliderOwners,
     getOrInitInputValue,
     requestPaint,
+    requestOverlayPaint,
     popupSink,
   } = opts;
 
@@ -458,7 +460,7 @@ export function renderTemporalInput(opts: {
     }
 
     temporalStates.set(key, st);
-    requestPaint?.();
+    (requestOverlayPaint ?? requestPaint)?.();
     ev.stopPropagation?.();
   });
 
@@ -757,6 +759,7 @@ export function renderTemporalPopups(opts: {
   getPointerId: (ev: any) => number;
 
   requestPaint: (() => void) | null;
+  requestOverlayPaint?: (() => void) | null;
 }): void {
   const {
     popups,
@@ -775,6 +778,7 @@ export function renderTemporalPopups(opts: {
     uiFocus,
     getPointerId,
     requestPaint,
+    requestOverlayPaint,
   } = opts;
 
   const subPopups: TemporalPopup[] = [];
@@ -877,7 +881,7 @@ export function renderTemporalPopups(opts: {
         if (hitYear) {
           st.openYear = true;
           temporalStates.set(popup.inputKey, st);
-          requestPaint?.();
+          (requestOverlayPaint ?? requestPaint)?.();
           ev.stopPropagation?.();
           return;
         }
@@ -989,7 +993,7 @@ export function renderTemporalPopups(opts: {
         if (hit(monthBtn)) {
           st.openMonthGrid = !st.openMonthGrid;
           temporalStates.set(popup.inputKey, st);
-          requestPaint?.();
+          (requestOverlayPaint ?? requestPaint)?.();
           ev.stopPropagation?.();
           return;
         }
@@ -997,7 +1001,7 @@ export function renderTemporalPopups(opts: {
         if (hit(yearBtn)) {
           st.openYear = true;
           temporalStates.set(popup.inputKey, st);
-          requestPaint?.();
+          (requestOverlayPaint ?? requestPaint)?.();
           ev.stopPropagation?.();
           return;
         }
@@ -1105,6 +1109,7 @@ export function renderTemporalPopups(opts: {
           getPointerId,
           getCursorColor,
           requestPaint,
+          requestOverlayPaint,
           popupSink: selectPopups,
         });
       };

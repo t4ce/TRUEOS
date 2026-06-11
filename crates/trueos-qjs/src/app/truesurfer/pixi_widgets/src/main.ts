@@ -43,7 +43,7 @@ import { applyYogaDefaultsNumber, getOrInitNumberState, renderNumberSpinner } fr
 import type { Rgb } from './widgets/color';
 import { applyYogaDefaultsColor, renderColorPicker, sampleColorPickerAtLocal } from './widgets/color';
 import type { SelectPopup, SelectState } from './widgets/select';
-import { applyYogaDefaultsSelect, getOrInitSelectState, renderSelect, renderSelectPopup } from './widgets/select';
+import { applyYogaDefaultsSelect, getOrInitSelectState, parseSelectOptions, renderSelect, renderSelectPopup } from './widgets/select';
 import type { TemporalPopup, TemporalState } from './widgets/temporal';
 import {
   applyYogaDefaultsTemporalInput,
@@ -71,6 +71,7 @@ declare global {
     __TRUEOS_PIXI_DIRTY__?: boolean;
     __TRUEOS_PIXI_REPAINT_REQUIRED__?: boolean;
     __TRUEOS_PIXI_SCROLL_REPAINT_REQUIRED__?: boolean;
+    __TRUEOS_PIXI_OVERLAY_REPAINT_REQUIRED__?: boolean;
     __TRUEOS_PIXI_SCROLL_REPAINT_OWNER__?: 'root' | 'iframe' | '';
     __TRUEOS_PIXI_SCROLL_REPAINT_IFRAME_KEY__?: string;
     __TRUEOS_PIXI_LAST_SCROLL_FAST_PATH__?: {
@@ -97,9 +98,21 @@ declare global {
       y: number;
       w: number;
       h: number;
+      worldX: number;
+      worldY: number;
       fillColor: number;
       fillAlpha: number;
     } | null;
+    __TRUEOS_PIXI_LAST_OVERLAY_FAST_PATH__?: {
+      rootNode: number;
+      damageX: number;
+      damageY: number;
+      damageW: number;
+      damageH: number;
+    } | null;
+    __TRUEOS_PIXI_INCREMENTAL_COMMANDS__?: unknown[];
+    __TRUEOS_PIXI_INCREMENTAL_ROOT__?: number;
+    __TRUEOS_PIXI_INCREMENTAL_DAMAGE__?: { x: number; y: number; w: number; h: number } | null;
     __TRUEOS_REPAINT_NOW__?: () => void;
     __TRUEOS_PIXI_BRIDGE_STATS__?: TrueosBridgeStats;
     __TRUEOS_PIXI_LAST_LAYOUT__?: LayoutBox;
@@ -1186,6 +1199,11 @@ function collectLayoutBoxText(box: LayoutBox): string {
   return box.children.map(collectLayoutBoxText).join(' ');
 }
 
+function collectRenderNodeText(node: RenderNode): string {
+  if (node.kind === 'text') return node.text ?? '';
+  return node.children.map(collectRenderNodeText).join(' ');
+}
+
 function collectLayoutTextOverlays(root: LayoutBox): Array<{ x: number; y: number; text: string }> {
   const out: Array<{ x: number; y: number; text: string }> = [];
   const walk = (box: LayoutBox, ox: number, oy: number, iframeDepth: number) => {
@@ -1374,6 +1392,9 @@ function ensureChildAtAny(parent: Container, child: any, index: number): void {
 
 let requestRerender: (() => void) | null = null;
 let requestPaint: (() => void) | null = null;
+let requestOverlayPaint: (() => void) | null = null;
+
+type OverlayRect = { x: number; y: number; w: number; h: number };
 
 function getCursorColor(pointerId: number): number {
   const existing = uiState.cursorColors.get(pointerId);
@@ -1400,6 +1421,76 @@ function getEffectivePointerId(ev: any): number {
 
 function isTrueosCaptureOnly(): boolean {
   return !!(globalThis as any).__TRUEOS_CAPTURE_ONLY__;
+}
+
+function unionOverlayRect(a: OverlayRect | null, b: OverlayRect | null): OverlayRect | null {
+  if (!a) return b;
+  if (!b) return a;
+  const x0 = Math.min(a.x, b.x);
+  const y0 = Math.min(a.y, b.y);
+  const x1 = Math.max(a.x + a.w, b.x + b.w);
+  const y1 = Math.max(a.y + a.h, b.y + b.h);
+  return { x: x0, y: y0, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) };
+}
+
+function translateOverlayRect(r: OverlayRect, dx: number, dy: number): OverlayRect {
+  return { x: r.x + dx, y: r.y + dy, w: r.w, h: r.h };
+}
+
+function localOverlayBounds(node: any): OverlayRect | null {
+  let out: OverlayRect | null = null;
+  const hit = node?.hitArea;
+  if (hit && Number.isFinite(Number(hit.x)) && Number.isFinite(Number(hit.y)) && Number(hit.width ?? hit.w) > 0 && Number(hit.height ?? hit.h) > 0) {
+    out = unionOverlayRect(out, {
+      x: Number(hit.x) || 0,
+      y: Number(hit.y) || 0,
+      w: Number(hit.width ?? hit.w) || 0,
+      h: Number(hit.height ?? hit.h) || 0,
+    });
+  }
+  const commands = Array.isArray(node?.commands) ? node.commands : [];
+  for (const cmd of commands) {
+    if (!Array.isArray(cmd)) continue;
+    const op = String(cmd[0] ?? '');
+    if (op === 'rect' || op === 'roundRect') {
+      const r = { x: Number(cmd[1]) || 0, y: Number(cmd[2]) || 0, w: Math.max(0, Number(cmd[3]) || 0), h: Math.max(0, Number(cmd[4]) || 0) };
+      out = unionOverlayRect(out, r);
+    } else if (op === 'circle') {
+      const x = Number(cmd[1]) || 0;
+      const y = Number(cmd[2]) || 0;
+      const rr = Math.max(0, Number(cmd[3]) || 0);
+      out = unionOverlayRect(out, { x: x - rr, y: y - rr, w: rr * 2, h: rr * 2 });
+    } else if (op === 'ellipse') {
+      const x = Number(cmd[1]) || 0;
+      const y = Number(cmd[2]) || 0;
+      const rx = Math.max(0, Number(cmd[3]) || 0);
+      const ry = Math.max(0, Number(cmd[4]) || 0);
+      out = unionOverlayRect(out, { x: x - rx, y: y - ry, w: rx * 2, h: ry * 2 });
+    }
+  }
+  const text = typeof node?.text === 'string' ? node.text : typeof node?._text === 'string' ? node._text : '';
+  if (text.length > 0) {
+    const tw = Math.max(1, Number(node?.width) || text.length * defaultTheme.fontSize * 0.7);
+    const th = Math.max(1, Number(node?.height) || defaultTheme.fontSize * 1.25);
+    out = unionOverlayRect(out, { x: 0, y: 0, w: tw, h: th });
+  }
+  return out;
+}
+
+function overlayTreeBounds(root: Container): OverlayRect | null {
+  const walk = (node: any, ox: number, oy: number): OverlayRect | null => {
+    const x = ox + (Number(node?.position?.x ?? node?.x) || 0);
+    const y = oy + (Number(node?.position?.y ?? node?.y) || 0);
+    let out = localOverlayBounds(node);
+    if (out) out = translateOverlayRect(out, x, y);
+    const children = Array.isArray(node?.children) ? node.children : [];
+    for (const child of children) out = unionOverlayRect(out, walk(child, x, y));
+    return out;
+  };
+  const pad = 4;
+  const raw = walk(root as any, 0, 0);
+  if (!raw) return null;
+  return { x: raw.x - pad, y: raw.y - pad, w: raw.w + pad * 2, h: raw.h + pad * 2 };
 }
 
 function setTrueosPhase(phase: string): void {
@@ -1675,6 +1766,9 @@ function createCaptureOnlyYoga() {
 
       if (this.measureFunc) {
         const measured = this.measureFunc(Math.max(0, ownW - padX), MEASURE_MODE_UNDEFINED);
+        if (this.width <= 0 && this.minWidth <= 0) {
+          this.computed.width = Math.ceil(Math.max(0, Number(measured.width) || 0)) + padX;
+        }
         ownH = Math.max(ownH, Math.ceil(Number(measured.height) || 0) + padY);
         this.computed.height = ownH;
         return;
@@ -2211,6 +2305,11 @@ function buildLayoutTree(renderNodes: RenderNode[], viewportWidth: number, viewp
     if (node.tagName === 'button') {
       setTrueosLayoutStep(`node:${node.tagName}:${node.key}:button-defaults`);
       applyYogaDefaultsButton(yogaNode, Yoga);
+      const label = normalizeWhitespace(collectRenderNodeText(node));
+      if (label.length > 0) {
+        const measured = measurer.measure(label);
+        yogaNode.setMinWidth(Math.max(100, Math.ceil(measured.width) + 28));
+      }
     }
     if (node.tagName === 'dialog') {
       setTrueosLayoutStep(`node:${node.tagName}:${node.key}:dialog-defaults`);
@@ -2665,6 +2764,7 @@ function renderToPixi(app: Application, box: LayoutBox, sceneRoot?: Container) {
           yearSliderOwners: uiState.temporalYearOwners,
           getOrInitInputValue: (k, attrs) => getOrInitInputState(k, attrs) as any,
           requestPaint,
+          requestOverlayPaint,
           popupSink: temporalPopups,
         });
 
@@ -2759,6 +2859,7 @@ function renderToPixi(app: Application, box: LayoutBox, sceneRoot?: Container) {
           getPointerId: getEffectivePointerId,
           getCursorColor,
           requestPaint,
+          requestOverlayPaint,
           popupSink: selectPopups,
         });
       } else if (node.tagName === 'summary') {
@@ -2870,9 +2971,7 @@ function renderToPixi(app: Application, box: LayoutBox, sceneRoot?: Container) {
           graphics: g,
           w,
           h,
-          // In capture-only mode, let the real layout text child carry the label.
-          // The retained Pixi path still uses the widget-local label for centering.
-          label: isTrueosCaptureOnly() ? '' : label,
+          label,
           theme,
           registerHoverHandlers: node.key
             ? (handlers) => {
@@ -3064,7 +3163,7 @@ function renderToPixi(app: Application, box: LayoutBox, sceneRoot?: Container) {
         const child = (node.children ?? [])[ci];
         if (child.kind === 'block' && child.tagName === 'dialog') {
           childSink.push(child);
-        } else if (node.tagName === 'button' && child.kind === 'text' && !isTrueosCaptureOnly()) {
+        } else if (node.tagName === 'button' && child.kind === 'text') {
           continue;
         } else {
           drawNode(child, childParent, nextTextCtx, childAbsX, childAbsY, childSink, childDialogClampRect, `${path}.${ci}`, childOrder++);
@@ -3159,6 +3258,7 @@ function renderToPixi(app: Application, box: LayoutBox, sceneRoot?: Container) {
       getPointerId: getEffectivePointerId,
       getCursorColor,
       requestPaint,
+      requestOverlayPaint,
     });
   }
 
@@ -3231,6 +3331,7 @@ function renderToPixi(app: Application, box: LayoutBox, sceneRoot?: Container) {
         const capture = window.__pixiCapture;
         const getId = capture && typeof capture.objectId === 'function' ? capture.objectId.bind(capture) : null;
         if (!getId) return;
+        const world = typeof (gg as any).getGlobalPosition === 'function' ? (gg as any).getGlobalPosition() : { x: 0, y: 0 };
         window.__TRUEOS_PIXI_LAST_GRAPHICS_FAST_PATH__ = {
           owner: 'context-menu-hover',
           rootNode: getId(app.stage as any),
@@ -3239,6 +3340,8 @@ function renderToPixi(app: Application, box: LayoutBox, sceneRoot?: Container) {
           y: 0,
           w: itemW,
           h: itemH,
+          worldX: Number(world?.x) || 0,
+          worldY: Number(world?.y) || 0,
           fillColor,
           fillAlpha: 1,
         };
@@ -3481,7 +3584,7 @@ async function main() {
         m.y = ev.global?.y ?? 0;
         uiState.contextMenus.set(pid, m);
       }
-      requestPaint?.();
+      requestOverlayPaint?.();
       ev.preventDefault?.();
       return;
     }
@@ -3493,7 +3596,7 @@ async function main() {
       if (m && m.open) {
         m.open = false;
         uiState.contextMenus.set(pid, m);
-        requestPaint?.();
+        requestOverlayPaint?.();
       }
     }
 
@@ -3506,13 +3609,13 @@ async function main() {
           didClose = true;
         }
       }
-      if (didClose) requestPaint?.();
+      if (didClose) requestOverlayPaint?.();
     }
 
     // Left click outside closes any open temporal pickers.
     if (ev?.button !== 2) {
       const didCloseTemporal = closeAllTemporalPopups(uiState.temporals);
-      if (didCloseTemporal) requestPaint?.();
+      if (didCloseTemporal) requestOverlayPaint?.();
     }
 
     // Some interactions (e.g. hover/active fills) mutate Graphics directly; ensure we present.
@@ -3610,6 +3713,7 @@ async function main() {
   let lastLayoutStats: TrueosTreeStats = { nodes: 0, blocks: 0, text: 0, maxDepth: 0, tags: {} };
   let lastPrePixiTrace: PrePixiTraceInfo = { hash: '', renderHash: '', layoutHash: '', bytes: 0 };
   let trueosLayoutOverlayLogCount = 0;
+  let lastOverlayBounds: OverlayRect | null = null;
 
   const clampScroll = () => {
     const maxScroll = Math.max(0, uiState.scroll.contentHeight - uiState.scroll.viewportHeight);
@@ -3709,6 +3813,238 @@ async function main() {
     }
   };
 
+  const collectOverlayPopupRequests = (layout: LayoutBox): { temporalPopups: TemporalPopup[]; selectPopups: SelectPopup[] } => {
+    const temporalPopups: TemporalPopup[] = [];
+    const selectPopups: SelectPopup[] = [];
+    const contentRootY = -uiState.scroll.y;
+    const walk = (node: LayoutBox, ax: number, ay: number) => {
+      const x = ax + node.x;
+      const y = ay + node.y;
+      if (node.kind === 'block' && node.key) {
+        if (node.tagName === 'select') {
+          const st = uiState.selects.get(node.key);
+          if (st?.open) {
+            const options = parseSelectOptions(node.attrs);
+            st.selectedIndex = Math.max(0, Math.min(options.length - 1, st.selectedIndex | 0));
+            selectPopups.push({
+              key: node.key,
+              absX: x,
+              absY: y,
+              w: node.width,
+              h: node.height,
+              options,
+              selectedIndex: st.selectedIndex,
+            });
+          }
+        } else if (
+          node.tagName === 'timeinput' ||
+          node.tagName === 'dateinput' ||
+          node.tagName === 'monthinput' ||
+          node.tagName === 'weekinput' ||
+          node.tagName === 'datetimelocalinput'
+        ) {
+          const st = uiState.temporals.get(node.key);
+          if (st?.openPanel === 'month') {
+            temporalPopups.push({ kind: 'month-panel', inputKey: node.key, absX: x, absY: y, anchorW: node.width, anchorH: node.height });
+          } else if (st?.openPanel === 'week') {
+            temporalPopups.push({ kind: 'week-panel', inputKey: node.key, absX: x, absY: y, anchorW: node.width, anchorH: node.height });
+          } else if (st?.openPanel === 'time') {
+            temporalPopups.push({ kind: 'time-panel', inputKey: node.key, absX: x, absY: y, anchorW: node.width, anchorH: node.height });
+          }
+        }
+      }
+      for (const child of node.children ?? []) {
+        if (child.kind === 'block' && child.tagName === 'dialog') continue;
+        walk(child, x, y);
+      }
+    };
+    for (const child of layout.children ?? []) walk(child, 0, contentRootY);
+    return { temporalPopups, selectPopups };
+  };
+
+  const renderContextMenusInto = (overlayRoot: Container) => {
+    for (const [ownerPid, menuState] of uiState.contextMenus.entries()) {
+      if (!menuState?.open) continue;
+
+      const menu = new Container();
+      menu.eventMode = 'static';
+      menu.cursor = 'default';
+      setDisplayPosition(menu, menuState.x, menuState.y);
+
+      const itemW = 140;
+      const itemH = 28;
+      const pad = 6;
+      const labels = ['Copy', 'Paste', 'Close'];
+
+      const bg = new Graphics();
+      bg.rect(0, 0, itemW + pad * 2, labels.length * itemH + pad * 2);
+      bg.fill(0xffffff);
+      const borderInset = 1;
+      bg.rect(borderInset, borderInset, itemW + pad * 2 - borderInset * 2, labels.length * itemH + pad * 2 - borderInset * 2);
+      bg.stroke({ width: 2, color: getCursorColor(ownerPid), alignment: 0 });
+      menu.addChild(bg);
+
+      labels.forEach((label, i) => {
+        const y = pad + i * itemH;
+        const hit = new Container();
+        hit.eventMode = 'static';
+        hit.cursor = 'pointer';
+        setDisplayPosition(hit, pad, y);
+
+        const gg = new Graphics();
+        gg.rect(0, 0, itemW, itemH);
+        gg.fill(0xffffff);
+        hit.addChild(gg);
+
+        const tt = makeThemedText({
+          text: label,
+          fontFamily: defaultTheme.fontFamily,
+          fontSize: defaultTheme.fontSize,
+          fill: defaultTheme.text,
+        });
+        setDisplayPosition(tt, 8, Math.max(0, (itemH - tt.height) / 2) + TEXT_BASELINE_NUDGE_Y);
+        hit.addChild(tt);
+
+        const isOwnerEvent = (ev: any) => getEffectivePointerId(ev) === ownerPid;
+        hit.on('pointerdown', (ev: any) => {
+          if (!isOwnerEvent(ev)) return;
+          ev.stopPropagation?.();
+
+          const focusedKey = uiState.focusedKeyByPointer.get(ownerPid) ?? null;
+          const focusedState = focusedKey ? uiState.inputs.get(focusedKey) : null;
+          const isTextField =
+            focusedKey != null &&
+            uiState.fieldBounds.has(focusedKey) &&
+            focusedState != null &&
+            typeof (focusedState as any).value === 'string';
+          let needsFullPaint = false;
+
+          if (label === 'Copy' && isTextField) {
+            const st = focusedState as any as { value: string; selections?: Map<number, { start: number; end: number }> };
+            const full = st.value ?? '';
+            const sel = st.selections?.get(ownerPid) ?? null;
+            const a = sel ? Math.max(0, Math.min(full.length, sel.start ?? 0)) : 0;
+            const b = sel ? Math.max(0, Math.min(full.length, sel.end ?? a)) : a;
+            uiState.clipboards.set(ownerPid, full.slice(Math.min(a, b), Math.max(a, b)) || full);
+          } else if (label === 'Paste' && isTextField) {
+            const clip = uiState.clipboards.get(ownerPid) ?? '';
+            if (clip.length > 0) {
+              const st = focusedState as any as { value: string; selections?: Map<number, { start: number; end: number }> };
+              const full = st.value ?? '';
+              if (!st.selections) st.selections = new Map();
+              if (!st.selections.has(ownerPid)) {
+                const p = full.length;
+                st.selections.set(ownerPid, { start: p, end: p });
+              }
+              const sel = st.selections.get(ownerPid)!;
+              const a = Math.max(0, Math.min(full.length, sel.start ?? full.length));
+              const b = Math.max(0, Math.min(full.length, sel.end ?? a));
+              const start = Math.min(a, b);
+              const end = Math.max(a, b);
+              st.value = full.slice(0, start) + clip + full.slice(end);
+              const caret = start + clip.length;
+              sel.start = caret;
+              sel.end = caret;
+              needsFullPaint = true;
+            }
+          }
+
+          const st = uiState.contextMenus.get(ownerPid);
+          if (st) {
+            st.open = false;
+            uiState.contextMenus.set(ownerPid, st);
+          }
+          if (needsFullPaint) requestPaint?.();
+          else requestOverlayPaint?.();
+        });
+
+        menu.addChild(hit);
+      });
+
+      overlayRoot.addChild(menu);
+    }
+  };
+
+  const renderOverlayLayer = (overlayRoot: Container, temporalPopups: TemporalPopup[], selectPopups: SelectPopup[]) => {
+    overlayRoot.removeChildren();
+    if (temporalPopups.length > 0) {
+      renderTemporalPopups({
+        popups: temporalPopups,
+        stage: overlayRoot,
+        theme: defaultTheme,
+        viewportW: app.renderer.width,
+        viewportH: app.renderer.height,
+        temporalStates: uiState.temporals,
+        getOrInitInputValue: (k, attrs) => getOrInitInputState(k, attrs) as any,
+        sliders: uiState.sliders,
+        sliderBounds: uiState.sliderBounds,
+        sliderDrags: uiState.sliderDrags,
+        selects: uiState.selects,
+        selectPopups,
+        uiFocus: uiState,
+        getPointerId: getEffectivePointerId,
+        getCursorColor,
+        requestPaint,
+        requestOverlayPaint,
+      });
+    }
+    if (selectPopups.length > 0) {
+      for (const p of selectPopups) {
+        renderSelectPopup({
+          popup: p,
+          stage: overlayRoot,
+          theme: defaultTheme,
+          selectStates: uiState.selects,
+          uiState,
+          getPointerId: getEffectivePointerId,
+          requestPaint,
+          viewportW: app.renderer.width,
+          viewportH: app.renderer.height,
+        });
+      }
+    }
+    renderContextMenusInto(overlayRoot);
+  };
+
+  const paintOverlayOnly = () => {
+    if (!lastLayout) return;
+    const overlayRoot = getOrCreateContainer(sceneRoot, '__overlayRoot');
+    const beforeBounds = lastOverlayBounds;
+    const { temporalPopups, selectPopups } = collectOverlayPopupRequests(lastLayout);
+    const capture = window.__pixiCapture;
+    const commands = capture && Array.isArray(capture.commands) ? capture.commands : null;
+    const beforeCommands = commands ? commands.length : 0;
+    renderOverlayLayer(overlayRoot, temporalPopups, selectPopups);
+    const afterBounds = overlayTreeBounds(overlayRoot);
+    lastOverlayBounds = afterBounds;
+    const damage = unionOverlayRect(beforeBounds, afterBounds);
+    if (isTrueosCaptureOnly()) {
+      window.__TRUEOS_PIXI_LAST_OVERLAY_FAST_PATH__ = null;
+      window.__TRUEOS_PIXI_INCREMENTAL_COMMANDS__ = [];
+      window.__TRUEOS_PIXI_INCREMENTAL_ROOT__ = 0;
+      window.__TRUEOS_PIXI_INCREMENTAL_DAMAGE__ = null;
+      if (commands && damage && damage.w > 0 && damage.h > 0) {
+        const delta = commands.slice(beforeCommands);
+        commands.splice(beforeCommands, delta.length);
+        const capObj = window.__pixiCapture;
+        const getId = capObj && typeof capObj.objectId === 'function' ? capObj.objectId.bind(capObj) : null;
+        const rootNode = getId ? getId(app.stage as any) : 0;
+        window.__TRUEOS_PIXI_INCREMENTAL_COMMANDS__ = delta;
+        window.__TRUEOS_PIXI_INCREMENTAL_ROOT__ = rootNode;
+        window.__TRUEOS_PIXI_INCREMENTAL_DAMAGE__ = damage;
+        window.__TRUEOS_PIXI_LAST_OVERLAY_FAST_PATH__ = {
+          rootNode,
+          damageX: damage.x,
+          damageY: damage.y,
+          damageW: damage.w,
+          damageH: damage.h,
+        };
+      }
+      return;
+    }
+    app.renderer.render(app.stage);
+  };
+
   const paint = () => {
     if (!lastLayout) return;
     logTrueosCaptureBounded('PIXI_PAINT_STEP', 96, '[trueos pixi widgets] paint-step clamp begin');
@@ -3717,6 +4053,7 @@ async function main() {
     logTrueosCaptureBounded('PIXI_PAINT_STEP', 96, '[trueos pixi widgets] paint-step render-to-pixi begin');
     setTrueosPhase('main:paint:render-to-pixi');
     renderToPixi(app, lastLayout, sceneRoot);
+    lastOverlayBounds = overlayTreeBounds(getOrCreateContainer(sceneRoot, '__overlayRoot'));
     logTrueosCaptureBounded('PIXI_PAINT_STEP', 96, '[trueos pixi widgets] paint-step render-to-pixi done');
     setTrueosPhase('main:paint:scrollbar');
     logTrueosCaptureBounded('PIXI_PAINT_STEP', 96, '[trueos pixi widgets] paint-step scrollbar begin');
@@ -3826,22 +4163,26 @@ async function main() {
   if (isTrueosCaptureOnly()) {
     window.__TRUEOS_REPAINT_NOW__ = () => {
       const scrollOnly = window.__TRUEOS_PIXI_SCROLL_REPAINT_REQUIRED__ === true;
+      const overlayOnly = !scrollOnly && window.__TRUEOS_PIXI_OVERLAY_REPAINT_REQUIRED__ === true;
       window.__TRUEOS_PIXI_DIRTY__ = false;
       window.__TRUEOS_PIXI_REPAINT_REQUIRED__ = false;
       window.__TRUEOS_PIXI_SCROLL_REPAINT_REQUIRED__ = false;
+      window.__TRUEOS_PIXI_OVERLAY_REPAINT_REQUIRED__ = false;
       if (!scrollOnly) window.__TRUEOS_PIXI_LAST_SCROLL_FAST_PATH__ = null;
+      if (!scrollOnly && !overlayOnly) window.__TRUEOS_PIXI_LAST_OVERLAY_FAST_PATH__ = null;
       if (!scrollOnly) window.__TRUEOS_PIXI_LAST_GRAPHICS_FAST_PATH__ = null;
       const repaintLogCount = Number((window as any).__TRUEOS_REPAINT_NOW_LOG_COUNT__ ?? 0) || 0;
       if (repaintLogCount < 24) {
         (window as any).__TRUEOS_REPAINT_NOW_LOG_COUNT__ = repaintLogCount + 1;
-        console.log(`[trueos pixi widgets] repaint-now scrollOnly=${scrollOnly ? 1 : 0} begin`);
+        console.log(`[trueos pixi widgets] repaint-now scrollOnly=${scrollOnly ? 1 : 0} overlayOnly=${overlayOnly ? 1 : 0} begin`);
       }
       if (scrollOnly) paintScrollOnly();
+      else if (overlayOnly) paintOverlayOnly();
       else paint();
       window.__TRUEOS_PIXI_SCROLL_REPAINT_OWNER__ = '';
       window.__TRUEOS_PIXI_SCROLL_REPAINT_IFRAME_KEY__ = '';
       if (repaintLogCount < 24) {
-        console.log(`[trueos pixi widgets] repaint-now scrollOnly=${scrollOnly ? 1 : 0} done`);
+        console.log(`[trueos pixi widgets] repaint-now scrollOnly=${scrollOnly ? 1 : 0} overlayOnly=${overlayOnly ? 1 : 0} done`);
       }
     };
   }
@@ -3908,6 +4249,20 @@ async function main() {
     requestAnimationFrame(() => {
       paintScheduled = false;
       paint();
+    });
+  };
+
+  requestOverlayPaint = () => {
+    if (paintScheduled) return;
+    if (isTrueosCaptureOnly()) {
+      window.__TRUEOS_PIXI_DIRTY__ = true;
+      window.__TRUEOS_PIXI_OVERLAY_REPAINT_REQUIRED__ = true;
+      return;
+    }
+    paintScheduled = true;
+    requestAnimationFrame(() => {
+      paintScheduled = false;
+      paintOverlayOnly();
     });
   };
 
