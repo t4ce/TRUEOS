@@ -27,10 +27,13 @@ let parseDocumentFn = null;
 let domToWidgetsFn = null;
 let collectWidgetStatsFn = null;
 let flattenWidgetTreeFn = null;
+let createRenderTreeTraceFn = null;
+let summarizeRenderTreeTraceFn = null;
 let browserAssetManager = null;
 let currentNavigationUrl = '';
 let currentSceneImageUrls = [];
 let currentArtifactsState = null;
+let renderTreeArtifactLogged = false;
 
 function getUrlOrigin(url) {
   const value = typeof url === 'string' ? url.trim() : '';
@@ -239,6 +242,37 @@ function logWidgetTable(url, widgetTree, startedAt) {
   }
 }
 
+function logRenderTreeArtifact(url, bytes, widgetTree, startedAt) {
+  if (renderTreeArtifactLogged) return;
+  if (typeof createRenderTreeTraceFn !== 'function') {
+    log(`[truesurfer render-tree] browser=${browserId} status=unavailable url=${url}`);
+    return;
+  }
+
+  try {
+    const artifact = createRenderTreeTraceFn(widgetTree, {
+      source: 'parse5',
+      bytes,
+    });
+    const summary =
+      typeof summarizeRenderTreeTraceFn === 'function'
+        ? summarizeRenderTreeTraceFn(artifact)
+        : { renderNodes: 0, renderHash: artifact.renderTree && artifact.renderTree.hash };
+    const elapsed = Date.now() - startedAt;
+    log(
+      `[truesurfer render-tree] browser=${browserId} status=ready nodes=${Number(summary.renderNodes || 0)} render_hash=${safeString(summary.renderHash)} ms=${elapsed} url=${url}`,
+    );
+    log(`[truesurfer render-tree ndjson] browser=${browserId} ${JSON.stringify(artifact.renderTree)}`);
+    if (artifact.prepixi) {
+      log(`[truesurfer render-tree ndjson] browser=${browserId} ${JSON.stringify(artifact.prepixi)}`);
+    }
+    renderTreeArtifactLogged = true;
+  } catch (error) {
+    const message = error && error.stack ? String(error.stack) : String(error || 'unknown render-tree error');
+    log(`[truesurfer render-tree] browser=${browserId} status=failed error=${message} url=${url}`);
+  }
+}
+
 function getImportHelpers(baseUrl) {
   if (typeof root.createImportHelpers === 'function') {
     return root.createImportHelpers(baseUrl);
@@ -261,17 +295,19 @@ async function warmBrowserPipelineModules() {
     './css.mjs',
     'parse5',
     '../widlib/index.mjs',
+    '../rendertree/renderToTree.mjs',
   ];
   for (let index = 0; index < imports.length; index += 1) {
     await helpers.prefetch(imports[index]);
   }
 
-  const [extractMod, assetsMod, cssMod, parse5Mod, widMod] = await Promise.all([
+  const [extractMod, assetsMod, cssMod, parse5Mod, widMod, renderTreeMod] = await Promise.all([
     helpers.import('./truesurfer_extract.mjs'),
     helpers.import('./truesurfer_assets.mjs'),
     helpers.import('./css.mjs'),
     helpers.import('parse5'),
     helpers.import('../widlib/index.mjs'),
+    helpers.import('../rendertree/renderToTree.mjs'),
   ]);
 
   const extractReady = !!extractMod && typeof extractMod.extractDocumentArtifacts === 'function';
@@ -283,9 +319,13 @@ async function warmBrowserPipelineModules() {
     && typeof widMod.domToWidgets === 'function'
     && typeof widMod.collectWidgetStats === 'function'
     && typeof widMod.flattenWidgetTree === 'function';
-  if (!extractReady || !assetsReady || !cssReady || !parseReady || !widgetsReady) {
+  const renderTreeReady =
+    !!renderTreeMod
+    && typeof renderTreeMod.createRenderTreeTrace === 'function'
+    && typeof renderTreeMod.summarizeRenderTreeTrace === 'function';
+  if (!extractReady || !assetsReady || !cssReady || !parseReady || !widgetsReady || !renderTreeReady) {
     throw new Error(
-      `browser pipeline warmup incomplete extract_ready=${extractReady ? 1 : 0} assets_ready=${assetsReady ? 1 : 0} css_ready=${cssReady ? 1 : 0} parse_ready=${parseReady ? 1 : 0} widgets_ready=${widgetsReady ? 1 : 0}`,
+      `browser pipeline warmup incomplete extract_ready=${extractReady ? 1 : 0} assets_ready=${assetsReady ? 1 : 0} css_ready=${cssReady ? 1 : 0} parse_ready=${parseReady ? 1 : 0} widgets_ready=${widgetsReady ? 1 : 0} render_tree_ready=${renderTreeReady ? 1 : 0}`,
     );
   }
 
@@ -296,12 +336,15 @@ async function warmBrowserPipelineModules() {
   domToWidgetsFn = widMod.domToWidgets;
   collectWidgetStatsFn = widMod.collectWidgetStats;
   flattenWidgetTreeFn = widMod.flattenWidgetTree;
+  createRenderTreeTraceFn = renderTreeMod.createRenderTreeTrace;
+  summarizeRenderTreeTraceFn = renderTreeMod.summarizeRenderTreeTrace;
   root.__trueosTruesurferModules = {
     extractReady: 1,
     assetsReady: 1,
     cssReady: 1,
     parseReady: 1,
     widgetsReady: 1,
+    renderTreeReady: 1,
   };
 }
 
@@ -313,6 +356,7 @@ async function bootstrapTruesurfer() {
       cssReady: 0,
       parseReady: 0,
       widgetsReady: 0,
+      renderTreeReady: 0,
       baseUrl: TRUESURFER_MODULE_BASE,
     };
   try {
@@ -327,11 +371,12 @@ async function bootstrapTruesurfer() {
       cssReady: modules.cssReady ? 1 : 0,
       parseReady: modules.parseReady ? 1 : 0,
       widgetsReady: modules.widgetsReady ? 1 : 0,
+      renderTreeReady: modules.renderTreeReady ? 1 : 0,
       baseUrl: TRUESURFER_MODULE_BASE,
     };
     root.__trueosTruesurferReady = 1;
     log(
-      `[truesurfer bootstrap] browser=${browserId} ready extract=${modules.extractReady ? 1 : 0} assets=${modules.assetsReady ? 1 : 0} css=${modules.cssReady ? 1 : 0} parse=${modules.parseReady ? 1 : 0} widgets=${modules.widgetsReady ? 1 : 0}`,
+      `[truesurfer bootstrap] browser=${browserId} ready extract=${modules.extractReady ? 1 : 0} assets=${modules.assetsReady ? 1 : 0} css=${modules.cssReady ? 1 : 0} parse=${modules.parseReady ? 1 : 0} widgets=${modules.widgetsReady ? 1 : 0} render_tree=${modules.renderTreeReady ? 1 : 0}`,
     );
   } catch (error) {
     const message = error && error.stack ? String(error.stack) : String(error || 'unknown bootstrap error');
@@ -342,6 +387,7 @@ async function bootstrapTruesurfer() {
       cssReady: 0,
       parseReady: 0,
       widgetsReady: 0,
+      renderTreeReady: 0,
       baseUrl: TRUESURFER_MODULE_BASE,
       error: message,
     };
@@ -393,6 +439,7 @@ function setHtml(nextHtml, meta) {
     logSyncPipeline(url, parsed);
     root.__trueosTruesurferLastStyleIndex = parsed.styleIndex;
     logWidgetTable(url, widgetTree, widgetStart);
+    logRenderTreeArtifact(url, html.length, widgetTree, widgetStart);
     log(
       `[truesurfer extract] browser=${browserId} title=${parsed.title} shell_bytes=${parsed.shellBytes} body_bytes=${parsed.bodyBytes} subset_body_roots=${parsed.bodyHierarchy.length} body_outline=${parsed.bodyHierarchySummary} style_count=${parsed.styleCount} style_slots=${parsed.styleSlotCount} styled_nodes=${parsed.styledNodeCount} style_rules=${parsed.styleRuleCount} script_count=${parsed.scriptCount} images=${imageSummary.total} image_pending=${imageSummary.pending} image_ready=${imageSummary.ready} dom_ms=${parsed.domParseMs} css_ms=${parsed.styleIndexMs} ms=${parsed.parseMs} url=${url}`,
     );

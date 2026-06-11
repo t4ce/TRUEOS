@@ -482,6 +482,7 @@ fn qjs_vendor_specifier(spec: &[u8]) -> Option<&'static [u8]> {
         b"@svgdotjs/svg.js" => Some(b"/qjs/svgjs/index.mjs"),
         b"svgdom" => Some(b"/qjs/svgjs/dom-lite.mjs"),
         b"parse5" => Some(b"/qjs/parse5/parse5.mjs"),
+        b"pixi" | b"pixi.js" => Some(b"/qjs/pixi/pixi.mjs"),
         b"yoga-layout" => Some(b"/qjs/yoga/yoga.mjs"),
         b"three" => Some(b"https://esm.sh/three@0.162.0"),
         _ => None,
