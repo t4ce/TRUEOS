@@ -143,18 +143,66 @@ export function temporalKindFromTagName(tagName, attrs = {}) {
 
 export function defaultTemporalState(kind = 'date', now = new Date(), inputKey = '') {
   const normalized = normalizeTemporalKind(kind);
-  return {
+  const year2 = clampInt(now.getFullYear() - 2000, 0, 99);
+  const month = clampInt(now.getMonth() + 1, 1, 12);
+  const day = clampInt(now.getDate(), 1, 31);
+  const weekIndex = clampInt(Math.floor((day - 1) / 7) + 1, 1, 4);
+  const yearSliderKey = inputKey ? `${inputKey}:year-slider` : '';
+
+  if (normalized === 'time') {
+    return {
+      kind: normalized,
+      hour: clampInt(now.getHours(), 0, 23),
+      minute: clampInt(now.getMinutes(), 0, 59),
+      second: clampInt(now.getSeconds(), 0, 59),
+      openPanel: null,
+    };
+  }
+
+  if (normalized === 'month') {
+    return {
+      kind: normalized,
+      year2,
+      month,
+      openYear: false,
+      openMonthGrid: false,
+      yearSliderKey,
+    };
+  }
+
+  if (normalized === 'week') {
+    const week = pseudoWeekNumber({ month, weekIndex });
+    return {
+      kind: normalized,
+      year2,
+      week,
+      month,
+      weekIndex,
+      openPanel: null,
+      openYear: false,
+      yearSliderKey,
+    };
+  }
+
+  const dateState = {
     kind: normalized,
-    year2: clampInt(now.getFullYear() - 2000, 0, 99),
-    month: clampInt(now.getMonth() + 1, 1, 12),
-    weekIndex: 1,
+    year2,
+    month,
+    day,
+    weekIndex,
+    openYear: false,
+    openMonthGrid: false,
+    yearSliderKey,
+  };
+
+  if (normalized !== 'datetime-local') return dateState;
+
+  return {
+    ...dateState,
     hour: clampInt(now.getHours(), 0, 23),
     minute: clampInt(now.getMinutes(), 0, 59),
     second: clampInt(now.getSeconds(), 0, 59),
     openPanel: null,
-    openYear: false,
-    openMonthGrid: false,
-    yearSliderKey: inputKey ? `${inputKey}:year-slider` : '',
   };
 }
 
@@ -187,11 +235,12 @@ export function parseTemporalValue(kind, value, now = new Date(), inputKey = '')
     const sep = raw.indexOf('-W');
     if (sep < 0) return fallback;
     const year2 = parseYear2FromYYYY(raw.slice(0, sep));
-    const week = parseIntInRange(raw.slice(sep + 2), 1, 48);
+    const week = parseIntInRange(raw.slice(sep + 2), 1, 53);
     if (year2 == null || week == null) return fallback;
     return {
       ...fallback,
       year2,
+      week,
       month: clampInt(Math.floor((week - 1) / 4) + 1, 1, 12),
       weekIndex: clampInt(((week - 1) % 4) + 1, 1, 4),
     };
@@ -211,6 +260,7 @@ export function parseTemporalValue(kind, value, now = new Date(), inputKey = '')
     ...fallback,
     year2,
     month,
+    day,
     weekIndex: clampInt(Math.floor((day - 1) / 7) + 1, 1, 4),
   };
 
@@ -245,12 +295,13 @@ export function pseudoWeekNumber(state) {
 export function formatTemporalValue(kind, state) {
   const normalized = normalizeTemporalKind(kind ?? state?.kind);
   const st = { ...defaultTemporalState(normalized), ...(state ?? {}), kind: normalized };
-  const date = `20${pad2(st.year2)}-${pad2(st.month)}-${pad2((clampInt(st.weekIndex, 1, 4) - 1) * 7 + 1)}`;
+  const day = st.day == null ? (clampInt(st.weekIndex, 1, 4) - 1) * 7 + 1 : st.day;
+  const date = `20${pad2(st.year2)}-${pad2(st.month)}-${pad2(day)}`;
   const time = `${pad2(st.hour)}:${pad2(st.minute)}:${pad2(st.second)}`;
 
   if (normalized === 'time') return time;
   if (normalized === 'month') return `20${pad2(st.year2)}-${pad2(st.month)}`;
-  if (normalized === 'week') return `20${pad2(st.year2)}-W${pad2(pseudoWeekNumber(st))}`;
+  if (normalized === 'week') return `20${pad2(st.year2)}-W${pad2(st.week == null ? pseudoWeekNumber(st) : st.week)}`;
   if (normalized === 'datetime-local') return `${date}T${time}`;
   return date;
 }

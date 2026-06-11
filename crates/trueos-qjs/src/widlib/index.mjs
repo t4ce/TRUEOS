@@ -1,4 +1,4 @@
-export { parseHtmlToWidgets, domToWidgets, nodeToWidgets } from './fromDom.mjs';
+export { domToWidgets, nodeToWidgets } from './fromDom.mjs';
 export { collectWidgetStats, flattenWidgetTree, walkWidgets } from './tree.mjs';
 export { createWidgetRegistry, defaultRegistry } from './registry.mjs';
 export * from './widgets/index.mjs';
