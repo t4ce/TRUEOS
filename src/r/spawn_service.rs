@@ -581,10 +581,6 @@ fn spawn_truesurfer_parse_pool(spawner: Spawner) -> SpawnAttempt {
     spawn_bool_result_to_attempt(crate::surfer::spawn_truesurfer_parse_pool(spawner))
 }
 
-fn spawn_ui3_asset_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |_ap1_spawner| crate::ui3::ui3_asset_service_task())
-}
-
 fn spawn_ui3_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |_ap1_spawner| crate::ui3::ui3_service_task())
 }
@@ -1026,9 +1022,9 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 #[cfg(feature = "trueos_rdp")]
-const TASK_COUNT: usize = 51;
-#[cfg(not(feature = "trueos_rdp"))]
 const TASK_COUNT: usize = 50;
+#[cfg(not(feature = "trueos_rdp"))]
+const TASK_COUNT: usize = 49;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1229,14 +1225,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         0,
         &SURFER_PARSE_POOL_STARTED,
         spawn_truesurfer_parse_pool,
-    ),
-    TaskSpec::enabled_gated(
-        "ui3-asset-service",
-        crate::r::readiness::BACKGROUND_AP_WORKER_READY
-            | crate::r::readiness::UI3_INTEL_PRESENT_READY,
-        intel_cursor_service_gate,
-        &UI3_ASSET_SERVICE_STARTED,
-        spawn_ui3_asset_service,
     ),
     TaskSpec::enabled_gated(
         "ui3-service",

@@ -152,6 +152,7 @@ const RGB_PLANE_PROBE_GPU_STRIDE: u64 = 0x0010_0000;
 static PRIMARY_BOOT_SURFACE_INIT: AtomicBool = AtomicBool::new(false);
 static PRIMARY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
 static PRIMARY_SURFACE: Mutex<Option<PrimarySurface>> = Mutex::new(None);
+static PRIMARY_PLANE_SOURCE_BINDING: Mutex<Option<PrimaryPlaneSourceBinding>> = Mutex::new(None);
 static UI2_BASE_SURFACE: Mutex<Option<DisplayRgba8Surface>> = Mutex::new(None);
 static UI2_FRAME_SURFACE: Mutex<Option<DisplayRgba8Surface>> = Mutex::new(None);
 static OVERLAY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
@@ -231,6 +232,40 @@ struct PrimarySurface {
 
 unsafe impl Send for PrimarySurface {}
 unsafe impl Sync for PrimarySurface {}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PrimaryPlaneSourceFormat {
+    Xrgb8888,
+    Xbgr8888,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct PrimaryPlaneSource {
+    pub(crate) phys: u64,
+    pub(crate) gpu: u64,
+    pub(crate) byte_len: usize,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) pitch_bytes: u32,
+    pub(crate) format: PrimaryPlaneSourceFormat,
+    pub(crate) src_x: u32,
+    pub(crate) src_y: u32,
+    pub(crate) dst_x: u32,
+    pub(crate) dst_y: u32,
+    pub(crate) dst_w: u32,
+    pub(crate) dst_h: u32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct PrimaryPlaneSourceBinding {
+    phys: u64,
+    gpu: u64,
+    byte_len: usize,
+    width: u32,
+    height: u32,
+    pitch_bytes: u32,
+    format: PrimaryPlaneSourceFormat,
+}
 
 #[derive(Copy, Clone)]
 struct DisplayRgba8Surface {
@@ -1186,6 +1221,131 @@ pub(super) fn notify_primary_surface_external_write(
         crate::intel::dma_flush(unsafe { surface.virt.add(flush_offset) }, flush_bytes);
     }
     notify_primary_surface_present(surface, reason, byte_len)
+}
+
+pub(crate) fn set_primary_plane_source(source: PrimaryPlaneSource, reason: &str) -> bool {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return false;
+    };
+    let Some(primary) = *PRIMARY_SURFACE.lock() else {
+        return false;
+    };
+    if source.phys == 0
+        || source.gpu == 0
+        || source.byte_len == 0
+        || source.width == 0
+        || source.height == 0
+        || source.dst_w == 0
+        || source.dst_h == 0
+    {
+        return false;
+    }
+    let Some(surface_reg) = u32::try_from(source.gpu).ok() else {
+        return false;
+    };
+    let Some(stride_reg) = plane_stride_reg_value(source.pitch_bytes) else {
+        return false;
+    };
+
+    let src_w = source.width.saturating_sub(source.src_x);
+    let src_h = source.height.saturating_sub(source.src_y);
+    let dst_w = source
+        .dst_w
+        .min(src_w)
+        .min(primary.width.saturating_sub(source.dst_x));
+    let dst_h = source
+        .dst_h
+        .min(src_h)
+        .min(primary.height.saturating_sub(source.dst_y));
+    if dst_w == 0 || dst_h == 0 {
+        return false;
+    }
+
+    let min_pitch = source
+        .width
+        .saturating_mul(core::mem::size_of::<u32>() as u32);
+    let min_bytes = (source.height as usize)
+        .saturating_sub(1)
+        .saturating_mul(source.pitch_bytes as usize)
+        .saturating_add(min_pitch as usize);
+    if source.pitch_bytes < min_pitch || source.byte_len < min_bytes {
+        return false;
+    }
+
+    let binding = PrimaryPlaneSourceBinding {
+        phys: source.phys,
+        gpu: source.gpu,
+        byte_len: source.byte_len,
+        width: source.width,
+        height: source.height,
+        pitch_bytes: source.pitch_bytes,
+        format: source.format,
+    };
+    let mut mapped_now = false;
+    if *PRIMARY_PLANE_SOURCE_BINDING.lock() != Some(binding) {
+        if !crate::intel::map_display_scanout_ggtt(dev, source.phys, source.byte_len, source.gpu) {
+            crate::log!(
+                "intel/display: primary-plane-source failed reason={} cause=ggtt gpu=0x{:X} phys=0x{:X} bytes=0x{:X}\n",
+                reason,
+                source.gpu,
+                source.phys,
+                source.byte_len
+            );
+            return false;
+        }
+        crate::intel::ggtt_invalidate(dev);
+        *PRIMARY_PLANE_SOURCE_BINDING.lock() = Some(binding);
+        mapped_now = true;
+    }
+
+    let pipe = primary.pipe;
+    let ctl_before = crate::intel::mmio_read(dev, pipe.plane_ctl_off);
+    let ctl_enabled = primary_plane_ctl_enabled_for_format(ctl_before, source.format);
+    let color_ctl_off = pipe.plane_ctl_off + UNI_PLANE_COLOR_CTL_OFF;
+    let color_ctl = crate::intel::mmio_read(dev, color_ctl_off);
+    crate::intel::mmio_write(dev, pipe.plane_stride_off, stride_reg);
+    crate::intel::mmio_write(
+        dev,
+        pipe.plane_ctl_off + UNI_PLANE_POS_OFF,
+        plane_pos_reg_value(source.dst_x, source.dst_y),
+    );
+    crate::intel::mmio_write(
+        dev,
+        pipe.plane_ctl_off + UNI_PLANE_SIZE_OFF,
+        plane_size_reg_value(dst_w, dst_h),
+    );
+    crate::intel::mmio_write(
+        dev,
+        pipe.plane_ctl_off + UNI_PLANE_OFFSET_OFF,
+        plane_pos_reg_value(source.src_x, source.src_y),
+    );
+    crate::intel::mmio_write(
+        dev,
+        color_ctl_off,
+        plane_color_ctl_alpha(color_ctl, OverlayAlphaMode::Opaque),
+    );
+    crate::intel::mmio_write(dev, pipe.plane_ctl_off, ctl_enabled);
+    crate::intel::mmio_write(dev, pipe.plane_surf_off, surface_reg);
+
+    let surf_after = crate::intel::mmio_read(dev, pipe.plane_surf_off);
+    intel_display_verbose_log!(
+        "intel/display: primary-plane-source reason={} pipe={} ok={} mapped={} fmt={:?} src={}x{} dst={}x{} size={}x{} pitch=0x{:X} surf=0x{:08X} after=0x{:08X}\n",
+        reason,
+        pipe.name,
+        (surf_after == surface_reg) as u8,
+        mapped_now as u8,
+        source.format,
+        source.src_x,
+        source.src_y,
+        source.dst_x,
+        source.dst_y,
+        dst_w,
+        dst_h,
+        source.pitch_bytes,
+        surface_reg,
+        surf_after
+    );
+    surf_after == surface_reg
 }
 
 pub(crate) fn present_rgba_primary(
@@ -2367,10 +2527,17 @@ fn wait_for_plane_live(
 }
 
 fn primary_plane_ctl_enabled(ctl_before: u32) -> u32 {
-    let order_bits = match PRIMARY_FORMAT_PROBE_MODE {
-        PRIMARY_FORMAT_PROBE_XRGB => 0,
-        PRIMARY_FORMAT_PROBE_XBGR => PLANE_CTL_ORDER_RGBX,
-        _ => 0,
+    let format = match PRIMARY_FORMAT_PROBE_MODE {
+        PRIMARY_FORMAT_PROBE_XBGR => PrimaryPlaneSourceFormat::Xbgr8888,
+        _ => PrimaryPlaneSourceFormat::Xrgb8888,
+    };
+    primary_plane_ctl_enabled_for_format(ctl_before, format)
+}
+
+fn primary_plane_ctl_enabled_for_format(ctl_before: u32, format: PrimaryPlaneSourceFormat) -> u32 {
+    let order_bits = match format {
+        PrimaryPlaneSourceFormat::Xrgb8888 => 0,
+        PrimaryPlaneSourceFormat::Xbgr8888 => PLANE_CTL_ORDER_RGBX,
     };
     (ctl_before
         & !(PLANE_CTL_ENABLE

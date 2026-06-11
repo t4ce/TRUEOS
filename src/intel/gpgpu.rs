@@ -771,7 +771,7 @@ const DIRECT_RCS_RING_BYTES: usize = 4096;
 const DIRECT_RCS_CONTEXT_BYTES: usize = 22 * 4096;
 const DIRECT_RCS_BATCH_BYTES: usize = 64 * 1024;
 const DIRECT_RCS_RESULT_BYTES: usize = 4096;
-const DIRECT_RCS_PPGTT_PT_COUNT: usize = 128;
+const DIRECT_RCS_PPGTT_PT_COUNT: usize = 256;
 const DIRECT_RCS_PPGTT_BYTES: usize = (3 + DIRECT_RCS_PPGTT_PT_COUNT) * 4096;
 const DIRECT_RCS_LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
 const DIRECT_RCS_BATCH_START_DWORDS: usize = 4;
@@ -4621,6 +4621,14 @@ pub(crate) fn sprite64_worklist_primary(
     sprite64_worklist_primary_inner(placements, present, present_reason)
 }
 
+pub(crate) fn sprite64_worklist_surface(
+    placements: &[GpgpuSprite64Placement],
+    dst: GpgpuRgba8Surface,
+    reason: &str,
+) -> Option<GpgpuShellAtlasWorklistResult> {
+    sprite64_worklist_surface_inner(placements, dst, reason)
+}
+
 pub(crate) fn sprite64_primary_draw_bounds() -> Option<(i32, i32)> {
     let target = super::display::primary_surface_gpgpu_marker_target()?;
     if target.virt.is_null()
@@ -4771,6 +4779,126 @@ fn sprite64_worklist_primary_inner<T: Sprite64PlacementDesc>(
         last_slot,
         last_dst_xy,
         presented,
+    })
+}
+
+fn sprite64_worklist_surface_inner<T: Sprite64PlacementDesc>(
+    placements: &[T],
+    dst: GpgpuRgba8Surface,
+    reason: &str,
+) -> Option<GpgpuShellAtlasWorklistResult> {
+    let total_start_tick = direct_rcs_now_tick();
+    if !dst.is_valid()
+        || dst.width < SPRITE64_WORKLIST_CELL_PIXELS
+        || dst.height < SPRITE64_WORKLIST_CELL_PIXELS
+        || placements.is_empty()
+    {
+        return None;
+    }
+    let atlas_start_tick = direct_rcs_now_tick();
+    let atlas = sprite64_worklist_atlas_once()?;
+    let atlas_ms = direct_rcs_elapsed_ms_since(atlas_start_tick);
+    let desc_start_tick = direct_rcs_now_tick();
+    let desc = sprite64_worklist_desc_buffer_once()?;
+    let desc_ms = direct_rcs_elapsed_ms_since(desc_start_tick);
+    let count = placements
+        .len()
+        .min(SPRITE64_WORKLIST_MAX_DESCS)
+        .min(atlas.slots as usize);
+    if count == 0 {
+        return None;
+    }
+
+    let max_x = dst.width.saturating_sub(SPRITE64_WORKLIST_CELL_PIXELS) as i32;
+    let max_y = dst.height.saturating_sub(SPRITE64_WORKLIST_CELL_PIXELS) as i32;
+    let mut last_slot = 0u16;
+    let mut last_dst_xy = GpgpuPoint::new(0, 0);
+    let desc_write_start_tick = direct_rcs_now_tick();
+    let _desc_guard = RECT_WORKLIST_DESC_SUBMIT_LOCK.lock();
+    unsafe {
+        core::ptr::write_bytes(desc.virt, 0, desc.bytes);
+        let descs = desc.virt as *mut Sprite64WorklistRgba8Desc;
+        for (index, placement) in placements.iter().take(count).enumerate() {
+            let slot = placement.slot();
+            if slot >= atlas.slots {
+                return None;
+            }
+            let atlas_x = (u32::from(slot) % atlas.columns) * SPRITE64_WORKLIST_CELL_PIXELS;
+            let atlas_y = (u32::from(slot) / atlas.columns) * SPRITE64_WORKLIST_CELL_PIXELS;
+            let dst_x = placement.dst_x().clamp(0, max_x);
+            let dst_y = placement.dst_y().clamp(0, max_y);
+            let desc_value = Sprite64WorklistRgba8Desc {
+                atlas_xy: ((atlas_y & 0xFFFF) << 16) | (atlas_x & 0xFFFF),
+                dst_xy: (((dst_y as u32) & 0xFFFF) << 16) | ((dst_x as u32) & 0xFFFF),
+                flags: placement.flags(),
+                color_rgba: placement.color_rgba(),
+            };
+            core::ptr::write_volatile(descs.add(index), desc_value);
+            last_slot = slot;
+            last_dst_xy = GpgpuPoint::new(dst_x, dst_y);
+        }
+    }
+    super::dma_flush(desc.virt, desc.bytes);
+    let desc_write_ms = direct_rcs_elapsed_ms_since(desc_write_start_tick);
+
+    let params = Sprite64WorklistRgba8Params {
+        atlas_gpu: atlas.surface.gpu,
+        dst_gpu: dst.gpu,
+        desc_gpu: desc.gpu,
+        atlas_pitch_bytes: atlas.surface.pitch_bytes,
+        dst_pitch_bytes: dst.pitch_bytes,
+        desc_base: 0,
+        desc_count: count as u32,
+    };
+    let walkers = sprite64_worklist_walker_count(count);
+
+    let submit_start_tick = direct_rcs_now_tick();
+    let submitted = submit_sprite64_worklist(atlas.surface, dst, desc, params);
+    let submit_ms = direct_rcs_elapsed_ms_since(submit_start_tick);
+    let total_ms = direct_rcs_elapsed_ms_since(total_start_tick);
+    if total_ms >= 50 {
+        crate::log!(
+            "intel/gpgpu: sprite64-worklist-surface reason={} requested={} desc={} walkers={} submitted={} atlas_ms={} desc_ms={} desc_write_ms={} submit_ms={} total_ms={} atlas_gpu=0x{:X} desc_gpu=0x{:X} dst_gpu=0x{:X} dst={}x{} pitch={} slots={}\n",
+            reason,
+            placements.len(),
+            count,
+            walkers,
+            submitted as u8,
+            atlas_ms,
+            desc_ms,
+            desc_write_ms,
+            submit_ms,
+            total_ms,
+            atlas.surface.gpu,
+            desc.gpu,
+            dst.gpu,
+            dst.width,
+            dst.height,
+            dst.pitch_bytes,
+            atlas.slots
+        );
+    }
+
+    Some(GpgpuShellAtlasWorklistResult {
+        ok: submitted,
+        submitted,
+        requested: placements.len(),
+        descriptors: count,
+        walkers,
+        copied_pixels: count
+            .saturating_mul(SPRITE64_WORKLIST_CELL_PIXELS as usize)
+            .saturating_mul(SPRITE64_WORKLIST_CELL_PIXELS as usize),
+        submit_ms,
+        present_ms: 0,
+        total_ms,
+        atlas_gpu: atlas.surface.gpu,
+        desc_gpu: desc.gpu,
+        primary_width: dst.width,
+        primary_height: dst.height,
+        slots: atlas.slots,
+        last_slot,
+        last_dst_xy,
+        presented: false,
     })
 }
 
@@ -7681,6 +7809,28 @@ fn submit_sprite64_worklist(
     } else {
         0
     };
+    if observed != SPRITE64_WORKLIST_POST_MARKER {
+        crate::log!(
+            "intel/gpgpu: sprite64-worklist submit failed forcewake={} mapped={} ppgtt={} kernel={} atlas={} dst={} desc={} batch={} submitted={} observed=0x{:X} want=0x{:X} upload_gpu=0x{:X} atlas_gpu=0x{:X} dst_gpu=0x{:X} dst_bytes=0x{:X} desc_gpu=0x{:X} desc_count={}\n",
+            forcewake_ok as u8,
+            mapped_ok as u8,
+            ppgtt_ok as u8,
+            kernel_ppgtt_ok as u8,
+            atlas_ppgtt_ok as u8,
+            dst_ppgtt_ok as u8,
+            desc_ppgtt_ok as u8,
+            batch_ok as u8,
+            submitted as u8,
+            observed,
+            SPRITE64_WORKLIST_POST_MARKER,
+            upload.gpu,
+            atlas.gpu,
+            dst.gpu,
+            dst.bytes,
+            desc.gpu,
+            params.desc_count
+        );
+    }
     observed == SPRITE64_WORKLIST_POST_MARKER
 }
 

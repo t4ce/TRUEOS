@@ -1,9 +1,9 @@
 use alloc::vec::Vec;
 
 use serde::Deserialize;
-use spin::{Mutex, Once};
+use spin::Once;
 
-use super::{AthlasBucketTexture, AthlasResolvedGlyph};
+use super::AthlasResolvedGlyph;
 use crate::ui3::althlasfont::athlasmetrics::AthlasGlyphRegion;
 
 pub const TWEMOJI_TEX_ID: u32 = 4_840;
@@ -25,23 +25,7 @@ struct TwemojiAtlas {
     unplaced: Vec<u32>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct TwemojiRuntime {
-    ready: bool,
-    ready_seq: u32,
-    texture: AthlasBucketTexture,
-}
-
 static TWEMOJI_ATLAS_SET: Once<Option<TwemojiAtlasSet>> = Once::new();
-static TWEMOJI_RUNTIME: Mutex<TwemojiRuntime> = Mutex::new(TwemojiRuntime {
-    ready: false,
-    ready_seq: 0,
-    texture: AthlasBucketTexture {
-        tex_id: 0,
-        width: 0,
-        height: 0,
-    },
-});
 
 fn atlas_set() -> Option<&'static TwemojiAtlasSet> {
     TWEMOJI_ATLAS_SET
@@ -60,33 +44,17 @@ pub fn twemoji_cell_height_px() -> u16 {
     atlas_set().map(|set| set.atlas.cell_h).unwrap_or(0)
 }
 
-pub fn twemoji_reset_state() {
-    let mut runtime = TWEMOJI_RUNTIME.lock();
-    *runtime = TwemojiRuntime::default();
-}
+pub fn twemoji_reset_state() {}
 
-pub fn twemoji_register_texture(tex_id: u32, width: u32, height: u32) {
-    let mut runtime = TWEMOJI_RUNTIME.lock();
-    runtime.texture = AthlasBucketTexture {
-        tex_id,
-        width,
-        height,
-    };
-}
+pub fn twemoji_register_texture(_tex_id: u32, _width: u32, _height: u32) {}
 
 pub fn twemoji_mark_ready() -> Option<u32> {
-    let mut runtime = TWEMOJI_RUNTIME.lock();
-    if runtime.texture.tex_id == 0 {
-        return None;
-    }
-    runtime.ready = true;
-    runtime.ready_seq = runtime.ready_seq.wrapping_add(1).max(1);
-    Some(runtime.ready_seq)
+    None
 }
 
 #[inline]
 pub fn twemoji_ready() -> bool {
-    TWEMOJI_RUNTIME.lock().ready
+    false
 }
 
 pub fn twemoji_lookup_glyph_region(ch: char) -> Option<AthlasGlyphRegion> {
@@ -143,12 +111,10 @@ pub fn twemoji_slot_count() -> u16 {
 
 pub fn twemoji_resolve_glyph(ch: char) -> Option<AthlasResolvedGlyph> {
     let region = twemoji_lookup_glyph_region(ch)?;
-    let runtime = TWEMOJI_RUNTIME.lock();
-    let texture = (runtime.texture.tex_id != 0).then_some(runtime.texture);
     Some(AthlasResolvedGlyph {
         region,
-        texture,
-        ready: runtime.ready,
-        ready_seq: runtime.ready_seq,
+        texture: None,
+        ready: false,
+        ready_seq: 0,
     })
 }

@@ -1,23 +1,9 @@
-use alloc::vec::Vec;
-
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use serde_json::Value;
-use trueos_gfx_core::Rgba8;
-
-use super::Ui3Point;
 
 const TASK_NAME: &str = "ui3-service";
 const UI3_SERVICE_IDLE_MS: u64 = 16;
 const UI3_LAYOUT_TEXT_NODE_MAX: usize = 512;
-const UI3_LAYOUT_PLACEMENT_MAX: usize = 4096;
-const UI3_LAYOUT_FONT_TIER_HALF: u8 = 1;
-const UI3_LAYOUT_TEXT_COLOR: Rgba8 = Rgba8 {
-    r: 0,
-    g: 0,
-    b: 0,
-    a: 255,
-};
-const UI3_LAYOUT_SPRITE64_BATCH_MAX: usize = super::font::gpgpu_font::UI3_FONT_SPRITE64_BATCH_MAX;
 const UI3_WHEEL_EVENT_BATCH_CAP: usize = 64;
 const UI3_WHEEL_SCROLL_PX_PER_NOTCH: f32 = 72.0;
 
@@ -28,7 +14,7 @@ struct Ui3ServiceStats {
 }
 
 #[derive(Clone, Debug, Default)]
-struct Ui3RetainedTextScene {
+struct Ui3Scene {
     frame: crate::surfer::Ui3RenderTreeFrame,
     scroll_y: f32,
     content_height: u32,
@@ -45,11 +31,11 @@ struct Ui3WheelDrain {
 pub async fn ui3_service_task() {
     let _task_guard = crate::r::spawn_service::task_run_guard(TASK_NAME);
     crate::log!(
-        "ui3-service: starting sink=render-tree-text-primary font=lucida-half mode=single-slot scroll=wheel-redraw\n"
+        "ui3-service: starting sink=render-tree-inspect-only font=disabled scroll=state-only\n"
     );
 
     let mut stats = Ui3ServiceStats::default();
-    let mut scene = Ui3RetainedTextScene::default();
+    let mut scene = Ui3Scene::default();
     let mut wheel = Ui3WheelDrain::default();
     loop {
         if crate::r::spawn_service::task_stop_requested(TASK_NAME) {
@@ -62,11 +48,24 @@ pub async fn ui3_service_task() {
         }
 
         let wheel_delta = drain_ui3_wheel_delta(&mut wheel);
-        let mut redraw_for_scroll = false;
         if wheel_delta != 0 && !scene.frame.layout_trace_json.is_empty() {
             scene.scroll_y =
                 (scene.scroll_y - (wheel_delta as f32 * UI3_WHEEL_SCROLL_PX_PER_NOTCH)).max(0.0);
-            redraw_for_scroll = true;
+            scene.scroll_y = clamp_scroll_y_for_scene(
+                scene.scroll_y,
+                scene.content_height,
+                scene.viewport_height,
+            );
+            crate::log!(
+                "ui3-service: scroll-state browser={} seq={} scroll_y={} content_height={} viewport={}x{} presented=0 url={}\n",
+                scene.frame.browser_instance_id,
+                scene.frame.seq,
+                scene.scroll_y as u32,
+                scene.content_height,
+                scene.viewport_width,
+                scene.viewport_height,
+                scene.frame.url
+            );
         }
 
         let mut took_any = false;
@@ -79,11 +78,7 @@ pub async fn ui3_service_task() {
             took_any = true;
             stats.frames_taken = stats.frames_taken.saturating_add(1);
             scene.frame = frame;
-            consume_render_tree_frame(&mut scene, stats.frames_taken, false);
-        }
-
-        if redraw_for_scroll && !took_any {
-            consume_render_tree_frame(&mut scene, stats.frames_taken, true);
+            consume_render_tree_frame(&mut scene, stats.frames_taken);
         }
 
         if !took_any {
@@ -93,15 +88,11 @@ pub async fn ui3_service_task() {
     }
 }
 
-fn consume_render_tree_frame(
-    scene: &mut Ui3RetainedTextScene,
-    taken_seq: u32,
-    scroll_redraw: bool,
-) {
-    let present = redraw_layout_text_primary(scene, scroll_redraw);
+fn consume_render_tree_frame(scene: &mut Ui3Scene, taken_seq: u32) {
+    let present = inspect_layout(scene);
     let frame = &scene.frame;
     crate::log!(
-        "ui3-service: frame taken={} browser={} seq={} render_hash={} layout_hash={} render_bytes={} layout_bytes={} scroll_y={} scroll_redraw={} content_height={} viewport={}x{} text_nodes={} placements={} clipped={} batches={} clear_ok={} clear_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
+        "ui3-service: frame taken={} browser={} seq={} render_hash={} layout_hash={} render_bytes={} layout_bytes={} scroll_y={} scroll_redraw=0 content_height={} viewport={}x{} text_nodes={} placements=0 clipped=0 batches=0 clear_ok=0 clear_ms=0 presented=0 submit_ok=0 submit_ms=0 present_ms=0 total_ms={} url={}\n",
         taken_seq,
         frame.browser_instance_id,
         frame.seq,
@@ -110,44 +101,22 @@ fn consume_render_tree_frame(
         frame.render_tree_json.len(),
         frame.layout_trace_json.len(),
         scene.scroll_y as u32,
-        scroll_redraw as u8,
         scene.content_height,
         scene.viewport_width,
         scene.viewport_height,
         present.text_nodes,
-        present.placements,
-        present.clipped,
-        present.batches,
-        present.clear_ok as u8,
-        present.clear_ms,
-        present.presented as u8,
-        present.submit_ok as u8,
-        present.submit_ms,
-        present.present_ms,
         present.total_ms,
         frame.url
     );
 }
 
 #[derive(Copy, Clone, Debug, Default)]
-struct Ui3LayoutPresentResult {
+struct Ui3LayoutInspectResult {
     text_nodes: usize,
-    placements: usize,
-    clipped: usize,
-    batches: usize,
-    clear_ok: bool,
-    clear_ms: u64,
-    presented: bool,
-    submit_ok: bool,
-    submit_ms: u64,
-    present_ms: u64,
     total_ms: u64,
 }
 
-fn redraw_layout_text_primary(
-    scene: &mut Ui3RetainedTextScene,
-    scroll_redraw: bool,
-) -> Ui3LayoutPresentResult {
+fn inspect_layout(scene: &mut Ui3Scene) -> Ui3LayoutInspectResult {
     let total_start = embassy_time_driver::now();
     let frame = &scene.frame;
     let Ok(value) = serde_json::from_str::<Value>(frame.layout_trace_json.as_str()) else {
@@ -157,7 +126,7 @@ fn redraw_layout_text_primary(
             frame.seq,
             frame.layout_trace_json.len()
         );
-        return Ui3LayoutPresentResult::default();
+        return Ui3LayoutInspectResult::default();
     };
 
     let Some(layout) = value
@@ -170,177 +139,51 @@ fn redraw_layout_text_primary(
             frame.browser_instance_id,
             frame.seq
         );
-        return Ui3LayoutPresentResult::default();
+        return Ui3LayoutInspectResult::default();
     };
 
-    let Some((max_dst_x, max_dst_y)) = crate::intel::gpgpu::sprite64_primary_draw_bounds() else {
-        return Ui3LayoutPresentResult::default();
-    };
-    scene.viewport_width = max_dst_x.saturating_add(64) as u32;
-    scene.viewport_height = max_dst_y.saturating_add(64) as u32;
+    if let Some((viewport_width, viewport_height)) = crate::intel::active_scanout_dimensions() {
+        scene.viewport_width = viewport_width;
+        scene.viewport_height = viewport_height;
+    }
     scene.content_height = json_f32_field(layout, "height")
         .map(|height| ceil_u32(height).max(scene.viewport_height))
         .unwrap_or(scene.viewport_height);
     scene.scroll_y =
         clamp_scroll_y_for_scene(scene.scroll_y, scene.content_height, scene.viewport_height);
 
-    let mut state = Ui3LayoutTextCollectState::default();
-    collect_layout_text_placements(layout, 0.0, -scene.scroll_y, &mut state);
-    let collected_placements = state.placements.len();
-    state
-        .placements
-        .retain(|placement| sprite64_placement_inside_primary(placement, max_dst_x, max_dst_y));
-    let clipped = collected_placements.saturating_sub(state.placements.len());
-
-    let clear = crate::intel::gpgpu::clear_primary_rgba8_white_stats();
-    let clear_ok = clear.as_ref().is_some_and(|stats| stats.submits > 0);
-    let clear_ms = clear.as_ref().map(|stats| stats.total_ms).unwrap_or(0);
-    if state.placements.is_empty() {
-        return Ui3LayoutPresentResult {
-            text_nodes: state.text_nodes,
-            placements: collected_placements,
-            clipped,
-            clear_ok,
-            clear_ms,
-            presented: clear_ok,
-            submit_ok: clear_ok,
-            total_ms: elapsed_ms_since(total_start),
-            ..Ui3LayoutPresentResult::default()
-        };
-    }
-
-    let Some(draw) = submit_primary_text_placements(state.placements.as_slice(), scroll_redraw)
-    else {
-        return Ui3LayoutPresentResult {
-            text_nodes: state.text_nodes,
-            placements: collected_placements,
-            clipped,
-            clear_ok,
-            clear_ms,
-            submit_ok: false,
-            total_ms: elapsed_ms_since(total_start),
-            ..Ui3LayoutPresentResult::default()
-        };
-    };
-
-    Ui3LayoutPresentResult {
-        text_nodes: state.text_nodes,
-        placements: collected_placements,
-        clipped,
-        batches: draw.batches,
-        clear_ok,
-        clear_ms,
-        presented: draw.presented,
-        submit_ok: clear_ok && draw.submit_ok,
-        submit_ms: draw.submit_ms,
-        present_ms: draw.present_ms,
+    Ui3LayoutInspectResult {
+        text_nodes: count_layout_text_nodes(layout, 0),
         total_ms: elapsed_ms_since(total_start),
     }
 }
 
-#[derive(Copy, Clone, Debug, Default)]
-struct Ui3LayoutTextSubmitResult {
-    batches: usize,
-    presented: bool,
-    submit_ok: bool,
-    submit_ms: u64,
-    present_ms: u64,
-}
-
-fn submit_primary_text_placements(
-    placements: &[crate::intel::gpgpu::GpgpuSprite64Placement],
-    scroll_redraw: bool,
-) -> Option<Ui3LayoutTextSubmitResult> {
-    if placements.is_empty() {
-        return None;
+fn count_layout_text_nodes(node: &Value, count: usize) -> usize {
+    if count >= UI3_LAYOUT_TEXT_NODE_MAX {
+        return count;
     }
-
-    let batch_count =
-        (placements.len() + UI3_LAYOUT_SPRITE64_BATCH_MAX - 1) / UI3_LAYOUT_SPRITE64_BATCH_MAX;
-    let mut aggregate = Ui3LayoutTextSubmitResult {
-        submit_ok: true,
-        ..Ui3LayoutTextSubmitResult::default()
-    };
-
-    for (batch_index, batch) in placements.chunks(UI3_LAYOUT_SPRITE64_BATCH_MAX).enumerate() {
-        let present = batch_index + 1 == batch_count;
-        let reason = if scroll_redraw {
-            "ui3-layout-text-scroll"
-        } else {
-            "ui3-layout-text-present"
-        };
-        let result = crate::intel::gpgpu::sprite64_worklist_primary(batch, present, reason)?;
-        aggregate.batches = aggregate.batches.saturating_add(1);
-        aggregate.presented |= present && result.presented;
-        aggregate.submit_ok &= result.ok;
-        aggregate.submit_ms = aggregate.submit_ms.saturating_add(result.submit_ms);
-        aggregate.present_ms = aggregate.present_ms.saturating_add(result.present_ms);
-    }
-
-    Some(aggregate)
-}
-
-fn sprite64_placement_inside_primary(
-    placement: &crate::intel::gpgpu::GpgpuSprite64Placement,
-    max_dst_x: i32,
-    max_dst_y: i32,
-) -> bool {
-    let x = placement.dst_x();
-    let y = placement.dst_y();
-    x >= 0 && y >= 0 && x <= max_dst_x && y <= max_dst_y
-}
-
-#[derive(Default)]
-struct Ui3LayoutTextCollectState {
-    text_nodes: usize,
-    placements: Vec<crate::intel::gpgpu::GpgpuSprite64Placement>,
-}
-
-fn collect_layout_text_placements(
-    node: &Value,
-    parent_x: f32,
-    parent_y: f32,
-    state: &mut Ui3LayoutTextCollectState,
-) {
-    if state.text_nodes >= UI3_LAYOUT_TEXT_NODE_MAX
-        || state.placements.len() >= UI3_LAYOUT_PLACEMENT_MAX
-    {
-        return;
-    }
-
-    let x = parent_x + json_f32_field(node, "x").unwrap_or(0.0);
-    let y = parent_y + json_f32_field(node, "y").unwrap_or(0.0);
-
+    let mut count = count;
     if node.get("kind").and_then(Value::as_str) == Some("text") {
-        if let Some(text) = node.get("text").and_then(Value::as_str)
-            && !text.is_empty()
+        if node
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.is_empty())
         {
-            state.text_nodes = state.text_nodes.saturating_add(1);
-            super::font::gpgpu_font::append_ui3_text_run_sprite64_placements(
-                &mut state.placements,
-                Ui3Point { x, y },
-                text,
-                UI3_LAYOUT_TEXT_COLOR,
-                UI3_LAYOUT_FONT_TIER_HALF,
-            );
-            if state.placements.len() > UI3_LAYOUT_PLACEMENT_MAX {
-                state.placements.truncate(UI3_LAYOUT_PLACEMENT_MAX);
-            }
+            count = count.saturating_add(1);
         }
-        return;
+        return count;
     }
 
     let Some(children) = node.get("children").and_then(Value::as_array) else {
-        return;
+        return count;
     };
     for child in children {
-        collect_layout_text_placements(child, x, y, state);
-        if state.text_nodes >= UI3_LAYOUT_TEXT_NODE_MAX
-            || state.placements.len() >= UI3_LAYOUT_PLACEMENT_MAX
-        {
+        count = count_layout_text_nodes(child, count);
+        if count >= UI3_LAYOUT_TEXT_NODE_MAX {
             break;
         }
     }
+    count
 }
 
 fn json_f32_field(node: &Value, key: &str) -> Option<f32> {
