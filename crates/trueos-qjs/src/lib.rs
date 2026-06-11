@@ -13,6 +13,7 @@ pub mod async_ops;
 pub mod async_fs;
 
 #[cfg(feature = "trueos")]
+#[path = "loader/mod.rs"]
 pub mod trueos_module_loader;
 
 #[cfg(feature = "trueos")]
@@ -50,6 +51,7 @@ pub mod qjs_diag;
 pub mod platform;
 
 #[cfg(feature = "trueos")]
+#[path = "lightning/lightningcss_native.rs"]
 pub mod lightningcss_native;
 
 #[cfg(feature = "trueos")]
