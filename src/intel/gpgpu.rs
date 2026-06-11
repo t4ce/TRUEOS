@@ -1630,6 +1630,16 @@ impl GpgpuSprite64Placement {
             color_rgba,
         }
     }
+
+    #[inline]
+    pub(crate) const fn dst_x(&self) -> i32 {
+        self.dst_x
+    }
+
+    #[inline]
+    pub(crate) const fn dst_y(&self) -> i32 {
+        self.dst_y
+    }
 }
 
 trait Sprite64PlacementDesc {
@@ -4609,6 +4619,20 @@ pub(crate) fn sprite64_worklist_primary(
     present_reason: &str,
 ) -> Option<GpgpuShellAtlasWorklistResult> {
     sprite64_worklist_primary_inner(placements, present, present_reason)
+}
+
+pub(crate) fn sprite64_primary_draw_bounds() -> Option<(i32, i32)> {
+    let target = super::display::primary_surface_gpgpu_marker_target()?;
+    if target.virt.is_null()
+        || target.width < SPRITE64_WORKLIST_CELL_PIXELS
+        || target.height < SPRITE64_WORKLIST_CELL_PIXELS
+    {
+        return None;
+    }
+    Some((
+        target.width.saturating_sub(SPRITE64_WORKLIST_CELL_PIXELS) as i32,
+        target.height.saturating_sub(SPRITE64_WORKLIST_CELL_PIXELS) as i32,
+    ))
 }
 
 fn sprite64_worklist_primary_inner<T: Sprite64PlacementDesc>(

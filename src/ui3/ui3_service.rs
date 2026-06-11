@@ -1,7 +1,6 @@
 use alloc::vec::Vec;
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use libm::roundf;
 use serde_json::Value;
 use trueos_gfx_core::Rgba8;
 
@@ -11,8 +10,6 @@ const TASK_NAME: &str = "ui3-service";
 const UI3_SERVICE_IDLE_MS: u64 = 16;
 const UI3_LAYOUT_TEXT_NODE_MAX: usize = 512;
 const UI3_LAYOUT_PLACEMENT_MAX: usize = 4096;
-const UI3_LAYOUT_RECT_NODE_MAX: usize = 512;
-const UI3_LAYOUT_RECT_MAX: usize = 2048;
 const UI3_LAYOUT_FONT_TIER_HALF: u8 = 1;
 const UI3_LAYOUT_TEXT_COLOR: Rgba8 = Rgba8 {
     r: 0,
@@ -20,6 +17,9 @@ const UI3_LAYOUT_TEXT_COLOR: Rgba8 = Rgba8 {
     b: 0,
     a: 255,
 };
+const UI3_LAYOUT_SPRITE64_BATCH_MAX: usize = super::font::gpgpu_font::UI3_FONT_SPRITE64_BATCH_MAX;
+const UI3_WHEEL_EVENT_BATCH_CAP: usize = 64;
+const UI3_WHEEL_SCROLL_PX_PER_NOTCH: f32 = 72.0;
 
 #[derive(Copy, Clone, Debug, Default)]
 struct Ui3ServiceStats {
@@ -27,14 +27,30 @@ struct Ui3ServiceStats {
     empty_polls: u32,
 }
 
+#[derive(Clone, Debug, Default)]
+struct Ui3RetainedTextScene {
+    frame: crate::surfer::Ui3RenderTreeFrame,
+    scroll_y: f32,
+    content_height: u32,
+    viewport_width: u32,
+    viewport_height: u32,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+struct Ui3WheelDrain {
+    read_seq: u64,
+}
+
 #[embassy_executor::task]
 pub async fn ui3_service_task() {
     let _task_guard = crate::r::spawn_service::task_run_guard(TASK_NAME);
     crate::log!(
-        "ui3-service: starting sink=render-tree-retained-image font=lucida-half mode=single-slot\n"
+        "ui3-service: starting sink=render-tree-text-primary font=lucida-half mode=single-slot scroll=wheel-redraw\n"
     );
 
     let mut stats = Ui3ServiceStats::default();
+    let mut scene = Ui3RetainedTextScene::default();
+    let mut wheel = Ui3WheelDrain::default();
     loop {
         if crate::r::spawn_service::task_stop_requested(TASK_NAME) {
             crate::log!(
@@ -43,6 +59,14 @@ pub async fn ui3_service_task() {
                 stats.empty_polls
             );
             return;
+        }
+
+        let wheel_delta = drain_ui3_wheel_delta(&mut wheel);
+        let mut redraw_for_scroll = false;
+        if wheel_delta != 0 && !scene.frame.layout_trace_json.is_empty() {
+            scene.scroll_y =
+                (scene.scroll_y - (wheel_delta as f32 * UI3_WHEEL_SCROLL_PX_PER_NOTCH)).max(0.0);
+            redraw_for_scroll = true;
         }
 
         let mut took_any = false;
@@ -54,7 +78,12 @@ pub async fn ui3_service_task() {
             };
             took_any = true;
             stats.frames_taken = stats.frames_taken.saturating_add(1);
-            consume_render_tree_frame(frame, stats.frames_taken);
+            scene.frame = frame;
+            consume_render_tree_frame(&mut scene, stats.frames_taken, false);
+        }
+
+        if redraw_for_scroll && !took_any {
+            consume_render_tree_frame(&mut scene, stats.frames_taken, true);
         }
 
         if !took_any {
@@ -64,54 +93,67 @@ pub async fn ui3_service_task() {
     }
 }
 
-fn consume_render_tree_frame(frame: crate::surfer::Ui3RenderTreeFrame, taken_seq: u32) {
-    let render_bytes = frame.render_tree_json.len();
-    let layout_bytes = frame.layout_trace_json.len();
-    let present = present_layout_text_once(&frame);
+fn consume_render_tree_frame(
+    scene: &mut Ui3RetainedTextScene,
+    taken_seq: u32,
+    scroll_redraw: bool,
+) {
+    let present = redraw_layout_text_primary(scene, scroll_redraw);
+    let frame = &scene.frame;
     crate::log!(
-        "ui3-service: frame taken={} browser={} seq={} render_hash={} layout_hash={} render_bytes={} layout_bytes={} rect_nodes={} rects={} text_nodes={} placements={} rect_ok={} rect_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} primary={}x{} url={}\n",
+        "ui3-service: frame taken={} browser={} seq={} render_hash={} layout_hash={} render_bytes={} layout_bytes={} scroll_y={} scroll_redraw={} content_height={} viewport={}x{} text_nodes={} placements={} clipped={} skipped_containers={} skipped_text_nodes={} batches={} clear_ok={} clear_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
         taken_seq,
         frame.browser_instance_id,
         frame.seq,
         frame.render_hash,
         frame.layout_hash,
-        render_bytes,
-        layout_bytes,
-        present.rect_nodes,
-        present.rects,
+        frame.render_tree_json.len(),
+        frame.layout_trace_json.len(),
+        scene.scroll_y as u32,
+        scroll_redraw as u8,
+        scene.content_height,
+        scene.viewport_width,
+        scene.viewport_height,
         present.text_nodes,
         present.placements,
-        present.rect_ok as u8,
-        present.rect_ms,
+        present.clipped,
+        present.skipped_containers,
+        present.skipped_text_nodes,
+        present.batches,
+        present.clear_ok as u8,
+        present.clear_ms,
         present.presented as u8,
         present.submit_ok as u8,
         present.submit_ms,
         present.present_ms,
         present.total_ms,
-        present.primary_width,
-        present.primary_height,
         frame.url
     );
 }
 
 #[derive(Copy, Clone, Debug, Default)]
 struct Ui3LayoutPresentResult {
-    rect_nodes: usize,
-    rects: usize,
     text_nodes: usize,
     placements: usize,
-    rect_ok: bool,
-    rect_ms: u64,
+    clipped: usize,
+    skipped_containers: usize,
+    skipped_text_nodes: usize,
+    batches: usize,
+    clear_ok: bool,
+    clear_ms: u64,
     presented: bool,
     submit_ok: bool,
     submit_ms: u64,
     present_ms: u64,
     total_ms: u64,
-    primary_width: u32,
-    primary_height: u32,
 }
 
-fn present_layout_text_once(frame: &crate::surfer::Ui3RenderTreeFrame) -> Ui3LayoutPresentResult {
+fn redraw_layout_text_primary(
+    scene: &mut Ui3RetainedTextScene,
+    scroll_redraw: bool,
+) -> Ui3LayoutPresentResult {
+    let total_start = embassy_time_driver::now();
+    let frame = &scene.frame;
     let Ok(value) = serde_json::from_str::<Value>(frame.layout_trace_json.as_str()) else {
         crate::log!(
             "ui3-service: layout json parse failed browser={} seq={} bytes={}\n",
@@ -121,6 +163,7 @@ fn present_layout_text_once(frame: &crate::surfer::Ui3RenderTreeFrame) -> Ui3Lay
         );
         return Ui3LayoutPresentResult::default();
     };
+
     let Some(layout) = value
         .get("trace")
         .and_then(|trace| trace.get("layout"))
@@ -134,112 +177,164 @@ fn present_layout_text_once(frame: &crate::surfer::Ui3RenderTreeFrame) -> Ui3Lay
         return Ui3LayoutPresentResult::default();
     };
 
-    let mut state = Ui3LayoutCollectState::default();
-    collect_layout_primitives(layout, 0.0, 0.0, &mut state);
+    let Some((max_dst_x, max_dst_y)) = crate::intel::gpgpu::sprite64_primary_draw_bounds() else {
+        return Ui3LayoutPresentResult::default();
+    };
+    scene.viewport_width = max_dst_x.saturating_add(64) as u32;
+    scene.viewport_height = max_dst_y.saturating_add(64) as u32;
+    scene.content_height = json_f32_field(layout, "height")
+        .map(|height| ceil_u32(height).max(scene.viewport_height))
+        .unwrap_or(scene.viewport_height);
+    scene.scroll_y =
+        clamp_scroll_y_for_scene(scene.scroll_y, scene.content_height, scene.viewport_height);
 
-    let background_result = state.background.and_then(|background| {
-        crate::intel::gpgpu::solid_rects_rgba8_over_primary(
-            core::slice::from_ref(&background),
-            false,
-        )
-    });
-    let rect_result = if state.rects.is_empty() {
-        None
-    } else {
-        crate::intel::gpgpu::solid_rects_rgba8_over_primary(
-            state.rects.as_slice(),
-            state.placements.is_empty(),
-        )
-    };
-    let background_ok = if state.background.is_some() {
-        background_result.map(|result| result.ok).unwrap_or(false)
-    } else {
-        true
-    };
-    let outlines_ok = if state.rects.is_empty() {
-        true
-    } else {
-        rect_result.map(|result| result.ok).unwrap_or(false)
-    };
-    let rect_ok = background_ok && outlines_ok;
-    let rect_ms = background_result
-        .map(|result| result.total_ms)
-        .unwrap_or(0)
-        .saturating_add(rect_result.map(|result| result.total_ms).unwrap_or(0));
+    let mut state = Ui3LayoutTextCollectState::default();
+    collect_layout_text_placements(layout, 0.0, -scene.scroll_y, &mut state);
+    let collected_placements = state.placements.len();
+    state
+        .placements
+        .retain(|placement| sprite64_placement_inside_primary(placement, max_dst_x, max_dst_y));
+    let clipped = collected_placements.saturating_sub(state.placements.len());
 
+    let clear = crate::intel::gpgpu::clear_primary_rgba8_white_stats();
+    let clear_ok = clear.as_ref().is_some_and(|stats| stats.submits > 0);
+    let clear_ms = clear.as_ref().map(|stats| stats.total_ms).unwrap_or(0);
     if state.placements.is_empty() {
+        log_layout_text_skips(frame, &state);
         return Ui3LayoutPresentResult {
-            rect_nodes: state.rect_nodes,
-            rects: state.rects.len(),
             text_nodes: state.text_nodes,
-            rect_ok,
-            rect_ms,
-            presented: rect_result.map(|result| result.presented).unwrap_or(false),
-            submit_ok: rect_ok,
+            placements: collected_placements,
+            clipped,
+            skipped_containers: state.skipped_containers,
+            skipped_text_nodes: state.skipped_text_nodes,
+            clear_ok,
+            clear_ms,
+            presented: clear_ok,
+            submit_ok: clear_ok,
+            total_ms: elapsed_ms_since(total_start),
             ..Ui3LayoutPresentResult::default()
         };
     }
 
-    let Some(result) = crate::intel::gpgpu::sprite64_worklist_primary(
-        state.placements.as_slice(),
-        true,
-        "ui3-layout-text-present-once",
-    ) else {
+    let Some(draw) = submit_primary_text_placements(state.placements.as_slice(), scroll_redraw)
+    else {
+        log_layout_text_skips(frame, &state);
         return Ui3LayoutPresentResult {
-            rect_nodes: state.rect_nodes,
-            rects: state.rects.len(),
             text_nodes: state.text_nodes,
-            placements: state.placements.len(),
-            rect_ok,
-            rect_ms,
+            placements: collected_placements,
+            clipped,
+            skipped_containers: state.skipped_containers,
+            skipped_text_nodes: state.skipped_text_nodes,
+            clear_ok,
+            clear_ms,
+            submit_ok: false,
+            total_ms: elapsed_ms_since(total_start),
             ..Ui3LayoutPresentResult::default()
         };
     };
 
+    log_layout_text_skips(frame, &state);
     Ui3LayoutPresentResult {
-        rect_nodes: state.rect_nodes,
-        rects: state.rects.len(),
         text_nodes: state.text_nodes,
-        placements: state.placements.len(),
-        rect_ok,
-        rect_ms,
-        presented: result.presented,
-        submit_ok: rect_ok && result.ok,
-        submit_ms: result.submit_ms,
-        present_ms: result.present_ms,
-        total_ms: result.total_ms,
-        primary_width: result.primary_width,
-        primary_height: result.primary_height,
+        placements: collected_placements,
+        clipped,
+        skipped_containers: state.skipped_containers,
+        skipped_text_nodes: state.skipped_text_nodes,
+        batches: draw.batches,
+        clear_ok,
+        clear_ms,
+        presented: draw.presented,
+        submit_ok: clear_ok && draw.submit_ok,
+        submit_ms: draw.submit_ms,
+        present_ms: draw.present_ms,
+        total_ms: elapsed_ms_since(total_start),
     }
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+struct Ui3LayoutTextSubmitResult {
+    batches: usize,
+    presented: bool,
+    submit_ok: bool,
+    submit_ms: u64,
+    present_ms: u64,
+}
+
+fn submit_primary_text_placements(
+    placements: &[crate::intel::gpgpu::GpgpuSprite64Placement],
+    scroll_redraw: bool,
+) -> Option<Ui3LayoutTextSubmitResult> {
+    if placements.is_empty() {
+        return None;
+    }
+
+    let batch_count =
+        (placements.len() + UI3_LAYOUT_SPRITE64_BATCH_MAX - 1) / UI3_LAYOUT_SPRITE64_BATCH_MAX;
+    let mut aggregate = Ui3LayoutTextSubmitResult {
+        submit_ok: true,
+        ..Ui3LayoutTextSubmitResult::default()
+    };
+
+    for (batch_index, batch) in placements.chunks(UI3_LAYOUT_SPRITE64_BATCH_MAX).enumerate() {
+        let present = batch_index + 1 == batch_count;
+        let reason = if scroll_redraw {
+            "ui3-layout-text-scroll"
+        } else {
+            "ui3-layout-text-present"
+        };
+        let result = crate::intel::gpgpu::sprite64_worklist_primary(batch, present, reason)?;
+        aggregate.batches = aggregate.batches.saturating_add(1);
+        aggregate.presented |= present && result.presented;
+        aggregate.submit_ok &= result.ok;
+        aggregate.submit_ms = aggregate.submit_ms.saturating_add(result.submit_ms);
+        aggregate.present_ms = aggregate.present_ms.saturating_add(result.present_ms);
+    }
+
+    Some(aggregate)
+}
+
+fn sprite64_placement_inside_primary(
+    placement: &crate::intel::gpgpu::GpgpuSprite64Placement,
+    max_dst_x: i32,
+    max_dst_y: i32,
+) -> bool {
+    let x = placement.dst_x();
+    let y = placement.dst_y();
+    x >= 0 && y >= 0 && x <= max_dst_x && y <= max_dst_y
 }
 
 #[derive(Default)]
-struct Ui3LayoutCollectState {
-    background: Option<crate::intel::gpgpu::GpgpuSolidRect>,
-    rect_nodes: usize,
-    rects: Vec<crate::intel::gpgpu::GpgpuSolidRect>,
+struct Ui3LayoutTextCollectState {
     text_nodes: usize,
+    skipped_containers: usize,
+    skipped_text_nodes: usize,
     placements: Vec<crate::intel::gpgpu::GpgpuSprite64Placement>,
 }
 
-fn collect_layout_primitives(
+fn collect_layout_text_placements(
     node: &Value,
     parent_x: f32,
     parent_y: f32,
-    state: &mut Ui3LayoutCollectState,
+    state: &mut Ui3LayoutTextCollectState,
 ) {
-    if state.text_nodes >= UI3_LAYOUT_TEXT_NODE_MAX && state.rect_nodes >= UI3_LAYOUT_RECT_NODE_MAX
+    if state.text_nodes >= UI3_LAYOUT_TEXT_NODE_MAX
+        || state.placements.len() >= UI3_LAYOUT_PLACEMENT_MAX
     {
         return;
     }
 
     let x = parent_x + json_f32_field(node, "x").unwrap_or(0.0);
     let y = parent_y + json_f32_field(node, "y").unwrap_or(0.0);
-    let kind = node.get("kind").and_then(Value::as_str);
-    if kind == Some("text") {
-        if state.text_nodes < UI3_LAYOUT_TEXT_NODE_MAX
-            && state.placements.len() < UI3_LAYOUT_PLACEMENT_MAX
-            && let Some(text) = node.get("text").and_then(Value::as_str)
+    if should_skip_layout_text_container(node) {
+        state.skipped_containers = state.skipped_containers.saturating_add(1);
+        state.skipped_text_nodes = state
+            .skipped_text_nodes
+            .saturating_add(count_text_nodes_in_layout_subtree(node));
+        return;
+    }
+
+    if node.get("kind").and_then(Value::as_str) == Some("text") {
+        if let Some(text) = node.get("text").and_then(Value::as_str)
             && !text.is_empty()
         {
             state.text_nodes = state.text_nodes.saturating_add(1);
@@ -257,142 +352,64 @@ fn collect_layout_primitives(
         return;
     }
 
-    if kind == Some("block") && state.rect_nodes < UI3_LAYOUT_RECT_NODE_MAX {
-        collect_layout_block_rect(node, x, y, state);
-    }
-
     let Some(children) = node.get("children").and_then(Value::as_array) else {
         return;
     };
     for child in children {
-        collect_layout_primitives(child, x, y, state);
+        collect_layout_text_placements(child, x, y, state);
         if state.text_nodes >= UI3_LAYOUT_TEXT_NODE_MAX
-            && state.rect_nodes >= UI3_LAYOUT_RECT_NODE_MAX
+            || state.placements.len() >= UI3_LAYOUT_PLACEMENT_MAX
         {
             break;
         }
     }
 }
 
-fn collect_layout_block_rect(node: &Value, x: f32, y: f32, state: &mut Ui3LayoutCollectState) {
-    let tag_name = node.get("tagName").and_then(Value::as_str).unwrap_or("div");
-    let Some(rect) = layout_rect_from_node(node, x, y) else {
-        return;
-    };
-
-    if tag_name == "root" {
-        state.background = Some(crate::intel::gpgpu::GpgpuSolidRect {
-            rect,
-            color_rgba: rgba8_to_kernel_rgba(255, 255, 255, 255),
-        });
-        return;
+fn should_skip_layout_text_container(node: &Value) -> bool {
+    let tag_name = node.get("tagName").and_then(Value::as_str).unwrap_or("");
+    if tag_name == "dialog" {
+        return true;
+    }
+    if tag_name != "iframe" {
+        return false;
     }
 
-    state.rect_nodes = state.rect_nodes.saturating_add(1);
-    let color = layout_outline_color_rgba(tag_name);
-    push_rect_outline(&mut state.rects, rect, color);
+    node.get("key").and_then(Value::as_str) != Some("root:internal-iframe")
 }
 
-fn layout_rect_from_node(node: &Value, x: f32, y: f32) -> Option<crate::intel::gpgpu::GpgpuRect> {
-    let width = json_f32_field(node, "width")?;
-    let height = json_f32_field(node, "height")?;
-    if !width.is_finite() || !height.is_finite() || width < 1.0 || height < 1.0 {
-        return None;
-    }
-    Some(crate::intel::gpgpu::GpgpuRect::new(
-        round_i32(x)?,
-        round_i32(y)?,
-        round_u32(width)?.max(1),
-        round_u32(height)?.max(1),
-    ))
-}
-
-fn push_rect_outline(
-    out: &mut Vec<crate::intel::gpgpu::GpgpuSolidRect>,
-    rect: crate::intel::gpgpu::GpgpuRect,
-    color_rgba: u32,
-) {
-    if out.len() >= UI3_LAYOUT_RECT_MAX || rect.is_empty() {
-        return;
+fn count_text_nodes_in_layout_subtree(node: &Value) -> usize {
+    let mut total = 0usize;
+    if node.get("kind").and_then(Value::as_str) == Some("text")
+        && node
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.is_empty())
+    {
+        total = total.saturating_add(1);
     }
 
-    push_solid_rect(out, rect.x, rect.y, rect.width, 1, color_rgba);
-    if rect.height > 1 {
-        push_solid_rect(
-            out,
-            rect.x,
-            rect.y.saturating_add(rect.height.saturating_sub(1) as i32),
-            rect.width,
-            1,
-            color_rgba,
-        );
-    }
-    if rect.height > 2 {
-        push_solid_rect(out, rect.x, rect.y, 1, rect.height, color_rgba);
-        if rect.width > 1 {
-            push_solid_rect(
-                out,
-                rect.x.saturating_add(rect.width.saturating_sub(1) as i32),
-                rect.y,
-                1,
-                rect.height,
-                color_rgba,
-            );
+    if let Some(children) = node.get("children").and_then(Value::as_array) {
+        for child in children {
+            total = total.saturating_add(count_text_nodes_in_layout_subtree(child));
         }
     }
+    total
 }
 
-fn push_solid_rect(
-    out: &mut Vec<crate::intel::gpgpu::GpgpuSolidRect>,
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-    color_rgba: u32,
+fn log_layout_text_skips(
+    frame: &crate::surfer::Ui3RenderTreeFrame,
+    state: &Ui3LayoutTextCollectState,
 ) {
-    if out.len() >= UI3_LAYOUT_RECT_MAX || width == 0 || height == 0 {
+    if state.skipped_containers == 0 {
         return;
     }
-    out.push(crate::intel::gpgpu::GpgpuSolidRect {
-        rect: crate::intel::gpgpu::GpgpuRect::new(x, y, width, height),
-        color_rgba,
-    });
-}
-
-fn layout_outline_color_rgba(tag_name: &str) -> u32 {
-    match tag_name {
-        "iframe" => rgba8_to_kernel_rgba(72, 112, 255, 255),
-        "details" | "summary" => rgba8_to_kernel_rgba(56, 130, 210, 255),
-        "table" | "tbody" | "tr" | "td" | "th" => rgba8_to_kernel_rgba(25, 135, 84, 255),
-        "input" | "button" | "select" | "textarea" | "timeinput" | "dateinput" | "monthinput"
-        | "weekinput" | "datetimelocalinput" | "searchbutton" => {
-            rgba8_to_kernel_rgba(120, 120, 120, 255)
-        }
-        "svg" | "canvas" | "img" | "color" => rgba8_to_kernel_rgba(185, 75, 170, 255),
-        "hr" => rgba8_to_kernel_rgba(80, 80, 80, 255),
-        _ => rgba8_to_kernel_rgba(190, 190, 190, 255),
-    }
-}
-
-#[inline]
-const fn rgba8_to_kernel_rgba(r: u8, g: u8, b: u8, a: u8) -> u32 {
-    ((a as u32) << 24) | ((b as u32) << 16) | ((g as u32) << 8) | (r as u32)
-}
-
-fn round_i32(value: f32) -> Option<i32> {
-    if value.is_finite() && value >= i32::MIN as f32 && value <= i32::MAX as f32 {
-        Some(roundf(value) as i32)
-    } else {
-        None
-    }
-}
-
-fn round_u32(value: f32) -> Option<u32> {
-    if value.is_finite() && value >= 0.0 && value <= u32::MAX as f32 {
-        Some(roundf(value) as u32)
-    } else {
-        None
-    }
+    crate::log!(
+        "ui3-service: TODO skipped floating/embedded layout text browser={} seq={} containers={} text_nodes={} reason=needs-window-plane-or-embedded-surface-concept\n",
+        frame.browser_instance_id,
+        frame.seq,
+        state.skipped_containers,
+        state.skipped_text_nodes
+    );
 }
 
 fn json_f32_field(node: &Value, key: &str) -> Option<f32> {
@@ -402,4 +419,50 @@ fn json_f32_field(node: &Value, key: &str) -> Option<f32> {
     } else {
         None
     }
+}
+
+fn clamp_scroll_y_for_scene(scroll_y: f32, content_height: u32, viewport_height: u32) -> f32 {
+    if scroll_y <= 0.0 || content_height <= viewport_height {
+        return 0.0;
+    }
+    scroll_y.min(content_height.saturating_sub(viewport_height) as f32)
+}
+
+fn ceil_u32(value: f32) -> u32 {
+    if !value.is_finite() || value <= 0.0 {
+        return 0;
+    }
+    libm::ceilf(value).min(u32::MAX as f32) as u32
+}
+
+fn elapsed_ms_since(start: u64) -> u64 {
+    let now = embassy_time_driver::now();
+    let ticks = now.saturating_sub(start);
+    let hz = embassy_time_driver::TICK_HZ;
+    if hz == 0 {
+        0
+    } else {
+        ticks.saturating_mul(1000) / hz
+    }
+}
+
+fn drain_ui3_wheel_delta(state: &mut Ui3WheelDrain) -> i32 {
+    let mut out = [crate::usb2::hid::TrueosHidCursorEvent::default(); UI3_WHEEL_EVENT_BATCH_CAP];
+    let (next_seq, dropped, wrote) =
+        crate::usb2::hid::read_cursor_events_since(state.read_seq, out.as_mut_slice());
+    state.read_seq = next_seq;
+    let wheel_delta = out
+        .iter()
+        .take(wrote)
+        .fold(0i32, |sum, event| sum.saturating_add(event.wheel as i32));
+    if wheel_delta != 0 {
+        crate::log!(
+            "ui3-service: wheel events={} dropped={} delta={} read_seq={}\n",
+            wrote,
+            dropped,
+            wheel_delta,
+            state.read_seq
+        );
+    }
+    wheel_delta
 }
