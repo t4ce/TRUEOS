@@ -2,7 +2,7 @@
 
 `wid` is the renderer-agnostic widget description layer.
 
-It does not know about Pixi, Yoga, retained scenes, pointer harnesses, popup state, or capture handoff. It only turns an already-parsed DOM into a small tree of widget descriptors that another runtime can lay out and render.
+It does not know about retained scenes, pointer harnesses, popup state, or capture handoff. It only turns an already-parsed DOM into a small tree of widget descriptors that another runtime can lay out and render.
 
 ## Files
 
@@ -19,7 +19,7 @@ It does not know about Pixi, Yoga, retained scenes, pointer harnesses, popup sta
 
 ## Current To Do Upfront
 
-- Keep this library as plain `.mjs` with no Pixi/Yoga imports.
+- Keep this library as plain `.mjs` with no renderer or layout-engine imports.
 - Move only DOM-to-widget classification here first; leave rendering and layout in the current app.
 - Treat complex controls as descriptors before rebuilding their UI: `color`, `dialog`, `iframe`, `search`, and temporal inputs.
 - Stop remapping temporal inputs into custom picker widgets for the portable layer. Keep them as `input` with `meta.currentStatus = "defer-special-ui"`.
@@ -183,7 +183,7 @@ Legacy synthetic entries are registered so the existing app can be mapped later:
 
 ## Ported Widget Modules
 
-The old Pixi files in `src/widgets` are still the renderer implementation. The portable port lives under `src/wid/widgets` and is split like this:
+The portable widget layer lives under `src/wid/widgets` and is split like this:
 
 - `widgets/forms.mjs`: `button`, `input`, `textarea`, `select`, `search`, `searchrow`, `searchbutton`
 - `widgets/values.mjs`: `progress`, `meter`, `slider`, `sliderlabel`, `barrow`, `number`, `color`, temporal descriptors
@@ -195,8 +195,7 @@ These files export descriptor arrays plus pure helpers such as `classifyInput`, 
 
 Things that stay outside `wid` for now:
 
-- Pixi drawing
-- Yoga layout defaults
+- Render-tree layout and drawing
 - Hover and pointer events
 - Keyboard editing
 - Selection/caret rendering
