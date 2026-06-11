@@ -631,7 +631,7 @@ fn probe_hw_logo_decode() -> bool {
 }
 
 fn probe_zune_boot_logo_decode() -> bool {
-    let decoded = match crate::gfx::jpeg_codec::decode_jpeg_rgba(PRIMARY_BOOT_LOGO_JPEG) {
+    let decoded = match crate::ui3::img::jpeg_codec::decode_jpeg_rgba(PRIMARY_BOOT_LOGO_JPEG) {
         Ok(decoded) => decoded,
         Err(err) => {
             crate::log!(

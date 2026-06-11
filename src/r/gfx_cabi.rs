@@ -2592,7 +2592,7 @@ pub mod cabi {
     }
 
     fn jpeg_encoded_dimensions(data: &[u8]) -> Option<(u32, u32)> {
-        let layout = crate::gfx::jpeg_layout::classify_jpeg_layout(data);
+        let layout = crate::ui3::img::jpeg_layout::classify_jpeg_layout(data);
         (layout.width != 0 && layout.height != 0).then_some((layout.width, layout.height))
     }
 
@@ -4801,7 +4801,7 @@ pub mod cabi {
         if finish_rdp_only_encoded_texture(tex_id, png_encoded_dimensions(bytes.as_slice())) {
             return;
         }
-        let rc = match crate::gfx::png_codec::decode_png_rgba(bytes.as_slice()) {
+        let rc = match crate::ui3::img::png_codec::decode_png_rgba(bytes.as_slice()) {
             Ok(decoded) => {
                 if queue_texture_rgba_upload_owned(
                     tex_id,
@@ -4841,7 +4841,7 @@ pub mod cabi {
         if finish_rdp_only_encoded_texture(tex_id, jpeg_encoded_dimensions(bytes.as_slice())) {
             return;
         }
-        let rc = match crate::gfx::jpeg_codec::decode_jpeg_rgba(bytes.as_slice()) {
+        let rc = match crate::ui3::img::jpeg_codec::decode_jpeg_rgba(bytes.as_slice()) {
             Ok(decoded) => {
                 if queue_texture_rgba_upload_owned(
                     tex_id,
@@ -4902,7 +4902,7 @@ pub mod cabi {
             return;
         }
         let data_len = bytes.len();
-        let rc = match crate::gfx::svg::rasterize_svg_bytes_rgba(bytes.as_slice()) {
+        let rc = match crate::ui3::img::svg::rasterize_svg_bytes_rgba(bytes.as_slice()) {
             Ok((info, rgba)) => {
                 if queue_texture_rgba_upload_owned(
                     tex_id,
@@ -7986,7 +7986,7 @@ pub mod cabi {
         if finish_rdp_only_encoded_texture(tex_id, png_encoded_dimensions(data)) {
             return 0;
         }
-        let decoded = match crate::gfx::png_codec::decode_png_rgba(data) {
+        let decoded = match crate::ui3::img::png_codec::decode_png_rgba(data) {
             Ok(decoded) => decoded,
             Err(err) => return err.code(),
         };
@@ -8083,7 +8083,7 @@ pub mod cabi {
         if finish_rdp_only_encoded_texture(tex_id, jpeg_encoded_dimensions(data)) {
             return 0;
         }
-        let decoded = match crate::gfx::jpeg_codec::decode_jpeg_rgba(data) {
+        let decoded = match crate::ui3::img::jpeg_codec::decode_jpeg_rgba(data) {
             Ok(decoded) => decoded,
             Err(err) => return err.code(),
         };
@@ -8184,7 +8184,7 @@ pub mod cabi {
             return 0;
         }
         if gfx_cabi_vm_context() {
-            return match crate::gfx::svg::rasterize_svg_bytes_rgba(data) {
+            return match crate::ui3::img::svg::rasterize_svg_bytes_rgba(data) {
                 Ok((info, rgba)) => {
                     if crate::hv::current_hull_guest_context_vm_id().is_some() {
                         return vmcall_texture_rgba_upload_from_ptr(
@@ -8219,7 +8219,7 @@ pub mod cabi {
                 }
             };
         }
-        match crate::gfx::svg::upload_svg_bytes_to_texture(tex_id, data) {
+        match crate::ui3::img::svg::upload_svg_bytes_to_texture(tex_id, data) {
             Ok(_) => 0,
             Err(code) => {
                 log_svg_upload_failure("sync-svg", tex_id, data_len, code, Some(data));
