@@ -36,7 +36,6 @@ pub mod vcabi;
 pub mod vclock;
 pub mod vfetch;
 pub mod vfs;
-pub mod vgfx;
 pub mod vhttp_srv;
 pub mod vinput;
 pub mod vio;
@@ -44,7 +43,6 @@ pub mod vnet;
 pub mod vnetfs;
 pub mod vshell;
 pub mod vsys;
-pub mod vui2;
 
 #[macro_export]
 macro_rules! shell_line {

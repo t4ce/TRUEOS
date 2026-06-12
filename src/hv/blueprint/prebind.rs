@@ -7,22 +7,12 @@ pub(crate) fn prebind_base_readiness() -> u32 {
 pub(crate) fn prebind_import_readiness(name: &str) -> u32 {
     let mut mask = 0;
 
-    if name.starts_with("trueos_cabi_app_") || name.starts_with("trueos_cabi_ui2_") {
-        mask |= crate::r::readiness::UI2_READY;
-    }
-
     if name.starts_with("trueos_cabi_gfx_upload_texture_") {
         mask |= crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY;
-    } else if name.starts_with("trueos_cabi_gfx_queue_render_")
-        || name.starts_with("trueos_cabi_gfx_draw_")
-        || name.starts_with("trueos_cabi_gfx_begin_frame")
-        || name.starts_with("trueos_cabi_gfx_end_frame")
+    } else if name.starts_with("trueos_cabi_gfx_texture_")
         || name.starts_with("trueos_cabi_gfx_capture_")
     {
         mask |= crate::r::readiness::GFX_BACKEND_READY;
-        if name.starts_with("trueos_cabi_gfx_queue_render_") {
-            mask |= crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY;
-        }
     }
 
     if name.starts_with("trueos_cabi_fs_") || name.starts_with("trueos_cabi_trueosfs_") {

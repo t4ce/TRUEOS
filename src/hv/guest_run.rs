@@ -442,7 +442,6 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         .as_str());
     }
 
-    crate::hv::begin_blueprint_app_window_session(vm_id, state.archive.as_str());
     crate::blueprint_net_broker::set_vmx_guest_net_backend(true);
     let invoke_result = crate::allocators::with_hv_guest_alloc_domain(vm_id, || {
         let process_args = crate::hv::blueprint::build_process_args(
@@ -467,11 +466,9 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
 
     match invoke_result {
         Ok(()) => {
-            crate::hv::finish_blueprint_app_window_session(vm_id, true);
             log("run: guest blueprint returned");
         }
         Err(err) => {
-            crate::hv::finish_blueprint_app_window_session(vm_id, true);
             log(alloc::format!("run: guest REL load failed: {}", err).as_str());
         }
     }

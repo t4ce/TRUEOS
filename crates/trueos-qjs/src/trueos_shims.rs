@@ -1,5 +1,6 @@
 extern crate alloc;
 
+use alloc::{string::String, vec};
 use core::ffi::CStr;
 use core::ffi::{c_char, c_int, c_long, c_void};
 use core::ptr;
@@ -21,11 +22,28 @@ pub use v::vcabi::{
     trueos_cabi_shell2_print_line, trueos_cabi_trueosfs_json_all,
     trueos_cabi_trueosfs_primary_html_tree, trueos_cabi_uart1_shell_write,
 };
-pub use v::vgfx::capture_screenshot_data_url as gfx_capture_screenshot_data_url;
 pub use v::vshell::{
     shell_command_registry_json, shell1_submit_input, shell2_print_line, uart1_shell_write,
 };
 pub use v::vsys::{log_error, log_info, write_log_stream};
+
+pub fn gfx_capture_screenshot_data_url() -> Option<String> {
+    let len =
+        unsafe { trueos_cabi_gfx_capture_screenshot_data_url(core::ptr::null_mut(), 0) };
+    if len <= 0 {
+        return None;
+    }
+
+    let mut bytes = vec![0u8; len as usize];
+    let got = unsafe {
+        trueos_cabi_gfx_capture_screenshot_data_url(bytes.as_mut_ptr(), bytes.len())
+    };
+    if got <= 0 {
+        return None;
+    }
+    bytes.truncate(got as usize);
+    String::from_utf8(bytes).ok()
+}
 
 unsafe extern "C" {
     fn trueos_cabi_boot_timestamp_secs() -> u64;

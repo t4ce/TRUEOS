@@ -1,6 +1,5 @@
 pub use v::env;
 pub use v::vclock;
-pub use v::vgfx;
 pub use v::vinput;
 pub use v::vio;
 pub use v::vshell;

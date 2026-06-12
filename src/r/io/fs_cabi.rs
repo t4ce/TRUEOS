@@ -978,6 +978,15 @@ pub unsafe extern "C" fn trueos_cabi_trueosfs_primary_json_all(
     }
 }
 
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_trueosfs_json_all(
+    max_entries: u32,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    unsafe { trueos_cabi_trueosfs_primary_json_all(max_entries, out_ptr, out_cap) }
+}
+
 unsafe fn copy_text(bytes: &[u8], out_ptr: *mut u8, out_cap: usize) -> isize {
     if out_ptr.is_null() || out_cap == 0 {
         return bytes.len() as isize;
