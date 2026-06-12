@@ -23,6 +23,7 @@ const COMPACT_STYLE_FIELDS = [
   'paddingTopPx',
   'paddingRightPx',
   'paddingBottomPx',
+  'paint',
 ];
 
 function collapseWhitespace(s) {
@@ -656,7 +657,13 @@ function compactStyleEntry(style) {
   const entry = Object.create(null);
   for (let i = 0; i < COMPACT_STYLE_FIELDS.length; i++) {
     const key = COMPACT_STYLE_FIELDS[i];
-    entry[key] = style && style[key] != null ? style[key] : null;
+    if (key === 'paint') {
+      entry[key] = style && style.paint && typeof style.paint === 'object'
+        ? { ...style.paint }
+        : null;
+    } else {
+      entry[key] = style && style[key] != null ? style[key] : null;
+    }
   }
   return entry;
 }
@@ -665,7 +672,9 @@ function compactStyleKey(style) {
   let key = '';
   for (let i = 0; i < COMPACT_STYLE_FIELDS.length; i++) {
     const field = COMPACT_STYLE_FIELDS[i];
-    const value = style && style[field] != null ? style[field] : '';
+    const value = field === 'paint'
+      ? JSON.stringify(style && style.paint && typeof style.paint === 'object' ? style.paint : null)
+      : (style && style[field] != null ? style[field] : '');
     if (i > 0) key += '\x1f';
     key += String(value);
   }
@@ -693,21 +702,7 @@ function walkElementTree(node, path, ancestors, visit) {
 export function buildCssStyleRefIndex(doc) {
   const extractedCssObjects = extractCssObjects(doc);
   const limit = limitCssObjects(extractedCssObjects);
-  if (limit.skipped) {
-    return {
-      styleTable: [],
-      nodeStyleRefs: [],
-      styleSlotCount: 0,
-      nodeRefCount: 0,
-      inlineStyleCount: 0,
-      stylesheetCount: 0,
-      ruleCount: 0,
-      elementCount: 0,
-      summary: limit.summary,
-    };
-  }
-
-  const cssObjects = limit.cssObjects;
+  const cssObjects = limit.skipped ? [] : limit.cssObjects;
   const context = buildCssContext(cssObjects);
   const cssSection = {
     byPath: context.byPath,

@@ -26,6 +26,20 @@ export const defaultTheme = Object.freeze({
       radius: 0,
     }),
 
+    dialog: Object.freeze({
+      fill: 0xadd8e6,
+      fillEnd: 0xffffff,
+      border: 0x666666,
+      borderWidth: 0,
+      radius: 0,
+    }),
+
+    iframe: Object.freeze({
+      border: 0x666666,
+      borderWidth: 1,
+      radius: 0,
+    }),
+
     progress: Object.freeze({
       border: 0x999999,
       background: 0xffffff,

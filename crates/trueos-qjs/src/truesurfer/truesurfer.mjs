@@ -23,6 +23,7 @@ const TRUESURFER_MAX_SCENE_IMAGES = 5;
 let truesurferSubsetProfile = null;
 let extractDocumentArtifactsFn = null;
 let createBrowserAssetManagerFn = null;
+let buildCssStyleRefIndexFn = null;
 let parseDocumentFn = null;
 let domToWidgetsFn = null;
 let collectWidgetStatsFn = null;
@@ -320,7 +321,10 @@ async function warmBrowserPipelineModules() {
 
   const extractReady = !!extractMod && typeof extractMod.extractDocumentArtifacts === 'function';
   const assetsReady = !!assetsMod && typeof assetsMod.createBrowserAssetManager === 'function';
-  const cssReady = !!cssMod && typeof cssMod.extractCssSection === 'function';
+  const cssReady =
+    !!cssMod
+    && typeof cssMod.extractCssSection === 'function'
+    && typeof cssMod.buildCssStyleRefIndex === 'function';
   const parseReady = !!parse5Mod && typeof parse5Mod.parse === 'function';
   const widgetsReady =
     !!widMod
@@ -340,6 +344,7 @@ async function warmBrowserPipelineModules() {
   truesurferSubsetProfile = extractMod.TRUESURFER_SUBSET_PROFILE || null;
   extractDocumentArtifactsFn = extractMod.extractDocumentArtifacts;
   createBrowserAssetManagerFn = assetsMod.createBrowserAssetManager;
+  buildCssStyleRefIndexFn = cssMod.buildCssStyleRefIndex;
   parseDocumentFn = parse5Mod.parse;
   domToWidgetsFn = widMod.domToWidgets;
   collectWidgetStatsFn = widMod.collectWidgetStats;
@@ -412,7 +417,12 @@ function setHtml(nextHtml, meta) {
   currentNavigationUrl = url;
   currentSceneImageUrls = [];
 
-  if (typeof extractDocumentArtifactsFn !== 'function' || typeof parseDocumentFn !== 'function' || typeof domToWidgetsFn !== 'function') {
+  if (
+    typeof extractDocumentArtifactsFn !== 'function'
+    || typeof buildCssStyleRefIndexFn !== 'function'
+    || typeof parseDocumentFn !== 'function'
+    || typeof domToWidgetsFn !== 'function'
+  ) {
     return {
       ok: 0,
       bytes: html.length,
@@ -424,8 +434,11 @@ function setHtml(nextHtml, meta) {
   try {
     const widgetStart = Date.now();
     const parsedDocument = parseDocumentFn(html);
+    const styleStart = Date.now();
+    const styleIndex = buildCssStyleRefIndexFn(parsedDocument);
+    const styleIndexMs = Date.now() - styleStart;
     const widgetTree = domToWidgetsFn(parsedDocument);
-    const parsed = extractDocumentArtifactsFn(html);
+    const parsed = extractDocumentArtifactsFn(html, { styleIndex, styleIndexMs });
     currentArtifactsState = {
       url,
       title: parsed.title,
