@@ -402,7 +402,7 @@ const SPRITE64_WORKLIST_PRE_MARKER: u32 = 0xC0DE_5701;
 const SPRITE64_WORKLIST_POST_MARKER: u32 = 0xC0DE_5702;
 const SPRITE64_WORKLIST_ATLAS_GPU: u64 = 0x0400_0000;
 const SPRITE64_WORKLIST_DESC_GPU: u64 = 0x0580_0000;
-const SPRITE64_WORKLIST_CELL_PIXELS: u32 = 64;
+pub(crate) const SPRITE64_WORKLIST_CELL_PIXELS: u32 = 64;
 const SPRITE64_WORKLIST_ATLAS_COLUMNS: u32 = 16;
 const SPRITE64_WORKLIST_MAX_DESCS: usize = 256;
 const SPRITE64_WORKLIST_DESCS_PER_WALKER: usize = 16;
@@ -4686,11 +4686,8 @@ fn sprite64_worklist_primary_inner<T: Sprite64PlacementDesc>(
     let desc_start_tick = direct_rcs_now_tick();
     let desc = sprite64_worklist_desc_buffer_once()?;
     let desc_ms = direct_rcs_elapsed_ms_since(desc_start_tick);
-    let count = placements
-        .len()
-        .min(SPRITE64_WORKLIST_MAX_DESCS)
-        .min(atlas.slots as usize);
-    if count == 0 {
+    let candidate_count = placements.len().min(SPRITE64_WORKLIST_MAX_DESCS);
+    if candidate_count == 0 {
         return None;
     }
 
@@ -4698,30 +4695,38 @@ fn sprite64_worklist_primary_inner<T: Sprite64PlacementDesc>(
     let max_y = target.height.saturating_sub(SPRITE64_WORKLIST_CELL_PIXELS) as i32;
     let mut last_slot = 0u16;
     let mut last_dst_xy = GpgpuPoint::new(0, 0);
+    let mut visible_count = 0usize;
     let desc_write_start_tick = direct_rcs_now_tick();
     let _desc_guard = RECT_WORKLIST_DESC_SUBMIT_LOCK.lock();
     unsafe {
         core::ptr::write_bytes(desc.virt, 0, desc.bytes);
         let descs = desc.virt as *mut Sprite64WorklistRgba8Desc;
-        for (index, placement) in placements.iter().take(count).enumerate() {
+        for placement in placements.iter().take(candidate_count) {
             let slot = placement.slot();
             if slot >= atlas.slots {
                 return None;
             }
             let atlas_x = (u32::from(slot) % atlas.columns) * SPRITE64_WORKLIST_CELL_PIXELS;
             let atlas_y = (u32::from(slot) / atlas.columns) * SPRITE64_WORKLIST_CELL_PIXELS;
-            let dst_x = placement.dst_x().clamp(0, max_x);
-            let dst_y = placement.dst_y().clamp(0, max_y);
+            let dst_x = placement.dst_x();
+            let dst_y = placement.dst_y();
+            if dst_x < 0 || dst_y < 0 || dst_x > max_x || dst_y > max_y {
+                continue;
+            }
             let desc_value = Sprite64WorklistRgba8Desc {
                 atlas_xy: ((atlas_y & 0xFFFF) << 16) | (atlas_x & 0xFFFF),
                 dst_xy: (((dst_y as u32) & 0xFFFF) << 16) | ((dst_x as u32) & 0xFFFF),
                 flags: placement.flags(),
                 color_rgba: placement.color_rgba(),
             };
-            core::ptr::write_volatile(descs.add(index), desc_value);
+            core::ptr::write_volatile(descs.add(visible_count), desc_value);
+            visible_count = visible_count.saturating_add(1);
             last_slot = slot;
             last_dst_xy = GpgpuPoint::new(dst_x, dst_y);
         }
+    }
+    if visible_count == 0 {
+        return None;
     }
     super::dma_flush(desc.virt, desc.bytes);
     let desc_write_ms = direct_rcs_elapsed_ms_since(desc_write_start_tick);
@@ -4733,9 +4738,9 @@ fn sprite64_worklist_primary_inner<T: Sprite64PlacementDesc>(
         atlas_pitch_bytes: atlas.surface.pitch_bytes,
         dst_pitch_bytes: primary.pitch_bytes,
         desc_base: 0,
-        desc_count: count as u32,
+        desc_count: visible_count as u32,
     };
-    let walkers = sprite64_worklist_walker_count(count);
+    let walkers = sprite64_worklist_walker_count(visible_count);
 
     let submit_start_tick = direct_rcs_now_tick();
     let submitted = submit_sprite64_worklist(atlas.surface, primary, desc, params);
@@ -4753,7 +4758,7 @@ fn sprite64_worklist_primary_inner<T: Sprite64PlacementDesc>(
         crate::log!(
             "intel/gpgpu: sprite64-worklist-primary phases requested={} desc={} walkers={} present={} submitted={} target_ms={} atlas_ms={} desc_ms={} desc_write_ms={} submit_ms={} present_ms={} total_ms={} atlas_gpu=0x{:X} desc_gpu=0x{:X} primary={}x{} slots={}\n",
             placements.len(),
-            count,
+            visible_count,
             walkers,
             present as u8,
             submitted as u8,
@@ -4776,9 +4781,9 @@ fn sprite64_worklist_primary_inner<T: Sprite64PlacementDesc>(
         ok: submitted && (!present || presented),
         submitted,
         requested: placements.len(),
-        descriptors: count,
+        descriptors: visible_count,
         walkers,
-        copied_pixels: count
+        copied_pixels: visible_count
             .saturating_mul(SPRITE64_WORKLIST_CELL_PIXELS as usize)
             .saturating_mul(SPRITE64_WORKLIST_CELL_PIXELS as usize),
         submit_ms,
@@ -4814,11 +4819,8 @@ fn sprite64_worklist_surface_inner<T: Sprite64PlacementDesc>(
     let desc_start_tick = direct_rcs_now_tick();
     let desc = sprite64_worklist_desc_buffer_once()?;
     let desc_ms = direct_rcs_elapsed_ms_since(desc_start_tick);
-    let count = placements
-        .len()
-        .min(SPRITE64_WORKLIST_MAX_DESCS)
-        .min(atlas.slots as usize);
-    if count == 0 {
+    let candidate_count = placements.len().min(SPRITE64_WORKLIST_MAX_DESCS);
+    if candidate_count == 0 {
         return None;
     }
 
@@ -4826,30 +4828,38 @@ fn sprite64_worklist_surface_inner<T: Sprite64PlacementDesc>(
     let max_y = dst.height.saturating_sub(SPRITE64_WORKLIST_CELL_PIXELS) as i32;
     let mut last_slot = 0u16;
     let mut last_dst_xy = GpgpuPoint::new(0, 0);
+    let mut visible_count = 0usize;
     let desc_write_start_tick = direct_rcs_now_tick();
     let _desc_guard = RECT_WORKLIST_DESC_SUBMIT_LOCK.lock();
     unsafe {
         core::ptr::write_bytes(desc.virt, 0, desc.bytes);
         let descs = desc.virt as *mut Sprite64WorklistRgba8Desc;
-        for (index, placement) in placements.iter().take(count).enumerate() {
+        for placement in placements.iter().take(candidate_count) {
             let slot = placement.slot();
             if slot >= atlas.slots {
                 return None;
             }
             let atlas_x = (u32::from(slot) % atlas.columns) * SPRITE64_WORKLIST_CELL_PIXELS;
             let atlas_y = (u32::from(slot) / atlas.columns) * SPRITE64_WORKLIST_CELL_PIXELS;
-            let dst_x = placement.dst_x().clamp(0, max_x);
-            let dst_y = placement.dst_y().clamp(0, max_y);
+            let dst_x = placement.dst_x();
+            let dst_y = placement.dst_y();
+            if dst_x < 0 || dst_y < 0 || dst_x > max_x || dst_y > max_y {
+                continue;
+            }
             let desc_value = Sprite64WorklistRgba8Desc {
                 atlas_xy: ((atlas_y & 0xFFFF) << 16) | (atlas_x & 0xFFFF),
                 dst_xy: (((dst_y as u32) & 0xFFFF) << 16) | ((dst_x as u32) & 0xFFFF),
                 flags: placement.flags(),
                 color_rgba: placement.color_rgba(),
             };
-            core::ptr::write_volatile(descs.add(index), desc_value);
+            core::ptr::write_volatile(descs.add(visible_count), desc_value);
+            visible_count = visible_count.saturating_add(1);
             last_slot = slot;
             last_dst_xy = GpgpuPoint::new(dst_x, dst_y);
         }
+    }
+    if visible_count == 0 {
+        return None;
     }
     super::dma_flush(desc.virt, desc.bytes);
     let desc_write_ms = direct_rcs_elapsed_ms_since(desc_write_start_tick);
@@ -4861,9 +4871,9 @@ fn sprite64_worklist_surface_inner<T: Sprite64PlacementDesc>(
         atlas_pitch_bytes: atlas.surface.pitch_bytes,
         dst_pitch_bytes: dst.pitch_bytes,
         desc_base: 0,
-        desc_count: count as u32,
+        desc_count: visible_count as u32,
     };
-    let walkers = sprite64_worklist_walker_count(count);
+    let walkers = sprite64_worklist_walker_count(visible_count);
 
     let submit_start_tick = direct_rcs_now_tick();
     let submitted = submit_sprite64_worklist(atlas.surface, dst, desc, params);
@@ -4874,7 +4884,7 @@ fn sprite64_worklist_surface_inner<T: Sprite64PlacementDesc>(
             "intel/gpgpu: sprite64-worklist-surface reason={} requested={} desc={} walkers={} submitted={} atlas_ms={} desc_ms={} desc_write_ms={} submit_ms={} total_ms={} atlas_gpu=0x{:X} desc_gpu=0x{:X} dst_gpu=0x{:X} dst={}x{} pitch={} slots={}\n",
             reason,
             placements.len(),
-            count,
+            visible_count,
             walkers,
             submitted as u8,
             atlas_ms,
@@ -4896,9 +4906,9 @@ fn sprite64_worklist_surface_inner<T: Sprite64PlacementDesc>(
         ok: submitted,
         submitted,
         requested: placements.len(),
-        descriptors: count,
+        descriptors: visible_count,
         walkers,
-        copied_pixels: count
+        copied_pixels: visible_count
             .saturating_mul(SPRITE64_WORKLIST_CELL_PIXELS as usize)
             .saturating_mul(SPRITE64_WORKLIST_CELL_PIXELS as usize),
         submit_ms,

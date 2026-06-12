@@ -1,6 +1,7 @@
 import * as lightningcss from 'trueos:lightningcss';
 import { createComputedStyle } from './cssDefaults.mjs';
 import { SUPPORTED_STYLE_TAGS } from './htmlDefaults.mjs';
+import { defaultTheme } from '../rendertree/renderTheme.mjs';
 
 const CSS_MAX_STYLE_ROOTS = 1;
 const CSS_MAX_TOTAL_BYTES = 15 * 1024;
@@ -66,6 +67,53 @@ function buildElementDescriptor(node, path) {
     id: String(getAttr(node, 'id') || ''),
     classes: parseClassList(node),
   };
+}
+
+function positiveIntegerAttr(value, fallback = 0) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(16, Math.floor(n)));
+}
+
+function nearestTableBorderWidth(node, ancestors) {
+  const tag = String(node && node.tagName || '').toLowerCase();
+  if (tag === 'table') return positiveIntegerAttr(getAttr(node, 'border'), 0);
+  if (tag !== 'td' && tag !== 'th') return 0;
+  const list = Array.isArray(ancestors) ? ancestors : [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    const ancestor = list[i] && list[i].node;
+    if (String(ancestor && ancestor.tagName || '').toLowerCase() !== 'table') continue;
+    return positiveIntegerAttr(getAttr(ancestor, 'border'), 0);
+  }
+  return 0;
+}
+
+function applyLegacyHtmlPaintDefaults(style, node, ancestors) {
+  if (!style || !node) return;
+  const tag = String(node.tagName || '').toLowerCase();
+  const tableBorderWidth = nearestTableBorderWidth(node, ancestors);
+  if (tableBorderWidth <= 0) return;
+
+  if (tag === 'table') {
+    style.paint = {
+      role: 'table',
+      borderColor: defaultTheme.control.table.border,
+      borderWidth: Math.max(defaultTheme.control.table.borderWidth, tableBorderWidth),
+    };
+    return;
+  }
+
+  if (tag !== 'td' && tag !== 'th') return;
+  style.paint = {
+    role: 'table-cell',
+    borderColor: defaultTheme.control.table.cellBorder,
+    borderWidth: Math.max(defaultTheme.control.table.cellBorderWidth, tableBorderWidth),
+  };
+  if (tag === 'th') {
+    style.paint.fill = 'solid';
+    style.paint.color0 = defaultTheme.control.table.headerFill;
+    style.paint.color1 = defaultTheme.control.table.headerFill;
+  }
 }
 
 function normalizeDeclarationList(declarations) {
@@ -768,6 +816,7 @@ export function resolveNodeStyle(node, path, cssSection, ancestors, parentStyle 
     ? ancestors.map((entry) => buildElementDescriptor(entry && entry.node, entry && entry.path)).filter((entry) => !!entry.tag)
     : [];
   const style = createComputedStyle(element.tag, path, parentStyle);
+  applyLegacyHtmlPaintDefaults(style, node, ancestors);
   const winners = Object.create(null);
   const matchedRules = [];
   const rules = Array.isArray(cssSection && cssSection.rules) ? cssSection.rules : [];
