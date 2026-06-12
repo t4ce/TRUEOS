@@ -107,6 +107,27 @@ function tagDefaults(tagName) {
   return defaultLayoutMetrics.tagDefaults[tagName] ?? {};
 }
 
+function intRgb(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? (n >>> 0) & 0xFFFFFF : fallback;
+}
+
+function paintForNode(tagName) {
+  if (tagName === 'button') {
+    const button = defaultTheme.control.button;
+    return {
+      role: 'button',
+      fill: 'linear-gradient',
+      color0: intRgb(button.fill, 0xf2f2f2),
+      color1: intRgb(button.fillEnd, defaultTheme.control.background),
+      borderColor: intRgb(button.border, 0x666666),
+      borderWidth: sizeFrom(button.borderWidth, 1),
+      radius: sizeFrom(button.radius, 0),
+    };
+  }
+  return null;
+}
+
 function sourceNodeByKey(widgetTree) {
   const map = new Map();
   const walk = (node) => {
@@ -401,6 +422,8 @@ function layoutBlockNode(renderNode, sourceMap, x, y, availableWidth, options, m
     children,
   };
   if (renderNode.attrs && Object.keys(renderNode.attrs).length > 0) out.attrs = renderNode.attrs;
+  const paint = paintForNode(tagName);
+  if (paint) out.paint = paint;
   return out;
 }
 

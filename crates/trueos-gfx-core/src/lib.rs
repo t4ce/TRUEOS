@@ -9,6 +9,9 @@ use core::fmt;
 use alloc::vec::Vec;
 use libm::sqrtf;
 
+#[cfg(any(feature = "alloc", test))]
+pub mod copy_kernel;
+
 pub type Result<T> = core::result::Result<T, Error>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

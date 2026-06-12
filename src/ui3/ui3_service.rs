@@ -51,7 +51,7 @@ pub async fn ui3_service_task() {
     let mut scene = Ui3Scene::default();
     let mut cursor_events = crate::ui3::ui3_hid::Ui3CursorEventDrain::default();
     let mut live_overlay = Ui3LiveOverlayState::default();
-    let mut font = crate::ui3::font::Ui3FontScratch::default();
+    let mut font = crate::ui3::ui3_font::Ui3FontScratch::default();
     loop {
         if crate::r::spawn_service::task_stop_requested(TASK_NAME) {
             crate::log!(
@@ -112,7 +112,7 @@ pub async fn ui3_service_task() {
 fn consume_render_tree_frame(
     scene: &mut Ui3Scene,
     taken_seq: u32,
-    font: &mut crate::ui3::font::Ui3FontScratch,
+    font: &mut crate::ui3::ui3_font::Ui3FontScratch,
 ) {
     let present = redraw_scene_text(scene, font, taken_seq, false);
     let frame = &scene.frame;
@@ -169,7 +169,7 @@ struct Ui3LayoutInspectResult {
 
 fn redraw_scene_text(
     scene: &mut Ui3Scene,
-    font: &mut crate::ui3::font::Ui3FontScratch,
+    font: &mut crate::ui3::ui3_font::Ui3FontScratch,
     taken_seq: u32,
     is_scroll: bool,
 ) -> Ui3LayoutInspectResult {
@@ -208,12 +208,12 @@ fn redraw_scene_text(
     scene.scroll_y =
         clamp_scroll_y_for_scene(scene.scroll_y, scene.content_height, scene.viewport_height);
 
-    let font_scene = crate::ui3::font::Ui3FontScene {
+    let font_scene = crate::ui3::ui3_font::Ui3FontScene {
         scroll_y: scene.scroll_y,
         viewport_width: scene.viewport_width,
         viewport_height: scene.viewport_height,
     };
-    let draw = crate::ui3::font::draw_layout_primary(
+    let draw = crate::ui3::ui3_font::draw_layout_primary(
         layout,
         font_scene,
         font,
