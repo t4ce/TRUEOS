@@ -13,6 +13,7 @@ use alloc::{collections::VecDeque, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
+use trueos_gfx_core::{UiRect, UiSurface, UiSurfaceFormat};
 
 macro_rules! intel_display_focus_log {
     ($($arg:tt)*) => {
@@ -1351,6 +1352,42 @@ pub(crate) fn set_primary_plane_source(source: PrimaryPlaneSource, reason: &str)
         surf_after
     );
     surf_after == surface_reg
+}
+
+pub(crate) fn present_ui_surface_to_primary_plane(
+    surface: UiSurface,
+    phys: u64,
+    byte_len: usize,
+    src: UiRect,
+    dst: UiRect,
+    reason: &str,
+) -> bool {
+    if src.is_empty() || dst.is_empty() {
+        return false;
+    }
+    let format = match surface.format {
+        UiSurfaceFormat::Xrgb8888 => PrimaryPlaneSourceFormat::Xrgb8888,
+        UiSurfaceFormat::Xbgr8888 => PrimaryPlaneSourceFormat::Xbgr8888,
+        UiSurfaceFormat::Rgba8888 => return false,
+    };
+    set_primary_plane_source(
+        PrimaryPlaneSource {
+            phys,
+            gpu: surface.gpu,
+            byte_len,
+            width: surface.width,
+            height: surface.height,
+            pitch_bytes: surface.pitch,
+            format,
+            src_x: src.x,
+            src_y: src.y,
+            dst_x: dst.x,
+            dst_y: dst.y,
+            dst_w: dst.w,
+            dst_h: dst.h,
+        },
+        reason,
+    )
 }
 
 pub(crate) fn present_rgba_primary(

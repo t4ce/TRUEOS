@@ -1,3 +1,4 @@
+mod blt;
 mod display;
 mod dmc;
 pub(crate) mod format;
@@ -216,6 +217,7 @@ pub fn init_once() {
     } else {
         crate::log!("intel/gpgpu: artifact boot smoketests skipped allcaps=0\n");
     }
+    let _ = self::blt::submit_bcs0_mi_smoke_once();
     self::fw_probe::log_probe_modules(dev.device_id);
     self::dmc::wire_load_path(dev);
     let huc_fw = self::huc::load_fw();
@@ -360,6 +362,17 @@ pub(crate) use self::display::{PrimaryPlaneSource, PrimaryPlaneSourceFormat};
 
 pub(crate) fn set_primary_plane_source(source: PrimaryPlaneSource, reason: &str) -> bool {
     self::display::set_primary_plane_source(source, reason)
+}
+
+pub(crate) fn present_ui_surface_to_primary_plane(
+    surface: trueos_gfx_core::UiSurface,
+    phys: u64,
+    byte_len: usize,
+    src: trueos_gfx_core::UiRect,
+    dst: trueos_gfx_core::UiRect,
+    reason: &str,
+) -> bool {
+    self::display::present_ui_surface_to_primary_plane(surface, phys, byte_len, src, dst, reason)
 }
 
 pub fn primary_surface_gpu_addr() -> Option<u64> {
@@ -796,7 +809,7 @@ pub(crate) fn read_ggtt_pte(dev: Dev, gpu: u64) -> Option<u64> {
     Some(unsafe { core::ptr::read_volatile(dev.mmio.add(GGTT_ALIAS_BASE_OFF + idx) as *const u64) })
 }
 
-fn ggtt_invalidate(dev: Dev) {
+pub(crate) fn ggtt_invalidate(dev: Dev) {
     mmio_write(dev, GFX_FLSH_CNTL_GEN6, GFX_FLSH_CNTL_EN);
 }
 pub(crate) fn mmio_read(dev: Dev, off: usize) -> u32 {

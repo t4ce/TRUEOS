@@ -254,6 +254,62 @@ pub enum ImageFormat {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UiSurfaceFormat {
+    Rgba8888,
+    Xrgb8888,
+    Xbgr8888,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UiPlaneSlot {
+    Primary,
+    Overlay(u8),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UiSurface {
+    pub gpu: u64,
+    pub width: u32,
+    pub height: u32,
+    pub pitch: u32,
+    pub format: UiSurfaceFormat,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UiRect {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}
+
+impl UiRect {
+    #[inline]
+    pub const fn new(x: u32, y: u32, w: u32, h: u32) -> Self {
+        Self { x, y, w, h }
+    }
+
+    #[inline]
+    pub const fn is_empty(self) -> bool {
+        self.w == 0 || self.h == 0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UiPresent {
+    pub src: UiRect,
+    pub dst: UiRect,
+    pub plane: UiPlaneSlot,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UiPresentPath {
+    PlaneSourceOffset,
+    KernelBlit,
+    CpuCopy,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ImageDesc {
     pub width: u32,
     pub height: u32,

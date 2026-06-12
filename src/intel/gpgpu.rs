@@ -3058,6 +3058,15 @@ pub(crate) fn present_rgba8_rect_to_primary_xrgb_stats(
     src_rect: GpgpuRect,
     dst_xy: GpgpuPoint,
 ) -> Option<GpgpuSubmitStats> {
+    present_rgba8_rect_to_primary_xrgb_stats_with_flip(src, src_rect, dst_xy, true)
+}
+
+pub(crate) fn present_rgba8_rect_to_primary_xrgb_stats_with_flip(
+    src: GpgpuRgba8Surface,
+    src_rect: GpgpuRect,
+    dst_xy: GpgpuPoint,
+    flip_y: bool,
+) -> Option<GpgpuSubmitStats> {
     let target = super::display::primary_surface_gpgpu_marker_target()?;
     let primary = GpgpuRgba8Surface::new(
         target.phys,
@@ -3067,7 +3076,7 @@ pub(crate) fn present_rgba8_rect_to_primary_xrgb_stats(
         target.height,
         target.pitch_bytes,
     )?;
-    let stats = present_rgba8_to_primary_xrgb_rect_stats(src, src_rect, primary, dst_xy, true);
+    let stats = present_rgba8_to_primary_xrgb_rect_stats(src, src_rect, primary, dst_xy, flip_y);
     if stats.spans == 0 || stats.submits == 0 {
         return None;
     }
