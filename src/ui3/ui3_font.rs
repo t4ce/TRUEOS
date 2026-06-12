@@ -14,6 +14,7 @@ const UI3_FLOAT_WINDOW_GRADIENT_RIGHT_RGBA: u32 = 0xFFFF_FFFF;
 pub(crate) struct Ui3FontScratch {
     placements: Vec<crate::intel::gpgpu::GpgpuSprite64Placement>,
     gradients: Vec<crate::intel::gpgpu::GpgpuGradientRect>,
+    control_gradients: Vec<crate::intel::gpgpu::GpgpuGradientRect>,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -57,14 +58,16 @@ pub(crate) fn draw_layout_primary(
 ) -> Ui3FontDrawResult {
     scratch.placements.clear();
     scratch.gradients.clear();
+    scratch.control_gradients.clear();
     let mut collect = Ui3TextCollectStats::default();
-    collect_layout_float_window_gradients(
+    collect_layout_rect_gradients(
         layout,
         0.0,
         0.0,
         scene.scroll_y,
         scene,
         &mut scratch.gradients,
+        &mut scratch.control_gradients,
     );
     collect_layout_text_placements(
         layout,
@@ -75,12 +78,16 @@ pub(crate) fn draw_layout_primary(
         &mut scratch.placements,
         &mut collect,
     );
-    let gradient_cap_hit = scratch.gradients.len() >= UI3_FLOAT_WINDOW_GRADIENT_MAX;
+    let gradient_count = scratch
+        .gradients
+        .len()
+        .saturating_add(scratch.control_gradients.len());
+    let gradient_cap_hit = gradient_count >= UI3_FLOAT_WINDOW_GRADIENT_MAX;
     if gradient_cap_hit {
         crate::log_warn!(
             target: "ui3";
             "ui3-font: gradient cap reached gradients={} cap={} scroll_y={} viewport={}x{}\n",
-            scratch.gradients.len(),
+            gradient_count,
             UI3_FLOAT_WINDOW_GRADIENT_MAX,
             scene.scroll_y as u32,
             scene.viewport_width,
@@ -112,7 +119,9 @@ pub(crate) fn draw_layout_primary(
         );
     }
 
-    let should_present_clear = scratch.placements.is_empty() && scratch.gradients.is_empty();
+    let should_present_clear = scratch.placements.is_empty()
+        && scratch.gradients.is_empty()
+        && scratch.control_gradients.is_empty();
     let clear_result = crate::intel::gpgpu::clear_primary_rgba8_white_for_redraw_stats(
         should_present_clear,
         present_reason,
@@ -122,6 +131,14 @@ pub(crate) fn draw_layout_primary(
     } else {
         crate::intel::gpgpu::gradient_rects_rgba8_over_primary(
             scratch.gradients.as_slice(),
+            scratch.placements.is_empty() && scratch.control_gradients.is_empty(),
+        )
+    };
+    let control_gradient_result = if scratch.control_gradients.is_empty() {
+        None
+    } else {
+        crate::intel::gpgpu::gradient_rects_rgba8_over_primary(
+            scratch.control_gradients.as_slice(),
             scratch.placements.is_empty(),
         )
     };
@@ -175,7 +192,7 @@ pub(crate) fn draw_layout_primary(
         text_nodes: collect.text_nodes,
         placements: scratch.placements.len(),
         batches: text_batches,
-        gradients: scratch.gradients.len(),
+        gradients: gradient_count,
         clipped: collect.clipped,
         clear_ok: clear_result.is_some(),
         clear_ms: clear_result
@@ -185,7 +202,13 @@ pub(crate) fn draw_layout_primary(
         rect_ms: gradient_result
             .as_ref()
             .map(|result| result.fill_ms.saturating_add(result.blend_ms))
-            .unwrap_or(0),
+            .unwrap_or(0)
+            .saturating_add(
+                control_gradient_result
+                    .as_ref()
+                    .map(|result| result.fill_ms.saturating_add(result.blend_ms))
+                    .unwrap_or(0),
+            ),
         text_ms: text_submit_ms,
         show_ms: clear_result
             .as_ref()
@@ -197,10 +220,23 @@ pub(crate) fn draw_layout_primary(
                     .map(|result| result.present_ms)
                     .unwrap_or(0),
             )
+            .saturating_add(
+                control_gradient_result
+                    .as_ref()
+                    .map(|result| result.present_ms)
+                    .unwrap_or(0),
+            )
             .saturating_add(text_present_ms),
-        submit_ok: text_submitted || gradient_result.as_ref().is_some_and(|result| result.ok),
+        submit_ok: text_submitted
+            || gradient_result.as_ref().is_some_and(|result| result.ok)
+            || control_gradient_result
+                .as_ref()
+                .is_some_and(|result| result.ok),
         presented: text_presented
             || gradient_result
+                .as_ref()
+                .is_some_and(|result| result.presented)
+            || control_gradient_result
                 .as_ref()
                 .is_some_and(|result| result.presented)
             || clear_result
@@ -216,6 +252,12 @@ pub(crate) fn draw_layout_primary(
                     .map(|result| result.fill_ms.saturating_add(result.blend_ms))
                     .unwrap_or(0),
             )
+            .saturating_add(
+                control_gradient_result
+                    .as_ref()
+                    .map(|result| result.fill_ms.saturating_add(result.blend_ms))
+                    .unwrap_or(0),
+            )
             .saturating_add(text_submit_ms),
         present_ms: clear_result
             .as_ref()
@@ -227,19 +269,26 @@ pub(crate) fn draw_layout_primary(
                     .map(|result| result.present_ms)
                     .unwrap_or(0),
             )
+            .saturating_add(
+                control_gradient_result
+                    .as_ref()
+                    .map(|result| result.present_ms)
+                    .unwrap_or(0),
+            )
             .saturating_add(text_present_ms),
     }
 }
 
-fn collect_layout_float_window_gradients(
+fn collect_layout_rect_gradients(
     node: &Value,
     parent_x: f32,
     parent_y: f32,
     scroll_y: f32,
     scene: Ui3FontScene,
     gradients: &mut Vec<crate::intel::gpgpu::GpgpuGradientRect>,
+    control_gradients: &mut Vec<crate::intel::gpgpu::GpgpuGradientRect>,
 ) {
-    if gradients.len() >= UI3_FLOAT_WINDOW_GRADIENT_MAX {
+    if layout_gradient_count(gradients, control_gradients) >= UI3_FLOAT_WINDOW_GRADIENT_MAX {
         return;
     }
     let x = parent_x + json_f32_field(node, "x").unwrap_or(0.0);
@@ -248,17 +297,38 @@ fn collect_layout_float_window_gradients(
         && node.get("tagName").and_then(Value::as_str) == Some("dialog")
     {
         push_float_window_gradient(x, y - scroll_y, node, scene, gradients);
+    } else if node.get("kind").and_then(Value::as_str) == Some("block")
+        && layout_paint_role(node) == Some("button")
+    {
+        let remaining = UI3_FLOAT_WINDOW_GRADIENT_MAX
+            .saturating_sub(layout_gradient_count(gradients, control_gradients));
+        push_painted_control_gradients(x, y - scroll_y, node, scene, remaining, control_gradients);
     }
 
     let Some(children) = node.get("children").and_then(Value::as_array) else {
         return;
     };
     for child in children {
-        collect_layout_float_window_gradients(child, x, y, scroll_y, scene, gradients);
-        if gradients.len() >= UI3_FLOAT_WINDOW_GRADIENT_MAX {
+        collect_layout_rect_gradients(
+            child,
+            x,
+            y,
+            scroll_y,
+            scene,
+            gradients,
+            control_gradients,
+        );
+        if layout_gradient_count(gradients, control_gradients) >= UI3_FLOAT_WINDOW_GRADIENT_MAX {
             break;
         }
     }
+}
+
+fn layout_gradient_count(
+    gradients: &[crate::intel::gpgpu::GpgpuGradientRect],
+    control_gradients: &[crate::intel::gpgpu::GpgpuGradientRect],
+) -> usize {
+    gradients.len().saturating_add(control_gradients.len())
 }
 
 fn push_float_window_gradient(
@@ -286,6 +356,132 @@ fn push_float_window_gradient(
         color1_rgba: UI3_FLOAT_WINDOW_GRADIENT_RIGHT_RGBA,
         vertical: false,
     });
+}
+
+fn layout_paint_role(node: &Value) -> Option<&str> {
+    node.get("paint")?.get("role")?.as_str()
+}
+
+fn push_painted_control_gradients(
+    x: f32,
+    y: f32,
+    node: &Value,
+    scene: Ui3FontScene,
+    remaining: usize,
+    gradients: &mut Vec<crate::intel::gpgpu::GpgpuGradientRect>,
+) {
+    if remaining == 0 {
+        return;
+    }
+    let Some(width) = json_u32_field(node, "width") else {
+        return;
+    };
+    let Some(height) = json_u32_field(node, "height") else {
+        return;
+    };
+    if width == 0 || height == 0 || y + height as f32 <= 0.0 || y >= scene.viewport_height as f32 {
+        return;
+    }
+    if x + width as f32 <= 0.0 || x >= scene.viewport_width as f32 {
+        return;
+    }
+    let Some(paint) = node.get("paint") else {
+        return;
+    };
+    let Some(color0) = json_rgb24_field(paint, "color0").map(rgb24_to_rgba8_word) else {
+        return;
+    };
+    let color1 = json_rgb24_field(paint, "color1")
+        .map(rgb24_to_rgba8_word)
+        .unwrap_or(color0);
+    let border_width = json_u32_field(paint, "borderWidth")
+        .unwrap_or(0)
+        .min(width / 2)
+        .min(height / 2);
+
+    let mut pushed = 0usize;
+    if border_width > 0 {
+        let Some(border_color) = json_rgb24_field(paint, "borderColor").map(rgb24_to_rgba8_word)
+        else {
+            return;
+        };
+        pushed = pushed.saturating_add(push_solid_gradient_rect(
+            gradients,
+            remaining.saturating_sub(pushed),
+            floor_i32(x),
+            floor_i32(y),
+            width,
+            border_width,
+            border_color,
+        ));
+        pushed = pushed.saturating_add(push_solid_gradient_rect(
+            gradients,
+            remaining.saturating_sub(pushed),
+            floor_i32(x),
+            floor_i32(y + (height - border_width) as f32),
+            width,
+            border_width,
+            border_color,
+        ));
+        pushed = pushed.saturating_add(push_solid_gradient_rect(
+            gradients,
+            remaining.saturating_sub(pushed),
+            floor_i32(x),
+            floor_i32(y + border_width as f32),
+            border_width,
+            height.saturating_sub(border_width.saturating_mul(2)),
+            border_color,
+        ));
+        pushed = pushed.saturating_add(push_solid_gradient_rect(
+            gradients,
+            remaining.saturating_sub(pushed),
+            floor_i32(x + (width - border_width) as f32),
+            floor_i32(y + border_width as f32),
+            border_width,
+            height.saturating_sub(border_width.saturating_mul(2)),
+            border_color,
+        ));
+    }
+
+    let fill_x = x + border_width as f32;
+    let fill_y = y + border_width as f32;
+    let fill_width = width.saturating_sub(border_width.saturating_mul(2));
+    let fill_height = height.saturating_sub(border_width.saturating_mul(2));
+    if fill_width == 0 || fill_height == 0 || pushed >= remaining {
+        return;
+    }
+    gradients.push(crate::intel::gpgpu::GpgpuGradientRect {
+        rect: crate::intel::gpgpu::GpgpuRect::new(
+            floor_i32(fill_x),
+            floor_i32(fill_y),
+            fill_width,
+            fill_height,
+        ),
+        color0_rgba: color0,
+        color1_rgba: color1,
+        vertical: false,
+    });
+}
+
+fn push_solid_gradient_rect(
+    gradients: &mut Vec<crate::intel::gpgpu::GpgpuGradientRect>,
+    remaining: usize,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    color_rgba: u32,
+) -> usize {
+    if remaining == 0 || width == 0 || height == 0 {
+        return 0;
+    }
+    gradients.push(crate::intel::gpgpu::GpgpuGradientRect {
+        rect: crate::intel::gpgpu::GpgpuRect::new(x, y, width, height),
+        color0_rgba: color_rgba,
+        color1_rgba: color_rgba,
+        vertical: false,
+    });
+    1
 }
 
 fn collect_layout_text_placements(
@@ -406,6 +602,14 @@ fn json_f32_field(node: &Value, key: &str) -> Option<f32> {
 fn json_u32_field(node: &Value, key: &str) -> Option<u32> {
     let number = node.get(key)?.as_u64()?;
     u32::try_from(number).ok()
+}
+
+fn json_rgb24_field(node: &Value, key: &str) -> Option<u32> {
+    json_u32_field(node, key).map(|rgb| rgb & 0x00FF_FFFF)
+}
+
+fn rgb24_to_rgba8_word(rgb: u32) -> u32 {
+    0xFF00_0000 | (rgb & 0x00FF_FFFF)
 }
 
 fn floor_i32(value: f32) -> i32 {

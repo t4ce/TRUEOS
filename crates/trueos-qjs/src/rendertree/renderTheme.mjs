@@ -17,9 +17,11 @@ export const defaultTheme = Object.freeze({
 
     button: Object.freeze({
       fill: 0xf2f2f2,
+      fillEnd: 0xffffff,
       hoverFill: 0xeaeaea,
       activeFill: 0xe0e0e0,
       border: 0x666666,
+      borderWidth: 1,
       text: 0x111111,
       radius: 0,
     }),
