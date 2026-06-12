@@ -57,7 +57,6 @@ dependencies = [
  "trueos-c4",
  "trueos-esp",
  "trueos-fs",
- "trueos-gfx-core",
  "trueos-io",
  "trueos-locale",
  "trueos-lsd",
@@ -2563,13 +2562,6 @@ name = "trueos-fs"
 version = "0.0.1"
 
 [[package]]
-name = "trueos-gfx-core"
-version = "0.1.0"
-dependencies = [
- "libm",
-]
-
-[[package]]
 name = "trueos-io"
 version = "0.1.0"
 dependencies = [
@@ -2607,7 +2599,6 @@ dependencies = [
  "libm",
  "parry2d",
  "spin",
- "trueos-gfx-core",
  "trueos-locale",
  "trueos-math",
  "usvg",

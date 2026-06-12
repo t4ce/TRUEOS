@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use trueos_gfx_core::Rgba8;
+use crate::intel::types::Rgba8;
 
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct Ui2Rect {

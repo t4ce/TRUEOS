@@ -1,7 +1,7 @@
+use crate::intel::types::Rgba8;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
-use trueos_gfx_core::Rgba8;
 
 static UI3_CURSOR_CAP_DROP_COUNT: AtomicU32 = AtomicU32::new(0);
 const UI3_CURSOR_CAP: usize = 32;

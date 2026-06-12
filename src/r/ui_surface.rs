@@ -1,7 +1,7 @@
-use spin::Mutex;
-use trueos_gfx_core::{
+use crate::intel::types::{
     Error, Result, UiPlaneSlot, UiPresent, UiPresentPath, UiRect, UiSurface, UiSurfaceFormat,
 };
+use spin::Mutex;
 
 const MAX_UI_SURFACES: usize = 8;
 const UI_SURFACE_GPU_BASE: u64 = 0x1200_0000;
@@ -47,11 +47,7 @@ unsafe impl Sync for TrustedUiSurface {}
 static SURFACES: Mutex<[Option<TrustedUiSurface>; MAX_UI_SURFACES]> =
     Mutex::new([None; MAX_UI_SURFACES]);
 
-pub fn create_surface(
-    width: u32,
-    height: u32,
-    format: UiSurfaceFormat,
-) -> Result<UiSurfaceHandle> {
+pub fn create_surface(width: u32, height: u32, format: UiSurfaceFormat) -> Result<UiSurfaceHandle> {
     if width == 0 || height == 0 {
         return Err(Error::Invalid);
     }
@@ -59,7 +55,8 @@ pub fn create_surface(
     let raw_len = (pitch as usize)
         .checked_mul(height as usize)
         .ok_or(Error::Invalid)?;
-    let byte_len = crate::intel::align_up(raw_len, crate::intel::WARM_ALIGN).ok_or(Error::Invalid)?;
+    let byte_len =
+        crate::intel::align_up(raw_len, crate::intel::WARM_ALIGN).ok_or(Error::Invalid)?;
     if byte_len as u64 > UI_SURFACE_GPU_STRIDE {
         return Err(Error::OutOfMemory);
     }
@@ -136,9 +133,8 @@ pub fn write_surface_rgba(
         UiSurfaceFormat::Rgba8888 => {
             for row in 0..dst.h as usize {
                 let src_off = row.saturating_mul(src_pitch);
-                let dst_off = ((dst.y as usize + row)
-                    .saturating_mul(surface.desc.pitch as usize))
-                .saturating_add((dst.x as usize).saturating_mul(4));
+                let dst_off = ((dst.y as usize + row).saturating_mul(surface.desc.pitch as usize))
+                    .saturating_add((dst.x as usize).saturating_mul(4));
                 unsafe {
                     core::ptr::copy_nonoverlapping(
                         src_rgba.as_ptr().add(src_off),
@@ -180,17 +176,16 @@ fn present_primary(
     dst: UiRect,
     reason: &'static str,
 ) -> Result<UiPresentPath> {
-    if matches!(
-        surface.desc.format,
-        UiSurfaceFormat::Xrgb8888 | UiSurfaceFormat::Xbgr8888
-    ) && crate::intel::present_ui_surface_to_primary_plane(
-        surface.desc,
-        surface.phys,
-        surface.byte_len,
-        src,
-        dst,
-        reason,
-    ) {
+    if matches!(surface.desc.format, UiSurfaceFormat::Xrgb8888 | UiSurfaceFormat::Xbgr8888)
+        && crate::intel::present_ui_surface_to_primary_plane(
+            surface.desc,
+            surface.phys,
+            surface.byte_len,
+            src,
+            dst,
+            reason,
+        )
+    {
         return Ok(UiPresentPath::PlaneSourceOffset);
     }
 
