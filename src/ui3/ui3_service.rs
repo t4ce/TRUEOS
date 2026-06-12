@@ -28,6 +28,11 @@ struct Ui3LiveOverlayState {
     context_menu_open: bool,
     context_menu_x: u32,
     context_menu_y: u32,
+    selection_probe_active: bool,
+    selection_probe_start_x: u32,
+    selection_probe_start_y: u32,
+    selection_probe_current_x: u32,
+    selection_probe_current_y: u32,
     last_buttons_down: u32,
 }
 
@@ -112,7 +117,7 @@ fn consume_render_tree_frame(
     let present = redraw_scene_text(scene, font, taken_seq, false);
     let frame = &scene.frame;
     crate::log!(
-        "ui3-service: frame taken={} browser={} seq={} render_hash={} layout_hash={} render_bytes={} layout_bytes={} scroll_y={} scroll_redraw=0 content_height={} viewport={}x{} text_nodes={} placements={} gradients={} clipped={} batches=1 clear_ok={} clear_ms={} rect_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
+        "ui3-service: frame taken={} browser={} seq={} render_hash={} layout_hash={} render_bytes={} layout_bytes={} scroll_y={} scroll_redraw=0 content_height={} viewport={}x{} text_nodes={} placements={} gradients={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
         taken_seq,
         frame.browser_instance_id,
         frame.seq,
@@ -128,6 +133,7 @@ fn consume_render_tree_frame(
         present.placements,
         present.gradients,
         present.clipped,
+        present.batches,
         present.clear_ok as u8,
         present.clear_ms,
         present.rect_ms,
@@ -146,6 +152,7 @@ fn consume_render_tree_frame(
 struct Ui3LayoutInspectResult {
     text_nodes: usize,
     placements: usize,
+    batches: usize,
     gradients: usize,
     clipped: usize,
     submit_ok: bool,
@@ -220,7 +227,7 @@ fn redraw_scene_text(
 
     if is_scroll {
         crate::log!(
-            "ui3-service: scroll taken={} browser={} seq={} scroll_y={} content_height={} viewport={}x{} text_nodes={} placements={} gradients={} clipped={} clear_ok={} clear_ms={} rect_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
+            "ui3-service: scroll taken={} browser={} seq={} scroll_y={} content_height={} viewport={}x{} text_nodes={} placements={} gradients={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
             taken_seq,
             frame.browser_instance_id,
             frame.seq,
@@ -232,6 +239,7 @@ fn redraw_scene_text(
             draw.placements,
             draw.gradients,
             draw.clipped,
+            draw.batches,
             draw.clear_ok as u8,
             draw.clear_ms,
             draw.rect_ms,
@@ -249,6 +257,7 @@ fn redraw_scene_text(
     Ui3LayoutInspectResult {
         text_nodes: draw.text_nodes,
         placements: draw.placements,
+        batches: draw.batches,
         gradients: draw.gradients,
         clipped: draw.clipped,
         submit_ok: draw.submit_ok,
@@ -312,24 +321,46 @@ fn drain_ui3_cursor_input(
             .wheel_delta
             .saturating_add(crate::ui3::ui3_hid::event_wheel_delta(*event));
         if (event.flags & crate::ui3::ui3_hid::UI3_CURSOR_EVENT_FLAG_MOTION) != 0 {
+            let (x, y) =
+                crate::ui3::ui3_hid::event_position_px(*event, viewport_width, viewport_height);
+            if live_overlay.selection_probe_active
+                && (event.buttons_down & crate::ui3::ui3_hid::UI3_CURSOR_BUTTON_LEFT) != 0
+            {
+                live_overlay.selection_probe_current_x = x;
+                live_overlay.selection_probe_current_y = y;
+            }
             input.overlay_dirty = true;
         }
         if crate::ui3::ui3_hid::event_has_button_change(*event) {
             let was_right = (live_overlay.last_buttons_down
                 & crate::ui3::ui3_hid::UI3_CURSOR_BUTTON_RIGHT)
                 != 0;
+            let was_left =
+                (live_overlay.last_buttons_down & crate::ui3::ui3_hid::UI3_CURSOR_BUTTON_LEFT) != 0;
             let is_right = crate::ui3::ui3_hid::event_has_right_button(*event);
+            let is_left = (event.buttons_down & crate::ui3::ui3_hid::UI3_CURSOR_BUTTON_LEFT) != 0;
             if is_right && !was_right {
                 let (x, y) =
                     crate::ui3::ui3_hid::event_position_px(*event, viewport_width, viewport_height);
                 live_overlay.context_menu_open = true;
+                live_overlay.selection_probe_active = false;
                 live_overlay.context_menu_x = x;
                 live_overlay.context_menu_y = y;
                 input.overlay_dirty = true;
-            } else if live_overlay.context_menu_open
-                && (event.buttons_down & crate::ui3::ui3_hid::UI3_CURSOR_BUTTON_LEFT) != 0
-            {
+            } else if live_overlay.context_menu_open && is_left {
                 live_overlay.context_menu_open = false;
+                input.overlay_dirty = true;
+            } else if is_left && !was_left {
+                let (x, y) =
+                    crate::ui3::ui3_hid::event_position_px(*event, viewport_width, viewport_height);
+                live_overlay.selection_probe_active = true;
+                live_overlay.selection_probe_start_x = x;
+                live_overlay.selection_probe_start_y = y;
+                live_overlay.selection_probe_current_x = x;
+                live_overlay.selection_probe_current_y = y;
+                input.overlay_dirty = true;
+            } else if !is_left && was_left && live_overlay.selection_probe_active {
+                live_overlay.selection_probe_active = false;
                 input.overlay_dirty = true;
             }
             live_overlay.last_buttons_down = event.buttons_down;
@@ -360,6 +391,15 @@ fn redraw_live_overlay(scene: &Ui3Scene, state: &Ui3LiveOverlayState, reason: &s
             state.context_menu_y,
             viewport_width,
             viewport_height,
+        );
+    }
+    if state.selection_probe_active {
+        crate::ui3::ui3_hid::push_drag_selection_probe_rects(
+            &mut rects,
+            state.selection_probe_start_x,
+            state.selection_probe_start_y,
+            state.selection_probe_current_x,
+            state.selection_probe_current_y,
         );
     }
     crate::ui3::ui3_hid::push_software_cursor_rects(&mut rects, viewport_width, viewport_height);

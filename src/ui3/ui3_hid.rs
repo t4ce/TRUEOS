@@ -358,6 +358,33 @@ pub(crate) fn push_merged_selection_rects(
     rects.extend(merged);
 }
 
+pub(crate) fn push_drag_selection_probe_rects(
+    rects: &mut Vec<crate::intel::LiveOverlayRect>,
+    start_x: u32,
+    start_y: u32,
+    current_x: u32,
+    current_y: u32,
+) {
+    let x0 = start_x.min(current_x);
+    let y0 = start_y.min(current_y);
+    let x1 = start_x.max(current_x);
+    let y1 = start_y.max(current_y);
+    let width = x1.saturating_sub(x0).max(1);
+    let height = y1.saturating_sub(y0).max(1);
+
+    let first_w = (width / 3).max(1);
+    let second_w = (width.saturating_sub(first_w) / 2).max(1);
+    let third_x = x0.saturating_add(first_w).saturating_add(second_w);
+    let third_w = x0.saturating_add(width).saturating_sub(third_x).max(1);
+    let pieces = [
+        (x0, y0, first_w, height),
+        (x0.saturating_add(first_w), y0, second_w, height),
+        (third_x, y0, third_w, height),
+    ];
+    push_merged_selection_rects(rects, &pieces);
+    push_outline_rect(rects, x0, y0, width, height, 1, Ui3CursorColor::Blue.rgba8());
+}
+
 #[inline]
 pub(crate) fn event_has_right_button(event: crate::usb2::hid::TrueosHidCursorEvent) -> bool {
     (event.buttons_down & UI3_CURSOR_BUTTON_RIGHT) != 0
