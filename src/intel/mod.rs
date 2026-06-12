@@ -14,6 +14,7 @@ pub(crate) mod opencl;
 pub(crate) mod ppgtt;
 pub(crate) mod state;
 pub(crate) mod stats;
+pub(crate) mod types;
 mod uc_fw;
 pub(crate) mod xelp_media2_ngin;
 pub(crate) mod xelp_media2_ngin_hw_pic;
@@ -365,11 +366,11 @@ pub(crate) fn set_primary_plane_source(source: PrimaryPlaneSource, reason: &str)
 }
 
 pub(crate) fn present_ui_surface_to_primary_plane(
-    surface: trueos_gfx_core::UiSurface,
+    surface: types::UiSurface,
     phys: u64,
     byte_len: usize,
-    src: trueos_gfx_core::UiRect,
-    dst: trueos_gfx_core::UiRect,
+    src: types::UiRect,
+    dst: types::UiRect,
     reason: &str,
 ) -> bool {
     self::display::present_ui_surface_to_primary_plane(surface, phys, byte_len, src, dst, reason)
@@ -441,8 +442,8 @@ pub fn rcs_draw_rgba_rgb_triangles(
     _width: u32,
     _height: u32,
     _target_gpu_addr: u64,
-    _scissor: Option<trueos_gfx_core::ScissorRect>,
-    _blend: trueos_gfx_core::BlendDesc,
+    _scissor: Option<types::ScissorRect>,
+    _blend: types::BlendDesc,
 ) -> bool {
     false
 }
@@ -456,9 +457,9 @@ pub fn rcs_draw_screen_tex_triangles(
     _target_width: u32,
     _target_height: u32,
     _target_gpu_addr: u64,
-    _scissor: Option<trueos_gfx_core::ScissorRect>,
-    _blend: trueos_gfx_core::BlendDesc,
-    _sampler: trueos_gfx_core::SamplerDesc,
+    _scissor: Option<types::ScissorRect>,
+    _blend: types::BlendDesc,
+    _sampler: types::SamplerDesc,
     _sample_kind: TextureStoreSampleKind,
 ) -> bool {
     false

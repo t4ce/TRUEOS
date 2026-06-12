@@ -9,11 +9,11 @@
 // pipeline rendered that memory; render must separately produce `ps-rt-proof
 // accepted=1` before a displayed pixel can be attributed to GPU rendering.
 
+use crate::intel::types::{Rgba8, UiRect, UiSurface, UiSurfaceFormat};
 use alloc::{collections::VecDeque, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
-use trueos_gfx_core::{Rgba8, UiRect, UiSurface, UiSurfaceFormat};
 
 macro_rules! intel_display_focus_log {
     ($($arg:tt)*) => {

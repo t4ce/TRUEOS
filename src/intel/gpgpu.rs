@@ -1458,7 +1458,7 @@ pub(crate) struct GpgpuSolidRect {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct GpgpuRgbMesh {
-    pub(crate) vertices: Vec<trueos_gfx_core::RgbVertexPx>,
+    pub(crate) vertices: Vec<super::types::RgbVertexPx>,
     pub(crate) indices: Vec<u16>,
 }
 
@@ -3102,9 +3102,9 @@ pub(crate) fn present_rgba8_rect_to_primary_xrgb_stats_with_flip(
 
 unsafe fn raster_rgb_triangle_over_primary(
     target: super::display::PrimarySurfaceGpgpuTarget,
-    v0: trueos_gfx_core::RgbVertexPx,
-    v1: trueos_gfx_core::RgbVertexPx,
-    v2: trueos_gfx_core::RgbVertexPx,
+    v0: super::types::RgbVertexPx,
+    v1: super::types::RgbVertexPx,
+    v2: super::types::RgbVertexPx,
 ) -> usize {
     if !v0.x.is_finite()
         || !v0.y.is_finite()
@@ -3173,14 +3173,14 @@ fn edge_fn(ax: f32, ay: f32, bx: f32, by: f32, px: f32, py: f32) -> f32 {
 
 #[inline]
 fn interpolate_rgb_vertex_color(
-    c0: trueos_gfx_core::Rgba8,
-    c1: trueos_gfx_core::Rgba8,
-    c2: trueos_gfx_core::Rgba8,
+    c0: super::types::Rgba8,
+    c1: super::types::Rgba8,
+    c2: super::types::Rgba8,
     w0: f32,
     w1: f32,
     w2: f32,
-) -> trueos_gfx_core::Rgba8 {
-    trueos_gfx_core::Rgba8 {
+) -> super::types::Rgba8 {
+    super::types::Rgba8 {
         r: interpolate_u8(c0.r, c1.r, c2.r, w0, w1, w2),
         g: interpolate_u8(c0.g, c1.g, c2.g, w0, w1, w2),
         b: interpolate_u8(c0.b, c1.b, c2.b, w0, w1, w2),
@@ -3195,7 +3195,7 @@ fn interpolate_u8(a: u8, b: u8, c: u8, w0: f32, w1: f32, w2: f32) -> u8 {
 }
 
 #[inline]
-fn blend_rgba8_over_kernel_rgba(src: trueos_gfx_core::Rgba8, dst: u32) -> u32 {
+fn blend_rgba8_over_kernel_rgba(src: super::types::Rgba8, dst: u32) -> u32 {
     let sa = src.a as u32;
     if sa == 0xff {
         return rgba8_to_kernel_rgba(src);
@@ -3211,7 +3211,7 @@ fn blend_rgba8_over_kernel_rgba(src: trueos_gfx_core::Rgba8, dst: u32) -> u32 {
 }
 
 #[inline]
-fn rgba8_to_kernel_rgba(color: trueos_gfx_core::Rgba8) -> u32 {
+fn rgba8_to_kernel_rgba(color: super::types::Rgba8) -> u32 {
     ((color.a as u32) << 24) | ((color.b as u32) << 16) | ((color.g as u32) << 8) | (color.r as u32)
 }
 

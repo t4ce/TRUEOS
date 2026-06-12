@@ -9,7 +9,6 @@ pub mod cursor;
 pub mod disc;
 pub mod fs;
 pub mod hid_udp_srv;
-#[path = "gfx_cabi.rs"]
 pub mod io;
 pub mod keyboard;
 pub mod net;

@@ -1,16 +1,8 @@
-#![cfg_attr(not(test), no_std)]
-
-#[cfg(any(feature = "alloc", test))]
 extern crate alloc;
 
-use core::fmt;
-
-#[cfg(any(feature = "alloc", test))]
 use alloc::vec::Vec;
+use core::fmt;
 use libm::sqrtf;
-
-#[cfg(any(feature = "alloc", test))]
-pub mod copy_kernel;
 
 pub type Result<T> = core::result::Result<T, Error>;
 
@@ -20,240 +12,6 @@ pub enum Error {
     Invalid,
     NotFound,
     OutOfMemory,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(transparent)]
-pub struct BufferId(u32);
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(transparent)]
-pub struct ImageId(u32);
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(transparent)]
-pub struct SamplerId(u32);
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(transparent)]
-pub struct ShaderId(u32);
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(transparent)]
-pub struct PipelineId(u32);
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(transparent)]
-pub struct FenceId(u64);
-
-impl BufferId {
-    #[inline]
-    pub const fn invalid() -> Self {
-        Self(0)
-    }
-
-    #[inline]
-    pub const fn is_valid(self) -> bool {
-        self.0 != 0
-    }
-
-    #[inline]
-    pub const fn raw(self) -> u32 {
-        self.0
-    }
-
-    #[inline]
-    pub const fn from_raw(raw: u32) -> Self {
-        Self(raw)
-    }
-}
-
-impl ImageId {
-    #[inline]
-    pub const fn invalid() -> Self {
-        Self(0)
-    }
-
-    #[inline]
-    pub const fn is_valid(self) -> bool {
-        self.0 != 0
-    }
-
-    #[inline]
-    pub const fn raw(self) -> u32 {
-        self.0
-    }
-
-    #[inline]
-    pub const fn from_raw(raw: u32) -> Self {
-        Self(raw)
-    }
-}
-
-impl SamplerId {
-    #[inline]
-    pub const fn invalid() -> Self {
-        Self(0)
-    }
-
-    #[inline]
-    pub const fn is_valid(self) -> bool {
-        self.0 != 0
-    }
-
-    #[inline]
-    pub const fn raw(self) -> u32 {
-        self.0
-    }
-
-    #[inline]
-    pub const fn from_raw(raw: u32) -> Self {
-        Self(raw)
-    }
-}
-
-impl ShaderId {
-    #[inline]
-    pub const fn invalid() -> Self {
-        Self(0)
-    }
-
-    #[inline]
-    pub const fn is_valid(self) -> bool {
-        self.0 != 0
-    }
-
-    #[inline]
-    pub const fn raw(self) -> u32 {
-        self.0
-    }
-
-    #[inline]
-    pub const fn from_raw(raw: u32) -> Self {
-        Self(raw)
-    }
-}
-
-impl PipelineId {
-    #[inline]
-    pub const fn invalid() -> Self {
-        Self(0)
-    }
-
-    #[inline]
-    pub const fn is_valid(self) -> bool {
-        self.0 != 0
-    }
-
-    #[inline]
-    pub const fn raw(self) -> u32 {
-        self.0
-    }
-
-    #[inline]
-    pub const fn from_raw(raw: u32) -> Self {
-        Self(raw)
-    }
-}
-
-impl FenceId {
-    #[inline]
-    pub const fn invalid() -> Self {
-        Self(0)
-    }
-
-    #[inline]
-    pub const fn is_valid(self) -> bool {
-        self.0 != 0
-    }
-
-    #[inline]
-    pub const fn raw(self) -> u64 {
-        self.0
-    }
-
-    #[inline]
-    pub const fn from_raw(raw: u64) -> Self {
-        Self(raw)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ShaderFormat {
-    Tgsi,
-    Nir,
-    SpirV,
-    Unknown(u32),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ShaderStage {
-    Vertex,
-    Fragment,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ShaderDesc<'a> {
-    pub stage: ShaderStage,
-    pub format: ShaderFormat,
-    pub bytes: &'a [u8],
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BufferUsage {
-    Vertex,
-    Index,
-    Uniform,
-    TransferSrc,
-    TransferDst,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MemoryType {
-    Device,
-    HostVisible,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct BufferDesc {
-    pub size: u64,
-    pub usage: BufferUsage,
-    pub memory: MemoryType,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ColorFormat {
-    RgbU8,
-    RgbaU8,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TexCoordFormat {
-    None,
-    UvF32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct VertexLayout {
-    pub stride: u16,
-    pub pos_offset: u16,
-    pub color_offset: u16,
-    pub color_format: ColorFormat,
-    pub texcoord_offset: u16,
-    pub texcoord_format: TexCoordFormat,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PipelineDesc {
-    pub vertex_layout: VertexLayout,
-    pub vs: Option<ShaderId>,
-    pub fs: Option<ShaderId>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ImageFormat {
-    Rgbx8888,
-    Rgba8888,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -313,118 +71,11 @@ pub enum UiPresentPath {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ImageDesc {
-    pub width: u32,
-    pub height: u32,
-    pub format: ImageFormat,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ImageRegion {
-    pub x: u32,
-    pub y: u32,
-    pub width: u32,
-    pub height: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Extent2D {
-    pub width: u32,
-    pub height: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SwapchainDesc {
-    pub format: ImageFormat,
-    pub extent: Extent2D,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Viewport {
-    pub x: i32,
-    pub y: i32,
-    pub width: i32,
-    pub height: i32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ScissorRect {
     pub x: u32,
     pub y: u32,
     pub width: u32,
     pub height: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MapMode {
-    Read,
-    Write,
-    ReadWrite,
-}
-
-#[derive(Clone, Copy)]
-pub struct MappedRange {
-    pub ptr: *mut u8,
-    pub len: usize,
-}
-
-impl fmt::Debug for MappedRange {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("MappedRange")
-            .field("ptr", &self.ptr)
-            .field("len", &self.len)
-            .finish()
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DeviceCaps {
-    pub supports_rgbx8888: bool,
-    pub supports_host_visible_buffers: bool,
-    pub supports_scissor: bool,
-}
-
-impl DeviceCaps {
-    pub const fn minimal_software() -> Self {
-        Self {
-            supports_rgbx8888: true,
-            supports_host_visible_buffers: true,
-            supports_scissor: false,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Command {
-    ClearColor {
-        rgb: u32,
-    },
-    ClearColorRgba {
-        rgba: Rgba8,
-    },
-    ClearRect {
-        rgb: u32,
-        x: u32,
-        y: u32,
-        width: u32,
-        height: u32,
-    },
-    BindPipeline(PipelineId),
-    BindVertexBuffer {
-        buffer: BufferId,
-        offset: u64,
-    },
-    BindImage(ImageId),
-    SetRenderTarget(Option<ImageId>),
-    SetSampler(SamplerDesc),
-    SetBlend(BlendDesc),
-    SetViewport(Viewport),
-    SetScissor(Option<ScissorRect>),
-    Draw {
-        vertex_count: u32,
-        first_vertex: u32,
-    },
-    Present,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -501,100 +152,6 @@ impl SamplerDesc {
         }
     }
 }
-
-#[derive(Clone, Copy, Debug)]
-pub struct CommandBuffer<'a> {
-    pub commands: &'a [Command],
-}
-
-#[cfg(any(feature = "alloc", test))]
-pub struct CommandList {
-    commands: alloc::vec::Vec<Command>,
-}
-
-#[cfg(any(feature = "alloc", test))]
-impl CommandList {
-    #[inline]
-    pub fn new() -> Self {
-        Self {
-            commands: alloc::vec::Vec::new(),
-        }
-    }
-
-    #[inline]
-    pub fn push(&mut self, cmd: Command) {
-        self.commands.push(cmd);
-    }
-
-    #[inline]
-    pub fn as_buffer(&self) -> CommandBuffer<'_> {
-        CommandBuffer {
-            commands: &self.commands,
-        }
-    }
-}
-
-pub trait GfxDevice {
-    fn caps(&self) -> DeviceCaps;
-
-    fn create_buffer(&mut self, desc: BufferDesc) -> Result<BufferId>;
-    fn destroy_buffer(&mut self, id: BufferId);
-
-    fn create_shader(&mut self, desc: ShaderDesc<'_>) -> Result<ShaderId>;
-    fn destroy_shader(&mut self, id: ShaderId);
-
-    fn create_pipeline(&mut self, desc: PipelineDesc) -> Result<PipelineId>;
-    fn destroy_pipeline(&mut self, id: PipelineId);
-
-    fn create_image(&mut self, desc: ImageDesc) -> Result<ImageId>;
-    fn destroy_image(&mut self, id: ImageId);
-    fn write_image(&mut self, id: ImageId, data: &[u8]) -> Result<()>;
-
-    fn write_image_region(
-        &mut self,
-        _id: ImageId,
-        _region: ImageRegion,
-        _data: &[u8],
-    ) -> Result<()> {
-        Err(Error::Unsupported)
-    }
-
-    fn write_buffer(&mut self, id: BufferId, offset: u64, data: &[u8]) -> Result<()>;
-
-    fn map_buffer(&mut self, _id: BufferId, _mode: MapMode) -> Result<MappedRange> {
-        Err(Error::Unsupported)
-    }
-
-    fn unmap_buffer(&mut self, _id: BufferId) -> Result<()> {
-        Err(Error::Unsupported)
-    }
-
-    fn submit(&mut self, cmds: CommandBuffer<'_>) -> Result<FenceId>;
-    fn poll(&mut self, fence: FenceId) -> bool;
-    fn device_idle(&mut self);
-}
-
-pub trait GfxPresent {
-    fn configure_swapchain(&mut self, desc: SwapchainDesc) -> Result<()>;
-    fn swapchain_desc(&self) -> SwapchainDesc;
-
-    /// Best-effort display refresh rate in millihertz.
-    ///
-    /// Backends that cannot query mode timing (or where "refresh" is not a meaningful
-    /// hardware concept) should return `None`.
-    #[inline]
-    fn display_refresh_millihz(&mut self) -> Option<u32> {
-        None
-    }
-}
-
-/// Convenience trait for backends that implement both the device and present sides.
-///
-/// This keeps the decoupling seam (`GfxDevice` vs `GfxPresent`) while allowing
-/// callers to borrow a single mutable context when the backend is a single object.
-pub trait GfxContext: GfxDevice + GfxPresent {}
-
-impl<T: GfxDevice + GfxPresent + ?Sized> GfxContext for T {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
@@ -678,22 +235,6 @@ pub struct RgbVertexPx {
 pub const RGB_VERTEX_SIZE: usize = core::mem::size_of::<RgbVertex>();
 pub const TEX_VERTEX_SIZE: usize = core::mem::size_of::<TexVertex>();
 
-#[inline]
-fn clamp01(v: f32) -> f32 {
-    if v <= 0.0 {
-        0.0
-    } else if v >= 1.0 {
-        1.0
-    } else {
-        v
-    }
-}
-
-#[inline]
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ViewTransform {
     pub width: f32,
@@ -721,22 +262,41 @@ impl ViewTransform {
     }
 
     #[inline]
-    pub fn rgb_vertex_ndc(self, x: f32, y: f32, color: Rgba8) -> RgbVertex {
-        let _ = self;
-        RgbVertex { x, y, color }
-    }
-
-    #[inline]
     pub fn tex_vertex_px(self, x: f32, y: f32, u: f32, v: f32, color: Rgba8) -> TexVertex {
         let (x, y) = self.px_to_ndc(x, y);
         TexVertex { x, y, u, v, color }
     }
+}
 
-    #[inline]
-    pub fn tex_vertex_ndc(self, x: f32, y: f32, u: f32, v: f32, color: Rgba8) -> TexVertex {
-        let _ = self;
-        TexVertex { x, y, u, v, color }
+#[derive(Clone, Copy)]
+pub struct MappedRange {
+    pub ptr: *mut u8,
+    pub len: usize,
+}
+
+impl fmt::Debug for MappedRange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MappedRange")
+            .field("ptr", &self.ptr)
+            .field("len", &self.len)
+            .finish()
     }
+}
+
+#[inline]
+fn clamp01(v: f32) -> f32 {
+    if v <= 0.0 {
+        0.0
+    } else if v >= 1.0 {
+        1.0
+    } else {
+        v
+    }
+}
+
+#[inline]
+fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
 }
 
 #[inline]
@@ -856,7 +416,6 @@ pub fn scissor_to_ndc(scissor: ScissorRect, vp_w: u32, vp_h: u32) -> Option<(f32
     Some((left, right, bottom, top))
 }
 
-#[cfg(any(feature = "alloc", test))]
 #[inline]
 pub fn push_rgb_vertex_bytes(out: &mut Vec<u8>, vertex: RgbVertex) {
     out.extend_from_slice(&vertex.x.to_le_bytes());
@@ -867,7 +426,6 @@ pub fn push_rgb_vertex_bytes(out: &mut Vec<u8>, vertex: RgbVertex) {
     out.push(vertex.color.a);
 }
 
-#[cfg(any(feature = "alloc", test))]
 fn clip_rgb_poly_edge(input: &[RgbVertexF32], edge: u8, bound: f32, out: &mut Vec<RgbVertexF32>) {
     out.clear();
     if input.is_empty() {
@@ -913,7 +471,6 @@ fn clip_rgb_poly_edge(input: &[RgbVertexF32], edge: u8, bound: f32, out: &mut Ve
     }
 }
 
-#[cfg(any(feature = "alloc", test))]
 #[inline]
 pub fn push_rgb_vertex_f32_bytes(out: &mut Vec<u8>, vertex: RgbVertexF32) {
     push_rgb_vertex_bytes(
@@ -931,7 +488,6 @@ pub fn push_rgb_vertex_f32_bytes(out: &mut Vec<u8>, vertex: RgbVertexF32) {
     );
 }
 
-#[cfg(any(feature = "alloc", test))]
 pub fn clip_rgb_triangles_to_scissor_bytes(
     src: &[u8],
     scissor: ScissorRect,
@@ -995,7 +551,6 @@ pub fn clip_rgb_triangles_to_scissor_bytes(
     out
 }
 
-#[cfg(any(feature = "alloc", test))]
 #[inline]
 pub fn push_rgb_vertices_bytes(out: &mut Vec<u8>, vertices: &[RgbVertex]) {
     out.reserve(rgb_vertices_byte_len(vertices.len()));
@@ -1004,7 +559,6 @@ pub fn push_rgb_vertices_bytes(out: &mut Vec<u8>, vertices: &[RgbVertex]) {
     }
 }
 
-#[cfg(any(feature = "alloc", test))]
 #[inline]
 pub fn push_tex_vertex_bytes(out: &mut Vec<u8>, vertex: TexVertex) {
     out.extend_from_slice(&vertex.x.to_le_bytes());
@@ -1017,7 +571,6 @@ pub fn push_tex_vertex_bytes(out: &mut Vec<u8>, vertex: TexVertex) {
     out.push(vertex.color.a);
 }
 
-#[cfg(any(feature = "alloc", test))]
 #[inline]
 pub fn push_tex_vertices_bytes(out: &mut Vec<u8>, vertices: &[TexVertex]) {
     out.reserve(tex_vertices_byte_len(vertices.len()));
@@ -1026,7 +579,6 @@ pub fn push_tex_vertices_bytes(out: &mut Vec<u8>, vertices: &[TexVertex]) {
     }
 }
 
-#[cfg(any(feature = "alloc", test))]
 #[inline]
 pub fn push_rgb_quad_px(
     out: &mut Vec<u8>,
@@ -1048,7 +600,6 @@ pub fn push_rgb_quad_px(
     push_rgb_vertex_bytes(out, transform.rgb_vertex_px(left, bottom, color));
 }
 
-#[cfg(any(feature = "alloc", test))]
 #[inline]
 pub fn push_rgb_triangle_px(
     out: &mut Vec<u8>,
@@ -1062,7 +613,6 @@ pub fn push_rgb_triangle_px(
     push_rgb_vertex_bytes(out, transform.rgb_vertex_px(v2.x, v2.y, v2.color));
 }
 
-#[cfg(any(feature = "alloc", test))]
 pub fn push_indexed_rgb_mesh_px(
     out: &mut Vec<u8>,
     transform: ViewTransform,
@@ -1078,7 +628,6 @@ pub fn push_indexed_rgb_mesh_px(
     }
 }
 
-#[cfg(any(feature = "alloc", test))]
 #[inline]
 pub fn push_rgb_quad_ndc(
     out: &mut Vec<u8>,
@@ -1126,7 +675,6 @@ pub fn push_rgb_quad_ndc(
     push_rgb_vertices_bytes(out, &verts);
 }
 
-#[cfg(any(feature = "alloc", test))]
 #[inline]
 pub fn push_tex_quad_px(
     out: &mut Vec<u8>,
@@ -1150,7 +698,6 @@ pub fn push_tex_quad_px(
     push_tex_vertex_bytes(out, transform.tex_vertex_px(left, top, u0, v0, color));
 }
 
-#[cfg(any(feature = "alloc", test))]
 #[inline]
 pub fn push_tex_quad_ndc(
     out: &mut Vec<u8>,
@@ -1212,7 +759,6 @@ pub fn push_tex_quad_ndc(
     push_tex_vertices_bytes(out, &verts);
 }
 
-#[cfg(any(feature = "alloc", test))]
 #[inline]
 pub fn push_rgb_line_quad_px(
     out: &mut Vec<u8>,
