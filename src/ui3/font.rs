@@ -4,6 +4,7 @@ use serde_json::Value;
 
 const UI3_LAYOUT_TEXT_NODE_MAX: usize = 512;
 const UI3_TEXT_PLACEMENT_MAX: usize = 4096;
+const UI3_TEXT_SUBMIT_BATCH_PLACEMENTS: usize = 256;
 const UI3_TEXT_COLOR_RGBA: u32 = 0x0000_0000;
 const UI3_FLOAT_WINDOW_GRADIENT_MAX: usize = 25;
 const UI3_FLOAT_WINDOW_GRADIENT_LEFT_RGBA: u32 = 0xFFAD_D8E6;
@@ -26,6 +27,7 @@ pub(crate) struct Ui3FontScene {
 pub(crate) struct Ui3FontDrawResult {
     pub(crate) text_nodes: usize,
     pub(crate) placements: usize,
+    pub(crate) batches: usize,
     pub(crate) gradients: usize,
     pub(crate) clipped: usize,
     pub(crate) clear_ok: bool,
@@ -43,6 +45,8 @@ pub(crate) struct Ui3FontDrawResult {
 struct Ui3TextCollectStats {
     text_nodes: usize,
     clipped: usize,
+    text_node_cap_hit: bool,
+    placement_cap_hit: bool,
 }
 
 pub(crate) fn draw_layout_primary(
@@ -71,6 +75,42 @@ pub(crate) fn draw_layout_primary(
         &mut scratch.placements,
         &mut collect,
     );
+    let gradient_cap_hit = scratch.gradients.len() >= UI3_FLOAT_WINDOW_GRADIENT_MAX;
+    if gradient_cap_hit {
+        crate::log_warn!(
+            target: "ui3";
+            "ui3-font: gradient cap reached gradients={} cap={} scroll_y={} viewport={}x{}\n",
+            scratch.gradients.len(),
+            UI3_FLOAT_WINDOW_GRADIENT_MAX,
+            scene.scroll_y as u32,
+            scene.viewport_width,
+            scene.viewport_height
+        );
+    }
+    if collect.text_node_cap_hit {
+        crate::log_warn!(
+            target: "ui3";
+            "ui3-font: text-node cap reached text_nodes={} cap={} placements={} scroll_y={} viewport={}x{}\n",
+            collect.text_nodes,
+            UI3_LAYOUT_TEXT_NODE_MAX,
+            scratch.placements.len(),
+            scene.scroll_y as u32,
+            scene.viewport_width,
+            scene.viewport_height
+        );
+    }
+    if collect.placement_cap_hit {
+        crate::log_warn!(
+            target: "ui3";
+            "ui3-font: placement cap reached placements={} cap={} text_nodes={} scroll_y={} viewport={}x{}\n",
+            scratch.placements.len(),
+            UI3_TEXT_PLACEMENT_MAX,
+            collect.text_nodes,
+            scene.scroll_y as u32,
+            scene.viewport_width,
+            scene.viewport_height
+        );
+    }
 
     let should_present_clear = scratch.placements.is_empty() && scratch.gradients.is_empty();
     let clear_result = crate::intel::gpgpu::clear_primary_rgba8_white_for_redraw_stats(
@@ -85,19 +125,56 @@ pub(crate) fn draw_layout_primary(
             scratch.placements.is_empty(),
         )
     };
-    let result = if scratch.placements.is_empty() {
-        None
-    } else {
-        crate::intel::gpgpu::sprite64_worklist_primary(
-            scratch.placements.as_slice(),
-            true,
-            present_reason,
-        )
-    };
+    let mut text_batches = 0usize;
+    let mut text_submitted = false;
+    let mut text_presented = false;
+    let mut text_submit_ms = 0u64;
+    let mut text_present_ms = 0u64;
+    if !scratch.placements.is_empty() {
+        if scratch.placements.len() >= UI3_TEXT_SUBMIT_BATCH_PLACEMENTS {
+            crate::log_warn!(
+                target: "ui3";
+                "ui3-font: sprite64 submit cap reached placements={} batch_cap={} batches={} scroll_y={} viewport={}x{}\n",
+                scratch.placements.len(),
+                UI3_TEXT_SUBMIT_BATCH_PLACEMENTS,
+                scratch
+                    .placements
+                    .len()
+                    .saturating_add(UI3_TEXT_SUBMIT_BATCH_PLACEMENTS - 1)
+                    / UI3_TEXT_SUBMIT_BATCH_PLACEMENTS,
+                scene.scroll_y as u32,
+                scene.viewport_width,
+                scene.viewport_height
+            );
+        }
+        let total_batches = scratch
+            .placements
+            .len()
+            .saturating_add(UI3_TEXT_SUBMIT_BATCH_PLACEMENTS - 1)
+            / UI3_TEXT_SUBMIT_BATCH_PLACEMENTS;
+        for (batch_index, chunk) in scratch
+            .placements
+            .chunks(UI3_TEXT_SUBMIT_BATCH_PLACEMENTS)
+            .enumerate()
+        {
+            let present = batch_index + 1 == total_batches;
+            let Some(result) =
+                crate::intel::gpgpu::sprite64_worklist_primary(chunk, present, present_reason)
+            else {
+                continue;
+            };
+            text_batches = text_batches.saturating_add(1);
+            text_submitted |= result.submitted;
+            text_presented |= result.presented;
+            text_submit_ms = text_submit_ms.saturating_add(result.submit_ms);
+            text_present_ms = text_present_ms.saturating_add(result.present_ms);
+        }
+    }
 
     Ui3FontDrawResult {
         text_nodes: collect.text_nodes,
         placements: scratch.placements.len(),
+        batches: text_batches,
         gradients: scratch.gradients.len(),
         clipped: collect.clipped,
         clear_ok: clear_result.is_some(),
@@ -109,7 +186,7 @@ pub(crate) fn draw_layout_primary(
             .as_ref()
             .map(|result| result.fill_ms.saturating_add(result.blend_ms))
             .unwrap_or(0),
-        text_ms: result.as_ref().map(|result| result.submit_ms).unwrap_or(0),
+        text_ms: text_submit_ms,
         show_ms: clear_result
             .as_ref()
             .map(|result| result.present_ms)
@@ -120,10 +197,9 @@ pub(crate) fn draw_layout_primary(
                     .map(|result| result.present_ms)
                     .unwrap_or(0),
             )
-            .saturating_add(result.as_ref().map(|result| result.present_ms).unwrap_or(0)),
-        submit_ok: result.as_ref().is_some_and(|result| result.submitted)
-            || gradient_result.as_ref().is_some_and(|result| result.ok),
-        presented: result.as_ref().is_some_and(|result| result.presented)
+            .saturating_add(text_present_ms),
+        submit_ok: text_submitted || gradient_result.as_ref().is_some_and(|result| result.ok),
+        presented: text_presented
             || gradient_result
                 .as_ref()
                 .is_some_and(|result| result.presented)
@@ -140,7 +216,7 @@ pub(crate) fn draw_layout_primary(
                     .map(|result| result.fill_ms.saturating_add(result.blend_ms))
                     .unwrap_or(0),
             )
-            .saturating_add(result.as_ref().map(|result| result.submit_ms).unwrap_or(0)),
+            .saturating_add(text_submit_ms),
         present_ms: clear_result
             .as_ref()
             .map(|result| result.present_ms)
@@ -151,7 +227,7 @@ pub(crate) fn draw_layout_primary(
                     .map(|result| result.present_ms)
                     .unwrap_or(0),
             )
-            .saturating_add(result.as_ref().map(|result| result.present_ms).unwrap_or(0)),
+            .saturating_add(text_present_ms),
     }
 }
 
@@ -222,6 +298,12 @@ fn collect_layout_text_placements(
     stats: &mut Ui3TextCollectStats,
 ) {
     if stats.text_nodes >= UI3_LAYOUT_TEXT_NODE_MAX || placements.len() >= UI3_TEXT_PLACEMENT_MAX {
+        if stats.text_nodes >= UI3_LAYOUT_TEXT_NODE_MAX {
+            stats.text_node_cap_hit = true;
+        }
+        if placements.len() >= UI3_TEXT_PLACEMENT_MAX {
+            stats.placement_cap_hit = true;
+        }
         return;
     }
     let x = parent_x + json_f32_field(node, "x").unwrap_or(0.0);
@@ -246,6 +328,12 @@ fn collect_layout_text_placements(
         if stats.text_nodes >= UI3_LAYOUT_TEXT_NODE_MAX
             || placements.len() >= UI3_TEXT_PLACEMENT_MAX
         {
+            if stats.text_nodes >= UI3_LAYOUT_TEXT_NODE_MAX {
+                stats.text_node_cap_hit = true;
+            }
+            if placements.len() >= UI3_TEXT_PLACEMENT_MAX {
+                stats.placement_cap_hit = true;
+            }
             break;
         }
     }
@@ -270,6 +358,7 @@ fn push_text_placements(
     let mut pen_x = x;
     for ch in text.chars() {
         if placements.len() >= UI3_TEXT_PLACEMENT_MAX {
+            stats.placement_cap_hit = true;
             break;
         }
         if ch.is_control() {
