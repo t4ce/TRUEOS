@@ -3,7 +3,6 @@ use serde_json::Value;
 
 const TASK_NAME: &str = "ui3-service";
 const UI3_SERVICE_IDLE_MS: u64 = 16;
-const UI3_LAYOUT_TEXT_NODE_MAX: usize = 512;
 const UI3_WHEEL_EVENT_BATCH_CAP: usize = 64;
 const UI3_WHEEL_SCROLL_PX_PER_NOTCH: f32 = 72.0;
 
@@ -30,13 +29,12 @@ struct Ui3WheelDrain {
 #[embassy_executor::task]
 pub async fn ui3_service_task() {
     let _task_guard = crate::r::spawn_service::task_run_guard(TASK_NAME);
-    crate::log!(
-        "ui3-service: starting sink=render-tree-inspect-only font=disabled scroll=state-only\n"
-    );
+    crate::log!("ui3-service: starting sink=render-tree-text-primary scroll=redraw\n");
 
     let mut stats = Ui3ServiceStats::default();
     let mut scene = Ui3Scene::default();
     let mut wheel = Ui3WheelDrain::default();
+    let mut font = crate::ui3::font::Ui3FontScratch::default();
     loop {
         if crate::r::spawn_service::task_stop_requested(TASK_NAME) {
             crate::log!(
@@ -56,16 +54,7 @@ pub async fn ui3_service_task() {
                 scene.content_height,
                 scene.viewport_height,
             );
-            crate::log!(
-                "ui3-service: scroll-state browser={} seq={} scroll_y={} content_height={} viewport={}x{} presented=0 url={}\n",
-                scene.frame.browser_instance_id,
-                scene.frame.seq,
-                scene.scroll_y as u32,
-                scene.content_height,
-                scene.viewport_width,
-                scene.viewport_height,
-                scene.frame.url
-            );
+            redraw_scene_text(&mut scene, &mut font, 0, true);
         }
 
         let mut took_any = false;
@@ -78,7 +67,7 @@ pub async fn ui3_service_task() {
             took_any = true;
             stats.frames_taken = stats.frames_taken.saturating_add(1);
             scene.frame = frame;
-            consume_render_tree_frame(&mut scene, stats.frames_taken);
+            consume_render_tree_frame(&mut scene, stats.frames_taken, &mut font);
         }
 
         if !took_any {
@@ -88,11 +77,15 @@ pub async fn ui3_service_task() {
     }
 }
 
-fn consume_render_tree_frame(scene: &mut Ui3Scene, taken_seq: u32) {
-    let present = inspect_layout(scene);
+fn consume_render_tree_frame(
+    scene: &mut Ui3Scene,
+    taken_seq: u32,
+    font: &mut crate::ui3::font::Ui3FontScratch,
+) {
+    let present = redraw_scene_text(scene, font, taken_seq, false);
     let frame = &scene.frame;
     crate::log!(
-        "ui3-service: frame taken={} browser={} seq={} render_hash={} layout_hash={} render_bytes={} layout_bytes={} scroll_y={} scroll_redraw=0 content_height={} viewport={}x{} text_nodes={} placements=0 clipped=0 batches=0 clear_ok=0 clear_ms=0 presented=0 submit_ok=0 submit_ms=0 present_ms=0 total_ms={} url={}\n",
+        "ui3-service: frame taken={} browser={} seq={} render_hash={} layout_hash={} render_bytes={} layout_bytes={} scroll_y={} scroll_redraw=0 content_height={} viewport={}x{} text_nodes={} placements={} clipped={} batches=1 clear_ok=0 clear_ms=0 presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
         taken_seq,
         frame.browser_instance_id,
         frame.seq,
@@ -105,6 +98,12 @@ fn consume_render_tree_frame(scene: &mut Ui3Scene, taken_seq: u32) {
         scene.viewport_width,
         scene.viewport_height,
         present.text_nodes,
+        present.placements,
+        present.clipped,
+        present.presented as u8,
+        present.submit_ok as u8,
+        present.submit_ms,
+        present.present_ms,
         present.total_ms,
         frame.url
     );
@@ -113,10 +112,21 @@ fn consume_render_tree_frame(scene: &mut Ui3Scene, taken_seq: u32) {
 #[derive(Copy, Clone, Debug, Default)]
 struct Ui3LayoutInspectResult {
     text_nodes: usize,
+    placements: usize,
+    clipped: usize,
+    submit_ok: bool,
+    presented: bool,
+    submit_ms: u64,
+    present_ms: u64,
     total_ms: u64,
 }
 
-fn inspect_layout(scene: &mut Ui3Scene) -> Ui3LayoutInspectResult {
+fn redraw_scene_text(
+    scene: &mut Ui3Scene,
+    font: &mut crate::ui3::font::Ui3FontScratch,
+    taken_seq: u32,
+    is_scroll: bool,
+) -> Ui3LayoutInspectResult {
     let total_start = embassy_time_driver::now();
     let frame = &scene.frame;
     let Ok(value) = serde_json::from_str::<Value>(frame.layout_trace_json.as_str()) else {
@@ -152,38 +162,55 @@ fn inspect_layout(scene: &mut Ui3Scene) -> Ui3LayoutInspectResult {
     scene.scroll_y =
         clamp_scroll_y_for_scene(scene.scroll_y, scene.content_height, scene.viewport_height);
 
+    let font_scene = crate::ui3::font::Ui3FontScene {
+        scroll_y: scene.scroll_y,
+        viewport_width: scene.viewport_width,
+        viewport_height: scene.viewport_height,
+    };
+    let draw = crate::ui3::font::draw_layout_primary(
+        layout,
+        font_scene,
+        font,
+        if is_scroll {
+            "ui3-text-scroll-primary"
+        } else {
+            "ui3-text-frame-primary"
+        },
+    );
+    let total_ms = elapsed_ms_since(total_start);
+
+    if is_scroll {
+        crate::log!(
+            "ui3-service: scroll taken={} browser={} seq={} scroll_y={} content_height={} viewport={}x{} text_nodes={} placements={} clipped={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
+            taken_seq,
+            frame.browser_instance_id,
+            frame.seq,
+            scene.scroll_y as u32,
+            scene.content_height,
+            scene.viewport_width,
+            scene.viewport_height,
+            draw.text_nodes,
+            draw.placements,
+            draw.clipped,
+            draw.presented as u8,
+            draw.submit_ok as u8,
+            draw.submit_ms,
+            draw.present_ms,
+            total_ms,
+            frame.url
+        );
+    }
+
     Ui3LayoutInspectResult {
-        text_nodes: count_layout_text_nodes(layout, 0),
+        text_nodes: draw.text_nodes,
+        placements: draw.placements,
+        clipped: draw.clipped,
+        submit_ok: draw.submit_ok,
+        presented: draw.presented,
+        submit_ms: draw.submit_ms,
+        present_ms: draw.present_ms,
         total_ms: elapsed_ms_since(total_start),
     }
-}
-
-fn count_layout_text_nodes(node: &Value, count: usize) -> usize {
-    if count >= UI3_LAYOUT_TEXT_NODE_MAX {
-        return count;
-    }
-    let mut count = count;
-    if node.get("kind").and_then(Value::as_str) == Some("text") {
-        if node
-            .get("text")
-            .and_then(Value::as_str)
-            .is_some_and(|text| !text.is_empty())
-        {
-            count = count.saturating_add(1);
-        }
-        return count;
-    }
-
-    let Some(children) = node.get("children").and_then(Value::as_array) else {
-        return count;
-    };
-    for child in children {
-        count = count_layout_text_nodes(child, count);
-        if count >= UI3_LAYOUT_TEXT_NODE_MAX {
-            break;
-        }
-    }
-    count
 }
 
 fn json_f32_field(node: &Value, key: &str) -> Option<f32> {

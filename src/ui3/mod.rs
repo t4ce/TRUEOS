@@ -1,4 +1,5 @@
 pub mod althlasfont;
+pub(crate) mod font;
 pub(crate) mod img;
 mod ui3_service;
 
