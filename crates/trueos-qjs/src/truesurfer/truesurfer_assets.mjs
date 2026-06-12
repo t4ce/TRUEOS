@@ -376,6 +376,17 @@ export function createBrowserAssetManager(options = {}) {
     return '';
   }
 
+  function resolveSceneImageKind(url) {
+    const value = String(url || '').trim();
+    if (value.startsWith('data:')) {
+      if (/^data:image\/svg\+xml(?:;|,)/i.test(value)) return 'svg';
+      if (/^data:image\/jpe?g(?:;|,)/i.test(value)) return 'jpeg';
+      if (/^data:image\/png(?:;|,)/i.test(value)) return 'png';
+      return '';
+    }
+    return resolveFetchableImageKind(value);
+  }
+
   function beginPageLoad() {
     fetchedImageBinaryUrls.clear();
   }
@@ -601,6 +612,69 @@ export function createBrowserAssetManager(options = {}) {
     scheduleImagePrimeFlush();
   }
 
+  function imageAssetTagForUrl(resolvedSrc, kind, defaultState = 'unsupported') {
+    const cached = imageTextureCache.get(resolvedSrc) || null;
+    const state = cached && cached.state ? String(cached.state) : defaultState;
+    return {
+      src: String(resolvedSrc || ''),
+      kind: String(kind || ''),
+      state,
+      texId: cached && cached.state === 'ready' ? Math.max(0, Number(cached.texId || 0) | 0) : 0,
+      mime: cached ? String(cached.mime || '') : '',
+      pixelWidth: cached ? Math.max(0, Number(cached.pixelWidth || 0) | 0) : 0,
+      pixelHeight: cached ? Math.max(0, Number(cached.pixelHeight || 0) | 0) : 0,
+      error: cached ? String(cached.error || '') : '',
+    };
+  }
+
+  function tagWidgetTreeImages(widgetTree, options = {}) {
+    const maxCount = Math.max(0, Number(options.maxCount || DEFAULT_MAX_SCENE_IMAGES) | 0);
+    const urls = [];
+    const unique = new Set();
+
+    const walk = (node) => {
+      if (!node || typeof node !== 'object') return;
+      if (node.kind === 'widget' && String(node.tag || node.widget || '').toLowerCase() === 'img') {
+        const props = node.props && typeof node.props === 'object' ? node.props : {};
+        const attrs = node.attrs && typeof node.attrs === 'object' ? node.attrs : {};
+        const rawSrc = String(props.src ?? attrs.src ?? '').trim();
+        const resolvedSrc = rawSrc ? resolveNavigationUrl(rawSrc) : '';
+        const kind = resolveSceneImageKind(resolvedSrc);
+        const supported = Boolean(resolvedSrc && kind);
+        const alreadySeen = supported && unique.has(resolvedSrc);
+        const withinLimit = supported && unique.size < maxCount;
+        const shouldPrime = supported && (alreadySeen || withinLimit);
+
+        node.props = {
+          ...props,
+          resolvedSrc,
+          imageAsset: imageAssetTagForUrl(
+            resolvedSrc,
+            kind,
+            supported ? (shouldPrime ? 'queued' : 'deferred') : 'unsupported',
+          ),
+        };
+
+        if (supported && !alreadySeen && withinLimit) {
+          unique.add(resolvedSrc);
+          urls.push(resolvedSrc);
+          maybePrewarmUrl(resolvedSrc);
+          const cached = imageTextureCache.get(resolvedSrc) || null;
+          if (!cached || (cached.state !== 'ready' && cached.state !== 'loading' && cached.state !== 'error')) {
+            enqueuePendingImageUrl(resolvedSrc, false);
+          }
+        }
+      }
+
+      const children = Array.isArray(node.children) ? node.children : [];
+      for (let i = 0; i < children.length; i += 1) walk(children[i]);
+    };
+
+    walk(widgetTree);
+    scheduleImagePrimeFlush();
+    return urls;
+  }
+
   function collectPrimeTargets(node, out = null) {
     const targets = Array.isArray(out) ? out : [];
     if (!node || typeof node !== 'object') return targets;
@@ -709,6 +783,7 @@ export function createBrowserAssetManager(options = {}) {
     applyResourcesToRows,
     getCachedImageTexture,
     requestAssetsForRows,
+    tagWidgetTreeImages,
     primeHtmlImageUrls,
     traceHtmlVideoSources,
     summarizeImageUrls,

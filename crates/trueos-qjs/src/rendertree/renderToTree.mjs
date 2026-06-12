@@ -94,6 +94,22 @@ function attrsWithWidgetProps(node, tagName) {
     if (props.dimensions.width != null && attrs.width == null) attrs.width = String(props.dimensions.width);
     if (props.dimensions.height != null && attrs.height == null) attrs.height = String(props.dimensions.height);
   }
+  if (tagName === 'img' && props.imageAsset && typeof props.imageAsset === 'object') {
+    const asset = props.imageAsset;
+    const assetSrc = String(asset.src ?? '');
+    if (assetSrc.startsWith('data:')) {
+      if (attrs['data-trueos-img-inline'] == null) attrs['data-trueos-img-inline'] = '1';
+    } else if (assetSrc && attrs['data-trueos-img-src'] == null) {
+      attrs['data-trueos-img-src'] = assetSrc;
+    }
+    if (asset.kind && attrs['data-trueos-img-kind'] == null) attrs['data-trueos-img-kind'] = String(asset.kind);
+    if (asset.state && attrs['data-trueos-img-state'] == null) attrs['data-trueos-img-state'] = String(asset.state);
+    if (Number(asset.texId || 0) > 0 && attrs['data-trueos-img-tex-id'] == null) attrs['data-trueos-img-tex-id'] = String(Number(asset.texId || 0) | 0);
+    if (Number(asset.pixelWidth || 0) > 0 && attrs['data-trueos-img-width'] == null) attrs['data-trueos-img-width'] = String(Number(asset.pixelWidth || 0) | 0);
+    if (Number(asset.pixelHeight || 0) > 0 && attrs['data-trueos-img-height'] == null) attrs['data-trueos-img-height'] = String(Number(asset.pixelHeight || 0) | 0);
+    if (asset.mime && attrs['data-trueos-img-mime'] == null) attrs['data-trueos-img-mime'] = String(asset.mime);
+    if (asset.error && attrs['data-trueos-img-error'] == null) attrs['data-trueos-img-error'] = String(asset.error);
+  }
   if (tagName === 'iframe' && props.srcdocText && attrs['data-trueos-srcdoc-text'] == null) {
     attrs['data-trueos-srcdoc-text'] = String(props.srcdocText);
   }
