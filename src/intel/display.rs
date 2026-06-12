@@ -138,6 +138,9 @@ const PRIMARY_REARM_PRESERVE_NON_PRIMARY_PLANES: bool = true;
 const PRIMARY_REARM_RGB_PLANE_PROBE_ENABLED: bool = false;
 const PRIMARY_REARM_RGB_PLANE_PROBE_SLOT_MASK: u8 = 1 << 2;
 const OVERLAY_PLANE_SLOT: usize = 1;
+const DEFAULT_OVERLAY_MARKER_ENABLED: bool = true;
+const DEFAULT_OVERLAY_MARKER_SIZE: u32 = 50;
+const DEFAULT_OVERLAY_MARKER_COLOR: u32 = 0x0000_0000;
 const OVERLAY_MARGIN_X: u32 = 0;
 const OVERLAY_MARGIN_Y: u32 = 0;
 const OVERLAY_COMPOSITION_PROOF_MARKER_ENABLED: bool = true;
@@ -532,6 +535,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         pipe,
     };
     *PRIMARY_SURFACE.lock() = Some(primary_surface);
+    let default_overlay_marker_ok = init_default_overlay_marker(dev, primary_surface);
     if ok {
         crate::r::readiness::set(crate::r::readiness::UI3_INTEL_PRESENT_READY);
     }
@@ -560,7 +564,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     }
 
     crate::log!(
-        "intel/display: primary-boot-surface pipe={} size={}x{} pitch=0x{:X} gpu=0x{:X} phys=0x{:X} plane_enabled={} ctl_before=0x{:08X} ctl_after=0x{:08X} surf_before=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ok={} logo={} ui2_base={} ui2_frame={}\n",
+        "intel/display: primary-boot-surface pipe={} size={}x{} pitch=0x{:X} gpu=0x{:X} phys=0x{:X} plane_enabled={} ctl_before=0x{:08X} ctl_after=0x{:08X} surf_before=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ok={} logo={} default_overlay_marker={} ui2_base={} ui2_frame={}\n",
         pipe.name,
         width,
         height,
@@ -575,6 +579,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         surf_live,
         ok as u8,
         logo_ok as u8,
+        default_overlay_marker_ok as u8,
         ui2_base_ok as u8,
         ui2_frame_ok as u8
     );
@@ -3255,6 +3260,57 @@ fn overlay_plane_clamped_position(surface: OverlaySurface, x: u32, y: u32) -> (u
         x.min(scanout_w.saturating_sub(surface.width)),
         y.min(scanout_h.saturating_sub(surface.height)),
     )
+}
+
+fn init_default_overlay_marker(dev: crate::intel::Dev, primary: PrimarySurface) -> bool {
+    if !DEFAULT_OVERLAY_MARKER_ENABLED {
+        return false;
+    }
+
+    let Some(surface) =
+        ensure_overlay_surface(dev, DEFAULT_OVERLAY_MARKER_SIZE, DEFAULT_OVERLAY_MARKER_SIZE)
+    else {
+        crate::log!(
+            "intel/display: default-overlay-marker skipped pipe={} cause=no-surface\n",
+            primary.pipe.name
+        );
+        return false;
+    };
+    fill_surface_color(
+        surface.virt,
+        surface.pitch_bytes as usize,
+        surface.width,
+        surface.height,
+        DEFAULT_OVERLAY_MARKER_COLOR,
+    );
+    crate::intel::dma_flush(
+        surface.virt,
+        (surface.pitch_bytes as usize).saturating_mul(surface.height as usize),
+    );
+
+    let (scanout_w, scanout_h) =
+        active_scanout_dimensions().unwrap_or((primary.width, primary.height));
+    let pos_x = scanout_w.saturating_sub(surface.width) / 2;
+    let pos_y = scanout_h.saturating_sub(surface.height) / 2;
+    let reason = "default-overlay-marker";
+    if overlay_plane_needs_rearm(dev, surface, pos_x, pos_y, OverlayAlphaMode::Opaque) {
+        program_two_plane_stack_resources(dev, surface.pipe, surface.plane_slot, reason);
+        if !arm_overlay_plane(dev, surface, pos_x, pos_y, OverlayAlphaMode::Opaque, reason) {
+            return false;
+        }
+    }
+
+    crate::log!(
+        "intel/display: default-overlay-marker pipe={} slot={} pos={}x{} size={}x{} color=0x{:08X}\n",
+        surface.pipe.name,
+        surface.plane_slot,
+        pos_x,
+        pos_y,
+        surface.width,
+        surface.height,
+        DEFAULT_OVERLAY_MARKER_COLOR
+    );
+    true
 }
 
 fn ensure_overlay_surface(
