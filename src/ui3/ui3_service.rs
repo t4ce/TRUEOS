@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use serde_json::Value;
 
@@ -22,8 +24,17 @@ struct Ui3Scene {
 }
 
 #[derive(Copy, Clone, Debug, Default)]
-struct Ui3WheelDrain {
-    read_seq: u64,
+struct Ui3LiveOverlayState {
+    context_menu_open: bool,
+    context_menu_x: u32,
+    context_menu_y: u32,
+    last_buttons_down: u32,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+struct Ui3CursorInput {
+    wheel_delta: i32,
+    overlay_dirty: bool,
 }
 
 #[embassy_executor::task]
@@ -33,7 +44,8 @@ pub async fn ui3_service_task() {
 
     let mut stats = Ui3ServiceStats::default();
     let mut scene = Ui3Scene::default();
-    let mut wheel = Ui3WheelDrain::default();
+    let mut cursor_events = crate::ui3::ui3_hid::Ui3CursorEventDrain::default();
+    let mut live_overlay = Ui3LiveOverlayState::default();
     let mut font = crate::ui3::font::Ui3FontScratch::default();
     loop {
         if crate::r::spawn_service::task_stop_requested(TASK_NAME) {
@@ -45,16 +57,31 @@ pub async fn ui3_service_task() {
             return;
         }
 
-        let wheel_delta = drain_ui3_wheel_delta(&mut wheel);
+        let cursor_input = drain_ui3_cursor_input(&mut cursor_events, &mut live_overlay, &scene);
+        if cursor_input.overlay_dirty {
+            let _ = redraw_live_overlay(&scene, &live_overlay, "ui3-live-overlay-cursor");
+        }
+        let wheel_delta = cursor_input.wheel_delta;
         if wheel_delta != 0 && !scene.frame.layout_trace_json.is_empty() {
-            scene.scroll_y =
-                (scene.scroll_y - (wheel_delta as f32 * UI3_WHEEL_SCROLL_PX_PER_NOTCH)).max(0.0);
-            scene.scroll_y = clamp_scroll_y_for_scene(
-                scene.scroll_y,
+            let old_scroll_y = scene.scroll_y;
+            let new_scroll_y = clamp_scroll_y_for_scene(
+                (old_scroll_y - (wheel_delta as f32 * UI3_WHEEL_SCROLL_PX_PER_NOTCH)).max(0.0),
                 scene.content_height,
                 scene.viewport_height,
             );
-            redraw_scene_text(&mut scene, &mut font, 0, true);
+            if new_scroll_y == old_scroll_y {
+                crate::log!(
+                    "ui3-service: scroll noop reason=bounds delta={} scroll_y={} content_height={} viewport={}x{}\n",
+                    wheel_delta,
+                    scene.scroll_y as u32,
+                    scene.content_height,
+                    scene.viewport_width,
+                    scene.viewport_height
+                );
+            } else {
+                scene.scroll_y = new_scroll_y;
+                redraw_scene_text(&mut scene, &mut font, 0, true);
+            }
         }
 
         let mut took_any = false;
@@ -85,7 +112,7 @@ fn consume_render_tree_frame(
     let present = redraw_scene_text(scene, font, taken_seq, false);
     let frame = &scene.frame;
     crate::log!(
-        "ui3-service: frame taken={} browser={} seq={} render_hash={} layout_hash={} render_bytes={} layout_bytes={} scroll_y={} scroll_redraw=0 content_height={} viewport={}x{} text_nodes={} placements={} clipped={} batches=1 clear_ok=0 clear_ms=0 presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
+        "ui3-service: frame taken={} browser={} seq={} render_hash={} layout_hash={} render_bytes={} layout_bytes={} scroll_y={} scroll_redraw=0 content_height={} viewport={}x{} text_nodes={} placements={} gradients={} clipped={} batches=1 clear_ok={} clear_ms={} rect_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
         taken_seq,
         frame.browser_instance_id,
         frame.seq,
@@ -99,7 +126,13 @@ fn consume_render_tree_frame(
         scene.viewport_height,
         present.text_nodes,
         present.placements,
+        present.gradients,
         present.clipped,
+        present.clear_ok as u8,
+        present.clear_ms,
+        present.rect_ms,
+        present.text_ms,
+        present.show_ms,
         present.presented as u8,
         present.submit_ok as u8,
         present.submit_ms,
@@ -113,9 +146,15 @@ fn consume_render_tree_frame(
 struct Ui3LayoutInspectResult {
     text_nodes: usize,
     placements: usize,
+    gradients: usize,
     clipped: usize,
     submit_ok: bool,
     presented: bool,
+    clear_ok: bool,
+    clear_ms: u64,
+    rect_ms: u64,
+    text_ms: u64,
+    show_ms: u64,
     submit_ms: u64,
     present_ms: u64,
     total_ms: u64,
@@ -181,7 +220,7 @@ fn redraw_scene_text(
 
     if is_scroll {
         crate::log!(
-            "ui3-service: scroll taken={} browser={} seq={} scroll_y={} content_height={} viewport={}x{} text_nodes={} placements={} clipped={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
+            "ui3-service: scroll taken={} browser={} seq={} scroll_y={} content_height={} viewport={}x{} text_nodes={} placements={} gradients={} clipped={} clear_ok={} clear_ms={} rect_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
             taken_seq,
             frame.browser_instance_id,
             frame.seq,
@@ -191,7 +230,13 @@ fn redraw_scene_text(
             scene.viewport_height,
             draw.text_nodes,
             draw.placements,
+            draw.gradients,
             draw.clipped,
+            draw.clear_ok as u8,
+            draw.clear_ms,
+            draw.rect_ms,
+            draw.text_ms,
+            draw.show_ms,
             draw.presented as u8,
             draw.submit_ok as u8,
             draw.submit_ms,
@@ -204,9 +249,15 @@ fn redraw_scene_text(
     Ui3LayoutInspectResult {
         text_nodes: draw.text_nodes,
         placements: draw.placements,
+        gradients: draw.gradients,
         clipped: draw.clipped,
         submit_ok: draw.submit_ok,
         presented: draw.presented,
+        clear_ok: draw.clear_ok,
+        clear_ms: draw.clear_ms,
+        rect_ms: draw.rect_ms,
+        text_ms: draw.text_ms,
+        show_ms: draw.show_ms,
         submit_ms: draw.submit_ms,
         present_ms: draw.present_ms,
         total_ms: elapsed_ms_since(total_start),
@@ -247,23 +298,77 @@ fn elapsed_ms_since(start: u64) -> u64 {
     }
 }
 
-fn drain_ui3_wheel_delta(state: &mut Ui3WheelDrain) -> i32 {
+fn drain_ui3_cursor_input(
+    state: &mut crate::ui3::ui3_hid::Ui3CursorEventDrain,
+    live_overlay: &mut Ui3LiveOverlayState,
+    scene: &Ui3Scene,
+) -> Ui3CursorInput {
     let mut out = [crate::usb2::hid::TrueosHidCursorEvent::default(); UI3_WHEEL_EVENT_BATCH_CAP];
-    let (next_seq, dropped, wrote) =
-        crate::usb2::hid::read_cursor_events_since(state.read_seq, out.as_mut_slice());
-    state.read_seq = next_seq;
-    let wheel_delta = out
-        .iter()
-        .take(wrote)
-        .fold(0i32, |sum, event| sum.saturating_add(event.wheel as i32));
-    if wheel_delta != 0 {
+    let read = crate::ui3::ui3_hid::drain_cursor_events(state, out.as_mut_slice());
+    let mut input = Ui3CursorInput::default();
+    let (viewport_width, viewport_height) = ui3_overlay_viewport(scene);
+    for event in out.iter().take(read.wrote) {
+        input.wheel_delta = input
+            .wheel_delta
+            .saturating_add(crate::ui3::ui3_hid::event_wheel_delta(*event));
+        if (event.flags & crate::ui3::ui3_hid::UI3_CURSOR_EVENT_FLAG_MOTION) != 0 {
+            input.overlay_dirty = true;
+        }
+        if crate::ui3::ui3_hid::event_has_button_change(*event) {
+            let was_right = (live_overlay.last_buttons_down
+                & crate::ui3::ui3_hid::UI3_CURSOR_BUTTON_RIGHT)
+                != 0;
+            let is_right = crate::ui3::ui3_hid::event_has_right_button(*event);
+            if is_right && !was_right {
+                let (x, y) =
+                    crate::ui3::ui3_hid::event_position_px(*event, viewport_width, viewport_height);
+                live_overlay.context_menu_open = true;
+                live_overlay.context_menu_x = x;
+                live_overlay.context_menu_y = y;
+                input.overlay_dirty = true;
+            } else if live_overlay.context_menu_open
+                && (event.buttons_down & crate::ui3::ui3_hid::UI3_CURSOR_BUTTON_LEFT) != 0
+            {
+                live_overlay.context_menu_open = false;
+                input.overlay_dirty = true;
+            }
+            live_overlay.last_buttons_down = event.buttons_down;
+        }
+    }
+    if input.wheel_delta != 0 {
         crate::log!(
             "ui3-service: wheel events={} dropped={} delta={} read_seq={}\n",
-            wrote,
-            dropped,
-            wheel_delta,
-            state.read_seq
+            read.wrote,
+            read.dropped,
+            input.wheel_delta,
+            read.next_seq
         );
     }
-    wheel_delta
+    input
+}
+
+fn redraw_live_overlay(scene: &Ui3Scene, state: &Ui3LiveOverlayState, reason: &str) -> bool {
+    let (viewport_width, viewport_height) = ui3_overlay_viewport(scene);
+    if viewport_width == 0 || viewport_height == 0 {
+        return false;
+    }
+    let mut rects: Vec<crate::intel::LiveOverlayRect> = Vec::new();
+    if state.context_menu_open {
+        crate::ui3::ui3_hid::push_context_menu_rects(
+            &mut rects,
+            state.context_menu_x,
+            state.context_menu_y,
+            viewport_width,
+            viewport_height,
+        );
+    }
+    crate::ui3::ui3_hid::push_software_cursor_rects(&mut rects, viewport_width, viewport_height);
+    crate::intel::present_live_overlay_rects(rects.as_slice(), reason)
+}
+
+fn ui3_overlay_viewport(scene: &Ui3Scene) -> (u32, u32) {
+    if scene.viewport_width != 0 && scene.viewport_height != 0 {
+        return (scene.viewport_width, scene.viewport_height);
+    }
+    crate::intel::active_scanout_dimensions().unwrap_or((0, 0))
 }

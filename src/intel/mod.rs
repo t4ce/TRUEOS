@@ -358,7 +358,7 @@ pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
     self::display::active_scanout_dimensions()
 }
 
-pub(crate) use self::display::{PrimaryPlaneSource, PrimaryPlaneSourceFormat};
+pub(crate) use self::display::{LiveOverlayRect, PrimaryPlaneSource, PrimaryPlaneSourceFormat};
 
 pub(crate) fn set_primary_plane_source(source: PrimaryPlaneSource, reason: &str) -> bool {
     self::display::set_primary_plane_source(source, reason)
@@ -510,6 +510,10 @@ pub fn present_rgba_overlay_at(
         preserve_alpha,
         reason,
     )
+}
+
+pub(crate) fn present_live_overlay_rects(rects: &[LiveOverlayRect], reason: &str) -> bool {
+    self::display::present_live_overlay_rects(rects, reason)
 }
 
 pub fn log_display_plane_ladder_probe(label: &str) {

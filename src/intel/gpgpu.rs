@@ -3645,9 +3645,6 @@ pub(crate) fn gradient_rects_rgba8_over_primary(
     rects: &[GpgpuGradientRect],
     present: bool,
 ) -> Option<GpgpuSolidRectOverlayResult> {
-    if !rect_worklist_probe_ready() || !gradient_rect_worklist_probe_ok() {
-        return None;
-    }
     let total_start_tick = direct_rcs_now_tick();
     let target = super::display::primary_surface_gpgpu_marker_target()?;
     if target.virt.is_null() || rects.is_empty() {
@@ -3987,6 +3984,13 @@ pub(crate) fn clear_ui2_frame_rgba8_white_stats() -> Option<GpgpuSubmitStats> {
 }
 
 pub(crate) fn clear_primary_rgba8_white_stats() -> Option<GpgpuSubmitStats> {
+    clear_primary_rgba8_white_for_redraw_stats(true, "gpgpu-primary-white-clear")
+}
+
+pub(crate) fn clear_primary_rgba8_white_for_redraw_stats(
+    present: bool,
+    reason: &str,
+) -> Option<GpgpuSubmitStats> {
     let total_start_tick = direct_rcs_now_tick();
     let target = super::display::primary_surface_gpgpu_marker_target()?;
     let primary = GpgpuRgba8Surface::new(
@@ -4002,13 +4006,13 @@ pub(crate) fn clear_primary_rgba8_white_stats() -> Option<GpgpuSubmitStats> {
         return None;
     }
 
+    if !present {
+        stats.total_ms = direct_rcs_elapsed_ms_since(total_start_tick);
+        return Some(stats);
+    }
+
     let present_start_tick = direct_rcs_now_tick();
-    super::display::notify_primary_surface_external_write(
-        "gpgpu-primary-white-clear",
-        0,
-        target.byte_len,
-    )
-    .then(|| {
+    super::display::notify_primary_surface_external_write(reason, 0, target.byte_len).then(|| {
         stats.present_ms = direct_rcs_elapsed_ms_since(present_start_tick);
         stats.total_ms = direct_rcs_elapsed_ms_since(total_start_tick);
         stats

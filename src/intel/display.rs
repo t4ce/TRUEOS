@@ -13,7 +13,7 @@ use alloc::{collections::VecDeque, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
-use trueos_gfx_core::{UiRect, UiSurface, UiSurfaceFormat};
+use trueos_gfx_core::{Rgba8, UiRect, UiSurface, UiSurfaceFormat};
 
 macro_rules! intel_display_focus_log {
     ($($arg:tt)*) => {
@@ -191,6 +191,27 @@ pub(crate) struct PrimarySurfaceBgra8Snapshot {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) pixels: Vec<u8>,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct LiveOverlayRect {
+    pub(crate) x: u32,
+    pub(crate) y: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) color: Rgba8,
+}
+
+impl LiveOverlayRect {
+    pub(crate) const fn new(x: u32, y: u32, width: u32, height: u32, color: Rgba8) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+            color,
+        }
+    }
 }
 
 impl PrimarySurfaceSampleSet {
@@ -1949,6 +1970,67 @@ pub(crate) fn present_rgba_overlay_at(
     )
 }
 
+pub(crate) fn present_live_overlay_rects(rects: &[LiveOverlayRect], reason: &str) -> bool {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return false;
+    };
+    let (width, height) = active_scanout_dimensions()
+        .or_else(|| {
+            PRIMARY_SURFACE
+                .lock()
+                .as_ref()
+                .map(|primary| (primary.width, primary.height))
+        })
+        .unwrap_or((0, 0));
+    if width == 0 || height == 0 {
+        return false;
+    }
+    let Some(surface) = ensure_overlay_surface(dev, width, height) else {
+        return false;
+    };
+
+    fill_surface_color(
+        surface.virt,
+        surface.pitch_bytes as usize,
+        surface.width,
+        surface.height,
+        0,
+    );
+    for rect in rects {
+        fill_overlay_rect_rgba(surface, *rect);
+    }
+
+    let byte_len = (surface.pitch_bytes as usize).saturating_mul(surface.height as usize);
+    crate::intel::dma_flush(surface.virt, byte_len);
+
+    if overlay_plane_needs_rearm(dev, surface, 0, 0, OverlayAlphaMode::Straight) {
+        program_two_plane_stack_resources(dev, surface.pipe, surface.plane_slot, reason);
+        if !arm_overlay_plane(dev, surface, 0, 0, OverlayAlphaMode::Straight, reason) {
+            return false;
+        }
+    }
+
+    let seq = OVERLAY_PRESENT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    if seq <= 8 || seq.is_multiple_of(60) {
+        let plane_base = overlay_plane_base(surface.pipe, surface.plane_slot);
+        crate::log!(
+            "intel/display: live-overlay-present seq={} reason={} pipe={} slot={} rects={} size={}x{} pitch=0x{:X} surf=0x{:08X} surf_live=0x{:08X}\n",
+            seq,
+            reason,
+            surface.pipe.name,
+            surface.plane_slot,
+            rects.len(),
+            surface.width,
+            surface.height,
+            surface.pitch_bytes,
+            crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURF_OFF),
+            crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURFLIVE_OFF),
+        );
+    }
+
+    true
+}
+
 pub(crate) fn log_display_plane_ladder_probe(label: &str) {
     crate::log!("intel/display: display-ladder label={} stage=read-only begin\n", label);
     log_primary_surface_samples("display-ladder-primary");
@@ -3554,6 +3636,20 @@ fn fill_overlay_rect(surface: OverlaySurface, x: u32, y: u32, width: u32, height
             }
         }
     }
+}
+
+fn fill_overlay_rect_rgba(surface: OverlaySurface, rect: LiveOverlayRect) {
+    if rect.width == 0 || rect.height == 0 || rect.color.a == 0 {
+        return;
+    }
+    fill_overlay_rect(
+        surface,
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+        overlay_scanout_pixel_bgra_premul(rect.color.r, rect.color.g, rect.color.b, rect.color.a),
+    );
 }
 
 fn sample_overlay_surface_pixel(surface: OverlaySurface, x: u32, y: u32) -> u32 {
