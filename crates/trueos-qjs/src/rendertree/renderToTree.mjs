@@ -2,6 +2,7 @@
 // This is the render-tree bridge: widlib widgets in, expanded render-tree out.
 
 import { parse as parseHtml } from 'parse5';
+import { buildCssStyleRefIndex } from '../truesurfer/css.mjs';
 import { domToWidgets } from '../widlib/index.mjs';
 import { widgetTreeToLayout as buildWidgetTreeLayout } from './layout.mjs';
 import {
@@ -54,6 +55,17 @@ function textRowsFromWidgetTree(widgetTree) {
   };
   walk(widgetTree);
   return rows;
+}
+
+function widgetPaint(node) {
+  const paint = node && node.meta && node.meta.paint;
+  return paint && typeof paint === 'object' && !Array.isArray(paint) ? { ...paint } : null;
+}
+
+function withWidgetPaint(renderNode, widgetNode) {
+  const paint = widgetPaint(widgetNode);
+  if (paint && renderNode && typeof renderNode === 'object') renderNode.paint = paint;
+  return renderNode;
 }
 
 function temporalTagName(node, attrs) {
@@ -249,12 +261,12 @@ function detailsRenderNode(node, options) {
     }
   }
 
-  return blockNode({
+  return withWidgetPaint(blockNode({
     key,
     tagName: 'details',
     attrs,
     children,
-  });
+  }), node);
 }
 
 function iframeRenderNode(node, options) {
@@ -269,6 +281,7 @@ function iframeRenderNode(node, options) {
   if (srcdoc.trim().length > 0 && depth < maxDepth) {
     try {
       const doc = parseHtml(srcdoc);
+      buildCssStyleRefIndex(doc);
       const nestedTree = domToWidgets(doc, { rootKey: `${widgetKeyPath(key)}:iframe-doc` });
       const rows = textRowsFromWidgetTree(nestedTree);
       if (rows.length > 0 && attrs['data-trueos-srcdoc-text'] == null) {
@@ -280,12 +293,12 @@ function iframeRenderNode(node, options) {
     }
   }
 
-  return blockNode({
+  return withWidgetPaint(blockNode({
     key,
     tagName: 'iframe',
     attrs: stableObject(attrs),
     children,
-  });
+  }), node);
 }
 
 export function widgetNodeToRenderNode(node, options = {}) {
@@ -324,7 +337,7 @@ export function widgetNodeToRenderNode(node, options = {}) {
       }
     }
   }
-  return renderNode;
+  return withWidgetPaint(renderNode, node);
 }
 
 export function widgetTreeToRenderNodes(widgetTree, options = {}) {

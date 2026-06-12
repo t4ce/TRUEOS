@@ -1,4 +1,5 @@
 import { BLOCK_TAGS } from './htmlDefaults.mjs';
+import { defaultTheme } from '../rendertree/renderTheme.mjs';
 
 const FONT_PX = 15;
 const FONT_RGB = 0x000000;
@@ -19,12 +20,40 @@ const TAG_THEME_DEFAULTS = {
     paddingRightPx: 12,
     paddingBottomPx: 6,
     paddingLeftPx: 12,
+    paint: {
+      role: 'button',
+      fill: 'linear-gradient',
+      color0: defaultTheme.control.button.fill,
+      color1: defaultTheme.control.button.fillEnd,
+      borderColor: defaultTheme.control.button.border,
+      borderWidth: defaultTheme.control.button.borderWidth,
+      radius: defaultTheme.control.button.radius,
+    },
+  },
+  dialog: {
+    paint: {
+      role: 'dialog',
+      fill: 'linear-gradient',
+      color0: defaultTheme.control.dialog.fill,
+      color1: defaultTheme.control.dialog.fillEnd,
+      borderColor: defaultTheme.control.dialog.border,
+      borderWidth: defaultTheme.control.dialog.borderWidth,
+      radius: defaultTheme.control.dialog.radius,
+    },
   },
   em: {
     fontStyle: 'italic',
   },
   i: {
     fontStyle: 'italic',
+  },
+  iframe: {
+    paint: {
+      role: 'iframe',
+      borderColor: defaultTheme.control.iframe.border,
+      borderWidth: defaultTheme.control.iframe.borderWidth,
+      radius: defaultTheme.control.iframe.radius,
+    },
   },
   strong: {
     fontWeight: 'bold',
@@ -83,6 +112,7 @@ export function createComputedStyle(tagName = '', path = '', parentStyle = null)
     paddingTopPx: 0,
     paddingRightPx: 0,
     paddingBottomPx: 0,
+    paint: null,
     source: {
       matchedRules: [],
       inline: false,

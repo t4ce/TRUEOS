@@ -361,7 +361,7 @@ function buildMinimalShell(title) {
   return `<!doctype html><html>${headChunk}${bodyChunk}</html>`;
 }
 
-function extractDocumentArtifacts(source) {
+function extractDocumentArtifacts(source, options = {}) {
   const startedAt = Date.now();
   const html = safeString(source);
   const headBlock = TRUESURFER_SUBSET_PROFILE.includeHead ? extractTagBlock(html, 'head') : null;
@@ -379,9 +379,11 @@ function extractDocumentArtifacts(source) {
   const bodyHierarchySummary = summarizeBodyHierarchy(bodyHierarchy);
   const styles = TRUESURFER_SUBSET_PROFILE.includeStyles ? collectStyleArtifacts(html) : [];
   const scripts = TRUESURFER_SUBSET_PROFILE.includeScripts ? collectScriptArtifacts(html) : [];
-  const styleIndex = emptyStyleIndex();
+  const styleIndex = options.styleIndex && typeof options.styleIndex === 'object'
+    ? options.styleIndex
+    : emptyStyleIndex();
   const domParseMs = Date.now() - startedAt;
-  const styleIndexMs = 0;
+  const styleIndexMs = Math.max(0, Number(options.styleIndexMs || 0) || 0);
   const shellHtml = buildMinimalShell(title);
   const parseMs = Date.now() - startedAt;
 

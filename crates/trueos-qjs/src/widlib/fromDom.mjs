@@ -29,8 +29,9 @@ function makeText(text) {
   return { kind: 'text', text };
 }
 
-function makeWidget({ tag, key, attrs = {}, props = {}, children = [], registry }) {
+function makeWidget({ tag, key, attrs = {}, props = {}, children = [], registry, styleRef = null, paint = null }) {
   const meta = registry.get(tag, attrs);
+  const metaPaint = paint && typeof paint === 'object' && !Array.isArray(paint) ? { ...paint } : undefined;
   return {
     kind: 'widget',
     key,
@@ -56,6 +57,8 @@ function makeWidget({ tag, key, attrs = {}, props = {}, children = [], registry 
       interactions: meta.interactions,
       overlays: meta.overlays,
       expandsTo: meta.expandsTo,
+      styleRef,
+      paint: metaPaint,
     },
   };
 }
@@ -208,6 +211,10 @@ export function nodeToWidgets(node, path = '0', options = {}) {
       props,
       children,
       registry: opts.registry,
+      styleRef: node.__trueosStyleRef ?? null,
+      paint: node.__trueosComputedStyle && typeof node.__trueosComputedStyle.paint === 'object'
+        ? node.__trueosComputedStyle.paint
+        : null,
     }),
   ];
 }
