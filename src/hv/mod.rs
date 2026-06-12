@@ -11,7 +11,6 @@ pub mod security;
 pub mod snapshot;
 pub mod store;
 pub mod vmcall;
-pub mod vmui2;
 pub mod vmx;
 pub mod vnet;
 
@@ -41,8 +40,6 @@ use crate::shell2::{MatrixTarget, ShellBackend2};
 use guest_work::{VmLaneProfile, pick_vm_hull_lane};
 use memory::*;
 use snapshot::*;
-pub use vmui2::*;
-
 const MAIN_LOOP_MARKER: &[u8] = b"main: entering executor loop";
 const VMX_PAGE_SIZE: usize = 4096;
 const HV_LOG_LINE: usize = crate::allcaps::hv::LOG_LINE_BYTES;
@@ -376,9 +373,6 @@ pub fn vm_state(vm_id: u8) -> HvVmState {
 pub fn app_vm_archive(vm_id: u8) -> Option<AllocString> {
     if vm_slot(vm_id).is_none() {
         return None;
-    }
-    if let Some(archive) = vmui2::app_window_session_archive(vm_id) {
-        return Some(archive);
     }
     blueprint_launch_snapshot(vm_id).map(|state| state.archive)
 }
@@ -1491,8 +1485,6 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
         }
     }
 
-    materialize_deferred_blueprint_app_windows(vm_id);
-
     vm.running.store(false, Ordering::Release);
     vm.starting.store(false, Ordering::Release);
     vm.stop_req.store(false, Ordering::Release);
@@ -1767,13 +1759,11 @@ async fn vmx_launch_once_with_ept(
                     crate::hv::vmcall::DispatchOutcome::Stop => break,
                     crate::hv::vmcall::DispatchOutcome::Yield => {
                         clear_current_vm_id();
-                        materialize_deferred_blueprint_app_windows(vm_id);
                         Timer::after(EmbassyDuration::from_millis(1)).await;
                         set_current_vm_id(vm_id);
                     }
                     crate::hv::vmcall::DispatchOutcome::SleepMs(ms) => {
                         clear_current_vm_id();
-                        materialize_deferred_blueprint_app_windows(vm_id);
                         if ms == 0 {
                             Timer::after(EmbassyDuration::from_millis(1)).await;
                         } else {

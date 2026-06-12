@@ -470,6 +470,73 @@ pub unsafe extern "C" fn realloc(ptr: *mut c_void, size: usize) -> *mut c_void {
     c_realloc_ptr(ptr, size)
 }
 
+#[repr(C)]
+pub struct TrueosCabiHeapStats {
+    pub heap_start: usize,
+    pub heap_end: usize,
+    pub usable_total: usize,
+    pub free_bytes: usize,
+    pub largest_free_block: usize,
+    pub free_blocks: usize,
+    pub initialized: u32,
+    pub source: u32,
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_alloc(size: usize) -> *mut u8 {
+    c_malloc_aligned(size, core::mem::align_of::<usize>()).cast::<u8>()
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_calloc(nmemb: usize, size: usize) -> *mut u8 {
+    calloc(nmemb, size).cast::<u8>()
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_free(ptr: *mut u8) {
+    c_free_ptr(ptr.cast::<c_void>());
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_realloc(ptr: *mut u8, size: usize) -> *mut u8 {
+    c_realloc_ptr(ptr.cast::<c_void>(), size).cast::<u8>()
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_malloc_usable_size(ptr: *const u8) -> usize {
+    if ptr.is_null() {
+        return 0;
+    }
+    c_allocation_get(ptr as *mut c_void)
+        .map(|record| record.size)
+        .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_heap_stats(out: *mut TrueosCabiHeapStats) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    let stats = crate::allocators::heap_stats();
+    let source = match stats.source {
+        crate::allocators::HeapSourceKind::Unconfigured => 0,
+        crate::allocators::HeapSourceKind::Arena => 1,
+    };
+    unsafe {
+        *out = TrueosCabiHeapStats {
+            heap_start: stats.heap_start,
+            heap_end: stats.heap_end,
+            usable_total: stats.usable_total,
+            free_bytes: stats.free_bytes,
+            largest_free_block: stats.largest_free_block,
+            free_blocks: stats.free_blocks,
+            initialized: u32::from(stats.initialized),
+            source,
+        };
+    }
+    0
+}
+
 unsafe fn cstr_arg(ptr: *const c_char) -> Option<String> {
     if ptr.is_null() {
         return None;
@@ -966,6 +1033,40 @@ pub extern "C" fn trueos_time_unix_nanos() -> u64 {
     crate::chronos::best_effort_unix_time_seconds()
         .unwrap_or(0)
         .saturating_mul(1_000_000_000)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_boot_timestamp_secs() -> u64 {
+    crate::limine::boot_timestamp_secs().unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_thread_current_id() -> usize {
+    pthread_current_id()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_ntp_current_unix_seconds() -> u64 {
+    crate::r::net::ntp::current_unix_seconds()
+        .or_else(crate::r::time::unix_time_seconds)
+        .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ntp_kernel_date_day_month_year(
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> usize {
+    let date = crate::r::net::ntp::kernel_date_day_month_year();
+    let bytes = date.as_bytes();
+    if out_ptr.is_null() || out_cap == 0 {
+        return bytes.len();
+    }
+    let n = core::cmp::min(bytes.len(), out_cap);
+    unsafe {
+        ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, n);
+    }
+    n
 }
 
 #[unsafe(no_mangle)]

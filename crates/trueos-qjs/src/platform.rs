@@ -23,6 +23,8 @@ pub mod sys {
 }
 
 pub mod gfx {
+    const ERR_UNSUPPORTED: i32 = -8;
+
     unsafe extern "C" {
         fn trueos_cabi_gfx_upload_texture_rgba(
             tex_id: u32,
@@ -46,7 +48,8 @@ pub mod gfx {
 
     #[inline]
     pub unsafe fn upload_texture_png(tex_id: u32, data_ptr: *const u8, data_len: usize) -> i32 {
-        unsafe { v::vcabi::trueos_cabi_gfx_upload_texture_png(tex_id, data_ptr, data_len) }
+        let _ = (tex_id, data_ptr, data_len);
+        ERR_UNSUPPORTED
     }
 
     #[inline]
@@ -55,12 +58,14 @@ pub mod gfx {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32 {
-        unsafe { v::vcabi::trueos_cabi_gfx_upload_texture_png_async(tex_id, data_ptr, data_len) }
+        let _ = (tex_id, data_ptr, data_len);
+        ERR_UNSUPPORTED
     }
 
     #[inline]
     pub unsafe fn upload_texture_jpeg(tex_id: u32, data_ptr: *const u8, data_len: usize) -> i32 {
-        unsafe { v::vcabi::trueos_cabi_gfx_upload_texture_jpeg(tex_id, data_ptr, data_len) }
+        let _ = (tex_id, data_ptr, data_len);
+        ERR_UNSUPPORTED
     }
 
     #[inline]
@@ -69,12 +74,14 @@ pub mod gfx {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32 {
-        unsafe { v::vcabi::trueos_cabi_gfx_upload_texture_jpeg_async(tex_id, data_ptr, data_len) }
+        let _ = (tex_id, data_ptr, data_len);
+        ERR_UNSUPPORTED
     }
 
     #[inline]
     pub unsafe fn upload_texture_svg(tex_id: u32, data_ptr: *const u8, data_len: usize) -> i32 {
-        unsafe { v::vcabi::trueos_cabi_gfx_upload_texture_svg(tex_id, data_ptr, data_len) }
+        let _ = (tex_id, data_ptr, data_len);
+        ERR_UNSUPPORTED
     }
 
     #[inline]
@@ -83,7 +90,8 @@ pub mod gfx {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32 {
-        unsafe { v::vcabi::trueos_cabi_gfx_upload_texture_svg_async(tex_id, data_ptr, data_len) }
+        let _ = (tex_id, data_ptr, data_len);
+        ERR_UNSUPPORTED
     }
 
     #[inline]
@@ -107,12 +115,8 @@ pub mod gfx {
 }
 
 pub mod ui {
-    unsafe extern "C" {
-        fn trueos_cabi_ui2_signal_hosted_browser_dirty(content_id: u32, flags: u32);
-    }
-
     #[inline]
     pub fn signal_hosted_browser_dirty(content_id: u32, flags: u32) {
-        unsafe { trueos_cabi_ui2_signal_hosted_browser_dirty(content_id, flags) };
+        let _ = (content_id, flags);
     }
 }

@@ -3,7 +3,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use crate::vfetch_job::{BytesJob, Poll as FetchPoll};
 use crate::vmcall;
 use crate::vpanic;
-use v::{vio, vsys, vui2};
+use v::{vio, vsys};
 
 const HULL_PROBE_PATH: &[u8] = b"/vm/hull_probe.txt";
 const HULL_FETCH_URL: &[u8] = b"https://example.com/";
@@ -75,7 +75,7 @@ fn log_time_sample(prefix: &str) {
 fn run_vlayer_probes() -> ProbeSummary {
     let fs_ok = run_fs_probe();
     let net_ok = run_net_probe();
-    let ui_ok = run_ui2_probe(fs_ok, net_ok);
+    let ui_ok = false;
     let mut flags = 0u32;
     if fs_ok {
         flags |= PROBE_FS_OK;
@@ -169,35 +169,6 @@ fn run_net_probe() -> bool {
     }
 }
 
-fn run_ui2_probe(fs_ok: bool, net_ok: bool) -> bool {
-    vpanic::set_stage(0x1040);
-    let rect = vui2::Rect {
-        x: 72,
-        y: 72,
-        width: 420,
-        height: 140,
-    };
-    let Some(window) = vui2::OwnedWindow::create("VMHULL", rect) else {
-        net_line("VMHULL: ui2 create failed");
-        return false;
-    };
-    let mut title = [0u8; 64];
-    let title_len = build_probe_title(&mut title, fs_ok, net_ok);
-    let ok = window.id().set_title(as_str(&title[..title_len]))
-        && window
-            .id()
-            .set_decorations(vui2::WindowDecorationMode::System)
-        && window.id().focus();
-    if ok {
-        let id = window.leak();
-        HULL_WINDOW_ID.store(id.raw(), Ordering::Release);
-        net_line("VMHULL: ui2 window ok");
-    } else {
-        net_line("VMHULL: ui2 window metadata update failed");
-    }
-    ok
-}
-
 fn log_probe_summary(summary: ProbeSummary) {
     let mut line = [0u8; 64];
     let len = build_probe_summary(&mut line, summary);
@@ -205,14 +176,6 @@ fn log_probe_summary(summary: ProbeSummary) {
 }
 
 fn refresh_probe_window_title(_now: u64) {
-    let flags = HULL_PROBE_FLAGS.load(Ordering::Acquire);
-    let fs_ok = (flags & PROBE_FS_OK) != 0;
-    let net_ok = (flags & PROBE_NET_OK) != 0;
-    let mut title = [0u8; 64];
-    let title_len = build_probe_title(&mut title, fs_ok, net_ok);
-    if let Some(window) = vui2::WindowId::new(HULL_WINDOW_ID.load(Ordering::Acquire)) {
-        let _ = window.set_title(as_str(&title[..title_len]));
-    }
 }
 
 fn bool_mark(ok: bool) -> &'static str {
@@ -294,29 +257,6 @@ fn build_probe_summary(buf: &mut [u8; 64], summary: ProbeSummary) -> usize {
     n = push_bytes(buf, n, bool_mark(summary.net_ok).as_bytes());
     n = push_bytes(buf, n, b" ui2=");
     push_bytes(buf, n, bool_mark(summary.ui_ok).as_bytes())
-}
-
-fn build_probe_title(buf: &mut [u8; 64], fs_ok: bool, net_ok: bool) -> usize {
-    let mut n = 0usize;
-    n = push_bytes(buf, n, b"VMHULL fs=");
-    n = push_bytes(buf, n, bool_mark(fs_ok).as_bytes());
-    n = push_bytes(buf, n, b" net=");
-    n = push_bytes(buf, n, bool_mark(net_ok).as_bytes());
-    n = push_bytes(buf, n, b" ap=");
-    let mut num = [0u8; 20];
-    push_bytes(buf, n, fmt_u64(&mut num, guest_apic_id() as u64))
-}
-
-#[cfg(target_arch = "x86_64")]
-fn guest_apic_id() -> u32 {
-    use core::arch::x86_64::__cpuid;
-
-    (__cpuid(1).ebx >> 24) & 0xff
-}
-
-#[cfg(not(target_arch = "x86_64"))]
-fn guest_apic_id() -> u32 {
-    0
 }
 
 fn push_bytes(dst: &mut [u8], at: usize, src: &[u8]) -> usize {
