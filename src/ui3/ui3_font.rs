@@ -6,7 +6,9 @@ const UI3_LAYOUT_TEXT_NODE_MAX: usize = 512;
 const UI3_TEXT_PLACEMENT_MAX: usize = 4096;
 const UI3_TEXT_SUBMIT_BATCH_PLACEMENTS: usize = 256;
 const UI3_TEXT_COLOR_RGBA: u32 = 0x0000_0000;
-const UI3_FLOAT_WINDOW_GRADIENT_MAX: usize = 25;
+const UI3_PAINTED_BOX_MAX: usize = 25;
+const UI3_GRADIENT_DESCS_PER_PAINTED_BOX_MAX: usize = 5;
+const UI3_GRADIENT_DESC_MAX: usize = UI3_PAINTED_BOX_MAX * UI3_GRADIENT_DESCS_PER_PAINTED_BOX_MAX;
 
 #[derive(Debug, Default)]
 pub(crate) struct Ui3FontScratch {
@@ -48,6 +50,13 @@ struct Ui3TextCollectStats {
     placement_cap_hit: bool,
 }
 
+#[derive(Copy, Clone, Debug, Default)]
+struct Ui3GradientCollectStats {
+    painted_boxes: usize,
+    painted_box_cap_hit: bool,
+    gradient_desc_cap_hit: bool,
+}
+
 pub(crate) fn draw_layout_primary(
     layout: &Value,
     scene: Ui3FontScene,
@@ -58,6 +67,7 @@ pub(crate) fn draw_layout_primary(
     scratch.gradients.clear();
     scratch.control_gradients.clear();
     let mut collect = Ui3TextCollectStats::default();
+    let mut gradient_collect = Ui3GradientCollectStats::default();
     collect_layout_rect_gradients(
         layout,
         0.0,
@@ -66,6 +76,7 @@ pub(crate) fn draw_layout_primary(
         scene,
         &mut scratch.gradients,
         &mut scratch.control_gradients,
+        &mut gradient_collect,
     );
     collect_layout_text_placements(
         layout,
@@ -80,13 +91,25 @@ pub(crate) fn draw_layout_primary(
         .gradients
         .len()
         .saturating_add(scratch.control_gradients.len());
-    let gradient_cap_hit = gradient_count >= UI3_FLOAT_WINDOW_GRADIENT_MAX;
-    if gradient_cap_hit {
+    if gradient_collect.painted_box_cap_hit {
         crate::log_warn!(
             target: "ui3";
-            "ui3-font: gradient cap reached gradients={} cap={} scroll_y={} viewport={}x{}\n",
+            "ui3-font: painted-box cap reached boxes={} cap={} gradients={} scroll_y={} viewport={}x{}\n",
+            gradient_collect.painted_boxes,
+            UI3_PAINTED_BOX_MAX,
             gradient_count,
-            UI3_FLOAT_WINDOW_GRADIENT_MAX,
+            scene.scroll_y as u32,
+            scene.viewport_width,
+            scene.viewport_height
+        );
+    }
+    if gradient_collect.gradient_desc_cap_hit {
+        crate::log_warn!(
+            target: "ui3";
+            "ui3-font: gradient-desc cap reached gradients={} cap={} boxes={} scroll_y={} viewport={}x{}\n",
+            gradient_count,
+            UI3_GRADIENT_DESC_MAX,
+            gradient_collect.painted_boxes,
             scene.scroll_y as u32,
             scene.viewport_width,
             scene.viewport_height
@@ -146,22 +169,6 @@ pub(crate) fn draw_layout_primary(
     let mut text_submit_ms = 0u64;
     let mut text_present_ms = 0u64;
     if !scratch.placements.is_empty() {
-        if scratch.placements.len() >= UI3_TEXT_SUBMIT_BATCH_PLACEMENTS {
-            crate::log_warn!(
-                target: "ui3";
-                "ui3-font: sprite64 submit cap reached placements={} batch_cap={} batches={} scroll_y={} viewport={}x{}\n",
-                scratch.placements.len(),
-                UI3_TEXT_SUBMIT_BATCH_PLACEMENTS,
-                scratch
-                    .placements
-                    .len()
-                    .saturating_add(UI3_TEXT_SUBMIT_BATCH_PLACEMENTS - 1)
-                    / UI3_TEXT_SUBMIT_BATCH_PLACEMENTS,
-                scene.scroll_y as u32,
-                scene.viewport_width,
-                scene.viewport_height
-            );
-        }
         let total_batches = scratch
             .placements
             .len()
@@ -285,8 +292,14 @@ fn collect_layout_rect_gradients(
     scene: Ui3FontScene,
     gradients: &mut Vec<crate::intel::gpgpu::GpgpuGradientRect>,
     control_gradients: &mut Vec<crate::intel::gpgpu::GpgpuGradientRect>,
+    stats: &mut Ui3GradientCollectStats,
 ) {
-    if layout_gradient_count(gradients, control_gradients) >= UI3_FLOAT_WINDOW_GRADIENT_MAX {
+    if stats.painted_boxes >= UI3_PAINTED_BOX_MAX {
+        stats.painted_box_cap_hit = true;
+        return;
+    }
+    if layout_gradient_count(gradients, control_gradients) >= UI3_GRADIENT_DESC_MAX {
+        stats.gradient_desc_cap_hit = true;
         return;
     }
     let x = parent_x + json_f32_field(node, "x").unwrap_or(0.0);
@@ -294,23 +307,38 @@ fn collect_layout_rect_gradients(
     if node.get("kind").and_then(Value::as_str) == Some("block") {
         match layout_paint_role(node) {
             Some("dialog") => {
-                let remaining = UI3_FLOAT_WINDOW_GRADIENT_MAX
+                let remaining = UI3_GRADIENT_DESC_MAX
                     .saturating_sub(layout_gradient_count(gradients, control_gradients));
-                push_painted_box_gradients(x, y - scroll_y, node, scene, remaining, gradients);
+                if push_painted_box_gradients(x, y - scroll_y, node, scene, remaining, gradients)
+                    != 0
+                {
+                    stats.painted_boxes = stats.painted_boxes.saturating_add(1);
+                }
             }
-            Some("button") | Some("iframe") => {
-                let remaining = UI3_FLOAT_WINDOW_GRADIENT_MAX
+            Some("button") | Some("iframe") | Some("table") | Some("table-cell") => {
+                let remaining = UI3_GRADIENT_DESC_MAX
                     .saturating_sub(layout_gradient_count(gradients, control_gradients));
-                push_painted_box_gradients(
+                if push_painted_box_gradients(
                     x,
                     y - scroll_y,
                     node,
                     scene,
                     remaining,
                     control_gradients,
-                );
+                ) != 0
+                {
+                    stats.painted_boxes = stats.painted_boxes.saturating_add(1);
+                }
             }
             _ => {}
+        }
+        if stats.painted_boxes >= UI3_PAINTED_BOX_MAX {
+            stats.painted_box_cap_hit = true;
+            return;
+        }
+        if layout_gradient_count(gradients, control_gradients) >= UI3_GRADIENT_DESC_MAX {
+            stats.gradient_desc_cap_hit = true;
+            return;
         }
     }
 
@@ -326,8 +354,14 @@ fn collect_layout_rect_gradients(
             scene,
             gradients,
             control_gradients,
+            stats,
         );
-        if layout_gradient_count(gradients, control_gradients) >= UI3_FLOAT_WINDOW_GRADIENT_MAX {
+        if stats.painted_boxes >= UI3_PAINTED_BOX_MAX {
+            stats.painted_box_cap_hit = true;
+            break;
+        }
+        if layout_gradient_count(gradients, control_gradients) >= UI3_GRADIENT_DESC_MAX {
+            stats.gradient_desc_cap_hit = true;
             break;
         }
     }
@@ -351,24 +385,24 @@ fn push_painted_box_gradients(
     scene: Ui3FontScene,
     remaining: usize,
     gradients: &mut Vec<crate::intel::gpgpu::GpgpuGradientRect>,
-) {
+) -> usize {
     if remaining == 0 {
-        return;
+        return 0;
     }
     let Some(width) = json_u32_field(node, "width") else {
-        return;
+        return 0;
     };
     let Some(height) = json_u32_field(node, "height") else {
-        return;
+        return 0;
     };
     if width == 0 || height == 0 || y + height as f32 <= 0.0 || y >= scene.viewport_height as f32 {
-        return;
+        return 0;
     }
     if x + width as f32 <= 0.0 || x >= scene.viewport_width as f32 {
-        return;
+        return 0;
     }
     let Some(paint) = node.get("paint") else {
-        return;
+        return 0;
     };
     let border_width = json_u32_field(paint, "borderWidth")
         .unwrap_or(0)
@@ -379,7 +413,7 @@ fn push_painted_box_gradients(
     if border_width > 0 {
         let Some(border_color) = json_rgb24_field(paint, "borderColor").map(rgb24_to_rgba8_word)
         else {
-            return;
+            return 0;
         };
         pushed = pushed.saturating_add(push_solid_gradient_rect(
             gradients,
@@ -420,7 +454,7 @@ fn push_painted_box_gradients(
     }
 
     let Some(color0) = json_rgb24_field(paint, "color0").map(rgb24_to_rgba8_word) else {
-        return;
+        return pushed;
     };
     let color1 = json_rgb24_field(paint, "color1")
         .map(rgb24_to_rgba8_word)
@@ -430,7 +464,7 @@ fn push_painted_box_gradients(
     let fill_width = width.saturating_sub(border_width.saturating_mul(2));
     let fill_height = height.saturating_sub(border_width.saturating_mul(2));
     if fill_width == 0 || fill_height == 0 || pushed >= remaining {
-        return;
+        return pushed;
     }
     gradients.push(crate::intel::gpgpu::GpgpuGradientRect {
         rect: crate::intel::gpgpu::GpgpuRect::new(
@@ -443,6 +477,7 @@ fn push_painted_box_gradients(
         color1_rgba: color1,
         vertical: false,
     });
+    pushed.saturating_add(1)
 }
 
 fn push_solid_gradient_rect(
@@ -528,7 +563,18 @@ fn push_text_placements(
     let face = crate::ui3::althlasfont::bitmapfont::ATHLAS_FONT_FACE_LUCIDA_HALF;
     let line_height =
         crate::ui3::althlasfont::bitmapfont::athlas_font_line_height_px(face).unwrap_or(22) as f32;
-    if y + line_height < 0.0 || y > scene.viewport_height as f32 {
+    let fallback_max_x = scene
+        .viewport_width
+        .saturating_sub(crate::intel::gpgpu::SPRITE64_WORKLIST_CELL_PIXELS)
+        as i32;
+    let fallback_max_y = scene
+        .viewport_height
+        .saturating_sub(crate::intel::gpgpu::SPRITE64_WORKLIST_CELL_PIXELS)
+        as i32;
+    let (max_draw_x, max_draw_y) = crate::intel::gpgpu::sprite64_primary_draw_bounds()
+        .unwrap_or((fallback_max_x, fallback_max_y));
+    let dst_y = floor_i32(y);
+    if dst_y < 0 || dst_y > max_draw_y {
         stats.clipped = stats.clipped.saturating_add(text.chars().count());
         return;
     }
@@ -553,7 +599,8 @@ fn push_text_placements(
             continue;
         };
         let advance = f32::from(region.src_w.max(1)).max(line_height * 0.35);
-        if pen_x + advance < 0.0 || pen_x > scene.viewport_width as f32 {
+        let dst_x = floor_i32(pen_x);
+        if dst_x < 0 || dst_x > max_draw_x {
             stats.clipped = stats.clipped.saturating_add(1);
             pen_x += advance;
             continue;
@@ -564,8 +611,8 @@ fn push_text_placements(
         };
         placements.push(crate::intel::gpgpu::GpgpuSprite64Placement::tinted_src_over(
             slot,
-            floor_i32(pen_x),
-            floor_i32(y),
+            dst_x,
+            dst_y,
             UI3_TEXT_COLOR_RGBA,
         ));
         pen_x += advance;

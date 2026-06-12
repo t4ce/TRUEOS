@@ -130,6 +130,7 @@ const PRIMARY_BOOT_LOGO_DECODE_MODE: PrimaryBootLogoDecodeMode =
 const PRIMARY_BOOT_LOGO_WAIT_TIMEOUT_MS: u64 = 5000;
 const PRIMARY_BOOT_LOGO_PRESENT_HOLD_MS: u64 = 3000;
 const PRIMARY_BOOT_DISPLAY_WARMUP_ENABLED: bool = true;
+const PRIMARY_GPGPU_EDGE_GUARD_PIXELS: u32 = 64;
 
 const fn pipe_bottom_color_u0_10(red: u32, green: u32, blue: u32) -> u32 {
     ((red & 0x3FF) << 20) | ((green & 0x3FF) << 10) | (blue & 0x3FF)
@@ -248,7 +249,10 @@ pub(super) struct PipeInfo {
 struct PrimarySurface {
     width: u32,
     height: u32,
+    backing_width: u32,
+    backing_height: u32,
     pitch_bytes: u32,
+    byte_len: usize,
     phys: u64,
     virt: *mut u8,
     gpu: u64,
@@ -487,11 +491,14 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     log_primary_dimensions_probe(pipe.name, pipe_src_raw, pipe_src_dims, fb_dims, chosen_from);
     program_pipe_bottom_color(dev, pipe, PIPE_BOTTOM_COLOR_RAW);
 
-    let Some(pitch_bytes) = aligned_pitch_bytes(width, PRIMARY_BYTES_PER_PIXEL) else {
+    let backing_width = width.saturating_add(PRIMARY_GPGPU_EDGE_GUARD_PIXELS);
+    let backing_height = height.saturating_add(PRIMARY_GPGPU_EDGE_GUARD_PIXELS);
+    let Some(pitch_bytes) = aligned_pitch_bytes(backing_width, PRIMARY_BYTES_PER_PIXEL) else {
         crate::log!("intel/display: primary-boot-surface skipped bad pitch width={}\n", width);
         return;
     };
-    let Some(byte_len) = usize::try_from(u64::from(pitch_bytes) * u64::from(height)).ok() else {
+    let Some(byte_len) = usize::try_from(u64::from(pitch_bytes) * u64::from(backing_height)).ok()
+    else {
         crate::log!("intel/display: primary-boot-surface skipped surface too large\n");
         return;
     };
@@ -550,7 +557,10 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     let primary_surface = PrimarySurface {
         width,
         height,
+        backing_width,
+        backing_height,
         pitch_bytes,
+        byte_len,
         phys,
         virt,
         gpu: crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE,
@@ -586,11 +596,15 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     }
 
     crate::log!(
-        "intel/display: primary-boot-surface pipe={} size={}x{} pitch=0x{:X} gpu=0x{:X} phys=0x{:X} plane_enabled={} ctl_before=0x{:08X} ctl_after=0x{:08X} surf_before=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ok={} logo={} default_overlay_marker={} ui2_base={} ui2_frame={}\n",
+        "intel/display: primary-boot-surface pipe={} size={}x{} backing={}x{} pitch=0x{:X} bytes=0x{:X} guard={} gpu=0x{:X} phys=0x{:X} plane_enabled={} ctl_before=0x{:08X} ctl_after=0x{:08X} surf_before=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ok={} logo={} default_overlay_marker={} ui2_base={} ui2_frame={}\n",
         pipe.name,
         width,
         height,
+        backing_width,
+        backing_height,
         pitch_bytes,
+        byte_len,
+        PRIMARY_GPGPU_EDGE_GUARD_PIXELS,
         crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE,
         phys,
         ((ctl_after & PLANE_CTL_ENABLE) != 0) as u8,
@@ -1183,14 +1197,14 @@ pub(super) fn primary_surface_gpgpu_marker_target() -> Option<PrimarySurfaceGpgp
     let marker_offset = (marker_y as usize)
         .saturating_mul(surface.pitch_bytes as usize)
         .saturating_add((marker_x as usize).saturating_mul(PRIMARY_BYTES_PER_PIXEL as usize));
-    let byte_len = (surface.pitch_bytes as usize).saturating_mul(surface.height as usize);
+    let byte_len = surface.byte_len;
     if marker_offset.saturating_add(core::mem::size_of::<u32>()) > byte_len {
         return None;
     }
 
     Some(PrimarySurfaceGpgpuTarget {
-        width: surface.width,
-        height: surface.height,
+        width: surface.backing_width,
+        height: surface.backing_height,
         pitch_bytes: surface.pitch_bytes,
         gpu: surface.gpu,
         phys: surface.phys,
@@ -1242,7 +1256,7 @@ pub(super) fn notify_primary_surface_external_write(
     let Some(surface) = *PRIMARY_SURFACE.lock() else {
         return false;
     };
-    let byte_len = (surface.pitch_bytes as usize).saturating_mul(surface.height as usize);
+    let byte_len = surface.byte_len;
     if !surface.virt.is_null() && flush_offset < byte_len {
         let flush_bytes = core::cmp::min(flush_bytes, byte_len.saturating_sub(flush_offset));
         crate::intel::dma_flush(unsafe { surface.virt.add(flush_offset) }, flush_bytes);

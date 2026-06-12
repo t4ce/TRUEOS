@@ -48,7 +48,9 @@ export const defaultTheme = Object.freeze({
 
     table: Object.freeze({
       border: 0x999999,
+      borderWidth: 1,
       cellBorder: 0xb0b0b0,
+      cellBorderWidth: 1,
       headerFill: 0xf7f7f7,
     }),
   }),
