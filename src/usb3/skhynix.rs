@@ -14,7 +14,7 @@ const UAS_STREAM_ID_FIRST: u16 = 3;
 const UAS_STREAM_ID_LAST: u16 = 15;
 const UAS_XHCI_STREAMS_ENABLED: bool = true;
 const UAS_XHCI_OUT_STREAMS_ENABLED: bool = true;
-const UAS_PREPOST_WRITE_DATA_OUT_STREAMS: bool = true;
+const UAS_PREPOST_WRITE_DATA_OUT_STREAMS: bool = false;
 const SKHYNIX_UAS_MAX_TRANSFER_BYTES: usize = 8 * 1024 * 1024;
 const SKHYNIX_UAS_LOG_TRANSFER_BYTES: usize = 512 * 1024;
 
@@ -1288,6 +1288,13 @@ impl SkhynixUasBlockDevice {
             );
             return Err(crate::disc::block::Error::Corrupted);
         }
+        crate::log!(
+            "crabusb: skhynix-green proof=block-write cmd=write10 lba={} blocks={} bytes={} tag=0x{:04x} status=ok\n",
+            lba,
+            blocks,
+            bytes,
+            tag
+        );
         Ok(())
     }
 

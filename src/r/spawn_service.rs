@@ -69,12 +69,6 @@ define_started_flags!(
     UI2_HOSTED_SYNC_TASK_STARTED,
     UI2_HIT_TASK_STARTED,
     UI2_STARTED,
-    UI2_ATHLAS_THIRD_DEMO_STARTED,
-    UI2_ATHLAS_HALF_DEMO_STARTED,
-    UI2_ATHLAS_1X_DEMO_STARTED,
-    UI2_ATHLAS_2X_DEMO_STARTED,
-    UI2_PALATINO_1X_DEMO_STARTED,
-    UI2_TWEMOJI_1X_STARTED,
     UI2_ANALOG_CLOCK_DEMO_STARTED,
     UI2_TEXT_INPUT_DEMO_STARTED,
     UI2_TEXT_AREA_DEMO_STARTED,
@@ -961,7 +955,7 @@ async fn bp_autostart_task() {
         "inline://trueos/input.html",
         include_str!("../../crates/trueos-qjs/src/html/input.html"),
     );
-    let _ = crate::surfer::html_shack::enqueue_ready_html_for_browser(html).await;
+    // let _ = crate::surfer::html_shack::enqueue_ready_html_for_browser(html).await;
 }
 
 fn spawn_bp_autostart(spawner: Spawner) -> SpawnAttempt {

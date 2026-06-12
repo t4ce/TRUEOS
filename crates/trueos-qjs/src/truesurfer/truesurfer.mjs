@@ -437,7 +437,17 @@ function setHtml(nextHtml, meta) {
     const styleStart = Date.now();
     const styleIndex = buildCssStyleRefIndexFn(parsedDocument);
     const styleIndexMs = Date.now() - styleStart;
+    const assetManager = ensureBrowserAssetManager();
+    if (assetManager && typeof assetManager.beginPageLoad === 'function') {
+      assetManager.beginPageLoad();
+    }
     const widgetTree = domToWidgetsFn(parsedDocument);
+    if (assetManager && typeof assetManager.tagWidgetTreeImages === 'function') {
+      currentSceneImageUrls = assetManager.tagWidgetTreeImages(widgetTree) || [];
+    }
+    const imageSummary = assetManager && typeof assetManager.summarizeImageUrls === 'function'
+      ? assetManager.summarizeImageUrls(currentSceneImageUrls)
+      : { total: 0, pending: 0, ready: 0, error: 0 };
     const parsed = extractDocumentArtifactsFn(html, { styleIndex, styleIndexMs });
     currentArtifactsState = {
       url,
@@ -454,9 +464,9 @@ function setHtml(nextHtml, meta) {
       styleRuleCount: parsed.styleRuleCount,
       scriptCount: parsed.scriptCount,
       scriptBytes: parsed.scriptBytes,
+      imageSummary,
     };
     publishLatestArtifacts();
-    const imageSummary = { total: 0, pending: 0, ready: 0, error: 0 };
     logSyncPipeline(url, parsed);
     root.__trueosTruesurferLastStyleIndex = parsed.styleIndex;
     logWidgetTable(url, widgetTree, widgetStart);
@@ -482,6 +492,7 @@ function setHtml(nextHtml, meta) {
       styleRuleCount: parsed.styleRuleCount,
       scriptCount: parsed.scriptCount,
       scriptBytes: parsed.scriptBytes,
+      imageSummary,
       renderHash: renderTreeArtifact ? renderTreeArtifact.renderHash : '',
       layoutHash: renderTreeArtifact ? renderTreeArtifact.layoutHash : '',
       renderTreeJson: renderTreeArtifact ? renderTreeArtifact.renderTreeJson : '',

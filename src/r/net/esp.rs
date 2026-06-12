@@ -1501,13 +1501,16 @@ pub async fn esp_gate_task() {
                             );
                         }
                         trueos_esp::gate::GateSignal::EspDiscovered(from) => {
-                            crate::log!(
-                                "esp-gate: heartbeat=swarm from {}.{}.{}.{} upload_port={}\n",
-                                from.addr[0],
-                                from.addr[1],
-                                from.addr[2],
-                                from.addr[3],
-                                trueos_esp::gate::ESP_HTTP_UPLOAD_PORT
+                            crate::globalog::log_with_level(
+                                log::Level::Trace,
+                                format_args!(
+                                    "esp-gate: heartbeat=swarm from {}.{}.{}.{} upload_port={}\n",
+                                    from.addr[0],
+                                    from.addr[1],
+                                    from.addr[2],
+                                    from.addr[3],
+                                    trueos_esp::gate::ESP_HTTP_UPLOAD_PORT
+                                ),
                             );
 
                             let now_ms = monotonic_ms();
