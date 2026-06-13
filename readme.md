@@ -55,6 +55,7 @@ brew install llvm binutils autoconf automake libtool xorriso zstd p7zip
 # Network Console Access
 `konsole -e sh -c 'stty -echo -icanon cols 200 rows 60; nc 192.168.178.94 4245; stty sane'`
 
+# Optional Section
 > [!IMPORTANT]
 > From here its mostly custom config that is emulator specific - OPTIONAL
 > This may be your best resort to puzzle a network driver or usb host controller
