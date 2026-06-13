@@ -22,92 +22,83 @@ A Rust Based 64 Bit Paged X84 Baremetal OS Targeted at modern Intel XeLp
 > A constant influx of resources, money, and safety.
 
 ## Setup to build ELF + ISO via makefile make (run,iso,release)
-### Rust and C Tools
-
+## Linux (Ubuntu)
+> [!TIP]
+> I develop on Stock Ubuntu.
+### C Tools
 ```
 sudo apt update && sudo apt upgrade
 sudo apt install npm git gh make rustup autoconf automake mtools nasm xorriso qemu-system gdb build-essential konsole gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
 ```
+### Rust Tools 
 ```
 cargo install fmt cargo-outdated cargo-edit --locked
 rustup component add clippy
 rustup toolchain install nightly --profile minimal --component rust-src,- - rustfmt,rust-analyzer,llvm-tools-preview
 cargo install cargo-edit --locked
 ```
+### Vars
 ```
 export CC_aarch64_unknown_none=aarch64-linux-gnu-gcc
 export AR_aarch64_unknown_none=aarch64-linux-gnu-ar
 ```
-
-**bold**
-*italic*
-`inline code`
-> This is a quote.
-> [!NOTE]
-> Useful note.
-
+## minimum install on MAC
+```
+xcode-select --install
+rustup toolchain install nightly
+brew install llvm binutils autoconf automake libtool xorriso zstd p7zip
+```
 > [!TIP]
-> Helpful tip.
+> We were able to build, with a MAC Laptop aswell.
 
+# Network Console Access
+`konsole -e sh -c 'stty -echo -icanon cols 200 rows 60; nc 192.168.178.94 4245; stty sane'`
+
+> [!IMPORTANT]
+> From here its mostly custom config that is emulator specific - OPTIONAL
+> This may be your best resort to puzzle a network driver or usb host controller
+> for your maybe unsupported hardware
+
+## update
 > [!WARNING]
-> Warning text.
+> Unless you choose only linear and easy upgrades
+> this i would recommend you dont move, it requires serious architecture knowledge
+> to maintain the clear dep. Graph - that you maybe havent even seen
 
-GitHub supports these alert blocks in Markdown, including NOTE, TIP, IMPORTANT, WARNING, and CAUTION.
-
-# minimum install on MAC
-- xcode-select --install
-- rustup toolchain install nightly
-- brew install llvm binutils autoconf automake libtool xorriso zstd p7zip
-
-# update
+```
 cargo outdated -R
 cargo upgrade
 cargo update
 cargo clippy --fix --broken-code --bin "TRUEOS" -p TRUEOS
+```
 
-# and so nomachione with pxe work add to
+## nomachione with pxe 
+> [!Note]
+> Nomachine had some Port in use that i needed in some setting
+> once atleast, for PXE so i had to move this, in order to preserve remote control
+```
 sudoedit /usr/NX/etc/server.cfg
 UDPPort 50000-50999
-
 sudo systemctl restart nxserver
+```
 
-# host firewall baseline
-# Current host layout:
-# - br0 is the LAN-facing bridge and owns the host IPs.
-# - enp5s0 is the physical uplink enslaved into br0.
-# - QEMU attaches to br0 via qemu-bridge-helper.
-# - legacy tap0 setups should be removed or left inactive.
-#
-# Current NoMachine config/listener:
-# - /usr/NX/etc/server.cfg -> Port 4000
-# - TCP listener on 0.0.0.0:4000 and [::]:4000
-#
-# This applies:
-# - allow all outgoing
-# - block all incoming by default
-# - allow inbound TCP 80, 443, and 4000 only on br0
-chmod +x scripts/configure-host-firewall.sh
-./scripts/configure-host-firewall.sh
+## firewall
+> [!Note]
+> this mostly depends on what ports you assign, because currently
+> i just casual use ports 0 to 10, so its kind of important
+> to know that ports can be assigned way more toughtful - but i never encountered problems
 
-# optional: reopen PXE-related UDP only when you are actively using PXE on br0
-PXE_IF=br0
-sudo ufw allow in on "$PXE_IF" proto udp from 192.168.178.0/24 to any port 67
-sudo ufw allow in on "$PXE_IF" proto udp from 192.168.178.0/24 to any port 4011
-sudo ufw allow in on "$PXE_IF" proto udp from 192.168.178.0/24 to any port 69
-sudo ufw allow in on "$PXE_IF" proto udp from 192.168.178.0/24 to any port 1024:65535
-sudo node pxe2.js --iface "$PXE_IF" --verbose
 
-/*
-ConPink 	FF_55_FF 
-ConBlue 	08_18_30
-ConWhite 	FF_FF_FF
-*/
-
-# PASS IN USB DEVICE / NVMe data partition / VFIO permissions
+## PASS IN USB DEVICE / NVMe data partition / VFIO permissions
+> [!Note]
+> passing in USB devices towards the emulator does cause
+> for a more realistic debug scenario, but keep in mind that emulator
+> has its entire universe of problems and behaviour, it remains a decent approach
+> for a lot can be simpler to bringup 
 sudo install -m 0644 99-trueos-usb.rules /etc/udev/rules.d/99-trueos-usb.rules
 sudo udevadm control --reload-rules
 
-# Castor mouse stays on the Linux host now; the rules file no longer auto-unbinds it.
+### Castor mouse stays on the Linux host now; the rules file no longer auto-unbinds it.
 
 sudo usermod -aG kvm "$USER"
 newgrp kvm
@@ -118,8 +109,8 @@ sudo udevadm trigger --name-match=nvme2n1p1
 ls -l /dev/nvme2n1p1
 ls -l /dev/vfio || true
 
-# Optional: keep router/DHCP seeing the *same* MAC as the physical uplink
-# (otherwise br0 may present a different MAC than $UPLINK)
+### Optional: keep router/DHCP seeing the *same* MAC as the physical uplink
+### (otherwise br0 may present a different MAC than $UPLINK)
 sudo nmcli con mod "$BR" 802-3-ethernet.cloned-mac-address "$(cat /sys/class/net/$UPLINK/address)"
 sudo nmcli con down "$BR" 2>/dev/null || true
 sudo nmcli con up "$BR"
@@ -136,7 +127,7 @@ ip -4 -br addr show "$BR" "$UPLINK" "$TAP" 2>/dev/null || true
 ip -4 route show default
 ip -4 -br addr show | egrep "^($BR|$UPLINK|$TAP)\\b" || true
 
-# VFIO USB CONTROLLER (no persist across reboot)
+### VFIO USB CONTROLLER (no persist across reboot)
 sudo modprobe vfio-pci
 echo 0000:06:00.0 | sudo tee /sys/bus/pci/devices/0000:06:00.0/driver/unbind
 echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:06:00.0/driver_override
@@ -156,23 +147,23 @@ ls -l /dev/vfio || true
 lspci -nnk -s 06:00.0
 '
 
-# Whole dock / hub root to guest (preferred over usb-host hub passthrough)
-# QEMU's usb-host docs explicitly warn that passing a hub itself does not work reliably.
-# The robust path is to hand the guest the owning host controller so the guest becomes
-# the real USB root for that downstream tree.
-#
-# In this setup the rear dock sits under:
-#   0000:06:00.0 ASMedia ASM3241 USB 3.2 Gen 2 Host Controller
-#   /sys/bus/usb/devices/4-1   -> SuperSpeed hub side
-#   /sys/bus/usb/devices/3-1   -> USB2 hub side
-#
-# Verify the mapping on the host:
+### Whole dock / hub root to guest (preferred over usb-host hub passthrough)
+QEMU's usb-host docs explicitly warn that passing a hub itself does not work reliably.
+The robust path is to hand the guest the owning host controller so the guest becomes
+the real USB root for that downstream tree.
+In this setup the rear dock sits under:
+
+   0000:06:00.0 ASMedia ASM3241 USB 3.2 Gen 2 Host Controller
+   /sys/bus/usb/devices/4-1   -> SuperSpeed hub side
+  /sys/bus/usb/devices/3-1   -> USB2 hub side
+
+## Verify the mapping on the host:
 readlink -f /sys/bus/usb/devices/4-1
 readlink -f /sys/bus/usb/devices/3-1
 lspci -nn -s 06:00.0
 lsusb -t
-#
-# Then bind that controller to VFIO and boot with controller-root USB handoff:
+
+## Then bind that controller to VFIO and boot with controller-root USB handoff:
 sudo modprobe vfio vfio-pci vfio_iommu_type1
 echo 0000:06:00.0 | sudo tee /sys/bus/pci/devices/0000:06:00.0/driver/unbind
 echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:06:00.0/driver_override
@@ -180,11 +171,11 @@ echo 0000:06:00.0 | sudo tee /sys/bus/pci/drivers_probe
 lspci -nnk -s 06:00.0
 ls -l /dev/vfio
 make run QEMU_USB_MODE=controller QEMU_USB_CONTROLLER_PCI=0000:06:00.0
-#
-# This makes the VM own the physical USB root for the dock on that controller,
-# which is much less fail-prone than trying to pass the dock hub via -device usb-host.
 
-# dummy (no persist across reboot)
+### This makes the VM own the physical USB root for the dock on that controller,
+### which is much less fail-prone than trying to pass the dock hub via -device usb-host.
+
+### dummy (no persist across reboot)
 sudo ip link add NIC type dummy
 sudo ip link set dev NIC address 5c:60:ba:b5:58:0f
 Bus 003 Device 003: ID 0403:6010 Future Technology Devices International, Ltd FT2232C/D/H Dual UART/FIFO IC
@@ -193,7 +184,7 @@ cd /home/t4ce/REPOS/TRUEGA
 sudo tools/flash_sram.sh
 
 
-## LAN bridge for QEMU (rerunnable)
+### LAN bridge for QEMU (rerunnable)
 sudo nmcli con up br0-enp5s0
 sudo nmcli con up br0
 UPLINK=enp5s0
@@ -210,7 +201,7 @@ sudo nmcli con down "$WIRED_CON" 2>/dev/null || true
 sudo nmcli con up "$SLAVE_CON"
 sudo nmcli con up br0
 
-# one-time qemu-bridge-helper setup for unprivileged `make run`
+### one-time qemu-bridge-helper setup for unprivileged `make run`
 BR=br0
 HELPER=/usr/lib/qemu/qemu-bridge-helper
 test -x "$HELPER" || HELPER=/usr/libexec/qemu-bridge-helper
@@ -221,26 +212,19 @@ sudo chmod 0644 /etc/qemu/bridge.conf
 sudo chmod u+s "$HELPER"
 cat /etc/qemu/bridge.conf
 
-# optional cleanup if you previously used the fixed tap0 setup
+### optional cleanup if you previously used the fixed tap0 setup
 sudo nmcli con down tap0 2>/dev/null || true
 sudo nmcli con delete tap0 2>/dev/null || true
 sudo ip link del tap0 2>/dev/null || true
 nmcli -t -f NAME,TYPE,DEVICE con show | grep -E '^br0:' || true
 ip -br link show "$BR"
 
-# if `ip -br link show "$BR"` reports `DOWN` / `NO-CARRIER`, the uplink is
-# not attached to the bridge yet
+### if `ip -br link show "$BR"` reports `DOWN` / `NO-CARRIER`, the uplink is not attached to the bridge yet
 nmcli -t -f NAME con show | grep -Fxq "$SLAVE_CON" \
   || sudo nmcli con add type bridge-slave ifname "$UPLINK" con-name "$SLAVE_CON" master "$BR"
 sudo nmcli con up "$SLAVE_CON"
 sudo nmcli con up "$BR"
 bridge link show | grep -E "$BR|$UPLINK" || true
-
-
-konsole -e sh -c 'stty -echo -icanon cols 200 rows 60; nc 192.168.178.94 4245; stty sane'
-
-
-konsole -e sh -c 'stty -echo -icanon cols 200 rows 60; nc 192.168.178.94 1; stty sane'
 
 
 
@@ -252,35 +236,12 @@ SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0951", ATTR{idPro
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="0951", ATTRS{idProduct}=="16a4", RUN+="/bin/sh -c 'if [ -L /sys/bus/usb/devices/%k/driver ]; then echo %k > /sys/bus/usb/drivers/$(basename $(readlink -f /sys/bus/usb/devices/%k/driver))/unbind; fi'"
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="303a", ATTR{idProduct}=="1001", MODE="0666", TAG+="uaccess"
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", RUN+="/bin/sh -c 'if [ -L /sys/bus/usb/devices/%k/driver ]; then echo %k > /sys/bus/usb/drivers/$(basename $(readlink -f /sys/bus/usb/devices/%k/driver))/unbind; fi'"
-
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="058f", ATTR{idProduct}=="6387", MODE="0666", TAG+="uaccess"
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="058f", ATTRS{idProduct}=="6387", RUN+="/bin/sh -c 'if [ -L /sys/bus/usb/devices/%k/driver ]; then echo %k > /sys/bus/usb/drivers/$(basename $(readlink -f /sys/bus/usb/devices/%k/driver))/unbind; fi'"
-
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="07cf", ATTR{idProduct}=="6803", MODE="0666", TAG+="uaccess"
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="07cf", ATTRS{idProduct}=="6803", RUN+="/bin/sh -c 'if [ -L /sys/bus/usb/devices/%k/driver ]; then echo %k > /sys/bus/usb/drivers/$(basename $(readlink -f /sys/bus/usb/devices/%k/driver))/unbind; fi'"
-
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="1462", ATTR{idProduct}=="7e03", MODE="0666", TAG+="uaccess"
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="1462", ATTRS{idProduct}=="7e03", RUN+="/bin/sh -c 'if [ -L /sys/bus/usb/devices/%k/driver ]; then echo %k > /sys/bus/usb/drivers/$(basename $(readlink -f /sys/bus/usb/devices/%k/driver))/unbind; fi'"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -433,8 +394,21 @@ SMOLTCP_IFACE_MAX_ADDR_COUNT=4 \
 rust-analyzer analysis-stats . --only src \
   --skip-inference --skip-mir-stats --skip-data-layout --skip-const-eval
 ```
-/*
+
 Retired shell2 etc/go spinner sequences, kept as glyph references:
 go  = ⣿ ⣾ ⣽ ⣻ ⢿ ⡿ ⣟ ⣯ ⣷
 go2 = ⢈ ⡈ ⡐ ⡠ ⣀ ⢄ ⢂ ⢁ ⡁
-*/
+
+ConPink 	FF_55_FF 
+ConBlue 	08_18_30
+ConWhite 	FF_FF_FF
+
+
+**bold**
+*italic*
+`inline code`
+> This is a quote.
+> [!TIP]
+> [!WARNING]
+> [!CAUTION]
+> [!Note]
