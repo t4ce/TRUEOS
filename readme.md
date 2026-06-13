@@ -22,7 +22,7 @@ Think of TRUE OS as the world’s fast-moving “entropy dividend”:
 A constant influx of resources, money, and safety.
 ```
 
-## Setup to build ELF + ISO via makefile make (run,iso,release)
+# Setup to build ELF + ISO via makefile make (run, iso, release)
 ## Linux (Ubuntu)
 > [!TIP]
 > I develop on Stock Ubuntu. This is how i recover, right after an EMP hit my geo replicated setup causing a full reset:
