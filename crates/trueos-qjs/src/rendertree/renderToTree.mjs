@@ -23,6 +23,89 @@ const TEMPORAL_INPUT_TAGS = Object.freeze({
   week: 'weekinput',
   'datetime-local': 'datetimelocalinput',
 });
+
+function renderContextFor(options = {}) {
+  if (options.renderContext && typeof options.renderContext === 'object') return options.renderContext;
+  return { embeddedScenes: [], nextEmbeddedSceneId: 1 };
+}
+
+function embeddedSceneIdFor(context, key) {
+  const seq = Math.max(1, Number(context.nextEmbeddedSceneId ?? 1) || 1);
+  context.nextEmbeddedSceneId = seq + 1;
+  return `${widgetKeyPath(key)}:embedded-scene:${seq}`;
+}
+
+function publicEmbeddedScene(scene) {
+  const out = {
+    id: String(scene.id ?? ''),
+    parentKey: String(scene.parentKey ?? ''),
+    parentTagName: String(scene.parentTagName ?? 'iframe'),
+    source: String(scene.source ?? 'iframe-srcdoc'),
+    depth: Math.max(0, Number(scene.depth ?? 0) || 0),
+    renderHash: String(scene.renderHash ?? ''),
+    renderNodes: Array.isArray(scene.renderNodes) ? scene.renderNodes : [],
+  };
+  if (scene.layoutHash) out.layoutHash = String(scene.layoutHash);
+  if (scene.parentBox) out.parentBox = scene.parentBox;
+  if (scene.viewport) out.viewport = scene.viewport;
+  if (scene.layout) out.layout = scene.layout;
+  if (scene.error) out.error = String(scene.error);
+  return out;
+}
+
+function findLayoutBoxByKey(node, key) {
+  if (!node || typeof node !== 'object') return null;
+  if (String(node.key ?? '') === String(key ?? '')) return node;
+  for (const child of node.children ?? []) {
+    const found = findLayoutBoxByKey(child, key);
+    if (found) return found;
+  }
+  return null;
+}
+
+function layoutBoxSummary(box) {
+  if (!box || typeof box !== 'object') return null;
+  return {
+    key: String(box.key ?? ''),
+    tagName: String(box.tagName ?? ''),
+    x: Math.round(Number(box.x ?? 0) || 0),
+    y: Math.round(Number(box.y ?? 0) || 0),
+    width: Math.max(0, Math.round(Number(box.width ?? 0) || 0)),
+    height: Math.max(0, Math.round(Number(box.height ?? 0) || 0)),
+  };
+}
+
+function buildEmbeddedSceneLayouts(scenes, rootLayout, options = {}) {
+  const out = [];
+  for (const scene of scenes ?? []) {
+    const parentBox = findLayoutBoxByKey(rootLayout, scene.parentKey)
+      ?? out.map((prior) => findLayoutBoxByKey(prior.layout, scene.parentKey)).find(Boolean)
+      ?? null;
+    const parentSummary = layoutBoxSummary(parentBox);
+    const viewport = normalizeViewport({
+      width: parentSummary && parentSummary.width > 0 ? parentSummary.width : options.viewport?.width,
+      height: parentSummary && parentSummary.height > 0 ? parentSummary.height : options.viewport?.height,
+    });
+    const layout = scene.widgetTree
+      ? buildWidgetTreeLayout(scene.widgetTree, scene.renderNodes, {
+        ...options,
+        viewport,
+        rootPad: 0,
+        scrollbarPad: 0,
+      })
+      : null;
+    const layoutHash = layout ? hashText(JSON.stringify(layout)) : '';
+    out.push(publicEmbeddedScene({
+      ...scene,
+      parentBox: parentSummary,
+      viewport,
+      layout,
+      layoutHash,
+    }));
+  }
+  return out;
+}
+
 function cleanChildren(children, options) {
   const out = [];
   for (const child of children ?? []) {
@@ -286,15 +369,19 @@ function detailsRenderNode(node, options) {
 }
 
 function iframeRenderNode(node, options) {
+  const context = renderContextFor(options);
   const attrs = attrsWithWidgetProps(node, 'iframe');
   const props = node.props && typeof node.props === 'object' ? node.props : {};
   const srcdoc = String(props.srcdoc ?? attrs.srcdoc ?? '');
   const key = String(node.key ?? 'iframe');
   const depth = Math.max(0, Number(options.iframeDepth ?? 0) || 0);
   const maxDepth = Math.max(0, Number(options.maxIframeDepth ?? DEFAULT_MAX_IFRAME_DEPTH) || 0);
-  const children = [];
 
   if (srcdoc.trim().length > 0 && depth < maxDepth) {
+    const sceneId = embeddedSceneIdFor(context, key);
+    const sceneInsertIndex = context.embeddedScenes.length;
+    attrs['data-trueos-embedded-scene-id'] = sceneId;
+    attrs['data-trueos-embedded-scene-source'] = 'iframe-srcdoc';
     try {
       const doc = parseHtml(srcdoc);
       buildCssStyleRefIndex(doc);
@@ -303,9 +390,35 @@ function iframeRenderNode(node, options) {
       if (rows.length > 0 && attrs['data-trueos-srcdoc-text'] == null) {
         attrs['data-trueos-srcdoc-text'] = rows.join('\n');
       }
-      children.push(...cleanChildren(nestedTree.children, { ...options, iframeDepth: depth + 1 }));
-    } catch (_) {
-      children.push(textNode('(iframe srcdoc parse error)'));
+      const nestedRenderNodes = widgetTreeToRenderNodes(nestedTree, {
+        ...options,
+        iframeDepth: depth + 1,
+        renderContext: context,
+        wrapRoot: false,
+      });
+      context.embeddedScenes.splice(sceneInsertIndex, 0, {
+        id: sceneId,
+        parentKey: key,
+        parentTagName: 'iframe',
+        source: 'iframe-srcdoc',
+        depth: depth + 1,
+        widgetTree: nestedTree,
+        renderNodes: nestedRenderNodes,
+        renderHash: hashText(JSON.stringify(nestedRenderNodes)),
+      });
+    } catch (error) {
+      attrs['data-trueos-embedded-scene-error'] = 'parse';
+      attrs['data-trueos-srcdoc-text'] = attrs['data-trueos-srcdoc-text'] ?? '(iframe srcdoc parse error)';
+      context.embeddedScenes.splice(sceneInsertIndex, 0, {
+        id: sceneId,
+        parentKey: key,
+        parentTagName: 'iframe',
+        source: 'iframe-srcdoc',
+        depth: depth + 1,
+        renderNodes: [textNode('(iframe srcdoc parse error)')],
+        renderHash: hashText(JSON.stringify([textNode('(iframe srcdoc parse error)')])),
+        error: error && error.message ? String(error.message) : 'iframe srcdoc parse error',
+      });
     }
   }
 
@@ -313,7 +426,7 @@ function iframeRenderNode(node, options) {
     key,
     tagName: 'iframe',
     attrs: stableObject(attrs),
-    children,
+    children: [],
   }), node);
 }
 
@@ -357,7 +470,8 @@ export function widgetNodeToRenderNode(node, options = {}) {
 }
 
 export function widgetTreeToRenderNodes(widgetTree, options = {}) {
-  const children = cleanChildren(widgetTree && widgetTree.children, options);
+  const renderContext = renderContextFor(options);
+  const children = cleanChildren(widgetTree && widgetTree.children, { ...options, renderContext });
   if (options.wrapRoot === false) return children;
   return [
     blockNode({
@@ -399,23 +513,40 @@ export function createRenderTreeTrace(widgetTree, options = {}) {
   const source = String(options.source ?? 'parse5');
   const viewport = normalizeViewport(options.viewport);
   const bytes = Math.max(0, Math.trunc(numberFrom(options.bytes, 0)));
-  const renderNodes = widgetTreeToRenderNodes(widgetTree, options);
-  const renderHash = hashText(JSON.stringify(renderNodes));
+  const renderContext = renderContextFor(options);
+  const renderNodes = widgetTreeToRenderNodes(widgetTree, { ...options, renderContext });
+  const embeddedScenes = renderContext.embeddedScenes.map(publicEmbeddedScene);
+  const renderHash = hashText(JSON.stringify({ rootId: 'root', renderNodes, embeddedScenes }));
   const artifact = {
     renderTree: {
       op: 'render-tree',
+      version: RENDER_TRACE_VERSION,
+      rootId: 'root',
       source,
       hash: renderHash,
       bytes,
       renderNodes,
     },
   };
+  if (embeddedScenes.length > 0) {
+    artifact.renderTree.embeddedScenes = embeddedScenes;
+  }
 
   if (options.includeLayout === true) {
     const layout = buildWidgetTreeLayout(widgetTree, renderNodes, { ...options, viewport });
-    const layoutHash = hashText(JSON.stringify(layout));
+    const embeddedLayoutScenes = buildEmbeddedSceneLayouts(
+      renderContext.embeddedScenes,
+      layout,
+      { ...options, viewport },
+    );
+    const layoutHash = hashText(JSON.stringify({
+      rootId: 'root',
+      layout,
+      embeddedScenes: embeddedLayoutScenes,
+    }));
     const traceBody = {
       version: RENDER_TRACE_VERSION,
+      rootId: 'root',
       source,
       viewport,
       renderHash,
@@ -423,6 +554,7 @@ export function createRenderTreeTrace(widgetTree, options = {}) {
       renderNodes,
       layout,
     };
+    if (embeddedLayoutScenes.length > 0) traceBody.embeddedScenes = embeddedLayoutScenes;
     artifact.layoutTrace = {
       op: 'layout-trace',
       trace: {
