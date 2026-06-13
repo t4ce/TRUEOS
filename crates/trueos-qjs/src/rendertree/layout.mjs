@@ -74,21 +74,28 @@ export function createTextMeasurer(options = {}) {
     lineHeight,
     measure(text, maxWidth = Number.POSITIVE_INFINITY) {
       const limit = Math.max(1, numberFrom(maxWidth, Number.POSITIVE_INFINITY));
-      const words = normalizeWhitespace(text).split(' ').filter(Boolean);
-      if (words.length === 0) return { width: 0, height: lineHeight, lines: [''] };
-
       const lines = [];
-      let current = '';
-      for (const word of words) {
-        const next = current ? `${current} ${word}` : word;
-        if (widthOf(next) <= limit || !current) {
-          current = next;
-        } else {
-          lines.push(current);
-          current = word;
+      const hardLines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n');
+
+      for (const hardLine of hardLines) {
+        const words = normalizeWhitespace(hardLine).split(' ').filter(Boolean);
+        if (words.length === 0) {
+          lines.push('');
+          continue;
         }
+
+        let current = '';
+        for (const word of words) {
+          const next = current ? `${current} ${word}` : word;
+          if (widthOf(next) <= limit || !current) {
+            current = next;
+          } else {
+            lines.push(current);
+            current = word;
+          }
+        }
+        if (current) lines.push(current);
       }
-      if (current) lines.push(current);
 
       const width = Math.min(
         limit,
@@ -162,6 +169,7 @@ function hasInlineChild(node) {
     if (!child || child.kind !== 'block') return false;
     const tagName = String(child.tagName ?? '').toLowerCase();
     return CONTROL_TAGS.has(tagName)
+      || tagName === 'a'
       || tagName === 'img'
       || tagName === 'svg'
       || tagName === 'canvas'
@@ -200,7 +208,7 @@ function nodePadding(tagName, defaults) {
     };
   }
   if (tagName === 'p' || tagName === 'label') return { left: 4, top: 4, right: 4, bottom: 4 };
-  if (tagName === 'summary') return { left: 26, top: 6, right: 8, bottom: 6 };
+  if (tagName === 'summary') return { left: 72, top: 6, right: 8, bottom: 6 };
   return {
     left: sizeFrom(defaults.paddingLeft ?? defaults.paddingX, 12),
     top: sizeFrom(defaults.paddingTop ?? defaults.paddingY, 12),
@@ -283,12 +291,19 @@ function layoutTextNode(renderNode, x, y, width, measurer) {
   return {
     kind: 'text',
     text,
+    lines: measured.lines,
     x,
     y,
     width: measured.width,
     height: measured.height,
     children: [],
   };
+}
+
+function textContentForNode(node) {
+  if (!node || typeof node !== 'object') return '';
+  if (node.kind === 'text') return String(node.text ?? '');
+  return (node.children ?? []).map(textContentForNode).filter(Boolean).join(' ');
 }
 
 function inlineWidthForChild(child, parentTagName, sourceMap, remainingWidth, remainingChildren, measurer) {
@@ -307,6 +322,17 @@ function inlineWidthForChild(child, parentTagName, sourceMap, remainingWidth, re
   const tagName = String(child.tagName ?? 'div').toLowerCase();
   const sourceNode = sourceMap.get(String(child.key ?? ''));
   const defaults = { ...tagDefaults(tagName), ...layoutDefaultsFor(sourceNode) };
+  if (tagName === 'a') {
+    const padding = nodePadding(tagName, defaults);
+    const textWidth = measurer.measure(
+      textContentForNode(child),
+      Math.max(1, remaining - padding.left - padding.right),
+    ).width;
+    return Math.min(
+      remaining,
+      Math.max(1, Math.ceil(textWidth) + padding.left + padding.right),
+    );
+  }
   const explicit = attrSize(child, 'width') ?? defaults.width ?? defaults.minWidth;
   if (explicit != null && explicit !== '') {
     return Math.min(remaining, Math.max(1, sizeFrom(explicit, remaining)));

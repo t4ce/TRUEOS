@@ -26,6 +26,14 @@ export const defaultTheme = Object.freeze({
       radius: 0,
     }),
 
+    link: Object.freeze({
+      fill: 0xf2f2f2,
+      fillEnd: 0xffffff,
+      text: 0x0000ee,
+      borderWidth: 0,
+      radius: 0,
+    }),
+
     dialog: Object.freeze({
       fill: 0xadd8e6,
       fillEnd: 0xffffff,
@@ -58,6 +66,8 @@ export const defaultTheme = Object.freeze({
 
 export const defaultLayoutMetrics = Object.freeze({
   tagDefaults: Object.freeze({
+    a: Object.freeze({ paddingX: 4, paddingY: 2 }),
+    summary: Object.freeze({ minHeight: 64 }),
     input: Object.freeze({ height: 36, minWidth: 220 }),
     button: Object.freeze({ height: 36, minWidth: 100 }),
     textarea: Object.freeze({ height: 108, minWidth: 220 }),

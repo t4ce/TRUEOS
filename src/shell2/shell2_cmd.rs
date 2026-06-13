@@ -6,6 +6,7 @@ use super::ShellBackend2;
 pub(crate) enum CommandSessionKind {
     BenchRunning(u64),
     FormatSure(u32),
+    GpuCanvasRunning(u64),
     RemoveSure(u64),
 }
 
@@ -14,6 +15,7 @@ impl CommandSessionKind {
         match self {
             Self::BenchRunning(_) => false,
             Self::FormatSure(_) => true,
+            Self::GpuCanvasRunning(_) => false,
             Self::RemoveSure(_) => true,
         }
     }
@@ -22,6 +24,7 @@ impl CommandSessionKind {
         match self {
             Self::BenchRunning(_) => true,
             Self::FormatSure(_) => false,
+            Self::GpuCanvasRunning(_) => true,
             Self::RemoveSure(_) => false,
         }
     }

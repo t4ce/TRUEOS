@@ -2138,6 +2138,84 @@ pub(crate) fn ui2_canvas3d_plane_patch_render_surface_frame(
     frame: u32,
     dst: GpgpuRgba8Surface,
 ) -> Option<GpgpuShellCube20ProjectResult> {
+    let q = CANVAS3D_PROJECT_Q16_ONE;
+    canvas3d_plane_patch_render_surface_frame(frame, dst, (q * 5) / 8)
+}
+
+pub(crate) fn shell_cube6_plane_project_once(
+    half_q16: i32,
+) -> Option<GpgpuShellCube20ProjectResult> {
+    shell_cube6_plane_project_frame(8, half_q16)
+}
+
+pub(crate) fn shell_cube6_plane_project_frame(
+    frame: u32,
+    half_q16: i32,
+) -> Option<GpgpuShellCube20ProjectResult> {
+    let target = intel::display::primary_surface_gpgpu_marker_target()?;
+    if target.virt.is_null() || target.width == 0 || target.height == 0 {
+        return None;
+    }
+
+    let width = target.width.min(512);
+    let height = target.height.min(512);
+    let primary = GpgpuRgba8Surface::new(
+        target.phys,
+        target.gpu,
+        target.byte_len,
+        width,
+        height,
+        target.pitch_bytes,
+    )?;
+    let half = half_q16.clamp(1, CANVAS3D_PROJECT_Q16_ONE * 4);
+    let mut result = canvas3d_plane_patch_render_surface_frame(frame, primary, half)?;
+    let flush_bytes = (height as usize)
+        .saturating_sub(1)
+        .saturating_mul(target.pitch_bytes as usize)
+        .saturating_add((width as usize).saturating_mul(core::mem::size_of::<u32>()));
+    let presented = intel::display::notify_primary_surface_external_write(
+        "gpgpu-cube6-plane-project",
+        0,
+        flush_bytes,
+    ) as u32;
+    result.presented = presented;
+    result.ok = result.ok && presented != 0;
+    result.primary_width = target.width;
+    result.primary_height = target.height;
+    Some(result)
+}
+
+pub(crate) fn shell_cube6_plane_project_overlay_frame(
+    frame: u32,
+    half_q16: i32,
+    width: u32,
+    height: u32,
+) -> Option<GpgpuShellCube20ProjectResult> {
+    let target = intel::display::ui3_canvas_overlay_gpgpu(width, height)?;
+    let surface = GpgpuRgba8Surface::new(
+        target.phys,
+        target.gpu,
+        target.byte_len,
+        target.width,
+        target.height,
+        target.pitch_bytes,
+    )?;
+    let half = half_q16.clamp(1, CANVAS3D_PROJECT_Q16_ONE * 4);
+    let mut result = canvas3d_plane_patch_render_surface_frame(frame, surface, half)?;
+    let flush_bytes = (target.pitch_bytes as usize).saturating_mul(target.height as usize);
+    intel::dma_flush(target.virt, flush_bytes);
+    result.presented = 1;
+    result.ok = result.ok && flush_bytes != 0;
+    result.primary_width = target.width;
+    result.primary_height = target.height;
+    Some(result)
+}
+
+fn canvas3d_plane_patch_render_surface_frame(
+    frame: u32,
+    dst: GpgpuRgba8Surface,
+    half: i32,
+) -> Option<GpgpuShellCube20ProjectResult> {
     const CADENCE_US: u64 = 33_000;
 
     if !dst.is_valid() || dst.width > 512 || dst.height > 512 {
@@ -2173,8 +2251,8 @@ pub(crate) fn ui2_canvas3d_plane_patch_render_surface_frame(
     let mut retired_count = 0u32;
     let mut total_submit_ms = 0u64;
     let mut max_submit_ms = 0u64;
+    let mut rendered_faces = 0usize;
     let q = CANVAS3D_PROJECT_Q16_ONE;
-    let half = (q * 5) / 8;
     if dst_ppgtt_ok {
         let center = Canvas3dVec3Q16 {
             x: 0,
@@ -2307,6 +2385,7 @@ pub(crate) fn ui2_canvas3d_plane_patch_render_surface_frame(
             visible_face_descs[0] = canvas3d_nearest_face_desc(face_descs);
             visible_face_count = 1;
         }
+        rendered_faces = visible_face_count;
         canvas3d_sort_face_descs_far_to_near(&mut visible_face_descs[..visible_face_count]);
         let (group_x, group_y, group_z) = canvas3d_plane_patch_worklist_groups_for_descs(
             &visible_face_descs[..visible_face_count],
@@ -2384,7 +2463,7 @@ pub(crate) fn ui2_canvas3d_plane_patch_render_surface_frame(
         frames: 1,
         submitted: submitted_count,
         presented: 0,
-        visible_points: if retired { 6 } else { 0 },
+        visible_points: if retired { rendered_faces } else { 0 },
         stamped_pixels: 0,
         duration_ms: 0,
         elapsed_ms,

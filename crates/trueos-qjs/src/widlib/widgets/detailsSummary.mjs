@@ -117,11 +117,11 @@ export const SUMMARY_WIDGET_DEFINITION = widgetDefinition('summary', {
   complexity: 'complex',
   interactions: ['toggle'],
   layoutDefaults: {
-    minHeight: 36,
+    minHeight: 64,
     paddingTop: 6,
     paddingRight: 12,
     paddingBottom: 6,
-    paddingLeft: 26,
+    paddingLeft: 72,
   },
 });
 

@@ -316,6 +316,7 @@ pub(super) struct DisplayRgba8GpgpuSurface {
     pub(super) height: u32,
     pub(super) pitch_bytes: u32,
     pub(super) phys: u64,
+    pub(super) virt: *mut u8,
     pub(super) gpu: u64,
     pub(super) byte_len: usize,
 }
@@ -1228,6 +1229,7 @@ pub(super) fn ui2_base_surface_gpgpu() -> Option<DisplayRgba8GpgpuSurface> {
         height: surface.height,
         pitch_bytes: surface.pitch_bytes,
         phys: surface.phys,
+        virt: surface.virt,
         gpu: surface.gpu,
         byte_len: surface.byte_len,
     })
@@ -1243,8 +1245,53 @@ pub(super) fn ui2_frame_surface_gpgpu() -> Option<DisplayRgba8GpgpuSurface> {
         height: surface.height,
         pitch_bytes: surface.pitch_bytes,
         phys: surface.phys,
+        virt: surface.virt,
         gpu: surface.gpu,
         byte_len: surface.byte_len,
+    })
+}
+
+pub(super) fn ui3_canvas_overlay_gpgpu(
+    width: u32,
+    height: u32,
+) -> Option<DisplayRgba8GpgpuSurface> {
+    const UI3_CANVAS_OVERLAY_X: u32 = 48;
+    const UI3_CANVAS_OVERLAY_Y: u32 = 48;
+
+    let dev = crate::intel::claimed_device()?;
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    let surface = ensure_overlay_surface(dev, width, height)?;
+    fill_surface_color(
+        surface.virt,
+        surface.pitch_bytes as usize,
+        surface.width,
+        surface.height,
+        0,
+    );
+    let byte_len = (surface.pitch_bytes as usize).saturating_mul(surface.height as usize);
+    crate::intel::dma_flush(surface.virt, byte_len);
+
+    let (pos_x, pos_y) =
+        overlay_plane_clamped_position(surface, UI3_CANVAS_OVERLAY_X, UI3_CANVAS_OVERLAY_Y);
+    if overlay_plane_needs_rearm(dev, surface, pos_x, pos_y, OverlayAlphaMode::Straight) {
+        program_two_plane_stack_resources(dev, surface.pipe, surface.plane_slot, "ui3-canvas");
+        if !arm_overlay_plane(dev, surface, pos_x, pos_y, OverlayAlphaMode::Straight, "ui3-canvas")
+        {
+            return None;
+        }
+    }
+
+    Some(DisplayRgba8GpgpuSurface {
+        width: surface.width,
+        height: surface.height,
+        pitch_bytes: surface.pitch_bytes,
+        phys: surface.phys,
+        virt: surface.virt,
+        gpu: crate::intel::GPU_VA_DISPLAY_OVERLAY_BASE,
+        byte_len,
     })
 }
 
