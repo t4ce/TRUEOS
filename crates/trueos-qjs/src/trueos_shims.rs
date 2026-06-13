@@ -28,16 +28,14 @@ pub use v::vshell::{
 pub use v::vsys::{log_error, log_info, write_log_stream};
 
 pub fn gfx_capture_screenshot_data_url() -> Option<String> {
-    let len =
-        unsafe { trueos_cabi_gfx_capture_screenshot_data_url(core::ptr::null_mut(), 0) };
+    let len = unsafe { trueos_cabi_gfx_capture_screenshot_data_url(core::ptr::null_mut(), 0) };
     if len <= 0 {
         return None;
     }
 
     let mut bytes = vec![0u8; len as usize];
-    let got = unsafe {
-        trueos_cabi_gfx_capture_screenshot_data_url(bytes.as_mut_ptr(), bytes.len())
-    };
+    let got =
+        unsafe { trueos_cabi_gfx_capture_screenshot_data_url(bytes.as_mut_ptr(), bytes.len()) };
     if got <= 0 {
         return None;
     }
@@ -52,6 +50,16 @@ unsafe extern "C" {
     fn trueos_cabi_free(ptr: *mut u8);
     fn trueos_cabi_realloc(ptr: *mut u8, size: usize) -> *mut u8;
     fn trueos_cabi_malloc_usable_size(ptr: *const u8) -> usize;
+    pub fn trueos_cabi_browser_asset_refs_begin(browser_instance_id: u32) -> i32;
+    pub fn trueos_cabi_browser_asset_ref_push(
+        browser_instance_id: u32,
+        tag_ptr: *const u8,
+        tag_len: usize,
+        url_ptr: *const u8,
+        url_len: usize,
+        kind_ptr: *const u8,
+        kind_len: usize,
+    ) -> i32;
 }
 
 #[inline]

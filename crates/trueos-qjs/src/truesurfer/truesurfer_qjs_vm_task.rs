@@ -301,10 +301,8 @@ pub fn latest_parse_result_for_browser(browser_instance_id: u32) -> Option<Parse
 pub fn take_ui3_render_tree_frame_for_browser(
     browser_instance_id: u32,
 ) -> Option<Ui3RenderTreeFrame> {
-    with_browser_state_mut(browser_instance_id, |state| {
-        state.pending_ui3_render_tree_frame.take()
-    })
-    .flatten()
+    with_browser_state_mut(browser_instance_id, |state| state.pending_ui3_render_tree_frame.take())
+        .flatten()
 }
 
 pub async fn queue_set_html_with_url_for_browser(
@@ -779,6 +777,7 @@ unsafe fn dispatch_html(
         url_js,
     );
     let args = [html_js, meta];
+    let _ = qjs::trueos_shims::trueos_cabi_browser_asset_refs_begin(browser_instance_id);
     log_line(format!(
         "qjs-truesurfer[{}]: setHtml call bytes={} url={}\n",
         browser_instance_id,
