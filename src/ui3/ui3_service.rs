@@ -1,4 +1,4 @@
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use serde_json::Value;
@@ -7,6 +7,7 @@ const TASK_NAME: &str = "ui3-service";
 const UI3_SERVICE_IDLE_MS: u64 = 16;
 const UI3_WHEEL_EVENT_BATCH_CAP: usize = 64;
 const UI3_WHEEL_SCROLL_PX_PER_NOTCH: f32 = 72.0;
+const UI3_CLICK_MAX_MOVE_PX: u32 = 6;
 
 #[derive(Copy, Clone, Debug, Default)]
 struct Ui3ServiceStats {
@@ -40,6 +41,13 @@ struct Ui3LiveOverlayState {
 struct Ui3CursorInput {
     wheel_delta: i32,
     overlay_dirty: bool,
+}
+
+#[derive(Clone, Debug)]
+struct Ui3ActivationHit {
+    key: String,
+    kind: String,
+    url: String,
 }
 
 #[embassy_executor::task]
@@ -103,6 +111,40 @@ pub async fn ui3_service_task() {
         }
 
         if !took_any {
+            let asset_ready_mask = crate::surfer::take_ui3_asset_batch_ready_mask();
+            if !scene.frame.layout_trace_json.is_empty()
+                && browser_mask_has(asset_ready_mask, scene.frame.browser_instance_id)
+            {
+                let present = redraw_scene_text(&mut scene, &mut font, 0, false);
+                crate::log!(
+                    "ui3-service: asset batch redraw browser={} seq={} scroll_y={} content_height={} viewport={}x{} text_nodes={} placements={} gradients={} assets={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} asset_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
+                    scene.frame.browser_instance_id,
+                    scene.frame.seq,
+                    scene.scroll_y as u32,
+                    scene.content_height,
+                    scene.viewport_width,
+                    scene.viewport_height,
+                    present.text_nodes,
+                    present.placements,
+                    present.gradients,
+                    present.assets,
+                    present.embedded_scenes,
+                    present.clipped,
+                    present.batches,
+                    present.clear_ok as u8,
+                    present.clear_ms,
+                    present.rect_ms,
+                    present.asset_ms,
+                    present.text_ms,
+                    present.show_ms,
+                    present.presented as u8,
+                    present.submit_ok as u8,
+                    present.submit_ms,
+                    present.present_ms,
+                    present.total_ms,
+                    scene.frame.url
+                );
+            }
             stats.empty_polls = stats.empty_polls.saturating_add(1);
             Timer::after(EmbassyDuration::from_millis(UI3_SERVICE_IDLE_MS)).await;
         }
@@ -117,7 +159,7 @@ fn consume_render_tree_frame(
     let present = redraw_scene_text(scene, font, taken_seq, false);
     let frame = &scene.frame;
     crate::log!(
-        "ui3-service: frame taken={} browser={} seq={} render_hash={} layout_hash={} render_bytes={} layout_bytes={} scroll_y={} scroll_redraw=0 content_height={} viewport={}x{} text_nodes={} placements={} gradients={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
+        "ui3-service: frame taken={} browser={} seq={} render_hash={} layout_hash={} render_bytes={} layout_bytes={} scroll_y={} scroll_redraw=0 content_height={} viewport={}x{} text_nodes={} placements={} gradients={} assets={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} asset_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
         taken_seq,
         frame.browser_instance_id,
         frame.seq,
@@ -132,12 +174,14 @@ fn consume_render_tree_frame(
         present.text_nodes,
         present.placements,
         present.gradients,
+        present.assets,
         present.embedded_scenes,
         present.clipped,
         present.batches,
         present.clear_ok as u8,
         present.clear_ms,
         present.rect_ms,
+        present.asset_ms,
         present.text_ms,
         present.show_ms,
         present.presented as u8,
@@ -153,6 +197,7 @@ fn consume_render_tree_frame(
 struct Ui3LayoutInspectResult {
     text_nodes: usize,
     placements: usize,
+    assets: usize,
     batches: usize,
     gradients: usize,
     embedded_scenes: usize,
@@ -162,6 +207,7 @@ struct Ui3LayoutInspectResult {
     clear_ok: bool,
     clear_ms: u64,
     rect_ms: u64,
+    asset_ms: u64,
     text_ms: u64,
     show_ms: u64,
     submit_ms: u64,
@@ -218,6 +264,7 @@ fn redraw_scene_text(
         clamp_scroll_y_for_scene(scene.scroll_y, scene.content_height, scene.viewport_height);
 
     let font_scene = crate::ui3::ui3_font::Ui3FontScene {
+        browser_instance_id: frame.browser_instance_id,
         scroll_y: scene.scroll_y,
         viewport_width: scene.viewport_width,
         viewport_height: scene.viewport_height,
@@ -233,7 +280,7 @@ fn redraw_scene_text(
 
     if is_scroll {
         crate::log!(
-            "ui3-service: scroll taken={} browser={} seq={} scroll_y={} content_height={} viewport={}x{} text_nodes={} placements={} gradients={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
+            "ui3-service: scroll taken={} browser={} seq={} scroll_y={} content_height={} viewport={}x{} text_nodes={} placements={} gradients={} assets={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} asset_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
             taken_seq,
             frame.browser_instance_id,
             frame.seq,
@@ -244,12 +291,14 @@ fn redraw_scene_text(
             draw.text_nodes,
             draw.placements,
             draw.gradients,
+            draw.assets,
             embedded_scenes,
             draw.clipped,
             draw.batches,
             draw.clear_ok as u8,
             draw.clear_ms,
             draw.rect_ms,
+            draw.asset_ms,
             draw.text_ms,
             draw.show_ms,
             draw.presented as u8,
@@ -264,6 +313,7 @@ fn redraw_scene_text(
     Ui3LayoutInspectResult {
         text_nodes: draw.text_nodes,
         placements: draw.placements,
+        assets: draw.assets,
         batches: draw.batches,
         gradients: draw.gradients,
         embedded_scenes,
@@ -273,6 +323,7 @@ fn redraw_scene_text(
         clear_ok: draw.clear_ok,
         clear_ms: draw.clear_ms,
         rect_ms: draw.rect_ms,
+        asset_ms: draw.asset_ms,
         text_ms: draw.text_ms,
         show_ms: draw.show_ms,
         submit_ms: draw.submit_ms,
@@ -290,11 +341,22 @@ fn json_f32_field(node: &Value, key: &str) -> Option<f32> {
     }
 }
 
+fn json_string_field(node: &Value, key: &str) -> Option<String> {
+    node.get(key).and_then(Value::as_str).map(String::from)
+}
+
 fn clamp_scroll_y_for_scene(scroll_y: f32, content_height: u32, viewport_height: u32) -> f32 {
     if scroll_y <= 0.0 || content_height <= viewport_height {
         return 0.0;
     }
     scroll_y.min(content_height.saturating_sub(viewport_height) as f32)
+}
+
+fn browser_mask_has(mask: u64, browser_instance_id: u32) -> bool {
+    if browser_instance_id == 0 || browser_instance_id > 64 {
+        return false;
+    }
+    (mask & (1u64 << browser_instance_id.saturating_sub(1))) != 0
 }
 
 fn ceil_u32(value: f32) -> u32 {
@@ -368,6 +430,9 @@ fn drain_ui3_cursor_input(
                 live_overlay.selection_probe_current_y = y;
                 input.overlay_dirty = true;
             } else if !is_left && was_left && live_overlay.selection_probe_active {
+                let (x, y) =
+                    crate::ui3::ui3_hid::event_position_px(*event, viewport_width, viewport_height);
+                let _ = activate_ui3_click_if_any(scene, live_overlay, x, y);
                 live_overlay.selection_probe_active = false;
                 input.overlay_dirty = true;
             }
@@ -384,6 +449,112 @@ fn drain_ui3_cursor_input(
         );
     }
     input
+}
+
+fn activate_ui3_click_if_any(
+    scene: &Ui3Scene,
+    live_overlay: &Ui3LiveOverlayState,
+    release_x: u32,
+    release_y: u32,
+) -> bool {
+    if !ui3_click_within_threshold(
+        live_overlay.selection_probe_start_x,
+        live_overlay.selection_probe_start_y,
+        release_x,
+        release_y,
+    ) {
+        return false;
+    }
+
+    let Some(press_hit) = ui3_activation_hit_at(
+        scene,
+        live_overlay.selection_probe_start_x,
+        live_overlay.selection_probe_start_y,
+    ) else {
+        return false;
+    };
+    let Some(release_hit) = ui3_activation_hit_at(scene, release_x, release_y) else {
+        return false;
+    };
+    if press_hit.key != release_hit.key || press_hit.kind != release_hit.kind {
+        return false;
+    }
+
+    if release_hit.kind == "navigate" && !release_hit.url.is_empty() {
+        let queued = crate::surfer::queue_browser_navigation(
+            scene.frame.browser_instance_id,
+            release_hit.url.as_str(),
+        );
+        crate::log!(
+            "ui3-service: activate kind=navigate queued={} browser={} key={} url={}\n",
+            if queued { 1 } else { 0 },
+            scene.frame.browser_instance_id,
+            release_hit.key,
+            release_hit.url
+        );
+        return queued;
+    }
+
+    false
+}
+
+fn ui3_click_within_threshold(start_x: u32, start_y: u32, end_x: u32, end_y: u32) -> bool {
+    start_x.abs_diff(end_x) <= UI3_CLICK_MAX_MOVE_PX
+        && start_y.abs_diff(end_y) <= UI3_CLICK_MAX_MOVE_PX
+}
+
+fn ui3_activation_hit_at(
+    scene: &Ui3Scene,
+    screen_x: u32,
+    screen_y: u32,
+) -> Option<Ui3ActivationHit> {
+    if scene.frame.layout_trace_json.is_empty() {
+        return None;
+    }
+    let value = serde_json::from_str::<Value>(scene.frame.layout_trace_json.as_str()).ok()?;
+    let paint_plan = value
+        .get("trace")
+        .and_then(|trace| trace.get("ui3PaintPlan"))
+        .or_else(|| value.get("ui3PaintPlan"))?;
+    let hit_boxes = paint_plan.get("hitBoxes").and_then(Value::as_array)?;
+    let content_x = screen_x as f32;
+    let content_y = screen_y as f32 + scene.scroll_y;
+    let mut best: Option<Ui3ActivationHit> = None;
+    for hit in hit_boxes {
+        let x = json_f32_field(hit, "x").unwrap_or(0.0);
+        let y = json_f32_field(hit, "y").unwrap_or(0.0);
+        let width = json_f32_field(hit, "width").unwrap_or(0.0);
+        let height = json_f32_field(hit, "height").unwrap_or(0.0);
+        if width <= 0.0 || height <= 0.0 {
+            continue;
+        }
+        if content_x < x || content_y < y || content_x >= x + width || content_y >= y + height {
+            continue;
+        }
+        let Some(activation) = hit.get("activation").and_then(Value::as_object) else {
+            continue;
+        };
+        let kind = activation
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if kind.is_empty() {
+            continue;
+        }
+        let url = activation
+            .get("resolvedHref")
+            .or_else(|| activation.get("href"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        best = Some(Ui3ActivationHit {
+            key: json_string_field(hit, "key").unwrap_or_default(),
+            kind: String::from(kind),
+            url: String::from(url),
+        });
+    }
+    best
 }
 
 fn redraw_live_overlay(scene: &Ui3Scene, state: &Ui3LiveOverlayState, reason: &str) -> bool {

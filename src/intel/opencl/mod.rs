@@ -25,8 +25,9 @@ pub(crate) use api::{
     trueos_cl_validate_known_aot_registry, trueos_cl_validate_known_aot_status,
 };
 pub(crate) use artifact::{
-    BuiltProgram, KernelArgDesc, KernelArgKind, KernelMetadata, KernelObject, ProgramArtifact,
-    ProgramBinaryKind,
+    BuiltProgram, DescriptorField, DescriptorLayout, GpuArtifactProducer, GpuKernelContract,
+    KernelArgAccess, KernelArgDesc, KernelArgKind, KernelCallArg, KernelLaunchContract,
+    KernelLaunchModel, KernelMetadata, KernelObject, ProgramArtifact, ProgramBinaryKind,
 };
 pub(crate) use backend::{BackendCaps, BackendCommand, IntelOpenClBackend, UploadedKernelRef};
 pub(crate) use memory::{BufferObject, BufferRegistry};

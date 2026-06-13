@@ -310,6 +310,7 @@ function logRenderTreeArtifact(url, bytes, widgetTree, startedAt) {
     const artifact = createRenderTreeTraceFn(widgetTree, {
       source: 'parse5',
       bytes,
+      baseUrl: url,
       includeLayout: true,
     });
     const summary =

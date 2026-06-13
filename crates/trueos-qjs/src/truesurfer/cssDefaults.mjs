@@ -68,6 +68,27 @@ const TAG_THEME_DEFAULTS = {
       radius: defaultTheme.control.iframe.radius,
     },
   },
+  hr: {
+    paint: {
+      role: 'rule',
+      fill: 'linear-gradient',
+      color0Rgba: defaultTheme.control.rule.color0Rgba,
+      color1Rgba: defaultTheme.control.rule.color1Rgba,
+      borderWidth: 0,
+      radius: 0,
+    },
+  },
+  img: {
+    display: 'inline-block',
+    paint: {
+      role: 'image',
+      fill: 'linear-gradient',
+      color0: defaultTheme.control.image.fill,
+      color1: defaultTheme.control.image.fillEnd,
+      borderWidth: defaultTheme.control.image.borderWidth,
+      radius: defaultTheme.control.image.radius,
+    },
+  },
   strong: {
     fontWeight: 'bold',
   },

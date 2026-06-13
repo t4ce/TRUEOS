@@ -1,4 +1,4 @@
-const DEFAULT_RULE_HEIGHT = 1;
+const DEFAULT_RULE_HEIGHT = 2;
 const DEFAULT_RULE_MARGIN_Y = 2;
 
 function normalizeAttrs(attrs = {}) {
