@@ -523,8 +523,7 @@ pub(crate) fn hv_guest_allocator_state_spans() -> [(u64, usize); 2] {
 
 const HOST_ALLOC_TAG: u8 = u8::MAX;
 static HOST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU: [AtomicU32; 64] = [const { AtomicU32::new(0) }; 64];
-static HOST_ALLOC_DOMAIN_STRONG_DEPTH_BY_CPU: [AtomicU32; 64] =
-    [const { AtomicU32::new(0) }; 64];
+static HOST_ALLOC_DOMAIN_STRONG_DEPTH_BY_CPU: [AtomicU32; 64] = [const { AtomicU32::new(0) }; 64];
 static HV_GUEST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU: [AtomicU32; 64] =
     [const { AtomicU32::new(0) }; 64];
 static HV_GUEST_ALLOC_DOMAIN_FORCE_VM_BY_CPU: [AtomicU32; 64] = [const { AtomicU32::new(0) }; 64];

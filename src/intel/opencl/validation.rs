@@ -14,6 +14,13 @@ pub(crate) enum KnownAotValidationIssueKind {
     EmptyTarget,
     ArtifactNameMismatch,
     ArtifactTargetMismatch,
+    ContractNameMismatch,
+    ContractTargetMismatch,
+    EmptyContractSource,
+    EmptyContractArgs,
+    EmptyContractBindingSet,
+    EmptyContractPayload,
+    EmptyContractSimd,
     EmptyBinary,
     EmptySha256,
     UploadNameMismatch,
@@ -97,6 +104,47 @@ pub(crate) fn validate_known_aot_registry() -> KnownAotValidationReport {
                 kernel.name,
                 KnownAotValidationIssueKind::ArtifactTargetMismatch,
             );
+        }
+        if kernel.contract.name != kernel.name {
+            report.record_issue(
+                index,
+                kernel.name,
+                KnownAotValidationIssueKind::ContractNameMismatch,
+            );
+        }
+        if kernel.contract.target != kernel.artifact.target {
+            report.record_issue(
+                index,
+                kernel.name,
+                KnownAotValidationIssueKind::ContractTargetMismatch,
+            );
+        }
+        if kernel.contract.source_path.is_empty() {
+            report.record_issue(
+                index,
+                kernel.name,
+                KnownAotValidationIssueKind::EmptyContractSource,
+            );
+        }
+        if kernel.contract.args.is_empty() {
+            report.record_issue(index, kernel.name, KnownAotValidationIssueKind::EmptyContractArgs);
+        }
+        if kernel.contract.binding_count == 0 {
+            report.record_issue(
+                index,
+                kernel.name,
+                KnownAotValidationIssueKind::EmptyContractBindingSet,
+            );
+        }
+        if kernel.contract.indirect_bytes() == 0 {
+            report.record_issue(
+                index,
+                kernel.name,
+                KnownAotValidationIssueKind::EmptyContractPayload,
+            );
+        }
+        if kernel.contract.launch.simd_width == 0 {
+            report.record_issue(index, kernel.name, KnownAotValidationIssueKind::EmptyContractSimd);
         }
         if kernel.artifact.bin.is_empty() {
             report.record_issue(index, kernel.name, KnownAotValidationIssueKind::EmptyBinary);

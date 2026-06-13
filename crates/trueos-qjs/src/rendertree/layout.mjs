@@ -35,6 +35,7 @@ const LEAF_TAGS = new Set([
   'searchbutton',
 ]);
 
+const REPLACED_DIMENSION_TAGS = new Set(['img', 'svg', 'canvas', 'iframe']);
 const ROW_TAGS = new Set(['tr', 'barrow', 'searchrow']);
 
 function numberFrom(value, fallback) {
@@ -165,6 +166,10 @@ function attrSize(node, axis) {
   return attrs[axis] ?? attrs[axis === 'width' ? 'w' : 'h'];
 }
 
+function isReplacedDimensionTag(tagName) {
+  return REPLACED_DIMENSION_TAGS.has(String(tagName ?? '').toLowerCase());
+}
+
 function isOpenDetails(node) {
   const attrs = attrsOf(node);
   return attrs.open != null || attrs['data-details-open'] === '1';
@@ -230,6 +235,9 @@ function nodePadding(tagName, defaults) {
 function widthForNode(node, tagName, defaults, availableWidth) {
   if (isCheckableInput(node)) return Math.min(18, Math.max(1, availableWidth));
   const attrWidth = attrSize(node, 'width');
+  if (attrWidth != null && attrWidth !== '' && isReplacedDimensionTag(tagName)) {
+    return Math.max(1, sizeFrom(attrWidth, availableWidth));
+  }
   const explicit = attrWidth ?? defaults.width;
   const minWidth = sizeFrom(defaults.minWidth, 0);
   if (explicit != null && explicit !== '') {
@@ -242,6 +250,9 @@ function widthForNode(node, tagName, defaults, availableWidth) {
 function heightForNode(node, tagName, defaults, contentHeight, padding) {
   if (isCheckableInput(node)) return 18;
   const attrHeight = attrSize(node, 'height');
+  if (attrHeight != null && attrHeight !== '' && isReplacedDimensionTag(tagName)) {
+    return Math.max(1, sizeFrom(attrHeight, contentHeight));
+  }
   const explicit = attrHeight ?? defaults.height;
   const minHeight = sizeFrom(defaults.minHeight, 0);
   if (explicit != null && explicit !== '') return Math.max(minHeight, sizeFrom(explicit, contentHeight));
@@ -334,8 +345,26 @@ function inlineWidthForChild(child, parentTagName, sourceMap, remainingWidth, re
   const tagName = String(child.tagName ?? 'div').toLowerCase();
   const sourceNode = sourceMap.get(String(child.key ?? ''));
   const defaults = { ...tagDefaults(tagName), ...layoutDefaultsFor(sourceNode) };
+  const attrWidth = attrSize(child, 'width');
+  if (attrWidth != null && attrWidth !== '' && isReplacedDimensionTag(tagName)) {
+    return Math.max(1, sizeFrom(attrWidth, remaining));
+  }
   if (tagName === 'a') {
     const padding = nodePadding(tagName, defaults);
+    if (hasInlineChild(child)) {
+      const childContentWidth = (child.children ?? []).reduce((sum, grandchild, index, children) => {
+        const childWidth = inlineWidthForChild(
+          grandchild,
+          tagName,
+          sourceMap,
+          remaining,
+          children.length - index,
+          measurer,
+        );
+        return sum + childWidth + (index + 1 < children.length ? rowGapForTag(tagName) : 0);
+      }, 0);
+      return Math.max(1, Math.ceil(childContentWidth) + padding.left + padding.right);
+    }
     const textWidth = measurer.measure(
       textContentForNode(child),
       Math.max(1, remaining - padding.left - padding.right),
@@ -345,7 +374,7 @@ function inlineWidthForChild(child, parentTagName, sourceMap, remainingWidth, re
       Math.max(1, Math.ceil(textWidth) + padding.left + padding.right),
     );
   }
-  const explicit = attrSize(child, 'width') ?? defaults.width ?? defaults.minWidth;
+  const explicit = attrWidth ?? defaults.width ?? defaults.minWidth;
   if (explicit != null && explicit !== '') {
     return Math.min(remaining, Math.max(1, sizeFrom(explicit, remaining)));
   }

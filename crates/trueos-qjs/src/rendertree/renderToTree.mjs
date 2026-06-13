@@ -143,7 +143,58 @@ function isHitBoxNode(tagName, role) {
     || role === 'link';
 }
 
-function createUi3PaintPlan(layout) {
+function getUrlOrigin(url) {
+  const value = String(url ?? '').trim();
+  const match = value.match(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]+/i);
+  return match ? match[0] : '';
+}
+
+function getUrlDirectory(url) {
+  const value = String(url ?? '').trim();
+  const origin = getUrlOrigin(value);
+  if (!origin) return '';
+  const rest = value.slice(origin.length);
+  const queryIndex = rest.search(/[?#]/);
+  const pathOnly = queryIndex >= 0 ? rest.slice(0, queryIndex) : rest;
+  const slash = pathOnly.lastIndexOf('/');
+  if (slash < 0) return `${origin}/`;
+  return `${origin}${pathOnly.slice(0, slash + 1)}`;
+}
+
+function resolveHref(baseUrl, href) {
+  const value = String(href ?? '').trim();
+  if (!value) return '';
+  if (value.startsWith('#')) return '';
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value)) return value;
+  const base = String(baseUrl ?? '').trim();
+  const origin = getUrlOrigin(base);
+  if (value.startsWith('//')) {
+    const schemeMatch = base.match(/^([a-z][a-z0-9+.-]*:)/i);
+    return schemeMatch ? `${schemeMatch[1]}${value}` : `https:${value}`;
+  }
+  if (value.startsWith('/')) return origin ? `${origin}${value}` : value;
+  const dir = getUrlDirectory(base);
+  return dir ? `${dir}${value}` : value;
+}
+
+function hitBoxActivation(node, tagName, role, options = {}) {
+  const attrs = layoutAttrs(node);
+  if ((tagName === 'a' || role === 'link') && attrs.href != null) {
+    const href = String(attrs.href ?? '').trim();
+    const resolvedHref = resolveHref(options.baseUrl, href);
+    if (!/^(https?:|file:)/i.test(resolvedHref)) return null;
+    const activation = {
+      kind: 'navigate',
+      href,
+      resolvedHref,
+    };
+    if (attrs.target != null) activation.target = String(attrs.target);
+    return activation;
+  }
+  return null;
+}
+
+function createUi3PaintPlan(layout, options = {}) {
   const paintedBoxes = [];
   const textRuns = [];
   const summaryIcons = [];
@@ -196,7 +247,7 @@ function createUi3PaintPlan(layout) {
         });
       }
       if (isHitBoxNode(tagName, role)) {
-        hitBoxes.push({
+        const hitBox = {
           key: String(node.key ?? ''),
           tagName,
           role,
@@ -204,7 +255,10 @@ function createUi3PaintPlan(layout) {
           y,
           width: Math.max(0, Math.round(Number(node.width ?? 0) || 0)),
           height: Math.max(0, Math.round(Number(node.height ?? 0) || 0)),
-        });
+        };
+        const activation = hitBoxActivation(node, tagName, role, options);
+        if (activation) hitBox.activation = activation;
+        hitBoxes.push(hitBox);
       }
     }
 
@@ -655,7 +709,7 @@ export function createRenderTreeTrace(widgetTree, options = {}) {
 
   if (options.includeLayout === true) {
     const layout = buildWidgetTreeLayout(widgetTree, renderNodes, { ...options, viewport });
-    const ui3PaintPlan = createUi3PaintPlan(layout);
+    const ui3PaintPlan = createUi3PaintPlan(layout, options);
     const embeddedLayoutScenes = buildEmbeddedSceneLayouts(
       renderContext.embeddedScenes,
       layout,

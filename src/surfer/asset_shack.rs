@@ -4,13 +4,16 @@ use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
 const ASSET_FETCH_IDLE_MS: u64 = 16;
 const ASSET_FETCH_POLL_MS: u64 = 8;
+const ASSET_BATCH_MONITOR_MS: u64 = 50;
+const ASSET_BATCH_TIMEOUT_MS: u64 = 5_000;
 const ASSET_FETCH_FIELD_MAX: usize = 512;
 const ASSET_FETCH_QUEUE_CAP: usize = 256;
+const ASSET_READY_CAP: usize = 256;
 pub(crate) const ASSET_FETCH_WORKERS: usize = 4;
 
 #[derive(Clone, Debug)]
@@ -29,13 +32,37 @@ pub struct BrowserAssetReady {
     pub tag: String,
     pub url: String,
     pub kind: String,
-    pub bytes_len: usize,
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct BrowserAssetBatch {
+    browser_instance_id: u32,
+    generation: u32,
+    expected: usize,
+    ready: usize,
+    failed: usize,
+    signaled: bool,
+    deadline: Instant,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AssetBatchSignal {
+    browser_instance_id: u32,
+    generation: u32,
+    expected: usize,
+    ready: usize,
+    failed: usize,
+    reason: &'static str,
 }
 
 #[derive(Default)]
 struct AssetShack {
     queued: VecDeque<BrowserAssetRequest>,
     ready: VecDeque<BrowserAssetReady>,
+    batches: Vec<BrowserAssetBatch>,
 }
 
 static ASSET_SHACK: Mutex<Option<AssetShack>> = Mutex::new(None);
@@ -91,17 +118,151 @@ fn pop_next_asset_request() -> Option<BrowserAssetRequest> {
     })
 }
 
-fn store_ready_asset(request: BrowserAssetRequest, bytes_len: usize) -> usize {
+fn infer_decode_kind(kind: &str, url: &str, bytes: &[u8]) -> &'static str {
+    let kind = kind.to_ascii_lowercase();
+    let url = url.to_ascii_lowercase();
+    if kind.contains("svg") || url.ends_with(".svg") || bytes.starts_with(b"<svg") {
+        return "svg";
+    }
+    if kind.contains("png") || url.ends_with(".png") || bytes.starts_with(b"\x89PNG\r\n\x1A\n") {
+        return "png";
+    }
+    if kind.contains("jpg")
+        || kind.contains("jpeg")
+        || url.ends_with(".jpg")
+        || url.ends_with(".jpeg")
+        || bytes.starts_with(&[0xFF, 0xD8, 0xFF])
+    {
+        return "jpeg";
+    }
+    "unknown"
+}
+
+fn decode_asset_rgba(kind: &str, url: &str, bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), i32> {
+    match infer_decode_kind(kind, url, bytes) {
+        "png" => crate::ui3::img::png_codec::decode_png_rgba(bytes)
+            .map(|decoded| (decoded.width, decoded.height, decoded.rgba))
+            .map_err(|err| err.code()),
+        "jpeg" => crate::ui3::img::jpeg_codec::decode_jpeg_rgba(bytes)
+            .map(|decoded| (decoded.width, decoded.height, decoded.rgba))
+            .map_err(|err| err.code()),
+        "svg" => crate::ui3::img::svg::rasterize_svg_bytes_rgba(bytes)
+            .map(|(info, rgba)| (info.width, info.height, rgba)),
+        _ => Err(-8),
+    }
+}
+
+fn browser_asset_batch_mut(
+    batches: &mut Vec<BrowserAssetBatch>,
+    browser_instance_id: u32,
+    generation: u32,
+) -> Option<&mut BrowserAssetBatch> {
+    batches.iter_mut().find(|batch| {
+        batch.browser_instance_id == browser_instance_id && batch.generation == generation
+    })
+}
+
+fn note_asset_ref_queued(shack: &mut AssetShack, browser_instance_id: u32, generation: u32) {
+    if let Some(batch) =
+        browser_asset_batch_mut(&mut shack.batches, browser_instance_id, generation)
+    {
+        batch.expected = batch.expected.saturating_add(1);
+        return;
+    }
+    shack.batches.push(BrowserAssetBatch {
+        browser_instance_id,
+        generation,
+        expected: 1,
+        ready: 0,
+        failed: 0,
+        signaled: false,
+        deadline: Instant::now() + EmbassyDuration::from_millis(ASSET_BATCH_TIMEOUT_MS),
+    });
+}
+
+fn note_asset_completed(browser_instance_id: u32, generation: u32, ready: bool) {
     with_asset_shack(|shack| {
+        let Some(batch) =
+            browser_asset_batch_mut(&mut shack.batches, browser_instance_id, generation)
+        else {
+            return;
+        };
+        if ready {
+            batch.ready = batch.ready.saturating_add(1);
+        } else {
+            batch.failed = batch.failed.saturating_add(1);
+        }
+    });
+}
+
+fn store_ready_asset(
+    request: BrowserAssetRequest,
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+) -> usize {
+    with_asset_shack(|shack| {
+        while shack.ready.len() >= ASSET_READY_CAP {
+            let _ = shack.ready.pop_front();
+        }
         shack.ready.push_back(BrowserAssetReady {
             browser_instance_id: request.browser_instance_id,
             generation: request.generation,
             tag: request.tag,
             url: request.url,
             kind: request.kind,
-            bytes_len,
+            width,
+            height,
+            rgba,
         });
         shack.ready.len()
+    })
+}
+
+pub(crate) fn ready_asset_for_tag(
+    browser_instance_id: u32,
+    tag: &str,
+) -> Option<BrowserAssetReady> {
+    let generation = current_generation(browser_instance_id)?;
+    with_asset_shack(|shack| {
+        shack
+            .ready
+            .iter()
+            .rev()
+            .find(|asset| {
+                asset.browser_instance_id == browser_instance_id
+                    && asset.generation == generation
+                    && asset.tag == tag
+            })
+            .cloned()
+    })
+}
+
+fn take_batch_signals() -> Vec<AssetBatchSignal> {
+    let now = Instant::now();
+    with_asset_shack(|shack| {
+        let mut signals = Vec::new();
+        for batch in &mut shack.batches {
+            if batch.signaled || batch.expected == 0 {
+                continue;
+            }
+            let done = batch.ready.saturating_add(batch.failed);
+            let all_done = done >= batch.expected;
+            let timed_out = now >= batch.deadline;
+            if !all_done && !timed_out {
+                continue;
+            }
+            batch.signaled = true;
+            signals.push(AssetBatchSignal {
+                browser_instance_id: batch.browser_instance_id,
+                generation: batch.generation,
+                expected: batch.expected,
+                ready: batch.ready,
+                failed: batch.failed,
+                reason: if all_done { "all-ready" } else { "timeout" },
+            });
+        }
+        signals
     })
 }
 
@@ -110,7 +271,7 @@ pub fn begin_browser_asset_refs(browser_instance_id: u32) -> i32 {
         return -1;
     };
     let next_generation = slot.fetch_add(1, Ordering::AcqRel).wrapping_add(1).max(1);
-    let (dropped_queued, dropped_ready) = with_asset_shack(|shack| {
+    let (dropped_queued, dropped_ready, dropped_batches) = with_asset_shack(|shack| {
         let before = shack.queued.len();
         shack
             .queued
@@ -122,14 +283,21 @@ pub fn begin_browser_asset_refs(browser_instance_id: u32) -> i32 {
             .ready
             .retain(|asset| asset.browser_instance_id != browser_instance_id);
         let dropped_ready = ready_before.saturating_sub(shack.ready.len());
-        (dropped_queued, dropped_ready)
+
+        let batches_before = shack.batches.len();
+        shack
+            .batches
+            .retain(|batch| batch.browser_instance_id != browser_instance_id);
+        let dropped_batches = batches_before.saturating_sub(shack.batches.len());
+        (dropped_queued, dropped_ready, dropped_batches)
     });
     crate::log!(
-        "asset_shack: browser begin browser={} generation={} dropped_queued={} dropped_ready={} active_cancel_signal=1\n",
+        "asset_shack: browser begin browser={} generation={} dropped_queued={} dropped_ready={} dropped_batches={} active_cancel_signal=1\n",
         browser_instance_id,
         next_generation,
         dropped_queued,
-        dropped_ready
+        dropped_ready,
+        dropped_batches
     );
     0
 }
@@ -147,6 +315,7 @@ pub fn push_browser_asset_ref(
         if shack.queued.len() >= ASSET_FETCH_QUEUE_CAP {
             return -4;
         }
+        note_asset_ref_queued(shack, browser_instance_id, generation);
         shack.queued.push_back(BrowserAssetRequest {
             browser_instance_id,
             generation,
@@ -187,6 +356,7 @@ async fn fetch_asset_request(worker_id: u32, request: BrowserAssetRequest) {
     let op_id = match start_asset_fetch(request.url.as_str()) {
         Ok(op_id) => op_id,
         Err(code) => {
+            note_asset_completed(request.browser_instance_id, request.generation, false);
             crate::log!(
                 "asset_shack: fetch start failed worker={} browser={} generation={} tag={} kind={} code={} url={}\n",
                 worker_id,
@@ -234,6 +404,7 @@ async fn fetch_asset_request(worker_id: u32, request: BrowserAssetRequest) {
         }
         if rc_or_done < 0 {
             let _ = trueos_qjs::async_fs::discard(op_id);
+            note_asset_completed(request.browser_instance_id, request.generation, false);
             crate::log!(
                 "asset_shack: fetch failed worker={} browser={} generation={} op_id={} tag={} code={} url={}\n",
                 worker_id,
@@ -253,6 +424,7 @@ async fn fetch_asset_request(worker_id: u32, request: BrowserAssetRequest) {
         let got = trueos_qjs::async_fs::read_result(op_id, bytes.as_mut_ptr(), bytes.len());
         if got < 0 {
             let _ = trueos_qjs::async_fs::discard(op_id);
+            note_asset_completed(request.browser_instance_id, request.generation, false);
             crate::log!(
                 "asset_shack: fetch read failed worker={} browser={} generation={} op_id={} tag={} code={} url={}\n",
                 worker_id,
@@ -281,9 +453,30 @@ async fn fetch_asset_request(worker_id: u32, request: BrowserAssetRequest) {
             return;
         }
 
-        let ready_len = store_ready_asset(request.clone(), bytes.len());
+        let (width, height, rgba) = match decode_asset_rgba(&request.kind, &request.url, &bytes) {
+            Ok(decoded) => decoded,
+            Err(code) => {
+                note_asset_completed(request.browser_instance_id, request.generation, false);
+                crate::log!(
+                    "asset_shack: decode failed worker={} browser={} generation={} op_id={} tag={} kind={} code={} bytes={} url={}\n",
+                    worker_id,
+                    request.browser_instance_id,
+                    request.generation,
+                    op_id,
+                    request.tag,
+                    request.kind,
+                    code,
+                    bytes.len(),
+                    request.url
+                );
+                return;
+            }
+        };
+
+        let ready_len = store_ready_asset(request.clone(), width, height, rgba);
+        note_asset_completed(request.browser_instance_id, request.generation, true);
         crate::log!(
-            "asset_shack: fetch ready worker={} browser={} generation={} op_id={} tag={} kind={} bytes={} ready_queue={} url={}\n",
+            "asset_shack: fetch ready worker={} browser={} generation={} op_id={} tag={} kind={} bytes={} image={}x{} ready_queue={} url={}\n",
             worker_id,
             request.browser_instance_id,
             request.generation,
@@ -291,10 +484,37 @@ async fn fetch_asset_request(worker_id: u32, request: BrowserAssetRequest) {
             request.tag,
             request.kind,
             bytes.len(),
+            width,
+            height,
             ready_len,
             request.url
         );
         return;
+    }
+}
+
+#[embassy_executor::task]
+pub async fn asset_batch_monitor_task() {
+    crate::log!(
+        "asset_shack: batch monitor started timeout_ms={} poll_ms={}\n",
+        ASSET_BATCH_TIMEOUT_MS,
+        ASSET_BATCH_MONITOR_MS
+    );
+    loop {
+        for signal in take_batch_signals() {
+            crate::log!(
+                "asset_shack: batch ready browser={} generation={} reason={} expected={} ready={} failed={} timeout_ms={}\n",
+                signal.browser_instance_id,
+                signal.generation,
+                signal.reason,
+                signal.expected,
+                signal.ready,
+                signal.failed,
+                ASSET_BATCH_TIMEOUT_MS
+            );
+            crate::surfer::signal_ui3_asset_batch_ready(signal.browser_instance_id);
+        }
+        Timer::after(EmbassyDuration::from_millis(ASSET_BATCH_MONITOR_MS)).await;
     }
 }
 

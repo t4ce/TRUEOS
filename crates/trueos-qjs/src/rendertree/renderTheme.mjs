@@ -48,6 +48,19 @@ export const defaultTheme = Object.freeze({
       radius: 0,
     }),
 
+    rule: Object.freeze({
+      color0Rgba: 0xff000000,
+      color1Rgba: 0x00000000,
+      height: 2,
+    }),
+
+    image: Object.freeze({
+      fill: 0x90ee90,
+      fillEnd: 0xffffff,
+      borderWidth: 0,
+      radius: 0,
+    }),
+
     progress: Object.freeze({
       border: 0x999999,
       background: 0xffffff,
@@ -67,6 +80,7 @@ export const defaultTheme = Object.freeze({
 export const defaultLayoutMetrics = Object.freeze({
   tagDefaults: Object.freeze({
     a: Object.freeze({ paddingX: 4, paddingY: 2 }),
+    hr: Object.freeze({ height: 2 }),
     summary: Object.freeze({ minHeight: 64 }),
     input: Object.freeze({ height: 36, minWidth: 220 }),
     button: Object.freeze({ height: 36, minWidth: 100 }),

@@ -18,10 +18,12 @@ pub(crate) struct Ui3FontScratch {
     placements: Vec<crate::intel::gpgpu::GpgpuSprite64Placement>,
     gradients: Vec<crate::intel::gpgpu::GpgpuGradientRect>,
     control_gradients: Vec<crate::intel::gpgpu::GpgpuGradientRect>,
+    assets: Vec<Ui3AssetPlacement>,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct Ui3FontScene {
+    pub(crate) browser_instance_id: u32,
     pub(crate) scroll_y: f32,
     pub(crate) viewport_width: u32,
     pub(crate) viewport_height: u32,
@@ -31,12 +33,14 @@ pub(crate) struct Ui3FontScene {
 pub(crate) struct Ui3FontDrawResult {
     pub(crate) text_nodes: usize,
     pub(crate) placements: usize,
+    pub(crate) assets: usize,
     pub(crate) batches: usize,
     pub(crate) gradients: usize,
     pub(crate) clipped: usize,
     pub(crate) clear_ok: bool,
     pub(crate) clear_ms: u64,
     pub(crate) rect_ms: u64,
+    pub(crate) asset_ms: u64,
     pub(crate) text_ms: u64,
     pub(crate) show_ms: u64,
     pub(crate) submit_ok: bool,
@@ -60,6 +64,15 @@ struct Ui3GradientCollectStats {
     gradient_desc_cap_hit: bool,
 }
 
+#[derive(Clone, Debug)]
+struct Ui3AssetPlacement {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    asset: crate::surfer::asset_shack::BrowserAssetReady,
+}
+
 pub(crate) fn draw_paint_plan_primary(
     plan: &Value,
     scene: Ui3FontScene,
@@ -69,6 +82,7 @@ pub(crate) fn draw_paint_plan_primary(
     scratch.placements.clear();
     scratch.gradients.clear();
     scratch.control_gradients.clear();
+    scratch.assets.clear();
     let mut collect = Ui3TextCollectStats::default();
     let mut gradient_collect = Ui3GradientCollectStats::default();
     collect_paint_plan_rect_gradients(
@@ -79,6 +93,7 @@ pub(crate) fn draw_paint_plan_primary(
         &mut scratch.control_gradients,
         &mut gradient_collect,
     );
+    collect_paint_plan_ready_assets(plan, scene.scroll_y, scene, &mut scratch.assets);
     collect_paint_plan_summary_icons(
         plan,
         scene.scroll_y,
@@ -108,9 +123,13 @@ fn finish_draw_primary(
         .len()
         .saturating_add(scratch.control_gradients.len());
     log_collect_caps(scratch, collect, gradient_collect, gradient_count, scene);
-    let should_present_clear = scratch.placements.is_empty()
-        && scratch.gradients.is_empty()
-        && scratch.control_gradients.is_empty();
+    let has_assets = !scratch.assets.is_empty();
+    let has_gradients = !scratch.gradients.is_empty() || !scratch.control_gradients.is_empty();
+    let should_present_clear = if has_assets {
+        !has_gradients
+    } else {
+        scratch.placements.is_empty() && !has_gradients
+    };
     let clear_result = crate::intel::gpgpu::clear_primary_rgba8_white_for_redraw_stats(
         should_present_clear,
         present_reason,
@@ -120,7 +139,7 @@ fn finish_draw_primary(
     } else {
         crate::intel::gpgpu::gradient_rects_rgba8_over_primary(
             scratch.gradients.as_slice(),
-            scratch.placements.is_empty() && scratch.control_gradients.is_empty(),
+            scratch.control_gradients.is_empty() && (has_assets || scratch.placements.is_empty()),
         )
     };
     let control_gradient_result = if scratch.control_gradients.is_empty() {
@@ -128,8 +147,15 @@ fn finish_draw_primary(
     } else {
         crate::intel::gpgpu::gradient_rects_rgba8_over_primary(
             scratch.control_gradients.as_slice(),
-            scratch.placements.is_empty(),
+            has_assets || scratch.placements.is_empty(),
         )
+    };
+    let asset_start = embassy_time_driver::now();
+    let assets_drawn = draw_ready_assets_primary(scratch.assets.as_slice());
+    let asset_ms = if assets_drawn == 0 {
+        0
+    } else {
+        elapsed_ms_since(asset_start)
     };
     let mut text_batches = 0usize;
     let mut text_submitted = false;
@@ -164,6 +190,7 @@ fn finish_draw_primary(
     Ui3FontDrawResult {
         text_nodes: collect.text_nodes,
         placements: scratch.placements.len(),
+        assets: assets_drawn,
         batches: text_batches,
         gradients: gradient_count,
         clipped: collect.clipped,
@@ -182,6 +209,7 @@ fn finish_draw_primary(
                     .map(|result| result.fill_ms.saturating_add(result.blend_ms))
                     .unwrap_or(0),
             ),
+        asset_ms,
         text_ms: text_submit_ms,
         show_ms: clear_result
             .as_ref()
@@ -201,11 +229,13 @@ fn finish_draw_primary(
             )
             .saturating_add(text_present_ms),
         submit_ok: text_submitted
+            || assets_drawn != 0
             || gradient_result.as_ref().is_some_and(|result| result.ok)
             || control_gradient_result
                 .as_ref()
                 .is_some_and(|result| result.ok),
         presented: text_presented
+            || assets_drawn != 0
             || gradient_result
                 .as_ref()
                 .is_some_and(|result| result.presented)
@@ -231,6 +261,7 @@ fn finish_draw_primary(
                     .map(|result| result.fill_ms.saturating_add(result.blend_ms))
                     .unwrap_or(0),
             )
+            .saturating_add(asset_ms)
             .saturating_add(text_submit_ms),
         present_ms: clear_result
             .as_ref()
@@ -250,6 +281,90 @@ fn finish_draw_primary(
             )
             .saturating_add(text_present_ms),
     }
+}
+
+fn collect_paint_plan_ready_assets(
+    plan: &Value,
+    scroll_y: f32,
+    scene: Ui3FontScene,
+    assets: &mut Vec<Ui3AssetPlacement>,
+) {
+    if scene.browser_instance_id == 0 {
+        return;
+    }
+    let Some(boxes) = plan.get("paintedBoxes").and_then(Value::as_array) else {
+        return;
+    };
+    for item in boxes {
+        if assets.len() >= UI3_PAINTED_BOX_MAX {
+            break;
+        }
+        if item.get("role").and_then(Value::as_str) != Some("image") {
+            continue;
+        }
+        let Some(key) = item.get("key").and_then(Value::as_str) else {
+            continue;
+        };
+        let x = json_f32_field(item, "x").unwrap_or(0.0);
+        let y = json_f32_field(item, "y").unwrap_or(0.0) - scroll_y;
+        let Some(width) = json_u32_field(item, "width") else {
+            continue;
+        };
+        let Some(height) = json_u32_field(item, "height") else {
+            continue;
+        };
+        if width == 0
+            || height == 0
+            || y + height as f32 <= 0.0
+            || y >= scene.viewport_height as f32
+            || x + width as f32 <= 0.0
+            || x >= scene.viewport_width as f32
+        {
+            continue;
+        }
+        let Some(asset) =
+            crate::surfer::asset_shack::ready_asset_for_tag(scene.browser_instance_id, key)
+        else {
+            continue;
+        };
+        assets.push(Ui3AssetPlacement {
+            x: floor_i32(x),
+            y: floor_i32(y),
+            width,
+            height,
+            asset,
+        });
+    }
+}
+
+fn draw_ready_assets_primary(assets: &[Ui3AssetPlacement]) -> usize {
+    let mut drawn = 0usize;
+    for placement in assets {
+        if placement.asset.width == 0
+            || placement.asset.height == 0
+            || placement.asset.rgba.is_empty()
+        {
+            continue;
+        }
+        if crate::intel::blend_rgba_primary_rect_scaled(
+            placement.asset.rgba.as_slice(),
+            placement.asset.width,
+            placement.asset.height,
+            placement.asset.width as usize * 4,
+            0,
+            0,
+            placement.asset.width,
+            placement.asset.height,
+            placement.x,
+            placement.y,
+            placement.width,
+            placement.height,
+            "ui3-asset-ready-primary",
+        ) {
+            drawn = drawn.saturating_add(1);
+        }
+    }
+    drawn
 }
 
 fn log_collect_caps(
@@ -341,14 +456,16 @@ fn collect_paint_plan_rect_gradients(
                 remaining,
                 gradients,
             ),
-            "button" | "iframe" | "link" | "table" | "table-cell" => push_painted_box_gradients(
-                json_f32_field(item, "x").unwrap_or(0.0),
-                json_f32_field(item, "y").unwrap_or(0.0) - scroll_y,
-                item,
-                scene,
-                remaining,
-                control_gradients,
-            ),
+            "button" | "iframe" | "image" | "link" | "rule" | "table" | "table-cell" => {
+                push_painted_box_gradients(
+                    json_f32_field(item, "x").unwrap_or(0.0),
+                    json_f32_field(item, "y").unwrap_or(0.0) - scroll_y,
+                    item,
+                    scene,
+                    remaining,
+                    control_gradients,
+                )
+            }
             _ => 0,
         };
         if pushed != 0 {
@@ -533,11 +650,13 @@ fn push_painted_box_gradients(
         ));
     }
 
-    let Some(color0) = json_rgb24_field(paint, "color0").map(rgb24_to_rgba8_word) else {
+    let Some(color0) = json_rgba8_field(paint, "color0Rgba")
+        .or_else(|| json_rgb24_field(paint, "color0").map(rgb24_to_rgba8_word))
+    else {
         return pushed;
     };
-    let color1 = json_rgb24_field(paint, "color1")
-        .map(rgb24_to_rgba8_word)
+    let color1 = json_rgba8_field(paint, "color1Rgba")
+        .or_else(|| json_rgb24_field(paint, "color1").map(rgb24_to_rgba8_word))
         .unwrap_or(color0);
     let fill_x = x + border_width as f32;
     let fill_y = y + border_width as f32;
@@ -822,6 +941,10 @@ fn json_rgb24_field(node: &Value, key: &str) -> Option<u32> {
     json_u32_field(node, key).map(|rgb| rgb & 0x00FF_FFFF)
 }
 
+fn json_rgba8_field(node: &Value, key: &str) -> Option<u32> {
+    json_u32_field(node, key)
+}
+
 fn rgb24_to_rgba8_word(rgb: u32) -> u32 {
     0xFF00_0000 | (rgb & 0x00FF_FFFF)
 }
@@ -838,4 +961,15 @@ fn floor_i32(value: f32) -> i32 {
         return 0;
     }
     libm::floorf(value).clamp(i32::MIN as f32, i32::MAX as f32) as i32
+}
+
+fn elapsed_ms_since(start: u64) -> u64 {
+    let now = embassy_time_driver::now();
+    let ticks = now.saturating_sub(start);
+    let hz = embassy_time_driver::TICK_HZ;
+    if hz == 0 {
+        0
+    } else {
+        ticks.saturating_mul(1000) / hz
+    }
 }
