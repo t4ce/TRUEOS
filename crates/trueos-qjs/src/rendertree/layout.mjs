@@ -442,26 +442,28 @@ export function renderNodesToLayout(renderNodes, options = {}) {
   const viewport = normalizeViewport(options.viewport);
   const sourceMap = options.sourceMap instanceof Map ? options.sourceMap : new Map();
   const measurer = options.measurer ?? createTextMeasurer(options);
+  const rootPad = sizeFrom(options.rootPad, ROOT_PAD);
+  const scrollbarPad = sizeFrom(options.scrollbarPad, SCROLLBAR_PAD);
   const children = [];
-  const contentWidth = Math.max(1, viewport.width - ROOT_PAD * 2 - SCROLLBAR_PAD);
-  let cursorY = ROOT_PAD;
+  const contentWidth = Math.max(1, viewport.width - rootPad * 2 - scrollbarPad);
+  let cursorY = rootPad;
 
   for (const node of renderNodes ?? []) {
     if (isOutOfFlowNode(node, sourceMap)) {
       const box = layoutNode(node, sourceMap, 0, 0, contentWidth, options, measurer);
       if (!box) continue;
       const pos = outOfFlowPosition(box, {
-        innerX: ROOT_PAD,
-        innerY: ROOT_PAD,
+        innerX: rootPad,
+        innerY: rootPad,
         innerWidth: contentWidth,
-        heightHint: Math.max(0, viewport.height - ROOT_PAD * 2),
+        heightHint: Math.max(0, viewport.height - rootPad * 2),
       });
       box.x = pos.x;
       box.y = pos.y;
       children.push(markOutOfFlow(box));
       continue;
     }
-    const box = layoutNode(node, sourceMap, ROOT_PAD, cursorY, contentWidth, options, measurer);
+    const box = layoutNode(node, sourceMap, rootPad, cursorY, contentWidth, options, measurer);
     if (!box) continue;
     children.push(box);
     cursorY += box.height + gapAfter(node);
@@ -474,7 +476,7 @@ export function renderNodesToLayout(renderNodes, options = {}) {
     x: 0,
     y: 0,
     width: viewport.width,
-    height: Math.max(viewport.height, cursorY + ROOT_PAD),
+    height: Math.max(viewport.height, cursorY + rootPad),
     children,
   };
 }

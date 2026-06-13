@@ -1,4 +1,4 @@
-export const RENDER_TRACE_VERSION = 1;
+export const RENDER_TRACE_VERSION = 2;
 export const DEFAULT_VIEWPORT = Object.freeze({ width: 2560, height: 1224 });
 
 function numberFrom(value, fallback) {

@@ -117,7 +117,7 @@ fn consume_render_tree_frame(
     let present = redraw_scene_text(scene, font, taken_seq, false);
     let frame = &scene.frame;
     crate::log!(
-        "ui3-service: frame taken={} browser={} seq={} render_hash={} layout_hash={} render_bytes={} layout_bytes={} scroll_y={} scroll_redraw=0 content_height={} viewport={}x{} text_nodes={} placements={} gradients={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
+        "ui3-service: frame taken={} browser={} seq={} render_hash={} layout_hash={} render_bytes={} layout_bytes={} scroll_y={} scroll_redraw=0 content_height={} viewport={}x{} text_nodes={} placements={} gradients={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
         taken_seq,
         frame.browser_instance_id,
         frame.seq,
@@ -132,6 +132,7 @@ fn consume_render_tree_frame(
         present.text_nodes,
         present.placements,
         present.gradients,
+        present.embedded_scenes,
         present.clipped,
         present.batches,
         present.clear_ok as u8,
@@ -154,6 +155,7 @@ struct Ui3LayoutInspectResult {
     placements: usize,
     batches: usize,
     gradients: usize,
+    embedded_scenes: usize,
     clipped: usize,
     submit_ok: bool,
     presented: bool,
@@ -197,6 +199,13 @@ fn redraw_scene_text(
         );
         return Ui3LayoutInspectResult::default();
     };
+    let embedded_scenes = value
+        .get("trace")
+        .and_then(|trace| trace.get("embeddedScenes"))
+        .or_else(|| value.get("embeddedScenes"))
+        .and_then(Value::as_array)
+        .map(|scenes| scenes.len())
+        .unwrap_or(0);
 
     if let Some((viewport_width, viewport_height)) = crate::intel::active_scanout_dimensions() {
         scene.viewport_width = viewport_width;
@@ -227,7 +236,7 @@ fn redraw_scene_text(
 
     if is_scroll {
         crate::log!(
-            "ui3-service: scroll taken={} browser={} seq={} scroll_y={} content_height={} viewport={}x{} text_nodes={} placements={} gradients={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
+            "ui3-service: scroll taken={} browser={} seq={} scroll_y={} content_height={} viewport={}x{} text_nodes={} placements={} gradients={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
             taken_seq,
             frame.browser_instance_id,
             frame.seq,
@@ -238,6 +247,7 @@ fn redraw_scene_text(
             draw.text_nodes,
             draw.placements,
             draw.gradients,
+            embedded_scenes,
             draw.clipped,
             draw.batches,
             draw.clear_ok as u8,
@@ -259,6 +269,7 @@ fn redraw_scene_text(
         placements: draw.placements,
         batches: draw.batches,
         gradients: draw.gradients,
+        embedded_scenes,
         clipped: draw.clipped,
         submit_ok: draw.submit_ok,
         presented: draw.presented,
