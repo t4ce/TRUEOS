@@ -345,6 +345,7 @@ pub(crate) fn inject_udp_tablet_absolute_event(
     x: f64,
     y: f64,
     buttons_down: u32,
+    wheel: i16,
     flags: u32,
 ) {
     let slot_id = hid_udp_slot_id(udp_device_id);
@@ -398,7 +399,7 @@ pub(crate) fn inject_udp_tablet_absolute_event(
         reserved0: 0,
         reserved1: 0,
         buttons_down,
-        wheel: 0,
+        wheel,
         reserved2: 0,
         x,
         y,
