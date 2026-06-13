@@ -5,7 +5,7 @@
 //! letting the external ABI leak into the early runtime internals.
 
 use super::{
-    ClError, ClResult, IntelOpenClBackend, KnownAotValidationReport, KnownKernelRole,
+    BuiltProgram, ClError, ClResult, IntelOpenClBackend, KnownAotValidationReport, KnownKernelRole,
     backend::UploadedKernelRef,
     example::{KnownAotQueueProbe, fill_rect_worklist_queue_probe},
     registry::{KNOWN_AOT_KERNELS, known_aot_kernel},
@@ -21,6 +21,17 @@ pub(crate) struct KnownKernelInfo {
     pub(crate) binary_bytes: usize,
     pub(crate) spirv_bytes: usize,
     pub(crate) binary_sha256: [u8; 32],
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SourceBuildSmoke {
+    pub(crate) source_compile_cap: bool,
+    pub(crate) source_build_error: Option<ClError>,
+    pub(crate) registry_kernels: usize,
+    pub(crate) registry_passed: bool,
+    pub(crate) queue_completed_commands: usize,
+    pub(crate) fill_rect_uploaded: bool,
+    pub(crate) queue_error: Option<ClError>,
 }
 
 pub(crate) fn trueos_cl_known_kernel_count() -> usize {
@@ -45,6 +56,13 @@ pub(crate) fn trueos_cl_upload_known_kernel(name: &str) -> ClResult<UploadedKern
     backend.require_known_aot_upload(name)
 }
 
+pub(crate) fn trueos_cl_build_program_from_source(
+    source: &str,
+    options: &str,
+) -> ClResult<BuiltProgram<'static>> {
+    IntelOpenClBackend::new().build_program_from_source(source, options)
+}
+
 pub(crate) fn trueos_cl_known_kernel_uploaded(name: &str) -> ClResult<bool> {
     if known_aot_kernel(name).is_none() {
         return Err(ClError::InvalidKernelName);
@@ -65,4 +83,31 @@ pub(crate) fn trueos_cl_validate_known_aot_registry() -> KnownAotValidationRepor
 
 pub(crate) fn trueos_cl_validate_known_aot_status() -> KnownAotValidationReport {
     validate_known_aot_status()
+}
+
+pub(crate) fn trueos_cl_source_build_smoke() -> SourceBuildSmoke {
+    let backend = IntelOpenClBackend::new();
+    let caps = backend.caps();
+    let source_build_error = match backend
+        .build_program_from_source(crate::intel::gpgpu::FILL_RECT_RGBA8_OPENCL_SOURCE, "")
+    {
+        Ok(_) => None,
+        Err(err) => Some(err),
+    };
+    let registry = validate_known_aot_registry();
+    let (queue_completed_commands, fill_rect_uploaded, queue_error) =
+        match fill_rect_worklist_queue_probe() {
+            Ok(probe) => (probe.completed_commands, probe.fill_rect_uploaded, None),
+            Err(err) => (0, false, Some(err)),
+        };
+
+    SourceBuildSmoke {
+        source_compile_cap: caps.source_compile,
+        source_build_error,
+        registry_kernels: registry.registry_kernels,
+        registry_passed: registry.passed(),
+        queue_completed_commands,
+        fill_rect_uploaded,
+        queue_error,
+    }
 }

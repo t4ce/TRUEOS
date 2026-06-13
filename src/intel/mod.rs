@@ -194,6 +194,20 @@ pub fn init_once() {
     let _ = self::gpgpu::upload_canvas3d_plane_fill_rgba8_kernel();
     let _ = self::gpgpu::upload_canvas3d_plane_patch_fill_cut_rgba8_kernel();
     let _ = self::gpgpu::upload_canvas3d_plane_patch_worklist_rgba8_kernel();
+    let opencl_smoke = self::opencl::trueos_cl_source_build_smoke();
+    crate::log!(
+        "intel/opencl: source-build-smoke source_compile={} build_err={} registry_kernels={} registry_ok={} queue_completed={} fill_rect_uploaded={} queue_err={} note=source-build-currently-scaffold-aot-path-active\n",
+        opencl_smoke.source_compile_cap as u8,
+        opencl_smoke
+            .source_build_error
+            .map(|err| err.code())
+            .unwrap_or(0),
+        opencl_smoke.registry_kernels,
+        opencl_smoke.registry_passed as u8,
+        opencl_smoke.queue_completed_commands,
+        opencl_smoke.fill_rect_uploaded as u8,
+        opencl_smoke.queue_error.map(|err| err.code()).unwrap_or(0),
+    );
     if crate::allcaps::probes::INTEL_GPGPU_ARTIFACT_BOOT_SMOKETESTS {
         let _ = self::gpgpu::submit_direct_rcs_smoke_once();
         let _ = self::gpgpu::submit_fill_rect_worklist_rgba8_probe_once();

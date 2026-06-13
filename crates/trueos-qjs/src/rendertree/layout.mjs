@@ -72,10 +72,20 @@ export function createTextMeasurer(options = {}) {
 
   return {
     lineHeight,
-    measure(text, maxWidth = Number.POSITIVE_INFINITY) {
+    measure(text, maxWidth = Number.POSITIVE_INFINITY, textOptions = {}) {
       const limit = Math.max(1, numberFrom(maxWidth, Number.POSITIVE_INFINITY));
       const lines = [];
       const hardLines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n');
+
+      if (textOptions.preserveWhitespace === true) {
+        lines.push(...hardLines);
+        const width = Math.max(1, ...lines.map((line) => Math.ceil(widthOf(line))));
+        return {
+          width,
+          height: Math.max(lineHeight, lines.length * lineHeight),
+          lines,
+        };
+      }
 
       for (const hardLine of hardLines) {
         const words = normalizeWhitespace(hardLine).split(' ').filter(Boolean);
@@ -287,7 +297,8 @@ function childRenderList(node) {
 
 function layoutTextNode(renderNode, x, y, width, measurer) {
   const text = String(renderNode.text ?? '');
-  const measured = measurer.measure(text, width);
+  const preserveWhitespace = renderNode.preserveWhitespace === true;
+  const measured = measurer.measure(text, width, { preserveWhitespace });
   return {
     kind: 'text',
     text,
@@ -296,6 +307,7 @@ function layoutTextNode(renderNode, x, y, width, measurer) {
     y,
     width: measured.width,
     height: measured.height,
+    ...(preserveWhitespace ? { preserveWhitespace: true } : {}),
     children: [],
   };
 }

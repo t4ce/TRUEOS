@@ -206,6 +206,10 @@ fn redraw_scene_text(
         .and_then(Value::as_array)
         .map(|scenes| scenes.len())
         .unwrap_or(0);
+    let paint_plan = value
+        .get("trace")
+        .and_then(|trace| trace.get("ui3PaintPlan"))
+        .or_else(|| value.get("ui3PaintPlan"));
 
     if let Some((viewport_width, viewport_height)) = crate::intel::active_scanout_dimensions() {
         scene.viewport_width = viewport_width;
@@ -222,16 +226,16 @@ fn redraw_scene_text(
         viewport_width: scene.viewport_width,
         viewport_height: scene.viewport_height,
     };
-    let draw = crate::ui3::ui3_font::draw_layout_primary(
-        layout,
-        font_scene,
-        font,
-        if is_scroll {
-            "ui3-text-scroll-primary"
-        } else {
-            "ui3-text-frame-primary"
-        },
-    );
+    let present_reason = if is_scroll {
+        "ui3-text-scroll-primary"
+    } else {
+        "ui3-text-frame-primary"
+    };
+    let draw = if let Some(plan) = paint_plan {
+        crate::ui3::ui3_font::draw_paint_plan_primary(plan, font_scene, font, present_reason)
+    } else {
+        crate::ui3::ui3_font::draw_layout_primary(layout, font_scene, font, present_reason)
+    };
     let total_ms = elapsed_ms_since(total_start);
 
     if is_scroll {

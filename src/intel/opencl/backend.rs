@@ -2,6 +2,7 @@
 //! AOT artifact upload path.
 
 use super::{
+    BuiltProgram,
     queue::{CommandKind, CommandQueue},
     registry,
     types::{ClError, ClResult, NdRange},
@@ -174,6 +175,18 @@ impl IntelOpenClBackend {
         } else {
             Err(ClError::InvalidBinary)
         }
+    }
+
+    pub(crate) fn build_program_from_source(
+        &self,
+        _source: &str,
+        _options: &str,
+    ) -> ClResult<BuiltProgram<'static>> {
+        if !self.caps.source_compile {
+            return Err(ClError::CompilerNotAvailable);
+        }
+
+        Err(ClError::BuildProgramFailure)
     }
 
     pub(crate) fn upload_fill_rect_worklist_rgba8(&self) -> Option<UploadedKernelRef> {

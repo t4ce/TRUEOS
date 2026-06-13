@@ -21,31 +21,28 @@ A Rust Based 64 Bit Paged X84 Baremetal OS Targeted at modern Intel XeLp
 > Think of TRUE OS as the world’s fast-moving “entropy dividend”:
 > A constant influx of resources, money, and safety.
 
-# install
-- sudo apt update && sudo apt upgrade
-- apt install git gh make rustup autoconf automake mtools nasm xorriso - - - qemu-system gdb build-essential konsole
-- apt install gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
-- cargo install fmt cargo-outdated cargo-edit --locked
-- rustup component add clippy
-- rustup toolchain install nightly --profile minimal --component rust-src,- - rustfmt,rust-analyzer,llvm-tools-preview
-- cargo install cargo-edit --locked
-- export CC_aarch64_unknown_none=aarch64-linux-gnu-gcc
-- export AR_aarch64_unknown_none=aarch64-linux-gnu-ar
+## Setup to build ELF + ISO via makefile make (run,iso,release)
+### Rust and C Tools
+- ```sudo apt update && sudo apt upgrade```
+- ```sudo apt install npm git gh make rustup autoconf automake mtools nasm xorriso - - - qemu-system gdb build-essential konsole```
+- ```sudo apt install gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu```
+- ```cargo install fmt cargo-outdated cargo-edit --locked```
+- ```rustup component add clippy```
+- ```rustup toolchain install nightly --profile minimal --component rust-src,- - rustfmt,rust-analyzer,llvm-tools-preview```
+- ```cargo install cargo-edit --locked```
+- ```export CC_aarch64_unknown_none=aarch64-linux-gnu-gcc```
+- ```export AR_aarch64_unknown_none=aarch64-linux-gnu-ar```
+### Git
+- ```git (my contact is well known)```
+- ```git config --global user.email "jonasb@post.com"```
+- ```git config --global user.name  "t4ce"```
+- ```gh auth login```
+- ```sudo npm install node```
 
-- git (my contact is well known)
-- git config --global user.email "jonasb@post.com"
-- git config --global user.name  "t4ce"
-- gh auth login
-
-- apt install npm
-- sudo npm install node
-
-# Big title
 ## Section title
-### Smaller section
+
 **bold**
 *italic*
-~~strikethrough~~
 `inline code`
 > This is a quote.
 > [!NOTE]
