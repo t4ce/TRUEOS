@@ -5,7 +5,7 @@ this software or its source code, in whole or in part, without prior
 written permission from the copyright holder.
 
 ```
-/* TRUE OS § ® 2026
+TRUE OS § ® 2026
 ██████████████████████████████████████████████████████████████████████
 ██░        ░░       ░░░  ░░░░  ░░        ░░░░░░░░░      ░░░░      ░░██
 ██▒▒▒▒  ▒▒▒▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒▒▒▒▒▒▒▒▒▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒▒▒▒██
@@ -14,15 +14,12 @@ written permission from the copyright holder.
 ██████  █████  ████  ███      ███        █████████      ████      ████
 ██████████████████████████████████████████████████████████████████████
 A Rust Based 64 Bit Paged X84 Baremetal OS Targeted at modern Intel XeLp
-
-Think of rust as the world’s quiet, slow-moving “entropy tax”:
-A constant drain of resources, money, and safety.
-
-Think of TRUE OS as the world’s fast-moving “entropy dividend”:
-A constant influx of resources, money, and safety.
-*/
-
 ```
+> Think of rust as the world’s quiet, slow-moving “entropy tax”:
+> A constant drain of resources, money, and safety.
+
+> Think of TRUE OS as the world’s fast-moving “entropy dividend”:
+> A constant influx of resources, money, and safety.
 
 # install
 - sudo apt update && sudo apt upgrade
