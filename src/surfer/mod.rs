@@ -1,13 +1,11 @@
 extern crate alloc;
 
+pub(crate) mod asset_shack;
 pub(crate) mod html_shack;
 
 use alloc::string::String;
-use alloc::vec;
-use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 use embassy_executor::{SpawnError, Spawner};
-use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 pub(crate) type HostedSurfaceState = trueos_qjs::browser_task::HostedBrowserSurfaceState;
@@ -34,7 +32,6 @@ const BROWSER_PARSE_HOST_LIMIT: u32 = if BROWSER_PARSE_HOST_POOL_SIZE < MAX_BROW
     MAX_BROWSER_INSTANCE_ID
 };
 const BROWSER_PARSE_POOL_BOOT_COUNT: u32 = 0;
-const BROWSER_ASSET_FETCH_POLL_MS: u64 = 8;
 
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct HostedBrowserDirtyMask {
@@ -287,6 +284,16 @@ pub(crate) fn spawn_html_fetch_service(spawner: Spawner) -> Result<bool, SpawnEr
     Ok(true)
 }
 
+pub(crate) fn spawn_asset_fetch_service(spawner: Spawner) -> Result<bool, SpawnError> {
+    let mut spawned = false;
+    for _ in 0..asset_shack::ASSET_FETCH_WORKERS {
+        let token = asset_shack::asset_fetch_worker_task()?;
+        spawner.spawn(token);
+        spawned = true;
+    }
+    Ok(spawned)
+}
+
 pub(crate) fn spawn_truesurfer_batch(
     _spawner: Spawner,
     requested: u32,
@@ -360,36 +367,5 @@ fn spawn_parse_host_for_html_queue() -> Option<u32> {
     match spawn_next_parse_host_locked(&mut parse_pool, "html-queue-spawned") {
         Ok(Some(browser_instance_id)) => Some(browser_instance_id),
         Ok(None) | Err(_) => None,
-    }
-}
-
-fn browser_asset_fetch_start(url: &str) -> Result<u32, i32> {
-    if url.starts_with('/') {
-        trueos_qjs::async_fs::start_read_file(url.as_bytes())
-    } else {
-        trueos_qjs::async_fs::start_net_fetch_bytes(url.as_bytes())
-    }
-}
-
-pub(crate) async fn fetch_browser_asset_bytes(url: &str) -> Result<Vec<u8>, i32> {
-    let op_id = browser_asset_fetch_start(url)?;
-    loop {
-        let rc_or_done = trueos_qjs::async_fs::result_len(op_id);
-        if rc_or_done == trueos_qjs::async_fs::FS_ERR_NOT_FOUND as isize {
-            Timer::after(EmbassyDuration::from_millis(BROWSER_ASSET_FETCH_POLL_MS)).await;
-            continue;
-        }
-        if rc_or_done < 0 {
-            let _ = trueos_qjs::async_fs::discard(op_id);
-            return Err(rc_or_done as i32);
-        }
-        let mut bytes = vec![0u8; rc_or_done as usize];
-        let got = trueos_qjs::async_fs::read_result(op_id, bytes.as_mut_ptr(), bytes.len());
-        if got < 0 {
-            let _ = trueos_qjs::async_fs::discard(op_id);
-            return Err(got as i32);
-        }
-        bytes.truncate(got as usize);
-        return Ok(bytes);
     }
 }

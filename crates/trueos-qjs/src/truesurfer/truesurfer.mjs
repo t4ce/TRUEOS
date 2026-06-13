@@ -22,7 +22,6 @@ const TRUESURFER_MAX_SCENE_IMAGES = 5;
 
 let truesurferSubsetProfile = null;
 let extractDocumentArtifactsFn = null;
-let createBrowserAssetManagerFn = null;
 let buildCssStyleRefIndexFn = null;
 let parseDocumentFn = null;
 let domToWidgetsFn = null;
@@ -30,9 +29,7 @@ let collectWidgetStatsFn = null;
 let flattenWidgetTreeFn = null;
 let createRenderTreeTraceFn = null;
 let summarizeRenderTreeTraceFn = null;
-let browserAssetManager = null;
 let currentNavigationUrl = '';
-let currentSceneImageUrls = [];
 let currentArtifactsState = null;
 let renderTreeArtifactLogged = false;
 
@@ -107,35 +104,94 @@ function countLines(source) {
   return lines;
 }
 
-function ensureBrowserAssetManager() {
-  if (browserAssetManager || typeof createBrowserAssetManagerFn !== 'function') {
-    return browserAssetManager;
-  }
-  const publish = () => {
-    try {
-      publishLatestArtifacts();
-    } catch (_) {}
-  };
-  browserAssetManager = createBrowserAssetManagerFn({
-    host: root,
-    browserId,
-    paint: publish,
-    resolveNavigationUrl: (href) => resolveNavigationUrl(currentNavigationUrl, href),
-    onAssetStateChanged: publish,
-    traceVideoSourceLine: globalLogLine,
-  });
-  return browserAssetManager;
-}
-
 function publishLatestArtifacts() {
   if (!currentArtifactsState) return null;
   const nextArtifacts = Object.assign({}, currentArtifactsState);
-  if (browserAssetManager) {
-    nextArtifacts.imageSummary = browserAssetManager.summarizeImageUrls(currentSceneImageUrls);
-  }
   root.__trueosTruesurferLastArtifacts = nextArtifacts;
   currentArtifactsState = nextArtifacts;
   return nextArtifacts;
+}
+
+function resolveSceneImageKind(url) {
+  const value = safeString(url).trim();
+  if (value.startsWith('data:')) {
+    if (/^data:image\/svg\+xml(?:;|,)/i.test(value)) return 'svg';
+    if (/^data:image\/jpe?g(?:;|,)/i.test(value)) return 'jpeg';
+    if (/^data:image\/png(?:;|,)/i.test(value)) return 'png';
+    return '';
+  }
+  const lower = value.toLowerCase();
+  if (/\.png(?:$|[?#])/.test(lower)) return 'png';
+  if (/\.jpe?g(?:$|[?#])/.test(lower)) return 'jpeg';
+  if (/\.svg(?:$|[?#])/.test(lower)) return 'svg';
+  return '';
+}
+
+function beginBrowserAssetRefs() {
+  if (typeof root.__trueosBrowserAssetRefsBegin !== 'function') return 0;
+  try {
+    return Number(root.__trueosBrowserAssetRefsBegin(browserId) || 0) | 0;
+  } catch (_) {
+    return -1;
+  }
+}
+
+function pushBrowserAssetRef(tag, url, kind) {
+  if (typeof root.__trueosBrowserAssetRef !== 'function') return -1;
+  try {
+    return Number(root.__trueosBrowserAssetRef(browserId, String(tag || ''), String(url || ''), String(kind || 'asset')) || 0) | 0;
+  } catch (_) {
+    return -1;
+  }
+}
+
+function tagWidgetTreeAssetRefs(widgetTree) {
+  const urls = [];
+  const unique = new Set();
+  beginBrowserAssetRefs();
+
+  const walk = (node) => {
+    if (!node || typeof node !== 'object') return;
+    if (node.kind === 'widget' && String(node.tag || node.widget || '').toLowerCase() === 'img') {
+      const props = node.props && typeof node.props === 'object' ? node.props : {};
+      const attrs = node.attrs && typeof node.attrs === 'object' ? node.attrs : {};
+      const rawSrc = String(props.src ?? attrs.src ?? '').trim();
+      const resolvedSrc = rawSrc ? resolveNavigationUrl(currentNavigationUrl, rawSrc) : '';
+      const kind = resolveSceneImageKind(resolvedSrc);
+      const assetTag = String(node.key || attrs.id || rawSrc || `img:${urls.length}`);
+      const supported = Boolean(resolvedSrc && kind);
+      node.props = {
+        ...props,
+        resolvedSrc,
+        imageAsset: {
+          tag: assetTag,
+          src: resolvedSrc,
+          kind,
+          state: supported ? 'referenced' : 'unsupported',
+          texId: 0,
+          mime: '',
+          pixelWidth: 0,
+          pixelHeight: 0,
+          error: '',
+        },
+      };
+      if (supported && !unique.has(assetTag)) {
+        unique.add(assetTag);
+        urls.push(resolvedSrc);
+        pushBrowserAssetRef(assetTag, resolvedSrc, kind);
+      }
+    }
+    const children = Array.isArray(node.children) ? node.children : [];
+    for (let i = 0; i < children.length; i += 1) walk(children[i]);
+  };
+
+  walk(widgetTree);
+  return {
+    total: urls.length,
+    pending: 0,
+    ready: 0,
+    error: 0,
+  };
 }
 
 function logSyncPipeline(url, parsed) {
@@ -300,7 +356,6 @@ async function warmBrowserPipelineModules() {
   const helpers = getImportHelpers(TRUESURFER_MODULE_BASE);
   const imports = [
     './truesurfer_extract.mjs',
-    './truesurfer_assets.mjs',
     './css.mjs',
     'parse5',
     '../widlib/index.mjs',
@@ -310,9 +365,8 @@ async function warmBrowserPipelineModules() {
     await helpers.prefetch(imports[index]);
   }
 
-  const [extractMod, assetsMod, cssMod, parse5Mod, widMod, renderTreeMod] = await Promise.all([
+  const [extractMod, cssMod, parse5Mod, widMod, renderTreeMod] = await Promise.all([
     helpers.import('./truesurfer_extract.mjs'),
-    helpers.import('./truesurfer_assets.mjs'),
     helpers.import('./css.mjs'),
     helpers.import('parse5'),
     helpers.import('../widlib/index.mjs'),
@@ -320,7 +374,6 @@ async function warmBrowserPipelineModules() {
   ]);
 
   const extractReady = !!extractMod && typeof extractMod.extractDocumentArtifacts === 'function';
-  const assetsReady = !!assetsMod && typeof assetsMod.createBrowserAssetManager === 'function';
   const cssReady =
     !!cssMod
     && typeof cssMod.extractCssSection === 'function'
@@ -335,15 +388,14 @@ async function warmBrowserPipelineModules() {
     !!renderTreeMod
     && typeof renderTreeMod.createRenderTreeTrace === 'function'
     && typeof renderTreeMod.summarizeRenderTreeTrace === 'function';
-  if (!extractReady || !assetsReady || !cssReady || !parseReady || !widgetsReady || !renderTreeReady) {
+  if (!extractReady || !cssReady || !parseReady || !widgetsReady || !renderTreeReady) {
     throw new Error(
-      `browser pipeline warmup incomplete extract_ready=${extractReady ? 1 : 0} assets_ready=${assetsReady ? 1 : 0} css_ready=${cssReady ? 1 : 0} parse_ready=${parseReady ? 1 : 0} widgets_ready=${widgetsReady ? 1 : 0} render_tree_ready=${renderTreeReady ? 1 : 0}`,
+      `browser pipeline warmup incomplete extract_ready=${extractReady ? 1 : 0} css_ready=${cssReady ? 1 : 0} parse_ready=${parseReady ? 1 : 0} widgets_ready=${widgetsReady ? 1 : 0} render_tree_ready=${renderTreeReady ? 1 : 0}`,
     );
   }
 
   truesurferSubsetProfile = extractMod.TRUESURFER_SUBSET_PROFILE || null;
   extractDocumentArtifactsFn = extractMod.extractDocumentArtifacts;
-  createBrowserAssetManagerFn = assetsMod.createBrowserAssetManager;
   buildCssStyleRefIndexFn = cssMod.buildCssStyleRefIndex;
   parseDocumentFn = parse5Mod.parse;
   domToWidgetsFn = widMod.domToWidgets;
@@ -353,7 +405,6 @@ async function warmBrowserPipelineModules() {
   summarizeRenderTreeTraceFn = renderTreeMod.summarizeRenderTreeTrace;
   root.__trueosTruesurferModules = {
     extractReady: 1,
-    assetsReady: 1,
     cssReady: 1,
     parseReady: 1,
     widgetsReady: 1,
@@ -365,7 +416,6 @@ async function bootstrapTruesurfer() {
   root.__trueosTruesurferWarmup = {
       status: 'warming',
       extractReady: 0,
-      assetsReady: 0,
       cssReady: 0,
       parseReady: 0,
       widgetsReady: 0,
@@ -380,7 +430,6 @@ async function bootstrapTruesurfer() {
     root.__trueosTruesurferWarmup = {
       status: 'ready',
       extractReady: modules.extractReady ? 1 : 0,
-      assetsReady: modules.assetsReady ? 1 : 0,
       cssReady: modules.cssReady ? 1 : 0,
       parseReady: modules.parseReady ? 1 : 0,
       widgetsReady: modules.widgetsReady ? 1 : 0,
@@ -389,14 +438,13 @@ async function bootstrapTruesurfer() {
     };
     root.__trueosTruesurferReady = 1;
     log(
-      `[truesurfer bootstrap] browser=${browserId} ready extract=${modules.extractReady ? 1 : 0} assets=${modules.assetsReady ? 1 : 0} css=${modules.cssReady ? 1 : 0} parse=${modules.parseReady ? 1 : 0} widgets=${modules.widgetsReady ? 1 : 0} render_tree=${modules.renderTreeReady ? 1 : 0}`,
+      `[truesurfer bootstrap] browser=${browserId} ready extract=${modules.extractReady ? 1 : 0} css=${modules.cssReady ? 1 : 0} parse=${modules.parseReady ? 1 : 0} widgets=${modules.widgetsReady ? 1 : 0} render_tree=${modules.renderTreeReady ? 1 : 0}`,
     );
   } catch (error) {
     const message = error && error.stack ? String(error.stack) : String(error || 'unknown bootstrap error');
     root.__trueosTruesurferWarmup = {
       status: 'error',
       extractReady: 0,
-      assetsReady: 0,
       cssReady: 0,
       parseReady: 0,
       widgetsReady: 0,
@@ -415,7 +463,6 @@ function setHtml(nextHtml, meta) {
   const lines = countLines(html);
 
   currentNavigationUrl = url;
-  currentSceneImageUrls = [];
 
   if (
     typeof extractDocumentArtifactsFn !== 'function'
@@ -437,17 +484,8 @@ function setHtml(nextHtml, meta) {
     const styleStart = Date.now();
     const styleIndex = buildCssStyleRefIndexFn(parsedDocument);
     const styleIndexMs = Date.now() - styleStart;
-    const assetManager = ensureBrowserAssetManager();
-    if (assetManager && typeof assetManager.beginPageLoad === 'function') {
-      assetManager.beginPageLoad();
-    }
     const widgetTree = domToWidgetsFn(parsedDocument);
-    if (assetManager && typeof assetManager.tagWidgetTreeImages === 'function') {
-      currentSceneImageUrls = assetManager.tagWidgetTreeImages(widgetTree) || [];
-    }
-    const imageSummary = assetManager && typeof assetManager.summarizeImageUrls === 'function'
-      ? assetManager.summarizeImageUrls(currentSceneImageUrls)
-      : { total: 0, pending: 0, ready: 0, error: 0 };
+    const imageSummary = tagWidgetTreeAssetRefs(widgetTree);
     const parsed = extractDocumentArtifactsFn(html, { styleIndex, styleIndexMs });
     currentArtifactsState = {
       url,

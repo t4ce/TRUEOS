@@ -66,6 +66,7 @@ define_started_flags!(
     RAPLE_SERVICE_STARTED,
     GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
     HTML_SHACK_SERVICE_STARTED,
+    ASSET_SHACK_SERVICE_STARTED,
     UI2_HOSTED_SYNC_TASK_STARTED,
     UI2_HIT_TASK_STARTED,
     UI2_STARTED,
@@ -571,6 +572,10 @@ fn html_fetch_service(spawner: Spawner) -> SpawnAttempt {
     spawn_bool_result_to_attempt(crate::surfer::spawn_html_fetch_service(spawner))
 }
 
+fn asset_fetch_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_bool_result_to_attempt(crate::surfer::spawn_asset_fetch_service(spawner))
+}
+
 fn spawn_truesurfer_parse_pool(spawner: Spawner) -> SpawnAttempt {
     spawn_bool_result_to_attempt(crate::surfer::spawn_truesurfer_parse_pool(spawner))
 }
@@ -1016,9 +1021,9 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 #[cfg(feature = "trueos_rdp")]
-const TASK_COUNT: usize = 50;
+const TASK_COUNT: usize = 51;
 #[cfg(not(feature = "trueos_rdp"))]
-const TASK_COUNT: usize = 49;
+const TASK_COUNT: usize = 50;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1213,6 +1218,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         &HTML_SHACK_SERVICE_STARTED,
         html_fetch_service,
+    ),
+    TaskSpec::enabled(
+        "asset_shack_service",
+        crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+        &ASSET_SHACK_SERVICE_STARTED,
+        asset_fetch_service,
     ),
     TaskSpec::enabled(
         "truesurfer-parse-pool",

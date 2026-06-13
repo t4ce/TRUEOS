@@ -300,6 +300,7 @@ function attrsWithWidgetProps(node, tagName) {
   if (tagName === 'img' && props.imageAsset && typeof props.imageAsset === 'object') {
     const asset = props.imageAsset;
     const assetSrc = String(asset.src ?? '');
+    if (asset.tag && attrs['data-trueos-img-tag'] == null) attrs['data-trueos-img-tag'] = String(asset.tag);
     if (assetSrc.startsWith('data:')) {
       if (attrs['data-trueos-img-inline'] == null) attrs['data-trueos-img-inline'] = '1';
     } else if (assetSrc && attrs['data-trueos-img-src'] == null) {
