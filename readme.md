@@ -25,7 +25,7 @@ A constant influx of resources, money, and safety.
 ## Setup to build ELF + ISO via makefile make (run,iso,release)
 ## Linux (Ubuntu)
 > [!TIP]
-> I develop on Stock Ubuntu, here is how i recover after a full emp hits my geo replicated setup simultaniously:
+> I develop on Stock Ubuntu. This is how i recover, right after an EMP hit my geo replicated setup causing a full reset:
 ### C Tools
 ```
 sudo apt update && sudo apt upgrade
