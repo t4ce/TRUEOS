@@ -6,6 +6,8 @@ use spin::Mutex;
 const UI3_IMG_STATUS_UNKNOWN: i32 = 0;
 const UI3_IMG_STATUS_PENDING: i32 = 1;
 const UI3_IMG_STATUS_READY: i32 = 2;
+const UI3_IMG_ERR_NULL: i32 = -2;
+const UI3_IMG_ERR_EMPTY: i32 = -3;
 
 #[derive(Clone)]
 pub(crate) struct Ui3Image {
@@ -32,6 +34,76 @@ fn set_status(tex_id: u32, status: i32) {
         return;
     }
     UI3_IMAGE_STATUS.lock().insert(tex_id, status);
+}
+
+fn set_error(tex_id: u32, status: i32) -> i32 {
+    set_status(tex_id, status);
+    status
+}
+
+unsafe fn encoded_bytes<'a>(data_ptr: *const u8, data_len: usize) -> Result<&'a [u8], i32> {
+    if data_ptr.is_null() {
+        return Err(UI3_IMG_ERR_NULL);
+    }
+    if data_len == 0 {
+        return Err(UI3_IMG_ERR_EMPTY);
+    }
+    Ok(unsafe { core::slice::from_raw_parts(data_ptr, data_len) })
+}
+
+#[cfg(feature = "trueos_rdp")]
+fn preserve_encoded_texture(
+    tex_id: u32,
+    kind: crate::r::resource_monitor::EncodedKind,
+    flags: u32,
+    bytes: &[u8],
+) {
+    let _ = crate::r::resource_monitor::preserve_encoded_texture(tex_id, kind, flags, bytes);
+}
+
+#[cfg(not(feature = "trueos_rdp"))]
+fn preserve_encoded_texture(_tex_id: u32, _kind: (), _flags: u32, _bytes: &[u8]) {}
+
+fn upload_decoded_rgba(tex_id: u32, width: u32, height: u32, rgba: Vec<u8>) -> i32 {
+    set_status(tex_id, UI3_IMG_STATUS_PENDING);
+    let rc = store_rgba_image(tex_id, width, height, rgba);
+    if rc != 0 { set_error(tex_id, rc) } else { rc }
+}
+
+fn upload_png_bytes_to_texture(tex_id: u32, bytes: &[u8], flags: u32) -> i32 {
+    #[cfg(feature = "trueos_rdp")]
+    preserve_encoded_texture(tex_id, crate::r::resource_monitor::EncodedKind::Png, flags, bytes);
+    #[cfg(not(feature = "trueos_rdp"))]
+    preserve_encoded_texture(tex_id, (), flags, bytes);
+
+    match crate::ui3::img::png_codec::decode_png_rgba(bytes) {
+        Ok(decoded) => upload_decoded_rgba(tex_id, decoded.width, decoded.height, decoded.rgba),
+        Err(err) => set_error(tex_id, err.code()),
+    }
+}
+
+fn upload_jpeg_bytes_to_texture(tex_id: u32, bytes: &[u8], flags: u32) -> i32 {
+    #[cfg(feature = "trueos_rdp")]
+    preserve_encoded_texture(tex_id, crate::r::resource_monitor::EncodedKind::Jpeg, flags, bytes);
+    #[cfg(not(feature = "trueos_rdp"))]
+    preserve_encoded_texture(tex_id, (), flags, bytes);
+
+    match crate::ui3::img::jpeg_codec::decode_jpeg_rgba(bytes) {
+        Ok(decoded) => upload_decoded_rgba(tex_id, decoded.width, decoded.height, decoded.rgba),
+        Err(err) => set_error(tex_id, err.code()),
+    }
+}
+
+fn upload_svg_bytes_to_texture_rgba(tex_id: u32, bytes: &[u8], flags: u32) -> i32 {
+    #[cfg(feature = "trueos_rdp")]
+    preserve_encoded_texture(tex_id, crate::r::resource_monitor::EncodedKind::Svg, flags, bytes);
+    #[cfg(not(feature = "trueos_rdp"))]
+    preserve_encoded_texture(tex_id, (), flags, bytes);
+
+    match crate::ui3::img::svg::rasterize_svg_bytes_rgba(bytes) {
+        Ok((info, rgba)) => upload_decoded_rgba(tex_id, info.width, info.height, rgba),
+        Err(err) => set_error(tex_id, err),
+    }
 }
 
 pub(crate) fn store_rgba_image(tex_id: u32, width: u32, height: u32, rgba: Vec<u8>) -> i32 {
@@ -130,6 +202,84 @@ pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_rgba_image_async(
     data_len: usize,
 ) -> i32 {
     unsafe { trueos_cabi_gfx_upload_texture_rgba_image(tex_id, width, height, data_ptr, data_len) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_png(
+    tex_id: u32,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> i32 {
+    let bytes = match unsafe { encoded_bytes(data_ptr, data_len) } {
+        Ok(bytes) => bytes,
+        Err(code) => return set_error(tex_id, code),
+    };
+    upload_png_bytes_to_texture(tex_id, bytes, 0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_png_async(
+    tex_id: u32,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> i32 {
+    let bytes = match unsafe { encoded_bytes(data_ptr, data_len) } {
+        Ok(bytes) => bytes,
+        Err(code) => return set_error(tex_id, code),
+    };
+    upload_png_bytes_to_texture(tex_id, bytes, 1)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_jpeg(
+    tex_id: u32,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> i32 {
+    let bytes = match unsafe { encoded_bytes(data_ptr, data_len) } {
+        Ok(bytes) => bytes,
+        Err(code) => return set_error(tex_id, code),
+    };
+    upload_jpeg_bytes_to_texture(tex_id, bytes, 0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_jpeg_async(
+    tex_id: u32,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> i32 {
+    let bytes = match unsafe { encoded_bytes(data_ptr, data_len) } {
+        Ok(bytes) => bytes,
+        Err(code) => return set_error(tex_id, code),
+    };
+    upload_jpeg_bytes_to_texture(tex_id, bytes, 1)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_svg(
+    tex_id: u32,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> i32 {
+    let bytes = match unsafe { encoded_bytes(data_ptr, data_len) } {
+        Ok(bytes) => bytes,
+        Err(code) => return set_error(tex_id, code),
+    };
+    upload_svg_bytes_to_texture_rgba(tex_id, bytes, 0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_svg_async(
+    tex_id: u32,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> i32 {
+    let bytes = match unsafe { encoded_bytes(data_ptr, data_len) } {
+        Ok(bytes) => bytes,
+        Err(code) => return set_error(tex_id, code),
+    };
+    upload_svg_bytes_to_texture_rgba(tex_id, bytes, 1)
 }
 
 #[unsafe(no_mangle)]
