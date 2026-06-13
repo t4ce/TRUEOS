@@ -7,6 +7,7 @@ mod canvas3d_cube;
 mod canvas3d_ico;
 mod test_gpgpu;
 
+pub(crate) use canvas3d_cube::LIVE_PLANE_HALF_Q16 as CANVAS3D_CUBE_LIVE_HALF_Q16;
 pub(crate) use test_gpgpu::{
     GpgpuCanvas3dUi2TextureFrame, GpgpuShellCube20ProjectResult, canvas3d_ico_project_frame,
     canvas3d_ico_project_rect, canvas3d_ico_project_texture_frame, shell_cube6_plane_project_frame,
@@ -745,7 +746,7 @@ const SURFACE_FORMAT_RAW: u32 = 0x1FF;
 const DIRECT_RCS_ENABLED: bool = true;
 const DIRECT_RCS_RING_BYTES: usize = 4096;
 const DIRECT_RCS_CONTEXT_BYTES: usize = 22 * 4096;
-const DIRECT_RCS_BATCH_BYTES: usize = 64 * 1024;
+const DIRECT_RCS_BATCH_BYTES: usize = 256 * 1024;
 const DIRECT_RCS_RESULT_BYTES: usize = 4096;
 const DIRECT_RCS_PPGTT_PT_COUNT: usize = 256;
 const DIRECT_RCS_PPGTT_BYTES: usize = (3 + DIRECT_RCS_PPGTT_PT_COUNT) * 4096;

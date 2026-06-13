@@ -12,7 +12,7 @@
 //! Payloads:
 //! - mouse:    buttons u8, dx i8, dy i8, wheel i8
 //! - keyboard: modifiers u8, reserved u8, six HID boot key bytes
-//! - tablet:   x_q16 u32, y_q16 u32, buttons u32
+//! - tablet:   x_q16 u32, y_q16 u32, buttons u32, optional wheel i16
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -60,6 +60,11 @@ fn read_u16(data: &[u8], off: usize) -> Option<u16> {
 #[inline]
 fn read_u32(data: &[u8], off: usize) -> Option<u32> {
     Some(u32::from_le_bytes(data.get(off..off + 4)?.try_into().ok()?))
+}
+
+#[inline]
+fn read_i16(data: &[u8], off: usize) -> Option<i16> {
+    Some(i16::from_le_bytes(data.get(off..off + 2)?.try_into().ok()?))
 }
 
 fn parse_frame(data: &[u8]) -> Option<HidUdpFrame<'_>> {
@@ -177,6 +182,7 @@ fn accept_frame(frame: HidUdpFrame<'_>, seqs: &mut Vec<DeviceSeq, DEVICE_STATE_C
             let Some(buttons) = read_u32(frame.payload, 8) else {
                 return false;
             };
+            let wheel = read_i16(frame.payload, 12).unwrap_or(0);
             let x = f64::from(x_q16.min(65535)) / 65535.0;
             let y = f64::from(y_q16.min(65535)) / 65535.0;
             crate::usb2::hid::inject_udp_tablet_absolute_event(
@@ -184,6 +190,7 @@ fn accept_frame(frame: HidUdpFrame<'_>, seqs: &mut Vec<DeviceSeq, DEVICE_STATE_C
                 x,
                 y,
                 buttons,
+                wheel,
                 frame.flags as u32,
             );
         }

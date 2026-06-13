@@ -24,6 +24,11 @@ pub(crate) struct GpgpuShellCube20ProjectResult {
     pub(crate) vertex_count: usize,
     pub(crate) radius_px: u32,
     pub(crate) last_angle_deg: u32,
+    pub(crate) work_group_x: u32,
+    pub(crate) work_group_y: u32,
+    pub(crate) work_group_z: u32,
+    pub(crate) pre_marker: u32,
+    pub(crate) post_marker: u32,
 }
 
 pub(crate) struct GpgpuCanvas3dUi2TextureFrame {
@@ -1565,6 +1570,11 @@ pub(crate) fn shell_cube20_project_spin(
         radius_px: (CUBE20_SEED_HALF_Q16 as u32).saturating_mul(target.width.min(target.height))
             / CANVAS3D_PROJECT_Q16_ONE as u32,
         last_angle_deg: angle_deg,
+        work_group_x: 0,
+        work_group_y: 0,
+        work_group_z: 0,
+        pre_marker: 0,
+        post_marker: 0,
     })
 }
 
@@ -1703,6 +1713,11 @@ pub(crate) fn canvas3d_ico_project_rect(
         radius_px: (CUBE20_SEED_HALF_Q16 as u32).saturating_mul(canvas_width.min(canvas_height))
             / CANVAS3D_PROJECT_Q16_ONE as u32,
         last_angle_deg: frame.wrapping_mul(2) % 360,
+        work_group_x: 0,
+        work_group_y: 0,
+        work_group_z: 0,
+        pre_marker: 0,
+        post_marker: 0,
     })
 }
 
@@ -1807,6 +1822,11 @@ pub(crate) fn canvas3d_ico_project_texture_frame(
         radius_px: (CUBE20_SEED_HALF_Q16 as u32).saturating_mul(width.min(height))
             / CANVAS3D_PROJECT_Q16_ONE as u32,
         last_angle_deg: frame.wrapping_mul(2) % 360,
+        work_group_x: 0,
+        work_group_y: 0,
+        work_group_z: 0,
+        pre_marker: 0,
+        post_marker: 0,
     };
 
     Some(GpgpuCanvas3dUi2TextureFrame {
@@ -1878,6 +1898,11 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
     let mut retired_count = 0u32;
     let mut total_submit_ms = 0u64;
     let mut max_submit_ms = 0u64;
+    let mut work_group_x = 0u32;
+    let mut work_group_y = 0u32;
+    let mut work_group_z = 0u32;
+    let mut work_pre_marker = 0u32;
+    let mut work_post_marker = 0u32;
     let q = CANVAS3D_PROJECT_Q16_ONE;
     let half = (q * 5) / 8;
     if dst_ppgtt_ok {
@@ -2016,6 +2041,9 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
         let (group_x, group_y, group_z) = canvas3d_plane_patch_worklist_groups_for_descs(
             &visible_face_descs[..visible_face_count],
         );
+        work_group_x = group_x;
+        work_group_y = group_y;
+        work_group_z = group_z;
         unsafe {
             core::ptr::write_bytes(
                 state.canvas3d_tmp_virt,
@@ -2075,6 +2103,8 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
         max_submit_ms = max_submit_ms.max(submit_ms);
         let pre_marker =
             direct_rcs_read_result_slot(state, CANVAS3D_PLANE_PATCH_WORKLIST_PRE_MARKER_SLOT);
+        work_pre_marker = pre_marker;
+        work_post_marker = observed;
         if observed == CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER
             && pre_marker == CANVAS3D_PLANE_PATCH_WORKLIST_PRE_MARKER
         {
@@ -2122,6 +2152,11 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
         radius_px: (half as u32).saturating_mul(width.min(height))
             / CANVAS3D_PROJECT_Q16_ONE as u32,
         last_angle_deg: frame.wrapping_mul(4) % 360,
+        work_group_x,
+        work_group_y,
+        work_group_z,
+        pre_marker: work_pre_marker,
+        post_marker: work_post_marker,
     };
 
     Some(GpgpuCanvas3dUi2TextureFrame {
@@ -2251,7 +2286,7 @@ fn canvas3d_plane_patch_render_surface_frame_in_rect(
 ) -> Option<GpgpuShellCube20ProjectResult> {
     const CADENCE_US: u64 = 33_000;
 
-    if !dst.is_valid() || rect.width > 512 || rect.height > 512 {
+    if !dst.is_valid() || rect.width > 1440 || rect.height > 1440 {
         return None;
     }
     if rect.width == 0
@@ -2295,6 +2330,11 @@ fn canvas3d_plane_patch_render_surface_frame_in_rect(
     let mut total_submit_ms = 0u64;
     let mut max_submit_ms = 0u64;
     let mut rendered_faces = 0usize;
+    let mut work_group_x = 0u32;
+    let mut work_group_y = 0u32;
+    let mut work_group_z = 0u32;
+    let mut work_pre_marker = 0u32;
+    let mut work_post_marker = 0u32;
     let q = CANVAS3D_PROJECT_Q16_ONE;
     if dst_ppgtt_ok {
         let center = Canvas3dVec3Q16 {
@@ -2459,6 +2499,9 @@ fn canvas3d_plane_patch_render_surface_frame_in_rect(
         let (group_x, group_y, group_z) = canvas3d_plane_patch_worklist_groups_for_descs(
             &visible_face_descs[..visible_face_count],
         );
+        work_group_x = group_x;
+        work_group_y = group_y;
+        work_group_z = group_z;
         unsafe {
             core::ptr::write_bytes(
                 state.canvas3d_tmp_virt,
@@ -2518,6 +2561,8 @@ fn canvas3d_plane_patch_render_surface_frame_in_rect(
         max_submit_ms = max_submit_ms.max(submit_ms);
         let pre_marker =
             direct_rcs_read_result_slot(state, CANVAS3D_PLANE_PATCH_WORKLIST_PRE_MARKER_SLOT);
+        work_pre_marker = pre_marker;
+        work_post_marker = observed;
         if observed == CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER
             && pre_marker == CANVAS3D_PLANE_PATCH_WORKLIST_PRE_MARKER
         {
@@ -2546,6 +2591,11 @@ fn canvas3d_plane_patch_render_surface_frame_in_rect(
         radius_px: (half as u32).saturating_mul(rect.width.min(rect.height))
             / CANVAS3D_PROJECT_Q16_ONE as u32,
         last_angle_deg: frame.wrapping_mul(4) % 360,
+        work_group_x,
+        work_group_y,
+        work_group_z,
+        pre_marker: work_pre_marker,
+        post_marker: work_post_marker,
     })
 }
 

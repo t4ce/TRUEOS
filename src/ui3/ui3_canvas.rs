@@ -1,6 +1,6 @@
 use alloc::format;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -16,11 +16,14 @@ use crate::shell2::{
 
 const GPU_CANVAS_SLOT: &str = "Gid";
 const GPU_CANVAS_FRAME_MS: u64 = 33;
-const GPU_CANVAS_OVERLAY_WIDTH: u32 = 192;
-const GPU_CANVAS_OVERLAY_HEIGHT: u32 = 192;
+const GPU_CANVAS_INITIAL_DIM: u32 = 192;
+const GPU_CANVAS_MIN_DIM: u32 = 192;
+const GPU_CANVAS_MAX_DIM: u32 = 1440;
+const GPU_CANVAS_CUBE_SAFE_MAX_DIM: u32 = 576;
+const GPU_CANVAS_WHEEL_STEP_PX: i32 = 64;
 const GPU_CANVAS_FALLBACK_X: u32 = 48;
 const GPU_CANVAS_FALLBACK_Y: u32 = 48;
-const GPU_CANVAS_CUBE_HALF_Q16: i32 = 32_768;
+const GPU_CANVAS_CURSOR_EVENT_BATCH_CAP: usize = 64;
 
 #[derive(Copy, Clone)]
 enum GpuCanvas3dScene {
@@ -42,6 +45,14 @@ impl GpuCanvas3dScene {
             Self::Ico => "transform/project artifacts",
         }
     }
+
+    fn max_dim(self, capacity_width: u32, capacity_height: u32) -> u32 {
+        let capacity = max_canvas_dim_for_viewport(capacity_width, capacity_height);
+        match self {
+            Self::Cube => capacity.min(GPU_CANVAS_CUBE_SAFE_MAX_DIM),
+            Self::Ico => capacity,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -55,6 +66,8 @@ struct GpuCanvasBuffer {
     phys: u64,
     virt: *mut u8,
     bytes: usize,
+    width: u32,
+    height: u32,
     pitch_bytes: u32,
 }
 
@@ -62,6 +75,7 @@ unsafe impl Send for GpuCanvasBuffer {}
 
 static GPU_CANVAS_SESSIONS: spin::Mutex<Vec<GpuCanvasSessionState>> = spin::Mutex::new(Vec::new());
 static GPU_CANVAS_BUFFER: spin::Mutex<Option<GpuCanvasBuffer>> = spin::Mutex::new(None);
+static GPU_CANVAS_DIM: AtomicU32 = AtomicU32::new(GPU_CANVAS_INITIAL_DIM);
 static NEXT_GPU_CANVAS_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 fn session_start() -> u64 {
@@ -135,15 +149,10 @@ pub(crate) fn live_overlay_preserve_rect(rects: &[LiveOverlayRect]) -> Option<Li
 pub(crate) fn current_canvas_rect() -> LiveOverlayRect {
     let (viewport_width, viewport_height) =
         crate::intel::active_scanout_dimensions().unwrap_or((0, 0));
+    let dim = current_canvas_dim_for_viewport(viewport_width, viewport_height);
     let (x, y) = canvas_origin_from_cursor(viewport_width, viewport_height)
         .unwrap_or((GPU_CANVAS_FALLBACK_X, GPU_CANVAS_FALLBACK_Y));
-    LiveOverlayRect::new(
-        x,
-        y,
-        GPU_CANVAS_OVERLAY_WIDTH,
-        GPU_CANVAS_OVERLAY_HEIGHT,
-        Rgba8::new(0, 0, 0, 0),
-    )
+    LiveOverlayRect::new(x, y, dim, dim, Rgba8::new(0, 0, 0, 0))
 }
 
 fn canvas_origin_from_cursor(viewport_width: u32, viewport_height: u32) -> Option<(u32, u32)> {
@@ -151,9 +160,10 @@ fn canvas_origin_from_cursor(viewport_width: u32, viewport_height: u32) -> Optio
         return None;
     }
     let cursor = crate::ui3::ui3_hid::preferred_cursor_snapshot(viewport_width, viewport_height)?;
+    let dim = current_canvas_dim_for_viewport(viewport_width, viewport_height);
     Some((
-        centered_origin(cursor.x_px, GPU_CANVAS_OVERLAY_WIDTH, viewport_width),
-        centered_origin(cursor.y_px, GPU_CANVAS_OVERLAY_HEIGHT, viewport_height),
+        centered_origin(cursor.x_px, dim, viewport_width),
+        centered_origin(cursor.y_px, dim, viewport_height),
     ))
 }
 
@@ -164,16 +174,40 @@ fn centered_origin(center: u32, size: u32, extent: u32) -> u32 {
     center.saturating_sub(size / 2).min(extent - size)
 }
 
+fn current_canvas_dim_for_viewport(viewport_width: u32, viewport_height: u32) -> u32 {
+    let max_dim = max_canvas_dim_for_viewport(viewport_width, viewport_height);
+    let min_dim = GPU_CANVAS_MIN_DIM.min(max_dim).max(1);
+    GPU_CANVAS_DIM
+        .load(Ordering::Acquire)
+        .clamp(min_dim, max_dim)
+}
+
+fn max_canvas_dim_for_viewport(viewport_width: u32, viewport_height: u32) -> u32 {
+    viewport_width
+        .min(viewport_height)
+        .min(GPU_CANVAS_MAX_DIM)
+        .max(1)
+}
+
+fn canvas_buffer_capacity_dim() -> u32 {
+    let (viewport_width, viewport_height) = crate::intel::active_scanout_dimensions()
+        .unwrap_or((GPU_CANVAS_INITIAL_DIM, GPU_CANVAS_INITIAL_DIM));
+    max_canvas_dim_for_viewport(viewport_width, viewport_height)
+}
+
 fn canvas_buffer() -> Option<GpuCanvasBuffer> {
+    let capacity_dim = canvas_buffer_capacity_dim();
     {
         let state = GPU_CANVAS_BUFFER.lock();
         if let Some(buffer) = *state {
-            return Some(buffer);
+            if buffer.width >= capacity_dim && buffer.height >= capacity_dim {
+                return Some(buffer);
+            }
         }
     }
 
-    let pitch_bytes = GPU_CANVAS_OVERLAY_WIDTH.checked_mul(core::mem::size_of::<u32>() as u32)?;
-    let bytes = (pitch_bytes as usize).checked_mul(GPU_CANVAS_OVERLAY_HEIGHT as usize)?;
+    let pitch_bytes = capacity_dim.checked_mul(core::mem::size_of::<u32>() as u32)?;
+    let bytes = (pitch_bytes as usize).checked_mul(capacity_dim as usize)?;
     let (phys, virt) = crate::dma::alloc(bytes, crate::intel::WARM_ALIGN)?;
     unsafe {
         core::ptr::write_bytes(virt, 0, bytes);
@@ -184,6 +218,8 @@ fn canvas_buffer() -> Option<GpuCanvasBuffer> {
         phys,
         virt,
         bytes,
+        width: capacity_dim,
+        height: capacity_dim,
         pitch_bytes,
     };
     *GPU_CANVAS_BUFFER.lock() = Some(buffer);
@@ -277,41 +313,61 @@ async fn ui3_canvas_worker_task(target: MatrixTarget, session_id: u64, scene: Gp
         Timer::after(EmbassyDuration::from_millis(1)).await;
 
         let mut frame = 0u32;
+        let mut cursor_drain = crate::ui3::ui3_hid::Ui3CursorEventDrain::default();
+        let (start_width, start_height) =
+            crate::intel::active_scanout_dimensions().unwrap_or((GPU_CANVAS_INITIAL_DIM, GPU_CANVAS_INITIAL_DIM));
+        let mut last_retired_dim = current_canvas_dim_for_viewport(start_width, start_height);
+        prime_canvas_cursor_drain(&mut cursor_drain);
         loop {
             if cancel_or_interrupted(session_id, &task_target) {
                 print_matrix_target_line(&task_target, "ui3 canvas: stopped before frame");
                 break;
             }
 
+            let wheel_delta = drain_canvas_wheel_delta(&mut cursor_drain);
             let Some(buffer) = canvas_buffer() else {
                 print_matrix_target_line(&task_target, "ui3 canvas: no buffer");
                 break;
             };
+            let scene_max_dim = scene.max_dim(buffer.width, buffer.height);
+            let canvas_dim =
+                apply_canvas_wheel_delta(wheel_delta, scene_max_dim, scene_max_dim);
             let Some(surface) = GpgpuRgba8Surface::new(
                 buffer.phys,
                 crate::intel::GPU_VA_DISPLAY_UI3_CANVAS_BASE,
                 buffer.bytes,
-                GPU_CANVAS_OVERLAY_WIDTH,
-                GPU_CANVAS_OVERLAY_HEIGHT,
+                canvas_dim,
+                canvas_dim,
                 buffer.pitch_bytes,
             ) else {
                 print_matrix_target_line(&task_target, "ui3 canvas: bad buffer surface");
                 break;
             };
-            unsafe {
-                core::ptr::write_bytes(buffer.virt, 0, buffer.bytes);
-            }
-            crate::intel::dma_flush(buffer.virt, buffer.bytes);
+            clear_canvas_buffer_region(buffer, canvas_dim, canvas_dim);
 
             match render_canvas3d_frame(scene, frame, buffer, surface) {
                 Some(result) => {
+                    let render_dim = canvas_dim;
+                    let rollback_dim = if result.ok {
+                        last_retired_dim = render_dim;
+                        0
+                    } else if render_dim > last_retired_dim {
+                        GPU_CANVAS_DIM.store(last_retired_dim, Ordering::Release);
+                        last_retired_dim
+                    } else {
+                        0
+                    };
                     let canvas = current_canvas_rect();
-                    let presented = crate::intel::present_ui3_canvas_rgba(
-                        canvas,
-                        buffer.virt,
-                        buffer.pitch_bytes as usize,
-                        "ui3-canvas",
-                    ) as u32;
+                    let presented = if result.ok {
+                        crate::intel::present_ui3_canvas_rgba(
+                            canvas,
+                            buffer.virt,
+                            buffer.pitch_bytes as usize,
+                            "ui3-canvas",
+                        ) as u32
+                    } else {
+                        0
+                    };
                     let avg_submit_ms = if result.submitted == 0 {
                         0
                     } else {
@@ -321,7 +377,7 @@ async fn ui3_canvas_worker_task(target: MatrixTarget, session_id: u64, scene: Gp
                         print_matrix_target_line(
                             &task_target,
                             format!(
-                                "ui3 canvas: frame={} scene={} ok={} submitted={} presented={} elapsed_ms={} avg_submit_ms={} visible={} angle={} surface={}x{} canvas={}x{} dst={},{}",
+                                "ui3 canvas: frame={} scene={} ok={} submitted={} presented={} elapsed_ms={} avg_submit_ms={} visible={} angle={} render={}x{} surface={}x{} canvas={}x{} cap={}x{} max_dim={} dst={},{} wheel_delta={} groups={}x{}x{} pre=0x{:08X} post=0x{:08X} rollback={}",
                                 frame,
                                 scene.name(),
                                 result.ok as u8,
@@ -331,12 +387,24 @@ async fn ui3_canvas_worker_task(target: MatrixTarget, session_id: u64, scene: Gp
                                 avg_submit_ms,
                                 result.visible_points,
                                 result.last_angle_deg,
+                                render_dim,
+                                render_dim,
                                 result.primary_width,
                                 result.primary_height,
                                 canvas.width,
                                 canvas.height,
+                                buffer.width,
+                                buffer.height,
+                                scene_max_dim,
                                 canvas.x,
                                 canvas.y,
+                                wheel_delta,
+                                result.work_group_x,
+                                result.work_group_y,
+                                result.work_group_z,
+                                result.pre_marker,
+                                result.post_marker,
+                                rollback_dim,
                             )
                             .as_str(),
                         )
@@ -377,22 +445,19 @@ fn render_canvas3d_frame(
     match scene {
         GpuCanvas3dScene::Cube => crate::intel::gpgpu::shell_cube6_plane_project_surface_frame(
             frame,
-            GPU_CANVAS_CUBE_HALF_Q16,
+            crate::intel::gpgpu::CANVAS3D_CUBE_LIVE_HALF_Q16,
             surface,
         ),
-        GpuCanvas3dScene::Ico => render_canvas3d_ico_frame(frame, buffer),
+        GpuCanvas3dScene::Ico => render_canvas3d_ico_frame(frame, buffer, surface.width),
     }
 }
 
 fn render_canvas3d_ico_frame(
     frame: u32,
     buffer: GpuCanvasBuffer,
+    dim: u32,
 ) -> Option<crate::intel::gpgpu::GpgpuShellCube20ProjectResult> {
-    let texture = crate::intel::gpgpu::canvas3d_ico_project_texture_frame(
-        frame,
-        GPU_CANVAS_OVERLAY_WIDTH,
-        GPU_CANVAS_OVERLAY_HEIGHT,
-    )?;
+    let texture = crate::intel::gpgpu::canvas3d_ico_project_texture_frame(frame, dim, dim)?;
     copy_texture_rgba_to_buffer(&texture, buffer)?;
     Some(texture.result)
 }
@@ -401,7 +466,11 @@ fn copy_texture_rgba_to_buffer(
     texture: &GpgpuCanvas3dUi2TextureFrame,
     buffer: GpuCanvasBuffer,
 ) -> Option<()> {
-    if texture.width != GPU_CANVAS_OVERLAY_WIDTH || texture.height != GPU_CANVAS_OVERLAY_HEIGHT {
+    if texture.width == 0
+        || texture.height == 0
+        || texture.width > buffer.width
+        || texture.height > buffer.height
+    {
         return None;
     }
     let row_pixels = buffer
@@ -434,10 +503,82 @@ fn copy_texture_rgba_to_buffer(
             }
         }
     }
-    crate::intel::dma_flush(buffer.virt, buffer.bytes);
+    flush_canvas_buffer_region(buffer, texture.width, texture.height);
     Some(())
 }
 
 fn pack_rgba_bytes_as_bgra_u32(r: u8, g: u8, b: u8, a: u8) -> u32 {
     u32::from(a) << 24 | u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)
+}
+
+fn prime_canvas_cursor_drain(drain: &mut crate::ui3::ui3_hid::Ui3CursorEventDrain) {
+    let mut out =
+        [crate::usb2::hid::TrueosHidCursorEvent::default(); GPU_CANVAS_CURSOR_EVENT_BATCH_CAP];
+    loop {
+        let read = crate::ui3::ui3_hid::drain_cursor_events(drain, out.as_mut_slice());
+        if read.wrote < out.len() {
+            break;
+        }
+    }
+}
+
+fn drain_canvas_wheel_delta(drain: &mut crate::ui3::ui3_hid::Ui3CursorEventDrain) -> i32 {
+    let mut out =
+        [crate::usb2::hid::TrueosHidCursorEvent::default(); GPU_CANVAS_CURSOR_EVENT_BATCH_CAP];
+    let mut total = 0i32;
+    loop {
+        let read = crate::ui3::ui3_hid::drain_cursor_events(drain, out.as_mut_slice());
+        for event in &out[..read.wrote] {
+            total = total.saturating_add(crate::ui3::ui3_hid::event_wheel_delta(*event));
+        }
+        if read.wrote < out.len() {
+            break;
+        }
+    }
+    total
+}
+
+fn apply_canvas_wheel_delta(wheel_delta: i32, capacity_width: u32, capacity_height: u32) -> u32 {
+    let max_dim = max_canvas_dim_for_viewport(capacity_width, capacity_height);
+    let min_dim = GPU_CANVAS_MIN_DIM.min(max_dim).max(1);
+    if wheel_delta != 0 {
+        let current = GPU_CANVAS_DIM.load(Ordering::Acquire);
+        let delta_px = wheel_delta.saturating_mul(GPU_CANVAS_WHEEL_STEP_PX);
+        let next = (current as i32)
+            .saturating_add(delta_px)
+            .clamp(min_dim as i32, max_dim as i32) as u32;
+        GPU_CANVAS_DIM.store(next, Ordering::Release);
+    }
+    GPU_CANVAS_DIM
+        .load(Ordering::Acquire)
+        .clamp(min_dim, max_dim)
+}
+
+fn clear_canvas_buffer_region(buffer: GpuCanvasBuffer, width: u32, height: u32) {
+    let row_bytes = (width as usize).saturating_mul(core::mem::size_of::<u32>());
+    for y in 0..height.min(buffer.height) as usize {
+        unsafe {
+            core::ptr::write_bytes(
+                buffer
+                    .virt
+                    .add(y.saturating_mul(buffer.pitch_bytes as usize)),
+                0,
+                row_bytes.min(buffer.pitch_bytes as usize),
+            );
+        }
+    }
+    flush_canvas_buffer_region(buffer, width, height);
+}
+
+fn flush_canvas_buffer_region(buffer: GpuCanvasBuffer, width: u32, height: u32) {
+    let width = width.min(buffer.width);
+    let height = height.min(buffer.height);
+    if width == 0 || height == 0 {
+        return;
+    }
+    let last_row = (height as usize).saturating_sub(1);
+    let bytes = last_row
+        .saturating_mul(buffer.pitch_bytes as usize)
+        .saturating_add((width as usize).saturating_mul(core::mem::size_of::<u32>()));
+    crate::intel::dma_flush(buffer.virt, bytes.min(buffer.bytes));
 }

@@ -3,6 +3,7 @@ Copyright (c) 2026 Jonas Baethke. All rights reserved.
 No permission is granted to use, copy, modify, distribute, or sublicense
 this software or its source code, in whole or in part, without prior
 written permission from the copyright holder.
+
 ```
 /* TRUE OS § ® 2026
 ██████████████████████████████████████████████████████████████████████
@@ -12,7 +13,7 @@ written permission from the copyright holder.
 ██████  █████  ███  ███  ████  ██  ██████████████  ████  ████████  ███
 ██████  █████  ████  ███      ███        █████████      ████      ████
 ██████████████████████████████████████████████████████████████████████
-A Rust Based 64 Bit Paged X84 Baremetal OS Targeted at Intel and GOWIN
+A Rust Based 64 Bit Paged X84 Baremetal OS Targeted at modern Intel XeLp
 
 Think of rust as the world’s quiet, slow-moving “entropy tax”:
 A constant drain of resources, money, and safety.
@@ -21,35 +22,50 @@ Think of TRUE OS as the world’s fast-moving “entropy dividend”:
 A constant influx of resources, money, and safety.
 */
 
-/*
-Retired shell2 etc/go spinner sequences, kept as glyph references:
-go  = ⣿ ⣾ ⣽ ⣻ ⢿ ⡿ ⣟ ⣯ ⣷
-go2 = ⢈ ⡈ ⡐ ⡠ ⣀ ⢄ ⢂ ⢁ ⡁
-*/
 ```
 
 # install
-sudo apt update && sudo apt upgrade
-apt install git gh make rustup autoconf automake mtools nasm xorriso qemu-system gdb build-essential konsole
-apt install gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
-cargo install fmt cargo-outdated cargo-edit --locked
-rustup component add clippy
-rustup toolchain install nightly --profile minimal --component rust-src,rustfmt,rust-analyzer,llvm-tools-preview
-cargo install cargo-edit --locked
-export CC_aarch64_unknown_none=aarch64-linux-gnu-gcc
-export AR_aarch64_unknown_none=aarch64-linux-gnu-ar
+- sudo apt update && sudo apt upgrade
+- apt install git gh make rustup autoconf automake mtools nasm xorriso - - - qemu-system gdb build-essential konsole
+- apt install gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+- cargo install fmt cargo-outdated cargo-edit --locked
+- rustup component add clippy
+- rustup toolchain install nightly --profile minimal --component rust-src,- - rustfmt,rust-analyzer,llvm-tools-preview
+- cargo install cargo-edit --locked
+- export CC_aarch64_unknown_none=aarch64-linux-gnu-gcc
+- export AR_aarch64_unknown_none=aarch64-linux-gnu-ar
 
-git config --global user.email "jonasb@post.com"
-git config --global user.name "t4ce"
-gh auth login
+- git (my contact is well known)
+- git config --global user.email "jonasb@post.com"
+- git config --global user.name  "t4ce"
+- gh auth login
 
-apt install npm
-sudo npm install node
+- apt install npm
+- sudo npm install node
+
+# Big title
+## Section title
+### Smaller section
+**bold**
+*italic*
+~~strikethrough~~
+`inline code`
+> This is a quote.
+> [!NOTE]
+> Useful note.
+
+> [!TIP]
+> Helpful tip.
+
+> [!WARNING]
+> Warning text.
+
+GitHub supports these alert blocks in Markdown, including NOTE, TIP, IMPORTANT, WARNING, and CAUTION.
 
 # minimum install on MAC
-xcode-select --install
-rustup toolchain install nightly
-brew install llvm binutils autoconf automake libtool xorriso zstd p7zip
+- xcode-select --install
+- rustup toolchain install nightly
+- brew install llvm binutils autoconf automake libtool xorriso zstd p7zip
 
 # update
 cargo outdated -R
@@ -425,3 +441,8 @@ SMOLTCP_IFACE_MAX_ADDR_COUNT=4 \
 rust-analyzer analysis-stats . --only src \
   --skip-inference --skip-mir-stats --skip-data-layout --skip-const-eval
 ```
+/*
+Retired shell2 etc/go spinner sequences, kept as glyph references:
+go  = ⣿ ⣾ ⣽ ⣻ ⢿ ⡿ ⣟ ⣯ ⣷
+go2 = ⢈ ⡈ ⡐ ⡠ ⣀ ⢄ ⢂ ⢁ ⡁
+*/

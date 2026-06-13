@@ -12,6 +12,7 @@ pub(crate) const TETRA_EDGE_SAMPLE_COUNT: usize = 1;
 pub(crate) const TETRA_VERTEX_COUNT: usize =
     TETRA_CORNER_COUNT + TETRA_EDGE_COUNT * TETRA_EDGE_SAMPLE_COUNT;
 pub(crate) const SEED_SCALE: i32 = 2;
+pub(crate) const LIVE_PLANE_HALF_Q16: i32 = CANVAS3D_PROJECT_Q16_ONE;
 pub(crate) const PRESENT_COLORS: [u32; CUBE_INSTANCE_COUNT] = [0xFFFF_3048];
 
 const CUBE_EDGES: [(usize, usize); CUBE_EDGE_COUNT] = [
