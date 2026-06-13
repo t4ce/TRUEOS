@@ -27,8 +27,10 @@ export function attrsOrUndefined(attrs) {
   return Object.keys(stable).length > 0 ? stable : undefined;
 }
 
-export function textNode(text) {
-  return { kind: 'text', text: String(text ?? '') };
+export function textNode(text, opts = {}) {
+  const node = { kind: 'text', text: String(text ?? '') };
+  if (opts.preserveWhitespace === true) node.preserveWhitespace = true;
+  return node;
 }
 
 export function blockNode(opts) {

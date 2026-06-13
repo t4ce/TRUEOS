@@ -49,6 +49,7 @@ function publicEmbeddedScene(scene) {
   if (scene.parentBox) out.parentBox = scene.parentBox;
   if (scene.viewport) out.viewport = scene.viewport;
   if (scene.layout) out.layout = scene.layout;
+  if (scene.ui3PaintPlan) out.ui3PaintPlan = scene.ui3PaintPlan;
   if (scene.error) out.error = String(scene.error);
   return out;
 }
@@ -100,10 +101,129 @@ function buildEmbeddedSceneLayouts(scenes, rootLayout, options = {}) {
       parentBox: parentSummary,
       viewport,
       layout,
+      ui3PaintPlan: layout ? createUi3PaintPlan(layout) : null,
       layoutHash,
     }));
   }
   return out;
+}
+
+function layoutAttrs(node) {
+  return node && node.attrs && typeof node.attrs === 'object' ? node.attrs : {};
+}
+
+function layoutPaint(node) {
+  return node && node.paint && typeof node.paint === 'object' && !Array.isArray(node.paint) ? node.paint : null;
+}
+
+function layoutPaintRole(node) {
+  return String(layoutPaint(node)?.role ?? '');
+}
+
+function layoutTextColor(node, inheritedTextColor) {
+  const paint = layoutPaint(node);
+  const value = paint && paint.textColor != null ? Number(paint.textColor) : inheritedTextColor;
+  return Number.isFinite(value) ? Math.max(0, Math.trunc(value) & 0xffffff) : inheritedTextColor;
+}
+
+function isSummaryOpen(node) {
+  const attrs = layoutAttrs(node);
+  return attrs.open != null || attrs['data-details-open'] === '1';
+}
+
+function isHitBoxNode(tagName, role) {
+  return tagName === 'button'
+    || tagName === 'a'
+    || tagName === 'summary'
+    || tagName === 'input'
+    || tagName === 'select'
+    || tagName === 'textarea'
+    || tagName === 'searchbutton'
+    || role === 'button'
+    || role === 'link';
+}
+
+function createUi3PaintPlan(layout) {
+  const paintedBoxes = [];
+  const textRuns = [];
+  const summaryIcons = [];
+  const hitBoxes = [];
+
+  const walk = (node, parentX = 0, parentY = 0, inheritedTextColor = defaultTextColor()) => {
+    if (!node || typeof node !== 'object') return;
+    const x = parentX + Number(node.x ?? 0);
+    const y = parentY + Number(node.y ?? 0);
+    const kind = String(node.kind ?? '');
+    const textColor = layoutTextColor(node, inheritedTextColor);
+
+    if (kind === 'text') {
+      textRuns.push({
+        key: String(node.key ?? ''),
+        x,
+        y,
+        width: Math.max(0, Math.round(Number(node.width ?? 0) || 0)),
+        height: Math.max(0, Math.round(Number(node.height ?? 0) || 0)),
+        text: String(node.text ?? ''),
+        lines: Array.isArray(node.lines) ? node.lines.map((line) => String(line ?? '')) : undefined,
+        preserveWhitespace: node.preserveWhitespace === true,
+        textColor,
+      });
+      return;
+    }
+
+    const tagName = String(node.tagName ?? '').toLowerCase();
+    const role = layoutPaintRole(node);
+    if (kind === 'block') {
+      if (role) {
+        paintedBoxes.push({
+          key: String(node.key ?? ''),
+          tagName,
+          role,
+          x,
+          y,
+          width: Math.max(0, Math.round(Number(node.width ?? 0) || 0)),
+          height: Math.max(0, Math.round(Number(node.height ?? 0) || 0)),
+          paint: layoutPaint(node),
+        });
+      }
+      if (tagName === 'summary') {
+        summaryIcons.push({
+          key: String(node.key ?? ''),
+          x,
+          y,
+          height: Math.max(0, Math.round(Number(node.height ?? 0) || 0)),
+          open: isSummaryOpen(node),
+        });
+      }
+      if (isHitBoxNode(tagName, role)) {
+        hitBoxes.push({
+          key: String(node.key ?? ''),
+          tagName,
+          role,
+          x,
+          y,
+          width: Math.max(0, Math.round(Number(node.width ?? 0) || 0)),
+          height: Math.max(0, Math.round(Number(node.height ?? 0) || 0)),
+        });
+      }
+    }
+
+    for (const child of node.children ?? []) walk(child, x, y, textColor);
+  };
+
+  walk(layout);
+  return {
+    version: 1,
+    contentHeight: Math.max(0, Math.round(Number(layout?.height ?? 0) || 0)),
+    paintedBoxes,
+    textRuns,
+    summaryIcons,
+    hitBoxes,
+  };
+}
+
+function defaultTextColor() {
+  return 0x000000;
 }
 
 function cleanChildren(children, options) {
@@ -433,7 +553,7 @@ function iframeRenderNode(node, options) {
 export function widgetNodeToRenderNode(node, options = {}) {
   if (!node || typeof node !== 'object') return null;
   if (node.kind === 'text') {
-    return textNode(node.text);
+    return textNode(node.text, { preserveWhitespace: node.preserveWhitespace === true });
   }
   if (node.kind !== 'widget') return null;
 
@@ -534,6 +654,7 @@ export function createRenderTreeTrace(widgetTree, options = {}) {
 
   if (options.includeLayout === true) {
     const layout = buildWidgetTreeLayout(widgetTree, renderNodes, { ...options, viewport });
+    const ui3PaintPlan = createUi3PaintPlan(layout);
     const embeddedLayoutScenes = buildEmbeddedSceneLayouts(
       renderContext.embeddedScenes,
       layout,
@@ -553,6 +674,7 @@ export function createRenderTreeTrace(widgetTree, options = {}) {
       layoutHash,
       renderNodes,
       layout,
+      ui3PaintPlan,
     };
     if (embeddedLayoutScenes.length > 0) traceBody.embeddedScenes = embeddedLayoutScenes;
     artifact.layoutTrace = {

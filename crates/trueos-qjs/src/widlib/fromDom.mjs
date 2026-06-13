@@ -30,6 +30,23 @@ function makeText(text) {
 }
 
 const INLINE_LINE_BREAK = '\u000B';
+const PRESERVE_WHITESPACE_TAGS = new Set(['pre', 'listing', 'xmp']);
+
+function makePreservedText(text) {
+  return { kind: 'text', text: String(text ?? '').replace(/\r\n?/g, '\n'), preserveWhitespace: true };
+}
+
+function preservesWhitespaceTag(tag) {
+  return PRESERVE_WHITESPACE_TAGS.has(String(tag ?? '').toLowerCase());
+}
+
+function extractRawText(node) {
+  if (isText(node)) return node.value ?? '';
+  if (!isElement(node)) return '';
+  const tag = String(node.tagName ?? node.nodeName).toLowerCase();
+  if (tag === 'br') return '\n';
+  return (node.childNodes ?? []).map(extractRawText).join('');
+}
 
 function normalizeInlineTextRun(text) {
   let out = '';
@@ -137,9 +154,15 @@ function childNodesToWidgets(node, path, opts) {
   let elementIndex = 0;
 
   const flushText = () => {
-    const text = normalizeInlineTextRun(inlineText);
+    const text = opts.preserveWhitespace
+      ? inlineText.replace(/\r\n?/g, '\n')
+      : normalizeInlineTextRun(inlineText);
     inlineText = '';
-    if (text.length > 0) out.push(makeText(text));
+    if (opts.preserveWhitespace) {
+      if (text.length > 0) out.push(makePreservedText(text));
+    } else if (text.length > 0) {
+      out.push(makeText(text));
+    }
   };
 
   for (const child of node.childNodes ?? []) {
@@ -161,8 +184,8 @@ function childNodesToWidgets(node, path, opts) {
       flushText();
       out.push(...nodeToWidgets(child, childPath, opts));
     } else if (INLINE_TAGS.has(tag)) {
-      if (tag === 'br') inlineText += INLINE_LINE_BREAK;
-      else inlineText += `${extractText(child)} `;
+      if (tag === 'br') inlineText += opts.preserveWhitespace ? '\n' : INLINE_LINE_BREAK;
+      else inlineText += opts.preserveWhitespace ? extractRawText(child) : `${extractText(child)} `;
     }
   }
 
@@ -177,6 +200,10 @@ export function nodeToWidgets(node, path = '0', options = {}) {
   };
 
   if (isText(node)) {
+    if (options.preserveWhitespace) {
+      const text = String(node.value ?? '').replace(/\r\n?/g, '\n');
+      return text.length > 0 ? [makePreservedText(text)] : [];
+    }
     const text = normalizeWhitespace(node.value ?? '');
     return text.length > 0 ? [makeText(text)] : [];
   }
@@ -226,7 +253,11 @@ export function nodeToWidgets(node, path = '0', options = {}) {
       props = parseTemporalValue(kind, attrs.value ?? '');
     }
   } else if (!REPLACED_TAGS.has(tag) && !opts.registry.get(tag, attrs).leaf) {
-    children = childNodesToWidgets(node, path, opts);
+    children = childNodesToWidgets(
+      node,
+      path,
+      preservesWhitespaceTag(tag) ? { ...opts, preserveWhitespace: true } : opts,
+    );
   }
 
   return [
