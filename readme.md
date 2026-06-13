@@ -43,14 +43,15 @@ cargo install cargo-edit --locked
 export CC_aarch64_unknown_none=aarch64-linux-gnu-gcc
 export AR_aarch64_unknown_none=aarch64-linux-gnu-ar
 ```
-## minimum install on MAC
+
+## on MAC
+> [!TIP]
+> We were able to build, with a MAC Laptop aswell.
 ```
 xcode-select --install
 rustup toolchain install nightly
 brew install llvm binutils autoconf automake libtool xorriso zstd p7zip
 ```
-> [!TIP]
-> We were able to build, with a MAC Laptop aswell.
 
 # Network Console Access
 `konsole -e sh -c 'stty -echo -icanon cols 200 rows 60; nc 192.168.178.94 4245; stty sane'`
@@ -245,17 +246,11 @@ SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="07cf", ATTRS{
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="1462", ATTR{idProduct}=="7e03", MODE="0666", TAG+="uaccess"
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="1462", ATTRS{idProduct}=="7e03", RUN+="/bin/sh -c 'if [ -L /sys/bus/usb/devices/%k/driver ]; then echo %k > /sys/bus/usb/drivers/$(basename $(readlink -f /sys/bus/usb/devices/%k/driver))/unbind; fi'"
 
-
-
-
-
-
 sudo modprobe vfio
 sudo modprobe vfio-pci
 sudo modprobe vfio_iommu_type1
 
 ls /sys/bus/pci/drivers | grep vfio
-
 
 echo 0000:00:02.0 | sudo tee /sys/bus/pci/devices/0000:00:02.0/driver/unbind
 echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:00:02.0/driver_override
@@ -264,9 +259,7 @@ echo 0000:00:02.0 | sudo tee /sys/bus/pci/drivers_probe
 ls -l /dev/vfio
 lspci -nnk -s 00:02.0
 
-
-
-t4ce@PCJB:~/REPOS/TRUEOS$ echo 0000:00:02.0 | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
+echo 0000:00:02.0 | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
 ls -l /dev/vfio
 lspci -nnk -s 00:02.0
 tee: /sys/bus/pci/drivers/vfio-pci/bind: No such file or directory (os error 2)
@@ -277,47 +270,16 @@ crw-rw-rw- 1 root root 10, 196 Mar 16 21:47 vfio
         DeviceName: Onboard - Video
         Subsystem: Micro-Star International Co., Ltd. [MSI] Device [1462:7e03]
         Kernel modules: i915, xe
-t4ce@PCJB:~/REPOS/TRUEOS$ 
-
-
-## rebnoot
+sudo reboot
 sudo modprobe vfio-pci
 sudo modprobe vfio_iommu_type1
-
 echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:00:02.0/driver_override
 echo 0000:00:02.0 | sudo tee /sys/bus/pci/drivers_probe
-
 ls -l /dev/vfio
 lspci -nnk -s 00:02.0
-
 echo 0000:00:02.0 | sudo tee /sys/bus/pci/devices/0000:00:02.0/driver/unbind
 echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:00:02.0/driver_override
 echo 0000:00:02.0 | sudo tee /sys/bus/pci/drivers_probe
-
-ls -l /dev/vfio
-lspci -nnk -s 00:02.0
-
-
-
-...
-
-
-
-echo 0000:00:02.0 | sudo tee /sys/bus/pci/devices/0000:00:02.0/driver/unbind
-echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:00:02.0/driver_override
-echo 0000:00:02.0 | sudo tee /sys/bus/pci/drivers_probe
-
-ls -l /dev/vfio
-lspci -nnk -s 00:02.0
-
-
-
-
-
-
-
-
-
 
 Use this on your Ubuntu 25.10 + GRUB host:
 
@@ -325,30 +287,21 @@ sudo tee /etc/modprobe.d/trueos-vfio-intel.conf >/dev/null <<'EOF'
 options vfio-pci ids=8086:a780
 softdep i915 pre: vfio-pci
 softdep xe pre: vfio-pci
-EOF
-
 sudo tee -a /etc/initramfs-tools/modules >/dev/null <<'EOF'
 vfio
 vfio_pci
 vfio_iommu_type1
-EOF
-Then edit /etc/default/grub and change:
-
 GRUB_CMDLINE_LINUX_DEFAULT="quiet splash intel_iommu=on iommu=pt vfio-pci.ids=8086:a780"
-Then apply it:
-
 sudo update-initramfs -u
 sudo update-grub
 sudo reboot
-After reboot, verify:
+
 
 lspci -nnk -s 00:02.0
 ls -l /dev/vfio
 
 
-
-
-# whipe nvme
+### whipe nvme
 Claim To Host nvme
 
 echo 0000:08:00.0 | sudo tee /sys/bus/pci/devices/0000:08:00.0/driver/unbind
@@ -382,7 +335,7 @@ lspci -nnk -s 08:00.0
 ls -l /dev/vfio
 
 
-# rust-analyzer kernel-source smoke check
+### rust-analyzer kernel-source smoke check
 
 Use this from the repo root when you want rust-analyzer to load the TRUEOS custom
 target and inspect only the kernel source tree. The `CARGO_UNSTABLE_JSON_TARGET_SPEC`
