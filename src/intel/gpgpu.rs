@@ -8,8 +8,9 @@ mod test_gpgpu;
 pub(crate) use test_gpgpu::{
     GpgpuCanvas3dUi2TextureFrame, GpgpuShellCube20ProjectResult, shell_cube6_plane_project_frame,
     shell_cube6_plane_project_once, shell_cube6_plane_project_overlay_frame,
-    shell_cube20_project_spin, submit_canvas3d_clip_box_q16_once,
-    submit_canvas3d_plane_fill_rgba8_once, submit_canvas3d_plane_patch_fill_cut_rgba8_once,
+    shell_cube6_plane_project_surface_frame, shell_cube20_project_spin,
+    submit_canvas3d_clip_box_q16_once, submit_canvas3d_plane_fill_rgba8_once,
+    submit_canvas3d_plane_patch_fill_cut_rgba8_once,
     submit_canvas3d_plane_patch_worklist_rgba8_once, submit_canvas3d_plane_sample_rgba8_once,
     submit_canvas3d_project_once, submit_canvas3d_transform_smoke_once,
     ui2_canvas3d_archaeology_project_frame, ui2_canvas3d_archaeology_project_frame_in_rect,

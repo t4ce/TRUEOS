@@ -37,6 +37,7 @@ pub(crate) const GPU_VA_DISPLAY_UI2_BASE_BASE: u64 = 0x0400_0000;
 pub(crate) const GPU_VA_DISPLAY_UI2_FRAME_BASE: u64 = 0x0500_0000;
 pub(crate) const GPU_VA_DISPLAY_CURSOR_BASE: u64 = 0x0600_0000;
 pub(crate) const GPU_VA_DISPLAY_UI3_TEXT_BASE: u64 = 0x1000_0000;
+pub(crate) const GPU_VA_DISPLAY_UI3_CANVAS_BASE: u64 = 0x1100_0000;
 pub(crate) const WARM_ALIGN: usize = 4096;
 const GGTT_ALIAS_BASE_OFF: usize = 0x0080_0000;
 const GGTT_ALIAS_BYTES: usize = 0x0080_0000;
@@ -515,6 +516,23 @@ pub fn present_rgba_overlay_at(
 
 pub(crate) fn present_live_overlay_rects(rects: &[LiveOverlayRect], reason: &str) -> bool {
     self::display::present_live_overlay_rects(rects, reason)
+}
+
+pub(crate) fn present_live_overlay_rects_preserving(
+    rects: &[LiveOverlayRect],
+    preserve: Option<LiveOverlayRect>,
+    reason: &str,
+) -> bool {
+    self::display::present_live_overlay_rects_preserving(rects, preserve, reason)
+}
+
+pub(crate) fn present_ui3_canvas_rgba(
+    rect: LiveOverlayRect,
+    src: *mut u8,
+    src_pitch_bytes: usize,
+    reason: &str,
+) -> bool {
+    self::display::present_ui3_canvas_rgba(rect, src, src_pitch_bytes, reason)
 }
 
 pub fn log_display_plane_ladder_probe(label: &str) {

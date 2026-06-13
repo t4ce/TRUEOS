@@ -1251,35 +1251,28 @@ pub(super) fn ui2_frame_surface_gpgpu() -> Option<DisplayRgba8GpgpuSurface> {
     })
 }
 
-pub(super) fn ui3_canvas_overlay_gpgpu(
-    width: u32,
-    height: u32,
-) -> Option<DisplayRgba8GpgpuSurface> {
-    const UI3_CANVAS_OVERLAY_X: u32 = 48;
-    const UI3_CANVAS_OVERLAY_Y: u32 = 48;
-
+pub(super) fn ui3_canvas_overlay_gpgpu(rect: LiveOverlayRect) -> Option<DisplayRgba8GpgpuSurface> {
     let dev = crate::intel::claimed_device()?;
-    if width == 0 || height == 0 {
+    let (width, height) = active_scanout_dimensions()
+        .or_else(|| {
+            PRIMARY_SURFACE
+                .lock()
+                .as_ref()
+                .map(|primary| (primary.width, primary.height))
+        })
+        .unwrap_or((0, 0));
+    if width == 0 || height == 0 || rect.width == 0 || rect.height == 0 {
         return None;
     }
 
     let surface = ensure_overlay_surface(dev, width, height)?;
-    fill_surface_color(
-        surface.virt,
-        surface.pitch_bytes as usize,
-        surface.width,
-        surface.height,
-        0,
-    );
+    fill_overlay_rect(surface, rect.x, rect.y, rect.width, rect.height, 0);
     let byte_len = (surface.pitch_bytes as usize).saturating_mul(surface.height as usize);
     crate::intel::dma_flush(surface.virt, byte_len);
 
-    let (pos_x, pos_y) =
-        overlay_plane_clamped_position(surface, UI3_CANVAS_OVERLAY_X, UI3_CANVAS_OVERLAY_Y);
-    if overlay_plane_needs_rearm(dev, surface, pos_x, pos_y, OverlayAlphaMode::Straight) {
+    if overlay_plane_needs_rearm(dev, surface, 0, 0, OverlayAlphaMode::Straight) {
         program_two_plane_stack_resources(dev, surface.pipe, surface.plane_slot, "ui3-canvas");
-        if !arm_overlay_plane(dev, surface, pos_x, pos_y, OverlayAlphaMode::Straight, "ui3-canvas")
-        {
+        if !arm_overlay_plane(dev, surface, 0, 0, OverlayAlphaMode::Straight, "ui3-canvas") {
             return None;
         }
     }
@@ -2032,6 +2025,14 @@ pub(crate) fn present_rgba_overlay_at(
 }
 
 pub(crate) fn present_live_overlay_rects(rects: &[LiveOverlayRect], reason: &str) -> bool {
+    present_live_overlay_rects_preserving(rects, None, reason)
+}
+
+pub(crate) fn present_live_overlay_rects_preserving(
+    rects: &[LiveOverlayRect],
+    preserve: Option<LiveOverlayRect>,
+    reason: &str,
+) -> bool {
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };
@@ -2050,13 +2051,17 @@ pub(crate) fn present_live_overlay_rects(rects: &[LiveOverlayRect], reason: &str
         return false;
     };
 
-    fill_surface_color(
-        surface.virt,
-        surface.pitch_bytes as usize,
-        surface.width,
-        surface.height,
-        0,
-    );
+    if let Some(rect) = preserve {
+        clear_overlay_except_rect(surface, rect);
+    } else {
+        fill_surface_color(
+            surface.virt,
+            surface.pitch_bytes as usize,
+            surface.width,
+            surface.height,
+            0,
+        );
+    }
     for rect in rects {
         fill_overlay_rect_rgba(surface, *rect);
     }
@@ -2090,6 +2095,97 @@ pub(crate) fn present_live_overlay_rects(rects: &[LiveOverlayRect], reason: &str
     }
 
     true
+}
+
+pub(crate) fn present_ui3_canvas_rgba(
+    rect: LiveOverlayRect,
+    src: *mut u8,
+    src_pitch_bytes: usize,
+    reason: &str,
+) -> bool {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return false;
+    };
+    let (width, height) = active_scanout_dimensions()
+        .or_else(|| {
+            PRIMARY_SURFACE
+                .lock()
+                .as_ref()
+                .map(|primary| (primary.width, primary.height))
+        })
+        .unwrap_or((0, 0));
+    if width == 0
+        || height == 0
+        || rect.width == 0
+        || rect.height == 0
+        || src.is_null()
+        || src_pitch_bytes < rect.width as usize * 4
+    {
+        return false;
+    }
+
+    let Some(surface) = ensure_overlay_surface(dev, width, height) else {
+        return false;
+    };
+    let x0 = rect.x.min(surface.width);
+    let y0 = rect.y.min(surface.height);
+    let copy_w = rect.width.min(surface.width.saturating_sub(x0));
+    let copy_h = rect.height.min(surface.height.saturating_sub(y0));
+    let dst_pitch = surface.pitch_bytes as usize;
+    if copy_w == 0 || copy_h == 0 || dst_pitch < surface.width as usize * 4 {
+        return false;
+    }
+
+    crate::intel::dma_flush(src, src_pitch_bytes.saturating_mul(copy_h as usize));
+    for row_idx in 0..copy_h as usize {
+        let src_row = unsafe { src.add(row_idx.saturating_mul(src_pitch_bytes)) as *const u32 };
+        let dst_row = unsafe {
+            (surface.virt as *mut u32)
+                .add((y0 as usize + row_idx).saturating_mul(dst_pitch / 4) + x0 as usize)
+        };
+        for col_idx in 0..copy_w as usize {
+            unsafe {
+                core::ptr::write_volatile(
+                    dst_row.add(col_idx),
+                    core::ptr::read_volatile(src_row.add(col_idx)),
+                );
+            }
+        }
+    }
+
+    let byte_len = (surface.pitch_bytes as usize).saturating_mul(surface.height as usize);
+    crate::intel::dma_flush(surface.virt, byte_len);
+
+    if overlay_plane_needs_rearm(dev, surface, 0, 0, OverlayAlphaMode::Straight) {
+        program_two_plane_stack_resources(dev, surface.pipe, surface.plane_slot, reason);
+        if !arm_overlay_plane(dev, surface, 0, 0, OverlayAlphaMode::Straight, reason) {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn clear_overlay_except_rect(surface: OverlaySurface, rect: LiveOverlayRect) {
+    let x0 = rect.x.min(surface.width);
+    let y0 = rect.y.min(surface.height);
+    let x1 = x0.saturating_add(rect.width).min(surface.width);
+    let y1 = y0.saturating_add(rect.height).min(surface.height);
+    if x0 >= x1 || y0 >= y1 {
+        fill_surface_color(
+            surface.virt,
+            surface.pitch_bytes as usize,
+            surface.width,
+            surface.height,
+            0,
+        );
+        return;
+    }
+
+    fill_overlay_rect(surface, 0, 0, surface.width, y0, 0);
+    fill_overlay_rect(surface, 0, y1, surface.width, surface.height.saturating_sub(y1), 0);
+    fill_overlay_rect(surface, 0, y0, x0, y1.saturating_sub(y0), 0);
+    fill_overlay_rect(surface, x1, y0, surface.width.saturating_sub(x1), y1.saturating_sub(y0), 0);
 }
 
 pub(crate) fn log_display_plane_ladder_probe(label: &str) {

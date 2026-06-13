@@ -2139,7 +2139,7 @@ pub(crate) fn ui2_canvas3d_plane_patch_render_surface_frame(
     dst: GpgpuRgba8Surface,
 ) -> Option<GpgpuShellCube20ProjectResult> {
     let q = CANVAS3D_PROJECT_Q16_ONE;
-    canvas3d_plane_patch_render_surface_frame(frame, dst, (q * 5) / 8)
+    canvas3d_plane_patch_render_surface_frame(frame, dst, (q * 5) / 8, Some(0xFF10_1010))
 }
 
 pub(crate) fn shell_cube6_plane_project_once(
@@ -2168,7 +2168,8 @@ pub(crate) fn shell_cube6_plane_project_frame(
         target.pitch_bytes,
     )?;
     let half = half_q16.clamp(1, CANVAS3D_PROJECT_Q16_ONE * 4);
-    let mut result = canvas3d_plane_patch_render_surface_frame(frame, primary, half)?;
+    let mut result =
+        canvas3d_plane_patch_render_surface_frame(frame, primary, half, Some(0xFF10_1010))?;
     let flush_bytes = (height as usize)
         .saturating_sub(1)
         .saturating_mul(target.pitch_bytes as usize)
@@ -2188,10 +2189,9 @@ pub(crate) fn shell_cube6_plane_project_frame(
 pub(crate) fn shell_cube6_plane_project_overlay_frame(
     frame: u32,
     half_q16: i32,
-    width: u32,
-    height: u32,
+    rect: crate::intel::LiveOverlayRect,
 ) -> Option<GpgpuShellCube20ProjectResult> {
-    let target = intel::display::ui3_canvas_overlay_gpgpu(width, height)?;
+    let target = intel::display::ui3_canvas_overlay_gpgpu(rect)?;
     let surface = GpgpuRgba8Surface::new(
         target.phys,
         target.gpu,
@@ -2201,7 +2201,8 @@ pub(crate) fn shell_cube6_plane_project_overlay_frame(
         target.pitch_bytes,
     )?;
     let half = half_q16.clamp(1, CANVAS3D_PROJECT_Q16_ONE * 4);
-    let mut result = canvas3d_plane_patch_render_surface_frame(frame, surface, half)?;
+    let mut result =
+        canvas3d_plane_patch_render_surface_frame_in_rect(frame, surface, half, rect, None)?;
     let flush_bytes = (target.pitch_bytes as usize).saturating_mul(target.height as usize);
     intel::dma_flush(target.virt, flush_bytes);
     result.presented = 1;
@@ -2211,22 +2212,66 @@ pub(crate) fn shell_cube6_plane_project_overlay_frame(
     Some(result)
 }
 
+pub(crate) fn shell_cube6_plane_project_surface_frame(
+    frame: u32,
+    half_q16: i32,
+    surface: GpgpuRgba8Surface,
+) -> Option<GpgpuShellCube20ProjectResult> {
+    let half = half_q16.clamp(1, CANVAS3D_PROJECT_Q16_ONE * 4);
+    let mut result = canvas3d_plane_patch_render_surface_frame(frame, surface, half, None)?;
+    result.presented = 0;
+    Some(result)
+}
+
 fn canvas3d_plane_patch_render_surface_frame(
     frame: u32,
     dst: GpgpuRgba8Surface,
     half: i32,
+    clear_rgba: Option<u32>,
+) -> Option<GpgpuShellCube20ProjectResult> {
+    canvas3d_plane_patch_render_surface_frame_in_rect(
+        frame,
+        dst,
+        half,
+        crate::intel::LiveOverlayRect::new(
+            0,
+            0,
+            dst.width,
+            dst.height,
+            crate::intel::types::Rgba8::new(0, 0, 0, 0),
+        ),
+        clear_rgba,
+    )
+}
+
+fn canvas3d_plane_patch_render_surface_frame_in_rect(
+    frame: u32,
+    dst: GpgpuRgba8Surface,
+    half: i32,
+    rect: crate::intel::LiveOverlayRect,
+    clear_rgba: Option<u32>,
 ) -> Option<GpgpuShellCube20ProjectResult> {
     const CADENCE_US: u64 = 33_000;
 
-    if !dst.is_valid() || dst.width > 512 || dst.height > 512 {
+    if !dst.is_valid() || rect.width > 512 || rect.height > 512 {
+        return None;
+    }
+    if rect.width == 0
+        || rect.height == 0
+        || rect.x >= dst.width
+        || rect.y >= dst.height
+        || rect.x.saturating_add(rect.width) > dst.width
+        || rect.y.saturating_add(rect.height) > dst.height
+    {
         return None;
     }
 
     let total_start_tick = direct_rcs_now_tick();
-    let clear_spans =
-        fill_rect_rgba8(dst, GpgpuRect::new(0, 0, dst.width, dst.height), 0xFF10_1010);
-    if clear_spans == 0 {
-        return None;
+    if let Some(color) = clear_rgba {
+        let clear_spans = fill_rect_rgba8(dst, GpgpuRect::new(0, 0, dst.width, dst.height), color);
+        if clear_spans == 0 {
+            return None;
+        }
     }
 
     let Some(dev) = intel::claimed_device() else {
@@ -2311,61 +2356,87 @@ fn canvas3d_plane_patch_render_surface_frame(
                 pad: 0,
             },
         ];
+        let canvas_width = rect.x.saturating_mul(2).saturating_add(rect.width);
+        let canvas_height = rect.y.saturating_mul(2).saturating_add(rect.height);
         let face_descs = [
-            canvas3d_plane_patch_ui2_face_desc(
+            canvas3d_plane_patch_ui2_face_desc_in_rect(
                 dst,
-                dst.width,
-                dst.height,
+                canvas_width,
+                canvas_height,
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
                 canvas3d_vec3_add(center, forward),
                 right,
                 up,
                 constraints,
                 0xFF22_3355,
             ),
-            canvas3d_plane_patch_ui2_face_desc(
+            canvas3d_plane_patch_ui2_face_desc_in_rect(
                 dst,
-                dst.width,
-                dst.height,
+                canvas_width,
+                canvas_height,
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
                 canvas3d_vec3_sub(center, right),
                 forward,
                 up,
                 constraints,
                 0xFF2F_80ED,
             ),
-            canvas3d_plane_patch_ui2_face_desc(
+            canvas3d_plane_patch_ui2_face_desc_in_rect(
                 dst,
-                dst.width,
-                dst.height,
+                canvas_width,
+                canvas_height,
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
                 canvas3d_vec3_sub(center, up),
                 right,
                 forward,
                 constraints,
                 0xFF36_4A58,
             ),
-            canvas3d_plane_patch_ui2_face_desc(
+            canvas3d_plane_patch_ui2_face_desc_in_rect(
                 dst,
-                dst.width,
-                dst.height,
+                canvas_width,
+                canvas_height,
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
                 canvas3d_vec3_add(center, right),
                 up,
                 forward,
                 constraints,
                 0xFFFF_8844,
             ),
-            canvas3d_plane_patch_ui2_face_desc(
+            canvas3d_plane_patch_ui2_face_desc_in_rect(
                 dst,
-                dst.width,
-                dst.height,
+                canvas_width,
+                canvas_height,
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
                 canvas3d_vec3_add(center, up),
                 forward,
                 right,
                 constraints,
                 0xFFFF_D166,
             ),
-            canvas3d_plane_patch_ui2_face_desc(
+            canvas3d_plane_patch_ui2_face_desc_in_rect(
                 dst,
-                dst.width,
-                dst.height,
+                canvas_width,
+                canvas_height,
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
                 canvas3d_vec3_sub(center, forward),
                 up,
                 right,
@@ -2474,7 +2545,7 @@ fn canvas3d_plane_patch_render_surface_frame(
         primary_height: dst.height,
         canvas_xy: GpgpuPoint::new(0, 0),
         vertex_count: 6,
-        radius_px: (half as u32).saturating_mul(dst.width.min(dst.height))
+        radius_px: (half as u32).saturating_mul(rect.width.min(rect.height))
             / CANVAS3D_PROJECT_Q16_ONE as u32,
         last_angle_deg: frame.wrapping_mul(4) % 360,
     })
@@ -2547,16 +2618,46 @@ fn canvas3d_plane_patch_ui2_face_desc(
     constraints: [Canvas3dVec3Q16; 4],
     color_rgba: u32,
 ) -> Canvas3dPlanePatchWorklistRgba8Desc {
+    canvas3d_plane_patch_ui2_face_desc_in_rect(
+        surface,
+        width,
+        height,
+        0,
+        0,
+        width,
+        height,
+        origin_q16,
+        axis_u_q16,
+        axis_v_q16,
+        constraints,
+        color_rgba,
+    )
+}
+
+fn canvas3d_plane_patch_ui2_face_desc_in_rect(
+    surface: GpgpuRgba8Surface,
+    canvas_width: u32,
+    canvas_height: u32,
+    rect_x: u32,
+    rect_y: u32,
+    rect_width: u32,
+    rect_height: u32,
+    origin_q16: Canvas3dVec3Q16,
+    axis_u_q16: Canvas3dVec3Q16,
+    axis_v_q16: Canvas3dVec3Q16,
+    constraints: [Canvas3dVec3Q16; 4],
+    color_rgba: u32,
+) -> Canvas3dPlanePatchWorklistRgba8Desc {
     Canvas3dPlanePatchWorklistRgba8Desc {
         dst_pitch_bytes: surface.pitch_bytes,
-        dst_width: width,
-        dst_height: height,
-        rect_x: 0,
-        rect_y: 0,
-        rect_width: width,
-        rect_height: height,
-        canvas_width: width,
-        canvas_height: height,
+        dst_width: surface.width,
+        dst_height: surface.height,
+        rect_x,
+        rect_y,
+        rect_width,
+        rect_height,
+        canvas_width,
+        canvas_height,
         reserved0: 0,
         origin_q16,
         axis_u_q16,

@@ -403,7 +403,8 @@ fn redraw_live_overlay(scene: &Ui3Scene, state: &Ui3LiveOverlayState, reason: &s
         );
     }
     crate::ui3::ui3_hid::push_software_cursor_rects(&mut rects, viewport_width, viewport_height);
-    crate::intel::present_live_overlay_rects(rects.as_slice(), reason)
+    let preserve = crate::ui3::ui3_canvas::live_overlay_preserve_rect(rects.as_slice());
+    crate::intel::present_live_overlay_rects_preserving(rects.as_slice(), preserve, reason)
 }
 
 fn ui3_overlay_viewport(scene: &Ui3Scene) -> (u32, u32) {
