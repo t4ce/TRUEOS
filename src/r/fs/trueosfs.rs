@@ -21,6 +21,14 @@ struct IndexRef {
 type TrueosFsIndex = BTreeMap<Vec<u8>, IndexRef>;
 
 const FILE_RECORD_CACHE_CAP: usize = 64;
+const TRUEOSFS_CHECKPOINT_MIN_TAIL_BLOCKS: u64 = 4096;
+
+struct BuiltIndex {
+    tree: Box<TrueosFsIndex>,
+    replay_from_rel_blocks: u64,
+    end_rel_blocks: u64,
+    had_checkpoint: bool,
+}
 
 struct FileRecordCacheEntry {
     disk_id: block::DiscId,
@@ -753,6 +761,132 @@ fn invalidate_root_index(disk_id: block::DiscId) {
     }
 }
 
+fn update_root_index_put(
+    disk_id: block::DiscId,
+    path: &str,
+    record: trueos_fs::FileRecordRef,
+) -> bool {
+    let mut roots = ROOTS.lock();
+    let Some(mount) = roots.iter_mut().find(|m| m.disk_id == disk_id) else {
+        return false;
+    };
+    let Some(index) = mount.index.as_mut() else {
+        return false;
+    };
+
+    index.insert(
+        path.as_bytes().to_vec(),
+        IndexRef {
+            kind: trueos_fs::LogKind::Put,
+            entry_lba: record.entry_lba,
+        },
+    );
+    mount.writes_since_checkpoint = mount.writes_since_checkpoint.saturating_add(1);
+    true
+}
+
+fn update_root_index_delete(disk_id: block::DiscId, path: &str) -> bool {
+    let mut roots = ROOTS.lock();
+    let Some(mount) = roots.iter_mut().find(|m| m.disk_id == disk_id) else {
+        return false;
+    };
+    let Some(index) = mount.index.as_mut() else {
+        return false;
+    };
+
+    index.remove(path.as_bytes());
+    mount.writes_since_checkpoint = mount.writes_since_checkpoint.saturating_add(1);
+    true
+}
+
+fn snapshot_index_for_checkpoint(
+    disk_id: block::DiscId,
+) -> Option<Vec<(Vec<u8>, trueos_fs::LogKind, u64)>> {
+    let roots = ROOTS.lock();
+    let mount = roots.iter().find(|m| m.disk_id == disk_id)?;
+    let index = mount.index.as_ref()?;
+    let mut entries = Vec::with_capacity(index.len());
+    for (key, index_ref) in index.iter() {
+        entries.push((key.clone(), index_ref.kind, index_ref.entry_lba));
+    }
+    Some(entries)
+}
+
+fn note_checkpoint_written(disk_id: block::DiscId) {
+    let mut roots = ROOTS.lock();
+    if let Some(mount) = roots.iter_mut().find(|m| m.disk_id == disk_id) {
+        mount.writes_since_checkpoint = 0;
+    }
+}
+
+async fn write_index_checkpoint_async(
+    disk: block::DeviceHandle,
+    placement: &TrueosFsPlacement,
+    replay_from_rel_blocks: u64,
+) -> Result<bool, block::Error> {
+    let disk_id = disk.id();
+    let Some(entries) = snapshot_index_for_checkpoint(disk_id) else {
+        return Ok(false);
+    };
+
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    let io = KernelBlockIo::new(disk);
+    let ok = trueos_fs::write_index_checkpoint(
+        &io,
+        &params,
+        replay_from_rel_blocks,
+        entries.into_iter(),
+    )
+    .await
+    .map_err(map_engine_err)?;
+    if ok {
+        note_checkpoint_written(disk_id);
+    }
+    Ok(ok)
+}
+
+async fn maybe_checkpoint_built_index_async(
+    disk: block::DeviceHandle,
+    placement: &TrueosFsPlacement,
+    replay_from_rel_blocks: u64,
+    end_rel_blocks: u64,
+    had_checkpoint: bool,
+    entry_count: usize,
+) {
+    let tail_blocks = end_rel_blocks.saturating_sub(replay_from_rel_blocks);
+    if had_checkpoint && tail_blocks < TRUEOSFS_CHECKPOINT_MIN_TAIL_BLOCKS {
+        return;
+    }
+
+    match write_index_checkpoint_async(disk, placement, end_rel_blocks).await {
+        Ok(true) => {
+            crate::log!(
+                "trueosfs: index checkpoint written disk_id={} replay_from={} entries={}\n",
+                disk.id().raw(),
+                end_rel_blocks,
+                entry_count
+            );
+        }
+        Ok(false) => {
+            crate::log!(
+                "trueosfs: index checkpoint skipped disk_id={} reason=no-space-or-no-index\n",
+                disk.id().raw()
+            );
+        }
+        Err(e) => {
+            crate::log!(
+                "trueosfs: index checkpoint error disk_id={} err={:?}\n",
+                disk.id().raw(),
+                e
+            );
+        }
+    }
+}
+
 /// Async TRUEOSFS: write/replace a file.
 ///
 /// Semantics match [`file_in`], but this avoids `block_on` and is safe to call from async contexts.
@@ -774,16 +908,29 @@ pub async fn file_in_async(
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
-    let ok = trueos_fs::write_file(&io, &params, name, bytes)
+    let Some(mut stream) =
+        trueos_fs::begin_write_file_stream(&io, &params, name, bytes.len() as u64)
+            .await
+            .map_err(map_engine_err)?
+    else {
+        return Ok(false);
+    };
+    trueos_fs::write_file_stream_chunk(&io, &mut stream, bytes)
         .await
         .map_err(map_engine_err)?;
-    if ok {
-        let disk_id = disk.id();
-        bump_root_cache_gen(disk_id);
-        file_record_cache_invalidate_path(disk_id, name);
+    let record = trueos_fs::write_stream_record_ref(&stream);
+    trueos_fs::finish_write_file_stream(&io, &params, stream)
+        .await
+        .map_err(map_engine_err)?;
+
+    let disk_id = disk.id();
+    bump_root_cache_gen(disk_id);
+    file_record_cache_invalidate_path(disk_id, name);
+    file_record_cache_insert(disk_id, name, record);
+    if !update_root_index_put(disk_id, name, record) {
         invalidate_root_index(disk_id);
     }
-    Ok(ok)
+    Ok(true)
 }
 
 /// Async TRUEOSFS: begin a streamed write for `name` with known final byte length.
@@ -872,7 +1019,9 @@ pub async fn file_write_finish_async(stream_handle: u32) -> Result<(), block::Er
     bump_root_cache_gen(disk_id);
     file_record_cache_invalidate_path(disk_id, entry.path.as_str());
     file_record_cache_insert(disk_id, entry.path.as_str(), record);
-    invalidate_root_index(disk_id);
+    if !update_root_index_put(disk_id, entry.path.as_str(), record) {
+        invalidate_root_index(disk_id);
+    }
     Ok(())
 }
 
@@ -1138,7 +1287,9 @@ pub async fn file_delete_async(
         let disk_id = disk.id();
         bump_root_cache_gen(disk_id);
         file_record_cache_invalidate_path(disk_id, name);
-        invalidate_root_index(disk_id);
+        if !update_root_index_delete(disk_id, name) {
+            invalidate_root_index(disk_id);
+        }
     }
     Ok(ok)
 }
@@ -1178,7 +1329,6 @@ pub async fn file_rename_async(
 
     // Best-effort cleanup; ignore failure.
     let _ = file_delete_async(disk, src).await;
-    invalidate_root_index(disk.id());
     Ok(true)
 }
 
@@ -1382,7 +1532,7 @@ async fn ensure_index_async(
     }
 
     // Build outside lock.
-    let build_result: Result<Box<TrueosFsIndex>, block::Error> =
+    let build_result: Result<BuiltIndex, block::Error> =
         async {
             let params = trueos_fs::FsParams {
                 super_lba: placement.super_lba,
@@ -1398,11 +1548,13 @@ async fn ensure_index_async(
             let sb = trueos_fs::parse_superblock(&sb_blk).ok_or(block::Error::Corrupted)?;
 
             let mut replay_from = 0u64;
+            let mut had_checkpoint = false;
 
             if let Ok(Some(ckpt)) = trueos_fs::read_index_checkpoint(&io, &params)
                 .await
                 .map_err(map_engine_err)
             {
+                had_checkpoint = true;
                 replay_from = ckpt.replay_from_rel_blocks;
                 for (key, kind, lba) in ckpt.entries {
                     match kind {
@@ -1445,19 +1597,34 @@ async fn ensure_index_async(
             .await
             .map_err(map_engine_err)?;
 
-            Ok(tree)
+            Ok(BuiltIndex {
+                tree,
+                replay_from_rel_blocks: replay_from,
+                end_rel_blocks: end_rel,
+                had_checkpoint,
+            })
         }
         .await;
 
     // Always clear the build flag; publish the index only when no writer raced the build.
     let mut needs_rebuild = false;
+    let mut checkpoint_after_publish = None;
     let result = match build_result {
-        Ok(tree) => {
+        Ok(built) => {
+            let BuiltIndex {
+                tree,
+                replay_from_rel_blocks,
+                end_rel_blocks,
+                had_checkpoint,
+            } = built;
+            let entry_count = tree.len();
             let mut roots = ROOTS.lock();
             if let Some(m) = roots.iter_mut().find(|m| m.disk_id == disk_id) {
                 if m.cache_gen == start_cache_gen {
                     m.index = Some(tree);
                     crate::r::readiness::set(crate::r::readiness::TRUEOSFS_INDEX_READY);
+                    checkpoint_after_publish =
+                        Some((replay_from_rel_blocks, end_rel_blocks, had_checkpoint, entry_count));
                 } else {
                     needs_rebuild = true;
                 }
@@ -1477,6 +1644,21 @@ async fn ensure_index_async(
     if needs_rebuild {
         request_warm_index(disk_id);
         return Err(block::Error::NotReady);
+    }
+
+    if result.is_ok()
+        && let Some((replay_from_rel_blocks, end_rel_blocks, had_checkpoint, entry_count)) =
+            checkpoint_after_publish
+    {
+        maybe_checkpoint_built_index_async(
+            disk,
+            placement,
+            replay_from_rel_blocks,
+            end_rel_blocks,
+            had_checkpoint,
+            entry_count,
+        )
+        .await;
     }
 
     result
@@ -1796,16 +1978,42 @@ pub async fn file_append_async(
     };
     let io = KernelBlockIo::new(disk);
 
-    let ok = trueos_fs::append_file(&io, &params, name, append_bytes)
+    if append_bytes.is_empty() {
+        return Ok(true);
+    }
+
+    let mut bytes = match trueos_fs::read_file(&io, &params, name)
+        .await
+        .map_err(map_engine_err)?
+    {
+        Some(existing) => existing,
+        None => Vec::new(),
+    };
+    bytes.extend_from_slice(append_bytes);
+
+    let Some(mut stream) =
+        trueos_fs::begin_write_file_stream(&io, &params, name, bytes.len() as u64)
+            .await
+            .map_err(map_engine_err)?
+    else {
+        return Ok(false);
+    };
+    trueos_fs::write_file_stream_chunk(&io, &mut stream, bytes.as_slice())
         .await
         .map_err(map_engine_err)?;
-    if ok {
-        let disk_id = disk.id();
-        bump_root_cache_gen(disk_id);
-        file_record_cache_invalidate_path(disk_id, name);
+    let record = trueos_fs::write_stream_record_ref(&stream);
+    trueos_fs::finish_write_file_stream(&io, &params, stream)
+        .await
+        .map_err(map_engine_err)?;
+
+    let disk_id = disk.id();
+    bump_root_cache_gen(disk_id);
+    file_record_cache_invalidate_path(disk_id, name);
+    file_record_cache_insert(disk_id, name, record);
+    if !update_root_index_put(disk_id, name, record) {
         invalidate_root_index(disk_id);
     }
-    Ok(ok)
+    Ok(true)
 }
 
 // NOTE: synchronous TRUEOSFS file operations (`file_in`, `file_out`, etc.) were removed.

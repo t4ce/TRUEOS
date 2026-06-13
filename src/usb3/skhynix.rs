@@ -14,8 +14,11 @@ const UAS_STREAM_ID_FIRST: u16 = 3;
 const UAS_STREAM_ID_LAST: u16 = 15;
 const UAS_XHCI_STREAMS_ENABLED: bool = true;
 const UAS_XHCI_OUT_STREAMS_ENABLED: bool = true;
-const UAS_PREPOST_WRITE_DATA_OUT_STREAMS: bool = false;
+// The SK hynix X31 bridge times out if WRITE(10) waits for WRITE READY before
+// arming data-out. Pre-post data-out on the tagged stream, then consume status.
+const SKHYNIX_PREPOST_WRITE_DATA_OUT: bool = true;
 const SKHYNIX_UAS_MAX_TRANSFER_BYTES: usize = 8 * 1024 * 1024;
+const SKHYNIX_UAS_WRITE_TRANSFER_BYTES: usize = 512 * 1024;
 const SKHYNIX_UAS_LOG_TRANSFER_BYTES: usize = 512 * 1024;
 
 struct SkhynixUasRuntime {
@@ -92,7 +95,7 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
     };
 
     crate::log!(
-        "crabusb: skhynix-green {:04x}:{:04x} proof=uas-target if#{} alt={} cfg={} cmd_out=0x{:02x}/{} status_in=0x{:02x}/{} data_in=0x{:02x}/{} data_out=0x{:02x}/{}\n",
+        "crabusb: skhynix-green {:04x}:{:04x} proof=uas-target if#{} alt={} cfg={} cmd_out=0x{:02x}/{} status_in=0x{:02x}/{} data_in=0x{:02x}/{} data_out=0x{:02x}/{} write_prepost={}\n",
         pooled.vendor_id,
         pooled.product_id,
         target.interface_number,
@@ -105,7 +108,8 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
         target.data_in,
         target.data_in_max_packet_size,
         target.data_out,
-        target.data_out_max_packet_size
+        target.data_out_max_packet_size,
+        SKHYNIX_PREPOST_WRITE_DATA_OUT
     );
 
     if let Err(err) = pooled
@@ -260,11 +264,12 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
     };
     let handle = crate::disc::block::register_device_with_worker(descriptor, block_device);
     crate::log!(
-        "crabusb: skhynix-green {:04x}:{:04x} proof=block-register status=ok disc={} read_only=false max_xfer={}\n",
+        "crabusb: skhynix-green {:04x}:{:04x} proof=block-register status=ok disc={} read_only=false max_xfer={} write_chunk={}\n",
         pooled.vendor_id,
         pooled.product_id,
         handle.id(),
-        SKHYNIX_UAS_MAX_TRANSFER_BYTES
+        SKHYNIX_UAS_MAX_TRANSFER_BYTES,
+        SKHYNIX_UAS_WRITE_TRANSFER_BYTES
     );
 
     crate::log!(
@@ -520,6 +525,17 @@ async fn uas_drain_status_grace(
     .actual_length;
     if got < 4 {
         return Err(MassProbeError::ShortData);
+    }
+    if crate::logflag::USB_MASS_UAS_TRACE_LOGS || cmd == "write10" || cmd == "sync-cache10" {
+        let status = &status[..got.min(status.len())];
+        crate::log!(
+            "crabusb: skhynix-green proof=uas-status-drain cmd={} tag=0x{:04x} iu=0x{:02x} iu_tag=0x{:04x} raw_len={}\n",
+            cmd,
+            tag,
+            status[0],
+            parse_uas_tag(status).unwrap_or(0),
+            got
+        );
     }
     validate_uas_status(cmd, &status[..got.min(status.len())], tag)
 }
@@ -780,7 +796,7 @@ async fn uas_command_out(
     data: &[u8],
     tag: u16,
 ) -> Result<usize, MassProbeError> {
-    if UAS_PREPOST_WRITE_DATA_OUT_STREAMS {
+    if SKHYNIX_PREPOST_WRITE_DATA_OUT {
         return uas_command_out_streams(command_out, status_in, data_out, cmd, cdb, data, tag)
             .await;
     }
@@ -963,8 +979,22 @@ async fn uas_command_out_streams(
     }
 
     if ready_id == UAS_IU_WRITE_READY && ready_tag == tag {
+        if cmd == "write10" {
+            crate::log!(
+                "crabusb: skhynix-green proof=uas-write phase=write-ready-drain-status cmd={} tag=0x{:04x}\n",
+                cmd,
+                tag
+            );
+        }
         uas_drain_status_grace(status_in, cmd, tag, "uas-write-status-timeout").await?;
     } else {
+        if cmd == "write10" {
+            crate::log!(
+                "crabusb: skhynix-green proof=uas-write phase=final-status-direct cmd={} tag=0x{:04x}\n",
+                cmd,
+                tag
+            );
+        }
         validate_uas_status(cmd, ready, tag)?;
     }
 
@@ -1145,6 +1175,17 @@ impl SkhynixUasBlockDevice {
             .ok_or(crate::disc::block::Error::InvalidParam)
     }
 
+    fn write_transfer_bytes(&self) -> crate::disc::block::Result<usize> {
+        let block_size = usize::try_from(self.info.block_size)
+            .map_err(|_| crate::disc::block::Error::InvalidParam)?;
+        if block_size == 0 {
+            return Err(crate::disc::block::Error::InvalidParam);
+        }
+        let aligned =
+            SKHYNIX_UAS_WRITE_TRANSFER_BYTES - (SKHYNIX_UAS_WRITE_TRANSFER_BYTES % block_size);
+        Ok(aligned.max(block_size))
+    }
+
     async fn read_blocks_inner(
         &mut self,
         lba: u64,
@@ -1225,7 +1266,11 @@ impl SkhynixUasBlockDevice {
         Ok(())
     }
 
-    async fn write_blocks_inner(&mut self, lba: u64, buf: &[u8]) -> crate::disc::block::Result<()> {
+    async fn write_blocks_one_inner(
+        &mut self,
+        lba: u64,
+        buf: &[u8],
+    ) -> crate::disc::block::Result<()> {
         let block_size = usize::try_from(self.info.block_size)
             .map_err(|_| crate::disc::block::Error::InvalidParam)?;
         if block_size == 0 || !buf.len().is_multiple_of(block_size) {
@@ -1295,6 +1340,47 @@ impl SkhynixUasBlockDevice {
             bytes,
             tag
         );
+        Ok(())
+    }
+
+    async fn write_blocks_inner(&mut self, lba: u64, buf: &[u8]) -> crate::disc::block::Result<()> {
+        let block_size = usize::try_from(self.info.block_size)
+            .map_err(|_| crate::disc::block::Error::InvalidParam)?;
+        if block_size == 0 || !buf.len().is_multiple_of(block_size) {
+            return Err(crate::disc::block::Error::InvalidParam);
+        }
+        let total_blocks = buf.len() / block_size;
+        let total_bytes = self.validate_span(lba, total_blocks)?;
+        if total_bytes != buf.len() {
+            return Err(crate::disc::block::Error::InvalidParam);
+        }
+        if total_blocks == 0 {
+            return Ok(());
+        }
+
+        let max_write_bytes = self.write_transfer_bytes()?;
+        if buf.len() <= max_write_bytes {
+            return self.write_blocks_one_inner(lba, buf).await;
+        }
+
+        crate::log!(
+            "crabusb: skhynix-green proof=block-write-split lba={} blocks={} bytes={} chunk_bytes={}\n",
+            lba,
+            total_blocks,
+            buf.len(),
+            max_write_bytes
+        );
+
+        let mut cur_lba = lba;
+        let mut off = 0usize;
+        while off < buf.len() {
+            let remaining = buf.len() - off;
+            let bytes_here = core::cmp::min(remaining, max_write_bytes);
+            self.write_blocks_one_inner(cur_lba, &buf[off..off + bytes_here])
+                .await?;
+            cur_lba = cur_lba.saturating_add((bytes_here / block_size) as u64);
+            off = off.saturating_add(bytes_here);
+        }
         Ok(())
     }
 
