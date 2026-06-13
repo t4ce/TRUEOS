@@ -187,18 +187,6 @@ fn redraw_scene_text(
         return Ui3LayoutInspectResult::default();
     };
 
-    let Some(layout) = value
-        .get("trace")
-        .and_then(|trace| trace.get("layout"))
-        .or_else(|| value.get("layout"))
-    else {
-        crate::log!(
-            "ui3-service: layout json missing layout browser={} seq={}\n",
-            frame.browser_instance_id,
-            frame.seq
-        );
-        return Ui3LayoutInspectResult::default();
-    };
     let embedded_scenes = value
         .get("trace")
         .and_then(|trace| trace.get("embeddedScenes"))
@@ -206,16 +194,24 @@ fn redraw_scene_text(
         .and_then(Value::as_array)
         .map(|scenes| scenes.len())
         .unwrap_or(0);
-    let paint_plan = value
+    let Some(paint_plan) = value
         .get("trace")
         .and_then(|trace| trace.get("ui3PaintPlan"))
-        .or_else(|| value.get("ui3PaintPlan"));
+        .or_else(|| value.get("ui3PaintPlan"))
+    else {
+        crate::log!(
+            "ui3-service: layout json missing ui3PaintPlan browser={} seq={}\n",
+            frame.browser_instance_id,
+            frame.seq
+        );
+        return Ui3LayoutInspectResult::default();
+    };
 
     if let Some((viewport_width, viewport_height)) = crate::intel::active_scanout_dimensions() {
         scene.viewport_width = viewport_width;
         scene.viewport_height = viewport_height;
     }
-    scene.content_height = json_f32_field(layout, "height")
+    scene.content_height = json_f32_field(paint_plan, "contentHeight")
         .map(|height| ceil_u32(height).max(scene.viewport_height))
         .unwrap_or(scene.viewport_height);
     scene.scroll_y =
@@ -231,11 +227,8 @@ fn redraw_scene_text(
     } else {
         "ui3-text-frame-primary"
     };
-    let draw = if let Some(plan) = paint_plan {
-        crate::ui3::ui3_font::draw_paint_plan_primary(plan, font_scene, font, present_reason)
-    } else {
-        crate::ui3::ui3_font::draw_layout_primary(layout, font_scene, font, present_reason)
-    };
+    let draw =
+        crate::ui3::ui3_font::draw_paint_plan_primary(paint_plan, font_scene, font, present_reason);
     let total_ms = elapsed_ms_since(total_start);
 
     if is_scroll {
