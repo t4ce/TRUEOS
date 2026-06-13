@@ -23,9 +23,11 @@ A Rust Based 64 Bit Paged X84 Baremetal OS Targeted at modern Intel XeLp
 
 ## Setup to build ELF + ISO via makefile make (run,iso,release)
 ### Rust and C Tools
-```sudo apt update && sudo apt upgrade
+
+- ```
+sudo apt update && sudo apt upgrade
 ```
-- ```sudo apt install npm git gh make rustup autoconf automake mtools nasm xorriso - - - qemu-system gdb build-essential konsole```
+```sudo apt install npm git gh make rustup autoconf automake mtools nasm xorriso - - - qemu-system gdb build-essential konsole```
 - ```sudo apt install gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu```
 - ```cargo install fmt cargo-outdated cargo-edit --locked```
 - ```rustup component add clippy```
