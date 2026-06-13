@@ -29,6 +29,29 @@ function makeText(text) {
   return { kind: 'text', text };
 }
 
+const INLINE_LINE_BREAK = '\u000B';
+
+function normalizeInlineTextRun(text) {
+  let out = '';
+  let inWs = false;
+
+  for (const ch of String(text ?? '')) {
+    if (ch === INLINE_LINE_BREAK) {
+      if (out.endsWith(' ')) out = out.slice(0, -1);
+      out += '\n';
+      inWs = true;
+    } else if (/\s/.test(ch)) {
+      if (!inWs) out += ' ';
+      inWs = true;
+    } else {
+      out += ch;
+      inWs = false;
+    }
+  }
+
+  return out.trim();
+}
+
 function makeWidget({ tag, key, attrs = {}, props = {}, children = [], registry, styleRef = null, paint = null }) {
   const meta = registry.get(tag, attrs);
   const metaPaint = paint && typeof paint === 'object' && !Array.isArray(paint) ? { ...paint } : undefined;
@@ -114,7 +137,7 @@ function childNodesToWidgets(node, path, opts) {
   let elementIndex = 0;
 
   const flushText = () => {
-    const text = normalizeWhitespace(inlineText);
+    const text = normalizeInlineTextRun(inlineText);
     inlineText = '';
     if (text.length > 0) out.push(makeText(text));
   };
@@ -131,11 +154,14 @@ function childNodesToWidgets(node, path, opts) {
     const childPath = `${path}.${elementIndex}`;
     elementIndex += 1;
 
-    if (BLOCK_TAGS.has(tag) || opts.keepUnknownElements) {
+    if (tag === 'a') {
+      flushText();
+      out.push(...nodeToWidgets(child, childPath, opts));
+    } else if (BLOCK_TAGS.has(tag) || opts.keepUnknownElements) {
       flushText();
       out.push(...nodeToWidgets(child, childPath, opts));
     } else if (INLINE_TAGS.has(tag)) {
-      if (tag === 'br') inlineText += '\n';
+      if (tag === 'br') inlineText += INLINE_LINE_BREAK;
       else inlineText += `${extractText(child)} `;
     }
   }

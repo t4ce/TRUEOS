@@ -278,9 +278,11 @@ struct MioCompat {
 static MIO_COMPAT: Mutex<Option<MioCompat>> = Mutex::new(None);
 
 fn with_compat<R>(f: impl FnOnce(&mut MioCompat) -> R) -> R {
-    let mut guard = MIO_COMPAT.lock();
-    let compat = guard.get_or_insert_with(MioCompat::new);
-    f(compat)
+    crate::allocators::with_host_alloc_domain_strong(|| {
+        let mut guard = MIO_COMPAT.lock();
+        let compat = guard.get_or_insert_with(MioCompat::new);
+        f(compat)
+    })
 }
 
 const MIO_ADDR_BYTES: usize = core::mem::size_of::<TrueosMioSocketAddr>();

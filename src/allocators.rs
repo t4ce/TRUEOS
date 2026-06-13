@@ -523,6 +523,8 @@ pub(crate) fn hv_guest_allocator_state_spans() -> [(u64, usize); 2] {
 
 const HOST_ALLOC_TAG: u8 = u8::MAX;
 static HOST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU: [AtomicU32; 64] = [const { AtomicU32::new(0) }; 64];
+static HOST_ALLOC_DOMAIN_STRONG_DEPTH_BY_CPU: [AtomicU32; 64] =
+    [const { AtomicU32::new(0) }; 64];
 static HV_GUEST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU: [AtomicU32; 64] =
     [const { AtomicU32::new(0) }; 64];
 static HV_GUEST_ALLOC_DOMAIN_FORCE_VM_BY_CPU: [AtomicU32; 64] = [const { AtomicU32::new(0) }; 64];
@@ -555,6 +557,12 @@ fn cpuid_slot() -> Option<usize> {
 }
 
 fn current_alloc_domain() -> AllocDomain {
+    if let Some(slot) = cpuid_slot()
+        && HOST_ALLOC_DOMAIN_STRONG_DEPTH_BY_CPU[slot].load(Ordering::Acquire) != 0
+    {
+        return AllocDomain::Host;
+    }
+
     if let Some(slot) = cpuid_slot()
         && HV_GUEST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU[slot].load(Ordering::Acquire) != 0
     {
@@ -593,6 +601,19 @@ pub fn with_host_alloc_domain<T>(f: impl FnOnce() -> T) -> T {
         return f();
     };
     let Some(depth) = HOST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU.get(slot) else {
+        return f();
+    };
+    depth.fetch_add(1, Ordering::AcqRel);
+    let out = f();
+    depth.fetch_sub(1, Ordering::AcqRel);
+    out
+}
+
+pub fn with_host_alloc_domain_strong<T>(f: impl FnOnce() -> T) -> T {
+    let Some(slot) = cpuid_slot() else {
+        return f();
+    };
+    let Some(depth) = HOST_ALLOC_DOMAIN_STRONG_DEPTH_BY_CPU.get(slot) else {
         return f();
     };
     depth.fetch_add(1, Ordering::AcqRel);

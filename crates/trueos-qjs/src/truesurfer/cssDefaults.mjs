@@ -5,6 +5,19 @@ const FONT_PX = 15;
 const FONT_RGB = 0x000000;
 
 const TAG_THEME_DEFAULTS = {
+  a: {
+    color: rgbIntToCss(defaultTheme.control.link.text),
+    display: 'inline-block',
+    paint: {
+      role: 'link',
+      fill: 'linear-gradient',
+      color0: defaultTheme.control.link.fill,
+      color1: defaultTheme.control.link.fillEnd,
+      borderWidth: defaultTheme.control.link.borderWidth,
+      radius: defaultTheme.control.link.radius,
+      textColor: defaultTheme.control.link.text,
+    },
+  },
   b: {
     fontWeight: 'bold',
   },

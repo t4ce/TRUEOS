@@ -113,9 +113,9 @@ fn dispatch_fslog(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Pa
     super::cmds::fslog::try_parse(io, rest)
 }
 
-fn dispatch_gpgpu(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+fn dispatch_gpgpu(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
-    super::cmds::gpgpu::try_parse(io, &mut args)
+    super::cmds::gpgpu::try_parse(spawner, io, &mut args)
 }
 
 fn dispatch_net(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {

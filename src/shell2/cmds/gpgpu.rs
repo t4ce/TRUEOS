@@ -2,6 +2,8 @@ use alloc::string::String as AllocString;
 use core::str::SplitWhitespace;
 use core::sync::atomic::{AtomicU32, Ordering};
 
+use embassy_executor::Spawner;
+
 use super::super::{ShellBackend2, print_shell_line};
 use crate::intel::gpgpu::{
     GPGPU_SHELL_SURFACE_HEIGHT, GPGPU_SHELL_SURFACE_PITCH_BYTES, GPGPU_SHELL_SURFACE_WIDTH,
@@ -20,7 +22,7 @@ use crate::intel::gpgpu::{
     sprite64_worklist_rgba8_upload_status, submit_alpha_blend_worklist_rgba8_probe_now,
     submit_fill_rect_worklist_rgba8_probe_now, submit_gradient_rect_worklist_rgba8_probe_now,
 };
-use crate::shell2::shell2_cmd::ParseOutcome;
+use crate::shell2::shell2_cmd::{CommandSessionKind, ParseOutcome};
 
 const ATHLAS_GO_DEFAULT_DURATION_MS: u64 = 5_000;
 const ATHLAS_GO_DEFAULT_CADENCE_MS: u64 = 0;
@@ -46,6 +48,7 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "gpgpu mandel [iterations]");
     print_shell_line(io, "gpgpu canvas [duration_ms] [cadence_ms:0.1..200]");
     print_shell_line(io, "gpgpu plane [half_q16]");
+    print_shell_line(io, "gpgpu plane draw [half_q16]");
     print_shell_line(io, "gpgpu rectprobe");
     print_shell_line(io, "gpgpu smoke");
 }
@@ -724,10 +727,24 @@ fn run_canvas(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
     print_shell_line(io, msg.as_str());
 }
 
-fn run_plane(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+fn run_plane(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    args: &mut SplitWhitespace<'_>,
+) -> ParseOutcome {
+    if args
+        .clone()
+        .next()
+        .map(|raw| raw.eq_ignore_ascii_case("draw") || raw.eq_ignore_ascii_case("project"))
+        .unwrap_or(false)
+    {
+        let _ = args.next();
+        return run_plane_draw(spawner, io, args);
+    }
+
     let Some(h) = parse_plane_args(args) else {
         usage(io);
-        return;
+        return ParseOutcome::Handled;
     };
 
     let q = 65_536;
@@ -763,9 +780,28 @@ fn run_plane(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
         );
         print_shell_line(io, line.as_str());
     }
+    ParseOutcome::Handled
+}
+
+fn run_plane_draw(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    args: &mut SplitWhitespace<'_>,
+) -> ParseOutcome {
+    let Some(h) = parse_plane_args(args) else {
+        usage(io);
+        return ParseOutcome::Handled;
+    };
+    match crate::ui3::ui3_canvas::submit_plane_draw(spawner, io, h) {
+        Some(session_id) => {
+            ParseOutcome::StartSession(CommandSessionKind::GpuCanvasRunning(session_id))
+        }
+        None => ParseOutcome::Handled,
+    }
 }
 
 pub(crate) fn try_parse(
+    spawner: &Spawner,
     io: &'static dyn ShellBackend2,
     args: &mut SplitWhitespace<'_>,
 ) -> ParseOutcome {
@@ -793,7 +829,7 @@ pub(crate) fn try_parse(
     } else if cmd.eq_ignore_ascii_case("canvas") {
         run_canvas(io, args);
     } else if cmd.eq_ignore_ascii_case("plane") {
-        run_plane(io, args);
+        return run_plane(spawner, io, args);
     } else if cmd.eq_ignore_ascii_case("rectprobe") {
         run_rect_probe(io, args);
     } else if cmd.eq_ignore_ascii_case("smoke") {
