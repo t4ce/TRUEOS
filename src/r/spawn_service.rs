@@ -955,7 +955,7 @@ async fn bp_autostart_task() {
         "inline://trueos/input.html",
         include_str!("../../crates/trueos-qjs/src/html/input.html"),
     );
-    // let _ = crate::surfer::html_shack::enqueue_ready_html_for_browser(html).await;
+    let _ = crate::surfer::html_shack::enqueue_ready_html_for_browser(html).await;
 }
 
 fn spawn_bp_autostart(spawner: Spawner) -> SpawnAttempt {
