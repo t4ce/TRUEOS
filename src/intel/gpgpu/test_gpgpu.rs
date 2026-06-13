@@ -1568,14 +1568,12 @@ pub(crate) fn shell_cube20_project_spin(
     })
 }
 
-pub(crate) fn ui2_canvas3d_archaeology_project_frame(
-    frame: u32,
-) -> Option<GpgpuShellCube20ProjectResult> {
+pub(crate) fn canvas3d_ico_project_frame(frame: u32) -> Option<GpgpuShellCube20ProjectResult> {
     let target = intel::display::primary_surface_gpgpu_marker_target()?;
-    ui2_canvas3d_archaeology_project_frame_in_rect(frame, 0, 0, target.width, target.height)
+    canvas3d_ico_project_rect(frame, 0, 0, target.width, target.height)
 }
 
-pub(crate) fn ui2_canvas3d_archaeology_project_frame_in_rect(
+pub(crate) fn canvas3d_ico_project_rect(
     frame: u32,
     rect_x: i32,
     rect_y: i32,
@@ -1708,7 +1706,7 @@ pub(crate) fn ui2_canvas3d_archaeology_project_frame_in_rect(
     })
 }
 
-pub(crate) fn ui2_canvas3d_archaeology_project_texture_frame(
+pub(crate) fn canvas3d_ico_project_texture_frame(
     frame: u32,
     width: u32,
     height: u32,
@@ -2719,29 +2717,11 @@ fn canvas3d_vec3_dot_q16(a: Canvas3dVec3Q16, b: Canvas3dVec3Q16) -> i64 {
 }
 
 fn shell_cube20_translate_x_q16(frame: u32) -> i32 {
-    const PERIOD_FRAMES: u32 = 240;
-    let half_period = PERIOD_FRAMES / 2;
-    let phase = frame % PERIOD_FRAMES;
-    let span = CANVAS3D_PROJECT_Q16_ONE;
-    let offset = if phase < half_period {
-        -CUBE20_HALF_Q16 + ((span as i64 * phase as i64) / half_period as i64) as i32
-    } else {
-        CUBE20_HALF_Q16 - ((span as i64 * (phase - half_period) as i64) / half_period as i64) as i32
-    };
-    offset.clamp(-CUBE20_HALF_Q16, CUBE20_HALF_Q16)
+    canvas3d_cube::cube_translate_x_q16(frame, CUBE20_HALF_Q16)
 }
 
 fn shell_tetra10_translate_y_q16(frame: u32) -> i32 {
-    const PERIOD_FRAMES: u32 = 240;
-    let half_period = PERIOD_FRAMES / 2;
-    let phase = frame % PERIOD_FRAMES;
-    let span = CANVAS3D_PROJECT_Q16_ONE;
-    let offset = if phase < half_period {
-        -CUBE20_HALF_Q16 + ((span as i64 * phase as i64) / half_period as i64) as i32
-    } else {
-        CUBE20_HALF_Q16 - ((span as i64 * (phase - half_period) as i64) / half_period as i64) as i32
-    };
-    offset.clamp(-CUBE20_HALF_Q16, CUBE20_HALF_Q16)
+    canvas3d_cube::tetra_translate_y_q16(frame, CUBE20_HALF_Q16)
 }
 
 fn shell_canvas3d_cube_scale_pulse_q16(elapsed_ms: u64) -> i32 {
@@ -2808,12 +2788,14 @@ fn shell_canvas3d_seed_visual_vertices(state: DirectRcsState) {
         for cube_index in 0..CUBE20_INSTANCE_COUNT {
             let base = cube_index * CUBE20_VERTEX_COUNT;
             for local_index in 0..CUBE20_VERTEX_COUNT {
-                let vertex = shell_canvas3d_seed_cube_vertex(cube_index, local_index);
+                let vertex =
+                    canvas3d_cube::cube_vertex(cube_index, local_index, CUBE20_SEED_HALF_Q16);
                 core::ptr::write_volatile(vertices.add(base + local_index), vertex);
             }
         }
         for local_index in 0..TETRA10_VERTEX_COUNT {
-            let vertex = shell_canvas3d_seed_tetra_vertex(local_index);
+            let vertex =
+                canvas3d_cube::tetra_vertex(local_index, TETRA10_BASE_VERTEX, CUBE20_HALF_Q16);
             core::ptr::write_volatile(vertices.add(TETRA10_BASE_VERTEX + local_index), vertex);
         }
     }
@@ -2822,252 +2804,6 @@ fn shell_canvas3d_seed_visual_vertices(state: DirectRcsState) {
     intel::dma_flush(state.canvas3d_tmp_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
 }
 
-const ICO30_VERTS_Q16: [Canvas3dVec3Q16; ICO30_CORNER_COUNT] = [
-    Canvas3dVec3Q16 {
-        x: 0,
-        y: 0,
-        z: 32768,
-        pad: 0,
-    },
-    Canvas3dVec3Q16 {
-        x: 16384,
-        y: 10126,
-        z: 26510,
-        pad: 1,
-    },
-    Canvas3dVec3Q16 {
-        x: -16384,
-        y: 10126,
-        z: 26510,
-        pad: 2,
-    },
-    Canvas3dVec3Q16 {
-        x: 16384,
-        y: -10126,
-        z: 26510,
-        pad: 3,
-    },
-    Canvas3dVec3Q16 {
-        x: -16384,
-        y: -10126,
-        z: 26510,
-        pad: 4,
-    },
-    Canvas3dVec3Q16 {
-        x: 10126,
-        y: 26510,
-        z: 16384,
-        pad: 5,
-    },
-    Canvas3dVec3Q16 {
-        x: -10126,
-        y: 26510,
-        z: 16384,
-        pad: 6,
-    },
-    Canvas3dVec3Q16 {
-        x: 26510,
-        y: 16384,
-        z: 10126,
-        pad: 7,
-    },
-    Canvas3dVec3Q16 {
-        x: 0,
-        y: 32768,
-        z: 0,
-        pad: 8,
-    },
-    Canvas3dVec3Q16 {
-        x: -26510,
-        y: 16384,
-        z: 10126,
-        pad: 9,
-    },
-    Canvas3dVec3Q16 {
-        x: 26510,
-        y: 16384,
-        z: -10126,
-        pad: 10,
-    },
-    Canvas3dVec3Q16 {
-        x: 32768,
-        y: 0,
-        z: 0,
-        pad: 11,
-    },
-    Canvas3dVec3Q16 {
-        x: -26510,
-        y: 16384,
-        z: -10126,
-        pad: 12,
-    },
-    Canvas3dVec3Q16 {
-        x: -32768,
-        y: 0,
-        z: 0,
-        pad: 13,
-    },
-    Canvas3dVec3Q16 {
-        x: 10126,
-        y: 26510,
-        z: -16384,
-        pad: 14,
-    },
-    Canvas3dVec3Q16 {
-        x: -10126,
-        y: 26510,
-        z: -16384,
-        pad: 15,
-    },
-    Canvas3dVec3Q16 {
-        x: 16384,
-        y: 10126,
-        z: -26510,
-        pad: 16,
-    },
-    Canvas3dVec3Q16 {
-        x: -16384,
-        y: 10126,
-        z: -26510,
-        pad: 17,
-    },
-    Canvas3dVec3Q16 {
-        x: 16384,
-        y: -10126,
-        z: -26510,
-        pad: 18,
-    },
-    Canvas3dVec3Q16 {
-        x: -16384,
-        y: -10126,
-        z: -26510,
-        pad: 19,
-    },
-    Canvas3dVec3Q16 {
-        x: 0,
-        y: 0,
-        z: -32768,
-        pad: 20,
-    },
-    Canvas3dVec3Q16 {
-        x: 10126,
-        y: -26510,
-        z: 16384,
-        pad: 21,
-    },
-    Canvas3dVec3Q16 {
-        x: -10126,
-        y: -26510,
-        z: 16384,
-        pad: 22,
-    },
-    Canvas3dVec3Q16 {
-        x: 26510,
-        y: -16384,
-        z: 10126,
-        pad: 23,
-    },
-    Canvas3dVec3Q16 {
-        x: 0,
-        y: -32768,
-        z: 0,
-        pad: 24,
-    },
-    Canvas3dVec3Q16 {
-        x: -26510,
-        y: -16384,
-        z: 10126,
-        pad: 25,
-    },
-    Canvas3dVec3Q16 {
-        x: 26510,
-        y: -16384,
-        z: -10126,
-        pad: 26,
-    },
-    Canvas3dVec3Q16 {
-        x: 10126,
-        y: -26510,
-        z: -16384,
-        pad: 27,
-    },
-    Canvas3dVec3Q16 {
-        x: -10126,
-        y: -26510,
-        z: -16384,
-        pad: 28,
-    },
-    Canvas3dVec3Q16 {
-        x: -26510,
-        y: -16384,
-        z: -10126,
-        pad: 29,
-    },
-];
-
-const ICO60_EDGES: [(usize, usize); ICO60_EDGE_COUNT] = [
-    (0, 1),
-    (0, 2),
-    (0, 3),
-    (0, 4),
-    (5, 6),
-    (5, 1),
-    (5, 7),
-    (5, 8),
-    (6, 2),
-    (6, 9),
-    (6, 8),
-    (1, 3),
-    (1, 7),
-    (2, 4),
-    (2, 9),
-    (7, 10),
-    (7, 11),
-    (9, 12),
-    (9, 13),
-    (14, 15),
-    (14, 16),
-    (14, 10),
-    (14, 8),
-    (15, 17),
-    (15, 12),
-    (15, 8),
-    (16, 18),
-    (16, 10),
-    (17, 19),
-    (17, 12),
-    (20, 16),
-    (20, 17),
-    (20, 18),
-    (20, 19),
-    (21, 22),
-    (21, 3),
-    (21, 23),
-    (21, 24),
-    (22, 4),
-    (22, 25),
-    (22, 24),
-    (3, 23),
-    (4, 25),
-    (23, 26),
-    (26, 11),
-    (10, 11),
-    (27, 28),
-    (27, 18),
-    (27, 26),
-    (27, 24),
-    (28, 19),
-    (28, 29),
-    (28, 24),
-    (18, 26),
-    (19, 29),
-    (25, 29),
-    (25, 13),
-    (23, 11),
-    (12, 13),
-    (29, 13),
-];
-
 fn shell_canvas3d_seed_archaeology_vertices(state: DirectRcsState) {
     unsafe {
         core::ptr::write_bytes(state.clear_test_virt, 0, CANVAS3D_PROJECT_TEST_BYTES);
@@ -3075,167 +2811,12 @@ fn shell_canvas3d_seed_archaeology_vertices(state: DirectRcsState) {
         core::ptr::write_bytes(state.canvas3d_tmp_virt, 0, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
 
         let vertices = state.clear_test_virt as *mut Canvas3dVec3Q16;
-        for (index, vertex) in ICO30_VERTS_Q16.iter().copied().enumerate() {
-            let mut vertex = shell_canvas3d_scale_seed_vertex(vertex);
-            vertex.pad = index as i32;
-            core::ptr::write_volatile(vertices.add(index), vertex);
-        }
-        for (edge_index, &(a, b)) in ICO60_EDGES.iter().enumerate() {
-            let va = shell_canvas3d_scale_seed_vertex(ICO30_VERTS_Q16[a]);
-            let vb = shell_canvas3d_scale_seed_vertex(ICO30_VERTS_Q16[b]);
-            let out_index = ICO30_CORNER_COUNT + edge_index;
-            core::ptr::write_volatile(
-                vertices.add(out_index),
-                Canvas3dVec3Q16 {
-                    x: va.x + ((vb.x - va.x) / 2),
-                    y: va.y + ((vb.y - va.y) / 2),
-                    z: va.z + ((vb.z - va.z) / 2),
-                    pad: out_index as i32,
-                },
-            );
-        }
+        canvas3d_ico::write_vertices(vertices, CUBE20_SEED_SCALE);
+        let _triangle_count = canvas3d_ico::TRIANGLES.len();
     }
     intel::dma_flush(state.clear_test_virt, CANVAS3D_PROJECT_TEST_BYTES);
     intel::dma_flush(state.canvas3d_out_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
     intel::dma_flush(state.canvas3d_tmp_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
-}
-
-fn shell_canvas3d_scale_seed_vertex(vertex: Canvas3dVec3Q16) -> Canvas3dVec3Q16 {
-    Canvas3dVec3Q16 {
-        x: vertex.x.saturating_mul(CUBE20_SEED_SCALE),
-        y: vertex.y.saturating_mul(CUBE20_SEED_SCALE),
-        z: vertex.z.saturating_mul(CUBE20_SEED_SCALE),
-        pad: vertex.pad,
-    }
-}
-
-fn shell_canvas3d_seed_cube_vertex(cube_index: usize, local_index: usize) -> Canvas3dVec3Q16 {
-    let half = CUBE20_SEED_HALF_Q16;
-    let corners = [
-        Canvas3dVec3Q16 {
-            x: -half,
-            y: -half,
-            z: -half,
-            pad: 0,
-        },
-        Canvas3dVec3Q16 {
-            x: half,
-            y: -half,
-            z: -half,
-            pad: 1,
-        },
-        Canvas3dVec3Q16 {
-            x: -half,
-            y: half,
-            z: -half,
-            pad: 2,
-        },
-        Canvas3dVec3Q16 {
-            x: half,
-            y: half,
-            z: -half,
-            pad: 3,
-        },
-        Canvas3dVec3Q16 {
-            x: -half,
-            y: -half,
-            z: half,
-            pad: 4,
-        },
-        Canvas3dVec3Q16 {
-            x: half,
-            y: -half,
-            z: half,
-            pad: 5,
-        },
-        Canvas3dVec3Q16 {
-            x: -half,
-            y: half,
-            z: half,
-            pad: 6,
-        },
-        Canvas3dVec3Q16 {
-            x: half,
-            y: half,
-            z: half,
-            pad: 7,
-        },
-    ];
-    let mut vertex = if local_index < CUBE20_CORNER_COUNT {
-        corners[local_index]
-    } else {
-        let edge_sample = local_index - CUBE20_CORNER_COUNT;
-        let edge_index = edge_sample / CUBE20_EDGE_SAMPLE_COUNT;
-        let sample_index = edge_sample % CUBE20_EDGE_SAMPLE_COUNT;
-        let (a, b) = CUBE20_EDGES[edge_index];
-        let va = corners[a];
-        let vb = corners[b];
-        let step = (sample_index + 1) as i32;
-        let denom = (CUBE20_EDGE_SAMPLE_COUNT + 1) as i32;
-        Canvas3dVec3Q16 {
-            x: va.x + ((vb.x - va.x) * step) / denom,
-            y: va.y + ((vb.y - va.y) * step) / denom,
-            z: va.z + ((vb.z - va.z) * step) / denom,
-            pad: local_index as i32,
-        }
-    };
-
-    vertex.pad = (cube_index * CUBE20_VERTEX_COUNT + local_index) as i32;
-    vertex
-}
-
-fn shell_canvas3d_seed_tetra_vertex(local_index: usize) -> Canvas3dVec3Q16 {
-    let half = CUBE20_HALF_Q16;
-    let base_x = ((half as i64 * 56_756) / CANVAS3D_PROJECT_Q16_ONE as i64) as i32;
-    let base_y = -half / 2;
-    let corners = [
-        // Apex sits on the local y-axis; the base triangle centroid is x=0,z=0.
-        Canvas3dVec3Q16 {
-            x: 0,
-            y: half,
-            z: 0,
-            pad: 0,
-        },
-        Canvas3dVec3Q16 {
-            x: 0,
-            y: base_y,
-            z: half,
-            pad: 1,
-        },
-        Canvas3dVec3Q16 {
-            x: -base_x,
-            y: base_y,
-            z: -half / 2,
-            pad: 2,
-        },
-        Canvas3dVec3Q16 {
-            x: base_x,
-            y: base_y,
-            z: -half / 2,
-            pad: 3,
-        },
-    ];
-    let mut vertex = if local_index < TETRA10_CORNER_COUNT {
-        corners[local_index]
-    } else {
-        let edge_sample = local_index - TETRA10_CORNER_COUNT;
-        let edge_index = edge_sample / TETRA10_EDGE_SAMPLE_COUNT;
-        let sample_index = edge_sample % TETRA10_EDGE_SAMPLE_COUNT;
-        let (a, b) = TETRA10_EDGES[edge_index];
-        let va = corners[a];
-        let vb = corners[b];
-        let step = (sample_index + 1) as i32;
-        let denom = (TETRA10_EDGE_SAMPLE_COUNT + 1) as i32;
-        Canvas3dVec3Q16 {
-            x: va.x + ((vb.x - va.x) * step) / denom,
-            y: va.y + ((vb.y - va.y) * step) / denom,
-            z: va.z + ((vb.z - va.z) * step) / denom,
-            pad: local_index as i32,
-        }
-    };
-
-    vertex.pad = (TETRA10_BASE_VERTEX + local_index) as i32;
-    vertex
 }
 
 fn shell_canvas3d_write_pixel(
@@ -3335,27 +2916,11 @@ fn shell_canvas3d_stamp_rgba_dot(
 }
 
 fn shell_canvas3d_present_color(vertex_index: usize) -> u32 {
-    if vertex_index < CUBE20_VISUAL_VERTEX_COUNT {
-        CUBE20_PRESENT_COLORS[0]
-    } else {
-        0xFF30_D8FF
-    }
+    canvas3d_cube::present_color(vertex_index, CUBE20_VISUAL_VERTEX_COUNT)
 }
 
 fn shell_canvas3d_archaeology_present_color(vertex_index: usize) -> u32 {
-    if vertex_index < ICO30_CORNER_COUNT {
-        const CORNER_COLORS: [u32; 6] = [
-            0xFFFF_4FD8,
-            0xFFFF_D050,
-            0xFF53_FFD2,
-            0xFF60_9CFF,
-            0xFFE8_7CFF,
-            0xFFFFFFFF,
-        ];
-        CORNER_COLORS[vertex_index % CORNER_COLORS.len()]
-    } else {
-        0xFF6C_B7FF
-    }
+    canvas3d_ico::present_color(vertex_index)
 }
 
 fn shell_canvas3d_cpu_copy_projected_points_to_primary(

@@ -3,19 +3,20 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use libm::{ceilf, floorf, roundf};
 use spin::{Mutex, Once};
+mod canvas3d_cube;
+mod canvas3d_ico;
 mod test_gpgpu;
 
 pub(crate) use test_gpgpu::{
-    GpgpuCanvas3dUi2TextureFrame, GpgpuShellCube20ProjectResult, shell_cube6_plane_project_frame,
+    GpgpuCanvas3dUi2TextureFrame, GpgpuShellCube20ProjectResult, canvas3d_ico_project_frame,
+    canvas3d_ico_project_rect, canvas3d_ico_project_texture_frame, shell_cube6_plane_project_frame,
     shell_cube6_plane_project_once, shell_cube6_plane_project_overlay_frame,
     shell_cube6_plane_project_surface_frame, shell_cube20_project_spin,
     submit_canvas3d_clip_box_q16_once, submit_canvas3d_plane_fill_rgba8_once,
     submit_canvas3d_plane_patch_fill_cut_rgba8_once,
     submit_canvas3d_plane_patch_worklist_rgba8_once, submit_canvas3d_plane_sample_rgba8_once,
     submit_canvas3d_project_once, submit_canvas3d_transform_smoke_once,
-    ui2_canvas3d_archaeology_project_frame, ui2_canvas3d_archaeology_project_frame_in_rect,
-    ui2_canvas3d_archaeology_project_texture_frame, ui2_canvas3d_plane_patch_render_surface_frame,
-    ui2_canvas3d_plane_patch_texture_frame,
+    ui2_canvas3d_plane_patch_render_surface_frame, ui2_canvas3d_plane_patch_texture_frame,
 };
 
 pub(crate) const COPY_RECT_RGBA8_KERNEL_NAME: &str = "copy_rect_rgba8";
@@ -662,43 +663,16 @@ const CUBE20_PROJECT_DEFAULT_CADENCE_US: u64 = 100_000;
 const CUBE20_PROJECT_MIN_CADENCE_US: u64 = 100;
 const CUBE20_PROJECT_MAX_CADENCE_US: u64 = 200_000;
 const CUBE20_PROJECT_MAX_DURATION_MS: u64 = 60_000;
-const CUBE20_CORNER_COUNT: usize = 8;
-const CUBE20_EDGE_COUNT: usize = 12;
-const CUBE20_EDGE_SAMPLE_COUNT: usize = 1;
-const CUBE20_VERTEX_COUNT: usize =
-    CUBE20_CORNER_COUNT + CUBE20_EDGE_COUNT * CUBE20_EDGE_SAMPLE_COUNT;
-const CUBE20_INSTANCE_COUNT: usize = 1;
+const CUBE20_VERTEX_COUNT: usize = canvas3d_cube::CUBE_VERTEX_COUNT;
+const CUBE20_INSTANCE_COUNT: usize = canvas3d_cube::CUBE_INSTANCE_COUNT;
 const CUBE20_VISUAL_VERTEX_COUNT: usize = CUBE20_VERTEX_COUNT * CUBE20_INSTANCE_COUNT;
-const TETRA10_CORNER_COUNT: usize = 4;
-const TETRA10_EDGE_COUNT: usize = 6;
-const TETRA10_EDGE_SAMPLE_COUNT: usize = 1;
-const TETRA10_VERTEX_COUNT: usize =
-    TETRA10_CORNER_COUNT + TETRA10_EDGE_COUNT * TETRA10_EDGE_SAMPLE_COUNT;
+const TETRA10_VERTEX_COUNT: usize = canvas3d_cube::TETRA_VERTEX_COUNT;
 const TETRA10_BASE_VERTEX: usize = CUBE20_VISUAL_VERTEX_COUNT;
 const CANVAS3D_VISUAL_VERTEX_COUNT: usize = CUBE20_VISUAL_VERTEX_COUNT + TETRA10_VERTEX_COUNT;
-const ICO30_CORNER_COUNT: usize = 30;
-const ICO60_EDGE_COUNT: usize = 60;
-const ICO90_VERTEX_COUNT: usize = ICO30_CORNER_COUNT + ICO60_EDGE_COUNT;
+const ICO90_VERTEX_COUNT: usize = canvas3d_ico::VERTEX_COUNT;
 const CUBE20_HALF_Q16: i32 = CANVAS3D_PROJECT_Q16_ONE / 2;
-const CUBE20_SEED_SCALE: i32 = 2;
+const CUBE20_SEED_SCALE: i32 = canvas3d_cube::SEED_SCALE;
 const CUBE20_SEED_HALF_Q16: i32 = CUBE20_HALF_Q16 * CUBE20_SEED_SCALE;
-const CUBE20_PRESENT_COLORS: [u32; CUBE20_INSTANCE_COUNT] = [0xFFFF_3048];
-const CUBE20_EDGES: [(usize, usize); CUBE20_EDGE_COUNT] = [
-    (0, 1),
-    (1, 3),
-    (3, 2),
-    (2, 0),
-    (4, 5),
-    (5, 7),
-    (7, 6),
-    (6, 4),
-    (0, 4),
-    (1, 5),
-    (2, 6),
-    (3, 7),
-];
-const TETRA10_EDGES: [(usize, usize); TETRA10_EDGE_COUNT] =
-    [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)];
 const COPY_RECT_TEST_WIDTH: u32 = 4;
 const COPY_RECT_TEST_HEIGHT: u32 = 1;
 const COPY_RECT_TEST_PIXELS: usize =

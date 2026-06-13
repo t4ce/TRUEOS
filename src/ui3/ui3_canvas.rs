@@ -6,7 +6,7 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use crate::intel::LiveOverlayRect;
-use crate::intel::gpgpu::GpgpuRgba8Surface;
+use crate::intel::gpgpu::{GpgpuCanvas3dUi2TextureFrame, GpgpuRgba8Surface};
 use crate::intel::types::Rgba8;
 use crate::shell2::{
     CommandSessionInputResult, MatrixTarget, ShellBackend2, matrix_target_for_backend,
@@ -16,10 +16,33 @@ use crate::shell2::{
 
 const GPU_CANVAS_SLOT: &str = "Gid";
 const GPU_CANVAS_FRAME_MS: u64 = 33;
-const GPU_CANVAS_OVERLAY_X: u32 = 48;
-const GPU_CANVAS_OVERLAY_Y: u32 = 48;
 const GPU_CANVAS_OVERLAY_WIDTH: u32 = 192;
 const GPU_CANVAS_OVERLAY_HEIGHT: u32 = 192;
+const GPU_CANVAS_FALLBACK_X: u32 = 48;
+const GPU_CANVAS_FALLBACK_Y: u32 = 48;
+const GPU_CANVAS_CUBE_HALF_Q16: i32 = 32_768;
+
+#[derive(Copy, Clone)]
+enum GpuCanvas3dScene {
+    Cube,
+    Ico,
+}
+
+impl GpuCanvas3dScene {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Cube => "cube",
+            Self::Ico => "ico",
+        }
+    }
+
+    fn failure_hint(self) -> &'static str {
+        match self {
+            Self::Cube => "plane worklist artifact",
+            Self::Ico => "transform/project artifacts",
+        }
+    }
+}
 
 #[derive(Clone)]
 struct GpuCanvasSessionState {
@@ -96,27 +119,49 @@ pub(crate) fn live_overlay_preserve_rect(rects: &[LiveOverlayRect]) -> Option<Li
     if !session_running() {
         return None;
     }
-    let canvas = LiveOverlayRect::new(
-        GPU_CANVAS_OVERLAY_X,
-        GPU_CANVAS_OVERLAY_Y,
-        GPU_CANVAS_OVERLAY_WIDTH,
-        GPU_CANVAS_OVERLAY_HEIGHT,
-        Rgba8::new(0, 0, 0, 0),
-    );
-    rects
+    let canvas = current_canvas_rect();
+    if rects
         .iter()
         .all(|rect| !overlay_rects_intersect(canvas, *rect))
-        .then_some(canvas)
+    {
+        return Some(canvas);
+    }
+
+    // The cursor normally intersects the cursor-follow canvas. Preserve the
+    // canvas underneath, then let the live overlay draw cursor/menu rects over it.
+    Some(canvas)
 }
 
-fn canvas_rect() -> LiveOverlayRect {
+pub(crate) fn current_canvas_rect() -> LiveOverlayRect {
+    let (viewport_width, viewport_height) =
+        crate::intel::active_scanout_dimensions().unwrap_or((0, 0));
+    let (x, y) = canvas_origin_from_cursor(viewport_width, viewport_height)
+        .unwrap_or((GPU_CANVAS_FALLBACK_X, GPU_CANVAS_FALLBACK_Y));
     LiveOverlayRect::new(
-        GPU_CANVAS_OVERLAY_X,
-        GPU_CANVAS_OVERLAY_Y,
+        x,
+        y,
         GPU_CANVAS_OVERLAY_WIDTH,
         GPU_CANVAS_OVERLAY_HEIGHT,
         Rgba8::new(0, 0, 0, 0),
     )
+}
+
+fn canvas_origin_from_cursor(viewport_width: u32, viewport_height: u32) -> Option<(u32, u32)> {
+    if viewport_width == 0 || viewport_height == 0 {
+        return None;
+    }
+    let cursor = crate::ui3::ui3_hid::preferred_cursor_snapshot(viewport_width, viewport_height)?;
+    Some((
+        centered_origin(cursor.x_px, GPU_CANVAS_OVERLAY_WIDTH, viewport_width),
+        centered_origin(cursor.y_px, GPU_CANVAS_OVERLAY_HEIGHT, viewport_height),
+    ))
+}
+
+fn centered_origin(center: u32, size: u32, extent: u32) -> u32 {
+    if extent <= size {
+        return 0;
+    }
+    center.saturating_sub(size / 2).min(extent - size)
 }
 
 fn canvas_buffer() -> Option<GpuCanvasBuffer> {
@@ -145,10 +190,24 @@ fn canvas_buffer() -> Option<GpuCanvasBuffer> {
     Some(buffer)
 }
 
-pub(crate) fn submit_plane_draw(
+pub(crate) fn submit_canvas3d_cube(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
-    half_q16: i32,
+) -> Option<u64> {
+    submit_canvas3d_scene(spawner, io, GpuCanvas3dScene::Cube)
+}
+
+pub(crate) fn submit_canvas3d_ico(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+) -> Option<u64> {
+    submit_canvas3d_scene(spawner, io, GpuCanvas3dScene::Ico)
+}
+
+fn submit_canvas3d_scene(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    scene: GpuCanvas3dScene,
 ) -> Option<u64> {
     let active_target = matrix_target_for_backend(io);
     let target = switch_matrix_target_slot(&active_target, GPU_CANVAS_SLOT);
@@ -157,19 +216,20 @@ pub(crate) fn submit_plane_draw(
     print_matrix_target_line(
         &target,
         format!(
-            "ui3 canvas: starting cube6 plane worker half_q16={} cadence_ms={}",
-            half_q16, GPU_CANVAS_FRAME_MS
+            "ui3 canvas: starting canvas3d {} worker cadence_ms={}",
+            scene.name(),
+            GPU_CANVAS_FRAME_MS
         )
         .as_str(),
     );
     set_matrix_target_active(&target, true);
 
-    let spawn_token = match ui3_canvas_worker_task(target.clone(), session_id, half_q16) {
+    let spawn_token = match ui3_canvas_worker_task(target.clone(), session_id, scene) {
         Ok(token) => token,
         Err(_) => {
             session_finish(session_id);
             set_matrix_target_active(&target, false);
-            print_shell_line(io, "gpgpu plane draw: worker spawn failed");
+            print_shell_line(io, "gpgpu canvas3d: worker spawn failed");
             return None;
         }
     };
@@ -211,7 +271,7 @@ pub(crate) fn handle_session_input(
 }
 
 #[embassy_executor::task(pool_size = 5)]
-async fn ui3_canvas_worker_task(target: MatrixTarget, session_id: u64, half_q16: i32) {
+async fn ui3_canvas_worker_task(target: MatrixTarget, session_id: u64, scene: GpuCanvas3dScene) {
     let task_target = target.clone();
     async move {
         Timer::after(EmbassyDuration::from_millis(1)).await;
@@ -243,11 +303,9 @@ async fn ui3_canvas_worker_task(target: MatrixTarget, session_id: u64, half_q16:
             }
             crate::intel::dma_flush(buffer.virt, buffer.bytes);
 
-            match crate::intel::gpgpu::shell_cube6_plane_project_surface_frame(
-                frame, half_q16, surface,
-            ) {
+            match render_canvas3d_frame(scene, frame, buffer, surface) {
                 Some(result) => {
-                    let canvas = canvas_rect();
+                    let canvas = current_canvas_rect();
                     let presented = crate::intel::present_ui3_canvas_rgba(
                         canvas,
                         buffer.virt,
@@ -263,8 +321,9 @@ async fn ui3_canvas_worker_task(target: MatrixTarget, session_id: u64, half_q16:
                         print_matrix_target_line(
                             &task_target,
                             format!(
-                                "ui3 canvas: frame={} ok={} submitted={} presented={} elapsed_ms={} avg_submit_ms={} visible_faces={} angle={} surface={}x{} canvas={}x{}",
+                                "ui3 canvas: frame={} scene={} ok={} submitted={} presented={} elapsed_ms={} avg_submit_ms={} visible={} angle={} surface={}x{} canvas={}x{} dst={},{}",
                                 frame,
+                                scene.name(),
                                 result.ok as u8,
                                 result.submitted,
                                 presented,
@@ -276,6 +335,8 @@ async fn ui3_canvas_worker_task(target: MatrixTarget, session_id: u64, half_q16:
                                 result.primary_height,
                                 canvas.width,
                                 canvas.height,
+                                canvas.x,
+                                canvas.y,
                             )
                             .as_str(),
                         )
@@ -285,7 +346,11 @@ async fn ui3_canvas_worker_task(target: MatrixTarget, session_id: u64, half_q16:
                 None => {
                     print_matrix_target_line(
                         &task_target,
-                        "ui3 canvas: frame failed (check primary surface, iGPU claim, and plane worklist artifact)",
+                        format!(
+                            "ui3 canvas: frame failed (check primary surface, iGPU claim, and {})",
+                            scene.failure_hint()
+                        )
+                        .as_str(),
                     );
                 }
             }
@@ -301,4 +366,78 @@ async fn ui3_canvas_worker_task(target: MatrixTarget, session_id: u64, half_q16:
 
     session_finish(session_id);
     set_matrix_target_active(&target, false);
+}
+
+fn render_canvas3d_frame(
+    scene: GpuCanvas3dScene,
+    frame: u32,
+    buffer: GpuCanvasBuffer,
+    surface: GpgpuRgba8Surface,
+) -> Option<crate::intel::gpgpu::GpgpuShellCube20ProjectResult> {
+    match scene {
+        GpuCanvas3dScene::Cube => crate::intel::gpgpu::shell_cube6_plane_project_surface_frame(
+            frame,
+            GPU_CANVAS_CUBE_HALF_Q16,
+            surface,
+        ),
+        GpuCanvas3dScene::Ico => render_canvas3d_ico_frame(frame, buffer),
+    }
+}
+
+fn render_canvas3d_ico_frame(
+    frame: u32,
+    buffer: GpuCanvasBuffer,
+) -> Option<crate::intel::gpgpu::GpgpuShellCube20ProjectResult> {
+    let texture = crate::intel::gpgpu::canvas3d_ico_project_texture_frame(
+        frame,
+        GPU_CANVAS_OVERLAY_WIDTH,
+        GPU_CANVAS_OVERLAY_HEIGHT,
+    )?;
+    copy_texture_rgba_to_buffer(&texture, buffer)?;
+    Some(texture.result)
+}
+
+fn copy_texture_rgba_to_buffer(
+    texture: &GpgpuCanvas3dUi2TextureFrame,
+    buffer: GpuCanvasBuffer,
+) -> Option<()> {
+    if texture.width != GPU_CANVAS_OVERLAY_WIDTH || texture.height != GPU_CANVAS_OVERLAY_HEIGHT {
+        return None;
+    }
+    let row_pixels = buffer
+        .pitch_bytes
+        .checked_div(core::mem::size_of::<u32>() as u32)? as usize;
+    if row_pixels < texture.width as usize {
+        return None;
+    }
+
+    let src_row_bytes = (texture.width as usize).checked_mul(core::mem::size_of::<u32>())?;
+    let expected_bytes = src_row_bytes.checked_mul(texture.height as usize)?;
+    if texture.rgba.len() < expected_bytes {
+        return None;
+    }
+
+    let dst = buffer.virt.cast::<u32>();
+    for y in 0..texture.height as usize {
+        let src_row = y.checked_mul(src_row_bytes)?;
+        let dst_row = y.checked_mul(row_pixels)?;
+        for x in 0..texture.width as usize {
+            let src = src_row + x * 4;
+            let pixel = pack_rgba_bytes_as_bgra_u32(
+                texture.rgba[src],
+                texture.rgba[src + 1],
+                texture.rgba[src + 2],
+                texture.rgba[src + 3],
+            );
+            unsafe {
+                core::ptr::write_volatile(dst.add(dst_row + x), pixel);
+            }
+        }
+    }
+    crate::intel::dma_flush(buffer.virt, buffer.bytes);
+    Some(())
+}
+
+fn pack_rgba_bytes_as_bgra_u32(r: u8, g: u8, b: u8, a: u8) -> u32 {
+    u32::from(a) << 24 | u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)
 }
