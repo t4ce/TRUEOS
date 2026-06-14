@@ -21,6 +21,36 @@ const TAG_THEME_DEFAULTS = {
   b: {
     fontWeight: 'bold',
   },
+  h1: {
+    fontSizePx: 30,
+    lineHeightPx: 38,
+    fontWeight: 'bold',
+  },
+  h2: {
+    fontSizePx: 22,
+    lineHeightPx: 30,
+    fontWeight: 'bold',
+  },
+  h3: {
+    fontSizePx: 18,
+    lineHeightPx: 26,
+    fontWeight: 'bold',
+  },
+  h4: {
+    fontSizePx: 15,
+    lineHeightPx: 22,
+    fontWeight: 'bold',
+  },
+  h5: {
+    fontSizePx: 12,
+    lineHeightPx: 20,
+    fontWeight: 'bold',
+  },
+  h6: {
+    fontSizePx: 10,
+    lineHeightPx: 20,
+    fontWeight: 'bold',
+  },
   button: {
     display: 'inline-block',
     backgroundColor: '#e9ecef',

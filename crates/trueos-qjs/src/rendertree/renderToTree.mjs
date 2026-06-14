@@ -126,6 +126,28 @@ function layoutTextColor(node, inheritedTextColor) {
   return Number.isFinite(value) ? Math.max(0, Math.trunc(value) & 0xffffff) : inheritedTextColor;
 }
 
+function layoutTextStyle(node, inheritedTextStyle = null) {
+  const base = inheritedTextStyle && typeof inheritedTextStyle === 'object'
+    ? { ...inheritedTextStyle }
+    : {};
+  const own = node && node.textStyle && typeof node.textStyle === 'object' ? node.textStyle : null;
+  if (!own) return Object.keys(base).length > 0 ? base : null;
+  return { ...base, ...own };
+}
+
+function fontTierForPx(fontSizePx) {
+  const px = Number(fontSizePx);
+  if (!Number.isFinite(px) || px <= 0) return 'half';
+  if (px <= 10) return 'third';
+  if (px <= 15) return 'half';
+  if (px <= 24) return '1x';
+  return '2x';
+}
+
+function renderFontTierForTier(tier) {
+  return tier === '2x' ? '1x' : tier;
+}
+
 function isSummaryOpen(node) {
   const attrs = layoutAttrs(node);
   return attrs.open != null || attrs['data-details-open'] === '1';
@@ -200,14 +222,25 @@ function createUi3PaintPlan(layout, options = {}) {
   const summaryIcons = [];
   const hitBoxes = [];
 
-  const walk = (node, parentX = 0, parentY = 0, inheritedTextColor = defaultTextColor()) => {
+  const walk = (
+    node,
+    parentX = 0,
+    parentY = 0,
+    inheritedTextColor = defaultTextColor(),
+    inheritedTextStyle = null,
+  ) => {
     if (!node || typeof node !== 'object') return;
     const x = parentX + Number(node.x ?? 0);
     const y = parentY + Number(node.y ?? 0);
     const kind = String(node.kind ?? '');
     const textColor = layoutTextColor(node, inheritedTextColor);
+    const textStyle = layoutTextStyle(node, inheritedTextStyle);
 
     if (kind === 'text') {
+      const fontSizePx = Number(textStyle?.fontSizePx ?? 15);
+      const lineHeightPx = Number(textStyle?.lineHeightPx ?? node.height ?? 20);
+      const fontTier = String(textStyle?.fontTier ?? fontTierForPx(fontSizePx));
+      const fontRenderTier = String(textStyle?.fontRenderTier ?? renderFontTierForTier(fontTier));
       textRuns.push({
         key: String(node.key ?? ''),
         x,
@@ -218,6 +251,12 @@ function createUi3PaintPlan(layout, options = {}) {
         lines: Array.isArray(node.lines) ? node.lines.map((line) => String(line ?? '')) : undefined,
         preserveWhitespace: node.preserveWhitespace === true,
         textColor,
+        fontSizePx: Number.isFinite(fontSizePx) ? Math.max(1, Math.round(fontSizePx)) : 15,
+        lineHeightPx: Number.isFinite(lineHeightPx) ? Math.max(1, Math.round(lineHeightPx)) : 20,
+        fontTier,
+        fontRenderTier,
+        fontWeight: textStyle?.fontWeight != null ? String(textStyle.fontWeight) : undefined,
+        fontStyle: textStyle?.fontStyle != null ? String(textStyle.fontStyle) : undefined,
       });
       return;
     }
@@ -263,7 +302,7 @@ function createUi3PaintPlan(layout, options = {}) {
       }
     }
 
-    for (const child of node.children ?? []) walk(child, x, y, textColor);
+    for (const child of node.children ?? []) walk(child, x, y, textColor, textStyle);
   };
 
   walk(layout);
@@ -320,10 +359,25 @@ function widgetPaint(node) {
   return paint && typeof paint === 'object' && !Array.isArray(paint) ? { ...paint } : null;
 }
 
+function widgetTextStyle(node) {
+  const style = node && node.meta && node.meta.textStyle;
+  return style && typeof style === 'object' && !Array.isArray(style) ? { ...style } : null;
+}
+
 function withWidgetPaint(renderNode, widgetNode) {
   const paint = widgetPaint(widgetNode);
   if (paint && renderNode && typeof renderNode === 'object') renderNode.paint = paint;
   return renderNode;
+}
+
+function withWidgetTextStyle(renderNode, widgetNode) {
+  const textStyle = widgetTextStyle(widgetNode);
+  if (textStyle && renderNode && typeof renderNode === 'object') renderNode.textStyle = textStyle;
+  return renderNode;
+}
+
+function finishWidgetBlock(renderNode, widgetNode) {
+  return withWidgetTextStyle(withWidgetPaint(renderNode, widgetNode), widgetNode);
 }
 
 function temporalTagName(node, attrs) {
@@ -536,7 +590,7 @@ function detailsRenderNode(node, options) {
     }
   }
 
-  return withWidgetPaint(blockNode({
+  return finishWidgetBlock(blockNode({
     key,
     tagName: 'details',
     attrs,
@@ -598,7 +652,7 @@ function iframeRenderNode(node, options) {
     }
   }
 
-  return withWidgetPaint(blockNode({
+  return finishWidgetBlock(blockNode({
     key,
     tagName: 'iframe',
     attrs: stableObject(attrs),
@@ -642,7 +696,7 @@ export function widgetNodeToRenderNode(node, options = {}) {
       }
     }
   }
-  return withWidgetPaint(renderNode, node);
+  return finishWidgetBlock(renderNode, node);
 }
 
 export function widgetTreeToRenderNodes(widgetTree, options = {}) {
