@@ -15,28 +15,29 @@ use crate::r::keyboard::{
 };
 use crate::shell2::{ShellBackend2, ShellIo2};
 
-const UI2_SHELL_DEFAULT_FG: (u8, u8, u8) = (0xF1, 0xF4, 0xF8);
-const UI2_SHELL_DEFAULT_BG: (u8, u8, u8) = (0x0C, 0x10, 0x16);
+const UI3_SHELL_DEFAULT_FG: (u8, u8, u8) = (0xF1, 0xF4, 0xF8);
+const UI3_SHELL_DEFAULT_BG: (u8, u8, u8) = (0x0C, 0x10, 0x16);
+const UI3_SHELL_DEFAULT_LINE_WIDTH: usize = 140;
 
-pub(crate) struct Ui2ShellBackend;
+pub(crate) struct Shell2Ui3Backend;
 
-pub(crate) static UI2_SHELL_BACKEND: Ui2ShellBackend = Ui2ShellBackend;
+pub(crate) static UI3_SHELL_BACKEND: Shell2Ui3Backend = Shell2Ui3Backend;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct Ui2ShellCell {
+pub(crate) struct Ui3ShellCell {
     pub ch: char,
     pub fg: (u8, u8, u8),
     pub bg: (u8, u8, u8),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Ui2ShellScreenSnapshot {
+pub(crate) struct Ui3ShellScreenSnapshot {
     pub cols: u32,
     pub rows: u32,
     pub cursor_col: u32,
     pub cursor_row: u32,
     pub cursor_visible: bool,
-    pub cells: Vec<Ui2ShellCell>,
+    pub cells: Vec<Ui3ShellCell>,
 }
 
 #[derive(Clone, Copy)]
@@ -51,8 +52,8 @@ struct TerminalStyle {
 impl Default for TerminalStyle {
     fn default() -> Self {
         Self {
-            fg: UI2_SHELL_DEFAULT_FG,
-            bg: UI2_SHELL_DEFAULT_BG,
+            fg: UI3_SHELL_DEFAULT_FG,
+            bg: UI3_SHELL_DEFAULT_BG,
             bold: false,
             dim: false,
             invert: false,
@@ -79,7 +80,7 @@ struct TerminalState {
     scroll_bottom: usize,
     cursor_visible: bool,
     style: TerminalStyle,
-    cells: Vec<Ui2ShellCell>,
+    cells: Vec<Ui3ShellCell>,
     esc_state: EscapeState,
     csi_buf: Vec<u8>,
     osc_buf: Vec<u8>,
@@ -177,8 +178,8 @@ impl TerminalState {
         }
     }
 
-    fn snapshot(&self) -> Ui2ShellScreenSnapshot {
-        Ui2ShellScreenSnapshot {
+    fn snapshot(&self) -> Ui3ShellScreenSnapshot {
+        Ui3ShellScreenSnapshot {
             cols: self.cols as u32,
             rows: self.rows as u32,
             cursor_col: self.cursor_col as u32,
@@ -188,11 +189,11 @@ impl TerminalState {
         }
     }
 
-    fn blank_cell() -> Ui2ShellCell {
-        Ui2ShellCell {
+    fn blank_cell() -> Ui3ShellCell {
+        Ui3ShellCell {
             ch: ' ',
-            fg: UI2_SHELL_DEFAULT_FG,
-            bg: UI2_SHELL_DEFAULT_BG,
+            fg: UI3_SHELL_DEFAULT_FG,
+            bg: UI3_SHELL_DEFAULT_BG,
         }
     }
 
@@ -212,7 +213,7 @@ impl TerminalState {
         if self.style.invert {
             core::mem::swap(&mut fg, &mut bg);
         }
-        self.cells[idx] = Ui2ShellCell { ch, fg, bg };
+        self.cells[idx] = Ui3ShellCell { ch, fg, bg };
     }
 
     fn clear_line_range(&mut self, row: usize, start_col: usize, end_col_inclusive: usize) {
@@ -515,9 +516,9 @@ impl TerminalState {
                 }
                 27 => self.style.invert = false,
                 30..=37 => self.style.fg = ansi_basic_rgb((codes[idx] - 30) as u8),
-                39 => self.style.fg = UI2_SHELL_DEFAULT_FG,
+                39 => self.style.fg = UI3_SHELL_DEFAULT_FG,
                 40..=47 => self.style.bg = ansi_basic_rgb((codes[idx] - 40) as u8),
-                49 => self.style.bg = UI2_SHELL_DEFAULT_BG,
+                49 => self.style.bg = UI3_SHELL_DEFAULT_BG,
                 38 | 48 => {
                     let is_fg = codes[idx] == 38;
                     if let Some(mode) = codes.get(idx + 1).copied() {
@@ -560,20 +561,20 @@ impl TerminalState {
     }
 }
 
-struct Ui2ShellRuntime {
+struct Ui3ShellRuntime {
     window_id: u32,
     dirty_seq: u32,
     input_rx: VecDeque<u8>,
     screen: TerminalState,
 }
 
-impl Ui2ShellRuntime {
+impl Ui3ShellRuntime {
     fn new() -> Self {
         Self {
             window_id: 0,
             dirty_seq: 0,
             input_rx: VecDeque::new(),
-            screen: TerminalState::new(100, 12),
+            screen: TerminalState::new(UI3_SHELL_DEFAULT_LINE_WIDTH, 12),
         }
     }
 
@@ -582,11 +583,11 @@ impl Ui2ShellRuntime {
     }
 }
 
-static UI2_SHELL_RUNTIME: Once<Mutex<Ui2ShellRuntime>> = Once::new();
-static UI2_SHELL_RENDERED_SEQ: AtomicU32 = AtomicU32::new(0);
+static UI3_SHELL_RUNTIME: Once<Mutex<Ui3ShellRuntime>> = Once::new();
+static UI3_SHELL_RENDERED_SEQ: AtomicU32 = AtomicU32::new(0);
 
-fn runtime() -> &'static Mutex<Ui2ShellRuntime> {
-    UI2_SHELL_RUNTIME.call_once(|| Mutex::new(Ui2ShellRuntime::new()))
+fn runtime() -> &'static Mutex<Ui3ShellRuntime> {
+    UI3_SHELL_RUNTIME.call_once(|| Mutex::new(Ui3ShellRuntime::new()))
 }
 
 fn ansi_basic_rgb(idx: u8) -> (u8, u8, u8) {
@@ -647,8 +648,7 @@ fn push_bytes(bytes: &[u8]) {
     runtime.bump_dirty();
 }
 
-pub(crate) fn ui2_shell_attach_window(window_id: u32, cols: usize, rows: usize) {
-    crate::shell2::set_line_width_for_backend(&UI2_SHELL_BACKEND, cols);
+pub(crate) fn ui3_shell_attach_window(window_id: u32, rows: usize) {
     {
         let mut runtime = runtime().lock();
         let is_new_window = runtime.window_id != window_id;
@@ -656,7 +656,8 @@ pub(crate) fn ui2_shell_attach_window(window_id: u32, cols: usize, rows: usize) 
         if is_new_window {
             runtime.input_rx.clear();
         }
-        if runtime.screen.cols != cols.max(1) || runtime.screen.rows != rows.max(1) {
+        let cols = runtime.screen.cols.max(1);
+        if runtime.screen.rows != rows.max(1) {
             if is_new_window {
                 runtime.screen.resize(cols, rows);
             } else {
@@ -665,19 +666,33 @@ pub(crate) fn ui2_shell_attach_window(window_id: u32, cols: usize, rows: usize) 
         }
         runtime.bump_dirty();
     }
-    UI2_SHELL_RENDERED_SEQ.store(0, Ordering::Release);
-    crate::shell2::repaint_backend_screen(&UI2_SHELL_BACKEND);
+    UI3_SHELL_RENDERED_SEQ.store(0, Ordering::Release);
+    crate::shell2::repaint_backend_screen(&UI3_SHELL_BACKEND);
 }
 
-pub(crate) fn ui2_shell_mark_rendered(seq: u32) {
-    UI2_SHELL_RENDERED_SEQ.store(seq, Ordering::Release);
+pub(crate) fn ui3_shell_line_width() -> usize {
+    runtime().lock().screen.cols.max(1)
 }
 
-pub(crate) fn ui2_shell_last_rendered_seq() -> u32 {
-    UI2_SHELL_RENDERED_SEQ.load(Ordering::Acquire)
+pub(crate) fn ui3_shell_set_line_width(width: usize) {
+    let mut runtime = runtime().lock();
+    let rows = runtime.screen.rows.max(1);
+    runtime
+        .screen
+        .resize_preserving_contents(width.max(1), rows);
+    runtime.bump_dirty();
+    UI3_SHELL_RENDERED_SEQ.store(0, Ordering::Release);
 }
 
-pub(crate) fn ui2_shell_snapshot(window_id: u32) -> Option<(u32, Ui2ShellScreenSnapshot)> {
+pub(crate) fn ui3_shell_mark_rendered(seq: u32) {
+    UI3_SHELL_RENDERED_SEQ.store(seq, Ordering::Release);
+}
+
+pub(crate) fn ui3_shell_last_rendered_seq() -> u32 {
+    UI3_SHELL_RENDERED_SEQ.load(Ordering::Acquire)
+}
+
+pub(crate) fn ui3_shell_snapshot(window_id: u32) -> Option<(u32, Ui3ShellScreenSnapshot)> {
     let runtime = runtime().lock();
     if window_id == 0 || runtime.window_id != window_id {
         return None;
@@ -718,7 +733,7 @@ fn queue_key_sequence(window_id: u32, key_code: u16) -> bool {
     }
 }
 
-pub(crate) fn queue_ui2_keyboard_event(window_id: u32, event: TrueosKeyboardOutputEvent) -> bool {
+pub(crate) fn queue_ui3_keyboard_event(window_id: u32, event: TrueosKeyboardOutputEvent) -> bool {
     const CTRL_MOD_MASK: u8 = (1 << 0) | (1 << 4);
     if (event.modifiers & CTRL_MOD_MASK) != 0 && matches!(event.codepoint, 3 | 67 | 99) {
         return queue_input_bytes(window_id, b"\x03");
@@ -737,7 +752,7 @@ pub(crate) fn queue_ui2_keyboard_event(window_id: u32, event: TrueosKeyboardOutp
     }
 }
 
-impl ShellIo2 for Ui2ShellBackend {
+impl ShellIo2 for Shell2Ui3Backend {
     fn raw_write_str(&self, s: &str) {
         push_bytes(s.as_bytes());
     }
@@ -764,7 +779,7 @@ impl ShellIo2 for Ui2ShellBackend {
     }
 }
 
-impl ShellBackend2 for Ui2ShellBackend {
+impl ShellBackend2 for Shell2Ui3Backend {
     fn init(&self) {}
 
     fn read_byte(&self) -> Option<u8> {

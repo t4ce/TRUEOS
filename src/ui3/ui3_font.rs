@@ -12,6 +12,7 @@ const UI3_GRADIENT_DESC_MAX: usize = UI3_PAINTED_BOX_MAX * UI3_GRADIENT_DESCS_PE
 const UI3_SUMMARY_ICON_CLOSED: char = '\u{25B6}';
 const UI3_SUMMARY_ICON_OPEN: char = '\u{1F53D}';
 const UI3_SUMMARY_ICON_X_PAD: f32 = 4.0;
+const UI3_CHOICE_CONTROL_SIZE: f32 = 64.0;
 
 #[derive(Debug, Default)]
 pub(crate) struct Ui3FontScratch {
@@ -119,6 +120,14 @@ pub(crate) fn draw_paint_plan_primary(
         &mut scratch.placements,
         &mut collect,
     );
+    collect_paint_plan_choice_controls(
+        plan,
+        scene.scroll_y,
+        scene,
+        &scratch.layout_adjustments,
+        &mut scratch.placements,
+        &mut collect,
+    );
     collect_paint_plan_text_placements(
         plan,
         scene.scroll_y,
@@ -175,6 +184,14 @@ pub(crate) fn draw_paint_plan_backend_band(
         &mut gradient_collect,
     );
     collect_paint_plan_summary_icons(
+        plan,
+        scene.scroll_y,
+        scene,
+        &scratch.layout_adjustments,
+        &mut scratch.placements,
+        &mut collect,
+    );
+    collect_paint_plan_choice_controls(
         plan,
         scene.scroll_y,
         scene,
@@ -1040,6 +1057,41 @@ fn collect_paint_plan_summary_icons(
     }
 }
 
+fn collect_paint_plan_choice_controls(
+    plan: &Value,
+    scroll_y: f32,
+    scene: Ui3FontScene,
+    adjustments: &[Ui3LayoutAdjustment],
+    placements: &mut Vec<crate::intel::gpgpu::GpgpuSprite64Placement>,
+    stats: &mut Ui3TextCollectStats,
+) {
+    let Some(controls) = plan.get("choiceControls").and_then(Value::as_array) else {
+        return;
+    };
+    for control in controls {
+        if placements.len() >= UI3_TEXT_PLACEMENT_MAX {
+            stats.placement_cap_hit = true;
+            break;
+        }
+        let y_doc = json_f32_field(control, "y").unwrap_or(0.0);
+        push_choice_control_placement_resolved(
+            json_f32_field(control, "x").unwrap_or(0.0),
+            y_doc + layout_shift_for_y(y_doc, adjustments) - scroll_y,
+            json_f32_field(control, "width").unwrap_or(0.0),
+            json_f32_field(control, "height").unwrap_or(0.0),
+            control
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("checkbox"),
+            json_bool_field(control, "checked").unwrap_or(false),
+            json_bool_field(control, "indeterminate").unwrap_or(false),
+            scene,
+            placements,
+            stats,
+        );
+    }
+}
+
 fn collect_paint_plan_text_placements(
     plan: &Value,
     scroll_y: f32,
@@ -1265,6 +1317,42 @@ fn push_summary_icon_placement_resolved(
     placements.push(crate::intel::gpgpu::GpgpuSprite64Placement::src_over(slot, dst_x, dst_y));
 }
 
+fn push_choice_control_placement_resolved(
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    control_type: &str,
+    checked: bool,
+    indeterminate: bool,
+    scene: Ui3FontScene,
+    placements: &mut Vec<crate::intel::gpgpu::GpgpuSprite64Placement>,
+    stats: &mut Ui3TextCollectStats,
+) {
+    if placements.len() >= UI3_TEXT_PLACEMENT_MAX {
+        stats.placement_cap_hit = true;
+        return;
+    }
+    let Some(slot) = choice_control_slot(control_type, checked, indeterminate) else {
+        return;
+    };
+    let dst_x = floor_i32(x + (width - UI3_CHOICE_CONTROL_SIZE) * 0.5);
+    let dst_y = floor_i32(y + (height - UI3_CHOICE_CONTROL_SIZE) * 0.5);
+    let fallback_max_x = scene
+        .viewport_width
+        .saturating_sub(crate::intel::gpgpu::SPRITE64_WORKLIST_CELL_PIXELS)
+        as i32;
+    let fallback_max_y = scene
+        .viewport_height
+        .saturating_sub(crate::intel::gpgpu::SPRITE64_WORKLIST_CELL_PIXELS)
+        as i32;
+    if dst_x < 0 || dst_x > fallback_max_x || dst_y < 0 || dst_y > fallback_max_y {
+        stats.clipped = stats.clipped.saturating_add(1);
+        return;
+    }
+    placements.push(crate::intel::gpgpu::GpgpuSprite64Placement::src_over(slot, dst_x, dst_y));
+}
+
 fn summary_icon_slot(open: bool) -> Option<u16> {
     let primary = if open {
         UI3_SUMMARY_ICON_OPEN
@@ -1276,6 +1364,24 @@ fn summary_icon_slot(open: bool) -> Option<u16> {
             crate::ui3::althlasfont::twemoji::twemoji_lookup_glyph_region(UI3_SUMMARY_ICON_CLOSED)
         })
         .map(|region| region.slot)
+}
+
+fn choice_control_slot(control_type: &str, checked: bool, indeterminate: bool) -> Option<u16> {
+    let is_radio = control_type == "radio";
+    let glyphs: &[char] = if is_radio {
+        if checked {
+            &['\u{1F518}', '\u{1F535}', '\u{26AB}']
+        } else {
+            &['\u{1F535}', '\u{26AA}', '\u{25CB}']
+        }
+    } else if checked || indeterminate {
+        &['\u{2611}', '\u{2705}', '\u{2714}', '\u{1F7E6}']
+    } else {
+        &['\u{1F532}', '\u{1F7E6}', '\u{25FB}']
+    };
+    glyphs.iter().find_map(|ch| {
+        crate::ui3::althlasfont::twemoji::twemoji_lookup_glyph_region(*ch).map(|region| region.slot)
+    })
 }
 
 fn push_solid_gradient_rect(

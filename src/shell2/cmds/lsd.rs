@@ -30,17 +30,17 @@ fn run_lsd(io: &'static dyn ShellBackend2, args: Vec<String>) -> trueos_io::Resu
     )
 }
 
-fn strip_table_flag(rest: &str) -> (bool, Vec<String>) {
+fn strip_table_flag(rest: &str) -> Result<(bool, Vec<String>), &'static str> {
     let mut table = false;
     let mut args = vec![String::from("lsd")];
 
-    for raw in rest.split_whitespace() {
+    for raw in parse_args(rest)? {
         if raw == "-T" || raw == "--table" {
             table = true;
             continue;
         }
 
-        if let Some(flags) = raw.strip_prefix('-')
+        if let Some(flags) = raw.as_str().strip_prefix('-')
             && !flags.starts_with('-')
             && flags.chars().any(|ch| ch == 'T')
         {
@@ -53,10 +53,60 @@ fn strip_table_flag(rest: &str) -> (bool, Vec<String>) {
             continue;
         }
 
-        args.push(String::from(raw));
+        args.push(raw);
     }
 
-    (table, args)
+    Ok((table, args))
+}
+
+fn parse_args(rest: &str) -> Result<Vec<String>, &'static str> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+
+    for ch in rest.trim().chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            } else {
+                current.push(ch);
+            }
+            continue;
+        }
+        if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+            continue;
+        }
+        if ch.is_whitespace() {
+            if !current.is_empty() {
+                args.push(current);
+                current = String::new();
+            }
+            continue;
+        }
+        current.push(ch);
+    }
+
+    if quote.is_some() {
+        return Err("unterminated quote");
+    }
+    if escaped {
+        current.push('\\');
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    Ok(args)
 }
 
 fn run_lsd_table(io: &'static dyn ShellBackend2, args: Vec<String>) -> trueos_io::Result<()> {
@@ -95,15 +145,39 @@ fn run_lsd_table(io: &'static dyn ShellBackend2, args: Vec<String>) -> trueos_io
 }
 
 fn first_path_arg(args: &[String]) -> Option<String> {
-    args.iter()
-        .skip(1)
-        .find(|arg| !arg.starts_with('-'))
-        .cloned()
+    let mut skip_next = false;
+    for arg in args.iter().skip(1) {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        match arg.as_str() {
+            "--color" | "--size" | "--permission" | "--sort" | "--group-dirs" | "--depth" => {
+                skip_next = true;
+            }
+            raw if raw.starts_with('-') => {}
+            _ => return Some(arg.clone()),
+        }
+    }
+    None
 }
 
 pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    let (table, args) = strip_table_flag(rest);
+    let (mut table, args) = match strip_table_flag(rest) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            print_shell_line(io, alloc::format!("lsd: {}", err).as_str());
+            return ParseOutcome::Handled;
+        }
+    };
     let display_path = first_path_arg(args.as_slice());
+    if args
+        .iter()
+        .skip(1)
+        .any(|arg| matches!(arg.as_str(), "help" | "-help" | "--help" | "-h" | "--version"))
+    {
+        table = false;
+    }
 
     let result = if table {
         run_lsd_table(io, args)

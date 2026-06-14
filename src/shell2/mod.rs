@@ -23,12 +23,12 @@ mod shell2_surf;
 mod term_style;
 #[allow(unused_imports)]
 pub(crate) use crate::shell2::backends::{
-    CONTAINER_SHELL_BACKEND, NET_TCP_SHELL_BACKEND, UART1_COM1_BACKEND, UI2_SHELL_BACKEND,
-    Ui2ShellCell, Ui2ShellScreenSnapshot, container_shell_drain_output,
+    CONTAINER_SHELL_BACKEND, NET_TCP_SHELL_BACKEND, UART1_COM1_BACKEND, UI3_SHELL_BACKEND,
+    Ui3ShellCell, Ui3ShellScreenSnapshot, container_shell_drain_output,
     container_shell_read_output_byte, container_shell_submit_input, crlf,
-    queue_ui2_keyboard_event as queue_ui2_shell_keyboard_event, uart1_com1,
-    ui2_shell_attach_window, ui2_shell_last_rendered_seq, ui2_shell_mark_rendered,
-    ui2_shell_snapshot,
+    queue_ui3_keyboard_event as queue_ui3_shell_keyboard_event, uart1_com1,
+    ui3_shell_attach_window, ui3_shell_last_rendered_seq, ui3_shell_line_width,
+    ui3_shell_mark_rendered, ui3_shell_set_line_width, ui3_shell_snapshot,
 };
 pub(crate) use interface::{ShellBackend2, ShellIo2};
 use shell2_apps::AppsPromptMode;
@@ -46,7 +46,7 @@ const FUNCTION_KEY_RGB: (u8, u8, u8) = (255, 255, 255);
 const SYSTEM_TEXT_RGB: (u8, u8, u8) = (60, 183, 161);
 pub(crate) const OUTPUT_UART1_MASK: u8 = 1 << 0;
 pub(crate) const OUTPUT_NET_TCP_MASK: u8 = 1 << 1;
-pub(crate) const OUTPUT_UI2_MASK: u8 = 1 << 2;
+pub(crate) const OUTPUT_UI3_MASK: u8 = 1 << 2;
 pub(crate) const OUTPUT_CONTAINER_MASK: u8 = 1 << 3;
 const SECTION_STATUS_TEXT: &str = "t4ce is with you";
 const SECTION_STATUS_HOLD_MS: u64 = 1000;
@@ -54,6 +54,9 @@ const SECTION_RAINBOW_FRAME_MS: u64 = 120;
 const SECTION_RAINBOW_COLORS: [u8; 8] = [199, 208, 227, 121, 51, 39, 99, 201];
 const STATUS_NORMAL_RGB: (u8, u8, u8) = (255, 255, 255);
 const VMX_CONSOLE_COMMANDS: &str = "echo hostname homedir env disc thread help exit";
+const BANNER_TITLE_TEXT: &str = "TRUE OS";
+const BANNER_CLOCK_WIDTH: usize = 5;
+const BANNER_GROUP_GAP_WIDTH: usize = 1;
 
 static REGISTERED_OUTPUTS: AtomicU8 = AtomicU8::new(0);
 
@@ -107,6 +110,16 @@ impl ShellMode2 {
             Self::Qjs => "F3",
             Self::Cmd => "F4",
             Self::Lumen => "F5",
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Surf => "surf",
+            Self::Apps => "apps",
+            Self::Qjs => "qjs",
+            Self::Cmd => "cmd",
+            Self::Lumen => "lumen",
         }
     }
 }
@@ -216,25 +229,13 @@ impl<'a> AlignedWriter<'a> {
         if active_matrix_vm_id(output_mask).is_some() {
             self.right_text(BANNER_ROW, self.vmx_console_text().as_str());
         } else {
-            self.right_text(BANNER_ROW, self.main_mode_text(mode).as_str());
+            self.right_text(BANNER_ROW, self.banner_right_text(output_mask, mode).as_str());
         }
     }
 
     fn banner_left(&self, output_mask: u8, time_text: &str) {
         self.move_to(BANNER_ROW, 1);
-        self.io.raw_write_str("TRUE OS ");
-        let active_slot = matrix::active_slot_id(output_mask);
-        let mut slot_label = AllocString::from("§");
-        if !active_slot.is_empty() {
-            slot_label.push_str(active_slot.as_str());
-        }
-        let styled = alloc::format!(
-            "{}",
-            term_style::paint(slot_label.as_str())
-                .bold()
-                .color(STATUS_SELECTED_RGB)
-        );
-        self.io.raw_write_str(styled.as_str());
+        self.io.raw_write_str(BANNER_TITLE_TEXT);
         self.io.raw_write_char(' ');
         self.io.raw_write_str(time_text);
         if active_matrix_vm_id(output_mask).is_some() {
@@ -301,20 +302,33 @@ impl<'a> AlignedWriter<'a> {
         text
     }
 
+    fn banner_right_text(&self, output_mask: u8, mode: ShellMode2) -> AllocString {
+        let mut text = self.active_slot_label(output_mask);
+        if !text.is_empty() {
+            self.push_plain(&mut text, " ");
+        }
+        self.push_plain(&mut text, self.main_mode_text(mode).as_str());
+        text
+    }
+
+    fn active_slot_label(&self, output_mask: u8) -> AllocString {
+        let active_slot = matrix::active_slot_id(output_mask);
+        let mut label = AllocString::from("§");
+        if !active_slot.is_empty() {
+            label.push_str(active_slot.as_str());
+        }
+        alloc::format!(
+            "{}",
+            term_style::paint(label.as_str())
+                .bold()
+                .color(STATUS_SELECTED_RGB)
+        )
+    }
+
     fn push_mode_choice(&self, out: &mut AllocString, mode: ShellMode2, selected: bool) {
         self.push_function_key_label(out, alloc::format!("[{}]", mode.function_key()).as_str());
         self.push_plain(out, " ");
-        self.push_mode_token(
-            out,
-            match mode {
-                ShellMode2::Surf => "surf",
-                ShellMode2::Apps => "apps",
-                ShellMode2::Qjs => "qjs",
-                ShellMode2::Cmd => "cmd",
-                ShellMode2::Lumen => "lumen",
-            },
-            selected,
-        );
+        self.push_mode_token(out, mode.label(), selected);
     }
 
     fn surf_status(&self, surf_prefix: SurfPromptPrefix) {
@@ -549,9 +563,9 @@ fn register_output(io: &'static dyn ShellIo2) {
         REGISTERED_OUTPUTS.fetch_or(OUTPUT_NET_TCP_MASK, Ordering::Relaxed);
         return;
     }
-    let ui2_io: &'static dyn ShellIo2 = &UI2_SHELL_BACKEND;
-    if same_backend_io(io, ui2_io) {
-        REGISTERED_OUTPUTS.fetch_or(OUTPUT_UI2_MASK, Ordering::Relaxed);
+    let ui3_io: &'static dyn ShellIo2 = &UI3_SHELL_BACKEND;
+    if same_backend_io(io, ui3_io) {
+        REGISTERED_OUTPUTS.fetch_or(OUTPUT_UI3_MASK, Ordering::Relaxed);
         return;
     }
 
@@ -562,11 +576,83 @@ fn register_output(io: &'static dyn ShellIo2) {
 }
 
 pub(crate) fn line_width_for_backend(io: &'static dyn ShellBackend2) -> usize {
-    matrix::active_line_width(output_target_for_backend(io))
+    line_width_for_output(output_target_for_backend(io))
 }
 
 pub(crate) fn set_line_width_for_backend(io: &'static dyn ShellBackend2, width: usize) {
-    matrix::set_active_line_width(output_target_for_backend(io), width.max(1));
+    set_line_width_for_output(output_target_for_backend(io), width);
+}
+
+pub(crate) fn minimum_line_width_for_backend(io: &'static dyn ShellBackend2) -> usize {
+    minimum_line_width_for_output(output_target_for_backend(io))
+}
+
+fn line_width_for_output(output_mask: u8) -> usize {
+    let min_width = minimum_line_width_for_output(output_mask);
+    if (output_mask & OUTPUT_UI3_MASK) != 0 {
+        ui3_shell_line_width().max(min_width)
+    } else {
+        matrix::active_line_width(output_mask).max(min_width)
+    }
+}
+
+fn set_line_width_for_output(output_mask: u8, width: usize) {
+    let width = width.max(minimum_line_width_for_output(output_mask));
+    if (output_mask & OUTPUT_UI3_MASK) != 0 {
+        ui3_shell_set_line_width(width.max(1));
+    } else {
+        matrix::set_active_line_width(output_mask, width.max(1));
+    }
+}
+
+fn minimum_line_width_for_output(output_mask: u8) -> usize {
+    let mut left = ecma48::visible_width(BANNER_TITLE_TEXT)
+        .saturating_add(1)
+        .saturating_add(BANNER_CLOCK_WIDTH);
+    if active_matrix_vm_id(output_mask).is_some() {
+        left = left
+            .saturating_add(1)
+            .saturating_add(ecma48::visible_width("VMX"));
+    }
+    left.saturating_add(BANNER_GROUP_GAP_WIDTH)
+        .saturating_add(banner_right_visible_width(output_mask))
+}
+
+fn banner_right_visible_width(output_mask: u8) -> usize {
+    if active_matrix_vm_id(output_mask).is_some() {
+        return ecma48::visible_width("vmx")
+            .saturating_add(1)
+            .saturating_add(ecma48::visible_width(VMX_CONSOLE_COMMANDS));
+    }
+    active_slot_label_visible_width(output_mask)
+        .saturating_add(1)
+        .saturating_add(main_mode_visible_width())
+}
+
+fn active_slot_label_visible_width(output_mask: u8) -> usize {
+    let active_slot = matrix::active_slot_id(output_mask);
+    1usize.saturating_add(ecma48::visible_width(active_slot.as_str()))
+}
+
+fn main_mode_visible_width() -> usize {
+    let modes = [
+        ShellMode2::Surf,
+        ShellMode2::Apps,
+        ShellMode2::Qjs,
+        ShellMode2::Cmd,
+        ShellMode2::Lumen,
+    ];
+    let mut width = 0usize;
+    for (idx, mode) in modes.iter().copied().enumerate() {
+        if idx != 0 {
+            width = width.saturating_add(ecma48::visible_width(" - "));
+        }
+        width = width
+            .saturating_add(mode.function_key().len())
+            .saturating_add(3)
+            .saturating_add(ecma48::visible_width(mode.label()));
+    }
+    width
 }
 
 pub(crate) fn output_target_for_backend(io: &'static dyn ShellBackend2) -> u8 {
@@ -580,9 +666,9 @@ pub(crate) fn output_target_for_backend(io: &'static dyn ShellBackend2) -> u8 {
         return OUTPUT_NET_TCP_MASK;
     }
 
-    let ui2_io: &'static dyn ShellIo2 = &UI2_SHELL_BACKEND;
-    if same_backend_task(io, ui2_io) {
-        return OUTPUT_UI2_MASK;
+    let ui3_io: &'static dyn ShellIo2 = &UI3_SHELL_BACKEND;
+    if same_backend_task(io, ui3_io) {
+        return OUTPUT_UI3_MASK;
     }
 
     let container_io: &'static dyn ShellIo2 = &CONTAINER_SHELL_BACKEND;
@@ -709,9 +795,9 @@ fn output_mask_for_io(io: &dyn ShellIo2) -> u8 {
         return OUTPUT_NET_TCP_MASK;
     }
 
-    let ui2_io: &'static dyn ShellIo2 = &UI2_SHELL_BACKEND;
-    if same_backend_io(io, ui2_io) {
-        return OUTPUT_UI2_MASK;
+    let ui3_io: &'static dyn ShellIo2 = &UI3_SHELL_BACKEND;
+    if same_backend_io(io, ui3_io) {
+        return OUTPUT_UI3_MASK;
     }
 
     let container_io: &'static dyn ShellIo2 = &CONTAINER_SHELL_BACKEND;
@@ -746,8 +832,8 @@ pub(crate) fn raw_write_matrix_target(target: &MatrixTarget, bytes: &[u8]) -> us
 
     let io: &'static dyn ShellIo2 = if (target.output_mask & OUTPUT_NET_TCP_MASK) != 0 {
         &NET_TCP_SHELL_BACKEND
-    } else if (target.output_mask & OUTPUT_UI2_MASK) != 0 {
-        &UI2_SHELL_BACKEND
+    } else if (target.output_mask & OUTPUT_UI3_MASK) != 0 {
+        &UI3_SHELL_BACKEND
     } else if (target.output_mask & OUTPUT_CONTAINER_MASK) != 0 {
         &CONTAINER_SHELL_BACKEND
     } else {
@@ -768,8 +854,8 @@ pub(crate) fn raw_write_matrix_target(target: &MatrixTarget, bytes: &[u8]) -> us
 pub(crate) fn read_matrix_target_byte(target: &MatrixTarget) -> Option<u8> {
     if (target.output_mask & OUTPUT_NET_TCP_MASK) != 0 {
         NET_TCP_SHELL_BACKEND.read_byte()
-    } else if (target.output_mask & OUTPUT_UI2_MASK) != 0 {
-        UI2_SHELL_BACKEND.read_byte()
+    } else if (target.output_mask & OUTPUT_UI3_MASK) != 0 {
+        UI3_SHELL_BACKEND.read_byte()
     } else if (target.output_mask & OUTPUT_CONTAINER_MASK) != 0 {
         CONTAINER_SHELL_BACKEND.read_byte()
     } else {
@@ -785,7 +871,7 @@ pub(crate) fn repaint_backend_screen(io: &'static dyn ShellBackend2) {
     register_output(io);
     let out = AlignedWriter::new(io);
     let output_mask = output_target_for_backend(io);
-    out.set_line_width(matrix::active_line_width(output_mask));
+    out.set_line_width(line_width_for_output(output_mask));
     out.clear_screen_home();
     out.reset_scroll_region();
 
@@ -1121,7 +1207,7 @@ fn apply_matrix_operator_and_refresh(
 ) -> VecDeque<TranscriptEntry> {
     handle_matrix_operator(io, submitted);
     *mode = ShellMode2::Cmd;
-    out.set_line_width(matrix::active_line_width(output_mask));
+    out.set_line_width(line_width_for_output(output_mask));
     out.banner(output_mask, *mode, minute_text);
     out.mode_status(
         output_mask,
@@ -1234,7 +1320,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     register_output(io);
     let out = AlignedWriter::new(io);
     let output_mask = output_target_for_backend(io);
-    out.set_line_width(matrix::active_line_width(output_mask));
+    out.set_line_width(line_width_for_output(output_mask));
 
     out.clear_screen_home();
     out.reset_scroll_region();
@@ -1664,7 +1750,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         if submitted_raw.starts_with('§') {
                             handle_matrix_operator(io, submitted);
                             mode = ShellMode2::Cmd;
-                            out.set_line_width(matrix::active_line_width(output_mask));
+                            out.set_line_width(line_width_for_output(output_mask));
                             out.banner(output_mask, mode, minute_text.as_str());
                             out.mode_status(
                                 output_mask,
@@ -1695,8 +1781,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 submitted,
                             ) {
                                 HandleSubmitResult::SetLineWidth(width) => {
-                                    out.set_line_width(width);
-                                    matrix::set_active_line_width(output_mask, width);
+                                    set_line_width_for_output(output_mask, width);
+                                    out.set_line_width(line_width_for_output(output_mask));
                                     out.banner(output_mask, mode, minute_text.as_str());
                                     out.mode_status(
                                         output_mask,

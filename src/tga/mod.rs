@@ -3,6 +3,8 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering, fence};
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
+// this connected to the FPGA-based "TGA" adapter in the FPGA lab, which implements a tiny MMIO protocol
+
 use crate::pci::PciDevice;
 
 const TGA_VENDOR_ID: u16 = 0x22c2; // DEC vendor:

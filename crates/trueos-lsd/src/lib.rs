@@ -20,7 +20,48 @@ const MIN_CELL_WIDTH: usize = 18;
 struct Options {
     long: bool,
     tree: bool,
+    oneline: bool,
     width: usize,
+    color: bool,
+    directory_only: bool,
+    classify: bool,
+    header: bool,
+    depth: Option<usize>,
+    size: SizeStyle,
+    permission: PermissionStyle,
+    sort: SortColumn,
+    reverse: bool,
+    group_dirs: DirGrouping,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SizeStyle {
+    Default,
+    Short,
+    Bytes,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PermissionStyle {
+    Rwx,
+    Octal,
+    Attributes,
+    Disable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SortColumn {
+    Name,
+    Size,
+    Extension,
+    None,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DirGrouping {
+    None,
+    First,
+    Last,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -56,7 +97,18 @@ impl Options {
         Self {
             long: false,
             tree: false,
+            oneline: false,
             width: DEFAULT_GRID_WIDTH,
+            color: true,
+            directory_only: false,
+            classify: false,
+            header: false,
+            depth: None,
+            size: SizeStyle::Default,
+            permission: PermissionStyle::Rwx,
+            sort: SortColumn::Name,
+            reverse: false,
+            group_dirs: DirGrouping::None,
         }
     }
 }
@@ -112,6 +164,12 @@ fn path_depth(path: &str) -> usize {
     path.split('/')
         .filter(|segment| !segment.is_empty())
         .count()
+}
+
+fn basename(path: &str) -> &str {
+    path.rsplit('/')
+        .find(|segment| !segment.is_empty())
+        .unwrap_or(".")
 }
 
 fn is_directory_marker(name: &str) -> bool {
@@ -233,7 +291,11 @@ fn tree_entries(prefix: &str) -> io::Result<Vec<Entry>> {
         .collect())
 }
 
-fn colorize(text: &str, kind: kfs::FsEntryKind) -> String {
+fn colorize(text: &str, kind: kfs::FsEntryKind, options: Options) -> String {
+    if !options.color {
+        return text.to_string();
+    }
+
     match kind {
         kfs::FsEntryKind::Dir => format!("\x1b[1;38;5;33m{text}\x1b[0m"),
         kfs::FsEntryKind::File => format!("\x1b[38;5;230m{text}\x1b[0m"),
@@ -241,8 +303,8 @@ fn colorize(text: &str, kind: kfs::FsEntryKind) -> String {
     }
 }
 
-fn display_name(entry: &Entry) -> String {
-    let suffix = if matches!(entry.kind, kfs::FsEntryKind::Dir) {
+fn display_name(entry: &Entry, options: Options) -> String {
+    let suffix = if options.classify || matches!(entry.kind, kfs::FsEntryKind::Dir) {
         "/"
     } else {
         ""
@@ -257,24 +319,43 @@ fn pad_visible(mut text: String, visible_width: usize, target_width: usize) -> S
     text
 }
 
-fn human_size(len: Option<u64>, is_dir: bool) -> String {
+fn human_size(len: Option<u64>, is_dir: bool, style: SizeStyle) -> String {
     if is_dir {
         return String::from("-");
     }
     let Some(bytes) = len else {
         return String::from("?");
     };
+    if matches!(style, SizeStyle::Bytes) {
+        return bytes.to_string();
+    }
+
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
     const GB: u64 = MB * 1024;
     if bytes < KB {
-        format!("{bytes} B")
+        match style {
+            SizeStyle::Short => format!("{bytes}B"),
+            SizeStyle::Default | SizeStyle::Bytes => format!("{bytes} B"),
+        }
     } else if bytes < MB {
-        format!("{} K", (bytes + KB / 2) / KB)
+        let value = (bytes + KB / 2) / KB;
+        match style {
+            SizeStyle::Short => format!("{value}K"),
+            SizeStyle::Default | SizeStyle::Bytes => format!("{value} K"),
+        }
     } else if bytes < GB {
-        format!("{} M", (bytes + MB / 2) / MB)
+        let value = (bytes + MB / 2) / MB;
+        match style {
+            SizeStyle::Short => format!("{value}M"),
+            SizeStyle::Default | SizeStyle::Bytes => format!("{value} M"),
+        }
     } else {
-        format!("{} G", (bytes + GB / 2) / GB)
+        let value = (bytes + GB / 2) / GB;
+        match style {
+            SizeStyle::Short => format!("{value}G"),
+            SizeStyle::Default | SizeStyle::Bytes => format!("{value} G"),
+        }
     }
 }
 
@@ -288,11 +369,19 @@ fn authority(path: &str) -> (&'static str, &'static str) {
     }
 }
 
-fn permissions(entry: &Entry) -> &'static str {
-    match entry.kind {
-        kfs::FsEntryKind::Dir => "drwxrwx---",
-        kfs::FsEntryKind::File => "-rw-rw----",
-        kfs::FsEntryKind::Other => "?---------",
+fn permissions(entry: &Entry, style: PermissionStyle) -> &'static str {
+    match style {
+        PermissionStyle::Disable => "-",
+        PermissionStyle::Octal => match entry.kind {
+            kfs::FsEntryKind::Dir => "770",
+            kfs::FsEntryKind::File => "660",
+            kfs::FsEntryKind::Other => "000",
+        },
+        PermissionStyle::Rwx | PermissionStyle::Attributes => match entry.kind {
+            kfs::FsEntryKind::Dir => "drwxrwx---",
+            kfs::FsEntryKind::File => "-rw-rw----",
+            kfs::FsEntryKind::Other => "?---------",
+        },
     }
 }
 
@@ -312,74 +401,98 @@ fn entry_id(entry: &Entry) -> String {
     }
 }
 
-fn table_row(entry: &Entry, base_depth: usize, tree: bool) -> TableRow {
+fn table_row(entry: &Entry, base_depth: usize, options: Options) -> TableRow {
     let (owner, group) = authority(entry.path.as_str());
     let is_dir = matches!(entry.kind, kfs::FsEntryKind::Dir);
-    let depth = if tree {
+    let depth = if options.tree {
         entry.depth.saturating_sub(base_depth.saturating_add(1))
     } else {
         0
     };
     TableRow {
-        mode: permissions(entry),
+        mode: permissions(entry, options.permission),
         id: entry_id(entry),
         owner,
         group,
-        size: human_size(entry.len, is_dir),
+        size: human_size(entry.len, is_dir, options.size),
         date: "-",
         kind: kind_text(entry.kind),
-        name: format!("{}{}", "  ".repeat(depth), display_name(entry)),
+        name: format!("{}{}", "  ".repeat(depth), display_name(entry, options)),
     }
 }
 
-fn render_grid_entry(entry: &Entry, cell_width: usize) -> String {
-    let label = format!("{} {}", entry_id(entry), display_name(entry));
+fn render_grid_entry(entry: &Entry, cell_width: usize, options: Options) -> String {
+    let label = format!("{} {}", entry_id(entry), display_name(entry, options));
     let visible = label.len();
-    pad_visible(colorize(label.as_str(), entry.kind), visible, cell_width)
+    pad_visible(colorize(label.as_str(), entry.kind, options), visible, cell_width)
 }
 
-fn render_grid<W>(entries: &[Entry], width: usize, write_line: &mut W)
+fn render_grid<W>(entries: &[Entry], options: Options, write_line: &mut W)
 where
     W: FnMut(&str),
 {
     let max_name = entries
         .iter()
-        .map(|entry| entry_id(entry).len() + 1 + display_name(entry).len())
+        .map(|entry| entry_id(entry).len() + 1 + display_name(entry, options).len())
         .max()
         .unwrap_or(MIN_CELL_WIDTH);
     let cell_width = core::cmp::max(max_name.saturating_add(3), MIN_CELL_WIDTH);
-    let columns = core::cmp::max(1, width.max(MIN_CELL_WIDTH) / cell_width);
+    let columns = core::cmp::max(1, options.width.max(MIN_CELL_WIDTH) / cell_width);
 
     for row in entries.chunks(columns) {
         let mut line = String::new();
         for entry in row {
-            line.push_str(render_grid_entry(entry, cell_width).as_str());
+            line.push_str(render_grid_entry(entry, cell_width, options).as_str());
         }
         write_line(line.trim_end());
     }
 }
 
-fn render_long<W>(entries: &[Entry], write_line: &mut W)
+fn render_oneline<W>(entries: &[Entry], options: Options, write_line: &mut W)
 where
     W: FnMut(&str),
 {
     for entry in entries {
-        render_long_entry(entry, String::new(), write_line);
+        let label = format!("{} {}", entry_id(entry), display_name(entry, options));
+        write_line(colorize(label.as_str(), entry.kind, options).as_str());
     }
 }
 
-fn render_long_entry<W>(entry: &Entry, name_prefix: String, write_line: &mut W)
+fn render_long_header<W>(write_line: &mut W)
+where
+    W: FnMut(&str),
+{
+    write_line("FileID   Mode       Owner   Group      Size       Date Name");
+}
+
+fn render_long<W>(entries: &[Entry], options: Options, write_line: &mut W)
+where
+    W: FnMut(&str),
+{
+    if options.header {
+        render_long_header(write_line);
+    }
+    for entry in entries {
+        render_long_entry(entry, String::new(), options, write_line);
+    }
+}
+
+fn render_long_entry<W>(entry: &Entry, name_prefix: String, options: Options, write_line: &mut W)
 where
     W: FnMut(&str),
 {
     let (owner, group) = authority(entry.path.as_str());
-    let size = human_size(entry.len, matches!(entry.kind, kfs::FsEntryKind::Dir));
-    let name = colorize(format!("{name_prefix}{}", display_name(entry)).as_str(), entry.kind);
+    let size = human_size(entry.len, matches!(entry.kind, kfs::FsEntryKind::Dir), options.size);
+    let name = colorize(
+        format!("{name_prefix}{}", display_name(entry, options)).as_str(),
+        entry.kind,
+        options,
+    );
     write_line(
         format!(
             "{:<8} {} {:<7} {:<7} {:>7} {:>10} {}",
             entry_id(entry),
-            permissions(entry),
+            permissions(entry, options.permission),
             owner,
             group,
             size,
@@ -390,7 +503,7 @@ where
     );
 }
 
-fn render_tree<W>(entries: &[Entry], base_depth: usize, write_line: &mut W)
+fn render_tree<W>(entries: &[Entry], base_depth: usize, options: Options, write_line: &mut W)
 where
     W: FnMut(&str),
 {
@@ -398,20 +511,80 @@ where
         let depth = entry.depth.saturating_sub(base_depth.saturating_add(1));
         let indent = "  ".repeat(depth);
         let name = colorize(
-            format!("{} {}", entry_id(entry), display_name(entry)).as_str(),
+            format!("{} {}", entry_id(entry), display_name(entry, options)).as_str(),
             entry.kind,
+            options,
         );
         write_line(format!("{indent}{name}").as_str());
     }
 }
 
-fn render_long_tree<W>(entries: &[Entry], base_depth: usize, write_line: &mut W)
+fn render_long_tree<W>(entries: &[Entry], base_depth: usize, options: Options, write_line: &mut W)
 where
     W: FnMut(&str),
 {
+    if options.header {
+        render_long_header(write_line);
+    }
     for entry in entries {
         let depth = entry.depth.saturating_sub(base_depth.saturating_add(1));
-        render_long_entry(entry, "  ".repeat(depth), write_line);
+        render_long_entry(entry, "  ".repeat(depth), options, write_line);
+    }
+}
+
+fn relative_depth(entry: &Entry, base_depth: usize) -> usize {
+    entry.depth.saturating_sub(base_depth)
+}
+
+fn extension(name: &str) -> &str {
+    name.rsplit_once('.')
+        .filter(|(base, _)| !base.is_empty())
+        .map(|(_, ext)| ext)
+        .unwrap_or("")
+}
+
+fn sort_entries(entries: &mut [Entry], options: Options) {
+    entries.sort_by(|a, b| {
+        let a_dir = matches!(a.kind, kfs::FsEntryKind::Dir);
+        let b_dir = matches!(b.kind, kfs::FsEntryKind::Dir);
+        let dir_order = match options.group_dirs {
+            DirGrouping::First => b_dir.cmp(&a_dir),
+            DirGrouping::Last => a_dir.cmp(&b_dir),
+            DirGrouping::None => core::cmp::Ordering::Equal,
+        };
+        if !dir_order.is_eq() {
+            return dir_order;
+        }
+
+        let order = match options.sort {
+            SortColumn::Name => a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)),
+            SortColumn::Size => a
+                .len
+                .unwrap_or(0)
+                .cmp(&b.len.unwrap_or(0))
+                .then_with(|| a.name.cmp(&b.name)),
+            SortColumn::Extension => extension(a.name.as_str())
+                .cmp(extension(b.name.as_str()))
+                .then_with(|| a.name.cmp(&b.name)),
+            SortColumn::None => core::cmp::Ordering::Equal,
+        };
+        if options.reverse {
+            order.reverse()
+        } else {
+            order
+        }
+    });
+}
+
+fn apply_listing_options(entries: &mut Vec<Entry>, base_depth: usize, options: Options) {
+    if let Some(max_depth) = options.depth {
+        entries.retain(|entry| relative_depth(entry, base_depth) <= max_depth);
+    }
+    if !matches!(options.sort, SortColumn::None)
+        || options.reverse
+        || options.group_dirs != DirGrouping::None
+    {
+        sort_entries(entries.as_mut_slice(), options);
     }
 }
 
@@ -420,13 +593,32 @@ where
     W: FnMut(&str),
 {
     if options.tree && options.long {
-        render_long_tree(entries, base_depth, write_line);
+        render_long_tree(entries, base_depth, options, write_line);
     } else if options.tree {
-        render_tree(entries, base_depth, write_line);
+        render_tree(entries, base_depth, options, write_line);
     } else if options.long {
-        render_long(entries, write_line);
+        render_long(entries, options, write_line);
+    } else if options.oneline {
+        render_oneline(entries, options, write_line);
     } else {
-        render_grid(entries, options.width, write_line);
+        render_grid(entries, options, write_line);
+    }
+}
+
+fn self_entry(path: &str, kind: kfs::FsEntryKind, len: Option<u64>) -> Entry {
+    let normalized = normalize_path(path);
+    let name = if normalized.is_empty() {
+        String::from(".")
+    } else {
+        String::from(basename(normalized.as_str()))
+    };
+    Entry {
+        id: indexed_id(normalized.as_str()),
+        path: normalized.clone(),
+        name,
+        kind,
+        depth: path_depth(normalized.as_str()),
+        len,
     }
 }
 
@@ -439,14 +631,12 @@ where
     if !normalized.is_empty() {
         match api::stat(normalized.as_bytes()) {
             Ok(stat) if matches!(stat.kind, api::FsNodeKind::File) => {
-                let entry = Entry {
-                    id: indexed_id(normalized.as_str()),
-                    path: normalized.clone(),
-                    name: normalized.clone(),
-                    kind: kfs::FsEntryKind::File,
-                    depth: path_depth(normalized.as_str()),
-                    len: Some(stat.len),
-                };
+                let entry = self_entry(normalized.as_str(), kfs::FsEntryKind::File, Some(stat.len));
+                render_entries(&[entry], options, 0, write_line);
+                return Ok(());
+            }
+            Ok(stat) if options.directory_only => {
+                let entry = self_entry(normalized.as_str(), kfs::FsEntryKind::Dir, Some(stat.len));
                 render_entries(&[entry], options, 0, write_line);
                 return Ok(());
             }
@@ -454,9 +644,13 @@ where
             Err(rc) if trueos_io::status_kind(rc) == ErrorKind::NotFound => {}
             Err(rc) => return Err(trueos_io::status_error(rc)),
         }
+    } else if options.directory_only {
+        let entry = self_entry(".", kfs::FsEntryKind::Dir, None);
+        render_entries(&[entry], options, 0, write_line);
+        return Ok(());
     }
 
-    let entries = if options.tree {
+    let mut entries = if options.tree {
         tree_entries(normalized.as_str())?
     } else {
         immediate_entries(normalized.as_str())?
@@ -472,6 +666,7 @@ where
     }
 
     let base_depth = path_depth(normalized.as_str());
+    apply_listing_options(&mut entries, base_depth, options);
     render_entries(entries.as_slice(), options, base_depth, write_line);
 
     Ok(())
@@ -482,7 +677,14 @@ where
     W: FnMut(&str),
 {
     write_line("lsd: usage `lsd [path ...]`");
-    write_line("     flags: -l/--long  -R/--tree  -T/--table  -lR/-Rl  --version  help");
+    write_line("     flags: -l/--long  -R/--tree  -T/--table  -1/--oneline  -d/--directory-only");
+    write_line("            --color always|auto|never  --size default|short|bytes");
+    write_line(
+        "            --permission rwx|octal|attributes|disable  --sort name|size|extension|none",
+    );
+    write_line(
+        "            --reverse  --group-dirs first|last|none  --depth N  --header  --version  help",
+    );
     write_line("     paths: / and . both mean the TRUEOSFS root");
 }
 
@@ -491,10 +693,146 @@ fn apply_short_flags(flags: &str, options: &mut Options) -> bool {
         match ch {
             'l' => options.long = true,
             'R' => options.tree = true,
+            '1' => options.oneline = true,
+            'd' => options.directory_only = true,
+            'F' => options.classify = true,
+            'N' | 'a' | 'A' | 'i' => {}
+            'r' => options.reverse = true,
+            'S' => options.sort = SortColumn::Size,
+            'X' => options.sort = SortColumn::Extension,
             _ => return false,
         }
     }
     true
+}
+
+enum ParseAction {
+    Run,
+    Help,
+    Version,
+}
+
+fn parse_usize(value: &str) -> io::Result<usize> {
+    value
+        .parse::<usize>()
+        .map_err(|_| io::Error::new(ErrorKind::InvalidInput, "invalid lsd number"))
+}
+
+fn parse_size(value: &str) -> io::Result<SizeStyle> {
+    match value {
+        "default" => Ok(SizeStyle::Default),
+        "short" => Ok(SizeStyle::Short),
+        "bytes" => Ok(SizeStyle::Bytes),
+        _ => Err(io::Error::new(ErrorKind::InvalidInput, "unsupported lsd size")),
+    }
+}
+
+fn parse_permission(value: &str) -> io::Result<PermissionStyle> {
+    match value {
+        "rwx" => Ok(PermissionStyle::Rwx),
+        "octal" => Ok(PermissionStyle::Octal),
+        "attributes" => Ok(PermissionStyle::Attributes),
+        "disable" => Ok(PermissionStyle::Disable),
+        _ => Err(io::Error::new(ErrorKind::InvalidInput, "unsupported lsd permission")),
+    }
+}
+
+fn parse_sort(value: &str) -> io::Result<SortColumn> {
+    match value {
+        "name" => Ok(SortColumn::Name),
+        "size" => Ok(SortColumn::Size),
+        "extension" => Ok(SortColumn::Extension),
+        "none" => Ok(SortColumn::None),
+        _ => Err(io::Error::new(ErrorKind::InvalidInput, "unsupported lsd sort")),
+    }
+}
+
+fn parse_group_dirs(value: &str) -> io::Result<DirGrouping> {
+    match value {
+        "none" => Ok(DirGrouping::None),
+        "first" => Ok(DirGrouping::First),
+        "last" => Ok(DirGrouping::Last),
+        _ => Err(io::Error::new(ErrorKind::InvalidInput, "unsupported lsd dir grouping")),
+    }
+}
+
+fn parse_value_arg(args: &[String], idx: &mut usize, inline: Option<&str>) -> io::Result<String> {
+    if let Some(value) = inline {
+        return Ok(String::from(value));
+    }
+    *idx += 1;
+    args.get(*idx)
+        .cloned()
+        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "missing lsd flag value"))
+}
+
+fn parse_args(args: &[String], width: usize) -> io::Result<(Options, Vec<String>, ParseAction)> {
+    let mut options = Options::new();
+    options.width = width;
+    let mut paths = Vec::new();
+    let mut idx = 1usize;
+
+    while idx < args.len() {
+        let arg = args[idx].as_str();
+        match arg {
+            "help" | "-help" | "--help" | "-h" => return Ok((options, paths, ParseAction::Help)),
+            "--version" => return Ok((options, paths, ParseAction::Version)),
+            "-l" | "--long" => options.long = true,
+            "-R" | "--tree" | "--recursive" => options.tree = true,
+            "-T" | "--table" => options.long = true,
+            "-1" | "--oneline" => options.oneline = true,
+            "-d" | "--directory-only" => options.directory_only = true,
+            "-F" | "--classify" => options.classify = true,
+            "-N" | "--literal" | "-a" | "--all" | "-A" | "--almost-all" | "-i" | "--inode" => {}
+            "-r" | "--reverse" => options.reverse = true,
+            "-S" | "--sizesort" => options.sort = SortColumn::Size,
+            "-X" | "--extensionsort" => options.sort = SortColumn::Extension,
+            "--header" => options.header = true,
+            "--group-directories-first" => options.group_dirs = DirGrouping::First,
+            raw if raw == "--color" || raw.starts_with("--color=") => {
+                let value = parse_value_arg(args, &mut idx, raw.strip_prefix("--color="))?;
+                options.color = match value.as_str() {
+                    "always" | "auto" => true,
+                    "never" => false,
+                    _ => {
+                        return Err(io::Error::new(
+                            ErrorKind::InvalidInput,
+                            "unsupported lsd color",
+                        ));
+                    }
+                };
+            }
+            raw if raw == "--size" || raw.starts_with("--size=") => {
+                let value = parse_value_arg(args, &mut idx, raw.strip_prefix("--size="))?;
+                options.size = parse_size(value.as_str())?;
+            }
+            raw if raw == "--permission" || raw.starts_with("--permission=") => {
+                let value = parse_value_arg(args, &mut idx, raw.strip_prefix("--permission="))?;
+                options.permission = parse_permission(value.as_str())?;
+            }
+            raw if raw == "--sort" || raw.starts_with("--sort=") => {
+                let value = parse_value_arg(args, &mut idx, raw.strip_prefix("--sort="))?;
+                options.sort = parse_sort(value.as_str())?;
+            }
+            raw if raw == "--group-dirs" || raw.starts_with("--group-dirs=") => {
+                let value = parse_value_arg(args, &mut idx, raw.strip_prefix("--group-dirs="))?;
+                options.group_dirs = parse_group_dirs(value.as_str())?;
+            }
+            raw if raw == "--depth" || raw.starts_with("--depth=") => {
+                let value = parse_value_arg(args, &mut idx, raw.strip_prefix("--depth="))?;
+                options.depth = Some(parse_usize(value.as_str())?);
+                options.tree = true;
+            }
+            raw if raw.starts_with('-') && apply_short_flags(&raw[1..], &mut options) => {}
+            raw if raw.starts_with('-') => {
+                return Err(io::Error::new(ErrorKind::InvalidInput, "unsupported lsd flag"));
+            }
+            path => paths.push(String::from(path)),
+        }
+        idx += 1;
+    }
+
+    Ok((options, paths, ParseAction::Run))
 }
 
 pub fn run_with_writer<W>(args: &[String], write_line: W) -> io::Result<()>
@@ -512,29 +850,18 @@ pub fn run_with_writer_and_width<W>(
 where
     W: FnMut(&str),
 {
-    let mut options = Options::new();
-    options.width = width;
-    let mut paths = Vec::new();
+    let (options, mut paths, action) = parse_args(args, width)?;
 
-    for arg in args.iter().skip(1) {
-        match arg.as_str() {
-            "help" | "-help" | "--help" | "-h" => {
-                print_usage(&mut write_line);
-                return Ok(());
-            }
-            "--version" => {
-                write_line(concat!("lsd ", env!("CARGO_PKG_VERSION")));
-                return Ok(());
-            }
-            "-l" | "--long" => options.long = true,
-            "-R" | "--tree" => options.tree = true,
-            raw if raw.starts_with('-') && apply_short_flags(&raw[1..], &mut options) => {}
-            raw if raw.starts_with('-') => {
-                print_usage(&mut write_line);
-                return Err(io::Error::new(ErrorKind::InvalidInput, "unsupported lsd flag"));
-            }
-            path => paths.push(String::from(path)),
+    match action {
+        ParseAction::Help => {
+            print_usage(&mut write_line);
+            return Ok(());
         }
+        ParseAction::Version => {
+            write_line(concat!("lsd ", env!("CARGO_PKG_VERSION")));
+            return Ok(());
+        }
+        ParseAction::Run => {}
     }
 
     if paths.is_empty() {
@@ -556,19 +883,10 @@ where
 }
 
 pub fn table_listings(args: &[String]) -> io::Result<Vec<TableListing>> {
-    let mut options = Options::new();
-    let mut paths = Vec::new();
+    let (options, mut paths, action) = parse_args(args, DEFAULT_GRID_WIDTH)?;
 
-    for arg in args.iter().skip(1) {
-        match arg.as_str() {
-            "-l" | "--long" => options.long = true,
-            "-R" | "--tree" => options.tree = true,
-            raw if raw.starts_with('-') && apply_short_flags(&raw[1..], &mut options) => {}
-            raw if raw.starts_with('-') => {
-                return Err(io::Error::new(ErrorKind::InvalidInput, "unsupported lsd flag"));
-            }
-            path => paths.push(String::from(path)),
-        }
+    if !matches!(action, ParseAction::Run) {
+        return Ok(Vec::new());
     }
 
     if paths.is_empty() {
@@ -578,7 +896,7 @@ pub fn table_listings(args: &[String]) -> io::Result<Vec<TableListing>> {
     let mut listings = Vec::new();
     for path in paths {
         let normalized = normalize_path(path.as_str());
-        let entries = if !normalized.is_empty() {
+        let mut entries = if !normalized.is_empty() {
             match api::stat(normalized.as_bytes()) {
                 Ok(stat) if matches!(stat.kind, api::FsNodeKind::File) => vec![Entry {
                     id: indexed_id(normalized.as_str()),
@@ -588,6 +906,13 @@ pub fn table_listings(args: &[String]) -> io::Result<Vec<TableListing>> {
                     depth: path_depth(normalized.as_str()),
                     len: Some(stat.len),
                 }],
+                Ok(stat) if options.directory_only => {
+                    vec![self_entry(
+                        normalized.as_str(),
+                        kfs::FsEntryKind::Dir,
+                        Some(stat.len),
+                    )]
+                }
                 Ok(_) if options.tree => tree_entries(normalized.as_str())?,
                 Ok(_) => immediate_entries(normalized.as_str())?,
                 Err(rc) if trueos_io::status_kind(rc) == ErrorKind::NotFound => {
@@ -599,6 +924,8 @@ pub fn table_listings(args: &[String]) -> io::Result<Vec<TableListing>> {
                 }
                 Err(rc) => return Err(trueos_io::status_error(rc)),
             }
+        } else if options.directory_only {
+            vec![self_entry(".", kfs::FsEntryKind::Dir, None)]
         } else if options.tree {
             tree_entries(normalized.as_str())?
         } else {
@@ -617,9 +944,10 @@ pub fn table_listings(args: &[String]) -> io::Result<Vec<TableListing>> {
         }
 
         let base_depth = path_depth(normalized.as_str());
+        apply_listing_options(&mut entries, base_depth, options);
         let rows = entries
             .iter()
-            .map(|entry| table_row(entry, base_depth, options.tree))
+            .map(|entry| table_row(entry, base_depth, options))
             .collect();
         listings.push(TableListing { path, rows });
     }

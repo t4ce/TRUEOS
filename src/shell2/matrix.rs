@@ -51,7 +51,7 @@ struct MatrixState {
     slots: Vec<MatrixSlot>,
     uart_active: MatrixSlotId,
     net_active: MatrixSlotId,
-    ui2_active: MatrixSlotId,
+    ui3_active: MatrixSlotId,
     container_active: MatrixSlotId,
     user_input_record: VecDeque<AllocString>,
     live_user_input_record: VecDeque<LiveUserInputEntry>,
@@ -66,7 +66,7 @@ fn state() -> &'static spin::Mutex<MatrixState> {
             slots: Vec::new(),
             uart_active: default_slot_id(),
             net_active: default_slot_id(),
-            ui2_active: default_slot_id(),
+            ui3_active: default_slot_id(),
             container_active: default_slot_id(),
             user_input_record: VecDeque::new(),
             live_user_input_record: VecDeque::new(),
@@ -128,8 +128,8 @@ fn bump_revision(state: &mut MatrixState) {
 fn active_slot_id_ref(state: &MatrixState, output_mask: u8) -> &MatrixSlotId {
     if (output_mask & super::OUTPUT_NET_TCP_MASK) != 0 {
         &state.net_active
-    } else if (output_mask & super::OUTPUT_UI2_MASK) != 0 {
-        &state.ui2_active
+    } else if (output_mask & super::OUTPUT_UI3_MASK) != 0 {
+        &state.ui3_active
     } else if (output_mask & super::OUTPUT_CONTAINER_MASK) != 0 {
         &state.container_active
     } else {
@@ -140,8 +140,8 @@ fn active_slot_id_ref(state: &MatrixState, output_mask: u8) -> &MatrixSlotId {
 fn active_slot_id_mut(state: &mut MatrixState, output_mask: u8) -> &mut MatrixSlotId {
     if (output_mask & super::OUTPUT_NET_TCP_MASK) != 0 {
         &mut state.net_active
-    } else if (output_mask & super::OUTPUT_UI2_MASK) != 0 {
-        &mut state.ui2_active
+    } else if (output_mask & super::OUTPUT_UI3_MASK) != 0 {
+        &mut state.ui3_active
     } else if (output_mask & super::OUTPUT_CONTAINER_MASK) != 0 {
         &mut state.container_active
     } else {
@@ -237,8 +237,8 @@ pub(crate) fn free_slot(requested: &str) -> MatrixSlotId {
         if guard.net_active == freed_id {
             guard.net_active = default_id.clone();
         }
-        if guard.ui2_active == freed_id {
-            guard.ui2_active = default_id.clone();
+        if guard.ui3_active == freed_id {
+            guard.ui3_active = default_id.clone();
         }
         changed = true;
     }

@@ -37,6 +37,7 @@ const LEAF_TAGS = new Set([
 
 const REPLACED_DIMENSION_TAGS = new Set(['img', 'svg', 'canvas', 'iframe']);
 const ROW_TAGS = new Set(['tr', 'barrow', 'searchrow']);
+const CHECKABLE_INPUT_LAYOUT_SIZE = 64;
 const UI3_ATLAS_LINE_HEIGHT_BY_TIER = Object.freeze({
   third: 21,
   half: 32,
@@ -299,7 +300,7 @@ function nodePadding(tagName, defaults) {
 }
 
 function widthForNode(node, tagName, defaults, availableWidth) {
-  if (isCheckableInput(node)) return Math.min(18, Math.max(1, availableWidth));
+  if (isCheckableInput(node)) return Math.min(CHECKABLE_INPUT_LAYOUT_SIZE, Math.max(1, availableWidth));
   const attrWidth = attrSize(node, 'width');
   if (attrWidth != null && attrWidth !== '' && isReplacedDimensionTag(tagName)) {
     return Math.max(1, sizeFrom(attrWidth, availableWidth));
@@ -314,7 +315,7 @@ function widthForNode(node, tagName, defaults, availableWidth) {
 }
 
 function heightForNode(node, tagName, defaults, contentHeight, padding) {
-  if (isCheckableInput(node)) return 18;
+  if (isCheckableInput(node)) return CHECKABLE_INPUT_LAYOUT_SIZE;
   const attrHeight = attrSize(node, 'height');
   if (attrHeight != null && attrHeight !== '' && isReplacedDimensionTag(tagName)) {
     return Math.max(1, sizeFrom(attrHeight, contentHeight));
@@ -409,7 +410,7 @@ function inlineWidthForChild(child, parentTagName, sourceMap, remainingWidth, re
 
   if (child.kind !== 'block') return Math.max(1, Math.floor(remaining / divisor));
   if (parentTagName === 'tr') return Math.max(1, Math.floor(remaining / divisor));
-  if (isCheckableInput(child)) return Math.min(18, remaining);
+  if (isCheckableInput(child)) return Math.min(CHECKABLE_INPUT_LAYOUT_SIZE, remaining);
 
   const tagName = String(child.tagName ?? 'div').toLowerCase();
   const sourceNode = sourceMap.get(String(child.key ?? ''));
