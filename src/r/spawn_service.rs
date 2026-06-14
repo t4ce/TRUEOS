@@ -924,7 +924,7 @@ async fn bp_autostart_task() {
         }
 
         let target =
-            crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_UI2_MASK, config.slot);
+            crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_UI3_MASK, config.slot);
 
         crate::log!(
             "spawn-svc: bp-autostart begin label={} archive={} slot={}\n",
@@ -979,7 +979,7 @@ fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_ui3_shell(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| crate::shell2::task(spawner, &crate::shell2::UI2_SHELL_BACKEND))
+    spawn_local(spawner, |spawner| crate::shell2::task(spawner, &crate::shell2::UI3_SHELL_BACKEND))
 }
 
 #[embassy_executor::task]

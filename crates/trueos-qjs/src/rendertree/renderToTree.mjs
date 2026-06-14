@@ -153,6 +153,21 @@ function isSummaryOpen(node) {
   return attrs.open != null || attrs['data-details-open'] === '1';
 }
 
+function inputTypeOf(node) {
+  const attrs = layoutAttrs(node);
+  return String(attrs.type ?? '').toLowerCase();
+}
+
+function isCheckableInputNode(tagName, node) {
+  if (tagName !== 'input') return false;
+  const type = inputTypeOf(node);
+  return type === 'checkbox' || type === 'radio';
+}
+
+function boolAttr(attrs, name) {
+  return attrs && Object.prototype.hasOwnProperty.call(attrs, name);
+}
+
 function isHitBoxNode(tagName, role) {
   return tagName === 'button'
     || tagName === 'a'
@@ -220,6 +235,7 @@ function createUi3PaintPlan(layout, options = {}) {
   const paintedBoxes = [];
   const textRuns = [];
   const summaryIcons = [];
+  const choiceControls = [];
   const hitBoxes = [];
 
   const walk = (
@@ -286,6 +302,23 @@ function createUi3PaintPlan(layout, options = {}) {
           open: isSummaryOpen(node),
         });
       }
+      if (isCheckableInputNode(tagName, node)) {
+        const attrs = layoutAttrs(node);
+        const type = inputTypeOf(node);
+        choiceControls.push({
+          key: String(node.key ?? ''),
+          type,
+          x,
+          y,
+          width: Math.max(0, Math.round(Number(node.width ?? 0) || 0)),
+          height: Math.max(0, Math.round(Number(node.height ?? 0) || 0)),
+          checked: boolAttr(attrs, 'checked'),
+          indeterminate: type === 'checkbox' && boolAttr(attrs, 'indeterminate'),
+          disabled: boolAttr(attrs, 'disabled'),
+          hover: false,
+          active: false,
+        });
+      }
       if (isHitBoxNode(tagName, role)) {
         const hitBox = {
           key: String(node.key ?? ''),
@@ -312,6 +345,7 @@ function createUi3PaintPlan(layout, options = {}) {
     paintedBoxes,
     textRuns,
     summaryIcons,
+    choiceControls,
     hitBoxes,
   };
 }

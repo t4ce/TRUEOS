@@ -1,71 +1,13 @@
-export const BLOCK_TAGS = new Set([
-  'html',
-  'body',
-  'main',
-  'section',
-  'article',
-  'header',
-  'footer',
-  'nav',
-  'aside',
-  'search',
-  'div',
-  'p',
-  'hr',
-  'pre',
-  'blockquote',
-  'ol',
-  'ul',
-  'menu',
-  'li',
-  'dl',
-  'dt',
-  'dd',
-  'figure',
-  'figcaption',
-  'address',
-  'h1',
-  'h2',
-  'h3',
-  'h4',
-  'h5',
-  'h6',
-  'form',
-  'label',
-  'fieldset',
-  'legend',
-  'button',
-  'input',
-  'textarea',
-  'select',
-  'option',
-  'optgroup',
-  'output',
-  'progress',
-  'meter',
-  'slider',
-  'number',
-  'color',
-  'details',
-  'summary',
-  'dialog',
-  'table',
-  'caption',
-  'colgroup',
-  'col',
-  'tbody',
-  'thead',
-  'tfoot',
-  'tr',
-  'td',
-  'th',
-  'img',
-  'svg',
-  'canvas',
-  'iframe',
+function uniqueTags(tags) {
+  return Object.freeze(Array.from(new Set(tags.map((t) => String(t || '').toLowerCase()))));
+}
+
+export const GROUPING_CONTENT_TAGS = uniqueTags([
+  'p', 'hr', 'pre', 'blockquote', 'ol', 'ul', 'menu', 'li',
+  'dl', 'dt', 'dd', 'figure', 'figcaption', 'main', 'search', 'div',
 ]);
 
-export const INLINE_TAGS = new Set([
+export const TEXT_LEVEL_SEMANTICS_TAGS = uniqueTags([
   'a',
   'em',
   'strong',
@@ -97,6 +39,61 @@ export const INLINE_TAGS = new Set([
   'wbr',
 ]);
 
+export const EMBEDDED_CONTENT_TAGS = uniqueTags([
+  'img',
+]);
+
+export const TABULAR_DATA_TAGS = uniqueTags([
+  'table', 'caption', 'colgroup', 'col', 'tbody', 'thead', 'tfoot',
+  'tr', 'td', 'th',
+]);
+
+export const BLOCK_TAGS = new Set(uniqueTags([
+  'html',
+  'body',
+  'section',
+  'article',
+  'header',
+  'footer',
+  'nav',
+  'aside',
+  ...GROUPING_CONTENT_TAGS,
+  'address',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'form',
+  'label',
+  'fieldset',
+  'legend',
+  'button',
+  'input',
+  'textarea',
+  'select',
+  'option',
+  'optgroup',
+  'output',
+  'progress',
+  'meter',
+  'slider',
+  'number',
+  'color',
+  'details',
+  'summary',
+  'stub',
+  'dialog',
+  ...TABULAR_DATA_TAGS,
+  ...EMBEDDED_CONTENT_TAGS,
+  'svg',
+  'canvas',
+  'iframe',
+]));
+
+export const INLINE_TAGS = new Set(TEXT_LEVEL_SEMANTICS_TAGS);
+
 export const TEMPORAL_INPUT_TYPES = new Set(['time', 'date', 'month', 'week', 'datetime-local']);
 
 export const TEXT_INPUT_TYPES = new Set([
@@ -111,4 +108,3 @@ export const TEXT_INPUT_TYPES = new Set([
 export const CHECKABLE_INPUT_TYPES = new Set(['checkbox', 'radio']);
 
 export const REPLACED_TAGS = new Set(['img', 'svg', 'canvas', 'iframe']);
-

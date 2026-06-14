@@ -3,7 +3,6 @@ use alloc::vec::Vec;
 use crate::intel::types::Rgba8;
 
 const UI3_SHELL_WINDOW_ID: u32 = 0x5533_0001;
-const UI3_SHELL_COLS: usize = 140;
 const UI3_SHELL_PADDING_PX: u32 = 18;
 const UI3_SHELL_MAX_ROWS: usize = 96;
 const UI3_SHELL_BLACK_RGBA: u32 = 0xFF00_0000;
@@ -38,7 +37,7 @@ impl Default for Ui3ShellOverlayState {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Ui3ShellRow {
-    cells: Vec<crate::shell2::Ui2ShellCell>,
+    cells: Vec<crate::shell2::Ui3ShellCell>,
 }
 
 impl Ui3ShellRow {
@@ -95,7 +94,7 @@ pub(crate) fn handle_keyboard(
 
         if state.active {
             attach_shell_window(state, viewport_width, viewport_height);
-            let _ = crate::shell2::queue_ui2_shell_keyboard_event(UI3_SHELL_WINDOW_ID, event);
+            let _ = crate::shell2::queue_ui3_shell_keyboard_event(UI3_SHELL_WINDOW_ID, event);
         }
     }
     input
@@ -114,7 +113,7 @@ pub(crate) fn draw_scene_if_dirty(
         return false;
     }
     attach_shell_window(state, viewport_width, viewport_height);
-    let Some((seq, snapshot)) = crate::shell2::ui2_shell_snapshot(UI3_SHELL_WINDOW_ID) else {
+    let Some((seq, snapshot)) = crate::shell2::ui3_shell_snapshot(UI3_SHELL_WINDOW_ID) else {
         return false;
     };
     if !force && seq == state.last_rendered_seq {
@@ -143,7 +142,7 @@ pub(crate) fn draw_scene_if_dirty(
     };
     if dirty_rows.is_empty() {
         state.last_rendered_seq = seq;
-        crate::shell2::ui2_shell_mark_rendered(seq);
+        crate::shell2::ui3_shell_mark_rendered(seq);
         return false;
     }
 
@@ -175,7 +174,7 @@ pub(crate) fn draw_scene_if_dirty(
     state.last_rendered_seq = seq;
     state.rendered_panel = doc_panel;
     state.rendered_rows = rows.clone();
-    crate::shell2::ui2_shell_mark_rendered(seq);
+    crate::shell2::ui3_shell_mark_rendered(seq);
     crate::log!(
         "ui3-shell-overlay: scene-draw seq={} rows={} dirty_rows={} full={} placements={} rect={}x{}@{},{} scroll_y={} fill_descs={} sprite_submits={}\n",
         seq,
@@ -376,12 +375,20 @@ fn attach_shell_window(
     {
         return;
     }
-    crate::shell2::ui2_shell_attach_window(UI3_SHELL_WINDOW_ID, UI3_SHELL_COLS, rows);
+    crate::shell2::ui3_shell_attach_window(UI3_SHELL_WINDOW_ID, rows);
     state.attached_width = rect.width;
     state.attached_height = rect.height;
     state.attached_rows = rows;
     state.rendered_rows.clear();
     state.last_rendered_seq = 0;
+    crate::log!(
+        "ui3-shell-overlay: attach rows={} rect={}x{}@{},{}\n",
+        rows,
+        rect.width,
+        rect.height,
+        rect.x,
+        rect.y
+    );
 }
 
 fn shell_rect(viewport_width: u32, viewport_height: u32) -> crate::intel::LiveOverlayRect {
@@ -412,7 +419,7 @@ fn shell_line_height() -> u32 {
     u32::from(crate::ui3::althlasfont::bitmapfont::athlas_font_line_height_px(face).unwrap_or(22))
 }
 
-fn snapshot_rows(snapshot: &crate::shell2::Ui2ShellScreenSnapshot) -> Vec<Ui3ShellRow> {
+fn snapshot_rows(snapshot: &crate::shell2::Ui3ShellScreenSnapshot) -> Vec<Ui3ShellRow> {
     let cols = snapshot.cols as usize;
     let rows = snapshot.rows as usize;
     let mut out = Vec::new();
@@ -446,13 +453,13 @@ fn trim_empty_head_to_fit(rows: &mut Vec<Ui3ShellRow>, cap: usize) {
     }
 }
 
-fn trim_end_default_blank_cells(cells: &mut Vec<crate::shell2::Ui2ShellCell>) {
+fn trim_end_default_blank_cells(cells: &mut Vec<crate::shell2::Ui3ShellCell>) {
     while cells.last().is_some_and(is_default_blank_cell) {
         cells.pop();
     }
 }
 
-fn is_default_blank_cell(cell: &crate::shell2::Ui2ShellCell) -> bool {
+fn is_default_blank_cell(cell: &crate::shell2::Ui3ShellCell) -> bool {
     cell.ch == ' ' && cell.bg == UI3_SHELL_DEFAULT_BG
 }
 
