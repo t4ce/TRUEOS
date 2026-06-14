@@ -1617,6 +1617,17 @@ impl GpgpuSprite64Placement {
     pub(crate) const fn dst_y(&self) -> i32 {
         self.dst_y
     }
+
+    #[inline]
+    pub(crate) const fn translated(self, dx: i32, dy: i32) -> Self {
+        Self {
+            slot: self.slot,
+            dst_x: self.dst_x.saturating_add(dx),
+            dst_y: self.dst_y.saturating_add(dy),
+            flags: self.flags,
+            color_rgba: self.color_rgba,
+        }
+    }
 }
 
 trait Sprite64PlacementDesc {
@@ -4617,6 +4628,13 @@ pub(crate) fn sprite64_worklist_surface(
     reason: &str,
 ) -> Option<GpgpuShellAtlasWorklistResult> {
     sprite64_worklist_surface_inner(placements, dst, reason)
+}
+
+pub(crate) fn ui3_overlay_rgba8_surface(
+    rect: super::display::LiveOverlayRect,
+) -> Option<GpgpuRgba8Surface> {
+    let target = super::display::ui3_canvas_overlay_gpgpu(rect)?;
+    display_rgba8_surface_from_target(target)
 }
 
 pub(crate) fn sprite64_primary_draw_bounds() -> Option<(i32, i32)> {

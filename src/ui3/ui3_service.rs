@@ -8,6 +8,7 @@ const UI3_SERVICE_IDLE_MS: u64 = 16;
 const UI3_WHEEL_EVENT_BATCH_CAP: usize = 64;
 const UI3_WHEEL_SCROLL_PX_PER_NOTCH: f32 = 72.0;
 const UI3_CLICK_MAX_MOVE_PX: u32 = 6;
+const UI3_BACKEND_PREFETCH_BANDS_AFTER_PRESENT: usize = 1;
 
 #[derive(Copy, Clone, Debug, Default)]
 struct Ui3ServiceStats {
@@ -15,13 +16,21 @@ struct Ui3ServiceStats {
     empty_polls: u32,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 struct Ui3Scene {
     frame: crate::surfer::Ui3RenderTreeFrame,
     scroll_y: f32,
     content_height: u32,
     viewport_width: u32,
     viewport_height: u32,
+    surface: Option<crate::ui3::ui3_surface::Ui3RgbaSurface>,
+    painted_bands: Vec<Ui3PaintedBand>,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+struct Ui3PaintedBand {
+    y0: u32,
+    y1: u32,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -53,12 +62,13 @@ struct Ui3ActivationHit {
 #[embassy_executor::task]
 pub async fn ui3_service_task() {
     let _task_guard = crate::r::spawn_service::task_run_guard(TASK_NAME);
-    crate::log!("ui3-service: starting sink=render-tree-text-primary scroll=redraw\n");
+    crate::log!("ui3-service: starting sink=render-tree-backend scroll=retained\n");
 
     let mut stats = Ui3ServiceStats::default();
     let mut scene = Ui3Scene::default();
     let mut cursor_events = crate::ui3::ui3_hid::Ui3CursorEventDrain::default();
     let mut live_overlay = Ui3LiveOverlayState::default();
+    let mut shell_overlay = crate::ui3::ui3_shell_overlay::Ui3ShellOverlayState::default();
     let mut font = crate::ui3::ui3_font::Ui3FontScratch::default();
     loop {
         if crate::r::spawn_service::task_stop_requested(TASK_NAME) {
@@ -70,12 +80,26 @@ pub async fn ui3_service_task() {
             return;
         }
 
+        let (overlay_width, overlay_height) = ui3_overlay_viewport(&scene);
+        let shell_dirty = crate::ui3::ui3_shell_overlay::handle_keyboard(
+            &mut shell_overlay,
+            overlay_width,
+            overlay_height,
+        );
         let cursor_input = drain_ui3_cursor_input(&mut cursor_events, &mut live_overlay, &scene);
-        if cursor_input.overlay_dirty {
+        if shell_overlay.active {
+            let _ = crate::ui3::ui3_shell_overlay::redraw_if_dirty(
+                &mut shell_overlay,
+                overlay_width,
+                overlay_height,
+                shell_dirty,
+                "ui3-shell-overlay",
+            );
+        } else if cursor_input.overlay_dirty {
             let _ = redraw_live_overlay(&scene, &live_overlay, "ui3-live-overlay-cursor");
         }
         let wheel_delta = cursor_input.wheel_delta;
-        if wheel_delta != 0 && !scene.frame.layout_trace_json.is_empty() {
+        if wheel_delta != 0 && !shell_overlay.active && !scene.frame.layout_trace_json.is_empty() {
             let old_scroll_y = scene.scroll_y;
             let new_scroll_y = clamp_scroll_y_for_scene(
                 (old_scroll_y - (wheel_delta as f32 * UI3_WHEEL_SCROLL_PX_PER_NOTCH)).max(0.0),
@@ -93,7 +117,20 @@ pub async fn ui3_service_task() {
                 );
             } else {
                 scene.scroll_y = new_scroll_y;
-                redraw_scene_text(&mut scene, &mut font, 0, true);
+                let present = redraw_scene_text(&mut scene, &mut font, 0, true);
+                crate::log!(
+                    "ui3-service: scroll retained delta={} scroll_y={} content_height={} viewport={}x{} painted_bands={} presented={} submit_ok={} present_ms={} total_ms={}\n",
+                    wheel_delta,
+                    scene.scroll_y as u32,
+                    scene.content_height,
+                    scene.viewport_width,
+                    scene.viewport_height,
+                    scene.painted_bands.len(),
+                    present.presented as u8,
+                    present.submit_ok as u8,
+                    present.present_ms,
+                    present.total_ms
+                );
             }
         }
 
@@ -107,6 +144,7 @@ pub async fn ui3_service_task() {
             took_any = true;
             stats.frames_taken = stats.frames_taken.saturating_add(1);
             scene.frame = frame;
+            scene.painted_bands.clear();
             consume_render_tree_frame(&mut scene, stats.frames_taken, &mut font);
         }
 
@@ -115,36 +153,52 @@ pub async fn ui3_service_task() {
             if !scene.frame.layout_trace_json.is_empty()
                 && browser_mask_has(asset_ready_mask, scene.frame.browser_instance_id)
             {
-                let present = redraw_scene_text(&mut scene, &mut font, 0, false);
-                crate::log!(
-                    "ui3-service: asset batch redraw browser={} seq={} scroll_y={} content_height={} viewport={}x{} text_nodes={} placements={} gradients={} assets={} layout_shift={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} asset_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
-                    scene.frame.browser_instance_id,
-                    scene.frame.seq,
-                    scene.scroll_y as u32,
-                    scene.content_height,
-                    scene.viewport_width,
-                    scene.viewport_height,
-                    present.text_nodes,
-                    present.placements,
-                    present.gradients,
-                    present.assets,
-                    present.layout_shift_px,
-                    present.embedded_scenes,
-                    present.clipped,
-                    present.batches,
-                    present.clear_ok as u8,
-                    present.clear_ms,
-                    present.rect_ms,
-                    present.asset_ms,
-                    present.text_ms,
-                    present.show_ms,
-                    present.presented as u8,
-                    present.submit_ok as u8,
-                    present.submit_ms,
-                    present.present_ms,
-                    present.total_ms,
-                    scene.frame.url
-                );
+                let invalidated = invalidate_ready_asset_bands(&mut scene);
+                if invalidated != 0 {
+                    let present = redraw_scene_text(&mut scene, &mut font, 0, false);
+                    crate::log!(
+                        "ui3-service: asset batch redraw browser={} seq={} invalidated={} scroll_y={} content_height={} viewport={}x{} text_nodes={} placements={} gradients={} assets={} layout_shift={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} asset_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
+                        scene.frame.browser_instance_id,
+                        scene.frame.seq,
+                        invalidated,
+                        scene.scroll_y as u32,
+                        scene.content_height,
+                        scene.viewport_width,
+                        scene.viewport_height,
+                        present.text_nodes,
+                        present.placements,
+                        present.gradients,
+                        present.assets,
+                        present.layout_shift_px,
+                        present.embedded_scenes,
+                        present.clipped,
+                        present.batches,
+                        present.clear_ok as u8,
+                        present.clear_ms,
+                        present.rect_ms,
+                        present.asset_ms,
+                        present.text_ms,
+                        present.show_ms,
+                        present.presented as u8,
+                        present.submit_ok as u8,
+                        present.submit_ms,
+                        present.present_ms,
+                        present.total_ms,
+                        scene.frame.url
+                    );
+                } else {
+                    crate::log!(
+                        "ui3-service: asset batch defer browser={} seq={} reason=no-painted-band-intersection scroll_y={} content_height={} viewport={}x{} painted_bands={} url={}\n",
+                        scene.frame.browser_instance_id,
+                        scene.frame.seq,
+                        scene.scroll_y as u32,
+                        scene.content_height,
+                        scene.viewport_width,
+                        scene.viewport_height,
+                        scene.painted_bands.len(),
+                        scene.frame.url
+                    );
+                }
             }
             stats.empty_polls = stats.empty_polls.saturating_add(1);
             Timer::after(EmbassyDuration::from_millis(UI3_SERVICE_IDLE_MS)).await;
@@ -225,13 +279,15 @@ fn redraw_scene_text(
     is_scroll: bool,
 ) -> Ui3LayoutInspectResult {
     let total_start = embassy_time_driver::now();
-    let frame = &scene.frame;
-    let Ok(value) = serde_json::from_str::<Value>(frame.layout_trace_json.as_str()) else {
+    let browser_instance_id = scene.frame.browser_instance_id;
+    let frame_seq = scene.frame.seq;
+    let layout_trace_len = scene.frame.layout_trace_json.len();
+    let Ok(value) = serde_json::from_str::<Value>(scene.frame.layout_trace_json.as_str()) else {
         crate::log!(
             "ui3-service: layout json parse failed browser={} seq={} bytes={}\n",
-            frame.browser_instance_id,
-            frame.seq,
-            frame.layout_trace_json.len()
+            browser_instance_id,
+            frame_seq,
+            layout_trace_len
         );
         return Ui3LayoutInspectResult::default();
     };
@@ -250,8 +306,8 @@ fn redraw_scene_text(
     else {
         crate::log!(
             "ui3-service: layout json missing ui3PaintPlan browser={} seq={}\n",
-            frame.browser_instance_id,
-            frame.seq
+            browser_instance_id,
+            frame_seq
         );
         return Ui3LayoutInspectResult::default();
     };
@@ -265,29 +321,82 @@ fn redraw_scene_text(
         .unwrap_or(scene.viewport_height);
     scene.scroll_y =
         clamp_scroll_y_for_scene(scene.scroll_y, scene.content_height, scene.viewport_height);
+    let visible_y0 = scene.scroll_y as u32;
+    let visible_y1 = visible_y0
+        .saturating_add(scene.viewport_height)
+        .min(scene.content_height.max(scene.viewport_height));
+    let surface_ok =
+        ensure_scene_surface(scene, scene.viewport_width, visible_y1.max(scene.viewport_height));
+    if !surface_ok {
+        crate::log!(
+            "ui3-service: scene surface unavailable browser={} seq={} viewport={}x{} content_height={}\n",
+            browser_instance_id,
+            frame_seq,
+            scene.viewport_width,
+            scene.viewport_height,
+            scene.content_height
+        );
+    }
 
-    let font_scene = crate::ui3::ui3_font::Ui3FontScene {
-        browser_instance_id: frame.browser_instance_id,
-        scroll_y: scene.scroll_y,
-        viewport_width: scene.viewport_width,
-        viewport_height: scene.viewport_height,
-    };
     let present_reason = if is_scroll {
-        "ui3-text-scroll-primary"
+        "ui3-text-scroll-backend"
     } else {
-        "ui3-text-frame-primary"
+        "ui3-text-frame-backend"
     };
-    let draw =
-        crate::ui3::ui3_font::draw_paint_plan_primary(paint_plan, font_scene, font, present_reason);
-    scene.content_height = scene.content_height.saturating_add(draw.layout_shift_px);
+    let mut draw = paint_missing_scene_bands(
+        scene,
+        font,
+        paint_plan,
+        browser_instance_id,
+        visible_y0,
+        visible_y1,
+        usize::MAX,
+        present_reason,
+    );
+    if draw.layout_shift_px != 0 {
+        scene.content_height = scene.content_height.saturating_add(draw.layout_shift_px);
+    }
+    let scanout_start = embassy_time_driver::now();
+    let scanout = bind_scene_surface_scanout(scene, present_reason);
+    let scanout_ms = if scanout {
+        elapsed_ms_since(scanout_start)
+    } else {
+        0
+    };
+    let prefetch_start = embassy_time_driver::now();
+    let prefetch = prefetch_scene_bands_after_present(
+        scene,
+        font,
+        paint_plan,
+        browser_instance_id,
+        visible_y1,
+        UI3_BACKEND_PREFETCH_BANDS_AFTER_PRESENT,
+        "ui3-text-prefetch-backend",
+    );
+    if prefetch.submit_ok || prefetch.clear_ok {
+        crate::log!(
+            "ui3-service: band-prefetch browser={} seq={} from_y={} bands={} text_nodes={} placements={} gradients={} assets={} submit_ok={} ms={}\n",
+            browser_instance_id,
+            frame_seq,
+            visible_y1,
+            scene.painted_bands.len(),
+            prefetch.text_nodes,
+            prefetch.placements,
+            prefetch.gradients,
+            prefetch.assets,
+            prefetch.submit_ok as u8,
+            elapsed_ms_since(prefetch_start)
+        );
+    }
+    merge_layout_result(&mut draw, prefetch);
     let total_ms = elapsed_ms_since(total_start);
 
     if is_scroll {
         crate::log!(
             "ui3-service: scroll taken={} browser={} seq={} scroll_y={} content_height={} viewport={}x{} text_nodes={} placements={} gradients={} assets={} layout_shift={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} asset_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
             taken_seq,
-            frame.browser_instance_id,
-            frame.seq,
+            browser_instance_id,
+            frame_seq,
             scene.scroll_y as u32,
             scene.content_height,
             scene.viewport_width,
@@ -311,7 +420,7 @@ fn redraw_scene_text(
             draw.submit_ms,
             draw.present_ms,
             total_ms,
-            frame.url
+            scene.frame.url
         );
     }
 
@@ -325,7 +434,7 @@ fn redraw_scene_text(
         embedded_scenes,
         clipped: draw.clipped,
         submit_ok: draw.submit_ok,
-        presented: draw.presented,
+        presented: draw.presented || scanout,
         clear_ok: draw.clear_ok,
         clear_ms: draw.clear_ms,
         rect_ms: draw.rect_ms,
@@ -333,9 +442,398 @@ fn redraw_scene_text(
         text_ms: draw.text_ms,
         show_ms: draw.show_ms,
         submit_ms: draw.submit_ms,
-        present_ms: draw.present_ms,
+        present_ms: draw.present_ms.saturating_add(scanout_ms),
         total_ms: elapsed_ms_since(total_start),
     }
+}
+
+fn paint_missing_scene_bands(
+    scene: &mut Ui3Scene,
+    font: &mut crate::ui3::ui3_font::Ui3FontScratch,
+    paint_plan: &Value,
+    browser_instance_id: u32,
+    y0: u32,
+    y1: u32,
+    max_bands: usize,
+    reason: &str,
+) -> crate::ui3::ui3_font::Ui3FontDrawResult {
+    let mut out = crate::ui3::ui3_font::Ui3FontDrawResult::default();
+    if y0 >= y1 || max_bands == 0 || scene.viewport_width == 0 || scene.viewport_height == 0 {
+        return out;
+    }
+    let band_height = scene_band_height(scene);
+    let mut band_y0 = align_down_u32(y0, band_height);
+    let mut painted = 0usize;
+    while band_y0 < y1 && painted < max_bands {
+        let band_y1 = band_y0
+            .saturating_add(band_height)
+            .min(scene.content_height.max(scene.viewport_height));
+        if band_y0 >= band_y1 {
+            break;
+        }
+        if painted_range_covers(scene, band_y0, band_y1) {
+            band_y0 = band_y1;
+            continue;
+        }
+        if !ensure_scene_surface(scene, scene.viewport_width, band_y1.max(scene.viewport_height)) {
+            break;
+        }
+        let Some(surface) = scene.surface.as_ref() else {
+            break;
+        };
+        let font_scene = crate::ui3::ui3_font::Ui3FontScene {
+            browser_instance_id,
+            scroll_y: band_y0 as f32,
+            viewport_width: scene.viewport_width,
+            viewport_height: band_y1.saturating_sub(band_y0),
+        };
+        let draw = crate::ui3::ui3_font::draw_paint_plan_backend_band(
+            paint_plan,
+            font_scene,
+            font,
+            surface,
+            band_y0,
+            band_y1.saturating_sub(band_y0),
+            reason,
+        );
+        mark_painted_range(scene, band_y0, band_y1);
+        merge_font_draw_result(&mut out, draw);
+        painted = painted.saturating_add(1);
+        crate::log!(
+            "ui3-service: band-paint reason={} y={}..{} band_h={} painted_bands={} text_nodes={} placements={} gradients={} assets={} submit_ok={}\n",
+            reason,
+            band_y0,
+            band_y1,
+            band_height,
+            scene.painted_bands.len(),
+            draw.text_nodes,
+            draw.placements,
+            draw.gradients,
+            draw.assets,
+            draw.submit_ok as u8
+        );
+        band_y0 = band_y1;
+    }
+    out
+}
+
+fn prefetch_scene_bands_after_present(
+    scene: &mut Ui3Scene,
+    font: &mut crate::ui3::ui3_font::Ui3FontScratch,
+    paint_plan: &Value,
+    browser_instance_id: u32,
+    visible_y1: u32,
+    max_bands: usize,
+    reason: &str,
+) -> crate::ui3::ui3_font::Ui3FontDrawResult {
+    if max_bands == 0 {
+        return crate::ui3::ui3_font::Ui3FontDrawResult::default();
+    }
+    let band_height = scene_band_height(scene);
+    let prefetch_y0 = align_up_u32(visible_y1, band_height);
+    if prefetch_y0 >= scene.content_height {
+        return crate::ui3::ui3_font::Ui3FontDrawResult::default();
+    }
+    let prefetch_y1 = prefetch_y0
+        .saturating_add(band_height.saturating_mul(max_bands as u32))
+        .min(scene.content_height);
+    paint_missing_scene_bands(
+        scene,
+        font,
+        paint_plan,
+        browser_instance_id,
+        prefetch_y0,
+        prefetch_y1,
+        max_bands,
+        reason,
+    )
+}
+
+fn merge_font_draw_result(
+    out: &mut crate::ui3::ui3_font::Ui3FontDrawResult,
+    draw: crate::ui3::ui3_font::Ui3FontDrawResult,
+) {
+    out.text_nodes = out.text_nodes.saturating_add(draw.text_nodes);
+    out.placements = out.placements.saturating_add(draw.placements);
+    out.assets = out.assets.saturating_add(draw.assets);
+    out.layout_shift_px = out.layout_shift_px.max(draw.layout_shift_px);
+    out.batches = out.batches.saturating_add(draw.batches);
+    out.gradients = out.gradients.saturating_add(draw.gradients);
+    out.clipped = out.clipped.saturating_add(draw.clipped);
+    out.clear_ok |= draw.clear_ok;
+    out.clear_ms = out.clear_ms.saturating_add(draw.clear_ms);
+    out.rect_ms = out.rect_ms.saturating_add(draw.rect_ms);
+    out.asset_ms = out.asset_ms.saturating_add(draw.asset_ms);
+    out.text_ms = out.text_ms.saturating_add(draw.text_ms);
+    out.show_ms = out.show_ms.saturating_add(draw.show_ms);
+    out.submit_ok |= draw.submit_ok;
+    out.presented |= draw.presented;
+    out.submit_ms = out.submit_ms.saturating_add(draw.submit_ms);
+    out.present_ms = out.present_ms.saturating_add(draw.present_ms);
+}
+
+fn scene_band_height(scene: &Ui3Scene) -> u32 {
+    (scene.viewport_height / 2).max(1)
+}
+
+fn align_down_u32(value: u32, align: u32) -> u32 {
+    if align == 0 {
+        value
+    } else {
+        value / align * align
+    }
+}
+
+fn align_up_u32(value: u32, align: u32) -> u32 {
+    if align == 0 {
+        return value;
+    }
+    value
+        .saturating_add(align.saturating_sub(1))
+        .checked_div(align)
+        .unwrap_or(0)
+        .saturating_mul(align)
+}
+
+fn painted_range_covers(scene: &Ui3Scene, y0: u32, y1: u32) -> bool {
+    if y0 >= y1 {
+        return true;
+    }
+    let mut cursor = y0;
+    for band in &scene.painted_bands {
+        if band.y1 <= cursor {
+            continue;
+        }
+        if band.y0 > cursor {
+            return false;
+        }
+        cursor = cursor.max(band.y1);
+        if cursor >= y1 {
+            return true;
+        }
+    }
+    false
+}
+
+fn mark_painted_range(scene: &mut Ui3Scene, y0: u32, y1: u32) {
+    if y0 >= y1 {
+        return;
+    }
+    scene.painted_bands.push(Ui3PaintedBand { y0, y1 });
+    scene.painted_bands.sort_by_key(|band| band.y0);
+    let mut merged: Vec<Ui3PaintedBand> = Vec::new();
+    for band in scene.painted_bands.iter().copied() {
+        if let Some(last) = merged.last_mut() {
+            if band.y0 <= last.y1 {
+                last.y1 = last.y1.max(band.y1);
+                continue;
+            }
+        }
+        merged.push(band);
+    }
+    scene.painted_bands = merged;
+}
+
+fn invalidate_ready_asset_bands(scene: &mut Ui3Scene) -> usize {
+    if scene.painted_bands.is_empty() || scene.frame.layout_trace_json.is_empty() {
+        return 0;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(scene.frame.layout_trace_json.as_str()) else {
+        return 0;
+    };
+    let Some(paint_plan) = value
+        .get("trace")
+        .and_then(|trace| trace.get("ui3PaintPlan"))
+        .or_else(|| value.get("ui3PaintPlan"))
+    else {
+        return 0;
+    };
+    let Some(boxes) = paint_plan.get("paintedBoxes").and_then(Value::as_array) else {
+        return 0;
+    };
+    let band_height = scene_band_height(scene);
+    let mut invalidated = 0usize;
+    for item in boxes {
+        if item.get("role").and_then(Value::as_str) != Some("image") {
+            continue;
+        }
+        let Some(key) = item.get("key").and_then(Value::as_str) else {
+            continue;
+        };
+        if crate::surfer::asset_shack::ready_asset_for_tag(scene.frame.browser_instance_id, key)
+            .is_none()
+        {
+            continue;
+        }
+        let y = json_f32_field(item, "y").unwrap_or(0.0);
+        let height = json_f32_field(item, "height")
+            .map(ceil_u32)
+            .unwrap_or(0)
+            .max(1);
+        let y0 = floor_i32(y).max(0) as u32;
+        let y1 = y0
+            .saturating_add(height)
+            .min(scene.content_height.max(scene.viewport_height));
+        if y0 >= y1 || !painted_range_intersects(scene, y0, y1) {
+            continue;
+        }
+        let band_y0 = align_down_u32(y0, band_height);
+        let band_y1 =
+            align_up_u32(y1, band_height).min(scene.content_height.max(scene.viewport_height));
+        if remove_painted_range(scene, band_y0, band_y1) {
+            invalidated = invalidated.saturating_add(1);
+            crate::log!(
+                "ui3-service: asset-band-invalidate key={} y={}..{} band={}..{} painted_bands={}\n",
+                key,
+                y0,
+                y1,
+                band_y0,
+                band_y1,
+                scene.painted_bands.len()
+            );
+        }
+    }
+    invalidated
+}
+
+fn painted_range_intersects(scene: &Ui3Scene, y0: u32, y1: u32) -> bool {
+    y0 < y1
+        && scene
+            .painted_bands
+            .iter()
+            .any(|band| band.y0 < y1 && y0 < band.y1)
+}
+
+fn remove_painted_range(scene: &mut Ui3Scene, y0: u32, y1: u32) -> bool {
+    if y0 >= y1 || scene.painted_bands.is_empty() {
+        return false;
+    }
+    let mut changed = false;
+    let mut kept: Vec<Ui3PaintedBand> = Vec::new();
+    for band in scene.painted_bands.iter().copied() {
+        if band.y1 <= y0 || band.y0 >= y1 {
+            kept.push(band);
+            continue;
+        }
+        changed = true;
+        if band.y0 < y0 {
+            kept.push(Ui3PaintedBand {
+                y0: band.y0,
+                y1: y0,
+            });
+        }
+        if band.y1 > y1 {
+            kept.push(Ui3PaintedBand {
+                y0: y1,
+                y1: band.y1,
+            });
+        }
+    }
+    if changed {
+        scene.painted_bands = kept;
+    }
+    changed
+}
+
+fn merge_layout_result(
+    draw: &mut crate::ui3::ui3_font::Ui3FontDrawResult,
+    other: crate::ui3::ui3_font::Ui3FontDrawResult,
+) {
+    merge_font_draw_result(draw, other);
+}
+
+fn bind_scene_surface_scanout(scene: &Ui3Scene, reason: &str) -> bool {
+    let Some(surface) = scene.surface.as_ref() else {
+        crate::log!(
+            "ui3-service: scanout-bind reason={} ok=0 cause=no-surface scroll_y={} viewport={}x{} content_height={}\n",
+            reason,
+            scene.scroll_y as u32,
+            scene.viewport_width,
+            scene.viewport_height,
+            scene.content_height
+        );
+        return false;
+    };
+    let ok = surface.bind_primary_scanout(
+        scene.scroll_y as u32,
+        scene.viewport_width,
+        scene.viewport_height,
+        reason,
+    );
+    crate::log!(
+        "ui3-service: scanout-bind reason={} ok={} scroll_y={} viewport={}x{} content_height={} surface={}x{} pitch={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X}\n",
+        reason,
+        ok as u8,
+        scene.scroll_y as u32,
+        scene.viewport_width,
+        scene.viewport_height,
+        scene.content_height,
+        surface.width,
+        surface.height,
+        surface.pitch_bytes,
+        surface.gpu,
+        surface.phys,
+        surface.bytes
+    );
+    ok
+}
+
+fn ensure_scene_surface(scene: &mut Ui3Scene, width: u32, min_height: u32) -> bool {
+    if width == 0 || min_height == 0 {
+        return false;
+    }
+
+    if let Some(surface) = scene.surface.as_mut() {
+        if surface.width == width {
+            let old_height = surface.height;
+            let ok = surface.ensure_height(min_height);
+            if ok && surface.height != old_height {
+                crate::log!(
+                    "ui3-service: scene-surface grow width={} old_height={} new_height={} pitch={} gpu=0x{:X} bytes=0x{:X}\n",
+                    width,
+                    old_height,
+                    surface.height,
+                    surface.pitch_bytes,
+                    surface.gpu,
+                    surface.bytes
+                );
+            } else if !ok {
+                crate::log!(
+                    "ui3-service: scene-surface grow failed width={} old_height={} requested_height={} gpu=0x{:X}\n",
+                    width,
+                    old_height,
+                    min_height,
+                    surface.gpu
+                );
+            }
+            return ok;
+        }
+    }
+
+    scene.surface = crate::ui3::ui3_surface::Ui3RgbaSurface::alloc(
+        width,
+        min_height,
+        crate::intel::GPU_VA_DISPLAY_UI3_SCENE_BASE,
+    );
+    if let Some(surface) = scene.surface.as_ref() {
+        crate::log!(
+            "ui3-service: scene-surface alloc width={} height={} pitch={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X}\n",
+            surface.width,
+            surface.height,
+            surface.pitch_bytes,
+            surface.gpu,
+            surface.phys,
+            surface.bytes
+        );
+    } else {
+        crate::log!(
+            "ui3-service: scene-surface alloc failed width={} height={} gpu=0x{:X}\n",
+            width,
+            min_height,
+            crate::intel::GPU_VA_DISPLAY_UI3_SCENE_BASE
+        );
+    }
+    scene.surface.is_some()
 }
 
 fn json_f32_field(node: &Value, key: &str) -> Option<f32> {
@@ -370,6 +868,15 @@ fn ceil_u32(value: f32) -> u32 {
         return 0;
     }
     libm::ceilf(value).min(u32::MAX as f32) as u32
+}
+
+fn floor_i32(value: f32) -> i32 {
+    if !value.is_finite() {
+        return 0;
+    }
+    libm::floorf(value)
+        .max(i32::MIN as f32)
+        .min(i32::MAX as f32) as i32
 }
 
 fn elapsed_ms_since(start: u64) -> u64 {

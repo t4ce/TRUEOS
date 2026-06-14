@@ -1305,6 +1305,18 @@ pub(super) fn notify_primary_surface_external_write(
 }
 
 pub(crate) fn set_primary_plane_source(source: PrimaryPlaneSource, reason: &str) -> bool {
+    set_primary_plane_source_inner(source, reason, false)
+}
+
+pub(crate) fn set_primary_plane_source_mapped(source: PrimaryPlaneSource, reason: &str) -> bool {
+    set_primary_plane_source_inner(source, reason, true)
+}
+
+fn set_primary_plane_source_inner(
+    source: PrimaryPlaneSource,
+    reason: &str,
+    already_mapped: bool,
+) -> bool {
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };
@@ -1364,7 +1376,14 @@ pub(crate) fn set_primary_plane_source(source: PrimaryPlaneSource, reason: &str)
     };
     let mut mapped_now = false;
     if *PRIMARY_PLANE_SOURCE_BINDING.lock() != Some(binding) {
-        if !crate::intel::map_display_scanout_ggtt(dev, source.phys, source.byte_len, source.gpu) {
+        if !already_mapped
+            && !crate::intel::map_display_scanout_ggtt(
+                dev,
+                source.phys,
+                source.byte_len,
+                source.gpu,
+            )
+        {
             crate::log!(
                 "intel/display: primary-plane-source failed reason={} cause=ggtt gpu=0x{:X} phys=0x{:X} bytes=0x{:X}\n",
                 reason,
@@ -1374,9 +1393,11 @@ pub(crate) fn set_primary_plane_source(source: PrimaryPlaneSource, reason: &str)
             );
             return false;
         }
-        crate::intel::ggtt_invalidate(dev);
+        if !already_mapped {
+            crate::intel::ggtt_invalidate(dev);
+        }
         *PRIMARY_PLANE_SOURCE_BINDING.lock() = Some(binding);
-        mapped_now = true;
+        mapped_now = !already_mapped;
     }
 
     let pipe = primary.pipe;

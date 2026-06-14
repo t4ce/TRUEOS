@@ -38,6 +38,7 @@ pub(crate) const GPU_VA_DISPLAY_UI2_FRAME_BASE: u64 = 0x0500_0000;
 pub(crate) const GPU_VA_DISPLAY_CURSOR_BASE: u64 = 0x0600_0000;
 pub(crate) const GPU_VA_DISPLAY_UI3_TEXT_BASE: u64 = 0x1000_0000;
 pub(crate) const GPU_VA_DISPLAY_UI3_CANVAS_BASE: u64 = 0x1100_0000;
+pub(crate) const GPU_VA_DISPLAY_UI3_SCENE_BASE: u64 = 0x1400_0000;
 pub(crate) const WARM_ALIGN: usize = 4096;
 const GGTT_ALIAS_BASE_OFF: usize = 0x0080_0000;
 const GGTT_ALIAS_BYTES: usize = 0x0080_0000;
@@ -378,6 +379,10 @@ pub(crate) use self::display::{LiveOverlayRect, PrimaryPlaneSource, PrimaryPlane
 
 pub(crate) fn set_primary_plane_source(source: PrimaryPlaneSource, reason: &str) -> bool {
     self::display::set_primary_plane_source(source, reason)
+}
+
+pub(crate) fn set_primary_plane_source_mapped(source: PrimaryPlaneSource, reason: &str) -> bool {
+    self::display::set_primary_plane_source_mapped(source, reason)
 }
 
 pub(crate) fn present_ui_surface_to_primary_plane(

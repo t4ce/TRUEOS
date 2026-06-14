@@ -25,6 +25,7 @@ pub const KEYBOARD_KEY_ARROW_UP: u16 = 12;
 pub const KEYBOARD_KEY_ARROW_DOWN: u16 = 13;
 pub const KEYBOARD_KEY_ARROW_LEFT: u16 = 14;
 pub const KEYBOARD_KEY_ARROW_RIGHT: u16 = 15;
+pub const KEYBOARD_KEY_START: u16 = 16;
 pub const KEYBOARD_KEY_F1: u16 = 101;
 pub const KEYBOARD_KEY_F2: u16 = 102;
 pub const KEYBOARD_KEY_F3: u16 = 103;
@@ -393,7 +394,7 @@ pub fn apply_report(
     keys: [u8; 6],
     ascii: [u8; 6],
 ) {
-    let prev_keys = {
+    let (prev_modifiers, prev_keys) = {
         let guard = KEYBOARD_SNAPSHOTS.lock();
         guard
             .iter()
@@ -402,11 +403,26 @@ pub fn apply_report(
                     && snapshot.slot_id == slot_id
                     && snapshot.ep_target == ep_target
             })
-            .map(|snapshot| snapshot.keys)
-            .unwrap_or([0; 6])
+            .map(|snapshot| (snapshot.modifiers, snapshot.keys))
+            .unwrap_or((0, [0; 6]))
     };
 
     upsert_snapshot(controller_id, slot_id, ep_target, modifiers, keys, ascii);
+
+    const GUI_MOD_MASK: u8 = (1 << 3) | (1 << 7);
+    if (prev_modifiers & GUI_MOD_MASK) == 0 && (modifiers & GUI_MOD_MASK) != 0 {
+        push_output_key(
+            controller_id,
+            slot_id,
+            ep_target,
+            t_ms,
+            device_seq,
+            modifiers,
+            KEYBOARD_KEY_START,
+            0,
+            KEYBOARD_OUTPUT_FLAG_PRESS,
+        );
+    }
 
     let mut emitted_ascii = [0u8; 6];
     let mut emitted_key_codes = [0u16; 6];
