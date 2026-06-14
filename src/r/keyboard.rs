@@ -9,6 +9,7 @@ const KEYBOARD_OUTPUT_FLAG_PRESS: u32 = 1 << 0;
 pub const KEYBOARD_OUTPUT_FLAG_SYNTHETIC: u32 = 1 << 1;
 pub const KEYBOARD_OUTPUT_KIND_TEXT: u8 = 1;
 pub const KEYBOARD_OUTPUT_KIND_KEY: u8 = 2;
+const KEYBOARD_CTRL_MOD_MASK: u8 = (1 << 0) | (1 << 4);
 
 pub const KEYBOARD_KEY_BACKSPACE: u16 = 1;
 pub const KEYBOARD_KEY_TAB: u16 = 2;
@@ -430,6 +431,10 @@ pub fn apply_report(
         let key = keys[idx];
         let ch = ascii[idx];
         if key != 0 && !key_is_down(&prev_keys, key) {
+            if key == 0x2C && (modifiers & KEYBOARD_CTRL_MOD_MASK) != 0 {
+                crate::ui3::ui3_orbits::toggle_slot1_cursor_orbit_buttons();
+                continue;
+            }
             if let Some(key_code) = hid_boot_keycode_to_named_key(key) {
                 if !key_code_was_emitted(&emitted_key_codes, key_code) {
                     let codepoint = key_code_default_codepoint(key_code)

@@ -1202,6 +1202,12 @@ fn drain_ui3_cursor_input(
             } else if !is_left && was_left && live_overlay.selection_probe_active {
                 let (x, y) =
                     crate::ui3::ui3_hid::event_position_px(*event, viewport_width, viewport_height);
+                crate::ui3::ui3_orbits::maybe_proc_weather_from_drag(
+                    live_overlay.selection_probe_start_x,
+                    live_overlay.selection_probe_start_y,
+                    x,
+                    y,
+                );
                 let click = activate_ui3_click_if_any(scene, live_overlay, x, y);
                 input.choice_dirty |= click.choice_toggled;
                 input.summary_dirty |= click.summary_toggled;
@@ -1606,9 +1612,15 @@ fn redraw_live_overlay(scene: &Ui3Scene, state: &Ui3LiveOverlayState, reason: &s
             state.selection_probe_current_y,
         );
     }
-    crate::ui3::ui3_hid::push_software_cursor_rects(&mut rects, viewport_width, viewport_height);
+    if !crate::ui3::ui3_orbits::orbit_visuals_active() {
+        crate::ui3::ui3_hid::push_software_cursor_rects(
+            &mut rects,
+            viewport_width,
+            viewport_height,
+        );
+    }
     let preserve = crate::ui3::ui3_canvas::live_overlay_preserve_rect(rects.as_slice());
-    crate::intel::present_live_overlay_rects_preserving(rects.as_slice(), preserve, reason)
+    crate::ui3::ui3_orbits::submit_live_overlay_rects(rects.as_slice(), preserve, reason)
 }
 
 fn ui3_overlay_viewport(scene: &Ui3Scene) -> (u32, u32) {

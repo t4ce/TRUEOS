@@ -359,7 +359,7 @@ async fn ui3_canvas_worker_task(target: MatrixTarget, session_id: u64, scene: Gp
                     };
                     let canvas = current_canvas_rect();
                     let presented = if result.ok {
-                        crate::intel::present_ui3_canvas_rgba(
+                        crate::ui3::ui3_orbits::submit_canvas_rgba(
                             canvas,
                             buffer.virt,
                             buffer.pitch_bytes as usize,

@@ -171,6 +171,14 @@ function isTextInputNode(tagName, node) {
   return tagName === 'input' && TEXT_INPUT_TYPES.has(inputTypeOf(node));
 }
 
+function isTextareaNode(tagName) {
+  return tagName === 'textarea';
+}
+
+function isTextFieldNode(tagName, node) {
+  return isTextInputNode(tagName, node) || isTextareaNode(tagName);
+}
+
 function boolAttr(attrs, name) {
   return attrs && Object.prototype.hasOwnProperty.call(attrs, name);
 }
@@ -207,35 +215,74 @@ function textInputDisplay(node) {
   };
 }
 
+function textareaDisplay(node) {
+  const attrs = layoutAttrs(node);
+  const value = String(attrs.value ?? '').replace(/\r\n?/g, '\n');
+  if (value.length > 0) {
+    return {
+      text: value,
+      placeholder: false,
+    };
+  }
+  return {
+    text: String(attrs.placeholder ?? ''),
+    placeholder: true,
+  };
+}
+
 function clampTextForBox(text, width) {
   const value = String(text ?? '');
   const maxChars = Math.max(1, Math.floor(Math.max(0, Number(width ?? 0) - 20) / 8));
   return value.length > maxChars ? value.slice(0, maxChars) : value;
 }
 
-function textInputTextRun(node, x, y, textStyle = null) {
-  if (!isTextInputNode(String(node.tagName ?? '').toLowerCase(), node)) return null;
-  const display = textInputDisplay(node);
-  const text = clampTextForBox(display.text, Number(node.width ?? 0));
-  if (!text) return null;
+function textareaLinesForBox(text, width, maxLines = 5) {
+  const value = String(text ?? '').replace(/\r\n?/g, '\n');
+  const limit = Math.max(1, Number(maxLines ?? 5) | 0);
+  const maxChars = Math.max(1, Math.floor(Math.max(0, Number(width ?? 0) - 20) / 8));
+  const out = [];
+  for (const hardLine of value.split('\n')) {
+    if (hardLine.length === 0) {
+      out.push('');
+    } else {
+      for (let i = 0; i < hardLine.length; i += maxChars) {
+        out.push(hardLine.slice(i, i + maxChars));
+        if (out.length >= limit) break;
+      }
+    }
+    if (out.length >= limit) break;
+  }
+  return out.slice(0, limit);
+}
+
+function textFieldTextRun(node, x, y, textStyle = null) {
+  const tagName = String(node.tagName ?? '').toLowerCase();
+  if (!isTextFieldNode(tagName, node)) return null;
+  const isTextarea = isTextareaNode(tagName);
+  const display = isTextarea ? textareaDisplay(node) : textInputDisplay(node);
+  const textWidth = Math.max(0, Math.round(Number(node.width ?? 0) || 0) - 20);
+  const lines = isTextarea
+    ? textareaLinesForBox(display.text, Number(node.width ?? 0), 5)
+    : [clampTextForBox(display.text, Number(node.width ?? 0))];
+  if (!lines.some((line) => line.length > 0)) return null;
   const paint = layoutPaint(node) ?? textInputPaint();
   const fieldHeight = Math.max(0, Math.round(Number(node.height ?? 0) || 0));
   const fontSizePx = Number(textStyle?.fontSizePx ?? 15);
   const lineHeightPx = Number(textStyle?.lineHeightPx ?? 20);
   const fontTier = String(textStyle?.fontTier ?? fontTierForPx(fontSizePx));
   const fontRenderTier = String(textStyle?.fontRenderTier ?? renderFontTierForTier(fontTier));
-  const textY = y + Math.max(0, Math.floor((fieldHeight - lineHeightPx) / 2));
+  const textY = isTextarea ? y + 6 : y + Math.max(0, Math.floor((fieldHeight - lineHeightPx) / 2));
   const textColor = display.placeholder
     ? Number(paint.placeholderTextColor ?? defaultTheme.control.textInput.placeholderText)
     : Number(paint.textColor ?? defaultTheme.control.textInput.text);
   return {
-    key: `${String(node.key ?? '')}:input-text`,
+    key: `${String(node.key ?? '')}:${isTextarea ? 'textarea-text' : 'input-text'}`,
     x: x + 10,
     y: textY,
-    width: Math.max(0, Math.round(Number(node.width ?? 0) || 0) - 20),
-    height: Math.max(1, Math.round(lineHeightPx)),
-    text,
-    lines: [text],
+    width: textWidth,
+    height: Math.max(1, Math.round(lineHeightPx) * lines.length),
+    text: lines.join('\n'),
+    lines,
     preserveWhitespace: false,
     textColor: Number.isFinite(textColor)
       ? Math.max(0, Math.trunc(textColor) & 0xffffff)
@@ -245,6 +292,107 @@ function textInputTextRun(node, x, y, textStyle = null) {
     fontTier,
     fontRenderTier,
   };
+}
+
+function clamp01(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(1, n));
+}
+
+function ratioFromRange(attrs, fallbackMax = 1, fallbackMin = 0) {
+  const min = numberFrom(attrs.min, fallbackMin);
+  const rawMax = numberFrom(attrs.max, fallbackMax);
+  const max = rawMax > min ? rawMax : min;
+  if (!(max > min)) return 0;
+  return clamp01((numberFrom(attrs.value, min) - min) / (max - min));
+}
+
+function valueControlRatio(tagName, node) {
+  const attrs = layoutAttrs(node);
+  if (tagName === 'meter' || tagName === 'slider') return ratioFromRange(attrs, 1, 0);
+  if (tagName === 'progress') return ratioFromRange({ ...attrs, min: 0 }, 1, 0);
+  return 0;
+}
+
+function solidPaint(role, color, extra = {}) {
+  return {
+    role,
+    fill: 'solid',
+    color0: color,
+    color1: color,
+    borderWidth: 0,
+    radius: 0,
+    ...extra,
+  };
+}
+
+function valueControlPaintBoxes(node, tagName, x, y) {
+  if (tagName !== 'progress' && tagName !== 'meter' && tagName !== 'slider') return [];
+  const width = Math.max(0, Math.round(Number(node.width ?? 0) || 0));
+  const height = Math.max(0, Math.round(Number(node.height ?? 0) || 0));
+  if (width <= 0 || height <= 0) return [];
+
+  const theme = defaultTheme.control.progress;
+  const trackHeight = Math.min(height, 10);
+  const trackY = y + Math.max(0, Math.floor((height - trackHeight) / 2));
+  const gap = 2;
+  const border = 1;
+  const inset = border + gap;
+  const innerX = x + inset;
+  const innerY = trackY + inset;
+  const innerWidth = Math.max(0, width - inset * 2);
+  const innerHeight = 4;
+  const ratio = valueControlRatio(tagName, node);
+  const fillWidth = Math.round(innerWidth * ratio);
+  const key = String(node.key ?? tagName);
+  const boxes = [
+    {
+      key: `${key}:track`,
+      tagName,
+      role: 'value-track',
+      x,
+      y: trackY,
+      width,
+      height: trackHeight,
+      attrs: layoutAttrs(node),
+      paint: solidPaint('value-track', theme.background, {
+        borderColor: defaultTheme.control.border,
+        borderWidth: border,
+      }),
+    },
+  ];
+
+  if (fillWidth > 0) {
+    boxes.push({
+      key: `${key}:fill`,
+      tagName,
+      role: 'value-fill',
+      x: innerX,
+      y: innerY,
+      width: fillWidth,
+      height: innerHeight,
+      attrs: layoutAttrs(node),
+      paint: solidPaint('value-fill', theme.fill),
+    });
+  }
+
+  if (tagName === 'slider') {
+    const thumbX = Math.round(innerX + innerWidth * ratio - 1);
+    boxes.push({
+      key: `${key}:thumb`,
+      tagName,
+      role: 'slider-thumb',
+      x: thumbX,
+      y,
+      width: 2,
+      height,
+      attrs: layoutAttrs(node),
+      paint: solidPaint('slider-thumb', defaultTheme.control.border),
+    });
+  }
+
+  return boxes;
 }
 
 function isHitBoxNode(tagName, role) {
@@ -398,10 +546,11 @@ function createUi3PaintPlan(layout, options = {}) {
           active: false,
         });
       }
-      if (isTextInputNode(tagName, node)) {
-        const run = textInputTextRun(node, x, y, textStyle);
+      if (isTextFieldNode(tagName, node)) {
+        const run = textFieldTextRun(node, x, y, textStyle);
         if (run) textRuns.push(run);
       }
+      paintedBoxes.push(...valueControlPaintBoxes(node, tagName, x, y));
       if (isHitBoxNode(tagName, role)) {
         const hitBox = {
           key: String(node.key ?? ''),
@@ -804,7 +953,7 @@ export function widgetNodeToRenderNode(node, options = {}) {
   const attrs = attrsWithWidgetProps(node, tagName);
   if (tagName === 'details' && node.props && node.props.open && attrs.open == null) attrs.open = '';
   if (Object.keys(attrs).length > 0) renderNode.attrs = stableObject(attrs);
-  if (isTextInputNode(tagName, renderNode) && !renderNode.paint) {
+  if (isTextFieldNode(tagName, renderNode) && !renderNode.paint) {
     renderNode.paint = textInputPaint();
   }
   if (tagName === 'details' && attrs.open != null) {

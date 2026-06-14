@@ -150,6 +150,9 @@ const OVERLAY_COMPOSITION_PROOF_MARKER_SIZE: u32 = 96;
 const OVERLAY_COMPOSITION_PROOF_MARKER_GAP: u32 = 16;
 const OVERLAY_COMPOSITION_PROOF_MARKER_X: u32 = 48;
 const OVERLAY_COMPOSITION_PROOF_MARKER_Y: u32 = 48;
+const OVERLAY_SWAP_BUFFER_COUNT: usize = 2;
+const OVERLAY_SWAP_GPU_BASE: u64 = 0x0700_0000;
+const OVERLAY_SWAP_GPU_STRIDE: u64 = 0x0200_0000;
 const RGB_PLANE_PROBE_SLOT_COUNT: usize = 3;
 const RGB_PLANE_PROBE_GPU_BASE: u64 = crate::intel::GPU_VA_DISPLAY_OVERLAY_BASE;
 const RGB_PLANE_PROBE_GPU_STRIDE: u64 = 0x0010_0000;
@@ -161,7 +164,7 @@ static PRIMARY_PLANE_SOURCE_BINDING: Mutex<Option<PrimaryPlaneSourceBinding>> = 
 static UI2_BASE_SURFACE: Mutex<Option<DisplayRgba8Surface>> = Mutex::new(None);
 static UI2_FRAME_SURFACE: Mutex<Option<DisplayRgba8Surface>> = Mutex::new(None);
 static OVERLAY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
-static OVERLAY_SURFACE: Mutex<Option<OverlaySurface>> = Mutex::new(None);
+static OVERLAY_SURFACE: Mutex<OverlaySurfacePool> = Mutex::new(OverlaySurfacePool::new());
 static RGB_PLANE_PROBE_SURFACES: Mutex<[Option<RgbPlaneProbeSurface>; RGB_PLANE_PROBE_SLOT_COUNT]> =
     Mutex::new([None; RGB_PLANE_PROBE_SLOT_COUNT]);
 static HW_LOGO_PENDING_IDS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
@@ -346,14 +349,42 @@ struct OverlaySurface {
     width: u32,
     height: u32,
     pitch_bytes: u32,
+    byte_len: usize,
     phys: u64,
     virt: *mut u8,
+    gpu: u64,
     pipe: PipeInfo,
     plane_slot: usize,
+    buffer_index: usize,
 }
 
 unsafe impl Send for OverlaySurface {}
 unsafe impl Sync for OverlaySurface {}
+
+#[derive(Copy, Clone)]
+struct OverlaySurfacePool {
+    width: u32,
+    height: u32,
+    pipe_slot: usize,
+    front_index: Option<usize>,
+    surfaces: [Option<OverlaySurface>; OVERLAY_SWAP_BUFFER_COUNT],
+}
+
+impl OverlaySurfacePool {
+    const fn new() -> Self {
+        Self {
+            width: 0,
+            height: 0,
+            pipe_slot: usize::MAX,
+            front_index: None,
+            surfaces: [None; OVERLAY_SWAP_BUFFER_COUNT],
+        }
+    }
+
+    fn matches(self, width: u32, height: u32, pipe: PipeInfo) -> bool {
+        self.width == width && self.height == height && self.pipe_slot == pipe.slot
+    }
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum OverlayAlphaMode {
@@ -1266,16 +1297,15 @@ pub(super) fn ui3_canvas_overlay_gpgpu(rect: LiveOverlayRect) -> Option<DisplayR
     }
 
     let surface = ensure_overlay_surface(dev, width, height)?;
+    fill_surface_color(
+        surface.virt,
+        surface.pitch_bytes as usize,
+        surface.width,
+        surface.height,
+        0,
+    );
     fill_overlay_rect(surface, rect.x, rect.y, rect.width, rect.height, 0);
-    let byte_len = (surface.pitch_bytes as usize).saturating_mul(surface.height as usize);
-    crate::intel::dma_flush(surface.virt, byte_len);
-
-    if overlay_plane_needs_rearm(dev, surface, 0, 0, OverlayAlphaMode::Straight) {
-        program_two_plane_stack_resources(dev, surface.pipe, surface.plane_slot, "ui3-canvas");
-        if !arm_overlay_plane(dev, surface, 0, 0, OverlayAlphaMode::Straight, "ui3-canvas") {
-            return None;
-        }
-    }
+    crate::intel::dma_flush(surface.virt, surface.byte_len);
 
     Some(DisplayRgba8GpgpuSurface {
         width: surface.width,
@@ -1283,9 +1313,31 @@ pub(super) fn ui3_canvas_overlay_gpgpu(rect: LiveOverlayRect) -> Option<DisplayR
         pitch_bytes: surface.pitch_bytes,
         phys: surface.phys,
         virt: surface.virt,
-        gpu: crate::intel::GPU_VA_DISPLAY_OVERLAY_BASE,
-        byte_len,
+        gpu: surface.gpu,
+        byte_len: surface.byte_len,
     })
+}
+
+pub(super) fn commit_ui3_canvas_overlay_gpgpu(
+    target: DisplayRgba8GpgpuSurface,
+    reason: &str,
+) -> bool {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return false;
+    };
+    let Some(surface) = overlay_surface_for_gpu(target.width, target.height, target.gpu) else {
+        return false;
+    };
+    if surface.virt != target.virt
+        || surface.byte_len != target.byte_len
+        || surface.pitch_bytes != target.pitch_bytes
+    {
+        return false;
+    }
+
+    crate::intel::dma_flush(target.virt, target.byte_len);
+    program_two_plane_stack_resources(dev, surface.pipe, surface.plane_slot, reason);
+    arm_overlay_plane(dev, surface, 0, 0, OverlayAlphaMode::Straight, reason)
 }
 
 pub(super) fn notify_primary_surface_external_write(
@@ -2073,6 +2125,7 @@ pub(crate) fn present_live_overlay_rects_preserving(
     };
 
     if let Some(rect) = preserve {
+        let _ = copy_overlay_front_into_back(surface);
         clear_overlay_except_rect(surface, rect);
     } else {
         fill_surface_color(
@@ -2087,7 +2140,7 @@ pub(crate) fn present_live_overlay_rects_preserving(
         fill_overlay_rect_rgba(surface, *rect);
     }
 
-    let byte_len = (surface.pitch_bytes as usize).saturating_mul(surface.height as usize);
+    let byte_len = surface.byte_len;
     crate::intel::dma_flush(surface.virt, byte_len);
 
     if overlay_plane_needs_rearm(dev, surface, 0, 0, OverlayAlphaMode::Straight) {
@@ -2157,6 +2210,10 @@ pub(crate) fn present_ui3_canvas_rgba(
         return false;
     }
 
+    if !live_rect_covers_surface(rect, surface) {
+        let _ = copy_overlay_front_into_back(surface);
+    }
+
     crate::intel::dma_flush(src, src_pitch_bytes.saturating_mul(copy_h as usize));
     for row_idx in 0..copy_h as usize {
         let src_row = unsafe { src.add(row_idx.saturating_mul(src_pitch_bytes)) as *const u32 };
@@ -2174,7 +2231,7 @@ pub(crate) fn present_ui3_canvas_rgba(
         }
     }
 
-    let byte_len = (surface.pitch_bytes as usize).saturating_mul(surface.height as usize);
+    let byte_len = surface.byte_len;
     crate::intel::dma_flush(surface.virt, byte_len);
 
     if overlay_plane_needs_rearm(dev, surface, 0, 0, OverlayAlphaMode::Straight) {
@@ -2304,7 +2361,7 @@ fn present_rgba_overlay(
         stamp_overlay_composition_proof_marker(surface, alpha, reason);
     }
 
-    let byte_len = (surface.pitch_bytes as usize).saturating_mul(surface.height as usize);
+    let byte_len = surface.byte_len;
     crate::intel::dma_flush(surface.virt, byte_len);
 
     let (pos_x, pos_y) = position
@@ -2335,7 +2392,7 @@ fn present_rgba_overlay(
             surface.width,
             surface.height,
             surface.pitch_bytes,
-            crate::intel::GPU_VA_DISPLAY_OVERLAY_BASE,
+            surface.gpu,
             surface.phys,
             crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURF_OFF),
             crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURFLIVE_OFF)
@@ -3559,6 +3616,73 @@ fn overlay_plane_clamped_position(surface: OverlaySurface, x: u32, y: u32) -> (u
     )
 }
 
+fn overlay_surface_gpu_for_index(index: usize) -> Option<u64> {
+    if index >= OVERLAY_SWAP_BUFFER_COUNT {
+        return None;
+    }
+    OVERLAY_SWAP_GPU_BASE.checked_add((index as u64).checked_mul(OVERLAY_SWAP_GPU_STRIDE)?)
+}
+
+fn overlay_back_buffer_index(pool: OverlaySurfacePool) -> usize {
+    pool.front_index
+        .map(|front| (front + 1) % OVERLAY_SWAP_BUFFER_COUNT)
+        .unwrap_or(0)
+}
+
+fn mark_overlay_surface_front(surface: OverlaySurface) {
+    let mut pool = OVERLAY_SURFACE.lock();
+    if pool.matches(surface.width, surface.height, surface.pipe) {
+        pool.front_index = Some(surface.buffer_index);
+    }
+}
+
+fn overlay_surface_for_gpu(width: u32, height: u32, gpu: u64) -> Option<OverlaySurface> {
+    let pool = OVERLAY_SURFACE.lock();
+    if pool.width != width || pool.height != height {
+        return None;
+    }
+    for surface in pool.surfaces.iter().flatten().copied() {
+        if surface.gpu == gpu {
+            return Some(surface);
+        }
+    }
+    None
+}
+
+fn copy_overlay_front_into_back(back: OverlaySurface) -> bool {
+    let front = {
+        let pool = OVERLAY_SURFACE.lock();
+        if !pool.matches(back.width, back.height, back.pipe) {
+            return false;
+        }
+        let Some(front_index) = pool.front_index else {
+            return false;
+        };
+        if front_index == back.buffer_index {
+            return false;
+        }
+        let Some(front) = pool.surfaces[front_index] else {
+            return false;
+        };
+        front
+    };
+    if front.virt.is_null()
+        || back.virt.is_null()
+        || front.byte_len != back.byte_len
+        || front.pitch_bytes != back.pitch_bytes
+    {
+        return false;
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(front.virt, back.virt, back.byte_len);
+    }
+    true
+}
+
+fn live_rect_covers_surface(rect: LiveOverlayRect, surface: OverlaySurface) -> bool {
+    rect.x == 0 && rect.y == 0 && rect.width >= surface.width && rect.height >= surface.height
+}
+
 fn init_default_overlay_marker(dev: crate::intel::Dev, primary: PrimarySurface) -> bool {
     if !DEFAULT_OVERLAY_MARKER_ENABLED {
         return false;
@@ -3595,6 +3719,7 @@ fn init_default_overlay_marker(dev: crate::intel::Dev, primary: PrimarySurface) 
         if !arm_overlay_plane(dev, surface, pos_x, pos_y, OverlayAlphaMode::Opaque, reason) {
             return false;
         }
+        mark_overlay_surface_front(surface);
     }
 
     crate::log!(
@@ -3616,18 +3741,19 @@ fn ensure_overlay_surface(
     height: u32,
 ) -> Option<OverlaySurface> {
     let active_pipe = active_pipe(dev)?;
-
-    {
-        let state = OVERLAY_SURFACE.lock();
-        if let Some(surface) = *state
-            && surface.width == width
-            && surface.height == height
-            && surface.pipe.slot == active_pipe.slot
-            && surface.plane_slot == OVERLAY_PLANE_SLOT
-        {
-            return Some(surface);
+    let buffer_index = {
+        let pool = OVERLAY_SURFACE.lock();
+        if pool.matches(width, height, active_pipe) {
+            let index = overlay_back_buffer_index(*pool);
+            if let Some(surface) = pool.surfaces[index] {
+                return Some(surface);
+            }
+            index
+        } else {
+            0
         }
-    }
+    };
+    let gpu = overlay_surface_gpu_for_index(buffer_index)?;
 
     let pitch_bytes = aligned_pitch_bytes(width, PRIMARY_BYTES_PER_PIXEL)?;
     let byte_len = usize::try_from(u64::from(pitch_bytes) * u64::from(height)).ok()?;
@@ -3635,20 +3761,16 @@ fn ensure_overlay_surface(
     fill_surface_color(virt, pitch_bytes as usize, width, height, 0);
     crate::intel::dma_flush(virt, byte_len);
 
-    if !crate::intel::map_display_scanout_ggtt(
-        dev,
-        phys,
-        byte_len,
-        crate::intel::GPU_VA_DISPLAY_OVERLAY_BASE,
-    ) {
+    if !crate::intel::map_display_scanout_ggtt(dev, phys, byte_len, gpu) {
         crate::log!(
-            "intel/display: overlay-surface ggtt map failed pipe={} slot={} size={}x{} bytes=0x{:X} gpu=0x{:X}\n",
+            "intel/display: overlay-surface ggtt map failed pipe={} slot={} buffer={} size={}x{} bytes=0x{:X} gpu=0x{:X}\n",
             active_pipe.name,
             OVERLAY_PLANE_SLOT,
+            buffer_index,
             width,
             height,
             byte_len,
-            crate::intel::GPU_VA_DISPLAY_OVERLAY_BASE
+            gpu
         );
         return None;
     }
@@ -3658,20 +3780,37 @@ fn ensure_overlay_surface(
         width,
         height,
         pitch_bytes,
+        byte_len,
         phys,
         virt,
+        gpu,
         pipe: active_pipe,
         plane_slot: OVERLAY_PLANE_SLOT,
+        buffer_index,
     };
-    *OVERLAY_SURFACE.lock() = Some(surface);
+    {
+        let mut pool = OVERLAY_SURFACE.lock();
+        if !pool.matches(width, height, active_pipe) {
+            *pool = OverlaySurfacePool {
+                width,
+                height,
+                pipe_slot: active_pipe.slot,
+                front_index: None,
+                surfaces: [None; OVERLAY_SWAP_BUFFER_COUNT],
+            };
+        }
+        pool.surfaces[buffer_index] = Some(surface);
+    }
     crate::log!(
-        "intel/display: overlay-surface pipe={} slot={} size={}x{} pitch=0x{:X} gpu=0x{:X} phys=0x{:X}\n",
+        "intel/display: overlay-surface pipe={} slot={} buffer={} size={}x{} pitch=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X}\n",
         active_pipe.name,
         OVERLAY_PLANE_SLOT,
+        buffer_index,
         width,
         height,
         pitch_bytes,
-        crate::intel::GPU_VA_DISPLAY_OVERLAY_BASE,
+        byte_len,
+        gpu,
         phys
     );
     Some(surface)
@@ -3860,7 +3999,7 @@ fn overlay_plane_needs_rearm(
     let plane_base = overlay_plane_base(surface.pipe, surface.plane_slot);
     let want_pos = plane_pos_reg_value(pos_x, pos_y);
     let want_size = plane_size_reg_value(surface.width, surface.height);
-    let want_surf = u32::try_from(crate::intel::GPU_VA_DISPLAY_OVERLAY_BASE).unwrap_or(0);
+    let want_surf = u32::try_from(surface.gpu).unwrap_or(0);
     let ctl = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_CTL_OFF);
     let pos = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_POS_OFF);
     let size = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SIZE_OFF);
@@ -3886,7 +4025,7 @@ fn arm_overlay_plane(
     reason: &str,
 ) -> bool {
     let plane_base = overlay_plane_base(surface.pipe, surface.plane_slot);
-    let Some(surface_reg) = u32::try_from(crate::intel::GPU_VA_DISPLAY_OVERLAY_BASE).ok() else {
+    let Some(surface_reg) = u32::try_from(surface.gpu).ok() else {
         return false;
     };
     let Some(stride_reg) = plane_stride_reg_value(surface.pitch_bytes) else {
@@ -3931,6 +4070,11 @@ fn arm_overlay_plane(
     let keymax_after = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYMAX_OFF);
     let aux_dist_after = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_AUX_DIST_OFF);
     let aux_offset_after = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_AUX_OFFSET_OFF);
+    let ok = live_after == surface_reg;
+    if ok {
+        mark_overlay_surface_front(surface);
+    }
+
     crate::log!(
         "intel/display: overlay-arm reason={} pipe={} slot={} alpha={:?} ctl_before=0x{:08X} ctl_enabled=0x{:08X} color_ctl=0x{:08X}=>0x{:08X} color_alpha={}=>{} pos={}x{} size={}x{} stride=0x{:08X} key=0x{:08X}/0x{:08X}/0x{:08X} aux=0x{:08X}/0x{:08X} surf_before=0x{:08X} surf_after=0x{:08X} surf_live_before=0x{:08X} surf_live_after=0x{:08X} frame={}=>{} frame_wait={} live_iters={}\n",
         reason,
@@ -3963,7 +4107,7 @@ fn arm_overlay_plane(
         live_iters
     );
 
-    live_after == surface_reg
+    ok
 }
 
 pub(super) fn active_pipe(dev: crate::intel::Dev) -> Option<PipeInfo> {
