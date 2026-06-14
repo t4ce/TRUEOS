@@ -45,8 +45,9 @@ const ACTIVE_PARTICLE_MULTIPLIER: usize = 5;
 const ACTIVE_PARTICLE_WOBBLE_SCALE: f32 = 2.35;
 const ACTIVE_PARTICLE_TRAIL_SCALE: f32 = 1.75;
 const DISTORTION_ROLL_FRAMES: u32 = 125;
-const DISTORTION_LIFE_FRAMES: u32 = 125;
+const DISTORTION_LIFE_FRAMES: u32 = 313;
 const DISTORTION_TARGET_COUNT: u32 = BUTTON_COUNT as u32 + 1;
+const DISTORTION_EXTRA_TARGET_CHANCE_PER_1000: u32 = 450;
 const DISTORTION_INNER_RADIUS_PX: f32 = ORBIT_RADIUS_PX * 0.5;
 const DISCO_LIFE_FRAMES: u32 = 1875;
 // Performance degraded: this full-screen gradient pass is intentionally parked
@@ -57,9 +58,9 @@ const HAPPY_ACTION_FRAMES: u32 = 188;
 const HAPPY_ACTION_BASELINE_FRAMES: u32 = 1625;
 const HAPPY_ACTION_JITTER_FRAMES: u32 = 625;
 const HAPPY_COMBO_CHANCE_PER_1000: u32 = 100;
-const PARALLEL_SCALE_FRAMES: u32 = 12;
+const PARALLEL_SCALE_FRAMES: u32 = 32;
 const PARALLEL_RETURN_DELAY_FRAMES: u32 = 938;
-const PARALLEL_ROLL_PER_1000: u32 = 10;
+const PARALLEL_ROLL_PER_1000: u32 = 75;
 const MOOD_ORBIT_ANGLE_SPEED: f32 = 0.018;
 const RETURN_SPAWN_MARGIN_PX: f32 = 96.0;
 const CURSOR_GAME_LEVEL_MAX: u32 = 15;
@@ -175,8 +176,7 @@ struct OrbitState {
     follow_vx: f32,
     follow_vy: f32,
     follow_ready: bool,
-    distortion_idx: Option<usize>,
-    distortion_until_frame: u32,
+    distortion_until_frames: [u32; BUTTON_COUNT],
     next_distortion_roll_frame: u32,
     distortion_seed: u32,
     disco_until_frame: u32,
@@ -199,8 +199,7 @@ impl OrbitState {
             follow_vx: 0.0,
             follow_vy: 0.0,
             follow_ready: false,
-            distortion_idx: None,
-            distortion_until_frame: 0,
+            distortion_until_frames: [0; BUTTON_COUNT],
             next_distortion_roll_frame: DISTORTION_ROLL_FRAMES,
             distortion_seed: 0,
             disco_until_frame: 0,
@@ -490,7 +489,7 @@ fn update_slot1_cursor_orbit_buttons() -> bool {
     if feature_enabled(LEVEL_DISTORTION) {
         update_distortion_state(&mut state, frame);
     } else {
-        state.distortion_idx = None;
+        state.distortion_until_frames = [0; BUTTON_COUNT];
         state.disco_until_frame = 0;
     }
     let weather = update_weather_state(&mut state, frame);
@@ -532,8 +531,7 @@ fn update_slot1_cursor_orbit_buttons() -> bool {
             OrbitMode::Orbiting | OrbitMode::Parked => {
                 let orbiting = mode == OrbitMode::Orbiting;
                 let distorted = feature_enabled(LEVEL_DISTORTION)
-                    && state.distortion_idx == Some(idx)
-                    && distortion_frame_active(frame, state.distortion_until_frame);
+                    && distortion_frame_active(frame, state.distortion_until_frames[idx]);
                 let distortion_seed = state.distortion_seed;
                 let traits = update_button_persona(
                     &mut state.personas[idx],
@@ -711,8 +709,7 @@ fn init_orbit_buttons(state: &mut OrbitState) {
     state.follow_vx = 0.0;
     state.follow_vy = 0.0;
     state.follow_ready = true;
-    state.distortion_idx = None;
-    state.distortion_until_frame = 0;
+    state.distortion_until_frames = [0; BUTTON_COUNT];
     state.next_distortion_roll_frame = DISTORTION_ROLL_FRAMES;
     state.disco_until_frame = 0;
     for idx in 0..BUTTON_COUNT {
@@ -1053,10 +1050,10 @@ fn weather_grid_target(weather: WeatherState, idx: usize) -> (f32, f32) {
 }
 
 fn update_distortion_state(state: &mut OrbitState, frame: u32) {
-    if state.distortion_idx.is_some()
-        && !distortion_frame_active(frame, state.distortion_until_frame)
-    {
-        state.distortion_idx = None;
+    for until_frame in state.distortion_until_frames.iter_mut() {
+        if !distortion_frame_active(frame, *until_frame) {
+            *until_frame = 0;
+        }
     }
     if frame < state.next_distortion_roll_frame {
         return;
@@ -1069,7 +1066,6 @@ fn update_distortion_state(state: &mut OrbitState, frame: u32) {
     state.next_distortion_roll_frame = frame.saturating_add(DISTORTION_ROLL_FRAMES);
     let target = seed % DISTORTION_TARGET_COUNT;
     if target == BUTTON_COUNT as u32 {
-        state.distortion_idx = None;
         state.disco_until_frame = frame.saturating_add(DISCO_LIFE_FRAMES);
         crate::log!(
             "ui3-orbits: distortion-roll target=butterfly disco_until={} seed=0x{:08X}\n",
@@ -1077,15 +1073,34 @@ fn update_distortion_state(state: &mut OrbitState, frame: u32) {
             seed
         );
     } else {
-        state.distortion_idx = Some(target as usize);
-        state.distortion_until_frame = frame.saturating_add(DISTORTION_LIFE_FRAMES);
+        activate_distortion_target(state, target as usize, frame);
+        let extra_seed = xorshift32(seed ^ 0xD157_02A5);
+        if extra_seed % 1000 < DISTORTION_EXTRA_TARGET_CHANCE_PER_1000 {
+            let extra_target = (extra_seed as usize) % BUTTON_COUNT;
+            activate_distortion_target(state, extra_target, frame);
+        }
         crate::log!(
-            "ui3-orbits: distortion-roll target={} until={} seed=0x{:08X}\n",
+            "ui3-orbits: distortion-roll target={} active={} seed=0x{:08X}\n",
             target,
-            state.distortion_until_frame,
+            active_distortion_count(state, frame),
             seed
         );
     }
+}
+
+fn activate_distortion_target(state: &mut OrbitState, idx: usize, frame: u32) {
+    if idx >= BUTTON_COUNT {
+        return;
+    }
+    state.distortion_until_frames[idx] = frame.saturating_add(DISTORTION_LIFE_FRAMES);
+}
+
+fn active_distortion_count(state: &OrbitState, frame: u32) -> usize {
+    state
+        .distortion_until_frames
+        .iter()
+        .filter(|until_frame| distortion_frame_active(frame, **until_frame))
+        .count()
 }
 
 fn update_button_persona(

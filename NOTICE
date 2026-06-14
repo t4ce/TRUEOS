@@ -1,0 +1,14 @@
+TRUEOS Notice
+
+TRUEOS is source-available for public view. The first-party TRUEOS code in this
+repository is made available under the TRUEOS Source-Available Public View
+License in the root LICENSE file.
+
+Public visibility of this repository does not make TRUEOS open source and does
+not grant permission to use, run, modify, redistribute, sublicense, sell, or
+commercially exploit first-party TRUEOS code without prior written permission
+from the copyright holder.
+
+Some directories and files contain third-party code or imported reference
+material. Those components remain under their own upstream licenses and notices.
+See THIRD_PARTY_NOTICES.md and the license files near the relevant components.

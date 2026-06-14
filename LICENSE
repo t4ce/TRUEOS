@@ -1,0 +1,31 @@
+TRUEOS Source-Available Public View License
+
+Copyright (c) 2026 Jonas Baethke. All rights reserved.
+
+This license applies to first-party TRUEOS source code, documentation, and
+project files in this repository, unless a file, directory, manifest, or notice
+states a different license or provenance.
+
+TRUEOS is source-available for public view. You may access, download, clone, and
+read the TRUEOS source code solely for personal review, security research,
+education, evaluation, and reference.
+
+No other permission is granted. Without prior written permission from the
+copyright holder, you may not use, run, modify, prepare derivative works from,
+copy beyond what is necessary for the public-view permission above, publish,
+redistribute, sublicense, sell, provide as a service, or commercially exploit
+the first-party TRUEOS source code or any substantial portion of it.
+
+Third-party code, vendored dependencies, imported reference material, generated
+artifacts, firmware, bootloader components, and files with their own license
+headers or manifests remain governed by their own licenses and notices. This
+license does not replace, narrow, or expand those third-party license terms.
+
+The TRUEOS name, marks, logos, and branding are not licensed for use except as
+needed to identify the project truthfully.
+
+THE SOFTWARE IS PROVIDED FOR PUBLIC VIEWING "AS IS", WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO
+EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY ARISING FROM OR RELATED TO THE SOFTWARE OR THIS REPOSITORY.
