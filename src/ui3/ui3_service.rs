@@ -800,7 +800,7 @@ fn draw_shell_on_scene(
     if !drew {
         return false;
     }
-    bind_scene_surface_scanout_without_flush(scene, reason)
+    bind_scene_surface_scanout(scene, reason)
 }
 
 fn bind_scene_surface_scanout(scene: &Ui3Scene, reason: &str) -> bool {
@@ -823,42 +823,6 @@ fn bind_scene_surface_scanout(scene: &Ui3Scene, reason: &str) -> bool {
     );
     crate::log!(
         "ui3-service: scanout-bind reason={} ok={} scroll_y={} viewport={}x{} content_height={} surface={}x{} pitch={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X}\n",
-        reason,
-        ok as u8,
-        scene.scroll_y as u32,
-        scene.viewport_width,
-        scene.viewport_height,
-        scene.content_height,
-        surface.width,
-        surface.height,
-        surface.pitch_bytes,
-        surface.gpu,
-        surface.phys,
-        surface.bytes
-    );
-    ok
-}
-
-fn bind_scene_surface_scanout_without_flush(scene: &Ui3Scene, reason: &str) -> bool {
-    let Some(surface) = scene.surface.as_ref() else {
-        crate::log!(
-            "ui3-service: scanout-bind reason={} ok=0 cause=no-surface scroll_y={} viewport={}x{} content_height={}\n",
-            reason,
-            scene.scroll_y as u32,
-            scene.viewport_width,
-            scene.viewport_height,
-            scene.content_height
-        );
-        return false;
-    };
-    let ok = surface.bind_primary_scanout_without_flush(
-        scene.scroll_y as u32,
-        scene.viewport_width,
-        scene.viewport_height,
-        reason,
-    );
-    crate::log!(
-        "ui3-service: scanout-bind-noflush reason={} ok={} scroll_y={} viewport={}x{} content_height={} surface={}x{} pitch={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X}\n",
         reason,
         ok as u8,
         scene.scroll_y as u32,
