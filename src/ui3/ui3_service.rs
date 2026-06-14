@@ -81,19 +81,30 @@ pub async fn ui3_service_task() {
         }
 
         let (overlay_width, overlay_height) = ui3_overlay_viewport(&scene);
-        let shell_dirty = crate::ui3::ui3_shell_overlay::handle_keyboard(
+        let shell_input = crate::ui3::ui3_shell_overlay::handle_keyboard(
             &mut shell_overlay,
             overlay_width,
             overlay_height,
         );
         let cursor_input = drain_ui3_cursor_input(&mut cursor_events, &mut live_overlay, &scene);
+        if shell_input.toggled_on || shell_input.toggled_off {
+            let invalidated = invalidate_visible_scene_bands(&mut scene);
+            crate::log!(
+                "ui3-service: shell-toggle active={} invalidated_visible={}\n",
+                shell_overlay.active as u8,
+                invalidated as u8
+            );
+        }
         if shell_overlay.active {
-            let _ = crate::ui3::ui3_shell_overlay::redraw_if_dirty(
-                &mut shell_overlay,
-                overlay_width,
-                overlay_height,
-                shell_dirty,
-                "ui3-shell-overlay",
+            let _ = draw_shell_on_scene(&scene, &mut shell_overlay, false, "ui3-shell-scene");
+        } else if shell_input.toggled_off {
+            let present = redraw_scene_text(&mut scene, &mut font, 0, false);
+            crate::log!(
+                "ui3-service: shell-hide repaint presented={} submit_ok={} present_ms={} total_ms={}\n",
+                present.presented as u8,
+                present.submit_ok as u8,
+                present.present_ms,
+                present.total_ms
             );
         } else if cursor_input.overlay_dirty {
             let _ = redraw_live_overlay(&scene, &live_overlay, "ui3-live-overlay-cursor");
@@ -146,6 +157,10 @@ pub async fn ui3_service_task() {
             scene.frame = frame;
             scene.painted_bands.clear();
             consume_render_tree_frame(&mut scene, stats.frames_taken, &mut font);
+            if shell_overlay.active {
+                let _ =
+                    draw_shell_on_scene(&scene, &mut shell_overlay, true, "ui3-shell-scene-frame");
+            }
         }
 
         if !took_any {
@@ -156,6 +171,14 @@ pub async fn ui3_service_task() {
                 let invalidated = invalidate_ready_asset_bands(&mut scene);
                 if invalidated != 0 {
                     let present = redraw_scene_text(&mut scene, &mut font, 0, false);
+                    if shell_overlay.active {
+                        let _ = draw_shell_on_scene(
+                            &scene,
+                            &mut shell_overlay,
+                            true,
+                            "ui3-shell-scene-asset",
+                        );
+                    }
                     crate::log!(
                         "ui3-service: asset batch redraw browser={} seq={} invalidated={} scroll_y={} content_height={} viewport={}x{} text_nodes={} placements={} gradients={} assets={} layout_shift={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} asset_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
                         scene.frame.browser_instance_id,
@@ -742,6 +765,44 @@ fn merge_layout_result(
     merge_font_draw_result(draw, other);
 }
 
+fn invalidate_visible_scene_bands(scene: &mut Ui3Scene) -> bool {
+    if scene.viewport_width == 0 || scene.viewport_height == 0 {
+        return false;
+    }
+    let y0 = scene.scroll_y as u32;
+    let y1 = y0
+        .saturating_add(scene.viewport_height)
+        .min(scene.content_height.max(scene.viewport_height));
+    remove_painted_range(scene, y0, y1)
+}
+
+fn draw_shell_on_scene(
+    scene: &Ui3Scene,
+    shell: &mut crate::ui3::ui3_shell_overlay::Ui3ShellOverlayState,
+    force: bool,
+    reason: &str,
+) -> bool {
+    if scene.viewport_width == 0 || scene.viewport_height == 0 {
+        return false;
+    }
+    let Some(surface) = scene.surface.as_ref() else {
+        return false;
+    };
+    let drew = crate::ui3::ui3_shell_overlay::draw_scene_if_dirty(
+        shell,
+        surface,
+        scene.viewport_width,
+        scene.viewport_height,
+        scene.scroll_y as u32,
+        force,
+        reason,
+    );
+    if !drew {
+        return false;
+    }
+    bind_scene_surface_scanout_without_flush(scene, reason)
+}
+
 fn bind_scene_surface_scanout(scene: &Ui3Scene, reason: &str) -> bool {
     let Some(surface) = scene.surface.as_ref() else {
         crate::log!(
@@ -762,6 +823,42 @@ fn bind_scene_surface_scanout(scene: &Ui3Scene, reason: &str) -> bool {
     );
     crate::log!(
         "ui3-service: scanout-bind reason={} ok={} scroll_y={} viewport={}x{} content_height={} surface={}x{} pitch={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X}\n",
+        reason,
+        ok as u8,
+        scene.scroll_y as u32,
+        scene.viewport_width,
+        scene.viewport_height,
+        scene.content_height,
+        surface.width,
+        surface.height,
+        surface.pitch_bytes,
+        surface.gpu,
+        surface.phys,
+        surface.bytes
+    );
+    ok
+}
+
+fn bind_scene_surface_scanout_without_flush(scene: &Ui3Scene, reason: &str) -> bool {
+    let Some(surface) = scene.surface.as_ref() else {
+        crate::log!(
+            "ui3-service: scanout-bind reason={} ok=0 cause=no-surface scroll_y={} viewport={}x{} content_height={}\n",
+            reason,
+            scene.scroll_y as u32,
+            scene.viewport_width,
+            scene.viewport_height,
+            scene.content_height
+        );
+        return false;
+    };
+    let ok = surface.bind_primary_scanout_without_flush(
+        scene.scroll_y as u32,
+        scene.viewport_width,
+        scene.viewport_height,
+        reason,
+    );
+    crate::log!(
+        "ui3-service: scanout-bind-noflush reason={} ok={} scroll_y={} viewport={}x{} content_height={} surface={}x{} pitch={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X}\n",
         reason,
         ok as u8,
         scene.scroll_y as u32,

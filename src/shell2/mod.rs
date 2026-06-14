@@ -1748,7 +1748,12 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 }
             }
         } else {
-            Timer::after(EmbassyDuration::from_millis(5)).await;
+            let idle_ms = if (output_mask & OUTPUT_UI2_MASK) != 0 {
+                1
+            } else {
+                5
+            };
+            Timer::after(EmbassyDuration::from_millis(idle_ms)).await;
         }
     }
 }

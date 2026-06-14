@@ -4,7 +4,10 @@ use super::super::{ShellBackend2, print_shell_line};
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 fn print_usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "disc: usage `disc` | `disc format <disc-id>`");
+    print_shell_line(
+        io,
+        "disc: usage `disc` | `disc format <disc-id>` | `disc log [disc-id] [--max N]`",
+    );
 }
 
 fn print_disc_table(io: &'static dyn ShellBackend2) {
@@ -44,6 +47,7 @@ pub(crate) fn try_parse(
 
             super::format::start_format_session_for_disk(io, disk, "disc format")
         }
+        Some("log") | Some("fslog") => super::fslog::try_parse_as(io, "disc log", args),
         Some(_) => {
             print_usage(io);
             ParseOutcome::Handled
