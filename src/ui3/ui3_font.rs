@@ -149,6 +149,67 @@ pub(crate) fn draw_paint_plan_backend(
     draw_paint_plan_backend_band(plan, scene, scratch, surface, 0, surface.height, reason)
 }
 
+pub(crate) fn stamp_sprite64_backend(
+    surface: &crate::ui3::ui3_surface::Ui3RgbaSurface,
+    doc_x: i32,
+    doc_y: i32,
+    slot: u16,
+    reason: &str,
+) -> Ui3FontDrawResult {
+    let cell = crate::intel::gpgpu::SPRITE64_WORKLIST_CELL_PIXELS;
+    if surface.width < cell || surface.height < cell {
+        return Ui3FontDrawResult::default();
+    }
+    let clear_start = embassy_time_driver::now();
+    surface.clear_white_rect(doc_x, doc_y, cell, cell);
+    let clear_ms = elapsed_ms_since(clear_start);
+
+    let text_start = embassy_time_driver::now();
+    let mut text_batches = 0usize;
+    let mut text_submitted = false;
+    let mut text_ms = 0u64;
+    for page in surface.pages() {
+        let page_y0 = page.y0 as i32;
+        let page_y1 = page_y0.saturating_add(page.height as i32);
+        let glyph_y1 = doc_y.saturating_add(cell as i32);
+        if doc_y < page_y0 || glyph_y1 > page_y1 {
+            continue;
+        }
+        let local_y = doc_y.saturating_sub(page_y0);
+        let placement = crate::intel::gpgpu::GpgpuSprite64Placement::src_over(slot, doc_x, local_y);
+        let dst = page.as_gpgpu(surface.width, surface.pitch_bytes);
+        let Some(result) =
+            crate::intel::gpgpu::sprite64_worklist_surface(&[placement], dst, reason)
+        else {
+            continue;
+        };
+        text_batches = text_batches.saturating_add(1);
+        text_submitted |= result.submitted;
+        text_ms = elapsed_ms_since(text_start);
+        break;
+    }
+
+    Ui3FontDrawResult {
+        text_nodes: 0,
+        placements: if text_submitted { 1 } else { 0 },
+        assets: 0,
+        layout_shift_px: 0,
+        batches: text_batches,
+        gradients: 0,
+        clipped: if text_submitted { 0 } else { 1 },
+        clear_ok: true,
+        clear_ms,
+        rect_ms: 0,
+        asset_ms: 0,
+        text_ms,
+        show_ms: 0,
+        submit_ok: text_submitted,
+        presented: false,
+        submit_ms: clear_ms.saturating_add(text_ms),
+        present_ms: 0,
+    }
+}
+
 pub(crate) fn draw_paint_plan_backend_band(
     plan: &Value,
     mut scene: Ui3FontScene,
@@ -1287,17 +1348,9 @@ fn push_summary_icon_placement_resolved(
         stats.placement_cap_hit = true;
         return;
     }
-    let Some(slot) = summary_icon_slot(open) else {
+    let Some((dst_x, dst_y, slot)) = summary_icon_stamp_for_ui3(x, y, height, open) else {
         return;
     };
-    let cell = crate::intel::gpgpu::SPRITE64_WORKLIST_CELL_PIXELS as f32;
-    let y_offset = if height > cell {
-        (height - cell) * 0.5
-    } else {
-        0.0
-    };
-    let dst_x = floor_i32(x + UI3_SUMMARY_ICON_X_PAD);
-    let dst_y = floor_i32(y + y_offset);
 
     let fallback_max_x = scene
         .viewport_width
@@ -1365,6 +1418,26 @@ fn summary_icon_slot(open: bool) -> Option<u16> {
         .map(|region| region.slot)
 }
 
+pub(crate) fn summary_icon_stamp_for_ui3(
+    x: f32,
+    y: f32,
+    height: f32,
+    open: bool,
+) -> Option<(i32, i32, u16)> {
+    let slot = summary_icon_slot(open)?;
+    let cell = crate::intel::gpgpu::SPRITE64_WORKLIST_CELL_PIXELS as f32;
+    let y_offset = if height > cell {
+        (height - cell) * 0.5
+    } else {
+        0.0
+    };
+    Some((floor_i32(x + UI3_SUMMARY_ICON_X_PAD), floor_i32(y + y_offset), slot))
+}
+
+pub(crate) fn summary_icon_slot_for_ui3(open: bool) -> Option<u16> {
+    summary_icon_slot(open)
+}
+
 fn choice_control_slot(control_type: &str, checked: bool, indeterminate: bool) -> Option<u16> {
     let is_radio = control_type == "radio";
     let glyphs: &[char] = if is_radio {
@@ -1376,11 +1449,19 @@ fn choice_control_slot(control_type: &str, checked: bool, indeterminate: bool) -
     } else if checked || indeterminate {
         &['\u{2611}', '\u{2705}', '\u{2714}', '\u{1F7E6}']
     } else {
-        &['\u{1F532}', '\u{1F7E6}', '\u{25FB}']
+        &['\u{1F7E6}', '\u{1F532}', '\u{25FB}']
     };
     glyphs.iter().find_map(|ch| {
         crate::ui3::althlasfont::twemoji::twemoji_lookup_glyph_region(*ch).map(|region| region.slot)
     })
+}
+
+pub(crate) fn choice_control_slot_for_ui3(
+    control_type: &str,
+    checked: bool,
+    indeterminate: bool,
+) -> Option<u16> {
+    choice_control_slot(control_type, checked, indeterminate)
 }
 
 fn push_solid_gradient_rect(

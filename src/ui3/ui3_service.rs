@@ -62,12 +62,13 @@ struct Ui3LiveOverlayState {
     last_buttons_down: u32,
 }
 
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct Ui3CursorInput {
     wheel_delta: i32,
     overlay_dirty: bool,
     choice_dirty: bool,
     summary_dirty: bool,
+    toggle_stamp: Option<Ui3ToggleStamp>,
 }
 
 #[derive(Clone, Debug)]
@@ -82,19 +83,33 @@ struct Ui3ChoiceHit {
     key: String,
     kind: String,
     checked: bool,
+    stamp_x: i32,
+    stamp_y: i32,
 }
 
 #[derive(Clone, Debug)]
 struct Ui3SummaryHit {
     key: String,
     open: bool,
+    stamp_x: i32,
+    stamp_y: i32,
 }
 
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Clone, Debug)]
+struct Ui3ToggleStamp {
+    key: String,
+    kind: String,
+    x: i32,
+    y: i32,
+    slot: u16,
+}
+
+#[derive(Clone, Debug, Default)]
 struct Ui3ClickResult {
     activated: bool,
     choice_toggled: bool,
     summary_toggled: bool,
+    toggle_stamp: Option<Ui3ToggleStamp>,
 }
 
 #[embassy_executor::task]
@@ -146,18 +161,24 @@ pub async fn ui3_service_task() {
                 present.total_ms
             );
         } else if cursor_input.choice_dirty || cursor_input.summary_dirty {
-            let invalidated = invalidate_visible_scene_bands(&mut scene);
-            let present = redraw_scene_text(&mut scene, &mut font, 0, false);
-            crate::log!(
-                "ui3-service: ui-toggle repaint choice={} summary={} invalidated_visible={} presented={} submit_ok={} present_ms={} total_ms={}\n",
-                cursor_input.choice_dirty as u8,
-                cursor_input.summary_dirty as u8,
-                invalidated as u8,
-                present.presented as u8,
-                present.submit_ok as u8,
-                present.present_ms,
-                present.total_ms
-            );
+            let stamped = cursor_input
+                .toggle_stamp
+                .as_ref()
+                .is_some_and(|stamp| stamp_ui3_toggle(&scene, stamp));
+            if !stamped {
+                let invalidated = invalidate_visible_scene_bands(&mut scene);
+                let present = redraw_scene_text(&mut scene, &mut font, 0, false);
+                crate::log!(
+                    "ui3-service: ui-toggle repaint choice={} summary={} invalidated_visible={} presented={} submit_ok={} present_ms={} total_ms={}\n",
+                    cursor_input.choice_dirty as u8,
+                    cursor_input.summary_dirty as u8,
+                    invalidated as u8,
+                    present.presented as u8,
+                    present.submit_ok as u8,
+                    present.present_ms,
+                    present.total_ms
+                );
+            }
             if cursor_input.overlay_dirty {
                 let _ = redraw_live_overlay(&scene, &live_overlay, "ui3-live-overlay-toggle");
             }
@@ -897,6 +918,54 @@ fn bind_scene_surface_scanout(scene: &Ui3Scene, reason: &str) -> bool {
     ok
 }
 
+fn stamp_ui3_toggle(scene: &Ui3Scene, stamp: &Ui3ToggleStamp) -> bool {
+    let total_start = embassy_time_driver::now();
+    let Some(surface) = scene.surface.as_ref() else {
+        return false;
+    };
+    let draw = crate::ui3::ui3_font::stamp_sprite64_backend(
+        surface,
+        stamp.x,
+        stamp.y,
+        stamp.slot,
+        "ui3-toggle-stamp-backend",
+    );
+    if !draw.submit_ok {
+        crate::log!(
+            "ui3-service: toggle-stamp failed browser={} key={} kind={} x={} y={} slot={} clipped={} clear_ms={} text_ms={}\n",
+            scene.frame.browser_instance_id,
+            stamp.key,
+            stamp.kind,
+            stamp.x,
+            stamp.y,
+            stamp.slot,
+            draw.clipped,
+            draw.clear_ms,
+            draw.text_ms
+        );
+        return false;
+    }
+    let scanout_start = embassy_time_driver::now();
+    let scanout = bind_scene_surface_scanout(scene, "ui3-toggle-stamp-scanout");
+    crate::log!(
+        "ui3-service: toggle-stamp browser={} key={} kind={} x={} y={} slot={} submitted={} batches={} scanout={} clear_ms={} text_ms={} present_ms={} total_ms={}\n",
+        scene.frame.browser_instance_id,
+        stamp.key,
+        stamp.kind,
+        stamp.x,
+        stamp.y,
+        stamp.slot,
+        draw.submit_ok as u8,
+        draw.batches,
+        scanout as u8,
+        draw.clear_ms,
+        draw.text_ms,
+        elapsed_ms_since(scanout_start),
+        elapsed_ms_since(total_start)
+    );
+    scanout
+}
+
 fn ensure_scene_surface(scene: &mut Ui3Scene, width: u32, min_height: u32) -> bool {
     if width == 0 || min_height == 0 {
         return false;
@@ -1137,6 +1206,9 @@ fn drain_ui3_cursor_input(
                 input.choice_dirty |= click.choice_toggled;
                 input.summary_dirty |= click.summary_toggled;
                 input.overlay_dirty |= click.activated;
+                if click.toggle_stamp.is_some() {
+                    input.toggle_stamp = click.toggle_stamp;
+                }
                 live_overlay.selection_probe_active = false;
                 input.overlay_dirty = true;
             }
@@ -1180,6 +1252,7 @@ fn activate_ui3_click_if_any(
     ) {
         if press_choice.key == release_choice.key && press_choice.kind == release_choice.kind {
             let checked = toggle_ui3_choice_override(scene, &release_choice);
+            let stamp = ui3_choice_toggle_stamp(&release_choice, checked, false);
             crate::log!(
                 "ui3-service: activate kind=choice-toggle browser={} key={} type={} checked={}\n",
                 scene.frame.browser_instance_id,
@@ -1191,6 +1264,7 @@ fn activate_ui3_click_if_any(
                 activated: true,
                 choice_toggled: true,
                 summary_toggled: false,
+                toggle_stamp: stamp,
             };
         }
     }
@@ -1205,6 +1279,7 @@ fn activate_ui3_click_if_any(
     ) {
         if press_summary.key == release_summary.key {
             let open = toggle_ui3_summary_override(scene, &release_summary);
+            let stamp = ui3_summary_toggle_stamp(&release_summary, open);
             crate::log!(
                 "ui3-service: activate kind=summary-toggle browser={} key={} open={}\n",
                 scene.frame.browser_instance_id,
@@ -1215,6 +1290,7 @@ fn activate_ui3_click_if_any(
                 activated: true,
                 choice_toggled: false,
                 summary_toggled: true,
+                toggle_stamp: stamp,
             };
         }
     }
@@ -1249,6 +1325,7 @@ fn activate_ui3_click_if_any(
             activated: queued,
             choice_toggled: false,
             summary_toggled: false,
+            toggle_stamp: None,
         };
     }
 
@@ -1349,10 +1426,18 @@ fn ui3_choice_hit_at(scene: &Ui3Scene, screen_x: u32, screen_y: u32) -> Option<U
         let key = json_string_field(control, "key").unwrap_or_default();
         let checked = ui3_choice_override_checked(scene, key.as_str())
             .unwrap_or_else(|| json_bool_field(control, "checked").unwrap_or(false));
+        let stamp_x = floor_i32(
+            x + (width - crate::intel::gpgpu::SPRITE64_WORKLIST_CELL_PIXELS as f32) * 0.5,
+        );
+        let stamp_y = floor_i32(
+            y + (height - crate::intel::gpgpu::SPRITE64_WORKLIST_CELL_PIXELS as f32) * 0.5,
+        );
         best = Some(Ui3ChoiceHit {
             key,
             kind: String::from(kind),
             checked,
+            stamp_x,
+            stamp_y,
         });
     }
     best
@@ -1388,7 +1473,17 @@ fn ui3_summary_hit_at(scene: &Ui3Scene, screen_x: u32, screen_y: u32) -> Option<
         let key = json_string_field(hit, "key").unwrap_or_default();
         let open = ui3_summary_override_open(scene, key.as_str())
             .unwrap_or_else(|| ui3_summary_icon_open(paint_plan, key.as_str()).unwrap_or(false));
-        best = Some(Ui3SummaryHit { key, open });
+        let Some((stamp_x, stamp_y, _slot)) =
+            crate::ui3::ui3_font::summary_icon_stamp_for_ui3(x, y, height, open)
+        else {
+            continue;
+        };
+        best = Some(Ui3SummaryHit {
+            key,
+            open,
+            stamp_x,
+            stamp_y,
+        });
     }
     best
 }
@@ -1435,6 +1530,36 @@ fn toggle_ui3_choice_override(scene: &mut Ui3Scene, hit: &Ui3ChoiceHit) -> bool 
         checked: next_checked,
     });
     next_checked
+}
+
+fn ui3_choice_toggle_stamp(
+    hit: &Ui3ChoiceHit,
+    checked: bool,
+    indeterminate: bool,
+) -> Option<Ui3ToggleStamp> {
+    let slot = crate::ui3::ui3_font::choice_control_slot_for_ui3(
+        hit.kind.as_str(),
+        checked,
+        indeterminate,
+    )?;
+    Some(Ui3ToggleStamp {
+        key: hit.key.clone(),
+        kind: hit.kind.clone(),
+        x: hit.stamp_x,
+        y: hit.stamp_y,
+        slot,
+    })
+}
+
+fn ui3_summary_toggle_stamp(hit: &Ui3SummaryHit, open: bool) -> Option<Ui3ToggleStamp> {
+    let slot = crate::ui3::ui3_font::summary_icon_slot_for_ui3(open)?;
+    Some(Ui3ToggleStamp {
+        key: hit.key.clone(),
+        kind: String::from("summary"),
+        x: hit.stamp_x,
+        y: hit.stamp_y,
+        slot,
+    })
 }
 
 fn toggle_ui3_summary_override(scene: &mut Ui3Scene, hit: &Ui3SummaryHit) -> bool {
