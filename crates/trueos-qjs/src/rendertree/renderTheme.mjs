@@ -34,6 +34,16 @@ export const defaultTheme = Object.freeze({
       radius: 0,
     }),
 
+    textInput: Object.freeze({
+      fill: 0xf2f2f2,
+      fillEnd: 0xfff2a8,
+      border: 0x666666,
+      borderWidth: 1,
+      text: 0x111111,
+      placeholderText: 0x777777,
+      radius: 0,
+    }),
+
     dialog: Object.freeze({
       fill: 0xadd8e6,
       fillEnd: 0xffffff,

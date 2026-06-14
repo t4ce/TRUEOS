@@ -5,6 +5,7 @@ import { parse as parseHtml } from 'parse5';
 import { buildCssStyleRefIndex } from '../truesurfer/css.mjs';
 import { domToWidgets } from '../widlib/index.mjs';
 import { widgetTreeToLayout as buildWidgetTreeLayout } from './layout.mjs';
+import { defaultTheme } from './renderTheme.mjs';
 import {
   RENDER_TRACE_VERSION,
   blockNode,
@@ -23,6 +24,7 @@ const TEMPORAL_INPUT_TAGS = Object.freeze({
   week: 'weekinput',
   'datetime-local': 'datetimelocalinput',
 });
+const TEXT_INPUT_TYPES = new Set(['text', 'search', 'password', 'email', 'url', 'tel']);
 
 function renderContextFor(options = {}) {
   if (options.renderContext && typeof options.renderContext === 'object') return options.renderContext;
@@ -155,7 +157,8 @@ function isSummaryOpen(node) {
 
 function inputTypeOf(node) {
   const attrs = layoutAttrs(node);
-  return String(attrs.type ?? '').toLowerCase();
+  const type = String(attrs.type ?? 'text').trim().toLowerCase();
+  return type || 'text';
 }
 
 function isCheckableInputNode(tagName, node) {
@@ -164,8 +167,84 @@ function isCheckableInputNode(tagName, node) {
   return type === 'checkbox' || type === 'radio';
 }
 
+function isTextInputNode(tagName, node) {
+  return tagName === 'input' && TEXT_INPUT_TYPES.has(inputTypeOf(node));
+}
+
 function boolAttr(attrs, name) {
   return attrs && Object.prototype.hasOwnProperty.call(attrs, name);
+}
+
+function textInputPaint() {
+  const theme = defaultTheme.control.textInput;
+  return {
+    role: 'text-input',
+    fill: 'linear-gradient',
+    color0: theme.fill,
+    color1: theme.fillEnd,
+    borderColor: theme.border,
+    borderWidth: theme.borderWidth,
+    radius: theme.radius,
+    textColor: theme.text,
+    placeholderTextColor: theme.placeholderText,
+  };
+}
+
+function textInputDisplay(node) {
+  const attrs = layoutAttrs(node);
+  const type = inputTypeOf(node);
+  const value = String(attrs.value ?? '');
+  if (value.length > 0) {
+    return {
+      text: type === 'password' ? '*'.repeat(value.length) : value,
+      placeholder: false,
+    };
+  }
+  const placeholder = String(attrs.placeholder ?? '');
+  return {
+    text: placeholder,
+    placeholder: true,
+  };
+}
+
+function clampTextForBox(text, width) {
+  const value = String(text ?? '');
+  const maxChars = Math.max(1, Math.floor(Math.max(0, Number(width ?? 0) - 20) / 8));
+  return value.length > maxChars ? value.slice(0, maxChars) : value;
+}
+
+function textInputTextRun(node, x, y, textStyle = null) {
+  if (!isTextInputNode(String(node.tagName ?? '').toLowerCase(), node)) return null;
+  const display = textInputDisplay(node);
+  const text = clampTextForBox(display.text, Number(node.width ?? 0));
+  if (!text) return null;
+  const paint = layoutPaint(node) ?? textInputPaint();
+  const fieldHeight = Math.max(0, Math.round(Number(node.height ?? 0) || 0));
+  const fontSizePx = Number(textStyle?.fontSizePx ?? 15);
+  const lineHeightPx = Number(textStyle?.lineHeightPx ?? 20);
+  const fontTier = String(textStyle?.fontTier ?? fontTierForPx(fontSizePx));
+  const fontRenderTier = String(textStyle?.fontRenderTier ?? renderFontTierForTier(fontTier));
+  const textY = y + Math.max(0, Math.floor((fieldHeight - lineHeightPx) / 2));
+  const textColor = display.placeholder
+    ? Number(paint.placeholderTextColor ?? defaultTheme.control.textInput.placeholderText)
+    : Number(paint.textColor ?? defaultTheme.control.textInput.text);
+  return {
+    key: `${String(node.key ?? '')}:input-text`,
+    x: x + 10,
+    y: textY,
+    width: Math.max(0, Math.round(Number(node.width ?? 0) || 0) - 20),
+    height: Math.max(1, Math.round(lineHeightPx)),
+    text,
+    lines: [text],
+    preserveWhitespace: false,
+    textColor: Number.isFinite(textColor)
+      ? Math.max(0, Math.trunc(textColor) & 0xffffff)
+      : defaultTheme.control.textInput.text,
+    fontSizePx: Number.isFinite(fontSizePx) ? Math.max(1, Math.round(fontSizePx)) : 15,
+    lineHeightPx: Number.isFinite(lineHeightPx) ? Math.max(1, Math.round(lineHeightPx)) : 20,
+    fontTier,
+    fontRenderTier,
+  };
 }
 
 function isHitBoxNode(tagName, role) {
@@ -318,6 +397,10 @@ function createUi3PaintPlan(layout, options = {}) {
           hover: false,
           active: false,
         });
+      }
+      if (isTextInputNode(tagName, node)) {
+        const run = textInputTextRun(node, x, y, textStyle);
+        if (run) textRuns.push(run);
       }
       if (isHitBoxNode(tagName, role)) {
         const hitBox = {
@@ -721,6 +804,9 @@ export function widgetNodeToRenderNode(node, options = {}) {
   const attrs = attrsWithWidgetProps(node, tagName);
   if (tagName === 'details' && node.props && node.props.open && attrs.open == null) attrs.open = '';
   if (Object.keys(attrs).length > 0) renderNode.attrs = stableObject(attrs);
+  if (isTextInputNode(tagName, renderNode) && !renderNode.paint) {
+    renderNode.paint = textInputPaint();
+  }
   if (tagName === 'details' && attrs.open != null) {
     for (const child of renderNode.children) {
       if (child && child.kind === 'block' && child.tagName === 'summary') {

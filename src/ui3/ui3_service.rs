@@ -9,6 +9,8 @@ const UI3_WHEEL_EVENT_BATCH_CAP: usize = 64;
 const UI3_WHEEL_SCROLL_PX_PER_NOTCH: f32 = 72.0;
 const UI3_CLICK_MAX_MOVE_PX: u32 = 6;
 const UI3_BACKEND_PREFETCH_BANDS_AFTER_PRESENT: usize = 1;
+const UI3_CHOICE_OVERRIDE_CAP: usize = 64;
+const UI3_SUMMARY_OVERRIDE_CAP: usize = 64;
 
 #[derive(Copy, Clone, Debug, Default)]
 struct Ui3ServiceStats {
@@ -25,12 +27,26 @@ struct Ui3Scene {
     viewport_height: u32,
     surface: Option<crate::ui3::ui3_surface::Ui3RgbaSurface>,
     painted_bands: Vec<Ui3PaintedBand>,
+    choice_overrides: Vec<Ui3ChoiceControlOverride>,
+    summary_overrides: Vec<Ui3SummaryOverride>,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
 struct Ui3PaintedBand {
     y0: u32,
     y1: u32,
+}
+
+#[derive(Clone, Debug)]
+struct Ui3ChoiceControlOverride {
+    key: String,
+    checked: bool,
+}
+
+#[derive(Clone, Debug)]
+struct Ui3SummaryOverride {
+    key: String,
+    open: bool,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -50,6 +66,8 @@ struct Ui3LiveOverlayState {
 struct Ui3CursorInput {
     wheel_delta: i32,
     overlay_dirty: bool,
+    choice_dirty: bool,
+    summary_dirty: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -57,6 +75,26 @@ struct Ui3ActivationHit {
     key: String,
     kind: String,
     url: String,
+}
+
+#[derive(Clone, Debug)]
+struct Ui3ChoiceHit {
+    key: String,
+    kind: String,
+    checked: bool,
+}
+
+#[derive(Clone, Debug)]
+struct Ui3SummaryHit {
+    key: String,
+    open: bool,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+struct Ui3ClickResult {
+    activated: bool,
+    choice_toggled: bool,
+    summary_toggled: bool,
 }
 
 #[embassy_executor::task]
@@ -86,7 +124,8 @@ pub async fn ui3_service_task() {
             overlay_width,
             overlay_height,
         );
-        let cursor_input = drain_ui3_cursor_input(&mut cursor_events, &mut live_overlay, &scene);
+        let cursor_input =
+            drain_ui3_cursor_input(&mut cursor_events, &mut live_overlay, &mut scene);
         if shell_input.toggled_on || shell_input.toggled_off {
             let invalidated = invalidate_visible_scene_bands(&mut scene);
             crate::log!(
@@ -106,6 +145,22 @@ pub async fn ui3_service_task() {
                 present.present_ms,
                 present.total_ms
             );
+        } else if cursor_input.choice_dirty || cursor_input.summary_dirty {
+            let invalidated = invalidate_visible_scene_bands(&mut scene);
+            let present = redraw_scene_text(&mut scene, &mut font, 0, false);
+            crate::log!(
+                "ui3-service: ui-toggle repaint choice={} summary={} invalidated_visible={} presented={} submit_ok={} present_ms={} total_ms={}\n",
+                cursor_input.choice_dirty as u8,
+                cursor_input.summary_dirty as u8,
+                invalidated as u8,
+                present.presented as u8,
+                present.submit_ok as u8,
+                present.present_ms,
+                present.total_ms
+            );
+            if cursor_input.overlay_dirty {
+                let _ = redraw_live_overlay(&scene, &live_overlay, "ui3-live-overlay-toggle");
+            }
         } else if cursor_input.overlay_dirty {
             let _ = redraw_live_overlay(&scene, &live_overlay, "ui3-live-overlay-cursor");
         }
@@ -305,7 +360,8 @@ fn redraw_scene_text(
     let browser_instance_id = scene.frame.browser_instance_id;
     let frame_seq = scene.frame.seq;
     let layout_trace_len = scene.frame.layout_trace_json.len();
-    let Ok(value) = serde_json::from_str::<Value>(scene.frame.layout_trace_json.as_str()) else {
+    let Ok(mut value) = serde_json::from_str::<Value>(scene.frame.layout_trace_json.as_str())
+    else {
         crate::log!(
             "ui3-service: layout json parse failed browser={} seq={} bytes={}\n",
             browser_instance_id,
@@ -314,6 +370,8 @@ fn redraw_scene_text(
         );
         return Ui3LayoutInspectResult::default();
     };
+    apply_choice_overrides_to_layout_value(&mut value, scene.choice_overrides.as_slice());
+    apply_summary_overrides_to_layout_value(&mut value, scene.summary_overrides.as_slice());
 
     let embedded_scenes = value
         .get("trace")
@@ -910,6 +968,75 @@ fn json_string_field(node: &Value, key: &str) -> Option<String> {
     node.get(key).and_then(Value::as_str).map(String::from)
 }
 
+fn json_bool_field(node: &Value, key: &str) -> Option<bool> {
+    node.get(key).and_then(Value::as_bool)
+}
+
+fn paint_plan_mut(value: &mut Value) -> Option<&mut Value> {
+    if value
+        .get("trace")
+        .and_then(|trace| trace.get("ui3PaintPlan"))
+        .is_some()
+    {
+        return value
+            .get_mut("trace")
+            .and_then(|trace| trace.get_mut("ui3PaintPlan"));
+    }
+    value.get_mut("ui3PaintPlan")
+}
+
+fn apply_choice_overrides_to_layout_value(
+    value: &mut Value,
+    overrides: &[Ui3ChoiceControlOverride],
+) {
+    if overrides.is_empty() {
+        return;
+    }
+    let Some(paint_plan) = paint_plan_mut(value) else {
+        return;
+    };
+    let Some(controls) = paint_plan
+        .get_mut("choiceControls")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for control in controls {
+        let Some(key) = control.get("key").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(override_state) = overrides.iter().find(|state| state.key == key) else {
+            continue;
+        };
+        control["checked"] = Value::Bool(override_state.checked);
+        control["indeterminate"] = Value::Bool(false);
+    }
+}
+
+fn apply_summary_overrides_to_layout_value(value: &mut Value, overrides: &[Ui3SummaryOverride]) {
+    if overrides.is_empty() {
+        return;
+    }
+    let Some(paint_plan) = paint_plan_mut(value) else {
+        return;
+    };
+    let Some(icons) = paint_plan
+        .get_mut("summaryIcons")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for icon in icons {
+        let Some(key) = icon.get("key").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(override_state) = overrides.iter().find(|state| state.key == key) else {
+            continue;
+        };
+        icon["open"] = Value::Bool(override_state.open);
+    }
+}
+
 fn clamp_scroll_y_for_scene(scroll_y: f32, content_height: u32, viewport_height: u32) -> f32 {
     if scroll_y <= 0.0 || content_height <= viewport_height {
         return 0.0;
@@ -954,7 +1081,7 @@ fn elapsed_ms_since(start: u64) -> u64 {
 fn drain_ui3_cursor_input(
     state: &mut crate::ui3::ui3_hid::Ui3CursorEventDrain,
     live_overlay: &mut Ui3LiveOverlayState,
-    scene: &Ui3Scene,
+    scene: &mut Ui3Scene,
 ) -> Ui3CursorInput {
     let mut out = [crate::usb2::hid::TrueosHidCursorEvent::default(); UI3_WHEEL_EVENT_BATCH_CAP];
     let read = crate::ui3::ui3_hid::drain_cursor_events(state, out.as_mut_slice());
@@ -1006,7 +1133,10 @@ fn drain_ui3_cursor_input(
             } else if !is_left && was_left && live_overlay.selection_probe_active {
                 let (x, y) =
                     crate::ui3::ui3_hid::event_position_px(*event, viewport_width, viewport_height);
-                let _ = activate_ui3_click_if_any(scene, live_overlay, x, y);
+                let click = activate_ui3_click_if_any(scene, live_overlay, x, y);
+                input.choice_dirty |= click.choice_toggled;
+                input.summary_dirty |= click.summary_toggled;
+                input.overlay_dirty |= click.activated;
                 live_overlay.selection_probe_active = false;
                 input.overlay_dirty = true;
             }
@@ -1026,18 +1156,67 @@ fn drain_ui3_cursor_input(
 }
 
 fn activate_ui3_click_if_any(
-    scene: &Ui3Scene,
+    scene: &mut Ui3Scene,
     live_overlay: &Ui3LiveOverlayState,
     release_x: u32,
     release_y: u32,
-) -> bool {
+) -> Ui3ClickResult {
     if !ui3_click_within_threshold(
         live_overlay.selection_probe_start_x,
         live_overlay.selection_probe_start_y,
         release_x,
         release_y,
     ) {
-        return false;
+        return Ui3ClickResult::default();
+    }
+
+    if let (Some(press_choice), Some(release_choice)) = (
+        ui3_choice_hit_at(
+            scene,
+            live_overlay.selection_probe_start_x,
+            live_overlay.selection_probe_start_y,
+        ),
+        ui3_choice_hit_at(scene, release_x, release_y),
+    ) {
+        if press_choice.key == release_choice.key && press_choice.kind == release_choice.kind {
+            let checked = toggle_ui3_choice_override(scene, &release_choice);
+            crate::log!(
+                "ui3-service: activate kind=choice-toggle browser={} key={} type={} checked={}\n",
+                scene.frame.browser_instance_id,
+                release_choice.key,
+                release_choice.kind,
+                checked as u8
+            );
+            return Ui3ClickResult {
+                activated: true,
+                choice_toggled: true,
+                summary_toggled: false,
+            };
+        }
+    }
+
+    if let (Some(press_summary), Some(release_summary)) = (
+        ui3_summary_hit_at(
+            scene,
+            live_overlay.selection_probe_start_x,
+            live_overlay.selection_probe_start_y,
+        ),
+        ui3_summary_hit_at(scene, release_x, release_y),
+    ) {
+        if press_summary.key == release_summary.key {
+            let open = toggle_ui3_summary_override(scene, &release_summary);
+            crate::log!(
+                "ui3-service: activate kind=summary-toggle browser={} key={} open={}\n",
+                scene.frame.browser_instance_id,
+                release_summary.key,
+                open as u8
+            );
+            return Ui3ClickResult {
+                activated: true,
+                choice_toggled: false,
+                summary_toggled: true,
+            };
+        }
     }
 
     let Some(press_hit) = ui3_activation_hit_at(
@@ -1045,13 +1224,13 @@ fn activate_ui3_click_if_any(
         live_overlay.selection_probe_start_x,
         live_overlay.selection_probe_start_y,
     ) else {
-        return false;
+        return Ui3ClickResult::default();
     };
     let Some(release_hit) = ui3_activation_hit_at(scene, release_x, release_y) else {
-        return false;
+        return Ui3ClickResult::default();
     };
     if press_hit.key != release_hit.key || press_hit.kind != release_hit.kind {
-        return false;
+        return Ui3ClickResult::default();
     }
 
     if release_hit.kind == "navigate" && !release_hit.url.is_empty() {
@@ -1066,10 +1245,14 @@ fn activate_ui3_click_if_any(
             release_hit.key,
             release_hit.url
         );
-        return queued;
+        return Ui3ClickResult {
+            activated: queued,
+            choice_toggled: false,
+            summary_toggled: false,
+        };
     }
 
-    false
+    Ui3ClickResult::default()
 }
 
 fn ui3_click_within_threshold(start_x: u32, start_y: u32, end_x: u32, end_y: u32) -> bool {
@@ -1129,6 +1312,149 @@ fn ui3_activation_hit_at(
         });
     }
     best
+}
+
+fn ui3_choice_hit_at(scene: &Ui3Scene, screen_x: u32, screen_y: u32) -> Option<Ui3ChoiceHit> {
+    if scene.frame.layout_trace_json.is_empty() {
+        return None;
+    }
+    let value = serde_json::from_str::<Value>(scene.frame.layout_trace_json.as_str()).ok()?;
+    let paint_plan = value
+        .get("trace")
+        .and_then(|trace| trace.get("ui3PaintPlan"))
+        .or_else(|| value.get("ui3PaintPlan"))?;
+    let controls = paint_plan.get("choiceControls").and_then(Value::as_array)?;
+    let content_x = screen_x as f32;
+    let content_y = screen_y as f32 + scene.scroll_y;
+    let mut best: Option<Ui3ChoiceHit> = None;
+    for control in controls {
+        let kind = control
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if kind != "checkbox" && kind != "radio" {
+            continue;
+        }
+        let x = json_f32_field(control, "x").unwrap_or(0.0);
+        let y = json_f32_field(control, "y").unwrap_or(0.0);
+        let width = json_f32_field(control, "width").unwrap_or(0.0);
+        let height = json_f32_field(control, "height").unwrap_or(0.0);
+        if width <= 0.0 || height <= 0.0 {
+            continue;
+        }
+        if content_x < x || content_y < y || content_x >= x + width || content_y >= y + height {
+            continue;
+        }
+        let key = json_string_field(control, "key").unwrap_or_default();
+        let checked = ui3_choice_override_checked(scene, key.as_str())
+            .unwrap_or_else(|| json_bool_field(control, "checked").unwrap_or(false));
+        best = Some(Ui3ChoiceHit {
+            key,
+            kind: String::from(kind),
+            checked,
+        });
+    }
+    best
+}
+
+fn ui3_summary_hit_at(scene: &Ui3Scene, screen_x: u32, screen_y: u32) -> Option<Ui3SummaryHit> {
+    if scene.frame.layout_trace_json.is_empty() {
+        return None;
+    }
+    let value = serde_json::from_str::<Value>(scene.frame.layout_trace_json.as_str()).ok()?;
+    let paint_plan = value
+        .get("trace")
+        .and_then(|trace| trace.get("ui3PaintPlan"))
+        .or_else(|| value.get("ui3PaintPlan"))?;
+    let hit_boxes = paint_plan.get("hitBoxes").and_then(Value::as_array)?;
+    let content_x = screen_x as f32;
+    let content_y = screen_y as f32 + scene.scroll_y;
+    let mut best: Option<Ui3SummaryHit> = None;
+    for hit in hit_boxes {
+        if hit.get("tagName").and_then(Value::as_str) != Some("summary") {
+            continue;
+        }
+        let x = json_f32_field(hit, "x").unwrap_or(0.0);
+        let y = json_f32_field(hit, "y").unwrap_or(0.0);
+        let width = json_f32_field(hit, "width").unwrap_or(0.0);
+        let height = json_f32_field(hit, "height").unwrap_or(0.0);
+        if width <= 0.0 || height <= 0.0 {
+            continue;
+        }
+        if content_x < x || content_y < y || content_x >= x + width || content_y >= y + height {
+            continue;
+        }
+        let key = json_string_field(hit, "key").unwrap_or_default();
+        let open = ui3_summary_override_open(scene, key.as_str())
+            .unwrap_or_else(|| ui3_summary_icon_open(paint_plan, key.as_str()).unwrap_or(false));
+        best = Some(Ui3SummaryHit { key, open });
+    }
+    best
+}
+
+fn ui3_summary_icon_open(paint_plan: &Value, key: &str) -> Option<bool> {
+    let icons = paint_plan.get("summaryIcons").and_then(Value::as_array)?;
+    icons
+        .iter()
+        .find(|icon| icon.get("key").and_then(Value::as_str) == Some(key))
+        .and_then(|icon| json_bool_field(icon, "open"))
+}
+
+fn ui3_choice_override_checked(scene: &Ui3Scene, key: &str) -> Option<bool> {
+    scene
+        .choice_overrides
+        .iter()
+        .find(|state| state.key == key)
+        .map(|state| state.checked)
+}
+
+fn ui3_summary_override_open(scene: &Ui3Scene, key: &str) -> Option<bool> {
+    scene
+        .summary_overrides
+        .iter()
+        .find(|state| state.key == key)
+        .map(|state| state.open)
+}
+
+fn toggle_ui3_choice_override(scene: &mut Ui3Scene, hit: &Ui3ChoiceHit) -> bool {
+    let next_checked = !ui3_choice_override_checked(scene, hit.key.as_str()).unwrap_or(hit.checked);
+    if let Some(state) = scene
+        .choice_overrides
+        .iter_mut()
+        .find(|state| state.key == hit.key)
+    {
+        state.checked = next_checked;
+        return next_checked;
+    }
+    if scene.choice_overrides.len() >= UI3_CHOICE_OVERRIDE_CAP {
+        scene.choice_overrides.remove(0);
+    }
+    scene.choice_overrides.push(Ui3ChoiceControlOverride {
+        key: hit.key.clone(),
+        checked: next_checked,
+    });
+    next_checked
+}
+
+fn toggle_ui3_summary_override(scene: &mut Ui3Scene, hit: &Ui3SummaryHit) -> bool {
+    let next_open = !ui3_summary_override_open(scene, hit.key.as_str()).unwrap_or(hit.open);
+    if let Some(state) = scene
+        .summary_overrides
+        .iter_mut()
+        .find(|state| state.key == hit.key)
+    {
+        state.open = next_open;
+        return next_open;
+    }
+    if scene.summary_overrides.len() >= UI3_SUMMARY_OVERRIDE_CAP {
+        scene.summary_overrides.remove(0);
+    }
+    scene.summary_overrides.push(Ui3SummaryOverride {
+        key: hit.key.clone(),
+        open: next_open,
+    });
+    next_open
 }
 
 fn redraw_live_overlay(scene: &Ui3Scene, state: &Ui3LiveOverlayState, reason: &str) -> bool {
