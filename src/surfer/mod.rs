@@ -3,12 +3,9 @@ extern crate alloc;
 pub(crate) mod asset_shack;
 pub(crate) mod html_shack;
 
-use alloc::collections::VecDeque;
 use alloc::string::String;
 use core::sync::atomic::{AtomicU64, Ordering};
 use embassy_executor::{SpawnError, Spawner};
-use embassy_time::{Duration as EmbassyDuration, Timer};
-use heapless::String as HString;
 use spin::Mutex;
 
 pub(crate) type HostedSurfaceState = trueos_qjs::browser_task::HostedBrowserSurfaceState;
@@ -35,14 +32,6 @@ const BROWSER_PARSE_HOST_LIMIT: u32 = if BROWSER_PARSE_HOST_POOL_SIZE < MAX_BROW
     MAX_BROWSER_INSTANCE_ID
 };
 const BROWSER_PARSE_POOL_BOOT_COUNT: u32 = 0;
-const BROWSER_NAVIGATION_QUEUE_CAP: usize = 8;
-const BROWSER_NAVIGATION_IDLE_MS: u64 = 16;
-
-#[derive(Clone, Debug)]
-struct BrowserNavigationRequest {
-    browser_instance_id: u32,
-    url: String,
-}
 
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct HostedBrowserDirtyMask {
@@ -88,8 +77,9 @@ impl BrowserParsePool {
 
     fn mark_spawned(&mut self, browser_instance_id: u32) {
         self.next_instance_id = self.next_instance_id.saturating_add(1);
-        let bit = 1u64 << browser_instance_id.saturating_sub(1);
-        self.spawned_mask |= bit;
+        if let Some(bit) = hosted_browser_bit(browser_instance_id) {
+            self.spawned_mask |= bit;
+        }
     }
 
     fn mark_html_queued(&mut self) -> u32 {
@@ -103,8 +93,6 @@ impl BrowserParsePool {
 }
 
 static BROWSER_PARSE_POOL: Mutex<BrowserParsePool> = Mutex::new(BrowserParsePool::new());
-static BROWSER_NAVIGATION_QUEUE: Mutex<VecDeque<BrowserNavigationRequest>> =
-    Mutex::new(VecDeque::new());
 static HOSTED_BROWSER_PARSE_POOL_SIGNAL: Mutex<HostedBrowserParsePoolSignalState> =
     Mutex::new(HostedBrowserParsePoolSignalState {
         latest_mask: 0,
@@ -274,29 +262,35 @@ pub(crate) fn queue_browser_navigation(browser_instance_id: u32, url: &str) -> b
         return false;
     }
 
-    let mut queue = BROWSER_NAVIGATION_QUEUE.lock();
-    while queue.len() >= BROWSER_NAVIGATION_QUEUE_CAP {
-        let _ = queue.pop_front();
-    }
-    queue.push_back(BrowserNavigationRequest {
-        browser_instance_id,
-        url: String::from(trimmed),
-    });
+    let road = if trimmed
+        .get(..8)
+        .map(|prefix| prefix.eq_ignore_ascii_case("https://"))
+        .unwrap_or(false)
+    {
+        html_shack::HtmlRoad::Https
+    } else if trimmed
+        .get(..7)
+        .map(|prefix| prefix.eq_ignore_ascii_case("http://"))
+        .unwrap_or(false)
+    {
+        html_shack::HtmlRoad::Http
+    } else {
+        crate::log!(
+            "surfer-navigation: drop source_browser={} reason=unsupported-scheme url={}\n",
+            browser_instance_id,
+            trimmed
+        );
+        return false;
+    };
+
+    let pending = html_shack::with_html_shack(|shack| shack.get_ready(trimmed, road, None));
     crate::log!(
-        "surfer-navigation: queued browser={} pending={} url={}\n",
+        "surfer-navigation: queued-fresh source_browser={} pending={} url={}\n",
         browser_instance_id,
-        queue.len(),
+        pending,
         trimmed
     );
     true
-}
-
-fn pop_latest_browser_navigation() -> Option<(BrowserNavigationRequest, usize)> {
-    let mut queue = BROWSER_NAVIGATION_QUEUE.lock();
-    let dropped = queue.len().saturating_sub(1);
-    let request = queue.pop_back()?;
-    queue.clear();
-    Some((request, dropped))
 }
 
 pub(crate) async fn queue_html_for_browser(
@@ -358,98 +352,6 @@ pub(crate) fn spawn_asset_fetch_service(spawner: Spawner) -> Result<bool, SpawnE
         spawned = true;
     }
     Ok(spawned)
-}
-
-pub(crate) fn spawn_browser_navigation_service(spawner: Spawner) -> Result<bool, SpawnError> {
-    let token = browser_navigation_service()?;
-    spawner.spawn(token);
-    Ok(true)
-}
-
-#[embassy_executor::task]
-async fn browser_navigation_service() {
-    crate::log!("surfer-navigation: service started latest_wins=1 target=same-browser\n");
-    loop {
-        let Some((request, dropped)) = pop_latest_browser_navigation() else {
-            Timer::after(EmbassyDuration::from_millis(BROWSER_NAVIGATION_IDLE_MS)).await;
-            continue;
-        };
-        if dropped > 0 {
-            crate::log!(
-                "surfer-navigation: dropped stale requests count={} newest={}\n",
-                dropped,
-                request.url
-            );
-        }
-        if let Some(file_ref) = request.url.strip_prefix("file://") {
-            match html_shack::prepare_ready_file_html(file_ref) {
-                Ok(html) => {
-                    let queued = queue_html_for_browser(
-                        request.browser_instance_id,
-                        html.html,
-                        Some(html.url.clone()),
-                    )
-                    .await;
-                    crate::log!(
-                        "surfer-navigation: file handoff browser={} ok={} url={}\n",
-                        request.browser_instance_id,
-                        if queued { 1 } else { 0 },
-                        html.url
-                    );
-                }
-                Err(err) => {
-                    crate::log!(
-                        "surfer-navigation: file failed browser={} err={:?} url={}\n",
-                        request.browser_instance_id,
-                        err,
-                        request.url
-                    );
-                }
-            }
-            continue;
-        }
-        if !(request.url.starts_with("http://") || request.url.starts_with("https://")) {
-            crate::log!(
-                "surfer-navigation: drop browser={} reason=unsupported-scheme url={}\n",
-                request.browser_instance_id,
-                request.url
-            );
-            continue;
-        }
-        let mut fetch_url: HString<256> = HString::new();
-        if fetch_url.push_str(request.url.as_str()).is_err() {
-            crate::log!(
-                "surfer-navigation: drop browser={} reason=url too long url={}\n",
-                request.browser_instance_id,
-                request.url
-            );
-            continue;
-        }
-        match crate::t::net::fetch_html_best_effort_shared("surfer-navigation", fetch_url).await {
-            Ok(html) => {
-                let queued = queue_html_for_browser(
-                    request.browser_instance_id,
-                    html,
-                    Some(request.url.clone()),
-                )
-                .await;
-                crate::log!(
-                    "surfer-navigation: handoff browser={} ok={} url={}\n",
-                    request.browser_instance_id,
-                    if queued { 1 } else { 0 },
-                    request.url
-                );
-            }
-            Err(err) => {
-                crate::log!(
-                    "surfer-navigation: fetch failed browser={} err={} url={}\n",
-                    request.browser_instance_id,
-                    err,
-                    request.url
-                );
-            }
-        }
-    }
 }
 
 pub(crate) fn spawn_truesurfer_batch(

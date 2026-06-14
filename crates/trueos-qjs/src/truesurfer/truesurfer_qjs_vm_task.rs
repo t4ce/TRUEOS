@@ -20,8 +20,8 @@ use spin::{Mutex, Once};
 
 use crate as qjs;
 
-pub const MAX_BROWSER_INSTANCE_ID: u32 = 50;
-pub const TRUESURFER_TASK_POOL_SIZE: usize = 4;
+pub const MAX_BROWSER_INSTANCE_ID: u32 = 100;
+pub const TRUESURFER_TASK_POOL_SIZE: usize = 100;
 pub const BOOT_BROWSER_INSTANCE_IDS: [u32; 1] = [1];
 
 pub const HOSTED_KEYBOARD_MOD_SHIFT: u8 = 1 << 0;
