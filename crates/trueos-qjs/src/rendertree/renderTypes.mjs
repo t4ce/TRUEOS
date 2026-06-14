@@ -30,6 +30,7 @@ export function attrsOrUndefined(attrs) {
 export function textNode(text, opts = {}) {
   const node = { kind: 'text', text: String(text ?? '') };
   if (opts.preserveWhitespace === true) node.preserveWhitespace = true;
+  if (opts.textStyle && typeof opts.textStyle === 'object') node.textStyle = opts.textStyle;
   return node;
 }
 
@@ -42,6 +43,7 @@ export function blockNode(opts) {
   };
   const attrs = attrsOrUndefined(opts?.attrs);
   if (attrs) node.attrs = attrs;
+  if (opts?.textStyle && typeof opts.textStyle === 'object') node.textStyle = opts.textStyle;
   return node;
 }
 

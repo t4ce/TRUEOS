@@ -236,6 +236,11 @@ pub fn athlas_lookup_glyph_region(face: AthlasFontFace, ch: char) -> Option<Athl
     None
 }
 
+#[inline]
+pub fn athlas_glyph_advance_px(region: AthlasGlyphRegion) -> u16 {
+    region.src_w.max(1)
+}
+
 pub fn athlas_validate_sprite64_faces(cell_px: u16) -> Option<AthlasFontSprite64Inventory> {
     athlas_validate_sprite64_face_list(cell_px, &ATHLAS_SPRITE64_FONT_FACES)
 }

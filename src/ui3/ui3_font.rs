@@ -1074,6 +1074,7 @@ fn collect_paint_plan_text_placements(
             .map(rgb24_to_sprite_tint_word)
             .unwrap_or(UI3_TEXT_COLOR_RGBA);
         let preserve_whitespace = paint_plan_preserve_whitespace(run);
+        let face = paint_plan_font_face(run);
         let x = json_f32_field(run, "x").unwrap_or(0.0);
         let y_doc = json_f32_field(run, "y").unwrap_or(0.0);
         let y = y_doc + layout_shift_for_y(y_doc, adjustments) - scroll_y;
@@ -1089,6 +1090,7 @@ fn collect_paint_plan_text_placements(
                 layout_line_height,
                 scene,
                 text_color,
+                face,
                 preserve_whitespace,
                 placements,
                 stats,
@@ -1101,6 +1103,7 @@ fn collect_paint_plan_text_placements(
                 None,
                 scene,
                 text_color,
+                face,
                 preserve_whitespace,
                 placements,
                 stats,
@@ -1303,11 +1306,11 @@ fn push_text_placements(
     line_advance: Option<f32>,
     scene: Ui3FontScene,
     color_rgba: u32,
+    face: crate::ui3::althlasfont::bitmapfont::AthlasFontFace,
     preserve_whitespace: bool,
     placements: &mut Vec<crate::intel::gpgpu::GpgpuSprite64Placement>,
     stats: &mut Ui3TextCollectStats,
 ) {
-    let face = crate::ui3::althlasfont::bitmapfont::ATHLAS_FONT_FACE_LUCIDA_HALF;
     let font_line_height =
         crate::ui3::althlasfont::bitmapfont::athlas_font_line_height_px(face).unwrap_or(22) as f32;
     let line_advance = line_advance
@@ -1321,6 +1324,7 @@ fn push_text_placements(
             font_line_height,
             scene,
             color_rgba,
+            face,
             preserve_whitespace,
             placements,
             stats,
@@ -1338,11 +1342,11 @@ fn push_layout_text_lines(
     line_advance: Option<f32>,
     scene: Ui3FontScene,
     color_rgba: u32,
+    face: crate::ui3::althlasfont::bitmapfont::AthlasFontFace,
     preserve_whitespace: bool,
     placements: &mut Vec<crate::intel::gpgpu::GpgpuSprite64Placement>,
     stats: &mut Ui3TextCollectStats,
 ) {
-    let face = crate::ui3::althlasfont::bitmapfont::ATHLAS_FONT_FACE_LUCIDA_HALF;
     let font_line_height =
         crate::ui3::althlasfont::bitmapfont::athlas_font_line_height_px(face).unwrap_or(22) as f32;
     let line_advance = line_advance
@@ -1359,6 +1363,7 @@ fn push_layout_text_lines(
             font_line_height,
             scene,
             color_rgba,
+            face,
             preserve_whitespace,
             placements,
             stats,
@@ -1376,11 +1381,11 @@ fn push_text_line_placements(
     line_height: f32,
     scene: Ui3FontScene,
     color_rgba: u32,
+    face: crate::ui3::althlasfont::bitmapfont::AthlasFontFace,
     preserve_whitespace: bool,
     placements: &mut Vec<crate::intel::gpgpu::GpgpuSprite64Placement>,
     stats: &mut Ui3TextCollectStats,
 ) {
-    let face = crate::ui3::althlasfont::bitmapfont::ATHLAS_FONT_FACE_LUCIDA_HALF;
     let preserved_space_advance = if preserve_whitespace {
         preserved_text_space_advance(face, line_height)
     } else {
@@ -1424,7 +1429,8 @@ fn push_text_line_placements(
             pen_x += line_height * 0.35;
             continue;
         };
-        let advance = f32::from(region.src_w.max(1)).max(line_height * 0.35);
+        let advance =
+            f32::from(crate::ui3::althlasfont::bitmapfont::athlas_glyph_advance_px(region));
         let dst_x = floor_i32(pen_x);
         if dst_x < 0 || dst_x > max_draw_x {
             stats.clipped = stats.clipped.saturating_add(1);
@@ -1456,6 +1462,37 @@ fn paint_plan_preserve_whitespace(node: &Value) -> bool {
     node.get("preserveWhitespace")
         .and_then(Value::as_bool)
         .unwrap_or(false)
+}
+
+fn paint_plan_font_face(node: &Value) -> crate::ui3::althlasfont::bitmapfont::AthlasFontFace {
+    use crate::ui3::althlasfont::bitmapfont::{
+        ATHLAS_FONT_FACE_LUCIDA_1X, ATHLAS_FONT_FACE_LUCIDA_HALF, ATHLAS_FONT_FACE_LUCIDA_THIRD,
+    };
+
+    let tier = node
+        .get("fontRenderTier")
+        .and_then(Value::as_str)
+        .or_else(|| node.get("fontTier").and_then(Value::as_str))
+        .unwrap_or("");
+
+    match tier {
+        "third" => ATHLAS_FONT_FACE_LUCIDA_THIRD,
+        "half" => ATHLAS_FONT_FACE_LUCIDA_HALF,
+        "1x" => ATHLAS_FONT_FACE_LUCIDA_1X,
+        // The render-tree contract can already ask for 2x. The sprite64 atlas
+        // currently tops out at 1x, so clamp here until the 2x face is wired.
+        "2x" => ATHLAS_FONT_FACE_LUCIDA_1X,
+        _ => {
+            let font_size = json_f32_field(node, "fontSizePx").unwrap_or(15.0);
+            if font_size <= 10.0 {
+                ATHLAS_FONT_FACE_LUCIDA_THIRD
+            } else if font_size <= 15.0 {
+                ATHLAS_FONT_FACE_LUCIDA_HALF
+            } else {
+                ATHLAS_FONT_FACE_LUCIDA_1X
+            }
+        }
+    }
 }
 
 fn json_f32_field(node: &Value, key: &str) -> Option<f32> {

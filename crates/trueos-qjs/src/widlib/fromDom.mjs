@@ -69,9 +69,21 @@ function normalizeInlineTextRun(text) {
   return out.trim();
 }
 
-function makeWidget({ tag, key, attrs = {}, props = {}, children = [], registry, styleRef = null, paint = null }) {
+function compactTextStyle(style) {
+  if (!style || typeof style !== 'object') return null;
+  const out = {};
+  if (style.fontSizePx != null) out.fontSizePx = Number(style.fontSizePx);
+  if (style.lineHeightPx != null) out.lineHeightPx = Number(style.lineHeightPx);
+  if (style.fontWeight != null) out.fontWeight = String(style.fontWeight);
+  if (style.fontStyle != null) out.fontStyle = String(style.fontStyle);
+  if (style.whiteSpace != null) out.whiteSpace = String(style.whiteSpace);
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function makeWidget({ tag, key, attrs = {}, props = {}, children = [], registry, styleRef = null, paint = null, textStyle = null }) {
   const meta = registry.get(tag, attrs);
   const metaPaint = paint && typeof paint === 'object' && !Array.isArray(paint) ? { ...paint } : undefined;
+  const metaTextStyle = compactTextStyle(textStyle);
   return {
     kind: 'widget',
     key,
@@ -99,6 +111,7 @@ function makeWidget({ tag, key, attrs = {}, props = {}, children = [], registry,
       expandsTo: meta.expandsTo,
       styleRef,
       paint: metaPaint,
+      textStyle: metaTextStyle,
     },
   };
 }
@@ -132,6 +145,11 @@ function detailsChildren(node, path, opts) {
         props: { detailsKey },
         children: childNodesToWidgets(summary, `${path}:summary`, opts),
         registry: opts.registry,
+        styleRef: summary.__trueosStyleRef ?? null,
+        textStyle: summary.__trueosComputedStyle ?? null,
+        paint: summary.__trueosComputedStyle && typeof summary.__trueosComputedStyle.paint === 'object'
+          ? summary.__trueosComputedStyle.paint
+          : null,
       })
     );
   }
@@ -269,6 +287,7 @@ export function nodeToWidgets(node, path = '0', options = {}) {
       children,
       registry: opts.registry,
       styleRef: node.__trueosStyleRef ?? null,
+      textStyle: node.__trueosComputedStyle ?? null,
       paint: node.__trueosComputedStyle && typeof node.__trueosComputedStyle.paint === 'object'
         ? node.__trueosComputedStyle.paint
         : null,

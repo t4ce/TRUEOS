@@ -1,14 +1,13 @@
-use alloc::{string::String, vec::Vec};
+use alloc::vec::Vec;
 
 use crate::intel::types::Rgba8;
 
 const UI3_SHELL_WINDOW_ID: u32 = 0x5533_0001;
-const UI3_SHELL_COLS: usize = 180;
+const UI3_SHELL_COLS: usize = 140;
 const UI3_SHELL_PADDING_PX: u32 = 18;
 const UI3_SHELL_MAX_ROWS: usize = 96;
-const UI3_SHELL_TEXT_RGBA: u32 = 0xFFFF_FFFF;
 const UI3_SHELL_BLACK_RGBA: u32 = 0xFF00_0000;
-const UI3_SHELL_GUI_MOD_MASK: u8 = (1 << 3) | (1 << 7);
+const UI3_SHELL_DEFAULT_BG: (u8, u8, u8) = (0x0C, 0x10, 0x16);
 
 #[derive(Debug)]
 pub(crate) struct Ui3ShellOverlayState {
@@ -18,8 +17,7 @@ pub(crate) struct Ui3ShellOverlayState {
     attached_width: u32,
     attached_height: u32,
     attached_rows: usize,
-    suppress_gui_one: bool,
-    rendered_rows: Vec<String>,
+    rendered_rows: Vec<Ui3ShellRow>,
     rendered_panel: crate::intel::LiveOverlayRect,
 }
 
@@ -32,10 +30,20 @@ impl Default for Ui3ShellOverlayState {
             attached_width: 0,
             attached_height: 0,
             attached_rows: 0,
-            suppress_gui_one: false,
             rendered_rows: Vec::new(),
             rendered_panel: crate::intel::LiveOverlayRect::new(0, 0, 0, 0, Rgba8::new(0, 0, 0, 0)),
         }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Ui3ShellRow {
+    cells: Vec<crate::shell2::Ui2ShellCell>,
+}
+
+impl Ui3ShellRow {
+    fn is_empty(&self) -> bool {
+        self.cells.is_empty()
     }
 }
 
@@ -49,7 +57,6 @@ impl Ui3ShellOverlayState {
     pub(crate) fn deactivate(&mut self) {
         self.active = false;
         self.last_rendered_seq = 0;
-        self.suppress_gui_one = false;
         self.rendered_rows.clear();
     }
 }
@@ -69,7 +76,7 @@ pub(crate) fn handle_keyboard(
 
     let mut input = Ui3ShellOverlayInput::default();
     for event in out.iter().take(wrote).copied() {
-        if is_start_key(event) || is_gui_one_toggle(state, event) {
+        if is_start_key(event) {
             state.active = !state.active;
             if state.active {
                 input.toggled_on = true;
@@ -79,8 +86,10 @@ pub(crate) fn handle_keyboard(
                 state.last_rendered_seq = 0;
                 state.rendered_rows.clear();
             }
-            state.suppress_gui_one = is_start_key(event);
-            crate::log!("ui3-shell-overlay: toggle active={}\n", state.active as u8);
+            crate::log!(
+                "ui3-shell-overlay: toggle active={} source=start-key\n",
+                state.active as u8
+            );
             continue;
         }
 
@@ -138,7 +147,7 @@ pub(crate) fn draw_scene_if_dirty(
         return false;
     }
 
-    let fill_descs = if full_repaint {
+    let mut fill_descs = if full_repaint {
         let doc_rect = crate::intel::gpgpu::GpgpuRect::new(
             doc_panel.x as i32,
             doc_panel.y as i32,
@@ -149,6 +158,12 @@ pub(crate) fn draw_scene_if_dirty(
     } else {
         fill_dirty_row_rects(surface, doc_panel, dirty_rows.as_slice())
     };
+    fill_descs = fill_descs.saturating_add(fill_dirty_cell_backgrounds(
+        surface,
+        rows.as_slice(),
+        doc_panel,
+        dirty_rows.as_slice(),
+    ));
 
     let placements =
         collect_dirty_row_text_placements(rows.as_slice(), doc_panel, dirty_rows.as_slice());
@@ -182,23 +197,6 @@ pub(crate) fn draw_scene_if_dirty(
 fn is_start_key(event: crate::r::keyboard::TrueosKeyboardOutputEvent) -> bool {
     event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
         && event.key_code == crate::r::keyboard::KEYBOARD_KEY_START
-}
-
-fn is_gui_one_toggle(
-    state: &mut Ui3ShellOverlayState,
-    event: crate::r::keyboard::TrueosKeyboardOutputEvent,
-) -> bool {
-    if event.kind != crate::r::keyboard::KEYBOARD_OUTPUT_KIND_TEXT
-        || event.codepoint != '1' as u32
-        || (event.modifiers & UI3_SHELL_GUI_MOD_MASK) == 0
-    {
-        return false;
-    }
-    if state.suppress_gui_one {
-        state.suppress_gui_one = false;
-        return false;
-    }
-    true
 }
 
 fn fill_scene_rect(
@@ -245,6 +243,88 @@ fn fill_dirty_row_rects(
         }
     }
     descs
+}
+
+fn fill_dirty_cell_backgrounds(
+    surface: &crate::ui3::ui3_surface::Ui3RgbaSurface,
+    rows: &[Ui3ShellRow],
+    panel: crate::intel::LiveOverlayRect,
+    dirty_rows: &[usize],
+) -> usize {
+    let face = crate::ui3::althlasfont::bitmapfont::ATHLAS_FONT_FACE_LUCIDA_HALF;
+    let line_height = shell_line_height() as i32;
+    let content_x0 = panel.x.saturating_add(UI3_SHELL_PADDING_PX) as i32;
+    let content_x1 = panel
+        .x
+        .saturating_add(panel.width)
+        .saturating_sub(UI3_SHELL_PADDING_PX) as i32;
+    let content_y0 = panel.y.saturating_add(UI3_SHELL_PADDING_PX) as i32;
+    let content_y1 = panel
+        .y
+        .saturating_add(panel.height)
+        .saturating_sub(UI3_SHELL_PADDING_PX) as i32;
+    let space_advance = shell_space_advance(line_height);
+    let mut descs = 0usize;
+
+    for row_idx in dirty_rows.iter().copied() {
+        let Some(row) = rows.get(row_idx) else {
+            continue;
+        };
+        let row_y0 = content_y0.saturating_add((row_idx as i32).saturating_mul(line_height));
+        let row_y1 = row_y0.saturating_add(line_height).min(content_y1);
+        if row_y0 >= row_y1 {
+            break;
+        }
+
+        let mut pen_x = content_x0;
+        let mut run_x0 = 0i32;
+        let mut run_x1 = 0i32;
+        let mut run_bg: Option<(u8, u8, u8)> = None;
+        for cell in row.cells.iter().copied() {
+            let advance = shell_cell_advance(face, cell.ch, line_height, space_advance);
+            let next_x = pen_x.saturating_add(advance).min(content_x1);
+            let bg = if cell.bg == UI3_SHELL_DEFAULT_BG {
+                None
+            } else {
+                Some(cell.bg)
+            };
+            if bg != run_bg {
+                descs = descs
+                    .saturating_add(flush_bg_run(surface, run_bg, run_x0, run_x1, row_y0, row_y1));
+                run_bg = bg;
+                run_x0 = pen_x;
+            }
+            run_x1 = next_x;
+            pen_x = pen_x.saturating_add(advance);
+            if pen_x >= content_x1 {
+                break;
+            }
+        }
+        descs = descs.saturating_add(flush_bg_run(surface, run_bg, run_x0, run_x1, row_y0, row_y1));
+    }
+
+    descs
+}
+
+fn flush_bg_run(
+    surface: &crate::ui3::ui3_surface::Ui3RgbaSurface,
+    bg: Option<(u8, u8, u8)>,
+    x0: i32,
+    x1: i32,
+    y0: i32,
+    y1: i32,
+) -> usize {
+    let Some(bg) = bg else {
+        return 0;
+    };
+    if x0 >= x1 || y0 >= y1 {
+        return 0;
+    }
+    fill_scene_rect(
+        surface,
+        crate::intel::gpgpu::GpgpuRect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32),
+        rgb_to_gpgpu_rgba(bg),
+    )
 }
 
 fn draw_scene_text(
@@ -308,7 +388,7 @@ fn shell_rect(viewport_width: u32, viewport_height: u32) -> crate::intel::LiveOv
     if viewport_width == 0 || viewport_height == 0 {
         return crate::intel::LiveOverlayRect::new(0, 0, 0, 0, Rgba8::new(0, 0, 0, 0));
     }
-    let height = viewport_height / 2;
+    let height = viewport_height.saturating_mul(2).saturating_div(3);
     let width = height
         .saturating_mul(16)
         .saturating_div(9)
@@ -332,7 +412,7 @@ fn shell_line_height() -> u32 {
     u32::from(crate::ui3::althlasfont::bitmapfont::athlas_font_line_height_px(face).unwrap_or(22))
 }
 
-fn snapshot_rows(snapshot: &crate::shell2::Ui2ShellScreenSnapshot) -> Vec<String> {
+fn snapshot_rows(snapshot: &crate::shell2::Ui2ShellScreenSnapshot) -> Vec<Ui3ShellRow> {
     let cols = snapshot.cols as usize;
     let rows = snapshot.rows as usize;
     let mut out = Vec::new();
@@ -345,17 +425,14 @@ fn snapshot_rows(snapshot: &crate::shell2::Ui2ShellScreenSnapshot) -> Vec<String
         if start >= end {
             break;
         }
-        let mut text = String::new();
-        for cell in &snapshot.cells[start..end] {
-            text.push(cell.ch);
-        }
-        trim_string_end_spaces(&mut text);
-        out.push(text);
+        let mut cells = snapshot.cells[start..end].to_vec();
+        trim_end_default_blank_cells(&mut cells);
+        out.push(Ui3ShellRow { cells });
     }
     out
 }
 
-fn trim_empty_head_to_fit(rows: &mut Vec<String>, cap: usize) {
+fn trim_empty_head_to_fit(rows: &mut Vec<Ui3ShellRow>, cap: usize) {
     while rows.len() > cap {
         if rows.first().is_some_and(|row| row.is_empty()) {
             rows.remove(0);
@@ -369,9 +446,14 @@ fn trim_empty_head_to_fit(rows: &mut Vec<String>, cap: usize) {
     }
 }
 
-fn trim_string_end_spaces(text: &mut String) {
-    let trimmed_len = text.trim_end_matches(' ').len();
-    text.truncate(trimmed_len);
+fn trim_end_default_blank_cells(cells: &mut Vec<crate::shell2::Ui2ShellCell>) {
+    while cells.last().is_some_and(is_default_blank_cell) {
+        cells.pop();
+    }
+}
+
+fn is_default_blank_cell(cell: &crate::shell2::Ui2ShellCell) -> bool {
+    cell.ch == ' ' && cell.bg == UI3_SHELL_DEFAULT_BG
 }
 
 fn all_row_indices(len: usize) -> Vec<usize> {
@@ -382,7 +464,7 @@ fn all_row_indices(len: usize) -> Vec<usize> {
     rows
 }
 
-fn dirty_row_indices(previous: &[String], rows: &[String]) -> Vec<usize> {
+fn dirty_row_indices(previous: &[Ui3ShellRow], rows: &[Ui3ShellRow]) -> Vec<usize> {
     let mut dirty = Vec::new();
     let len = previous.len().max(rows.len());
     for index in 0..len {
@@ -424,7 +506,7 @@ fn shell_row_rect(
 }
 
 fn collect_dirty_row_text_placements(
-    rows: &[String],
+    rows: &[Ui3ShellRow],
     panel: crate::intel::LiveOverlayRect,
     dirty_rows: &[usize],
 ) -> Vec<crate::intel::gpgpu::GpgpuSprite64Placement> {
@@ -440,7 +522,7 @@ fn collect_dirty_row_text_placements(
         .y
         .saturating_add(panel.height)
         .saturating_sub(UI3_SHELL_PADDING_PX) as i32;
-    let space_advance = preserved_space_advance(face, line_height);
+    let space_advance = shell_space_advance(line_height);
     let mut placements = Vec::new();
     for row_idx in dirty_rows.iter().copied() {
         let Some(row) = rows.get(row_idx) else {
@@ -451,7 +533,8 @@ fn collect_dirty_row_text_placements(
             break;
         }
         let mut pen_x = content_x0;
-        for ch in row.chars() {
+        for cell in row.cells.iter().copied() {
+            let ch = cell.ch;
             if ch.is_control() {
                 continue;
             }
@@ -472,7 +555,7 @@ fn collect_dirty_row_text_placements(
                 pen_x = pen_x.saturating_add(space_advance);
                 continue;
             };
-            let advance = i32::from(region.src_w.max(1)).max(space_advance);
+            let advance = shell_glyph_advance(region, line_height);
             if pen_x.saturating_add(advance) > content_x1 {
                 break;
             }
@@ -481,7 +564,7 @@ fn collect_dirty_row_text_placements(
                     slot,
                     pen_x,
                     baseline_y,
-                    UI3_SHELL_TEXT_RGBA,
+                    rgb_to_gpgpu_rgba(cell.fg),
                 ));
             }
             pen_x = pen_x.saturating_add(advance);
@@ -490,11 +573,34 @@ fn collect_dirty_row_text_placements(
     placements
 }
 
-fn preserved_space_advance(
-    face: crate::ui3::althlasfont::bitmapfont::AthlasFontFace,
-    line_height: i32,
+fn shell_space_advance(line_height: i32) -> i32 {
+    (line_height.saturating_mul(35) / 100).max(1)
+}
+
+fn shell_glyph_advance(
+    region: crate::ui3::althlasfont::athlasmetrics::AthlasGlyphRegion,
+    _line_height: i32,
 ) -> i32 {
-    crate::ui3::althlasfont::bitmapfont::athlas_lookup_glyph_region(face, 'M')
-        .map(|region| i32::from(region.src_w.max(1)))
-        .unwrap_or((line_height / 2).max(1))
+    i32::from(crate::ui3::althlasfont::bitmapfont::athlas_glyph_advance_px(region))
+}
+
+fn shell_cell_advance(
+    face: crate::ui3::althlasfont::bitmapfont::AthlasFontFace,
+    ch: char,
+    line_height: i32,
+    space_advance: i32,
+) -> i32 {
+    if ch == '\t' {
+        return space_advance.saturating_mul(4);
+    }
+    if ch.is_whitespace() || ch.is_control() {
+        return space_advance;
+    }
+    crate::ui3::althlasfont::bitmapfont::athlas_lookup_glyph_region(face, ch)
+        .map(|region| shell_glyph_advance(region, line_height))
+        .unwrap_or(space_advance)
+}
+
+fn rgb_to_gpgpu_rgba(rgb: (u8, u8, u8)) -> u32 {
+    0xFF00_0000 | ((rgb.2 as u32) << 16) | ((rgb.1 as u32) << 8) | rgb.0 as u32
 }

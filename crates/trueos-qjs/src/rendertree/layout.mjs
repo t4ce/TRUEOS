@@ -37,6 +37,12 @@ const LEAF_TAGS = new Set([
 
 const REPLACED_DIMENSION_TAGS = new Set(['img', 'svg', 'canvas', 'iframe']);
 const ROW_TAGS = new Set(['tr', 'barrow', 'searchrow']);
+const UI3_ATLAS_LINE_HEIGHT_BY_TIER = Object.freeze({
+  third: 21,
+  half: 32,
+  '1x': 64,
+  '2x': 64,
+});
 
 function numberFrom(value, fallback) {
   const n = Number(value);
@@ -53,7 +59,8 @@ function normalizeWhitespace(text) {
 
 export function createTextMeasurer(options = {}) {
   const fontSize = Math.max(1, numberFrom(options.fontSize, defaultTheme.fontSize));
-  const lineHeight = Math.ceil(fontSize * 1.25);
+  const requestedLineHeight = numberFrom(options.lineHeight, 0);
+  const lineHeight = Math.max(1, Math.ceil(requestedLineHeight > 0 ? requestedLineHeight : fontSize * 1.25));
   const charWidth = fontSize * 0.58;
   let ctx = null;
 
@@ -141,6 +148,65 @@ function layoutDefaultsFor(sourceNode) {
   const defaults = meta.layoutDefaults && typeof meta.layoutDefaults === 'object' ? meta.layoutDefaults : {};
   const layout = sourceNode && sourceNode.layout && typeof sourceNode.layout === 'object' ? sourceNode.layout : {};
   return { ...defaults, ...layout };
+}
+
+function textStyleFor(renderNode, sourceNode, inheritedStyle) {
+  const base = inheritedStyle && typeof inheritedStyle === 'object' ? { ...inheritedStyle } : {};
+  const sourceMeta = sourceNode && sourceNode.meta && typeof sourceNode.meta === 'object' ? sourceNode.meta : {};
+  const sourceStyle = sourceMeta.textStyle && typeof sourceMeta.textStyle === 'object' ? sourceMeta.textStyle : null;
+  const renderStyle = renderNode && renderNode.textStyle && typeof renderNode.textStyle === 'object' ? renderNode.textStyle : null;
+  if (sourceStyle) Object.assign(base, sourceStyle);
+  if (renderStyle) Object.assign(base, renderStyle);
+  return Object.keys(base).length > 0 ? snappedTextStyle(base) : null;
+}
+
+function fontTierForPx(fontSizePx) {
+  const px = Number(fontSizePx);
+  if (!Number.isFinite(px) || px <= 0) return 'half';
+  if (px <= 10) return 'third';
+  if (px <= 15) return 'half';
+  if (px <= 24) return '1x';
+  return '2x';
+}
+
+function renderFontTierForTier(tier) {
+  return tier === '2x' ? '1x' : tier;
+}
+
+function atlasLineHeightForStyle(style) {
+  const tier = renderFontTierForTier(String(style?.fontTier ?? fontTierForPx(style?.fontSizePx)));
+  return UI3_ATLAS_LINE_HEIGHT_BY_TIER[tier] ?? 0;
+}
+
+function snappedTextStyle(style) {
+  const out = { ...style };
+  const requestedFontSize = numberFrom(out.fontSizePx, defaultTheme.fontSize);
+  const requestedLineHeight = numberFrom(out.lineHeightPx, 0);
+  const requestedTier = String(out.fontTier ?? fontTierForPx(requestedFontSize));
+  const renderTier = renderFontTierForTier(requestedTier);
+  const atlasLineHeight = atlasLineHeightForStyle({ ...out, fontTier: requestedTier });
+  out.fontSizePx = requestedFontSize;
+  out.fontTier = requestedTier;
+  out.fontRenderTier = renderTier;
+  if (renderTier === '1x') {
+    out.lineHeightPx = Math.max(1, Math.ceil(Math.max(requestedLineHeight, atlasLineHeight)));
+    out.measureFontSizePx = out.lineHeightPx;
+  } else {
+    out.lineHeightPx = Math.max(1, Math.ceil(requestedLineHeight || requestedFontSize * 1.25));
+    out.measureFontSizePx = requestedFontSize;
+  }
+  return out;
+}
+
+function measurerForTextStyle(style, fallbackMeasurer) {
+  if (!style || typeof style !== 'object') return fallbackMeasurer;
+  const fontSize = numberFrom(style.measureFontSizePx ?? style.fontSizePx, 0);
+  const lineHeight = numberFrom(style.lineHeightPx, 0);
+  if (fontSize <= 0 && lineHeight <= 0) return fallbackMeasurer;
+  return createTextMeasurer({
+    fontSize: fontSize > 0 ? fontSize : undefined,
+    lineHeight: lineHeight > 0 ? lineHeight : undefined,
+  });
 }
 
 function overlaysFor(sourceNode) {
@@ -306,11 +372,12 @@ function childRenderList(node) {
   return children.filter((child) => child && child.kind === 'block' && String(child.tagName ?? '') === 'summary');
 }
 
-function layoutTextNode(renderNode, x, y, width, measurer) {
+function layoutTextNode(renderNode, x, y, width, measurer, textStyle = null) {
   const text = String(renderNode.text ?? '');
   const preserveWhitespace = renderNode.preserveWhitespace === true;
-  const measured = measurer.measure(text, width, { preserveWhitespace });
-  return {
+  const styledMeasurer = measurerForTextStyle(textStyle, measurer);
+  const measured = styledMeasurer.measure(text, width, { preserveWhitespace });
+  const out = {
     kind: 'text',
     text,
     lines: measured.lines,
@@ -321,6 +388,8 @@ function layoutTextNode(renderNode, x, y, width, measurer) {
     ...(preserveWhitespace ? { preserveWhitespace: true } : {}),
     children: [],
   };
+  if (textStyle && typeof textStyle === 'object') out.textStyle = { ...textStyle };
+  return out;
 }
 
 function textContentForNode(node) {
@@ -391,10 +460,11 @@ function rowGapForTag(tagName) {
   return tagName === 'tr' ? 0 : INLINE_GAP;
 }
 
-function layoutBlockNode(renderNode, sourceMap, x, y, availableWidth, options, measurer) {
+function layoutBlockNode(renderNode, sourceMap, x, y, availableWidth, options, measurer, inheritedTextStyle = null) {
   const tagName = String(renderNode.tagName ?? 'div').toLowerCase();
   const sourceNode = sourceMap.get(String(renderNode.key ?? ''));
   const defaults = { ...tagDefaults(tagName), ...layoutDefaultsFor(sourceNode) };
+  const nodeTextStyle = textStyleFor(renderNode, sourceNode, inheritedTextStyle);
   const width = widthForNode(renderNode, tagName, defaults, availableWidth);
   const padding = nodePadding(tagName, defaults);
   const innerX = LEAF_TAGS.has(tagName) ? 0 : padding.left;
@@ -412,7 +482,7 @@ function layoutBlockNode(renderNode, sourceMap, x, y, availableWidth, options, m
     for (let i = 0; i < renderChildren.length; i += 1) {
       const child = renderChildren[i];
       if (isOutOfFlowNode(child, sourceMap)) {
-        const box = layoutNode(child, sourceMap, 0, 0, innerWidth, options, measurer);
+        const box = layoutNode(child, sourceMap, 0, 0, innerWidth, options, measurer, nodeTextStyle);
         if (!box) continue;
         const pos = outOfFlowPosition(box, { innerX, innerY, innerWidth, heightHint: explicitHeightHint });
         box.x = pos.x;
@@ -429,7 +499,7 @@ function layoutBlockNode(renderNode, sourceMap, x, y, availableWidth, options, m
         renderChildren.length - i,
         measurer,
       );
-      const box = layoutNode(child, sourceMap, cursorX, innerY, childWidth, options, measurer);
+      const box = layoutNode(child, sourceMap, cursorX, innerY, childWidth, options, measurer, nodeTextStyle);
       if (!box) continue;
       children.push(box);
       cursorX += box.width + gap;
@@ -440,7 +510,7 @@ function layoutBlockNode(renderNode, sourceMap, x, y, availableWidth, options, m
     let cursorY = innerY;
     for (const child of renderChildren) {
       if (isOutOfFlowNode(child, sourceMap)) {
-        const box = layoutNode(child, sourceMap, 0, 0, innerWidth, options, measurer);
+        const box = layoutNode(child, sourceMap, 0, 0, innerWidth, options, measurer, nodeTextStyle);
         if (!box) continue;
         const pos = outOfFlowPosition(box, { innerX, innerY, innerWidth, heightHint: explicitHeightHint });
         box.x = pos.x;
@@ -448,7 +518,7 @@ function layoutBlockNode(renderNode, sourceMap, x, y, availableWidth, options, m
         children.push(markOutOfFlow(box));
         continue;
       }
-      const box = layoutNode(child, sourceMap, innerX, cursorY, innerWidth, options, measurer);
+      const box = layoutNode(child, sourceMap, innerX, cursorY, innerWidth, options, measurer, nodeTextStyle);
       if (!box) continue;
       children.push(box);
       cursorY += box.height + gapAfter(child);
@@ -469,14 +539,15 @@ function layoutBlockNode(renderNode, sourceMap, x, y, availableWidth, options, m
   };
   if (renderNode.attrs && Object.keys(renderNode.attrs).length > 0) out.attrs = renderNode.attrs;
   if (renderNode.paint && typeof renderNode.paint === 'object') out.paint = renderNode.paint;
+  if (nodeTextStyle && typeof nodeTextStyle === 'object') out.textStyle = { ...nodeTextStyle };
   return out;
 }
 
-export function layoutNode(renderNode, sourceMap, x, y, width, options = {}, measurer = createTextMeasurer()) {
+export function layoutNode(renderNode, sourceMap, x, y, width, options = {}, measurer = createTextMeasurer(), inheritedTextStyle = null) {
   if (!renderNode || typeof renderNode !== 'object') return null;
-  if (renderNode.kind === 'text') return layoutTextNode(renderNode, x, y, width, measurer);
+  if (renderNode.kind === 'text') return layoutTextNode(renderNode, x, y, width, measurer, textStyleFor(renderNode, null, inheritedTextStyle));
   if (renderNode.kind !== 'block') return null;
-  return layoutBlockNode(renderNode, sourceMap, x, y, Math.max(1, width), options, measurer);
+  return layoutBlockNode(renderNode, sourceMap, x, y, Math.max(1, width), options, measurer, inheritedTextStyle);
 }
 
 export function renderNodesToLayout(renderNodes, options = {}) {
