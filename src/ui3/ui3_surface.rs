@@ -110,6 +110,27 @@ impl Ui3RgbaSurface {
         viewport_height: u32,
         reason: &str,
     ) -> bool {
+        self.bind_primary_scanout_inner(scroll_y, viewport_width, viewport_height, true, reason)
+    }
+
+    pub(crate) fn bind_primary_scanout_without_flush(
+        &self,
+        scroll_y: u32,
+        viewport_width: u32,
+        viewport_height: u32,
+        reason: &str,
+    ) -> bool {
+        self.bind_primary_scanout_inner(scroll_y, viewport_width, viewport_height, false, reason)
+    }
+
+    fn bind_primary_scanout_inner(
+        &self,
+        scroll_y: u32,
+        viewport_width: u32,
+        viewport_height: u32,
+        flush: bool,
+        reason: &str,
+    ) -> bool {
         if self.width == 0 || self.height == 0 || viewport_width == 0 || viewport_height == 0 {
             return false;
         }
@@ -119,7 +140,9 @@ impl Ui3RgbaSurface {
         if dst_w == 0 || dst_h == 0 {
             return false;
         }
-        self.flush_for_display();
+        if flush {
+            self.flush_for_display();
+        }
         crate::intel::set_primary_plane_source_mapped(
             crate::intel::PrimaryPlaneSource {
                 phys: self.phys,

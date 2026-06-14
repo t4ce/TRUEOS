@@ -21,8 +21,7 @@ struct BuiltinShell2CmdEntry {
 const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_7Z: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file to compress into a sibling .7z archive."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_C4: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["file","inline"],"description":"Compile from a TRUEOSFS file or inline C4 source."},"path":{"type":"string","description":"TRUEOSFS source path when mode=file."},"source":{"type":"string","description":"Inline C4 source when mode=inline."}},"required":["mode"],"additionalProperties":false}"#;
-const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."}},"required":["action"],"additionalProperties":false}"#;
-const TOOL_JSON_FSLOG: &str = r#"{"type":"object","properties":{"disk_id":{"type":"string","description":"Optional disk id to scan. Omit for the primary TRUEOSFS root."},"max":{"type":"integer","minimum":1,"maximum":4096,"description":"Maximum raw records to print."}},"required":[],"additionalProperties":false}"#;
+const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","log"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format or optional disk id for action=log."},"max":{"type":"integer","minimum":1,"maximum":4096,"description":"Maximum raw TRUEOSFS log records to print for action=log."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_GPGPU: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","clear","copy","scanout","atlas","athlas","athlas_go","mandel","canvas","smoke"],"description":"GPGPU command to run."},"id":{"type":"integer","description":"Optional atlas sprite slot id."},"x":{"type":"integer","description":"Optional clear x or atlas destination x."},"y":{"type":"integer","description":"Optional clear y or atlas destination y."},"w":{"type":"integer","description":"Optional width."},"h":{"type":"integer","description":"Optional height."},"sx":{"type":"integer","description":"Optional copy source x."},"sy":{"type":"integer","description":"Optional copy source y."},"dx":{"type":"integer","description":"Optional copy destination x."},"dy":{"type":"integer","description":"Optional copy destination y."},"duration_ms":{"type":"integer","description":"Optional athlas_go/canvas runtime in milliseconds."},"cadence_ms":{"type":"integer","description":"Optional athlas_go/canvas minimum launch cadence in milliseconds."},"burst":{"type":"integer","description":"Optional athlas_go copies per cadence step."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_HYPER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","probe"],"description":"Hyper transport view to print."},"url":{"type":"string","description":"Optional URL to download into TRUEOSFS."},"path":{"type":"string","description":"Optional TRUEOSFS destination path."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_LSD: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"Optional TRUEOSFS path to list."},"long":{"type":"boolean","description":"Show file kind and byte size."},"tree":{"type":"boolean","description":"Walk recursively from the path."}},"required":[],"additionalProperties":false}"#;
@@ -177,17 +176,19 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some((255, 55, 255)),
         advertised: true,
         handler: dispatch_disc,
-        tool_description: Some("List top-level disk devices or format a disk."),
+        tool_description: Some(
+            "List top-level disk devices, format a disk, or print raw TRUEOSFS log records.",
+        ),
         tool_parameters_json: Some(TOOL_JSON_DISC),
     },
     BuiltinShell2CmdEntry {
         name: "fslog",
         mode: "cmd",
         color: Some((255, 55, 255)),
-        advertised: true,
+        advertised: false,
         handler: dispatch_fslog,
-        tool_description: Some("Print raw TRUEOSFS log records from the block device."),
-        tool_parameters_json: Some(TOOL_JSON_FSLOG),
+        tool_description: None,
+        tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {
         name: "gpgpu",

@@ -1,5 +1,6 @@
 use alloc::format;
 use alloc::string::String;
+use core::str::SplitWhitespace;
 
 use super::super::{ShellBackend2, line_width_for_backend, print_shell_line};
 use crate::disc::block::{self, DeviceHandle};
@@ -8,14 +9,13 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 const DEFAULT_MAX_RECORDS: usize = 256;
 const MAX_MAX_RECORDS: usize = 4096;
 
-fn usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "fslog: usage `fslog [disc-id] [--max N]`");
+fn usage(io: &'static dyn ShellBackend2, command: &str) {
+    print_shell_line(io, format!("{command}: usage `{command} [disc-id] [--max N]`").as_str());
 }
 
-fn parse_args(rest: &str) -> Result<(Option<u32>, usize), &'static str> {
+fn parse_args(args: &mut SplitWhitespace<'_>) -> Result<(Option<u32>, usize), &'static str> {
     let mut disk_id = None;
     let mut max_records = DEFAULT_MAX_RECORDS;
-    let mut args = rest.split_whitespace();
 
     while let Some(arg) = args.next() {
         match arg {
@@ -98,12 +98,16 @@ fn scan(
     })
 }
 
-pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    let (disk_id, max_records) = match parse_args(rest) {
+pub(crate) fn try_parse_as(
+    io: &'static dyn ShellBackend2,
+    command: &str,
+    args: &mut SplitWhitespace<'_>,
+) -> ParseOutcome {
+    let (disk_id, max_records) = match parse_args(args) {
         Ok(v) => v,
         Err(err) => {
-            print_shell_line(io, format!("fslog: {err}").as_str());
-            usage(io);
+            print_shell_line(io, format!("{command}: {err}").as_str());
+            usage(io, command);
             return ParseOutcome::Handled;
         }
     };
@@ -111,11 +115,11 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
     let disk = match select_disk(disk_id) {
         Ok(disk) => disk,
         Err(err) => {
-            print_shell_line(io, format!("fslog: {err}").as_str());
+            print_shell_line(io, format!("{command}: {err}").as_str());
             if disk_id.is_some() {
                 super::tlb_helper::print_disk_choice_table(
                     io,
-                    "fslog",
+                    command,
                     "disk devices",
                     super::tlb_helper::collect_top_level_disk_choices().as_slice(),
                 );
@@ -128,11 +132,11 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
     let scan = match scan(disk, max_records) {
         Ok(Some(scan)) => scan,
         Ok(None) => {
-            print_shell_line(io, "fslog: disk has no TRUEOSFS placement");
+            print_shell_line(io, format!("{command}: disk has no TRUEOSFS placement").as_str());
             return ParseOutcome::Handled;
         }
         Err(err) => {
-            print_shell_line(io, format!("fslog: scan failed: {err:?}").as_str());
+            print_shell_line(io, format!("{command}: scan failed: {err:?}").as_str());
             return ParseOutcome::Handled;
         }
     };
@@ -140,7 +144,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
     print_shell_line(
         io,
         format!(
-            "fslog: disk={} ({}) bs={} data_lba={} log_head_rel={} checkpoint_rel={} records={} stop={}",
+            "{command}: disk={} ({}) bs={} data_lba={} log_head_rel={} checkpoint_rel={} records={} stop={}",
             info.id.raw(),
             info.id,
             scan.block_size,
@@ -181,4 +185,9 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
     table.emit_footer(|text| print_shell_line(io, text));
 
     ParseOutcome::Handled
+}
+
+pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    let mut args = rest.split_whitespace();
+    try_parse_as(io, "fslog", &mut args)
 }
