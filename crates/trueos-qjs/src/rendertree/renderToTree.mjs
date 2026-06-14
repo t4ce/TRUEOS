@@ -182,7 +182,7 @@ function hitBoxActivation(node, tagName, role, options = {}) {
   if ((tagName === 'a' || role === 'link') && attrs.href != null) {
     const href = String(attrs.href ?? '').trim();
     const resolvedHref = resolveHref(options.baseUrl, href);
-    if (!/^(https?:|file:)/i.test(resolvedHref)) return null;
+    if (!/^https?:/i.test(resolvedHref)) return null;
     const activation = {
       kind: 'navigate',
       href,
@@ -234,6 +234,7 @@ function createUi3PaintPlan(layout, options = {}) {
           y,
           width: Math.max(0, Math.round(Number(node.width ?? 0) || 0)),
           height: Math.max(0, Math.round(Number(node.height ?? 0) || 0)),
+          attrs: node.attrs && typeof node.attrs === 'object' ? node.attrs : undefined,
           paint: layoutPaint(node),
         });
       }

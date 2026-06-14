@@ -117,7 +117,7 @@ pub async fn ui3_service_task() {
             {
                 let present = redraw_scene_text(&mut scene, &mut font, 0, false);
                 crate::log!(
-                    "ui3-service: asset batch redraw browser={} seq={} scroll_y={} content_height={} viewport={}x{} text_nodes={} placements={} gradients={} assets={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} asset_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
+                    "ui3-service: asset batch redraw browser={} seq={} scroll_y={} content_height={} viewport={}x{} text_nodes={} placements={} gradients={} assets={} layout_shift={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} asset_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
                     scene.frame.browser_instance_id,
                     scene.frame.seq,
                     scene.scroll_y as u32,
@@ -128,6 +128,7 @@ pub async fn ui3_service_task() {
                     present.placements,
                     present.gradients,
                     present.assets,
+                    present.layout_shift_px,
                     present.embedded_scenes,
                     present.clipped,
                     present.batches,
@@ -159,7 +160,7 @@ fn consume_render_tree_frame(
     let present = redraw_scene_text(scene, font, taken_seq, false);
     let frame = &scene.frame;
     crate::log!(
-        "ui3-service: frame taken={} browser={} seq={} render_hash={} layout_hash={} render_bytes={} layout_bytes={} scroll_y={} scroll_redraw=0 content_height={} viewport={}x{} text_nodes={} placements={} gradients={} assets={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} asset_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
+        "ui3-service: frame taken={} browser={} seq={} render_hash={} layout_hash={} render_bytes={} layout_bytes={} scroll_y={} scroll_redraw=0 content_height={} viewport={}x{} text_nodes={} placements={} gradients={} assets={} layout_shift={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} asset_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
         taken_seq,
         frame.browser_instance_id,
         frame.seq,
@@ -175,6 +176,7 @@ fn consume_render_tree_frame(
         present.placements,
         present.gradients,
         present.assets,
+        present.layout_shift_px,
         present.embedded_scenes,
         present.clipped,
         present.batches,
@@ -198,6 +200,7 @@ struct Ui3LayoutInspectResult {
     text_nodes: usize,
     placements: usize,
     assets: usize,
+    layout_shift_px: u32,
     batches: usize,
     gradients: usize,
     embedded_scenes: usize,
@@ -276,11 +279,12 @@ fn redraw_scene_text(
     };
     let draw =
         crate::ui3::ui3_font::draw_paint_plan_primary(paint_plan, font_scene, font, present_reason);
+    scene.content_height = scene.content_height.saturating_add(draw.layout_shift_px);
     let total_ms = elapsed_ms_since(total_start);
 
     if is_scroll {
         crate::log!(
-            "ui3-service: scroll taken={} browser={} seq={} scroll_y={} content_height={} viewport={}x{} text_nodes={} placements={} gradients={} assets={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} asset_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
+            "ui3-service: scroll taken={} browser={} seq={} scroll_y={} content_height={} viewport={}x{} text_nodes={} placements={} gradients={} assets={} layout_shift={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} asset_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
             taken_seq,
             frame.browser_instance_id,
             frame.seq,
@@ -292,6 +296,7 @@ fn redraw_scene_text(
             draw.placements,
             draw.gradients,
             draw.assets,
+            draw.layout_shift_px,
             embedded_scenes,
             draw.clipped,
             draw.batches,
@@ -314,6 +319,7 @@ fn redraw_scene_text(
         text_nodes: draw.text_nodes,
         placements: draw.placements,
         assets: draw.assets,
+        layout_shift_px: draw.layout_shift_px,
         batches: draw.batches,
         gradients: draw.gradients,
         embedded_scenes,

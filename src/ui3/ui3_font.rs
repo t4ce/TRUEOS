@@ -19,6 +19,7 @@ pub(crate) struct Ui3FontScratch {
     gradients: Vec<crate::intel::gpgpu::GpgpuGradientRect>,
     control_gradients: Vec<crate::intel::gpgpu::GpgpuGradientRect>,
     assets: Vec<Ui3AssetPlacement>,
+    layout_adjustments: Vec<Ui3LayoutAdjustment>,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -34,6 +35,7 @@ pub(crate) struct Ui3FontDrawResult {
     pub(crate) text_nodes: usize,
     pub(crate) placements: usize,
     pub(crate) assets: usize,
+    pub(crate) layout_shift_px: u32,
     pub(crate) batches: usize,
     pub(crate) gradients: usize,
     pub(crate) clipped: usize,
@@ -73,6 +75,12 @@ struct Ui3AssetPlacement {
     asset: crate::surfer::asset_shack::BrowserAssetReady,
 }
 
+#[derive(Copy, Clone, Debug)]
+struct Ui3LayoutAdjustment {
+    after_y: f32,
+    delta_y: f32,
+}
+
 pub(crate) fn draw_paint_plan_primary(
     plan: &Value,
     scene: Ui3FontScene,
@@ -83,21 +91,30 @@ pub(crate) fn draw_paint_plan_primary(
     scratch.gradients.clear();
     scratch.control_gradients.clear();
     scratch.assets.clear();
+    scratch.layout_adjustments.clear();
     let mut collect = Ui3TextCollectStats::default();
     let mut gradient_collect = Ui3GradientCollectStats::default();
+    collect_paint_plan_ready_assets(
+        plan,
+        scene.scroll_y,
+        scene,
+        &mut scratch.assets,
+        &mut scratch.layout_adjustments,
+    );
     collect_paint_plan_rect_gradients(
         plan,
         scene.scroll_y,
         scene,
+        &scratch.layout_adjustments,
         &mut scratch.gradients,
         &mut scratch.control_gradients,
         &mut gradient_collect,
     );
-    collect_paint_plan_ready_assets(plan, scene.scroll_y, scene, &mut scratch.assets);
     collect_paint_plan_summary_icons(
         plan,
         scene.scroll_y,
         scene,
+        &scratch.layout_adjustments,
         &mut scratch.placements,
         &mut collect,
     );
@@ -105,6 +122,7 @@ pub(crate) fn draw_paint_plan_primary(
         plan,
         scene.scroll_y,
         scene,
+        &scratch.layout_adjustments,
         &mut scratch.placements,
         &mut collect,
     );
@@ -191,6 +209,7 @@ fn finish_draw_primary(
         text_nodes: collect.text_nodes,
         placements: scratch.placements.len(),
         assets: assets_drawn,
+        layout_shift_px: layout_adjustment_total_px(scratch.layout_adjustments.as_slice()),
         batches: text_batches,
         gradients: gradient_count,
         clipped: collect.clipped,
@@ -288,6 +307,7 @@ fn collect_paint_plan_ready_assets(
     scroll_y: f32,
     scene: Ui3FontScene,
     assets: &mut Vec<Ui3AssetPlacement>,
+    adjustments: &mut Vec<Ui3LayoutAdjustment>,
 ) {
     if scene.browser_instance_id == 0 {
         return;
@@ -306,19 +326,14 @@ fn collect_paint_plan_ready_assets(
             continue;
         };
         let x = json_f32_field(item, "x").unwrap_or(0.0);
-        let y = json_f32_field(item, "y").unwrap_or(0.0) - scroll_y;
+        let y_doc = json_f32_field(item, "y").unwrap_or(0.0);
         let Some(width) = json_u32_field(item, "width") else {
             continue;
         };
         let Some(height) = json_u32_field(item, "height") else {
             continue;
         };
-        if width == 0
-            || height == 0
-            || y + height as f32 <= 0.0
-            || y >= scene.viewport_height as f32
-            || x + width as f32 <= 0.0
-            || x >= scene.viewport_width as f32
+        if width == 0 || height == 0 || x + width as f32 <= 0.0 || x >= scene.viewport_width as f32
         {
             continue;
         }
@@ -327,11 +342,29 @@ fn collect_paint_plan_ready_assets(
         else {
             continue;
         };
+        let explicit_width = image_box_has_explicit_size(item, "width");
+        let explicit_height = image_box_has_explicit_size(item, "height");
+        let (resolved_width, resolved_height) =
+            resolved_asset_size(&asset, x, width, height, explicit_width, explicit_height);
+        if !explicit_height && resolved_height > height {
+            adjustments.push(Ui3LayoutAdjustment {
+                after_y: y_doc + height as f32,
+                delta_y: resolved_height.saturating_sub(height) as f32,
+            });
+        }
+        let adjusted_y = y_doc + layout_shift_for_y(y_doc, adjustments) - scroll_y;
+        if adjusted_y + resolved_height as f32 <= 0.0
+            || adjusted_y >= scene.viewport_height as f32
+            || x + resolved_width as f32 <= 0.0
+            || x >= scene.viewport_width as f32
+        {
+            continue;
+        }
         assets.push(Ui3AssetPlacement {
             x: floor_i32(x),
-            y: floor_i32(y),
-            width,
-            height,
+            y: floor_i32(adjusted_y),
+            width: resolved_width,
+            height: resolved_height,
             asset,
         });
     }
@@ -365,6 +398,97 @@ fn draw_ready_assets_primary(assets: &[Ui3AssetPlacement]) -> usize {
         }
     }
     drawn
+}
+
+fn resolved_asset_size(
+    asset: &crate::surfer::asset_shack::BrowserAssetReady,
+    x: f32,
+    layout_width: u32,
+    layout_height: u32,
+    explicit_width: bool,
+    explicit_height: bool,
+) -> (u32, u32) {
+    let intrinsic_width = asset.width.max(1);
+    let intrinsic_height = asset.height.max(1);
+    if explicit_width && explicit_height {
+        return (layout_width.max(1), layout_height.max(1));
+    }
+
+    let aspect_height_for_width = |width: u32| -> u32 {
+        (((width as u64)
+            .saturating_mul(intrinsic_height as u64)
+            .saturating_add((intrinsic_width / 2) as u64))
+            / intrinsic_width as u64)
+            .clamp(1, u32::MAX as u64) as u32
+    };
+    let aspect_width_for_height = |height: u32| -> u32 {
+        (((height as u64)
+            .saturating_mul(intrinsic_width as u64)
+            .saturating_add((intrinsic_height / 2) as u64))
+            / intrinsic_height as u64)
+            .clamp(1, u32::MAX as u64) as u32
+    };
+
+    let (mut width, mut height) = if explicit_width {
+        let width = layout_width.max(1);
+        (width, aspect_height_for_width(width))
+    } else if explicit_height {
+        let height = layout_height.max(1);
+        (aspect_width_for_height(height), height)
+    } else {
+        (intrinsic_width, intrinsic_height)
+    };
+
+    let max_width = crate::intel::active_scanout_dimensions()
+        .map(|(scanout_width, _)| {
+            if x < 0.0 {
+                scanout_width
+            } else {
+                scanout_width.saturating_sub(floor_i32(x).max(0) as u32)
+            }
+        })
+        .unwrap_or(layout_width)
+        .max(1);
+    if width > max_width {
+        width = max_width;
+        height = aspect_height_for_width(width);
+    }
+
+    (width.max(1), height.max(1))
+}
+
+fn image_box_has_explicit_size(node: &Value, axis: &str) -> bool {
+    let Some(attrs) = node.get("attrs").and_then(Value::as_object) else {
+        return false;
+    };
+    let fallback_axis = if axis == "width" { "w" } else { "h" };
+    attrs
+        .get(axis)
+        .or_else(|| attrs.get(fallback_axis))
+        .is_some_and(|value| match value {
+            Value::String(s) => !s.trim().is_empty(),
+            Value::Number(_) => true,
+            _ => false,
+        })
+}
+
+fn layout_shift_for_y(y: f32, adjustments: &[Ui3LayoutAdjustment]) -> f32 {
+    adjustments
+        .iter()
+        .filter(|adjustment| y >= adjustment.after_y)
+        .map(|adjustment| adjustment.delta_y)
+        .sum()
+}
+
+fn layout_adjustment_total_px(adjustments: &[Ui3LayoutAdjustment]) -> u32 {
+    let total: f32 = adjustments
+        .iter()
+        .map(|adjustment| adjustment.delta_y)
+        .sum();
+    if !total.is_finite() || total <= 0.0 {
+        return 0;
+    }
+    libm::ceilf(total).min(u32::MAX as f32) as u32
 }
 
 fn log_collect_caps(
@@ -428,6 +552,7 @@ fn collect_paint_plan_rect_gradients(
     plan: &Value,
     scroll_y: f32,
     scene: Ui3FontScene,
+    adjustments: &[Ui3LayoutAdjustment],
     gradients: &mut Vec<crate::intel::gpgpu::GpgpuGradientRect>,
     control_gradients: &mut Vec<crate::intel::gpgpu::GpgpuGradientRect>,
     stats: &mut Ui3GradientCollectStats,
@@ -447,10 +572,12 @@ fn collect_paint_plan_rect_gradients(
         let role = item.get("role").and_then(Value::as_str).unwrap_or("");
         let remaining = UI3_GRADIENT_DESC_MAX
             .saturating_sub(paint_plan_gradient_count(gradients, control_gradients));
+        let y_doc = json_f32_field(item, "y").unwrap_or(0.0);
+        let adjusted_y = y_doc + layout_shift_for_y(y_doc, adjustments) - scroll_y;
         let pushed = match role {
             "dialog" => push_painted_box_gradients(
                 json_f32_field(item, "x").unwrap_or(0.0),
-                json_f32_field(item, "y").unwrap_or(0.0) - scroll_y,
+                adjusted_y,
                 item,
                 scene,
                 remaining,
@@ -459,7 +586,7 @@ fn collect_paint_plan_rect_gradients(
             "button" | "iframe" | "image" | "link" | "rule" | "table" | "table-cell" => {
                 push_painted_box_gradients(
                     json_f32_field(item, "x").unwrap_or(0.0),
-                    json_f32_field(item, "y").unwrap_or(0.0) - scroll_y,
+                    adjusted_y,
                     item,
                     scene,
                     remaining,
@@ -478,6 +605,7 @@ fn collect_paint_plan_summary_icons(
     plan: &Value,
     scroll_y: f32,
     scene: Ui3FontScene,
+    adjustments: &[Ui3LayoutAdjustment],
     placements: &mut Vec<crate::intel::gpgpu::GpgpuSprite64Placement>,
     stats: &mut Ui3TextCollectStats,
 ) {
@@ -489,9 +617,10 @@ fn collect_paint_plan_summary_icons(
             stats.placement_cap_hit = true;
             break;
         }
+        let y_doc = json_f32_field(icon, "y").unwrap_or(0.0);
         push_summary_icon_placement_resolved(
             json_f32_field(icon, "x").unwrap_or(0.0),
-            json_f32_field(icon, "y").unwrap_or(0.0) - scroll_y,
+            y_doc + layout_shift_for_y(y_doc, adjustments) - scroll_y,
             json_f32_field(icon, "height").unwrap_or(0.0),
             json_bool_field(icon, "open").unwrap_or(false),
             scene,
@@ -505,6 +634,7 @@ fn collect_paint_plan_text_placements(
     plan: &Value,
     scroll_y: f32,
     scene: Ui3FontScene,
+    adjustments: &[Ui3LayoutAdjustment],
     placements: &mut Vec<crate::intel::gpgpu::GpgpuSprite64Placement>,
     stats: &mut Ui3TextCollectStats,
 ) {
@@ -535,7 +665,8 @@ fn collect_paint_plan_text_placements(
             .unwrap_or(UI3_TEXT_COLOR_RGBA);
         let preserve_whitespace = paint_plan_preserve_whitespace(run);
         let x = json_f32_field(run, "x").unwrap_or(0.0);
-        let y = json_f32_field(run, "y").unwrap_or(0.0) - scroll_y;
+        let y_doc = json_f32_field(run, "y").unwrap_or(0.0);
+        let y = y_doc + layout_shift_for_y(y_doc, adjustments) - scroll_y;
         if let Some(lines) = run.get("lines").and_then(Value::as_array) {
             let line_count = lines.len().max(1);
             let layout_line_height = json_f32_field(run, "height")
