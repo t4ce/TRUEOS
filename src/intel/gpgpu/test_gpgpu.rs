@@ -2238,8 +2238,9 @@ pub(crate) fn shell_cube6_plane_project_overlay_frame(
         canvas3d_plane_patch_render_surface_frame_in_rect(frame, surface, half, rect, None)?;
     let flush_bytes = (target.pitch_bytes as usize).saturating_mul(target.height as usize);
     intel::dma_flush(target.virt, flush_bytes);
-    result.presented = 1;
-    result.ok = result.ok && flush_bytes != 0;
+    let presented = intel::display::commit_ui3_canvas_overlay_gpgpu(target, "gpgpu-cube6-overlay");
+    result.presented = presented as u32;
+    result.ok = result.ok && presented && flush_bytes != 0;
     result.primary_width = target.width;
     result.primary_height = target.height;
     Some(result)

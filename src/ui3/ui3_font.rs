@@ -1072,14 +1072,16 @@ fn collect_paint_plan_rect_gradients(
                 gradients,
             ),
             "button" | "iframe" | "image" | "link" | "rule" | "table" | "table-cell"
-            | "text-input" => push_painted_box_gradients(
-                json_f32_field(item, "x").unwrap_or(0.0),
-                adjusted_y,
-                item,
-                scene,
-                remaining,
-                control_gradients,
-            ),
+            | "text-input" | "value-track" | "value-fill" | "slider-thumb" => {
+                push_painted_box_gradients(
+                    json_f32_field(item, "x").unwrap_or(0.0),
+                    adjusted_y,
+                    item,
+                    scene,
+                    remaining,
+                    control_gradients,
+                )
+            }
             _ => 0,
         };
         if pushed != 0 {

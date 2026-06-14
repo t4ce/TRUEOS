@@ -100,6 +100,7 @@ define_started_flags!(
     SILK_SERVICE_STARTED,
     ATOMIC_BOMB_STARTED,
     SURFER_PARSE_POOL_STARTED,
+    UI3_ORBITS_STARTED,
     UI3_ASSET_SERVICE_STARTED,
     UI3_SERVICE_STARTED
 );
@@ -585,6 +586,10 @@ fn spawn_ui3_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |_ap1_spawner| crate::ui3::ui3_service_task())
 }
 
+fn spawn_ui3_orbits(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_ap1(spawner, |_ap1_spawner| crate::ui3::ui3_orbits::ui3_orbits_task())
+}
+
 #[inline]
 fn gfx_backend_boot_gate() -> bool {
     true
@@ -1026,9 +1031,9 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 #[cfg(feature = "trueos_rdp")]
-const TASK_COUNT: usize = 52;
+const TASK_COUNT: usize = 53;
 #[cfg(not(feature = "trueos_rdp"))]
-const TASK_COUNT: usize = 51;
+const TASK_COUNT: usize = 52;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1242,6 +1247,13 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         intel_cursor_service_gate,
         &UI3_SERVICE_STARTED,
         spawn_ui3_service,
+    ),
+    TaskSpec::enabled_gated(
+        "ui3-orbits",
+        crate::r::readiness::UI3_INTEL_PRESENT_READY,
+        intel_cursor_service_gate,
+        &UI3_ORBITS_STARTED,
+        spawn_ui3_orbits,
     ),
     TaskSpec::disabled(
         "trueosfs-ready-hook",
