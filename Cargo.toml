@@ -2,6 +2,7 @@
 name = "TRUEOS"
 version = "0.0.2"
 edition = "2024"
+license-file = "LICENSE"
 
 [[bin]]
 name = "TRUEOS"
