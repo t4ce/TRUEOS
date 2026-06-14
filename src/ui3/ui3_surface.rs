@@ -80,6 +80,28 @@ impl Ui3RgbaSurface {
         }
     }
 
+    pub(crate) fn clear_white_rect(&self, x: i32, y: i32, width: u32, height: u32) {
+        if width == 0 || height == 0 || self.width == 0 || self.height == 0 {
+            return;
+        }
+        let x0 = x.max(0) as u32;
+        let y0 = y.max(0) as u32;
+        let x1 = (x as i64)
+            .saturating_add(width as i64)
+            .min(self.width as i64)
+            .max(0) as u32;
+        let y1 = (y as i64)
+            .saturating_add(height as i64)
+            .min(self.height as i64)
+            .max(0) as u32;
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        for page in &self.pages {
+            page.clear_white_doc_rect(x0, y0, x1, y1, self.pitch_bytes);
+        }
+    }
+
     pub(crate) fn flush_for_display(&self) {
         for page in &self.pages {
             page.flush_for_display();
@@ -243,6 +265,47 @@ impl Ui3RgbaPage {
             core::ptr::write_bytes(self.virt.add(offset), 0xFF, bytes);
         }
         crate::intel::dma_cache_flush_range(unsafe { self.virt.add(offset) } as *const u8, bytes);
+    }
+
+    fn clear_white_doc_rect(&self, x0: u32, y0: u32, x1: u32, y1: u32, pitch_bytes: u32) {
+        if self.virt.is_null() || self.bytes == 0 || x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        let page_y0 = self.y0;
+        let page_y1 = self.y0.saturating_add(self.height);
+        let clear_y0 = y0.max(page_y0);
+        let clear_y1 = y1.min(page_y1);
+        if clear_y0 >= clear_y1 {
+            return;
+        }
+        let pitch = pitch_bytes as usize;
+        if pitch == 0 {
+            return;
+        }
+        let row_bytes = x1.saturating_sub(x0) as usize * core::mem::size_of::<u32>();
+        if row_bytes == 0 {
+            return;
+        }
+        for doc_y in clear_y0..clear_y1 {
+            let page_y = doc_y.saturating_sub(page_y0) as usize;
+            let offset = page_y
+                .saturating_mul(pitch)
+                .saturating_add(x0 as usize * core::mem::size_of::<u32>());
+            if offset >= self.bytes {
+                continue;
+            }
+            let bytes = row_bytes.min(self.bytes.saturating_sub(offset));
+            if bytes == 0 {
+                continue;
+            }
+            unsafe {
+                core::ptr::write_bytes(self.virt.add(offset), 0xFF, bytes);
+            }
+            crate::intel::dma_cache_flush_range(
+                unsafe { self.virt.add(offset) } as *const u8,
+                bytes,
+            );
+        }
     }
 
     fn flush_for_display(&self) {
