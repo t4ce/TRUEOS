@@ -81,6 +81,7 @@ struct Ui3LayoutAdjustment {
     delta_y: f32,
 }
 
+#[allow(dead_code)]
 pub(crate) fn draw_paint_plan_primary(
     plan: &Value,
     scene: Ui3FontScene,
@@ -129,6 +130,79 @@ pub(crate) fn draw_paint_plan_primary(
     finish_draw_primary(scratch, collect, gradient_collect, scene, present_reason)
 }
 
+pub(crate) fn draw_paint_plan_backend(
+    plan: &Value,
+    scene: Ui3FontScene,
+    scratch: &mut Ui3FontScratch,
+    surface: &crate::ui3::ui3_surface::Ui3RgbaSurface,
+    reason: &str,
+) -> Ui3FontDrawResult {
+    draw_paint_plan_backend_band(plan, scene, scratch, surface, 0, surface.height, reason)
+}
+
+pub(crate) fn draw_paint_plan_backend_band(
+    plan: &Value,
+    mut scene: Ui3FontScene,
+    scratch: &mut Ui3FontScratch,
+    surface: &crate::ui3::ui3_surface::Ui3RgbaSurface,
+    band_y: u32,
+    band_height: u32,
+    reason: &str,
+) -> Ui3FontDrawResult {
+    scene.scroll_y = band_y as f32;
+    scene.viewport_height = band_height;
+    scratch.placements.clear();
+    scratch.gradients.clear();
+    scratch.control_gradients.clear();
+    scratch.assets.clear();
+    scratch.layout_adjustments.clear();
+    let mut collect = Ui3TextCollectStats::default();
+    let mut gradient_collect = Ui3GradientCollectStats::default();
+    collect_paint_plan_ready_assets(
+        plan,
+        scene.scroll_y,
+        scene,
+        &mut scratch.assets,
+        &mut scratch.layout_adjustments,
+    );
+    collect_paint_plan_rect_gradients(
+        plan,
+        scene.scroll_y,
+        scene,
+        &scratch.layout_adjustments,
+        &mut scratch.gradients,
+        &mut scratch.control_gradients,
+        &mut gradient_collect,
+    );
+    collect_paint_plan_summary_icons(
+        plan,
+        scene.scroll_y,
+        scene,
+        &scratch.layout_adjustments,
+        &mut scratch.placements,
+        &mut collect,
+    );
+    collect_paint_plan_text_placements(
+        plan,
+        scene.scroll_y,
+        scene,
+        &scratch.layout_adjustments,
+        &mut scratch.placements,
+        &mut collect,
+    );
+    finish_draw_backend(
+        scratch,
+        collect,
+        gradient_collect,
+        scene,
+        surface,
+        band_y,
+        band_height,
+        reason,
+    )
+}
+
+#[allow(dead_code)]
 fn finish_draw_primary(
     scratch: &mut Ui3FontScratch,
     collect: Ui3TextCollectStats,
@@ -302,6 +376,341 @@ fn finish_draw_primary(
     }
 }
 
+fn finish_draw_backend(
+    scratch: &mut Ui3FontScratch,
+    collect: Ui3TextCollectStats,
+    gradient_collect: Ui3GradientCollectStats,
+    scene: Ui3FontScene,
+    surface: &crate::ui3::ui3_surface::Ui3RgbaSurface,
+    target_y: u32,
+    clear_height: u32,
+    reason: &str,
+) -> Ui3FontDrawResult {
+    let Ok(target_y_i32) = i32::try_from(target_y) else {
+        return Ui3FontDrawResult::default();
+    };
+    let gradient_count = scratch
+        .gradients
+        .len()
+        .saturating_add(scratch.control_gradients.len());
+    log_collect_caps(scratch, collect, gradient_collect, gradient_count, scene);
+
+    let clear_start = embassy_time_driver::now();
+    surface.clear_white_range(target_y, clear_height);
+    let clear_ms = elapsed_ms_since(clear_start);
+
+    let gradient_start = embassy_time_driver::now();
+    let gradient_stats = draw_backend_gradients(surface, scratch.gradients.as_slice(), target_y);
+    let control_gradient_stats =
+        draw_backend_gradients(surface, scratch.control_gradients.as_slice(), target_y);
+    let rect_ms = if gradient_stats.submits != 0 || control_gradient_stats.submits != 0 {
+        elapsed_ms_since(gradient_start)
+    } else {
+        0
+    };
+
+    let asset_start = embassy_time_driver::now();
+    let assets_drawn = draw_ready_assets_backend(surface, scratch.assets.as_slice(), target_y);
+    let asset_ms = if assets_drawn == 0 {
+        0
+    } else {
+        elapsed_ms_since(asset_start)
+    };
+
+    let text_start = embassy_time_driver::now();
+    let mut text_batches = 0usize;
+    let mut text_submitted = false;
+    let mut shifted = Vec::new();
+    if !scratch.placements.is_empty() {
+        for page in surface.pages() {
+            shifted.clear();
+            let page_y0 = page.y0 as i32;
+            let page_y1 = page_y0.saturating_add(page.height as i32);
+            let cell = crate::intel::gpgpu::SPRITE64_WORKLIST_CELL_PIXELS as i32;
+            for placement in scratch.placements.iter().copied() {
+                let doc_placement = placement.translated(0, target_y_i32);
+                let glyph_y0 = doc_placement.dst_y();
+                let glyph_y1 = glyph_y0.saturating_add(cell);
+                if glyph_y1 <= page_y0 || glyph_y0 >= page_y1 {
+                    continue;
+                }
+                shifted.push(doc_placement.translated(0, -page_y0));
+            }
+            if shifted.is_empty() {
+                continue;
+            }
+            let dst = page.as_gpgpu(surface.width, surface.pitch_bytes);
+            for chunk in shifted.chunks(UI3_TEXT_SUBMIT_BATCH_PLACEMENTS) {
+                let Some(result) =
+                    crate::intel::gpgpu::sprite64_worklist_surface(chunk, dst, reason)
+                else {
+                    continue;
+                };
+                text_batches = text_batches.saturating_add(1);
+                text_submitted |= result.submitted;
+            }
+        }
+    }
+    let text_ms = if text_batches == 0 {
+        0
+    } else {
+        elapsed_ms_since(text_start)
+    };
+
+    Ui3FontDrawResult {
+        text_nodes: collect.text_nodes,
+        placements: scratch.placements.len(),
+        assets: assets_drawn,
+        layout_shift_px: layout_adjustment_total_px(scratch.layout_adjustments.as_slice()),
+        batches: text_batches,
+        gradients: gradient_count,
+        clipped: collect.clipped,
+        clear_ok: true,
+        clear_ms,
+        rect_ms,
+        asset_ms,
+        text_ms,
+        show_ms: 0,
+        submit_ok: text_submitted
+            || assets_drawn != 0
+            || gradient_stats.submits != 0
+            || control_gradient_stats.submits != 0,
+        presented: false,
+        submit_ms: clear_ms
+            .saturating_add(rect_ms)
+            .saturating_add(asset_ms)
+            .saturating_add(text_ms),
+        present_ms: 0,
+    }
+}
+
+fn draw_backend_gradients(
+    surface: &crate::ui3::ui3_surface::Ui3RgbaSurface,
+    gradients: &[crate::intel::gpgpu::GpgpuGradientRect],
+    target_y: u32,
+) -> crate::intel::gpgpu::GpgpuWorklistSubmitStats {
+    let mut total = crate::intel::gpgpu::GpgpuWorklistSubmitStats::default();
+    if gradients.is_empty() {
+        return total;
+    }
+
+    let mut descs = Vec::new();
+    for page in surface.pages() {
+        descs.clear();
+        for gradient in gradients {
+            let Some(doc_rect) = offset_rect_y(gradient.rect, target_y) else {
+                continue;
+            };
+            let Some(rect) = clip_doc_rect_to_page(doc_rect, surface.width, page.y0, page.height)
+            else {
+                continue;
+            };
+            if rect.width > u16::MAX as u32 || rect.height > u16::MAX as u32 {
+                continue;
+            }
+            let Ok(dst_x) = i16::try_from(rect.x) else {
+                continue;
+            };
+            let Ok(dst_y) = i16::try_from(rect.y) else {
+                continue;
+            };
+            descs.push(crate::intel::gpgpu::GradientRectWorklistRgba8Desc {
+                dst_xy: pack_i16_pair_u32(dst_x, dst_y),
+                size: pack_u16_pair_u32(rect.width as u16, rect.height as u16),
+                color0_rgba: gradient.color0_rgba,
+                color1_rgba: gradient.color1_rgba,
+                flags: if gradient.vertical {
+                    crate::intel::gpgpu::GRADIENT_RECT_WORKLIST_FLAG_VERTICAL
+                } else {
+                    0
+                },
+            });
+        }
+        if descs.is_empty() {
+            continue;
+        }
+        let stats = crate::intel::gpgpu::gradient_rect_worklist_rgba8_stats(
+            page.as_gpgpu(surface.width, surface.pitch_bytes),
+            descs.as_slice(),
+        );
+        total.descs = total.descs.saturating_add(stats.descs);
+        total.walkers = total.walkers.saturating_add(stats.walkers);
+        total.submits = total.submits.saturating_add(stats.submits);
+        total.submit_ms = total.submit_ms.saturating_add(stats.submit_ms);
+    }
+    total
+}
+
+fn draw_ready_assets_backend(
+    surface: &crate::ui3::ui3_surface::Ui3RgbaSurface,
+    assets: &[Ui3AssetPlacement],
+    target_y: u32,
+) -> usize {
+    let mut drawn = 0usize;
+    for placement in assets {
+        if placement.asset.width == 0
+            || placement.asset.height == 0
+            || placement.asset.rgba.is_empty()
+            || placement.width == 0
+            || placement.height == 0
+        {
+            continue;
+        }
+        let mut placement_drawn = false;
+        for page in surface.pages() {
+            placement_drawn |= blend_asset_into_backend_page(surface, page, placement, target_y);
+        }
+        if placement_drawn {
+            drawn = drawn.saturating_add(1);
+        }
+    }
+    drawn
+}
+
+fn blend_asset_into_backend_page(
+    surface: &crate::ui3::ui3_surface::Ui3RgbaSurface,
+    page: &crate::ui3::ui3_surface::Ui3RgbaPage,
+    placement: &Ui3AssetPlacement,
+    target_y: u32,
+) -> bool {
+    if page.virt.is_null() {
+        return false;
+    }
+    let dst_x0 = placement.x.max(0) as u32;
+    let dst_x1 = (placement.x as i64)
+        .saturating_add(placement.width as i64)
+        .min(surface.width as i64)
+        .max(0) as u32;
+    let placement_y_doc = (placement.y as i64).saturating_add(target_y as i64);
+    let dst_y0_doc = placement_y_doc.max(page.y0 as i64).max(0) as u32;
+    let dst_y1_doc = placement_y_doc
+        .saturating_add(placement.height as i64)
+        .min(page.y0.saturating_add(page.height) as i64)
+        .max(0) as u32;
+    if dst_x0 >= dst_x1 || dst_y0_doc >= dst_y1_doc {
+        return false;
+    }
+
+    let src_pitch = placement.asset.width as usize * 4;
+    let dst_pitch = surface.pitch_bytes as usize;
+    for doc_y in dst_y0_doc..dst_y1_doc {
+        let rel_y = (doc_y as i64).saturating_sub(placement_y_doc).max(0) as u32;
+        let src_y = (rel_y as u64)
+            .saturating_mul(placement.asset.height as u64)
+            .checked_div(placement.height.max(1) as u64)
+            .unwrap_or(0)
+            .min(placement.asset.height.saturating_sub(1) as u64) as u32;
+        let dst_y = doc_y.saturating_sub(page.y0);
+        let dst_row = unsafe { page.virt.add(dst_y as usize * dst_pitch) };
+        let src_row_off = src_y as usize * src_pitch;
+        let Some(src_row) = placement
+            .asset
+            .rgba
+            .get(src_row_off..src_row_off.saturating_add(src_pitch))
+        else {
+            return false;
+        };
+        for dst_x in dst_x0..dst_x1 {
+            let rel_x = (dst_x as i64).saturating_sub(placement.x as i64).max(0) as u32;
+            let src_x = (rel_x as u64)
+                .saturating_mul(placement.asset.width as u64)
+                .checked_div(placement.width.max(1) as u64)
+                .unwrap_or(0)
+                .min(placement.asset.width.saturating_sub(1) as u64)
+                as usize;
+            let src_off = src_x.saturating_mul(4);
+            let r = src_row[src_off] as u32;
+            let g = src_row[src_off + 1] as u32;
+            let b = src_row[src_off + 2] as u32;
+            let a = src_row[src_off + 3] as u32;
+            if a == 0 {
+                continue;
+            }
+            let dst_px = unsafe { dst_row.add(dst_x as usize * 4) };
+            if a == 0xFF {
+                unsafe {
+                    core::ptr::write_volatile(dst_px, r as u8);
+                    core::ptr::write_volatile(dst_px.add(1), g as u8);
+                    core::ptr::write_volatile(dst_px.add(2), b as u8);
+                    core::ptr::write_volatile(dst_px.add(3), 0xFF);
+                }
+            } else {
+                let dr = unsafe { core::ptr::read_volatile(dst_px) } as u32;
+                let dg = unsafe { core::ptr::read_volatile(dst_px.add(1)) } as u32;
+                let db = unsafe { core::ptr::read_volatile(dst_px.add(2)) } as u32;
+                let da = unsafe { core::ptr::read_volatile(dst_px.add(3)) } as u32;
+                let inv = 255 - a;
+                unsafe {
+                    core::ptr::write_volatile(dst_px, ((r * a + dr * inv + 127) / 255) as u8);
+                    core::ptr::write_volatile(
+                        dst_px.add(1),
+                        ((g * a + dg * inv + 127) / 255) as u8,
+                    );
+                    core::ptr::write_volatile(
+                        dst_px.add(2),
+                        ((b * a + db * inv + 127) / 255) as u8,
+                    );
+                    core::ptr::write_volatile(
+                        dst_px.add(3),
+                        ((a * 255 + da * inv + 127) / 255) as u8,
+                    );
+                }
+            }
+        }
+    }
+    crate::intel::dma_cache_flush_range(page.virt as *const u8, page.bytes);
+    true
+}
+
+fn clip_doc_rect_to_page(
+    rect: crate::intel::gpgpu::GpgpuRect,
+    surface_width: u32,
+    page_y0: u32,
+    page_height: u32,
+) -> Option<crate::intel::gpgpu::GpgpuRect> {
+    if rect.width == 0 || rect.height == 0 || surface_width == 0 || page_height == 0 {
+        return None;
+    }
+    let x0 = (rect.x as i64).max(0);
+    let y0 = (rect.y as i64).max(page_y0 as i64);
+    let x1 = (rect.x as i64)
+        .saturating_add(rect.width as i64)
+        .min(surface_width as i64);
+    let y1 = (rect.y as i64)
+        .saturating_add(rect.height as i64)
+        .min(page_y0.saturating_add(page_height) as i64);
+    if x0 >= x1 || y0 >= y1 {
+        return None;
+    }
+    Some(crate::intel::gpgpu::GpgpuRect::new(
+        x0 as i32,
+        y0.saturating_sub(page_y0 as i64) as i32,
+        (x1 - x0) as u32,
+        (y1 - y0) as u32,
+    ))
+}
+
+fn offset_rect_y(
+    rect: crate::intel::gpgpu::GpgpuRect,
+    target_y: u32,
+) -> Option<crate::intel::gpgpu::GpgpuRect> {
+    let target_y = i32::try_from(target_y).ok()?;
+    Some(crate::intel::gpgpu::GpgpuRect::new(
+        rect.x,
+        rect.y.checked_add(target_y)?,
+        rect.width,
+        rect.height,
+    ))
+}
+
+fn pack_i16_pair_u32(x: i16, y: i16) -> u32 {
+    (((y as u16 as u32) & 0xFFFF) << 16) | ((x as u16 as u32) & 0xFFFF)
+}
+
+fn pack_u16_pair_u32(x: u16, y: u16) -> u32 {
+    (u32::from(y) << 16) | u32::from(x)
+}
+
 fn collect_paint_plan_ready_assets(
     plan: &Value,
     scroll_y: f32,
@@ -370,6 +779,7 @@ fn collect_paint_plan_ready_assets(
     }
 }
 
+#[allow(dead_code)]
 fn draw_ready_assets_primary(assets: &[Ui3AssetPlacement]) -> usize {
     let mut drawn = 0usize;
     for placement in assets {
@@ -843,8 +1253,7 @@ fn push_summary_icon_placement_resolved(
         .viewport_height
         .saturating_sub(crate::intel::gpgpu::SPRITE64_WORKLIST_CELL_PIXELS)
         as i32;
-    let (max_draw_x, max_draw_y) = crate::intel::gpgpu::sprite64_primary_draw_bounds()
-        .unwrap_or((fallback_max_x, fallback_max_y));
+    let (max_draw_x, max_draw_y) = (fallback_max_x, fallback_max_y);
     if dst_x < 0 || dst_x > max_draw_x || dst_y < 0 || dst_y > max_draw_y {
         stats.clipped = stats.clipped.saturating_add(1);
         return;
@@ -985,8 +1394,7 @@ fn push_text_line_placements(
         .viewport_height
         .saturating_sub(crate::intel::gpgpu::SPRITE64_WORKLIST_CELL_PIXELS)
         as i32;
-    let (max_draw_x, max_draw_y) = crate::intel::gpgpu::sprite64_primary_draw_bounds()
-        .unwrap_or((fallback_max_x, fallback_max_y));
+    let (max_draw_x, max_draw_y) = (fallback_max_x, fallback_max_y);
     let dst_y = floor_i32(y);
     if dst_y < 0 || dst_y > max_draw_y {
         stats.clipped = stats.clipped.saturating_add(text.chars().count());
