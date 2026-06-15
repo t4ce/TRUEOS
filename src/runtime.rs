@@ -28,28 +28,32 @@ pub fn poll_local_executor() {
     cpu.leave_executor_poll();
 }
 
+#[inline]
+fn wants_chill() -> bool {
+    false
+}
+
 pub fn run_ap_forever() -> ! {
-    let mut counter: u64 = 0;
     loop {
         crate::time::poll();
         poll_local_executor();
-        #[cfg(feature = "trueos_lumen")]
-        crate::lumen::burn_baby::poll_compute_lane();
+        if wants_chill() {
+            hlt();
+        } else {
+            core::hint::spin_loop();
+        }
+    }
+}
 
-        if counter.is_multiple_of(100_000) {
-            crate::smp::poll();
-        }
-        if counter.is_multiple_of(5_000) {
-            let slot = crate::percpu::this_cpu().cpu_index() as usize;
-            if slot > 0 {
-                let _ = crate::tst::ui2::coreticks_demo::ui2_coreticks_tick_tile_index(slot);
-            }
-        }
-        counter = counter.wrapping_add(1);
-        // AP executors accept cross-core work through SendSpawner, but their
-        // raw executors currently have no APIC/IPI-backed pender. Halting here
-        // can strand newly submitted VM hull work until an unrelated interrupt
-        // arrives, so AP carrier lanes must remain polling/spinning for now.
-        core::hint::spin_loop();
+#[inline(always)]
+fn hlt() {
+    // todo signal to BSP that we need a wakeup at get woken up
+    // todo first: dont use the param actually but just make clear
+    // that its a forever hlt because our TODO firstofall is
+    // to wantsChill() return the real number of tasks for the executor
+    // and if therefore we need a simple cnt++ to each ap, we can
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        core::arch::asm!("sti; hlt", options(nomem, nostack));
     }
 }

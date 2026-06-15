@@ -67,7 +67,6 @@ pub fn spin_step_no_exec() {
 pub fn park_step() {
     crate::time::poll();
     crate::runtime::poll_local_executor();
-    crate::power::idle_hint();
 }
 
 /// Spin until `condition` is true or the timeout expires.

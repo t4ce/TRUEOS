@@ -1,5 +1,5 @@
 use crate::limine::MpCpu as LimineCpu;
-use crate::{exceptions, globalog, percpu, runtime};
+use crate::{exceptions, percpu, runtime};
 use alloc::vec::Vec;
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::__cpuid;
@@ -228,11 +228,6 @@ pub fn register_current_worker_spawner(spawner: Spawner) -> Option<CpuProfile> {
 fn enter_ap_runtime(spawner: Spawner) -> ! {
     let _profile = register_current_worker_spawner(spawner)
         .unwrap_or_else(|| CpuProfile::current().unwrap_or(CpuProfile::new(0, 0, 0)));
-
-    match ap_heartbeat_task() {
-        Ok(token) => spawner.spawn(token),
-        Err(e) => crate::log!("ap: heartbeat task spawn failed: {:?}\n", e),
-    }
     crate::smp::mark_online();
     exceptions::load_this_cpu();
     runtime::run_ap_forever()
@@ -357,20 +352,6 @@ fn store_profile(profile: CpuProfile) {
     rec.lapic_id.store(profile.lapic_id, Ordering::Release);
     rec.core_kind.store(profile.core_kind, Ordering::Release);
     rec.registered.store(1, Ordering::Release);
-}
-
-#[embassy_executor::task(pool_size = AP_HEARTBEAT_TASK_POOL)]
-async fn ap_heartbeat_task() {
-    loop {
-        Timer::after(EmbassyDuration::from_secs(5)).await;
-        let slot = percpu::this_cpu().cpu_index() as u8;
-        let mark = if slot < 10 {
-            b'0' + slot
-        } else {
-            b'A' + ((slot - 10) % 26)
-        };
-        globalog::debugcon_write_byte_raw(mark);
-    }
 }
 
 #[cfg(target_arch = "x86_64")]

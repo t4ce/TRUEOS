@@ -82,6 +82,7 @@ mod tst_tactics_srv;
 #[path = "tst/ws_time.rs"]
 mod tst_ws_time;
 mod turbo;
+mod unhlt_isr;
 #[allow(non_snake_case)]
 mod tyche;
 mod ui3;
@@ -279,37 +280,37 @@ pub extern "C" fn kmain() -> ! {
             }
         }
     }
-    _loop(executor, spawner, smp_resp)
+    boot_secondary_processors(smp_resp);
+    spawn_bsp_services(spawner);
+    _loop(executor)
 }
 
-fn _loop(
-    executor: &'static Executor,
-    _spawner: Spawner,
-    resp: Option<&'static crate::limine::MpResponse>,
-) -> ! {
+fn boot_secondary_processors(resp: Option<&'static crate::limine::MpResponse>) {
     if let Some(resp) = resp {
         resp.cpus()
             .iter()
             .filter(|c| limine::mp_cpu_id(c) != percpu::this_cpu().lapic_id())
             .for_each(|c| c.bootstrap(cpu::ap_start, 0));
     }
+}
 
-    match crate::r::spawn_service::spawn_service_task(_spawner) {
-        Ok(token) => _spawner.spawn(token),
+fn spawn_bsp_services(spawner: Spawner) {
+    match crate::r::spawn_service::spawn_service_task(spawner) {
+        Ok(token) => spawner.spawn(token),
         Err(e) => crate::log!("spawn-svc: spawn failed: {:?}\n", e),
     }
+}
 
-    let mut counter: u64 = 0;
+fn _loop(executor: &'static Executor) -> ! {
     loop {
         time::poll();
         unsafe { executor.poll() };
-        if counter.is_multiple_of(5_000) {
-            let _ = crate::tst::ui2::coreticks_demo::ui2_coreticks_tick_tile_index(0);
-        }
-        if counter.is_multiple_of(10_000_000) {
-            globalog::debugcon_write_byte_raw(b'0');
-        }
-        counter = counter.wrapping_add(1);
-        power::idle_hint();
+        //if counter.is_multiple_of(5_000) {
+        //    let _ = crate::tst::ui2::coreticks_demo::ui2_coreticks_tick_tile_index(0);
+        //}
+        //if counter.is_multiple_of(10_000_000) {
+        //    globalog::debugcon_write_byte_raw(b'0');
+        //}
+        core::hint::spin_loop()
     }
 }
