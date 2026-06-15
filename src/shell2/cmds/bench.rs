@@ -23,9 +23,19 @@ const CPUBENCH_PHASE_MS: u64 = 10_000;
 const CPUBENCH_STOP_GRACE_MS: u64 = 2_000;
 const PROGRESS_LOG_MS: u64 = 3000;
 const BENCH_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
+#[cfg(feature = "trueos_lumen")]
 const BENCH_MENU_ROWS: [[&str; 2]; 4] = [
     ["cpu", "Run CPU-only compute benchmark"],
     ["lumen", "Run Lumen model/compute benchmark"],
+    ["net", "Run network throughput benchmark"],
+    [
+        "netk",
+        "Run internal netbench (literal URL, default 2 flows)",
+    ],
+];
+#[cfg(not(feature = "trueos_lumen"))]
+const BENCH_MENU_ROWS: [[&str; 2]; 3] = [
+    ["cpu", "Run CPU-only compute benchmark"],
     ["net", "Run network throughput benchmark"],
     [
         "netk",
@@ -448,6 +458,7 @@ pub(crate) fn try_parse(
                 ParseOutcome::Handled
             }
         }
+        #[cfg(feature = "trueos_lumen")]
         "lumen" => {
             if args.next().is_some() {
                 print_usage(io);
@@ -487,6 +498,7 @@ fn submit_cpubench(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<
     Some(session_id)
 }
 
+#[cfg(feature = "trueos_lumen")]
 fn submit_lumenbench(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<u64> {
     let target = matrix_target_for_backend(io);
     let session_id = bench_session_start();

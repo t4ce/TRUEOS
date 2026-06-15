@@ -54,6 +54,11 @@ rustup toolchain install nightly
 brew install llvm binutils autoconf automake libtool xorriso zstd p7zip
 ```
 
+### Lic
+> [!IMPORTANT]
+> I pub the SRC for view and the Build can 
+> It
+
 # Network Console Access
 `konsole -e sh -c 'stty -echo -icanon cols 200 rows 60; nc 192.168.178.94 4245; stty sane'`
 

@@ -46,6 +46,7 @@ mod iso9660;
 mod limine;
 mod locale;
 mod logflag;
+#[cfg(feature = "trueos_lumen")]
 mod lumen;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod mio_compat;
@@ -86,6 +87,7 @@ mod tyche;
 mod ui3;
 #[path = "usb3/mod.rs"]
 pub(crate) mod usb3;
+mod virtio_gpu_logo;
 mod wait;
 mod workers;
 mod x2apic;
@@ -268,9 +270,14 @@ pub extern "C" fn kmain() -> ! {
         if simd.avx2_fma_ready { "yes" } else { "no" },
         simd.avx2_fma_reason.as_str()
     );
-    match crate::turbo::avx2_fma_sse2_help::bf16_helper_boot_exercise_task() {
-        Ok(token) => spawner.spawn(token),
-        Err(e) => crate::log!("lumen-simd-help: bf16 helper boot exercise spawn failed: {:?}\n", e),
+    #[cfg(feature = "trueos_lumen")]
+    {
+        match crate::turbo::avx2_fma_sse2_help::bf16_helper_boot_exercise_task() {
+            Ok(token) => spawner.spawn(token),
+            Err(e) => {
+                crate::log!("lumen-simd-help: bf16 helper boot exercise spawn failed: {:?}\n", e)
+            }
+        }
     }
     _loop(executor, spawner, smp_resp)
 }

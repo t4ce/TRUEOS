@@ -62,6 +62,7 @@ define_started_flags!(
     HW_PIC_SERVICE_STARTED,
     HW_VID_PROBE_STARTED,
     HW_LOGO_PRESENT_TASK_STARTED,
+    VIRTIO_GPU_UI_STARTED,
     INTEL_HDA_AUDIO_DEMO_STARTED,
     RAPLE_SERVICE_STARTED,
     GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
@@ -478,6 +479,7 @@ fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::globalog::logtotcp::logtotcp_task())
 }
 
+#[cfg(feature = "trueos_lumen")]
 fn spawn_lumen_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::lumen::lumen_service::lumen_service_task())
 }
@@ -564,6 +566,10 @@ fn spawn_hw_logo_present_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| crate::intel::hw_logo_present_task())
 }
 
+fn spawn_virtio_gpu_ui_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |_worker_spawner| crate::virtio_gpu_logo::emulator_ui_task())
+}
+
 fn spawn_intel_hda_audio_demo_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
@@ -618,6 +624,11 @@ fn i226_diagnostic_display_gate() -> bool {
 #[inline]
 fn intel_media_engine_gate() -> bool {
     crate::intel::has_media_decode_engine()
+}
+
+#[inline]
+fn virtio_gpu_ui_gate() -> bool {
+    crate::virtio_gpu_logo::present()
 }
 
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
@@ -1045,9 +1056,14 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::NET_SOCKET_READY
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-#[cfg(feature = "trueos_rdp")]
+#[cfg(all(feature = "trueos_rdp", feature = "trueos_lumen"))]
+const TASK_COUNT: usize = 55;
+#[cfg(any(
+    all(feature = "trueos_rdp", not(feature = "trueos_lumen")),
+    all(not(feature = "trueos_rdp"), feature = "trueos_lumen")
+))]
 const TASK_COUNT: usize = 54;
-#[cfg(not(feature = "trueos_rdp"))]
+#[cfg(all(not(feature = "trueos_rdp"), not(feature = "trueos_lumen")))]
 const TASK_COUNT: usize = 53;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
@@ -1238,6 +1254,13 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &I226_DIAGNOSTIC_DISPLAY_STARTED,
         spawn_i226_diagnostic_display,
     ),
+    TaskSpec::enabled_gated(
+        "virtio-gpu-ui",
+        0,
+        virtio_gpu_ui_gate,
+        &VIRTIO_GPU_UI_STARTED,
+        spawn_virtio_gpu_ui_task,
+    ),
     TaskSpec::disabled(
         "intel-hda-audio-demo",
         0,
@@ -1283,6 +1306,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &TRUEOSFS_READY_HOOK_STARTED,
         spawn_trueosfs_ready_hook,
     ),
+    #[cfg(feature = "trueos_lumen")]
     TaskSpec::disabled(
         "lumen-service",
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,

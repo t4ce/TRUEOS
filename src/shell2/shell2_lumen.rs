@@ -1,9 +1,9 @@
 use alloc::format;
 use alloc::string::String as AllocString;
 
-use super::{
-    MatrixTarget, ShellBackend2, matrix, matrix_target_for_backend, print_matrix_target_line,
-};
+use super::matrix;
+#[cfg(feature = "trueos_lumen")]
+use super::{MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LumenPromptMode {
@@ -26,6 +26,7 @@ pub(crate) fn lumen_status(output_mask: u8) -> AllocString {
     }
 }
 
+#[cfg(feature = "trueos_lumen")]
 #[embassy_executor::task(pool_size = 4)]
 async fn shell_lumen_submit_task(target: MatrixTarget, text: AllocString) {
     if crate::lumen::lumen_service::submit_lumen_prompt(text.as_str()) {
@@ -35,6 +36,7 @@ async fn shell_lumen_submit_task(target: MatrixTarget, text: AllocString) {
     }
 }
 
+#[cfg(feature = "trueos_lumen")]
 pub(crate) fn submit(
     io: &'static dyn ShellBackend2,
     mode: LumenPromptMode,

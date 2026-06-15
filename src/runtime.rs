@@ -33,6 +33,7 @@ pub fn run_ap_forever() -> ! {
     loop {
         crate::time::poll();
         poll_local_executor();
+        #[cfg(feature = "trueos_lumen")]
         crate::lumen::burn_baby::poll_compute_lane();
 
         if counter.is_multiple_of(100_000) {
