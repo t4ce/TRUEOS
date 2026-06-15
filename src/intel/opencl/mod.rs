@@ -13,6 +13,9 @@ pub(crate) mod artifact;
 pub(crate) mod backend;
 pub(crate) mod example;
 pub(crate) mod memory;
+pub(crate) mod neo_command;
+pub(crate) mod neo_dispatch;
+pub(crate) mod neo_helpers;
 pub(crate) mod queue;
 pub(crate) mod registry;
 pub(crate) mod types;
@@ -31,6 +34,16 @@ pub(crate) use artifact::{
 };
 pub(crate) use backend::{BackendCaps, BackendCommand, IntelOpenClBackend, UploadedKernelRef};
 pub(crate) use memory::{BufferObject, BufferRegistry};
+pub(crate) use neo_command::{
+    PipeControlArgs, PipelineSelectArgs, PreemptionMode, QueueThrottle, SubmissionStatus,
+    TransferDirection, WaitParams, WaitStatus,
+};
+pub(crate) use neo_dispatch::{SamplerPatchValue, hw_walk_order, pow_const, split_dispatch};
+pub(crate) use neo_helpers::{
+    DriverModelType, HeapAddressModel, MapOperationType, get_most_significant_set_bit_index,
+    is_any_bit_set, is_bit_set, is_field_valid, is_value_set, make_bit_mask, set_bits,
+    shift_left_by,
+};
 pub(crate) use queue::{Command, CommandKind, CommandQueue, EventRecord, EventStatus};
 pub(crate) use registry::{KnownAotKernel, KnownKernelRole};
 pub(crate) use types::{
