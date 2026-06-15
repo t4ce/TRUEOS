@@ -8,6 +8,7 @@ pub mod esp;
 pub mod ports;
 pub mod socket_cabi;
 pub mod srv;
+pub mod trueos_peer;
 pub mod udp;
 
 pub use cli::{ftp, html, json, ntp};

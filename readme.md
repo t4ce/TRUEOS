@@ -1,9 +1,13 @@
 Copyright (c) 2026 Jonas Baethke. All rights reserved.
 
-TRUEOS is source-available for public view under the terms in `LICENSE`.
-No permission is granted to use, modify, distribute, sublicense, or
-commercially exploit this software or its source code, in whole or in part,
-without prior written permission from the copyright holder.
+TRUEOS uses a two-lane permission model under `LICENSE`: the first-party source
+is source-available for public view, while official TRUEOS binary releases may
+be used, run, evaluated, deployed, and commercially used.
+
+Do not copy, publish, redistribute, clone, or build a 1:1 source-derived TRUEOS
+from the first-party source without prior written permission. Blueprints,
+scripts, applications, data, and configuration are the intended path for
+extending and programming TRUEOS at runtime, including commercially.
 
 ```
 TRUE OS § ® 2026
@@ -56,8 +60,9 @@ brew install llvm binutils autoconf automake libtool xorriso zstd p7zip
 
 ### Lic
 > [!IMPORTANT]
-> I pub the SRC for view and the Build can 
-> It
+> The source is public-view/protected. Official binaries are usable, including
+> commercially. Blueprints are the legit extension path: they can change runtime
+> behavior without being treated as prohibited source modification.
 
 # Network Console Access
 `konsole -e sh -c 'stty -echo -icanon cols 200 rows 60; nc 192.168.178.94 4245; stty sane'`

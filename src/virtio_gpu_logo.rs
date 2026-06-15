@@ -627,7 +627,7 @@ impl VirtioGpuLogo {
             &self.resp,
             req_bytes.len(),
             "cursorq",
-            Some(&[VIRTIO_GPU_RESP_OK_NODATA]),
+            None,
         )
     }
 
@@ -642,18 +642,21 @@ impl VirtioGpuLogo {
         expected_resp_types: Option<&[u32]>,
     ) -> bool {
         req.flush();
+        let wants_response = expected_resp_types.is_some();
         unsafe {
             let d0 = &mut *queue.desc.add(0);
             d0.addr = req.phys();
             d0.len = req_len as u32;
-            d0.flags = VIRTQ_DESC_F_NEXT;
-            d0.next = 1;
+            d0.flags = if wants_response { VIRTQ_DESC_F_NEXT } else { 0 };
+            d0.next = if wants_response { 1 } else { 0 };
 
-            let d1 = &mut *queue.desc.add(1);
-            d1.addr = resp.phys();
-            d1.len = resp.len() as u32;
-            d1.flags = VIRTQ_DESC_F_WRITE;
-            d1.next = 0;
+            if wants_response {
+                let d1 = &mut *queue.desc.add(1);
+                d1.addr = resp.phys();
+                d1.len = resp.len() as u32;
+                d1.flags = VIRTQ_DESC_F_WRITE;
+                d1.next = 0;
+            }
         }
 
         queue.push_avail(0);

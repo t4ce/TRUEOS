@@ -2848,7 +2848,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
             };
             idle_waits = 0;
             let _ = crate::lumen::lumen_service::mark_prompt_running("dequeue");
-            let offload_enabled = crate::r::net::esp::prepare_lumen_offload_for_prompt();
+            let offload_enabled = crate::r::net::trueos_peer::prepare_lumen_offload_for_prompt();
             crate::log!(
                 "lumen: prompt offload decision session={} enabled={}\n",
                 session_id,

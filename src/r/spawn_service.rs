@@ -51,6 +51,7 @@ define_started_flags!(
     HYPER_HTTP1_PROBE_STARTED,
     WS_TIME_STARTED,
     ESP_GATE_STARTED,
+    TRUEOS_PEER_STARTED,
     ESP_GATE_REGISTRY_STARTED,
     ESP_PIANO_AUDIO_STARTED,
     ESP_PIANO_UDP_STARTED,
@@ -515,6 +516,11 @@ fn spawn_ws_time(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_esp_gate(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::net::esp::esp_gate_task())
+}
+
+#[cfg(feature = "trueos_lumen")]
+fn spawn_trueos_peer(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::r::net::trueos_peer::trueos_peer_task())
 }
 
 fn spawn_esp_gate_registry(spawner: Spawner) -> SpawnAttempt {
@@ -1057,12 +1063,11 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 #[cfg(all(feature = "trueos_rdp", feature = "trueos_lumen"))]
-const TASK_COUNT: usize = 55;
-#[cfg(any(
-    all(feature = "trueos_rdp", not(feature = "trueos_lumen")),
-    all(not(feature = "trueos_rdp"), feature = "trueos_lumen")
-))]
+const TASK_COUNT: usize = 56;
+#[cfg(all(feature = "trueos_rdp", not(feature = "trueos_lumen")))]
 const TASK_COUNT: usize = 54;
+#[cfg(all(not(feature = "trueos_rdp"), feature = "trueos_lumen"))]
+const TASK_COUNT: usize = 55;
 #[cfg(all(not(feature = "trueos_rdp"), not(feature = "trueos_lumen")))]
 const TASK_COUNT: usize = 53;
 static TASKS: [TaskSpec; TASK_COUNT] = [
@@ -1199,6 +1204,8 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_usb_controller_tasks,
     ),
     TaskSpec::disabled("esp-gate", 0, &ESP_GATE_STARTED, spawn_esp_gate),
+    #[cfg(feature = "trueos_lumen")]
+    TaskSpec::disabled("trueos-peer", 0, &TRUEOS_PEER_STARTED, spawn_trueos_peer),
     TaskSpec::disabled("esp-gate-registry", 0, &ESP_GATE_REGISTRY_STARTED, spawn_esp_gate_registry),
     TaskSpec::disabled("esp-piano-audio", 0, &ESP_PIANO_AUDIO_STARTED, spawn_esp_piano_audio),
     TaskSpec::enabled(

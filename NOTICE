@@ -1,13 +1,21 @@
 TRUEOS Notice
 
-TRUEOS is source-available for public view. The first-party TRUEOS code in this
-repository is made available under the TRUEOS Source-Available Public View
-License in the root LICENSE file.
+TRUEOS uses a two-lane permission model. The first-party TRUEOS source code in
+this repository is source-available for public view under the root LICENSE file.
+Official TRUEOS binary releases distributed by the copyright holder may be used,
+run, evaluated, deployed, and commercially used under that same LICENSE file.
 
-Public visibility of this repository does not make TRUEOS open source and does
-not grant permission to use, run, modify, redistribute, sublicense, sell, or
-commercially exploit first-party TRUEOS code without prior written permission
-from the copyright holder.
+Public visibility of this repository does not make TRUEOS open source. It does
+not grant permission to modify, publish, redistribute, sublicense, sell, provide
+as a service, commercially exploit, or make 1:1 copies or clone products from
+the first-party TRUEOS source code without prior written permission from the
+copyright holder.
+
+Blueprints, scripts, applications, data, and configuration that run on TRUEOS
+through its published runtime interfaces are the intended and recommended way to
+extend, customize, automate, and program TRUEOS. Using Blueprints, including for
+commercial purposes, is permitted and is not treated as a prohibited source-code
+modification merely because it changes runtime behavior.
 
 Some directories and files contain third-party code or imported reference
 material. Those components remain under their own upstream licenses and notices.
