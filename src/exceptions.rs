@@ -16,7 +16,7 @@ fn idt() -> &'static InterruptDescriptorTable {
     IDT.call_once(|| {
         let mut idt = InterruptDescriptorTable::new();
         crate::chronos::interrupt_install(&mut idt);
-        crate::unhlt_isr::interrupt_install(&mut idt);
+        crate::remote_work_wake::interrupt_install(&mut idt);
         idt.invalid_opcode.set_handler_fn(invalid_opcode_handler);
         idt.device_not_available
             .set_handler_fn(device_not_available_handler);
