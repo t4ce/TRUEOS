@@ -270,6 +270,7 @@ pub fn can_restart_current_worker_ap_from_panic() -> bool {
 
 pub fn restart_current_worker_ap_from_panic() -> ! {
     unsafe { enable_sse() };
+    crate::microcode::apply_selected_to_current_cpu("ap-restart");
 
     let cpu = percpu::this_cpu();
     let slot = cpu.cpu_index();
@@ -298,6 +299,7 @@ pub fn restart_current_worker_ap_from_panic() -> ! {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ap_start(cpu: &LimineCpu) -> ! {
     enable_sse();
+    crate::microcode::apply_selected_to_current_cpu("ap");
     let lapic_id = crate::limine::mp_cpu_id(cpu);
     let slot = percpu::slot_for_lapic_id(lapic_id);
     percpu::init_ap(lapic_id, slot as u32);

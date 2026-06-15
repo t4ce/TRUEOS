@@ -15,6 +15,9 @@ Known third-party/provenance areas include:
   extraction material documented in that directory.
 - `crates/trueos-lsd/`: Apache-2.0 licensed material with upstream repository
   provenance declared in its Cargo manifest.
+- Intel processor microcode update binaries, if bundled with a TRUEOS image or
+  boot medium, must remain unmodified and are governed by Intel's microcode
+  license. See `licenses/intel-microcode.txt`.
 - Files with embedded license headers or bundled license notices, including
   JavaScript modules under `crates/trueos-qjs/src/`.
 - Build or release artifacts under `bld/`, where present, may include their own

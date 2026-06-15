@@ -22,3 +22,6 @@ own dependencies and contributors.
 Some directories and files contain third-party code or imported reference
 material. Those components remain under their own upstream licenses and notices.
 See THIRD_PARTY_NOTICES.md and the license files near the relevant components.
+If Intel processor microcode binaries are bundled with a TRUEOS release or boot
+medium, include the Intel microcode notice at licenses/intel-microcode.txt and
+keep the Intel binaries unmodified.
