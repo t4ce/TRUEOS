@@ -135,19 +135,6 @@ pub fn set_idle_policy(policy: IdlePolicy) -> IdlePolicy {
     IdlePolicy::from_u8(prev)
 }
 
-#[inline(always)]
-pub fn idle_hint() {
-    match idle_policy() {
-        IdlePolicy::Spin => core::hint::spin_loop(),
-        IdlePolicy::Halt => {
-            if x86_64::instructions::interrupts::are_enabled() {
-                x86_64::instructions::hlt()
-            } else {
-                core::hint::spin_loop()
-            }
-        }
-    }
-}
 
 pub fn current_ratio() -> Option<u8> {
     let caps = caps()?;

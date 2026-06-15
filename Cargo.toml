@@ -100,6 +100,7 @@ debug = false
 opt-level = 2
 
 [patch.crates-io]
+embassy-executor = { path = "vendor/embassy-executor-0.10.0" }
 libc = { path = "vendor/libc-0.2.186" }
 png = { path = "vendor/png-0.18.1" }
 fdeflate = { path = "vendor/fdeflate-0.3.7" }
