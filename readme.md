@@ -62,7 +62,8 @@ brew install llvm binutils autoconf automake libtool xorriso zstd p7zip
 > [!IMPORTANT]
 > The source is public-view/protected. Official binaries are usable, including
 > commercially. Blueprints are the legit extension path: they can change runtime
-> behavior without being treated as prohibited source modification.
+> behavior without being treated as prohibited source modification. Blueprints
+> belong to their authors.
 
 # Network Console Access
 `konsole -e sh -c 'stty -echo -icanon cols 200 rows 60; nc 192.168.178.94 4245; stty sane'`
