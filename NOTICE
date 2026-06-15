@@ -15,7 +15,9 @@ Blueprints, scripts, applications, data, and configuration that run on TRUEOS
 through its published runtime interfaces are the intended and recommended way to
 extend, customize, automate, and program TRUEOS. Using Blueprints, including for
 commercial purposes, is permitted and is not treated as a prohibited source-code
-modification merely because it changes runtime behavior.
+modification merely because it changes runtime behavior. User-created
+Blueprints belong to their authors, subject to whatever rights belong to their
+own dependencies and contributors.
 
 Some directories and files contain third-party code or imported reference
 material. Those components remain under their own upstream licenses and notices.
