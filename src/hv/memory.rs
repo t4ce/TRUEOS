@@ -1135,7 +1135,7 @@ pub fn build_guest_cr3_with_mode(
         map_region_4k(
             guest_code_pt,
             code_pt_base,
-            kernel_va_to_pa(code_pt_base).ok_or("guest code pa")?,
+            host_va_to_pa(code_pt_base).ok_or("guest code pa")?,
             PAGE_SIZE_2M as usize,
             PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE,
         )?;
@@ -1812,7 +1812,7 @@ fn map_guest_image_span(
                 let image_pt = unsafe { core::ptr::addr_of_mut!((*tables).image_pts[*pt_slot].0) };
                 let image_pt_pa = host_va_to_pa(image_pt as u64).ok_or("guest image pt pa")?;
                 map_table_entry(pd, pd_index(va), image_pt_pa);
-                let phys = kernel_va_to_pa(chunk_start).ok_or("guest kernel image pa")?;
+                let phys = host_va_to_pa(chunk_start).ok_or("guest kernel image pa")?;
                 map_region_4k(
                     image_pt,
                     chunk_start,
@@ -1870,7 +1870,7 @@ fn map_guest_hull_private_rw_span(
                     | PT_ENTRY_PRESENT
                     | PT_ENTRY_WRITABLE
             } else if page_va >= image_start && page_va < image_end {
-                (kernel_va_to_pa(page_va).ok_or("guest hull rw image pa")? & 0x000F_FFFF_FFFF_F000)
+                (host_va_to_pa(page_va).ok_or("guest hull rw image pa")? & 0x000F_FFFF_FFFF_F000)
                     | PT_ENTRY_PRESENT
                     | PT_ENTRY_WRITABLE
             } else {

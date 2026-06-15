@@ -37,8 +37,13 @@ impl WorkerSpawner {
 
     #[inline]
     pub fn spawn<S: Send>(&self, token: SpawnToken<S>) {
+        let _ = self.spawn_and_wake(token);
+    }
+
+    #[inline]
+    pub fn spawn_and_wake<S: Send>(&self, token: SpawnToken<S>) -> bool {
         self.spawner.spawn(token);
-        let _ = crate::unhlt_isr::wake_cpu_slot(self.cpu_slot);
+        crate::unhlt_isr::wake_cpu_slot(self.cpu_slot)
     }
 
     #[inline]

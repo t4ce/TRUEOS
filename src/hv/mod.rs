@@ -42,6 +42,7 @@ use memory::*;
 use snapshot::*;
 const MAIN_LOOP_MARKER: &[u8] = b"main: entering executor loop";
 const VMX_PAGE_SIZE: usize = 4096;
+const MIB: usize = 1024 * 1024;
 const HV_LOG_LINE: usize = crate::allcaps::hv::LOG_LINE_BYTES;
 pub const TRUEOS_VM_ID_LIMIT: usize = crate::allcaps::hv::VM_ID_LIMIT;
 const TRUEOS_VM_CPU_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
@@ -83,6 +84,8 @@ static VMX_ROOT_ACTIVE_BY_CPU: [AtomicBool; TRUEOS_VM_CPU_SLOT_LIMIT] =
 static HV_CONTROL_NUDGE_SEQ: AtomicU64 = AtomicU64::new(1);
 static VM_BOOT_MODES: [Mutex<VmBootMode>; TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new(VmBootMode::Hull) }; TRUEOS_VM_ID_LIMIT];
+static BLUEPRINT_PENDING_LAUNCH_STATES: [Mutex<Option<BlueprintPendingLaunchState>>; TRUEOS_VM_ID_LIMIT] =
+    [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_LAUNCH_STATES: [Mutex<Option<BlueprintLaunchState>>; TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_PROCESS_CONTEXTS: [Mutex<Option<BlueprintProcessContext>>; TRUEOS_VM_ID_LIMIT] =
@@ -247,6 +250,48 @@ pub enum VmBootMode {
     Full,
 }
 
+#[derive(Copy, Clone)]
+enum BlueprintMemoryClass {
+    TinyUi,
+    Ui,
+    TokioRuntime,
+    NetworkClient,
+    HeavyGraphics,
+    Unknown,
+}
+
+impl BlueprintMemoryClass {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::TinyUi => "tiny-ui",
+            Self::Ui => "ui",
+            Self::TokioRuntime => "tokio-runtime",
+            Self::NetworkClient => "network-client",
+            Self::HeavyGraphics => "heavy-graphics",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+struct BlueprintVmMemoryProfile {
+    class: BlueprintMemoryClass,
+    heap_lower_mib: usize,
+    heap_recommended_mib: usize,
+    heap_upper_mib: usize,
+    stack_lower_mib: usize,
+    stack_recommended_mib: usize,
+    stack_upper_mib: usize,
+}
+
+#[derive(Clone)]
+struct BlueprintPendingLaunchState {
+    archive: AllocString,
+    module_bytes: AllocVec<u8>,
+    app_args: AllocVec<AllocString>,
+    console_target: Option<MatrixTarget>,
+}
+
 #[derive(Clone)]
 pub struct BlueprintLaunchState {
     pub archive: AllocString,
@@ -386,6 +431,11 @@ pub(crate) fn current_vm_id() -> Option<u8> {
     }
 
     let slot = crate::percpu::current_slot();
+    let tagged = CURRENT_VM_ID_BY_CPU.get(slot)?.load(Ordering::Acquire);
+    tagged.checked_sub(1)
+}
+
+pub fn vm_id_for_cpu_slot(slot: usize) -> Option<u8> {
     let tagged = CURRENT_VM_ID_BY_CPU.get(slot)?.load(Ordering::Acquire);
     tagged.checked_sub(1)
 }
@@ -591,7 +641,31 @@ pub fn start(
     io: &'static dyn ShellBackend2,
     stack_mb: Option<usize>,
 ) -> Result<(), StartError> {
-    start_with_mode(vm_id, spawner, io, VmBootMode::Hull, stack_mb)
+    start_with_mode(vm_id, spawner, io, VmBootMode::Hull, stack_mb, None)
+}
+
+pub fn start_blueprint_app_vm(
+    vm_id: u8,
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    archive: AllocString,
+    module_bytes: AllocVec<u8>,
+    app_args: AllocVec<AllocString>,
+    console_target: Option<MatrixTarget>,
+) -> Result<(), StartError> {
+    start_with_mode(
+        vm_id,
+        spawner,
+        io,
+        VmBootMode::Hull,
+        None,
+        Some(BlueprintPendingLaunchState {
+            archive,
+            module_bytes,
+            app_args,
+            console_target,
+        }),
+    )
 }
 
 fn start_with_mode(
@@ -600,6 +674,7 @@ fn start_with_mode(
     io: &'static dyn ShellBackend2,
     boot_mode: VmBootMode,
     stack_mb: Option<usize>,
+    pending_blueprint: Option<BlueprintPendingLaunchState>,
 ) -> Result<(), StartError> {
     let Some(vm) = vm_slot(vm_id) else {
         return Err(StartError::UnsupportedVmId);
@@ -663,6 +738,14 @@ fn start_with_mode(
     if let Some(mode) = VM_BOOT_MODES.get(vm_id as usize) {
         *mode.lock() = boot_mode;
     }
+    if let Some(pending) = pending_blueprint {
+        if let Some(slot) = BLUEPRINT_PENDING_LAUNCH_STATES.get(vm_id as usize) {
+            *slot.lock() = Some(pending);
+        } else {
+            vm.starting.store(false, Ordering::Release);
+            return Err(StartError::UnsupportedVmId);
+        }
+    }
 
     let _ = spawner;
     let _ = io;
@@ -670,6 +753,7 @@ fn start_with_mode(
     let target = match pick_vm_hull_lane() {
         Ok(target) => target,
         Err(error) => {
+            clear_blueprint_pending_launch(vm_id);
             vm.starting.store(false, Ordering::Release);
             hvlogf(format_args!(
                 "hv: vm{} lane pick failed: role={} placement={} reason={}",
@@ -686,6 +770,7 @@ fn start_with_mode(
     // actual guest work must stay on HV-reserved VM lanes only, never on BSP
     // and never on the AP1 UI2/service lane.
     if !profile.requires_reserved_vm_lane() || !target.supports(profile) {
+        clear_blueprint_pending_launch(vm_id);
         vm.starting.store(false, Ordering::Release);
         hvlogf(format_args!(
             "hv: vm{} lane rejected: role={} placement={} slot={} requires reserved VM lane on AP2+",
@@ -718,17 +803,24 @@ fn start_with_mode(
 
     match vm_task(vm_id, target.lease) {
         Ok(token) => {
-            target.spawner.spawn(token);
+            let wake_sent = target.spawner.spawn_and_wake(token);
             hvlogf(format_args!(
-                "hv: vm{} lane spawn submitted: role={} placement={} slot={}",
+                "hv: vm{} lane spawn submitted: role={} placement={} slot={} wake={}",
                 vm_id,
                 profile.role_name(),
                 profile.placement_name(),
-                target.slot
+                target.slot,
+                wake_sent as u8
             ));
-            crate::log!("app-vm-run-queue: vm task submitted vm={} slot={}\n", vm_id, target.slot);
+            crate::log!(
+                "app-vm-run-queue: vm task submitted vm={} slot={} wake={}\n",
+                vm_id,
+                target.slot,
+                wake_sent as u8
+            );
         }
         Err(_) => {
+            clear_blueprint_pending_launch(vm_id);
             vm.starting.store(false, Ordering::Release);
             return Err(StartError::SpawnFailed);
         }
@@ -865,6 +957,249 @@ pub fn request_preserve_active_vm() -> bool {
         .find(|(_, vm)| vm.running.load(Ordering::Acquire) || vm.starting.load(Ordering::Acquire))
         .map(|(vm_id, _)| request_preserve(vm_id as u8).unwrap_or(false))
         .unwrap_or(false)
+}
+
+fn ceil_mib(bytes: usize) -> usize {
+    bytes.saturating_add(MIB - 1) / MIB
+}
+
+fn clamp_mib(value: usize, lower: usize, upper: usize) -> usize {
+    value.max(lower).min(upper)
+}
+
+fn round_pow2_mib(value: usize) -> usize {
+    value.max(1).next_power_of_two()
+}
+
+fn import_name_has(imports: &[crate::hv::blueprint::ElfImport<'_>], needle: &str) -> bool {
+    imports.iter().any(|import| import.name.contains(needle))
+}
+
+fn archive_has(archive: &str, needle: &str) -> bool {
+    archive.contains(needle)
+}
+
+fn classify_blueprint_memory(
+    archive: &str,
+    raw_payload_len: usize,
+    stats: crate::hv::blueprint::ElfAllocStats,
+    imports: &[crate::hv::blueprint::ElfImport<'_>],
+) -> BlueprintMemoryClass {
+    let network_signal = archive_has(archive, "weather")
+        || archive_has(archive, "currency")
+        || archive_has(archive, "reqwest")
+        || archive_has(archive, "http")
+        || archive_has(archive, "https")
+        || import_name_has(imports, "trueos_mio_")
+        || import_name_has(imports, "dns_resolve")
+        || import_name_has(imports, "net_fetch")
+        || import_name_has(imports, "tcp_stream")
+        || import_name_has(imports, "tokio_spawn_blocking");
+    if network_signal {
+        return BlueprintMemoryClass::NetworkClient;
+    }
+
+    let tokio_signal = archive_has(archive, "tokio")
+        || import_name_has(imports, "trueos_tokio_")
+        || import_name_has(imports, "tokio_")
+        || import_name_has(imports, "sleep_ms");
+    if tokio_signal {
+        return BlueprintMemoryClass::TokioRuntime;
+    }
+
+    let heavy_graphics_signal = archive_has(archive, "mandelbrot")
+        || archive_has(archive, "shader")
+        || archive_has(archive, "particle")
+        || archive_has(archive, "virgl")
+        || import_name_has(imports, "gfx")
+        || stats.alloc_bytes > 4 * MIB
+        || raw_payload_len > 8 * MIB;
+    if heavy_graphics_signal {
+        return BlueprintMemoryClass::HeavyGraphics;
+    }
+
+    let tiny_ui_signal = raw_payload_len <= MIB
+        && stats.alloc_bytes <= 512 * 1024
+        && import_name_has(imports, "ui2")
+        && !imports.is_empty();
+    if tiny_ui_signal {
+        return BlueprintMemoryClass::TinyUi;
+    }
+
+    if import_name_has(imports, "ui2") || import_name_has(imports, "app_surface_window") {
+        return BlueprintMemoryClass::Ui;
+    }
+
+    BlueprintMemoryClass::Unknown
+}
+
+fn estimate_blueprint_memory_profile(
+    archive: &str,
+    module: &crate::hv::blueprint::BlueprintModule<'_>,
+    unpacked: &[u8],
+    imports: &[crate::hv::blueprint::ElfImport<'_>],
+) -> BlueprintVmMemoryProfile {
+    let stats = crate::hv::blueprint::elf_alloc_stats(unpacked).unwrap_or_default();
+    let class = classify_blueprint_memory(archive, module.raw_payload_len, stats, imports);
+    let base_live_mib = ceil_mib(module.raw_payload_len).max(ceil_mib(stats.alloc_bytes));
+
+    let (heap_lower, heap_recommended, heap_upper, stack_lower, stack_recommended, stack_upper) =
+        match class {
+            BlueprintMemoryClass::TinyUi => (
+                16,
+                round_pow2_mib(base_live_mib.saturating_mul(8).saturating_add(16)).max(32),
+                128,
+                8,
+                8,
+                32,
+            ),
+            BlueprintMemoryClass::Ui => (
+                32,
+                round_pow2_mib(base_live_mib.saturating_mul(10).saturating_add(32)).max(64),
+                192,
+                8,
+                16,
+                64,
+            ),
+            BlueprintMemoryClass::TokioRuntime => (
+                64,
+                round_pow2_mib(base_live_mib.saturating_mul(12).saturating_add(64)).max(128),
+                256,
+                8,
+                16,
+                64,
+            ),
+            BlueprintMemoryClass::NetworkClient => (
+                64,
+                round_pow2_mib(base_live_mib.saturating_mul(32).saturating_add(128)).max(512),
+                512,
+                8,
+                16,
+                64,
+            ),
+            BlueprintMemoryClass::HeavyGraphics => (
+                128,
+                round_pow2_mib(base_live_mib.saturating_mul(16).saturating_add(128)).max(256),
+                512,
+                16,
+                32,
+                128,
+            ),
+            BlueprintMemoryClass::Unknown => (64, 128, 512, 8, 16, 64),
+        };
+
+    BlueprintVmMemoryProfile {
+        class,
+        heap_lower_mib: heap_lower,
+        heap_recommended_mib: clamp_mib(heap_recommended, heap_lower, heap_upper),
+        heap_upper_mib: heap_upper,
+        stack_lower_mib: stack_lower,
+        stack_recommended_mib: clamp_mib(stack_recommended, stack_lower, stack_upper),
+        stack_upper_mib: stack_upper,
+    }
+}
+
+fn log_blueprint_memory_profile(
+    profile: BlueprintVmMemoryProfile,
+    log: &dyn Fn(core::fmt::Arguments<'_>),
+) {
+    log(format_args!(
+        "apps: memory profile class={} heap_mib={}/{}/{} stack_mib={}/{}/{}",
+        profile.class.label(),
+        profile.heap_lower_mib,
+        profile.heap_recommended_mib,
+        profile.heap_upper_mib,
+        profile.stack_lower_mib,
+        profile.stack_recommended_mib,
+        profile.stack_upper_mib
+    ));
+}
+
+fn take_blueprint_pending_launch(vm_id: u8) -> Option<BlueprintPendingLaunchState> {
+    BLUEPRINT_PENDING_LAUNCH_STATES.get(vm_id as usize)?.lock().take()
+}
+
+fn clear_blueprint_pending_launch(vm_id: u8) {
+    if let Some(slot) = BLUEPRINT_PENDING_LAUNCH_STATES.get(vm_id as usize) {
+        let _ = slot.lock().take();
+    }
+}
+
+fn log_blueprint_launch_line(target: Option<&MatrixTarget>, args: core::fmt::Arguments<'_>) {
+    let line = alloc::format!("{}", args);
+    if let Some(target) = target {
+        crate::shell2::print_matrix_target_line(target, line.as_str());
+    }
+    hvlogf(format_args!("{}", line.as_str()));
+}
+
+fn prepare_blueprint_launch_on_lane(
+    vm_id: u8,
+    pending: BlueprintPendingLaunchState,
+) -> Result<(), AllocString> {
+    let target = pending.console_target.clone();
+    let log = |args: core::fmt::Arguments<'_>| log_blueprint_launch_line(target.as_ref(), args);
+    log(format_args!(
+        "apps: app-vm{} AP launch prep archive={}",
+        vm_id,
+        pending.archive.as_str()
+    ));
+
+    let host_alloc_guard = crate::allocators::enter_host_alloc_domain_current_cpu();
+    let module = crate::hv::blueprint::parse_blueprint(pending.module_bytes.as_slice())
+        .map_err(|err| alloc::format!("app-vm parse failed: {}", err))?;
+    let unpacked_bytes = crate::hv::blueprint::unpack_blueprint(&module)
+        .map_err(|err| alloc::format!("app-vm unpack failed: {}", err))?;
+
+    if !unpacked_bytes.starts_with(b"\x7fELF")
+        || !matches!(
+            crate::hv::blueprint::elf_type_name(unpacked_bytes.as_slice()),
+            Some("REL")
+        )
+    {
+        return Err(AllocString::from(
+            "only ELF REL blueprints are supported for app-vm launch",
+        ));
+    }
+
+    let imports = crate::hv::blueprint::elf_imports(unpacked_bytes.as_slice()).unwrap_or_default();
+    let profile = estimate_blueprint_memory_profile(
+        pending.archive.as_str(),
+        &module,
+        unpacked_bytes.as_slice(),
+        imports.as_slice(),
+    );
+    log_blueprint_memory_profile(profile, &log);
+    drop(host_alloc_guard);
+
+    if !crate::allocators::prepare_hv_guest_heap_for_vm(
+        vm_id,
+        profile.heap_recommended_mib.saturating_mul(MIB),
+    ) {
+        return Err(AllocString::from("app-vm heap profile allocation failed"));
+    }
+    if memory::prepare_guest_stack_mb_for_vm(vm_id, profile.stack_recommended_mib).is_err() {
+        return Err(AllocString::from("app-vm stack profile allocation failed"));
+    }
+
+    stage_blueprint_launch(
+        vm_id,
+        BlueprintLaunchState {
+            archive: pending.archive,
+            module_bytes: pending.module_bytes,
+            unpacked_bytes,
+            app_args: pending.app_args,
+        },
+        pending.console_target,
+    )
+    .map_err(|err| alloc::format!("app-vm stage failed: {:?}", err))?;
+
+    crate::log!(
+        "app-vm-run-queue: AP prep ok vm={} stack_mib={}\n",
+        vm_id,
+        profile.stack_recommended_mib
+    );
+    Ok(())
 }
 
 pub fn stage_blueprint_launch(
@@ -1363,6 +1698,7 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
     );
 
     let boot_mode = boot_mode_for_vm(vm_id);
+    let pending_blueprint = take_blueprint_pending_launch(vm_id);
     let guest = crate::limine::guest_kernel_bytes();
     match boot_mode {
         VmBootMode::Full => {
@@ -1393,6 +1729,19 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
                 memory::active_guest_stack_mb_for_vm(vm_id)
             ));
         }
+    }
+    if let Some(pending) = pending_blueprint
+        && let Err(err) = prepare_blueprint_launch_on_lane(vm_id, pending)
+    {
+        hvlogf(format_args!("hv: vm{} lifecycle: blueprint prep failed ({})", vm_id, err));
+        clear_current_vm_id();
+        vm.running.store(false, Ordering::Release);
+        vm.starting.store(false, Ordering::Release);
+        vm.stop_req.store(false, Ordering::Release);
+        vm.preserve_req.store(false, Ordering::Release);
+        vm.preserve_exit.store(false, Ordering::Release);
+        clear_blueprint_process_context(vm_id);
+        return;
     }
     hvlogf(format_args!("hv: vm{} reporting: vmx preflight ok, stage=m1", vm_id));
     hvlogf(format_args!("hv: vm{} reporting: vlayer policy=integrity-first", vm_id));
@@ -1490,6 +1839,7 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
     vm.stop_req.store(false, Ordering::Release);
     vm.preserve_req.store(false, Ordering::Release);
     vm.preserve_exit.store(false, Ordering::Release);
+    clear_blueprint_pending_launch(vm_id);
     let _ = take_blueprint_launch(vm_id);
     clear_blueprint_process_context(vm_id);
     hvlogf(format_args!("hv: vm{} lifecycle: stopped", vm_id));

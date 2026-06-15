@@ -63,10 +63,14 @@ pub fn run_ap_forever() -> ! {
 
 #[inline(always)]
 fn hlt(_sleep_ticks: u64) {
+    crate::smp::mark_current_hlt_state(true);
+
     #[cfg(target_arch = "x86_64")]
     unsafe {
         core::arch::asm!("sti; hlt", options(nomem, nostack));
     }
+
+    crate::smp::mark_current_hlt_state(false);
 }
 
 #[inline(always)]

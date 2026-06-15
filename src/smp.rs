@@ -1,6 +1,7 @@
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicPtr, AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use embassy_time::{Duration as EmbassyDuration, Timer};
 
 pub type CpuCallFn = fn(u64) -> u64;
 
@@ -8,11 +9,20 @@ pub const STATE_IDLE: u8 = 0;
 pub const STATE_PENDING: u8 = 1;
 pub const STATE_RUNNING: u8 = 2;
 pub const STATE_DONE: u8 = 3;
+pub const HLT_HISTORY_LEN: usize = 80;
+pub const HLT_SAMPLE_MS: u64 = 50;
+
+const HLT_HISTORY_LOW_BITS: usize = 64;
+const HLT_HISTORY_HIGH_BITS: usize = HLT_HISTORY_LEN - HLT_HISTORY_LOW_BITS;
+const HLT_HISTORY_HIGH_MASK: u64 = (1u64 << HLT_HISTORY_HIGH_BITS) - 1;
 
 #[repr(C, align(64))]
 struct Mailbox {
     online: AtomicU8,
     state: AtomicU8,
+    hlt_now: AtomicU8,
+    hlt_history_low: AtomicU64,
+    hlt_history_high: AtomicU64,
     seq: AtomicU64,
     func: AtomicUsize,
     arg: AtomicU64,
@@ -24,6 +34,9 @@ impl Mailbox {
         Self {
             online: AtomicU8::new(0),
             state: AtomicU8::new(STATE_IDLE),
+            hlt_now: AtomicU8::new(0),
+            hlt_history_low: AtomicU64::new(u64::MAX),
+            hlt_history_high: AtomicU64::new(HLT_HISTORY_HIGH_MASK),
             seq: AtomicU64::new(0),
             func: AtomicUsize::new(0),
             arg: AtomicU64::new(0),
@@ -36,11 +49,13 @@ static MAILBOX_PTR: AtomicPtr<Mailbox> = AtomicPtr::new(null_mut());
 static MAILBOX_LEN: AtomicUsize = AtomicUsize::new(0);
 static INIT_ONCE: spin::Once<()> = spin::Once::new();
 static REQUEST_SEQ: AtomicU64 = AtomicU64::new(1);
+static HLT_SAMPLE_COUNT: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Copy, Clone, Debug)]
 pub struct MailboxRead {
     pub online: bool,
     pub state: u8,
+    pub hlt_now: bool,
     pub seq: u64,
     pub ret: u64,
 }
@@ -83,6 +98,19 @@ pub fn mark_online() {
     let slot = crate::percpu::this_cpu().cpu_index() as usize;
     let Some(m) = mailbox(slot) else { return };
     m.online.store(1, Ordering::Release);
+}
+
+pub fn mark_current_hlt_state(hlt: bool) {
+    if !is_init() {
+        return;
+    }
+    let cpu_ptr = crate::percpu::try_this_cpu_ptr();
+    if cpu_ptr.is_null() {
+        return;
+    }
+    let slot = unsafe { (*cpu_ptr).cpu_index() as usize };
+    let Some(m) = mailbox(slot) else { return };
+    m.hlt_now.store(u8::from(hlt), Ordering::Release);
 }
 
 #[inline]
@@ -195,11 +223,60 @@ pub fn poll() {
     m.state.store(STATE_DONE, Ordering::Release);
 }
 
+pub fn sample_hlt_history() {
+    let len = cpu_count();
+    if len == 0 {
+        return;
+    }
+
+    for slot in 0..len {
+        let Some(m) = mailbox(slot) else { continue };
+        let active_bit = u64::from(m.hlt_now.load(Ordering::Acquire) == 0);
+        let low = m.hlt_history_low.load(Ordering::Acquire);
+        let high = m.hlt_history_high.load(Ordering::Acquire);
+        m.hlt_history_low
+            .store((low << 1) | active_bit, Ordering::Release);
+        m.hlt_history_high
+            .store(((high << 1) | (low >> 63)) & HLT_HISTORY_HIGH_MASK, Ordering::Release);
+    }
+
+    HLT_SAMPLE_COUNT.fetch_add(1, Ordering::AcqRel);
+}
+
+pub fn hlt_sample_count() -> u64 {
+    HLT_SAMPLE_COUNT.load(Ordering::Acquire)
+}
+
+pub fn hlt_history_text(slot: usize) -> Option<String> {
+    let m = mailbox(slot)?;
+    let low = m.hlt_history_low.load(Ordering::Acquire);
+    let high = m.hlt_history_high.load(Ordering::Acquire);
+    let mut out = String::with_capacity(HLT_HISTORY_LEN);
+    for idx in (0..HLT_HISTORY_HIGH_BITS).rev() {
+        let hot = ((high >> idx) & 1) != 0;
+        out.push(if hot { '!' } else { '.' });
+    }
+    for idx in (0..HLT_HISTORY_LOW_BITS).rev() {
+        let hot = ((low >> idx) & 1) != 0;
+        out.push(if hot { '!' } else { '.' });
+    }
+    Some(out)
+}
+
+#[embassy_executor::task]
+pub async fn hlt_history_sampler_task() {
+    loop {
+        sample_hlt_history();
+        Timer::after(EmbassyDuration::from_millis(HLT_SAMPLE_MS)).await;
+    }
+}
+
 pub fn read(slot: usize) -> Option<MailboxRead> {
     let m = mailbox(slot)?;
     Some(MailboxRead {
         online: m.online.load(Ordering::Acquire) != 0,
         state: m.state.load(Ordering::Acquire),
+        hlt_now: m.hlt_now.load(Ordering::Acquire) != 0,
         seq: m.seq.load(Ordering::Acquire),
         ret: m.ret.load(Ordering::Acquire),
     })
