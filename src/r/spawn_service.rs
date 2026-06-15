@@ -30,6 +30,7 @@ macro_rules! define_started_flags {
 
 define_started_flags!(
     JOB_RUNNER_STARTED,
+    SMP_HLT_HISTORY_STARTED,
     CODEC_SERVICE_STARTED,
     QJS_ASYNC_FS_SERVICE_STARTED,
     TRUEOSFS_MOUNT_SERVICE_STARTED,
@@ -303,6 +304,10 @@ fn spawn_bool_result_to_attempt(result: Result<bool, SpawnError>) -> SpawnAttemp
 
 fn spawn_job_runner(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::wait::job_runner_task())
+}
+
+fn spawn_smp_hlt_history(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::smp::hlt_history_sampler_task())
 }
 
 fn spawn_codec_service(spawner: Spawner) -> SpawnAttempt {
@@ -1063,15 +1068,16 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 #[cfg(all(feature = "trueos_rdp", feature = "trueos_lumen"))]
-const TASK_COUNT: usize = 56;
+const TASK_COUNT: usize = 57;
 #[cfg(all(feature = "trueos_rdp", not(feature = "trueos_lumen")))]
-const TASK_COUNT: usize = 54;
-#[cfg(all(not(feature = "trueos_rdp"), feature = "trueos_lumen"))]
 const TASK_COUNT: usize = 55;
+#[cfg(all(not(feature = "trueos_rdp"), feature = "trueos_lumen"))]
+const TASK_COUNT: usize = 56;
 #[cfg(all(not(feature = "trueos_rdp"), not(feature = "trueos_lumen")))]
-const TASK_COUNT: usize = 53;
+const TASK_COUNT: usize = 54;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
+    TaskSpec::enabled("smp-hlt-history", 0, &SMP_HLT_HISTORY_STARTED, spawn_smp_hlt_history),
     TaskSpec::enabled(
         "codec-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,

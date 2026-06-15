@@ -618,59 +618,20 @@ fn start_blueprint_launch(spawner: &Spawner, request: &AppVmLaunchRequest, log: 
         return;
     };
 
-    let module = match crate::hv::blueprint::parse_blueprint(request.module_bytes.as_slice()) {
-        Ok(module) => module,
-        Err(err) => {
-            log(alloc::format!("apps: app-vm parse failed: {}", err).as_str());
-            return;
-        }
-    };
-    let unpacked_bytes = match crate::hv::blueprint::unpack_blueprint(&module) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            log(alloc::format!("apps: app-vm unpack failed: {}", err).as_str());
-            return;
-        }
-    };
-    let imports = crate::hv::blueprint::elf_imports(unpacked_bytes.as_slice()).unwrap_or_default();
-    let profile = estimate_blueprint_memory_profile(
-        request.archive.as_str(),
-        &module,
-        unpacked_bytes.as_slice(),
-        imports.as_slice(),
-    );
-    log_blueprint_memory_profile(profile, log);
-
-    if !crate::allocators::prepare_hv_guest_heap_for_vm(
+    match crate::hv::start_blueprint_app_vm(
         vm_id,
-        profile.heap_recommended_mib.saturating_mul(MIB),
-    ) {
-        log("apps: app-vm heap profile allocation failed");
-        return;
-    }
-
-    if let Err(err) = crate::hv::stage_blueprint_launch(
-        vm_id,
-        crate::hv::BlueprintLaunchState {
-            archive: request.archive.clone(),
-            module_bytes: request.module_bytes.clone(),
-            unpacked_bytes,
-            app_args: request.app_args.clone(),
-        },
+        spawner,
+        &UART1_COM1_BACKEND,
+        request.archive.clone(),
+        request.module_bytes.clone(),
+        request.app_args.clone(),
         Some(request.target.clone()),
     ) {
-        log(alloc::format!("apps: app-vm stage failed: {:?}", err).as_str());
-        return;
-    }
-
-    match crate::hv::start(vm_id, spawner, &UART1_COM1_BACKEND, Some(profile.stack_recommended_mib))
-    {
         Ok(()) => {
             crate::log!(
-                "app-vm-run-queue: hv start ok vm={} archive={} stack_mib={}\n",
+                "app-vm-run-queue: hv start ok vm={} archive={}\n",
                 vm_id,
-                request.archive.as_str(),
-                profile.stack_recommended_mib
+                request.archive.as_str()
             );
             log(alloc::format!("apps: app-vm{} launch requested", vm_id).as_str());
         }
@@ -683,7 +644,6 @@ fn start_blueprint_launch(spawner: &Spawner, request: &AppVmLaunchRequest, log: 
                 err
             );
             log(alloc::format!("apps: app-vm start failed: {:?}", err).as_str());
-            let _ = crate::hv::take_blueprint_launch(vm_id);
         }
     }
 }
