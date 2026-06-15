@@ -1,31 +1,82 @@
-TRUEOS Source-Available Public View License
+TRUEOS Source-Available and Official Binary Use License
 
 Copyright (c) 2026 Jonas Baethke. All rights reserved.
 
-This license applies to first-party TRUEOS source code, documentation, and
-project files in this repository, unless a file, directory, manifest, or notice
-states a different license or provenance.
+This license applies to first-party TRUEOS source code, documentation, project
+files, and official TRUEOS binary releases, unless a file, directory, manifest,
+or notice states a different license or provenance.
+
+1. Source code public-view permission
 
 TRUEOS is source-available for public view. You may access, download, clone, and
-read the TRUEOS source code solely for personal review, security research,
-education, evaluation, and reference.
+read the first-party TRUEOS source code solely for personal review, security
+research, education, evaluation, and reference.
 
-No other permission is granted. Without prior written permission from the
-copyright holder, you may not use, run, modify, prepare derivative works from,
-copy beyond what is necessary for the public-view permission above, publish,
-redistribute, sublicense, sell, provide as a service, or commercially exploit
+No other source-code permission is granted. Without prior written permission
+from the copyright holder, you may not modify, prepare derivative works from,
+publish, redistribute, sublicense, sell, provide as a service, commercially
+exploit, or copy beyond what is necessary for the public-view permission above
 the first-party TRUEOS source code or any substantial portion of it.
+
+This means the public source is not a grant to make a 1:1 copy, clone product,
+renamed fork, source-derived distribution, or competing source release.
+
+2. Official binary use permission
+
+Official TRUEOS binary releases distributed by the copyright holder may be used,
+run, evaluated, deployed, and commercially used. This includes using TRUEOS as a
+tool, runtime, operating environment, demonstration system, research platform,
+or part of a commercial workflow.
+
+This binary permission applies only to official, unmodified TRUEOS binary
+releases from the copyright holder. It does not grant permission to modify,
+repackage, redistribute, sublicense, sell, or provide modified TRUEOS binary
+images or source-derived TRUEOS builds unless separate written permission is
+given.
+
+3. Blueprint extension path
+
+Blueprints, scripts, applications, data, configuration, and other user-created
+payloads that run on TRUEOS through its published runtime interfaces are the
+intended and recommended way to extend, customize, automate, and program TRUEOS.
+
+Using Blueprints is permitted, including for commercial purposes. A Blueprint may
+change runtime behavior, load code, interact with TRUEOS services, and produce
+new behavior inside a running TRUEOS system. That is a legitimate runtime
+extension path, not a prohibited modification of the first-party TRUEOS source
+code merely because it changes what the system does at runtime.
+
+You own your own Blueprint payloads, subject to whatever rights belong to their
+authors and dependencies. This license does not claim ownership of independent
+Blueprints that merely use TRUEOS runtime interfaces.
+
+4. Limits and reserved rights
+
+The permissions above do not grant permission to:
+
+- copy, publish, or redistribute the first-party TRUEOS source code beyond the
+  public-view permission;
+- create or distribute source-derived TRUEOS forks, clones, or 1:1 copies;
+- remove or alter copyright, license, or notice files;
+- use the TRUEOS name, marks, logos, or branding except as needed to identify
+  the project truthfully;
+- bypass or ignore third-party license terms for components included with or
+  used by TRUEOS.
+
+All rights not expressly granted are reserved by the copyright holder.
+
+5. Third-party components
 
 Third-party code, vendored dependencies, imported reference material, generated
 artifacts, firmware, bootloader components, and files with their own license
 headers or manifests remain governed by their own licenses and notices. This
 license does not replace, narrow, or expand those third-party license terms.
 
-The TRUEOS name, marks, logos, and branding are not licensed for use except as
-needed to identify the project truthfully.
+6. No warranty
 
-THE SOFTWARE IS PROVIDED FOR PUBLIC VIEWING "AS IS", WITHOUT WARRANTY OF ANY
-KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO
-EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
-LIABILITY ARISING FROM OR RELATED TO THE SOFTWARE OR THIS REPOSITORY.
+THE SOFTWARE, SOURCE CODE, AND BINARY RELEASES ARE PROVIDED "AS IS", WITHOUT
+WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM,
+DAMAGES, OR OTHER LIABILITY ARISING FROM OR RELATED TO THE SOFTWARE, SOURCE
+CODE, BINARY RELEASES, OR THIS REPOSITORY.
