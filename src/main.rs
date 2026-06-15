@@ -48,6 +48,7 @@ mod locale;
 mod logflag;
 #[cfg(feature = "trueos_lumen")]
 mod lumen;
+mod microcode;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod mio_compat;
 mod mio_probe;
@@ -202,6 +203,7 @@ pub extern "C" fn kmain() -> ! {
     percpu::install_cpu_slot_lapic_order_owned(lapic_ids);
     cpu::init_profiles(percpu::total_slots());
     percpu::init_bsp();
+    microcode::init_from_limine_bsp();
     dma::init_from_limine();
     pci::enumerate_impl();
     intel::init_once();
@@ -220,8 +222,7 @@ pub extern "C" fn kmain() -> ! {
     efi::log_reset_runtime_once();
 
     // Chronos awake hpet dependend
-    efi::acpi::hpet::ensure();
-    chronos::awake();
+    efi::acpi::hpet::ensure();  chronos::awake();
     // i hope fmt dont make this syntax 2 row
 
     power::init();

@@ -91,6 +91,29 @@ pub fn executable_address_bases() -> Option<(u64, u64)> {
     Some((resp.virtual_base, resp.physical_base))
 }
 
+pub struct BootModule<'a> {
+    pub path: &'a str,
+    pub cmdline: &'a str,
+    pub bytes: &'static [u8],
+}
+
+pub fn for_each_module(mut f: impl FnMut(BootModule<'_>)) -> bool {
+    let Some(resp) = MODULE_REQUEST.response() else {
+        return false;
+    };
+    for m in resp.modules().iter() {
+        let Some(bytes) = bytes_from_limine_file(m) else {
+            continue;
+        };
+        f(BootModule {
+            path: m.path(),
+            cmdline: m.cmdline(),
+            bytes,
+        });
+    }
+    true
+}
+
 pub fn module_bytes_by_string(expected: &[u8]) -> Option<&'static [u8]> {
     let resp = MODULE_REQUEST.response()?;
     for m in resp.modules().iter() {
