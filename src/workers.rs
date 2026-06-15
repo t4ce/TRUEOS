@@ -4,7 +4,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
-use embassy_executor::{SendSpawner, Spawner};
+use embassy_executor::{SendSpawner, SpawnToken, Spawner};
 use spin::Mutex;
 
 pub const CORE_KIND_UNKNOWN: u8 = 0;
@@ -22,6 +22,45 @@ static CORE_SPAWNER_BY_SLOT: [Mutex<Option<SendSpawner>>; WORKER_SLOT_LIMIT] =
 static CORE_KIND_BY_SLOT: [AtomicU8; WORKER_SLOT_LIMIT] =
     [const { AtomicU8::new(CORE_KIND_UNKNOWN) }; WORKER_SLOT_LIMIT];
 static SPAWN_RR: AtomicU32 = AtomicU32::new(0);
+
+#[derive(Clone, Copy)]
+pub struct WorkerSpawner {
+    cpu_slot: u32,
+    spawner: SendSpawner,
+}
+
+impl WorkerSpawner {
+    #[inline]
+    pub const fn cpu_slot(self) -> u32 {
+        self.cpu_slot
+    }
+
+    #[inline]
+    pub fn spawn<S: Send>(&self, token: SpawnToken<S>) {
+        self.spawner.spawn(token);
+        let _ = crate::unhlt_isr::wake_cpu_slot(self.cpu_slot);
+    }
+
+    #[inline]
+    pub fn spawned_task_count(&self) -> usize {
+        self.spawner.spawned_task_count()
+    }
+
+    #[inline]
+    pub fn ready_task_count(&self) -> usize {
+        self.spawner.ready_task_count()
+    }
+
+    #[inline]
+    pub const fn raw(self) -> SendSpawner {
+        self.spawner
+    }
+}
+
+#[inline]
+fn worker_spawner(cpu_slot: u32, spawner: SendSpawner) -> WorkerSpawner {
+    WorkerSpawner { cpu_slot, spawner }
+}
 
 pub fn register_core_spawner(cpu_slot: u32, core_kind: u8, spawner: Spawner) {
     let send_spawner = spawner.make_send();
@@ -54,10 +93,14 @@ pub extern "Rust" fn trueos_kernel_worker_core_kind_for_slot(cpu_slot: u32) -> u
     core_kind_for_slot(cpu_slot)
 }
 
-pub fn spawner_for_slot(cpu_slot: u32) -> Option<SendSpawner> {
+pub fn raw_spawner_for_slot(cpu_slot: u32) -> Option<SendSpawner> {
     CORE_SPAWNER_BY_SLOT
         .get(cpu_slot as usize)
         .and_then(|slot| *slot.lock())
+}
+
+pub fn spawner_for_slot(cpu_slot: u32) -> Option<WorkerSpawner> {
+    raw_spawner_for_slot(cpu_slot).map(|spawner| worker_spawner(cpu_slot, spawner))
 }
 
 pub fn background_slot_range() -> core::ops::Range<u32> {
@@ -66,7 +109,7 @@ pub fn background_slot_range() -> core::ops::Range<u32> {
 
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_kernel_worker_spawner_for_slot(cpu_slot: u32) -> Option<SendSpawner> {
-    spawner_for_slot(cpu_slot)
+    raw_spawner_for_slot(cpu_slot)
 }
 
 pub fn background_worker_slots() -> Vec<u32> {
@@ -96,22 +139,22 @@ pub fn has_background_worker_slot() -> bool {
         .any(|slot| *slot >= FIRST_BACKGROUND_SLOT)
 }
 
-pub fn pick_background_spawner() -> Option<SendSpawner> {
+pub fn pick_background_spawner() -> Option<WorkerSpawner> {
     pick_background_spawner_with_slot().map(|(_, _, spawner)| spawner)
 }
 
-pub fn pick_background_spawner_with_slot() -> Option<(u32, u8, SendSpawner)> {
+pub fn pick_background_spawner_with_slot() -> Option<(u32, u8, WorkerSpawner)> {
     pick_background_spawner_with_filter(|_| true)
 }
 
-pub fn pick_background_spawner_where<F>(accept_slot: F) -> Option<(u32, u8, SendSpawner)>
+pub fn pick_background_spawner_where<F>(accept_slot: F) -> Option<(u32, u8, WorkerSpawner)>
 where
     F: Fn(u32) -> bool,
 {
     pick_background_spawner_with_filter(accept_slot)
 }
 
-fn pick_background_spawner_with_filter<F>(accept_slot: F) -> Option<(u32, u8, SendSpawner)>
+fn pick_background_spawner_with_filter<F>(accept_slot: F) -> Option<(u32, u8, WorkerSpawner)>
 where
     F: Fn(u32) -> bool,
 {
@@ -139,7 +182,7 @@ where
                 continue;
             }
             if seen == idx {
-                return Some((*slot, kind, spawner.clone()));
+                return Some((*slot, kind, worker_spawner(*slot, *spawner)));
             }
             seen += 1;
         }
@@ -162,7 +205,7 @@ where
         }
         if seen == idx {
             let kind = kinds.get(slot).copied().unwrap_or(CORE_KIND_UNKNOWN);
-            return Some((*slot, kind, spawner.clone()));
+            return Some((*slot, kind, worker_spawner(*slot, *spawner)));
         }
         seen += 1;
     }
@@ -173,5 +216,6 @@ where
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_kernel_worker_pick_background_spawner_with_slot()
 -> Option<(u32, u8, SendSpawner)> {
-    pick_background_spawner_with_slot()
+    pick_background_spawner_with_filter(|_| true)
+        .map(|(slot, kind, spawner)| (slot, kind, spawner.raw()))
 }

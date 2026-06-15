@@ -20,7 +20,6 @@ pub(crate) mod xelp_media2_ngin;
 pub(crate) mod xelp_media2_ngin_hw_pic;
 
 use core::sync::atomic::{AtomicBool, Ordering};
-use embassy_executor::SendSpawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
@@ -77,7 +76,7 @@ const PCI_DEVICE_RAPTOR_LAKE_S_GT1_UHD770: u16 = 0xA780;
 static INIT: AtomicBool = AtomicBool::new(false);
 static CLAIMED_DEVICE: Mutex<Option<Dev>> = Mutex::new(None);
 
-fn pick_media_boot_demo_spawner() -> Option<(u32, SendSpawner)> {
+fn pick_media_boot_demo_spawner() -> Option<(u32, crate::workers::WorkerSpawner)> {
     let background_slots = crate::workers::background_worker_slots();
 
     let pick_slot = |predicate: fn(u32) -> bool| {

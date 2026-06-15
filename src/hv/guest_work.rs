@@ -1,6 +1,5 @@
-use embassy_executor::SendSpawner;
-
 use crate::r::spawn_spec::SpawnPlacement;
+use crate::workers::WorkerSpawner;
 
 const VM_RESERVED_FIRST_SLOT: u32 = 2;
 
@@ -82,7 +81,7 @@ impl VmLaneProfile {
 pub struct VmLaneTarget {
     pub slot: u32,
     pub core_kind: u8,
-    pub spawner: SendSpawner,
+    pub spawner: WorkerSpawner,
     pub lease: crate::hv::lane::LaneLease,
 }
 

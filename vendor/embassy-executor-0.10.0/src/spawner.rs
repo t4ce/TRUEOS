@@ -181,6 +181,11 @@ impl Spawner {
     pub fn spawned_task_count(&self) -> usize {
         self.executor.spawned_task_count()
     }
+
+    /// Return the number of tasks currently queued to be polled on this Spawner's Executor.
+    pub fn ready_task_count(&self) -> usize {
+        self.executor.ready_task_count()
+    }
 }
 
 /// Handle to spawn tasks into an executor from any thread.
@@ -234,5 +239,10 @@ impl SendSpawner {
     /// Return the number of currently spawned tasks attached to this SendSpawner's Executor.
     pub fn spawned_task_count(&self) -> usize {
         self.executor.spawned_task_count()
+    }
+
+    /// Return the number of tasks currently queued to be polled on this SendSpawner's Executor.
+    pub fn ready_task_count(&self) -> usize {
+        self.executor.ready_task_count()
     }
 }

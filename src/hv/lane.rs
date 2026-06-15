@@ -3,9 +3,8 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
-use embassy_executor::SendSpawner;
-
 use crate::r::spawn_spec::SpawnPlacement;
+use crate::workers::WorkerSpawner;
 
 const AP2_FIRST_CARRIER_SLOT: u32 = 2;
 
@@ -45,13 +44,13 @@ pub struct LaneProfile {
 struct LaneCandidate {
     slot: u32,
     core_kind: u8,
-    spawner: SendSpawner,
+    spawner: WorkerSpawner,
 }
 
 pub struct LaneTarget {
     pub slot: u32,
     pub core_kind: u8,
-    pub spawner: SendSpawner,
+    pub spawner: WorkerSpawner,
     pub lease: LaneLease,
 }
 
@@ -117,7 +116,7 @@ pub fn pick_carrier_lane(profile: LaneProfile) -> Result<LaneTarget, LanePickErr
             return Ok(LaneTarget {
                 slot: candidate.slot,
                 core_kind: candidate.core_kind,
-                spawner: candidate.spawner.clone(),
+                spawner: candidate.spawner,
                 lease,
             });
         }
