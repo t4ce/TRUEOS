@@ -71,6 +71,9 @@ const MEDIA_BOOT_DEMO_ENABLED: bool = false;
 const MEDIA_BOOT_DEMO_DELAY_MS: u64 = 5_000;
 const MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT: u32 = 3;
 const HW_VID_PROBE_H264: &[u8] = include_bytes!("../../tools/vid/x31_head_movie_first_frame.h264");
+const PCI_DEVICE_ALDER_LAKE_S_GT1: u16 = 0x4680;
+const PCI_DEVICE_ALDER_LAKE_N_N100_UHD: u16 = 0x46D1;
+const PCI_DEVICE_RAPTOR_LAKE_S_GT1_UHD770: u16 = 0xA780;
 static INIT: AtomicBool = AtomicBool::new(false);
 static CLAIMED_DEVICE: Mutex<Option<Dev>> = Mutex::new(None);
 
@@ -172,132 +175,163 @@ pub fn init_once() {
         return;
     };
     crate::log!(
-        "intel: claimed {:02X}:{:02X}.{} device=0x{:04X} rev=0x{:02X} mmio_len=0x{:X}\n",
+        "intel: claimed {:02X}:{:02X}.{} device=0x{:04X} name={} rev=0x{:02X} mmio_len=0x{:X} ui3_boot={} media_decode={}\n",
         dev.bus,
         dev.slot,
         dev.function,
         dev.device_id,
+        display_device_name(dev.device_id),
         dev.revision_id,
-        dev.mmio_len
+        dev.mmio_len,
+        full_ui3_boot_enabled_for_device(dev.device_id) as u8,
+        media_decode_enabled_for_device(dev.device_id) as u8
     );
     *CLAIMED_DEVICE.lock() = Some(dev);
-    let _ = self::gpgpu::upload_fill_rect_worklist_rgba8_kernel();
-    let _ = self::gpgpu::upload_gradient_rect_worklist_rgba8_kernel();
-    let _ = self::gpgpu::upload_alpha_blend_worklist_rgba8_kernel();
-    let _ = self::gpgpu::upload_glyph_mask_rgba8_kernel();
-    let _ = self::gpgpu::upload_present_rgba8_to_primary_xrgb_rect_kernel();
-    let _ = self::gpgpu::upload_sprite64_worklist_rgba8_kernel();
-    let _ = self::gpgpu::upload_mandel64_worklist_rgba8_kernel();
-    let _ = self::gpgpu::upload_canvas3d_project_rgba8_kernel();
-    let _ = self::gpgpu::upload_canvas3d_transform_q16_kernel();
-    let _ = self::gpgpu::upload_canvas3d_clip_box_q16_kernel();
-    let _ = self::gpgpu::upload_canvas3d_plane_sample_rgba8_kernel();
-    let _ = self::gpgpu::upload_canvas3d_plane_fill_rgba8_kernel();
-    let _ = self::gpgpu::upload_canvas3d_plane_patch_fill_cut_rgba8_kernel();
-    let _ = self::gpgpu::upload_canvas3d_plane_patch_worklist_rgba8_kernel();
-    let opencl_smoke = self::opencl::trueos_cl_source_build_smoke();
-    crate::log!(
-        "intel/opencl: source-build-smoke source_compile={} build_err={} registry_kernels={} registry_ok={} queue_completed={} fill_rect_uploaded={} queue_err={} note=source-build-currently-scaffold-aot-path-active\n",
-        opencl_smoke.source_compile_cap as u8,
-        opencl_smoke
-            .source_build_error
-            .map(|err| err.code())
-            .unwrap_or(0),
-        opencl_smoke.registry_kernels,
-        opencl_smoke.registry_passed as u8,
-        opencl_smoke.queue_completed_commands,
-        opencl_smoke.fill_rect_uploaded as u8,
-        opencl_smoke.queue_error.map(|err| err.code()).unwrap_or(0),
-    );
-    if crate::allcaps::probes::INTEL_GPGPU_ARTIFACT_BOOT_SMOKETESTS {
-        let _ = self::gpgpu::submit_direct_rcs_smoke_once();
-        let _ = self::gpgpu::submit_fill_rect_worklist_rgba8_probe_once();
-        let _ = self::gpgpu::submit_gradient_rect_worklist_rgba8_probe_once();
-        let _ = self::gpgpu::submit_alpha_blend_worklist_rgba8_probe_once();
+    let full_ui3_boot = full_ui3_boot_enabled_for_device(dev.device_id);
+    if full_ui3_boot {
+        let _ = self::gpgpu::upload_fill_rect_worklist_rgba8_kernel();
+        let _ = self::gpgpu::upload_gradient_rect_worklist_rgba8_kernel();
+        let _ = self::gpgpu::upload_alpha_blend_worklist_rgba8_kernel();
+        let _ = self::gpgpu::upload_glyph_mask_rgba8_kernel();
+        let _ = self::gpgpu::upload_present_rgba8_to_primary_xrgb_rect_kernel();
+        let _ = self::gpgpu::upload_sprite64_worklist_rgba8_kernel();
+        let _ = self::gpgpu::upload_mandel64_worklist_rgba8_kernel();
+        let _ = self::gpgpu::upload_canvas3d_project_rgba8_kernel();
+        let _ = self::gpgpu::upload_canvas3d_transform_q16_kernel();
+        let _ = self::gpgpu::upload_canvas3d_clip_box_q16_kernel();
+        let _ = self::gpgpu::upload_canvas3d_plane_sample_rgba8_kernel();
+        let _ = self::gpgpu::upload_canvas3d_plane_fill_rgba8_kernel();
+        let _ = self::gpgpu::upload_canvas3d_plane_patch_fill_cut_rgba8_kernel();
+        let _ = self::gpgpu::upload_canvas3d_plane_patch_worklist_rgba8_kernel();
+        let opencl_smoke = self::opencl::trueos_cl_source_build_smoke();
         crate::log!(
-            "intel/gpgpu: rect-worklist-probes fill_ran={} fill_ok={} gradient_ran={} gradient_ok={} alpha_ran={} alpha_ok={} ready={}\n",
-            self::gpgpu::fill_rect_worklist_probe_ran() as u8,
-            self::gpgpu::fill_rect_worklist_probe_ok() as u8,
-            self::gpgpu::gradient_rect_worklist_probe_ran() as u8,
-            self::gpgpu::gradient_rect_worklist_probe_ok() as u8,
-            self::gpgpu::alpha_blend_worklist_probe_ran() as u8,
-            self::gpgpu::alpha_blend_worklist_probe_ok() as u8,
-            self::gpgpu::rect_worklist_probe_ready() as u8
+            "intel/opencl: source-build-smoke source_compile={} build_err={} registry_kernels={} registry_ok={} queue_completed={} fill_rect_uploaded={} queue_err={} note=source-build-currently-scaffold-aot-path-active\n",
+            opencl_smoke.source_compile_cap as u8,
+            opencl_smoke
+                .source_build_error
+                .map(|err| err.code())
+                .unwrap_or(0),
+            opencl_smoke.registry_kernels,
+            opencl_smoke.registry_passed as u8,
+            opencl_smoke.queue_completed_commands,
+            opencl_smoke.fill_rect_uploaded as u8,
+            opencl_smoke.queue_error.map(|err| err.code()).unwrap_or(0),
         );
-        let _ = self::gpgpu::submit_canvas3d_project_once();
-        let _ = self::gpgpu::submit_canvas3d_transform_smoke_once();
-        let _ = self::gpgpu::submit_canvas3d_clip_box_q16_once();
-        let _ = self::gpgpu::submit_canvas3d_plane_sample_rgba8_once();
-        let _ = self::gpgpu::submit_canvas3d_plane_fill_rgba8_once();
-        let _ = self::gpgpu::submit_canvas3d_plane_patch_fill_cut_rgba8_once();
-        let _ = self::gpgpu::submit_canvas3d_plane_patch_worklist_rgba8_once();
+        if crate::allcaps::probes::INTEL_GPGPU_ARTIFACT_BOOT_SMOKETESTS {
+            let _ = self::gpgpu::submit_direct_rcs_smoke_once();
+            let _ = self::gpgpu::submit_fill_rect_worklist_rgba8_probe_once();
+            let _ = self::gpgpu::submit_gradient_rect_worklist_rgba8_probe_once();
+            let _ = self::gpgpu::submit_alpha_blend_worklist_rgba8_probe_once();
+            crate::log!(
+                "intel/gpgpu: rect-worklist-probes fill_ran={} fill_ok={} gradient_ran={} gradient_ok={} alpha_ran={} alpha_ok={} ready={}\n",
+                self::gpgpu::fill_rect_worklist_probe_ran() as u8,
+                self::gpgpu::fill_rect_worklist_probe_ok() as u8,
+                self::gpgpu::gradient_rect_worklist_probe_ran() as u8,
+                self::gpgpu::gradient_rect_worklist_probe_ok() as u8,
+                self::gpgpu::alpha_blend_worklist_probe_ran() as u8,
+                self::gpgpu::alpha_blend_worklist_probe_ok() as u8,
+                self::gpgpu::rect_worklist_probe_ready() as u8
+            );
+            let _ = self::gpgpu::submit_canvas3d_project_once();
+            let _ = self::gpgpu::submit_canvas3d_transform_smoke_once();
+            let _ = self::gpgpu::submit_canvas3d_clip_box_q16_once();
+            let _ = self::gpgpu::submit_canvas3d_plane_sample_rgba8_once();
+            let _ = self::gpgpu::submit_canvas3d_plane_fill_rgba8_once();
+            let _ = self::gpgpu::submit_canvas3d_plane_patch_fill_cut_rgba8_once();
+            let _ = self::gpgpu::submit_canvas3d_plane_patch_worklist_rgba8_once();
+        } else {
+            crate::log!("intel/gpgpu: artifact boot smoketests skipped allcaps=0\n");
+        }
     } else {
-        crate::log!("intel/gpgpu: artifact boot smoketests skipped allcaps=0\n");
+        crate::log!(
+            "intel/gpgpu: upload and boot probes skipped device=0x{:04X} name={} reason=logo-only-bringup\n",
+            dev.device_id,
+            display_device_name(dev.device_id)
+        );
     }
-    let _ = self::blt::submit_bcs0_mi_smoke_once();
-    self::fw_probe::log_probe_modules(dev.device_id);
-    self::dmc::wire_load_path(dev);
-    let huc_fw = self::huc::load_fw();
-    let fw = self::guc::load_fw();
-    if fw.len == 0 {
-        crate::log!("intel/guc: firmware module missing or invalid\n");
-        return;
-    }
-    crate::log!(
-        "intel/guc: firmware found phys=0x{:X} gpu=0x{:X} len=0x{:X} xfer=0x{:X}\n",
-        fw.phys,
-        fw.gpu,
-        fw.len,
-        fw.xfer_len
-    );
-    let ads = self::guc::alloc_ads(fw.private_data_size);
-    if ads.len == 0 {
-        crate::log!("intel/guc: ads alloc failed private_data=0x{:X}\n", fw.private_data_size);
-        return;
-    }
-    let huc_mapped = huc_fw.len != 0
-        && map_ggtt(dev, huc_fw.phys, huc_fw.len, huc_fw.gpu)
-        && self::huc::map_rsa(dev);
-    if !map_ggtt(dev, fw.phys, fw.len, fw.gpu) || !map_ggtt(dev, ads.phys, ads.len, ads.gpu) {
-        crate::log!("intel/guc: ggtt map failed fw_len=0x{:X} ads_len=0x{:X}\n", fw.len, ads.len);
-        return;
-    }
-    ggtt_invalidate(dev);
-    forcewake(dev);
-    let huc_uploaded = if huc_fw.len != 0 {
-        if huc_mapped {
-            self::huc::upload_via_dma(dev, huc_fw)
+    if full_ui3_boot {
+        let _ = self::blt::submit_bcs0_mi_smoke_once();
+        self::fw_probe::log_probe_modules(dev.device_id);
+        self::dmc::wire_load_path(dev);
+        let huc_fw = self::huc::load_fw();
+        let fw = self::guc::load_fw();
+        if fw.len == 0 {
+            crate::log!(
+                "intel/guc: firmware module missing or invalid; continuing to display bring-up\n"
+            );
         } else {
             crate::log!(
-                "intel/huc: dma-upload skipped reason=ggtt-map-failed fw_len=0x{:X}\n",
-                huc_fw.len
+                "intel/guc: firmware found phys=0x{:X} gpu=0x{:X} len=0x{:X} xfer=0x{:X}\n",
+                fw.phys,
+                fw.gpu,
+                fw.len,
+                fw.xfer_len
             );
-            false
+            let ads = self::guc::alloc_ads(fw.private_data_size);
+            if ads.len == 0 {
+                crate::log!(
+                    "intel/guc: ads alloc failed private_data=0x{:X}; continuing to display bring-up\n",
+                    fw.private_data_size
+                );
+            } else {
+                let huc_mapped = huc_fw.len != 0
+                    && map_ggtt(dev, huc_fw.phys, huc_fw.len, huc_fw.gpu)
+                    && self::huc::map_rsa(dev);
+                if !map_ggtt(dev, fw.phys, fw.len, fw.gpu)
+                    || !map_ggtt(dev, ads.phys, ads.len, ads.gpu)
+                {
+                    crate::log!(
+                        "intel/guc: ggtt map failed fw_len=0x{:X} ads_len=0x{:X}; continuing to display bring-up\n",
+                        fw.len,
+                        ads.len
+                    );
+                } else {
+                    ggtt_invalidate(dev);
+                    forcewake(dev);
+                    let huc_uploaded = if huc_fw.len != 0 {
+                        if huc_mapped {
+                            self::huc::upload_via_dma(dev, huc_fw)
+                        } else {
+                            crate::log!(
+                                "intel/huc: dma-upload skipped reason=ggtt-map-failed fw_len=0x{:X}\n",
+                                huc_fw.len
+                            );
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                    let ready = self::guc::bootstrap(dev, fw, ads);
+                    let status = self::guc::status(dev);
+                    let (bootrom, ukernel, auth) = self::guc::describe_status(status);
+                    crate::log!(
+                        "intel/guc: bootstrap ready={} status=0x{:08X} bootrom={} ukernel={} auth=0x{:X}\n",
+                        ready as u8,
+                        status,
+                        bootrom,
+                        ukernel,
+                        auth
+                    );
+                    if ready {
+                        let ctb_ready = self::guc_ctb::init_and_enable(dev);
+                        if !ctb_ready {
+                            self::guc::prove_h2g_mmio_once(dev, "boot-control-ctb-disable");
+                        }
+                        if huc_uploaded {
+                            self::huc::authenticate_via_guc(dev, huc_fw);
+                        } else if huc_fw.len != 0 {
+                            crate::log!("intel/huc: auth skipped reason=dma-upload-not-complete\n");
+                        }
+                    }
+                }
+            }
         }
     } else {
-        false
-    };
-    let ready = self::guc::bootstrap(dev, fw, ads);
-    let status = self::guc::status(dev);
-    let (bootrom, ukernel, auth) = self::guc::describe_status(status);
-    crate::log!(
-        "intel/guc: bootstrap ready={} status=0x{:08X} bootrom={} ukernel={} auth=0x{:X}\n",
-        ready as u8,
-        status,
-        bootrom,
-        ukernel,
-        auth
-    );
-    if ready {
-        let ctb_ready = self::guc_ctb::init_and_enable(dev);
-        if !ctb_ready {
-            self::guc::prove_h2g_mmio_once(dev, "boot-control-ctb-disable");
-        }
-        if huc_uploaded {
-            self::huc::authenticate_via_guc(dev, huc_fw);
-        } else if huc_fw.len != 0 {
-            crate::log!("intel/huc: auth skipped reason=dma-upload-not-complete\n");
-        }
+        crate::log!(
+            "intel/guc: firmware/engine bring-up skipped device=0x{:04X} name={} reason=logo-only-bringup\n",
+            dev.device_id,
+            display_device_name(dev.device_id)
+        );
     }
     if DISPLAY_PLANE1_BOOT_DEMO_ENABLED {
         self::display::init_primary_boot_surface(dev);
@@ -369,6 +403,29 @@ pub fn has_claimed_device() -> bool {
 
 pub(crate) fn claimed_device() -> Option<Dev> {
     *CLAIMED_DEVICE.lock()
+}
+
+pub(crate) fn full_ui3_boot_enabled() -> bool {
+    claimed_device()
+        .map(|dev| full_ui3_boot_enabled_for_device(dev.device_id))
+        .unwrap_or(false)
+}
+
+pub(crate) fn display_device_name(device_id: u16) -> &'static str {
+    match device_id {
+        PCI_DEVICE_ALDER_LAKE_S_GT1 => "alder-lake-s-gt1",
+        PCI_DEVICE_ALDER_LAKE_N_N100_UHD => "alder-lake-n-n100-uhd",
+        PCI_DEVICE_RAPTOR_LAKE_S_GT1_UHD770 => "raptor-lake-s-gt1-uhd770",
+        _ => "intel-display-unknown",
+    }
+}
+
+fn full_ui3_boot_enabled_for_device(device_id: u16) -> bool {
+    !matches!(device_id, PCI_DEVICE_ALDER_LAKE_N_N100_UHD)
+}
+
+fn media_decode_enabled_for_device(device_id: u16) -> bool {
+    !matches!(device_id, PCI_DEVICE_ALDER_LAKE_N_N100_UHD)
 }
 
 pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
@@ -495,6 +552,17 @@ pub fn guc_status(_state: ()) -> u32 {
 
 pub(crate) fn clear_primary_surface_color(color: u32, reason: &str) -> bool {
     self::display::clear_primary_surface_color(color, reason)
+}
+
+pub(crate) async fn wait_hw_logo_sequence_done() {
+    self::display::wait_hw_logo_sequence_done().await
+}
+
+pub(crate) fn present_i226_diagnostic_screen(
+    snapshot: crate::net::i226::I226Snapshot,
+    reason: &str,
+) -> bool {
+    self::display::present_i226_diagnostic_screen(snapshot, reason)
 }
 
 pub(crate) fn capture_primary_surface_bgra8() -> Option<self::display::PrimarySurfaceBgra8Snapshot>
@@ -671,7 +739,9 @@ pub async fn run_media2_first_frame_async() -> Option<self::xelp_media2_ngin::Me
 }
 
 pub(crate) fn has_media_decode_engine() -> bool {
-    has_claimed_device()
+    claimed_device()
+        .map(|dev| media_decode_enabled_for_device(dev.device_id))
+        .unwrap_or(false)
 }
 
 pub(crate) fn hw_pic_service()

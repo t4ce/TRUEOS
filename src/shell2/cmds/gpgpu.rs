@@ -4,8 +4,8 @@ use embassy_executor::Spawner;
 
 use super::super::{ShellBackend2, print_shell_line};
 use crate::intel::gpgpu::{
-    MANDEL64_WORKLIST_DEFAULT_ITERATIONS, shell_mandel64_worklist_scanout,
-    shell_twemoji_atlas_worklist_scanout,
+    MANDEL64_WORKLIST_DEFAULT_ITERATIONS, MANDEL64_WORKLIST_MAX_ITERATIONS,
+    shell_mandel64_worklist_scanout, shell_twemoji_atlas_worklist_scanout,
 };
 use crate::shell2::shell2_cmd::{CommandSessionKind, ParseOutcome};
 
@@ -13,7 +13,7 @@ const CANVAS2D_SPRITES64_COUNT: u32 = 16;
 
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "gpgpu canvas2d sprites64");
-    print_shell_line(io, "gpgpu canvas2d mandel64");
+    print_shell_line(io, "gpgpu canvas2d mandel64 [iterations]");
     print_shell_line(io, "gpgpu canvas3d cube");
     print_shell_line(io, "gpgpu canvas3d ico");
     print_shell_line(io, "gpgpu smoke");
@@ -33,14 +33,14 @@ fn run_canvas2d(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) 
         usage(io);
         return;
     };
-    if !expect_no_more(io, args) {
-        return;
-    }
 
     if kind.eq_ignore_ascii_case("sprites64") {
+        if !expect_no_more(io, args) {
+            return;
+        }
         run_canvas2d_sprites64(io);
     } else if kind.eq_ignore_ascii_case("mandel64") {
-        run_canvas2d_mandel64(io);
+        run_canvas2d_mandel64(io, args);
     } else {
         usage(io);
     }
@@ -78,8 +78,22 @@ fn run_canvas2d_sprites64(io: &'static dyn ShellBackend2) -> bool {
     result.ok
 }
 
-fn run_canvas2d_mandel64(io: &'static dyn ShellBackend2) -> bool {
-    let Some(result) = shell_mandel64_worklist_scanout(MANDEL64_WORKLIST_DEFAULT_ITERATIONS) else {
+fn run_canvas2d_mandel64(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) -> bool {
+    let iterations = match args.next() {
+        Some(value) => match value.parse::<u32>() {
+            Ok(iterations) => iterations.clamp(1, MANDEL64_WORKLIST_MAX_ITERATIONS),
+            Err(_) => {
+                usage(io);
+                return false;
+            }
+        },
+        None => MANDEL64_WORKLIST_DEFAULT_ITERATIONS,
+    };
+    if !expect_no_more(io, args) {
+        return false;
+    }
+
+    let Some(result) = shell_mandel64_worklist_scanout(iterations) else {
         print_shell_line(
             io,
             "gpgpu canvas2d mandel64: no result (check primary surface, iGPU claim, and mandel artifact)",
@@ -87,8 +101,9 @@ fn run_canvas2d_mandel64(io: &'static dyn ShellBackend2) -> bool {
         return false;
     };
     let msg = alloc::format!(
-        "gpgpu canvas2d mandel64: mode=mandel64-worklist ok={} requested={} desc={} walkers={} pixels={} submit_ms={} present_ms={} total_ms={} last_src={},{} last_dst={},{} primary={}x{} desc_gpu=0x{:X} presented={}",
+        "gpgpu canvas2d mandel64: mode=mandel64-worklist ok={} iterations={} requested={} desc={} walkers={} pixels={} submit_ms={} present_ms={} total_ms={} last_src={},{} last_dst={},{} primary={}x{} desc_gpu=0x{:X} presented={}",
         result.ok as u8,
+        iterations,
         result.requested,
         result.descriptors,
         result.walkers,
@@ -144,7 +159,8 @@ fn run_smoke(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
         return;
     }
     let sprites_ok = run_canvas2d_sprites64(io);
-    let mandel_ok = run_canvas2d_mandel64(io);
+    let mut mandel_args = "".split_whitespace();
+    let mandel_ok = run_canvas2d_mandel64(io, &mut mandel_args);
     let msg = alloc::format!(
         "gpgpu smoke: canvas2d_sprites64={} canvas2d_mandel64={} ok={}",
         sprites_ok as u8,
