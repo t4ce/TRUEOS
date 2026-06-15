@@ -86,9 +86,17 @@ pub fn init_ap(lapic_id: u32, cpu_index: u32) {
 }
 
 pub fn init_executor() -> &'static mut RawExecutor {
-    let executor = Box::leak(Box::new(RawExecutor::new(core::ptr::null_mut())));
-    unsafe {
-        (&mut *this_cpu_ptr()).set_executor_ptr(executor as *mut RawExecutor);
+    let cpu_ptr = this_cpu_ptr();
+    let context = if cpu_ptr.is_null() {
+        core::ptr::null_mut()
+    } else {
+        unsafe { (*cpu_ptr).cpu_index() as usize as *mut () }
+    };
+    let executor = Box::leak(Box::new(RawExecutor::new(context)));
+    if !cpu_ptr.is_null() {
+        unsafe {
+            (&mut *cpu_ptr).set_executor_ptr(executor as *mut RawExecutor);
+        }
     }
     executor
 }
@@ -187,6 +195,8 @@ fn init_with(lapic_id: u32, cpu_index: u32, _tag: &str) {
 
     #[cfg(not(target_arch = "x86_64"))]
     CURRENT_CPU_PTR.store(ptr, Ordering::Release);
+
+    let _ = crate::unhlt_isr::enable_local_apic_for_this_cpu();
 
     PERCPU_READY.store(true, Ordering::Release);
 

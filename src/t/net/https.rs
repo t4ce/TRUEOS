@@ -465,7 +465,7 @@ fn spawn_cabi_net_fetch_bytes(op_id: u32, url: String, timeout_ms: u32, max_byte
 
 fn pick_net_fetch_background_spawner(
     caller_slot: u32,
-) -> Option<(u32, u8, embassy_executor::SendSpawner)> {
+) -> Option<(u32, u8, crate::workers::WorkerSpawner)> {
     crate::workers::pick_background_spawner_where(|slot| {
         (!crate::workers::is_background_worker_slot(caller_slot) || slot != caller_slot)
             && crate::hv::lane::is_carrier_lane_free(slot)

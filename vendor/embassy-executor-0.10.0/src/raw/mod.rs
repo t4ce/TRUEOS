@@ -429,6 +429,7 @@ impl Pender {
 pub(crate) struct SyncExecutor {
     run_queue: RunQueue,
     pender: Pender,
+    ready_tasks: AtomicUsize,
     spawned_tasks: AtomicUsize,
 }
 
@@ -437,8 +438,23 @@ impl SyncExecutor {
         Self {
             run_queue: RunQueue::new(),
             pender,
+            ready_tasks: AtomicUsize::new(0),
             spawned_tasks: AtomicUsize::new(0),
         }
+    }
+
+    #[inline]
+    fn note_task_queued(&self) {
+        self.ready_tasks.fetch_add(1, Ordering::AcqRel);
+    }
+
+    #[inline]
+    fn note_task_dequeued(&self) {
+        let _ = self
+            .ready_tasks
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                Some(count.saturating_sub(1))
+            });
     }
 
     /// Enqueue a task in the task queue
@@ -452,6 +468,7 @@ impl SyncExecutor {
         #[cfg(feature = "_any_trace")]
         trace::task_ready_begin(self, &task);
 
+        self.note_task_queued();
         if self.run_queue.enqueue(task, l) {
             self.pender.pend();
         }
@@ -479,6 +496,7 @@ impl SyncExecutor {
         trace::poll_start(self);
 
         self.run_queue.dequeue_all(|p| {
+            self.note_task_dequeued();
             let task = p.header();
 
             #[cfg(feature = "_any_trace")]
@@ -497,6 +515,10 @@ impl SyncExecutor {
 
     pub fn spawned_task_count(&self) -> usize {
         self.spawned_tasks.load(Ordering::Acquire)
+    }
+
+    pub fn ready_task_count(&self) -> usize {
+        self.ready_tasks.load(Ordering::Acquire)
     }
 }
 
@@ -598,6 +620,11 @@ impl Executor {
         self.inner.spawned_task_count()
     }
 
+    /// Return the number of tasks currently queued to be polled.
+    pub fn ready_task_count(&'static self) -> usize {
+        self.inner.ready_task_count()
+    }
+
     /// Get a spawner that spawns tasks in this executor.
     ///
     /// It is OK to call this method multiple times to obtain multiple
@@ -635,6 +662,7 @@ pub fn wake_task_no_pend(task: TaskRef) {
         // We have just marked the task as scheduled, so enqueue it.
         unsafe {
             let executor = header.executor.load(Ordering::Relaxed).as_ref().unwrap_unchecked();
+            executor.note_task_queued();
             executor.run_queue.enqueue(task, l);
         }
     });

@@ -1,7 +1,7 @@
 use alloc::{string::String, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use embassy_executor::{SendSpawner, SpawnError, SpawnToken, Spawner};
+use embassy_executor::{SpawnError, SpawnToken, Spawner};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use crate::r::spawn_spec::{SpawnAttempt, TaskSpec};
@@ -255,7 +255,7 @@ fn spawn_local<S>(
 #[inline]
 fn spawn_on_ap1<S: Send>(
     spawner: Spawner,
-    task: impl FnOnce(SendSpawner) -> Result<SpawnToken<S>, SpawnError>,
+    task: impl FnOnce(crate::workers::WorkerSpawner) -> Result<SpawnToken<S>, SpawnError>,
 ) -> SpawnAttempt {
     let _ = spawner; // keep signature stable; this task intentionally targets AP1.
     let Some(profile) = crate::cpu::CpuProfile::for_slot(1) else {
@@ -276,7 +276,7 @@ fn spawn_on_ap1<S: Send>(
 #[inline]
 fn spawn_on_worker<S: Send>(
     spawner: Spawner,
-    task: impl FnOnce(SendSpawner) -> Result<SpawnToken<S>, SpawnError>,
+    task: impl FnOnce(crate::workers::WorkerSpawner) -> Result<SpawnToken<S>, SpawnError>,
 ) -> SpawnAttempt {
     let Some(worker_spawner) = crate::workers::pick_background_spawner() else {
         let _ = spawner;

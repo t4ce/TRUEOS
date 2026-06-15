@@ -135,7 +135,6 @@ pub fn set_idle_policy(policy: IdlePolicy) -> IdlePolicy {
     IdlePolicy::from_u8(prev)
 }
 
-
 pub fn current_ratio() -> Option<u8> {
     let caps = caps()?;
     if !msr_armed() || !caps.has_msr || !caps.has_eist {

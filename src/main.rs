@@ -82,10 +82,10 @@ mod tst_tactics_srv;
 #[path = "tst/ws_time.rs"]
 mod tst_ws_time;
 mod turbo;
-mod unhlt_isr;
 #[allow(non_snake_case)]
 mod tyche;
 mod ui3;
+mod unhlt_isr;
 #[path = "usb3/mod.rs"]
 pub(crate) mod usb3;
 mod virtio_gpu_logo;

@@ -195,6 +195,15 @@ pub fn poll() {
     }
 }
 
+pub fn next_wake_tick() -> Option<u64> {
+    QUEUE.lock().first().map(|entry| entry.at)
+}
+
+pub fn ticks_until_next_wake() -> Option<u64> {
+    let now = embassy_time_driver::now();
+    next_wake_tick().map(|at| at.saturating_sub(now))
+}
+
 struct TimeDriver;
 
 impl Driver for TimeDriver {

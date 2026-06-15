@@ -12,7 +12,13 @@ mod thread {
     use crate::{Spawner, raw};
 
     #[unsafe(export_name = "__pender")]
-    fn __pender(_context: *mut ()) {}
+    fn __pender(context: *mut ()) {
+        unsafe extern "Rust" {
+            fn __trueos_embassy_pender(context: *mut ());
+        }
+
+        unsafe { __trueos_embassy_pender(context) };
+    }
 
     /// Spin Executor
     pub struct Executor {
@@ -58,6 +64,11 @@ mod thread {
         /// Return the number of currently spawned tasks attached to this executor.
         pub fn spawned_task_count(&'static self) -> usize {
             self.inner.spawned_task_count()
+        }
+
+        /// Return the number of tasks currently queued to be polled.
+        pub fn ready_task_count(&'static self) -> usize {
+            self.inner.ready_task_count()
         }
     }
 }
