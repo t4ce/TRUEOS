@@ -102,7 +102,8 @@ define_started_flags!(
     SURFER_PARSE_POOL_STARTED,
     UI3_ORBITS_STARTED,
     UI3_ASSET_SERVICE_STARTED,
-    UI3_SERVICE_STARTED
+    UI3_SERVICE_STARTED,
+    I226_DIAGNOSTIC_DISPLAY_STARTED
 );
 
 #[cfg(feature = "trueos_rdp")]
@@ -432,6 +433,10 @@ fn spawn_net_service(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
+fn spawn_i226_diagnostic_display(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |_worker_spawner| crate::net::i226::i226_diagnostic_display_task())
+}
+
 fn spawn_net_cache_service(spawner: Spawner) -> SpawnAttempt {
     spawn_bool_result_to_attempt(crate::net::cache_service::ensure_service_started(spawner))
 }
@@ -598,6 +603,16 @@ fn gfx_backend_boot_gate() -> bool {
 #[inline]
 fn intel_cursor_service_gate() -> bool {
     crate::intel::has_claimed_device()
+}
+
+#[inline]
+fn intel_full_ui3_gate() -> bool {
+    crate::intel::full_ui3_boot_enabled()
+}
+
+#[inline]
+fn i226_diagnostic_display_gate() -> bool {
+    crate::intel::has_claimed_device() && crate::net::i226::has_primary_snapshot()
 }
 
 #[inline]
@@ -966,7 +981,7 @@ async fn bp_autostart_task() {
         "inline://trueos/input.html",
         include_str!("../../crates/trueos-qjs/src/html/input.html"),
     );
-    let _ = crate::surfer::html_shack::enqueue_ready_html_for_browser(html).await;
+    //let _ = crate::surfer::html_shack::enqueue_ready_html_for_browser(html).await;
 }
 
 fn spawn_bp_autostart(spawner: Spawner) -> SpawnAttempt {
@@ -1031,9 +1046,9 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 #[cfg(feature = "trueos_rdp")]
-const TASK_COUNT: usize = 53;
+const TASK_COUNT: usize = 54;
 #[cfg(not(feature = "trueos_rdp"))]
-const TASK_COUNT: usize = 52;
+const TASK_COUNT: usize = 53;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1167,7 +1182,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &USB_CONTROLLER_TASKS_STARTED,
         spawn_usb_controller_tasks,
     ),
-    TaskSpec::enabled("esp-gate", 0, &ESP_GATE_STARTED, spawn_esp_gate),
+    TaskSpec::disabled("esp-gate", 0, &ESP_GATE_STARTED, spawn_esp_gate),
     TaskSpec::disabled("esp-gate-registry", 0, &ESP_GATE_REGISTRY_STARTED, spawn_esp_gate_registry),
     TaskSpec::disabled("esp-piano-audio", 0, &ESP_PIANO_AUDIO_STARTED, spawn_esp_piano_audio),
     TaskSpec::enabled(
@@ -1216,6 +1231,13 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &HW_LOGO_PRESENT_TASK_STARTED,
         spawn_hw_logo_present_task,
     ),
+    TaskSpec::enabled_gated(
+        "i226-diagnostic-display",
+        0,
+        i226_diagnostic_display_gate,
+        &I226_DIAGNOSTIC_DISPLAY_STARTED,
+        spawn_i226_diagnostic_display,
+    ),
     TaskSpec::disabled(
         "intel-hda-audio-demo",
         0,
@@ -1244,14 +1266,14 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled_gated(
         "ui3-service",
         crate::r::readiness::UI3_INTEL_PRESENT_READY,
-        intel_cursor_service_gate,
+        intel_full_ui3_gate,
         &UI3_SERVICE_STARTED,
         spawn_ui3_service,
     ),
     TaskSpec::enabled_gated(
         "ui3-orbits",
         crate::r::readiness::UI3_INTEL_PRESENT_READY,
-        intel_cursor_service_gate,
+        intel_full_ui3_gate,
         &UI3_ORBITS_STARTED,
         spawn_ui3_orbits,
     ),
@@ -1269,7 +1291,13 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     TaskSpec::enabled("uart-shell", 0, &UART_SHELL_STARTED, spawn_uart_shell),
     TaskSpec::enabled("net-tcp-shell", 0, &NET_TCP_SHELL_STARTED, spawn_net_tcp_shell),
-    TaskSpec::enabled("ui3-shell", 0, &UI3_SHELL_STARTED, spawn_ui3_shell),
+    TaskSpec::enabled_gated(
+        "ui3-shell",
+        crate::r::readiness::UI3_INTEL_PRESENT_READY,
+        intel_full_ui3_gate,
+        &UI3_SHELL_STARTED,
+        spawn_ui3_shell,
+    ),
     TaskSpec::disabled("atomic_bomb", 0, &ATOMIC_BOMB_STARTED, spawn_atomic_bomb),
 ];
 

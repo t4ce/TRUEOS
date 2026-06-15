@@ -10,7 +10,7 @@
 // accepted=1` before a displayed pixel can be attributed to GPU rendering.
 
 use crate::intel::types::{Rgba8, UiRect, UiSurface, UiSurfaceFormat};
-use alloc::{collections::VecDeque, vec::Vec};
+use alloc::{collections::VecDeque, string::String, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
@@ -600,8 +600,15 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     };
     *PRIMARY_SURFACE.lock() = Some(primary_surface);
     let default_overlay_marker_ok = init_default_overlay_marker(dev, primary_surface);
-    if ok {
+    let ui3_boot = crate::intel::full_ui3_boot_enabled();
+    if ok && ui3_boot {
         crate::r::readiness::set(crate::r::readiness::UI3_INTEL_PRESENT_READY);
+    } else if ok {
+        crate::log!(
+            "intel/display: ui3-ready held device=0x{:04X} name={} reason=logo-only-bringup\n",
+            dev.device_id,
+            crate::intel::display_device_name(dev.device_id)
+        );
     }
     let ui2_base_ok = false;
     let ui2_frame_ok = false;
@@ -628,7 +635,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     }
 
     crate::log!(
-        "intel/display: primary-boot-surface pipe={} size={}x{} backing={}x{} pitch=0x{:X} bytes=0x{:X} guard={} gpu=0x{:X} phys=0x{:X} plane_enabled={} ctl_before=0x{:08X} ctl_after=0x{:08X} surf_before=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ok={} logo={} default_overlay_marker={} ui2_base={} ui2_frame={}\n",
+        "intel/display: primary-boot-surface pipe={} size={}x{} backing={}x{} pitch=0x{:X} bytes=0x{:X} guard={} gpu=0x{:X} phys=0x{:X} plane_enabled={} ctl_before=0x{:08X} ctl_after=0x{:08X} surf_before=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ok={} logo={} ui3_ready={} default_overlay_marker={} ui2_base={} ui2_frame={}\n",
         pipe.name,
         width,
         height,
@@ -647,6 +654,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         surf_live,
         ok as u8,
         logo_ok as u8,
+        (ok && ui3_boot) as u8,
         default_overlay_marker_ok as u8,
         ui2_base_ok as u8,
         ui2_frame_ok as u8
@@ -1140,6 +1148,273 @@ pub(crate) fn clear_primary_surface_color(color: u32, reason: &str) -> bool {
         presented as u8,
     );
     presented
+}
+
+pub(crate) fn present_i226_diagnostic_screen(
+    snapshot: crate::net::i226::I226Snapshot,
+    reason: &str,
+) -> bool {
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+        crate::log!(
+            "intel/display: i226-screen skipped reason={} cause=no-primary-surface\n",
+            reason
+        );
+        return false;
+    };
+    if surface.virt.is_null()
+        || surface.width == 0
+        || surface.height == 0
+        || surface.pitch_bytes == 0
+    {
+        crate::log!("intel/display: i226-screen skipped reason={} cause=bad-surface\n", reason);
+        return false;
+    }
+
+    let byte_len = (surface.pitch_bytes as usize).saturating_mul(surface.height as usize);
+    if byte_len == 0 {
+        crate::log!("intel/display: i226-screen skipped reason={} cause=empty-surface\n", reason);
+        return false;
+    }
+
+    fill_surface_color(
+        surface.virt,
+        surface.pitch_bytes as usize,
+        surface.width,
+        surface.height,
+        0x00FF_FFFF,
+    );
+
+    let title_scale = if surface.width >= 1920 { 8 } else { 5 };
+    let body_scale = if surface.width >= 1920 { 4 } else { 3 };
+    let left = 72u32.min(surface.width.saturating_sub(1));
+    let mut y = 72u32.min(surface.height.saturating_sub(1));
+    let title = "NETWORK CARD";
+    let title_pixels = draw_primary_text_line(surface, left, y, title_scale, title);
+    y = y.saturating_add(title_scale.saturating_mul(11));
+    let subtitle = "INTEL I226-V CLAIMED - PASSIVE DIAGNOSTIC MODE";
+    let subtitle_pixels = draw_primary_text_line(surface, left, y, body_scale, subtitle);
+    y = y.saturating_add(body_scale.saturating_mul(12));
+
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(alloc::format!(
+        "BDF {:02X}:{:02X}.{}  VID:PID {:04X}:{:04X}  REV {:02X}",
+        snapshot.bus,
+        snapshot.slot,
+        snapshot.function,
+        snapshot.vendor,
+        snapshot.device,
+        snapshot.revision
+    ));
+    lines.push(alloc::format!(
+        "CLASS {:02X}:{:02X}.{:02X}  PCI CMD {:04X}->{:04X}  PCI STATUS {:04X}",
+        snapshot.class,
+        snapshot.subclass,
+        snapshot.prog_if,
+        snapshot.pci_command_before,
+        snapshot.pci_command_after,
+        snapshot.pci_status
+    ));
+    lines.push(alloc::format!(
+        "BAR{} PHYS 0X{:X}  BAR SIZE 0X{:X}  MAP SIZE 0X{:X}",
+        snapshot.bar_index,
+        snapshot.bar_phys,
+        snapshot.bar_size,
+        snapshot.map_size
+    ));
+    lines.push(alloc::format!(
+        "MAC {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+        snapshot.mac[0],
+        snapshot.mac[1],
+        snapshot.mac[2],
+        snapshot.mac[3],
+        snapshot.mac[4],
+        snapshot.mac[5]
+    ));
+    lines.push(alloc::format!(
+        "STATUS 0X{:08X}  LINK RAW={}  SPEED RAW={}MBIT  FULL DUPLEX RAW={}",
+        snapshot.status,
+        yes_no(snapshot.raw_link_up()),
+        snapshot.raw_speed_mbps(),
+        yes_no(snapshot.raw_full_duplex())
+    ));
+    lines.push(alloc::format!(
+        "CTRL 0X{:08X}  EECD 0X{:08X}  ICR 0X{:08X}  IMS 0X{:08X}",
+        snapshot.ctrl,
+        snapshot.eecd,
+        snapshot.icr,
+        snapshot.ims
+    ));
+    lines.push(alloc::format!(
+        "RCTL 0X{:08X}  TCTL 0X{:08X}  MSI-X VECTORS {}",
+        snapshot.rctl,
+        snapshot.tctl,
+        snapshot.msix_vectors
+    ));
+    lines.push(alloc::format!(
+        "CAP MASK 0X{:08X}  CAPS {}  PASSIVE {}",
+        snapshot.cap_mask,
+        snapshot.caps_text(),
+        yes_no(snapshot.passive)
+    ));
+    lines.push(String::from("RX/TX DMA DEFERRED. NO RESET. NO RINGS. NO PACKET HANDOFF YET."));
+    lines.push(String::from(
+        "THIS SCREEN WAS DRAWN 10S AFTER THE BOOT LOGO USING OWNED PRIMARY SCANOUT.",
+    ));
+
+    let mut text_pixels = title_pixels.saturating_add(subtitle_pixels);
+    for line in lines.iter() {
+        text_pixels = text_pixels.saturating_add(draw_primary_text_line(
+            surface,
+            left,
+            y,
+            body_scale,
+            line.as_str(),
+        ));
+        y = y.saturating_add(body_scale.saturating_mul(10));
+        if y >= surface.height.saturating_sub(body_scale.saturating_mul(8)) {
+            break;
+        }
+    }
+
+    crate::intel::dma_flush(surface.virt, byte_len);
+    let presented = notify_primary_surface_present(surface, reason, byte_len);
+    crate::log!(
+        "intel/display: i226-screen reason={} bdf={:02x}:{:02x}.{} size={}x{} pitch=0x{:X} bytes=0x{:X} text_pixels={} presented={}\n",
+        reason,
+        snapshot.bus,
+        snapshot.slot,
+        snapshot.function,
+        surface.width,
+        surface.height,
+        surface.pitch_bytes,
+        byte_len,
+        text_pixels,
+        presented as u8
+    );
+    presented
+}
+
+fn yes_no(v: bool) -> &'static str {
+    if v { "YES" } else { "NO" }
+}
+
+fn draw_primary_text_line(
+    surface: PrimarySurface,
+    x: u32,
+    y: u32,
+    scale: u32,
+    text: &str,
+) -> usize {
+    if scale == 0 || surface.virt.is_null() {
+        return 0;
+    }
+    let mut pen_x = x;
+    let mut pixels = 0usize;
+    let advance = scale.saturating_mul(6);
+    for ch in text.chars() {
+        if pen_x >= surface.width {
+            break;
+        }
+        pixels = pixels.saturating_add(draw_primary_glyph(surface, pen_x, y, scale, ch));
+        pen_x = pen_x.saturating_add(advance);
+    }
+    pixels
+}
+
+fn draw_primary_glyph(surface: PrimarySurface, x: u32, y: u32, scale: u32, ch: char) -> usize {
+    let glyph = glyph5x7(ch);
+    let pitch = surface.pitch_bytes as usize;
+    let mut pixels = 0usize;
+    for (row_idx, row_bits) in glyph.iter().copied().enumerate() {
+        for col in 0..5u32 {
+            if (row_bits & (1 << (4 - col))) == 0 {
+                continue;
+            }
+            let px0 = x.saturating_add(col.saturating_mul(scale));
+            let py0 = y.saturating_add((row_idx as u32).saturating_mul(scale));
+            for sy in 0..scale {
+                let py = py0.saturating_add(sy);
+                if py >= surface.height {
+                    continue;
+                }
+                for sx in 0..scale {
+                    let px = px0.saturating_add(sx);
+                    if px >= surface.width {
+                        continue;
+                    }
+                    let off = (py as usize).saturating_mul(pitch).saturating_add(
+                        (px as usize).saturating_mul(PRIMARY_BYTES_PER_PIXEL as usize),
+                    );
+                    if off.saturating_add(core::mem::size_of::<u32>()) > surface.byte_len {
+                        continue;
+                    }
+                    unsafe {
+                        core::ptr::write_volatile(surface.virt.add(off) as *mut u32, 0x0000_0000);
+                    }
+                    pixels = pixels.saturating_add(1);
+                }
+            }
+        }
+    }
+    pixels
+}
+
+fn glyph5x7(ch: char) -> [u8; 7] {
+    let upper = if ch.is_ascii_lowercase() {
+        ((ch as u8) - b'a' + b'A') as char
+    } else {
+        ch
+    };
+    match upper {
+        'A' => [0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
+        'B' => [0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E],
+        'C' => [0x0F, 0x10, 0x10, 0x10, 0x10, 0x10, 0x0F],
+        'D' => [0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E],
+        'E' => [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F],
+        'F' => [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10],
+        'G' => [0x0F, 0x10, 0x10, 0x13, 0x11, 0x11, 0x0F],
+        'H' => [0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
+        'I' => [0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x1F],
+        'J' => [0x01, 0x01, 0x01, 0x01, 0x11, 0x11, 0x0E],
+        'K' => [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11],
+        'L' => [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F],
+        'M' => [0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11],
+        'N' => [0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11],
+        'O' => [0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
+        'P' => [0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10],
+        'Q' => [0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D],
+        'R' => [0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11],
+        'S' => [0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E],
+        'T' => [0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
+        'U' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
+        'V' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04],
+        'W' => [0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0A],
+        'X' => [0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11],
+        'Y' => [0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04],
+        'Z' => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F],
+        '0' => [0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E],
+        '1' => [0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E],
+        '2' => [0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F],
+        '3' => [0x1E, 0x01, 0x01, 0x0E, 0x01, 0x01, 0x1E],
+        '4' => [0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02],
+        '5' => [0x1F, 0x10, 0x10, 0x1E, 0x01, 0x01, 0x1E],
+        '6' => [0x0E, 0x10, 0x10, 0x1E, 0x11, 0x11, 0x0E],
+        '7' => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
+        '8' => [0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E],
+        '9' => [0x0E, 0x11, 0x11, 0x0F, 0x01, 0x01, 0x0E],
+        ':' => [0x00, 0x04, 0x04, 0x00, 0x04, 0x04, 0x00],
+        '.' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C],
+        '-' => [0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00],
+        '>' => [0x10, 0x08, 0x04, 0x02, 0x04, 0x08, 0x10],
+        '/' => [0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x10],
+        '=' => [0x00, 0x1F, 0x00, 0x00, 0x1F, 0x00, 0x00],
+        '(' => [0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02],
+        ')' => [0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08],
+        '_' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F],
+        ',' => [0x00, 0x00, 0x00, 0x00, 0x0C, 0x04, 0x08],
+        ' ' => [0; 7],
+        _ => [0x1F, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04],
+    }
 }
 
 fn log_surface_samples(surface: PrimarySurface, label: &str) {
@@ -2749,12 +3024,15 @@ fn notify_primary_surface_present(surface: PrimarySurface, reason: &str, byte_le
     }
 
     // Fast path: if the plane is already active (seq > 1) and PLANE_SURF
-    // already points to our surface, skip MMIO writes and vblank waits.
+    // already points to our surface with matching geometry, skip MMIO writes
+    // and vblank waits.
     // The display scanner is already reading from this address; new pixel
     // data is visible as soon as the CPU cache flush completes.
     if seq > 1 {
         let surf_current = crate::intel::mmio_read(dev, surface.pipe.plane_surf_off);
-        if surf_current == surface_reg {
+        let regs_match = surf_current == surface_reg
+            && primary_plane_surface_regs_match(dev, surface, surface_reg);
+        if regs_match {
             if should_log_primary_present(seq) {
                 intel_display_verbose_log!(
                     "intel/display: primary-flip seq={} reason={} pipe={} surf=0x{:08X} fast-skip\n",
@@ -2766,23 +3044,44 @@ fn notify_primary_surface_present(surface: PrimarySurface, reason: &str, byte_le
             }
             return true;
         }
-        // Different surface address: write and wait one vblank.
-        crate::intel::mmio_write(dev, surface.pipe.plane_surf_off, surface_reg);
-        let (frame_before, frame_after, frame_iters) = wait_for_pipe_next_frame(dev, surface.pipe);
+
+        let stride_before = crate::intel::mmio_read(dev, surface.pipe.plane_stride_off);
+        let size_before =
+            crate::intel::mmio_read(dev, surface.pipe.plane_ctl_off + UNI_PLANE_SIZE_OFF);
+        let pos_before =
+            crate::intel::mmio_read(dev, surface.pipe.plane_ctl_off + UNI_PLANE_POS_OFF);
+        let offset_before =
+            crate::intel::mmio_read(dev, surface.pipe.plane_ctl_off + UNI_PLANE_OFFSET_OFF);
+        let ctl_before = crate::intel::mmio_read(dev, surface.pipe.plane_ctl_off);
+        let (_, _, surf_live_after, iter) = program_primary_plane_and_wait(
+            dev,
+            surface.pipe,
+            surface.width,
+            surface.height,
+            surface.pitch_bytes,
+            surface_reg,
+            reason,
+        );
+        let surf_after = crate::intel::mmio_read(dev, surface.pipe.plane_surf_off);
         if should_log_primary_present(seq) {
             intel_display_verbose_log!(
-                "intel/display: primary-flip seq={} reason={} pipe={} surf=0x{:08X}=>0x{:08X} frame={}=>{} frame_wait={}\n",
+                "intel/display: primary-flip seq={} reason={} pipe={} rearm=1 regs_match={} surf=0x{:08X}=>0x{:08X} surf_live=0x{:08X} stride_before=0x{:08X} size_before=0x{:08X} pos_before=0x{:08X} offset_before=0x{:08X} ctl_before=0x{:08X} iter={}\n",
                 seq,
                 reason,
                 surface.pipe.name,
+                regs_match as u8,
                 surf_current,
-                surface_reg,
-                frame_before,
-                frame_after,
-                frame_iters,
+                surf_after,
+                surf_live_after,
+                stride_before,
+                size_before,
+                pos_before,
+                offset_before,
+                ctl_before,
+                iter,
             );
         }
-        return true;
+        return surf_after == surface_reg || surf_live_after == surface_reg;
     }
 
     let surf_before = crate::intel::mmio_read(dev, surface.pipe.plane_surf_off);
@@ -2830,6 +3129,33 @@ fn notify_primary_surface_present(surface: PrimarySurface, reason: &str, byte_le
     }
 
     true
+}
+
+fn primary_plane_surface_regs_match(
+    dev: crate::intel::Dev,
+    surface: PrimarySurface,
+    surface_reg: u32,
+) -> bool {
+    let Some(stride_reg) = plane_stride_reg_value(surface.pitch_bytes) else {
+        return false;
+    };
+    let ctl = crate::intel::mmio_read(dev, surface.pipe.plane_ctl_off);
+    let ctl_expected = primary_plane_ctl_enabled(ctl);
+    let ctl_match_mask = PLANE_CTL_ENABLE
+        | PLANE_CTL_ARB_SLOTS_MASK
+        | PLANE_CTL_FORMAT_MASK_SKL
+        | PLANE_CTL_KEY_ENABLE_MASK
+        | PLANE_CTL_TILED_MASK
+        | PLANE_CTL_ORDER_RGBX;
+    crate::intel::mmio_read(dev, surface.pipe.plane_surf_off) == surface_reg
+        && crate::intel::mmio_read(dev, surface.pipe.plane_stride_off) == stride_reg
+        && crate::intel::mmio_read(dev, surface.pipe.plane_ctl_off + UNI_PLANE_POS_OFF)
+            == plane_pos_reg_value(0, 0)
+        && crate::intel::mmio_read(dev, surface.pipe.plane_ctl_off + UNI_PLANE_SIZE_OFF)
+            == plane_size_reg_value(surface.width, surface.height)
+        && crate::intel::mmio_read(dev, surface.pipe.plane_ctl_off + UNI_PLANE_OFFSET_OFF)
+            == plane_pos_reg_value(0, 0)
+        && (ctl & ctl_match_mask) == (ctl_expected & ctl_match_mask)
 }
 
 #[inline]
