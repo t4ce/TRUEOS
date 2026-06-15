@@ -92,54 +92,70 @@ pub fn registry_change_seq() -> u32 {
 }
 
 pub(crate) fn request_lumen_work_capacity_probe() -> u32 {
-    let seq = LUMEN_WORK_PROBE_SEQ
-        .fetch_add(1, Ordering::AcqRel)
-        .wrapping_add(1);
-    crate::lumen::lumen_net::set_remote_bf16_route_available(false);
-    crate::log!(
-        "esp-gate: lumen work capacity probe requested seq={} timeout_ms={}\n",
-        seq,
-        TRUEOS_LUMEN_WORK_PROBE_TIMEOUT_MS
-    );
-    seq
+    #[cfg(feature = "trueos_lumen")]
+    {
+        let seq = LUMEN_WORK_PROBE_SEQ
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
+        crate::lumen::lumen_net::set_remote_bf16_route_available(false);
+        crate::log!(
+            "esp-gate: lumen work capacity probe requested seq={} timeout_ms={}\n",
+            seq,
+            TRUEOS_LUMEN_WORK_PROBE_TIMEOUT_MS
+        );
+        seq
+    }
+    #[cfg(not(feature = "trueos_lumen"))]
+    {
+        0
+    }
 }
 
 pub(crate) fn prepare_lumen_offload_for_prompt() -> bool {
-    let seq = request_lumen_work_capacity_probe();
-    let start = embassy_time_driver::now();
-    let timeout_ticks = TRUEOS_LUMEN_WORK_PROBE_TIMEOUT_MS
-        .saturating_mul(embassy_time_driver::TICK_HZ.max(1))
-        / 1000;
+    #[cfg(feature = "trueos_lumen")]
+    {
+        let seq = request_lumen_work_capacity_probe();
+        let start = embassy_time_driver::now();
+        let timeout_ticks = TRUEOS_LUMEN_WORK_PROBE_TIMEOUT_MS
+            .saturating_mul(embassy_time_driver::TICK_HZ.max(1))
+            / 1000;
 
-    loop {
-        if LUMEN_WORK_PROBE_RESULT_SEQ.load(Ordering::Acquire) == seq {
-            let sent = LUMEN_WORK_PROBE_RESULT_SENT.load(Ordering::Acquire);
-            let replies = LUMEN_WORK_PROBE_RESULT_REPLIES.load(Ordering::Acquire);
-            let best = LUMEN_WORK_PROBE_RESULT_BEST.load(Ordering::Acquire);
-            let enabled = sent != 0 && replies != 0 && best != 0;
-            crate::lumen::lumen_net::set_remote_bf16_route_available(enabled);
-            crate::log!(
-                "esp-gate: lumen prompt offload gate seq={} sent={} replies={} best={} enabled={}\n",
-                seq,
-                sent,
-                replies,
-                best,
-                if enabled { 1 } else { 0 }
-            );
-            return enabled;
-        }
+        loop {
+            if LUMEN_WORK_PROBE_RESULT_SEQ.load(Ordering::Acquire) == seq {
+                let sent = LUMEN_WORK_PROBE_RESULT_SENT.load(Ordering::Acquire);
+                let replies = LUMEN_WORK_PROBE_RESULT_REPLIES.load(Ordering::Acquire);
+                let best = LUMEN_WORK_PROBE_RESULT_BEST.load(Ordering::Acquire);
+                let enabled = sent != 0 && replies != 0 && best != 0;
+                crate::lumen::lumen_net::set_remote_bf16_route_available(enabled);
+                crate::log!(
+                    "esp-gate: lumen prompt offload gate seq={} sent={} replies={} best={} enabled={}\n",
+                    seq,
+                    sent,
+                    replies,
+                    best,
+                    if enabled { 1 } else { 0 }
+                );
+                return enabled;
+            }
 
-        crate::time::poll();
-        crate::smp::poll();
-        if timeout_ticks != 0 && embassy_time_driver::now().saturating_sub(start) > timeout_ticks {
-            crate::lumen::lumen_net::set_remote_bf16_route_available(false);
-            crate::log!(
-                "esp-gate: lumen prompt offload gate seq={} result=timeout enabled=0\n",
-                seq
-            );
-            return false;
+            crate::time::poll();
+            crate::smp::poll();
+            if timeout_ticks != 0
+                && embassy_time_driver::now().saturating_sub(start) > timeout_ticks
+            {
+                crate::lumen::lumen_net::set_remote_bf16_route_available(false);
+                crate::log!(
+                    "esp-gate: lumen prompt offload gate seq={} result=timeout enabled=0\n",
+                    seq
+                );
+                return false;
+            }
+            core::hint::spin_loop();
         }
-        core::hint::spin_loop();
+    }
+    #[cfg(not(feature = "trueos_lumen"))]
+    {
+        false
     }
 }
 
@@ -163,11 +179,16 @@ fn trueos_node_id(vnet: &VNet) -> u64 {
 }
 
 fn trueos_peer_hello(node_id: u64) -> String {
+    #[cfg(feature = "trueos_lumen")]
+    const CAPS: &str = "registry,status,lumen-work";
+    #[cfg(not(feature = "trueos_lumen"))]
+    const CAPS: &str = "registry,status";
     format!(
-        "{} v=1 node=0x{:016X} tcp={} caps=registry,status,lumen-work\n",
+        "{} v=1 node=0x{:016X} tcp={} caps={}\n",
         trueos_esp::gate::TRUEOS_SWARM_MAGIC_TEXT,
         node_id,
-        trueos_esp::gate::TRUEOS_PEER_TCP_PORT
+        trueos_esp::gate::TRUEOS_PEER_TCP_PORT,
+        CAPS
     )
 }
 
@@ -656,6 +677,7 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     hash
 }
 
+#[cfg(feature = "trueos_lumen")]
 fn process_lumen_app_text_payload(
     vnet: &VNet,
     handle: v::vnet::NetHandle,
@@ -781,6 +803,7 @@ fn process_lumen_app_text_payload(
     }
 }
 
+#[cfg(feature = "trueos_lumen")]
 fn submit_trueos_lumen_work_capacity(vnet: &VNet, handle: v::vnet::NetHandle) {
     let capacity = crate::lumen::lumen_service::remote_work_capacity();
     let telemetry = crate::lumen::lumen_net::backend_telemetry(capacity);
@@ -846,6 +869,7 @@ fn submit_trueos_lumen_work_probe_to_all(vnet: &VNet, links: &[TrueOsPeerLink]) 
     sent
 }
 
+#[cfg(feature = "trueos_lumen")]
 fn submit_trueos_lumen_shadow_frame_to_first_peer(
     vnet: &VNet,
     links: &[TrueOsPeerLink],
@@ -896,6 +920,7 @@ fn encode_lumen_matvec_result_chunk_frame(
     out
 }
 
+#[cfg(feature = "trueos_lumen")]
 fn submit_trueos_lumen_result_frames(
     vnet: &VNet,
     handle: v::vnet::NetHandle,
@@ -1289,14 +1314,23 @@ pub async fn esp_gate_task() {
         let mut peer_listener: Option<v::vnet::NetHandle> = None;
         let mut peer_links = allocate_trueos_peer_links();
         let mut next_peer_advertise_ms = 0u64;
+        #[cfg(feature = "trueos_lumen")]
         let mut seen_lumen_work_probe_seq = LUMEN_WORK_PROBE_SEQ.load(Ordering::Acquire);
+        #[cfg(feature = "trueos_lumen")]
         let mut lumen_work_probe_seq = seen_lumen_work_probe_seq;
+        #[cfg(feature = "trueos_lumen")]
         let mut lumen_work_probe_deadline_ms = 0u64;
+        #[cfg(feature = "trueos_lumen")]
         let mut lumen_work_probe_sent = 0usize;
+        #[cfg(feature = "trueos_lumen")]
         let mut lumen_work_probe_replies = 0usize;
+        #[cfg(feature = "trueos_lumen")]
         let mut lumen_work_probe_best = 0u32;
+        #[cfg(feature = "trueos_lumen")]
         let mut lumen_work_probe_seen_nodes: Vec<u64> = Vec::new();
+        #[cfg(feature = "trueos_lumen")]
         let mut shadow_descriptors: Vec<LumenMatvecShadowDescriptor> = Vec::new();
+        #[cfg(feature = "trueos_lumen")]
         let mut shadow_x_reassemblies: Vec<ShadowXReassembly> = Vec::new();
         let _ = vnet.submit(gate.bootstrap_command());
         let _ = vnet.submit(v::vnet::Command::OpenTcpListen {
@@ -1318,6 +1352,7 @@ pub async fn esp_gate_task() {
                     crate::log!("esp-gate: error {}\n", msg);
                     if msg == "bad handle" {
                         let cleared = clear_trueos_peer_links(peer_links.as_mut_slice());
+                        #[cfg(feature = "trueos_lumen")]
                         crate::lumen::lumen_net::set_remote_bf16_route_available(false);
                         crate::log!(
                             "esp-gate: peer links cleared reason=bad-handle count={}\n",
@@ -1386,75 +1421,78 @@ pub async fn esp_gate_task() {
                             }
                         }
                         if !close_duplicate_peer {
-                            if trueos_lumen_work_probe_received(data.as_slice()) {
-                                submit_trueos_lumen_work_capacity(&vnet, handle);
-                            }
-                            drain_lumen_app_data_for_handle(
-                                peer_links.as_mut_slice(),
-                                handle,
-                                data.as_slice(),
-                                |frame| {
-                                    if frame.opcode == TRUEOS_LUMEN_APP_OP_TEXT {
-                                        process_lumen_app_text_payload(
-                                            &vnet,
-                                            handle,
-                                            frame.payload,
-                                            &mut shadow_descriptors,
-                                            &mut shadow_x_reassemblies,
-                                        );
-                                    } else {
-                                        crate::log!(
-                                            "esp-gate: lumen app frame ignored handle={} opcode={} bytes={}\n",
-                                            handle.0,
-                                            frame.opcode,
-                                            frame.payload.len()
-                                        );
-                                    }
-                                },
-                            );
-                            if let Some(capacity) =
-                                parse_trueos_lumen_work_capacity(data.as_slice())
+                            #[cfg(feature = "trueos_lumen")]
                             {
-                                let now_ms = monotonic_ms();
-                                let node_id =
-                                    trueos_peer_link_node_id(peer_links.as_slice(), handle);
-                                let mut counted = false;
-                                if lumen_work_probe_deadline_ms != 0
-                                    && now_ms <= lumen_work_probe_deadline_ms
-                                {
-                                    if node_id == 0
-                                        || !lumen_work_probe_seen_nodes.contains(&node_id)
-                                    {
-                                        if node_id != 0 {
-                                            lumen_work_probe_seen_nodes.push(node_id);
-                                        }
-                                        lumen_work_probe_replies =
-                                            lumen_work_probe_replies.saturating_add(1);
-                                        lumen_work_probe_best =
-                                            lumen_work_probe_best.max(capacity.lanes);
-                                        counted = true;
-                                    }
-                                    if counted && lumen_work_probe_best != 0 {
-                                        publish_lumen_work_probe_result(
-                                            lumen_work_probe_seq,
-                                            lumen_work_probe_sent,
-                                            lumen_work_probe_replies,
-                                            lumen_work_probe_best,
-                                        );
-                                    }
+                                if trueos_lumen_work_probe_received(data.as_slice()) {
+                                    submit_trueos_lumen_work_capacity(&vnet, handle);
                                 }
-                                crate::log!(
-                                    "esp-gate: lumen work capacity received handle={} node=0x{:016X} n={} proto={} caps=0x{:08X} workers={} pending={} min_rows={} counted={}\n",
-                                    handle.0,
-                                    node_id,
-                                    capacity.lanes,
-                                    capacity.protocol_version,
-                                    capacity.caps,
-                                    capacity.workers,
-                                    capacity.pending,
-                                    capacity.min_rows,
-                                    if counted { 1 } else { 0 }
+                                drain_lumen_app_data_for_handle(
+                                    peer_links.as_mut_slice(),
+                                    handle,
+                                    data.as_slice(),
+                                    |frame| {
+                                        if frame.opcode == TRUEOS_LUMEN_APP_OP_TEXT {
+                                            process_lumen_app_text_payload(
+                                                &vnet,
+                                                handle,
+                                                frame.payload,
+                                                &mut shadow_descriptors,
+                                                &mut shadow_x_reassemblies,
+                                            );
+                                        } else {
+                                            crate::log!(
+                                                "esp-gate: lumen app frame ignored handle={} opcode={} bytes={}\n",
+                                                handle.0,
+                                                frame.opcode,
+                                                frame.payload.len()
+                                            );
+                                        }
+                                    },
                                 );
+                                if let Some(capacity) =
+                                    parse_trueos_lumen_work_capacity(data.as_slice())
+                                {
+                                    let now_ms = monotonic_ms();
+                                    let node_id =
+                                        trueos_peer_link_node_id(peer_links.as_slice(), handle);
+                                    let mut counted = false;
+                                    if lumen_work_probe_deadline_ms != 0
+                                        && now_ms <= lumen_work_probe_deadline_ms
+                                    {
+                                        if node_id == 0
+                                            || !lumen_work_probe_seen_nodes.contains(&node_id)
+                                        {
+                                            if node_id != 0 {
+                                                lumen_work_probe_seen_nodes.push(node_id);
+                                            }
+                                            lumen_work_probe_replies =
+                                                lumen_work_probe_replies.saturating_add(1);
+                                            lumen_work_probe_best =
+                                                lumen_work_probe_best.max(capacity.lanes);
+                                            counted = true;
+                                        }
+                                        if counted && lumen_work_probe_best != 0 {
+                                            publish_lumen_work_probe_result(
+                                                lumen_work_probe_seq,
+                                                lumen_work_probe_sent,
+                                                lumen_work_probe_replies,
+                                                lumen_work_probe_best,
+                                            );
+                                        }
+                                    }
+                                    crate::log!(
+                                        "esp-gate: lumen work capacity received handle={} node=0x{:016X} n={} proto={} caps=0x{:08X} workers={} pending={} min_rows={} counted={}\n",
+                                        handle.0,
+                                        node_id,
+                                        capacity.lanes,
+                                        capacity.protocol_version,
+                                        capacity.caps,
+                                        capacity.workers,
+                                        capacity.pending,
+                                        capacity.min_rows,
+                                        if counted { 1 } else { 0 }
+                                    );
+                                }
                             }
                         }
                     }
@@ -1476,6 +1514,7 @@ pub async fn esp_gate_task() {
                     v::vnet::Event::Closed { handle } => {
                         if remove_trueos_peer_link(peer_links.as_mut_slice(), handle) {
                             if trueos_peer_link_count(peer_links.as_slice()) == 0 {
+                                #[cfg(feature = "trueos_lumen")]
                                 crate::lumen::lumen_net::set_remote_bf16_route_available(false);
                             }
                             crate::log!(
@@ -1593,67 +1632,70 @@ pub async fn esp_gate_task() {
                 next_peer_advertise_ms = now_ms.saturating_add(TRUEOS_PEER_ADVERTISE_MS);
             }
 
-            let requested_lumen_work_probe_seq = LUMEN_WORK_PROBE_SEQ.load(Ordering::Acquire);
-            if requested_lumen_work_probe_seq != seen_lumen_work_probe_seq {
-                seen_lumen_work_probe_seq = requested_lumen_work_probe_seq;
-                lumen_work_probe_seq = requested_lumen_work_probe_seq;
-                lumen_work_probe_replies = 0;
-                lumen_work_probe_best = 0;
-                lumen_work_probe_seen_nodes.clear();
-                lumen_work_probe_sent =
-                    submit_trueos_lumen_work_probe_to_all(&vnet, peer_links.as_slice());
-                if lumen_work_probe_sent == 0 {
-                    lumen_work_probe_deadline_ms = 0;
-                    crate::lumen::lumen_net::set_remote_bf16_route_available(false);
-                    publish_lumen_work_probe_result(lumen_work_probe_seq, 0, 0, 0);
-                    crate::log!(
-                        "esp-gate: lumen work capacity probe seq={} skipped reason=no-peers\n",
-                        lumen_work_probe_seq
-                    );
-                } else {
-                    lumen_work_probe_deadline_ms =
-                        now_ms.saturating_add(TRUEOS_LUMEN_WORK_PROBE_TIMEOUT_MS);
-                    crate::log!(
-                        "esp-gate: lumen work capacity probe seq={} sent={} timeout_ms={}\n",
+            #[cfg(feature = "trueos_lumen")]
+            {
+                let requested_lumen_work_probe_seq = LUMEN_WORK_PROBE_SEQ.load(Ordering::Acquire);
+                if requested_lumen_work_probe_seq != seen_lumen_work_probe_seq {
+                    seen_lumen_work_probe_seq = requested_lumen_work_probe_seq;
+                    lumen_work_probe_seq = requested_lumen_work_probe_seq;
+                    lumen_work_probe_replies = 0;
+                    lumen_work_probe_best = 0;
+                    lumen_work_probe_seen_nodes.clear();
+                    lumen_work_probe_sent =
+                        submit_trueos_lumen_work_probe_to_all(&vnet, peer_links.as_slice());
+                    if lumen_work_probe_sent == 0 {
+                        lumen_work_probe_deadline_ms = 0;
+                        crate::lumen::lumen_net::set_remote_bf16_route_available(false);
+                        publish_lumen_work_probe_result(lumen_work_probe_seq, 0, 0, 0);
+                        crate::log!(
+                            "esp-gate: lumen work capacity probe seq={} skipped reason=no-peers\n",
+                            lumen_work_probe_seq
+                        );
+                    } else {
+                        lumen_work_probe_deadline_ms =
+                            now_ms.saturating_add(TRUEOS_LUMEN_WORK_PROBE_TIMEOUT_MS);
+                        crate::log!(
+                            "esp-gate: lumen work capacity probe seq={} sent={} timeout_ms={}\n",
+                            lumen_work_probe_seq,
+                            lumen_work_probe_sent,
+                            TRUEOS_LUMEN_WORK_PROBE_TIMEOUT_MS
+                        );
+                    }
+                }
+
+                if lumen_work_probe_deadline_ms != 0 && now_ms >= lumen_work_probe_deadline_ms {
+                    if lumen_work_probe_replies == 0 {
+                        crate::lumen::lumen_net::set_remote_bf16_route_available(false);
+                    }
+                    publish_lumen_work_probe_result(
                         lumen_work_probe_seq,
                         lumen_work_probe_sent,
-                        TRUEOS_LUMEN_WORK_PROBE_TIMEOUT_MS
+                        lumen_work_probe_replies,
+                        lumen_work_probe_best,
                     );
-                }
-            }
-
-            if lumen_work_probe_deadline_ms != 0 && now_ms >= lumen_work_probe_deadline_ms {
-                if lumen_work_probe_replies == 0 {
-                    crate::lumen::lumen_net::set_remote_bf16_route_available(false);
-                }
-                publish_lumen_work_probe_result(
-                    lumen_work_probe_seq,
-                    lumen_work_probe_sent,
-                    lumen_work_probe_replies,
-                    lumen_work_probe_best,
-                );
-                crate::log!(
-                    "esp-gate: lumen work capacity probe seq={} complete sent={} replies={} best={}\n",
-                    lumen_work_probe_seq,
-                    lumen_work_probe_sent,
-                    lumen_work_probe_replies,
-                    lumen_work_probe_best
-                );
-                lumen_work_probe_deadline_ms = 0;
-            }
-
-            if trueos_peer_link_count(peer_links.as_slice()) != 0 {
-                if let Some(frame) = crate::lumen::lumen_net::take_shadow_bf16_matvec_frame()
-                    && !submit_trueos_lumen_shadow_frame_to_first_peer(
-                        &vnet,
-                        peer_links.as_slice(),
-                        frame.as_slice(),
-                    )
-                {
                     crate::log!(
-                        "esp-gate: lumen matvec shadow send failed bytes={}\n",
-                        frame.len()
+                        "esp-gate: lumen work capacity probe seq={} complete sent={} replies={} best={}\n",
+                        lumen_work_probe_seq,
+                        lumen_work_probe_sent,
+                        lumen_work_probe_replies,
+                        lumen_work_probe_best
                     );
+                    lumen_work_probe_deadline_ms = 0;
+                }
+
+                if trueos_peer_link_count(peer_links.as_slice()) != 0 {
+                    if let Some(frame) = crate::lumen::lumen_net::take_shadow_bf16_matvec_frame()
+                        && !submit_trueos_lumen_shadow_frame_to_first_peer(
+                            &vnet,
+                            peer_links.as_slice(),
+                            frame.as_slice(),
+                        )
+                    {
+                        crate::log!(
+                            "esp-gate: lumen matvec shadow send failed bytes={}\n",
+                            frame.len()
+                        );
+                    }
                 }
             }
 

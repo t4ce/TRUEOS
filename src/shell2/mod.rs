@@ -99,6 +99,7 @@ enum ShellMode2 {
     Apps,
     Qjs,
     Cmd,
+    #[cfg(feature = "trueos_lumen")]
     Lumen,
 }
 
@@ -109,6 +110,7 @@ impl ShellMode2 {
             Self::Apps => "F2",
             Self::Qjs => "F3",
             Self::Cmd => "F4",
+            #[cfg(feature = "trueos_lumen")]
             Self::Lumen => "F5",
         }
     }
@@ -119,8 +121,22 @@ impl ShellMode2 {
             Self::Apps => "apps",
             Self::Qjs => "qjs",
             Self::Cmd => "cmd",
+            #[cfg(feature = "trueos_lumen")]
             Self::Lumen => "lumen",
         }
+    }
+}
+
+#[inline]
+fn is_lumen_mode(mode: ShellMode2) -> bool {
+    #[cfg(feature = "trueos_lumen")]
+    {
+        mode == ShellMode2::Lumen
+    }
+    #[cfg(not(feature = "trueos_lumen"))]
+    {
+        let _ = mode;
+        false
     }
 }
 
@@ -272,7 +288,8 @@ impl<'a> AlignedWriter<'a> {
             self.qjs_status(qjs_mode);
         } else if mode == ShellMode2::Cmd {
             self.cmd_status(cmd_status_text);
-        } else if mode == ShellMode2::Lumen {
+        } else if is_lumen_mode(mode) {
+            #[cfg(feature = "trueos_lumen")]
             self.lumen_status(output_mask, lumen_mode);
         }
         self.io.raw_write_str(ecma48::RESET);
@@ -297,8 +314,11 @@ impl<'a> AlignedWriter<'a> {
         self.push_mode_choice(&mut text, ShellMode2::Qjs, mode == ShellMode2::Qjs);
         self.push_plain(&mut text, " - ");
         self.push_mode_choice(&mut text, ShellMode2::Cmd, mode == ShellMode2::Cmd);
-        self.push_plain(&mut text, " - ");
-        self.push_mode_choice(&mut text, ShellMode2::Lumen, mode == ShellMode2::Lumen);
+        #[cfg(feature = "trueos_lumen")]
+        {
+            self.push_plain(&mut text, " - ");
+            self.push_mode_choice(&mut text, ShellMode2::Lumen, mode == ShellMode2::Lumen);
+        }
         text
     }
 
@@ -635,12 +655,20 @@ fn active_slot_label_visible_width(output_mask: u8) -> usize {
 }
 
 fn main_mode_visible_width() -> usize {
+    #[cfg(feature = "trueos_lumen")]
     let modes = [
         ShellMode2::Surf,
         ShellMode2::Apps,
         ShellMode2::Qjs,
         ShellMode2::Cmd,
         ShellMode2::Lumen,
+    ];
+    #[cfg(not(feature = "trueos_lumen"))]
+    let modes = [
+        ShellMode2::Surf,
+        ShellMode2::Apps,
+        ShellMode2::Qjs,
+        ShellMode2::Cmd,
     ];
     let mut width = 0usize;
     for (idx, mode) in modes.iter().copied().enumerate() {
@@ -1054,6 +1082,7 @@ fn handle_submit(
             shell2_apps::submit(spawner, io, apps_mode, submitted);
             HandleSubmitResult::None
         }
+        #[cfg(feature = "trueos_lumen")]
         ShellMode2::Lumen => {
             let target = matrix_target_for_backend(io);
             shell2_lumen::submit(io, lumen_mode, &target, submitted);
@@ -1120,6 +1149,7 @@ fn mode_from_function_key(index: u16) -> Option<ShellMode2> {
         2 => Some(ShellMode2::Apps),
         3 => Some(ShellMode2::Qjs),
         4 => Some(ShellMode2::Cmd),
+        #[cfg(feature = "trueos_lumen")]
         5 => Some(ShellMode2::Lumen),
         _ => None,
     }
@@ -1138,7 +1168,8 @@ fn apply_mode_toggle(
     line: &HString<MAX_LINE>,
     minute_text: &str,
 ) {
-    if mode == ShellMode2::Lumen {
+    if is_lumen_mode(mode) {
+        #[cfg(feature = "trueos_lumen")]
         shell2_lumen::ensure_lumen_slot(output_mask);
     }
     out.banner(output_mask, mode, minute_text);
@@ -1484,6 +1515,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             b'Q' => Some(ShellMode2::Apps),
                             b'R' => Some(ShellMode2::Qjs),
                             b'S' => Some(ShellMode2::Cmd),
+                            #[cfg(feature = "trueos_lumen")]
                             b'T' => Some(ShellMode2::Lumen),
                             _ => None,
                         }
@@ -1591,6 +1623,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 out.prompt(output_mask);
                             }
                         }
+                        #[cfg(feature = "trueos_lumen")]
                         ShellMode2::Lumen => {
                             cmd_status_text = None;
                             out.mode_status(
@@ -1620,7 +1653,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     matrix::record_user_input(submitted_raw);
                     let submitted = submitted_raw.trim();
                     cmd_status_text = None;
-                    if mode == ShellMode2::Lumen {
+                    if is_lumen_mode(mode) {
+                        #[cfg(feature = "trueos_lumen")]
                         shell2_lumen::ensure_lumen_slot(output_mask);
                     }
                     let active_slot = matrix::active_slot_id(output_mask);

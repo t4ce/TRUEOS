@@ -140,6 +140,7 @@ fn spawn_on_background_ap(
             tag.scratch_len
         );
     }
+    #[cfg(feature = "trueos_lumen")]
     if purpose == "chat-http-runtime" {
         crate::lumen::burn_baby::protect_service_compute_slot(cpu_slot, purpose);
     }
