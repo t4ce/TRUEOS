@@ -85,7 +85,7 @@ mod turbo;
 #[allow(non_snake_case)]
 mod tyche;
 mod ui3;
-mod unhlt_isr;
+mod remote_work_wake;
 #[path = "usb3/mod.rs"]
 pub(crate) mod usb3;
 mod virtio_gpu_logo;

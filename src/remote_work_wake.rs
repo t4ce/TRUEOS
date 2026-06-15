@@ -9,18 +9,18 @@ use x86_64::registers::model_specific::Msr;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 
 #[cfg(target_arch = "x86_64")]
-pub(crate) const AP_WAKE_VECTOR: u8 = 0x41;
+pub(crate) const REMOTE_WORK_WAKE_VECTOR: u8 = 0x41;
 #[cfg(target_arch = "x86_64")]
 const AP_SPURIOUS_VECTOR: u8 = 0xFF;
 
 #[cfg(target_arch = "x86_64")]
-static AP_WAKE_INTERRUPTS: AtomicU64 = AtomicU64::new(0);
+static REMOTE_WORK_WAKE_INTERRUPTS: AtomicU64 = AtomicU64::new(0);
 #[cfg(target_arch = "x86_64")]
-static AP_WAKE_REQUESTS: AtomicU64 = AtomicU64::new(0);
+static REMOTE_WORK_WAKE_REQUESTS: AtomicU64 = AtomicU64::new(0);
 #[cfg(target_arch = "x86_64")]
-static AP_WAKE_SENT: AtomicU64 = AtomicU64::new(0);
+static REMOTE_WORK_WAKE_SENT: AtomicU64 = AtomicU64::new(0);
 #[cfg(target_arch = "x86_64")]
-static AP_WAKE_FAILED: AtomicU64 = AtomicU64::new(0);
+static REMOTE_WORK_WAKE_FAILED: AtomicU64 = AtomicU64::new(0);
 #[cfg(target_arch = "x86_64")]
 static AP_SPURIOUS_INTERRUPTS: AtomicU64 = AtomicU64::new(0);
 
@@ -41,7 +41,7 @@ const X2APIC_SIVR_SOFTWARE_ENABLE: u64 = 1 << 8;
 
 #[cfg(target_arch = "x86_64")]
 pub(crate) fn interrupt_install(idt: &mut InterruptDescriptorTable) {
-    idt[AP_WAKE_VECTOR].set_handler_fn(ap_wake_isr);
+    idt[REMOTE_WORK_WAKE_VECTOR].set_handler_fn(remote_work_wake_isr);
     idt[AP_SPURIOUS_VECTOR].set_handler_fn(ap_spurious_isr);
 }
 
@@ -77,8 +77,8 @@ fn cpu_supports_x2apic() -> bool {
 }
 
 #[cfg(target_arch = "x86_64")]
-pub(crate) fn wake_cpu_slot(cpu_slot: u32) -> bool {
-    AP_WAKE_REQUESTS.fetch_add(1, Ordering::AcqRel);
+pub(crate) fn wake_cpu_for_remote_work(cpu_slot: u32) -> bool {
+    REMOTE_WORK_WAKE_REQUESTS.fetch_add(1, Ordering::AcqRel);
 
     let cpu_ptr = crate::percpu::try_this_cpu_ptr();
     if !cpu_ptr.is_null() && unsafe { (*cpu_ptr).cpu_index() == cpu_slot } {
@@ -90,21 +90,21 @@ pub(crate) fn wake_cpu_slot(cpu_slot: u32) -> bool {
         .find(|slot| slot.slot == cpu_slot)
         .map(|slot| slot.lapic_id)
     else {
-        AP_WAKE_FAILED.fetch_add(1, Ordering::AcqRel);
+        REMOTE_WORK_WAKE_FAILED.fetch_add(1, Ordering::AcqRel);
         return false;
     };
 
-    if send_x2apic_wake(lapic_id) {
-        AP_WAKE_SENT.fetch_add(1, Ordering::AcqRel);
+    if send_remote_work_x2apic_wake(lapic_id) {
+        REMOTE_WORK_WAKE_SENT.fetch_add(1, Ordering::AcqRel);
         true
     } else {
-        AP_WAKE_FAILED.fetch_add(1, Ordering::AcqRel);
+        REMOTE_WORK_WAKE_FAILED.fetch_add(1, Ordering::AcqRel);
         false
     }
 }
 
 #[cfg(not(target_arch = "x86_64"))]
-pub(crate) fn wake_cpu_slot(_cpu_slot: u32) -> bool {
+pub(crate) fn wake_cpu_for_remote_work(_cpu_slot: u32) -> bool {
     false
 }
 
@@ -115,16 +115,16 @@ pub extern "Rust" fn trueos_embassy_pender(context: *mut ()) {
         return;
     }
 
-    let _ = wake_cpu_slot(cpu_slot as u32);
+    let _ = wake_cpu_for_remote_work(cpu_slot as u32);
 }
 
 #[cfg(target_arch = "x86_64")]
-fn send_x2apic_wake(lapic_id: u32) -> bool {
+fn send_remote_work_x2apic_wake(lapic_id: u32) -> bool {
     if !local_x2apic_enabled() {
         return false;
     }
 
-    let icr = ((lapic_id as u64) << 32) | AP_WAKE_VECTOR as u64;
+    let icr = ((lapic_id as u64) << 32) | REMOTE_WORK_WAKE_VECTOR as u64;
     unsafe {
         Msr::new(MSR_IA32_X2APIC_ICR).write(icr);
     }
@@ -157,9 +157,9 @@ fn local_eoi() {
 
 #[allow(non_snake_case)]
 #[cfg(target_arch = "x86_64")]
-extern "x86-interrupt" fn ap_wake_isr(_stack_frame: InterruptStackFrame) {
+extern "x86-interrupt" fn remote_work_wake_isr(_stack_frame: InterruptStackFrame) {
     disable_interrupts();
-    AP_WAKE_INTERRUPTS.fetch_add(1, Ordering::AcqRel);
+    REMOTE_WORK_WAKE_INTERRUPTS.fetch_add(1, Ordering::AcqRel);
     local_eoi();
 }
 

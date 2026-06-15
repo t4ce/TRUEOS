@@ -196,7 +196,7 @@ fn init_with(lapic_id: u32, cpu_index: u32, _tag: &str) {
     #[cfg(not(target_arch = "x86_64"))]
     CURRENT_CPU_PTR.store(ptr, Ordering::Release);
 
-    let _ = crate::unhlt_isr::enable_local_apic_for_this_cpu();
+    let _ = crate::remote_work_wake::enable_local_apic_for_this_cpu();
 
     PERCPU_READY.store(true, Ordering::Release);
 

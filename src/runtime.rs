@@ -62,14 +62,18 @@ pub fn run_ap_forever() -> ! {
 }
 
 #[inline(always)]
-fn hlt(_sleep_ticks: u64) {
+fn hlt(sleep_ticks: u64) {
     crate::smp::mark_current_hlt_state(true);
+    let armed_timer = crate::chronos::arm_local_tsc_deadline_after_ticks(sleep_ticks);
 
     #[cfg(target_arch = "x86_64")]
     unsafe {
         core::arch::asm!("sti; hlt", options(nomem, nostack));
     }
 
+    if armed_timer {
+        crate::chronos::disarm_local_timer();
+    }
     crate::smp::mark_current_hlt_state(false);
 }
 

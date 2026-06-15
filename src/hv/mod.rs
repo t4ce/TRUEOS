@@ -803,7 +803,7 @@ fn start_with_mode(
 
     match vm_task(vm_id, target.lease) {
         Ok(token) => {
-            let wake_sent = target.spawner.spawn_and_wake(token);
+            let wake_sent = target.spawner.spawn_and_wake_remote(token);
             hvlogf(format_args!(
                 "hv: vm{} lane spawn submitted: role={} placement={} slot={} wake={}",
                 vm_id,

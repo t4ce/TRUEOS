@@ -35,14 +35,27 @@ consumer_b task
 */
 // this is our apic helper
 #[cfg(target_arch = "x86_64")]
-use core::arch::x86_64::_rdtsc;
+use core::arch::x86_64::{__cpuid, _rdtsc};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use spin::Mutex;
 #[cfg(target_arch = "x86_64")]
+use x86_64::registers::model_specific::Msr;
+#[cfg(target_arch = "x86_64")]
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 
 pub(crate) const CHRONOS_TIMER_VECTOR: u8 = 0x40;
+
+#[cfg(target_arch = "x86_64")]
+const MSR_IA32_X2APIC_EOI: u32 = 0x0000_080B;
+#[cfg(target_arch = "x86_64")]
+const MSR_IA32_X2APIC_LVT_TIMER: u32 = 0x0000_0832;
+#[cfg(target_arch = "x86_64")]
+const MSR_IA32_TSC_DEADLINE: u32 = 0x0000_06E0;
+#[cfg(target_arch = "x86_64")]
+const X2APIC_LVT_TIMER_MASKED: u64 = 1 << 16;
+#[cfg(target_arch = "x86_64")]
+const X2APIC_LVT_TIMER_TSC_DEADLINE: u64 = 0b10 << 17;
 
 static CHRONOS_AWAKE: AtomicBool = AtomicBool::new(false);
 static WATCH_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -141,12 +154,60 @@ pub fn latest_snapshot() -> TimeSnapshot {
     *LATEST_SNAPSHOT.lock()
 }
 
+#[cfg(target_arch = "x86_64")]
+pub(crate) fn arm_local_tsc_deadline_after_ticks(ticks: u64) -> bool {
+    if ticks == 0 || ticks == u64::MAX {
+        return false;
+    }
+    if !local_tsc_deadline_supported() {
+        return false;
+    }
+
+    let tsc_hz = crate::time::tsc_hz();
+    let tick_hz = embassy_time_driver::TICK_HZ.max(1);
+    let delta_tsc = ((ticks as u128) * (tsc_hz as u128) / (tick_hz as u128))
+        .clamp(1, u64::MAX as u128) as u64;
+    let deadline = read_cycle_counter().wrapping_add(delta_tsc);
+
+    unsafe {
+        Msr::new(MSR_IA32_X2APIC_LVT_TIMER)
+            .write(CHRONOS_TIMER_VECTOR as u64 | X2APIC_LVT_TIMER_TSC_DEADLINE);
+        Msr::new(MSR_IA32_TSC_DEADLINE).write(deadline);
+    }
+
+    true
+}
+
+#[cfg(target_arch = "x86_64")]
+fn local_tsc_deadline_supported() -> bool {
+    let cpuid = unsafe { __cpuid(1) };
+    (cpuid.ecx & (1 << 24)) != 0
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+pub(crate) fn arm_local_tsc_deadline_after_ticks(_ticks: u64) -> bool {
+    false
+}
+
+#[cfg(target_arch = "x86_64")]
+pub(crate) fn disarm_local_timer() {
+    unsafe {
+        Msr::new(MSR_IA32_TSC_DEADLINE).write(0);
+        Msr::new(MSR_IA32_X2APIC_LVT_TIMER)
+            .write(CHRONOS_TIMER_VECTOR as u64 | X2APIC_LVT_TIMER_MASKED);
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+pub(crate) fn disarm_local_timer() {}
+
 #[allow(non_snake_case)]
 #[cfg(target_arch = "x86_64")]
 pub(crate) extern "x86-interrupt" fn CHRONOS_TIMER(_stack_frame: InterruptStackFrame) {
     let seq = WATCH_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
     let _ = refresh_snapshot(seq);
     unsafe {
-        crate::portio::outb(0xE9, b'?');
+        Msr::new(MSR_IA32_TSC_DEADLINE).write(0);
+        Msr::new(MSR_IA32_X2APIC_EOI).write(0);
     }
 }
