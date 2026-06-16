@@ -12,7 +12,8 @@ fn slot_owner(slot: usize) -> alloc::string::String {
     let Some(vm_id) = crate::hv::vm_id_for_cpu_slot(slot) else {
         return alloc::string::String::from("-");
     };
-    let archive = crate::hv::app_vm_archive(vm_id).unwrap_or_else(|| alloc::string::String::from("-"));
+    let archive =
+        crate::hv::app_vm_archive(vm_id).unwrap_or_else(|| alloc::string::String::from("-"));
     alloc::format!("vm{}:{}", vm_id, archive)
 }
 

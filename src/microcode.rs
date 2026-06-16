@@ -146,11 +146,7 @@ mod imp {
                 records_matching = records_matching.saturating_add(1);
                 consider_best_update(&mut best, target, update);
             }));
-            crate::log!(
-                "microcode/intel: embedded-source name={} len=0x{:X}\n",
-                name,
-                bytes.len()
-            );
+            crate::log!("microcode/intel: embedded-source name={} len=0x{:X}\n", name, bytes.len());
         }
 
         crate::limine::for_each_module(|module| {
@@ -227,13 +223,15 @@ mod imp {
 
         let bytes = unsafe { core::slice::from_raw_parts(ptr as *const u8, len) };
         let Some(update) = parse_update_at(bytes, target, 0) else {
-            crate::log!("microcode/intel: cpu={} action=skip reason=selected-record-no-longer-valid\n", tag);
+            crate::log!(
+                "microcode/intel: cpu={} action=skip reason=selected-record-no-longer-valid\n",
+                tag
+            );
             return;
         };
 
         unsafe {
-            Msr::new(MSR_IA32_BIOS_UPDT_TRIG)
-                .write(update.bytes.as_ptr().add(HEADER_LEN) as u64);
+            Msr::new(MSR_IA32_BIOS_UPDT_TRIG).write(update.bytes.as_ptr().add(HEADER_LEN) as u64);
         }
         let after = read_current_revision();
         crate::log!(
@@ -242,7 +240,11 @@ mod imp {
             target.current_revision,
             selected_rev,
             after,
-            if after >= selected_rev { "loaded" } else { "not-accepted" }
+            if after >= selected_rev {
+                "loaded"
+            } else {
+                "not-accepted"
+            }
         );
     }
 
@@ -296,7 +298,11 @@ mod imp {
         records_seen
     }
 
-    fn parse_update_at(bytes: &'static [u8], target: Target, offset: usize) -> Option<Update<'static>> {
+    fn parse_update_at(
+        bytes: &'static [u8],
+        target: Target,
+        offset: usize,
+    ) -> Option<Update<'static>> {
         match_record(parse_record_at(bytes, offset)?, target)
     }
 
@@ -397,7 +403,8 @@ mod imp {
         let Some(count) = le_u32(ext, 0).map(|v| v as usize) else {
             return false;
         };
-        let Some(table_len) = EXT_HEADER_LEN.checked_add(count.saturating_mul(EXT_ENTRY_LEN)) else {
+        let Some(table_len) = EXT_HEADER_LEN.checked_add(count.saturating_mul(EXT_ENTRY_LEN))
+        else {
             return false;
         };
         if table_len > ext.len() || !checksum_zero(&ext[..table_len]) {
@@ -533,5 +540,5 @@ mod imp {
     }
 }
 
-pub(crate) use imp::{snapshot, EmbeddedSource, FmsName, Snapshot};
+pub(crate) use imp::{EmbeddedSource, FmsName, Snapshot, snapshot};
 pub use imp::{apply_selected_to_current_cpu, init_from_limine_bsp};

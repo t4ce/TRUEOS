@@ -469,8 +469,8 @@ fn encode_triangle_probe_batch(
             cursor,
             RCS_RING_CONTEXT_CONTROL,
             masked_bits_update(
-                CTX_CTRL_OAC_CONTEXT_ENABLE,
                 if enable { CTX_CTRL_OAC_CONTEXT_ENABLE } else { 0 },
+                if enable { 0 } else { CTX_CTRL_OAC_CONTEXT_ENABLE },
             ),
         )
     }
@@ -622,6 +622,7 @@ fn encode_triangle_probe_batch(
         | BackendProbeMode::PsDispatchSlot1
         | BackendProbeMode::PsDispatchSlot2
         | BackendProbeMode::PsDispatchAllKspSlots
+        | BackendProbeMode::PsSimd16
         | BackendProbeMode::PsPayloadPushConstant
         | BackendProbeMode::PsPayloadAttributeEnable
         | BackendProbeMode::PsPayloadSimpleHint
@@ -671,7 +672,9 @@ fn encode_triangle_probe_batch(
     };
     let ps_ksp1 = if matches!(
         backend_probe_mode,
-        BackendProbeMode::PsDispatchSlot1 | BackendProbeMode::PsDispatchAllKspSlots
+        BackendProbeMode::PsDispatchSlot1
+            | BackendProbeMode::PsDispatchAllKspSlots
+            | BackendProbeMode::PsSimd16
     ) {
         ps_ksp_base
     } else {

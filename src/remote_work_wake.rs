@@ -139,14 +139,6 @@ fn local_x2apic_enabled() -> bool {
 
 #[cfg(target_arch = "x86_64")]
 #[inline]
-fn disable_interrupts() {
-    unsafe {
-        core::arch::asm!("cli", options(nomem, nostack));
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-#[inline]
 fn local_eoi() {
     unsafe {
         if local_x2apic_enabled() {
@@ -158,7 +150,6 @@ fn local_eoi() {
 #[allow(non_snake_case)]
 #[cfg(target_arch = "x86_64")]
 extern "x86-interrupt" fn remote_work_wake_isr(_stack_frame: InterruptStackFrame) {
-    disable_interrupts();
     REMOTE_WORK_WAKE_INTERRUPTS.fetch_add(1, Ordering::AcqRel);
     local_eoi();
 }
@@ -166,6 +157,5 @@ extern "x86-interrupt" fn remote_work_wake_isr(_stack_frame: InterruptStackFrame
 #[allow(non_snake_case)]
 #[cfg(target_arch = "x86_64")]
 extern "x86-interrupt" fn ap_spurious_isr(_stack_frame: InterruptStackFrame) {
-    disable_interrupts();
     AP_SPURIOUS_INTERRUPTS.fetch_add(1, Ordering::AcqRel);
 }

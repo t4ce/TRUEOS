@@ -1223,26 +1223,45 @@ fn cmd_tlb_ucode(io: &'static dyn ShellBackend2) {
     table.emit_row(&["intel", intel], |text| line(io, text));
     table.emit_row(&["target", snapshot.target_name], |text| line(io, text));
     table.emit_row(
-        &["signature", alloc::format!("0x{:08X}", snapshot.signature).as_str()],
-        |text| line(io, text),
-    );
-    table.emit_row(&["family-model-step", alloc::format!("{}", snapshot.fms).as_str()], |text| {
-        line(io, text)
-    });
-    table.emit_row(
-        &["platform-mask", alloc::format!("0x{:02X}", snapshot.platform_mask).as_str()],
+        &[
+            "signature",
+            alloc::format!("0x{:08X}", snapshot.signature).as_str(),
+        ],
         |text| line(io, text),
     );
     table.emit_row(
-        &["current-revision", alloc::format!("0x{:08X}", snapshot.current_revision).as_str()],
+        &[
+            "family-model-step",
+            alloc::format!("{}", snapshot.fms).as_str(),
+        ],
         |text| line(io, text),
     );
     table.emit_row(
-        &["selected-revision", alloc::format!("0x{:08X}", snapshot.selected_revision).as_str()],
+        &[
+            "platform-mask",
+            alloc::format!("0x{:02X}", snapshot.platform_mask).as_str(),
+        ],
         |text| line(io, text),
     );
     table.emit_row(
-        &["selected-len", alloc::format!("0x{:X}", snapshot.selected_len).as_str()],
+        &[
+            "current-revision",
+            alloc::format!("0x{:08X}", snapshot.current_revision).as_str(),
+        ],
+        |text| line(io, text),
+    );
+    table.emit_row(
+        &[
+            "selected-revision",
+            alloc::format!("0x{:08X}", snapshot.selected_revision).as_str(),
+        ],
+        |text| line(io, text),
+    );
+    table.emit_row(
+        &[
+            "selected-len",
+            alloc::format!("0x{:X}", snapshot.selected_len).as_str(),
+        ],
         |text| line(io, text),
     );
     for source in snapshot.embedded_sources {
@@ -1300,7 +1319,10 @@ fn cmd_tlb_pmu(io: &'static dyn ShellBackend2) {
         |text| line(io, text),
     );
     table.emit_row(
-        &["gpgpu-submit-seq", alloc::format!("{}", gpu.submit_seq).as_str()],
+        &[
+            "gpgpu-submit-seq",
+            alloc::format!("{}", gpu.submit_seq).as_str(),
+        ],
         |text| line(io, text),
     );
     table.emit_row(
@@ -1335,12 +1357,16 @@ fn cmd_tlb_pmu(io: &'static dyn ShellBackend2) {
     table.emit_row(
         &[
             "gp-counters",
-            alloc::format!("{} x {}b", snapshot.gp_counter_count, snapshot.gp_counter_bits).as_str(),
+            alloc::format!("{} x {}b", snapshot.gp_counter_count, snapshot.gp_counter_bits)
+                .as_str(),
         ],
         |text| line(io, text),
     );
     table.emit_row(
-        &["event-mask-len", alloc::format!("{}", snapshot.event_mask_len).as_str()],
+        &[
+            "event-mask-len",
+            alloc::format!("{}", snapshot.event_mask_len).as_str(),
+        ],
         |text| line(io, text),
     );
     table.emit_row(
@@ -1359,11 +1385,17 @@ fn cmd_tlb_pmu(io: &'static dyn ShellBackend2) {
         |text| line(io, text),
     );
     table.emit_row(
-        &["perf-global-ctrl", fmt_opt_u64_hex(snapshot.perf_global_ctrl).as_str()],
+        &[
+            "perf-global-ctrl",
+            fmt_opt_u64_hex(snapshot.perf_global_ctrl).as_str(),
+        ],
         |text| line(io, text),
     );
     table.emit_row(
-        &["fixed-ctr-ctrl", fmt_opt_u64_hex(snapshot.fixed_ctr_ctrl).as_str()],
+        &[
+            "fixed-ctr-ctrl",
+            fmt_opt_u64_hex(snapshot.fixed_ctr_ctrl).as_str(),
+        ],
         |text| line(io, text),
     );
     table.emit_row(&["pmc0", fmt_opt_u64_hex(snapshot.pmc0).as_str()], |text| line(io, text));

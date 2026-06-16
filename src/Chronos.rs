@@ -165,8 +165,8 @@ pub(crate) fn arm_local_tsc_deadline_after_ticks(ticks: u64) -> bool {
 
     let tsc_hz = crate::time::tsc_hz();
     let tick_hz = embassy_time_driver::TICK_HZ.max(1);
-    let delta_tsc = ((ticks as u128) * (tsc_hz as u128) / (tick_hz as u128))
-        .clamp(1, u64::MAX as u128) as u64;
+    let delta_tsc =
+        ((ticks as u128) * (tsc_hz as u128) / (tick_hz as u128)).clamp(1, u64::MAX as u128) as u64;
     let deadline = read_cycle_counter().wrapping_add(delta_tsc);
 
     unsafe {

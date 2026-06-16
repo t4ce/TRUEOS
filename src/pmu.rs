@@ -43,7 +43,8 @@ mod imp {
         let mut fixed_ctr = [None; 3];
         let fixed_to_read = fixed_counter_count.min(3);
         for idx in 0..fixed_to_read {
-            fixed_ctr[idx as usize] = Some(unsafe { Msr::new(IA32_FIXED_CTR0 + idx as u32).read() });
+            fixed_ctr[idx as usize] =
+                Some(unsafe { Msr::new(IA32_FIXED_CTR0 + idx as u32).read() });
         }
 
         Snapshot {

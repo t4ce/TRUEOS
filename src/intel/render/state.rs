@@ -194,6 +194,7 @@ enum BackendProbeMode {
     PsDispatchSlot1,
     PsDispatchSlot2,
     PsDispatchAllKspSlots,
+    PsSimd16,
     PsPayloadPushConstant,
     PsPayloadAttributeEnable,
     PsPayloadSimpleHint,
@@ -316,6 +317,7 @@ impl BackendProbeMode {
             Self::PsDispatchSlot1 => "ps-dispatch-slot1",
             Self::PsDispatchSlot2 => "ps-dispatch-slot2",
             Self::PsDispatchAllKspSlots => "ps-dispatch-all-ksp-slots",
+            Self::PsSimd16 => "ps-simd16",
             Self::PsPayloadPushConstant => "ps-payload-push-constant",
             Self::PsPayloadAttributeEnable => "ps-payload-attribute-enable",
             Self::PsPayloadSimpleHint => "ps-payload-simple-hint",
@@ -333,7 +335,7 @@ impl BackendProbeMode {
     fn ps_dispatch_slot(self) -> Option<u8> {
         match self {
             Self::PsDispatchSlot0 => Some(0),
-            Self::PsDispatchSlot1 => Some(1),
+            Self::PsDispatchSlot1 | Self::PsSimd16 => Some(1),
             Self::PsDispatchSlot2 => Some(2),
             _ => None,
         }
