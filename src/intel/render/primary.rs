@@ -40,6 +40,18 @@ const RENDER_JOKER_VARIANTS: &[&str] = &[
     "all",
     "simd16",
     "simd16-retire",
+    "eot",
+    "eot-retire",
+    "cps",
+    "cps-retire",
+    "hz",
+    "hz-retire",
+    "reemit",
+    "reemit-retire",
+    "reemit-vs-retire",
+    "reemit-vs-slot0-retire",
+    "reemit-vs-urb2-retire",
+    "reemit-vs-urb2-slot0-retire",
     "payload-push",
     "payload-attr",
     "payload-simple",
@@ -258,7 +270,11 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
         }
     } else if name.eq_ignore_ascii_case("bt0") || name.eq_ignore_ascii_case("scratch") {
         RenderJokerSpec {
-            variant: if name.eq_ignore_ascii_case("scratch") { "scratch" } else { "bt0" },
+            variant: if name.eq_ignore_ascii_case("scratch") {
+                "scratch"
+            } else {
+                "bt0"
+            },
             submit_name: "ps-bt0-scratch-rt",
             target: scratch,
             blend: zeroed,
@@ -364,6 +380,136 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
             blend: explicit,
             geometry: big,
             backend: BackendProbeMode::PsSimd16,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("eot") {
+        RenderJokerSpec {
+            variant: "eot",
+            submit_name: "ps-eot-big-primitive",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::PsEotOnly,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("eot-retire") {
+        RenderJokerSpec {
+            variant: "eot-retire",
+            submit_name: "ps-eot-big-primitive-retire",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::PsEotOnly,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("cps") || name.eq_ignore_ascii_case("cps-disabled") {
+        RenderJokerSpec {
+            variant: "cps",
+            submit_name: "ps-cps-disabled-big-primitive",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::PsCpsDisabled,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("cps-retire") {
+        RenderJokerSpec {
+            variant: "cps-retire",
+            submit_name: "ps-cps-disabled-big-primitive-retire",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::PsCpsDisabled,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("hz") || name.eq_ignore_ascii_case("wm-hz") {
+        RenderJokerSpec {
+            variant: "hz",
+            submit_name: "wm-hz-sample-mask-big-primitive",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::WmHzSampleMask,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("hz-retire") || name.eq_ignore_ascii_case("wm-hz-retire") {
+        RenderJokerSpec {
+            variant: "hz-retire",
+            submit_name: "wm-hz-sample-mask-big-primitive-retire",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::WmHzSampleMask,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("reemit") || name.eq_ignore_ascii_case("late-reemit") {
+        RenderJokerSpec {
+            variant: "reemit",
+            submit_name: "wm-late-reemit-big-primitive",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::WmLateReemit,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("reemit-retire")
+        || name.eq_ignore_ascii_case("late-reemit-retire")
+    {
+        RenderJokerSpec {
+            variant: "reemit-retire",
+            submit_name: "wm-late-reemit-big-primitive-retire",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::WmLateReemit,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("reemit-vs-retire")
+        || name.eq_ignore_ascii_case("late-reemit-vs-retire")
+    {
+        RenderJokerSpec {
+            variant: "reemit-vs-retire",
+            submit_name: "wm-late-reemit-vs-big-primitive-retire",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::WmLateReemit,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("reemit-vs-slot0-retire")
+        || name.eq_ignore_ascii_case("late-reemit-vs-slot0-retire")
+    {
+        RenderJokerSpec {
+            variant: "reemit-vs-slot0-retire",
+            submit_name: "wm-late-reemit-vs-slot0-big-primitive-retire",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::WmLateReemit,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("reemit-vs-urb2-retire")
+        || name.eq_ignore_ascii_case("late-reemit-vs-urb2-retire")
+    {
+        RenderJokerSpec {
+            variant: "reemit-vs-urb2-retire",
+            submit_name: "wm-late-reemit-vs-urb2-big-primitive-retire",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::WmLateReemit,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("reemit-vs-urb2-slot0-retire")
+        || name.eq_ignore_ascii_case("late-reemit-vs-urb2-slot0-retire")
+    {
+        RenderJokerSpec {
+            variant: "reemit-vs-urb2-slot0-retire",
+            submit_name: "wm-late-reemit-vs-urb2-slot0-big-primitive-retire",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::WmLateReemit,
             sync: light_post_no_cs,
         }
     } else if name.eq_ignore_ascii_case("payload-push") {
@@ -502,6 +648,16 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
     Some(spec)
 }
 
+fn render_joker_real_vs_front_end_contract(variant: &str) -> Option<TriangleFrontEndContract> {
+    match variant {
+        "reemit-vs-retire" => Some(TRIANGLE_DEFAULT_FRONT_END_CONTRACT),
+        "reemit-vs-slot0-retire" => Some(VS_DRAW_FRONTIER_CONTRACTS[1]),
+        "reemit-vs-urb2-retire" => Some(VS_DRAW_FRONTIER_CONTRACTS[2]),
+        "reemit-vs-urb2-slot0-retire" => Some(VS_DRAW_FRONTIER_CONTRACTS[3]),
+        _ => None,
+    }
+}
+
 pub(crate) fn submit_render_joker_probe(name: &str) -> Result<RenderJokerResult, &'static str> {
     let Some(spec) = parse_render_joker_spec(name) else {
         return Err("unknown-variant");
@@ -574,31 +730,25 @@ fn submit_render_joker_probe_locked(
     }
 
     let (target_gpu, target_pitch, target_w, target_h, target_label) = match spec.target {
-        RenderJokerTarget::Primary => (
-            surface_gpu,
-            pitch_bytes,
-            width as usize,
-            height as usize,
-            "primary",
-        ),
+        RenderJokerTarget::Primary => {
+            (surface_gpu, pitch_bytes, width as usize, height as usize, "primary")
+        }
         RenderJokerTarget::ScratchRt => {
             unsafe {
                 core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
                 core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
             }
             crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
-            (
-                GPU_VA_STREAMOUT_BASE,
-                8 * core::mem::size_of::<u32>(),
-                8,
-                8,
-                "scratch",
-            )
+            (GPU_VA_STREAMOUT_BASE, 8 * core::mem::size_of::<u32>(), 8, 8, "scratch")
         }
     };
 
+    let real_vs_contract = render_joker_real_vs_front_end_contract(spec.variant);
+    let front_end_label = real_vs_contract
+        .map(|contract| contract.label)
+        .unwrap_or("vf-synthesized");
     intel_render_focus_log!(
-        "intel/render: joker begin seq={} variant={} submit={} target={} backend={} geometry={} blend={} sync={}\n",
+        "intel/render: joker begin seq={} variant={} submit={} target={} backend={} geometry={} blend={} sync={} front_end={}\n",
         probe_seq,
         spec.variant,
         spec.submit_name,
@@ -607,20 +757,38 @@ fn submit_render_joker_probe_locked(
         spec.geometry.label(),
         spec.blend.label(),
         spec.sync.label(),
+        front_end_label,
     );
-    let completed = submit_triangle_vf_draw_to_surface(
-        spec.submit_name,
-        dev,
-        warm,
-        target_gpu,
-        target_pitch,
-        target_w,
-        target_h,
-        spec.blend,
-        spec.geometry,
-        spec.backend,
-        spec.sync,
-    );
+    let completed = if let Some(front_end_contract) = real_vs_contract {
+        submit_triangle_real_vs_draw_probe_to_surface_ext(
+            dev,
+            warm,
+            target_gpu,
+            target_pitch,
+            target_w,
+            target_h,
+            spec.blend,
+            spec.geometry,
+            spec.submit_name,
+            front_end_contract,
+            spec.backend,
+            spec.sync,
+        )
+    } else {
+        submit_triangle_vf_draw_to_surface(
+            spec.submit_name,
+            dev,
+            warm,
+            target_gpu,
+            target_pitch,
+            target_w,
+            target_h,
+            spec.blend,
+            spec.geometry,
+            spec.backend,
+            spec.sync,
+        )
+    };
     intel_render_focus_log!(
         "intel/render: joker end seq={} variant={} submit={} target={} completed={}\n",
         probe_seq,
@@ -1455,10 +1623,19 @@ fn submit_triangle_vf_draw_to_surface(
         return false;
     };
 
-    let pipeline = if matches!(backend_probe_mode, BackendProbeMode::PsSimd16) {
-        crate::intel::shader::triangle_pipeline_simd16()
-    } else {
-        crate::intel::shader::triangle_pipeline()
+    let (pipeline, pipeline_note) = match backend_probe_mode {
+        BackendProbeMode::PsSimd16 => (
+            crate::intel::shader::triangle_pipeline_simd16(),
+            crate::intel::shader::triangle_pipeline_simd16_note(),
+        ),
+        BackendProbeMode::PsEotOnly => (
+            crate::intel::shader::triangle_pipeline_ps_eot(),
+            crate::intel::shader::triangle_pipeline_ps_eot_note(),
+        ),
+        _ => (
+            crate::intel::shader::triangle_pipeline(),
+            crate::intel::shader::triangle_pipeline_note(),
+        ),
     };
     log_render_buffer_layout(warm, Some(dst_gpu_addr));
     log_render_packet_encodings();
@@ -1477,7 +1654,7 @@ fn submit_triangle_vf_draw_to_surface(
             geometry.label(),
             crate::intel::shader::TRIANGLE_VERTEX_SOURCE_PATH,
             crate::intel::shader::TRIANGLE_FRAGMENT_SOURCE_PATH,
-            crate::intel::shader::triangle_pipeline_note()
+            pipeline_note
         );
         return false;
     }
@@ -1495,7 +1672,7 @@ fn submit_triangle_vf_draw_to_surface(
         geometry.label(),
         backend_probe_mode.label(),
         post_draw_sync_variant.label(),
-        crate::intel::shader::triangle_pipeline_note()
+        pipeline_note
     );
     if geometry.fullscreen_candidate() {
         intel_render_focus_log!(
@@ -1514,7 +1691,7 @@ fn submit_triangle_vf_draw_to_surface(
                 "intel/render: {} staging skipped reason=shader-layout-error detail={} note={}\n",
                 submit_name,
                 reason,
-                crate::intel::shader::triangle_pipeline_note()
+                pipeline_note
             );
             return false;
         }
@@ -1761,9 +1938,8 @@ fn oa_report_slice(warm: RenderWarmState, base_dword: usize) -> Option<&'static 
     {
         return None;
     }
-    let dwords = unsafe {
-        core::slice::from_raw_parts(warm.result_virt as *const u32, warm.result_len / 4)
-    };
+    let dwords =
+        unsafe { core::slice::from_raw_parts(warm.result_virt as *const u32, warm.result_len / 4) };
     dwords.get(base_dword..base_dword + RESULT_OA_REPORT_DWORDS)
 }
 
@@ -1782,16 +1958,14 @@ fn oa_a_counter_gfx125(report: &[u32], index: usize) -> Option<u64> {
     if index < 4 {
         Some(report[4 + index] as u64)
     } else if index < 24 {
-        let high_bytes = unsafe {
-            core::slice::from_raw_parts(report.as_ptr().add(40) as *const u8, 32)
-        };
+        let high_bytes =
+            unsafe { core::slice::from_raw_parts(report.as_ptr().add(40) as *const u8, 32) };
         Some(report[4 + index] as u64 | ((high_bytes[index] as u64) << 32))
     } else if index < 28 {
         Some(report[28 + (index - 24)] as u64)
     } else if index < 32 {
-        let high_bytes = unsafe {
-            core::slice::from_raw_parts(report.as_ptr().add(40) as *const u8, 32)
-        };
+        let high_bytes =
+            unsafe { core::slice::from_raw_parts(report.as_ptr().add(40) as *const u8, 32) };
         Some(report[4 + index] as u64 | ((high_bytes[index] as u64) << 32))
     } else {
         Some(report[36 + (index - 32)] as u64)
@@ -2322,14 +2496,51 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
     submit_name: &'static str,
     front_end_contract: TriangleFrontEndContract,
 ) -> bool {
-    let Some(draw) = prepare_triangle_draw_resources(warm, dst_gpu_addr, pitch, rect_w, rect_h)
-    else {
+    submit_triangle_real_vs_draw_probe_to_surface_ext(
+        dev,
+        warm,
+        dst_gpu_addr,
+        pitch,
+        rect_w,
+        rect_h,
+        blend_mode,
+        VfPrimitiveGeometry::Canonical,
+        submit_name,
+        front_end_contract,
+        BackendProbeMode::MesaLike,
+        PostDrawSyncVariant::HeavyAll,
+    )
+}
+
+fn submit_triangle_real_vs_draw_probe_to_surface_ext(
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+    dst_gpu_addr: u64,
+    pitch: usize,
+    rect_w: usize,
+    rect_h: usize,
+    blend_mode: TriangleBlendProbeMode,
+    geometry: VfPrimitiveGeometry,
+    submit_name: &'static str,
+    front_end_contract: TriangleFrontEndContract,
+    backend_probe_mode: BackendProbeMode,
+    post_draw_sync_variant: PostDrawSyncVariant,
+) -> bool {
+    let Some(draw) = prepare_triangle_draw_resources_for_geometry(
+        warm,
+        dst_gpu_addr,
+        pitch,
+        rect_w,
+        rect_h,
+        geometry,
+    ) else {
         crate::log!(
-            "intel/render: {} staging skipped reason=resource-layout size={}x{} pitch=0x{:X}\n",
+            "intel/render: {} staging skipped reason=resource-layout size={}x{} pitch=0x{:X} geometry={}\n",
             submit_name,
             rect_w,
             rect_h,
-            pitch
+            pitch,
+            geometry.label(),
         );
         return false;
     };
@@ -2357,7 +2568,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
     }
 
     intel_render_verbose_log!(
-        "intel/render: {} ps-meta dispatch={:?} grf_start={} grf_used={} ksp_off=0x{:X} size={} header_only={} note={}\n",
+        "intel/render: {} ps-meta dispatch={:?} grf_start={} grf_used={} ksp_off=0x{:X} size={} header_only={} geometry={} backend={} postdraw_sync={} note={}\n",
         submit_name,
         pipeline.ps.meta.kernel.dispatch_mode,
         pipeline.ps.meta.kernel.grf_start_register,
@@ -2366,8 +2577,20 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
         pipeline.ps.meta.kernel.code_size_bytes,
         (pipeline.ps.meta.num_varying_inputs == 0
             && pipeline.ps.meta.kernel.push_constant_bytes == 0) as u8,
+        geometry.label(),
+        backend_probe_mode.label(),
+        post_draw_sync_variant.label(),
         crate::intel::shader::triangle_pipeline_note()
     );
+    if geometry.fullscreen_candidate() {
+        intel_render_focus_log!(
+            "intel/render: {} fragment-candidate-shape accepted=1 geometry={} ndc=v0[-1.000,-1.000] v1[3.000,-1.000] v2[-1.000,3.000] screen_bbox=[0,0..{},{}] sample_points=full-surface coverage_contract=oversized-triangle does_not_prove=raster_samples_or_ps\n",
+            submit_name,
+            geometry.label(),
+            draw.target_w.saturating_sub(1),
+            draw.target_h.saturating_sub(1),
+        );
+    }
     let programmed_vs_urb_output_length = front_end_contract
         .vs_urb_output_length_override
         .or(TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE)
@@ -2482,8 +2705,8 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
         TriangleBatchMode::Draw,
         StreamoutProofExperiment::PositionSlot1,
         front_end_contract,
-        BackendProbeMode::MesaLike,
-        PostDrawSyncVariant::HeavyAll,
+        backend_probe_mode,
+        post_draw_sync_variant,
     ) {
         Ok(bytes) => bytes,
         Err(reason) => {
@@ -2498,7 +2721,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
 
     intel_render_verbose_log!(
-        "intel/render: {} batch-ready bytes=0x{:X} bt_off=0x{:X} samp_off=0x{:X} blend_off=0x{:X} cc_state_off=0x{:X} cc_vp_off=0x{:X} sf_vp_off=0x{:X}\n",
+        "intel/render: {} batch-ready bytes=0x{:X} bt_off=0x{:X} samp_off=0x{:X} blend_off=0x{:X} cc_state_off=0x{:X} cc_vp_off=0x{:X} sf_vp_off=0x{:X} geometry={} backend={}\n",
         submit_name,
         batch_tail_bytes,
         probe_state.binding_table_offset_bytes,
@@ -2506,7 +2729,9 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
         probe_state.blend_state_offset_bytes,
         probe_state.color_calc_state_offset_bytes,
         probe_state.cc_viewport_offset_bytes,
-        probe_state.sf_clip_viewport_offset_bytes
+        probe_state.sf_clip_viewport_offset_bytes,
+        geometry.label(),
+        backend_probe_mode.label(),
     );
     intel_render_verbose_log!("intel/render: {} blend-probe={}\n", submit_name, blend_mode.label());
     log_triangle_probe_state(warm, shader_layout, probe_state);

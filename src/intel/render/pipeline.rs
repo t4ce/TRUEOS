@@ -1,3 +1,7 @@
+const CPS_STATE_DWORDS_PER_VIEWPORT: usize = 8;
+const CPS_STATE_VIEWPORTS: usize = 16;
+const CPS_STATE_DWORDS: usize = CPS_STATE_DWORDS_PER_VIEWPORT * CPS_STATE_VIEWPORTS;
+
 fn log_render_buffer_layout(warm: RenderWarmState, rt_gpu_addr: Option<u64>) {
     if !crate::logflag::INTEL_RENDER_NGIN_LOGS || crate::logflag::INTEL_STAGE1_LOGS {
         return;
@@ -169,6 +173,10 @@ fn write_triangle_probe_state(
     cursor = scissor_rect_offset
         .checked_add(8)
         .ok_or("probe-state-overflow")?;
+    let cps_state_offset = crate::intel::align_up(cursor, 32).ok_or("probe-state-align")?;
+    cursor = cps_state_offset
+        .checked_add(CPS_STATE_DWORDS * core::mem::size_of::<u32>())
+        .ok_or("probe-state-overflow")?;
     let slice_hash_table_offset = if device_is_gfx125(warm.device_id) {
         let offset = crate::intel::align_up(cursor, 64).ok_or("probe-state-align")?;
         cursor = offset
@@ -246,6 +254,9 @@ fn write_triangle_probe_state(
     scissor_rect[0] = 0;
     scissor_rect[1] = draw.target_w.saturating_sub(1) | (draw.target_h.saturating_sub(1) << 16);
 
+    let cps_state = &mut dwords[cps_state_offset / 4..cps_state_offset / 4 + CPS_STATE_DWORDS];
+    cps_state.fill(0);
+
     if slice_hash_table_offset != 0 {
         let slice_hash = &mut dwords[slice_hash_table_offset / 4
             ..slice_hash_table_offset / 4 + GFX125_SLICE_HASH_TABLE_DWORDS];
@@ -272,6 +283,7 @@ fn write_triangle_probe_state(
         cc_viewport_offset_bytes: cc_viewport_offset as u32,
         sf_clip_viewport_offset_bytes: sf_clip_viewport_offset as u32,
         scissor_rect_offset_bytes: scissor_rect_offset as u32,
+        cps_state_offset_bytes: cps_state_offset as u32,
         slice_hash_table_offset_bytes: slice_hash_table_offset as u32,
     })
 }
@@ -577,10 +589,11 @@ fn encode_triangle_probe_batch(
     } else {
         0
     };
+    let force_wm_thread_dispatch = matches!(backend_probe_mode, BackendProbeMode::WmLateReemit)
+        || (matches!(batch_mode, TriangleBatchMode::VfDraw)
+            && !matches!(backend_probe_mode, BackendProbeMode::WmNormalDispatch));
     let wm_dw1 = (1 << 31)
-        | if matches!(batch_mode, TriangleBatchMode::VfDraw)
-            && !matches!(backend_probe_mode, BackendProbeMode::WmNormalDispatch)
-        {
+        | if force_wm_thread_dispatch {
             // The VF-fed draw path is our backend isolation probe, so make the
             // fragment launch condition explicit instead of inferring it from
             // the minimal Mesa-like defaults.
@@ -601,13 +614,20 @@ fn encode_triangle_probe_batch(
     let streamout_surface_size_dwords = (warm.streamout_len / 4).saturating_sub(1) as u32;
     let so_buffer_index_dw1 = (RENDER_MOCS << 22) | (1 << 20) | (1 << 21) | (1 << 31);
     let so_buffer_stream_offset_dw = 0u32;
-    // Mesa zeros this packet during init to clear any inherited clear/resolve
-    // overrides; do the same in the probe path so backend behaviour is fully
-    // under our control.
+    // Mesa zeros this packet during init to clear inherited clear/resolve
+    // overrides. The wm-hz probe keeps those op bits clear but arms the
+    // packet-local sample mask to test whether WM treats zero as no samples.
     let wm_hz_op_dw1 = 0;
     let wm_hz_op_dw2 = 0;
     let wm_hz_op_dw3 = 0;
-    let wm_hz_op_dw4 = 0;
+    let wm_hz_op_dw4 = if matches!(
+        backend_probe_mode,
+        BackendProbeMode::WmHzSampleMask | BackendProbeMode::WmLateReemit
+    ) {
+        1
+    } else {
+        0
+    };
     let gfx125_sample_pattern_dw = 0x8888_8888;
     let gfx125_slice_hash =
         device_is_gfx125(warm.device_id).then(|| gfx125_slice_hash_config(warm));
@@ -623,6 +643,8 @@ fn encode_triangle_probe_batch(
         | BackendProbeMode::PsDispatchSlot2
         | BackendProbeMode::PsDispatchAllKspSlots
         | BackendProbeMode::PsSimd16
+        | BackendProbeMode::PsEotOnly
+        | BackendProbeMode::PsCpsDisabled
         | BackendProbeMode::PsPayloadPushConstant
         | BackendProbeMode::PsPayloadAttributeEnable
         | BackendProbeMode::PsPayloadSimpleHint
@@ -633,6 +655,8 @@ fn encode_triangle_probe_batch(
         | BackendProbeMode::PsGrfStartR4
         | BackendProbeMode::PsGrfMaxThreads31
         | BackendProbeMode::PsGrfMaxThreads15
+        | BackendProbeMode::WmHzSampleMask
+        | BackendProbeMode::WmLateReemit
         | BackendProbeMode::RasterWmInputOa => pipeline.ps.meta.kernel.binding_table_entry_count,
         BackendProbeMode::PsBindingTableCountOne => {
             pipeline.ps.meta.kernel.binding_table_entry_count.max(1)
@@ -1116,6 +1140,21 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, 0)?;
     }
 
+    if matches!(backend_probe_mode, BackendProbeMode::PsCpsDisabled) {
+        log_batch_offset(cursor, "PIPE_CONTROL pre-cps-pointers");
+        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
+        log_batch_offset(cursor, "3DSTATE_CPS_POINTERS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_CPS_POINTERS)?;
+        push(batch_dwords, &mut cursor, probe_state.cps_state_offset_bytes & !0x1F)?;
+        intel_render_focus_log!(
+            "intel/render: probe-cps-disabled backend={} cps_ptr=0x{:X} cps_gpu=0x{:X} state_dwords={} mode=none source=mesa-gen12-cps-pointers does_not_prove=ps_thread_launch\n",
+            backend_probe_mode.label(),
+            probe_state.cps_state_offset_bytes & !0x1F,
+            GPU_VA_DRAW_STATE_BASE + (probe_state.cps_state_offset_bytes as u64 & !0x1F),
+            CPS_STATE_DWORDS,
+        );
+    }
+
     // Program explicit null depth/stencil state instead of relying on any
     // inherited render context defaults before the first primitive launches.
     let depth_buffer_dw1 = (DEPTH_SURFACE_FORMAT_D32_FLOAT << 24) | (SURFTYPE_NULL << 29);
@@ -1302,6 +1341,63 @@ fn encode_triangle_probe_batch(
         result_gpu_addr + (RESULT_SLOT_PRE3D_DWORD as u64) * 4,
         pre3d_value,
     )?;
+
+    if matches!(backend_probe_mode, BackendProbeMode::WmLateReemit) {
+        log_batch_offset(cursor, "PIPE_CONTROL big-pre-draw-flush");
+        push_pipe_control_full(
+            batch_dwords,
+            &mut cursor,
+            PIPE_CONTROL_BIG_PRE_DRAW_HEADER_BITS,
+            PIPE_CONTROL_BIG_PRE_DRAW_BITS,
+        )?;
+
+        log_batch_offset(cursor, "3DSTATE_SBE_SWIZ late-reemit");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_SBE_SWIZ)?;
+        for _ in 0..10 {
+            push(batch_dwords, &mut cursor, 0)?;
+        }
+
+        log_batch_offset(cursor, "3DSTATE_WM late-reemit");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_WM)?;
+        push(batch_dwords, &mut cursor, wm_dw1)?;
+
+        log_batch_offset(cursor, "3DSTATE_WM_HZ_OP late-reemit");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_WM_HZ_OP)?;
+        push(batch_dwords, &mut cursor, wm_hz_op_dw1)?;
+        push(batch_dwords, &mut cursor, wm_hz_op_dw2)?;
+        push(batch_dwords, &mut cursor, wm_hz_op_dw3)?;
+        push(batch_dwords, &mut cursor, wm_hz_op_dw4)?;
+
+        log_batch_offset(cursor, "3DSTATE_PS late-reemit");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_PS)?;
+        push(batch_dwords, &mut cursor, ps_ksp0)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, ps_dw3)?;
+        push(batch_dwords, &mut cursor, ps_scratch_space_buffer)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, ps_dw6)?;
+        push(batch_dwords, &mut cursor, ps_dw7)?;
+        push(batch_dwords, &mut cursor, ps_ksp1)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, ps_ksp2)?;
+        push(batch_dwords, &mut cursor, 0)?;
+
+        log_batch_offset(cursor, "3DSTATE_PS_EXTRA late-reemit");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_PS_EXTRA)?;
+        push(batch_dwords, &mut cursor, ps_extra_dw1)?;
+
+        log_batch_offset(cursor, "3DSTATE_CPS_POINTERS late-null");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_CPS_POINTERS)?;
+        push(batch_dwords, &mut cursor, 0)?;
+
+        intel_render_focus_log!(
+            "intel/render: probe-late-reemit backend={} pc_header=0x{:08X} pc_dw1=0x{:08X} wm_hz_sample_mask=0x{:X} cps_ptr=null does_not_prove=ps_thread_launch\n",
+            backend_probe_mode.label(),
+            PIPE_CONTROL_BIG_PRE_DRAW_HEADER_BITS,
+            PIPE_CONTROL_BIG_PRE_DRAW_BITS,
+            wm_hz_op_dw4 & 0xFFFF,
+        );
+    }
 
     if backend_probe_mode.uses_raster_wm_oa() {
         log_batch_offset(cursor, "OA raster-wm enable");
