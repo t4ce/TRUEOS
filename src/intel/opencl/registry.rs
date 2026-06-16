@@ -83,6 +83,7 @@ const UI3_CANVAS_CONSUMERS: &[&str] = &[
     "intel::init_once upload",
     "shell2:gpgpu canvas3d cube",
     "shell2:gpgpu canvas3d ico",
+    "shell2:gpgpu canvas3d para",
     "ui3::ui3_canvas worker",
     "gpgpu canvas3d probes",
 ];
@@ -143,6 +144,7 @@ const PATCH_DESC_FIELDS: &[DescriptorField<'_>] = &[
     DescriptorField::new("rect_height", 6, 1),
     DescriptorField::new("canvas_width", 7, 1),
     DescriptorField::new("canvas_height", 8, 1),
+    DescriptorField::new("flags", 9, 1),
     DescriptorField::new("origin_q16", 10, 4),
     DescriptorField::new("axis_u_q16", 14, 4),
     DescriptorField::new("axis_v_q16", 18, 4),
@@ -150,11 +152,15 @@ const PATCH_DESC_FIELDS: &[DescriptorField<'_>] = &[
     DescriptorField::new("constraint1_q16", 26, 4),
     DescriptorField::new("constraint2_q16", 30, 4),
     DescriptorField::new("constraint3_q16", 34, 4),
-    DescriptorField::new("constraint_count", 38, 1),
-    DescriptorField::new("color_rgba", 39, 1),
+    DescriptorField::new("constraint4_q16", 38, 4),
+    DescriptorField::new("constraint5_q16", 42, 4),
+    DescriptorField::new("constraint6_q16", 46, 4),
+    DescriptorField::new("constraint7_q16", 50, 4),
+    DescriptorField::new("constraint_count", 54, 1),
+    DescriptorField::new("color_rgba", 55, 1),
 ];
 const PATCH_DESC: DescriptorLayout<'_> =
-    DescriptorLayout::new("Canvas3dPlanePatchDesc", 40, Some(16), PATCH_DESC_FIELDS);
+    DescriptorLayout::new("Canvas3dPlanePatchDesc", 56, Some(32), PATCH_DESC_FIELDS);
 
 macro_rules! ro_buf {
     ($index:expr, $name:expr, $ty:expr, $binding:expr, $payload:expr) => {

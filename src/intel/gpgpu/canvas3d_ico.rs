@@ -5,6 +5,8 @@ use super::Canvas3dVec3Q16;
 pub(crate) const CORNER_COUNT: usize = 30;
 pub(crate) const EDGE_COUNT: usize = 60;
 pub(crate) const TRIANGLE_COUNT: usize = 20;
+pub(crate) const PENTAGON_COUNT: usize = 12;
+pub(crate) const FACE_COUNT: usize = TRIANGLE_COUNT + PENTAGON_COUNT;
 pub(crate) const VERTEX_COUNT: usize = CORNER_COUNT + EDGE_COUNT;
 
 pub(crate) const TRIANGLES: [(usize, usize, usize); TRIANGLE_COUNT] = [
@@ -28,6 +30,21 @@ pub(crate) const TRIANGLES: [(usize, usize, usize); TRIANGLE_COUNT] = [
     (19, 28, 29),
     (21, 22, 24),
     (24, 27, 28),
+];
+
+pub(crate) const PENTAGONS: [(usize, usize, usize, usize, usize); PENTAGON_COUNT] = [
+    (0, 1, 5, 6, 2),
+    (0, 3, 21, 22, 4),
+    (1, 3, 23, 11, 7),
+    (2, 4, 25, 13, 9),
+    (5, 7, 10, 14, 8),
+    (6, 8, 15, 12, 9),
+    (10, 11, 26, 18, 16),
+    (12, 13, 29, 19, 17),
+    (14, 15, 17, 20, 16),
+    (18, 20, 19, 28, 27),
+    (21, 23, 26, 27, 24),
+    (22, 24, 28, 29, 25),
 ];
 
 const CORNERS_Q16: [Canvas3dVec3Q16; CORNER_COUNT] = [
@@ -298,6 +315,13 @@ pub(crate) fn write_vertices(dst: *mut Canvas3dVec3Q16, seed_scale: i32) {
             );
         }
     }
+}
+
+pub(crate) fn corner(index: usize, seed_scale: i32) -> Canvas3dVec3Q16 {
+    if index >= CORNER_COUNT {
+        return Canvas3dVec3Q16::default();
+    }
+    scale_seed_vertex(CORNERS_Q16[index], seed_scale)
 }
 
 pub(crate) fn present_color(vertex_index: usize) -> u32 {

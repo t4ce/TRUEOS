@@ -16,6 +16,7 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "gpgpu canvas2d mandel64 [iterations]");
     print_shell_line(io, "gpgpu canvas3d cube");
     print_shell_line(io, "gpgpu canvas3d ico");
+    print_shell_line(io, "gpgpu canvas3d para");
     print_shell_line(io, "gpgpu smoke");
 }
 
@@ -141,6 +142,8 @@ fn run_canvas3d(
         crate::ui3::ui3_canvas::submit_canvas3d_cube(spawner, io)
     } else if kind.eq_ignore_ascii_case("ico") {
         crate::ui3::ui3_canvas::submit_canvas3d_ico(spawner, io)
+    } else if kind.eq_ignore_ascii_case("para") {
+        crate::ui3::ui3_canvas::submit_canvas3d_para(spawner, io)
     } else {
         usage(io);
         return ParseOutcome::Handled;
