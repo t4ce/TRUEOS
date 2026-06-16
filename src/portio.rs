@@ -1,4 +1,4 @@
-// ARMTODO: `portio` is x86 I/O-port machinery, not a portable device access API.
+// ARMTODO: `portio` is x86 I/O-port machinery
 // The current non-x86 stub is only here to keep the ARM build moving.
 // Known caller impact if this stays stubbed on ARM:
 // - src/globalog.rs and src/exceptions.rs use port 0xE9 style debug output.

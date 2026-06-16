@@ -1,11 +1,7 @@
 //! Tyche: kernel entropy and small pseudo-random helpers.
-//!
 //! The kernel CSPRNG is ChaCha20 seeded from hardware entropy and virtio-rng.
 //! `SoftRng` is for UI variation, games, randomized retries, and demos. It is
 //! not a cryptographic RNG.
-
-#![allow(dead_code)]
-
 use rand_chacha::ChaCha20Rng;
 use rand_core::{RngCore, SeedableRng};
 use spin::Mutex;

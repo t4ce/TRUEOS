@@ -416,72 +416,6 @@ const SPRITE64_WORKLIST_MAX_WALKERS: usize =
     SPRITE64_WORKLIST_MAX_DESCS / SPRITE64_WORKLIST_DESCS_PER_WALKER;
 const SPRITE64_WORKLIST_DESC_BYTES: usize =
     SPRITE64_WORKLIST_MAX_DESCS * core::mem::size_of::<Sprite64WorklistRgba8Desc>();
-const SPRITE64_LUCIDA_THIRD_BUCKET_PNGS: [&[u8];
-    crate::ui3::althlasfont::athlasmetrics::ATHLAS_BUCKET_COUNT] = [
-    include_bytes!("../ui3/althlasfont/lucida-third/atlas-g00.png"),
-    include_bytes!("../ui3/althlasfont/lucida-third/atlas-g01.png"),
-    include_bytes!("../ui3/althlasfont/lucida-third/atlas-g02.png"),
-    include_bytes!("../ui3/althlasfont/lucida-third/atlas-g03.png"),
-    include_bytes!("../ui3/althlasfont/lucida-third/atlas-g04.png"),
-    include_bytes!("../ui3/althlasfont/lucida-third/atlas-g05.png"),
-    include_bytes!("../ui3/althlasfont/lucida-third/atlas-g06.png"),
-    include_bytes!("../ui3/althlasfont/lucida-third/atlas-g07.png"),
-];
-const SPRITE64_LUCIDA_HALF_BUCKET_PNGS: [&[u8];
-    crate::ui3::althlasfont::athlasmetrics::ATHLAS_BUCKET_COUNT] = [
-    include_bytes!("../ui3/althlasfont/lucida-half/atlas-g00.png"),
-    include_bytes!("../ui3/althlasfont/lucida-half/atlas-g01.png"),
-    include_bytes!("../ui3/althlasfont/lucida-half/atlas-g02.png"),
-    include_bytes!("../ui3/althlasfont/lucida-half/atlas-g03.png"),
-    include_bytes!("../ui3/althlasfont/lucida-half/atlas-g04.png"),
-    include_bytes!("../ui3/althlasfont/lucida-half/atlas-g05.png"),
-    include_bytes!("../ui3/althlasfont/lucida-half/atlas-g06.png"),
-    include_bytes!("../ui3/althlasfont/lucida-half/atlas-g07.png"),
-];
-const SPRITE64_LUCIDA_1X_BUCKET_PNGS: [&[u8];
-    crate::ui3::althlasfont::athlasmetrics::ATHLAS_BUCKET_COUNT] = [
-    include_bytes!("../ui3/althlasfont/lucida-1x/atlas-g00.png"),
-    include_bytes!("../ui3/althlasfont/lucida-1x/atlas-g01.png"),
-    include_bytes!("../ui3/althlasfont/lucida-1x/atlas-g02.png"),
-    include_bytes!("../ui3/althlasfont/lucida-1x/atlas-g03.png"),
-    include_bytes!("../ui3/althlasfont/lucida-1x/atlas-g04.png"),
-    include_bytes!("../ui3/althlasfont/lucida-1x/atlas-g05.png"),
-    include_bytes!("../ui3/althlasfont/lucida-1x/atlas-g06.png"),
-    include_bytes!("../ui3/althlasfont/lucida-1x/atlas-g07.png"),
-];
-const SPRITE64_PALATINO_THIRD_BUCKET_PNGS: [&[u8];
-    crate::ui3::althlasfont::athlasmetrics::ATHLAS_BUCKET_COUNT] = [
-    include_bytes!("../ui3/althlasfont/palatino-third/atlas-g00.png"),
-    include_bytes!("../ui3/althlasfont/palatino-third/atlas-g01.png"),
-    include_bytes!("../ui3/althlasfont/palatino-third/atlas-g02.png"),
-    include_bytes!("../ui3/althlasfont/palatino-third/atlas-g03.png"),
-    include_bytes!("../ui3/althlasfont/palatino-third/atlas-g04.png"),
-    include_bytes!("../ui3/althlasfont/palatino-third/atlas-g05.png"),
-    include_bytes!("../ui3/althlasfont/palatino-third/atlas-g06.png"),
-    include_bytes!("../ui3/althlasfont/palatino-third/atlas-g07.png"),
-];
-const SPRITE64_PALATINO_HALF_BUCKET_PNGS: [&[u8];
-    crate::ui3::althlasfont::athlasmetrics::ATHLAS_BUCKET_COUNT] = [
-    include_bytes!("../ui3/althlasfont/palatino-half/atlas-g00.png"),
-    include_bytes!("../ui3/althlasfont/palatino-half/atlas-g01.png"),
-    include_bytes!("../ui3/althlasfont/palatino-half/atlas-g02.png"),
-    include_bytes!("../ui3/althlasfont/palatino-half/atlas-g03.png"),
-    include_bytes!("../ui3/althlasfont/palatino-half/atlas-g04.png"),
-    include_bytes!("../ui3/althlasfont/palatino-half/atlas-g05.png"),
-    include_bytes!("../ui3/althlasfont/palatino-half/atlas-g06.png"),
-    include_bytes!("../ui3/althlasfont/palatino-half/atlas-g07.png"),
-];
-const SPRITE64_PALATINO_1X_BUCKET_PNGS: [&[u8];
-    crate::ui3::althlasfont::athlasmetrics::ATHLAS_BUCKET_COUNT] = [
-    include_bytes!("../ui3/althlasfont/palatino-1x/atlas-g00.png"),
-    include_bytes!("../ui3/althlasfont/palatino-1x/atlas-g01.png"),
-    include_bytes!("../ui3/althlasfont/palatino-1x/atlas-g02.png"),
-    include_bytes!("../ui3/althlasfont/palatino-1x/atlas-g03.png"),
-    include_bytes!("../ui3/althlasfont/palatino-1x/atlas-g04.png"),
-    include_bytes!("../ui3/althlasfont/palatino-1x/atlas-g05.png"),
-    include_bytes!("../ui3/althlasfont/palatino-1x/atlas-g06.png"),
-    include_bytes!("../ui3/althlasfont/palatino-1x/atlas-g07.png"),
-];
 const RECT_WORKLIST_IDD_OFFSET_BYTES: usize = 0x1400;
 const RECT_WORKLIST_BINDING_TABLE_OFFSET_BYTES: usize = 0x1440;
 const RECT_WORKLIST_SRC_SURFACE_STATE_OFFSET_BYTES: usize = 0x1480;
@@ -4583,29 +4517,6 @@ fn sprite64_font_bucket_base(
     u16::try_from(base).ok()
 }
 
-fn sprite64_font_bucket_pngs(
-    face: crate::ui3::althlasfont::bitmapfont::AthlasFontFace,
-) -> Option<&'static [&'static [u8]; crate::ui3::althlasfont::athlasmetrics::ATHLAS_BUCKET_COUNT]> {
-    use crate::ui3::althlasfont::bitmapfont::{AthlasFontFamily, AthlasFontTier};
-
-    match (face.family, face.tier) {
-        (AthlasFontFamily::Lucida, AthlasFontTier::Third) => {
-            Some(&SPRITE64_LUCIDA_THIRD_BUCKET_PNGS)
-        }
-        (AthlasFontFamily::Lucida, AthlasFontTier::Half) => Some(&SPRITE64_LUCIDA_HALF_BUCKET_PNGS),
-        (AthlasFontFamily::Lucida, AthlasFontTier::OneX) => Some(&SPRITE64_LUCIDA_1X_BUCKET_PNGS),
-        (AthlasFontFamily::Palatino, AthlasFontTier::Third) => {
-            Some(&SPRITE64_PALATINO_THIRD_BUCKET_PNGS)
-        }
-        (AthlasFontFamily::Palatino, AthlasFontTier::Half) => {
-            Some(&SPRITE64_PALATINO_HALF_BUCKET_PNGS)
-        }
-        (AthlasFontFamily::Palatino, AthlasFontTier::OneX) => {
-            Some(&SPRITE64_PALATINO_1X_BUCKET_PNGS)
-        }
-    }
-}
-
 pub(crate) fn sprite64_font_slot_count() -> Option<u32> {
     let mut count = 0u32;
     for face in crate::ui3::althlasfont::bitmapfont::ATHLAS_UI3_SPRITE64_FONT_FACES {
@@ -6577,7 +6488,8 @@ fn sprite64_worklist_atlas_once() -> Option<GpgpuSprite64WorklistAtlasSurface> {
             }
 
             for face in crate::ui3::althlasfont::bitmapfont::ATHLAS_UI3_SPRITE64_FONT_FACES {
-                let bucket_pngs = sprite64_font_bucket_pngs(face)?;
+                let bucket_pngs =
+                    crate::ui3::althlasfont::bitmapfont::athlas_font_bucket_pngs(face);
                 for (bucket, png) in bucket_pngs.iter().enumerate() {
                     let decoded = crate::ui3::img::png_codec::decode_png_rgba(png).ok()?;
                     let metrics =

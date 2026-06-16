@@ -12,6 +12,8 @@ mod hw_cursor;
 pub(crate) mod hw_pic;
 pub(crate) mod opencl;
 pub(crate) mod ppgtt;
+pub(crate) mod render;
+pub(crate) mod shader;
 pub(crate) mod state;
 pub(crate) mod stats;
 pub(crate) mod types;
@@ -334,6 +336,7 @@ pub fn init_once() {
     }
     if DISPLAY_PLANE1_BOOT_DEMO_ENABLED {
         self::display::init_primary_boot_surface(dev);
+        self::render::submit_primary_triangle_once();
     } else {
         crate::log!("intel/display: plane1 boot demo disabled\n");
     }

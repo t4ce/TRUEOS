@@ -7,6 +7,66 @@ use super::athlasmetrics::{ATHLAS_BUCKET_COUNT, AthlasBucketAtlasMetrics, Athlas
 
 const LUCIDA_METRICS_JSON: &str = include_str!("lucida-metrics.json");
 const PALATINO_METRICS_JSON: &str = include_str!("palatino-metrics.json");
+const LUCIDA_THIRD_BUCKET_PNGS: [&[u8]; ATHLAS_BUCKET_COUNT] = [
+    include_bytes!("lucida-third/atlas-g00.png"),
+    include_bytes!("lucida-third/atlas-g01.png"),
+    include_bytes!("lucida-third/atlas-g02.png"),
+    include_bytes!("lucida-third/atlas-g03.png"),
+    include_bytes!("lucida-third/atlas-g04.png"),
+    include_bytes!("lucida-third/atlas-g05.png"),
+    include_bytes!("lucida-third/atlas-g06.png"),
+    include_bytes!("lucida-third/atlas-g07.png"),
+];
+const LUCIDA_HALF_BUCKET_PNGS: [&[u8]; ATHLAS_BUCKET_COUNT] = [
+    include_bytes!("lucida-half/atlas-g00.png"),
+    include_bytes!("lucida-half/atlas-g01.png"),
+    include_bytes!("lucida-half/atlas-g02.png"),
+    include_bytes!("lucida-half/atlas-g03.png"),
+    include_bytes!("lucida-half/atlas-g04.png"),
+    include_bytes!("lucida-half/atlas-g05.png"),
+    include_bytes!("lucida-half/atlas-g06.png"),
+    include_bytes!("lucida-half/atlas-g07.png"),
+];
+const LUCIDA_1X_BUCKET_PNGS: [&[u8]; ATHLAS_BUCKET_COUNT] = [
+    include_bytes!("lucida-1x/atlas-g00.png"),
+    include_bytes!("lucida-1x/atlas-g01.png"),
+    include_bytes!("lucida-1x/atlas-g02.png"),
+    include_bytes!("lucida-1x/atlas-g03.png"),
+    include_bytes!("lucida-1x/atlas-g04.png"),
+    include_bytes!("lucida-1x/atlas-g05.png"),
+    include_bytes!("lucida-1x/atlas-g06.png"),
+    include_bytes!("lucida-1x/atlas-g07.png"),
+];
+const PALATINO_THIRD_BUCKET_PNGS: [&[u8]; ATHLAS_BUCKET_COUNT] = [
+    include_bytes!("palatino-third/atlas-g00.png"),
+    include_bytes!("palatino-third/atlas-g01.png"),
+    include_bytes!("palatino-third/atlas-g02.png"),
+    include_bytes!("palatino-third/atlas-g03.png"),
+    include_bytes!("palatino-third/atlas-g04.png"),
+    include_bytes!("palatino-third/atlas-g05.png"),
+    include_bytes!("palatino-third/atlas-g06.png"),
+    include_bytes!("palatino-third/atlas-g07.png"),
+];
+const PALATINO_HALF_BUCKET_PNGS: [&[u8]; ATHLAS_BUCKET_COUNT] = [
+    include_bytes!("palatino-half/atlas-g00.png"),
+    include_bytes!("palatino-half/atlas-g01.png"),
+    include_bytes!("palatino-half/atlas-g02.png"),
+    include_bytes!("palatino-half/atlas-g03.png"),
+    include_bytes!("palatino-half/atlas-g04.png"),
+    include_bytes!("palatino-half/atlas-g05.png"),
+    include_bytes!("palatino-half/atlas-g06.png"),
+    include_bytes!("palatino-half/atlas-g07.png"),
+];
+const PALATINO_1X_BUCKET_PNGS: [&[u8]; ATHLAS_BUCKET_COUNT] = [
+    include_bytes!("palatino-1x/atlas-g00.png"),
+    include_bytes!("palatino-1x/atlas-g01.png"),
+    include_bytes!("palatino-1x/atlas-g02.png"),
+    include_bytes!("palatino-1x/atlas-g03.png"),
+    include_bytes!("palatino-1x/atlas-g04.png"),
+    include_bytes!("palatino-1x/atlas-g05.png"),
+    include_bytes!("palatino-1x/atlas-g06.png"),
+    include_bytes!("palatino-1x/atlas-g07.png"),
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AthlasFontFamily {
@@ -81,6 +141,19 @@ pub const ATHLAS_UI3_SPRITE64_FONT_FACES: [AthlasFontFace; 3] = [
     ATHLAS_FONT_FACE_LUCIDA_HALF,
     ATHLAS_FONT_FACE_LUCIDA_1X,
 ];
+
+pub fn athlas_font_bucket_pngs(
+    face: AthlasFontFace,
+) -> &'static [&'static [u8]; ATHLAS_BUCKET_COUNT] {
+    match (face.family, face.tier) {
+        (AthlasFontFamily::Lucida, AthlasFontTier::Third) => &LUCIDA_THIRD_BUCKET_PNGS,
+        (AthlasFontFamily::Lucida, AthlasFontTier::Half) => &LUCIDA_HALF_BUCKET_PNGS,
+        (AthlasFontFamily::Lucida, AthlasFontTier::OneX) => &LUCIDA_1X_BUCKET_PNGS,
+        (AthlasFontFamily::Palatino, AthlasFontTier::Third) => &PALATINO_THIRD_BUCKET_PNGS,
+        (AthlasFontFamily::Palatino, AthlasFontTier::Half) => &PALATINO_HALF_BUCKET_PNGS,
+        (AthlasFontFamily::Palatino, AthlasFontTier::OneX) => &PALATINO_1X_BUCKET_PNGS,
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct AthlasMetricsSet {
