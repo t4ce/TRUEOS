@@ -84,8 +84,8 @@ static VMX_ROOT_ACTIVE_BY_CPU: [AtomicBool; TRUEOS_VM_CPU_SLOT_LIMIT] =
 static HV_CONTROL_NUDGE_SEQ: AtomicU64 = AtomicU64::new(1);
 static VM_BOOT_MODES: [Mutex<VmBootMode>; TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new(VmBootMode::Hull) }; TRUEOS_VM_ID_LIMIT];
-static BLUEPRINT_PENDING_LAUNCH_STATES: [Mutex<Option<BlueprintPendingLaunchState>>; TRUEOS_VM_ID_LIMIT] =
-    [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
+static BLUEPRINT_PENDING_LAUNCH_STATES: [Mutex<Option<BlueprintPendingLaunchState>>;
+    TRUEOS_VM_ID_LIMIT] = [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_LAUNCH_STATES: [Mutex<Option<BlueprintLaunchState>>; TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_PROCESS_CONTEXTS: [Mutex<Option<BlueprintProcessContext>>; TRUEOS_VM_ID_LIMIT] =
@@ -1116,7 +1116,10 @@ fn log_blueprint_memory_profile(
 }
 
 fn take_blueprint_pending_launch(vm_id: u8) -> Option<BlueprintPendingLaunchState> {
-    BLUEPRINT_PENDING_LAUNCH_STATES.get(vm_id as usize)?.lock().take()
+    BLUEPRINT_PENDING_LAUNCH_STATES
+        .get(vm_id as usize)?
+        .lock()
+        .take()
 }
 
 fn clear_blueprint_pending_launch(vm_id: u8) {
@@ -1139,11 +1142,7 @@ fn prepare_blueprint_launch_on_lane(
 ) -> Result<(), AllocString> {
     let target = pending.console_target.clone();
     let log = |args: core::fmt::Arguments<'_>| log_blueprint_launch_line(target.as_ref(), args);
-    log(format_args!(
-        "apps: app-vm{} AP launch prep archive={}",
-        vm_id,
-        pending.archive.as_str()
-    ));
+    log(format_args!("apps: app-vm{} AP launch prep archive={}", vm_id, pending.archive.as_str()));
 
     let host_alloc_guard = crate::allocators::enter_host_alloc_domain_current_cpu();
     let module = crate::hv::blueprint::parse_blueprint(pending.module_bytes.as_slice())
@@ -1152,14 +1151,9 @@ fn prepare_blueprint_launch_on_lane(
         .map_err(|err| alloc::format!("app-vm unpack failed: {}", err))?;
 
     if !unpacked_bytes.starts_with(b"\x7fELF")
-        || !matches!(
-            crate::hv::blueprint::elf_type_name(unpacked_bytes.as_slice()),
-            Some("REL")
-        )
+        || !matches!(crate::hv::blueprint::elf_type_name(unpacked_bytes.as_slice()), Some("REL"))
     {
-        return Err(AllocString::from(
-            "only ELF REL blueprints are supported for app-vm launch",
-        ));
+        return Err(AllocString::from("only ELF REL blueprints are supported for app-vm launch"));
     }
 
     let imports = crate::hv::blueprint::elf_imports(unpacked_bytes.as_slice()).unwrap_or_default();

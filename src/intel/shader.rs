@@ -55,56 +55,33 @@ pub(crate) struct TrianglePipeline {
     pub(crate) ps: TrianglePixelShader,
 }
 
-pub(crate) const TRIANGLE_VERTEX_SOURCE_PATH: &str = "igc-or-spec:intel/render/triangle_vs";
-pub(crate) const TRIANGLE_FRAGMENT_SOURCE_PATH: &str = "igc-or-spec:intel/render/triangle_ps";
+#[path = "../../crates/trueos-shader/generated_triangle.rs"]
+mod generated_triangle;
+
+pub(crate) const TRIANGLE_VERTEX_SOURCE_PATH: &str =
+    "crates/trueos-shader/generated_triangle.rs:TRIANGLE_VS_CODE";
+pub(crate) const TRIANGLE_FRAGMENT_SOURCE_PATH: &str =
+    "crates/trueos-shader/generated_triangle.rs:TRIANGLE_PS_CODE";
 pub(crate) const TRIANGLE_VERTEX_COMPONENTS: usize = 3;
 pub(crate) const TRIANGLE_VERTEX_STRIDE_BYTES: usize =
     TRIANGLE_VERTEX_COMPONENTS * core::mem::size_of::<f32>();
 
-const PLACEHOLDER_KERNEL: ShaderKernelMetadata = ShaderKernelMetadata {
-    code_offset_bytes: 0,
-    code_size_bytes: 0,
-    code_alignment_bytes: 64,
-    ksp_offset_bytes: 0,
-    dispatch_mode: DispatchMode::Simd8,
-    grf_start_register: 0,
-    grf_used: 0,
-    push_constant_bytes: 0,
-    binding_table_entry_count: 0,
-    sampler_count: 0,
-};
-
-static PLACEHOLDER_PIPELINE: TrianglePipeline = TrianglePipeline {
-    vs: TriangleVertexShader {
-        meta: TriangleVertexShaderMetadata {
-            kernel: PLACEHOLDER_KERNEL,
-            max_threads: 0,
-            urb_entry_output_length: 0,
-        },
-        code: &[],
-    },
-    ps: TrianglePixelShader {
-        meta: TrianglePixelShaderMetadata {
-            kernel: PLACEHOLDER_KERNEL,
-            num_varying_inputs: 0,
-            uses_vmask: false,
-            computed_stencil: false,
-            persample_dispatch: false,
-            computed_depth_mode: 0,
-            flat_inputs: 0,
-        },
-        code: &[],
-    },
-};
-
 pub(crate) fn triangle_pipeline() -> &'static TrianglePipeline {
-    &PLACEHOLDER_PIPELINE
+    generated_triangle::triangle_pipeline()
+}
+
+pub(crate) fn triangle_pipeline_simd16() -> &'static TrianglePipeline {
+    generated_triangle::triangle_pipeline_simd16()
 }
 
 pub(crate) fn triangle_pipeline_is_placeholder() -> bool {
-    true
+    false
 }
 
 pub(crate) fn triangle_pipeline_note() -> &'static str {
-    "placeholder: IGC/spec-backed triangle VS/PS artifact is not wired"
+    generated_triangle::TRIANGLE_PIPELINE_NOTE
+}
+
+pub(crate) fn triangle_pipeline_simd16_note() -> &'static str {
+    generated_triangle::TRIANGLE_PIPELINE_SIMD16_NOTE
 }

@@ -13,6 +13,7 @@ pub(crate) mod lsd;
 pub(crate) mod mv;
 pub(crate) mod net;
 pub(crate) mod rm;
+pub(crate) mod render;
 pub(crate) mod run;
 pub(crate) mod set;
 pub(crate) mod sevenz;

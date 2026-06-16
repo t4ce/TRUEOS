@@ -54,9 +54,9 @@ mod mio_compat;
 mod mio_probe;
 mod net;
 mod pci;
-mod pmu;
 mod percpu;
 mod phys;
+mod pmu;
 mod portio;
 #[cfg(target_arch = "x86_64")]
 mod power;
@@ -65,6 +65,7 @@ mod power;
 mod power;
 mod r;
 mod ram_probe;
+mod remote_work_wake;
 mod runtime;
 mod shell2;
 mod smp;
@@ -87,7 +88,6 @@ mod turbo;
 #[allow(non_snake_case)]
 mod tyche;
 mod ui3;
-mod remote_work_wake;
 #[path = "usb3/mod.rs"]
 pub(crate) mod usb3;
 mod virtio_gpu_logo;
@@ -223,7 +223,8 @@ pub extern "C" fn kmain() -> ! {
     efi::log_reset_runtime_once();
 
     // Chronos awake hpet dependend
-    efi::acpi::hpet::ensure();  chronos::awake();
+    efi::acpi::hpet::ensure();
+    chronos::awake();
     // i hope fmt dont make this syntax 2 row
 
     power::init();

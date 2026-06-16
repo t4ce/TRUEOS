@@ -10,6 +10,634 @@ pub(crate) fn submit_primary_probe_periodic() {
     let _ = submit_primary_probe_now("periodic");
 }
 
+pub(crate) struct RenderJokerResult {
+    pub(crate) variant: &'static str,
+    pub(crate) submit_name: &'static str,
+    pub(crate) target: &'static str,
+    pub(crate) completed: bool,
+}
+
+pub(crate) struct RenderOaControlResult {
+    pub(crate) action: &'static str,
+    pub(crate) oactx: u32,
+    pub(crate) oar: u32,
+    pub(crate) ctx_ctrl: u32,
+}
+
+const RENDER_JOKER_VARIANTS: &[&str] = &[
+    "canonical",
+    "mesa",
+    "mesa-retire",
+    "bt0",
+    "bt0-primary",
+    "scratch",
+    "oa",
+    "bt1",
+    "wm-normal",
+    "slot0",
+    "slot1",
+    "slot2",
+    "all",
+    "simd16",
+    "simd16-retire",
+    "payload-push",
+    "payload-attr",
+    "payload-simple",
+    "payload-depthw",
+    "payload-bary",
+    "grf1",
+    "grf2",
+    "grf4",
+    "mt31",
+    "mt15",
+    "sync-light",
+    "sync-post-no-cs",
+    "sync-cs-no-post",
+];
+
+pub(crate) fn render_joker_variant_names() -> &'static [&'static str] {
+    RENDER_JOKER_VARIANTS
+}
+
+pub(crate) fn render_oa_control_action_names() -> &'static [&'static str] {
+    &[
+        "status",
+        "selectors",
+        "ctx-on",
+        "ctx-off",
+        "oactx-on",
+        "oactx-off",
+        "oar-on",
+        "oar-off",
+        "full-on",
+        "full-off",
+    ]
+}
+
+pub(crate) fn render_oa_control_action(
+    action: &str,
+) -> Result<RenderOaControlResult, &'static str> {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return Err("no-device");
+    };
+    if !forcewake_render_acquire(warm_once(dev)) {
+        return Err("forcewake");
+    }
+
+    let action = if action.eq_ignore_ascii_case("status") {
+        "status"
+    } else if action.eq_ignore_ascii_case("selectors") {
+        "selectors"
+    } else if action.eq_ignore_ascii_case("ctx-on") {
+        "ctx-on"
+    } else if action.eq_ignore_ascii_case("ctx-off") {
+        "ctx-off"
+    } else if action.eq_ignore_ascii_case("oactx-on") {
+        "oactx-on"
+    } else if action.eq_ignore_ascii_case("oactx-off") {
+        "oactx-off"
+    } else if action.eq_ignore_ascii_case("oar-on") {
+        "oar-on"
+    } else if action.eq_ignore_ascii_case("oar-off") {
+        "oar-off"
+    } else if action.eq_ignore_ascii_case("full-on") {
+        "full-on"
+    } else if action.eq_ignore_ascii_case("full-off") {
+        "full-off"
+    } else {
+        return Err("unknown-action");
+    };
+
+    let before_oactx = crate::intel::mmio_read(dev, RCS_OACTXCONTROL);
+    let before_oar = crate::intel::mmio_read(dev, OAR_OACONTROL);
+    let before_ctx = crate::intel::mmio_read(dev, RCS_RING_CONTEXT_CONTROL);
+    intel_render_focus_log!(
+        "intel/render: oa-control begin action={} oactx=0x{:08X} oar=0x{:08X} ctx_ctrl=0x{:08X}\n",
+        action,
+        before_oactx,
+        before_oar,
+        before_ctx,
+    );
+
+    match action {
+        "status" => {}
+        "selectors" => write_raster_wm_oa_selectors(dev),
+        "ctx-on" => crate::intel::mmio_write(
+            dev,
+            RCS_RING_CONTEXT_CONTROL,
+            masked_bits_update(CTX_CTRL_OAC_CONTEXT_ENABLE, 0),
+        ),
+        "ctx-off" => crate::intel::mmio_write(
+            dev,
+            RCS_RING_CONTEXT_CONTROL,
+            masked_bits_update(0, CTX_CTRL_OAC_CONTEXT_ENABLE),
+        ),
+        "oactx-on" => crate::intel::mmio_write(dev, RCS_OACTXCONTROL, OACTXCONTROL_COUNTER_RESUME),
+        "oactx-off" => crate::intel::mmio_write(dev, RCS_OACTXCONTROL, 0),
+        "oar-on" => crate::intel::mmio_write(
+            dev,
+            OAR_OACONTROL,
+            OAR_OACONTROL_FORMAT_A24_A14_B8_C8 | OAR_OACONTROL_COUNTER_ENABLE,
+        ),
+        "oar-off" => crate::intel::mmio_write(dev, OAR_OACONTROL, 0),
+        "full-on" => {
+            write_raster_wm_oa_selectors(dev);
+            crate::intel::mmio_write(dev, RCS_OACTXCONTROL, OACTXCONTROL_COUNTER_RESUME);
+            crate::intel::mmio_write(
+                dev,
+                OAR_OACONTROL,
+                OAR_OACONTROL_FORMAT_A24_A14_B8_C8 | OAR_OACONTROL_COUNTER_ENABLE,
+            );
+            crate::intel::mmio_write(
+                dev,
+                RCS_RING_CONTEXT_CONTROL,
+                masked_bits_update(CTX_CTRL_OAC_CONTEXT_ENABLE, 0),
+            );
+        }
+        "full-off" => {
+            crate::intel::mmio_write(dev, RCS_OACTXCONTROL, 0);
+            crate::intel::mmio_write(dev, OAR_OACONTROL, 0);
+            crate::intel::mmio_write(
+                dev,
+                RCS_RING_CONTEXT_CONTROL,
+                masked_bits_update(0, CTX_CTRL_OAC_CONTEXT_ENABLE),
+            );
+        }
+        _ => return Err("unknown-action"),
+    }
+
+    let after_oactx = crate::intel::mmio_read(dev, RCS_OACTXCONTROL);
+    let after_oar = crate::intel::mmio_read(dev, OAR_OACONTROL);
+    let after_ctx = crate::intel::mmio_read(dev, RCS_RING_CONTEXT_CONTROL);
+    intel_render_focus_log!(
+        "intel/render: oa-control end action={} oactx=0x{:08X}->0x{:08X} oar=0x{:08X}->0x{:08X} ctx_ctrl=0x{:08X}->0x{:08X}\n",
+        action,
+        before_oactx,
+        after_oactx,
+        before_oar,
+        after_oar,
+        before_ctx,
+        after_ctx,
+    );
+
+    Ok(RenderOaControlResult {
+        action,
+        oactx: after_oactx,
+        oar: after_oar,
+        ctx_ctrl: after_ctx,
+    })
+}
+
+fn write_raster_wm_oa_selectors(dev: crate::intel::Dev) {
+    crate::intel::mmio_write(dev, OAG_OASTARTTRIG1, 0);
+    crate::intel::mmio_write(dev, OAG_OASTARTTRIG2, 0x0080_0000);
+    crate::intel::mmio_write(dev, OAG_OASTARTTRIG3, 0);
+    crate::intel::mmio_write(dev, OAG_OASTARTTRIG4, 0x0080_0000);
+    crate::intel::mmio_write(dev, OAG_OAREPORTTRIG1, 0);
+    crate::intel::mmio_write(dev, OAG_SPCTR_CNF, 0);
+    crate::intel::mmio_write(dev, OAA_LENABLE_REG, 0);
+    crate::intel::mmio_write(dev, OAG_OA_PESS, 0);
+}
+
+#[derive(Copy, Clone)]
+struct RenderJokerSpec {
+    variant: &'static str,
+    submit_name: &'static str,
+    target: RenderJokerTarget,
+    blend: TriangleBlendProbeMode,
+    geometry: VfPrimitiveGeometry,
+    backend: BackendProbeMode,
+    sync: PostDrawSyncVariant,
+}
+
+#[derive(Copy, Clone)]
+enum RenderJokerTarget {
+    Primary,
+    ScratchRt,
+}
+
+fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
+    let surface = RenderJokerTarget::Primary;
+    let scratch = RenderJokerTarget::ScratchRt;
+    let explicit = TriangleBlendProbeMode::ExplicitRt0;
+    let zeroed = TriangleBlendProbeMode::MesaZeroedState;
+    let canonical = VfPrimitiveGeometry::Canonical;
+    let big = VfPrimitiveGeometry::Oversized;
+    let heavy = PostDrawSyncVariant::HeavyAll;
+    let light_post_no_cs = PostDrawSyncVariant::LightPostSyncNoCs;
+
+    let spec = if name.eq_ignore_ascii_case("canonical") {
+        RenderJokerSpec {
+            variant: "canonical",
+            submit_name: "vf-draw-path",
+            target: surface,
+            blend: explicit,
+            geometry: canonical,
+            backend: BackendProbeMode::MesaLike,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("mesa") || name.eq_ignore_ascii_case("big") {
+        RenderJokerSpec {
+            variant: "mesa",
+            submit_name: "ps-launch-big-primitive",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::MesaLike,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("mesa-retire") {
+        RenderJokerSpec {
+            variant: "mesa-retire",
+            submit_name: "ps-launch-big-primitive-retire",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::MesaLike,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("bt0") || name.eq_ignore_ascii_case("scratch") {
+        RenderJokerSpec {
+            variant: if name.eq_ignore_ascii_case("scratch") { "scratch" } else { "bt0" },
+            submit_name: "ps-bt0-scratch-rt",
+            target: scratch,
+            blend: zeroed,
+            geometry: big,
+            backend: BackendProbeMode::PsBindingTableCountZero,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("bt0-primary") {
+        RenderJokerSpec {
+            variant: "bt0-primary",
+            submit_name: "ps-bt0-primary-rt",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::PsBindingTableCountZero,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("oa") {
+        RenderJokerSpec {
+            variant: "oa",
+            submit_name: "raster-wm-oa-probe",
+            target: scratch,
+            blend: zeroed,
+            geometry: big,
+            backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("bt1") {
+        RenderJokerSpec {
+            variant: "bt1",
+            submit_name: "ps-bt1-big-primitive",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::PsBindingTableCountOne,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("wm-normal") || name.eq_ignore_ascii_case("wm") {
+        RenderJokerSpec {
+            variant: "wm-normal",
+            submit_name: "ps-wm-normal-big-primitive",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::WmNormalDispatch,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("slot0") {
+        RenderJokerSpec {
+            variant: "slot0",
+            submit_name: "ps-dispatch-slot0-big-primitive",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::PsDispatchSlot0,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("slot1") {
+        RenderJokerSpec {
+            variant: "slot1",
+            submit_name: "ps-dispatch-slot1-big-primitive",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::PsDispatchSlot1,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("slot2") {
+        RenderJokerSpec {
+            variant: "slot2",
+            submit_name: "ps-dispatch-slot2-big-primitive",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::PsDispatchSlot2,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("all") || name.eq_ignore_ascii_case("slots-all") {
+        RenderJokerSpec {
+            variant: "all",
+            submit_name: "ps-dispatch-all-big-primitive",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::PsDispatchAllKspSlots,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("simd16") {
+        RenderJokerSpec {
+            variant: "simd16",
+            submit_name: "ps-simd16-big-primitive",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::PsSimd16,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("simd16-retire") {
+        RenderJokerSpec {
+            variant: "simd16-retire",
+            submit_name: "ps-simd16-big-primitive-retire",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::PsSimd16,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("payload-push") {
+        RenderJokerSpec {
+            variant: "payload-push",
+            submit_name: "ps-payload-push-big-primitive",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::PsPayloadPushConstant,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("payload-attr") {
+        RenderJokerSpec {
+            variant: "payload-attr",
+            submit_name: "ps-payload-attr-big-primitive",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::PsPayloadAttributeEnable,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("payload-simple") {
+        RenderJokerSpec {
+            variant: "payload-simple",
+            submit_name: "ps-payload-simple-big-primitive",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::PsPayloadSimpleHint,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("payload-depthw") {
+        RenderJokerSpec {
+            variant: "payload-depthw",
+            submit_name: "ps-payload-source-depth-w-big-primitive",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::PsPayloadSourceDepthW,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("payload-bary") || name.eq_ignore_ascii_case("bary") {
+        RenderJokerSpec {
+            variant: "payload-bary",
+            submit_name: "ps-payload-bary-big-primitive",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::PsPayloadBaryPlanes,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("grf1") {
+        RenderJokerSpec {
+            variant: "grf1",
+            submit_name: "ps-grf-start-r1-big-primitive",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::PsGrfStartR1,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("grf2") {
+        RenderJokerSpec {
+            variant: "grf2",
+            submit_name: "ps-grf-start-r2-big-primitive",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::PsGrfStartR2,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("grf4") {
+        RenderJokerSpec {
+            variant: "grf4",
+            submit_name: "ps-grf-start-r4-big-primitive",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::PsGrfStartR4,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("mt31") {
+        RenderJokerSpec {
+            variant: "mt31",
+            submit_name: "ps-grf-maxthreads-31-big-primitive",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::PsGrfMaxThreads31,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("mt15") {
+        RenderJokerSpec {
+            variant: "mt15",
+            submit_name: "ps-grf-maxthreads-15-big-primitive",
+            target: surface,
+            blend: explicit,
+            geometry: big,
+            backend: BackendProbeMode::PsGrfMaxThreads15,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("sync-light") {
+        RenderJokerSpec {
+            variant: "sync-light",
+            submit_name: "postdraw-light-only-retire",
+            target: surface,
+            blend: explicit,
+            geometry: canonical,
+            backend: BackendProbeMode::MesaLike,
+            sync: PostDrawSyncVariant::LightOnlyRetire,
+        }
+    } else if name.eq_ignore_ascii_case("sync-post-no-cs") {
+        RenderJokerSpec {
+            variant: "sync-post-no-cs",
+            submit_name: "postdraw-pc-postsync-no-cs",
+            target: surface,
+            blend: explicit,
+            geometry: canonical,
+            backend: BackendProbeMode::MesaLike,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("sync-cs-no-post") {
+        RenderJokerSpec {
+            variant: "sync-cs-no-post",
+            submit_name: "postdraw-pc-cs-no-postsync",
+            target: surface,
+            blend: explicit,
+            geometry: canonical,
+            backend: BackendProbeMode::MesaLike,
+            sync: PostDrawSyncVariant::LightCsNoPostSync,
+        }
+    } else {
+        return None;
+    };
+    Some(spec)
+}
+
+pub(crate) fn submit_render_joker_probe(name: &str) -> Result<RenderJokerResult, &'static str> {
+    let Some(spec) = parse_render_joker_spec(name) else {
+        return Err("unknown-variant");
+    };
+
+    if PRIMARY_PROBE_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("in-flight");
+    }
+
+    let result = submit_render_joker_probe_locked(spec);
+    PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+    result
+}
+
+fn submit_render_joker_probe_locked(
+    spec: RenderJokerSpec,
+) -> Result<RenderJokerResult, &'static str> {
+    let probe_seq = PRIMARY_PROBE_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    if PRIMARY_DISABLE_RENDER_BRINGUP {
+        crate::log!(
+            "intel/render: joker skipped reason=disabled variant={} seq={}\n",
+            spec.variant,
+            probe_seq
+        );
+        return Err("disabled");
+    }
+
+    let Some(dev) = crate::intel::claimed_device() else {
+        crate::log!("intel/render: joker skipped reason=no-device variant={}\n", spec.variant);
+        return Err("no-device");
+    };
+    let Some(surface_gpu) = crate::intel::display::primary_surface_gpu_addr() else {
+        crate::log!("intel/render: joker skipped reason=no-surface variant={}\n", spec.variant);
+        return Err("no-surface");
+    };
+    let Some((width, height)) = crate::intel::display::active_scanout_dimensions() else {
+        crate::log!("intel/render: joker skipped reason=no-dimensions variant={}\n", spec.variant);
+        return Err("no-dimensions");
+    };
+    let Some(pitch_bytes) = width
+        .checked_mul(4)
+        .and_then(|v| crate::intel::align_up(v as usize, 64))
+    else {
+        crate::log!("intel/render: joker skipped reason=bad-pitch width={}\n", width);
+        return Err("bad-pitch");
+    };
+
+    let warm = warm_once(dev);
+    if warm.ring_len == 0
+        || warm.context_len == 0
+        || warm.batch_len == 0
+        || warm.draw_state_len == 0
+        || warm.vertex_len == 0
+        || warm.result_len == 0
+        || warm.streamout_len == 0
+    {
+        crate::log!("intel/render: joker skipped reason=warm-buffers variant={}\n", spec.variant);
+        return Err("warm-buffers");
+    }
+    if !forcewake_render_acquire(warm) {
+        crate::log!("intel/render: joker skipped reason=forcewake variant={}\n", spec.variant);
+        return Err("forcewake");
+    }
+    if !ensure_smoke_buffers_mapped(dev, warm) {
+        crate::log!("intel/render: joker skipped reason=ggtt-map variant={}\n", spec.variant);
+        return Err("ggtt-map");
+    }
+
+    let (target_gpu, target_pitch, target_w, target_h, target_label) = match spec.target {
+        RenderJokerTarget::Primary => (
+            surface_gpu,
+            pitch_bytes,
+            width as usize,
+            height as usize,
+            "primary",
+        ),
+        RenderJokerTarget::ScratchRt => {
+            unsafe {
+                core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+                core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+            }
+            crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+            (
+                GPU_VA_STREAMOUT_BASE,
+                8 * core::mem::size_of::<u32>(),
+                8,
+                8,
+                "scratch",
+            )
+        }
+    };
+
+    intel_render_focus_log!(
+        "intel/render: joker begin seq={} variant={} submit={} target={} backend={} geometry={} blend={} sync={}\n",
+        probe_seq,
+        spec.variant,
+        spec.submit_name,
+        target_label,
+        spec.backend.label(),
+        spec.geometry.label(),
+        spec.blend.label(),
+        spec.sync.label(),
+    );
+    let completed = submit_triangle_vf_draw_to_surface(
+        spec.submit_name,
+        dev,
+        warm,
+        target_gpu,
+        target_pitch,
+        target_w,
+        target_h,
+        spec.blend,
+        spec.geometry,
+        spec.backend,
+        spec.sync,
+    );
+    intel_render_focus_log!(
+        "intel/render: joker end seq={} variant={} submit={} target={} completed={}\n",
+        probe_seq,
+        spec.variant,
+        spec.submit_name,
+        target_label,
+        completed as u8,
+    );
+
+    Ok(RenderJokerResult {
+        variant: spec.variant,
+        submit_name: spec.submit_name,
+        target: target_label,
+        completed,
+    })
+}
+
 fn submit_primary_probe_now(reason: &'static str) -> bool {
     let probe_seq = PRIMARY_PROBE_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     if PRIMARY_PROBE_IN_FLIGHT
@@ -192,6 +820,27 @@ fn submit_primary_triangle_with_retries(
     width: usize,
     height: usize,
 ) -> bool {
+    if !PRIMARY_BOOT_3D_PROBES_ENABLED {
+        let completed = submit_triangle_vf_draw_to_surface(
+            "primary-single-submit",
+            dev,
+            warm,
+            surface_gpu,
+            pitch_bytes,
+            width,
+            height,
+            TriangleBlendProbeMode::ExplicitRt0,
+            VfPrimitiveGeometry::Canonical,
+            BackendProbeMode::MesaLike,
+            PostDrawSyncVariant::HeavyAll,
+        );
+        intel_render_focus_log!(
+            "intel/render: primary-single-submit completed={} action=stop-after-one-submit reason=boot-3d-probes-disabled\n",
+            completed as u8,
+        );
+        return completed;
+    }
+
     let initial_streamout_experiment =
         select_streamout_proof_experiment(PRIMARY_PROBE_SEQ.load(Ordering::Acquire));
     let vf_streamout_precheck = submit_triangle_vf_streamout_proof(
@@ -232,7 +881,6 @@ fn submit_primary_triangle_with_retries(
     if vf_draw_precheck {
         return true;
     }
-
     reset_fragment_boundary_probe();
     let ps_launch_big_primitive = submit_triangle_vf_draw_to_surface(
         "ps-launch-big-primitive",
@@ -807,7 +1455,11 @@ fn submit_triangle_vf_draw_to_surface(
         return false;
     };
 
-    let pipeline = crate::intel::shader::triangle_pipeline();
+    let pipeline = if matches!(backend_probe_mode, BackendProbeMode::PsSimd16) {
+        crate::intel::shader::triangle_pipeline_simd16()
+    } else {
+        crate::intel::shader::triangle_pipeline()
+    };
     log_render_buffer_layout(warm, Some(dst_gpu_addr));
     log_render_packet_encodings();
     if crate::intel::shader::triangle_pipeline_is_placeholder() {
@@ -881,7 +1533,9 @@ fn submit_triangle_vf_draw_to_surface(
     };
     let ps_ksp1 = if matches!(
         backend_probe_mode,
-        BackendProbeMode::PsDispatchSlot1 | BackendProbeMode::PsDispatchAllKspSlots
+        BackendProbeMode::PsDispatchSlot1
+            | BackendProbeMode::PsDispatchAllKspSlots
+            | BackendProbeMode::PsSimd16
     ) {
         ps_ksp_base
     } else {
@@ -1091,7 +1745,7 @@ fn disable_raster_wm_oa_context(dev: crate::intel::Dev, submit_name: &'static st
     crate::intel::mmio_write(
         dev,
         RCS_RING_CONTEXT_CONTROL,
-        masked_bits_update(CTX_CTRL_OAC_CONTEXT_ENABLE, 0),
+        masked_bits_update(0, CTX_CTRL_OAC_CONTEXT_ENABLE),
     );
     intel_render_focus_log!(
         "intel/render: {} raster-wm-oa cleanup oactx=0 oar=0 reason=diagnostic-counter-disable\n",

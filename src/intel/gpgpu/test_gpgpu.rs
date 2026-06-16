@@ -2584,7 +2584,9 @@ fn canvas3d_para_plane_patch_descs(
     let q = CANVAS3D_PROJECT_Q16_ONE;
     let width = surface.width as i32;
     let height = surface.height as i32;
-    let sheet_width = ((width * 4) / 5).max(192).min(width.saturating_sub(32).max(1));
+    let sheet_width = ((width * 4) / 5)
+        .max(192)
+        .min(width.saturating_sub(32).max(1));
     let sheet_height = (height / 130).clamp(7, 14);
     let skew = (width / 9).clamp(28, 160);
     let pitch = sheet_height + SHEET_GAP_PX;
@@ -2810,7 +2812,11 @@ fn canvas3d_polygon_patch_desc(
     };
     canvas3d_plane_patch_set_local_constraints(&mut desc, &constraints[..count], count as u32);
     if let Some(constraints) = screen_constraints {
-        canvas3d_plane_patch_set_screen_edge_constraints(&mut desc, &constraints[..count], count as u32);
+        canvas3d_plane_patch_set_screen_edge_constraints(
+            &mut desc,
+            &constraints[..count],
+            count as u32,
+        );
     }
     desc
 }
@@ -2853,12 +2859,7 @@ fn canvas3d_projected_polygon_rect(
         return GpgpuRect::new(0, 0, 1, 1);
     }
 
-    GpgpuRect::new(
-        x0 as i32,
-        y0 as i32,
-        (x1 - x0) as u32,
-        (y1 - y0) as u32,
-    )
+    GpgpuRect::new(x0 as i32, y0 as i32, (x1 - x0) as u32, (y1 - y0) as u32)
 }
 
 fn canvas3d_project_screen_point(
@@ -2948,11 +2949,7 @@ fn canvas3d_screen_edge_constraints_from_points(
     }
 }
 
-fn canvas3d_screen_points_rect(
-    points: [(i32, i32); 4],
-    width: u32,
-    height: u32,
-) -> GpgpuRect {
+fn canvas3d_screen_points_rect(points: [(i32, i32); 4], width: u32, height: u32) -> GpgpuRect {
     let mut min_x = i32::MAX;
     let mut min_y = i32::MAX;
     let mut max_x = i32::MIN;
@@ -2964,16 +2961,15 @@ fn canvas3d_screen_points_rect(
         max_y = max_y.max(point.1);
     }
 
-    let x0 = min_x.saturating_sub(1).clamp(0, width.saturating_sub(1) as i32);
-    let y0 = min_y.saturating_sub(1).clamp(0, height.saturating_sub(1) as i32);
+    let x0 = min_x
+        .saturating_sub(1)
+        .clamp(0, width.saturating_sub(1) as i32);
+    let y0 = min_y
+        .saturating_sub(1)
+        .clamp(0, height.saturating_sub(1) as i32);
     let x1 = max_x.saturating_add(2).clamp(1, width as i32);
     let y1 = max_y.saturating_add(2).clamp(1, height as i32);
-    GpgpuRect::new(
-        x0,
-        y0,
-        (x1 - x0).max(1) as u32,
-        (y1 - y0).max(1) as u32,
-    )
+    GpgpuRect::new(x0, y0, (x1 - x0).max(1) as u32, (y1 - y0).max(1) as u32)
 }
 
 fn canvas3d_screen_edge_constraint(a: (i32, i32), b: (i32, i32)) -> Canvas3dVec3Q16 {
@@ -3078,10 +3074,14 @@ fn canvas3d_paper_light_color(light_q16: u32, shade_drop: u32) -> u32 {
     let q = CANVAS3D_PROJECT_Q16_ONE as u32;
     let ambient = q / 2;
     let diffuse = (light_q16 / 2).min(q / 2);
-    let shade = ambient.saturating_add(diffuse).saturating_sub(shade_drop << 8);
+    let shade = ambient
+        .saturating_add(diffuse)
+        .saturating_sub(shade_drop << 8);
     let r = ((246u32 * shade) >> 16).clamp(0, 255);
     let g = ((244u32 * shade) >> 16).clamp(0, 255);
-    let b = ((232u32 * shade) >> 16).saturating_sub(shade_drop / 5).clamp(0, 255);
+    let b = ((232u32 * shade) >> 16)
+        .saturating_sub(shade_drop / 5)
+        .clamp(0, 255);
     0xFF00_0000 | (r << 16) | (g << 8) | b
 }
 
@@ -3142,10 +3142,7 @@ fn canvas3d_polygon_local_uv_q16(
 
     let du = canvas3d_vec3_dot_q16(delta, axis_u_q16);
     let dv = canvas3d_vec3_dot_q16(delta, axis_v_q16);
-    (
-        (((du * vv - dv * uv) << 16) / det) as i32,
-        (((dv * uu - du * uv) << 16) / det) as i32,
-    )
+    ((((du * vv - dv * uv) << 16) / det) as i32, (((dv * uu - du * uv) << 16) / det) as i32)
 }
 
 fn canvas3d_polygon_edge_constraint_q16(a: (i32, i32), b: (i32, i32)) -> Canvas3dVec3Q16 {
@@ -3766,7 +3763,11 @@ fn canvas3d_plane_patch_ui2_face_desc_in_rect_with_count(
         if let Some(screen_constraints) =
             canvas3d_screen_edge_constraints(&vertices, 4, canvas_width, canvas_height)
         {
-            canvas3d_plane_patch_set_screen_edge_constraints(&mut desc, &screen_constraints[..4], 4);
+            canvas3d_plane_patch_set_screen_edge_constraints(
+                &mut desc,
+                &screen_constraints[..4],
+                4,
+            );
         }
     }
 
