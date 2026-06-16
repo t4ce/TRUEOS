@@ -5,6 +5,8 @@ use core::sync::atomic::Ordering;
 use super::super as intel;
 use super::*;
 
+const CANVAS3D_POLYGON_MAX_VERTICES: usize = CANVAS3D_PLANE_PATCH_MAX_CONSTRAINTS as usize;
+
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct GpgpuShellCube20ProjectResult {
     pub(crate) ok: bool,
@@ -1169,7 +1171,7 @@ pub(crate) fn submit_canvas3d_plane_patch_worklist_rgba8_once() -> bool {
             rect_height,
             canvas_width: CANVAS3D_PLANE_FILL_TEST_WIDTH,
             canvas_height: CANVAS3D_PLANE_FILL_TEST_HEIGHT,
-            reserved0: 0,
+            flags: 0,
             origin_q16: Canvas3dVec3Q16 {
                 x: origin_x,
                 y: origin_y,
@@ -1192,6 +1194,10 @@ pub(crate) fn submit_canvas3d_plane_patch_worklist_rgba8_once() -> bool {
             constraint1_q16: square_constraints.1,
             constraint2_q16: square_constraints.2,
             constraint3_q16: square_constraints.3,
+            constraint4_q16: Canvas3dVec3Q16::default(),
+            constraint5_q16: Canvas3dVec3Q16::default(),
+            constraint6_q16: Canvas3dVec3Q16::default(),
+            constraint7_q16: Canvas3dVec3Q16::default(),
             constraint_count: 4,
             color_rgba,
         }
@@ -1728,105 +1734,204 @@ pub(crate) fn canvas3d_ico_project_texture_frame(
 ) -> Option<GpgpuCanvas3dUi2TextureFrame> {
     const CADENCE_US: u64 = 33_000;
 
-    let width = width.max(1);
-    let height = height.max(1);
+    let width = width.clamp(1, 512);
+    let height = height.clamp(1, 512);
     let pixel_count = (width as usize).checked_mul(height as usize)?;
     let byte_count = pixel_count.checked_mul(core::mem::size_of::<u32>())?;
     let total_start_tick = direct_rcs_now_tick();
     let Some(dev) = intel::claimed_device() else {
         return None;
     };
-    let Some(project_upload) = upload_canvas3d_project_rgba8_kernel() else {
-        return None;
-    };
-    let Some(transform_upload) = upload_canvas3d_transform_q16_kernel() else {
+    let Some(upload) = upload_canvas3d_plane_patch_worklist_rgba8_kernel() else {
         return None;
     };
     let Some(state) = direct_rcs_state_once(dev) else {
         return None;
     };
-    if CANVAS3D_PROJECT_TEST_BYTES > CLEAR_RECT_TEST_BYTES
-        || CANVAS3D_PROJECT_OUT_BYTES > CANVAS3D_PROJECT_OUT_ALLOC_BYTES
-    {
+    let Some(staging) = present_staging_surface_once(width, height) else {
+        return None;
+    };
+    if byte_count > staging.surface.bytes {
         return None;
     }
 
-    shell_canvas3d_seed_archaeology_vertices(state);
-    let y_spin_half_deg = frame % 180;
-    let rotate_q16 = shell_canvas3d_y_quat_q16(y_spin_half_deg, true);
-    let scene_scale_q16 = shell_canvas3d_cube_scale_pulse_q16(u64::from(frame) * 33);
-    let transform_ms = submit_canvas3d_transform_fused_frame_range(
-        dev,
-        state,
-        transform_upload,
-        DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
-        state.clear_test_phys,
-        CANVAS3D_TMP_GPU,
-        state.canvas3d_tmp_phys,
-        0,
-        0,
-        ICO90_VERTEX_COUNT as u32,
-        Canvas3dVec3Q16 {
-            x: scene_scale_q16,
-            y: scene_scale_q16,
-            z: scene_scale_q16,
-            pad: 0,
-        },
-        rotate_q16,
-        Canvas3dVec3Q16 {
-            x: 0,
-            y: 0,
-            z: CANVAS3D_PROJECT_Q16_ONE * 2,
-            pad: 0,
-        },
-        CANVAS3D_TRANSFORM_FUSED_PRE_MARKER,
-        CANVAS3D_TRANSFORM_FUSED_POST_MARKER,
-    )?;
-    let project_ms = submit_canvas3d_project_frame_from(
-        dev,
-        state,
-        project_upload,
-        CANVAS3D_TMP_GPU,
-        state.canvas3d_tmp_phys,
-        ICO90_VERTEX_COUNT as u32,
-        width,
-        height,
-    )?;
+    unsafe {
+        let dst = staging.virt as *mut u32;
+        for y in 0..height as usize {
+            let row = dst.add(y * width as usize);
+            for x in 0..width as usize {
+                let checker = (((x >> 5) ^ (y >> 5)) & 1) as u32;
+                let shade = if checker == 0 { 0x10 } else { 0x18 };
+                core::ptr::write_volatile(
+                    row.add(x),
+                    0xFF00_0000 | (shade << 16) | (shade << 8) | shade,
+                );
+            }
+        }
+    }
+    intel::dma_flush(staging.virt, byte_count);
+
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let dst_ppgtt_ok = kernel_ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(
+            state,
+            staging.surface.gpu,
+            staging.surface.phys,
+            staging.surface.bytes,
+        );
+    let mut submitted_count = 0u32;
+    let mut retired_count = 0u32;
+    let mut total_submit_ms = 0u64;
+    let mut max_submit_ms = 0u64;
+    let mut rendered_faces = 0usize;
+    let mut work_group_x = 0u32;
+    let mut work_group_y = 0u32;
+    let mut work_group_z = 0u32;
+    let mut work_pre_marker = 0u32;
+    let mut work_post_marker = 0u32;
+    if dst_ppgtt_ok {
+        let mut face_descs =
+            [Canvas3dPlanePatchWorklistRgba8Desc::default(); canvas3d_ico::FACE_COUNT];
+        let face_count =
+            canvas3d_ico_plane_patch_descs(frame, staging.surface, width, height, &mut face_descs);
+        let mut visible_face_descs =
+            [Canvas3dPlanePatchWorklistRgba8Desc::default(); canvas3d_ico::FACE_COUNT];
+        let mut visible_face_count = 0usize;
+        for desc in face_descs[..face_count].iter().copied() {
+            if canvas3d_plane_patch_faces_camera(desc) {
+                visible_face_descs[visible_face_count] = desc;
+                visible_face_count += 1;
+            }
+        }
+        if visible_face_count == 0 && face_count != 0 {
+            visible_face_descs[0] = canvas3d_nearest_face_desc_slice(&face_descs[..face_count]);
+            visible_face_count = 1;
+        }
+        rendered_faces = visible_face_count;
+        canvas3d_sort_face_descs_far_to_near(&mut visible_face_descs[..visible_face_count]);
+        let (group_x, group_y, group_z) = canvas3d_plane_patch_worklist_groups_for_descs(
+            &visible_face_descs[..visible_face_count],
+        );
+        work_group_x = group_x;
+        work_group_y = group_y;
+        work_group_z = group_z;
+        unsafe {
+            core::ptr::write_bytes(
+                state.canvas3d_tmp_virt,
+                0,
+                CANVAS3D_PLANE_PATCH_WORKLIST_DESC_BYTES,
+            );
+            let desc_dst = state.canvas3d_tmp_virt as *mut Canvas3dPlanePatchWorklistRgba8Desc;
+            for (index, desc) in visible_face_descs[..visible_face_count]
+                .iter()
+                .copied()
+                .enumerate()
+            {
+                core::ptr::write_volatile(desc_dst.add(index), desc);
+            }
+        }
+        intel::dma_flush(state.canvas3d_tmp_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
+
+        let desc_ppgtt_ok = direct_rcs_map_ppgtt_kernel(
+            state,
+            CANVAS3D_TMP_GPU,
+            state.canvas3d_tmp_phys,
+            CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+        );
+        let params = Canvas3dPlanePatchWorklistRgba8Params {
+            dst_gpu: staging.surface.gpu,
+            desc_gpu: CANVAS3D_TMP_GPU,
+            desc_base: 0,
+            desc_count: visible_face_count as u32,
+            group_x,
+            group_y,
+            group_z,
+        };
+        let batch_ok = desc_ppgtt_ok
+            && direct_rcs_encode_canvas3d_plane_patch_worklist_batch(
+                state,
+                upload,
+                params,
+                staging.surface.bytes,
+                CANVAS3D_PLANE_PATCH_WORKLIST_DESC_BYTES,
+            );
+        let submit_start_tick = direct_rcs_now_tick();
+        let submitted_ok = batch_ok && direct_rcs_submit_batch(dev, state);
+        if submitted_ok {
+            submitted_count = submitted_count.saturating_add(1);
+        }
+        let (observed, submit_ms) = if submitted_ok {
+            direct_rcs_poll_result_slot_elapsed(
+                state,
+                CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER_SLOT,
+                CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER,
+                submit_start_tick,
+            )
+        } else {
+            (0, 0)
+        };
+        total_submit_ms = total_submit_ms.saturating_add(submit_ms);
+        max_submit_ms = max_submit_ms.max(submit_ms);
+        let pre_marker =
+            direct_rcs_read_result_slot(state, CANVAS3D_PLANE_PATCH_WORKLIST_PRE_MARKER_SLOT);
+        work_pre_marker = pre_marker;
+        work_post_marker = observed;
+        if observed == CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER
+            && pre_marker == CANVAS3D_PLANE_PATCH_WORKLIST_PRE_MARKER
+        {
+            retired_count = retired_count.saturating_add(1);
+        }
+    }
+    intel::dma_flush(staging.virt, byte_count);
+
     let mut rgba = vec![0u8; byte_count];
-    let (visible_points, stamped_pixels) = shell_canvas3d_copy_projected_points_to_rgba8(
-        state,
-        width as usize,
-        height as usize,
-        ICO90_VERTEX_COUNT,
-        true,
-        rgba.as_mut_slice(),
-    );
-    let submitted = 2;
-    let total_submit_ms = transform_ms.saturating_add(project_ms);
+    let mut colored = 0usize;
+    unsafe {
+        let src = staging.virt as *const u8;
+        core::ptr::copy_nonoverlapping(src, rgba.as_mut_ptr(), byte_count);
+        let pixels = staging.virt as *const u32;
+        for y in 0..height as usize {
+            for x in 0..width as usize {
+                let index = y * width as usize + x;
+                let checker = (((x >> 5) ^ (y >> 5)) & 1) as u32;
+                let shade = if checker == 0 { 0x10 } else { 0x18 };
+                let background = 0xFF00_0000 | (shade << 16) | (shade << 8) | shade;
+                if core::ptr::read_volatile(pixels.add(index)) != background {
+                    colored += 1;
+                }
+            }
+        }
+    }
+    let retired = submitted_count > 0 && submitted_count == retired_count;
     let result = GpgpuShellCube20ProjectResult {
-        ok: visible_points != 0 && stamped_pixels != 0,
+        ok: retired && colored > 0,
         frames: 1,
-        submitted,
+        submitted: submitted_count,
         presented: 0,
-        visible_points,
-        stamped_pixels,
+        visible_points: rendered_faces,
+        stamped_pixels: colored,
         duration_ms: 0,
         elapsed_ms: direct_rcs_elapsed_ms_since(total_start_tick),
         cadence_us: CADENCE_US,
         total_submit_ms,
-        max_submit_ms: transform_ms.max(project_ms),
+        max_submit_ms,
         primary_width: width,
         primary_height: height,
         canvas_xy: GpgpuPoint::new(0, 0),
-        vertex_count: ICO90_VERTEX_COUNT,
+        vertex_count: canvas3d_ico::FACE_COUNT,
         radius_px: (CUBE20_SEED_HALF_Q16 as u32).saturating_mul(width.min(height))
             / CANVAS3D_PROJECT_Q16_ONE as u32,
         last_angle_deg: frame.wrapping_mul(2) % 360,
-        work_group_x: 0,
-        work_group_y: 0,
-        work_group_z: 0,
-        pre_marker: 0,
-        post_marker: 0,
+        work_group_x,
+        work_group_y,
+        work_group_z,
+        pre_marker: work_pre_marker,
+        post_marker: work_post_marker,
     };
 
     Some(GpgpuCanvas3dUi2TextureFrame {
@@ -2165,6 +2270,893 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
         height,
         rgba,
     })
+}
+
+pub(crate) fn canvas3d_ico_project_surface_frame(
+    frame: u32,
+    dst: GpgpuRgba8Surface,
+) -> Option<GpgpuShellCube20ProjectResult> {
+    const CADENCE_US: u64 = 33_000;
+
+    if !dst.is_valid() || dst.width == 0 || dst.height == 0 || dst.width > 1440 || dst.height > 1440
+    {
+        return None;
+    }
+
+    let total_start_tick = direct_rcs_now_tick();
+    let Some(dev) = intel::claimed_device() else {
+        return None;
+    };
+    let Some(upload) = upload_canvas3d_plane_patch_worklist_rgba8_kernel() else {
+        return None;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        return None;
+    };
+
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let dst_ppgtt_ok =
+        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
+    let mut submitted_count = 0u32;
+    let mut retired_count = 0u32;
+    let mut total_submit_ms = 0u64;
+    let mut max_submit_ms = 0u64;
+    let mut rendered_faces = 0usize;
+    let mut work_group_x = 0u32;
+    let mut work_group_y = 0u32;
+    let mut work_group_z = 0u32;
+    let mut work_pre_marker = 0u32;
+    let mut work_post_marker = 0u32;
+    if dst_ppgtt_ok {
+        let mut face_descs =
+            [Canvas3dPlanePatchWorklistRgba8Desc::default(); canvas3d_ico::FACE_COUNT];
+        let face_count =
+            canvas3d_ico_plane_patch_descs(frame, dst, dst.width, dst.height, &mut face_descs);
+        let mut visible_face_descs =
+            [Canvas3dPlanePatchWorklistRgba8Desc::default(); canvas3d_ico::FACE_COUNT];
+        let mut visible_face_count = 0usize;
+        for desc in face_descs[..face_count].iter().copied() {
+            if canvas3d_plane_patch_faces_camera(desc) {
+                visible_face_descs[visible_face_count] = desc;
+                visible_face_count += 1;
+            }
+        }
+        if visible_face_count == 0 && face_count != 0 {
+            visible_face_descs[0] = canvas3d_nearest_face_desc_slice(&face_descs[..face_count]);
+            visible_face_count = 1;
+        }
+        rendered_faces = visible_face_count;
+        canvas3d_sort_face_descs_far_to_near(&mut visible_face_descs[..visible_face_count]);
+        let (group_x, group_y, group_z) = canvas3d_plane_patch_worklist_groups_for_descs(
+            &visible_face_descs[..visible_face_count],
+        );
+        work_group_x = group_x;
+        work_group_y = group_y;
+        work_group_z = group_z;
+        unsafe {
+            core::ptr::write_bytes(
+                state.canvas3d_tmp_virt,
+                0,
+                CANVAS3D_PLANE_PATCH_WORKLIST_DESC_BYTES,
+            );
+            let desc_dst = state.canvas3d_tmp_virt as *mut Canvas3dPlanePatchWorklistRgba8Desc;
+            for (index, desc) in visible_face_descs[..visible_face_count]
+                .iter()
+                .copied()
+                .enumerate()
+            {
+                core::ptr::write_volatile(desc_dst.add(index), desc);
+            }
+        }
+        intel::dma_flush(state.canvas3d_tmp_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
+
+        let desc_ppgtt_ok = direct_rcs_map_ppgtt_kernel(
+            state,
+            CANVAS3D_TMP_GPU,
+            state.canvas3d_tmp_phys,
+            CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+        );
+        let params = Canvas3dPlanePatchWorklistRgba8Params {
+            dst_gpu: dst.gpu,
+            desc_gpu: CANVAS3D_TMP_GPU,
+            desc_base: 0,
+            desc_count: visible_face_count as u32,
+            group_x,
+            group_y,
+            group_z,
+        };
+        let batch_ok = desc_ppgtt_ok
+            && direct_rcs_encode_canvas3d_plane_patch_worklist_batch(
+                state,
+                upload,
+                params,
+                dst.bytes,
+                CANVAS3D_PLANE_PATCH_WORKLIST_DESC_BYTES,
+            );
+        let submit_start_tick = direct_rcs_now_tick();
+        let submitted_ok = batch_ok && direct_rcs_submit_batch(dev, state);
+        if submitted_ok {
+            submitted_count = submitted_count.saturating_add(1);
+        }
+        let (observed, submit_ms) = if submitted_ok {
+            direct_rcs_poll_result_slot_elapsed(
+                state,
+                CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER_SLOT,
+                CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER,
+                submit_start_tick,
+            )
+        } else {
+            (0, 0)
+        };
+        total_submit_ms = total_submit_ms.saturating_add(submit_ms);
+        max_submit_ms = max_submit_ms.max(submit_ms);
+        let pre_marker =
+            direct_rcs_read_result_slot(state, CANVAS3D_PLANE_PATCH_WORKLIST_PRE_MARKER_SLOT);
+        work_pre_marker = pre_marker;
+        work_post_marker = observed;
+        if observed == CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER
+            && pre_marker == CANVAS3D_PLANE_PATCH_WORKLIST_PRE_MARKER
+        {
+            retired_count = retired_count.saturating_add(1);
+        }
+    }
+
+    let retired = submitted_count > 0 && submitted_count == retired_count;
+    Some(GpgpuShellCube20ProjectResult {
+        ok: retired,
+        frames: 1,
+        submitted: submitted_count,
+        presented: 0,
+        visible_points: if retired { rendered_faces } else { 0 },
+        stamped_pixels: 0,
+        duration_ms: 0,
+        elapsed_ms: direct_rcs_elapsed_ms_since(total_start_tick),
+        cadence_us: CADENCE_US,
+        total_submit_ms,
+        max_submit_ms,
+        primary_width: dst.width,
+        primary_height: dst.height,
+        canvas_xy: GpgpuPoint::new(0, 0),
+        vertex_count: canvas3d_ico::FACE_COUNT,
+        radius_px: (CUBE20_SEED_HALF_Q16 as u32).saturating_mul(dst.width.min(dst.height))
+            / CANVAS3D_PROJECT_Q16_ONE as u32,
+        last_angle_deg: frame.wrapping_mul(2) % 360,
+        work_group_x,
+        work_group_y,
+        work_group_z,
+        pre_marker: work_pre_marker,
+        post_marker: work_post_marker,
+    })
+}
+
+pub(crate) fn canvas3d_para_project_surface_frame(
+    frame: u32,
+    dst: GpgpuRgba8Surface,
+) -> Option<GpgpuShellCube20ProjectResult> {
+    const CADENCE_US: u64 = 33_000;
+    const SHEET_COUNT: usize = 32;
+
+    if !dst.is_valid() || dst.width == 0 || dst.height == 0 || dst.width > 1440 || dst.height > 1440
+    {
+        return None;
+    }
+
+    let total_start_tick = direct_rcs_now_tick();
+    let Some(dev) = intel::claimed_device() else {
+        return None;
+    };
+    let Some(upload) = upload_canvas3d_plane_patch_worklist_rgba8_kernel() else {
+        return None;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        return None;
+    };
+
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let dst_ppgtt_ok =
+        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
+    let mut submitted_count = 0u32;
+    let mut retired_count = 0u32;
+    let mut total_submit_ms = 0u64;
+    let mut max_submit_ms = 0u64;
+    let mut work_group_x = 0u32;
+    let mut work_group_y = 0u32;
+    let mut work_group_z = 0u32;
+    let mut work_pre_marker = 0u32;
+    let mut work_post_marker = 0u32;
+    if dst_ppgtt_ok {
+        let mut descs = [Canvas3dPlanePatchWorklistRgba8Desc::default(); SHEET_COUNT];
+        let desc_count = canvas3d_para_plane_patch_descs(frame, dst, &mut descs);
+        let (group_x, group_y, group_z) =
+            canvas3d_plane_patch_worklist_groups_for_descs(&descs[..desc_count]);
+        work_group_x = group_x;
+        work_group_y = group_y;
+        work_group_z = group_z;
+        unsafe {
+            core::ptr::write_bytes(
+                state.canvas3d_tmp_virt,
+                0,
+                CANVAS3D_PLANE_PATCH_WORKLIST_DESC_BYTES,
+            );
+            let desc_dst = state.canvas3d_tmp_virt as *mut Canvas3dPlanePatchWorklistRgba8Desc;
+            for (index, desc) in descs[..desc_count].iter().copied().enumerate() {
+                core::ptr::write_volatile(desc_dst.add(index), desc);
+            }
+        }
+        intel::dma_flush(state.canvas3d_tmp_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
+
+        let desc_ppgtt_ok = direct_rcs_map_ppgtt_kernel(
+            state,
+            CANVAS3D_TMP_GPU,
+            state.canvas3d_tmp_phys,
+            CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+        );
+        let params = Canvas3dPlanePatchWorklistRgba8Params {
+            dst_gpu: dst.gpu,
+            desc_gpu: CANVAS3D_TMP_GPU,
+            desc_base: 0,
+            desc_count: desc_count as u32,
+            group_x,
+            group_y,
+            group_z,
+        };
+        let batch_ok = desc_ppgtt_ok
+            && direct_rcs_encode_canvas3d_plane_patch_worklist_batch(
+                state,
+                upload,
+                params,
+                dst.bytes,
+                CANVAS3D_PLANE_PATCH_WORKLIST_DESC_BYTES,
+            );
+        let submit_start_tick = direct_rcs_now_tick();
+        let submitted_ok = batch_ok && direct_rcs_submit_batch(dev, state);
+        if submitted_ok {
+            submitted_count = submitted_count.saturating_add(1);
+        }
+        let (observed, submit_ms) = if submitted_ok {
+            direct_rcs_poll_result_slot_elapsed(
+                state,
+                CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER_SLOT,
+                CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER,
+                submit_start_tick,
+            )
+        } else {
+            (0, 0)
+        };
+        total_submit_ms = total_submit_ms.saturating_add(submit_ms);
+        max_submit_ms = max_submit_ms.max(submit_ms);
+        let pre_marker =
+            direct_rcs_read_result_slot(state, CANVAS3D_PLANE_PATCH_WORKLIST_PRE_MARKER_SLOT);
+        work_pre_marker = pre_marker;
+        work_post_marker = observed;
+        if observed == CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER
+            && pre_marker == CANVAS3D_PLANE_PATCH_WORKLIST_PRE_MARKER
+        {
+            retired_count = retired_count.saturating_add(1);
+        }
+    }
+
+    let retired = submitted_count > 0 && submitted_count == retired_count;
+    Some(GpgpuShellCube20ProjectResult {
+        ok: retired,
+        frames: 1,
+        submitted: submitted_count,
+        presented: 0,
+        visible_points: if retired { SHEET_COUNT } else { 0 },
+        stamped_pixels: 0,
+        duration_ms: 0,
+        elapsed_ms: direct_rcs_elapsed_ms_since(total_start_tick),
+        cadence_us: CADENCE_US,
+        total_submit_ms,
+        max_submit_ms,
+        primary_width: dst.width,
+        primary_height: dst.height,
+        canvas_xy: GpgpuPoint::new(0, 0),
+        vertex_count: SHEET_COUNT,
+        radius_px: dst.width.min(dst.height) / 2,
+        last_angle_deg: frame.wrapping_mul(2) % 360,
+        work_group_x,
+        work_group_y,
+        work_group_z,
+        pre_marker: work_pre_marker,
+        post_marker: work_post_marker,
+    })
+}
+
+fn canvas3d_para_plane_patch_descs(
+    frame: u32,
+    surface: GpgpuRgba8Surface,
+    out: &mut [Canvas3dPlanePatchWorklistRgba8Desc; 32],
+) -> usize {
+    const SHEET_COUNT: usize = 32;
+    const SHEET_GAP_PX: i32 = 6;
+
+    let q = CANVAS3D_PROJECT_Q16_ONE;
+    let width = surface.width as i32;
+    let height = surface.height as i32;
+    let sheet_width = ((width * 4) / 5).max(192).min(width.saturating_sub(32).max(1));
+    let sheet_height = (height / 130).clamp(7, 14);
+    let skew = (width / 9).clamp(28, 160);
+    let pitch = sheet_height + SHEET_GAP_PX;
+    let stack_height = pitch * (SHEET_COUNT as i32 - 1) + sheet_height;
+    let left = ((width - sheet_width - skew) / 2).max(8);
+    let top = ((height - stack_height) / 2).max(8);
+    let light_dir = Canvas3dVec3Q16 {
+        x: -q / 3,
+        y: -q / 2,
+        z: q,
+        pad: 0,
+    };
+    let axis_u_q16 = Canvas3dVec3Q16 {
+        x: q,
+        y: 0,
+        z: q / 3,
+        pad: 0,
+    };
+    let axis_v_q16 = Canvas3dVec3Q16 {
+        x: 0,
+        y: q / 7,
+        z: 0,
+        pad: 0,
+    };
+    let normal_q16 = canvas3d_vec3_cross_q16(axis_u_q16, axis_v_q16);
+    let lit_q16 = canvas3d_plane_light_q16(normal_q16, light_dir);
+    let drift = ((frame % 120) as i32 - 60) / 12;
+
+    for sheet in 0..SHEET_COUNT {
+        let sheet_from_top = (SHEET_COUNT - 1 - sheet) as i32;
+        let y0 = top + sheet_from_top * pitch;
+        let y1 = y0 + sheet_height;
+        let slide = sheet_from_top / 3 + drift;
+        let points = [
+            (left + skew + slide, y0),
+            (left + skew + sheet_width + slide, y0),
+            (left + sheet_width + slide, y1),
+            (left + slide, y1),
+        ];
+        let rect = canvas3d_screen_points_rect(points, surface.width, surface.height);
+        let constraints =
+            canvas3d_screen_edge_constraints_from_points(points, 4).unwrap_or_default();
+        let shade_drop = (sheet_from_top as u32).saturating_mul(4);
+        let color_rgba = canvas3d_paper_light_color(lit_q16, shade_drop);
+        let mut desc = Canvas3dPlanePatchWorklistRgba8Desc {
+            dst_pitch_bytes: surface.pitch_bytes,
+            dst_width: surface.width,
+            dst_height: surface.height,
+            rect_x: rect.x as u32,
+            rect_y: rect.y as u32,
+            rect_width: rect.width,
+            rect_height: rect.height,
+            canvas_width: surface.width,
+            canvas_height: surface.height,
+            flags: 0,
+            origin_q16: Canvas3dVec3Q16 {
+                x: (slide * q) / width.max(1),
+                y: ((height / 2 - y0) * q) / height.max(1),
+                z: q * 2 + sheet_from_top * 96,
+                pad: 0,
+            },
+            axis_u_q16,
+            axis_v_q16,
+            constraint0_q16: Canvas3dVec3Q16::default(),
+            constraint1_q16: Canvas3dVec3Q16::default(),
+            constraint2_q16: Canvas3dVec3Q16::default(),
+            constraint3_q16: Canvas3dVec3Q16::default(),
+            constraint4_q16: Canvas3dVec3Q16::default(),
+            constraint5_q16: Canvas3dVec3Q16::default(),
+            constraint6_q16: Canvas3dVec3Q16::default(),
+            constraint7_q16: Canvas3dVec3Q16::default(),
+            constraint_count: 0,
+            color_rgba,
+        };
+        canvas3d_plane_patch_set_screen_edge_constraints(&mut desc, &constraints[..4], 4);
+        out[sheet] = desc;
+    }
+
+    SHEET_COUNT
+}
+
+fn canvas3d_ico_plane_patch_descs(
+    frame: u32,
+    surface: GpgpuRgba8Surface,
+    width: u32,
+    height: u32,
+    out: &mut [Canvas3dPlanePatchWorklistRgba8Desc; canvas3d_ico::FACE_COUNT],
+) -> usize {
+    const TRI_COLORS: [u32; 5] = [
+        0xFFFF_4FD8,
+        0xFFFF_D050,
+        0xFF53_FFD2,
+        0xFF60_9CFF,
+        0xFFE8_7CFF,
+    ];
+    const PENT_COLORS: [u32; 4] = [0xFF1B_998B, 0xFF2D_6CDF, 0xFFFF_8844, 0xFFFF_D166];
+
+    let q = CANVAS3D_PROJECT_Q16_ONE;
+    let scene_center = Canvas3dVec3Q16 {
+        x: 0,
+        y: 0,
+        z: q * 2,
+        pad: 0,
+    };
+    let scene_scale_q16 = shell_canvas3d_cube_scale_pulse_q16(u64::from(frame) * 33);
+    let angle_deg = frame.wrapping_mul(2) % 360;
+    let mut count = 0usize;
+
+    for (face_index, &(a, b, c)) in canvas3d_ico::TRIANGLES.iter().enumerate() {
+        let vertices = [
+            canvas3d_ico_world_corner(a, scene_scale_q16, angle_deg, scene_center),
+            canvas3d_ico_world_corner(b, scene_scale_q16, angle_deg, scene_center),
+            canvas3d_ico_world_corner(c, scene_scale_q16, angle_deg, scene_center),
+            Canvas3dVec3Q16::default(),
+            Canvas3dVec3Q16::default(),
+            Canvas3dVec3Q16::default(),
+            Canvas3dVec3Q16::default(),
+            Canvas3dVec3Q16::default(),
+        ];
+        out[count] = canvas3d_polygon_patch_desc(
+            surface,
+            width,
+            height,
+            scene_center,
+            vertices,
+            3,
+            TRI_COLORS[face_index % TRI_COLORS.len()],
+        );
+        count += 1;
+    }
+
+    for (face_index, &(a, b, c, d, e)) in canvas3d_ico::PENTAGONS.iter().enumerate() {
+        let vertices = [
+            canvas3d_ico_world_corner(a, scene_scale_q16, angle_deg, scene_center),
+            canvas3d_ico_world_corner(b, scene_scale_q16, angle_deg, scene_center),
+            canvas3d_ico_world_corner(c, scene_scale_q16, angle_deg, scene_center),
+            canvas3d_ico_world_corner(d, scene_scale_q16, angle_deg, scene_center),
+            canvas3d_ico_world_corner(e, scene_scale_q16, angle_deg, scene_center),
+            Canvas3dVec3Q16::default(),
+            Canvas3dVec3Q16::default(),
+            Canvas3dVec3Q16::default(),
+        ];
+        out[count] = canvas3d_polygon_patch_desc(
+            surface,
+            width,
+            height,
+            scene_center,
+            vertices,
+            5,
+            PENT_COLORS[face_index % PENT_COLORS.len()],
+        );
+        count += 1;
+    }
+
+    count
+}
+
+fn canvas3d_ico_world_corner(
+    index: usize,
+    scene_scale_q16: i32,
+    angle_deg: u32,
+    scene_center: Canvas3dVec3Q16,
+) -> Canvas3dVec3Q16 {
+    let vertex = canvas3d_ico::corner(index, CUBE20_SEED_SCALE);
+    let vertex = canvas3d_vec3_scale_q16(vertex, scene_scale_q16);
+    let vertex = canvas3d_vec3_rotate_y_q16(vertex, angle_deg);
+    canvas3d_vec3_add(vertex, scene_center)
+}
+
+fn canvas3d_polygon_patch_desc(
+    surface: GpgpuRgba8Surface,
+    width: u32,
+    height: u32,
+    scene_center: Canvas3dVec3Q16,
+    mut vertices: [Canvas3dVec3Q16; CANVAS3D_POLYGON_MAX_VERTICES],
+    count: usize,
+    color_rgba: u32,
+) -> Canvas3dPlanePatchWorklistRgba8Desc {
+    let count = count.clamp(3, CANVAS3D_POLYGON_MAX_VERTICES);
+    canvas3d_orient_polygon_outward(&mut vertices, count, scene_center);
+
+    let rect = canvas3d_projected_polygon_rect(&vertices, count, width, height);
+    let origin_q16 = canvas3d_polygon_center_q16(&vertices, count);
+    let axis_u_q16 = canvas3d_vec3_sub(vertices[0], origin_q16);
+    let axis_v_q16 = canvas3d_vec3_sub(vertices[1], origin_q16);
+    let mut local = [(0i32, 0i32); CANVAS3D_POLYGON_MAX_VERTICES];
+    for index in 0..count {
+        local[index] =
+            canvas3d_polygon_local_uv_q16(origin_q16, axis_u_q16, axis_v_q16, vertices[index]);
+    }
+
+    let mut constraints = [Canvas3dVec3Q16::default(); CANVAS3D_POLYGON_MAX_VERTICES];
+    for index in 0..count {
+        let next = (index + 1) % count;
+        constraints[index] = canvas3d_polygon_edge_constraint_q16(local[index], local[next]);
+    }
+    let screen_constraints = canvas3d_screen_edge_constraints(&vertices, count, width, height);
+
+    let mut desc = Canvas3dPlanePatchWorklistRgba8Desc {
+        dst_pitch_bytes: surface.pitch_bytes,
+        dst_width: surface.width,
+        dst_height: surface.height,
+        rect_x: rect.x as u32,
+        rect_y: rect.y as u32,
+        rect_width: rect.width,
+        rect_height: rect.height,
+        canvas_width: width,
+        canvas_height: height,
+        flags: 0,
+        origin_q16,
+        axis_u_q16,
+        axis_v_q16,
+        constraint0_q16: Canvas3dVec3Q16::default(),
+        constraint1_q16: Canvas3dVec3Q16::default(),
+        constraint2_q16: Canvas3dVec3Q16::default(),
+        constraint3_q16: Canvas3dVec3Q16::default(),
+        constraint4_q16: Canvas3dVec3Q16::default(),
+        constraint5_q16: Canvas3dVec3Q16::default(),
+        constraint6_q16: Canvas3dVec3Q16::default(),
+        constraint7_q16: Canvas3dVec3Q16::default(),
+        constraint_count: 0,
+        color_rgba,
+    };
+    canvas3d_plane_patch_set_local_constraints(&mut desc, &constraints[..count], count as u32);
+    if let Some(constraints) = screen_constraints {
+        canvas3d_plane_patch_set_screen_edge_constraints(&mut desc, &constraints[..count], count as u32);
+    }
+    desc
+}
+
+fn canvas3d_projected_polygon_rect(
+    vertices: &[Canvas3dVec3Q16; CANVAS3D_POLYGON_MAX_VERTICES],
+    count: usize,
+    width: u32,
+    height: u32,
+) -> GpgpuRect {
+    let focal = width.min(height) as i64 / 2;
+    if width == 0 || height == 0 || focal == 0 {
+        return GpgpuRect::new(0, 0, width, height);
+    }
+
+    let mut min_x = i64::MAX;
+    let mut min_y = i64::MAX;
+    let mut max_x = i64::MIN;
+    let mut max_y = i64::MIN;
+    let center_x = width as i64 / 2;
+    let center_y = height as i64 / 2;
+    for vertex in vertices.iter().take(count) {
+        if vertex.z <= 0 {
+            return GpgpuRect::new(0, 0, width, height);
+        }
+        let sx = center_x + ((vertex.x as i64) * focal) / vertex.z as i64;
+        let sy = center_y - ((vertex.y as i64) * focal) / vertex.z as i64;
+        min_x = min_x.min(sx);
+        min_y = min_y.min(sy);
+        max_x = max_x.max(sx);
+        max_y = max_y.max(sy);
+    }
+
+    const PAD: i64 = 4;
+    let x0 = (min_x - PAD).clamp(0, width as i64);
+    let y0 = (min_y - PAD).clamp(0, height as i64);
+    let x1 = (max_x + PAD + 1).clamp(0, width as i64);
+    let y1 = (max_y + PAD + 1).clamp(0, height as i64);
+    if x1 <= x0 || y1 <= y0 {
+        return GpgpuRect::new(0, 0, 1, 1);
+    }
+
+    GpgpuRect::new(
+        x0 as i32,
+        y0 as i32,
+        (x1 - x0) as u32,
+        (y1 - y0) as u32,
+    )
+}
+
+fn canvas3d_project_screen_point(
+    vertex: Canvas3dVec3Q16,
+    width: u32,
+    height: u32,
+) -> Option<(i32, i32)> {
+    let focal = width.min(height) as i64 / 2;
+    if width == 0 || height == 0 || focal == 0 || vertex.z <= 0 {
+        return None;
+    }
+
+    let center_x = width as i64 / 2;
+    let center_y = height as i64 / 2;
+    let sx = center_x + ((vertex.x as i64) * focal) / vertex.z as i64;
+    let sy = center_y - ((vertex.y as i64) * focal) / vertex.z as i64;
+    Some((sx as i32, sy as i32))
+}
+
+fn canvas3d_screen_edge_constraints(
+    vertices: &[Canvas3dVec3Q16],
+    count: usize,
+    width: u32,
+    height: u32,
+) -> Option<[Canvas3dVec3Q16; CANVAS3D_POLYGON_MAX_VERTICES]> {
+    let count = count.clamp(3, CANVAS3D_POLYGON_MAX_VERTICES);
+    let mut points = [(0i32, 0i32); CANVAS3D_POLYGON_MAX_VERTICES];
+    let mut center_x = 0i64;
+    let mut center_y = 0i64;
+    for index in 0..count {
+        points[index] = canvas3d_project_screen_point(vertices[index], width, height)?;
+        center_x += points[index].0 as i64;
+        center_y += points[index].1 as i64;
+    }
+    center_x /= count as i64;
+    center_y /= count as i64;
+
+    let mut constraints = [Canvas3dVec3Q16::default(); CANVAS3D_POLYGON_MAX_VERTICES];
+    for index in 0..count {
+        let next = (index + 1) % count;
+        constraints[index] = canvas3d_screen_edge_constraint(points[index], points[next]);
+    }
+    if !canvas3d_screen_edges_contain_point(&constraints, count, center_x, center_y) {
+        for constraint in constraints.iter_mut().take(count) {
+            constraint.x = constraint.x.saturating_neg();
+            constraint.y = constraint.y.saturating_neg();
+            constraint.z = constraint.z.saturating_neg();
+        }
+    }
+    if canvas3d_screen_edges_contain_point(&constraints, count, center_x, center_y) {
+        Some(constraints)
+    } else {
+        None
+    }
+}
+
+fn canvas3d_screen_edge_constraints_from_points(
+    points: [(i32, i32); 4],
+    count: usize,
+) -> Option<[Canvas3dVec3Q16; CANVAS3D_POLYGON_MAX_VERTICES]> {
+    let count = count.clamp(3, 4);
+    let mut center_x = 0i64;
+    let mut center_y = 0i64;
+    for point in points.iter().take(count) {
+        center_x += point.0 as i64;
+        center_y += point.1 as i64;
+    }
+    center_x /= count as i64;
+    center_y /= count as i64;
+
+    let mut constraints = [Canvas3dVec3Q16::default(); CANVAS3D_POLYGON_MAX_VERTICES];
+    for index in 0..count {
+        let next = (index + 1) % count;
+        constraints[index] = canvas3d_screen_edge_constraint(points[index], points[next]);
+    }
+    if !canvas3d_screen_edges_contain_point(&constraints, count, center_x, center_y) {
+        for constraint in constraints.iter_mut().take(count) {
+            constraint.x = constraint.x.saturating_neg();
+            constraint.y = constraint.y.saturating_neg();
+            constraint.z = constraint.z.saturating_neg();
+        }
+    }
+    if canvas3d_screen_edges_contain_point(&constraints, count, center_x, center_y) {
+        Some(constraints)
+    } else {
+        None
+    }
+}
+
+fn canvas3d_screen_points_rect(
+    points: [(i32, i32); 4],
+    width: u32,
+    height: u32,
+) -> GpgpuRect {
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut max_y = i32::MIN;
+    for point in points {
+        min_x = min_x.min(point.0);
+        min_y = min_y.min(point.1);
+        max_x = max_x.max(point.0);
+        max_y = max_y.max(point.1);
+    }
+
+    let x0 = min_x.saturating_sub(1).clamp(0, width.saturating_sub(1) as i32);
+    let y0 = min_y.saturating_sub(1).clamp(0, height.saturating_sub(1) as i32);
+    let x1 = max_x.saturating_add(2).clamp(1, width as i32);
+    let y1 = max_y.saturating_add(2).clamp(1, height as i32);
+    GpgpuRect::new(
+        x0,
+        y0,
+        (x1 - x0).max(1) as u32,
+        (y1 - y0).max(1) as u32,
+    )
+}
+
+fn canvas3d_screen_edge_constraint(a: (i32, i32), b: (i32, i32)) -> Canvas3dVec3Q16 {
+    let ax = a.0 as i64;
+    let ay = a.1 as i64;
+    let bx = b.0 as i64;
+    let by = b.1 as i64;
+    Canvas3dVec3Q16 {
+        x: (ay - by) as i32,
+        y: (bx - ax) as i32,
+        z: ((ax * by) - (bx * ay)) as i32,
+        pad: 0,
+    }
+}
+
+fn canvas3d_screen_edges_contain_point(
+    constraints: &[Canvas3dVec3Q16],
+    count: usize,
+    x: i64,
+    y: i64,
+) -> bool {
+    for constraint in constraints.iter().take(count) {
+        let value = (constraint.x as i64)
+            .saturating_mul(x)
+            .saturating_add((constraint.y as i64).saturating_mul(y))
+            .saturating_add(constraint.z as i64);
+        if value < 0 {
+            return false;
+        }
+    }
+    true
+}
+
+fn canvas3d_plane_patch_set_screen_edge_constraints(
+    desc: &mut Canvas3dPlanePatchWorklistRgba8Desc,
+    constraints: &[Canvas3dVec3Q16],
+    constraint_count: u32,
+) {
+    desc.flags |= CANVAS3D_PLANE_PATCH_DESC_FLAG_SCREEN_EDGES;
+    canvas3d_plane_patch_set_constraints(desc, constraints, constraint_count);
+}
+
+fn canvas3d_plane_patch_set_local_constraints(
+    desc: &mut Canvas3dPlanePatchWorklistRgba8Desc,
+    constraints: &[Canvas3dVec3Q16],
+    constraint_count: u32,
+) {
+    desc.flags &= !CANVAS3D_PLANE_PATCH_DESC_FLAG_SCREEN_EDGES;
+    canvas3d_plane_patch_set_constraints(desc, constraints, constraint_count);
+}
+
+fn canvas3d_plane_patch_set_constraints(
+    desc: &mut Canvas3dPlanePatchWorklistRgba8Desc,
+    constraints: &[Canvas3dVec3Q16],
+    constraint_count: u32,
+) {
+    desc.constraint0_q16 = Canvas3dVec3Q16::default();
+    desc.constraint1_q16 = Canvas3dVec3Q16::default();
+    desc.constraint2_q16 = Canvas3dVec3Q16::default();
+    desc.constraint3_q16 = Canvas3dVec3Q16::default();
+    desc.constraint4_q16 = Canvas3dVec3Q16::default();
+    desc.constraint5_q16 = Canvas3dVec3Q16::default();
+    desc.constraint6_q16 = Canvas3dVec3Q16::default();
+    desc.constraint7_q16 = Canvas3dVec3Q16::default();
+    let count = (constraint_count as usize)
+        .min(CANVAS3D_POLYGON_MAX_VERTICES)
+        .min(constraints.len());
+    for (index, constraint) in constraints.iter().take(count).copied().enumerate() {
+        match index {
+            0 => desc.constraint0_q16 = constraint,
+            1 => desc.constraint1_q16 = constraint,
+            2 => desc.constraint2_q16 = constraint,
+            3 => desc.constraint3_q16 = constraint,
+            4 => desc.constraint4_q16 = constraint,
+            5 => desc.constraint5_q16 = constraint,
+            6 => desc.constraint6_q16 = constraint,
+            7 => desc.constraint7_q16 = constraint,
+            _ => {}
+        }
+    }
+    desc.constraint_count = count as u32;
+}
+
+fn canvas3d_plane_light_q16(normal_q16: Canvas3dVec3Q16, light_dir_q16: Canvas3dVec3Q16) -> u32 {
+    let q = CANVAS3D_PROJECT_Q16_ONE as i64;
+    let dot = canvas3d_vec3_dot_q16(normal_q16, light_dir_q16).max(0);
+    let normal_len = (normal_q16.x as i64)
+        .abs()
+        .saturating_add((normal_q16.y as i64).abs())
+        .saturating_add((normal_q16.z as i64).abs())
+        .max(1);
+    let light_len = (light_dir_q16.x as i64)
+        .abs()
+        .saturating_add((light_dir_q16.y as i64).abs())
+        .saturating_add((light_dir_q16.z as i64).abs())
+        .max(1);
+    let denom = ((normal_len * light_len) >> 16).max(1);
+    ((dot * q) / denom).clamp(0, q) as u32
+}
+
+fn canvas3d_paper_light_color(light_q16: u32, shade_drop: u32) -> u32 {
+    let q = CANVAS3D_PROJECT_Q16_ONE as u32;
+    let ambient = q / 2;
+    let diffuse = (light_q16 / 2).min(q / 2);
+    let shade = ambient.saturating_add(diffuse).saturating_sub(shade_drop << 8);
+    let r = ((246u32 * shade) >> 16).clamp(0, 255);
+    let g = ((244u32 * shade) >> 16).clamp(0, 255);
+    let b = ((232u32 * shade) >> 16).saturating_sub(shade_drop / 5).clamp(0, 255);
+    0xFF00_0000 | (r << 16) | (g << 8) | b
+}
+
+fn canvas3d_orient_polygon_outward(
+    vertices: &mut [Canvas3dVec3Q16],
+    count: usize,
+    scene_center: Canvas3dVec3Q16,
+) {
+    let edge0 = canvas3d_vec3_sub(vertices[1], vertices[0]);
+    let edge1 = canvas3d_vec3_sub(vertices[2], vertices[0]);
+    let normal = canvas3d_vec3_cross_q16(edge0, edge1);
+    let center = canvas3d_polygon_center_q16(vertices, count);
+    let from_scene_center = canvas3d_vec3_sub(center, scene_center);
+    if canvas3d_vec3_dot_q16(normal, from_scene_center) >= 0 {
+        return;
+    }
+
+    let mut left = 0usize;
+    let mut right = count - 1;
+    while left < right {
+        vertices.swap(left, right);
+        left += 1;
+        right -= 1;
+    }
+}
+
+fn canvas3d_polygon_center_q16(vertices: &[Canvas3dVec3Q16], count: usize) -> Canvas3dVec3Q16 {
+    let mut x = 0i64;
+    let mut y = 0i64;
+    let mut z = 0i64;
+    for vertex in vertices.iter().take(count) {
+        x += vertex.x as i64;
+        y += vertex.y as i64;
+        z += vertex.z as i64;
+    }
+    Canvas3dVec3Q16 {
+        x: (x / count as i64) as i32,
+        y: (y / count as i64) as i32,
+        z: (z / count as i64) as i32,
+        pad: 0,
+    }
+}
+
+fn canvas3d_polygon_local_uv_q16(
+    origin_q16: Canvas3dVec3Q16,
+    axis_u_q16: Canvas3dVec3Q16,
+    axis_v_q16: Canvas3dVec3Q16,
+    vertex: Canvas3dVec3Q16,
+) -> (i32, i32) {
+    let delta = canvas3d_vec3_sub(vertex, origin_q16);
+    let uu = canvas3d_vec3_dot_q16(axis_u_q16, axis_u_q16);
+    let uv = canvas3d_vec3_dot_q16(axis_u_q16, axis_v_q16);
+    let vv = canvas3d_vec3_dot_q16(axis_v_q16, axis_v_q16);
+    let det = uu * vv - uv * uv;
+    if det == 0 {
+        return (0, 0);
+    }
+
+    let du = canvas3d_vec3_dot_q16(delta, axis_u_q16);
+    let dv = canvas3d_vec3_dot_q16(delta, axis_v_q16);
+    (
+        (((du * vv - dv * uv) << 16) / det) as i32,
+        (((dv * uu - du * uv) << 16) / det) as i32,
+    )
+}
+
+fn canvas3d_polygon_edge_constraint_q16(a: (i32, i32), b: (i32, i32)) -> Canvas3dVec3Q16 {
+    let dx = b.0 as i64 - a.0 as i64;
+    let dy = b.1 as i64 - a.1 as i64;
+    Canvas3dVec3Q16 {
+        x: (-dy) as i32,
+        y: dx as i32,
+        z: (((dy * a.0 as i64) - (dx * a.1 as i64)) >> 16) as i32,
+        pad: 0,
+    }
 }
 
 pub(crate) fn ui2_canvas3d_plane_patch_render_surface_frame(
@@ -2618,6 +3610,15 @@ fn canvas3d_vec3_sub(a: Canvas3dVec3Q16, b: Canvas3dVec3Q16) -> Canvas3dVec3Q16 
     }
 }
 
+fn canvas3d_vec3_scale_q16(vertex: Canvas3dVec3Q16, scale_q16: i32) -> Canvas3dVec3Q16 {
+    Canvas3dVec3Q16 {
+        x: (((vertex.x as i64) * (scale_q16 as i64)) >> 16) as i32,
+        y: (((vertex.y as i64) * (scale_q16 as i64)) >> 16) as i32,
+        z: (((vertex.z as i64) * (scale_q16 as i64)) >> 16) as i32,
+        pad: 0,
+    }
+}
+
 fn canvas3d_sin_360_q16(deg: u32) -> i32 {
     let deg = deg % 360;
     if deg < 180 {
@@ -2697,7 +3698,39 @@ fn canvas3d_plane_patch_ui2_face_desc_in_rect(
     constraints: [Canvas3dVec3Q16; 4],
     color_rgba: u32,
 ) -> Canvas3dPlanePatchWorklistRgba8Desc {
-    Canvas3dPlanePatchWorklistRgba8Desc {
+    canvas3d_plane_patch_ui2_face_desc_in_rect_with_count(
+        surface,
+        canvas_width,
+        canvas_height,
+        rect_x,
+        rect_y,
+        rect_width,
+        rect_height,
+        origin_q16,
+        axis_u_q16,
+        axis_v_q16,
+        constraints,
+        4,
+        color_rgba,
+    )
+}
+
+fn canvas3d_plane_patch_ui2_face_desc_in_rect_with_count(
+    surface: GpgpuRgba8Surface,
+    canvas_width: u32,
+    canvas_height: u32,
+    rect_x: u32,
+    rect_y: u32,
+    rect_width: u32,
+    rect_height: u32,
+    origin_q16: Canvas3dVec3Q16,
+    axis_u_q16: Canvas3dVec3Q16,
+    axis_v_q16: Canvas3dVec3Q16,
+    constraints: [Canvas3dVec3Q16; 4],
+    constraint_count: u32,
+    color_rgba: u32,
+) -> Canvas3dPlanePatchWorklistRgba8Desc {
+    let mut desc = Canvas3dPlanePatchWorklistRgba8Desc {
         dst_pitch_bytes: surface.pitch_bytes,
         dst_width: surface.width,
         dst_height: surface.height,
@@ -2707,7 +3740,7 @@ fn canvas3d_plane_patch_ui2_face_desc_in_rect(
         rect_height,
         canvas_width,
         canvas_height,
-        reserved0: 0,
+        flags: 0,
         origin_q16,
         axis_u_q16,
         axis_v_q16,
@@ -2715,9 +3748,60 @@ fn canvas3d_plane_patch_ui2_face_desc_in_rect(
         constraint1_q16: constraints[1],
         constraint2_q16: constraints[2],
         constraint3_q16: constraints[3],
-        constraint_count: 4,
+        constraint4_q16: Canvas3dVec3Q16::default(),
+        constraint5_q16: Canvas3dVec3Q16::default(),
+        constraint6_q16: Canvas3dVec3Q16::default(),
+        constraint7_q16: Canvas3dVec3Q16::default(),
+        constraint_count: constraint_count.min(CANVAS3D_PLANE_PATCH_MAX_CONSTRAINTS),
         color_rgba,
+    };
+
+    if constraint_count >= 4 && canvas3d_plane_patch_constraints_are_unit_square(constraints) {
+        let vertices = [
+            canvas3d_vec3_sub(canvas3d_vec3_sub(origin_q16, axis_u_q16), axis_v_q16),
+            canvas3d_vec3_sub(canvas3d_vec3_add(origin_q16, axis_u_q16), axis_v_q16),
+            canvas3d_vec3_add(canvas3d_vec3_add(origin_q16, axis_u_q16), axis_v_q16),
+            canvas3d_vec3_add(canvas3d_vec3_sub(origin_q16, axis_u_q16), axis_v_q16),
+        ];
+        if let Some(screen_constraints) =
+            canvas3d_screen_edge_constraints(&vertices, 4, canvas_width, canvas_height)
+        {
+            canvas3d_plane_patch_set_screen_edge_constraints(&mut desc, &screen_constraints[..4], 4);
+        }
     }
+
+    desc
+}
+
+fn canvas3d_plane_patch_constraints_are_unit_square(constraints: [Canvas3dVec3Q16; 4]) -> bool {
+    let q = CANVAS3D_PROJECT_Q16_ONE;
+    constraints
+        == [
+            Canvas3dVec3Q16 {
+                x: q,
+                y: 0,
+                z: q,
+                pad: 0,
+            },
+            Canvas3dVec3Q16 {
+                x: -q,
+                y: 0,
+                z: q,
+                pad: 0,
+            },
+            Canvas3dVec3Q16 {
+                x: 0,
+                y: q,
+                z: q,
+                pad: 0,
+            },
+            Canvas3dVec3Q16 {
+                x: 0,
+                y: -q,
+                z: q,
+                pad: 0,
+            },
+        ]
 }
 
 fn canvas3d_plane_patch_faces_camera(desc: Canvas3dPlanePatchWorklistRgba8Desc) -> bool {
@@ -2727,6 +3811,12 @@ fn canvas3d_plane_patch_faces_camera(desc: Canvas3dPlanePatchWorklistRgba8Desc) 
 
 fn canvas3d_nearest_face_desc(
     descs: [Canvas3dPlanePatchWorklistRgba8Desc; 6],
+) -> Canvas3dPlanePatchWorklistRgba8Desc {
+    canvas3d_nearest_face_desc_slice(&descs)
+}
+
+fn canvas3d_nearest_face_desc_slice(
+    descs: &[Canvas3dPlanePatchWorklistRgba8Desc],
 ) -> Canvas3dPlanePatchWorklistRgba8Desc {
     let mut nearest = descs[0];
     for desc in descs.iter().copied().skip(1) {

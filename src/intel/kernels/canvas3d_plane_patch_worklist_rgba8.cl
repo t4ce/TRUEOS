@@ -2,7 +2,7 @@
 //
 // Contract:
 // - Stage1 affine plane patch worklist fill: each descriptor is one 3D plane
-//   patch with up to four local half-space cuts.
+//   patch with up to eight local half-space cuts.
 // - One work item covers an 8x16 pixel tile. The CPU emits multiple proven
 //   single-group walkers and passes a base tile index per walker.
 // - Each pixel worker walks descriptors in order, preserving painter-order
@@ -15,10 +15,18 @@
 // - Each cut is int4 { a, b, c, ignored } in local plane coordinates:
 //     a*u + b*v + c >= 0
 //   with a,b,c in Q16.
+// - When descriptor flags has PATCH_DESC_FLAG_SCREEN_EDGES set, the cut
+//   slots are screen-space edge equations instead:
+//     a*x + b*y + c >= 0
+//   with x/y in destination pixels. This avoids per-pixel ray/plane division for
+//   CPU-projected polygon faces.
 
-#define PATCH_DESC_DWORDS 40u
+#define PATCH_DESC_DWORDS 56u
 #define PATCH_TILE_PIXELS_PER_LANE 8u
 #define PATCH_TILE_ROWS 16u
+#define PATCH_DESC_FLAG_SCREEN_EDGES 1u
+#define PATCH_CONSTRAINT_BASE_DWORD 22u
+#define PATCH_MAX_CONSTRAINTS 8u
 
 static inline long dot3_q16(int4 a, int4 b)
 {
@@ -60,6 +68,14 @@ static inline int constraint_ok(int4 constraint, int u_q16, int v_q16)
     return value >= 0;
 }
 
+static inline int screen_edge_ok(int4 edge, int x, int y)
+{
+    long value = ((long)edge.x * (long)x)
+        + ((long)edge.y * (long)y)
+        + (long)edge.z;
+    return value >= 0;
+}
+
 __attribute__((intel_reqd_sub_group_size(16)))
 __kernel void canvas3d_plane_patch_worklist_rgba8(
     __global const uint *unused_src,
@@ -92,15 +108,18 @@ __kernel void canvas3d_plane_patch_worklist_rgba8(
         uint rect_height = descs[desc_index + 6u];
         uint canvas_width = descs[desc_index + 7u];
         uint canvas_height = descs[desc_index + 8u];
+        uint flags = descs[desc_index + 9u];
         int4 origin_q16 = load_int4_desc(descs, desc_index + 10u);
         int4 axis_u_q16 = load_int4_desc(descs, desc_index + 14u);
         int4 axis_v_q16 = load_int4_desc(descs, desc_index + 18u);
-        int4 constraint0_q16 = load_int4_desc(descs, desc_index + 22u);
-        int4 constraint1_q16 = load_int4_desc(descs, desc_index + 26u);
-        int4 constraint2_q16 = load_int4_desc(descs, desc_index + 30u);
-        int4 constraint3_q16 = load_int4_desc(descs, desc_index + 34u);
-        uint constraint_count = descs[desc_index + 38u];
-        uint color_rgba = descs[desc_index + 39u];
+        int4 constraints_q16[PATCH_MAX_CONSTRAINTS];
+        for (uint constraint_index = 0u; constraint_index < PATCH_MAX_CONSTRAINTS; constraint_index++) {
+            constraints_q16[constraint_index] = load_int4_desc(
+                descs,
+                desc_index + PATCH_CONSTRAINT_BASE_DWORD + constraint_index * 4u);
+        }
+        uint constraint_count = descs[desc_index + 54u];
+        uint color_rgba = descs[desc_index + 55u];
 
         uint focal = min(canvas_width, canvas_height) >> 1;
         if (dst_pitch_bytes == 0u || dst_width == 0u || dst_height == 0u
@@ -134,6 +153,35 @@ __kernel void canvas3d_plane_patch_worklist_rgba8(
             continue;
         }
 
+        uint cuts = min(constraint_count, PATCH_MAX_CONSTRAINTS);
+        if ((flags & PATCH_DESC_FLAG_SCREEN_EDGES) != 0u) {
+            for (uint row = 0u; row < PATCH_TILE_ROWS; row++) {
+                uint ly = tile_y + row;
+                if (ly >= max_h) {
+                    break;
+                }
+                for (uint pixel = 0u; pixel < PATCH_TILE_PIXELS_PER_LANE; pixel++) {
+                    uint lx = tile_x + pixel;
+                    if (lx >= max_w) {
+                        continue;
+                    }
+                    uint sx_u = rect_x + lx;
+                    uint sy_u = rect_y + ly;
+                    int sx = (int)sx_u;
+                    int sy = (int)sy_u;
+
+                    int keep = 1;
+                    for (uint cut = 0u; cut < cuts; cut++) {
+                        keep &= screen_edge_ok(constraints_q16[cut], sx, sy);
+                    }
+                    if (keep) {
+                        dst_rgba[sy_u * pitch_pixels + sx_u] = color_rgba;
+                    }
+                }
+            }
+            continue;
+        }
+
         int center_x = (int)(canvas_width >> 1);
         int center_y = (int)(canvas_height >> 1);
         int4 normal_q16 = cross3_q16(axis_u_q16, axis_v_q16);
@@ -146,7 +194,6 @@ __kernel void canvas3d_plane_patch_worklist_rgba8(
             continue;
         }
 
-        uint cuts = min(constraint_count, 4u);
         for (uint row = 0u; row < PATCH_TILE_ROWS; row++) {
             uint ly = tile_y + row;
             if (ly >= max_h) {
@@ -195,10 +242,9 @@ __kernel void canvas3d_plane_patch_worklist_rgba8(
                 int v_q16 = (int)(((dv * uu - du * uv) << 16) / det);
 
                 int keep = 1;
-                if (cuts > 0u) keep &= constraint_ok(constraint0_q16, u_q16, v_q16);
-                if (cuts > 1u) keep &= constraint_ok(constraint1_q16, u_q16, v_q16);
-                if (cuts > 2u) keep &= constraint_ok(constraint2_q16, u_q16, v_q16);
-                if (cuts > 3u) keep &= constraint_ok(constraint3_q16, u_q16, v_q16);
+                for (uint cut = 0u; cut < cuts; cut++) {
+                    keep &= constraint_ok(constraints_q16[cut], u_q16, v_q16);
+                }
                 if (keep) {
                     dst_rgba[sy_u * pitch_pixels + sx_u] = color_rgba;
                 }

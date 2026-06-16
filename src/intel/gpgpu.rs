@@ -10,7 +10,9 @@ mod test_gpgpu;
 pub(crate) use canvas3d_cube::LIVE_PLANE_HALF_Q16 as CANVAS3D_CUBE_LIVE_HALF_Q16;
 pub(crate) use test_gpgpu::{
     GpgpuCanvas3dUi2TextureFrame, GpgpuShellCube20ProjectResult, canvas3d_ico_project_frame,
-    canvas3d_ico_project_rect, canvas3d_ico_project_texture_frame, shell_cube6_plane_project_frame,
+    canvas3d_ico_project_rect, canvas3d_ico_project_surface_frame,
+    canvas3d_ico_project_texture_frame, canvas3d_para_project_surface_frame,
+    shell_cube6_plane_project_frame,
     shell_cube6_plane_project_once, shell_cube6_plane_project_overlay_frame,
     shell_cube6_plane_project_surface_frame, shell_cube20_project_spin,
     submit_canvas3d_clip_box_q16_once, submit_canvas3d_plane_fill_rgba8_once,
@@ -237,8 +239,8 @@ pub(crate) const CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     0x0E, 0xB1, 0xFD, 0xB3, 0x63, 0x49, 0xBE, 0x28, 0xFD, 0x62, 0xD1, 0x36, 0x01, 0xA8, 0x58, 0x07,
 ];
 pub(crate) const CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
-    0x66, 0x12, 0x74, 0xD0, 0xE2, 0xC7, 0x1D, 0x37, 0x53, 0xDE, 0xD2, 0x7A, 0xE9, 0x23, 0x8C, 0xB7,
-    0x26, 0x96, 0xC6, 0x6B, 0x99, 0xB6, 0xD3, 0x41, 0x66, 0x7F, 0x0C, 0x39, 0x3E, 0x11, 0xC4, 0xB1,
+    0x4A, 0xC7, 0xC0, 0xD7, 0xC1, 0x1A, 0xC7, 0x99, 0xC9, 0x74, 0x03, 0x7E, 0x42, 0x89, 0x8C, 0xAE,
+    0xAC, 0xC4, 0xB9, 0x2E, 0x3C, 0x52, 0x69, 0x09, 0x4D, 0x28, 0x73, 0xBC, 0xA6, 0x36, 0x31, 0x93,
 ];
 
 const COPY_RECT_RGBA8_ADLS_GPU: u64 = 0x0D20_0000;
@@ -632,8 +634,8 @@ const CANVAS3D_PLANE_PATCH_WORKLIST_PRE_MARKER_SLOT: usize = 23;
 const CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER_SLOT: usize = 22;
 const CANVAS3D_PLANE_PATCH_WORKLIST_PRE_MARKER: u32 = 0xC0DE_3691;
 const CANVAS3D_PLANE_PATCH_WORKLIST_POST_MARKER: u32 = 0xC0DE_3692;
-const CANVAS3D_PLANE_PATCH_WORKLIST_DESC_DWORDS: usize = 40;
-const CANVAS3D_PLANE_PATCH_WORKLIST_MAX_DESCS: usize = 16;
+const CANVAS3D_PLANE_PATCH_WORKLIST_DESC_DWORDS: usize = 56;
+const CANVAS3D_PLANE_PATCH_WORKLIST_MAX_DESCS: usize = 32;
 const CANVAS3D_PLANE_PATCH_WORKLIST_TEST_DESCS: usize = 3;
 const CANVAS3D_PLANE_PATCH_WORKLIST_PIXELS_PER_LANE: u32 = 8;
 const CANVAS3D_PLANE_PATCH_WORKLIST_TILE_ROWS: u32 = 16;
@@ -828,6 +830,19 @@ static CANVAS3D_PLANE_FILL_RAN: AtomicBool = AtomicBool::new(false);
 static CANVAS3D_PLANE_PATCH_FILL_CUT_RAN: AtomicBool = AtomicBool::new(false);
 static CANVAS3D_PLANE_PATCH_WORKLIST_RAN: AtomicBool = AtomicBool::new(false);
 static DIRECT_RCS_SUBMIT_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuActivitySnapshot {
+    pub(crate) available: bool,
+    pub(crate) direct_rcs_enabled: bool,
+    pub(crate) submit_seq: u32,
+    pub(crate) ring_head: u32,
+    pub(crate) ring_tail: u32,
+    pub(crate) acthd: u32,
+    pub(crate) ipeir: u32,
+    pub(crate) ipehr: u32,
+    pub(crate) eir: u32,
+}
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -1079,6 +1094,9 @@ pub(crate) struct Canvas3dPlanePatchWorklistRgba8Params {
     pub(crate) group_z: u32,
 }
 
+pub(crate) const CANVAS3D_PLANE_PATCH_DESC_FLAG_SCREEN_EDGES: u32 = 1 << 0;
+pub(crate) const CANVAS3D_PLANE_PATCH_MAX_CONSTRAINTS: u32 = 8;
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct Canvas3dPlanePatchWorklistRgba8Desc {
@@ -1091,7 +1109,7 @@ pub(crate) struct Canvas3dPlanePatchWorklistRgba8Desc {
     pub(crate) rect_height: u32,
     pub(crate) canvas_width: u32,
     pub(crate) canvas_height: u32,
-    pub(crate) reserved0: u32,
+    pub(crate) flags: u32,
     pub(crate) origin_q16: Canvas3dVec3Q16,
     pub(crate) axis_u_q16: Canvas3dVec3Q16,
     pub(crate) axis_v_q16: Canvas3dVec3Q16,
@@ -1099,6 +1117,10 @@ pub(crate) struct Canvas3dPlanePatchWorklistRgba8Desc {
     pub(crate) constraint1_q16: Canvas3dVec3Q16,
     pub(crate) constraint2_q16: Canvas3dVec3Q16,
     pub(crate) constraint3_q16: Canvas3dVec3Q16,
+    pub(crate) constraint4_q16: Canvas3dVec3Q16,
+    pub(crate) constraint5_q16: Canvas3dVec3Q16,
+    pub(crate) constraint6_q16: Canvas3dVec3Q16,
+    pub(crate) constraint7_q16: Canvas3dVec3Q16,
     pub(crate) constraint_count: u32,
     pub(crate) color_rgba: u32,
 }
@@ -5200,6 +5222,29 @@ pub(crate) fn shell_twemoji_atlas_worklist_present_scanout() -> Option<u64> {
         Some(direct_rcs_elapsed_ms_since(present_start_tick))
     } else {
         None
+    }
+}
+
+pub(crate) fn activity_snapshot() -> GpgpuActivitySnapshot {
+    let submit_seq = DIRECT_RCS_SUBMIT_COUNTER.load(Ordering::Relaxed);
+    let Some(dev) = super::claimed_device() else {
+        return GpgpuActivitySnapshot {
+            direct_rcs_enabled: DIRECT_RCS_ENABLED,
+            submit_seq,
+            ..GpgpuActivitySnapshot::default()
+        };
+    };
+
+    GpgpuActivitySnapshot {
+        available: true,
+        direct_rcs_enabled: DIRECT_RCS_ENABLED,
+        submit_seq,
+        ring_head: super::mmio_read(dev, RCS_RING_HEAD),
+        ring_tail: super::mmio_read(dev, RCS_RING_TAIL),
+        acthd: super::mmio_read(dev, RCS_RING_ACTHD),
+        ipeir: super::mmio_read(dev, RCS_RING_IPEIR),
+        ipehr: super::mmio_read(dev, RCS_RING_IPEHR),
+        eir: super::mmio_read(dev, RCS_RING_EIR),
     }
 }
 
