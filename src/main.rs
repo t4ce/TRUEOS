@@ -54,6 +54,7 @@ mod mio_compat;
 mod mio_probe;
 mod net;
 mod pci;
+mod pmu;
 mod percpu;
 mod phys;
 mod portio;

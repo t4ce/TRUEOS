@@ -1,6 +1,6 @@
 // it’s basically an OS-level safety net.
 // atleast for my cpus, if the mainboards are
-// not updated, they will be now 
+// not updated, they will be now - intel mop update loader
 // because bios updates dont arrive magically usually
 #[cfg(target_arch = "x86_64")]
 mod imp {
@@ -22,23 +22,24 @@ mod imp {
     const EXT_HEADER_LEN: usize = 20;
     const EXT_ENTRY_LEN: usize = 12;
 
+    #[repr(align(16))]
+    struct AlignedBytes<const N: usize>([u8; N]);
+
     static SELECTED_PTR: AtomicUsize = AtomicUsize::new(0);
     static SELECTED_LEN: AtomicUsize = AtomicUsize::new(0);
     static SELECTED_REV: AtomicU32 = AtomicU32::new(0);
 
+    static UCODE_06_BF_02: AlignedBytes<0x37800> =
+        AlignedBytes(*include_bytes!("../tools/intel-ucode/06-bf-02"));
+    static UCODE_06_B7_01: AlignedBytes<0x35800> =
+        AlignedBytes(*include_bytes!("../tools/intel-ucode/06-b7-01"));
+    static UCODE_06_8C_01: AlignedBytes<0x1B800> =
+        AlignedBytes(*include_bytes!("../tools/intel-ucode/06-8c-01"));
+
     static EMBEDDED_MICROCODE: &[(&str, &[u8])] = &[
-        (
-            "intel-ucode/06-bf-02",
-            include_bytes!("../tools/intel-ucode/06-bf-02"),
-        ),
-        (
-            "intel-ucode/06-b7-01",
-            include_bytes!("../tools/intel-ucode/06-b7-01"),
-        ),
-        (
-            "intel-ucode/06-8c-01",
-            include_bytes!("../tools/intel-ucode/06-8c-01"),
-        ),
+        ("intel-ucode/06-bf-02", &UCODE_06_BF_02.0),
+        ("intel-ucode/06-b7-01", &UCODE_06_B7_01.0),
+        ("intel-ucode/06-8c-01", &UCODE_06_8C_01.0),
     ];
 
     #[derive(Clone, Copy)]
@@ -61,6 +62,70 @@ mod imp {
         len: usize,
         revision: u32,
         date: u32,
+    }
+
+    #[derive(Clone, Copy)]
+    pub(crate) struct EmbeddedSource {
+        pub(crate) name: &'static str,
+        pub(crate) len: usize,
+    }
+
+    #[derive(Clone, Copy)]
+    pub(crate) struct Snapshot {
+        pub(crate) intel: bool,
+        pub(crate) target_name: &'static str,
+        pub(crate) signature: u32,
+        pub(crate) fms: FmsName,
+        pub(crate) platform_mask: u32,
+        pub(crate) current_revision: u32,
+        pub(crate) selected_revision: u32,
+        pub(crate) selected_len: usize,
+        pub(crate) embedded_sources: [EmbeddedSource; 3],
+    }
+
+    pub(crate) fn snapshot() -> Snapshot {
+        let embedded_sources = [
+            EmbeddedSource {
+                name: EMBEDDED_MICROCODE[0].0,
+                len: EMBEDDED_MICROCODE[0].1.len(),
+            },
+            EmbeddedSource {
+                name: EMBEDDED_MICROCODE[1].0,
+                len: EMBEDDED_MICROCODE[1].1.len(),
+            },
+            EmbeddedSource {
+                name: EMBEDDED_MICROCODE[2].0,
+                len: EMBEDDED_MICROCODE[2].1.len(),
+            },
+        ];
+        let selected_revision = SELECTED_REV.load(Ordering::Acquire);
+        let selected_len = SELECTED_LEN.load(Ordering::Acquire);
+
+        if let Some(target) = detect_target() {
+            Snapshot {
+                intel: true,
+                target_name: known_target_name(target.signature),
+                signature: target.signature,
+                fms: fms_name(target.signature),
+                platform_mask: target.platform_mask,
+                current_revision: target.current_revision,
+                selected_revision,
+                selected_len,
+                embedded_sources,
+            }
+        } else {
+            Snapshot {
+                intel: false,
+                target_name: "non-intel-or-missing-msr",
+                signature: 0,
+                fms: FmsName(0),
+                platform_mask: 0,
+                current_revision: 0,
+                selected_revision,
+                selected_len,
+                embedded_sources,
+            }
+        }
     }
 
     pub fn init_from_limine_bsp() {
@@ -167,7 +232,8 @@ mod imp {
         };
 
         unsafe {
-            Msr::new(MSR_IA32_BIOS_UPDT_TRIG).write(update.bytes.as_ptr() as u64);
+            Msr::new(MSR_IA32_BIOS_UPDT_TRIG)
+                .write(update.bytes.as_ptr().add(HEADER_LEN) as u64);
         }
         let after = read_current_revision();
         crate::log!(
@@ -390,7 +456,8 @@ mod imp {
         UcodeDate(date)
     }
 
-    struct FmsName(u32);
+    #[derive(Clone, Copy)]
+    pub(crate) struct FmsName(u32);
 
     impl core::fmt::Display for FmsName {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -415,8 +482,56 @@ mod imp {
 
 #[cfg(not(target_arch = "x86_64"))]
 mod imp {
+    #[derive(Clone, Copy)]
+    pub(crate) struct EmbeddedSource {
+        pub(crate) name: &'static str,
+        pub(crate) len: usize,
+    }
+
+    #[derive(Clone, Copy)]
+    pub(crate) struct FmsName(pub(crate) u32);
+
+    impl core::fmt::Display for FmsName {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let _ = self;
+            write!(f, "--")
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    pub(crate) struct Snapshot {
+        pub(crate) intel: bool,
+        pub(crate) target_name: &'static str,
+        pub(crate) signature: u32,
+        pub(crate) fms: FmsName,
+        pub(crate) platform_mask: u32,
+        pub(crate) current_revision: u32,
+        pub(crate) selected_revision: u32,
+        pub(crate) selected_len: usize,
+        pub(crate) embedded_sources: [EmbeddedSource; 3],
+    }
+
     pub fn init_from_limine_bsp() {}
     pub fn apply_selected_to_current_cpu(_tag: &str) {}
+
+    pub(crate) fn snapshot() -> Snapshot {
+        Snapshot {
+            intel: false,
+            target_name: "non-x86",
+            signature: 0,
+            fms: FmsName(0),
+            platform_mask: 0,
+            current_revision: 0,
+            selected_revision: 0,
+            selected_len: 0,
+            embedded_sources: [
+                EmbeddedSource { name: "-", len: 0 },
+                EmbeddedSource { name: "-", len: 0 },
+                EmbeddedSource { name: "-", len: 0 },
+            ],
+        }
+    }
 }
 
+pub(crate) use imp::{snapshot, EmbeddedSource, FmsName, Snapshot};
 pub use imp::{apply_selected_to_current_cpu, init_from_limine_bsp};
