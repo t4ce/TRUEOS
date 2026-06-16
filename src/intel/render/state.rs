@@ -123,6 +123,7 @@ struct TriangleProbeStateLayout {
     cc_viewport_offset_bytes: u32,
     sf_clip_viewport_offset_bytes: u32,
     scissor_rect_offset_bytes: u32,
+    cps_state_offset_bytes: u32,
     slice_hash_table_offset_bytes: u32,
 }
 
@@ -195,6 +196,8 @@ enum BackendProbeMode {
     PsDispatchSlot2,
     PsDispatchAllKspSlots,
     PsSimd16,
+    PsEotOnly,
+    PsCpsDisabled,
     PsPayloadPushConstant,
     PsPayloadAttributeEnable,
     PsPayloadSimpleHint,
@@ -205,6 +208,8 @@ enum BackendProbeMode {
     PsGrfStartR4,
     PsGrfMaxThreads31,
     PsGrfMaxThreads15,
+    WmHzSampleMask,
+    WmLateReemit,
     RasterWmInputOa,
 }
 
@@ -318,6 +323,8 @@ impl BackendProbeMode {
             Self::PsDispatchSlot2 => "ps-dispatch-slot2",
             Self::PsDispatchAllKspSlots => "ps-dispatch-all-ksp-slots",
             Self::PsSimd16 => "ps-simd16",
+            Self::PsEotOnly => "ps-eot-only",
+            Self::PsCpsDisabled => "ps-cps-disabled",
             Self::PsPayloadPushConstant => "ps-payload-push-constant",
             Self::PsPayloadAttributeEnable => "ps-payload-attribute-enable",
             Self::PsPayloadSimpleHint => "ps-payload-simple-hint",
@@ -328,6 +335,8 @@ impl BackendProbeMode {
             Self::PsGrfStartR4 => "ps-grf-start-r4",
             Self::PsGrfMaxThreads31 => "ps-grf-maxthreads-31",
             Self::PsGrfMaxThreads15 => "ps-grf-maxthreads-15",
+            Self::WmHzSampleMask => "wm-hz-sample-mask",
+            Self::WmLateReemit => "wm-late-reemit",
             Self::RasterWmInputOa => "raster-wm-input-oa",
         }
     }
@@ -546,6 +555,10 @@ fn is_surface_draw_submit_name(submit_name: &str) -> bool {
             | "ps-dispatch-slot1-big-primitive"
             | "ps-dispatch-slot2-big-primitive"
             | "ps-dispatch-all-big-primitive"
+            | "ps-eot-big-primitive"
+            | "ps-eot-big-primitive-retire"
+            | "ps-cps-disabled-big-primitive"
+            | "ps-cps-disabled-big-primitive-retire"
             | "ps-payload-push-big-primitive"
             | "ps-payload-attr-big-primitive"
             | "ps-payload-simple-big-primitive"
@@ -556,6 +569,14 @@ fn is_surface_draw_submit_name(submit_name: &str) -> bool {
             | "ps-grf-start-r4-big-primitive"
             | "ps-grf-maxthreads-31-big-primitive"
             | "ps-grf-maxthreads-15-big-primitive"
+            | "wm-hz-sample-mask-big-primitive"
+            | "wm-hz-sample-mask-big-primitive-retire"
+            | "wm-late-reemit-big-primitive"
+            | "wm-late-reemit-big-primitive-retire"
+            | "wm-late-reemit-vs-big-primitive-retire"
+            | "wm-late-reemit-vs-slot0-big-primitive-retire"
+            | "wm-late-reemit-vs-urb2-big-primitive-retire"
+            | "wm-late-reemit-vs-urb2-slot0-big-primitive-retire"
             | "postdraw-light-only-retire"
             | "postdraw-flush-bit5"
             | "postdraw-flush-bit7"
@@ -580,6 +601,10 @@ fn is_fragment_candidate_submit_name(submit_name: &str) -> bool {
             | "ps-dispatch-slot0-big-primitive"
             | "ps-dispatch-slot1-big-primitive"
             | "ps-dispatch-slot2-big-primitive"
+            | "ps-eot-big-primitive"
+            | "ps-eot-big-primitive-retire"
+            | "ps-cps-disabled-big-primitive"
+            | "ps-cps-disabled-big-primitive-retire"
             | "ps-payload-push-big-primitive"
             | "ps-payload-attr-big-primitive"
             | "ps-payload-simple-big-primitive"
@@ -590,6 +615,14 @@ fn is_fragment_candidate_submit_name(submit_name: &str) -> bool {
             | "ps-grf-start-r4-big-primitive"
             | "ps-grf-maxthreads-31-big-primitive"
             | "ps-grf-maxthreads-15-big-primitive"
+            | "wm-hz-sample-mask-big-primitive"
+            | "wm-hz-sample-mask-big-primitive-retire"
+            | "wm-late-reemit-big-primitive"
+            | "wm-late-reemit-big-primitive-retire"
+            | "wm-late-reemit-vs-big-primitive-retire"
+            | "wm-late-reemit-vs-slot0-big-primitive-retire"
+            | "wm-late-reemit-vs-urb2-big-primitive-retire"
+            | "wm-late-reemit-vs-urb2-slot0-big-primitive-retire"
     )
 }
 

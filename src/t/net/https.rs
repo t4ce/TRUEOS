@@ -50,7 +50,6 @@ static CABI_NET_FETCH_BYTES_RESULTS: Mutex<BTreeMap<u32, CabiNetFetchBytesResult
     Mutex::new(BTreeMap::new());
 static CABI_NET_FETCH_WAIT: WaitQueue = WaitQueue::new();
 static CABI_NET_FETCH_WAIT_MODE_LOGGED: AtomicU8 = AtomicU8::new(0);
-static VHTTPS_HYPER_FILE_TMP_SEQ: AtomicU32 = AtomicU32::new(1);
 const CABI_NET_FETCH_TASK_POOL_SIZE: usize = crate::allcaps::net::CABI_NET_FETCH_TASK_POOL_SIZE;
 const NET_FETCH_MAX_CONCURRENCY: usize = crate::allcaps::net::CABI_NET_FETCH_MAX_CONCURRENCY;
 static NET_FETCH_ACTIVE: AtomicUsize = AtomicUsize::new(0);
@@ -1146,11 +1145,6 @@ fn normalize_rel(path: &str, allow_empty: bool) -> Result<String, i32> {
     Ok(out)
 }
 
-fn hyper_file_tmp_key_for(key: &str) -> String {
-    let seq = VHTTPS_HYPER_FILE_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
-    format!("{}.tmp.vhttps-hyper.{}", key, seq)
-}
-
 #[derive(Clone, Debug)]
 struct ParsedHttpsUrl {
     host: String,
@@ -1590,7 +1584,6 @@ pub async fn fetch_https_to_file_hyper_with_profile_async(
     crate::log!("vhttps-hyper-file: start key={} url={}\n", key, url);
 
     const MAX_REDIRECTS: usize = 3;
-    let tmp_key = hyper_file_tmp_key_for(key.as_str());
     let mut current_url = String::from(url);
     for hop in 0..=MAX_REDIRECTS {
         let parsed = parse_https_url(current_url.as_str())
@@ -1601,27 +1594,70 @@ pub async fn fetch_https_to_file_hyper_with_profile_async(
                 if body.len() > max_bytes {
                     return Err(fetch_error_to_code(FetchError::ResponseTooLarge));
                 }
-                if let Err(err) = tokio::fs::write(tmp_key.as_str(), body.as_slice()).await {
-                    crate::log!(
-                        "vhttps-hyper-file: tokio-fs-temp-write failed key={} tmp={} err={}\n",
-                        key,
-                        tmp_key,
-                        err
-                    );
-                    let _ = tokio::fs::remove_file(tmp_key.as_str()).await;
-                    return Err(FS_ERR_IO);
+                let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
+                    crate::log!("vhttps-hyper-file: publish failed key={} reason=no-root\n", key);
+                    return Err(FS_ERR_NOT_FOUND);
+                };
+                let disk_info = disk.info();
+                crate::log!(
+                    "vhttps-hyper-file: publish begin key={} disk={} kind={:?} writable={} blocks={} bs={}\n",
+                    key,
+                    disk_info.id.raw(),
+                    disk_info.kind,
+                    disk_info.writable,
+                    disk_info.block_count,
+                    disk_info.block_size
+                );
+                match crate::r::fs::trueosfs::file_in_async(disk, key.as_str(), body.as_slice())
+                    .await
+                {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        crate::log!(
+                            "vhttps-hyper-file: publish failed key={} reason=no-space\n",
+                            key
+                        );
+                        return Err(FS_ERR_NO_SPACE);
+                    }
+                    Err(err) => {
+                        crate::log!(
+                            "vhttps-hyper-file: publish failed key={} err={:?}\n",
+                            key,
+                            err
+                        );
+                        return Err(block_error_to_code(err));
+                    }
                 }
-                if let Err(err) = tokio::fs::write(key.as_str(), body.as_slice()).await {
-                    crate::log!(
-                        "vhttps-hyper-file: tokio-fs-publish failed key={} tmp={} err={}\n",
-                        key,
-                        tmp_key,
-                        err
-                    );
-                    let _ = tokio::fs::remove_file(tmp_key.as_str()).await;
-                    return Err(FS_ERR_IO);
+                match crate::r::fs::trueosfs::file_info_async(disk, key.as_str()).await {
+                    Ok(Some(info)) if info.data_len == body.len() as u64 => {
+                        crate::log!(
+                            "vhttps-hyper-file: publish verified key={} bytes={}\n",
+                            key,
+                            info.data_len
+                        );
+                    }
+                    Ok(Some(info)) => {
+                        crate::log!(
+                            "vhttps-hyper-file: publish verify mismatch key={} expected={} actual={}\n",
+                            key,
+                            body.len(),
+                            info.data_len
+                        );
+                        return Err(FS_ERR_IO);
+                    }
+                    Ok(None) => {
+                        crate::log!("vhttps-hyper-file: publish verify missing key={}\n", key);
+                        return Err(FS_ERR_NOT_FOUND);
+                    }
+                    Err(err) => {
+                        crate::log!(
+                            "vhttps-hyper-file: publish verify failed key={} err={:?}\n",
+                            key,
+                            err
+                        );
+                        return Err(block_error_to_code(err));
+                    }
                 }
-                let _ = tokio::fs::remove_file(tmp_key.as_str()).await;
                 let total_ms = Instant::now().saturating_duration_since(t0).as_millis();
                 crate::log!(
                     "vhttps-hyper-file: done key={} bytes={} ms_total={}\n",
@@ -1638,7 +1674,6 @@ pub async fn fetch_https_to_file_hyper_with_profile_async(
                 current_url = url;
             }
             Err(err) => {
-                let _ = tokio::fs::remove_file(tmp_key.as_str()).await;
                 return Err(fetch_error_to_code(err));
             }
         }
