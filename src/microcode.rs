@@ -1,6 +1,6 @@
 // it’s basically an OS-level safety net.
 // atleast for my cpus, if the mainboards are
-// not updated, they will be now - intel mop update loader
+// not updated, cpus will be now - intel mop update loader
 // because bios updates dont arrive magically usually
 #[cfg(target_arch = "x86_64")]
 mod imp {
