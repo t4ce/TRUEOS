@@ -15,19 +15,21 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 
 pub(crate) const DUMP_FILE_PATH: &str = "trueos/pci/tlb.txt";
 
-const TLB_USAGE: &str = "tlb: usage `tlb [pci|pcibar|mem|cpu|turbo|acpi [sig [index]]|aml [ec|symbol <path>|prefix <path>]|facp|madt|hpet|mcfg|ssdt|uefi|x2apic|usb [probe]|dump]`";
+const TLB_USAGE: &str = "tlb: usage `tlb [pci|pcibar|mem|cpu|turbo|ucode|pmu|acpi [sig [index]]|aml [ec|symbol <path>|prefix <path>]|facp|madt|hpet|mcfg|ssdt|uefi|x2apic|usb [probe]|dump]`";
 const TLB_ACPI_USAGE: &str = "tlb: usage `tlb acpi [sig [index]]`";
 const TLB_AML_USAGE: &str = "tlb: usage `tlb aml [ec|symbol <path>|prefix <path>]`";
 const ACPI_HEXDUMP_MAX_BYTES: usize = 512;
 const ACPI_HEXDUMP_ROW_BYTES: usize = 16;
 const ACPI_AML_DUMP_MAX_BYTES: usize = 1024;
 const TLB_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
-const TLB_MENU_ROWS: [(&str, &str); 16] = [
+const TLB_MENU_ROWS: [(&str, &str); 18] = [
     ("pci", "List PCI devices"),
     ("pcibar", "List PCI BAR windows"),
     ("mem", "List memory map"),
     ("cpu", "List CPU cores"),
     ("turbo", "List CPU turbo state and all-core verify stats"),
+    ("ucode", "Show Intel microcode loader snapshot"),
+    ("pmu", "Show architectural PMU/perf snapshot"),
     ("acpi", "List ACPI tables or dump one (`tlb acpi SSDT 3`)"),
     ("aml", "Inspect parsed AML namespace (`tlb aml ec|symbol|prefix`)"),
     ("facp", "Show FACP/FADT details"),
@@ -1201,6 +1203,180 @@ fn cmd_tlb_cpu(io: &'static dyn ShellBackend2) {
             emit_table_row(io, &cols, &[&slot_s, &apic, role, state, &seq]);
         }
     }
+}
+
+fn fmt_opt_u64_hex(value: Option<u64>) -> String {
+    match value {
+        Some(value) => alloc::format!("0x{:016X}", value),
+        None => String::from("-"),
+    }
+}
+
+fn cmd_tlb_ucode(io: &'static dyn ShellBackend2) {
+    let snapshot = crate::microcode::snapshot();
+    const HEADERS: [&str; 2] = ["Field", "Value"];
+    let table = TlbTable::with_width(&HEADERS, line_width_for_backend(io).saturating_sub(2))
+        .with_max_col_widths(&[24, 0]);
+    table.emit_header(|text| line(io, text));
+
+    let intel = if snapshot.intel { "yes" } else { "no" };
+    table.emit_row(&["intel", intel], |text| line(io, text));
+    table.emit_row(&["target", snapshot.target_name], |text| line(io, text));
+    table.emit_row(
+        &["signature", alloc::format!("0x{:08X}", snapshot.signature).as_str()],
+        |text| line(io, text),
+    );
+    table.emit_row(&["family-model-step", alloc::format!("{}", snapshot.fms).as_str()], |text| {
+        line(io, text)
+    });
+    table.emit_row(
+        &["platform-mask", alloc::format!("0x{:02X}", snapshot.platform_mask).as_str()],
+        |text| line(io, text),
+    );
+    table.emit_row(
+        &["current-revision", alloc::format!("0x{:08X}", snapshot.current_revision).as_str()],
+        |text| line(io, text),
+    );
+    table.emit_row(
+        &["selected-revision", alloc::format!("0x{:08X}", snapshot.selected_revision).as_str()],
+        |text| line(io, text),
+    );
+    table.emit_row(
+        &["selected-len", alloc::format!("0x{:X}", snapshot.selected_len).as_str()],
+        |text| line(io, text),
+    );
+    for source in snapshot.embedded_sources {
+        table.emit_row(
+            &[
+                "embedded",
+                alloc::format!("{} len=0x{:X}", source.name, source.len).as_str(),
+            ],
+            |text| line(io, text),
+        );
+    }
+    table.emit_footer(|text| line(io, text));
+}
+
+fn cmd_tlb_pmu(io: &'static dyn ShellBackend2) {
+    let source_ready = crate::pmu::ensure_liveness_source();
+    let snapshot = crate::pmu::snapshot();
+    let gpu = crate::intel::gpgpu::activity_snapshot();
+    const HEADERS: [&str; 2] = ["Field", "Value"];
+    let table = TlbTable::with_width(&HEADERS, line_width_for_backend(io).saturating_sub(2))
+        .with_max_col_widths(&[24, 0]);
+    table.emit_header(|text| line(io, text));
+
+    table.emit_row(
+        &[
+            "arch-perfmon",
+            if snapshot.arch_perfmon { "yes" } else { "no" },
+        ],
+        |text| line(io, text),
+    );
+    table.emit_row(
+        &[
+            "live-source",
+            if source_ready {
+                "fixed-counters armed"
+            } else {
+                "unavailable"
+            },
+        ],
+        |text| line(io, text),
+    );
+    table.emit_row(
+        &[
+            "gpgpu-source",
+            if gpu.available {
+                if gpu.direct_rcs_enabled {
+                    "rcs mmio + submit counter"
+                } else {
+                    "mmio only"
+                }
+            } else {
+                "unavailable"
+            },
+        ],
+        |text| line(io, text),
+    );
+    table.emit_row(
+        &["gpgpu-submit-seq", alloc::format!("{}", gpu.submit_seq).as_str()],
+        |text| line(io, text),
+    );
+    table.emit_row(
+        &[
+            "gpgpu-rcs",
+            alloc::format!(
+                "head=0x{:08X} tail=0x{:08X} acthd=0x{:08X}",
+                gpu.ring_head,
+                gpu.ring_tail,
+                gpu.acthd
+            )
+            .as_str(),
+        ],
+        |text| line(io, text),
+    );
+    table.emit_row(
+        &[
+            "gpgpu-errors",
+            alloc::format!(
+                "ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X}",
+                gpu.ipeir,
+                gpu.ipehr,
+                gpu.eir
+            )
+            .as_str(),
+        ],
+        |text| line(io, text),
+    );
+    table.emit_row(&["version", alloc::format!("{}", snapshot.version).as_str()], |text| {
+        line(io, text)
+    });
+    table.emit_row(
+        &[
+            "gp-counters",
+            alloc::format!("{} x {}b", snapshot.gp_counter_count, snapshot.gp_counter_bits).as_str(),
+        ],
+        |text| line(io, text),
+    );
+    table.emit_row(
+        &["event-mask-len", alloc::format!("{}", snapshot.event_mask_len).as_str()],
+        |text| line(io, text),
+    );
+    table.emit_row(
+        &[
+            "unavailable-events",
+            alloc::format!("0x{:08X}", snapshot.unavailable_events).as_str(),
+        ],
+        |text| line(io, text),
+    );
+    table.emit_row(
+        &[
+            "fixed-counters",
+            alloc::format!("{} x {}b", snapshot.fixed_counter_count, snapshot.fixed_counter_bits)
+                .as_str(),
+        ],
+        |text| line(io, text),
+    );
+    table.emit_row(
+        &["perf-global-ctrl", fmt_opt_u64_hex(snapshot.perf_global_ctrl).as_str()],
+        |text| line(io, text),
+    );
+    table.emit_row(
+        &["fixed-ctr-ctrl", fmt_opt_u64_hex(snapshot.fixed_ctr_ctrl).as_str()],
+        |text| line(io, text),
+    );
+    table.emit_row(&["pmc0", fmt_opt_u64_hex(snapshot.pmc0).as_str()], |text| line(io, text));
+    for idx in 0..snapshot.fixed_ctr.len() {
+        table.emit_row(
+            &[
+                alloc::format!("fixed-ctr{}", idx).as_str(),
+                fmt_opt_u64_hex(snapshot.fixed_ctr[idx]).as_str(),
+            ],
+            |text| line(io, text),
+        );
+    }
+    table.emit_footer(|text| line(io, text));
 }
 
 fn turbo_state_text(state: crate::power::turbo::TurboState) -> &'static str {
@@ -3318,6 +3494,8 @@ pub(crate) fn try_parse(
         Some("mem") if ensure_no_args(io, args, "tlb: usage `tlb mem`") => cmd_tlb_mem(io),
         Some("cpu") if ensure_no_args(io, args, "tlb: usage `tlb cpu`") => cmd_tlb_cpu(io),
         Some("turbo") if ensure_no_args(io, args, "tlb: usage `tlb turbo`") => cmd_tlb_turbo(io),
+        Some("ucode") if ensure_no_args(io, args, "tlb: usage `tlb ucode`") => cmd_tlb_ucode(io),
+        Some("pmu") if ensure_no_args(io, args, "tlb: usage `tlb pmu`") => cmd_tlb_pmu(io),
         Some("acpi") => cmd_tlb_acpi(io, args),
         Some("aml") => cmd_tlb_aml(io, args),
         Some("facp") if ensure_no_args(io, args, "tlb: usage `tlb facp`") => cmd_tlb_facp(io),
