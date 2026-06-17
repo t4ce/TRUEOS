@@ -18,6 +18,12 @@ struct BuiltinShell2CmdEntry {
     tool_parameters_json: Option<&'static str>,
 }
 
+const STATUS_GREEN_RGB: (u8, u8, u8) = (60, 220, 120);
+const STATUS_PINK_RGB: (u8, u8, u8) = (255, 55, 255);
+const STATUS_BLUE_RGB: (u8, u8, u8) = (120, 210, 255);
+const STATUS_ORANGE_RGB: (u8, u8, u8) = (255, 190, 90);
+const STATUS_GRAY_RGB: (u8, u8, u8) = (160, 168, 176);
+
 const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_7Z: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file to compress into a sibling .7z archive."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_C4: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["file","inline"],"description":"Compile from a TRUEOSFS file or inline C4 source."},"path":{"type":"string","description":"TRUEOSFS source path when mode=file."},"source":{"type":"string","description":"Inline C4 source when mode=inline."}},"required":["mode"],"additionalProperties":false}"#;
@@ -138,7 +144,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "7z",
         mode: "cmd",
-        color: Some((60, 220, 120)),
+        color: Some(STATUS_GREEN_RGB),
         advertised: true,
         handler: dispatch_7z,
         tool_description: Some("Queue a kernel codec job that compresses a TRUEOSFS file as .7z."),
@@ -147,7 +153,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "acpi",
         mode: "cmd",
-        color: None,
+        color: Some(STATUS_GRAY_RGB),
         advertised: true,
         handler: dispatch_acpi,
         tool_description: Some("Run ACPI power actions."),
@@ -156,7 +162,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "c4",
         mode: "cmd",
-        color: Some((255, 190, 90)),
+        color: Some(STATUS_ORANGE_RGB),
         advertised: true,
         handler: dispatch_c4,
         tool_description: Some("Compile C4 source to Rust and TC4O, then run the TC4O VM object."),
@@ -165,7 +171,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "disc",
         mode: "cmd",
-        color: Some((255, 55, 255)),
+        color: Some(STATUS_GREEN_RGB),
         advertised: true,
         handler: dispatch_disc,
         tool_description: Some(
@@ -176,7 +182,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "fslog",
         mode: "cmd",
-        color: Some((255, 55, 255)),
+        color: Some(STATUS_GREEN_RGB),
         advertised: false,
         handler: dispatch_fslog,
         tool_description: None,
@@ -185,7 +191,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "gpgpu",
         mode: "cmd",
-        color: Some((120, 210, 255)),
+        color: Some(STATUS_GRAY_RGB),
         advertised: true,
         handler: dispatch_gpgpu,
         tool_description: Some("Run Intel GPGPU clear/copy staging-surface commands."),
@@ -194,7 +200,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "install",
         mode: "cmd",
-        color: Some((255, 55, 255)),
+        color: Some(STATUS_PINK_RGB),
         advertised: true,
         handler: dispatch_install,
         tool_description: None,
@@ -203,7 +209,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "hyper",
         mode: "cmd",
-        color: Some((120, 210, 255)),
+        color: Some(STATUS_BLUE_RGB),
         advertised: true,
         handler: dispatch_hyper,
         tool_description: Some("Inspect the kernel Hyper HTTP/HTTPS transport surface."),
@@ -212,7 +218,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "lsd",
         mode: "cmd",
-        color: Some((60, 220, 120)),
+        color: Some(STATUS_GREEN_RGB),
         advertised: true,
         handler: dispatch_lsd,
         tool_description: Some("List TRUEOSFS paths with the TRUEOS lsd adapter."),
@@ -221,7 +227,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "rm",
         mode: "cmd",
-        color: Some((60, 220, 120)),
+        color: Some(STATUS_GREEN_RGB),
         advertised: true,
         handler: dispatch_rm,
         tool_description: Some("Remove a TRUEOSFS file or directory after confirmation."),
@@ -230,7 +236,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "render",
         mode: "cmd",
-        color: Some((120, 210, 255)),
+        color: Some(STATUS_BLUE_RGB),
         advertised: true,
         handler: dispatch_render,
         tool_description: Some("Run Intel render bring-up joker probes."),
@@ -239,7 +245,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "remove",
         mode: "cmd",
-        color: Some((60, 220, 120)),
+        color: Some(STATUS_GREEN_RGB),
         advertised: false,
         handler: dispatch_remove,
         tool_description: None,
@@ -248,7 +254,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "delete",
         mode: "cmd",
-        color: Some((60, 220, 120)),
+        color: Some(STATUS_GREEN_RGB),
         advertised: false,
         handler: dispatch_delete,
         tool_description: None,
@@ -257,7 +263,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "del",
         mode: "cmd",
-        color: Some((60, 220, 120)),
+        color: Some(STATUS_GREEN_RGB),
         advertised: false,
         handler: dispatch_del,
         tool_description: None,
@@ -266,7 +272,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "mv",
         mode: "cmd",
-        color: Some((60, 220, 120)),
+        color: Some(STATUS_GREEN_RGB),
         advertised: true,
         handler: dispatch_mv,
         tool_description: Some("Move TRUEOSFS files or directory contents."),
@@ -275,7 +281,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "move",
         mode: "cmd",
-        color: Some((60, 220, 120)),
+        color: Some(STATUS_GREEN_RGB),
         advertised: false,
         handler: dispatch_move,
         tool_description: None,
@@ -284,7 +290,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "net",
         mode: "cmd",
-        color: Some((120, 210, 255)),
+        color: Some(STATUS_BLUE_RGB),
         advertised: true,
         handler: dispatch_net,
         tool_description: Some(
@@ -295,7 +301,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "tlb",
         mode: "cmd",
-        color: None,
+        color: Some(STATUS_GRAY_RGB),
         advertised: true,
         handler: dispatch_tlb,
         tool_description: Some("Print one of the table and hardware inspection views."),
@@ -304,7 +310,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "txt",
         mode: "cmd",
-        color: None,
+        color: Some(STATUS_ORANGE_RGB),
         advertised: true,
         handler: dispatch_txt,
         tool_description: None,
@@ -313,7 +319,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "update",
         mode: "cmd",
-        color: Some((255, 55, 255)),
+        color: Some(STATUS_PINK_RGB),
         advertised: true,
         handler: dispatch_update,
         tool_description: None,
@@ -331,7 +337,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "smp",
         mode: "cmd",
-        color: None,
+        color: Some(STATUS_GRAY_RGB),
         advertised: true,
         handler: dispatch_smp,
         tool_description: Some("Inspect SMP slot state."),
@@ -373,10 +379,22 @@ pub(crate) fn try_dispatch(
 }
 
 pub(crate) fn command_names_status_text() -> AllocString {
+    const STATUS_ORDER: &[&str] = &[
+        "7z", "lsd", "rm", "mv", "disc", "install", "update", "hyper", "net", "c4", "txt", "gpgpu",
+        "acpi", "tlb", "smp",
+    ];
+
     let mut out = AllocString::new();
 
     let mut first = true;
-    for entry in BUILTIN_CMD_REGISTRY.iter().filter(|entry| entry.advertised) {
+    for name in STATUS_ORDER {
+        let Some(entry) = BUILTIN_CMD_REGISTRY
+            .iter()
+            .find(|entry| entry.advertised && entry.name == *name)
+        else {
+            continue;
+        };
+
         if !first {
             out.push(' ');
         }

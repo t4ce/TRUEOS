@@ -863,7 +863,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         settle_ms: 750,
     },
     BlueprintAutostart {
-        enabled: true,
+        enabled: false,
         label: "flags",
         archive: "flags.bp",
         slot: "flg",
@@ -1367,25 +1367,6 @@ fn readiness_names(mask: u32) -> String {
     out
 }
 
-fn log_bp_autostart_pending_marker(ready: u32) {
-    let missing = BP_AUTOSTART_READY & !ready;
-    if missing == 0 {
-        BP_AUTOSTART_PENDING_MISSING.store(0, Ordering::Release);
-        return;
-    }
-
-    if BP_AUTOSTART_PENDING_MISSING.swap(missing, Ordering::AcqRel) == missing {
-        return;
-    }
-
-    crate::log!(
-        "spawn-svc: bp-autostart pending missing={} ready=0x{:08X} required=0x{:08X}\n",
-        readiness_names(missing).as_str(),
-        ready,
-        BP_AUTOSTART_READY
-    );
-}
-
 #[embassy_executor::task]
 pub async fn spawn_service_task(spawner: Spawner) {
     async move {
@@ -1403,7 +1384,6 @@ pub async fn spawn_service_task(spawner: Spawner) {
                 }
                 if (ready & spec.required) != spec.required {
                     if spec.name == "bp-autostart" {
-                        log_bp_autostart_pending_marker(ready);
                     }
                     pending += 1;
                     continue;

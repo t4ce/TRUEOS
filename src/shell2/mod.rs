@@ -323,8 +323,6 @@ impl<'a> AlignedWriter<'a> {
 
     fn surf_status(&self, surf_prefix: SurfPromptPrefix) {
         let mut text = AllocString::new();
-        self.push_function_key_label(&mut text, "[TAB]");
-        self.push_plain(&mut text, " ");
         self.push_ai_token(
             &mut text,
             SurfPromptPrefix::Https.label(),
@@ -353,8 +351,6 @@ impl<'a> AlignedWriter<'a> {
 
     fn qjs_status(&self, qjs_mode: QjsPromptMode) {
         let mut text = AllocString::new();
-        self.push_function_key_label(&mut text, "[TAB]");
-        self.push_plain(&mut text, " ");
         self.push_ai_token(&mut text, "repl", qjs_mode == QjsPromptMode::Repl);
         self.push_plain(&mut text, " - ");
         self.push_ai_token(&mut text, "eval", qjs_mode == QjsPromptMode::Eval);
@@ -363,8 +359,6 @@ impl<'a> AlignedWriter<'a> {
 
     fn apps_status(&self, apps_mode: AppsPromptMode) {
         let mut text = AllocString::new();
-        self.push_function_key_label(&mut text, "[TAB]");
-        self.push_plain(&mut text, " ");
         for (idx, mode) in [
             AppsPromptMode::Start,
             AppsPromptMode::Online,
@@ -388,11 +382,11 @@ impl<'a> AlignedWriter<'a> {
     }
 
     fn cmd_status(&self, cmd_status_text: Option<&str>) {
-        let Some(cmd_status_text) = cmd_status_text else {
-            return;
-        };
-        if !cmd_status_text.is_empty() {
-            self.right_text(STATUS_ROW, cmd_status_text);
+        let status_text = cmd_status_text
+            .map(AllocString::from)
+            .unwrap_or_else(command_names_status_text);
+        if !status_text.is_empty() {
+            self.right_text(STATUS_ROW, status_text.as_str());
         }
     }
 
