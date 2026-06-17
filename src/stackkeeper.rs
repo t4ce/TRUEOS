@@ -1,5 +1,5 @@
 use core::ptr::addr_of_mut;
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 pub const TOKIO_LANE_COUNT: usize = crate::allcaps::stackkeeper::TOKIO_LANE_COUNT;
 pub const TOKIO_LANE_SCRATCH_BYTES: usize = crate::allcaps::stackkeeper::TOKIO_LANE_SCRATCH_BYTES;
@@ -11,6 +11,11 @@ const TRUEOS_KERNEL_VM_ID: u8 = 0;
 const LANE_DOMAIN_HOST: u8 = 0;
 const LANE_DOMAIN_GUEST: u8 = 1;
 const LANE_ROLE_TOKIO_BLOCKING: u8 = 1;
+const TOKIO_WORKER_RECORD_MAGIC: u32 = 0x524B_5754; // "TWKR", little endian in memory.
+const TOKIO_WORKER_RECORD_VERSION: u32 = 1;
+const VM_HULL_RECORD_MAGIC: u32 = 0x4C48_4D56; // "VMHL", little endian in memory.
+const VM_HULL_RECORD_VERSION: u32 = 1;
+pub const VM_HULL_RECORD_ROLE_VM_HULL: u8 = 1;
 
 #[repr(align(64))]
 #[allow(dead_code)]
@@ -43,6 +48,8 @@ static TOKIO_CURRENT_LANE_BY_CPU: [AtomicU32; TOKIO_TLS_CPU_TRACK_COUNT] =
     [const { AtomicU32::new(u32::MAX) }; TOKIO_TLS_CPU_TRACK_COUNT];
 static LOGGED_TOKIO_LANE_BUSY: AtomicBool = AtomicBool::new(false);
 static LOGGED_GUEST_TOKIO_TLS_SLOT: [AtomicBool; 32] = [const { AtomicBool::new(false) }; 32];
+static VM_HULL_FS_BASE: [AtomicU64; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { AtomicU64::new(0) }; crate::allcaps::hv::VM_ID_LIMIT];
 
 #[derive(Clone, Copy, Debug)]
 pub struct LaneTag {
@@ -68,6 +75,41 @@ pub struct TokioLaneGuard {
     armed: bool,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct TokioWorkerRecord {
+    pub magic: u32,
+    pub version: u32,
+    pub lane_id: u32,
+    pub tls_slot: u32,
+    pub scratch_base: usize,
+    pub scratch_len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct VmHullSnapshot {
+    pub role: u8,
+    pub lane_id: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct VmHullRecord {
+    pub magic: u32,
+    pub version: u32,
+    pub vm_id: u8,
+    pub role: u8,
+    pub lane_id: u32,
+    pub fs_base: u64,
+}
+
+impl VmHullRecord {
+    pub fn vtid(self) -> u32 {
+        self.lane_id
+    }
+}
+
 fn lane_scratch_base(lane_id: usize) -> usize {
     unsafe { (addr_of_mut!(TOKIO_LANE_SCRATCHES) as *mut LaneScratch).add(lane_id) as usize }
 }
@@ -90,8 +132,8 @@ pub extern "Rust" fn trueos_tokio_tls_current_cpu_slot() -> u32 {
 pub extern "Rust" fn trueos_tokio_tls_current_slot() -> u32 {
     let guest_vm_id = crate::hv::current_hull_guest_context_vm_id();
 
-    if crate::t::th::vthread::tokio_blocking_backing_enabled()
-        && let Some(slot) = crate::t::th::vthread::current_tls_slot()
+    if tokio_blocking_backing_enabled()
+        && let Some(slot) = current_tokio_worker_tls_slot()
     {
         if let Some(vm_id) = guest_vm_id {
             let vm_index = vm_id as usize;
@@ -99,7 +141,7 @@ pub extern "Rust" fn trueos_tokio_tls_current_slot() -> u32 {
                 && !LOGGED_GUEST_TOKIO_TLS_SLOT[vm_index].swap(true, Ordering::AcqRel)
             {
                 crate::log!(
-                    "stackkeeper: guest tokio tls slot source=vthread vm={} slot={}\n",
+                    "stackkeeper: guest tokio tls slot source=tokio-worker vm={} slot={}\n",
                     vm_id,
                     slot
                 );
@@ -145,6 +187,81 @@ pub extern "Rust" fn trueos_tokio_tls_current_slot() -> u32 {
     };
 
     slot
+}
+
+pub fn tokio_blocking_backing_enabled() -> bool {
+    true
+}
+
+pub fn current_tokio_worker_tls_slot() -> Option<u32> {
+    let cpu_slot = cpu_slot_now();
+    if cpu_slot == NO_CPU_SLOT {
+        return None;
+    }
+
+    let cpu_slot = cpu_slot as usize;
+    if cpu_slot >= TOKIO_TLS_CPU_TRACK_COUNT {
+        return None;
+    }
+
+    let lane_id = TOKIO_CURRENT_LANE_BY_CPU[cpu_slot].load(Ordering::Acquire);
+    if (lane_id as usize) < TOKIO_LANE_COUNT
+        && TOKIO_LANE_ACTIVE[lane_id as usize].load(Ordering::Acquire)
+    {
+        Some(lane_id)
+    } else {
+        None
+    }
+}
+
+pub fn current_tokio_worker_id() -> Option<usize> {
+    current_tokio_worker_tls_slot().map(|lane_id| lane_id as usize)
+}
+
+pub fn tokio_worker_record_for_lane(lane_id: usize) -> TokioWorkerRecord {
+    let lane_id = lane_id.min(TOKIO_LANE_COUNT - 1);
+    TokioWorkerRecord {
+        magic: TOKIO_WORKER_RECORD_MAGIC,
+        version: TOKIO_WORKER_RECORD_VERSION,
+        lane_id: lane_id as u32,
+        tls_slot: lane_id as u32,
+        scratch_base: lane_scratch_base(lane_id),
+        scratch_len: TOKIO_LANE_SCRATCH_BYTES,
+    }
+}
+
+pub fn current_vm_hull_snapshot() -> Option<VmHullSnapshot> {
+    let vm_id = crate::hv::current_hull_guest_context_vm_id()?;
+    Some(VmHullSnapshot {
+        role: VM_HULL_RECORD_ROLE_VM_HULL,
+        lane_id: vm_id as u32,
+    })
+}
+
+pub fn vm_hull_record(vm_id: u8) -> VmHullRecord {
+    VmHullRecord {
+        magic: VM_HULL_RECORD_MAGIC,
+        version: VM_HULL_RECORD_VERSION,
+        vm_id,
+        role: VM_HULL_RECORD_ROLE_VM_HULL,
+        lane_id: vm_id as u32,
+        fs_base: vm_hull_fs_base(vm_id),
+    }
+}
+
+pub fn vm_hull_fs_base(vm_id: u8) -> u64 {
+    VM_HULL_FS_BASE
+        .get(vm_id as usize)
+        .map(|slot| slot.load(Ordering::Acquire))
+        .unwrap_or(0)
+}
+
+pub fn set_vm_hull_fs_base(vm_id: u8, fs_base: u64) -> bool {
+    let Some(slot) = VM_HULL_FS_BASE.get(vm_id as usize) else {
+        return false;
+    };
+    slot.store(fs_base, Ordering::Release);
+    true
 }
 
 pub fn try_acquire_tokio_lane(
@@ -310,8 +427,8 @@ impl TokioLaneLease {
         self.tag
     }
 
-    pub fn vthread_record(self) -> &'static crate::t::th::vthread::VThreadRecord {
-        crate::t::th::vthread::record_for_lane(self.tag.lane_id as usize)
+    pub fn tokio_worker_record(self) -> TokioWorkerRecord {
+        tokio_worker_record_for_lane(self.tag.lane_id as usize)
     }
 }
 

@@ -11,7 +11,7 @@ use core::slice;
 use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use spin::Mutex;
 
-use crate::t::static_map::FixedKeyMap;
+use crate::r::static_map::FixedKeyMap;
 
 static TRUEOS_ERRNO: AtomicI32 = AtomicI32::new(0);
 static C_ALLOCATIONS: Mutex<FixedKeyMap<usize, AllocationRecord, C_ALLOCATION_CAPACITY>> =
@@ -236,10 +236,10 @@ fn pthread_key(ptr: *mut c_void) -> Option<usize> {
 }
 
 fn pthread_current_id() -> usize {
-    if crate::t::th::vthread::tokio_blocking_backing_enabled()
-        && let Some(vtid) = crate::t::th::vthread::current_id()
+    if crate::stackkeeper::tokio_blocking_backing_enabled()
+        && let Some(worker_id) = crate::stackkeeper::current_tokio_worker_id()
     {
-        return 0x1_0000usize.saturating_add(vtid as usize);
+        return 0x1_0000usize.saturating_add(worker_id);
     }
     crate::percpu::current_slot().saturating_add(1)
 }
@@ -612,26 +612,26 @@ unsafe fn getaddrinfo_service_port(service: *const c_char) -> Result<u16, c_int>
 }
 
 fn getaddrinfo_resolve_ipv4(host: &str) -> Result<[u8; 4], c_int> {
-    crate::t::net::vlayer::resolve_ipv4_for_sync_abi(host).map_err(dns_resolve_error_to_eai)
+    crate::r::net::vlayer::resolve_ipv4_for_sync_abi(host).map_err(dns_resolve_error_to_eai)
 }
 
-fn dns_resolve_error_to_eai(err: crate::t::net::vlayer::DnsResolveError) -> c_int {
+fn dns_resolve_error_to_eai(err: crate::r::net::vlayer::DnsResolveError) -> c_int {
     match err {
-        crate::t::net::vlayer::DnsResolveError::BadName
-        | crate::t::net::vlayer::DnsResolveError::NoAnswer => TRUEOS_EAI_NONAME,
-        crate::t::net::vlayer::DnsResolveError::Runtime
-        | crate::t::net::vlayer::DnsResolveError::NoNic
-        | crate::t::net::vlayer::DnsResolveError::Timeout => TRUEOS_EAI_SYSTEM,
+        crate::r::net::vlayer::DnsResolveError::BadName
+        | crate::r::net::vlayer::DnsResolveError::NoAnswer => TRUEOS_EAI_NONAME,
+        crate::r::net::vlayer::DnsResolveError::Runtime
+        | crate::r::net::vlayer::DnsResolveError::NoNic
+        | crate::r::net::vlayer::DnsResolveError::Timeout => TRUEOS_EAI_SYSTEM,
     }
 }
 
-fn dns_resolve_error_to_cabi_errno(err: crate::t::net::vlayer::DnsResolveError) -> c_int {
+fn dns_resolve_error_to_cabi_errno(err: crate::r::net::vlayer::DnsResolveError) -> c_int {
     match err {
-        crate::t::net::vlayer::DnsResolveError::BadName
-        | crate::t::net::vlayer::DnsResolveError::NoAnswer => TRUEOS_EIO,
-        crate::t::net::vlayer::DnsResolveError::Runtime
-        | crate::t::net::vlayer::DnsResolveError::NoNic
-        | crate::t::net::vlayer::DnsResolveError::Timeout => TRUEOS_ETIMEDOUT,
+        crate::r::net::vlayer::DnsResolveError::BadName
+        | crate::r::net::vlayer::DnsResolveError::NoAnswer => TRUEOS_EIO,
+        crate::r::net::vlayer::DnsResolveError::Runtime
+        | crate::r::net::vlayer::DnsResolveError::NoNic
+        | crate::r::net::vlayer::DnsResolveError::Timeout => TRUEOS_ETIMEDOUT,
     }
 }
 
@@ -1792,7 +1792,7 @@ pub unsafe extern "C" fn trueos_cabi_dns_resolve_ipv4(
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return TRUEOS_EINVAL;
     };
-    match crate::t::net::vlayer::resolve_ipv4_for_sync_abi(host_name) {
+    match crate::r::net::vlayer::resolve_ipv4_for_sync_abi(host_name) {
         Ok(ip) => {
             if copy_to_abi_out(out_octets, &ip) {
                 0
@@ -2166,13 +2166,6 @@ pub unsafe extern "C" fn pthread_create(
     }
 
     let thread_id = PTHREAD_NEXT_THREAD_ID.fetch_add(1, Ordering::AcqRel);
-    let permit = match crate::t::app_exec::admit_current_app_work(
-        crate::t::app_exec::AppWorkKind::Pthread,
-        thread_id,
-    ) {
-        Ok(permit) => permit,
-        Err(_) => return TRUEOS_EAGAIN,
-    };
     let completion = Arc::new(crate::wait::CompletionCell::new());
     let state = PthreadThreadState {
         completion: completion.clone(),
@@ -2193,7 +2186,6 @@ pub unsafe extern "C" fn pthread_create(
     let start = start_routine as usize;
     let arg = arg as usize;
     let job = Box::new(move || {
-        let _permit = permit;
         let start: unsafe extern "C" fn(*mut c_void) -> *mut c_void =
             unsafe { core::mem::transmute(start) };
         let result = unsafe { start(arg as *mut c_void) } as usize;
@@ -2201,7 +2193,7 @@ pub unsafe extern "C" fn pthread_create(
         pthread_thread_finish(thread_id);
     });
 
-    let rc = crate::t::trueos_tokio_worker::trueos_tokio_spawn_blocking_job(job);
+    let rc = crate::r::blocking::trueos_tokio_spawn_blocking_job(job);
     pthread_create_trace(thread_id, rc);
     if rc == 0 {
         0

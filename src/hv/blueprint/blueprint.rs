@@ -1389,9 +1389,9 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "trueos_platform_cpu_count" => {
             Some(crate::r::platform::trueos_platform_cpu_count as *const () as usize)
         }
-        "trueos_tokio_spawn_blocking_job" => Some(
-            crate::t::trueos_tokio_worker::trueos_tokio_spawn_blocking_job as *const () as usize,
-        ),
+        "trueos_tokio_spawn_blocking_job" => {
+            Some(crate::r::blocking::trueos_tokio_spawn_blocking_job as *const () as usize)
+        }
         "trueos_time_monotonic_nanos" => {
             Some(crate::std_abi_shim::trueos_time_monotonic_nanos as *const () as usize)
         }

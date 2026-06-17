@@ -337,14 +337,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_THREAD_CURRENT_ID => {
-            let vtid = crate::t::th::vthread::current_id()
-                .unwrap_or_else(|| crate::t::th::vthread::record_for_vm_hull(vm_id).vtid());
+            let vtid = 0x8000u32.saturating_add(vm_id as u32);
             write_response(vm_id, seq, STATUS_OK, vtid as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_TOKIO_BLOCKING_SPAWN => {
             let rc = unsafe {
-                crate::t::trueos_tokio_worker::spawn_vmx_thread_from_raw(
+                crate::r::blocking::spawn_vmx_thread_from_raw(
                     vm_id,
                     arg0 as usize,
                     arg1 as usize,
@@ -460,14 +459,14 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     vm_id,
                     seq,
                     STATUS_OK,
-                    crate::t::net::vlayer::dns_resolve_error_code(
-                        crate::t::net::vlayer::DnsResolveError::BadName,
+                    crate::r::net::vlayer::dns_resolve_error_code(
+                        crate::r::net::vlayer::DnsResolveError::BadName,
                     ),
                     0,
                 );
                 return DispatchOutcome::Resume;
             };
-            match crate::t::net::vlayer::resolve_ipv4_for_sync_abi_host(host) {
+            match crate::r::net::vlayer::resolve_ipv4_for_sync_abi_host(host) {
                 Ok(ip) => {
                     unsafe {
                         (&mut (*p).payload)[..4].copy_from_slice(&ip);
@@ -479,7 +478,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                         vm_id,
                         seq,
                         STATUS_OK,
-                        crate::t::net::vlayer::dns_resolve_error_code(err),
+                        crate::r::net::vlayer::dns_resolve_error_code(err),
                         0,
                     );
                 }
@@ -567,7 +566,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             const TIMEOUT_MS: u32 = 45_000;
             const MAX_BYTES: usize = 8 * 1024 * 1024;
             let op_id =
-                crate::t::net::https::cabi_net_fetch_bytes_start_host(url, TIMEOUT_MS, MAX_BYTES);
+                crate::r::net::https::cabi_net_fetch_bytes_start_host(url, TIMEOUT_MS, MAX_BYTES);
             if op_id == 0 {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
             } else {
@@ -576,7 +575,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_FETCH_BYTES_RESULT_LEN => {
-            let rc = crate::t::net::https::cabi_net_fetch_bytes_result_len_host(arg0 as u32);
+            let rc = crate::r::net::https::cabi_net_fetch_bytes_result_len_host(arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
@@ -586,7 +585,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let out = unsafe { &mut (&mut (*p).payload)[..PAYLOAD_CAP] };
-            let rc = crate::t::net::https::cabi_net_fetch_bytes_read_chunk_host(
+            let rc = crate::r::net::https::cabi_net_fetch_bytes_read_chunk_host(
                 arg0 as u32,
                 arg1 as usize,
                 out,
@@ -599,7 +598,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_FETCH_BYTES_DISCARD => {
-            let rc = crate::t::net::https::cabi_net_fetch_bytes_discard_host(arg0 as u32);
+            let rc = crate::r::net::https::cabi_net_fetch_bytes_discard_host(arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
@@ -626,7 +625,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             const TIMEOUT_MS: u32 = 45_000;
             const MAX_BYTES: usize = 8 * 1024 * 1024;
             let op_id =
-                crate::t::net::https::cabi_net_fetch_start_host(url, path, TIMEOUT_MS, MAX_BYTES);
+                crate::r::net::https::cabi_net_fetch_start_host(url, path, TIMEOUT_MS, MAX_BYTES);
             if op_id == 0 {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
             } else {
@@ -635,12 +634,12 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_FETCH_FILE_RESULT => {
-            let rc = crate::t::net::https::cabi_net_fetch_result_host(arg0 as u32);
+            let rc = crate::r::net::https::cabi_net_fetch_result_host(arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_FETCH_FILE_DISCARD => {
-            let rc = crate::t::net::https::cabi_net_fetch_discard_host(arg0 as u32);
+            let rc = crate::r::net::https::cabi_net_fetch_discard_host(arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
