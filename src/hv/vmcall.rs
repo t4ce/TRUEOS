@@ -105,6 +105,7 @@ pub const OP_BP_MIO_TCP_LISTENER_ACCEPT: u32 = 0x5C; // arg0 socket -> child+add
 pub const OP_BP_MIO_SELECTOR_REGISTER_SOCKET: u32 = 0x5D; // selector/socket/token/interests
 pub const OP_BP_MIO_SELECTOR_DEREGISTER_SOCKET: u32 = 0x5E; // selector/socket
 pub const OP_BP_MIO_SELECTOR_POLL: u32 = 0x5F; // selector/cap/timeout -> ready events
+pub const OP_BP_MIO_SELECTOR_WAKE: u32 = 0x80; // selector -> wake parked pollers
 
 // ── response status codes (u32, written by host) ────────────────────────────
 pub const STATUS_OK: u32 = 0;
@@ -1318,6 +1319,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_MIO_SELECTOR_DEREGISTER_SOCKET => {
             let rc = crate::hv::with_guest_broker_context(vm_id, || unsafe {
                 crate::mio_compat::mio_selector_deregister_socket_host(arg0 as usize, arg1 as u32)
+            });
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_MIO_SELECTOR_WAKE => {
+            let rc = crate::hv::with_guest_broker_context(vm_id, || unsafe {
+                crate::mio_compat::mio_selector_wake_host(arg0 as usize)
             });
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume

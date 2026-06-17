@@ -5,6 +5,7 @@ use spin::Mutex;
 use v::vnet as api;
 
 use crate::blueprint_net_broker::VNetBridge;
+use crate::wait::WaitQueue;
 
 const STATUS_OK: i32 = 0;
 const STATUS_UNSUPPORTED: i32 = -1;
@@ -23,6 +24,9 @@ const READY_WRITE_CLOSED: u8 = 0b0001_0000;
 
 const CONNECT_COMPAT_WAIT_NS: u64 = 2_000_000_000;
 const CONNECT_IO_FASTPATH_NS: u64 = 1_000_000_000;
+const SELECTOR_PARK_SLICE_NS: u64 = 10_000_000;
+
+static MIO_SELECTOR_WAIT: WaitQueue = WaitQueue::new();
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -192,7 +196,8 @@ fn compat_addr_port(addr: Option<CompatAddr>) -> Option<u16> {
 
 fn probe_tcp_socket(socket: &MioSocketState) -> bool {
     socket.kind == MioSocketKind::TcpStream
-        && (matches!(compat_addr_port(socket.local), Some(4 | 5))
+        && (crate::logflag::NET_LOG_TCP_FLOW
+            || matches!(compat_addr_port(socket.local), Some(4 | 5))
             || matches!(compat_addr_port(socket.peer), Some(80 | 443)))
 }
 
@@ -219,6 +224,15 @@ fn once_per_second(last: &AtomicU64) -> bool {
     }
     last.compare_exchange(prev, now, AtomicOrdering::Relaxed, AtomicOrdering::Relaxed)
         .is_ok()
+}
+
+pub(crate) fn notify_net_event() {
+    MIO_SELECTOR_WAIT.notify_all();
+}
+
+pub(crate) unsafe fn mio_selector_wake_host(_selector_id: usize) -> i32 {
+    MIO_SELECTOR_WAIT.notify_all();
+    STATUS_OK
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -680,8 +694,11 @@ impl MioCompat {
                     .iter()
                     .position(|pending| pending.kind == kind)
                     && let Some(pending) = self.pending_opens.remove(index)
-                    && let Some(socket) = self.socket_mut(pending.socket_id)
                 {
+                    let pending_open_count = self.pending_opens.len();
+                    let Some(socket) = self.socket_mut(pending.socket_id) else {
+                        return;
+                    };
                     socket.handle = Some(handle);
                     match socket.kind {
                         MioSocketKind::Udp => {
@@ -702,7 +719,18 @@ impl MioCompat {
                                 );
                             }
                         }
-                        MioSocketKind::TcpListener => {}
+                        MioSocketKind::TcpListener => {
+                            if crate::logflag::NET_LOG_TCP_FLOW {
+                                crate::log!(
+                                    "mio_compat: tcp listener opened socket={} owner={} handle={} listen_port={} pending_opens={}\n",
+                                    socket.id,
+                                    socket.owner_vm.unwrap_or(u8::MAX),
+                                    handle.0,
+                                    socket.listen_port.unwrap_or(0),
+                                    pending_open_count
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -758,6 +786,15 @@ impl MioCompat {
                     if let Some(listener) = self.socket_mut(listener_id) {
                         listener.handle = None;
                         listener.accept_queue.push_back(child_id);
+                        if crate::logflag::NET_LOG_TCP_FLOW {
+                            crate::log!(
+                                "mio_compat: tcp listener accept queued listener={} child={} handle={} pending={}\n",
+                                listener_id,
+                                child_id,
+                                handle.0,
+                                listener.accept_queue.len()
+                            );
+                        }
                     }
 
                     if let Some(port) = port {
@@ -776,6 +813,33 @@ impl MioCompat {
                     {
                         log_tcp_endpoint("mio_compat: tcp established", socket.id, handle.0, peer);
                     }
+                } else if crate::logflag::NET_LOG_TCP_FLOW {
+                    let mut listener_count = 0usize;
+                    let mut first_listener_socket = 0u32;
+                    let mut first_listener_handle = 0u32;
+                    let mut first_listener_port = 0u16;
+                    for socket in self
+                        .sockets
+                        .iter()
+                        .filter(|socket| socket.kind == MioSocketKind::TcpListener)
+                    {
+                        listener_count += 1;
+                        if first_listener_socket == 0 {
+                            first_listener_socket = socket.id;
+                            first_listener_handle = socket.handle.map(|h| h.0).unwrap_or(0);
+                            first_listener_port = socket.listen_port.unwrap_or(0);
+                        }
+                    }
+                    crate::log!(
+                        "mio_compat: tcp established orphan handle={} listeners={} first_listener={} first_handle={} first_port={} sockets={} pending_opens={}\n",
+                        handle.0,
+                        listener_count,
+                        first_listener_socket,
+                        first_listener_handle,
+                        first_listener_port,
+                        self.sockets.len(),
+                        self.pending_opens.len()
+                    );
                 }
             }
             api::Event::TcpData { handle, data } => {
@@ -1982,6 +2046,14 @@ pub(crate) unsafe fn mio_tcp_listener_accept_host(
             *out_socket_id = child_id;
             *out_addr = peer_addr.to_raw();
         }
+        if crate::logflag::NET_LOG_TCP_FLOW {
+            crate::log!(
+                "mio_compat: tcp listener accept ok listener={} child={} pending={}\n",
+                socket_id,
+                child_id,
+                compat.sockets[listener_index].accept_queue.len()
+            );
+        }
         STATUS_OK
     })
 }
@@ -2176,6 +2248,23 @@ pub unsafe extern "C" fn trueos_mio_selector_deregister_socket(
     mio_selector_deregister_socket_host(selector_id, socket_id)
 }
 
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_mio_selector_wake(selector_id: usize) -> i32 {
+    if vm_guest_vmcall_active() {
+        let (status, data) = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_MIO_SELECTOR_WAKE,
+            selector_id as u64,
+            0,
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            vmcall_i32(data)
+        } else {
+            STATUS_INVALID_INPUT
+        };
+    }
+    mio_selector_wake_host(selector_id)
+}
+
 pub(crate) unsafe fn mio_selector_poll_host(
     selector_id: usize,
     out_events: *mut TrueosMioReadyEvent,
@@ -2199,7 +2288,57 @@ pub(crate) unsafe fn mio_selector_poll_host(
         if !block_forever && crate::chronos::monotonic_nanos() >= deadline {
             return 0;
         }
-        crate::wait::spin_step();
+
+        if crate::logflag::NET_LOG_TCP_FLOW {
+            static MIO_SELECTOR_PARK_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
+            if once_per_second(&MIO_SELECTOR_PARK_LAST_LOG_NS) {
+                let (regs, sockets, listeners, accepts, pending_opens) = with_compat(|compat| {
+                    let regs = compat
+                        .registrations
+                        .iter()
+                        .filter(|reg| {
+                            owner_matches(reg.owner_vm, owner_vm) && reg.selector_id == selector_id
+                        })
+                        .count();
+                    let mut listeners = 0usize;
+                    let mut accepts = 0usize;
+                    for socket in compat.sockets.iter() {
+                        if socket.kind == MioSocketKind::TcpListener {
+                            listeners += 1;
+                            accepts += socket.accept_queue.len();
+                        }
+                    }
+                    (
+                        regs,
+                        compat.sockets.len(),
+                        listeners,
+                        accepts,
+                        compat.pending_opens.len(),
+                    )
+                });
+                crate::log!(
+                    "mio_compat: selector-park selector={} owner={} timeout_ns={} regs={} sockets={} listeners={} accepts={} pending_opens={}\n",
+                    selector_id,
+                    owner_vm.map(|id| id as i32).unwrap_or(-1),
+                    timeout_nanos,
+                    regs,
+                    sockets,
+                    listeners,
+                    accepts,
+                    pending_opens
+                );
+            }
+        }
+
+        let wait_ns = if block_forever {
+            SELECTOR_PARK_SLICE_NS
+        } else {
+            deadline
+                .saturating_sub(crate::chronos::monotonic_nanos())
+                .min(SELECTOR_PARK_SLICE_NS)
+        };
+        let wait_ms = wait_ns.saturating_add(999_999) / 1_000_000;
+        let _ = MIO_SELECTOR_WAIT.wait_for_event_blocking_parked(wait_ms.max(1));
     }
 }
 

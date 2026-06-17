@@ -2167,6 +2167,13 @@ pub unsafe extern "C" fn pthread_create(
     }
 
     let thread_id = PTHREAD_NEXT_THREAD_ID.fetch_add(1, Ordering::AcqRel);
+    let permit = match crate::t::app_exec::admit_current_app_work(
+        crate::t::app_exec::AppWorkKind::Pthread,
+        thread_id,
+    ) {
+        Ok(permit) => permit,
+        Err(_) => return TRUEOS_EAGAIN,
+    };
     let completion = Arc::new(crate::wait::CompletionCell::new());
     let state = PthreadThreadState {
         completion: completion.clone(),
@@ -2187,6 +2194,7 @@ pub unsafe extern "C" fn pthread_create(
     let start = start_routine as usize;
     let arg = arg as usize;
     let job = Box::new(move || {
+        let _permit = permit;
         let start: unsafe extern "C" fn(*mut c_void) -> *mut c_void =
             unsafe { core::mem::transmute(start) };
         let result = unsafe { start(arg as *mut c_void) } as usize;

@@ -77,6 +77,7 @@ unsafe extern "C" {
         out_cap: usize,
         timeout_nanos: u64,
     ) -> usize;
+    fn trueos_mio_selector_wake(selector_id: usize) -> i32;
 }
 
 #[derive(Debug)]
@@ -234,6 +235,10 @@ pub(crate) fn selector_poll(
         trueos_mio_selector_poll(selector_id, raw.as_mut_ptr(), raw.len(), timeout_nanos)
     };
     out_events.extend(raw.into_iter().take(len));
+}
+
+pub(crate) fn selector_wake(selector_id: usize) {
+    let _ = unsafe { trueos_mio_selector_wake(selector_id) };
 }
 
 fn socket_addr_to_raw(addr: SocketAddr) -> SocketAddrRaw {

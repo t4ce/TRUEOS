@@ -21,6 +21,7 @@ unsafe extern "Rust" {
     fn trueos_tokio_platform_poll_once();
     fn trueos_tokio_platform_sleep_ms(ms: u64);
     fn trueos_tokio_platform_log_semantic_gap(code: u32);
+    fn trueos_tokio_platform_log(level: u32, bytes: *const u8, len: usize);
 }
 
 #[inline]
@@ -46,4 +47,9 @@ pub(crate) fn sleep_ms(ms: u64) {
 #[inline]
 pub(crate) fn note_semantic_gap(code: u32) {
     unsafe { trueos_tokio_platform_log_semantic_gap(code) }
+}
+
+#[inline]
+pub(crate) fn log(level: u32, bytes: &[u8]) {
+    unsafe { trueos_tokio_platform_log(level, bytes.as_ptr(), bytes.len()) }
 }

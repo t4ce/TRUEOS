@@ -88,13 +88,26 @@ impl Selector {
                 .saturating_add(crate::zkvm_compat::duration_to_nanos(duration))
         });
 
+        const SELECT_PARK_SLICE: Duration = Duration::from_millis(10);
+
         loop {
-            crate::zkvm_compat::poll_once();
-            if self.drain_ready(events) {
+            let timeout_slice = match deadline {
+                Some(deadline) => {
+                    let now = crate::zkvm_compat::now_nanos();
+                    if now >= deadline {
+                        return Ok(());
+                    }
+                    let remaining = Duration::from_nanos(deadline.saturating_sub(now));
+                    Some(core::cmp::min(remaining, SELECT_PARK_SLICE))
+                }
+                None => Some(SELECT_PARK_SLICE),
+            };
+
+            if self.drain_socket_ready_timeout(events, timeout_slice) {
                 return Ok(());
             }
 
-            if self.drain_socket_ready(events) {
+            if self.drain_ready(events) {
                 return Ok(());
             }
 
@@ -157,13 +170,18 @@ impl Selector {
 
     #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     fn drain_socket_ready(&self, events: &mut Events) -> bool {
+        self.drain_socket_ready_timeout(events, Some(Duration::ZERO))
+    }
+
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    fn drain_socket_ready_timeout(&self, events: &mut Events, timeout: Option<Duration>) -> bool {
         let remaining = events.capacity().saturating_sub(events.len());
         if remaining == 0 {
             return !events.is_empty();
         }
 
         let mut raw_events = Vec::with_capacity(remaining);
-        crate::zkvm_net::selector_poll(self.id, &mut raw_events, Some(Duration::ZERO));
+        crate::zkvm_net::selector_poll(self.id, &mut raw_events, timeout);
         for raw in raw_events {
             if events.len() >= events.capacity() {
                 break;
