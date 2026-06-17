@@ -179,7 +179,12 @@ impl TriangleBlendProbeMode {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum TriangleBatchMode {
     Draw,
+    DrawScreenSpace,
+    DrawScreenSpaceRect,
     VfDraw,
+    VfPointDraw,
+    VfRectDraw,
+    VfRectClipDraw,
     StreamoutProof,
     VfStreamoutProof,
     VsStreamoutProof,
@@ -211,6 +216,69 @@ enum BackendProbeMode {
     WmHzSampleMask,
     WmLateReemit,
     RasterWmInputOa,
+    RasterWmInputOaKillOff,
+    RasterWmInputOaSmoothPoint,
+    RasterWmInputOaMsRaster,
+    RasterWmInputOaMsRasterForced,
+    RasterWmInputOaDerefBlock0,
+    RasterWmInputOaNoHzOp,
+    RasterWmInputOaWmNormalDispatch,
+    RasterWmInputOaWmReemitAfterPsExtra,
+    RasterWmInputOaOmitHzOp,
+    RasterWmInputOaPsDisabled,
+    RasterWmInputOaBtCountOne,
+    RasterWmInputOaScissorOnly,
+    RasterWmInputOaMesaSimpleRect,
+    RasterWmInputOaMesaSimpleRectEarly,
+    RasterWmInputOaMesaSimpleRectArtificial,
+    RasterWmInputOaMesaSimpleRectNoSrcHeader,
+    RasterWmInputOaEarlySample,
+    RasterWmInputOaEarlyKillOff,
+    RasterWmInputOaClipNormal,
+    RasterWmInputOaClipPerspective,
+    RasterWmInputOaClipDisabled,
+    RasterWmInputOaClipDisabledArtificial,
+    RasterWmInputOaClipForceMode,
+    RasterWmInputOaClipApiD3d,
+    RasterWmInputOaClipViewportXy,
+    RasterWmInputOaEarlyClipViewportXy,
+    RasterWmInputOaEarlyPointWidth1023,
+    RasterWmInputOaEarlyMsRasterForced,
+    RasterWmInputOaSbeBeforeClip,
+    RasterWmInputOaSbeBeforeSf,
+    RasterWmInputOaSbeRead0,
+    RasterWmInputOaDrawRectEarlyOnly,
+    RasterWmInputOaSampleMaskEarlyOnly,
+    RasterWmInputOaPipeControlClipSf,
+    RasterWmInputOaWmHzOpBeforeWm,
+    RasterWmInputOaWmHzOpAfterPsExtra,
+    RasterWmInputOaPayloadAttributeEnable,
+    RasterWmInputOaPayloadSourceDepthW,
+    RasterWmInputOaPayloadBaryPlanes,
+    RasterWmInputOaFrontCcw,
+    RasterWmInputOaNoPrimitiveReplication,
+    RasterWmInputOaVfGeometryDistribution,
+    RasterWmInputOaPointWidth8,
+    RasterWmInputOaPointWidth8ClipMax,
+    RasterWmInputOaPointWidth64,
+    RasterWmInputOaPointWidth64ClipMax,
+    RasterWmInputOaPointWidth64Early,
+    RasterWmInputOaPointWidth64EarlyScissor,
+    RasterWmInputOaPointWidth64Screen,
+    RasterWmInputOaPointWidth64Artificial,
+    RasterWmInputOaPointWidth64WmNormalDispatch,
+    RasterWmInputOaPointWidth64WmReemitAfterPsExtra,
+    RasterWmInputOaPointWidth64OmitHzOp,
+    RasterWmInputOaPointWidth64PsDisabled,
+    RasterWmInputOaPointWidth64PayloadAttributeEnable,
+    RasterWmInputOaPointWidth64PayloadSourceDepthW,
+    RasterWmInputOaPointWidth64PayloadBaryPlanes,
+    RasterWmInputOaPointWidth64SbeBeforeClip,
+    RasterWmInputOaPointWidth64SbeBeforeSf,
+    RasterWmInputOaPointWidth1023,
+    RasterWmInputOaPointWidth1023NoWmPoint,
+    RasterWmInputOaPointWidth1023Scissor,
+    RasterWmInputOaPointWidthVertex,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -338,6 +406,135 @@ impl BackendProbeMode {
             Self::WmHzSampleMask => "wm-hz-sample-mask",
             Self::WmLateReemit => "wm-late-reemit",
             Self::RasterWmInputOa => "raster-wm-input-oa",
+            Self::RasterWmInputOaKillOff => "raster-wm-input-oa-killoff",
+            Self::RasterWmInputOaSmoothPoint => "raster-wm-input-oa-smooth-point",
+            Self::RasterWmInputOaMsRaster => "raster-wm-input-oa-ms-raster",
+            Self::RasterWmInputOaMsRasterForced => "raster-wm-input-oa-ms-raster-forced",
+            Self::RasterWmInputOaDerefBlock0 => "raster-wm-input-oa-deref-block-0",
+            Self::RasterWmInputOaNoHzOp => "raster-wm-input-oa-no-hz-op",
+            Self::RasterWmInputOaWmNormalDispatch => {
+                "raster-wm-input-oa-wm-normal-dispatch"
+            }
+            Self::RasterWmInputOaWmReemitAfterPsExtra => {
+                "raster-wm-input-oa-wm-reemit-after-ps-extra"
+            }
+            Self::RasterWmInputOaOmitHzOp => "raster-wm-input-oa-omit-hz-op",
+            Self::RasterWmInputOaPsDisabled => "raster-wm-input-oa-ps-disabled",
+            Self::RasterWmInputOaBtCountOne => "raster-wm-input-oa-bt-count-1",
+            Self::RasterWmInputOaScissorOnly => "raster-wm-input-oa-scissor-only",
+            Self::RasterWmInputOaMesaSimpleRect => "raster-wm-input-oa-mesa-simple-rect",
+            Self::RasterWmInputOaMesaSimpleRectEarly => {
+                "raster-wm-input-oa-mesa-simple-rect-early"
+            }
+            Self::RasterWmInputOaMesaSimpleRectArtificial => {
+                "raster-wm-input-oa-mesa-simple-rect-artificial"
+            }
+            Self::RasterWmInputOaMesaSimpleRectNoSrcHeader => {
+                "raster-wm-input-oa-mesa-simple-rect-nosrc-header"
+            }
+            Self::RasterWmInputOaEarlySample => "raster-wm-input-oa-early-sample",
+            Self::RasterWmInputOaEarlyKillOff => "raster-wm-input-oa-early-killoff",
+            Self::RasterWmInputOaClipNormal => "raster-wm-input-oa-clip-normal",
+            Self::RasterWmInputOaClipPerspective => "raster-wm-input-oa-clip-perspective",
+            Self::RasterWmInputOaClipDisabled => "raster-wm-input-oa-clip-disabled",
+            Self::RasterWmInputOaClipDisabledArtificial => {
+                "raster-wm-input-oa-clip-disabled-artificial"
+            }
+            Self::RasterWmInputOaClipForceMode => "raster-wm-input-oa-clip-force-mode",
+            Self::RasterWmInputOaClipApiD3d => "raster-wm-input-oa-clip-api-d3d",
+            Self::RasterWmInputOaClipViewportXy => "raster-wm-input-oa-clip-viewport-xy",
+            Self::RasterWmInputOaEarlyClipViewportXy => {
+                "raster-wm-input-oa-early-clip-viewport-xy"
+            }
+            Self::RasterWmInputOaEarlyPointWidth1023 => {
+                "raster-wm-input-oa-early-point-width-1023"
+            }
+            Self::RasterWmInputOaEarlyMsRasterForced => {
+                "raster-wm-input-oa-early-ms-raster-forced"
+            }
+            Self::RasterWmInputOaSbeBeforeClip => "raster-wm-input-oa-sbe-before-clip",
+            Self::RasterWmInputOaSbeBeforeSf => "raster-wm-input-oa-sbe-before-sf",
+            Self::RasterWmInputOaSbeRead0 => "raster-wm-input-oa-sbe-read0",
+            Self::RasterWmInputOaDrawRectEarlyOnly => {
+                "raster-wm-input-oa-draw-rect-early-only"
+            }
+            Self::RasterWmInputOaSampleMaskEarlyOnly => {
+                "raster-wm-input-oa-sample-mask-early-only"
+            }
+            Self::RasterWmInputOaPipeControlClipSf => {
+                "raster-wm-input-oa-pipe-control-clip-sf"
+            }
+            Self::RasterWmInputOaWmHzOpBeforeWm => "raster-wm-input-oa-wm-hz-op-before-wm",
+            Self::RasterWmInputOaWmHzOpAfterPsExtra => "raster-wm-input-oa-wm-hz-op-after-ps-extra",
+            Self::RasterWmInputOaPayloadAttributeEnable => {
+                "raster-wm-input-oa-payload-attribute-enable"
+            }
+            Self::RasterWmInputOaPayloadSourceDepthW => {
+                "raster-wm-input-oa-payload-source-depth-w"
+            }
+            Self::RasterWmInputOaPayloadBaryPlanes => "raster-wm-input-oa-payload-bary-planes",
+            Self::RasterWmInputOaFrontCcw => "raster-wm-input-oa-front-ccw",
+            Self::RasterWmInputOaNoPrimitiveReplication => {
+                "raster-wm-input-oa-no-primitive-replication"
+            }
+            Self::RasterWmInputOaVfGeometryDistribution => {
+                "raster-wm-input-oa-vf-geometry-distribution"
+            }
+            Self::RasterWmInputOaPointWidth8 => "raster-wm-input-oa-point-width-8",
+            Self::RasterWmInputOaPointWidth8ClipMax => {
+                "raster-wm-input-oa-point-width-8-clipmax"
+            }
+            Self::RasterWmInputOaPointWidth64 => "raster-wm-input-oa-point-width-64",
+            Self::RasterWmInputOaPointWidth64ClipMax => {
+                "raster-wm-input-oa-point-width-64-clipmax"
+            }
+            Self::RasterWmInputOaPointWidth64Early => {
+                "raster-wm-input-oa-point-width-64-early"
+            }
+            Self::RasterWmInputOaPointWidth64EarlyScissor => {
+                "raster-wm-input-oa-point-width-64-early-scissor"
+            }
+            Self::RasterWmInputOaPointWidth64Screen => {
+                "raster-wm-input-oa-point-width-64-screen"
+            }
+            Self::RasterWmInputOaPointWidth64Artificial => {
+                "raster-wm-input-oa-point-width-64-artificial"
+            }
+            Self::RasterWmInputOaPointWidth64WmNormalDispatch => {
+                "raster-wm-input-oa-point-width-64-wm-normal-dispatch"
+            }
+            Self::RasterWmInputOaPointWidth64WmReemitAfterPsExtra => {
+                "raster-wm-input-oa-point-width-64-wm-reemit-after-ps-extra"
+            }
+            Self::RasterWmInputOaPointWidth64OmitHzOp => {
+                "raster-wm-input-oa-point-width-64-omit-hz-op"
+            }
+            Self::RasterWmInputOaPointWidth64PsDisabled => {
+                "raster-wm-input-oa-point-width-64-ps-disabled"
+            }
+            Self::RasterWmInputOaPointWidth64PayloadAttributeEnable => {
+                "raster-wm-input-oa-point-width-64-payload-attribute-enable"
+            }
+            Self::RasterWmInputOaPointWidth64PayloadSourceDepthW => {
+                "raster-wm-input-oa-point-width-64-payload-source-depth-w"
+            }
+            Self::RasterWmInputOaPointWidth64PayloadBaryPlanes => {
+                "raster-wm-input-oa-point-width-64-payload-bary-planes"
+            }
+            Self::RasterWmInputOaPointWidth64SbeBeforeClip => {
+                "raster-wm-input-oa-point-width-64-sbe-before-clip"
+            }
+            Self::RasterWmInputOaPointWidth64SbeBeforeSf => {
+                "raster-wm-input-oa-point-width-64-sbe-before-sf"
+            }
+            Self::RasterWmInputOaPointWidth1023 => "raster-wm-input-oa-point-width-1023",
+            Self::RasterWmInputOaPointWidth1023NoWmPoint => {
+                "raster-wm-input-oa-point-width-1023-no-wm-point"
+            }
+            Self::RasterWmInputOaPointWidth1023Scissor => {
+                "raster-wm-input-oa-point-width-1023-scissor"
+            }
+            Self::RasterWmInputOaPointWidthVertex => "raster-wm-input-oa-point-width-vertex",
         }
     }
 
@@ -379,7 +576,373 @@ impl BackendProbeMode {
     }
 
     fn uses_raster_wm_oa(self) -> bool {
-        matches!(self, Self::RasterWmInputOa)
+        matches!(
+            self,
+            Self::RasterWmInputOa
+                | Self::RasterWmInputOaKillOff
+                | Self::RasterWmInputOaSmoothPoint
+                | Self::RasterWmInputOaMsRaster
+                | Self::RasterWmInputOaMsRasterForced
+                | Self::RasterWmInputOaDerefBlock0
+                | Self::RasterWmInputOaNoHzOp
+                | Self::RasterWmInputOaWmNormalDispatch
+                | Self::RasterWmInputOaWmReemitAfterPsExtra
+                | Self::RasterWmInputOaOmitHzOp
+                | Self::RasterWmInputOaPsDisabled
+                | Self::RasterWmInputOaBtCountOne
+                | Self::RasterWmInputOaScissorOnly
+                | Self::RasterWmInputOaMesaSimpleRect
+                | Self::RasterWmInputOaMesaSimpleRectEarly
+                | Self::RasterWmInputOaMesaSimpleRectArtificial
+                | Self::RasterWmInputOaMesaSimpleRectNoSrcHeader
+                | Self::RasterWmInputOaEarlySample
+                | Self::RasterWmInputOaEarlyKillOff
+                | Self::RasterWmInputOaClipNormal
+                | Self::RasterWmInputOaClipPerspective
+                | Self::RasterWmInputOaClipDisabled
+                | Self::RasterWmInputOaClipDisabledArtificial
+                | Self::RasterWmInputOaClipForceMode
+                | Self::RasterWmInputOaClipApiD3d
+                | Self::RasterWmInputOaClipViewportXy
+                | Self::RasterWmInputOaEarlyClipViewportXy
+                | Self::RasterWmInputOaEarlyPointWidth1023
+                | Self::RasterWmInputOaEarlyMsRasterForced
+                | Self::RasterWmInputOaSbeBeforeClip
+                | Self::RasterWmInputOaSbeBeforeSf
+                | Self::RasterWmInputOaSbeRead0
+                | Self::RasterWmInputOaDrawRectEarlyOnly
+                | Self::RasterWmInputOaSampleMaskEarlyOnly
+                | Self::RasterWmInputOaPipeControlClipSf
+                | Self::RasterWmInputOaWmHzOpBeforeWm
+                | Self::RasterWmInputOaWmHzOpAfterPsExtra
+                | Self::RasterWmInputOaPayloadAttributeEnable
+                | Self::RasterWmInputOaPayloadSourceDepthW
+                | Self::RasterWmInputOaPayloadBaryPlanes
+                | Self::RasterWmInputOaFrontCcw
+                | Self::RasterWmInputOaNoPrimitiveReplication
+                | Self::RasterWmInputOaVfGeometryDistribution
+                | Self::RasterWmInputOaPointWidth8
+                | Self::RasterWmInputOaPointWidth8ClipMax
+                | Self::RasterWmInputOaPointWidth64
+                | Self::RasterWmInputOaPointWidth64ClipMax
+                | Self::RasterWmInputOaPointWidth64Early
+                | Self::RasterWmInputOaPointWidth64EarlyScissor
+                | Self::RasterWmInputOaPointWidth64Screen
+                | Self::RasterWmInputOaPointWidth64Artificial
+                | Self::RasterWmInputOaPointWidth64WmNormalDispatch
+                | Self::RasterWmInputOaPointWidth64WmReemitAfterPsExtra
+                | Self::RasterWmInputOaPointWidth64OmitHzOp
+                | Self::RasterWmInputOaPointWidth64PsDisabled
+                | Self::RasterWmInputOaPointWidth64PayloadAttributeEnable
+                | Self::RasterWmInputOaPointWidth64PayloadSourceDepthW
+                | Self::RasterWmInputOaPointWidth64PayloadBaryPlanes
+                | Self::RasterWmInputOaPointWidth64SbeBeforeClip
+                | Self::RasterWmInputOaPointWidth64SbeBeforeSf
+                | Self::RasterWmInputOaPointWidth1023
+                | Self::RasterWmInputOaPointWidth1023NoWmPoint
+                | Self::RasterWmInputOaPointWidth1023Scissor
+                | Self::RasterWmInputOaPointWidthVertex
+        )
+    }
+
+    fn force_kill_pixel_off(self) -> bool {
+        matches!(self, Self::RasterWmInputOaKillOff | Self::RasterWmInputOaEarlyKillOff)
+    }
+
+    fn smooth_point_raster(self) -> bool {
+        matches!(self, Self::RasterWmInputOaSmoothPoint)
+    }
+
+    fn dx_multisample_raster(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaMsRaster
+                | Self::RasterWmInputOaMsRasterForced
+                | Self::RasterWmInputOaEarlyMsRasterForced
+        )
+    }
+
+    fn force_multisample_raster(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaMsRasterForced | Self::RasterWmInputOaEarlyMsRasterForced
+        )
+    }
+
+    fn sf_deref_block_zero(self) -> bool {
+        matches!(self, Self::RasterWmInputOaDerefBlock0)
+    }
+
+    fn suppress_wm_hz_op_sample_mask(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaNoHzOp
+                | Self::RasterWmInputOaMesaSimpleRect
+                | Self::RasterWmInputOaMesaSimpleRectEarly
+                | Self::RasterWmInputOaMesaSimpleRectArtificial
+                | Self::RasterWmInputOaMesaSimpleRectNoSrcHeader
+        )
+    }
+
+    fn omit_wm_hz_op(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaNoHzOp
+                | Self::RasterWmInputOaOmitHzOp
+                | Self::RasterWmInputOaPointWidth64OmitHzOp
+        )
+    }
+
+    fn suppress_forced_wm_thread_dispatch(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaWmNormalDispatch
+                | Self::RasterWmInputOaPointWidth64WmNormalDispatch
+        )
+    }
+
+    fn reemit_wm_after_ps_extra(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaWmReemitAfterPsExtra
+                | Self::RasterWmInputOaPointWidth64WmReemitAfterPsExtra
+        )
+    }
+
+    fn disable_ps_contract(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaPsDisabled | Self::RasterWmInputOaPointWidth64PsDisabled
+        )
+    }
+
+    fn keep_ps_binding_table_count(self) -> bool {
+        matches!(self, Self::RasterWmInputOaBtCountOne)
+    }
+
+    fn mesa_simple_rect_stack(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaMesaSimpleRect
+                | Self::RasterWmInputOaMesaSimpleRectEarly
+                | Self::RasterWmInputOaMesaSimpleRectArtificial
+                | Self::RasterWmInputOaMesaSimpleRectNoSrcHeader
+        )
+    }
+
+    fn mesa_simple_rect_no_src_header(self) -> bool {
+        matches!(self, Self::RasterWmInputOaMesaSimpleRectNoSrcHeader)
+    }
+
+    fn early_sample_state(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaEarlySample
+                | Self::RasterWmInputOaEarlyKillOff
+                | Self::RasterWmInputOaEarlyClipViewportXy
+                | Self::RasterWmInputOaEarlyPointWidth1023
+                | Self::RasterWmInputOaEarlyMsRasterForced
+                | Self::RasterWmInputOaPointWidth64Early
+                | Self::RasterWmInputOaPointWidth64EarlyScissor
+                | Self::RasterWmInputOaMesaSimpleRectEarly
+        )
+    }
+
+    fn early_sample_mask_only(self) -> bool {
+        matches!(self, Self::RasterWmInputOaSampleMaskEarlyOnly)
+    }
+
+    fn early_draw_rect_only(self) -> bool {
+        matches!(self, Self::RasterWmInputOaDrawRectEarlyOnly)
+    }
+
+    fn sample_mask_before_clip(self) -> bool {
+        self.early_sample_state() || self.early_sample_mask_only()
+    }
+
+    fn draw_rect_before_clip(self) -> bool {
+        self.early_sample_state() || self.early_draw_rect_only()
+    }
+
+    fn enable_raster_scissor(self) -> bool {
+        self.early_sample_state()
+            || matches!(
+                self,
+                Self::RasterWmInputOaPointWidth1023Scissor | Self::RasterWmInputOaScissorOnly
+                    | Self::RasterWmInputOaPointWidth64EarlyScissor
+            )
+    }
+
+    fn clip_accept_all(self) -> bool {
+        !matches!(self, Self::RasterWmInputOaClipNormal)
+    }
+
+    fn enable_perspective_divide(self) -> bool {
+        matches!(self, Self::RasterWmInputOaClipPerspective)
+    }
+
+    fn disable_clip_unit(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaClipDisabled | Self::RasterWmInputOaClipDisabledArtificial
+        )
+    }
+
+    fn force_clip_mode(self) -> bool {
+        matches!(self, Self::RasterWmInputOaClipForceMode)
+    }
+
+    fn clip_api_d3d(self) -> bool {
+        matches!(self, Self::RasterWmInputOaClipApiD3d)
+    }
+
+    fn enable_viewport_xy_clip(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaClipViewportXy | Self::RasterWmInputOaEarlyClipViewportXy
+        )
+    }
+
+    fn sbe_before_clip(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaSbeBeforeClip | Self::RasterWmInputOaPointWidth64SbeBeforeClip
+        )
+    }
+
+    fn sbe_before_sf(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaSbeBeforeSf | Self::RasterWmInputOaPointWidth64SbeBeforeSf
+        )
+    }
+
+    fn force_sbe_read0(self) -> bool {
+        matches!(self, Self::RasterWmInputOaSbeRead0)
+    }
+
+    fn pipe_control_between_clip_sf(self) -> bool {
+        matches!(self, Self::RasterWmInputOaPipeControlClipSf)
+    }
+
+    fn wm_hz_op_before_wm(self) -> bool {
+        matches!(self, Self::RasterWmInputOaWmHzOpBeforeWm)
+    }
+
+    fn wm_hz_op_after_ps_extra(self) -> bool {
+        matches!(self, Self::RasterWmInputOaWmHzOpAfterPsExtra)
+    }
+
+    fn force_ps_attribute_payload(self) -> bool {
+        matches!(
+            self,
+            Self::PsPayloadAttributeEnable
+                | Self::RasterWmInputOaPayloadAttributeEnable
+                | Self::RasterWmInputOaPayloadSourceDepthW
+                | Self::RasterWmInputOaPayloadBaryPlanes
+                | Self::RasterWmInputOaPointWidth64PayloadAttributeEnable
+                | Self::RasterWmInputOaPointWidth64PayloadSourceDepthW
+                | Self::RasterWmInputOaPointWidth64PayloadBaryPlanes
+        )
+    }
+
+    fn force_ps_source_depth_w(self) -> bool {
+        matches!(
+            self,
+            Self::PsPayloadSourceDepthW
+                | Self::RasterWmInputOaPayloadSourceDepthW
+                | Self::RasterWmInputOaPointWidth64PayloadSourceDepthW
+        )
+    }
+
+    fn force_ps_bary_planes(self) -> bool {
+        matches!(
+            self,
+            Self::PsPayloadBaryPlanes
+                | Self::RasterWmInputOaPayloadBaryPlanes
+                | Self::RasterWmInputOaPointWidth64PayloadBaryPlanes
+        )
+    }
+
+    fn force_one_sbe_attribute(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaPayloadAttributeEnable
+                | Self::RasterWmInputOaPayloadSourceDepthW
+                | Self::RasterWmInputOaPayloadBaryPlanes
+                | Self::RasterWmInputOaPointWidth64PayloadAttributeEnable
+                | Self::RasterWmInputOaPointWidth64PayloadSourceDepthW
+                | Self::RasterWmInputOaPointWidth64PayloadBaryPlanes
+        )
+    }
+
+    fn front_ccw(self) -> bool {
+        matches!(self, Self::RasterWmInputOaFrontCcw)
+    }
+
+    fn disable_primitive_replication(self) -> bool {
+        matches!(self, Self::RasterWmInputOaNoPrimitiveReplication)
+    }
+
+    fn force_vf_geometry_distribution(self) -> bool {
+        matches!(self, Self::RasterWmInputOaVfGeometryDistribution)
+    }
+
+    fn suppress_wm_point_rule(self) -> bool {
+        matches!(self, Self::RasterWmInputOaPointWidth1023NoWmPoint)
+    }
+
+    fn point_width_raw_override(self) -> Option<u32> {
+        match self {
+            Self::RasterWmInputOaPointWidth8 | Self::RasterWmInputOaPointWidth8ClipMax => {
+                Some(0x008)
+            }
+            Self::RasterWmInputOaPointWidth64
+            | Self::RasterWmInputOaPointWidth64ClipMax
+            | Self::RasterWmInputOaPointWidth64Early
+            | Self::RasterWmInputOaPointWidth64EarlyScissor
+            | Self::RasterWmInputOaPointWidth64Screen
+            | Self::RasterWmInputOaPointWidth64Artificial
+            | Self::RasterWmInputOaPointWidth64WmNormalDispatch
+            | Self::RasterWmInputOaPointWidth64WmReemitAfterPsExtra
+            | Self::RasterWmInputOaPointWidth64OmitHzOp
+            | Self::RasterWmInputOaPointWidth64PsDisabled
+            | Self::RasterWmInputOaPointWidth64PayloadAttributeEnable
+            | Self::RasterWmInputOaPointWidth64PayloadSourceDepthW
+            | Self::RasterWmInputOaPointWidth64PayloadBaryPlanes
+            | Self::RasterWmInputOaPointWidth64SbeBeforeClip
+            | Self::RasterWmInputOaPointWidth64SbeBeforeSf => Some(0x200),
+            Self::RasterWmInputOaPointWidth1023
+            | Self::RasterWmInputOaPointWidth1023NoWmPoint
+            | Self::RasterWmInputOaPointWidth1023Scissor
+            | Self::RasterWmInputOaEarlyPointWidth1023 => Some(0x3FF),
+            _ => None,
+        }
+    }
+
+    fn clip_max_point_width_raw_override(self) -> Option<u32> {
+        match self {
+            Self::RasterWmInputOaPointWidth8ClipMax => Some(0x008),
+            Self::RasterWmInputOaPointWidth64ClipMax => Some(0x200),
+            _ => None,
+        }
+    }
+
+    fn point_width_from_vertex(self) -> bool {
+        matches!(self, Self::RasterWmInputOaPointWidthVertex)
+    }
+
+    fn disable_sf_viewport_transform(self) -> bool {
+        matches!(self, Self::RasterWmInputOaPointWidth64Screen)
+    }
+
+    fn artificial_fragment_markers(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaMesaSimpleRectArtificial
+                | Self::RasterWmInputOaClipDisabledArtificial
+                | Self::RasterWmInputOaPointWidth64Artificial
+        )
     }
 }
 
@@ -387,6 +950,19 @@ impl BackendProbeMode {
 enum VfPrimitiveGeometry {
     Canonical,
     Oversized,
+    CenterPoint,
+    ScreenSpacePoint8x8,
+    ScreenSpace8x8,
+    ScreenSpaceRect8x8,
+    ScreenSpaceRect8x8OrderB,
+    ScreenSpaceRect8x8OrderC,
+    NdcTriangleLarge,
+    NdcTriangleLargeCw,
+    NdcRect,
+    NdcRectCw,
+    NdcRectAlt,
+    NdcRectUrLrUl,
+    NdcRectSmall,
 }
 
 impl VfPrimitiveGeometry {
@@ -394,6 +970,19 @@ impl VfPrimitiveGeometry {
         match self {
             Self::Canonical => "canonical",
             Self::Oversized => "oversized",
+            Self::CenterPoint => "center-point",
+            Self::ScreenSpacePoint8x8 => "screen-space-point-8x8",
+            Self::ScreenSpace8x8 => "screen-space-8x8",
+            Self::ScreenSpaceRect8x8 => "screen-space-rect-8x8",
+            Self::ScreenSpaceRect8x8OrderB => "screen-space-rect-8x8-order-b",
+            Self::ScreenSpaceRect8x8OrderC => "screen-space-rect-8x8-order-c",
+            Self::NdcTriangleLarge => "ndc-triangle-large",
+            Self::NdcTriangleLargeCw => "ndc-triangle-large-cw",
+            Self::NdcRect => "ndc-rect",
+            Self::NdcRectCw => "ndc-rect-cw",
+            Self::NdcRectAlt => "ndc-rect-alt",
+            Self::NdcRectUrLrUl => "ndc-rect-ur-lr-ul",
+            Self::NdcRectSmall => "ndc-rect-small",
         }
     }
 
@@ -405,11 +994,77 @@ impl VfPrimitiveGeometry {
             // move PS counters, coverage of the tiny canonical triangle was
             // not the blocker.
             Self::Oversized => [[-1.0, -1.0, 0.0], [3.0, -1.0, 0.0], [-1.0, 3.0, 0.0]],
+            // Three coincident POINTLIST vertices.  The draw mode, not the
+            // vertex upload, decides that these are point primitives.
+            Self::CenterPoint => [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+            Self::ScreenSpacePoint8x8 => [[4.0, 4.0, 0.0], [4.0, 4.0, 0.0], [4.0, 4.0, 0.0]],
+            // Diagnostic-only screen-space-ish coordinates for a scratch RT
+            // with SF viewport transform disabled.
+            Self::ScreenSpace8x8 | Self::ScreenSpaceRect8x8 => {
+                [[0.5, 0.5, 0.0], [7.5, 0.5, 0.0], [0.5, 7.5, 0.0]]
+            }
+            Self::ScreenSpaceRect8x8OrderB => {
+                [[0.5, 0.5, 0.0], [0.5, 7.5, 0.0], [7.5, 0.5, 0.0]]
+            }
+            Self::ScreenSpaceRect8x8OrderC => {
+                [[7.5, 7.5, 0.0], [7.5, 0.5, 0.0], [0.5, 7.5, 0.0]]
+            }
+            Self::NdcTriangleLarge => {
+                [[-0.75, -0.75, 0.0], [0.75, -0.75, 0.0], [-0.75, 0.75, 0.0]]
+            }
+            Self::NdcTriangleLargeCw => {
+                [[-0.75, -0.75, 0.0], [-0.75, 0.75, 0.0], [0.75, -0.75, 0.0]]
+            }
+            Self::NdcRect => [[-0.75, -0.75, 0.0], [0.75, -0.75, 0.0], [-0.75, 0.75, 0.0]],
+            Self::NdcRectCw => [[-0.75, -0.75, 0.0], [-0.75, 0.75, 0.0], [0.75, -0.75, 0.0]],
+            Self::NdcRectAlt => [[0.75, 0.75, 0.0], [-0.75, 0.75, 0.0], [-0.75, -0.75, 0.0]],
+            Self::NdcRectUrLrUl => [[0.75, 0.75, 0.0], [0.75, -0.75, 0.0], [-0.75, 0.75, 0.0]],
+            Self::NdcRectSmall => [[-0.20, -0.20, 0.0], [0.20, -0.20, 0.0], [-0.20, 0.20, 0.0]],
         }
     }
 
     fn fullscreen_candidate(self) -> bool {
         matches!(self, Self::Oversized)
+    }
+
+    fn point_candidate(self) -> bool {
+        matches!(self, Self::CenterPoint | Self::ScreenSpacePoint8x8)
+    }
+
+    fn screen_space_candidate(self) -> bool {
+        matches!(
+            self,
+            Self::ScreenSpacePoint8x8
+                | Self::ScreenSpace8x8
+                | Self::ScreenSpaceRect8x8
+                | Self::ScreenSpaceRect8x8OrderB
+                | Self::ScreenSpaceRect8x8OrderC
+        )
+    }
+
+    fn rect_candidate(self) -> bool {
+        matches!(
+            self,
+            Self::ScreenSpaceRect8x8
+                | Self::ScreenSpaceRect8x8OrderB
+                | Self::ScreenSpaceRect8x8OrderC
+                | Self::NdcRect
+                | Self::NdcRectCw
+                | Self::NdcRectAlt
+                | Self::NdcRectUrLrUl
+                | Self::NdcRectSmall
+        )
+    }
+
+    fn ndc_rect_candidate(self) -> bool {
+        matches!(
+            self,
+            Self::NdcRect
+                | Self::NdcRectCw
+                | Self::NdcRectAlt
+                | Self::NdcRectUrLrUl
+                | Self::NdcRectSmall
+        )
     }
 }
 
@@ -418,6 +1073,7 @@ enum StreamoutProofExperiment {
     PositionSlot0,
     PositionSlot1,
     HeaderAndPositionSlots01,
+    PointSizeSlot0PositionSlot1,
 }
 
 const CMD_3DSTATE_VERTEX_ELEMENTS_2: u32 = 3 | (9 << 16) | (3 << 27) | (3 << 29);
@@ -428,6 +1084,7 @@ impl StreamoutProofExperiment {
             Self::PositionSlot0 => "pos-slot0",
             Self::PositionSlot1 => "pos-slot1",
             Self::HeaderAndPositionSlots01 => "header+pos-slots01",
+            Self::PointSizeSlot0PositionSlot1 => "point-size-slot0+pos-slot1",
         }
     }
 
@@ -436,13 +1093,14 @@ impl StreamoutProofExperiment {
             Self::PositionSlot0 => Self::PositionSlot1,
             Self::PositionSlot1 => Self::HeaderAndPositionSlots01,
             Self::HeaderAndPositionSlots01 => Self::PositionSlot0,
+            Self::PointSizeSlot0PositionSlot1 => Self::PositionSlot1,
         }
     }
 
     fn vertex_bytes(self) -> usize {
         match self {
             Self::PositionSlot0 | Self::PositionSlot1 => 16,
-            Self::HeaderAndPositionSlots01 => 32,
+            Self::HeaderAndPositionSlots01 | Self::PointSizeSlot0PositionSlot1 => 32,
         }
     }
 
@@ -455,7 +1113,9 @@ impl StreamoutProofExperiment {
             Self::PositionSlot0 | Self::PositionSlot1 => {
                 3 | (23 << 16) | (1 << 24) | (3 << 27) | (3 << 29)
             }
-            Self::HeaderAndPositionSlots01 => 5 | (23 << 16) | (1 << 24) | (3 << 27) | (3 << 29),
+            Self::HeaderAndPositionSlots01 | Self::PointSizeSlot0PositionSlot1 => {
+                5 | (23 << 16) | (1 << 24) | (3 << 27) | (3 << 29)
+            }
         }
     }
 
@@ -466,7 +1126,7 @@ impl StreamoutProofExperiment {
     fn so_decl_num_entries(self) -> u32 {
         match self {
             Self::PositionSlot0 | Self::PositionSlot1 => 1,
-            Self::HeaderAndPositionSlots01 => 2,
+            Self::HeaderAndPositionSlots01 | Self::PointSizeSlot0PositionSlot1 => 2,
         }
     }
 
@@ -475,6 +1135,9 @@ impl StreamoutProofExperiment {
             Self::PositionSlot0 => [0x0000_000F, 0x0000_0000, 0x0000_0000, 0x0000_0000],
             Self::PositionSlot1 => [0x0000_001F, 0x0000_0000, 0x0000_0000, 0x0000_0000],
             Self::HeaderAndPositionSlots01 => [0x0000_000F, 0x0000_0000, 0x0000_001F, 0x0000_0000],
+            Self::PointSizeSlot0PositionSlot1 => {
+                [0x0000_000F, 0x0000_0000, 0x0000_001F, 0x0000_0000]
+            }
         }
     }
 
@@ -487,13 +1150,16 @@ impl StreamoutProofExperiment {
             Self::PositionSlot0 => "slot0=position",
             Self::PositionSlot1 => "slot0=zero slot1=position",
             Self::HeaderAndPositionSlots01 => "slot0=header slot1=position",
+            Self::PointSizeSlot0PositionSlot1 => "slot0=point-size slot1=position",
         }
     }
 
     fn vf_vertex_element_count(self) -> usize {
         match self {
             Self::PositionSlot0 => 1,
-            Self::PositionSlot1 | Self::HeaderAndPositionSlots01 => 2,
+            Self::PositionSlot1
+            | Self::HeaderAndPositionSlots01
+            | Self::PointSizeSlot0PositionSlot1 => 2,
         }
     }
 }
@@ -509,11 +1175,42 @@ fn select_streamout_proof_experiment(probe_seq: u32) -> StreamoutProofExperiment
 impl TriangleBatchMode {
     fn topology(self) -> u32 {
         match self {
-            Self::Draw | Self::VfDraw => TRIANGLE_TOPOLOGY_TRILIST,
+            Self::Draw | Self::DrawScreenSpace | Self::VfDraw => TRIANGLE_TOPOLOGY_TRILIST,
+            Self::DrawScreenSpaceRect | Self::VfRectDraw | Self::VfRectClipDraw => {
+                TRIANGLE_TOPOLOGY_RECTLIST
+            }
+            Self::VfPointDraw => TRIANGLE_TOPOLOGY_POINTLIST,
             Self::StreamoutProof | Self::VfStreamoutProof | Self::VsStreamoutProof => {
                 TRIANGLE_TOPOLOGY_POINTLIST
             }
         }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Draw => "draw",
+            Self::DrawScreenSpace => "draw-screen-space",
+            Self::DrawScreenSpaceRect => "draw-screen-space-rect",
+            Self::VfDraw => "vf-draw",
+            Self::VfPointDraw => "vf-point-draw",
+            Self::VfRectDraw => "vf-rect-draw",
+            Self::VfRectClipDraw => "vf-rect-clip-draw",
+            Self::StreamoutProof => "streamout-proof",
+            Self::VfStreamoutProof => "vf-streamout-proof",
+            Self::VsStreamoutProof => "vs-streamout-proof",
+        }
+    }
+
+    fn vf_synthesized_vue(self) -> bool {
+        matches!(self, Self::VfDraw | Self::VfPointDraw | Self::VfRectDraw | Self::VfRectClipDraw)
+    }
+
+    fn point_raster(self) -> bool {
+        matches!(self, Self::VfPointDraw)
+    }
+
+    fn screen_space_raster(self) -> bool {
+        matches!(self, Self::DrawScreenSpace | Self::DrawScreenSpaceRect | Self::VfRectDraw)
     }
 
     fn streamout_enabled(self) -> bool {
@@ -536,11 +1233,231 @@ fn is_triangle_debug_submit_name(submit_name: &str) -> bool {
 }
 
 fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
-    matches!(submit_name, "ps-bt0-scratch-rt" | "raster-wm-oa-probe")
+    matches!(
+        submit_name,
+        "ps-bt0-scratch-rt"
+            | "raster-wm-oa-probe"
+            | "point-vf-giant-scratch"
+            | "point-vf-giant-oa"
+            | "point-vf-giant-oa-pos0"
+            | "point-vf-giant-oa-header"
+            | "point-vf-giant-oa-killoff"
+            | "point-vf-giant-oa-smooth"
+            | "point-vf-giant-oa-msrast"
+            | "point-vf-giant-oa-msrast-force"
+            | "point-vf-giant-oa-deref0"
+            | "point-vf-giant-oa-hz0"
+            | "point-vf-giant-oa-wm-normal"
+            | "point-vf-giant-oa-wm-reemit"
+            | "point-vf-giant-oa-hz-omit"
+            | "point-vf-giant-oa-ps-off"
+            | "point-vf-giant-oa-bt1"
+            | "point-vf-giant-oa-early"
+            | "point-vf-giant-oa-early-killoff"
+            | "point-vf-giant-oa-clip-normal"
+            | "point-vf-giant-oa-clip-persp"
+            | "point-vf-giant-oa-clip-disable"
+            | "point-vf-giant-oa-clip-disable-arm"
+            | "point-vf-giant-oa-clip-force"
+            | "point-vf-giant-oa-clip-d3d"
+            | "point-vf-giant-oa-clip-xy"
+            | "point-vf-giant-oa-sbe0"
+            | "point-vf-giant-oa-sbe-pre-clip"
+            | "point-vf-giant-oa-sbe-pre-sf"
+            | "point-vf-giant-oa-no-pr"
+            | "point-vf-giant-oa-vfg"
+            | "point-vf-giant-oa-w8"
+            | "point-vf-giant-oa-w8-clipmax"
+            | "point-vf-giant-oa-w64"
+            | "point-vf-giant-oa-w64-clipmax"
+            | "point-vf-giant-oa-w64-wm-normal"
+            | "point-vf-giant-oa-w64-wm-reemit"
+            | "point-vf-giant-oa-w64-hz-omit"
+            | "point-vf-giant-oa-w64-ps-off"
+            | "point-vf-giant-oa-w64-payload-attr"
+            | "point-vf-giant-oa-w64-payload-depthw"
+            | "point-vf-giant-oa-w64-payload-bary"
+            | "point-vf-giant-oa-w64-sbe-pre-clip"
+            | "point-vf-giant-oa-w64-sbe-pre-sf"
+            | "point-vf-giant-oa-w64-early"
+            | "point-vf-giant-oa-w64-early-scissor"
+            | "point-vf-screen-oa-w64"
+            | "point-vf-giant-oa-w64-arm"
+            | "point-vf-giant-oa-w1023"
+            | "point-vf-giant-oa-w1023-nowmpoint"
+            | "point-vf-giant-oa-w1023-scissor"
+            | "point-vf-giant-oa-vtxw"
+            | "point-vf-giant-oa-early-w1023"
+            | "point-vf-giant-oa-early-msrast-force"
+            | "screen-vs-scratch"
+            | "screen-vs-oa"
+            | "screen-vs-ndc-oa"
+            | "screen-vs-ndc-oa-hz0"
+            | "screen-vs-sbe0"
+            | "screen-vs-slot0-oa"
+            | "screen-vs-urb2-oa"
+            | "screen-vs-urb2-slot0-oa"
+            | "vf-rect-oa"
+            | "vf-rect-oa-pos0"
+            | "vf-rect-oa-header"
+            | "vf-rect-oa-deref0"
+            | "vf-rect-ndc-oa"
+            | "vf-rect-ndc-oa-sbe-pre-clip"
+            | "vf-rect-ndc-oa-sbe-pre-sf"
+            | "vf-rect-ndc-oa-drawrect-early"
+            | "vf-rect-ndc-oa-sample-early"
+            | "vf-rect-ndc-oa-pc-clip-sf"
+            | "vf-rect-ndc-oa-hz-pre-wm"
+            | "vf-rect-ndc-oa-hz-post-extra"
+            | "vf-rect-ndc-oa-payload-attr"
+            | "vf-rect-ndc-oa-payload-depthw"
+            | "vf-rect-ndc-oa-payload-bary"
+            | "vf-rect-ndc-oa-persp"
+            | "vf-rect-ndc-oa-clipxy"
+            | "vf-rect-ndc-oa-clip-disable"
+            | "vf-rect-ndc-oa-clip-force"
+            | "vf-rect-ndc-oa-clip-d3d"
+            | "vf-rect-ndc-oa-early-clipxy"
+            | "vf-rect-ndc-oa-frontccw"
+            | "vf-rect-ndc-oa-hz0"
+            | "vf-rect-ndc-oa-early"
+            | "vf-rect-ndc-oa-bt1"
+            | "vf-rect-ndc-order-b-oa"
+            | "vf-rect-ndc-order-c-oa"
+            | "vf-rect-ndc-order-c-early-oa"
+            | "vf-rect-ndc-order-c-clip-disable-oa"
+            | "vf-rect-ndc-mesa-simple-oa"
+            | "vf-rect-ndc-mesa-nosrc-header-oa"
+            | "vf-rect-ndc-small-oa"
+            | "vf-rect-ndc-cw-oa"
+            | "vf-rect-ndc-alt-oa"
+            | "vf-rect-order-b-oa"
+            | "vf-rect-order-b-early-oa"
+            | "vf-rect-order-b-scissor-oa"
+            | "vf-rect-mesa-simple-oa"
+            | "vf-rect-mesa-simple-oa-early"
+            | "vf-rect-mesa-simple-oa-arm"
+            | "vf-rect-mesa-nosrc-header-oa"
+            | "vf-rect-order-c-oa"
+            | "vf-tri-ndc-oa"
+            | "vf-tri-ndc-oa-early"
+            | "vf-tri-ndc-oa-early-clipxy"
+            | "vf-tri-ndc-cw-oa-early"
+            | "screen-rect-scratch"
+            | "screen-rect-oa-early"
+    )
 }
 
 fn is_raster_wm_oa_submit_name(submit_name: &str) -> bool {
-    submit_name == "raster-wm-oa-probe"
+    matches!(
+        submit_name,
+        "raster-wm-oa-probe"
+            | "point-vf-giant-oa"
+            | "point-vf-giant-oa-pos0"
+            | "point-vf-giant-oa-header"
+            | "point-vf-giant-oa-killoff"
+            | "point-vf-giant-oa-smooth"
+            | "point-vf-giant-oa-msrast"
+            | "point-vf-giant-oa-msrast-force"
+            | "point-vf-giant-oa-deref0"
+            | "point-vf-giant-oa-hz0"
+            | "point-vf-giant-oa-wm-normal"
+            | "point-vf-giant-oa-wm-reemit"
+            | "point-vf-giant-oa-hz-omit"
+            | "point-vf-giant-oa-ps-off"
+            | "point-vf-giant-oa-bt1"
+            | "point-vf-giant-oa-early"
+            | "point-vf-giant-oa-early-killoff"
+            | "point-vf-giant-oa-clip-normal"
+            | "point-vf-giant-oa-clip-persp"
+            | "point-vf-giant-oa-clip-disable"
+            | "point-vf-giant-oa-clip-disable-arm"
+            | "point-vf-giant-oa-clip-force"
+            | "point-vf-giant-oa-clip-d3d"
+            | "point-vf-giant-oa-clip-xy"
+            | "point-vf-giant-oa-sbe0"
+            | "point-vf-giant-oa-sbe-pre-clip"
+            | "point-vf-giant-oa-sbe-pre-sf"
+            | "point-vf-giant-oa-no-pr"
+            | "point-vf-giant-oa-vfg"
+            | "point-vf-giant-oa-w8"
+            | "point-vf-giant-oa-w8-clipmax"
+            | "point-vf-giant-oa-w64"
+            | "point-vf-giant-oa-w64-clipmax"
+            | "point-vf-giant-oa-w64-wm-normal"
+            | "point-vf-giant-oa-w64-wm-reemit"
+            | "point-vf-giant-oa-w64-hz-omit"
+            | "point-vf-giant-oa-w64-ps-off"
+            | "point-vf-giant-oa-w64-payload-attr"
+            | "point-vf-giant-oa-w64-payload-depthw"
+            | "point-vf-giant-oa-w64-payload-bary"
+            | "point-vf-giant-oa-w64-sbe-pre-clip"
+            | "point-vf-giant-oa-w64-sbe-pre-sf"
+            | "point-vf-giant-oa-w64-early"
+            | "point-vf-giant-oa-w64-early-scissor"
+            | "point-vf-screen-oa-w64"
+            | "point-vf-giant-oa-w64-arm"
+            | "point-vf-giant-oa-w1023"
+            | "point-vf-giant-oa-w1023-nowmpoint"
+            | "point-vf-giant-oa-w1023-scissor"
+            | "point-vf-giant-oa-vtxw"
+            | "point-vf-giant-oa-early-w1023"
+            | "point-vf-giant-oa-early-msrast-force"
+            | "screen-vs-oa"
+            | "screen-vs-ndc-oa"
+            | "screen-vs-ndc-oa-hz0"
+            | "screen-vs-sbe0"
+            | "screen-vs-slot0-oa"
+            | "screen-vs-urb2-oa"
+            | "screen-vs-urb2-slot0-oa"
+            | "vf-rect-oa"
+            | "vf-rect-oa-pos0"
+            | "vf-rect-oa-header"
+            | "vf-rect-oa-deref0"
+            | "vf-rect-ndc-oa"
+            | "vf-rect-ndc-oa-sbe-pre-clip"
+            | "vf-rect-ndc-oa-sbe-pre-sf"
+            | "vf-rect-ndc-oa-drawrect-early"
+            | "vf-rect-ndc-oa-sample-early"
+            | "vf-rect-ndc-oa-pc-clip-sf"
+            | "vf-rect-ndc-oa-hz-pre-wm"
+            | "vf-rect-ndc-oa-hz-post-extra"
+            | "vf-rect-ndc-oa-payload-attr"
+            | "vf-rect-ndc-oa-payload-depthw"
+            | "vf-rect-ndc-oa-payload-bary"
+            | "vf-rect-ndc-oa-persp"
+            | "vf-rect-ndc-oa-clipxy"
+            | "vf-rect-ndc-oa-clip-disable"
+            | "vf-rect-ndc-oa-clip-force"
+            | "vf-rect-ndc-oa-clip-d3d"
+            | "vf-rect-ndc-oa-early-clipxy"
+            | "vf-rect-ndc-oa-frontccw"
+            | "vf-rect-ndc-oa-hz0"
+            | "vf-rect-ndc-oa-early"
+            | "vf-rect-ndc-oa-bt1"
+            | "vf-rect-ndc-order-b-oa"
+            | "vf-rect-ndc-order-c-oa"
+            | "vf-rect-ndc-order-c-early-oa"
+            | "vf-rect-ndc-order-c-clip-disable-oa"
+            | "vf-rect-ndc-mesa-simple-oa"
+            | "vf-rect-ndc-mesa-nosrc-header-oa"
+            | "vf-rect-ndc-small-oa"
+            | "vf-rect-ndc-cw-oa"
+            | "vf-rect-ndc-alt-oa"
+            | "vf-rect-order-b-oa"
+            | "vf-rect-order-b-early-oa"
+            | "vf-rect-order-b-scissor-oa"
+            | "vf-rect-mesa-simple-oa"
+            | "vf-rect-mesa-simple-oa-early"
+            | "vf-rect-mesa-simple-oa-arm"
+            | "vf-rect-mesa-nosrc-header-oa"
+            | "vf-rect-order-c-oa"
+            | "vf-tri-ndc-oa"
+            | "vf-tri-ndc-oa-early"
+            | "vf-tri-ndc-oa-early-clipxy"
+            | "vf-tri-ndc-cw-oa-early"
+            | "screen-rect-oa-early"
+    )
 }
 
 fn is_surface_draw_submit_name(submit_name: &str) -> bool {
@@ -577,6 +1494,117 @@ fn is_surface_draw_submit_name(submit_name: &str) -> bool {
             | "wm-late-reemit-vs-slot0-big-primitive-retire"
             | "wm-late-reemit-vs-urb2-big-primitive-retire"
             | "wm-late-reemit-vs-urb2-slot0-big-primitive-retire"
+            | "point-vf-giant"
+            | "point-vf-giant-scratch"
+            | "point-vf-giant-oa"
+            | "point-vf-giant-oa-pos0"
+            | "point-vf-giant-oa-header"
+            | "point-vf-giant-oa-killoff"
+            | "point-vf-giant-oa-smooth"
+            | "point-vf-giant-oa-msrast"
+            | "point-vf-giant-oa-msrast-force"
+            | "point-vf-giant-oa-deref0"
+            | "point-vf-giant-oa-hz0"
+            | "point-vf-giant-oa-wm-normal"
+            | "point-vf-giant-oa-wm-reemit"
+            | "point-vf-giant-oa-hz-omit"
+            | "point-vf-giant-oa-ps-off"
+            | "point-vf-giant-oa-bt1"
+            | "point-vf-giant-oa-early"
+            | "point-vf-giant-oa-early-killoff"
+            | "point-vf-giant-oa-clip-normal"
+            | "point-vf-giant-oa-clip-persp"
+            | "point-vf-giant-oa-clip-disable"
+            | "point-vf-giant-oa-clip-disable-arm"
+            | "point-vf-giant-oa-clip-force"
+            | "point-vf-giant-oa-clip-d3d"
+            | "point-vf-giant-oa-clip-xy"
+            | "point-vf-giant-oa-sbe0"
+            | "point-vf-giant-oa-sbe-pre-clip"
+            | "point-vf-giant-oa-sbe-pre-sf"
+            | "point-vf-giant-oa-no-pr"
+            | "point-vf-giant-oa-vfg"
+            | "point-vf-giant-oa-w8"
+            | "point-vf-giant-oa-w8-clipmax"
+            | "point-vf-giant-oa-w64"
+            | "point-vf-giant-oa-w64-clipmax"
+            | "point-vf-giant-oa-w64-wm-normal"
+            | "point-vf-giant-oa-w64-wm-reemit"
+            | "point-vf-giant-oa-w64-hz-omit"
+            | "point-vf-giant-oa-w64-ps-off"
+            | "point-vf-giant-oa-w64-payload-attr"
+            | "point-vf-giant-oa-w64-payload-depthw"
+            | "point-vf-giant-oa-w64-payload-bary"
+            | "point-vf-giant-oa-w64-sbe-pre-clip"
+            | "point-vf-giant-oa-w64-sbe-pre-sf"
+            | "point-vf-giant-oa-w64-early"
+            | "point-vf-giant-oa-w64-early-scissor"
+            | "point-vf-screen-oa-w64"
+            | "point-vf-giant-oa-w64-arm"
+            | "point-vf-giant-oa-w1023"
+            | "point-vf-giant-oa-w1023-nowmpoint"
+            | "point-vf-giant-oa-w1023-scissor"
+            | "point-vf-giant-oa-vtxw"
+            | "point-vf-giant-oa-early-w1023"
+            | "point-vf-giant-oa-early-msrast-force"
+            | "point-vf-giant-bt1"
+            | "point-vf-giant-slot0"
+            | "screen-vs-scratch"
+            | "screen-vs-oa"
+            | "screen-vs-ndc-oa"
+            | "screen-vs-ndc-oa-hz0"
+            | "screen-vs-sbe0"
+            | "screen-vs-slot0-oa"
+            | "screen-vs-urb2-oa"
+            | "screen-vs-urb2-slot0-oa"
+            | "vf-rect-oa"
+            | "vf-rect-oa-pos0"
+            | "vf-rect-oa-header"
+            | "vf-rect-oa-deref0"
+            | "vf-rect-ndc-oa"
+            | "vf-rect-ndc-oa-sbe-pre-clip"
+            | "vf-rect-ndc-oa-sbe-pre-sf"
+            | "vf-rect-ndc-oa-drawrect-early"
+            | "vf-rect-ndc-oa-sample-early"
+            | "vf-rect-ndc-oa-pc-clip-sf"
+            | "vf-rect-ndc-oa-hz-pre-wm"
+            | "vf-rect-ndc-oa-hz-post-extra"
+            | "vf-rect-ndc-oa-payload-attr"
+            | "vf-rect-ndc-oa-payload-depthw"
+            | "vf-rect-ndc-oa-payload-bary"
+            | "vf-rect-ndc-oa-persp"
+            | "vf-rect-ndc-oa-clipxy"
+            | "vf-rect-ndc-oa-clip-disable"
+            | "vf-rect-ndc-oa-clip-force"
+            | "vf-rect-ndc-oa-clip-d3d"
+            | "vf-rect-ndc-oa-early-clipxy"
+            | "vf-rect-ndc-oa-frontccw"
+            | "vf-rect-ndc-oa-hz0"
+            | "vf-rect-ndc-oa-early"
+            | "vf-rect-ndc-oa-bt1"
+            | "vf-rect-ndc-order-b-oa"
+            | "vf-rect-ndc-order-c-oa"
+            | "vf-rect-ndc-order-c-early-oa"
+            | "vf-rect-ndc-order-c-clip-disable-oa"
+            | "vf-rect-ndc-mesa-simple-oa"
+            | "vf-rect-ndc-mesa-nosrc-header-oa"
+            | "vf-rect-ndc-small-oa"
+            | "vf-rect-ndc-cw-oa"
+            | "vf-rect-ndc-alt-oa"
+            | "vf-rect-order-b-oa"
+            | "vf-rect-order-b-early-oa"
+            | "vf-rect-order-b-scissor-oa"
+            | "vf-rect-mesa-simple-oa"
+            | "vf-rect-mesa-simple-oa-early"
+            | "vf-rect-mesa-simple-oa-arm"
+            | "vf-rect-mesa-nosrc-header-oa"
+            | "vf-rect-order-c-oa"
+            | "vf-tri-ndc-oa"
+            | "vf-tri-ndc-oa-early"
+            | "vf-tri-ndc-oa-early-clipxy"
+            | "vf-tri-ndc-cw-oa-early"
+            | "screen-rect-scratch"
+            | "screen-rect-oa-early"
             | "postdraw-light-only-retire"
             | "postdraw-flush-bit5"
             | "postdraw-flush-bit7"
@@ -623,6 +1651,126 @@ fn is_fragment_candidate_submit_name(submit_name: &str) -> bool {
             | "wm-late-reemit-vs-slot0-big-primitive-retire"
             | "wm-late-reemit-vs-urb2-big-primitive-retire"
             | "wm-late-reemit-vs-urb2-slot0-big-primitive-retire"
+            | "point-vf-giant"
+            | "point-vf-giant-scratch"
+            | "point-vf-giant-oa"
+            | "point-vf-giant-oa-pos0"
+            | "point-vf-giant-oa-header"
+            | "point-vf-giant-oa-killoff"
+            | "point-vf-giant-oa-smooth"
+            | "point-vf-giant-oa-msrast"
+            | "point-vf-giant-oa-msrast-force"
+            | "point-vf-giant-oa-deref0"
+            | "point-vf-giant-oa-hz0"
+            | "point-vf-giant-oa-wm-normal"
+            | "point-vf-giant-oa-wm-reemit"
+            | "point-vf-giant-oa-hz-omit"
+            | "point-vf-giant-oa-ps-off"
+            | "point-vf-giant-oa-bt1"
+            | "point-vf-giant-oa-early"
+            | "point-vf-giant-oa-early-killoff"
+            | "point-vf-giant-oa-clip-normal"
+            | "point-vf-giant-oa-clip-persp"
+            | "point-vf-giant-oa-clip-disable"
+            | "point-vf-giant-oa-clip-disable-arm"
+            | "point-vf-giant-oa-clip-force"
+            | "point-vf-giant-oa-clip-d3d"
+            | "point-vf-giant-oa-clip-xy"
+            | "point-vf-giant-oa-sbe0"
+            | "point-vf-giant-oa-sbe-pre-clip"
+            | "point-vf-giant-oa-sbe-pre-sf"
+            | "point-vf-giant-oa-no-pr"
+            | "point-vf-giant-oa-vfg"
+            | "point-vf-giant-oa-w8"
+            | "point-vf-giant-oa-w8-clipmax"
+            | "point-vf-giant-oa-w64"
+            | "point-vf-giant-oa-w64-clipmax"
+            | "point-vf-giant-oa-w64-wm-normal"
+            | "point-vf-giant-oa-w64-wm-reemit"
+            | "point-vf-giant-oa-w64-hz-omit"
+            | "point-vf-giant-oa-w64-ps-off"
+            | "point-vf-giant-oa-w64-payload-attr"
+            | "point-vf-giant-oa-w64-payload-depthw"
+            | "point-vf-giant-oa-w64-payload-bary"
+            | "point-vf-giant-oa-w64-sbe-pre-clip"
+            | "point-vf-giant-oa-w64-sbe-pre-sf"
+            | "point-vf-giant-oa-w64-early"
+            | "point-vf-giant-oa-w64-early-scissor"
+            | "point-vf-screen-oa-w64"
+            | "point-vf-giant-oa-w64-arm"
+            | "point-vf-giant-oa-w1023"
+            | "point-vf-giant-oa-w1023-nowmpoint"
+            | "point-vf-giant-oa-w1023-scissor"
+            | "point-vf-giant-oa-vtxw"
+            | "point-vf-giant-oa-early-w1023"
+            | "point-vf-giant-oa-early-msrast-force"
+            | "point-vf-giant-bt1"
+            | "point-vf-giant-slot0"
+            | "screen-vs-scratch"
+            | "screen-vs-oa"
+            | "screen-vs-ndc-oa"
+            | "screen-vs-ndc-oa-hz0"
+            | "screen-vs-sbe0"
+            | "screen-vs-slot0-oa"
+            | "screen-vs-urb2-oa"
+            | "screen-vs-urb2-slot0-oa"
+            | "vf-rect-oa"
+            | "vf-rect-oa-pos0"
+            | "vf-rect-oa-header"
+            | "vf-rect-oa-deref0"
+            | "vf-rect-ndc-oa"
+            | "vf-rect-ndc-oa-sbe-pre-clip"
+            | "vf-rect-ndc-oa-sbe-pre-sf"
+            | "vf-rect-ndc-oa-drawrect-early"
+            | "vf-rect-ndc-oa-sample-early"
+            | "vf-rect-ndc-oa-pc-clip-sf"
+            | "vf-rect-ndc-oa-hz-pre-wm"
+            | "vf-rect-ndc-oa-hz-post-extra"
+            | "vf-rect-ndc-oa-payload-attr"
+            | "vf-rect-ndc-oa-payload-depthw"
+            | "vf-rect-ndc-oa-payload-bary"
+            | "vf-rect-ndc-oa-persp"
+            | "vf-rect-ndc-oa-clipxy"
+            | "vf-rect-ndc-oa-clip-disable"
+            | "vf-rect-ndc-oa-clip-force"
+            | "vf-rect-ndc-oa-clip-d3d"
+            | "vf-rect-ndc-oa-early-clipxy"
+            | "vf-rect-ndc-oa-frontccw"
+            | "vf-rect-ndc-oa-hz0"
+            | "vf-rect-ndc-oa-early"
+            | "vf-rect-ndc-oa-bt1"
+            | "vf-rect-ndc-order-b-oa"
+            | "vf-rect-ndc-order-c-oa"
+            | "vf-rect-ndc-order-c-early-oa"
+            | "vf-rect-ndc-order-c-clip-disable-oa"
+            | "vf-rect-ndc-mesa-simple-oa"
+            | "vf-rect-ndc-mesa-nosrc-header-oa"
+            | "vf-rect-ndc-small-oa"
+            | "vf-rect-ndc-cw-oa"
+            | "vf-rect-ndc-alt-oa"
+            | "vf-rect-order-b-oa"
+            | "vf-rect-order-b-early-oa"
+            | "vf-rect-order-b-scissor-oa"
+            | "vf-rect-mesa-simple-oa"
+            | "vf-rect-mesa-simple-oa-early"
+            | "vf-rect-mesa-simple-oa-arm"
+            | "vf-rect-mesa-nosrc-header-oa"
+            | "vf-rect-order-c-oa"
+            | "vf-tri-ndc-oa"
+            | "vf-tri-ndc-oa-early"
+            | "vf-tri-ndc-oa-early-clipxy"
+            | "vf-tri-ndc-cw-oa-early"
+            | "screen-rect-scratch"
+            | "screen-rect-oa-early"
+    )
+}
+
+fn is_artificial_fragment_marker_submit_name(submit_name: &str) -> bool {
+    matches!(
+        submit_name,
+        "point-vf-giant-oa-clip-disable-arm"
+            | "point-vf-giant-oa-w64-arm"
+            | "vf-rect-mesa-simple-oa-arm"
     )
 }
 

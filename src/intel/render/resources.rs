@@ -474,6 +474,36 @@ fn prepare_vf_streamout_proof_resources(
                     f32::from_bits(words[base + 7]),
                 );
             }
+            StreamoutProofExperiment::PointSizeSlot0PositionSlot1 => {
+                let base = idx * 8;
+                words[base + 0] = pos[0].to_bits();
+                words[base + 1] = pos[1].to_bits();
+                words[base + 2] = pos[2].to_bits();
+                words[base + 3] = 1.0f32.to_bits();
+                words[base + 4] = 64.0f32.to_bits();
+                words[base + 5] = 0.0f32.to_bits();
+                words[base + 6] = 0.0f32.to_bits();
+                words[base + 7] = 0.0f32.to_bits();
+                intel_render_verbose_log!(
+                    "intel/render: vf-streamout-source v{} experiment={} geometry={} point_size=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] point_size_f={:.3} pos_f=[{:.3},{:.3},{:.3},{:.3}]\n",
+                    idx,
+                    experiment.label(),
+                    geometry.label(),
+                    words[base + 4],
+                    words[base + 5],
+                    words[base + 6],
+                    words[base + 7],
+                    words[base + 0],
+                    words[base + 1],
+                    words[base + 2],
+                    words[base + 3],
+                    f32::from_bits(words[base + 4]),
+                    f32::from_bits(words[base + 0]),
+                    f32::from_bits(words[base + 1]),
+                    f32::from_bits(words[base + 2]),
+                    f32::from_bits(words[base + 3]),
+                );
+            }
         }
     }
 

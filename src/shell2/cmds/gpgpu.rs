@@ -17,6 +17,7 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "gpgpu canvas3d cube");
     print_shell_line(io, "gpgpu canvas3d ico");
     print_shell_line(io, "gpgpu canvas3d para");
+    print_shell_line(io, "gpgpu artificial-fragment");
     print_shell_line(io, "gpgpu smoke");
 }
 
@@ -173,6 +174,31 @@ fn run_smoke(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
     print_shell_line(io, msg.as_str());
 }
 
+fn run_artificial_fragment(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+    if !expect_no_more(io, args) {
+        return;
+    }
+
+    let Some(result) = shell_mandel64_worklist_scanout(MANDEL64_WORKLIST_DEFAULT_ITERATIONS) else {
+        print_shell_line(
+            io,
+            "gpgpu artificial-fragment: no result (check primary surface, iGPU claim, and mandel artifact)",
+        );
+        return;
+    };
+    let msg = alloc::format!(
+        "gpgpu artificial-fragment: mode=mandel64-worklist ok={} desc={} walkers={} pixels={} submit_ms={} present_ms={} presented={} meaning=shader-driven-pixels-not-wm-fragments",
+        result.ok as u8,
+        result.descriptors,
+        result.walkers,
+        result.pixels,
+        result.submit_ms,
+        result.present_ms,
+        result.presented as u8
+    );
+    print_shell_line(io, msg.as_str());
+}
+
 pub(crate) fn try_parse(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
@@ -187,6 +213,8 @@ pub(crate) fn try_parse(
         run_canvas2d(io, args);
     } else if cmd.eq_ignore_ascii_case("canvas3d") {
         return run_canvas3d(spawner, io, args);
+    } else if cmd.eq_ignore_ascii_case("artificial-fragment") {
+        run_artificial_fragment(io, args);
     } else if cmd.eq_ignore_ascii_case("smoke") {
         run_smoke(io, args);
     } else {

@@ -253,13 +253,6 @@ version = "0.9"
 version = "1.2.8"
 default-features = false
 
-[target.'cfg(all(all(target_arch = "aarch64", target_endian = "little"), target_os = "windows"))'.dependencies.windows-sys]
-version = "0.52"
-features = [
-    "Win32_Foundation",
-    "Win32_System_Threading",
-]
-
 [target.'cfg(all(all(target_arch = "aarch64", target_endian = "little"), target_vendor = "apple", any(target_os = "ios", target_os = "macos", target_os = "tvos", target_os = "visionos", target_os = "watchos")))'.dependencies.libc]
 version = "0.2.155"
 default-features = false

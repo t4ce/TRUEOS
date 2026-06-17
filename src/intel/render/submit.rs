@@ -16,11 +16,7 @@ fn submit_warm_render_batch(
     }
     if is_gpgpu_submit_name(submit_name) {
         recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-pre-submit");
-        crate::intel::mmio_write(
-            dev,
-            GEN12_RCU_MODE,
-            masked_bit_enable(GEN12_RCU_MODE_CCS_ENABLE),
-        );
+        crate::intel::mmio_write(dev, GEN12_RCU_MODE, masked_bit_enable(GEN12_RCU_MODE_CCS_ENABLE));
     }
     let ring_tail_bytes = build_ring_batch_start(warm, GPU_VA_BATCH_BASE);
     let Some(ring_ctl) = ring_ctl_value(warm.ring_len) else {
@@ -47,11 +43,7 @@ fn submit_warm_render_batch(
     let ctx_ctl_after = rcs_ctx_control_value(false);
     crate::intel::mmio_write(dev, RCS_RING_CONTEXT_CONTROL, ctx_ctl_after);
     crate::intel::mmio_write(dev, RCS_RING_CONTEXT_CONTROL_REF, ctx_ctl_after);
-    crate::intel::mmio_write(
-        dev,
-        RCS_RING_MI_MODE,
-        masked_bit_disable(RING_MI_MODE_STOP_RING),
-    );
+    crate::intel::mmio_write(dev, RCS_RING_MI_MODE, masked_bit_disable(RING_MI_MODE_STOP_RING));
     crate::intel::mmio_write(dev, RCS_RING_HWS_PGA, pphwsp_gpu);
     let hws_after = crate::intel::mmio_read(dev, RCS_RING_HWS_PGA);
 
@@ -641,9 +633,9 @@ fn log_triangle_demo_stats(dev: crate::intel::Dev, completed: bool) {
 }
 
 fn triangle_vs_max_threads_field(device_id: u16, baked_max_threads: u16) -> u32 {
-    if device_is_gfx125(device_id) {
-        // Mesa advertises ADL-S gfx12 max_vs_threads = 546 and programs the
-        // packet with max_vs_threads - 1.
+    if device_is_gfx12(device_id) {
+        // Mesa advertises ADL-S gfx12 max_vs_threads = 546 and programs this
+        // packet field with max_vs_threads - 1.
         545
     } else {
         baked_max_threads.saturating_sub(1) as u32
@@ -659,7 +651,30 @@ fn triangle_vs_dispatch_grf_start_register(baked_grf_start: u8) -> u32 {
 }
 
 fn device_is_gfx125(device_id: u16) -> bool {
-    matches!(device_id, 0x4680 | 0x4682 | 0x4688 | 0x468A | 0x468B | 0x4690 | 0x4692 | 0x4693)
+    matches!(
+        device_id,
+        0x5690..=0x5697
+            | 0x56A0..=0x56A6
+            | 0x56B0..=0x56B3
+            | 0x56BA..=0x56BF
+            | 0x56C0..=0x56C2
+    )
+}
+
+fn device_is_gfx12(device_id: u16) -> bool {
+    matches!(
+        device_id,
+        0x4680
+            | 0x4682
+            | 0x4688
+            | 0x468A
+            | 0x468B
+            | 0x4690
+            | 0x4692
+            | 0x4693
+            | 0x46D1
+            | 0xA780
+    ) || device_is_gfx125(device_id)
 }
 
 fn decode_clip_mode_name(mode: u32) -> &'static str {
@@ -1695,7 +1710,7 @@ fn log_streamout_proof_result(
             unsafe { core::slice::from_raw_parts(base.add(idx * stride_words), stride_words) };
         match experiment {
             StreamoutProofExperiment::PositionSlot0 | StreamoutProofExperiment::PositionSlot1 => {
-                intel_render_verbose_log!(
+                intel_render_focus_log!(
                     "intel/render: {} v{} experiment={} completed={} raw=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos=[{:.3},{:.3},{:.3},{:.3}]\n",
                     submit_name,
                     idx,
@@ -1711,8 +1726,9 @@ fn log_streamout_proof_result(
                     f32::from_bits(words[3])
                 );
             }
-            StreamoutProofExperiment::HeaderAndPositionSlots01 => {
-                intel_render_verbose_log!(
+            StreamoutProofExperiment::HeaderAndPositionSlots01
+            | StreamoutProofExperiment::PointSizeSlot0PositionSlot1 => {
+                intel_render_focus_log!(
                     "intel/render: {} v{} experiment={} completed={} hdr=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos_f=[{:.3},{:.3},{:.3},{:.3}]\n",
                     submit_name,
                     idx,
@@ -1745,6 +1761,7 @@ fn primitive_topology_label(topology: u32) -> &'static str {
         0x05 => "tristrip",
         0x06 => "trifan",
         0x09 => "linelist_adj",
+        0x0F => "rectlist",
         _ => "unknown",
     }
 }

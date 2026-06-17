@@ -340,6 +340,224 @@ pub struct HdaController {
 /// Global HDA controller instance
 static HDA: Mutex<Option<HdaController>> = Mutex::new(None);
 static HDA_INITIALIZED: AtomicBool = AtomicBool::new(false);
+static CPAL_HDA_STREAM: Mutex<Option<PcmStreamHandle>> = Mutex::new(None);
+
+/// Current PCM format exposed by the HDA output stream.
+pub const PCM_SAMPLE_RATE_HZ: u32 = 48_000;
+pub const PCM_CHANNELS: usize = 2;
+pub const PCM_SAMPLE_BITS: usize = 16;
+pub const PCM_SAMPLE_BYTES: usize = PCM_SAMPLE_BITS / 8;
+pub const PCM_FRAME_BYTES: usize = PCM_CHANNELS * PCM_SAMPLE_BYTES;
+
+/// HDA DMA buffer layout. The current stream uses two 512 KiB BDL fragments.
+pub const PCM_DMA_BUFFER_BYTES: usize = 1024 * 1024;
+pub const PCM_DMA_BUFFER_SAMPLES: usize = PCM_DMA_BUFFER_BYTES / PCM_SAMPLE_BYTES;
+pub const PCM_DMA_BUFFER_FRAMES: usize = PCM_DMA_BUFFER_BYTES / PCM_FRAME_BYTES;
+const PCM_STREAM_START_AHEAD_FRAMES: usize = PCM_SAMPLE_RATE_HZ as usize / 200;
+
+/// Metadata a synth backend needs before writing into the HDA stream.
+#[derive(Debug, Clone, Copy)]
+pub struct PcmStreamInfo {
+    /// Samples are signed little-endian i16 values.
+    pub sample_rate_hz: u32,
+    /// Stereo interleaved: L, R, L, R...
+    pub channels: usize,
+    pub sample_bits: usize,
+    pub sample_bytes: usize,
+    pub frame_bytes: usize,
+    /// Total DMA ring size in bytes.
+    pub buffer_bytes: usize,
+    /// Total DMA ring capacity in interleaved i16 samples.
+    pub buffer_samples: usize,
+    /// Total DMA ring capacity in stereo frames.
+    pub buffer_frames: usize,
+    /// Native layout expected by this hardware stream.
+    pub native_layout: PcmSampleLayout,
+}
+
+impl PcmStreamInfo {
+    pub const fn current(buffer_bytes: usize) -> Self {
+        Self {
+            sample_rate_hz: PCM_SAMPLE_RATE_HZ,
+            channels: PCM_CHANNELS,
+            sample_bits: PCM_SAMPLE_BITS,
+            sample_bytes: PCM_SAMPLE_BYTES,
+            frame_bytes: PCM_FRAME_BYTES,
+            buffer_bytes,
+            buffer_samples: buffer_bytes / PCM_SAMPLE_BYTES,
+            buffer_frames: buffer_bytes / PCM_FRAME_BYTES,
+            native_layout: PcmSampleLayout::Interleaved,
+        }
+    }
+}
+
+/// Channel layout for PCM sample buffers.
+///
+/// HDA currently consumes interleaved stereo samples in its DMA ring, but the
+/// public audio boundary accepts planar samples too so engines can keep
+/// high-fidelity/channel-local processing until the hardware handoff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PcmSampleLayout {
+    /// One contiguous buffer laid out frame-by-frame: L, R, L, R...
+    Interleaved,
+    /// One buffer per channel: all left samples, all right samples, etc.
+    Planar,
+}
+
+/// Borrowed signed 16-bit PCM data in either interleaved or planar form.
+#[derive(Debug, Clone, Copy)]
+pub enum PcmBuffer<'a> {
+    Interleaved {
+        samples: &'a [i16],
+        channels: usize,
+        sample_rate_hz: u32,
+    },
+    Planar {
+        channels: &'a [&'a [i16]],
+        sample_rate_hz: u32,
+    },
+    PlanarStereo {
+        left: &'a [i16],
+        right: &'a [i16],
+        sample_rate_hz: u32,
+    },
+}
+
+impl<'a> PcmBuffer<'a> {
+    pub const fn interleaved_i16(samples: &'a [i16], channels: usize, sample_rate_hz: u32) -> Self {
+        Self::Interleaved {
+            samples,
+            channels,
+            sample_rate_hz,
+        }
+    }
+
+    pub const fn interleaved_stereo_48k(samples: &'a [i16]) -> Self {
+        Self::Interleaved {
+            samples,
+            channels: PCM_CHANNELS,
+            sample_rate_hz: PCM_SAMPLE_RATE_HZ,
+        }
+    }
+
+    pub const fn planar_i16(channels: &'a [&'a [i16]], sample_rate_hz: u32) -> Self {
+        Self::Planar {
+            channels,
+            sample_rate_hz,
+        }
+    }
+
+    pub const fn planar_stereo_48k(left: &'a [i16], right: &'a [i16]) -> Self {
+        Self::PlanarStereo {
+            left,
+            right,
+            sample_rate_hz: PCM_SAMPLE_RATE_HZ,
+        }
+    }
+
+    pub const fn layout(&self) -> PcmSampleLayout {
+        match self {
+            Self::Interleaved { .. } => PcmSampleLayout::Interleaved,
+            Self::Planar { .. } | Self::PlanarStereo { .. } => PcmSampleLayout::Planar,
+        }
+    }
+
+    pub fn sample_rate_hz(&self) -> u32 {
+        match self {
+            Self::Interleaved { sample_rate_hz, .. }
+            | Self::Planar { sample_rate_hz, .. }
+            | Self::PlanarStereo { sample_rate_hz, .. } => *sample_rate_hz,
+        }
+    }
+
+    pub fn channel_count(&self) -> usize {
+        match self {
+            Self::Interleaved { channels, .. } => *channels,
+            Self::Planar { channels, .. } => channels.len(),
+            Self::PlanarStereo { .. } => PCM_CHANNELS,
+        }
+    }
+
+    pub fn frame_count(&self) -> Result<usize, &'static str> {
+        match self {
+            Self::Interleaved {
+                samples, channels, ..
+            } => {
+                if *channels == 0 {
+                    return Err("PCM: channel count is zero");
+                }
+                if samples.len() % *channels != 0 {
+                    return Err("PCM: interleaved samples do not align to channels");
+                }
+                Ok(samples.len() / *channels)
+            }
+            Self::Planar { channels, .. } => {
+                let Some(first) = channels.first() else {
+                    return Err("PCM: no planar channels");
+                };
+                let frames = first.len();
+                if channels.iter().any(|channel| channel.len() != frames) {
+                    return Err("PCM: planar channels have different lengths");
+                }
+                Ok(frames)
+            }
+            Self::PlanarStereo { left, right, .. } => {
+                if left.len() != right.len() {
+                    return Err("PCM: planar stereo channels have different lengths");
+                }
+                Ok(left.len())
+            }
+        }
+    }
+
+    pub fn interleaved_samples(&self) -> Option<&'a [i16]> {
+        match self {
+            Self::Interleaved { samples, .. } => Some(samples),
+            _ => None,
+        }
+    }
+
+    fn sample_at(&self, channel: usize, frame: usize) -> i16 {
+        match self {
+            Self::Interleaved {
+                samples, channels, ..
+            } => samples[frame * *channels + channel],
+            Self::Planar { channels, .. } => channels[channel][frame],
+            Self::PlanarStereo { left, right, .. } => {
+                if channel == 0 {
+                    left[frame]
+                } else {
+                    right[frame]
+                }
+            }
+        }
+    }
+
+    fn validate_hda(&self) -> Result<(usize, usize), &'static str> {
+        if self.sample_rate_hz() != PCM_SAMPLE_RATE_HZ {
+            return Err("HDA: PCM sample rate must be 48 kHz");
+        }
+        let channels = self.channel_count();
+        if channels != PCM_CHANNELS {
+            return Err("HDA: PCM buffer must be stereo");
+        }
+        let frames = self.frame_count()?;
+        Ok((frames, channels))
+    }
+}
+
+/// A lightweight handle for streaming interleaved i16 stereo PCM into HDA.
+///
+/// The handle owns only software cursor state. The hardware buffer remains the
+/// global HDA DMA ring.
+pub struct PcmStreamHandle {
+    started: bool,
+    disabled: bool,
+    start_ahead_frames: usize,
+    write_cursor: usize,
+    dma_len_samples: usize,
+    info: PcmStreamInfo,
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MMIO Helpers
@@ -1652,6 +1870,362 @@ pub fn get_lpib() -> u32 {
     }
 }
 
+fn stream_cursor_distance(from: usize, to: usize, cap: usize) -> usize {
+    if to >= from {
+        to - from
+    } else {
+        cap - from + to
+    }
+}
+
+/// Return the active HDA PCM stream format and DMA ring capacity.
+pub fn pcm_stream_info() -> Option<PcmStreamInfo> {
+    let (_buf, cap_samples) = get_dma_buffer_info()?;
+    Some(PcmStreamInfo::current(cap_samples * PCM_SAMPLE_BYTES))
+}
+
+/// Open the HDA PCM output stream for direct interleaved i16 stereo writes.
+///
+/// The returned handle starts DMA lazily on the first `push_samples` call.
+pub fn open_pcm_stream() -> Result<PcmStreamHandle, &'static str> {
+    if !is_initialized() {
+        init()?;
+    }
+
+    let (_buf, cap_samples) = get_dma_buffer_info().ok_or("HDA: DMA buffer not initialized")?;
+    if cap_samples == 0 {
+        return Err("HDA: empty DMA buffer");
+    }
+
+    Ok(PcmStreamHandle {
+        started: false,
+        disabled: false,
+        start_ahead_frames: PCM_STREAM_START_AHEAD_FRAMES,
+        write_cursor: 0,
+        dma_len_samples: cap_samples,
+        info: PcmStreamInfo::current(cap_samples * PCM_SAMPLE_BYTES),
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cpal_hda_is_available() -> i32 {
+    i32::from(is_initialized() || find_hda_device().is_some())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cpal_hda_open_pcm_stream() -> usize {
+    let mut stream = CPAL_HDA_STREAM.lock();
+    if stream.is_some() {
+        return 1;
+    }
+
+    match open_pcm_stream() {
+        Ok(handle) => {
+            *stream = Some(handle);
+            1
+        }
+        Err(err) => {
+            hda_warn!("[HDA] CPAL open failed: {}", err);
+            0
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cpal_hda_close_pcm_stream(handle: usize) {
+    if handle != 1 {
+        return;
+    }
+
+    if let Some(mut stream) = CPAL_HDA_STREAM.lock().take() {
+        stream.stop_reset();
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cpal_hda_writable_samples(handle: usize, guard_samples: usize) -> isize {
+    if handle != 1 {
+        return -1;
+    }
+
+    let stream = CPAL_HDA_STREAM.lock();
+    let Some(stream) = stream.as_ref() else {
+        return -2;
+    };
+
+    match stream.writable_samples(guard_samples) {
+        Some(samples) => samples.min(isize::MAX as usize) as isize,
+        None => -3,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cpal_hda_push_samples(
+    handle: usize,
+    samples: *const i16,
+    len: usize,
+) -> i32 {
+    if handle != 1 {
+        return -1;
+    }
+    if samples.is_null() && len != 0 {
+        return -2;
+    }
+
+    let samples = if len == 0 {
+        &[]
+    } else {
+        unsafe { core::slice::from_raw_parts(samples, len) }
+    };
+    let mut stream = CPAL_HDA_STREAM.lock();
+    let Some(stream) = stream.as_mut() else {
+        return -3;
+    };
+
+    match stream.push_samples(samples) {
+        Ok(()) => 0,
+        Err(err) => {
+            hda_warn!("[HDA] CPAL push failed: {}", err);
+            -4
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cpal_spawn_output_pump(
+    ctx: usize,
+    pump: unsafe extern "C" fn(usize) -> i32,
+    period_ms: u64,
+) -> i32 {
+    let period_ms = period_ms.max(1);
+    match crate::t::spawn_on_shared_tokio(move || async move {
+        loop {
+            if unsafe { pump(ctx) } != 0 {
+                break;
+            }
+            tokio::time::sleep(core::time::Duration::from_millis(period_ms)).await;
+        }
+    }) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+impl PcmStreamHandle {
+    pub fn info(&self) -> PcmStreamInfo {
+        self.info
+    }
+
+    pub fn is_started(&self) -> bool {
+        self.started
+    }
+
+    /// Stop DMA, reset the stream descriptor, and forget this handle's cursor.
+    pub fn stop_reset(&mut self) {
+        let _ = stop();
+        reset_stream();
+        self.started = false;
+        self.disabled = false;
+        self.write_cursor = 0;
+        self.dma_len_samples = self.info.buffer_samples;
+    }
+
+    /// Number of interleaved i16 samples that can be queued before the guard.
+    pub fn writable_samples(&self, guard_samples: usize) -> Option<usize> {
+        if !self.started {
+            return Some(self.info.buffer_samples);
+        }
+
+        let cap = self.dma_len_samples;
+        if cap == 0 {
+            return None;
+        }
+
+        let play_cursor = self.play_cursor(cap);
+        let queued = stream_cursor_distance(play_cursor, self.write_cursor, cap);
+        Some(
+            cap.saturating_sub(queued)
+                .saturating_sub(guard_samples.min(cap)),
+        )
+    }
+
+    /// Number of interleaved i16 samples currently queued ahead of playback.
+    pub fn queued_samples(&self) -> Option<usize> {
+        if !self.started {
+            return Some(0);
+        }
+
+        let cap = self.dma_len_samples;
+        if cap == 0 {
+            return None;
+        }
+
+        let play_cursor = self.play_cursor(cap);
+        Some(stream_cursor_distance(play_cursor, self.write_cursor, cap))
+    }
+
+    /// Push signed little-endian i16 PCM into the HDA DMA ring.
+    ///
+    /// Interleaved input is copied directly. Planar input is interleaved while
+    /// crossing into the HDA hardware ring.
+    pub fn push_pcm(&mut self, pcm: PcmBuffer<'_>) -> Result<(), &'static str> {
+        let (frames, channels) = pcm.validate_hda()?;
+        if frames == 0 {
+            return Ok(());
+        }
+
+        if let Some(samples) = pcm.interleaved_samples() {
+            return self.push_interleaved_samples(samples);
+        }
+
+        if self.disabled {
+            return Err("HDA: PCM stream disabled");
+        }
+        if !is_initialized() {
+            return Err("HDA: not initialized");
+        }
+
+        let needs_start = !self.started;
+        if needs_start {
+            if let Err(err) = self.prepare_start() {
+                self.disabled = true;
+                return Err(err);
+            }
+        }
+
+        let Some((buf, cap)) = get_dma_buffer_info() else {
+            return Err("HDA: DMA buffer not initialized");
+        };
+        if cap == 0 {
+            return Err("HDA: empty DMA buffer");
+        }
+
+        let sample_count = frames
+            .checked_mul(channels)
+            .ok_or("HDA: PCM buffer too large")?;
+        if sample_count > cap {
+            return Err("HDA: PCM write larger than DMA buffer");
+        }
+
+        self.dma_len_samples = cap;
+        self.info = PcmStreamInfo::current(cap * PCM_SAMPLE_BYTES);
+
+        for frame in 0..frames {
+            for channel in 0..channels {
+                unsafe {
+                    core::ptr::write(
+                        buf.add(self.write_cursor + channel),
+                        pcm.sample_at(channel, frame),
+                    );
+                }
+            }
+            self.write_cursor = (self.write_cursor + channels) % cap;
+        }
+
+        clear_stream_status();
+        if needs_start {
+            start_dma()?;
+            self.started = true;
+        } else {
+            let _ = ensure_running();
+        }
+        Ok(())
+    }
+
+    /// Push signed little-endian i16 stereo samples into the HDA DMA ring.
+    ///
+    /// `samples` must be stereo interleaved: L, R, L, R...
+    pub fn push_samples(&mut self, samples: &[i16]) -> Result<(), &'static str> {
+        self.push_interleaved_samples(samples)
+    }
+
+    fn push_interleaved_samples(&mut self, samples: &[i16]) -> Result<(), &'static str> {
+        if samples.is_empty() {
+            return Ok(());
+        }
+        if samples.len() % PCM_CHANNELS != 0 {
+            return Err("HDA: PCM samples must be stereo interleaved");
+        }
+        if self.disabled {
+            return Err("HDA: PCM stream disabled");
+        }
+        if !is_initialized() {
+            return Err("HDA: not initialized");
+        }
+
+        let needs_start = !self.started;
+        if needs_start {
+            if let Err(err) = self.prepare_start() {
+                self.disabled = true;
+                return Err(err);
+            }
+        }
+
+        let Some((buf, cap)) = get_dma_buffer_info() else {
+            return Err("HDA: DMA buffer not initialized");
+        };
+        if cap == 0 {
+            return Err("HDA: empty DMA buffer");
+        }
+        if samples.len() > cap {
+            return Err("HDA: PCM write larger than DMA buffer");
+        }
+
+        self.dma_len_samples = cap;
+        self.info = PcmStreamInfo::current(cap * PCM_SAMPLE_BYTES);
+
+        let mut copied = 0usize;
+        while copied < samples.len() {
+            let chunk = (samples.len() - copied).min(cap - self.write_cursor);
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    samples.as_ptr().add(copied),
+                    buf.add(self.write_cursor),
+                    chunk,
+                );
+            }
+            copied += chunk;
+            self.write_cursor = (self.write_cursor + chunk) % cap;
+        }
+
+        clear_stream_status();
+        if needs_start {
+            start_dma()?;
+            self.started = true;
+        } else {
+            let _ = ensure_running();
+        }
+        Ok(())
+    }
+
+    fn prepare_start(&mut self) -> Result<(), &'static str> {
+        let _ = stop();
+        reset_stream();
+
+        let Some((buf, cap)) = get_dma_buffer_info() else {
+            return Err("HDA: DMA buffer not initialized");
+        };
+        if cap == 0 {
+            return Err("HDA: empty DMA buffer");
+        }
+
+        unsafe {
+            core::ptr::write_bytes(buf, 0, cap);
+        }
+
+        self.dma_len_samples = cap;
+        self.info = PcmStreamInfo::current(cap * PCM_SAMPLE_BYTES);
+        self.write_cursor = (self.start_ahead_frames * PCM_CHANNELS)
+            .min(cap.saturating_sub(PCM_CHANNELS))
+            & !(PCM_CHANNELS - 1);
+        Ok(())
+    }
+
+    fn play_cursor(&self, cap: usize) -> usize {
+        ((get_playback_position() as usize) / core::mem::size_of::<i16>()) % cap
+    }
+}
+
 /// Reset the output stream (SRST): clears LPIB, FIFOs, and all stream state.
 /// Reconfigures CBL/LVI/FMT/BDL so the next start_looped_playback works correctly.
 /// Must be called AFTER stop() and BEFORE start_looped_playback() to ensure
@@ -2360,9 +2934,41 @@ pub fn amp_probe() -> String {
     s
 }
 
-/// Write raw audio samples to the DMA buffer and play for a given duration
-/// Samples are stereo interleaved i16 (left, right, left, right, ...)
-pub fn write_samples_and_play(samples: &[i16], duration_ms: u32) -> Result<(), &'static str> {
+unsafe fn copy_pcm_to_interleaved_dma(
+    pcm: PcmBuffer<'_>,
+    dst: *mut i16,
+    dst_capacity_samples: usize,
+) -> Result<usize, &'static str> {
+    let (frames, channels) = pcm.validate_hda()?;
+    let frames_to_copy = frames.min(dst_capacity_samples / channels);
+    let samples_to_copy = frames_to_copy * channels;
+
+    if let Some(samples) = pcm.interleaved_samples() {
+        unsafe {
+            core::ptr::copy_nonoverlapping(samples.as_ptr(), dst, samples_to_copy);
+        }
+        return Ok(samples_to_copy);
+    }
+
+    for frame in 0..frames_to_copy {
+        for channel in 0..channels {
+            unsafe {
+                core::ptr::write(
+                    dst.add(frame * channels + channel),
+                    pcm.sample_at(channel, frame),
+                );
+            }
+        }
+    }
+
+    Ok(samples_to_copy)
+}
+
+/// Write PCM audio to the DMA buffer and play for a given duration.
+///
+/// HDA consumes interleaved stereo i16. Planar input is accepted and interleaved
+/// here so software mixers can keep channel-separated buffers internally.
+pub fn write_pcm_and_play(pcm: PcmBuffer<'_>, duration_ms: u32) -> Result<(), &'static str> {
     let mut hda = HDA.lock();
     let ctrl = hda.as_mut().ok_or("HDA: not initialized")?;
 
@@ -2377,12 +2983,9 @@ pub fn write_samples_and_play(samples: &[i16], duration_ms: u32) -> Result<(), &
     let buf = ctrl.audio_buf_virt as *mut i16;
     let buf_capacity = (ctrl.audio_buf_size / 2) as usize; // capacity in i16 samples
 
-    let to_copy = samples.len().min(buf_capacity);
+    let to_copy = unsafe { copy_pcm_to_interleaved_dma(pcm, buf, buf_capacity)? };
 
     unsafe {
-        // Copy samples to DMA buffer
-        core::ptr::copy_nonoverlapping(samples.as_ptr(), buf, to_copy);
-
         // Zero the rest
         if to_copy < buf_capacity {
             core::ptr::write_bytes(buf.add(to_copy), 0, buf_capacity - to_copy);
@@ -2406,6 +3009,12 @@ pub fn write_samples_and_play(samples: &[i16], duration_ms: u32) -> Result<(), &
 
     ctrl.play(false);
     Ok(())
+}
+
+/// Write raw audio samples to the DMA buffer and play for a given duration.
+/// Samples are stereo interleaved i16 (left, right, left, right, ...).
+pub fn write_samples_and_play(samples: &[i16], duration_ms: u32) -> Result<(), &'static str> {
+    write_pcm_and_play(PcmBuffer::interleaved_stereo_48k(samples), duration_ms)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

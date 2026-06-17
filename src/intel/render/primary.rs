@@ -24,6 +24,16 @@ pub(crate) struct RenderOaControlResult {
     pub(crate) ctx_ctrl: u32,
 }
 
+pub(crate) struct RenderArtificialFragmentResult {
+    pub(crate) mode: &'static str,
+    pub(crate) ok: bool,
+    pub(crate) descs: usize,
+    pub(crate) before: u32,
+    pub(crate) after: u32,
+    pub(crate) rt_gpu: u64,
+    pub(crate) remapped_render: bool,
+}
+
 const RENDER_JOKER_VARIANTS: &[&str] = &[
     "canonical",
     "mesa",
@@ -32,6 +42,118 @@ const RENDER_JOKER_VARIANTS: &[&str] = &[
     "bt0-primary",
     "scratch",
     "oa",
+    "point",
+    "point-scratch",
+    "point-oa",
+    "point-oa-pos0",
+    "point-oa-header",
+    "point-oa-killoff",
+    "point-oa-smooth",
+    "point-oa-msrast",
+    "point-oa-msrast-force",
+    "point-oa-deref0",
+    "point-oa-hz0",
+    "point-oa-wm-normal",
+    "point-oa-wm-reemit",
+    "point-oa-hz-omit",
+    "point-oa-ps-off",
+    "point-oa-bt1",
+    "point-oa-early",
+    "point-oa-early-killoff",
+    "point-oa-clip-normal",
+    "point-oa-clip-persp",
+    "point-oa-clip-disable",
+    "point-oa-clip-disable-arm",
+    "point-oa-clip-force",
+    "point-oa-clip-d3d",
+    "point-oa-clip-xy",
+    "point-oa-sbe0",
+    "point-oa-sbe-pre-clip",
+    "point-oa-sbe-pre-sf",
+    "point-oa-no-pr",
+    "point-oa-vfg",
+    "point-oa-w64",
+    "point-oa-w64-early",
+    "point-oa-w64-early-scissor",
+    "point-oa-screen-w64",
+    "point-oa-w64-arm",
+    "point-oa-w64-wm-normal",
+    "point-oa-w64-wm-reemit",
+    "point-oa-w64-hz-omit",
+    "point-oa-w64-ps-off",
+    "point-oa-w64-payload-attr",
+    "point-oa-w64-payload-depthw",
+    "point-oa-w64-payload-bary",
+    "point-oa-w64-sbe-pre-clip",
+    "point-oa-w64-sbe-pre-sf",
+    "point-oa-w1023",
+    "point-oa-w1023-nowmpoint",
+    "point-oa-w1023-scissor",
+    "point-oa-vtxw",
+    "point-oa-early-w1023",
+    "point-oa-early-msrast-force",
+    "point-bt1",
+    "point-slot0",
+    "screen-vs-scratch",
+    "screen-vs-oa",
+    "screen-vs-ndc-oa",
+    "screen-vs-ndc-oa-hz0",
+    "screen-vs-sbe0",
+    "screen-vs-slot0-oa",
+    "screen-vs-urb2-oa",
+    "screen-vs-urb2-slot0-oa",
+    "vf-rect-oa",
+    "vf-rect-oa-pos0",
+    "vf-rect-oa-header",
+    "vf-rect-oa-deref0",
+    "vf-rect-ndc-oa",
+    "vf-rect-ndc-oa-sbe-pre-clip",
+    "vf-rect-ndc-oa-sbe-pre-sf",
+    "vf-rect-ndc-oa-drawrect-early",
+    "vf-rect-ndc-oa-sample-early",
+    "vf-rect-ndc-oa-pc-clip-sf",
+    "vf-rect-ndc-oa-hz-pre-wm",
+    "vf-rect-ndc-oa-hz-post-extra",
+    "vf-rect-ndc-oa-payload-attr",
+    "vf-rect-ndc-oa-payload-depthw",
+    "vf-rect-ndc-oa-payload-bary",
+    "vf-rect-ndc-oa-persp",
+    "vf-rect-ndc-oa-clipxy",
+    "vf-rect-ndc-oa-clip-disable",
+    "vf-rect-ndc-oa-clip-force",
+    "vf-rect-ndc-oa-clip-d3d",
+    "vf-rect-ndc-oa-early-clipxy",
+    "vf-rect-ndc-oa-frontccw",
+    "vf-rect-ndc-oa-hz0",
+    "vf-rect-ndc-oa-early",
+    "vf-rect-ndc-oa-bt1",
+    "vf-rect-ndc-order-b-oa",
+    "vf-rect-ndc-order-c-oa",
+    "vf-rect-ndc-order-c-early-oa",
+    "vf-rect-ndc-order-c-clip-disable-oa",
+    "vf-rect-ndc-mesa-simple-oa",
+    "vf-rect-ndc-mesa-nosrc-header-oa",
+    "vf-rect-ndc-small-oa",
+    "vf-rect-ndc-cw-oa",
+    "vf-rect-ndc-alt-oa",
+    "vf-rect-order-b-oa",
+    "vf-rect-order-b-early-oa",
+    "vf-rect-order-b-scissor-oa",
+    "vf-rect-mesa-simple-oa",
+    "vf-rect-mesa-simple-oa-early",
+    "vf-rect-mesa-simple-oa-arm",
+    "vf-rect-mesa-nosrc-header-oa",
+    "vf-rect-order-c-oa",
+    "vf-tri-ndc-oa",
+    "vf-tri-ndc-oa-early",
+    "vf-tri-ndc-oa-early-clipxy",
+    "vf-tri-ndc-cw-oa-early",
+    "screen-rect-scratch",
+    "screen-rect-oa-early",
+    "so-vf",
+    "so-vf-header",
+    "so-vs",
+    "so-vs-header",
     "bt1",
     "wm-normal",
     "slot0",
@@ -84,6 +206,17 @@ pub(crate) fn render_oa_control_action_names() -> &'static [&'static str] {
         "full-on",
         "full-off",
     ]
+}
+
+fn retired_render_joker_variant_reason(name: &str) -> Option<&'static str> {
+    if name.eq_ignore_ascii_case("point-oa-w8")
+        || name.eq_ignore_ascii_case("point-oa-w8-clipmax")
+        || name.eq_ignore_ascii_case("point-oa-w64-clipmax")
+    {
+        Some("retired-invalid-point-width-hw-contract")
+    } else {
+        None
+    }
 }
 
 pub(crate) fn render_oa_control_action(
@@ -235,6 +368,19 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
     let zeroed = TriangleBlendProbeMode::MesaZeroedState;
     let canonical = VfPrimitiveGeometry::Canonical;
     let big = VfPrimitiveGeometry::Oversized;
+    let point = VfPrimitiveGeometry::CenterPoint;
+    let screen_point = VfPrimitiveGeometry::ScreenSpacePoint8x8;
+    let screen_space = VfPrimitiveGeometry::ScreenSpace8x8;
+    let screen_rect = VfPrimitiveGeometry::ScreenSpaceRect8x8;
+    let screen_rect_order_b = VfPrimitiveGeometry::ScreenSpaceRect8x8OrderB;
+    let screen_rect_order_c = VfPrimitiveGeometry::ScreenSpaceRect8x8OrderC;
+    let ndc_triangle = VfPrimitiveGeometry::NdcTriangleLarge;
+    let ndc_triangle_cw = VfPrimitiveGeometry::NdcTriangleLargeCw;
+    let ndc_rect = VfPrimitiveGeometry::NdcRect;
+    let ndc_rect_cw = VfPrimitiveGeometry::NdcRectCw;
+    let ndc_rect_alt = VfPrimitiveGeometry::NdcRectAlt;
+    let ndc_rect_order_c = VfPrimitiveGeometry::NdcRectUrLrUl;
+    let ndc_rect_small = VfPrimitiveGeometry::NdcRectSmall;
     let heavy = PostDrawSyncVariant::HeavyAll;
     let light_post_no_cs = PostDrawSyncVariant::LightPostSyncNoCs;
 
@@ -301,6 +447,1156 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
             geometry: big,
             backend: BackendProbeMode::RasterWmInputOa,
             sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point") || name.eq_ignore_ascii_case("giant-point") {
+        RenderJokerSpec {
+            variant: "point",
+            submit_name: "point-vf-giant",
+            target: surface,
+            blend: explicit,
+            geometry: point,
+            backend: BackendProbeMode::MesaLike,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-scratch") {
+        RenderJokerSpec {
+            variant: "point-scratch",
+            submit_name: "point-vf-giant-scratch",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::PsBindingTableCountZero,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa") {
+        RenderJokerSpec {
+            variant: "point-oa",
+            submit_name: "point-vf-giant-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-pos0") {
+        RenderJokerSpec {
+            variant: "point-oa-pos0",
+            submit_name: "point-vf-giant-oa-pos0",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-header") {
+        RenderJokerSpec {
+            variant: "point-oa-header",
+            submit_name: "point-vf-giant-oa-header",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-killoff") {
+        RenderJokerSpec {
+            variant: "point-oa-killoff",
+            submit_name: "point-vf-giant-oa-killoff",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaKillOff,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-smooth") {
+        RenderJokerSpec {
+            variant: "point-oa-smooth",
+            submit_name: "point-vf-giant-oa-smooth",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaSmoothPoint,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-msrast") {
+        RenderJokerSpec {
+            variant: "point-oa-msrast",
+            submit_name: "point-vf-giant-oa-msrast",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaMsRaster,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-msrast-force") {
+        RenderJokerSpec {
+            variant: "point-oa-msrast-force",
+            submit_name: "point-vf-giant-oa-msrast-force",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaMsRasterForced,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-deref0") {
+        RenderJokerSpec {
+            variant: "point-oa-deref0",
+            submit_name: "point-vf-giant-oa-deref0",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaDerefBlock0,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-hz0") {
+        RenderJokerSpec {
+            variant: "point-oa-hz0",
+            submit_name: "point-vf-giant-oa-hz0",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaNoHzOp,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-wm-normal") {
+        RenderJokerSpec {
+            variant: "point-oa-wm-normal",
+            submit_name: "point-vf-giant-oa-wm-normal",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaWmNormalDispatch,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-wm-reemit") {
+        RenderJokerSpec {
+            variant: "point-oa-wm-reemit",
+            submit_name: "point-vf-giant-oa-wm-reemit",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaWmReemitAfterPsExtra,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-hz-omit") {
+        RenderJokerSpec {
+            variant: "point-oa-hz-omit",
+            submit_name: "point-vf-giant-oa-hz-omit",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaOmitHzOp,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-ps-off") {
+        RenderJokerSpec {
+            variant: "point-oa-ps-off",
+            submit_name: "point-vf-giant-oa-ps-off",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaPsDisabled,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-bt1") {
+        RenderJokerSpec {
+            variant: "point-oa-bt1",
+            submit_name: "point-vf-giant-oa-bt1",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaBtCountOne,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-early") {
+        RenderJokerSpec {
+            variant: "point-oa-early",
+            submit_name: "point-vf-giant-oa-early",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaEarlySample,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-early-killoff") {
+        RenderJokerSpec {
+            variant: "point-oa-early-killoff",
+            submit_name: "point-vf-giant-oa-early-killoff",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaEarlyKillOff,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-clip-normal") {
+        RenderJokerSpec {
+            variant: "point-oa-clip-normal",
+            submit_name: "point-vf-giant-oa-clip-normal",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaClipNormal,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-clip-persp") {
+        RenderJokerSpec {
+            variant: "point-oa-clip-persp",
+            submit_name: "point-vf-giant-oa-clip-persp",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaClipPerspective,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-clip-disable") {
+        RenderJokerSpec {
+            variant: "point-oa-clip-disable",
+            submit_name: "point-vf-giant-oa-clip-disable",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaClipDisabled,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-clip-disable-arm") {
+        RenderJokerSpec {
+            variant: "point-oa-clip-disable-arm",
+            submit_name: "point-vf-giant-oa-clip-disable-arm",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaClipDisabledArtificial,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-clip-force") {
+        RenderJokerSpec {
+            variant: "point-oa-clip-force",
+            submit_name: "point-vf-giant-oa-clip-force",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaClipForceMode,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-clip-d3d") {
+        RenderJokerSpec {
+            variant: "point-oa-clip-d3d",
+            submit_name: "point-vf-giant-oa-clip-d3d",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaClipApiD3d,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-clip-xy") {
+        RenderJokerSpec {
+            variant: "point-oa-clip-xy",
+            submit_name: "point-vf-giant-oa-clip-xy",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaClipViewportXy,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-sbe0") {
+        RenderJokerSpec {
+            variant: "point-oa-sbe0",
+            submit_name: "point-vf-giant-oa-sbe0",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaSbeRead0,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-sbe-pre-clip") {
+        RenderJokerSpec {
+            variant: "point-oa-sbe-pre-clip",
+            submit_name: "point-vf-giant-oa-sbe-pre-clip",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaSbeBeforeClip,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-sbe-pre-sf") {
+        RenderJokerSpec {
+            variant: "point-oa-sbe-pre-sf",
+            submit_name: "point-vf-giant-oa-sbe-pre-sf",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaSbeBeforeSf,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-no-pr") {
+        RenderJokerSpec {
+            variant: "point-oa-no-pr",
+            submit_name: "point-vf-giant-oa-no-pr",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaNoPrimitiveReplication,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-vfg") {
+        RenderJokerSpec {
+            variant: "point-oa-vfg",
+            submit_name: "point-vf-giant-oa-vfg",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaVfGeometryDistribution,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-w8") {
+        RenderJokerSpec {
+            variant: "point-oa-w8",
+            submit_name: "point-vf-giant-oa-w8",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaPointWidth8,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-w8-clipmax") {
+        RenderJokerSpec {
+            variant: "point-oa-w8-clipmax",
+            submit_name: "point-vf-giant-oa-w8-clipmax",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaPointWidth8ClipMax,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-w64") {
+        RenderJokerSpec {
+            variant: "point-oa-w64",
+            submit_name: "point-vf-giant-oa-w64",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaPointWidth64,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-w64-clipmax") {
+        RenderJokerSpec {
+            variant: "point-oa-w64-clipmax",
+            submit_name: "point-vf-giant-oa-w64-clipmax",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaPointWidth64ClipMax,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-w64-early") {
+        RenderJokerSpec {
+            variant: "point-oa-w64-early",
+            submit_name: "point-vf-giant-oa-w64-early",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaPointWidth64Early,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-w64-early-scissor") {
+        RenderJokerSpec {
+            variant: "point-oa-w64-early-scissor",
+            submit_name: "point-vf-giant-oa-w64-early-scissor",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaPointWidth64EarlyScissor,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-screen-w64") {
+        RenderJokerSpec {
+            variant: "point-oa-screen-w64",
+            submit_name: "point-vf-screen-oa-w64",
+            target: scratch,
+            blend: zeroed,
+            geometry: screen_point,
+            backend: BackendProbeMode::RasterWmInputOaPointWidth64Screen,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-w64-arm") {
+        RenderJokerSpec {
+            variant: "point-oa-w64-arm",
+            submit_name: "point-vf-giant-oa-w64-arm",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaPointWidth64Artificial,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-w64-wm-normal") {
+        RenderJokerSpec {
+            variant: "point-oa-w64-wm-normal",
+            submit_name: "point-vf-giant-oa-w64-wm-normal",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaPointWidth64WmNormalDispatch,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-w64-wm-reemit") {
+        RenderJokerSpec {
+            variant: "point-oa-w64-wm-reemit",
+            submit_name: "point-vf-giant-oa-w64-wm-reemit",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaPointWidth64WmReemitAfterPsExtra,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-w64-hz-omit") {
+        RenderJokerSpec {
+            variant: "point-oa-w64-hz-omit",
+            submit_name: "point-vf-giant-oa-w64-hz-omit",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaPointWidth64OmitHzOp,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-w64-ps-off") {
+        RenderJokerSpec {
+            variant: "point-oa-w64-ps-off",
+            submit_name: "point-vf-giant-oa-w64-ps-off",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaPointWidth64PsDisabled,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-w64-payload-attr") {
+        RenderJokerSpec {
+            variant: "point-oa-w64-payload-attr",
+            submit_name: "point-vf-giant-oa-w64-payload-attr",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaPointWidth64PayloadAttributeEnable,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-w64-payload-depthw") {
+        RenderJokerSpec {
+            variant: "point-oa-w64-payload-depthw",
+            submit_name: "point-vf-giant-oa-w64-payload-depthw",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaPointWidth64PayloadSourceDepthW,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-w64-payload-bary") {
+        RenderJokerSpec {
+            variant: "point-oa-w64-payload-bary",
+            submit_name: "point-vf-giant-oa-w64-payload-bary",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaPointWidth64PayloadBaryPlanes,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-w64-sbe-pre-clip") {
+        RenderJokerSpec {
+            variant: "point-oa-w64-sbe-pre-clip",
+            submit_name: "point-vf-giant-oa-w64-sbe-pre-clip",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaPointWidth64SbeBeforeClip,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-w64-sbe-pre-sf") {
+        RenderJokerSpec {
+            variant: "point-oa-w64-sbe-pre-sf",
+            submit_name: "point-vf-giant-oa-w64-sbe-pre-sf",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaPointWidth64SbeBeforeSf,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-w1023") {
+        RenderJokerSpec {
+            variant: "point-oa-w1023",
+            submit_name: "point-vf-giant-oa-w1023",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaPointWidth1023,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-w1023-nowmpoint") {
+        RenderJokerSpec {
+            variant: "point-oa-w1023-nowmpoint",
+            submit_name: "point-vf-giant-oa-w1023-nowmpoint",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaPointWidth1023NoWmPoint,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-w1023-scissor") {
+        RenderJokerSpec {
+            variant: "point-oa-w1023-scissor",
+            submit_name: "point-vf-giant-oa-w1023-scissor",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaPointWidth1023Scissor,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-vtxw") {
+        RenderJokerSpec {
+            variant: "point-oa-vtxw",
+            submit_name: "point-vf-giant-oa-vtxw",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaPointWidthVertex,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-early-w1023") {
+        RenderJokerSpec {
+            variant: "point-oa-early-w1023",
+            submit_name: "point-vf-giant-oa-early-w1023",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaEarlyPointWidth1023,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-oa-early-msrast-force") {
+        RenderJokerSpec {
+            variant: "point-oa-early-msrast-force",
+            submit_name: "point-vf-giant-oa-early-msrast-force",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaEarlyMsRasterForced,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-bt1") {
+        RenderJokerSpec {
+            variant: "point-bt1",
+            submit_name: "point-vf-giant-bt1",
+            target: surface,
+            blend: explicit,
+            geometry: point,
+            backend: BackendProbeMode::PsBindingTableCountOne,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("point-slot0") {
+        RenderJokerSpec {
+            variant: "point-slot0",
+            submit_name: "point-vf-giant-slot0",
+            target: surface,
+            blend: explicit,
+            geometry: point,
+            backend: BackendProbeMode::PsDispatchSlot0,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("screen-vs-scratch") {
+        RenderJokerSpec {
+            variant: "screen-vs-scratch",
+            submit_name: "screen-vs-scratch",
+            target: scratch,
+            blend: zeroed,
+            geometry: screen_space,
+            backend: BackendProbeMode::PsBindingTableCountZero,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("screen-vs-oa") {
+        RenderJokerSpec {
+            variant: "screen-vs-oa",
+            submit_name: "screen-vs-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: screen_space,
+            backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("screen-vs-ndc-oa") {
+        RenderJokerSpec {
+            variant: "screen-vs-ndc-oa",
+            submit_name: "screen-vs-ndc-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_triangle,
+            backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("screen-vs-ndc-oa-hz0") {
+        RenderJokerSpec {
+            variant: "screen-vs-ndc-oa-hz0",
+            submit_name: "screen-vs-ndc-oa-hz0",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_triangle,
+            backend: BackendProbeMode::RasterWmInputOaNoHzOp,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("screen-vs-sbe0") {
+        RenderJokerSpec {
+            variant: "screen-vs-sbe0",
+            submit_name: "screen-vs-sbe0",
+            target: scratch,
+            blend: zeroed,
+            geometry: screen_space,
+            backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("screen-vs-slot0-oa") {
+        RenderJokerSpec {
+            variant: "screen-vs-slot0-oa",
+            submit_name: "screen-vs-slot0-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: screen_space,
+            backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("screen-vs-urb2-oa") {
+        RenderJokerSpec {
+            variant: "screen-vs-urb2-oa",
+            submit_name: "screen-vs-urb2-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: screen_space,
+            backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("screen-vs-urb2-slot0-oa") {
+        RenderJokerSpec {
+            variant: "screen-vs-urb2-slot0-oa",
+            submit_name: "screen-vs-urb2-slot0-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: screen_space,
+            backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-oa") {
+        RenderJokerSpec {
+            variant: "vf-rect-oa",
+            submit_name: "vf-rect-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: screen_rect,
+            backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-oa-pos0") {
+        RenderJokerSpec {
+            variant: "vf-rect-oa-pos0",
+            submit_name: "vf-rect-oa-pos0",
+            target: scratch,
+            blend: zeroed,
+            geometry: screen_rect,
+            backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-oa-header") {
+        RenderJokerSpec {
+            variant: "vf-rect-oa-header",
+            submit_name: "vf-rect-oa-header",
+            target: scratch,
+            blend: zeroed,
+            geometry: screen_rect,
+            backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-oa-deref0") {
+        RenderJokerSpec {
+            variant: "vf-rect-oa-deref0",
+            submit_name: "vf-rect-oa-deref0",
+            target: scratch,
+            blend: zeroed,
+            geometry: screen_rect,
+            backend: BackendProbeMode::RasterWmInputOaDerefBlock0,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-oa",
+            submit_name: "vf-rect-ndc-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect,
+            backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa-sbe-pre-clip") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-oa-sbe-pre-clip",
+            submit_name: "vf-rect-ndc-oa-sbe-pre-clip",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect,
+            backend: BackendProbeMode::RasterWmInputOaSbeBeforeClip,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa-sbe-pre-sf") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-oa-sbe-pre-sf",
+            submit_name: "vf-rect-ndc-oa-sbe-pre-sf",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect,
+            backend: BackendProbeMode::RasterWmInputOaSbeBeforeSf,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa-drawrect-early") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-oa-drawrect-early",
+            submit_name: "vf-rect-ndc-oa-drawrect-early",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect,
+            backend: BackendProbeMode::RasterWmInputOaDrawRectEarlyOnly,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa-sample-early") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-oa-sample-early",
+            submit_name: "vf-rect-ndc-oa-sample-early",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect,
+            backend: BackendProbeMode::RasterWmInputOaSampleMaskEarlyOnly,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa-pc-clip-sf") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-oa-pc-clip-sf",
+            submit_name: "vf-rect-ndc-oa-pc-clip-sf",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect,
+            backend: BackendProbeMode::RasterWmInputOaPipeControlClipSf,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa-hz-pre-wm") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-oa-hz-pre-wm",
+            submit_name: "vf-rect-ndc-oa-hz-pre-wm",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect,
+            backend: BackendProbeMode::RasterWmInputOaWmHzOpBeforeWm,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa-hz-post-extra") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-oa-hz-post-extra",
+            submit_name: "vf-rect-ndc-oa-hz-post-extra",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect,
+            backend: BackendProbeMode::RasterWmInputOaWmHzOpAfterPsExtra,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa-payload-attr") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-oa-payload-attr",
+            submit_name: "vf-rect-ndc-oa-payload-attr",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect,
+            backend: BackendProbeMode::RasterWmInputOaPayloadAttributeEnable,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa-payload-depthw") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-oa-payload-depthw",
+            submit_name: "vf-rect-ndc-oa-payload-depthw",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect,
+            backend: BackendProbeMode::RasterWmInputOaPayloadSourceDepthW,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa-payload-bary") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-oa-payload-bary",
+            submit_name: "vf-rect-ndc-oa-payload-bary",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect,
+            backend: BackendProbeMode::RasterWmInputOaPayloadBaryPlanes,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa-persp") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-oa-persp",
+            submit_name: "vf-rect-ndc-oa-persp",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect,
+            backend: BackendProbeMode::RasterWmInputOaClipPerspective,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa-clipxy") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-oa-clipxy",
+            submit_name: "vf-rect-ndc-oa-clipxy",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect,
+            backend: BackendProbeMode::RasterWmInputOaClipViewportXy,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa-clip-disable") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-oa-clip-disable",
+            submit_name: "vf-rect-ndc-oa-clip-disable",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect,
+            backend: BackendProbeMode::RasterWmInputOaClipDisabled,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa-clip-force") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-oa-clip-force",
+            submit_name: "vf-rect-ndc-oa-clip-force",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect,
+            backend: BackendProbeMode::RasterWmInputOaClipForceMode,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa-clip-d3d") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-oa-clip-d3d",
+            submit_name: "vf-rect-ndc-oa-clip-d3d",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect,
+            backend: BackendProbeMode::RasterWmInputOaClipApiD3d,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa-early-clipxy") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-oa-early-clipxy",
+            submit_name: "vf-rect-ndc-oa-early-clipxy",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect,
+            backend: BackendProbeMode::RasterWmInputOaEarlyClipViewportXy,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa-frontccw") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-oa-frontccw",
+            submit_name: "vf-rect-ndc-oa-frontccw",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect,
+            backend: BackendProbeMode::RasterWmInputOaFrontCcw,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa-hz0") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-oa-hz0",
+            submit_name: "vf-rect-ndc-oa-hz0",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect,
+            backend: BackendProbeMode::RasterWmInputOaNoHzOp,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa-early") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-oa-early",
+            submit_name: "vf-rect-ndc-oa-early",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect,
+            backend: BackendProbeMode::RasterWmInputOaEarlySample,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa-bt1") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-oa-bt1",
+            submit_name: "vf-rect-ndc-oa-bt1",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect,
+            backend: BackendProbeMode::RasterWmInputOaBtCountOne,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-order-b-oa") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-order-b-oa",
+            submit_name: "vf-rect-ndc-order-b-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect_cw,
+            backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-order-c-oa") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-order-c-oa",
+            submit_name: "vf-rect-ndc-order-c-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect_order_c,
+            backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-order-c-early-oa") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-order-c-early-oa",
+            submit_name: "vf-rect-ndc-order-c-early-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect_order_c,
+            backend: BackendProbeMode::RasterWmInputOaEarlySample,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-order-c-clip-disable-oa") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-order-c-clip-disable-oa",
+            submit_name: "vf-rect-ndc-order-c-clip-disable-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect_order_c,
+            backend: BackendProbeMode::RasterWmInputOaClipDisabled,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-mesa-simple-oa") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-mesa-simple-oa",
+            submit_name: "vf-rect-ndc-mesa-simple-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect_order_c,
+            backend: BackendProbeMode::RasterWmInputOaMesaSimpleRect,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-mesa-nosrc-header-oa") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-mesa-nosrc-header-oa",
+            submit_name: "vf-rect-ndc-mesa-nosrc-header-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect_order_c,
+            backend: BackendProbeMode::RasterWmInputOaMesaSimpleRectNoSrcHeader,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-small-oa") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-small-oa",
+            submit_name: "vf-rect-ndc-small-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect_small,
+            backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-cw-oa") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-cw-oa",
+            submit_name: "vf-rect-ndc-cw-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect_cw,
+            backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-alt-oa") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-alt-oa",
+            submit_name: "vf-rect-ndc-alt-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect_alt,
+            backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-order-b-oa") {
+        RenderJokerSpec {
+            variant: "vf-rect-order-b-oa",
+            submit_name: "vf-rect-order-b-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: screen_rect_order_b,
+            backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-order-b-early-oa") {
+        RenderJokerSpec {
+            variant: "vf-rect-order-b-early-oa",
+            submit_name: "vf-rect-order-b-early-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: screen_rect_order_b,
+            backend: BackendProbeMode::RasterWmInputOaEarlySample,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-order-b-scissor-oa") {
+        RenderJokerSpec {
+            variant: "vf-rect-order-b-scissor-oa",
+            submit_name: "vf-rect-order-b-scissor-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: screen_rect_order_b,
+            backend: BackendProbeMode::RasterWmInputOaScissorOnly,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-mesa-simple-oa") {
+        RenderJokerSpec {
+            variant: "vf-rect-mesa-simple-oa",
+            submit_name: "vf-rect-mesa-simple-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: screen_rect_order_b,
+            backend: BackendProbeMode::RasterWmInputOaMesaSimpleRect,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-mesa-simple-oa-early") {
+        RenderJokerSpec {
+            variant: "vf-rect-mesa-simple-oa-early",
+            submit_name: "vf-rect-mesa-simple-oa-early",
+            target: scratch,
+            blend: zeroed,
+            geometry: screen_rect_order_b,
+            backend: BackendProbeMode::RasterWmInputOaMesaSimpleRectEarly,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-mesa-simple-oa-arm") {
+        RenderJokerSpec {
+            variant: "vf-rect-mesa-simple-oa-arm",
+            submit_name: "vf-rect-mesa-simple-oa-arm",
+            target: scratch,
+            blend: zeroed,
+            geometry: screen_rect_order_b,
+            backend: BackendProbeMode::RasterWmInputOaMesaSimpleRectArtificial,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-mesa-nosrc-header-oa") {
+        RenderJokerSpec {
+            variant: "vf-rect-mesa-nosrc-header-oa",
+            submit_name: "vf-rect-mesa-nosrc-header-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: screen_rect_order_b,
+            backend: BackendProbeMode::RasterWmInputOaMesaSimpleRectNoSrcHeader,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-order-c-oa") {
+        RenderJokerSpec {
+            variant: "vf-rect-order-c-oa",
+            submit_name: "vf-rect-order-c-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: screen_rect_order_c,
+            backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-tri-ndc-oa") {
+        RenderJokerSpec {
+            variant: "vf-tri-ndc-oa",
+            submit_name: "vf-tri-ndc-oa",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_triangle,
+            backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-tri-ndc-oa-early") {
+        RenderJokerSpec {
+            variant: "vf-tri-ndc-oa-early",
+            submit_name: "vf-tri-ndc-oa-early",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_triangle,
+            backend: BackendProbeMode::RasterWmInputOaEarlySample,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-tri-ndc-oa-early-clipxy") {
+        RenderJokerSpec {
+            variant: "vf-tri-ndc-oa-early-clipxy",
+            submit_name: "vf-tri-ndc-oa-early-clipxy",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_triangle,
+            backend: BackendProbeMode::RasterWmInputOaEarlyClipViewportXy,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-tri-ndc-cw-oa-early") {
+        RenderJokerSpec {
+            variant: "vf-tri-ndc-cw-oa-early",
+            submit_name: "vf-tri-ndc-cw-oa-early",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_triangle_cw,
+            backend: BackendProbeMode::RasterWmInputOaEarlySample,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("screen-rect-scratch") {
+        RenderJokerSpec {
+            variant: "screen-rect-scratch",
+            submit_name: "screen-rect-scratch",
+            target: scratch,
+            blend: zeroed,
+            geometry: screen_rect,
+            backend: BackendProbeMode::PsBindingTableCountZero,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("screen-rect-oa-early") {
+        RenderJokerSpec {
+            variant: "screen-rect-oa-early",
+            submit_name: "screen-rect-oa-early",
+            target: scratch,
+            blend: zeroed,
+            geometry: screen_rect,
+            backend: BackendProbeMode::RasterWmInputOaEarlySample,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("so-vf") {
+        RenderJokerSpec {
+            variant: "so-vf",
+            submit_name: "joker-vf-streamout",
+            target: surface,
+            blend: zeroed,
+            geometry: canonical,
+            backend: BackendProbeMode::MesaLike,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("so-vf-header") {
+        RenderJokerSpec {
+            variant: "so-vf-header",
+            submit_name: "joker-vf-streamout-header",
+            target: surface,
+            blend: zeroed,
+            geometry: canonical,
+            backend: BackendProbeMode::MesaLike,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("so-vs") {
+        RenderJokerSpec {
+            variant: "so-vs",
+            submit_name: "joker-vs-streamout",
+            target: surface,
+            blend: zeroed,
+            geometry: canonical,
+            backend: BackendProbeMode::MesaLike,
+            sync: heavy,
+        }
+    } else if name.eq_ignore_ascii_case("so-vs-header") {
+        RenderJokerSpec {
+            variant: "so-vs-header",
+            submit_name: "joker-vs-streamout-header",
+            target: surface,
+            blend: zeroed,
+            geometry: canonical,
+            backend: BackendProbeMode::MesaLike,
+            sync: heavy,
         }
     } else if name.eq_ignore_ascii_case("bt1") {
         RenderJokerSpec {
@@ -654,11 +1950,51 @@ fn render_joker_real_vs_front_end_contract(variant: &str) -> Option<TriangleFron
         "reemit-vs-slot0-retire" => Some(VS_DRAW_FRONTIER_CONTRACTS[1]),
         "reemit-vs-urb2-retire" => Some(VS_DRAW_FRONTIER_CONTRACTS[2]),
         "reemit-vs-urb2-slot0-retire" => Some(VS_DRAW_FRONTIER_CONTRACTS[3]),
+        "screen-vs-sbe0" => Some(VS_DRAW_SBE_READ0_CONTRACT),
+        "screen-vs-ndc-oa" | "screen-vs-ndc-oa-hz0" => Some(TRIANGLE_DEFAULT_FRONT_END_CONTRACT),
+        "screen-vs-slot0-oa" => Some(VS_DRAW_FRONTIER_CONTRACTS[1]),
+        "screen-vs-urb2-oa" => Some(VS_DRAW_FRONTIER_CONTRACTS[2]),
+        "screen-vs-urb2-slot0-oa" => Some(VS_DRAW_FRONTIER_CONTRACTS[3]),
+        "screen-vs-scratch" | "screen-vs-oa" | "screen-rect-scratch" | "screen-rect-oa-early" => {
+            Some(TRIANGLE_DEFAULT_FRONT_END_CONTRACT)
+        }
+        _ => None,
+    }
+}
+
+fn render_joker_vf_experiment(variant: &str) -> StreamoutProofExperiment {
+    match variant {
+        "point-oa-pos0" => StreamoutProofExperiment::PositionSlot0,
+        "vf-rect-mesa-simple-oa"
+        | "vf-rect-mesa-simple-oa-early"
+        | "vf-rect-mesa-simple-oa-arm"
+        | "vf-rect-ndc-mesa-simple-oa"
+        | "vf-rect-mesa-nosrc-header-oa"
+        | "vf-rect-ndc-mesa-nosrc-header-oa" => {
+            StreamoutProofExperiment::PositionSlot0
+        }
+        "vf-rect-oa-pos0" => StreamoutProofExperiment::PositionSlot0,
+        "point-oa-header" | "vf-rect-oa-header" | "so-vf-header" | "so-vs-header" => {
+            StreamoutProofExperiment::HeaderAndPositionSlots01
+        }
+        "point-oa-vtxw" => StreamoutProofExperiment::PointSizeSlot0PositionSlot1,
+        _ => StreamoutProofExperiment::PositionSlot1,
+    }
+}
+
+fn render_joker_streamout_kind(variant: &str) -> Option<&'static str> {
+    match variant {
+        "so-vf" | "so-vf-header" => Some("vf"),
+        "so-vs" | "so-vs-header" => Some("vs"),
         _ => None,
     }
 }
 
 pub(crate) fn submit_render_joker_probe(name: &str) -> Result<RenderJokerResult, &'static str> {
+    if let Some(reason) = retired_render_joker_variant_reason(name) {
+        return Err(reason);
+    }
+
     let Some(spec) = parse_render_joker_spec(name) else {
         return Err("unknown-variant");
     };
@@ -673,6 +2009,108 @@ pub(crate) fn submit_render_joker_probe(name: &str) -> Result<RenderJokerResult,
     let result = submit_render_joker_probe_locked(spec);
     PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
     result
+}
+
+pub(crate) fn submit_render_artificial_fragment_sentinel(
+) -> Result<RenderArtificialFragmentResult, &'static str> {
+    if PRIMARY_PROBE_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("in-flight");
+    }
+
+    let result = submit_render_artificial_fragment_sentinel_locked();
+    PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+    result
+}
+
+fn submit_render_artificial_fragment_sentinel_locked(
+) -> Result<RenderArtificialFragmentResult, &'static str> {
+    let Some(dev) = crate::intel::claimed_device() else {
+        crate::log!("intel/render: artificial-fragment-sentinel skipped reason=no-device\n");
+        return Err("no-device");
+    };
+    let warm = warm_once(dev);
+    if warm.streamout_len < 8 * 8 * core::mem::size_of::<u32>()
+        || warm.streamout_virt.is_null()
+        || warm.streamout_phys == 0
+    {
+        crate::log!("intel/render: artificial-fragment-sentinel skipped reason=warm-scratch\n");
+        return Err("warm-scratch");
+    }
+    if !forcewake_render_acquire(warm) {
+        crate::log!("intel/render: artificial-fragment-sentinel skipped reason=forcewake\n");
+        return Err("forcewake");
+    }
+    if !ensure_smoke_buffers_mapped(dev, warm) {
+        crate::log!("intel/render: artificial-fragment-sentinel skipped reason=ggtt-map\n");
+        return Err("ggtt-map");
+    }
+
+    const SENTINEL_COLOR: u32 = 0xA17F_F00D;
+    unsafe {
+        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+        core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+        core::ptr::write_volatile(warm.result_virt as *mut u32, 0xC0DE_7700);
+    }
+    crate::intel::dma_flush(warm.batch_virt, warm.batch_len);
+    crate::intel::dma_flush(warm.ring_virt, warm.ring_len);
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+    let before = unsafe { core::ptr::read_volatile(warm.streamout_virt as *const u32) };
+
+    let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
+    let batch_tail_bytes = encode_3d_no_draw_probe_batch(
+        batch,
+        warm,
+        GPU_VA_RESULT_BASE,
+        RCS_EXEC_RESULT_MI_PROBE_DONE,
+        Some((GPU_VA_STREAMOUT_BASE, SENTINEL_COLOR)),
+    )
+    .map_err(|_| "batch")?;
+    crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
+    let completed = submit_warm_render_batch(
+        dev,
+        warm,
+        RCS_EXEC_RESULT_MI_PROBE_DONE,
+        RESULT_SLOT_PRE3D_DWORD,
+        "artificial-fragment-sentinel",
+    );
+    if !completed {
+        recover_render_engine_after_nonretired_submit(dev, warm, "artificial-fragment-sentinel");
+    }
+
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+    let after = unsafe { core::ptr::read_volatile(warm.streamout_virt as *const u32) };
+    let remapped_render = ensure_smoke_buffers_mapped(dev, warm);
+    WARM_BUFFERS_MAPPED.store(remapped_render, Ordering::Release);
+    let ok = completed && after == SENTINEL_COLOR && remapped_render;
+    intel_render_focus_log!(
+        "intel/render: artificial-fragment-sentinel mode=mi-store ok={} completed={} stores=1 rt_gpu=0x{:X} size=8x8 pitch=0x{:X} before=0x{:08X} after=0x{:08X} remapped_render={} meaning=artificial-fragment-not-wm does_not_prove=raster_or_ps\n",
+        ok as u8,
+        completed as u8,
+        GPU_VA_STREAMOUT_BASE,
+        8 * core::mem::size_of::<u32>() as u32,
+        before,
+        after,
+        remapped_render as u8,
+    );
+
+    Ok(RenderArtificialFragmentResult {
+        mode: "mi-store",
+        ok,
+        descs: 1,
+        before,
+        after,
+        rt_gpu: GPU_VA_STREAMOUT_BASE,
+        remapped_render,
+    })
 }
 
 fn submit_render_joker_probe_locked(
@@ -743,9 +2181,11 @@ fn submit_render_joker_probe_locked(
         }
     };
 
+    let streamout_kind = render_joker_streamout_kind(spec.variant);
     let real_vs_contract = render_joker_real_vs_front_end_contract(spec.variant);
     let front_end_label = real_vs_contract
         .map(|contract| contract.label)
+        .or(streamout_kind)
         .unwrap_or("vf-synthesized");
     intel_render_focus_log!(
         "intel/render: joker begin seq={} variant={} submit={} target={} backend={} geometry={} blend={} sync={} front_end={}\n",
@@ -759,7 +2199,30 @@ fn submit_render_joker_probe_locked(
         spec.sync.label(),
         front_end_label,
     );
-    let completed = if let Some(front_end_contract) = real_vs_contract {
+    let completed = if let Some(kind) = streamout_kind {
+        let experiment = render_joker_vf_experiment(spec.variant);
+        if kind == "vs" {
+            submit_triangle_vs_streamout_proof(
+                dev,
+                warm,
+                target_gpu,
+                target_pitch,
+                target_w,
+                target_h,
+                experiment,
+            )
+        } else {
+            submit_triangle_vf_streamout_proof(
+                dev,
+                warm,
+                target_gpu,
+                target_pitch,
+                target_w,
+                target_h,
+                experiment,
+            )
+        }
+    } else if let Some(front_end_contract) = real_vs_contract {
         submit_triangle_real_vs_draw_probe_to_surface_ext(
             dev,
             warm,
@@ -775,7 +2238,7 @@ fn submit_render_joker_probe_locked(
             spec.sync,
         )
     } else {
-        submit_triangle_vf_draw_to_surface(
+        submit_triangle_vf_draw_to_surface_ext(
             spec.submit_name,
             dev,
             warm,
@@ -787,6 +2250,7 @@ fn submit_render_joker_probe_locked(
             spec.geometry,
             spec.backend,
             spec.sync,
+            render_joker_vf_experiment(spec.variant),
         )
     };
     intel_render_focus_log!(
@@ -1603,13 +3067,43 @@ fn submit_triangle_vf_draw_to_surface(
     backend_probe_mode: BackendProbeMode,
     post_draw_sync_variant: PostDrawSyncVariant,
 ) -> bool {
+    submit_triangle_vf_draw_to_surface_ext(
+        submit_name,
+        dev,
+        warm,
+        dst_gpu_addr,
+        pitch,
+        rect_w,
+        rect_h,
+        blend_mode,
+        geometry,
+        backend_probe_mode,
+        post_draw_sync_variant,
+        StreamoutProofExperiment::PositionSlot1,
+    )
+}
+
+fn submit_triangle_vf_draw_to_surface_ext(
+    submit_name: &'static str,
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+    dst_gpu_addr: u64,
+    pitch: usize,
+    rect_w: usize,
+    rect_h: usize,
+    blend_mode: TriangleBlendProbeMode,
+    geometry: VfPrimitiveGeometry,
+    backend_probe_mode: BackendProbeMode,
+    post_draw_sync_variant: PostDrawSyncVariant,
+    vf_experiment: StreamoutProofExperiment,
+) -> bool {
     let Some(draw) = prepare_vf_streamout_proof_resources(
         warm,
         dst_gpu_addr,
         pitch,
         rect_w,
         rect_h,
-        StreamoutProofExperiment::PositionSlot1,
+        vf_experiment,
         geometry,
     ) else {
         crate::log!(
@@ -1660,7 +3154,7 @@ fn submit_triangle_vf_draw_to_surface(
     }
 
     intel_render_verbose_log!(
-        "intel/render: {} ps-meta dispatch={:?} grf_start={} grf_used={} ksp_off=0x{:X} size={} header_only={} geometry={} backend={} postdraw_sync={} note={}\n",
+        "intel/render: {} ps-meta dispatch={:?} grf_start={} grf_used={} ksp_off=0x{:X} size={} header_only={} geometry={} vf_contract={} backend={} postdraw_sync={} note={}\n",
         submit_name,
         pipeline.ps.meta.kernel.dispatch_mode,
         pipeline.ps.meta.kernel.grf_start_register,
@@ -1670,6 +3164,7 @@ fn submit_triangle_vf_draw_to_surface(
         (pipeline.ps.meta.num_varying_inputs == 0
             && pipeline.ps.meta.kernel.push_constant_bytes == 0) as u8,
         geometry.label(),
+        vf_experiment.vf_slot_contract(),
         backend_probe_mode.label(),
         post_draw_sync_variant.label(),
         pipeline_note
@@ -1681,6 +3176,22 @@ fn submit_triangle_vf_draw_to_surface(
             geometry.label(),
             draw.target_w.saturating_sub(1),
             draw.target_h.saturating_sub(1),
+        );
+    } else if geometry.point_candidate() {
+        let point_width_raw = backend_probe_mode.point_width_raw_override().unwrap_or(0x200);
+        intel_render_focus_log!(
+            "intel/render: {} fragment-candidate-shape accepted=1 geometry={} topology=pointlist ndc=center point_width_raw=0x{:X} point_width_source={} vf_contract={} screen_center=[{},{}] coverage_contract=giant-point does_not_prove=raster_samples_or_ps\n",
+            submit_name,
+            geometry.label(),
+            point_width_raw,
+            if backend_probe_mode.point_width_from_vertex() {
+                "vertex"
+            } else {
+                "state"
+            },
+            vf_experiment.vf_slot_contract(),
+            draw.target_w / 2,
+            draw.target_h / 2,
         );
     }
 
@@ -1809,6 +3320,15 @@ fn submit_triangle_vf_draw_to_surface(
     let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
     let batch =
         unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
+    let batch_mode = if geometry.point_candidate() {
+        TriangleBatchMode::VfPointDraw
+    } else if geometry.ndc_rect_candidate() {
+        TriangleBatchMode::VfRectClipDraw
+    } else if geometry.rect_candidate() {
+        TriangleBatchMode::VfRectDraw
+    } else {
+        TriangleBatchMode::VfDraw
+    };
     let batch_tail_bytes = match encode_triangle_probe_batch(
         batch,
         warm,
@@ -1821,8 +3341,8 @@ fn submit_triangle_vf_draw_to_surface(
         RCS_EXEC_RESULT_DRAW_PRE3D,
         RCS_EXEC_RESULT_DRAW_POST3D,
         RCS_EXEC_RESULT_DONE,
-        TriangleBatchMode::VfDraw,
-        StreamoutProofExperiment::PositionSlot1,
+        batch_mode,
+        vf_experiment,
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
         backend_probe_mode,
         post_draw_sync_variant,
@@ -1861,7 +3381,29 @@ fn submit_triangle_vf_draw_to_surface(
 
     let scratch_rt_before = if is_scratch_rt_submit_name(submit_name) {
         crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
-        Some(unsafe { core::ptr::read_volatile(warm.streamout_virt as *const u32) })
+        let center_x = draw.target_w / 2;
+        let center_y = draw.target_h / 2;
+        let center_offset = center_y
+            .saturating_mul(draw.rt_pitch)
+            .saturating_add(center_x.saturating_mul(4)) as usize;
+        let post_offset =
+            center_offset.saturating_add(if center_x + 1 < draw.target_w { 4 } else { 0 });
+        let read_scratch_dword = |byte_offset: usize| -> u32 {
+            if byte_offset.saturating_add(core::mem::size_of::<u32>()) > warm.streamout_len {
+                return 0;
+            }
+            unsafe {
+                let ptr = (warm.streamout_virt as *const u8).add(byte_offset) as *const u32;
+                core::ptr::read_volatile(ptr)
+            }
+        };
+        Some((
+            read_scratch_dword(0),
+            read_scratch_dword(center_offset),
+            read_scratch_dword(post_offset),
+            center_offset,
+            post_offset,
+        ))
     } else {
         None
     };
@@ -1878,17 +3420,38 @@ fn submit_triangle_vf_draw_to_surface(
         RESULT_SLOT_FINAL_DWORD,
         submit_name,
     );
-    if let (Some(scratch_before), Some(stats_before)) = (scratch_rt_before, scratch_stats_before) {
+    if let (Some((scratch_before, center_before, post_before, center_offset, post_offset)), Some(stats_before)) =
+        (scratch_rt_before, scratch_stats_before)
+    {
         crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
-        let scratch_after = unsafe { core::ptr::read_volatile(warm.streamout_virt as *const u32) };
+        let read_scratch_dword = |byte_offset: usize| -> u32 {
+            if byte_offset.saturating_add(core::mem::size_of::<u32>()) > warm.streamout_len {
+                return 0;
+            }
+            unsafe {
+                let ptr = (warm.streamout_virt as *const u8).add(byte_offset) as *const u32;
+                core::ptr::read_volatile(ptr)
+            }
+        };
+        let scratch_after = read_scratch_dword(0);
+        let center_after = read_scratch_dword(center_offset);
+        let post_after = read_scratch_dword(post_offset);
         let delta = capture_triangle_stage_stats(dev).delta_since(stats_before);
-        let accepted = delta.ps_invocations > 0
-            || delta.cps_invocations > 0
-            || delta.ps_depth > 0
-            || scratch_after != scratch_before;
+        let ps_counter_accept =
+            delta.ps_invocations > 0 || delta.cps_invocations > 0 || delta.ps_depth > 0;
+        let rt_changed = scratch_after != scratch_before
+            || center_after != center_before
+            || post_after != post_before;
+        let artificial_markers = is_artificial_fragment_marker_submit_name(submit_name);
+        let artificial_pre_marker = center_after == RCS_ARTIFICIAL_FRAGMENT_PRE_COLOR;
+        let artificial_post_marker = post_after == RCS_ARTIFICIAL_FRAGMENT_POST_COLOR;
+        let possible_draw_window_write = artificial_markers
+            && artificial_post_marker
+            && center_after != RCS_ARTIFICIAL_FRAGMENT_PRE_COLOR;
+        let accepted = ps_counter_accept || (!artificial_markers && rt_changed) || possible_draw_window_write;
         record_fragment_boundary_probe(true, accepted);
         intel_render_focus_log!(
-            "intel/render: {} scratch-rt-fragment-proof accepted={} completed={} rt_gpu=0x{:X} size={}x{} pitch=0x{:X} before=0x{:08X} after=0x{:08X} changed={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=display_scanout\n",
+            "intel/render: {} scratch-rt-fragment-proof accepted={} completed={} rt_gpu=0x{:X} size={}x{} pitch=0x{:X} before=0x{:08X} after=0x{:08X} center_before=0x{:08X} center_after=0x{:08X} post_before=0x{:08X} post_after=0x{:08X} changed={} artificial={} artificial_pre_marker={} artificial_post_marker={} possible_draw_window_write={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=display_scanout\n",
             submit_name,
             accepted as u8,
             completed as u8,
@@ -1898,7 +3461,15 @@ fn submit_triangle_vf_draw_to_surface(
             draw.rt_pitch,
             scratch_before,
             scratch_after,
-            (scratch_after != scratch_before) as u8,
+            center_before,
+            center_after,
+            post_before,
+            post_after,
+            rt_changed as u8,
+            artificial_markers as u8,
+            artificial_pre_marker as u8,
+            artificial_post_marker as u8,
+            possible_draw_window_write as u8,
             delta.ps_invocations,
             delta.cps_invocations,
             delta.ps_depth,
@@ -1987,6 +3558,68 @@ fn oa_a_delta_gfx125(begin: &[u32], end: &[u32], index: usize) -> u64 {
     oa_counter_delta(before, after, bits)
 }
 
+fn log_raster_wm_oa_raw_deltas(submit_name: &'static str, begin: &[u32], end: &[u32]) {
+    let mut a = [0u64; 36];
+    let mut changed = 0usize;
+    let mut i = 0usize;
+    while i < a.len() {
+        a[i] = oa_a_delta_gfx125(begin, end, i);
+        if a[i] != 0 {
+            changed += 1;
+        }
+        i += 1;
+    }
+    intel_render_focus_log!(
+        "intel/render: {} oa-raw-a-delta changed={} a00={} a01={} a02={} a03={} a04={} a05={} a06={} a07={} a08={} a09={} a10={} a11={}\n",
+        submit_name,
+        changed,
+        a[0],
+        a[1],
+        a[2],
+        a[3],
+        a[4],
+        a[5],
+        a[6],
+        a[7],
+        a[8],
+        a[9],
+        a[10],
+        a[11],
+    );
+    intel_render_focus_log!(
+        "intel/render: {} oa-raw-a-delta a12={} a13={} a14={} a15={} a16={} a17={} a18={} a19={} a20={} a21={} a22={} a23={}\n",
+        submit_name,
+        a[12],
+        a[13],
+        a[14],
+        a[15],
+        a[16],
+        a[17],
+        a[18],
+        a[19],
+        a[20],
+        a[21],
+        a[22],
+        a[23],
+    );
+    intel_render_focus_log!(
+        "intel/render: {} oa-raw-a-delta a24={} a25={} a26={} a27={} a28={} a29={} a30={} a31={} a32={} a33={} a34={} a35={} note=raw-counter-index-audit\n",
+        submit_name,
+        a[24],
+        a[25],
+        a[26],
+        a[27],
+        a[28],
+        a[29],
+        a[30],
+        a[31],
+        a[32],
+        a[33],
+        a[34],
+        a[35],
+    );
+}
+
 fn log_raster_wm_oa_probe(
     submit_name: &'static str,
     warm: RenderWarmState,
@@ -2032,6 +3665,11 @@ fn log_raster_wm_oa_probe(
             || postps_fail_delta != 0
             || pixel_write_delta != 0
             || pixel_blend_delta != 0);
+    if reports_valid && !accepted {
+        let begin = begin.unwrap_or(&[]);
+        let end = end.unwrap_or(&[]);
+        log_raster_wm_oa_raw_deltas(submit_name, begin, end);
+    }
     record_fragment_boundary_probe(true, accepted);
     intel_render_focus_log!(
         "intel/render: {} raster-wm-input-proof accepted={} completed={} reports_valid={} begin_id=0x{:08X} end_id=0x{:08X} rt_gpu=0x{:X} size={}x{} pitch=0x{:X} raster_samples_delta={} ps_threads_delta={} samples_killed_delta={} postps_fail_delta={} pixel_write_delta={} pixel_blend_delta={} ps_delta={} cps_delta={} ps_depth_delta={} observable=oar-mi-rpc-a21 does_not_prove=rt_visible\n",
@@ -2438,10 +4076,8 @@ fn log_render_memory_proof(warm: RenderWarmState) {
 }
 
 fn ensure_smoke_buffers_mapped(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
-    if WARM_BUFFERS_MAPPED.load(Ordering::Acquire) {
-        return true;
-    }
     if !map_smoke_buffers(dev, warm) {
+        WARM_BUFFERS_MAPPED.store(false, Ordering::Release);
         return false;
     }
     if !MEMORY_PROOF_LOGGED.swap(true, Ordering::AcqRel) {
@@ -2590,6 +4226,14 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
             draw.target_w.saturating_sub(1),
             draw.target_h.saturating_sub(1),
         );
+    } else if geometry.screen_space_candidate() {
+        intel_render_focus_log!(
+            "intel/render: {} fragment-candidate-shape accepted=1 geometry={} topology=trilist sf_viewport_transform=0 screen_vertices=v0[0.5,0.5] v1[7.5,0.5] v2[0.5,7.5] target={}x{} coverage_contract=screen-space-scratch-triangle does_not_prove=raster_samples_or_ps\n",
+            submit_name,
+            geometry.label(),
+            draw.target_w,
+            draw.target_h,
+        );
     }
     let programmed_vs_urb_output_length = front_end_contract
         .vs_urb_output_length_override
@@ -2690,6 +4334,13 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
     let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
     let batch =
         unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
+    let batch_mode = if geometry.rect_candidate() {
+        TriangleBatchMode::DrawScreenSpaceRect
+    } else if geometry.screen_space_candidate() {
+        TriangleBatchMode::DrawScreenSpace
+    } else {
+        TriangleBatchMode::Draw
+    };
     let batch_tail_bytes = match encode_triangle_probe_batch(
         batch,
         warm,
@@ -2702,7 +4353,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         RCS_EXEC_RESULT_DRAW_PRE3D,
         RCS_EXEC_RESULT_DRAW_POST3D,
         RCS_EXEC_RESULT_DONE,
-        TriangleBatchMode::Draw,
+        batch_mode,
         StreamoutProofExperiment::PositionSlot1,
         front_end_contract,
         backend_probe_mode,
@@ -2796,6 +4447,7 @@ fn submit_3d_no_draw_probe(dev: crate::intel::Dev, warm: RenderWarmState) -> boo
         warm,
         GPU_VA_RESULT_BASE + (RESULT_SLOT_POST3D_DWORD as u64) * 4,
         RCS_EXEC_RESULT_3D_NO_DRAW_DONE,
+        None,
     ) else {
         crate::log!("intel/render: 3d-no-draw-probe batch build failed\n");
         return false;

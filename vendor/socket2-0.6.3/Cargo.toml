@@ -79,8 +79,6 @@ allowed_external_types = [
     "libc::*::socklen_t",
     "libc::sa_family_t",
     "libc::*::sa_family_t",
-    "windows_sys::Win32::Networking::WinSock::socklen_t",
-    "windows_sys::Win32::Networking::WinSock::ADDRESS_FAMILY",
 ]
 
 [features]
@@ -103,13 +101,3 @@ path = "../../crates/trueos-io"
 
 [target.'cfg(any(target_os = "trueos", target_os = "zkvm"))'.dependencies.spin]
 version = "0.10"
-
-[target."cfg(windows)".dependencies.windows-sys]
-version = ">=0.60, <0.62"
-features = [
-    "Win32_Foundation",
-    "Win32_Networking_WinSock",
-    "Win32_System_IO",
-    "Win32_System_Threading",
-    "Win32_System_WindowsProgramming",
-]

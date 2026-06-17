@@ -106,7 +106,8 @@ define_started_flags!(
     UI3_ORBITS_STARTED,
     UI3_ASSET_SERVICE_STARTED,
     UI3_SERVICE_STARTED,
-    I226_DIAGNOSTIC_DISPLAY_STARTED
+    I226_DIAGNOSTIC_DISPLAY_STARTED,
+    CPAL_SERVICE_STARTED
 );
 
 #[cfg(feature = "trueos_rdp")]
@@ -612,6 +613,15 @@ fn spawn_ui3_orbits(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |_ap1_spawner| crate::ui3::ui3_orbits::ui3_orbits_task())
 }
 
+fn spawn_cpal_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::tst::esynth::cpal_service_task())
+}
+
+#[inline]
+fn always_gate() -> bool {
+    true
+}
+
 #[inline]
 fn gfx_backend_boot_gate() -> bool {
     true
@@ -1070,7 +1080,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
 #[cfg(all(feature = "trueos_rdp", feature = "trueos_lumen"))]
 const TASK_COUNT: usize = 57;
 #[cfg(all(feature = "trueos_rdp", not(feature = "trueos_lumen")))]
-const TASK_COUNT: usize = 55;
+const TASK_COUNT: usize = 56;
 #[cfg(all(not(feature = "trueos_rdp"), feature = "trueos_lumen"))]
 const TASK_COUNT: usize = 56;
 #[cfg(all(not(feature = "trueos_rdp"), not(feature = "trueos_lumen")))]
@@ -1214,7 +1224,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::disabled("trueos-peer", 0, &TRUEOS_PEER_STARTED, spawn_trueos_peer),
     TaskSpec::disabled("esp-gate-registry", 0, &ESP_GATE_REGISTRY_STARTED, spawn_esp_gate_registry),
     TaskSpec::disabled("esp-piano-audio", 0, &ESP_PIANO_AUDIO_STARTED, spawn_esp_piano_audio),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "esp-piano-udp",
         crate::r::readiness::NET_ANY_CONFIGURED,
         &ESP_PIANO_UDP_STARTED,
@@ -1312,6 +1322,15 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         intel_full_ui3_gate,
         &UI3_ORBITS_STARTED,
         spawn_ui3_orbits,
+    ),
+    TaskSpec::enabled_gated(
+        "cpal_service",
+        crate::r::readiness::INTEL_HDA_READY
+            | crate::r::readiness::BACKGROUND_AP_WORKER_READY
+            | crate::r::readiness::TOKIO_RUNTIME_READY,
+        always_gate,
+        &CPAL_SERVICE_STARTED,
+        spawn_cpal_service,
     ),
     TaskSpec::disabled(
         "trueosfs-ready-hook",
