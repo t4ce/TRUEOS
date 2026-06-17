@@ -4,7 +4,6 @@ use super::ShellBackend2;
 
 #[derive(Clone, Copy)]
 pub(crate) enum CommandSessionKind {
-    BenchRunning(u64),
     FormatSure(u32),
     GpuCanvasRunning(u64),
     RemoveSure(u64),
@@ -13,7 +12,6 @@ pub(crate) enum CommandSessionKind {
 impl CommandSessionKind {
     pub(crate) const fn shows_session_activity(self) -> bool {
         match self {
-            Self::BenchRunning(_) => false,
             Self::FormatSure(_) => true,
             Self::GpuCanvasRunning(_) => false,
             Self::RemoveSure(_) => true,
@@ -22,7 +20,6 @@ impl CommandSessionKind {
 
     pub(crate) const fn accepts_broadcast_input(self) -> bool {
         match self {
-            Self::BenchRunning(_) => true,
             Self::FormatSure(_) => false,
             Self::GpuCanvasRunning(_) => true,
             Self::RemoveSure(_) => false,

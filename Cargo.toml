@@ -13,7 +13,6 @@ bench = false
 [features]
 default = ["trueos_rdp"]
 trueos_rdp = []
-trueos_lumen = ["dep:lumen"]
 
 [dependencies]
 x86_64 = { version = "0.15.4", default-features = false, features = ["instructions", "nightly"] }
@@ -82,7 +81,6 @@ socket2 = { version = "0.6.3", default-features = false }
 mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net"] }
 hyper = { version = "1.9.0", default-features = false, features = ["client", "http1", "server"] }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio", "tower-log", "original-uri"] }
-lumen = { path = "vendor/lumen", default-features = false, features = ["cpu-trueos"], optional = true }
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]

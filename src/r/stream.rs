@@ -511,7 +511,7 @@ pub async fn read_trueosfs_file_range_into_logged_async(
         let chunk_offset = offset
             .checked_add(read as u64)
             .ok_or(crate::disc::block::Error::OutOfBounds)?;
-        if crate::logflag::LUMEN_STORAGE_TRACE_LOGS {
+        if crate::logflag::STORAGE_TRACE_LOGS {
             crate::log!(
                 "{} read chunk start path={} offset={} chunk={} total_done={} total_need={}\n",
                 log_label,
@@ -547,7 +547,7 @@ pub async fn read_trueosfs_file_range_into_logged_async(
         }
         read = read.saturating_add(got);
 
-        if crate::logflag::LUMEN_STORAGE_TRACE_LOGS {
+        if crate::logflag::STORAGE_TRACE_LOGS {
             crate::log!(
                 "{} read chunk done path={} offset={} got={} total_done={} total_need={}\n",
                 log_label,

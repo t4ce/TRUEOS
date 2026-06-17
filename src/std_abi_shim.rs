@@ -195,7 +195,8 @@ fn posix_rc_i32(rc: c_int) -> c_int {
 
 fn posix_rc_isize(rc: isize) -> isize {
     if rc < 0 {
-        TRUEOS_ERRNO.store((rc.saturating_neg()).min(c_int::MAX as isize) as c_int, Ordering::Relaxed);
+        TRUEOS_ERRNO
+            .store((rc.saturating_neg()).min(c_int::MAX as isize) as c_int, Ordering::Relaxed);
         -1
     } else {
         TRUEOS_ERRNO.store(0, Ordering::Relaxed);
@@ -1327,10 +1328,8 @@ pub unsafe extern "C" fn setsockopt(
         return -1;
     }
 
-    let rc = crate::r::net::socket_cabi::trueos_cabi_socket_tcp_set_nonblocking(
-        socket_id as u32,
-        0,
-    );
+    let rc =
+        crate::r::net::socket_cabi::trueos_cabi_socket_tcp_set_nonblocking(socket_id as u32, 0);
     posix_rc_i32(if rc < 0 { rc } else { 0 })
 }
 

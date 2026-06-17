@@ -15,7 +15,6 @@ mod matrix;
 mod shell2_apps;
 mod shell2_cmd;
 mod shell2_cmd_registry;
-mod shell2_lumen;
 mod shell2_qjs;
 mod shell2_qjs_c4;
 mod shell2_qjs_c4_contract;
@@ -32,7 +31,6 @@ pub(crate) use crate::shell2::backends::{
 };
 pub(crate) use interface::{ShellBackend2, ShellIo2};
 use shell2_apps::AppsPromptMode;
-use shell2_lumen::LumenPromptMode;
 use shell2_qjs::QjsPromptMode;
 use shell2_surf::SurfPromptPrefix;
 
@@ -99,8 +97,6 @@ enum ShellMode2 {
     Apps,
     Qjs,
     Cmd,
-    #[cfg(feature = "trueos_lumen")]
-    Lumen,
 }
 
 impl ShellMode2 {
@@ -110,8 +106,6 @@ impl ShellMode2 {
             Self::Apps => "F2",
             Self::Qjs => "F3",
             Self::Cmd => "F4",
-            #[cfg(feature = "trueos_lumen")]
-            Self::Lumen => "F5",
         }
     }
 
@@ -121,22 +115,7 @@ impl ShellMode2 {
             Self::Apps => "apps",
             Self::Qjs => "qjs",
             Self::Cmd => "cmd",
-            #[cfg(feature = "trueos_lumen")]
-            Self::Lumen => "lumen",
         }
-    }
-}
-
-#[inline]
-fn is_lumen_mode(mode: ShellMode2) -> bool {
-    #[cfg(feature = "trueos_lumen")]
-    {
-        mode == ShellMode2::Lumen
-    }
-    #[cfg(not(feature = "trueos_lumen"))]
-    {
-        let _ = mode;
-        false
     }
 }
 
@@ -267,7 +246,6 @@ impl<'a> AlignedWriter<'a> {
         mode: ShellMode2,
         qjs_mode: QjsPromptMode,
         apps_mode: AppsPromptMode,
-        lumen_mode: LumenPromptMode,
         surf_prefix: SurfPromptPrefix,
         cmd_status_text: Option<&str>,
         running_go2_phase: usize,
@@ -288,9 +266,6 @@ impl<'a> AlignedWriter<'a> {
             self.qjs_status(qjs_mode);
         } else if mode == ShellMode2::Cmd {
             self.cmd_status(cmd_status_text);
-        } else if is_lumen_mode(mode) {
-            #[cfg(feature = "trueos_lumen")]
-            self.lumen_status(output_mask, lumen_mode);
         }
         self.io.raw_write_str(ecma48::RESET);
     }
@@ -314,11 +289,6 @@ impl<'a> AlignedWriter<'a> {
         self.push_mode_choice(&mut text, ShellMode2::Qjs, mode == ShellMode2::Qjs);
         self.push_plain(&mut text, " - ");
         self.push_mode_choice(&mut text, ShellMode2::Cmd, mode == ShellMode2::Cmd);
-        #[cfg(feature = "trueos_lumen")]
-        {
-            self.push_plain(&mut text, " - ");
-            self.push_mode_choice(&mut text, ShellMode2::Lumen, mode == ShellMode2::Lumen);
-        }
         text
     }
 
@@ -424,13 +394,6 @@ impl<'a> AlignedWriter<'a> {
         if !cmd_status_text.is_empty() {
             self.right_text(STATUS_ROW, cmd_status_text);
         }
-    }
-
-    fn lumen_status(&self, output_mask: u8, lumen_mode: LumenPromptMode) {
-        let mut text = AllocString::new();
-        let _ = lumen_mode;
-        self.push_plain(&mut text, shell2_lumen::lumen_status(output_mask).as_str());
-        self.right_text(STATUS_ROW, text.as_str());
     }
 
     fn push_plain(&self, out: &mut AllocString, text: &str) {
@@ -655,15 +618,6 @@ fn active_slot_label_visible_width(output_mask: u8) -> usize {
 }
 
 fn main_mode_visible_width() -> usize {
-    #[cfg(feature = "trueos_lumen")]
-    let modes = [
-        ShellMode2::Surf,
-        ShellMode2::Apps,
-        ShellMode2::Qjs,
-        ShellMode2::Cmd,
-        ShellMode2::Lumen,
-    ];
-    #[cfg(not(feature = "trueos_lumen"))]
     let modes = [
         ShellMode2::Surf,
         ShellMode2::Apps,
@@ -907,11 +861,10 @@ pub(crate) fn repaint_backend_screen(io: &'static dyn ShellBackend2) {
     let mode = ShellMode2::Cmd;
     let qjs_mode = QjsPromptMode::Repl;
     let apps_mode = AppsPromptMode::Start;
-    let lumen_mode = LumenPromptMode::Default;
     let surf_prefix = SurfPromptPrefix::Https;
 
     out.banner(output_mask, mode, time_text.as_str());
-    out.mode_status(output_mask, mode, qjs_mode, apps_mode, lumen_mode, surf_prefix, None, 0);
+    out.mode_status(output_mask, mode, qjs_mode, apps_mode, surf_prefix, None, 0);
     out.set_scroll_region(SCROLL_TOP_ROW);
 
     let transcript = current_transcript_for_task(io);
@@ -1007,7 +960,6 @@ async fn run_plain_section_status(
     mode: ShellMode2,
     qjs_mode: QjsPromptMode,
     apps_mode: AppsPromptMode,
-    lumen_mode: LumenPromptMode,
     surf_prefix: SurfPromptPrefix,
     cmd_status_text: Option<&str>,
     running_go2_phase: usize,
@@ -1032,7 +984,6 @@ async fn run_plain_section_status(
         mode,
         qjs_mode,
         apps_mode,
-        lumen_mode,
         surf_prefix,
         cmd_status_text,
         running_go2_phase,
@@ -1045,7 +996,6 @@ fn handle_submit(
     mode: ShellMode2,
     qjs_mode: QjsPromptMode,
     apps_mode: AppsPromptMode,
-    lumen_mode: LumenPromptMode,
     surf_prefix: SurfPromptPrefix,
     submitted: &str,
 ) -> HandleSubmitResult {
@@ -1080,12 +1030,6 @@ fn handle_submit(
         }
         ShellMode2::Apps => {
             shell2_apps::submit(spawner, io, apps_mode, submitted);
-            HandleSubmitResult::None
-        }
-        #[cfg(feature = "trueos_lumen")]
-        ShellMode2::Lumen => {
-            let target = matrix_target_for_backend(io);
-            shell2_lumen::submit(io, lumen_mode, &target, submitted);
             HandleSubmitResult::None
         }
     }
@@ -1126,9 +1070,6 @@ fn handle_command_session_input(
 ) -> CommandSessionInputResult {
     let target = matrix_target_for_slot(output_mask, &session.slot_id);
     match session.kind {
-        shell2_cmd::CommandSessionKind::BenchRunning(session_id) => {
-            crate::shell2::cmds::bench::handle_session_input(session_id, &target, submitted)
-        }
         shell2_cmd::CommandSessionKind::FormatSure(disc_id) => {
             crate::shell2::cmds::format::handle_session_input(
                 spawner, io, &target, submitted, disc_id,
@@ -1149,8 +1090,6 @@ fn mode_from_function_key(index: u16) -> Option<ShellMode2> {
         2 => Some(ShellMode2::Apps),
         3 => Some(ShellMode2::Qjs),
         4 => Some(ShellMode2::Cmd),
-        #[cfg(feature = "trueos_lumen")]
-        5 => Some(ShellMode2::Lumen),
         _ => None,
     }
 }
@@ -1161,24 +1100,18 @@ fn apply_mode_toggle(
     mode: ShellMode2,
     qjs_mode: QjsPromptMode,
     apps_mode: AppsPromptMode,
-    lumen_mode: LumenPromptMode,
     surf_prefix: SurfPromptPrefix,
     cmd_status_text: Option<&str>,
     running_go2_phase: usize,
     line: &HString<MAX_LINE>,
     minute_text: &str,
 ) {
-    if is_lumen_mode(mode) {
-        #[cfg(feature = "trueos_lumen")]
-        shell2_lumen::ensure_lumen_slot(output_mask);
-    }
     out.banner(output_mask, mode, minute_text);
     out.mode_status(
         output_mask,
         mode,
         qjs_mode,
         apps_mode,
-        lumen_mode,
         surf_prefix,
         cmd_status_text,
         running_go2_phase,
@@ -1195,7 +1128,6 @@ fn redraw_status_preserving_cursor(
     mode: ShellMode2,
     qjs_mode: QjsPromptMode,
     apps_mode: AppsPromptMode,
-    lumen_mode: LumenPromptMode,
     surf_prefix: SurfPromptPrefix,
     cmd_status_text: Option<&str>,
     running_go2_phase: usize,
@@ -1206,7 +1138,6 @@ fn redraw_status_preserving_cursor(
         mode,
         qjs_mode,
         apps_mode,
-        lumen_mode,
         surf_prefix,
         cmd_status_text,
         running_go2_phase,
@@ -1229,7 +1160,6 @@ fn apply_matrix_operator_and_refresh(
     mode: &mut ShellMode2,
     qjs_mode: QjsPromptMode,
     apps_mode: AppsPromptMode,
-    lumen_mode: LumenPromptMode,
     surf_prefix: SurfPromptPrefix,
     cmd_status_text: Option<&str>,
     running_go2_phase: usize,
@@ -1245,7 +1175,6 @@ fn apply_matrix_operator_and_refresh(
         *mode,
         qjs_mode,
         apps_mode,
-        lumen_mode,
         surf_prefix,
         cmd_status_text,
         running_go2_phase,
@@ -1361,7 +1290,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     out.banner(output_mask, mode, time_text.as_str());
     let mut qjs_mode = QjsPromptMode::Repl;
     let mut apps_mode = AppsPromptMode::Start;
-    let lumen_mode = LumenPromptMode::Default;
     let mut cmd_status_text: Option<AllocString> = None;
     let mut command_sessions: alloc::vec::Vec<CommandSession> = alloc::vec::Vec::new();
     let running_go2_phase = 0usize;
@@ -1370,7 +1298,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
         mode,
         qjs_mode,
         apps_mode,
-        lumen_mode,
         surf_prefix,
         cmd_status_text.as_deref(),
         running_go2_phase,
@@ -1389,13 +1316,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     let mut live_history_cursor: Option<usize> = None;
 
     loop {
-        command_sessions.retain(|session| match session.kind {
-            shell2_cmd::CommandSessionKind::BenchRunning(session_id) => {
-                crate::shell2::cmds::bench::session_alive(session_id)
-            }
-            _ => true,
-        });
-
         let matrix_revision = matrix::revision();
         if matrix_revision != last_matrix_revision {
             last_matrix_revision = matrix_revision;
@@ -1406,7 +1326,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 mode,
                 qjs_mode,
                 apps_mode,
-                lumen_mode,
                 surf_prefix,
                 cmd_status_text.as_deref(),
                 running_go2_phase,
@@ -1490,7 +1409,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                     mode,
                                     qjs_mode,
                                     apps_mode,
-                                    lumen_mode,
                                     surf_prefix,
                                     cmd_status_text.as_deref(),
                                     running_go2_phase,
@@ -1515,8 +1433,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             b'Q' => Some(ShellMode2::Apps),
                             b'R' => Some(ShellMode2::Qjs),
                             b'S' => Some(ShellMode2::Cmd),
-                            #[cfg(feature = "trueos_lumen")]
-                            b'T' => Some(ShellMode2::Lumen),
                             _ => None,
                         }
                     };
@@ -1528,7 +1444,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             mode,
                             qjs_mode,
                             apps_mode,
-                            lumen_mode,
                             surf_prefix,
                             cmd_status_text.as_deref(),
                             running_go2_phase,
@@ -1561,7 +1476,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 mode,
                                 qjs_mode,
                                 apps_mode,
-                                lumen_mode,
                                 surf_prefix,
                                 cmd_status_text.as_deref(),
                                 running_go2_phase,
@@ -1579,7 +1493,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 mode,
                                 qjs_mode,
                                 apps_mode,
-                                lumen_mode,
                                 surf_prefix,
                                 cmd_status_text.as_deref(),
                                 running_go2_phase,
@@ -1597,7 +1510,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 mode,
                                 qjs_mode,
                                 apps_mode,
-                                lumen_mode,
                                 surf_prefix,
                                 cmd_status_text.as_deref(),
                                 running_go2_phase,
@@ -1615,30 +1527,11 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                     mode,
                                     qjs_mode,
                                     apps_mode,
-                                    lumen_mode,
                                     surf_prefix,
                                     cmd_status_text.as_deref(),
                                     running_go2_phase,
                                 );
                                 out.prompt(output_mask);
-                            }
-                        }
-                        #[cfg(feature = "trueos_lumen")]
-                        ShellMode2::Lumen => {
-                            cmd_status_text = None;
-                            out.mode_status(
-                                output_mask,
-                                mode,
-                                qjs_mode,
-                                apps_mode,
-                                lumen_mode,
-                                surf_prefix,
-                                cmd_status_text.as_deref(),
-                                running_go2_phase,
-                            );
-                            out.prompt(output_mask);
-                            for ch in line.chars() {
-                                out.user_char(ch);
                             }
                         }
                     }
@@ -1653,10 +1546,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     matrix::record_user_input(submitted_raw);
                     let submitted = submitted_raw.trim();
                     cmd_status_text = None;
-                    if is_lumen_mode(mode) {
-                        #[cfg(feature = "trueos_lumen")]
-                        shell2_lumen::ensure_lumen_slot(output_mask);
-                    }
                     let active_slot = matrix::active_slot_id(output_mask);
                     let session_indexes =
                         find_command_session_indexes(command_sessions.as_slice(), &active_slot);
@@ -1671,7 +1560,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             &mut mode,
                             qjs_mode,
                             apps_mode,
-                            lumen_mode,
                             surf_prefix,
                             cmd_status_text.as_deref(),
                             running_go2_phase,
@@ -1686,7 +1574,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             mode,
                             qjs_mode,
                             apps_mode,
-                            lumen_mode,
                             surf_prefix,
                             cmd_status_text.as_deref(),
                             running_go2_phase,
@@ -1703,7 +1590,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             &mut mode,
                             qjs_mode,
                             apps_mode,
-                            lumen_mode,
                             surf_prefix,
                             cmd_status_text.as_deref(),
                             running_go2_phase,
@@ -1794,7 +1680,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 mode,
                                 qjs_mode,
                                 apps_mode,
-                                lumen_mode,
                                 surf_prefix,
                                 cmd_status_text.as_deref(),
                                 running_go2_phase,
@@ -1813,7 +1698,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 mode,
                                 qjs_mode,
                                 apps_mode,
-                                lumen_mode,
                                 surf_prefix,
                                 submitted,
                             ) {
@@ -1826,7 +1710,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                         mode,
                                         qjs_mode,
                                         apps_mode,
-                                        lumen_mode,
                                         surf_prefix,
                                         cmd_status_text.as_deref(),
                                         running_go2_phase,

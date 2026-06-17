@@ -63,7 +63,7 @@ pub(crate) const USB_AUDIO_DEBUG_LOGS: bool = false;
 pub(crate) const HID_DEBUG_REPORT_LOGS: bool = false;
 pub(crate) const USB_MASS_UAS_TRACE_LOGS: bool = false;
 pub(crate) const USB_XHCI_TRANSFER_TRACE_LOGS: bool = false;
-pub(crate) const LUMEN_STORAGE_TRACE_LOGS: bool = false;
+pub(crate) const STORAGE_TRACE_LOGS: bool = false;
 
 pub(crate) const NVME_VERBOSE: bool = false;
 

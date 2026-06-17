@@ -8,8 +8,8 @@ use crate::r::spawn_spec::{SpawnAttempt, TaskSpec};
 // NOTE: This file is intended to become the single source of truth for Embassy task startup.
 
 const SPAWN_SERVICE_AFTER_START_MS: u64 = 25;
-const SPAWN_SERVICE_PENDING_MS: u64 = 100;
-const SPAWN_SERVICE_IDLE_MS: u64 = 500;
+const SPAWN_SERVICE_PENDING_MS: u64 = 150;
+const SPAWN_SERVICE_IDLE_MS: u64 = 250;
 static BP_AUTOSTART_PENDING_MISSING: AtomicU32 = AtomicU32::new(0);
 
 /// Central task orchestrator ("FSM spawn service").
@@ -51,7 +51,6 @@ define_started_flags!(
     HYPER_HTTP1_PROBE_STARTED,
     WS_TIME_STARTED,
     ESP_GATE_STARTED,
-    TRUEOS_PEER_STARTED,
     ESP_GATE_REGISTRY_STARTED,
     ESP_PIANO_AUDIO_STARTED,
     ESP_PIANO_UDP_STARTED,
@@ -97,7 +96,6 @@ define_started_flags!(
     NET_TCP_SHELL_STARTED,
     UI3_SHELL_STARTED,
     LOGTOTCP_STARTED,
-    LUMEN_SERVICE_STARTED,
     SHADER_COMPILE_SERVICE_STARTED,
     SILK_SERVICE_STARTED,
     ATOMIC_BOMB_STARTED,
@@ -481,11 +479,6 @@ fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::globalog::logtotcp::logtotcp_task())
 }
 
-#[cfg(feature = "trueos_lumen")]
-fn spawn_lumen_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::lumen::lumen_service::lumen_service_task())
-}
-
 fn spawn_shader_compile_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::shader::shader_compile_service_task())
 }
@@ -517,11 +510,6 @@ fn spawn_ws_time(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_esp_gate(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::net::esp::esp_gate_task())
-}
-
-#[cfg(feature = "trueos_lumen")]
-fn spawn_trueos_peer(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::r::net::trueos_peer::trueos_peer_task())
 }
 
 fn spawn_esp_gate_registry(spawner: Spawner) -> SpawnAttempt {
@@ -902,7 +890,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         settle_ms: 750,
     },
     BlueprintAutostart {
-        enabled: false,
+        enabled: true,
         label: "flags",
         archive: "flags.bp",
         slot: "flg",
@@ -1077,8 +1065,7 @@ const GBOI_DEMO_READY: u32 = crate::r::readiness::BACKGROUND_AP_WORKER_READY;
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize =
-    54 + cfg!(feature = "trueos_rdp") as usize + cfg!(feature = "trueos_lumen") as usize;
+const TASK_COUNT: usize = 54 + cfg!(feature = "trueos_rdp") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled("smp-hlt-history", 0, &SMP_HLT_HISTORY_STARTED, spawn_smp_hlt_history),
@@ -1189,7 +1176,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_hyper_http1_probe,
     ),
     TaskSpec::enabled("app-vm-run-queue", 0, &APP_VM_RUN_QUEUE_STARTED, spawn_app_vm_run_queue),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "bp-autostart",
         BP_AUTOSTART_READY,
         &BP_AUTOSTART_STARTED,
@@ -1208,8 +1195,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_usb_controller_tasks,
     ),
     TaskSpec::disabled("esp-gate", 0, &ESP_GATE_STARTED, spawn_esp_gate),
-    #[cfg(feature = "trueos_lumen")]
-    TaskSpec::disabled("trueos-peer", 0, &TRUEOS_PEER_STARTED, spawn_trueos_peer),
     TaskSpec::disabled("esp-gate-registry", 0, &ESP_GATE_REGISTRY_STARTED, spawn_esp_gate_registry),
     TaskSpec::disabled("esp-piano-audio", 0, &ESP_PIANO_AUDIO_STARTED, spawn_esp_piano_audio),
     TaskSpec::disabled(
@@ -1322,13 +1307,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         &TRUEOSFS_READY_HOOK_STARTED,
         spawn_trueosfs_ready_hook,
-    ),
-    #[cfg(feature = "trueos_lumen")]
-    TaskSpec::disabled(
-        "lumen-service",
-        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
-        &LUMEN_SERVICE_STARTED,
-        spawn_lumen_service,
     ),
     TaskSpec::enabled("uart-shell", 0, &UART_SHELL_STARTED, spawn_uart_shell),
     TaskSpec::enabled("net-tcp-shell", 0, &NET_TCP_SHELL_STARTED, spawn_net_tcp_shell),

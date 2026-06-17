@@ -1,7 +1,6 @@
 use alloc::string::String as AllocString;
 
 pub(crate) mod acpi;
-pub(crate) mod bench;
 pub(crate) mod c4;
 pub(crate) mod disc;
 pub(crate) mod format;

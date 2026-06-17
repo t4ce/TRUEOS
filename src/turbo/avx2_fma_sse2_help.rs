@@ -234,7 +234,7 @@ pub(crate) async fn bf16_helper_boot_exercise_task() {
     }
     let elapsed_ticks = embassy_time_driver::now().saturating_sub(start);
     crate::log!(
-        "lumen-simd-help: bf16 helper boot exercise rows={} k_dim={} scalar=0x{:08X} scalar_lane={} dispatch=0x{:08X} dispatch_lane={} sse2=0x{:08X} avx2=0x{:08X} sse2_ran={} avx2_ran={} max_abs_delta={:.8} ticks={}\n",
+        "bf16-simd-help: boot exercise rows={} k_dim={} scalar=0x{:08X} scalar_lane={} dispatch=0x{:08X} dispatch_lane={} sse2=0x{:08X} avx2=0x{:08X} sse2_ran={} avx2_ran={} max_abs_delta={:.8} ticks={}\n",
         last.rows,
         last.k_dim,
         last.scalar_checksum,
