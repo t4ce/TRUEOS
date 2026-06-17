@@ -40,7 +40,6 @@ define_started_flags!(
     NET_POLL_STARTED,
     NET_SERVICE_STARTED,
     NET_CACHE_SERVICE_STARTED,
-    SHARED_TOKIO_RUNTIME_STARTED,
     TLS_SOCKET_SERVICE_STARTED,
     NTP_SYNC_STARTED,
     SNTP_SERVICE_STARTED,
@@ -451,10 +450,6 @@ fn spawn_net_cache_service(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_tls_socket_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::net::tls_socket::tls_socket_service_task())
-}
-
-fn spawn_shared_tokio_runtime(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::t::shared_tokio_runtime_service_task())
 }
 
 fn spawn_ntp_sync(spawner: Spawner) -> SpawnAttempt {
@@ -1082,14 +1077,8 @@ const GBOI_DEMO_READY: u32 = crate::r::readiness::BACKGROUND_AP_WORKER_READY;
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-#[cfg(all(feature = "trueos_rdp", feature = "trueos_lumen"))]
-const TASK_COUNT: usize = 57;
-#[cfg(all(feature = "trueos_rdp", not(feature = "trueos_lumen")))]
-const TASK_COUNT: usize = 56;
-#[cfg(all(not(feature = "trueos_rdp"), feature = "trueos_lumen"))]
-const TASK_COUNT: usize = 56;
-#[cfg(all(not(feature = "trueos_rdp"), not(feature = "trueos_lumen")))]
-const TASK_COUNT: usize = 54;
+const TASK_COUNT: usize =
+    54 + cfg!(feature = "trueos_rdp") as usize + cfg!(feature = "trueos_lumen") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled("smp-hlt-history", 0, &SMP_HLT_HISTORY_STARTED, spawn_smp_hlt_history),
@@ -1123,12 +1112,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("net-poll-tasks", 0, &NET_POLL_STARTED, spawn_net_poll_tasks),
     TaskSpec::enabled("net-service", 0, &NET_SERVICE_STARTED, spawn_net_service),
     TaskSpec::enabled("net-cache-service", 0, &NET_CACHE_SERVICE_STARTED, spawn_net_cache_service),
-    TaskSpec::enabled(
-        "shared-tokio-runtime",
-        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        &SHARED_TOKIO_RUNTIME_STARTED,
-        spawn_shared_tokio_runtime,
-    ),
     TaskSpec::enabled(
         "tls-socket-service",
         crate::r::readiness::NET_ANY_CONFIGURED,
@@ -1206,7 +1189,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_hyper_http1_probe,
     ),
     TaskSpec::enabled("app-vm-run-queue", 0, &APP_VM_RUN_QUEUE_STARTED, spawn_app_vm_run_queue),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "bp-autostart",
         BP_AUTOSTART_READY,
         &BP_AUTOSTART_STARTED,
@@ -1328,12 +1311,9 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &UI3_ORBITS_STARTED,
         spawn_ui3_orbits,
     ),
-    TaskSpec::enabled_gated(
+    TaskSpec::enabled(
         "cpal_service",
-        crate::r::readiness::INTEL_HDA_READY
-            | crate::r::readiness::BACKGROUND_AP_WORKER_READY
-            | crate::r::readiness::TOKIO_RUNTIME_READY,
-        always_gate,
+        crate::r::readiness::INTEL_HDA_READY,
         &CPAL_SERVICE_STARTED,
         spawn_cpal_service,
     ),

@@ -1991,6 +1991,20 @@ pub unsafe extern "C" fn trueos_cpal_hda_push_samples(
     }
 }
 
+#[embassy_executor::task(pool_size = 4)]
+async fn cpal_output_pump_task(
+    ctx: usize,
+    pump: unsafe extern "C" fn(usize) -> i32,
+    period_ms: u64,
+) {
+    loop {
+        if unsafe { pump(ctx) } != 0 {
+            break;
+        }
+        embassy_time::Timer::after(embassy_time::Duration::from_millis(period_ms)).await;
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cpal_spawn_output_pump(
     ctx: usize,
@@ -1998,16 +2012,20 @@ pub extern "C" fn trueos_cpal_spawn_output_pump(
     period_ms: u64,
 ) -> i32 {
     let period_ms = period_ms.max(1);
-    match crate::t::spawn_on_shared_tokio(move || async move {
-        loop {
-            if unsafe { pump(ctx) } != 0 {
-                break;
-            }
-            tokio::time::sleep(core::time::Duration::from_millis(period_ms)).await;
+    let caller_slot = crate::percpu::current_slot() as u32;
+    let spawner = match crate::workers::spawner_for_slot(caller_slot)
+        .or_else(|| crate::workers::spawner_for_slot(0))
+    {
+        Some(spawner) => spawner,
+        None => return -1,
+    };
+
+    match cpal_output_pump_task(ctx, pump, period_ms) {
+        Ok(token) => {
+            spawner.spawn(token);
+            0
         }
-    }) {
-        Ok(()) => 0,
-        Err(_) => -1,
+        Err(_) => -2,
     }
 }
 

@@ -47,6 +47,7 @@ static INTERNAL_NETBENCH_NEXT_ID: AtomicU32 = AtomicU32::new(1);
 static INTERNAL_NETBENCH_REQS: spin::Mutex<Vec<InternalNetbenchRequest>> =
     spin::Mutex::new(Vec::new());
 static NET_TX_TAP_TCP_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
+static LOGTOTCP_TX4_SAMPLE_COUNT: AtomicU32 = AtomicU32::new(0);
 static LOGTOTCP_SEND_FLUSH_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
 static LOGTOTCP_SEND_FLUSH_SUPPRESSED: AtomicU64 = AtomicU64::new(0);
 static LOGTOTCP_SEND_FLUSH_BYTES: AtomicU64 = AtomicU64::new(0);
@@ -60,6 +61,25 @@ fn net_log_once_per_second(last: &AtomicU64) -> bool {
     }
     last.compare_exchange(prev, now, Ordering::Relaxed, Ordering::Relaxed)
         .is_ok()
+}
+
+fn should_log_tx4_summary(proto: u8, buf: &[u8], l2_off: usize, ihl: usize) -> bool {
+    const LOGTOTCP_TX4_SAMPLE_EVERY: u32 = 10;
+
+    if proto != 6 || buf.len() < l2_off + ihl + 20 {
+        return true;
+    }
+
+    let tcp_off = l2_off + ihl;
+    let sport = u16::from_be_bytes([buf[tcp_off], buf[tcp_off + 1]]);
+    if sport != crate::r::net::ports::LOGTOTCP_TCP_PORT {
+        return true;
+    }
+
+    LOGTOTCP_TX4_SAMPLE_COUNT
+        .fetch_add(1, Ordering::Relaxed)
+        % LOGTOTCP_TX4_SAMPLE_EVERY
+        == 0
 }
 
 fn internal_netbench_format_speed(bps: u64) -> alloc::string::String {
@@ -1139,7 +1159,9 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
 
                             // Lightweight IPv4 TX summary (rate-limited): lets us see
                             // the actual source IP used after DHCP reconfiguration.
-                            if new_dev_total <= 256 {
+                            if new_dev_total <= 256
+                                && should_log_tx4_summary(proto, &buf, l2_off, ihl)
+                            {
                                 let src_ip = [
                                     buf[l2_off + 12],
                                     buf[l2_off + 13],
