@@ -680,6 +680,9 @@ fn push_event(target: &'static str, event: NetEvent) -> bool {
     let guard = APP_QUEUES.lock();
     if let Some(entry) = guard.iter().find(|e| e.name == target) {
         let ok = entry.events.push(event).is_ok();
+        if ok && is_tcp_signal {
+            crate::mio_compat::notify_net_event();
+        }
         if !ok && is_tcp_signal {
             let n = DROP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
             if n <= 2 || n.is_power_of_two() {

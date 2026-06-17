@@ -168,6 +168,28 @@ feature! {
         {
             use crate::io::Read;
 
+            #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+            {
+                let b = unsafe {
+                    &mut *(buf.unfilled_mut() as *mut [core::mem::MaybeUninit<u8>] as *mut [u8])
+                };
+
+                match self.io.as_ref().unwrap().read(b) {
+                    Ok(n) => {
+                        unsafe { buf.assume_init(n) };
+                        buf.advance(n);
+                        return Poll::Ready(Ok(()));
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        crate::platform::poll_once();
+                        cx.waker().wake_by_ref();
+                        return Poll::Pending;
+                    }
+                    Err(e) => return Poll::Ready(Err(e)),
+                }
+            }
+
+            #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
             loop {
                 let evt = ready!(self.registration.poll_read_ready(cx))?;
 
@@ -232,6 +254,20 @@ feature! {
         {
             use crate::io::Write;
 
+            #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+            {
+                match self.io.as_ref().unwrap().write(buf) {
+                    Ok(n) => return Poll::Ready(Ok(n)),
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        crate::platform::poll_once();
+                        cx.waker().wake_by_ref();
+                        return Poll::Pending;
+                    }
+                    Err(e) => return Poll::Ready(Err(e)),
+                }
+            }
+
+            #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
             loop {
                 let evt = ready!(self.registration.poll_write_ready(cx))?;
 

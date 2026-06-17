@@ -27,6 +27,11 @@ use std::sync::Arc;
 
 use crate::{event, sys, Events, Interest, Token};
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+unsafe extern "Rust" {
+    fn trueos_tokio_platform_log(level: u32, bytes: *const u8, len: usize);
+}
+
 /// Polls for readiness events on all registered values.
 ///
 /// `Poll` allows a program to monitor a large number of [`event::Source`]s,
@@ -440,6 +445,29 @@ impl Poll {
     ///
     /// [struct]: #
     pub fn poll(&mut self, events: &mut Events, timeout: Option<Duration>) -> io::Result<()> {
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        {
+            use core::sync::atomic::{AtomicU32, Ordering};
+            static MIO_POLL_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
+            let count = MIO_POLL_LOG_COUNT.fetch_add(1, Ordering::Relaxed);
+            if count < 16 || count.is_power_of_two() {
+                let timeout_ns = timeout
+                    .map(|duration| {
+                        duration
+                            .as_secs()
+                            .saturating_mul(1_000_000_000)
+                            .saturating_add(u64::from(duration.subsec_nanos()))
+                    })
+                    .unwrap_or(u64::MAX);
+                let msg = alloc::format!(
+                    "mio: poll enter count={} timeout_ns={} cap={}\n",
+                    count,
+                    timeout_ns,
+                    events.capacity()
+                );
+                unsafe { trueos_tokio_platform_log(3, msg.as_ptr(), msg.len()) };
+            }
+        }
         self.registry.selector.select(events.sys(), timeout)
     }
 }

@@ -186,6 +186,24 @@ impl Driver {
 
         let events = &mut self.events;
 
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        crate::platform::log(
+            3,
+            alloc::format!(
+                "tokio-platform: io-driver turn max_wait_ns={} events_cap={}\n",
+                max_wait
+                    .map(|duration| {
+                        duration
+                            .as_secs()
+                            .saturating_mul(1_000_000_000)
+                            .saturating_add(u64::from(duration.subsec_nanos()))
+                    })
+                    .unwrap_or(u64::MAX),
+                events.capacity()
+            )
+            .as_bytes(),
+        );
+
         // Block waiting for an event to happen, peeling out how many events
         // happened.
         match self.poll.poll(events, max_wait) {

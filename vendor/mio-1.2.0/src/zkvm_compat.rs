@@ -2,18 +2,9 @@ use ::core::fmt;
 use core::time::Duration;
 use trueos_io as io;
 
-unsafe extern "C" {
-    fn trueos_cabi_poll_once();
-}
-
 #[allow(dead_code)]
 pub(crate) fn unsupported_io_error(detail: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::Other, detail)
-}
-
-#[inline]
-pub(crate) fn poll_once() {
-    unsafe { trueos_cabi_poll_once() }
 }
 
 #[inline]

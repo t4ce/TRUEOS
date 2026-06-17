@@ -1464,6 +1464,9 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "trueos_mio_selector_poll" => {
             Some(crate::mio_compat::trueos_mio_selector_poll as *const () as usize)
         }
+        "trueos_mio_selector_wake" => {
+            Some(crate::mio_compat::trueos_mio_selector_wake as *const () as usize)
+        }
         _ => None,
     }
 }

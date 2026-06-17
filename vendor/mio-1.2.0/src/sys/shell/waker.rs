@@ -17,6 +17,8 @@ impl Waker {
     }
 
     pub fn wake(&self) -> io::Result<()> {
-        self.selector.push_waker_event(self.token)
+        self.selector.push_waker_event(self.token)?;
+        crate::zkvm_net::selector_wake(self.selector.id());
+        Ok(())
     }
 }

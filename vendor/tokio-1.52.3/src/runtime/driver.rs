@@ -153,6 +153,17 @@ cfg_io_driver! {
         #[cfg(loom)]
         assert!(!enabled);
 
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        crate::platform::log(
+            3,
+            alloc::format!(
+                "tokio-platform: create_io_stack enabled={} nevents={}\n",
+                enabled,
+                nevents
+            )
+            .as_bytes(),
+        );
+
         let ret = if enabled {
             let (io_driver, io_handle) = crate::runtime::io::Driver::new(nevents)?;
 
