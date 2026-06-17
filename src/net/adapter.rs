@@ -76,10 +76,7 @@ fn should_log_tx4_summary(proto: u8, buf: &[u8], l2_off: usize, ihl: usize) -> b
         return true;
     }
 
-    LOGTOTCP_TX4_SAMPLE_COUNT
-        .fetch_add(1, Ordering::Relaxed)
-        % LOGTOTCP_TX4_SAMPLE_EVERY
-        == 0
+    LOGTOTCP_TX4_SAMPLE_COUNT.fetch_add(1, Ordering::Relaxed) % LOGTOTCP_TX4_SAMPLE_EVERY == 0
 }
 
 fn internal_netbench_format_speed(bps: u64) -> alloc::string::String {
@@ -1135,7 +1132,7 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                         buf[l2_off + 26],
                         buf[l2_off + 27],
                     ];
-                    crate::log_info!(target: "net";
+                    crate::log_trace!(target: "net";
                         "net: tx-tap dev={} arp op={} spa={}.{}.{}.{} tpa={}.{}.{}.{}\n",
                         self.index,
                         opcode,
@@ -1174,7 +1171,7 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                                     buf[l2_off + 18],
                                     buf[l2_off + 19],
                                 ];
-                                crate::log_info!(target: "net";
+                                crate::log_trace!(target: "net";
                                     "net: tx4 dev={} {}.{}.{}.{} -> {}.{}.{}.{} proto={} len={}\n",
                                     self.index,
                                     src_ip[0],
@@ -1208,7 +1205,7 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                                     let icmp_off = l2_off + ihl;
                                     let icmp_type = buf.get(icmp_off).copied().unwrap_or(0);
                                     let icmp_code = buf.get(icmp_off + 1).copied().unwrap_or(0);
-                                    crate::log_info!(target: "net";
+                                    crate::log_trace!(target: "net";
                                         "net: tx-tap dev={} icmp4 {}.{}.{}.{} -> {}.{}.{}.{} type={} code={}\n",
                                         self.index,
                                         src_ip[0],
@@ -1248,7 +1245,7 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                                     let sampled_data = crate::logflag::NET_LOG_TX_TAP
                                         && net_log_once_per_second(&NET_TX_TAP_TCP_LAST_LOG_NS);
                                     if control || sampled_data {
-                                        crate::log_info!(target: "net";
+                                        crate::log_trace!(target: "net";
                                             "net: tx-tap dev={} tcp {}.{}.{}.{}:{} -> {}.{}.{}.{}:{} flags=0x{:02x}\n",
                                             self.index,
                                             src_ip[0],
@@ -1280,7 +1277,7 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                             let sport = u16::from_be_bytes([buf[udp_off], buf[udp_off + 1]]);
                             let dport = u16::from_be_bytes([buf[udp_off + 2], buf[udp_off + 3]]);
                             if crate::logflag::NET_LOG_DHCP_VERBOSE && sport == 68 && dport == 67 {
-                                crate::log_info!(target: "net";
+                                crate::log_trace!(target: "net";
                                     "net: tx-tap dev={} saw dhcp client (udp 68->67)\n",
                                     self.index
                                 );

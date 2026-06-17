@@ -239,6 +239,19 @@ fn once_per_second(last: &AtomicU64) -> bool {
         .is_ok()
 }
 
+fn should_log_tcp_rx_queue_growth(before: usize, after: usize) -> bool {
+    const LOG_START_BYTES: usize = 2_000;
+    const LOG_STEP_BYTES: usize = 10_000;
+
+    after >= LOG_START_BYTES
+        && (before < LOG_START_BYTES || before / LOG_STEP_BYTES != after / LOG_STEP_BYTES)
+}
+
+fn should_log_tcp_read_would_block() -> bool {
+    static TCP_READ_WOULD_BLOCK_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
+    once_per_second(&TCP_READ_WOULD_BLOCK_LAST_LOG_NS)
+}
+
 pub(crate) fn notify_net_event() {
     MIO_SELECTOR_WAIT.notify_all();
 }
@@ -902,25 +915,33 @@ impl MioCompat {
             }
             api::Event::TcpData { handle, data } => {
                 if let Some(socket) = self.socket_by_handle_mut(handle) {
-                    if crate::logflag::NET_LOG_TCP_FLOW && socket.kind == MioSocketKind::TcpListener {
+                    let queued_before = socket.rx_stream.len();
+                    let data_len = data.as_slice().len();
+                    let queued_after = queued_before.saturating_add(data_len);
+                    let log_queue = should_log_tcp_rx_queue_growth(queued_before, queued_after);
+
+                    if log_queue
+                        && crate::logflag::NET_LOG_TCP_FLOW
+                        && socket.kind == MioSocketKind::TcpListener
+                    {
                         crate::log!(
                             "mio_compat: tcp data queued on listener socket={} handle={} bytes={} queued_before={}\n",
                             socket.id,
                             handle.0,
-                            data.as_slice().len(),
-                            socket.rx_stream.len()
+                            data_len,
+                            queued_before
                         );
-                    } else if probe_tcp_socket(socket) {
+                    } else if log_queue && probe_tcp_socket(socket) {
                         crate::log!(
                             "mio_compat: tcp data socket={} handle={} bytes={} queued_before={}\n",
                             socket.id,
                             handle.0,
-                            data.as_slice().len(),
-                            socket.rx_stream.len()
+                            data_len,
+                            queued_before
                         );
                     }
                     socket.rx_stream.extend(data.as_slice().iter().copied());
-                    if probe_tcp_socket(socket) {
+                    if log_queue && probe_tcp_socket(socket) {
                         crate::log!(
                             "mio_compat: tcp data queued socket={} handle={} queued_after={}\n",
                             socket.id,
@@ -1653,7 +1674,7 @@ pub(crate) unsafe fn mio_tcp_stream_read_host(
             return STATUS_INVALID_INPUT as isize;
         }
         if socket.rx_stream.is_empty() {
-            if probe_tcp_socket(socket) {
+            if probe_tcp_socket(socket) && should_log_tcp_read_would_block() {
                 crate::log!(
                     "mio_compat: tcp read would-block socket={} cap={} closed={}\n",
                     socket.id,
@@ -2382,13 +2403,7 @@ pub(crate) unsafe fn mio_selector_poll_host(
                             accepts += socket.accept_queue.len();
                         }
                     }
-                    (
-                        regs,
-                        compat.sockets.len(),
-                        listeners,
-                        accepts,
-                        compat.pending_opens.len(),
-                    )
+                    (regs, compat.sockets.len(), listeners, accepts, compat.pending_opens.len())
                 });
                 crate::log!(
                     "mio_compat: selector-park selector={} owner={} timeout_ns={} regs={} sockets={} listeners={} accepts={} pending_opens={}\n",

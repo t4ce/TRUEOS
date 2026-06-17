@@ -1501,8 +1501,7 @@ fn verify_guest_mapping_chain(label: &str, guest_va: u64) -> Result<(), &'static
         return Err("guest verify pml4");
     }
 
-    let pdpte = unsafe { read_phys_page_entry(pde_addr(pml4e), pdpt_index(guest_va)) }
-        .unwrap_or(0);
+    let pdpte = unsafe { read_phys_page_entry(pde_addr(pml4e), pdpt_index(guest_va)) }.unwrap_or(0);
     if pdpte & PT_ENTRY_PRESENT == 0 {
         hvlogf(format_args!(
             "hv: vm{} reporting: guest-verify {} broken=pdpt va=0x{:016X} region={} idx[pml4={},pdpt={},pd={},pt={}] pml4e=0x{:016X} pdpte=0x{:016X}",

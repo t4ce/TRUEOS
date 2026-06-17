@@ -344,11 +344,11 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         OP_BP_TOKIO_BLOCKING_SPAWN => {
             let rc = unsafe {
-                crate::t::trueos_tokio_worker::spawn_guest_blocking_job_from_raw(
+                crate::t::trueos_tokio_worker::spawn_vmx_thread_from_raw(
                     vm_id,
                     arg0 as usize,
                     arg1 as usize,
-                    "guest-tokio-blocking-job",
+                    "vmx-thread",
                 )
             };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);

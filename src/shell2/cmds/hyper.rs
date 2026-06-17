@@ -18,8 +18,6 @@ const HYPER_MENU_ROWS: [[&str; 2]; 3] = [
     ["probe", "Describe the background HTTP/1 probe service"],
     ["<url> [path]", "Download URL into TRUEOSFS"],
 ];
-const HYPER_DOWNLOAD_TIMEOUT_MS: u32 = 120_000;
-const HYPER_DOWNLOAD_MAX_BYTES: usize = 16 * 1024 * 1024 * 1024;
 
 fn line(io: &'static dyn ShellBackend2, text: &str) {
     print_shell_line(io, text);
@@ -96,58 +94,7 @@ fn submit_download(spawner: &Spawner, io: &'static dyn ShellBackend2, url: Strin
 async fn hyper_download_task(target: MatrixTarget, url: String, path: String) {
     let log = |line: &str| print_matrix_target_line(&target, line);
 
-    crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
-
-    let result = if url.starts_with("http://") {
-        let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-            log("hyper: no TRUEOSFS root");
-            set_matrix_target_active(&target, false);
-            return;
-        };
-        crate::t::run_on_shared_tokio({
-            let url = url.clone();
-            let path = path.clone();
-            move || async move {
-                crate::t::net::http_stream::fetch_http_to_file_hyper_async(
-                    url.as_str(),
-                    disk,
-                    path.as_str(),
-                    HYPER_DOWNLOAD_TIMEOUT_MS,
-                    HYPER_DOWNLOAD_MAX_BYTES,
-                )
-                .await
-                .map_err(|err| alloc::format!("{:?}", err))
-            }
-        })
-        .await
-        .map_err(|err| alloc::format!("shared tokio unavailable ({:?})", err))
-        .and_then(|inner| inner)
-    } else if url.starts_with("https://") {
-        crate::t::run_on_shared_tokio({
-            let url = url.clone();
-            let path = path.clone();
-            move || async move {
-                crate::t::net::https::fetch_https_to_file_hyper_async(
-                    url.as_str(),
-                    path.as_str(),
-                    HYPER_DOWNLOAD_TIMEOUT_MS,
-                    HYPER_DOWNLOAD_MAX_BYTES,
-                )
-                .await
-                .map_err(|err| alloc::format!("rc={}", err))
-            }
-        })
-        .await
-        .map_err(|err| alloc::format!("shared tokio unavailable ({:?})", err))
-        .and_then(|inner| inner)
-    } else {
-        Err(String::from("unsupported URL scheme"))
-    };
-
-    match result {
-        Ok(()) => log(alloc::format!("hyper: saved {}", path).as_str()),
-        Err(err) => log(alloc::format!("hyper: download failed ({})", err).as_str()),
-    }
+    log(alloc::format!("hyper: download disabled ({} -> {})", url, path).as_str());
     set_matrix_target_active(&target, false);
 }
 

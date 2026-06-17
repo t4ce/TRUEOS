@@ -95,11 +95,6 @@ fn dispatch_update(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str
     super::cmds::update::try_parse(spawner, io, &mut args)
 }
 
-fn dispatch_bench(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    let mut args = rest.split_whitespace();
-    super::cmds::bench::try_parse(spawner, io, &mut args)
-}
-
 fn dispatch_c4(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::c4::try_parse(io, rest)
 }
@@ -157,15 +152,6 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_acpi,
         tool_description: Some("Run ACPI power actions."),
         tool_parameters_json: Some(TOOL_JSON_ACPI),
-    },
-    BuiltinShell2CmdEntry {
-        name: "bench",
-        mode: "cmd",
-        color: None,
-        advertised: true,
-        handler: dispatch_bench,
-        tool_description: None,
-        tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {
         name: "c4",

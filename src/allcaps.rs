@@ -18,19 +18,6 @@ pub mod probes {
     pub const TOKIO_NET_WRITABLE_TIMEOUT_MS: u64 = 1000;
 }
 
-pub mod lumen {
-    pub const RUNTIME_DIAGNOSTIC_PROBES: bool = false;
-    pub const ROUTE_BF16_MATVEC_TO_NET_BACKEND: bool = false;
-    pub const SHADOW_BF16_MATVEC_TO_NET_BACKEND: bool = false;
-    pub const NET_BF16_MATVEC_SHADOW_MAX_JOBS_PER_BOOT: u64 = 8;
-    pub const NET_BF16_MATVEC_SHADOW_FRAME_QUEUE_CAP: usize = 96;
-    pub const NET_BF16_MATVEC_SHADOW_X_CHUNK_BYTES: usize = 3000;
-    pub const NET_BF16_MATVEC_SHADOW_COMPUTE_PROOF: bool = true;
-    pub const NET_BF16_MATVEC_SHADOW_COMPUTE_PROOF_ROWS: usize = 4;
-    pub const NET_BF16_MATVEC_RESULT_CHUNK_BYTES: usize = 3000;
-    pub const NET_BF16_MATVEC_RESULT_WAIT_TIMEOUT_MS: u64 = 10000;
-}
-
 pub mod blueprint {
     pub const PORTAL_IMAGE_CAP_BYTES: usize = 16 * 1024 * 1024;
 }

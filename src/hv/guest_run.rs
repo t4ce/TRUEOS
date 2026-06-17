@@ -370,10 +370,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         }
     }
 
-    crate::hv::hvlogf(format_args!(
-        "run: guest app fs path alloc begin vm={}",
-        vm_id
-    ));
+    crate::hv::hvlogf(format_args!("run: guest app fs path alloc begin vm={}", vm_id));
     let Some((app_fs_root, app_fs_common)) =
         crate::allocators::with_hv_guest_alloc_domain(vm_id, || {
             (
