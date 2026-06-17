@@ -5,7 +5,7 @@ use core::ffi::CStr;
 use core::ffi::{c_char, c_int, c_long, c_void};
 use core::ptr;
 
-pub use v::vcabi::{
+pub use v::qjs_abi::{
     TrueosHidCursorEvent, TrueosHidKeyboardSample, TrueosMouseState, trueos_cabi_fs_read_file,
     trueos_cabi_fs_remove, trueos_cabi_fs_write_abort, trueos_cabi_fs_write_begin,
     trueos_cabi_fs_write_chunk, trueos_cabi_fs_write_finish,
@@ -21,6 +21,10 @@ pub use v::vcabi::{
     trueos_cabi_shell_command_registry_json, trueos_cabi_shell1_submit_input,
     trueos_cabi_shell2_print_line, trueos_cabi_trueosfs_json_all,
     trueos_cabi_trueosfs_primary_html_tree, trueos_cabi_uart1_shell_write,
+    trueos_cabi_alloc, trueos_cabi_boot_timestamp_secs,
+    trueos_cabi_browser_asset_ref_push, trueos_cabi_browser_asset_refs_begin,
+    trueos_cabi_calloc, trueos_cabi_free, trueos_cabi_malloc_usable_size,
+    trueos_cabi_realloc,
 };
 pub use v::vshell::{
     shell_command_registry_json, shell1_submit_input, shell2_print_line, uart1_shell_write,
@@ -41,25 +45,6 @@ pub fn gfx_capture_screenshot_data_url() -> Option<String> {
     }
     bytes.truncate(got as usize);
     String::from_utf8(bytes).ok()
-}
-
-unsafe extern "C" {
-    fn trueos_cabi_boot_timestamp_secs() -> u64;
-    fn trueos_cabi_alloc(size: usize) -> *mut u8;
-    fn trueos_cabi_calloc(nmemb: usize, size: usize) -> *mut u8;
-    fn trueos_cabi_free(ptr: *mut u8);
-    fn trueos_cabi_realloc(ptr: *mut u8, size: usize) -> *mut u8;
-    fn trueos_cabi_malloc_usable_size(ptr: *const u8) -> usize;
-    pub fn trueos_cabi_browser_asset_refs_begin(browser_instance_id: u32) -> i32;
-    pub fn trueos_cabi_browser_asset_ref_push(
-        browser_instance_id: u32,
-        tag_ptr: *const u8,
-        tag_len: usize,
-        url_ptr: *const u8,
-        url_len: usize,
-        kind_ptr: *const u8,
-        kind_len: usize,
-    ) -> i32;
 }
 
 #[inline]

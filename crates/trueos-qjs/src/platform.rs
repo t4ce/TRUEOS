@@ -118,7 +118,7 @@ pub mod gfx {
 
     #[inline]
     pub fn texture_status(tex_id: u32) -> i32 {
-        unsafe { v::vcabi::trueos_cabi_gfx_texture_status(tex_id) }
+        unsafe { v::qjs_abi::trueos_cabi_gfx_texture_status(tex_id) }
     }
 
     #[inline]
@@ -126,7 +126,7 @@ pub mod gfx {
         let mut width = 0;
         let mut height = 0;
         let rc = unsafe {
-            v::vcabi::trueos_cabi_gfx_texture_dimensions(
+            v::qjs_abi::trueos_cabi_gfx_texture_dimensions(
                 tex_id,
                 &mut width as *mut u32,
                 &mut height as *mut u32,

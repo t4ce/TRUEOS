@@ -10,10 +10,10 @@ fn main() {
 }
 
 fn generate_portal_imports(manifest_dir: &Path) -> Result<(), String> {
-    let vcabi_path = manifest_dir.join("crates/trueos-v/src/vcabi.rs");
-    println!("cargo:rerun-if-changed={}", vcabi_path.display());
+    let bp_abi_path = manifest_dir.join("crates/trueos-v/src/bp_abi.rs");
+    println!("cargo:rerun-if-changed={}", bp_abi_path.display());
 
-    let import_names = parse_declared_cabi_imports(&vcabi_path)?;
+    let import_names = parse_declared_cabi_imports(&bp_abi_path)?;
     let defined_exports = collect_defined_cabi_exports(manifest_dir)?;
 
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR");
@@ -40,9 +40,9 @@ fn generate_portal_imports(manifest_dir: &Path) -> Result<(), String> {
         .map_err(|err| format!("failed to write {}: {err}", generated_path.display()))
 }
 
-fn parse_declared_cabi_imports(vcabi_path: &Path) -> Result<Vec<String>, String> {
-    let source = fs::read_to_string(vcabi_path)
-        .map_err(|err| format!("failed to read {}: {err}", vcabi_path.display()))?;
+fn parse_declared_cabi_imports(bp_abi_path: &Path) -> Result<Vec<String>, String> {
+    let source = fs::read_to_string(bp_abi_path)
+        .map_err(|err| format!("failed to read {}: {err}", bp_abi_path.display()))?;
     let mut import_names = BTreeSet::new();
 
     for line in source.lines() {
