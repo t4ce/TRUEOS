@@ -144,17 +144,18 @@ impl PortalImageAllocation {
                 layout.align()
             ));
         }
-        if crate::logflag::PORTAL_LOGS
-            && PORTAL_IMAGE_ALLOC_TRACE_COUNT.fetch_add(1, Ordering::Relaxed) < 8
-        {
+        if PORTAL_IMAGE_ALLOC_TRACE_COUNT.fetch_add(1, Ordering::Relaxed) < 8 {
             let vm_for_stats = vm_id.unwrap_or(0);
             let stats = crate::allocators::hv_guest_heap_stats(vm_for_stats);
             crate::hv::hvlogf(format_args!(
-                "portal: image alloc vm={:?} size={} align={} ptr=0x{:016X} guest_heap=[0x{:016X}..0x{:016X})",
+                "hv: rel image alloc vm={:?} size={} align={} ptr=0x{:016X} free_bytes={} largest_free={} free_blocks={} guest_heap=[0x{:016X}..0x{:016X})",
                 vm_id,
                 layout.size(),
                 layout.align(),
                 base as usize,
+                stats.free_bytes,
+                stats.largest_free_block,
+                stats.free_blocks,
                 stats.heap_start,
                 stats.heap_end,
             ));
@@ -1727,6 +1728,27 @@ pub(crate) fn invoke_host_rel(
     let sections = parse_sections(unpacked)?;
     let main_addr =
         find_main_addr(unpacked, sections.as_slice(), image.section_bases.as_slice(), entry_hint)?;
+    let entry_section = entry_hint_section(entry_hint) as usize;
+    let entry_section_base = image
+        .section_bases
+        .get(entry_section)
+        .copied()
+        .unwrap_or(0);
+    let vm_for_stats = portal_guest_alloc_vm_id().unwrap_or(0);
+    let stats = crate::allocators::hv_guest_heap_stats(vm_for_stats);
+    crate::hv::hvlogf(format_args!(
+        "hv: rel image loaded vm={} base=0x{:016X} used_len=0x{:X} main=0x{:016X} entry_hint=sec:{}+0x{:X} entry_section_base=0x{:016X} free_bytes={} largest_free={} free_blocks={}",
+        vm_for_stats,
+        image.base as usize,
+        image.used_len,
+        main_addr,
+        entry_section,
+        entry_hint_offset(entry_hint),
+        entry_section_base,
+        stats.free_bytes,
+        stats.largest_free_block,
+        stats.free_blocks,
+    ));
     let (_arg_storage, argv) = build_argv(process_args.as_slice());
     let main_fn: extern "C" fn(usize, *const *const c_char) =
         unsafe { core::mem::transmute(main_addr) };
