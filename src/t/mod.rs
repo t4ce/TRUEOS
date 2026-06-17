@@ -21,7 +21,6 @@ pub mod th;
 mod tokio_environment;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub(crate) mod tokio_platform;
-pub mod tokio_probe;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod trueos_tokio_worker;
 

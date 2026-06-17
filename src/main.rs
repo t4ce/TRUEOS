@@ -240,11 +240,6 @@ pub extern "C" fn kmain() -> ! {
     tga::init_once();
     net::init();
 
-    if crate::allcaps::probes::TOKIO_BOOT_PROBE {
-        t::tokio_probe::log_boot_probe();
-    } else {
-        t::tokio_probe::assume_ready_when_probe_disabled();
-    }
     if crate::allcaps::probes::MIO_BOOT_PROBE {
         mio_probe::log_boot_probe();
     } else {
