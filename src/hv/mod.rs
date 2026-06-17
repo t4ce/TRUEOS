@@ -256,6 +256,7 @@ enum BlueprintMemoryClass {
     Ui,
     TokioRuntime,
     NetworkClient,
+    ServerRuntime,
     HeavyGraphics,
     Unknown,
 }
@@ -267,6 +268,7 @@ impl BlueprintMemoryClass {
             Self::Ui => "ui",
             Self::TokioRuntime => "tokio-runtime",
             Self::NetworkClient => "network-client",
+            Self::ServerRuntime => "server-runtime",
             Self::HeavyGraphics => "heavy-graphics",
             Self::Unknown => "unknown",
         }
@@ -985,6 +987,14 @@ fn classify_blueprint_memory(
     stats: crate::hv::blueprint::ElfAllocStats,
     imports: &[crate::hv::blueprint::ElfImport<'_>],
 ) -> BlueprintMemoryClass {
+    let server_signal = archive_has(archive, "horizon")
+        || archive_has(archive, "server")
+        || archive_has(archive, "game")
+        || import_name_has(imports, "pthread_");
+    if server_signal {
+        return BlueprintMemoryClass::ServerRuntime;
+    }
+
     let network_signal = archive_has(archive, "weather")
         || archive_has(archive, "currency")
         || archive_has(archive, "reqwest")
@@ -1074,6 +1084,14 @@ fn estimate_blueprint_memory_profile(
                 round_pow2_mib(base_live_mib.saturating_mul(32).saturating_add(128)).max(512),
                 512,
                 8,
+                16,
+                64,
+            ),
+            BlueprintMemoryClass::ServerRuntime => (
+                256,
+                round_pow2_mib(base_live_mib.saturating_mul(64).saturating_add(512)).max(2048),
+                2048,
+                16,
                 16,
                 64,
             ),
@@ -1776,48 +1794,50 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
     clear_current_vm_id();
     let blueprint_crash_state = blueprint_launch_snapshot(vm_id);
     let mut pending_crash = None;
-    match launch_result {
-        Ok(lr) => {
-            capture_snapshot_meta(vm_id, lr);
-            let preserve_exit = vmexit_is_preserve(lr);
-            if preserve_exit {
-                snapshot_on_preserve_exit(vm_id);
-            } else if let Some(state) = blueprint_crash_state.as_ref() {
-                pending_crash = Some(crate::hv::app_crash::prepare(
+    crate::allocators::with_host_alloc_domain_strong(|| {
+        match launch_result {
+            Ok(lr) => {
+                capture_snapshot_meta(vm_id, lr);
+                let preserve_exit = vmexit_is_preserve(lr);
+                if preserve_exit {
+                    snapshot_on_preserve_exit(vm_id);
+                } else if let Some(state) = blueprint_crash_state.as_ref() {
+                    pending_crash = Some(crate::hv::app_crash::prepare(
+                        vm_id,
+                        state,
+                        crate::hv::app_crash::CrashOutcome::Vmexit(lr),
+                    ));
+                }
+                hvlogf(format_args!(
+                    "hv: vm{}-{} reporting: vmlaunch entered={} launch_failed={} exit_reason=0x{:X} exit_qual=0x{:X} guest_rip=0x{:016X}",
                     vm_id,
-                    state,
-                    crate::hv::app_crash::CrashOutcome::Vmexit(lr),
+                    lineage_record.level,
+                    lr.entered,
+                    lr.launch_failed,
+                    lr.exit_reason,
+                    lr.exit_qualification,
+                    lr.guest_rip
+                ));
+                hvlogf(format_args!(
+                    "hv: vm{}-{} reporting: symbolize_hint=addr2line -e TRUEOS.full.elf 0x{:016X}",
+                    vm_id, lineage_record.level, lr.guest_rip
                 ));
             }
-            hvlogf(format_args!(
-                "hv: vm{}-{} reporting: vmlaunch entered={} launch_failed={} exit_reason=0x{:X} exit_qual=0x{:X} guest_rip=0x{:016X}",
-                vm_id,
-                lineage_record.level,
-                lr.entered,
-                lr.launch_failed,
-                lr.exit_reason,
-                lr.exit_qualification,
-                lr.guest_rip
-            ));
-            hvlogf(format_args!(
-                "hv: vm{}-{} reporting: symbolize_hint=addr2line -e TRUEOS.full.elf 0x{:016X}",
-                vm_id, lineage_record.level, lr.guest_rip
-            ));
-        }
-        Err(e) => {
-            if let Some(state) = blueprint_crash_state.as_ref() {
-                pending_crash = Some(crate::hv::app_crash::prepare(
-                    vm_id,
-                    state,
-                    crate::hv::app_crash::CrashOutcome::LaunchError(e),
+            Err(e) => {
+                if let Some(state) = blueprint_crash_state.as_ref() {
+                    pending_crash = Some(crate::hv::app_crash::prepare(
+                        vm_id,
+                        state,
+                        crate::hv::app_crash::CrashOutcome::LaunchError(e),
+                    ));
+                }
+                hvlogf(format_args!(
+                    "hv: vm{}-{} reporting: vmlaunch/ept failed ({})",
+                    vm_id, lineage_record.level, e
                 ));
             }
-            hvlogf(format_args!(
-                "hv: vm{}-{} reporting: vmlaunch/ept failed ({})",
-                vm_id, lineage_record.level, e
-            ));
         }
-    }
+    });
 
     if boot_mode == VmBootMode::Full {
         if let Some(bytes) = guest {

@@ -27,8 +27,9 @@ pub mod prelude {
     pub mod rust_2024 {
         //! TRUEOS no_std compatibility prelude for upstream std-shaped source.
         pub use alloc::{
+            borrow::ToOwned,
             boxed::Box,
-            format,
+            format, vec,
             string::{String, ToString},
             vec::Vec,
         };
@@ -111,6 +112,8 @@ pub mod mem {
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod net {
     //! TRUEOS no_std network compatibility placeholders.
+    pub use core::net::SocketAddr;
+
     use crate::io;
 
     /// Placeholder TCP stream type for APIs that are unavailable on TRUEOS kernel builds.
@@ -118,9 +121,31 @@ pub mod net {
     pub struct TcpStream;
 
     impl TcpStream {
+        /// Blocking TCP connect is unavailable for the placeholder stream.
+        pub fn connect<A>(_addr: A) -> io::Result<Self> {
+            Err(io::ErrorKind::Other.into())
+        }
+
         /// TCP_NODELAY is a no-op for the placeholder stream.
         pub fn set_nodelay(&self, _nodelay: bool) -> io::Result<()> {
             Ok(())
+        }
+    }
+
+    /// Minimal TRUEOS placeholder for std's socket-address conversion trait.
+    pub trait ToSocketAddrs {
+        /// Iterator returned by address resolution.
+        type Iter;
+
+        /// Resolve socket addresses.
+        fn to_socket_addrs(&self) -> io::Result<Self::Iter>;
+    }
+
+    impl ToSocketAddrs for (&str, u16) {
+        type Iter = alloc::vec::IntoIter<SocketAddr>;
+
+        fn to_socket_addrs(&self) -> io::Result<Self::Iter> {
+            Err(io::ErrorKind::Other.into())
         }
     }
 

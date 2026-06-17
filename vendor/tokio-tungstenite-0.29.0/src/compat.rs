@@ -3,7 +3,14 @@ use core::{
     pin::Pin,
     task::{Context, Poll},
 };
-use std::io::{Read, Write};
+#[cfg(target_os = "trueos")]
+use tungstenite::io::{
+    Error as CompatIoError, ErrorKind as CompatIoErrorKind, Read, Result as CompatIoResult, Write,
+};
+#[cfg(not(target_os = "trueos"))]
+use std::io::{
+    Error as CompatIoError, ErrorKind as CompatIoErrorKind, Read, Result as CompatIoResult, Write,
+};
 
 use futures_util::task;
 use std::sync::Arc;
@@ -124,9 +131,9 @@ impl<S> AllowStd<S>
 where
     S: Unpin,
 {
-    fn with_context<F, R>(&mut self, kind: ContextWaker, f: F) -> Poll<std::io::Result<R>>
+    fn with_context<F, R>(&mut self, kind: ContextWaker, f: F) -> R
     where
-        F: FnOnce(&mut Context<'_>, Pin<&mut S>) -> Poll<std::io::Result<R>>,
+        F: FnOnce(&mut Context<'_>, Pin<&mut S>) -> R,
     {
         trace!("{}:{} AllowStd.with_context", file!(), line!());
         let waker = match kind {
@@ -150,16 +157,16 @@ impl<S> Read for AllowStd<S>
 where
     S: AsyncRead + Unpin,
 {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    fn read(&mut self, buf: &mut [u8]) -> CompatIoResult<usize> {
         trace!("{}:{} Read.read", file!(), line!());
         let mut buf = ReadBuf::new(buf);
-        match self.with_context(ContextWaker::Read, |ctx, stream| {
+        match map_tokio_io(self.with_context(ContextWaker::Read, |ctx, stream| {
             trace!("{}:{} Read.with_context read -> poll_read", file!(), line!());
             stream.poll_read(ctx, &mut buf)
-        }) {
+        })) {
             Poll::Ready(Ok(_)) => Ok(buf.filled().len()),
             Poll::Ready(Err(err)) => Err(err),
-            Poll::Pending => Err(std::io::Error::from(std::io::ErrorKind::WouldBlock)),
+            Poll::Pending => Err(would_block_error()),
         }
     }
 }
@@ -168,25 +175,25 @@ impl<S> Write for AllowStd<S>
 where
     S: AsyncWrite + Unpin,
 {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+    fn write(&mut self, buf: &[u8]) -> CompatIoResult<usize> {
         trace!("{}:{} Write.write", file!(), line!());
-        match self.with_context(ContextWaker::Write, |ctx, stream| {
+        match map_tokio_io(self.with_context(ContextWaker::Write, |ctx, stream| {
             trace!("{}:{} Write.with_context write -> poll_write", file!(), line!());
             stream.poll_write(ctx, buf)
-        }) {
+        })) {
             Poll::Ready(r) => r,
-            Poll::Pending => Err(std::io::Error::from(std::io::ErrorKind::WouldBlock)),
+            Poll::Pending => Err(would_block_error()),
         }
     }
 
-    fn flush(&mut self) -> std::io::Result<()> {
+    fn flush(&mut self) -> CompatIoResult<()> {
         trace!("{}:{} Write.flush", file!(), line!());
-        match self.with_context(ContextWaker::Write, |ctx, stream| {
+        match map_tokio_io(self.with_context(ContextWaker::Write, |ctx, stream| {
             trace!("{}:{} Write.with_context flush -> poll_flush", file!(), line!());
             stream.poll_flush(ctx)
-        }) {
+        })) {
             Poll::Ready(r) => r,
-            Poll::Pending => Err(std::io::Error::from(std::io::ErrorKind::WouldBlock)),
+            Poll::Pending => Err(would_block_error()),
         }
     }
 }
@@ -194,10 +201,31 @@ where
 pub(crate) fn cvt<T>(r: Result<T, WsError>) -> Poll<Result<T, WsError>> {
     match r {
         Ok(v) => Poll::Ready(Ok(v)),
-        Err(WsError::Io(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
+        Err(WsError::Io(ref e)) if e.kind() == CompatIoErrorKind::WouldBlock => {
             trace!("WouldBlock");
             Poll::Pending
         }
         Err(e) => Poll::Ready(Err(e)),
     }
+}
+
+#[cfg(target_os = "trueos")]
+fn map_tokio_io<T, E>(poll: Poll<Result<T, E>>) -> Poll<CompatIoResult<T>> {
+    match poll {
+        Poll::Ready(Ok(value)) => Poll::Ready(Ok(value)),
+        Poll::Ready(Err(_error)) => Poll::Ready(Err(CompatIoError::new(
+            CompatIoErrorKind::Other,
+            "tokio io error",
+        ))),
+        Poll::Pending => Poll::Pending,
+    }
+}
+
+#[cfg(not(target_os = "trueos"))]
+fn map_tokio_io<T>(poll: Poll<::std::io::Result<T>>) -> Poll<CompatIoResult<T>> {
+    poll
+}
+
+fn would_block_error() -> CompatIoError {
+    CompatIoError::new(CompatIoErrorKind::WouldBlock, "operation would block")
 }

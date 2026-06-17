@@ -2,7 +2,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32};
 use log::{Level, LevelFilter};
 use spin::Once;
 
-pub(crate) const GLOBAL_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
+pub(crate) const GLOBAL_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const BOOT_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const SERVICE_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const NET_LOG_LEVEL: LevelFilter = LevelFilter::Warn;

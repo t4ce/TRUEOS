@@ -118,10 +118,7 @@ fn run_sentinel(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) 
         return;
     };
     if kind.eq_ignore_ascii_case("scratch-gpgpu") {
-        print_shell_line(
-            io,
-            "render sentinel: skipped reason=gpgpu-alias-unsafe-use-scratch-mi",
-        );
+        print_shell_line(io, "render sentinel: skipped reason=gpgpu-alias-unsafe-use-scratch-mi");
         return;
     }
     if !kind.eq_ignore_ascii_case("scratch-mi") {

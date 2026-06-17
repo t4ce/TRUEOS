@@ -346,13 +346,13 @@ fn resolve_unresolved_import(name: &str) -> Option<usize> {
 }
 
 fn portal_alloc_error_handler(layout: Layout) -> ! {
-    portal_logf(format_args!(
+    crate::hv::hvlogf(format_args!(
         "portal: alloc error size={} align={}",
         layout.size(),
         layout.align()
     ));
     let stats = crate::allocators::hv_guest_heap_stats(crate::hv::current_vm_id().unwrap_or(0));
-    portal_logf(format_args!(
+    crate::hv::hvlogf(format_args!(
         "portal: hv-guest-heap virt=0x{:X}..0x{:X} phys=0x{:X} src={:?} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}",
         stats.heap_start,
         stats.heap_end,
@@ -365,7 +365,7 @@ fn portal_alloc_error_handler(layout: Layout) -> ! {
         stats.initialized,
     ));
     let trace = crate::allocators::last_alloc_trace();
-    portal_logf(format_args!(
+    crate::hv::hvlogf(format_args!(
         "portal: last-alloc seq={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X} size={} align={} stage={} head=0x{:016X} block=0x{:016X} block_size={} next=0x{:016X} payload=0x{:016X} aligned_used={}",
         trace.seq,
         trace.caller_rip,
@@ -1306,6 +1306,10 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "trueos_cabi_dns_resolve_ipv4" => {
             Some(crate::std_abi_shim::trueos_cabi_dns_resolve_ipv4 as *const () as usize)
         }
+        "socket" => Some(crate::std_abi_shim::socket as *const () as usize),
+        "setsockopt" => Some(crate::std_abi_shim::setsockopt as *const () as usize),
+        "send" => Some(crate::std_abi_shim::send as *const () as usize),
+        "recv" => Some(crate::std_abi_shim::recv as *const () as usize),
         "posix_memalign" => Some(crate::std_abi_shim::posix_memalign as *const () as usize),
         "getcwd" => Some(crate::std_abi_shim::getcwd as *const () as usize),
         "sysconf" => Some(crate::std_abi_shim::sysconf as *const () as usize),

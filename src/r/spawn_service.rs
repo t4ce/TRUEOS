@@ -891,6 +891,14 @@ struct BlueprintAutostart {
 
 const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
     BlueprintAutostart {
+        enabled: true,
+        label: "horizon",
+        archive: "horizon.bp",
+        slot: "hor",
+        args: &[],
+        settle_ms: 250,
+    },
+    BlueprintAutostart {
         enabled: false,
         label: "mandelbrot",
         archive: "mandelbrot.bp",
@@ -1072,9 +1080,6 @@ const UI2_DEMO_READY: u32 =
     crate::r::readiness::UI2_READY | crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY;
 const GBOI_DEMO_READY: u32 = crate::r::readiness::BACKGROUND_AP_WORKER_READY;
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
-    | crate::r::readiness::TRUEOSFS_INDEX_READY
-    | crate::r::readiness::NET_ANY_CONFIGURED
-    | crate::r::readiness::NET_SOCKET_READY
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 #[cfg(all(feature = "trueos_rdp", feature = "trueos_lumen"))]

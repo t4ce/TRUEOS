@@ -5,6 +5,7 @@ KERNEL_EMPTY_LIB_DIR = bld/empty-libs
 ARTIFACT_BUILD_ID ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 ARTIFACT_DIR = bld/artifacts/$(BUILD_MODE)-$(ARTIFACT_BUILD_ID)
 ARTIFACT_RUNTIME_ELF = $(ARTIFACT_DIR)/TRUEOS.elf
+ARTIFACT_DEBUG_ELF = $(ARTIFACT_DIR)/TRUEOS.full.elf
 ARTIFACT_BUILD_INFO = $(ARTIFACT_DIR)/BUILD_INFO
 ISO_DIR := bld
 ISO_PATH := bld/trueos.iso
@@ -41,8 +42,11 @@ DMC_FW_HOST_PATH ?= /lib/firmware/i915/adls_dmc_ver2_01.bin.zst
 DMC_FW_ISO_REL_PATH ?= EFI/BOOT/adls_dmc_ver2_01.bin
 HUC_FW_HOST_PATH ?= /lib/firmware/i915/tgl_huc.bin.zst
 HUC_FW_ISO_REL_PATH ?= EFI/BOOT/tgl_huc.bin
+HORIZON_BP_HOST_PATH ?= ../TRUEOS-Blueprints/dist/horizon.bp
+HORIZON_BP_ISO_REL_PATH ?= EFI/BOOT/apps/horizon.bp
 QEMU_RUNNER := tools/qemu/run.sh
 QEMU_BIN ?= qemu-system-x86_64
+QEMU_MEMORY ?= 12000M
 QEMU_UEFI_FIRMWARE = $(OVMF_BUNDLE_PATH)
 NVME_IMG := tools/nvme.img
 CNT_FILE := tools/cnt
@@ -54,7 +58,7 @@ QEMU_HOST_TCP_PORT_4 ?= 10004
 QEMU_HOST_TCP_PORT_100 ?= 10100
 QEMU_HOST_TCP_PORT_80 ?= 8080
 QEMU_HOST_TCP_PORT_54321 ?= 15432
-QEMU_RUN_ENV = ISO_PATH="$(ISO_PATH)" QEMU_BIN="$(QEMU_BIN)" QEMU_UEFI_FIRMWARE="$(QEMU_UEFI_FIRMWARE)" QEMU_NVME_IMG="$(NVME_IMG)" QEMU_BRIDGE="$(QEMU_BRIDGE)" QEMU_BRIDGE_HELPER="$(QEMU_BRIDGE_HELPER)" QEMU_HDA_AUDIODEV="$(QEMU_HDA_AUDIODEV)" QEMU_HOST_TCP_PORT_3="$(QEMU_HOST_TCP_PORT_3)" QEMU_HOST_TCP_PORT_4="$(QEMU_HOST_TCP_PORT_4)" QEMU_HOST_TCP_PORT_100="$(QEMU_HOST_TCP_PORT_100)" QEMU_HOST_TCP_PORT_80="$(QEMU_HOST_TCP_PORT_80)" QEMU_HOST_TCP_PORT_54321="$(QEMU_HOST_TCP_PORT_54321)"
+QEMU_RUN_ENV = ISO_PATH="$(ISO_PATH)" QEMU_BIN="$(QEMU_BIN)" QEMU_MEMORY="$(QEMU_MEMORY)" QEMU_UEFI_FIRMWARE="$(QEMU_UEFI_FIRMWARE)" QEMU_NVME_IMG="$(NVME_IMG)" QEMU_BRIDGE="$(QEMU_BRIDGE)" QEMU_BRIDGE_HELPER="$(QEMU_BRIDGE_HELPER)" QEMU_HDA_AUDIODEV="$(QEMU_HDA_AUDIODEV)" QEMU_HOST_TCP_PORT_3="$(QEMU_HOST_TCP_PORT_3)" QEMU_HOST_TCP_PORT_4="$(QEMU_HOST_TCP_PORT_4)" QEMU_HOST_TCP_PORT_100="$(QEMU_HOST_TCP_PORT_100)" QEMU_HOST_TCP_PORT_80="$(QEMU_HOST_TCP_PORT_80)" QEMU_HOST_TCP_PORT_54321="$(QEMU_HOST_TCP_PORT_54321)"
 BAREMETAL_LOG_DRAIN := tools/baremetal-log-drain.sh
 BAREMETAL_LOG_HOST ?= 192.168.178.94
 BAREMETAL_LOG_PORT ?= 1
@@ -85,7 +89,7 @@ kernel: empty-libs
 artifacts: kernel
 	mkdir -p $(ARTIFACT_DIR)
 	cp $(KERNEL_BIN) $(ARTIFACT_RUNTIME_ELF)
-	rm -f $(ARTIFACT_DIR)/TRUEOS.full.elf
+	cp $(KERNEL_BIN) $(ARTIFACT_DEBUG_ELF)
 	strip -s $(ARTIFACT_RUNTIME_ELF) || true
 	@{ \
 		commit=$$(git rev-parse HEAD 2>/dev/null || echo unknown); \
@@ -95,6 +99,7 @@ artifacts: kernel
 		printf "commit=%s\n" "$$commit"; \
 		printf "timestamp_utc=%s\n" "$$ts"; \
 		printf "runtime_elf=%s\n" "$(ARTIFACT_RUNTIME_ELF)"; \
+		printf "debug_elf=%s\n" "$(ARTIFACT_DEBUG_ELF)"; \
 	} > $(ARTIFACT_BUILD_INFO)
 
 limine:
@@ -206,6 +211,15 @@ iso: artifacts images limine
 		mkdir -p $(ISO_BOOT_DIR)/$(dir $(HUC_FW_ISO_REL_PATH)); \
 		cp "$(ISO_DIR)/EFI/BOOT/$$(basename "$(HUC_FW_ISO_REL_PATH)")" "$(ISO_BOOT_DIR)/$(HUC_FW_ISO_REL_PATH)"; \
 	fi
+	@if [ ! -f "$(HORIZON_BP_HOST_PATH)" ]; then \
+		echo "error: Horizon blueprint not found at $(HORIZON_BP_HOST_PATH)"; \
+		echo "       run: cd ../TRUEOS-Blueprints && cargo bp horizon"; \
+		exit 1; \
+	fi
+	mkdir -p $(ISO_BOOT_DIR)/$(dir $(HORIZON_BP_ISO_REL_PATH))
+	cp "$(HORIZON_BP_HOST_PATH)" "$(ISO_BOOT_DIR)/$(HORIZON_BP_ISO_REL_PATH)"
+	mkdir -p "$(ISO_DIR)/$(dir $(HORIZON_BP_ISO_REL_PATH))"
+	cp "$(HORIZON_BP_HOST_PATH)" "$(ISO_DIR)/$(HORIZON_BP_ISO_REL_PATH)"
 	cp "$(LIMINE_CFG)" "$(LIMINE_CFG_GENERATED)"
 	@if [ -f "$(ISO_BOOT_DIR)/$(DMC_FW_ISO_REL_PATH)" ]; then \
 		printf '%s\n%s\n' \
@@ -222,6 +236,10 @@ iso: artifacts images limine
 	printf '%s\n%s\n' \
 		"module_path: boot():/$(ISO_EFI_IMG)" \
 		"module_string: trueos.install.efi_img" \
+		>> "$(LIMINE_CFG_GENERATED)"
+	printf '%s\n%s\n' \
+		"module_path: boot():/$(HORIZON_BP_ISO_REL_PATH)" \
+		"module_string: trueos.app.horizon" \
 		>> "$(LIMINE_CFG_GENERATED)"
 	@if [ "$(GUC_FW_ISO_REL_PATH)" != "EFI/BOOT/adlp_guc_70.bin" ]; then \
 		mkdir -p $(ISO_BOOT_DIR)/EFI/BOOT; \

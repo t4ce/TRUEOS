@@ -1,5 +1,9 @@
 //! Server handshake machine.
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[allow(unused_imports)]
+use crate::prelude::rust_2024::*;
+
 use core::{marker::PhantomData, result::Result as StdResult};
 use std::io::{self, Read, Write};
 

@@ -370,6 +370,10 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         }
     }
 
+    crate::hv::hvlogf(format_args!(
+        "run: guest app fs path alloc begin vm={}",
+        vm_id
+    ));
     let Some((app_fs_root, app_fs_common)) =
         crate::allocators::with_hv_guest_alloc_domain(vm_id, || {
             (
@@ -384,6 +388,11 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         log("run: guest app fs paths failed: guest heap domain unavailable");
         return false;
     };
+    crate::hv::hvlogf(format_args!(
+        "run: guest app fs path alloc ok root={} common={}",
+        app_fs_root.as_str(),
+        app_fs_common.as_str()
+    ));
 
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         if let Err(err) = create_blueprint_dir_all(app_fs_root.as_str()) {
@@ -443,6 +452,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     }
 
     crate::blueprint_net_broker::set_vmx_guest_net_backend(true);
+    crate::hv::hvlogf(format_args!("run: guest invoke alloc begin vm={}", vm_id));
     let invoke_result = crate::allocators::with_hv_guest_alloc_domain(vm_id, || {
         let process_args = crate::hv::blueprint::build_process_args(
             state.archive.as_str(),

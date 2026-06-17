@@ -1,5 +1,9 @@
 //! Error handling.
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[allow(unused_imports)]
+use crate::prelude::rust_2024::*;
+
 use crate::io;
 use alloc::{
     boxed::Box,
@@ -215,7 +219,9 @@ pub enum ProtocolError {
     /// Wrapper around a [`httparse::Error`] value.
     #[error("httparse error: {0}")]
     #[cfg(feature = "handshake")]
-    HttparseError(#[from] httparse::Error),
+    HttparseError(
+        #[cfg_attr(not(any(target_os = "trueos", target_os = "zkvm")), from)] httparse::Error,
+    ),
     /// Not allowed to send after having sent a closing frame.
     #[error("Sending after closing is not allowed")]
     SendAfterClosing,

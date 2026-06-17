@@ -1,4 +1,5 @@
-use crate::{util::uninit_slice_fill_zero, Error};
+//! TRUEOS blueprint/kernel random source.
+use crate::Error;
 use core::mem::MaybeUninit;
 
 unsafe extern "C" {
@@ -7,12 +8,13 @@ unsafe extern "C" {
 
 const WORD_CHUNK: usize = 64;
 
-fn rand_bytes(out: &mut [u8]) -> bool {
+pub fn getrandom_inner(dest: &mut [MaybeUninit<u8>]) -> Result<(), Error> {
+    let out = crate::util::uninit_slice_fill_zero(dest);
     let mut offset = 0usize;
     let mut words = [0u32; WORD_CHUNK];
     while offset < out.len() {
         let want = core::cmp::min(words.len() * core::mem::size_of::<u32>(), out.len() - offset);
-        let word_count = want.div_ceil(core::mem::size_of::<u32>());
+        let word_count = (want + core::mem::size_of::<u32>() - 1) / core::mem::size_of::<u32>();
         words[..word_count].fill(0);
         unsafe { sys_rand(words.as_mut_ptr(), word_count) };
 
@@ -23,14 +25,5 @@ fn rand_bytes(out: &mut [u8]) -> bool {
             offset += n;
         }
     }
-    true
-}
-
-pub fn getrandom_inner(dest: &mut [MaybeUninit<u8>]) -> Result<(), Error> {
-    let dest = uninit_slice_fill_zero(dest);
-    if rand_bytes(dest) {
-        Ok(())
-    } else {
-        Err(Error::UNSUPPORTED)
-    }
+    Ok(())
 }

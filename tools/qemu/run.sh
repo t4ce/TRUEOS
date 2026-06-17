@@ -4,13 +4,16 @@ set -euo pipefail
 QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"
 ISO_PATH="${ISO_PATH:-bld/trueos.iso}"
 QEMU_NVME_IMG="${QEMU_NVME_IMG:-tools/nvme.img}"
+QEMU_MEMORY="${QEMU_MEMORY:-12000M}"
 
+QEMU_HOST_TCP_PORT_8081="${QEMU_HOST_TCP_PORT_8081:-18081}"
 QEMU_HOST_TCP_PORT_3="${QEMU_HOST_TCP_PORT_3:-10003}"
 QEMU_HOST_TCP_PORT_4="${QEMU_HOST_TCP_PORT_4:-10004}"
 QEMU_HOST_TCP_PORT_100="${QEMU_HOST_TCP_PORT_100:-10100}"
 QEMU_HOST_TCP_PORT_80="${QEMU_HOST_TCP_PORT_80:-8080}"
 QEMU_HOST_TCP_PORT_54321="${QEMU_HOST_TCP_PORT_54321:-15432}"
 QEMU_NETDEV_USER="user,id=net1"
+QEMU_NETDEV_USER+=",hostfwd=tcp:127.0.0.1:${QEMU_HOST_TCP_PORT_8081}-:8081"
 QEMU_NETDEV_USER+=",hostfwd=tcp:127.0.0.1:${QEMU_HOST_TCP_PORT_3}-:3"
 QEMU_NETDEV_USER+=",hostfwd=tcp:127.0.0.1:${QEMU_HOST_TCP_PORT_4}-:4"
 QEMU_NETDEV_USER+=",hostfwd=tcp:127.0.0.1:${QEMU_HOST_TCP_PORT_100}-:100"
@@ -37,7 +40,7 @@ exec env -i \
     -debugcon stdio \
     -D bld/qemu.log \
     -d int,guest_errors,cpu_reset,unimp \
-    -m 8000M \
+    -m "${QEMU_MEMORY}" \
     -smp cores=14 \
     -cpu host,host-phys-bits=true \
     -serial tcp:127.0.0.1:5555,server,nowait \

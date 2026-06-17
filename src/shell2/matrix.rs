@@ -481,3 +481,18 @@ pub(crate) fn history_lines_text(start_line: usize, max_lines: usize) -> AllocSt
     }
     out
 }
+
+pub(crate) fn slot_transcript_text(slot_id: &MatrixSlotId) -> AllocString {
+    let mut guard = state().lock();
+    let idx = ensure_slot_index(&mut guard.slots, slot_id);
+    let slot = &guard.slots[idx];
+
+    let mut out = AllocString::new();
+    for (idx, line) in slot.lines.iter().enumerate() {
+        if idx != 0 {
+            out.push('\n');
+        }
+        out.push_str(line.text.as_str());
+    }
+    out
+}
