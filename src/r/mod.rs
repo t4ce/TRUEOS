@@ -1,9 +1,4 @@
-mod pattern;
-
-pub mod pat {
-    pub use super::pattern::*;
-}
-
+pub mod pat;
 pub mod blocking;
 pub mod codec;
 pub mod cursor;
@@ -18,8 +13,6 @@ pub mod path;
 pub mod platform;
 pub mod rdp;
 pub mod readiness;
-#[cfg(feature = "trueos_rdp")]
-pub mod resource_monitor;
 pub mod shader;
 pub mod silk_service;
 pub mod spawn_service;
@@ -31,3 +24,6 @@ pub mod sync;
 pub mod time;
 pub mod ui2;
 pub mod ui_surface;
+
+#[cfg(feature = "trueos_rdp")]
+pub mod resource_monitor;

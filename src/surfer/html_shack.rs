@@ -844,54 +844,18 @@ async fn resolve_ipv4(host: &str) -> Result<[u8; 4], HttpFetchError> {
         return Ok(ip);
     }
 
-    let (servers, count) = crate::net::adapter::primary_dhcp_dns_snapshot();
-    if count == 0 {
-        return Err(HttpFetchError::NoDns);
-    }
-    let dns_server = servers[0];
-    let net = crate::r::net::VNet::open_primary().ok_or(HttpFetchError::Dns)?;
-
-    net.submit(api::Command::OpenUdp { port: 0 })
-        .map_err(|_| HttpFetchError::Dns)?;
-    let udp = wait_for_vnet_event(&net, HTML_FETCH_DNS_TIMEOUT_MS, |ev| match ev {
-        api::Event::Opened {
-            handle,
-            kind: api::SocketKind::Udp,
-        } => Some(Ok(handle)),
-        api::Event::Error { .. } => Some(Err(HttpFetchError::Dns)),
-        _ => None,
-    })
-    .await?;
-
-    let id = HTML_FETCH_WORKER_SEQ.load(Ordering::Relaxed) as u16
-        ^ ((Instant::now().as_millis() as u16).rotate_left(5));
-    let query = build_dns_a_query(host, id)?;
-    net.submit(api::Command::SendUdp {
-        handle: udp,
-        remote: api::EndpointV4::new(dns_server, 53),
-        data: api::ByteBuf::from_slice_trunc(query.as_slice()),
-    })
-    .map_err(|_| HttpFetchError::Dns)?;
-
-    let deadline = Instant::now() + EmbassyDuration::from_millis(HTML_FETCH_DNS_TIMEOUT_MS);
-    loop {
-        while let Some(ev) = net.pop_event() {
-            match ev {
-                api::Event::UdpPacket { handle, data, .. } if handle == udp => {
-                    if let Some(ip) = parse_dns_a_response(data.as_slice(), id) {
-                        let _ = net.submit(api::Command::Close { handle: udp });
-                        return Ok(ip);
-                    }
-                }
-                api::Event::Error { .. } => return Err(HttpFetchError::Dns),
-                _ => {}
-            }
+    match crate::r::net::dns::resolve_ipv4_primary(
+        host,
+        crate::r::net::dns::DnsConfig::default().with_timeout_ms(HTML_FETCH_DNS_TIMEOUT_MS),
+    )
+    .await
+    {
+        Ok(ip) => Ok(ip),
+        Err(crate::r::net::dns::DnsError::NoNic) => Err(HttpFetchError::NoDns),
+        Err(err) => {
+            crate::log!("html_shack: dns resolve failed host={} err={:?}\n", host, err);
+            Err(HttpFetchError::Dns)
         }
-        if Instant::now() >= deadline {
-            let _ = net.submit(api::Command::Close { handle: udp });
-            return Err(HttpFetchError::Dns);
-        }
-        Timer::after(EmbassyDuration::from_micros(100)).await;
     }
 }
 
