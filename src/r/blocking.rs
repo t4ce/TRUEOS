@@ -4,12 +4,15 @@ use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 pub type BlockingJobFn = Box<dyn FnOnce() + Send + 'static>;
 
 const BLOCKING_JOB_QUEUE_WARN_DEPTH: usize = 100;
 const BLOCKING_JOB_QUEUE_CAP: usize = 4094;
+const BLOCKING_JOB_DISPATCH_IDLE_MS: u64 = 5;
+const BLOCKING_JOB_DISPATCH_BUSY_MS: u64 = 1;
 const BLOCKING_JOB_TAG_HOST: &str = "host-blocking-job";
 const BLOCKING_JOB_TAG_VMX: &str = "vmx-respect-architecture";
 static NEXT_BLOCKING_JOB_ID: AtomicU64 = AtomicU64::new(1);
@@ -34,6 +37,122 @@ pub fn queued_blocking_jobs() -> usize {
 
 pub fn pop_blocking_job() -> Option<BlockingJobEntry> {
     BLOCKING_JOB_QUEUE.lock().pop_front()
+}
+
+#[inline]
+fn now_ms() -> u64 {
+    let hz = embassy_time_driver::TICK_HZ.max(1);
+    embassy_time_driver::now().saturating_mul(1000) / hz
+}
+
+fn run_blocking_job_call(call: BlockingJobCall) {
+    match call {
+        BlockingJobCall::Host(job) => job(),
+        BlockingJobCall::GuestRaw { data, vtable } => unsafe {
+            let raw: *mut (dyn FnOnce() + Send + 'static) = core::mem::transmute((data, vtable));
+            let job: BlockingJobFn = Box::from_raw(raw);
+            job();
+        },
+    }
+}
+
+fn run_blocking_job_entry(entry: BlockingJobEntry) {
+    let BlockingJobEntry {
+        id,
+        vm_id,
+        purpose,
+        policy_tag,
+        call,
+    } = entry;
+    let started_ms = now_ms();
+    crate::log_trace!(
+        target: "service";
+        "blocking-job: run begin id={} vm={:?} purpose={} tag={}\n",
+        id,
+        vm_id,
+        purpose,
+        policy_tag
+    );
+    if let Some(vm_id) = vm_id {
+        crate::r::kernel_task_domain::with(
+            crate::r::kernel_task_domain::KernelTaskDomain::TokioCarrier,
+            Some(vm_id),
+            || run_blocking_job_call(call),
+        );
+    } else {
+        crate::r::kernel_task_domain::with(
+            crate::r::kernel_task_domain::KernelTaskDomain::HostService,
+            None,
+            || run_blocking_job_call(call),
+        );
+    }
+    crate::log_trace!(
+        target: "service";
+        "blocking-job: run done id={} vm={:?} purpose={} tag={} elapsed_ms={}\n",
+        id,
+        vm_id,
+        purpose,
+        policy_tag,
+        now_ms().saturating_sub(started_ms)
+    );
+}
+
+#[embassy_executor::task(pool_size = 64)]
+async fn blocking_job_execute_task(
+    entry: BlockingJobEntry,
+    _lease: crate::hv::lane::LaneLease,
+    slot: u32,
+    core_kind: u8,
+) {
+    crate::log_trace!(
+        target: "service";
+        "blocking-job: carrier start slot={} core_kind={}\n",
+        slot,
+        core_kind
+    );
+    run_blocking_job_entry(entry);
+}
+
+#[embassy_executor::task]
+pub async fn blocking_job_dispatcher_task() {
+    loop {
+        if queued_blocking_jobs() == 0 {
+            Timer::after(EmbassyDuration::from_millis(BLOCKING_JOB_DISPATCH_IDLE_MS)).await;
+            continue;
+        }
+
+        let target = match crate::hv::guest_work::pick_tokio_blocking_lane() {
+            Ok(target) => target,
+            Err(err) => {
+                crate::log_trace!(
+                    target: "service";
+                    "blocking-job: no carrier lane queued={} reason={}\n",
+                    queued_blocking_jobs(),
+                    err.as_str()
+                );
+                Timer::after(EmbassyDuration::from_millis(BLOCKING_JOB_DISPATCH_BUSY_MS)).await;
+                continue;
+            }
+        };
+
+        let Some(entry) = pop_blocking_job() else {
+            continue;
+        };
+        let slot = target.slot;
+        let core_kind = target.core_kind;
+        match blocking_job_execute_task(entry, target.lease, slot, core_kind) {
+            Ok(token) => target.spawner.spawn(token),
+            Err(err) => {
+                crate::log_error!(
+                    target: "service";
+                    "blocking-job: carrier spawn failed slot={} core_kind={} err={:?}\n",
+                    slot,
+                    core_kind,
+                    err
+                );
+            }
+        }
+    }
 }
 
 fn enqueue_blocking_job(

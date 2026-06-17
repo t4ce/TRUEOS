@@ -23,6 +23,7 @@ const STATUS_PINK_RGB: (u8, u8, u8) = (255, 55, 255);
 const STATUS_BLUE_RGB: (u8, u8, u8) = (120, 210, 255);
 const STATUS_ORANGE_RGB: (u8, u8, u8) = (255, 190, 90);
 const STATUS_GRAY_RGB: (u8, u8, u8) = (160, 168, 176);
+const STATUS_RAINBOW_COLORS: [u8; 8] = [199, 208, 227, 121, 51, 39, 99, 201];
 
 const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_7Z: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file to compress into a sibling .7z archive."}},"required":["path"],"additionalProperties":false}"#;
@@ -399,16 +400,41 @@ pub(crate) fn command_names_status_text() -> AllocString {
             out.push(' ');
         }
         first = false;
-        if let Some(color) = entry.color {
-            let styled =
-                alloc::format!("{}", super::term_style::paint(entry.name).bold().color(color));
-            out.push_str(styled.as_str());
-        } else {
-            out.push_str(entry.name);
-        }
+        push_status_command_name(&mut out, entry);
     }
 
     out
+}
+
+fn push_status_command_name(out: &mut AllocString, entry: &BuiltinShell2CmdEntry) {
+    if entry.name == "gpgpu" {
+        push_static_rainbow_token(out, entry.name);
+    } else if let Some(color) = entry.color {
+        let styled = alloc::format!("{}", super::term_style::paint(entry.name).bold().color(color));
+        out.push_str(styled.as_str());
+    } else {
+        out.push_str(entry.name);
+    }
+}
+
+fn push_static_rainbow_token(out: &mut AllocString, text: &str) {
+    for (idx, ch) in text.chars().enumerate() {
+        let mut glyph = [0u8; 4];
+        let glyph = ch.encode_utf8(&mut glyph);
+        let color = STATUS_RAINBOW_COLORS[idx % STATUS_RAINBOW_COLORS.len()];
+        let styled = if (idx & 1) == 0 {
+            alloc::format!(
+                "{}",
+                super::term_style::paint(glyph)
+                    .bold()
+                    .underline()
+                    .color(color)
+            )
+        } else {
+            alloc::format!("{}", super::term_style::paint(glyph).bold().color(color))
+        };
+        out.push_str(styled.as_str());
+    }
 }
 
 pub(crate) fn command_registry_json() -> AllocString {
