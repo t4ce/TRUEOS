@@ -720,7 +720,7 @@ impl MioCompat {
                         let listener = self.socket_mut(listener_id).unwrap();
                         let mut inherited_rx = VecDeque::new();
                         core::mem::swap(&mut inherited_rx, &mut listener.rx_stream);
-                        if !inherited_rx.is_empty() {
+                        if crate::logflag::NET_LOG_TCP_FLOW && !inherited_rx.is_empty() {
                             crate::log!(
                                 "mio_compat: tcp established inherited listener bytes listener={} child={} handle={} bytes={}\n",
                                 listener_id,
@@ -780,7 +780,7 @@ impl MioCompat {
             }
             api::Event::TcpData { handle, data } => {
                 if let Some(socket) = self.socket_by_handle_mut(handle) {
-                    if socket.kind == MioSocketKind::TcpListener {
+                    if crate::logflag::NET_LOG_TCP_FLOW && socket.kind == MioSocketKind::TcpListener {
                         crate::log!(
                             "mio_compat: tcp data queued on listener socket={} handle={} bytes={} queued_before={}\n",
                             socket.id,
@@ -1048,6 +1048,55 @@ pub(crate) unsafe fn mio_tcp_listener_bind_host(
 
         if status == STATUS_OK {
             unsafe { *out_socket_id = socket_id };
+            match local {
+                CompatAddr::V4 { addr, port } => crate::log!(
+                    "mio_compat: tcp listener bind ok socket={} owner={} addr={}.{}.{}.{}:{} port={}\n",
+                    socket_id,
+                    owner_vm.unwrap_or(u8::MAX),
+                    addr[0],
+                    addr[1],
+                    addr[2],
+                    addr[3],
+                    port,
+                    port
+                ),
+                CompatAddr::V6 { addr, port } => crate::log!(
+                    "mio_compat: tcp listener bind ok socket={} owner={} addr={:02x}{:02x}:{:02x}{:02x}:...:{} port={}\n",
+                    socket_id,
+                    owner_vm.unwrap_or(u8::MAX),
+                    addr[0],
+                    addr[1],
+                    addr[2],
+                    addr[3],
+                    port,
+                    port
+                ),
+            }
+        } else {
+            match local {
+                CompatAddr::V4 { addr, port } => crate::log!(
+                    "mio_compat: tcp listener bind failed status={} owner={} addr={}.{}.{}.{}:{} port={}\n",
+                    status,
+                    owner_vm.unwrap_or(u8::MAX),
+                    addr[0],
+                    addr[1],
+                    addr[2],
+                    addr[3],
+                    port,
+                    port
+                ),
+                CompatAddr::V6 { addr, port } => crate::log!(
+                    "mio_compat: tcp listener bind failed status={} owner={} addr={:02x}{:02x}:{:02x}{:02x}:...:{} port={}\n",
+                    status,
+                    owner_vm.unwrap_or(u8::MAX),
+                    addr[0],
+                    addr[1],
+                    addr[2],
+                    addr[3],
+                    port,
+                    port
+                ),
+            }
         }
 
         status
