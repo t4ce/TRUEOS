@@ -43,8 +43,8 @@ pub const CORE_KIND_EFF: u8 = 2;
 
 static LOGGED_WORKER_API_USE: AtomicBool = AtomicBool::new(false);
 
-// Slots <= 2 are reserved by the kernel; background worker carriers start at AP > 2.
-const FIRST_DISPOSABLE_SLOT: u32 = 3;
+// Slot 0 is BSP and slot 1 is the service AP; disposable worker carriers start at AP2.
+const FIRST_DISPOSABLE_SLOT: u32 = 2;
 const WORKER_TASK_POOL: usize = 32;
 const WORKER_TEARDOWN_WAIT_MS: u64 = 50;
 

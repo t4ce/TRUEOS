@@ -137,8 +137,9 @@ fn indexed_id(path: &str) -> u64 {
             snapshot
                 .entries
                 .into_iter()
-                .find(|entry| entry.path == path)
+                .filter(|entry| entry.path == path)
                 .map(|entry| entry.id)
+                .max()
         })
         .unwrap_or(0)
 }
@@ -180,7 +181,7 @@ fn immediate_entries(prefix: &str) -> io::Result<Vec<Entry>> {
     let snapshot = kfs::tree(MAX_ENTRIES).map_err(|rc| {
         io::Error::new(trueos_io::status_kind(rc), "TRUEOSFS index unavailable for lsd")
     })?;
-    let mut children = BTreeMap::<(String, u64), Entry>::new();
+    let mut children = BTreeMap::<String, Entry>::new();
 
     for raw in snapshot.entries.into_iter() {
         if !is_under_prefix(raw.path.as_str(), prefix) || raw.path == prefix {
@@ -211,8 +212,9 @@ fn immediate_entries(prefix: &str) -> io::Result<Vec<Entry>> {
         let depth = path_depth(path.as_str());
 
         children
-            .entry((path.clone(), raw.id))
+            .entry(path.clone())
             .and_modify(|entry| {
+                entry.id = entry.id.max(raw.id);
                 if matches!(kind, kfs::FsEntryKind::Dir) {
                     entry.kind = kfs::FsEntryKind::Dir;
                 }
@@ -240,7 +242,7 @@ fn tree_entries(prefix: &str) -> io::Result<Vec<Entry>> {
     let snapshot = kfs::tree(MAX_ENTRIES).map_err(|rc| {
         io::Error::new(trueos_io::status_kind(rc), "TRUEOSFS index unavailable for lsd")
     })?;
-    let mut entries = BTreeMap::<(String, u64), Entry>::new();
+    let mut entries = BTreeMap::<String, Entry>::new();
 
     for raw in snapshot.entries.into_iter() {
         if !is_under_prefix(raw.path.as_str(), prefix) || raw.path == prefix {
@@ -265,8 +267,9 @@ fn tree_entries(prefix: &str) -> io::Result<Vec<Entry>> {
             };
             let depth = path_depth(current.as_str());
             entries
-                .entry((current.clone(), raw.id))
+                .entry(current.clone())
                 .and_modify(|entry| {
+                    entry.id = entry.id.max(raw.id);
                     if matches!(kind, kfs::FsEntryKind::Dir) {
                         entry.kind = kfs::FsEntryKind::Dir;
                     }
