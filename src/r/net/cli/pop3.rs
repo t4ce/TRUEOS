@@ -15,8 +15,8 @@ use v::vnet::{self, EndpointV4};
 
 use crate::net::tls::{TlsClientConfig, TlsRoots};
 use crate::net::tls_socket::{TlsCommand, TlsEvent, TlsTimeouts, register_tls_app_queues};
+use crate::r::net::dns::{self, DnsConfig};
 use crate::r::net::{NetProfile, Queue};
-use crate::t::net::dns::{self, DnsConfig};
 
 pub const POP3_HOST: &str = crate::allports::mail::POP3_HOST;
 pub const POP3_PORT: u16 = crate::allports::mail::POP3_PORT;

@@ -1381,13 +1381,13 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
             Some(crate::std_abi_shim::pthread_cond_broadcast as *const () as usize)
         }
         "trueos_platform_monotonic_nanos" => {
-            Some(crate::t::platform::trueos_platform_monotonic_nanos as *const () as usize)
+            Some(crate::r::platform::trueos_platform_monotonic_nanos as *const () as usize)
         }
         "trueos_platform_unix_seconds" => {
-            Some(crate::t::platform::trueos_platform_unix_seconds as *const () as usize)
+            Some(crate::r::platform::trueos_platform_unix_seconds as *const () as usize)
         }
         "trueos_platform_cpu_count" => {
-            Some(crate::t::platform::trueos_platform_cpu_count as *const () as usize)
+            Some(crate::r::platform::trueos_platform_cpu_count as *const () as usize)
         }
         "trueos_tokio_spawn_blocking_job" => Some(
             crate::t::trueos_tokio_worker::trueos_tokio_spawn_blocking_job as *const () as usize,
@@ -1401,20 +1401,20 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "trueos_time_unix_seconds" => {
             Some(crate::std_abi_shim::trueos_time_unix_seconds as *const () as usize)
         }
-        "trueos_tokio_platform_log_semantic_gap" => Some(
-            crate::t::tokio_platform::trueos_tokio_platform_log_semantic_gap as *const () as usize,
-        ),
-        "trueos_tokio_platform_log" => {
-            Some(crate::t::tokio_platform::trueos_tokio_platform_log as *const () as usize)
+        "trueos_tokio_platform_log_semantic_gap" => {
+            Some(crate::r::platform::trueos_tokio_platform_log_semantic_gap as *const () as usize)
         }
-        "trueos_tokio_platform_monotonic_nanos" => Some(
-            crate::t::tokio_platform::trueos_tokio_platform_monotonic_nanos as *const () as usize,
-        ),
+        "trueos_tokio_platform_log" => {
+            Some(crate::r::platform::trueos_tokio_platform_log as *const () as usize)
+        }
+        "trueos_tokio_platform_monotonic_nanos" => {
+            Some(crate::r::platform::trueos_tokio_platform_monotonic_nanos as *const () as usize)
+        }
         "trueos_tokio_platform_poll_once" => {
-            Some(crate::t::tokio_platform::trueos_tokio_platform_poll_once as *const () as usize)
+            Some(crate::r::platform::trueos_tokio_platform_poll_once as *const () as usize)
         }
         "trueos_tokio_platform_sleep_ms" => {
-            Some(crate::t::tokio_platform::trueos_tokio_platform_sleep_ms as *const () as usize)
+            Some(crate::r::platform::trueos_tokio_platform_sleep_ms as *const () as usize)
         }
         "trueos_mio_tcp_listener_bind" => {
             Some(crate::mio_compat::trueos_mio_tcp_listener_bind as *const () as usize)
@@ -1732,11 +1732,7 @@ pub(crate) fn invoke_host_rel(
     let main_addr =
         find_main_addr(unpacked, sections.as_slice(), image.section_bases.as_slice(), entry_hint)?;
     let entry_section = entry_hint_section(entry_hint) as usize;
-    let entry_section_base = image
-        .section_bases
-        .get(entry_section)
-        .copied()
-        .unwrap_or(0);
+    let entry_section_base = image.section_bases.get(entry_section).copied().unwrap_or(0);
     let vm_for_stats = portal_guest_alloc_vm_id().unwrap_or(0);
     let stats = crate::allocators::hv_guest_heap_stats(vm_for_stats);
     crate::hv::hvlogf(format_args!(

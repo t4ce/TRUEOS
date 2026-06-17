@@ -157,45 +157,6 @@ fn hda_duration_ms_for_samples(sample_count: usize) -> u32 {
     ms.clamp(1, u64::from(u32::MAX)) as u32
 }
 
-async fn load_hda_wav_loop_samples() -> Result<Vec<i16>, &'static str> {
-    let url = crate::allports::local_assets::AUDIO_DEMO_URL;
-    crate::log!(
-        "intel/hda-audio-demo: wav fetch submit trace={} url={}\n",
-        HDA_AUDIO_DEMO_WAV_TRACE_MARKER,
-        url
-    );
-    let body = crate::t::run_on_shared_tokio(move || async move {
-        crate::log!(
-            "intel/hda-audio-demo: wav fetch job enter trace={} url={}\n",
-            HDA_AUDIO_DEMO_WAV_TRACE_MARKER,
-            url
-        );
-        crate::t::net::http::fetch_http_body_hyper(
-            url,
-            HDA_WAV_FETCH_TIMEOUT_MS,
-            HDA_WAV_FETCH_MAX_BYTES,
-        )
-        .await
-    })
-    .await
-    .map_err(|_| "shared tokio unavailable")?
-    .map_err(|_| "http fetch failed")?;
-    crate::log!(
-        "intel/hda-audio-demo: wav fetch body trace={} url={} bytes={}\n",
-        HDA_AUDIO_DEMO_WAV_TRACE_MARKER,
-        url,
-        body.len()
-    );
-    let samples = decode_wav_pcm_s16_stereo_48k(body.as_slice())?;
-    crate::log!(
-        "intel/hda-audio-demo: wav decode ok trace={} samples={} frames={}\n",
-        HDA_AUDIO_DEMO_WAV_TRACE_MARKER,
-        samples.len(),
-        samples.len() / HDA_WAV_CHANNELS
-    );
-    Ok(samples)
-}
-
 #[embassy_executor::task]
 pub async fn task() {
     crate::log!(

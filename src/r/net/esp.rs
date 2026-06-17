@@ -124,12 +124,12 @@ pub async fn upload_app_to_device(
         target_name,
         body.len()
     );
-    crate::t::net::http::post_http_body_hyper_with_headers(
+    crate::surfer::html_shack::post_bytes_via_pool(
         upload_url.as_str(),
         "application/octet-stream",
         &[("X-Filename", target_name)],
         body,
-        ESP_CONTROL_TIMEOUT_MS,
+        ESP_CONTROL_TIMEOUT_MS as u64,
         ESP_CONTROL_MAX_RX,
     )
     .await
@@ -138,11 +138,12 @@ pub async fn upload_app_to_device(
     let Some(run_url) = iface.run_url() else {
         return Err(EspControlError::DeviceUnreachable);
     };
-    crate::t::net::http::post_http_body_hyper(
+    crate::surfer::html_shack::post_bytes_via_pool(
         run_url.as_str(),
         "",
         &[],
-        ESP_CONTROL_TIMEOUT_MS,
+        &[],
+        ESP_CONTROL_TIMEOUT_MS as u64,
         ESP_CONTROL_MAX_RX,
     )
     .await
@@ -162,11 +163,12 @@ pub async fn restart_device(
     let Some(url) = manual_endpoint_url(&snapshot, trueos_esp::swarm::ESP_RESTART_PATH) else {
         return Err(EspControlError::DeviceUnreachable);
     };
-    let restart_requested = crate::t::net::http::post_http_body_hyper(
+    let restart_requested = crate::surfer::html_shack::post_bytes_via_pool(
         url.as_str(),
         "",
         &[],
-        ESP_CONTROL_TIMEOUT_MS,
+        &[],
+        ESP_CONTROL_TIMEOUT_MS as u64,
         ESP_CONTROL_MAX_RX,
     )
     .await
@@ -194,19 +196,15 @@ async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
         return;
     };
 
-    let url_string = String::from(url.as_str());
-    match crate::t::run_on_shared_tokio(move || async move {
-        crate::t::net::http::fetch_http_body_hyper(
-            url_string.as_str(),
-            ESP_STATUS_FETCH_TIMEOUT_MS,
-            ESP_STATUS_FETCH_MAX_RX,
-        )
-        .await
-    })
+    match crate::surfer::html_shack::fetch_bytes_via_pool(
+        url.as_str(),
+        ESP_STATUS_FETCH_TIMEOUT_MS as u64,
+        ESP_STATUS_FETCH_MAX_RX,
+    )
     .await
     {
-        Ok(Ok(body)) => {
-            if let Some(status) = trueos_esp::swarm::parse_status_snapshot(body.as_slice()) {
+        Ok(fetch) => {
+            if let Some(status) = trueos_esp::swarm::parse_status_snapshot(fetch.bytes.as_slice()) {
                 let now_ms = monotonic_ms();
                 let event =
                     DEVICE_REGISTRY
@@ -228,24 +226,16 @@ async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
                     "esp-gate: status parse failed handle={} url={} bytes={}\n",
                     snapshot.handle.0,
                     url.as_str(),
-                    body.len()
+                    fetch.bytes.len()
                 );
             }
         }
-        Ok(Err(err)) => {
+        Err(err) => {
             crate::log!(
-                "esp-gate: status fetch failed handle={} url={} timeout_ms={} err={:?}\n",
+                "esp-gate: status fetch failed handle={} url={} timeout_ms={} err={}\n",
                 snapshot.handle.0,
                 url.as_str(),
                 ESP_STATUS_FETCH_TIMEOUT_MS,
-                err
-            );
-        }
-        Err(err) => {
-            crate::log!(
-                "esp-gate: status fetch shared-tokio failed handle={} url={} err={:?}\n",
-                snapshot.handle.0,
-                url.as_str(),
                 err
             );
         }

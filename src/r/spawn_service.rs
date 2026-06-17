@@ -174,28 +174,9 @@ pub fn task_run_guard(name: &'static str) -> TaskRunGuard {
     TaskRunGuard { name }
 }
 
-pub fn kernel_task_domain_for_name(name: &str) -> crate::t::kernel_task_domain::KernelTaskDomain {
-    if name.starts_with("ui2-") {
-        crate::t::kernel_task_domain::KernelTaskDomain::Ui2Service
-    } else if name.starts_with("net-")
-        || name.contains("http")
-        || name.contains("tls")
-        || name.contains("ftp")
-        || name.contains("sntp")
-        || name.contains("ntp")
-    {
-        crate::t::kernel_task_domain::KernelTaskDomain::NetService
-    } else if name.starts_with("gfx-") {
-        crate::t::kernel_task_domain::KernelTaskDomain::GfxService
-    } else if name.starts_with("app-vm") || name.starts_with("bp-") || name.starts_with("hv-vm") {
-        crate::t::kernel_task_domain::KernelTaskDomain::VmRun
-    } else {
-        crate::t::kernel_task_domain::KernelTaskDomain::HostService
-    }
-}
-
 pub fn with_task_domain<T>(name: &str, f: impl FnOnce() -> T) -> T {
-    crate::t::kernel_task_domain::with(kernel_task_domain_for_name(name), None, f)
+    let _ = name;
+    f()
 }
 
 pub fn task_stop_requested(name: &str) -> bool {
@@ -494,14 +475,6 @@ fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_http_trueosfs(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::tst_http_trueosfs::http_trueosfs_task())
-}
-
-fn spawn_hyper_http1_probe(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |_worker_spawner| crate::hyper_probe::hyper_net_probe_task())
-}
-
-fn hyper_http1_probe_enabled() -> bool {
-    crate::allcaps::probes::HYPER_HTTP1_NET_PROBE
 }
 
 fn spawn_ws_time(spawner: Spawner) -> SpawnAttempt {
@@ -1171,9 +1144,9 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled_gated(
         "hyper-http1-probe",
         HYPER_HTTP1_PROBE_READY,
-        hyper_http1_probe_enabled,
+        true,
         &HYPER_HTTP1_PROBE_STARTED,
-        spawn_hyper_http1_probe,
+        true,
     ),
     TaskSpec::enabled("app-vm-run-queue", 0, &APP_VM_RUN_QUEUE_STARTED, spawn_app_vm_run_queue),
     TaskSpec::enabled(

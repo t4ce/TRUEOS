@@ -591,7 +591,7 @@ fn current_alloc_domain() -> AllocDomain {
         return AllocDomain::HvGuest(vm_id);
     }
 
-    if let Some(vm_id) = crate::t::kernel_task_domain::guest_owned_alloc_vm_id() {
+    if let Some(vm_id) = crate::r::kernel_task_domain::guest_owned_alloc_vm_id() {
         return AllocDomain::HvGuest(vm_id);
     }
 
@@ -667,8 +667,8 @@ pub fn with_hv_guest_alloc_domain<T>(vm_id: u8, f: impl FnOnce() -> T) -> Option
         return None;
     }
     let Some(slot) = cpuid_slot() else {
-        return Some(crate::t::kernel_task_domain::with(
-            crate::t::kernel_task_domain::KernelTaskDomain::VmGuestOwnedAlloc,
+        return Some(crate::r::kernel_task_domain::with(
+            crate::r::kernel_task_domain::KernelTaskDomain::VmGuestOwnedAlloc,
             Some(vm_id),
             f,
         ));
@@ -677,8 +677,8 @@ pub fn with_hv_guest_alloc_domain<T>(vm_id: u8, f: impl FnOnce() -> T) -> Option
     let vm_force = HV_GUEST_ALLOC_DOMAIN_FORCE_VM_BY_CPU.get(slot)?;
     let previous_vm = vm_force.swap(vm_id as u32 + 1, Ordering::AcqRel);
     depth.fetch_add(1, Ordering::AcqRel);
-    let out = crate::t::kernel_task_domain::with(
-        crate::t::kernel_task_domain::KernelTaskDomain::VmGuestOwnedAlloc,
+    let out = crate::r::kernel_task_domain::with(
+        crate::r::kernel_task_domain::KernelTaskDomain::VmGuestOwnedAlloc,
         Some(vm_id),
         f,
     );

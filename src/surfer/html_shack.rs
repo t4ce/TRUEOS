@@ -1,21 +1,36 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
+use alloc::collections::BTreeSet;
 use alloc::collections::VecDeque;
 use alloc::string::String;
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use embassy_time::{Duration as EmbassyDuration, Timer};
-use heapless::String as HString;
+use alloc::vec::Vec;
+use core::convert::Infallible;
+use core::pin::Pin;
+use core::sync::atomic::{AtomicU32, Ordering};
+use core::task::{Context, Poll};
+use embassy_executor::Spawner;
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use hyper::body::{Body, Bytes, Frame, SizeHint};
+use hyper::io;
+use hyper::rt::{Read, ReadBufCursor, Write};
 use spin::Mutex;
+use v::vnet as api;
 
+pub(crate) const HTML_FETCH_WORKERS: usize = 10;
 const HTML_FETCH_IDLE_MS: u64 = 250;
+const HTML_FETCH_CONNECT_TIMEOUT_MS: u64 = 10_000;
+const HTML_FETCH_DNS_TIMEOUT_MS: u64 = 5_000;
+const HTML_FETCH_BODY_TIMEOUT_MS: u64 = 35_000;
+const HTML_FETCH_MAX_BYTES: usize = 4 * 1024 * 1024;
+const HTML_FETCH_MAX_REDIRECTS: usize = 3;
 const HTML_PREVIEW_FRONT_LINES: usize = 5;
 const HTML_PREVIEW_LINE_CHARS: usize = 160;
 const HTML_SHACK_BROWSER_HANDOFF_ENABLE: bool = true;
 const HTML_SHACK_PREVIEW_ENABLE: bool = false;
 static HTML_FETCH_IDLE_LOGS: AtomicU32 = AtomicU32::new(0);
-static HTML_FETCH_WAITING_FOR_TOKIO_LOGGED: AtomicBool = AtomicBool::new(false);
-static HTML_FETCH_TOKIO_READY_LOGGED: AtomicBool = AtomicBool::new(false);
+static HTML_FETCH_WORKER_SEQ: AtomicU32 = AtomicU32::new(0);
+static HTML_BYTE_FETCH_SEQ: AtomicU32 = AtomicU32::new(1);
 
 /// A fetched HTML document.
 ///
@@ -76,6 +91,34 @@ impl HtmlRequest {
     }
 }
 
+struct ByteFetchRequest {
+    id: u32,
+    url: String,
+    timeout_ms: u64,
+    max_bytes: usize,
+    method: ByteFetchMethod,
+}
+
+#[derive(Clone)]
+enum ByteFetchMethod {
+    Get,
+    Post {
+        content_type: String,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+    },
+}
+
+pub struct ByteFetch {
+    pub url: String,
+    pub bytes: Vec<u8>,
+}
+
+struct ByteFetchCompletion {
+    id: u32,
+    result: Result<ByteFetch, String>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HtmlShackFileError {
     NoRoot,
@@ -92,6 +135,8 @@ pub enum HtmlShackFileError {
 pub struct HtmlShack {
     html_request_queue: VecDeque<HtmlRequest>,
     ready_html_queue: VecDeque<Html>,
+    byte_request_queue: VecDeque<ByteFetchRequest>,
+    ready_byte_queue: VecDeque<ByteFetchCompletion>,
 }
 
 impl HtmlShack {
@@ -134,6 +179,51 @@ impl HtmlShack {
             );
         }
         Some((latest, dropped))
+    }
+
+    fn push_byte_fetch(&mut self, request: ByteFetchRequest) -> usize {
+        if crate::logflag::HTML_SHACK_VERBOSE {
+            crate::log!(
+                "html_shack: enqueue byte_fetch id={} url={} pending_before={}\n",
+                request.id,
+                request.url,
+                self.byte_request_queue.len()
+            );
+        }
+        self.byte_request_queue.push_back(request);
+        self.byte_request_queue.len()
+    }
+
+    fn pop_byte_fetch(&mut self) -> Option<ByteFetchRequest> {
+        self.byte_request_queue.pop_front()
+    }
+
+    fn remove_byte_fetch(&mut self, id: u32) -> bool {
+        if let Some(idx) = self
+            .byte_request_queue
+            .iter()
+            .position(|request| request.id == id)
+        {
+            self.byte_request_queue.remove(idx);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn put_byte_fetch_result(&mut self, completion: ByteFetchCompletion) -> usize {
+        self.ready_byte_queue.push_back(completion);
+        self.ready_byte_queue.len()
+    }
+
+    fn take_byte_fetch_result(&mut self, id: u32) -> Option<Result<ByteFetch, String>> {
+        let idx = self
+            .ready_byte_queue
+            .iter()
+            .position(|completion| completion.id == id)?;
+        self.ready_byte_queue
+            .remove(idx)
+            .map(|completion| completion.result)
     }
 
     pub fn put_ready_html(&mut self, html: Html) -> usize {
@@ -196,6 +286,103 @@ pub fn prepare_ready_file_html(file_ref: &str) -> Result<Html, HtmlShackFileErro
 
 fn pop_latest_request() -> Option<(HtmlRequest, usize)> {
     with_html_shack(HtmlShack::pop_latest)
+}
+
+fn pop_byte_fetch_request() -> Option<ByteFetchRequest> {
+    with_html_shack(HtmlShack::pop_byte_fetch)
+}
+
+fn put_byte_fetch_result(id: u32, result: Result<ByteFetch, String>) -> usize {
+    with_html_shack(|shack| shack.put_byte_fetch_result(ByteFetchCompletion { id, result }))
+}
+
+pub async fn fetch_bytes_via_pool(
+    url: impl Into<String>,
+    timeout_ms: u64,
+    max_bytes: usize,
+) -> Result<ByteFetch, String> {
+    let url = url.into();
+    if url.trim().is_empty() {
+        return Err(String::from("empty url"));
+    }
+    if url.len() > 256 {
+        return Err(String::from("url too long"));
+    }
+
+    let id = HTML_BYTE_FETCH_SEQ.fetch_add(1, Ordering::AcqRel);
+    fetch_bytes_via_pool_method(id, url, timeout_ms, max_bytes, ByteFetchMethod::Get).await
+}
+
+pub async fn post_bytes_via_pool(
+    url: impl Into<String>,
+    content_type: impl Into<String>,
+    headers: &[(&str, &str)],
+    body: &[u8],
+    timeout_ms: u64,
+    max_bytes: usize,
+) -> Result<ByteFetch, String> {
+    let url = url.into();
+    if url.trim().is_empty() {
+        return Err(String::from("empty url"));
+    }
+    if url.len() > 256 {
+        return Err(String::from("url too long"));
+    }
+
+    let mut owned_headers = Vec::new();
+    for (name, value) in headers {
+        if name.trim().is_empty() {
+            return Err(String::from("empty header name"));
+        }
+        owned_headers.push((String::from(*name), String::from(*value)));
+    }
+
+    let id = HTML_BYTE_FETCH_SEQ.fetch_add(1, Ordering::AcqRel);
+    fetch_bytes_via_pool_method(
+        id,
+        url,
+        timeout_ms,
+        max_bytes,
+        ByteFetchMethod::Post {
+            content_type: content_type.into(),
+            headers: owned_headers,
+            body: Vec::from(body),
+        },
+    )
+    .await
+}
+
+async fn fetch_bytes_via_pool_method(
+    id: u32,
+    url: String,
+    timeout_ms: u64,
+    max_bytes: usize,
+    method: ByteFetchMethod,
+) -> Result<ByteFetch, String> {
+    with_html_shack(|shack| {
+        shack.push_byte_fetch(ByteFetchRequest {
+            id,
+            url,
+            timeout_ms,
+            max_bytes,
+            method,
+        })
+    });
+
+    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms);
+    loop {
+        if let Some(result) = with_html_shack(|shack| shack.take_byte_fetch_result(id)) {
+            return result;
+        }
+        if Instant::now() >= deadline {
+            let removed = with_html_shack(|shack| shack.remove_byte_fetch(id));
+            if removed {
+                return Err(String::from("timed out"));
+            }
+            return Err(String::from("timed out waiting for result"));
+        }
+        Timer::after(EmbassyDuration::from_millis(25)).await;
+    }
 }
 
 async fn store_ready_html(html: Html) -> usize {
@@ -289,34 +476,757 @@ fn log_html_preview(url: &str, html: &str) {
     }
 }
 
-#[embassy_executor::task]
-pub async fn html_fetch_service() {
-    crate::log!(
-        "html_shack: fetch service started executor=local transport=shared-tokio latest_wins=1\n"
-    );
-    loop {
-        if !crate::t::shared_tokio_runtime_ready() {
-            if crate::logflag::HTML_SHACK_VERBOSE
-                && !HTML_FETCH_WAITING_FOR_TOKIO_LOGGED.swap(true, Ordering::AcqRel)
-            {
-                crate::log!("html_shack: waiting for shared tokio runtime\n");
+struct RequestBody {
+    data: Option<Bytes>,
+}
+
+impl RequestBody {
+    fn empty() -> Self {
+        Self { data: None }
+    }
+
+    fn from_vec(bytes: Vec<u8>) -> Self {
+        if bytes.is_empty() {
+            Self::empty()
+        } else {
+            Self {
+                data: Some(Bytes::from(bytes)),
             }
-            if crate::logflag::HTML_SHACK_IDLE_LOGS {
-                let n = HTML_FETCH_IDLE_LOGS.fetch_add(1, Ordering::Relaxed);
-                if n.is_multiple_of(256) {
-                    crate::log!("html_shack: waiting for shared tokio runtime polls={}\n", n + 1);
-                }
-            }
-            Timer::after(EmbassyDuration::from_millis(HTML_FETCH_IDLE_MS)).await;
-            continue;
         }
-        if crate::logflag::HTML_SHACK_VERBOSE
-            && !HTML_FETCH_TOKIO_READY_LOGGED.swap(true, Ordering::AcqRel)
-        {
-            crate::log!("html_shack: shared tokio runtime ready\n");
+    }
+}
+
+impl Body for RequestBody {
+    type Data = Bytes;
+    type Error = Infallible;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        Poll::Ready(self.data.take().map(|data| Ok(Frame::data(data))))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.data.is_none()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        let len = self.data.as_ref().map(Bytes::len).unwrap_or(0) as u64;
+        SizeHint::with_exact(len)
+    }
+}
+
+struct HyperVnetIo {
+    net: crate::r::net::VNet,
+    handle: api::NetHandle,
+    rx: VecDeque<Vec<u8>>,
+    closed: bool,
+}
+
+impl HyperVnetIo {
+    fn new(net: crate::r::net::VNet, handle: api::NetHandle) -> Self {
+        Self {
+            net,
+            handle,
+            rx: VecDeque::new(),
+            closed: false,
+        }
+    }
+
+    fn pop_into(&mut self, mut buf: ReadBufCursor<'_>) -> bool {
+        let Some(chunk) = self.rx.pop_front() else {
+            return false;
+        };
+
+        let copied = chunk.len().min(buf.remaining());
+        buf.put_slice(&chunk[..copied]);
+        if copied < chunk.len() {
+            self.rx.push_front(Vec::from(&chunk[copied..]));
+        }
+        true
+    }
+}
+
+impl Read for HyperVnetIo {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: ReadBufCursor<'_>,
+    ) -> Poll<Result<(), io::Error>> {
+        if self.pop_into(buf) {
+            return Poll::Ready(Ok(()));
+        }
+        if self.closed {
+            return Poll::Ready(Ok(()));
         }
 
-        let Some((mut request, dropped_requests)) = pop_latest_request() else {
+        while let Some(ev) = self.net.pop_event() {
+            match ev {
+                api::Event::TcpData { handle, data } if handle == self.handle => {
+                    self.rx.push_back(Vec::from(data.as_slice()));
+                    return Poll::Pending;
+                }
+                api::Event::Closed { handle } if handle == self.handle => {
+                    self.closed = true;
+                    return Poll::Ready(Ok(()));
+                }
+                api::Event::Error { .. } => return Poll::Ready(Err(io::other("vnet error"))),
+                _ => {}
+            }
+        }
+
+        Poll::Pending
+    }
+}
+
+impl Write for HyperVnetIo {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, io::Error>> {
+        if self.closed {
+            return Poll::Ready(Err(io::not_connected("vnet tcp closed")));
+        }
+        if buf.is_empty() {
+            return Poll::Ready(Ok(0));
+        }
+        match self.net.send_tcp_all(self.handle, buf) {
+            Ok(()) => Poll::Ready(Ok(buf.len())),
+            Err(()) => Poll::Ready(Err(io::other("vnet tcp send"))),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<Result<(), io::Error>> {
+        let _ = self.net.submit(api::Command::Close {
+            handle: self.handle,
+        });
+        self.closed = true;
+        Poll::Ready(Ok(()))
+    }
+}
+
+#[embassy_executor::task(pool_size = 10)]
+async fn html_hyper_connection_task(
+    connection: hyper::client::conn::http1::Connection<HyperVnetIo, RequestBody>,
+) {
+    let mut connection = core::pin::pin!(connection);
+    loop {
+        let result = with_timeout_or_none(
+            core::future::poll_fn(|cx| core::future::Future::poll(connection.as_mut(), cx)),
+            1,
+        )
+        .await;
+        let Some(result) = result else {
+            continue;
+        };
+        if let Err(err) = result {
+            crate::log!("html_shack: hyper connection ended err={:?}\n", err);
+        }
+        break;
+    }
+}
+
+#[derive(Clone)]
+struct HttpTarget {
+    url: String,
+    host: String,
+    port: u16,
+    path_and_query: String,
+}
+
+enum HttpFetchError {
+    BadUrl,
+    UnsupportedScheme,
+    NoDns,
+    Dns,
+    Connect,
+    Hyper,
+    Body,
+    TooLarge,
+    Redirect(String),
+}
+
+impl HttpFetchError {
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::BadUrl => "bad-url",
+            Self::UnsupportedScheme => "unsupported-scheme",
+            Self::NoDns => "no-dns",
+            Self::Dns => "dns",
+            Self::Connect => "connect",
+            Self::Hyper => "hyper",
+            Self::Body => "body",
+            Self::TooLarge => "too-large",
+            Self::Redirect(_) => "redirect",
+        }
+    }
+}
+
+fn parse_http_url(url: &str) -> Result<HttpTarget, HttpFetchError> {
+    let trimmed = url.trim();
+    if trimmed.starts_with("https://") {
+        return Err(HttpFetchError::UnsupportedScheme);
+    }
+    let Some(rest) = trimmed.strip_prefix("http://") else {
+        return Err(HttpFetchError::BadUrl);
+    };
+
+    let authority_end = rest
+        .find(|c| c == '/' || c == '?' || c == '#')
+        .unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    if authority.is_empty() {
+        return Err(HttpFetchError::BadUrl);
+    }
+
+    let mut host = authority;
+    let mut port = 80u16;
+    if let Some(colon) = authority.rfind(':') {
+        host = &authority[..colon];
+        port = authority[colon + 1..]
+            .parse::<u16>()
+            .map_err(|_| HttpFetchError::BadUrl)?;
+    }
+    if host.is_empty() {
+        return Err(HttpFetchError::BadUrl);
+    }
+
+    let mut path_and_query = if authority_end >= rest.len() {
+        String::from("/")
+    } else {
+        let suffix = &rest[authority_end..];
+        if suffix.starts_with('?') {
+            alloc::format!("/{}", suffix)
+        } else {
+            String::from(suffix)
+        }
+    };
+    if let Some(fragment) = path_and_query.find('#') {
+        path_and_query.truncate(fragment);
+    }
+    if path_and_query.is_empty() {
+        path_and_query.push('/');
+    }
+
+    Ok(HttpTarget {
+        url: String::from(trimmed),
+        host: String::from(host),
+        port,
+        path_and_query,
+    })
+}
+
+fn parse_ipv4_literal(host: &str) -> Option<[u8; 4]> {
+    let mut out = [0u8; 4];
+    let mut count = 0usize;
+    for part in host.split('.') {
+        if count >= out.len() || part.is_empty() {
+            return None;
+        }
+        let octet = part.parse::<u8>().ok()?;
+        out[count] = octet;
+        count += 1;
+    }
+    if count == out.len() { Some(out) } else { None }
+}
+
+fn build_dns_a_query(host: &str, id: u16) -> Result<Vec<u8>, HttpFetchError> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&id.to_be_bytes());
+    out.extend_from_slice(&0x0100u16.to_be_bytes());
+    out.extend_from_slice(&1u16.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+
+    for label in host.trim_end_matches('.').split('.') {
+        if label.is_empty() || label.len() > 63 || !label.is_ascii() {
+            return Err(HttpFetchError::BadUrl);
+        }
+        out.push(label.len() as u8);
+        out.extend_from_slice(label.as_bytes());
+    }
+    out.push(0);
+    out.extend_from_slice(&1u16.to_be_bytes());
+    out.extend_from_slice(&1u16.to_be_bytes());
+    Ok(out)
+}
+
+fn dns_skip_name(buf: &[u8], mut offset: usize) -> Option<usize> {
+    loop {
+        let len = *buf.get(offset)?;
+        offset += 1;
+        if len == 0 {
+            return Some(offset);
+        }
+        if len & 0xC0 == 0xC0 {
+            let _ = *buf.get(offset)?;
+            return Some(offset + 1);
+        }
+        if len & 0xC0 != 0 {
+            return None;
+        }
+        offset = offset.checked_add(len as usize)?;
+        if offset > buf.len() {
+            return None;
+        }
+    }
+}
+
+fn parse_dns_a_response(buf: &[u8], id: u16) -> Option<[u8; 4]> {
+    if buf.len() < 12 || u16::from_be_bytes([buf[0], buf[1]]) != id {
+        return None;
+    }
+    let qd = u16::from_be_bytes([buf[4], buf[5]]) as usize;
+    let an = u16::from_be_bytes([buf[6], buf[7]]) as usize;
+    let mut offset = 12usize;
+    for _ in 0..qd {
+        offset = dns_skip_name(buf, offset)?.checked_add(4)?;
+        if offset > buf.len() {
+            return None;
+        }
+    }
+    for _ in 0..an {
+        offset = dns_skip_name(buf, offset)?;
+        if offset + 10 > buf.len() {
+            return None;
+        }
+        let ty = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
+        let class = u16::from_be_bytes([buf[offset + 2], buf[offset + 3]]);
+        let rdlen = u16::from_be_bytes([buf[offset + 8], buf[offset + 9]]) as usize;
+        offset += 10;
+        if offset + rdlen > buf.len() {
+            return None;
+        }
+        if ty == 1 && class == 1 && rdlen == 4 {
+            return Some([
+                buf[offset],
+                buf[offset + 1],
+                buf[offset + 2],
+                buf[offset + 3],
+            ]);
+        }
+        offset += rdlen;
+    }
+    None
+}
+
+async fn wait_for_vnet_event(
+    net: &crate::r::net::VNet,
+    timeout_ms: u64,
+    mut f: impl FnMut(api::Event) -> Option<Result<api::NetHandle, HttpFetchError>>,
+) -> Result<api::NetHandle, HttpFetchError> {
+    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms);
+    loop {
+        while let Some(ev) = net.pop_event() {
+            if let Some(result) = f(ev) {
+                return result;
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(HttpFetchError::Connect);
+        }
+        Timer::after(EmbassyDuration::from_micros(100)).await;
+    }
+}
+
+async fn resolve_ipv4(host: &str) -> Result<[u8; 4], HttpFetchError> {
+    if let Some(ip) = parse_ipv4_literal(host) {
+        return Ok(ip);
+    }
+
+    let (servers, count) = crate::net::adapter::primary_dhcp_dns_snapshot();
+    if count == 0 {
+        return Err(HttpFetchError::NoDns);
+    }
+    let dns_server = servers[0];
+    let net = crate::r::net::VNet::open_primary().ok_or(HttpFetchError::Dns)?;
+
+    net.submit(api::Command::OpenUdp { port: 0 })
+        .map_err(|_| HttpFetchError::Dns)?;
+    let udp = wait_for_vnet_event(&net, HTML_FETCH_DNS_TIMEOUT_MS, |ev| match ev {
+        api::Event::Opened {
+            handle,
+            kind: api::SocketKind::Udp,
+        } => Some(Ok(handle)),
+        api::Event::Error { .. } => Some(Err(HttpFetchError::Dns)),
+        _ => None,
+    })
+    .await?;
+
+    let id = HTML_FETCH_WORKER_SEQ.load(Ordering::Relaxed) as u16
+        ^ ((Instant::now().as_millis() as u16).rotate_left(5));
+    let query = build_dns_a_query(host, id)?;
+    net.submit(api::Command::SendUdp {
+        handle: udp,
+        remote: api::EndpointV4::new(dns_server, 53),
+        data: api::ByteBuf::from_slice_trunc(query.as_slice()),
+    })
+    .map_err(|_| HttpFetchError::Dns)?;
+
+    let deadline = Instant::now() + EmbassyDuration::from_millis(HTML_FETCH_DNS_TIMEOUT_MS);
+    loop {
+        while let Some(ev) = net.pop_event() {
+            match ev {
+                api::Event::UdpPacket { handle, data, .. } if handle == udp => {
+                    if let Some(ip) = parse_dns_a_response(data.as_slice(), id) {
+                        let _ = net.submit(api::Command::Close { handle: udp });
+                        return Ok(ip);
+                    }
+                }
+                api::Event::Error { .. } => return Err(HttpFetchError::Dns),
+                _ => {}
+            }
+        }
+        if Instant::now() >= deadline {
+            let _ = net.submit(api::Command::Close { handle: udp });
+            return Err(HttpFetchError::Dns);
+        }
+        Timer::after(EmbassyDuration::from_micros(100)).await;
+    }
+}
+
+async fn connect_tcp(ip: [u8; 4], port: u16) -> Result<HyperVnetIo, HttpFetchError> {
+    let net = crate::r::net::VNet::open_primary().ok_or(HttpFetchError::Connect)?;
+    net.submit(api::Command::OpenTcpConnect {
+        remote: api::EndpointV4::new(ip, port),
+    })
+    .map_err(|_| HttpFetchError::Connect)?;
+
+    let mut opened = None;
+    let handle = wait_for_vnet_event(&net, HTML_FETCH_CONNECT_TIMEOUT_MS, |ev| match ev {
+        api::Event::Opened {
+            handle,
+            kind: api::SocketKind::Tcp,
+        } => {
+            opened = Some(handle);
+            None
+        }
+        api::Event::TcpEstablished { handle, .. } if opened.is_none() || opened == Some(handle) => {
+            Some(Ok(handle))
+        }
+        api::Event::Closed { handle } if opened == Some(handle) => {
+            Some(Err(HttpFetchError::Connect))
+        }
+        api::Event::Error { .. } => Some(Err(HttpFetchError::Connect)),
+        _ => None,
+    })
+    .await?;
+
+    Ok(HyperVnetIo::new(net, handle))
+}
+
+async fn with_timeout_or_none<F: core::future::Future>(
+    fut: F,
+    timeout_ms: u64,
+) -> Option<F::Output> {
+    let mut fut = core::pin::pin!(fut);
+    let mut timeout = core::pin::pin!(Timer::after(EmbassyDuration::from_millis(timeout_ms)));
+
+    core::future::poll_fn(|cx| {
+        if let Poll::Ready(out) = fut.as_mut().poll(cx) {
+            return Poll::Ready(Some(out));
+        }
+        if timeout.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(None);
+        }
+        Poll::Pending
+    })
+    .await
+}
+
+async fn fetch_http_body_once(
+    target: &HttpTarget,
+    max_bytes: usize,
+    method: &ByteFetchMethod,
+) -> Result<Vec<u8>, HttpFetchError> {
+    let ip = resolve_ipv4(target.host.as_str()).await?;
+    crate::log!(
+        "html_shack: hyper connect host={} remote={}.{}.{}.{}:{} path={}\n",
+        target.host,
+        ip[0],
+        ip[1],
+        ip[2],
+        ip[3],
+        target.port,
+        target.path_and_query
+    );
+
+    let io = connect_tcp(ip, target.port).await?;
+    let (mut sender, connection) = hyper::client::conn::http1::handshake::<_, RequestBody>(io)
+        .await
+        .map_err(|_| HttpFetchError::Hyper)?;
+    let spawner: Spawner = unsafe { Spawner::for_current_executor().await };
+    let token = html_hyper_connection_task(connection).map_err(|_| HttpFetchError::Hyper)?;
+    spawner.spawn(token);
+
+    sender.ready().await.map_err(|_| HttpFetchError::Hyper)?;
+    let (http_method, request_body, content_type, extra_headers, content_len) = match method {
+        ByteFetchMethod::Get => (hyper::Method::GET, RequestBody::empty(), None, &[][..], 0usize),
+        ByteFetchMethod::Post {
+            content_type,
+            headers,
+            body,
+        } => (
+            hyper::Method::POST,
+            RequestBody::from_vec(body.clone()),
+            if content_type.is_empty() {
+                None
+            } else {
+                Some(content_type.as_str())
+            },
+            headers.as_slice(),
+            body.len(),
+        ),
+    };
+    let content_len_header = alloc::format!("{}", content_len);
+    let mut builder = hyper::Request::builder()
+        .method(http_method)
+        .uri(target.path_and_query.as_str())
+        .header(hyper::header::HOST, target.host.as_str())
+        .header(hyper::header::USER_AGENT, "TRUEOS/html_shack")
+        .header(hyper::header::ACCEPT, "text/html,*/*;q=0.8")
+        .header(hyper::header::CONNECTION, "close");
+    if let Some(content_type) = content_type {
+        builder = builder.header(hyper::header::CONTENT_TYPE, content_type);
+    }
+    if matches!(method, ByteFetchMethod::Post { .. }) {
+        builder = builder.header(hyper::header::CONTENT_LENGTH, content_len_header.as_str());
+    }
+    for (name, value) in extra_headers {
+        builder = builder.header(name.as_str(), value.as_str());
+    }
+    let request = builder
+        .body(request_body)
+        .map_err(|_| HttpFetchError::Hyper)?;
+
+    let mut response = sender
+        .send_request(request)
+        .await
+        .map_err(|_| HttpFetchError::Hyper)?;
+    let status = response.status();
+    if status.is_redirection() {
+        if let Some(location) = response
+            .headers()
+            .get(hyper::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+        {
+            return Err(HttpFetchError::Redirect(String::from(location)));
+        }
+    }
+    if !status.is_success() {
+        return Err(HttpFetchError::Body);
+    }
+
+    let mut out = Vec::new();
+    let body = response.body_mut();
+    loop {
+        let frame = core::future::poll_fn(|cx| Pin::new(&mut *body).poll_frame(cx)).await;
+        match frame {
+            Some(Ok(frame)) => {
+                if let Ok(data) = frame.into_data() {
+                    if out.len().saturating_add(data.len()) > max_bytes {
+                        return Err(HttpFetchError::TooLarge);
+                    }
+                    out.extend_from_slice(&data);
+                }
+            }
+            Some(Err(_)) => return Err(HttpFetchError::Body),
+            None => break,
+        }
+    }
+
+    Ok(out)
+}
+
+fn resolve_redirect(current: &HttpTarget, location: &str) -> Result<String, HttpFetchError> {
+    let location = location.trim();
+    if location.starts_with("http://") || location.starts_with("https://") {
+        return Ok(String::from(location));
+    }
+    if location.starts_with('/') {
+        return Ok(alloc::format!("http://{}:{}{}", current.host, current.port, location));
+    }
+    let base = current
+        .path_and_query
+        .rsplit_once('/')
+        .map(|(dir, _)| dir)
+        .unwrap_or("");
+    Ok(alloc::format!(
+        "http://{}:{}/{}{}",
+        current.host,
+        current.port,
+        base.trim_start_matches('/'),
+        location
+    ))
+}
+
+async fn fetch_http_body_hyper(
+    url: &str,
+    max_bytes: usize,
+    method: &ByteFetchMethod,
+) -> Result<(String, Vec<u8>), HttpFetchError> {
+    let mut current = String::from(url);
+    let mut seen = BTreeSet::new();
+
+    for hop in 0..=HTML_FETCH_MAX_REDIRECTS {
+        if !seen.insert(current.clone()) {
+            return Err(HttpFetchError::Body);
+        }
+        let target = parse_http_url(current.as_str())?;
+        match fetch_http_body_once(&target, max_bytes, method).await {
+            Ok(body) => return Ok((target.url, body)),
+            Err(HttpFetchError::Redirect(next)) if hop < HTML_FETCH_MAX_REDIRECTS => {
+                let next = resolve_redirect(&target, next.as_str())?;
+                crate::log!("html_shack: redirect hop={} {} -> {}\n", hop + 1, target.url, next);
+                current = next;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Err(HttpFetchError::Body)
+}
+
+async fn handle_byte_fetch_request(worker_id: u32, request: ByteFetchRequest) {
+    let result = with_timeout_or_none(
+        fetch_http_body_hyper(request.url.as_str(), request.max_bytes, &request.method),
+        request.timeout_ms,
+    )
+    .await;
+
+    let result = match result {
+        Some(Ok((url, bytes))) => {
+            crate::log!(
+                "html_shack: byte_fetch ready worker={} id={} url={} bytes={} transport=hyper-vnet\n",
+                worker_id,
+                request.id,
+                url,
+                bytes.len()
+            );
+            Ok(ByteFetch { url, bytes })
+        }
+        Some(Err(err)) => {
+            crate::log!(
+                "html_shack: byte_fetch failed worker={} id={} url={} reason={}\n",
+                worker_id,
+                request.id,
+                request.url,
+                err.reason()
+            );
+            Err(String::from(err.reason()))
+        }
+        None => {
+            crate::log!(
+                "html_shack: byte_fetch failed worker={} id={} url={} reason=timeout\n",
+                worker_id,
+                request.id,
+                request.url
+            );
+            Err(String::from("timed out"))
+        }
+    };
+
+    put_byte_fetch_result(request.id, result);
+}
+
+async fn handle_html_fetch_request(
+    worker_id: u32,
+    mut request: HtmlRequest,
+    dropped_requests: usize,
+) {
+    let fetch_url = resolve_request_url(&request);
+    if dropped_requests > 0 {
+        crate::log!(
+            "html_shack: dropped stale navigation requests worker={} count={} newest={}\n",
+            worker_id,
+            dropped_requests,
+            fetch_url
+        );
+    }
+
+    if fetch_url.len() > 256 {
+        crate::log!(
+            "html_shack: drop worker={} url={} reason=url too long max=256\n",
+            worker_id,
+            fetch_url
+        );
+        return;
+    }
+
+    let result = with_timeout_or_none(
+        fetch_http_body_hyper(fetch_url.as_str(), HTML_FETCH_MAX_BYTES, &ByteFetchMethod::Get),
+        HTML_FETCH_BODY_TIMEOUT_MS,
+    )
+    .await;
+
+    let Some(result) = result else {
+        crate::log!(
+            "html_shack: fetch failed worker={} url={} reason=timeout\n",
+            worker_id,
+            fetch_url
+        );
+        return;
+    };
+
+    let (source_url, bytes) = match result {
+        Ok(ok) => ok,
+        Err(err) => {
+            crate::log!(
+                "html_shack: fetch failed worker={} url={} reason={}\n",
+                worker_id,
+                fetch_url,
+                err.reason()
+            );
+            return;
+        }
+    };
+
+    let html_text = String::from_utf8_lossy(bytes.as_slice()).into_owned();
+    if HTML_SHACK_PREVIEW_ENABLE {
+        log_html_preview(source_url.as_str(), html_text.as_str());
+    }
+
+    let html = Html::new(source_url.clone(), html_text);
+    if let Some(callback) = request.auto_handoff_callback.as_mut() {
+        callback(html.clone());
+    }
+    let ready_len = store_ready_html(html).await;
+    crate::log!(
+        "html_shack: fetched worker={} url={} bytes={} ready={} transport=hyper-vnet\n",
+        worker_id,
+        source_url,
+        bytes.len(),
+        ready_len
+    );
+}
+
+#[embassy_executor::task(pool_size = 10)]
+pub async fn html_fetch_worker_task() {
+    let worker_id = HTML_FETCH_WORKER_SEQ
+        .fetch_add(1, Ordering::AcqRel)
+        .saturating_add(1);
+    crate::log!(
+        "html_shack: fetch worker started worker={} max_parallel={} executor=local transport=hyper-vnet latest_wins=1\n",
+        worker_id,
+        HTML_FETCH_WORKERS
+    );
+
+    loop {
+        if let Some(request) = pop_byte_fetch_request() {
+            handle_byte_fetch_request(worker_id, request).await;
+            continue;
+        }
+
+        let Some((request, dropped_requests)) = pop_latest_request() else {
             if crate::logflag::HTML_SHACK_IDLE_LOGS {
                 let n = HTML_FETCH_IDLE_LOGS.fetch_add(1, Ordering::Relaxed);
                 if n.is_multiple_of(256) {
@@ -327,38 +1237,6 @@ pub async fn html_fetch_service() {
             continue;
         };
 
-        let fetch_url = resolve_request_url(&request);
-        if dropped_requests > 0 {
-            crate::log!(
-                "html_shack: dropped stale navigation requests count={} newest={}\n",
-                dropped_requests,
-                fetch_url
-            );
-        }
-
-        let mut fetch_url_buf: HString<256> = HString::new();
-        if fetch_url_buf.push_str(fetch_url.as_str()).is_err() {
-            crate::log!("html_shack: drop url={} reason=url too long max=256\n", fetch_url);
-            continue;
-        }
-
-        if crate::logflag::HTML_SHACK_VERBOSE {
-            crate::log!("html_shack: fetch begin url={}\n", fetch_url);
-        }
-        match crate::t::net::fetch_html_best_effort_shared("html_shack", fetch_url_buf).await {
-            Ok(html) => {
-                if HTML_SHACK_PREVIEW_ENABLE {
-                    log_html_preview(fetch_url.as_str(), html.as_str());
-                }
-                let ready = Html::new(fetch_url.as_str(), html);
-                let ready_len = store_ready_html(ready.clone()).await;
-                crate::log!("html_shack: ready url={} ready_queue={}\n", ready.url, ready_len);
-
-                let _ = request.auto_handoff_callback.take();
-            }
-            Err(err) => {
-                crate::log!("html_shack: fetch failed url={} err={}\n", fetch_url, err);
-            }
-        }
+        handle_html_fetch_request(worker_id, request, dropped_requests).await;
     }
 }

@@ -204,29 +204,47 @@ struct OnlineApp {
     url: String,
 }
 
-const ONLINE_APPS_URL_HTTPS: &str = "https://trueos.eu/apps";
+const ONLINE_APPS_URL: &str = "http://trueos.eu/apps";
 const ONLINE_LIST_MAX_BYTES: usize = 1024 * 1024;
 const ONLINE_APP_MAX_BYTES: usize = 64 * 1024 * 1024;
 const ONLINE_FETCH_TIMEOUT_MS: u32 = 45_000;
 const ONLINE_HEADERS: &[&str; 3] = &["id", "module", "url"];
 
 async fn fetch_url_bytes(url: String, max_bytes: usize) -> Result<Vec<u8>, String> {
-    crate::t::net::https::get_bytes_shared(url, ONLINE_FETCH_TIMEOUT_MS, max_bytes)
-        .await
-        .map_err(|err| alloc::format!("{:?}", err))
+    let result = crate::surfer::html_shack::fetch_bytes_via_pool(
+        url.clone(),
+        ONLINE_FETCH_TIMEOUT_MS as u64,
+        max_bytes,
+    )
+    .await;
+    match result {
+        Ok(fetch) => Ok(fetch.bytes),
+        Err(err) if url.starts_with("https://") => {
+            let fallback = alloc::format!("http://{}", &url["https://".len()..]);
+            crate::surfer::html_shack::fetch_bytes_via_pool(
+                fallback,
+                ONLINE_FETCH_TIMEOUT_MS as u64,
+                max_bytes,
+            )
+            .await
+            .map(|fetch| fetch.bytes)
+            .map_err(|fallback_err| alloc::format!("{}; http fallback: {}", err, fallback_err))
+        }
+        Err(err) => Err(err),
+    }
 }
 
 async fn fetch_online_apps_html() -> Result<Vec<u8>, String> {
-    fetch_url_bytes(String::from(ONLINE_APPS_URL_HTTPS), ONLINE_LIST_MAX_BYTES).await
+    fetch_url_bytes(String::from(ONLINE_APPS_URL), ONLINE_LIST_MAX_BYTES).await
 }
 
 fn absolutize_online_url(href: &str) -> String {
     if href.contains("://") {
         String::from(href)
     } else if href.starts_with('/') {
-        alloc::format!("https://trueos.eu{}", href)
+        alloc::format!("http://trueos.eu{}", href)
     } else {
-        alloc::format!("https://trueos.eu/apps/{}", href)
+        alloc::format!("http://trueos.eu/apps/{}", href)
     }
 }
 
@@ -303,7 +321,10 @@ fn print_online_apps_target(target: &MatrixTarget, width: usize, apps: &[OnlineA
 
 #[embassy_executor::task(pool_size = 2)]
 async fn online_app_task(target: MatrixTarget, width: usize, mut args: Vec<String>) {
-    crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
+    crate::r::readiness::wait_for(
+        crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+    )
+    .await;
 
     let log = |text: &str| print_matrix_target_line(&target, text);
     if args.is_empty() {

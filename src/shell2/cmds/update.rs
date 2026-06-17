@@ -70,7 +70,7 @@ pub(crate) fn submit_update(
 async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::DeviceHandle) {
     let task_target = target.clone();
     async move {
-        const ISO_URL: &str = "https://trueos.eu/TrueOS.7z";
+        const ISO_URL: &str = "http://trueos.eu/TrueOS.7z";
 
         Timer::after(EmbassyDuration::from_millis(1)).await;
 
@@ -81,7 +81,10 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
 
         let info = disk.info();
         log("update: waiting for net");
-        crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
+        crate::r::readiness::wait_for(
+            crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+        )
+        .await;
         if interrupted() {
             log("update: interrupted before download");
             return;
@@ -125,19 +128,16 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
             return;
         }
 
-        let payload = match crate::t::run_on_shared_tokio(move || async move {
-            crate::t::net::https::fetch_https_body_hyper_async(ISO_URL, 120_000, 128 * 1024 * 1024)
-                .await
-        })
+        let payload = match crate::surfer::html_shack::fetch_bytes_via_pool(
+            ISO_URL,
+            120_000,
+            128 * 1024 * 1024,
+        )
         .await
         {
-            Ok(Ok(b)) => b,
-            Ok(Err(e)) => {
-                log(alloc::format!("update: download failed ({:?})", e).as_str());
-                return;
-            }
+            Ok(fetch) => fetch.bytes,
             Err(e) => {
-                log(alloc::format!("update: shared tokio unavailable ({:?})", e).as_str());
+                log(alloc::format!("update: download failed ({})", e).as_str());
                 return;
             }
         };

@@ -1,8 +1,6 @@
 use alloc::vec::Vec;
 
-pub(crate) fn publish_host_advertisement(
-    advertisement: trueos_esp::gate::TrueOsHostAdvertisement,
-) {
+pub(crate) fn publish_host_advertisement(advertisement: trueos_esp::gate::TrueOsHostAdvertisement) {
     let _ = advertisement;
 }
 

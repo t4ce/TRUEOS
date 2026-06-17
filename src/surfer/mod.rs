@@ -337,9 +337,13 @@ fn spawn_truesurfer_on_worker(browser_instance_id: u32) -> Result<bool, SpawnErr
 }
 
 pub(crate) fn spawn_html_fetch_service(spawner: Spawner) -> Result<bool, SpawnError> {
-    let token = html_shack::html_fetch_service()?;
-    spawner.spawn(token);
-    Ok(true)
+    let mut spawned = false;
+    for _ in 0..html_shack::HTML_FETCH_WORKERS {
+        let token = html_shack::html_fetch_worker_task()?;
+        spawner.spawn(token);
+        spawned = true;
+    }
+    Ok(spawned)
 }
 
 pub(crate) fn spawn_asset_fetch_service(spawner: Spawner) -> Result<bool, SpawnError> {

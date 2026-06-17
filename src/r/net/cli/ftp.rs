@@ -8,8 +8,8 @@ use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use embassy_time::{Duration, Instant, Timer};
 use v::vnet::{Command, EndpointV4, Event, NetHandle, SocketKind};
 
+use crate::r::net::dns::{self, DnsConfig};
 use crate::r::net::{NetProfile, VNet, ports};
-use crate::t::net::dns::{self, DnsConfig};
 
 const FTP_SERVER_IDLE_SLEEP_MS: u64 = 2;
 const FTP_SERVER_IO_TIMEOUT_MS: u32 = 30_000;
