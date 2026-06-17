@@ -497,8 +497,8 @@ pub(crate) fn current_guest_execution_context_vm_id() -> Option<u8> {
         return Some(vm_id);
     }
 
-    let snapshot = crate::t::th::vthread::current_snapshot()?;
-    if snapshot.role != crate::t::th::vthread::VTHREAD_ROLE_VM_HULL {
+    let snapshot = crate::stackkeeper::current_vm_hull_snapshot()?;
+    if snapshot.role != crate::stackkeeper::VM_HULL_RECORD_ROLE_VM_HULL {
         return None;
     }
 
@@ -1513,7 +1513,7 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
             }
         }
         "thread" => {
-            let record = crate::t::th::vthread::record_for_vm_hull(vm_id);
+            let record = crate::stackkeeper::vm_hull_record(vm_id);
             let state = vm_state(vm_id);
             blueprint_control_shell_line(
                 vm_id,
@@ -1779,9 +1779,9 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
         ));
     }
     hvlogf(format_args!(
-        "hv: vm{} reporting: vthread hull fs_base=0x{:016X}",
+        "hv: vm{} reporting: vm-hull fs_base=0x{:016X}",
         vm_id,
-        crate::t::th::vthread::vm_hull_fs_base(vm_id)
+        crate::stackkeeper::vm_hull_fs_base(vm_id)
     ));
     crate::log!(
         "app-vm-run-queue: vm launch enter vm={} mode={:?} stack_mib={}\n",
@@ -2516,7 +2516,7 @@ fn setup_vmcs_for_launch(
             ));
             let fs_base = unsafe { Msr::new(crate::hv::vmx::IA32_FS_BASE).read() };
             let gs_base = unsafe { Msr::new(crate::hv::vmx::IA32_GS_BASE).read() };
-            let guest_fs_base = crate::t::th::vthread::vm_hull_fs_base(vm_id);
+            let guest_fs_base = crate::stackkeeper::vm_hull_fs_base(vm_id);
             let sysenter_cs = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_CS).read() };
             let sysenter_esp = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_ESP).read() };
             let sysenter_eip = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_EIP).read() };
@@ -2703,7 +2703,7 @@ fn setup_vmcs_for_launch(
     };
     let fs_base = unsafe { Msr::new(crate::hv::vmx::IA32_FS_BASE).read() };
     let gs_base = unsafe { Msr::new(crate::hv::vmx::IA32_GS_BASE).read() };
-    let guest_fs_base = crate::t::th::vthread::vm_hull_fs_base(vm_id);
+    let guest_fs_base = crate::stackkeeper::vm_hull_fs_base(vm_id);
     let sysenter_cs = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_CS).read() };
     let sysenter_esp = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_ESP).read() };
     let sysenter_eip = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_EIP).read() };

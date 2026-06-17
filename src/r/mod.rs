@@ -4,6 +4,7 @@ pub mod pat {
     pub use super::pattern::*;
 }
 
+pub mod blocking;
 pub mod codec;
 pub mod cursor;
 pub mod disc;
@@ -23,6 +24,7 @@ pub mod shader;
 pub mod silk_service;
 pub mod spawn_service;
 pub mod spawn_spec;
+pub mod static_map;
 pub mod static_slots;
 pub mod stream;
 pub mod sync;
