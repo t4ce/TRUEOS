@@ -38,7 +38,6 @@ mod hv;
 #[cfg(not(target_arch = "x86_64"))]
 #[path = "hv_disabled.rs"]
 mod hv;
-mod hyper_probe;
 mod intel;
 #[path = "intel/intel_hda_audio_demo.rs"]
 mod intel_hda_audio_demo;
@@ -241,9 +240,6 @@ pub extern "C" fn kmain() -> ! {
         mio_probe::log_boot_probe();
     } else {
         mio_probe::assume_ready_when_probe_disabled();
-    }
-    if crate::allcaps::probes::HYPER_BOOT_PROBE {
-        hyper_probe::log_boot_probe();
     }
     match pci::nic_fpga_dma::init_default_once() {
         Ok(region) => {

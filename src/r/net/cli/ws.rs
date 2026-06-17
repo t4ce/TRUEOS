@@ -49,10 +49,10 @@ impl WsConnection {
         let dev_idx = profile
             .resolve_device_index()
             .ok_or(WsError::ConnectFailed)?;
-        let api_ip = match crate::t::net::dns::resolve_ipv4_for_device(
+        let api_ip = match crate::r::net::dns::resolve_ipv4_for_device(
             dev_idx,
             &host,
-            crate::t::net::dns::DnsConfig::for_profile(profile),
+            crate::r::net::dns::DnsConfig::for_profile(profile),
         )
         .await
         {

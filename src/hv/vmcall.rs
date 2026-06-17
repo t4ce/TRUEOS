@@ -282,8 +282,8 @@ fn write_mio_addr(out: &mut [u8], addr: crate::mio_compat::TrueosMioSocketAddr) 
 /// Called from the vmexit loop on every VMCALL exit.
 pub fn dispatch(vm_id: u8) -> DispatchOutcome {
     crate::allocators::with_host_alloc_domain(|| {
-        crate::t::kernel_task_domain::with(
-            crate::t::kernel_task_domain::KernelTaskDomain::VmBroker,
+        crate::r::kernel_task_domain::with(
+            crate::r::kernel_task_domain::KernelTaskDomain::VmBroker,
             Some(vm_id),
             || crate::hv::with_guest_broker_context(vm_id, || dispatch_inner(vm_id)),
         )

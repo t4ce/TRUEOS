@@ -24,9 +24,9 @@ fn line(io: &'static dyn ShellBackend2, text: &str) {
 }
 
 fn print_status(io: &'static dyn ShellBackend2) {
-    line(io, "hyper: client=http1 transport=tokio/vnet");
-    line(io, "hyper: http fetch=body+stream-to-trueosfs");
-    line(io, "hyper: https fetch=rustls body+stream-to-trueosfs");
+    line(io, "hyper: client=http1 transport=hyper-vnet");
+    line(io, "hyper: http fetch=html_shack byte lane");
+    line(io, "hyper: https fetch=not wired");
     line(io, "hyper: probe=spawn-svc hyper-http1-probe");
 }
 

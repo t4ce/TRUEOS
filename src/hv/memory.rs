@@ -1,6 +1,6 @@
 use super::hvlogf;
 use crate::phys::HeapArena;
-use crate::t::static_slots::StaticSlots;
+use crate::r::static_slots::StaticSlots;
 use spin::Mutex;
 
 #[inline]
