@@ -42,6 +42,7 @@ regex-automata = { version = "0.4.14", default-features = false, features = ["al
 twoway = { version = "0.2", default-features = false }
 unicode-segmentation = { version = "1", default-features = false }
 log = { version = "0.4", default-features = false }
+cpal = { version = "0.16.0", default-features = false, features = [] }
 trueos-qjs = { path = "crates/trueos-qjs", features = ["trueos"] }
 rustls = { version = "0.23", default-features = false, features = ["custom-provider", "tls12"] }
 rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "tls12", "zeroize"] }
@@ -100,6 +101,8 @@ debug = false
 opt-level = 2
 
 [patch.crates-io]
+cpal = { path = "vendor/cpal-0.16.0" }
+dasp_sample = { path = "vendor/dasp_sample-0.11.0" }
 embassy-executor = { path = "vendor/embassy-executor-0.10.0" }
 libc = { path = "vendor/libc-0.2.186" }
 png = { path = "vendor/png-0.18.1" }
@@ -147,6 +150,7 @@ embassy-time = { path = "vendor/embassy-time-0.5.1" }
 aarch64-cpu = { path = "vendor/aarch64-cpu-10.0.0" }
 lazy_static = { path = "vendor/lazy_static-1.5.0" }
 rustls-rustcrypto = { path = "vendor/rustls-rustcrypto-0.0.2-alpha" }
+ring = { path = "vendor/ring-0.17.14" }
 tokio = { path = "vendor/tokio-1.52.3" }
 tokio-util = { path = "vendor/tokio-util-0.7.18" }
 tokio-rustls = { path = "vendor/tokio-rustls-0.26.4" }

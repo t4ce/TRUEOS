@@ -6,6 +6,7 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "render joker <variant>");
     print_shell_line(io, "render joker list");
+    print_shell_line(io, "render sentinel scratch-mi");
     print_shell_line(io, "render oa <action>");
     print_shell_line(io, "render oa list");
 }
@@ -111,6 +112,47 @@ fn run_joker(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
     }
 }
 
+fn run_sentinel(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+    let Some(kind) = args.next() else {
+        usage(io);
+        return;
+    };
+    if kind.eq_ignore_ascii_case("scratch-gpgpu") {
+        print_shell_line(
+            io,
+            "render sentinel: skipped reason=gpgpu-alias-unsafe-use-scratch-mi",
+        );
+        return;
+    }
+    if !kind.eq_ignore_ascii_case("scratch-mi") {
+        usage(io);
+        return;
+    }
+    if !expect_no_more(io, args) {
+        return;
+    }
+
+    match crate::intel::render::submit_render_artificial_fragment_sentinel() {
+        Ok(result) => {
+            let msg = alloc::format!(
+                "render sentinel: mode={} ok={} descs={} rt_gpu=0x{:X} before=0x{:08X} after=0x{:08X} remapped_render={} meaning=artificial-fragment-not-wm",
+                result.mode,
+                result.ok as u8,
+                result.descs,
+                result.rt_gpu,
+                result.before,
+                result.after,
+                result.remapped_render as u8,
+            );
+            print_shell_line(io, msg.as_str());
+        }
+        Err(reason) => {
+            let msg = alloc::format!("render sentinel: skipped reason={}", reason);
+            print_shell_line(io, msg.as_str());
+        }
+    }
+}
+
 pub(crate) fn try_parse(
     io: &'static dyn ShellBackend2,
     args: &mut SplitWhitespace<'_>,
@@ -122,6 +164,8 @@ pub(crate) fn try_parse(
 
     if cmd.eq_ignore_ascii_case("joker") {
         run_joker(io, args);
+    } else if cmd.eq_ignore_ascii_case("sentinel") {
+        run_sentinel(io, args);
     } else if cmd.eq_ignore_ascii_case("oa") {
         run_oa(io, args);
     } else if cmd.eq_ignore_ascii_case("list") {

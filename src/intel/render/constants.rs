@@ -153,6 +153,8 @@ const RCS_EXEC_RESULT_DRAW_POST_RASTER: u32 = 0xC0DE_7727;
 const RCS_EXEC_RESULT_DRAW_FINAL_AFTER_LIGHT: u32 = 0xC0DE_7728;
 const RCS_EXEC_RESULT_DRAW_PRE_LIGHT_PC: u32 = 0xC0DE_7729;
 const RCS_EXEC_RESULT_DRAW_POST3D: u32 = 0xC0DE_7722;
+const RCS_ARTIFICIAL_FRAGMENT_PRE_COLOR: u32 = 0xA17F_1001;
+const RCS_ARTIFICIAL_FRAGMENT_POST_COLOR: u32 = 0xA17F_1002;
 const PRIMARY_TRIANGLE_SUBMIT_ATTEMPTS: usize = 3;
 const PRIMARY_USE_MI_STRIPE_PROBE: bool = false;
 const PRIMARY_USE_MI_SCANOUT_PROOF: bool = false;
@@ -169,6 +171,9 @@ const MI_STORE_DATA_IMM_GGTT_DW1: u32 = 0x1040_0002;
 const TS_GPGPU_THREADS_DISPATCHED_LO: usize = 0x2290;
 const TS_GPGPU_THREADS_DISPATCHED_HI: usize = 0x2294;
 const RENDER_MOCS: u32 = 1;
+const GEN12_L3ALLOC: usize = 0xB134;
+const GEN12_L3ALLOC_ADL_DEFAULT: u32 = (32 << 1) | (88 << 25);
+const GFX125_L3ALLOC_FULL_WAYS: u32 = 1 << 9;
 const SURFTYPE_2D: u32 = 1;
 const SURFTYPE_NULL: u32 = 7;
 const SURFACE_FORMAT_B8G8R8A8_UNORM: u32 = 10;
@@ -216,10 +221,12 @@ const CMD_3DSTATE_3D_MODE: u32 = 3 | (30 << 16) | (1 << 24) | (3 << 27) | (3 << 
 const CMD_3DSTATE_SLICE_TABLE_STATE_POINTERS: u32 = (32 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_BINDING_TABLE_POOL_ALLOC: u32 =
     2 | (25 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_CONSTANT_ALL_EMPTY_ALL_STAGES: u32 = (109 << 16) | (0x1F << 8) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_VS: u32 = 7 | (16 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_GS: u32 = 8 | (17 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_CLEAR_PARAMS: u32 = 1 | (4 << 16) | (3 << 27) | (3 << 29);
-const CMD_3DSTATE_DEPTH_BUFFER: u32 = 8 | (5 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_DEPTH_BUFFER_GEN12: u32 = 6 | (5 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_DEPTH_BUFFER_GFX125: u32 = 8 | (5 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_STENCIL_BUFFER: u32 = 6 | (6 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_HIER_DEPTH_BUFFER: u32 = 3 | (7 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_CLIP: u32 = 2 | (18 << 16) | (3 << 27) | (3 << 29);
@@ -260,7 +267,8 @@ const CMD_3DSTATE_PS_EXTRA: u32 = (79 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_DEPTH_BOUNDS: u32 = 2 | (113 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_RASTER: u32 = 3 | (80 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_SBE_SWIZ: u32 = 9 | (81 << 16) | (3 << 27) | (3 << 29);
-const CMD_3DSTATE_WM_HZ_OP: u32 = 4 | (82 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_WM_HZ_OP_GEN12: u32 = 3 | (82 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_WM_HZ_OP_GFX125: u32 = 4 | (82 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_URB_ALLOC_HS: u32 = 1 | (89 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_URB_ALLOC_DS: u32 = 1 | (90 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_URB_ALLOC_GS: u32 = 1 | (91 << 16) | (3 << 27) | (3 << 29);
@@ -362,6 +370,7 @@ const SO_NUM_PRIMS_WRITTEN_0: usize = 0x5200;
 const SO_WRITE_OFFSET_0: usize = 0x5280;
 const TRIANGLE_TOPOLOGY_POINTLIST: u32 = 1;
 const TRIANGLE_TOPOLOGY_TRILIST: u32 = 4;
+const TRIANGLE_TOPOLOGY_RECTLIST: u32 = 15;
 const TRIANGLE_PS_MAX_THREADS: u32 = 63;
 const TRIANGLE_VS_URB_START: u32 = 4;
 const TRIANGLE_VS_URB_ENTRIES: u32 = 192;
@@ -401,6 +410,14 @@ const VS_DRAW_FRONTIER_CONTRACTS: [TriangleFrontEndContract; 4] = [
         force_sbe_read_length: true,
     },
 ];
+const VS_DRAW_SBE_READ0_CONTRACT: TriangleFrontEndContract = TriangleFrontEndContract {
+    label: "sbe-read0",
+    vs_urb_output_length_override: TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE,
+    sbe_read_offset: 0,
+    sbe_read_length: 0,
+    force_sbe_read_offset: true,
+    force_sbe_read_length: true,
+};
 const GFX125_GEOMETRY_DSS_ENABLE: usize = 0x913C;
 const GFX125_PIXEL_PIPES: usize = 3;
 const GFX125_DUAL_SUBSLICES_PER_PIXEL_PIPE: usize = 2;
