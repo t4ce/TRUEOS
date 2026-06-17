@@ -4,7 +4,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use embassy_time::{Duration, Timer};
 
 const TONE_HZ: u32 = 440;
-const TONE_MS: u64 = 1_200;
+const TONE_MS: u64 = 10_200;
 const VOLUME: i32 = 9_000;
 const SINE_TABLE_BITS: u32 = 8;
 

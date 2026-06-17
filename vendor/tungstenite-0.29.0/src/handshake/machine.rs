@@ -1,7 +1,11 @@
 //! WebSocket handshake machine.
 
 #![allow(missing_docs)]
-use crate::io::{Cursor, Read, Write};
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[allow(unused_imports)]
+use crate::prelude::rust_2024::*;
+
+use crate::io::{Read, Write};
 use bytes::Buf;
 use log::*;
 
@@ -30,7 +34,7 @@ impl<Stream> HandshakeMachine<Stream> {
     pub fn start_write<D: Into<Vec<u8>>>(stream: Stream, data: D) -> Self {
         HandshakeMachine {
             stream,
-            state: HandshakeState::Writing(Cursor::new(data.into())),
+            state: HandshakeState::Writing(WriteBuffer::new(data.into())),
         }
     }
     /// Returns a shared reference to the inner stream.
@@ -79,7 +83,7 @@ impl<Stream: Read + Write> HandshakeMachine<Stream> {
             }
             HandshakeState::Writing(mut buf) => {
                 assert!(buf.has_remaining());
-                if let Some(size) = self.stream.write(Buf::chunk(&buf)).no_block()? {
+                if let Some(size) = self.stream.write(buf.chunk()).no_block()? {
                     assert!(size > 0);
                     buf.advance(size);
                     Ok(if buf.has_remaining() {
@@ -148,9 +152,33 @@ enum HandshakeState {
     /// Reading data from the peer.
     Reading(ReadBuffer, AttackCheck),
     /// Sending data to the peer.
-    Writing(Cursor<Vec<u8>>),
+    Writing(WriteBuffer),
     /// Flushing data to ensure that all intermediately buffered contents reach their destination.
     Flushing,
+}
+
+#[derive(Debug)]
+struct WriteBuffer {
+    bytes: Vec<u8>,
+    pos: usize,
+}
+
+impl WriteBuffer {
+    fn new(bytes: Vec<u8>) -> Self {
+        Self { bytes, pos: 0 }
+    }
+
+    fn has_remaining(&self) -> bool {
+        self.pos < self.bytes.len()
+    }
+
+    fn chunk(&self) -> &[u8] {
+        &self.bytes[self.pos..]
+    }
+
+    fn advance(&mut self, count: usize) {
+        self.pos = self.pos.saturating_add(count).min(self.bytes.len());
+    }
 }
 
 /// Attack mitigation. Contains counters needed to prevent DoS attacks

@@ -126,6 +126,19 @@ impl<'a> Lexer<'a> {
         Some(b)
     }
 
+    fn starts_section_sign(&self) -> bool {
+        self.src[self.pos..].starts_with('§')
+    }
+
+    fn bump_section_sign(&mut self) -> bool {
+        if self.starts_section_sign() {
+            self.pos += '§'.len_utf8();
+            true
+        } else {
+            false
+        }
+    }
+
     fn skip_ws_and_comments(&mut self) {
         loop {
             let Some(b) = self.peek() else {
@@ -167,6 +180,8 @@ impl<'a> Lexer<'a> {
         while let Some(c) = self.peek() {
             if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' {
                 self.pos += 1;
+            } else if self.bump_section_sign() {
+                continue;
             } else {
                 break;
             }
@@ -244,6 +259,9 @@ impl<'a> Lexer<'a> {
     fn next_token(&mut self) -> Result<Token, Diagnostic> {
         self.skip_ws_and_comments();
         let start = self.pos;
+        if self.bump_section_sign() {
+            return Ok(self.ident_or_keyword(start));
+        }
         let Some(c) = self.bump() else {
             return Ok(Token {
                 kind: LexTokenKind::Eof,

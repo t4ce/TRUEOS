@@ -107,6 +107,20 @@ impl<'a> Lexer<'a> {
         Some(ch)
     }
 
+    fn starts_section_sign(&self) -> bool {
+        self.src[self.idx..].starts_with('§')
+    }
+
+    fn bump_section_sign(&mut self) -> bool {
+        if self.starts_section_sign() {
+            self.idx += '§'.len_utf8();
+            self.col += 1;
+            true
+        } else {
+            false
+        }
+    }
+
     fn skip_ws_and_comments(&mut self) {
         loop {
             while matches!(self.peek(), Some(b' ' | b'\t' | b'\r' | b'\n')) {
@@ -150,6 +164,22 @@ impl<'a> Lexer<'a> {
             return Ok(Token {
                 kind: TokenKind::NoMain,
                 span,
+            });
+        }
+
+        if self.bump_section_sign() {
+            let start = span;
+            let ident_start = self.idx - '§'.len_utf8();
+            while matches!(self.peek(), Some(c) if c.is_ascii_alphanumeric())
+                || self.starts_section_sign()
+            {
+                if !self.bump_section_sign() {
+                    let _ = self.bump();
+                }
+            }
+            return Ok(Token {
+                kind: TokenKind::Id(self.src[ident_start..self.idx].to_string()),
+                span: start,
             });
         }
 
@@ -266,8 +296,12 @@ impl<'a> Lexer<'a> {
 
         if ch.is_ascii_alphabetic() {
             let start = self.idx;
-            while matches!(self.peek(), Some(c) if c.is_ascii_alphanumeric()) {
-                let _ = self.bump();
+            while matches!(self.peek(), Some(c) if c.is_ascii_alphanumeric())
+                || self.starts_section_sign()
+            {
+                if !self.bump_section_sign() {
+                    let _ = self.bump();
+                }
             }
             let ident = &self.src[start..self.idx];
             let kind = match ident {

@@ -31,11 +31,13 @@ static OPEN_FILES: Mutex<FixedKeyMap<c_int, OpenFile, OPEN_FILE_CAPACITY>> =
 static LOGGED_PTHREAD_SYNC: AtomicI32 = AtomicI32::new(0);
 static LOGGED_C_ALLOCATION_TRACK_OVERFLOW: AtomicI32 = AtomicI32::new(0);
 static PTHREAD_SYNC_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
+static PTHREAD_CREATE_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
 static PTHREAD_NEXT_THREAD_ID: AtomicUsize = AtomicUsize::new(1);
 static NEXT_FILE_FD: AtomicI32 = AtomicI32::new(3);
 
 const PTHREAD_SYNC_TRACE_LIMIT: usize = 48;
-const C_ALLOCATION_CAPACITY: usize = 16384;
+const PTHREAD_CREATE_TRACE_LIMIT: usize = 16;
+const C_ALLOCATION_CAPACITY: usize = 65536;
 const PTHREAD_MUTEX_CAPACITY: usize = 256;
 const PTHREAD_COND_CAPACITY: usize = 256;
 const PTHREAD_KEY_CAPACITY: usize = 128;
@@ -153,6 +155,7 @@ struct PthreadCondState {
 struct PthreadMutexState {
     locked: bool,
     owner: usize,
+    depth: usize,
 }
 
 struct PthreadThreadState {
@@ -177,6 +180,26 @@ fn write_platform_fd(fd: u32, bytes: &[u8]) {
         1 => crate::r::io::cabi::write_console_bytes(crate::r::io::cabi::ConsoleStream::Out, bytes),
         2 => crate::r::io::cabi::write_console_bytes(crate::r::io::cabi::ConsoleStream::Err, bytes),
         _ => uart_write(bytes),
+    }
+}
+
+fn posix_rc_i32(rc: c_int) -> c_int {
+    if rc < 0 {
+        TRUEOS_ERRNO.store(rc.saturating_neg(), Ordering::Relaxed);
+        -1
+    } else {
+        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+        rc
+    }
+}
+
+fn posix_rc_isize(rc: isize) -> isize {
+    if rc < 0 {
+        TRUEOS_ERRNO.store((rc.saturating_neg()).min(c_int::MAX as isize) as c_int, Ordering::Relaxed);
+        -1
+    } else {
+        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+        rc
     }
 }
 
@@ -246,6 +269,19 @@ fn pthread_sync_trace(op: &str, key: usize) {
     }
 }
 
+fn pthread_create_trace(thread_id: usize, rc: c_int) {
+    let seq = PTHREAD_CREATE_TRACE_COUNT.fetch_add(1, Ordering::Relaxed);
+    if seq < PTHREAD_CREATE_TRACE_LIMIT {
+        crate::log!(
+            "std-abi: pthread_create seq={} thread={} rc={} owner={}\n",
+            seq,
+            thread_id,
+            rc,
+            pthread_current_id()
+        );
+    }
+}
+
 fn pthread_mutex_unlock_key(key: usize) -> c_int {
     pthread_sync_trace("mutex.unlock", key);
     let owner = pthread_current_id();
@@ -256,8 +292,13 @@ fn pthread_mutex_unlock_key(key: usize) -> c_int {
     if state.locked && state.owner != owner {
         return TRUEOS_EINVAL;
     }
+    if state.depth > 1 {
+        state.depth = state.depth.saturating_sub(1);
+        return 0;
+    }
     state.locked = false;
     state.owner = 0;
+    state.depth = 0;
     0
 }
 
@@ -271,12 +312,18 @@ fn pthread_mutex_lock_key(key: usize) -> c_int {
             let Some(state) = table.get_or_insert_with(key, || PthreadMutexState {
                 locked: false,
                 owner: 0,
+                depth: 0,
             }) else {
                 return TRUEOS_EAGAIN;
             };
+            if state.locked && state.owner == owner {
+                state.depth = state.depth.saturating_add(1).max(1);
+                return 0;
+            }
             if !state.locked {
                 state.locked = true;
                 state.owner = owner;
+                state.depth = 1;
                 return 0;
             }
         }
@@ -292,14 +339,20 @@ fn pthread_mutex_trylock_key(key: usize) -> c_int {
     let Some(state) = table.get_or_insert_with(key, || PthreadMutexState {
         locked: false,
         owner: 0,
+        depth: 0,
     }) else {
         return TRUEOS_EAGAIN;
     };
+    if state.locked && state.owner == owner {
+        state.depth = state.depth.saturating_add(1).max(1);
+        return 0;
+    }
     if state.locked {
         return TRUEOS_EBUSY;
     }
     state.locked = true;
     state.owner = owner;
+    state.depth = 1;
     0
 }
 
@@ -1249,6 +1302,88 @@ pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: usize) -> isiz
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn socket(domain: c_int, socket_type: c_int, protocol: c_int) -> c_int {
+    posix_rc_i32(crate::r::net::socket_cabi::trueos_cabi_socket_tcp_open(
+        domain,
+        socket_type,
+        protocol,
+    ))
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn setsockopt(
+    socket_id: c_int,
+    _level: c_int,
+    _optname: c_int,
+    optval: *const c_void,
+    optlen: u32,
+) -> c_int {
+    if socket_id < 0 {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    }
+    if optlen != 0 && optval.is_null() {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+
+    let rc = crate::r::net::socket_cabi::trueos_cabi_socket_tcp_set_nonblocking(
+        socket_id as u32,
+        0,
+    );
+    posix_rc_i32(if rc < 0 { rc } else { 0 })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn send(
+    socket_id: c_int,
+    buf: *const c_void,
+    len: usize,
+    _flags: c_int,
+) -> isize {
+    if socket_id < 0 {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    }
+    if len != 0 && buf.is_null() {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+
+    posix_rc_isize(crate::r::net::socket_cabi::trueos_cabi_socket_tcp_send(
+        socket_id as u32,
+        buf.cast::<u8>(),
+        len,
+    ))
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn recv(
+    socket_id: c_int,
+    buf: *mut c_void,
+    len: usize,
+    flags: c_int,
+) -> isize {
+    if socket_id < 0 {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    }
+    if len != 0 && buf.is_null() {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+
+    posix_rc_isize(crate::r::net::socket_cabi::trueos_cabi_socket_tcp_recv(
+        socket_id as u32,
+        buf.cast::<u8>(),
+        len,
+        flags,
+        0,
+        u64::MAX,
+    ))
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn readv(fd: c_int, iov: *const Iovec, iovcnt: c_int) -> isize {
     if iov.is_null() || iovcnt < 0 {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
@@ -1851,12 +1986,14 @@ pub unsafe extern "C" fn pthread_mutex_init(mutex: *mut c_void, _attr: *const c_
     let Some(state) = table.get_or_insert_with(key, || PthreadMutexState {
         locked: false,
         owner: 0,
+        depth: 0,
     }) else {
         return TRUEOS_EAGAIN;
     };
     *state = PthreadMutexState {
         locked: false,
         owner: 0,
+        depth: 0,
     };
     0
 }
@@ -2058,6 +2195,7 @@ pub unsafe extern "C" fn pthread_create(
     });
 
     let rc = crate::t::trueos_tokio_worker::trueos_tokio_spawn_blocking_job(job);
+    pthread_create_trace(thread_id, rc);
     if rc == 0 {
         0
     } else {

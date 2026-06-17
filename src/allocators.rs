@@ -10,12 +10,15 @@ use crate::phys::{self, HeapArena};
 
 const HV_GUEST_HEAP_ALIGN: usize = 2 * 1024 * 1024;
 pub const HV_GUEST_HEAP_MIN_ARENA_SIZE: usize = 16 * 1024 * 1024;
-pub const HV_GUEST_HEAP_MAX_ARENA_SIZE: usize = 512 * 1024 * 1024;
-const HV_GUEST_HEAP_CANDIDATES: [usize; 4] = [
+pub const HV_GUEST_HEAP_MAX_ARENA_SIZE: usize = 2 * 1024 * 1024 * 1024;
+const HV_GUEST_HEAP_LARGE_FALLBACK_ARENA_SIZE: usize = 1536 * 1024 * 1024;
+const HV_GUEST_HEAP_CANDIDATES: [usize; 6] = [
     HV_GUEST_HEAP_MAX_ARENA_SIZE,
+    HV_GUEST_HEAP_LARGE_FALLBACK_ARENA_SIZE,
+    1024 * 1024 * 1024,
+    512 * 1024 * 1024,
     256 * 1024 * 1024,
     128 * 1024 * 1024,
-    64 * 1024 * 1024,
 ];
 
 const ALLOC_TRACE_STAGE_ENTRY: u32 = 1;
@@ -550,6 +553,10 @@ fn alloc_domain_vm_id(domain: AllocDomain) -> Option<u8> {
     }
 }
 
+fn should_log_hv_guest_alloc_success() -> bool {
+    crate::hv::current_hull_guest_context_vm_id().is_none()
+}
+
 fn cpuid_slot() -> Option<usize> {
     let slot = crate::percpu::current_slot_via_cpuid();
     if slot < 64 { Some(slot) } else { None }
@@ -737,11 +744,12 @@ pub fn prepare_hv_guest_heap_for_vm(vm_id: u8, requested_size: usize) -> bool {
     }
 
     let requested_size = round_hv_guest_heap_request(requested_size);
+    let minimum_acceptable_size = requested_size;
     let ready_bit = 1u64 << vm_id;
     let mut guard = HV_GUEST_ALLOCATORS[vm_id as usize].lock();
     if guard.initialized {
         if guard.heap_source == HeapSourceKind::Arena {
-            return guard.heap_len >= requested_size;
+            return guard.heap_len >= minimum_acceptable_size;
         }
         crate::log!(
             "heap: hv guest vm{} non-arena heap already initialized src={:?} size={} KiB requested={} MiB; refusing launch\n",
@@ -753,25 +761,43 @@ pub fn prepare_hv_guest_heap_for_vm(vm_id: u8, requested_size: usize) -> bool {
         return false;
     }
     if guard.heap_len != 0 {
-        if guard.heap_source == HeapSourceKind::Arena && guard.heap_len >= requested_size {
+        if guard.heap_source == HeapSourceKind::Arena && guard.heap_len >= minimum_acceptable_size {
             HV_GUEST_HEAP_READY_MASK.fetch_or(ready_bit, Ordering::AcqRel);
             return true;
         }
         crate::log!(
-            "heap: hv guest vm{} non-arena heap configured src={:?} size={} KiB requested={} MiB; refusing launch\n",
+            "heap: hv guest vm{} heap configured src={:?} size={} KiB requested={} MiB min_acceptable={} MiB; refusing launch\n",
             vm_id,
             guard.heap_source,
             guard.heap_len / 1024,
-            requested_size / (1024 * 1024)
+            requested_size / (1024 * 1024),
+            minimum_acceptable_size / (1024 * 1024)
         );
         return false;
     }
 
-    let Some(arena) = phys::reserve_heap_arena(requested_size, HV_GUEST_HEAP_ALIGN) else {
+    let mut selected = None;
+    let mut last_candidate = 0;
+    for &candidate in HV_GUEST_HEAP_CANDIDATES.iter() {
+        let candidate = candidate.min(requested_size);
+        if candidate < minimum_acceptable_size || candidate == last_candidate {
+            continue;
+        }
+        last_candidate = candidate;
+        let Some(arena) = phys::reserve_heap_arena(candidate, HV_GUEST_HEAP_ALIGN) else {
+            continue;
+        };
+        selected = Some(arena);
+        break;
+    }
+
+    let Some(arena) = selected else {
         crate::log!(
-            "heap: hv guest vm{} requested arena unavailable size={} MiB\n",
+            "heap: hv guest vm{} requested arena unavailable size={} MiB min_acceptable={} MiB absolute_min={} MiB\n",
             vm_id,
-            requested_size / (1024 * 1024)
+            requested_size / (1024 * 1024),
+            minimum_acceptable_size / (1024 * 1024),
+            HV_GUEST_HEAP_MIN_ARENA_SIZE / (1024 * 1024)
         );
         return false;
     };
@@ -785,6 +811,15 @@ pub fn prepare_hv_guest_heap_for_vm(vm_id: u8, requested_size: usize) -> bool {
         arena.length / (1024 * 1024),
         requested_size / (1024 * 1024)
     );
+    if arena.length < requested_size {
+        crate::log!(
+            "heap: hv guest vm{} arena fallback accepted size={} MiB requested={} MiB min_acceptable={} MiB\n",
+            vm_id,
+            arena.length / (1024 * 1024),
+            requested_size / (1024 * 1024),
+            minimum_acceptable_size / (1024 * 1024)
+        );
+    }
     true
 }
 
@@ -795,7 +830,9 @@ unsafe impl GlobalAlloc for Allocator {
         if !ptr.is_null() {
             let tag_ptr = ptr.sub(size_of::<AllocTag>()) as *mut AllocTag;
             (*tag_ptr).domain = alloc_domain_tag(domain);
-            if let Some(vm_id) = alloc_domain_vm_id(domain) {
+            if let Some(vm_id) = alloc_domain_vm_id(domain)
+                && should_log_hv_guest_alloc_success()
+            {
                 log_hv_guest_alloc_watermark(vm_id, layout, ptr, "global");
             }
         } else if let Some(vm_id) = alloc_domain_vm_id(domain) {
@@ -831,7 +868,9 @@ pub unsafe fn alloc_raw(layout: Layout) -> *mut u8 {
     if !ptr.is_null() {
         let tag_ptr = ptr.sub(size_of::<AllocTag>()) as *mut AllocTag;
         (*tag_ptr).domain = alloc_domain_tag(domain);
-        if let Some(vm_id) = alloc_domain_vm_id(domain) {
+        if let Some(vm_id) = alloc_domain_vm_id(domain)
+            && should_log_hv_guest_alloc_success()
+        {
             log_hv_guest_alloc_watermark(vm_id, layout, ptr, "raw");
         }
     } else if let Some(vm_id) = alloc_domain_vm_id(domain) {
@@ -841,7 +880,7 @@ pub unsafe fn alloc_raw(layout: Layout) -> *mut u8 {
 }
 
 fn log_hv_guest_alloc_watermark(vm_id: u8, layout: Layout, ptr: *mut u8, path: &str) {
-    with_host_alloc_domain(|| {
+    with_host_alloc_domain_strong(|| {
         let Some(bucket_slot) = HV_GUEST_ALLOC_FREE_BUCKET_BY_VM.get(vm_id as usize) else {
             return;
         };
@@ -878,7 +917,7 @@ fn log_hv_guest_alloc_watermark(vm_id: u8, layout: Layout, ptr: *mut u8, path: &
 }
 
 fn log_hv_guest_alloc_failure(vm_id: u8, layout: Layout, path: &str) {
-    with_host_alloc_domain(|| {
+    with_host_alloc_domain_strong(|| {
         let stats = hv_guest_heap_stats(vm_id);
         let trace = last_alloc_trace();
         crate::log_warn!(

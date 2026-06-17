@@ -36,6 +36,7 @@ enum BlueprintMemoryClass {
     Ui,
     TokioRuntime,
     NetworkClient,
+    ServerRuntime,
     HeavyGraphics,
     Unknown,
 }
@@ -47,6 +48,7 @@ impl BlueprintMemoryClass {
             Self::Ui => "ui",
             Self::TokioRuntime => "tokio-runtime",
             Self::NetworkClient => "network-client",
+            Self::ServerRuntime => "server-runtime",
             Self::HeavyGraphics => "heavy-graphics",
             Self::Unknown => "unknown",
         }
@@ -347,6 +349,14 @@ fn classify_blueprint_memory(
     stats: crate::hv::blueprint::ElfAllocStats,
     imports: &[crate::hv::blueprint::ElfImport<'_>],
 ) -> BlueprintMemoryClass {
+    let server_signal = archive_has(archive, "horizon")
+        || archive_has(archive, "server")
+        || archive_has(archive, "game")
+        || import_name_has(imports, "pthread_");
+    if server_signal {
+        return BlueprintMemoryClass::ServerRuntime;
+    }
+
     let network_signal = archive_has(archive, "weather")
         || archive_has(archive, "currency")
         || archive_has(archive, "reqwest")
@@ -436,6 +446,14 @@ fn estimate_blueprint_memory_profile(
                 round_pow2_mib(base_live_mib.saturating_mul(32).saturating_add(128)).max(512),
                 512,
                 8,
+                16,
+                64,
+            ),
+            BlueprintMemoryClass::ServerRuntime => (
+                256,
+                round_pow2_mib(base_live_mib.saturating_mul(64).saturating_add(512)).max(2048),
+                2048,
+                16,
                 16,
                 64,
             ),

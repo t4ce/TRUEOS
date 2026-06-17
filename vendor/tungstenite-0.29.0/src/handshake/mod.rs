@@ -1,5 +1,9 @@
 //! WebSocket handshake control.
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[allow(unused_imports)]
+use crate::prelude::rust_2024::*;
+
 pub mod client;
 pub mod headers;
 pub mod machine;

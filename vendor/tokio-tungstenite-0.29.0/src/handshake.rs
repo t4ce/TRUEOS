@@ -7,6 +7,9 @@ use core::{
     task::{Context, Poll},
 };
 use log::*;
+#[cfg(target_os = "trueos")]
+use tungstenite::io::{Read, Write};
+#[cfg(not(target_os = "trueos"))]
 use std::io::{Read, Write};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tungstenite::WebSocket;

@@ -219,6 +219,30 @@ unsafe extern "C" fn qjs_shell2_print_line(
     qjs::JS_NewFloat64(ctx, text.len() as f64)
 }
 
+unsafe extern "C" fn qjs_shell2_slot_array_buffer(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let slot_id = if argc >= 1 && !argv.is_null() {
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        read_js_string_arg(ctx, args[0])
+            .map(|requested| normalize_slot_id(requested.as_str()))
+            .unwrap_or_else(matrix::MatrixSlotId::new)
+    } else {
+        let opaque = qjs::JS_GetContextOpaque(ctx) as *mut ShellQjsContextOpaque;
+        if opaque.is_null() {
+            matrix::MatrixSlotId::new()
+        } else {
+            (*opaque).slot_id.clone()
+        }
+    };
+
+    let text = matrix::slot_transcript_text(&slot_id);
+    qjs::JS_NewArrayBufferCopy(ctx, text.as_bytes().as_ptr(), text.len())
+}
+
 unsafe fn install_shell_globals(ctx: *mut qjs::JSContext) {
     let global = qjs::JS_GetGlobalObject(ctx);
     let shell2_print_fn = qjs::JS_NewCFunction2(
@@ -234,6 +258,43 @@ unsafe fn install_shell_globals(ctx: *mut qjs::JSContext) {
         global,
         b"__trueosShell2PrintLine\0".as_ptr() as *const c_char,
         shell2_print_fn,
+    );
+    let slot_array_buffer_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_shell2_slot_array_buffer),
+        b"abuffer\0".as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"abuffer\0".as_ptr() as *const c_char,
+        slot_array_buffer_fn,
+    );
+    let slot_operator_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_shell2_slot_array_buffer),
+        "§\0".as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(ctx, global, "§\0".as_ptr() as *const c_char, slot_operator_fn);
+    let shell2_slot_array_buffer_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_shell2_slot_array_buffer),
+        b"__trueosShell2SlotArrayBuffer\0".as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosShell2SlotArrayBuffer\0".as_ptr() as *const c_char,
+        shell2_slot_array_buffer_fn,
     );
     qjs::js_free_value(ctx, global);
 }
@@ -495,6 +556,7 @@ pub(crate) fn submit(
     submitted: &str,
 ) {
     let source = submitted.trim();
+    let source = if source == "§" { "§()" } else { source };
     if source.is_empty() {
         print_target_line(target, "qjs: empty input");
         return;

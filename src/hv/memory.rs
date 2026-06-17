@@ -41,6 +41,7 @@ const EPT_ENTRY_LARGE_PAGE: u64 = 1 << 7;
 // Page table entry flags
 pub const PT_ENTRY_PRESENT: u64 = 1 << 0;
 pub const PT_ENTRY_WRITABLE: u64 = 1 << 1;
+const PT_ENTRY_LARGE_PAGE: u64 = 1 << 7;
 
 #[repr(C, align(4096))]
 #[derive(Copy, Clone)]
@@ -1221,6 +1222,16 @@ pub fn build_guest_cr3_with_mode(
         let hv_guest_heap = crate::allocators::hv_guest_heap_stats(current_vm_id_for_log());
         log_guest_mapping("hv-guest-heap-start", hv_guest_heap.heap_start as u64);
         log_guest_mapping("hv-guest-heap-end-8", (hv_guest_heap.heap_end as u64).saturating_sub(8));
+        if hv_guest_heap.initialized
+            && hv_guest_heap.heap_start != 0
+            && hv_guest_heap.heap_end > hv_guest_heap.heap_start
+        {
+            verify_guest_mapping_chain("hv-guest-heap-start", hv_guest_heap.heap_start as u64)?;
+            verify_guest_mapping_chain(
+                "hv-guest-heap-end-8",
+                (hv_guest_heap.heap_end as u64).saturating_sub(8),
+            )?;
+        }
         verify_guest_mapping_chain("guest-rip", guest_rip)?;
         verify_guest_mapping_chain("image-start", mapped_code_base)?;
         verify_guest_mapping_chain(
@@ -1276,61 +1287,48 @@ unsafe fn read_guest_page_entry(page: *const [u64; 512], index: usize) -> u64 {
 }
 
 pub fn log_guest_mapping(label: &str, guest_va: u64) {
-    let low_half = pml4_index(guest_va) == pml4_index(GUEST_STACK_VA_BASE);
     let Some(pml4) = guest_pml4_page() else {
         return;
     };
-    let Some(low_pdpt) = guest_low_pdpt_page() else {
-        return;
-    };
-    let Some(low_pd) = guest_low_pd_page() else {
-        return;
-    };
-    let Some(high_pdpt) = guest_high_pdpt_page() else {
-        return;
-    };
-    let Some(high_pd) = guest_high_pd_page() else {
-        return;
-    };
     let pml4e = unsafe { read_guest_page_entry(pml4, pml4_index(guest_va)) };
-    let _pdpte = unsafe {
+    let pdpte = unsafe {
         if pml4e & PT_ENTRY_PRESENT == 0 {
             0
-        } else if low_half {
-            read_guest_page_entry(low_pdpt, pdpt_index(guest_va))
         } else {
-            read_guest_page_entry(high_pdpt, pdpt_index(guest_va))
+            read_phys_page_entry(pde_addr(pml4e), pdpt_index(guest_va)).unwrap_or(0)
         }
     };
-
-    let (pde, pte) = unsafe {
-        if low_half {
-            let pde = read_guest_page_entry(low_pd, pd_index(guest_va));
-            let pte = if pde & PT_ENTRY_PRESENT != 0 {
-                read_guest_low_pt_entry(guest_va, pde)
-            } else {
-                0
-            };
-            (pde, pte)
+    let pde = unsafe {
+        if pdpte & PT_ENTRY_PRESENT == 0 {
+            0
         } else {
-            let pde = read_guest_page_entry(high_pd, pd_index(guest_va));
-            let pte = if pde & PT_ENTRY_PRESENT != 0 {
-                read_guest_high_pt_entry(guest_va, pde)
-            } else {
-                0
-            };
-            (pde, pte)
+            read_phys_page_entry(pde_addr(pdpte), pd_index(guest_va)).unwrap_or(0)
+        }
+    };
+    let large_page = pde & PT_ENTRY_LARGE_PAGE != 0;
+    let pte = unsafe {
+        if large_page {
+            pde
+        } else if pde & PT_ENTRY_PRESENT != 0 {
+            read_phys_page_entry(pde_addr(pde), pt_index(guest_va)).unwrap_or(0)
+        } else {
+            0
         }
     };
 
     hvlogf(format_args!(
-        "hv: vm{} reporting: guest-map {} va=0x{:016X} region={} idx[pd={},pt={}] pde=0x{:016X} pte=0x{:016X}",
+        "hv: vm{} reporting: guest-map {} va=0x{:016X} region={} idx[pml4={},pdpt={},pd={},pt={}] large={} pml4e=0x{:016X} pdpte=0x{:016X} pde=0x{:016X} pte=0x{:016X}",
         current_vm_id_for_log(),
         label,
         guest_va,
         classify_guest_va(guest_va),
+        pml4_index(guest_va),
+        pdpt_index(guest_va),
         pd_index(guest_va),
         pt_index(guest_va),
+        large_page as u8,
+        pml4e,
+        pdpte,
         pde,
         pte
     ));
@@ -1483,21 +1481,8 @@ pub fn log_guest_phys_pt_context(label: &str, guest_cr3: u64, guest_va: u64) {
 }
 
 fn verify_guest_mapping_chain(label: &str, guest_va: u64) -> Result<(), &'static str> {
-    let low_half = pml4_index(guest_va) == pml4_index(GUEST_STACK_VA_BASE);
     let Some(pml4) = guest_pml4_page() else {
         return Err("guest verify pml4");
-    };
-    let Some(low_pdpt) = guest_low_pdpt_page() else {
-        return Err("guest verify pdpt");
-    };
-    let Some(low_pd) = guest_low_pd_page() else {
-        return Err("guest verify pd");
-    };
-    let Some(high_pdpt) = guest_high_pdpt_page() else {
-        return Err("guest verify pdpt");
-    };
-    let Some(high_pd) = guest_high_pd_page() else {
-        return Err("guest verify pd");
     };
     let pml4e = unsafe { read_guest_page_entry(pml4, pml4_index(guest_va)) };
     if pml4e & PT_ENTRY_PRESENT == 0 {
@@ -1516,13 +1501,8 @@ fn verify_guest_mapping_chain(label: &str, guest_va: u64) -> Result<(), &'static
         return Err("guest verify pml4");
     }
 
-    let pdpte = unsafe {
-        if low_half {
-            read_guest_page_entry(low_pdpt, pdpt_index(guest_va))
-        } else {
-            read_guest_page_entry(high_pdpt, pdpt_index(guest_va))
-        }
-    };
+    let pdpte = unsafe { read_phys_page_entry(pde_addr(pml4e), pdpt_index(guest_va)) }
+        .unwrap_or(0);
     if pdpte & PT_ENTRY_PRESENT == 0 {
         hvlogf(format_args!(
             "hv: vm{} reporting: guest-verify {} broken=pdpt va=0x{:016X} region={} idx[pml4={},pdpt={},pd={},pt={}] pml4e=0x{:016X} pdpte=0x{:016X}",
@@ -1540,13 +1520,7 @@ fn verify_guest_mapping_chain(label: &str, guest_va: u64) -> Result<(), &'static
         return Err("guest verify pdpt");
     }
 
-    let pde = unsafe {
-        if low_half {
-            read_guest_page_entry(low_pd, pd_index(guest_va))
-        } else {
-            read_guest_page_entry(high_pd, pd_index(guest_va))
-        }
-    };
+    let pde = unsafe { read_phys_page_entry(pde_addr(pdpte), pd_index(guest_va)) }.unwrap_or(0);
     if pde & PT_ENTRY_PRESENT == 0 {
         hvlogf(format_args!(
             "hv: vm{} reporting: guest-verify {} broken=pd va=0x{:016X} region={} idx[pml4={},pdpt={},pd={},pt={}] pml4e=0x{:016X} pdpte=0x{:016X} pde=0x{:016X}",
@@ -1564,12 +1538,24 @@ fn verify_guest_mapping_chain(label: &str, guest_va: u64) -> Result<(), &'static
         ));
         return Err("guest verify pd");
     }
+    if pde & PT_ENTRY_LARGE_PAGE != 0 {
+        hvlogf(format_args!(
+            "hv: vm{} reporting: guest-verify {} ok-large va=0x{:016X} region={} idx[pml4={},pdpt={},pd={}] pml4e=0x{:016X} pdpte=0x{:016X} pde=0x{:016X}",
+            current_vm_id_for_log(),
+            label,
+            guest_va,
+            classify_guest_va(guest_va),
+            pml4_index(guest_va),
+            pdpt_index(guest_va),
+            pd_index(guest_va),
+            pml4e,
+            pdpte,
+            pde
+        ));
+        return Ok(());
+    }
 
-    let pte = if low_half {
-        read_guest_low_pt_entry(guest_va, pde)
-    } else {
-        read_guest_high_pt_entry(guest_va, pde)
-    };
+    let pte = unsafe { read_phys_page_entry(pde_addr(pde), pt_index(guest_va)) }.unwrap_or(0);
     if pte & PT_ENTRY_PRESENT == 0 {
         hvlogf(format_args!(
             "hv: vm{} reporting: guest-verify {} broken=pt va=0x{:016X} region={} idx[pml4={},pdpt={},pd={},pt={}] pml4e=0x{:016X} pdpte=0x{:016X} pde=0x{:016X} pte=0x{:016X}",
@@ -2003,18 +1989,35 @@ fn map_guest_heap_span(
             let chunk_end = core::cmp::min(va.saturating_add(PAGE_SIZE_2M), end);
             if chunk_start < chunk_end {
                 let heap_pd = unsafe { core::ptr::addr_of_mut!((*tables).heap_pds[pd_slot].0) };
-                let heap_pt = unsafe { core::ptr::addr_of_mut!((*tables).image_pts[*pt_slot].0) };
-                let heap_pt_pa = host_va_to_pa(heap_pt as u64).ok_or("guest heap pt pa")?;
-                map_table_entry(heap_pd, pd_index(va), heap_pt_pa);
                 let phys = host_va_to_pa(chunk_start).ok_or("guest heap pa")?;
-                map_region_4k(
-                    heap_pt,
-                    chunk_start,
-                    phys,
-                    chunk_end.saturating_sub(chunk_start) as usize,
-                    PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE,
-                )?;
-                *pt_slot += 1;
+                if chunk_start == va
+                    && chunk_end == va.saturating_add(PAGE_SIZE_2M)
+                    && is_2m_aligned(chunk_start)
+                    && is_2m_aligned(phys)
+                {
+                    unsafe {
+                        (*heap_pd)[pd_index(va)] = (phys & 0x000F_FFFF_FFE0_0000)
+                            | PT_ENTRY_PRESENT
+                            | PT_ENTRY_WRITABLE
+                            | PT_ENTRY_LARGE_PAGE;
+                    }
+                } else {
+                    if *pt_slot >= GUEST_HIGH_IMAGE_PT_COUNT {
+                        return Err("guest image pt pool");
+                    }
+                    let heap_pt =
+                        unsafe { core::ptr::addr_of_mut!((*tables).image_pts[*pt_slot].0) };
+                    let heap_pt_pa = host_va_to_pa(heap_pt as u64).ok_or("guest heap pt pa")?;
+                    map_table_entry(heap_pd, pd_index(va), heap_pt_pa);
+                    map_region_4k(
+                        heap_pt,
+                        chunk_start,
+                        phys,
+                        chunk_end.saturating_sub(chunk_start) as usize,
+                        PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE,
+                    )?;
+                    *pt_slot += 1;
+                }
             }
 
             va = va

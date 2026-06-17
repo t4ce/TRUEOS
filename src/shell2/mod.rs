@@ -1663,7 +1663,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     let has_broadcast_sessions = session_indexes
                         .iter()
                         .any(|idx| command_sessions[*idx].kind.accepts_broadcast_input());
-                    if submitted == "§" {
+                    if submitted == "§" && mode != ShellMode2::Qjs {
                         transcript = apply_matrix_operator_and_refresh(
                             &out,
                             io,
@@ -1692,7 +1692,10 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             running_go2_phase,
                         )
                         .await;
-                    } else if submitted_raw.starts_with('§') && !submitted.is_empty() {
+                    } else if submitted_raw.starts_with('§')
+                        && !submitted.is_empty()
+                        && mode != ShellMode2::Qjs
+                    {
                         transcript = apply_matrix_operator_and_refresh(
                             &out,
                             io,
@@ -1781,7 +1784,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             CommandSessionInputResult::KeepRunning => {}
                         }
                     } else if !submitted.is_empty() || mode == ShellMode2::Apps {
-                        if submitted_raw.starts_with('§') {
+                        if submitted_raw.starts_with('§') && mode != ShellMode2::Qjs {
                             handle_matrix_operator(io, submitted);
                             mode = ShellMode2::Cmd;
                             out.set_line_width(line_width_for_output(output_mask));

@@ -22,7 +22,10 @@ mod stream;
 #[cfg(any(feature = "native-tls", feature = "__rustls-tls", feature = "connect"))]
 mod tls;
 
-use std::io::{Read, Write};
+#[cfg(target_os = "trueos")]
+use tungstenite::io::{Error as CompatIoError, ErrorKind as CompatIoErrorKind, Read, Write};
+#[cfg(not(target_os = "trueos"))]
+use std::io::{Error as CompatIoError, ErrorKind as CompatIoErrorKind, Read, Write};
 
 use compat::{cvt, AllowStd, ContextWaker};
 use core::{
@@ -109,7 +112,7 @@ where
     });
     f.await.map_err(|e| match e {
         HandshakeError::Failure(e) => e,
-        e => WsError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
+        e => WsError::Io(CompatIoError::new(CompatIoErrorKind::Other, "websocket handshake error")),
     })
 }
 
@@ -176,7 +179,7 @@ where
     });
     f.await.map_err(|e| match e {
         HandshakeError::Failure(e) => e,
-        e => WsError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
+        e => WsError::Io(CompatIoError::new(CompatIoErrorKind::Other, "websocket handshake error")),
     })
 }
 
@@ -349,7 +352,7 @@ where
                 self.ready = true;
                 Ok(())
             }
-            Err(WsError::Io(err)) if err.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(WsError::Io(err)) if err.kind() == CompatIoErrorKind::WouldBlock => {
                 // the message was accepted and queued so not an error
                 // but `poll_ready` will now start trying to flush the block
                 self.ready = false;
@@ -386,7 +389,7 @@ where
         match res {
             Ok(()) => Poll::Ready(Ok(())),
             Err(WsError::ConnectionClosed) => Poll::Ready(Ok(())),
-            Err(WsError::Io(err)) if err.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(WsError::Io(err)) if err.kind() == CompatIoErrorKind::WouldBlock => {
                 trace!("WouldBlock");
                 self.closing = true;
                 Poll::Pending

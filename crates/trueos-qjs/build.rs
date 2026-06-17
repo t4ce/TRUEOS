@@ -215,6 +215,38 @@ Set TRUEOS_QJS_QUICKJS_DIR=/path/to/quickjs or run with network access."
     checkout_dir
 }
 
+fn patch_quickjs_trueos(quickjs_dir: &Path) {
+    let libunicode_h = quickjs_dir.join("libunicode.h");
+    let mut src = std::fs::read_to_string(&libunicode_h)
+        .unwrap_or_else(|e| panic!("read {} failed: {e}", libunicode_h.display()));
+    if src.contains("TRUEOS_QJS_SECTION_SIGN_IDENT") {
+        return;
+    }
+
+    let first_needle = "static inline int lre_js_is_ident_first(uint32_t c) {\n";
+    let first_repl = "static inline int lre_js_is_ident_first(uint32_t c) {\n    /* TRUEOS_QJS_SECTION_SIGN_IDENT: shell matrix-slot operator as JS identifier */\n    if (c == 0x00A7)\n        return TRUE;\n";
+    if !src.contains(first_needle) {
+        panic!(
+            "QuickJS libunicode.h shape changed: missing lre_js_is_ident_first in {}",
+            libunicode_h.display()
+        );
+    }
+    src = src.replacen(first_needle, first_repl, 1);
+
+    let next_needle = "static inline int lre_js_is_ident_next(uint32_t c) {\n";
+    let next_repl = "static inline int lre_js_is_ident_next(uint32_t c) {\n    /* TRUEOS_QJS_SECTION_SIGN_IDENT: shell matrix-slot operator as JS identifier */\n    if (c == 0x00A7)\n        return TRUE;\n";
+    if !src.contains(next_needle) {
+        panic!(
+            "QuickJS libunicode.h shape changed: missing lre_js_is_ident_next in {}",
+            libunicode_h.display()
+        );
+    }
+    src = src.replacen(next_needle, next_repl, 1);
+
+    std::fs::write(&libunicode_h, src)
+        .unwrap_or_else(|e| panic!("write {} failed: {e}", libunicode_h.display()));
+}
+
 fn build_host_qjs_bytecode_gen(quickjs_dir: &Path, out_dir: &Path) -> PathBuf {
     let exe = out_dir.join("qjs_bytecode_gen");
     let gen_c = out_dir.join("qjs_bytecode_gen.c");
@@ -704,6 +736,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=AR_aarch64-unknown-none");
 
     let quickjs_dir = ensure_quickjs_checkout(&out_dir);
+    patch_quickjs_trueos(&quickjs_dir);
 
     let trueos_stdio = manifest_dir.join("src").join("stdio.c");
 

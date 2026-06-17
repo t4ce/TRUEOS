@@ -1,5 +1,9 @@
 //! Methods to connect to a WebSocket as a client.
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[allow(unused_imports)]
+use crate::prelude::rust_2024::*;
+
 use std::{
     io::{Read, Write},
     net::{SocketAddr, TcpStream, ToSocketAddrs},

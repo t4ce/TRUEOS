@@ -148,6 +148,7 @@ fn log_panic_context() {
             hull_vm,
             exec_vm
         );
+        log_fault_alloc_trace_debugcon();
         return;
     }
 
@@ -227,6 +228,29 @@ fn log_fault_alloc_trace() {
             trace.payload_start,
             trace.aligned_used,
         ),
+    );
+}
+
+fn log_fault_alloc_trace_debugcon() {
+    let trace = crate::allocators::last_alloc_trace();
+    if trace.seq == 0 {
+        return;
+    }
+    dprintln!(
+        "alloc-trace: seq={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X} size={} align={} stage={} head=0x{:016X} block=0x{:016X} block_size={} next=0x{:016X} payload=0x{:016X} aligned_used={}",
+        trace.seq,
+        trace.caller_rip,
+        trace.caller_rip_1,
+        trace.caller_rip_2,
+        trace.layout_size,
+        trace.layout_align,
+        trace.stage,
+        trace.head_ptr,
+        trace.block_ptr,
+        trace.block_size,
+        trace.block_next,
+        trace.payload_start,
+        trace.aligned_used,
     );
 }
 
