@@ -122,10 +122,9 @@ pub fn current() -> KernelTaskDomainSnapshot {
 #[inline]
 pub fn guest_owned_alloc_vm_id() -> Option<u8> {
     let snapshot = current();
-    if snapshot.domain == KernelTaskDomain::VmGuestOwnedAlloc {
-        snapshot.vm_id
-    } else {
-        None
+    match snapshot.domain {
+        KernelTaskDomain::VmGuestOwnedAlloc => snapshot.vm_id,
+        _ => None,
     }
 }
 

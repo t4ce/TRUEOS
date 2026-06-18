@@ -286,10 +286,8 @@ fn spawn_job_runner(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::wait::job_runner_task())
 }
 
-fn spawn_blocking_job_dispatcher(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| {
-        crate::r::blocking::blocking_job_dispatcher_task()
-    })
+fn spawn_blocking_service_lanes(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::r::blocking::blocking_job_dispatcher_task())
 }
 
 fn spawn_smp_hlt_history(spawner: Spawner) -> SpawnAttempt {
@@ -1049,10 +1047,10 @@ const TASK_COUNT: usize = 54 + cfg!(feature = "trueos_rdp") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
-        "blocking-job-dispatcher",
+        "blocking-service-lanes",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         &BLOCKING_JOB_DISPATCHER_STARTED,
-        spawn_blocking_job_dispatcher,
+        spawn_blocking_service_lanes,
     ),
     TaskSpec::enabled("smp-hlt-history", 0, &SMP_HLT_HISTORY_STARTED, spawn_smp_hlt_history),
     TaskSpec::enabled(
@@ -1396,8 +1394,7 @@ pub async fn spawn_service_task(spawner: Spawner) {
                     continue;
                 }
                 if (ready & spec.required) != spec.required {
-                    if spec.name == "bp-autostart" {
-                    }
+                    if spec.name == "bp-autostart" {}
                     pending += 1;
                     continue;
                 }

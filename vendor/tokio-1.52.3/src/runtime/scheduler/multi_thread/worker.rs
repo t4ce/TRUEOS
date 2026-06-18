@@ -59,28 +59,37 @@
 #[allow(unused_imports)]
 use crate::runtime::prelude::*;
 
-use alloc::sync::Arc;
 use crate::loom::sync::Mutex;
 use crate::runtime;
 use crate::runtime::scheduler::multi_thread::{
-    idle, park, queue, Counters, Handle, Idle, Overflow, Parker, Stats, TraceStatus, Unparker,
+    Counters, Handle, Idle, Overflow, Parker, Stats, TraceStatus, Unparker, idle, park, queue,
 };
-use crate::runtime::scheduler::{inject, Defer, Lock};
+use crate::runtime::scheduler::{Defer, Lock, inject};
 use crate::runtime::task::OwnedTasks;
 use crate::runtime::{
-    blocking, driver, scheduler, task, Config, SchedulerMetrics, TimerFlavor, WorkerMetrics,
+    Config, SchedulerMetrics, TimerFlavor, WorkerMetrics, blocking, driver, scheduler, task,
 };
-use crate::runtime::{context, TaskHooks};
+use crate::runtime::{TaskHooks, context};
 use crate::task::coop;
 use crate::util::atomic_cell::AtomicCell;
 use crate::util::rand::{FastRand, RngSeedGenerator};
+use alloc::boxed::Box;
+use alloc::sync::Arc;
 
 use core::cell::RefCell;
 use core::task::Waker;
-use std::thread;
 use core::time::Duration;
+use std::thread;
 
 mod metrics;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+type TrueosWorkerJob = Box<dyn FnOnce() + Send + 'static>;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+unsafe extern "Rust" {
+    fn trueos_service_lane_submit_job(job: TrueosWorkerJob) -> i32;
+}
 
 cfg_taskdump! {
     mod taskdump;
@@ -391,10 +400,7 @@ where
     let mut take_core = false;
 
     let setup_result = with_current(|maybe_cx| {
-        match (
-            crate::runtime::context::current_enter_context(),
-            maybe_cx.is_some(),
-        ) {
+        match (crate::runtime::context::current_enter_context(), maybe_cx.is_some()) {
             (context::EnterRuntime::Entered { .. }, true) => {
                 // We are on a thread pool runtime thread, so we just need to
                 // set up blocking.
@@ -471,7 +477,7 @@ where
         // Once the blocking task is done executing, we will attempt to
         // steal the core back.
         let worker = cx.worker.clone();
-        runtime::spawn_blocking(move || run(worker));
+        spawn_runtime_worker(worker);
         Ok(())
     });
 
@@ -495,10 +501,57 @@ where
 
 impl Launch {
     pub(crate) fn launch(mut self) {
+        crate::platform::log(
+            3,
+            alloc::format!(
+                "tokio-platform: multi_thread Launch::launch workers={}\n",
+                self.0.len()
+            )
+            .as_bytes(),
+        );
         for worker in self.0.drain(..) {
-            runtime::spawn_blocking(move || run(worker));
+            spawn_runtime_worker(worker);
         }
     }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+fn spawn_runtime_worker(worker: Arc<Worker>) {
+    let index = worker.index;
+    crate::platform::log(
+        3,
+        alloc::format!("tokio-platform: multi_thread worker submit index={}\n", index).as_bytes(),
+    );
+    let job: TrueosWorkerJob = Box::new(move || {
+        crate::platform::log(
+            3,
+            alloc::format!("tokio-platform: multi_thread worker run index={}\n", index).as_bytes(),
+        );
+        run(worker);
+    });
+    let rc = unsafe { trueos_service_lane_submit_job(job) };
+    if rc == 0 {
+        crate::platform::log(
+            3,
+            alloc::format!("tokio-platform: multi_thread worker accepted index={}\n", index)
+                .as_bytes(),
+        );
+    } else {
+        crate::platform::log(
+            5,
+            alloc::format!(
+                "tokio-platform: multi_thread worker rejected index={} rc={}\n",
+                index,
+                rc
+            )
+            .as_bytes(),
+        );
+    }
+}
+
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+fn spawn_runtime_worker(worker: Arc<Worker>) {
+    runtime::spawn_blocking(move || run(worker));
 }
 
 fn run(worker: Arc<Worker>) {
@@ -770,10 +823,7 @@ impl Context {
     }
 
     fn assert_lifo_enabled_is_correct(&self, core: &Core) {
-        debug_assert_eq!(
-            core.lifo_enabled,
-            !self.worker.handle.shared.config.disable_lifo_slot
-        );
+        debug_assert_eq!(core.lifo_enabled, !self.worker.handle.shared.config.disable_lifo_slot);
     }
 
     fn maintenance(&self, mut core: Box<Core>) -> Box<Core> {
@@ -1038,9 +1088,7 @@ impl Context {
     {
         self.with_core(|maybe_core| match maybe_core {
             Some(core) if core.is_shutdown => f(Some(time_alt::TempLocalContext::new_shutdown())),
-            Some(core) => f(Some(time_alt::TempLocalContext::new_running(
-                &mut core.time_context,
-            ))),
+            Some(core) => f(Some(time_alt::TempLocalContext::new_running(&mut core.time_context))),
             None => f(None),
         })
     }
@@ -1105,10 +1153,7 @@ impl Core {
             // The worker is currently idle, pull a batch of work from the
             // injection queue. We don't want to pull *all* the work so other
             // workers can also get some.
-            let n = usize::min(
-                worker.inject().len() / worker.handle.shared.remotes.len() + 1,
-                cap,
-            );
+            let n = usize::min(worker.inject().len() / worker.handle.shared.remotes.len() + 1, cap);
 
             // Take at least one task since the first task is returned directly
             // and not pushed onto the local queue.

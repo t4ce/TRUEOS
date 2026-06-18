@@ -307,8 +307,7 @@ async fn fetch_https_bytes(
                     if tls_handle != Some(handle) {
                         continue;
                     }
-                    if response.len().saturating_add(data.len()) > max_bytes.saturating_add(4096)
-                    {
+                    if response.len().saturating_add(data.len()) > max_bytes.saturating_add(4096) {
                         let _ = cmds.push(TlsCommand::Close { handle });
                         return Err(String::from("too large"));
                     }

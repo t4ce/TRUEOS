@@ -1819,7 +1819,12 @@ pub unsafe extern "C" fn sysconf(name: c_int) -> isize {
     match name {
         TRUEOS_SC_PAGESIZE => 4096,
         TRUEOS_SC_NPROCESSORS_ONLN | TRUEOS_SC_NPROCESSORS_CONF => {
-            crate::workers::background_worker_slots().len().max(1) as isize
+            if crate::hv::current_hull_guest_context_vm_id().is_some()
+                && let Some(count) = crate::hv::vmcall::guest_cpu_count()
+            {
+                return count as isize;
+            }
+            crate::workers::app_visible_parallelism() as isize
         }
         _ => {
             TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
@@ -2193,7 +2198,7 @@ pub unsafe extern "C" fn pthread_create(
         pthread_thread_finish(thread_id);
     });
 
-    let rc = crate::r::blocking::trueos_tokio_spawn_blocking_job(job);
+    let rc = crate::r::blocking::trueos_service_lane_submit_job(job);
     pthread_create_trace(thread_id, rc);
     if rc == 0 {
         0

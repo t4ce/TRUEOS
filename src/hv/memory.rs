@@ -709,11 +709,8 @@ fn prepare_guest_hull_rw_backing_for_vm(
         crate::hv::current_vm_lapic_low_tag_addr(),
         vm_id.saturating_add(1),
     );
-    for (guest_addr, len) in crate::allocators::hv_guest_allocator_state_spans() {
-        patch_guest_hull_rw_bytes(arena.virt_start, guest_start, bytes, guest_addr, len);
-    }
     hvlogf(format_args!(
-        "hv: vm{} reporting: hull rw patched hv-guest-allocator-state spans={}",
+        "hv: vm{} reporting: hull rw shared hv-guest-allocator-state spans={}",
         vm_id,
         crate::allocators::hv_guest_allocator_state_spans().len()
     ));
@@ -792,6 +789,23 @@ fn patch_guest_hull_rw_bytes(
             len,
         );
     }
+}
+
+fn guest_hull_rw_page_uses_kernel_backing(page_va: u64) -> bool {
+    let page_start = page_align_down(page_va);
+    let page_end = page_start.saturating_add(PAGE_SIZE_4K as u64);
+    for (span_start, span_len) in crate::allocators::hv_guest_allocator_state_spans() {
+        if span_len == 0 {
+            continue;
+        }
+        let span_end = span_start.saturating_add(span_len as u64);
+        let shared_start = page_align_down(span_start);
+        let shared_end = page_align_up_4k(span_end);
+        if page_start < shared_end && page_end > shared_start {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn ensure_guest_hull_rw_template_ready() -> Result<(), &'static str> {
@@ -1024,7 +1038,11 @@ pub fn prepare_guest_stack_bytes_for_vm(
 }
 
 pub fn guest_stack_top() -> u64 {
-    (GUEST_STACK_VA_BASE + active_guest_stack_bytes() as u64) & !0xF
+    guest_stack_top_for_vm(crate::hv::current_vm_id().unwrap_or(0))
+}
+
+pub fn guest_stack_top_for_vm(vm_id: u8) -> u64 {
+    (GUEST_STACK_VA_BASE + active_guest_stack_bytes_for_vm(vm_id) as u64) & !0xF
 }
 
 pub fn guest_kernel_elf_entry(bytes: &[u8]) -> Option<u64> {
@@ -1042,7 +1060,7 @@ pub fn guest_kernel_elf_entry(bytes: &[u8]) -> Option<u64> {
 }
 
 pub fn build_guest_cr3(guest_rip: u64, guest_rsp: u64) -> Result<u64, &'static str> {
-    build_guest_cr3_with_mode(guest_rip, guest_rsp, crate::hv::VmBootMode::Hull)
+    build_guest_cr3_for_vm(crate::hv::current_vm_id().unwrap_or(0), guest_rip, guest_rsp)
 }
 
 pub fn build_guest_cr3_with_mode(
@@ -1050,8 +1068,30 @@ pub fn build_guest_cr3_with_mode(
     guest_rsp: u64,
     boot_mode: crate::hv::VmBootMode,
 ) -> Result<u64, &'static str> {
+    build_guest_cr3_for_vm_with_mode(
+        crate::hv::current_vm_id().unwrap_or(0),
+        guest_rip,
+        guest_rsp,
+        boot_mode,
+    )
+}
+
+pub fn build_guest_cr3_for_vm(
+    vm_id: u8,
+    guest_rip: u64,
+    guest_rsp: u64,
+) -> Result<u64, &'static str> {
+    build_guest_cr3_for_vm_with_mode(vm_id, guest_rip, guest_rsp, crate::hv::VmBootMode::Hull)
+}
+
+pub fn build_guest_cr3_for_vm_with_mode(
+    vm_id: u8,
+    guest_rip: u64,
+    guest_rsp: u64,
+    boot_mode: crate::hv::VmBootMode,
+) -> Result<u64, &'static str> {
     unsafe {
-        let tables = guest_tables_ptr()?;
+        let tables = guest_tables_ptr_for_vm(vm_id)?;
         let guest_pml4 = core::ptr::addr_of_mut!((*tables).pml4.0);
         let guest_low_pdpt = core::ptr::addr_of_mut!((*tables).low_pdpt.0);
         let guest_low_pd = core::ptr::addr_of_mut!((*tables).low_pd.0);
@@ -1086,8 +1126,8 @@ pub fn build_guest_cr3_with_mode(
 
         map_table_entry(guest_pml4, pml4_index(GUEST_STACK_VA_BASE), low_pdpt_pa);
         map_table_entry(guest_low_pdpt, pdpt_index(GUEST_STACK_VA_BASE), low_pd_pa);
-        let stack = active_guest_stack_arena().ok_or("guest stack backing")?;
-        let stack_bytes = active_guest_stack_bytes();
+        let stack = active_guest_stack_arena_for_vm(vm_id).ok_or("guest stack backing")?;
+        let stack_bytes = active_guest_stack_bytes_for_vm(vm_id);
         let stack_pt_count = stack_bytes.div_ceil(PAGE_SIZE_2M as usize);
         let stack_pa = stack.phys_start;
         let mut stack_va = page_align_down(GUEST_STACK_VA_BASE);
@@ -1116,8 +1156,7 @@ pub fn build_guest_cr3_with_mode(
 
         // Map comm page at a fixed VA above the maximum supported stack span so
         // guest-side helpers can keep using a stable address.
-        let comm_pa =
-            crate::hv::vmcall::pa_for_vm(current_vm_id_for_log()).ok_or("comm page pa")?;
+        let comm_pa = crate::hv::vmcall::pa_for_vm(vm_id).ok_or("comm page pa")?;
         let comm_pt = core::ptr::addr_of_mut!((*tables).low_pts[GUEST_STACK_PT_CAP].0);
         let comm_pt_pa = host_va_to_pa(comm_pt as u64).ok_or("comm page pt pa")?;
         map_table_entry(
@@ -1208,7 +1247,7 @@ pub fn build_guest_cr3_with_mode(
 
         hvlogf(format_args!(
             "hv: vm{} reporting: guest-cr3=0x{:016X} code=0x{:016X} stack=0x{:016X} stack_mib={}",
-            current_vm_id_for_log(),
+            vm_id,
             pml4_pa,
             guest_rip,
             guest_rsp,
@@ -1217,9 +1256,12 @@ pub fn build_guest_cr3_with_mode(
         log_guest_mapping("stack-base", GUEST_STACK_VA_BASE);
         log_guest_mapping("stack-top-8", guest_rsp.saturating_sub(8));
         log_guest_mapping("stack-top-0x40", guest_rsp.saturating_sub(0x40));
+        log_guest_mapping_from_cr3("stack-base", pml4_pa, GUEST_STACK_VA_BASE);
+        log_guest_mapping_from_cr3("stack-top-8", pml4_pa, guest_rsp.saturating_sub(8));
+        log_guest_mapping_from_cr3("stack-top-0x40", pml4_pa, guest_rsp.saturating_sub(0x40));
         log_guest_mapping("comm-page", crate::hv::vmcall::comm_page_guest_va());
         log_guest_mapping("guest-rip", guest_rip);
-        let hv_guest_heap = crate::allocators::hv_guest_heap_stats(current_vm_id_for_log());
+        let hv_guest_heap = crate::allocators::hv_guest_heap_stats(vm_id);
         log_guest_mapping("hv-guest-heap-start", hv_guest_heap.heap_start as u64);
         log_guest_mapping("hv-guest-heap-end-8", (hv_guest_heap.heap_end as u64).saturating_sub(8));
         if hv_guest_heap.initialized
@@ -1418,24 +1460,97 @@ pub fn log_guest_mapping_from_cr3(label: &str, guest_cr3: u64, guest_va: u64) {
     } else {
         0
     };
-    let pte = if pde & PT_ENTRY_PRESENT != 0 {
+    let large_page = pde & PT_ENTRY_LARGE_PAGE != 0;
+    let pte = if large_page {
+        pde
+    } else if pde & PT_ENTRY_PRESENT != 0 {
         unsafe { read_phys_page_entry(pde_addr(pde), pt_index(guest_va)) }.unwrap_or(0)
     } else {
         0
     };
 
     hvlogf(format_args!(
-        "hv: vm{} reporting: guest-walk {} va=0x{:016X} cr3=0x{:016X} idx[pd={},pt={}] pml4e=0x{:016X} pdpte=0x{:016X} pde=0x{:016X} pte=0x{:016X}",
+        "hv: vm{} reporting: guest-walk {} va=0x{:016X} cr3=0x{:016X} idx[pd={},pt={}] large={} pml4e=0x{:016X} pdpte=0x{:016X} pde=0x{:016X} pte=0x{:016X}",
         current_vm_id_for_log(),
         label,
         guest_va,
         guest_cr3,
         pd_index(guest_va),
         pt_index(guest_va),
+        large_page as u8,
         pml4e,
         pdpte,
         pde,
         pte
+    ));
+}
+
+fn guest_va_to_pa_from_cr3(guest_cr3: u64, guest_va: u64) -> Option<u64> {
+    let pml4_pa = pde_addr(guest_cr3);
+    if pml4_pa == 0 {
+        return None;
+    }
+
+    let pml4e = unsafe { read_phys_page_entry(pml4_pa, pml4_index(guest_va)) }?;
+    if pml4e & PT_ENTRY_PRESENT == 0 {
+        return None;
+    }
+    let pdpte = unsafe { read_phys_page_entry(pde_addr(pml4e), pdpt_index(guest_va)) }?;
+    if pdpte & PT_ENTRY_PRESENT == 0 {
+        return None;
+    }
+    let pde = unsafe { read_phys_page_entry(pde_addr(pdpte), pd_index(guest_va)) }?;
+    if pde & PT_ENTRY_PRESENT == 0 {
+        return None;
+    }
+    if pde & PT_ENTRY_LARGE_PAGE != 0 {
+        return Some(pde_addr(pde) + (guest_va & (PAGE_SIZE_2M - 1)));
+    }
+    let pte = unsafe { read_phys_page_entry(pde_addr(pde), pt_index(guest_va)) }?;
+    if pte & PT_ENTRY_PRESENT == 0 {
+        return None;
+    }
+    Some(pde_addr(pte) + (guest_va & ((PAGE_SIZE_4K as u64) - 1)))
+}
+
+pub fn log_guest_code_bytes_from_cr3(label: &str, guest_cr3: u64, guest_va: u64) {
+    let Some(pa) = guest_va_to_pa_from_cr3(guest_cr3, guest_va) else {
+        hvlogf(format_args!(
+            "hv: vm{} reporting: guest-code {} va=0x{:016X} pa=missing",
+            current_vm_id_for_log(),
+            label,
+            guest_va
+        ));
+        return;
+    };
+
+    let ptr = crate::phys::phys_to_virt(pa as usize) as *const u8;
+    let mut bytes = [0u8; 16];
+    for (idx, byte) in bytes.iter_mut().enumerate() {
+        *byte = unsafe { core::ptr::read_volatile(ptr.add(idx)) };
+    }
+    hvlogf(format_args!(
+        "hv: vm{} reporting: guest-code {} va=0x{:016X} pa=0x{:016X} b={:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
+        current_vm_id_for_log(),
+        label,
+        guest_va,
+        pa,
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
     ));
 }
 
@@ -1850,10 +1965,13 @@ fn map_guest_hull_private_rw_span(
         for page in 0..512u64 {
             let page_va = va.saturating_add(page * PAGE_SIZE_4K as u64);
             let entry = if page_va >= rw_start && page_va < rw_end {
-                let offset = page_va.saturating_sub(rw_start);
-                (arena.phys_start.saturating_add(offset) & 0x000F_FFFF_FFFF_F000)
-                    | PT_ENTRY_PRESENT
-                    | PT_ENTRY_WRITABLE
+                let phys = if guest_hull_rw_page_uses_kernel_backing(page_va) {
+                    host_va_to_pa(page_va).ok_or("guest hull rw shared pa")?
+                } else {
+                    let offset = page_va.saturating_sub(rw_start);
+                    arena.phys_start.saturating_add(offset)
+                };
+                (phys & 0x000F_FFFF_FFFF_F000) | PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE
             } else if page_va >= image_start && page_va < image_end {
                 (host_va_to_pa(page_va).ok_or("guest hull rw image pa")? & 0x000F_FFFF_FFFF_F000)
                     | PT_ENTRY_PRESENT

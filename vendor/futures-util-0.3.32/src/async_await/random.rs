@@ -1,5 +1,8 @@
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use std::cell::Cell;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use std::sync::atomic::AtomicU64;
 use std::{
-    cell::Cell,
     collections::hash_map::DefaultHasher,
     hash::Hasher,
     num::Wrapping,
@@ -24,6 +27,35 @@ fn gen_index(n: usize) -> usize {
 /// Pseudorandom number generator based on [xorshift*].
 ///
 /// [xorshift*]: https://en.wikipedia.org/wiki/Xorshift#xorshift*
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+fn random() -> u64 {
+    static RNG: AtomicU64 = AtomicU64::new(0);
+
+    let mut x = RNG.load(Ordering::Acquire);
+    if x == 0 {
+        let seed = prng_seed();
+        match RNG.compare_exchange(0, seed, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => x = seed,
+            Err(existing) => x = existing,
+        }
+    }
+
+    loop {
+        debug_assert_ne!(x, 0);
+        let mut next = Wrapping(x);
+        next ^= next >> 12;
+        next ^= next << 25;
+        next ^= next >> 27;
+        match RNG.compare_exchange(x, next.0, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return next.0.wrapping_mul(0x2545_f491_4f6c_dd1d),
+            Err(existing) => {
+                x = if existing == 0 { prng_seed() } else { existing };
+            }
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 fn random() -> u64 {
     std::thread_local! {
         static RNG: Cell<Wrapping<u64>> = Cell::new(Wrapping(prng_seed()));
@@ -51,4 +83,17 @@ fn random() -> u64 {
         rng.set(x);
         x.0.wrapping_mul(0x2545_f491_4f6c_dd1d)
     })
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+fn prng_seed() -> u64 {
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    let mut seed = 0;
+    while seed == 0 {
+        let mut hasher = DefaultHasher::new();
+        hasher.write_usize(COUNTER.fetch_add(1, Ordering::Relaxed));
+        seed = hasher.finish();
+    }
+    seed
 }

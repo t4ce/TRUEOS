@@ -752,7 +752,7 @@ fn start_with_mode(
     let _ = spawner;
     let _ = io;
     let profile = VmLaneProfile::vm_default();
-    let target = match pick_vm_hull_lane() {
+    let mut target = match pick_vm_hull_lane() {
         Ok(target) => target,
         Err(error) => {
             clear_blueprint_pending_launch(vm_id);
@@ -802,6 +802,7 @@ fn start_with_mode(
         target.core_kind_name(),
         memory::active_guest_stack_mb_for_vm(vm_id)
     );
+    target.lease.set_vm_owner(vm_id);
 
     match vm_task(vm_id, target.lease) {
         Ok(token) => {
@@ -1088,12 +1089,12 @@ fn estimate_blueprint_memory_profile(
                 64,
             ),
             BlueprintMemoryClass::ServerRuntime => (
-                256,
-                round_pow2_mib(base_live_mib.saturating_mul(64).saturating_add(512)).max(2048),
-                2048,
-                16,
+                512,
+                round_pow2_mib(base_live_mib.saturating_mul(96).saturating_add(1024)).max(4096),
+                4096,
                 16,
                 64,
+                128,
             ),
             BlueprintMemoryClass::HeavyGraphics => (
                 128,
@@ -2041,6 +2042,33 @@ async fn vmx_launch_once_with_ept(
                 regs.rcx,
                 lr.exit_qualification
             ));
+            hvlogf(format_args!(
+                "hv: vm{} fault-regs2 rax=0x{:016X} rbx=0x{:016X} rcx=0x{:016X} rdx=0x{:016X} rbp=0x{:016X} r8=0x{:016X} r9=0x{:016X} r10=0x{:016X} r11=0x{:016X} r12=0x{:016X} r13=0x{:016X} r14=0x{:016X} r15=0x{:016X}",
+                current_vm_id_for_log(),
+                regs.rax,
+                regs.rbx,
+                regs.rcx,
+                regs.rdx,
+                regs.rbp,
+                regs.r8,
+                regs.r9,
+                regs.r10,
+                regs.r11,
+                regs.r12,
+                regs.r13,
+                regs.r14,
+                regs.r15
+            ));
+            hvlogf(format_args!(
+                "hv: vm{} fault-regs3 r10=0x{:016X} r11=0x{:016X} r12=0x{:016X} r13=0x{:016X} r14=0x{:016X} r15=0x{:016X}",
+                current_vm_id_for_log(),
+                regs.r10,
+                regs.r11,
+                regs.r12,
+                regs.r13,
+                regs.r14,
+                regs.r15
+            ));
             let host_heap = crate::allocators::heap_stats();
             if host_heap.initialized && host_heap.heap_end > host_heap.heap_start {
                 let in_host_heap = |addr: u64| {
@@ -2086,6 +2114,7 @@ async fn vmx_launch_once_with_ept(
             ));
             crate::hv::memory::log_guest_mapping_from_cr3("fault-linear", guest_cr3, guest_linear);
             crate::hv::memory::log_guest_mapping_from_cr3("fault-rip", guest_cr3, lr.guest_rip);
+            crate::hv::memory::log_guest_code_bytes_from_cr3("fault-rip", guest_cr3, lr.guest_rip);
             crate::hv::memory::log_guest_phys_pt_context("fault-linear", guest_cr3, guest_linear);
             crate::hv::memory::log_guest_phys_pt_context("fault-rip", guest_cr3, lr.guest_rip);
             crate::hv::memory::log_guest_pt_context("fault-linear", guest_linear);
@@ -2605,12 +2634,13 @@ fn setup_vmcs_for_launch(
                 .unwrap_or_else(guest_launch_rip);
             let guest_rsp = restored
                 .map(|m| m.guest_rsp)
-                .unwrap_or_else(guest_stack_top);
+                .unwrap_or_else(|| guest_stack_top_for_vm(vm_id));
             let guest_cr3 = if restored.is_some() {
-                current_guest_cr3_pa()
-                    .or_else(|_| build_guest_cr3_with_mode(guest_rip, guest_rsp, boot_mode))?
+                current_guest_cr3_pa().or_else(|_| {
+                    build_guest_cr3_for_vm_with_mode(vm_id, guest_rip, guest_rsp, boot_mode)
+                })?
             } else {
-                build_guest_cr3_with_mode(guest_rip, guest_rsp, boot_mode)?
+                build_guest_cr3_for_vm_with_mode(vm_id, guest_rip, guest_rsp, boot_mode)?
             };
             crate::hv::vmx::reset_guest_registers();
             vmwrite(VMCS_GUEST_CR0, host_cr0)?;
@@ -2794,11 +2824,11 @@ fn setup_vmcs_for_launch(
         .unwrap_or_else(guest_launch_rip);
     let guest_rsp = restored
         .map(|m| m.guest_rsp)
-        .unwrap_or_else(guest_stack_top);
+        .unwrap_or_else(|| guest_stack_top_for_vm(vm_id));
     let guest_cr3 = if restored.is_some() {
-        current_guest_cr3_pa().or_else(|_| build_guest_cr3(guest_rip, guest_rsp))?
+        current_guest_cr3_pa().or_else(|_| build_guest_cr3_for_vm(vm_id, guest_rip, guest_rsp))?
     } else {
-        build_guest_cr3(guest_rip, guest_rsp)?
+        build_guest_cr3_for_vm(vm_id, guest_rip, guest_rsp)?
     };
     crate::hv::vmx::reset_guest_registers();
     vmwrite(VMCS_GUEST_CR0, host_cr0)?;

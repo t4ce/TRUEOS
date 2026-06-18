@@ -450,12 +450,12 @@ fn estimate_blueprint_memory_profile(
                 64,
             ),
             BlueprintMemoryClass::ServerRuntime => (
-                256,
-                round_pow2_mib(base_live_mib.saturating_mul(64).saturating_add(512)).max(2048),
-                2048,
-                16,
+                512,
+                round_pow2_mib(base_live_mib.saturating_mul(96).saturating_add(1024)).max(4096),
+                4096,
                 16,
                 64,
+                128,
             ),
             BlueprintMemoryClass::HeavyGraphics => (
                 128,

@@ -124,7 +124,9 @@ const PRIMARY_BYTES_PER_PIXEL: u32 = 4;
 const PRIMARY_BASELINE_COLOR: u32 = 0x00FF_37FF;
 const VIDEO_NV12_BLACK_PROOF_LIFT: bool = false;
 const PRIMARY_BOOT_LOGO_JPEG: &[u8] = include_bytes!("../../logo.jpg");
+const PRIMARY_BOOT_HORIZON_STAMP_PNG: &[u8] = include_bytes!("../../HorizonServer.png");
 const PRIMARY_BOOT_LOGO_ENABLED: bool = true;
+const PRIMARY_BOOT_HORIZON_STAMP_ENABLED: bool = true;
 const PRIMARY_BOOT_LOGO_DECODE_MODE: PrimaryBootLogoDecodeMode =
     PrimaryBootLogoDecodeMode::ZuneJpeg;
 const PRIMARY_BOOT_LOGO_WAIT_TIMEOUT_MS: u64 = 5000;
@@ -764,19 +766,139 @@ fn probe_zune_boot_logo_decode() -> bool {
         decoded.width,
         decoded.height,
         decoded.width as usize * 4,
-        "boot-logo-zune-jpeg-center",
+        "boot-logo-zune-jpeg-horizon-stamp-center",
     );
+    let stamped = stored && stamp_horizon_logo_top_left_screen();
+    let bgrt_stamped = stored && stamp_bgrt_logo_bottom_right_screen();
     crate::log!(
-        "intel/display: boot-logo decode mode=zune_jpeg decoded={}x{} bytes=0x{:X} stored={}\n",
+        "intel/display: boot-logo decode mode=zune_jpeg decoded={}x{} bytes=0x{:X} horizon_stamp={} bgrt_stamp={} stored={}\n",
         decoded.width,
         decoded.height,
         decoded.rgba.len(),
+        stamped as u8,
+        bgrt_stamped as u8,
         stored as u8
     );
     if stored {
         mark_hw_logo_sequence_done("zune-logo-presented");
     }
     stored
+}
+
+fn stamp_horizon_logo_top_left_screen() -> bool {
+    if !PRIMARY_BOOT_HORIZON_STAMP_ENABLED {
+        return false;
+    }
+
+    let stamp = match crate::ui3::img::png_codec::decode_png_rgba(PRIMARY_BOOT_HORIZON_STAMP_PNG) {
+        Ok(stamp) => stamp,
+        Err(err) => {
+            crate::log!(
+                "intel/display: boot-logo horizon stamp decode failed code={} bytes=0x{:X}\n",
+                err.code(),
+                PRIMARY_BOOT_HORIZON_STAMP_PNG.len()
+            );
+            return false;
+        }
+    };
+
+    let stamped = blend_rgba_primary_rect(
+        stamp.rgba.as_slice(),
+        stamp.width,
+        stamp.height,
+        stamp.width as usize * 4,
+        0,
+        0,
+        0,
+        0,
+        stamp.width,
+        stamp.height,
+        "boot-logo-horizon-stamp-top-left-screen",
+    );
+    crate::log!(
+        "intel/display: boot-logo horizon stamp src={}x{} dst=0,0 screen=top-left stored={}\n",
+        stamp.width,
+        stamp.height,
+        stamped as u8
+    );
+    stamped
+}
+
+fn stamp_bgrt_logo_bottom_right_screen() -> bool {
+    let Some((bgrt_width, bgrt_height, bgrt_pixels)) = crate::efi::acpi::bgrt::decoded_logo_rgba()
+    else {
+        crate::log!("intel/display: boot-logo bgrt stamp skipped reason=no-bgrt-logo\n");
+        return false;
+    };
+
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+        return false;
+    };
+    if surface.virt.is_null()
+        || surface.width == 0
+        || surface.height == 0
+        || surface.pitch_bytes < surface.width.saturating_mul(4)
+        || bgrt_width == 0
+        || bgrt_height == 0
+    {
+        return false;
+    }
+
+    let dst_width = surface.width as usize;
+    let dst_height = surface.height as usize;
+    let dst_pitch = surface.pitch_bytes as usize;
+    let copy_w = bgrt_width.min(dst_width);
+    let copy_h = bgrt_height.min(dst_height);
+    if copy_w == 0 || copy_h == 0 || bgrt_pixels.len() < bgrt_width.saturating_mul(bgrt_height) {
+        return false;
+    }
+
+    let dst_x = dst_width.saturating_sub(copy_w);
+    let dst_y = dst_height.saturating_sub(copy_h);
+    let src_x = bgrt_width.saturating_sub(copy_w);
+    let src_y = bgrt_height.saturating_sub(copy_h);
+
+    for row in 0..copy_h {
+        let src_row = src_y.saturating_add(row).saturating_mul(bgrt_width);
+        let dst_row_off = dst_y
+            .saturating_add(row)
+            .saturating_mul(dst_pitch)
+            .saturating_add(dst_x.saturating_mul(4));
+        let dst_row = unsafe { surface.virt.add(dst_row_off) as *mut u32 };
+        for col in 0..copy_w {
+            let rgb = bgrt_pixels[src_row.saturating_add(src_x).saturating_add(col)];
+            let r = ((rgb >> 16) & 0xFF) as u8;
+            let g = ((rgb >> 8) & 0xFF) as u8;
+            let b = (rgb & 0xFF) as u8;
+            unsafe {
+                core::ptr::write_volatile(dst_row.add(col), u32::from_le_bytes([b, g, r, 0]));
+            }
+        }
+    }
+
+    let flush_offset = dst_y
+        .saturating_mul(dst_pitch)
+        .saturating_add(dst_x.saturating_mul(4));
+    let flush_bytes = copy_h
+        .saturating_sub(1)
+        .saturating_mul(dst_pitch)
+        .saturating_add(copy_w.saturating_mul(4));
+    let stamped = notify_primary_surface_external_write(
+        "boot-logo-bgrt-stamp-bottom-right-screen",
+        flush_offset,
+        flush_bytes,
+    );
+    crate::log!(
+        "intel/display: boot-logo bgrt stamp src={}x{} dst={},{} {}x{} screen=bottom-right stored={}\n",
+        bgrt_width,
+        bgrt_height,
+        dst_x,
+        dst_y,
+        copy_w,
+        copy_h,
+        stamped as u8
+    );
+    stamped
 }
 
 fn run_primary_display_warmup(_surface: PrimarySurface, release_render_after: bool) -> bool {

@@ -4,14 +4,13 @@ use crate::{limine, pci::mmio}; // vga
 
 use super::ensure_tables;
 
-// Packed (valid|w|h) so decoded_logo_rgba can expose the image without any VGA-era side effects.
 // Bits: [63]=valid, [0..15]=w, [16..31]=h
 static BGRT_IMAGE_INFO: AtomicU64 = AtomicU64::new(0);
 
-const MAX_W: usize = 256;
+const MAX_W: usize = 512 + 256;
 const MAX_H: usize = 256;
 const MAX_PIXELS: usize = MAX_W * MAX_H;
-const MAX_PALETTE: usize = 256;
+const MAX_PALETTE: usize = 2;
 
 #[unsafe(link_section = ".bss")]
 static mut BGRT_PIXELS: [u32; MAX_PIXELS] = [0; MAX_PIXELS];

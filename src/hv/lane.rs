@@ -15,6 +15,8 @@ const LANE_WORKER: u8 = 3;
 
 static LANE_OWNER: [AtomicU8; crate::allcaps::hv::VM_CPU_SLOT_LIMIT] =
     [const { AtomicU8::new(LANE_FREE) }; crate::allcaps::hv::VM_CPU_SLOT_LIMIT];
+static LANE_VM_OWNER: [AtomicU8; crate::allcaps::hv::VM_CPU_SLOT_LIMIT] =
+    [const { AtomicU8::new(0) }; crate::allcaps::hv::VM_CPU_SLOT_LIMIT];
 static LANE_RR: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -30,6 +32,13 @@ impl LaneRole {
             Self::VmHull => LANE_VM_HULL,
             Self::TokioBlocking => LANE_TOKIO_BLOCKING,
             Self::Worker => LANE_WORKER,
+        }
+    }
+
+    pub const fn owner_label(self) -> &'static str {
+        match self {
+            Self::VmHull => "hull",
+            Self::TokioBlocking | Self::Worker => "worker",
         }
     }
 }
@@ -84,11 +93,33 @@ impl LaneLease {
             return;
         }
         if let Some(owner) = LANE_OWNER.get(self.slot as usize) {
-            owner
+            if owner
                 .compare_exchange(self.role.code(), LANE_FREE, Ordering::AcqRel, Ordering::Acquire)
-                .ok();
+                .is_ok()
+                && let Some(vm_owner) = LANE_VM_OWNER.get(self.slot as usize)
+            {
+                vm_owner.store(0, Ordering::Release);
+            }
         }
         self.armed = false;
+    }
+
+    pub fn set_vm_owner(&mut self, vm_id: u8) {
+        if !self.armed {
+            return;
+        }
+        if let Some(owner) = LANE_VM_OWNER.get(self.slot as usize) {
+            owner.store(vm_id.saturating_add(1), Ordering::Release);
+        }
+    }
+
+    pub fn clear_vm_owner(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Some(owner) = LANE_VM_OWNER.get(self.slot as usize) {
+            owner.store(0, Ordering::Release);
+        }
     }
 }
 
@@ -130,6 +161,14 @@ pub fn pick_tokio_blocking_lane() -> Result<LaneTarget, LanePickError> {
         role: LaneRole::TokioBlocking,
         placement: SpawnPlacement::Worker,
     })
+}
+
+pub fn try_lease_tokio_blocking_lane_for_slot(slot: u32) -> Option<LaneLease> {
+    if !crate::workers::is_background_worker_slot(slot) {
+        return None;
+    }
+    crate::workers::spawner_for_slot(slot)?;
+    try_lease(slot, LaneRole::TokioBlocking)
 }
 
 fn collect_candidates(profile: LaneProfile) -> Vec<LaneCandidate> {
@@ -174,4 +213,18 @@ pub fn is_carrier_lane_free(slot: u32) -> bool {
         .get(slot as usize)
         .map(|owner| owner.load(Ordering::Acquire) == LANE_FREE)
         .unwrap_or(false)
+}
+
+pub fn vm_owner_for_slot(slot: usize) -> Option<u8> {
+    let tagged = LANE_VM_OWNER.get(slot)?.load(Ordering::Acquire);
+    tagged.checked_sub(1)
+}
+
+pub fn role_for_slot(slot: usize) -> Option<LaneRole> {
+    match LANE_OWNER.get(slot)?.load(Ordering::Acquire) {
+        LANE_VM_HULL => Some(LaneRole::VmHull),
+        LANE_TOKIO_BLOCKING => Some(LaneRole::TokioBlocking),
+        LANE_WORKER => Some(LaneRole::Worker),
+        _ => None,
+    }
 }

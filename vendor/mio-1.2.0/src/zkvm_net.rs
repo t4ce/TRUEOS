@@ -282,6 +282,7 @@ fn interest_bits(interests: Interest) -> u8 {
     bits
 }
 
+#[inline(never)]
 fn status_to_result(status: i32, detail: &'static str) -> io::Result<()> {
     if status == 0 {
         Ok(())
@@ -290,6 +291,7 @@ fn status_to_result(status: i32, detail: &'static str) -> io::Result<()> {
     }
 }
 
+#[inline(never)]
 fn read_write_result(status: isize, detail: &'static str) -> io::Result<usize> {
     if status >= 0 {
         Ok(status as usize)
@@ -298,7 +300,8 @@ fn read_write_result(status: isize, detail: &'static str) -> io::Result<usize> {
     }
 }
 
-fn status_to_error(status: i32, detail: &'static str) -> io::Error {
+#[inline(never)]
+fn status_to_error(status: i32, _detail: &'static str) -> io::Error {
     let kind = match status {
         STATUS_UNSUPPORTED => io::ErrorKind::Other,
         STATUS_WOULD_BLOCK => io::ErrorKind::WouldBlock,
@@ -310,5 +313,5 @@ fn status_to_error(status: i32, detail: &'static str) -> io::Error {
         STATUS_IO => io::ErrorKind::Other,
         _ => io::ErrorKind::Other,
     };
-    io::Error::new(kind, detail)
+    kind.into()
 }

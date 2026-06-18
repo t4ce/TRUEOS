@@ -3,24 +3,24 @@
 #[allow(unused_imports)]
 use crate::runtime::prelude::*;
 
-use alloc::sync::Arc;
 use crate::loom::sync::Mutex;
 use crate::loom::thread;
 use crate::runtime::blocking::schedule::BlockingSchedule;
-use crate::runtime::blocking::{shutdown, BlockingTask};
+use crate::runtime::blocking::{BlockingTask, shutdown};
 use crate::runtime::builder::ThreadNameFn;
 use crate::runtime::task::{self, JoinHandle};
-use crate::runtime::{Builder, Callback, Handle, BOX_FUTURE_THRESHOLD};
+use crate::runtime::{BOX_FUTURE_THRESHOLD, Builder, Callback, Handle};
 use crate::util::metric_atomics::MetricAtomicUsize;
-use crate::util::trace::{blocking_task, SpawnMeta};
+use crate::util::trace::{SpawnMeta, blocking_task};
+use alloc::sync::Arc;
 
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::collections::HashMap;
-use alloc::collections::VecDeque;
-use ::core::fmt;
 use crate::io;
+use ::core::fmt;
+use alloc::collections::VecDeque;
 use core::sync::atomic::Ordering;
 use core::time::Duration;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use std::collections::HashMap;
 
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::loom::sync::Condvar;
@@ -45,7 +45,7 @@ type TrueosBlockingJob = Box<dyn FnOnce() + Send + 'static>;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 unsafe extern "Rust" {
-    fn trueos_tokio_spawn_blocking_job(job: TrueosBlockingJob) -> i32;
+    fn trueos_service_lane_submit_job(job: TrueosBlockingJob) -> i32;
 }
 
 pub(crate) struct BlockingPool {
@@ -537,17 +537,21 @@ impl Spawner {
         rt: &Handle,
         id: usize,
     ) -> io::Result<()> {
+        crate::platform::log(4, b"tokio-platform: spawn_zkvm_worker submit\n");
         let rt = rt.clone();
         let job: TrueosBlockingJob = Box::new(move || {
+            crate::platform::log(4, b"tokio-platform: spawn_zkvm_worker run\n");
             let _enter = rt.enter();
             rt.inner.blocking_spawner().inner.run(id);
             drop(shutdown_tx);
         });
 
-        let rc = unsafe { trueos_tokio_spawn_blocking_job(job) };
+        let rc = unsafe { trueos_service_lane_submit_job(job) };
         if rc == 0 {
+            crate::platform::log(4, b"tokio-platform: spawn_zkvm_worker accepted\n");
             Ok(())
         } else {
+            crate::platform::log(5, b"tokio-platform: spawn_zkvm_worker rejected\n");
             Err(io::Error::new(io::ErrorKind::Other, "TRUEOS background worker spawn failed"))
         }
     }

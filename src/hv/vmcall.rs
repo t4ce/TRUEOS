@@ -20,6 +20,7 @@ pub const OP_UNIX_TIME: u32 = 0x03; // response_data = unix seconds
 pub const OP_YIELD: u32 = 0x04; // cooperative host yield point
 pub const OP_SLEEP_MS: u32 = 0x05; // cooperative host sleep before resume
 pub const OP_RAND_BYTES: u32 = 0x06; // arg0 requested bytes, response payload is random bytes
+pub const OP_BP_CPU_COUNT: u32 = 0x07; // response is app-visible CPU/service lane count
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -45,7 +46,8 @@ pub const OP_BP_FS_EXISTS: u32 = 0x33; // payload path -> 0/1/rc
 pub const OP_BP_FS_REMOVE: u32 = 0x34; // payload path -> rc
 pub const OP_BP_FS_STAT: u32 = 0x60; // payload path -> rc + kind in response_data[63:32]
 pub const OP_BP_THREAD_CURRENT_ID: u32 = 0x61; // response is current TRUEOS vthread id
-pub const OP_BP_TOKIO_BLOCKING_SPAWN: u32 = 0x62; // arg0/arg1 boxed blocking job raw parts
+pub const OP_BP_SERVICE_LANE_SUBMIT: u32 = 0x62; // arg0/arg1 boxed service-lane job raw parts
+pub const OP_BP_TOKIO_BLOCKING_SPAWN: u32 = OP_BP_SERVICE_LANE_SUBMIT; // compatibility alias
 pub const OP_BP_UI2_WINDOW_CREATE: u32 = 0x63; // legacy/unsupported
 pub const OP_BP_UI2_WINDOW_OP: u32 = 0x64; // legacy/unsupported
 pub const OP_BP_GFX_TEXTURE_UPLOAD_BEGIN: u32 = 0x65; // payload texture upload header
@@ -255,6 +257,15 @@ pub fn guest_sleep_ms(ms: u64) {
     let _ = guest_call(OP_SLEEP_MS, ms, 0);
 }
 
+pub fn guest_cpu_count() -> Option<usize> {
+    let (status, count) = guest_call(OP_BP_CPU_COUNT, 0, 0);
+    if status == STATUS_OK {
+        Some(count.max(1) as usize)
+    } else {
+        None
+    }
+}
+
 const MIO_ADDR_BYTES: usize = core::mem::size_of::<crate::mio_compat::TrueosMioSocketAddr>();
 const MIO_READY_EVENT_BYTES: usize = core::mem::size_of::<crate::mio_compat::TrueosMioReadyEvent>();
 
@@ -304,6 +315,11 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, 0xCAFE_BABE, 0);
             DispatchOutcome::Resume
         }
+        OP_BP_CPU_COUNT => {
+            let count = crate::workers::app_visible_parallelism().max(1);
+            write_response(vm_id, seq, STATUS_OK, count as u64, 0);
+            DispatchOutcome::Resume
+        }
         OP_UNIX_TIME => {
             let t = crate::r::net::ntp::current_unix_seconds().unwrap_or(0);
             write_response(vm_id, seq, STATUS_OK, t, 0);
@@ -341,13 +357,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, vtid as u64, 0);
             DispatchOutcome::Resume
         }
-        OP_BP_TOKIO_BLOCKING_SPAWN => {
+        OP_BP_SERVICE_LANE_SUBMIT => {
             let rc = unsafe {
-                crate::r::blocking::spawn_vmx_thread_from_raw(
+                crate::r::blocking::submit_guest_service_lane_job_from_raw(
                     vm_id,
                     arg0 as usize,
                     arg1 as usize,
-                    "vmx-thread",
+                    "vmx-service-lane",
                 )
             };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
