@@ -124,7 +124,20 @@ struct PortalImageAllocation {
 }
 
 fn portal_guest_alloc_vm_id() -> Option<u8> {
-    crate::hv::current_hull_guest_context_vm_id().or_else(crate::hv::current_vm_id)
+    crate::hv::current_hull_guest_context_vm_id()
+        .or_else(crate::hv::current_vm_id)
+        .or_else(|| {
+            let domain = crate::r::kernel_task_domain::current();
+            if matches!(
+                domain.domain,
+                crate::r::kernel_task_domain::KernelTaskDomain::TokioCarrier
+                    | crate::r::kernel_task_domain::KernelTaskDomain::VmGuestOwnedAlloc
+            ) {
+                domain.vm_id
+            } else {
+                None
+            }
+        })
 }
 
 impl PortalImageAllocation {
@@ -1389,6 +1402,9 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "trueos_platform_cpu_count" => {
             Some(crate::r::platform::trueos_platform_cpu_count as *const () as usize)
         }
+        "trueos_service_lane_submit_job" => {
+            Some(crate::r::blocking::trueos_service_lane_submit_job as *const () as usize)
+        }
         "trueos_tokio_spawn_blocking_job" => {
             Some(crate::r::blocking::trueos_tokio_spawn_blocking_job as *const () as usize)
         }
@@ -1492,17 +1508,25 @@ unsafe extern "C" fn portal_rust_alloc(size: usize, align: usize) -> *mut u8 {
     } else {
         alloc()
     };
+    let trace_index = PORTAL_RUST_ALLOC_TRACE_COUNT.fetch_add(1, Ordering::Relaxed);
     if crate::logflag::PORTAL_LOGS
-        && PORTAL_RUST_ALLOC_TRACE_COUNT.fetch_add(1, Ordering::Relaxed) < 32
+        && (trace_index < 128
+            || layout.size() >= 1024 * 1024
+            || trace_index.is_power_of_two()
+            || ptr.is_null())
     {
         let vm_for_stats = vm_id.unwrap_or(0);
         let stats = crate::allocators::hv_guest_heap_stats(vm_for_stats);
         crate::hv::hvlogf(format_args!(
-            "portal: rust alloc vm={:?} size={} align={} ptr=0x{:016X} guest_heap=[0x{:016X}..0x{:016X})",
+            "portal: rust alloc seq={} vm={:?} size={} align={} ptr=0x{:016X} free_bytes={} largest_free={} free_blocks={} guest_heap=[0x{:016X}..0x{:016X})",
+            trace_index,
             vm_id,
             layout.size(),
             layout.align(),
             ptr as usize,
+            stats.free_bytes,
+            stats.largest_free_block,
+            stats.free_blocks,
             stats.heap_start,
             stats.heap_end,
         ));

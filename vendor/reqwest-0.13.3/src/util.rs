@@ -24,10 +24,26 @@ where
 }
 
 #[cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub(crate) fn fast_random() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0x9e37_79b9_7f4a_7c15);
+
+    let mut x = COUNTER.fetch_add(0x9e37_79b9_7f4a_7c15, Ordering::Relaxed);
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
+}
+
+#[cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 pub(crate) fn fast_random() -> u64 {
     use core::cell::Cell;
-    use std::collections::hash_map::RandomState;
     use core::hash::{BuildHasher, Hasher};
+    use std::collections::hash_map::RandomState;
 
     thread_local! {
         static KEY: RandomState = RandomState::new();

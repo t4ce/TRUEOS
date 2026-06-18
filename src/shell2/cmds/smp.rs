@@ -9,12 +9,32 @@ fn print_usage(io: &'static dyn ShellBackend2) {
 }
 
 fn slot_owner(slot: usize) -> alloc::string::String {
-    let Some(vm_id) = crate::hv::vm_id_for_cpu_slot(slot) else {
-        return alloc::string::String::from("-");
-    };
-    let archive =
-        crate::hv::app_vm_archive(vm_id).unwrap_or_else(|| alloc::string::String::from("-"));
-    alloc::format!("vm{}:{}", vm_id, archive)
+    if let Some(vm_id) = crate::hv::vm_id_for_cpu_slot(slot) {
+        let archive =
+            crate::hv::app_vm_archive(vm_id).unwrap_or_else(|| alloc::string::String::from("-"));
+        return alloc::format!("vm{}:{}", vm_id, archive);
+    }
+
+    if let Some(vm_id) = crate::hv::lane::vm_owner_for_slot(slot) {
+        let archive =
+            crate::hv::app_vm_archive(vm_id).unwrap_or_else(|| alloc::string::String::from("-"));
+        let label = crate::hv::lane::role_for_slot(slot)
+            .map(|role| role.owner_label())
+            .unwrap_or("worker");
+        if archive != "-" {
+            if label == "hull" {
+                return alloc::format!("vm{}:{}", vm_id, archive);
+            }
+            return alloc::format!("vm{}:{}.{}", vm_id, archive, label);
+        }
+        return alloc::format!("vm{}:{}", vm_id, label);
+    }
+
+    if crate::r::blocking::service_lane_started_for_slot(slot) {
+        return alloc::string::String::from("service-lane");
+    }
+
+    alloc::string::String::from("-")
 }
 
 fn slot_row(slot: usize) -> [alloc::string::String; 4] {

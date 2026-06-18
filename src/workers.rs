@@ -13,6 +13,7 @@ pub const CORE_KIND_EFF: u8 = 2;
 
 // Slot 0 is BSP and slot 1 is the UI2/service AP; background carriers start at AP2.
 const FIRST_BACKGROUND_SLOT: u32 = 2;
+const APP_PARALLELISM_NO_UI: bool = false;
 const WORKER_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
 
 static CORE_SPAWNERS: Mutex<BTreeMap<u32, SendSpawner>> = Mutex::new(BTreeMap::new());
@@ -73,8 +74,22 @@ pub fn register_core_spawner(cpu_slot: u32, core_kind: u8, spawner: Spawner) {
         *slot.lock() = Some(send_spawner);
         CORE_KIND_BY_SLOT[cpu_slot as usize].store(core_kind, Ordering::Release);
     }
-    CORE_SPAWNERS.lock().insert(cpu_slot, send_spawner);
+    let registered = {
+        let mut spawners = CORE_SPAWNERS.lock();
+        spawners.insert(cpu_slot, send_spawner);
+        spawners.len()
+    };
     CORE_KINDS.lock().insert(cpu_slot, core_kind);
+    crate::log!(
+        "workers: registered core spawner slot={} kind={} registered={} app_visible={}\n",
+        cpu_slot,
+        core_kind,
+        registered,
+        app_visible_parallelism()
+    );
+    if is_background_worker_slot(cpu_slot) {
+        crate::r::blocking::start_service_lane_for_slot(cpu_slot);
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -126,6 +141,35 @@ pub fn background_worker_slots() -> Vec<u32> {
         .collect();
     out.sort_unstable();
     out
+}
+
+pub fn registered_core_spawner_count() -> usize {
+    CORE_SPAWNERS.lock().len()
+}
+
+pub fn topology_core_slot_count() -> usize {
+    crate::smp::cpu_count().max(crate::percpu::total_slots())
+}
+
+pub fn app_visible_parallelism() -> usize {
+    let first_app_slot = if APP_PARALLELISM_NO_UI {
+        1
+    } else {
+        FIRST_BACKGROUND_SLOT
+    };
+    let topology_slots = topology_core_slot_count();
+    if topology_slots != 0 {
+        return topology_slots
+            .saturating_sub(first_app_slot as usize)
+            .max(1);
+    }
+
+    CORE_SPAWNERS
+        .lock()
+        .keys()
+        .filter(|slot| **slot >= first_app_slot)
+        .count()
+        .max(1)
 }
 
 pub fn is_background_worker_slot(cpu_slot: u32) -> bool {

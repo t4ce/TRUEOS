@@ -1,21 +1,21 @@
-use alloc::boxed::Box;
-use alloc::sync::Arc;
 use ::core::fmt;
 use ::core::fmt::{Debug, Formatter};
+use alloc::boxed::Box;
+use alloc::sync::Arc;
 use core::future::Future;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use futures_util::future::{AbortHandle, Abortable};
 use tokio::runtime::Builder;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
-use tokio::task::{spawn_local, JoinHandle, LocalSet};
+use tokio::task::{JoinHandle, LocalSet, spawn_local};
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 type TrueosBlockingJob = Box<dyn FnOnce() + Send + 'static>;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 unsafe extern "Rust" {
-    fn trueos_tokio_spawn_blocking_job(job: TrueosBlockingJob) -> i32;
+    fn trueos_service_lane_submit_job(job: TrueosBlockingJob) -> i32;
 }
 
 /// A cloneable handle to a local pool, used for spawning `!Send` tasks.
@@ -409,7 +409,7 @@ impl LocalWorkerHandle {
         #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             let job: TrueosBlockingJob = Box::new(move || Self::run(runtime, receiver, task_count));
-            let rc = unsafe { trueos_tokio_spawn_blocking_job(job) };
+            let rc = unsafe { trueos_service_lane_submit_job(job) };
             if rc != 0 {
                 panic!("Failed to start a TRUEOS pinned worker carrier: rc={rc}");
             }

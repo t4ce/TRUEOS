@@ -10,11 +10,12 @@ use crate::phys::{self, HeapArena};
 
 const HV_GUEST_HEAP_ALIGN: usize = 2 * 1024 * 1024;
 pub const HV_GUEST_HEAP_MIN_ARENA_SIZE: usize = 16 * 1024 * 1024;
-pub const HV_GUEST_HEAP_MAX_ARENA_SIZE: usize = 2 * 1024 * 1024 * 1024;
-const HV_GUEST_HEAP_LARGE_FALLBACK_ARENA_SIZE: usize = 1536 * 1024 * 1024;
-const HV_GUEST_HEAP_CANDIDATES: [usize; 6] = [
+pub const HV_GUEST_HEAP_MAX_ARENA_SIZE: usize = 4 * 1024 * 1024 * 1024;
+const HV_GUEST_HEAP_LARGE_FALLBACK_ARENA_SIZE: usize = 3 * 1024 * 1024 * 1024;
+const HV_GUEST_HEAP_CANDIDATES: [usize; 7] = [
     HV_GUEST_HEAP_MAX_ARENA_SIZE,
     HV_GUEST_HEAP_LARGE_FALLBACK_ARENA_SIZE,
+    2 * 1024 * 1024 * 1024,
     1024 * 1024 * 1024,
     512 * 1024 * 1024,
     256 * 1024 * 1024,

@@ -9,6 +9,7 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
 static TOKIO_SEMANTIC_GAPS_LOGGED: AtomicU64 = AtomicU64::new(0);
+static TOKIO_CPU_COUNT_LOGGED: AtomicU64 = AtomicU64::new(0);
 
 const SEMANTIC_GAP_MUTEX_SPIN: u32 = 1;
 const SEMANTIC_GAP_RUNTIME_PARK_POLL: u32 = 2;
@@ -35,12 +36,33 @@ pub extern "Rust" fn trueos_platform_unix_seconds() -> u64 {
 
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_platform_cpu_count() -> usize {
-    let smp_count = crate::smp::cpu_count();
-    if smp_count != 0 {
-        return smp_count;
+    if crate::hv::current_hull_guest_context_vm_id().is_some()
+        && let Some(count) = crate::hv::vmcall::guest_cpu_count()
+    {
+        return count;
     }
 
-    crate::percpu::total_slots().max(1)
+    let registered = crate::workers::registered_core_spawner_count();
+    let topology_slots = crate::workers::topology_core_slot_count();
+    let app_lanes = crate::workers::app_visible_parallelism();
+    let count = app_lanes.max(1);
+
+    if TOKIO_CPU_COUNT_LOGGED
+        .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        crate::log!(
+            "tokio-platform: cpu_count count={} app_lanes={} registered_spawners={} fallback={} smp={} percpu_slots={}\n",
+            count,
+            app_lanes,
+            registered,
+            topology_slots.saturating_sub(2).max(1),
+            crate::smp::cpu_count(),
+            crate::percpu::total_slots()
+        );
+    }
+
+    count
 }
 
 fn tokio_semantic_gap_message(code: u32) -> &'static str {

@@ -1,4 +1,3 @@
-pub mod pat;
 pub mod blocking;
 pub mod codec;
 pub mod cursor;
@@ -9,6 +8,7 @@ pub mod io;
 pub mod kernel_task_domain;
 pub mod keyboard;
 pub mod net;
+pub mod pat;
 pub mod path;
 pub mod platform;
 pub mod rdp;

@@ -1867,6 +1867,14 @@ cfg_rt_multi_thread! {
             use crate::runtime::scheduler::{self, MultiThread};
 
             let worker_threads = self.worker_threads.unwrap_or_else(num_cpus);
+            crate::platform::log(
+                3,
+                alloc::format!(
+                    "tokio-platform: build_threaded_runtime worker_threads={}\n",
+                    worker_threads
+                )
+                .as_bytes(),
+            );
 
             let (driver, driver_handle) = driver::Driver::new(self.get_cfg())?;
 
