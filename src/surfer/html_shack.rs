@@ -428,10 +428,27 @@ fn normalize_file_reference(path: &str) -> String {
     String::from(trimmed)
 }
 
+fn strip_url_prefix_ignore_ascii_case<'a>(url: &'a str, prefix: &str) -> Option<&'a str> {
+    url.get(..prefix.len())
+        .filter(|head| head.eq_ignore_ascii_case(prefix))
+        .map(|_| &url[prefix.len()..])
+}
+
+fn normalize_http_url_scheme(url: &str) -> Option<String> {
+    let trimmed = url.trim();
+    if let Some(rest) = strip_url_prefix_ignore_ascii_case(trimmed, "https://") {
+        return Some(alloc::format!("https://{}", rest));
+    }
+    if let Some(rest) = strip_url_prefix_ignore_ascii_case(trimmed, "http://") {
+        return Some(alloc::format!("http://{}", rest));
+    }
+    None
+}
+
 fn resolve_request_url(request: &HtmlRequest) -> String {
     let trimmed = request.url.trim();
-    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        return String::from(trimmed);
+    if let Some(url) = normalize_http_url_scheme(trimmed) {
+        return url;
     }
 
     let mut out = String::from(request.road.as_scheme());
@@ -646,6 +663,7 @@ struct HttpTarget {
 enum HttpFetchError {
     BadUrl,
     UnsupportedScheme,
+    Https,
     NoDns,
     Dns,
     Connect,
@@ -660,6 +678,7 @@ impl HttpFetchError {
         match self {
             Self::BadUrl => "bad-url",
             Self::UnsupportedScheme => "unsupported-scheme",
+            Self::Https => "https",
             Self::NoDns => "no-dns",
             Self::Dns => "dns",
             Self::Connect => "connect",
@@ -673,10 +692,10 @@ impl HttpFetchError {
 
 fn parse_http_url(url: &str) -> Result<HttpTarget, HttpFetchError> {
     let trimmed = url.trim();
-    if trimmed.starts_with("https://") {
+    if strip_url_prefix_ignore_ascii_case(trimmed, "https://").is_some() {
         return Err(HttpFetchError::UnsupportedScheme);
     }
-    let Some(rest) = trimmed.strip_prefix("http://") else {
+    let Some(rest) = strip_url_prefix_ignore_ascii_case(trimmed, "http://") else {
         return Err(HttpFetchError::BadUrl);
     };
 
@@ -1038,6 +1057,7 @@ async fn fetch_http_body_hyper(
     url: &str,
     max_bytes: usize,
     method: &ByteFetchMethod,
+    timeout_ms: u64,
 ) -> Result<(String, Vec<u8>), HttpFetchError> {
     let mut current = String::from(url);
     let mut seen = BTreeSet::new();
@@ -1045,6 +1065,28 @@ async fn fetch_http_body_hyper(
     for hop in 0..=HTML_FETCH_MAX_REDIRECTS {
         if !seen.insert(current.clone()) {
             return Err(HttpFetchError::Body);
+        }
+        if let Some(https_url) = normalize_http_url_scheme(current.as_str())
+            && strip_url_prefix_ignore_ascii_case(https_url.as_str(), "https://").is_some()
+        {
+            match method {
+                ByteFetchMethod::Get => {}
+                ByteFetchMethod::Post { .. } => return Err(HttpFetchError::UnsupportedScheme),
+            }
+
+            let timeout_ms = timeout_ms.min(u32::MAX as u64).max(1) as u32;
+            let bytes =
+                crate::r::net::https::get_bytes_shared(https_url.as_str(), timeout_ms, max_bytes)
+                    .await
+                    .map_err(|err| {
+                        crate::log!(
+                            "html_shack: https fetch failed url={} err={}\n",
+                            https_url,
+                            err
+                        );
+                        HttpFetchError::Https
+                    })?;
+            return Ok((https_url, bytes));
         }
         let target = parse_http_url(current.as_str())?;
         match fetch_http_body_once(&target, max_bytes, method).await {
@@ -1062,7 +1104,12 @@ async fn fetch_http_body_hyper(
 
 async fn handle_byte_fetch_request(worker_id: u32, request: ByteFetchRequest) {
     let result = with_timeout_or_none(
-        fetch_http_body_hyper(request.url.as_str(), request.max_bytes, &request.method),
+        fetch_http_body_hyper(
+            request.url.as_str(),
+            request.max_bytes,
+            &request.method,
+            request.timeout_ms,
+        ),
         request.timeout_ms,
     )
     .await;
@@ -1127,7 +1174,12 @@ async fn handle_html_fetch_request(
     }
 
     let result = with_timeout_or_none(
-        fetch_http_body_hyper(fetch_url.as_str(), HTML_FETCH_MAX_BYTES, &ByteFetchMethod::Get),
+        fetch_http_body_hyper(
+            fetch_url.as_str(),
+            HTML_FETCH_MAX_BYTES,
+            &ByteFetchMethod::Get,
+            HTML_FETCH_BODY_TIMEOUT_MS,
+        ),
         HTML_FETCH_BODY_TIMEOUT_MS,
     )
     .await;

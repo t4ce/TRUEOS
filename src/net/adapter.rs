@@ -3731,7 +3731,7 @@ impl NetService {
                     self.records[idx].tcp_tx.extend(data);
                     self.flush_tcp_tx(idx);
                 } else {
-                    let _ = push_event(owner, NetEvent::Error { msg: "bad handle" });
+                    let _ = push_event(owner, NetEvent::Closed { handle });
                 }
             }
             NetCommand::IcmpEcho { target, seq, data } => {
