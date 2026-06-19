@@ -105,7 +105,7 @@ define_started_flags!(
     UI3_ASSET_SERVICE_STARTED,
     UI3_SERVICE_STARTED,
     I226_DIAGNOSTIC_DISPLAY_STARTED,
-    CPAL_SERVICE_STARTED
+    TINYAUDIO_SERVICE_STARTED
 );
 
 #[cfg(feature = "trueos_rdp")]
@@ -574,8 +574,8 @@ fn spawn_ui3_orbits(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |_ap1_spawner| crate::ui3::ui3_orbits::ui3_orbits_task())
 }
 
-fn spawn_cpal_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::tst::esynth::cpal_service_task())
+fn spawn_tinyaudio_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::tst::esynth::tinyaudio_service_task())
 }
 
 #[inline]
@@ -1274,10 +1274,10 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_ui3_orbits,
     ),
     TaskSpec::enabled(
-        "cpal_service",
+        "tinyaudio_service",
         crate::r::readiness::INTEL_HDA_READY,
-        &CPAL_SERVICE_STARTED,
-        spawn_cpal_service,
+        &TINYAUDIO_SERVICE_STARTED,
+        spawn_tinyaudio_service,
     ),
     TaskSpec::disabled(
         "trueosfs-ready-hook",
