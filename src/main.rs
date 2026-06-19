@@ -72,6 +72,8 @@ mod std_abi_shim;
 mod surfer;
 mod tga;
 mod tst;
+#[path = "tst/audio_live_http.rs"]
+mod tst_audio_live_http;
 #[path = "tst/http_trueosfs.rs"]
 mod tst_http_trueosfs;
 #[path = "tst/net_tcp_shell.rs"]

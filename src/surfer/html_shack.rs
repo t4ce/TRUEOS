@@ -17,6 +17,10 @@ use hyper::rt::{Read, ReadBufCursor, Write};
 use spin::Mutex;
 use v::vnet as api;
 
+use crate::net::tls::{TlsClientConfig, TlsRoots};
+use crate::net::tls_socket::{TlsCommand, TlsEvent, TlsTimeouts, register_tls_app_queues};
+use crate::r::net::{NetProfile, Queue};
+
 pub(crate) const HTML_FETCH_WORKERS: usize = 10;
 const HTML_FETCH_IDLE_MS: u64 = 250;
 const HTML_FETCH_CONNECT_TIMEOUT_MS: u64 = 10_000;
@@ -31,6 +35,7 @@ const HTML_SHACK_PREVIEW_ENABLE: bool = false;
 static HTML_FETCH_IDLE_LOGS: AtomicU32 = AtomicU32::new(0);
 static HTML_FETCH_WORKER_SEQ: AtomicU32 = AtomicU32::new(0);
 static HTML_BYTE_FETCH_SEQ: AtomicU32 = AtomicU32::new(1);
+static HTML_HTTPS_FETCH_SEQ: AtomicU32 = AtomicU32::new(1);
 
 /// A fetched HTML document.
 ///
@@ -660,6 +665,13 @@ struct HttpTarget {
     path_and_query: String,
 }
 
+struct HttpsTarget {
+    url: String,
+    host: String,
+    port: u16,
+    path_and_query: String,
+}
+
 enum HttpFetchError {
     BadUrl,
     UnsupportedScheme,
@@ -688,6 +700,10 @@ impl HttpFetchError {
             Self::Redirect(_) => "redirect",
         }
     }
+}
+
+fn leak_str(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
 }
 
 fn parse_http_url(url: &str) -> Result<HttpTarget, HttpFetchError> {
@@ -744,6 +760,57 @@ fn parse_http_url(url: &str) -> Result<HttpTarget, HttpFetchError> {
     })
 }
 
+fn parse_https_url(url: &str) -> Result<HttpsTarget, HttpFetchError> {
+    let trimmed = url.trim();
+    let Some(rest) = strip_url_prefix_ignore_ascii_case(trimmed, "https://") else {
+        return Err(HttpFetchError::BadUrl);
+    };
+
+    let authority_end = rest
+        .find(|c| c == '/' || c == '?' || c == '#')
+        .unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    if authority.is_empty() {
+        return Err(HttpFetchError::BadUrl);
+    }
+
+    let mut host = authority;
+    let mut port = 443u16;
+    if let Some(colon) = authority.rfind(':') {
+        host = &authority[..colon];
+        port = authority[colon + 1..]
+            .parse::<u16>()
+            .map_err(|_| HttpFetchError::BadUrl)?;
+    }
+    if host.is_empty() {
+        return Err(HttpFetchError::BadUrl);
+    }
+
+    let mut path_and_query = if authority_end >= rest.len() {
+        String::from("/")
+    } else {
+        let suffix = &rest[authority_end..];
+        if suffix.starts_with('?') {
+            alloc::format!("/{}", suffix)
+        } else {
+            String::from(suffix)
+        }
+    };
+    if let Some(fragment) = path_and_query.find('#') {
+        path_and_query.truncate(fragment);
+    }
+    if path_and_query.is_empty() {
+        path_and_query.push('/');
+    }
+
+    Ok(HttpsTarget {
+        url: String::from(trimmed),
+        host: String::from(host),
+        port,
+        path_and_query,
+    })
+}
+
 fn parse_ipv4_literal(host: &str) -> Option<[u8; 4]> {
     let mut out = [0u8; 4];
     let mut count = 0usize;
@@ -778,6 +845,116 @@ fn build_dns_a_query(host: &str, id: u16) -> Result<Vec<u8>, HttpFetchError> {
     out.extend_from_slice(&1u16.to_be_bytes());
     out.extend_from_slice(&1u16.to_be_bytes());
     Ok(out)
+}
+
+fn find_http_header_end(bytes: &[u8]) -> Option<usize> {
+    bytes
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|idx| idx + 4)
+}
+
+fn parse_http_status(bytes: &[u8]) -> Option<u16> {
+    let line_end = bytes.windows(2).position(|w| w == b"\r\n")?;
+    let line = core::str::from_utf8(&bytes[..line_end]).ok()?;
+    let mut parts = line.split_whitespace();
+    let _http = parts.next()?;
+    parts.next()?.parse::<u16>().ok()
+}
+
+fn trim_ascii(mut bytes: &[u8]) -> &[u8] {
+    while matches!(bytes.first(), Some(b' ' | b'\t' | b'\r' | b'\n')) {
+        bytes = &bytes[1..];
+    }
+    while matches!(bytes.last(), Some(b' ' | b'\t' | b'\r' | b'\n')) {
+        bytes = &bytes[..bytes.len() - 1];
+    }
+    bytes
+}
+
+fn header_value<'a>(headers: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
+    for line in headers.split(|b| *b == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        let Some(colon) = line.iter().position(|b| *b == b':') else {
+            continue;
+        };
+        let key = &line[..colon];
+        if key.len() == name.len()
+            && key
+                .iter()
+                .zip(name.iter())
+                .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+        {
+            return Some(trim_ascii(&line[colon + 1..]));
+        }
+    }
+    None
+}
+
+fn header_value_has_token(value: &[u8], token: &[u8]) -> bool {
+    value.split(|b| *b == b',' || *b == b';').any(|part| {
+        let part = trim_ascii(part);
+        part.len() == token.len()
+            && part
+                .iter()
+                .zip(token.iter())
+                .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+    })
+}
+
+fn decode_chunked(body: &[u8], max_bytes: usize) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut offset = 0usize;
+    loop {
+        let line_rel = body[offset..].windows(2).position(|w| w == b"\r\n")?;
+        let line = &body[offset..offset + line_rel];
+        let size_text = core::str::from_utf8(line.split(|b| *b == b';').next()?).ok()?;
+        let size = usize::from_str_radix(size_text.trim(), 16).ok()?;
+        offset = offset.checked_add(line_rel + 2)?;
+        if size == 0 {
+            return Some(out);
+        }
+        if offset.checked_add(size + 2)? > body.len() {
+            return None;
+        }
+        if out.len().checked_add(size)? > max_bytes {
+            return None;
+        }
+        out.extend_from_slice(&body[offset..offset + size]);
+        offset += size + 2;
+    }
+}
+
+fn https_body_from_response(response: &[u8], max_bytes: usize) -> Result<Vec<u8>, HttpFetchError> {
+    let hdr_end = find_http_header_end(response).ok_or(HttpFetchError::Body)?;
+    let status = parse_http_status(response).ok_or(HttpFetchError::Body)?;
+    if !(200..300).contains(&status) {
+        return Err(HttpFetchError::Body);
+    }
+
+    let headers = &response[..hdr_end];
+    let body = &response[hdr_end..];
+    if let Some(te) = header_value(headers, b"transfer-encoding")
+        && header_value_has_token(te, b"chunked")
+    {
+        return decode_chunked(body, max_bytes).ok_or(HttpFetchError::Body);
+    }
+
+    if let Some(len_text) = header_value(headers, b"content-length")
+        && let Ok(len) = core::str::from_utf8(trim_ascii(len_text))
+            .unwrap_or("")
+            .parse::<usize>()
+    {
+        if len > max_bytes {
+            return Err(HttpFetchError::TooLarge);
+        }
+        return Ok(body.get(..len).unwrap_or(body).to_vec());
+    }
+
+    if body.len() > max_bytes {
+        return Err(HttpFetchError::TooLarge);
+    }
+    Ok(body.to_vec())
 }
 
 fn dns_skip_name(buf: &[u8], mut offset: usize) -> Option<usize> {
@@ -1102,6 +1279,159 @@ async fn fetch_http_body_hyper(
     Err(HttpFetchError::Body)
 }
 
+async fn fetch_https_body_once(
+    target: &HttpsTarget,
+    max_bytes: usize,
+    timeout_ms: u64,
+) -> Result<Vec<u8>, HttpFetchError> {
+    crate::r::readiness::wait_for(
+        crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TLS_SOCKET_SERVICE_READY,
+    )
+    .await;
+
+    let device_index = NetProfile::default()
+        .resolve_device_index()
+        .ok_or(HttpFetchError::NoDns)?;
+    let ip = crate::r::net::dns::resolve_ipv4_for_device(
+        device_index,
+        target.host.as_str(),
+        crate::r::net::dns::DnsConfig::default().with_timeout_ms(HTML_FETCH_DNS_TIMEOUT_MS),
+    )
+    .await
+    .map_err(|err| {
+        crate::log!("html_shack: https dns resolve failed host={} err={:?}\n", target.host, err);
+        HttpFetchError::Dns
+    })?;
+
+    let seq = HTML_HTTPS_FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
+    let owner = leak_str(alloc::format!("html-https-fetch-{}@{}", seq, device_index));
+    let cmds = Queue::new_leaked(leak_str(alloc::format!("{}-cmd", owner)), 128);
+    let events = Queue::new_leaked(leak_str(alloc::format!("{}-evt", owner)), 1024);
+    register_tls_app_queues(owner, cmds, events);
+
+    cmds.push(TlsCommand::OpenTcpConnect {
+        remote: api::EndpointV4::new(ip, target.port),
+        server_name: leak_str(target.host.clone()),
+        cfg: TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]),
+        roots: TlsRoots::mozilla(),
+        timeouts: TlsTimeouts {
+            connect_ms: 20_000,
+            tls_ms: 30_000,
+            idle_ms: timeout_ms.min(u32::MAX as u64).max(1) as u32,
+        },
+    })
+    .map_err(|_| HttpFetchError::Connect)?;
+
+    crate::log!(
+        "html_shack: https connect host={} device={} remote={}.{}.{}.{}:{} path={}\n",
+        target.host,
+        device_index,
+        ip[0],
+        ip[1],
+        ip[2],
+        ip[3],
+        target.port,
+        target.path_and_query
+    );
+
+    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms);
+    let mut tls_handle = None;
+    let mut sent_request = false;
+    let mut response = Vec::new();
+
+    loop {
+        for ev in events.drain(64) {
+            match ev {
+                TlsEvent::Opened { handle } => tls_handle = Some(handle),
+                TlsEvent::Connected { handle } => {
+                    if tls_handle != Some(handle) || sent_request {
+                        continue;
+                    }
+                    let req = alloc::format!(
+                        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS/html_shack\r\nAccept: text/html,*/*;q=0.8\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n",
+                        target.path_and_query,
+                        target.host
+                    );
+                    cmds.push(TlsCommand::Send {
+                        handle,
+                        data: req.into_bytes(),
+                    })
+                    .map_err(|_| HttpFetchError::Connect)?;
+                    sent_request = true;
+                }
+                TlsEvent::Data { handle, data } => {
+                    if tls_handle != Some(handle) {
+                        continue;
+                    }
+                    if response.len().saturating_add(data.len()) > max_bytes.saturating_add(4096) {
+                        let _ = cmds.push(TlsCommand::Close { handle });
+                        return Err(HttpFetchError::TooLarge);
+                    }
+                    response.extend_from_slice(data.as_slice());
+                }
+                TlsEvent::Closed { handle } => {
+                    if tls_handle == Some(handle) {
+                        return https_body_from_response(response.as_slice(), max_bytes);
+                    }
+                }
+                TlsEvent::Error { msg } => {
+                    crate::log!(
+                        "html_shack: https tls-socket error host={} msg={}\n",
+                        target.host,
+                        msg
+                    );
+                    return Err(HttpFetchError::Https);
+                }
+                TlsEvent::TlsError { err } => {
+                    crate::log!("html_shack: https tls error host={} err={:?}\n", target.host, err);
+                    return Err(HttpFetchError::Https);
+                }
+            }
+        }
+
+        if Instant::now() >= deadline {
+            if let Some(handle) = tls_handle {
+                let _ = cmds.push(TlsCommand::Close { handle });
+            }
+            return Err(HttpFetchError::Connect);
+        }
+        Timer::after(EmbassyDuration::from_millis(10)).await;
+    }
+}
+
+async fn fetch_html_body_for_navigation(
+    url: &str,
+    max_bytes: usize,
+    timeout_ms: u64,
+) -> Result<(String, Vec<u8>), HttpFetchError> {
+    let mut current = String::from(url);
+    let mut seen = BTreeSet::new();
+
+    for hop in 0..=HTML_FETCH_MAX_REDIRECTS {
+        if !seen.insert(current.clone()) {
+            return Err(HttpFetchError::Body);
+        }
+
+        if strip_url_prefix_ignore_ascii_case(current.trim(), "https://").is_some() {
+            let target = parse_https_url(current.as_str())?;
+            let body = fetch_https_body_once(&target, max_bytes, timeout_ms).await?;
+            return Ok((target.url, body));
+        }
+
+        let target = parse_http_url(current.as_str())?;
+        match fetch_http_body_once(&target, max_bytes, &ByteFetchMethod::Get).await {
+            Ok(body) => return Ok((target.url, body)),
+            Err(HttpFetchError::Redirect(next)) if hop < HTML_FETCH_MAX_REDIRECTS => {
+                let next = resolve_redirect(&target, next.as_str())?;
+                crate::log!("html_shack: redirect hop={} {} -> {}\n", hop + 1, target.url, next);
+                current = next;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Err(HttpFetchError::Body)
+}
+
 async fn handle_byte_fetch_request(worker_id: u32, request: ByteFetchRequest) {
     let result = with_timeout_or_none(
         fetch_http_body_hyper(
@@ -1174,10 +1504,9 @@ async fn handle_html_fetch_request(
     }
 
     let result = with_timeout_or_none(
-        fetch_http_body_hyper(
+        fetch_html_body_for_navigation(
             fetch_url.as_str(),
             HTML_FETCH_MAX_BYTES,
-            &ByteFetchMethod::Get,
             HTML_FETCH_BODY_TIMEOUT_MS,
         ),
         HTML_FETCH_BODY_TIMEOUT_MS,
