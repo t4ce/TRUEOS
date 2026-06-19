@@ -21,7 +21,7 @@ const READY_WRITABLE: u8 = 0b0000_0010;
 const READY_ERROR: u8 = 0b0000_0100;
 const READY_READ_CLOSED: u8 = 0b0000_1000;
 const READY_WRITE_CLOSED: u8 = 0b0001_0000;
-const TCP_LISTENER_PREPOST: usize = 8;
+const TCP_LISTENER_PREPOST: usize = 32;
 
 const CONNECT_COMPAT_WAIT_NS: u64 = 2_000_000_000;
 const CONNECT_IO_FASTPATH_NS: u64 = 1_000_000_000;
@@ -710,17 +710,37 @@ impl MioCompat {
         }
     }
 
-    fn log_unattributed_error(&self, msg: &'static str) {
-        let pending_count = self.pending_opens.len();
-        if let Some(pending) = self.pending_opens.front()
-            && let Some(socket) = self.socket(pending.socket_id)
-        {
-            log_mio_pending_endpoint(
-                "mio_compat: vnet error unattributed; pending open left active",
+    fn handle_unattributed_error(&mut self, msg: &'static str) {
+        let open_error = matches!(
+            msg,
+            "no sockets available" | "bind failed" | "listen failed" | "connect failed"
+        );
+        if !open_error {
+            crate::log!(
+                "mio_compat: vnet runtime error msg={} pending_opens={}\n",
                 msg,
-                pending_count,
-                socket,
+                self.pending_opens.len()
             );
+            return;
+        }
+
+        if let Some(pending) = self.pending_opens.pop_front() {
+            let pending_count = self.pending_opens.len();
+            if let Some(socket) = self.socket(pending.socket_id) {
+                log_mio_pending_endpoint(
+                    "mio_compat: vnet error unattributed; pending open retired",
+                    msg,
+                    pending_count,
+                    socket,
+                );
+            }
+            if let Some(socket) = self.socket_mut(pending.socket_id)
+                && socket.kind != MioSocketKind::TcpListener
+            {
+                socket.error = STATUS_IO;
+                socket.closed = true;
+            }
+            MIO_SELECTOR_WAIT.notify_all();
             return;
         }
 
@@ -987,17 +1007,23 @@ impl MioCompat {
                 }
             }
             api::Event::Closed { handle } => {
+                let mut refill_listener = None;
                 if let Some(socket) = self.socket_by_handle_mut(handle) {
                     if socket.kind == MioSocketKind::TcpListener {
                         socket.listen_handles.retain(|h| *h != handle);
+                        refill_listener = Some(socket.id);
                     } else {
                         socket.handle = None;
                         socket.closed = true;
                     }
                 }
+                if let Some(socket_id) = refill_listener {
+                    self.ensure_tcp_listener_depth(socket_id);
+                }
+                MIO_SELECTOR_WAIT.notify_all();
             }
             api::Event::Error { msg } => {
-                self.log_unattributed_error(msg);
+                self.handle_unattributed_error(msg);
             }
             api::Event::IcmpReply { .. } => {}
             api::Event::IcmpReplyV6 { .. } => {}
@@ -1054,74 +1080,77 @@ impl MioCompat {
         self.pump();
 
         let mut written = 0usize;
-        for reg in self
-            .registrations
-            .iter()
-            .filter(|reg| owner_matches(reg.owner_vm, owner_vm) && reg.selector_id == selector_id)
-        {
-            if written >= out_cap {
-                break;
-            }
+        for listeners_first in [true, false] {
+            for reg in self.registrations.iter().filter(|reg| {
+                owner_matches(reg.owner_vm, owner_vm) && reg.selector_id == selector_id
+            }) {
+                if written >= out_cap {
+                    break;
+                }
 
-            let Some(socket) = self.socket(reg.socket_id) else {
-                continue;
-            };
+                let Some(socket) = self.socket(reg.socket_id) else {
+                    continue;
+                };
+                if (socket.kind == MioSocketKind::TcpListener) != listeners_first {
+                    continue;
+                }
 
-            let readiness = self.ready_mask(socket, reg.interests);
-            if readiness == 0 {
-                continue;
-            }
+                let readiness = self.ready_mask(socket, reg.interests);
+                if readiness == 0 {
+                    continue;
+                }
 
-            if probe_tcp_socket(socket) && should_log_selector_probe(readiness) {
-                crate::log!(
-                    "mio_compat: tcp selector-ready selector={} socket={} token={} interests=0x{:02x} readiness=0x{:02x} rx={} closed={}\n",
-                    selector_id,
-                    socket.id,
-                    reg.token,
-                    reg.interests,
-                    readiness,
-                    socket.rx_stream.len(),
-                    socket.closed as u8
-                );
-            }
-            if crate::logflag::NET_LOG_TCP_FLOW
-                && socket.kind == MioSocketKind::Udp
-                && (readiness & READY_WRITABLE) != 0
-            {
-                static UDP_WRITABLE_FLOW_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
-                if once_per_second(&UDP_WRITABLE_FLOW_LAST_LOG_NS) {
+                if probe_tcp_socket(socket) && should_log_selector_probe(readiness) {
                     crate::log!(
-                        "mio_compat: udp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
+                        "mio_compat: tcp selector-ready selector={} socket={} token={} interests=0x{:02x} readiness=0x{:02x} rx={} closed={}\n",
                         selector_id,
                         socket.id,
                         reg.token,
-                        readiness
+                        reg.interests,
+                        readiness,
+                        socket.rx_stream.len(),
+                        socket.closed as u8
                     );
                 }
-            }
-            if crate::logflag::NET_LOG_TCP_FLOW
-                && socket.kind == MioSocketKind::TcpStream
-                && (readiness & READY_WRITABLE) != 0
-            {
-                static TCP_WRITABLE_FLOW_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
-                if once_per_second(&TCP_WRITABLE_FLOW_LAST_LOG_NS) {
-                    crate::log!(
-                        "mio_compat: tcp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
-                        selector_id,
-                        socket.id,
-                        reg.token,
-                        readiness
-                    );
+                if crate::logflag::NET_LOG_TCP_FLOW
+                    && socket.kind == MioSocketKind::Udp
+                    && (readiness & READY_WRITABLE) != 0
+                {
+                    static UDP_WRITABLE_FLOW_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
+                    if once_per_second(&UDP_WRITABLE_FLOW_LAST_LOG_NS) {
+                        crate::log!(
+                            "mio_compat: udp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
+                            selector_id,
+                            socket.id,
+                            reg.token,
+                            readiness
+                        );
+                    }
                 }
-            }
+                if crate::logflag::NET_LOG_TCP_FLOW
+                    && socket.kind == MioSocketKind::TcpStream
+                    && (readiness & READY_WRITABLE) != 0
+                {
+                    static TCP_WRITABLE_FLOW_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
+                    if once_per_second(&TCP_WRITABLE_FLOW_LAST_LOG_NS) {
+                        crate::log!(
+                            "mio_compat: tcp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
+                            selector_id,
+                            socket.id,
+                            reg.token,
+                            readiness
+                        );
+                    }
+                }
 
-            unsafe {
-                out_events.add(written).write(TrueosMioReadyEvent {
-                    token: reg.token,
-                    readiness,
-                });
+                unsafe {
+                    out_events.add(written).write(TrueosMioReadyEvent {
+                        token: reg.token,
+                        readiness,
+                    });
+                }
+                written += 1;
             }
-            written += 1;
         }
 
         written
@@ -1495,9 +1524,13 @@ pub(crate) unsafe fn mio_socket_close_host(socket_id: u32) -> i32 {
         }
 
         compat.drop_pending_open(socket_id);
+        compat
+            .registrations
+            .retain(|reg| !(owner_matches(reg.owner_vm, owner_vm) && reg.socket_id == socket_id));
         for handle in handles {
             let _ = compat.submit(api::Command::Close { handle });
         }
+        compat.sockets.remove(socket_index);
         STATUS_OK
     })
 }
@@ -2149,6 +2182,7 @@ pub(crate) unsafe fn mio_tcp_listener_accept_host(
                 compat.sockets[listener_index].accept_queue.len()
             );
         }
+        compat.ensure_tcp_listener_depth(socket_id);
         STATUS_OK
     })
 }

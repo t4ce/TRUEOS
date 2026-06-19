@@ -55,7 +55,7 @@ pub mod net {
     pub const PACKET_POOL_MAX: usize = 1024;
     pub const RX_BUF_SIZE: usize = 2048;
 
-    pub const MAX_SOCKETS: usize = 128;
+    pub const MAX_SOCKETS: usize = 512;
     pub const MAX_DRAIN_PER_LOOP: usize = 128;
     pub const TCP_RX_BUF_BYTES: usize = 1024 * 1024;
     pub const TCP_TX_BUF_BYTES: usize = 1024 * 1024;

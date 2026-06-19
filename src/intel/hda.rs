@@ -2029,6 +2029,47 @@ pub extern "C" fn trueos_cpal_spawn_output_pump(
     }
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_tinyaudio_hda_is_available() -> i32 {
+    trueos_cpal_hda_is_available()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_tinyaudio_hda_open_pcm_stream() -> usize {
+    trueos_cpal_hda_open_pcm_stream()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_tinyaudio_hda_close_pcm_stream(handle: usize) {
+    trueos_cpal_hda_close_pcm_stream(handle);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_tinyaudio_hda_writable_samples(
+    handle: usize,
+    guard_samples: usize,
+) -> isize {
+    trueos_cpal_hda_writable_samples(handle, guard_samples)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_tinyaudio_hda_push_samples(
+    handle: usize,
+    samples: *const i16,
+    len: usize,
+) -> i32 {
+    unsafe { trueos_cpal_hda_push_samples(handle, samples, len) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_tinyaudio_spawn_output_pump(
+    ctx: usize,
+    pump: unsafe extern "C" fn(usize) -> i32,
+    period_ms: u64,
+) -> i32 {
+    trueos_cpal_spawn_output_pump(ctx, pump, period_ms)
+}
+
 impl PcmStreamHandle {
     pub fn info(&self) -> PcmStreamInfo {
         self.info

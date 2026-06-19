@@ -12,3 +12,6 @@
 [submodule "vendor/CrabUSB"]
 	path = vendor/CrabUSB
 	url = https://github.com/t4ce/CrabUSB
+[submodule "vendor/tinyaudio"]
+	path = vendor/tinyaudio
+	url = https://github.com/t4ce/tinyaudio.git

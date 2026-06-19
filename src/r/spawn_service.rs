@@ -852,7 +852,7 @@ struct BlueprintAutostart {
 
 const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
     BlueprintAutostart {
-        enabled: true,
+        enabled: false,
         label: "horizon",
         archive: "horizon.bp",
         slot: "hor",
