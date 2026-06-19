@@ -340,7 +340,7 @@ pub struct HdaController {
 /// Global HDA controller instance
 static HDA: Mutex<Option<HdaController>> = Mutex::new(None);
 static HDA_INITIALIZED: AtomicBool = AtomicBool::new(false);
-static CPAL_HDA_STREAM: Mutex<Option<PcmStreamHandle>> = Mutex::new(None);
+static TINYAUDIO_HDA_STREAM: Mutex<Option<PcmStreamHandle>> = Mutex::new(None);
 
 /// Current PCM format exposed by the HDA output stream.
 pub const PCM_SAMPLE_RATE_HZ: u32 = 48_000;
@@ -1908,13 +1908,13 @@ pub fn open_pcm_stream() -> Result<PcmStreamHandle, &'static str> {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn trueos_cpal_hda_is_available() -> i32 {
+pub extern "C" fn trueos_tinyaudio_hda_is_available() -> i32 {
     i32::from(is_initialized() || find_hda_device().is_some())
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn trueos_cpal_hda_open_pcm_stream() -> usize {
-    let mut stream = CPAL_HDA_STREAM.lock();
+pub extern "C" fn trueos_tinyaudio_hda_open_pcm_stream() -> usize {
+    let mut stream = TINYAUDIO_HDA_STREAM.lock();
     if stream.is_some() {
         return 1;
     }
@@ -1925,30 +1925,33 @@ pub extern "C" fn trueos_cpal_hda_open_pcm_stream() -> usize {
             1
         }
         Err(err) => {
-            hda_warn!("[HDA] CPAL open failed: {}", err);
+            hda_warn!("[HDA] tinyaudio open failed: {}", err);
             0
         }
     }
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn trueos_cpal_hda_close_pcm_stream(handle: usize) {
+pub extern "C" fn trueos_tinyaudio_hda_close_pcm_stream(handle: usize) {
     if handle != 1 {
         return;
     }
 
-    if let Some(mut stream) = CPAL_HDA_STREAM.lock().take() {
+    if let Some(mut stream) = TINYAUDIO_HDA_STREAM.lock().take() {
         stream.stop_reset();
     }
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn trueos_cpal_hda_writable_samples(handle: usize, guard_samples: usize) -> isize {
+pub extern "C" fn trueos_tinyaudio_hda_writable_samples(
+    handle: usize,
+    guard_samples: usize,
+) -> isize {
     if handle != 1 {
         return -1;
     }
 
-    let stream = CPAL_HDA_STREAM.lock();
+    let stream = TINYAUDIO_HDA_STREAM.lock();
     let Some(stream) = stream.as_ref() else {
         return -2;
     };
@@ -1960,7 +1963,7 @@ pub extern "C" fn trueos_cpal_hda_writable_samples(handle: usize, guard_samples:
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cpal_hda_push_samples(
+pub unsafe extern "C" fn trueos_tinyaudio_hda_push_samples(
     handle: usize,
     samples: *const i16,
     len: usize,
@@ -1977,7 +1980,7 @@ pub unsafe extern "C" fn trueos_cpal_hda_push_samples(
     } else {
         unsafe { core::slice::from_raw_parts(samples, len) }
     };
-    let mut stream = CPAL_HDA_STREAM.lock();
+    let mut stream = TINYAUDIO_HDA_STREAM.lock();
     let Some(stream) = stream.as_mut() else {
         return -3;
     };
@@ -1985,14 +1988,14 @@ pub unsafe extern "C" fn trueos_cpal_hda_push_samples(
     match stream.push_samples(samples) {
         Ok(()) => 0,
         Err(err) => {
-            hda_warn!("[HDA] CPAL push failed: {}", err);
+            hda_warn!("[HDA] tinyaudio push failed: {}", err);
             -4
         }
     }
 }
 
 #[embassy_executor::task(pool_size = 4)]
-async fn cpal_output_pump_task(
+async fn tinyaudio_output_pump_task(
     ctx: usize,
     pump: unsafe extern "C" fn(usize) -> i32,
     period_ms: u64,
@@ -2006,7 +2009,7 @@ async fn cpal_output_pump_task(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn trueos_cpal_spawn_output_pump(
+pub extern "C" fn trueos_tinyaudio_spawn_output_pump(
     ctx: usize,
     pump: unsafe extern "C" fn(usize) -> i32,
     period_ms: u64,
@@ -2020,54 +2023,13 @@ pub extern "C" fn trueos_cpal_spawn_output_pump(
         None => return -1,
     };
 
-    match cpal_output_pump_task(ctx, pump, period_ms) {
+    match tinyaudio_output_pump_task(ctx, pump, period_ms) {
         Ok(token) => {
             spawner.spawn(token);
             0
         }
         Err(_) => -2,
     }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_tinyaudio_hda_is_available() -> i32 {
-    trueos_cpal_hda_is_available()
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_tinyaudio_hda_open_pcm_stream() -> usize {
-    trueos_cpal_hda_open_pcm_stream()
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_tinyaudio_hda_close_pcm_stream(handle: usize) {
-    trueos_cpal_hda_close_pcm_stream(handle);
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_tinyaudio_hda_writable_samples(
-    handle: usize,
-    guard_samples: usize,
-) -> isize {
-    trueos_cpal_hda_writable_samples(handle, guard_samples)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_tinyaudio_hda_push_samples(
-    handle: usize,
-    samples: *const i16,
-    len: usize,
-) -> i32 {
-    unsafe { trueos_cpal_hda_push_samples(handle, samples, len) }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_tinyaudio_spawn_output_pump(
-    ctx: usize,
-    pump: unsafe extern "C" fn(usize) -> i32,
-    period_ms: u64,
-) -> i32 {
-    trueos_cpal_spawn_output_pump(ctx, pump, period_ms)
 }
 
 impl PcmStreamHandle {

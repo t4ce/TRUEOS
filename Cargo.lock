@@ -11,7 +11,6 @@ dependencies = [
  "axum",
  "bytes",
  "core3",
- "cpal",
  "crab-usb",
  "crc32fast",
  "dma-api",
@@ -52,6 +51,7 @@ dependencies = [
  "socket2",
  "spin",
  "tiny-skia-path",
+ "tinyaudio",
  "tokio",
  "tower",
  "trueos-c4",
@@ -432,13 +432,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cpal"
-version = "0.16.0"
-dependencies = [
- "dasp_sample",
-]
-
-[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -621,10 +614,6 @@ dependencies = [
  "quote",
  "syn",
 ]
-
-[[package]]
-name = "dasp_sample"
-version = "0.11.0"
 
 [[package]]
 name = "data-url"
@@ -2336,6 +2325,10 @@ dependencies = [
  "libm",
  "strict-num",
 ]
+
+[[package]]
+name = "tinyaudio"
+version = "2.0.0"
 
 [[package]]
 name = "tock-registers"

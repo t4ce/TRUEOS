@@ -41,7 +41,7 @@ regex-automata = { version = "0.4.14", default-features = false, features = ["al
 twoway = { version = "0.2", default-features = false }
 unicode-segmentation = { version = "1", default-features = false }
 log = { version = "0.4", default-features = false }
-cpal = { version = "0.16.0", default-features = false, features = [] }
+tinyaudio = { path = "vendor/tinyaudio", default-features = false }
 trueos-qjs = { path = "crates/trueos-qjs", features = ["trueos"] }
 rustls = { version = "0.23", default-features = false, features = ["custom-provider", "tls12"] }
 rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "tls12", "zeroize"] }
@@ -99,8 +99,6 @@ debug = false
 opt-level = 2
 
 [patch.crates-io]
-cpal = { path = "vendor/cpal-0.16.0" }
-dasp_sample = { path = "vendor/dasp_sample-0.11.0" }
 embassy-executor = { path = "vendor/embassy-executor-0.10.0" }
 libc = { path = "vendor/libc-0.2.186" }
 png = { path = "vendor/png-0.18.1" }
