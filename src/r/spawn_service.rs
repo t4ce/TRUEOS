@@ -105,7 +105,8 @@ define_started_flags!(
     UI3_ASSET_SERVICE_STARTED,
     UI3_SERVICE_STARTED,
     I226_DIAGNOSTIC_DISPLAY_STARTED,
-    TINYAUDIO_SERVICE_STARTED
+    TINYAUDIO_SERVICE_STARTED,
+    TINYAUDIO_LIVE_HTTP_STARTED
 );
 
 #[cfg(feature = "trueos_rdp")]
@@ -578,6 +579,10 @@ fn spawn_tinyaudio_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::tst::esynth::tinyaudio_service_task())
 }
 
+fn spawn_tinyaudio_live_http(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::tst_audio_live_http::tinyaudio_live_http_task())
+}
+
 #[inline]
 fn always_gate() -> bool {
     true
@@ -1043,7 +1048,7 @@ const GBOI_DEMO_READY: u32 = crate::r::readiness::BACKGROUND_AP_WORKER_READY;
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 54 + cfg!(feature = "trueos_rdp") as usize;
+const TASK_COUNT: usize = 55 + cfg!(feature = "trueos_rdp") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1174,7 +1179,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::disabled("esp-gate", 0, &ESP_GATE_STARTED, spawn_esp_gate),
     TaskSpec::disabled("esp-gate-registry", 0, &ESP_GATE_REGISTRY_STARTED, spawn_esp_gate_registry),
     TaskSpec::disabled("esp-piano-audio", 0, &ESP_PIANO_AUDIO_STARTED, spawn_esp_piano_audio),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "esp-piano-udp",
         crate::r::readiness::NET_ANY_CONFIGURED,
         &ESP_PIANO_UDP_STARTED,
@@ -1278,6 +1283,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::INTEL_HDA_READY,
         &TINYAUDIO_SERVICE_STARTED,
         spawn_tinyaudio_service,
+    ),
+    TaskSpec::enabled(
+        "tinyaudio-live-http",
+        crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::INTEL_HDA_READY,
+        &TINYAUDIO_LIVE_HTTP_STARTED,
+        spawn_tinyaudio_live_http,
     ),
     TaskSpec::disabled(
         "trueosfs-ready-hook",

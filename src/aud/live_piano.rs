@@ -29,11 +29,15 @@ const BACKING_BAR_SAMPLES: u32 = BACKING_BEAT_SAMPLES * 4;
 const BACKING_FRAC_BITS: u32 = 16;
 const BACKING_TABLE_SIZE: u32 = 256;
 const BACKING_NO_BASS_STEP: u8 = u8::MAX;
+const FAST_TAP_HOLD_MS: u32 = 24;
+const FAST_TAP_HOLD_FRAMES: usize = (SAMPLE_RATE as usize * FAST_TAP_HOLD_MS as usize) / 1_000;
 
 #[derive(Clone, Copy)]
 struct LiveNote {
     down: bool,
     velocity: u8,
+    strike_seq: u32,
+    release_seq: u32,
 }
 
 impl LiveNote {
@@ -41,6 +45,8 @@ impl LiveNote {
         Self {
             down: false,
             velocity: 0,
+            strike_seq: 0,
+            release_seq: 0,
         }
     }
 }
@@ -69,11 +75,14 @@ pub fn note_on(note: u8, velocity: u8) {
     }
 
     let mut state = LIVE_STATE.lock();
+    let seq = state.seq.wrapping_add(1);
     state.notes[idx] = LiveNote {
         down: true,
         velocity: velocity.max(1),
+        strike_seq: seq,
+        release_seq: state.notes[idx].release_seq,
     };
-    state.seq = state.seq.wrapping_add(1);
+    state.seq = seq;
 }
 
 pub fn note_off(note: u8) {
@@ -83,14 +92,21 @@ pub fn note_off(note: u8) {
     }
 
     let mut state = LIVE_STATE.lock();
+    let seq = state.seq.wrapping_add(1);
     state.notes[idx].down = false;
-    state.seq = state.seq.wrapping_add(1);
+    state.notes[idx].release_seq = seq;
+    state.seq = seq;
 }
 
 pub fn all_notes_off() {
     let mut state = LIVE_STATE.lock();
-    state.notes = [LiveNote::up(); MIDI_NOTE_COUNT];
-    state.seq = state.seq.wrapping_add(1);
+    let seq = state.seq.wrapping_add(1);
+    for note in &mut state.notes {
+        note.down = false;
+        note.velocity = 0;
+        note.release_seq = seq;
+    }
+    state.seq = seq;
 }
 
 fn snapshot() -> LivePianoState {
@@ -109,24 +125,145 @@ fn configure_engine() -> SynthEngine {
     engine
 }
 
+pub(crate) struct LivePianoRenderSource {
+    engine: SynthEngine,
+    backing: BackingGroove,
+    active: [bool; MIDI_NOTE_COUNT],
+    last_velocity: [u8; MIDI_NOTE_COUNT],
+    last_strike_seq: [u32; MIDI_NOTE_COUNT],
+    last_release_seq: [u32; MIDI_NOTE_COUNT],
+    release_after_frames: [usize; MIDI_NOTE_COUNT],
+    last_seq: u32,
+}
+
+pub(crate) const fn backing_config() -> (bool, u32, i32) {
+    (BACKING_ENABLED, BACKING_BPM, BACKING_VOLUME_PCT)
+}
+
+impl LivePianoRenderSource {
+    pub(crate) fn new() -> Self {
+        Self {
+            engine: configure_engine(),
+            backing: BackingGroove::new(),
+            active: [false; MIDI_NOTE_COUNT],
+            last_velocity: [0; MIDI_NOTE_COUNT],
+            last_strike_seq: [0; MIDI_NOTE_COUNT],
+            last_release_seq: [0; MIDI_NOTE_COUNT],
+            release_after_frames: [0; MIDI_NOTE_COUNT],
+            last_seq: 0,
+        }
+    }
+
+    pub(crate) fn render_into(&mut self, buffer: &mut [i16], frames: usize) -> bool {
+        let state = snapshot();
+        if state.seq != self.last_seq {
+            apply_note_state(
+                &mut self.engine,
+                &mut self.active,
+                &mut self.last_velocity,
+                &mut self.last_strike_seq,
+                &mut self.last_release_seq,
+                &mut self.release_after_frames,
+                &state.notes,
+            );
+            self.last_seq = state.seq;
+        }
+
+        let active_piano = self.engine.active_voice_count() != 0
+            || has_held_note(&state.notes)
+            || has_pending_release(&self.release_after_frames);
+        let active_audio = BACKING_ENABLED || active_piano;
+        if active_piano {
+            self.engine.render(buffer, frames);
+            finish_pending_releases(
+                &mut self.engine,
+                &mut self.active,
+                &mut self.last_velocity,
+                &mut self.release_after_frames,
+                frames,
+            );
+        }
+        if BACKING_ENABLED {
+            self.backing.render_into(buffer, frames);
+        }
+        active_audio
+    }
+}
+
 fn apply_note_state(
     engine: &mut SynthEngine,
     active: &mut [bool; MIDI_NOTE_COUNT],
     last_velocity: &mut [u8; MIDI_NOTE_COUNT],
+    last_strike_seq: &mut [u32; MIDI_NOTE_COUNT],
+    last_release_seq: &mut [u32; MIDI_NOTE_COUNT],
+    release_after_frames: &mut [usize; MIDI_NOTE_COUNT],
     notes: &[LiveNote; MIDI_NOTE_COUNT],
 ) {
     for note in 0..MIDI_NOTE_COUNT {
         let wanted = notes[note];
+        let struck = wanted.strike_seq != last_strike_seq[note];
+        let released = wanted.release_seq != last_release_seq[note];
+
+        if struck {
+            if active[note] {
+                engine.note_off(note as u8);
+            }
+            engine.note_on(note as u8, wanted.velocity);
+            active[note] = true;
+            last_velocity[note] = wanted.velocity;
+            last_strike_seq[note] = wanted.strike_seq;
+            release_after_frames[note] = if wanted.down { 0 } else { FAST_TAP_HOLD_FRAMES };
+        }
+
+        if released {
+            last_release_seq[note] = wanted.release_seq;
+            if !struck && active[note] {
+                engine.note_off(note as u8);
+                active[note] = false;
+                last_velocity[note] = 0;
+                release_after_frames[note] = 0;
+            } else if struck && !wanted.down {
+                release_after_frames[note] = FAST_TAP_HOLD_FRAMES;
+            }
+        }
+
         if wanted.down && !active[note] {
             engine.note_on(note as u8, wanted.velocity);
             active[note] = true;
             last_velocity[note] = wanted.velocity;
-        } else if !wanted.down && active[note] {
+            release_after_frames[note] = 0;
+        } else if !wanted.down && active[note] && !struck && !released {
             engine.note_off(note as u8);
             active[note] = false;
             last_velocity[note] = 0;
         } else if wanted.down && wanted.velocity != last_velocity[note] {
             last_velocity[note] = wanted.velocity;
+        }
+    }
+}
+
+fn has_pending_release(release_after_frames: &[usize; MIDI_NOTE_COUNT]) -> bool {
+    release_after_frames.iter().any(|frames| *frames != 0)
+}
+
+fn finish_pending_releases(
+    engine: &mut SynthEngine,
+    active: &mut [bool; MIDI_NOTE_COUNT],
+    last_velocity: &mut [u8; MIDI_NOTE_COUNT],
+    release_after_frames: &mut [usize; MIDI_NOTE_COUNT],
+    rendered_frames: usize,
+) {
+    for note in 0..MIDI_NOTE_COUNT {
+        let frames = release_after_frames[note];
+        if frames == 0 {
+            continue;
+        }
+
+        release_after_frames[note] = frames.saturating_sub(rendered_frames);
+        if release_after_frames[note] == 0 && active[note] {
+            engine.note_off(note as u8);
+            active[note] = false;
+            last_velocity[note] = 0;
         }
     }
 }
@@ -314,18 +451,31 @@ pub async fn task() {
     let mut buffer: Vec<i16> = alloc::vec![0; RENDER_SAMPLES];
     let mut active = [false; MIDI_NOTE_COUNT];
     let mut last_velocity = [0u8; MIDI_NOTE_COUNT];
+    let mut last_strike_seq = [0u32; MIDI_NOTE_COUNT];
+    let mut last_release_seq = [0u32; MIDI_NOTE_COUNT];
+    let mut release_after_frames = [0usize; MIDI_NOTE_COUNT];
     let mut last_seq = 0u32;
     let mut logged_push_err = false;
 
     loop {
         let state = snapshot();
         if state.seq != last_seq {
-            apply_note_state(&mut engine, &mut active, &mut last_velocity, &state.notes);
+            apply_note_state(
+                &mut engine,
+                &mut active,
+                &mut last_velocity,
+                &mut last_strike_seq,
+                &mut last_release_seq,
+                &mut release_after_frames,
+                &state.notes,
+            );
             last_seq = state.seq;
         }
 
-        let active_audio =
-            BACKING_ENABLED || engine.active_voice_count() != 0 || has_held_note(&state.notes);
+        let active_audio = BACKING_ENABLED
+            || engine.active_voice_count() != 0
+            || has_held_note(&state.notes)
+            || has_pending_release(&release_after_frames);
         if !active_audio {
             if stream.is_started() {
                 stream.stop_reset();
@@ -352,6 +502,13 @@ pub async fn task() {
 
         buffer.fill(0);
         engine.render(buffer.as_mut_slice(), RENDER_FRAMES);
+        finish_pending_releases(
+            &mut engine,
+            &mut active,
+            &mut last_velocity,
+            &mut release_after_frames,
+            RENDER_FRAMES,
+        );
         if BACKING_ENABLED {
             backing.render_into(buffer.as_mut_slice(), RENDER_FRAMES);
         }

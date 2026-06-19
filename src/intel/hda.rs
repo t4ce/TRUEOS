@@ -1963,6 +1963,23 @@ pub extern "C" fn trueos_tinyaudio_hda_writable_samples(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn trueos_tinyaudio_hda_queued_samples(handle: usize) -> isize {
+    if handle != 1 {
+        return -1;
+    }
+
+    let stream = TINYAUDIO_HDA_STREAM.lock();
+    let Some(stream) = stream.as_ref() else {
+        return -2;
+    };
+
+    match stream.queued_samples() {
+        Some(samples) => samples.min(isize::MAX as usize) as isize,
+        None => -3,
+    }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_tinyaudio_hda_push_samples(
     handle: usize,
     samples: *const i16,
