@@ -27,12 +27,12 @@ mod imp {
     }
 
     pub(crate) fn snapshot() -> Snapshot {
-        let max_leaf = unsafe { __cpuid(0) }.eax;
+        let max_leaf = __cpuid(0).eax;
         if max_leaf < 0xA {
             return Snapshot::unsupported();
         }
 
-        let leaf = unsafe { __cpuid(0xA) };
+        let leaf = __cpuid(0xA);
         let version = (leaf.eax & 0xFF) as u8;
         if version == 0 {
             return Snapshot::unsupported();
@@ -149,4 +149,4 @@ mod imp {
     }
 }
 
-pub(crate) use imp::{Snapshot, ensure_liveness_source, snapshot};
+pub(crate) use imp::{ensure_liveness_source, snapshot};

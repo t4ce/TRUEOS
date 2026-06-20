@@ -6,7 +6,7 @@ pub mod hid;
 mod lib;
 mod skhynix;
 
-pub use self::hid::{hut, input, midi};
+pub use self::hid::midi;
 pub use self::lib::*;
 pub use crab_usb as crabusb;
 

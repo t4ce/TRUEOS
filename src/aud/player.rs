@@ -126,7 +126,7 @@ impl PatternPlayer {
 
             // Render the full pattern
             let samples = pattern.render(engine);
-            let step_samples = pattern.step_duration_samples() as usize;
+            let _step_samples = pattern.step_duration_samples() as usize;
             let mut step_visual = String::with_capacity(pattern.steps.len());
 
             // Play each step with visual indicator

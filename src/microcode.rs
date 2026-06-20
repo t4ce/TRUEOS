@@ -249,7 +249,7 @@ mod imp {
     }
 
     fn detect_target() -> Option<Target> {
-        let leaf0 = unsafe { __cpuid(0) };
+        let leaf0 = __cpuid(0);
         if leaf0.ebx != INTEL_VENDOR_EBX
             || leaf0.edx != INTEL_VENDOR_EDX
             || leaf0.ecx != INTEL_VENDOR_ECX
@@ -260,7 +260,7 @@ mod imp {
             return None;
         }
 
-        let signature = unsafe { __cpuid(1) }.eax;
+        let signature = __cpuid(1).eax;
         let platform_id = unsafe { (Msr::new(MSR_IA32_PLATFORM_ID).read() >> 50) & 0x7 } as u32;
         let platform_mask = 1u32 << platform_id;
         Some(Target {
@@ -540,5 +540,5 @@ mod imp {
     }
 }
 
-pub(crate) use imp::{EmbeddedSource, FmsName, Snapshot, snapshot};
+pub(crate) use imp::snapshot;
 pub use imp::{apply_selected_to_current_cpu, init_from_limine_bsp};

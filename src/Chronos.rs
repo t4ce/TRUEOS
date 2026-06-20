@@ -180,7 +180,7 @@ pub(crate) fn arm_local_tsc_deadline_after_ticks(ticks: u64) -> bool {
 
 #[cfg(target_arch = "x86_64")]
 fn local_tsc_deadline_supported() -> bool {
-    let cpuid = unsafe { __cpuid(1) };
+    let cpuid = __cpuid(1);
     (cpuid.ecx & (1 << 24)) != 0
 }
 
