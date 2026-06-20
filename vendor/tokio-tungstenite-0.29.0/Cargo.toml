@@ -85,10 +85,12 @@ native-tls-vendored = [
 ]
 rustls-tls-native-roots = [
     "__rustls-tls",
+    "rustls-rustcrypto",
     "rustls-native-certs",
 ]
 rustls-tls-webpki-roots = [
     "__rustls-tls",
+    "rustls-rustcrypto",
     "webpki-roots",
 ]
 stream = []
@@ -163,6 +165,16 @@ optional = true
 
 [dependencies.rustls-pki-types]
 version = "1.0"
+optional = true
+default-features = false
+
+[dependencies.rustls-rustcrypto]
+version = "0.0.2-alpha"
+features = [
+    "alloc",
+    "tls12",
+    "zeroize",
+]
 optional = true
 default-features = false
 

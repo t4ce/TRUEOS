@@ -50,11 +50,7 @@ fn close(handle: usize) {
 }
 
 fn start(handle: usize) -> alsa::trueos::BackendResult<()> {
-    if handle == 1 {
-        Ok(())
-    } else {
-        Err(EBADF)
-    }
+    if handle == 1 { Ok(()) } else { Err(EBADF) }
 }
 
 fn drop_stream(handle: usize) -> alsa::trueos::BackendResult<()> {
@@ -71,11 +67,7 @@ fn drop_stream(handle: usize) -> alsa::trueos::BackendResult<()> {
 }
 
 fn drain(handle: usize) -> alsa::trueos::BackendResult<()> {
-    if handle == 1 {
-        Ok(())
-    } else {
-        Err(EBADF)
-    }
+    if handle == 1 { Ok(()) } else { Err(EBADF) }
 }
 
 fn write_i16_interleaved(

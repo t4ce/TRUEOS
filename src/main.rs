@@ -11,10 +11,10 @@ pub extern crate alloc;
 
 // Modules
 mod allcaps;
-#[cfg(target_os = "trueos")]
-mod alsa_trueos_backend;
 mod allocators;
 pub mod allports;
+#[cfg(target_os = "trueos")]
+mod alsa_trueos_backend;
 mod aud;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 #[path = "hv/blueprint/blueprint_net_broker.rs"]
