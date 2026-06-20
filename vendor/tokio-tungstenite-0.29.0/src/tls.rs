@@ -123,7 +123,11 @@ mod encryption {
                             }
 
                             Arc::new(
-                                ClientConfig::builder()
+                                ClientConfig::builder_with_provider(
+                                    rustls_rustcrypto::provider().into(),
+                                )
+                                .with_safe_default_protocol_versions()
+                                .map_err(std::io::Error::other)?
                                     .with_root_certificates(root_store)
                                     .with_no_client_auth(),
                             )

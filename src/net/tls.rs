@@ -143,7 +143,7 @@ impl rustls::time_provider::TimeProvider for TimeProviderAdapter {
     }
 }
 
-fn ensure_rustls_provider_installed() {
+pub fn ensure_rustls_provider_installed() {
     TLS_PROVIDER_ONCE.call_once(|| {
         let _ = rustls::crypto::CryptoProvider::install_default(rustls_rustcrypto::provider());
     });

@@ -54,6 +54,11 @@ zune-core = { version = "0.5.1", default-features = false }
 zune-jpeg = { version = "0.5.15", default-features = false, features = ["x86", "portable_simd"] }
 crc32fast = { version = "1.5.0", default-features = false }
 sha2 = { version = "0.10.9", default-features = false }
+sha1 = { version = "0.10.6", default-features = false }
+hmac = { version = "0.12.1", default-features = false }
+aes = { version = "0.8.4", default-features = false }
+ctr = { version = "0.9.2", default-features = false }
+base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
 embedded-websocket = { version = "0.9.4", default-features = false }
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "proto-ipv4", "proto-ipv6", "multicast", "socket-raw", "socket-udp", "socket-tcp", "socket-icmp", "socket-dhcpv4", "medium-ethernet"] }
 dma-api = { version = "=0.7.3", default-features = false }
@@ -109,6 +114,7 @@ usvg = { path = "vendor/usvg-0.45.1" }
 imagesize = { path = "vendor/imagesize-0.13.0" }
 hyper = { path = "vendor/hyper-1.9.0" }
 hyper-util = { path = "vendor/hyper-util-0.1.20" }
+hyper-rustls = { path = "vendor/hyper-rustls-0.27.9" }
 h2 = { path = "vendor/h2-0.4.14" }
 h3 = { path = "vendor/h3-0.0.8" }
 h3-quinn = { path = "vendor/h3-quinn-0.0.10" }

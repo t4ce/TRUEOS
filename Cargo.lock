@@ -7,13 +7,16 @@ name = "TRUEOS"
 version = "0.0.2"
 dependencies = [
  "acpi",
+ "aes",
  "alsa",
  "aml",
  "axum",
+ "base64",
  "bytes",
  "core3",
  "crab-usb",
  "crc32fast",
+ "ctr",
  "dma-api",
  "embassy-executor",
  "embassy-sync",
@@ -25,6 +28,7 @@ dependencies = [
  "getrandom",
  "hashbrown",
  "heapless",
+ "hmac",
  "hyper",
  "kurbo",
  "libm",
@@ -47,6 +51,7 @@ dependencies = [
  "rustls-rustcrypto",
  "serde",
  "serde_json",
+ "sha1",
  "sha2",
  "smoltcp",
  "socket2",
@@ -2836,6 +2841,10 @@ version = "0.0.10"
 [[patch.unused]]
 name = "half"
 version = "2.7.1"
+
+[[patch.unused]]
+name = "hyper-rustls"
+version = "0.27.9"
 
 [[patch.unused]]
 name = "ndarray-rand"

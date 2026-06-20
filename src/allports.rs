@@ -6,6 +6,7 @@
 pub mod well_known {
     pub const DNS: u16 = 53;
     pub const HTTP: u16 = 80;
+    pub const MDNS: u16 = 5353;
     pub const SNTP: u16 = 123;
     pub const POP3_TLS: u16 = 995;
     pub const SMTP_SUBMISSION: u16 = 587;
@@ -45,6 +46,7 @@ pub mod services {
     pub const LOCALCODER_WEB_TCP_PORT: u16 = 81;
     pub const TINYAUDIO_LIVE_HTTP_TCP_PORT: u16 = 82;
     pub const GAMESERVER_TACTICS_TCP_PORT: u16 = 1337;
+    pub const SPOTIFY_CONNECT_HTTP_TCP_PORT: u16 = 57_621;
 }
 
 pub mod mail {
