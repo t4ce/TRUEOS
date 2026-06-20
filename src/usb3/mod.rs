@@ -114,6 +114,10 @@ async fn open_and_handoff_devices(
                     continue;
                 }
 
+                if hid::midi::maybe_start_midi(host, &info, spawner, CRABUSB_CONTROLLER_ID).await {
+                    continue;
+                }
+
                 if vendor_id != 0x152e || product_id != 0x7001 {
                     crate::log!(
                         "crabusb: device id={} ignored reason=no-usb3-driver vid={:04x} pid={:04x}\n",

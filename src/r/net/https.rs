@@ -204,12 +204,67 @@ fn decode_chunked(body: &[u8], max_bytes: usize) -> Option<Vec<u8>> {
     }
 }
 
-fn http_body_from_response(response: &[u8], max_bytes: usize) -> Result<Vec<u8>, String> {
-    let hdr_end = find_http_header_end(response).ok_or_else(|| String::from("bad response"))?;
+fn bad_response_message(response: &[u8]) -> String {
+    let preview_len = response.len().min(24);
+    let mut preview = String::new();
+    for (idx, byte) in response[..preview_len].iter().copied().enumerate() {
+        if idx != 0 {
+            preview.push(' ');
+        }
+        preview.push_str(format!("{:02X}", byte).as_str());
+    }
+    if response.len() > preview_len {
+        preview.push_str(" ...");
+    }
+    if preview.is_empty() {
+        preview.push_str("<empty>");
+    }
+    format!("bad response len={} first={}", response.len(), preview)
+}
+
+fn complete_http_body_from_response(
+    response: &[u8],
+    max_bytes: usize,
+) -> Result<Option<Vec<u8>>, String> {
+    let Some(hdr_end) = find_http_header_end(response) else {
+        return Ok(None);
+    };
     let status = parse_http_status(response).ok_or_else(|| String::from("bad status"))?;
     if !(200..300).contains(&status) {
         return Err(format!("http status {}", status));
     }
+
+    let headers = &response[..hdr_end];
+    let body = &response[hdr_end..];
+    if let Some(te) = header_value(headers, b"transfer-encoding")
+        && header_value_has_token(te, b"chunked")
+    {
+        return Ok(decode_chunked(body, max_bytes));
+    }
+
+    if let Some(len_text) = header_value(headers, b"content-length")
+        && let Ok(len) = core::str::from_utf8(trim_ascii(len_text))
+            .unwrap_or("")
+            .parse::<usize>()
+    {
+        if len > max_bytes {
+            return Err(String::from("too large"));
+        }
+        if body.len() < len {
+            return Ok(None);
+        }
+        return Ok(Some(body[..len].to_vec()));
+    }
+
+    Ok(None)
+}
+
+fn http_body_from_response(response: &[u8], max_bytes: usize) -> Result<Vec<u8>, String> {
+    if let Some(body) = complete_http_body_from_response(response, max_bytes)? {
+        return Ok(body);
+    }
+
+    let hdr_end = find_http_header_end(response).ok_or_else(|| bad_response_message(response))?;
 
     let headers = &response[..hdr_end];
     let body = &response[hdr_end..];
@@ -289,6 +344,9 @@ async fn fetch_https_bytes(
             match ev {
                 TlsEvent::Opened { handle } => tls_handle = Some(handle),
                 TlsEvent::Connected { handle } => {
+                    if tls_handle.is_none() {
+                        tls_handle = Some(handle);
+                    }
                     if tls_handle != Some(handle) || sent_request {
                         continue;
                     }
@@ -312,6 +370,12 @@ async fn fetch_https_bytes(
                         return Err(String::from("too large"));
                     }
                     response.extend_from_slice(data.as_slice());
+                    if let Some(body) =
+                        complete_http_body_from_response(response.as_slice(), max_bytes)?
+                    {
+                        let _ = cmds.push(TlsCommand::Close { handle });
+                        return Ok(body);
+                    }
                 }
                 TlsEvent::Closed { handle } => {
                     if tls_handle == Some(handle) {

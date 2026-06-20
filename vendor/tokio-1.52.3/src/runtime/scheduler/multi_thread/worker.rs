@@ -518,6 +518,17 @@ impl Launch {
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn spawn_runtime_worker(worker: Arc<Worker>) {
     let index = worker.index;
+    if !crate::platform::worker_carriers_enabled() {
+        crate::platform::log(
+            5,
+            alloc::format!(
+                "tokio-platform: multi_thread worker rejected index={} reason=worker-carriers-disabled\n",
+                index
+            )
+            .as_bytes(),
+        );
+        return;
+    }
     crate::platform::log(
         3,
         alloc::format!("tokio-platform: multi_thread worker submit index={}\n", index).as_bytes(),

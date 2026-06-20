@@ -42,6 +42,10 @@ pub extern "Rust" fn trueos_platform_cpu_count() -> usize {
         return count;
     }
 
+    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
+        return crate::hv::blueprint_exposed_cpu_count(vm_id);
+    }
+
     let registered = crate::workers::registered_core_spawner_count();
     let topology_slots = crate::workers::topology_core_slot_count();
     let app_lanes = crate::workers::app_visible_parallelism();
@@ -63,6 +67,15 @@ pub extern "Rust" fn trueos_platform_cpu_count() -> usize {
     }
 
     count
+}
+
+#[unsafe(no_mangle)]
+pub extern "Rust" fn trueos_tokio_worker_carriers_enabled() -> bool {
+    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
+        return crate::hv::blueprint_exposed_cpu_count(vm_id) > 1;
+    }
+
+    crate::workers::app_visible_parallelism() > 1
 }
 
 fn tokio_semantic_gap_message(code: u32) -> &'static str {

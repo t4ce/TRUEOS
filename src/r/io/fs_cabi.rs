@@ -103,17 +103,6 @@ fn emit_console_stream_line(stream: ConsoleStream, line: &str) {
     }
 }
 
-fn emit_vm_console_stream_line(stream: ConsoleStream, line: &str) {
-    match stream {
-        ConsoleStream::Out => {
-            crate::hv::log_active_blueprint_console_line(format_args!("guest: {}", line))
-        }
-        ConsoleStream::Err => {
-            crate::hv::log_active_blueprint_console_line(format_args!("guest error: {}", line))
-        }
-    }
-}
-
 fn process_text_stream_impl(
     stream: ConsoleStream,
     text: &str,
@@ -145,13 +134,6 @@ fn process_text_stream_impl(
     }
 }
 
-fn process_vm_text_stream(stream: ConsoleStream, text: &str) {
-    process_text_stream_impl(stream, text, |stream, line| {
-        emit_console_stream_line(stream, line);
-        emit_vm_console_stream_line(stream, line);
-    });
-}
-
 fn process_text_stream(stream: ConsoleStream, text: &str) {
     process_text_stream_impl(stream, text, |stream, line| {
         emit_console_stream_line(stream, line);
@@ -163,6 +145,30 @@ fn process_text_stream(stream: ConsoleStream, text: &str) {
     });
 }
 
+fn guest_shell_attached_write(data: &[u8]) -> usize {
+    let mut written = 0usize;
+    while written < data.len() {
+        let end = core::cmp::min(written + trueos_vm::vmcall::PAYLOAD_CAP, data.len());
+        let chunk = &data[written..end];
+        let (status, count) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_SHELL_ATTACHED_WRITE,
+            0,
+            0,
+            chunk,
+            &mut [],
+        );
+        if status != trueos_vm::vmcall::STATUS_OK {
+            break;
+        }
+        let count = core::cmp::min(count as usize, chunk.len());
+        if count == 0 {
+            break;
+        }
+        written = written.saturating_add(count);
+    }
+    written
+}
+
 #[inline]
 pub fn write_console_bytes(stream: ConsoleStream, bytes: &[u8]) {
     if bytes.is_empty() {
@@ -170,14 +176,7 @@ pub fn write_console_bytes(stream: ConsoleStream, bytes: &[u8]) {
     }
 
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        if let Ok(text) = core::str::from_utf8(bytes) {
-            process_vm_text_stream(stream, text);
-        } else {
-            crate::hv::log_active_blueprint_console_line(format_args!(
-                "guest: non-utf8 stream bytes={}",
-                bytes.len()
-            ));
-        }
+        let _ = guest_shell_attached_write(bytes);
         return;
     }
 
@@ -1119,25 +1118,7 @@ pub unsafe extern "C" fn trueos_cabi_shell_attached_write(
     }
     let data = unsafe { core::slice::from_raw_parts(data_ptr, data_len) };
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let mut written = 0usize;
-        while written < data.len() {
-            let end = core::cmp::min(written + trueos_vm::vmcall::PAYLOAD_CAP, data.len());
-            let (status, count) = trueos_vm::vmcall::call_with_payload(
-                trueos_vm::vmcall::OP_BP_SHELL_ATTACHED_WRITE,
-                0,
-                0,
-                &data[written..end],
-                &mut [],
-            );
-            if status != trueos_vm::vmcall::STATUS_OK {
-                break;
-            }
-            written = written.saturating_add(count as usize);
-            if count == 0 {
-                break;
-            }
-        }
-        return written;
+        return guest_shell_attached_write(data);
     }
     if let Some(target) = super::env::console_target() {
         return crate::shell2::raw_write_matrix_target(&target, data);

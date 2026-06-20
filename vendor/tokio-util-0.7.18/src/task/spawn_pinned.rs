@@ -15,6 +15,7 @@ type TrueosBlockingJob = Box<dyn FnOnce() + Send + 'static>;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 unsafe extern "Rust" {
+    fn trueos_tokio_worker_carriers_enabled() -> bool;
     fn trueos_service_lane_submit_job(job: TrueosBlockingJob) -> i32;
 }
 
@@ -408,6 +409,11 @@ impl LocalWorkerHandle {
     ) {
         #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
+            if unsafe { !trueos_tokio_worker_carriers_enabled() } {
+                panic!(
+                    "TRUEOS pinned worker carriers are available only to Horizon worker-lane blueprints"
+                );
+            }
             let job: TrueosBlockingJob = Box::new(move || Self::run(runtime, receiver, task_count));
             let rc = unsafe { trueos_service_lane_submit_job(job) };
             if rc != 0 {
