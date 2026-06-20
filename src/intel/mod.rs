@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 mod blt;
 mod display;
 mod dmc;

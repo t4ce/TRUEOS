@@ -17,6 +17,7 @@ pub(crate) const TRUEOS_DEBUG_BUILD_CURRENT_THREAD_READY: u32 = 9;
 
 unsafe extern "Rust" {
     fn trueos_platform_cpu_count() -> usize;
+    fn trueos_tokio_worker_carriers_enabled() -> bool;
     fn trueos_tokio_platform_monotonic_nanos() -> u64;
     fn trueos_tokio_platform_poll_once();
     fn trueos_tokio_platform_sleep_ms(ms: u64);
@@ -27,6 +28,11 @@ unsafe extern "Rust" {
 #[inline]
 pub(crate) fn cpu_count() -> usize {
     unsafe { trueos_platform_cpu_count().max(1) }
+}
+
+#[inline]
+pub(crate) fn worker_carriers_enabled() -> bool {
+    unsafe { trueos_tokio_worker_carriers_enabled() }
 }
 
 #[inline]

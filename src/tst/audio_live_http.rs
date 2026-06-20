@@ -1,6 +1,6 @@
 extern crate alloc;
 
-use alloc::{format, string::String, vec::Vec};
+use alloc::{format, vec::Vec};
 
 use embassy_time::{Duration, Instant, Timer};
 use v::vnet as api;
@@ -11,13 +11,15 @@ const PAGE_PATH: &str = "/";
 const LEGACY_PAGE_PATH: &str = "/audio/live";
 const WAV_PATH: &str = "/audio/live.wav";
 const RX_BUF_MAX: usize = 8 * 1024;
-const MAX_SESSIONS: usize = 16;
+const MAX_STREAM_CLIENTS: usize = 4;
+const MAX_IDLE_REQUESTS: usize = 4;
+const MAX_SESSIONS: usize = MAX_STREAM_CLIENTS + MAX_IDLE_REQUESTS;
 const SAMPLE_RATE: usize = 48_000;
 const CHANNELS: usize = 2;
 const PREROLL_MS: usize = 150;
 const SEND_MS: usize = 50;
 const POLL_MS: u64 = 5;
-const REQUEST_IDLE_TIMEOUT_MS: u64 = 1_500;
+const REQUEST_IDLE_TIMEOUT_MS: u64 = 750;
 const FIXED_SEND_TIMEOUT_MS: u64 = 1_500;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -221,12 +223,20 @@ fn live_audio_page() -> Vec<u8> {
     response_with_body(
         "HTTP/1.1 200 OK\r\n",
         "text/html; charset=utf-8",
-        b"<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOS Live Audio</title><style>body{font-family:sans-serif;margin:2rem;max-width:42rem}audio{width:100%;margin-top:1rem}</style></head><body><h1>TRUEOS Live Audio</h1><audio controls autoplay src=\"/audio/live.wav\"></audio></body></html>",
+        b"<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOS Live Audio</title><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>body{font-family:sans-serif;margin:2rem;max-width:42rem}button{font:inherit;padding:.55rem .85rem}audio{width:100%;margin-top:1rem}#status{display:block;margin-top:.75rem;color:#555}</style></head><body><h1>TRUEOS Live Audio</h1><button id=\"start\" type=\"button\">Start</button><audio id=\"audio\" controls preload=\"none\"></audio><output id=\"status\">idle</output><script>const a=document.getElementById('audio'),s=document.getElementById('status');function set(x){s.textContent=x}document.getElementById('start').onclick=()=>{a.src='/audio/live.wav?t='+Date.now();a.play().then(()=>set('playing')).catch(e=>set(e&&e.name?e.name:'blocked'))};a.onplaying=()=>set('playing');a.onwaiting=()=>set('buffering');a.onerror=()=>set('error')</script></body></html>",
     )
 }
 
 fn not_found_response() -> Vec<u8> {
     response_with_body("HTTP/1.1 404 Not Found\r\n", "text/plain; charset=utf-8", b"not found\n")
+}
+
+fn busy_response() -> Vec<u8> {
+    response_with_body(
+        "HTTP/1.1 503 Service Unavailable\r\n",
+        "text/plain; charset=utf-8",
+        b"too many live audio clients\n",
+    )
 }
 
 fn wav_stream_head() -> Vec<u8> {
@@ -239,7 +249,7 @@ fn wav_stream_head() -> Vec<u8> {
     head
 }
 
-fn handle_request(vnet: &VNet, session: &mut AudioHttpSession) -> bool {
+fn handle_request(vnet: &VNet, session: &mut AudioHttpSession, active_streams: usize) -> bool {
     let Some(header_end) = find_http_header_end(session.rx.as_slice()) else {
         return false;
     };
@@ -263,6 +273,10 @@ fn handle_request(vnet: &VNet, session: &mut AudioHttpSession) -> bool {
             !send_fixed_response(vnet, session, page.as_slice())
         }
         Some(WAV_PATH) => {
+            if active_streams >= MAX_STREAM_CLIENTS {
+                let response = busy_response();
+                return !send_fixed_response(vnet, session, response.as_slice());
+            }
             let preroll_samples = SAMPLE_RATE * CHANNELS * PREROLL_MS / 1000;
             session.cursor =
                 crate::tst::esynth::live_pcm_stream_start_cursor(preroll_samples).unwrap_or(0);
@@ -273,6 +287,8 @@ fn handle_request(vnet: &VNet, session: &mut AudioHttpSession) -> bool {
             }
             session.mode = SessionMode::Streaming;
             session.rx.clear();
+            session.pending_bytes = 0;
+            session.sent_bytes = 0;
             session.stream_chunks = 0;
             session.stream_samples = 0;
             crate::log!("tinyaudio-live-http: stream opened handle={}\n", session.handle.0);
@@ -309,6 +325,7 @@ fn stream_audio_tick(vnet: &VNet, session: &mut AudioHttpSession) -> bool {
         close_session(vnet, session.handle);
         return true;
     }
+    session.pending_bytes = session.pending_bytes.saturating_add(bytes.len());
 
     session.stream_chunks = session.stream_chunks.saturating_add(1);
     session.stream_samples = session.stream_samples.saturating_add(samples.len());
@@ -324,6 +341,43 @@ fn stream_audio_tick(vnet: &VNet, session: &mut AudioHttpSession) -> bool {
     }
 
     false
+}
+
+fn active_stream_count(endpoint: &AudioHttpEndpoint) -> usize {
+    endpoint
+        .sessions
+        .iter()
+        .filter(|session| session.mode == SessionMode::Streaming)
+        .count()
+}
+
+fn reopen_listener(endpoint: &mut AudioHttpEndpoint) {
+    endpoint.listener = None;
+    endpoint.listener_ready = false;
+    let _ = endpoint.vnet.submit(api::Command::OpenTcpListen {
+        port: ports::TINYAUDIO_LIVE_HTTP_TCP_PORT,
+    });
+}
+
+fn close_oldest_reading_request(endpoint: &mut AudioHttpEndpoint) -> bool {
+    let Some(idx) = endpoint
+        .sessions
+        .iter()
+        .position(|session| session.mode == SessionMode::ReadingRequest)
+    else {
+        return false;
+    };
+
+    let handle = endpoint.sessions[idx].handle;
+    crate::log!(
+        "tinyaudio-live-http: idle preconnect close dev={} handle={} active={}\n",
+        endpoint.dev_idx,
+        handle.0,
+        endpoint.sessions.len()
+    );
+    close_session(&endpoint.vnet, handle);
+    endpoint.sessions.remove(idx);
+    true
 }
 
 fn prune_idle_sessions(endpoint: &mut AudioHttpEndpoint) {
@@ -385,38 +439,75 @@ pub async fn tinyaudio_live_http_task() {
                         }
                     }
                     api::Event::TcpEstablished { handle, .. } => {
-                        if endpoint.sessions.len() >= MAX_SESSIONS {
-                            crate::log!(
-                                "tinyaudio-live-http: max sessions close dev={} handle={} active={}\n",
-                                endpoint.dev_idx,
-                                handle.0,
-                                endpoint.sessions.len()
-                            );
-                            close_session(&endpoint.vnet, handle);
-                        } else {
-                            if endpoint.listener == Some(handle) {
-                                endpoint.listener = None;
-                                endpoint.listener_ready = false;
-                                let _ = endpoint.vnet.submit(api::Command::OpenTcpListen {
-                                    port: ports::TINYAUDIO_LIVE_HTTP_TCP_PORT,
-                                });
-                            }
-                            endpoint.sessions.push(AudioHttpSession::new(handle));
-                            crate::log!(
-                                "tinyaudio-live-http: tcp established dev={} handle={}\n",
-                                endpoint.dev_idx,
-                                handle.0
-                            );
+                        if endpoint.listener == Some(handle) {
+                            reopen_listener(endpoint);
                         }
+
+                        if endpoint
+                            .sessions
+                            .iter()
+                            .any(|session| session.handle == handle)
+                        {
+                            continue;
+                        }
+
+                        if endpoint.sessions.len() >= MAX_SESSIONS {
+                            close_oldest_reading_request(endpoint);
+                            if endpoint.sessions.len() >= MAX_SESSIONS {
+                                crate::log!(
+                                    "tinyaudio-live-http: max sessions close dev={} handle={} active={}\n",
+                                    endpoint.dev_idx,
+                                    handle.0,
+                                    endpoint.sessions.len()
+                                );
+                                close_session(&endpoint.vnet, handle);
+                                continue;
+                            }
+                        }
+
+                        endpoint.sessions.push(AudioHttpSession::new(handle));
+                        crate::log!(
+                            "tinyaudio-live-http: tcp established dev={} handle={}\n",
+                            endpoint.dev_idx,
+                            handle.0
+                        );
                     }
                     api::Event::TcpData { handle, data } => {
-                        let Some(idx) = endpoint
+                        if endpoint.listener == Some(handle) {
+                            reopen_listener(endpoint);
+                        }
+
+                        let idx = match endpoint
                             .sessions
                             .iter()
                             .position(|session| session.handle == handle)
-                        else {
-                            continue;
+                        {
+                            Some(idx) => idx,
+                            None => {
+                                if endpoint.sessions.len() >= MAX_SESSIONS {
+                                    close_oldest_reading_request(endpoint);
+                                    if endpoint.sessions.len() >= MAX_SESSIONS {
+                                        crate::log!(
+                                            "tinyaudio-live-http: max sessions close dev={} handle={} active={}\n",
+                                            endpoint.dev_idx,
+                                            handle.0,
+                                            endpoint.sessions.len()
+                                        );
+                                        close_session(&endpoint.vnet, handle);
+                                        continue;
+                                    }
+                                }
+
+                                endpoint.sessions.push(AudioHttpSession::new(handle));
+                                crate::log!(
+                                    "tinyaudio-live-http: tcp data before established dev={} handle={}\n",
+                                    endpoint.dev_idx,
+                                    handle.0
+                                );
+                                endpoint.sessions.len() - 1
+                            }
                         };
+                        let active_streams = active_stream_count(endpoint);
                         let session = &mut endpoint.sessions[idx];
                         if session.mode != SessionMode::ReadingRequest {
                             continue;
@@ -428,7 +519,7 @@ pub async fn tinyaudio_live_http_task() {
                         }
                         session.rx.extend_from_slice(data.as_slice());
                         session.refresh_request_deadline();
-                        if handle_request(&endpoint.vnet, session) {
+                        if handle_request(&endpoint.vnet, session, active_streams) {
                             endpoint.sessions.remove(idx);
                         }
                     }
@@ -440,12 +531,8 @@ pub async fn tinyaudio_live_http_task() {
                         {
                             endpoint.sessions.remove(idx);
                         } else if Some(handle) == endpoint.listener {
-                            endpoint.listener = None;
-                            endpoint.listener_ready = false;
                             endpoint.sessions.clear();
-                            let _ = endpoint.vnet.submit(api::Command::OpenTcpListen {
-                                port: ports::TINYAUDIO_LIVE_HTTP_TCP_PORT,
-                            });
+                            reopen_listener(endpoint);
                         }
                     }
                     api::Event::Error { msg } => {
@@ -462,10 +549,11 @@ pub async fn tinyaudio_live_http_task() {
                             .sessions
                             .iter_mut()
                             .find(|session| session.handle == handle)
-                            && session.mode == SessionMode::SendingFixed
                         {
                             session.sent_bytes = session.sent_bytes.saturating_add(len as usize);
-                            if session.sent_bytes >= session.pending_bytes {
+                            if session.mode == SessionMode::SendingFixed
+                                && session.sent_bytes >= session.pending_bytes
+                            {
                                 close_session(&endpoint.vnet, handle);
                             }
                         }

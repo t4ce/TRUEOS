@@ -1,6 +1,3 @@
-[submodule "vendor/lumen"]
-	path = vendor/lumen
-	url = https://github.com/t4ce/Lumen
 [submodule "crates/trueos-shader"]
 	path = crates/trueos-shader
 	url = https://github.com/t4ce/trueos-shader.git

@@ -90,6 +90,8 @@ static BLUEPRINT_LAUNCH_STATES: [Mutex<Option<BlueprintLaunchState>>; TRUEOS_VM_
     [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_PROCESS_CONTEXTS: [Mutex<Option<BlueprintProcessContext>>; TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
+static BLUEPRINT_CONSOLE_LOG_BUFFERS: [Mutex<Option<AllocString>>; TRUEOS_VM_ID_LIMIT] =
+    [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 
 pub static mut VMXON_REGIONS: [VmxPage; TRUEOS_VM_CPU_SLOT_LIMIT] =
     [const { VmxPage([0u8; VMX_PAGE_SIZE]) }; TRUEOS_VM_CPU_SLOT_LIMIT];
@@ -1250,6 +1252,9 @@ pub fn stage_blueprint_launch(
     let console_target = process_context.console_target.clone();
     *slot.lock() = Some(guest_state);
     *process_slot.lock() = Some(process_context);
+    if let Some(log_slot) = BLUEPRINT_CONSOLE_LOG_BUFFERS.get(vm_id as usize) {
+        let _ = log_slot.lock().take();
+    }
     if let Some(target) = console_target.as_ref() {
         crate::shell2::bind_matrix_target_vm(target, vm_id);
     }
@@ -1269,6 +1274,18 @@ pub fn blueprint_launch_active(vm_id: u8) -> bool {
         .get(vm_id as usize)
         .map(|slot| slot.lock().is_some())
         .unwrap_or(false)
+}
+
+pub(crate) fn blueprint_exposed_cpu_count(vm_id: u8) -> usize {
+    let horizon_worker_lane = blueprint_launch_snapshot(vm_id)
+        .map(|state| archive_has(state.archive.as_str(), "horizon"))
+        .unwrap_or(false);
+
+    if horizon_worker_lane {
+        crate::workers::app_visible_parallelism().max(1)
+    } else {
+        1
+    }
 }
 
 pub(crate) fn blueprint_process_arg_count(vm_id: u8) -> Option<usize> {
@@ -1449,7 +1466,9 @@ pub(crate) fn blueprint_console_write(vm_id: u8, data: &[u8]) -> usize {
         let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
         context.and_then(|slot| slot.lock().as_ref()?.console_target.clone())
     };
-    blueprint_console_write_to_target(target.as_ref(), data)
+    let written = blueprint_console_write_to_target(target.as_ref(), data);
+    blueprint_console_mirror_global_log(vm_id, &data[..core::cmp::min(written, data.len())]);
+    written
 }
 
 fn blueprint_console_write_to_target(target: Option<&MatrixTarget>, data: &[u8]) -> usize {
@@ -1458,6 +1477,45 @@ fn blueprint_console_write_to_target(target: Option<&MatrixTarget>, data: &[u8])
     }
     crate::shell2::uart1_com1::write_bytes(data);
     data.len()
+}
+
+fn blueprint_console_mirror_global_log(vm_id: u8, data: &[u8]) {
+    if data.is_empty() {
+        return;
+    }
+    let Some(slot) = BLUEPRINT_CONSOLE_LOG_BUFFERS.get(vm_id as usize) else {
+        return;
+    };
+
+    let text = AllocString::from_utf8_lossy(data);
+    let mut ready = VecDeque::new();
+    {
+        let mut guard = slot.lock();
+        let pending = guard.get_or_insert_with(AllocString::new);
+        pending.push_str(text.as_ref());
+
+        while let Some(newline_idx) = pending.find('\n') {
+            let mut line = AllocString::from(&pending[..newline_idx]);
+            if line.ends_with('\r') {
+                line.pop();
+            }
+            ready.push_back(line);
+            pending.drain(..=newline_idx);
+        }
+
+        if pending.len() > HV_LOG_LINE {
+            let mut line = AllocString::new();
+            core::mem::swap(pending, &mut line);
+            ready.push_back(line);
+        }
+    }
+
+    for line in ready {
+        crate::globalog::log_with_purpose(
+            Some("blueprint"),
+            format_args!("vm{}: {}\n", vm_id, line.as_str()),
+        );
+    }
 }
 
 fn blueprint_control_shell_line(vm_id: u8, line: &str) {
@@ -1630,6 +1688,9 @@ pub(crate) fn blueprint_process_context(vm_id: u8) -> Option<BlueprintProcessCon
 }
 
 fn clear_blueprint_process_context(vm_id: u8) {
+    if let Some(log_slot) = BLUEPRINT_CONSOLE_LOG_BUFFERS.get(vm_id as usize) {
+        let _ = log_slot.lock().take();
+    }
     if let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) {
         let previous = slot.lock().take();
         if let Some(context) = previous

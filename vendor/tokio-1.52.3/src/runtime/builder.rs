@@ -1067,6 +1067,15 @@ impl Builder {
     /// # }
     /// ```
     pub fn build(&mut self) -> io::Result<Runtime> {
+        #[cfg(all(any(target_os = "trueos", target_os = "zkvm"), feature = "rt-multi-thread"))]
+        if matches!(self.kind, Kind::MultiThread) && !crate::platform::worker_carriers_enabled() {
+            crate::platform::log(
+                3,
+                b"tokio-platform: multi_thread runtime coerced to current_thread; worker carriers disabled\n",
+            );
+            return self.build_current_thread_runtime();
+        }
+
         match &self.kind {
             Kind::CurrentThread => self.build_current_thread_runtime(),
             #[cfg(feature = "rt-multi-thread")]

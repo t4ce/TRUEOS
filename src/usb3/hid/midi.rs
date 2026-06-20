@@ -601,18 +601,20 @@ pub(crate) async fn maybe_start_midi(
     spawner: &Spawner,
     controller_id: u32,
 ) -> bool {
-    let Some(target) = pick_midi_target(dev_info.configurations()) else {
-        return false;
-    };
-
     let desc = dev_info.descriptor();
     let vendor_id = desc.vendor_id;
     let product_id = desc.product_id;
     let adapter = select_adapter(vendor_id, product_id);
 
-    if adapter == MidiAdapterKind::CasioCtk3500 {
-        maybe_start_piano_drain(spawner);
+    if adapter != MidiAdapterKind::CasioCtk3500 {
+        return false;
     }
+
+    let Some(target) = pick_midi_target(dev_info.configurations()) else {
+        return false;
+    };
+
+    maybe_start_piano_drain(spawner);
 
     let device = match host.open_device(dev_info).await {
         Ok(device) => device,

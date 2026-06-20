@@ -316,7 +316,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_CPU_COUNT => {
-            let count = crate::workers::app_visible_parallelism().max(1);
+            let count = crate::hv::blueprint_exposed_cpu_count(vm_id);
             write_response(vm_id, seq, STATUS_OK, count as u64, 0);
             DispatchOutcome::Resume
         }
