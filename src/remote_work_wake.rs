@@ -70,7 +70,7 @@ pub(crate) fn enable_local_apic_for_this_cpu() -> bool {
 
 #[cfg(target_arch = "x86_64")]
 fn cpu_supports_x2apic() -> bool {
-    let cpuid = unsafe { __cpuid(1) };
+    let cpuid = __cpuid(1);
     let has_apic = (cpuid.edx & (1 << 9)) != 0;
     let has_x2apic = (cpuid.ecx & (1 << 21)) != 0;
     has_apic && has_x2apic

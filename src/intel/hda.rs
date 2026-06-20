@@ -1127,7 +1127,7 @@ impl HdaController {
             .map(|w| (w.nid, w.pin_config, w.connections.clone()))
             .collect();
 
-        for (pin_nid, pin_config, pin_conns) in &pins {
+        for (pin_nid, pin_config, _pin_conns) in &pins {
             // Walk backward from pin to find a DAC
             if let Some(path) = self.trace_to_dac(*pin_nid, &mut Vec::new()) {
                 let device = pin_default_device(*pin_config);
@@ -1327,7 +1327,7 @@ impl HdaController {
         let afg_out_steps = ((self.afg_amp_out_caps >> 8) & 0x7F) as u16;
         let afg_in_steps = ((self.afg_amp_in_caps >> 8) & 0x7F) as u16;
 
-        for &(nid, caps, num_conns, out_caps, in_caps) in &all_widget_conns {
+        for &(nid, _caps, num_conns, out_caps, in_caps) in &all_widget_conns {
             // Extract max gain from amp caps: numsteps is bits [14:8]
             // AD1984 silently ignores gain values > numsteps!
             let out_steps = ((out_caps >> 8) & 0x7F) as u16;
@@ -2702,7 +2702,7 @@ pub fn codec_dump() -> String {
         let hp_en = pin_ctl & 0x80 != 0;
         let eapd_en = eapd & 0x02 != 0;
         let has_eapd = pin_caps & (1 << 16) != 0;
-        let has_out = pin_caps & (1 << 4) != 0;
+        let _has_out = pin_caps & (1 << 4) != 0;
         let has_out_amp = wcaps & (1 << 2) != 0;
         let has_amp_ovrd = wcaps & (1 << 3) != 0;
 

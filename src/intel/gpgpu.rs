@@ -9,16 +9,12 @@ mod test_gpgpu;
 
 pub(crate) use canvas3d_cube::LIVE_PLANE_HALF_Q16 as CANVAS3D_CUBE_LIVE_HALF_Q16;
 pub(crate) use test_gpgpu::{
-    GpgpuCanvas3dUi2TextureFrame, GpgpuShellCube20ProjectResult, canvas3d_ico_project_frame,
-    canvas3d_ico_project_rect, canvas3d_ico_project_surface_frame,
-    canvas3d_ico_project_texture_frame, canvas3d_para_project_surface_frame,
-    shell_cube6_plane_project_frame, shell_cube6_plane_project_once,
-    shell_cube6_plane_project_overlay_frame, shell_cube6_plane_project_surface_frame,
-    shell_cube20_project_spin, submit_canvas3d_clip_box_q16_once,
-    submit_canvas3d_plane_fill_rgba8_once, submit_canvas3d_plane_patch_fill_cut_rgba8_once,
+    GpgpuShellCube20ProjectResult, canvas3d_ico_project_surface_frame,
+    canvas3d_para_project_surface_frame, shell_cube6_plane_project_surface_frame,
+    submit_canvas3d_clip_box_q16_once, submit_canvas3d_plane_fill_rgba8_once,
+    submit_canvas3d_plane_patch_fill_cut_rgba8_once,
     submit_canvas3d_plane_patch_worklist_rgba8_once, submit_canvas3d_plane_sample_rgba8_once,
     submit_canvas3d_project_once, submit_canvas3d_transform_smoke_once,
-    ui2_canvas3d_plane_patch_render_surface_frame, ui2_canvas3d_plane_patch_texture_frame,
 };
 
 pub(crate) const COPY_RECT_RGBA8_KERNEL_NAME: &str = "copy_rect_rgba8";
