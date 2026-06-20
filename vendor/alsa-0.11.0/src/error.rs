@@ -1,5 +1,10 @@
 #![macro_use]
 
+#[cfg(target_os = "trueos")]
+use crate::libc;
+#[cfg(target_os = "trueos")]
+use crate::libc::{c_char, c_int, c_void, free};
+#[cfg(not(target_os = "trueos"))]
 use libc::{c_char, c_int, c_void, free};
 use core::error::Error as StdError;
 use core::ffi::CStr;
@@ -17,7 +22,7 @@ pub struct Error(&'static str, c_int);
 
 pub type Result<T> = ::core::result::Result<T, Error>;
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), not(target_os = "trueos")))]
 extern "C" {
     pub(crate) static errno: c_int;
 }
@@ -77,11 +82,14 @@ impl Error {
                 std::io::Error::last_os_error().raw_os_error().unwrap_or_default(),
             )
         }
-        #[cfg(not(feature = "std"))] {
+        #[cfg(all(not(feature = "std"), not(target_os = "trueos")))] {
             Self(
                 func,
                 unsafe {errno},
             )
+        }
+        #[cfg(all(not(feature = "std"), target_os = "trueos"))] {
+            Self(func, libc::EIO)
         }
     }
 
