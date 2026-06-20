@@ -61,11 +61,11 @@ version = "2.4.0"
 [dependencies.cfg-if]
 version = "1.0"
 
-[dependencies.libc]
-version = "0.2.178"
-
 [dev-dependencies.anyhow]
 version = "1.0"
 
 [lints.rust]
 missing-debug-implementations = "warn"
+
+[target.'cfg(not(target_os = "trueos"))'.dependencies.libc]
+version = "0.2.178"

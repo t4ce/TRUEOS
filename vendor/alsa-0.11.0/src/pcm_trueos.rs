@@ -7,6 +7,7 @@ use core::marker::PhantomData;
 use core::mem::size_of;
 
 use crate::error::{Error, Result};
+use crate::libc;
 use crate::{Direction, ValueOr};
 
 pub type Frames = isize;

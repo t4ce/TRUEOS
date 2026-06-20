@@ -23,9 +23,13 @@ extern crate std;
 #[cfg(not(target_os = "trueos"))]
 extern crate alsa_sys as alsa;
 extern crate alloc;
+#[cfg(not(target_os = "trueos"))]
 extern crate libc;
 #[macro_use]
 extern crate bitflags;
+
+#[cfg(target_os = "trueos")]
+mod libc;
 
 #[cfg(not(target_os = "trueos"))]
 macro_rules! alsa_enum {
