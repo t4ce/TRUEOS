@@ -11,6 +11,8 @@ pub extern crate alloc;
 
 // Modules
 mod allcaps;
+#[cfg(target_os = "trueos")]
+mod alsa_trueos_backend;
 mod allocators;
 pub mod allports;
 mod aud;
@@ -167,6 +169,8 @@ pub extern "C" fn kmain() -> ! {
         cpu::enable_sse();
     }
     globalog::init_log_facade();
+    #[cfg(target_os = "trueos")]
+    alsa_trueos_backend::install();
     exceptions::init();
     if crate::logflag::BOOT_INFO_LOGS {
         crate::log!("long_mode_active: {}\n", cpu::long_mode_active());

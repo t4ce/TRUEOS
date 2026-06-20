@@ -7,6 +7,7 @@ name = "TRUEOS"
 version = "0.0.2"
 dependencies = [
  "acpi",
+ "alsa",
  "aml",
  "axum",
  "bytes",
@@ -161,6 +162,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ddd31a130427c27518df266943a5308ed92d4b226cc639f5a8f1002816174301"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "alsa"
+version = "0.11.0"
+dependencies = [
+ "bitflags 2.11.1",
+ "cfg-if",
+ "libc",
 ]
 
 [[package]]
