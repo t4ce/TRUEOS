@@ -42,6 +42,7 @@ twoway = { version = "0.2", default-features = false }
 unicode-segmentation = { version = "1", default-features = false }
 log = { version = "0.4", default-features = false }
 tinyaudio = { path = "vendor/tinyaudio", default-features = false }
+alsa = { version = "0.11.0", default-features = false }
 trueos-qjs = { path = "crates/trueos-qjs", features = ["trueos"] }
 rustls = { version = "0.23", default-features = false, features = ["custom-provider", "tls12"] }
 rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "tls12", "zeroize"] }
@@ -160,3 +161,4 @@ aml = { path = "vendor/aml-0.16.4" }
 zune-core = { path = "vendor/zune-core-0.5.1" }
 zune-jpeg = { path = "vendor/zune-jpeg-0.5.15" }
 dma-api = { path = "vendor/dma-api-0.7.3" }
+alsa = { path = "vendor/alsa-0.11.0" }

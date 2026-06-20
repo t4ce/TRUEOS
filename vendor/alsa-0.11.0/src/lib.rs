@@ -20,12 +20,14 @@
 #[cfg(feature = "std")]
 extern crate std;
 
+#[cfg(not(target_os = "trueos"))]
 extern crate alsa_sys as alsa;
 extern crate alloc;
 extern crate libc;
 #[macro_use]
 extern crate bitflags;
 
+#[cfg(not(target_os = "trueos"))]
 macro_rules! alsa_enum {
  ($(#[$attr:meta])+ $name:ident, $static_name:ident [$count:expr], $( $a:ident = $b:ident),* ,) =>
 {
@@ -98,43 +100,76 @@ pub enum Round {
 mod error;
 pub use crate::error::{Error, Result};
 
+#[cfg(target_os = "trueos")]
+pub mod trueos;
+
+#[cfg(target_os = "trueos")]
+#[path = "pcm_trueos.rs"]
+pub mod pcm;
+
+#[cfg(target_os = "trueos")]
+pub use crate::pcm::PCM as PCM;
+
+#[cfg(not(target_os = "trueos"))]
 pub mod card;
+#[cfg(not(target_os = "trueos"))]
 pub use crate::card::Card as Card;
 
+#[cfg(not(target_os = "trueos"))]
 mod ctl_int;
+#[cfg(not(target_os = "trueos"))]
 pub mod ctl {
     //! Control device API
     pub use super::ctl_int::{Ctl, CardInfo, DeviceIter, ElemIface, ElemId, ElemList, ElemType, ElemValue, ElemInfo};
 }
 
+#[cfg(not(target_os = "trueos"))]
 pub use crate::ctl::Ctl as Ctl;
 
+#[cfg(not(target_os = "trueos"))]
 pub mod hctl;
+#[cfg(not(target_os = "trueos"))]
 pub use crate::hctl::HCtl as HCtl;
 
+#[cfg(not(target_os = "trueos"))]
 pub mod pcm;
+#[cfg(not(target_os = "trueos"))]
 pub use crate::pcm::PCM as PCM;
 
+#[cfg(not(target_os = "trueos"))]
 pub mod config;
 
+#[cfg(not(target_os = "trueos"))]
 pub mod rawmidi;
+#[cfg(not(target_os = "trueos"))]
 pub use crate::rawmidi::Rawmidi as Rawmidi;
 
+#[cfg(not(target_os = "trueos"))]
 pub mod device_name;
 
+#[cfg(not(target_os = "trueos"))]
 pub mod poll;
+#[cfg(not(target_os = "trueos"))]
 pub use crate::poll::Descriptors as PollDescriptors;
 
+#[cfg(not(target_os = "trueos"))]
 pub mod mixer;
+#[cfg(not(target_os = "trueos"))]
 pub use crate::mixer::Mixer as Mixer;
 
+#[cfg(not(target_os = "trueos"))]
 pub mod seq;
+#[cfg(not(target_os = "trueos"))]
 pub use crate::seq::Seq as Seq;
 
+#[cfg(not(target_os = "trueos"))]
 mod io;
+#[cfg(not(target_os = "trueos"))]
 pub use crate::io::Output;
 
 // Reexported inside PCM module
+#[cfg(not(target_os = "trueos"))]
 mod chmap;
 
+#[cfg(not(target_os = "trueos"))]
 pub mod direct;
