@@ -28,7 +28,7 @@ const STATUS_RAINBOW_COLORS: [u8; 8] = [199, 208, 227, 121, 51, 39, 99, 201];
 const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_7Z: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file to compress into a sibling .7z archive."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_C4: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["file","inline"],"description":"Compile from a TRUEOSFS file or inline C4 source."},"path":{"type":"string","description":"TRUEOSFS source path when mode=file."},"source":{"type":"string","description":"Inline C4 source when mode=inline."}},"required":["mode"],"additionalProperties":false}"#;
-const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","log"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format or optional disk id for action=log."},"max":{"type":"integer","minimum":1,"maximum":4096,"description":"Maximum raw TRUEOSFS log records to print for action=log."}},"required":["action"],"additionalProperties":false}"#;
+const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc","log"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format or optional disk id for action=log."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."},"max":{"type":"integer","minimum":1,"maximum":4096,"description":"Maximum raw TRUEOSFS log records to print for action=log."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_GPGPU: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","clear","copy","scanout","atlas","athlas","athlas_go","mandel","canvas","artificial-fragment","smoke"],"description":"GPGPU command to run."},"id":{"type":"integer","description":"Optional atlas sprite slot id."},"x":{"type":"integer","description":"Optional clear x or atlas destination x."},"y":{"type":"integer","description":"Optional clear y or atlas destination y."},"w":{"type":"integer","description":"Optional width."},"h":{"type":"integer","description":"Optional height."},"sx":{"type":"integer","description":"Optional copy source x."},"sy":{"type":"integer","description":"Optional copy source y."},"dx":{"type":"integer","description":"Optional copy destination x."},"dy":{"type":"integer","description":"Optional copy destination y."},"duration_ms":{"type":"integer","description":"Optional athlas_go/canvas runtime in milliseconds."},"cadence_ms":{"type":"integer","description":"Optional athlas_go/canvas minimum launch cadence in milliseconds."},"burst":{"type":"integer","description":"Optional athlas_go copies per cadence step."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_HYPER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","probe"],"description":"Hyper transport view to print."},"url":{"type":"string","description":"Optional URL to download into TRUEOSFS."},"path":{"type":"string","description":"Optional TRUEOSFS destination path."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_LSD: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"Optional TRUEOSFS path to list."},"paths":{"type":"array","items":{"type":"string"},"description":"Optional TRUEOSFS paths to list."},"long":{"type":"boolean","description":"Show file kind, ownership, byte size, and name."},"tree":{"type":"boolean","description":"Walk recursively from the path."},"table":{"type":"boolean","description":"Render the shell2 table view."},"oneline":{"type":"boolean","description":"Show one entry per line."},"directory_only":{"type":"boolean","description":"List directories themselves instead of their contents."},"color":{"type":"string","enum":["always","auto","never"],"description":"Color output mode."},"size":{"type":"string","enum":["default","short","bytes"],"description":"Size display mode."},"permission":{"type":"string","enum":["rwx","octal","attributes","disable"],"description":"Permission display mode."},"sort":{"type":"string","enum":["name","size","extension","none"],"description":"Sort entries."},"reverse":{"type":"boolean","description":"Reverse the selected sort."},"group_dirs":{"type":"string","enum":["none","first","last"],"description":"Group directories before or after files."},"depth":{"type":"integer","minimum":0,"description":"Maximum recursive depth."},"header":{"type":"boolean","description":"Show long-output headers."}},"required":[],"additionalProperties":false}"#;
@@ -37,6 +37,7 @@ const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"typ
 const TOOL_JSON_RENDER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["joker","oa","list"],"description":"Render probe command to run."},"variant":{"type":"string","description":"Optional joker variant, for example mesa, bt0, oa, slot0, payload-bary, or grf2."},"action":{"type":"string","description":"Optional OA action, for example status, ctx-on, ctx-off, oar-on, oar-off, full-on, or full-off."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_RM: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file or directory path."},"regex":{"type":"string","description":"Optional -regx pattern to match children under path."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"integer","minimum":50,"maximum":500,"description":"Shell line width."}},"required":["width"],"additionalProperties":false}"#;
+const TOOL_JSON_SHA: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file to hash with SHA-256."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"description":"Optional SMP slot. Omit to list all slots."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pcibar","mem","cpu","turbo","ucode","pmu","acpi","aml","facp","madt","hpet","mcfg","ssdt","uefi","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."},"signature":{"type":"string","minLength":4,"maxLength":4,"description":"Optional ACPI signature when target=acpi, for example SSDT or FACP."},"index":{"type":"integer","minimum":1,"description":"Optional 1-based instance index when target=acpi and the signature repeats."},"subcommand":{"type":"string","enum":["ec","symbol","prefix"],"description":"Optional AML subcommand when target=aml."},"path":{"type":"string","description":"Optional AML path or prefix when target=aml and subcommand is symbol or prefix."}},"required":["target"],"additionalProperties":false}"#;
 
@@ -90,6 +91,10 @@ fn dispatch_del(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Pars
 fn dispatch_set(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::set::try_parse(io, &mut args)
+}
+
+fn dispatch_sha(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::sha::try_parse(io, rest)
 }
 
 fn dispatch_smp(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -176,7 +181,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         advertised: true,
         handler: dispatch_disc,
         tool_description: Some(
-            "List top-level disk devices, format a disk, or print raw TRUEOSFS log records.",
+            "List top-level disk devices, format a disk, create a ramdisc, or print raw TRUEOSFS log records.",
         ),
         tool_parameters_json: Some(TOOL_JSON_DISC),
     },
@@ -233,6 +238,15 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_rm,
         tool_description: Some("Remove a TRUEOSFS file or directory after confirmation."),
         tool_parameters_json: Some(TOOL_JSON_RM),
+    },
+    BuiltinShell2CmdEntry {
+        name: "sha",
+        mode: "cmd",
+        color: Some(STATUS_GREEN_RGB),
+        advertised: true,
+        handler: dispatch_sha,
+        tool_description: Some("Hash a TRUEOSFS file with SHA-256."),
+        tool_parameters_json: Some(TOOL_JSON_SHA),
     },
     BuiltinShell2CmdEntry {
         name: "render",
@@ -381,8 +395,8 @@ pub(crate) fn try_dispatch(
 
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
-        "7z", "lsd", "rm", "mv", "disc", "install", "update", "hyper", "net", "c4", "txt", "gpgpu",
-        "acpi", "tlb", "smp",
+        "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "net", "c4", "txt",
+        "gpgpu", "acpi", "tlb", "smp",
     ];
 
     let mut out = AllocString::new();

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 #[inline]
 pub(crate) fn bf16_to_f32(bits: u16) -> f32 {
     f32::from_bits((bits as u32) << 16)

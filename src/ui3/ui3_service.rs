@@ -894,10 +894,7 @@ fn ensure_shell_scene_surface(scene: &mut Ui3Scene, reason: &str) -> bool {
         scene.viewport_height = viewport_height;
     }
     if scene.viewport_width == 0 || scene.viewport_height == 0 {
-        crate::log!(
-            "ui3-service: shell scene unavailable reason={} cause=no-viewport\n",
-            reason
-        );
+        crate::log!("ui3-service: shell scene unavailable reason={} cause=no-viewport\n", reason);
         return false;
     }
     scene.content_height = scene.content_height.max(scene.viewport_height);

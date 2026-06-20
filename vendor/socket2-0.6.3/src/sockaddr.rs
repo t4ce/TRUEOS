@@ -5,7 +5,7 @@ use ::core::fmt;
 use core::hash::Hash;
 use core::mem::{self, size_of};
 use core::ptr;
-use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
+use core::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 #[cfg(all(
     not(target_os = "wasi"),
     not(any(target_os = "trueos", target_os = "zkvm"))
