@@ -1025,7 +1025,7 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
         set_global_i32(ctx, TRUESURFER_ID_PROP, browser_instance_id as i32);
 
         log_line(format!(
-            "qjs-truesurfer[{}]: renderer handoff disabled reason=widget-inspect-only\n",
+            "qjs-truesurfer[{}]: renderer handoff mode=ui3-render-tree widget_inspect=1\n",
             browser_instance_id
         ));
 

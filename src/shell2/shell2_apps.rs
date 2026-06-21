@@ -15,6 +15,7 @@ use super::{
 pub(crate) enum AppsPromptMode {
     Start,
     Online,
+    Peer,
     Pause,
     Unpause,
     Save,
@@ -27,7 +28,8 @@ impl AppsPromptMode {
     pub(crate) const fn next(self) -> Self {
         match self {
             Self::Start => Self::Online,
-            Self::Online => Self::Pause,
+            Self::Online => Self::Peer,
+            Self::Peer => Self::Pause,
             Self::Pause => Self::Unpause,
             Self::Unpause => Self::Save,
             Self::Save => Self::Load,
@@ -41,6 +43,7 @@ impl AppsPromptMode {
         match self {
             Self::Start => "start",
             Self::Online => "online",
+            Self::Peer => "peer",
             Self::Pause => "pause",
             Self::Unpause => "unpause",
             Self::Save => "save",
@@ -368,6 +371,212 @@ fn online_app(spawner: &Spawner, io: &'static dyn ShellBackend2, args: Vec<Strin
     }
 }
 
+const PEER_HEADERS: &[&str; 5] = &["id", "peer", "node", "port", "vms"];
+
+fn peer_vms_text(offers: &[crate::r::net::trueos_peer::PeerVmOffer]) -> String {
+    if offers.is_empty() {
+        return String::from("-");
+    }
+    let mut out = String::new();
+    for offer in offers {
+        if !out.is_empty() {
+            out.push(',');
+        }
+        let _ = write!(out, "{}", offer.vm_id);
+    }
+    out
+}
+
+async fn query_peer_offers(
+    peer: &crate::r::net::trueos_peer::PeerSnapshot,
+) -> Result<Vec<crate::r::net::trueos_peer::PeerVmOffer>, String> {
+    crate::r::net::trueos_peer::list_peer_vms(peer)
+        .await
+        .map_err(|err| alloc::format!("{:?}", err))
+}
+
+async fn print_peer_table(target: &MatrixTarget, width: usize) {
+    let peers = crate::r::net::trueos_peer::peer_snapshots();
+    if peers.is_empty() {
+        print_matrix_target_line(target, "apps: no TRUEOS peers detected");
+        return;
+    }
+
+    let table = TlbTable::with_width(PEER_HEADERS, width.saturating_sub(2))
+        .with_max_col_widths(&[4, 15, 18, 5, 0]);
+    table.emit_header(|text| print_matrix_target_line(target, text));
+    for peer in peers {
+        let id = alloc::format!("{}", peer.id);
+        let addr = crate::r::net::trueos_peer::peer_addr_text(&peer);
+        let node = alloc::format!("{:016X}", peer.node_id);
+        let port = alloc::format!("{}", peer.port);
+        let vms = match query_peer_offers(&peer).await {
+            Ok(offers) => peer_vms_text(offers.as_slice()),
+            Err(err) => alloc::format!("err:{}", err.as_str()),
+        };
+        let row = [
+            id.as_str(),
+            addr.as_str(),
+            node.as_str(),
+            port.as_str(),
+            vms.as_str(),
+        ];
+        table.emit_row(&row, |text| print_matrix_target_line(target, text));
+    }
+    table.emit_footer(|text| print_matrix_target_line(target, text));
+}
+
+#[embassy_executor::task(pool_size = 2)]
+async fn peer_app_task(
+    target: MatrixTarget,
+    width: usize,
+    args: Vec<String>,
+    spawner: Spawner,
+    io: &'static dyn ShellBackend2,
+) {
+    if args.is_empty() {
+        print_peer_table(&target, width).await;
+        set_matrix_target_active(&target, false);
+        return;
+    }
+
+    let peers = crate::r::net::trueos_peer::peer_snapshots();
+    let Some(peer_id) = args.first().and_then(|arg| arg.parse::<usize>().ok()) else {
+        print_matrix_target_line(&target, "apps: peer expects a peer id");
+        print_peer_table(&target, width).await;
+        set_matrix_target_active(&target, false);
+        return;
+    };
+    let Some(peer) = peers.get(peer_id).cloned() else {
+        print_matrix_target_line(&target, "apps: unknown peer id");
+        print_peer_table(&target, width).await;
+        set_matrix_target_active(&target, false);
+        return;
+    };
+
+    let Some(remote_vm_id) = args.get(1).and_then(|arg| arg.parse::<u8>().ok()) else {
+        match query_peer_offers(&peer).await {
+            Ok(offers) => {
+                let addr = crate::r::net::trueos_peer::peer_addr_text(&peer);
+                print_matrix_target_line(
+                    &target,
+                    alloc::format!(
+                        "apps: peer {} {} vms={}",
+                        peer.id,
+                        addr.as_str(),
+                        peer_vms_text(offers.as_slice()).as_str()
+                    )
+                    .as_str(),
+                );
+            }
+            Err(err) => print_matrix_target_line(
+                &target,
+                alloc::format!("apps: peer query failed: {}", err).as_str(),
+            ),
+        }
+        set_matrix_target_active(&target, false);
+        return;
+    };
+
+    let local_vm_id = args
+        .get(2)
+        .and_then(|arg| arg.parse::<u8>().ok())
+        .or_else(crate::hv::first_free_vm_id)
+        .unwrap_or(remote_vm_id);
+    let addr = crate::r::net::trueos_peer::peer_addr_text(&peer);
+    print_matrix_target_line(
+        &target,
+        alloc::format!(
+            "apps: fetching peer {} {} vm{} -> local vm{}",
+            peer.id,
+            addr.as_str(),
+            remote_vm_id,
+            local_vm_id
+        )
+        .as_str(),
+    );
+
+    match crate::r::net::trueos_peer::fetch_peer_vm(&peer, remote_vm_id).await {
+        Ok(bytes) => {
+            let fetched = bytes.len();
+            match crate::hv::store::save_bytes(local_vm_id, bytes) {
+                Ok(saved) => {
+                    print_matrix_target_line(
+                        &target,
+                        alloc::format!("apps: peer vm{} fetched {} bytes", local_vm_id, saved)
+                            .as_str(),
+                    );
+                    match crate::hv::restore_snapshot(local_vm_id) {
+                        Ok(loaded) => {
+                            print_matrix_target_line(
+                                &target,
+                                alloc::format!(
+                                    "apps: vm{} loaded peer snapshot {} bytes",
+                                    local_vm_id,
+                                    loaded
+                                )
+                                .as_str(),
+                            );
+                            match crate::hv::start(local_vm_id, &spawner, io, None) {
+                                Ok(()) => print_matrix_target_line(
+                                    &target,
+                                    alloc::format!("apps: vm{} peer start requested", local_vm_id)
+                                        .as_str(),
+                                ),
+                                Err(crate::hv::StartError::AlreadyRunning) => {
+                                    print_matrix_target_line(
+                                        &target,
+                                        alloc::format!("apps: vm{} already running", local_vm_id)
+                                            .as_str(),
+                                    )
+                                }
+                                Err(err) => print_matrix_target_line(
+                                    &target,
+                                    alloc::format!("apps: peer start failed: {:?}", err).as_str(),
+                                ),
+                            }
+                        }
+                        Err(err) => print_matrix_target_line(
+                            &target,
+                            alloc::format!("apps: peer restore failed: {:?}", err).as_str(),
+                        ),
+                    }
+                }
+                Err(err) => print_matrix_target_line(
+                    &target,
+                    alloc::format!(
+                        "apps: peer save failed after {} fetched bytes: {:?}",
+                        fetched,
+                        err
+                    )
+                    .as_str(),
+                ),
+            }
+        }
+        Err(err) => print_matrix_target_line(
+            &target,
+            alloc::format!("apps: peer fetch failed: {:?}", err).as_str(),
+        ),
+    }
+
+    set_matrix_target_active(&target, false);
+}
+
+fn peer_app(spawner: &Spawner, io: &'static dyn ShellBackend2, args: Vec<String>) {
+    let target = matrix_target_for_backend(io);
+    let width = line_width_for_backend(io);
+    set_matrix_target_active(&target, true);
+    match peer_app_task(target.clone(), width, args, *spawner, io) {
+        Ok(token) => {
+            spawner.spawn(token);
+        }
+        Err(_) => {
+            set_matrix_target_active(&target, false);
+            line(io, "apps: peer task unavailable");
+        }
+    }
+}
+
 fn parse_id(token: Option<&str>) -> Option<u8> {
     token.and_then(|s| s.parse::<u8>().ok())
 }
@@ -478,6 +687,7 @@ pub(crate) fn submit(
         None => (mode, Vec::new()),
         Some("start") => (AppsPromptMode::Start, parts.map(String::from).collect()),
         Some("online") => (AppsPromptMode::Online, parts.map(String::from).collect()),
+        Some("peer") => (AppsPromptMode::Peer, parts.map(String::from).collect()),
         Some("pause") => (AppsPromptMode::Pause, parts.map(String::from).collect()),
         Some("unpause") => (AppsPromptMode::Unpause, parts.map(String::from).collect()),
         Some("save") => (AppsPromptMode::Save, parts.map(String::from).collect()),
@@ -495,6 +705,7 @@ pub(crate) fn submit(
     match action {
         AppsPromptMode::Start => start_app(io, rest.into_iter()),
         AppsPromptMode::Online => online_app(spawner, io, rest),
+        AppsPromptMode::Peer => peer_app(spawner, io, rest),
         AppsPromptMode::Pause => {
             stop_selected_or_all(io, parse_id(rest.first().map(String::as_str)), "pause")
         }

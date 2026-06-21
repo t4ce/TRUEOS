@@ -64,6 +64,7 @@ mod power;
 mod power;
 mod r;
 mod ram_probe;
+mod release_count;
 mod remote_work_wake;
 mod runtime;
 mod shell2;
@@ -169,6 +170,11 @@ pub extern "C" fn kmain() -> ! {
         cpu::enable_sse();
     }
     globalog::init_log_facade();
+    crate::log_info!(
+        target: "boot";
+        "boot: stage=bsp-early log_config boot_level={:?}\n",
+        crate::logflag::BOOT_LOG_LEVEL
+    );
     #[cfg(target_os = "trueos")]
     alsa_trueos_backend::install();
     exceptions::init();

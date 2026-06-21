@@ -27,6 +27,12 @@ enum CodecRequest {
         archive_path: String,
         target: MatrixTarget,
     },
+    SevenZExtractFile {
+        id: u64,
+        archive_path: String,
+        output_path: String,
+        target: MatrixTarget,
+    },
     SevenZExtractMemory {
         id: u64,
         label: String,
@@ -49,6 +55,12 @@ pub enum CodecCompletedKind {
         archive_path: String,
         source_bytes: usize,
         archive_bytes: usize,
+    },
+    FileExtract {
+        archive_path: String,
+        output_path: String,
+        archive_bytes: usize,
+        output_bytes: usize,
     },
     MemoryBytes {
         label: String,
@@ -123,6 +135,14 @@ fn archive_path_for_source(source_path: &str) -> String {
     out
 }
 
+fn output_path_for_archive(archive_path: &str) -> Result<String, CodecError> {
+    archive_path
+        .strip_suffix(".7z")
+        .filter(|path| !path.is_empty())
+        .map(String::from)
+        .ok_or(CodecError::BadPath)
+}
+
 fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
@@ -166,6 +186,38 @@ pub fn enqueue_7z_compress_file(
         id,
         source_path,
         archive_path,
+        target,
+    });
+    Ok(QueuedCodecJob {
+        id,
+        slot: Some(slot),
+    })
+}
+
+pub fn enqueue_7z_extract_file(
+    archive_path: &str,
+    output_mask: u8,
+) -> Result<QueuedCodecJob, CodecError> {
+    let archive_path = normalize_path(archive_path, false)?;
+    let output_path = output_path_for_archive(archive_path.as_str())?;
+    let id = next_job_id();
+    let slot = slot_name_for_job(id);
+    let target = crate::shell2::matrix_target_for_slot_name(output_mask, slot.as_str());
+
+    log_target(
+        &target,
+        alloc::format!(
+            "7z: queued extract job={} archive={} output={}",
+            id,
+            archive_path.as_str(),
+            output_path.as_str()
+        )
+        .as_str(),
+    );
+    REQUESTS.lock().push_back(CodecRequest::SevenZExtractFile {
+        id,
+        archive_path,
+        output_path,
         target,
     });
     Ok(QueuedCodecJob {
@@ -273,6 +325,75 @@ async fn compress_file_job(
     result
 }
 
+async fn extract_file_job(
+    id: u64,
+    archive_path: String,
+    output_path: String,
+    target: MatrixTarget,
+) -> Result<(), CodecError> {
+    crate::shell2::set_matrix_target_active(&target, true);
+    let result = async {
+        let disk = crate::r::fs::trueosfs::primary_root_handle().ok_or(CodecError::NoRoot)?;
+        log_target(
+            &target,
+            alloc::format!("7z: job={} reading archive {}", id, archive_path.as_str()).as_str(),
+        );
+        let archive = crate::r::fs::trueosfs::file_out_async(disk, archive_path.as_str())
+            .await?
+            .ok_or(CodecError::NotFound)?;
+
+        log_target(
+            &target,
+            alloc::format!("7z: job={} extracting archive_bytes={}", id, archive.len()).as_str(),
+        );
+        let output = crate::z7::extract_single_file_to_vec(archive.as_slice())?;
+        log_target(
+            &target,
+            alloc::format!(
+                "7z: job={} writing {} output_bytes={}",
+                id,
+                output_path.as_str(),
+                output.len()
+            )
+            .as_str(),
+        );
+
+        let ok =
+            crate::r::fs::trueosfs::file_in_async(disk, output_path.as_str(), output.as_slice())
+                .await?;
+        if !ok {
+            return Err(CodecError::WriteFailed);
+        }
+
+        let archive_bytes = archive.len();
+        let output_bytes = output.len();
+        push_completed(CodecCompletedJob {
+            id,
+            kind: CodecCompletedKind::FileExtract {
+                archive_path: archive_path.clone(),
+                output_path: output_path.clone(),
+                archive_bytes,
+                output_bytes,
+            },
+        });
+        log_target(
+            &target,
+            alloc::format!(
+                "7z: done job={} archive={} bytes output={} bytes path={}",
+                id,
+                archive_bytes,
+                output_bytes,
+                output_path.as_str()
+            )
+            .as_str(),
+        );
+        Ok(())
+    }
+    .await;
+    crate::shell2::set_matrix_target_active(&target, false);
+    result
+}
+
 async fn extract_memory_job(
     id: u64,
     label: String,
@@ -327,6 +448,22 @@ async fn execute_request(worker_id: usize, request: CodecRequest) {
                 alloc::format!("codec: worker={} start job={}", worker_id, id).as_str(),
             );
             let result = compress_file_job(id, source_path, archive_path, target.clone()).await;
+            if let Err(err) = &result {
+                log_target(&target, alloc::format!("7z: failed job={} err={}", id, err).as_str());
+            }
+            result
+        }
+        CodecRequest::SevenZExtractFile {
+            id,
+            archive_path,
+            output_path,
+            target,
+        } => {
+            log_target(
+                &target,
+                alloc::format!("codec: worker={} start job={}", worker_id, id).as_str(),
+            );
+            let result = extract_file_job(id, archive_path, output_path, target.clone()).await;
             if let Err(err) = &result {
                 log_target(&target, alloc::format!("7z: failed job={} err={}", id, err).as_str());
             }
