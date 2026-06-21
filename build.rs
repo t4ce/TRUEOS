@@ -53,17 +53,10 @@ fn parse_declared_cabi_imports(bp_abi_path: &Path) -> Result<Vec<String>, String
         let Some(name_end) = rest.find('(') else {
             continue;
         };
-        let name = format!("trueos_cabi_{}", &rest[..name_end]);
-        if portal_import_is_exposed(name.as_str()) {
-            import_names.insert(name);
-        }
+        import_names.insert(format!("trueos_cabi_{}", &rest[..name_end]));
     }
 
     Ok(import_names.into_iter().collect())
-}
-
-fn portal_import_is_exposed(name: &str) -> bool {
-    !matches!(name, "trueos_cabi_ui2_window_create" | "trueos_cabi_ui2_surface_window_create")
 }
 
 fn collect_defined_cabi_exports(manifest_dir: &Path) -> Result<BTreeMap<String, String>, String> {
@@ -131,15 +124,8 @@ fn module_path_for_source(manifest_dir: &Path, path: &Path) -> Result<String, St
         .strip_prefix(manifest_dir.join("src"))
         .map_err(|_| format!("{} is not under src/", path.display()))?;
 
-    if rel == Path::new("r/io.rs")
-        || rel == Path::new("r/gfx_cabi.rs")
-        || rel == Path::new("r/io_cursor.rs")
-    {
+    if rel == Path::new("r/io.rs") || rel == Path::new("r/io_cursor.rs") {
         return Ok(String::from("crate::r::io::cabi"));
-    }
-
-    if rel == Path::new("ui2/mod.rs") {
-        return Ok(String::from("crate::r::ui2"));
     }
 
     let mut parts = rel

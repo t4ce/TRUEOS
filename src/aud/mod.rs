@@ -11,8 +11,13 @@
 #![allow(dead_code)]
 
 pub mod dmg;
+pub mod file_service;
 pub mod live_piano;
+pub mod m4a;
+pub mod m4a_demux;
 pub mod pattern;
+pub mod pcm_convert;
+pub mod pcm_lane;
 pub mod player;
 pub mod synth;
 pub mod tables;

@@ -29,6 +29,7 @@ static LIVE_PCM_RING: Mutex<Option<LivePcmRing>> = Mutex::new(None);
 struct TinyaudioDemoMixer {
     piano: PianoSource,
     tone: ToneSource,
+    overlay: PcmOverlaySource,
 }
 
 struct PianoSource {
@@ -57,11 +58,17 @@ struct LivePcmRing {
     write_seq: u64,
 }
 
+struct PcmOverlaySource {
+    current: Option<crate::aud::pcm_lane::PcmLaneRequest>,
+    cursor: usize,
+}
+
 impl TinyaudioDemoMixer {
     fn new(params: OutputDeviceParameters) -> Self {
         Self {
             piano: PianoSource::new(params, PIANO_SOURCE_ENABLED),
             tone: ToneSource::new(TONE_HZ, params.sample_rate, VOLUME, TONE_SOURCE_ENABLED),
+            overlay: PcmOverlaySource::new(),
         }
     }
 
@@ -72,6 +79,7 @@ impl TinyaudioDemoMixer {
         data.fill(0.0);
         self.piano.mix_into(data);
         self.tone.mix_into(data);
+        self.overlay.mix_into(data);
     }
 }
 
@@ -187,6 +195,15 @@ pub fn live_pcm_read_since(cursor: u64, out: &mut Vec<i16>, max_samples: usize) 
         .map(|ring| ring.read_since(cursor, out, max_samples))
 }
 
+pub fn submit_pcm_overlay(label: &'static str, samples: Vec<i16>) -> Result<usize, &'static str> {
+    crate::aud::pcm_lane::submit_i16_stereo_48k(label, samples)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_tinyaudio_audio_urgent_pending() -> i32 {
+    i32::from(crate::aud::pcm_lane::urgent_pending())
+}
+
 impl PianoSource {
     fn new(params: OutputDeviceParameters, enabled: bool) -> Self {
         Self {
@@ -209,6 +226,58 @@ impl PianoSource {
 
         for (dst, src) in data.iter_mut().zip(self.buffer.iter().copied()) {
             *dst += src as f32 / 32_767.0;
+        }
+    }
+}
+
+impl PcmOverlaySource {
+    const fn new() -> Self {
+        Self {
+            current: None,
+            cursor: 0,
+        }
+    }
+
+    fn take_pending(&mut self) {
+        let next = crate::aud::pcm_lane::take_pending();
+        if let Some(next) = next {
+            crate::log!(
+                "tinyaudio-service: overlay start label={} samples={} frames={}\n",
+                next.label,
+                next.samples.len(),
+                next.samples.len() / CHANNELS
+            );
+            self.current = Some(next);
+            self.cursor = 0;
+        }
+    }
+
+    fn mix_into(&mut self, data: &mut [f32]) {
+        self.take_pending();
+
+        let Some(current) = self.current.as_ref() else {
+            return;
+        };
+
+        let remaining = current.samples.len().saturating_sub(self.cursor);
+        let take = data.len().min(remaining);
+        for (dst, src) in data.iter_mut().zip(
+            current.samples[self.cursor..self.cursor + take]
+                .iter()
+                .copied(),
+        ) {
+            *dst += src as f32 / 32_767.0;
+        }
+
+        self.cursor += take;
+        if self.cursor >= current.samples.len() {
+            crate::log!(
+                "tinyaudio-service: overlay done label={} samples={}\n",
+                current.label,
+                current.samples.len()
+            );
+            self.current = None;
+            self.cursor = 0;
         }
     }
 }
@@ -347,7 +416,10 @@ pub async fn tinyaudio_service_task() {
     CALLBACKS.store(0, Ordering::Release);
     SAMPLES_WRITTEN.store(0, Ordering::Release);
 
-    crate::log!("tinyaudio-service: audio task start\n");
+    crate::log!(
+        "tinyaudio-service: audio task start slot={} policy=ap1-ui-service\n",
+        crate::percpu::current_slot()
+    );
     live_pcm_reset(LIVE_PCM_RING_SECONDS);
 
     let params = OutputDeviceParameters {

@@ -1,14 +1,31 @@
 use spin::Mutex;
 
-use crate::hda::{self, PcmStreamHandle};
-
-static ALSA_HDA_STREAM: Mutex<Option<PcmStreamHandle>> = Mutex::new(None);
+use crate::hda;
 
 const EBADF: i32 = 9;
 const EFAULT: i32 = 14;
 const EINVAL: i32 = 22;
 const EIO: i32 = 5;
 const ENODEV: i32 = 19;
+
+const ALSA_TRUEOS_HANDLE: usize = 1;
+const ALSA_TRUEOS_BUFFER_FRAMES: usize = hda::PCM_SAMPLE_RATE_HZ as usize * 30;
+
+static ALSA_PCM_STATE: Mutex<AlsaPcmState> = Mutex::new(AlsaPcmState::new());
+
+struct AlsaPcmState {
+    open: bool,
+    running: bool,
+}
+
+impl AlsaPcmState {
+    const fn new() -> Self {
+        Self {
+            open: false,
+            running: false,
+        }
+    }
+}
 
 pub fn install() {
     alsa::trueos::install_pcm_backend(&PCM_BACKEND);
@@ -28,46 +45,61 @@ static PCM_BACKEND: alsa::trueos::PcmBackend = alsa::trueos::PcmBackend {
 };
 
 fn open_playback() -> alsa::trueos::BackendResult<usize> {
-    if !hda::is_initialized() {
-        hda::init().map_err(|_| ENODEV)?;
-    }
-
-    let mut stream = ALSA_HDA_STREAM.lock();
-    if stream.is_none() {
-        *stream = Some(hda::open_pcm_stream().map_err(|_| ENODEV)?);
-    }
-    Ok(1)
-}
-
-fn close(handle: usize) {
-    if handle != 1 {
-        return;
-    }
-
-    if let Some(mut stream) = ALSA_HDA_STREAM.lock().take() {
-        stream.stop_reset();
-    }
-}
-
-fn start(handle: usize) -> alsa::trueos::BackendResult<()> {
-    if handle == 1 { Ok(()) } else { Err(EBADF) }
-}
-
-fn drop_stream(handle: usize) -> alsa::trueos::BackendResult<()> {
-    if handle != 1 {
+    let mut state = ALSA_PCM_STATE.lock();
+    if state.open {
         return Err(EBADF);
     }
 
-    let mut stream = ALSA_HDA_STREAM.lock();
-    let Some(stream) = stream.as_mut() else {
+    state.open = true;
+    state.running = false;
+    crate::log!("alsa-trueos: pcm open playback backend=trueos-pcm-lane\n");
+    Ok(ALSA_TRUEOS_HANDLE)
+}
+
+fn close(handle: usize) {
+    if handle != ALSA_TRUEOS_HANDLE {
+        return;
+    }
+
+    let mut state = ALSA_PCM_STATE.lock();
+    state.open = false;
+    state.running = false;
+}
+
+fn start(handle: usize) -> alsa::trueos::BackendResult<()> {
+    if handle != ALSA_TRUEOS_HANDLE {
+        return Err(EBADF);
+    }
+
+    let mut state = ALSA_PCM_STATE.lock();
+    if !state.open {
         return Err(ENODEV);
-    };
-    stream.stop_reset();
+    }
+
+    state.running = true;
+    Ok(())
+}
+
+fn drop_stream(handle: usize) -> alsa::trueos::BackendResult<()> {
+    if handle != ALSA_TRUEOS_HANDLE {
+        return Err(EBADF);
+    }
+
+    let mut state = ALSA_PCM_STATE.lock();
+    if !state.open {
+        return Err(ENODEV);
+    }
+
+    state.running = false;
     Ok(())
 }
 
 fn drain(handle: usize) -> alsa::trueos::BackendResult<()> {
-    if handle == 1 { Ok(()) } else { Err(EBADF) }
+    if handle == ALSA_TRUEOS_HANDLE {
+        Ok(())
+    } else {
+        Err(EBADF)
+    }
 }
 
 fn write_i16_interleaved(
@@ -75,7 +107,7 @@ fn write_i16_interleaved(
     samples: *const i16,
     len: usize,
 ) -> alsa::trueos::BackendResult<usize> {
-    if handle != 1 {
+    if handle != ALSA_TRUEOS_HANDLE {
         return Err(EBADF);
     }
     if samples.is_null() && len != 0 {
@@ -84,68 +116,73 @@ fn write_i16_interleaved(
     if len % hda::PCM_CHANNELS != 0 {
         return Err(EINVAL);
     }
+    if !ALSA_PCM_STATE.lock().open {
+        return Err(ENODEV);
+    }
 
     let samples = if len == 0 {
         &[]
     } else {
         unsafe { core::slice::from_raw_parts(samples, len) }
     };
+    let frames = samples.len() / hda::PCM_CHANNELS;
+    if frames == 0 {
+        return Ok(0);
+    }
 
-    let mut stream = ALSA_HDA_STREAM.lock();
-    let Some(stream) = stream.as_mut() else {
-        return Err(ENODEV);
-    };
-    stream.push_samples(samples).map_err(|_| EIO)?;
-    Ok(len / hda::PCM_CHANNELS)
+    crate::aud::pcm_lane::submit_i16_stereo_48k("alsa-trueos-pcm", alloc::vec::Vec::from(samples))
+        .map_err(|_| EIO)?;
+    ALSA_PCM_STATE.lock().running = true;
+    crate::log!(
+        "alsa-trueos: write_i16_interleaved samples={} frames={} route=trueos-pcm-lane\n",
+        samples.len(),
+        frames
+    );
+    Ok(frames)
 }
 
 fn writable_frames(handle: usize) -> alsa::trueos::BackendResult<usize> {
-    if handle != 1 {
+    if handle != ALSA_TRUEOS_HANDLE {
         return Err(EBADF);
     }
-
-    let stream = ALSA_HDA_STREAM.lock();
-    let Some(stream) = stream.as_ref() else {
+    if !ALSA_PCM_STATE.lock().open {
         return Err(ENODEV);
-    };
-    let samples = stream.writable_samples(hda::PCM_CHANNELS).ok_or(EIO)?;
-    Ok(samples / hda::PCM_CHANNELS)
+    }
+
+    Ok(ALSA_TRUEOS_BUFFER_FRAMES)
 }
 
 fn queued_frames(handle: usize) -> alsa::trueos::BackendResult<usize> {
-    if handle != 1 {
+    if handle != ALSA_TRUEOS_HANDLE {
         return Err(EBADF);
     }
-
-    let stream = ALSA_HDA_STREAM.lock();
-    let Some(stream) = stream.as_ref() else {
+    if !ALSA_PCM_STATE.lock().open {
         return Err(ENODEV);
-    };
-    let samples = stream.queued_samples().ok_or(EIO)?;
-    Ok(samples / hda::PCM_CHANNELS)
+    }
+
+    Ok(0)
 }
 
 fn buffer_frames(handle: usize) -> alsa::trueos::BackendResult<usize> {
-    if handle != 1 {
+    if handle != ALSA_TRUEOS_HANDLE {
         return Err(EBADF);
     }
-
-    let stream = ALSA_HDA_STREAM.lock();
-    let Some(stream) = stream.as_ref() else {
+    if !ALSA_PCM_STATE.lock().open {
         return Err(ENODEV);
-    };
-    Ok(stream.info().buffer_frames)
+    }
+
+    Ok(ALSA_TRUEOS_BUFFER_FRAMES)
 }
 
 fn state(handle: usize) -> alsa::pcm::State {
-    if handle != 1 {
+    if handle != ALSA_TRUEOS_HANDLE {
         return alsa::pcm::State::Disconnected;
     }
 
-    let stream = ALSA_HDA_STREAM.lock();
-    match stream.as_ref() {
-        Some(stream) if stream.is_started() => alsa::pcm::State::Running,
-        Some(_) => alsa::pcm::State::Prepared,
-        None => alsa::pcm::State::Disconnected,
+    let state = ALSA_PCM_STATE.lock();
+    match (state.open, state.running) {
+        (true, true) => alsa::pcm::State::Running,
+        (true, false) => alsa::pcm::State::Prepared,
+        (false, _) => alsa::pcm::State::Disconnected,
     }
 }

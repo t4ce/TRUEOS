@@ -375,7 +375,7 @@ const PEER_HEADERS: &[&str; 5] = &["id", "peer", "node", "port", "vms"];
 
 fn peer_vms_text(offers: &[crate::r::net::trueos_peer::PeerVmOffer]) -> String {
     if offers.is_empty() {
-        return String::from("-");
+        return String::from("none");
     }
     let mut out = String::new();
     for offer in offers {
@@ -448,7 +448,23 @@ async fn peer_app_task(
         return;
     };
     let Some(peer) = peers.get(peer_id).cloned() else {
-        print_matrix_target_line(&target, "apps: unknown peer id");
+        let available = if peers.is_empty() {
+            String::from("none")
+        } else {
+            let mut ids = String::new();
+            for peer in peers.iter() {
+                if !ids.is_empty() {
+                    ids.push(',');
+                }
+                let _ = write!(ids, "{}", peer.id);
+            }
+            ids
+        };
+        print_matrix_target_line(
+            &target,
+            alloc::format!("apps: unknown peer id {} (available: {})", peer_id, available.as_str())
+                .as_str(),
+        );
         print_peer_table(&target, width).await;
         set_matrix_target_active(&target, false);
         return;

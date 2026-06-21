@@ -1943,6 +1943,21 @@ pub extern "C" fn trueos_tinyaudio_hda_close_pcm_stream(handle: usize) {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn trueos_tinyaudio_hda_reset_pcm_stream(handle: usize) -> i32 {
+    if handle != 1 {
+        return -1;
+    }
+
+    let mut stream = TINYAUDIO_HDA_STREAM.lock();
+    let Some(stream) = stream.as_mut() else {
+        return -2;
+    };
+
+    stream.stop_reset();
+    0
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn trueos_tinyaudio_hda_writable_samples(
     handle: usize,
     guard_samples: usize,

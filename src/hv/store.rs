@@ -38,6 +38,7 @@ static VM_STORE_REQ_SEQ: AtomicU64 = AtomicU64::new(1);
 static VM_STORE_OBJECT_SEQ: AtomicU64 = AtomicU64::new(1);
 static VM_STORE_COMMITTED_SEQS: Mutex<BTreeMap<u8, u64>> = Mutex::new(BTreeMap::new());
 static VM_STORE_COMMIT_WAIT: WaitQueue = WaitQueue::new();
+static VM_STORE_REPLICATION_ONLINE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Debug)]
 pub enum VmStoreError {
@@ -301,6 +302,10 @@ pub fn has_committed_vm(vm_id: u8) -> bool {
     VM_STORE_COMMITTED_SEQS.lock().contains_key(&vm_id)
 }
 
+pub fn replication_online() -> bool {
+    VM_STORE_REPLICATION_ONLINE.load(Ordering::Acquire)
+}
+
 fn enqueue(kind: RequestKind) -> Result<Arc<Completion>, VmStoreError> {
     if !wait_until_online(2000) {
         return Err(VmStoreError::ServiceOffline);
@@ -433,25 +438,22 @@ pub async fn vm_store_replication_task() {
         crate::log_info!(target: "hv"; "hv-store-net: store offline; replication unavailable\n");
         return;
     }
+    crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
 
-    let mut dev_idx = crate::net::primary_device_index();
-    let primary_up = crate::net::link_state_at(dev_idx)
-        .map(|ls| ls.up)
-        .unwrap_or(false);
-    if !primary_up {
-        for idx in 0..crate::net::device_count() {
-            if crate::net::link_state_at(idx)
-                .map(|ls| ls.up)
-                .unwrap_or(false)
-            {
-                dev_idx = idx;
-                break;
-            }
-        }
-    }
     if crate::net::device_count() == 0 {
         crate::log_info!(target: "hv"; "hv-store-net: no network device; replication unavailable\n");
         return;
+    }
+
+    let mut dev_idx = crate::net::primary_device_index();
+    for idx in 0..crate::net::device_count() {
+        if crate::net::link_state_at(idx)
+            .map(|ls| ls.up)
+            .unwrap_or(false)
+        {
+            dev_idx = idx;
+            break;
+        }
     }
 
     let selector = if let Some((bus, slot, func)) = crate::net::bdf_at(dev_idx) {
@@ -468,9 +470,16 @@ pub async fn vm_store_replication_task() {
     let cmds = NetQueue::new_leaked("hv-store-net-cmd", 128);
     let events = NetQueue::new_leaked("hv-store-net-evt", 128);
     register_app_queues(owner, cmds, events);
-    let _ = cmds.push(NetCommand::OpenTcpListen {
-        port: ports::VM_STORE_REPL_PORT,
-    });
+    if cmds
+        .push(NetCommand::OpenTcpListen {
+            port: ports::VM_STORE_REPL_PORT,
+        })
+        .is_err()
+    {
+        crate::log_info!(target: "hv"; "hv-store-net: listen submit failed\n");
+        return;
+    }
+    VM_STORE_REPLICATION_ONLINE.store(true, Ordering::Release);
     crate::log_info!(
         target: "hv";
         "hv-store-net: listening on tcp {} owner={}\n",

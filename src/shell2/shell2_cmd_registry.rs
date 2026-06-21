@@ -178,7 +178,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some(STATUS_ORANGE_RGB),
         advertised: true,
         handler: dispatch_aud,
-        tool_description: Some("Play /aud.wav from the TRUEOSFS root through the HDA PCM stream."),
+        tool_description: Some("Queue /aud.m4a from TRUEOSFS root through the AP1 audio service."),
         tool_parameters_json: Some(TOOL_JSON_AUD),
     },
     BuiltinShell2CmdEntry {

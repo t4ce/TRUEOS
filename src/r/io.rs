@@ -429,13 +429,11 @@ pub mod env {
 pub mod fs_cabi;
 pub mod input_cabi;
 pub mod ui3_cabi;
-pub mod vm_gfx_cabi;
 
 pub mod cabi {
     pub use super::fs_cabi::*;
     pub use super::input_cabi::*;
     pub use super::ui3_cabi::*;
-    pub use super::vm_gfx_cabi::*;
     pub use crate::r::net::https::{
         trueos_cabi_net_fetch_bytes_discard, trueos_cabi_net_fetch_bytes_read,
         trueos_cabi_net_fetch_bytes_result_len, trueos_cabi_net_fetch_bytes_start,
