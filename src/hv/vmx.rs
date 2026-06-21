@@ -135,6 +135,7 @@ pub const VMCS_VMEXIT_GUEST_RIP: u64 = 0x681E;
 
 pub const PROC_BASED_HLT_EXITING: u64 = 1 << 7;
 pub const PROC_BASED_VMX_PREEMPTION_TIMER: u64 = 1 << 6;
+pub const PROC_BASED_PAUSE_EXITING: u64 = 1 << 30;
 pub const PROC_BASED_ACTIVATE_SECONDARY: u64 = 1 << 31;
 pub const PROC2_BASED_ENABLE_EPT: u64 = 1 << 1;
 pub const PROC_BASED_USE_TSC_OFFSETTING: u64 = 1 << 3;
@@ -146,6 +147,7 @@ pub const RFLAGS_RESERVED_BIT1: u64 = 1 << 1;
 pub const RFLAGS_IF: u64 = 1 << 9;
 pub const EXCEPTION_BITMAP_ALL: u64 = 0xFFFF_FFFF;
 pub const VMEXIT_REASON_VMCALL: u64 = 0x12;
+pub const VMEXIT_REASON_PAUSE: u64 = 0x28;
 
 pub const HV_GDT_SEL_CODE: u16 = 0x08;
 pub const HV_GDT_SEL_DATA: u16 = 0x10;
