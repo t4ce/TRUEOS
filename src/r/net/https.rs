@@ -6,7 +6,7 @@ use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
-use alloc::vec::Vec;
+use alloc::{vec, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
@@ -63,6 +63,13 @@ struct FetchTarget {
     host: String,
     port: u16,
     path_and_query: String,
+}
+
+struct HttpsRequest<'a> {
+    method: &'static str,
+    content_type: Option<&'static str>,
+    headers: Vec<(String, String)>,
+    body: &'a [u8],
 }
 
 fn parse_fetch_url(url: &str) -> Result<FetchTarget, &'static str> {
@@ -248,7 +255,7 @@ fn complete_http_body_from_response(
             .parse::<usize>()
     {
         if len > max_bytes {
-            return Err(String::from("too large"));
+            return Err(format!("too large content_length={} max={}", len, max_bytes));
         }
         if body.len() < len {
             return Ok(None);
@@ -280,7 +287,7 @@ fn http_body_from_response(response: &[u8], max_bytes: usize) -> Result<Vec<u8>,
             .parse::<usize>()
     {
         if len > max_bytes {
-            return Err(String::from("too large"));
+            return Err(format!("too large content_length={} max={}", len, max_bytes));
         }
         return Ok(body.get(..len).unwrap_or(body).to_vec());
     }
@@ -293,6 +300,21 @@ fn http_body_from_response(response: &[u8], max_bytes: usize) -> Result<Vec<u8>,
 
 async fn fetch_https_bytes(
     target: &FetchTarget,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    let request = HttpsRequest {
+        method: "GET",
+        content_type: None,
+        headers: Vec::new(),
+        body: &[],
+    };
+    request_https_bytes(target, &request, timeout_ms, max_bytes).await
+}
+
+async fn request_https_bytes(
+    target: &FetchTarget,
+    request: &HttpsRequest<'_>,
     timeout_ms: u32,
     max_bytes: usize,
 ) -> Result<Vec<u8>, String> {
@@ -350,15 +372,33 @@ async fn fetch_https_bytes(
                     if tls_handle != Some(handle) || sent_request {
                         continue;
                     }
-                    let req = format!(
-                        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS net-fetch\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n",
-                        target.path_and_query, target.host
+                    let mut req = format!(
+                        "{} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS net-fetch\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n",
+                        request.method, target.path_and_query, target.host
                     );
-                    cmds.push(TlsCommand::Send {
-                        handle,
-                        data: req.into_bytes(),
-                    })
-                    .map_err(|_| String::from("tls send queue full"))?;
+                    if let Some(content_type) = request.content_type {
+                        req.push_str("Content-Type: ");
+                        req.push_str(content_type);
+                        req.push_str("\r\n");
+                    }
+                    if !request.body.is_empty() {
+                        req.push_str("Content-Length: ");
+                        req.push_str(format!("{}", request.body.len()).as_str());
+                        req.push_str("\r\n");
+                    }
+                    for (name, value) in &request.headers {
+                        if !name.is_empty() && !value.is_empty() {
+                            req.push_str(name.as_str());
+                            req.push_str(": ");
+                            req.push_str(value.as_str());
+                            req.push_str("\r\n");
+                        }
+                    }
+                    req.push_str("\r\n");
+                    let mut data = req.into_bytes();
+                    data.extend_from_slice(request.body);
+                    cmds.push(TlsCommand::Send { handle, data })
+                        .map_err(|_| String::from("tls send queue full"))?;
                     sent_request = true;
                 }
                 TlsEvent::Data { handle, data } => {
@@ -367,7 +407,12 @@ async fn fetch_https_bytes(
                     }
                     if response.len().saturating_add(data.len()) > max_bytes.saturating_add(4096) {
                         let _ = cmds.push(TlsCommand::Close { handle });
-                        return Err(String::from("too large"));
+                        return Err(format!(
+                            "too large received={} next={} max={}",
+                            response.len(),
+                            data.len(),
+                            max_bytes
+                        ));
                     }
                     response.extend_from_slice(data.as_slice());
                     if let Some(body) =
@@ -414,6 +459,108 @@ pub async fn get_bytes_shared(
         "https" => fetch_https_bytes(&target, timeout_ms.max(1), max_bytes).await,
         _ => Err(String::from("unsupported scheme")),
     }
+}
+
+pub async fn get_bytes_bearer_shared(
+    url: &str,
+    bearer: Option<&str>,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    let target = parse_fetch_url(url).map_err(String::from)?;
+    if target.scheme != "https" {
+        return Err(String::from("unsupported scheme"));
+    }
+    let mut headers = Vec::new();
+    if let Some(token) = bearer {
+        headers.push((String::from("Authorization"), format!("Bearer {}", token)));
+    }
+    let request = HttpsRequest {
+        method: "GET",
+        content_type: None,
+        headers,
+        body: &[],
+    };
+    request_https_bytes(&target, &request, timeout_ms.max(1), max_bytes).await
+}
+
+pub async fn get_range_bytes_shared(
+    url: &str,
+    offset: usize,
+    length: usize,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    let target = parse_fetch_url(url).map_err(String::from)?;
+    if target.scheme != "https" {
+        return Err(String::from("unsupported scheme"));
+    }
+    if length == 0 {
+        return Ok(Vec::new());
+    }
+    let end = offset
+        .checked_add(length)
+        .and_then(|value| value.checked_sub(1))
+        .ok_or_else(|| String::from("range overflow"))?;
+    let request = HttpsRequest {
+        method: "GET",
+        content_type: None,
+        headers: vec![(String::from("Range"), format!("bytes={}-{}", offset, end))],
+        body: &[],
+    };
+    request_https_bytes(&target, &request, timeout_ms.max(1), max_bytes).await
+}
+
+pub async fn put_protobuf_shared(
+    url: &str,
+    body: &[u8],
+    bearer: Option<&str>,
+    connection_id: Option<&str>,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    let target = parse_fetch_url(url).map_err(String::from)?;
+    if target.scheme != "https" {
+        return Err(String::from("unsupported scheme"));
+    }
+    let mut headers = Vec::new();
+    if let Some(token) = bearer {
+        headers.push((String::from("Authorization"), format!("Bearer {}", token)));
+    }
+    if let Some(connection_id) = connection_id {
+        headers.push((String::from("X-Spotify-Connection-Id"), String::from(connection_id)));
+    }
+    let request = HttpsRequest {
+        method: "PUT",
+        content_type: Some("application/x-protobuf"),
+        headers,
+        body,
+    };
+    request_https_bytes(&target, &request, timeout_ms.max(1), max_bytes).await
+}
+
+pub async fn post_protobuf_shared(
+    url: &str,
+    body: &[u8],
+    bearer: Option<&str>,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    let target = parse_fetch_url(url).map_err(String::from)?;
+    if target.scheme != "https" {
+        return Err(String::from("unsupported scheme"));
+    }
+    let mut headers = Vec::new();
+    if let Some(token) = bearer {
+        headers.push((String::from("Authorization"), format!("Bearer {}", token)));
+    }
+    let request = HttpsRequest {
+        method: "POST",
+        content_type: Some("application/x-protobuf"),
+        headers,
+        body,
+    };
+    request_https_bytes(&target, &request, timeout_ms.max(1), max_bytes).await
 }
 
 async fn fetch_bytes(url: String, timeout_ms: u32, max_bytes: usize) -> Result<Vec<u8>, i32> {

@@ -1166,7 +1166,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &SILK_SERVICE_STARTED,
         spawn_silk_service,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "spotify-service",
         SPOTIFY_SERVICE_READY,
         &SPOTIFY_SERVICE_STARTED,

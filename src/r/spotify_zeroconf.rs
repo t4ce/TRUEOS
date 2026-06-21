@@ -227,8 +227,8 @@ impl SpotifyZeroconf {
         let client_key = form_value(form, "clientKey").ok_or("missing-clientKey")?;
 
         let username = decode_form_value(username)?;
-        let blob = decode_form_value(blob)?;
-        let client_key = decode_form_value(client_key)?;
+        let blob = decode_form_base64_value(blob)?;
+        let client_key = decode_form_base64_value(client_key)?;
 
         let encrypted_blob = base64::engine::general_purpose::STANDARD
             .decode(blob.as_slice())
@@ -240,6 +240,11 @@ impl SpotifyZeroconf {
         let client_key = base64::engine::general_purpose::STANDARD
             .decode(client_key.as_slice())
             .map_err(|_| "client-key-base64")?;
+        crate::log!(
+            "spotify-zeroconf: addUser decoded encrypted_blob_len={} client_key_len={}\n",
+            encrypted_blob.len(),
+            client_key.len()
+        );
         let shared_key = self.shared_secret(client_key.as_slice());
         let base_key = Sha1::digest(shared_key);
         let base_key = &base_key[..16];
@@ -426,14 +431,22 @@ fn form_value<'a>(form: &'a str, key: &str) -> Option<&'a str> {
     None
 }
 
+fn decode_form_base64_value(value: &str) -> Result<Vec<u8>, &'static str> {
+    decode_form_value_with_plus(value, true)
+}
+
 fn decode_form_value(value: &str) -> Result<Vec<u8>, &'static str> {
+    decode_form_value_with_plus(value, false)
+}
+
+fn decode_form_value_with_plus(value: &str, preserve_plus: bool) -> Result<Vec<u8>, &'static str> {
     let mut out = Vec::with_capacity(value.len());
     let bytes = value.as_bytes();
     let mut i = 0usize;
     while i < bytes.len() {
         match bytes[i] {
             b'+' => {
-                out.push(b' ');
+                out.push(if preserve_plus { b'+' } else { b' ' });
                 i += 1;
             }
             b'%' if i + 2 < bytes.len() => {
