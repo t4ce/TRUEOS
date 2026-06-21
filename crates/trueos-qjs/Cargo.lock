@@ -1218,13 +1218,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "trueos-gfx-core"
-version = "0.1.0"
-dependencies = [
- "libm",
-]
-
-[[package]]
 name = "trueos-locale"
 version = "0.1.0"
 
@@ -1248,7 +1241,6 @@ dependencies = [
  "lightningcss",
  "parry2d",
  "spin",
- "trueos-gfx-core",
  "trueos-locale",
  "trueos-math",
  "usvg",

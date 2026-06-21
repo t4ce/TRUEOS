@@ -490,8 +490,8 @@ function setHtml(nextHtml, meta) {
     const parsed = extractDocumentArtifactsFn(html, { styleIndex, styleIndexMs });
     currentArtifactsState = {
       url,
-      title: parsed.title,
-      faviconUrl: resolveNavigationUrl(url, parsed.faviconHref),
+      title: parsed.title || null,
+      faviconUrl: resolveNavigationUrl(url, parsed.faviconHref) || null,
       shellBytes: parsed.shellBytes,
       bodyBytes: parsed.bodyBytes,
       bodyHierarchy: parsed.bodyHierarchy,
@@ -520,8 +520,8 @@ function setHtml(nextHtml, meta) {
       parseMs: parsed.parseMs,
       domParseMs: parsed.domParseMs,
       styleIndexMs: parsed.styleIndexMs,
-      title: parsed.title,
-      faviconUrl: resolveNavigationUrl(url, parsed.faviconHref),
+      title: parsed.title || null,
+      faviconUrl: resolveNavigationUrl(url, parsed.faviconHref) || null,
       shellBytes: parsed.shellBytes,
       bodyBytes: parsed.bodyBytes,
       styleCount: parsed.styleCount,
@@ -532,10 +532,10 @@ function setHtml(nextHtml, meta) {
       scriptCount: parsed.scriptCount,
       scriptBytes: parsed.scriptBytes,
       imageSummary,
-      renderHash: renderTreeArtifact ? renderTreeArtifact.renderHash : '',
-      layoutHash: renderTreeArtifact ? renderTreeArtifact.layoutHash : '',
-      renderTreeJson: renderTreeArtifact ? renderTreeArtifact.renderTreeJson : '',
-      layoutTraceJson: renderTreeArtifact ? renderTreeArtifact.layoutTraceJson : '',
+      renderHash: renderTreeArtifact ? renderTreeArtifact.renderHash : null,
+      layoutHash: renderTreeArtifact ? renderTreeArtifact.layoutHash : null,
+      renderTreeJson: renderTreeArtifact ? renderTreeArtifact.renderTreeJson : null,
+      layoutTraceJson: renderTreeArtifact ? renderTreeArtifact.layoutTraceJson : null,
     };
   } catch (error) {
     const message =

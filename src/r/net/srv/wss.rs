@@ -2,7 +2,7 @@
 
 extern crate alloc;
 
-use alloc::{boxed::Box, format, string::String, vec::Vec};
+use alloc::{boxed::Box, format, string::String, vec, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_time::{Duration, Timer};
@@ -20,7 +20,7 @@ use crate::r::net::{NetProfile, Queue};
 use crate::time::unix_time_seconds;
 
 static WSS_SEQ: AtomicU32 = AtomicU32::new(1);
-const RX_BUF_SIZE: usize = 4096;
+const RX_BUF_SIZE: usize = 16 * 1024;
 
 pub struct WssConnection {
     cmds: &'static Queue<TlsCommand>,
@@ -30,6 +30,7 @@ pub struct WssConnection {
     connected: bool,
     closed: bool,
     rx_buf: Vec<u8>,
+    message_buf: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -115,8 +116,8 @@ impl WssConnection {
             additional_headers,
         };
 
-        let mut frame_buf = [0u8; RX_BUF_SIZE];
-        let (len, ws_key) = match client.client_connect(&options, &mut frame_buf) {
+        let mut frame_buf = vec![0u8; RX_BUF_SIZE];
+        let (len, ws_key) = match client.client_connect(&options, frame_buf.as_mut_slice()) {
             Ok(res) => res,
             Err(_) => return Err(WssError::Protocol),
         };
@@ -210,6 +211,7 @@ impl WssConnection {
                                         connected: true,
                                         closed: false,
                                         rx_buf: extra,
+                                        message_buf: Vec::new(),
                                     });
                                 }
                                 Err(embedded_websocket::Error::HttpHeaderIncomplete) => {}
@@ -221,14 +223,14 @@ impl WssConnection {
                                             let line = &s[..line_end];
                                             crate::log!(
                                                 "wss: handshake failed url={} status-line='{}' err={:?}\n",
-                                                url,
+                                                redact_wss_url(url).as_str(),
                                                 line,
                                                 e
                                             );
                                         } else {
                                             crate::log!(
                                                 "wss: handshake failed url={} bytes={} err={:?}\n",
-                                                url,
+                                                redact_wss_url(url).as_str(),
                                                 handshake_response.len(),
                                                 e
                                             );
@@ -236,7 +238,7 @@ impl WssConnection {
                                     } else {
                                         crate::log!(
                                             "wss: handshake failed url={} bytes={} err={:?}\n",
-                                            url,
+                                            redact_wss_url(url).as_str(),
                                             handshake_response.len(),
                                             e
                                         );
@@ -264,7 +266,7 @@ impl WssConnection {
         if self.closed || !self.connected {
             return Err(WssError::Closed);
         }
-        let mut buf = [0u8; RX_BUF_SIZE];
+        let mut buf = vec![0u8; RX_BUF_SIZE];
 
         let len = self
             .client
@@ -272,7 +274,7 @@ impl WssConnection {
                 WebSocketSendMessageType::Text,
                 true, // fin
                 text.as_bytes(),
-                &mut buf,
+                buf.as_mut_slice(),
             )
             .map_err(|_| WssError::Protocol)?;
 
@@ -309,27 +311,43 @@ impl WssConnection {
             return None;
         }
 
-        let mut out_buf = [0u8; RX_BUF_SIZE];
-        match self.client.read(&self.rx_buf, &mut out_buf) {
+        let mut out_buf = vec![0u8; RX_BUF_SIZE];
+        match self.client.read(&self.rx_buf, out_buf.as_mut_slice()) {
             Ok(read_result) => {
                 let consumed = read_result.len_from;
                 self.rx_buf.drain(0..consumed);
 
                 match read_result.message_type {
                     WebSocketReceiveMessageType::Text => {
-                        let s = core::str::from_utf8(&out_buf[..read_result.len_to]).ok()?;
-                        Some(String::from(s))
+                        if self.message_buf.len().saturating_add(read_result.len_to) > 256 * 1024 {
+                            crate::log!(
+                                "wss: text message too large partial={} next={}\n",
+                                self.message_buf.len(),
+                                read_result.len_to
+                            );
+                            self.message_buf.clear();
+                            return None;
+                        }
+                        self.message_buf
+                            .extend_from_slice(&out_buf[..read_result.len_to]);
+                        if !read_result.end_of_message {
+                            return None;
+                        }
+                        let s = core::str::from_utf8(self.message_buf.as_slice()).ok()?;
+                        let message = String::from(s);
+                        self.message_buf.clear();
+                        Some(message)
                     }
                     WebSocketReceiveMessageType::Binary => None,
                     WebSocketReceiveMessageType::Ping => {
                         // RFC6455: reply to Ping with Pong including identical payload.
-                        let buf = [0u8; RX_BUF_SIZE];
-                        let mut payload = Vec::from(&out_buf[..read_result.len_to]);
+                        let mut buf = vec![0u8; RX_BUF_SIZE];
+                        let payload = Vec::from(&out_buf[..read_result.len_to]);
                         if let Ok(len) = self.client.write(
                             WebSocketSendMessageType::Pong,
                             true,
-                            &buf,
-                            &mut payload,
+                            payload.as_slice(),
+                            buf.as_mut_slice(),
                         ) && let Some(h) = self.handle
                         {
                             let _ = self.cmds.push(TlsCommand::Send {
@@ -341,13 +359,13 @@ impl WssConnection {
                     }
                     WebSocketReceiveMessageType::Pong => None,
                     WebSocketReceiveMessageType::CloseMustReply => {
-                        let buf = [0u8; RX_BUF_SIZE];
-                        let mut payload = Vec::from(&out_buf[..read_result.len_to]);
+                        let mut buf = vec![0u8; RX_BUF_SIZE];
+                        let payload = Vec::from(&out_buf[..read_result.len_to]);
                         if let Ok(len) = self.client.write(
                             WebSocketSendMessageType::CloseReply,
                             true,
-                            &buf,
-                            &mut payload,
+                            payload.as_slice(),
+                            buf.as_mut_slice(),
                         ) && let Some(h) = self.handle
                         {
                             let _ = self.cmds.push(TlsCommand::Send {
@@ -384,4 +402,17 @@ fn parse_wss_url(url: &str) -> Option<(String, u16, String)> {
         (String::from(authority), 443)
     };
     Some((host, port, path))
+}
+
+fn redact_wss_url(url: &str) -> String {
+    if let Some(start) = url.find("access_token=") {
+        let token_start = start + "access_token=".len();
+        if let Some(tail) = url[token_start..].find('&') {
+            format!("{}access_token=<redacted>{}", &url[..start], &url[token_start + tail..])
+        } else {
+            format!("{}access_token=<redacted>", &url[..start])
+        }
+    } else {
+        String::from(url)
+    }
 }

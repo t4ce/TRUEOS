@@ -1,0 +1,17 @@
+[package]
+name = "pure_vorbis"
+version = "0.0.1"
+description = "Vorbis decoder implementation in pure Rust"
+authors = ["pingw33n <d@emphased.net>"]
+license = "BSD-3-Clause"
+documentation = "https://docs.rs/pure_vorbis/0.0.1/pure_vorbis"
+repository = "https://github.com/pingw33n/pure_vorbis"
+readme = "README.md"
+keywords = ["audio", "decoder", "lossy"]
+include = ["src/**/*", "Cargo.toml"]
+
+[lib]
+name = "vorbis"
+
+[dependencies]
+libm = { version = "0.2", default-features = false }

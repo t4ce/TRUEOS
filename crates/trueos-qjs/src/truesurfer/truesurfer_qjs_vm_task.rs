@@ -84,6 +84,9 @@ const TRUESURFER_HTML_QUEUE_DEPTH: usize = 2;
 const TRUESURFER_HTML_QUEUE_WAIT_MS: u64 = 2;
 const TRUESURFER_BUSY_PUMP_BUDGET: usize = 512;
 const TRUESURFER_BUSY_SLEEP_MS: u64 = 1;
+const TRUESURFER_RESULT_TEXT_MAX_BYTES: usize = 4 * 1024;
+const TRUESURFER_RESULT_HASH_MAX_BYTES: usize = 128;
+const TRUESURFER_RESULT_JSON_MAX_BYTES: usize = 1024 * 1024;
 const HOSTED_BROWSER_DIRTY_CONTENT: u32 = 1 << 0;
 const HOSTED_BROWSER_DIRTY_INTERACTIVE: u32 = 1 << 1;
 
@@ -539,7 +542,12 @@ unsafe fn read_global_string(ctx: *mut qjs::JSContext, key: &[u8]) -> String {
         qjs::js_free_value(ctx, global);
         return String::new();
     }
-    let out = js_value_to_string(ctx, value);
+    let out = js_value_to_string(
+        ctx,
+        value,
+        "global",
+        TRUESURFER_RESULT_TEXT_MAX_BYTES,
+    );
     qjs::js_free_value(ctx, value);
     qjs::js_free_value(ctx, global);
     strip_trueos_host_markers(out.as_str())
@@ -611,21 +619,35 @@ unsafe fn read_result_string(
     ctx: *mut qjs::JSContext,
     obj: qjs::JSValueConst,
     key: &[u8],
+    label: &str,
+    max_len: usize,
 ) -> String {
     let value = qjs::JS_GetPropertyStr(ctx, obj, key.as_ptr() as *const c_char);
     if value.is_exception() || value.tag == qjs::JS_TAG_UNDEFINED || value.tag == qjs::JS_TAG_NULL {
         qjs::js_free_value(ctx, value);
         return String::new();
     }
-    let out = js_value_to_string(ctx, value);
+    let out = js_value_to_string(ctx, value, label, max_len);
     qjs::js_free_value(ctx, value);
     strip_trueos_host_markers(out.as_str())
 }
 
-unsafe fn js_value_to_string(ctx: *mut qjs::JSContext, value: qjs::JSValueConst) -> String {
+unsafe fn js_value_to_string(
+    ctx: *mut qjs::JSContext,
+    value: qjs::JSValueConst,
+    label: &str,
+    max_len: usize,
+) -> String {
     let mut len = 0usize;
     let cstr = qjs::JS_ToCStringLen2(ctx, &mut len as *mut usize, value, 0);
     if cstr.is_null() {
+        return String::new();
+    }
+    if len > max_len {
+        log_error(format!(
+            "qjs-truesurfer: rejected oversized JS string field={} len={} max={}\n",
+            label, len, max_len
+        ));
         return String::new();
     }
     let bytes = core::slice::from_raw_parts(cstr as *const u8, len);
@@ -820,22 +842,72 @@ unsafe fn dispatch_html(
         bytes: read_result_u32(ctx, result, TRUESURFER_RESULT_BYTES_PROP),
         lines: read_result_u32(ctx, result, TRUESURFER_RESULT_LINES_PROP),
         parse_ms: read_result_u32(ctx, result, TRUESURFER_RESULT_PARSE_MS_PROP),
-        title: read_result_string(ctx, result, TRUESURFER_RESULT_TITLE_PROP),
-        favicon_url: read_result_string(ctx, result, TRUESURFER_RESULT_FAVICON_URL_PROP),
+        title: read_result_string(
+            ctx,
+            result,
+            TRUESURFER_RESULT_TITLE_PROP,
+            "title",
+            TRUESURFER_RESULT_TEXT_MAX_BYTES,
+        ),
+        favicon_url: read_result_string(
+            ctx,
+            result,
+            TRUESURFER_RESULT_FAVICON_URL_PROP,
+            "faviconUrl",
+            TRUESURFER_RESULT_TEXT_MAX_BYTES,
+        ),
         shell_bytes: read_result_u32(ctx, result, TRUESURFER_RESULT_SHELL_BYTES_PROP),
         body_bytes: read_result_u32(ctx, result, TRUESURFER_RESULT_BODY_BYTES_PROP),
         style_count: read_result_u32(ctx, result, TRUESURFER_RESULT_STYLE_COUNT_PROP),
         style_bytes: read_result_u32(ctx, result, TRUESURFER_RESULT_STYLE_BYTES_PROP),
         script_count: read_result_u32(ctx, result, TRUESURFER_RESULT_SCRIPT_COUNT_PROP),
         script_bytes: read_result_u32(ctx, result, TRUESURFER_RESULT_SCRIPT_BYTES_PROP),
-        error: read_result_string(ctx, result, TRUESURFER_RESULT_ERROR_PROP),
+        error: read_result_string(
+            ctx,
+            result,
+            TRUESURFER_RESULT_ERROR_PROP,
+            "error",
+            TRUESURFER_RESULT_TEXT_MAX_BYTES,
+        ),
     };
-    let ui3_render_hash = read_result_string(ctx, result, TRUESURFER_RESULT_RENDER_HASH_PROP);
-    let ui3_layout_hash = read_result_string(ctx, result, TRUESURFER_RESULT_LAYOUT_HASH_PROP);
+    log_line(format!(
+        "qjs-truesurfer[{}]: result metadata read done ok={} title_bytes={} favicon_bytes={} error_bytes={}\n",
+        browser_instance_id,
+        if parse_result.ok { 1 } else { 0 },
+        parse_result.title.len(),
+        parse_result.favicon_url.len(),
+        parse_result.error.len()
+    ));
+    let ui3_render_hash = read_result_string(
+        ctx,
+        result,
+        TRUESURFER_RESULT_RENDER_HASH_PROP,
+        "renderHash",
+        TRUESURFER_RESULT_HASH_MAX_BYTES,
+    );
+    let ui3_layout_hash = read_result_string(
+        ctx,
+        result,
+        TRUESURFER_RESULT_LAYOUT_HASH_PROP,
+        "layoutHash",
+        TRUESURFER_RESULT_HASH_MAX_BYTES,
+    );
     let ui3_render_tree_json =
-        read_result_string(ctx, result, TRUESURFER_RESULT_RENDER_TREE_JSON_PROP);
+        read_result_string(
+            ctx,
+            result,
+            TRUESURFER_RESULT_RENDER_TREE_JSON_PROP,
+            "renderTreeJson",
+            TRUESURFER_RESULT_JSON_MAX_BYTES,
+        );
     let ui3_layout_trace_json =
-        read_result_string(ctx, result, TRUESURFER_RESULT_LAYOUT_TRACE_JSON_PROP);
+        read_result_string(
+            ctx,
+            result,
+            TRUESURFER_RESULT_LAYOUT_TRACE_JSON_PROP,
+            "layoutTraceJson",
+            TRUESURFER_RESULT_JSON_MAX_BYTES,
+        );
     log_line(format!(
         "qjs-truesurfer[{}]: result read done ok={} bytes={} body_bytes={} styles={} scripts={}\n",
         browser_instance_id,
