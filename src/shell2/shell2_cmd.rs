@@ -2,8 +2,9 @@ use embassy_executor::Spawner;
 
 use super::ShellBackend2;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandSessionKind {
+    AudControl,
     FormatSure(u32),
     GpuCanvasRunning(u64),
     RemoveSure(u64),
@@ -12,6 +13,7 @@ pub(crate) enum CommandSessionKind {
 impl CommandSessionKind {
     pub(crate) const fn shows_session_activity(self) -> bool {
         match self {
+            Self::AudControl => true,
             Self::FormatSure(_) => true,
             Self::GpuCanvasRunning(_) => false,
             Self::RemoveSure(_) => true,
@@ -20,6 +22,7 @@ impl CommandSessionKind {
 
     pub(crate) const fn accepts_broadcast_input(self) -> bool {
         match self {
+            Self::AudControl => false,
             Self::FormatSure(_) => false,
             Self::GpuCanvasRunning(_) => true,
             Self::RemoveSure(_) => false,

@@ -1,6 +1,11 @@
 use alloc::vec::Vec;
 use core::fmt;
 
+use symphonia_codec_aac::AacDecoder;
+use symphonia_core::audio::{AudioBuffer, AudioBufferRef, Layout, Signal};
+use symphonia_core::codecs::{CODEC_TYPE_AAC, CodecParameters, Decoder, DecoderOptions};
+use symphonia_core::formats::Packet;
+
 pub const PCM_SAMPLE_RATE_HZ: u32 = 48_000;
 pub const PCM_CHANNELS: usize = 2;
 pub const PCM_SAMPLE_BITS: usize = 16;
@@ -113,6 +118,12 @@ pub enum M4aDecodeError {
         asc_len: usize,
         object_type_indication: Option<u8>,
     },
+    AacDecoderInitFailed,
+    AacDecodeFailed,
+    UnsupportedDecodedAudio,
+    UnsupportedDecodedRate,
+    UnsupportedDecodedChannels,
+    InvalidPacketRange,
     InvalidPcmSampleCount {
         samples: usize,
     },
@@ -129,8 +140,14 @@ impl M4aDecodeError {
             Self::InvalidFtypPayload { .. } => -5,
             Self::Demux(_) => -6,
             Self::DecoderMissing { .. } => -7,
-            Self::InvalidPcmSampleCount { .. } => -8,
-            Self::DecodeFailed => -9,
+            Self::AacDecoderInitFailed => -8,
+            Self::AacDecodeFailed => -9,
+            Self::UnsupportedDecodedAudio => -10,
+            Self::UnsupportedDecodedRate => -11,
+            Self::UnsupportedDecodedChannels => -12,
+            Self::InvalidPacketRange => -13,
+            Self::InvalidPcmSampleCount { .. } => -14,
+            Self::DecodeFailed => -15,
         }
     }
 
@@ -145,16 +162,216 @@ pub fn decode_m4a_to_pcm_48k_stereo_s16(
     let container = detect_m4a_container(bytes)?;
     let demuxed = crate::aud::m4a_demux::parse_m4a(bytes).map_err(M4aDecodeError::Demux)?;
 
-    // Decoder internals land behind this boundary: demux AAC/ALAC samples,
-    // decode, resample, and normalize to interleaved s16 stereo at 48 kHz.
-    Err(M4aDecodeError::DecoderMissing {
-        container,
-        source_sample_rate: demuxed.sample_rate,
-        source_channels: demuxed.channel_count,
-        packet_count: demuxed.packets.len(),
-        asc_len: demuxed.codec.audio_specific_config.len(),
-        object_type_indication: demuxed.codec.object_type_indication,
-    })
+    if demuxed.codec.audio_specific_config.is_empty() || demuxed.packets.is_empty() {
+        return Err(M4aDecodeError::DecoderMissing {
+            container,
+            source_sample_rate: demuxed.sample_rate,
+            source_channels: demuxed.channel_count,
+            packet_count: demuxed.packets.len(),
+            asc_len: demuxed.codec.audio_specific_config.len(),
+            object_type_indication: demuxed.codec.object_type_indication,
+        });
+    }
+
+    let mut params = CodecParameters::new();
+    params
+        .for_codec(CODEC_TYPE_AAC)
+        .with_extra_data(
+            demuxed
+                .codec
+                .audio_specific_config
+                .clone()
+                .into_boxed_slice(),
+        )
+        .with_max_frames_per_packet(1024);
+
+    if let Some(rate) = demuxed.sample_rate {
+        params.with_sample_rate(rate);
+    }
+    match demuxed.channel_count {
+        Some(1) => {
+            params.with_channel_layout(Layout::Mono);
+        }
+        Some(2) => {
+            params.with_channel_layout(Layout::Stereo);
+        }
+        Some(_) => return Err(M4aDecodeError::UnsupportedDecodedChannels),
+        None => {}
+    }
+
+    let mut decoder = AacDecoder::try_new(&params, &DecoderOptions::default())
+        .map_err(|_| M4aDecodeError::AacDecoderInitFailed)?;
+    let mut source_rate = demuxed.sample_rate.unwrap_or(0);
+    let mut source_channels = usize::from(demuxed.channel_count.unwrap_or(0));
+    let mut source_stereo = Vec::new();
+
+    for (idx, packet_range) in demuxed.packets.iter().copied().enumerate() {
+        let packet_data = demuxed
+            .packet_data(bytes, packet_range)
+            .ok_or(M4aDecodeError::InvalidPacketRange)?;
+        let packet = Packet::new_from_slice(
+            0,
+            packet_range.timestamp.unwrap_or(idx as u64),
+            u64::from(packet_range.duration.unwrap_or(1024)),
+            packet_data,
+        );
+        let decoded = decoder
+            .decode(&packet)
+            .map_err(|_| M4aDecodeError::AacDecodeFailed)?;
+        append_decoded_as_stereo_s16(
+            &decoded,
+            &mut source_stereo,
+            &mut source_rate,
+            &mut source_channels,
+        )?;
+    }
+
+    if source_stereo.is_empty() {
+        return Err(M4aDecodeError::DecodeFailed);
+    }
+
+    let samples = resample_stereo_s16_to_48k(source_stereo.as_slice(), source_rate)?;
+    DecodedPcm48kStereo::new(samples)
+}
+
+fn append_decoded_as_stereo_s16(
+    decoded: &AudioBufferRef<'_>,
+    out: &mut Vec<i16>,
+    source_rate: &mut u32,
+    source_channels: &mut usize,
+) -> Result<(), M4aDecodeError> {
+    match decoded {
+        AudioBufferRef::F32(buf) => {
+            let buf: &AudioBuffer<f32> = buf.as_ref();
+            let rate = buf.spec().rate;
+            let channels = buf.spec().channels.count();
+            if channels == 0 || channels > 2 {
+                return Err(M4aDecodeError::UnsupportedDecodedChannels);
+            }
+            set_or_check_stream_shape(rate, channels, source_rate, source_channels)?;
+
+            let frames = buf.frames();
+            let left = buf.chan(0);
+            let right = if channels == 2 {
+                Some(buf.chan(1))
+            } else {
+                None
+            };
+            for idx in 0..frames {
+                let l = f32_to_i16(left[idx]);
+                let r = right.map(|samples| f32_to_i16(samples[idx])).unwrap_or(l);
+                out.push(l);
+                out.push(r);
+            }
+            Ok(())
+        }
+        AudioBufferRef::S16(buf) => {
+            let buf: &AudioBuffer<i16> = buf.as_ref();
+            let rate = buf.spec().rate;
+            let channels = buf.spec().channels.count();
+            if channels == 0 || channels > 2 {
+                return Err(M4aDecodeError::UnsupportedDecodedChannels);
+            }
+            set_or_check_stream_shape(rate, channels, source_rate, source_channels)?;
+
+            let frames = buf.frames();
+            let left = buf.chan(0);
+            let right = if channels == 2 {
+                Some(buf.chan(1))
+            } else {
+                None
+            };
+            for idx in 0..frames {
+                let l = left[idx];
+                let r = right.map(|samples| samples[idx]).unwrap_or(l);
+                out.push(l);
+                out.push(r);
+            }
+            Ok(())
+        }
+        _ => Err(M4aDecodeError::UnsupportedDecodedAudio),
+    }
+}
+
+fn set_or_check_stream_shape(
+    rate: u32,
+    channels: usize,
+    source_rate: &mut u32,
+    source_channels: &mut usize,
+) -> Result<(), M4aDecodeError> {
+    if rate == 0 {
+        return Err(M4aDecodeError::UnsupportedDecodedRate);
+    }
+    if channels == 0 || channels > 2 {
+        return Err(M4aDecodeError::UnsupportedDecodedChannels);
+    }
+
+    if *source_rate == 0 {
+        *source_rate = rate;
+    } else if *source_rate != rate {
+        return Err(M4aDecodeError::UnsupportedDecodedRate);
+    }
+
+    if *source_channels == 0 {
+        *source_channels = channels;
+    } else if *source_channels != channels {
+        return Err(M4aDecodeError::UnsupportedDecodedChannels);
+    }
+
+    Ok(())
+}
+
+fn f32_to_i16(sample: f32) -> i16 {
+    (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
+}
+
+fn resample_stereo_s16_to_48k(
+    samples: &[i16],
+    source_rate: u32,
+) -> Result<Vec<i16>, M4aDecodeError> {
+    if source_rate == 0 {
+        return Err(M4aDecodeError::UnsupportedDecodedRate);
+    }
+    if samples.len() % PCM_CHANNELS != 0 {
+        return Err(M4aDecodeError::InvalidPcmSampleCount {
+            samples: samples.len(),
+        });
+    }
+    if source_rate == PCM_SAMPLE_RATE_HZ {
+        return Ok(samples.to_vec());
+    }
+
+    let in_frames = samples.len() / PCM_CHANNELS;
+    if in_frames == 0 {
+        return Err(M4aDecodeError::DecodeFailed);
+    }
+
+    let out_frames = (((in_frames as u128) * u128::from(PCM_SAMPLE_RATE_HZ))
+        / u128::from(source_rate))
+    .max(1)
+    .min(usize::MAX as u128) as usize;
+    let mut out = Vec::with_capacity(out_frames.saturating_mul(PCM_CHANNELS));
+
+    for out_idx in 0..out_frames {
+        let pos_num = (out_idx as u128) * u128::from(source_rate);
+        let src_idx = (pos_num / u128::from(PCM_SAMPLE_RATE_HZ)) as usize;
+        let frac = (pos_num % u128::from(PCM_SAMPLE_RATE_HZ)) as u32;
+        let a = src_idx.min(in_frames - 1);
+        let b = (a + 1).min(in_frames - 1);
+        out.push(lerp_i16(samples[a * 2], samples[b * 2], frac, PCM_SAMPLE_RATE_HZ));
+        out.push(lerp_i16(samples[a * 2 + 1], samples[b * 2 + 1], frac, PCM_SAMPLE_RATE_HZ));
+    }
+
+    Ok(out)
+}
+
+fn lerp_i16(a: i16, b: i16, frac: u32, denom: u32) -> i16 {
+    let a = i64::from(a);
+    let b = i64::from(b);
+    let frac = i64::from(frac);
+    let denom = i64::from(denom);
+    let mixed = a * (denom - frac) + b * frac;
+    (mixed / denom).clamp(i64::from(i16::MIN), i64::from(i16::MAX)) as i16
 }
 
 pub fn detect_m4a_container(bytes: &[u8]) -> Result<M4aContainerInfo, M4aDecodeError> {

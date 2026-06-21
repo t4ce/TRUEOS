@@ -1053,6 +1053,9 @@ fn handle_command_session_input(
 ) -> CommandSessionInputResult {
     let target = matrix_target_for_slot(output_mask, &session.slot_id);
     match session.kind {
+        shell2_cmd::CommandSessionKind::AudControl => {
+            crate::shell2::cmds::aud::handle_session_input(&target, submitted)
+        }
         shell2_cmd::CommandSessionKind::FormatSure(disc_id) => {
             crate::shell2::cmds::format::handle_session_input(
                 spawner, io, &target, submitted, disc_id,
@@ -1708,6 +1711,9 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                             matrix::MatrixSlotActivity::Session,
                                         );
                                     }
+                                    command_sessions.retain(|session| {
+                                        !(session.slot_id == slot_id && session.kind == kind)
+                                    });
                                     command_sessions.push(CommandSession { slot_id, kind });
                                 }
                                 HandleSubmitResult::None => {}

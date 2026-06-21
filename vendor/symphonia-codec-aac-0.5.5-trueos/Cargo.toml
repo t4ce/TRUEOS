@@ -1,0 +1,17 @@
+[package]
+name = "symphonia-codec-aac"
+version = "0.5.5"
+edition = "2018"
+rust-version = "1.53"
+license = "MPL-2.0"
+description = "TRUEOS-minimized Symphonia AAC decoder"
+repository = "https://github.com/pdeljanov/Symphonia"
+
+[lib]
+name = "symphonia_codec_aac"
+path = "src/lib.rs"
+
+[dependencies]
+lazy_static = { path = "../lazy_static-1.5.0", default-features = false, features = ["spin_no_std"] }
+libm = { version = "0.2", default-features = false }
+symphonia-core = { version = "0.5.5", path = "../symphonia-core-0.5.5-trueos" }

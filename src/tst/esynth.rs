@@ -61,6 +61,7 @@ struct LivePcmRing {
 struct PcmOverlaySource {
     current: Option<crate::aud::pcm_lane::PcmLaneRequest>,
     cursor: usize,
+    stop_generation: u32,
 }
 
 impl TinyaudioDemoMixer {
@@ -235,7 +236,25 @@ impl PcmOverlaySource {
         Self {
             current: None,
             cursor: 0,
+            stop_generation: 0,
         }
+    }
+
+    fn apply_control(&mut self) -> bool {
+        let generation = crate::aud::pcm_lane::stop_generation();
+        if generation != self.stop_generation {
+            self.stop_generation = generation;
+            if let Some(current) = self.current.take() {
+                crate::log!(
+                    "tinyaudio-service: overlay stop label={} samples={}\n",
+                    current.label,
+                    current.samples.len()
+                );
+            }
+            self.cursor = 0;
+        }
+
+        crate::aud::pcm_lane::paused()
     }
 
     fn take_pending(&mut self) {
@@ -253,6 +272,10 @@ impl PcmOverlaySource {
     }
 
     fn mix_into(&mut self, data: &mut [f32]) {
+        if self.apply_control() {
+            return;
+        }
+
         self.take_pending();
 
         let Some(current) = self.current.as_ref() else {
@@ -261,12 +284,13 @@ impl PcmOverlaySource {
 
         let remaining = current.samples.len().saturating_sub(self.cursor);
         let take = data.len().min(remaining);
+        let volume = crate::aud::pcm_lane::volume_percent() as f32 / 100.0;
         for (dst, src) in data.iter_mut().zip(
             current.samples[self.cursor..self.cursor + take]
                 .iter()
                 .copied(),
         ) {
-            *dst += src as f32 / 32_767.0;
+            *dst += src as f32 / 32_767.0 * volume;
         }
 
         self.cursor += take;

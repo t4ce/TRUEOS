@@ -1,0 +1,24 @@
+[package]
+name = "symphonia-core"
+version = "0.5.5"
+edition = "2018"
+rust-version = "1.53"
+license = "MPL-2.0"
+description = "TRUEOS-minimized Symphonia core surface for AAC decode"
+repository = "https://github.com/pdeljanov/Symphonia"
+
+[lib]
+name = "symphonia_core"
+path = "src/lib.rs"
+
+[features]
+default = []
+opt-simd = []
+opt-simd-avx = []
+opt-simd-neon = []
+opt-simd-sse = []
+
+[dependencies]
+bytemuck = { version = "1.7", default-features = false }
+lazy_static = { path = "../lazy_static-1.5.0", default-features = false, features = ["spin_no_std"] }
+libm = { version = "0.2", default-features = false }

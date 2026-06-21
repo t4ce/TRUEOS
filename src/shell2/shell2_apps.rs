@@ -620,9 +620,9 @@ fn stop_selected_or_all(io: &'static dyn ShellBackend2, id: Option<u8>, label: &
     }
 }
 
-fn save_vm(io: &'static dyn ShellBackend2, vm_id: u8) {
+fn preserve_vm(io: &'static dyn ShellBackend2, vm_id: u8, label: &str) {
     match crate::hv::request_preserve(vm_id) {
-        Ok(true) => line(io, alloc::format!("apps: vm{} save requested", vm_id).as_str()),
+        Ok(true) => line(io, alloc::format!("apps: vm{} {} requested", vm_id, label).as_str()),
         Ok(false) => match crate::hv::save_snapshot(vm_id) {
             Ok(bytes) => {
                 line(io, alloc::format!("apps: vm{} saved {} bytes", vm_id, bytes).as_str())
@@ -633,9 +633,9 @@ fn save_vm(io: &'static dyn ShellBackend2, vm_id: u8) {
     }
 }
 
-fn save_selected_or_all(io: &'static dyn ShellBackend2, id: Option<u8>) {
+fn preserve_selected_or_all(io: &'static dyn ShellBackend2, id: Option<u8>, label: &str) {
     if let Some(vm_id) = id {
-        save_vm(io, vm_id);
+        preserve_vm(io, vm_id, label);
         return;
     }
     let active = active_vm_ids();
@@ -644,7 +644,7 @@ fn save_selected_or_all(io: &'static dyn ShellBackend2, id: Option<u8>) {
         return;
     }
     for vm_id in active {
-        save_vm(io, vm_id);
+        preserve_vm(io, vm_id, label);
     }
 }
 
@@ -723,7 +723,7 @@ pub(crate) fn submit(
         AppsPromptMode::Online => online_app(spawner, io, rest),
         AppsPromptMode::Peer => peer_app(spawner, io, rest),
         AppsPromptMode::Pause => {
-            stop_selected_or_all(io, parse_id(rest.first().map(String::as_str)), "pause")
+            preserve_selected_or_all(io, parse_id(rest.first().map(String::as_str)), "pause")
         }
         AppsPromptMode::Unpause | AppsPromptMode::Load => {
             let mut args = rest.iter();
@@ -737,7 +737,7 @@ pub(crate) fn submit(
             }
         }
         AppsPromptMode::Save => {
-            save_selected_or_all(io, parse_id(rest.first().map(String::as_str)))
+            preserve_selected_or_all(io, parse_id(rest.first().map(String::as_str)), "save")
         }
         AppsPromptMode::Stop => {
             stop_selected_or_all(io, parse_id(rest.first().map(String::as_str)), "stop")

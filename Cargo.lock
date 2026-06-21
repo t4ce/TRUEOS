@@ -58,6 +58,8 @@ dependencies = [
  "smoltcp",
  "socket2",
  "spin",
+ "symphonia-codec-aac",
+ "symphonia-core",
  "tiny-skia-path",
  "tinyaudio",
  "tokio",
@@ -2285,6 +2287,24 @@ version = "0.15.3"
 dependencies = [
  "kurbo",
  "siphasher",
+]
+
+[[package]]
+name = "symphonia-codec-aac"
+version = "0.5.5"
+dependencies = [
+ "lazy_static",
+ "libm",
+ "symphonia-core",
+]
+
+[[package]]
+name = "symphonia-core"
+version = "0.5.5"
+dependencies = [
+ "bytemuck",
+ "lazy_static",
+ "libm",
 ]
 
 [[package]]
