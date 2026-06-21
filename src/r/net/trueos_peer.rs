@@ -192,6 +192,17 @@ fn is_local_advertisement(advertisement: &PeerHostAdvertisement) -> bool {
         .unwrap_or(false)
 }
 
+fn is_local_snapshot(peer: &PeerSnapshot) -> bool {
+    if peer.node_id != 0 && peer.node_id == local_node_id() {
+        return true;
+    }
+
+    let dev_idx = crate::net::primary_device_index();
+    crate::net::adapter::ipv4_at(dev_idx)
+        .map(|addr| addr == peer.addr)
+        .unwrap_or(false)
+}
+
 pub(crate) fn publish_host_advertisement(advertisement: PeerHostAdvertisement) {
     if is_local_advertisement(&advertisement) {
         return;
@@ -232,6 +243,10 @@ pub(crate) fn publish_host_advertisement(advertisement: PeerHostAdvertisement) {
 }
 
 pub(crate) fn take_peer_advertisements() -> Vec<PeerAdvertisement> {
+    if !crate::hv::store::replication_online() {
+        return Vec::new();
+    }
+
     let now = monotonic_ms();
     let last = LAST_ADVERTISE_MS.load(Ordering::Acquire);
     if now.saturating_sub(last) < PEER_ADVERTISE_INTERVAL_MS {
@@ -289,7 +304,9 @@ pub(crate) fn take_peer_advertisements() -> Vec<PeerAdvertisement> {
 pub(crate) fn peer_snapshots() -> Vec<PeerSnapshot> {
     let now = monotonic_ms();
     let mut peers = PEERS.lock();
-    peers.retain(|peer| now.saturating_sub(peer.last_seen_ms) <= PEER_STALE_MS);
+    peers.retain(|peer| {
+        now.saturating_sub(peer.last_seen_ms) <= PEER_STALE_MS && !is_local_snapshot(peer)
+    });
     for (idx, peer) in peers.iter_mut().enumerate() {
         peer.id = idx;
     }

@@ -48,27 +48,6 @@ pub const OP_BP_FS_STAT: u32 = 0x60; // payload path -> rc + kind in response_da
 pub const OP_BP_THREAD_CURRENT_ID: u32 = 0x61; // response is current TRUEOS vthread id
 pub const OP_BP_SERVICE_LANE_SUBMIT: u32 = 0x62; // arg0/arg1 boxed service-lane job raw parts
 pub const OP_BP_TOKIO_BLOCKING_SPAWN: u32 = OP_BP_SERVICE_LANE_SUBMIT; // compatibility alias
-pub const OP_BP_UI2_WINDOW_CREATE: u32 = 0x63; // legacy/unsupported
-pub const OP_BP_UI2_WINDOW_OP: u32 = 0x64; // legacy/unsupported
-pub const OP_BP_GFX_TEXTURE_UPLOAD_BEGIN: u32 = 0x65; // payload texture upload header
-pub const OP_BP_GFX_TEXTURE_UPLOAD_CHUNK: u32 = 0x66; // arg0 offset, payload rgba chunk
-pub const OP_BP_GFX_TEXTURE_UPLOAD_FINISH: u32 = 0x67; // finalize pending texture upload
-pub const OP_BP_GFX_TEXTURE_DIMENSIONS: u32 = 0x70; // arg0 tex -> packed width/height
-pub const OP_BP_GFX_QUEUE_RENDER_RGB: u32 = 0x71; // legacy/unsupported
-pub const OP_BP_GFX_QUEUE_RENDER_TEX: u32 = 0x72; // legacy/unsupported
-pub const OP_BP_GFX_QUEUE_RENDER_MANDELBROT: u32 = 0x73; // legacy/unsupported
-pub const OP_BP_GFX_QUEUE_RENDER_BEGIN: u32 = 0x74; // legacy/unsupported
-pub const OP_BP_GFX_QUEUE_RENDER_CHUNK: u32 = 0x75; // legacy/unsupported
-pub const OP_BP_GFX_QUEUE_RENDER_FINISH: u32 = 0x76; // legacy/unsupported
-pub const OP_BP_GFX_TEXTURE_STATUS: u32 = 0x77; // arg0 tex -> async texture status
-pub const OP_BP_GFX_FRAME_BEGIN: u32 = 0x78; // legacy/unsupported
-pub const OP_BP_GFX_FRAME_SET_TARGET: u32 = 0x79; // legacy/unsupported
-pub const OP_BP_GFX_FRAME_STATE: u32 = 0x7A; // legacy/unsupported
-pub const OP_BP_GFX_FRAME_DRAW_BEGIN: u32 = 0x7B; // legacy/unsupported
-pub const OP_BP_GFX_FRAME_DRAW_CHUNK: u32 = 0x7C; // legacy/unsupported
-pub const OP_BP_GFX_FRAME_DRAW_FINISH: u32 = 0x7D; // legacy/unsupported
-pub const OP_BP_GFX_FRAME_END: u32 = 0x7E; // legacy/unsupported
-pub const OP_BP_UI2_WINDOW_CURSOR_EVENTS: u32 = 0x7F; // legacy/unsupported
 pub const OP_BP_INPUT_CURSOR_POS: u32 = 0x68; // arg0 cursor id -> packed x/y
 pub const OP_BP_INPUT_CURSOR_BUTTONS: u32 = 0x69; // arg0 cursor id -> buttons
 pub const OP_BP_INPUT_CURSOR_EVENTS: u32 = 0x6A; // arg0 read seq, arg1 cap -> payload events
@@ -367,70 +346,6 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 )
             };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI2_WINDOW_CREATE | OP_BP_UI2_WINDOW_OP | OP_BP_UI2_WINDOW_CURSOR_EVENTS => {
-            write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_GFX_TEXTURE_UPLOAD_BEGIN => {
-            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
-            let Some(p) = host_ptr(vm_id) else {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return DispatchOutcome::Resume;
-            };
-            let bytes = unsafe { &(&(*p).payload)[..n] };
-            let rc = crate::r::io::cabi::handle_vm_texture_upload_begin(vm_id, bytes);
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_GFX_TEXTURE_UPLOAD_CHUNK => {
-            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
-            let Some(p) = host_ptr(vm_id) else {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return DispatchOutcome::Resume;
-            };
-            let bytes = unsafe { &(&(*p).payload)[..n] };
-            let rc =
-                crate::r::io::cabi::handle_vm_texture_upload_chunk(vm_id, arg0 as usize, bytes);
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_GFX_TEXTURE_UPLOAD_FINISH => {
-            let rc = crate::r::io::cabi::handle_vm_texture_upload_finish(vm_id);
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_GFX_TEXTURE_DIMENSIONS => {
-            if let Some((width, height)) =
-                crate::r::io::cabi::handle_vm_texture_dimensions(vm_id, arg0 as u32)
-            {
-                let packed = width as u64 | ((height as u64) << 32);
-                write_response(vm_id, seq, STATUS_OK, packed, 0);
-            } else {
-                write_response(vm_id, seq, STATUS_OK, u64::MAX, 0);
-            }
-            DispatchOutcome::Resume
-        }
-        OP_BP_GFX_TEXTURE_STATUS => {
-            let rc = crate::r::io::cabi::handle_vm_texture_status(vm_id, arg0 as u32);
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_GFX_QUEUE_RENDER_RGB
-        | OP_BP_GFX_QUEUE_RENDER_TEX
-        | OP_BP_GFX_QUEUE_RENDER_MANDELBROT
-        | OP_BP_GFX_QUEUE_RENDER_BEGIN
-        | OP_BP_GFX_QUEUE_RENDER_CHUNK
-        | OP_BP_GFX_QUEUE_RENDER_FINISH
-        | OP_BP_GFX_FRAME_BEGIN
-        | OP_BP_GFX_FRAME_SET_TARGET
-        | OP_BP_GFX_FRAME_STATE
-        | OP_BP_GFX_FRAME_DRAW_BEGIN
-        | OP_BP_GFX_FRAME_DRAW_CHUNK
-        | OP_BP_GFX_FRAME_DRAW_FINISH
-        | OP_BP_GFX_FRAME_END => {
-            write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
             DispatchOutcome::Resume
         }
         OP_BP_INPUT_CURSOR_POS => {

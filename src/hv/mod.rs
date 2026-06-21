@@ -254,8 +254,6 @@ pub enum VmBootMode {
 
 #[derive(Copy, Clone)]
 enum BlueprintMemoryClass {
-    TinyUi,
-    Ui,
     TokioRuntime,
     NetworkClient,
     ServerRuntime,
@@ -266,8 +264,6 @@ enum BlueprintMemoryClass {
 impl BlueprintMemoryClass {
     const fn label(self) -> &'static str {
         match self {
-            Self::TinyUi => "tiny-ui",
-            Self::Ui => "ui",
             Self::TokioRuntime => "tokio-runtime",
             Self::NetworkClient => "network-client",
             Self::ServerRuntime => "server-runtime",
@@ -1024,23 +1020,10 @@ fn classify_blueprint_memory(
         || archive_has(archive, "shader")
         || archive_has(archive, "particle")
         || archive_has(archive, "virgl")
-        || import_name_has(imports, "gfx")
         || stats.alloc_bytes > 4 * MIB
         || raw_payload_len > 8 * MIB;
     if heavy_graphics_signal {
         return BlueprintMemoryClass::HeavyGraphics;
-    }
-
-    let tiny_ui_signal = raw_payload_len <= MIB
-        && stats.alloc_bytes <= 512 * 1024
-        && import_name_has(imports, "ui2")
-        && !imports.is_empty();
-    if tiny_ui_signal {
-        return BlueprintMemoryClass::TinyUi;
-    }
-
-    if import_name_has(imports, "ui2") || import_name_has(imports, "app_surface_window") {
-        return BlueprintMemoryClass::Ui;
     }
 
     BlueprintMemoryClass::Unknown
@@ -1058,22 +1041,6 @@ fn estimate_blueprint_memory_profile(
 
     let (heap_lower, heap_recommended, heap_upper, stack_lower, stack_recommended, stack_upper) =
         match class {
-            BlueprintMemoryClass::TinyUi => (
-                16,
-                round_pow2_mib(base_live_mib.saturating_mul(8).saturating_add(16)).max(32),
-                128,
-                8,
-                8,
-                32,
-            ),
-            BlueprintMemoryClass::Ui => (
-                32,
-                round_pow2_mib(base_live_mib.saturating_mul(10).saturating_add(32)).max(64),
-                192,
-                8,
-                16,
-                64,
-            ),
             BlueprintMemoryClass::TokioRuntime => (
                 64,
                 round_pow2_mib(base_live_mib.saturating_mul(12).saturating_add(64)).max(128),

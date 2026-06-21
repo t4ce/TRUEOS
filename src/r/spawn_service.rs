@@ -105,6 +105,7 @@ define_started_flags!(
     UI3_ASSET_SERVICE_STARTED,
     UI3_SERVICE_STARTED,
     I226_DIAGNOSTIC_DISPLAY_STARTED,
+    AUD_FILE_SERVICE_STARTED,
     TINYAUDIO_SERVICE_STARTED,
     TINYAUDIO_LIVE_HTTP_STARTED
 );
@@ -581,8 +582,12 @@ fn spawn_ui3_orbits(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |_ap1_spawner| crate::ui3::ui3_orbits::ui3_orbits_task())
 }
 
+fn spawn_aud_file_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_ap1(spawner, |_ap1_spawner| crate::aud::file_service::aud_file_service_task())
+}
+
 fn spawn_tinyaudio_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::tst::esynth::tinyaudio_service_task())
+    spawn_on_ap1(spawner, |_ap1_spawner| crate::tst::esynth::tinyaudio_service_task())
 }
 
 fn spawn_tinyaudio_live_http(spawner: Spawner) -> SpawnAttempt {
@@ -1057,7 +1062,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
 const SPOTIFY_SERVICE_READY: u32 = crate::r::readiness::NET_SOCKET_READY
     | crate::r::readiness::INTEL_HDA_READY
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY;
-const TASK_COUNT: usize = 56 + cfg!(feature = "trueos_rdp") as usize;
+const TASK_COUNT: usize = 57 + cfg!(feature = "trueos_rdp") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1093,7 +1098,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_trueosfs_index_service,
     ),
     TaskSpec::enabled("hv-vm-store", 0, &HV_VM_STORE_STARTED, spawn_hv_vm_store),
-    TaskSpec::enabled("hv-vm-store-net", 0, &HV_VM_STORE_NET_STARTED, spawn_hv_vm_store_net),
+    TaskSpec::enabled(
+        "hv-vm-store-net",
+        crate::r::readiness::NET_ANY_CONFIGURED,
+        &HV_VM_STORE_NET_STARTED,
+        spawn_hv_vm_store_net,
+    ),
     TaskSpec::enabled("net-poll-tasks", 0, &NET_POLL_STARTED, spawn_net_poll_tasks),
     TaskSpec::enabled("net-service", 0, &NET_SERVICE_STARTED, spawn_net_service),
     TaskSpec::enabled("net-cache-service", 0, &NET_CACHE_SERVICE_STARTED, spawn_net_cache_service),
@@ -1297,6 +1307,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         intel_full_ui3_gate,
         &UI3_ORBITS_STARTED,
         spawn_ui3_orbits,
+    ),
+    TaskSpec::enabled(
+        "aud-file-service",
+        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::INTEL_HDA_READY,
+        &AUD_FILE_SERVICE_STARTED,
+        spawn_aud_file_service,
     ),
     TaskSpec::enabled(
         "tinyaudio_service",
