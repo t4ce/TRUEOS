@@ -26,7 +26,7 @@ const STATUS_GRAY_RGB: (u8, u8, u8) = (160, 168, 176);
 const STATUS_RAINBOW_COLORS: [u8; 8] = [199, 208, 227, 121, 51, 39, 99, 201];
 
 const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
-const TOOL_JSON_7Z: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file to compress into a sibling .7z archive."}},"required":["path"],"additionalProperties":false}"#;
+const TOOL_JSON_7Z: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS path. Non-.7z files compress to a sibling .7z archive; .7z archives extract beside the archive."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_C4: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["file","inline"],"description":"Compile from a TRUEOSFS file or inline C4 source."},"path":{"type":"string","description":"TRUEOSFS source path when mode=file."},"source":{"type":"string","description":"Inline C4 source when mode=inline."}},"required":["mode"],"additionalProperties":false}"#;
 const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc","log"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format or optional disk id for action=log."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."},"max":{"type":"integer","minimum":1,"maximum":4096,"description":"Maximum raw TRUEOSFS log records to print for action=log."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_GPGPU: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["canvas2d","canvas3d","artificial-fragment","smoke"],"description":"GPGPU command to run."},"canvas2d":{"type":"string","enum":["sprite","sprites64","mandel64"],"description":"Optional canvas2d mode."},"canvas3d":{"type":"string","enum":["cube","ico","para"],"description":"Optional canvas3d mode."},"duration_ms":{"type":"integer","description":"Optional canvas2d sprite runtime in milliseconds."},"cadence_ms":{"type":"integer","description":"Optional canvas2d sprite minimum launch cadence in milliseconds."},"count":{"type":"integer","minimum":1,"maximum":256,"description":"Optional canvas2d sprite descriptors per batch."},"present_every":{"type":"integer","minimum":1,"maximum":1024,"description":"Optional canvas2d sprite present interval."},"iterations":{"type":"integer","description":"Optional canvas2d mandel64 iteration count."}},"required":["subcommand"],"additionalProperties":false}"#;
@@ -153,7 +153,9 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some(STATUS_GREEN_RGB),
         advertised: true,
         handler: dispatch_7z,
-        tool_description: Some("Queue a kernel codec job that compresses a TRUEOSFS file as .7z."),
+        tool_description: Some(
+            "Queue a kernel codec job that compresses a TRUEOSFS file or extracts a .7z archive.",
+        ),
         tool_parameters_json: Some(TOOL_JSON_7Z),
     },
     BuiltinShell2CmdEntry {

@@ -41,6 +41,7 @@ const PROMPT_ROW: usize = 3;
 const SCROLL_TOP_ROW: usize = 4;
 const STATUS_SELECTED_RGB: (u8, u8, u8) = (255, 55, 255);
 const FUNCTION_KEY_RGB: (u8, u8, u8) = (255, 255, 255);
+const TITLE_COUNT_RGB: (u8, u8, u8) = (255, 255, 255);
 const SYSTEM_TEXT_RGB: (u8, u8, u8) = (60, 183, 161);
 pub(crate) const OUTPUT_UART1_MASK: u8 = 1 << 0;
 pub(crate) const OUTPUT_NET_TCP_MASK: u8 = 1 << 1;
@@ -233,6 +234,10 @@ impl<'a> AlignedWriter<'a> {
         self.io.raw_write_str(BANNER_TITLE_TEXT);
         self.io.raw_write_char(' ');
         self.io.raw_write_str(time_text);
+        let count_text = alloc::format!(" CNT {}", crate::release_count::RELEASE_COUNT);
+        let styled_count =
+            alloc::format!("{}", term_style::paint(count_text.as_str()).color(TITLE_COUNT_RGB));
+        self.io.raw_write_str(styled_count.as_str());
         if active_matrix_vm_id(output_mask).is_some() {
             let vmx =
                 alloc::format!(" {}", term_style::paint("VMX").bold().color(STATUS_SELECTED_RGB));
@@ -292,27 +297,10 @@ impl<'a> AlignedWriter<'a> {
         text
     }
 
-    fn banner_right_text(&self, output_mask: u8, mode: ShellMode2) -> AllocString {
-        let mut text = self.active_slot_label(output_mask);
-        if !text.is_empty() {
-            self.push_plain(&mut text, " ");
-        }
+    fn banner_right_text(&self, _output_mask: u8, mode: ShellMode2) -> AllocString {
+        let mut text = AllocString::new();
         self.push_plain(&mut text, self.main_mode_text(mode).as_str());
         text
-    }
-
-    fn active_slot_label(&self, output_mask: u8) -> AllocString {
-        let active_slot = matrix::active_slot_id(output_mask);
-        let mut label = AllocString::from("§");
-        if !active_slot.is_empty() {
-            label.push_str(active_slot.as_str());
-        }
-        alloc::format!(
-            "{}",
-            term_style::paint(label.as_str())
-                .bold()
-                .color(STATUS_SELECTED_RGB)
-        )
     }
 
     fn push_mode_choice(&self, out: &mut AllocString, mode: ShellMode2, selected: bool) {
@@ -362,6 +350,7 @@ impl<'a> AlignedWriter<'a> {
         for (idx, mode) in [
             AppsPromptMode::Start,
             AppsPromptMode::Online,
+            AppsPromptMode::Peer,
             AppsPromptMode::Pause,
             AppsPromptMode::Unpause,
             AppsPromptMode::Save,

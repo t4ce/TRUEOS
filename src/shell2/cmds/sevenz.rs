@@ -65,7 +65,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
     let path = match parse_one_path(rest) {
         Ok(Some(path)) => path,
         Ok(None) => {
-            print_shell_line(io, "7z: usage `7z <file>`");
+            print_shell_line(io, "7z: usage `7z <file|archive.7z>`");
             return ParseOutcome::Handled;
         }
         Err(err) => {
@@ -74,7 +74,13 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
         }
     };
 
-    match crate::r::codec::enqueue_7z_compress_file(path.as_str(), output_target_for_backend(io)) {
+    let result = if path.ends_with(".7z") {
+        crate::r::codec::enqueue_7z_extract_file(path.as_str(), output_target_for_backend(io))
+    } else {
+        crate::r::codec::enqueue_7z_compress_file(path.as_str(), output_target_for_backend(io))
+    };
+
+    match result {
         Ok(job) => {
             if let Some(slot) = job.slot {
                 print_shell_line(

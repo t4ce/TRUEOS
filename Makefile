@@ -84,6 +84,7 @@ empty-libs:
 	ar crs $(KERNEL_EMPTY_LIB_DIR)/libgcc_s.a
 
 kernel: empty-libs
+	@mkdir -p "$$(dirname "$(CNT_FILE)")"; count=$$(cat "$(CNT_FILE)" 2>/dev/null || echo 0); count=$${count:-0}; printf '%s\n' $$((count + 1)) | tee "$(CNT_FILE)"
 	cargo +nightly build $(CARGO_GFX_FLAGS) $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc,panic_abort -Z json-target-spec --target .cargo/x86_64-unknown-trueos.json
 
 artifacts: kernel
@@ -294,7 +295,6 @@ release: iso
 	cd $(RELEASE_BUNDLE_DIR) && 7z a -t7z $(UPDATE_7Z_FLAGS) ../$(notdir $(RELEASE_ARCHIVE)) trueos.iso $(BUNDLED_OVMF_NAME) run-linux.sh run-macos.sh README-RUN.txt $$(test -f OVMF-LICENSE.txt && printf '%s' OVMF-LICENSE.txt)
 	env -u GIO_MODULE_DIR gio mount smb://t4ce@pdjb/home-share || true
 	env -u GIO_MODULE_DIR gio copy $(RELEASE_ARCHIVE) smb://t4ce@pdjb/home-share/TRUEOS_SITE/
-	@mkdir -p "$$(dirname "$(CNT_FILE)")"; count=$$(cat "$(CNT_FILE)" 2>/dev/null || echo 0); count=$${count:-0}; printf '%s\n' $$((count + 1)) | tee "$(CNT_FILE)"
 
 
 SERIAL_CONSOLE_CMD = konsole -e sh -c 'stty -echo -icanon cols 100 rows 100; nc 127.0.0.1 5555; stty sane; echo "Connection closed. Press ENTER to exit..."; read'

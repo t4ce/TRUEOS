@@ -1191,7 +1191,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &USB_CONTROLLER_TASKS_STARTED,
         spawn_usb_controller_tasks,
     ),
-    TaskSpec::disabled("esp-gate", 0, &ESP_GATE_STARTED, spawn_esp_gate),
+    TaskSpec::enabled(
+        "esp-gate",
+        crate::r::readiness::NET_ANY_CONFIGURED,
+        &ESP_GATE_STARTED,
+        spawn_esp_gate,
+    ),
     TaskSpec::disabled("esp-gate-registry", 0, &ESP_GATE_REGISTRY_STARTED, spawn_esp_gate_registry),
     TaskSpec::disabled("esp-piano-audio", 0, &ESP_PIANO_AUDIO_STARTED, spawn_esp_piano_audio),
     TaskSpec::enabled(
