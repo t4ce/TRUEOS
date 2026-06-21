@@ -30,6 +30,7 @@ A constant influx of resources, money, and safety.
 # Setup to build ELF + ISO via makefile make (run, iso, release)
 ## Linux (Ubuntu)
 > [!TIP]
+```
        Icon name: computer-desktop
          Chassis: desktop 🖥️
       Machine ID: 79508dd77fbe43d9b1fb0255a0098481
@@ -43,6 +44,7 @@ Hardware Version: 1.0
 Firmware Version: 1.B2
    Firmware Date: Thu 2024-05-30
     Firmware Age: 2y 3w 1d     
+    ```
 ### C Tools
 ```
 sudo apt update && sudo apt upgrade
