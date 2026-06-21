@@ -130,7 +130,7 @@ mod imp {
 
     pub fn init_from_limine_bsp() {
         let Some(target) = detect_target() else {
-            crate::log!("microcode/intel: action=skip reason=non-intel-or-missing-msr\n");
+            crate::log_info!(target: "boot"; "microcode/intel: action=skip reason=non-intel-or-missing-msr\n");
             return;
         };
 
@@ -146,7 +146,7 @@ mod imp {
                 records_matching = records_matching.saturating_add(1);
                 consider_best_update(&mut best, target, update);
             }));
-            crate::log!("microcode/intel: embedded-source name={} len=0x{:X}\n", name, bytes.len());
+            crate::log_info!(target: "boot"; "microcode/intel: embedded-source name={} len=0x{:X}\n", name, bytes.len());
         }
 
         crate::limine::for_each_module(|module| {
@@ -157,7 +157,8 @@ mod imp {
             }));
         });
 
-        crate::log!(
+        crate::log_info!(
+            target: "boot";
             "microcode/intel: cpu={} sig=0x{:08X} pf=0x{:02X} current=0x{:08X} embedded={} boot_modules={} records={} matches={} target={}\n",
             known_target_name(target.signature),
             target.signature,
@@ -171,7 +172,8 @@ mod imp {
         );
 
         let Some(best) = best else {
-            crate::log!(
+            crate::log_info!(
+                target: "boot";
                 "microcode/intel: action=skip reason=no-newer-update records={} current=0x{:08X}\n",
                 records_seen,
                 target.current_revision
@@ -183,7 +185,8 @@ mod imp {
         SELECTED_LEN.store(best.len, Ordering::Release);
         SELECTED_REV.store(best.revision, Ordering::Release);
 
-        crate::log!(
+        crate::log_info!(
+            target: "boot";
             "microcode/intel: selected rev=0x{:08X} date={} len=0x{:X} action=load-bsp\n",
             best.revision,
             fmt_date(best.date),
@@ -223,7 +226,8 @@ mod imp {
 
         let bytes = unsafe { core::slice::from_raw_parts(ptr as *const u8, len) };
         let Some(update) = parse_update_at(bytes, target, 0) else {
-            crate::log!(
+            crate::log_warn!(
+                target: "boot";
                 "microcode/intel: cpu={} action=skip reason=selected-record-no-longer-valid\n",
                 tag
             );
@@ -234,18 +238,25 @@ mod imp {
             Msr::new(MSR_IA32_BIOS_UPDT_TRIG).write(update.bytes.as_ptr().add(HEADER_LEN) as u64);
         }
         let after = read_current_revision();
-        crate::log!(
-            "microcode/intel: cpu={} before=0x{:08X} selected=0x{:08X} after=0x{:08X} status={}\n",
-            tag,
-            target.current_revision,
-            selected_rev,
-            after,
-            if after >= selected_rev {
-                "loaded"
-            } else {
-                "not-accepted"
-            }
-        );
+        if after >= selected_rev {
+            crate::log_info!(
+                target: "boot";
+                "microcode/intel: cpu={} before=0x{:08X} selected=0x{:08X} after=0x{:08X} status=loaded\n",
+                tag,
+                target.current_revision,
+                selected_rev,
+                after
+            );
+        } else {
+            crate::log_warn!(
+                target: "boot";
+                "microcode/intel: cpu={} before=0x{:08X} selected=0x{:08X} after=0x{:08X} status=not-accepted\n",
+                tag,
+                target.current_revision,
+                selected_rev,
+                after
+            );
+        }
     }
 
     fn detect_target() -> Option<Target> {

@@ -167,3 +167,42 @@ pub extern "Rust" fn trueos_tokio_platform_sleep_ms(ms: u64) {
     }
     let _ = crate::wait::spin_until_timeout(ms, || false);
 }
+
+#[unsafe(no_mangle)]
+pub extern "Rust" fn trueos_tokio_platform_wait_observe(key: u64) -> u32 {
+    crate::wait::platform_wait_observe(key)
+}
+
+#[unsafe(no_mangle)]
+pub extern "Rust" fn trueos_tokio_platform_wait_after(
+    key: u64,
+    observed: u32,
+    timeout_ms: u64,
+) -> bool {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        if timeout_ms == 0 {
+            crate::hv::vmcall::guest_yield();
+        } else {
+            crate::hv::vmcall::guest_sleep_ms(timeout_ms);
+        }
+        return false;
+    }
+
+    crate::wait::platform_wait_after(key, observed, timeout_ms)
+}
+
+#[unsafe(no_mangle)]
+pub extern "Rust" fn trueos_tokio_platform_wait(key: u64, timeout_ms: u64) -> bool {
+    let observed = trueos_tokio_platform_wait_observe(key);
+    trueos_tokio_platform_wait_after(key, observed, timeout_ms)
+}
+
+#[unsafe(no_mangle)]
+pub extern "Rust" fn trueos_tokio_platform_wake_one(key: u64) -> bool {
+    crate::wait::platform_wake_one(key)
+}
+
+#[unsafe(no_mangle)]
+pub extern "Rust" fn trueos_tokio_platform_wake_all(key: u64) -> usize {
+    crate::wait::platform_wake_all(key)
+}

@@ -26,6 +26,7 @@ const STATUS_GRAY_RGB: (u8, u8, u8) = (160, 168, 176);
 const STATUS_RAINBOW_COLORS: [u8; 8] = [199, 208, 227, 121, 51, 39, 99, 201];
 
 const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
+const TOOL_JSON_AUD: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_7Z: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS path. Non-.7z files compress to a sibling .7z archive; .7z archives extract beside the archive."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_C4: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["file","inline"],"description":"Compile from a TRUEOSFS file or inline C4 source."},"path":{"type":"string","description":"TRUEOSFS source path when mode=file."},"source":{"type":"string","description":"Inline C4 source when mode=inline."}},"required":["mode"],"additionalProperties":false}"#;
 const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc","log"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format or optional disk id for action=log."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."},"max":{"type":"integer","minimum":1,"maximum":4096,"description":"Maximum raw TRUEOSFS log records to print for action=log."}},"required":["action"],"additionalProperties":false}"#;
@@ -44,6 +45,10 @@ const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"
 fn dispatch_acpi(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::acpi::try_parse(io, &mut args)
+}
+
+fn dispatch_aud(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::aud::try_parse(spawner, io, rest)
 }
 
 fn dispatch_7z(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -166,6 +171,15 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_acpi,
         tool_description: Some("Run ACPI power actions."),
         tool_parameters_json: Some(TOOL_JSON_ACPI),
+    },
+    BuiltinShell2CmdEntry {
+        name: "aud",
+        mode: "cmd",
+        color: Some(STATUS_ORANGE_RGB),
+        advertised: true,
+        handler: dispatch_aud,
+        tool_description: Some("Play /aud.wav from the TRUEOSFS root through the HDA PCM stream."),
+        tool_parameters_json: Some(TOOL_JSON_AUD),
     },
     BuiltinShell2CmdEntry {
         name: "c4",
@@ -397,8 +411,8 @@ pub(crate) fn try_dispatch(
 
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
-        "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "net", "c4", "txt",
-        "gpgpu", "acpi", "tlb", "smp",
+        "7z", "lsd", "rm", "mv", "sha", "aud", "disc", "install", "update", "hyper", "net", "c4",
+        "txt", "gpgpu", "acpi", "tlb", "smp",
     ];
 
     let mut out = AllocString::new();

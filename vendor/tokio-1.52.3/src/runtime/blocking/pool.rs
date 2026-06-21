@@ -35,9 +35,13 @@ impl Condvar {
         Condvar
     }
 
-    fn notify_one(&self) {}
+    fn notify_one(&self) {
+        let _ = crate::platform::wake_one(self as *const Condvar as usize as u64);
+    }
 
-    fn notify_all(&self) {}
+    fn notify_all(&self) {
+        let _ = crate::platform::wake_all(self as *const Condvar as usize as u64);
+    }
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
@@ -616,11 +620,22 @@ impl Inner {
             while !shared.shutdown {
                 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
                 {
-                    crate::platform::note_semantic_gap(
-                        crate::platform::SEMANTIC_GAP_BLOCKING_POOL_POLL,
-                    );
+                    if shared.num_notify != 0 {
+                        shared.num_notify -= 1;
+                        is_counted_idle = false;
+                        break;
+                    }
+
+                    let wait_key = &self.condvar as *const Condvar as usize as u64;
+                    let observed = crate::platform::wait_observe(wait_key);
                     drop(shared);
-                    crate::platform::sleep_ms(1);
+                    let now = crate::platform::monotonic_nanos();
+                    let timeout_ms = if now >= idle_deadline {
+                        1
+                    } else {
+                        nanos_to_timeout_ms(idle_deadline.saturating_sub(now))
+                    };
+                    let _ = crate::platform::wait_after(wait_key, observed, timeout_ms);
                     shared = self.shared.lock();
 
                     if shared.num_notify != 0 {
@@ -727,4 +742,9 @@ fn duration_to_nanos(duration: Duration) -> u64 {
         .as_secs()
         .saturating_mul(1_000_000_000)
         .saturating_add(u64::from(duration.subsec_nanos()))
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+fn nanos_to_timeout_ms(nanos: u64) -> u64 {
+    nanos.div_ceil(1_000_000).max(1)
 }

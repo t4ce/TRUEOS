@@ -4,6 +4,7 @@ use alloc::{boxed::Box, collections::VecDeque, format, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
 pub mod cli;
+pub mod discovery;
 pub mod dns;
 pub mod esp;
 pub mod https;

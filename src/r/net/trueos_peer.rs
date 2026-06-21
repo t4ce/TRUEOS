@@ -1,5 +1,5 @@
 use alloc::{format, string::String, vec::Vec};
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use embassy_time::{Duration, Instant, Timer};
 use spin::Mutex;
@@ -12,10 +12,23 @@ const PEER_QUERY_TIMEOUT_MS: u64 = 3000;
 const PEER_FETCH_TIMEOUT_MS: u64 = 10_000;
 const PEER_FETCH_MAX_BYTES: usize = 256 * 1024 * 1024;
 const QUIET_LIST_WINDOW_MS: u64 = 120;
+const PEER_ADVERTISE_UNICAST_TARGETS: &[[u8; 4]] = &[[192, 168, 178, 94]];
+const PEER_ADVERTISEMENT_MAGIC: &str = "C0DEC0DE";
+
+mod peer_caps {
+    pub const REGISTRY: u32 = 1 << 0;
+    pub const STATUS: u32 = 1 << 1;
+    pub const FS: u32 = 1 << 2;
+    pub const RPC: u32 = 1 << 3;
+    pub const LUMEN_WORK: u32 = 1 << 4;
+
+    pub const TRUEOS_HOST_DEFAULT: u32 = REGISTRY | STATUS | FS;
+}
 
 static PEERS: Mutex<Vec<PeerSnapshot>> = Mutex::new(Vec::new());
 static LOCAL_NODE_ID: AtomicU64 = AtomicU64::new(0);
 static LAST_ADVERTISE_MS: AtomicU64 = AtomicU64::new(0);
+static ADVERTISE_TARGETS_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Debug)]
 pub(crate) struct PeerSnapshot {
@@ -30,6 +43,19 @@ pub(crate) struct PeerSnapshot {
 #[derive(Clone, Debug)]
 pub(crate) struct PeerVmOffer {
     pub vm_id: u8,
+}
+
+pub(crate) struct PeerAdvertisement {
+    pub remote: v::vnet::EndpointV4,
+    pub data: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PeerHostAdvertisement {
+    pub from: v::vnet::EndpointV4,
+    pub peer_tcp_port: u16,
+    pub node_id: u64,
+    pub caps: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -70,7 +96,92 @@ fn local_node_id() -> u64 {
     }
 }
 
-fn is_local_advertisement(advertisement: &trueos_esp::gate::TrueOsHostAdvertisement) -> bool {
+fn parse_u64_token(value: &str) -> Option<u64> {
+    if let Some(hex) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
+        u64::from_str_radix(hex, 16).ok()
+    } else {
+        value
+            .parse::<u64>()
+            .ok()
+            .or_else(|| u64::from_str_radix(value, 16).ok())
+    }
+}
+
+fn parse_caps_token(value: &str) -> u32 {
+    if let Some(caps) = parse_u64_token(value) {
+        return caps as u32;
+    }
+
+    let mut caps = 0;
+    for cap in value.split(',') {
+        match cap {
+            "registry" => caps |= peer_caps::REGISTRY,
+            "status" => caps |= peer_caps::STATUS,
+            "fs" => caps |= peer_caps::FS,
+            "rpc" => caps |= peer_caps::RPC,
+            "lumen" | "lumen-work" | "lumen_work" => caps |= peer_caps::LUMEN_WORK,
+            _ => {}
+        }
+    }
+    caps
+}
+
+pub(crate) fn parse_peer_advertisement(
+    from: v::vnet::EndpointV4,
+    data: &[u8],
+) -> Option<PeerHostAdvertisement> {
+    let text = core::str::from_utf8(data).ok()?.trim();
+    let rest = text.strip_prefix(PEER_ADVERTISEMENT_MAGIC)?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+
+    let mut peer_tcp_port = crate::r::net::ports::VM_STORE_REPL_PORT;
+    let mut node_id = 0;
+    let mut caps = peer_caps::TRUEOS_HOST_DEFAULT;
+    let mut saw_advertisement_field = false;
+
+    for token in rest.split_whitespace() {
+        let Some((key, value)) = token.split_once('=') else {
+            continue;
+        };
+        match key {
+            "tcp" | "port" => {
+                if let Ok(port) = value.parse::<u16>() {
+                    peer_tcp_port = port;
+                    saw_advertisement_field = true;
+                }
+            }
+            "node" | "node_id" => {
+                if let Some(parsed) = parse_u64_token(value) {
+                    node_id = parsed;
+                    saw_advertisement_field = true;
+                }
+            }
+            "caps" => {
+                caps = parse_caps_token(value);
+                saw_advertisement_field = true;
+            }
+            _ => {}
+        }
+    }
+
+    if !saw_advertisement_field {
+        return None;
+    }
+
+    Some(PeerHostAdvertisement {
+        from,
+        peer_tcp_port,
+        node_id,
+        caps,
+    })
+}
+
+fn is_local_advertisement(advertisement: &PeerHostAdvertisement) -> bool {
     if advertisement.node_id != 0 && advertisement.node_id == local_node_id() {
         return true;
     }
@@ -81,7 +192,7 @@ fn is_local_advertisement(advertisement: &trueos_esp::gate::TrueOsHostAdvertisem
         .unwrap_or(false)
 }
 
-pub(crate) fn publish_host_advertisement(advertisement: trueos_esp::gate::TrueOsHostAdvertisement) {
+pub(crate) fn publish_host_advertisement(advertisement: PeerHostAdvertisement) {
     if is_local_advertisement(&advertisement) {
         return;
     }
@@ -120,28 +231,59 @@ pub(crate) fn publish_host_advertisement(advertisement: trueos_esp::gate::TrueOs
     });
 }
 
-pub(crate) fn take_peer_advertisement() -> Option<Vec<u8>> {
+pub(crate) fn take_peer_advertisements() -> Vec<PeerAdvertisement> {
     let now = monotonic_ms();
     let last = LAST_ADVERTISE_MS.load(Ordering::Acquire);
     if now.saturating_sub(last) < PEER_ADVERTISE_INTERVAL_MS {
-        return None;
+        return Vec::new();
     }
     if LAST_ADVERTISE_MS
         .compare_exchange(last, now, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
-        return None;
+        return Vec::new();
     }
 
-    Some(
-        format!(
-            "{} v=1 node=0x{:016X} tcp={} caps=registry,status,fs",
-            trueos_esp::gate::TRUEOS_SWARM_MAGIC_TEXT,
-            local_node_id(),
-            crate::r::net::ports::VM_STORE_REPL_PORT
-        )
-        .into_bytes(),
+    let data = format!(
+        "{} v=1 node=0x{:016X} tcp={} caps=registry,status,fs",
+        PEER_ADVERTISEMENT_MAGIC,
+        local_node_id(),
+        crate::r::net::ports::VM_STORE_REPL_PORT
     )
+    .into_bytes();
+
+    let local_ip = crate::net::adapter::ipv4_at(crate::net::primary_device_index());
+    let mut out = Vec::new();
+    out.push(PeerAdvertisement {
+        remote: v::vnet::EndpointV4::new(
+            [255, 255, 255, 255],
+            crate::r::net::ports::TRUEOS_DISCOVERY_UDP_PORT,
+        ),
+        data: data.clone(),
+    });
+    for &addr in PEER_ADVERTISE_UNICAST_TARGETS {
+        if Some(addr) == local_ip {
+            continue;
+        }
+        out.push(PeerAdvertisement {
+            remote: v::vnet::EndpointV4::new(addr, crate::r::net::ports::TRUEOS_DISCOVERY_UDP_PORT),
+            data: data.clone(),
+        });
+    }
+
+    if !ADVERTISE_TARGETS_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::log!(
+            "trueos-peer: advertising targets={} local_ip={}.{}.{}.{} tcp={}\n",
+            out.len(),
+            local_ip.map(|ip| ip[0]).unwrap_or(0),
+            local_ip.map(|ip| ip[1]).unwrap_or(0),
+            local_ip.map(|ip| ip[2]).unwrap_or(0),
+            local_ip.map(|ip| ip[3]).unwrap_or(0),
+            crate::r::net::ports::VM_STORE_REPL_PORT
+        );
+    }
+
+    out
 }
 
 pub(crate) fn peer_snapshots() -> Vec<PeerSnapshot> {

@@ -73,6 +73,29 @@ fn snapshot_for_handle(handle: v::vnet::NetHandle) -> Option<trueos_esp::gate::D
     DEVICE_REGISTRY.lock().snapshot_for(handle)
 }
 
+pub(crate) fn publish_swarm_heartbeat_v4(from: v::vnet::EndpointV4) {
+    crate::globalog::log_with_level(
+        log::Level::Trace,
+        format_args!(
+            "esp-gate: heartbeat=swarm from {}.{}.{}.{} upload_port={}\n",
+            from.addr[0],
+            from.addr[1],
+            from.addr[2],
+            from.addr[3],
+            trueos_esp::gate::ESP_HTTP_UPLOAD_PORT
+        ),
+    );
+
+    let now_ms = monotonic_ms();
+    let is_new = {
+        let mut registry = DEVICE_REGISTRY.lock();
+        registry.upsert_heartbeat_v4(from.addr, trueos_esp::gate::ESP_HTTP_UPLOAD_PORT, now_ms)
+    };
+    if is_new {
+        note_registry_change();
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EspControlError {
     DeviceMissing,
@@ -238,97 +261,6 @@ async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
                 ESP_STATUS_FETCH_TIMEOUT_MS,
                 err
             );
-        }
-    }
-}
-
-#[embassy_executor::task]
-pub async fn esp_gate_task() {
-    crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
-
-    loop {
-        let Some(vnet) = VNet::open_primary() else {
-            Timer::after(Duration::from_millis(100)).await;
-            continue;
-        };
-
-        let mut gate = trueos_esp::gate::GateDiscovery::new();
-        let mut udp_handle: Option<v::vnet::NetHandle> = None;
-        let _ = vnet.submit(gate.bootstrap_command());
-        crate::log!(
-            "esp-gate: starting udp swarm listener on port {} payload=swarm\n",
-            trueos_esp::gate::ESP_UDP_BROADCAST_PORT
-        );
-
-        loop {
-            if let Some(ev) = vnet.pop_event() {
-                if let v::vnet::Event::Error { msg } = ev {
-                    crate::log!("esp-gate: error {}\n", msg);
-                }
-
-                match gate.on_event(ev) {
-                    trueos_esp::gate::GateAction::None => {}
-                    trueos_esp::gate::GateAction::Signal(signal) => match signal {
-                        trueos_esp::gate::GateSignal::UdpBound(handle) => {
-                            udp_handle = Some(handle);
-                            crate::log!(
-                                "esp-gate: udp listener bound handle={} port={}\n",
-                                handle.0,
-                                trueos_esp::gate::ESP_UDP_BROADCAST_PORT
-                            );
-                        }
-                        trueos_esp::gate::GateSignal::EspDiscovered(from) => {
-                            crate::globalog::log_with_level(
-                                log::Level::Trace,
-                                format_args!(
-                                    "esp-gate: heartbeat=swarm from {}.{}.{}.{} upload_port={}\n",
-                                    from.addr[0],
-                                    from.addr[1],
-                                    from.addr[2],
-                                    from.addr[3],
-                                    trueos_esp::gate::ESP_HTTP_UPLOAD_PORT
-                                ),
-                            );
-
-                            let now_ms = monotonic_ms();
-                            let is_new = {
-                                let mut registry = DEVICE_REGISTRY.lock();
-                                registry.upsert_heartbeat_v4(
-                                    from.addr,
-                                    trueos_esp::gate::ESP_HTTP_UPLOAD_PORT,
-                                    now_ms,
-                                )
-                            };
-                            if is_new {
-                                note_registry_change();
-                            }
-                        }
-                        trueos_esp::gate::GateSignal::TrueOsHostDiscovered(advertisement) => {
-                            crate::r::net::trueos_peer::publish_host_advertisement(advertisement);
-                        }
-                    },
-                    trueos_esp::gate::GateAction::Submit(cmd) => {
-                        let _ = vnet.submit(cmd);
-                    }
-                }
-
-                continue;
-            }
-
-            if let Some(handle) = udp_handle {
-                while let Some(data) = crate::r::net::trueos_peer::take_peer_advertisement() {
-                    let _ = vnet.submit(v::vnet::Command::SendUdp {
-                        handle,
-                        remote: v::vnet::EndpointV4::new(
-                            [255, 255, 255, 255],
-                            trueos_esp::gate::ESP_UDP_BROADCAST_PORT,
-                        ),
-                        data: v::vnet::ByteBuf::from_slice_trunc(data.as_slice()),
-                    });
-                }
-            }
-
-            Timer::after(Duration::from_millis(10)).await;
         }
     }
 }
