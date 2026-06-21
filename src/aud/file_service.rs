@@ -1,9 +1,8 @@
 use alloc::format;
-use alloc::string::String;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 
-use alsa::pcm::{Access, Format, HwParams, PCM};
-use alsa::{Direction, ValueOr};
+use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
@@ -14,6 +13,7 @@ const READ_RETRY_ATTEMPTS: usize = 80;
 const READ_RETRY_DELAY_MS: u64 = 25;
 
 static AUD_JOB: Mutex<Option<AudJob>> = Mutex::new(None);
+static AUD_JOB_RUNNING: AtomicBool = AtomicBool::new(false);
 
 struct AudJob {
     target: MatrixTarget,
@@ -53,7 +53,7 @@ impl AudReadError {
 
 pub fn submit_default(target: MatrixTarget) -> Result<(), &'static str> {
     let mut job = AUD_JOB.lock();
-    if job.is_some() {
+    if job.is_some() || AUD_JOB_RUNNING.load(Ordering::Acquire) {
         return Err("busy");
     }
     *job = Some(AudJob { target });
@@ -249,38 +249,12 @@ fn print_decode_error(target: &MatrixTarget, bytes_len: usize, err: AudDecodeErr
     }
 }
 
-fn alsa_err(step: &'static str, err: alsa::Error) -> String {
-    format!("alsa {step} failed: {:?}", err)
-}
-
-fn queue_decoded_via_alsa(decoded: DecodedAudio) -> Result<usize, String> {
-    let pcm =
-        PCM::new("default", Direction::Playback, false).map_err(|err| alsa_err("open", err))?;
-    let hwp = HwParams::any(&pcm).map_err(|err| alsa_err("hw_params_any", err))?;
-    hwp.set_access(Access::RWInterleaved)
-        .map_err(|err| alsa_err("set_access", err))?;
-    hwp.set_format(Format::s16())
-        .map_err(|err| alsa_err("set_format", err))?;
-    hwp.set_channels(crate::hda::PCM_CHANNELS as u32)
-        .map_err(|err| alsa_err("set_channels", err))?;
-    hwp.set_rate(crate::hda::PCM_SAMPLE_RATE_HZ, ValueOr::Nearest)
-        .map_err(|err| alsa_err("set_rate", err))?;
-    hwp.set_period_size(480, ValueOr::Nearest)
-        .map_err(|err| alsa_err("set_period_size", err))?;
-    pcm.hw_params(&hwp)
-        .map_err(|err| alsa_err("hw_params", err))?;
-    pcm.prepare().map_err(|err| alsa_err("prepare", err))?;
-
-    let io = pcm.io_i16().map_err(|err| alsa_err("io_i16", err))?;
-    let written = io
-        .writei(decoded.samples.as_slice())
-        .map_err(|err| alsa_err("writei", err))?;
-    drop(io);
-    pcm.start().map_err(|err| alsa_err("start", err))?;
-    Ok(written)
+fn queue_decoded_via_pcm_lane(decoded: DecodedAudio) -> Result<usize, &'static str> {
+    crate::aud::pcm_lane::submit_i16_stereo_48k(AUD_PATH, decoded.samples)
 }
 
 async fn handle_job(job: AudJob) {
+    let stop_generation = crate::aud::pcm_lane::stop_generation();
     print_matrix_target_line(&job.target, format!("aud: ap1 loading {}", AUD_PATH).as_str());
 
     let bytes = match read_aud_file().await {
@@ -315,27 +289,52 @@ async fn handle_job(job: AudJob) {
         .as_str(),
     );
 
-    match queue_decoded_via_alsa(decoded) {
+    if crate::aud::pcm_lane::stop_generation() != stop_generation {
+        print_matrix_target_line(&job.target, "aud: decode discarded after stop");
+        set_matrix_target_active(&job.target, false);
+        return;
+    }
+
+    match queue_decoded_via_pcm_lane(decoded) {
         Ok(frames) => print_matrix_target_line(
             &job.target,
-            format!("aud: queued via ALSA frames={frames}").as_str(),
+            format!("aud: queued pcm-lane frames={frames} sinks=hda,http82").as_str(),
         ),
-        Err(err) => {
-            print_matrix_target_line(&job.target, format!("aud: ALSA queue failed: {err}").as_str())
-        }
+        Err(err) => print_matrix_target_line(
+            &job.target,
+            format!("aud: pcm-lane queue failed: {err}").as_str(),
+        ),
     }
 
     set_matrix_target_active(&job.target, false);
 }
 
 #[embassy_executor::task(pool_size = 1)]
+async fn aud_decode_job_task(job: AudJob) {
+    handle_job(job).await;
+    AUD_JOB_RUNNING.store(false, Ordering::Release);
+}
+
+#[embassy_executor::task(pool_size = 1)]
 pub async fn aud_file_service_task() {
     let slot = crate::percpu::current_slot();
     crate::log!("aud-file-service: task start slot={} policy=ap1-ui-service\n", slot);
+    let spawner: Spawner = unsafe { Spawner::for_current_executor().await };
 
     loop {
         if let Some(job) = take_job() {
-            handle_job(job).await;
+            AUD_JOB_RUNNING.store(true, Ordering::Release);
+            let target = job.target.clone();
+            match aud_decode_job_task(job) {
+                Ok(token) => {
+                    spawner.spawn(token);
+                }
+                Err(_) => {
+                    AUD_JOB_RUNNING.store(false, Ordering::Release);
+                    set_matrix_target_active(&target, false);
+                    print_matrix_target_line(&target, "aud: decode worker unavailable");
+                }
+            }
         } else {
             Timer::after(EmbassyDuration::from_millis(10)).await;
         }

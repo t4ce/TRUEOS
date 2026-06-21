@@ -157,8 +157,10 @@ fn container_shell_command(raw: &str) -> bool {
             }
             attached_write_line(line.as_str());
         }
-        "help" => attached_write_line("commands: echo hostname homedir env disc thread help exit"),
-        "exit" => return false,
+        "help" => attached_write_line(
+            "commands: echo hostname homedir env disc thread help stop pause preserve exit",
+        ),
+        "stop" | "pause" | "preserve" | "exit" => return false,
         _ => attached_write_line("unknown command; try `help`"),
     }
     true
@@ -287,7 +289,9 @@ pub extern "C" fn trueos_hv_guest_shell_run() -> ! {
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_hv_guest_container_shell_run() -> ! {
     attached_write_line("vmx-shell: ready");
-    attached_write_line("commands: echo hostname homedir env disc thread help exit");
+    attached_write_line(
+        "commands: echo hostname homedir env disc thread help stop pause preserve exit",
+    );
     let mut line = Vec::new();
     loop {
         container_shell_prompt();

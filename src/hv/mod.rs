@@ -1555,8 +1555,16 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
         }
         "help" => blueprint_control_shell_line(
             vm_id,
-            "commands: echo hostname homedir env disc thread help exit",
+            "commands: echo hostname homedir env disc thread help stop pause preserve exit",
         ),
+        "stop" | "pause" | "preserve" => match request_preserve(vm_id) {
+            Ok(true) => blueprint_control_shell_line(vm_id, "vmx-shell: preserve requested"),
+            Ok(false) => blueprint_control_shell_line(vm_id, "vmx-shell: vm is not running"),
+            Err(err) => blueprint_control_shell_line(
+                vm_id,
+                alloc::format!("vmx-shell: preserve failed: {:?}", err).as_str(),
+            ),
+        },
         "exit" | "detach" => {
             blueprint_control_shell_line(vm_id, "vm: switch matrix slots with `§<slot>`")
         }
