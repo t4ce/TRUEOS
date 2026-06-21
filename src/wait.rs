@@ -1,6 +1,7 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::future::Future;
@@ -251,6 +252,12 @@ impl WaitQueue {
 
     #[inline]
     pub fn wait_for_event_blocking_parked(&self, timeout_ms: u64) -> bool {
+        let observed = self.seq.load(Ordering::Acquire);
+        self.wait_for_event_after_blocking_parked(observed, timeout_ms)
+    }
+
+    #[inline]
+    pub fn wait_for_event_after_blocking_parked(&self, observed: u32, timeout_ms: u64) -> bool {
         let hz = TICK_HZ;
         let ticks = if hz == 0 || timeout_ms == 0 {
             0
@@ -262,8 +269,6 @@ impl WaitQueue {
         } else {
             now().saturating_add(ticks)
         };
-        let observed = self.seq.load(Ordering::Acquire);
-
         loop {
             if ticks != 0 && now() >= deadline {
                 return false;
@@ -368,6 +373,44 @@ type LocalJobFuture = Pin<Box<dyn Future<Output = ()> + 'static>>;
 
 static JOBS: Mutex<Vec<JobFuture>> = Mutex::new(Vec::new());
 static JOBS_WAIT: WaitQueue = WaitQueue::new();
+static PLATFORM_WAIT_QUEUES: Mutex<BTreeMap<u64, &'static WaitQueue>> = Mutex::new(BTreeMap::new());
+
+fn platform_wait_queue(key: u64) -> &'static WaitQueue {
+    if let Some(queue) = PLATFORM_WAIT_QUEUES.lock().get(&key).copied() {
+        return queue;
+    }
+
+    let queue = Box::leak(Box::new(WaitQueue::new()));
+    let mut queues = PLATFORM_WAIT_QUEUES.lock();
+    *queues.entry(key).or_insert(queue)
+}
+
+#[inline]
+pub fn platform_wait_observe(key: u64) -> u32 {
+    platform_wait_queue(key).seq.load(Ordering::Acquire)
+}
+
+#[inline]
+pub fn platform_wait_after(key: u64, observed: u32, timeout_ms: u64) -> bool {
+    platform_wait_queue(key).wait_for_event_after_blocking_parked(observed, timeout_ms)
+}
+
+#[inline]
+#[allow(dead_code)]
+pub fn platform_wait(key: u64, timeout_ms: u64) -> bool {
+    let observed = platform_wait_observe(key);
+    platform_wait_after(key, observed, timeout_ms)
+}
+
+#[inline]
+pub fn platform_wake_one(key: u64) -> bool {
+    platform_wait_queue(key).notify_one()
+}
+
+#[inline]
+pub fn platform_wake_all(key: u64) -> usize {
+    platform_wait_queue(key).notify_all()
+}
 
 struct LocalJobQueue {
     jobs: Mutex<Vec<LocalJobFuture>>,

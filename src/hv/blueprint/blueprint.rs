@@ -1432,6 +1432,21 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "trueos_tokio_platform_sleep_ms" => {
             Some(crate::r::platform::trueos_tokio_platform_sleep_ms as *const () as usize)
         }
+        "trueos_tokio_platform_wait_observe" => {
+            Some(crate::r::platform::trueos_tokio_platform_wait_observe as *const () as usize)
+        }
+        "trueos_tokio_platform_wait_after" => {
+            Some(crate::r::platform::trueos_tokio_platform_wait_after as *const () as usize)
+        }
+        "trueos_tokio_platform_wait" => {
+            Some(crate::r::platform::trueos_tokio_platform_wait as *const () as usize)
+        }
+        "trueos_tokio_platform_wake_one" => {
+            Some(crate::r::platform::trueos_tokio_platform_wake_one as *const () as usize)
+        }
+        "trueos_tokio_platform_wake_all" => {
+            Some(crate::r::platform::trueos_tokio_platform_wake_all as *const () as usize)
+        }
         "trueos_mio_tcp_listener_bind" => {
             Some(crate::mio_compat::trueos_mio_tcp_listener_bind as *const () as usize)
         }

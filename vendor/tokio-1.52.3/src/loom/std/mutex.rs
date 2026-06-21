@@ -109,17 +109,21 @@ impl<T: Default> Default for Mutex<T> {
 impl<T: ?Sized> Mutex<T> {
     #[inline]
     pub(crate) fn lock(&self) -> MutexGuard<'_, T> {
-        let mut noted_contention = false;
         while self
             .locked
             .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_err()
         {
-            if !noted_contention {
-                crate::platform::note_semantic_gap(crate::platform::SEMANTIC_GAP_MUTEX_SPIN);
-                noted_contention = true;
+            let key = self as *const Mutex<T> as *const () as usize as u64;
+            let observed = crate::platform::wait_observe(key);
+            if self
+                .locked
+                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+                .is_ok()
+            {
+                return MutexGuard { mutex: self };
             }
-            core::hint::spin_loop();
+            let _ = crate::platform::wait_after(key, observed, 0);
         }
 
         MutexGuard { mutex: self }
@@ -156,6 +160,8 @@ impl<'a, T: ?Sized> MutexGuard<'a, T> {
 impl<T: ?Sized> Drop for MutexGuard<'_, T> {
     fn drop(&mut self) {
         self.mutex.locked.store(false, Ordering::Release);
+        let key = self.mutex as *const Mutex<T> as *const () as usize as u64;
+        let _ = crate::platform::wake_one(key);
     }
 }
 

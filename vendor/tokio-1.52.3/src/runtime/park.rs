@@ -64,21 +64,13 @@ fn trueos_duration_nanos(duration: Duration) -> u64 {
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-fn trueos_park_step(remaining_nanos: Option<u64>) {
-    crate::platform::note_semantic_gap(crate::platform::SEMANTIC_GAP_RUNTIME_PARK_POLL);
+fn trueos_wait_key(inner: &Inner) -> u64 {
+    inner as *const Inner as usize as u64
+}
 
-    // TRUEOS Platform has no kernel parker wait queue here yet; preserve the
-    // park/unpark state machine while yielding through the platform hooks.
-    let sleep_ms = match remaining_nanos {
-        Some(nanos) => (nanos / 1_000_000).min(1),
-        None => 1,
-    };
-
-    if sleep_ms == 0 {
-        crate::platform::poll_once();
-    } else {
-        crate::platform::sleep_ms(sleep_ms);
-    }
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+fn trueos_timeout_ms(remaining_nanos: u64) -> u64 {
+    remaining_nanos.div_ceil(1_000_000).max(1)
 }
 
 tokio_thread_local! {
@@ -163,11 +155,21 @@ impl Inner {
         #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             drop(m);
+            let key = trueos_wait_key(self);
 
             loop {
                 match self.state.compare_exchange(NOTIFIED, EMPTY, SeqCst, SeqCst) {
                     Ok(_) => return,
-                    Err(PARKED) => trueos_park_step(None),
+                    Err(PARKED) => {
+                        let observed = crate::platform::wait_observe(key);
+                        match self.state.load(SeqCst) {
+                            NOTIFIED => continue,
+                            PARKED => {
+                                let _ = crate::platform::wait_after(key, observed, 0);
+                            }
+                            actual => panic!("inconsistent park state: {actual}"),
+                        }
+                    }
                     Err(actual) => panic!("inconsistent park state; actual = {actual}"),
                 }
             }
@@ -229,6 +231,7 @@ impl Inner {
         #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             drop(m);
+            let key = trueos_wait_key(self);
             let deadline = trueos_now_nanos().saturating_add(trueos_duration_nanos(dur));
 
             loop {
@@ -243,7 +246,15 @@ impl Inner {
                     break;
                 }
 
-                trueos_park_step(Some(deadline.saturating_sub(now)));
+                let observed = crate::platform::wait_observe(key);
+                match self.state.load(SeqCst) {
+                    NOTIFIED => continue,
+                    PARKED => {
+                        let timeout_ms = trueos_timeout_ms(deadline.saturating_sub(now));
+                        let _ = crate::platform::wait_after(key, observed, timeout_ms);
+                    }
+                    actual => panic!("inconsistent park_timeout state: {actual}"),
+                }
             }
         }
 
@@ -303,10 +314,20 @@ impl Inner {
         // to release `lock`.
         drop(self.mutex.lock());
 
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        {
+            let _ = crate::platform::wake_one(trueos_wait_key(self));
+        }
+
         self.condvar.notify_one();
     }
 
     fn shutdown(&self) {
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        {
+            let _ = crate::platform::wake_all(trueos_wait_key(self));
+        }
+
         self.condvar.notify_all();
     }
 }
