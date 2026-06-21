@@ -1557,7 +1557,15 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
             vm_id,
             "commands: echo hostname homedir env disc thread help stop pause preserve exit",
         ),
-        "stop" | "pause" | "preserve" => match request_preserve(vm_id) {
+        "stop" => match stop(vm_id) {
+            Ok(true) => blueprint_control_shell_line(vm_id, "vmx-shell: stop requested"),
+            Ok(false) => blueprint_control_shell_line(vm_id, "vmx-shell: vm is not running"),
+            Err(err) => blueprint_control_shell_line(
+                vm_id,
+                alloc::format!("vmx-shell: stop failed: {:?}", err).as_str(),
+            ),
+        },
+        "pause" | "preserve" => match request_preserve(vm_id) {
             Ok(true) => blueprint_control_shell_line(vm_id, "vmx-shell: preserve requested"),
             Ok(false) => blueprint_control_shell_line(vm_id, "vmx-shell: vm is not running"),
             Err(err) => blueprint_control_shell_line(
@@ -2206,6 +2214,13 @@ async fn vmx_launch_once_with_ept(
                 let len = vmread(VMCS_VMEXIT_INSTRUCTION_LEN).ok_or("vmread instr len hlt")?;
                 vmwrite(VMCS_GUEST_RIP, lr.guest_rip + len)?;
             }
+            VMEXIT_REASON_PAUSE => {
+                let len = vmread(VMCS_VMEXIT_INSTRUCTION_LEN).ok_or("vmread instr len pause")?;
+                vmwrite(VMCS_GUEST_RIP, lr.guest_rip + len)?;
+                clear_current_vm_id();
+                Timer::after(EmbassyDuration::from_millis(1)).await;
+                set_current_vm_id(vm_id);
+            }
             0xA => {
                 let mut regs = crate::hv::vmx::guest_registers();
                 let leaf = regs.rax as u32;
@@ -2459,6 +2474,7 @@ fn setup_vmcs_for_launch(
     let proc = crate::hv::vmx::adjust_vmx_ctrl(
         proc_msr,
         PROC_BASED_HLT_EXITING
+            | PROC_BASED_PAUSE_EXITING
             | PROC_BASED_ACTIVATE_SECONDARY
             | PROC_BASED_VMX_PREEMPTION_TIMER
             | PROC_BASED_USE_TSC_OFFSETTING,
@@ -2487,6 +2503,13 @@ fn setup_vmcs_for_launch(
             lineage_record.level
         ));
         return Err("secondary controls unsupported");
+    }
+    if (proc & PROC_BASED_PAUSE_EXITING) == 0 {
+        hvlogf(format_args!(
+            "hv: vm{}-{} reporting: vmcs ctrl unsupported: primary bit PAUSE_EXITING not available",
+            current_vm_id_for_log(),
+            lineage_record.level
+        ));
     }
     if (proc2 & PROC2_BASED_ENABLE_EPT) == 0 {
         hvlogf(format_args!(
