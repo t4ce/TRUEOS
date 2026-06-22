@@ -274,6 +274,13 @@ pub extern "C" fn kmain() -> ! {
         if simd.avx2_fma_ready { "yes" } else { "no" },
         simd.avx2_fma_reason.as_str()
     );
+    let sse42 = crate::r::pat::sse42_available();
+    crate::log_info!(
+        target: "boot";
+        "cpu-string-search: sse4.2={} pcmpestri={} fallback=twoway\n",
+        if sse42 { "yes" } else { "no" },
+        if sse42 { "enabled" } else { "disabled" }
+    );
     boot_secondary_processors(smp_resp);
     spawn_bsp_services(spawner);
     _loop(executor)

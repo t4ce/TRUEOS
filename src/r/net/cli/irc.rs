@@ -69,7 +69,7 @@ impl IrcMessage {
             None
         };
 
-        let trailing = if let Some(idx) = rest.find(" :") {
+        let trailing = if let Some(idx) = crate::r::pat::find_str(rest, " :") {
             let t = String::from(&rest[idx + 2..]);
             rest = &rest[..idx];
             Some(t)

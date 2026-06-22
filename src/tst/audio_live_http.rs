@@ -162,8 +162,7 @@ fn path_only(target: &str) -> &str {
 }
 
 fn http_request_path(req: &str) -> Option<&str> {
-    let line_end = req
-        .find("\r\n")
+    let line_end = crate::r::pat::find_str(req, "\r\n")
         .or_else(|| req.find('\n'))
         .unwrap_or(req.len());
     let line = req.get(..line_end)?;
