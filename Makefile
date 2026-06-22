@@ -44,6 +44,7 @@ HUC_FW_HOST_PATH ?= /lib/firmware/i915/tgl_huc.bin.zst
 HUC_FW_ISO_REL_PATH ?= EFI/BOOT/tgl_huc.bin
 HORIZON_BP_HOST_PATH ?= ../TRUEOS-Blueprints/dist/horizon.bp
 HORIZON_BP_ISO_REL_PATH ?= EFI/BOOT/apps/horizon.bp
+ENABLE_BLUEPRINTS ?= 0
 QEMU_RUNNER := tools/qemu/run.sh
 QEMU_BIN ?= qemu-system-x86_64
 QEMU_MEMORY ?= 12000M
@@ -214,15 +215,19 @@ iso: artifacts images limine
 		mkdir -p $(ISO_BOOT_DIR)/$(dir $(HUC_FW_ISO_REL_PATH)); \
 		cp "$(ISO_DIR)/EFI/BOOT/$$(basename "$(HUC_FW_ISO_REL_PATH)")" "$(ISO_BOOT_DIR)/$(HUC_FW_ISO_REL_PATH)"; \
 	fi
-	@if [ ! -f "$(HORIZON_BP_HOST_PATH)" ]; then \
-		echo "error: Horizon blueprint not found at $(HORIZON_BP_HOST_PATH)"; \
-		echo "       run: cd ../TRUEOS-Blueprints && cargo bp horizon"; \
-		exit 1; \
+	@if [ "$(ENABLE_BLUEPRINTS)" = "1" ]; then \
+		if [ ! -f "$(HORIZON_BP_HOST_PATH)" ]; then \
+			echo "error: Horizon blueprint not found at $(HORIZON_BP_HOST_PATH)"; \
+			echo "       run: cd ../TRUEOS-Blueprints && cargo bp horizon"; \
+			exit 1; \
+		fi; \
+		mkdir -p "$(ISO_BOOT_DIR)/$(dir $(HORIZON_BP_ISO_REL_PATH))"; \
+		cp "$(HORIZON_BP_HOST_PATH)" "$(ISO_BOOT_DIR)/$(HORIZON_BP_ISO_REL_PATH)"; \
+		mkdir -p "$(ISO_DIR)/$(dir $(HORIZON_BP_ISO_REL_PATH))"; \
+		cp "$(HORIZON_BP_HOST_PATH)" "$(ISO_DIR)/$(HORIZON_BP_ISO_REL_PATH)"; \
+	else \
+		echo "iso: skipping Blueprint modules (ENABLE_BLUEPRINTS=0)"; \
 	fi
-	mkdir -p $(ISO_BOOT_DIR)/$(dir $(HORIZON_BP_ISO_REL_PATH))
-	cp "$(HORIZON_BP_HOST_PATH)" "$(ISO_BOOT_DIR)/$(HORIZON_BP_ISO_REL_PATH)"
-	mkdir -p "$(ISO_DIR)/$(dir $(HORIZON_BP_ISO_REL_PATH))"
-	cp "$(HORIZON_BP_HOST_PATH)" "$(ISO_DIR)/$(HORIZON_BP_ISO_REL_PATH)"
 	cp "$(LIMINE_CFG)" "$(LIMINE_CFG_GENERATED)"
 	@if [ -f "$(ISO_BOOT_DIR)/$(DMC_FW_ISO_REL_PATH)" ]; then \
 		printf '%s\n%s\n' \
@@ -240,10 +245,12 @@ iso: artifacts images limine
 		"module_path: boot():/$(ISO_EFI_IMG)" \
 		"module_string: trueos.install.efi_img" \
 		>> "$(LIMINE_CFG_GENERATED)"
-	printf '%s\n%s\n' \
-		"module_path: boot():/$(HORIZON_BP_ISO_REL_PATH)" \
-		"module_string: trueos.app.horizon" \
-		>> "$(LIMINE_CFG_GENERATED)"
+	@if [ "$(ENABLE_BLUEPRINTS)" = "1" ]; then \
+		printf '%s\n%s\n' \
+			"module_path: boot():/$(HORIZON_BP_ISO_REL_PATH)" \
+			"module_string: trueos.app.horizon" \
+			>> "$(LIMINE_CFG_GENERATED)"; \
+	fi
 	@if [ "$(GUC_FW_ISO_REL_PATH)" != "EFI/BOOT/adlp_guc_70.bin" ]; then \
 		mkdir -p $(ISO_BOOT_DIR)/EFI/BOOT; \
 		cp $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin $(ISO_BOOT_DIR)/EFI/BOOT/adlp_guc_70.bin; \

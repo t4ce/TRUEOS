@@ -245,11 +245,16 @@ pub fn shell1_submit_input(bytes: &[u8]) -> usize {
 }
 
 #[inline]
-pub fn attached_write(bytes: &[u8]) -> usize {
+pub fn write(bytes: &[u8]) -> usize {
     if bytes.is_empty() {
         return 0;
     }
     unsafe { vcabi::trueos_cabi_shell_attached_write(bytes.as_ptr(), bytes.len()) }
+}
+
+#[inline]
+pub fn attached_write(bytes: &[u8]) -> usize {
+    write(bytes)
 }
 
 #[inline]
@@ -260,6 +265,39 @@ pub fn attached_read_byte() -> Option<u8> {
     } else {
         None
     }
+}
+
+#[inline]
+pub fn read(buf: &mut [u8]) -> usize {
+    let mut read = 0;
+    for slot in buf {
+        let Some(byte) = attached_read_byte() else {
+            break;
+        };
+        *slot = byte;
+        read += 1;
+    }
+    read
+}
+
+pub fn read_blocking(buf: &mut [u8]) -> usize {
+    if buf.is_empty() {
+        return 0;
+    }
+
+    loop {
+        let read = read(buf);
+        if read != 0 {
+            return read;
+        }
+        crate::vsys::poll_once();
+        crate::vsys::sleep_ms(100);
+    }
+}
+
+#[inline]
+pub fn attached_read_available(buf: &mut [u8]) -> usize {
+    read(buf)
 }
 
 #[inline]

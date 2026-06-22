@@ -9,7 +9,8 @@ use spin::Mutex;
 use super::super::{
     MatrixTarget, ShellBackend2, UART1_COM1_BACKEND, line_width_for_backend,
     matrix_target_for_backend, matrix_target_interrupted, print_matrix_target_line,
-    print_shell_line, set_matrix_target_active,
+    print_shell_line, release_matrix_target_vm_reservation,
+    reserve_matrix_target_for_vm_slot_selected, set_matrix_target_active,
 };
 use super::tlb_helper::TlbTable;
 
@@ -20,6 +21,50 @@ const MIB: usize = 1024 * 1024;
 use alloc::collections::VecDeque;
 
 static APP_VM_RUN_QUEUE: Mutex<VecDeque<AppVmLaunchRequest>> = Mutex::new(VecDeque::new());
+
+fn preferred_slot_for_archive(archive: &str) -> String {
+    if archive == "hello_world" || archive == "hello_world.bp" {
+        return String::from("h_w");
+    }
+
+    let stem = archive
+        .trim()
+        .trim_end_matches(".bp")
+        .trim_end_matches(".vm");
+    let mut words = stem
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty());
+
+    let first = words.next().unwrap_or("bp");
+    let mut out = String::new();
+    out.push(first.chars().next().unwrap_or('b').to_ascii_lowercase());
+    for word in words {
+        if out.len() >= 3 {
+            break;
+        }
+        out.push(word.chars().next().unwrap_or('p').to_ascii_lowercase());
+    }
+    if out.len() < 2 {
+        for ch in first.chars().skip(1) {
+            if out.len() >= 3 {
+                break;
+            }
+            if ch.is_ascii_alphanumeric() {
+                out.push(ch.to_ascii_lowercase());
+            }
+        }
+    }
+    if out.is_empty() {
+        String::from("bp")
+    } else {
+        out
+    }
+}
+
+fn reserve_target_for_archive(target: &MatrixTarget, archive: &str) -> MatrixTarget {
+    let preferred = preferred_slot_for_archive(archive);
+    reserve_matrix_target_for_vm_slot_selected(target.output_mask, preferred.as_str())
+}
 
 #[derive(Clone)]
 struct AppVmLaunchRequest {
@@ -706,6 +751,7 @@ pub(crate) async fn app_vm_run_queue_task(spawner: Spawner) {
         set_matrix_target_active(&target, true);
         execute_request(&spawner, request).await;
         set_matrix_target_active(&target, false);
+        release_matrix_target_vm_reservation(&target);
     }
 }
 
@@ -735,6 +781,7 @@ pub(crate) fn enqueue_blueprint_bytes(
         return Err(line);
     }
 
+    let target = reserve_target_for_archive(&target, archive.as_str());
     let line = alloc::format!("apps: queued {}", archive.as_str());
     log_run_target_line(&target, line.as_str());
     enqueue_blueprint_request(target, archive, module_bytes, app_args, false);
@@ -778,6 +825,7 @@ async fn submit_module_bytes_to_target_async(
         return Err(line);
     }
     crate::allocators::with_host_alloc_domain(|| {
+        let target = reserve_target_for_archive(&target, archive_name);
         let line = alloc::format!("apps: queued {}", archive_name);
         log_run_target_line(&target, line.as_str());
         enqueue_blueprint_request(target, String::from(archive_name), module_bytes, app_args, true);

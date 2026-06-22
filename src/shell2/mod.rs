@@ -52,7 +52,6 @@ const SECTION_STATUS_HOLD_MS: u64 = 1000;
 const SECTION_RAINBOW_FRAME_MS: u64 = 120;
 const SECTION_RAINBOW_COLORS: [u8; 8] = [199, 208, 227, 121, 51, 39, 99, 201];
 const STATUS_NORMAL_RGB: (u8, u8, u8) = (255, 255, 255);
-const VMX_CONSOLE_COMMANDS: &str = "echo hostname homedir env disc thread help exit";
 const BANNER_TITLE_TEXT: &str = "TRUE OS";
 const BANNER_CLOCK_WIDTH: usize = 5;
 const BANNER_GROUP_GAP_WIDTH: usize = 1;
@@ -75,6 +74,7 @@ pub(crate) struct TranscriptEntry {
 #[derive(Clone)]
 struct CommandSession {
     slot_id: matrix::MatrixSlotId,
+    slot_lifetime_generation: u64,
     kind: shell2_cmd::CommandSessionKind,
 }
 
@@ -89,6 +89,7 @@ pub(crate) enum CommandSessionInputResult {
 pub(crate) struct MatrixTarget {
     output_mask: u8,
     slot_id: matrix::MatrixSlotId,
+    slot_lifetime_generation: u64,
     interrupt_generation: u64,
 }
 
@@ -222,11 +223,7 @@ impl<'a> AlignedWriter<'a> {
         self.move_to(BANNER_ROW, 1);
         self.clear_line();
         self.banner_left(output_mask, time_text);
-        if active_matrix_vm_id(output_mask).is_some() {
-            self.right_text(BANNER_ROW, self.vmx_console_text().as_str());
-        } else {
-            self.right_text(BANNER_ROW, self.banner_right_text(output_mask, mode).as_str());
-        }
+        self.right_text(BANNER_ROW, self.banner_right_text(output_mask, mode).as_str());
     }
 
     fn banner_left(&self, output_mask: u8, time_text: &str) {
@@ -238,11 +235,6 @@ impl<'a> AlignedWriter<'a> {
         let styled_count =
             alloc::format!("{}", term_style::paint(count_text.as_str()).color(TITLE_COUNT_RGB));
         self.io.raw_write_str(styled_count.as_str());
-        if active_matrix_vm_id(output_mask).is_some() {
-            let vmx =
-                alloc::format!(" {}", term_style::paint("VMX").bold().color(STATUS_SELECTED_RGB));
-            self.io.raw_write_str(vmx.as_str());
-        }
     }
 
     fn mode_status(
@@ -261,9 +253,7 @@ impl<'a> AlignedWriter<'a> {
         if !slot_text.is_empty() {
             self.left_text(STATUS_ROW, slot_text.as_str());
         }
-        if active_matrix_vm_id(output_mask).is_some() {
-            self.vmx_console_status(cmd_status_text);
-        } else if mode == ShellMode2::Surf {
+        if mode == ShellMode2::Surf {
             self.surf_status(surf_prefix);
         } else if mode == ShellMode2::Apps {
             self.apps_status(apps_mode);
@@ -274,16 +264,6 @@ impl<'a> AlignedWriter<'a> {
         }
         self.io.raw_write_str(ecma48::RESET);
     }
-
-    fn vmx_console_text(&self) -> AllocString {
-        let mut text = AllocString::new();
-        self.push_ai_token(&mut text, "vmx", true);
-        self.push_plain(&mut text, " ");
-        self.push_plain(&mut text, VMX_CONSOLE_COMMANDS);
-        text
-    }
-
-    fn vmx_console_status(&self, _cmd_status_text: Option<&str>) {}
 
     fn main_mode_text(&self, mode: ShellMode2) -> AllocString {
         let mut text = AllocString::new();
@@ -572,24 +552,14 @@ fn set_line_width_for_output(output_mask: u8, width: usize) {
 }
 
 fn minimum_line_width_for_output(output_mask: u8) -> usize {
-    let mut left = ecma48::visible_width(BANNER_TITLE_TEXT)
+    let left = ecma48::visible_width(BANNER_TITLE_TEXT)
         .saturating_add(1)
         .saturating_add(BANNER_CLOCK_WIDTH);
-    if active_matrix_vm_id(output_mask).is_some() {
-        left = left
-            .saturating_add(1)
-            .saturating_add(ecma48::visible_width("VMX"));
-    }
     left.saturating_add(BANNER_GROUP_GAP_WIDTH)
         .saturating_add(banner_right_visible_width(output_mask))
 }
 
 fn banner_right_visible_width(output_mask: u8) -> usize {
-    if active_matrix_vm_id(output_mask).is_some() {
-        return ecma48::visible_width("vmx")
-            .saturating_add(1)
-            .saturating_add(ecma48::visible_width(VMX_CONSOLE_COMMANDS));
-    }
     active_slot_label_visible_width(output_mask)
         .saturating_add(1)
         .saturating_add(main_mode_visible_width())
@@ -647,30 +617,66 @@ pub(crate) fn output_target_for_backend(io: &'static dyn ShellBackend2) -> u8 {
 pub(crate) fn matrix_target_for_backend(io: &'static dyn ShellBackend2) -> MatrixTarget {
     let output_mask = output_target_for_backend(io);
     let slot_id = matrix::active_slot_id(output_mask);
+    let slot_lifetime_generation = matrix::slot_lifetime_generation(&slot_id);
     let interrupt_generation = matrix::slot_interrupt_generation(&slot_id);
     MatrixTarget {
         output_mask,
         slot_id,
+        slot_lifetime_generation,
         interrupt_generation,
     }
 }
 
 pub(crate) fn matrix_target_for_slot_name(output_mask: u8, requested: &str) -> MatrixTarget {
     let slot_id = matrix::slot_id_from_name(requested);
+    let slot_lifetime_generation = matrix::slot_lifetime_generation(&slot_id);
     let interrupt_generation = matrix::slot_interrupt_generation(&slot_id);
     MatrixTarget {
         output_mask,
         slot_id,
+        slot_lifetime_generation,
+        interrupt_generation,
+    }
+}
+
+pub(crate) fn matrix_target_for_slot_name_selected(
+    output_mask: u8,
+    requested: &str,
+) -> MatrixTarget {
+    let slot_id = matrix::switch_active_slot(output_mask, requested);
+    let slot_lifetime_generation = matrix::slot_lifetime_generation(&slot_id);
+    let interrupt_generation = matrix::slot_interrupt_generation(&slot_id);
+    MatrixTarget {
+        output_mask,
+        slot_id,
+        slot_lifetime_generation,
+        interrupt_generation,
+    }
+}
+
+pub(crate) fn reserve_matrix_target_for_vm_slot_selected(
+    output_mask: u8,
+    requested: &str,
+) -> MatrixTarget {
+    let slot_id = matrix::reserve_available_vm_slot_selected(output_mask, requested);
+    let slot_lifetime_generation = matrix::slot_lifetime_generation(&slot_id);
+    let interrupt_generation = matrix::slot_interrupt_generation(&slot_id);
+    MatrixTarget {
+        output_mask,
+        slot_id,
+        slot_lifetime_generation,
         interrupt_generation,
     }
 }
 
 pub(crate) fn switch_matrix_target_slot(target: &MatrixTarget, requested: &str) -> MatrixTarget {
     let slot_id = matrix::switch_active_slot(target.output_mask, requested);
+    let slot_lifetime_generation = matrix::slot_lifetime_generation(&slot_id);
     let interrupt_generation = matrix::slot_interrupt_generation(&slot_id);
     MatrixTarget {
         output_mask: target.output_mask,
         slot_id,
+        slot_lifetime_generation,
         interrupt_generation,
     }
 }
@@ -685,24 +691,32 @@ pub(crate) fn spawn_app_vm_run_queue(spawner: Spawner) -> Result<(), embassy_exe
     }
 }
 
-fn matrix_target_for_slot(output_mask: u8, slot_id: &matrix::MatrixSlotId) -> MatrixTarget {
+fn matrix_target_for_slot(
+    output_mask: u8,
+    slot_id: &matrix::MatrixSlotId,
+    slot_lifetime_generation: u64,
+) -> MatrixTarget {
+    let interrupt_generation =
+        matrix::live_slot_interrupt_generation(slot_id, slot_lifetime_generation).unwrap_or(0);
     MatrixTarget {
         output_mask,
         slot_id: slot_id.clone(),
-        interrupt_generation: matrix::slot_interrupt_generation(slot_id),
+        slot_lifetime_generation,
+        interrupt_generation,
     }
 }
 
 pub(crate) fn set_matrix_target_active(target: &MatrixTarget, active: bool) {
     if active {
-        matrix::begin_slot_running(&target.slot_id);
+        let _ = matrix::begin_live_slot_running(&target.slot_id, target.slot_lifetime_generation);
     } else {
-        matrix::end_slot_running(&target.slot_id);
+        let _ = matrix::end_live_slot_running(&target.slot_id, target.slot_lifetime_generation);
     }
 }
 
 pub(crate) fn matrix_target_interrupted(target: &MatrixTarget) -> bool {
-    matrix::slot_interrupt_generation(&target.slot_id) != target.interrupt_generation
+    matrix::live_slot_interrupt_generation(&target.slot_id, target.slot_lifetime_generation)
+        != Some(target.interrupt_generation)
 }
 
 pub(crate) fn bind_matrix_target_vm(target: &MatrixTarget, vm_id: u8) {
@@ -715,6 +729,10 @@ pub(crate) fn bind_matrix_target_vm_input(target: &MatrixTarget, vm_id: u8) {
 
 pub(crate) fn unbind_matrix_target_vm(target: &MatrixTarget, vm_id: u8) {
     matrix::unbind_slot_vm(&target.slot_id, vm_id);
+}
+
+pub(crate) fn release_matrix_target_vm_reservation(target: &MatrixTarget) {
+    let _ = matrix::release_vm_slot_reservation(&target.slot_id, target.slot_lifetime_generation);
 }
 
 pub(crate) fn active_matrix_vm_input_id(output_mask: u8) -> Option<u8> {
@@ -783,11 +801,21 @@ fn enqueue_transcript_line(io: &dyn ShellIo2, source: LineSource, text: &str) {
 }
 
 pub(crate) fn print_matrix_target_line(target: &MatrixTarget, text: &str) {
-    matrix::record_line_in_slot(&target.slot_id, LineSource::System, text);
+    let _ = matrix::record_line_in_live_slot(
+        &target.slot_id,
+        target.slot_lifetime_generation,
+        LineSource::System,
+        text,
+    );
 }
 
 pub(crate) fn print_matrix_target_native_line(target: &MatrixTarget, text: &str) {
-    matrix::record_line_in_slot(&target.slot_id, LineSource::Native, text);
+    let _ = matrix::record_line_in_live_slot(
+        &target.slot_id,
+        target.slot_lifetime_generation,
+        LineSource::Native,
+        text,
+    );
 }
 
 pub(crate) fn raw_write_matrix_target(target: &MatrixTarget, bytes: &[u8]) -> usize {
@@ -902,6 +930,23 @@ fn handle_matrix_operator(io: &'static dyn ShellBackend2, submitted: &str) {
         let requested = submitted.strip_prefix('§').unwrap_or("");
         let _ = matrix::switch_active_slot(output_target_for_backend(io), requested);
     }
+}
+
+fn is_vmx_control_command(submitted: &str) -> bool {
+    matches!(
+        submitted.split_whitespace().next().unwrap_or(""),
+        "hostname"
+            | "homedir"
+            | "env"
+            | "disc"
+            | "file"
+            | "thread"
+            | "help"
+            | "stop"
+            | "pause"
+            | "preserve"
+            | "detach"
+    )
 }
 
 fn rainbow_status_text(phase: usize) -> AllocString {
@@ -1027,20 +1072,26 @@ enum HandleSubmitResult {
 fn find_command_session_index(
     sessions: &[CommandSession],
     slot_id: &matrix::MatrixSlotId,
+    slot_lifetime_generation: u64,
 ) -> Option<usize> {
-    sessions
-        .iter()
-        .position(|session| session.slot_id == *slot_id)
+    sessions.iter().position(|session| {
+        session.slot_id == *slot_id && session.slot_lifetime_generation == slot_lifetime_generation
+    })
 }
 
 fn find_command_session_indexes(
     sessions: &[CommandSession],
     slot_id: &matrix::MatrixSlotId,
+    slot_lifetime_generation: u64,
 ) -> alloc::vec::Vec<usize> {
     sessions
         .iter()
         .enumerate()
-        .filter_map(|(idx, session)| (session.slot_id == *slot_id).then_some(idx))
+        .filter_map(|(idx, session)| {
+            (session.slot_id == *slot_id
+                && session.slot_lifetime_generation == slot_lifetime_generation)
+                .then_some(idx)
+        })
         .collect()
 }
 
@@ -1051,7 +1102,8 @@ fn handle_command_session_input(
     submitted: &str,
     output_mask: u8,
 ) -> CommandSessionInputResult {
-    let target = matrix_target_for_slot(output_mask, &session.slot_id);
+    let target =
+        matrix_target_for_slot(output_mask, &session.slot_id, session.slot_lifetime_generation);
     match session.kind {
         shell2_cmd::CommandSessionKind::AudControl => {
             crate::shell2::cmds::aud::handle_session_input(&target, submitted)
@@ -1533,8 +1585,13 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     let submitted = submitted_raw.trim();
                     cmd_status_text = None;
                     let active_slot = matrix::active_slot_id(output_mask);
-                    let session_indexes =
-                        find_command_session_indexes(command_sessions.as_slice(), &active_slot);
+                    let active_slot_lifetime_generation =
+                        matrix::slot_lifetime_generation(&active_slot);
+                    let session_indexes = find_command_session_indexes(
+                        command_sessions.as_slice(),
+                        &active_slot,
+                        active_slot_lifetime_generation,
+                    );
                     let has_broadcast_sessions = session_indexes
                         .iter()
                         .any(|idx| command_sessions[*idx].kind.accepts_broadcast_input());
@@ -1582,6 +1639,21 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             minute_text.as_str(),
                             submitted,
                         );
+                    } else if let Some(vm_id) = active_matrix_vm_input_id(output_mask) {
+                        if !submitted.is_empty() {
+                            record_user_line_for_active_slot(io, submitted);
+                            if is_vmx_control_command(submitted) {
+                                let _ = crate::hv::blueprint_console_submit_control_line(
+                                    vm_id, submitted,
+                                );
+                            } else {
+                                let mut input = alloc::vec::Vec::from(submitted.as_bytes());
+                                input.push(b'\n');
+                                let _ = crate::hv::blueprint_console_submit_stdin(vm_id, &input);
+                            }
+                            transcript = current_transcript_for_task(io);
+                            out.render_transcript(&transcript);
+                        }
                     } else if let Some(vm_id) = active_matrix_vm_id(output_mask) {
                         if !submitted.is_empty() {
                             record_user_line_for_active_slot(io, submitted);
@@ -1628,9 +1700,11 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         for session_idx in remove_indexes.into_iter().rev() {
                             let _ = command_sessions.remove(session_idx);
                         }
-                    } else if let Some(session_idx) =
-                        find_command_session_index(command_sessions.as_slice(), &active_slot)
-                    {
+                    } else if let Some(session_idx) = find_command_session_index(
+                        command_sessions.as_slice(),
+                        &active_slot,
+                        active_slot_lifetime_generation,
+                    ) {
                         if !submitted.is_empty() {
                             record_user_line_for_active_slot(io, submitted);
                             transcript = current_transcript_for_task(io);
@@ -1705,6 +1779,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 }
                                 HandleSubmitResult::StartSession(kind) => {
                                     let slot_id = matrix::active_slot_id(output_mask);
+                                    let slot_lifetime_generation =
+                                        matrix::slot_lifetime_generation(&slot_id);
                                     if kind.shows_session_activity() {
                                         matrix::set_slot_activity(
                                             &slot_id,
@@ -1714,7 +1790,11 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                     command_sessions.retain(|session| {
                                         !(session.slot_id == slot_id && session.kind == kind)
                                     });
-                                    command_sessions.push(CommandSession { slot_id, kind });
+                                    command_sessions.push(CommandSession {
+                                        slot_id,
+                                        slot_lifetime_generation,
+                                        kind,
+                                    });
                                 }
                                 HandleSubmitResult::None => {}
                             }

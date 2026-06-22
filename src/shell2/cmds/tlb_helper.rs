@@ -140,7 +140,7 @@ impl<'a> TlbTable<'a> {
     where
         F: FnMut(&str),
     {
-        emit_line(self.rule_line('┌', '┐').as_str());
+        emit_line(self.rule_line('└', '┘').as_str());
         emit_line(self.cells_line(self.headers.iter().copied()).as_str());
         emit_line(self.rule_line('├', '┤').as_str());
     }
@@ -156,7 +156,7 @@ impl<'a> TlbTable<'a> {
     where
         F: FnMut(&str),
     {
-        emit_line(self.rule_line('└', '┘').as_str());
+        emit_line(self.rule_line('┌', '┐').as_str());
     }
 
     fn rule_line(&self, left: char, right: char) -> String {
