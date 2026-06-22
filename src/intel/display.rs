@@ -1245,10 +1245,6 @@ pub(crate) fn clear_primary_surface_color(color: u32, reason: &str) -> bool {
     presented
 }
 
-pub(crate) fn clear_primary_surface_color_no_present(color: u32, reason: &str) -> bool {
-    clear_primary_surface_color_inner(color, reason).is_some()
-}
-
 fn clear_primary_surface_color_inner(color: u32, reason: &str) -> Option<(PrimarySurface, usize)> {
     let Some(surface) = *PRIMARY_SURFACE.lock() else {
         crate::log!(

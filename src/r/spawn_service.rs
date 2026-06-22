@@ -107,7 +107,8 @@ define_started_flags!(
     I226_DIAGNOSTIC_DISPLAY_STARTED,
     AUD_FILE_SERVICE_STARTED,
     TINYAUDIO_SERVICE_STARTED,
-    TINYAUDIO_LIVE_HTTP_STARTED
+    TINYAUDIO_LIVE_HTTP_STARTED,
+    EXECUTOR_REALM_MIGRATION_SMOKE_STARTED
 );
 
 static SPOTIFY_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
@@ -1041,6 +1042,143 @@ fn spawn_atomic_bomb(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| atomic_bomb_task())
 }
 
+const EXECUTOR_REALM_SMOKE_HOPS: usize = 25;
+
+#[inline]
+fn executor_realm_smoke_delay_ms(hop: usize) -> u64 {
+    let mixed = (hop as u64)
+        .wrapping_mul(1_103_515_245)
+        .wrapping_add(12_345);
+    3 + ((mixed >> 16) % 23)
+}
+
+#[embassy_executor::task]
+async fn executor_realm_migration_smoke_task(
+    bsp_target: embassy_executor::MigrationTarget,
+    ap_target: embassy_executor::MigrationTarget,
+    ap_slot: u32,
+    ap_kind: u8,
+    bsp_executor_id: usize,
+    ap_executor_id: usize,
+) {
+    let start_ms = boot_probe_ms();
+    crate::log_info!(
+        target: "executor-realm";
+        "executor-realm: migration-smoke start ms={} hops={} bsp_exec=0x{:X} ap_slot={} ap_kind={} ap_exec=0x{:X}\n",
+        start_ms,
+        EXECUTOR_REALM_SMOKE_HOPS,
+        bsp_executor_id,
+        ap_slot,
+        ap_kind,
+        ap_executor_id
+    );
+
+    let mut ok_hops = 0usize;
+    for hop in 0..EXECUTOR_REALM_SMOKE_HOPS {
+        let to_ap = hop % 2 == 0;
+        let target = if to_ap { ap_target } else { bsp_target };
+        let to_slot = if to_ap { ap_slot as usize } else { 0 };
+        let from_slot = crate::percpu::current_slot();
+        let arm_ms = boot_probe_ms();
+        let delay_ms = executor_realm_smoke_delay_ms(hop);
+
+        crate::log_trace!(
+            target: "executor-realm";
+            "executor-realm: migration-smoke arm hop={} ms={} delay_ms={} from_cpu={} to_cpu={} from_exec=0x{:X} to_exec=0x{:X}\n",
+            hop,
+            arm_ms,
+            delay_ms,
+            from_slot,
+            to_slot,
+            if to_ap { bsp_executor_id } else { ap_executor_id },
+            target.executor_id()
+        );
+
+        Timer::after(EmbassyDuration::from_millis(delay_ms)).await;
+
+        let request_ms = boot_probe_ms();
+        // Safety: this smoke task is spawned through SendSpawner below, so the
+        // compiler verifies the whole future is Send before it may cross CPUs.
+        let result = unsafe { embassy_executor::migrate_current_task_to(target) }.await;
+        let done_ms = boot_probe_ms();
+        let current_slot = crate::percpu::current_slot();
+        let hop_ok = result.migrated && current_slot == to_slot;
+        if hop_ok {
+            ok_hops = ok_hops.saturating_add(1);
+        }
+
+        crate::log_trace!(
+            target: "executor-realm";
+            "executor-realm: migration-smoke hop={} task=0x{:X} request_ms={} done_ms={} wait_ms={} migrate_ms={} cpu_from={} cpu_to={} cpu_now={} spawner_from=0x{:X} spawner_to=0x{:X} spawner_now=0x{:X} ok={}\n",
+            hop,
+            result.task_id,
+            request_ms,
+            done_ms,
+            request_ms.saturating_sub(arm_ms),
+            done_ms.saturating_sub(request_ms),
+            from_slot,
+            to_slot,
+            current_slot,
+            result.from_executor_id,
+            result.to_executor_id,
+            result.current_executor_id,
+            hop_ok
+        );
+    }
+
+    crate::log_info!(
+        target: "executor-realm";
+        "executor-realm: migration-smoke done ms={} ok_hops={}/{} final_cpu={} bsp_exec=0x{:X} ap_slot={} ap_exec=0x{:X}\n",
+        boot_probe_ms(),
+        ok_hops,
+        EXECUTOR_REALM_SMOKE_HOPS,
+        crate::percpu::current_slot(),
+        bsp_executor_id,
+        ap_slot,
+        ap_executor_id
+    );
+}
+
+fn spawn_executor_realm_migration_smoke(spawner: Spawner) -> SpawnAttempt {
+    let Some((ap_slot, ap_kind, worker_spawner)) =
+        crate::workers::pick_background_spawner_with_slot()
+    else {
+        return SpawnAttempt::Skipped;
+    };
+
+    let bsp_spawner = spawner.make_send();
+    let ap_spawner = worker_spawner.raw();
+    let bsp_target = bsp_spawner.migration_target();
+    let ap_target = ap_spawner.migration_target();
+    let bsp_executor_id = bsp_spawner.executor_id();
+    let ap_executor_id = ap_spawner.executor_id();
+
+    match executor_realm_migration_smoke_task(
+        bsp_target,
+        ap_target,
+        ap_slot,
+        ap_kind,
+        bsp_executor_id,
+        ap_executor_id,
+    ) {
+        Ok(token) => {
+            let task_id = token.id();
+            crate::log_info!(
+                target: "executor-realm";
+                "executor-realm: migration-smoke spawn task=0x{:X} bsp_exec=0x{:X} ap_slot={} ap_kind={} ap_exec=0x{:X}\n",
+                task_id,
+                bsp_executor_id,
+                ap_slot,
+                ap_kind,
+                ap_executor_id
+            );
+            bsp_spawner.spawn(token);
+            SpawnAttempt::Spawned
+        }
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
 // --- registry ---
 
 const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
@@ -1062,7 +1200,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
 const SPOTIFY_SERVICE_READY: u32 = crate::r::readiness::NET_SOCKET_READY
     | crate::r::readiness::INTEL_HDA_READY
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY;
-const TASK_COUNT: usize = 57 + cfg!(feature = "trueos_rdp") as usize;
+const TASK_COUNT: usize = 58 + cfg!(feature = "trueos_rdp") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1072,6 +1210,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_blocking_service_lanes,
     ),
     TaskSpec::enabled("smp-hlt-history", 0, &SMP_HLT_HISTORY_STARTED, spawn_smp_hlt_history),
+    TaskSpec::enabled(
+        "executor-realm-migration-smoke",
+        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        &EXECUTOR_REALM_MIGRATION_SMOKE_STARTED,
+        spawn_executor_realm_migration_smoke,
+    ),
     TaskSpec::enabled(
         "codec-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,

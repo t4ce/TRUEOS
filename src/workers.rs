@@ -151,6 +151,11 @@ pub fn topology_core_slot_count() -> usize {
     crate::smp::cpu_count().max(crate::percpu::total_slots())
 }
 
+pub fn all_topology_spawners_registered() -> bool {
+    let topology_slots = topology_core_slot_count();
+    topology_slots == 0 || registered_core_spawner_count() >= topology_slots
+}
+
 pub fn app_visible_parallelism() -> usize {
     let first_app_slot = if APP_PARALLELISM_NO_UI {
         1
@@ -194,6 +199,14 @@ pub fn pick_background_spawner() -> Option<WorkerSpawner> {
 
 pub fn pick_background_spawner_with_slot() -> Option<(u32, u8, WorkerSpawner)> {
     pick_background_spawner_with_filter(|_| true)
+}
+
+pub fn pick_perf_background_spawner() -> Option<WorkerSpawner> {
+    pick_perf_background_spawner_with_slot().map(|(_, _, spawner)| spawner)
+}
+
+pub fn pick_perf_background_spawner_with_slot() -> Option<(u32, u8, WorkerSpawner)> {
+    pick_background_spawner_with_filter(|slot| core_kind_for_slot(slot) == CORE_KIND_PERF)
 }
 
 pub fn pick_background_spawner_where<F>(accept_slot: F) -> Option<(u32, u8, WorkerSpawner)>

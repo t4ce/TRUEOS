@@ -6,6 +6,16 @@ ISO_PATH="${ISO_PATH:-bld/trueos.iso}"
 QEMU_NVME_IMG="${QEMU_NVME_IMG:-tools/nvme.img}"
 QEMU_MEMORY="${QEMU_MEMORY:-12000M}"
 
+QEMU_MODE="${1:-iso}"
+if [[ "${QEMU_MODE}" == "iso" || "${QEMU_MODE}" == "iso-debug" ]]; then
+    shift || true
+fi
+
+QEMU_DEBUG_ARGS=()
+if [[ "${QEMU_MODE}" == "iso-debug" ]]; then
+    QEMU_DEBUG_ARGS+=("-S" "-s" "-no-reboot")
+fi
+
 QEMU_HOST_TCP_PORT_8081="${QEMU_HOST_TCP_PORT_8081:-18081}"
 QEMU_HOST_TCP_PORT_3="${QEMU_HOST_TCP_PORT_3:-10003}"
 QEMU_HOST_TCP_PORT_4="${QEMU_HOST_TCP_PORT_4:-10004}"
@@ -34,6 +44,8 @@ exec env -i \
     "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-}" \
     "XAUTHORITY=${XAUTHORITY:-}" \
     "${QEMU_BIN}" -no-shutdown \
+    "${QEMU_DEBUG_ARGS[@]}" \
+    "$@" \
     -display sdl,gl=on \
     -vga none \
     -device virtio-gpu-gl-pci,xres=2560,yres=1440 \

@@ -15,6 +15,7 @@ const ASSET_FETCH_FIELD_MAX: usize = 512;
 const ASSET_FETCH_QUEUE_CAP: usize = 256;
 const ASSET_READY_CAP: usize = 256;
 pub(crate) const ASSET_FETCH_WORKERS: usize = 4;
+pub(crate) const ASSET_FETCH_POLICY_PCORE_IMAGE: u8 = 1;
 
 #[derive(Clone, Debug)]
 pub struct BrowserAssetRequest {
@@ -107,8 +108,22 @@ fn start_asset_fetch(url: &str) -> Result<u32, i32> {
     }
 }
 
-fn pop_next_asset_request() -> Option<BrowserAssetRequest> {
+fn pop_next_asset_request(policy: u8) -> Option<BrowserAssetRequest> {
     with_asset_shack(|shack| {
+        if policy == ASSET_FETCH_POLICY_PCORE_IMAGE {
+            while let Some(index) = shack.queued.iter().position(|request| {
+                !browser_alive(request.browser_instance_id, request.generation)
+                    || request_prefers_perf_core(request)
+            }) {
+                let Some(request) = shack.queued.remove(index) else {
+                    break;
+                };
+                if browser_alive(request.browser_instance_id, request.generation) {
+                    return Some(request);
+                }
+            }
+        }
+
         while let Some(request) = shack.queued.pop_front() {
             if browser_alive(request.browser_instance_id, request.generation) {
                 return Some(request);
@@ -136,6 +151,10 @@ fn infer_decode_kind(kind: &str, url: &str, bytes: &[u8]) -> &'static str {
         return "jpeg";
     }
     "unknown"
+}
+
+fn request_prefers_perf_core(request: &BrowserAssetRequest) -> bool {
+    matches!(infer_decode_kind(&request.kind, &request.url, &[]), "png" | "jpeg")
 }
 
 fn decode_asset_rgba(kind: &str, url: &str, bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), i32> {
@@ -519,17 +538,22 @@ pub async fn asset_batch_monitor_task() {
 }
 
 #[embassy_executor::task(pool_size = 4)]
-pub async fn asset_fetch_worker_task() {
+pub async fn asset_fetch_worker_task(policy: u8) {
     let worker_id = ASSET_FETCH_WORKER_SEQ
         .fetch_add(1, Ordering::AcqRel)
         .saturating_add(1);
+    let policy_name = match policy {
+        ASSET_FETCH_POLICY_PCORE_IMAGE => "pcore-image-png-jpeg",
+        _ => "any",
+    };
     crate::log!(
-        "asset_shack: fetch worker started worker={} max_parallel={}\n",
+        "asset_shack: fetch worker started worker={} max_parallel={} policy={}\n",
         worker_id,
-        ASSET_FETCH_WORKERS
+        ASSET_FETCH_WORKERS,
+        policy_name
     );
     loop {
-        if let Some(request) = pop_next_asset_request() {
+        if let Some(request) = pop_next_asset_request(policy) {
             fetch_asset_request(worker_id, request).await;
         } else {
             Timer::after(EmbassyDuration::from_millis(ASSET_FETCH_IDLE_MS)).await;

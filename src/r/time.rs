@@ -212,6 +212,24 @@ pub fn ticks_until_next_wake() -> Option<u64> {
     next_wake_tick().map(|at| at.saturating_sub(now))
 }
 
+fn coalesced_wake_tick(queue: &Vec<WakeEntry, MAX_WAKEUPS>, at: u64, slack: u64) -> u64 {
+    if slack == 0 {
+        return at;
+    }
+
+    let latest = at.saturating_add(slack);
+    for entry in queue.iter() {
+        if entry.at < at {
+            continue;
+        }
+        if entry.at <= latest {
+            return entry.at;
+        }
+        break;
+    }
+    latest
+}
+
 struct TimeDriver;
 
 impl Driver for TimeDriver {
@@ -233,6 +251,11 @@ impl Driver for TimeDriver {
         }
 
         let mut queue = QUEUE.lock();
+        let at = coalesced_wake_tick(
+            &queue,
+            at,
+            embassy_executor::raw::timer_slack_ticks_for_waker(waker),
+        );
 
         let mut idx = 0;
         while idx < queue.len() {

@@ -558,10 +558,6 @@ pub(crate) fn clear_primary_surface_color(color: u32, reason: &str) -> bool {
     self::display::clear_primary_surface_color(color, reason)
 }
 
-pub(crate) fn clear_primary_surface_color_no_present(color: u32, reason: &str) -> bool {
-    self::display::clear_primary_surface_color_no_present(color, reason)
-}
-
 pub(crate) async fn wait_hw_logo_sequence_done() {
     self::display::wait_hw_logo_sequence_done().await
 }

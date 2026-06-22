@@ -10,6 +10,56 @@ use crate::{SendSpawner, Spawner};
 
 const REALM_CONTEXT_TAG: usize = 1;
 const REALM_CONTEXT_MASK: usize = !REALM_CONTEXT_TAG;
+const MIN_TAGGED_REALM_CONTEXT: usize = 4096;
+
+/// Scheduling policy for a realm.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Policy {
+    /// Maximum delay, in embassy-time ticks, allowed for timer wake coalescing.
+    pub timer_slack_ticks: u64,
+    /// Maximum queued tasks this realm may poll per bounded pass.
+    ///
+    /// A value of zero means no realm-local poll limit.
+    pub poll_limit_tasks: usize,
+}
+
+impl Policy {
+    /// Policy with exact timer wakes.
+    pub const fn exact() -> Self {
+        Self {
+            timer_slack_ticks: 0,
+            poll_limit_tasks: 0,
+        }
+    }
+
+    /// Policy with timer wake slack.
+    pub const fn with_timer_slack_ticks(timer_slack_ticks: u64) -> Self {
+        Self {
+            timer_slack_ticks,
+            poll_limit_tasks: 0,
+        }
+    }
+
+    /// Policy with a per-pass task poll limit.
+    pub const fn with_poll_limit_tasks(poll_limit_tasks: usize) -> Self {
+        Self {
+            timer_slack_ticks: 0,
+            poll_limit_tasks,
+        }
+    }
+
+    /// Return this policy with timer wake slack set.
+    pub const fn and_timer_slack_ticks(mut self, timer_slack_ticks: u64) -> Self {
+        self.timer_slack_ticks = timer_slack_ticks;
+        self
+    }
+
+    /// Return this policy with a per-pass task poll limit set.
+    pub const fn and_poll_limit_tasks(mut self, poll_limit_tasks: usize) -> Self {
+        self.poll_limit_tasks = poll_limit_tasks;
+        self
+    }
+}
 
 /// Wake flag used as the pender context for a nested executor realm.
 #[repr(C, align(2))]
@@ -62,6 +112,10 @@ impl Default for WakeFlag {
 /// Returns false for normal TRUEOS CPU-slot contexts.
 pub(crate) fn try_pend_context(context: *mut ()) -> bool {
     let raw = context as usize;
+    if raw < MIN_TAGGED_REALM_CONTEXT {
+        return false;
+    }
+
     if raw & REALM_CONTEXT_TAG == 0 {
         return false;
     }
@@ -87,9 +141,17 @@ pub struct Realm {
 impl Realm {
     /// Create a realm backed by `wake`.
     pub fn new(wake: &'static WakeFlag) -> Self {
+        Self::new_with_policy(wake, Policy::exact())
+    }
+
+    /// Create a realm backed by `wake` and `policy`.
+    pub fn new_with_policy(wake: &'static WakeFlag, policy: Policy) -> Self {
+        let executor = Executor::new(wake.context());
+        executor.set_timer_slack_ticks(policy.timer_slack_ticks);
+        executor.set_poll_limit_tasks(policy.poll_limit_tasks);
         Self {
             wake,
-            executor: Executor::new(wake.context()),
+            executor,
         }
     }
 
@@ -106,6 +168,30 @@ impl Realm {
     /// Return a sendable spawner for tasks that should run inside this realm.
     pub fn send_spawner(&'static self) -> SendSpawner {
         self.spawner().make_send()
+    }
+
+    /// Set this realm's timer slack in embassy-time ticks.
+    pub fn set_timer_slack_ticks(&self, ticks: u64) {
+        self.executor.set_timer_slack_ticks(ticks);
+    }
+
+    /// Return this realm's timer slack in embassy-time ticks.
+    pub fn timer_slack_ticks(&self) -> u64 {
+        self.executor.timer_slack_ticks()
+    }
+
+    /// Set this realm's per-pass task poll limit.
+    ///
+    /// A value of zero means no realm-local limit.
+    pub fn set_poll_limit_tasks(&self, tasks: usize) {
+        self.executor.set_poll_limit_tasks(tasks);
+    }
+
+    /// Return this realm's per-pass task poll limit.
+    ///
+    /// A value of zero means no realm-local limit.
+    pub fn poll_limit_tasks(&self) -> usize {
+        self.executor.poll_limit_tasks()
     }
 
     /// Poll up to `max_tasks` queued tasks from this realm.

@@ -177,6 +177,11 @@ impl Spawner {
         self.executor.id()
     }
 
+    /// Return this Spawner's executor as a cooperative migration target.
+    pub fn migration_target(&self) -> raw::MigrationTarget {
+        self.executor.migration_target()
+    }
+
     /// Return the number of currently spawned tasks attached to this Spawner's Executor.
     pub fn spawned_task_count(&self) -> usize {
         self.executor.spawned_task_count()
@@ -185,6 +190,32 @@ impl Spawner {
     /// Return the number of tasks currently queued to be polled on this Spawner's Executor.
     pub fn ready_task_count(&self) -> usize {
         self.executor.ready_task_count()
+    }
+
+    /// Set the timer slack for tasks owned by this Spawner's Executor.
+    ///
+    /// A value of zero means exact timer wakes.
+    pub fn set_timer_slack_ticks(&self, ticks: u64) {
+        self.executor.set_timer_slack_ticks(ticks);
+    }
+
+    /// Return the timer slack for tasks owned by this Spawner's Executor.
+    pub fn timer_slack_ticks(&self) -> u64 {
+        self.executor.timer_slack_ticks()
+    }
+
+    /// Limit how many queued tasks this Spawner's Executor may poll per bounded pass.
+    ///
+    /// A value of zero disables this executor-local limit.
+    pub fn set_poll_limit_tasks(&self, tasks: usize) {
+        self.executor.set_poll_limit_tasks(tasks);
+    }
+
+    /// Return the per-pass task poll limit for this Spawner's Executor.
+    ///
+    /// A value of zero means no executor-local limit.
+    pub fn poll_limit_tasks(&self) -> usize {
+        self.executor.poll_limit_tasks()
     }
 }
 
@@ -241,8 +272,46 @@ impl SendSpawner {
         self.executor.spawned_task_count()
     }
 
+    /// Return the unique ID of this SendSpawner's Executor.
+    pub fn executor_id(&self) -> usize {
+        self.executor as *const raw::SyncExecutor as usize
+    }
+
+    /// Return this SendSpawner's executor as a cooperative migration target.
+    pub fn migration_target(&self) -> raw::MigrationTarget {
+        raw::MigrationTarget {
+            executor: (self.executor as *const raw::SyncExecutor).cast_mut(),
+        }
+    }
+
     /// Return the number of tasks currently queued to be polled on this SendSpawner's Executor.
     pub fn ready_task_count(&self) -> usize {
         self.executor.ready_task_count()
+    }
+
+    /// Set the timer slack for tasks owned by this SendSpawner's Executor.
+    ///
+    /// A value of zero means exact timer wakes.
+    pub fn set_timer_slack_ticks(&self, ticks: u64) {
+        self.executor.set_timer_slack_ticks(ticks);
+    }
+
+    /// Return the timer slack for tasks owned by this SendSpawner's Executor.
+    pub fn timer_slack_ticks(&self) -> u64 {
+        self.executor.timer_slack_ticks()
+    }
+
+    /// Limit how many queued tasks this SendSpawner's Executor may poll per bounded pass.
+    ///
+    /// A value of zero disables this executor-local limit.
+    pub fn set_poll_limit_tasks(&self, tasks: usize) {
+        self.executor.set_poll_limit_tasks(tasks);
+    }
+
+    /// Return the per-pass task poll limit for this SendSpawner's Executor.
+    ///
+    /// A value of zero means no executor-local limit.
+    pub fn poll_limit_tasks(&self) -> usize {
+        self.executor.poll_limit_tasks()
     }
 }
