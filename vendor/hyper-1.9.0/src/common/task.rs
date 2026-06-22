@@ -36,9 +36,8 @@ fn noop_waker() -> Waker {
 pub(crate) fn now_or_never<F: core::future::Future>(fut: F) -> Option<F::Output> {
     let waker = noop_waker();
     let mut cx = Context::from_waker(&waker);
-    // TODO: replace with core::pin::pin! once MSRV >= 1.68
-    tokio::pin!(fut);
-    match fut.poll(&mut cx) {
+    let mut fut = core::pin::pin!(fut);
+    match fut.as_mut().poll(&mut cx) {
         Poll::Ready(res) => Some(res),
         Poll::Pending => None,
     }

@@ -11,6 +11,8 @@ pub(crate) mod either;
 pub(crate) mod future;
 pub(crate) mod io;
 #[cfg(all(any(feature = "client", feature = "server"), feature = "http1"))]
+pub(crate) mod mpsc;
+#[cfg(all(any(feature = "client", feature = "server"), feature = "http1"))]
 pub(crate) mod task;
 #[cfg(any(
     all(feature = "server", feature = "http1"),

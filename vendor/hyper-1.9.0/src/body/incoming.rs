@@ -13,10 +13,12 @@ use futures_channel::oneshot;
 ))]
 use futures_core::ready;
 #[cfg(all(feature = "http1", any(feature = "client", feature = "server")))]
+use futures_core::Stream;
+#[cfg(all(feature = "http1", any(feature = "client", feature = "server")))]
 use http::HeaderMap;
 use http_body::{Body, Frame, SizeHint};
 #[cfg(all(feature = "http1", any(feature = "client", feature = "server")))]
-use tokio::sync::mpsc;
+use crate::common::mpsc;
 
 #[cfg(all(
     any(feature = "http1", feature = "http2"),
@@ -109,7 +111,7 @@ impl Incoming {
     #[inline]
     #[cfg(all(feature = "http1", any(feature = "client", feature = "server")))]
     pub(crate) fn new_channel(content_length: DecodedLength, wanter: bool) -> (Sender, Incoming) {
-        let (data_tx, data_rx) = mpsc::unbounded_channel();
+        let (data_tx, data_rx) = mpsc::unbounded();
         let (trailers_tx, trailers_rx) = oneshot::channel();
 
         // If wanter is true, `Sender::poll_ready()` won't becoming ready
@@ -217,7 +219,7 @@ impl Body for Incoming {
                 want_tx.send(WANT_READY);
 
                 if !data_rx.is_closed() || !data_rx.is_empty() {
-                    if let Some(chunk) = ready!(data_rx.poll_recv(cx)) {
+                    if let Some(chunk) = ready!(Pin::new(data_rx).poll_next(cx)) {
                         let chunk = chunk?;
                         len.sub_if(chunk.len() as u64);
                         return Poll::Ready(Some(Ok(Frame::data(chunk))));
@@ -391,8 +393,8 @@ impl Sender {
     #[cfg(feature = "http1")]
     pub(crate) fn try_send_data(&mut self, chunk: Bytes) -> Result<(), Bytes> {
         self.data_tx
-            .send(Ok(chunk))
-            .map_err(|err| err.0.expect("just sent Ok"))
+            .unbounded_send(Ok(chunk))
+            .map_err(|err| err.into_inner().expect("just sent Ok"))
     }
 
     #[cfg(feature = "http1")]
@@ -409,7 +411,7 @@ impl Sender {
     }
 
     pub(crate) fn send_error(&mut self, err: crate::Error) {
-        let _ = self.data_tx.send(Err(err));
+        let _ = self.data_tx.unbounded_send(Err(err));
     }
 }
 

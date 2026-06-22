@@ -309,7 +309,27 @@ pub mod thread {
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod time {
     pub use core::time::Duration;
-    pub use tokio::time::Instant;
+
+    unsafe extern "Rust" {
+        fn trueos_platform_monotonic_nanos() -> u64;
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
+    pub struct Instant(Duration);
+
+    impl Instant {
+        pub fn now() -> Self {
+            Self(Duration::from_nanos(unsafe {
+                trueos_platform_monotonic_nanos()
+            }))
+        }
+
+        pub fn duration_since(self, earlier: Instant) -> Duration {
+            self.0
+                .checked_sub(earlier.0)
+                .unwrap_or_else(|| Duration::from_nanos(0))
+        }
+    }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
     pub struct SystemTime(Duration);
@@ -341,6 +361,30 @@ pub mod time {
 
         fn sub(self, rhs: Duration) -> SystemTime {
             SystemTime(self.0 - rhs)
+        }
+    }
+
+    impl core::ops::Add<Duration> for Instant {
+        type Output = Instant;
+
+        fn add(self, rhs: Duration) -> Instant {
+            Instant(self.0 + rhs)
+        }
+    }
+
+    impl core::ops::Sub<Duration> for Instant {
+        type Output = Instant;
+
+        fn sub(self, rhs: Duration) -> Instant {
+            Instant(self.0 - rhs)
+        }
+    }
+
+    impl core::ops::Sub<Instant> for Instant {
+        type Output = Duration;
+
+        fn sub(self, rhs: Instant) -> Duration {
+            self.duration_since(rhs)
         }
     }
 }
