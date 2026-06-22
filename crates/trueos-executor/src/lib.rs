@@ -35,6 +35,7 @@ pub use embassy_executor_macros::main_unspecified as main;
 pub use platform::*;
 
 pub mod raw;
+pub use raw::{MigrateCurrentTask, MigrationResult, MigrationTarget, migrate_current_task_to};
 
 /// Runtime lanes built from nested raw executors.
 pub mod realm;

@@ -66,6 +66,17 @@ impl State {
         }
     }
 
+    /// Mark the task as run-queued without immediately inserting it in a run queue.
+    ///
+    /// This is used by cooperative migration: the task reserves the next poll
+    /// while it is still running, then the executor inserts it into the
+    /// destination queue after the current poll returns.
+    #[inline(always)]
+    pub fn mark_run_queued(&self) -> bool {
+        let prev = self.state.fetch_or(STATE_RUN_QUEUED, Ordering::AcqRel);
+        prev & STATE_RUN_QUEUED == 0
+    }
+
     /// Unmark the task as run-queued. Return whether the task is spawned.
     #[inline(always)]
     pub fn run_dequeue(&self) {

@@ -26,7 +26,9 @@ use core::marker::PhantomData;
 use core::mem;
 use core::pin::Pin;
 use core::ptr::NonNull;
+use core::ptr::null_mut;
 use core::sync::atomic::AtomicPtr;
+use core::sync::atomic::AtomicU64;
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 use core::task::{Context, Poll, Waker};
@@ -101,6 +103,7 @@ pub(crate) struct TaskHeader {
     pub(crate) run_queue_item: RunQueueItem,
 
     pub(crate) executor: AtomicPtr<SyncExecutor>,
+    migration_target: AtomicPtr<SyncExecutor>,
     poll_fn: SyncUnsafeCell<Option<unsafe fn(TaskRef)>>,
 
     /// Integrated timer queue storage. This field should not be accessed outside of the timer queue.
@@ -205,6 +208,7 @@ impl<F: Future + 'static> TaskStorage<F> {
                 state: State::new(),
                 run_queue_item: RunQueueItem::new(),
                 executor: AtomicPtr::new(core::ptr::null_mut()),
+                migration_target: AtomicPtr::new(core::ptr::null_mut()),
                 // Note: this is lazily initialized so that a static `TaskStorage` will go in `.bss`
                 poll_fn: SyncUnsafeCell::new(None),
 
@@ -305,6 +309,7 @@ impl<F: Future + 'static> AvailableTask<F> {
     fn initialize_impl<S>(self, future: impl FnOnce() -> F) -> SpawnToken<S> {
         unsafe {
             self.task.raw.metadata.reset();
+            self.task.raw.migration_target.store(null_mut(), Ordering::Relaxed);
             self.task.raw.poll_fn.set(Some(TaskStorage::<F>::poll));
             self.task.future.write_in_place(future);
 
@@ -439,6 +444,8 @@ pub(crate) struct SyncExecutor {
     pender: Pender,
     ready_tasks: AtomicUsize,
     spawned_tasks: AtomicUsize,
+    timer_slack_ticks: AtomicU64,
+    poll_limit_tasks: AtomicUsize,
 }
 
 /// Result counters from a bounded executor poll pass.
@@ -466,6 +473,8 @@ impl SyncExecutor {
             pender,
             ready_tasks: AtomicUsize::new(0),
             spawned_tasks: AtomicUsize::new(0),
+            timer_slack_ticks: AtomicU64::new(0),
+            poll_limit_tasks: AtomicUsize::new(0),
         }
     }
 
@@ -536,6 +545,7 @@ impl SyncExecutor {
         #[cfg(feature = "_any_trace")]
         trace::poll_start(self);
 
+        let max_tasks = self.effective_poll_budget(max_tasks);
         let polled_tasks = self.run_queue.dequeue_budget(max_tasks, |p| {
             unsafe { self.poll_task(p) };
         });
@@ -561,6 +571,30 @@ impl SyncExecutor {
 
         #[cfg(feature = "_any_trace")]
         trace::task_exec_end(self, &p);
+
+        self.finish_task_migration(p);
+    }
+
+    fn finish_task_migration(&'static self, task: TaskRef) {
+        let header = task.header();
+        let target = header.migration_target.swap(null_mut(), Ordering::AcqRel);
+        if target.is_null() {
+            return;
+        }
+
+        let target = unsafe { &*target };
+        header
+            .executor
+            .store((target as *const SyncExecutor).cast_mut(), Ordering::Release);
+
+        if !core::ptr::eq(self, target) {
+            self.spawned_tasks.fetch_sub(1, Ordering::AcqRel);
+            target.spawned_tasks.fetch_add(1, Ordering::AcqRel);
+        }
+
+        state::locked(|l| unsafe {
+            target.enqueue(task, l);
+        });
     }
 
     pub fn spawned_task_count(&self) -> usize {
@@ -569,6 +603,30 @@ impl SyncExecutor {
 
     pub fn ready_task_count(&self) -> usize {
         self.ready_tasks.load(Ordering::Acquire)
+    }
+
+    pub fn set_timer_slack_ticks(&self, ticks: u64) {
+        self.timer_slack_ticks.store(ticks, Ordering::Release);
+    }
+
+    pub fn timer_slack_ticks(&self) -> u64 {
+        self.timer_slack_ticks.load(Ordering::Acquire)
+    }
+
+    #[inline]
+    fn effective_poll_budget(&self, max_tasks: usize) -> usize {
+        match self.poll_limit_tasks.load(Ordering::Acquire) {
+            0 => max_tasks,
+            limit => max_tasks.min(limit),
+        }
+    }
+
+    pub fn set_poll_limit_tasks(&self, tasks: usize) {
+        self.poll_limit_tasks.store(tasks, Ordering::Release);
+    }
+
+    pub fn poll_limit_tasks(&self) -> usize {
+        self.poll_limit_tasks.load(Ordering::Acquire)
     }
 }
 
@@ -677,6 +735,33 @@ impl Executor {
         self.inner.poll_budget(max_tasks)
     }
 
+    /// Set how far timers owned by this executor may be delayed for wake coalescing.
+    ///
+    /// A value of zero means exact timer wakes.
+    pub fn set_timer_slack_ticks(&self, ticks: u64) {
+        self.inner.set_timer_slack_ticks(ticks);
+    }
+
+    /// Return this executor's timer slack in embassy-time ticks.
+    pub fn timer_slack_ticks(&self) -> u64 {
+        self.inner.timer_slack_ticks()
+    }
+
+    /// Limit how many queued tasks [`poll_budget`](Self::poll_budget) may poll per pass.
+    ///
+    /// A value of zero disables this executor-local limit. The caller supplied
+    /// `max_tasks` still applies either way.
+    pub fn set_poll_limit_tasks(&self, tasks: usize) {
+        self.inner.set_poll_limit_tasks(tasks);
+    }
+
+    /// Return this executor's per-pass task poll limit.
+    ///
+    /// A value of zero means no executor-local limit.
+    pub fn poll_limit_tasks(&self) -> usize {
+        self.inner.poll_limit_tasks()
+    }
+
     /// Return the number of currently spawned tasks attached to this executor.
     pub fn spawned_task_count(&'static self) -> usize {
         self.inner.spawned_task_count()
@@ -698,6 +783,127 @@ impl Executor {
     /// Get a unique ID for this Executor.
     pub fn id(&'static self) -> usize {
         &self.inner as *const SyncExecutor as usize
+    }
+
+    /// Return a migration target for cooperative task handoff.
+    pub fn migration_target(&'static self) -> MigrationTarget {
+        MigrationTarget {
+            executor: (&self.inner as *const SyncExecutor).cast_mut(),
+        }
+    }
+}
+
+/// Destination handle for cooperative task migration.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct MigrationTarget {
+    pub(crate) executor: *mut SyncExecutor,
+}
+
+unsafe impl Send for MigrationTarget {}
+unsafe impl Sync for MigrationTarget {}
+
+impl MigrationTarget {
+    /// Return true if this target does not point at an executor.
+    pub fn is_null(self) -> bool {
+        self.executor.is_null()
+    }
+
+    /// Return the executor id for this target.
+    pub fn executor_id(self) -> usize {
+        self.executor as usize
+    }
+}
+
+/// Result of one cooperative migration request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MigrationResult {
+    /// Task id of the migrated task.
+    pub task_id: u32,
+    /// Executor id observed before the migration request.
+    pub from_executor_id: usize,
+    /// Requested destination executor id.
+    pub to_executor_id: usize,
+    /// Executor id observed when this future completed.
+    pub current_executor_id: usize,
+    /// Whether the task reached the requested executor.
+    pub migrated: bool,
+}
+
+/// Future returned by [`migrate_current_task_to`].
+pub struct MigrateCurrentTask {
+    target: MigrationTarget,
+    requested: bool,
+    task_id: u32,
+    from_executor_id: usize,
+}
+
+impl Future for MigrateCurrentTask {
+    type Output = MigrationResult;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let task = task_from_waker(cx.waker());
+        let header = task.header();
+        let current = header.executor.load(Ordering::Acquire);
+        let current_executor_id = current as usize;
+
+        if self.requested {
+            return Poll::Ready(MigrationResult {
+                task_id: self.task_id,
+                from_executor_id: self.from_executor_id,
+                to_executor_id: self.target.executor_id(),
+                current_executor_id,
+                migrated: current == self.target.executor,
+            });
+        }
+
+        let task_id = task.id();
+        if self.target.is_null() || current.is_null() || current == self.target.executor {
+            return Poll::Ready(MigrationResult {
+                task_id,
+                from_executor_id: current_executor_id,
+                to_executor_id: self.target.executor_id(),
+                current_executor_id,
+                migrated: false,
+            });
+        }
+
+        if !header.state.mark_run_queued() {
+            return Poll::Ready(MigrationResult {
+                task_id,
+                from_executor_id: current_executor_id,
+                to_executor_id: self.target.executor_id(),
+                current_executor_id,
+                migrated: false,
+            });
+        }
+
+        header
+            .migration_target
+            .store(self.target.executor, Ordering::Release);
+        self.requested = true;
+        self.task_id = task_id;
+        self.from_executor_id = current_executor_id;
+        Poll::Pending
+    }
+}
+
+/// Cooperatively move the currently polling task to `target`.
+///
+/// The request is made while the task is polling, but the source executor only
+/// commits the handoff after that poll returns. The task is then queued on the
+/// destination executor and this future completes on its next poll.
+///
+/// # Safety
+///
+/// The current task must be safe to resume on the destination executor. For a
+/// cross-CPU migration this means the task future and all state held across the
+/// migration point must be `Send`.
+pub unsafe fn migrate_current_task_to(target: MigrationTarget) -> MigrateCurrentTask {
+    MigrateCurrentTask {
+        target,
+        requested: false,
+        task_id: 0,
+        from_executor_id: 0,
     }
 }
 
@@ -736,4 +942,17 @@ pub fn wake_task_no_pend(task: TaskRef) {
             executor.run_queue.enqueue(task, l);
         }
     });
+}
+
+/// Return the timer slack for the executor that owns `waker`.
+///
+/// Wakers not created by this executor, or wakers not currently attached to a
+/// spawned task, have zero slack.
+pub fn timer_slack_ticks_for_waker(waker: &Waker) -> u64 {
+    let Some(task) = try_task_from_waker(waker) else {
+        return 0;
+    };
+
+    let executor = task.header().executor.load(Ordering::Relaxed);
+    unsafe { executor.as_ref().map_or(0, SyncExecutor::timer_slack_ticks) }
 }

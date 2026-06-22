@@ -347,15 +347,38 @@ pub(crate) fn spawn_html_fetch_service(spawner: Spawner) -> Result<bool, SpawnEr
 }
 
 pub(crate) fn spawn_asset_fetch_service(spawner: Spawner) -> Result<bool, SpawnError> {
+    let Some(first_worker_spawner) = pick_png_jpeg_asset_worker_spawner() else {
+        return Ok(false);
+    };
+
     let monitor_token = asset_shack::asset_batch_monitor_task()?;
     spawner.spawn(monitor_token);
+
     let mut spawned = false;
     for _ in 0..asset_shack::ASSET_FETCH_WORKERS {
-        let token = asset_shack::asset_fetch_worker_task()?;
-        spawner.spawn(token);
+        let worker_spawner = if spawned {
+            pick_png_jpeg_asset_worker_spawner().unwrap_or(first_worker_spawner)
+        } else {
+            first_worker_spawner
+        };
+        let token =
+            asset_shack::asset_fetch_worker_task(asset_shack::ASSET_FETCH_POLICY_PCORE_IMAGE)?;
+        worker_spawner.spawn(token);
         spawned = true;
     }
     Ok(spawned)
+}
+
+fn pick_png_jpeg_asset_worker_spawner() -> Option<crate::workers::WorkerSpawner> {
+    if let Some(spawner) = crate::workers::pick_perf_background_spawner() {
+        return Some(spawner);
+    }
+
+    if !crate::workers::all_topology_spawners_registered() {
+        return None;
+    }
+
+    crate::workers::pick_background_spawner()
 }
 
 pub(crate) fn spawn_truesurfer_batch(

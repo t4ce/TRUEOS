@@ -178,6 +178,8 @@ async fn run_diashow(target: &MatrixTarget) -> Result<(), String> {
     Timer::after(EmbassyDuration::from_millis(START_DELAY_MS)).await;
 
     let mut presented = 0usize;
+    let mut gpu_presented = 0usize;
+    let mut fallback_presented = 0usize;
     let mut gpu_surface = DiashowGpuSurface::new();
     for slide in slides.iter() {
         let geometry = centered_scaled_geometry(
@@ -187,9 +189,18 @@ async fn run_diashow(target: &MatrixTarget) -> Result<(), String> {
             scanout_width,
             scanout_height,
         );
-        let ok = match geometry {
+        let gpu_ok = match geometry {
             Some(geometry) => present_slide_gpu(&mut gpu_surface, slide, geometry),
             None => false,
+        };
+        let ok = if gpu_ok {
+            gpu_presented = gpu_presented.saturating_add(1);
+            true
+        } else if present_slide_cpu_unscaled(slide) {
+            fallback_presented = fallback_presented.saturating_add(1);
+            true
+        } else {
+            false
         };
         if ok {
             presented = presented.saturating_add(1);
@@ -205,9 +216,11 @@ async fn run_diashow(target: &MatrixTarget) -> Result<(), String> {
     print_matrix_target_line(
         target,
         alloc::format!(
-            "diashow: done presented={}/{} delay={}ms",
+            "diashow: done presented={}/{} gpu={} fallback={} delay={}ms",
             presented,
             slides.len(),
+            gpu_presented,
+            fallback_presented,
             FRAME_DELAY_MS
         )
         .as_str(),
@@ -284,7 +297,6 @@ fn present_slide_gpu(
         return false;
     }
 
-    let _ = crate::intel::clear_primary_surface_color_no_present(0, "diashow-clear");
     ui_surface::present_surface(
         handle,
         UiPresent {
@@ -295,4 +307,14 @@ fn present_slide_gpu(
         "diashow",
     )
     .is_ok()
+}
+
+fn present_slide_cpu_unscaled(slide: &Slide) -> bool {
+    crate::intel::present_rgba_primary_center_unscaled(
+        slide.decoded.rgba.as_slice(),
+        slide.decoded.width,
+        slide.decoded.height,
+        (slide.decoded.width as usize).saturating_mul(4),
+        "diashow-fallback",
+    )
 }
