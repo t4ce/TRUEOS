@@ -125,6 +125,14 @@ fn rename_file(disk: DeviceHandle, src: &str, dst: &str) -> Result<bool, block::
     })
 }
 
+fn rename_dir(disk: DeviceHandle, src: &str, dst: &str) -> Result<bool, block::Error> {
+    let src = String::from(src);
+    let dst = String::from(dst);
+    crate::wait::spawn_and_wait_local(async move {
+        crate::r::fs::trueosfs::dir_rename_async(disk, src.as_str(), dst.as_str()).await
+    })
+}
+
 fn collect_dir_files(
     disk: DeviceHandle,
     path: &str,
@@ -156,21 +164,15 @@ fn move_path(disk: DeviceHandle, src: &str, dst: &str) -> Result<(usize, usize),
 
     let mut files = Vec::new();
     collect_dir_files(disk, src, &mut files)?;
-    let mut moved = 0usize;
-    let mut missed = 0usize;
-    for file in files {
-        let rest = file
-            .strip_prefix(src)
-            .unwrap_or(file.as_str())
-            .trim_start_matches('/');
-        let dst_file = join_path(dst, rest);
-        if rename_file(disk, file.as_str(), dst_file.as_str())? {
-            moved = moved.saturating_add(1);
-        } else {
-            missed = missed.saturating_add(1);
-        }
+    let count = files.len();
+    if count == 0 {
+        return Ok((0, 1));
     }
-    Ok((moved, missed))
+    if rename_dir(disk, src, dst)? {
+        Ok((count, 0))
+    } else {
+        Ok((0, count.max(1)))
+    }
 }
 
 fn print_usage(io: &'static dyn ShellBackend2, name: &str) {

@@ -8,6 +8,8 @@ use super::super::{
     print_shell_line, set_matrix_target_active, switch_matrix_target_slot,
 };
 use crate::disc::block;
+use crate::intel::types::{UiPlaneSlot, UiPresent, UiRect, UiSurfaceFormat};
+use crate::r::ui_surface::{self, UiSurfaceHandle};
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const DIASHOW_DIR: &str = "diashow";
@@ -15,11 +17,64 @@ const DIASHOW_SLOT: &str = "dia";
 const MAX_IMAGES: usize = 200;
 const START_DELAY_MS: u64 = 1_000;
 const FRAME_DELAY_MS: u64 = 15;
+const PRESENT_SCALE: u32 = 2;
 const AP1_UI_SERVICE_SLOT: u32 = 1;
 
 struct Slide {
     path: String,
     decoded: crate::ui3::img::jpeg_codec::DecodedJpeg,
+}
+
+struct DiashowGpuSurface {
+    handle: Option<UiSurfaceHandle>,
+    width: u32,
+    height: u32,
+}
+
+impl DiashowGpuSurface {
+    const fn new() -> Self {
+        Self {
+            handle: None,
+            width: 0,
+            height: 0,
+        }
+    }
+
+    fn ensure(&mut self, width: u32, height: u32) -> Result<UiSurfaceHandle, String> {
+        if let Some(handle) = self.handle
+            && self.width == width
+            && self.height == height
+        {
+            return Ok(handle);
+        }
+
+        self.destroy();
+        let handle = ui_surface::create_surface(width, height, UiSurfaceFormat::Rgba8888)
+            .map_err(|err| alloc::format!("gpu surface create failed: {:?}", err))?;
+        self.handle = Some(handle);
+        self.width = width;
+        self.height = height;
+        Ok(handle)
+    }
+
+    fn destroy(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            let _ = ui_surface::destroy_surface(handle);
+        }
+        self.width = 0;
+        self.height = 0;
+    }
+}
+
+impl Drop for DiashowGpuSurface {
+    fn drop(&mut self) {
+        self.destroy();
+    }
+}
+
+struct PresentGeometry {
+    src: UiRect,
+    dst: UiRect,
 }
 
 pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -105,14 +160,15 @@ async fn run_diashow(target: &MatrixTarget) -> Result<(), String> {
         return Err(String::from("all jpeg decodes failed"));
     }
 
-    let scanout = crate::intel::active_scanout_dimensions()
-        .map(|(w, h)| alloc::format!(" scanout={}x{}", w, h))
-        .unwrap_or_default();
+    let (scanout_width, scanout_height) = crate::intel::active_scanout_dimensions()
+        .ok_or_else(|| String::from("no active scanout"))?;
+    let scanout = alloc::format!(" scanout={}x{}", scanout_width, scanout_height);
     print_matrix_target_line(
         target,
         alloc::format!(
-            "diashow: presenting {} frame(s) after {}ms{}",
+            "diashow: presenting {} frame(s) scale={}x after {}ms{}",
             slides.len(),
+            PRESENT_SCALE,
             START_DELAY_MS,
             scanout
         )
@@ -122,14 +178,19 @@ async fn run_diashow(target: &MatrixTarget) -> Result<(), String> {
     Timer::after(EmbassyDuration::from_millis(START_DELAY_MS)).await;
 
     let mut presented = 0usize;
+    let mut gpu_surface = DiashowGpuSurface::new();
     for slide in slides.iter() {
-        let ok = crate::intel::present_rgba_primary_center_unscaled(
-            slide.decoded.rgba.as_slice(),
+        let geometry = centered_scaled_geometry(
             slide.decoded.width,
             slide.decoded.height,
-            (slide.decoded.width as usize).saturating_mul(4),
-            "diashow",
+            PRESENT_SCALE,
+            scanout_width,
+            scanout_height,
         );
+        let ok = match geometry {
+            Some(geometry) => present_slide_gpu(&mut gpu_surface, slide, geometry),
+            None => false,
+        };
         if ok {
             presented = presented.saturating_add(1);
         } else {
@@ -174,4 +235,64 @@ async fn collect_jpeg_paths(disk: block::DeviceHandle) -> Result<Vec<String>, St
 
 fn is_jpeg_name(name: &str) -> bool {
     name.len() > ".jpeg".len() && name.to_ascii_lowercase().ends_with(".jpeg")
+}
+
+fn centered_scaled_geometry(
+    src_width: u32,
+    src_height: u32,
+    scale: u32,
+    scanout_width: u32,
+    scanout_height: u32,
+) -> Option<PresentGeometry> {
+    if src_width == 0 || src_height == 0 || scale == 0 || scanout_width == 0 || scanout_height == 0
+    {
+        return None;
+    }
+
+    let visible_src_w = src_width.min(scanout_width.checked_div(scale).unwrap_or(0));
+    let visible_src_h = src_height.min(scanout_height.checked_div(scale).unwrap_or(0));
+    if visible_src_w == 0 || visible_src_h == 0 {
+        return None;
+    }
+
+    let dst_w = visible_src_w.checked_mul(scale)?;
+    let dst_h = visible_src_h.checked_mul(scale)?;
+    let src_x = src_width.saturating_sub(visible_src_w) / 2;
+    let src_y = src_height.saturating_sub(visible_src_h) / 2;
+    let dst_x = scanout_width.saturating_sub(dst_w) / 2;
+    let dst_y = scanout_height.saturating_sub(dst_h) / 2;
+
+    Some(PresentGeometry {
+        src: UiRect::new(src_x, src_y, visible_src_w, visible_src_h),
+        dst: UiRect::new(dst_x, dst_y, dst_w, dst_h),
+    })
+}
+
+fn present_slide_gpu(
+    gpu_surface: &mut DiashowGpuSurface,
+    slide: &Slide,
+    geometry: PresentGeometry,
+) -> bool {
+    let Ok(handle) = gpu_surface.ensure(slide.decoded.width, slide.decoded.height) else {
+        return false;
+    };
+    let full = UiRect::new(0, 0, slide.decoded.width, slide.decoded.height);
+    let src_pitch = (slide.decoded.width as usize).saturating_mul(4);
+    if ui_surface::write_surface_rgba(handle, full, slide.decoded.rgba.as_slice(), src_pitch)
+        .is_err()
+    {
+        return false;
+    }
+
+    let _ = crate::intel::clear_primary_surface_color_no_present(0, "diashow-clear");
+    ui_surface::present_surface(
+        handle,
+        UiPresent {
+            src: geometry.src,
+            dst: geometry.dst,
+            plane: UiPlaneSlot::Primary,
+        },
+        "diashow",
+    )
+    .is_ok()
 }
