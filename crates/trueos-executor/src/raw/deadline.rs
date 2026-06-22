@@ -27,7 +27,8 @@ impl Deadline {
     pub(crate) fn set(&self, instant_ticks: u64) {
         self.instant_ticks_hi
             .store((instant_ticks >> 32) as u32, Ordering::Relaxed);
-        self.instant_ticks_lo.store(instant_ticks as u32, Ordering::Relaxed);
+        self.instant_ticks_lo
+            .store(instant_ticks as u32, Ordering::Relaxed);
     }
 
     /// Deadline value in ticks, same time base and ticks as `embassy-time`

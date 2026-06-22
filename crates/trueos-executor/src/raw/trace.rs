@@ -133,12 +133,19 @@ impl TaskTracker {
         loop {
             let current_head = self.head.load(Ordering::Acquire);
             unsafe {
-                (*task_ptr).all_tasks_next.store(current_head, Ordering::Relaxed);
+                (*task_ptr)
+                    .all_tasks_next
+                    .store(current_head, Ordering::Relaxed);
             }
 
             if self
                 .head
-                .compare_exchange(current_head, task_ptr.cast_mut(), Ordering::Release, Ordering::Relaxed)
+                .compare_exchange(
+                    current_head,
+                    task_ptr.cast_mut(),
+                    Ordering::Release,
+                    Ordering::Relaxed,
+                )
                 .is_ok()
             {
                 break;

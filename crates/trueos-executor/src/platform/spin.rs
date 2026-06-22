@@ -10,6 +10,10 @@ mod thread {
 
     #[unsafe(export_name = "__pender")]
     fn __pender(context: *mut ()) {
+        if crate::realm::try_pend_context(context) {
+            return;
+        }
+
         unsafe extern "Rust" {
             fn __trueos_embassy_pender(context: *mut ());
         }
