@@ -640,6 +640,22 @@ pub fn present_rgba_primary(
     self::display::present_rgba_primary(src, src_width, src_height, src_pitch_bytes, reason)
 }
 
+pub fn present_rgba_primary_center_unscaled(
+    src: &[u8],
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+    reason: &str,
+) -> bool {
+    self::display::present_rgba_primary_center_unscaled(
+        src,
+        src_width,
+        src_height,
+        src_pitch_bytes,
+        reason,
+    )
+}
+
 pub fn blend_rgba_primary_rect(
     src: &[u8],
     src_width: u32,

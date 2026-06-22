@@ -1223,7 +1223,7 @@ pub fn stage_blueprint_launch(
         let _ = log_slot.lock().take();
     }
     if let Some(target) = console_target.as_ref() {
-        crate::shell2::bind_matrix_target_vm(target, vm_id);
+        crate::shell2::bind_matrix_target_vm_input(target, vm_id);
     }
     Ok(())
 }
@@ -1478,6 +1478,9 @@ fn blueprint_console_mirror_global_log(vm_id: u8, data: &[u8]) {
     }
 
     for line in ready {
+        if line.is_empty() {
+            continue;
+        }
         crate::globalog::log_with_purpose(
             Some("blueprint"),
             format_args!("vm{}: {}\n", vm_id, line.as_str()),
@@ -1507,7 +1510,6 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
     let rest = words.next().unwrap_or("").trim_start();
     match cmd {
         "" => {}
-        "echo" => blueprint_control_shell_line(vm_id, rest),
         "hostname" => {
             let hostname = blueprint_process_env_var(vm_id, "HOSTNAME")
                 .or_else(|| blueprint_process_env_var(vm_id, "TRUEOS_HOSTNAME"))
@@ -1555,7 +1557,7 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
         }
         "help" => blueprint_control_shell_line(
             vm_id,
-            "commands: echo hostname homedir env disc thread help stop pause preserve exit",
+            "commands: hostname homedir env disc thread help stop pause preserve",
         ),
         "stop" => match stop(vm_id) {
             Ok(true) => blueprint_control_shell_line(vm_id, "vmx-shell: stop requested"),
@@ -1573,9 +1575,7 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
                 alloc::format!("vmx-shell: preserve failed: {:?}", err).as_str(),
             ),
         },
-        "exit" | "detach" => {
-            blueprint_control_shell_line(vm_id, "vm: switch matrix slots with `§<slot>`")
-        }
+        "detach" => blueprint_control_shell_line(vm_id, "vm: switch matrix slots with `§<slot>`"),
         _ => blueprint_control_shell_line(vm_id, "unknown command; try `help`"),
     }
 }
@@ -1590,6 +1590,27 @@ pub(crate) fn blueprint_console_submit_control_line(vm_id: u8, line: &str) -> bo
     }
     blueprint_control_shell_command(vm_id, line);
     true
+}
+
+pub(crate) fn blueprint_console_submit_stdin(vm_id: u8, data: &[u8]) -> usize {
+    const MAX_CONSOLE_INPUT: usize = 64 * 1024;
+    if data.is_empty() {
+        return 0;
+    }
+    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
+        return 0;
+    };
+    let mut guard = slot.lock();
+    let Some(context) = guard.as_mut() else {
+        return 0;
+    };
+    for &byte in data {
+        if context.console_input.len() >= MAX_CONSOLE_INPUT {
+            let _ = context.console_input.pop_front();
+        }
+        context.console_input.push_back(byte);
+    }
+    data.len()
 }
 
 pub(crate) fn blueprint_console_submit_input(vm_id: u8, data: &[u8]) -> usize {

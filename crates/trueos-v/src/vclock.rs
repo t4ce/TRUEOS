@@ -16,6 +16,16 @@ pub struct Instant {
     nanos: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct UtcDateTime {
+    pub year: u32,
+    pub month: u8,
+    pub day: u8,
+    pub hour: u8,
+    pub minute: u8,
+    pub second: u8,
+}
+
 impl Duration {
     #[inline]
     pub const fn from_nanos(nanos: u64) -> Self {
@@ -24,12 +34,16 @@ impl Duration {
 
     #[inline]
     pub const fn from_millis(millis: u64) -> Self {
-        Self { nanos: millis.saturating_mul(1_000_000) }
+        Self {
+            nanos: millis.saturating_mul(1_000_000),
+        }
     }
 
     #[inline]
     pub const fn from_secs(seconds: u64) -> Self {
-        Self { nanos: seconds.saturating_mul(1_000_000_000) }
+        Self {
+            nanos: seconds.saturating_mul(1_000_000_000),
+        }
     }
 
     #[inline]
@@ -48,7 +62,9 @@ impl Duration {
         if nanos > u64::MAX as f64 {
             return Err(TryFromSecsError);
         }
-        Ok(Self { nanos: nanos as u64 })
+        Ok(Self {
+            nanos: nanos as u64,
+        })
     }
 
     #[inline]
@@ -74,12 +90,31 @@ impl fmt::Display for TryFromSecsError {
 impl Instant {
     #[inline]
     pub fn now() -> Self {
-        Self { nanos: monotonic_nanos() }
+        Self {
+            nanos: monotonic_nanos(),
+        }
     }
 
     #[inline]
     pub fn elapsed(self) -> Duration {
         Duration::from_nanos(monotonic_nanos().saturating_sub(self.nanos))
+    }
+}
+
+impl UtcDateTime {
+    #[inline]
+    pub fn from_unix_seconds(seconds: u64) -> Self {
+        unix_seconds_to_utc_date_time(seconds)
+    }
+}
+
+impl fmt::Display for UtcDateTime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
+            self.year, self.month, self.day, self.hour, self.minute, self.second
+        )
     }
 }
 
@@ -110,8 +145,21 @@ pub fn unix_nanos() -> Option<u64> {
 }
 
 #[inline]
+pub fn utc_date_time() -> Option<UtcDateTime> {
+    unix_seconds().map(UtcDateTime::from_unix_seconds)
+}
+
+#[inline]
 pub fn ntp_current_unix_seconds() -> u64 {
     unsafe { vcabi::trueos_cabi_ntp_current_unix_seconds() }
+}
+
+#[inline]
+pub fn ntp_utc_date_time() -> Option<UtcDateTime> {
+    match ntp_current_unix_seconds() {
+        0 => None,
+        seconds => Some(UtcDateTime::from_unix_seconds(seconds)),
+    }
 }
 
 #[inline]
@@ -130,4 +178,67 @@ pub fn kernel_date_day_month_year() -> Option<String> {
     }
     bytes.truncate(got);
     String::from_utf8(bytes).ok()
+}
+
+fn is_leap_year(year: u32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+fn month_lengths(year: u32) -> [u8; 12] {
+    if is_leap_year(year) {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    }
+}
+
+fn unix_seconds_to_utc_date_time(seconds: u64) -> UtcDateTime {
+    const SECS_PER_MIN: u64 = 60;
+    const SECS_PER_HOUR: u64 = 60 * SECS_PER_MIN;
+    const SECS_PER_DAY: u64 = 24 * SECS_PER_HOUR;
+
+    let mut days = seconds / SECS_PER_DAY;
+    let mut rem = seconds % SECS_PER_DAY;
+
+    let hour = (rem / SECS_PER_HOUR) as u8;
+    rem %= SECS_PER_HOUR;
+    let minute = (rem / SECS_PER_MIN) as u8;
+    let second = (rem % SECS_PER_MIN) as u8;
+
+    let mut year = 1970u32;
+    loop {
+        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
+        if days < days_in_year {
+            break;
+        }
+        days -= days_in_year;
+        year += 1;
+    }
+
+    let lengths = month_lengths(year);
+    let mut month_idx = 0usize;
+    while month_idx < lengths.len() {
+        let len = lengths[month_idx] as u64;
+        if days < len {
+            return UtcDateTime {
+                year,
+                month: (month_idx + 1) as u8,
+                day: (days + 1) as u8,
+                hour,
+                minute,
+                second,
+            };
+        }
+        days -= len;
+        month_idx += 1;
+    }
+
+    UtcDateTime {
+        year,
+        month: 12,
+        day: 31,
+        hour,
+        minute,
+        second,
+    }
 }

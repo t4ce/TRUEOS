@@ -911,7 +911,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         enabled: false,
         label: "hello_world",
         archive: "hello_world.bp",
-        slot: "hel",
+        slot: "h_w",
         args: &[],
         settle_ms: 750,
     },
