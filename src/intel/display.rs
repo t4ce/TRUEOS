@@ -1228,9 +1228,36 @@ pub(crate) fn sample_primary_surface_pixel(x: u32, y: u32) -> Option<u32> {
 }
 
 pub(crate) fn clear_primary_surface_color(color: u32, reason: &str) -> bool {
-    let Some((surface, byte_len)) = clear_primary_surface_color_inner(color, reason) else {
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+        crate::log!(
+            "intel/display: primary-clear skipped reason={} cause=no-primary-surface\n",
+            reason,
+        );
         return false;
     };
+    if surface.virt.is_null()
+        || surface.width == 0
+        || surface.height == 0
+        || surface.pitch_bytes == 0
+    {
+        crate::log!("intel/display: primary-clear skipped reason={} cause=bad-surface\n", reason,);
+        return false;
+    }
+
+    let byte_len = (surface.pitch_bytes as usize).saturating_mul(surface.height as usize);
+    if byte_len == 0 {
+        crate::log!("intel/display: primary-clear skipped reason={} cause=empty-surface\n", reason,);
+        return false;
+    }
+
+    fill_surface_color(
+        surface.virt,
+        surface.pitch_bytes as usize,
+        surface.width,
+        surface.height,
+        color,
+    );
+    crate::intel::dma_flush(surface.virt, byte_len);
     let presented = notify_primary_surface_present(surface, reason, byte_len);
     crate::log!(
         "intel/display: primary-clear reason={} color=0x{:08X} size={}x{} pitch=0x{:X} bytes=0x{:X} presented={}\n",
@@ -1243,40 +1270,6 @@ pub(crate) fn clear_primary_surface_color(color: u32, reason: &str) -> bool {
         presented as u8,
     );
     presented
-}
-
-fn clear_primary_surface_color_inner(color: u32, reason: &str) -> Option<(PrimarySurface, usize)> {
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
-        crate::log!(
-            "intel/display: primary-clear skipped reason={} cause=no-primary-surface\n",
-            reason,
-        );
-        return None;
-    };
-    if surface.virt.is_null()
-        || surface.width == 0
-        || surface.height == 0
-        || surface.pitch_bytes == 0
-    {
-        crate::log!("intel/display: primary-clear skipped reason={} cause=bad-surface\n", reason,);
-        return None;
-    }
-
-    let byte_len = (surface.pitch_bytes as usize).saturating_mul(surface.height as usize);
-    if byte_len == 0 {
-        crate::log!("intel/display: primary-clear skipped reason={} cause=empty-surface\n", reason,);
-        return None;
-    }
-
-    fill_surface_color(
-        surface.virt,
-        surface.pitch_bytes as usize,
-        surface.width,
-        surface.height,
-        color,
-    );
-    crate::intel::dma_flush(surface.virt, byte_len);
-    Some((surface, byte_len))
 }
 
 pub(crate) fn present_i226_diagnostic_screen(

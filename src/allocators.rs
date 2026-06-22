@@ -564,6 +564,12 @@ fn cpuid_slot() -> Option<usize> {
 }
 
 fn current_alloc_domain() -> AllocDomain {
+    // Hull guest code shares this image, but not host virtual heap/percpu
+    // discovery state. The comm page/VMX context is the authority here.
+    if let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() {
+        return AllocDomain::HvGuest(vm_id);
+    }
+
     if let Some(slot) = cpuid_slot()
         && HOST_ALLOC_DOMAIN_STRONG_DEPTH_BY_CPU[slot].load(Ordering::Acquire) != 0
     {
@@ -666,6 +672,9 @@ fn allocator_for_domain(domain: AllocDomain) -> &'static Mutex<FreeList> {
 pub fn with_hv_guest_alloc_domain<T>(vm_id: u8, f: impl FnOnce() -> T) -> Option<T> {
     if (vm_id as usize) >= crate::allcaps::hv::VM_ID_LIMIT || !ensure_hv_guest_heap_ready(vm_id) {
         return None;
+    }
+    if crate::hv::current_hull_guest_context_vm_id() == Some(vm_id) {
+        return Some(f());
     }
     let Some(slot) = cpuid_slot() else {
         return Some(crate::r::kernel_task_domain::with(
@@ -876,6 +885,28 @@ pub unsafe fn alloc_raw(layout: Layout) -> *mut u8 {
         }
     } else if let Some(vm_id) = alloc_domain_vm_id(domain) {
         log_hv_guest_alloc_failure(vm_id, layout, "raw");
+    }
+    ptr
+}
+
+pub unsafe fn alloc_raw_hv_guest(vm_id: u8, layout: Layout) -> *mut u8 {
+    if (vm_id as usize) >= crate::allcaps::hv::VM_ID_LIMIT || !ensure_hv_guest_heap_ready(vm_id) {
+        return core::ptr::null_mut();
+    }
+
+    let domain = AllocDomain::HvGuest(vm_id);
+    let ptr = {
+        let mut guard = allocator_for_domain(domain).lock();
+        guard.alloc(domain, layout)
+    };
+    if !ptr.is_null() {
+        let tag_ptr = ptr.sub(size_of::<AllocTag>()) as *mut AllocTag;
+        (*tag_ptr).domain = alloc_domain_tag(domain);
+        if should_log_hv_guest_alloc_success() {
+            log_hv_guest_alloc_watermark(vm_id, layout, ptr, "raw-explicit");
+        }
+    } else if should_log_hv_guest_alloc_success() {
+        log_hv_guest_alloc_failure(vm_id, layout, "raw-explicit");
     }
     ptr
 }

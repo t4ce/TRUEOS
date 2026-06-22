@@ -145,8 +145,7 @@ impl PortalImageAllocation {
         let alloc = || unsafe { crate::allocators::alloc_raw(layout) };
         let vm_id = portal_guest_alloc_vm_id();
         let base = if let Some(vm_id) = vm_id {
-            crate::allocators::with_hv_guest_alloc_domain(vm_id, alloc)
-                .unwrap_or(core::ptr::null_mut())
+            unsafe { crate::allocators::alloc_raw_hv_guest(vm_id, layout) }
         } else {
             alloc()
         };
@@ -1232,9 +1231,6 @@ fn resolve_known_import(name: &str) -> Option<usize> {
         "trueos_tokio_tls_current_slot" => {
             Some(crate::stackkeeper::trueos_tokio_tls_current_slot as *const () as usize)
         }
-        "trueos_tokio_tls_current_cpu_slot" => {
-            Some(crate::stackkeeper::trueos_tokio_tls_current_cpu_slot as *const () as usize)
-        }
         "__rust_alloc"
         | "_RNvCs75cmLyI1ip2_7___rustc12___rust_alloc"
         | "_RNvCs2csqI13tepL_7___rustc12___rust_alloc" => {
@@ -1516,12 +1512,11 @@ unsafe extern "C" fn portal_rust_alloc(size: usize, align: usize) -> *mut u8 {
         return core::ptr::null_mut();
     };
 
-    let alloc = || unsafe { crate::allocators::alloc_raw(layout) };
     let vm_id = portal_guest_alloc_vm_id();
     let ptr = if let Some(vm_id) = vm_id {
-        crate::allocators::with_hv_guest_alloc_domain(vm_id, alloc).unwrap_or(core::ptr::null_mut())
+        unsafe { crate::allocators::alloc_raw_hv_guest(vm_id, layout) }
     } else {
-        alloc()
+        unsafe { crate::allocators::alloc_raw(layout) }
     };
     let trace_index = PORTAL_RUST_ALLOC_TRACE_COUNT.fetch_add(1, Ordering::Relaxed);
     if crate::logflag::PORTAL_LOGS

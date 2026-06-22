@@ -22,7 +22,6 @@ The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 - `fill_rect_worklist_rgba8.cl`: descriptor worklist RGBA8 fills; one walker consumes the descriptor slice serially
 - `gradient_rect_worklist_rgba8.cl`: descriptor worklist procedural RGBA8 gradients; each descriptor writes one horizontal or vertical rect from two endpoint colors
 - `fill_circle_rgba8.cl`: parameterized RGBA8 circle fill clipped by a rect
-- `blit_rgba8_nearest.cl`: nearest-neighbor RGBA8 rect blit
 - `alpha_blend_rgba8_over.cl`: source-over RGBA8 blend
 - `alpha_blend_worklist_rgba8.cl`: descriptor worklist RGBA8 composites; source/destination rects are unscaled and batched like the fill worklist
 - `glyph_mask_rgba8.cl`: 8-bit coverage mask blended with packed RGBA8 color

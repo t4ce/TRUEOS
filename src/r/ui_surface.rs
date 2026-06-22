@@ -205,28 +205,18 @@ fn present_primary(
             src.w,
             src.h,
         );
-        let dst_x = i32::try_from(dst.x).map_err(|_| Error::Invalid)?;
-        let dst_y = i32::try_from(dst.y).map_err(|_| Error::Invalid)?;
-        let presented = if dst.w == src.w && dst.h == src.h {
-            let dst_xy = crate::intel::gpgpu::GpgpuPoint::new(dst_x, dst_y);
-            crate::intel::gpgpu::present_rgba8_rect_to_primary_xrgb_stats_with_flip(
-                src_surface,
-                src_rect,
-                dst_xy,
-                false,
-            )
-            .is_some()
-        } else {
-            let dst_rect = crate::intel::gpgpu::GpgpuRect::new(dst_x, dst_y, dst.w, dst.h);
-            crate::intel::gpgpu::present_rgba8_rect_to_primary_xrgb_scaled_nearest_stats(
-                src_surface,
-                src_rect,
-                dst_rect,
-                false,
-            )
-            .is_some()
-        };
-        if presented {
+        let dst_xy = crate::intel::gpgpu::GpgpuPoint::new(
+            i32::try_from(dst.x).map_err(|_| Error::Invalid)?,
+            i32::try_from(dst.y).map_err(|_| Error::Invalid)?,
+        );
+        if crate::intel::gpgpu::present_rgba8_rect_to_primary_xrgb_stats_with_flip(
+            src_surface,
+            src_rect,
+            dst_xy,
+            false,
+        )
+        .is_some()
+        {
             return Ok(UiPresentPath::KernelBlit);
         }
     }
