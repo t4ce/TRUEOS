@@ -51,7 +51,7 @@ use core::task::{Context, Poll};
 
 use crate::rt::{Read, ReadBufCursor, Write};
 use bytes::Bytes;
-use tokio::sync::oneshot;
+use futures_channel::oneshot;
 
 use crate::common::io::Rewind;
 

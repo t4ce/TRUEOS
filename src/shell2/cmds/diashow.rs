@@ -14,7 +14,7 @@ const DIASHOW_DIR: &str = "diashow";
 const DIASHOW_SLOT: &str = "dia";
 const MAX_IMAGES: usize = 200;
 const START_DELAY_MS: u64 = 1_000;
-const FRAME_DELAY_MS: u64 = 5;
+const FRAME_DELAY_MS: u64 = 15;
 const AP1_UI_SERVICE_SLOT: u32 = 1;
 
 struct Slide {

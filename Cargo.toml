@@ -85,11 +85,9 @@ tiny-skia-path = { version = "0.11.4", default-features = false, features = ["no
 parry2d = { version = "0.26", default-features = false, features = ["dim2", "f32"] }
 serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
-tokio = { version = "1.52.3", default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net", "io-util", "io-std", "fs", "process", "signal", "test-util"] }
 socket2 = { version = "0.6.3", default-features = false }
 mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net"] }
 hyper = { version = "1.9.0", default-features = false, features = ["client", "http1", "server"] }
-axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio", "tower-log", "original-uri"] }
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
@@ -124,8 +122,6 @@ h3-quinn = { path = "vendor/h3-quinn-0.0.10" }
 quinn = { path = "vendor/quinn-0.11.9" }
 quinn-proto = { path = "vendor/quinn-proto-0.11.14" }
 quinn-udp = { path = "vendor/quinn-udp-0.5.14" }
-axum = { path = "vendor/axum-0.8.9" }
-axum-core = { path = "vendor/axum-core-0.5.6" }
 base64 = { path = "vendor/base64-0.22.1" }
 bincode = { path = "vendor/bincode-1.3.3" }
 http = { path = "vendor/http-1.4.0" }
@@ -143,7 +139,6 @@ ndarray-rand = { path = "vendor/ndarray-rand-0.14.0" }
 rand = { path = "vendor/rand-0.8.6" }
 rand_distr = { path = "vendor/rand_distr-0.4.3" }
 serde_path_to_error = { path = "vendor/serde_path_to_error-0.1.20" }
-tokio-tungstenite = { path = "vendor/tokio-tungstenite-0.29.0" }
 tungstenite = { path = "vendor/tungstenite-0.29.0" }
 reqwest = { path = "vendor/reqwest-0.13.3" }
 kurbo = { path = "vendor/kurbo-0.11.3" }
@@ -156,9 +151,6 @@ aarch64-cpu = { path = "vendor/aarch64-cpu-10.0.0" }
 lazy_static = { path = "vendor/lazy_static-1.5.0" }
 rustls-rustcrypto = { path = "vendor/rustls-rustcrypto-0.0.2-alpha" }
 ring = { path = "vendor/ring-0.17.14" }
-tokio = { path = "vendor/tokio-1.52.3" }
-tokio-util = { path = "vendor/tokio-util-0.7.18" }
-tokio-rustls = { path = "vendor/tokio-rustls-0.26.4" }
 mio = { path = "vendor/mio-1.2.0" }
 socket2 = { path = "vendor/socket2-0.6.3" }
 getrandom = { path = "vendor/getrandom-0.2.17" }
