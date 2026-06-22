@@ -9,15 +9,7 @@
 
 mod run_queue;
 
-#[cfg_attr(all(cortex_m, target_has_atomic = "32"), path = "state_atomics_arm.rs")]
-#[cfg_attr(
-    all(not(cortex_m), any(target_has_atomic = "8", target_has_atomic = "32")),
-    path = "state_atomics.rs"
-)]
-#[cfg_attr(
-    not(any(target_has_atomic = "8", target_has_atomic = "32")),
-    path = "state_critical_section.rs"
-)]
+#[path = "state_atomics.rs"]
 mod state;
 
 #[cfg(feature = "_any_trace")]
