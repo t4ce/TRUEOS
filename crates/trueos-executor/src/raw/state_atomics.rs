@@ -41,7 +41,12 @@ impl State {
     #[inline(always)]
     pub fn spawn(&self) -> bool {
         self.state
-            .compare_exchange(0, STATE_SPAWNED | STATE_RUN_QUEUED, Ordering::AcqRel, Ordering::Acquire)
+            .compare_exchange(
+                0,
+                STATE_SPAWNED | STATE_RUN_QUEUED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
             .is_ok()
     }
 

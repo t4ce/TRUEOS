@@ -92,6 +92,29 @@ impl RunQueue {
         }
     }
 
+    /// Empty up to `limit` tasks from the queue and call `on_task` for each one.
+    ///
+    /// Tasks beyond the budget stay queued for a later poll pass.
+    #[cfg(not(any(feature = "scheduler-priority", feature = "scheduler-deadline")))]
+    pub(crate) fn dequeue_budget(&self, limit: usize, on_task: impl Fn(TaskRef)) -> usize {
+        if limit == 0 {
+            return 0;
+        }
+
+        let taken = self.stack.take_all();
+        let mut dequeued = 0;
+        for taskref in taken {
+            if dequeued < limit {
+                run_dequeue(&taskref);
+                on_task(taskref);
+                dequeued += 1;
+            } else {
+                self.requeue_unpolled(taskref);
+            }
+        }
+        dequeued
+    }
+
     /// # Earliest Deadline First Scheduler
     ///
     /// This algorithm will loop until all enqueued tasks are processed.
@@ -152,6 +175,71 @@ impl RunQueue {
             on_task(taskref);
         }
     }
+
+    /// Empty up to `limit` tasks from the queue and call `on_task` for each one.
+    ///
+    /// Tasks beyond the budget stay queued for a later poll pass.
+    #[cfg(any(feature = "scheduler-priority", feature = "scheduler-deadline"))]
+    pub(crate) fn dequeue_budget(&self, limit: usize, on_task: impl Fn(TaskRef)) -> usize {
+        if limit == 0 {
+            return 0;
+        }
+
+        let mut dequeued = 0;
+        let mut sorted = SortedList::<TaskHeader>::new_with_cmp(|lhs, rhs| {
+            #[cfg(feature = "scheduler-priority")]
+            {
+                let lp = lhs.metadata.priority();
+                let rp = rhs.metadata.priority();
+                if lp != rp {
+                    return lp.cmp(&rp).reverse();
+                }
+            }
+            #[cfg(feature = "scheduler-deadline")]
+            {
+                let ld = lhs.metadata.deadline();
+                let rd = rhs.metadata.deadline();
+                if ld != rd {
+                    return ld.cmp(&rd);
+                }
+            }
+            core::cmp::Ordering::Equal
+        });
+
+        loop {
+            let taken = self.stack.take_all();
+            sorted.extend(taken);
+
+            let Some(taskref) = sorted.pop_front() else {
+                return dequeued;
+            };
+
+            if dequeued == limit {
+                self.requeue_unpolled(taskref);
+                while let Some(taskref) = sorted.pop_front() {
+                    self.requeue_unpolled(taskref);
+                }
+                return dequeued;
+            }
+
+            run_dequeue(&taskref);
+            on_task(taskref);
+            dequeued += 1;
+        }
+    }
+
+    #[cfg(target_has_atomic = "ptr")]
+    fn requeue_unpolled(&self, task: TaskRef) {
+        self.stack.push(task);
+    }
+
+    #[cfg(not(target_has_atomic = "ptr"))]
+    fn requeue_unpolled(&self, task: TaskRef) {
+        critical_section::with(|cs| {
+            let inner = unsafe { &mut *self.stack.inner.borrow(cs).get() };
+            inner.push(task);
+        })
+    }
 }
 
 /// atomic state does not require a cs...
@@ -180,7 +268,9 @@ struct MutexTransferStack<T: Linked<cordyceps::stack::Links<T>>> {
 impl<T: Linked<cordyceps::stack::Links<T>>> MutexTransferStack<T> {
     const fn new() -> Self {
         Self {
-            inner: critical_section::Mutex::new(core::cell::UnsafeCell::new(cordyceps::Stack::new())),
+            inner: critical_section::Mutex::new(core::cell::UnsafeCell::new(
+                cordyceps::Stack::new(),
+            )),
         }
     }
 

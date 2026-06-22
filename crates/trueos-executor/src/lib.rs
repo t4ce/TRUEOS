@@ -36,6 +36,9 @@ pub use platform::*;
 
 pub mod raw;
 
+/// Runtime lanes built from nested raw executors.
+pub mod realm;
+
 mod spawner;
 pub use spawner::*;
 
@@ -106,8 +109,14 @@ pub mod _export {
         align: Align<ALIGN>,
     }
 
-    unsafe impl<const SIZE: usize, const ALIGN: usize> Send for TaskPoolHolder<SIZE, ALIGN> where Align<ALIGN>: Alignment {}
-    unsafe impl<const SIZE: usize, const ALIGN: usize> Sync for TaskPoolHolder<SIZE, ALIGN> where Align<ALIGN>: Alignment {}
+    unsafe impl<const SIZE: usize, const ALIGN: usize> Send for TaskPoolHolder<SIZE, ALIGN> where
+        Align<ALIGN>: Alignment
+    {
+    }
+    unsafe impl<const SIZE: usize, const ALIGN: usize> Sync for TaskPoolHolder<SIZE, ALIGN> where
+        Align<ALIGN>: Alignment
+    {
+    }
 
     #[allow(private_bounds)]
     impl<const SIZE: usize, const ALIGN: usize> TaskPoolHolder<SIZE, ALIGN>
@@ -135,7 +144,9 @@ pub mod _export {
         align_of::<TaskPool<Fut, POOL_SIZE>>()
     }
 
-    pub const fn task_pool_new<F, Args, Fut, const POOL_SIZE: usize>(_: F) -> TaskPool<Fut, POOL_SIZE>
+    pub const fn task_pool_new<F, Args, Fut, const POOL_SIZE: usize>(
+        _: F,
+    ) -> TaskPool<Fut, POOL_SIZE>
     where
         F: TaskFn<Args, Fut = Fut>,
         Fut: Future + 'static,

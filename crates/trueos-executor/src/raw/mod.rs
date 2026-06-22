@@ -44,12 +44,16 @@ use super::SpawnToken;
 use crate::{Metadata, SpawnError};
 
 #[unsafe(no_mangle)]
-extern "Rust" fn __embassy_time_queue_item_from_waker(waker: &Waker) -> &'static mut TimerQueueItem {
+extern "Rust" fn __embassy_time_queue_item_from_waker(
+    waker: &Waker,
+) -> &'static mut TimerQueueItem {
     unsafe { task_from_waker(waker).timer_queue_item() }
 }
 
 #[unsafe(no_mangle)]
-extern "Rust" fn __try_embassy_time_queue_item_from_waker(waker: &Waker) -> Option<&'static mut TimerQueueItem> {
+extern "Rust" fn __try_embassy_time_queue_item_from_waker(
+    waker: &Waker,
+) -> Option<&'static mut TimerQueueItem> {
     unsafe { try_task_from_waker(waker).map(|task| task.timer_queue_item()) }
 }
 
@@ -226,7 +230,10 @@ impl<F: Future + 'static> TaskStorage<F> {
     ///
     /// Once the task has finished running, you may spawn it again. It is allowed to spawn it
     /// on a different executor.
-    pub fn spawn(&'static self, future: impl FnOnce() -> F) -> Result<SpawnToken<impl Sized>, SpawnError> {
+    pub fn spawn(
+        &'static self,
+        future: impl FnOnce() -> F,
+    ) -> Result<SpawnToken<impl Sized>, SpawnError> {
         let task = AvailableTask::claim(self);
         match task {
             Some(task) => Ok(task.initialize(future)),
@@ -319,7 +326,10 @@ impl<F: Future + 'static> AvailableTask<F> {
     /// `future` must be a closure of the form `move || my_async_fn(args)`, where `my_async_fn`
     /// is an `async fn`, NOT a hand-written `Future`.
     #[doc(hidden)]
-    pub unsafe fn __initialize_async_fn<FutFn>(self, future: impl FnOnce() -> F) -> SpawnToken<FutFn> {
+    pub unsafe fn __initialize_async_fn<FutFn>(
+        self,
+        future: impl FnOnce() -> F,
+    ) -> SpawnToken<FutFn> {
         // When send-spawning a task, we construct the future in this thread, and effectively
         // "send" it to the executor thread by enqueuing it in its queue. Therefore, in theory,
         // send-spawning should require the future `F` to be `Send`.
@@ -364,7 +374,10 @@ impl<F: Future + 'static, const N: usize> TaskPool<F, N> {
         }
     }
 
-    fn spawn_impl<T>(&'static self, future: impl FnOnce() -> F) -> Result<SpawnToken<T>, SpawnError> {
+    fn spawn_impl<T>(
+        &'static self,
+        future: impl FnOnce() -> F,
+    ) -> Result<SpawnToken<T>, SpawnError> {
         match self.pool.iter().find_map(AvailableTask::claim) {
             Some(task) => Ok(task.initialize_impl::<T>(future)),
             None => Err(SpawnError::Busy),
@@ -378,7 +391,10 @@ impl<F: Future + 'static, const N: usize> TaskPool<F, N> {
     /// This will loop over the pool and spawn the task in the first storage that
     /// is currently free. If none is free, a "poisoned" SpawnToken is returned,
     /// which will cause [`Spawner::spawn()`](super::Spawner::spawn) to return the error.
-    pub fn spawn(&'static self, future: impl FnOnce() -> F) -> Result<SpawnToken<impl Sized>, SpawnError> {
+    pub fn spawn(
+        &'static self,
+        future: impl FnOnce() -> F,
+    ) -> Result<SpawnToken<impl Sized>, SpawnError> {
         self.spawn_impl::<F>(future)
     }
 
@@ -391,7 +407,10 @@ impl<F: Future + 'static, const N: usize> TaskPool<F, N> {
     /// SAFETY: `future` must be a closure of the form `move || my_async_fn(args)`, where `my_async_fn`
     /// is an `async fn`, NOT a hand-written `Future`.
     #[doc(hidden)]
-    pub unsafe fn _spawn_async_fn<FutFn>(&'static self, future: FutFn) -> Result<SpawnToken<impl Sized>, SpawnError>
+    pub unsafe fn _spawn_async_fn<FutFn>(
+        &'static self,
+        future: FutFn,
+    ) -> Result<SpawnToken<impl Sized>, SpawnError>
     where
         FutFn: FnOnce() -> F,
     {
@@ -420,6 +439,24 @@ pub(crate) struct SyncExecutor {
     pender: Pender,
     ready_tasks: AtomicUsize,
     spawned_tasks: AtomicUsize,
+}
+
+/// Result counters from a bounded executor poll pass.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PollStats {
+    /// Number of queued tasks that were polled in this pass.
+    pub polled_tasks: usize,
+    /// Number of spawned tasks still attached to the executor after polling.
+    pub spawned_tasks: usize,
+    /// Number of tasks still queued to be polled after this pass.
+    pub ready_tasks: usize,
+}
+
+impl PollStats {
+    /// Returns true when more queued work remains after the poll pass.
+    pub const fn has_ready_tasks(self) -> bool {
+        self.ready_tasks != 0
+    }
 }
 
 impl SyncExecutor {
@@ -485,21 +522,45 @@ impl SyncExecutor {
         trace::poll_start(self);
 
         self.run_queue.dequeue_all(|p| {
-            self.note_task_dequeued();
-            let task = p.header();
-
-            #[cfg(feature = "_any_trace")]
-            trace::task_exec_begin(self, &p);
-
-            // Run the task
-            task.poll_fn.get().unwrap_unchecked()(p);
-
-            #[cfg(feature = "_any_trace")]
-            trace::task_exec_end(self, &p);
+            unsafe { self.poll_task(p) };
         });
 
         #[cfg(feature = "_any_trace")]
-            trace::executor_idle(self)
+        trace::executor_idle(self)
+    }
+
+    /// # Safety
+    ///
+    /// Same as [`Executor::poll_budget`], plus you must only call this on the thread this executor was created.
+    pub(crate) unsafe fn poll_budget(&'static self, max_tasks: usize) -> PollStats {
+        #[cfg(feature = "_any_trace")]
+        trace::poll_start(self);
+
+        let polled_tasks = self.run_queue.dequeue_budget(max_tasks, |p| {
+            unsafe { self.poll_task(p) };
+        });
+
+        #[cfg(feature = "_any_trace")]
+        trace::executor_idle(self);
+
+        PollStats {
+            polled_tasks,
+            spawned_tasks: self.spawned_task_count(),
+            ready_tasks: self.ready_task_count(),
+        }
+    }
+
+    unsafe fn poll_task(&'static self, p: TaskRef) {
+        self.note_task_dequeued();
+        let task = p.header();
+
+        #[cfg(feature = "_any_trace")]
+        trace::task_exec_begin(self, &p);
+
+        task.poll_fn.get().unwrap_unchecked()(p);
+
+        #[cfg(feature = "_any_trace")]
+        trace::task_exec_end(self, &p);
     }
 
     pub fn spawned_task_count(&self) -> usize {
@@ -604,6 +665,18 @@ impl Executor {
         self.inner.poll()
     }
 
+    /// Poll up to `max_tasks` queued tasks in this executor.
+    ///
+    /// This is useful for hosting an executor as a schedulable lane inside another runtime.
+    ///
+    /// # Safety
+    ///
+    /// You must NOT call `poll_budget` reentrantly on the same executor, and it must be called
+    /// from the executor's owning thread.
+    pub unsafe fn poll_budget(&'static self, max_tasks: usize) -> PollStats {
+        self.inner.poll_budget(max_tasks)
+    }
+
     /// Return the number of currently spawned tasks attached to this executor.
     pub fn spawned_task_count(&'static self) -> usize {
         self.inner.spawned_task_count()
@@ -636,7 +709,11 @@ pub fn wake_task(task: TaskRef) {
     header.state.run_enqueue(|l| {
         // We have just marked the task as scheduled, so enqueue it.
         unsafe {
-            let executor = header.executor.load(Ordering::Relaxed).as_ref().unwrap_unchecked();
+            let executor = header
+                .executor
+                .load(Ordering::Relaxed)
+                .as_ref()
+                .unwrap_unchecked();
             executor.enqueue(task, l);
         }
     });
@@ -650,7 +727,11 @@ pub fn wake_task_no_pend(task: TaskRef) {
     header.state.run_enqueue(|l| {
         // We have just marked the task as scheduled, so enqueue it.
         unsafe {
-            let executor = header.executor.load(Ordering::Relaxed).as_ref().unwrap_unchecked();
+            let executor = header
+                .executor
+                .load(Ordering::Relaxed)
+                .as_ref()
+                .unwrap_unchecked();
             executor.note_task_queued();
             executor.run_queue.enqueue(task, l);
         }
