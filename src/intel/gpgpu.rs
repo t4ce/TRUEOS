@@ -3039,6 +3039,105 @@ pub(crate) fn present_rgba8_rect_to_primary_xrgb_stats_with_flip(
     Some(stats)
 }
 
+pub(crate) fn present_rgba8_rect_to_primary_xrgb_scaled_nearest_stats(
+    src: GpgpuRgba8Surface,
+    src_rect: GpgpuRect,
+    dst_rect: GpgpuRect,
+    flip_y: bool,
+) -> Option<GpgpuSubmitStats> {
+    let total_start_tick = direct_rcs_now_tick();
+    if !src.is_valid()
+        || src_rect.is_empty()
+        || dst_rect.is_empty()
+        || src_rect.x < 0
+        || src_rect.y < 0
+    {
+        return None;
+    }
+
+    let target = super::display::primary_surface_gpgpu_marker_target()?;
+    let primary = GpgpuRgba8Surface::new(
+        target.phys,
+        target.gpu,
+        target.byte_len,
+        target.width,
+        target.height,
+        target.pitch_bytes,
+    )?;
+
+    let dst_x0 = (dst_rect.x as i64).max(0);
+    let dst_y0 = (dst_rect.y as i64).max(0);
+    let dst_x1 = (dst_rect.x as i64 + dst_rect.width as i64).min(primary.width as i64);
+    let dst_y1 = (dst_rect.y as i64 + dst_rect.height as i64).min(primary.height as i64);
+    if dst_x1 <= dst_x0 || dst_y1 <= dst_y0 {
+        return None;
+    }
+
+    let clip_x = (dst_x0 - dst_rect.x as i64) as u32;
+    let clip_y = (dst_y0 - dst_rect.y as i64) as u32;
+    let clip_w = (dst_x1 - dst_x0) as u32;
+    let clip_h = (dst_y1 - dst_y0) as u32;
+    let src_base_x = src_rect.x as u32;
+    let src_base_y = src_rect.y as u32;
+    let src_x =
+        src_base_x + ((clip_x as u64 * src_rect.width as u64) / dst_rect.width as u64) as u32;
+    let src_y =
+        src_base_y + ((clip_y as u64 * src_rect.height as u64) / dst_rect.height as u64) as u32;
+    let src_x1 = src_base_x
+        + (((clip_x as u64 + clip_w as u64) * src_rect.width as u64 + dst_rect.width as u64 - 1)
+            / dst_rect.width as u64) as u32;
+    let src_y1 = src_base_y
+        + (((clip_y as u64 + clip_h as u64) * src_rect.height as u64 + dst_rect.height as u64 - 1)
+            / dst_rect.height as u64) as u32;
+    let clipped_src_w = src_x1.saturating_sub(src_x).max(1);
+    let clipped_src_h = src_y1.saturating_sub(src_y).max(1);
+    if src_x >= src.width
+        || src_y >= src.height
+        || src_x.saturating_add(clipped_src_w) > src.width
+        || src_y.saturating_add(clipped_src_h) > src.height
+    {
+        return None;
+    }
+
+    let staging = present_staging_surface_once(clip_w, clip_h)?;
+    let flavor = blit_rgba8_nearest_kernel_flavor()?;
+    let blit_params = BlitRgba8NearestParams {
+        src_gpu: src.gpu,
+        dst_gpu: staging.surface.gpu,
+        src_pitch_bytes: src.pitch_bytes,
+        dst_pitch_bytes: staging.surface.pitch_bytes,
+        src_x,
+        src_y,
+        src_width: clipped_src_w,
+        src_height: clipped_src_h,
+        dst_x: 0,
+        dst_y: 0,
+        dst_width: clip_w,
+        dst_height: clip_h,
+    };
+
+    let blit_stats =
+        submit_blit_rgba8_nearest_spans_with_stats(src, staging.surface, blit_params, flavor);
+    if blit_stats.spans == 0 || blit_stats.submits == 0 {
+        return None;
+    }
+
+    let present_stats = present_rgba8_rect_to_primary_xrgb_stats_with_flip(
+        staging.surface,
+        GpgpuRect::new(0, 0, clip_w, clip_h),
+        GpgpuPoint::new(dst_x0 as i32, dst_y0 as i32),
+        flip_y,
+    )?;
+
+    Some(GpgpuSubmitStats {
+        spans: blit_stats.spans.saturating_add(present_stats.spans),
+        submits: blit_stats.submits.saturating_add(present_stats.submits),
+        submit_ms: blit_stats.submit_ms.saturating_add(present_stats.submit_ms),
+        present_ms: present_stats.present_ms,
+        total_ms: direct_rcs_elapsed_ms_since(total_start_tick),
+    })
+}
+
 unsafe fn raster_rgb_triangle_over_primary(
     target: super::display::PrimarySurfaceGpgpuTarget,
     v0: super::types::RgbVertexPx,

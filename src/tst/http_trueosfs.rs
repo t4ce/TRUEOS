@@ -1070,6 +1070,88 @@ pub async fn http_trueosfs_task() {
                                     }
                                 }
                             }
+                        } else if method == "POST" && vhttp_srv::path_only(target.as_str()).starts_with("/mv/") {
+                            'resp: {
+                                let path_only = vhttp_srv::path_only(target.as_str());
+                                let rest = path_only.strip_prefix("/mv/").unwrap_or("");
+                                let (root_raw_s, enc_src) = match rest.split_once('/') {
+                                    Some(v) => v,
+                                    None => {
+                                        break 'resp http_plain_response(
+                                            "HTTP/1.1 400 Bad Request\r\n",
+                                            "missing root/src\n",
+                                        );
+                                    }
+                                };
+                                let root_raw = match root_raw_s.parse::<u32>() {
+                                    Ok(v) => v,
+                                    Err(_) => {
+                                        break 'resp http_plain_response("HTTP/1.1 400 Bad Request\r\n", "bad root\n");
+                                    }
+                                };
+                                let src = match http_normalize_rel_path_decoded(enc_src, 240) {
+                                    Some(v) if !v.is_empty() => v,
+                                    _ => break 'resp http_plain_response("HTTP/1.1 400 Bad Request\r\n", "bad src\n"),
+                                };
+                                let dst = match vhttp_srv::query_param(target.as_str(), "to")
+                                    .and_then(|v| http_normalize_rel_path_decoded(v, 240))
+                                {
+                                    Some(v) if !v.is_empty() => v,
+                                    _ => break 'resp http_plain_response("HTTP/1.1 400 Bad Request\r\n", "bad dst\n"),
+                                };
+                                let root = match roots.iter().find(|r| r.disk_id.raw() == root_raw) {
+                                    Some(v) => v,
+                                    None => {
+                                        break 'resp http_plain_response("HTTP/1.1 404 Not Found\r\n", "unknown root\n");
+                                    }
+                                };
+                                let disk = match crate::disc::block::device_handle(root.disk_id) {
+                                    Some(v) => v,
+                                    None => {
+                                        break 'resp http_plain_response(
+                                            "HTTP/1.1 503 Service Unavailable\r\n",
+                                            "root unavailable\n",
+                                        );
+                                    }
+                                };
+
+                                let is_file = match crate::r::fs::trueosfs::file_exists_async(disk, src.as_str()).await {
+                                    Ok(v) => v,
+                                    Err(_) => {
+                                        break 'resp http_plain_response(
+                                            "HTTP/1.1 500 Internal Server Error\r\n",
+                                            "move probe error\n",
+                                        );
+                                    }
+                                };
+                                let moved = if is_file {
+                                    match crate::r::fs::trueosfs::file_rename_async(disk, src.as_str(), dst.as_str()).await {
+                                        Ok(v) => v,
+                                        Err(_) => {
+                                            break 'resp http_plain_response(
+                                                "HTTP/1.1 500 Internal Server Error\r\n",
+                                                "file move error\n",
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    match crate::r::fs::trueosfs::dir_rename_async(disk, src.as_str(), dst.as_str()).await {
+                                        Ok(v) => v,
+                                        Err(_) => {
+                                            break 'resp http_plain_response(
+                                                "HTTP/1.1 500 Internal Server Error\r\n",
+                                                "directory move error\n",
+                                            );
+                                        }
+                                    }
+                                };
+
+                                if moved {
+                                    http_plain_response("HTTP/1.1 200 OK\r\n", "move ok\n")
+                                } else {
+                                    http_plain_response("HTTP/1.1 409 Conflict\r\n", "move failed\n")
+                                }
+                            }
                         } else if method == "POST" && vhttp_srv::path_only(target.as_str()).starts_with("/rm/") {
                             'resp: {
                                 let path_only = vhttp_srv::path_only(target.as_str());

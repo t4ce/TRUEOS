@@ -52,6 +52,7 @@ fn kind_text(kind: trueos_fs::LogKind) -> &'static str {
         trueos_fs::LogKind::Put => "put",
         trueos_fs::LogKind::Delete => "del",
         trueos_fs::LogKind::IndexCheckpoint => "ckpt",
+        trueos_fs::LogKind::RenameTree => "rndir",
     }
 }
 

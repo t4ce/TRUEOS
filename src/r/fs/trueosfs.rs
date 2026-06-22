@@ -740,6 +740,11 @@ fn file_record_cache_invalidate_path(disk_id: block::DiscId, path: &str) {
     cache.retain(|entry| !(entry.disk_id == disk_id && entry.path == path));
 }
 
+fn file_record_cache_invalidate_prefix(disk_id: block::DiscId, prefix: &str) {
+    let mut cache = FILE_RECORD_CACHE.lock();
+    cache.retain(|entry| !(entry.disk_id == disk_id && entry.path.starts_with(prefix)));
+}
+
 fn file_record_cache_invalidate_disk(disk_id: block::DiscId) {
     let mut cache = FILE_RECORD_CACHE.lock();
     cache.retain(|entry| entry.disk_id != disk_id);
@@ -797,6 +802,58 @@ fn update_root_index_delete(disk_id: block::DiscId, path: &str) -> bool {
     index.remove(path.as_bytes());
     mount.writes_since_checkpoint = mount.writes_since_checkpoint.saturating_add(1);
     true
+}
+
+fn update_root_index_rename_tree(
+    disk_id: block::DiscId,
+    moves: &[(String, String, IndexRef)],
+) -> bool {
+    let mut roots = ROOTS.lock();
+    let Some(mount) = roots.iter_mut().find(|m| m.disk_id == disk_id) else {
+        return false;
+    };
+    let Some(index) = mount.index.as_mut() else {
+        return false;
+    };
+
+    for (src, _, _) in moves {
+        index.remove(src.as_bytes());
+    }
+    for (_, dst, index_ref) in moves {
+        index.insert(dst.as_bytes().to_vec(), *index_ref);
+    }
+    mount.writes_since_checkpoint = mount.writes_since_checkpoint.saturating_add(1);
+    true
+}
+
+fn apply_index_rename_tree(index: &mut TrueosFsIndex, src_dir: &str, dst_dir: &str) {
+    let src_prefix = normalized_dir_prefix(src_dir);
+    let dst_prefix = normalized_dir_prefix(dst_dir);
+    if src_prefix.is_empty() || dst_prefix.is_empty() || dst_prefix.starts_with(src_prefix.as_str())
+    {
+        return;
+    }
+
+    let mut moves: Vec<(Vec<u8>, Vec<u8>, IndexRef)> = Vec::new();
+    for (key, index_ref) in index.range(src_prefix.as_bytes().to_vec()..) {
+        if !key.starts_with(src_prefix.as_bytes()) {
+            break;
+        }
+        let suffix = &key[src_prefix.len()..];
+        if suffix.is_empty() {
+            continue;
+        }
+        let mut dst = dst_prefix.as_bytes().to_vec();
+        dst.extend_from_slice(suffix);
+        moves.push((key.clone(), dst, *index_ref));
+    }
+
+    for (src, _, _) in moves.iter() {
+        index.remove(src);
+    }
+    for (_, dst, index_ref) in moves {
+        index.insert(dst, index_ref);
+    }
 }
 
 fn snapshot_index_for_checkpoint(
@@ -1332,6 +1389,116 @@ pub async fn file_rename_async(
     Ok(true)
 }
 
+fn normalize_dir_name(path: &str) -> String {
+    let prefix = normalized_dir_prefix(path);
+    prefix.trim_end_matches('/').into()
+}
+
+fn collect_index_tree_moves(
+    disk_id: block::DiscId,
+    src_dir: &str,
+    dst_dir: &str,
+) -> Option<Vec<(String, String, IndexRef)>> {
+    let src_prefix = normalized_dir_prefix(src_dir);
+    if src_prefix.is_empty() {
+        return None;
+    }
+    let dst_prefix = normalized_dir_prefix(dst_dir);
+    if dst_prefix.is_empty() {
+        return None;
+    }
+    if dst_prefix.starts_with(src_prefix.as_str()) {
+        return None;
+    }
+
+    let roots = ROOTS.lock();
+    let mount = roots.iter().find(|m| m.disk_id == disk_id)?;
+    let index = mount.index.as_ref()?;
+
+    let mut moves = Vec::new();
+    for (key, index_ref) in index.range(src_prefix.as_bytes().to_vec()..) {
+        if !key.starts_with(src_prefix.as_bytes()) {
+            break;
+        }
+        let Ok(src_path) = core::str::from_utf8(key) else {
+            return None;
+        };
+        let suffix = &src_path[src_prefix.len()..];
+        if suffix.is_empty() {
+            continue;
+        }
+        moves.push((String::from(src_path), alloc::format!("{dst_prefix}{suffix}"), *index_ref));
+    }
+    if moves.is_empty() {
+        return Some(moves);
+    }
+
+    for (_, dst, _) in moves.iter() {
+        if index.contains_key(dst.as_bytes()) {
+            let occupied_by_source = moves.iter().any(|(src, _, _)| src == dst);
+            if !occupied_by_source {
+                return None;
+            }
+        }
+    }
+
+    Some(moves)
+}
+
+/// Async TRUEOSFS: move a whole directory tree by appending one metadata record.
+///
+/// File payload blocks are not copied. The live index remaps every file under
+/// `src_dir` to the same relative path under `dst_dir`.
+pub async fn dir_rename_async(
+    disk: block::DeviceHandle,
+    src_dir: &str,
+    dst_dir: &str,
+) -> Result<bool, block::Error> {
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+
+    let src = normalize_dir_name(src_dir);
+    let dst = normalize_dir_name(dst_dir);
+    if src.is_empty() || dst.is_empty() || src == dst {
+        return Ok(false);
+    }
+
+    let Some(placement) = locate_async(disk).await? else {
+        return Ok(false);
+    };
+    ensure_index_async(disk, &placement).await?;
+
+    let disk_id = disk.id();
+    let Some(moves) = collect_index_tree_moves(disk_id, src.as_str(), dst.as_str()) else {
+        return Ok(false);
+    };
+    if moves.is_empty() {
+        return Ok(false);
+    }
+
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    let io = KernelBlockIo::new(disk);
+    let ok = trueos_fs::rename_tree(&io, &params, src.as_str(), dst.as_str())
+        .await
+        .map_err(map_engine_err)?;
+    if !ok {
+        return Ok(false);
+    }
+
+    bump_root_cache_gen(disk_id);
+    file_record_cache_invalidate_prefix(disk_id, normalized_dir_prefix(src.as_str()).as_str());
+    file_record_cache_invalidate_prefix(disk_id, normalized_dir_prefix(dst.as_str()).as_str());
+    if !update_root_index_rename_tree(disk_id, moves.as_slice()) {
+        invalidate_root_index(disk_id);
+    }
+    Ok(true)
+}
+
 /// Async TRUEOSFS: check whether a file exists.
 pub async fn file_exists_async(
     disk: block::DeviceHandle,
@@ -1532,56 +1699,34 @@ async fn ensure_index_async(
     }
 
     // Build outside lock.
-    let build_result: Result<BuiltIndex, block::Error> =
-        async {
-            let params = trueos_fs::FsParams {
-                super_lba: placement.super_lba,
-                data_lba: placement.data_lba,
-                data_end_lba_exclusive: placement.data_end_lba_exclusive,
-            };
-            let io = KernelBlockIo::new(disk);
+    let build_result: Result<BuiltIndex, block::Error> = async {
+        let params = trueos_fs::FsParams {
+            super_lba: placement.super_lba,
+            data_lba: placement.data_lba,
+            data_end_lba_exclusive: placement.data_end_lba_exclusive,
+        };
+        let io = KernelBlockIo::new(disk);
 
-            let mut tree = Box::new(BTreeMap::new());
+        let mut tree = Box::new(BTreeMap::new());
 
-            // Replay log.
-            let sb_blk = read_blocks_aligned_async(disk, params.super_lba, 1).await?;
-            let sb = trueos_fs::parse_superblock(&sb_blk).ok_or(block::Error::Corrupted)?;
+        // Replay log.
+        let sb_blk = read_blocks_aligned_async(disk, params.super_lba, 1).await?;
+        let sb = trueos_fs::parse_superblock(&sb_blk).ok_or(block::Error::Corrupted)?;
 
-            let mut replay_from = 0u64;
-            let mut had_checkpoint = false;
+        let mut replay_from = 0u64;
+        let mut had_checkpoint = false;
 
-            if let Ok(Some(ckpt)) = trueos_fs::read_index_checkpoint(&io, &params)
-                .await
-                .map_err(map_engine_err)
-            {
-                had_checkpoint = true;
-                replay_from = ckpt.replay_from_rel_blocks;
-                for (key, kind, lba) in ckpt.entries {
-                    match kind {
-                        trueos_fs::LogKind::Put => {
-                            tree.insert(
-                                key,
-                                IndexRef {
-                                    kind,
-                                    entry_lba: lba,
-                                },
-                            );
-                        }
-                        trueos_fs::LogKind::Delete => {
-                            tree.remove(&key);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-
-            let end_rel = sb.log_head_rel_blocks;
-
-            trueos_fs::replay_log_range(&io, &params, replay_from, end_rel, |kind, name, lba| {
+        if let Ok(Some(ckpt)) = trueos_fs::read_index_checkpoint(&io, &params)
+            .await
+            .map_err(map_engine_err)
+        {
+            had_checkpoint = true;
+            replay_from = ckpt.replay_from_rel_blocks;
+            for (key, kind, lba) in ckpt.entries {
                 match kind {
                     trueos_fs::LogKind::Put => {
                         tree.insert(
-                            name,
+                            key,
                             IndexRef {
                                 kind,
                                 entry_lba: lba,
@@ -1589,22 +1734,52 @@ async fn ensure_index_async(
                         );
                     }
                     trueos_fs::LogKind::Delete => {
-                        tree.remove(&name);
+                        tree.remove(&key);
                     }
                     _ => {}
                 }
-            })
-            .await
-            .map_err(map_engine_err)?;
-
-            Ok(BuiltIndex {
-                tree,
-                replay_from_rel_blocks: replay_from,
-                end_rel_blocks: end_rel,
-                had_checkpoint,
-            })
+            }
         }
-        .await;
+
+        let end_rel = sb.log_head_rel_blocks;
+
+        trueos_fs::replay_log_range(&io, &params, replay_from, end_rel, |kind, name, data, lba| {
+            match kind {
+                trueos_fs::LogKind::Put => {
+                    tree.insert(
+                        name,
+                        IndexRef {
+                            kind,
+                            entry_lba: lba,
+                        },
+                    );
+                }
+                trueos_fs::LogKind::Delete => {
+                    tree.remove(&name);
+                }
+                trueos_fs::LogKind::RenameTree => {
+                    let Ok(src) = core::str::from_utf8(name.as_slice()) else {
+                        return;
+                    };
+                    let Ok(dst) = core::str::from_utf8(data.as_slice()) else {
+                        return;
+                    };
+                    apply_index_rename_tree(&mut tree, src, dst);
+                }
+                _ => {}
+            }
+        })
+        .await
+        .map_err(map_engine_err)?;
+
+        Ok(BuiltIndex {
+            tree,
+            replay_from_rel_blocks: replay_from,
+            end_rel_blocks: end_rel,
+            had_checkpoint,
+        })
+    }
+    .await;
 
     // Always clear the build flag; publish the index only when no writer raced the build.
     let mut needs_rebuild = false;

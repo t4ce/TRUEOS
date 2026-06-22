@@ -3,7 +3,7 @@
 
 extern crate alloc;
 
-use alloc::{collections::BTreeSet, string::String, vec, vec::Vec};
+use alloc::{collections::BTreeSet, format, string::String, vec, vec::Vec};
 
 pub const MAGIC: [u8; 8] = *b"TRUEOSFS";
 
@@ -197,6 +197,7 @@ pub enum LogKind {
     Put = 1,
     Delete = 2,
     IndexCheckpoint = 3,
+    RenameTree = 4,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -347,6 +348,7 @@ impl LogHeader {
             1 => LogKind::Put,
             2 => LogKind::Delete,
             3 => LogKind::IndexCheckpoint,
+            4 => LogKind::RenameTree,
             _ => return None,
         };
         let committed = block[9] == 1;
@@ -649,7 +651,7 @@ pub async fn write_index_checkpoint<D: BlockIo>(
 }
 
 /// Replay the log range `[start_rel_blocks, end_rel_blocks)` and call `apply`
-/// for each committed Put/Delete record.
+/// for each committed index-affecting record.
 ///
 /// Checkpoint records are skipped.
 pub async fn replay_log_range<D: BlockIo>(
@@ -657,7 +659,7 @@ pub async fn replay_log_range<D: BlockIo>(
     params: &FsParams,
     start_rel_blocks: u64,
     end_rel_blocks: u64,
-    mut apply: impl FnMut(LogKind, Vec<u8>, u64),
+    mut apply: impl FnMut(LogKind, Vec<u8>, Vec<u8>, u64),
 ) -> Result<(), FsError<D::Error>> {
     let bs = dev.block_size();
     if bs == 0 {
@@ -692,6 +694,11 @@ pub async fn replay_log_range<D: BlockIo>(
                     break;
                 }
             }
+            LogKind::RenameTree => {
+                if name_len == 0 || name_len > 4096 || data_len == 0 || data_len > 4096 {
+                    break;
+                }
+            }
         }
 
         let name_blocks = (name_len + (bs - 1)) / bs;
@@ -708,7 +715,15 @@ pub async fn replay_log_range<D: BlockIo>(
         let name_lba = lba.saturating_add(1);
         let mut name_bytes = vec![0u8; name_len];
         read_exact_bytes(dev, name_lba, 0, &mut name_bytes).await?;
-        apply(hdr.kind, name_bytes, lba);
+        let mut data = Vec::new();
+        if hdr.kind == LogKind::RenameTree {
+            data.resize(data_len, 0);
+            let data_lba = lba
+                .saturating_add(1)
+                .saturating_add(name_blocks as u64);
+            read_exact_bytes(dev, data_lba, 0, data.as_mut_slice()).await?;
+        }
+        apply(hdr.kind, name_bytes, data, lba);
 
         lba = lba.saturating_add(blocks);
     }
@@ -794,6 +809,7 @@ pub async fn scan_raw_log<D: BlockIo>(
             LogKind::Put => name_len > 0 && name_len <= 4096,
             LogKind::Delete => name_len > 0 && name_len <= 4096 && data_len == DELETE_REF_BYTES,
             LogKind::IndexCheckpoint => name_len == 0 && data_len >= 8,
+            LogKind::RenameTree => name_len > 0 && name_len <= 4096 && data_len > 0 && data_len <= 4096,
         };
         if !valid_shape {
             return Ok(RawLogScan {
@@ -846,7 +862,7 @@ pub async fn scan_raw_log<D: BlockIo>(
                     checkpoint_entry_count = Some(ckpt.entries.len());
                 }
             }
-            LogKind::Put => {}
+            LogKind::Put | LogKind::RenameTree => {}
         }
 
         records.push(RawLogRecord {
@@ -1303,6 +1319,100 @@ async fn write_delete_entry<D: BlockIo>(
     Ok(blocks)
 }
 
+async fn write_rename_tree_entry<D: BlockIo>(
+    dev: &D,
+    entry_lba: u64,
+    src_dir: &str,
+    dst_dir: &str,
+) -> Result<u64, FsError<D::Error>> {
+    let bs = dev.block_size();
+    if bs == 0 {
+        return Err(FsError::InvalidParam);
+    }
+    let name_len = src_dir.len();
+    let data_len = dst_dir.len();
+    let blocks = entry_blocks(bs, name_len, data_len);
+
+    let mut hdr0 = vec![0u8; bs];
+    LogHeader {
+        kind: LogKind::RenameTree,
+        committed: false,
+        name_len: name_len as u16,
+        data_len: data_len as u64,
+        integrity_tag: ZERO_INTEGRITY_TAG,
+    }
+    .encode_into_block(&mut hdr0);
+    dev.write_blocks(entry_lba, &hdr0)
+        .await
+        .map_err(FsError::Device)?;
+
+    let name_bytes = src_dir.as_bytes();
+    let name_blocks = (name_bytes.len() + (bs - 1)) / bs;
+    let payload_bytes_rounded = name_blocks * bs;
+    let mut off = 0usize;
+    let mut src = |dst: &mut [u8]| -> Result<usize, FsError<D::Error>> {
+        if off >= name_bytes.len() {
+            return Ok(0);
+        }
+        let take = core::cmp::min(dst.len(), name_bytes.len() - off);
+        dst[..take].copy_from_slice(&name_bytes[off..off + take]);
+        off = off.saturating_add(take);
+        Ok(take)
+    };
+    if payload_bytes_rounded > 0 {
+        write_stream_at_lba(
+            dev,
+            entry_lba.saturating_add(1),
+            name_bytes.len(),
+            payload_bytes_rounded,
+            &mut src,
+        )
+        .await?;
+    }
+
+    let dst_bytes = dst_dir.as_bytes();
+    let data_blocks = (dst_bytes.len() + (bs - 1)) / bs;
+    let data_bytes_rounded = data_blocks * bs;
+    let mut dst_off = 0usize;
+    let mut dst_src = |dst: &mut [u8]| -> Result<usize, FsError<D::Error>> {
+        if dst_off >= dst_bytes.len() {
+            return Ok(0);
+        }
+        let take = core::cmp::min(dst.len(), dst_bytes.len() - dst_off);
+        dst[..take].copy_from_slice(&dst_bytes[dst_off..dst_off + take]);
+        dst_off = dst_off.saturating_add(take);
+        Ok(take)
+    };
+    if data_bytes_rounded > 0 {
+        write_stream_at_lba(
+            dev,
+            entry_lba
+                .saturating_add(1)
+                .saturating_add(name_blocks as u64),
+            dst_bytes.len(),
+            data_bytes_rounded,
+            &mut dst_src,
+        )
+        .await?;
+    }
+    dev.flush().await.map_err(FsError::Device)?;
+
+    let mut hdr1 = vec![0u8; bs];
+    LogHeader {
+        kind: LogKind::RenameTree,
+        committed: true,
+        name_len: name_len as u16,
+        data_len: data_len as u64,
+        integrity_tag: ZERO_INTEGRITY_TAG,
+    }
+    .encode_into_block(&mut hdr1);
+    dev.write_blocks(entry_lba, &hdr1)
+        .await
+        .map_err(FsError::Device)?;
+    dev.flush().await.map_err(FsError::Device)?;
+    Ok(blocks)
+}
+
 async fn read_put_entry_data<D: BlockIo>(
     dev: &D,
     entry_lba: u64,
@@ -1394,6 +1504,11 @@ async fn find_latest_delete_ref<D: BlockIo>(
                     break;
                 }
             }
+            LogKind::RenameTree => {
+                if name_len == 0 || name_len > 4096 || data_len == 0 || data_len > 4096 {
+                    break;
+                }
+            }
         }
 
         let name_blocks = (name_len + (bs - 1)) / bs;
@@ -1418,7 +1533,7 @@ async fn find_latest_delete_ref<D: BlockIo>(
                         let deleted_entry_lba = u64::from_le_bytes(ref_bytes);
                         latest_delete = Some(deleted_entry_lba);
                     }
-                    LogKind::IndexCheckpoint => {}
+                    LogKind::IndexCheckpoint | LogKind::RenameTree => {}
                 }
             }
         }
@@ -1501,6 +1616,11 @@ async fn find_latest_record<D: BlockIo>(
                     break;
                 }
             }
+            LogKind::RenameTree => {
+                if name_len == 0 || name_len > 4096 || data_len == 0 || data_len > 4096 {
+                    break;
+                }
+            }
         }
 
         let name_blocks = (name_len + (bs - 1)) / bs;
@@ -1526,7 +1646,7 @@ async fn find_latest_record<D: BlockIo>(
                     LogKind::Delete => {
                         latest = None;
                     }
-                    LogKind::IndexCheckpoint => {}
+                    LogKind::IndexCheckpoint | LogKind::RenameTree => {}
                 }
             }
         }
@@ -2023,6 +2143,49 @@ pub async fn delete_file<D: BlockIo>(
     Ok(true)
 }
 
+pub async fn rename_tree<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    src_dir: &str,
+    dst_dir: &str,
+) -> Result<bool, FsError<D::Error>> {
+    let Some(src) = normalize_rel_no_parent(src_dir) else {
+        return Ok(false);
+    };
+    let Some(dst) = normalize_rel_no_parent(dst_dir) else {
+        return Ok(false);
+    };
+    if src.is_empty() || dst.is_empty() || src == dst {
+        return Ok(false);
+    }
+    if normalized_dir_prefix_str(dst.as_str()).starts_with(normalized_dir_prefix_str(src.as_str()).as_str()) {
+        return Ok(false);
+    }
+    if src.len() > (u16::MAX as usize) || dst.len() > 4096 {
+        return Ok(false);
+    }
+
+    let bs = dev.block_size();
+    if bs == 0 {
+        return Err(FsError::InvalidParam);
+    }
+    let sb_block = read_one_block(dev, params.super_lba).await?;
+    let Some(sb) = parse_superblock(&sb_block) else {
+        return Err(FsError::Corrupted);
+    };
+    let entry_lba = params.data_lba.saturating_add(sb.log_head_rel_blocks);
+
+    let blocks = entry_blocks(bs, src.as_bytes().len(), dst.as_bytes().len());
+    let end_lba = disk_data_end_lba_exclusive(dev, params);
+    if entry_lba.saturating_add(blocks) > end_lba {
+        return Ok(false);
+    }
+
+    let written_blocks = write_rename_tree_entry(dev, entry_lba, src.as_str(), dst.as_str()).await?;
+    advance_log_head(dev, params, sb, written_blocks).await?;
+    Ok(true)
+}
+
 pub async fn file_exists<D: BlockIo>(
     dev: &D,
     params: &FsParams,
@@ -2049,6 +2212,14 @@ fn normalize_rel_no_parent(path: &str) -> Option<String> {
         out.push_str(part);
     }
     Some(out)
+}
+
+fn normalized_dir_prefix_str(path: &str) -> String {
+    let mut out = normalize_rel_no_parent(path).unwrap_or_default();
+    if !out.is_empty() && !out.ends_with('/') {
+        out.push('/');
+    }
+    out
 }
 
 /// List immediate children of a directory, treating stored keys as `/`-separated paths.
@@ -2108,6 +2279,11 @@ pub async fn list_dir<D: BlockIo>(
                     break;
                 }
             }
+            LogKind::RenameTree => {
+                if name_len == 0 || name_len > 4096 || data_len == 0 || data_len > 4096 {
+                    break;
+                }
+            }
         }
 
         let name_blocks = (name_len + (bs - 1)) / bs;
@@ -2127,6 +2303,26 @@ pub async fn list_dir<D: BlockIo>(
                     }
                     LogKind::Delete => {
                         let _ = live.remove(name);
+                    }
+                    LogKind::RenameTree => {
+                        let data_lba = lba.saturating_add(1).saturating_add(name_blocks as u64);
+                        let mut dst_bytes = vec![0u8; data_len];
+                        read_exact_bytes(dev, data_lba, 0, dst_bytes.as_mut_slice()).await?;
+                        if let Ok(dst) = core::str::from_utf8(dst_bytes.as_slice()) {
+                            let src_prefix = normalized_dir_prefix_str(name);
+                            let dst_prefix = normalized_dir_prefix_str(dst);
+                            let moved: Vec<String> = live
+                                .iter()
+                                .filter_map(|path| {
+                                    path.strip_prefix(src_prefix.as_str())
+                                        .map(|suffix| format!("{}{}", dst_prefix, suffix))
+                                })
+                                .collect();
+                            live.retain(|path| !path.starts_with(src_prefix.as_str()));
+                            for path in moved {
+                                live.insert(path);
+                            }
+                        }
                     }
                     LogKind::IndexCheckpoint => {}
                 }
