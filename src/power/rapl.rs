@@ -1,6 +1,6 @@
-use core::arch::x86_64::__cpuid;
 use embassy_sync::watch::{Receiver as WatchReceiver, Watch};
 use embassy_time::{Duration as EmbassyDuration, Timer};
+use raw_cpuid::CpuId;
 use spin::Once;
 use x86_64::registers::model_specific::Msr;
 
@@ -274,11 +274,15 @@ pub fn wraparound_delta_joules(raw_start: u32, raw_end: u32, joules_per_tick: f6
 }
 
 fn detect_caps_cpuid_only() -> Option<RaplCaps> {
-    let r0 = __cpuid(0x0);
-    let vendor_intel = r0.ebx == 0x756e6547 && r0.edx == 0x49656e69 && r0.ecx == 0x6c65746e;
-
-    let r1 = __cpuid(0x1);
-    let has_msr = (r1.edx & (1 << 5)) != 0;
+    let cpuid = CpuId::new();
+    let vendor_intel = cpuid
+        .get_vendor_info()
+        .map(|vendor| vendor.as_str() == "GenuineIntel")
+        .unwrap_or(false);
+    let has_msr = cpuid
+        .get_feature_info()
+        .map(|features| features.has_msr())
+        .unwrap_or(false);
 
     Some(RaplCaps {
         vendor_intel,

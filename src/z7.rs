@@ -174,8 +174,22 @@ struct ArchiveShape<'a> {
     name: String,
     packed_stream: &'a [u8],
     method: Method,
-    unpacked_size: usize,
-    unpack_crc: Option<u32>,
+    folder_unpacked_size: usize,
+    folder_crc: Option<u32>,
+    substream_offset: usize,
+    substream_size: usize,
+    substream_crc: Option<u32>,
+}
+
+pub struct SevenZEntry {
+    pub name: String,
+    pub bytes: Vec<u8>,
+}
+
+pub struct SevenZEntryInfo {
+    pub name: String,
+    pub unpacked_size: usize,
+    pub crc: Option<u32>,
 }
 
 struct FolderInfo {
@@ -183,6 +197,8 @@ struct FolderInfo {
     unpacked_size: u64,
     unpack_crc: Option<u32>,
     num_unpack_sub_streams: usize,
+    substream_sizes: Vec<u64>,
+    substream_crcs: Vec<Option<u32>>,
 }
 
 struct FilesInfo {
@@ -379,8 +395,13 @@ fn read_encoded_header(payload: &[u8], encoded_header: &[u8]) -> Result<Vec<u8>,
         name: String::new(),
         packed_stream,
         method: folder.method,
-        unpacked_size: usize::try_from(folder.unpacked_size).map_err(|_| SevenZError::BadOffset)?,
-        unpack_crc: folder.unpack_crc,
+        folder_unpacked_size: usize::try_from(folder.unpacked_size)
+            .map_err(|_| SevenZError::BadOffset)?,
+        folder_crc: folder.unpack_crc,
+        substream_offset: 0,
+        substream_size: usize::try_from(folder.unpacked_size)
+            .map_err(|_| SevenZError::BadOffset)?,
+        substream_crc: folder.unpack_crc,
     })
 }
 
@@ -458,6 +479,8 @@ fn parse_folder(reader: &mut Cursor<'_>) -> Result<FolderInfo, SevenZError> {
         unpacked_size: 0,
         unpack_crc: None,
         num_unpack_sub_streams: 1,
+        substream_sizes: Vec::new(),
+        substream_crcs: Vec::new(),
     })
 }
 
@@ -539,26 +562,30 @@ fn parse_sub_streams_info(
     if nid == K_NUM_UNPACK_STREAM {
         for folder in folders.iter_mut() {
             folder.num_unpack_sub_streams = reader.read_len()?;
-            if folder.num_unpack_sub_streams != 1 {
-                return Err(SevenZError::Unsupported);
+            if folder.num_unpack_sub_streams == 0 {
+                return Err(SevenZError::BadHeader);
             }
         }
         nid = reader.read_u8()?;
     }
 
     if nid == K_SIZE {
-        let extra_sizes = folders
-            .iter()
-            .map(|folder| folder.num_unpack_sub_streams.saturating_sub(1))
-            .sum();
-        for _ in 0..extra_sizes {
-            let _ = reader.read_variable_u64()?;
-        }
-        if folders
-            .iter()
-            .any(|folder| folder.num_unpack_sub_streams != 1)
-        {
-            return Err(SevenZError::Unsupported);
+        for folder in folders.iter_mut() {
+            folder.substream_sizes.clear();
+            let extra_sizes = folder.num_unpack_sub_streams.saturating_sub(1);
+            let mut sum = 0u64;
+            for _ in 0..extra_sizes {
+                let size = reader.read_variable_u64()?;
+                sum = sum.checked_add(size).ok_or(SevenZError::BadOffset)?;
+                folder.substream_sizes.push(size);
+            }
+            if folder.num_unpack_sub_streams > 1 {
+                let last = folder
+                    .unpacked_size
+                    .checked_sub(sum)
+                    .ok_or(SevenZError::BadHeader)?;
+                folder.substream_sizes.push(last);
+            }
         }
         nid = reader.read_u8()?;
     }
@@ -575,9 +602,24 @@ fn parse_sub_streams_info(
             })
             .sum();
         let defined = read_all_or_bits(reader, num_digests)?;
-        for has_crc in defined {
-            if has_crc {
-                let _ = reader.read_u32_le()?;
+        let mut digest_idx = 0usize;
+        for folder in folders.iter_mut() {
+            folder.substream_crcs.clear();
+            if folder.num_unpack_sub_streams == 1 {
+                if let Some(crc) = folder.unpack_crc {
+                    folder.substream_crcs.push(Some(crc));
+                    continue;
+                }
+            }
+            for _ in 0..folder.num_unpack_sub_streams {
+                let has_crc = *defined.get(digest_idx).ok_or(SevenZError::BadHeader)?;
+                digest_idx += 1;
+                let crc = if has_crc {
+                    Some(reader.read_u32_le()?)
+                } else {
+                    None
+                };
+                folder.substream_crcs.push(crc);
             }
         }
         nid = reader.read_u8()?;
@@ -585,6 +627,44 @@ fn parse_sub_streams_info(
 
     if nid != K_END {
         return Err(SevenZError::BadHeader);
+    }
+    Ok(())
+}
+
+fn finalize_sub_streams(folders: &mut [FolderInfo]) -> Result<(), SevenZError> {
+    for folder in folders {
+        if folder.num_unpack_sub_streams == 0 {
+            return Err(SevenZError::BadHeader);
+        }
+        if folder.substream_sizes.is_empty() {
+            if folder.num_unpack_sub_streams != 1 {
+                return Err(SevenZError::BadHeader);
+            }
+            folder.substream_sizes.push(folder.unpacked_size);
+        }
+        if folder.substream_sizes.len() != folder.num_unpack_sub_streams {
+            return Err(SevenZError::BadHeader);
+        }
+        let total = folder
+            .substream_sizes
+            .iter()
+            .try_fold(0u64, |sum, size| sum.checked_add(*size))
+            .ok_or(SevenZError::BadOffset)?;
+        if total != folder.unpacked_size {
+            return Err(SevenZError::BadHeader);
+        }
+        if folder.substream_crcs.is_empty() {
+            if folder.num_unpack_sub_streams == 1 {
+                folder.substream_crcs.push(folder.unpack_crc);
+            } else {
+                folder
+                    .substream_crcs
+                    .resize(folder.num_unpack_sub_streams, None);
+            }
+        }
+        if folder.substream_crcs.len() != folder.num_unpack_sub_streams {
+            return Err(SevenZError::BadHeader);
+        }
     }
     Ok(())
 }
@@ -655,10 +735,10 @@ fn parse_files_info(reader: &mut Cursor<'_>) -> Result<FilesInfo, SevenZError> {
     let mut empty_idx = 0usize;
     for is_empty_stream in empty_streams {
         if is_empty_stream {
-            let is_empty_file = empty_files.get(empty_idx).copied().unwrap_or(false);
+            let _is_empty_file = empty_files.get(empty_idx).copied().unwrap_or(false);
             let is_anti = anti_files.get(empty_idx).copied().unwrap_or(false);
             empty_idx += 1;
-            if !is_empty_file || is_anti {
+            if is_anti {
                 return Err(SevenZError::Unsupported);
             }
             stream_indices.push(None);
@@ -742,6 +822,8 @@ fn parse_archive(payload: &[u8]) -> Result<Vec<ArchiveShape<'_>>, SevenZError> {
         return Err(SevenZError::Unsupported);
     }
 
+    finalize_sub_streams(folders.as_mut_slice())?;
+
     let pack_pos = usize::try_from(pack_pos.ok_or(SevenZError::BadHeader)?)
         .map_err(|_| SevenZError::BadOffset)?;
     if pack_sizes.len() != folders.len() {
@@ -760,17 +842,33 @@ fn parse_archive(payload: &[u8]) -> Result<Vec<ArchiveShape<'_>>, SevenZError> {
             .ok_or(SevenZError::BadOffset)?;
     }
 
+    let mut stream_map = Vec::new();
+    for (folder_index, folder) in folders.iter().enumerate() {
+        let mut offset = 0u64;
+        for substream_index in 0..folder.num_unpack_sub_streams {
+            let size = *folder
+                .substream_sizes
+                .get(substream_index)
+                .ok_or(SevenZError::BadHeader)?;
+            let crc = *folder
+                .substream_crcs
+                .get(substream_index)
+                .ok_or(SevenZError::BadHeader)?;
+            stream_map.push((folder_index, offset, size, crc));
+            offset = offset.checked_add(size).ok_or(SevenZError::BadOffset)?;
+        }
+    }
+
     let mut archives = Vec::new();
     for (file_index, stream_index) in files.stream_indices.iter().enumerate() {
         let Some(stream_index) = *stream_index else {
             continue;
         };
-        let folder = folders.get(stream_index).ok_or(SevenZError::BadHeader)?;
-        if folder.num_unpack_sub_streams != 1 {
-            return Err(SevenZError::Unsupported);
-        }
+        let (folder_index, substream_offset, substream_size, substream_crc) =
+            *stream_map.get(stream_index).ok_or(SevenZError::BadHeader)?;
+        let folder = folders.get(folder_index).ok_or(SevenZError::BadHeader)?;
         let (packed_start, pack_size) = *pack_offsets
-            .get(stream_index)
+            .get(folder_index)
             .ok_or(SevenZError::BadHeader)?;
         let packed_end = packed_start
             .checked_add(pack_size)
@@ -787,9 +885,13 @@ fn parse_archive(payload: &[u8]) -> Result<Vec<ArchiveShape<'_>>, SevenZError> {
                 .ok_or(SevenZError::BadHeader)?,
             packed_stream,
             method: folder.method,
-            unpacked_size: usize::try_from(folder.unpacked_size)
+            folder_unpacked_size: usize::try_from(folder.unpacked_size)
                 .map_err(|_| SevenZError::BadOffset)?,
-            unpack_crc: folder.unpack_crc,
+            folder_crc: folder.unpack_crc,
+            substream_offset: usize::try_from(substream_offset)
+                .map_err(|_| SevenZError::BadOffset)?,
+            substream_size: usize::try_from(substream_size).map_err(|_| SevenZError::BadOffset)?,
+            substream_crc,
         });
     }
 
@@ -854,24 +956,87 @@ pub fn extract_single_file_to_vec(payload: &[u8]) -> Result<Vec<u8>, SevenZError
     extract_archive_shape_to_vec(&archive)
 }
 
-fn extract_archive_shape_to_vec(archive: &ArchiveShape<'_>) -> Result<Vec<u8>, SevenZError> {
+fn decode_folder_to_vec(archive: &ArchiveShape<'_>) -> Result<Vec<u8>, SevenZError> {
     let out = match archive.method {
         Method::Copy => archive.packed_stream.to_vec(),
-        Method::Lzma { props, dict_size } => {
-            lzma_decompress_to_vec(archive.packed_stream, props, dict_size, archive.unpacked_size)?
-        }
+        Method::Lzma { props, dict_size } => lzma_decompress_to_vec(
+            archive.packed_stream,
+            props,
+            dict_size,
+            archive.folder_unpacked_size,
+        )?,
         Method::Lzma2 { dict_size } => lzma2_decompress_to_vec(archive.packed_stream, dict_size)?,
     };
 
-    if out.len() != archive.unpacked_size {
+    if out.len() != archive.folder_unpacked_size {
         return Err(SevenZError::DecodeFailed);
     }
-    if let Some(expected_crc) = archive.unpack_crc {
+    if let Some(expected_crc) = archive.folder_crc {
         if crc32fast::hash(&out) != expected_crc {
             return Err(SevenZError::BadCrc);
         }
     }
 
+    Ok(out)
+}
+
+fn extract_archive_substream_to_vec(
+    archive: &ArchiveShape<'_>,
+    folder: &[u8],
+) -> Result<Vec<u8>, SevenZError> {
+    let end = archive
+        .substream_offset
+        .checked_add(archive.substream_size)
+        .ok_or(SevenZError::BadOffset)?;
+    let slice = folder
+        .get(archive.substream_offset..end)
+        .ok_or(SevenZError::BadOffset)?;
+    if let Some(expected_crc) = archive.substream_crc {
+        if crc32fast::hash(slice) != expected_crc {
+            return Err(SevenZError::BadCrc);
+        }
+    }
+
+    Ok(slice.to_vec())
+}
+
+fn extract_archive_shape_to_vec(archive: &ArchiveShape<'_>) -> Result<Vec<u8>, SevenZError> {
+    let folder = decode_folder_to_vec(archive)?;
+    extract_archive_substream_to_vec(archive, folder.as_slice())
+}
+
+pub fn extract_all_to_vec(payload: &[u8]) -> Result<Vec<SevenZEntry>, SevenZError> {
+    let archives = parse_archive(payload)?;
+    let mut out = Vec::with_capacity(archives.len());
+    let mut cached_ptr: *const u8 = core::ptr::null();
+    let mut cached_len = 0usize;
+    let mut cached_folder = Vec::new();
+
+    for archive in &archives {
+        if archive.packed_stream.as_ptr() != cached_ptr || archive.packed_stream.len() != cached_len
+        {
+            cached_folder = decode_folder_to_vec(archive)?;
+            cached_ptr = archive.packed_stream.as_ptr();
+            cached_len = archive.packed_stream.len();
+        }
+        out.push(SevenZEntry {
+            name: archive.name.clone(),
+            bytes: extract_archive_substream_to_vec(archive, cached_folder.as_slice())?,
+        });
+    }
+    Ok(out)
+}
+
+pub fn list_entries(payload: &[u8]) -> Result<Vec<SevenZEntryInfo>, SevenZError> {
+    let archives = parse_archive(payload)?;
+    let mut out = Vec::with_capacity(archives.len());
+    for archive in &archives {
+        out.push(SevenZEntryInfo {
+            name: archive.name.clone(),
+            unpacked_size: archive.substream_size,
+            crc: archive.substream_crc,
+        });
+    }
     Ok(out)
 }
 

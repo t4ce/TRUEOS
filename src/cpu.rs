@@ -8,6 +8,8 @@ use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU32, AtomicUsize
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 #[cfg(target_arch = "x86_64")]
+use raw_cpuid::CpuId;
+#[cfg(target_arch = "x86_64")]
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 
 // ARMTODO: `cpu.rs` now keeps the portable profile/slot bookkeeping, but a
@@ -430,12 +432,12 @@ pub fn simd_status() -> SimdStatus {
 
 #[cfg(target_arch = "x86_64")]
 fn probe_xsave_avx_state() -> SimdReason {
-    let r = __cpuid(1);
-    const CPUID1_ECX_XSAVE: u32 = 1 << 26;
-    const CPUID1_ECX_AVX: u32 = 1 << 28;
-    if (r.ecx & CPUID1_ECX_XSAVE) == 0 {
+    let Some(features) = CpuId::new().get_feature_info() else {
+        return SimdReason::MissingXsave;
+    };
+    if !features.has_xsave() {
         SimdReason::MissingXsave
-    } else if (r.ecx & CPUID1_ECX_AVX) == 0 {
+    } else if !features.has_avx() {
         SimdReason::MissingAvx
     } else {
         SimdReason::Enabled
@@ -444,21 +446,22 @@ fn probe_xsave_avx_state() -> SimdReason {
 
 #[cfg(target_arch = "x86_64")]
 fn probe_avx2_fma() -> SimdReason {
-    use core::arch::x86_64::__cpuid_count;
-
-    let r1 = __cpuid(1);
-    const CPUID1_ECX_FMA: u32 = 1 << 12;
-    const CPUID1_ECX_AVX: u32 = 1 << 28;
-    if (r1.ecx & CPUID1_ECX_AVX) == 0 {
+    let cpuid = CpuId::new();
+    let Some(features) = cpuid.get_feature_info() else {
+        return SimdReason::MissingAvx;
+    };
+    if !features.has_avx() {
         return SimdReason::MissingAvx;
     }
-    if (r1.ecx & CPUID1_ECX_FMA) == 0 {
+    if !features.has_fma() {
         return SimdReason::MissingFma;
     }
 
-    let r7 = __cpuid_count(7, 0);
-    const CPUID7_EBX_AVX2: u32 = 1 << 5;
-    if (r7.ebx & CPUID7_EBX_AVX2) == 0 {
+    if !cpuid
+        .get_extended_feature_info()
+        .map(|features| features.has_avx2())
+        .unwrap_or(false)
+    {
         return SimdReason::MissingAvx2;
     }
 

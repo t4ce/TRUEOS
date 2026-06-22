@@ -471,7 +471,12 @@ impl TerminalState {
             }
             'r' => {
                 let top = params.first().copied().unwrap_or(1).max(1) as usize;
-                let bottom = params.get(1).copied().unwrap_or(self.rows as i32).max(1) as usize;
+                let bottom_param = params.get(1).copied().unwrap_or(self.rows as i32);
+                let bottom = if bottom_param <= 0 {
+                    self.rows
+                } else {
+                    bottom_param as usize
+                };
                 if top <= bottom && bottom <= self.rows {
                     self.scroll_top = top.saturating_sub(1);
                     self.scroll_bottom = bottom.saturating_sub(1);
@@ -672,6 +677,10 @@ pub(crate) fn ui3_shell_attach_window(window_id: u32, rows: usize) {
 
 pub(crate) fn ui3_shell_line_width() -> usize {
     runtime().lock().screen.cols.max(1)
+}
+
+pub(crate) fn ui3_shell_rows() -> usize {
+    runtime().lock().screen.rows.max(1)
 }
 
 pub(crate) fn ui3_shell_set_line_width(width: usize) {

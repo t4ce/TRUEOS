@@ -1,6 +1,6 @@
 #[cfg(target_arch = "x86_64")]
 mod imp {
-    use core::arch::x86_64::__cpuid;
+    use raw_cpuid::CpuId;
     use x86_64::registers::model_specific::Msr;
 
     const IA32_PMC0: u32 = 0xC1;
@@ -27,19 +27,16 @@ mod imp {
     }
 
     pub(crate) fn snapshot() -> Snapshot {
-        let max_leaf = __cpuid(0).eax;
-        if max_leaf < 0xA {
+        let Some(perfmon) = CpuId::new().get_performance_monitoring_info() else {
             return Snapshot::unsupported();
-        }
-
-        let leaf = __cpuid(0xA);
-        let version = (leaf.eax & 0xFF) as u8;
+        };
+        let version = perfmon.version_id();
         if version == 0 {
             return Snapshot::unsupported();
         }
 
-        let gp_counter_count = ((leaf.eax >> 8) & 0xFF) as u8;
-        let fixed_counter_count = (leaf.edx & 0x1F) as u8;
+        let gp_counter_count = perfmon.number_of_counters();
+        let fixed_counter_count = perfmon.fixed_function_counters();
         let mut fixed_ctr = [None; 3];
         let fixed_to_read = fixed_counter_count.min(3);
         for idx in 0..fixed_to_read {
@@ -51,11 +48,11 @@ mod imp {
             arch_perfmon: true,
             version,
             gp_counter_count,
-            gp_counter_bits: ((leaf.eax >> 16) & 0xFF) as u8,
-            event_mask_len: ((leaf.eax >> 24) & 0xFF) as u8,
-            unavailable_events: leaf.ebx,
+            gp_counter_bits: perfmon.counter_bit_width(),
+            event_mask_len: perfmon.ebx_length(),
+            unavailable_events: unavailable_events_mask(&perfmon),
             fixed_counter_count,
-            fixed_counter_bits: ((leaf.edx >> 5) & 0xFF) as u8,
+            fixed_counter_bits: perfmon.fixed_function_counters_bit_width(),
             perf_global_ctrl: Some(unsafe { Msr::new(IA32_PERF_GLOBAL_CTRL).read() }),
             fixed_ctr_ctrl: Some(unsafe { Msr::new(IA32_FIXED_CTR_CTRL).read() }),
             fixed_ctr,
@@ -65,6 +62,32 @@ mod imp {
                 None
             },
         }
+    }
+
+    fn unavailable_events_mask(perfmon: &raw_cpuid::PerformanceMonitoringInfo) -> u32 {
+        let mut mask = 0;
+        if perfmon.is_core_cyc_ev_unavailable() {
+            mask |= 1 << 0;
+        }
+        if perfmon.is_inst_ret_ev_unavailable() {
+            mask |= 1 << 1;
+        }
+        if perfmon.is_ref_cycle_ev_unavailable() {
+            mask |= 1 << 2;
+        }
+        if perfmon.is_cache_ref_ev_unavailable() {
+            mask |= 1 << 3;
+        }
+        if perfmon.is_ll_cache_miss_ev_unavailable() {
+            mask |= 1 << 4;
+        }
+        if perfmon.is_branch_inst_ret_ev_unavailable() {
+            mask |= 1 << 5;
+        }
+        if perfmon.is_branch_midpred_ev_unavailable() {
+            mask |= 1 << 6;
+        }
+        mask
     }
 
     pub(crate) fn ensure_liveness_source() -> bool {

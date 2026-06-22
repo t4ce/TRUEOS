@@ -143,6 +143,19 @@ fn output_path_for_archive(archive_path: &str) -> Result<String, CodecError> {
         .ok_or(CodecError::BadPath)
 }
 
+fn output_path_for_archive_entry(
+    output_root: &str,
+    entry_name: &str,
+) -> Result<String, CodecError> {
+    let entry = normalize_path(entry_name, false)?;
+    let mut out = String::from(output_root);
+    if !out.is_empty() {
+        out.push('/');
+    }
+    out.push_str(entry.as_str());
+    normalize_path(out.as_str(), false)
+}
+
 fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
@@ -346,27 +359,73 @@ async fn extract_file_job(
             &target,
             alloc::format!("7z: job={} extracting archive_bytes={}", id, archive.len()).as_str(),
         );
-        let output = crate::z7::extract_single_file_to_vec(archive.as_slice())?;
-        log_target(
-            &target,
-            alloc::format!(
-                "7z: job={} writing {} output_bytes={}",
-                id,
-                output_path.as_str(),
-                output.len()
-            )
-            .as_str(),
-        );
+        let entries = crate::z7::extract_all_to_vec(archive.as_slice())?;
+        if entries.is_empty() {
+            return Err(CodecError::Archive(crate::z7::SevenZError::BadHeader));
+        }
+        let archive_bytes = archive.len();
+        let mut output_bytes = 0usize;
+        let mut output_files = 0usize;
 
-        let ok =
-            crate::r::fs::trueosfs::file_in_async(disk, output_path.as_str(), output.as_slice())
+        if entries.len() == 1 {
+            let entry = entries
+                .first()
+                .ok_or(CodecError::Archive(crate::z7::SevenZError::BadHeader))?;
+            log_target(
+                &target,
+                alloc::format!(
+                    "7z: job={} writing {} output_bytes={}",
+                    id,
+                    output_path.as_str(),
+                    entry.bytes.len()
+                )
+                .as_str(),
+            );
+            let ok = crate::r::fs::trueosfs::file_in_async(
+                disk,
+                output_path.as_str(),
+                entry.bytes.as_slice(),
+            )
+            .await?;
+            if !ok {
+                return Err(CodecError::WriteFailed);
+            }
+            output_bytes = entry.bytes.len();
+            output_files = 1;
+        } else {
+            log_target(
+                &target,
+                alloc::format!("7z: job={} writing entries={}", id, entries.len()).as_str(),
+            );
+            for entry in entries {
+                let path =
+                    output_path_for_archive_entry(output_path.as_str(), entry.name.as_str())?;
+                log_target(
+                    &target,
+                    alloc::format!(
+                        "7z: job={} writing {} output_bytes={}",
+                        id,
+                        path.as_str(),
+                        entry.bytes.len()
+                    )
+                    .as_str(),
+                );
+                let ok = crate::r::fs::trueosfs::file_in_async(
+                    disk,
+                    path.as_str(),
+                    entry.bytes.as_slice(),
+                )
                 .await?;
-        if !ok {
-            return Err(CodecError::WriteFailed);
+                if !ok {
+                    return Err(CodecError::WriteFailed);
+                }
+                output_bytes = output_bytes
+                    .checked_add(entry.bytes.len())
+                    .ok_or(CodecError::WriteFailed)?;
+                output_files = output_files.checked_add(1).ok_or(CodecError::WriteFailed)?;
+            }
         }
 
-        let archive_bytes = archive.len();
-        let output_bytes = output.len();
         push_completed(CodecCompletedJob {
             id,
             kind: CodecCompletedKind::FileExtract {
@@ -379,10 +438,11 @@ async fn extract_file_job(
         log_target(
             &target,
             alloc::format!(
-                "7z: done job={} archive={} bytes output={} bytes path={}",
+                "7z: done job={} archive={} bytes output={} bytes files={} path={}",
                 id,
                 archive_bytes,
                 output_bytes,
+                output_files,
                 output_path.as_str()
             )
             .as_str(),

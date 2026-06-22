@@ -27,7 +27,7 @@ pub(crate) use crate::shell2::backends::{
     container_shell_read_output_byte, container_shell_submit_input, crlf,
     queue_ui3_keyboard_event as queue_ui3_shell_keyboard_event, uart1_com1,
     ui3_shell_attach_window, ui3_shell_last_rendered_seq, ui3_shell_line_width,
-    ui3_shell_mark_rendered, ui3_shell_set_line_width, ui3_shell_snapshot,
+    ui3_shell_mark_rendered, ui3_shell_rows, ui3_shell_set_line_width, ui3_shell_snapshot,
 };
 pub(crate) use interface::{ShellBackend2, ShellIo2};
 use shell2_apps::AppsPromptMode;
@@ -39,6 +39,7 @@ const BANNER_ROW: usize = 1;
 const STATUS_ROW: usize = 2;
 const PROMPT_ROW: usize = 3;
 const SCROLL_TOP_ROW: usize = 4;
+const DEFAULT_TRANSCRIPT_VIEW_ROWS: usize = 48;
 const STATUS_SELECTED_RGB: (u8, u8, u8) = (255, 55, 255);
 const FUNCTION_KEY_RGB: (u8, u8, u8) = (255, 255, 255);
 const TITLE_COUNT_RGB: (u8, u8, u8) = (255, 255, 255);
@@ -132,6 +133,7 @@ enum EscState {
 struct AlignedWriter<'a> {
     io: &'a dyn ShellIo2,
     line_width: Cell<usize>,
+    transcript_view_rows: Cell<usize>,
 }
 
 impl<'a> AlignedWriter<'a> {
@@ -139,6 +141,7 @@ impl<'a> AlignedWriter<'a> {
         Self {
             io,
             line_width: Cell::new(matrix::DEFAULT_MATRIX_SLOT_LINE_WIDTH),
+            transcript_view_rows: Cell::new(DEFAULT_TRANSCRIPT_VIEW_ROWS),
         }
     }
 
@@ -150,14 +153,17 @@ impl<'a> AlignedWriter<'a> {
         self.line_width.set(width);
     }
 
+    fn set_transcript_view_rows(&self, rows: usize) {
+        self.transcript_view_rows.set(rows.max(1));
+    }
+
     fn clear_screen_home(&self) {
         self.io.raw_write_str("\x1b[2J\x1b[H");
     }
 
     fn set_scroll_region(&self, top: usize) {
         // Reserve header rows by scrolling only in [top..bottom].
-        self.io
-            .raw_write_fmt(format_args!("\x1b[{};999r", top.max(1)));
+        self.io.raw_write_fmt(format_args!("\x1b[{};r", top.max(1)));
     }
 
     fn reset_scroll_region(&self) {
@@ -196,14 +202,15 @@ impl<'a> AlignedWriter<'a> {
         self.io.raw_write_str(ecma48::SAVE_CURSOR);
         self.move_to(SCROLL_TOP_ROW, 1);
         self.io.raw_write_str("\x1b[J");
+        let view_rows = self.transcript_view_rows.get().max(1);
 
         if transcript_prefers_chronological_layout(transcript) {
-            for (idx, entry) in transcript.iter().enumerate() {
+            for (idx, entry) in transcript.iter().take(view_rows).enumerate() {
                 let row = SCROLL_TOP_ROW + idx;
                 self.transcript_line_at(row, entry.source, entry.text.as_str());
             }
         } else {
-            for (idx, entry) in transcript.iter().rev().enumerate() {
+            for (idx, entry) in transcript.iter().rev().take(view_rows).enumerate() {
                 let row = SCROLL_TOP_ROW + idx;
                 self.transcript_line_at(row, entry.source, entry.text.as_str());
             }
@@ -542,6 +549,21 @@ fn line_width_for_output(output_mask: u8) -> usize {
     }
 }
 
+fn transcript_view_rows_for_output(output_mask: u8) -> usize {
+    if (output_mask & OUTPUT_UI3_MASK) != 0 {
+        ui3_shell_rows()
+            .saturating_sub(SCROLL_TOP_ROW.saturating_sub(1))
+            .max(1)
+    } else {
+        DEFAULT_TRANSCRIPT_VIEW_ROWS
+    }
+}
+
+fn configure_output_view(out: &AlignedWriter<'_>, output_mask: u8) {
+    out.set_line_width(line_width_for_output(output_mask));
+    out.set_transcript_view_rows(transcript_view_rows_for_output(output_mask));
+}
+
 fn set_line_width_for_output(output_mask: u8, width: usize) {
     let width = width.max(minimum_line_width_for_output(output_mask));
     if (output_mask & OUTPUT_UI3_MASK) != 0 {
@@ -864,7 +886,7 @@ pub(crate) fn repaint_backend_screen(io: &'static dyn ShellBackend2) {
     register_output(io);
     let out = AlignedWriter::new(io);
     let output_mask = output_target_for_backend(io);
-    out.set_line_width(line_width_for_output(output_mask));
+    configure_output_view(&out, output_mask);
     out.clear_screen_home();
     out.reset_scroll_region();
 
@@ -1206,7 +1228,7 @@ fn apply_matrix_operator_and_refresh(
 ) -> VecDeque<TranscriptEntry> {
     handle_matrix_operator(io, submitted);
     *mode = ShellMode2::Cmd;
-    out.set_line_width(line_width_for_output(output_mask));
+    configure_output_view(out, output_mask);
     out.banner(output_mask, *mode, minute_text);
     out.mode_status(
         output_mask,
@@ -1318,7 +1340,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     register_output(io);
     let out = AlignedWriter::new(io);
     let output_mask = output_target_for_backend(io);
-    out.set_line_width(line_width_for_output(output_mask));
+    configure_output_view(&out, output_mask);
 
     out.clear_screen_home();
     out.reset_scroll_region();
@@ -1584,6 +1606,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     matrix::record_user_input(submitted_raw);
                     let submitted = submitted_raw.trim();
                     cmd_status_text = None;
+                    out.prompt(output_mask);
                     let active_slot = matrix::active_slot_id(output_mask);
                     let active_slot_lifetime_generation =
                         matrix::slot_lifetime_generation(&active_slot);
@@ -1733,7 +1756,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         if submitted_raw.starts_with('§') && mode != ShellMode2::Qjs {
                             handle_matrix_operator(io, submitted);
                             mode = ShellMode2::Cmd;
-                            out.set_line_width(line_width_for_output(output_mask));
+                            configure_output_view(&out, output_mask);
                             out.banner(output_mask, mode, minute_text.as_str());
                             out.mode_status(
                                 output_mask,
@@ -1763,7 +1786,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             ) {
                                 HandleSubmitResult::SetLineWidth(width) => {
                                     set_line_width_for_output(output_mask, width);
-                                    out.set_line_width(line_width_for_output(output_mask));
+                                    configure_output_view(&out, output_mask);
                                     out.banner(output_mask, mode, minute_text.as_str());
                                     out.mode_status(
                                         output_mask,
