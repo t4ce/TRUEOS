@@ -40,8 +40,7 @@ fn find_http_header_end(buf: &[u8]) -> Option<usize> {
 }
 
 fn http_request_path(req: &str) -> Option<&str> {
-    let line_end = req
-        .find("\r\n")
+    let line_end = crate::r::pat::find_str(req, "\r\n")
         .or_else(|| req.find('\n'))
         .unwrap_or(req.len());
     let line = req.get(..line_end)?;
@@ -271,8 +270,7 @@ fn try_open_websocket(vnet: &VNet, session: &mut TimeSession) -> bool {
     let ws_upgrade_ok = is_valid_ws_upgrade(req);
 
     if path != Some(WS_TIME_PATH) || !ws_upgrade_ok || key.is_none() {
-        let line_end = req
-            .find("\r\n")
+        let line_end = crate::r::pat::find_str(req, "\r\n")
             .or_else(|| req.find('\n'))
             .unwrap_or(req.len());
         let req_line = &req[..line_end];

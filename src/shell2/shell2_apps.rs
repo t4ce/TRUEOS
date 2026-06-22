@@ -264,7 +264,7 @@ fn parse_online_apps(html: &str) -> Vec<OnlineApp> {
             rest = &rest[li_end..];
             continue;
         };
-        let Some(text_end) = link[tag_end + 1..].find("</a>") else {
+        let Some(text_end) = crate::r::pat::find_str(&link[tag_end + 1..], "</a>") else {
             rest = &rest[li_end..];
             continue;
         };

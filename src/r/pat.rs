@@ -1,5 +1,10 @@
+#[cfg(target_arch = "x86_64")]
+use core::sync::atomic::{AtomicU8, Ordering};
 use memchr::memchr;
-use twoway::find_str;
+use twoway::find_str as twoway_find_str;
+
+#[cfg(target_arch = "x86_64")]
+static SSE42_SUPPORTED: AtomicU8 = AtomicU8::new(0);
 
 /// Lightweight string search primitive mirroring a subset of `std::str::pattern`.
 pub trait Pattern<'a> {
@@ -14,16 +19,127 @@ pub trait Pattern<'a> {
 
 impl<'a> Pattern<'a> for &str {
     fn find_in(&mut self, haystack: &'a str) -> Option<usize> {
-        if self.is_empty() {
-            return Some(0);
-        }
-
-        if let Some(idx) = find_str(haystack, self) {
-            return Some(idx);
-        }
-
-        haystack.find(*self)
+        find_str(haystack, self)
     }
+}
+
+#[inline]
+pub fn find_str(haystack: &str, needle: &str) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    if let Some(idx) = find_str_sse42(haystack, needle) {
+        return Some(idx);
+    }
+
+    if let Some(idx) = twoway_find_str(haystack, needle) {
+        return Some(idx);
+    }
+
+    haystack.find(needle)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline]
+pub fn sse42_available() -> bool {
+    sse42_supported()
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+#[inline]
+pub fn sse42_available() -> bool {
+    false
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline]
+fn find_str_sse42(haystack: &str, needle: &str) -> Option<usize> {
+    let haystack = haystack.as_bytes();
+    let needle = needle.as_bytes();
+    if !(2..=8).contains(&needle.len()) || haystack.len() < needle.len() || !sse42_supported() {
+        return None;
+    }
+
+    unsafe { find_bytes_sse42(haystack, needle) }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline]
+fn sse42_supported() -> bool {
+    match SSE42_SUPPORTED.load(Ordering::Acquire) {
+        1 => false,
+        2 => true,
+        _ => {
+            let supported = unsafe {
+                let r = core::arch::x86_64::__cpuid(1);
+                (r.ecx & (1 << 20)) != 0
+            };
+            SSE42_SUPPORTED.store(if supported { 2 } else { 1 }, Ordering::Release);
+            supported
+        }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse4.2")]
+unsafe fn find_bytes_sse42(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    use core::arch::x86_64::{
+        __m128i, _SIDD_CMP_EQUAL_ORDERED, _mm_cmpestri, _mm_loadu_si128, _mm_setzero_si128,
+    };
+
+    #[inline(always)]
+    unsafe fn load_prefix(bytes: &[u8]) -> __m128i {
+        let mut block = _mm_setzero_si128();
+        let len = bytes.len().min(16);
+        core::ptr::copy_nonoverlapping(bytes.as_ptr(), &mut block as *mut __m128i as *mut u8, len);
+        block
+    }
+
+    #[inline(always)]
+    unsafe fn load_haystack_block(ptr: *const u8, len: usize) -> __m128i {
+        if len >= 16 {
+            _mm_loadu_si128(ptr as *const __m128i)
+        } else {
+            let mut block = _mm_setzero_si128();
+            core::ptr::copy_nonoverlapping(ptr, &mut block as *mut __m128i as *mut u8, len);
+            block
+        }
+    }
+
+    let prefix_len = needle.len().min(16);
+    let needle_prefix = load_prefix(&needle[..prefix_len]);
+    let mut pos = 0usize;
+
+    while pos + needle.len() <= haystack.len() {
+        let remaining = haystack.len() - pos;
+        let text_len = remaining.min(16);
+        let text = load_haystack_block(haystack.as_ptr().add(pos), text_len);
+        let rel = _mm_cmpestri(
+            needle_prefix,
+            prefix_len as i32,
+            text,
+            text_len as i32,
+            _SIDD_CMP_EQUAL_ORDERED,
+        ) as usize;
+
+        if rel == 16 {
+            pos = pos.saturating_add(16 - prefix_len + 1);
+            continue;
+        }
+
+        let candidate = pos + rel;
+        if candidate + needle.len() > haystack.len() {
+            return None;
+        }
+        if &haystack[candidate..candidate + needle.len()] == needle {
+            return Some(candidate);
+        }
+        pos = candidate + 1;
+    }
+
+    None
 }
 
 impl<'a> Pattern<'a> for char {
