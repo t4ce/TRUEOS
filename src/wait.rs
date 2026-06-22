@@ -279,11 +279,12 @@ impl WaitQueue {
                 return true;
             }
 
-            // Parked blocking waits are only safe for call sites whose progress is
-            // driven by other tasks/cores/interrupts and which will notify this queue
-            // on completion. Keep the default blocking wait conservative for the
-            // polling-driven paths that still rely on active spinning.
-            park_step();
+            // Parked blocking waits are used by runtime/platform primitives that
+            // may already be inside a Tokio enter guard. Polling the local
+            // executor here can re-enter another carrier job on the same TLS lane
+            // and make Tokio's enter guards unwind out of LIFO order. These
+            // waits rely on explicit notify/timeout progress instead.
+            spin_step_no_exec();
         }
     }
 }

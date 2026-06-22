@@ -146,7 +146,6 @@ svgtypes = { path = "vendor/svgtypes-0.15.3" }
 xmlwriter = { path = "vendor/xmlwriter-0.1.0" }
 crc32fast = { path = "vendor/crc32fast-1.5.0" }
 embedded-websocket = { path = "vendor/embedded-websocket-0.9.4" }
-embassy-time = { path = "vendor/embassy-time-0.5.1" }
 aarch64-cpu = { path = "vendor/aarch64-cpu-10.0.0" }
 lazy_static = { path = "vendor/lazy_static-1.5.0" }
 rustls-rustcrypto = { path = "vendor/rustls-rustcrypto-0.0.2-alpha" }
