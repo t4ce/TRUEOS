@@ -124,11 +124,6 @@ fn cpu_slot_now() -> u32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "Rust" fn trueos_tokio_tls_current_cpu_slot() -> u32 {
-    cpu_slot_now()
-}
-
-#[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_tokio_tls_current_slot() -> u32 {
     let guest_vm_id = crate::hv::current_hull_guest_context_vm_id();
 

@@ -13,6 +13,7 @@ pub const OP_UNIX_TIME: u32 = 0x03;
 pub const OP_YIELD: u32 = 0x04;
 pub const OP_SLEEP_MS: u32 = 0x05;
 pub const OP_RAND_BYTES: u32 = 0x06;
+pub const OP_BP_CPU_COUNT: u32 = 0x07;
 pub const OP_NET_TCP_WRITE: u32 = 0x10;
 pub const OP_NET_TCP_READ: u32 = 0x11;
 pub const OP_BP_NET_OPEN: u32 = 0x20;
@@ -206,6 +207,15 @@ pub fn yield_now() {
 
 pub fn sleep_ms(ms: u64) {
     let _ = call(OP_SLEEP_MS, ms, 0);
+}
+
+pub fn cpu_count() -> Option<usize> {
+    let (status, count) = call(OP_BP_CPU_COUNT, 0, 0);
+    if status == STATUS_OK {
+        Some(count.max(1) as usize)
+    } else {
+        None
+    }
 }
 
 pub fn net_tcp_write(bytes: &[u8]) -> usize {

@@ -38,7 +38,6 @@ pub(crate) enum KnownKernelRole {
     Fill,
     WorklistFill,
     WorklistGradient,
-    Blit,
     Blend,
     WorklistBlend,
     Glyph,
@@ -287,35 +286,6 @@ const GRADIENT_RECT_WORKLIST_CONTRACT: GpuKernelContract<'_> = GpuKernelContract
     descriptor_layouts: GRADIENT_RECT_DESCS,
     launch: KernelLaunchContract::descriptor_worklist(16),
     consumers: RECT_WORKLIST_CONSUMERS,
-};
-
-const BLIT_RGBA8_NEAREST_ARGS: &[KernelCallArg<'_>] = &[
-    ro_buf!(0, "src_rgba", "__global const uint*", 0, 12),
-    rw_buf!(1, "dst_rgba", "__global uint*", 1, 14),
-    u32_arg!(2, "src_pitch_bytes", 16),
-    u32_arg!(3, "dst_pitch_bytes", 17),
-    u32_arg!(4, "src_x", 18),
-    u32_arg!(5, "src_y", 19),
-    u32_arg!(6, "src_width", 20),
-    u32_arg!(7, "src_height", 21),
-    u32_arg!(8, "dst_x", 22),
-    u32_arg!(9, "dst_y", 23),
-    u32_arg!(10, "dst_width", 24),
-    u32_arg!(11, "dst_height", 25),
-];
-const BLIT_RGBA8_NEAREST_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
-    name: gpgpu::BLIT_RGBA8_NEAREST_KERNEL_NAME,
-    source_path: "src/intel/kernels/blit_rgba8_nearest.cl",
-    producer: IGC,
-    target: ADLS,
-    entry_text_offset_bytes: TEXT_OFFSET,
-    cross_thread_bytes: COPY_CROSS_THREAD_BYTES,
-    per_thread_bytes: COPY_PER_THREAD_BYTES,
-    binding_count: 2,
-    args: BLIT_RGBA8_NEAREST_ARGS,
-    descriptor_layouts: NO_DESCS,
-    launch: KernelLaunchContract::nd_range_2d(None),
-    consumers: BOOT_UPLOAD_CONSUMERS,
 };
 
 const ALPHA_BLEND_WORKLIST_ARGS: &[KernelCallArg<'_>] = &[
@@ -659,14 +629,6 @@ pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
         upload: gpgpu::upload_gradient_rect_worklist_rgba8_kernel,
         status: gpgpu::gradient_rect_worklist_rgba8_upload_status,
         role: KnownKernelRole::WorklistGradient,
-    },
-    KnownAotKernel {
-        name: gpgpu::BLIT_RGBA8_NEAREST_KERNEL_NAME,
-        artifact: &gpgpu::BLIT_RGBA8_NEAREST_ADLS_ARTIFACT,
-        contract: &BLIT_RGBA8_NEAREST_CONTRACT,
-        upload: gpgpu::upload_blit_rgba8_nearest_kernel,
-        status: gpgpu::blit_rgba8_nearest_upload_status,
-        role: KnownKernelRole::Blit,
     },
     KnownAotKernel {
         name: gpgpu::ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME,

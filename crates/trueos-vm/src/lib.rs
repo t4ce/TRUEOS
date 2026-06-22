@@ -70,6 +70,7 @@ pub mod vmcall {
     pub const OP_PRESERVE: u32 = 0x01;
     pub const OP_PING: u32 = 0x02;
     pub const OP_UNIX_TIME: u32 = 0x03;
+    pub const OP_BP_CPU_COUNT: u32 = 0x07;
     pub const OP_NET_TCP_WRITE: u32 = 0x10;
     pub const OP_NET_TCP_READ: u32 = 0x11;
     pub const OP_BP_NET_OPEN: u32 = 0x20;
@@ -110,6 +111,10 @@ pub mod vmcall {
 
     pub fn call(_op: u32, _arg0: u64, _arg1: u64) -> (u32, u64) {
         (STATUS_BAD_ARG, 0)
+    }
+
+    pub fn cpu_count() -> Option<usize> {
+        None
     }
 
     pub fn call_with_payload(

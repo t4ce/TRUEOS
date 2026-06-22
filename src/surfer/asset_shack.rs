@@ -157,6 +157,17 @@ fn request_prefers_perf_core(request: &BrowserAssetRequest) -> bool {
     matches!(infer_decode_kind(&request.kind, &request.url, &[]), "png" | "jpeg")
 }
 
+fn current_worker_residency() -> (usize, u8, &'static str) {
+    let slot = crate::percpu::current_slot();
+    let core_kind = crate::workers::core_kind_for_slot(slot as u32);
+    let core_kind_name = match core_kind {
+        crate::workers::CORE_KIND_PERF => "perf",
+        crate::workers::CORE_KIND_EFF => "eff",
+        _ => "unknown",
+    };
+    (slot, core_kind, core_kind_name)
+}
+
 fn decode_asset_rgba(kind: &str, url: &str, bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), i32> {
     match infer_decode_kind(kind, url, bytes) {
         "png" => crate::ui3::img::png_codec::decode_png_rgba(bytes)
@@ -476,9 +487,13 @@ async fn fetch_asset_request(worker_id: u32, request: BrowserAssetRequest) {
             Ok(decoded) => decoded,
             Err(code) => {
                 note_asset_completed(request.browser_instance_id, request.generation, false);
+                let (slot, core_kind, core_kind_name) = current_worker_residency();
                 crate::log!(
-                    "asset_shack: decode failed worker={} browser={} generation={} op_id={} tag={} kind={} code={} bytes={} url={}\n",
+                    "asset_shack: decode failed worker={} slot={} core_kind={} core={} browser={} generation={} op_id={} tag={} kind={} code={} bytes={} url={}\n",
                     worker_id,
+                    slot,
+                    core_kind,
+                    core_kind_name,
                     request.browser_instance_id,
                     request.generation,
                     op_id,
@@ -494,9 +509,13 @@ async fn fetch_asset_request(worker_id: u32, request: BrowserAssetRequest) {
 
         let ready_len = store_ready_asset(request.clone(), width, height, rgba);
         note_asset_completed(request.browser_instance_id, request.generation, true);
+        let (slot, core_kind, core_kind_name) = current_worker_residency();
         crate::log!(
-            "asset_shack: fetch ready worker={} browser={} generation={} op_id={} tag={} kind={} bytes={} image={}x{} ready_queue={} url={}\n",
+            "asset_shack: fetch ready worker={} slot={} core_kind={} core={} browser={} generation={} op_id={} tag={} kind={} bytes={} image={}x{} ready_queue={} url={}\n",
             worker_id,
+            slot,
+            core_kind,
+            core_kind_name,
             request.browser_instance_id,
             request.generation,
             op_id,
@@ -546,9 +565,13 @@ pub async fn asset_fetch_worker_task(policy: u8) {
         ASSET_FETCH_POLICY_PCORE_IMAGE => "pcore-image-png-jpeg",
         _ => "any",
     };
+    let (slot, core_kind, core_kind_name) = current_worker_residency();
     crate::log!(
-        "asset_shack: fetch worker started worker={} max_parallel={} policy={}\n",
+        "asset_shack: fetch worker started worker={} slot={} core_kind={} core={} max_parallel={} policy={}\n",
         worker_id,
+        slot,
+        core_kind,
+        core_kind_name,
         ASSET_FETCH_WORKERS,
         policy_name
     );

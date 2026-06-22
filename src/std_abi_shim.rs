@@ -440,10 +440,7 @@ fn c_malloc_aligned(size: usize, align: usize) -> *mut c_void {
         return ptr::null_mut();
     };
     let ptr = if let Some(vm_id) = active_abi_alloc_guest_vm_id() {
-        crate::allocators::with_hv_guest_alloc_domain(vm_id, || unsafe {
-            crate::allocators::alloc_raw(layout)
-        })
-        .unwrap_or(ptr::null_mut())
+        unsafe { crate::allocators::alloc_raw_hv_guest(vm_id, layout) }
     } else {
         unsafe { crate::allocators::alloc_raw(layout) }
     };
@@ -849,10 +846,7 @@ pub unsafe extern "C" fn sys_alloc_aligned(size: usize, align: usize) -> *mut u8
     };
 
     if let Some(vm_id) = active_abi_alloc_guest_vm_id() {
-        crate::allocators::with_hv_guest_alloc_domain(vm_id, || unsafe {
-            crate::allocators::alloc_raw(layout)
-        })
-        .unwrap_or(ptr::null_mut())
+        unsafe { crate::allocators::alloc_raw_hv_guest(vm_id, layout) }
     } else {
         unsafe { crate::allocators::alloc_raw(layout) }
     }
