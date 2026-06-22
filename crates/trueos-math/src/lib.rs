@@ -7,6 +7,12 @@ extern crate alloc;
 pub mod tree;
 pub use tree::{Children, NodeId, Tree};
 
+pub mod sort;
+pub use sort::{
+    SortError, stable_rank, stable_rank_positions, stable_rank_positions_range,
+    stable_rank_sort_copy, stable_rank_sort_copy_range,
+};
+
 pub mod complex;
 pub use complex::Complex;
 

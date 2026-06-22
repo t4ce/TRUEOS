@@ -1,10 +1,12 @@
 #[cfg(target_arch = "x86_64")]
-use core::arch::x86_64::{__cpuid, _rdtsc};
+use core::arch::x86_64::_rdtsc;
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::task::Waker;
 
 use embassy_time_driver::{Driver, TICK_HZ};
 use heapless::Vec;
+#[cfg(target_arch = "x86_64")]
+use raw_cpuid::CpuId;
 use spin::{Mutex, Once};
 
 struct WakeEntry {
@@ -96,10 +98,14 @@ fn detect_tsc_hz() -> u64 {
 
 #[cfg(target_arch = "x86_64")]
 fn detect_tsc_hz_from_cpuid() -> u64 {
-    let r15 = __cpuid(0x15);
-    let denom = r15.eax as u64;
-    let numer = r15.ebx as u64;
-    let crystal_hz = r15.ecx as u64;
+    let cpuid = CpuId::new();
+    let tsc = cpuid.get_tsc_info();
+    let denom = tsc.as_ref().map(|info| info.denominator()).unwrap_or(0) as u64;
+    let numer = tsc.as_ref().map(|info| info.numerator()).unwrap_or(0) as u64;
+    let crystal_hz = tsc
+        .as_ref()
+        .map(|info| info.nominal_frequency())
+        .unwrap_or(0) as u64;
     if crate::logflag::BOOT_INFO_LOGS {
         crate::log!(
             "time: cpuid 0x15: denom={} numer={} crystal_hz={}\n",
@@ -124,8 +130,10 @@ fn detect_tsc_hz_from_cpuid() -> u64 {
         }
     }
 
-    let r16 = __cpuid(0x16);
-    let base_mhz = (r16.eax & 0xFFFF) as u64;
+    let base_mhz = cpuid
+        .get_processor_frequency_info()
+        .map(|info| info.processor_base_frequency() as u64)
+        .unwrap_or(0);
     if crate::logflag::BOOT_INFO_LOGS {
         crate::log!("time: cpuid 0x16: base_mhz={}\n", base_mhz);
     }

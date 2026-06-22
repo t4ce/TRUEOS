@@ -3,9 +3,9 @@
 pub(crate) mod rapl;
 pub(crate) mod turbo;
 
-use core::arch::x86_64::__cpuid;
 use core::sync::atomic::{AtomicU8, Ordering};
 
+use raw_cpuid::CpuId;
 use spin::Once;
 
 use x86_64::registers::model_specific::Msr;
@@ -160,21 +160,21 @@ pub fn set_pstate_ratio(requested: u8) -> Result<u8, &'static str> {
 }
 
 fn detect_caps_cpuid_only() -> Option<PowerCaps> {
-    let r0 = __cpuid(0x0);
-    let max_leaf = r0.eax;
-    let vendor_intel = r0.ebx == 0x756e6547 && r0.edx == 0x49656e69 && r0.ecx == 0x6c65746e;
-
-    let r1 = __cpuid(0x1);
-    let has_msr = (r1.edx & (1 << 5)) != 0;
+    let cpuid = CpuId::new();
+    let vendor_intel = cpuid
+        .get_vendor_info()
+        .map(|vendor| vendor.as_str() == "GenuineIntel")
+        .unwrap_or(false);
+    let features = cpuid.get_feature_info()?;
+    let has_msr = features.has_msr();
     // EIST/HWP probing is Intel-specific. On other vendors, treating these bits as
     // authoritative can lead to invalid MSR reads and a #GP (which currently reboots).
-    let has_eist = vendor_intel && (r1.ecx & (1 << 7)) != 0;
-
-    let mut has_hwp = false;
-    if vendor_intel && max_leaf >= 0x6 {
-        let r6 = __cpuid(0x6);
-        has_hwp = (r6.eax & (1 << 7)) != 0;
-    }
+    let has_eist = vendor_intel && features.has_eist();
+    let has_hwp = vendor_intel
+        && cpuid
+            .get_thermal_power_info()
+            .map(|power| power.has_hwp())
+            .unwrap_or(false);
 
     Some(PowerCaps {
         vendor_intel,

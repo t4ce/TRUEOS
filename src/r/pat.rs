@@ -1,6 +1,8 @@
 #[cfg(target_arch = "x86_64")]
 use core::sync::atomic::{AtomicU8, Ordering};
 use memchr::memchr;
+#[cfg(target_arch = "x86_64")]
+use raw_cpuid::CpuId;
 use twoway::find_str as twoway_find_str;
 
 #[cfg(target_arch = "x86_64")]
@@ -72,10 +74,10 @@ fn sse42_supported() -> bool {
         1 => false,
         2 => true,
         _ => {
-            let supported = unsafe {
-                let r = core::arch::x86_64::__cpuid(1);
-                (r.ecx & (1 << 20)) != 0
-            };
+            let supported = CpuId::new()
+                .get_feature_info()
+                .map(|features| features.has_sse42())
+                .unwrap_or(false);
             SSE42_SUPPORTED.store(if supported { 2 } else { 1 }, Ordering::Release);
             supported
         }
