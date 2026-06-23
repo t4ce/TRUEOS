@@ -31,8 +31,8 @@
 <!-- in0&#45;&gt;n0 -->
 <g id="edge1" class="edge">
 <title>in0&#45;&gt;n0</title>
-<path fill="none" stroke="#4b8fc5" stroke-width="0.9" stroke-dasharray="5,2" d="M132.82,-27.2C143.66,-27.2 154.89,-27.2 165.69,-27.2"/>
-<polygon fill="#4b8fc5" stroke="#4b8fc5" stroke-width="0.9" points="165.49,-29.13 170.99,-27.2 165.49,-25.28 165.49,-29.13"/>
+<path fill="none" stroke="#4b8fc5" stroke-width="7.2" stroke-dasharray="5,2" d="M132.82,-27.2C141.82,-27.2 151.09,-27.2 160.16,-27.2"/>
+<polygon fill="#4b8fc5" stroke="#4b8fc5" stroke-width="7.2" points="160.1,-30.67 165.6,-27.2 160.1,-23.74 160.1,-30.67"/>
 </g>
 </g>
 </svg>

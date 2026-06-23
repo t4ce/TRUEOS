@@ -30,8 +30,8 @@
 <!-- n0&#45;&gt;out0 -->
 <g id="edge1" class="edge">
 <title>n0&#45;&gt;out0</title>
-<path fill="none" stroke="#d19922" stroke-width="0.9" stroke-dasharray="5,2" d="M120.65,-126.89C134.28,-132.87 148.77,-139.23 162.33,-145.18"/>
-<polygon fill="#d19922" stroke="#d19922" stroke-width="0.9" points="161.43,-146.89 167.24,-147.34 162.98,-143.37 161.43,-146.89"/>
+<path fill="none" stroke="#d19922" stroke-width="7.2" stroke-dasharray="5,2" d="M120.65,-126.89C132.68,-132.17 145.39,-137.75 157.53,-143.08"/>
+<polygon fill="#d19922" stroke="#d19922" stroke-width="7.2" points="155.88,-146.14 162.3,-145.17 158.66,-139.79 155.88,-146.14"/>
 </g>
 <!-- out1 -->
 <g id="node3" class="node">
@@ -46,8 +46,8 @@
 <!-- n0&#45;&gt;out1 -->
 <g id="edge2" class="edge">
 <title>n0&#45;&gt;out1</title>
-<path fill="none" stroke="#d19922" stroke-width="0.9" stroke-dasharray="5,2" d="M122.45,-101.2C135.57,-101.2 149.42,-101.2 162.41,-101.2"/>
-<polygon fill="#d19922" stroke="#d19922" stroke-width="0.9" points="162.25,-103.13 167.75,-101.2 162.25,-99.28 162.25,-103.13"/>
+<path fill="none" stroke="#d19922" stroke-width="7.2" stroke-dasharray="5,2" d="M122.45,-101.2C133.77,-101.2 145.62,-101.2 157,-101.2"/>
+<polygon fill="#d19922" stroke="#d19922" stroke-width="7.2" points="156.86,-104.67 162.36,-101.2 156.86,-97.74 156.86,-104.67"/>
 </g>
 <!-- out2 -->
 <g id="node4" class="node">
@@ -63,8 +63,8 @@
 <!-- n0&#45;&gt;out2 -->
 <g id="edge3" class="edge">
 <title>n0&#45;&gt;out2</title>
-<path fill="none" stroke="#d19922" stroke-width="0.9" stroke-dasharray="5,2" d="M116.66,-75.53C129.35,-69.55 142.96,-63.14 156,-57.01"/>
-<polygon fill="#d19922" stroke="#d19922" stroke-width="0.9" points="156.55,-58.88 160.71,-54.79 154.91,-55.39 156.55,-58.88"/>
+<path fill="none" stroke="#d19922" stroke-width="7.2" stroke-dasharray="5,2" d="M116.66,-75.53C127.75,-70.31 139.54,-64.75 151.04,-59.34"/>
+<polygon fill="#d19922" stroke="#d19922" stroke-width="7.2" points="152.33,-62.57 155.83,-57.09 149.38,-56.3 152.33,-62.57"/>
 </g>
 </g>
 </svg>

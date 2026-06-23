@@ -29,8 +29,8 @@
 <!-- n0&#45;&gt;out0 -->
 <g id="edge1" class="edge">
 <title>n0&#45;&gt;out0</title>
-<path fill="none" stroke="#d19922" stroke-width="0.9" stroke-dasharray="5,2" d="M82.11,-22.2C92.48,-22.2 103.81,-22.2 114.77,-22.2"/>
-<polygon fill="#d19922" stroke="#d19922" stroke-width="0.9" points="114.66,-24.13 120.16,-22.2 114.66,-20.28 114.66,-24.13"/>
+<path fill="none" stroke="#d19922" stroke-width="7.2" stroke-dasharray="5,2" d="M82.11,-22.2C90.82,-22.2 100.2,-22.2 109.47,-22.2"/>
+<polygon fill="#d19922" stroke="#d19922" stroke-width="7.2" points="109.27,-25.67 114.77,-22.2 109.27,-18.74 109.27,-25.67"/>
 </g>
 </g>
 </svg>

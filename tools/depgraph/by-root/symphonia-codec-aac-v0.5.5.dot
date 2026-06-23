@@ -1,7 +1,7 @@
 digraph "symphonia-codec-aac-v0.5.5" {
   graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];
   node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.13,0.10", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
-  edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];
+  edge [color="#9aa8b8", arrowsize=0.55, penwidth=7.2];
   n0 [label=<<FONT POINT-SIZE="13"><B>symphonia-codec-aac</B></FONT><BR/><FONT POINT-SIZE="12">0.5.5</FONT><BR/><FONT POINT-SIZE="11">/vendor/symphonia-codec-aac-0.5.5-trueos</FONT>>, fillcolor="#dff3ff", color="#1b78a6"];
   n1 [label=<<FONT POINT-SIZE="13"><B>bytemuck</B></FONT><BR/><FONT POINT-SIZE="12">1.25.0</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
   out0 [label=<to libm-v0.2.16.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];

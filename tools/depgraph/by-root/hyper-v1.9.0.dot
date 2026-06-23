@@ -1,7 +1,7 @@
 digraph "hyper-v1.9.0" {
   graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];
   node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.13,0.10", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
-  edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];
+  edge [color="#9aa8b8", arrowsize=0.55, penwidth=7.2];
   n0 [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="0"><TR><TD><FONT POINT-SIZE="13"><B>hyper</B></FONT></TD></TR>
 <TR><TD><FONT POINT-SIZE="12">1.9.0</FONT></TD></TR>
 <TR><TD><FONT POINT-SIZE="11">/vendor/hyper-1.9.0</FONT></TD></TR><TR><TD><TABLE BORDER="0" CELLBORDER="0" CELLSPACING="6" CELLPADDING="0"><TR><TD><TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="8" COLOR="#9aa8b8" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="11"><B>atomic-waker</B></FONT> <FONT POINT-SIZE="10">1.1.2</FONT></TD></TR></TABLE></TD></TR><TR><TD><TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="8" COLOR="#9aa8b8" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="11"><B>httpdate</B></FONT> <FONT POINT-SIZE="10">1.0.3</FONT><BR/><FONT POINT-SIZE="9">/vendor/httpdate-1.0.3</FONT></TD></TR></TABLE></TD></TR></TABLE></TD></TR></TABLE>>, fillcolor="#dff3ff", color="#1b78a6"];
