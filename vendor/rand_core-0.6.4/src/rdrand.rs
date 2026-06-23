@@ -59,11 +59,13 @@
 //! </table>
 //!
 //! [Agner’s instruction tables]: http://agner.org/optimize/
-#[path = "rdrand_errors.rs"]
+#![cfg_attr(not(feature = "std"), no_std)]
+
+pub mod changelog;
 mod errors;
 
 pub use errors::ErrorCode;
-use crate::{CryptoRng, Error, RngCore};
+use rand_core::{CryptoRng, Error, RngCore};
 
 #[cold]
 #[inline(never)]
@@ -82,7 +84,7 @@ pub(crate) fn busy_loop_fail(code: ErrorCode) -> ! {
 ///
 /// It is potentially faster than `OsRng`, but is only supported by more recent architectures such
 /// as Intel Ivy Bridge and AMD Zen.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct RdRand(());
 
 /// A cryptographically secure non-deterministic random bit generator.
@@ -94,7 +96,7 @@ pub struct RdRand(());
 ///
 /// This generator is not intended for general random number generation purposes and should be used
 /// to seed other generators implementing [rand_core::SeedableRng].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct RdSeed(());
 
 impl CryptoRng for RdRand {}
@@ -499,7 +501,7 @@ impl_rand!(
 #[cfg(test)]
 mod test {
     use super::{RdRand, RdSeed};
-    use crate::RngCore;
+    use rand_core::RngCore;
 
     #[test]
     fn rdrand_works() {

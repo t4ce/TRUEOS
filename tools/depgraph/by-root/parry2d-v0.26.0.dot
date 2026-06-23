@@ -1,15 +1,15 @@
 digraph "parry2d-v0.26.0" {
   graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];
-  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.08,0.05", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
+  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.13,0.10", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
   edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];
-  n0 [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="0"><TR><TD><B>parry2d</B></TD></TR>
-<TR><TD>0.26.0</TD></TR><TR><TD><TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#9aa8b8" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="8"><B>downcast-rs</B> 2.0.2</FONT></TD></TR></TABLE></TD></TR><TR><TD><TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#9aa8b8" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="8"><B>either</B> 1.15.0</FONT></TD></TR></TABLE></TD></TR></TABLE>>, fillcolor="#dff3ff", color="#1b78a6"];
-  n1 [label=<<B>approx</B><BR/>0.5.1>, fillcolor="#f7f9fb", color="#8b9bb0"];
-  n2 [label=<<B>glam</B><BR/>0.30.10>, fillcolor="#f7f9fb", color="#8b9bb0"];
-  n3 [label=<<B>glamx</B><BR/>0.1.3>, fillcolor="#f7f9fb", color="#8b9bb0"];
-  n4 [label=<<B>num-complex</B><BR/>0.4.6>, fillcolor="#f7f9fb", color="#8b9bb0"];
-  n5 [label=<<B>ordered-float</B><BR/>5.3.0>, fillcolor="#f7f9fb", color="#8b9bb0"];
-  n6 [label=<<B>simba</B><BR/>0.9.1>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n0 [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="0"><TR><TD><FONT POINT-SIZE="13"><B>parry2d</B></FONT></TD></TR>
+<TR><TD><FONT POINT-SIZE="12">0.26.0</FONT></TD></TR><TR><TD><TABLE BORDER="0" CELLBORDER="0" CELLSPACING="6" CELLPADDING="0"><TR><TD><TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="8" COLOR="#9aa8b8" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="11"><B>downcast-rs</B></FONT> <FONT POINT-SIZE="10">2.0.2</FONT></TD></TR></TABLE></TD></TR><TR><TD><TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="8" COLOR="#9aa8b8" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="11"><B>either</B></FONT> <FONT POINT-SIZE="10">1.15.0</FONT></TD></TR></TABLE></TD></TR></TABLE></TD></TR></TABLE>>, fillcolor="#dff3ff", color="#1b78a6"];
+  n1 [label=<<FONT POINT-SIZE="13"><B>approx</B></FONT><BR/><FONT POINT-SIZE="12">0.5.1</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n2 [label=<<FONT POINT-SIZE="13"><B>glam</B></FONT><BR/><FONT POINT-SIZE="12">0.30.10</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n3 [label=<<FONT POINT-SIZE="13"><B>glamx</B></FONT><BR/><FONT POINT-SIZE="12">0.1.3</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n4 [label=<<FONT POINT-SIZE="13"><B>num-complex</B></FONT><BR/><FONT POINT-SIZE="12">0.4.6</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n5 [label=<<FONT POINT-SIZE="13"><B>ordered-float</B></FONT><BR/><FONT POINT-SIZE="12">5.3.0</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n6 [label=<<FONT POINT-SIZE="13"><B>simba</B></FONT><BR/><FONT POINT-SIZE="12">0.9.1</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
   n2 -> n1;
   n3 -> n1;
   n3 -> n2;

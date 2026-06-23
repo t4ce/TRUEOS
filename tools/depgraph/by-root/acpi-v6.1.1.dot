@@ -1,15 +1,15 @@
 digraph "acpi-v6.1.1" {
   graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];
-  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.08,0.05", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
+  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.13,0.10", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
   edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];
-  n0 [label=<<B>acpi</B><BR/>6.1.1>, fillcolor="#dff3ff", color="#1b78a6"];
-  n1 [label=<<B>bit_field</B><BR/>0.10.3>, fillcolor="#f7f9fb", color="#8b9bb0"];
-  n2 [label=<<B>bitflags</B><BR/>2.11.1>, fillcolor="#f7f9fb", color="#8b9bb0"];
-  n3 [label=<<B>byteorder</B><BR/>1.5.0>, fillcolor="#f7f9fb", color="#8b9bb0"];
-  n4 [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="0"><TR><TD><B>lock_api</B></TD></TR>
-<TR><TD>0.4.14</TD></TR><TR><TD><TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#9aa8b8" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="8"><B>scopeguard</B> 1.2.0</FONT></TD></TR></TABLE></TD></TR></TABLE>>, fillcolor="#f7f9fb", color="#8b9bb0"];
-  n5 [label=<<B>pci_types</B><BR/>0.10.1>, fillcolor="#f7f9fb", color="#8b9bb0"];
-  n6 [label=<<B>spinning_top</B><BR/>0.3.0>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n0 [label=<<FONT POINT-SIZE="13"><B>acpi</B></FONT><BR/><FONT POINT-SIZE="12">6.1.1</FONT>>, fillcolor="#dff3ff", color="#1b78a6"];
+  n1 [label=<<FONT POINT-SIZE="13"><B>bit_field</B></FONT><BR/><FONT POINT-SIZE="12">0.10.3</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n2 [label=<<FONT POINT-SIZE="13"><B>bitflags</B></FONT><BR/><FONT POINT-SIZE="12">2.11.1</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n3 [label=<<FONT POINT-SIZE="13"><B>byteorder</B></FONT><BR/><FONT POINT-SIZE="12">1.5.0</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n4 [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="0"><TR><TD><FONT POINT-SIZE="13"><B>lock_api</B></FONT></TD></TR>
+<TR><TD><FONT POINT-SIZE="12">0.4.14</FONT></TD></TR><TR><TD><TABLE BORDER="0" CELLBORDER="0" CELLSPACING="6" CELLPADDING="0"><TR><TD><TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="8" COLOR="#9aa8b8" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="11"><B>scopeguard</B></FONT> <FONT POINT-SIZE="10">1.2.0</FONT></TD></TR></TABLE></TD></TR></TABLE></TD></TR></TABLE>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n5 [label=<<FONT POINT-SIZE="13"><B>pci_types</B></FONT><BR/><FONT POINT-SIZE="12">0.10.1</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n6 [label=<<FONT POINT-SIZE="13"><B>spinning_top</B></FONT><BR/><FONT POINT-SIZE="12">0.3.0</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
   n0 -> n1;
   n0 -> n2;
   n0 -> n3;

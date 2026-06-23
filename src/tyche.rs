@@ -8,7 +8,7 @@ use spin::Mutex;
 use zeroize::Zeroize;
 
 #[cfg(target_arch = "x86_64")]
-use rand_core::rdrand::{RdRand, RdSeed};
+use rdrand::{RdRand, RdSeed};
 
 const SPLITMIX_GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
 

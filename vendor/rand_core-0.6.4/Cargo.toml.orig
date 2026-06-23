@@ -2,7 +2,7 @@
 name = "rand_core"
 version = "0.6.4"
 authors = ["The Rand Project Developers", "The Rust Project Developers"]
-license = "(MIT OR Apache-2.0) AND ISC"
+license = "MIT OR Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/rust-random/rand"
 documentation = "https://docs.rs/rand_core"
@@ -26,7 +26,6 @@ all-features = true
 [features]
 std = ["alloc", "getrandom", "getrandom/std"]    # use std library; should be default but for above bug
 alloc = []  # enables Vec and Box support without std
-rdrand = [] # enables x86/x86_64 RDRAND/RDSEED generators
 serde1 = ["serde"] # enables serde for BlockRng wrapper
 
 [dependencies]

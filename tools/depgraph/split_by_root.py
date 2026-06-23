@@ -15,6 +15,15 @@ FULL_SVG_PATH = Path("tools/depgraph/trueos-depth-tree.svg")
 OUT_DIR = Path("tools/depgraph/by-root")
 HTML_INDEX_PATH = Path("tools/depgraph/index.html")
 REPO_ROOT = "/home/t4ce/REPOS/TRUEOS"
+NODE_MARGIN = "0.13,0.10"
+INNER_BUBBLE_PADDING = 8
+INNER_BUBBLE_SPACING = 6
+NAME_POINT_SIZE = 13
+VERSION_POINT_SIZE = 12
+PATH_POINT_SIZE = 11
+COMPACT_NAME_POINT_SIZE = 11
+COMPACT_VERSION_POINT_SIZE = 10
+COMPACT_PATH_POINT_SIZE = 9
 LEFT_WING_CRATES = {
     "core3",
     "mio",
@@ -73,19 +82,29 @@ def crate_name(label: str) -> str:
 def compact_html_label(label: str) -> str:
     lines = display_lines(label)
     name = escape(lines[0][0])
-    version = escape(lines[1][0]) if len(lines) > 1 else ""
-    rendered = f"<B>{name}</B>" if not version else f"<B>{name}</B> {version}"
-    extra = [escape(text) for text, _ in lines[2:]]
+    rendered = f'<FONT POINT-SIZE="{COMPACT_NAME_POINT_SIZE}"><B>{name}</B></FONT>'
+    if len(lines) > 1:
+        version = escape(lines[1][0])
+        rendered += f' <FONT POINT-SIZE="{COMPACT_VERSION_POINT_SIZE}">{version}</FONT>'
+    extra = [
+        f'<FONT POINT-SIZE="{COMPACT_PATH_POINT_SIZE}">{escape(text)}</FONT>'
+        for text, _ in lines[2:]
+    ]
     if extra:
         rendered += "<BR/>" + "<BR/>".join(extra)
-    return f'<FONT POINT-SIZE="8">{rendered}</FONT>'
+    return rendered
 
 
 def label_text_html(label: str) -> list[str]:
     lines = []
-    for text, bold in display_lines(label):
+    for index, (text, bold) in enumerate(display_lines(label)):
         escaped = escape(text)
-        lines.append(f"<B>{escaped}</B>" if bold else escaped)
+        if index == 0:
+            lines.append(f'<FONT POINT-SIZE="{NAME_POINT_SIZE}"><B>{escaped}</B></FONT>')
+        elif index == 1:
+            lines.append(f'<FONT POINT-SIZE="{VERSION_POINT_SIZE}">{escaped}</FONT>')
+        else:
+            lines.append(f'<FONT POINT-SIZE="{PATH_POINT_SIZE}">{escaped}</FONT>')
     return lines
 
 
@@ -136,18 +155,27 @@ def direct_embedded_path_index(entries: list[EmbeddedEntry], label: str) -> int 
 
 def embedded_bubble_html(entry: EmbeddedEntry) -> str:
     port_attr = f' PORT="{escape(entry.port)}"' if entry.port else ""
-    child_rows = "".join(
-        f"<TR>{embedded_bubble_html(child)}</TR>"
-        for child in normalize_embedded_entries(entry.children)
-    )
+    child_rows = embedded_rows_html(normalize_embedded_entries(entry.children))
+    child_row = f"<TR><TD>{child_rows}</TD></TR>" if child_rows else ""
     return (
         f"<TD{port_attr}>"
-        "<TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"4\" "
+        f"<TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"{INNER_BUBBLE_PADDING}\" "
         "COLOR=\"#9aa8b8\" STYLE=\"ROUNDED\">"
         f"<TR><TD>{compact_html_label(entry.label)}</TD></TR>"
-        f"{child_rows}"
+        f"{child_row}"
         "</TABLE>"
         "</TD>"
+    )
+
+
+def embedded_rows_html(entries: list[EmbeddedEntry]) -> str:
+    if not entries:
+        return ""
+    rows = "".join(f"<TR>{embedded_bubble_html(entry)}</TR>" for entry in entries)
+    return (
+        f"<TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"{INNER_BUBBLE_SPACING}\" CELLPADDING=\"0\">"
+        f"{rows}"
+        "</TABLE>"
     )
 
 
@@ -159,13 +187,11 @@ def html_label(
     embedded_entries = normalize_embedded_entries(embedded_ends)
     if embedded_entries:
         main_rows = "\n".join(f"<TR><TD>{line}</TD></TR>" for line in lines)
-        end_rows = ""
-        for entry in embedded_entries:
-            end_rows += f"<TR>{embedded_bubble_html(entry)}</TR>"
+        embedded_rows = embedded_rows_html(embedded_entries)
         return (
             "<<TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\">"
             f"{main_rows}"
-            f"{end_rows}"
+            f"<TR><TD>{embedded_rows}</TD></TR>"
             "</TABLE>>"
         )
     return "<" + "<BR/>".join(lines) + ">"
@@ -278,7 +304,7 @@ def render_dot(
     lines: list[str] = [
         f'digraph "{dot_escape(slug_for(image_root))}" {{',
         '  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];',
-        '  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.08,0.05", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];',
+        f'  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="{NODE_MARGIN}", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];',
         '  edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];',
     ]
 
@@ -451,6 +477,8 @@ def full_collapse_info(
             parent = next(iter(incoming_parents[node]))
             if parent == root and outgoing_count[node] != 0:
                 continue
+            if any(child in shared_input_leaves for child in children_by_parent.get(node, ())):
+                continue
             if all(child in collapsed_leaves for child in children_by_parent.get(node, ())):
                 collapsed_leaves.add(node)
                 changed = True
@@ -524,7 +552,7 @@ def render_full_dot(root: str, edges: set[tuple[str, str]]) -> str:
     lines = [
         "digraph trueos_depth_graph {",
         '  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=1.004];',
-        '  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.08,0.05", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];',
+        f'  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="{NODE_MARGIN}", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];',
         '  edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];',
     ]
 
