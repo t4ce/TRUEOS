@@ -125,27 +125,7 @@ fn cpu_slot_now() -> u32 {
 
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_tokio_tls_current_slot() -> u32 {
-    let guest_vm_id = crate::hv::current_hull_guest_context_vm_id();
-
-    if tokio_blocking_backing_enabled()
-        && let Some(slot) = current_tokio_worker_tls_slot()
-    {
-        if let Some(vm_id) = guest_vm_id {
-            let vm_index = vm_id as usize;
-            if vm_index < LOGGED_GUEST_TOKIO_TLS_SLOT.len()
-                && !LOGGED_GUEST_TOKIO_TLS_SLOT[vm_index].swap(true, Ordering::AcqRel)
-            {
-                crate::log!(
-                    "stackkeeper: guest tokio tls slot source=tokio-worker vm={} slot={}\n",
-                    vm_id,
-                    slot
-                );
-            }
-        }
-        return slot;
-    }
-
-    if let Some(vm_id) = guest_vm_id {
+    if let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() {
         let slot = (TOKIO_LANE_COUNT as u32).saturating_add(vm_id as u32);
         let vm_index = vm_id as usize;
         if vm_index < LOGGED_GUEST_TOKIO_TLS_SLOT.len()
@@ -157,6 +137,12 @@ pub extern "Rust" fn trueos_tokio_tls_current_slot() -> u32 {
                 slot
             );
         }
+        return slot;
+    }
+
+    if tokio_blocking_backing_enabled()
+        && let Some(slot) = current_tokio_worker_tls_slot()
+    {
         return slot;
     }
 
@@ -189,6 +175,10 @@ pub fn tokio_blocking_backing_enabled() -> bool {
 }
 
 pub fn current_tokio_worker_tls_slot() -> Option<u32> {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return None;
+    }
+
     let cpu_slot = cpu_slot_now();
     if cpu_slot == NO_CPU_SLOT {
         return None;

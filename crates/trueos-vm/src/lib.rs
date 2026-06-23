@@ -100,6 +100,7 @@ pub mod vmcall {
     pub const OP_BP_INPUT_CURSOR_EVENTS: u32 = 0x6A;
     pub const OP_BP_ENV_ALL: u32 = 0x6E;
     pub const OP_BP_FS_LIST_TREE: u32 = 0x6F;
+    pub const OP_BP_FS_LIST_DIR: u32 = 0x81;
 
     pub const STATUS_OK: u32 = 0;
     pub const STATUS_BAD_ARG: u32 = 2;

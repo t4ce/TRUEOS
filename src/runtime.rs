@@ -28,6 +28,7 @@ pub fn poll_local_executor() {
     if !cpu.try_enter_executor_poll() {
         return;
     }
+    crate::executor_cache::warm_bsp_executor(cpu, executor);
     unsafe { executor.poll() };
     cpu.leave_executor_poll();
 }

@@ -28,6 +28,8 @@ static PTHREAD_THREADS: Mutex<FixedKeyMap<usize, PthreadThreadState, PTHREAD_THR
     Mutex::new(FixedKeyMap::new());
 static OPEN_FILES: Mutex<FixedKeyMap<c_int, OpenFile, OPEN_FILE_CAPACITY>> =
     Mutex::new(FixedKeyMap::new());
+static SOCKET_FDS: Mutex<FixedKeyMap<c_int, SocketFd, SOCKET_FD_CAPACITY>> =
+    Mutex::new(FixedKeyMap::new());
 static LOGGED_PTHREAD_SYNC: AtomicI32 = AtomicI32::new(0);
 static LOGGED_C_ALLOCATION_TRACK_OVERFLOW: AtomicI32 = AtomicI32::new(0);
 static PTHREAD_SYNC_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -44,8 +46,10 @@ const PTHREAD_KEY_CAPACITY: usize = 128;
 const PTHREAD_TLS_VALUE_CAPACITY: usize = 512;
 const PTHREAD_THREAD_CAPACITY: usize = 64;
 const OPEN_FILE_CAPACITY: usize = 64;
+const SOCKET_FD_CAPACITY: usize = 128;
 
 const TRUEOS_EAGAIN: c_int = 11;
+const TRUEOS_EADDRINUSE: c_int = 98;
 const TRUEOS_EBUSY: c_int = 16;
 const TRUEOS_ENOENT: c_int = 2;
 const TRUEOS_EINVAL: c_int = 22;
@@ -65,7 +69,10 @@ const TRUEOS_EAI_NONAME: c_int = 8;
 const TRUEOS_EAI_SERVICE: c_int = 9;
 const TRUEOS_EAI_SOCKTYPE: c_int = 10;
 const TRUEOS_ETIMEDOUT: c_int = 110;
+const TRUEOS_O_ACCMODE: c_int = 0x3;
 const TRUEOS_O_RDONLY: c_int = 0;
+const TRUEOS_O_WRONLY: c_int = 1;
+const TRUEOS_O_RDWR: c_int = 2;
 const TRUEOS_SC_PAGESIZE: c_int = 30;
 const TRUEOS_SC_PAGE_SIZE: c_int = TRUEOS_SC_PAGESIZE;
 const TRUEOS_SC_NPROCESSORS_CONF: c_int = 83;
@@ -101,6 +108,12 @@ struct TrueosSockAddrIn {
     sin_port: u16,
     sin_addr: TrueosInAddr,
     sin_zero: [u8; 8],
+}
+
+#[derive(Clone, Copy)]
+struct SocketAddrV4 {
+    addr: [u8; 4],
+    port: u16,
 }
 
 #[repr(C)]
@@ -163,9 +176,64 @@ struct PthreadThreadState {
     detached: bool,
 }
 
-struct OpenFile {
-    bytes: Vec<u8>,
-    offset: usize,
+enum OpenFile {
+    Read {
+        bytes: Vec<u8>,
+        offset: usize,
+    },
+    Write {
+        path: String,
+        bytes: Vec<u8>,
+        offset: usize,
+    },
+}
+
+enum SocketFd {
+    Cabi {
+        backend: u32,
+    },
+    PendingListener {
+        backend: u32,
+        local: Option<SocketAddrV4>,
+    },
+    MioListener {
+        backend: u32,
+        local: SocketAddrV4,
+    },
+    MioStream {
+        backend: u32,
+    },
+}
+
+impl SocketFd {
+    fn backend(&self) -> u32 {
+        match self {
+            Self::Cabi { backend }
+            | Self::PendingListener { backend, .. }
+            | Self::MioListener { backend, .. }
+            | Self::MioStream { backend } => *backend,
+        }
+    }
+}
+
+impl OpenFile {
+    fn len(&self) -> usize {
+        match self {
+            Self::Read { bytes, .. } | Self::Write { bytes, .. } => bytes.len(),
+        }
+    }
+
+    fn offset(&self) -> usize {
+        match self {
+            Self::Read { offset, .. } | Self::Write { offset, .. } => *offset,
+        }
+    }
+
+    fn set_offset(&mut self, next: usize) {
+        match self {
+            Self::Read { offset, .. } | Self::Write { offset, .. } => *offset = next,
+        }
+    }
 }
 
 fn uart_write(bytes: &[u8]) {
@@ -204,6 +272,107 @@ fn posix_rc_isize(rc: isize) -> isize {
     }
 }
 
+fn mio_status_to_errno(status: i32) -> c_int {
+    match status {
+        -2 => TRUEOS_EAGAIN,
+        -3 => TRUEOS_EIO,
+        -4 => TRUEOS_EINVAL,
+        -5 => TRUEOS_EBADF,
+        -8 => TRUEOS_EIO,
+        _ => TRUEOS_EIO,
+    }
+}
+
+fn posix_mio_i32(status: i32) -> c_int {
+    if status < 0 {
+        TRUEOS_ERRNO.store(mio_status_to_errno(status), Ordering::Relaxed);
+        -1
+    } else {
+        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+        status
+    }
+}
+
+fn posix_mio_isize(status: isize) -> isize {
+    if status < 0 {
+        TRUEOS_ERRNO
+            .store(mio_status_to_errno(status.max(i32::MIN as isize) as i32), Ordering::Relaxed);
+        -1
+    } else {
+        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+        status
+    }
+}
+
+fn parse_sockaddr_v4(addr: *const c_void, addr_len: u32) -> Option<SocketAddrV4> {
+    if addr.is_null() || addr_len < core::mem::size_of::<TrueosSockAddrIn>() as u32 {
+        return None;
+    }
+    let bytes = abi_read_bytes(addr.cast::<u8>(), core::mem::size_of::<TrueosSockAddrIn>())?;
+    if bytes.get(1).copied()? as c_int != TRUEOS_AF_INET {
+        return None;
+    }
+    Some(SocketAddrV4 {
+        port: u16::from_be_bytes([bytes[2], bytes[3]]),
+        addr: [bytes[4], bytes[5], bytes[6], bytes[7]],
+    })
+}
+
+fn write_sockaddr_v4(addr: *mut c_void, addr_len: *mut u32, value: SocketAddrV4) -> bool {
+    if addr.is_null() {
+        return true;
+    }
+    let len = if addr_len.is_null() {
+        core::mem::size_of::<TrueosSockAddrIn>() as u32
+    } else {
+        let Some(bytes) = abi_read_bytes(addr_len.cast::<u8>(), core::mem::size_of::<u32>()) else {
+            return false;
+        };
+        u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+    };
+    if len < core::mem::size_of::<TrueosSockAddrIn>() as u32 {
+        return false;
+    }
+
+    let mut out = [0u8; core::mem::size_of::<TrueosSockAddrIn>()];
+    out[0] = core::mem::size_of::<TrueosSockAddrIn>() as u8;
+    out[1] = TRUEOS_AF_INET as u8;
+    out[2..4].copy_from_slice(&value.port.to_be_bytes());
+    out[4..8].copy_from_slice(&value.addr);
+    if !copy_to_abi_out(addr.cast::<u8>(), &out) {
+        return false;
+    }
+    if !addr_len.is_null()
+        && !copy_to_abi_out(
+            addr_len.cast::<u8>(),
+            &(core::mem::size_of::<TrueosSockAddrIn>() as u32).to_ne_bytes(),
+        )
+    {
+        return false;
+    }
+    true
+}
+
+fn socket_v4_to_mio(value: SocketAddrV4) -> crate::mio_compat::TrueosMioSocketAddr {
+    let mut addr = crate::mio_compat::TrueosMioSocketAddr {
+        family: 4,
+        port: value.port,
+        addr: [0; 16],
+    };
+    addr.addr[..4].copy_from_slice(&value.addr);
+    addr
+}
+
+fn socket_v4_from_mio(value: crate::mio_compat::TrueosMioSocketAddr) -> Option<SocketAddrV4> {
+    if value.family != 4 {
+        return None;
+    }
+    Some(SocketAddrV4 {
+        addr: [value.addr[0], value.addr[1], value.addr[2], value.addr[3]],
+        port: value.port,
+    })
+}
+
 fn copy_bytes_to_words(out_words: *mut u32, out_nwords: usize, bytes: &[u8]) -> usize {
     if !out_words.is_null() && out_nwords != 0 {
         let cap = out_nwords.saturating_mul(core::mem::size_of::<u32>());
@@ -236,6 +405,10 @@ fn pthread_key(ptr: *mut c_void) -> Option<usize> {
 }
 
 fn pthread_current_id() -> usize {
+    if let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() {
+        return 0x2_0000usize.saturating_add(vm_id as usize);
+    }
+
     if crate::stackkeeper::tokio_blocking_backing_enabled()
         && let Some(worker_id) = crate::stackkeeper::current_tokio_worker_id()
     {
@@ -813,6 +986,37 @@ fn read_file_from_cabi(path: &str) -> Result<Vec<u8>, c_int> {
     Ok(bytes)
 }
 
+fn write_file_to_cabi(path: &str, bytes: &[u8]) -> Result<(), c_int> {
+    let mut handle = 0u32;
+    let rc = unsafe {
+        crate::r::io::cabi::trueos_cabi_fs_write_begin(
+            path.as_ptr(),
+            path.len(),
+            bytes.len() as u64,
+            &mut handle as *mut u32,
+        )
+    };
+    if rc != 0 {
+        return Err(fs_rc_to_errno(rc));
+    }
+
+    if !bytes.is_empty() {
+        let rc = unsafe {
+            crate::r::io::cabi::trueos_cabi_fs_write_chunk(handle, bytes.as_ptr(), bytes.len())
+        };
+        if rc != 0 {
+            let _ = unsafe { crate::r::io::cabi::trueos_cabi_fs_write_abort(handle) };
+            return Err(fs_rc_to_errno(rc));
+        }
+    }
+
+    let rc = unsafe { crate::r::io::cabi::trueos_cabi_fs_write_finish(handle) };
+    if rc != 0 {
+        return Err(fs_rc_to_errno(rc));
+    }
+    Ok(())
+}
+
 fn next_file_fd() -> c_int {
     NEXT_FILE_FD.fetch_add(1, Ordering::AcqRel)
 }
@@ -1242,7 +1446,10 @@ pub unsafe extern "C" fn getcwd(buf: *mut c_char, size: usize) -> *mut c_char {
         TRUEOS_ERRNO.store(TRUEOS_ERANGE, Ordering::Relaxed);
         return ptr::null_mut();
     }
-    let cwd = b"/";
+    let cwd = crate::r::io::env::current_app_fs_root()
+        .map(|root| alloc::format!("/{}", root.trim_matches('/')))
+        .unwrap_or_else(|| String::from("/"));
+    let cwd = cwd.as_bytes();
     if size < cwd.len() + 1 {
         TRUEOS_ERRNO.store(TRUEOS_ERANGE, Ordering::Relaxed);
         return ptr::null_mut();
@@ -1258,11 +1465,41 @@ pub unsafe extern "C" fn getcwd(buf: *mut c_char, size: usize) -> *mut c_char {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: usize) -> isize {
-    if buf.is_null() {
+    if count != 0 && buf.is_null() {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
     }
-    unsafe { sys_write(fd as u32, buf.cast::<u8>(), count) };
-    count as isize
+    if fd == 1 || fd == 2 {
+        unsafe { sys_write(fd as u32, buf.cast::<u8>(), count) };
+        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+        return count as isize;
+    }
+    if fd < 0 {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    }
+    let Some(input) = abi_read_bytes(buf.cast::<u8>(), count) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+
+    let mut table = OPEN_FILES.lock();
+    let Some(file) = table.get_mut(fd) else {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    };
+    let OpenFile::Write { bytes, offset, .. } = file else {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    };
+    let end = offset.saturating_add(input.len());
+    if bytes.len() < end {
+        bytes.resize(end, 0);
+    }
+    bytes[*offset..end].copy_from_slice(input);
+    *offset = end;
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    input.len() as isize
 }
 
 #[unsafe(no_mangle)]
@@ -1285,24 +1522,47 @@ pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: usize) -> isiz
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     };
-    let remaining = file.bytes.len().saturating_sub(file.offset);
+    let OpenFile::Read { bytes, offset } = file else {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    };
+    let remaining = bytes.len().saturating_sub(*offset);
     let n = core::cmp::min(count, remaining);
-    if n != 0 && !copy_to_abi_out(buf.cast::<u8>(), &file.bytes[file.offset..file.offset + n]) {
+    if n != 0 && !copy_to_abi_out(buf.cast::<u8>(), &bytes[*offset..*offset + n]) {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
     }
-    file.offset = file.offset.saturating_add(n);
+    *offset = offset.saturating_add(n);
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
     n as isize
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn socket(domain: c_int, socket_type: c_int, protocol: c_int) -> c_int {
-    posix_rc_i32(crate::r::net::socket_cabi::trueos_cabi_socket_tcp_open(
+    let fd = posix_rc_i32(crate::r::net::socket_cabi::trueos_cabi_socket_tcp_open(
         domain,
         socket_type,
         protocol,
-    ))
+    ));
+    if fd < 0 {
+        return fd;
+    }
+    if SOCKET_FDS
+        .lock()
+        .insert(
+            fd,
+            SocketFd::PendingListener {
+                backend: fd as u32,
+                local: None,
+            },
+        )
+        .is_err()
+    {
+        let _ = crate::r::net::socket_cabi::trueos_cabi_socket_tcp_close(fd as u32);
+        TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed);
+        return -1;
+    }
+    fd
 }
 
 #[unsafe(no_mangle)]
@@ -1322,9 +1582,162 @@ pub unsafe extern "C" fn setsockopt(
         return -1;
     }
 
+    if matches!(
+        SOCKET_FDS.lock().get(socket_id),
+        Some(SocketFd::MioListener { .. } | SocketFd::MioStream { .. })
+    ) {
+        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+        return 0;
+    }
+
     let rc =
         crate::r::net::socket_cabi::trueos_cabi_socket_tcp_set_nonblocking(socket_id as u32, 0);
     posix_rc_i32(if rc < 0 { rc } else { 0 })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn bind(socket_id: c_int, addr: *const c_void, addr_len: u32) -> c_int {
+    if socket_id < 0 {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    }
+    let Some(local) = parse_sockaddr_v4(addr, addr_len) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    let mut sockets = SOCKET_FDS.lock();
+    let Some(socket) = sockets.get_mut(socket_id) else {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    };
+    match socket {
+        SocketFd::PendingListener { local: slot, .. } => {
+            *slot = Some(local);
+            TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+            0
+        }
+        SocketFd::MioListener { local: slot, .. } => {
+            *slot = local;
+            TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+            0
+        }
+        SocketFd::Cabi { .. } | SocketFd::MioStream { .. } => {
+            TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+            -1
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn listen(socket_id: c_int, _backlog: c_int) -> c_int {
+    if socket_id < 0 {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    }
+    let local = {
+        let sockets = SOCKET_FDS.lock();
+        let Some(socket) = sockets.get(socket_id) else {
+            TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+            return -1;
+        };
+        match socket {
+            SocketFd::MioListener { .. } => {
+                TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+                return 0;
+            }
+            SocketFd::PendingListener {
+                local: Some(local), ..
+            } => *local,
+            SocketFd::PendingListener { local: None, .. } => SocketAddrV4 {
+                addr: [0, 0, 0, 0],
+                port: 0,
+            },
+            SocketFd::Cabi { .. } | SocketFd::MioStream { .. } => {
+                TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+                return -1;
+            }
+        }
+    };
+
+    let mut backend = 0u32;
+    let rc = unsafe {
+        crate::mio_compat::trueos_mio_tcp_listener_bind(
+            socket_v4_to_mio(local),
+            &mut backend as *mut u32,
+        )
+    };
+    if rc != 0 {
+        TRUEOS_ERRNO.store(
+            if rc == -6 {
+                TRUEOS_EADDRINUSE
+            } else {
+                mio_status_to_errno(rc)
+            },
+            Ordering::Relaxed,
+        );
+        return -1;
+    }
+    let mut sockets = SOCKET_FDS.lock();
+    let _ = sockets.insert(socket_id, SocketFd::MioListener { backend, local });
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn accept(socket_id: c_int, addr: *mut c_void, addr_len: *mut u32) -> c_int {
+    unsafe { accept4(socket_id, addr, addr_len, 0) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn accept4(
+    socket_id: c_int,
+    addr: *mut c_void,
+    addr_len: *mut u32,
+    _flags: c_int,
+) -> c_int {
+    if socket_id < 0 {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    }
+    let backend = {
+        let sockets = SOCKET_FDS.lock();
+        let Some(SocketFd::MioListener { backend, .. }) = sockets.get(socket_id) else {
+            TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+            return -1;
+        };
+        *backend
+    };
+
+    let mut child = 0u32;
+    let mut peer = crate::mio_compat::TrueosMioSocketAddr::default();
+    let rc = unsafe {
+        crate::mio_compat::trueos_mio_tcp_listener_accept(
+            backend,
+            &mut child as *mut u32,
+            &mut peer as *mut crate::mio_compat::TrueosMioSocketAddr,
+        )
+    };
+    if rc != 0 {
+        return posix_mio_i32(rc);
+    }
+    if let Some(peer) = socket_v4_from_mio(peer)
+        && !write_sockaddr_v4(addr, addr_len, peer)
+    {
+        let _ = unsafe { crate::mio_compat::trueos_mio_socket_close(child) };
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    if SOCKET_FDS
+        .lock()
+        .insert(child as c_int, SocketFd::MioStream { backend: child })
+        .is_err()
+    {
+        let _ = unsafe { crate::mio_compat::trueos_mio_socket_close(child) };
+        TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed);
+        return -1;
+    }
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    child as c_int
 }
 
 #[unsafe(no_mangle)]
@@ -1341,6 +1754,12 @@ pub unsafe extern "C" fn send(
     if len != 0 && buf.is_null() {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
+    }
+
+    if let Some(SocketFd::MioStream { backend }) = SOCKET_FDS.lock().get(socket_id) {
+        return posix_mio_isize(unsafe {
+            crate::mio_compat::trueos_mio_tcp_stream_write(*backend, buf.cast::<u8>(), len)
+        });
     }
 
     posix_rc_isize(crate::r::net::socket_cabi::trueos_cabi_socket_tcp_send(
@@ -1364,6 +1783,12 @@ pub unsafe extern "C" fn recv(
     if len != 0 && buf.is_null() {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
+    }
+
+    if let Some(SocketFd::MioStream { backend }) = SOCKET_FDS.lock().get(socket_id) {
+        return posix_mio_isize(unsafe {
+            crate::mio_compat::trueos_mio_tcp_stream_read(*backend, buf.cast::<u8>(), len)
+        });
     }
 
     posix_rc_isize(crate::r::net::socket_cabi::trueos_cabi_socket_tcp_recv(
@@ -1423,8 +1848,14 @@ pub unsafe extern "C" fn writev(fd: c_int, iov: *const Iovec, iovcnt: c_int) -> 
     for chunk in entries.chunks_exact(core::mem::size_of::<Iovec>()) {
         let entry = unsafe { ptr::read_unaligned(chunk.as_ptr().cast::<Iovec>()) };
         if !entry.base.is_null() && entry.len != 0 {
-            unsafe { sys_write(fd as u32, entry.base, entry.len) };
-            written = written.saturating_add(entry.len);
+            let n = unsafe { write(fd, entry.base.cast::<c_void>(), entry.len) };
+            if n < 0 {
+                return if written == 0 { -1 } else { written as isize };
+            }
+            written = written.saturating_add(n as usize);
+            if n as usize != entry.len {
+                break;
+            }
         }
     }
     written as isize
@@ -1530,28 +1961,34 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, _mode: c_int) -
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
     }
-    if flags & 0x3 != TRUEOS_O_RDONLY {
-        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
-        return -1;
-    }
     let Some(path) = abi_cstr_to_string(path, 4096) else {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
     };
 
-    let bytes = match read_file_from_cabi(path.as_str()) {
-        Ok(bytes) => bytes,
-        Err(errno) => {
-            TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
+    let file = match flags & TRUEOS_O_ACCMODE {
+        TRUEOS_O_RDONLY => {
+            let bytes = match read_file_from_cabi(path.as_str()) {
+                Ok(bytes) => bytes,
+                Err(errno) => {
+                    TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
+                    return -1;
+                }
+            };
+            OpenFile::Read { bytes, offset: 0 }
+        }
+        TRUEOS_O_WRONLY | TRUEOS_O_RDWR => OpenFile::Write {
+            path,
+            bytes: Vec::new(),
+            offset: 0,
+        },
+        _ => {
+            TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
             return -1;
         }
     };
     let fd = next_file_fd();
-    if OPEN_FILES
-        .lock()
-        .insert(fd, OpenFile { bytes, offset: 0 })
-        .is_err()
-    {
+    if OPEN_FILES.lock().insert(fd, file).is_err() {
         TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed);
         return -1;
     }
@@ -1564,18 +2001,161 @@ pub unsafe extern "C" fn close(fd: c_int) -> c_int {
     if (0..=2).contains(&fd) {
         return 0;
     }
-    if OPEN_FILES.lock().remove(fd).is_some() {
-        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
-        return 0;
+    if let Some(socket) = SOCKET_FDS.lock().remove(fd) {
+        let rc = match socket {
+            SocketFd::Cabi { backend } | SocketFd::PendingListener { backend, .. } => {
+                crate::r::net::socket_cabi::trueos_cabi_socket_tcp_close(backend)
+            }
+            SocketFd::MioListener { backend, .. } | SocketFd::MioStream { backend } => unsafe {
+                crate::mio_compat::trueos_mio_socket_close(backend)
+            },
+        };
+        return if rc < 0 {
+            TRUEOS_ERRNO.store(rc.saturating_neg(), Ordering::Relaxed);
+            -1
+        } else {
+            TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+            0
+        };
     }
-    TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
-    -1
+    let Some(file) = OPEN_FILES.lock().remove(fd) else {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    };
+    if let OpenFile::Write { path, bytes, .. } = file {
+        if let Err(errno) = write_file_to_cabi(path.as_str(), bytes.as_slice()) {
+            TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
+            return -1;
+        }
+    }
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    0
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lseek(_fd: c_int, _offset: isize, _whence: c_int) -> isize {
-    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
-    -1
+pub unsafe extern "C" fn fcntl(fd: c_int, _cmd: c_int, _arg: c_int) -> c_int {
+    if fd < 0 {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    }
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn getsockname(
+    socket_id: c_int,
+    addr: *mut c_void,
+    addr_len: *mut u32,
+) -> c_int {
+    if socket_id < 0 {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    }
+    let local = {
+        let sockets = SOCKET_FDS.lock();
+        let Some(socket) = sockets.get(socket_id) else {
+            TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+            return -1;
+        };
+        match socket {
+            SocketFd::MioListener { local, .. } => Some(*local),
+            SocketFd::PendingListener { local, .. } => *local,
+            SocketFd::MioStream { backend } => {
+                let mut mio_addr = crate::mio_compat::TrueosMioSocketAddr::default();
+                let rc = unsafe {
+                    crate::mio_compat::trueos_mio_socket_local_addr(*backend, &mut mio_addr)
+                };
+                if rc == 0 {
+                    socket_v4_from_mio(mio_addr)
+                } else {
+                    None
+                }
+            }
+            SocketFd::Cabi { .. } => None,
+        }
+    }
+    .unwrap_or(SocketAddrV4 {
+        addr: [0, 0, 0, 0],
+        port: 0,
+    });
+
+    if !write_sockaddr_v4(addr, addr_len, local) {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn getpeername(
+    socket_id: c_int,
+    addr: *mut c_void,
+    addr_len: *mut u32,
+) -> c_int {
+    if socket_id < 0 {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    }
+    let peer = {
+        let sockets = SOCKET_FDS.lock();
+        let Some(socket) = sockets.get(socket_id) else {
+            TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+            return -1;
+        };
+        let backend = socket.backend();
+        let mut mio_addr = crate::mio_compat::TrueosMioSocketAddr::default();
+        let rc = unsafe { crate::mio_compat::trueos_mio_socket_peer_addr(backend, &mut mio_addr) };
+        if rc == 0 {
+            socket_v4_from_mio(mio_addr)
+        } else {
+            None
+        }
+    };
+    let Some(peer) = peer else {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    };
+    if !write_sockaddr_v4(addr, addr_len, peer) {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lseek(fd: c_int, offset: isize, whence: c_int) -> isize {
+    if fd < 0 {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    }
+    let mut table = OPEN_FILES.lock();
+    let Some(file) = table.get_mut(fd) else {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    };
+    let base = match whence {
+        0 => 0isize,
+        1 => file.offset().min(isize::MAX as usize) as isize,
+        2 => file.len().min(isize::MAX as usize) as isize,
+        _ => {
+            TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+            return -1;
+        }
+    };
+    let Some(next) = base.checked_add(offset) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    if next < 0 {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    file.set_offset(next as usize);
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    next
 }
 
 #[unsafe(no_mangle)]
@@ -1589,7 +2169,7 @@ pub unsafe extern "C" fn fstat(fd: c_int, buf: *mut c_void) -> c_int {
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     };
-    let len = file.bytes.len() as u64;
+    let len = file.len() as u64;
     let blocks = core::cmp::min(len.saturating_add(511) / 512, i32::MAX as u64) as i32;
     let out = TrueosStat {
         st_dev: 1,
@@ -1639,6 +2219,26 @@ pub unsafe extern "C" fn closedir(_dir: *mut TrueosDir) -> c_int {
 pub unsafe extern "C" fn dirfd(_dir: *mut TrueosDir) -> c_int {
     TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
     -1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mkdir(path: *const c_char, _mode: c_int) -> c_int {
+    if path.is_null() {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    let Some(path) = abi_cstr_to_string(path, 4096) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    let rc =
+        unsafe { crate::r::io::cabi::trueos_cabi_fs_create_dir_all(path.as_ptr(), path.len()) };
+    if rc != 0 {
+        TRUEOS_ERRNO.store(fs_rc_to_errno(rc), Ordering::Relaxed);
+        return -1;
+    }
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    0
 }
 
 #[unsafe(no_mangle)]

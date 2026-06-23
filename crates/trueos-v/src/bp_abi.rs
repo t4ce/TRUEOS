@@ -52,6 +52,12 @@ unsafe extern "C" {
         out_kind: *mut u32,
         out_len: *mut u64,
     ) -> i32;
+    pub fn trueos_cabi_fs_list_dir(
+        path_ptr: *const u8,
+        path_len: usize,
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize;
     pub fn trueos_cabi_trueosfs_primary_html_tree(
         max_entries: u32,
         out_ptr: *mut u8,

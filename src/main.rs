@@ -34,6 +34,7 @@ mod exceptions;
 #[cfg(not(target_arch = "x86_64"))]
 #[path = "exceptions_disabled.rs"]
 mod exceptions;
+mod executor_cache;
 mod globalog;
 #[cfg(target_arch = "x86_64")]
 mod hv;

@@ -18,7 +18,9 @@ pub(crate) const GFX_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const GPGPU_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const HDA_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const HV_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
+pub(crate) const APPS_LOG_LEVEL: LevelFilter = LevelFilter::Info;
 pub(crate) const EXECUTOR_REALM_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
+pub(crate) const EXECUTOR_CACHE_LOG_LEVEL: LevelFilter = LevelFilter::Info;
 
 pub(crate) const NET_LOG_RX_TAP: bool = false;
 pub(crate) const NET_LOG_TX_TAP: bool = false;
@@ -114,6 +116,8 @@ pub(crate) fn concept_log_enabled(concept: &str, level: Level) -> bool {
         "gpgpu" | "intel/gpgpu" => GPGPU_LOG_LEVEL,
         "hda" | "audio" => HDA_LOG_LEVEL,
         "hv" => HV_LOG_LEVEL,
+        "apps" | "blueprint" | "bp" => APPS_LOG_LEVEL,
+        "executor-cache" => EXECUTOR_CACHE_LOG_LEVEL,
         "executor-realm" => EXECUTOR_REALM_LOG_LEVEL,
         _ => GLOBAL_LOG_LEVEL,
     };

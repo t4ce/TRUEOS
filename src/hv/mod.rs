@@ -1087,12 +1087,10 @@ fn estimate_blueprint_memory_profile(
     }
 }
 
-fn log_blueprint_memory_profile(
-    profile: BlueprintVmMemoryProfile,
-    log: &dyn Fn(core::fmt::Arguments<'_>),
-) {
-    log(format_args!(
-        "apps: memory profile class={} heap_mib={}/{}/{} stack_mib={}/{}/{}",
+fn log_blueprint_memory_profile_info(profile: BlueprintVmMemoryProfile) {
+    crate::log_info!(
+        target: "hv";
+        "apps: profile {} heap={}/{}/{}MiB stack={}/{}/{}MiB\n",
         profile.class.label(),
         profile.heap_lower_mib,
         profile.heap_recommended_mib,
@@ -1100,7 +1098,7 @@ fn log_blueprint_memory_profile(
         profile.stack_lower_mib,
         profile.stack_recommended_mib,
         profile.stack_upper_mib
-    ));
+    );
 }
 
 fn take_blueprint_pending_launch(vm_id: u8) -> Option<BlueprintPendingLaunchState> {
@@ -1130,7 +1128,7 @@ fn prepare_blueprint_launch_on_lane(
 ) -> Result<(), AllocString> {
     let target = pending.console_target.clone();
     let log = |args: core::fmt::Arguments<'_>| log_blueprint_launch_line(target.as_ref(), args);
-    log(format_args!("apps: app-vm{} AP launch prep archive={}", vm_id, pending.archive.as_str()));
+    log(format_args!("apps: vm{} preparing {} on AP lane", vm_id, pending.archive.as_str()));
 
     let host_alloc_guard = crate::allocators::enter_host_alloc_domain_current_cpu();
     let module = crate::hv::blueprint::parse_blueprint(pending.module_bytes.as_slice())
@@ -1151,7 +1149,7 @@ fn prepare_blueprint_launch_on_lane(
         unpacked_bytes.as_slice(),
         imports.as_slice(),
     );
-    log_blueprint_memory_profile(profile, &log);
+    log_blueprint_memory_profile_info(profile);
     drop(host_alloc_guard);
 
     if !crate::allocators::prepare_hv_guest_heap_for_vm(
