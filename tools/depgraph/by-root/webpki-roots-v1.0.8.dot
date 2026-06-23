@@ -1,7 +1,7 @@
 digraph "webpki-roots-v1.0.8" {
   graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];
   node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.13,0.10", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
-  edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];
+  edge [color="#9aa8b8", arrowsize=0.55, penwidth=7.2];
   n0 [label=<<FONT POINT-SIZE="13"><B>webpki-roots</B></FONT><BR/><FONT POINT-SIZE="12">1.0.8</FONT>>, fillcolor="#dff3ff", color="#1b78a6"];
   out0 [label=<to rustls-v0.23.41.svg<BR/><B>rustls-pki-types</B><BR/>1.14.1>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out0 [style=dashed, color="#d19922"];

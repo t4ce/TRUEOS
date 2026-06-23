@@ -40,12 +40,51 @@
     }
     #graph {
       display: block;
-      width: 34165.0px;
+      width: 41504.0px;
       max-width: none;
       height: auto;
       background: white;
       box-shadow: 0 1px 3px rgba(15, 23, 42, 0.14);
       transform-origin: top left;
+    }
+    .control-panel {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      z-index: 4;
+      width: min(320px, calc(100vw - 32px));
+      padding: 14px 16px 16px;
+      border: 1px solid rgba(139, 155, 176, 0.42);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.94);
+      box-shadow: 0 16px 44px rgba(15, 23, 42, 0.16);
+      backdrop-filter: blur(10px);
+      opacity: 0.25;
+      transition: opacity 140ms ease;
+    }
+    .control-panel:hover,
+    .control-panel:focus-within {
+      opacity: 1;
+    }
+    .control-title {
+      margin: 0 0 12px;
+      font-size: 18px;
+      line-height: 1.15;
+      font-weight: 750;
+      color: var(--ink);
+    }
+    .zoom-control {
+      display: grid;
+      gap: 6px;
+    }
+    .zoom-control label {
+      font-size: 12px;
+      font-weight: 700;
+      color: #475569;
+    }
+    #zoom-slider {
+      width: 100%;
+      accent-color: var(--hot);
     }
     @keyframes rootPulse {
       0%, 100% { fill: rgba(27, 120, 166, 0.06); }
@@ -54,7 +93,7 @@
     .root-hotspot rect {
       fill: rgba(27, 120, 166, 0.06);
       stroke: transparent;
-      stroke-width: 3;
+      stroke-width: 7.2;
       pointer-events: all;
       animation: rootPulse 3.2s ease-in-out infinite;
       transition: fill 120ms ease, stroke 120ms ease;
@@ -97,317 +136,326 @@
       line-height: 1;
       cursor: pointer;
     }
-    #dialog-frame {
+    #dialog-image {
       width: 100%;
       height: 100%;
-      border: 0;
+      display: block;
+      object-fit: contain;
+      object-position: center center;
       background: white;
     }
   </style>
 </head>
 <body>
+  <section class="control-panel" aria-label="Graph controls">
+    <h1 class="control-title">TrueOS § Depth Graph</h1>
+    <div class="zoom-control">
+      <label for="zoom-slider">Zoom</label>
+      <input id="zoom-slider" type="range" min="0.01" max="4" step="0.001" value="1">
+    </div>
+  </section>
   <div class="viewport">
-    <svg id="graph" viewBox="0 0 34165.0 18587.0" width="34165.0" height="18587.0" xmlns="http://www.w3.org/2000/svg">
-      <image href="trueos-depth-tree.svg" x="0" y="0" width="34165.0" height="18587.0"></image>
+    <svg id="graph" viewBox="0 0 41504.0 23346.0" width="41504.0" height="23346.0" xmlns="http://www.w3.org/2000/svg">
+      <image href="trueos-depth-tree.svg" x="0" y="0" width="41504.0" height="23346.0"></image>
       <a class="root-hotspot" href="by-root/acpi-v6.1.1.svg" aria-label="acpi / 6.1.1">
         <title>acpi / 6.1.1</title>
-        <rect x="10670.32" y="14764.39" width="259.93" height="227.2" rx="9" ry="9"></rect>
+        <rect x="11929.73" y="18680.42" width="213.52" height="186.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/aes-v0.8.4.svg" aria-label="aes / 0.8.4">
         <title>aes / 0.8.4</title>
-        <rect x="20155.84" y="2148.39" width="259.93" height="227.2" rx="9" ry="9"></rect>
+        <rect x="22278.81" y="591.42" width="213.52" height="186.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/alsa-v0.11.0.svg" aria-label="alsa / 0.11.0 / /vendor/alsa-0.11.0">
         <title>alsa / 0.11.0 / /vendor/alsa-0.11.0</title>
-        <rect x="13205.62" y="16300.39" width="619.93" height="287.2" rx="9" ry="9"></rect>
+        <rect x="14393.23" y="14697.42" width="518.02" height="236.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/aml-v0.16.4.svg" aria-label="aml / 0.16.4 / /vendor/aml-0.16.4">
         <title>aml / 0.16.4 / /vendor/aml-0.16.4</title>
-        <rect x="13210.12" y="13024.39" width="610.93" height="287.2" rx="9" ry="9"></rect>
+        <rect x="14396.6" y="18337.42" width="511.27" height="236.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/base64-v0.22.1.svg" aria-label="base64 / 0.22.1 / /vendor/base64-0.22.1">
         <title>base64 / 0.22.1 / /vendor/base64-0.22.1</title>
-        <rect x="15380.42" y="11153.39" width="709.18" height="287.2" rx="9" ry="9"></rect>
+        <rect x="16459.0" y="16986.42" width="593.77" height="236.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/bytes-v1.12.0.svg" aria-label="bytes / 1.12.0">
         <title>bytes / 1.12.0</title>
-        <rect x="17208.35" y="9617.39" width="301.18" height="227.2" rx="9" ry="9"></rect>
+        <rect x="18521.9" y="12458.42" width="245.01" height="186.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/core3-v0.1.2.svg" aria-label="core3 / 0.1.2">
         <title>core3 / 0.1.2</title>
-        <rect x="1959.13" y="12154.39" width="304.93" height="227.2" rx="9" ry="9"></rect>
+        <rect x="2112.38" y="22430.42" width="248.02" height="186.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/crab-usb-v0.9.1.svg" aria-label="crab-usb / 0.9.1 / /vendor/CrabUSB/usb-host">
         <title>crab-usb / 0.9.1 / /vendor/CrabUSB/usb-host</title>
-        <rect x="9966.7" y="16679.29" width="1667.17" height="1821.4" rx="9" ry="9"></rect>
+        <rect x="11357.0" y="15093.27" width="1358.98" height="1491.1" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/crc32fast-v1.5.0.svg" aria-label="crc32fast / 1.5.0 / /vendor/crc32fast-1.5.0">
         <title>crc32fast / 1.5.0 / /vendor/crc32fast-1.5.0</title>
-        <rect x="13153.87" y="6547.39" width="723.43" height="287.2" rx="9" ry="9"></rect>
+        <rect x="14349.73" y="14153.42" width="605.02" height="236.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/ctr-v0.9.2.svg" aria-label="ctr / 0.9.2">
         <title>ctr / 0.9.2</title>
-        <rect x="18687.53" y="642.39" width="259.94" height="227.2" rx="9" ry="9"></rect>
+        <rect x="20403.92" y="773.42" width="213.51" height="186.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/dma-api-v0.7.3.svg" aria-label="dma-api / 0.7.3 / /vendor/dma-api-0.7.3">
         <title>dma-api / 0.7.3 / /vendor/dma-api-0.7.3</title>
-        <rect x="13166.99" y="18213.39" width="697.18" height="287.2" rx="9" ry="9"></rect>
+        <rect x="14360.6" y="14425.42" width="583.27" height="236.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/embassy-executor-v0.10.0.svg" aria-label="embassy-executor / 0.10.0 / /crates/trueos-executor">
         <title>embassy-executor / 0.10.0 / /crates/trueos-executor</title>
-        <rect x="12539.62" y="5266.76" width="1951.93" height="916.46" rx="9" ry="9"></rect>
+        <rect x="14119.23" y="5958.67" width="1066.02" height="760.3" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/embassy-sync-v0.8.0.svg" aria-label="embassy-sync / 0.8.0">
         <title>embassy-sync / 0.8.0</title>
-        <rect x="12924.37" y="10179.01" width="1182.43" height="467.96" rx="9" ry="9"></rect>
+        <rect x="14313.1" y="13094.17" width="678.27" height="387.3" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/embassy-time-v0.5.1.svg" aria-label="embassy-time / 0.5.1 / /vendor/embassy-time-0.5.1-trueos">
         <title>embassy-time / 0.5.1 / /vendor/embassy-time-0.5.1-trueos</title>
-        <rect x="12995.62" y="6899.39" width="1039.93" height="287.2" rx="9" ry="9"></rect>
+        <rect x="14217.73" y="8466.42" width="869.02" height="236.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/embassy-time-driver-v0.2.2.svg" aria-label="embassy-time-driver / 0.2.2">
         <title>embassy-time-driver / 0.2.2</title>
-        <rect x="15327.17" y="6347.39" width="815.68" height="227.2" rx="9" ry="9"></rect>
+        <rect x="16425.62" y="8104.42" width="660.52" height="186.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/embedded-io-async-v0.7.0.svg" aria-label="embedded-io-async / 0.7.0">
         <title>embedded-io-async / 0.7.0</title>
-        <rect x="15340.3" y="12227.01" width="789.43" height="467.96" rx="9" ry="9"></rect>
+        <rect x="16437.25" y="13111.17" width="637.27" height="387.3" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/embedded-websocket-v0.9.4.svg" aria-label="embedded-websocket / 0.9.4 / /vendor/embedded-websocket-0.9.4">
         <title>embedded-websocket / 0.9.4 / /vendor/embedded-websocket-0.9.4</title>
-        <rect x="12983.24" y="11594.26" width="1064.68" height="535.46" rx="9" ry="9"></rect>
+        <rect x="14206.85" y="16889.67" width="890.77" height="444.3" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/euclid-v0.22.13.svg" aria-label="euclid / 0.22.13">
         <title>euclid / 0.22.13</title>
-        <rect x="18650.78" y="11024.39" width="333.44" height="227.2" rx="9" ry="9"></rect>
+        <rect x="20373.92" y="11481.42" width="273.51" height="186.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/getrandom-v0.2.17.svg" aria-label="getrandom / 0.2.17 / /vendor/getrandom-0.2.17">
         <title>getrandom / 0.2.17 / /vendor/getrandom-0.2.17</title>
-        <rect x="22721.2" y="6240.39" width="799.18" height="287.2" rx="9" ry="9"></rect>
+        <rect x="25693.1" y="12928.42" width="669.52" height="236.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/hashbrown-v0.17.1.svg" aria-label="hashbrown / 0.17.1">
         <title>hashbrown / 0.17.1</title>
-        <rect x="17036.6" y="9135.01" width="644.68" height="467.96" rx="9" ry="9"></rect>
+        <rect x="18377.65" y="11814.17" width="533.51" height="387.3" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/heapless-v0.9.3.svg" aria-label="heapless / 0.9.3">
         <title>heapless / 0.9.3</title>
-        <rect x="15288.55" y="12759.01" width="892.93" height="467.96" rx="9" ry="9"></rect>
+        <rect x="16385.25" y="17713.17" width="741.27" height="387.3" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/hmac-v0.12.1.svg" aria-label="hmac / 0.12.1">
         <title>hmac / 0.12.1</title>
-        <rect x="20135.22" y="2981.39" width="301.18" height="227.2" rx="9" ry="9"></rect>
+        <rect x="22263.06" y="2971.42" width="245.02" height="186.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/hyper-v1.9.0.svg" aria-label="hyper / 1.9.0 / /vendor/hyper-1.9.0">
         <title>hyper / 1.9.0 / /vendor/hyper-1.9.0</title>
-        <rect x="10025.45" y="8201.29" width="1549.67" height="2991.4" rx="9" ry="9"></rect>
+        <rect x="11402.87" y="10662.27" width="1267.23" height="2449.1" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/kurbo-v0.11.3.svg" aria-label="kurbo / 0.11.3 / /vendor/kurbo-0.11.3">
         <title>kurbo / 0.11.3 / /vendor/kurbo-0.11.3</title>
-        <rect x="17029.1" y="7115.39" width="659.68" height="287.2" rx="9" ry="9"></rect>
+        <rect x="18368.9" y="7844.42" width="551.01" height="236.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/libm-v0.2.16.svg" aria-label="libm / 0.2.16">
         <title>libm / 0.2.16</title>
-        <rect x="21494.4" y="11320.39" width="296.68" height="227.2" rx="9" ry="9"></rect>
+        <rect x="24041.08" y="8802.42" width="243.52" height="186.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/limine-v0.6.5.svg" aria-label="limine / 0.6.5">
         <title>limine / 0.6.5</title>
-        <rect x="7098.24" y="9532.74" width="1793.75" height="324.5" rx="9" ry="9"></rect>
+        <rect x="8349.26" y="11453.07" width="1466.25" height="267.0" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/lyon_geom-v1.0.19.svg" aria-label="lyon_geom / 1.0.19">
         <title>lyon_geom / 1.0.19</title>
-        <rect x="17111.98" y="11024.39" width="493.93" height="227.2" rx="9" ry="9"></rect>
+        <rect x="18445.02" y="11154.42" width="398.77" height="186.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/lyon_tessellation-v1.0.20.svg" aria-label="lyon_tessellation / 1.0.20">
         <title>lyon_tessellation / 1.0.20</title>
-        <rect x="13095.37" y="10761.01" width="840.43" height="467.96" rx="9" ry="9"></rect>
+        <rect x="14304.1" y="9659.17" width="696.27" height="387.3" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/lzma-rust2-v0.16.4.svg" aria-label="lzma-rust2 / 0.16.4">
         <title>lzma-rust2 / 0.16.4</title>
-        <rect x="7098.24" y="9913.24" width="1793.75" height="324.5" rx="9" ry="9"></rect>
+        <rect x="8349.26" y="11764.07" width="1466.25" height="267.0" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/memchr-v2.8.2.svg" aria-label="memchr / 2.8.2">
         <title>memchr / 2.8.2</title>
-        <rect x="238.53" y="11815.39" width="392.69" height="227.2" rx="9" ry="9"></rect>
+        <rect x="197.87" y="22250.42" width="319.26" height="186.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/miniz_oxide-v0.9.1.svg" aria-label="miniz_oxide / 0.9.1">
         <title>miniz_oxide / 0.9.1</title>
-        <rect x="13230.37" y="13678.01" width="570.43" height="467.96" rx="9" ry="9"></rect>
+        <rect x="14416.23" y="17733.17" width="472.02" height="387.3" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/mio-v1.2.0.svg" aria-label="mio / 1.2.0 / /vendor/mio-1.2.0">
         <title>mio / 1.2.0 / /vendor/mio-1.2.0</title>
-        <rect x="4831.73" y="12651.79" width="1160.17" height="564.4" rx="9" ry="9"></rect>
+        <rect x="5830.66" y="22883.02" width="947.23" height="463.6" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/parry2d-v0.26.1.svg" aria-label="parry2d / 0.26.1">
         <title>parry2d / 0.26.1</title>
-        <rect x="13141.87" y="8564.51" width="747.43" height="848.96" rx="9" ry="9"></rect>
+        <rect x="14342.73" y="8829.17" width="619.02" height="703.3" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/png-v0.18.1.svg" aria-label="png / 0.18.1 / /vendor/png-0.18.1">
         <title>png / 0.18.1 / /vendor/png-0.18.1</title>
-        <rect x="10288.57" y="13264.01" width="1023.43" height="931.96" rx="9" ry="9"></rect>
+        <rect x="11620.23" y="17262.17" width="832.52" height="767.3" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/pure_vorbis-v0.0.1.svg" aria-label="pure_vorbis / 0.0.1 / /vendor/pure_vorbis-0.0.1">
         <title>pure_vorbis / 0.0.1 / /vendor/pure_vorbis-0.0.1</title>
-        <rect x="10403.69" y="12231.39" width="793.19" height="287.2" rx="9" ry="9"></rect>
+        <rect x="11705.1" y="14134.42" width="662.77" height="236.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/rand_chacha-v0.3.1.svg" aria-label="rand_chacha / 0.3.1">
         <title>rand_chacha / 0.3.1</title>
-        <rect x="18395.41" y="5498.26" width="844.18" height="779.46" rx="9" ry="9"></rect>
+        <rect x="20162.29" y="10711.67" width="696.77" height="644.3" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/rand_core-v0.6.4.svg" aria-label="rand_core / 0.6.4">
         <title>rand_core / 0.6.4</title>
-        <rect x="21412.27" y="5653.39" width="460.93" height="227.2" rx="9" ry="9"></rect>
+        <rect x="23976.21" y="6978.42" width="373.26" height="186.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/raw-cpuid-v11.6.0.svg" aria-label="raw-cpuid / 11.6.0">
         <title>raw-cpuid / 11.6.0</title>
-        <rect x="10573.19" y="15510.39" width="454.19" height="227.2" rx="9" ry="9"></rect>
+        <rect x="11853.23" y="19664.42" width="366.52" height="186.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/rdrand-v0.8.3.svg" aria-label="rdrand / 0.8.3">
         <title>rdrand / 0.8.3</title>
-        <rect x="10629.44" y="6199.39" width="341.68" height="227.2" rx="9" ry="9"></rect>
+        <rect x="11898.23" y="13912.42" width="276.52" height="186.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/regex-automata-v0.4.14.svg" aria-label="regex-automata / 0.4.14">
         <title>regex-automata / 0.4.14</title>
-        <rect x="5017.1" y="392.02" width="789.43" height="467.94" rx="9" ry="9"></rect>
+        <rect x="5977.14" y="13173.17" width="654.27" height="387.3" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/rsa-v0.9.10.svg" aria-label="rsa / 0.9.10">
         <title>rsa / 0.9.10</title>
-        <rect x="13367.24" y="4825.39" width="296.68" height="227.2" rx="9" ry="9"></rect>
+        <rect x="14530.48" y="5464.42" width="243.52" height="186.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/rustls-v0.23.41.svg" aria-label="rustls / 0.23.41">
         <title>rustls / 0.23.41</title>
-        <rect x="13166.99" y="1291.02" width="697.18" height="467.94" rx="9" ry="9"></rect>
+        <rect x="14363.35" y="1223.17" width="577.77" height="387.3" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/rustls-rustcrypto-v0.0.2-alpha.svg" aria-label="rustls-rustcrypto / 0.0.2-alpha / /vendor/rustls-rustcrypto-0.0.2-alpha">
         <title>rustls-rustcrypto / 0.0.2-alpha / /vendor/rustls-rustcrypto-0.0.2-alpha</title>
-        <rect x="9716.95" y="2621.79" width="2166.67" height="564.4" rx="9" ry="9"></rect>
+        <rect x="11153.75" y="3618.02" width="1765.48" height="463.6" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/serde-v1.0.228.svg" aria-label="serde / 1.0.228">
         <title>serde / 1.0.228</title>
-        <rect x="1541.38" y="10868.01" width="1140.43" height="467.96" rx="9" ry="9"></rect>
+        <rect x="1916.0" y="21220.17" width="640.77" height="387.3" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/serde_json-v1.0.150.svg" aria-label="serde_json / 1.0.150">
         <title>serde_json / 1.0.150</title>
-        <rect x="1526.75" y="11349.76" width="1169.68" height="658.46" rx="9" ry="9"></rect>
+        <rect x="3756.77" y="20715.17" width="640.77" height="545.3" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/sha1-v0.10.6.svg" aria-label="sha1 / 0.10.6">
         <title>sha1 / 0.10.6</title>
-        <rect x="20137.47" y="2740.39" width="296.68" height="227.2" rx="9" ry="9"></rect>
+        <rect x="22263.81" y="4180.42" width="243.52" height="186.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/sha2-v0.10.9.svg" aria-label="sha2 / 0.10.9">
         <title>sha2 / 0.10.9</title>
-        <rect x="15586.67" y="2958.39" width="296.68" height="227.2" rx="9" ry="9"></rect>
+        <rect x="16634.12" y="4134.42" width="243.52" height="186.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/smoltcp-v0.13.1.svg" aria-label="smoltcp / 0.13.1 / /vendor/smoltcp-0.13.1">
         <title>smoltcp / 0.13.1 / /vendor/smoltcp-0.13.1</title>
-        <rect x="13155.37" y="12475.26" width="720.43" height="535.46" rx="9" ry="9"></rect>
+        <rect x="14350.85" y="20089.67" width="602.77" height="444.3" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/socket2-v0.6.3.svg" aria-label="socket2 / 0.6.3 / /vendor/socket2-0.6.3">
         <title>socket2 / 0.6.3 / /vendor/socket2-0.6.3</title>
-        <rect x="4719.98" y="12073.79" width="1383.67" height="564.4" rx="9" ry="9"></rect>
+        <rect x="5739.91" y="22293.02" width="1128.73" height="463.6" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/spin-v0.10.0.svg" aria-label="spin / 0.10.0">
         <title>spin / 0.10.0</title>
-        <rect x="18669.16" y="16631.39" width="296.68" height="227.2" rx="9" ry="9"></rect>
+        <rect x="20388.92" y="16732.42" width="243.51" height="186.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/symphonia-codec-aac-v0.5.5.svg" aria-label="symphonia-codec-aac / 0.5.5 / /vendor/symphonia-codec-aac-0.5.5-trueos">
         <title>symphonia-codec-aac / 0.5.5 / /vendor/symphonia-codec-aac-0.5.5-trueos</title>
-        <rect x="12889.87" y="13376.39" width="1251.43" height="287.2" rx="9" ry="9"></rect>
+        <rect x="11513.85" y="10164.42" width="1045.27" height="236.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/symphonia-core-v0.5.5.svg" aria-label="symphonia-core / 0.5.5 / /vendor/symphonia-core-0.5.5-trueos">
         <title>symphonia-core / 0.5.5 / /vendor/symphonia-core-0.5.5-trueos</title>
-        <rect x="15188.8" y="14565.27" width="1092.43" height="535.44" rx="9" ry="9"></rect>
+        <rect x="14195.98" y="10263.67" width="912.52" height="444.3" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/tiny-skia-path-v0.11.4.svg" aria-label="tiny-skia-path / 0.11.4">
         <title>tiny-skia-path / 0.11.4</title>
-        <rect x="15147.55" y="11454.76" width="1174.93" height="658.46" rx="9" ry="9"></rect>
+        <rect x="16464.75" y="8326.17" width="582.27" height="545.3" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/tinyaudio-v2.0.0.svg" aria-label="tinyaudio / 2.0.0 / /vendor/tinyaudio">
         <title>tinyaudio / 2.0.0 / /vendor/tinyaudio</title>
-        <rect x="7098.24" y="10293.74" width="1793.75" height="408.0" rx="9" ry="9"></rect>
+        <rect x="8349.26" y="12075.07" width="1466.25" height="336.0" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/tower-v0.5.3.svg" aria-label="tower / 0.5.3 / /vendor/tower-0.5.3">
         <title>tower / 0.5.3 / /vendor/tower-0.5.3</title>
-        <rect x="4550.36" y="5022.79" width="1722.92" height="1988.4" rx="9" ry="9"></rect>
+        <rect x="5597.54" y="18724.27" width="1413.48" height="1629.1" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/trueos-c4-v0.1.0.svg" aria-label="trueos-c4 / 0.1.0 / /crates/trueos-c4">
         <title>trueos-c4 / 0.1.0 / /crates/trueos-c4</title>
-        <rect x="7098.24" y="10757.74" width="1793.75" height="408.0" rx="9" ry="9"></rect>
+        <rect x="8349.26" y="12455.07" width="1466.25" height="336.0" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/trueos-esp-v0.1.0.svg" aria-label="trueos-esp / 0.1.0 / /crates/trueos-esp">
         <title>trueos-esp / 0.1.0 / /crates/trueos-esp</title>
-        <rect x="5116.1" y="10492.39" width="591.43" height="287.2" rx="9" ry="9"></rect>
+        <rect x="6057.64" y="20570.42" width="493.27" height="236.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/trueos-fs-v0.0.1.svg" aria-label="trueos-fs / 0.0.1 / /crates/trueos-fs">
         <title>trueos-fs / 0.0.1 / /crates/trueos-fs</title>
-        <rect x="7098.24" y="11221.74" width="1793.75" height="408.0" rx="9" ry="9"></rect>
+        <rect x="8349.26" y="12835.07" width="1466.25" height="336.0" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/trueos-io-v0.1.0.svg" aria-label="trueos-io / 0.1.0 / /crates/trueos-io">
         <title>trueos-io / 0.1.0 / /crates/trueos-io</title>
-        <rect x="3352.43" y="12124.39" width="541.93" height="287.2" rx="9" ry="9"></rect>
+        <rect x="3851.14" y="22315.42" width="452.02" height="236.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/trueos-lsd-v1.1.5.svg" aria-label="trueos-lsd / 1.1.5 / /crates/trueos-lsd">
         <title>trueos-lsd / 1.1.5 / /crates/trueos-lsd</title>
-        <rect x="5125.85" y="11772.39" width="571.93" height="287.2" rx="9" ry="9"></rect>
+        <rect x="6065.89" y="22021.42" width="476.77" height="236.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/trueos-math-v0.1.0.svg" aria-label="trueos-math / 0.1.0 / /crates/trueos-math">
         <title>trueos-math / 0.1.0 / /crates/trueos-math</title>
-        <rect x="13201.49" y="11293.39" width="628.18" height="287.2" rx="9" ry="9"></rect>
+        <rect x="14389.85" y="8013.42" width="524.77" height="236.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/trueos-qjs-v0.1.0.svg" aria-label="trueos-qjs / 0.1.0 / /crates/trueos-qjs">
         <title>trueos-qjs / 0.1.0 / /crates/trueos-qjs</title>
-        <rect x="10301.69" y="7049.26" width="997.19" height="1037.46" rx="9" ry="9"></rect>
+        <rect x="11623.98" y="8105.17" width="825.02" height="859.3" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/trueos-silk-v0.1.0.svg" aria-label="trueos-silk / 0.1.0 / /crates/trueos-silk">
         <title>trueos-silk / 0.1.0 / /crates/trueos-silk</title>
-        <rect x="7098.24" y="11685.74" width="1793.75" height="408.0" rx="9" ry="9"></rect>
+        <rect x="8349.26" y="13215.07" width="1466.25" height="336.0" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/trueos-vm-v0.1.0.svg" aria-label="trueos-vm / 0.1.0 / /crates/trueos-vm">
         <title>trueos-vm / 0.1.0 / /crates/trueos-vm</title>
-        <rect x="5123.98" y="10868.39" width="575.68" height="287.2" rx="9" ry="9"></rect>
+        <rect x="6064.39" y="21295.42" width="479.77" height="236.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/unicode-segmentation-v1.13.3.svg" aria-label="unicode-segmentation / 1.13.3">
         <title>unicode-segmentation / 1.13.3</title>
-        <rect x="7098.24" y="12149.74" width="1793.75" height="324.5" rx="9" ry="9"></rect>
+        <rect x="8349.26" y="13595.07" width="1466.25" height="267.0" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/usvg-v0.45.1.svg" aria-label="usvg / 0.45.1 / /vendor/usvg-0.45.1">
         <title>usvg / 0.45.1 / /vendor/usvg-0.45.1</title>
-        <rect x="13126.12" y="7351.26" width="778.93" height="1149.46" rx="9" ry="9"></rect>
+        <rect x="14335.98" y="6936.17" width="632.52" height="951.3" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/v-v0.1.0.svg" aria-label="v / 0.1.0 / /crates/trueos-v">
         <title>v / 0.1.0 / /crates/trueos-v</title>
-        <rect x="3360.68" y="10958.39" width="525.43" height="287.2" rx="9" ry="9"></rect>
+        <rect x="3858.27" y="21295.42" width="437.77" height="236.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/webpki-roots-v1.0.8.svg" aria-label="webpki-roots / 1.0.8">
         <title>webpki-roots / 1.0.8</title>
-        <rect x="10519.19" y="1221.39" width="562.19" height="227.2" rx="9" ry="9"></rect>
+        <rect x="11809.73" y="1135.42" width="453.52" height="186.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/x86_64-v0.15.4.svg" aria-label="x86_64 / 0.15.4">
         <title>x86_64 / 0.15.4</title>
-        <rect x="13139.99" y="15252.02" width="751.18" height="933.94" rx="9" ry="9"></rect>
+        <rect x="14341.23" y="19103.17" width="622.02" height="769.3" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/zeroize-v1.9.0.svg" aria-label="zeroize / 1.9.0">
         <title>zeroize / 1.9.0</title>
-        <rect x="25899.31" y="2185.39" width="357.43" height="227.2" rx="9" ry="9"></rect>
+        <rect x="29638.39" y="3068.42" width="290.02" height="186.8" rx="9" ry="9"></rect>
       </a>
       <a class="root-hotspot" href="by-root/zune-jpeg-v0.5.15.svg" aria-label="zune-jpeg / 0.5.15 / /vendor/zune-jpeg-0.5.15">
         <title>zune-jpeg / 0.5.15 / /vendor/zune-jpeg-0.5.15</title>
-        <rect x="5023.85" y="11220.39" width="775.93" height="287.2" rx="9" ry="9"></rect>
+        <rect x="5979.64" y="21023.42" width="649.27" height="236.8" rx="9" ry="9"></rect>
       </a>
     </svg>
   </div>
   <dialog id="root-dialog">
     <button id="close-dialog" type="button" aria-label="Close">&times;</button>
-    <iframe id="dialog-frame" title="Root dependency graph"></iframe>
+    <img id="dialog-image" alt="Root dependency graph">
   </dialog>
   <script>
     const viewport = document.querySelector('.viewport');
     const graph = document.getElementById('graph');
     const dialog = document.getElementById('root-dialog');
-    const frame = document.getElementById('dialog-frame');
+    const dialogImage = document.getElementById('dialog-image');
     const closeButton = document.getElementById('close-dialog');
+    const zoomSlider = document.getElementById('zoom-slider');
     const dragThreshold = 4;
-    const minGraphScale = 0.15;
-    const maxGraphScale = 4;
+    const maxGraphScale = 0.8;
     const graphBaseWidth = Number.parseFloat(graph.getAttribute('width'));
     const graphBaseHeight = Number.parseFloat(graph.getAttribute('height'));
     let graphScale = 1;
@@ -422,10 +470,36 @@
       return Math.min(Math.max(value, min), max);
     }
 
+    function minGraphScale() {
+      const style = getComputedStyle(viewport);
+      const paddingX = (Number.parseFloat(style.paddingLeft) || 0)
+        + (Number.parseFloat(style.paddingRight) || 0);
+      const paddingY = (Number.parseFloat(style.paddingTop) || 0)
+        + (Number.parseFloat(style.paddingBottom) || 0);
+      const fitWidth = Math.max(0.01, (viewport.clientWidth - paddingX) / graphBaseWidth);
+      const fitHeight = Math.max(0.01, (viewport.clientHeight - paddingY) / graphBaseHeight);
+      return Math.min(maxGraphScale, Math.max(fitWidth, fitHeight));
+    }
+
     function setGraphScale(nextScale) {
-      graphScale = clamp(nextScale, minGraphScale, maxGraphScale);
+      graphScale = clamp(nextScale, minGraphScale(), maxGraphScale);
       graph.style.width = `${graphBaseWidth * graphScale}px`;
       graph.style.height = `${graphBaseHeight * graphScale}px`;
+      zoomSlider.min = minGraphScale().toFixed(4);
+      zoomSlider.max = String(maxGraphScale);
+      zoomSlider.value = graphScale.toFixed(4);
+    }
+
+    function setGraphScaleAroundViewportPoint(nextScale, pointerX, pointerY) {
+      const style = getComputedStyle(viewport);
+      const paddingLeft = Number.parseFloat(style.paddingLeft) || 0;
+      const paddingTop = Number.parseFloat(style.paddingTop) || 0;
+      const graphX = (viewport.scrollLeft + pointerX - paddingLeft) / graphScale;
+      const graphY = (viewport.scrollTop + pointerY - paddingTop) / graphScale;
+
+      setGraphScale(nextScale);
+      viewport.scrollLeft = paddingLeft + graphX * graphScale - pointerX;
+      viewport.scrollTop = paddingTop + graphY * graphScale - pointerY;
     }
 
     function normalizeWheelDelta(event) {
@@ -443,6 +517,9 @@
 
     viewport.addEventListener('pointerdown', (event) => {
       if (event.button !== 0) {
+        return;
+      }
+      if (event.target.closest('.root-hotspot')) {
         return;
       }
 
@@ -508,25 +585,31 @@
       }
 
       const rect = viewport.getBoundingClientRect();
-      const style = getComputedStyle(viewport);
-      const paddingLeft = Number.parseFloat(style.paddingLeft) || 0;
-      const paddingTop = Number.parseFloat(style.paddingTop) || 0;
       const pointerX = event.clientX - rect.left;
       const pointerY = event.clientY - rect.top;
-      const graphX = (viewport.scrollLeft + pointerX - paddingLeft) / graphScale;
-      const graphY = (viewport.scrollTop + pointerY - paddingTop) / graphScale;
 
-      setGraphScale(graphScale * Math.exp(-delta.y * 0.001));
-      viewport.scrollLeft = paddingLeft + graphX * graphScale - pointerX;
-      viewport.scrollTop = paddingTop + graphY * graphScale - pointerY;
+      setGraphScaleAroundViewportPoint(graphScale * Math.exp(-delta.y * 0.001), pointerX, pointerY);
     }, { passive: false });
 
-    setGraphScale(1);
+    zoomSlider.addEventListener('input', () => {
+      setGraphScaleAroundViewportPoint(
+        Number.parseFloat(zoomSlider.value),
+        viewport.clientWidth / 2,
+        viewport.clientHeight / 2,
+      );
+    });
+
+    window.addEventListener('resize', () => {
+      setGraphScale(graphScale);
+    });
+
+    setGraphScale(minGraphScale());
 
     document.querySelectorAll('.root-hotspot').forEach((link) => {
       link.addEventListener('click', (event) => {
         event.preventDefault();
-        frame.src = link.getAttribute('href');
+        dialogImage.src = link.getAttribute('href');
+        dialogImage.alt = link.getAttribute('aria-label') || 'Root dependency graph';
         dialog.showModal();
       });
     });
@@ -536,7 +619,7 @@
     });
 
     dialog.addEventListener('close', () => {
-      frame.removeAttribute('src');
+      dialogImage.removeAttribute('src');
     });
   </script>
 </body>

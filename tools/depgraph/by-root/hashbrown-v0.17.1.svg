@@ -26,8 +26,8 @@
 <!-- n0&#45;&gt;n1 -->
 <g id="edge1" class="edge">
 <title>n0&#45;&gt;n1</title>
-<path fill="none" stroke="#9aa8b8" stroke-width="0.9" d="M263.14,-32.73C279.72,-36.66 298.5,-41.11 314.95,-45.01"/>
-<polygon fill="#9aa8b8" stroke="#9aa8b8" stroke-width="0.9" points="314.24,-46.82 320.04,-46.22 315.13,-43.08 314.24,-46.82"/>
+<path fill="none" stroke="#9aa8b8" stroke-width="7.2" d="M263.14,-32.73C277.96,-36.24 294.53,-40.17 309.63,-43.75"/>
+<polygon fill="#9aa8b8" stroke="#9aa8b8" stroke-width="7.2" points="308.64,-47.08 314.79,-44.98 310.24,-40.34 308.64,-47.08"/>
 </g>
 <!-- in0 -->
 <g id="node3" class="node">
@@ -42,8 +42,8 @@
 <!-- in0&#45;&gt;n0 -->
 <g id="edge2" class="edge">
 <title>in0&#45;&gt;n0</title>
-<path fill="none" stroke="#4b8fc5" stroke-width="0.9" stroke-dasharray="5,2" d="M114.39,-22.2C131.22,-22.2 149.57,-22.2 166.01,-22.2"/>
-<polygon fill="#4b8fc5" stroke="#4b8fc5" stroke-width="0.9" points="165.59,-24.13 171.09,-22.2 165.59,-20.28 165.59,-24.13"/>
+<path fill="none" stroke="#4b8fc5" stroke-width="7.2" stroke-dasharray="5,2" d="M114.39,-22.2C129.29,-22.2 145.37,-22.2 160.26,-22.2"/>
+<polygon fill="#4b8fc5" stroke="#4b8fc5" stroke-width="7.2" points="160.2,-25.67 165.7,-22.2 160.2,-18.74 160.2,-25.67"/>
 </g>
 <!-- in1 -->
 <g id="node4" class="node">
@@ -58,8 +58,8 @@
 <!-- in1&#45;&gt;n1 -->
 <g id="edge3" class="edge">
 <title>in1&#45;&gt;n1</title>
-<path fill="none" stroke="#4b8fc5" stroke-width="0.9" stroke-dasharray="5,2" d="M281.8,-73.79C293,-71.06 304.43,-68.27 314.91,-65.71"/>
-<polygon fill="#4b8fc5" stroke="#4b8fc5" stroke-width="0.9" points="315.09,-67.64 319.98,-64.47 314.18,-63.9 315.09,-67.64"/>
+<path fill="none" stroke="#4b8fc5" stroke-width="7.2" stroke-dasharray="5,2" d="M281.8,-73.79C291.1,-71.52 300.55,-69.21 309.49,-67.03"/>
+<polygon fill="#4b8fc5" stroke="#4b8fc5" stroke-width="7.2" points="310.22,-70.42 314.74,-65.75 308.58,-63.69 310.22,-70.42"/>
 </g>
 </g>
 </svg>

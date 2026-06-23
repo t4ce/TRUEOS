@@ -30,8 +30,8 @@
 <!-- n0&#45;&gt;out0 -->
 <g id="edge1" class="edge">
 <title>n0&#45;&gt;out0</title>
-<path fill="none" stroke="#d19922" stroke-width="0.9" stroke-dasharray="5,2" d="M396.46,-81.25C416.09,-84.45 436.4,-87.76 454.7,-90.75"/>
-<polygon fill="#d19922" stroke="#d19922" stroke-width="0.9" points="454.26,-92.62 460,-91.61 454.88,-88.82 454.26,-92.62"/>
+<path fill="none" stroke="#d19922" stroke-width="7.2" stroke-dasharray="5,2" d="M396.46,-81.25C414.19,-84.14 432.49,-87.12 449.35,-89.87"/>
+<polygon fill="#d19922" stroke="#d19922" stroke-width="7.2" points="448.69,-93.28 454.68,-90.74 449.81,-86.44 448.69,-93.28"/>
 </g>
 <!-- out1 -->
 <g id="node3" class="node">
@@ -46,8 +46,8 @@
 <!-- n0&#45;&gt;out1 -->
 <g id="edge2" class="edge">
 <title>n0&#45;&gt;out1</title>
-<path fill="none" stroke="#d19922" stroke-width="0.9" stroke-dasharray="5,2" d="M396.46,-51.58C407.28,-49.87 418.3,-48.12 429.09,-46.41"/>
-<polygon fill="#d19922" stroke="#d19922" stroke-width="0.9" points="429.29,-48.33 434.42,-45.57 428.69,-44.53 429.29,-48.33"/>
+<path fill="none" stroke="#d19922" stroke-width="7.2" stroke-dasharray="5,2" d="M396.46,-51.58C405.54,-50.14 414.77,-48.68 423.88,-47.24"/>
+<polygon fill="#d19922" stroke="#d19922" stroke-width="7.2" points="424.2,-50.7 429.09,-46.41 423.12,-43.85 424.2,-50.7"/>
 </g>
 <!-- in2 -->
 <g id="node4" class="node">
@@ -63,8 +63,8 @@
 <!-- in2&#45;&gt;n0 -->
 <g id="edge3" class="edge">
 <title>in2&#45;&gt;n0</title>
-<path fill="none" stroke="#4b8fc5" stroke-width="0.9" stroke-dasharray="5,2" d="M170.59,-90.56C181.37,-88.57 192.49,-86.51 203.47,-84.48"/>
-<polygon fill="#4b8fc5" stroke="#4b8fc5" stroke-width="0.9" points="203.53,-86.42 208.58,-83.53 202.83,-82.64 203.53,-86.42"/>
+<path fill="none" stroke="#4b8fc5" stroke-width="7.2" stroke-dasharray="5,2" d="M170.59,-90.56C179.56,-88.9 188.76,-87.2 197.92,-85.5"/>
+<polygon fill="#4b8fc5" stroke="#4b8fc5" stroke-width="7.2" points="198.51,-88.92 203.28,-84.51 197.24,-82.1 198.51,-88.92"/>
 </g>
 <!-- in3 -->
 <g id="node5" class="node">
@@ -80,8 +80,8 @@
 <!-- in3&#45;&gt;n0 -->
 <g id="edge4" class="edge">
 <title>in3&#45;&gt;n0</title>
-<path fill="none" stroke="#4b8fc5" stroke-width="0.9" stroke-dasharray="5,2" d="M170.59,-42.45C181.37,-44.39 192.49,-46.4 203.47,-48.38"/>
-<polygon fill="#4b8fc5" stroke="#4b8fc5" stroke-width="0.9" points="202.83,-50.22 208.58,-49.3 203.51,-46.43 202.83,-50.22"/>
+<path fill="none" stroke="#4b8fc5" stroke-width="7.2" stroke-dasharray="5,2" d="M170.59,-42.45C179.56,-44.07 188.76,-45.73 197.92,-47.38"/>
+<polygon fill="#4b8fc5" stroke="#4b8fc5" stroke-width="7.2" points="197.25,-50.78 203.28,-48.35 198.48,-43.96 197.25,-50.78"/>
 </g>
 </g>
 </svg>

@@ -24,7 +24,12 @@ PATH_POINT_SIZE = 11
 COMPACT_NAME_POINT_SIZE = 11
 COMPACT_VERSION_POINT_SIZE = 10
 COMPACT_PATH_POINT_SIZE = 9
-FULL_GRAPH_LABEL_SCALE = 5.5
+GRAPH_EDGE_PEN_WIDTH = 7.2
+SHARED_LEAF_LINK_STROKE_WIDTH = 12.8
+TERMINAL_LEAF_BORDER_STROKE_WIDTH = GRAPH_EDGE_PEN_WIDTH
+OWNERSHIP_REGION_STROKE_WIDTH = GRAPH_EDGE_PEN_WIDTH
+NESTED_SHARED_BADGE_STROKE_WIDTH = GRAPH_EDGE_PEN_WIDTH
+FULL_GRAPH_LABEL_SCALE = 4.5
 FULL_GRAPH_ROOT_SCALE = FULL_GRAPH_LABEL_SCALE * 2
 FULL_GRAPH_ROOT_SCALE_CRATES = {
     "crab-usb",
@@ -37,9 +42,8 @@ FULL_GRAPH_ROOT_SCALE_CRATES = {
 SHARED_LINK_VERTICAL_THRESHOLD = 24.0
 ARCHITECTURE_BUCKET_PADDING = 32.0
 # Spread the full LR graph wide enough that the layout itself uses the 16:9 canvas.
-FULL_GRAPH_NODESEP = 0.34
-FULL_GRAPH_RANKSEP = 9.25
-SHARED_PARENT_NUDGE_WIDTH = round(FULL_GRAPH_RANKSEP * 36.0)
+FULL_GRAPH_NODESEP = 0.62
+FULL_GRAPH_RANKSEP = 16.8
 FULL_GRAPH_ASPECT_RATIO = 16 / 9
 SPLIT_GRAPH_NODESEP = 0.35
 SPLIT_GRAPH_RANKSEP = 0.55
@@ -282,7 +286,6 @@ def html_label(
     embedded_ends: list[str | tuple[str, str | None] | EmbeddedEntry] | None = None,
     scale: float = 1.0,
     include_paths: bool = True,
-    nudge_parent_right: bool = False,
 ) -> str:
     lines = label_text_html(label, scale, include_paths)
     embedded_entries = normalize_embedded_entries(embedded_ends)
@@ -298,14 +301,7 @@ def html_label(
     else:
         body = "<BR/>".join(lines)
 
-    if nudge_parent_right:
-        body = (
-            '<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="0">'
-            f'<TR><TD WIDTH="{SHARED_PARENT_NUDGE_WIDTH}" HEIGHT="1" FIXEDSIZE="TRUE"></TD>'
-            f"<TD>{body}</TD></TR>"
-            "</TABLE>"
-        )
-    return f"<<{body}>>"
+    return f"<{body}>"
 
 
 def architecture_irrelevant_bucket_label(labels: list[str], scale: float = 1.0) -> str:
@@ -448,7 +444,7 @@ def render_dot(
         f'digraph "{dot_escape(slug_for(image_root))}" {{',
         f'  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep={SPLIT_GRAPH_NODESEP}, ranksep={SPLIT_GRAPH_RANKSEP}];',
         f'  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="{NODE_MARGIN}", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];',
-        '  edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];',
+        f'  edge [color="#9aa8b8", arrowsize=0.55, penwidth={GRAPH_EDGE_PEN_WIDTH}];',
     ]
 
     def node_id(label: str) -> str:
@@ -814,9 +810,9 @@ def render_full_dot(
     root: str,
     edges: set[tuple[str, str]],
     architecture_irrelevant: list[str] | None = None,
-    nudged_shared_leaves: set[str] | None = None,
+    advanced_parent_nodes: set[str] | None = None,
 ) -> str:
-    nudged_shared_leaves = nudged_shared_leaves or set()
+    advanced_parent_nodes = advanced_parent_nodes or set()
     node_ids: dict[str, str] = {}
     (
         all_nodes,
@@ -843,8 +839,11 @@ def render_full_dot(
     left_wing_nodes = {
         node for node in visible_nodes if crate_name(node) in LEFT_WING_CRATES
     }
-    left_wing_depth_by_node = left_wing_depths(left_wing_nodes, edges)
-
+    base_left_wing_depth_by_node = left_wing_depths(left_wing_nodes, edges)
+    left_wing_depth_by_node = {
+        node: max(0, depth - 1) if node in advanced_parent_nodes else depth
+        for node, depth in base_left_wing_depth_by_node.items()
+    }
     def node_id(label: str) -> str:
         if label not in node_ids:
             node_ids[label] = f"n{len(node_ids)}"
@@ -854,7 +853,7 @@ def render_full_dot(
         "digraph trueos_depth_graph {",
         f'  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep={FULL_GRAPH_NODESEP}, ranksep={FULL_GRAPH_RANKSEP}];',
         f'  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="{NODE_MARGIN}", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];',
-        '  edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];',
+        f'  edge [color="#9aa8b8", arrowsize=0.55, penwidth={GRAPH_EDGE_PEN_WIDTH}];',
     ]
 
     for label in sorted(visible_nodes, key=lambda x: (x != root, x)):
@@ -867,14 +866,9 @@ def render_full_dot(
             if label == root or crate_name(label) in FULL_GRAPH_ROOT_SCALE_CRATES
             else FULL_GRAPH_LABEL_SCALE
         )
-        nudged_embedded_labels = {
-            leaf
-            for leaf in nudged_shared_leaves
-            if leaf in embedded_path_labels_postorder(normalize_embedded_entries(embedded_ends))
-        }
         margin_attr = f', margin="{scaled_node_margin(label_scale)}"'
         lines.append(
-            f'  {node_id(label)} [label={html_label(label, embedded_ends, label_scale, nudged_embedded_labels, label != root)}, fillcolor="{fill}", color="{color}"{margin_attr}];'
+            f'  {node_id(label)} [label={html_label(label, embedded_ends, label_scale, label != root)}, fillcolor="{fill}", color="{color}"{margin_attr}];'
         )
     for parent, child in sorted(edges):
         if parent in collapsed_leaves or child in collapsed_leaves:
@@ -895,6 +889,11 @@ def render_full_dot(
                 f"  {node_id(leaf)} -> {node_id(parent)} "
                 '[style=invis, weight=90, minlen=2];'
             )
+
+    for label in sorted(advanced_parent_nodes - left_wing_nodes):
+        if label not in visible_nodes or label == root:
+            continue
+        lines.append(f"  {node_id(root)} -> {node_id(label)} [style=invis, weight=500, minlen=2];")
 
     if left_wing_nodes:
         max_left_depth = max(left_wing_depth_by_node.values(), default=0)
@@ -1120,8 +1119,14 @@ def svg_layout(
     bboxes: dict[str, tuple[float, float, float, float]] = {}
     inner_bboxes: dict[str, list[tuple[float, float, float, float]]] = {}
     bodies: dict[str, str] = {}
-    for group in re.finditer(r'<g id="node\d+" class="node">(.*?)</g>', svg, re.S):
-        body = group.group(1)
+    node_group_pattern = (
+        r'<g id="node\d+" class="node"'
+        r'(?: transform="translate\(([0-9.-]+) ([0-9.-]+)\)")?>(.*?)</g>'
+    )
+    for group in re.finditer(node_group_pattern, svg, re.S):
+        node_tx = float(group.group(1) or 0.0)
+        node_ty = float(group.group(2) or 0.0)
+        body = group.group(3)
         title = re.search(r"<title>(n\d+)</title>", body)
         if not title:
             continue
@@ -1130,8 +1135,11 @@ def svg_layout(
         paths = re.findall(r'<path\b[^>]*\bd="([^"]+)"', body)
         if not paths:
             continue
-        bboxes[node_id] = transform_bbox(svg_path_bbox(paths[0]), tx, ty)
-        inner_bboxes[node_id] = [transform_bbox(svg_path_bbox(path), tx, ty) for path in paths[1:]]
+        bboxes[node_id] = transform_bbox(svg_path_bbox(paths[0]), tx + node_tx, ty + node_ty)
+        inner_bboxes[node_id] = [
+            transform_bbox(svg_path_bbox(path), tx + node_tx, ty + node_ty)
+            for path in paths[1:]
+        ]
 
     return width, height, tx, ty, bboxes, inner_bboxes, bodies
 
@@ -1239,7 +1247,7 @@ def inject_nested_shared_badges(
                     f'<rect x="{target_x - tx:.2f}" y="{target_y - ty:.2f}" '
                     f'width="{old_w:.2f}" height="{old_h:.2f}" '
                     f'rx="{rx:.2f}" ry="{rx:.2f}" fill="#f7f9fb" '
-                    'stroke="#9aa8b8" stroke-opacity="1" stroke-width="1.25"/>'
+                    f'stroke="#9aa8b8" stroke-opacity="1" stroke-width="{NESTED_SHARED_BADGE_STROKE_WIDTH}"/>'
                 ),
                 *(shifted_text_markup(text, dx, dy) for text in texts),
                 "</g>",
@@ -1409,6 +1417,41 @@ def vertically_aligned_shared_leaves(root: str, edges: set[tuple[str, str]]) -> 
     return vertical_leaves
 
 
+def shared_leaf_parent_nodes(
+    root: str,
+    edges: set[tuple[str, str]],
+    shared_leaves: set[str],
+) -> set[str]:
+    if not shared_leaves:
+        return set()
+
+    node_ids, _collapsed_leaves, embedded_by_parent, _shared_input_leaves, incoming_parents = (
+        full_graph_layout(root, edges)
+    )
+    _width, _height, node_bboxes, inner_bboxes = full_svg_bboxes()
+    advanced_parents: set[str] = set()
+    for leaf in sorted(shared_leaves):
+        candidates: list[tuple[float, str, str]] = []
+        for parent in sorted(incoming_parents.get(leaf, set())):
+            node_id = node_ids.get(parent)
+            if not node_id:
+                continue
+            entries = embedded_by_parent.get(parent, [])
+            index = direct_embedded_path_index(entries, leaf)
+            boxes = inner_bboxes.get(node_id, [])
+            if index is not None and index < len(boxes):
+                x, y, w, h = boxes[index]
+            elif node_id in node_bboxes:
+                x, y, w, h = node_bboxes[node_id]
+            else:
+                continue
+            candidates.append((y + h / 2, display_label(parent), parent))
+        if candidates:
+            _center_y, _display, parent = max(candidates)
+            advanced_parents.add(parent)
+    return advanced_parents
+
+
 def terminal_leaf_borders(root: str, edges: set[tuple[str, str]]) -> list[dict[str, object]]:
     incoming_count: dict[str, int] = defaultdict(int)
     outgoing_count: dict[str, int] = defaultdict(int)
@@ -1483,7 +1526,7 @@ def inject_full_svg_regions(root: str, root_children: list[str], edges: set[tupl
                     f'<rect x="{x:.2f}" y="{y:.2f}" width="{float(region["w"]):.2f}" '
                     f'height="{float(region["h"]):.2f}" rx="26" ry="26" '
                     'fill="black" fill-opacity="0.045" '
-                    'stroke="black" stroke-opacity="0.33" stroke-width="3" '
+                    f'stroke="black" stroke-opacity="0.33" stroke-width="{OWNERSHIP_REGION_STROKE_WIDTH}" '
                     f'stroke-dasharray="{dash}"/>'
                 ),
                 "</g>",
@@ -1518,7 +1561,7 @@ def inject_full_svg_regions(root: str, root_children: list[str], edges: set[tupl
                     f'height="{float(border["h"]):.2f}" rx="{float(border["r"]):.2f}" '
                     f'ry="{float(border["r"]):.2f}" fill="none" '
                     f'stroke="{escape(str(border["color"]))}" stroke-opacity="0.78" '
-                    'stroke-width="1.25"/>'
+                    f'stroke-width="{TERMINAL_LEAF_BORDER_STROKE_WIDTH}"/>'
                 ),
             ]
         )
@@ -1548,7 +1591,7 @@ def inject_full_svg_regions(root: str, root_children: list[str], edges: set[tupl
                 f'<title>shared leaf {escape(str(link["label"]))}</title>',
                 (
                     f'<line x1="{x1:.2f}" y1="{y1:.2f}" x2="{x2:.2f}" y2="{y2:.2f}" '
-                    'stroke="#111111" stroke-opacity="0.82" stroke-width="1.6" '
+                    f'stroke="#111111" stroke-opacity="0.82" stroke-width="{SHARED_LEAF_LINK_STROKE_WIDTH}" '
                     'marker-start="url(#shared-leaf-arrow)" marker-end="url(#shared-leaf-arrow)"/>'
                 ),
                 "</g>",
@@ -1668,6 +1711,45 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
       box-shadow: 0 1px 3px rgba(15, 23, 42, 0.14);
       transform-origin: top left;
     }}
+    .control-panel {{
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      z-index: 4;
+      width: min(320px, calc(100vw - 32px));
+      padding: 14px 16px 16px;
+      border: 1px solid rgba(139, 155, 176, 0.42);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.94);
+      box-shadow: 0 16px 44px rgba(15, 23, 42, 0.16);
+      backdrop-filter: blur(10px);
+      opacity: 0.25;
+      transition: opacity 140ms ease;
+    }}
+    .control-panel:hover,
+    .control-panel:focus-within {{
+      opacity: 1;
+    }}
+    .control-title {{
+      margin: 0 0 12px;
+      font-size: 18px;
+      line-height: 1.15;
+      font-weight: 750;
+      color: var(--ink);
+    }}
+    .zoom-control {{
+      display: grid;
+      gap: 6px;
+    }}
+    .zoom-control label {{
+      font-size: 12px;
+      font-weight: 700;
+      color: #475569;
+    }}
+    #zoom-slider {{
+      width: 100%;
+      accent-color: var(--hot);
+    }}
     @keyframes rootPulse {{
       0%, 100% {{ fill: rgba(27, 120, 166, 0.06); }}
       50% {{ fill: rgba(27, 120, 166, 0.25); }}
@@ -1675,7 +1757,7 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
     .root-hotspot rect {{
       fill: rgba(27, 120, 166, 0.06);
       stroke: transparent;
-      stroke-width: 3;
+      stroke-width: {GRAPH_EDGE_PEN_WIDTH};
       pointer-events: all;
       animation: rootPulse 3.2s ease-in-out infinite;
       transition: fill 120ms ease, stroke 120ms ease;
@@ -1718,15 +1800,24 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
       line-height: 1;
       cursor: pointer;
     }}
-    #dialog-frame {{
+    #dialog-image {{
       width: 100%;
       height: 100%;
-      border: 0;
+      display: block;
+      object-fit: contain;
+      object-position: center center;
       background: white;
     }}
   </style>
 </head>
 <body>
+  <section class="control-panel" aria-label="Graph controls">
+    <h1 class="control-title">TrueOS § Depth Graph</h1>
+    <div class="zoom-control">
+      <label for="zoom-slider">Zoom</label>
+      <input id="zoom-slider" type="range" min="0.01" max="4" step="0.001" value="1">
+    </div>
+  </section>
   <div class="viewport">
     <svg id="graph" viewBox="0 0 {width} {height}" width="{display_width}" height="{display_height}" xmlns="http://www.w3.org/2000/svg">
       <image href="trueos-depth-tree.svg" x="0" y="0" width="{width}" height="{height}"></image>
@@ -1735,17 +1826,17 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
   </div>
   <dialog id="root-dialog">
     <button id="close-dialog" type="button" aria-label="Close">&times;</button>
-    <iframe id="dialog-frame" title="Root dependency graph"></iframe>
+    <img id="dialog-image" alt="Root dependency graph">
   </dialog>
   <script>
     const viewport = document.querySelector('.viewport');
     const graph = document.getElementById('graph');
     const dialog = document.getElementById('root-dialog');
-    const frame = document.getElementById('dialog-frame');
+    const dialogImage = document.getElementById('dialog-image');
     const closeButton = document.getElementById('close-dialog');
+    const zoomSlider = document.getElementById('zoom-slider');
     const dragThreshold = 4;
-    const minGraphScale = 0.15;
-    const maxGraphScale = 4;
+    const maxGraphScale = 0.8;
     const graphBaseWidth = Number.parseFloat(graph.getAttribute('width'));
     const graphBaseHeight = Number.parseFloat(graph.getAttribute('height'));
     let graphScale = 1;
@@ -1760,10 +1851,36 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
       return Math.min(Math.max(value, min), max);
     }}
 
+    function minGraphScale() {{
+      const style = getComputedStyle(viewport);
+      const paddingX = (Number.parseFloat(style.paddingLeft) || 0)
+        + (Number.parseFloat(style.paddingRight) || 0);
+      const paddingY = (Number.parseFloat(style.paddingTop) || 0)
+        + (Number.parseFloat(style.paddingBottom) || 0);
+      const fitWidth = Math.max(0.01, (viewport.clientWidth - paddingX) / graphBaseWidth);
+      const fitHeight = Math.max(0.01, (viewport.clientHeight - paddingY) / graphBaseHeight);
+      return Math.min(maxGraphScale, Math.max(fitWidth, fitHeight));
+    }}
+
     function setGraphScale(nextScale) {{
-      graphScale = clamp(nextScale, minGraphScale, maxGraphScale);
+      graphScale = clamp(nextScale, minGraphScale(), maxGraphScale);
       graph.style.width = `${{graphBaseWidth * graphScale}}px`;
       graph.style.height = `${{graphBaseHeight * graphScale}}px`;
+      zoomSlider.min = minGraphScale().toFixed(4);
+      zoomSlider.max = String(maxGraphScale);
+      zoomSlider.value = graphScale.toFixed(4);
+    }}
+
+    function setGraphScaleAroundViewportPoint(nextScale, pointerX, pointerY) {{
+      const style = getComputedStyle(viewport);
+      const paddingLeft = Number.parseFloat(style.paddingLeft) || 0;
+      const paddingTop = Number.parseFloat(style.paddingTop) || 0;
+      const graphX = (viewport.scrollLeft + pointerX - paddingLeft) / graphScale;
+      const graphY = (viewport.scrollTop + pointerY - paddingTop) / graphScale;
+
+      setGraphScale(nextScale);
+      viewport.scrollLeft = paddingLeft + graphX * graphScale - pointerX;
+      viewport.scrollTop = paddingTop + graphY * graphScale - pointerY;
     }}
 
     function normalizeWheelDelta(event) {{
@@ -1781,6 +1898,9 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
 
     viewport.addEventListener('pointerdown', (event) => {{
       if (event.button !== 0) {{
+        return;
+      }}
+      if (event.target.closest('.root-hotspot')) {{
         return;
       }}
 
@@ -1846,25 +1966,31 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
       }}
 
       const rect = viewport.getBoundingClientRect();
-      const style = getComputedStyle(viewport);
-      const paddingLeft = Number.parseFloat(style.paddingLeft) || 0;
-      const paddingTop = Number.parseFloat(style.paddingTop) || 0;
       const pointerX = event.clientX - rect.left;
       const pointerY = event.clientY - rect.top;
-      const graphX = (viewport.scrollLeft + pointerX - paddingLeft) / graphScale;
-      const graphY = (viewport.scrollTop + pointerY - paddingTop) / graphScale;
 
-      setGraphScale(graphScale * Math.exp(-delta.y * 0.001));
-      viewport.scrollLeft = paddingLeft + graphX * graphScale - pointerX;
-      viewport.scrollTop = paddingTop + graphY * graphScale - pointerY;
+      setGraphScaleAroundViewportPoint(graphScale * Math.exp(-delta.y * 0.001), pointerX, pointerY);
     }}, {{ passive: false }});
 
-    setGraphScale(1);
+    zoomSlider.addEventListener('input', () => {{
+      setGraphScaleAroundViewportPoint(
+        Number.parseFloat(zoomSlider.value),
+        viewport.clientWidth / 2,
+        viewport.clientHeight / 2,
+      );
+    }});
+
+    window.addEventListener('resize', () => {{
+      setGraphScale(graphScale);
+    }});
+
+    setGraphScale(minGraphScale());
 
     document.querySelectorAll('.root-hotspot').forEach((link) => {{
       link.addEventListener('click', (event) => {{
         event.preventDefault();
-        frame.src = link.getAttribute('href');
+        dialogImage.src = link.getAttribute('href');
+        dialogImage.alt = link.getAttribute('aria-label') || 'Root dependency graph';
         dialog.showModal();
       }});
     }});
@@ -1874,7 +2000,7 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
     }});
 
     dialog.addEventListener('close', () => {{
-      frame.removeAttribute('src');
+      dialogImage.removeAttribute('src');
     }});
   </script>
 </body>
@@ -1900,9 +2026,10 @@ def main() -> None:
 
     FULL_DOT_PATH.write_text(render_full_dot(root, graph_edges, architecture_irrelevant))
     subprocess.run(["dot", "-Tsvg", str(FULL_DOT_PATH), "-o", str(FULL_SVG_PATH)], check=True)
-    nudged_shared_leaves = vertically_aligned_shared_leaves(root, graph_edges)
+    advanced_shared_leaves = vertically_aligned_shared_leaves(root, graph_edges)
+    advanced_parent_nodes = shared_leaf_parent_nodes(root, graph_edges, advanced_shared_leaves)
     FULL_DOT_PATH.write_text(
-        render_full_dot(root, graph_edges, architecture_irrelevant, nudged_shared_leaves)
+        render_full_dot(root, graph_edges, architecture_irrelevant, advanced_parent_nodes)
     )
     subprocess.run(["dot", "-Tsvg", str(FULL_DOT_PATH), "-o", str(FULL_SVG_PATH)], check=True)
     inject_full_svg_regions(root, graph_root_children, graph_edges)

@@ -43,8 +43,8 @@
 <!-- n0&#45;&gt;n1 -->
 <g id="edge1" class="edge">
 <title>n0&#45;&gt;n1</title>
-<path fill="none" stroke="#9aa8b8" stroke-width="0.9" d="M99.02,-156.7C112.6,-164.64 127.88,-173.57 142.6,-182.17"/>
-<polygon fill="#9aa8b8" stroke="#9aa8b8" stroke-width="0.9" points="141.53,-183.77 147.25,-184.88 143.47,-180.45 141.53,-183.77"/>
+<path fill="none" stroke="#9aa8b8" stroke-width="7.2" d="M99.02,-156.7C111.16,-163.8 124.66,-171.68 137.9,-179.42"/>
+<polygon fill="#9aa8b8" stroke="#9aa8b8" stroke-width="7.2" points="136.1,-182.38 142.6,-182.16 139.59,-176.4 136.1,-182.38"/>
 </g>
 <!-- out0 -->
 <g id="node3" class="node">
@@ -63,15 +63,15 @@
 <!-- n0&#45;&gt;out0 -->
 <g id="edge2" class="edge">
 <title>n0&#45;&gt;out0</title>
-<path fill="none" stroke="#d19922" stroke-width="0.9" stroke-dasharray="5,2" d="M99.02,-105.7C116.31,-95.59 136.35,-83.89 154.48,-73.29"/>
-<polygon fill="#d19922" stroke="#d19922" stroke-width="0.9" points="155.09,-75.17 158.86,-70.73 153.14,-71.85 155.09,-75.17"/>
+<path fill="none" stroke="#d19922" stroke-width="7.2" stroke-dasharray="5,2" d="M99.02,-105.7C114.82,-96.47 132.91,-85.89 149.75,-76.06"/>
+<polygon fill="#d19922" stroke="#d19922" stroke-width="7.2" points="151.21,-79.22 154.21,-73.45 147.71,-73.24 151.21,-79.22"/>
 </g>
 <g id="nested-shared-leaf-badges" class="nested-shared-leaf-badges" pointer-events="none">
 <!-- nested shared leaf badge tap / 1.0.1 on wyz / 0.5.1 -->
 <g>
 <title>nested shared leaf tap / 1.0.1</title>
 <rect x="177.83" y="-170.32" width="61.75" height="34.00" fill="#f7f9fb" stroke="none"/>
-<rect x="179.08" y="-138.32" width="59.25" height="31.50" rx="15.75" ry="15.75" fill="#f7f9fb" stroke="#9aa8b8" stroke-opacity="1" stroke-width="1.25"/>
+<rect x="179.08" y="-138.32" width="59.25" height="31.50" rx="15.75" ry="15.75" fill="#f7f9fb" stroke="#9aa8b8" stroke-opacity="1" stroke-width="7.2"/>
 <text xml:space="preserve" text-anchor="start" x="188.08" y="-119.87" font-family="Inter,Arial" font-weight="bold" font-size="11.00" fill="#172033">tap</text>
 <text xml:space="preserve" text-anchor="start" x="204.58" y="-119.87" font-family="Inter,Arial" font-size="10.00" fill="#172033"> </text>
 <text xml:space="preserve" text-anchor="start" x="207.58" y="-119.87" font-family="Inter,Arial" font-size="10.00" fill="#172033">1.0.1</text>
