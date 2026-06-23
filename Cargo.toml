@@ -106,6 +106,7 @@ debug = false
 opt-level = 2
 
 [patch.crates-io]
+embassy-time = { path = "vendor/embassy-time-0.5.1-trueos" }
 embassy-executor = { path = "crates/trueos-executor" }
 png = { path = "vendor/png-0.18.1" }
 fdeflate = { path = "vendor/fdeflate-0.3.7" }
