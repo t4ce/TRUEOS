@@ -565,6 +565,49 @@ pub(crate) fn fs_stat_host(path: &str, out_kind: &mut u32, out_len: &mut u64) ->
     }
 }
 
+pub(crate) fn fs_list_dir_host_text(path: &str) -> core::result::Result<String, i32> {
+    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+        log_fs_cabi_path_fail(
+            "list_dir",
+            path,
+            None,
+            "reason=raw-path-too-large",
+            FS_ERR_TOO_LARGE,
+        );
+        return Err(FS_ERR_TOO_LARGE);
+    }
+    let raw = path;
+    let Some(path) = super::env::resolve_fs_path(path, true) else {
+        log_fs_cabi_path_fail("list_dir", raw, None, "reason=resolve-failed", FS_ERR_BAD_PATH);
+        return Err(FS_ERR_BAD_PATH);
+    };
+    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+        log_fs_cabi_path_fail(
+            "list_dir",
+            raw,
+            Some(path.as_str()),
+            "reason=resolved-path-too-large",
+            FS_ERR_TOO_LARGE,
+        );
+        return Err(FS_ERR_TOO_LARGE);
+    }
+    match super::kfs::list_dir(path.as_str()) {
+        Ok(text) => Ok(text),
+        Err(e) => {
+            let rc = fs_error_to_code(e);
+            log_fs_cabi_path_fail("list_dir", raw, Some(path.as_str()), "", rc);
+            Err(rc)
+        }
+    }
+}
+
+pub(crate) fn fs_list_dir_host(path: &str, out_ptr: *mut u8, out_cap: usize) -> isize {
+    match fs_list_dir_host_text(path) {
+        Ok(text) => unsafe { copy_text(text.as_bytes(), out_ptr, out_cap) },
+        Err(rc) => rc as isize,
+    }
+}
+
 pub(crate) fn fs_remove_host(path: &str) -> i32 {
     if path.len() > QJS_ASYNC_FS_MAX_PATH {
         log_fs_cabi_path_fail("remove", path, None, "reason=raw-path-too-large", FS_ERR_TOO_LARGE);
@@ -746,6 +789,63 @@ fn guest_fs_stat(path_bytes: &[u8], out_kind: *mut u32, out_len: *mut u64) -> i3
     0
 }
 
+unsafe fn guest_fs_list_dir(path_bytes: &[u8], out_ptr: *mut u8, out_cap: usize) -> isize {
+    if path_bytes.len() > trueos_vm::vmcall::PAYLOAD_CAP {
+        return FS_ERR_TOO_LARGE as isize;
+    }
+
+    let mut probe = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+    let (status, len) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_FS_LIST_DIR,
+        0,
+        0,
+        path_bytes,
+        &mut probe,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return FS_ERR_BAD_PARAM as isize;
+    }
+    let len = vmcall_signed(len);
+    if len < 0 || out_ptr.is_null() || out_cap == 0 {
+        return len;
+    }
+
+    let len = len as usize;
+    if out_cap < len {
+        return FS_ERR_NO_SPACE as isize;
+    }
+
+    let mut offset = 0usize;
+    while offset < len {
+        let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+        let want = core::cmp::min(trueos_vm::vmcall::PAYLOAD_CAP, len - offset);
+        let (status, got) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_FS_LIST_DIR,
+            offset as u64,
+            want as u64,
+            path_bytes,
+            &mut bytes,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return FS_ERR_BAD_PARAM as isize;
+        }
+        let got = vmcall_signed(got);
+        if got < 0 {
+            return got;
+        }
+        let got = got as usize;
+        if got == 0 {
+            break;
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr.add(offset), got);
+        }
+        offset = offset.saturating_add(got);
+    }
+
+    offset as isize
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_fs_read_file(
     path_ptr: *const u8,
@@ -921,6 +1021,29 @@ pub unsafe extern "C" fn trueos_cabi_fs_stat(
         return guest_fs_stat(path_bytes, out_kind, out_len);
     }
     unsafe { fs_stat_host(path, &mut *out_kind, &mut *out_len) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_fs_list_dir(
+    path_ptr: *const u8,
+    path_len: usize,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    if path_ptr.is_null() && path_len != 0 {
+        return FS_ERR_BAD_PARAM as isize;
+    }
+    if path_len > QJS_ASYNC_FS_MAX_PATH {
+        return FS_ERR_TOO_LARGE as isize;
+    }
+    let path_bytes = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
+    let Ok(path) = core::str::from_utf8(path_bytes) else {
+        return FS_ERR_BAD_UTF8 as isize;
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return unsafe { guest_fs_list_dir(path_bytes, out_ptr, out_cap) };
+    }
+    fs_list_dir_host(path, out_ptr, out_cap)
 }
 
 #[unsafe(no_mangle)]

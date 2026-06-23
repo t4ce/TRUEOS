@@ -14,6 +14,8 @@ const BLOCKING_JOB_QUEUE_CAP: usize = 4094;
 const SERVICE_LANE_IDLE_POLL_MS: u64 = 10;
 const SERVICE_LANE_BUSY_RETRY_MS: u64 = 1;
 const SERVICE_LANE_SUPERVISOR_MS: u64 = 250;
+const SERVICE_LANE_QUEUE_WAIT_WARN_MS: u64 = 100;
+const SERVICE_LANE_SOFT_THROTTLE_DEPTH: usize = 64;
 const SERVICE_LANE_TASK_POOL: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
 const BLOCKING_JOB_TAG_HOST: &str = "host-blocking-job";
 const BLOCKING_JOB_TAG_VMX: &str = "vmx-respect-architecture";
@@ -43,6 +45,9 @@ pub struct BlockingJobEntry {
 struct ServiceLaneRequest {
     entry: BlockingJobEntry,
     lease: crate::hv::lane::LaneLease,
+    tokio_lease: crate::stackkeeper::TokioLaneLease,
+    enqueued_ms: u64,
+    lane_depth_at_enqueue: usize,
 }
 
 pub fn queued_blocking_jobs() -> usize {
@@ -65,6 +70,12 @@ pub fn pop_blocking_job() -> Option<BlockingJobEntry> {
 fn now_ms() -> u64 {
     let hz = embassy_time_driver::TICK_HZ.max(1);
     embassy_time_driver::now().saturating_mul(1000) / hz
+}
+
+fn service_lane_executor_counts(slot: u32) -> (usize, usize) {
+    crate::workers::spawner_for_slot(slot)
+        .map(|spawner| (spawner.spawned_task_count(), spawner.ready_task_count()))
+        .unwrap_or((0, 0))
 }
 
 fn run_blocking_job_call(call: BlockingJobCall) {
@@ -136,18 +147,42 @@ async fn service_lane_worker_task(slot: u32, core_kind: u8) {
             continue;
         }
 
-        let Some(mut request) = pop_service_lane_request(slot) else {
+        let Some(request) = pop_service_lane_request(slot) else {
             Timer::after(EmbassyDuration::from_millis(SERVICE_LANE_BUSY_RETRY_MS)).await;
             continue;
         };
-        let entry = request.entry;
-        let lease = &mut request.lease;
+        let ServiceLaneRequest {
+            entry,
+            mut lease,
+            tokio_lease,
+            enqueued_ms,
+            lane_depth_at_enqueue,
+        } = request;
+        let purpose = entry.purpose;
+        let queue_wait_ms = now_ms().saturating_sub(enqueued_ms);
+        let (spawned_tasks, ready_tasks) = service_lane_executor_counts(slot);
+        if queue_wait_ms >= SERVICE_LANE_QUEUE_WAIT_WARN_MS {
+            crate::log_warn!(target: "service";
+                "service-lane: queued job waited id={} vm={:?} purpose={} lane_slot={} wait_ms={} lane_depth_at_enqueue={} spawned_tasks={} ready_tasks={}\n",
+                entry.id,
+                entry.vm_id,
+                purpose,
+                slot,
+                queue_wait_ms,
+                lane_depth_at_enqueue,
+                spawned_tasks,
+                ready_tasks
+            );
+        }
         if let Some(vm_id) = entry.vm_id {
             lease.set_vm_owner(vm_id);
         } else {
             lease.clear_vm_owner();
         }
+        let tokio_guard = crate::stackkeeper::enter_tokio_lane(tokio_lease, purpose);
         run_blocking_job_entry(entry);
+        drop(tokio_guard);
+        crate::stackkeeper::release_tokio_lane(tokio_lease);
         lease.clear_vm_owner();
     }
 }
@@ -243,7 +278,10 @@ fn pop_service_lane_request(slot: u32) -> Option<ServiceLaneRequest> {
         .and_then(|queue| queue.lock().pop_front())
 }
 
-fn pick_service_lane_slot() -> Option<(u32, crate::hv::lane::LaneLease)> {
+fn pick_service_lane_slot(
+    vm_id: Option<u8>,
+    purpose: &'static str,
+) -> Option<(u32, crate::hv::lane::LaneLease, crate::stackkeeper::TokioLaneLease)> {
     start_service_lanes();
     let slots = crate::workers::background_worker_slots();
     if slots.is_empty() {
@@ -259,7 +297,16 @@ fn pick_service_lane_slot() -> Option<(u32, crate::hv::lane::LaneLease)> {
             .unwrap_or(false)
             && let Some(lease) = crate::hv::lane::try_lease_tokio_blocking_lane_for_slot(slot)
         {
-            return Some((slot, lease));
+            let core_kind = crate::workers::core_kind_for_slot(slot);
+            let tokio_lease = if let Some(vm_id) = vm_id {
+                crate::stackkeeper::try_acquire_tokio_lane_for_vm(slot, core_kind, vm_id, purpose)
+            } else {
+                crate::stackkeeper::try_acquire_tokio_lane(slot, core_kind, purpose)
+            };
+
+            if let Some(tokio_lease) = tokio_lease {
+                return Some((slot, lease, tokio_lease));
+            }
         }
     }
     None
@@ -277,7 +324,8 @@ fn submit_service_lane_request(entry: BlockingJobEntry) -> Result<u64, BlockingJ
         return Err(entry);
     }
 
-    let Some((slot, lease)) = pick_service_lane_slot() else {
+    let Some((slot, lease, tokio_lease)) = pick_service_lane_slot(entry.vm_id, entry.purpose)
+    else {
         crate::log_error!(
             target: "service";
             "blocking-job: no service lane available vm={:?} purpose={}\n",
@@ -291,19 +339,43 @@ fn submit_service_lane_request(entry: BlockingJobEntry) -> Result<u64, BlockingJ
     let vm_id = entry.vm_id;
     let purpose = entry.purpose;
     let policy_tag = entry.policy_tag;
+    let enqueued_ms = now_ms();
     let lane_depth = {
         let Some(queue) = SERVICE_LANE_QUEUES.get(slot as usize) else {
             return Err(entry);
         };
         let mut queue = queue.lock();
-        queue.push_back(ServiceLaneRequest { entry, lease });
+        let lane_depth_at_enqueue = queue.len().saturating_add(1);
+        queue.push_back(ServiceLaneRequest {
+            entry,
+            lease,
+            tokio_lease,
+            enqueued_ms,
+            lane_depth_at_enqueue,
+        });
         queue.len()
     };
     let queued = queued_blocking_jobs();
-    if queued > BLOCKING_JOB_QUEUE_WARN_DEPTH {
+    let (spawned_tasks, ready_tasks) = service_lane_executor_counts(slot);
+    if lane_depth >= SERVICE_LANE_SOFT_THROTTLE_DEPTH {
+        crate::log_warn!(
+            target: "service";
+            "blocking-job: service-lane soft throttle id={} vm={:?} purpose={} tag={} lane_slot={} lane_depth={} soft_depth={} queued={} spawned_tasks={} ready_tasks={}\n",
+            id,
+            vm_id,
+            purpose,
+            policy_tag,
+            slot,
+            lane_depth,
+            SERVICE_LANE_SOFT_THROTTLE_DEPTH,
+            queued,
+            spawned_tasks,
+            ready_tasks
+        );
+    } else if queued > BLOCKING_JOB_QUEUE_WARN_DEPTH {
         crate::log_error!(
             target: "service";
-            "blocking-job: backlog above safe depth id={} vm={:?} purpose={} tag={} queued={} safe_depth={} cap={} lane_slot={} lane_depth={}\n",
+            "blocking-job: backlog above safe depth id={} vm={:?} purpose={} tag={} queued={} safe_depth={} cap={} lane_slot={} lane_depth={} spawned_tasks={} ready_tasks={}\n",
             id,
             vm_id,
             purpose,
@@ -312,12 +384,14 @@ fn submit_service_lane_request(entry: BlockingJobEntry) -> Result<u64, BlockingJ
             BLOCKING_JOB_QUEUE_WARN_DEPTH,
             BLOCKING_JOB_QUEUE_CAP,
             slot,
-            lane_depth
+            lane_depth,
+            spawned_tasks,
+            ready_tasks
         );
     }
     crate::log_info!(
         target: "service";
-        "blocking-job: queued id={} vm={:?} purpose={} tag={} queued={} cap={} lane_slot={} lane_depth={}\n",
+        "blocking-job: queued id={} vm={:?} purpose={} tag={} queued={} cap={} lane_slot={} lane_depth={} spawned_tasks={} ready_tasks={}\n",
         id,
         vm_id,
         purpose,
@@ -325,7 +399,9 @@ fn submit_service_lane_request(entry: BlockingJobEntry) -> Result<u64, BlockingJ
         queued,
         BLOCKING_JOB_QUEUE_CAP,
         slot,
-        lane_depth
+        lane_depth,
+        spawned_tasks,
+        ready_tasks
     );
     service_lane_wait(slot).notify_one();
     crate::remote_work_wake::wake_cpu_for_remote_work(slot);

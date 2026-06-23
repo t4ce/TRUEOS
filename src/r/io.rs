@@ -213,6 +213,23 @@ pub mod kfs {
     }
 
     #[inline]
+    pub fn list_dir(path: &str) -> Result<String> {
+        let stat = stat(path)?;
+        if stat.kind != FsNodeKind::Directory {
+            return Err(FsError::BadPath);
+        }
+
+        let disk = root_disk()?;
+        let name = normalize_rel(path, true)?;
+        crate::wait::spawn_and_wait_local(async move {
+            match crate::r::fs::trueosfs::list_dir_async(disk, name.as_str()).await? {
+                Some(v) => Ok(v),
+                None => Err(FsError::NoRoot),
+            }
+        })
+    }
+
+    #[inline]
     pub fn remove(path: &str) -> Result<()> {
         let disk = root_disk()?;
         let name = normalize_rel(path, false)?;
@@ -345,6 +362,11 @@ pub mod env {
             .last()
             .and_then(|ctx| ctx.vars.get(key).cloned())
             .or_else(|| crate::locale::env_var(key).map(String::from))
+    }
+
+    pub(crate) fn current_app_fs_root() -> Option<String> {
+        let stack = context_stack().lock();
+        stack.last().and_then(|ctx| ctx.app_fs_root.clone())
     }
 
     pub(crate) unsafe extern "C" fn getenv(name: *const c_char) -> *mut c_char {

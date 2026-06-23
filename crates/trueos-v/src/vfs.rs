@@ -113,6 +113,31 @@ pub fn stat(path: &[u8]) -> Result<FsStat, i32> {
 }
 
 #[inline]
+pub fn list_dir(path: &[u8]) -> Result<Vec<u8>, i32> {
+    let len = unsafe {
+        vcabi::trueos_cabi_fs_list_dir(path.as_ptr(), path.len(), core::ptr::null_mut(), 0)
+    };
+    if len < 0 {
+        return Err(len as i32);
+    }
+    let mut bytes = vec![0u8; len as usize];
+    let got = unsafe {
+        vcabi::trueos_cabi_fs_list_dir(path.as_ptr(), path.len(), bytes.as_mut_ptr(), bytes.len())
+    };
+    if got < 0 {
+        return Err(got as i32);
+    }
+    bytes.truncate(got as usize);
+    Ok(bytes)
+}
+
+#[inline]
+pub fn list_dir_utf8(path: &[u8]) -> Result<String, i32> {
+    let bytes = list_dir(path)?;
+    String::from_utf8(bytes).map_err(|_| -1)
+}
+
+#[inline]
 pub fn write_file(path: &[u8], data: &[u8]) -> Result<(), i32> {
     let handle = write_begin(path, data.len() as u64)?;
     if let Err(rc) = write_chunk(handle, data) {

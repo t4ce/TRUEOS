@@ -69,6 +69,7 @@ pub const OP_BP_SHELL_ATTACHED_WRITE: u32 = 0x6C;
 pub const OP_BP_SHELL_ATTACHED_READ_BYTE: u32 = 0x6D;
 pub const OP_BP_ENV_ALL: u32 = 0x6E;
 pub const OP_BP_FS_LIST_TREE: u32 = 0x6F;
+pub const OP_BP_FS_LIST_DIR: u32 = 0x81;
 pub const OP_BP_SOCKET_TCP_OPEN: u32 = 0x35;
 pub const OP_BP_SOCKET_TCP_CLOSE: u32 = 0x36;
 pub const OP_BP_SOCKET_TCP_SET_NONBLOCKING: u32 = 0x37;

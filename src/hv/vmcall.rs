@@ -56,6 +56,7 @@ pub const OP_BP_SHELL_ATTACHED_WRITE: u32 = 0x6C; // payload bytes -> attached s
 pub const OP_BP_SHELL_ATTACHED_READ_BYTE: u32 = 0x6D; // response is byte or u64::MAX
 pub const OP_BP_ENV_ALL: u32 = 0x6E; // response payload is newline-separated key=value text
 pub const OP_BP_FS_LIST_TREE: u32 = 0x6F; // payload path -> response payload tree text
+pub const OP_BP_FS_LIST_DIR: u32 = 0x81; // arg0 offset, arg1 cap; payload path -> newline children
 pub const OP_BP_SOCKET_TCP_OPEN: u32 = 0x35; // arg0 domain/type, arg1 protocol -> socket/rc
 pub const OP_BP_SOCKET_TCP_CLOSE: u32 = 0x36; // arg0 socket -> rc
 pub const OP_BP_SOCKET_TCP_SET_NONBLOCKING: u32 = 0x37; // arg0 socket, arg1 bool -> rc
@@ -680,6 +681,45 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 (&mut (&mut (*p).payload)[..out_n]).copy_from_slice(&bytes[..out_n]);
             }
             write_response(vm_id, seq, STATUS_OK, bytes.len() as u64, out_n as u32);
+            DispatchOutcome::Resume
+        }
+        OP_BP_FS_LIST_DIR => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let path_bytes = unsafe { &(&(*p).payload)[..n] };
+            let Ok(path) = core::str::from_utf8(path_bytes) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_UTF8 as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let text = match crate::r::io::cabi::fs_list_dir_host_text(path) {
+                Ok(text) => text,
+                Err(rc) => {
+                    write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+                    return DispatchOutcome::Resume;
+                }
+            };
+            if arg1 == 0 {
+                write_response(vm_id, seq, STATUS_OK, text.len() as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            let bytes = text.as_bytes();
+            let offset = core::cmp::min(arg0 as usize, bytes.len());
+            let want = core::cmp::min(arg1 as usize, PAYLOAD_CAP);
+            let end = core::cmp::min(offset.saturating_add(want), bytes.len());
+            let out_n = end.saturating_sub(offset);
+            unsafe {
+                (&mut (&mut (*p).payload)[..out_n]).copy_from_slice(&bytes[offset..end]);
+            }
+            write_response(vm_id, seq, STATUS_OK, out_n as u64, out_n as u32);
             DispatchOutcome::Resume
         }
         OP_BP_FS_READ_FILE => {

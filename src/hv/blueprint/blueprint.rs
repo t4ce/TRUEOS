@@ -341,6 +341,10 @@ fn is_rustc_runtime_import(name: &str) -> bool {
         || rustc_tail.contains("___rust_no_alloc_shim_is_unstable")
 }
 
+pub(crate) fn is_joker_import(name: &str) -> bool {
+    is_rustc_runtime_import(name)
+}
+
 fn portal_logf(args: core::fmt::Arguments<'_>) {
     if crate::logflag::PORTAL_LOGS {
         crate::log!("{}\n", args);
@@ -1307,6 +1311,7 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "readdir_r" => Some(crate::std_abi_shim::readdir_r as *const () as usize),
         "closedir" => Some(crate::std_abi_shim::closedir as *const () as usize),
         "dirfd" => Some(crate::std_abi_shim::dirfd as *const () as usize),
+        "mkdir" => Some(crate::std_abi_shim::mkdir as *const () as usize),
         "unlink" => Some(crate::std_abi_shim::unlink as *const () as usize),
         "readlink" => Some(crate::std_abi_shim::readlink as *const () as usize),
         "realpath" => Some(crate::std_abi_shim::realpath as *const () as usize),
@@ -1317,7 +1322,14 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
             Some(crate::std_abi_shim::trueos_cabi_dns_resolve_ipv4 as *const () as usize)
         }
         "socket" => Some(crate::std_abi_shim::socket as *const () as usize),
+        "bind" => Some(crate::std_abi_shim::bind as *const () as usize),
+        "listen" => Some(crate::std_abi_shim::listen as *const () as usize),
+        "accept" => Some(crate::std_abi_shim::accept as *const () as usize),
+        "accept4" => Some(crate::std_abi_shim::accept4 as *const () as usize),
         "setsockopt" => Some(crate::std_abi_shim::setsockopt as *const () as usize),
+        "getsockname" => Some(crate::std_abi_shim::getsockname as *const () as usize),
+        "getpeername" => Some(crate::std_abi_shim::getpeername as *const () as usize),
+        "fcntl" => Some(crate::std_abi_shim::fcntl as *const () as usize),
         "send" => Some(crate::std_abi_shim::send as *const () as usize),
         "recv" => Some(crate::std_abi_shim::recv as *const () as usize),
         "posix_memalign" => Some(crate::std_abi_shim::posix_memalign as *const () as usize),
@@ -1608,8 +1620,10 @@ pub(crate) fn build_process_env(
     app_fs_root: Option<&str>,
 ) -> BTreeMap<String, String> {
     let mut vars = BTreeMap::new();
-    let app_home = String::from("/");
-    vars.insert(String::from("PWD"), String::from("/"));
+    let app_home = app_fs_root
+        .map(|root| alloc::format!("/{}", root.trim_matches('/')))
+        .unwrap_or_else(|| String::from("/"));
+    vars.insert(String::from("PWD"), app_home.clone());
     vars.insert(String::from("HOME"), app_home.clone());
     vars.insert(String::from("LANG"), String::from(crate::locale::current_language_code()));
     vars.insert(String::from("LANGUAGE"), String::from(crate::locale::current_language_code()));
