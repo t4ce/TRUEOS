@@ -54,7 +54,7 @@
 <polygon fill="#eef6ff" stroke="#4b8fc5" points="150.34,-527.4 28.87,-527.4 28.87,-483 156.34,-483 156.34,-521.4 150.34,-527.4"/>
 <polyline fill="none" stroke="#4b8fc5" points="150.34,-527.4 150.34,-521.4"/>
 <polyline fill="none" stroke="#4b8fc5" points="156.34,-521.4 150.34,-521.4"/>
-<text xml:space="preserve" text-anchor="start" x="38.23" y="-511.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">from parry2d&#45;v0.26.0.svg</text>
+<text xml:space="preserve" text-anchor="start" x="38.23" y="-511.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">from parry2d&#45;v0.26.1.svg</text>
 <text xml:space="preserve" text-anchor="start" x="82.11" y="-501.7" font-family="Inter,Arial" font-weight="bold" font-size="10.00" fill="#123d5c">libm</text>
 <text xml:space="preserve" text-anchor="start" x="79.11" y="-491.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">0.2.16</text>
 </g>

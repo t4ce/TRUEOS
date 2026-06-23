@@ -7,6 +7,10 @@ ARTIFACT_DIR = bld/artifacts/$(BUILD_MODE)-$(ARTIFACT_BUILD_ID)
 ARTIFACT_RUNTIME_ELF = $(ARTIFACT_DIR)/TRUEOS.elf
 ARTIFACT_DEBUG_ELF = $(ARTIFACT_DIR)/TRUEOS.full.elf
 ARTIFACT_BUILD_INFO = $(ARTIFACT_DIR)/BUILD_INFO
+PROVENANCE_DIR := bld/provenance
+PROVENANCE_LATEST := $(PROVENANCE_DIR)/latest.json
+PROVENANCE_LATEST_SOURCE_MANIFEST := $(PROVENANCE_DIR)/latest.source-files.sha256
+PROVENANCE_SCRIPT := tools/provenance_chain.py
 ISO_DIR := bld
 ISO_PATH := bld/trueos.iso
 ISO_BOOT_DIR := bld/iso-bootroot
@@ -73,6 +77,8 @@ CARGO_BUILD_FLAGS ?=
 CARGO_GFX_FLAGS =
 
 IMG_SIZE ?= 25G
+
+.PHONY: images empty-libs kernel artifacts limine baremetal-reboot-log iso provenance verify-provenance release dbg run
 
 images: $(NVME_IMG)
 
@@ -280,10 +286,23 @@ iso: artifacts images limine
 		-o $(ISO_PATH) $(ISO_BOOT_DIR)
 	$(MAKE) --no-print-directory baremetal-reboot-log
 
+provenance: iso
+	python3 $(PROVENANCE_SCRIPT) attest \
+		--source-root . \
+		--out-dir $(PROVENANCE_DIR) \
+		--elf $(ARTIFACT_RUNTIME_ELF) \
+		--debug-elf $(ARTIFACT_DEBUG_ELF) \
+		--iso $(ISO_PATH) \
+		--build-info $(ARTIFACT_BUILD_INFO)
+
+verify-provenance:
+	python3 $(PROVENANCE_SCRIPT) verify \
+		--source-root . \
+		--record $(PROVENANCE_LATEST)
 
 release: BUILD_MODE := release
 release: CARGO_BUILD_FLAGS += --release
-release: iso
+release: provenance
 	@if [ -z "$(OVMF_BUNDLE_PATH)" ] || [ ! -f "$(OVMF_BUNDLE_PATH)" ]; then \
 		echo "error: no OVMF firmware found to bundle"; \
 		echo "       install OVMF/edk2-ovmf or run: make release OVMF_BUNDLE_PATH=/path/to/ovmf-code-x86_64.fd"; \
@@ -293,6 +312,11 @@ release: iso
 	rm -f $(RELEASE_ARCHIVE)
 	mkdir -p $(RELEASE_BUNDLE_DIR)
 	cp $(ISO_PATH) $(RELEASE_BUNDLE_DIR)/trueos.iso
+	cp $(PROVENANCE_LATEST) $(RELEASE_BUNDLE_DIR)/TRUEOS.provenance.json
+	cp $(PROVENANCE_LATEST_SOURCE_MANIFEST) $(RELEASE_BUNDLE_DIR)/TRUEOS.source-files.sha256
+	@manifest_name=$$(python3 -c 'import json; print(json.load(open("$(PROVENANCE_LATEST)"))["source_manifest"]["path"])'); \
+		cp "$(PROVENANCE_DIR)/$$manifest_name" "$(RELEASE_BUNDLE_DIR)/$$manifest_name"; \
+		printf '%s\n' "$$manifest_name" > "$(RELEASE_BUNDLE_DIR)/.provenance-manifest-name"
 	cp "$(OVMF_BUNDLE_PATH)" $(RELEASE_BUNDLE_DIR)/$(BUNDLED_OVMF_NAME)
 	cp tools/release/run-linux.sh $(RELEASE_BUNDLE_DIR)/run-linux.sh
 	cp tools/release/run-macos.sh $(RELEASE_BUNDLE_DIR)/run-macos.sh
@@ -301,7 +325,7 @@ release: iso
 		cp "$(OVMF_LICENSE_PATH)" $(RELEASE_BUNDLE_DIR)/OVMF-LICENSE.txt; \
 	fi
 	chmod +x $(RELEASE_BUNDLE_DIR)/run-linux.sh $(RELEASE_BUNDLE_DIR)/run-macos.sh
-	cd $(RELEASE_BUNDLE_DIR) && 7z a -t7z $(UPDATE_7Z_FLAGS) ../$(notdir $(RELEASE_ARCHIVE)) trueos.iso $(BUNDLED_OVMF_NAME) run-linux.sh run-macos.sh README-RUN.txt $$(test -f OVMF-LICENSE.txt && printf '%s' OVMF-LICENSE.txt)
+	cd $(RELEASE_BUNDLE_DIR) && 7z a -t7z $(UPDATE_7Z_FLAGS) ../$(notdir $(RELEASE_ARCHIVE)) trueos.iso TRUEOS.provenance.json TRUEOS.source-files.sha256 $$(cat .provenance-manifest-name) $(BUNDLED_OVMF_NAME) run-linux.sh run-macos.sh README-RUN.txt $$(test -f OVMF-LICENSE.txt && printf '%s' OVMF-LICENSE.txt)
 	env -u GIO_MODULE_DIR gio mount smb://t4ce@pdjb/home-share || true
 	env -u GIO_MODULE_DIR gio copy $(RELEASE_ARCHIVE) smb://t4ce@pdjb/home-share/TRUEOS_SITE/
 

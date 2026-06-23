@@ -35,7 +35,7 @@
 <text xml:space="preserve" text-anchor="start" x="203.83" y="-117.7" font-family="Inter,Arial" font-weight="bold" font-size="10.00" fill="#614000">bit_field</text>
 <text xml:space="preserve" text-anchor="start" x="209.08" y="-107.7" font-family="Inter,Arial" font-size="10.00" fill="#614000">0.10.3</text>
 <text xml:space="preserve" text-anchor="start" x="205.33" y="-97.7" font-family="Inter,Arial" font-weight="bold" font-size="10.00" fill="#614000">bitflags</text>
-<text xml:space="preserve" text-anchor="start" x="209.08" y="-87.7" font-family="Inter,Arial" font-size="10.00" fill="#614000">2.11.1</text>
+<text xml:space="preserve" text-anchor="start" x="209.08" y="-87.7" font-family="Inter,Arial" font-size="10.00" fill="#614000">2.13.0</text>
 </g>
 <!-- n0&#45;&gt;out0 -->
 <g id="edge1" class="edge">

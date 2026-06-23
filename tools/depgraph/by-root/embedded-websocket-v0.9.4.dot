@@ -38,7 +38,7 @@ digraph "embedded-websocket-v0.9.4" {
   in10 [label=<from rustls-rustcrypto-v0.0.2-alpha.svg<BR/><B>subtle</B><BR/>2.6.1<BR/><B>digest</B><BR/>0.10.7>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in10 -> n3 [style=dashed, color="#4b8fc5"];
   in10 -> n5 [style=dashed, color="#4b8fc5"];
-  in11 [label=<from rustls-v0.23.40.svg<BR/><B>subtle</B><BR/>2.6.1>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in11 [label=<from rustls-v0.23.41.svg<BR/><B>subtle</B><BR/>2.6.1>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in11 -> n5 [style=dashed, color="#4b8fc5"];
   in12 [label=<from sha1-v0.10.6.svg<BR/><B>digest</B><BR/>0.10.7>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in12 -> n3 [style=dashed, color="#4b8fc5"];
@@ -46,4 +46,5 @@ digraph "embedded-websocket-v0.9.4" {
   in13 -> n3 [style=dashed, color="#4b8fc5"];
   // collapsed leaf ends: 0
   // centered two-input leaves: 0
+  // nested two-input leaves: 0
 }

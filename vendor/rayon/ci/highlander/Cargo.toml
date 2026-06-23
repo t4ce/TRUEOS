@@ -1,0 +1,13 @@
+[package]
+edition = "2024"
+name = "highlander"
+description = "There Can Be Only One"
+publish = false
+
+[dependencies.alt-core]
+optional = false
+path = "../alt-core"
+
+[dependencies.rayon-core]
+optional = false
+path = "../../rayon-core"

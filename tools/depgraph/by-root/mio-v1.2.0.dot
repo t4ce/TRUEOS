@@ -11,4 +11,5 @@ digraph "mio-v1.2.0" {
   n0 -> out2 [style=dashed, color="#d19922"];
   // collapsed leaf ends: 0
   // centered two-input leaves: 0
+  // nested two-input leaves: 0
 }

@@ -7,14 +7,13 @@ digraph "usvg-v0.45.1" {
   n0 -> out0 [style=dashed, color="#d19922"];
   out1 [label=<to kurbo-v0.11.3.svg<BR/><B>kurbo</B><BR/>0.11.3<BR/>/vendor/kurbo-0.11.3>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out1 [style=dashed, color="#d19922"];
-  out2 [label=<to log-v0.4.29.svg<BR/><B>log</B><BR/>0.4.29>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  out2 [label=<to tiny-skia-path-v0.11.4.svg<BR/><B>strict-num</B><BR/>0.1.1<BR/><B>tiny-skia-path</B><BR/>0.11.4>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out2 [style=dashed, color="#d19922"];
-  out3 [label=<to tiny-skia-path-v0.11.4.svg<BR/><B>strict-num</B><BR/>0.1.1<BR/><B>tiny-skia-path</B><BR/>0.11.4>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  out3 [label=<to trueos-qjs-v0.1.0.svg<BR/><B>data-url</B><BR/>0.3.2<BR/><B>imagesize</B><BR/>0.13.0<BR/>/vendor/imagesize-0.13.0<BR/><B>roxmltree</B><BR/>0.20.0<BR/><B>simplecss</B><BR/>0.2.2<BR/><B>siphasher</B><BR/>1.0.3<BR/><B>svgtypes</B><BR/>0.15.3<BR/>/vendor/svgtypes-0.15.3<BR/><B>xmlwriter</B><BR/>0.1.0<BR/>/vendor/xmlwriter-0.1.0>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out3 [style=dashed, color="#d19922"];
-  out4 [label=<to trueos-qjs-v0.1.0.svg<BR/><B>data-url</B><BR/>0.3.2<BR/><B>imagesize</B><BR/>0.13.0<BR/>/vendor/imagesize-0.13.0<BR/><B>roxmltree</B><BR/>0.20.0<BR/><B>simplecss</B><BR/>0.2.2<BR/><B>siphasher</B><BR/>1.0.3<BR/><B>svgtypes</B><BR/>0.15.3<BR/>/vendor/svgtypes-0.15.3<BR/><B>xmlwriter</B><BR/>0.1.0<BR/>/vendor/xmlwriter-0.1.0>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
-  n0 -> out4 [style=dashed, color="#d19922"];
-  in5 [label=<from trueos-qjs-v0.1.0.svg<BR/><B>usvg</B><BR/>0.45.1<BR/>/vendor/usvg-0.45.1>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
-  in5 -> n0 [style=dashed, color="#4b8fc5"];
+  in4 [label=<from trueos-qjs-v0.1.0.svg<BR/><B>usvg</B><BR/>0.45.1<BR/>/vendor/usvg-0.45.1>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in4 -> n0 [style=dashed, color="#4b8fc5"];
   // collapsed leaf ends: 0
   // centered two-input leaves: 0
+  // nested two-input leaves: 0
 }

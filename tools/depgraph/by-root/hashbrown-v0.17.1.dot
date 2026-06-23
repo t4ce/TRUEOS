@@ -7,8 +7,9 @@ digraph "hashbrown-v0.17.1" {
   n0 -> n1;
   in0 [label=<from hyper-v1.9.0.svg<BR/><B>hashbrown</B><BR/>0.17.1>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in0 -> n0 [style=dashed, color="#4b8fc5"];
-  in1 [label=<from parry2d-v0.26.0.svg<BR/><B>foldhash</B><BR/>0.2.0>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in1 [label=<from parry2d-v0.26.1.svg<BR/><B>foldhash</B><BR/>0.2.0>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in1 -> n1 [style=dashed, color="#4b8fc5"];
   // collapsed leaf ends: 0
   // centered two-input leaves: 0
+  // nested two-input leaves: 0
 }

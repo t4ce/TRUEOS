@@ -7,10 +7,11 @@ digraph "lyon_geom-v1.0.19" {
   n0 -> out0 [style=dashed, color="#d19922"];
   out1 [label=<to euclid-v0.22.13.svg<BR/><B>euclid</B><BR/>0.22.13>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out1 [style=dashed, color="#d19922"];
-  out2 [label=<to kurbo-v0.11.3.svg<BR/><B>arrayvec</B><BR/>0.7.6>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  out2 [label=<to kurbo-v0.11.3.svg<BR/><B>arrayvec</B><BR/>0.7.7>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out2 [style=dashed, color="#d19922"];
   in3 [label=<from lyon_tessellation-v1.0.20.svg<BR/><B>lyon_geom</B><BR/>1.0.19>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in3 -> n0 [style=dashed, color="#4b8fc5"];
   // collapsed leaf ends: 0
   // centered two-input leaves: 0
+  // nested two-input leaves: 0
 }

@@ -1,9 +1,8 @@
 #[cfg(target_arch = "x86_64")]
 use core::sync::atomic::{AtomicU8, Ordering};
-use memchr::memchr;
+use memchr::{memchr, memmem};
 #[cfg(target_arch = "x86_64")]
 use raw_cpuid::CpuId;
-use twoway::find_str as twoway_find_str;
 
 #[cfg(target_arch = "x86_64")]
 static SSE42_SUPPORTED: AtomicU8 = AtomicU8::new(0);
@@ -36,11 +35,7 @@ pub fn find_str(haystack: &str, needle: &str) -> Option<usize> {
         return Some(idx);
     }
 
-    if let Some(idx) = twoway_find_str(haystack, needle) {
-        return Some(idx);
-    }
-
-    haystack.find(needle)
+    memmem::find(haystack.as_bytes(), needle.as_bytes())
 }
 
 #[cfg(target_arch = "x86_64")]

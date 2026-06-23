@@ -9,4 +9,5 @@ digraph "hmac-v0.12.1" {
   in1 -> n0 [style=dashed, color="#4b8fc5"];
   // collapsed leaf ends: 0
   // centered two-input leaves: 0
+  // nested two-input leaves: 0
 }
