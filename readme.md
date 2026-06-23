@@ -68,6 +68,26 @@ export CC_aarch64_unknown_none=aarch64-linux-gnu-gcc
 export AR_aarch64_unknown_none=aarch64-linux-gnu-ar
 ```
 
+### ELF/ISO provenance hash chain
+
+`make provenance` builds the ISO and writes a tamper-evident record under
+`bld/provenance/`. The record chains:
+
+- the previous provenance record hash;
+- the current source tree manifest hash;
+- the runtime ELF, debug ELF, and ISO SHA-256 hashes;
+- selected build info, tool versions, git status, submodule status, and relevant
+  build environment variables.
+
+```bash
+make provenance
+make verify-provenance
+```
+
+The head of the local chain is `bld/provenance/latest.json`. For a public
+release, publish or sign the printed `record_sha256`; that hash is the compact
+anchor for "these source files produced this ELF and this ISO".
+
 ## on MAC
 > [!TIP]
 > We were able to build, with a MAC Laptop aswell.
@@ -548,8 +568,8 @@ ConWhite 	FF_FF_FF
   ![aml v0.16.4.svg](tools/depgraph/by-root/aml-v0.16.4.svg)
 - `tools/depgraph/by-root/base64-v0.22.1.svg`  
   ![base64 v0.22.1.svg](tools/depgraph/by-root/base64-v0.22.1.svg)
-- `tools/depgraph/by-root/bytes-v1.11.1.svg`  
-  ![bytes v1.11.1.svg](tools/depgraph/by-root/bytes-v1.11.1.svg)
+- `tools/depgraph/by-root/bytes-v1.12.0.svg`  
+  ![bytes v1.12.0.svg](tools/depgraph/by-root/bytes-v1.12.0.svg)
 - `tools/depgraph/by-root/core3-v0.1.2.svg`  
   ![core3 v0.1.2.svg](tools/depgraph/by-root/core3-v0.1.2.svg)
 - `tools/depgraph/by-root/crab-usb-v0.9.1.svg`  
@@ -588,24 +608,24 @@ ConWhite 	FF_FF_FF
   ![kurbo v0.11.3.svg](tools/depgraph/by-root/kurbo-v0.11.3.svg)
 - `tools/depgraph/by-root/libm-v0.2.16.svg`  
   ![libm v0.2.16.svg](tools/depgraph/by-root/libm-v0.2.16.svg)
-- `tools/depgraph/by-root/limine-v0.6.3.svg`  
-  ![limine v0.6.3.svg](tools/depgraph/by-root/limine-v0.6.3.svg)
-- `tools/depgraph/by-root/log-v0.4.29.svg`  
-  ![log v0.4.29.svg](tools/depgraph/by-root/log-v0.4.29.svg)
+- `tools/depgraph/by-root/limine-v0.6.5.svg`  
+  ![limine v0.6.5.svg](tools/depgraph/by-root/limine-v0.6.5.svg)
+- `tools/depgraph/by-root/log-v0.4.33.svg`  
+  ![log v0.4.33.svg](tools/depgraph/by-root/log-v0.4.33.svg)
 - `tools/depgraph/by-root/lyon_geom-v1.0.19.svg`  
   ![lyon geom v1.0.19.svg](tools/depgraph/by-root/lyon_geom-v1.0.19.svg)
 - `tools/depgraph/by-root/lyon_tessellation-v1.0.20.svg`  
   ![lyon tessellation v1.0.20.svg](tools/depgraph/by-root/lyon_tessellation-v1.0.20.svg)
-- `tools/depgraph/by-root/lzma-rust2-v0.16.2.svg`  
-  ![lzma rust2 v0.16.2.svg](tools/depgraph/by-root/lzma-rust2-v0.16.2.svg)
-- `tools/depgraph/by-root/memchr-v2.8.0.svg`  
-  ![memchr v2.8.0.svg](tools/depgraph/by-root/memchr-v2.8.0.svg)
+- `tools/depgraph/by-root/lzma-rust2-v0.16.4.svg`  
+  ![lzma rust2 v0.16.4.svg](tools/depgraph/by-root/lzma-rust2-v0.16.4.svg)
+- `tools/depgraph/by-root/memchr-v2.8.2.svg`  
+  ![memchr v2.8.2.svg](tools/depgraph/by-root/memchr-v2.8.2.svg)
 - `tools/depgraph/by-root/miniz_oxide-v0.9.1.svg`  
   ![miniz oxide v0.9.1.svg](tools/depgraph/by-root/miniz_oxide-v0.9.1.svg)
 - `tools/depgraph/by-root/mio-v1.2.0.svg`  
   ![mio v1.2.0.svg](tools/depgraph/by-root/mio-v1.2.0.svg)
-- `tools/depgraph/by-root/parry2d-v0.26.0.svg`  
-  ![parry2d v0.26.0.svg](tools/depgraph/by-root/parry2d-v0.26.0.svg)
+- `tools/depgraph/by-root/parry2d-v0.26.1.svg`  
+  ![parry2d v0.26.1.svg](tools/depgraph/by-root/parry2d-v0.26.1.svg)
 - `tools/depgraph/by-root/png-v0.18.1.svg`  
   ![png v0.18.1.svg](tools/depgraph/by-root/png-v0.18.1.svg)
 - `tools/depgraph/by-root/pure_vorbis-v0.0.1.svg`  
@@ -624,12 +644,12 @@ ConWhite 	FF_FF_FF
   ![rsa v0.9.10.svg](tools/depgraph/by-root/rsa-v0.9.10.svg)
 - `tools/depgraph/by-root/rustls-rustcrypto-v0.0.2-alpha.svg`  
   ![rustls rustcrypto v0.0.2 alpha.svg](tools/depgraph/by-root/rustls-rustcrypto-v0.0.2-alpha.svg)
-- `tools/depgraph/by-root/rustls-v0.23.40.svg`  
-  ![rustls v0.23.40.svg](tools/depgraph/by-root/rustls-v0.23.40.svg)
+- `tools/depgraph/by-root/rustls-v0.23.41.svg`  
+  ![rustls v0.23.41.svg](tools/depgraph/by-root/rustls-v0.23.41.svg)
 - `tools/depgraph/by-root/serde-v1.0.228.svg`  
   ![serde v1.0.228.svg](tools/depgraph/by-root/serde-v1.0.228.svg)
-- `tools/depgraph/by-root/serde_json-v1.0.149.svg`  
-  ![serde json v1.0.149.svg](tools/depgraph/by-root/serde_json-v1.0.149.svg)
+- `tools/depgraph/by-root/serde_json-v1.0.150.svg`  
+  ![serde json v1.0.150.svg](tools/depgraph/by-root/serde_json-v1.0.150.svg)
 - `tools/depgraph/by-root/sha1-v0.10.6.svg`  
   ![sha1 v0.10.6.svg](tools/depgraph/by-root/sha1-v0.10.6.svg)
 - `tools/depgraph/by-root/sha2-v0.10.9.svg`  
@@ -670,20 +690,18 @@ ConWhite 	FF_FF_FF
   ![trueos silk v0.1.0.svg](tools/depgraph/by-root/trueos-silk-v0.1.0.svg)
 - `tools/depgraph/by-root/trueos-vm-v0.1.0.svg`  
   ![trueos vm v0.1.0.svg](tools/depgraph/by-root/trueos-vm-v0.1.0.svg)
-- `tools/depgraph/by-root/twoway-v0.2.2.svg`  
-  ![twoway v0.2.2.svg](tools/depgraph/by-root/twoway-v0.2.2.svg)
-- `tools/depgraph/by-root/unicode-segmentation-v1.13.2.svg`  
-  ![unicode segmentation v1.13.2.svg](tools/depgraph/by-root/unicode-segmentation-v1.13.2.svg)
+- `tools/depgraph/by-root/unicode-segmentation-v1.13.3.svg`  
+  ![unicode segmentation v1.13.3.svg](tools/depgraph/by-root/unicode-segmentation-v1.13.3.svg)
 - `tools/depgraph/by-root/usvg-v0.45.1.svg`  
   ![usvg v0.45.1.svg](tools/depgraph/by-root/usvg-v0.45.1.svg)
 - `tools/depgraph/by-root/v-v0.1.0.svg`  
   ![v v0.1.0.svg](tools/depgraph/by-root/v-v0.1.0.svg)
-- `tools/depgraph/by-root/webpki-roots-v1.0.7.svg`  
-  ![webpki roots v1.0.7.svg](tools/depgraph/by-root/webpki-roots-v1.0.7.svg)
+- `tools/depgraph/by-root/webpki-roots-v1.0.8.svg`  
+  ![webpki roots v1.0.8.svg](tools/depgraph/by-root/webpki-roots-v1.0.8.svg)
 - `tools/depgraph/by-root/x86_64-v0.15.4.svg`  
   ![x86 64 v0.15.4.svg](tools/depgraph/by-root/x86_64-v0.15.4.svg)
-- `tools/depgraph/by-root/zeroize-v1.8.2.svg`  
-  ![zeroize v1.8.2.svg](tools/depgraph/by-root/zeroize-v1.8.2.svg)
+- `tools/depgraph/by-root/zeroize-v1.9.0.svg`  
+  ![zeroize v1.9.0.svg](tools/depgraph/by-root/zeroize-v1.9.0.svg)
 - `tools/depgraph/by-root/zune-core-v0.5.1.svg`  
   ![zune core v0.5.1.svg](tools/depgraph/by-root/zune-core-v0.5.1.svg)
 - `tools/depgraph/by-root/zune-jpeg-v0.5.15.svg`  

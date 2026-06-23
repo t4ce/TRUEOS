@@ -16,4 +16,5 @@ digraph "symphonia-codec-aac-v0.5.5" {
   in4 -> n1 [style=dashed, color="#4b8fc5"];
   // collapsed leaf ends: 0
   // centered two-input leaves: 0
+  // nested two-input leaves: 0
 }

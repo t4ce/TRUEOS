@@ -24,7 +24,7 @@
 <polyline fill="none" stroke="#d19922" points="218.44,-38.4 212.44,-38.4"/>
 <text xml:space="preserve" text-anchor="start" x="131.08" y="-28.7" font-family="Inter,Arial" font-size="10.00" fill="#614000">to acpi&#45;v6.1.1.svg</text>
 <text xml:space="preserve" text-anchor="start" x="152.83" y="-18.7" font-family="Inter,Arial" font-weight="bold" font-size="10.00" fill="#614000">bitflags</text>
-<text xml:space="preserve" text-anchor="start" x="156.58" y="-8.7" font-family="Inter,Arial" font-size="10.00" fill="#614000">2.11.1</text>
+<text xml:space="preserve" text-anchor="start" x="156.58" y="-8.7" font-family="Inter,Arial" font-size="10.00" fill="#614000">2.13.0</text>
 </g>
 <!-- n0&#45;&gt;out0 -->
 <g id="edge1" class="edge">

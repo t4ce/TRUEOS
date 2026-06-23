@@ -4,10 +4,11 @@ digraph "x86_64-v0.15.4" {
   edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];
   n0 [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="0"><TR><TD><FONT POINT-SIZE="13"><B>x86_64</B></FONT></TD></TR>
 <TR><TD><FONT POINT-SIZE="12">0.15.4</FONT></TD></TR><TR><TD><TABLE BORDER="0" CELLBORDER="0" CELLSPACING="6" CELLPADDING="0"><TR><TD><TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="8" COLOR="#9aa8b8" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="11"><B>const_fn</B></FONT> <FONT POINT-SIZE="10">0.4.12</FONT><BR/><FONT POINT-SIZE="9">proc-macro</FONT></TD></TR></TABLE></TD></TR><TR><TD><TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="8" COLOR="#9aa8b8" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="11"><B>volatile</B></FONT> <FONT POINT-SIZE="10">0.4.6</FONT></TD></TR></TABLE></TD></TR></TABLE></TD></TR></TABLE>>, fillcolor="#dff3ff", color="#1b78a6"];
-  out0 [label=<to acpi-v6.1.1.svg<BR/><B>bit_field</B><BR/>0.10.3<BR/><B>bitflags</B><BR/>2.11.1>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  out0 [label=<to acpi-v6.1.1.svg<BR/><B>bit_field</B><BR/>0.10.3<BR/><B>bitflags</B><BR/>2.13.0>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out0 [style=dashed, color="#d19922"];
   out1 [label=<to crab-usb-v0.9.1.svg<BR/><B>rustversion</B><BR/>1.0.22<BR/>proc-macro>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out1 [style=dashed, color="#d19922"];
   // collapsed leaf ends: 2
   // centered two-input leaves: 0
+  // nested two-input leaves: 0
 }

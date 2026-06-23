@@ -6,17 +6,17 @@ Each SVG expands one direct dependency of the TRUEOS root. Blue note nodes are i
 
 | Root dependency | SVG | Owned nodes | Input images | Output images |
 | --- | --- | ---: | ---: | ---: |
-| acpi<br>6.1.1 | [`acpi-v6.1.1.svg`](acpi-v6.1.1.svg) | 8 | 11 | 1 |
+| acpi<br>6.1.1 | [`acpi-v6.1.1.svg`](acpi-v6.1.1.svg) | 8 | 11 | 0 |
 | aes<br>0.8.4 | [`aes-v0.8.4.svg`](aes-v0.8.4.svg) | 14 | 15 | 1 |
 | alsa<br>0.11.0<br>/vendor/alsa-0.11.0 | [`alsa-v0.11.0.svg`](alsa-v0.11.0.svg) | 1 | 0 | 2 |
-| aml<br>0.16.4<br>/vendor/aml-0.16.4 | [`aml-v0.16.4.svg`](aml-v0.16.4.svg) | 6 | 0 | 2 |
+| aml<br>0.16.4<br>/vendor/aml-0.16.4 | [`aml-v0.16.4.svg`](aml-v0.16.4.svg) | 6 | 0 | 1 |
 | base64<br>0.22.1<br>/vendor/base64-0.22.1 | [`base64-v0.22.1.svg`](base64-v0.22.1.svg) | 1 | 2 | 0 |
-| bytes<br>1.11.1 | [`bytes-v1.11.1.svg`](bytes-v1.11.1.svg) | 1 | 1 | 0 |
+| bytes<br>1.12.0 | [`bytes-v1.12.0.svg`](bytes-v1.12.0.svg) | 1 | 1 | 0 |
 | core3<br>0.1.2 | [`core3-v0.1.2.svg`](core3-v0.1.2.svg) | 1 | 5 | 1 |
-| crab-usb<br>0.9.1<br>/vendor/CrabUSB/usb-host | [`crab-usb-v0.9.1.svg`](crab-usb-v0.9.1.svg) | 44 | 14 | 7 |
+| crab-usb<br>0.9.1<br>/vendor/CrabUSB/usb-host | [`crab-usb-v0.9.1.svg`](crab-usb-v0.9.1.svg) | 44 | 14 | 6 |
 | crc32fast<br>1.5.0<br>/vendor/crc32fast-1.5.0 | [`crc32fast-v1.5.0.svg`](crc32fast-v1.5.0.svg) | 1 | 1 | 1 |
 | ctr<br>0.9.2 | [`ctr-v0.9.2.svg`](ctr-v0.9.2.svg) | 1 | 1 | 1 |
-| dma-api<br>0.7.3<br>/vendor/dma-api-0.7.3 | [`dma-api-v0.7.3.svg`](dma-api-v0.7.3.svg) | 1 | 1 | 4 |
+| dma-api<br>0.7.3<br>/vendor/dma-api-0.7.3 | [`dma-api-v0.7.3.svg`](dma-api-v0.7.3.svg) | 1 | 1 | 3 |
 | embassy-executor<br>0.10.0<br>/crates/trueos-executor | [`embassy-executor-v0.10.0.svg`](embassy-executor-v0.10.0.svg) | 13 | 3 | 1 |
 | embassy-sync<br>0.8.0 | [`embassy-sync-v0.8.0.svg`](embassy-sync-v0.8.0.svg) | 4 | 3 | 6 |
 | embassy-time<br>0.5.1<br>/vendor/embassy-time-0.5.1-trueos | [`embassy-time-v0.5.1.svg`](embassy-time-v0.5.1.svg) | 1 | 2 | 2 |
@@ -31,16 +31,15 @@ Each SVG expands one direct dependency of the TRUEOS root. Blue note nodes are i
 | hyper<br>1.9.0<br>/vendor/hyper-1.9.0 | [`hyper-v1.9.0.svg`](hyper-v1.9.0.svg) | 9 | 4 | 5 |
 | kurbo<br>0.11.3<br>/vendor/kurbo-0.11.3 | [`kurbo-v0.11.3.svg`](kurbo-v0.11.3.svg) | 2 | 4 | 2 |
 | libm<br>0.2.16 | [`libm-v0.2.16.svg`](libm-v0.2.16.svg) | 1 | 10 | 0 |
-| limine<br>0.6.3 | [`limine-v0.6.3.svg`](limine-v0.6.3.svg) | 1 | 0 | 0 |
-| log<br>0.4.29 | [`log-v0.4.29.svg`](log-v0.4.29.svg) | 1 | 8 | 0 |
+| limine<br>0.6.5 | [`limine-v0.6.5.svg`](limine-v0.6.5.svg) | 1 | 0 | 0 |
 | lyon_geom<br>1.0.19 | [`lyon_geom-v1.0.19.svg`](lyon_geom-v1.0.19.svg) | 1 | 1 | 3 |
 | lyon_tessellation<br>1.0.20 | [`lyon_tessellation-v1.0.20.svg`](lyon_tessellation-v1.0.20.svg) | 3 | 0 | 2 |
-| lzma-rust2<br>0.16.2 | [`lzma-rust2-v0.16.2.svg`](lzma-rust2-v0.16.2.svg) | 1 | 0 | 0 |
-| memchr<br>2.8.0 | [`memchr-v2.8.0.svg`](memchr-v2.8.0.svg) | 1 | 3 | 0 |
+| lzma-rust2<br>0.16.4 | [`lzma-rust2-v0.16.4.svg`](lzma-rust2-v0.16.4.svg) | 1 | 0 | 0 |
+| memchr<br>2.8.2 | [`memchr-v2.8.2.svg`](memchr-v2.8.2.svg) | 1 | 2 | 0 |
 | miniz_oxide<br>0.9.1 | [`miniz_oxide-v0.9.1.svg`](miniz_oxide-v0.9.1.svg) | 2 | 1 | 0 |
 | mio<br>1.2.0<br>/vendor/mio-1.2.0 | [`mio-v1.2.0.svg`](mio-v1.2.0.svg) | 1 | 0 | 3 |
-| parry2d<br>0.26.0 | [`parry2d-v0.26.0.svg`](parry2d-v0.26.0.svg) | 9 | 1 | 7 |
-| png<br>0.18.1<br>/vendor/png-0.18.1 | [`png-v0.18.1.svg`](png-v0.18.1.svg) | 3 | 0 | 5 |
+| parry2d<br>0.26.1 | [`parry2d-v0.26.1.svg`](parry2d-v0.26.1.svg) | 9 | 1 | 6 |
+| png<br>0.18.1<br>/vendor/png-0.18.1 | [`png-v0.18.1.svg`](png-v0.18.1.svg) | 3 | 0 | 4 |
 | pure_vorbis<br>0.0.1<br>/vendor/pure_vorbis-0.0.1 | [`pure_vorbis-v0.0.1.svg`](pure_vorbis-v0.0.1.svg) | 1 | 0 | 1 |
 | rand_chacha<br>0.3.1 | [`rand_chacha-v0.3.1.svg`](rand_chacha-v0.3.1.svg) | 3 | 1 | 1 |
 | rand_core<br>0.6.4 | [`rand_core-v0.6.4.svg`](rand_core-v0.6.4.svg) | 1 | 5 | 1 |
@@ -48,10 +47,10 @@ Each SVG expands one direct dependency of the TRUEOS root. Blue note nodes are i
 | rdrand<br>0.8.3 | [`rdrand-v0.8.3.svg`](rdrand-v0.8.3.svg) | 1 | 0 | 1 |
 | regex-automata<br>0.4.14 | [`regex-automata-v0.4.14.svg`](regex-automata-v0.4.14.svg) | 2 | 0 | 0 |
 | rsa<br>0.9.10 | [`rsa-v0.9.10.svg`](rsa-v0.9.10.svg) | 14 | 3 | 9 |
-| rustls<br>0.23.40 | [`rustls-v0.23.40.svg`](rustls-v0.23.40.svg) | 4 | 2 | 3 |
+| rustls<br>0.23.41 | [`rustls-v0.23.41.svg`](rustls-v0.23.41.svg) | 4 | 2 | 3 |
 | rustls-rustcrypto<br>0.0.2-alpha<br>/vendor/rustls-rustcrypto-0.0.2-alpha | [`rustls-rustcrypto-v0.0.2-alpha.svg`](rustls-rustcrypto-v0.0.2-alpha.svg) | 27 | 0 | 10 |
 | serde<br>1.0.228 | [`serde-v1.0.228.svg`](serde-v1.0.228.svg) | 3 | 2 | 1 |
-| serde_json<br>1.0.149 | [`serde_json-v1.0.149.svg`](serde_json-v1.0.149.svg) | 2 | 1 | 3 |
+| serde_json<br>1.0.150 | [`serde_json-v1.0.150.svg`](serde_json-v1.0.150.svg) | 2 | 1 | 3 |
 | sha1<br>0.10.6 | [`sha1-v0.10.6.svg`](sha1-v0.10.6.svg) | 1 | 1 | 2 |
 | sha2<br>0.10.9 | [`sha2-v0.10.9.svg`](sha2-v0.10.9.svg) | 1 | 2 | 2 |
 | smoltcp<br>0.13.1<br>/vendor/smoltcp-0.13.1 | [`smoltcp-v0.13.1.svg`](smoltcp-v0.13.1.svg) | 2 | 0 | 3 |
@@ -69,18 +68,17 @@ Each SVG expands one direct dependency of the TRUEOS root. Blue note nodes are i
 | trueos-locale<br>0.1.0<br>/crates/trueos-locale | [`trueos-locale-v0.1.0.svg`](trueos-locale-v0.1.0.svg) | 1 | 1 | 0 |
 | trueos-lsd<br>1.1.5<br>/crates/trueos-lsd | [`trueos-lsd-v1.1.5.svg`](trueos-lsd-v1.1.5.svg) | 1 | 0 | 2 |
 | trueos-math<br>0.1.0<br>/crates/trueos-math | [`trueos-math-v0.1.0.svg`](trueos-math-v0.1.0.svg) | 1 | 1 | 1 |
-| trueos-qjs<br>0.1.0<br>/crates/trueos-qjs | [`trueos-qjs-v0.1.0.svg`](trueos-qjs-v0.1.0.svg) | 11 | 1 | 14 |
+| trueos-qjs<br>0.1.0<br>/crates/trueos-qjs | [`trueos-qjs-v0.1.0.svg`](trueos-qjs-v0.1.0.svg) | 11 | 1 | 13 |
 | trueos-silk<br>0.1.0<br>/crates/trueos-silk | [`trueos-silk-v0.1.0.svg`](trueos-silk-v0.1.0.svg) | 1 | 0 | 0 |
 | trueos-vm<br>0.1.0<br>/crates/trueos-vm | [`trueos-vm-v0.1.0.svg`](trueos-vm-v0.1.0.svg) | 1 | 0 | 1 |
-| twoway<br>0.2.2 | [`twoway-v0.2.2.svg`](twoway-v0.2.2.svg) | 2 | 0 | 1 |
-| unicode-segmentation<br>1.13.2 | [`unicode-segmentation-v1.13.2.svg`](unicode-segmentation-v1.13.2.svg) | 1 | 1 | 0 |
-| usvg<br>0.45.1<br>/vendor/usvg-0.45.1 | [`usvg-v0.45.1.svg`](usvg-v0.45.1.svg) | 1 | 1 | 5 |
+| unicode-segmentation<br>1.13.3 | [`unicode-segmentation-v1.13.3.svg`](unicode-segmentation-v1.13.3.svg) | 1 | 1 | 0 |
+| usvg<br>0.45.1<br>/vendor/usvg-0.45.1 | [`usvg-v0.45.1.svg`](usvg-v0.45.1.svg) | 1 | 1 | 4 |
 | v<br>0.1.0<br>/crates/trueos-v | [`v-v0.1.0.svg`](v-v0.1.0.svg) | 1 | 4 | 3 |
-| webpki-roots<br>1.0.7 | [`webpki-roots-v1.0.7.svg`](webpki-roots-v1.0.7.svg) | 1 | 0 | 1 |
+| webpki-roots<br>1.0.8 | [`webpki-roots-v1.0.8.svg`](webpki-roots-v1.0.8.svg) | 1 | 0 | 1 |
 | x86_64<br>0.15.4 | [`x86_64-v0.15.4.svg`](x86_64-v0.15.4.svg) | 3 | 0 | 2 |
-| zeroize<br>1.8.2 | [`zeroize-v1.8.2.svg`](zeroize-v1.8.2.svg) | 1 | 4 | 1 |
+| zeroize<br>1.9.0 | [`zeroize-v1.9.0.svg`](zeroize-v1.9.0.svg) | 1 | 4 | 1 |
 | zune-core<br>0.5.1<br>/vendor/zune-core-0.5.1 | [`zune-core-v0.5.1.svg`](zune-core-v0.5.1.svg) | 1 | 1 | 0 |
 | zune-jpeg<br>0.5.15<br>/vendor/zune-jpeg-0.5.15 | [`zune-jpeg-v0.5.15.svg`](zune-jpeg-v0.5.15.svg) | 1 | 0 | 1 |
 
-Total direct TRUEOS roots: 75
-Total owned nodes excluding TRUEOS root: 254
+Total direct TRUEOS roots: 73
+Total owned nodes excluding TRUEOS root: 251

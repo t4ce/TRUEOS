@@ -7,4 +7,5 @@ digraph "trueos-vm-v0.1.0" {
   n0 -> out0 [style=dashed, color="#d19922"];
   // collapsed leaf ends: 0
   // centered two-input leaves: 0
+  // nested two-input leaves: 0
 }

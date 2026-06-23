@@ -5,4 +5,5 @@ digraph "trueos-silk-v0.1.0" {
   n0 [label=<<FONT POINT-SIZE="13"><B>trueos-silk</B></FONT><BR/><FONT POINT-SIZE="12">0.1.0</FONT><BR/><FONT POINT-SIZE="11">/crates/trueos-silk</FONT>>, fillcolor="#dff3ff", color="#1b78a6"];
   // collapsed leaf ends: 0
   // centered two-input leaves: 0
+  // nested two-input leaves: 0
 }

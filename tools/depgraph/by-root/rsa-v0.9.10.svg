@@ -105,7 +105,7 @@
 <text xml:space="preserve" text-anchor="start" x="945.37" y="-750.5" font-family="Inter,Arial" font-size="10.00" fill="#614000">0.2.19</text>
 <text xml:space="preserve" text-anchor="start" x="904.49" y="-740.5" font-family="Inter,Arial" font-size="10.00" fill="#614000">/vendor/num&#45;traits&#45;0.2.19</text>
 <text xml:space="preserve" text-anchor="start" x="941.62" y="-730.5" font-family="Inter,Arial" font-weight="bold" font-size="10.00" fill="#614000">autocfg</text>
-<text xml:space="preserve" text-anchor="start" x="947.99" y="-720.5" font-family="Inter,Arial" font-size="10.00" fill="#614000">1.5.0</text>
+<text xml:space="preserve" text-anchor="start" x="947.99" y="-720.5" font-family="Inter,Arial" font-size="10.00" fill="#614000">1.5.1</text>
 </g>
 <!-- n0&#45;&gt;out0 -->
 <g id="edge25" class="edge">
@@ -171,9 +171,9 @@
 <polygon fill="#fff8e8" stroke="#d19922" points="1292.69,-291.2 1188.48,-291.2 1188.48,-246.8 1298.69,-246.8 1298.69,-285.2 1292.69,-291.2"/>
 <polyline fill="none" stroke="#d19922" points="1292.69,-291.2 1292.69,-285.2"/>
 <polyline fill="none" stroke="#d19922" points="1298.69,-285.2 1292.69,-285.2"/>
-<text xml:space="preserve" text-anchor="start" x="1197.84" y="-275.5" font-family="Inter,Arial" font-size="10.00" fill="#614000">to zeroize&#45;v1.8.2.svg</text>
+<text xml:space="preserve" text-anchor="start" x="1197.84" y="-275.5" font-family="Inter,Arial" font-size="10.00" fill="#614000">to zeroize&#45;v1.9.0.svg</text>
 <text xml:space="preserve" text-anchor="start" x="1226.71" y="-265.5" font-family="Inter,Arial" font-weight="bold" font-size="10.00" fill="#614000">zeroize</text>
-<text xml:space="preserve" text-anchor="start" x="1232.71" y="-255.5" font-family="Inter,Arial" font-size="10.00" fill="#614000">1.8.2</text>
+<text xml:space="preserve" text-anchor="start" x="1232.71" y="-255.5" font-family="Inter,Arial" font-size="10.00" fill="#614000">1.9.0</text>
 </g>
 <!-- n0&#45;&gt;out8 -->
 <g id="edge39" class="edge">
@@ -294,7 +294,7 @@
 <polyline fill="none" stroke="#d19922" points="664.78,-618.2 658.78,-618.2"/>
 <text xml:space="preserve" text-anchor="start" x="571.42" y="-608.5" font-family="Inter,Arial" font-size="10.00" fill="#614000">to hyper&#45;v1.9.0.svg</text>
 <text xml:space="preserve" text-anchor="start" x="592.8" y="-598.5" font-family="Inter,Arial" font-weight="bold" font-size="10.00" fill="#614000">smallvec</text>
-<text xml:space="preserve" text-anchor="start" x="599.92" y="-588.5" font-family="Inter,Arial" font-size="10.00" fill="#614000">1.15.1</text>
+<text xml:space="preserve" text-anchor="start" x="599.92" y="-588.5" font-family="Inter,Arial" font-size="10.00" fill="#614000">1.15.2</text>
 </g>
 <!-- n3&#45;&gt;out2 -->
 <g id="edge29" class="edge">

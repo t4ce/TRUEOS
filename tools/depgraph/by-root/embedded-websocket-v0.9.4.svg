@@ -291,7 +291,7 @@
 <polygon fill="#eef6ff" stroke="#4b8fc5" points="349.69,-584.4 231.22,-584.4 231.22,-540 355.69,-540 355.69,-578.4 349.69,-584.4"/>
 <polyline fill="none" stroke="#4b8fc5" points="349.69,-584.4 349.69,-578.4"/>
 <polyline fill="none" stroke="#4b8fc5" points="355.69,-578.4 349.69,-578.4"/>
-<text xml:space="preserve" text-anchor="start" x="240.58" y="-568.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">from rustls&#45;v0.23.40.svg</text>
+<text xml:space="preserve" text-anchor="start" x="240.58" y="-568.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">from rustls&#45;v0.23.41.svg</text>
 <text xml:space="preserve" text-anchor="start" x="279.21" y="-558.7" font-family="Inter,Arial" font-weight="bold" font-size="10.00" fill="#123d5c">subtle</text>
 <text xml:space="preserve" text-anchor="start" x="282.58" y="-548.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">2.6.1</text>
 </g>

@@ -22,7 +22,7 @@
 <title>n1</title>
 <path fill="#f7f9fb" stroke="#8b9bb0" d="M431.66,-179.9C431.66,-179.9 381.44,-179.9 381.44,-179.9 375.44,-179.9 369.44,-173.9 369.44,-167.9 369.44,-167.9 369.44,-152.5 369.44,-152.5 369.44,-146.5 375.44,-140.5 381.44,-140.5 381.44,-140.5 431.66,-140.5 431.66,-140.5 437.66,-140.5 443.66,-146.5 443.66,-152.5 443.66,-152.5 443.66,-167.9 443.66,-167.9 443.66,-173.9 437.66,-179.9 431.66,-179.9"/>
 <text xml:space="preserve" text-anchor="start" x="378.8" y="-161.35" font-family="Inter,Arial" font-weight="bold" font-size="13.00" fill="#172033">arrayvec</text>
-<text xml:space="preserve" text-anchor="start" x="393.42" y="-149.3" font-family="Inter,Arial" font-size="12.00" fill="#172033">0.7.6</text>
+<text xml:space="preserve" text-anchor="start" x="393.42" y="-149.3" font-family="Inter,Arial" font-size="12.00" fill="#172033">0.7.7</text>
 </g>
 <!-- n0&#45;&gt;n1 -->
 <g id="edge1" class="edge">
@@ -38,7 +38,7 @@
 <polyline fill="none" stroke="#d19922" points="457.91,-107.4 451.91,-107.4"/>
 <text xml:space="preserve" text-anchor="start" x="364.55" y="-97.7" font-family="Inter,Arial" font-size="10.00" fill="#614000">to hyper&#45;v1.9.0.svg</text>
 <text xml:space="preserve" text-anchor="start" x="385.92" y="-87.7" font-family="Inter,Arial" font-weight="bold" font-size="10.00" fill="#614000">smallvec</text>
-<text xml:space="preserve" text-anchor="start" x="393.05" y="-77.7" font-family="Inter,Arial" font-size="10.00" fill="#614000">1.15.1</text>
+<text xml:space="preserve" text-anchor="start" x="393.05" y="-77.7" font-family="Inter,Arial" font-size="10.00" fill="#614000">1.15.2</text>
 </g>
 <!-- n0&#45;&gt;out0 -->
 <g id="edge2" class="edge">
@@ -70,7 +70,7 @@
 <polyline fill="none" stroke="#4b8fc5" points="315.19,-245.4 309.19,-245.4"/>
 <text xml:space="preserve" text-anchor="start" x="182.08" y="-235.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">from lyon_geom&#45;v1.0.19.svg</text>
 <text xml:space="preserve" text-anchor="start" x="224.45" y="-225.7" font-family="Inter,Arial" font-weight="bold" font-size="10.00" fill="#123d5c">arrayvec</text>
-<text xml:space="preserve" text-anchor="start" x="233.08" y="-215.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">0.7.6</text>
+<text xml:space="preserve" text-anchor="start" x="233.08" y="-215.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">0.7.7</text>
 </g>
 <!-- in2&#45;&gt;n1 -->
 <g id="edge4" class="edge">
@@ -84,9 +84,9 @@
 <polygon fill="#eef6ff" stroke="#4b8fc5" points="301.69,-182.4 180.22,-182.4 180.22,-138 307.69,-138 307.69,-176.4 301.69,-182.4"/>
 <polyline fill="none" stroke="#4b8fc5" points="301.69,-182.4 301.69,-176.4"/>
 <polyline fill="none" stroke="#4b8fc5" points="307.69,-176.4 301.69,-176.4"/>
-<text xml:space="preserve" text-anchor="start" x="189.58" y="-166.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">from parry2d&#45;v0.26.0.svg</text>
+<text xml:space="preserve" text-anchor="start" x="189.58" y="-166.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">from parry2d&#45;v0.26.1.svg</text>
 <text xml:space="preserve" text-anchor="start" x="224.45" y="-156.7" font-family="Inter,Arial" font-weight="bold" font-size="10.00" fill="#123d5c">arrayvec</text>
-<text xml:space="preserve" text-anchor="start" x="233.08" y="-146.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">0.7.6</text>
+<text xml:space="preserve" text-anchor="start" x="233.08" y="-146.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">0.7.7</text>
 </g>
 <!-- in3&#45;&gt;n1 -->
 <g id="edge5" class="edge">

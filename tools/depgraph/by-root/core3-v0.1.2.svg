@@ -22,9 +22,9 @@
 <polygon fill="#fff8e8" stroke="#d19922" points="375.41,-182.4 267.44,-182.4 267.44,-138 381.41,-138 381.41,-176.4 375.41,-182.4"/>
 <polyline fill="none" stroke="#d19922" points="375.41,-182.4 375.41,-176.4"/>
 <polyline fill="none" stroke="#d19922" points="381.41,-176.4 375.41,-176.4"/>
-<text xml:space="preserve" text-anchor="start" x="276.8" y="-166.7" font-family="Inter,Arial" font-size="10.00" fill="#614000">to memchr&#45;v2.8.0.svg</text>
+<text xml:space="preserve" text-anchor="start" x="276.8" y="-166.7" font-family="Inter,Arial" font-size="10.00" fill="#614000">to memchr&#45;v2.8.2.svg</text>
 <text xml:space="preserve" text-anchor="start" x="305.3" y="-156.7" font-family="Inter,Arial" font-weight="bold" font-size="10.00" fill="#614000">memchr</text>
-<text xml:space="preserve" text-anchor="start" x="313.55" y="-146.7" font-family="Inter,Arial" font-size="10.00" fill="#614000">2.8.0</text>
+<text xml:space="preserve" text-anchor="start" x="313.55" y="-146.7" font-family="Inter,Arial" font-size="10.00" fill="#614000">2.8.2</text>
 </g>
 <!-- n0&#45;&gt;out0 -->
 <g id="edge1" class="edge">

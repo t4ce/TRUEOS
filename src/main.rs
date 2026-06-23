@@ -278,7 +278,7 @@ pub extern "C" fn kmain() -> ! {
     let sse42 = crate::r::pat::sse42_available();
     crate::log_info!(
         target: "boot";
-        "cpu-string-search: sse4.2={} pcmpestri={} fallback=twoway\n",
+        "cpu-string-search: sse4.2={} pcmpestri={} fallback=memmem\n",
         if sse42 { "yes" } else { "no" },
         if sse42 { "enabled" } else { "disabled" }
     );

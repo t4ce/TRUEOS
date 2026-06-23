@@ -3,7 +3,7 @@ digraph "core3-v0.1.2" {
   node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.13,0.10", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
   edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];
   n0 [label=<<FONT POINT-SIZE="13"><B>core3</B></FONT><BR/><FONT POINT-SIZE="12">0.1.2</FONT>>, fillcolor="#dff3ff", color="#1b78a6"];
-  out0 [label=<to memchr-v2.8.0.svg<BR/><B>memchr</B><BR/>2.8.0>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  out0 [label=<to memchr-v2.8.2.svg<BR/><B>memchr</B><BR/>2.8.2>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out0 [style=dashed, color="#d19922"];
   in1 [label=<from mio-v1.2.0.svg<BR/><B>core3</B><BR/>0.1.2>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in1 -> n0 [style=dashed, color="#4b8fc5"];
@@ -17,4 +17,5 @@ digraph "core3-v0.1.2" {
   in5 -> n0 [style=dashed, color="#4b8fc5"];
   // collapsed leaf ends: 0
   // centered two-input leaves: 0
+  // nested two-input leaves: 0
 }

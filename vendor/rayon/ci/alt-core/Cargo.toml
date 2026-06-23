@@ -1,0 +1,6 @@
+[package]
+edition = "2024"
+name = "alt-core"
+links = "rayon-core"
+build = "build.rs"
+publish = false

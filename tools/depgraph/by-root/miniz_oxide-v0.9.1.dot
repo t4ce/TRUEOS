@@ -8,4 +8,5 @@ digraph "miniz_oxide-v0.9.1" {
   in0 -> n0 [style=dashed, color="#4b8fc5"];
   // collapsed leaf ends: 1
   // centered two-input leaves: 0
+  // nested two-input leaves: 0
 }

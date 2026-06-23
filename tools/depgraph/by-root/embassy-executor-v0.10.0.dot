@@ -21,7 +21,7 @@ digraph "embassy-executor-v0.10.0" {
   n0 -> n5;
   n0 -> n6;
   n6 -> n2;
-  out0 [label=<to aes-v0.8.4.svg<BR/><B>proc-macro2</B><BR/>1.0.106<BR/><B>quote</B><BR/>1.0.45<BR/><B>syn</B><BR/>2.0.117>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  out0 [label=<to aes-v0.8.4.svg<BR/><B>proc-macro2</B><BR/>1.0.106<BR/><B>quote</B><BR/>1.0.46<BR/><B>syn</B><BR/>2.0.118>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n3 -> out0 [style=dashed, color="#d19922"];
   n4 -> out0 [style=dashed, color="#d19922"];
   n6 -> out0 [style=dashed, color="#d19922"];
@@ -33,4 +33,5 @@ digraph "embassy-executor-v0.10.0" {
   in3 -> n0 [style=dashed, color="#4b8fc5"];
   // collapsed leaf ends: 6
   // centered two-input leaves: 0
+  // nested two-input leaves: 0
 }

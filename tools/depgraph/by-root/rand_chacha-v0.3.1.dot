@@ -4,7 +4,7 @@ digraph "rand_chacha-v0.3.1" {
   edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];
   n0 [label=<<FONT POINT-SIZE="13"><B>rand_chacha</B></FONT><BR/><FONT POINT-SIZE="12">0.3.1</FONT>>, fillcolor="#dff3ff", color="#1b78a6"];
   n1 [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="0"><TR><TD><FONT POINT-SIZE="13"><B>ppv-lite86</B></FONT></TD></TR>
-<TR><TD><FONT POINT-SIZE="12">0.2.21</FONT></TD></TR><TR><TD><TABLE BORDER="0" CELLBORDER="0" CELLSPACING="6" CELLPADDING="0"><TR><TD><TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="8" COLOR="#9aa8b8" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="11"><B>zerocopy</B></FONT> <FONT POINT-SIZE="10">0.8.48</FONT></TD></TR></TABLE></TD></TR></TABLE></TD></TR></TABLE>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+<TR><TD><FONT POINT-SIZE="12">0.2.21</FONT></TD></TR><TR><TD><TABLE BORDER="0" CELLBORDER="0" CELLSPACING="6" CELLPADDING="0"><TR><TD><TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="8" COLOR="#9aa8b8" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="11"><B>zerocopy</B></FONT> <FONT POINT-SIZE="10">0.8.52</FONT></TD></TR></TABLE></TD></TR></TABLE></TD></TR></TABLE>>, fillcolor="#f7f9fb", color="#8b9bb0"];
   n0 -> n1;
   out0 [label=<to rand_core-v0.6.4.svg<BR/><B>rand_core</B><BR/>0.6.4>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out0 [style=dashed, color="#d19922"];
@@ -12,4 +12,5 @@ digraph "rand_chacha-v0.3.1" {
   in1 -> n0 [style=dashed, color="#4b8fc5"];
   // collapsed leaf ends: 1
   // centered two-input leaves: 0
+  // nested two-input leaves: 0
 }

@@ -24,10 +24,20 @@ PATH_POINT_SIZE = 11
 COMPACT_NAME_POINT_SIZE = 11
 COMPACT_VERSION_POINT_SIZE = 10
 COMPACT_PATH_POINT_SIZE = 9
+# Spread the full LR graph wide enough that the layout itself uses the 16:9 canvas.
+FULL_GRAPH_NODESEP = 0.34
+FULL_GRAPH_RANKSEP = 9.25
+FULL_GRAPH_ASPECT_RATIO = 16 / 9
+SPLIT_GRAPH_NODESEP = 0.35
+SPLIT_GRAPH_RANKSEP = 0.55
 LEFT_WING_CRATES = {
     "core3",
+    "memchr",
     "mio",
     "regex-automata",
+    "serde",
+    "serde_derive",
+    "serde_json",
     "socket2",
     "tower",
     "trueos-esp",
@@ -38,6 +48,35 @@ LEFT_WING_CRATES = {
     "zune-core",
     "zune-jpeg",
 }
+ARCHITECTURE_IRRELEVANT_CRATES = {
+    "log",
+}
+
+
+def left_wing_depths(
+    left_wing_nodes: set[str],
+    edges: set[tuple[str, str]],
+) -> dict[str, int]:
+    left_parents: dict[str, set[str]] = defaultdict(set)
+    for parent, child in edges:
+        if parent in left_wing_nodes and child in left_wing_nodes:
+            left_parents[child].add(parent)
+
+    depths: dict[str, int] = {}
+    visiting: set[str] = set()
+
+    def depth(node: str) -> int:
+        if node in depths:
+            return depths[node]
+        if node in visiting:
+            return 0
+        visiting.add(node)
+        parents = left_parents.get(node, set())
+        depths[node] = 0 if not parents else max(depth(parent) + 1 for parent in parents)
+        visiting.remove(node)
+        return depths[node]
+
+    return {node: depth(node) for node in left_wing_nodes}
 
 
 def canonical_label(label: str) -> str:
@@ -77,6 +116,10 @@ def display_label(label: str) -> str:
 def crate_name(label: str) -> str:
     match = re.match(r"^([^ ]+) v[^ ]+", label)
     return match.group(1) if match else label
+
+
+def is_architecture_irrelevant(label: str) -> bool:
+    return crate_name(label) in ARCHITECTURE_IRRELEVANT_CRATES
 
 
 def compact_html_label(label: str) -> str:
@@ -153,6 +196,21 @@ def direct_embedded_path_index(entries: list[EmbeddedEntry], label: str) -> int 
     return None
 
 
+def embedded_path_labels_postorder(entries: list[EmbeddedEntry]) -> list[str]:
+    labels: list[str] = []
+    for entry in entries:
+        labels.extend(embedded_path_labels_postorder(normalize_embedded_entries(entry.children)))
+        labels.append(entry.label)
+    return labels
+
+
+def embedded_path_index_postorder(entries: list[EmbeddedEntry], label: str) -> int | None:
+    for index, entry_label in enumerate(embedded_path_labels_postorder(entries)):
+        if entry_label == label:
+            return index
+    return None
+
+
 def embedded_bubble_html(entry: EmbeddedEntry) -> str:
     port_attr = f' PORT="{escape(entry.port)}"' if entry.port else ""
     child_rows = embedded_rows_html(normalize_embedded_entries(entry.children))
@@ -195,6 +253,20 @@ def html_label(
             "</TABLE>>"
         )
     return "<" + "<BR/>".join(lines) + ">"
+
+
+def architecture_irrelevant_bucket_label(labels: list[str]) -> str:
+    rows = [
+        '<TR><TD><FONT POINT-SIZE="12"><B>irrelevant to architecture</B></FONT></TD></TR>'
+    ]
+    for label in sorted(labels, key=crate_name):
+        rows.append(f"<TR><TD>{compact_html_label(label)}</TD></TR>")
+    return (
+        '<<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="8" '
+        'COLOR="#b7bec9" STYLE="ROUNDED">'
+        + "".join(rows)
+        + "</TABLE>>"
+    )
 
 
 def slug_for(label: str) -> str:
@@ -267,6 +339,24 @@ def reachable(start: str, adjacency: dict[str, set[str]]) -> set[str]:
     return seen
 
 
+def nested_shared_leaf_parents(
+    incoming_parents: dict[str, set[str]],
+    children_by_parent: dict[str, set[str]],
+    leaves: set[str],
+) -> dict[str, tuple[str, str]]:
+    nested: dict[str, tuple[str, str]] = {}
+    for leaf in sorted(leaves):
+        parents = sorted(incoming_parents.get(leaf, ()))
+        if len(parents) != 2:
+            continue
+        parent_a, parent_b = parents
+        if parent_b in children_by_parent.get(parent_a, ()):
+            nested[leaf] = (parent_a, parent_b)
+        elif parent_a in children_by_parent.get(parent_b, ()):
+            nested[leaf] = (parent_b, parent_a)
+    return nested
+
+
 def assign_owners(root_children: list[str], adjacency: dict[str, set[str]]) -> dict[str, str]:
     roots = set(root_children)
     owner = {root: root for root in root_children}
@@ -303,7 +393,7 @@ def render_dot(
     connector_ids: dict[tuple[str, str, str], str] = {}
     lines: list[str] = [
         f'digraph "{dot_escape(slug_for(image_root))}" {{',
-        '  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];',
+        f'  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep={SPLIT_GRAPH_NODESEP}, ranksep={SPLIT_GRAPH_RANKSEP}];',
         f'  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="{NODE_MARGIN}", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];',
         '  edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];',
     ]
@@ -322,11 +412,13 @@ def render_dot(
     internal_out_count: dict[str, int] = defaultdict(int)
     internal_parent_by_leaf: dict[str, str] = {}
     internal_parents: dict[str, set[str]] = defaultdict(set)
+    children_by_parent: dict[str, set[str]] = defaultdict(set)
     for parent, child in internal_edges:
         internal_in_count[child] += 1
         internal_out_count[parent] += 1
         internal_parent_by_leaf[child] = parent
         internal_parents[child].add(parent)
+        children_by_parent[parent].add(child)
 
     connector_in_count: dict[str, int] = defaultdict(int)
     connector_out_count: dict[str, int] = defaultdict(int)
@@ -335,8 +427,7 @@ def render_dot(
     for parent, _child in outgoing:
         connector_out_count[parent] += 1
 
-    embedded_by_parent: dict[str, list[str]] = defaultdict(list)
-    collapsed_leaves = {
+    one_input_leaves = {
         node
         for node in owned_nodes
         if node != image_root
@@ -345,24 +436,66 @@ def render_dot(
         and connector_in_count[node] == 0
         and connector_out_count[node] == 0
     }
-    for leaf in collapsed_leaves:
-        embedded_by_parent[internal_parent_by_leaf[leaf]].append(leaf)
-    visible_nodes = owned_nodes - collapsed_leaves
-    two_input_leaves = {
+    two_input_leaf_candidates = {
         node
-        for node in visible_nodes
+        for node in owned_nodes
         if node != image_root
         and internal_in_count[node] == 2
         and internal_out_count[node] == 0
         and connector_in_count[node] == 0
         and connector_out_count[node] == 0
     }
+    nested_two_input = nested_shared_leaf_parents(
+        internal_parents, children_by_parent, two_input_leaf_candidates
+    )
+    nested_two_input_leaves = set(nested_two_input)
+    nested_two_input_outer_parents = {outer for outer, _inner in nested_two_input.values()}
+    two_input_leaves = two_input_leaf_candidates - nested_two_input_leaves
+    collapsed_leaves = set(one_input_leaves) | nested_two_input_leaves
+
+    changed = True
+    while changed:
+        changed = False
+        for node in sorted(owned_nodes):
+            if node == image_root or node in collapsed_leaves or internal_in_count[node] != 1:
+                continue
+            if node in nested_two_input_outer_parents:
+                continue
+            parent = internal_parent_by_leaf.get(node)
+            if parent == image_root and internal_out_count[node] != 0:
+                continue
+            if connector_in_count[node] != 0 or connector_out_count[node] != 0:
+                continue
+            if all(child in collapsed_leaves for child in children_by_parent.get(node, ())):
+                collapsed_leaves.add(node)
+                changed = True
+
+    def embedded_entry(label: str) -> EmbeddedEntry:
+        children = [
+            embedded_entry(child)
+            for child in sorted(children_by_parent.get(label, ()))
+            if child in collapsed_leaves
+            and not (child in nested_two_input and nested_two_input[child][0] == label)
+        ]
+        return EmbeddedEntry(label, children=children)
+
+    embedded_by_parent: dict[str, list[EmbeddedEntry]] = defaultdict(list)
+    for node in sorted(collapsed_leaves):
+        if internal_in_count[node] != 1:
+            continue
+        parent = internal_parent_by_leaf[node]
+        if parent not in collapsed_leaves:
+            embedded_by_parent[parent].append(embedded_entry(node))
+    for parent, entries in embedded_by_parent.items():
+        embedded_by_parent[parent] = normalize_embedded_entries(entries)
+
+    visible_nodes = owned_nodes - collapsed_leaves
 
     for label in sorted(visible_nodes, key=lambda x: (x != image_root, x)):
         fill, color = node_style(label)
         if label == image_root:
             fill, color = "#dff3ff", "#1b78a6"
-        embedded_ends = sorted(embedded_by_parent.get(label, ()))
+        embedded_ends = embedded_by_parent.get(label, [])
         lines.append(
             f'  {node_id(label)} [label={html_label(label, embedded_ends)}, fillcolor="{fill}", color="{color}"];'
         )
@@ -432,8 +565,108 @@ def render_dot(
 
     lines.append(f"  // collapsed leaf ends: {len(collapsed_leaves)}")
     lines.append(f"  // centered two-input leaves: {len(two_input_leaves)}")
+    lines.append(f"  // nested two-input leaves: {len(nested_two_input_leaves)}")
     lines.append("}")
     return "\n".join(lines) + "\n"
+
+
+def split_graph_layout(
+    image_root: str,
+    owned_nodes: set[str],
+    edges: set[tuple[str, str]],
+    incoming: list[tuple[str, str]],
+    outgoing: list[tuple[str, str]],
+) -> tuple[dict[str, str], dict[str, list[EmbeddedEntry]], dict[str, tuple[str, str]]]:
+    internal_edges = {
+        (parent, child)
+        for parent, child in edges
+        if parent in owned_nodes and child in owned_nodes
+    }
+    internal_in_count: dict[str, int] = defaultdict(int)
+    internal_out_count: dict[str, int] = defaultdict(int)
+    internal_parent_by_leaf: dict[str, str] = {}
+    internal_parents: dict[str, set[str]] = defaultdict(set)
+    children_by_parent: dict[str, set[str]] = defaultdict(set)
+    for parent, child in internal_edges:
+        internal_in_count[child] += 1
+        internal_out_count[parent] += 1
+        internal_parent_by_leaf[child] = parent
+        internal_parents[child].add(parent)
+        children_by_parent[parent].add(child)
+
+    connector_in_count: dict[str, int] = defaultdict(int)
+    connector_out_count: dict[str, int] = defaultdict(int)
+    for _parent, child in incoming:
+        connector_in_count[child] += 1
+    for parent, _child in outgoing:
+        connector_out_count[parent] += 1
+
+    one_input_leaves = {
+        node
+        for node in owned_nodes
+        if node != image_root
+        and internal_in_count[node] == 1
+        and internal_out_count[node] == 0
+        and connector_in_count[node] == 0
+        and connector_out_count[node] == 0
+    }
+    two_input_leaf_candidates = {
+        node
+        for node in owned_nodes
+        if node != image_root
+        and internal_in_count[node] == 2
+        and internal_out_count[node] == 0
+        and connector_in_count[node] == 0
+        and connector_out_count[node] == 0
+    }
+    nested_two_input = nested_shared_leaf_parents(
+        internal_parents, children_by_parent, two_input_leaf_candidates
+    )
+    nested_two_input_outer_parents = {outer for outer, _inner in nested_two_input.values()}
+    collapsed_leaves = set(one_input_leaves) | set(nested_two_input)
+
+    changed = True
+    while changed:
+        changed = False
+        for node in sorted(owned_nodes):
+            if node == image_root or node in collapsed_leaves or internal_in_count[node] != 1:
+                continue
+            if node in nested_two_input_outer_parents:
+                continue
+            parent = internal_parent_by_leaf.get(node)
+            if parent == image_root and internal_out_count[node] != 0:
+                continue
+            if connector_in_count[node] != 0 or connector_out_count[node] != 0:
+                continue
+            if all(child in collapsed_leaves for child in children_by_parent.get(node, ())):
+                collapsed_leaves.add(node)
+                changed = True
+
+    def embedded_entry(label: str) -> EmbeddedEntry:
+        children = [
+            embedded_entry(child)
+            for child in sorted(children_by_parent.get(label, ()))
+            if child in collapsed_leaves
+            and not (child in nested_two_input and nested_two_input[child][0] == label)
+        ]
+        return EmbeddedEntry(label, children=children)
+
+    embedded_by_parent: dict[str, list[EmbeddedEntry]] = defaultdict(list)
+    for node in sorted(collapsed_leaves):
+        if internal_in_count[node] != 1:
+            continue
+        parent = internal_parent_by_leaf[node]
+        if parent not in collapsed_leaves:
+            embedded_by_parent[parent].append(embedded_entry(node))
+    for parent, entries in embedded_by_parent.items():
+        embedded_by_parent[parent] = normalize_embedded_entries(entries)
+
+    visible_nodes = owned_nodes - collapsed_leaves
+    node_ids = {
+        label: f"n{index}"
+        for index, label in enumerate(sorted(visible_nodes, key=lambda x: (x != image_root, x)))
+    }
+    return node_ids, embedded_by_parent, nested_two_input
 
 
 def full_collapse_info(
@@ -460,19 +693,26 @@ def full_collapse_info(
         incoming_parents[child].add(parent)
         children_by_parent[parent].add(child)
 
-    shared_input_leaves = {
+    shared_input_leaf_candidates = {
         node
         for node in all_nodes
         if node != root
         and incoming_count[node] == 2
         and outgoing_count[node] == 0
     }
-    collapsed_leaves = set(shared_input_leaves)
+    nested_shared_leaves = nested_shared_leaf_parents(
+        incoming_parents, children_by_parent, shared_input_leaf_candidates
+    )
+    nested_shared_outer_parents = {outer for outer, _inner in nested_shared_leaves.values()}
+    shared_input_leaves = shared_input_leaf_candidates - set(nested_shared_leaves)
+    collapsed_leaves = set(shared_input_leaves) | set(nested_shared_leaves)
     changed = True
     while changed:
         changed = False
         for node in sorted(all_nodes):
             if node == root or node in collapsed_leaves or incoming_count[node] != 1:
+                continue
+            if node in nested_shared_outer_parents:
                 continue
             parent = next(iter(incoming_parents[node]))
             if parent == root and outgoing_count[node] != 0:
@@ -488,6 +728,7 @@ def full_collapse_info(
             embedded_entry(child)
             for child in sorted(children_by_parent.get(label, ()))
             if child in collapsed_leaves
+            and not (child in nested_shared_leaves and nested_shared_leaves[child][0] == label)
         ]
         port = port_for(label) if label in shared_input_leaves else None
         return EmbeddedEntry(label, port, children)
@@ -516,7 +757,11 @@ def full_collapse_info(
     )
 
 
-def render_full_dot(root: str, edges: set[tuple[str, str]]) -> str:
+def render_full_dot(
+    root: str,
+    edges: set[tuple[str, str]],
+    architecture_irrelevant: list[str] | None = None,
+) -> str:
     node_ids: dict[str, str] = {}
     (
         all_nodes,
@@ -543,6 +788,7 @@ def render_full_dot(root: str, edges: set[tuple[str, str]]) -> str:
     left_wing_nodes = {
         node for node in visible_nodes if crate_name(node) in LEFT_WING_CRATES
     }
+    left_wing_depth_by_node = left_wing_depths(left_wing_nodes, edges)
 
     def node_id(label: str) -> str:
         if label not in node_ids:
@@ -551,7 +797,7 @@ def render_full_dot(root: str, edges: set[tuple[str, str]]) -> str:
 
     lines = [
         "digraph trueos_depth_graph {",
-        '  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=1.004];',
+        f'  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep={FULL_GRAPH_NODESEP}, ranksep={FULL_GRAPH_RANKSEP}];',
         f'  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="{NODE_MARGIN}", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];',
         '  edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];',
     ]
@@ -584,31 +830,50 @@ def render_full_dot(root: str, edges: set[tuple[str, str]]) -> str:
                 '[style=invis, weight=90, minlen=2];'
             )
 
-    for index in range(1, 4):
-        lines.append(
-            f'  left_space_{index} [label="", shape=point, width=0.01, height=0.01, '
-            'style=invis];'
-        )
-    lines.append(
-        f"  left_space_3 -> left_space_2 -> left_space_1 -> {node_id(root)} "
-        '[style=invis, weight=1000];'
-    )
     if left_wing_nodes:
-        rank_members = "; ".join(["left_space_2", *(node_id(node) for node in sorted(left_wing_nodes))])
-        lines.append("  {")
-        lines.append("    rank=same;")
-        lines.append(f"    {rank_members};")
-        lines.append("  }")
-        for node in sorted(left_wing_nodes):
+        max_left_depth = max(left_wing_depth_by_node.values(), default=0)
+        for depth in range(max_left_depth + 1):
             lines.append(
-                f"  {node_id(node)} -> {node_id(root)} "
-                '[style=invis, weight=300, minlen=2];'
+                f'  left_column_{depth} [label="", shape=point, width=0.01, height=0.01, '
+                'style=invis];'
             )
+        column_chain = " -> ".join(
+            [f"left_column_{depth}" for depth in range(max_left_depth, -1, -1)]
+            + [node_id(root)]
+        )
+        lines.append(f"  {column_chain} [style=invis, weight=1000];")
+        for depth in range(max_left_depth + 1):
+            column_nodes = [
+                node
+                for node in sorted(left_wing_nodes)
+                if left_wing_depth_by_node.get(node, 0) == depth
+            ]
+            rank_members = "; ".join(
+                [f"left_column_{depth}", *(node_id(node) for node in column_nodes)]
+            )
+            lines.append("  {")
+            lines.append("    rank=same;")
+            lines.append(f"    {rank_members};")
+            lines.append("  }")
+        for parent, child in sorted(edges):
+            if parent in left_wing_nodes and child in left_wing_nodes:
+                lines.append(
+                    f"  {node_id(child)} -> {node_id(parent)} "
+                    '[style=invis, weight=300, minlen=1];'
+                )
+
+    if architecture_irrelevant:
+        bucket_id = "architecture_irrelevant"
+        lines.append(
+            f'  {bucket_id} [label={architecture_irrelevant_bucket_label(architecture_irrelevant)}, '
+            'shape=plain, fontcolor="#334155"];'
+        )
 
     lines.append(f"  // collapsed leaf ends: {len(collapsed_leaves)}")
     lines.append(f"  // shared two-input leaf ends: {len(shared_input_leaves)}")
     lines.append(f"  // left-wing root-shared leaf ends: {len(left_input_leaves)}")
     lines.append(f"  // pinned left-wing crates: {len(left_wing_nodes)}")
+    lines.append(f"  // architecture-irrelevant bucket entries: {len(architecture_irrelevant or [])}")
     lines.append("}")
     return "\n".join(lines) + "\n"
 
@@ -632,6 +897,32 @@ def full_graph_layout(
     return node_ids, collapsed_leaves, embedded_by_parent, shared_input_leaves, incoming_parents
 
 
+def full_nested_shared_leaf_parents(root: str, edges: set[tuple[str, str]]) -> dict[str, tuple[str, str]]:
+    all_nodes = {root}
+    incoming_count: dict[str, int] = defaultdict(int)
+    outgoing_count: dict[str, int] = defaultdict(int)
+    incoming_parents: dict[str, set[str]] = defaultdict(set)
+    children_by_parent: dict[str, set[str]] = defaultdict(set)
+    for parent, child in edges:
+        all_nodes.add(parent)
+        all_nodes.add(child)
+        incoming_count[child] += 1
+        outgoing_count[parent] += 1
+        incoming_parents[child].add(parent)
+        children_by_parent[parent].add(child)
+
+    shared_input_leaf_candidates = {
+        node
+        for node in all_nodes
+        if node != root
+        and incoming_count[node] == 2
+        and outgoing_count[node] == 0
+    }
+    return nested_shared_leaf_parents(
+        incoming_parents, children_by_parent, shared_input_leaf_candidates
+    )
+
+
 def svg_path_bbox(path_d: str) -> tuple[float, float, float, float]:
     nums = [float(n) for n in re.findall(r"-?\d+(?:\.\d+)?", path_d)]
     points = list(zip(nums[::2], nums[1::2]))
@@ -651,38 +942,215 @@ def display_size(width: float, height: float) -> tuple[float, float]:
     return width, height
 
 
-def full_svg_bboxes() -> tuple[
+def widen_full_svg_to_aspect() -> None:
+    svg = FULL_SVG_PATH.read_text()
+    viewbox = re.search(r'viewBox="0\.00 0\.00 ([0-9.]+) ([0-9.]+)"', svg)
+    if not viewbox:
+        raise RuntimeError(f"could not parse viewBox from {FULL_SVG_PATH}")
+    width, height = float(viewbox.group(1)), float(viewbox.group(2))
+    target_width = max(width, height * FULL_GRAPH_ASPECT_RATIO)
+    if target_width <= width + 0.01:
+        return
+
+    svg = re.sub(
+        r'<svg width="[^"]+" height="[^"]+"',
+        f'<svg width="{target_width:.0f}pt" height="{height:.0f}pt"',
+        svg,
+        count=1,
+    )
+    svg = re.sub(
+        r'viewBox="0\.00 0\.00 [0-9.]+ [0-9.]+"',
+        f'viewBox="0.00 0.00 {target_width:.2f} {height:.2f}"',
+        svg,
+        count=1,
+    )
+
+    def widen_background(match: re.Match[str]) -> str:
+        points = match.group(2)
+        pairs = re.findall(r"(-?[0-9.]+),(-?[0-9.]+)", points)
+        if not pairs:
+            return match.group(0)
+        xs = [float(x) for x, _y in pairs]
+        old_max_x = max(xs)
+        right_pad = width - old_max_x
+        new_max_x = target_width - right_pad
+        rewritten = []
+        for x_text, y_text in pairs:
+            x = float(x_text)
+            if abs(x - old_max_x) < 0.01:
+                x_text = f"{new_max_x:.2f}"
+            rewritten.append(f"{x_text},{y_text}")
+        return match.group(1) + " ".join(rewritten) + match.group(3)
+
+    svg = re.sub(
+        r'(<polygon fill="white" stroke="none" points=")([^"]+)(")',
+        widen_background,
+        svg,
+        count=1,
+    )
+    FULL_SVG_PATH.write_text(svg)
+
+
+def svg_layout(
+    svg_path: Path,
+) -> tuple[
+    float,
+    float,
     float,
     float,
     dict[str, tuple[float, float, float, float]],
     dict[str, list[tuple[float, float, float, float]]],
+    dict[str, str],
 ]:
-    svg = FULL_SVG_PATH.read_text()
+    svg = svg_path.read_text()
     viewbox = re.search(r'viewBox="[^"]*?[^0-9.]([0-9.]+) ([0-9.]+)"', svg)
     if not viewbox:
-        raise RuntimeError(f"could not parse viewBox from {FULL_SVG_PATH}")
+        raise RuntimeError(f"could not parse viewBox from {svg_path}")
     width, height = float(viewbox.group(1)), float(viewbox.group(2))
 
     transform = re.search(r'<g id="graph0"[^>]*transform="[^"]*translate\(([0-9.-]+) ([0-9.-]+)\)', svg)
     if not transform:
-        raise RuntimeError(f"could not parse graph transform from {FULL_SVG_PATH}")
+        raise RuntimeError(f"could not parse graph transform from {svg_path}")
     tx, ty = float(transform.group(1)), float(transform.group(2))
 
     bboxes: dict[str, tuple[float, float, float, float]] = {}
     inner_bboxes: dict[str, list[tuple[float, float, float, float]]] = {}
+    bodies: dict[str, str] = {}
     for group in re.finditer(r'<g id="node\d+" class="node">(.*?)</g>', svg, re.S):
         body = group.group(1)
         title = re.search(r"<title>(n\d+)</title>", body)
         if not title:
             continue
         node_id = title.group(1)
+        bodies[node_id] = body
         paths = re.findall(r'<path\b[^>]*\bd="([^"]+)"', body)
         if not paths:
             continue
         bboxes[node_id] = transform_bbox(svg_path_bbox(paths[0]), tx, ty)
         inner_bboxes[node_id] = [transform_bbox(svg_path_bbox(path), tx, ty) for path in paths[1:]]
 
+    return width, height, tx, ty, bboxes, inner_bboxes, bodies
+
+
+def full_svg_bboxes() -> tuple[
+    float,
+    float,
+    dict[str, tuple[float, float, float, float]],
+    dict[str, list[tuple[float, float, float, float]]],
+]:
+    width, height, _tx, _ty, bboxes, inner_bboxes, _bodies = svg_layout(FULL_SVG_PATH)
     return width, height, bboxes, inner_bboxes
+
+
+def shifted_text_markup(markup: str, dx: float, dy: float) -> str:
+    def shift_attr(match: re.Match[str]) -> str:
+        name = match.group(1)
+        value = float(match.group(2))
+        shifted = value + (dx if name == "x" else dy)
+        return f'{name}="{shifted:.2f}"'
+
+    return re.sub(r'\b(x|y)="([0-9.-]+)"', shift_attr, markup)
+
+
+def text_markup_in_bbox(
+    body: str,
+    bbox: tuple[float, float, float, float],
+    tx: float,
+    ty: float,
+) -> list[str]:
+    x, y, w, h = bbox
+    matches: list[str] = []
+    for text in re.finditer(r'<text\b[^>]*\bx="([0-9.-]+)"\s+y="([0-9.-]+)"[^>]*>.*?</text>', body):
+        text_x = float(text.group(1)) + tx
+        text_y = float(text.group(2)) + ty
+        if x - 2 <= text_x <= x + w + 2 and y - 4 <= text_y <= y + h + 4:
+            matches.append(text.group(0))
+    return matches
+
+
+def inject_nested_shared_badges(
+    svg_path: Path,
+    node_ids: dict[str, str],
+    embedded_by_parent: dict[str, list[EmbeddedEntry]],
+    nested_leaf_parents: dict[str, tuple[str, str]],
+) -> None:
+    if not nested_leaf_parents:
+        return
+
+    svg = svg_path.read_text()
+    svg = re.sub(
+        r'<g id="nested-shared-leaf-badges" class="nested-shared-leaf-badges".*?</g>\n',
+        "",
+        svg,
+        flags=re.S,
+    )
+    _width, _height, tx, ty, _node_bboxes, inner_bboxes, node_bodies = svg_layout(svg_path)
+    badge_lines = [
+        '<g id="nested-shared-leaf-badges" class="nested-shared-leaf-badges" pointer-events="none">'
+    ]
+
+    for leaf, (outer_parent, inner_parent) in sorted(nested_leaf_parents.items()):
+        node_id = node_ids.get(outer_parent)
+        if not node_id:
+            continue
+        entries = embedded_by_parent.get(outer_parent, [])
+        labels = embedded_path_labels_postorder(entries)
+        leaf_index = embedded_path_index_postorder(entries, leaf)
+        inner_index = embedded_path_index_postorder(entries, inner_parent)
+        boxes = inner_bboxes.get(node_id, [])
+        if leaf_index is None or inner_index is None:
+            continue
+        if leaf_index >= len(boxes) or inner_index >= len(boxes):
+            continue
+
+        leaf_box = boxes[leaf_index]
+        inner_box = boxes[inner_index]
+        old_x, old_y, old_w, old_h = leaf_box
+        target_x = inner_box[0] + inner_box[2] / 2 - old_w / 2
+        target_y = inner_box[1] + inner_box[3] - old_h / 2
+        dx = target_x - old_x
+        dy = target_y - old_y
+        if abs(dx) < 0.01 and abs(dy) < 0.01:
+            continue
+
+        body = node_bodies.get(node_id, "")
+        texts = text_markup_in_bbox(body, leaf_box, tx, ty)
+        if not texts:
+            continue
+
+        label = display_label(leaf).replace(r"\n", " / ")
+        inner_label = display_label(inner_parent).replace(r"\n", " / ")
+        rx = min(18.0, old_h / 2)
+        badge_lines.extend(
+            [
+                f'<!-- nested shared leaf badge {escape(label)} on {escape(inner_label)} -->',
+                "<g>",
+                f"<title>nested shared leaf {escape(label)}</title>",
+                (
+                    f'<rect x="{old_x - tx - 1.25:.2f}" y="{old_y - ty - 1.25:.2f}" '
+                    f'width="{old_w + 2.5:.2f}" height="{old_h + 2.5:.2f}" '
+                    'fill="#f7f9fb" stroke="none"/>'
+                ),
+                (
+                    f'<rect x="{target_x - tx:.2f}" y="{target_y - ty:.2f}" '
+                    f'width="{old_w:.2f}" height="{old_h:.2f}" '
+                    f'rx="{rx:.2f}" ry="{rx:.2f}" fill="#f7f9fb" '
+                    'stroke="#9aa8b8" stroke-opacity="1" stroke-width="1.25"/>'
+                ),
+                *(shifted_text_markup(text, dx, dy) for text in texts),
+                "</g>",
+            ]
+        )
+
+    badge_lines.append("</g>")
+    if len(badge_lines) == 2:
+        return
+
+    graph_end = svg.rfind("</g>\n</svg>")
+    if graph_end == -1:
+        raise RuntimeError(f"could not find graph end in {svg_path}")
+    svg = svg[:graph_end] + "\n".join(badge_lines) + "\n" + svg[graph_end:]
+    svg_path.write_text(svg)
 
 
 def ownership_regions(
@@ -691,6 +1159,7 @@ def ownership_regions(
     adjacency: dict[str, set[str]] = defaultdict(set)
     for parent, child in edges:
         adjacency[parent].add(child)
+    root_child_set = set(root_children)
     node_ids, _collapsed_leaves, _embedded_by_parent, _shared_input_leaves, _incoming_parents = (
         full_graph_layout(root, edges)
     )
@@ -700,7 +1169,10 @@ def ownership_regions(
         root_label = next((child for child in root_children if child.startswith(prefix)), None)
         if not root_label:
             return None
-        owned_nodes = {root_label, *adjacency.get(root_label, set())}
+        direct_local_children = {
+            child for child in adjacency.get(root_label, set()) if child not in root_child_set
+        }
+        owned_nodes = {root_label, *direct_local_children}
         boxes = []
         for node in owned_nodes:
             node_id = node_ids.get(node)
@@ -1144,10 +1616,31 @@ def main() -> None:
     if not root or not root_children:
         raise SystemExit(f"could not parse root children from {TREE_PATH}")
 
-    FULL_DOT_PATH.write_text(render_full_dot(root, edges))
+    architecture_irrelevant = [child for child in root_children if is_architecture_irrelevant(child)]
+    graph_root_children = [child for child in root_children if not is_architecture_irrelevant(child)]
+    graph_edges = {
+        (parent, child)
+        for parent, child in edges
+        if not is_architecture_irrelevant(parent) and not is_architecture_irrelevant(child)
+    }
+    graph_adjacency: dict[str, set[str]] = defaultdict(set)
+    for parent, child in graph_edges:
+        graph_adjacency[parent].add(child)
+
+    FULL_DOT_PATH.write_text(render_full_dot(root, graph_edges, architecture_irrelevant))
     subprocess.run(["dot", "-Tsvg", str(FULL_DOT_PATH), "-o", str(FULL_SVG_PATH)], check=True)
-    inject_full_svg_regions(root, root_children, edges)
-    HTML_INDEX_PATH.write_text(render_html_index(root, root_children, edges))
+    inject_full_svg_regions(root, graph_root_children, graph_edges)
+    full_node_ids, _collapsed_leaves, full_embedded_by_parent, _shared_input_leaves, _incoming_parents = (
+        full_graph_layout(root, graph_edges)
+    )
+    inject_nested_shared_badges(
+        FULL_SVG_PATH,
+        full_node_ids,
+        full_embedded_by_parent,
+        full_nested_shared_leaf_parents(root, graph_edges),
+    )
+    widen_full_svg_to_aspect()
+    HTML_INDEX_PATH.write_text(render_html_index(root, graph_root_children, graph_edges))
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     for old in OUT_DIR.glob("*.dot"):
@@ -1155,18 +1648,18 @@ def main() -> None:
     for old in OUT_DIR.glob("*.svg"):
         old.unlink()
 
-    owner = assign_owners(root_children, adjacency)
-    filenames = unique_filenames(root_children)
-    all_roots = set(root_children)
+    owner = assign_owners(graph_root_children, graph_adjacency)
+    filenames = unique_filenames(graph_root_children)
+    all_roots = set(graph_root_children)
 
     rows: list[tuple[str, str, int, int, int]] = []
-    for image_root in root_children:
+    for image_root in graph_root_children:
         owned_nodes = {node for node, node_owner in owner.items() if node_owner == image_root}
         owned_nodes.add(image_root)
 
         incoming: list[tuple[str, str]] = []
         outgoing: list[tuple[str, str]] = []
-        for parent, child in edges:
+        for parent, child in graph_edges:
             if parent == root:
                 continue
             parent_owner = owner.get(parent)
@@ -1178,11 +1671,24 @@ def main() -> None:
             if child_owner == image_root and child in owned_nodes:
                 incoming.append((parent, child))
 
-        dot = render_dot(image_root, owned_nodes, filenames, owner, edges, incoming, outgoing)
+        dot = render_dot(image_root, owned_nodes, filenames, owner, graph_edges, incoming, outgoing)
         dot_path = OUT_DIR / filenames[image_root].replace(".svg", ".dot")
         svg_path = OUT_DIR / filenames[image_root]
         dot_path.write_text(dot)
         subprocess.run(["dot", "-Tsvg", str(dot_path), "-o", str(svg_path)], check=True)
+        split_node_ids, split_embedded_by_parent, split_nested_two_input = split_graph_layout(
+            image_root,
+            owned_nodes,
+            graph_edges,
+            incoming,
+            outgoing,
+        )
+        inject_nested_shared_badges(
+            svg_path,
+            split_node_ids,
+            split_embedded_by_parent,
+            split_nested_two_input,
+        )
         input_groups = len({owner[parent] for parent, _ in incoming})
         output_groups = len({owner[child] for _, child in outgoing})
         rows.append((image_root, filenames[image_root], len(owned_nodes), input_groups, output_groups))

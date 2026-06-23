@@ -15,4 +15,5 @@ digraph "tiny-skia-path-v0.11.4" {
   in2 -> n0 [style=dashed, color="#4b8fc5"];
   // collapsed leaf ends: 1
   // centered two-input leaves: 0
+  // nested two-input leaves: 0
 }

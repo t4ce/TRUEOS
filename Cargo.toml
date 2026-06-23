@@ -38,7 +38,6 @@ libm = { version = "0.2", default-features = false }
 hashbrown = { version = "0.17.0", default-features = false }
 memchr = { version = "2.8.0", default-features = false }
 regex-automata = { version = "0.4.14", default-features = false, features = ["alloc", "meta", "syntax"] }
-twoway = { version = "0.2", default-features = false }
 unicode-segmentation = { version = "1", default-features = false }
 log = { version = "0.4", default-features = false }
 tinyaudio = { path = "vendor/tinyaudio", default-features = false }
@@ -165,3 +164,5 @@ dma-api = { path = "vendor/dma-api-0.7.3" }
 alsa = { path = "vendor/alsa-0.11.0" }
 symphonia-core = { path = "vendor/symphonia-core-0.5.5-trueos" }
 symphonia-codec-aac = { path = "vendor/symphonia-codec-aac-0.5.5-trueos" }
+rayon = { path = "vendor/rayon" }
+rayon-core = { path = "vendor/rayon/rayon-core" }

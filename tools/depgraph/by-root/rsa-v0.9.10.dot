@@ -37,7 +37,7 @@ digraph "rsa-v0.9.10" {
   n0 -> n11;
   n0 -> n12;
   n12 -> n1;
-  out0 [label=<to crab-usb-v0.9.1.svg<BR/><B>num-traits</B><BR/>0.2.19<BR/>/vendor/num-traits-0.2.19<BR/><B>autocfg</B><BR/>1.5.0>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  out0 [label=<to crab-usb-v0.9.1.svg<BR/><B>num-traits</B><BR/>0.2.19<BR/>/vendor/num-traits-0.2.19<BR/><B>autocfg</B><BR/>1.5.1>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n3 -> out0 [style=dashed, color="#d19922"];
   n4 -> out0 [style=dashed, color="#d19922"];
   n5 -> out0 [style=dashed, color="#d19922"];
@@ -46,7 +46,7 @@ digraph "rsa-v0.9.10" {
   n1 -> out1 [style=dashed, color="#d19922"];
   n0 -> out1 [style=dashed, color="#d19922"];
   n11 -> out1 [style=dashed, color="#d19922"];
-  out2 [label=<to hyper-v1.9.0.svg<BR/><B>smallvec</B><BR/>1.15.1>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  out2 [label=<to hyper-v1.9.0.svg<BR/><B>smallvec</B><BR/>1.15.2>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n3 -> out2 [style=dashed, color="#d19922"];
   out3 [label=<to libm-v0.2.16.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n3 -> out3 [style=dashed, color="#d19922"];
@@ -60,7 +60,7 @@ digraph "rsa-v0.9.10" {
   n0 -> out6 [style=dashed, color="#d19922"];
   out7 [label=<to spin-v0.10.0.svg<BR/><B>spin</B><BR/>0.10.0>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n2 -> out7 [style=dashed, color="#d19922"];
-  out8 [label=<to zeroize-v1.8.2.svg<BR/><B>zeroize</B><BR/>1.8.2>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  out8 [label=<to zeroize-v1.9.0.svg<BR/><B>zeroize</B><BR/>1.9.0>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n1 -> out8 [style=dashed, color="#d19922"];
   n3 -> out8 [style=dashed, color="#d19922"];
   n0 -> out8 [style=dashed, color="#d19922"];
@@ -77,4 +77,5 @@ digraph "rsa-v0.9.10" {
   in11 -> n2 [style=dashed, color="#4b8fc5"];
   // collapsed leaf ends: 1
   // centered two-input leaves: 0
+  // nested two-input leaves: 0
 }

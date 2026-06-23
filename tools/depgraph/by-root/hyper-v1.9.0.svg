@@ -72,7 +72,7 @@
 <title>n4</title>
 <path fill="#f7f9fb" stroke="#8b9bb0" d="M295.69,-110.9C295.69,-110.9 244.72,-110.9 244.72,-110.9 238.72,-110.9 232.72,-104.9 232.72,-98.9 232.72,-98.9 232.72,-83.5 232.72,-83.5 232.72,-77.5 238.72,-71.5 244.72,-71.5 244.72,-71.5 295.69,-71.5 295.69,-71.5 301.69,-71.5 307.69,-77.5 307.69,-83.5 307.69,-83.5 307.69,-98.9 307.69,-98.9 307.69,-104.9 301.69,-110.9 295.69,-110.9"/>
 <text xml:space="preserve" text-anchor="start" x="242.08" y="-92.35" font-family="Inter,Arial" font-weight="bold" font-size="13.00" fill="#172033">smallvec</text>
-<text xml:space="preserve" text-anchor="start" x="253.71" y="-80.3" font-family="Inter,Arial" font-size="12.00" fill="#172033">1.15.1</text>
+<text xml:space="preserve" text-anchor="start" x="253.71" y="-80.3" font-family="Inter,Arial" font-size="12.00" fill="#172033">1.15.2</text>
 </g>
 <!-- n0&#45;&gt;n4 -->
 <g id="edge6" class="edge">
@@ -101,18 +101,18 @@
 <!-- out0 -->
 <g id="node7" class="node">
 <title>out0</title>
-<polygon fill="#fff8e8" stroke="#d19922" points="698.13,-398.4 596.91,-398.4 596.91,-354 704.13,-354 704.13,-392.4 698.13,-398.4"/>
-<polyline fill="none" stroke="#d19922" points="698.13,-398.4 698.13,-392.4"/>
-<polyline fill="none" stroke="#d19922" points="704.13,-392.4 698.13,-392.4"/>
-<text xml:space="preserve" text-anchor="start" x="606.27" y="-382.7" font-family="Inter,Arial" font-size="10.00" fill="#614000">to bytes&#45;v1.11.1.svg</text>
+<polygon fill="#fff8e8" stroke="#d19922" points="698.5,-398.4 596.53,-398.4 596.53,-354 704.5,-354 704.5,-392.4 698.5,-398.4"/>
+<polyline fill="none" stroke="#d19922" points="698.5,-398.4 698.5,-392.4"/>
+<polyline fill="none" stroke="#d19922" points="704.5,-392.4 698.5,-392.4"/>
+<text xml:space="preserve" text-anchor="start" x="605.89" y="-382.7" font-family="Inter,Arial" font-size="10.00" fill="#614000">to bytes&#45;v1.12.0.svg</text>
 <text xml:space="preserve" text-anchor="start" x="638.14" y="-372.7" font-family="Inter,Arial" font-weight="bold" font-size="10.00" fill="#614000">bytes</text>
-<text xml:space="preserve" text-anchor="start" x="637.02" y="-362.7" font-family="Inter,Arial" font-size="10.00" fill="#614000">1.11.1</text>
+<text xml:space="preserve" text-anchor="start" x="637.02" y="-362.7" font-family="Inter,Arial" font-size="10.00" fill="#614000">1.12.0</text>
 </g>
 <!-- n0&#45;&gt;out0 -->
 <g id="edge10" class="edge">
 <title>n0&#45;&gt;out0</title>
-<path fill="none" stroke="#d19922" stroke-width="0.9" stroke-dasharray="5,2" d="M143.66,-367.04C156.29,-360.1 169.73,-354.06 183.22,-350.2 324.66,-309.7 499.87,-339.68 589.92,-360.57"/>
-<polygon fill="#d19922" stroke="#d19922" stroke-width="0.9" points="589.39,-362.42 595.19,-361.81 590.27,-358.68 589.39,-362.42"/>
+<path fill="none" stroke="#d19922" stroke-width="0.9" stroke-dasharray="5,2" d="M143.66,-367.04C156.29,-360.1 169.73,-354.06 183.22,-350.2 324.47,-309.75 499.4,-339.6 589.55,-360.49"/>
+<polygon fill="#d19922" stroke="#d19922" stroke-width="0.9" points="589.04,-362.34 594.83,-361.72 589.92,-358.59 589.04,-362.34"/>
 </g>
 <!-- out1 -->
 <g id="node8" class="node">
@@ -192,8 +192,8 @@
 <!-- n1&#45;&gt;out0 -->
 <g id="edge8" class="edge">
 <title>n1&#45;&gt;out0</title>
-<path fill="none" stroke="#d19922" stroke-width="0.9" stroke-dasharray="5,2" d="M522.91,-421.15C543.88,-413.7 568.33,-405.02 590.12,-397.28"/>
-<polygon fill="#d19922" stroke="#d19922" stroke-width="0.9" points="590.67,-399.13 595.21,-395.48 589.38,-395.51 590.67,-399.13"/>
+<path fill="none" stroke="#d19922" stroke-width="0.9" stroke-dasharray="5,2" d="M522.91,-421.15C543.79,-413.73 568.12,-405.1 589.83,-397.39"/>
+<polygon fill="#d19922" stroke="#d19922" stroke-width="0.9" points="590.36,-399.24 594.9,-395.59 589.07,-395.62 590.36,-399.24"/>
 </g>
 <!-- n1&#45;&gt;out3 -->
 <g id="edge13" class="edge">
@@ -210,8 +210,8 @@
 <!-- n2&#45;&gt;out0 -->
 <g id="edge9" class="edge">
 <title>n2&#45;&gt;out0</title>
-<path fill="none" stroke="#d19922" stroke-width="0.9" stroke-dasharray="5,2" d="M335.81,-386.15C407.06,-383.89 520.75,-380.28 589.93,-378.09"/>
-<polygon fill="#d19922" stroke="#d19922" stroke-width="0.9" points="589.68,-380.02 595.12,-377.93 589.56,-376.18 589.68,-380.02"/>
+<path fill="none" stroke="#d19922" stroke-width="0.9" stroke-dasharray="5,2" d="M335.81,-386.15C406.96,-383.89 520.42,-380.29 589.63,-378.1"/>
+<polygon fill="#d19922" stroke="#d19922" stroke-width="0.9" points="589.39,-380.03 594.82,-377.93 589.26,-376.19 589.39,-380.03"/>
 </g>
 <!-- in5 -->
 <g id="node12" class="node">
@@ -221,7 +221,7 @@
 <polyline fill="none" stroke="#4b8fc5" points="130.85,-176.4 124.85,-176.4"/>
 <text xml:space="preserve" text-anchor="start" x="21.74" y="-166.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">from kurbo&#45;v0.11.3.svg</text>
 <text xml:space="preserve" text-anchor="start" x="50.99" y="-156.7" font-family="Inter,Arial" font-weight="bold" font-size="10.00" fill="#123d5c">smallvec</text>
-<text xml:space="preserve" text-anchor="start" x="58.11" y="-146.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">1.15.1</text>
+<text xml:space="preserve" text-anchor="start" x="58.11" y="-146.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">1.15.2</text>
 </g>
 <!-- in5&#45;&gt;n4 -->
 <g id="edge16" class="edge">
@@ -235,9 +235,9 @@
 <polygon fill="#eef6ff" stroke="#4b8fc5" points="129.35,-113.4 7.88,-113.4 7.88,-69 135.35,-69 135.35,-107.4 129.35,-113.4"/>
 <polyline fill="none" stroke="#4b8fc5" points="129.35,-113.4 129.35,-107.4"/>
 <polyline fill="none" stroke="#4b8fc5" points="135.35,-107.4 129.35,-107.4"/>
-<text xml:space="preserve" text-anchor="start" x="17.24" y="-97.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">from parry2d&#45;v0.26.0.svg</text>
+<text xml:space="preserve" text-anchor="start" x="17.24" y="-97.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">from parry2d&#45;v0.26.1.svg</text>
 <text xml:space="preserve" text-anchor="start" x="50.99" y="-87.7" font-family="Inter,Arial" font-weight="bold" font-size="10.00" fill="#123d5c">smallvec</text>
-<text xml:space="preserve" text-anchor="start" x="58.11" y="-77.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">1.15.1</text>
+<text xml:space="preserve" text-anchor="start" x="58.11" y="-77.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">1.15.2</text>
 </g>
 <!-- in6&#45;&gt;n4 -->
 <g id="edge17" class="edge">
@@ -253,7 +253,7 @@
 <polyline fill="none" stroke="#4b8fc5" points="125.97,-38.4 119.97,-38.4"/>
 <text xml:space="preserve" text-anchor="start" x="26.61" y="-28.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">from rsa&#45;v0.9.10.svg</text>
 <text xml:space="preserve" text-anchor="start" x="50.99" y="-18.7" font-family="Inter,Arial" font-weight="bold" font-size="10.00" fill="#123d5c">smallvec</text>
-<text xml:space="preserve" text-anchor="start" x="58.11" y="-8.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">1.15.1</text>
+<text xml:space="preserve" text-anchor="start" x="58.11" y="-8.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">1.15.2</text>
 </g>
 <!-- in7&#45;&gt;n4 -->
 <g id="edge18" class="edge">
@@ -267,7 +267,7 @@
 <polygon fill="#eef6ff" stroke="#4b8fc5" points="538.91,-533.4 397.19,-533.4 397.19,-489 544.91,-489 544.91,-527.4 538.91,-533.4"/>
 <polyline fill="none" stroke="#4b8fc5" points="538.91,-533.4 538.91,-527.4"/>
 <polyline fill="none" stroke="#4b8fc5" points="544.91,-527.4 538.91,-527.4"/>
-<text xml:space="preserve" text-anchor="start" x="406.55" y="-517.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">from serde_json&#45;v1.0.149.svg</text>
+<text xml:space="preserve" text-anchor="start" x="406.55" y="-517.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">from serde_json&#45;v1.0.150.svg</text>
 <text xml:space="preserve" text-anchor="start" x="462.43" y="-507.7" font-family="Inter,Arial" font-weight="bold" font-size="10.00" fill="#123d5c">itoa</text>
 <text xml:space="preserve" text-anchor="start" x="457.55" y="-497.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">1.0.18</text>
 </g>

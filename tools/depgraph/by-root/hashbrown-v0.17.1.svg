@@ -51,7 +51,7 @@
 <polygon fill="#eef6ff" stroke="#4b8fc5" points="275.44,-111.4 153.97,-111.4 153.97,-67 281.44,-67 281.44,-105.4 275.44,-111.4"/>
 <polyline fill="none" stroke="#4b8fc5" points="275.44,-111.4 275.44,-105.4"/>
 <polyline fill="none" stroke="#4b8fc5" points="281.44,-105.4 275.44,-105.4"/>
-<text xml:space="preserve" text-anchor="start" x="163.33" y="-95.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">from parry2d&#45;v0.26.0.svg</text>
+<text xml:space="preserve" text-anchor="start" x="163.33" y="-95.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">from parry2d&#45;v0.26.1.svg</text>
 <text xml:space="preserve" text-anchor="start" x="197.45" y="-85.7" font-family="Inter,Arial" font-weight="bold" font-size="10.00" fill="#123d5c">foldhash</text>
 <text xml:space="preserve" text-anchor="start" x="206.83" y="-75.7" font-family="Inter,Arial" font-size="10.00" fill="#123d5c">0.2.0</text>
 </g>

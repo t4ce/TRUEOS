@@ -13,4 +13,5 @@ digraph "lyon_tessellation-v1.0.20" {
   n1 -> out1 [style=dashed, color="#d19922"];
   // collapsed leaf ends: 1
   // centered two-input leaves: 0
+  // nested two-input leaves: 0
 }
