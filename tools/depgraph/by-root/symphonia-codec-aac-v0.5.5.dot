@@ -1,0 +1,19 @@
+digraph "symphonia-codec-aac-v0.5.5" {
+  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];
+  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.08,0.05", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
+  edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];
+  n0 [label=<<B>symphonia-codec-aac</B><BR/>0.5.5<BR/>/vendor/symphonia-codec-aac-0.5.5-trueos>, fillcolor="#dff3ff", color="#1b78a6"];
+  n1 [label=<<B>bytemuck</B><BR/>1.25.0>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  out0 [label=<to libm-v0.2.16.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out0 [style=dashed, color="#d19922"];
+  out1 [label=<to rsa-v0.9.10.svg<BR/><B>lazy_static</B><BR/>1.5.0<BR/>/vendor/lazy_static-1.5.0>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out1 [style=dashed, color="#d19922"];
+  out2 [label=<to symphonia-core-v0.5.5.svg<BR/><B>symphonia-core</B><BR/>0.5.5<BR/>/vendor/symphonia-core-0.5.5-trueos>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out2 [style=dashed, color="#d19922"];
+  in3 [label=<from symphonia-core-v0.5.5.svg<BR/><B>bytemuck</B><BR/>1.25.0>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in3 -> n1 [style=dashed, color="#4b8fc5"];
+  in4 [label=<from tiny-skia-path-v0.11.4.svg<BR/><B>bytemuck</B><BR/>1.25.0>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in4 -> n1 [style=dashed, color="#4b8fc5"];
+  // collapsed leaf ends: 0
+  // centered two-input leaves: 0
+}

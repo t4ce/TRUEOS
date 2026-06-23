@@ -1,0 +1,16 @@
+digraph "embassy-time-v0.5.1" {
+  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];
+  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.08,0.05", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
+  edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];
+  n0 [label=<<B>embassy-time</B><BR/>0.5.1<BR/>/vendor/embassy-time-0.5.1-trueos>, fillcolor="#dff3ff", color="#1b78a6"];
+  out0 [label=<to crab-usb-v0.9.1.svg<BR/><B>futures-core</B><BR/>0.3.32>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out0 [style=dashed, color="#d19922"];
+  out1 [label=<to embassy-time-driver-v0.2.2.svg<BR/><B>embassy-time-driver</B><BR/>0.2.2>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out1 [style=dashed, color="#d19922"];
+  in2 [label=<from trueos-esp-v0.1.0.svg<BR/><B>embassy-time</B><BR/>0.5.1<BR/>/vendor/embassy-time-0.5.1-trueos>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in2 -> n0 [style=dashed, color="#4b8fc5"];
+  in3 [label=<from trueos-qjs-v0.1.0.svg<BR/><B>embassy-time</B><BR/>0.5.1<BR/>/vendor/embassy-time-0.5.1-trueos>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in3 -> n0 [style=dashed, color="#4b8fc5"];
+  // collapsed leaf ends: 0
+  // centered two-input leaves: 0
+}

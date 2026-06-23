@@ -1,0 +1,10 @@
+digraph "zune-jpeg-v0.5.15" {
+  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];
+  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.08,0.05", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
+  edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];
+  n0 [label=<<B>zune-jpeg</B><BR/>0.5.15<BR/>/vendor/zune-jpeg-0.5.15>, fillcolor="#dff3ff", color="#1b78a6"];
+  out0 [label=<to zune-core-v0.5.1.svg<BR/><B>zune-core</B><BR/>0.5.1<BR/>/vendor/zune-core-0.5.1>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out0 [style=dashed, color="#d19922"];
+  // collapsed leaf ends: 0
+  // centered two-input leaves: 0
+}

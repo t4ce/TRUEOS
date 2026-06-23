@@ -1,0 +1,22 @@
+digraph "kurbo-v0.11.3" {
+  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];
+  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.08,0.05", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
+  edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];
+  n0 [label=<<B>kurbo</B><BR/>0.11.3<BR/>/vendor/kurbo-0.11.3>, fillcolor="#dff3ff", color="#1b78a6"];
+  n1 [label=<<B>arrayvec</B><BR/>0.7.6>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n0 -> n1;
+  out0 [label=<to hyper-v1.9.0.svg<BR/><B>smallvec</B><BR/>1.15.1>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out0 [style=dashed, color="#d19922"];
+  out1 [label=<to libm-v0.2.16.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out1 [style=dashed, color="#d19922"];
+  in2 [label=<from lyon_geom-v1.0.19.svg<BR/><B>arrayvec</B><BR/>0.7.6>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in2 -> n1 [style=dashed, color="#4b8fc5"];
+  in3 [label=<from parry2d-v0.26.0.svg<BR/><B>arrayvec</B><BR/>0.7.6>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in3 -> n1 [style=dashed, color="#4b8fc5"];
+  in4 [label=<from trueos-qjs-v0.1.0.svg<BR/><B>kurbo</B><BR/>0.11.3<BR/>/vendor/kurbo-0.11.3>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in4 -> n0 [style=dashed, color="#4b8fc5"];
+  in5 [label=<from usvg-v0.45.1.svg<BR/><B>kurbo</B><BR/>0.11.3<BR/>/vendor/kurbo-0.11.3>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in5 -> n0 [style=dashed, color="#4b8fc5"];
+  // collapsed leaf ends: 0
+  // centered two-input leaves: 0
+}

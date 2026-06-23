@@ -402,12 +402,10 @@ ConWhite 	FF_FF_FF
 ## Asset preview smoke test
 
 <details>
-<summary>Repository images and generated dependency graph</summary>
+<summary>Repository images and generated dependency graphs (161)</summary>
 
 - `HorizonServer.png`  
   ![HorizonServer.png](HorizonServer.png)
-- `tools/depgraph/trueos-depth-tree.svg`  
-  ![trueos depth tree.svg](tools/depgraph/trueos-depth-tree.svg)
 - `logo.jpg`  
   ![logo.jpg](logo.jpg)
 - `src/ui3/althlasfont/lucida-1x/atlas-g00.png`  
@@ -540,6 +538,158 @@ ConWhite 	FF_FF_FF
   ![atlas g07.png](src/ui3/althlasfont/palatino-third/atlas-g07.png)
 - `src/ui3/althlasfont/twemoji-1x/atlas.png`  
   ![atlas.png](src/ui3/althlasfont/twemoji-1x/atlas.png)
+- `tools/depgraph/by-root/acpi-v6.1.1.svg`  
+  ![acpi v6.1.1.svg](tools/depgraph/by-root/acpi-v6.1.1.svg)
+- `tools/depgraph/by-root/aes-v0.8.4.svg`  
+  ![aes v0.8.4.svg](tools/depgraph/by-root/aes-v0.8.4.svg)
+- `tools/depgraph/by-root/alsa-v0.11.0.svg`  
+  ![alsa v0.11.0.svg](tools/depgraph/by-root/alsa-v0.11.0.svg)
+- `tools/depgraph/by-root/aml-v0.16.4.svg`  
+  ![aml v0.16.4.svg](tools/depgraph/by-root/aml-v0.16.4.svg)
+- `tools/depgraph/by-root/base64-v0.22.1.svg`  
+  ![base64 v0.22.1.svg](tools/depgraph/by-root/base64-v0.22.1.svg)
+- `tools/depgraph/by-root/bytes-v1.11.1.svg`  
+  ![bytes v1.11.1.svg](tools/depgraph/by-root/bytes-v1.11.1.svg)
+- `tools/depgraph/by-root/core3-v0.1.2.svg`  
+  ![core3 v0.1.2.svg](tools/depgraph/by-root/core3-v0.1.2.svg)
+- `tools/depgraph/by-root/crab-usb-v0.9.1.svg`  
+  ![crab usb v0.9.1.svg](tools/depgraph/by-root/crab-usb-v0.9.1.svg)
+- `tools/depgraph/by-root/crc32fast-v1.5.0.svg`  
+  ![crc32fast v1.5.0.svg](tools/depgraph/by-root/crc32fast-v1.5.0.svg)
+- `tools/depgraph/by-root/ctr-v0.9.2.svg`  
+  ![ctr v0.9.2.svg](tools/depgraph/by-root/ctr-v0.9.2.svg)
+- `tools/depgraph/by-root/dma-api-v0.7.3.svg`  
+  ![dma api v0.7.3.svg](tools/depgraph/by-root/dma-api-v0.7.3.svg)
+- `tools/depgraph/by-root/embassy-executor-v0.10.0.svg`  
+  ![embassy executor v0.10.0.svg](tools/depgraph/by-root/embassy-executor-v0.10.0.svg)
+- `tools/depgraph/by-root/embassy-sync-v0.8.0.svg`  
+  ![embassy sync v0.8.0.svg](tools/depgraph/by-root/embassy-sync-v0.8.0.svg)
+- `tools/depgraph/by-root/embassy-time-driver-v0.2.2.svg`  
+  ![embassy time driver v0.2.2.svg](tools/depgraph/by-root/embassy-time-driver-v0.2.2.svg)
+- `tools/depgraph/by-root/embassy-time-v0.5.1.svg`  
+  ![embassy time v0.5.1.svg](tools/depgraph/by-root/embassy-time-v0.5.1.svg)
+- `tools/depgraph/by-root/embedded-io-async-v0.7.0.svg`  
+  ![embedded io async v0.7.0.svg](tools/depgraph/by-root/embedded-io-async-v0.7.0.svg)
+- `tools/depgraph/by-root/embedded-websocket-v0.9.4.svg`  
+  ![embedded websocket v0.9.4.svg](tools/depgraph/by-root/embedded-websocket-v0.9.4.svg)
+- `tools/depgraph/by-root/euclid-v0.22.13.svg`  
+  ![euclid v0.22.13.svg](tools/depgraph/by-root/euclid-v0.22.13.svg)
+- `tools/depgraph/by-root/getrandom-v0.2.17.svg`  
+  ![getrandom v0.2.17.svg](tools/depgraph/by-root/getrandom-v0.2.17.svg)
+- `tools/depgraph/by-root/hashbrown-v0.17.1.svg`  
+  ![hashbrown v0.17.1.svg](tools/depgraph/by-root/hashbrown-v0.17.1.svg)
+- `tools/depgraph/by-root/heapless-v0.9.3.svg`  
+  ![heapless v0.9.3.svg](tools/depgraph/by-root/heapless-v0.9.3.svg)
+- `tools/depgraph/by-root/hmac-v0.12.1.svg`  
+  ![hmac v0.12.1.svg](tools/depgraph/by-root/hmac-v0.12.1.svg)
+- `tools/depgraph/by-root/hyper-v1.9.0.svg`  
+  ![hyper v1.9.0.svg](tools/depgraph/by-root/hyper-v1.9.0.svg)
+- `tools/depgraph/by-root/kurbo-v0.11.3.svg`  
+  ![kurbo v0.11.3.svg](tools/depgraph/by-root/kurbo-v0.11.3.svg)
+- `tools/depgraph/by-root/libm-v0.2.16.svg`  
+  ![libm v0.2.16.svg](tools/depgraph/by-root/libm-v0.2.16.svg)
+- `tools/depgraph/by-root/limine-v0.6.3.svg`  
+  ![limine v0.6.3.svg](tools/depgraph/by-root/limine-v0.6.3.svg)
+- `tools/depgraph/by-root/log-v0.4.29.svg`  
+  ![log v0.4.29.svg](tools/depgraph/by-root/log-v0.4.29.svg)
+- `tools/depgraph/by-root/lyon_geom-v1.0.19.svg`  
+  ![lyon geom v1.0.19.svg](tools/depgraph/by-root/lyon_geom-v1.0.19.svg)
+- `tools/depgraph/by-root/lyon_tessellation-v1.0.20.svg`  
+  ![lyon tessellation v1.0.20.svg](tools/depgraph/by-root/lyon_tessellation-v1.0.20.svg)
+- `tools/depgraph/by-root/lzma-rust2-v0.16.2.svg`  
+  ![lzma rust2 v0.16.2.svg](tools/depgraph/by-root/lzma-rust2-v0.16.2.svg)
+- `tools/depgraph/by-root/memchr-v2.8.0.svg`  
+  ![memchr v2.8.0.svg](tools/depgraph/by-root/memchr-v2.8.0.svg)
+- `tools/depgraph/by-root/miniz_oxide-v0.9.1.svg`  
+  ![miniz oxide v0.9.1.svg](tools/depgraph/by-root/miniz_oxide-v0.9.1.svg)
+- `tools/depgraph/by-root/mio-v1.2.0.svg`  
+  ![mio v1.2.0.svg](tools/depgraph/by-root/mio-v1.2.0.svg)
+- `tools/depgraph/by-root/parry2d-v0.26.0.svg`  
+  ![parry2d v0.26.0.svg](tools/depgraph/by-root/parry2d-v0.26.0.svg)
+- `tools/depgraph/by-root/png-v0.18.1.svg`  
+  ![png v0.18.1.svg](tools/depgraph/by-root/png-v0.18.1.svg)
+- `tools/depgraph/by-root/pure_vorbis-v0.0.1.svg`  
+  ![pure vorbis v0.0.1.svg](tools/depgraph/by-root/pure_vorbis-v0.0.1.svg)
+- `tools/depgraph/by-root/rand_chacha-v0.3.1.svg`  
+  ![rand chacha v0.3.1.svg](tools/depgraph/by-root/rand_chacha-v0.3.1.svg)
+- `tools/depgraph/by-root/rand_core-v0.6.4.svg`  
+  ![rand core v0.6.4.svg](tools/depgraph/by-root/rand_core-v0.6.4.svg)
+- `tools/depgraph/by-root/raw-cpuid-v11.6.0.svg`  
+  ![raw cpuid v11.6.0.svg](tools/depgraph/by-root/raw-cpuid-v11.6.0.svg)
+- `tools/depgraph/by-root/rdrand-v0.8.3.svg`  
+  ![rdrand v0.8.3.svg](tools/depgraph/by-root/rdrand-v0.8.3.svg)
+- `tools/depgraph/by-root/regex-automata-v0.4.14.svg`  
+  ![regex automata v0.4.14.svg](tools/depgraph/by-root/regex-automata-v0.4.14.svg)
+- `tools/depgraph/by-root/rsa-v0.9.10.svg`  
+  ![rsa v0.9.10.svg](tools/depgraph/by-root/rsa-v0.9.10.svg)
+- `tools/depgraph/by-root/rustls-rustcrypto-v0.0.2-alpha.svg`  
+  ![rustls rustcrypto v0.0.2 alpha.svg](tools/depgraph/by-root/rustls-rustcrypto-v0.0.2-alpha.svg)
+- `tools/depgraph/by-root/rustls-v0.23.40.svg`  
+  ![rustls v0.23.40.svg](tools/depgraph/by-root/rustls-v0.23.40.svg)
+- `tools/depgraph/by-root/serde-v1.0.228.svg`  
+  ![serde v1.0.228.svg](tools/depgraph/by-root/serde-v1.0.228.svg)
+- `tools/depgraph/by-root/serde_json-v1.0.149.svg`  
+  ![serde json v1.0.149.svg](tools/depgraph/by-root/serde_json-v1.0.149.svg)
+- `tools/depgraph/by-root/sha1-v0.10.6.svg`  
+  ![sha1 v0.10.6.svg](tools/depgraph/by-root/sha1-v0.10.6.svg)
+- `tools/depgraph/by-root/sha2-v0.10.9.svg`  
+  ![sha2 v0.10.9.svg](tools/depgraph/by-root/sha2-v0.10.9.svg)
+- `tools/depgraph/by-root/smoltcp-v0.13.1.svg`  
+  ![smoltcp v0.13.1.svg](tools/depgraph/by-root/smoltcp-v0.13.1.svg)
+- `tools/depgraph/by-root/socket2-v0.6.3.svg`  
+  ![socket2 v0.6.3.svg](tools/depgraph/by-root/socket2-v0.6.3.svg)
+- `tools/depgraph/by-root/spin-v0.10.0.svg`  
+  ![spin v0.10.0.svg](tools/depgraph/by-root/spin-v0.10.0.svg)
+- `tools/depgraph/by-root/symphonia-codec-aac-v0.5.5.svg`  
+  ![symphonia codec aac v0.5.5.svg](tools/depgraph/by-root/symphonia-codec-aac-v0.5.5.svg)
+- `tools/depgraph/by-root/symphonia-core-v0.5.5.svg`  
+  ![symphonia core v0.5.5.svg](tools/depgraph/by-root/symphonia-core-v0.5.5.svg)
+- `tools/depgraph/by-root/tiny-skia-path-v0.11.4.svg`  
+  ![tiny skia path v0.11.4.svg](tools/depgraph/by-root/tiny-skia-path-v0.11.4.svg)
+- `tools/depgraph/by-root/tinyaudio-v2.0.0.svg`  
+  ![tinyaudio v2.0.0.svg](tools/depgraph/by-root/tinyaudio-v2.0.0.svg)
+- `tools/depgraph/by-root/tower-v0.5.3.svg`  
+  ![tower v0.5.3.svg](tools/depgraph/by-root/tower-v0.5.3.svg)
+- `tools/depgraph/by-root/trueos-c4-v0.1.0.svg`  
+  ![trueos c4 v0.1.0.svg](tools/depgraph/by-root/trueos-c4-v0.1.0.svg)
+- `tools/depgraph/by-root/trueos-esp-v0.1.0.svg`  
+  ![trueos esp v0.1.0.svg](tools/depgraph/by-root/trueos-esp-v0.1.0.svg)
+- `tools/depgraph/by-root/trueos-fs-v0.0.1.svg`  
+  ![trueos fs v0.0.1.svg](tools/depgraph/by-root/trueos-fs-v0.0.1.svg)
+- `tools/depgraph/by-root/trueos-io-v0.1.0.svg`  
+  ![trueos io v0.1.0.svg](tools/depgraph/by-root/trueos-io-v0.1.0.svg)
+- `tools/depgraph/by-root/trueos-locale-v0.1.0.svg`  
+  ![trueos locale v0.1.0.svg](tools/depgraph/by-root/trueos-locale-v0.1.0.svg)
+- `tools/depgraph/by-root/trueos-lsd-v1.1.5.svg`  
+  ![trueos lsd v1.1.5.svg](tools/depgraph/by-root/trueos-lsd-v1.1.5.svg)
+- `tools/depgraph/by-root/trueos-math-v0.1.0.svg`  
+  ![trueos math v0.1.0.svg](tools/depgraph/by-root/trueos-math-v0.1.0.svg)
+- `tools/depgraph/by-root/trueos-qjs-v0.1.0.svg`  
+  ![trueos qjs v0.1.0.svg](tools/depgraph/by-root/trueos-qjs-v0.1.0.svg)
+- `tools/depgraph/by-root/trueos-silk-v0.1.0.svg`  
+  ![trueos silk v0.1.0.svg](tools/depgraph/by-root/trueos-silk-v0.1.0.svg)
+- `tools/depgraph/by-root/trueos-vm-v0.1.0.svg`  
+  ![trueos vm v0.1.0.svg](tools/depgraph/by-root/trueos-vm-v0.1.0.svg)
+- `tools/depgraph/by-root/twoway-v0.2.2.svg`  
+  ![twoway v0.2.2.svg](tools/depgraph/by-root/twoway-v0.2.2.svg)
+- `tools/depgraph/by-root/unicode-segmentation-v1.13.2.svg`  
+  ![unicode segmentation v1.13.2.svg](tools/depgraph/by-root/unicode-segmentation-v1.13.2.svg)
+- `tools/depgraph/by-root/usvg-v0.45.1.svg`  
+  ![usvg v0.45.1.svg](tools/depgraph/by-root/usvg-v0.45.1.svg)
+- `tools/depgraph/by-root/v-v0.1.0.svg`  
+  ![v v0.1.0.svg](tools/depgraph/by-root/v-v0.1.0.svg)
+- `tools/depgraph/by-root/webpki-roots-v1.0.7.svg`  
+  ![webpki roots v1.0.7.svg](tools/depgraph/by-root/webpki-roots-v1.0.7.svg)
+- `tools/depgraph/by-root/x86_64-v0.15.4.svg`  
+  ![x86 64 v0.15.4.svg](tools/depgraph/by-root/x86_64-v0.15.4.svg)
+- `tools/depgraph/by-root/zeroize-v1.8.2.svg`  
+  ![zeroize v1.8.2.svg](tools/depgraph/by-root/zeroize-v1.8.2.svg)
+- `tools/depgraph/by-root/zune-core-v0.5.1.svg`  
+  ![zune core v0.5.1.svg](tools/depgraph/by-root/zune-core-v0.5.1.svg)
+- `tools/depgraph/by-root/zune-jpeg-v0.5.15.svg`  
+  ![zune jpeg v0.5.15.svg](tools/depgraph/by-root/zune-jpeg-v0.5.15.svg)
+- `tools/depgraph/trueos-depth-tree.svg`  
+  ![trueos depth tree.svg](tools/depgraph/trueos-depth-tree.svg)
 - `tools/vid/Buro4K.jpeg`  
   ![Buro4K.jpeg](tools/vid/Buro4K.jpeg)
 - `tools/vid/IMG_20260426_020424.jpg`  

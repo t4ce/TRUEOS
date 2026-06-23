@@ -1,0 +1,22 @@
+digraph "png-v0.18.1" {
+  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];
+  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.08,0.05", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
+  edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];
+  n0 [label=<<B>png</B><BR/>0.18.1<BR/>/vendor/png-0.18.1>, fillcolor="#dff3ff", color="#1b78a6"];
+  n1 [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="0"><TR><TD><B>fdeflate</B></TD></TR>
+<TR><TD>0.3.7</TD></TR>
+<TR><TD>/vendor/fdeflate-0.3.7</TD></TR><TR><TD><TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#9aa8b8" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="8"><B>simd-adler32</B> 0.3.8<BR/>/vendor/simd-adler32-0.3.8</FONT></TD></TR></TABLE></TD></TR></TABLE>>, fillcolor="#fff0d5", color="#c47a1a"];
+  n0 -> n1;
+  out0 [label=<to acpi-v6.1.1.svg<BR/><B>bitflags</B><BR/>2.11.1>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out0 [style=dashed, color="#d19922"];
+  out1 [label=<to core3-v0.1.2.svg<BR/><B>core3</B><BR/>0.1.2>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out1 [style=dashed, color="#d19922"];
+  out2 [label=<to crc32fast-v1.5.0.svg<BR/><B>crc32fast</B><BR/>1.5.0<BR/>/vendor/crc32fast-1.5.0>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out2 [style=dashed, color="#d19922"];
+  out3 [label=<to log-v0.4.29.svg<BR/><B>log</B><BR/>0.4.29>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out3 [style=dashed, color="#d19922"];
+  out4 [label=<to miniz_oxide-v0.9.1.svg<BR/><B>miniz_oxide</B><BR/>0.9.1>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out4 [style=dashed, color="#d19922"];
+  // collapsed leaf ends: 1
+  // centered two-input leaves: 0
+}

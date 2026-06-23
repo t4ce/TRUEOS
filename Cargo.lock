@@ -45,7 +45,6 @@ dependencies = [
  "rand_chacha",
  "rand_core",
  "raw-cpuid",
- "rdrand",
  "regex-automata",
  "rsa",
  "rustls",
@@ -1731,8 +1730,6 @@ dependencies = [
 [[package]]
 name = "rand_core"
 version = "0.6.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 dependencies = [
  "getrandom",
 ]
@@ -1744,15 +1741,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "498cd0dc59d73224351ee52a95fee0f1a617a2eae0e7d9d720cc622c73a54186"
 dependencies = [
  "bitflags 2.11.1",
-]
-
-[[package]]
-name = "rdrand"
-version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d92195228612ac8eed47adbc2ed0f04e513a4ccb98175b6f2bd04d963b533655"
-dependencies = [
- "rand_core",
 ]
 
 [[package]]

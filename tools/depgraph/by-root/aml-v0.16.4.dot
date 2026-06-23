@@ -1,0 +1,25 @@
+digraph "aml-v0.16.4" {
+  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];
+  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.08,0.05", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
+  edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];
+  n0 [label=<<B>aml</B><BR/>0.16.4<BR/>/vendor/aml-0.16.4>, fillcolor="#dff3ff", color="#1b78a6"];
+  n1 [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="0"><TR><TD><B>bitvec</B></TD></TR>
+<TR><TD>1.0.1</TD></TR><TR><TD><TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#9aa8b8" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="8"><B>funty</B> 2.0.0</FONT></TD></TR></TABLE></TD></TR><TR><TD><TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#9aa8b8" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="8"><B>radium</B> 0.7.0</FONT></TD></TR></TABLE></TD></TR></TABLE>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n2 [label=<<B>tap</B><BR/>1.0.1>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n3 [label=<<B>wyz</B><BR/>0.5.1>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n0 -> n1;
+  n1 -> n2 [constraint=false, weight=4];
+  n1 -> n3;
+  n3 -> n2 [constraint=false, weight=4];
+  out0 [label=<to acpi-v6.1.1.svg<BR/><B>bit_field</B><BR/>0.10.3<BR/><B>byteorder</B><BR/>1.5.0<BR/><B>spinning_top</B><BR/>0.3.0>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out0 [style=dashed, color="#d19922"];
+  out1 [label=<to log-v0.4.29.svg<BR/><B>log</B><BR/>0.4.29>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out1 [style=dashed, color="#d19922"];
+  {
+    rank=same;
+    n1; n2; n3;
+    n1 -> n2 -> n3 [style=invis, weight=120];
+  }
+  // collapsed leaf ends: 2
+  // centered two-input leaves: 1
+}
