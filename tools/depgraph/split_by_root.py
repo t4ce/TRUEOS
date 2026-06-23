@@ -43,7 +43,7 @@ SHARED_LINK_VERTICAL_THRESHOLD = 24.0
 ARCHITECTURE_BUCKET_PADDING = 32.0
 # Spread the full LR graph wide enough that the layout itself uses the 16:9 canvas.
 FULL_GRAPH_NODESEP = 0.62
-FULL_GRAPH_RANKSEP = 16.8
+FULL_GRAPH_RANKSEP = 16.2
 FULL_GRAPH_ASPECT_RATIO = 16 / 9
 SPLIT_GRAPH_NODESEP = 0.35
 SPLIT_GRAPH_RANKSEP = 0.55
@@ -811,8 +811,10 @@ def render_full_dot(
     edges: set[tuple[str, str]],
     architecture_irrelevant: list[str] | None = None,
     advanced_parent_nodes: set[str] | None = None,
+    advanced_parent_anchors: dict[str, str] | None = None,
 ) -> str:
     advanced_parent_nodes = advanced_parent_nodes or set()
+    advanced_parent_anchors = advanced_parent_anchors or {}
     node_ids: dict[str, str] = {}
     (
         all_nodes,
@@ -893,7 +895,14 @@ def render_full_dot(
     for label in sorted(advanced_parent_nodes - left_wing_nodes):
         if label not in visible_nodes or label == root:
             continue
-        lines.append(f"  {node_id(root)} -> {node_id(label)} [style=invis, weight=500, minlen=2];")
+        anchor = advanced_parent_anchors.get(label)
+        if anchor in visible_nodes and anchor != label:
+            lines.append(
+                f"  {node_id(anchor)} -> {node_id(label)} "
+                "[style=invis, weight=900, minlen=2];"
+            )
+        else:
+            lines.append(f"  {node_id(root)} -> {node_id(label)} [style=invis, weight=500, minlen=2];")
 
     if left_wing_nodes:
         max_left_depth = max(left_wing_depth_by_node.values(), default=0)
@@ -1013,43 +1022,53 @@ def widen_full_svg_to_aspect() -> None:
     if not viewbox:
         raise RuntimeError(f"could not parse viewBox from {FULL_SVG_PATH}")
     width, height = float(viewbox.group(1)), float(viewbox.group(2))
-    target_width = max(width, height * FULL_GRAPH_ASPECT_RATIO)
-    if target_width <= width + 0.01:
+    target_width = width
+    target_height = height
+    if width / height < FULL_GRAPH_ASPECT_RATIO:
+        target_width = height * FULL_GRAPH_ASPECT_RATIO
+    elif width / height > FULL_GRAPH_ASPECT_RATIO:
+        target_height = width / FULL_GRAPH_ASPECT_RATIO
+    if abs(target_width - width) <= 0.01 and abs(target_height - height) <= 0.01:
         return
 
     svg = re.sub(
         r'<svg width="[^"]+" height="[^"]+"',
-        f'<svg width="{target_width:.0f}pt" height="{height:.0f}pt"',
+        f'<svg width="{target_width:.0f}pt" height="{target_height:.0f}pt"',
         svg,
         count=1,
     )
     svg = re.sub(
         r'viewBox="0\.00 0\.00 [0-9.]+ [0-9.]+"',
-        f'viewBox="0.00 0.00 {target_width:.2f} {height:.2f}"',
+        f'viewBox="0.00 0.00 {target_width:.2f} {target_height:.2f}"',
         svg,
         count=1,
     )
 
-    def widen_background(match: re.Match[str]) -> str:
+    def pad_background(match: re.Match[str]) -> str:
         points = match.group(2)
         pairs = re.findall(r"(-?[0-9.]+),(-?[0-9.]+)", points)
         if not pairs:
             return match.group(0)
         xs = [float(x) for x, _y in pairs]
+        ys = [float(y) for _x, y in pairs]
         old_max_x = max(xs)
-        right_pad = width - old_max_x
-        new_max_x = target_width - right_pad
+        old_max_y = max(ys)
+        new_max_x = old_max_x + (target_width - width)
+        new_max_y = old_max_y + (target_height - height)
         rewritten = []
         for x_text, y_text in pairs:
             x = float(x_text)
+            y = float(y_text)
             if abs(x - old_max_x) < 0.01:
                 x_text = f"{new_max_x:.2f}"
+            if abs(y - old_max_y) < 0.01:
+                y_text = f"{new_max_y:.2f}"
             rewritten.append(f"{x_text},{y_text}")
         return match.group(1) + " ".join(rewritten) + match.group(3)
 
     svg = re.sub(
         r'(<polygon fill="white" stroke="none" points=")([^"]+)(")',
-        widen_background,
+        pad_background,
         svg,
         count=1,
     )
@@ -1417,19 +1436,20 @@ def vertically_aligned_shared_leaves(root: str, edges: set[tuple[str, str]]) -> 
     return vertical_leaves
 
 
-def shared_leaf_parent_nodes(
+def shared_leaf_parent_advances(
     root: str,
     edges: set[tuple[str, str]],
     shared_leaves: set[str],
-) -> set[str]:
+) -> tuple[set[str], dict[str, str]]:
     if not shared_leaves:
-        return set()
+        return set(), {}
 
     node_ids, _collapsed_leaves, embedded_by_parent, _shared_input_leaves, incoming_parents = (
         full_graph_layout(root, edges)
     )
     _width, _height, node_bboxes, inner_bboxes = full_svg_bboxes()
     advanced_parents: set[str] = set()
+    advanced_anchors: dict[str, str] = {}
     for leaf in sorted(shared_leaves):
         candidates: list[tuple[float, str, str]] = []
         for parent in sorted(incoming_parents.get(leaf, set())):
@@ -1447,9 +1467,12 @@ def shared_leaf_parent_nodes(
                 continue
             candidates.append((y + h / 2, display_label(parent), parent))
         if candidates:
-            _center_y, _display, parent = max(candidates)
+            ordered = sorted(candidates)
+            _center_y, _display, parent = ordered[-1]
             advanced_parents.add(parent)
-    return advanced_parents
+            if len(ordered) > 1:
+                advanced_anchors[parent] = ordered[0][2]
+    return advanced_parents, advanced_anchors
 
 
 def terminal_leaf_borders(root: str, edges: set[tuple[str, str]]) -> list[dict[str, object]]:
@@ -2027,9 +2050,17 @@ def main() -> None:
     FULL_DOT_PATH.write_text(render_full_dot(root, graph_edges, architecture_irrelevant))
     subprocess.run(["dot", "-Tsvg", str(FULL_DOT_PATH), "-o", str(FULL_SVG_PATH)], check=True)
     advanced_shared_leaves = vertically_aligned_shared_leaves(root, graph_edges)
-    advanced_parent_nodes = shared_leaf_parent_nodes(root, graph_edges, advanced_shared_leaves)
+    advanced_parent_nodes, advanced_parent_anchors = shared_leaf_parent_advances(
+        root, graph_edges, advanced_shared_leaves
+    )
     FULL_DOT_PATH.write_text(
-        render_full_dot(root, graph_edges, architecture_irrelevant, advanced_parent_nodes)
+        render_full_dot(
+            root,
+            graph_edges,
+            architecture_irrelevant,
+            advanced_parent_nodes,
+            advanced_parent_anchors,
+        )
     )
     subprocess.run(["dot", "-Tsvg", str(FULL_DOT_PATH), "-o", str(FULL_SVG_PATH)], check=True)
     inject_full_svg_regions(root, graph_root_children, graph_edges)
