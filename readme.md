@@ -398,3 +398,183 @@ ConWhite 	FF_FF_FF
 > [!WARNING]
 > [!CAUTION]
 > [!Note]
+
+## Asset preview smoke test
+
+<details>
+<summary>Repository images and generated dependency graph</summary>
+
+- `HorizonServer.png`  
+  ![HorizonServer.png](HorizonServer.png)
+- `tools/depgraph/trueos-depth-tree.svg`  
+  ![trueos depth tree.svg](tools/depgraph/trueos-depth-tree.svg)
+- `logo.jpg`  
+  ![logo.jpg](logo.jpg)
+- `src/ui3/althlasfont/lucida-1x/atlas-g00.png`  
+  ![atlas g00.png](src/ui3/althlasfont/lucida-1x/atlas-g00.png)
+- `src/ui3/althlasfont/lucida-1x/atlas-g01.png`  
+  ![atlas g01.png](src/ui3/althlasfont/lucida-1x/atlas-g01.png)
+- `src/ui3/althlasfont/lucida-1x/atlas-g02.png`  
+  ![atlas g02.png](src/ui3/althlasfont/lucida-1x/atlas-g02.png)
+- `src/ui3/althlasfont/lucida-1x/atlas-g03.png`  
+  ![atlas g03.png](src/ui3/althlasfont/lucida-1x/atlas-g03.png)
+- `src/ui3/althlasfont/lucida-1x/atlas-g04.png`  
+  ![atlas g04.png](src/ui3/althlasfont/lucida-1x/atlas-g04.png)
+- `src/ui3/althlasfont/lucida-1x/atlas-g05.png`  
+  ![atlas g05.png](src/ui3/althlasfont/lucida-1x/atlas-g05.png)
+- `src/ui3/althlasfont/lucida-1x/atlas-g06.png`  
+  ![atlas g06.png](src/ui3/althlasfont/lucida-1x/atlas-g06.png)
+- `src/ui3/althlasfont/lucida-1x/atlas-g07.png`  
+  ![atlas g07.png](src/ui3/althlasfont/lucida-1x/atlas-g07.png)
+- `src/ui3/althlasfont/lucida-2x/atlas-g00.png`  
+  ![atlas g00.png](src/ui3/althlasfont/lucida-2x/atlas-g00.png)
+- `src/ui3/althlasfont/lucida-2x/atlas-g01.png`  
+  ![atlas g01.png](src/ui3/althlasfont/lucida-2x/atlas-g01.png)
+- `src/ui3/althlasfont/lucida-2x/atlas-g02.png`  
+  ![atlas g02.png](src/ui3/althlasfont/lucida-2x/atlas-g02.png)
+- `src/ui3/althlasfont/lucida-2x/atlas-g03.png`  
+  ![atlas g03.png](src/ui3/althlasfont/lucida-2x/atlas-g03.png)
+- `src/ui3/althlasfont/lucida-2x/atlas-g04.png`  
+  ![atlas g04.png](src/ui3/althlasfont/lucida-2x/atlas-g04.png)
+- `src/ui3/althlasfont/lucida-2x/atlas-g05.png`  
+  ![atlas g05.png](src/ui3/althlasfont/lucida-2x/atlas-g05.png)
+- `src/ui3/althlasfont/lucida-2x/atlas-g06.png`  
+  ![atlas g06.png](src/ui3/althlasfont/lucida-2x/atlas-g06.png)
+- `src/ui3/althlasfont/lucida-2x/atlas-g07.png`  
+  ![atlas g07.png](src/ui3/althlasfont/lucida-2x/atlas-g07.png)
+- `src/ui3/althlasfont/lucida-half/atlas-g00.png`  
+  ![atlas g00.png](src/ui3/althlasfont/lucida-half/atlas-g00.png)
+- `src/ui3/althlasfont/lucida-half/atlas-g01.png`  
+  ![atlas g01.png](src/ui3/althlasfont/lucida-half/atlas-g01.png)
+- `src/ui3/althlasfont/lucida-half/atlas-g02.png`  
+  ![atlas g02.png](src/ui3/althlasfont/lucida-half/atlas-g02.png)
+- `src/ui3/althlasfont/lucida-half/atlas-g03.png`  
+  ![atlas g03.png](src/ui3/althlasfont/lucida-half/atlas-g03.png)
+- `src/ui3/althlasfont/lucida-half/atlas-g04.png`  
+  ![atlas g04.png](src/ui3/althlasfont/lucida-half/atlas-g04.png)
+- `src/ui3/althlasfont/lucida-half/atlas-g05.png`  
+  ![atlas g05.png](src/ui3/althlasfont/lucida-half/atlas-g05.png)
+- `src/ui3/althlasfont/lucida-half/atlas-g06.png`  
+  ![atlas g06.png](src/ui3/althlasfont/lucida-half/atlas-g06.png)
+- `src/ui3/althlasfont/lucida-half/atlas-g07.png`  
+  ![atlas g07.png](src/ui3/althlasfont/lucida-half/atlas-g07.png)
+- `src/ui3/althlasfont/lucida-third/atlas-g00.png`  
+  ![atlas g00.png](src/ui3/althlasfont/lucida-third/atlas-g00.png)
+- `src/ui3/althlasfont/lucida-third/atlas-g01.png`  
+  ![atlas g01.png](src/ui3/althlasfont/lucida-third/atlas-g01.png)
+- `src/ui3/althlasfont/lucida-third/atlas-g02.png`  
+  ![atlas g02.png](src/ui3/althlasfont/lucida-third/atlas-g02.png)
+- `src/ui3/althlasfont/lucida-third/atlas-g03.png`  
+  ![atlas g03.png](src/ui3/althlasfont/lucida-third/atlas-g03.png)
+- `src/ui3/althlasfont/lucida-third/atlas-g04.png`  
+  ![atlas g04.png](src/ui3/althlasfont/lucida-third/atlas-g04.png)
+- `src/ui3/althlasfont/lucida-third/atlas-g05.png`  
+  ![atlas g05.png](src/ui3/althlasfont/lucida-third/atlas-g05.png)
+- `src/ui3/althlasfont/lucida-third/atlas-g06.png`  
+  ![atlas g06.png](src/ui3/althlasfont/lucida-third/atlas-g06.png)
+- `src/ui3/althlasfont/lucida-third/atlas-g07.png`  
+  ![atlas g07.png](src/ui3/althlasfont/lucida-third/atlas-g07.png)
+- `src/ui3/althlasfont/palatino-1x/atlas-g00.png`  
+  ![atlas g00.png](src/ui3/althlasfont/palatino-1x/atlas-g00.png)
+- `src/ui3/althlasfont/palatino-1x/atlas-g01.png`  
+  ![atlas g01.png](src/ui3/althlasfont/palatino-1x/atlas-g01.png)
+- `src/ui3/althlasfont/palatino-1x/atlas-g02.png`  
+  ![atlas g02.png](src/ui3/althlasfont/palatino-1x/atlas-g02.png)
+- `src/ui3/althlasfont/palatino-1x/atlas-g03.png`  
+  ![atlas g03.png](src/ui3/althlasfont/palatino-1x/atlas-g03.png)
+- `src/ui3/althlasfont/palatino-1x/atlas-g04.png`  
+  ![atlas g04.png](src/ui3/althlasfont/palatino-1x/atlas-g04.png)
+- `src/ui3/althlasfont/palatino-1x/atlas-g05.png`  
+  ![atlas g05.png](src/ui3/althlasfont/palatino-1x/atlas-g05.png)
+- `src/ui3/althlasfont/palatino-1x/atlas-g06.png`  
+  ![atlas g06.png](src/ui3/althlasfont/palatino-1x/atlas-g06.png)
+- `src/ui3/althlasfont/palatino-1x/atlas-g07.png`  
+  ![atlas g07.png](src/ui3/althlasfont/palatino-1x/atlas-g07.png)
+- `src/ui3/althlasfont/palatino-2x/atlas-g00.png`  
+  ![atlas g00.png](src/ui3/althlasfont/palatino-2x/atlas-g00.png)
+- `src/ui3/althlasfont/palatino-2x/atlas-g01.png`  
+  ![atlas g01.png](src/ui3/althlasfont/palatino-2x/atlas-g01.png)
+- `src/ui3/althlasfont/palatino-2x/atlas-g02.png`  
+  ![atlas g02.png](src/ui3/althlasfont/palatino-2x/atlas-g02.png)
+- `src/ui3/althlasfont/palatino-2x/atlas-g03.png`  
+  ![atlas g03.png](src/ui3/althlasfont/palatino-2x/atlas-g03.png)
+- `src/ui3/althlasfont/palatino-2x/atlas-g04.png`  
+  ![atlas g04.png](src/ui3/althlasfont/palatino-2x/atlas-g04.png)
+- `src/ui3/althlasfont/palatino-2x/atlas-g05.png`  
+  ![atlas g05.png](src/ui3/althlasfont/palatino-2x/atlas-g05.png)
+- `src/ui3/althlasfont/palatino-2x/atlas-g06.png`  
+  ![atlas g06.png](src/ui3/althlasfont/palatino-2x/atlas-g06.png)
+- `src/ui3/althlasfont/palatino-2x/atlas-g07.png`  
+  ![atlas g07.png](src/ui3/althlasfont/palatino-2x/atlas-g07.png)
+- `src/ui3/althlasfont/palatino-half/atlas-g00.png`  
+  ![atlas g00.png](src/ui3/althlasfont/palatino-half/atlas-g00.png)
+- `src/ui3/althlasfont/palatino-half/atlas-g01.png`  
+  ![atlas g01.png](src/ui3/althlasfont/palatino-half/atlas-g01.png)
+- `src/ui3/althlasfont/palatino-half/atlas-g02.png`  
+  ![atlas g02.png](src/ui3/althlasfont/palatino-half/atlas-g02.png)
+- `src/ui3/althlasfont/palatino-half/atlas-g03.png`  
+  ![atlas g03.png](src/ui3/althlasfont/palatino-half/atlas-g03.png)
+- `src/ui3/althlasfont/palatino-half/atlas-g04.png`  
+  ![atlas g04.png](src/ui3/althlasfont/palatino-half/atlas-g04.png)
+- `src/ui3/althlasfont/palatino-half/atlas-g05.png`  
+  ![atlas g05.png](src/ui3/althlasfont/palatino-half/atlas-g05.png)
+- `src/ui3/althlasfont/palatino-half/atlas-g06.png`  
+  ![atlas g06.png](src/ui3/althlasfont/palatino-half/atlas-g06.png)
+- `src/ui3/althlasfont/palatino-half/atlas-g07.png`  
+  ![atlas g07.png](src/ui3/althlasfont/palatino-half/atlas-g07.png)
+- `src/ui3/althlasfont/palatino-third/atlas-g00.png`  
+  ![atlas g00.png](src/ui3/althlasfont/palatino-third/atlas-g00.png)
+- `src/ui3/althlasfont/palatino-third/atlas-g01.png`  
+  ![atlas g01.png](src/ui3/althlasfont/palatino-third/atlas-g01.png)
+- `src/ui3/althlasfont/palatino-third/atlas-g02.png`  
+  ![atlas g02.png](src/ui3/althlasfont/palatino-third/atlas-g02.png)
+- `src/ui3/althlasfont/palatino-third/atlas-g03.png`  
+  ![atlas g03.png](src/ui3/althlasfont/palatino-third/atlas-g03.png)
+- `src/ui3/althlasfont/palatino-third/atlas-g04.png`  
+  ![atlas g04.png](src/ui3/althlasfont/palatino-third/atlas-g04.png)
+- `src/ui3/althlasfont/palatino-third/atlas-g05.png`  
+  ![atlas g05.png](src/ui3/althlasfont/palatino-third/atlas-g05.png)
+- `src/ui3/althlasfont/palatino-third/atlas-g06.png`  
+  ![atlas g06.png](src/ui3/althlasfont/palatino-third/atlas-g06.png)
+- `src/ui3/althlasfont/palatino-third/atlas-g07.png`  
+  ![atlas g07.png](src/ui3/althlasfont/palatino-third/atlas-g07.png)
+- `src/ui3/althlasfont/twemoji-1x/atlas.png`  
+  ![atlas.png](src/ui3/althlasfont/twemoji-1x/atlas.png)
+- `tools/vid/Buro4K.jpeg`  
+  ![Buro4K.jpeg](tools/vid/Buro4K.jpeg)
+- `tools/vid/IMG_20260426_020424.jpg`  
+  ![IMG 20260426 020424.jpg](tools/vid/IMG_20260426_020424.jpg)
+- `tools/vid/Photo from 2026-04-26 02-00-42.935475.jpeg`  
+  ![Photo from 2026 04 26 02 00 42.935475.jpeg](<tools/vid/Photo from 2026-04-26 02-00-42.935475.jpeg>)
+- `tools/vid/YellyFHD.jpg`  
+  ![YellyFHD.jpg](tools/vid/YellyFHD.jpg)
+- `tools/vid/demo_yelly3_first_frame.png`  
+  ![demo yelly3 first frame.png](tools/vid/demo_yelly3_first_frame.png)
+- `tools/vid/demo_yelly_first_frame.png`  
+  ![demo yelly first frame.png](tools/vid/demo_yelly_first_frame.png)
+- `tools/vid/trueos_jpeg_diag_2560x1440.png`  
+  ![trueos jpeg diag 2560x1440.png](tools/vid/trueos_jpeg_diag_2560x1440.png)
+- `tools/vid/trueos_jpeg_diag_2560x1440_q95.jpg`  
+  ![trueos jpeg diag 2560x1440 q95.jpg](tools/vid/trueos_jpeg_diag_2560x1440_q95.jpg)
+- `tools/vid/trueos_yellow_2560x1440_q90.jpg`  
+  ![trueos yellow 2560x1440 q90.jpg](tools/vid/trueos_yellow_2560x1440_q90.jpg)
+- `vendor/CrabUSB/docs/layout.svg`  
+  ![layout.svg](vendor/CrabUSB/docs/layout.svg)
+- `vendor/CrabUSB/docs/异步请求.drawio.png`  
+  ![异步请求.drawio.png](vendor/CrabUSB/docs/异步请求.drawio.png)
+- `vendor/base64-0.22.1/icon_CLion.svg`  
+  ![icon CLion.svg](vendor/base64-0.22.1/icon_CLion.svg)
+- `vendor/limine/logo.png`  
+  ![logo.png](vendor/limine/logo.png)
+- `vendor/limine/screenshot.png`  
+  ![screenshot.png](vendor/limine/screenshot.png)
+- `vendor/limine/test/bg.jpg`  
+  ![bg.jpg](vendor/limine/test/bg.jpg)
+- `vendor/limine/trueos_dist/src/logo.png`  
+  ![logo.png](vendor/limine/trueos_dist/src/logo.png)
+- `vendor/limine/trueos_dist/src/screenshot.png`  
+  ![screenshot.png](vendor/limine/trueos_dist/src/screenshot.png)
+- `vendor/limine/trueos_dist/src/test/bg.jpg`  
+  ![bg.jpg](vendor/limine/trueos_dist/src/test/bg.jpg)
+
+</details>
