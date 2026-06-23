@@ -31,7 +31,7 @@ categories = [
     "algorithms",
     "no-std",
 ]
-license = "(MIT OR Apache-2.0) AND ISC"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/rust-random/rand"
 
 [package.metadata.docs.rs]
@@ -55,7 +55,6 @@ optional = true
 
 [features]
 alloc = []
-rdrand = []
 serde1 = ["serde"]
 std = [
     "alloc",

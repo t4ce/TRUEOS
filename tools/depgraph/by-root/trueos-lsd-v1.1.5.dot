@@ -1,8 +1,8 @@
 digraph "trueos-lsd-v1.1.5" {
   graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];
-  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.08,0.05", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
+  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.13,0.10", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
   edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];
-  n0 [label=<<B>trueos-lsd</B><BR/>1.1.5<BR/>/crates/trueos-lsd>, fillcolor="#dff3ff", color="#1b78a6"];
+  n0 [label=<<FONT POINT-SIZE="13"><B>trueos-lsd</B></FONT><BR/><FONT POINT-SIZE="12">1.1.5</FONT><BR/><FONT POINT-SIZE="11">/crates/trueos-lsd</FONT>>, fillcolor="#dff3ff", color="#1b78a6"];
   out0 [label=<to trueos-io-v0.1.0.svg<BR/><B>trueos-io</B><BR/>0.1.0<BR/>/crates/trueos-io>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out0 [style=dashed, color="#d19922"];
   out1 [label=<to v-v0.1.0.svg<BR/><B>v</B><BR/>0.1.0<BR/>/crates/trueos-v>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];

@@ -1,8 +1,8 @@
 digraph "euclid-v0.22.13" {
   graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];
-  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.08,0.05", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
+  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.13,0.10", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
   edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];
-  n0 [label=<<B>euclid</B><BR/>0.22.13>, fillcolor="#dff3ff", color="#1b78a6"];
+  n0 [label=<<FONT POINT-SIZE="13"><B>euclid</B></FONT><BR/><FONT POINT-SIZE="12">0.22.13</FONT>>, fillcolor="#dff3ff", color="#1b78a6"];
   out0 [label=<to crab-usb-v0.9.1.svg<BR/><B>num-traits</B><BR/>0.2.19<BR/>/vendor/num-traits-0.2.19>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out0 [style=dashed, color="#d19922"];
   in1 [label=<from lyon_geom-v1.0.19.svg<BR/><B>euclid</B><BR/>0.22.13>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];

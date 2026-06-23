@@ -17,22 +17,22 @@ impl ErrorCode {
     #[cfg(not(feature = "std"))]
     const fn as_randcore_code(self) -> core::num::NonZeroU32 {
         /// Arbitrary, off top of head bitmask for error codes that come from rdrand
-        const RDRAND_TAG: u32 = crate::Error::CUSTOM_START + 0x3D34_7D00;
+        const RDRAND_TAG: u32 = rand_core::Error::CUSTOM_START + 0x3D34_7D00;
         unsafe { core::num::NonZeroU32::new_unchecked(RDRAND_TAG + self as u32) }
     }
 }
 
 #[cfg(not(feature = "std"))]
-impl From<ErrorCode> for crate::Error {
-    fn from(code: ErrorCode) -> crate::Error {
+impl From<ErrorCode> for rand_core::Error {
+    fn from(code: ErrorCode) -> rand_core::Error {
         code.as_randcore_code().into()
     }
 }
 
 #[cfg(feature = "std")]
-impl From<ErrorCode> for crate::Error {
-    fn from(code: ErrorCode) -> crate::Error {
-        crate::Error::new(code)
+impl From<ErrorCode> for rand_core::Error {
+    fn from(code: ErrorCode) -> rand_core::Error {
+        rand_core::Error::new(code)
     }
 }
 
@@ -60,10 +60,10 @@ impl Display for NotAnErrorCode {
     }
 }
 
-impl TryFrom<&crate::Error> for ErrorCode {
+impl TryFrom<&rand_core::Error> for ErrorCode {
     type Error = NotAnErrorCode;
     #[cfg(feature = "std")]
-    fn try_from(error: &crate::Error) -> Result<Self, Self::Error> {
+    fn try_from(error: &rand_core::Error) -> Result<Self, Self::Error> {
         error
             .inner()
             .downcast_ref::<ErrorCode>()
@@ -71,7 +71,7 @@ impl TryFrom<&crate::Error> for ErrorCode {
             .ok_or(NotAnErrorCode)
     }
     #[cfg(not(feature = "std"))]
-    fn try_from(error: &crate::Error) -> Result<Self, Self::Error> {
+    fn try_from(error: &rand_core::Error) -> Result<Self, Self::Error> {
         let code = error.code().ok_or(NotAnErrorCode)?;
         if code == ErrorCode::UnsupportedInstruction.as_randcore_code() {
             Ok(ErrorCode::UnsupportedInstruction)
@@ -83,10 +83,10 @@ impl TryFrom<&crate::Error> for ErrorCode {
     }
 }
 
-impl TryFrom<crate::Error> for ErrorCode {
+impl TryFrom<rand_core::Error> for ErrorCode {
     type Error = NotAnErrorCode;
-    fn try_from(error: crate::Error) -> Result<Self, Self::Error> {
-        <ErrorCode as TryFrom<&crate::Error>>::try_from(&error)
+    fn try_from(error: rand_core::Error) -> Result<Self, Self::Error> {
+        <ErrorCode as TryFrom<&rand_core::Error>>::try_from(&error)
     }
 }
 
@@ -94,7 +94,7 @@ impl TryFrom<crate::Error> for ErrorCode {
 mod test {
     use super::ErrorCode;
     use core::convert::TryInto;
-    use crate::Error;
+    use rand_core::Error;
 
     #[test]
     fn error_code_send() {

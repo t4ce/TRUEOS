@@ -1,10 +1,10 @@
 digraph "tower-v0.5.3" {
   graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];
-  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.08,0.05", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
+  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.13,0.10", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
   edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];
-  n0 [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="0"><TR><TD><B>tower</B></TD></TR>
-<TR><TD>0.5.3</TD></TR>
-<TR><TD>/vendor/tower-0.5.3</TD></TR><TR><TD><TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#9aa8b8" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="8"><B>sync_wrapper</B> 1.0.2</FONT></TD></TR></TABLE></TD></TR><TR><TD><TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#9aa8b8" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="8"><B>tower-layer</B> 0.3.3<BR/>/vendor/tower-layer-0.3.3</FONT></TD></TR></TABLE></TD></TR><TR><TD><TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#9aa8b8" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="8"><B>tower-service</B> 0.3.3<BR/>/vendor/tower-service-0.3.3</FONT></TD></TR></TABLE></TD></TR></TABLE>>, fillcolor="#dff3ff", color="#1b78a6"];
+  n0 [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="0"><TR><TD><FONT POINT-SIZE="13"><B>tower</B></FONT></TD></TR>
+<TR><TD><FONT POINT-SIZE="12">0.5.3</FONT></TD></TR>
+<TR><TD><FONT POINT-SIZE="11">/vendor/tower-0.5.3</FONT></TD></TR><TR><TD><TABLE BORDER="0" CELLBORDER="0" CELLSPACING="6" CELLPADDING="0"><TR><TD><TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="8" COLOR="#9aa8b8" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="11"><B>sync_wrapper</B></FONT> <FONT POINT-SIZE="10">1.0.2</FONT></TD></TR></TABLE></TD></TR><TR><TD><TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="8" COLOR="#9aa8b8" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="11"><B>tower-layer</B></FONT> <FONT POINT-SIZE="10">0.3.3</FONT><BR/><FONT POINT-SIZE="9">/vendor/tower-layer-0.3.3</FONT></TD></TR></TABLE></TD></TR><TR><TD><TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="8" COLOR="#9aa8b8" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="11"><B>tower-service</B></FONT> <FONT POINT-SIZE="10">0.3.3</FONT><BR/><FONT POINT-SIZE="9">/vendor/tower-service-0.3.3</FONT></TD></TR></TABLE></TD></TR></TABLE></TD></TR></TABLE>>, fillcolor="#dff3ff", color="#1b78a6"];
   out0 [label=<to crab-usb-v0.9.1.svg<BR/><B>futures-core</B><BR/>0.3.32<BR/><B>futures-util</B><BR/>0.3.32<BR/><B>pin-project-lite</B><BR/>0.2.17>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out0 [style=dashed, color="#d19922"];
   // collapsed leaf ends: 3
