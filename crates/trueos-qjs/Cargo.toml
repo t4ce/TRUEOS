@@ -34,6 +34,7 @@ lightningcss-native = ["dep:lightningcss"]
 trueos = ["dep:trueos-math", "dep:trueos-locale", "dep:embassy-time-driver", "dep:embassy-executor", "dep:embassy-time", "dep:embassy-sync", "dep:libm", "dep:parry2d"]
 
 [patch.crates-io]
+embassy-time = { path = "../../vendor/embassy-time-0.5.1-trueos" }
 num-traits = { path = "../../vendor/num-traits-0.2.19" }
 imagesize = { path = "../../vendor/imagesize-0.13.0" }
 kurbo = { path = "../../vendor/kurbo-0.11.3" }
