@@ -1,0 +1,14 @@
+digraph "sha1-v0.10.6" {
+  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];
+  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.08,0.05", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
+  edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];
+  n0 [label=<<B>sha1</B><BR/>0.10.6>, fillcolor="#dff3ff", color="#1b78a6"];
+  out0 [label=<to aes-v0.8.4.svg<BR/><B>cfg-if</B><BR/>1.0.4<BR/><B>cpufeatures</B><BR/>0.2.17>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out0 [style=dashed, color="#d19922"];
+  out1 [label=<to embedded-websocket-v0.9.4.svg<BR/><B>digest</B><BR/>0.10.7>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out1 [style=dashed, color="#d19922"];
+  in2 [label=<from embedded-websocket-v0.9.4.svg<BR/><B>sha1</B><BR/>0.10.6>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in2 -> n0 [style=dashed, color="#4b8fc5"];
+  // collapsed leaf ends: 0
+  // centered two-input leaves: 0
+}

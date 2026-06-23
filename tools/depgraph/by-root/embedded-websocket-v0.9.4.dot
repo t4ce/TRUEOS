@@ -1,0 +1,49 @@
+digraph "embedded-websocket-v0.9.4" {
+  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];
+  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.08,0.05", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
+  edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];
+  n0 [label=<<B>embedded-websocket</B><BR/>0.9.4<BR/>/vendor/embedded-websocket-0.9.4>, fillcolor="#dff3ff", color="#1b78a6"];
+  n1 [label=<<B>block-buffer</B><BR/>0.10.4>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n2 [label=<<B>const-oid</B><BR/>0.9.6>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n3 [label=<<B>digest</B><BR/>0.10.7>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n4 [label=<<B>httparse</B><BR/>1.10.1>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n5 [label=<<B>subtle</B><BR/>2.6.1>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n3 -> n1;
+  n3 -> n2;
+  n3 -> n5;
+  n0 -> n4;
+  out0 [label=<to acpi-v6.1.1.svg<BR/><B>byteorder</B><BR/>1.5.0>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out0 [style=dashed, color="#d19922"];
+  out1 [label=<to aes-v0.8.4.svg<BR/><B>generic-array</B><BR/>0.14.7<BR/><B>crypto-common</B><BR/>0.1.7>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n1 -> out1 [style=dashed, color="#d19922"];
+  n3 -> out1 [style=dashed, color="#d19922"];
+  out2 [label=<to base64-v0.22.1.svg<BR/><B>base64</B><BR/>0.22.1<BR/>/vendor/base64-0.22.1>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out2 [style=dashed, color="#d19922"];
+  out3 [label=<to crab-usb-v0.9.1.svg<BR/><B>futures</B><BR/>0.3.32>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out3 [style=dashed, color="#d19922"];
+  out4 [label=<to heapless-v0.9.3.svg<BR/><B>heapless</B><BR/>0.9.3>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out4 [style=dashed, color="#d19922"];
+  out5 [label=<to rand_core-v0.6.4.svg<BR/><B>rand_core</B><BR/>0.6.4>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out5 [style=dashed, color="#d19922"];
+  out6 [label=<to sha1-v0.10.6.svg<BR/><B>sha1</B><BR/>0.10.6>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out6 [style=dashed, color="#d19922"];
+  in7 [label=<from hmac-v0.12.1.svg<BR/><B>digest</B><BR/>0.10.7>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in7 -> n3 [style=dashed, color="#4b8fc5"];
+  in8 [label=<from hyper-v1.9.0.svg<BR/><B>httparse</B><BR/>1.10.1>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in8 -> n4 [style=dashed, color="#4b8fc5"];
+  in9 [label=<from rsa-v0.9.10.svg<BR/><B>const-oid</B><BR/>0.9.6<BR/><B>digest</B><BR/>0.10.7<BR/><B>subtle</B><BR/>2.6.1>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in9 -> n2 [style=dashed, color="#4b8fc5"];
+  in9 -> n3 [style=dashed, color="#4b8fc5"];
+  in9 -> n5 [style=dashed, color="#4b8fc5"];
+  in10 [label=<from rustls-rustcrypto-v0.0.2-alpha.svg<BR/><B>subtle</B><BR/>2.6.1<BR/><B>digest</B><BR/>0.10.7>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in10 -> n3 [style=dashed, color="#4b8fc5"];
+  in10 -> n5 [style=dashed, color="#4b8fc5"];
+  in11 [label=<from rustls-v0.23.40.svg<BR/><B>subtle</B><BR/>2.6.1>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in11 -> n5 [style=dashed, color="#4b8fc5"];
+  in12 [label=<from sha1-v0.10.6.svg<BR/><B>digest</B><BR/>0.10.7>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in12 -> n3 [style=dashed, color="#4b8fc5"];
+  in13 [label=<from sha2-v0.10.9.svg<BR/><B>digest</B><BR/>0.10.7>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in13 -> n3 [style=dashed, color="#4b8fc5"];
+  // collapsed leaf ends: 0
+  // centered two-input leaves: 0
+}

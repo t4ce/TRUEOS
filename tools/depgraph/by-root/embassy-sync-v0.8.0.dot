@@ -1,0 +1,30 @@
+digraph "embassy-sync-v0.8.0" {
+  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];
+  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.08,0.05", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
+  edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];
+  n0 [label=<<B>embassy-sync</B><BR/>0.8.0>, fillcolor="#dff3ff", color="#1b78a6"];
+  n1 [label=<<B>embedded-io</B><BR/>0.7.1>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n2 [label=<<B>hash32</B><BR/>0.3.1>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n3 [label=<<B>stable_deref_trait</B><BR/>1.2.1>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  out0 [label=<to acpi-v6.1.1.svg<BR/><B>byteorder</B><BR/>1.5.0>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n2 -> out0 [style=dashed, color="#d19922"];
+  out1 [label=<to aes-v0.8.4.svg<BR/><B>cfg-if</B><BR/>1.0.4>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out1 [style=dashed, color="#d19922"];
+  out2 [label=<to crab-usb-v0.9.1.svg<BR/><B>futures-core</B><BR/>0.3.32<BR/><B>futures-sink</B><BR/>0.3.32>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out2 [style=dashed, color="#d19922"];
+  out3 [label=<to embassy-executor-v0.10.0.svg<BR/><B>critical-section</B><BR/>1.2.0>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out3 [style=dashed, color="#d19922"];
+  out4 [label=<to embedded-io-async-v0.7.0.svg<BR/><B>embedded-io-async</B><BR/>0.7.0>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out4 [style=dashed, color="#d19922"];
+  out5 [label=<to heapless-v0.9.3.svg<BR/><B>heapless</B><BR/>0.9.3>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out5 [style=dashed, color="#d19922"];
+  in6 [label=<from embedded-io-async-v0.7.0.svg<BR/><B>embedded-io</B><BR/>0.7.1>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in6 -> n1 [style=dashed, color="#4b8fc5"];
+  in7 [label=<from heapless-v0.9.3.svg<BR/><B>hash32</B><BR/>0.3.1<BR/><B>stable_deref_trait</B><BR/>1.2.1>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in7 -> n2 [style=dashed, color="#4b8fc5"];
+  in7 -> n3 [style=dashed, color="#4b8fc5"];
+  in8 [label=<from trueos-qjs-v0.1.0.svg<BR/><B>embassy-sync</B><BR/>0.8.0>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in8 -> n0 [style=dashed, color="#4b8fc5"];
+  // collapsed leaf ends: 0
+  // centered two-input leaves: 0
+}

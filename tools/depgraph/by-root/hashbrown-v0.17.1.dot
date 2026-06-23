@@ -1,0 +1,14 @@
+digraph "hashbrown-v0.17.1" {
+  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];
+  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.08,0.05", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
+  edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];
+  n0 [label=<<B>hashbrown</B><BR/>0.17.1>, fillcolor="#dff3ff", color="#1b78a6"];
+  n1 [label=<<B>foldhash</B><BR/>0.2.0>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n0 -> n1;
+  in0 [label=<from hyper-v1.9.0.svg<BR/><B>hashbrown</B><BR/>0.17.1>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in0 -> n0 [style=dashed, color="#4b8fc5"];
+  in1 [label=<from parry2d-v0.26.0.svg<BR/><B>foldhash</B><BR/>0.2.0>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in1 -> n1 [style=dashed, color="#4b8fc5"];
+  // collapsed leaf ends: 0
+  // centered two-input leaves: 0
+}

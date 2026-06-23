@@ -31,7 +31,7 @@ acpi = { version = "6.1.1", default-features = false, features = ["alloc", "aml"
 aml = { version = "0.16", default-features = false }
 getrandom_02 = { package = "getrandom", version = "0.2", default-features = false, features = ["custom"] }
 raw-cpuid = { version = "11", default-features = false }
-rand_core = { version = "0.6", default-features = false }
+rand_core = { version = "0.6", default-features = false, features = ["rdrand"] }
 rand_chacha = { version = "0.3", default-features = false }
 zeroize = { version = "1", default-features = false }
 libm = { version = "0.2", default-features = false }
@@ -90,9 +90,6 @@ mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net
 hyper = { version = "1.9.0", default-features = false, features = ["client", "http1", "server"] }
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
 
-[target.'cfg(target_arch = "x86_64")'.dependencies]
-rdrand = { version = "0.8", default-features = false }
-
 [profile.dev]
 panic = "abort"
 opt-level = 1
@@ -139,6 +136,7 @@ matchit = { path = "vendor/matchit-0.8.4" }
 mime = { path = "vendor/mime-0.3.17" }
 ndarray-rand = { path = "vendor/ndarray-rand-0.14.0" }
 rand = { path = "vendor/rand-0.8.6" }
+rand_core = { path = "vendor/rand_core-0.6.4" }
 rand_distr = { path = "vendor/rand_distr-0.4.3" }
 serde_path_to_error = { path = "vendor/serde_path_to_error-0.1.20" }
 tungstenite = { path = "vendor/tungstenite-0.29.0" }

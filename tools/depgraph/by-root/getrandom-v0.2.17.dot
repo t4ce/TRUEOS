@@ -1,0 +1,12 @@
+digraph "getrandom-v0.2.17" {
+  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];
+  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.08,0.05", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
+  edge [color="#9aa8b8", arrowsize=0.55, penwidth=0.9];
+  n0 [label=<<B>getrandom</B><BR/>0.2.17<BR/>/vendor/getrandom-0.2.17>, fillcolor="#dff3ff", color="#1b78a6"];
+  out0 [label=<to aes-v0.8.4.svg<BR/><B>cfg-if</B><BR/>1.0.4>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out0 [style=dashed, color="#d19922"];
+  in1 [label=<from rand_core-v0.6.4.svg<BR/><B>getrandom</B><BR/>0.2.17<BR/>/vendor/getrandom-0.2.17>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in1 -> n0 [style=dashed, color="#4b8fc5"];
+  // collapsed leaf ends: 0
+  // centered two-input leaves: 0
+}
