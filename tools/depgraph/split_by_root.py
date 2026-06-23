@@ -24,9 +24,22 @@ PATH_POINT_SIZE = 11
 COMPACT_NAME_POINT_SIZE = 11
 COMPACT_VERSION_POINT_SIZE = 10
 COMPACT_PATH_POINT_SIZE = 9
+FULL_GRAPH_LABEL_SCALE = 5.5
+FULL_GRAPH_ROOT_SCALE = FULL_GRAPH_LABEL_SCALE * 2
+FULL_GRAPH_ROOT_SCALE_CRATES = {
+    "crab-usb",
+    "hyper",
+    "mio",
+    "rustls-rustcrypto",
+    "socket2",
+    "tower",
+}
+SHARED_LINK_VERTICAL_THRESHOLD = 24.0
+ARCHITECTURE_BUCKET_PADDING = 32.0
 # Spread the full LR graph wide enough that the layout itself uses the 16:9 canvas.
 FULL_GRAPH_NODESEP = 0.34
 FULL_GRAPH_RANKSEP = 9.25
+SHARED_PARENT_NUDGE_WIDTH = round(FULL_GRAPH_RANKSEP * 36.0)
 FULL_GRAPH_ASPECT_RATIO = 16 / 9
 SPLIT_GRAPH_NODESEP = 0.35
 SPLIT_GRAPH_RANKSEP = 0.55
@@ -122,15 +135,24 @@ def is_architecture_irrelevant(label: str) -> bool:
     return crate_name(label) in ARCHITECTURE_IRRELEVANT_CRATES
 
 
-def compact_html_label(label: str) -> str:
+def scaled(value: int, scale: float) -> int:
+    return max(1, round(value * scale))
+
+
+def scaled_node_margin(scale: float) -> str:
+    x_text, y_text = NODE_MARGIN.split(",", 1)
+    return f"{float(x_text) * scale:.2f},{float(y_text) * scale:.2f}"
+
+
+def compact_html_label(label: str, scale: float = 1.0) -> str:
     lines = display_lines(label)
     name = escape(lines[0][0])
-    rendered = f'<FONT POINT-SIZE="{COMPACT_NAME_POINT_SIZE}"><B>{name}</B></FONT>'
+    rendered = f'<FONT POINT-SIZE="{scaled(COMPACT_NAME_POINT_SIZE, scale)}"><B>{name}</B></FONT>'
     if len(lines) > 1:
         version = escape(lines[1][0])
-        rendered += f' <FONT POINT-SIZE="{COMPACT_VERSION_POINT_SIZE}">{version}</FONT>'
+        rendered += f' <FONT POINT-SIZE="{scaled(COMPACT_VERSION_POINT_SIZE, scale)}">{version}</FONT>'
     extra = [
-        f'<FONT POINT-SIZE="{COMPACT_PATH_POINT_SIZE}">{escape(text)}</FONT>'
+        f'<FONT POINT-SIZE="{scaled(COMPACT_PATH_POINT_SIZE, scale)}">{escape(text)}</FONT>'
         for text, _ in lines[2:]
     ]
     if extra:
@@ -138,16 +160,23 @@ def compact_html_label(label: str) -> str:
     return rendered
 
 
-def label_text_html(label: str) -> list[str]:
+def label_text_html(
+    label: str,
+    scale: float = 1.0,
+    include_paths: bool = True,
+) -> list[str]:
     lines = []
-    for index, (text, bold) in enumerate(display_lines(label)):
+    display = display_lines(label)
+    if not include_paths:
+        display = display[:2]
+    for index, (text, bold) in enumerate(display):
         escaped = escape(text)
         if index == 0:
-            lines.append(f'<FONT POINT-SIZE="{NAME_POINT_SIZE}"><B>{escaped}</B></FONT>')
+            lines.append(f'<FONT POINT-SIZE="{scaled(NAME_POINT_SIZE, scale)}"><B>{escaped}</B></FONT>')
         elif index == 1:
-            lines.append(f'<FONT POINT-SIZE="{VERSION_POINT_SIZE}">{escaped}</FONT>')
+            lines.append(f'<FONT POINT-SIZE="{scaled(VERSION_POINT_SIZE, scale)}">{escaped}</FONT>')
         else:
-            lines.append(f'<FONT POINT-SIZE="{PATH_POINT_SIZE}">{escaped}</FONT>')
+            lines.append(f'<FONT POINT-SIZE="{scaled(PATH_POINT_SIZE, scale)}">{escaped}</FONT>')
     return lines
 
 
@@ -211,27 +240,38 @@ def embedded_path_index_postorder(entries: list[EmbeddedEntry], label: str) -> i
     return None
 
 
-def embedded_bubble_html(entry: EmbeddedEntry) -> str:
+def embedded_bubble_html(
+    entry: EmbeddedEntry,
+    scale: float = 1.0,
+) -> str:
     port_attr = f' PORT="{escape(entry.port)}"' if entry.port else ""
-    child_rows = embedded_rows_html(normalize_embedded_entries(entry.children))
+    child_rows = embedded_rows_html(
+        normalize_embedded_entries(entry.children), scale
+    )
     child_row = f"<TR><TD>{child_rows}</TD></TR>" if child_rows else ""
     return (
         f"<TD{port_attr}>"
-        f"<TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"{INNER_BUBBLE_PADDING}\" "
+        f"<TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"{scaled(INNER_BUBBLE_PADDING, scale)}\" "
         "COLOR=\"#9aa8b8\" STYLE=\"ROUNDED\">"
-        f"<TR><TD>{compact_html_label(entry.label)}</TD></TR>"
+        f"<TR><TD>{compact_html_label(entry.label, scale)}</TD></TR>"
         f"{child_row}"
         "</TABLE>"
         "</TD>"
     )
 
 
-def embedded_rows_html(entries: list[EmbeddedEntry]) -> str:
+def embedded_rows_html(
+    entries: list[EmbeddedEntry],
+    scale: float = 1.0,
+) -> str:
     if not entries:
         return ""
-    rows = "".join(f"<TR>{embedded_bubble_html(entry)}</TR>" for entry in entries)
+    rows = "".join(
+        f"<TR>{embedded_bubble_html(entry, scale)}</TR>"
+        for entry in entries
+    )
     return (
-        f"<TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"{INNER_BUBBLE_SPACING}\" CELLPADDING=\"0\">"
+        f"<TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"{scaled(INNER_BUBBLE_SPACING, scale)}\" CELLPADDING=\"0\">"
         f"{rows}"
         "</TABLE>"
     )
@@ -240,29 +280,42 @@ def embedded_rows_html(entries: list[EmbeddedEntry]) -> str:
 def html_label(
     label: str,
     embedded_ends: list[str | tuple[str, str | None] | EmbeddedEntry] | None = None,
+    scale: float = 1.0,
+    include_paths: bool = True,
+    nudge_parent_right: bool = False,
 ) -> str:
-    lines = label_text_html(label)
+    lines = label_text_html(label, scale, include_paths)
     embedded_entries = normalize_embedded_entries(embedded_ends)
     if embedded_entries:
         main_rows = "\n".join(f"<TR><TD>{line}</TD></TR>" for line in lines)
-        embedded_rows = embedded_rows_html(embedded_entries)
-        return (
-            "<<TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\">"
+        embedded_rows = embedded_rows_html(embedded_entries, scale)
+        body = (
+            "<TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\">"
             f"{main_rows}"
             f"<TR><TD>{embedded_rows}</TD></TR>"
-            "</TABLE>>"
+            "</TABLE>"
         )
-    return "<" + "<BR/>".join(lines) + ">"
+    else:
+        body = "<BR/>".join(lines)
+
+    if nudge_parent_right:
+        body = (
+            '<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="0">'
+            f'<TR><TD WIDTH="{SHARED_PARENT_NUDGE_WIDTH}" HEIGHT="1" FIXEDSIZE="TRUE"></TD>'
+            f"<TD>{body}</TD></TR>"
+            "</TABLE>"
+        )
+    return f"<<{body}>>"
 
 
-def architecture_irrelevant_bucket_label(labels: list[str]) -> str:
+def architecture_irrelevant_bucket_label(labels: list[str], scale: float = 1.0) -> str:
     rows = [
-        '<TR><TD><FONT POINT-SIZE="12"><B>irrelevant to architecture</B></FONT></TD></TR>'
+        f'<TR><TD><FONT POINT-SIZE="{scaled(VERSION_POINT_SIZE, scale)}"><B>irrelevant to architecture</B></FONT></TD></TR>'
     ]
     for label in sorted(labels, key=crate_name):
-        rows.append(f"<TR><TD>{compact_html_label(label)}</TD></TR>")
+        rows.append(f"<TR><TD>{compact_html_label(label, scale)}</TD></TR>")
     return (
-        '<<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="8" '
+        f'<<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="{scaled(INNER_BUBBLE_PADDING, scale)}" '
         'COLOR="#b7bec9" STYLE="ROUNDED">'
         + "".join(rows)
         + "</TABLE>>"
@@ -761,7 +814,9 @@ def render_full_dot(
     root: str,
     edges: set[tuple[str, str]],
     architecture_irrelevant: list[str] | None = None,
+    nudged_shared_leaves: set[str] | None = None,
 ) -> str:
+    nudged_shared_leaves = nudged_shared_leaves or set()
     node_ids: dict[str, str] = {}
     (
         all_nodes,
@@ -807,8 +862,19 @@ def render_full_dot(
         if label == root:
             fill, color = "#dff3ff", "#1b78a6"
         embedded_ends = embedded_by_parent.get(label, [])
+        label_scale = (
+            FULL_GRAPH_ROOT_SCALE
+            if label == root or crate_name(label) in FULL_GRAPH_ROOT_SCALE_CRATES
+            else FULL_GRAPH_LABEL_SCALE
+        )
+        nudged_embedded_labels = {
+            leaf
+            for leaf in nudged_shared_leaves
+            if leaf in embedded_path_labels_postorder(normalize_embedded_entries(embedded_ends))
+        }
+        margin_attr = f', margin="{scaled_node_margin(label_scale)}"'
         lines.append(
-            f'  {node_id(label)} [label={html_label(label, embedded_ends)}, fillcolor="{fill}", color="{color}"];'
+            f'  {node_id(label)} [label={html_label(label, embedded_ends, label_scale, nudged_embedded_labels, label != root)}, fillcolor="{fill}", color="{color}"{margin_attr}];'
         )
     for parent, child in sorted(edges):
         if parent in collapsed_leaves or child in collapsed_leaves:
@@ -865,7 +931,7 @@ def render_full_dot(
     if architecture_irrelevant:
         bucket_id = "architecture_irrelevant"
         lines.append(
-            f'  {bucket_id} [label={architecture_irrelevant_bucket_label(architecture_irrelevant)}, '
+            f'  {bucket_id} [label={architecture_irrelevant_bucket_label(architecture_irrelevant, FULL_GRAPH_LABEL_SCALE)}, '
             'shape=plain, fontcolor="#334155"];'
         )
 
@@ -988,6 +1054,44 @@ def widen_full_svg_to_aspect() -> None:
         svg,
         count=1,
     )
+    FULL_SVG_PATH.write_text(svg)
+
+
+def move_architecture_irrelevant_bucket_to_top_left() -> None:
+    svg = FULL_SVG_PATH.read_text()
+    transform = re.search(
+        r'<g id="graph0"[^>]*transform="[^"]*translate\(([0-9.-]+) ([0-9.-]+)\)',
+        svg,
+    )
+    if not transform:
+        raise RuntimeError(f"could not parse graph transform from {FULL_SVG_PATH}")
+    tx, ty = float(transform.group(1)), float(transform.group(2))
+
+    group = re.search(
+        r'(<g id="node\d+" class="node">[\s\n]*<title>architecture_irrelevant</title>)(.*?)(</g>)',
+        svg,
+        re.S,
+    )
+    if not group:
+        return
+
+    path_values = re.findall(r'<path\b[^>]*\bd="([^"]+)"', group.group(2))
+    if not path_values:
+        return
+    boxes = [svg_path_bbox(path) for path in path_values]
+    min_x = min(box[0] for box in boxes)
+    min_y = min(box[1] for box in boxes)
+    target_x = ARCHITECTURE_BUCKET_PADDING - tx
+    target_y = ARCHITECTURE_BUCKET_PADDING - ty
+    dx = target_x - min_x
+    dy = target_y - min_y
+    opening = group.group(1).replace(
+        ' class="node"',
+        f' class="node" transform="translate({dx:.2f} {dy:.2f})"',
+        1,
+    )
+    replacement = f"{opening}{group.group(2)}{group.group(3)}"
+    svg = svg[: group.start()] + replacement + svg[group.end() :]
     FULL_SVG_PATH.write_text(svg)
 
 
@@ -1272,6 +1376,39 @@ def shared_leaf_links(root: str, edges: set[tuple[str, str]]) -> list[dict[str, 
     return links
 
 
+def vertically_aligned_shared_leaves(root: str, edges: set[tuple[str, str]]) -> set[str]:
+    node_ids, _collapsed_leaves, embedded_by_parent, shared_input_leaves, incoming_parents = (
+        full_graph_layout(root, edges)
+    )
+    _width, _height, _node_bboxes, inner_bboxes = full_svg_bboxes()
+    vertical_leaves: set[str] = set()
+
+    for leaf in sorted(shared_input_leaves):
+        parents = sorted(incoming_parents[leaf])
+        if len(parents) != 2:
+            continue
+        bubble_boxes = []
+        for parent in parents:
+            node_id = node_ids.get(parent)
+            if not node_id:
+                break
+            entries = embedded_by_parent.get(parent, [])
+            index = direct_embedded_path_index(entries, leaf)
+            if index is None:
+                break
+            boxes = inner_bboxes.get(node_id, [])
+            if index >= len(boxes):
+                break
+            bubble_boxes.append(boxes[index])
+        if len(bubble_boxes) != 2:
+            continue
+        points = connection_points(bubble_boxes[0], bubble_boxes[1])
+        if points and abs(points[0] - points[2]) <= SHARED_LINK_VERTICAL_THRESHOLD:
+            vertical_leaves.add(leaf)
+
+    return vertical_leaves
+
+
 def terminal_leaf_borders(root: str, edges: set[tuple[str, str]]) -> list[dict[str, object]]:
     incoming_count: dict[str, int] = defaultdict(int)
     outgoing_count: dict[str, int] = defaultdict(int)
@@ -1496,6 +1633,12 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
       --paper: #f6f8fb;
     }}
     * {{ box-sizing: border-box; }}
+    html,
+    body {{
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }}
     body {{
       margin: 0;
       color: var(--ink);
@@ -1503,9 +1646,18 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
       font: 14px/1.4 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }}
     .viewport {{
-      overflow: auto;
+      overflow: scroll;
       padding: 18px;
-      min-height: 100vh;
+      width: 100vw;
+      height: 100vh;
+      cursor: grab;
+      scrollbar-gutter: stable both-edges;
+      user-select: none;
+      overscroll-behavior: contain;
+    }}
+    .viewport.is-panning,
+    .viewport.is-panning * {{
+      cursor: grabbing;
     }}
     #graph {{
       display: block;
@@ -1586,9 +1738,128 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
     <iframe id="dialog-frame" title="Root dependency graph"></iframe>
   </dialog>
   <script>
+    const viewport = document.querySelector('.viewport');
+    const graph = document.getElementById('graph');
     const dialog = document.getElementById('root-dialog');
     const frame = document.getElementById('dialog-frame');
     const closeButton = document.getElementById('close-dialog');
+    const dragThreshold = 4;
+    const minGraphScale = 0.15;
+    const maxGraphScale = 4;
+    const graphBaseWidth = Number.parseFloat(graph.getAttribute('width'));
+    const graphBaseHeight = Number.parseFloat(graph.getAttribute('height'));
+    let graphScale = 1;
+    let pointerId = null;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let dragStartLeft = 0;
+    let dragStartTop = 0;
+    let didDrag = false;
+
+    function clamp(value, min, max) {{
+      return Math.min(Math.max(value, min), max);
+    }}
+
+    function setGraphScale(nextScale) {{
+      graphScale = clamp(nextScale, minGraphScale, maxGraphScale);
+      graph.style.width = `${{graphBaseWidth * graphScale}}px`;
+      graph.style.height = `${{graphBaseHeight * graphScale}}px`;
+    }}
+
+    function normalizeWheelDelta(event) {{
+      const multiplier = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? 16
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+          ? viewport.clientHeight
+          : 1;
+
+      return {{
+        x: event.deltaX * multiplier,
+        y: event.deltaY * multiplier,
+      }};
+    }}
+
+    viewport.addEventListener('pointerdown', (event) => {{
+      if (event.button !== 0) {{
+        return;
+      }}
+
+      pointerId = event.pointerId;
+      dragStartX = event.clientX;
+      dragStartY = event.clientY;
+      dragStartLeft = viewport.scrollLeft;
+      dragStartTop = viewport.scrollTop;
+      didDrag = false;
+      viewport.setPointerCapture(pointerId);
+      viewport.classList.add('is-panning');
+    }});
+
+    viewport.addEventListener('pointermove', (event) => {{
+      if (event.pointerId !== pointerId) {{
+        return;
+      }}
+
+      const deltaX = event.clientX - dragStartX;
+      const deltaY = event.clientY - dragStartY;
+      if (Math.abs(deltaX) > dragThreshold || Math.abs(deltaY) > dragThreshold) {{
+        didDrag = true;
+      }}
+
+      if (didDrag) {{
+        event.preventDefault();
+        viewport.scrollLeft = dragStartLeft - deltaX;
+        viewport.scrollTop = dragStartTop - deltaY;
+      }}
+    }});
+
+    function endDrag(event) {{
+      if (event.pointerId !== pointerId) {{
+        return;
+      }}
+
+      viewport.releasePointerCapture(pointerId);
+      viewport.classList.remove('is-panning');
+      pointerId = null;
+    }}
+
+    viewport.addEventListener('pointerup', endDrag);
+    viewport.addEventListener('pointercancel', endDrag);
+
+    viewport.addEventListener('click', (event) => {{
+      if (!didDrag) {{
+        return;
+      }}
+
+      event.preventDefault();
+      event.stopPropagation();
+      didDrag = false;
+    }}, true);
+
+    viewport.addEventListener('wheel', (event) => {{
+      event.preventDefault();
+
+      const delta = normalizeWheelDelta(event);
+      if (!event.ctrlKey && !event.metaKey) {{
+        viewport.scrollLeft += event.shiftKey && delta.x === 0 ? delta.y : delta.x;
+        viewport.scrollTop += event.shiftKey && delta.x === 0 ? 0 : delta.y;
+        return;
+      }}
+
+      const rect = viewport.getBoundingClientRect();
+      const style = getComputedStyle(viewport);
+      const paddingLeft = Number.parseFloat(style.paddingLeft) || 0;
+      const paddingTop = Number.parseFloat(style.paddingTop) || 0;
+      const pointerX = event.clientX - rect.left;
+      const pointerY = event.clientY - rect.top;
+      const graphX = (viewport.scrollLeft + pointerX - paddingLeft) / graphScale;
+      const graphY = (viewport.scrollTop + pointerY - paddingTop) / graphScale;
+
+      setGraphScale(graphScale * Math.exp(-delta.y * 0.001));
+      viewport.scrollLeft = paddingLeft + graphX * graphScale - pointerX;
+      viewport.scrollTop = paddingTop + graphY * graphScale - pointerY;
+    }}, {{ passive: false }});
+
+    setGraphScale(1);
 
     document.querySelectorAll('.root-hotspot').forEach((link) => {{
       link.addEventListener('click', (event) => {{
@@ -1629,6 +1900,11 @@ def main() -> None:
 
     FULL_DOT_PATH.write_text(render_full_dot(root, graph_edges, architecture_irrelevant))
     subprocess.run(["dot", "-Tsvg", str(FULL_DOT_PATH), "-o", str(FULL_SVG_PATH)], check=True)
+    nudged_shared_leaves = vertically_aligned_shared_leaves(root, graph_edges)
+    FULL_DOT_PATH.write_text(
+        render_full_dot(root, graph_edges, architecture_irrelevant, nudged_shared_leaves)
+    )
+    subprocess.run(["dot", "-Tsvg", str(FULL_DOT_PATH), "-o", str(FULL_SVG_PATH)], check=True)
     inject_full_svg_regions(root, graph_root_children, graph_edges)
     full_node_ids, _collapsed_leaves, full_embedded_by_parent, _shared_input_leaves, _incoming_parents = (
         full_graph_layout(root, graph_edges)
@@ -1640,6 +1916,7 @@ def main() -> None:
         full_nested_shared_leaf_parents(root, graph_edges),
     )
     widen_full_svg_to_aspect()
+    move_architecture_irrelevant_bucket_to_top_left()
     HTML_INDEX_PATH.write_text(render_html_index(root, graph_root_children, graph_edges))
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
