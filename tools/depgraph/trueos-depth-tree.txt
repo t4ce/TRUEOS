@@ -1,0 +1,597 @@
+0TRUEOS v0.0.2 (/home/t4ce/REPOS/TRUEOS)
+1acpi v6.1.1
+2bit_field v0.10.3
+2bitflags v2.11.1
+2byteorder v1.5.0
+2log v0.4.29
+2pci_types v0.10.1
+3bit_field v0.10.3
+3bitflags v2.11.1
+2spinning_top v0.3.0
+3lock_api v0.4.14
+4scopeguard v1.2.0
+1aes v0.8.4
+2cfg-if v1.0.4
+2cipher v0.4.4
+3crypto-common v0.1.7
+4generic-array v0.14.7
+5typenum v1.20.0
+5zeroize v1.8.2
+6zeroize_derive v1.4.3 (proc-macro)
+7proc-macro2 v1.0.106
+8unicode-ident v1.0.24
+7quote v1.0.45
+8proc-macro2 v1.0.106 (*)
+7syn v2.0.117
+8proc-macro2 v1.0.106 (*)
+8quote v1.0.45 (*)
+8unicode-ident v1.0.24
+5version_check v0.9.5
+4typenum v1.20.0
+3inout v0.1.4
+4generic-array v0.14.7 (*)
+3zeroize v1.8.2 (*)
+2cpufeatures v0.2.17
+1alsa v0.11.0 (/home/t4ce/REPOS/TRUEOS/vendor/alsa-0.11.0)
+2bitflags v2.11.1
+2cfg-if v1.0.4
+1aml v0.16.4 (/home/t4ce/REPOS/TRUEOS/vendor/aml-0.16.4)
+2bit_field v0.10.3
+2bitvec v1.0.1
+3funty v2.0.0
+3radium v0.7.0
+3tap v1.0.1
+3wyz v0.5.1
+4tap v1.0.1
+2byteorder v1.5.0
+2log v0.4.29
+2spinning_top v0.3.0 (*)
+1base64 v0.22.1 (/home/t4ce/REPOS/TRUEOS/vendor/base64-0.22.1)
+1bytes v1.11.1
+1core3 v0.1.2
+2memchr v2.8.0
+1crab-usb v0.9.1 (/home/t4ce/REPOS/TRUEOS/vendor/CrabUSB/usb-host)
+2anyhow v1.0.102
+2bitflags v2.11.1
+2crossbeam v0.8.4
+3crossbeam-epoch v0.9.18
+4crossbeam-utils v0.8.21
+3crossbeam-queue v0.3.12
+4crossbeam-utils v0.8.21
+3crossbeam-utils v0.8.21
+2crossbeam-skiplist v0.1.3
+3crossbeam-epoch v0.9.18 (*)
+3crossbeam-utils v0.8.21
+2dma-api v0.7.3 (/home/t4ce/REPOS/TRUEOS/vendor/dma-api-0.7.3)
+3cfg-if v1.0.4
+3derive_more v2.1.1
+4derive_more-impl v2.1.1 (proc-macro)
+5convert_case v0.10.0
+6unicode-segmentation v1.13.2
+5proc-macro2 v1.0.106 (*)
+5quote v1.0.45 (*)
+5syn v2.0.117 (*)
+5unicode-xid v0.2.6
+5rustc_version v0.4.1
+6semver v1.0.28
+3log v0.4.29
+3mbarrier v0.1.3
+3spin v0.10.0
+4lock_api v0.4.14 (*)
+3thiserror v2.0.18
+4thiserror-impl v2.0.18 (proc-macro)
+5proc-macro2 v1.0.106 (*)
+5quote v1.0.45 (*)
+5syn v2.0.117 (*)
+2enum_dispatch v0.3.13 (proc-macro)
+3once_cell v1.21.4
+3proc-macro2 v1.0.106 (*)
+3quote v1.0.45 (*)
+3syn v2.0.117 (*)
+2futures v0.3.32
+3futures-channel v0.3.32
+4futures-core v0.3.32
+4futures-sink v0.3.32
+3futures-core v0.3.32
+3futures-io v0.3.32
+3futures-sink v0.3.32
+3futures-task v0.3.32
+3futures-util v0.3.32
+4futures-core v0.3.32
+4futures-sink v0.3.32
+4futures-task v0.3.32
+4pin-project-lite v0.2.17
+4slab v0.4.12
+2id-arena v2.3.0
+2log v0.4.29
+2mbarrier v0.1.3
+2nb v1.1.0
+2num_enum v0.7.6
+3num_enum_derive v0.7.6 (proc-macro)
+4proc-macro2 v1.0.106 (*)
+4quote v1.0.45 (*)
+4syn v2.0.117 (*)
+3rustversion v1.0.22 (proc-macro)
+2spin v0.10.0 (*)
+2thiserror v2.0.18 (*)
+2tock-registers v0.10.1
+2trait-ffi v0.2.11 (proc-macro) (https://github.com/t4ce/trait-ffi?branch=convert-case-0.10#d445a016)
+3convert_case v0.10.0 (*)
+3lenient_semver v0.4.2
+4lenient_semver_parser v0.4.2
+5lenient_semver_version_builder v0.4.2
+6semver v1.0.28
+5semver v1.0.28
+4semver v1.0.28
+3proc-macro2 v1.0.106 (*)
+3quote v1.0.45 (*)
+3syn v2.0.117 (*)
+2usb-if v0.7.0 (/home/t4ce/REPOS/TRUEOS/vendor/CrabUSB/usb-if)
+3anyhow v1.0.102
+3futures v0.3.32 (*)
+3log v0.4.29
+3num_enum v0.7.6 (*)
+3spin v0.10.0 (*)
+3thiserror v2.0.18 (*)
+2xhci v0.9.2 (/home/t4ce/REPOS/TRUEOS/vendor/xhci-0.9.2)
+3accessor v0.3.3
+3bit_field v0.10.3
+3num-derive v0.4.2 (proc-macro)
+4proc-macro2 v1.0.106 (*)
+4quote v1.0.45 (*)
+4syn v2.0.117 (*)
+3num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19)
+4libm v0.2.16
+4autocfg v1.5.0
+3paste v1.0.15 (proc-macro)
+1crc32fast v1.5.0 (/home/t4ce/REPOS/TRUEOS/vendor/crc32fast-1.5.0)
+2cfg-if v1.0.4
+1ctr v0.9.2
+2cipher v0.4.4 (*)
+1dma-api v0.7.3 (/home/t4ce/REPOS/TRUEOS/vendor/dma-api-0.7.3) (*)
+1embassy-executor v0.10.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-executor)
+2cordyceps v0.3.4
+2critical-section v1.2.0
+2document-features v0.2.12 (proc-macro)
+3litrs v1.0.0
+2embassy-executor-macros v0.8.0 (proc-macro)
+3darling v0.20.11
+4darling_core v0.20.11
+5fnv v1.0.7
+5ident_case v1.0.1
+5proc-macro2 v1.0.106 (*)
+5quote v1.0.45 (*)
+5strsim v0.11.1
+5syn v2.0.117 (*)
+4darling_macro v0.20.11 (proc-macro)
+5darling_core v0.20.11 (*)
+5quote v1.0.45 (*)
+5syn v2.0.117 (*)
+3proc-macro2 v1.0.106 (*)
+3quote v1.0.45 (*)
+3syn v2.0.117 (*)
+2embassy-executor-timer-queue v0.1.0
+1embassy-sync v0.8.0
+2cfg-if v1.0.4
+2critical-section v1.2.0
+2embedded-io-async v0.7.0
+3embedded-io v0.7.1
+2futures-core v0.3.32
+2futures-sink v0.3.32
+2heapless v0.9.3
+3hash32 v0.3.1
+4byteorder v1.5.0
+3stable_deref_trait v1.2.1
+1embassy-time v0.5.1 (/home/t4ce/REPOS/TRUEOS/vendor/embassy-time-0.5.1-trueos)
+2embassy-time-driver v0.2.2
+3document-features v0.2.12 (proc-macro) (*)
+2futures-core v0.3.32
+1embassy-time-driver v0.2.2 (*)
+1embedded-io-async v0.7.0 (*)
+1embedded-websocket v0.9.4 (/home/t4ce/REPOS/TRUEOS/vendor/embedded-websocket-0.9.4)
+2base64 v0.22.1 (/home/t4ce/REPOS/TRUEOS/vendor/base64-0.22.1)
+2byteorder v1.5.0
+2futures v0.3.32 (*)
+2heapless v0.9.3 (*)
+2httparse v1.10.1
+2rand_core v0.6.4
+3getrandom v0.2.17 (/home/t4ce/REPOS/TRUEOS/vendor/getrandom-0.2.17)
+4cfg-if v1.0.4
+2sha1 v0.10.6
+3cfg-if v1.0.4
+3cpufeatures v0.2.17
+3digest v0.10.7
+4block-buffer v0.10.4
+5generic-array v0.14.7 (*)
+4const-oid v0.9.6
+4crypto-common v0.1.7 (*)
+4subtle v2.6.1
+1euclid v0.22.13
+2num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
+1getrandom v0.2.17 (/home/t4ce/REPOS/TRUEOS/vendor/getrandom-0.2.17) (*)
+1hashbrown v0.17.1
+2foldhash v0.2.0
+1heapless v0.9.3 (*)
+1hmac v0.12.1
+2digest v0.10.7 (*)
+1hyper v1.9.0 (/home/t4ce/REPOS/TRUEOS/vendor/hyper-1.9.0)
+2atomic-waker v1.1.2
+2bytes v1.11.1
+2futures-channel v0.3.32 (*)
+2futures-core v0.3.32
+2hashbrown v0.17.1 (*)
+2http v1.4.0 (/home/t4ce/REPOS/TRUEOS/vendor/http-1.4.0)
+3bytes v1.11.1
+3hashbrown v0.17.1 (*)
+3itoa v1.0.18
+2http-body v1.0.1 (/home/t4ce/REPOS/TRUEOS/vendor/http-body-1.0.1)
+3bytes v1.11.1
+3http v1.4.0 (/home/t4ce/REPOS/TRUEOS/vendor/http-1.4.0) (*)
+2httparse v1.10.1
+2httpdate v1.0.3 (/home/t4ce/REPOS/TRUEOS/vendor/httpdate-1.0.3)
+2itoa v1.0.18
+2pin-project-lite v0.2.17
+2smallvec v1.15.1
+2trueos-io v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-io)
+3core3 v0.1.2 (*)
+2want v0.3.1 (/home/t4ce/REPOS/TRUEOS/vendor/want-0.3.1)
+3try-lock v0.2.5
+1kurbo v0.11.3 (/home/t4ce/REPOS/TRUEOS/vendor/kurbo-0.11.3)
+2arrayvec v0.7.6
+2libm v0.2.16
+2smallvec v1.15.1
+1libm v0.2.16
+1limine v0.6.3
+1log v0.4.29
+1lyon_geom v1.0.19
+2arrayvec v0.7.6
+2euclid v0.22.13 (*)
+2num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
+1lyon_tessellation v1.0.20
+2float_next_after v1.0.0
+2lyon_path v1.0.19
+3lyon_geom v1.0.19 (*)
+3num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
+2num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
+1lzma-rust2 v0.16.2
+1memchr v2.8.0
+1miniz_oxide v0.9.1
+2adler2 v2.0.1
+1mio v1.2.0 (/home/t4ce/REPOS/TRUEOS/vendor/mio-1.2.0)
+2core3 v0.1.2 (*)
+2spin v0.10.0 (*)
+2trueos-io v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-io) (*)
+1parry2d v0.26.0
+2approx v0.5.1
+3num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
+2arrayvec v0.7.6
+2bitflags v2.11.1
+2downcast-rs v2.0.2
+2either v1.15.0
+2foldhash v0.2.0
+2glamx v0.1.3
+3approx v0.5.1 (*)
+3glam v0.30.10
+4approx v0.5.1 (*)
+4libm v0.2.16
+3num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
+3simba v0.9.1
+4approx v0.5.1 (*)
+4num-complex v0.4.6
+5num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
+4num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
+4paste v1.0.15 (proc-macro)
+2log v0.4.29
+2num-derive v0.4.2 (proc-macro) (*)
+2num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
+2ordered-float v5.3.0
+3num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
+2simba v0.9.1 (*)
+2smallvec v1.15.1
+2thiserror v2.0.18 (*)
+1png v0.18.1 (/home/t4ce/REPOS/TRUEOS/vendor/png-0.18.1)
+2bitflags v2.11.1
+2core3 v0.1.2 (*)
+2crc32fast v1.5.0 (/home/t4ce/REPOS/TRUEOS/vendor/crc32fast-1.5.0) (*)
+2fdeflate v0.3.7 (/home/t4ce/REPOS/TRUEOS/vendor/fdeflate-0.3.7)
+3simd-adler32 v0.3.8 (/home/t4ce/REPOS/TRUEOS/vendor/simd-adler32-0.3.8)
+2log v0.4.29
+2miniz_oxide v0.9.1 (*)
+1pure_vorbis v0.0.1 (/home/t4ce/REPOS/TRUEOS/vendor/pure_vorbis-0.0.1)
+2libm v0.2.16
+1rand_chacha v0.3.1
+2ppv-lite86 v0.2.21
+3zerocopy v0.8.48
+2rand_core v0.6.4 (*)
+1rand_core v0.6.4 (*)
+1raw-cpuid v11.6.0
+2bitflags v2.11.1
+1rdrand v0.8.3
+2rand_core v0.6.4 (*)
+1regex-automata v0.4.14
+2regex-syntax v0.8.10
+1rsa v0.9.10
+2const-oid v0.9.6
+2digest v0.10.7 (*)
+2num-bigint-dig v0.8.6
+3lazy_static v1.5.0 (/home/t4ce/REPOS/TRUEOS/vendor/lazy_static-1.5.0)
+4spin v0.10.0 (*)
+3libm v0.2.16
+3num-integer v0.1.46
+4num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
+3num-iter v0.1.45
+4num-integer v0.1.46 (*)
+4num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
+4autocfg v1.5.0
+3num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
+3rand v0.8.6 (/home/t4ce/REPOS/TRUEOS/vendor/rand-0.8.6)
+4rand_chacha v0.3.1 (*)
+4rand_core v0.6.4 (*)
+3smallvec v1.15.1
+3zeroize v1.8.2 (*)
+2num-integer v0.1.46 (*)
+2num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
+2pkcs1 v0.7.5
+3der v0.7.10
+4const-oid v0.9.6
+4pem-rfc7468 v0.7.0
+5base64ct v1.8.3
+4zeroize v1.8.2 (*)
+3pkcs8 v0.10.2
+4der v0.7.10 (*)
+4pkcs5 v0.7.1
+5der v0.7.10 (*)
+5spki v0.7.3
+6der v0.7.10 (*)
+4spki v0.7.3 (*)
+3spki v0.7.3 (*)
+2pkcs8 v0.10.2 (*)
+2rand_core v0.6.4 (*)
+2sha2 v0.10.9
+3cfg-if v1.0.4
+3cpufeatures v0.2.17
+3digest v0.10.7 (*)
+2signature v2.2.0
+3digest v0.10.7 (*)
+3rand_core v0.6.4 (*)
+2spki v0.7.3 (*)
+2subtle v2.6.1
+2zeroize v1.8.2 (*)
+1rustls v0.23.40
+2once_cell v1.21.4
+2rustls-pki-types v1.14.1
+3zeroize v1.8.2 (*)
+2rustls-webpki v0.103.13
+3rustls-pki-types v1.14.1 (*)
+3untrusted v0.9.0
+2subtle v2.6.1
+2zeroize v1.8.2 (*)
+1rustls-rustcrypto v0.0.2-alpha (/home/t4ce/REPOS/TRUEOS/vendor/rustls-rustcrypto-0.0.2-alpha)
+2aead v0.5.2
+3crypto-common v0.1.7 (*)
+3generic-array v0.14.7 (*)
+2aes-gcm v0.10.3
+3aead v0.5.2 (*)
+3aes v0.8.4 (*)
+3cipher v0.4.4 (*)
+3ctr v0.9.2 (*)
+3ghash v0.5.1
+4opaque-debug v0.3.1
+4polyval v0.6.2
+5cfg-if v1.0.4
+5cpufeatures v0.2.17
+5opaque-debug v0.3.1
+5universal-hash v0.5.1
+6crypto-common v0.1.7 (*)
+6subtle v2.6.1
+3subtle v2.6.1
+2chacha20poly1305 v0.10.1
+3aead v0.5.2 (*)
+3chacha20 v0.9.1
+4cfg-if v1.0.4
+4cipher v0.4.4 (*)
+4cpufeatures v0.2.17
+3cipher v0.4.4 (*)
+3poly1305 v0.8.0
+4cpufeatures v0.2.17
+4opaque-debug v0.3.1
+4universal-hash v0.5.1 (*)
+3zeroize v1.8.2 (*)
+2crypto-common v0.1.7 (*)
+2der v0.7.10 (*)
+2digest v0.10.7 (*)
+2ecdsa v0.16.9
+3der v0.7.10 (*)
+3digest v0.10.7 (*)
+3elliptic-curve v0.13.8
+4base16ct v0.2.0
+4crypto-bigint v0.5.5
+5generic-array v0.14.7 (*)
+5rand_core v0.6.4 (*)
+5subtle v2.6.1
+5zeroize v1.8.2 (*)
+4digest v0.10.7 (*)
+4ff v0.13.1
+5rand_core v0.6.4 (*)
+5subtle v2.6.1
+4generic-array v0.14.7 (*)
+4group v0.13.0
+5ff v0.13.1 (*)
+5rand_core v0.6.4 (*)
+5subtle v2.6.1
+4hkdf v0.12.4
+5hmac v0.12.1 (*)
+4pem-rfc7468 v0.7.0 (*)
+4pkcs8 v0.10.2 (*)
+4rand_core v0.6.4 (*)
+4sec1 v0.7.3
+5base16ct v0.2.0
+5der v0.7.10 (*)
+5generic-array v0.14.7 (*)
+5pkcs8 v0.10.2 (*)
+5subtle v2.6.1
+5zeroize v1.8.2 (*)
+4subtle v2.6.1
+4zeroize v1.8.2 (*)
+3rfc6979 v0.4.0
+4hmac v0.12.1 (*)
+4subtle v2.6.1
+3signature v2.2.0 (*)
+3spki v0.7.3 (*)
+2ed25519-dalek v2.2.0
+3curve25519-dalek v4.1.3
+4cfg-if v1.0.4
+4cpufeatures v0.2.17
+4curve25519-dalek-derive v0.1.1 (proc-macro)
+5proc-macro2 v1.0.106 (*)
+5quote v1.0.45 (*)
+5syn v2.0.117 (*)
+4digest v0.10.7 (*)
+4subtle v2.6.1
+4zeroize v1.8.2 (*)
+4rustc_version v0.4.1 (*)
+3ed25519 v2.2.3
+4pkcs8 v0.10.2 (*)
+4signature v2.2.0 (*)
+3sha2 v0.10.9 (*)
+3subtle v2.6.1
+3zeroize v1.8.2 (*)
+2hmac v0.12.1 (*)
+2p256 v0.13.2
+3ecdsa v0.16.9 (*)
+3elliptic-curve v0.13.8 (*)
+3primeorder v0.13.6
+4elliptic-curve v0.13.8 (*)
+3sha2 v0.10.9 (*)
+2p384 v0.13.1
+3ecdsa v0.16.9 (*)
+3elliptic-curve v0.13.8 (*)
+3primeorder v0.13.6 (*)
+3sha2 v0.10.9 (*)
+2paste v1.0.15 (proc-macro)
+2pkcs8 v0.10.2 (*)
+2rand_core v0.6.4 (*)
+2rsa v0.9.10 (*)
+2rustls v0.23.40 (*)
+2rustls-pki-types v1.14.1 (*)
+2rustls-webpki v0.103.13 (*)
+2sec1 v0.7.3 (*)
+2sha2 v0.10.9 (*)
+2signature v2.2.0 (*)
+2x25519-dalek v2.0.1
+3curve25519-dalek v4.1.3 (*)
+3rand_core v0.6.4 (*)
+3zeroize v1.8.2 (*)
+1serde v1.0.228
+2serde_core v1.0.228
+2serde_derive v1.0.228 (proc-macro)
+3proc-macro2 v1.0.106 (*)
+3quote v1.0.45 (*)
+3syn v2.0.117 (*)
+1serde_json v1.0.149
+2itoa v1.0.18
+2memchr v2.8.0
+2serde_core v1.0.228
+2zmij v1.0.21
+1sha1 v0.10.6 (*)
+1sha2 v0.10.9 (*)
+1smoltcp v0.13.1 (/home/t4ce/REPOS/TRUEOS/vendor/smoltcp-0.13.1)
+2bitflags v2.11.1
+2byteorder v1.5.0
+2cfg-if v1.0.4
+2heapless v0.9.3 (*)
+2managed v0.8.0
+1socket2 v0.6.3 (/home/t4ce/REPOS/TRUEOS/vendor/socket2-0.6.3)
+2core3 v0.1.2 (*)
+2spin v0.10.0 (*)
+2trueos-io v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-io) (*)
+1spin v0.10.0 (*)
+1symphonia-codec-aac v0.5.5 (/home/t4ce/REPOS/TRUEOS/vendor/symphonia-codec-aac-0.5.5-trueos)
+2lazy_static v1.5.0 (/home/t4ce/REPOS/TRUEOS/vendor/lazy_static-1.5.0) (*)
+2libm v0.2.16
+2symphonia-core v0.5.5 (/home/t4ce/REPOS/TRUEOS/vendor/symphonia-core-0.5.5-trueos)
+3bytemuck v1.25.0
+3lazy_static v1.5.0 (/home/t4ce/REPOS/TRUEOS/vendor/lazy_static-1.5.0) (*)
+3libm v0.2.16
+1symphonia-core v0.5.5 (/home/t4ce/REPOS/TRUEOS/vendor/symphonia-core-0.5.5-trueos) (*)
+1tiny-skia-path v0.11.4
+2arrayref v0.3.9
+2bytemuck v1.25.0
+2libm v0.2.16
+2strict-num v0.1.1
+1tinyaudio v2.0.0 (/home/t4ce/REPOS/TRUEOS/vendor/tinyaudio)
+1tower v0.5.3 (/home/t4ce/REPOS/TRUEOS/vendor/tower-0.5.3)
+2futures-core v0.3.32
+2futures-util v0.3.32 (*)
+2pin-project-lite v0.2.17
+2sync_wrapper v1.0.2
+2tower-layer v0.3.3 (/home/t4ce/REPOS/TRUEOS/vendor/tower-layer-0.3.3)
+2tower-service v0.3.3 (/home/t4ce/REPOS/TRUEOS/vendor/tower-service-0.3.3)
+1trueos-c4 v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-c4)
+1trueos-esp v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-esp)
+2embassy-time v0.5.1 (/home/t4ce/REPOS/TRUEOS/vendor/embassy-time-0.5.1-trueos) (*)
+2heapless v0.9.3 (*)
+2v v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-v)
+3serde v1.0.228 (*)
+3serde_json v1.0.149 (*)
+3spin v0.10.0 (*)
+1trueos-fs v0.0.1 (/home/t4ce/REPOS/TRUEOS/crates/trueos-fs)
+1trueos-io v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-io) (*)
+1trueos-locale v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-locale)
+1trueos-lsd v1.1.5 (/home/t4ce/REPOS/TRUEOS/crates/trueos-lsd)
+2trueos-io v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-io) (*)
+2v v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-v) (*)
+1trueos-math v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-math)
+2libm v0.2.16
+1trueos-qjs v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-qjs)
+2embassy-executor v0.10.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-executor) (*)
+2embassy-sync v0.8.0 (*)
+2embassy-time v0.5.1 (/home/t4ce/REPOS/TRUEOS/vendor/embassy-time-0.5.1-trueos) (*)
+2embassy-time-driver v0.2.2 (*)
+2libm v0.2.16
+2parry2d v0.26.0 (*)
+2spin v0.10.0 (*)
+2trueos-locale v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-locale)
+2trueos-math v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-math) (*)
+2usvg v0.45.1 (/home/t4ce/REPOS/TRUEOS/vendor/usvg-0.45.1)
+3base64 v0.22.1 (/home/t4ce/REPOS/TRUEOS/vendor/base64-0.22.1)
+3data-url v0.3.2
+3imagesize v0.13.0 (/home/t4ce/REPOS/TRUEOS/vendor/imagesize-0.13.0)
+4core3 v0.1.2 (*)
+3kurbo v0.11.3 (/home/t4ce/REPOS/TRUEOS/vendor/kurbo-0.11.3) (*)
+3log v0.4.29
+3roxmltree v0.20.0
+3simplecss v0.2.2
+4log v0.4.29
+3siphasher v1.0.3
+3strict-num v0.1.1
+3svgtypes v0.15.3 (/home/t4ce/REPOS/TRUEOS/vendor/svgtypes-0.15.3)
+4kurbo v0.11.3 (/home/t4ce/REPOS/TRUEOS/vendor/kurbo-0.11.3) (*)
+4siphasher v1.0.3
+3tiny-skia-path v0.11.4 (*)
+3xmlwriter v0.1.0 (/home/t4ce/REPOS/TRUEOS/vendor/xmlwriter-0.1.0)
+2v v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-v) (*)
+2cc v1.2.62
+3find-msvc-tools v0.1.9
+3shlex v1.3.0
+1trueos-silk v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-silk)
+1trueos-vm v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-vm)
+2v v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-v) (*)
+1twoway v0.2.2
+2memchr v2.8.0
+2unchecked-index v0.2.2
+1unicode-segmentation v1.13.2
+1usvg v0.45.1 (/home/t4ce/REPOS/TRUEOS/vendor/usvg-0.45.1) (*)
+1v v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-v) (*)
+1webpki-roots v1.0.7
+2rustls-pki-types v1.14.1 (*)
+1x86_64 v0.15.4
+2bit_field v0.10.3
+2bitflags v2.11.1
+2const_fn v0.4.12 (proc-macro)
+2rustversion v1.0.22 (proc-macro)
+2volatile v0.4.6
+1zeroize v1.8.2 (*)
+1zune-core v0.5.1 (/home/t4ce/REPOS/TRUEOS/vendor/zune-core-0.5.1)
+1zune-jpeg v0.5.15 (/home/t4ce/REPOS/TRUEOS/vendor/zune-jpeg-0.5.15)
+2zune-core v0.5.1 (/home/t4ce/REPOS/TRUEOS/vendor/zune-core-0.5.1)
