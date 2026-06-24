@@ -94,7 +94,9 @@ pub const STATUS_OK: u32 = 0;
 pub const STATUS_UNKNOWN_OP: u32 = 1;
 pub const STATUS_BAD_ARG: u32 = 2;
 const MAX_GUEST_SLEEP_MS: u64 = 10_000;
+const MAX_SELECTOR_IDLE_SLEEP_MS: u64 = 1_000;
 pub const COMM_PAGE_VM_ID_MAGIC: u32 = 0x4856_0000;
+static SELECTOR_IDLE_SLEEP_LOGGED: AtomicU32 = AtomicU32::new(0);
 
 // ── shared page ─────────────────────────────────────────────────────────────
 
@@ -133,6 +135,18 @@ pub enum DispatchOutcome {
     Stop,
     Yield,
     SleepMs(u64),
+}
+
+fn selector_idle_sleep_ms(vm_id: u8, timeout_nanos: u64) -> Option<u64> {
+    if timeout_nanos == 0 {
+        return None;
+    }
+    let value = crate::hv::blueprint_process_env_var(vm_id, "TRUEOS_MIO_SELECTOR_IDLE_SLEEP_MS")?;
+    let ms = value.trim().parse::<u64>().ok()?;
+    if ms == 0 {
+        return None;
+    }
+    Some(ms.min(MAX_SELECTOR_IDLE_SLEEP_MS))
 }
 
 static GUEST_CABI_SEQ: AtomicU32 = AtomicU32::new(1);
@@ -1323,12 +1337,18 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let out = unsafe { &mut (&mut (*p).payload)[..PAYLOAD_CAP] };
+            let idle_sleep_ms = selector_idle_sleep_ms(vm_id, timeout_nanos);
+            let host_timeout_nanos = if idle_sleep_ms.is_some() {
+                0
+            } else {
+                timeout_nanos
+            };
             let count = crate::hv::with_guest_broker_context(vm_id, || unsafe {
                 crate::mio_compat::mio_selector_poll_host(
                     arg0 as usize,
                     out.as_mut_ptr() as *mut crate::mio_compat::TrueosMioReadyEvent,
                     max_events,
-                    timeout_nanos,
+                    host_timeout_nanos,
                 )
             });
             let count = core::cmp::min(count, max_events);
@@ -1339,6 +1359,17 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 count as u64,
                 (count * MIO_READY_EVENT_BYTES) as u32,
             );
+            if count == 0
+                && let Some(ms) = idle_sleep_ms
+            {
+                if SELECTOR_IDLE_SLEEP_LOGGED
+                    .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    hvlogf(format_args!("hv: vm{} selector idle sleep enabled {}ms", vm_id, ms));
+                }
+                return DispatchOutcome::SleepMs(ms);
+            }
             DispatchOutcome::Resume
         }
         _ => {

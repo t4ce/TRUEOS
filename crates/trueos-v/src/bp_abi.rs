@@ -169,6 +169,28 @@ unsafe extern "C" {
         out_port_be: *mut u16,
     ) -> i32;
 
+    pub fn trueos_cabi_smtp_send_text_start(
+        to_ptr: *const u8,
+        to_len: usize,
+        subject_ptr: *const u8,
+        subject_len: usize,
+        body_ptr: *const u8,
+        body_len: usize,
+        timeout_ms: u32,
+    ) -> u32;
+    pub fn trueos_cabi_smtp_result(op_id: u32) -> i32;
+    pub fn trueos_cabi_smtp_wait(op_id: u32, timeout_ms: u64) -> i32;
+    pub fn trueos_cabi_smtp_discard(op_id: u32) -> i32;
+    pub fn trueos_cabi_smtp_configure_account(
+        user_ptr: *const u8,
+        user_len: usize,
+        pass_ptr: *const u8,
+        pass_len: usize,
+        from_ptr: *const u8,
+        from_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_smtp_password_configured() -> i32;
+
     pub fn trueos_cabi_audio_open_playback(
         format: u32,
         channels: u32,
