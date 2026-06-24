@@ -510,7 +510,13 @@ fn log_blueprint_memory_profile(profile: BlueprintVmMemoryProfile, log: &dyn Fn(
 fn log_blueprint_import(import: &crate::hv::blueprint::ElfImport<'_>, log: &dyn Fn(&str)) {
     match import.resolved_addr {
         Some(addr) if crate::hv::blueprint::is_joker_import(import.name) => {
-            let line = alloc::format!("apps: joker import {} -> 0x{:x}", import.name, addr);
+            let line = if let Some(note) =
+                crate::hv::blueprint::rustc_runtime_import_note(import.name)
+            {
+                alloc::format!("apps: rust-runtime import {} -> 0x{:x} {}", import.name, addr, note)
+            } else {
+                alloc::format!("apps: rust-runtime import {} -> 0x{:x}", import.name, addr)
+            };
             crate::log_warn!(target: "apps"; "{}\n", line.as_str());
             log(line.as_str());
         }

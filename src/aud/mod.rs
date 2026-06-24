@@ -12,6 +12,7 @@
 
 #[cfg(target_os = "trueos")]
 pub mod alsa_trueos_backend;
+pub mod cabi;
 pub mod dmg;
 pub mod file_service;
 pub mod live_piano;

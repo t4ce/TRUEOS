@@ -2,7 +2,7 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::alloc::Layout;
-use core::ffi::c_char;
+use core::ffi::{c_char, c_void};
 use core::sync::atomic::{AtomicUsize, Ordering};
 use sha2::{Digest, Sha256};
 use spin::Mutex;
@@ -345,6 +345,52 @@ pub(crate) fn is_joker_import(name: &str) -> bool {
     is_rustc_runtime_import(name)
 }
 
+pub(crate) fn rustc_runtime_import_note(name: &str) -> Option<&'static str> {
+    if name == "__rust_no_alloc_shim_is_unstable_v2"
+        || name
+            .rsplit_once("___rustc")
+            .is_some_and(|(_, tail)| tail.contains("___rust_no_alloc_shim_is_unstable"))
+    {
+        return Some("class=rustc-no-alloc-shim need=noop-provider reason=allocator-presence-marker");
+    }
+    if name == "__rust_alloc"
+        || name
+            .rsplit_once("___rustc")
+            .is_some_and(|(_, tail)| tail.contains("___rust_alloc"))
+    {
+        return Some("class=rustc-alloc need=portal-rust-alloc");
+    }
+    if name == "__rust_dealloc"
+        || name
+            .rsplit_once("___rustc")
+            .is_some_and(|(_, tail)| tail.contains("___rust_dealloc"))
+    {
+        return Some("class=rustc-dealloc need=portal-rust-dealloc");
+    }
+    if name == "__rust_realloc"
+        || name
+            .rsplit_once("___rustc")
+            .is_some_and(|(_, tail)| tail.contains("___rust_realloc"))
+    {
+        return Some("class=rustc-realloc need=portal-rust-realloc");
+    }
+    if name == "__rust_alloc_zeroed"
+        || name
+            .rsplit_once("___rustc")
+            .is_some_and(|(_, tail)| tail.contains("___rust_alloc_zeroed"))
+    {
+        return Some("class=rustc-alloc-zeroed need=portal-rust-alloc-zeroed");
+    }
+    if name == "__rust_alloc_error_handler"
+        || name
+            .rsplit_once("___rustc")
+            .is_some_and(|(_, tail)| tail.contains("___rust_alloc_error_handler"))
+    {
+        return Some("class=rustc-alloc-error-handler need=portal-rust-alloc-error-handler");
+    }
+    None
+}
+
 fn portal_logf(args: core::fmt::Arguments<'_>) {
     if crate::logflag::PORTAL_LOGS {
         crate::log!("{}\n", args);
@@ -409,6 +455,22 @@ unsafe extern "C" fn portal_rust_alloc_error_handler(size: usize, align: usize) 
 }
 
 fn portal_no_alloc_shim_is_unstable_v2() {}
+
+type PortalUnwindReasonCode = u32;
+type PortalUnwindTraceFn = unsafe extern "C" fn(*mut c_void, *mut c_void) -> PortalUnwindReasonCode;
+
+const PORTAL_URC_END_OF_STACK: PortalUnwindReasonCode = 5;
+
+unsafe extern "C" fn portal_unwind_backtrace(
+    _trace: Option<PortalUnwindTraceFn>,
+    _trace_argument: *mut c_void,
+) -> PortalUnwindReasonCode {
+    PORTAL_URC_END_OF_STACK
+}
+
+unsafe extern "C" fn portal_unwind_get_ip(_context: *mut c_void) -> usize {
+    0
+}
 
 include!(concat!(env!("OUT_DIR"), "/generated_portal_imports.rs"));
 
@@ -1235,6 +1297,8 @@ fn resolve_known_import(name: &str) -> Option<usize> {
         "trueos_tokio_tls_current_slot" => {
             Some(crate::stackkeeper::trueos_tokio_tls_current_slot as *const () as usize)
         }
+        "_Unwind_Backtrace" => Some(portal_unwind_backtrace as *const () as usize),
+        "_Unwind_GetIP" => Some(portal_unwind_get_ip as *const () as usize),
         "__rust_alloc"
         | "_RNvCs75cmLyI1ip2_7___rustc12___rust_alloc"
         | "_RNvCs2csqI13tepL_7___rustc12___rust_alloc" => {
