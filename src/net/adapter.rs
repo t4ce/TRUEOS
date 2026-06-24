@@ -1594,7 +1594,7 @@ impl NetService {
         };
         let mut iface = Interface::new(cfg, &mut device, now());
 
-        // Spotify Connect discovery uses mDNS/DNS-SD over IPv4 multicast.
+        // mDNS/DNS-SD uses IPv4 multicast.
         let _ = iface.join_multicast_group(IpAddress::Ipv4(Ipv4Address::new(224, 0, 0, 251)));
         // Ensure the stack accepts multicast IPv6 control traffic.
         // Router Advertisements are commonly sent to ff02::1 (all-nodes).
