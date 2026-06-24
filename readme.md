@@ -53,54 +53,41 @@ export CC_aarch64_unknown_none=aarch64-linux-gnu-gcc
 export AR_aarch64_unknown_none=aarch64-linux-gnu-ar
 ```
 
-### ELF/ISO provenance and release verification
+### Cloud releases
 
-Official releases use:
+Official public releases are built upstream by GitHub Actions:
 
-```bash
-make release
-```
+`.github/workflows/release.yml` builds a clean checkout, packages the ISO bundle,
+signs the release assets with the TRUEOS Ed25519 release key, uploads them as a
+workflow artifact, and publishes a GitHub Release when you push a `v*` tag or
+manually run the workflow with `publish_release=true`.
 
-`make release` fails unless the TRUEOS checkout is clean, builds the ISO, writes
-and verifies provenance, then packages:
+Manual workflow runs can leave `version` empty. The workflow then names the
+release `0.0.<build-counter>` from `bld/cnt`.
 
-- `trueos.iso`
-- `TRUEOS.provenance.json`
-- QEMU/OVMF run helpers
+Set this repository secret before publishing:
 
-The provenance record is written under `bld/provenance/` and records:
+- `TRUEOS_RELEASE_ED25519_KEY`: private TRUEOS Ed25519 release key JSON. Keep
+  the matching public key in `TRUEOS-release-public-key.json`.
 
-- the previous provenance record hash;
-- the exact Git commit hash and Git tree hash;
-- submodule/gitlink commits;
-- the runtime ELF, debug ELF, and ISO SHA-256 hashes;
-- selected build info, tool versions, git status, submodule status, and relevant
-  build environment variables.
+Release assets include:
 
-By default, release provenance uses compact Git source identity
-(`PROVENANCE_SOURCE_MANIFEST=git-commit`). That is enough for GitHub-built
-upstream releases from a clean checkout, so the release bundle does not include
-the large `TRUEOS.source-files.sha256` block. If you want the old per-file
-source manifest for local/offline audit work, run:
+- `TrueOS-<version>.7z`
+- `TRUEOS-<version>.provenance.json`
+- `SHA256SUMS`
+- `.trueos-sig.json` signatures
+- `TRUEOS-release-public-key.json`
+
+Local `make release` is a fallback for reproducing the CI release path on your
+own machine. It still requires a clean checkout, writes and verifies provenance,
+then packages the same ISO bundle. By default provenance uses compact Git source
+identity (`PROVENANCE_SOURCE_MANIFEST=git-commit`), so no large
+`TRUEOS.source-files.sha256` block is bundled. For old-style per-file source
+manifest audit work:
 
 ```bash
 make release PROVENANCE_SOURCE_MANIFEST=git-index
 ```
-
-`make provenance` and `make verify-provenance` still exist as lower-level
-targets; `make release` calls them for the official release flow.
-
-### GitHub cloud releases
-
-`.github/workflows/release.yml` builds `make release` on GitHub Actions, signs
-the release assets, uploads them as a workflow artifact, and publishes a GitHub
-Release when you push a `v*` tag or manually run the workflow with
-`publish_release=true`.
-
-Set these repository secrets before publishing:
-
-- `TRUEOS_RELEASE_ED25519_KEY`: private TRUEOS Ed25519 release key JSON. Keep
-  the matching public key in `TRUEOS-release-public-key.json`.
 
 Verifier flow:
 
