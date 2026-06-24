@@ -11,6 +11,8 @@ PROVENANCE_DIR := bld/provenance
 PROVENANCE_LATEST := $(PROVENANCE_DIR)/latest.json
 PROVENANCE_LATEST_SOURCE_MANIFEST := $(PROVENANCE_DIR)/latest.source-files.sha256
 PROVENANCE_SCRIPT := tools/provenance_chain.py
+PROVENANCE_CLEAN_FLAG ?= --require-clean
+START_BAREMETAL_LOG ?= 1
 ISO_DIR := bld
 ISO_PATH := bld/trueos.iso
 ISO_BOOT_DIR := bld/iso-bootroot
@@ -18,6 +20,7 @@ ISO_EFI_IMG := efi.img
 UPDATE_7Z_FLAGS ?= -mx=9 -m0=LZMA2 -ms=off
 RELEASE_BUNDLE_DIR := $(ISO_DIR)/trueos-release
 RELEASE_ARCHIVE := $(ISO_DIR)/TrueOS.7z
+PUBLISH_RELEASE_SMB ?= 1
 BUNDLED_OVMF_NAME := ovmf-code-x86_64.fd
 OVMF_BUNDLE_PATH ?= $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd /opt/homebrew/share/qemu/edk2-x86_64-code.fd /usr/local/share/qemu/edk2-x86_64-code.fd))
 OVMF_LICENSE_PATH ?= $(firstword $(wildcard /usr/share/doc/ovmf/copyright /opt/homebrew/share/doc/qemu/LICENSE /usr/local/share/doc/qemu/LICENSE))
@@ -54,7 +57,7 @@ QEMU_BIN ?= qemu-system-x86_64
 QEMU_MEMORY ?= 12000M
 QEMU_UEFI_FIRMWARE = $(OVMF_BUNDLE_PATH)
 NVME_IMG := tools/nvme.img
-CNT_FILE := tools/cnt
+CNT_FILE := bld/cnt
 QEMU_BRIDGE ?= br0
 QEMU_BRIDGE_HELPER ?= $(firstword $(wildcard /usr/lib/qemu/qemu-bridge-helper /usr/libexec/qemu-bridge-helper /usr/lib/qemu-bridge-helper))
 QEMU_HDA_AUDIODEV ?= none,id=snd0
@@ -78,7 +81,7 @@ CARGO_GFX_FLAGS =
 
 IMG_SIZE ?= 25G
 
-.PHONY: images empty-libs kernel artifacts limine baremetal-reboot-log iso provenance verify-provenance release dbg run
+.PHONY: images empty-libs kernel artifacts limine baremetal-reboot-log iso provenance-git-clean provenance verify-provenance release-git-clean release dbg run
 
 images: $(NVME_IMG)
 
@@ -284,25 +287,64 @@ iso: artifacts images limine
 		-e $(ISO_EFI_IMG) -no-emul-boot \
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
 		-o $(ISO_PATH) $(ISO_BOOT_DIR)
-	$(MAKE) --no-print-directory baremetal-reboot-log
+	@if [ "$(START_BAREMETAL_LOG)" = "1" ]; then \
+		$(MAKE) --no-print-directory baremetal-reboot-log; \
+	else \
+		echo "iso: skipping baremetal log drain (START_BAREMETAL_LOG=$(START_BAREMETAL_LOG))"; \
+	fi
 
-provenance: iso
+provenance-git-clean:
+	@if [ "$(PROVENANCE_CLEAN_FLAG)" = "--require-clean" ]; then \
+		set -e; \
+		if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+			echo "error: provenance requires a Git checkout"; \
+			exit 1; \
+		fi; \
+		status=$$(git status --porcelain=v1 --untracked-files=all --ignore-submodules=none); \
+		if [ -n "$$status" ]; then \
+			echo "error: provenance requires a clean TRUEOS checkout"; \
+			echo "$$status"; \
+			echo "commit, stash, or remove these changes before creating release provenance"; \
+			exit 1; \
+		fi; \
+	fi
+
+provenance: provenance-git-clean iso
 	python3 $(PROVENANCE_SCRIPT) attest \
 		--source-root . \
 		--out-dir $(PROVENANCE_DIR) \
 		--elf $(ARTIFACT_RUNTIME_ELF) \
 		--debug-elf $(ARTIFACT_DEBUG_ELF) \
 		--iso $(ISO_PATH) \
-		--build-info $(ARTIFACT_BUILD_INFO)
+		--build-info $(ARTIFACT_BUILD_INFO) \
+		$(PROVENANCE_CLEAN_FLAG)
 
 verify-provenance:
 	python3 $(PROVENANCE_SCRIPT) verify \
 		--source-root . \
 		--record $(PROVENANCE_LATEST)
 
+release-git-clean:
+	@set -e; \
+	if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		echo "error: release requires a Git checkout"; \
+		exit 1; \
+	fi; \
+	status=$$(git status --porcelain=v1 --untracked-files=all --ignore-submodules=none); \
+	if [ -n "$$status" ]; then \
+		echo "error: release requires a clean TRUEOS checkout"; \
+		echo "$$status"; \
+		echo "commit, stash, or remove these changes before building an official ISO"; \
+		exit 1; \
+	fi; \
+	printf 'release source commit: %s\n' "$$(git rev-parse HEAD)"; \
+	printf 'release source tree:   %s\n' "$$(git rev-parse 'HEAD^{tree}')"
+
 release: BUILD_MODE := release
 release: CARGO_BUILD_FLAGS += --release
-release: provenance
+release: PROVENANCE_CLEAN_FLAG := --require-clean
+release: release-git-clean provenance
+	$(MAKE) --no-print-directory verify-provenance
 	@if [ -z "$(OVMF_BUNDLE_PATH)" ] || [ ! -f "$(OVMF_BUNDLE_PATH)" ]; then \
 		echo "error: no OVMF firmware found to bundle"; \
 		echo "       install OVMF/edk2-ovmf or run: make release OVMF_BUNDLE_PATH=/path/to/ovmf-code-x86_64.fd"; \
@@ -314,9 +356,6 @@ release: provenance
 	cp $(ISO_PATH) $(RELEASE_BUNDLE_DIR)/trueos.iso
 	cp $(PROVENANCE_LATEST) $(RELEASE_BUNDLE_DIR)/TRUEOS.provenance.json
 	cp $(PROVENANCE_LATEST_SOURCE_MANIFEST) $(RELEASE_BUNDLE_DIR)/TRUEOS.source-files.sha256
-	@manifest_name=$$(python3 -c 'import json; print(json.load(open("$(PROVENANCE_LATEST)"))["source_manifest"]["path"])'); \
-		cp "$(PROVENANCE_DIR)/$$manifest_name" "$(RELEASE_BUNDLE_DIR)/$$manifest_name"; \
-		printf '%s\n' "$$manifest_name" > "$(RELEASE_BUNDLE_DIR)/.provenance-manifest-name"
 	cp "$(OVMF_BUNDLE_PATH)" $(RELEASE_BUNDLE_DIR)/$(BUNDLED_OVMF_NAME)
 	cp tools/release/run-linux.sh $(RELEASE_BUNDLE_DIR)/run-linux.sh
 	cp tools/release/run-macos.sh $(RELEASE_BUNDLE_DIR)/run-macos.sh
@@ -325,9 +364,13 @@ release: provenance
 		cp "$(OVMF_LICENSE_PATH)" $(RELEASE_BUNDLE_DIR)/OVMF-LICENSE.txt; \
 	fi
 	chmod +x $(RELEASE_BUNDLE_DIR)/run-linux.sh $(RELEASE_BUNDLE_DIR)/run-macos.sh
-	cd $(RELEASE_BUNDLE_DIR) && 7z a -t7z $(UPDATE_7Z_FLAGS) ../$(notdir $(RELEASE_ARCHIVE)) trueos.iso TRUEOS.provenance.json TRUEOS.source-files.sha256 $$(cat .provenance-manifest-name) $(BUNDLED_OVMF_NAME) run-linux.sh run-macos.sh README-RUN.txt $$(test -f OVMF-LICENSE.txt && printf '%s' OVMF-LICENSE.txt)
-	env -u GIO_MODULE_DIR gio mount smb://t4ce@pdjb/home-share || true
-	env -u GIO_MODULE_DIR gio copy $(RELEASE_ARCHIVE) smb://t4ce@pdjb/home-share/TRUEOS_SITE/
+	cd $(RELEASE_BUNDLE_DIR) && 7z a -t7z $(UPDATE_7Z_FLAGS) ../$(notdir $(RELEASE_ARCHIVE)) trueos.iso TRUEOS.provenance.json TRUEOS.source-files.sha256 $(BUNDLED_OVMF_NAME) run-linux.sh run-macos.sh README-RUN.txt $$(test -f OVMF-LICENSE.txt && printf '%s' OVMF-LICENSE.txt)
+	@if [ "$(PUBLISH_RELEASE_SMB)" = "1" ]; then \
+		env -u GIO_MODULE_DIR gio mount smb://t4ce@pdjb/home-share || true; \
+		env -u GIO_MODULE_DIR gio copy $(RELEASE_ARCHIVE) smb://t4ce@pdjb/home-share/TRUEOS_SITE/; \
+	else \
+		echo "release: skipping SMB publish (PUBLISH_RELEASE_SMB=$(PUBLISH_RELEASE_SMB))"; \
+	fi
 
 
 SERIAL_CONSOLE_CMD = konsole -e sh -c 'stty -echo -icanon cols 100 rows 100; nc 127.0.0.1 5555; stty sane; echo "Connection closed. Press ENTER to exit..."; read'

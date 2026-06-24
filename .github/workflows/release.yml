@@ -1,0 +1,259 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without the leading v, for example 0.0.2
+        required: true
+        type: string
+      publish_release:
+        description: Publish or update the GitHub Release
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: trueos-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-sign-release:
+    name: Build, sign, and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version || '' }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+            version="${tag#v}"
+          else
+            version="${INPUT_VERSION}"
+            tag="v${version}"
+          fi
+
+          if [[ -z "${version}" || "${version}" == "v" ]]; then
+            echo "Release version is empty" >&2
+            exit 1
+          fi
+
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf \
+            automake \
+            build-essential \
+            dosfstools \
+            gcc \
+            git \
+            gnupg \
+            libasound2-dev \
+            linux-firmware \
+            mtools \
+            nasm \
+            ovmf \
+            p7zip-full \
+            pkg-config \
+            xorriso \
+            zstd
+
+      - name: Install Rust nightly toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install nightly \
+            --profile minimal \
+            --component rust-src,rustfmt,clippy,llvm-tools-preview
+
+      - name: Locate firmware and OVMF
+        id: paths
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ovmf_path="$(find /usr/share -type f \( -name OVMF_CODE.fd -o -name OVMF_CODE_4M.fd -o -name OVMF.fd \) | sort | head -n 1)"
+          if [[ -z "${ovmf_path}" ]]; then
+            echo "Could not find OVMF firmware from the ovmf package" >&2
+            exit 1
+          fi
+
+          guc_path="$(find /lib/firmware /usr/lib/firmware -type f \( -name adlp_guc_70.bin -o -name adlp_guc_70.bin.zst \) 2>/dev/null | sort | head -n 1 || true)"
+          if [[ -z "${guc_path}" ]]; then
+            echo "Could not find Intel ADL-P GuC firmware. Install linux-firmware or provide it in the runner image." >&2
+            exit 1
+          fi
+
+          dmc_path="$(find /lib/firmware /usr/lib/firmware -type f \( -name adls_dmc_ver2_01.bin -o -name adls_dmc_ver2_01.bin.zst \) 2>/dev/null | sort | head -n 1 || true)"
+          huc_path="$(find /lib/firmware /usr/lib/firmware -type f \( -name tgl_huc.bin -o -name tgl_huc.bin.zst \) 2>/dev/null | sort | head -n 1 || true)"
+
+          echo "ovmf=${ovmf_path}" >> "${GITHUB_OUTPUT}"
+          echo "guc=${guc_path}" >> "${GITHUB_OUTPUT}"
+          echo "dmc=${dmc_path}" >> "${GITHUB_OUTPUT}"
+          echo "huc=${huc_path}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build release bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          make release \
+            START_BAREMETAL_LOG=0 \
+            PUBLISH_RELEASE_SMB=0 \
+            OVMF_BUNDLE_PATH="${{ steps.paths.outputs.ovmf }}" \
+            GUC_FW_HOST_PATH="${{ steps.paths.outputs.guc }}" \
+            DMC_FW_HOST_PATH="${{ steps.paths.outputs.dmc }}" \
+            HUC_FW_HOST_PATH="${{ steps.paths.outputs.huc }}"
+
+      - name: Stage release assets
+        id: assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${{ steps.version.outputs.version }}"
+          dist="dist"
+          mkdir -p "${dist}"
+
+          cp bld/TrueOS.7z "${dist}/TrueOS-${version}.7z"
+          cp bld/trueos-release/TRUEOS.provenance.json "${dist}/TRUEOS-${version}.provenance.json"
+          cp bld/trueos-release/TRUEOS.source-files.sha256 "${dist}/TRUEOS-${version}.source-files.sha256"
+
+          (
+            cd "${dist}"
+            sha256sum TrueOS-${version}.7z TRUEOS-${version}.provenance.json TRUEOS-${version}.source-files.sha256 > SHA256SUMS
+          )
+
+          record_sha256="$(python3 -c 'import json; print(json.load(open("bld/trueos-release/TRUEOS.provenance.json", encoding="utf-8"))["record_sha256"])')"
+          iso_sha256="$(python3 -c 'import json; data=json.load(open("bld/trueos-release/TRUEOS.provenance.json", encoding="utf-8")); print(data["artifacts"]["iso"]["sha256"])')"
+
+          cat > "${dist}/release-notes.md" <<EOF
+          TRUEOS ${version}
+
+          Source commit: ${GITHUB_SHA}
+          Provenance record SHA-256: ${record_sha256}
+          ISO SHA-256: ${iso_sha256}
+
+          Assets are signed with the TRUEOS release GPG key. Verify SHA256SUMS and the detached .asc signatures before using the release bundle.
+          EOF
+
+          echo "dist=${dist}" >> "${GITHUB_OUTPUT}"
+
+      - name: Import GPG release key
+        id: gpg
+        shell: bash
+        env:
+          TRUEOS_RELEASE_GPG_PRIVATE_KEY: ${{ secrets.TRUEOS_RELEASE_GPG_PRIVATE_KEY }}
+          TRUEOS_RELEASE_GPG_PASSPHRASE: ${{ secrets.TRUEOS_RELEASE_GPG_PASSPHRASE }}
+          TRUEOS_RELEASE_GPG_KEY_ID: ${{ secrets.TRUEOS_RELEASE_GPG_KEY_ID }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${TRUEOS_RELEASE_GPG_PRIVATE_KEY}" ]]; then
+            echo "Missing required secret TRUEOS_RELEASE_GPG_PRIVATE_KEY" >&2
+            exit 1
+          fi
+
+          export GNUPGHOME="${RUNNER_TEMP}/gnupg"
+          mkdir -p "${GNUPGHOME}"
+          chmod 700 "${GNUPGHOME}"
+
+          printf '%s' "${TRUEOS_RELEASE_GPG_PRIVATE_KEY}" | gpg --batch --import
+
+          key_id="${TRUEOS_RELEASE_GPG_KEY_ID}"
+          if [[ -z "${key_id}" ]]; then
+            key_id="$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^sec/ { print $5; exit }')"
+          fi
+
+          if [[ -z "${key_id}" ]]; then
+            echo "Could not determine imported GPG key id" >&2
+            exit 1
+          fi
+
+          fingerprint="$(gpg --batch --list-secret-keys --with-colons "${key_id}" | awk -F: '/^fpr/ { print $10; exit }')"
+
+          echo "gnupghome=${GNUPGHOME}" >> "${GITHUB_OUTPUT}"
+          echo "key_id=${key_id}" >> "${GITHUB_OUTPUT}"
+          echo "fingerprint=${fingerprint}" >> "${GITHUB_OUTPUT}"
+
+      - name: Sign release assets
+        shell: bash
+        env:
+          GNUPGHOME: ${{ steps.gpg.outputs.gnupghome }}
+          GPG_KEY_ID: ${{ steps.gpg.outputs.key_id }}
+          GPG_PASSPHRASE: ${{ secrets.TRUEOS_RELEASE_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+
+          dist="${{ steps.assets.outputs.dist }}"
+          sign_args=(--batch --yes --armor --detach-sign --local-user "${GPG_KEY_ID}")
+          if [[ -n "${GPG_PASSPHRASE}" ]]; then
+            sign_args+=(--pinentry-mode loopback --passphrase "${GPG_PASSPHRASE}")
+          fi
+
+          gpg --batch --armor --export "${GPG_KEY_ID}" > "${dist}/TRUEOS-release-public-key.asc"
+
+          while IFS= read -r -d '' file; do
+            gpg "${sign_args[@]}" "${file}"
+          done < <(find "${dist}" -maxdepth 1 -type f ! -name '*.asc' ! -name 'release-notes.md' -print0 | sort -z)
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trueos-release-${{ steps.version.outputs.version }}
+          path: |
+            dist/*
+            !dist/release-notes.md
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.publish_release == true)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mapfile -d '' release_assets < <(find dist -maxdepth 1 -type f ! -name 'release-notes.md' -print0 | sort -z)
+
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" "${release_assets[@]}" --clobber
+            gh release edit "${TAG}" \
+              --title "TRUEOS ${VERSION}" \
+              --notes-file dist/release-notes.md
+          else
+            gh release create "${TAG}" "${release_assets[@]}" \
+              --target "${GITHUB_SHA}" \
+              --title "TRUEOS ${VERSION}" \
+              --notes-file dist/release-notes.md
+          fi

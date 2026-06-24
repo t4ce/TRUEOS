@@ -24,7 +24,10 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA = "trueos.provenance-chain.v1"
+SCHEMA = "trueos.provenance-chain.v2"
+SOURCE_MANIFEST_KIND = "trueos-source-manifest-v2"
+SOURCE_MODE_GIT_INDEX = "git-index"
+SOURCE_MODE_FILESYSTEM = "filesystem-v1"
 EXCLUDED_DIRS = {
     ".git",
     ".limine",
@@ -108,11 +111,29 @@ def run_text(argv: list[str], cwd: Path) -> tuple[int, str]:
     return completed.returncode, completed.stdout.strip()
 
 
+def run_bytes(argv: list[str], cwd: Path) -> tuple[int, bytes]:
+    try:
+        completed = subprocess.run(
+            argv,
+            cwd=cwd,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+    except FileNotFoundError as err:
+        return 127, str(err).encode("utf-8", "replace")
+    return completed.returncode, completed.stdout
+
+
 def git_text(root: Path, argv: list[str]) -> str | None:
     code, output = run_text(["git", *argv], root)
     if code != 0:
         return None
     return output
+
+
+def require_git(root: Path) -> bool:
+    return git_text(root, ["rev-parse", "--is-inside-work-tree"]) == "true"
 
 
 def should_skip(path: Path, rel: str) -> bool:
@@ -125,7 +146,7 @@ def should_skip(path: Path, rel: str) -> bool:
     return False
 
 
-def source_entries(root: Path) -> tuple[list[str], int, int]:
+def source_entries_filesystem(root: Path) -> tuple[list[str], int, int]:
     rows: list[str] = []
     file_count = 0
     bytes_hashed = 0
@@ -159,16 +180,89 @@ def source_entries(root: Path) -> tuple[list[str], int, int]:
     return rows, file_count, bytes_hashed
 
 
-def write_source_manifest(root: Path, out_path: Path) -> dict[str, Any]:
-    rows, file_count, bytes_hashed = source_entries(root)
+def source_entries_git_index(root: Path) -> tuple[list[str], int, int]:
+    code, output = run_bytes(["git", "ls-files", "-s", "-z"], root)
+    if code != 0:
+        raise RuntimeError(output.decode("utf-8", "replace").strip())
+
+    rows: list[str] = []
+    file_count = 0
+    bytes_hashed = 0
+
+    for raw_record in output.split(b"\0"):
+        if not raw_record:
+            continue
+        meta, sep, raw_path = raw_record.partition(b"\t")
+        if not sep:
+            continue
+        parts = meta.decode("ascii", "replace").split()
+        if len(parts) < 3:
+            continue
+        mode, object_id, _stage = parts[:3]
+        rel = raw_path.decode("utf-8", "surrogateescape")
+        path = root / rel
+
+        if mode == "160000":
+            kind = "gitlink"
+            data = f"gitlink {object_id}\n".encode("ascii")
+            digest = sha256_bytes(data)
+            size = len(object_id)
+        elif mode == "120000":
+            kind = "symlink"
+            data = os.readlink(path).encode("utf-8", "surrogateescape")
+            digest = sha256_bytes(data)
+            size = len(data)
+        else:
+            kind = "file"
+            digest, size = hash_file(path)
+
+        rows.append(f"{digest}  {kind} {mode} {size} {rel}\n")
+        file_count += 1
+        bytes_hashed += size
+
+    return rows, file_count, bytes_hashed
+
+
+def source_manifest_headers(root: Path, mode: str) -> list[str]:
+    if mode != SOURCE_MODE_GIT_INDEX:
+        return []
+
+    commit = git_text(root, ["rev-parse", "HEAD"]) or "unknown"
+    tree = git_text(root, ["rev-parse", "HEAD^{tree}"]) or "unknown"
+    return [
+        f"# {SOURCE_MANIFEST_KIND}\n",
+        f"# source_mode {SOURCE_MODE_GIT_INDEX}\n",
+        f"# git_commit {commit}\n",
+        f"# git_tree {tree}\n",
+    ]
+
+
+def write_source_manifest(
+    root: Path,
+    out_path: Path,
+    mode: str = SOURCE_MODE_GIT_INDEX,
+) -> dict[str, Any]:
+    if mode == SOURCE_MODE_GIT_INDEX:
+        rows, file_count, bytes_hashed = source_entries_git_index(root)
+    elif mode == SOURCE_MODE_FILESYSTEM:
+        rows, file_count, bytes_hashed = source_entries_filesystem(root)
+    else:
+        raise ValueError(f"unknown source manifest mode: {mode}")
+
+    rows = source_manifest_headers(root, mode) + rows
     content = "".join(rows).encode("utf-8")
     out_path.write_bytes(content)
-    return {
+    info: dict[str, Any] = {
         "path": out_path.name,
+        "mode": mode,
         "sha256": sha256_bytes(content),
         "file_count": file_count,
         "bytes_hashed": bytes_hashed,
     }
+    if mode == SOURCE_MODE_GIT_INDEX:
+        info["git_commit"] = git_text(root, ["rev-parse", "HEAD"])
+        info["git_tree"] = git_text(root, ["rev-parse", "HEAD^{tree}"])
+    return info
 
 
 def artifact_record(root: Path, path: Path) -> dict[str, Any]:
@@ -224,16 +318,24 @@ def gitless_command(argv: list[str], root: Path) -> str | None:
 
 
 def collect_git(root: Path) -> dict[str, Any]:
-    status = git_text(root, ["status", "--short"]) or ""
+    status = git_text(root, ["status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"]) or ""
     submodules = git_text(root, ["submodule", "status", "--recursive"]) or ""
+    gitlinks = git_text(root, ["ls-files", "-s"]) or ""
+    gitlink_entries = [line for line in gitlinks.splitlines() if line.startswith("160000 ")]
+    remotes = git_text(root, ["remote", "-v"]) or ""
     return {
         "commit": git_text(root, ["rev-parse", "HEAD"]),
         "commit_short": git_text(root, ["rev-parse", "--short=12", "HEAD"]),
+        "tree": git_text(root, ["rev-parse", "HEAD^{tree}"]),
+        "branch": git_text(root, ["branch", "--show-current"]),
         "dirty": bool(status.strip()),
         "status_sha256": sha256_bytes(status.encode("utf-8")),
         "status_short": status.splitlines(),
         "submodules_sha256": sha256_bytes(submodules.encode("utf-8")),
         "submodules": submodules.splitlines(),
+        "gitlinks_sha256": sha256_bytes("\n".join(gitlink_entries).encode("utf-8")),
+        "gitlinks": gitlink_entries,
+        "remotes": remotes.splitlines(),
     }
 
 
@@ -263,9 +365,26 @@ def build_record(args: argparse.Namespace) -> int:
     out_dir = Path(args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    if args.require_clean:
+        if not require_git(root):
+            print("error: --require-clean needs a Git checkout", file=sys.stderr)
+            return 2
+        status = git_text(root, ["status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"]) or ""
+        if status.strip():
+            print("error: refusing to attest a dirty TRUEOS checkout", file=sys.stderr)
+            print(status, file=sys.stderr)
+            print("commit, stash, or remove these changes before creating release provenance", file=sys.stderr)
+            return 2
+
+    source_mode = SOURCE_MODE_GIT_INDEX if require_git(root) else SOURCE_MODE_FILESYSTEM
+
     stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ") + f"-{os.getpid()}"
     source_manifest_path = out_dir / f"source-files-{stamp}.sha256"
-    source_manifest = write_source_manifest(root, source_manifest_path)
+    try:
+        source_manifest = write_source_manifest(root, source_manifest_path, source_mode)
+    except (RuntimeError, ValueError) as err:
+        print(f"error: failed to write source manifest: {err}", file=sys.stderr)
+        return 2
 
     artifacts: dict[str, Any] = {}
     for name, value in [
@@ -327,7 +446,12 @@ def verify_record(args: argparse.Namespace) -> int:
 
     manifest_info = record.get("source_manifest", {})
     manifest_name = manifest_info.get("path")
-    manifest_path = record_path.parent / manifest_name if isinstance(manifest_name, str) else None
+    manifest_candidates = []
+    if isinstance(manifest_name, str):
+        manifest_candidates.append(record_path.parent / manifest_name)
+    manifest_candidates.append(record_path.parent / "TRUEOS.source-files.sha256")
+    manifest_candidates.append(record_path.parent / "latest.source-files.sha256")
+    manifest_path = next((path for path in manifest_candidates if path.exists()), None)
     if manifest_path is None or not manifest_path.exists():
         print("source manifest missing next to record", file=sys.stderr)
         ok = False
@@ -338,7 +462,14 @@ def verify_record(args: argparse.Namespace) -> int:
             ok = False
 
     check_manifest = record_path.parent / ".verify-source-files.sha256"
-    recomputed = write_source_manifest(root, check_manifest)
+    source_mode = manifest_info.get("mode")
+    if not isinstance(source_mode, str):
+        source_mode = SOURCE_MODE_FILESYSTEM
+    try:
+        recomputed = write_source_manifest(root, check_manifest, source_mode)
+    except (RuntimeError, ValueError) as err:
+        print(f"source tree manifest failed: {err}", file=sys.stderr)
+        return 1
     try:
         check_manifest.unlink()
     except FileNotFoundError:
@@ -379,6 +510,8 @@ def main(argv: list[str]) -> int:
     attest.add_argument("--debug-elf")
     attest.add_argument("--iso", required=True)
     attest.add_argument("--build-info")
+    attest.add_argument("--require-clean", action="store_true", help="refuse dirty Git worktrees")
+    attest.add_argument("--allow-dirty", action="store_true", help="accepted for explicit local/dev attestations")
     attest.set_defaults(func=build_record)
 
     verify = sub.add_parser("verify", help="verify a provenance record against local files")
