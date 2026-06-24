@@ -55,46 +55,40 @@ export AR_aarch64_unknown_none=aarch64-linux-gnu-ar
 
 ### ELF/ISO provenance and release verification
 
-`make provenance` builds the ISO and writes a tamper-evident record under
-`bld/provenance/`. By default it refuses a dirty Git checkout, then records:
-
-- the previous provenance record hash;
-- the exact Git commit hash and Git tree hash;
-- a source manifest generated from the Git index, including gitlink commits;
-- the runtime ELF, debug ELF, and ISO SHA-256 hashes;
-- selected build info, tool versions, git status, submodule status, and relevant
-  build environment variables.
-
-```bash
-make provenance
-make verify-provenance
-```
-
-Official releases use the stricter path:
+Official releases use:
 
 ```bash
 make release
 ```
 
-`make release` fails unless the TRUEOS checkout is clean, writes provenance,
-verifies it, and packages:
+`make release` fails unless the TRUEOS checkout is clean, builds the ISO, writes
+and verifies provenance, then packages:
 
 - `trueos.iso`
 - `TRUEOS.provenance.json`
+- QEMU/OVMF run helpers
 
-By default release provenance uses compact Git source identity: commit, tree,
-submodule gitlinks, and artifact hashes. That is enough for GitHub-built
-upstream releases from a clean checkout, so the release bundle does not need the
-large `TRUEOS.source-files.sha256` block. If you want the old per-file source
-manifest for local/offline audit work, run:
+The provenance record is written under `bld/provenance/` and records:
+
+- the previous provenance record hash;
+- the exact Git commit hash and Git tree hash;
+- submodule/gitlink commits;
+- the runtime ELF, debug ELF, and ISO SHA-256 hashes;
+- selected build info, tool versions, git status, submodule status, and relevant
+  build environment variables.
+
+By default, release provenance uses compact Git source identity
+(`PROVENANCE_SOURCE_MANIFEST=git-commit`). That is enough for GitHub-built
+upstream releases from a clean checkout, so the release bundle does not include
+the large `TRUEOS.source-files.sha256` block. If you want the old per-file
+source manifest for local/offline audit work, run:
 
 ```bash
 make release PROVENANCE_SOURCE_MANIFEST=git-index
 ```
 
-For a public release, publish the upstream Git commit and sign or otherwise
-anchor the printed `record_sha256`. That signed record hash is the compact proof
-handle for "this commit/tree and this ISO belong together."
+`make provenance` and `make verify-provenance` still exist as lower-level
+targets; `make release` calls them for the official release flow.
 
 ### GitHub cloud releases
 
@@ -105,12 +99,8 @@ Release when you push a `v*` tag or manually run the workflow with
 
 Set these repository secrets before publishing:
 
-- `TRUEOS_RELEASE_GPG_PRIVATE_KEY`: ASCII-armored private GPG key used only for
-  release signing.
-- `TRUEOS_RELEASE_GPG_PASSPHRASE`: passphrase for that private key, if it has
-  one.
-- `TRUEOS_RELEASE_GPG_KEY_ID`: optional key id or fingerprint. If omitted, the
-  workflow uses the first imported secret key.
+- `TRUEOS_RELEASE_ED25519_KEY`: private TRUEOS Ed25519 release key JSON. Keep
+  the matching public key in `TRUEOS-release-public-key.json`.
 
 Verifier flow:
 
@@ -121,10 +111,10 @@ python3 tools/provenance_chain.py verify \
   --record /path/to/release/TRUEOS.provenance.json
 ```
 
-The verifier recomputes the source manifest from the checked-out Git commit,
-or the compact Git source identity for default releases, and checks the ISO hash
-named in `TRUEOS.provenance.json`. A wrong commit, swapped submodule/gitlink, or
-replaced ISO breaks the chain.
+The verifier recomputes the compact Git source identity for default releases and
+checks the ISO hash named in `TRUEOS.provenance.json`. A wrong commit, swapped
+submodule/gitlink, or replaced ISO breaks the chain. Release assets also include
+`.trueos-sig.json` Ed25519 signatures and `TRUEOS-release-public-key.json`.
 
 ## on MAC
 > [!TIP]
