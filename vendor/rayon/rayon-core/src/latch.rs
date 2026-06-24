@@ -1,7 +1,7 @@
-use std::marker::PhantomData;
-use std::ops::Deref;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use core::marker::PhantomData;
+use core::ops::Deref;
+use alloc::sync::Arc;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::registry::{Registry, WorkerThread};
 use crate::sync::{Condvar, Mutex};
@@ -347,8 +347,8 @@ enum CountLatchKind {
     Blocking { latch: LockLatch },
 }
 
-impl std::fmt::Debug for CountLatchKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for CountLatchKind {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             CountLatchKind::Stealing { latch, .. } => {
                 f.debug_tuple("Stealing").field(latch).finish()

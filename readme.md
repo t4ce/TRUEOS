@@ -42,7 +42,7 @@ workflow artifact, and publishes a GitHub Release when you push a `v*` tag or
 manually run the workflow with `publish_release=true`.
 
 Manual workflow runs can leave `version` empty. The workflow then names the
-release `0.0.<build-counter>` from `bld/cnt`.
+release `0.0.<workflow-run-number>` from GitHub Actions.
 
 Set this repository secret before publishing:
 

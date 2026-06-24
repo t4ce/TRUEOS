@@ -1,5 +1,5 @@
 use rayon::prelude::*;
-use std::fmt::Debug;
+use core::fmt::Debug;
 
 fn check<I>(iter: I)
 where
@@ -19,7 +19,7 @@ where
 
 #[test]
 fn clone_binary_heap() {
-    use std::collections::BinaryHeap;
+    use alloc::collections::BinaryHeap;
     let heap: BinaryHeap<_> = (0..1000).collect();
     check(heap.par_iter());
     check(heap.into_par_iter());
@@ -27,14 +27,14 @@ fn clone_binary_heap() {
 
 #[test]
 fn clone_btree_map() {
-    use std::collections::BTreeMap;
+    use alloc::collections::BTreeMap;
     let map: BTreeMap<_, _> = (0..1000).enumerate().collect();
     check(map.par_iter());
 }
 
 #[test]
 fn clone_btree_set() {
-    use std::collections::BTreeSet;
+    use alloc::collections::BTreeSet;
     let set: BTreeSet<_> = (0..1000).collect();
     check(set.par_iter());
 }
@@ -55,7 +55,7 @@ fn clone_hash_set() {
 
 #[test]
 fn clone_linked_list() {
-    use std::collections::LinkedList;
+    use alloc::collections::LinkedList;
     let list: LinkedList<_> = (0..1000).collect();
     check(list.par_iter());
     check(list.into_par_iter());
@@ -63,7 +63,7 @@ fn clone_linked_list() {
 
 #[test]
 fn clone_vec_deque() {
-    use std::collections::VecDeque;
+    use alloc::collections::VecDeque;
     let deque: VecDeque<_> = (0..1000).collect();
     check(deque.par_iter());
     check(deque.into_par_iter());

@@ -3,7 +3,7 @@
 //! unless you have need to name one of the iterator types.
 
 use std::collections::HashSet;
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 
 use crate::iter::plumbing::*;
 use crate::iter::*;

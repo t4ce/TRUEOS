@@ -79,7 +79,7 @@ where
         let first = crate::current_num_threads();
         let callback = BlocksCallback {
             consumer,
-            sizes: std::iter::successors(Some(first), exponential_size),
+            sizes: core::iter::successors(Some(first), exponential_size),
             len: self.base.len(),
         };
         self.base.with_producer(callback)
@@ -121,7 +121,7 @@ where
     {
         let callback = BlocksCallback {
             consumer,
-            sizes: std::iter::repeat(self.block_size),
+            sizes: core::iter::repeat(self.block_size),
             len: self.base.len(),
         };
         self.base.with_producer(callback)

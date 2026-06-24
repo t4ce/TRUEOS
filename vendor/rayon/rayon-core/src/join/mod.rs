@@ -2,7 +2,7 @@ use crate::job::StackJob;
 use crate::latch::SpinLatch;
 use crate::registry::{self, WorkerThread};
 use crate::unwind;
-use std::any::Any;
+use core::any::Any;
 
 use crate::FnContext;
 

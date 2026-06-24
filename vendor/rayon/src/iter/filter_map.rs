@@ -1,7 +1,7 @@
 use super::plumbing::*;
 use super::*;
 
-use std::fmt::{self, Debug};
+use core::fmt::{self, Debug};
 
 /// `FilterMap` creates an iterator that uses `filter_op` to both filter and map elements.
 /// This struct is created by the [`filter_map()`] method on [`ParallelIterator`].

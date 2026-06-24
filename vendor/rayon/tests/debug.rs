@@ -1,5 +1,5 @@
 use rayon::prelude::*;
-use std::fmt::Debug;
+use core::fmt::Debug;
 
 fn check<I>(iter: I)
 where
@@ -10,7 +10,7 @@ where
 
 #[test]
 fn debug_binary_heap() {
-    use std::collections::BinaryHeap;
+    use alloc::collections::BinaryHeap;
     let mut heap: BinaryHeap<_> = (0..10).collect();
     check(heap.par_iter());
     check(heap.par_drain());
@@ -19,7 +19,7 @@ fn debug_binary_heap() {
 
 #[test]
 fn debug_btree_map() {
-    use std::collections::BTreeMap;
+    use alloc::collections::BTreeMap;
     let mut map: BTreeMap<_, _> = (0..10).enumerate().collect();
     check(map.par_iter());
     check(map.par_iter_mut());
@@ -28,7 +28,7 @@ fn debug_btree_map() {
 
 #[test]
 fn debug_btree_set() {
-    use std::collections::BTreeSet;
+    use alloc::collections::BTreeSet;
     let set: BTreeSet<_> = (0..10).collect();
     check(set.par_iter());
     check(set.into_par_iter());
@@ -55,7 +55,7 @@ fn debug_hash_set() {
 
 #[test]
 fn debug_linked_list() {
-    use std::collections::LinkedList;
+    use alloc::collections::LinkedList;
     let mut list: LinkedList<_> = (0..10).collect();
     check(list.par_iter());
     check(list.par_iter_mut());
@@ -64,7 +64,7 @@ fn debug_linked_list() {
 
 #[test]
 fn debug_vec_deque() {
-    use std::collections::VecDeque;
+    use alloc::collections::VecDeque;
     let mut deque: VecDeque<_> = (0..10).collect();
     check(deque.par_iter());
     check(deque.par_iter_mut());

@@ -1,6 +1,6 @@
 use super::plumbing::*;
 use super::*;
-use std::num::NonZeroUsize;
+use core::num::NonZeroUsize;
 use std::{fmt, iter};
 
 /// Iterator adaptor for [the `repeat()` function].
@@ -209,7 +209,7 @@ impl<T: Clone + Send> Producer for RepeatNProducer<T> {
     type IntoIter = Either<iter::RepeatN<T>, iter::Empty<T>>;
 
     fn into_iter(self) -> Self::IntoIter {
-        // We could potentially use `std::iter::RepeatN`, but we have no way to
+        // We could potentially use `core::iter::RepeatN`, but we have no way to
         // create an empty instance without a value in hand, like `repeat_n(value, 0)`.
         // `Default` may solve this: https://github.com/rust-lang/rust/pull/139690
         if let Self::Repeats(element, count) = self {

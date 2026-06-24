@@ -1,4 +1,4 @@
-use std::ops::{Bound, Range, RangeBounds};
+use core::ops::{Bound, Range, RangeBounds};
 
 /// Normalize arbitrary `RangeBounds` to a `Range`
 pub(super) fn simplify_range(range: impl RangeBounds<usize>, len: usize) -> Range<usize> {

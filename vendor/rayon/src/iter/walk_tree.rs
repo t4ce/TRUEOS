@@ -28,7 +28,7 @@ where
         let right_children = split_vec(&mut self.to_explore);
         let right = right_children
             .map(|mut c| {
-                std::mem::swap(&mut c, &mut self.to_explore);
+                core::mem::swap(&mut c, &mut self.to_explore);
                 WalkTreePrefixProducer {
                     to_explore: c,
                     seen: Vec::new(),
@@ -240,7 +240,7 @@ where
         let right_children = split_vec(&mut self.to_explore);
         let right = right_children
             .map(|c| {
-                let right_seen = std::mem::take(&mut self.seen); // postfix -> upper nodes are processed last
+                let right_seen = core::mem::take(&mut self.seen); // postfix -> upper nodes are processed last
                 WalkTreePostfixProducer {
                     to_explore: c,
                     seen: right_seen,
@@ -251,7 +251,7 @@ where
                 // we can still try to divide 'seen'
                 let right_seen = split_vec(&mut self.seen);
                 right_seen.map(|mut s| {
-                    std::mem::swap(&mut self.seen, &mut s);
+                    core::mem::swap(&mut self.seen, &mut s);
                     WalkTreePostfixProducer {
                         to_explore: Default::default(),
                         seen: s,

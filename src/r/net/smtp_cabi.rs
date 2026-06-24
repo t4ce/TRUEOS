@@ -33,6 +33,14 @@ fn monotonic_ms() -> u64 {
     embassy_time_driver::now().saturating_mul(1000) / hz
 }
 
+fn smtp_wait_step() {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        crate::hv::vmcall::guest_yield();
+        return;
+    }
+    crate::wait::spin_step();
+}
+
 fn sanitize_header(value: &str) -> String {
     let mut out = String::new();
     for ch in value.trim().chars() {
@@ -222,6 +230,6 @@ pub extern "C" fn trueos_cabi_smtp_wait(op_id: u32, timeout_ms: u64) -> i32 {
         if timeout_ms == 0 || monotonic_ms().saturating_sub(start) >= timeout_ms {
             return FS_ERR_TIMEOUT;
         }
-        crate::wait::spin_step();
+        smtp_wait_step();
     }
 }

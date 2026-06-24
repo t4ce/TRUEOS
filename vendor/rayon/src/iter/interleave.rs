@@ -1,6 +1,6 @@
 use super::plumbing::*;
 use super::*;
-use std::iter::Fuse;
+use core::iter::Fuse;
 
 /// `Interleave` is an iterator that interleaves elements of iterators
 /// `i` and `j` in one continuous iterator. This struct is created by

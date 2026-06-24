@@ -4,7 +4,7 @@ use std::sync::Mutex;
 #[cfg(feature = "web_spin_lock")]
 use wasm_sync::Mutex;
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::iter::ParallelIterator;
 use crate::iter::plumbing::{Folder, UnindexedConsumer, UnindexedProducer, bridge_unindexed};
@@ -99,7 +99,7 @@ where
 
 struct IterParallelProducer<'a, Iter> {
     split_count: AtomicUsize,
-    iter: Mutex<std::iter::Fuse<Iter>>,
+    iter: Mutex<core::iter::Fuse<Iter>>,
     threads_started: &'a [AtomicBool],
 }
 

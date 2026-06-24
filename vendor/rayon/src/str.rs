@@ -357,7 +357,7 @@ impl ParallelString for str {
 // /////////////////////////////////////////////////////////////////////////
 
 /// Pattern-matching trait for `ParallelString`, somewhat like a mix of
-/// `std::str::pattern::{Pattern, Searcher}`.
+/// `core::str::pattern::{Pattern, Searcher}`.
 ///
 /// We keep this trait private because its API is not meant for general
 /// consumption.  If we could have privacy on trait items, then it would be

@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 pub(super) struct AtomicCounters {
     /// Packs together a number of counters. The counters are ordered as
@@ -136,7 +136,7 @@ impl AtomicCounters {
                 if self.try_exchange(old_value, new_value, Ordering::SeqCst) {
                     return new_value;
                 }
-                std::hint::spin_loop();
+                core::hint::spin_loop();
             } else {
                 return old_value;
             }
@@ -261,8 +261,8 @@ impl Counters {
     }
 }
 
-impl std::fmt::Debug for Counters {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Counters {
+    fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let word = format!("{:016x}", self.word);
         fmt.debug_struct("Counters")
             .field("word", &word)

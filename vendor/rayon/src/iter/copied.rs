@@ -1,7 +1,7 @@
 use super::plumbing::*;
 use super::*;
 
-use std::iter;
+use core::iter;
 
 /// `Copied` is an iterator that copies the elements of an underlying iterator.
 ///

@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use crate::{ThreadPoolBuildError, ThreadPoolBuilder};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 
 #[test]

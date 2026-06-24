@@ -1,8 +1,8 @@
 use super::plumbing::*;
 use super::*;
 
-use std::fmt::{self, Debug};
-use std::iter;
+use core::fmt::{self, Debug};
+use core::iter;
 
 /// `Map` is an iterator that transforms the elements of an underlying iterator.
 ///

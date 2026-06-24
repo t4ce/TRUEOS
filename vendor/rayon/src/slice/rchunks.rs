@@ -65,7 +65,7 @@ struct RChunksProducer<'data, T: Sync> {
 
 impl<'data, T: 'data + Sync> Producer for RChunksProducer<'data, T> {
     type Item = &'data [T];
-    type IntoIter = ::std::slice::RChunks<'data, T>;
+    type IntoIter = ::core::slice::RChunks<'data, T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.slice.rchunks(self.chunk_size)
@@ -165,7 +165,7 @@ struct RChunksExactProducer<'data, T: Sync> {
 
 impl<'data, T: 'data + Sync> Producer for RChunksExactProducer<'data, T> {
     type Item = &'data [T];
-    type IntoIter = ::std::slice::RChunksExact<'data, T>;
+    type IntoIter = ::core::slice::RChunksExact<'data, T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.slice.rchunks_exact(self.chunk_size)
@@ -245,7 +245,7 @@ struct RChunksMutProducer<'data, T: Send> {
 
 impl<'data, T: 'data + Send> Producer for RChunksMutProducer<'data, T> {
     type Item = &'data mut [T];
-    type IntoIter = ::std::slice::RChunksMut<'data, T>;
+    type IntoIter = ::core::slice::RChunksMut<'data, T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.slice.rchunks_mut(self.chunk_size)
@@ -293,7 +293,7 @@ impl<'data, T: Send> RChunksExactMut<'data, T> {
     /// Note that this has to consume `self` to return the original lifetime of
     /// the data, which prevents this from actually being used as a parallel
     /// iterator since that also consumes. This method is provided for parity
-    /// with `std::iter::RChunksExactMut`, but consider calling `remainder()` or
+    /// with `core::iter::RChunksExactMut`, but consider calling `remainder()` or
     /// `take_remainder()` as alternatives.
     pub fn into_remainder(self) -> &'data mut [T] {
         self.rem
@@ -313,7 +313,7 @@ impl<'data, T: Send> RChunksExactMut<'data, T> {
     /// returned by the iterator. The returned slice has at most `chunk_size-1`
     /// elements. Subsequent calls will return an empty slice.
     pub fn take_remainder(&mut self) -> &'data mut [T] {
-        std::mem::take(&mut self.rem)
+        core::mem::take(&mut self.rem)
     }
 }
 
@@ -362,7 +362,7 @@ struct RChunksExactMutProducer<'data, T: Send> {
 
 impl<'data, T: 'data + Send> Producer for RChunksExactMutProducer<'data, T> {
     type Item = &'data mut [T];
-    type IntoIter = ::std::slice::RChunksExactMut<'data, T>;
+    type IntoIter = ::core::slice::RChunksExactMut<'data, T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.slice.rchunks_exact_mut(self.chunk_size)

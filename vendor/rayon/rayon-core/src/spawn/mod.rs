@@ -1,8 +1,8 @@
 use crate::job::*;
 use crate::registry::Registry;
 use crate::unwind;
-use std::mem;
-use std::sync::Arc;
+use core::mem;
+use alloc::sync::Arc;
 
 /// Puts the task into the Rayon thread pool's job queue in the "static"
 /// or "global" scope. Just like a standard thread, this task is not
@@ -47,7 +47,7 @@ use std::sync::Arc;
 ///
 /// ```rust
 /// # use rayon_core as rayon;
-/// use std::sync::atomic::{AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
+/// use core::sync::atomic::{AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
 ///
 /// static GLOBAL_COUNTER: AtomicUsize = ATOMIC_USIZE_INIT;
 ///

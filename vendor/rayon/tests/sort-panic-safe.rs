@@ -1,11 +1,11 @@
 use rand::distr::Uniform;
 use rand::{RngExt, rng};
 use rayon::prelude::*;
-use std::cell::Cell;
-use std::cmp::Ordering;
+use core::cell::Cell;
+use core::cmp::Ordering;
 use std::panic;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering::Relaxed;
+use core::sync::atomic::AtomicUsize;
+use core::sync::atomic::Ordering::Relaxed;
 use std::thread;
 
 const LEN: usize = 20_000;

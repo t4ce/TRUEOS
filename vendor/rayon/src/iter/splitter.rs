@@ -1,7 +1,7 @@
 use super::plumbing::*;
 use super::*;
 
-use std::fmt::{self, Debug};
+use core::fmt::{self, Debug};
 
 /// The `split` function takes arbitrary data and a closure that knows how to
 /// split it, and turns this into a `ParallelIterator`.
@@ -13,7 +13,7 @@ use std::fmt::{self, Debug};
 /// ```
 /// use rayon::iter;
 /// use rayon::prelude::*;
-/// use std::ops::Range;
+/// use core::ops::Range;
 ///
 ///
 /// // We define a range of indices as follows
@@ -46,7 +46,7 @@ use std::fmt::{self, Debug};
 /// ```
 /// # use rayon::iter;
 /// # use rayon::prelude::*;
-/// # use std::ops::Range;
+/// # use core::ops::Range;
 /// # type Range1D = Range<usize>;
 /// # fn split_range1(r: Range1D) -> (Range1D, Option<Range1D>) {
 /// #     if r.end - r.start <= 1 { return (r, None); }

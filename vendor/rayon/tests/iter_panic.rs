@@ -1,8 +1,8 @@
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
-use std::ops::Range;
+use core::ops::Range;
 use std::panic::{self, UnwindSafe};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 const ITER: Range<i32> = 0..0x1_0000;
 const PANIC: i32 = 0xC000;

@@ -2,8 +2,8 @@ use super::ParallelIterator;
 use super::Try;
 use super::plumbing::*;
 
-use std::ops::ControlFlow::{self, Break, Continue};
-use std::sync::atomic::{AtomicBool, Ordering};
+use core::ops::ControlFlow::{self, Break, Continue};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 pub(super) fn try_reduce<PI, R, ID, T>(pi: PI, identity: ID, reduce_op: R) -> T
 where

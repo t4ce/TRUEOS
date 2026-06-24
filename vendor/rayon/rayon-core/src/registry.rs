@@ -8,13 +8,13 @@ use crate::{
     Yield,
 };
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
-use std::cell::Cell;
-use std::fmt;
+use core::cell::Cell;
+use core::fmt;
 use std::hash::{DefaultHasher, Hasher};
 use std::io;
-use std::mem;
-use std::ptr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use core::mem;
+use core::ptr;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Once};
 use std::thread;
 
@@ -450,7 +450,7 @@ impl Registry {
             match self.injected_jobs.steal() {
                 Steal::Success(job) => return Some(job),
                 Steal::Empty => return None,
-                Steal::Retry => std::hint::spin_loop(),
+                Steal::Retry => core::hint::spin_loop(),
             }
         }
     }
@@ -757,7 +757,7 @@ impl WorkerThread {
             match self.stealer.steal() {
                 Steal::Success(job) => return Some(job),
                 Steal::Empty => return None,
-                Steal::Retry => std::hint::spin_loop(),
+                Steal::Retry => core::hint::spin_loop(),
             }
         }
     }
@@ -903,7 +903,7 @@ impl WorkerThread {
             if job.is_some() || !retry {
                 return job;
             }
-            std::hint::spin_loop();
+            core::hint::spin_loop();
         }
     }
 }

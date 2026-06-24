@@ -59,7 +59,7 @@ use super::*;
 /// // Mutably reference each input separately with `IntoParallelIterator`:
 /// (&mut xs, &mut ys, &mut zs).into_par_iter().for_each(|(x, y, z)| {
 ///     *z += *x + *y;
-///     std::mem::swap(x, y);
+///     core::mem::swap(x, y);
 /// });
 ///
 /// assert_eq!(xs, (vec![-4, -3, -2]));
@@ -70,7 +70,7 @@ use super::*;
 /// let mut tuple = (xs, ys, zs);
 /// tuple.par_iter_mut().for_each(|(x, y, z)| {
 ///     *z += *x + *y;
-///     std::mem::swap(x, y);
+///     core::mem::swap(x, y);
 /// });
 ///
 /// assert_eq!(tuple, (vec![1, 2, 3], vec![-4, -3, -2], vec![-6, -2, 2]));

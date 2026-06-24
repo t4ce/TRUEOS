@@ -5,7 +5,7 @@
 use crate::iter::plumbing::*;
 use crate::math::simplify_range;
 use crate::prelude::*;
-use std::ops::{Range, RangeBounds};
+use core::ops::{Range, RangeBounds};
 
 impl<'a> ParallelDrainRange<usize> for &'a mut String {
     type Iter = Drain<'a>;

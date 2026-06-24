@@ -1,7 +1,7 @@
 use super::plumbing::*;
 use super::*;
 
-use std::fmt::{self, Debug};
+use core::fmt::{self, Debug};
 
 impl<I, ID, F> Fold<I, ID, F> {
     pub(super) fn new(base: I, identity: ID, fold_op: F) -> Self {

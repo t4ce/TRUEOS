@@ -30,7 +30,7 @@ fn partition<T: PartialOrd + Send>(v: &mut [T]) -> usize {
 }
 
 fn seeded_rng() -> StdRng {
-    let seed = std::array::from_fn(|i| i as u8);
+    let seed = core::array::from_fn(|i| i as u8);
     StdRng::from_seed(seed)
 }
 

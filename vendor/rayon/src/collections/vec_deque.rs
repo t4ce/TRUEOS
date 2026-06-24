@@ -2,8 +2,8 @@
 //! (`VecDeque<T>`). You will rarely need to interact with it directly
 //! unless you have need to name one of the iterator types.
 
-use std::collections::VecDeque;
-use std::ops::{Range, RangeBounds};
+use alloc::collections::VecDeque;
+use core::ops::{Range, RangeBounds};
 
 use crate::iter::plumbing::*;
 use crate::iter::*;

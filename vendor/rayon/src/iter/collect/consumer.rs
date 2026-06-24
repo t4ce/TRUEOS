@@ -1,7 +1,7 @@
 use super::super::plumbing::*;
 use crate::SendPtr;
-use std::marker::PhantomData;
-use std::ptr;
+use core::marker::PhantomData;
+use core::ptr;
 
 pub(super) struct CollectConsumer<'c, T: Send> {
     /// See `CollectResult` for explanation of why this is not a slice

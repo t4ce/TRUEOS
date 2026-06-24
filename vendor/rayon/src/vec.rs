@@ -9,11 +9,11 @@ use crate::iter::plumbing::*;
 use crate::iter::*;
 use crate::math::simplify_range;
 use crate::slice::{Iter, IterMut};
-use std::iter;
-use std::mem;
-use std::ops::{Range, RangeBounds};
-use std::ptr;
-use std::slice;
+use core::iter;
+use core::mem;
+use core::ops::{Range, RangeBounds};
+use core::ptr;
+use core::slice;
 
 impl<'data, T: Sync + 'data> IntoParallelIterator for &'data Vec<T> {
     type Item = &'data T;

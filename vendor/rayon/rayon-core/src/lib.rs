@@ -57,13 +57,13 @@
 #![deny(missing_debug_implementations)]
 #![deny(missing_docs)]
 
-use std::any::Any;
+use core::any::Any;
 use std::env;
-use std::error::Error;
-use std::fmt;
+use core::error::Error;
+use core::fmt;
 use std::io;
-use std::marker::PhantomData;
-use std::str::FromStr;
+use core::marker::PhantomData;
+use core::str::FromStr;
 use std::thread;
 
 mod broadcast;

@@ -2,7 +2,7 @@
 //! place, you can use the `AbortIfPanic` helper to protect against
 //! accidental panics in the rayon code itself.
 
-use std::any::Any;
+use core::any::Any;
 use std::panic::{self, AssertUnwindSafe};
 use std::thread;
 

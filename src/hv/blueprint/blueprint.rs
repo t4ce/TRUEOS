@@ -1730,8 +1730,7 @@ pub(crate) fn build_process_env(
     vars.insert(String::from("XDG_CACHE_HOME"), String::from("/cache"));
     vars.insert(String::from("BAT_CONFIG_DIR"), String::from("/config/bat"));
     vars.insert(String::from("BAT_CACHE_PATH"), String::from("/cache/bat"));
-    let archive_stem = safe_archive_stem(archive);
-    if archive_stem == "bat" {
+    if safe_archive_stem(archive) == "bat" {
         vars.insert(
             String::from("BAT_OPTS"),
             String::from(
@@ -1741,9 +1740,6 @@ pub(crate) fn build_process_env(
         vars.insert(String::from("BAT_PAGING"), String::from("never"));
         vars.insert(String::from("BAT_PAGER"), String::new());
         vars.insert(String::from("BAT_WIDTH"), String::from("100"));
-    }
-    if archive_stem == "webmail" {
-        vars.insert(String::from("TRUEOS_MIO_SELECTOR_IDLE_SLEEP_MS"), String::from("150"));
     }
     vars.insert(String::from("TRUEOS_APP_ARCHIVE"), String::from(archive));
     if let Some(root) = app_fs_root {

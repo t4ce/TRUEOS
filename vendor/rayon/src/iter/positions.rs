@@ -1,7 +1,7 @@
 use super::plumbing::*;
 use super::*;
 
-use std::fmt::{self, Debug};
+use core::fmt::{self, Debug};
 
 /// `Positions` takes a predicate `predicate` and filters out elements that match,
 /// yielding their indices.

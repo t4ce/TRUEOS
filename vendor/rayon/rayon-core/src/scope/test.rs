@@ -3,8 +3,8 @@ use crate::unwind;
 use crate::{Scope, ScopeFifo, scope, scope_fifo};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
-use std::iter::once;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use core::iter::once;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Barrier, Mutex};
 use std::vec;
 
@@ -109,7 +109,7 @@ impl<T: Send> Tree<T> {
 
 fn random_tree(depth: usize) -> Tree<u32> {
     assert!(depth > 0);
-    let seed = std::array::from_fn(|i| i as u8);
+    let seed = core::array::from_fn(|i| i as u8);
     let mut rng = StdRng::from_seed(seed);
     random_tree1(depth, &mut rng)
 }

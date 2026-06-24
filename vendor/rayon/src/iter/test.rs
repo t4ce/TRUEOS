@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
 use crate::prelude::*;
@@ -10,13 +10,13 @@ use rand::{RngExt, SeedableRng};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::collections::{BinaryHeap, VecDeque};
 use std::ffi::OsStr;
-use std::fmt::Debug;
+use core::fmt::Debug;
 use std::sync::mpsc;
 
 fn is_indexed<T: IndexedParallelIterator>(_: T) {}
 
 fn seeded_rng() -> StdRng {
-    let seed = std::array::from_fn(|i| i as u8);
+    let seed = core::array::from_fn(|i| i as u8);
     StdRng::from_seed(seed)
 }
 
@@ -279,7 +279,7 @@ fn check_skip() {
     assert_eq!(v1, v2);
 
     // Check that the skipped elements side effects are executed
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use core::sync::atomic::{AtomicUsize, Ordering};
     let num = AtomicUsize::new(0);
     a.par_iter()
         .map(|&n| num.fetch_add(n, Ordering::Relaxed))
@@ -310,7 +310,7 @@ fn check_take() {
 
 #[test]
 fn check_inspect() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
     let a = AtomicUsize::new(0);
     let b: usize = (0_usize..1024)
@@ -337,7 +337,7 @@ fn check_move() {
 
 #[test]
 fn check_drops() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
     let c = AtomicUsize::new(0);
     let a = vec![DropCounter(&c); 10];
@@ -403,7 +403,7 @@ fn check_cmp_direct() {
 
     let result = a.cmp(b);
 
-    assert!(result == ::std::cmp::Ordering::Equal);
+    assert!(result == ::core::cmp::Ordering::Equal);
 }
 
 #[test]
@@ -435,7 +435,7 @@ fn check_cmp_lt_direct() {
 
     let result = a.cmp(b);
 
-    assert!(result == ::std::cmp::Ordering::Less);
+    assert!(result == ::core::cmp::Ordering::Less);
 }
 
 #[test]
@@ -453,7 +453,7 @@ fn check_cmp_gt_direct() {
 
     let result = a.cmp(b);
 
-    assert!(result == ::std::cmp::Ordering::Greater);
+    assert!(result == ::core::cmp::Ordering::Greater);
 }
 
 #[test]
@@ -475,7 +475,7 @@ fn check_cmp_short_circuit() {
     b[42] = 1;
 
     pool.install(|| {
-        let expected = ::std::cmp::Ordering::Less;
+        let expected = ::core::cmp::Ordering::Less;
         assert_eq!(a.par_iter().cmp(&b), expected);
 
         for len in 1..10 {
@@ -505,7 +505,7 @@ fn check_partial_cmp_short_circuit() {
     b[42] = 1;
 
     pool.install(|| {
-        let expected = Some(::std::cmp::Ordering::Less);
+        let expected = Some(::core::cmp::Ordering::Less);
         assert_eq!(a.par_iter().partial_cmp(&b), expected);
 
         for len in 1..10 {
@@ -561,7 +561,7 @@ fn check_partial_cmp_direct() {
 
     let result = a.partial_cmp(b);
 
-    assert!(result == Some(::std::cmp::Ordering::Equal));
+    assert!(result == Some(::core::cmp::Ordering::Equal));
 }
 
 #[test]
@@ -592,7 +592,7 @@ fn check_partial_cmp_lt_direct() {
 
     let result = a.partial_cmp(b);
 
-    assert!(result == Some(::std::cmp::Ordering::Less));
+    assert!(result == Some(::core::cmp::Ordering::Less));
 }
 
 #[test]
@@ -609,7 +609,7 @@ fn check_partial_cmp_gt_direct() {
 
     let result = a.partial_cmp(b);
 
-    assert!(result == Some(::std::cmp::Ordering::Greater));
+    assert!(result == Some(::core::cmp::Ordering::Greater));
 }
 
 #[test]
@@ -647,7 +647,7 @@ fn check_partial_cmp_late_nan_direct() {
 
     let result = a.par_iter().partial_cmp(b.par_iter());
 
-    assert!(result == Some(::std::cmp::Ordering::Less));
+    assert!(result == Some(::core::cmp::Ordering::Less));
 }
 
 #[test]
@@ -966,7 +966,7 @@ fn check_slice_split() {
         assert_eq!(a, b);
     }
 
-    // same as std::slice::split() examples
+    // same as core::slice::split() examples
     let slice = [10, 40, 33, 20];
     let v: Vec<_> = slice.par_split(|num| num % 3 == 0).collect();
     assert_eq!(v, &[&slice[..2], &slice[3..]]);
@@ -989,7 +989,7 @@ fn check_slice_split_inclusive() {
         assert_eq!(a, b);
     }
 
-    // same as std::slice::split_inclusive() examples
+    // same as core::slice::split_inclusive() examples
     let slice = [10, 40, 33, 20];
     let v: Vec<_> = slice.par_split_inclusive(|num| num % 3 == 0).collect();
     assert_eq!(v, &[&slice[..3], &slice[3..]]);
@@ -1009,7 +1009,7 @@ fn check_slice_split_mut() {
         assert_eq!(a, b);
     }
 
-    // same as std::slice::split_mut() example
+    // same as core::slice::split_mut() example
     let mut v = [10, 40, 30, 20, 60, 50];
     v.par_split_mut(|num| num % 3 == 0).for_each(|group| {
         group[0] = 1;
@@ -1027,7 +1027,7 @@ fn check_slice_split_inclusive_mut() {
         assert_eq!(a, b);
     }
 
-    // same as std::slice::split_inclusive_mut() example
+    // same as core::slice::split_inclusive_mut() example
     let mut v = [10, 40, 30, 20, 60, 50];
     v.par_split_inclusive_mut(|num| num % 3 == 0)
         .for_each(|group| {
@@ -1131,7 +1131,7 @@ fn check_results() {
 
 #[test]
 fn check_binary_heap() {
-    use std::collections::BinaryHeap;
+    use alloc::collections::BinaryHeap;
 
     let a: BinaryHeap<i32> = (0..10).collect();
 
@@ -1141,7 +1141,7 @@ fn check_binary_heap() {
 
 #[test]
 fn check_btree_map() {
-    use std::collections::BTreeMap;
+    use alloc::collections::BTreeMap;
 
     let mut a: BTreeMap<i32, i32> = (0..10).map(|i| (i, -i)).collect();
 
@@ -1155,7 +1155,7 @@ fn check_btree_map() {
 
 #[test]
 fn check_btree_set() {
-    use std::collections::BTreeSet;
+    use alloc::collections::BTreeSet;
 
     let a: BTreeSet<i32> = (0..10).collect();
 
@@ -1189,7 +1189,7 @@ fn check_hash_set() {
 
 #[test]
 fn check_linked_list() {
-    use std::collections::LinkedList;
+    use alloc::collections::LinkedList;
 
     let mut a: LinkedList<i32> = (0..10).collect();
 
@@ -1202,7 +1202,7 @@ fn check_linked_list() {
 
 #[test]
 fn check_vec_deque() {
-    use std::collections::VecDeque;
+    use alloc::collections::VecDeque;
 
     let mut a: VecDeque<i32> = (0..10).collect();
 
@@ -1538,7 +1538,7 @@ fn par_iter_collect_linked_list_flat_map_filter() {
 
 #[test]
 fn par_iter_collect_cows() {
-    use std::borrow::Cow;
+    use alloc::borrow::Cow;
 
     let s = "Fearless Concurrency with Rust";
 
@@ -1669,7 +1669,7 @@ fn divide_and_conquer<'scope>(scope: &Scope<'scope>, counter: &'scope AtomicUsiz
 
 #[test]
 fn check_split() {
-    use std::ops::Range;
+    use core::ops::Range;
 
     let a = (0..1024).into_par_iter();
 
@@ -2186,7 +2186,7 @@ fn check_repeat_n_zip_right() {
 
 #[test]
 fn count_repeat_n_clones() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
     static CLONES: AtomicUsize = AtomicUsize::new(0);
     static DROPS: AtomicUsize = AtomicUsize::new(0);
@@ -2228,7 +2228,7 @@ fn count_repeat_n_clones() {
     check(1, 0);
     assert_eq!(par_iter.count(), 100);
     check(99, 100);
-    assert_eq!(par_iter2.map(std::mem::forget).count(), 100);
+    assert_eq!(par_iter2.map(core::mem::forget).count(), 100);
     check(99, 0);
 
     // Clone once in `split_at` and again for the first item, leaving its unused tail.
@@ -2292,8 +2292,8 @@ fn walk_tree_prefix() {
         // root is smallest
         let mid = (r.start + 1 + r.end) / 2;
         // small indices to the left, large to the right
-        std::iter::once((r.start + 1)..mid)
-            .chain(std::iter::once(mid..r.end))
+        core::iter::once((r.start + 1)..mid)
+            .chain(core::iter::once(mid..r.end))
             .filter(|r| !r.is_empty())
     })
     .map(|r| r.start)
@@ -2307,8 +2307,8 @@ fn walk_tree_postfix() {
         // root is largest
         let mid = (r.start + r.end - 1) / 2;
         // small indices to the left, large to the right
-        std::iter::once(r.start..mid)
-            .chain(std::iter::once(mid..(r.end - 1)))
+        core::iter::once(r.start..mid)
+            .chain(core::iter::once(mid..(r.end - 1)))
             .filter(|r| !r.is_empty())
     })
     .map(|r| r.end - 1)

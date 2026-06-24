@@ -1,6 +1,6 @@
 use rayon::iter::plumbing::*;
 use rayon::prelude::*;
-use std::fmt::Debug;
+use core::fmt::Debug;
 
 /// Stress-test indexes for `Producer::split_at`.
 fn check<F, I>(expected: &[I::Item], mut f: F)
@@ -138,7 +138,7 @@ fn range_inclusive() {
 
 #[test]
 fn repeat_n() {
-    let v: Vec<_> = std::iter::repeat_n(1, 5).collect();
+    let v: Vec<_> = core::iter::repeat_n(1, 5).collect();
     check(&v, || rayon::iter::repeat_n(1, 5));
 }
 
