@@ -13,8 +13,6 @@ pub extern crate alloc;
 mod allcaps;
 mod allocators;
 pub mod allports;
-#[cfg(target_os = "trueos")]
-mod alsa_trueos_backend;
 mod aud;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 #[path = "hv/blueprint/blueprint_net_broker.rs"]
@@ -180,7 +178,7 @@ pub extern "C" fn kmain() -> ! {
         crate::logflag::BOOT_LOG_LEVEL
     );
     #[cfg(target_os = "trueos")]
-    alsa_trueos_backend::install();
+    aud::alsa_trueos_backend::install();
     exceptions::init();
     if crate::logflag::BOOT_INFO_LOGS {
         crate::log!("long_mode_active: {}\n", cpu::long_mode_active());
