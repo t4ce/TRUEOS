@@ -1,7 +1,7 @@
 use super::plumbing::*;
 use super::*;
 use core::num::NonZeroUsize;
-use std::{fmt, iter};
+use core::{fmt, iter};
 
 /// Iterator adaptor for [the `repeat()` function].
 ///
