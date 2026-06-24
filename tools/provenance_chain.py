@@ -98,6 +98,13 @@ def hash_file(path: Path) -> tuple[str, int]:
     return digest.hexdigest(), size
 
 
+def path_exists(path: Path) -> bool:
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
 def run_text(argv: list[str], cwd: Path) -> tuple[int, str]:
     try:
         completed = subprocess.run(
@@ -325,10 +332,10 @@ def collect_tools(root: Path) -> dict[str, Any]:
     tools: dict[str, Any] = {}
     rust_lld = shutil.which("rust-lld")
     if rust_lld is None:
-        sysroot = gitless_command(["rustc", "--print", "sysroot"], root)
+        sysroot = rust_sysroot_from_output(gitless_command(["rustc", "--print", "sysroot"], root))
         if sysroot:
             candidate = Path(sysroot) / "lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld"
-            if candidate.exists():
+            if path_exists(candidate):
                 rust_lld = str(candidate)
 
     for name, argv in TOOL_COMMANDS:
@@ -351,6 +358,17 @@ def gitless_command(argv: list[str], root: Path) -> str | None:
     if code != 0:
         return None
     return output
+
+
+def rust_sysroot_from_output(output: str | None) -> str | None:
+    if not output:
+        return None
+
+    for line in reversed(output.splitlines()):
+        line = line.strip()
+        if line.startswith("/"):
+            return line
+    return None
 
 
 def collect_git(root: Path) -> dict[str, Any]:
