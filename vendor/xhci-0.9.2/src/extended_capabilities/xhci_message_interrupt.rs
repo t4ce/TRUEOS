@@ -31,7 +31,7 @@ where
     /// # Panics
     ///
     /// This method panics if `base` is not aligned correctly.
-    pub unsafe fn new(base: usize, mapper: M) -> Self {
+    pub unsafe fn new(base: usize, mapper: M) -> Self { unsafe {
         let control: single::ReadWrite<MessageControl, M> =
             single::ReadWrite::new(base + 2, mapper.clone());
 
@@ -40,7 +40,7 @@ where
         } else {
             Self::Addr32(single::ReadWrite::new(base, mapper))
         }
-    }
+    }}
 }
 impl<M> From<XhciMessageInterrupt<M>> for ExtendedCapability<M>
 where

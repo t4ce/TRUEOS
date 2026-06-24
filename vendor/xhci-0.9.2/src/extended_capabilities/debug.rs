@@ -49,7 +49,7 @@ where
     /// # Panics
     ///
     /// This method panics if `base` is not aligned correctly.
-    pub unsafe fn new(base: usize, mapper: &M) -> Self {
+    pub unsafe fn new(base: usize, mapper: &M) -> Self { unsafe {
         macro_rules! m {
             ($offset:expr) => {
                 single::ReadWrite::new(base + $offset, mapper.clone())
@@ -69,7 +69,7 @@ where
             dcddi1: m!(0x38),
             dcddi2: m!(0x3c),
         }
-    }
+    }}
 }
 impl<M> From<Debug<M>> for ExtendedCapability<M>
 where

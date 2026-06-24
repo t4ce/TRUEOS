@@ -34,7 +34,7 @@ where
     /// # Panics
     ///
     /// This method panics if `base` is not aligned correctly.
-    pub unsafe fn new(base: usize, mapper: M) -> Option<Self> {
+    pub unsafe fn new(base: usize, mapper: M) -> Option<Self> { unsafe {
         let header: single::ReadWrite<Header, M> = single::ReadWrite::new(base, mapper.clone());
         let size = header.read_volatile().size();
 
@@ -45,7 +45,7 @@ where
         } else {
             None
         }
-    }
+    }}
 }
 impl<M> From<XhciLocalMemory<M>> for ExtendedCapability<M>
 where

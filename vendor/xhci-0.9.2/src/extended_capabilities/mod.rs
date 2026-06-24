@@ -231,12 +231,12 @@ impl<M> ExtendedCapability<M>
 where
     M: Mapper + Clone,
 {
-    unsafe fn new(base: usize, h: Header, m: M) -> Option<Self> {
+    unsafe fn new(base: usize, h: Header, m: M) -> Option<Self> { unsafe {
         let ty = FromPrimitive::from_u8(h.id())?;
         Self::from_ty(base, ty, m)
-    }
+    }}
 
-    unsafe fn from_ty(base: usize, ty: Ty, m: M) -> Option<Self> {
+    unsafe fn from_ty(base: usize, ty: Ty, m: M) -> Option<Self> { unsafe {
         let v = match ty {
             // SAFETY: `List::new` ensures that the all necessary conditions are fulfilled.
             Ty::UsbLegacySupport => UsbLegacySupport::new(base, m).into(),
@@ -253,7 +253,7 @@ where
         };
 
         Some(v)
-    }
+    }}
 }
 
 /// A struct representing that the Extended Capability with the ID is not supported by this crate.

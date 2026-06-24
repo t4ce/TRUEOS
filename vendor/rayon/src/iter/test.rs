@@ -10,6 +10,7 @@ use rand::{RngExt, SeedableRng};
 use alloc::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
 use core::fmt::Debug;
 use std::collections::{HashMap, HashSet};
+#[cfg(not(target_os = "trueos"))]
 use std::ffi::OsStr;
 use std::sync::mpsc;
 
@@ -1564,17 +1565,20 @@ fn par_iter_collect_cows() {
     let b: Cow<'_, str> = psw.map(str::to_owned).collect();
     assert_eq!(a, b);
 
-    // Collects `OsStr` into a `OsString`
-    let sw = s.split_whitespace().map(OsStr::new);
-    let psw = s.par_split_whitespace().map(OsStr::new);
-    let a: Cow<'_, OsStr> = Cow::Owned(sw.clone().collect());
-    let b: Cow<'_, OsStr> = psw.clone().collect();
-    assert_eq!(a, b);
+    #[cfg(not(target_os = "trueos"))]
+    {
+        // Collects `OsStr` into a `OsString`
+        let sw = s.split_whitespace().map(OsStr::new);
+        let psw = s.par_split_whitespace().map(OsStr::new);
+        let a: Cow<'_, OsStr> = Cow::Owned(sw.clone().collect());
+        let b: Cow<'_, OsStr> = psw.clone().collect();
+        assert_eq!(a, b);
 
-    // Collects `OsString` into a `OsString`
-    let a: Cow<'_, OsStr> = Cow::Owned(sw.map(OsStr::to_owned).collect());
-    let b: Cow<'_, OsStr> = psw.map(OsStr::to_owned).collect();
-    assert_eq!(a, b);
+        // Collects `OsString` into a `OsString`
+        let a: Cow<'_, OsStr> = Cow::Owned(sw.map(OsStr::to_owned).collect());
+        let b: Cow<'_, OsStr> = psw.map(OsStr::to_owned).collect();
+        assert_eq!(a, b);
+    }
 }
 
 #[test]

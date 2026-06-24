@@ -3,10 +3,8 @@ use alloc::vec::Vec;
 use serde::Deserialize;
 use spin::Once;
 
-use super::AthlasResolvedGlyph;
 use crate::ui3::althlasfont::athlasmetrics::AthlasGlyphRegion;
 
-pub const TWEMOJI_TEX_ID: u32 = 4_840;
 pub const TWEMOJI_ATLAS_PNG: &[u8] = include_bytes!("twemoji-1x/atlas.png");
 const TWEMOJI_ATLAS_SET_JSON: &str = include_str!("twemoji-1x/atlas-set.json");
 
@@ -37,24 +35,6 @@ fn atlas_set() -> Option<&'static TwemojiAtlasSet> {
             }
         })
         .as_ref()
-}
-
-#[inline]
-pub fn twemoji_cell_height_px() -> u16 {
-    atlas_set().map(|set| set.atlas.cell_h).unwrap_or(0)
-}
-
-pub fn twemoji_reset_state() {}
-
-pub fn twemoji_register_texture(_tex_id: u32, _width: u32, _height: u32) {}
-
-pub fn twemoji_mark_ready() -> Option<u32> {
-    None
-}
-
-#[inline]
-pub fn twemoji_ready() -> bool {
-    false
 }
 
 pub fn twemoji_lookup_glyph_region(ch: char) -> Option<AthlasGlyphRegion> {
@@ -107,14 +87,4 @@ pub fn twemoji_slot_count() -> u16 {
     atlas_set()
         .map(|set| set.atlas.slots.len().min(u16::MAX as usize) as u16)
         .unwrap_or(0)
-}
-
-pub fn twemoji_resolve_glyph(ch: char) -> Option<AthlasResolvedGlyph> {
-    let region = twemoji_lookup_glyph_region(ch)?;
-    Some(AthlasResolvedGlyph {
-        region,
-        texture: None,
-        ready: false,
-        ready_seq: 0,
-    })
 }

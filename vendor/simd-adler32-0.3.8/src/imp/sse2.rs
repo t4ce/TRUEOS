@@ -54,7 +54,7 @@ mod imp {
 
   #[inline]
   #[target_feature(enable = "sse2")]
-  unsafe fn update_imp(a: u16, b: u16, data: &[u8]) -> (u16, u16) {
+  unsafe fn update_imp(a: u16, b: u16, data: &[u8]) -> (u16, u16) { unsafe {
     let mut a = a as u32;
     let mut b = b as u32;
 
@@ -67,9 +67,9 @@ mod imp {
     update_block(&mut a, &mut b, remainder);
 
     (a as u16, b as u16)
-  }
+  }}
 
-  unsafe fn update_chunk_block(a: &mut u32, b: &mut u32, chunk: &[u8]) {
+  unsafe fn update_chunk_block(a: &mut u32, b: &mut u32, chunk: &[u8]) { unsafe {
     debug_assert_eq!(
       chunk.len(),
       CHUNK_SIZE,
@@ -82,9 +82,9 @@ mod imp {
 
     *a %= MOD;
     *b %= MOD;
-  }
+  }}
 
-  unsafe fn update_block(a: &mut u32, b: &mut u32, chunk: &[u8]) {
+  unsafe fn update_block(a: &mut u32, b: &mut u32, chunk: &[u8]) { unsafe {
     debug_assert!(
       chunk.len() <= CHUNK_SIZE,
       "Unexpected chunk size (expected <= {}, got {})",
@@ -99,10 +99,10 @@ mod imp {
 
     *a %= MOD;
     *b %= MOD;
-  }
+  }}
 
   #[inline(always)]
-  unsafe fn reduce_add_blocks<'a>(a: &mut u32, b: &mut u32, chunk: &'a [u8]) -> &'a [u8] {
+  unsafe fn reduce_add_blocks<'a>(a: &mut u32, b: &mut u32, chunk: &'a [u8]) -> &'a [u8] { unsafe {
     if chunk.len() < BLOCK_SIZE {
       return chunk;
     }
@@ -140,10 +140,10 @@ mod imp {
     *b = reduce_add(b_v);
 
     blocks_remainder
-  }
+  }}
 
   #[inline(always)]
-  unsafe fn maddubs(a: __m128i, b: __m128i) -> __m128i {
+  unsafe fn maddubs(a: __m128i, b: __m128i) -> __m128i { unsafe {
     let a_lo = _mm_unpacklo_epi8(a, _mm_setzero_si128());
     let a_hi = _mm_unpackhi_epi8(a, _mm_setzero_si128());
 
@@ -154,10 +154,10 @@ mod imp {
     let hi = _mm_madd_epi16(a_hi, b_hi);
 
     _mm_add_epi32(lo, hi)
-  }
+  }}
 
   #[inline(always)]
-  unsafe fn reduce_add(v: __m128i) -> u32 {
+  unsafe fn reduce_add(v: __m128i) -> u32 { unsafe {
     let hi = _mm_unpackhi_epi64(v, v);
     let sum = _mm_add_epi32(hi, v);
     let hi = _mm_shuffle_epi32(sum, crate::imp::_MM_SHUFFLE(2, 3, 0, 1));
@@ -165,17 +165,17 @@ mod imp {
     let sum = _mm_add_epi32(sum, hi);
 
     _mm_cvtsi128_si32(sum) as _
-  }
+  }}
 
   #[inline(always)]
-  unsafe fn get_weight_lo() -> __m128i {
+  unsafe fn get_weight_lo() -> __m128i { unsafe {
     _mm_set_epi8(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
-  }
+  }}
 
   #[inline(always)]
-  unsafe fn get_weight_hi() -> __m128i {
+  unsafe fn get_weight_hi() -> __m128i { unsafe {
     _mm_set_epi8(
       17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
     )
-  }
+  }}
 }

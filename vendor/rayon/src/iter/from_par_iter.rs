@@ -7,6 +7,7 @@ use alloc::rc::Rc;
 use alloc::sync::Arc;
 use core::hash::{BuildHasher, Hash};
 use std::collections::{HashMap, HashSet};
+#[cfg(not(target_os = "trueos"))]
 use std::ffi::{OsStr, OsString};
 
 /// Creates an empty default collection and extends it.
@@ -207,6 +208,7 @@ collect_string!("boxed strings", Box<str>);
 collect_string!("strings", String);
 
 /// Collects OS-string slices from a parallel iterator into an OS-string.
+#[cfg(not(target_os = "trueos"))]
 impl<'a> FromParallelIterator<&'a OsStr> for OsString {
     fn from_par_iter<I>(par_iter: I) -> Self
     where
@@ -217,6 +219,7 @@ impl<'a> FromParallelIterator<&'a OsStr> for OsString {
 }
 
 /// Collects OS-strings from a parallel iterator into one large OS-string.
+#[cfg(not(target_os = "trueos"))]
 impl FromParallelIterator<OsString> for OsString {
     fn from_par_iter<I>(par_iter: I) -> Self
     where
@@ -227,6 +230,7 @@ impl FromParallelIterator<OsString> for OsString {
 }
 
 /// Collects OS-string slices from a parallel iterator into an OS-string.
+#[cfg(not(target_os = "trueos"))]
 impl<'a> FromParallelIterator<Cow<'a, OsStr>> for OsString {
     fn from_par_iter<I>(par_iter: I) -> Self
     where

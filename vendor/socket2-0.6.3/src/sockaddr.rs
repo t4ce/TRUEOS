@@ -77,12 +77,12 @@ impl SockAddrStorage {
     /// # }
     /// ```
     #[inline]
-    pub unsafe fn view_as<T>(&mut self) -> &mut T {
+    pub unsafe fn view_as<T>(&mut self) -> &mut T { unsafe {
         assert!(size_of::<T>() <= size_of::<Self>());
         // SAFETY: This type is repr(transparent) over `sockaddr_storage` and `T` is one of the
         // `sockaddr_*` types defined by this platform.
         &mut *(self as *mut Self as *mut T)
-    }
+    }}
 }
 
 impl ::core::fmt::Debug for SockAddrStorage {
@@ -204,7 +204,7 @@ impl SockAddr {
     pub unsafe fn try_init<F, T>(init: F) -> io::Result<(T, SockAddr)>
     where
         F: FnOnce(*mut SockAddrStorage, *mut socklen_t) -> io::Result<T>,
-    {
+    { unsafe {
         const STORAGE_SIZE: socklen_t = size_of::<sockaddr_storage>() as socklen_t;
         // NOTE: `SockAddr::unix` depends on the storage being zeroed before
         // calling `init`.
@@ -217,7 +217,7 @@ impl SockAddr {
             debug_assert!(len <= STORAGE_SIZE, "overflown address storage");
             (res, SockAddr::new(storage, len))
         })
-    }
+    }}
 
     /// Constructs a `SockAddr` with the family `AF_UNIX` and the provided path.
     ///

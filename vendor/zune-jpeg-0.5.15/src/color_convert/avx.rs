@@ -97,7 +97,7 @@ pub fn ycbcr_to_rgb_avx2(
 #[target_feature(enable = "avx2")]
 unsafe fn ycbcr_to_rgb_avx2_1(
     y: &[i16; 16], cb: &[i16; 16], cr: &[i16; 16], out: &mut [u8], offset: &mut usize
-) {
+) { unsafe {
     let (mut r, mut g, mut b) = ycbcr_to_rgb_baseline_no_clamp(y, cb, cr);
 
     r = _mm256_packus_epi16(r, _mm256_setzero_si256());
@@ -145,7 +145,7 @@ unsafe fn ycbcr_to_rgb_avx2_1(
     _mm_storeu_si128(out[32..].as_mut_ptr().cast(), _mm256_castsi256_si128(rgb1));
 
     *offset += 48;
-}
+}}
 
 // Enabled avx2 automatically enables avx.
 #[inline]
@@ -157,7 +157,7 @@ unsafe fn ycbcr_to_rgb_avx2_1(
 /// routines
 unsafe fn ycbcr_to_rgb_baseline_no_clamp(
     y: &[i16; 16], cb: &[i16; 16], cr: &[i16; 16]
-) -> (__m256i, __m256i, __m256i) {
+) -> (__m256i, __m256i, __m256i) { unsafe {
     // Load values into a register
     //
     let y_c = _mm256_loadu_si256(y.as_ptr().cast());
@@ -230,7 +230,7 @@ unsafe fn ycbcr_to_rgb_baseline_no_clamp(
     let b = _mm256_packus_epi32(b_lo, b_hi);
 
     return (r, g, b);
-}
+}}
 
 #[inline(always)]
 pub fn ycbcr_to_rgba_avx2(
@@ -249,7 +249,7 @@ unsafe fn ycbcr_to_rgba_unsafe(
     out: &mut [u8],
     offset: &mut usize,
 )
-{
+{ unsafe {
     // check if we have enough space to write.
     let tmp:& mut [u8; 64] = out.get_mut(*offset..*offset + 64).expect("Slice to small cannot write").try_into().unwrap();
 
@@ -289,7 +289,7 @@ unsafe fn ycbcr_to_rgba_unsafe(
     _mm256_storeu_si256(tmp[32..].as_mut_ptr().cast(), n);
 
     *offset += 64;
-}
+}}
 
 #[inline]
 const fn shuffle(z: i32, y: i32, x: i32, w: i32) -> i32 {

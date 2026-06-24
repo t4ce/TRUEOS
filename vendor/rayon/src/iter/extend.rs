@@ -7,6 +7,7 @@ use alloc::borrow::Cow;
 use alloc::collections::{BTreeMap, BTreeSet, BinaryHeap, LinkedList, VecDeque};
 use core::hash::{BuildHasher, Hash};
 use std::collections::{HashMap, HashSet};
+#[cfg(not(target_os = "trueos"))]
 use std::ffi::{OsStr, OsString};
 
 /// Performs a generic `par_extend` by collecting to a `LinkedList<Vec<_>>` in
@@ -55,6 +56,7 @@ fn string_len<T: AsRef<str>>(vecs: &Either<Vec<T>, LinkedList<Vec<T>>>) -> usize
 }
 
 /// Computes the total OS-string length of a `fast_collect` result.
+#[cfg(not(target_os = "trueos"))]
 fn osstring_len<T: AsRef<OsStr>>(vecs: &Either<Vec<T>, LinkedList<Vec<T>>>) -> usize {
     let osstrs = match vecs {
         Either::Left(vec) => Either::Left(vec.iter()),
@@ -380,6 +382,7 @@ impl<T> Reducer<LinkedList<T>> for ListReducer {
 }
 
 /// Extends an OS-string with string slices from a parallel iterator.
+#[cfg(not(target_os = "trueos"))]
 impl<'a> ParallelExtend<&'a OsStr> for OsString {
     fn par_extend<I>(&mut self, par_iter: I)
     where
@@ -390,6 +393,7 @@ impl<'a> ParallelExtend<&'a OsStr> for OsString {
 }
 
 /// Extends an OS-string with strings from a parallel iterator.
+#[cfg(not(target_os = "trueos"))]
 impl ParallelExtend<OsString> for OsString {
     fn par_extend<I>(&mut self, par_iter: I)
     where
@@ -400,6 +404,7 @@ impl ParallelExtend<OsString> for OsString {
 }
 
 /// Extends an OS-string with string slices from a parallel iterator.
+#[cfg(not(target_os = "trueos"))]
 impl<'a> ParallelExtend<Cow<'a, OsStr>> for OsString {
     fn par_extend<I>(&mut self, par_iter: I)
     where
