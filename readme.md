@@ -27,33 +27,12 @@ Think of TRUE OS as the world’s fast-moving “entropy dividend”:
 A constant influx of resources, money, and safety.
 ```
 
-# The Release Versions are created entirely Upstream, using the GitHub Actions
+# Release is done entirely Upstream, via GitHub Actions
 > [!Note]
 > Makes it impossible to alter the build tools
-> The sourcefiles are signed and included
+> and sourcefiles are signed & included
 
-### C Tools
-```
-sudo apt update && sudo apt upgrade
-sudo apt install graphviz npm git gh make rustup autoconf automake mtools nasm xorriso qemu-system gdb build-essential konsole gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
-```
-
-### Rust Tools 
-```
-cargo install fmt cargo-outdated cargo-edit --locked
-rustup component add clippy
-rustup toolchain install nightly --profile minimal --component rust-src,- - rustfmt,rust-analyzer,llvm-tools-preview
-cargo install cargo-edit --locked
-cargo install cargo-depgraph
-
-```
-### Vars
-```
-export CC_aarch64_unknown_none=aarch64-linux-gnu-gcc
-export AR_aarch64_unknown_none=aarch64-linux-gnu-ar
-```
-
-### Cloud releases
+## Cloud releases
 
 Official public releases are built upstream by GitHub Actions:
 
@@ -102,6 +81,28 @@ The verifier recomputes the compact Git source identity for default releases and
 checks the ISO hash named in `TRUEOS.provenance.json`. A wrong commit, swapped
 submodule/gitlink, or replaced ISO breaks the chain. Release assets also include
 `.trueos-sig.json` Ed25519 signatures and `TRUEOS-release-public-key.json`.
+
+
+### C Tools
+```
+sudo apt update && sudo apt upgrade
+sudo apt install graphviz npm git gh make rustup autoconf automake mtools nasm xorriso qemu-system gdb build-essential konsole gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+```
+
+### Rust Tools 
+```
+cargo install fmt cargo-outdated cargo-edit --locked
+rustup component add clippy
+rustup toolchain install nightly --profile minimal --component rust-src,- - rustfmt,rust-analyzer,llvm-tools-preview
+cargo install cargo-edit --locked
+cargo install cargo-depgraph
+
+```
+### Vars
+```
+export CC_aarch64_unknown_none=aarch64-linux-gnu-gcc
+export AR_aarch64_unknown_none=aarch64-linux-gnu-ar
+```
 
 ## on MAC
 > [!TIP]
