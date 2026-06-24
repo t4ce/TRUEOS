@@ -199,9 +199,14 @@ jobs:
 
           printf '%s' "${TRUEOS_RELEASE_GPG_PRIVATE_KEY}" | gpg --batch --import
 
+          imported_fingerprint="$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^fpr/ { print $10; exit }')"
           key_id="${TRUEOS_RELEASE_GPG_KEY_ID}"
+          if [[ -n "${key_id}" ]] && ! gpg --batch --list-secret-keys "${key_id}" >/dev/null 2>&1; then
+            echo "Configured TRUEOS_RELEASE_GPG_KEY_ID did not match the imported key; using imported fingerprint." >&2
+            key_id=""
+          fi
           if [[ -z "${key_id}" ]]; then
-            key_id="$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^sec/ { print $5; exit }')"
+            key_id="${imported_fingerprint}"
           fi
 
           if [[ -z "${key_id}" ]]; then
