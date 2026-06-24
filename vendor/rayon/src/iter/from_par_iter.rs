@@ -2,13 +2,12 @@ use super::noop::NoopConsumer;
 use super::{FromParallelIterator, IntoParallelIterator, ParallelExtend, ParallelIterator};
 
 use alloc::borrow::Cow;
-use alloc::collections::LinkedList;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::collections::{BinaryHeap, VecDeque};
-use std::ffi::{OsStr, OsString};
-use std::hash::{BuildHasher, Hash};
+use alloc::collections::{BTreeMap, BTreeSet, BinaryHeap, LinkedList, VecDeque};
 use alloc::rc::Rc;
 use alloc::sync::Arc;
+use core::hash::{BuildHasher, Hash};
+use std::collections::{HashMap, HashSet};
+use std::ffi::{OsStr, OsString};
 
 /// Creates an empty default collection and extends it.
 fn collect_extended<C, I>(par_iter: I) -> C

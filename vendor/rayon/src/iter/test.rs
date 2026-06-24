@@ -7,10 +7,10 @@ use rayon_core::*;
 use rand::distr::StandardUniform;
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::collections::{BinaryHeap, VecDeque};
-use std::ffi::OsStr;
+use alloc::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
 use core::fmt::Debug;
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsStr;
 use std::sync::mpsc;
 
 fn is_indexed<T: IndexedParallelIterator>(_: T) {}

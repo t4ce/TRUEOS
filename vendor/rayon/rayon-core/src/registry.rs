@@ -7,15 +7,17 @@ use crate::{
     ErrorKind, ExitHandler, PanicHandler, StartHandler, ThreadPoolBuildError, ThreadPoolBuilder,
     Yield,
 };
+use alloc::sync::Arc;
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use core::cell::Cell;
 use core::fmt;
-use std::hash::{DefaultHasher, Hasher};
-use std::io;
+use core::hash::Hasher;
 use core::mem;
 use core::ptr;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Once};
+use core3::io;
+use std::hash::DefaultHasher;
+use std::sync::Once;
 use std::thread;
 
 /// Thread builder used for customization via [`ThreadPoolBuilder::spawn_handler()`].

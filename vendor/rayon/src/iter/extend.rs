@@ -4,11 +4,10 @@ use super::{IntoParallelIterator, ParallelExtend, ParallelIterator};
 
 use either::Either;
 use alloc::borrow::Cow;
-use alloc::collections::LinkedList;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::collections::{BinaryHeap, VecDeque};
+use alloc::collections::{BTreeMap, BTreeSet, BinaryHeap, LinkedList, VecDeque};
+use core::hash::{BuildHasher, Hash};
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
-use std::hash::{BuildHasher, Hash};
 
 /// Performs a generic `par_extend` by collecting to a `LinkedList<Vec<_>>` in
 /// parallel, then extending the collection sequentially.

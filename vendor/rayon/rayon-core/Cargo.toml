@@ -25,6 +25,7 @@ workspace = true
 web_spin_lock = ["dep:wasm_sync"]
 
 [dependencies]
+core3.workspace = true
 crossbeam-deque.workspace = true
 crossbeam-utils.workspace = true
 wasm_sync = { workspace = true, optional = true }
