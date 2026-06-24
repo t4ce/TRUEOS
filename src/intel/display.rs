@@ -1160,6 +1160,13 @@ fn program_pipe_bottom_color(dev: crate::intel::Dev, pipe: PipeInfo, raw: u32) {
     );
 }
 
+fn pipe_bottom_color_from_xrgb(color: u32) -> u32 {
+    let red = ((color >> 16) & 0xFF) * 0x3FF / 0xFF;
+    let green = ((color >> 8) & 0xFF) * 0x3FF / 0xFF;
+    let blue = (color & 0xFF) * 0x3FF / 0xFF;
+    pipe_bottom_color_u0_10(red, green, blue)
+}
+
 #[allow(dead_code)]
 pub(crate) fn active_scanout_dimensions() -> Option<(u32, u32)> {
     let dev = crate::intel::claimed_device()?;
@@ -2065,6 +2072,97 @@ pub(crate) fn present_rgba_primary_center_unscaled_bg(
 
     crate::intel::dma_flush(surface.virt, byte_len);
     notify_primary_surface_present(surface, reason, byte_len)
+}
+
+pub(crate) fn present_rgba_primary_center_plane_bg(
+    src: &[u8],
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+    bg_xrgb: u32,
+    reason: &str,
+) -> bool {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return false;
+    };
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+        return false;
+    };
+    if surface.virt.is_null()
+        || src_width == 0
+        || src_height == 0
+        || src_pitch_bytes < src_width as usize * 4
+    {
+        return false;
+    }
+
+    let dst_width = surface.width as usize;
+    let dst_height = surface.height as usize;
+    let dst_pitch = surface.pitch_bytes as usize;
+    let src_width = src_width as usize;
+    let src_height = src_height as usize;
+    if dst_width == 0 || dst_height == 0 || dst_pitch < dst_width.saturating_mul(4) {
+        return false;
+    }
+
+    let copy_w = src_width.min(dst_width);
+    let copy_h = src_height.min(dst_height);
+    if copy_w == 0 || copy_h == 0 {
+        return false;
+    }
+
+    let src_x = src_width.saturating_sub(copy_w) / 2;
+    let src_y = src_height.saturating_sub(copy_h) / 2;
+    let dst_x = dst_width.saturating_sub(copy_w) / 2;
+    let dst_y = dst_height.saturating_sub(copy_h) / 2;
+
+    program_pipe_bottom_color(dev, surface.pipe, pipe_bottom_color_from_xrgb(bg_xrgb));
+
+    for row_idx in 0..copy_h {
+        let src_row_off = src_y
+            .saturating_add(row_idx)
+            .saturating_mul(src_pitch_bytes)
+            .saturating_add(src_x.saturating_mul(4));
+        let Some(src_row) = src.get(src_row_off..src_row_off.saturating_add(copy_w * 4)) else {
+            return false;
+        };
+        let dst_row_off = row_idx.saturating_mul(dst_pitch);
+        let dst_row = unsafe { surface.virt.add(dst_row_off) as *mut u32 };
+        for col_idx in 0..copy_w {
+            let src_off = col_idx.saturating_mul(4);
+            let r = src_row[src_off];
+            let g = src_row[src_off + 1];
+            let b = src_row[src_off + 2];
+            let pixel = u32::from_le_bytes([b, g, r, 0]);
+            unsafe {
+                core::ptr::write_volatile(dst_row.add(col_idx), pixel);
+            }
+        }
+        crate::intel::dma_flush(unsafe { surface.virt.add(dst_row_off) }, copy_w.saturating_mul(4));
+    }
+
+    set_primary_plane_source_inner(
+        PrimaryPlaneSource {
+            phys: surface.phys,
+            gpu: surface.gpu,
+            byte_len: surface.byte_len,
+            width: surface.width,
+            height: surface.height,
+            pitch_bytes: surface.pitch_bytes,
+            format: match PRIMARY_FORMAT_PROBE_MODE {
+                PRIMARY_FORMAT_PROBE_XBGR => PrimaryPlaneSourceFormat::Xbgr8888,
+                _ => PrimaryPlaneSourceFormat::Xrgb8888,
+            },
+            src_x: 0,
+            src_y: 0,
+            dst_x: dst_x as u32,
+            dst_y: dst_y as u32,
+            dst_w: copy_w as u32,
+            dst_h: copy_h as u32,
+        },
+        reason,
+        true,
+    )
 }
 
 fn present_rgba_primary_center(
