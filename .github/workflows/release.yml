@@ -35,10 +35,19 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          submodules: recursive
+
+      - name: Checkout required submodules
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule update --init \
+            crates/trueos-shader \
+            vendor/CrabUSB \
+            vendor/limine \
+            vendor/tinyaudio
 
       - name: Resolve release version
         id: version
@@ -226,7 +235,7 @@ jobs:
           done < <(find "${dist}" -maxdepth 1 -type f ! -name '*.asc' ! -name 'release-notes.md' -print0 | sort -z)
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: trueos-release-${{ steps.version.outputs.version }}
           path: |
