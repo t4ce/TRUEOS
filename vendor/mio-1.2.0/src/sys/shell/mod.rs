@@ -1,3 +1,4 @@
+#[allow(unused_macros)]
 macro_rules! os_required {
     () => {
         panic!("mio must be compiled with `os-poll` to run.")

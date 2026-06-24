@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(feature = "proto-ipv6-slaac")]
 use crate::iface::Route;
 
 /// Enum used for the process_hopbyhop function. In some cases, when discarding a packet, an ICMP

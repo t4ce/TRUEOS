@@ -11,7 +11,7 @@ use crate::pcm::State;
 
 pub type BackendResult<T> = core::result::Result<T, i32>;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct PcmBackend {
     pub open_playback: fn() -> BackendResult<usize>,
     pub close: fn(usize),

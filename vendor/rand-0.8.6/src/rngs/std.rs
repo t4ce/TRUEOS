@@ -10,7 +10,7 @@
 
 use crate::{CryptoRng, Error, RngCore, SeedableRng};
 
-use rand_chacha::{ChaCha12Core as Core, ChaCha12Rng as Rng};
+use rand_chacha::ChaCha12Rng as Rng;
 
 
 /// The standard RNG. The PRNG algorithm in `StdRng` is chosen to be efficient
@@ -69,4 +69,3 @@ impl SeedableRng for StdRng {
 }
 
 impl CryptoRng for StdRng {}
-

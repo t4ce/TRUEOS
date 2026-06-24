@@ -12,6 +12,7 @@ repository = "https://github.com/embassy-rs/embassy"
 [features]
 default = []
 defmt = ["dep:defmt"]
+log = []
 tick-hz-1_000 = ["embassy-time-driver/tick-hz-1_000"]
 
 [lib]
