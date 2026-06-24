@@ -11,10 +11,8 @@ digraph "rand_core-v0.6.4" {
   in2 -> n0 [style=dashed, color="#4b8fc5"];
   in3 [label=<from rdrand-v0.8.3.svg<BR/><B>rand_core</B><BR/>0.6.4>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in3 -> n0 [style=dashed, color="#4b8fc5"];
-  in4 [label=<from rsa-v0.9.10.svg<BR/><B>rand_core</B><BR/>0.6.4>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in4 [label=<from rustls-rustcrypto-v0.0.2-alpha.svg<BR/><B>rand_core</B><BR/>0.6.4>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in4 -> n0 [style=dashed, color="#4b8fc5"];
-  in5 [label=<from rustls-rustcrypto-v0.0.2-alpha.svg<BR/><B>rand_core</B><BR/>0.6.4>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
-  in5 -> n0 [style=dashed, color="#4b8fc5"];
   // collapsed leaf ends: 0
   // centered two-input leaves: 0
   // nested two-input leaves: 0

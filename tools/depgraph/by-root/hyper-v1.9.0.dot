@@ -36,7 +36,7 @@ digraph "hyper-v1.9.0" {
   in5 -> n4 [style=dashed, color="#4b8fc5"];
   in6 [label=<from parry2d-v0.26.1.svg<BR/><B>smallvec</B><BR/>1.15.2>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in6 -> n4 [style=dashed, color="#4b8fc5"];
-  in7 [label=<from rsa-v0.9.10.svg<BR/><B>smallvec</B><BR/>1.15.2>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in7 [label=<from rustls-rustcrypto-v0.0.2-alpha.svg<BR/><B>smallvec</B><BR/>1.15.2>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in7 -> n4 [style=dashed, color="#4b8fc5"];
   in8 [label=<from serde_json-v1.0.150.svg<BR/><B>itoa</B><BR/>1.0.18>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in8 -> n3 [style=dashed, color="#4b8fc5"];

@@ -10,28 +10,6 @@
 2spinning_top v0.3.0
 3lock_api v0.4.14
 4scopeguard v1.2.0
-1aes v0.8.4
-2cfg-if v1.0.4
-2cipher v0.4.4
-3crypto-common v0.1.7
-4generic-array v0.14.7
-5typenum v1.20.1
-5zeroize v1.9.0
-6zeroize_derive v1.5.0 (proc-macro)
-7proc-macro2 v1.0.106
-8unicode-ident v1.0.24
-7quote v1.0.46
-8proc-macro2 v1.0.106 (*)
-7syn v2.0.118
-8proc-macro2 v1.0.106 (*)
-8quote v1.0.46 (*)
-8unicode-ident v1.0.24
-5version_check v0.9.5
-4typenum v1.20.1
-3inout v0.1.4
-4generic-array v0.14.7 (*)
-3zeroize v1.9.0 (*)
-2cpufeatures v0.2.17
 1alsa v0.11.0 (/home/t4ce/REPOS/TRUEOS/vendor/alsa-0.11.0)
 2bitflags v2.13.0
 2cfg-if v1.0.4
@@ -46,7 +24,6 @@
 2byteorder v1.5.0
 2log v0.4.33
 2spinning_top v0.3.0 (*)
-1base64 v0.22.1 (/home/t4ce/REPOS/TRUEOS/vendor/base64-0.22.1)
 1bytes v1.12.0
 1core3 v0.1.2
 2memchr v2.8.2
@@ -68,9 +45,14 @@
 4derive_more-impl v2.1.1 (proc-macro)
 5convert_case v0.10.0
 6unicode-segmentation v1.13.3
-5proc-macro2 v1.0.106 (*)
-5quote v1.0.46 (*)
-5syn v2.0.118 (*)
+5proc-macro2 v1.0.106
+6unicode-ident v1.0.24
+5quote v1.0.46
+6proc-macro2 v1.0.106 (*)
+5syn v2.0.118
+6proc-macro2 v1.0.106 (*)
+6quote v1.0.46 (*)
+6unicode-ident v1.0.24
 5unicode-xid v0.2.6
 5rustc_version v0.4.1
 6semver v1.0.28
@@ -146,8 +128,6 @@
 3paste v1.0.15 (proc-macro)
 1crc32fast v1.5.0 (/home/t4ce/REPOS/TRUEOS/vendor/crc32fast-1.5.0)
 2cfg-if v1.0.4
-1ctr v0.9.2
-2cipher v0.4.4 (*)
 1dma-api v0.7.3 (/home/t4ce/REPOS/TRUEOS/vendor/dma-api-0.7.3) (*)
 1embassy-executor v0.10.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-executor)
 2cordyceps v0.3.4
@@ -202,9 +182,18 @@
 3cpufeatures v0.2.17
 3digest v0.10.7
 4block-buffer v0.10.4
-5generic-array v0.14.7 (*)
+5generic-array v0.14.7
+6typenum v1.20.1
+6zeroize v1.9.0
+7zeroize_derive v1.5.0 (proc-macro)
+8proc-macro2 v1.0.106 (*)
+8quote v1.0.46 (*)
+8syn v2.0.118 (*)
+6version_check v0.9.5
 4const-oid v0.9.6
-4crypto-common v0.1.7 (*)
+4crypto-common v0.1.7
+5generic-array v0.14.7 (*)
+5typenum v1.20.1
 4subtle v2.6.1
 1euclid v0.22.13
 2num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
@@ -212,8 +201,6 @@
 1hashbrown v0.17.1
 2foldhash v0.2.0
 1heapless v0.9.3 (*)
-1hmac v0.12.1
-2digest v0.10.7 (*)
 1hyper v1.9.0 (/home/t4ce/REPOS/TRUEOS/vendor/hyper-1.9.0)
 2atomic-waker v1.1.2
 2bytes v1.12.0
@@ -297,8 +284,6 @@
 3simd-adler32 v0.3.8 (/home/t4ce/REPOS/TRUEOS/vendor/simd-adler32-0.3.8)
 2log v0.4.33
 2miniz_oxide v0.9.1 (*)
-1pure_vorbis v0.0.1 (/home/t4ce/REPOS/TRUEOS/vendor/pure_vorbis-0.0.1)
-2libm v0.2.16
 1rand_chacha v0.3.1
 2ppv-lite86 v0.2.21
 3zerocopy v0.8.52
@@ -310,53 +295,6 @@
 2rand_core v0.6.4 (*)
 1regex-automata v0.4.14
 2regex-syntax v0.8.11
-1rsa v0.9.10
-2const-oid v0.9.6
-2digest v0.10.7 (*)
-2num-bigint-dig v0.8.6
-3lazy_static v1.5.0 (/home/t4ce/REPOS/TRUEOS/vendor/lazy_static-1.5.0)
-4spin v0.10.0 (*)
-3libm v0.2.16
-3num-integer v0.1.46
-4num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
-3num-iter v0.1.45
-4num-integer v0.1.46 (*)
-4num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
-4autocfg v1.5.1
-3num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
-3rand v0.8.6 (/home/t4ce/REPOS/TRUEOS/vendor/rand-0.8.6)
-4rand_chacha v0.3.1 (*)
-4rand_core v0.6.4 (*)
-3smallvec v1.15.2
-3zeroize v1.9.0 (*)
-2num-integer v0.1.46 (*)
-2num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
-2pkcs1 v0.7.5
-3der v0.7.10
-4const-oid v0.9.6
-4pem-rfc7468 v0.7.0
-5base64ct v1.8.3
-4zeroize v1.9.0 (*)
-3pkcs8 v0.10.2
-4der v0.7.10 (*)
-4pkcs5 v0.7.1
-5der v0.7.10 (*)
-5spki v0.7.3
-6der v0.7.10 (*)
-4spki v0.7.3 (*)
-3spki v0.7.3 (*)
-2pkcs8 v0.10.2 (*)
-2rand_core v0.6.4 (*)
-2sha2 v0.10.9
-3cfg-if v1.0.4
-3cpufeatures v0.2.17
-3digest v0.10.7 (*)
-2signature v2.2.0
-3digest v0.10.7 (*)
-3rand_core v0.6.4 (*)
-2spki v0.7.3 (*)
-2subtle v2.6.1
-2zeroize v1.9.0 (*)
 1rustls v0.23.41
 2once_cell v1.21.4
 2rustls-pki-types v1.14.1
@@ -372,9 +310,17 @@
 3generic-array v0.14.7 (*)
 2aes-gcm v0.10.3
 3aead v0.5.2 (*)
-3aes v0.8.4 (*)
+3aes v0.8.4
+4cfg-if v1.0.4
+4cipher v0.4.4
+5crypto-common v0.1.7 (*)
+5inout v0.1.4
+6generic-array v0.14.7 (*)
+5zeroize v1.9.0 (*)
+4cpufeatures v0.2.17
 3cipher v0.4.4 (*)
-3ctr v0.9.2 (*)
+3ctr v0.9.2
+4cipher v0.4.4 (*)
 3ghash v0.5.1
 4opaque-debug v0.3.1
 4polyval v0.6.2
@@ -398,7 +344,11 @@
 4universal-hash v0.5.1 (*)
 3zeroize v1.9.0 (*)
 2crypto-common v0.1.7 (*)
-2der v0.7.10 (*)
+2der v0.7.10
+3const-oid v0.9.6
+3pem-rfc7468 v0.7.0
+4base64ct v1.8.3
+3zeroize v1.9.0 (*)
 2digest v0.10.7 (*)
 2ecdsa v0.16.9
 3der v0.7.10 (*)
@@ -420,9 +370,16 @@
 5rand_core v0.6.4 (*)
 5subtle v2.6.1
 4hkdf v0.12.4
-5hmac v0.12.1 (*)
+5hmac v0.12.1
+6digest v0.10.7 (*)
 4pem-rfc7468 v0.7.0 (*)
-4pkcs8 v0.10.2 (*)
+4pkcs8 v0.10.2
+5der v0.7.10 (*)
+5pkcs5 v0.7.1
+6der v0.7.10 (*)
+6spki v0.7.3
+7der v0.7.10 (*)
+5spki v0.7.3 (*)
 4rand_core v0.6.4 (*)
 4sec1 v0.7.3
 5base16ct v0.2.0
@@ -436,7 +393,9 @@
 3rfc6979 v0.4.0
 4hmac v0.12.1 (*)
 4subtle v2.6.1
-3signature v2.2.0 (*)
+3signature v2.2.0
+4digest v0.10.7 (*)
+4rand_core v0.6.4 (*)
 3spki v0.7.3 (*)
 2ed25519-dalek v2.2.0
 3curve25519-dalek v4.1.3
@@ -453,7 +412,10 @@
 3ed25519 v2.2.3
 4pkcs8 v0.10.2 (*)
 4signature v2.2.0 (*)
-3sha2 v0.10.9 (*)
+3sha2 v0.10.9
+4cfg-if v1.0.4
+4cpufeatures v0.2.17
+4digest v0.10.7 (*)
 3subtle v2.6.1
 3zeroize v1.9.0 (*)
 2hmac v0.12.1 (*)
@@ -471,7 +433,38 @@
 2paste v1.0.15 (proc-macro)
 2pkcs8 v0.10.2 (*)
 2rand_core v0.6.4 (*)
-2rsa v0.9.10 (*)
+2rsa v0.9.10
+3const-oid v0.9.6
+3digest v0.10.7 (*)
+3num-bigint-dig v0.8.6
+4lazy_static v1.5.0 (/home/t4ce/REPOS/TRUEOS/vendor/lazy_static-1.5.0)
+5spin v0.10.0 (*)
+4libm v0.2.16
+4num-integer v0.1.46
+5num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
+4num-iter v0.1.45
+5num-integer v0.1.46 (*)
+5num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
+5autocfg v1.5.1
+4num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
+4rand v0.8.6 (/home/t4ce/REPOS/TRUEOS/vendor/rand-0.8.6)
+5rand_chacha v0.3.1 (*)
+5rand_core v0.6.4 (*)
+4smallvec v1.15.2
+4zeroize v1.9.0 (*)
+3num-integer v0.1.46 (*)
+3num-traits v0.2.19 (/home/t4ce/REPOS/TRUEOS/vendor/num-traits-0.2.19) (*)
+3pkcs1 v0.7.5
+4der v0.7.10 (*)
+4pkcs8 v0.10.2 (*)
+4spki v0.7.3 (*)
+3pkcs8 v0.10.2 (*)
+3rand_core v0.6.4 (*)
+3sha2 v0.10.9 (*)
+3signature v2.2.0 (*)
+3spki v0.7.3 (*)
+3subtle v2.6.1
+3zeroize v1.9.0 (*)
 2rustls v0.23.41 (*)
 2rustls-pki-types v1.14.1 (*)
 2rustls-webpki v0.103.13 (*)
@@ -493,7 +486,6 @@
 2memchr v2.8.2
 2serde_core v1.0.228
 2zmij v1.0.21
-1sha1 v0.10.6 (*)
 1sha2 v0.10.9 (*)
 1smoltcp v0.13.1 (/home/t4ce/REPOS/TRUEOS/vendor/smoltcp-0.13.1)
 2bitflags v2.13.0
