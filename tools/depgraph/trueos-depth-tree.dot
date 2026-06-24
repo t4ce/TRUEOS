@@ -1,5 +1,5 @@
 digraph trueos_depth_graph {
-  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.62, ranksep=55.0];
+  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.62, ranksep=61.0];
   node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.13,0.10", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
   edge [color="#9aa8b8", arrowsize=0.55, penwidth=7.2];
   n0 [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="0"><TR><TD><FONT POINT-SIZE="117"><B>TRUEOS</B></FONT></TD></TR>
@@ -238,7 +238,7 @@ digraph trueos_depth_graph {
   n0 -> n9;
   n0 -> n15;
   n0 -> n22 [constraint=false, tailport=w, headport=e];
-  n0 -> n24 [style=invis, constraint=false];
+  n0 -> n24;
   n0 -> n25;
   n0 -> n33;
   n0 -> n43;
@@ -247,28 +247,28 @@ digraph trueos_depth_graph {
   n0 -> n52;
   n0 -> n53;
   n0 -> n54;
-  n0 -> n55 [style=invis, constraint=false];
+  n0 -> n55;
   n0 -> n57;
   n0 -> n65;
   n0 -> n71;
   n0 -> n72;
   n0 -> n74;
-  n0 -> n77 [style=invis, constraint=false];
+  n0 -> n77;
   n0 -> n81;
   n0 -> n86;
   n0 -> n88;
-  n0 -> n90 [style=invis, constraint=false];
+  n0 -> n90;
   n0 -> n91 [constraint=false, tailport=w, headport=e];
   n0 -> n92;
   n0 -> n93 [style=invis, constraint=false];
   n0 -> n106;
-  n0 -> n114 [style=invis, constraint=false];
+  n0 -> n114;
   n0 -> n119 [style=invis, constraint=false];
   n0 -> n122;
   n0 -> n123;
   n0 -> n124 [style=invis, constraint=false];
   n0 -> n125 [style=invis, constraint=false];
-  n0 -> n126 [style=invis, constraint=false];
+  n0 -> n126 [constraint=false, tailport=w, headport=e];
   n0 -> n128;
   n0 -> n130;
   n0 -> n132 [style=invis, constraint=false];
@@ -276,25 +276,25 @@ digraph trueos_depth_graph {
   n0 -> n138 [constraint=false, tailport=w, headport=e];
   n0 -> n139;
   n0 -> n140;
-  n0 -> n144 [style=invis, constraint=false];
+  n0 -> n144;
   n0 -> n145 [style=invis, constraint=false];
   n0 -> n146;
   n0 -> n151 [style=invis, constraint=false];
   n0 -> n152;
   n0 -> n156;
-  n0 -> n157 [style=invis, constraint=false];
+  n0 -> n157 [constraint=false, tailport=w, headport=e];
   n0 -> n159 [style=invis, constraint=false];
   n0 -> n160 [constraint=false, tailport=w, headport=e];
   n0 -> n161 [style=invis, constraint=false];
   n0 -> n162;
-  n0 -> n163 [style=invis, constraint=false];
+  n0 -> n163;
   n0 -> n164 [style=invis, constraint=false];
   n0 -> n167;
   n0 -> n168 [constraint=false, tailport=w, headport=e];
   n0 -> n169 [style=invis, constraint=false];
-  n0 -> n171 [style=invis, constraint=false];
+  n0 -> n171;
   n0 -> n173;
-  n0 -> n175 [style=invis, constraint=false];
+  n0 -> n175 [constraint=false, tailport=w, headport=e];
   n1 -> n10;
   n1 -> n11;
   n1 -> n14;
@@ -596,16 +596,16 @@ digraph trueos_depth_graph {
   n130 -> n173;
   n131 -> n173;
   n132 -> n2;
-  n132 -> n4 [style=invis, constraint=false];
-  n132 -> n18 [style=invis, constraint=false];
+  n132 -> n4;
+  n132 -> n18;
   n132 -> n32;
   n132 -> n39;
   n132 -> n42;
   n132 -> n45;
-  n132 -> n47 [style=invis, constraint=false];
+  n132 -> n47;
   n132 -> n74;
-  n132 -> n104 [style=invis, constraint=false];
-  n132 -> n105 [style=invis, constraint=false];
+  n132 -> n104;
+  n132 -> n105;
   n132 -> n107;
   n132 -> n113;
   n132 -> n123;
@@ -616,7 +616,7 @@ digraph trueos_depth_graph {
   n132 -> n134;
   n132 -> n140;
   n132 -> n141;
-  n132 -> n170 [style=invis, constraint=false];
+  n132 -> n170;
   n133 -> n131;
   n134 -> n39;
   n134 -> n64;
@@ -718,8 +718,8 @@ digraph trueos_depth_graph {
   n174 -> n118;
   n174 -> n120;
   n174 -> n153;
-  n51 -> n49 [style=invis, weight=900, minlen=2];
-  n71 -> n106 [style=invis, weight=900, minlen=2];
+  n49 -> n51 [style=invis, weight=900, minlen=2];
+  n55 -> n77 [style=invis, weight=900, minlen=2];
   left_column_0 [label="", shape=point, width=0.01, height=0.01, style=invis];
   left_column_1 [label="", shape=point, width=0.01, height=0.01, style=invis];
   left_column_2 [label="", shape=point, width=0.01, height=0.01, style=invis];
@@ -727,7 +727,7 @@ digraph trueos_depth_graph {
   left_column_3 -> left_column_2 -> left_column_1 -> left_column_0 -> n0 [style=invis, weight=1000];
   {
     rank=same;
-    left_column_0; n55; n77; n93; n126; n144; n145; n157; n159; n161; n164; n175;
+    left_column_0; n93; n126; n145; n157; n159; n161; n164; n175;
   }
   {
     rank=same;
@@ -742,7 +742,6 @@ digraph trueos_depth_graph {
     left_column_3; n91; n137;
   }
   n91 -> n22 [style=invis, weight=300, minlen=1];
-  n160 -> n77 [style=invis, weight=300, minlen=1];
   n22 -> n93 [style=invis, weight=300, minlen=1];
   n160 -> n93 [style=invis, weight=300, minlen=1];
   n137 -> n136 [style=invis, weight=300, minlen=1];
@@ -759,8 +758,8 @@ digraph trueos_depth_graph {
   architecture_irrelevant [label=<<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="36" COLOR="#b7bec9" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="54"><B>irrelevant to architecture</B></FONT></TD></TR><TR><TD><FONT POINT-SIZE="50"><B>log</B></FONT> <FONT POINT-SIZE="45">0.4.33</FONT></TD></TR></TABLE>>, shape=plain, fontcolor="#334155"];
   // collapsed leaf ends: 76
   // shared two-input leaf ends: 8
-  // parent-attached one-input nodes: 71
+  // parent-attached one-input nodes: 54
   // left-wing root-shared leaf ends: 0
-  // pinned left-wing crates: 18
+  // pinned left-wing crates: 15
   // architecture-irrelevant bucket entries: 1
 }

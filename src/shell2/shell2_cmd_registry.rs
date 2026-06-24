@@ -237,7 +237,9 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some(STATUS_PINK_RGB),
         advertised: true,
         handler: dispatch_gboy,
-        tool_description: Some("Load a Game Boy ROM from TRUEOSFS and present it on the Intel backend."),
+        tool_description: Some(
+            "Load a Game Boy ROM from TRUEOSFS and present it on the Intel backend.",
+        ),
         tool_parameters_json: Some(TOOL_JSON_GBOY),
     },
     BuiltinShell2CmdEntry {
@@ -441,8 +443,8 @@ pub(crate) fn try_dispatch(
 
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
-        "7z", "lsd", "rm", "mv", "sha", "aud", "diashow", "gboy", "disc", "install",
-        "update", "hyper", "net", "c4", "txt", "gpgpu", "acpi", "tlb", "smp",
+        "7z", "lsd", "rm", "mv", "sha", "aud", "diashow", "gboy", "disc", "install", "update",
+        "hyper", "net", "c4", "txt", "gpgpu", "acpi", "tlb", "smp",
     ];
 
     let mut out = AllocString::new();

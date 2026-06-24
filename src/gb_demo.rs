@@ -3,8 +3,9 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-const PRESENT_WIDTH: usize = crate::trueos_gboi::gpu::SCREEN_W * 4;
-const PRESENT_HEIGHT: usize = crate::trueos_gboi::gpu::SCREEN_H * 4;
+const PRESENT_SCALE: usize = 2;
+const PRESENT_WIDTH: usize = crate::trueos_gboi::gpu::SCREEN_W * PRESENT_SCALE;
+const PRESENT_HEIGHT: usize = crate::trueos_gboi::gpu::SCREEN_H * PRESENT_SCALE;
 const PRESENT_PITCH_BYTES: usize = PRESENT_WIDTH * core::mem::size_of::<u32>();
 
 static GBOY_RUN_GENERATION: AtomicU32 = AtomicU32::new(0);
@@ -20,11 +21,7 @@ fn current_run_generation() -> u32 {
 }
 
 #[embassy_executor::task(pool_size = 2)]
-pub(crate) async fn gboy_task(
-    path: String,
-    target: crate::shell2::MatrixTarget,
-    generation: u32,
-) {
+pub(crate) async fn gboy_task(path: String, target: crate::shell2::MatrixTarget, generation: u32) {
     let result = run_gboy(path.as_str(), &target, generation).await;
     if let Err(err) = result {
         crate::shell2::print_matrix_target_line(&target, alloc::format!("gboy: {err}").as_str());
@@ -61,8 +58,7 @@ async fn run_gboy(
         .unwrap_or_default();
     crate::shell2::print_matrix_target_line(
         target,
-        alloc::format!("gboy: presenting {}x{}{}", PRESENT_WIDTH, PRESENT_HEIGHT, scanout)
-            .as_str(),
+        alloc::format!("gboy: presenting {}x{}{}", PRESENT_WIDTH, PRESENT_HEIGHT, scanout).as_str(),
     );
 
     while current_run_generation() == generation {
@@ -83,7 +79,10 @@ async fn run_gboy(
                 target,
                 alloc::format!(
                     "gboy: frame={} presented={} size={}x{}",
-                    frame, presented as u8, PRESENT_WIDTH, PRESENT_HEIGHT
+                    frame,
+                    presented as u8,
+                    PRESENT_WIDTH,
+                    PRESENT_HEIGHT
                 )
                 .as_str(),
             );
@@ -106,7 +105,10 @@ async fn read_rom(path: &str, target: &crate::shell2::MatrixTarget) -> Result<Ve
         .map(|path| path.to_relative_string())
         .map_err(|err| alloc::format!("bad path {:?}: {}", err, path))?;
 
-    crate::shell2::print_matrix_target_line(target, alloc::format!("gboy: reading /{}", rel).as_str());
+    crate::shell2::print_matrix_target_line(
+        target,
+        alloc::format!("gboy: reading /{}", rel).as_str(),
+    );
 
     match crate::r::fs::trueosfs::file_out_async(disk, rel.as_str())
         .await
