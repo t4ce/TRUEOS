@@ -169,6 +169,29 @@ unsafe extern "C" {
         out_port_be: *mut u16,
     ) -> i32;
 
+    pub fn trueos_cabi_audio_open_playback(
+        format: u32,
+        channels: u32,
+        rate_hz: u32,
+        out_handle: *mut u32,
+    ) -> i32;
+    pub fn trueos_cabi_audio_close(handle: u32) -> i32;
+    pub fn trueos_cabi_audio_start(handle: u32) -> i32;
+    pub fn trueos_cabi_audio_drop(handle: u32) -> i32;
+    pub fn trueos_cabi_audio_drain(handle: u32, timeout_ms: u64) -> i32;
+    pub fn trueos_cabi_audio_write_i16_interleaved(
+        handle: u32,
+        samples_ptr: *const i16,
+        sample_count: usize,
+    ) -> isize;
+    pub fn trueos_cabi_audio_write_i16_stereo_48k(
+        samples_ptr: *const i16,
+        sample_count: usize,
+    ) -> isize;
+    pub fn trueos_cabi_audio_queued_frames(handle: u32) -> isize;
+    pub fn trueos_cabi_audio_buffer_frames(handle: u32) -> isize;
+    pub fn trueos_cabi_audio_state(handle: u32) -> i32;
+
     pub fn trueos_cabi_input_pop_mouse(
         out_buttons: *mut u8,
         out_dx: *mut i8,

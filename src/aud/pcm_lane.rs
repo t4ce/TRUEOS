@@ -40,6 +40,14 @@ pub fn urgent_pending() -> bool {
     PCM_LANE_REQUEST.lock().is_some()
 }
 
+pub fn pending_frames() -> usize {
+    PCM_LANE_REQUEST
+        .lock()
+        .as_ref()
+        .map(|request| request.samples.len() / hda::PCM_CHANNELS)
+        .unwrap_or(0)
+}
+
 pub fn take_pending() -> Option<PcmLaneRequest> {
     PCM_LANE_REQUEST.lock().take()
 }
