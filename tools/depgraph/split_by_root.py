@@ -43,14 +43,12 @@ SHARED_LINK_VERTICAL_THRESHOLD = 24.0
 ARCHITECTURE_BUCKET_PADDING = 32.0
 # Spread the full LR graph wide enough that the layout itself uses the 16:9 canvas.
 FULL_GRAPH_NODESEP = 0.62
-FULL_GRAPH_RANKSEP = 55.0
+FULL_GRAPH_RANKSEP = 61.0
 FULL_GRAPH_ASPECT_RATIO = 16 / 9
 SPLIT_GRAPH_NODESEP = 0.35
 SPLIT_GRAPH_RANKSEP = 0.55
 LEFT_WING_CRATES = {
     "core3",
-    "embedded-websocket",
-    "hyper",
     "memchr",
     "mio",
     "regex-automata",
@@ -58,7 +56,6 @@ LEFT_WING_CRATES = {
     "serde_derive",
     "serde_json",
     "socket2",
-    "smoltcp",
     "tower",
     "trueos-esp",
     "trueos-io",
@@ -70,6 +67,9 @@ LEFT_WING_CRATES = {
 }
 LEFT_SIDE_ATTACHED_PARENT_CRATES = {
     "hyper",
+}
+SKIP_ATTACHED_CHILDREN_OF_CRATES = {
+    "rustls-rustcrypto",
 }
 ARCHITECTURE_IRRELEVANT_CRATES = {
     "log",
@@ -786,10 +786,8 @@ def full_collapse_info(
         and node not in collapsed_leaves
         and incoming_count[node] == 1
         and next(iter(incoming_parents[node])) not in collapsed_leaves
-        and (
-            incoming_parents[node] == {root}
-            or not any(child in collapsed_leaves for child in children_by_parent.get(node, ()))
-        )
+        and crate_name(next(iter(incoming_parents[node]))) not in SKIP_ATTACHED_CHILDREN_OF_CRATES
+        and not any(child in collapsed_leaves for child in children_by_parent.get(node, ()))
     }
 
     def embedded_entry(label: str) -> EmbeddedEntry:

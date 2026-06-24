@@ -104,7 +104,6 @@ define_started_flags!(
     UI3_ORBITS_STARTED,
     UI3_ASSET_SERVICE_STARTED,
     UI3_SERVICE_STARTED,
-    GB_BAREMETAL_DEMO_STARTED,
     I226_DIAGNOSTIC_DISPLAY_STARTED,
     AUD_FILE_SERVICE_STARTED,
     TINYAUDIO_SERVICE_STARTED,
@@ -584,10 +583,6 @@ fn spawn_ui3_orbits(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |_ap1_spawner| crate::ui3::ui3_orbits::ui3_orbits_task())
 }
 
-fn spawn_gb_baremetal_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |_ap1_spawner| crate::gb_demo::gb_baremetal_demo_task())
-}
-
 fn spawn_aud_file_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |_ap1_spawner| crate::aud::file_service::aud_file_service_task())
 }
@@ -618,11 +613,6 @@ fn intel_cursor_service_gate() -> bool {
 #[inline]
 fn intel_full_ui3_gate() -> bool {
     crate::intel::full_ui3_boot_enabled()
-}
-
-#[inline]
-fn gb_baremetal_demo_gate() -> bool {
-    crate::intel::has_claimed_device() && crate::gb_demo::boot_rom_present()
 }
 
 #[inline]
@@ -1210,7 +1200,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
 const SPOTIFY_SERVICE_READY: u32 = crate::r::readiness::NET_SOCKET_READY
     | crate::r::readiness::INTEL_HDA_READY
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY;
-const TASK_COUNT: usize = 59 + cfg!(feature = "trueos_rdp") as usize;
+const TASK_COUNT: usize = 58 + cfg!(feature = "trueos_rdp") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1461,13 +1451,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         intel_full_ui3_gate,
         &UI3_ORBITS_STARTED,
         spawn_ui3_orbits,
-    ),
-    TaskSpec::enabled_gated(
-        "gb-baremetal-demo",
-        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        gb_baremetal_demo_gate,
-        &GB_BAREMETAL_DEMO_STARTED,
-        spawn_gb_baremetal_demo,
     ),
     TaskSpec::enabled(
         "aud-file-service",
