@@ -147,6 +147,35 @@ enum ErrorKind {
     IOError(io::Error),
 }
 
+fn io_error_from_std(error: std::io::Error) -> io::Error {
+    use std::io::ErrorKind as StdErrorKind;
+
+    let kind = match error.kind() {
+        StdErrorKind::NotFound => io::ErrorKind::NotFound,
+        StdErrorKind::PermissionDenied => io::ErrorKind::PermissionDenied,
+        StdErrorKind::ConnectionRefused => io::ErrorKind::ConnectionRefused,
+        StdErrorKind::ConnectionReset => io::ErrorKind::ConnectionReset,
+        StdErrorKind::ConnectionAborted => io::ErrorKind::ConnectionAborted,
+        StdErrorKind::NotConnected => io::ErrorKind::NotConnected,
+        StdErrorKind::AddrInUse => io::ErrorKind::AddrInUse,
+        StdErrorKind::AddrNotAvailable => io::ErrorKind::AddrNotAvailable,
+        StdErrorKind::BrokenPipe => io::ErrorKind::BrokenPipe,
+        StdErrorKind::AlreadyExists => io::ErrorKind::AlreadyExists,
+        StdErrorKind::WouldBlock => io::ErrorKind::WouldBlock,
+        StdErrorKind::InvalidInput => io::ErrorKind::InvalidInput,
+        StdErrorKind::InvalidData => io::ErrorKind::InvalidData,
+        StdErrorKind::TimedOut => io::ErrorKind::TimedOut,
+        StdErrorKind::WriteZero => io::ErrorKind::WriteZero,
+        StdErrorKind::Interrupted => io::ErrorKind::Interrupted,
+        StdErrorKind::Other => io::ErrorKind::Other,
+        StdErrorKind::UnexpectedEof => io::ErrorKind::UnexpectedEof,
+        StdErrorKind::Unsupported => io::ErrorKind::Uncategorized,
+        _ => io::ErrorKind::Uncategorized,
+    };
+
+    io::Error::from(kind)
+}
+
 /// Used to create a new [`ThreadPool`] or to configure the global rayon thread pool.
 /// ## Creating a ThreadPool
 /// The following creates a thread pool with 22 threads.
@@ -332,7 +361,9 @@ impl ThreadPoolBuilder {
                     if let Some(size) = thread.stack_size() {
                         builder = builder.stack_size(size);
                     }
-                    builder.spawn_scoped(scope, || wrapper(thread))?;
+                    builder
+                        .spawn_scoped(scope, || wrapper(thread))
+                        .map_err(io_error_from_std)?;
                     Ok(())
                 })
                 .build()?;
@@ -741,7 +772,7 @@ impl ThreadPoolBuildError {
     }
 
     fn is_unsupported(&self) -> bool {
-        matches!(&self.kind, ErrorKind::IOError(e) if e.kind() == io::ErrorKind::Unsupported)
+        matches!(&self.kind, ErrorKind::IOError(e) if e.kind() == io::ErrorKind::Uncategorized)
     }
 }
 
