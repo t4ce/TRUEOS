@@ -111,8 +111,6 @@ define_started_flags!(
     EXECUTOR_REALM_MIGRATION_SMOKE_STARTED
 );
 
-static SPOTIFY_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
-
 #[cfg(feature = "trueos_rdp")]
 static RESOURCE_MONITOR_STARTED: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "trueos_rdp")]
@@ -476,10 +474,6 @@ fn spawn_shader_compile_service(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_silk_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| crate::r::silk_service::silk_service_task())
-}
-
-fn spawn_spotify_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |_worker_spawner| crate::r::spotify_service::spotify_service_task())
 }
 
 fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
@@ -1197,10 +1191,7 @@ const GBOI_DEMO_READY: u32 = crate::r::readiness::BACKGROUND_AP_WORKER_READY;
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const SPOTIFY_SERVICE_READY: u32 = crate::r::readiness::NET_SOCKET_READY
-    | crate::r::readiness::INTEL_HDA_READY
-    | crate::r::readiness::BACKGROUND_AP_WORKER_READY;
-const TASK_COUNT: usize = 58 + cfg!(feature = "trueos_rdp") as usize;
+const TASK_COUNT: usize = 57 + cfg!(feature = "trueos_rdp") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1319,12 +1310,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         &SILK_SERVICE_STARTED,
         spawn_silk_service,
-    ),
-    TaskSpec::disabled(
-        "spotify-service",
-        SPOTIFY_SERVICE_READY,
-        &SPOTIFY_SERVICE_STARTED,
-        spawn_spotify_service,
     ),
     TaskSpec::enabled("app-vm-run-queue", 0, &APP_VM_RUN_QUEUE_STARTED, spawn_app_vm_run_queue),
     TaskSpec::enabled(

@@ -511,34 +511,6 @@ pub async fn get_range_bytes_shared(
     request_https_bytes(&target, &request, timeout_ms.max(1), max_bytes).await
 }
 
-pub async fn put_protobuf_shared(
-    url: &str,
-    body: &[u8],
-    bearer: Option<&str>,
-    connection_id: Option<&str>,
-    timeout_ms: u32,
-    max_bytes: usize,
-) -> Result<Vec<u8>, String> {
-    let target = parse_fetch_url(url).map_err(String::from)?;
-    if target.scheme != "https" {
-        return Err(String::from("unsupported scheme"));
-    }
-    let mut headers = Vec::new();
-    if let Some(token) = bearer {
-        headers.push((String::from("Authorization"), format!("Bearer {}", token)));
-    }
-    if let Some(connection_id) = connection_id {
-        headers.push((String::from("X-Spotify-Connection-Id"), String::from(connection_id)));
-    }
-    let request = HttpsRequest {
-        method: "PUT",
-        content_type: Some("application/x-protobuf"),
-        headers,
-        body,
-    };
-    request_https_bytes(&target, &request, timeout_ms.max(1), max_bytes).await
-}
-
 pub async fn post_protobuf_shared(
     url: &str,
     body: &[u8],

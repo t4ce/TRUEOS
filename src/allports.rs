@@ -47,7 +47,6 @@ pub mod services {
     pub const LOCALCODER_WEB_TCP_PORT: u16 = 81;
     pub const TINYAUDIO_LIVE_HTTP_TCP_PORT: u16 = 82;
     pub const GAMESERVER_TACTICS_TCP_PORT: u16 = 1337;
-    pub const SPOTIFY_CONNECT_HTTP_TCP_PORT: u16 = 57_621;
 }
 
 pub mod mail {

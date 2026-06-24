@@ -41,7 +41,6 @@ FULL_GRAPH_ROOT_SCALE_CRATES = {
 }
 SHARED_LINK_VERTICAL_THRESHOLD = 24.0
 ARCHITECTURE_BUCKET_PADDING = 32.0
-FULL_GRAPH_LEFT_GUTTER = 900.0
 # Spread the full LR graph wide enough that the layout itself uses the 16:9 canvas.
 FULL_GRAPH_NODESEP = 0.62
 FULL_GRAPH_RANKSEP = 55.0
@@ -1176,8 +1175,8 @@ def layer_full_svg_edges_below_nodes() -> None:
         shared_group, shared_end = extract_balanced_svg_group(svg, shared_start)
         svg = svg[:shared_start] + svg[shared_end:]
 
-    line_markup = "".join(edge_groups) + shared_group
-    if not line_markup:
+    edge_markup = "".join(edge_groups)
+    if not edge_markup and not shared_group:
         FULL_SVG_PATH.write_text(svg)
         return
 
@@ -1197,17 +1196,25 @@ def layer_full_svg_edges_below_nodes() -> None:
             raise RuntimeError(f"could not find SVG background in {FULL_SVG_PATH}")
         insert_at = background_match.end()
 
-    svg = svg[:insert_at] + line_markup + svg[insert_at:]
+    svg = svg[:insert_at] + edge_markup + svg[insert_at:]
+
+    if shared_group:
+        graph_end = svg.rfind("</g>\n</svg>")
+        if graph_end == -1:
+            raise RuntimeError(f"could not find graph end in {FULL_SVG_PATH}")
+        svg = svg[:graph_end] + shared_group + svg[graph_end:]
     FULL_SVG_PATH.write_text(svg)
 
 
-def ensure_full_svg_left_gutter() -> None:
-    _width, _height, _tx, _ty, node_bboxes, _inner_bboxes, _bodies = svg_layout(FULL_SVG_PATH)
+def center_full_svg_horizontally() -> None:
+    width, _height, _tx, _ty, node_bboxes, _inner_bboxes, _bodies = svg_layout(FULL_SVG_PATH)
     if not node_bboxes:
         return
     left = min(x for x, _y, _w, _h in node_bboxes.values())
-    dx = FULL_GRAPH_LEFT_GUTTER - left
-    if dx <= 0.01:
+    right = max(x + w for x, _y, w, _h in node_bboxes.values())
+    target_left = (width - (right - left)) / 2
+    dx = target_left - left
+    if abs(dx) <= 0.01:
         return
 
     svg = FULL_SVG_PATH.read_text()
@@ -1657,6 +1664,70 @@ def node_id_from_edge_title_endpoint(endpoint: str) -> str:
     return endpoint.split(":", 1)[0]
 
 
+def downstream_nodes(start: str, edges: set[tuple[str, str]]) -> set[str]:
+    children_by_parent: dict[str, set[str]] = defaultdict(set)
+    for parent, child in edges:
+        children_by_parent[parent].add(child)
+
+    seen = {start}
+    stack = [start]
+    while stack:
+        parent = stack.pop()
+        for child in children_by_parent.get(parent, ()):
+            if child in seen:
+                continue
+            seen.add(child)
+            stack.append(child)
+    return seen
+
+
+def selected_arrow_has_rendered_edges(
+    root: str,
+    selected_root: str,
+    selected_nodes: set[str],
+    rendered_edges: set[tuple[str, str]],
+) -> bool:
+    if selected_root == root:
+        return bool(rendered_edges)
+    return any(
+        parent in selected_nodes or (parent == root and child == selected_root)
+        for parent, child in rendered_edges
+    )
+
+
+def inline_full_svg_markup(node_ids: dict[str, str]) -> str:
+    svg = FULL_SVG_PATH.read_text()
+    outer = re.search(r"<svg\b[^>]*>(.*)</svg>\s*$", svg, re.S)
+    if not outer:
+        raise RuntimeError(f"could not parse inline SVG body from {FULL_SVG_PATH}")
+
+    label_by_node_id = {node_id: label for label, node_id in node_ids.items()}
+
+    def annotate_edge(match: re.Match[str]) -> str:
+        edge_group = match.group(0)
+        title = re.search(r"<title>([^<]+?)&#45;&gt;([^<]+?)</title>", edge_group)
+        if not title:
+            return edge_group
+        tail_node = node_id_from_edge_title_endpoint(title.group(1))
+        head_node = node_id_from_edge_title_endpoint(title.group(2))
+        tail_label = label_by_node_id.get(tail_node)
+        head_label = label_by_node_id.get(head_node)
+        if not tail_label or not head_label:
+            return edge_group
+
+        start = re.search(r'<g id="edge\d+" class="edge"', edge_group)
+        if not start:
+            return edge_group
+        annotated_start = (
+            start.group(0).replace('class="edge"', 'class="edge graph-edge"')
+            + f' data-tail="{escape(tail_label, quote=True)}"'
+            + f' data-head="{escape(head_label, quote=True)}"'
+        )
+        return edge_group[: start.start()] + annotated_start + edge_group[start.end() :]
+
+    return re.sub(r'<g id="edge\d+" class="edge">.*?</g>\n?', annotate_edge, outer.group(1), flags=re.S)
+
+
 def move_attached_nodes_to_parents(root: str, edges: set[tuple[str, str]]) -> None:
     (
         _all_nodes,
@@ -2080,6 +2151,7 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
     )
     width, height, node_bboxes, inner_bboxes = full_svg_bboxes()
     display_width, display_height = display_size(width, height)
+    inline_svg = inline_full_svg_markup(node_ids)
     root_node_id = node_ids.get(root)
     root_bbox = node_bboxes.get(root_node_id) if root_node_id else None
     if root_bbox:
@@ -2098,6 +2170,33 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
         if index is not None and index < len(root_inner_bboxes):
             root_inner_by_label[child] = root_inner_bboxes[index]
 
+    rendered_edges = {
+        (parent, child)
+        for parent, child in edges
+        if parent not in collapsed_leaves and child not in collapsed_leaves
+    }
+    arrow_roots = {}
+    for child in root_children:
+        if is_architecture_irrelevant(child):
+            continue
+        selected_nodes = downstream_nodes(child, edges)
+        if selected_arrow_has_rendered_edges(root, child, selected_nodes, rendered_edges):
+            arrow_roots[child] = sorted(selected_nodes)
+
+    arrow_targets = []
+    if root_bbox and rendered_edges:
+        x, y, w, h = root_bbox
+        arrow_targets.append(
+            {
+                "node": root,
+                "label": display_label(root).replace(r"\n", " / "),
+                "is_root": True,
+                "x": round(max(0, x), 2),
+                "y": round(max(0, y), 2),
+                "w": round(w, 2),
+                "h": round(h, 2),
+            }
+        )
     hotspots = []
     for child in root_children:
         if child in node_ids:
@@ -2108,16 +2207,21 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
             continue
         x, y, w, h = bbox
         pad = 5
-        hotspots.append(
+        hotspot = (
             {
+                "node": child,
                 "label": display_label(child).replace(r"\n", " / "),
                 "href": f"by-root/{filenames[child]}",
+                "is_root": False,
                 "x": round(max(0, x - pad), 2),
                 "y": round(max(0, y - pad), 2),
                 "w": round(w + pad * 2, 2),
                 "h": round(h + pad * 2, 2),
             }
         )
+        hotspots.append(hotspot)
+        if child in arrow_roots:
+            arrow_targets.append(hotspot)
 
     rects = "\n".join(
         f'''      <a class="root-hotspot" href="{escape(hotspot["href"])}" aria-label="{escape(hotspot["label"])}">
@@ -2126,6 +2230,28 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
       </a>'''
         for hotspot in hotspots
     )
+    toggles = []
+    for target in arrow_targets:
+        size = min(76.0, max(34.0, min(float(target["w"]), float(target["h"])) * 0.22))
+        inset = max(8.0, size * 0.22)
+        x = float(target["x"]) + inset
+        y = float(target["y"]) + inset
+        stroke = max(4.0, size * 0.11)
+        mark = (
+            f"M{x + size * 0.25:.2f},{y + size * 0.53:.2f} "
+            f"L{x + size * 0.43:.2f},{y + size * 0.71:.2f} "
+            f"L{x + size * 0.76:.2f},{y + size * 0.30:.2f}"
+        )
+        toggles.append(
+            f'''      <g class="arrow-toggle{" arrow-toggle-root" if target["is_root"] else ""}" data-arrow-root="{escape(target["node"], quote=True)}" role="checkbox" aria-checked="false" tabindex="0">
+        <title>show arrows for {escape(target["label"])}</title>
+        <rect class="arrow-toggle-box" x="{x:.2f}" y="{y:.2f}" width="{size:.2f}" height="{size:.2f}" rx="{size * 0.18:.2f}" ry="{size * 0.18:.2f}"></rect>
+        <path class="arrow-toggle-mark" d="{mark}" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="{stroke:.2f}"></path>
+      </g>'''
+        )
+    toggle_markup = "\n".join(toggles)
+    arrow_roots_json = json.dumps(arrow_roots, ensure_ascii=False).replace("</", "<\\/")
+    root_json = json.dumps(root, ensure_ascii=False).replace("</", "<\\/")
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -2174,6 +2300,15 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
       background: white;
       box-shadow: 0 1px 3px rgba(15, 23, 42, 0.14);
       transform-origin: top left;
+    }}
+    #graph .graph-edge {{
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 140ms ease;
+    }}
+    #graph.show-all-arrows .graph-edge,
+    #graph .graph-edge.is-visible-arrow {{
+      opacity: 1;
     }}
     .control-panel {{
       position: fixed;
@@ -2232,6 +2367,35 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
       fill: rgba(27, 120, 166, 0.50);
       stroke: var(--hot);
     }}
+    .arrow-toggle {{
+      cursor: pointer;
+      outline: none;
+      pointer-events: all;
+    }}
+    .arrow-toggle-box {{
+      fill: rgba(255, 255, 255, 0.92);
+      stroke: var(--hot);
+      stroke-opacity: 0.72;
+      stroke-width: {GRAPH_EDGE_PEN_WIDTH};
+      transition: fill 120ms ease, stroke-opacity 120ms ease;
+    }}
+    .arrow-toggle-mark {{
+      opacity: 0;
+      stroke: white;
+      transition: opacity 120ms ease;
+    }}
+    .arrow-toggle:hover .arrow-toggle-box,
+    .arrow-toggle:focus .arrow-toggle-box {{
+      fill: rgba(27, 120, 166, 0.22);
+      stroke-opacity: 1;
+    }}
+    .arrow-toggle.is-arrow-selected .arrow-toggle-box {{
+      fill: rgba(27, 120, 166, 0.86);
+      stroke-opacity: 1;
+    }}
+    .arrow-toggle.is-arrow-selected .arrow-toggle-mark {{
+      opacity: 1;
+    }}
     dialog {{
       width: 95vw;
       height: 95vh;
@@ -2283,9 +2447,10 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
     </div>
   </section>
   <div class="viewport">
-    <svg id="graph" viewBox="0 0 {width} {height}" width="{display_width}" height="{display_height}" xmlns="http://www.w3.org/2000/svg">
-      <image href="trueos-depth-tree.svg" x="0" y="0" width="{width}" height="{height}"></image>
+    <svg id="graph" viewBox="0 0 {width} {height}" width="{display_width}" height="{display_height}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+{inline_svg}
 {rects}
+{toggle_markup}
     </svg>
   </div>
   <dialog id="root-dialog">
@@ -2305,6 +2470,11 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
     const graphBaseHeight = Number.parseFloat(graph.getAttribute('height'));
     const rootFocusX = {root_focus_x:.2f};
     const rootFocusY = {root_focus_y:.2f};
+    const rootArrowLabel = {root_json};
+    const arrowRoots = {arrow_roots_json};
+    const graphEdges = Array.from(graph.querySelectorAll('.graph-edge'));
+    const rootHotspots = Array.from(document.querySelectorAll('.root-hotspot'));
+    const arrowToggles = Array.from(graph.querySelectorAll('.arrow-toggle'));
     let graphScale = 1;
     let pointerId = null;
     let dragStartX = 0;
@@ -2312,9 +2482,47 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
     let dragStartLeft = 0;
     let dragStartTop = 0;
     let didDrag = false;
+    let pinnedArrowRoot = null;
 
     function clamp(value, min, max) {{
       return Math.min(Math.max(value, min), max);
+    }}
+
+    function setArrowSelection(nextRoot) {{
+      const selectedRoot = nextRoot || null;
+      const showAll = selectedRoot === rootArrowLabel;
+      const selectedNodes = selectedRoot && !showAll
+        ? new Set(arrowRoots[selectedRoot] || [selectedRoot])
+        : null;
+
+      graph.classList.toggle('show-all-arrows', showAll);
+      graphEdges.forEach((edge) => {{
+        const isSelectedEdge = selectedNodes
+          && (
+            selectedNodes.has(edge.dataset.tail)
+            || (edge.dataset.tail === rootArrowLabel && edge.dataset.head === selectedRoot)
+          );
+        edge.classList.toggle('is-visible-arrow', Boolean(isSelectedEdge));
+      }});
+
+      arrowToggles.forEach((toggle) => {{
+        const isSelected = showAll
+          || Boolean(selectedNodes && selectedNodes.has(toggle.dataset.arrowRoot));
+        toggle.classList.toggle(
+          'is-arrow-selected',
+          isSelected,
+        );
+        toggle.setAttribute('aria-checked', isSelected ? 'true' : 'false');
+      }});
+    }}
+
+    function setPinnedArrowRoot(nextRoot) {{
+      pinnedArrowRoot = nextRoot || null;
+      setArrowSelection(pinnedArrowRoot);
+    }}
+
+    function togglePinnedArrowRoot(nextRoot) {{
+      setPinnedArrowRoot(pinnedArrowRoot === nextRoot ? null : nextRoot);
     }}
 
     function minGraphScale() {{
@@ -2401,7 +2609,7 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
       if (event.button !== 0) {{
         return;
       }}
-      if (event.target.closest('.root-hotspot')) {{
+      if (event.target.closest('.root-hotspot, .arrow-toggle')) {{
         return;
       }}
 
@@ -2487,7 +2695,25 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
 
     animateStartupZoom();
 
-    document.querySelectorAll('.root-hotspot').forEach((link) => {{
+    arrowToggles.forEach((toggle) => {{
+      toggle.addEventListener('click', (event) => {{
+        event.preventDefault();
+        event.stopPropagation();
+        togglePinnedArrowRoot(toggle.dataset.arrowRoot);
+      }});
+
+      toggle.addEventListener('keydown', (event) => {{
+        if (event.key !== 'Enter' && event.key !== ' ') {{
+          return;
+        }}
+
+        event.preventDefault();
+        event.stopPropagation();
+        togglePinnedArrowRoot(toggle.dataset.arrowRoot);
+      }});
+    }});
+
+    rootHotspots.forEach((link) => {{
       link.addEventListener('click', (event) => {{
         event.preventDefault();
         dialogImage.src = link.getAttribute('href');
@@ -2555,7 +2781,7 @@ def main() -> None:
     widen_full_svg_to_aspect()
     move_architecture_irrelevant_bucket_to_top_left()
     layer_full_svg_edges_below_nodes()
-    ensure_full_svg_left_gutter()
+    center_full_svg_horizontally()
     HTML_INDEX_PATH.write_text(render_html_index(root, graph_root_children, graph_edges))
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
