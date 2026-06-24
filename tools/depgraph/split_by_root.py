@@ -728,6 +728,7 @@ def full_collapse_info(
     set[str],
     dict[str, list[EmbeddedEntry]],
     set[str],
+    set[str],
 ]:
     all_nodes = {root}
     incoming_count: dict[str, int] = defaultdict(int)
@@ -772,6 +773,17 @@ def full_collapse_info(
                 collapsed_leaves.add(node)
                 changed = True
 
+    root_attached_nodes = {
+        node
+        for node in all_nodes
+        if node != root
+        and node not in collapsed_leaves
+        and incoming_count[node] == 1
+        and incoming_parents[node] == {root}
+        and outgoing_count[node] == 1
+        and not any(child in collapsed_leaves for child in children_by_parent.get(node, ()))
+    }
+
     def embedded_entry(label: str) -> EmbeddedEntry:
         children = [
             embedded_entry(child)
@@ -803,6 +815,7 @@ def full_collapse_info(
         collapsed_leaves,
         embedded_by_parent,
         shared_input_leaves,
+        root_attached_nodes,
     )
 
 
@@ -824,6 +837,7 @@ def render_full_dot(
         collapsed_leaves,
         embedded_by_parent,
         shared_input_leaves,
+        root_attached_nodes,
     ) = full_collapse_info(root, edges)
 
     left_input_leaves = {
@@ -873,6 +887,9 @@ def render_full_dot(
             f'  {node_id(label)} [label={html_label(label, embedded_ends, label_scale, label != root)}, fillcolor="{fill}", color="{color}"{margin_attr}];'
         )
     for parent, child in sorted(edges):
+        if parent == root and child in root_attached_nodes:
+            lines.append(f"  {node_id(parent)} -> {node_id(child)} [style=invis, constraint=false];")
+            continue
         if parent in collapsed_leaves or child in collapsed_leaves:
             continue
         if child in left_wing_nodes:
@@ -945,6 +962,7 @@ def render_full_dot(
 
     lines.append(f"  // collapsed leaf ends: {len(collapsed_leaves)}")
     lines.append(f"  // shared two-input leaf ends: {len(shared_input_leaves)}")
+    lines.append(f"  // root-attached one-hop nodes: {len(root_attached_nodes)}")
     lines.append(f"  // left-wing root-shared leaf ends: {len(left_input_leaves)}")
     lines.append(f"  // pinned left-wing crates: {len(left_wing_nodes)}")
     lines.append(f"  // architecture-irrelevant bucket entries: {len(architecture_irrelevant or [])}")
@@ -963,6 +981,7 @@ def full_graph_layout(
         collapsed_leaves,
         embedded_by_parent,
         shared_input_leaves,
+        _root_attached_nodes,
     ) = full_collapse_info(root, edges)
     visible_nodes = all_nodes - collapsed_leaves
     node_ids: dict[str, str] = {}
@@ -1475,6 +1494,148 @@ def shared_leaf_parent_advances(
     return advanced_parents, advanced_anchors
 
 
+def shifted_svg_path_endpoint(
+    path_d: str,
+    tail_delta: tuple[float, float],
+    head_delta: tuple[float, float],
+) -> str:
+    point_pattern = r"(-?[0-9]+(?:\.[0-9]+)?),(-?[0-9]+(?:\.[0-9]+)?)"
+    points = list(re.finditer(point_pattern, path_d))
+    if not points:
+        return path_d
+
+    shifts: dict[int, tuple[float, float]] = {}
+    if abs(tail_delta[0]) > 0.01 or abs(tail_delta[1]) > 0.01:
+        shifts[0] = tail_delta
+        if len(points) > 1:
+            shifts[1] = tail_delta
+    if abs(head_delta[0]) > 0.01 or abs(head_delta[1]) > 0.01:
+        shifts[len(points) - 1] = head_delta
+        if len(points) > 1:
+            shifts[len(points) - 2] = head_delta
+    if not shifts:
+        return path_d
+
+    point_index = -1
+
+    def shift_point(match: re.Match[str]) -> str:
+        nonlocal point_index
+        point_index += 1
+        delta = shifts.get(point_index)
+        if delta is None:
+            return match.group(0)
+        dx, dy = delta
+        return f"{float(match.group(1)) + dx:.2f},{float(match.group(2)) + dy:.2f}"
+
+    return re.sub(point_pattern, shift_point, path_d)
+
+
+def shifted_svg_points(points: str, delta: tuple[float, float]) -> str:
+    dx, dy = delta
+    if abs(dx) <= 0.01 and abs(dy) <= 0.01:
+        return points
+
+    def shift_point(match: re.Match[str]) -> str:
+        return f"{float(match.group(1)) + dx:.2f},{float(match.group(2)) + dy:.2f}"
+
+    return re.sub(r"(-?[0-9]+(?:\.[0-9]+)?),(-?[0-9]+(?:\.[0-9]+)?)", shift_point, points)
+
+
+def node_id_from_edge_title_endpoint(endpoint: str) -> str:
+    return endpoint.split(":", 1)[0]
+
+
+def move_root_attached_nodes_to_root(root: str, edges: set[tuple[str, str]]) -> None:
+    (
+        _all_nodes,
+        _incoming_count,
+        _outgoing_count,
+        _incoming_parents,
+        _collapsed_leaves,
+        _embedded_by_parent,
+        _shared_input_leaves,
+        root_attached_nodes,
+    ) = full_collapse_info(root, edges)
+    if not root_attached_nodes:
+        return
+
+    node_ids, _collapsed_leaves, _embedded_by_parent, _shared_input_leaves, _incoming_parents = (
+        full_graph_layout(root, edges)
+    )
+    _width, _height, node_bboxes, _inner_bboxes = full_svg_bboxes()
+    root_id = node_ids.get(root)
+    if not root_id or root_id not in node_bboxes:
+        return
+
+    attached = [
+        (label, node_ids[label], node_bboxes[node_ids[label]])
+        for label in root_attached_nodes
+        if label in node_ids and node_ids[label] in node_bboxes
+    ]
+    if not attached:
+        return
+
+    root_x, root_y, root_w, root_h = node_bboxes[root_id]
+    gap = float(scaled(INNER_BUBBLE_SPACING, FULL_GRAPH_ROOT_SCALE))
+    total_h = sum(box[3] for _label, _node_id, box in attached) + gap * (len(attached) - 1)
+    next_y = root_y + max(0.0, (root_h - total_h) / 2)
+    target_x = root_x + root_w + gap
+    node_delta: dict[str, tuple[float, float]] = {}
+    for _label, node_id, box in sorted(attached, key=lambda item: (item[2][1], display_label(item[0]))):
+        x, _y, _w, h = box
+        node_delta[node_id] = (target_x - x, next_y - box[1])
+        next_y += h + gap
+
+    svg = FULL_SVG_PATH.read_text()
+    for node_id, (dx, dy) in sorted(node_delta.items()):
+        pattern = rf'(<g id="node\d+" class="node")>(\s*<title>{re.escape(node_id)}</title>)'
+        replacement = rf'\1 transform="translate({dx:.2f} {dy:.2f})">\2'
+        svg = re.sub(pattern, replacement, svg, count=1)
+
+    def move_edge_endpoint(match: re.Match[str]) -> str:
+        edge_group = match.group(0)
+        title = re.search(r"<title>([^<]+?)&#45;&gt;([^<]+?)</title>", edge_group)
+        if not title:
+            return edge_group
+        tail_node = node_id_from_edge_title_endpoint(title.group(1))
+        head_node = node_id_from_edge_title_endpoint(title.group(2))
+        tail_delta = node_delta.get(tail_node, (0.0, 0.0))
+        head_delta = node_delta.get(head_node, (0.0, 0.0))
+        if (
+            abs(tail_delta[0]) <= 0.01
+            and abs(tail_delta[1]) <= 0.01
+            and abs(head_delta[0]) <= 0.01
+            and abs(head_delta[1]) <= 0.01
+        ):
+            return edge_group
+
+        edge_group = re.sub(
+            r'(<path\b[^>]*\bd=")([^"]+)(")',
+            lambda path: (
+                f"{path.group(1)}"
+                f"{shifted_svg_path_endpoint(path.group(2), tail_delta, head_delta)}"
+                f"{path.group(3)}"
+            ),
+            edge_group,
+            count=1,
+        )
+        if abs(head_delta[0]) > 0.01 or abs(head_delta[1]) > 0.01:
+            edge_group = re.sub(
+                r'(<polygon\b[^>]*\bpoints=")([^"]+)(")',
+                lambda polygon: (
+                    f"{polygon.group(1)}"
+                    f"{shifted_svg_points(polygon.group(2), head_delta)}"
+                    f"{polygon.group(3)}"
+                ),
+                edge_group,
+                count=1,
+            )
+        return edge_group
+
+    svg = re.sub(r'<g id="edge\d+" class="edge">.*?</g>', move_edge_endpoint, svg, flags=re.S)
+    FULL_SVG_PATH.write_text(svg)
+
+
 def terminal_leaf_borders(root: str, edges: set[tuple[str, str]]) -> list[dict[str, object]]:
     incoming_count: dict[str, int] = defaultdict(int)
     outgoing_count: dict[str, int] = defaultdict(int)
@@ -1647,6 +1808,14 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
     )
     width, height, node_bboxes, inner_bboxes = full_svg_bboxes()
     display_width, display_height = display_size(width, height)
+    root_node_id = node_ids.get(root)
+    root_bbox = node_bboxes.get(root_node_id) if root_node_id else None
+    if root_bbox:
+        root_focus_x = root_bbox[0] + root_bbox[2] / 2
+        root_focus_y = root_bbox[1] + root_bbox[3] / 2
+    else:
+        root_focus_x = width / 2
+        root_focus_y = height / 2
     root_inner_bboxes = inner_bboxes.get("n0", [])
     root_inner_by_label = {}
     root_entries = embedded_by_parent.get(root, [])
@@ -1773,21 +1942,15 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
       width: 100%;
       accent-color: var(--hot);
     }}
-    @keyframes rootPulse {{
-      0%, 100% {{ fill: rgba(27, 120, 166, 0.06); }}
-      50% {{ fill: rgba(27, 120, 166, 0.25); }}
-    }}
     .root-hotspot rect {{
       fill: rgba(27, 120, 166, 0.06);
       stroke: transparent;
       stroke-width: {GRAPH_EDGE_PEN_WIDTH};
       pointer-events: all;
-      animation: rootPulse 3.2s ease-in-out infinite;
       transition: fill 120ms ease, stroke 120ms ease;
     }}
     .root-hotspot:hover rect,
     .root-hotspot:focus rect {{
-      animation: none;
       fill: rgba(27, 120, 166, 0.25);
       stroke: var(--hot);
     }}
@@ -1862,6 +2025,8 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
     const maxGraphScale = 0.8;
     const graphBaseWidth = Number.parseFloat(graph.getAttribute('width'));
     const graphBaseHeight = Number.parseFloat(graph.getAttribute('height'));
+    const rootFocusX = {root_focus_x:.2f};
+    const rootFocusY = {root_focus_y:.2f};
     let graphScale = 1;
     let pointerId = null;
     let dragStartX = 0;
@@ -1904,6 +2069,41 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
       setGraphScale(nextScale);
       viewport.scrollLeft = paddingLeft + graphX * graphScale - pointerX;
       viewport.scrollTop = paddingTop + graphY * graphScale - pointerY;
+    }}
+
+    function centerGraphPoint(graphX, graphY) {{
+      const style = getComputedStyle(viewport);
+      const paddingLeft = Number.parseFloat(style.paddingLeft) || 0;
+      const paddingTop = Number.parseFloat(style.paddingTop) || 0;
+      viewport.scrollLeft = paddingLeft + graphX * graphScale - viewport.clientWidth / 2;
+      viewport.scrollTop = paddingTop + graphY * graphScale - viewport.clientHeight / 2;
+    }}
+
+    function startupTargetScale() {{
+      const minScale = minGraphScale();
+      return minScale + (maxGraphScale - minScale) * 0.25;
+    }}
+
+    function animateStartupZoom() {{
+      const startScale = minGraphScale();
+      const targetScale = startupTargetScale();
+      const duration = 3000;
+      const startTime = performance.now();
+
+      setGraphScale(startScale);
+      centerGraphPoint(rootFocusX, rootFocusY);
+
+      function frame(now) {{
+        const t = clamp((now - startTime) / duration, 0, 1);
+        const eased = 1 - Math.pow(1 - t, 3);
+        setGraphScale(startScale + (targetScale - startScale) * eased);
+        centerGraphPoint(rootFocusX, rootFocusY);
+        if (t < 1) {{
+          requestAnimationFrame(frame);
+        }}
+      }}
+
+      requestAnimationFrame(frame);
     }}
 
     function normalizeWheelDelta(event) {{
@@ -2007,7 +2207,7 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
       setGraphScale(graphScale);
     }});
 
-    setGraphScale(minGraphScale());
+    animateStartupZoom();
 
     document.querySelectorAll('.root-hotspot').forEach((link) => {{
       link.addEventListener('click', (event) => {{
@@ -2063,6 +2263,7 @@ def main() -> None:
         )
     )
     subprocess.run(["dot", "-Tsvg", str(FULL_DOT_PATH), "-o", str(FULL_SVG_PATH)], check=True)
+    move_root_attached_nodes_to_root(root, graph_edges)
     inject_full_svg_regions(root, graph_root_children, graph_edges)
     full_node_ids, _collapsed_leaves, full_embedded_by_parent, _shared_input_leaves, _incoming_parents = (
         full_graph_layout(root, graph_edges)

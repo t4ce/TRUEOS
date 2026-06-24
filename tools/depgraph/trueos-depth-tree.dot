@@ -263,11 +263,11 @@ digraph trueos_depth_graph {
   n0 -> n93 [constraint=false, tailport=w, headport=e];
   n0 -> n106;
   n0 -> n114;
-  n0 -> n119;
+  n0 -> n119 [style=invis, constraint=false];
   n0 -> n122;
   n0 -> n123;
-  n0 -> n124;
-  n0 -> n125;
+  n0 -> n124 [style=invis, constraint=false];
+  n0 -> n125 [style=invis, constraint=false];
   n0 -> n126 [constraint=false, tailport=w, headport=e];
   n0 -> n128;
   n0 -> n130;
@@ -288,10 +288,10 @@ digraph trueos_depth_graph {
   n0 -> n161 [constraint=false, tailport=w, headport=e];
   n0 -> n162;
   n0 -> n163;
-  n0 -> n164 [constraint=false, tailport=w, headport=e];
+  n0 -> n164 [style=invis, constraint=false];
   n0 -> n167;
   n0 -> n168 [constraint=false, tailport=w, headport=e];
-  n0 -> n169;
+  n0 -> n169 [style=invis, constraint=false];
   n0 -> n171;
   n0 -> n173;
   n0 -> n175 [constraint=false, tailport=w, headport=e];
@@ -718,8 +718,8 @@ digraph trueos_depth_graph {
   n174 -> n118;
   n174 -> n120;
   n174 -> n153;
-  n49 -> n51 [style=invis, weight=900, minlen=2];
-  n156 -> n152 [style=invis, weight=900, minlen=2];
+  n51 -> n49 [style=invis, weight=900, minlen=2];
+  n152 -> n156 [style=invis, weight=900, minlen=2];
   left_column_0 [label="", shape=point, width=0.01, height=0.01, style=invis];
   left_column_1 [label="", shape=point, width=0.01, height=0.01, style=invis];
   left_column_2 [label="", shape=point, width=0.01, height=0.01, style=invis];
@@ -731,11 +731,11 @@ digraph trueos_depth_graph {
   }
   {
     rank=same;
-    left_column_1; n138; n160; n168;
+    left_column_1; n136; n160; n168;
   }
   {
     rank=same;
-    left_column_2; n22; n136;
+    left_column_2; n22; n138;
   }
   {
     rank=same;
@@ -758,6 +758,7 @@ digraph trueos_depth_graph {
   architecture_irrelevant [label=<<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="36" COLOR="#b7bec9" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="54"><B>irrelevant to architecture</B></FONT></TD></TR><TR><TD><FONT POINT-SIZE="50"><B>log</B></FONT> <FONT POINT-SIZE="45">0.4.33</FONT></TD></TR></TABLE>>, shape=plain, fontcolor="#334155"];
   // collapsed leaf ends: 76
   // shared two-input leaf ends: 8
+  // root-attached one-hop nodes: 5
   // left-wing root-shared leaf ends: 0
   // pinned left-wing crates: 15
   // architecture-irrelevant bucket entries: 1
