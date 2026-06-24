@@ -5,8 +5,8 @@ use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 use core::iter::once;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use alloc::vec;
 use std::sync::{Barrier, Mutex};
-use std::vec;
 
 #[test]
 fn scope_empty() {

@@ -14,6 +14,7 @@
 //! * `Waker`: see [`crate::Waker`].
 
 cfg_os_poll! {
+    #[allow(unused_macros)]
     macro_rules! debug_detail {
         (
             $type: ident ($event_type: ty), $test: path,

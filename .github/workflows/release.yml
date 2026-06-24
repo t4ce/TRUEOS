@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Optional release version without the leading v. Empty uses 0.0.<workflow run number>.
+        description: Optional release version without the leading v. Empty uses 0.0.<tools/cnt>.
         required: false
         default: ""
         type: string
@@ -134,11 +134,12 @@ jobs:
             version="${INPUT_VERSION}"
             tag="v${version}"
           else
-            if ! [[ "${GITHUB_RUN_NUMBER}" =~ ^[0-9]+$ ]]; then
-              echo "Could not derive release version: GITHUB_RUN_NUMBER is missing or not numeric" >&2
+            release_counter="$(tr -d '[:space:]' < tools/cnt 2>/dev/null || true)"
+            if ! [[ "${release_counter}" =~ ^[0-9]+$ ]]; then
+              echo "Could not derive release version: tools/cnt is missing or not numeric" >&2
               exit 1
             fi
-            version="0.0.${GITHUB_RUN_NUMBER}"
+            version="0.0.${release_counter}"
             tag="v${version}"
           fi
 

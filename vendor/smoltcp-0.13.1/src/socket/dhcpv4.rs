@@ -563,6 +563,7 @@ impl<'a> Socket<'a> {
     {
         // note: Dhcpv4Socket is only usable in ethernet mediums, so the
         // unwrap can never fail.
+        #[allow(irrefutable_let_patterns)]
         let HardwareAddress::Ethernet(ethernet_addr) = cx.hardware_addr() else {
             panic!("using DHCPv4 socket with a non-ethernet hardware address.");
         };

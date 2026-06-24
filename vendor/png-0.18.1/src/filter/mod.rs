@@ -73,7 +73,7 @@ unsafe fn unfilter_up_sse2(previous: &[u8], current: &mut [u8]) {
     while offset + 16 <= len {
         let curr = unsafe { _mm_loadu_si128(current.as_ptr().add(offset).cast::<__m128i>()) };
         let above = unsafe { _mm_loadu_si128(previous.as_ptr().add(offset).cast::<__m128i>()) };
-        let sum = _mm_add_epi8(curr, above);
+        let sum = unsafe { _mm_add_epi8(curr, above) };
         unsafe { _mm_storeu_si128(current.as_mut_ptr().add(offset).cast::<__m128i>(), sum) };
         offset += 16;
     }
