@@ -43,12 +43,14 @@ SHARED_LINK_VERTICAL_THRESHOLD = 24.0
 ARCHITECTURE_BUCKET_PADDING = 32.0
 # Spread the full LR graph wide enough that the layout itself uses the 16:9 canvas.
 FULL_GRAPH_NODESEP = 0.62
-FULL_GRAPH_RANKSEP = 16.2
+FULL_GRAPH_RANKSEP = 55.0
 FULL_GRAPH_ASPECT_RATIO = 16 / 9
 SPLIT_GRAPH_NODESEP = 0.35
 SPLIT_GRAPH_RANKSEP = 0.55
 LEFT_WING_CRATES = {
     "core3",
+    "embedded-websocket",
+    "hyper",
     "memchr",
     "mio",
     "regex-automata",
@@ -56,6 +58,7 @@ LEFT_WING_CRATES = {
     "serde_derive",
     "serde_json",
     "socket2",
+    "smoltcp",
     "tower",
     "trueos-esp",
     "trueos-io",
@@ -64,6 +67,9 @@ LEFT_WING_CRATES = {
     "v",
     "zune-core",
     "zune-jpeg",
+}
+LEFT_SIDE_ATTACHED_PARENT_CRATES = {
+    "hyper",
 }
 ARCHITECTURE_IRRELEVANT_CRATES = {
     "log",
@@ -773,15 +779,17 @@ def full_collapse_info(
                 collapsed_leaves.add(node)
                 changed = True
 
-    root_attached_nodes = {
+    attached_nodes = {
         node
         for node in all_nodes
         if node != root
         and node not in collapsed_leaves
         and incoming_count[node] == 1
-        and incoming_parents[node] == {root}
-        and outgoing_count[node] == 1
-        and not any(child in collapsed_leaves for child in children_by_parent.get(node, ()))
+        and next(iter(incoming_parents[node])) not in collapsed_leaves
+        and (
+            incoming_parents[node] == {root}
+            or not any(child in collapsed_leaves for child in children_by_parent.get(node, ()))
+        )
     }
 
     def embedded_entry(label: str) -> EmbeddedEntry:
@@ -815,7 +823,7 @@ def full_collapse_info(
         collapsed_leaves,
         embedded_by_parent,
         shared_input_leaves,
-        root_attached_nodes,
+        attached_nodes,
     )
 
 
@@ -837,7 +845,7 @@ def render_full_dot(
         collapsed_leaves,
         embedded_by_parent,
         shared_input_leaves,
-        root_attached_nodes,
+        attached_nodes,
     ) = full_collapse_info(root, edges)
 
     left_input_leaves = {
@@ -887,7 +895,7 @@ def render_full_dot(
             f'  {node_id(label)} [label={html_label(label, embedded_ends, label_scale, label != root)}, fillcolor="{fill}", color="{color}"{margin_attr}];'
         )
     for parent, child in sorted(edges):
-        if parent == root and child in root_attached_nodes:
+        if child in attached_nodes:
             lines.append(f"  {node_id(parent)} -> {node_id(child)} [style=invis, constraint=false];")
             continue
         if parent in collapsed_leaves or child in collapsed_leaves:
@@ -962,7 +970,7 @@ def render_full_dot(
 
     lines.append(f"  // collapsed leaf ends: {len(collapsed_leaves)}")
     lines.append(f"  // shared two-input leaf ends: {len(shared_input_leaves)}")
-    lines.append(f"  // root-attached one-hop nodes: {len(root_attached_nodes)}")
+    lines.append(f"  // parent-attached one-input nodes: {len(attached_nodes)}")
     lines.append(f"  // left-wing root-shared leaf ends: {len(left_input_leaves)}")
     lines.append(f"  // pinned left-wing crates: {len(left_wing_nodes)}")
     lines.append(f"  // architecture-irrelevant bucket entries: {len(architecture_irrelevant or [])}")
@@ -976,12 +984,12 @@ def full_graph_layout(
     (
         all_nodes,
         _incoming_count,
-        _outgoing_count,
+        outgoing_count,
         incoming_parents,
         collapsed_leaves,
         embedded_by_parent,
         shared_input_leaves,
-        _root_attached_nodes,
+        _attached_nodes,
     ) = full_collapse_info(root, edges)
     visible_nodes = all_nodes - collapsed_leaves
     node_ids: dict[str, str] = {}
@@ -1306,6 +1314,7 @@ def inject_nested_shared_badges(
 def ownership_regions(
     root: str, root_children: list[str], edges: set[tuple[str, str]]
 ) -> list[dict[str, object]]:
+    return []
     adjacency: dict[str, set[str]] = defaultdict(set)
     for parent, child in edges:
         adjacency[parent].add(child)
@@ -1545,46 +1554,191 @@ def node_id_from_edge_title_endpoint(endpoint: str) -> str:
     return endpoint.split(":", 1)[0]
 
 
-def move_root_attached_nodes_to_root(root: str, edges: set[tuple[str, str]]) -> None:
+def move_attached_nodes_to_parents(root: str, edges: set[tuple[str, str]]) -> None:
     (
         _all_nodes,
         _incoming_count,
-        _outgoing_count,
-        _incoming_parents,
+        outgoing_count,
+        incoming_parents,
         _collapsed_leaves,
         _embedded_by_parent,
         _shared_input_leaves,
-        root_attached_nodes,
+        attached_nodes,
     ) = full_collapse_info(root, edges)
-    if not root_attached_nodes:
+    if not attached_nodes:
         return
 
     node_ids, _collapsed_leaves, _embedded_by_parent, _shared_input_leaves, _incoming_parents = (
         full_graph_layout(root, edges)
     )
-    _width, _height, node_bboxes, _inner_bboxes = full_svg_bboxes()
-    root_id = node_ids.get(root)
-    if not root_id or root_id not in node_bboxes:
-        return
-
-    attached = [
-        (label, node_ids[label], node_bboxes[node_ids[label]])
-        for label in root_attached_nodes
-        if label in node_ids and node_ids[label] in node_bboxes
-    ]
-    if not attached:
-        return
-
-    root_x, root_y, root_w, root_h = node_bboxes[root_id]
+    _width, _height, tx, ty, node_bboxes, _inner_bboxes, _bodies = svg_layout(FULL_SVG_PATH)
     gap = float(scaled(INNER_BUBBLE_SPACING, FULL_GRAPH_ROOT_SCALE))
-    total_h = sum(box[3] for _label, _node_id, box in attached) + gap * (len(attached) - 1)
-    next_y = root_y + max(0.0, (root_h - total_h) / 2)
-    target_x = root_x + root_w + gap
     node_delta: dict[str, tuple[float, float]] = {}
-    for _label, node_id, box in sorted(attached, key=lambda item: (item[2][1], display_label(item[0]))):
-        x, _y, _w, h = box
-        node_delta[node_id] = (target_x - x, next_y - box[1])
-        next_y += h + gap
+    attached_by_parent: dict[str, list[tuple[str, str, tuple[float, float, float, float]]]] = defaultdict(list)
+    for label in attached_nodes:
+        parent = next(iter(incoming_parents[label]))
+        if (
+            parent in node_ids
+            and node_ids[parent] in node_bboxes
+            and label in node_ids
+            and node_ids[label] in node_bboxes
+        ):
+            attached_by_parent[parent].append((label, node_ids[label], node_bboxes[node_ids[label]]))
+
+    def place_stack(
+        stack: list[tuple[str, str, tuple[float, float, float, float]]],
+        parent_box: tuple[float, float, float, float],
+        side: str,
+    ) -> None:
+        if not stack:
+            return
+        parent_x, parent_y, parent_w, parent_h = parent_box
+        columns: list[list[tuple[str, str, tuple[float, float, float, float]]]] = []
+        column_heights: list[float] = []
+        for item in sorted(stack, key=lambda item: (item[2][1], display_label(item[0]))):
+            h = item[2][3]
+            extra_h = h if not columns or not columns[-1] else h + gap
+            if columns and column_heights[-1] + extra_h > parent_h:
+                columns.append([item])
+                column_heights.append(h)
+            else:
+                if not columns:
+                    columns.append([])
+                    column_heights.append(0.0)
+                columns[-1].append(item)
+                column_heights[-1] += extra_h
+
+        previous_left = parent_x
+        previous_right = parent_x + parent_w
+        for column in columns:
+            column_h = sum(box[3] for _label, _node_id, box in column) + gap * (len(column) - 1)
+            next_y = parent_y + max(0.0, (parent_h - column_h) / 2)
+            column_w = max(box[2] for _label, _node_id, box in column)
+            if side == "left":
+                target_column_x = previous_left - gap - column_w
+                previous_left = target_column_x
+            else:
+                target_column_x = previous_right + gap
+                previous_right = target_column_x + column_w
+            for _label, node_id, box in column:
+                x, _y, w, h = box
+                target_x = (
+                    target_column_x + (column_w - w)
+                    if side == "left"
+                    else target_column_x
+                )
+                node_delta[node_id] = (target_x - x, next_y - box[1])
+                next_y += h + gap
+
+    root_id = node_ids.get(root)
+    root_attached = attached_by_parent.pop(root, [])
+    top_attached: list[tuple[str, str, tuple[float, float, float, float]]] = []
+    if root_id and root_id in node_bboxes and root_attached:
+        root_box = node_bboxes[root_id]
+        left_attached = [
+            item for item in root_attached if crate_name(item[0]) in LEFT_WING_CRATES
+        ]
+        top_attached = [
+            item
+            for item in root_attached
+            if crate_name(item[0]) not in LEFT_WING_CRATES and outgoing_count[item[0]] >= 8
+        ]
+        right_attached = [
+            item
+            for item in root_attached
+            if crate_name(item[0]) not in LEFT_WING_CRATES and item not in top_attached
+        ]
+
+        place_stack(left_attached, root_box, "left")
+        place_stack(right_attached, root_box, "right")
+
+        if top_attached:
+            root_x, root_y, root_w, _root_h = root_box
+            ordered_top = sorted(top_attached, key=lambda item: (item[2][0], display_label(item[0])))
+            total_w = sum(box[2] for _label, _node_id, box in ordered_top) + gap * (len(ordered_top) - 1)
+            next_x = root_x + (root_w - total_w) / 2
+            top_h = max(box[3] for _label, _node_id, box in ordered_top)
+            target_y = root_y - gap - top_h
+            for _label, node_id, box in ordered_top:
+                x, y, w, h = box
+                node_delta[node_id] = (next_x - x, target_y + (top_h - h) - y)
+                next_x += w + gap
+
+    def moved_node_box(label: str) -> tuple[float, float, float, float]:
+        node_id = node_ids[label]
+        x, y, w, h = node_bboxes[node_id]
+        dx, dy = node_delta.get(node_id, (0.0, 0.0))
+        return x + dx, y + dy, w, h
+
+    placed_parents: set[str] = set()
+    visiting_parents: set[str] = set()
+
+    def place_attached_children(parent: str) -> None:
+        if parent in placed_parents or parent in visiting_parents:
+            return
+        visiting_parents.add(parent)
+        if parent in attached_nodes:
+            upstream_parent = next(iter(incoming_parents[parent]))
+            if upstream_parent in attached_by_parent:
+                place_attached_children(upstream_parent)
+        if parent in attached_by_parent and parent in node_ids:
+            side = "left" if crate_name(parent) in LEFT_SIDE_ATTACHED_PARENT_CRATES else "right"
+            place_stack(attached_by_parent[parent], moved_node_box(parent), side)
+        visiting_parents.remove(parent)
+        placed_parents.add(parent)
+
+    for parent in sorted(attached_by_parent, key=display_label):
+        place_attached_children(parent)
+
+    top_node_ids = {node_id for _label, node_id, _box in top_attached}
+    moved_bboxes = {
+        node_id: (x + dx, y + dy, w, h)
+        for node_id, (x, y, w, h) in node_bboxes.items()
+        for dx, dy in [node_delta.get(node_id, (0.0, 0.0))]
+    }
+
+    def replace_svg_path_points(
+        path_d: str,
+        replacements: dict[int, tuple[float, float]],
+    ) -> str:
+        point_pattern = r"(-?[0-9]+(?:\.[0-9]+)?),(-?[0-9]+(?:\.[0-9]+)?)"
+        point_index = -1
+
+        def replace_point(match: re.Match[str]) -> str:
+            nonlocal point_index
+            point_index += 1
+            point = replacements.get(point_index)
+            if point is None:
+                return match.group(0)
+            return f"{point[0]:.2f},{point[1]:.2f}"
+
+        return re.sub(point_pattern, replace_point, path_d)
+
+    def reroute_top_attached_tail(path_d: str, tail_node: str, head_node: str) -> str:
+        tail_box = moved_bboxes.get(tail_node)
+        head_box = moved_bboxes.get(head_node)
+        if not tail_box or not head_box:
+            return path_d
+        tail_x, tail_y, tail_w, tail_h = tail_box
+        head_x, head_y, head_w, head_h = head_box
+        tail_cx = tail_x + tail_w / 2
+        head_cx = head_x + head_w / 2
+        head_cy = head_y + head_h / 2
+        side_threshold = tail_w * 0.30
+        control = max(gap * 3, 160.0)
+        if head_cx < tail_cx - side_threshold:
+            anchor = (tail_x, tail_y + tail_h / 2)
+            control_point = (anchor[0] - control, anchor[1])
+        elif head_cx > tail_cx + side_threshold:
+            anchor = (tail_x + tail_w, tail_y + tail_h / 2)
+            control_point = (anchor[0] + control, anchor[1])
+        else:
+            anchor_x = min(max(head_cx, tail_x + tail_w * 0.20), tail_x + tail_w * 0.80)
+            anchor = (anchor_x, tail_y)
+            control_point = (anchor[0], anchor[1] - control)
+        raw_anchor = (anchor[0] - tx, anchor[1] - ty)
+        raw_control = (control_point[0] - tx, control_point[1] - ty)
+        return replace_svg_path_points(path_d, {0: raw_anchor, 1: raw_control})
 
     svg = FULL_SVG_PATH.read_text()
     for node_id, (dx, dy) in sorted(node_delta.items()):
@@ -1609,16 +1763,14 @@ def move_root_attached_nodes_to_root(root: str, edges: set[tuple[str, str]]) -> 
         ):
             return edge_group
 
-        edge_group = re.sub(
-            r'(<path\b[^>]*\bd=")([^"]+)(")',
-            lambda path: (
-                f"{path.group(1)}"
-                f"{shifted_svg_path_endpoint(path.group(2), tail_delta, head_delta)}"
-                f"{path.group(3)}"
-            ),
-            edge_group,
-            count=1,
-        )
+        def move_path(path: re.Match[str]) -> str:
+            shifted_tail_delta = (0.0, 0.0) if tail_node in top_node_ids else tail_delta
+            path_d = shifted_svg_path_endpoint(path.group(2), shifted_tail_delta, head_delta)
+            if tail_node in top_node_ids:
+                path_d = reroute_top_attached_tail(path_d, tail_node, head_node)
+            return f"{path.group(1)}{path_d}{path.group(3)}"
+
+        edge_group = re.sub(r'(<path\b[^>]*\bd=")([^"]+)(")', move_path, edge_group, count=1)
         if abs(head_delta[0]) > 0.01 or abs(head_delta[1]) > 0.01:
             edge_group = re.sub(
                 r'(<polygon\b[^>]*\bpoints=")([^"]+)(")',
@@ -1633,6 +1785,22 @@ def move_root_attached_nodes_to_root(root: str, edges: set[tuple[str, str]]) -> 
         return edge_group
 
     svg = re.sub(r'<g id="edge\d+" class="edge">.*?</g>', move_edge_endpoint, svg, flags=re.S)
+    lifted_top_nodes: list[str] = []
+    for node_id in sorted(top_node_ids):
+        pattern = (
+            rf'(?:<!-- {re.escape(node_id)} -->\n)?'
+            rf'<g id="node\d+" class="node"[^>]*>\s*<title>{re.escape(node_id)}</title>.*?</g>\n'
+        )
+        match = re.search(pattern, svg, re.S)
+        if not match:
+            continue
+        lifted_top_nodes.append(match.group(0))
+        svg = svg[: match.start()] + svg[match.end() :]
+    if lifted_top_nodes:
+        graph_end = svg.rfind("</g>\n</svg>")
+        if graph_end == -1:
+            raise RuntimeError(f"could not find graph end in {FULL_SVG_PATH}")
+        svg = svg[:graph_end] + "".join(lifted_top_nodes) + svg[graph_end:]
     FULL_SVG_PATH.write_text(svg)
 
 
@@ -1696,8 +1864,9 @@ def inject_full_svg_regions(root: str, root_children: list[str], edges: set[tupl
         svg,
         flags=re.S,
     )
+    regions = ownership_regions(root, root_children, edges)
     region_lines = ['<g id="ownership-regions" class="ownership-regions">']
-    for region in ownership_regions(root, root_children, edges):
+    for region in regions:
         x = float(region["x"]) - tx
         y = float(region["y"]) - ty
         dash = "4 9" if "rustcrypto" in str(region["class_name"]) else "12 10"
@@ -1717,7 +1886,7 @@ def inject_full_svg_regions(root: str, root_children: list[str], edges: set[tupl
             ]
         )
     region_lines.append("</g>")
-    region_markup = "\n".join(region_lines) + "\n"
+    region_markup = "\n".join(region_lines) + "\n" if regions else ""
 
     svg = re.sub(
         r'<g id="ownership-regions" class="ownership-regions">.*?</g>\n',
@@ -1942,16 +2111,22 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
       width: 100%;
       accent-color: var(--hot);
     }}
+    @keyframes rootPulse {{
+      0%, 100% {{ fill: rgba(27, 120, 166, 0.06); }}
+      50% {{ fill: rgba(27, 120, 166, 0.50); }}
+    }}
     .root-hotspot rect {{
       fill: rgba(27, 120, 166, 0.06);
       stroke: transparent;
       stroke-width: {GRAPH_EDGE_PEN_WIDTH};
       pointer-events: all;
+      animation: rootPulse 3.2s ease-in-out infinite;
       transition: fill 120ms ease, stroke 120ms ease;
     }}
     .root-hotspot:hover rect,
     .root-hotspot:focus rect {{
-      fill: rgba(27, 120, 166, 0.25);
+      animation: none;
+      fill: rgba(27, 120, 166, 0.50);
       stroke: var(--hot);
     }}
     dialog {{
@@ -2263,7 +2438,7 @@ def main() -> None:
         )
     )
     subprocess.run(["dot", "-Tsvg", str(FULL_DOT_PATH), "-o", str(FULL_SVG_PATH)], check=True)
-    move_root_attached_nodes_to_root(root, graph_edges)
+    move_attached_nodes_to_parents(root, graph_edges)
     inject_full_svg_regions(root, graph_root_children, graph_edges)
     full_node_ids, _collapsed_leaves, full_embedded_by_parent, _shared_input_leaves, _incoming_parents = (
         full_graph_layout(root, graph_edges)
