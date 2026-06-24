@@ -216,16 +216,61 @@ jobs:
           set -euo pipefail
 
           dist="${{ steps.assets.outputs.dist }}"
+          export TRUEOS_RELEASE_DIST="${dist}"
 
-          python3 tools/release/vanity_ed25519.py pub "${TRUEOS_RELEASE_KEY_PATH}" > "${dist}/TRUEOS-release-public-key.json"
+          python3 - <<'PY'
+          import base64
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
 
-          while IFS= read -r -d '' file; do
-            python3 tools/release/vanity_ed25519.py sign "${TRUEOS_RELEASE_KEY_PATH}" "${file}" --out "${file}.trueos-sig.json"
-          done < <(find "${dist}" -maxdepth 1 -type f \
-            ! -name '*.trueos-sig.json' \
-            ! -name 'TRUEOS-release-public-key.json' \
-            ! -name 'release-notes.md' \
-            -print0 | sort -z)
+          from cryptography.hazmat.primitives.asymmetric import ed25519
+
+          def b64u(data):
+              return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+          def b64u_decode(text):
+              return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+          key_path = Path(os.environ["TRUEOS_RELEASE_KEY_PATH"])
+          dist = Path(os.environ["TRUEOS_RELEASE_DIST"])
+          key_data = json.loads(key_path.read_text(encoding="utf-8"))
+
+          public = {
+              "schema": "trueos-ed25519-public-key-v1",
+              "algorithm": "ed25519",
+              "id": key_data["id"],
+              "public_key": key_data["public_key"],
+          }
+          (dist / "TRUEOS-release-public-key.json").write_text(
+              json.dumps(public, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+
+          private_key = ed25519.Ed25519PrivateKey.from_private_bytes(
+              b64u_decode(key_data["private_key"])
+          )
+
+          skip = {"TRUEOS-release-public-key.json", "release-notes.md"}
+          for path in sorted(dist.iterdir()):
+              if not path.is_file() or path.name in skip or path.name.endswith(".trueos-sig.json"):
+                  continue
+              payload = path.read_bytes()
+              signature = {
+                  "schema": "trueos-ed25519-signature-v1",
+                  "algorithm": "ed25519",
+                  "key_id": key_data["id"],
+                  "public_key": key_data["public_key"],
+                  "file": path.name,
+                  "sha256": hashlib.sha256(payload).hexdigest(),
+                  "signature": b64u(private_key.sign(payload)),
+              }
+              Path(str(path) + ".trueos-sig.json").write_text(
+                  json.dumps(signature, indent=2, sort_keys=True) + "\n",
+                  encoding="utf-8",
+              )
+          PY
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v6
