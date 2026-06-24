@@ -8,7 +8,7 @@ digraph "embassy-sync-v0.8.0" {
   n3 [label=<<FONT POINT-SIZE="13"><B>stable_deref_trait</B></FONT><BR/><FONT POINT-SIZE="12">1.2.1</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
   out0 [label=<to acpi-v6.1.1.svg<BR/><B>byteorder</B><BR/>1.5.0>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n2 -> out0 [style=dashed, color="#d19922"];
-  out1 [label=<to aes-v0.8.4.svg<BR/><B>cfg-if</B><BR/>1.0.4>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  out1 [label=<to alsa-v0.11.0.svg<BR/><B>cfg-if</B><BR/>1.0.4>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out1 [style=dashed, color="#d19922"];
   out2 [label=<to crab-usb-v0.9.1.svg<BR/><B>futures-core</B><BR/>0.3.32<BR/><B>futures-sink</B><BR/>0.3.32>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out2 [style=dashed, color="#d19922"];

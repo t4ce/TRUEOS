@@ -656,6 +656,24 @@ pub fn present_rgba_primary_center_unscaled(
     )
 }
 
+pub fn present_rgba_primary_center_unscaled_bg(
+    src: &[u8],
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+    bg_xrgb: u32,
+    reason: &str,
+) -> bool {
+    self::display::present_rgba_primary_center_unscaled_bg(
+        src,
+        src_width,
+        src_height,
+        src_pitch_bytes,
+        bg_xrgb,
+        reason,
+    )
+}
+
 pub fn blend_rgba_primary_rect(
     src: &[u8],
     src_width: u32,

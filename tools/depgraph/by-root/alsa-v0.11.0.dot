@@ -3,10 +3,26 @@ digraph "alsa-v0.11.0" {
   node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.13,0.10", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
   edge [color="#9aa8b8", arrowsize=0.55, penwidth=7.2];
   n0 [label=<<FONT POINT-SIZE="13"><B>alsa</B></FONT><BR/><FONT POINT-SIZE="12">0.11.0</FONT><BR/><FONT POINT-SIZE="11">/vendor/alsa-0.11.0</FONT>>, fillcolor="#dff3ff", color="#1b78a6"];
+  n1 [label=<<FONT POINT-SIZE="13"><B>cfg-if</B></FONT><BR/><FONT POINT-SIZE="12">1.0.4</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n0 -> n1;
   out0 [label=<to acpi-v6.1.1.svg<BR/><B>bitflags</B><BR/>2.13.0>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out0 [style=dashed, color="#d19922"];
-  out1 [label=<to aes-v0.8.4.svg<BR/><B>cfg-if</B><BR/>1.0.4>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
-  n0 -> out1 [style=dashed, color="#d19922"];
+  in1 [label=<from crc32fast-v1.5.0.svg<BR/><B>cfg-if</B><BR/>1.0.4>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in1 -> n1 [style=dashed, color="#4b8fc5"];
+  in2 [label=<from dma-api-v0.7.3.svg<BR/><B>cfg-if</B><BR/>1.0.4>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in2 -> n1 [style=dashed, color="#4b8fc5"];
+  in3 [label=<from embassy-sync-v0.8.0.svg<BR/><B>cfg-if</B><BR/>1.0.4>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in3 -> n1 [style=dashed, color="#4b8fc5"];
+  in4 [label=<from embedded-websocket-v0.9.4.svg<BR/><B>cfg-if</B><BR/>1.0.4>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in4 -> n1 [style=dashed, color="#4b8fc5"];
+  in5 [label=<from getrandom-v0.2.17.svg<BR/><B>cfg-if</B><BR/>1.0.4>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in5 -> n1 [style=dashed, color="#4b8fc5"];
+  in6 [label=<from rustls-rustcrypto-v0.0.2-alpha.svg<BR/><B>cfg-if</B><BR/>1.0.4>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in6 -> n1 [style=dashed, color="#4b8fc5"];
+  in7 [label=<from sha2-v0.10.9.svg<BR/><B>cfg-if</B><BR/>1.0.4>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in7 -> n1 [style=dashed, color="#4b8fc5"];
+  in8 [label=<from smoltcp-v0.13.1.svg<BR/><B>cfg-if</B><BR/>1.0.4>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in8 -> n1 [style=dashed, color="#4b8fc5"];
   // collapsed leaf ends: 0
   // centered two-input leaves: 0
   // nested two-input leaves: 0

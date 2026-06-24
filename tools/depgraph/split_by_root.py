@@ -2150,7 +2150,6 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
         full_graph_layout(root, edges)
     )
     width, height, node_bboxes, inner_bboxes = full_svg_bboxes()
-    display_width, display_height = display_size(width, height)
     inline_svg = inline_full_svg_markup(node_ids)
     root_node_id = node_ids.get(root)
     root_bbox = node_bboxes.get(root_node_id) if root_node_id else None
@@ -2231,12 +2230,14 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
         for hotspot in hotspots
     )
     toggles = []
+    toggle_extents: list[tuple[float, float, float, float]] = []
     for target in arrow_targets:
-        size = min(76.0, max(34.0, min(float(target["w"]), float(target["h"])) * 0.22))
-        inset = max(8.0, size * 0.22)
-        x = float(target["x"]) + inset
-        y = float(target["y"]) + inset
+        size = min(152.0, max(68.0, min(float(target["w"]), float(target["h"])) * 0.44))
+        gap = max(18.0, size * 0.22)
+        x = float(target["x"])
+        y = float(target["y"]) - size - gap
         stroke = max(4.0, size * 0.11)
+        outer_gap = gap + stroke / 2
         mark = (
             f"M{x + size * 0.25:.2f},{y + size * 0.53:.2f} "
             f"L{x + size * 0.43:.2f},{y + size * 0.71:.2f} "
@@ -2249,7 +2250,19 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
         <path class="arrow-toggle-mark" d="{mark}" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="{stroke:.2f}"></path>
       </g>'''
         )
+        toggle_extents.append((x - outer_gap, y - outer_gap, x + size + outer_gap, y + size + outer_gap))
     toggle_markup = "\n".join(toggles)
+    view_min_x = min([0.0, *(extent[0] for extent in toggle_extents)])
+    view_min_y = min([0.0, *(extent[1] for extent in toggle_extents)])
+    view_max_x = max([width, *(extent[2] for extent in toggle_extents)])
+    view_max_y = max([height, *(extent[3] for extent in toggle_extents)])
+    view_width = view_max_x - view_min_x
+    view_height = view_max_y - view_min_y
+    display_width, display_height = display_size(view_width, view_height)
+    content_offset_x = -view_min_x
+    content_offset_y = -view_min_y
+    root_focus_x += content_offset_x
+    root_focus_y += content_offset_y
     arrow_roots_json = json.dumps(arrow_roots, ensure_ascii=False).replace("</", "<\\/")
     root_json = json.dumps(root, ensure_ascii=False).replace("</", "<\\/")
     return f"""<!doctype html>
@@ -2447,10 +2460,12 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
     </div>
   </section>
   <div class="viewport">
-    <svg id="graph" viewBox="0 0 {width} {height}" width="{display_width}" height="{display_height}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <svg id="graph" viewBox="0 0 {view_width:.2f} {view_height:.2f}" width="{display_width}" height="{display_height}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+      <g transform="translate({content_offset_x:.2f} {content_offset_y:.2f})">
 {inline_svg}
 {rects}
 {toggle_markup}
+      </g>
     </svg>
   </div>
   <dialog id="root-dialog">

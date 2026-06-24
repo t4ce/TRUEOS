@@ -7,6 +7,7 @@ const PRESENT_SCALE: usize = 2;
 const PRESENT_WIDTH: usize = crate::trueos_gboi::gpu::SCREEN_W * PRESENT_SCALE;
 const PRESENT_HEIGHT: usize = crate::trueos_gboi::gpu::SCREEN_H * PRESENT_SCALE;
 const PRESENT_PITCH_BYTES: usize = PRESENT_WIDTH * core::mem::size_of::<u32>();
+const PRESENT_BG_XRGB: u32 = 0x00FF_FFFF;
 
 static GBOY_RUN_GENERATION: AtomicU32 = AtomicU32::new(0);
 
@@ -66,11 +67,12 @@ async fn run_gboy(
         emulator.render(&mut argb, PRESENT_WIDTH, PRESENT_HEIGHT);
         argb_to_rgba(&argb, &mut rgba);
 
-        let presented = crate::intel::present_rgba_primary_center_unscaled(
+        let presented = crate::intel::present_rgba_primary_center_unscaled_bg(
             &rgba,
             PRESENT_WIDTH as u32,
             PRESENT_HEIGHT as u32,
             PRESENT_PITCH_BYTES,
+            PRESENT_BG_XRGB,
             "gboy",
         );
         frame = frame.wrapping_add(1);
