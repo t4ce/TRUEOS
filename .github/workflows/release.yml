@@ -154,11 +154,13 @@ jobs:
 
           cp bld/TrueOS.7z "${dist}/TrueOS-${version}.7z"
           cp bld/trueos-release/TRUEOS.provenance.json "${dist}/TRUEOS-${version}.provenance.json"
-          cp bld/trueos-release/TRUEOS.source-files.sha256 "${dist}/TRUEOS-${version}.source-files.sha256"
+          if [[ -f bld/trueos-release/TRUEOS.source-files.sha256 ]]; then
+            cp bld/trueos-release/TRUEOS.source-files.sha256 "${dist}/TRUEOS-${version}.source-files.sha256"
+          fi
 
           (
             cd "${dist}"
-            sha256sum TrueOS-${version}.7z TRUEOS-${version}.provenance.json TRUEOS-${version}.source-files.sha256 > SHA256SUMS
+            sha256sum TrueOS-${version}.7z TRUEOS-${version}.provenance.json $([[ -f TRUEOS-${version}.source-files.sha256 ]] && printf '%s' TRUEOS-${version}.source-files.sha256) > SHA256SUMS
           )
 
           record_sha256="$(python3 -c 'import json; print(json.load(open("bld/trueos-release/TRUEOS.provenance.json", encoding="utf-8"))["record_sha256"])')"

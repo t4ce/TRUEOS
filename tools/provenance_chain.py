@@ -27,7 +27,9 @@ from typing import Any
 SCHEMA = "trueos.provenance-chain.v2"
 SOURCE_MANIFEST_KIND = "trueos-source-manifest-v2"
 SOURCE_MODE_GIT_INDEX = "git-index"
+SOURCE_MODE_GIT_COMMIT = "git-commit"
 SOURCE_MODE_FILESYSTEM = "filesystem-v1"
+SOURCE_MODE_AUTO = "auto"
 EXCLUDED_DIRS = {
     ".git",
     ".limine",
@@ -223,6 +225,11 @@ def source_entries_git_index(root: Path) -> tuple[list[str], int, int]:
     return rows, file_count, bytes_hashed
 
 
+def gitlink_entries(root: Path) -> list[str]:
+    gitlinks = git_text(root, ["ls-files", "-s"]) or ""
+    return [line for line in gitlinks.splitlines() if line.startswith("160000 ")]
+
+
 def source_manifest_headers(root: Path, mode: str) -> list[str]:
     if mode != SOURCE_MODE_GIT_INDEX:
         return []
@@ -263,6 +270,35 @@ def write_source_manifest(
         info["git_commit"] = git_text(root, ["rev-parse", "HEAD"])
         info["git_tree"] = git_text(root, ["rev-parse", "HEAD^{tree}"])
     return info
+
+
+def source_identity_git_commit(root: Path) -> dict[str, Any]:
+    if not require_git(root):
+        raise RuntimeError("git-commit source identity needs a Git checkout")
+
+    commit = git_text(root, ["rev-parse", "HEAD"])
+    tree = git_text(root, ["rev-parse", "HEAD^{tree}"])
+    gitlinks = gitlink_entries(root)
+    gitlinks_text = "\n".join(gitlinks)
+    identity = {
+        "kind": "trueos-source-identity-v1",
+        "source_mode": SOURCE_MODE_GIT_COMMIT,
+        "git_commit": commit,
+        "git_tree": tree,
+        "gitlinks": gitlinks,
+    }
+
+    return {
+        "path": None,
+        "mode": SOURCE_MODE_GIT_COMMIT,
+        "sha256": sha256_bytes(canonical_json(identity)),
+        "file_count": 0,
+        "bytes_hashed": 0,
+        "git_commit": commit,
+        "git_tree": tree,
+        "gitlinks_sha256": sha256_bytes(gitlinks_text.encode("utf-8")),
+        "description": "compact Git commit/tree identity; no per-file source manifest sidecar",
+    }
 
 
 def artifact_record(root: Path, path: Path) -> dict[str, Any]:
@@ -320,8 +356,7 @@ def gitless_command(argv: list[str], root: Path) -> str | None:
 def collect_git(root: Path) -> dict[str, Any]:
     status = git_text(root, ["status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"]) or ""
     submodules = git_text(root, ["submodule", "status", "--recursive"]) or ""
-    gitlinks = git_text(root, ["ls-files", "-s"]) or ""
-    gitlink_entries = [line for line in gitlinks.splitlines() if line.startswith("160000 ")]
+    gitlinks = gitlink_entries(root)
     remotes = git_text(root, ["remote", "-v"]) or ""
     return {
         "commit": git_text(root, ["rev-parse", "HEAD"]),
@@ -333,8 +368,8 @@ def collect_git(root: Path) -> dict[str, Any]:
         "status_short": status.splitlines(),
         "submodules_sha256": sha256_bytes(submodules.encode("utf-8")),
         "submodules": submodules.splitlines(),
-        "gitlinks_sha256": sha256_bytes("\n".join(gitlink_entries).encode("utf-8")),
-        "gitlinks": gitlink_entries,
+        "gitlinks_sha256": sha256_bytes("\n".join(gitlinks).encode("utf-8")),
+        "gitlinks": gitlinks,
         "remotes": remotes.splitlines(),
     }
 
@@ -360,6 +395,12 @@ def resolve_record_path(root: Path, record_path: str) -> Path:
     return path if path.is_absolute() else root / path
 
 
+def resolve_source_mode(root: Path, requested: str) -> str:
+    if requested == SOURCE_MODE_AUTO:
+        return SOURCE_MODE_GIT_INDEX if require_git(root) else SOURCE_MODE_FILESYSTEM
+    return requested
+
+
 def build_record(args: argparse.Namespace) -> int:
     root = Path(args.source_root).resolve()
     out_dir = Path(args.out_dir).resolve()
@@ -376,12 +417,16 @@ def build_record(args: argparse.Namespace) -> int:
             print("commit, stash, or remove these changes before creating release provenance", file=sys.stderr)
             return 2
 
-    source_mode = SOURCE_MODE_GIT_INDEX if require_git(root) else SOURCE_MODE_FILESYSTEM
+    source_mode = resolve_source_mode(root, args.source_manifest)
 
     stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ") + f"-{os.getpid()}"
-    source_manifest_path = out_dir / f"source-files-{stamp}.sha256"
+    source_manifest_path: Path | None = None
     try:
-        source_manifest = write_source_manifest(root, source_manifest_path, source_mode)
+        if source_mode == SOURCE_MODE_GIT_COMMIT:
+            source_manifest = source_identity_git_commit(root)
+        else:
+            source_manifest_path = out_dir / f"source-files-{stamp}.sha256"
+            source_manifest = write_source_manifest(root, source_manifest_path, source_mode)
     except (RuntimeError, ValueError) as err:
         print(f"error: failed to write source manifest: {err}", file=sys.stderr)
         return 2
@@ -420,11 +465,21 @@ def build_record(args: argparse.Namespace) -> int:
     record_path = out_dir / f"record-{stamp}-{record_hash[:16]}.json"
     record_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     shutil.copy2(record_path, out_dir / "latest.json")
-    shutil.copy2(source_manifest_path, out_dir / "latest.source-files.sha256")
+    latest_manifest_path = out_dir / "latest.source-files.sha256"
+    if source_manifest_path is not None:
+        shutil.copy2(source_manifest_path, latest_manifest_path)
+    else:
+        try:
+            latest_manifest_path.unlink()
+        except FileNotFoundError:
+            pass
 
     print(f"provenance_record={record_path}")
     print(f"record_sha256={record_hash}")
-    print(f"source_manifest_sha256={source_manifest['sha256']}")
+    if source_manifest_path is not None:
+        print(f"source_manifest_sha256={source_manifest['sha256']}")
+    else:
+        print(f"source_identity_sha256={source_manifest['sha256']}")
     for name, artifact in artifacts.items():
         print(f"{name}_sha256={artifact['sha256']}")
     return 0
@@ -445,38 +500,41 @@ def verify_record(args: argparse.Namespace) -> int:
         ok = False
 
     manifest_info = record.get("source_manifest", {})
-    manifest_name = manifest_info.get("path")
-    manifest_candidates = []
-    if isinstance(manifest_name, str):
-        manifest_candidates.append(record_path.parent / manifest_name)
-    manifest_candidates.append(record_path.parent / "TRUEOS.source-files.sha256")
-    manifest_candidates.append(record_path.parent / "latest.source-files.sha256")
-    manifest_path = next((path for path in manifest_candidates if path.exists()), None)
-    if manifest_path is None or not manifest_path.exists():
-        print("source manifest missing next to record", file=sys.stderr)
-        ok = False
-    else:
-        manifest_hash = sha256_bytes(manifest_path.read_bytes())
-        if manifest_hash != manifest_info.get("sha256"):
-            print("stored source manifest hash mismatch", file=sys.stderr)
-            ok = False
-
-    check_manifest = record_path.parent / ".verify-source-files.sha256"
     source_mode = manifest_info.get("mode")
     if not isinstance(source_mode, str):
         source_mode = SOURCE_MODE_FILESYSTEM
     try:
-        recomputed = write_source_manifest(root, check_manifest, source_mode)
+        if source_mode == SOURCE_MODE_GIT_COMMIT:
+            recomputed = source_identity_git_commit(root)
+        else:
+            manifest_name = manifest_info.get("path")
+            manifest_candidates = []
+            if isinstance(manifest_name, str):
+                manifest_candidates.append(record_path.parent / manifest_name)
+            manifest_candidates.append(record_path.parent / "TRUEOS.source-files.sha256")
+            manifest_candidates.append(record_path.parent / "latest.source-files.sha256")
+            manifest_path = next((path for path in manifest_candidates if path.exists()), None)
+            if manifest_path is None or not manifest_path.exists():
+                print("source manifest missing next to record", file=sys.stderr)
+                ok = False
+            else:
+                manifest_hash = sha256_bytes(manifest_path.read_bytes())
+                if manifest_hash != manifest_info.get("sha256"):
+                    print("stored source manifest hash mismatch", file=sys.stderr)
+                    ok = False
+
+            check_manifest = record_path.parent / ".verify-source-files.sha256"
+            recomputed = write_source_manifest(root, check_manifest, source_mode)
+            try:
+                check_manifest.unlink()
+            except FileNotFoundError:
+                pass
     except (RuntimeError, ValueError) as err:
-        print(f"source tree manifest failed: {err}", file=sys.stderr)
+        print(f"source identity check failed: {err}", file=sys.stderr)
         return 1
-    try:
-        check_manifest.unlink()
-    except FileNotFoundError:
-        pass
     if recomputed.get("sha256") != manifest_info.get("sha256"):
         print(
-            f"source tree hash mismatch: expected {manifest_info.get('sha256')}, "
+            f"source identity hash mismatch: expected {manifest_info.get('sha256')}, "
             f"got {recomputed.get('sha256')}",
             file=sys.stderr,
         )
@@ -512,6 +570,17 @@ def main(argv: list[str]) -> int:
     attest.add_argument("--build-info")
     attest.add_argument("--require-clean", action="store_true", help="refuse dirty Git worktrees")
     attest.add_argument("--allow-dirty", action="store_true", help="accepted for explicit local/dev attestations")
+    attest.add_argument(
+        "--source-manifest",
+        choices=[
+            SOURCE_MODE_AUTO,
+            SOURCE_MODE_GIT_INDEX,
+            SOURCE_MODE_GIT_COMMIT,
+            SOURCE_MODE_FILESYSTEM,
+        ],
+        default=SOURCE_MODE_AUTO,
+        help="source identity mode; git-commit avoids the per-file source-files sidecar",
+    )
     attest.set_defaults(func=build_record)
 
     verify = sub.add_parser("verify", help="verify a provenance record against local files")
