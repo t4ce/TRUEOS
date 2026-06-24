@@ -35,6 +35,7 @@ mod exceptions;
 #[path = "exceptions_disabled.rs"]
 mod exceptions;
 mod executor_cache;
+mod gb_demo;
 mod globalog;
 #[cfg(target_arch = "x86_64")]
 mod hv;
@@ -75,6 +76,8 @@ mod stackkeeper;
 mod std_abi_shim;
 mod surfer;
 mod tga;
+#[path = "../crates/trueos-gboi/mod.rs"]
+mod trueos_gboi;
 mod tst;
 #[path = "tst/audio_live_http.rs"]
 mod tst_audio_live_http;

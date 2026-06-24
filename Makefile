@@ -48,6 +48,8 @@ HUC_FW_HOST_PATH ?= /lib/firmware/i915/tgl_huc.bin.zst
 HUC_FW_ISO_REL_PATH ?= EFI/BOOT/tgl_huc.bin
 HORIZON_BP_HOST_PATH ?= ../TRUEOS-Blueprints/dist/horizon.bp
 HORIZON_BP_ISO_REL_PATH ?= EFI/BOOT/apps/horizon.bp
+GB_ROM_HOST_PATH ?=
+GB_ROM_ISO_REL_PATH ?= EFI/BOOT/apps/game.gb
 ENABLE_BLUEPRINTS ?= 0
 QEMU_RUNNER := tools/qemu/run.sh
 QEMU_BIN ?= qemu-system-x86_64
@@ -234,6 +236,18 @@ iso: artifacts images limine
 	else \
 		echo "iso: skipping Blueprint modules (ENABLE_BLUEPRINTS=0)"; \
 	fi
+	@if [ -n "$(GB_ROM_HOST_PATH)" ]; then \
+		if [ ! -f "$(GB_ROM_HOST_PATH)" ]; then \
+			echo "error: Game Boy ROM not found at $(GB_ROM_HOST_PATH)"; \
+			exit 1; \
+		fi; \
+		mkdir -p "$(ISO_BOOT_DIR)/$(dir $(GB_ROM_ISO_REL_PATH))"; \
+		cp "$(GB_ROM_HOST_PATH)" "$(ISO_BOOT_DIR)/$(GB_ROM_ISO_REL_PATH)"; \
+		mkdir -p "$(ISO_DIR)/$(dir $(GB_ROM_ISO_REL_PATH))"; \
+		cp "$(GB_ROM_HOST_PATH)" "$(ISO_DIR)/$(GB_ROM_ISO_REL_PATH)"; \
+	else \
+		echo "iso: skipping Game Boy ROM module (GB_ROM_HOST_PATH empty)"; \
+	fi
 	cp "$(LIMINE_CFG)" "$(LIMINE_CFG_GENERATED)"
 	@if [ -f "$(ISO_BOOT_DIR)/$(DMC_FW_ISO_REL_PATH)" ]; then \
 		printf '%s\n%s\n' \
@@ -255,6 +269,12 @@ iso: artifacts images limine
 		printf '%s\n%s\n' \
 			"module_path: boot():/$(HORIZON_BP_ISO_REL_PATH)" \
 			"module_string: trueos.app.horizon" \
+			>> "$(LIMINE_CFG_GENERATED)"; \
+	fi
+	@if [ -n "$(GB_ROM_HOST_PATH)" ]; then \
+		printf '%s\n%s\n' \
+			"module_path: boot():/$(GB_ROM_ISO_REL_PATH)" \
+			"module_string: trueos.app.gb_rom" \
 			>> "$(LIMINE_CFG_GENERATED)"; \
 	fi
 	@if [ "$(GUC_FW_ISO_REL_PATH)" != "EFI/BOOT/adlp_guc_70.bin" ]; then \

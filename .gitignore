@@ -14,4 +14,7 @@ yelly.mp4
 tools/*.gguf
 tinyllama/
 .codex_tmp/
+roms/
+*.gb
+*.gbc
 *_pre_exec_handle_14_off_0x0_len_0x8000000.bin
