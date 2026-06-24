@@ -1,5 +1,5 @@
 digraph trueos_depth_graph {
-  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.62, ranksep=61.0];
+  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.62, ranksep=55.0];
   node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.13,0.10", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
   edge [color="#9aa8b8", arrowsize=0.55, penwidth=7.2];
   n0 [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="0"><TR><TD><FONT POINT-SIZE="117"><B>TRUEOS</B></FONT></TD></TR>
