@@ -27,25 +27,10 @@ Think of TRUE OS as the world’s fast-moving “entropy dividend”:
 A constant influx of resources, money, and safety.
 ```
 
-# Setup to build ELF + ISO via makefile make (run, iso, release)
-## Linux (Ubuntu)
-> [!TIP]
-> This is the Desktop ubuntu installation to build os:
-```
-       Icon name: computer-desktop
-         Chassis: desktop 🖥️
-      Machine ID: 79508dd77fbe43d9b1fb0255a0098481
-         Boot ID: 60d5c1fcf425427bb51bf64e8e17a778
-Operating System: Ubuntu 26.04 LTS                  
-          Kernel: Linux 7.0.0-22-generic
-    Architecture: x86-64
- Hardware Vendor: Micro-Star International Co., Ltd.
-  Hardware Model: MS-7E03
-Hardware Version: 1.0
-Firmware Version: 1.B2
-   Firmware Date: Thu 2024-05-30
-    Firmware Age: 2y 3w 1d     
-```
+# The Release Versions are created entirely Upstream, using the GitHub Actions
+> [!Note]
+> Makes it impossible to alter the build tools
+> The sourcefiles are signed and included
 
 ### C Tools
 ```
