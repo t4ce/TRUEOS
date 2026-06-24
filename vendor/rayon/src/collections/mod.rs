@@ -14,7 +14,7 @@ macro_rules! into_par_vec {
             type Iter = $iter<$($i),*>;
 
             fn into_par_iter(self) -> Self::Iter {
-                use std::iter::FromIterator;
+                use core::iter::FromIterator;
                 $iter { inner: Vec::from_iter(self).into_par_iter() }
             }
         }
@@ -33,8 +33,8 @@ use self::drain_guard::DrainGuard;
 
 mod drain_guard {
     use crate::iter::ParallelDrainRange;
-    use std::mem;
-    use std::ops::RangeBounds;
+    use core::mem;
+    use core::ops::RangeBounds;
 
     /// A proxy for draining a collection by converting to a `Vec` and back.
     ///

@@ -1,7 +1,7 @@
 use super::plumbing::*;
 use super::*;
 
-use std::fmt::{self, Debug};
+use core::fmt::{self, Debug};
 
 /// `Update` is an iterator that mutates the elements of an
 /// underlying iterator before they are yielded.
@@ -297,7 +297,7 @@ where
     // if possible, re-use inner iterator specializations in collect
     fn collect<C>(self) -> C
     where
-        C: ::std::iter::FromIterator<Self::Item>,
+        C: ::core::iter::FromIterator<Self::Item>,
     {
         self.base.map(apply(self.update_op)).collect()
     }

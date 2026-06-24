@@ -13,12 +13,12 @@ use super::IndexedParallelIterator;
 /// the plumbing README][r] for more details.
 ///
 /// [r]: https://github.com/rayon-rs/rayon/blob/main/src/iter/plumbing/README.md#producer-callback
-/// [FnOnce]: std::ops::FnOnce
+/// [FnOnce]: core::ops::FnOnce
 pub trait ProducerCallback<T> {
     /// The type of value returned by this callback. Analogous to
     /// [`Output` from the `FnOnce` trait][Output].
     ///
-    /// [Output]: std::ops::FnOnce::Output
+    /// [Output]: core::ops::FnOnce::Output
     type Output;
 
     /// Invokes the callback with the given producer as argument. The

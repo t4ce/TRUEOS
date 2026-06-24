@@ -1,8 +1,8 @@
 #![cfg(test)]
 
 use crate::ThreadPoolBuilder;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use alloc::sync::Arc;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::channel;
 use std::{thread, time};
 

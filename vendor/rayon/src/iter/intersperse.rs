@@ -1,7 +1,7 @@
 use super::plumbing::*;
 use super::*;
-use std::cell::Cell;
-use std::iter::{self, Fuse};
+use core::cell::Cell;
+use core::iter::{self, Fuse};
 
 /// `Intersperse` is an iterator that inserts a particular item between each
 /// item of the adapted iterator.  This struct is created by the

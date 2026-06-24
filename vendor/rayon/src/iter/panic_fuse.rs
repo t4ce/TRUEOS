@@ -1,6 +1,6 @@
 use super::plumbing::*;
 use super::*;
-use std::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 /// `PanicFuse` is an adaptor that wraps an iterator with a fuse in case

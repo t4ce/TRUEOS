@@ -3,7 +3,7 @@
 /** ```compile_fail,E0277
 
 use rayon::prelude::*;
-use std::ptr::null;
+use core::ptr::null;
 
 #[derive(Copy, Clone)]
 struct NoSend(*const ());
@@ -22,7 +22,7 @@ mod map {}
 /** ```compile_fail,E0277
 
 use rayon::prelude::*;
-use std::ptr::null;
+use core::ptr::null;
 
 #[derive(Copy, Clone)]
 struct NoSend(*const ());
@@ -41,7 +41,7 @@ mod filter_map {}
 /** ```compile_fail,E0277
 
 use rayon::prelude::*;
-use std::ptr::null;
+use core::ptr::null;
 
 #[derive(Copy, Clone)]
 struct NoSend(*const ());

@@ -7,7 +7,7 @@
 
 use crate::iter::plumbing::*;
 use crate::iter::*;
-use std::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 /// A parallel iterator over the value in [`Some`] variant of an [`Option`].
 ///
@@ -143,7 +143,7 @@ struct OptionProducer<T: Send> {
 
 impl<T: Send> Producer for OptionProducer<T> {
     type Item = T;
-    type IntoIter = std::option::IntoIter<T>;
+    type IntoIter = core::option::IntoIter<T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.opt.into_iter()

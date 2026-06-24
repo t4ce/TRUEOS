@@ -4,7 +4,7 @@
 use crate::latch::CoreLatch;
 use crate::sync::{Condvar, Mutex};
 use crossbeam_utils::CachePadded;
-use std::sync::atomic::Ordering;
+use core::sync::atomic::Ordering;
 use std::thread;
 
 mod counters;
@@ -167,7 +167,7 @@ impl Sleep {
         // - an external job is being injected while we are sleepy
         // - that job triggers the rollover over the JEC such that we don't see it
         // - we are the last active worker thread
-        std::sync::atomic::fence(Ordering::SeqCst);
+        core::sync::atomic::fence(Ordering::SeqCst);
         if has_injected_jobs() {
             // If we see an externally injected job, then we have to 'wake
             // ourselves up'. (Ordinarily, `sub_sleeping_thread` is invoked by
@@ -215,7 +215,7 @@ impl Sleep {
         // This fence is needed to guarantee that threads
         // as they are about to fall asleep, observe any
         // new jobs that may have been injected.
-        std::sync::atomic::fence(Ordering::SeqCst);
+        core::sync::atomic::fence(Ordering::SeqCst);
 
         self.new_jobs(num_jobs, queue_was_empty)
     }

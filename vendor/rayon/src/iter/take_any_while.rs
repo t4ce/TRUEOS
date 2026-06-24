@@ -1,7 +1,7 @@
 use super::plumbing::*;
 use super::*;
-use std::fmt;
-use std::sync::atomic::{AtomicBool, Ordering};
+use core::fmt;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 /// `TakeAnyWhile` is an iterator that iterates over elements from anywhere in `I`
 /// until the callback returns `false`.

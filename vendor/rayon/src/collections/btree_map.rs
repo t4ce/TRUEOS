@@ -2,7 +2,7 @@
 //! (`BTreeMap<K, V>`). You will rarely need to interact with it directly
 //! unless you have need to name one of the iterator types.
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
 
 use crate::iter::plumbing::*;
 use crate::iter::*;

@@ -1,5 +1,5 @@
 use crate::scope;
-use std::any::Any;
+use core::any::Any;
 use std::sync::Mutex;
 use std::sync::mpsc::channel;
 

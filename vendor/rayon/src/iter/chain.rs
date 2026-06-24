@@ -1,7 +1,7 @@
 use super::plumbing::*;
 use super::*;
 use rayon_core::join;
-use std::iter;
+use core::iter;
 
 /// `Chain` is an iterator that joins `b` after `a` in one continuous iterator.
 /// This struct is created by the [`chain()`] method on [`ParallelIterator`]

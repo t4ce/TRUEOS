@@ -47,11 +47,11 @@ fn use_current_thread_basic() {
         .1
         .wait_while(pair.0.lock().unwrap(), |ran| !*ran)
         .unwrap();
-    std::mem::drop(pool); // Drop the pool.
+    core::mem::drop(pool); // Drop the pool.
 
     // Wait until all threads have actually exited. This is not really needed, other than to
     // reduce noise of leak-checking tools.
-    for handle in std::mem::take(&mut *JOIN_HANDLES.lock().unwrap()) {
+    for handle in core::mem::take(&mut *JOIN_HANDLES.lock().unwrap()) {
         let _ = handle.join();
     }
 }

@@ -1,4 +1,4 @@
-use std::fmt::{self, Debug};
+use core::fmt::{self, Debug};
 
 use super::chunks::ChunkProducer;
 use super::plumbing::*;
@@ -125,7 +125,7 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::ops::Add;
+    use core::ops::Add;
 
     #[test]
     fn check_fold_chunks() {

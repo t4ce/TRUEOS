@@ -1,7 +1,7 @@
 use crate::iter::plumbing::*;
 use crate::iter::*;
-use std::fmt;
-use std::marker::PhantomData;
+use core::fmt;
+use core::marker::PhantomData;
 
 trait ChunkBySlice<T>: AsRef<[T]> + Default + Send {
     fn split(self, index: usize) -> (Self, Self);

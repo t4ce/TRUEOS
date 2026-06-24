@@ -66,7 +66,7 @@ struct WindowsProducer<'data, T: Sync> {
 
 impl<'data, T: Sync> Producer for WindowsProducer<'data, T> {
     type Item = &'data [T];
-    type IntoIter = ::std::slice::Windows<'data, T>;
+    type IntoIter = ::core::slice::Windows<'data, T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.slice.windows(self.window_size)

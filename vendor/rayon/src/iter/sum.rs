@@ -1,8 +1,8 @@
 use super::ParallelIterator;
 use super::plumbing::*;
 
-use std::iter::{self, Sum};
-use std::marker::PhantomData;
+use core::iter::{self, Sum};
+use core::marker::PhantomData;
 
 pub(super) fn sum<PI, S>(pi: PI) -> S
 where

@@ -9,9 +9,9 @@ use super::collect_with_consumer;
 use crate::iter::plumbing::*;
 use rayon_core::join;
 
-use std::fmt;
+use core::fmt;
 use std::panic;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::Result as ThreadResult;
 
 /// Promises to produce 2 items, but then produces 3.  Does not do any

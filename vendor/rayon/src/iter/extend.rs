@@ -3,8 +3,8 @@ use super::plumbing::{Consumer, Folder, Reducer, UnindexedConsumer};
 use super::{IntoParallelIterator, ParallelExtend, ParallelIterator};
 
 use either::Either;
-use std::borrow::Cow;
-use std::collections::LinkedList;
+use alloc::borrow::Cow;
+use alloc::collections::LinkedList;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::collections::{BinaryHeap, VecDeque};
 use std::ffi::{OsStr, OsString};

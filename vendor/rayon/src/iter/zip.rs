@@ -1,6 +1,6 @@
 use super::plumbing::*;
 use super::*;
-use std::iter;
+use core::iter;
 
 /// `Zip` is an iterator that zips up `a` and `b` into a single iterator
 /// of pairs. This struct is created by the [`zip()`] method on

@@ -67,7 +67,7 @@
 //!
 //! Note: Several of the `ParallelIterator` methods rely on a `Try` trait which
 //! has been deliberately obscured from the public API.  This trait is intended
-//! to mirror the unstable `std::ops::Try` with implementations for `Option` and
+//! to mirror the unstable `core::ops::Try` with implementations for `Option` and
 //! `Result`, where `Some`/`Ok` values will let those iterators continue, but
 //! `None`/`Err` values will exit early.
 //!
@@ -80,13 +80,13 @@
 
 use self::plumbing::*;
 pub use either::Either;
-use std::cmp::Ordering;
-use std::collections::LinkedList;
-use std::convert::Infallible;
-use std::iter::{Product, Sum};
-use std::ops::ControlFlow;
-use std::ops::{Fn, RangeBounds};
-use std::task::Poll;
+use core::cmp::Ordering;
+use alloc::collections::LinkedList;
+use core::convert::Infallible;
+use core::iter::{Product, Sum};
+use core::ops::ControlFlow;
+use core::ops::{Fn, RangeBounds};
+use core::task::Poll;
 
 pub mod plumbing;
 
@@ -218,7 +218,7 @@ pub use repeat::repeatn;
 ///
 /// By implementing `IntoParallelIterator` for a type, you define how it will
 /// transformed into an iterator. This is a parallel version of the standard
-/// library's [`std::iter::IntoIterator`] trait.
+/// library's [`core::iter::IntoIterator`] trait.
 pub trait IntoParallelIterator {
     /// The parallel iterator type that will be created.
     type Iter: ParallelIterator<Item = Self::Item>;
@@ -282,7 +282,7 @@ pub trait IntoParallelRefIterator<'data> {
     /// // `v.par_iter()` is shorthand for `(&v).into_par_iter()`,
     /// // producing the exact same references.
     /// assert!(v.par_iter().zip(&v)
-    ///          .all(|(a, b)| std::ptr::eq(a, b)));
+    ///          .all(|(a, b)| core::ptr::eq(a, b)));
     /// ```
     fn par_iter(&'data self) -> Self::Iter;
 }
@@ -889,14 +889,14 @@ pub trait ParallelIterator: Sized + Send {
     ///
     /// ```
     /// use rayon::prelude::*;
-    /// use std::cell::RefCell;
+    /// use core::cell::RefCell;
     ///
     /// let a = [[1, 2], [3, 4], [5, 6], [7, 8]];
     ///
     /// let par_iter = a.par_iter().flat_map_iter(|a| {
     ///     // The serial iterator doesn't have to be thread-safe, just its items.
     ///     let cell_iter = RefCell::new(a.iter().cloned());
-    ///     std::iter::from_fn(move || cell_iter.borrow_mut().next())
+    ///     core::iter::from_fn(move || cell_iter.borrow_mut().next())
     /// });
     ///
     /// let vec: Vec<_> = par_iter.collect();
@@ -1904,7 +1904,7 @@ pub trait ParallelIterator: Sized + Send {
     ///
     /// ```
     /// use rayon::prelude::*;
-    /// use std::sync::atomic::{AtomicUsize, Ordering};
+    /// use core::sync::atomic::{AtomicUsize, Ordering};
     ///
     /// let counter = AtomicUsize::new(0);
     /// let value = (0_i32..2048)
@@ -2293,8 +2293,8 @@ pub trait ParallelIterator: Sized + Send {
     ///
     /// ```
     /// use rayon::prelude::*;
-    /// use std::sync::atomic::AtomicUsize;
-    /// use std::sync::atomic::Ordering::Relaxed;
+    /// use core::sync::atomic::AtomicUsize;
+    /// use core::sync::atomic::Ordering::Relaxed;
     ///
     /// // Collect any group of items that sum <= 1000
     /// let quota = AtomicUsize::new(1000);
@@ -2368,7 +2368,7 @@ pub trait ParallelIterator: Sized + Send {
     /// # Examples
     ///
     /// ```
-    /// # use std::collections::LinkedList;
+    /// # use alloc::collections::LinkedList;
     /// use rayon::prelude::*;
     ///
     /// let result: LinkedList<Vec<_>> = (0..=100)
@@ -2706,7 +2706,7 @@ pub trait IndexedParallelIterator: ParallelIterator {
     ///
     /// except there is no per-chunk allocation overhead.
     ///
-    /// [`fold()`]: std::iter::Iterator#method.fold
+    /// [`fold()`]: core::iter::Iterator#method.fold
     ///
     /// **Panics** if `chunk_size` is 0.
     ///
@@ -2744,7 +2744,7 @@ pub trait IndexedParallelIterator: ParallelIterator {
     /// except it doesn't require the `init` type to be `Sync`, nor any other form of
     /// added synchronization.
     ///
-    /// [`fold()`]: std::iter::Iterator#method.fold
+    /// [`fold()`]: core::iter::Iterator#method.fold
     ///
     /// **Panics** if `chunk_size` is 0.
     ///
@@ -2778,7 +2778,7 @@ pub trait IndexedParallelIterator: ParallelIterator {
     ///
     /// ```
     /// use rayon::prelude::*;
-    /// use std::cmp::Ordering::*;
+    /// use core::cmp::Ordering::*;
     ///
     /// let x = vec![1, 2, 3];
     /// assert_eq!(x.par_iter().cmp(&vec![1, 3, 0]), Less);
@@ -2815,7 +2815,7 @@ pub trait IndexedParallelIterator: ParallelIterator {
     ///
     /// ```
     /// use rayon::prelude::*;
-    /// use std::cmp::Ordering::*;
+    /// use core::cmp::Ordering::*;
     ///
     /// let x = vec![1.0, 2.0, 3.0];
     /// assert_eq!(x.par_iter().partial_cmp(&vec![1.0, 3.0, 0.0]), Some(Less));
@@ -3379,7 +3379,7 @@ pub trait ParallelDrainFull {
     ///
     /// When the iterator is dropped, all items are removed, even if the
     /// iterator was not fully consumed. If the iterator is leaked, for example
-    /// using `std::mem::forget`, it is unspecified how many items are removed.
+    /// using `core::mem::forget`, it is unspecified how many items are removed.
     ///
     /// # Examples
     ///
@@ -3419,7 +3419,7 @@ pub trait ParallelDrainRange<Idx = usize> {
     ///
     /// When the iterator is dropped, all items in the range are removed, even
     /// if the iterator was not fully consumed. If the iterator is leaked, for
-    /// example using `std::mem::forget`, it is unspecified how many items are
+    /// example using `core::mem::forget`, it is unspecified how many items are
     /// removed.
     ///
     /// # Examples
@@ -3476,7 +3476,7 @@ pub trait ParallelDrainRange<Idx = usize> {
     fn par_drain<R: RangeBounds<Idx>>(self, range: R) -> Self::Iter;
 }
 
-/// Clone of `std::ops::Try`, until that is someday stabilized.
+/// Clone of `core::ops::Try`, until that is someday stabilized.
 ///
 /// Implementing this trait is not permitted outside of `rayon`.
 trait Try {

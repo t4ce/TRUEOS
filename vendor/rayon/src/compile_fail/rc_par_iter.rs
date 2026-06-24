@@ -4,7 +4,7 @@
 // `Rc`.
 
 use rayon::prelude::*;
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 let x = vec![Rc::new(22), Rc::new(23)];
 let mut y = vec![];

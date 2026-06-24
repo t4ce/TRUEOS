@@ -14,11 +14,11 @@
 //! assert_eq!((0..=100).sum::<u64>(), r);
 //! ```
 //!
-//! [inclusive ranges]: std::ops::RangeInclusive
+//! [inclusive ranges]: core::ops::RangeInclusive
 
 use crate::iter::plumbing::*;
 use crate::iter::*;
-use std::ops::RangeInclusive;
+use core::ops::RangeInclusive;
 
 /// Parallel iterator over an inclusive range, implemented for all integer types and `char`.
 ///

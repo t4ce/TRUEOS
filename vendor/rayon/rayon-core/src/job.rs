@@ -1,10 +1,10 @@
 use crate::latch::Latch;
 use crate::unwind;
 use crossbeam_deque::{Injector, Steal};
-use std::any::Any;
-use std::cell::UnsafeCell;
-use std::mem;
-use std::sync::Arc;
+use core::any::Any;
+use core::cell::UnsafeCell;
+use core::mem;
+use alloc::sync::Arc;
 
 pub(super) enum JobResult<T> {
     None,
@@ -270,7 +270,7 @@ impl Job for JobFifo {
                 match this.inner.steal() {
                     Steal::Success(job_ref) => break job_ref.execute(),
                     Steal::Empty => panic!("FIFO is empty"),
-                    Steal::Retry => std::hint::spin_loop(),
+                    Steal::Retry => core::hint::spin_loop(),
                 }
             }
         }

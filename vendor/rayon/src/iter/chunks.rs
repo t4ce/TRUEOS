@@ -111,7 +111,7 @@ where
     F: Fn(P::IntoIter) -> T + Send + Clone,
 {
     type Item = T;
-    type IntoIter = std::iter::Map<ChunkSeq<P>, F>;
+    type IntoIter = core::iter::Map<ChunkSeq<P>, F>;
 
     fn into_iter(self) -> Self::IntoIter {
         let chunks = ChunkSeq {

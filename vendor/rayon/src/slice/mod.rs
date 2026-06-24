@@ -19,8 +19,8 @@ use crate::iter::plumbing::*;
 use crate::iter::*;
 use crate::split_producer::*;
 
-use std::cmp::Ordering;
-use std::fmt::{self, Debug};
+use core::cmp::Ordering;
+use core::fmt::{self, Debug};
 
 pub use self::chunk_by::{ChunkBy, ChunkByMut};
 pub use self::chunks::{Chunks, ChunksExact, ChunksExactMut, ChunksMut};
@@ -862,7 +862,7 @@ struct IterProducer<'data, T: Sync> {
 
 impl<'data, T: 'data + Sync> Producer for IterProducer<'data, T> {
     type Item = &'data T;
-    type IntoIter = ::std::slice::Iter<'data, T>;
+    type IntoIter = ::core::slice::Iter<'data, T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.slice.iter()
@@ -921,7 +921,7 @@ struct IterMutProducer<'data, T: Send> {
 
 impl<'data, T: 'data + Send> Producer for IterMutProducer<'data, T> {
     type Item = &'data mut T;
-    type IntoIter = ::std::slice::IterMut<'data, T>;
+    type IntoIter = ::core::slice::IterMut<'data, T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.slice.iter_mut()

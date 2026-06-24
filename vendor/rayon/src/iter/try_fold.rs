@@ -2,9 +2,9 @@ use super::ParallelIterator;
 use super::Try;
 use super::plumbing::*;
 
-use std::fmt::{self, Debug};
-use std::marker::PhantomData;
-use std::ops::ControlFlow::{self, Break, Continue};
+use core::fmt::{self, Debug};
+use core::marker::PhantomData;
+use core::ops::ControlFlow::{self, Break, Continue};
 
 impl<I, U, ID, F> TryFold<I, U, ID, F> {
     pub(super) fn new(base: I, identity: ID, fold_op: F) -> Self {

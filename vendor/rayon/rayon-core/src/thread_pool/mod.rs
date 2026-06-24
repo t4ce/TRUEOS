@@ -9,9 +9,9 @@ use crate::spawn;
 use crate::{Scope, scope};
 use crate::{ScopeFifo, scope_fifo};
 use crate::{ThreadPoolBuildError, ThreadPoolBuilder};
-use std::error::Error;
-use std::fmt;
-use std::sync::Arc;
+use core::error::Error;
+use core::fmt;
+use alloc::sync::Arc;
 
 mod test;
 
@@ -169,7 +169,7 @@ impl ThreadPool {
     ///
     /// ```ignore-wasm
     ///    # use rayon_core as rayon;
-    ///    use std::sync::atomic::{AtomicUsize, Ordering};
+    ///    use core::sync::atomic::{AtomicUsize, Ordering};
     ///
     ///    fn main() {
     ///         let pool = rayon::ThreadPoolBuilder::new().num_threads(5).build().unwrap();

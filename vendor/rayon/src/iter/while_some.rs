@@ -1,6 +1,6 @@
 use super::plumbing::*;
 use super::*;
-use std::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 /// `WhileSome` is an iterator that yields the `Some` elements of an iterator,
 /// halting as soon as any `None` is produced.

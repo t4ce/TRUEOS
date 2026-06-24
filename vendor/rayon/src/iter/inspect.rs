@@ -1,8 +1,8 @@
 use super::plumbing::*;
 use super::*;
 
-use std::fmt::{self, Debug};
-use std::iter;
+use core::fmt::{self, Debug};
+use core::iter;
 
 /// `Inspect` is an iterator that calls a function with a reference to each
 /// element before yielding it.

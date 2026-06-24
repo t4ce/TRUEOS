@@ -1,5 +1,5 @@
 use rayon_core::ThreadPoolBuilder;
-use std::error::Error;
+use core::error::Error;
 
 #[test]
 #[cfg_attr(any(target_os = "emscripten", target_family = "wasm"), ignore)]

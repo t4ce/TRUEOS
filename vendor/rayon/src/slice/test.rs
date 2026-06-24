@@ -4,8 +4,8 @@ use crate::prelude::*;
 use rand::distr::Uniform;
 use rand::seq::IndexedRandom;
 use rand::{RngExt, rng};
-use std::cmp::Ordering::{Equal, Greater, Less};
-use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+use core::cmp::Ordering::{Equal, Greater, Less};
+use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
 macro_rules! sort {
     ($f:ident, $name:ident) => {

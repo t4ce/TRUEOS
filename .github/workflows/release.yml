@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Optional release version without the leading v. Empty uses 0.0.<build counter>.
+        description: Optional release version without the leading v. Empty uses 0.0.<workflow run number>.
         required: false
         default: ""
         type: string
@@ -134,12 +134,11 @@ jobs:
             version="${INPUT_VERSION}"
             tag="v${version}"
           else
-            build_counter="$(cat bld/cnt 2>/dev/null || true)"
-            if ! [[ "${build_counter}" =~ ^[0-9]+$ ]]; then
-              echo "Could not derive release version: bld/cnt is missing or not numeric" >&2
+            if ! [[ "${GITHUB_RUN_NUMBER}" =~ ^[0-9]+$ ]]; then
+              echo "Could not derive release version: GITHUB_RUN_NUMBER is missing or not numeric" >&2
               exit 1
             fi
-            version="0.0.${build_counter}"
+            version="0.0.${GITHUB_RUN_NUMBER}"
             tag="v${version}"
           fi
 
@@ -172,17 +171,30 @@ jobs:
             sha256sum TrueOS-${version}.7z TRUEOS-${version}.provenance.json $([[ -f TRUEOS-${version}.source-files.sha256 ]] && printf '%s' TRUEOS-${version}.source-files.sha256) > SHA256SUMS
           )
 
+          archive_name="TrueOS-${version}.7z"
+          archive_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/v${version}/${archive_name}"
+          archive_sha256="$(sha256sum "${dist}/${archive_name}" | cut -d ' ' -f1)"
           record_sha256="$(python3 -c 'import json; print(json.load(open("bld/trueos-release/TRUEOS.provenance.json", encoding="utf-8"))["record_sha256"])')"
           iso_sha256="$(python3 -c 'import json; data=json.load(open("bld/trueos-release/TRUEOS.provenance.json", encoding="utf-8")); print(data["artifacts"]["iso"]["sha256"])')"
 
           cat > "${dist}/release-notes.md" <<EOF
-          TRUEOS ${version}
+          ## Download
 
-          Source commit: ${GITHUB_SHA}
-          Provenance record SHA-256: ${record_sha256}
-          ISO SHA-256: ${iso_sha256}
+          [Download ${archive_name}](${archive_url})
 
-          Assets are signed with the TRUEOS Ed25519 release key. Verify SHA256SUMS and the .trueos-sig.json signatures before using the release bundle.
+          <sub>
+
+          | item | sha256 |
+          | --- | --- |
+          | release bundle | \`${archive_sha256}\` |
+          | ISO inside bundle | \`${iso_sha256}\` |
+          | provenance record | \`${record_sha256}\` |
+
+          Source commit: \`${GITHUB_SHA}\`
+
+          Assets are signed with the TRUEOS Ed25519 release key. Verify \`SHA256SUMS\` and the \`.trueos-sig.json\` signatures before using the release bundle.
+
+          </sub>
           EOF
 
           echo "dist=${dist}" >> "${GITHUB_OUTPUT}"

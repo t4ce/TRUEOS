@@ -66,7 +66,7 @@ fn unindexed_example() {
     use crate::iter::plumbing::*;
     use crate::prelude::*;
 
-    use std::collections::BTreeMap;
+    use alloc::collections::BTreeMap;
 
     struct MyIntoIter<T: Ord + Send, U: Send> {
         inner: IntoIter<T, U>,

@@ -1,8 +1,8 @@
 use crate::iter::plumbing::*;
 use crate::iter::*;
 
-use std::fmt;
-use std::marker::PhantomData;
+use core::fmt;
+use core::marker::PhantomData;
 
 /// Creates a parallel iterator that produces nothing.
 ///
@@ -88,10 +88,10 @@ struct EmptyProducer<T: Send>(PhantomData<T>);
 
 impl<T: Send> Producer for EmptyProducer<T> {
     type Item = T;
-    type IntoIter = std::iter::Empty<T>;
+    type IntoIter = core::iter::Empty<T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        std::iter::empty()
+        core::iter::empty()
     }
 
     fn split_at(self, index: usize) -> (Self, Self) {
