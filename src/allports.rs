@@ -53,7 +53,7 @@ pub mod mail {
     use super::well_known;
 
     pub const ACCOUNT_EMAIL: &str = "jonasb@post.com";
-    pub const ACCOUNT_PASSWORD: &str = "Ttest1001";
+    pub const ACCOUNT_PASSWORD: &str = "";
 
     pub const SMTP_HOST: &str = "smtp.mail.com";
     pub const SMTP_PORT: u16 = well_known::SMTP_SUBMISSION;

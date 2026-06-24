@@ -40,6 +40,7 @@ pub mod vaudio;
 pub mod vclock;
 pub mod vfetch;
 pub mod vfs;
+pub mod vmail;
 pub mod vhttp_srv;
 pub mod vinput;
 pub mod vio;

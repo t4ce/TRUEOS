@@ -103,10 +103,20 @@ struct MailSendRequest {
     body: String,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct MailConfig {
+    #[serde(default)]
     smtp_user: String,
+    #[serde(default)]
     smtp_pass: String,
+    #[serde(default)]
+    from: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MailConfigUpdate {
+    smtp_pass: Option<String>,
+    smtp_user: Option<String>,
     from: Option<String>,
 }
 
@@ -125,16 +135,15 @@ impl MailConfig {
     }
 
     fn password_is_placeholder(&self) -> bool {
-        self.smtp_pass.trim().is_empty() || self.smtp_pass.contains("ENTER_")
+        self.smtp_pass.trim().is_empty()
+            || self.smtp_pass.contains("ENTER_")
+            || self.smtp_pass == "password"
     }
 
     fn merge_with_static(mut self) -> Self {
         let static_config = Self::static_account();
         if self.smtp_user.trim().is_empty() {
             self.smtp_user = static_config.smtp_user.clone();
-        }
-        if self.password_is_placeholder() {
-            self.smtp_pass = static_config.smtp_pass.clone();
         }
         if self
             .from
@@ -146,6 +155,18 @@ impl MailConfig {
         }
         self
     }
+}
+
+fn redacted_config(config: &MailConfig) -> serde_json::Value {
+    serde_json::json!({
+        "smtp_user": config.smtp_user,
+        "from": config.from,
+        "passwordConfigured": !config.password_is_placeholder(),
+        "smtp_host": mail_config::SMTP_HOST,
+        "smtp_port": mail_config::SMTP_PORT,
+        "pop3_host": mail_config::POP3_HOST,
+        "pop3_port": mail_config::POP3_PORT,
+    })
 }
 
 fn status_code(status: u16) -> StatusCode {
@@ -219,7 +240,7 @@ async fn write_config_template(disk: crate::disc::block::DeviceHandle) -> Result
         "smtp_port": mail_config::SMTP_PORT,
         "pop3_host": mail_config::POP3_HOST,
         "pop3_port": mail_config::POP3_PORT,
-        "note": "Fill smtp_pass with the mailbox password. The kernel falls back to allports.rs while this placeholder remains."
+        "note": "Fill smtp_pass at runtime. TRUEOS keeps mail provider defaults in allports.rs but does not ship a password."
     });
     let bytes =
         serde_json::to_vec_pretty(&template).map_err(|_| "config template serialize failed")?;
@@ -243,7 +264,7 @@ async fn load_config() -> Result<LoadedMailConfig, &'static str> {
             }
             Err(_) => {
                 crate::log!(
-                    "webmail-http: bad {}; falling back to static account\n",
+                    "webmail-http: bad {}; falling back to passwordless static account\n",
                     MAIL_CONFIG_PATH
                 );
                 Ok(LoadedMailConfig {
@@ -255,22 +276,46 @@ async fn load_config() -> Result<LoadedMailConfig, &'static str> {
         Ok(None) => {
             match write_config_template(disk).await {
                 Ok(()) => crate::log!(
-                    "webmail-http: wrote config template path={} source=allports\n",
+                    "webmail-http: wrote config template path={} source=allports-passwordless\n",
                     MAIL_CONFIG_PATH
                 ),
                 Err(err) => crate::log!(
-                    "webmail-http: config template unavailable path={} err={} source=allports\n",
+                    "webmail-http: config template unavailable path={} err={} source=allports-passwordless\n",
                     MAIL_CONFIG_PATH,
                     err
                 ),
             }
             Ok(LoadedMailConfig {
                 config: MailConfig::static_account(),
-                source: "allports-template",
+                source: "allports-template-passwordless",
             })
         }
         Err(_) => Err("config read failed"),
     }
+}
+
+async fn save_config(config: &MailConfig) -> Result<(), &'static str> {
+    let disk = primary_root()?;
+    ensure_mail_dir(disk).await?;
+    let bytes = serde_json::to_vec_pretty(config).map_err(|_| "config serialize failed")?;
+    match crate::r::fs::trueosfs::file_in_async(disk, MAIL_CONFIG_PATH, bytes.as_slice()).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("config write refused"),
+        Err(_) => Err("config write failed"),
+    }
+}
+
+pub(crate) async fn runtime_smtp_account() -> Result<(String, String, String), &'static str> {
+    let loaded = load_config().await?;
+    let config = loaded.config;
+    if config.password_is_placeholder() {
+        return Err("mail password missing");
+    }
+    let from = config
+        .from
+        .clone()
+        .unwrap_or_else(|| config.smtp_user.clone());
+    Ok((config.smtp_user, config.smtp_pass, from))
 }
 
 fn now_date_string() -> String {
@@ -1064,6 +1109,10 @@ async fn handle_status_local() -> Response {
         .as_ref()
         .map(|loaded| loaded.source)
         .unwrap_or("unavailable");
+    let password_configured = loaded_config
+        .as_ref()
+        .map(|loaded| !loaded.config.password_is_placeholder())
+        .unwrap_or(false);
     let inbox_count = store
         .messages
         .iter()
@@ -1081,6 +1130,7 @@ async fn handle_status_local() -> Response {
             "service": "webmail-http",
             "account": account,
             "configSource": config_source,
+            "passwordConfigured": password_configured,
             "storePath": MAIL_STORE_PATH,
             "configPath": MAIL_CONFIG_PATH,
             "smtp": format!("{}:{}", mail_config::SMTP_HOST, mail_config::SMTP_PORT),
@@ -1144,6 +1194,79 @@ async fn handle_refresh() -> Response {
 
 async fn handle_status() -> Response {
     run_mail_local(handle_status_local).await
+}
+
+async fn handle_config_get_local() -> Response {
+    crate::log!("webmail-http: api config get\n");
+    match load_config().await {
+        Ok(loaded) => json_response(
+            200,
+            &serde_json::json!({
+                "ok": true,
+                "source": loaded.source,
+                "config": redacted_config(&loaded.config),
+            }),
+        ),
+        Err(err) => json_response(500, &serde_json::json!({"ok": false, "error": err})),
+    }
+}
+
+async fn handle_config_set_local(body: Bytes) -> Response {
+    crate::log!("webmail-http: api config set bytes={}\n", body.len());
+    if body.len() > MAIL_HTTP_BODY_MAX {
+        return json_response(413, &serde_json::json!({"ok": false, "error": "request too large"}));
+    }
+    let req = match serde_json::from_slice::<MailConfigUpdate>(body.as_ref()) {
+        Ok(req) => req,
+        Err(_) => {
+            return json_response(400, &serde_json::json!({"ok": false, "error": "bad json"}));
+        }
+    };
+    let mut config = load_config()
+        .await
+        .map(|loaded| loaded.config)
+        .unwrap_or_else(|_| MailConfig::static_account());
+
+    if let Some(user) = req.smtp_user {
+        let user = user.trim();
+        config.smtp_user = if user.is_empty() {
+            String::from(mail_config::ACCOUNT_EMAIL)
+        } else {
+            String::from(user)
+        };
+    }
+    if let Some(from) = req.from {
+        let from = from.trim();
+        config.from = if from.is_empty() {
+            Some(String::from(mail_config::ACCOUNT_EMAIL))
+        } else {
+            Some(String::from(from))
+        };
+    }
+    if let Some(pass) = req.smtp_pass {
+        config.smtp_pass = pass.trim().to_string();
+    }
+    config = config.merge_with_static();
+
+    match save_config(&config).await {
+        Ok(()) => json_response(
+            200,
+            &serde_json::json!({
+                "ok": true,
+                "config": redacted_config(&config),
+                "configPath": MAIL_CONFIG_PATH,
+            }),
+        ),
+        Err(err) => json_response(500, &serde_json::json!({"ok": false, "error": err})),
+    }
+}
+
+async fn handle_config_get() -> Response {
+    run_mail_local(handle_config_get_local).await
+}
+
+async fn handle_config_set(body: Bytes) -> Response {
+    run_mail_local(move || handle_config_set_local(body)).await
 }
 
 async fn handle_read(OriginalUri(uri): OriginalUri) -> Response {
@@ -1276,6 +1399,7 @@ fn mail_router() -> Router {
         .route("/healthz", get(handle_status))
         .route("/api/healthz", get(handle_status))
         .route("/api/webmail/status", get(handle_status))
+        .route("/api/webmail/config", get(handle_config_get).post(handle_config_set))
         .route("/api/webmail/refresh", get(handle_refresh).post(handle_refresh))
         .route("/api/webmail/list", get(handle_list))
         .route("/api/webmail/read", get(handle_read))

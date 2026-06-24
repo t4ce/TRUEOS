@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TRUEOS Webmail</title>
+    <link rel="stylesheet" href="/tailwind.css" />
+  </head>
+  <body>
+    <main class="app">
+      <div class="topbar">
+        <div>
+          <h1>TRUEOS Webmail</h1>
+          <div id="status" class="muted">Loading</div>
+        </div>
+        <div class="row">
+          <button id="refresh" class="secondary">Refresh</button>
+          <button id="save-config">Save Password</button>
+        </div>
+      </div>
+
+      <section class="grid">
+        <aside class="stack">
+          <form id="config-form" class="panel stack">
+            <h2>Account</h2>
+            <label>
+              Mail
+              <input id="smtp-user" autocomplete="username" />
+            </label>
+            <label>
+              Password
+              <input id="smtp-pass" type="password" autocomplete="current-password" placeholder="Runtime password" />
+            </label>
+            <div id="config-state" class="muted"></div>
+          </form>
+
+          <form id="compose-form" class="panel stack">
+            <h2>Compose</h2>
+            <label>
+              To
+              <input id="to" autocomplete="email" />
+            </label>
+            <label>
+              Subject
+              <input id="subject" />
+            </label>
+            <label>
+              Body
+              <textarea id="body"></textarea>
+            </label>
+            <button id="send" type="submit">Send</button>
+          </form>
+        </aside>
+
+        <section class="panel stack">
+          <h2>Messages</h2>
+          <div id="messages" class="list"></div>
+          <article id="reader" class="stack muted"></article>
+        </section>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
