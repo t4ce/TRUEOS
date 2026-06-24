@@ -30,7 +30,7 @@ A constant influx of resources, money, and safety.
 # Setup to build ELF + ISO via makefile make (run, iso, release)
 ## Linux (Ubuntu)
 > [!TIP]
-> Current Software Development Hardware - not the Test RIG.
+> This is the Desktop ubuntu installation to build os:
 ```
        Icon name: computer-desktop
          Chassis: desktop 🖥️

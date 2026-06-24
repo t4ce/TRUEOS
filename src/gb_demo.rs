@@ -3,10 +3,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-const PRESENT_SCALE: usize = 2;
-const PRESENT_WIDTH: usize = crate::trueos_gboi::gpu::SCREEN_W * PRESENT_SCALE;
-const PRESENT_HEIGHT: usize = crate::trueos_gboi::gpu::SCREEN_H * PRESENT_SCALE;
-const PRESENT_PITCH_BYTES: usize = PRESENT_WIDTH * core::mem::size_of::<u32>();
+const PRESENT_MAX_SCALE: usize = 4;
 const PRESENT_BG_XRGB: u32 = 0x00FF_FFFF;
 
 static GBOY_RUN_GENERATION: AtomicU32 = AtomicU32::new(0);
@@ -50,8 +47,10 @@ async fn run_gboy(
         return Err(String::from("ROM parser rejected file"));
     }
 
-    let mut argb = vec![0u32; PRESENT_WIDTH * PRESENT_HEIGHT];
-    let mut rgba = vec![0u8; PRESENT_WIDTH * PRESENT_HEIGHT * core::mem::size_of::<u32>()];
+    let (present_width, present_height, present_scale) = present_size();
+    let present_pitch_bytes = present_width * core::mem::size_of::<u32>();
+    let mut argb = vec![0u32; present_width * present_height];
+    let mut rgba = vec![0u8; present_width * present_height * core::mem::size_of::<u32>()];
     let mut frame = 0u64;
 
     let scanout = crate::intel::active_scanout_dimensions()
@@ -59,19 +58,27 @@ async fn run_gboy(
         .unwrap_or_default();
     crate::shell2::print_matrix_target_line(
         target,
-        alloc::format!("gboy: presenting {}x{}{}", PRESENT_WIDTH, PRESENT_HEIGHT, scanout).as_str(),
+        alloc::format!(
+            "gboy: presenting {}x{} scale={}{}",
+            present_width,
+            present_height,
+            present_scale,
+            scanout
+        )
+        .as_str(),
     );
 
     while current_run_generation() == generation {
+        sync_gboy_buttons_from_hid_hut(&mut emulator);
         emulator.tick();
-        emulator.render(&mut argb, PRESENT_WIDTH, PRESENT_HEIGHT);
+        emulator.render(&mut argb, present_width, present_height);
         argb_to_rgba(&argb, &mut rgba);
 
-        let presented = crate::intel::present_rgba_primary_center_unscaled_bg(
+        let presented = crate::intel::present_rgba_primary_center_plane_bg(
             &rgba,
-            PRESENT_WIDTH as u32,
-            PRESENT_HEIGHT as u32,
-            PRESENT_PITCH_BYTES,
+            present_width as u32,
+            present_height as u32,
+            present_pitch_bytes,
             PRESENT_BG_XRGB,
             "gboy",
         );
@@ -83,8 +90,8 @@ async fn run_gboy(
                     "gboy: frame={} presented={} size={}x{}",
                     frame,
                     presented as u8,
-                    PRESENT_WIDTH,
-                    PRESENT_HEIGHT
+                    present_width,
+                    present_height
                 )
                 .as_str(),
             );
@@ -118,6 +125,78 @@ async fn read_rom(path: &str, target: &crate::shell2::MatrixTarget) -> Result<Ve
     {
         Some(bytes) => Ok(bytes),
         None => Err(alloc::format!("{path}: not found")),
+    }
+}
+
+fn present_size() -> (usize, usize, usize) {
+    let base_w = crate::trueos_gboi::gpu::SCREEN_W;
+    let base_h = crate::trueos_gboi::gpu::SCREEN_H;
+    let max_scale = crate::intel::active_scanout_dimensions()
+        .map(|(w, h)| {
+            ((w as usize) / base_w)
+                .min((h as usize) / base_h)
+                .clamp(1, PRESENT_MAX_SCALE)
+        })
+        .unwrap_or(PRESENT_MAX_SCALE);
+    let scale = if max_scale >= 4 {
+        4
+    } else if max_scale >= 2 {
+        2
+    } else {
+        1
+    };
+    (base_w * scale, base_h * scale, scale)
+}
+
+#[inline]
+fn hid_key_is_down(key_down_bits: &[u32; 8], key_code: u8) -> bool {
+    let key_code = key_code as usize;
+    (key_down_bits[key_code / 32] & (1u32 << (key_code % 32))) != 0
+}
+
+fn button_from_hid_boot_keycode(key_code: u8) -> Option<crate::trueos_gboi::GameBoyButton> {
+    match key_code {
+        0x04 => Some(crate::trueos_gboi::GameBoyButton::Left),
+        0x06 => Some(crate::trueos_gboi::GameBoyButton::Select),
+        0x07 => Some(crate::trueos_gboi::GameBoyButton::Right),
+        0x16 => Some(crate::trueos_gboi::GameBoyButton::Down),
+        0x1A => Some(crate::trueos_gboi::GameBoyButton::Up),
+        0x1B | 0x2C => Some(crate::trueos_gboi::GameBoyButton::A),
+        0x1D => Some(crate::trueos_gboi::GameBoyButton::B),
+        0x28 => Some(crate::trueos_gboi::GameBoyButton::Start),
+        0x4F => Some(crate::trueos_gboi::GameBoyButton::Right),
+        0x50 => Some(crate::trueos_gboi::GameBoyButton::Left),
+        0x51 => Some(crate::trueos_gboi::GameBoyButton::Down),
+        0x52 => Some(crate::trueos_gboi::GameBoyButton::Up),
+        _ => None,
+    }
+}
+
+fn sync_gboy_buttons_from_hid_hut(emulator: &mut crate::trueos_gboi::GameBoyEmulator) {
+    const KEY_CODES: &[u8] = &[
+        0x04, 0x06, 0x07, 0x16, 0x1A, 0x1B, 0x1D, 0x28, 0x2C, 0x4F, 0x50, 0x51, 0x52,
+    ];
+
+    let keyboards = crate::usb3::hid::hut::keyboards_snapshot();
+    for button in [
+        crate::trueos_gboi::GameBoyButton::Right,
+        crate::trueos_gboi::GameBoyButton::Left,
+        crate::trueos_gboi::GameBoyButton::Up,
+        crate::trueos_gboi::GameBoyButton::Down,
+        crate::trueos_gboi::GameBoyButton::A,
+        crate::trueos_gboi::GameBoyButton::B,
+        crate::trueos_gboi::GameBoyButton::Select,
+        crate::trueos_gboi::GameBoyButton::Start,
+    ] {
+        let pressed = KEY_CODES
+            .iter()
+            .filter(|key_code| button_from_hid_boot_keycode(**key_code) == Some(button))
+            .any(|key_code| {
+                keyboards
+                    .iter()
+                    .any(|keyboard| hid_key_is_down(&keyboard.key_down_bits, *key_code))
+            });
+        emulator.set_button(button, pressed);
     }
 }
 

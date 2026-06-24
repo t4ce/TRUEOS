@@ -2174,7 +2174,9 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
         for parent, child in edges
         if parent not in collapsed_leaves and child not in collapsed_leaves
     }
-    arrow_roots = {}
+    arrow_roots = {
+        root: sorted({root, *(node for edge in rendered_edges for node in edge)})
+    } if rendered_edges else {}
     for child in root_children:
         if is_architecture_irrelevant(child):
             continue
@@ -2230,14 +2232,12 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
         for hotspot in hotspots
     )
     toggles = []
-    toggle_extents: list[tuple[float, float, float, float]] = []
     for target in arrow_targets:
         size = min(152.0, max(68.0, min(float(target["w"]), float(target["h"])) * 0.44))
-        gap = max(18.0, size * 0.22)
-        x = float(target["x"])
-        y = float(target["y"]) - size - gap
+        margin = 10.0
+        x = float(target["x"]) + margin
+        y = float(target["y"]) + margin
         stroke = max(4.0, size * 0.11)
-        outer_gap = gap + stroke / 2
         mark = (
             f"M{x + size * 0.25:.2f},{y + size * 0.53:.2f} "
             f"L{x + size * 0.43:.2f},{y + size * 0.71:.2f} "
@@ -2250,19 +2250,12 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
         <path class="arrow-toggle-mark" d="{mark}" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="{stroke:.2f}"></path>
       </g>'''
         )
-        toggle_extents.append((x - outer_gap, y - outer_gap, x + size + outer_gap, y + size + outer_gap))
     toggle_markup = "\n".join(toggles)
-    view_min_x = min([0.0, *(extent[0] for extent in toggle_extents)])
-    view_min_y = min([0.0, *(extent[1] for extent in toggle_extents)])
-    view_max_x = max([width, *(extent[2] for extent in toggle_extents)])
-    view_max_y = max([height, *(extent[3] for extent in toggle_extents)])
-    view_width = view_max_x - view_min_x
-    view_height = view_max_y - view_min_y
+    view_width = width
+    view_height = height
     display_width, display_height = display_size(view_width, view_height)
-    content_offset_x = -view_min_x
-    content_offset_y = -view_min_y
-    root_focus_x += content_offset_x
-    root_focus_y += content_offset_y
+    content_offset_x = 0.0
+    content_offset_y = 0.0
     arrow_roots_json = json.dumps(arrow_roots, ensure_ascii=False).replace("</", "<\\/")
     root_json = json.dumps(root, ensure_ascii=False).replace("</", "<\\/")
     return f"""<!doctype html>
@@ -2319,7 +2312,6 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
       pointer-events: none;
       transition: opacity 140ms ease;
     }}
-    #graph.show-all-arrows .graph-edge,
     #graph .graph-edge.is-visible-arrow {{
       opacity: 1;
     }}
@@ -2383,7 +2375,14 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
     .arrow-toggle {{
       cursor: pointer;
       outline: none;
+      opacity: 0.25;
       pointer-events: all;
+      transition: opacity 140ms ease;
+    }}
+    .arrow-toggle:hover,
+    .arrow-toggle:focus,
+    .arrow-toggle.is-arrow-selected {{
+      opacity: 1;
     }}
     .arrow-toggle-box {{
       fill: rgba(255, 255, 255, 0.92);
@@ -2490,6 +2489,11 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
     const graphEdges = Array.from(graph.querySelectorAll('.graph-edge'));
     const rootHotspots = Array.from(document.querySelectorAll('.root-hotspot'));
     const arrowToggles = Array.from(graph.querySelectorAll('.arrow-toggle'));
+    const arrowToggleRoots = arrowToggles.map((toggle) => toggle.dataset.arrowRoot);
+    const childArrowToggleRoots = arrowToggleRoots.filter((root) => root !== rootArrowLabel);
+    const arrowRootNodeSets = new Map(Object.entries(arrowRoots).map(
+      ([root, nodes]) => [root, new Set(nodes)],
+    ));
     let graphScale = 1;
     let pointerId = null;
     let dragStartX = 0;
@@ -2497,32 +2501,51 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
     let dragStartLeft = 0;
     let dragStartTop = 0;
     let didDrag = false;
-    let pinnedArrowRoot = null;
+    let checkedArrowRoots = new Set();
 
     function clamp(value, min, max) {{
       return Math.min(Math.max(value, min), max);
     }}
 
-    function setArrowSelection(nextRoot) {{
-      const selectedRoot = nextRoot || null;
-      const showAll = selectedRoot === rootArrowLabel;
-      const selectedNodes = selectedRoot && !showAll
-        ? new Set(arrowRoots[selectedRoot] || [selectedRoot])
-        : null;
+    function toggleScope(nextRoot) {{
+      if (nextRoot === rootArrowLabel) {{
+        return new Set([rootArrowLabel, ...childArrowToggleRoots]);
+      }}
 
-      graph.classList.toggle('show-all-arrows', showAll);
+      const selectedNodes = new Set(arrowRoots[nextRoot] || [nextRoot]);
+      return new Set(childArrowToggleRoots.filter((root) => selectedNodes.has(root)));
+    }}
+
+    function edgeBelongsToArrowRoot(edge, root) {{
+      if (root === rootArrowLabel) {{
+        return true;
+      }}
+
+      const nodes = arrowRootNodeSets.get(root) || new Set([root]);
+      return (
+        edge.dataset.tail === rootArrowLabel && edge.dataset.head === root
+      ) || (
+        edge.dataset.tail !== rootArrowLabel
+          && nodes.has(edge.dataset.tail)
+          && nodes.has(edge.dataset.head)
+      );
+    }}
+
+    function updateArrowSelection() {{
+      const selectedRoots = Array.from(checkedArrowRoots);
       graphEdges.forEach((edge) => {{
-        const isSelectedEdge = selectedNodes
-          && (
-            selectedNodes.has(edge.dataset.tail)
-            || (edge.dataset.tail === rootArrowLabel && edge.dataset.head === selectedRoot)
-          );
+        const isSelectedEdge = selectedRoots.some((root) => (
+          edgeBelongsToArrowRoot(edge, root)
+        ));
         edge.classList.toggle('is-visible-arrow', Boolean(isSelectedEdge));
       }});
 
+      const allChildrenChecked = childArrowToggleRoots.length > 0
+        && childArrowToggleRoots.every((root) => checkedArrowRoots.has(root));
       arrowToggles.forEach((toggle) => {{
-        const isSelected = showAll
-          || Boolean(selectedNodes && selectedNodes.has(toggle.dataset.arrowRoot));
+        const isSelected = toggle.dataset.arrowRoot === rootArrowLabel
+          ? checkedArrowRoots.has(rootArrowLabel) || allChildrenChecked
+          : checkedArrowRoots.has(toggle.dataset.arrowRoot);
         toggle.classList.toggle(
           'is-arrow-selected',
           isSelected,
@@ -2531,13 +2554,25 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
       }});
     }}
 
-    function setPinnedArrowRoot(nextRoot) {{
-      pinnedArrowRoot = nextRoot || null;
-      setArrowSelection(pinnedArrowRoot);
-    }}
+    function toggleArrowRoot(nextRoot) {{
+      const scope = toggleScope(nextRoot);
+      const shouldClear = nextRoot === rootArrowLabel
+        ? checkedArrowRoots.has(rootArrowLabel) || childArrowToggleRoots.length > 0
+          && childArrowToggleRoots.every((root) => checkedArrowRoots.has(root))
+        : scope.size > 0 && Array.from(scope).every((root) => checkedArrowRoots.has(root));
 
-    function togglePinnedArrowRoot(nextRoot) {{
-      setPinnedArrowRoot(pinnedArrowRoot === nextRoot ? null : nextRoot);
+      if (nextRoot !== rootArrowLabel) {{
+        checkedArrowRoots.delete(rootArrowLabel);
+      }}
+
+      scope.forEach((root) => {{
+        if (shouldClear) {{
+          checkedArrowRoots.delete(root);
+        }} else {{
+          checkedArrowRoots.add(root);
+        }}
+      }});
+      updateArrowSelection();
     }}
 
     function minGraphScale() {{
@@ -2714,7 +2749,7 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
       toggle.addEventListener('click', (event) => {{
         event.preventDefault();
         event.stopPropagation();
-        togglePinnedArrowRoot(toggle.dataset.arrowRoot);
+        toggleArrowRoot(toggle.dataset.arrowRoot);
       }});
 
       toggle.addEventListener('keydown', (event) => {{
@@ -2724,7 +2759,7 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
 
         event.preventDefault();
         event.stopPropagation();
-        togglePinnedArrowRoot(toggle.dataset.arrowRoot);
+        toggleArrowRoot(toggle.dataset.arrowRoot);
       }});
     }});
 
