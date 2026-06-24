@@ -96,12 +96,20 @@ verifies it, and packages:
 
 - `trueos.iso`
 - `TRUEOS.provenance.json`
-- `TRUEOS.source-files.sha256`
+
+By default release provenance uses compact Git source identity: commit, tree,
+submodule gitlinks, and artifact hashes. That is enough for GitHub-built
+upstream releases from a clean checkout, so the release bundle does not need the
+large `TRUEOS.source-files.sha256` block. If you want the old per-file source
+manifest for local/offline audit work, run:
+
+```bash
+make release PROVENANCE_SOURCE_MANIFEST=git-index
+```
 
 For a public release, publish the upstream Git commit and sign or otherwise
 anchor the printed `record_sha256`. That signed record hash is the compact proof
-handle for "this commit/tree, this source manifest, and this ISO belong
-together."
+handle for "this commit/tree and this ISO belong together."
 
 ### GitHub cloud releases
 
@@ -129,9 +137,9 @@ python3 tools/provenance_chain.py verify \
 ```
 
 The verifier recomputes the source manifest from the checked-out Git commit,
-checks `TRUEOS.source-files.sha256`, and checks the ISO hash named in
-`TRUEOS.provenance.json`. A changed source file, wrong commit, swapped
-submodule/gitlink, or replaced ISO breaks the chain.
+or the compact Git source identity for default releases, and checks the ISO hash
+named in `TRUEOS.provenance.json`. A wrong commit, swapped submodule/gitlink, or
+replaced ISO breaks the chain.
 
 ## on MAC
 > [!TIP]

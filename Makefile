@@ -12,6 +12,7 @@ PROVENANCE_LATEST := $(PROVENANCE_DIR)/latest.json
 PROVENANCE_LATEST_SOURCE_MANIFEST := $(PROVENANCE_DIR)/latest.source-files.sha256
 PROVENANCE_SCRIPT := tools/provenance_chain.py
 PROVENANCE_CLEAN_FLAG ?= --require-clean
+PROVENANCE_SOURCE_MANIFEST ?= git-commit
 START_BAREMETAL_LOG ?= 1
 ISO_DIR := bld
 ISO_PATH := bld/trueos.iso
@@ -317,6 +318,7 @@ provenance: provenance-git-clean iso
 		--debug-elf $(ARTIFACT_DEBUG_ELF) \
 		--iso $(ISO_PATH) \
 		--build-info $(ARTIFACT_BUILD_INFO) \
+		--source-manifest $(PROVENANCE_SOURCE_MANIFEST) \
 		$(PROVENANCE_CLEAN_FLAG)
 
 verify-provenance:
@@ -355,7 +357,9 @@ release: release-git-clean provenance
 	mkdir -p $(RELEASE_BUNDLE_DIR)
 	cp $(ISO_PATH) $(RELEASE_BUNDLE_DIR)/trueos.iso
 	cp $(PROVENANCE_LATEST) $(RELEASE_BUNDLE_DIR)/TRUEOS.provenance.json
-	cp $(PROVENANCE_LATEST_SOURCE_MANIFEST) $(RELEASE_BUNDLE_DIR)/TRUEOS.source-files.sha256
+	@if [ -f "$(PROVENANCE_LATEST_SOURCE_MANIFEST)" ]; then \
+		cp $(PROVENANCE_LATEST_SOURCE_MANIFEST) $(RELEASE_BUNDLE_DIR)/TRUEOS.source-files.sha256; \
+	fi
 	cp "$(OVMF_BUNDLE_PATH)" $(RELEASE_BUNDLE_DIR)/$(BUNDLED_OVMF_NAME)
 	cp tools/release/run-linux.sh $(RELEASE_BUNDLE_DIR)/run-linux.sh
 	cp tools/release/run-macos.sh $(RELEASE_BUNDLE_DIR)/run-macos.sh
@@ -364,7 +368,7 @@ release: release-git-clean provenance
 		cp "$(OVMF_LICENSE_PATH)" $(RELEASE_BUNDLE_DIR)/OVMF-LICENSE.txt; \
 	fi
 	chmod +x $(RELEASE_BUNDLE_DIR)/run-linux.sh $(RELEASE_BUNDLE_DIR)/run-macos.sh
-	cd $(RELEASE_BUNDLE_DIR) && 7z a -t7z $(UPDATE_7Z_FLAGS) ../$(notdir $(RELEASE_ARCHIVE)) trueos.iso TRUEOS.provenance.json TRUEOS.source-files.sha256 $(BUNDLED_OVMF_NAME) run-linux.sh run-macos.sh README-RUN.txt $$(test -f OVMF-LICENSE.txt && printf '%s' OVMF-LICENSE.txt)
+	cd $(RELEASE_BUNDLE_DIR) && 7z a -t7z $(UPDATE_7Z_FLAGS) ../$(notdir $(RELEASE_ARCHIVE)) trueos.iso TRUEOS.provenance.json $$(test -f TRUEOS.source-files.sha256 && printf '%s' TRUEOS.source-files.sha256) $(BUNDLED_OVMF_NAME) run-linux.sh run-macos.sh README-RUN.txt $$(test -f OVMF-LICENSE.txt && printf '%s' OVMF-LICENSE.txt)
 	@if [ "$(PUBLISH_RELEASE_SMB)" = "1" ]; then \
 		env -u GIO_MODULE_DIR gio mount smb://t4ce@pdjb/home-share || true; \
 		env -u GIO_MODULE_DIR gio copy $(RELEASE_ARCHIVE) smb://t4ce@pdjb/home-share/TRUEOS_SITE/; \
