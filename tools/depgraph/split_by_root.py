@@ -41,9 +41,10 @@ FULL_GRAPH_ROOT_SCALE_CRATES = {
 }
 SHARED_LINK_VERTICAL_THRESHOLD = 24.0
 ARCHITECTURE_BUCKET_PADDING = 32.0
+FULL_GRAPH_LEFT_GUTTER = 900.0
 # Spread the full LR graph wide enough that the layout itself uses the 16:9 canvas.
 FULL_GRAPH_NODESEP = 0.62
-FULL_GRAPH_RANKSEP = 61.0
+FULL_GRAPH_RANKSEP = 55.0
 FULL_GRAPH_ASPECT_RATIO = 16 / 9
 SPLIT_GRAPH_NODESEP = 0.35
 SPLIT_GRAPH_RANKSEP = 0.55
@@ -1135,6 +1136,110 @@ def move_architecture_irrelevant_bucket_to_top_left() -> None:
     )
     replacement = f"{opening}{group.group(2)}{group.group(3)}"
     svg = svg[: group.start()] + replacement + svg[group.end() :]
+    FULL_SVG_PATH.write_text(svg)
+
+
+def extract_balanced_svg_group(svg: str, start: int) -> tuple[str, int]:
+    depth = 0
+    pos = start
+    while True:
+        next_open = svg.find("<g", pos)
+        next_close = svg.find("</g>", pos)
+        if next_close == -1:
+            raise RuntimeError(f"could not find closing group in {FULL_SVG_PATH}")
+        if next_open != -1 and next_open < next_close:
+            depth += 1
+            tag_end = svg.find(">", next_open)
+            if tag_end == -1:
+                raise RuntimeError(f"could not parse group in {FULL_SVG_PATH}")
+            pos = tag_end + 1
+            continue
+        depth -= 1
+        end = next_close + len("</g>")
+        if end < len(svg) and svg[end] == "\n":
+            end += 1
+        if depth == 0:
+            return svg[start:end], end
+        pos = end
+
+
+def layer_full_svg_edges_below_nodes() -> None:
+    svg = FULL_SVG_PATH.read_text()
+
+    edge_groups = re.findall(r'<g id="edge\d+" class="edge">.*?</g>\n?', svg, re.S)
+    if edge_groups:
+        svg = re.sub(r'<g id="edge\d+" class="edge">.*?</g>\n?', "", svg, flags=re.S)
+
+    shared_group = ""
+    shared_start = svg.find('<g id="shared-leaf-links"')
+    if shared_start != -1:
+        shared_group, shared_end = extract_balanced_svg_group(svg, shared_start)
+        svg = svg[:shared_start] + svg[shared_end:]
+
+    line_markup = "".join(edge_groups) + shared_group
+    if not line_markup:
+        FULL_SVG_PATH.write_text(svg)
+        return
+
+    region_match = re.search(
+        r'<g id="ownership-regions" class="ownership-regions">.*?</g>\n',
+        svg,
+        re.S,
+    )
+    if region_match:
+        insert_at = region_match.end()
+    else:
+        background_match = re.search(
+            r'<polygon fill="white" stroke="none" points="[^"]+"/>\n',
+            svg,
+        )
+        if not background_match:
+            raise RuntimeError(f"could not find SVG background in {FULL_SVG_PATH}")
+        insert_at = background_match.end()
+
+    svg = svg[:insert_at] + line_markup + svg[insert_at:]
+    FULL_SVG_PATH.write_text(svg)
+
+
+def ensure_full_svg_left_gutter() -> None:
+    _width, _height, _tx, _ty, node_bboxes, _inner_bboxes, _bodies = svg_layout(FULL_SVG_PATH)
+    if not node_bboxes:
+        return
+    left = min(x for x, _y, _w, _h in node_bboxes.values())
+    dx = FULL_GRAPH_LEFT_GUTTER - left
+    if dx <= 0.01:
+        return
+
+    svg = FULL_SVG_PATH.read_text()
+    transform = re.search(
+        r'(<g id="graph0"[^>]*transform="[^"]*translate\()([0-9.-]+)( )([0-9.-]+)(\)[^"]*")',
+        svg,
+    )
+    if not transform:
+        raise RuntimeError(f"could not parse graph transform from {FULL_SVG_PATH}")
+    next_tx = float(transform.group(2)) + dx
+    svg = svg[: transform.start()] + (
+        f"{transform.group(1)}{next_tx:.2f}{transform.group(3)}{transform.group(4)}{transform.group(5)}"
+    ) + svg[transform.end() :]
+
+    def keep_background_in_place(match: re.Match[str]) -> str:
+        points = match.group(2)
+
+        def shift_x(point: re.Match[str]) -> str:
+            return f"{float(point.group(1)) - dx:.2f},{point.group(2)}"
+
+        return match.group(1) + re.sub(
+            r"(-?[0-9.]+),(-?[0-9.]+)",
+            shift_x,
+            points,
+        ) + match.group(3)
+
+    svg = re.sub(
+        r'(<polygon fill="white" stroke="none" points=")([^"]+)(")',
+        keep_background_in_place,
+        svg,
+        count=1,
+    )
     FULL_SVG_PATH.write_text(svg)
 
 
@@ -2449,6 +2554,8 @@ def main() -> None:
     )
     widen_full_svg_to_aspect()
     move_architecture_irrelevant_bucket_to_top_left()
+    layer_full_svg_edges_below_nodes()
+    ensure_full_svg_left_gutter()
     HTML_INDEX_PATH.write_text(render_html_index(root, graph_root_children, graph_edges))
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
