@@ -7,6 +7,7 @@ pub(crate) mod diashow;
 pub(crate) mod disc;
 pub(crate) mod format;
 pub(crate) mod fslog;
+pub(crate) mod gboy;
 pub(crate) mod gpgpu;
 pub(crate) mod hyper;
 pub(crate) mod install;
