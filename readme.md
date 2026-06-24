@@ -68,13 +68,14 @@ export CC_aarch64_unknown_none=aarch64-linux-gnu-gcc
 export AR_aarch64_unknown_none=aarch64-linux-gnu-ar
 ```
 
-### ELF/ISO provenance hash chain
+### ELF/ISO provenance and release verification
 
 `make provenance` builds the ISO and writes a tamper-evident record under
-`bld/provenance/`. The record chains:
+`bld/provenance/`. By default it refuses a dirty Git checkout, then records:
 
 - the previous provenance record hash;
-- the current source tree manifest hash;
+- the exact Git commit hash and Git tree hash;
+- a source manifest generated from the Git index, including gitlink commits;
 - the runtime ELF, debug ELF, and ISO SHA-256 hashes;
 - selected build info, tool versions, git status, submodule status, and relevant
   build environment variables.
@@ -84,9 +85,53 @@ make provenance
 make verify-provenance
 ```
 
-The head of the local chain is `bld/provenance/latest.json`. For a public
-release, publish or sign the printed `record_sha256`; that hash is the compact
-anchor for "these source files produced this ELF and this ISO".
+Official releases use the stricter path:
+
+```bash
+make release
+```
+
+`make release` fails unless the TRUEOS checkout is clean, writes provenance,
+verifies it, and packages:
+
+- `trueos.iso`
+- `TRUEOS.provenance.json`
+- `TRUEOS.source-files.sha256`
+
+For a public release, publish the upstream Git commit and sign or otherwise
+anchor the printed `record_sha256`. That signed record hash is the compact proof
+handle for "this commit/tree, this source manifest, and this ISO belong
+together."
+
+### GitHub cloud releases
+
+`.github/workflows/release.yml` builds `make release` on GitHub Actions, signs
+the release assets, uploads them as a workflow artifact, and publishes a GitHub
+Release when you push a `v*` tag or manually run the workflow with
+`publish_release=true`.
+
+Set these repository secrets before publishing:
+
+- `TRUEOS_RELEASE_GPG_PRIVATE_KEY`: ASCII-armored private GPG key used only for
+  release signing.
+- `TRUEOS_RELEASE_GPG_PASSPHRASE`: passphrase for that private key, if it has
+  one.
+- `TRUEOS_RELEASE_GPG_KEY_ID`: optional key id or fingerprint. If omitted, the
+  workflow uses the first imported secret key.
+
+Verifier flow:
+
+```bash
+sha256sum trueos.iso
+python3 tools/provenance_chain.py verify \
+  --source-root /path/to/TRUEOS-at-the-recorded-commit \
+  --record /path/to/release/TRUEOS.provenance.json
+```
+
+The verifier recomputes the source manifest from the checked-out Git commit,
+checks `TRUEOS.source-files.sha256`, and checks the ISO hash named in
+`TRUEOS.provenance.json`. A changed source file, wrong commit, swapped
+submodule/gitlink, or replaced ISO breaks the chain.
 
 ## on MAC
 > [!TIP]
