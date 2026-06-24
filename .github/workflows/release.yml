@@ -7,8 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version without the leading v, for example 0.0.2
-        required: true
+        description: Optional release version without the leading v. Empty uses 0.0.<build counter>.
+        required: false
+        default: ""
         type: string
       publish_release:
         description: Publish or update the GitHub Release
@@ -49,30 +50,6 @@ jobs:
             vendor/limine \
             vendor/tinyaudio
 
-      - name: Resolve release version
-        id: version
-        shell: bash
-        env:
-          INPUT_VERSION: ${{ inputs.version || '' }}
-        run: |
-          set -euo pipefail
-
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            tag="${GITHUB_REF_NAME}"
-            version="${tag#v}"
-          else
-            version="${INPUT_VERSION}"
-            tag="v${version}"
-          fi
-
-          if [[ -z "${version}" || "${version}" == "v" ]]; then
-            echo "Release version is empty" >&2
-            exit 1
-          fi
-
-          echo "version=${version}" >> "${GITHUB_OUTPUT}"
-          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-
       - name: Install build dependencies
         shell: bash
         run: |
@@ -85,7 +62,6 @@ jobs:
             dosfstools \
             gcc \
             git \
-            gnupg \
             libasound2-dev \
             linux-firmware \
             mtools \
@@ -93,6 +69,7 @@ jobs:
             ovmf \
             p7zip-full \
             pkg-config \
+            python3-cryptography \
             xorriso \
             zstd
 
@@ -142,6 +119,38 @@ jobs:
             DMC_FW_HOST_PATH="${{ steps.paths.outputs.dmc }}" \
             HUC_FW_HOST_PATH="${{ steps.paths.outputs.huc }}"
 
+      - name: Resolve release version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version || '' }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+            version="${tag#v}"
+          elif [[ -n "${INPUT_VERSION}" ]]; then
+            version="${INPUT_VERSION}"
+            tag="v${version}"
+          else
+            build_counter="$(cat bld/cnt 2>/dev/null || true)"
+            if ! [[ "${build_counter}" =~ ^[0-9]+$ ]]; then
+              echo "Could not derive release version: bld/cnt is missing or not numeric" >&2
+              exit 1
+            fi
+            version="0.0.${build_counter}"
+            tag="v${version}"
+          fi
+
+          if [[ -z "${version}" || "${version}" == "v" ]]; then
+            echo "Release version is empty" >&2
+            exit 1
+          fi
+
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
       - name: Stage release assets
         id: assets
         shell: bash
@@ -173,73 +182,50 @@ jobs:
           Provenance record SHA-256: ${record_sha256}
           ISO SHA-256: ${iso_sha256}
 
-          Assets are signed with the TRUEOS release GPG key. Verify SHA256SUMS and the detached .asc signatures before using the release bundle.
+          Assets are signed with the TRUEOS Ed25519 release key. Verify SHA256SUMS and the .trueos-sig.json signatures before using the release bundle.
           EOF
 
           echo "dist=${dist}" >> "${GITHUB_OUTPUT}"
 
-      - name: Import GPG release key
-        id: gpg
+      - name: Install TRUEOS release key
+        id: release-key
         shell: bash
         env:
-          TRUEOS_RELEASE_GPG_PRIVATE_KEY: ${{ secrets.TRUEOS_RELEASE_GPG_PRIVATE_KEY }}
-          TRUEOS_RELEASE_GPG_PASSPHRASE: ${{ secrets.TRUEOS_RELEASE_GPG_PASSPHRASE }}
-          TRUEOS_RELEASE_GPG_KEY_ID: ${{ secrets.TRUEOS_RELEASE_GPG_KEY_ID }}
+          TRUEOS_RELEASE_ED25519_KEY: ${{ secrets.TRUEOS_RELEASE_ED25519_KEY }}
         run: |
           set -euo pipefail
 
-          if [[ -z "${TRUEOS_RELEASE_GPG_PRIVATE_KEY}" ]]; then
-            echo "Missing required secret TRUEOS_RELEASE_GPG_PRIVATE_KEY" >&2
+          if [[ -z "${TRUEOS_RELEASE_ED25519_KEY}" ]]; then
+            echo "Missing required secret TRUEOS_RELEASE_ED25519_KEY" >&2
             exit 1
           fi
 
-          export GNUPGHOME="${RUNNER_TEMP}/gnupg"
-          mkdir -p "${GNUPGHOME}"
-          chmod 700 "${GNUPGHOME}"
+          key_path="${RUNNER_TEMP}/trueos-release-ed25519-key.json"
+          printf '%s' "${TRUEOS_RELEASE_ED25519_KEY}" > "${key_path}"
+          chmod 600 "${key_path}"
 
-          printf '%s' "${TRUEOS_RELEASE_GPG_PRIVATE_KEY}" | gpg --batch --import
-
-          imported_fingerprint="$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^fpr/ { print $10; exit }')"
-          key_id="${TRUEOS_RELEASE_GPG_KEY_ID}"
-          if [[ -n "${key_id}" ]] && ! gpg --batch --list-secret-keys "${key_id}" >/dev/null 2>&1; then
-            echo "Configured TRUEOS_RELEASE_GPG_KEY_ID did not match the imported key; using imported fingerprint." >&2
-            key_id=""
-          fi
-          if [[ -z "${key_id}" ]]; then
-            key_id="${imported_fingerprint}"
-          fi
-
-          if [[ -z "${key_id}" ]]; then
-            echo "Could not determine imported GPG key id" >&2
-            exit 1
-          fi
-
-          fingerprint="$(gpg --batch --list-secret-keys --with-colons "${key_id}" | awk -F: '/^fpr/ { print $10; exit }')"
-
-          echo "gnupghome=${GNUPGHOME}" >> "${GITHUB_OUTPUT}"
+          key_id="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["id"])' "${key_path}")"
+          echo "key_path=${key_path}" >> "${GITHUB_OUTPUT}"
           echo "key_id=${key_id}" >> "${GITHUB_OUTPUT}"
-          echo "fingerprint=${fingerprint}" >> "${GITHUB_OUTPUT}"
 
       - name: Sign release assets
         shell: bash
         env:
-          GNUPGHOME: ${{ steps.gpg.outputs.gnupghome }}
-          GPG_KEY_ID: ${{ steps.gpg.outputs.key_id }}
-          GPG_PASSPHRASE: ${{ secrets.TRUEOS_RELEASE_GPG_PASSPHRASE }}
+          TRUEOS_RELEASE_KEY_PATH: ${{ steps.release-key.outputs.key_path }}
         run: |
           set -euo pipefail
 
           dist="${{ steps.assets.outputs.dist }}"
-          sign_args=(--batch --yes --armor --detach-sign --local-user "${GPG_KEY_ID}")
-          if [[ -n "${GPG_PASSPHRASE}" ]]; then
-            sign_args+=(--pinentry-mode loopback --passphrase "${GPG_PASSPHRASE}")
-          fi
 
-          gpg --batch --armor --export "${GPG_KEY_ID}" > "${dist}/TRUEOS-release-public-key.asc"
+          python3 tools/release/vanity_ed25519.py pub "${TRUEOS_RELEASE_KEY_PATH}" > "${dist}/TRUEOS-release-public-key.json"
 
           while IFS= read -r -d '' file; do
-            gpg "${sign_args[@]}" "${file}"
-          done < <(find "${dist}" -maxdepth 1 -type f ! -name '*.asc' ! -name 'release-notes.md' -print0 | sort -z)
+            python3 tools/release/vanity_ed25519.py sign "${TRUEOS_RELEASE_KEY_PATH}" "${file}" --out "${file}.trueos-sig.json"
+          done < <(find "${dist}" -maxdepth 1 -type f \
+            ! -name '*.trueos-sig.json' \
+            ! -name 'TRUEOS-release-public-key.json' \
+            ! -name 'release-notes.md' \
+            -print0 | sort -z)
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v6

@@ -1,0 +1,6 @@
+{
+  "algorithm": "ed25519",
+  "id": "C0DEACE4DA046B59FC6D78401572C5920E1720BD5EF558AC2754D74D96DA7430",
+  "public_key": "iqf7nM8cptndyps7cb2NCuxW4lfBy2IaiKkS2HiF67k",
+  "schema": "trueos-ed25519-public-key-v1"
+}
