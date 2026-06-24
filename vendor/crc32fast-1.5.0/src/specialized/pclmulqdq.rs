@@ -75,7 +75,7 @@ const P_X: i64 = 0x1DB710641;
 const U_PRIME: i64 = 0x1F7011641;
 
 #[target_feature(enable = "pclmulqdq", enable = "sse2", enable = "sse4.1")]
-unsafe fn calculate(crc: u32, mut data: &[u8]) -> u32 {
+unsafe fn calculate(crc: u32, mut data: &[u8]) -> u32 { unsafe {
     // In theory we can accelerate smaller chunks too, but for now just rely on
     // the fallback implementation as it's too much hassle and doesn't seem too
     // beneficial.
@@ -169,17 +169,17 @@ unsafe fn calculate(crc: u32, mut data: &[u8]) -> u32 {
     } else {
         !c
     }
-}
+}}
 
-unsafe fn reduce128(a: arch::__m128i, b: arch::__m128i, keys: arch::__m128i) -> arch::__m128i {
+unsafe fn reduce128(a: arch::__m128i, b: arch::__m128i, keys: arch::__m128i) -> arch::__m128i { unsafe {
     let t1 = arch::_mm_clmulepi64_si128(a, keys, 0x00);
     let t2 = arch::_mm_clmulepi64_si128(a, keys, 0x11);
     arch::_mm_xor_si128(arch::_mm_xor_si128(b, t1), t2)
-}
+}}
 
-unsafe fn get(a: &mut &[u8]) -> arch::__m128i {
+unsafe fn get(a: &mut &[u8]) -> arch::__m128i { unsafe {
     debug_assert!(a.len() >= 16);
     let r = arch::_mm_loadu_si128(a.as_ptr() as *const arch::__m128i);
     *a = &a[16..];
     r
-}
+}}

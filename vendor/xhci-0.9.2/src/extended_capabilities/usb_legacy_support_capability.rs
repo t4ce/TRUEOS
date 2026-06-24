@@ -29,7 +29,7 @@ where
     /// # Panics
     ///
     /// This method panics if `base` is not aligned correctly.
-    pub unsafe fn new(base: usize, m: M) -> Self {
+    pub unsafe fn new(base: usize, m: M) -> Self { unsafe {
         let usblegsup = single::ReadWrite::new(base, m.clone());
         let usblegctlsts = single::ReadWrite::new(base, m);
 
@@ -37,7 +37,7 @@ where
             usblegsup,
             usblegctlsts,
         }
-    }
+    }}
 }
 impl<M> From<UsbLegacySupport<M>> for ExtendedCapability<M>
 where

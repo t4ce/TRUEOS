@@ -5,10 +5,10 @@ use core::{mem::MaybeUninit, ptr};
 /// `MaybeUninit::slice_assume_init_mut`. Every element of `slice` must have
 /// been initialized.
 #[inline(always)]
-pub unsafe fn slice_assume_init_mut<T>(slice: &mut [MaybeUninit<T>]) -> &mut [T] {
+pub unsafe fn slice_assume_init_mut<T>(slice: &mut [MaybeUninit<T>]) -> &mut [T] { unsafe {
     // SAFETY: `MaybeUninit<T>` is guaranteed to be layout-compatible with `T`.
     &mut *(slice as *mut [MaybeUninit<T>] as *mut [T])
-}
+}}
 
 #[inline]
 pub fn uninit_slice_fill_zero(slice: &mut [MaybeUninit<u8>]) -> &mut [u8] {
@@ -29,7 +29,7 @@ pub fn slice_as_uninit<T>(slice: &[T]) -> &[MaybeUninit<T>] {
 /// This is unsafe because it allows assigning uninitialized values into
 /// `slice`, which would be undefined behavior.
 #[inline(always)]
-pub unsafe fn slice_as_uninit_mut<T>(slice: &mut [T]) -> &mut [MaybeUninit<T>] {
+pub unsafe fn slice_as_uninit_mut<T>(slice: &mut [T]) -> &mut [MaybeUninit<T>] { unsafe {
     // SAFETY: `MaybeUninit<T>` is guaranteed to be layout-compatible with `T`.
     &mut *(slice as *mut [T] as *mut [MaybeUninit<T>])
-}
+}}

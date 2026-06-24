@@ -71,6 +71,7 @@ const PALATINO_1X_BUCKET_PNGS: [&[u8]; ATHLAS_BUCKET_COUNT] = [
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AthlasFontFamily {
     Lucida,
+    #[allow(dead_code)]
     Palatino,
 }
 
@@ -87,16 +88,6 @@ pub struct AthlasFontFace {
     pub tier: AthlasFontTier,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct AthlasFontSprite64Inventory {
-    pub face_count: usize,
-    pub bucket_count: usize,
-    pub cell_count: u32,
-    pub wide_cell_count: u32,
-    pub max_cell_w: u16,
-    pub max_cell_h: u16,
-}
-
 pub const ATHLAS_FONT_FACE_LUCIDA_THIRD: AthlasFontFace = AthlasFontFace {
     family: AthlasFontFamily::Lucida,
     tier: AthlasFontTier::Third,
@@ -111,30 +102,6 @@ pub const ATHLAS_FONT_FACE_LUCIDA_1X: AthlasFontFace = AthlasFontFace {
     family: AthlasFontFamily::Lucida,
     tier: AthlasFontTier::OneX,
 };
-
-pub const ATHLAS_SPRITE64_FONT_FACES: [AthlasFontFace; 6] = [
-    AthlasFontFace {
-        family: AthlasFontFamily::Lucida,
-        tier: AthlasFontTier::Third,
-    },
-    AthlasFontFace {
-        family: AthlasFontFamily::Lucida,
-        tier: AthlasFontTier::Half,
-    },
-    ATHLAS_FONT_FACE_LUCIDA_1X,
-    AthlasFontFace {
-        family: AthlasFontFamily::Palatino,
-        tier: AthlasFontTier::Third,
-    },
-    AthlasFontFace {
-        family: AthlasFontFamily::Palatino,
-        tier: AthlasFontTier::Half,
-    },
-    AthlasFontFace {
-        family: AthlasFontFamily::Palatino,
-        tier: AthlasFontTier::OneX,
-    },
-];
 
 pub const ATHLAS_UI3_SPRITE64_FONT_FACES: [AthlasFontFace; 3] = [
     ATHLAS_FONT_FACE_LUCIDA_THIRD,
@@ -312,42 +279,4 @@ pub fn athlas_lookup_glyph_region(face: AthlasFontFace, ch: char) -> Option<Athl
 #[inline]
 pub fn athlas_glyph_advance_px(region: AthlasGlyphRegion) -> u16 {
     region.src_w.max(1)
-}
-
-pub fn athlas_validate_sprite64_faces(cell_px: u16) -> Option<AthlasFontSprite64Inventory> {
-    athlas_validate_sprite64_face_list(cell_px, &ATHLAS_SPRITE64_FONT_FACES)
-}
-
-pub fn athlas_validate_ui3_sprite64_faces(cell_px: u16) -> Option<AthlasFontSprite64Inventory> {
-    athlas_validate_sprite64_face_list(cell_px, &ATHLAS_UI3_SPRITE64_FONT_FACES)
-}
-
-fn athlas_validate_sprite64_face_list(
-    cell_px: u16,
-    faces: &[AthlasFontFace],
-) -> Option<AthlasFontSprite64Inventory> {
-    let mut inventory = AthlasFontSprite64Inventory {
-        face_count: faces.len(),
-        bucket_count: ATHLAS_BUCKET_COUNT,
-        ..AthlasFontSprite64Inventory::default()
-    };
-
-    for face in faces {
-        for bucket in 0..ATHLAS_BUCKET_COUNT {
-            let metrics = athlas_font_bucket_atlas_metrics(*face, bucket)?;
-            if metrics.cell_w == 0 || metrics.cell_h == 0 || metrics.cell_h > cell_px {
-                return None;
-            }
-            let cells =
-                u32::from(metrics.grid_w.max(1)).saturating_mul(u32::from(metrics.grid_h.max(1)));
-            if metrics.cell_w > cell_px {
-                inventory.wide_cell_count = inventory.wide_cell_count.checked_add(cells)?;
-            }
-            inventory.cell_count = inventory.cell_count.checked_add(cells)?;
-            inventory.max_cell_w = inventory.max_cell_w.max(metrics.cell_w);
-            inventory.max_cell_h = inventory.max_cell_h.max(metrics.cell_h);
-        }
-    }
-
-    Some(inventory)
 }

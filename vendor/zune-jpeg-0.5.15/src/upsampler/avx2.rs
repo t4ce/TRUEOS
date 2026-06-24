@@ -179,7 +179,7 @@ pub unsafe fn upsample_hv_avx2(
     in_far: &[i16],
     scratch_space: &mut [i16],
     output: &mut [i16],
-) {
+) { unsafe {
     assert_eq!(input.len() * 4, output.len());
     assert!(input.len() * 2 <= scratch_space.len());
     let scratch_space = &mut scratch_space[..input.len() * 2];
@@ -196,4 +196,4 @@ pub unsafe fn upsample_hv_avx2(
     let mut t = [0];
     upsample_horizontal_avx2(scratch_top, &[], &[], &mut t, out_top);
     upsample_horizontal_avx2(scratch_bottom, &[], &[], &mut t, out_bottom);
-}
+}}

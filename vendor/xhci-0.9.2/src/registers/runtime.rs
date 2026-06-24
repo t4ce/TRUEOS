@@ -37,13 +37,13 @@ where
     /// # Panics
     ///
     /// This method panics if `mmio_base` is not aligned correctly.
-    pub unsafe fn new(mmio_base: usize, rtoff: RuntimeRegisterSpaceOffset, mapper: M) -> Self {
+    pub unsafe fn new(mmio_base: usize, rtoff: RuntimeRegisterSpaceOffset, mapper: M) -> Self { unsafe {
         let base = mmio_base + usize::try_from(rtoff.get()).unwrap();
 
         Self {
             mfindex: single::ReadWrite::new(base, mapper),
         }
-    }
+    }}
 }
 
 /// Microframe Index Register
@@ -147,7 +147,7 @@ where
     /// # Panics
     ///
     /// This method panics if `index > 1023`.
-    unsafe fn new(interrupter_register_set_base: usize, index: usize, mapper: M) -> Self {
+    unsafe fn new(interrupter_register_set_base: usize, index: usize, mapper: M) -> Self { unsafe {
         assert!(index < 1024, "index out of range");
         let base = interrupter_register_set_base + index * 0x20;
         Self {
@@ -158,7 +158,7 @@ where
             erdp: single::Generic::new(base + 0x18, mapper),
             _marker: PhantomData,
         }
-    }
+    }}
 }
 
 /// Interrupter Management Register.

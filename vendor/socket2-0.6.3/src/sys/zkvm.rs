@@ -374,7 +374,7 @@ fn with_backend<T>(
     f(backend)
 }
 
-unsafe fn cast_value<T, U: Copy>(value: U) -> T {
+unsafe fn cast_value<T, U: Copy>(value: U) -> T { unsafe {
     debug_assert_eq!(core::mem::size_of::<T>(), core::mem::size_of::<U>());
     let mut out = MaybeUninit::<T>::uninit();
     ptr::copy_nonoverlapping(
@@ -383,7 +383,7 @@ unsafe fn cast_value<T, U: Copy>(value: U) -> T {
         core::mem::size_of::<U>(),
     );
     out.assume_init()
-}
+}}
 
 fn default_local_addr(domain: c_int) -> SocketAddr {
     match domain {
@@ -766,7 +766,7 @@ pub(crate) fn set_tcp_keepalive(_: RawSocket, _: &TcpKeepalive) -> io::Result<()
     Err(unsupported())
 }
 
-pub(crate) unsafe fn getsockopt<T>(socket: RawSocket, level: c_int, name: c_int) -> io::Result<T> {
+pub(crate) unsafe fn getsockopt<T>(socket: RawSocket, level: c_int, name: c_int) -> io::Result<T> { unsafe {
     match (level, name) {
         (SOL_SOCKET, SO_TYPE) => {
             let socket_type = with_meta(socket, |meta| meta.socket_type)?;
@@ -774,7 +774,7 @@ pub(crate) unsafe fn getsockopt<T>(socket: RawSocket, level: c_int, name: c_int)
         }
         (SOL_SOCKET, SO_ERROR) => {
             let value = with_meta(socket, |meta| meta.backend)?
-                .map_or(0, |backend| unsafe { trueos_mio_socket_take_error(backend as u32) });
+                .map_or(0, |backend| trueos_mio_socket_take_error(backend as u32));
             if value < 0 {
                 Err(mio_status_to_error(value, "socket2 zkvm socket error"))
             } else {
@@ -783,7 +783,7 @@ pub(crate) unsafe fn getsockopt<T>(socket: RawSocket, level: c_int, name: c_int)
         }
         _ => Err(unsupported()),
     }
-}
+}}
 
 pub(crate) unsafe fn setsockopt<T>(
     _: RawSocket,

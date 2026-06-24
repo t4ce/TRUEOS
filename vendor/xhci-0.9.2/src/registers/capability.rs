@@ -48,7 +48,7 @@ where
     pub unsafe fn new(mmio_base: usize, mapper: &M) -> Self
     where
         M: Mapper,
-    {
+    { unsafe {
         macro_rules! m {
             ($offset:expr) => {
                 single::ReadWrite::new(mmio_base + $offset, mapper.clone())
@@ -67,7 +67,7 @@ where
             hccparams2: m!(0x1c),
             vtiosoff: m!(0x20),
         }
-    }
+    }}
 }
 
 /// Capability Registers Length

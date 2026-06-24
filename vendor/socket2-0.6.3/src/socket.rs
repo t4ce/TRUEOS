@@ -19,8 +19,6 @@ use crate::io::{self, Read, Write};
 use ::core::fmt;
 use core::mem::MaybeUninit;
 use core::time::Duration;
-#[cfg(not(target_os = "zkvm"))]
-use std::net;
 #[cfg(not(target_os = "nto"))]
 use std::net::Ipv6Addr;
 use std::net::{Ipv4Addr, Shutdown};

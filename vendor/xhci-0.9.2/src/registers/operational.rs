@@ -51,7 +51,7 @@ where
     pub unsafe fn new(mmio_base: usize, caplength: CapabilityRegistersLength, mapper: &M) -> Self
     where
         M: Mapper,
-    {
+    { unsafe {
         let base = mmio_base + usize::from(caplength.get());
 
         macro_rules! m {
@@ -69,7 +69,7 @@ where
             dcbaap: m!(0x30),
             config: m!(0x38),
         }
-    }
+    }}
 }
 
 /// USB Command Register
@@ -321,7 +321,7 @@ impl PortRegisterSet {
     where
         M1: Mapper,
         M2: Mapper + Clone,
-    {
+    { unsafe {
         let base = mmio_base + usize::from(capability.caplength.read_volatile().get()) + 0x400;
         array::ReadWrite::new(
             base,
@@ -332,7 +332,7 @@ impl PortRegisterSet {
                 .into(),
             mapper,
         )
-    }
+    }}
 }
 
 /// Port Status and Control Register

@@ -28,7 +28,7 @@ impl Register {
     where
         M1: Mapper,
         M2: Mapper + Clone,
-    {
+    { unsafe {
         let base = mmio_base + usize::try_from(capability.dboff.read_volatile().get()).unwrap();
         array::ReadWrite::new(
             base,
@@ -39,7 +39,7 @@ impl Register {
                 .into(),
             mapper,
         )
-    }
+    }}
 
     rw_field!(0..=7, doorbell_target, "Doorbell Target", u8);
     rw_field!(16..=31, doorbell_stream_id, "Doorbell Stream ID", u16);
