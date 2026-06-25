@@ -1199,7 +1199,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_sntp_service,
     ),
     TaskSpec::enabled("net-shell", 0, &NET_SHELL_STARTED, spawn_net_shell),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "tactics-srv",
         crate::r::readiness::NET_ANY_CONFIGURED,
         &TACTICS_SRV_STARTED,
