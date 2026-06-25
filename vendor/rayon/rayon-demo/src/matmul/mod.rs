@@ -16,8 +16,7 @@ pub struct Args {
     flag_size: usize,
 }
 
-use std::time::Instant;
-
+use crate::compat::time::Instant;
 use docopt::Docopt;
 use rayon::prelude::*;
 

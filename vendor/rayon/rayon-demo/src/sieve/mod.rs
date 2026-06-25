@@ -41,7 +41,8 @@ mod bench;
 
 use docopt::Docopt;
 use rayon::prelude::*;
-use std::time::{Duration, Instant};
+
+use crate::compat::time::{Duration, Instant};
 
 const CHUNK_SIZE: usize = 100_000;
 

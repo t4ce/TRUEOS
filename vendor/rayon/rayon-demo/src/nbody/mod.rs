@@ -1,6 +1,6 @@
 use docopt::Docopt;
-use std::time::Instant;
 
+use crate::compat::time::Instant;
 #[cfg(test)]
 mod bench;
 #[expect(clippy::module_inception)]

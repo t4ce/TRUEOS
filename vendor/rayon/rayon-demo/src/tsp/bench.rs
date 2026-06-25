@@ -1,4 +1,4 @@
-use std::path::Path;
+use crate::compat::path::Path;
 
 use super::graph::Node;
 use super::parse_solver;

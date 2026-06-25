@@ -65,10 +65,22 @@ use core::fmt;
 use core::marker::PhantomData;
 use core::str::FromStr;
 use core3::io;
-use std::env;
 #[cfg(not(target_os = "trueos"))]
 use std as host_std;
+#[cfg(not(target_os = "trueos"))]
+use std::env;
 use std::thread;
+
+#[cfg(target_os = "trueos")]
+mod env {
+    use alloc::string::String;
+
+    pub struct VarError;
+
+    pub fn var(_key: &str) -> Result<String, VarError> {
+        Err(VarError)
+    }
+}
 
 mod broadcast;
 mod job;

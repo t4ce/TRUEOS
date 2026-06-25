@@ -196,10 +196,6 @@ pub fn live_pcm_read_since(cursor: u64, out: &mut Vec<i16>, max_samples: usize) 
         .map(|ring| ring.read_since(cursor, out, max_samples))
 }
 
-pub fn submit_pcm_overlay(label: &'static str, samples: Vec<i16>) -> Result<usize, &'static str> {
-    crate::aud::pcm_lane::submit_i16_stereo_48k(label, samples)
-}
-
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_tinyaudio_audio_urgent_pending() -> i32 {
     i32::from(crate::aud::pcm_lane::urgent_pending())
