@@ -1,6 +1,8 @@
 #![cfg_attr(test, feature(test))]
 #![warn(rust_2018_idioms)]
 
+extern crate alloc;
+
 use std::{env, io, io::prelude::*, process::exit};
 
 mod cpu_time;

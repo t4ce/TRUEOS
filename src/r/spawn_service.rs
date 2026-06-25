@@ -1,5 +1,5 @@
 use alloc::{string::String, vec::Vec};
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_executor::{SpawnError, SpawnToken, Spawner};
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -10,7 +10,6 @@ use crate::r::spawn_spec::{SpawnAttempt, TaskSpec};
 const SPAWN_SERVICE_AFTER_START_MS: u64 = 25;
 const SPAWN_SERVICE_PENDING_MS: u64 = 150;
 const SPAWN_SERVICE_IDLE_MS: u64 = 250;
-static BP_AUTOSTART_PENDING_MISSING: AtomicU32 = AtomicU32::new(0);
 
 /// Central task orchestrator ("FSM spawn service").
 ///
@@ -49,7 +48,6 @@ define_started_flags!(
     HID_UDP_SRV_STARTED,
     AI_QJS_ONESHOT_STARTED,
     HTTP_TRUEOSFS_STARTED,
-    HYPER_HTTP1_PROBE_STARTED,
     WS_TIME_STARTED,
     LAN_DISCOVERY_STARTED,
     ESP_GATE_REGISTRY_STARTED,
@@ -57,8 +55,6 @@ define_started_flags!(
     ESP_PIANO_UDP_STARTED,
     FTP_SERVER_STARTED,
     TGA_TASK_STARTED,
-    GFX_VIRGL_READY_TASK_STARTED,
-    MANDELBROT_GPU_SIDEQUEST_STARTED,
     INTEL_CURSOR_SERVICE_STARTED,
     HW_PIC_SERVICE_STARTED,
     HW_VID_PROBE_STARTED,
@@ -66,27 +62,8 @@ define_started_flags!(
     VIRTIO_GPU_UI_STARTED,
     INTEL_HDA_AUDIO_DEMO_STARTED,
     RAPLE_SERVICE_STARTED,
-    GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
     HTML_SHACK_SERVICE_STARTED,
     ASSET_SHACK_SERVICE_STARTED,
-    UI2_HOSTED_SYNC_TASK_STARTED,
-    UI2_HIT_TASK_STARTED,
-    UI2_STARTED,
-    UI2_ANALOG_CLOCK_DEMO_STARTED,
-    UI2_TEXT_INPUT_DEMO_STARTED,
-    UI2_TEXT_AREA_DEMO_STARTED,
-    UI2_BGRT_DEMO_STARTED,
-    UI2_CORETICKS_DEMO_STARTED,
-    UI2_CURSORPICKER_DEMO_STARTED,
-    UI2_GBOI_DEMO_STARTED,
-    UI2_INTEL_CANVAS3D_DEMO_STARTED,
-    UI2_INTEL_CANVAS3D_PLANE_PATCH_DEMO_STARTED,
-    UI2_MANDELBROT_DEMO_STARTED,
-    UI2_PLAYER_DEMO_STARTED,
-    UI2_RAPLE_DEMO_STARTED,
-    UI2_SMILEY_FOUNTAIN_DEMO_STARTED,
-    UI2_SHELL_DEMO_STARTED,
-    UI2_SWARM_DEMO_STARTED,
     USB_CONTROLLER_TASKS_STARTED,
     TRUEOSFS_READY_HOOK_STARTED,
     TRUEOSFS_RW_PROBE_STARTED,
@@ -102,7 +79,6 @@ define_started_flags!(
     ATOMIC_BOMB_STARTED,
     SURFER_PARSE_POOL_STARTED,
     UI3_ORBITS_STARTED,
-    UI3_ASSET_SERVICE_STARTED,
     UI3_SERVICE_STARTED,
     I226_DIAGNOSTIC_DISPLAY_STARTED,
     AUD_FILE_SERVICE_STARTED,
@@ -113,8 +89,6 @@ define_started_flags!(
 
 #[cfg(feature = "trueos_rdp")]
 static RESOURCE_MONITOR_STARTED: AtomicBool = AtomicBool::new(false);
-#[cfg(feature = "trueos_rdp")]
-static TRUEOS_RDP_STARTED: AtomicBool = AtomicBool::new(false);
 
 macro_rules! define_stop_flags {
     ($($name:ident),* $(,)?) => {
@@ -178,11 +152,6 @@ pub fn task_run_guard(name: &'static str) -> TaskRunGuard {
     TaskRunGuard { name }
 }
 
-pub fn with_task_domain<T>(name: &str, f: impl FnOnce() -> T) -> T {
-    let _ = name;
-    f()
-}
-
 pub fn task_stop_requested(name: &str) -> bool {
     stop_flag_by_task_name(name)
         .map(|flag| flag.load(Ordering::Acquire))
@@ -199,22 +168,6 @@ fn task_exited(name: &str) {
         }
     }
 }
-
-pub async fn wait_task_or_timeout_ms(name: &str, total_ms: u64) -> bool {
-    const CHUNK_MS: u64 = 50;
-    let mut remaining_ms = total_ms;
-    while remaining_ms != 0 {
-        if task_stop_requested(name) {
-            return true;
-        }
-        let sleep_ms = remaining_ms.min(CHUNK_MS);
-        Timer::after(EmbassyDuration::from_millis(sleep_ms)).await;
-        remaining_ms -= sleep_ms;
-    }
-    task_stop_requested(name)
-}
-
-static GFX_VIRGL_RETRY_AFTER_MS: AtomicU64 = AtomicU64::new(0);
 
 #[inline]
 fn boot_probe_ms() -> u64 {
@@ -587,16 +540,6 @@ fn spawn_tinyaudio_service(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_tinyaudio_live_http(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::tst_audio_live_http::tinyaudio_live_http_task())
-}
-
-#[inline]
-fn always_gate() -> bool {
-    true
-}
-
-#[inline]
-fn gfx_backend_boot_gate() -> bool {
-    true
 }
 
 #[inline]
@@ -1180,14 +1123,9 @@ const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
 const NET_ANY_CONFIGURED_AND_INDEX_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::TRUEOSFS_INDEX_READY;
-const HYPER_HTTP1_PROBE_READY: u32 =
-    crate::r::readiness::NET_SOCKET_READY | crate::r::readiness::NET_V4_GATEWAY_REACHABLE;
 const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::QJS_ASYNC_FS_READY;
-const UI2_DEMO_READY: u32 =
-    crate::r::readiness::UI2_READY | crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY;
-const GBOI_DEMO_READY: u32 = crate::r::readiness::BACKGROUND_AP_WORKER_READY;
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
@@ -1473,85 +1411,8 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::disabled("atomic_bomb", 0, &ATOMIC_BOMB_STARTED, spawn_atomic_bomb),
 ];
 
-// ---------------------------------------------------------------------------
-// Public API: offline task list for UI2 dock.
-// ---------------------------------------------------------------------------
-
-/// An offline task entry visible to the UI2 layer.
-pub struct OfflineTaskEntry {
-    pub index: usize,
-}
-
-/// Return all UI2 tasks that are currently disabled.
-/// This includes both tasks that have not started yet and task-backed windows
-/// that were offlined while already running.
-pub fn offline_ui2_demo_tasks() -> Vec<OfflineTaskEntry> {
-    let mut out = Vec::new();
-    for (i, spec) in TASKS.iter().enumerate() {
-        if !spec.name.starts_with("ui2-") {
-            continue;
-        }
-        if spec.disabled.load(Ordering::Acquire) {
-            out.push(OfflineTaskEntry { index: i });
-        }
-    }
-    out
-}
-
-/// Enable a disabled task by its TASKS index, making it eligible for spawn.
-pub fn enable_task_by_index(index: usize) {
-    if let Some(spec) = TASKS.get(index) {
-        spec.disabled.store(false, Ordering::Release);
-    }
-}
-
-pub fn disable_task_by_index(index: usize) {
-    if let Some(spec) = TASKS.get(index) {
-        spec.disabled.store(true, Ordering::Release);
-    }
-}
-
-pub fn request_task_stop_by_index(index: usize) -> bool {
-    let Some(spec) = TASKS.get(index) else {
-        return false;
-    };
-    let Some(flag) = stop_flag_by_task_name(spec.name) else {
-        return false;
-    };
-    flag.store(true, Ordering::Release);
-    true
-}
-
-/// Return the name of a task by its TASKS index.
-pub fn task_name_by_index(index: usize) -> Option<&'static str> {
-    TASKS.get(index).map(|spec| spec.name)
-}
-
 pub fn task_index_by_name(name: &str) -> Option<usize> {
     TASKS.iter().position(|spec| spec.name == name)
-}
-
-pub fn task_started_by_index(index: usize) -> bool {
-    TASKS
-        .get(index)
-        .map(|spec| spec.started.load(Ordering::Acquire))
-        .unwrap_or(false)
-}
-
-fn readiness_names(mask: u32) -> String {
-    let mut out = String::new();
-    let mut first = true;
-    crate::r::readiness::for_each_flag(mask, |_flag, name| {
-        if !first {
-            out.push('|');
-        }
-        first = false;
-        out.push_str(name);
-    });
-    if first {
-        out.push_str("none");
-    }
-    out
 }
 
 #[embassy_executor::task]

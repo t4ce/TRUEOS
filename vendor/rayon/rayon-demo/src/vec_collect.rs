@@ -1,8 +1,8 @@
 //! Some benchmarks stress-testing various ways to build a standard `Vec`.
 
 mod util {
+    use alloc::collections::LinkedList;
     use rayon::prelude::*;
-    use std::collections::LinkedList;
 
     /// Do whatever `collect` does by default.
     pub fn collect<T, PI>(pi: PI) -> Vec<T>
