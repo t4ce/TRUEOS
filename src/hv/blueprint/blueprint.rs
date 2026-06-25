@@ -1474,6 +1474,9 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "trueos_platform_cpu_count" => {
             Some(crate::r::platform::trueos_platform_cpu_count as *const () as usize)
         }
+        "trueos_tokio_worker_carriers_enabled" => {
+            Some(crate::r::platform::trueos_tokio_worker_carriers_enabled as *const () as usize)
+        }
         "trueos_service_lane_submit_job" => {
             Some(crate::r::blocking::trueos_service_lane_submit_job as *const () as usize)
         }
@@ -1489,6 +1492,7 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "trueos_time_unix_seconds" => {
             Some(crate::std_abi_shim::trueos_time_unix_seconds as *const () as usize)
         }
+        "clock_gettime" => Some(trueos_qjs::trueos_shims::clock_gettime as *const () as usize),
         "trueos_tokio_platform_log_semantic_gap" => {
             Some(crate::r::platform::trueos_tokio_platform_log_semantic_gap as *const () as usize)
         }
