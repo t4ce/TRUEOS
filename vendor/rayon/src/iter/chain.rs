@@ -1,7 +1,7 @@
 use super::plumbing::*;
 use super::*;
-use rayon_core::join;
 use core::iter;
+use rayon_core::join;
 
 /// `Chain` is an iterator that joins `b` after `a` in one continuous iterator.
 /// This struct is created by the [`chain()`] method on [`ParallelIterator`]
@@ -180,10 +180,7 @@ where
             let a_rem = self.a_len - index;
             let (a_left, a_right) = self.a.split_at(index);
             let (b_left, b_right) = self.b.split_at(0);
-            (
-                ChainProducer::new(index, a_left, b_left),
-                ChainProducer::new(a_rem, a_right, b_right),
-            )
+            (ChainProducer::new(index, a_left, b_left), ChainProducer::new(a_rem, a_right, b_right))
         } else {
             let (a_left, a_right) = self.a.split_at(self.a_len);
             let (b_left, b_right) = self.b.split_at(index - self.a_len);

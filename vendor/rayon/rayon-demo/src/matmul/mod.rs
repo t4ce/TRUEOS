@@ -78,10 +78,7 @@ impl Iterator for SplayedBitsCounter {
 #[test]
 fn test_splayed_counter() {
     let bits: Vec<usize> = SplayedBitsCounter::new(64).collect();
-    assert_eq!(
-        vec![0b0, 0b1, 0b100, 0b101, 0b10000, 0b10001, 0b10100, 0b10101],
-        bits
-    );
+    assert_eq!(vec![0b0, 0b1, 0b100, 0b101, 0b10000, 0b10001, 0b10100, 0b10101], bits);
 }
 
 // Multiply the matrices laid out in z order.
@@ -387,13 +384,7 @@ fn timed_matmul<F: FnOnce(&[f32], &[f32], &mut [f32])>(size: usize, f: F, name: 
     f(&a[..], &b[..], &mut dest[..]);
     let dur = Instant::now() - start;
     let nanos = u64::from(dur.subsec_nanos()) + dur.as_secs() * 1_000_000_000u64;
-    println!(
-        "{}:\t{}x{} matrix: {} s",
-        name,
-        size,
-        size,
-        nanos as f32 / 1e9f32
-    );
+    println!("{}:\t{}x{} matrix: {} s", name, size, size, nanos as f32 / 1e9f32);
     nanos
 }
 

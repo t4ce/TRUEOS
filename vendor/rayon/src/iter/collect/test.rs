@@ -10,8 +10,8 @@ use crate::iter::plumbing::*;
 use rayon_core::join;
 
 use core::fmt;
-use std::panic;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use std::panic;
 use std::thread::Result as ThreadResult;
 
 /// Promises to produce 2 items, but then produces 3.  Does not do any

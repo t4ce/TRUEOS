@@ -4,11 +4,14 @@ use super::*;
 use crate::prelude::*;
 use rayon_core::*;
 
+use alloc::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
+use core::fmt::Debug;
+#[cfg(target_os = "trueos")]
+use hashbrown::{HashMap, HashSet};
 use rand::distr::StandardUniform;
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
-use alloc::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
-use core::fmt::Debug;
+#[cfg(not(target_os = "trueos"))]
 use std::collections::{HashMap, HashSet};
 #[cfg(not(target_os = "trueos"))]
 use std::ffi::OsStr;
@@ -409,10 +412,7 @@ fn check_cmp_direct() {
 
 #[test]
 fn check_cmp_to_seq() {
-    assert_eq!(
-        (0..1024).into_par_iter().cmp(0..1024),
-        (0..1024).cmp(0..1024)
-    );
+    assert_eq!((0..1024).into_par_iter().cmp(0..1024), (0..1024).cmp(0..1024));
 }
 
 #[test]
@@ -441,10 +441,7 @@ fn check_cmp_lt_direct() {
 
 #[test]
 fn check_cmp_lt_to_seq() {
-    assert_eq!(
-        (0..1024).into_par_iter().cmp(1..1024),
-        (0..1024).cmp(1..1024)
-    )
+    assert_eq!((0..1024).into_par_iter().cmp(1..1024), (0..1024).cmp(1..1024))
 }
 
 #[test]
@@ -459,10 +456,7 @@ fn check_cmp_gt_direct() {
 
 #[test]
 fn check_cmp_gt_to_seq() {
-    assert_eq!(
-        (1..1024).into_par_iter().cmp(0..1024),
-        (1..1024).cmp(0..1024)
-    )
+    assert_eq!((1..1024).into_par_iter().cmp(0..1024), (1..1024).cmp(0..1024))
 }
 
 #[test]
@@ -1166,8 +1160,6 @@ fn check_btree_set() {
 
 #[test]
 fn check_hash_map() {
-    use std::collections::HashMap;
-
     let mut a: HashMap<i32, i32> = (0..10).map(|i| (i, -i)).collect();
 
     assert_eq!(45, a.par_iter().map(|(&k, _)| k).sum::<i32>());
@@ -1180,8 +1172,6 @@ fn check_hash_map() {
 
 #[test]
 fn check_hash_set() {
-    use std::collections::HashSet;
-
     let a: HashSet<i32> = (0..10).collect();
 
     assert_eq!(45, a.par_iter().sum::<i32>());
@@ -1289,17 +1279,11 @@ fn find_any() {
     let a: Vec<i32> = (0..1024).collect();
 
     assert!(a.par_iter().find_any(|&&x| x % 42 == 41).is_some());
-    assert_eq!(
-        a.par_iter().find_any(|&&x| x % 19 == 1 && x % 53 == 0),
-        Some(&742_i32)
-    );
+    assert_eq!(a.par_iter().find_any(|&&x| x % 19 == 1 && x % 53 == 0), Some(&742_i32));
     assert_eq!(a.par_iter().find_any(|&&x| x < 0), None);
 
     assert!(a.par_iter().position_any(|&x| x % 42 == 41).is_some());
-    assert_eq!(
-        a.par_iter().position_any(|&x| x % 19 == 1 && x % 53 == 0),
-        Some(742_usize)
-    );
+    assert_eq!(a.par_iter().position_any(|&x| x % 19 == 1 && x % 53 == 0), Some(742_usize));
     assert_eq!(a.par_iter().position_any(|&x| x < 0), None);
 
     assert!(a.par_iter().any(|&x| x > 1000));
@@ -1314,37 +1298,19 @@ fn find_first_or_last() {
     let a: Vec<i32> = (0..1024).collect();
 
     assert_eq!(a.par_iter().find_first(|&&x| x % 42 == 41), Some(&41_i32));
-    assert_eq!(
-        a.par_iter().find_first(|&&x| x % 19 == 1 && x % 53 == 0),
-        Some(&742_i32)
-    );
+    assert_eq!(a.par_iter().find_first(|&&x| x % 19 == 1 && x % 53 == 0), Some(&742_i32));
     assert_eq!(a.par_iter().find_first(|&&x| x < 0), None);
 
-    assert_eq!(
-        a.par_iter().position_first(|&x| x % 42 == 41),
-        Some(41_usize)
-    );
-    assert_eq!(
-        a.par_iter().position_first(|&x| x % 19 == 1 && x % 53 == 0),
-        Some(742_usize)
-    );
+    assert_eq!(a.par_iter().position_first(|&x| x % 42 == 41), Some(41_usize));
+    assert_eq!(a.par_iter().position_first(|&x| x % 19 == 1 && x % 53 == 0), Some(742_usize));
     assert_eq!(a.par_iter().position_first(|&x| x < 0), None);
 
     assert_eq!(a.par_iter().find_last(|&&x| x % 42 == 41), Some(&1007_i32));
-    assert_eq!(
-        a.par_iter().find_last(|&&x| x % 19 == 1 && x % 53 == 0),
-        Some(&742_i32)
-    );
+    assert_eq!(a.par_iter().find_last(|&&x| x % 19 == 1 && x % 53 == 0), Some(&742_i32));
     assert_eq!(a.par_iter().find_last(|&&x| x < 0), None);
 
-    assert_eq!(
-        a.par_iter().position_last(|&x| x % 42 == 41),
-        Some(1007_usize)
-    );
-    assert_eq!(
-        a.par_iter().position_last(|&x| x % 19 == 1 && x % 53 == 0),
-        Some(742_usize)
-    );
+    assert_eq!(a.par_iter().position_last(|&x| x % 42 == 41), Some(1007_usize));
+    assert_eq!(a.par_iter().position_last(|&x| x % 19 == 1 && x % 53 == 0), Some(742_usize));
     assert_eq!(a.par_iter().position_last(|&x| x < 0), None);
 }
 
@@ -1363,10 +1329,7 @@ fn find_map_first_or_last_or_any() {
     assert!(a.par_iter().find_map_last(half_if_positive).is_none());
 
     assert!(a.par_iter().find_map_any(half_if_negative).is_some());
-    assert_eq!(
-        a.par_iter().find_map_first(half_if_negative),
-        Some(-512_i32)
-    );
+    assert_eq!(a.par_iter().find_map_first(half_if_negative), Some(-512_i32));
     assert_eq!(a.par_iter().find_map_last(half_if_negative), Some(-2_i32));
 
     a.append(&mut (2..1025).collect());
@@ -1626,14 +1589,8 @@ fn min_max_by_key() {
     let a: Vec<(i32, u16)> = r.iter().chain(&r).cloned().zip(0..).collect();
     for i in 0..=a.len() {
         let slice = &a[..i];
-        assert_eq!(
-            slice.par_iter().min_by_key(|x| x.0),
-            slice.iter().min_by_key(|x| x.0)
-        );
-        assert_eq!(
-            slice.par_iter().max_by_key(|x| x.0),
-            slice.iter().max_by_key(|x| x.0)
-        );
+        assert_eq!(slice.par_iter().min_by_key(|x| x.0), slice.iter().min_by_key(|x| x.0));
+        assert_eq!(slice.par_iter().max_by_key(|x| x.0), slice.iter().max_by_key(|x| x.0));
     }
 }
 
@@ -1807,10 +1764,7 @@ fn check_extend_heap() {
     let v: Vec<_> = (0..128).collect();
     serial.extend(&v);
     parallel.par_extend(&v);
-    assert_eq!(
-        serial.clone().into_sorted_vec(),
-        parallel.clone().into_sorted_vec()
-    );
+    assert_eq!(serial.clone().into_sorted_vec(), parallel.clone().into_sorted_vec());
 
     // extend with values
     serial.extend(-128..0);
@@ -1975,16 +1929,8 @@ fn check_interleave_eq() {
 #[test]
 fn check_interleave_uneven() {
     let cases: Vec<(Vec<usize>, Vec<usize>, Vec<usize>)> = vec![
-        (
-            (0..9).collect(),
-            vec![10],
-            vec![0, 10, 1, 2, 3, 4, 5, 6, 7, 8],
-        ),
-        (
-            vec![10],
-            (0..9).collect(),
-            vec![10, 0, 1, 2, 3, 4, 5, 6, 7, 8],
-        ),
+        ((0..9).collect(), vec![10], vec![0, 10, 1, 2, 3, 4, 5, 6, 7, 8]),
+        (vec![10], (0..9).collect(), vec![10, 0, 1, 2, 3, 4, 5, 6, 7, 8]),
         (
             (0..5).collect(),
             (5..10).collect(),
@@ -2092,10 +2038,7 @@ fn check_chunks_even_size() {
 fn check_chunks_empty() {
     let v: Vec<i32> = vec![];
     let expected: Vec<Vec<i32>> = vec![];
-    assert_eq!(
-        expected,
-        v.into_par_iter().chunks(2).collect::<Vec<Vec<i32>>>()
-    );
+    assert_eq!(expected, v.into_par_iter().chunks(2).collect::<Vec<Vec<i32>>>());
 }
 
 #[test]

@@ -1,7 +1,9 @@
-use std::collections::HashSet;
-
+#[cfg(target_os = "trueos")]
+use hashbrown::HashSet;
 use rayon::prelude::*;
 use rayon::*;
+#[cfg(not(target_os = "trueos"))]
+use std::collections::HashSet;
 
 #[test]
 #[cfg_attr(any(target_os = "emscripten", target_family = "wasm"), ignore)]

@@ -1,11 +1,11 @@
 use crate::ThreadPoolBuilder;
 use crate::unwind;
 use crate::{Scope, ScopeFifo, scope, scope_fifo};
-use rand::rngs::StdRng;
-use rand::{RngExt, SeedableRng};
+use alloc::vec;
 use core::iter::once;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use alloc::vec;
+use rand::rngs::StdRng;
+use rand::{RngExt, SeedableRng};
 use std::sync::{Barrier, Mutex};
 
 #[test]
@@ -160,10 +160,7 @@ fn linear_stack_growth() {
         let diff_when_500 = *max_diff.get_mut().unwrap() as f64;
 
         let ratio = diff_when_5 / diff_when_500;
-        assert!(
-            ratio > 0.9 && ratio < 1.1,
-            "stack usage ratio out of bounds: {ratio}"
-        );
+        assert!(ratio > 0.9 && ratio < 1.1, "stack usage ratio out of bounds: {ratio}");
     });
 }
 

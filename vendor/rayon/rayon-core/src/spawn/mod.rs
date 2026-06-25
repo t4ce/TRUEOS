@@ -1,8 +1,8 @@
 use crate::job::*;
 use crate::registry::Registry;
 use crate::unwind;
-use core::mem;
 use alloc::sync::Arc;
+use core::mem;
 
 /// Puts the task into the Rayon thread pool's job queue in the "static"
 /// or "global" scope. Just like a standard thread, this task is not

@@ -408,23 +408,9 @@ where
             let (left_producer, right_producer) = producer.split_at(mid);
             let (left_consumer, right_consumer, reducer) = consumer.split_at(mid);
             let (left_result, right_result) = join_context(
+                |context| helper(mid, context.migrated(), splitter, left_producer, left_consumer),
                 |context| {
-                    helper(
-                        mid,
-                        context.migrated(),
-                        splitter,
-                        left_producer,
-                        left_consumer,
-                    )
-                },
-                |context| {
-                    helper(
-                        len - mid,
-                        context.migrated(),
-                        splitter,
-                        right_producer,
-                        right_consumer,
-                    )
+                    helper(len - mid, context.migrated(), splitter, right_producer, right_consumer)
                 },
             );
             reducer.reduce(left_result, right_result)

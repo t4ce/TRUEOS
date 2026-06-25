@@ -44,6 +44,7 @@ const STATUS_SELECTED_RGB: (u8, u8, u8) = (255, 55, 255);
 const FUNCTION_KEY_RGB: (u8, u8, u8) = (255, 255, 255);
 const TITLE_COUNT_RGB: (u8, u8, u8) = (255, 255, 255);
 const SYSTEM_TEXT_RGB: (u8, u8, u8) = (60, 183, 161);
+const VMX_STATUS_RGB: (u8, u8, u8) = (120, 210, 255);
 pub(crate) const OUTPUT_UART1_MASK: u8 = 1 << 0;
 pub(crate) const OUTPUT_NET_TCP_MASK: u8 = 1 << 1;
 pub(crate) const OUTPUT_UI3_MASK: u8 = 1 << 2;
@@ -260,7 +261,9 @@ impl<'a> AlignedWriter<'a> {
         if !slot_text.is_empty() {
             self.left_text(STATUS_ROW, slot_text.as_str());
         }
-        if mode == ShellMode2::Surf {
+        if active_matrix_slot_is_vmx(output_mask) {
+            self.vmx_status();
+        } else if mode == ShellMode2::Surf {
             self.surf_status(surf_prefix);
         } else if mode == ShellMode2::Apps {
             self.apps_status(apps_mode);
@@ -284,9 +287,16 @@ impl<'a> AlignedWriter<'a> {
         text
     }
 
-    fn banner_right_text(&self, _output_mask: u8, mode: ShellMode2) -> AllocString {
+    fn banner_right_text(&self, output_mask: u8, mode: ShellMode2) -> AllocString {
         let mut text = AllocString::new();
-        self.push_plain(&mut text, self.main_mode_text(mode).as_str());
+        if active_matrix_slot_is_vmx(output_mask) {
+            self.push_function_key_label(&mut text, "[F1]");
+            self.push_plain(&mut text, " ");
+            let styled = alloc::format!("{}", term_style::paint("§").bold().color(VMX_STATUS_RGB));
+            self.push_plain(&mut text, styled.as_str());
+        } else {
+            self.push_plain(&mut text, self.main_mode_text(mode).as_str());
+        }
         text
     }
 
@@ -364,6 +374,20 @@ impl<'a> AlignedWriter<'a> {
         if !status_text.is_empty() {
             self.right_text(STATUS_ROW, status_text.as_str());
         }
+    }
+
+    fn vmx_status(&self) {
+        let mut text = AllocString::new();
+        let styled = alloc::format!("{}", term_style::paint("vmx").bold().color(VMX_STATUS_RGB));
+        self.push_plain(&mut text, styled.as_str());
+        for command in [
+            "hostname", "homedir", "env", "disc", "thread", "help", "stop", "pause", "preserve",
+            "detach",
+        ] {
+            self.push_plain(&mut text, " ");
+            self.push_plain(&mut text, command);
+        }
+        self.right_text(STATUS_ROW, text.as_str());
     }
 
     fn push_plain(&self, out: &mut AllocString, text: &str) {
@@ -584,7 +608,7 @@ fn minimum_line_width_for_output(output_mask: u8) -> usize {
 fn banner_right_visible_width(output_mask: u8) -> usize {
     active_slot_label_visible_width(output_mask)
         .saturating_add(1)
-        .saturating_add(main_mode_visible_width())
+        .saturating_add(main_mode_visible_width(output_mask))
 }
 
 fn active_slot_label_visible_width(output_mask: u8) -> usize {
@@ -592,7 +616,11 @@ fn active_slot_label_visible_width(output_mask: u8) -> usize {
     1usize.saturating_add(ecma48::visible_width(active_slot.as_str()))
 }
 
-fn main_mode_visible_width() -> usize {
+fn main_mode_visible_width(output_mask: u8) -> usize {
+    if active_matrix_slot_is_vmx(output_mask) {
+        return ecma48::visible_width("[F1] §");
+    }
+
     let modes = [
         ShellMode2::Surf,
         ShellMode2::Apps,
@@ -763,6 +791,10 @@ pub(crate) fn active_matrix_vm_input_id(output_mask: u8) -> Option<u8> {
 
 pub(crate) fn active_matrix_vm_id(output_mask: u8) -> Option<u8> {
     matrix::active_slot_vm_id(output_mask)
+}
+
+fn active_matrix_slot_is_vmx(output_mask: u8) -> bool {
+    active_matrix_vm_id(output_mask).is_some()
 }
 
 pub(crate) fn history_total_lines() -> usize {
@@ -1182,29 +1214,6 @@ fn apply_mode_toggle(
     }
 }
 
-fn redraw_status_preserving_cursor(
-    out: &AlignedWriter<'_>,
-    output_mask: u8,
-    mode: ShellMode2,
-    qjs_mode: QjsPromptMode,
-    apps_mode: AppsPromptMode,
-    surf_prefix: SurfPromptPrefix,
-    cmd_status_text: Option<&str>,
-    running_go2_phase: usize,
-) {
-    out.io.raw_write_str(ecma48::SAVE_CURSOR);
-    out.mode_status(
-        output_mask,
-        mode,
-        qjs_mode,
-        apps_mode,
-        surf_prefix,
-        cmd_status_text,
-        running_go2_phase,
-    );
-    out.io.raw_write_str(ecma48::RESTORE_CURSOR);
-}
-
 fn redraw_clock_preserving_cursor(out: &AlignedWriter<'_>, output_mask: u8, time_text: &str) {
     out.io.raw_write_str(ecma48::SAVE_CURSOR);
     out.io.raw_write_str(ecma48::RESET);
@@ -1241,6 +1250,37 @@ fn apply_matrix_operator_and_refresh(
     );
     let transcript = current_transcript_for_task(io);
     out.render_transcript(&transcript);
+    transcript
+}
+
+fn switch_to_default_slot_and_refresh(
+    out: &AlignedWriter<'_>,
+    io: &'static dyn ShellBackend2,
+    output_mask: u8,
+    mode: &mut ShellMode2,
+    qjs_mode: QjsPromptMode,
+    apps_mode: AppsPromptMode,
+    surf_prefix: SurfPromptPrefix,
+    cmd_status_text: Option<&str>,
+    running_go2_phase: usize,
+    minute_text: &str,
+) -> VecDeque<TranscriptEntry> {
+    let _ = matrix::switch_active_slot(output_mask, "");
+    *mode = ShellMode2::Cmd;
+    configure_output_view(out, output_mask);
+    out.banner(output_mask, *mode, minute_text);
+    out.mode_status(
+        output_mask,
+        *mode,
+        qjs_mode,
+        apps_mode,
+        surf_prefix,
+        cmd_status_text,
+        running_go2_phase,
+    );
+    let transcript = current_transcript_for_task(io);
+    out.render_transcript(&transcript);
+    out.prompt(output_mask);
     transcript
 }
 
@@ -1379,9 +1419,13 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
         let matrix_revision = matrix::revision();
         if matrix_revision != last_matrix_revision {
             last_matrix_revision = matrix_revision;
+            configure_output_view(&out, output_mask);
             let next_transcript = current_transcript_for_task(io);
-            redraw_status_preserving_cursor(
-                &out,
+            out.io.raw_write_str(ecma48::SAVE_CURSOR);
+            out.io.raw_write_str(ecma48::RESET);
+            let (_, header_time_text) = clock_bucket_and_text();
+            out.banner(output_mask, mode, header_time_text.as_str());
+            out.mode_status(
                 output_mask,
                 mode,
                 qjs_mode,
@@ -1390,6 +1434,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 cmd_status_text.as_deref(),
                 running_go2_phase,
             );
+            out.io.raw_write_str(ecma48::RESTORE_CURSOR);
             if let Some(entry) = appended_transcript_line(&transcript, &next_transcript) {
                 out.push_transcript_line(entry);
             } else {
@@ -1458,23 +1503,40 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             csi_param = csi_param.saturating_mul(10).saturating_add(digit);
                         }
                         b'~' => {
-                            if active_matrix_vm_id(output_mask).is_none()
-                                && let Some(next_mode) =
-                                    csi_param.checked_sub(10).and_then(mode_from_function_key)
-                            {
-                                mode = next_mode;
-                                apply_mode_toggle(
-                                    &out,
-                                    output_mask,
-                                    mode,
-                                    qjs_mode,
-                                    apps_mode,
-                                    surf_prefix,
-                                    cmd_status_text.as_deref(),
-                                    running_go2_phase,
-                                    &line,
-                                    minute_text.as_str(),
-                                );
+                            if let Some(function_index) = csi_param.checked_sub(10) {
+                                if active_matrix_slot_is_vmx(output_mask) {
+                                    if function_index == 1 {
+                                        line.clear();
+                                        transcript = switch_to_default_slot_and_refresh(
+                                            &out,
+                                            io,
+                                            output_mask,
+                                            &mut mode,
+                                            qjs_mode,
+                                            apps_mode,
+                                            surf_prefix,
+                                            cmd_status_text.as_deref(),
+                                            running_go2_phase,
+                                            minute_text.as_str(),
+                                        );
+                                    }
+                                } else if let Some(next_mode) =
+                                    mode_from_function_key(function_index)
+                                {
+                                    mode = next_mode;
+                                    apply_mode_toggle(
+                                        &out,
+                                        output_mask,
+                                        mode,
+                                        qjs_mode,
+                                        apps_mode,
+                                        surf_prefix,
+                                        cmd_status_text.as_deref(),
+                                        running_go2_phase,
+                                        &line,
+                                        minute_text.as_str(),
+                                    );
+                                }
                             }
                             esc = EscState::None;
                         }
@@ -1485,31 +1547,45 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     continue;
                 }
                 EscState::Ss3 => {
-                    let next_mode = if active_matrix_vm_id(output_mask).is_some() {
-                        None
+                    if active_matrix_slot_is_vmx(output_mask) {
+                        if b == b'P' {
+                            line.clear();
+                            transcript = switch_to_default_slot_and_refresh(
+                                &out,
+                                io,
+                                output_mask,
+                                &mut mode,
+                                qjs_mode,
+                                apps_mode,
+                                surf_prefix,
+                                cmd_status_text.as_deref(),
+                                running_go2_phase,
+                                minute_text.as_str(),
+                            );
+                        }
                     } else {
-                        match b {
+                        let next_mode = match b {
                             b'P' => Some(ShellMode2::Surf),
                             b'Q' => Some(ShellMode2::Apps),
                             b'R' => Some(ShellMode2::Qjs),
                             b'S' => Some(ShellMode2::Cmd),
                             _ => None,
+                        };
+                        if let Some(next_mode) = next_mode {
+                            mode = next_mode;
+                            apply_mode_toggle(
+                                &out,
+                                output_mask,
+                                mode,
+                                qjs_mode,
+                                apps_mode,
+                                surf_prefix,
+                                cmd_status_text.as_deref(),
+                                running_go2_phase,
+                                &line,
+                                minute_text.as_str(),
+                            );
                         }
-                    };
-                    if let Some(next_mode) = next_mode {
-                        mode = next_mode;
-                        apply_mode_toggle(
-                            &out,
-                            output_mask,
-                            mode,
-                            qjs_mode,
-                            apps_mode,
-                            surf_prefix,
-                            cmd_status_text.as_deref(),
-                            running_go2_phase,
-                            &line,
-                            minute_text.as_str(),
-                        );
                     }
                     esc = EscState::None;
                     continue;

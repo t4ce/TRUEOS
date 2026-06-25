@@ -271,11 +271,7 @@ pub fn main(args: &[String]) {
         println!("  serial: {serial:10} ns");
 
         let parallel = measure(parallel_generations, &args).as_nanos();
-        println!(
-            "parallel: {:10} ns -> {:.2}x speedup",
-            parallel,
-            serial as f64 / parallel as f64
-        );
+        println!("parallel: {:10} ns -> {:.2}x speedup", parallel, serial as f64 / parallel as f64);
 
         if !args.flag_skip_bridge {
             let par_bridge = measure(par_bridge_generations, &args).as_nanos();

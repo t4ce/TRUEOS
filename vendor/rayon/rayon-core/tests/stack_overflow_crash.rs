@@ -49,10 +49,7 @@ fn stack_overflow_crash() {
     #[cfg(any(unix, windows))]
     assert_eq!(status.code(), overflow_code());
     #[cfg(target_os = "linux")]
-    assert!(matches!(
-        status.signal(),
-        Some(libc::SIGABRT | libc::SIGSEGV)
-    ));
+    assert!(matches!(status.signal(), Some(libc::SIGABRT | libc::SIGSEGV)));
 
     // Now run with a larger stack and verify correct operation.
     let status = run_ignored("run_with_large_stack");

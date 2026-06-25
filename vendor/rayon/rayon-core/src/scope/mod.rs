@@ -8,12 +8,12 @@ use crate::job::{ArcJob, HeapJob, JobFifo, JobRef};
 use crate::latch::{CountLatch, Latch};
 use crate::registry::{Registry, WorkerThread, global_registry, in_worker};
 use crate::unwind;
+use alloc::sync::Arc;
 use core::any::Any;
 use core::fmt;
 use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::ptr;
-use alloc::sync::Arc;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
 #[cfg(test)]

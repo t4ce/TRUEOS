@@ -2,8 +2,11 @@
 //! (`HashSet<T>`). You will rarely need to interact with it directly
 //! unless you have need to name one of the iterator types.
 
-use std::collections::HashSet;
 use core::marker::PhantomData;
+#[cfg(target_os = "trueos")]
+use hashbrown::HashSet;
+#[cfg(not(target_os = "trueos"))]
+use std::collections::HashSet;
 
 use crate::iter::plumbing::*;
 use crate::iter::*;

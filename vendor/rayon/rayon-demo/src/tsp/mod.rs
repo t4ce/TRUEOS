@@ -57,11 +57,7 @@ pub fn main(args: &[String]) {
         .unwrap_or_else(|e| e.exit());
 
     if args.cmd_bench {
-        let _ = run_solver(
-            Path::new(&args.arg_datafile),
-            args.flag_seq_threshold,
-            args.flag_from,
-        );
+        let _ = run_solver(Path::new(&args.arg_datafile), args.flag_seq_threshold, args.flag_from);
     }
 }
 

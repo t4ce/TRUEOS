@@ -64,10 +64,7 @@ pub fn parse_tsp_data(text: &str) -> Result<Graph, String> {
                 }
             }
             _ => {
-                return Err(format!(
-                    "line {}: unknown header type {}",
-                    header.line, header.name
-                ));
+                return Err(format!("line {}: unknown header type {}", header.line, header.name));
             }
         }
     }
@@ -75,19 +72,13 @@ pub fn parse_tsp_data(text: &str) -> Result<Graph, String> {
     let num_nodes = match num_nodes {
         Some(n) => n,
         None => {
-            return Err(format!(
-                "line {}: never found DIMENSION header",
-                data.line_num
-            ));
+            return Err(format!("line {}: never found DIMENSION header", data.line_num));
         }
     };
     let mut graph = Graph::new(num_nodes);
 
     if parse_coord_header(&mut data).is_none() {
-        return Err(format!(
-            "line {}: expected NODE_COORD_SECTION",
-            data.line_num
-        ));
+        return Err(format!("line {}: expected NODE_COORD_SECTION", data.line_num));
     }
 
     let mut coords = HashMap::new();

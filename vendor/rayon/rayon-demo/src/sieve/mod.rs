@@ -191,17 +191,9 @@ pub fn main(args: &[String]) {
         println!("  serial: {serial:10} ns");
 
         let chunks = measure(sieve_chunks).as_nanos();
-        println!(
-            "  chunks: {:10} ns -> {:.2}x speedup",
-            chunks,
-            serial as f64 / chunks as f64
-        );
+        println!("  chunks: {:10} ns -> {:.2}x speedup", chunks, serial as f64 / chunks as f64);
 
         let parallel = measure(sieve_parallel).as_nanos();
-        println!(
-            "parallel: {:10} ns -> {:.2}x speedup",
-            parallel,
-            chunks as f64 / parallel as f64
-        );
+        println!("parallel: {:10} ns -> {:.2}x speedup", parallel, chunks as f64 / parallel as f64);
     }
 }

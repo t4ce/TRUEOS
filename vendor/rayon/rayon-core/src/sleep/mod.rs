@@ -3,8 +3,8 @@
 
 use crate::latch::CoreLatch;
 use crate::sync::{Condvar, Mutex};
-use crossbeam_utils::CachePadded;
 use core::sync::atomic::Ordering;
+use crossbeam_utils::CachePadded;
 use std::thread;
 
 mod counters;

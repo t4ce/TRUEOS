@@ -147,10 +147,7 @@ impl ApplicationHandler for State {
                 target.clear_color_and_depth((0.1, 0.1, 0.1, 1.0), 1.0);
                 target
                     .draw(
-                        (
-                            &self.vertex_buffer,
-                            self.instance_buffer.per_instance().unwrap(),
-                        ),
+                        (&self.vertex_buffer, self.instance_buffer.per_instance().unwrap()),
                         &self.index_buffer,
                         &self.program,
                         &glium::uniform! { matrix: view_proj },

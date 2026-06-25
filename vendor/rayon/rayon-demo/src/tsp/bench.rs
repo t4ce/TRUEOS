@@ -30,10 +30,7 @@ fn run_dir(
         weight.to_usize(),
         "actual weight ({weight:?}) did not match expectation ({exp_weight:?})"
     );
-    assert_eq!(
-        exp_path, path,
-        "best path ({path:?}) did not match expectation ({exp_path:?})"
-    );
+    assert_eq!(exp_path, path, "best path ({path:?}) did not match expectation ({exp_path:?})");
 }
 
 #[bench]
@@ -41,11 +38,5 @@ fn dj10(b: &mut test::Bencher) {
     // these numbers are tuned to "not take THAT long" in cargo bench,
     // basically, but still exercise the spawning stuff -- each run
     // should spawn 6! (720) tasks or so this way.
-    run_dir(
-        b,
-        "dj10.tsp",
-        4,
-        2577,
-        vec![0, 1, 3, 2, 4, 6, 8, 7, 5, 9, 0],
-    );
+    run_dir(b, "dj10.tsp", 4, 2577, vec![0, 1, 3, 2, 4, 6, 8, 7, 5, 9, 0]);
 }

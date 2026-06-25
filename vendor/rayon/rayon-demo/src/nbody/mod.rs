@@ -69,10 +69,7 @@ pub fn main(args: &[String]) {
     }
 
     if args.cmd_visualize {
-        visualize_benchmarks(
-            args.flag_bodies,
-            args.flag_mode.unwrap_or(ExecutionMode::Par),
-        );
+        visualize_benchmarks(args.flag_bodies, args.flag_mode.unwrap_or(ExecutionMode::Par));
     }
 }
 

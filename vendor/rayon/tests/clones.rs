@@ -1,5 +1,11 @@
-use rayon::prelude::*;
+extern crate alloc;
+
 use core::fmt::Debug;
+#[cfg(target_os = "trueos")]
+use hashbrown::{HashMap, HashSet};
+use rayon::prelude::*;
+#[cfg(not(target_os = "trueos"))]
+use std::collections::{HashMap, HashSet};
 
 fn check<I>(iter: I)
 where
@@ -41,14 +47,12 @@ fn clone_btree_set() {
 
 #[test]
 fn clone_hash_map() {
-    use std::collections::HashMap;
     let map: HashMap<_, _> = (0..1000).enumerate().collect();
     check(map.par_iter());
 }
 
 #[test]
 fn clone_hash_set() {
-    use std::collections::HashSet;
     let set: HashSet<_> = (0..1000).collect();
     check(set.par_iter());
 }

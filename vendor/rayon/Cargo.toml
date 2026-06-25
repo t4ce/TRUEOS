@@ -30,6 +30,9 @@ either.workspace = true
 
 wasm_sync = { workspace = true, optional = true }
 
+[target.'cfg(target_os = "trueos")'.dependencies]
+hashbrown.workspace = true
+
 [dev-dependencies]
 rand.workspace = true
 
@@ -59,11 +62,12 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("trueos"
 
 # Some dependencies may not be their latest version, in order to support older rustc.
 [workspace.dependencies]
-core3 = { version = "0.1.2", default-features = false, features = ["alloc"] }
-crossbeam-deque = "0.8.1"
-crossbeam-utils = "0.8.0"
-either = { version = "1", default-features = false }
-libc = "0.2"
-rand = "0.10"
-scoped-tls = "1.0"
-wasm_sync = "0.1.0"
+core3 = { version = "=0.1.2", default-features = false, features = ["alloc"] }
+crossbeam-deque = "=0.8.6"
+crossbeam-utils = "=0.8.21"
+either = { version = "=1.16.0", default-features = false }
+hashbrown = { version = "0.17.0", default-features = false, features = ["default-hasher"] }
+libc = "=0.2.186"
+rand = "=0.10.1"
+scoped-tls = "=1.0.1"
+wasm_sync = "=0.1.2"
