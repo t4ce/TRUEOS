@@ -63,8 +63,8 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("trueos"
 # Some dependencies may not be their latest version, in order to support older rustc.
 [workspace.dependencies]
 core3 = { version = "=0.1.2", default-features = false, features = ["alloc"] }
-crossbeam-deque = { version = "=0.8.6", default-features = false, features = ["alloc"] }
-crossbeam-utils = { version = "=0.8.21", default-features = false }
+crossbeam-deque = { version = "=0.8.6", path = "../crossbeam-deque-0.8.6", default-features = false, features = ["alloc"] }
+crossbeam-utils = { version = "=0.8.21", path = "../crossbeam-utils-0.8.21", default-features = false }
 either = { version = "=1.16.0", default-features = false }
 hashbrown = { version = "0.17.0", default-features = false, features = ["default-hasher"] }
 libc = "=0.2.186"
