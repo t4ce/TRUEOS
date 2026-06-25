@@ -2,9 +2,10 @@
 //! `HashMap` data structures from the standard library.
 
 mod util {
+    use alloc::collections::LinkedList;
     use core::hash::Hash;
+    use hashbrown::HashMap;
     use rayon::prelude::*;
-    use std::collections::{HashMap, LinkedList};
     use std::sync::Mutex;
 
     /// Do whatever `collect` does by default.
@@ -288,8 +289,8 @@ macro_rules! make_bench {
 /// interesting because it has no conflicts, so each parallel
 /// iteration adds a distinct entry into the map.
 mod i_to_i {
+    use hashbrown::HashMap;
     use rayon::prelude::*;
-    use std::collections::HashMap;
 
     const N: u32 = 256 * 1024;
 
@@ -311,8 +312,8 @@ mod i_to_i {
 /// is interesting because it has lots of conflicts, so parallel
 /// iterations sometimes overwrite entries.
 mod i_mod_10_to_i {
+    use hashbrown::HashMap;
     use rayon::prelude::*;
-    use std::collections::HashMap;
 
     const N: u32 = 256 * 1024;
 

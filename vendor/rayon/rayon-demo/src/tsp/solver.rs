@@ -1,5 +1,5 @@
+use alloc::collections::BinaryHeap;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use std::collections::BinaryHeap;
 use std::sync::{Arc, Mutex};
 
 use super::graph::{Graph, Node};
