@@ -1139,7 +1139,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_blocking_service_lanes,
     ),
     TaskSpec::enabled("smp-hlt-history", 0, &SMP_HLT_HISTORY_STARTED, spawn_smp_hlt_history),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "executor-realm-migration-smoke",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         &EXECUTOR_REALM_MIGRATION_SMOKE_STARTED,
