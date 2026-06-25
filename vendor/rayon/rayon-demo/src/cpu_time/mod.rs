@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use crate::compat::time::{Duration, Instant};
 
 #[cfg(windows)]
 mod win;

@@ -6,10 +6,11 @@
 use core::error::Error;
 use core::fmt::Write;
 use docopt::Docopt;
-use std::fs::File;
-use std::io::prelude::*;
-use std::path::Path;
-use std::time::Instant;
+
+use crate::compat::fs::File;
+use crate::compat::io::prelude::*;
+use crate::compat::path::Path;
+use crate::compat::time::Instant;
 
 #[cfg(test)]
 mod bench;

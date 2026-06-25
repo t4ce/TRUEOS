@@ -24,7 +24,7 @@ pub fn main(args: &[String]) {
 
     let m = cpu_time::measure_cpu(|| {
         for _ in 1..args.flag_iters {
-            std::thread::sleep(std::time::Duration::from_millis(args.flag_sleep));
+            std::thread::sleep(crate::compat::time::Duration::from_millis(args.flag_sleep));
             rayon::spawn(move || {});
         }
     });

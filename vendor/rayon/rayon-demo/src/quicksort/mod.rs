@@ -25,8 +25,8 @@ pub struct Args {
 use docopt::Docopt;
 use rand::RngExt;
 use rand::distr::StandardUniform;
-use std::time::Instant;
 
+use crate::compat::time::Instant;
 pub trait Joiner {
     fn is_parallel() -> bool;
     fn join<A, R_A, B, R_B>(oper_a: A, oper_b: B) -> (R_A, R_B)

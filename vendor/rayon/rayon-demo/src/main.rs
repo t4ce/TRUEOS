@@ -3,8 +3,9 @@
 
 extern crate alloc;
 
-use std::{env, io, io::prelude::*, process::exit};
+use crate::compat::{env, io, io::prelude::*, process::exit};
 
+mod compat;
 mod cpu_time;
 mod life;
 mod matmul;

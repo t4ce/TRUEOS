@@ -5,6 +5,9 @@ publish = false
 edition.workspace = true
 rust-version.workspace = true
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("trueos"))'] }
+
 [dependencies]
 rayon = { path = "../" }
 cgmath = "0.18"
@@ -22,6 +25,9 @@ features = ["derive"]
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
+
+[target.'cfg(target_os = "trueos")'.dependencies]
+core3.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["processthreadsapi"] }

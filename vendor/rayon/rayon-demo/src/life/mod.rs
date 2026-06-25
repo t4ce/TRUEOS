@@ -21,8 +21,8 @@ use rand::distr::StandardUniform;
 use rand::{RngExt, rng};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
 
+use crate::compat::time::{Duration, Instant};
 use docopt::Docopt;
 use rayon::prelude::*;
 

@@ -28,8 +28,8 @@ use docopt::Docopt;
 
 use core::mem::MaybeUninit;
 use core::slice;
-use std::time::Instant;
 
+use crate::compat::time::Instant;
 pub fn merge_sort<T: Ord + Send + Copy>(v: &mut [T]) {
     let n = v.len();
     let mut buf: Vec<MaybeUninit<T>> = Vec::with_capacity(n);

@@ -1,6 +1,33 @@
 use docopt::Docopt;
-use std::io;
-use std::process;
+
+#[cfg(target_os = "trueos")]
+mod io {
+    pub use core3::io::*;
+
+    pub struct Stdin;
+
+    pub fn stdin() -> Stdin {
+        Stdin
+    }
+
+    impl Stdin {
+        pub fn read_line(&mut self, _buf: &mut String) -> Result<usize> {
+            Err(Error::new(ErrorKind::Uncategorized, "rayon-demo stdin unavailable on TRUEOS"))
+        }
+    }
+}
+
+#[cfg(target_os = "trueos")]
+mod process {
+    pub fn exit(_code: i32) -> ! {
+        loop {
+            core::hint::spin_loop();
+        }
+    }
+}
+
+#[cfg(not(target_os = "trueos"))]
+use std::{io, process};
 
 const USAGE: &str = "
 Usage: cpu_monitor [options] <scenario>
