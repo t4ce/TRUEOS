@@ -121,7 +121,8 @@ impl Stream {
 }
 
 pub fn play_i16_stereo_48k(samples: &[i16]) -> Result<usize, i32> {
-    let frames = unsafe { vcabi::trueos_cabi_audio_write_i16_stereo_48k(samples.as_ptr(), samples.len()) };
+    let frames =
+        unsafe { vcabi::trueos_cabi_audio_write_i16_stereo_48k(samples.as_ptr(), samples.len()) };
     frames_result(frames)
 }
 

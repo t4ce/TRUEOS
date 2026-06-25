@@ -115,7 +115,12 @@ impl Pcm {
 
     pub fn hw_params(&self, params: &HwParams) -> Result<(), i32> {
         match (params.format, params.access, params.channels, params.rate_hz) {
-            (Format::S16LE, Access::RWInterleaved, vaudio::DEFAULT_CHANNELS, vaudio::DEFAULT_RATE_HZ) => Ok(()),
+            (
+                Format::S16LE,
+                Access::RWInterleaved,
+                vaudio::DEFAULT_CHANNELS,
+                vaudio::DEFAULT_RATE_HZ,
+            ) => Ok(()),
             _ => Err(vaudio::ERR_INVALID),
         }
     }

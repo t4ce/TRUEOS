@@ -5,11 +5,7 @@ pub mod env {
 
 #[cfg(target_os = "trueos")]
 pub mod env {
-    use alloc::{string::String, vec::Vec};
-
-    pub fn args() -> alloc::vec::IntoIter<String> {
-        Vec::new().into_iter()
-    }
+    pub use v::env::*;
 }
 
 #[cfg(not(target_os = "trueos"))]

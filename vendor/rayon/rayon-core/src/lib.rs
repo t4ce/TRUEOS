@@ -70,17 +70,8 @@ use std as host_std;
 #[cfg(not(target_os = "trueos"))]
 use std::env;
 use std::thread;
-
 #[cfg(target_os = "trueos")]
-mod env {
-    use alloc::string::String;
-
-    pub struct VarError;
-
-    pub fn var(_key: &str) -> Result<String, VarError> {
-        Err(VarError)
-    }
-}
+use v::env;
 
 mod broadcast;
 mod job;

@@ -28,22 +28,22 @@ pub mod vled {
     }
 }
 
+pub mod alsa_compat;
 pub mod borrow;
 pub mod bp_abi;
 pub mod env;
 pub mod ffi;
 pub mod qjs_abi;
 pub mod sync;
-pub mod alsa_compat;
-pub mod vcabi;
 pub mod vaudio;
+pub mod vcabi;
 pub mod vclock;
 pub mod vfetch;
 pub mod vfs;
-pub mod vmail;
 pub mod vhttp_srv;
 pub mod vinput;
 pub mod vio;
+pub mod vmail;
 pub mod vnet;
 pub mod vnetfs;
 pub mod vshell;

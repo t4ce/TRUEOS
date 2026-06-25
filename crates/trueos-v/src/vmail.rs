@@ -97,7 +97,12 @@ pub fn send_text_start_with_timeout(
     MailOp::from_raw(id).ok_or(ERR_BAD_PARAM)
 }
 
-pub fn send_text_blocking(to: &str, subject: &str, body: &str, wait_timeout_ms: u64) -> Result<(), i32> {
+pub fn send_text_blocking(
+    to: &str,
+    subject: &str,
+    body: &str,
+    wait_timeout_ms: u64,
+) -> Result<(), i32> {
     let op = send_text_start(to, subject, body)?;
     let result = op.wait(wait_timeout_ms);
     op.discard();
