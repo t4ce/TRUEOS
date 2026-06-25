@@ -443,8 +443,8 @@ pub(crate) fn try_dispatch(
 
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
-        "7z", "lsd", "rm", "mv", "sha", "aud", "diashow", "gboy", "disc", "install", "update",
-        "hyper", "net", "c4", "txt", "gpgpu", "acpi", "tlb", "smp",
+        "7z", "lsd", "rm", "mv", "sha", "diashow", "gboy", "disc", "install", "update", "hyper",
+        "net", "c4", "txt", "gpgpu", "aud", "acpi", "tlb", "smp",
     ];
 
     let mut out = AllocString::new();
@@ -469,13 +469,22 @@ pub(crate) fn command_names_status_text() -> AllocString {
 }
 
 fn push_status_command_name(out: &mut AllocString, entry: &BuiltinShell2CmdEntry) {
-    if entry.name == "gpgpu" {
-        push_static_rainbow_token(out, entry.name);
+    let label = status_command_label(entry);
+
+    if matches!(entry.name, "gpgpu" | "aud") {
+        push_static_rainbow_token(out, label);
     } else if let Some(color) = entry.color {
-        let styled = alloc::format!("{}", super::term_style::paint(entry.name).bold().color(color));
+        let styled = alloc::format!("{}", super::term_style::paint(label).bold().color(color));
         out.push_str(styled.as_str());
     } else {
-        out.push_str(entry.name);
+        out.push_str(label);
+    }
+}
+
+fn status_command_label(entry: &BuiltinShell2CmdEntry) -> &'static str {
+    match entry.name {
+        "aud" => "audio",
+        _ => entry.name,
     }
 }
 

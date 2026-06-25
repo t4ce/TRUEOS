@@ -1,6 +1,6 @@
+use alloc::sync::Arc;
 use core::marker::PhantomData;
 use core::ops::Deref;
-use alloc::sync::Arc;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::registry::{Registry, WorkerThread};

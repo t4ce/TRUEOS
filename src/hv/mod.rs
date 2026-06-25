@@ -1555,7 +1555,7 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
         }
         "help" => blueprint_control_shell_line(
             vm_id,
-            "commands: hostname homedir env disc thread help stop pause preserve",
+            "commands: hostname homedir env disc thread help stop pause preserve detach",
         ),
         "stop" => match stop(vm_id) {
             Ok(true) => blueprint_control_shell_line(vm_id, "vmx-shell: stop requested"),

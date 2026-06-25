@@ -1,10 +1,10 @@
 use crate::latch::Latch;
 use crate::unwind;
-use crossbeam_deque::{Injector, Steal};
+use alloc::sync::Arc;
 use core::any::Any;
 use core::cell::UnsafeCell;
 use core::mem;
-use alloc::sync::Arc;
+use crossbeam_deque::{Injector, Steal};
 
 pub(super) enum JobResult<T> {
     None,

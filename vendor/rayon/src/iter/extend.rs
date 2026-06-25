@@ -2,10 +2,13 @@ use super::noop::NoopConsumer;
 use super::plumbing::{Consumer, Folder, Reducer, UnindexedConsumer};
 use super::{IntoParallelIterator, ParallelExtend, ParallelIterator};
 
-use either::Either;
 use alloc::borrow::Cow;
 use alloc::collections::{BTreeMap, BTreeSet, BinaryHeap, LinkedList, VecDeque};
 use core::hash::{BuildHasher, Hash};
+use either::Either;
+#[cfg(target_os = "trueos")]
+use hashbrown::{HashMap, HashSet};
+#[cfg(not(target_os = "trueos"))]
 use std::collections::{HashMap, HashSet};
 #[cfg(not(target_os = "trueos"))]
 use std::ffi::{OsStr, OsString};

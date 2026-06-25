@@ -57,11 +57,7 @@ where
 
     fn split_at(self, index: usize) -> (Self, Self, C::Reducer) {
         let (left, right, reducer) = self.base.split_at(index);
-        (
-            FlattenIterConsumer::new(left),
-            FlattenIterConsumer::new(right),
-            reducer,
-        )
+        (FlattenIterConsumer::new(left), FlattenIterConsumer::new(right), reducer)
     }
 
     fn into_folder(self) -> Self::Folder {

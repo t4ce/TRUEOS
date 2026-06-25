@@ -39,11 +39,7 @@ where
     type Result = P;
 
     fn split_at(self, _index: usize) -> (Self, Self, Self) {
-        (
-            ProductConsumer::new(),
-            ProductConsumer::new(),
-            ProductConsumer::new(),
-        )
+        (ProductConsumer::new(), ProductConsumer::new(), ProductConsumer::new())
     }
 
     fn into_folder(self) -> Self::Folder {

@@ -8,7 +8,6 @@ use crate::{
     Yield,
 };
 use alloc::sync::Arc;
-use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use core::cell::Cell;
 use core::fmt;
 use core::hash::Hasher;
@@ -16,6 +15,7 @@ use core::mem;
 use core::ptr;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core3::io;
+use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use std::hash::DefaultHasher;
 use std::sync::Once;
 use std::thread;
@@ -92,8 +92,7 @@ impl ThreadSpawn for DefaultSpawn {
         if let Some(stack_size) = thread.stack_size() {
             b = b.stack_size(stack_size);
         }
-        b.spawn(|| thread.run())
-            .map_err(crate::io_error_from_std)?;
+        b.spawn(|| thread.run()).map_err(crate::io_error_from_std)?;
         Ok(())
     }
 }
@@ -189,9 +188,7 @@ fn set_global_registry<F>(registry: F) -> Result<&'static Arc<Registry>, ThreadP
 where
     F: FnOnce() -> Result<Arc<Registry>, ThreadPoolBuildError>,
 {
-    let mut result = Err(ThreadPoolBuildError::new(
-        ErrorKind::GlobalPoolAlreadyInitialized,
-    ));
+    let mut result = Err(ThreadPoolBuildError::new(ErrorKind::GlobalPoolAlreadyInitialized));
 
     THE_REGISTRY_SET.call_once(|| {
         result = registry().map(|registry: Arc<Registry>| {
@@ -295,9 +292,7 @@ impl Registry {
 
             if index == 0 && builder.use_current_thread {
                 if !WorkerThread::current().is_null() {
-                    return Err(ThreadPoolBuildError::new(
-                        ErrorKind::CurrentThreadAlreadyInPool,
-                    ));
+                    return Err(ThreadPoolBuildError::new(ErrorKind::CurrentThreadAlreadyInPool));
                 }
                 // Rather than starting a new thread, we're just taking over the current thread
                 // *without* running the main loop, so we can still return from here.

@@ -204,10 +204,8 @@ where
         let idx = index >> 1;
 
         // desired split
-        let (i_idx, j_idx) = (
-            idx + odd_offset(even || self.i_next),
-            idx + odd_offset(even || !self.i_next),
-        );
+        let (i_idx, j_idx) =
+            (idx + odd_offset(even || self.i_next), idx + odd_offset(even || !self.i_next));
 
         let (i_split, j_split) = if self.i_len >= i_idx && self.j_len >= j_idx {
             (i_idx, j_idx)

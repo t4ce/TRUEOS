@@ -222,14 +222,10 @@ impl<T: Clone + Send> Producer for RepeatNProducer<T> {
     fn split_at(self, index: usize) -> (Self, Self) {
         if let Self::Repeats(element, count) = self {
             assert!(index <= count.get());
-            match (
-                NonZeroUsize::new(index),
-                NonZeroUsize::new(count.get() - index),
-            ) {
-                (Some(left), Some(right)) => (
-                    Self::Repeats(element.clone(), left),
-                    Self::Repeats(element, right),
-                ),
+            match (NonZeroUsize::new(index), NonZeroUsize::new(count.get() - index)) {
+                (Some(left), Some(right)) => {
+                    (Self::Repeats(element.clone(), left), Self::Repeats(element, right))
+                }
                 (Some(left), None) => (Self::Repeats(element, left), Self::Empty),
                 (None, Some(right)) => (Self::Empty, Self::Repeats(element, right)),
                 (None, None) => unreachable!(),

@@ -1,11 +1,11 @@
 #![cfg(test)]
 
 use crate::prelude::*;
+use core::cmp::Ordering::{Equal, Greater, Less};
+use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use rand::distr::Uniform;
 use rand::seq::IndexedRandom;
 use rand::{RngExt, rng};
-use core::cmp::Ordering::{Equal, Greater, Less};
-use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
 macro_rules! sort {
     ($f:ident, $name:ident) => {

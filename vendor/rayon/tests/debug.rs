@@ -1,5 +1,11 @@
-use rayon::prelude::*;
+extern crate alloc;
+
 use core::fmt::Debug;
+#[cfg(target_os = "trueos")]
+use hashbrown::{HashMap, HashSet};
+use rayon::prelude::*;
+#[cfg(not(target_os = "trueos"))]
+use std::collections::{HashMap, HashSet};
 
 fn check<I>(iter: I)
 where
@@ -36,7 +42,6 @@ fn debug_btree_set() {
 
 #[test]
 fn debug_hash_map() {
-    use std::collections::HashMap;
     let mut map: HashMap<_, _> = (0..10).enumerate().collect();
     check(map.par_iter());
     check(map.par_iter_mut());
@@ -46,7 +51,6 @@ fn debug_hash_map() {
 
 #[test]
 fn debug_hash_set() {
-    use std::collections::HashSet;
     let mut set: HashSet<_> = (0..10).collect();
     check(set.par_iter());
     check(set.par_drain());

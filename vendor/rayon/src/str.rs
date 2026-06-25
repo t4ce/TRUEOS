@@ -487,10 +487,9 @@ impl<'ch> UnindexedProducer for CharsProducer<'ch> {
 
     fn split(self) -> (Self, Option<Self>) {
         match split(self.chars) {
-            Some((left, right)) => (
-                CharsProducer { chars: left },
-                Some(CharsProducer { chars: right }),
-            ),
+            Some((left, right)) => {
+                (CharsProducer { chars: left }, Some(CharsProducer { chars: right }))
+            }
             None => (self, None),
         }
     }
@@ -587,10 +586,9 @@ impl<'ch> UnindexedProducer for BytesProducer<'ch> {
 
     fn split(self) -> (Self, Option<Self>) {
         match split(self.chars) {
-            Some((left, right)) => (
-                BytesProducer { chars: left },
-                Some(BytesProducer { chars: right }),
-            ),
+            Some((left, right)) => {
+                (BytesProducer { chars: left }, Some(BytesProducer { chars: right }))
+            }
             None => (self, None),
         }
     }
@@ -631,10 +629,9 @@ impl<'ch> UnindexedProducer for EncodeUtf16Producer<'ch> {
 
     fn split(self) -> (Self, Option<Self>) {
         match split(self.chars) {
-            Some((left, right)) => (
-                EncodeUtf16Producer { chars: left },
-                Some(EncodeUtf16Producer { chars: right }),
-            ),
+            Some((left, right)) => {
+                (EncodeUtf16Producer { chars: left }, Some(EncodeUtf16Producer { chars: right }))
+            }
             None => (self, None),
         }
     }

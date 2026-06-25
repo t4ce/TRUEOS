@@ -1,11 +1,11 @@
+use core::cell::Cell;
+use core::cmp::Ordering;
+use core::sync::atomic::AtomicUsize;
+use core::sync::atomic::Ordering::Relaxed;
 use rand::distr::Uniform;
 use rand::{RngExt, rng};
 use rayon::prelude::*;
-use core::cell::Cell;
-use core::cmp::Ordering;
 use std::panic;
-use core::sync::atomic::AtomicUsize;
-use core::sync::atomic::Ordering::Relaxed;
 use std::thread;
 
 const LEN: usize = 20_000;
@@ -95,13 +95,7 @@ macro_rules! test {
             // what we expect (i.e. the contents of `v`).
             for (i, c) in DROP_COUNTS.iter().enumerate().take(len) {
                 let count = c.load(Relaxed);
-                assert!(
-                    count == 1,
-                    "found drop count == {} for i == {}, len == {}",
-                    count,
-                    i,
-                    len
-                );
+                assert!(count == 1, "found drop count == {} for i == {}, len == {}", count, i, len);
             }
 
             // Check that the most recent versions of values were dropped.

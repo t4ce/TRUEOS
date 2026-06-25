@@ -383,10 +383,7 @@ fn test_i128_len_doesnt_overflow() {
 
     assert_eq!(octillion as u128, producer.range.unindexed_len());
     assert_eq!(octillion as u128, (0..octillion).unindexed_len());
-    assert_eq!(
-        2 * octillion as u128,
-        (-octillion..octillion).unindexed_len()
-    );
+    assert_eq!(2 * octillion as u128, (-octillion..octillion).unindexed_len());
 
     assert_eq!(u128::MAX, (i128::MIN..i128::MAX).unindexed_len());
 }
@@ -394,10 +391,7 @@ fn test_i128_len_doesnt_overflow() {
 #[test]
 fn test_u64_opt_len() {
     assert_eq!(Some(100), (0..100u64).into_par_iter().opt_len());
-    assert_eq!(
-        Some(usize::MAX),
-        (0..usize::MAX as u64).into_par_iter().opt_len()
-    );
+    assert_eq!(Some(usize::MAX), (0..usize::MAX as u64).into_par_iter().opt_len());
     if (usize::MAX as u64) < u64::MAX {
         assert_eq!(
             None,
@@ -412,10 +406,7 @@ fn test_u64_opt_len() {
 #[test]
 fn test_u128_opt_len() {
     assert_eq!(Some(100), (0..100u128).into_par_iter().opt_len());
-    assert_eq!(
-        Some(usize::MAX),
-        (0..usize::MAX as u128).into_par_iter().opt_len()
-    );
+    assert_eq!(Some(usize::MAX), (0..usize::MAX as u128).into_par_iter().opt_len());
     assert_eq!(None, (0..1 + usize::MAX as u128).into_par_iter().opt_len());
     assert_eq!(None, (0..u128::MAX).into_par_iter().opt_len());
 }

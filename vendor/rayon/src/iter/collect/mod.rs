@@ -97,10 +97,7 @@ where
     // will happen, have happened. Unless some code is buggy, that means we
     // should have seen `len` total writes.
     let actual_writes = result.len();
-    assert!(
-        actual_writes == len,
-        "expected {len} total writes, but got {actual_writes}"
-    );
+    assert!(actual_writes == len, "expected {len} total writes, but got {actual_writes}");
 
     // Release the result's mutable borrow and "proxy ownership"
     // of the elements, before the vector takes it over.

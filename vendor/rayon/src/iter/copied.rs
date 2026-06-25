@@ -114,10 +114,7 @@ where
 
     fn split_at(self, index: usize) -> (Self, Self) {
         let (left, right) = self.base.split_at(index);
-        (
-            CopiedProducer { base: left },
-            CopiedProducer { base: right },
-        )
+        (CopiedProducer { base: left }, CopiedProducer { base: right })
     }
 
     fn fold_with<F>(self, folder: F) -> F
@@ -152,11 +149,7 @@ where
 
     fn split_at(self, index: usize) -> (Self, Self, Self::Reducer) {
         let (left, right, reducer) = self.base.split_at(index);
-        (
-            CopiedConsumer::new(left),
-            CopiedConsumer::new(right),
-            reducer,
-        )
+        (CopiedConsumer::new(left), CopiedConsumer::new(right), reducer)
     }
 
     fn into_folder(self) -> Self::Folder {

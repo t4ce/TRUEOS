@@ -6,6 +6,9 @@ use alloc::collections::{BTreeMap, BTreeSet, BinaryHeap, LinkedList, VecDeque};
 use alloc::rc::Rc;
 use alloc::sync::Arc;
 use core::hash::{BuildHasher, Hash};
+#[cfg(target_os = "trueos")]
+use hashbrown::{HashMap, HashSet};
+#[cfg(not(target_os = "trueos"))]
 use std::collections::{HashMap, HashSet};
 #[cfg(not(target_os = "trueos"))]
 use std::ffi::{OsStr, OsString};

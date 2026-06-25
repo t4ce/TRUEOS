@@ -454,9 +454,7 @@ pub trait ParallelSliceMut<T: Send> {
     where
         F: Fn(&T, &T) -> Ordering + Sync,
     {
-        par_mergesort(self.as_parallel_slice_mut(), |a, b| {
-            compare(a, b) == Ordering::Less
-        });
+        par_mergesort(self.as_parallel_slice_mut(), |a, b| compare(a, b) == Ordering::Less);
     }
 
     /// Sorts the slice in parallel with a key extraction function.
@@ -693,9 +691,7 @@ pub trait ParallelSliceMut<T: Send> {
     where
         F: Fn(&T, &T) -> Ordering + Sync,
     {
-        par_quicksort(self.as_parallel_slice_mut(), |a, b| {
-            compare(a, b) == Ordering::Less
-        });
+        par_quicksort(self.as_parallel_slice_mut(), |a, b| compare(a, b) == Ordering::Less);
     }
 
     /// Sorts the slice in parallel with a key extraction function, but might not preserve the order
@@ -929,10 +925,7 @@ impl<'data, T: 'data + Send> Producer for IterMutProducer<'data, T> {
 
     fn split_at(self, index: usize) -> (Self, Self) {
         let (left, right) = self.slice.split_at_mut(index);
-        (
-            IterMutProducer { slice: left },
-            IterMutProducer { slice: right },
-        )
+        (IterMutProducer { slice: left }, IterMutProducer { slice: right })
     }
 }
 

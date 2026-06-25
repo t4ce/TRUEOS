@@ -1,5 +1,5 @@
-use rayon::prelude::*;
 use core::iter::once_with;
+use rayon::prelude::*;
 
 const N: usize = 100_000;
 

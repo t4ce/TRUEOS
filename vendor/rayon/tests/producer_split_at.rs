@@ -1,6 +1,6 @@
+use core::fmt::Debug;
 use rayon::iter::plumbing::*;
 use rayon::prelude::*;
-use core::fmt::Debug;
 
 /// Stress-test indexes for `Producer::split_at`.
 fn check<F, I>(expected: &[I::Item], mut f: F)

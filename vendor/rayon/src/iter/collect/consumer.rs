@@ -74,10 +74,7 @@ impl<'c, T> Drop for CollectResult<'c, T> {
         // Drop the first `self.initialized_len` elements, which have been recorded
         // to be initialized by the folder.
         unsafe {
-            ptr::drop_in_place(ptr::slice_from_raw_parts_mut(
-                self.start.0,
-                self.initialized_len,
-            ));
+            ptr::drop_in_place(ptr::slice_from_raw_parts_mut(self.start.0, self.initialized_len));
         }
     }
 }
@@ -122,10 +119,7 @@ impl<'c, T: Send + 'c> Folder<T> for CollectResult<'c, T> {
     type Result = Self;
 
     fn consume(mut self, item: T) -> Self {
-        assert!(
-            self.initialized_len < self.total_len,
-            "too many values pushed to consumer"
-        );
+        assert!(self.initialized_len < self.total_len, "too many values pushed to consumer");
 
         // SAFETY: The assert above is a bounds check for this write, and we
         // avoid assignment here so we do not drop an uninitialized T.

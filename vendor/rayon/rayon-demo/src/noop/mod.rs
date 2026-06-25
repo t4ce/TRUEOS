@@ -28,9 +28,6 @@ pub fn main(args: &[String]) {
             rayon::spawn(move || {});
         }
     });
-    println!(
-        "noop --iters={} --sleep={}",
-        args.flag_iters, args.flag_sleep
-    );
+    println!("noop --iters={} --sleep={}", args.flag_iters, args.flag_sleep);
     cpu_time::print_time(m);
 }

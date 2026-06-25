@@ -9,9 +9,9 @@ use crate::spawn;
 use crate::{Scope, scope};
 use crate::{ScopeFifo, scope_fifo};
 use crate::{ThreadPoolBuildError, ThreadPoolBuilder};
+use alloc::sync::Arc;
 use core::error::Error;
 use core::fmt;
-use alloc::sync::Arc;
 
 mod test;
 

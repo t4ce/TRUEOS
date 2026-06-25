@@ -70,11 +70,7 @@ where
 
     fn split_at(self, index: usize) -> (Self, Self, C::Reducer) {
         let (left, right, reducer) = self.base.split_at(index);
-        (
-            FlatMapConsumer::new(left, self.map_op),
-            FlatMapConsumer::new(right, self.map_op),
-            reducer,
-        )
+        (FlatMapConsumer::new(left, self.map_op), FlatMapConsumer::new(right, self.map_op), reducer)
     }
 
     fn into_folder(self) -> Self::Folder {

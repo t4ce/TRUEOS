@@ -79,14 +79,14 @@
 //! (This keeps the implementation simpler and allows extra optimizations.)
 
 use self::plumbing::*;
-pub use either::Either;
-use core::cmp::Ordering;
 use alloc::collections::LinkedList;
+use core::cmp::Ordering;
 use core::convert::Infallible;
 use core::iter::{Product, Sum};
 use core::ops::ControlFlow;
 use core::ops::{Fn, RangeBounds};
 use core::task::Poll;
+pub use either::Either;
 
 pub mod plumbing;
 
@@ -2613,11 +2613,7 @@ pub trait IndexedParallelIterator: ParallelIterator {
         Z: IntoParallelIterator<Iter: IndexedParallelIterator>,
     {
         let zip_op_iter = zip_op.into_par_iter();
-        assert_eq!(
-            self.len(),
-            zip_op_iter.len(),
-            "iterators must have the same length"
-        );
+        assert_eq!(self.len(), zip_op_iter.len(), "iterators must have the same length");
         ZipEq::new(self, zip_op_iter)
     }
 

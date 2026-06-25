@@ -1,9 +1,9 @@
 use crate::job::{ArcJob, StackJob};
 use crate::latch::{CountLatch, LatchRef};
 use crate::registry::{Registry, WorkerThread};
+use alloc::sync::Arc;
 use core::fmt;
 use core::marker::PhantomData;
-use alloc::sync::Arc;
 
 mod test;
 

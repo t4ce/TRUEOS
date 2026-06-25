@@ -613,10 +613,7 @@ where
             }
         }
 
-        (
-            l + partition_in_blocks(&mut v[l..r], pivot, is_less),
-            l >= r,
-        )
+        (l + partition_in_blocks(&mut v[l..r], pivot, is_less), l >= r)
 
         // `_pivot_guard` goes out of scope and writes the pivot (which is a stack-allocated
         // variable) back into the slice where it originally was. This step is critical in ensuring
