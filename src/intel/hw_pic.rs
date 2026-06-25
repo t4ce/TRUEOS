@@ -309,20 +309,130 @@ fn process_h264_probe_job(job: HwPicJob) -> HwPicOutput {
         proof.forcewake_awake_count
     );
 
-    log_stage(job.id, "submit", false, "h264-command-sequence-not-yet-emitted", -31);
+    log_stage(job.id, "submit", true, "enter-media-h264-smoke-batch", 0);
+    let Some(smoke) = super::xelp_media2_ngin_hw_pic::submit_h264_smoke_batch(
+        dev,
+        engine,
+        windows,
+        backing,
+        proof.bytes_written,
+        job.id,
+    ) else {
+        log_stage(job.id, "submit", false, "media-h264-smoke-batch-failed", -32);
+        return failed_output(&job, -32);
+    };
+
+    hw_pic_info!(
+        "intel/hw_pic-stage: id={} stage=h264-submit accepted={} engine={} retired={} polls={} coded={}x{} pitch=0x{:X} surface_bytes=0x{:X} nals={} nal_mask=0x{:08X} slices={} batch_bytes=0x{:X} ring_bytes=0x{:X}\n",
+        job.id,
+        smoke.retired as u8,
+        smoke.engine_name,
+        smoke.retired as u8,
+        smoke.poll_iters,
+        smoke.coded_width,
+        smoke.coded_height,
+        smoke.output_surface_pitch,
+        smoke.output_surface_bytes,
+        smoke.nal_count,
+        smoke.nal_type_mask,
+        smoke.slice_count,
+        smoke.batch_tail_bytes,
+        smoke.ring_tail_bytes
+    );
+    hw_pic_info!(
+        "intel/hw_pic-stage: id={} stage=h264-state accepted=1 sps={} pps={} frame_num={} slice_type={} mb={}x{} slice=0x{:X}+0x{:X} first_mb={}.{} pipe_mode=0x{:08X} surface=0x{:08X}/0x{:08X} img=0x{:08X}/0x{:08X}/0x{:08X}/0x{:08X}/0x{:08X} slice_dw=0x{:08X}/0x{:08X}/0x{:08X} bsd=0x{:08X}/0x{:08X}/0x{:08X}\n",
+        job.id,
+        smoke.sps_id,
+        smoke.pps_id,
+        smoke.frame_num,
+        smoke.slice_type,
+        smoke.pic_width_mbs,
+        smoke.frame_height_mbs,
+        smoke.first_slice_offset,
+        smoke.first_slice_len,
+        smoke.first_mb_byte_offset,
+        smoke.first_mb_bit_offset,
+        smoke.pipe_mode_dw1,
+        smoke.surface_dw2,
+        smoke.surface_dw3,
+        smoke.avc_img_dw1,
+        smoke.avc_img_dw2,
+        smoke.avc_img_dw4,
+        smoke.avc_img_dw13,
+        smoke.avc_img_dw14,
+        smoke.avc_slice_dw1,
+        smoke.avc_slice_dw3,
+        smoke.avc_slice_dw4,
+        smoke.avc_bsd_dw1,
+        smoke.avc_bsd_dw2,
+        smoke.avc_bsd_dw4
+    );
+    hw_pic_info!(
+        "intel/hw_pic-stage: id={} stage=h264-markers accepted={} kickoff=0x{:08X}/0x{:08X} presubmit=0x{:08X}/0x{:08X} postsubmit=0x{:08X}/0x{:08X} complete=0x{:08X}/0x{:08X} out_sig=0x{:08X} out_nonzero={}\n",
+        job.id,
+        smoke.retired as u8,
+        smoke.kickoff_value,
+        smoke.kickoff_marker,
+        smoke.presubmit_value,
+        smoke.presubmit_marker,
+        smoke.postsubmit_value,
+        smoke.postsubmit_marker,
+        smoke.complete_value,
+        smoke.complete_marker,
+        smoke.output_surface_signature,
+        smoke.output_surface_nonzero_samples
+    );
+    hw_pic_info!(
+        "intel/hw_pic-stage: id={} stage=h264-engine-regs accepted=1 el=0x{:08X}:0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X}:0x{:08X} acthd_region={} acthd_off=0x{:X} acthd_dw=0x{:08X} bbaddr=0x{:08X}:0x{:08X} dma_fadd=0x{:08X}:0x{:08X} bbstate=0x{:08X} esr=0x{:08X} instps=0x{:08X} psmi=0x{:08X} nopid=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} fault=0x{:08X}/0x{:08X}\n",
+        job.id,
+        smoke.execlist_status_lo,
+        smoke.execlist_status_hi,
+        smoke.ring_head,
+        smoke.ring_tail,
+        smoke.ring_acthd_hi,
+        smoke.ring_acthd,
+        smoke.acthd_region,
+        smoke.acthd_offset_bytes,
+        smoke.acthd_dword,
+        smoke.bbaddr_hi,
+        smoke.bbaddr_lo,
+        smoke.dma_fadd_hi,
+        smoke.dma_fadd_lo,
+        smoke.bbstate,
+        smoke.esr,
+        smoke.instps,
+        smoke.psmi_ctl,
+        smoke.nopid,
+        smoke.ipeir,
+        smoke.ipehr,
+        smoke.fault_gen8,
+        smoke.fault_gen12
+    );
+
+    if !smoke.retired {
+        log_stage(job.id, "submit", false, "media-h264-smoke-batch-not-retired", -33);
+    }
     HwPicOutput {
         id: job.id,
         codec: job.codec,
-        status: HwPicStatus::Streamed,
-        format: HwPicPixelFormat::Unknown,
-        width: 0,
-        height: 0,
-        pitch_bytes: 0,
-        byte_len: proof.bytes_written,
-        gpu_addr: windows.bitstream_gpu_addr,
-        phys_addr: backing.bitstream_phys,
-        virt_addr: backing.bitstream_virt as usize,
-        error_code: -31,
+        status: if smoke.retired {
+            HwPicStatus::Ready
+        } else {
+            HwPicStatus::Streamed
+        },
+        format: if smoke.retired {
+            HwPicPixelFormat::Imc3
+        } else {
+            HwPicPixelFormat::Unknown
+        },
+        width: smoke.coded_width,
+        height: smoke.coded_height,
+        pitch_bytes: smoke.output_surface_pitch,
+        byte_len: smoke.output_surface_bytes,
+        gpu_addr: windows.output_surface_gpu_addr,
+        phys_addr: backing.output_surface_phys,
+        virt_addr: backing.output_surface_virt as usize,
+        error_code: if smoke.retired { 0 } else { -33 },
     }
 }
 

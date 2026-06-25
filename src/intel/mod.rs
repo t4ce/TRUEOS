@@ -70,10 +70,10 @@ pub(crate) const GS_BOOTROM_MASK: u32 = 0x7F << 1;
 pub(crate) const GS_UKERNEL_MASK: u32 = 0xFF << 8;
 pub(crate) const GS_AUTH_STATUS_MASK: u32 = 0x03 << 30;
 const DISPLAY_PLANE1_BOOT_DEMO_ENABLED: bool = true;
-const MEDIA_BOOT_DEMO_ENABLED: bool = false;
-const MEDIA_BOOT_DEMO_DELAY_MS: u64 = 5_000;
+const MEDIA_BOOT_DEMO_ENABLED: bool = true;
+const MEDIA_BOOT_DEMO_DELAY_MS: u64 = 2_000;
 const MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT: u32 = 3;
-const HW_VID_PROBE_H264: &[u8] = include_bytes!("../../tools/vid/x31_head_movie_first_frame.h264");
+const HW_VID_PROBE_H264: &[u8] = include_bytes!("../../tools/vid/x31_head_movie.annexb.h264");
 const PCI_DEVICE_ALDER_LAKE_S_GT1: u16 = 0x4680;
 const PCI_DEVICE_ALDER_LAKE_N_N100_UHD: u16 = 0x46D1;
 const PCI_DEVICE_RAPTOR_LAKE_S_GT1_UHD770: u16 = 0xA780;
@@ -832,7 +832,7 @@ pub(crate) fn hw_logo_present_task()
 #[embassy_executor::task]
 pub(crate) async fn hw_vid_probe_task() {
     crate::log!(
-        "intel/hw_vid: probe begin source=embedded-x31-first-frame codec=h264 bytes=0x{:X}\n",
+        "intel/hw_vid: probe begin source=embedded-x31-annexb-video codec=h264 bytes=0x{:X}\n",
         HW_VID_PROBE_H264.len()
     );
     let id = match self::hw_pic_submit_h264(HW_VID_PROBE_H264) {
@@ -851,7 +851,7 @@ pub(crate) async fn hw_vid_probe_task() {
         }
     };
     crate::log!(
-        "intel/hw_vid: submit ok id={} bytes=0x{:X} source=embedded-x31-first-frame\n",
+        "intel/hw_vid: submit ok id={} bytes=0x{:X} source=embedded-x31-annexb-video\n",
         id,
         HW_VID_PROBE_H264.len()
     );
