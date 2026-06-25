@@ -119,7 +119,7 @@ fn main() {
     assert_eq!(stream.dwords[AVC_CMD_OFFSET_PIPE_MODE + 1], 0x0002_0202);
     assert_eq!(
         stream.dwords[AVC_CMD_OFFSET_SURFACE_STATE + 3] & 0x03,
-        MFX_TILEMODE_TILEYS_64K
+        MFX_SURFACE_TILE_WALK_YMAJOR | MFX_SURFACE_TILED_SURFACE
     );
     assert_eq!(
         stream.dwords[AVC_CMD_OFFSET_SURFACE_STATE + 2],
@@ -167,7 +167,7 @@ fn main() {
     );
     assert_eq!(
         stream.dwords[AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 6],
-        MFX_MEMORY_OBJECT_CONTROL_UC
+        MFX_MEMORY_OBJECT_CONTROL_UC | MFX_TILED_RESOURCE_MODE_TILEYS
     );
     assert_eq!(
         addr_lo(&stream.dwords, AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 13),
@@ -199,7 +199,7 @@ fn main() {
     }
     assert_eq!(
         stream.dwords[AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 51],
-        MFX_MEMORY_OBJECT_CONTROL_UC
+        MFX_MEMORY_OBJECT_CONTROL_UC | MFX_TILED_RESOURCE_MODE_TILEYS
     );
     assert_eq!(
         addr_lo(&stream.dwords, AVC_CMD_OFFSET_BSP_BUF_BASE_ADDR_STATE + 1),

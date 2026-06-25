@@ -7,6 +7,7 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 // These are monotonic: once set, they are never cleared.
 // Consumers can `await` prerequisites instead of guessing boot ordering.
 pub const PIANO_CLAIMED: u32 = 1 << 3;
+pub const RAYON_READY: u32 = 1 << 7;
 
 // Network readiness.
 //
@@ -58,6 +59,7 @@ const APP_VM_READY_REQUIRED: u32 =
 
 const READINESS_FLAGS: &[(u32, &str)] = &[
     (PIANO_CLAIMED, "PIANO_CLAIMED"),
+    (RAYON_READY, "RAYON_READY"),
     (NET_GATEWAY_REACHABLE, "NET_GATEWAY_REACHABLE"),
     (TLS_SOCKET_SERVICE_READY, "TLS_SOCKET_SERVICE_READY"),
     (NET_V4_GATEWAY_REACHABLE, "NET_V4_GATEWAY_REACHABLE"),

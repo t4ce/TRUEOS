@@ -7,6 +7,10 @@ pub(crate) fn prebind_base_readiness() -> u32 {
 pub(crate) fn prebind_import_readiness(name: &str) -> u32 {
     let mut mask = 0;
 
+    if is_rayon_import(name) {
+        mask |= crate::r::readiness::RAYON_READY;
+    }
+
     if name.starts_with("trueos_cabi_fs_") || name.starts_with("trueos_cabi_trueosfs_") {
         mask |= crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
     }
@@ -24,6 +28,10 @@ pub(crate) fn prebind_import_readiness(name: &str) -> u32 {
     }
 
     mask
+}
+
+fn is_rayon_import(name: &str) -> bool {
+    name.starts_with("trueos_cabi_rayon_") || name.starts_with("trueos_rayon_")
 }
 
 pub(crate) fn prebind_required_readiness(module_bytes: &[u8]) -> Result<u32, String> {

@@ -735,6 +735,7 @@ fn readiness_friendly_label(flag: u32, fallback: &'static str) -> &'static str {
         crate::r::readiness::TLS_SOCKET_SERVICE_READY => "TLS_NETWORK",
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED => "FILESYSTEM_MOUNTED",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY => "WORKER_AP_RDY",
+        crate::r::readiness::RAYON_READY => "RAYON_READY",
         crate::r::readiness::TRUEOSFS_INDEX_READY => "FILESYSTEM_INDEX_RDY",
         _ => fallback,
     }
