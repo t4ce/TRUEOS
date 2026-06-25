@@ -63,6 +63,7 @@ const MEDIA_DEFAULT_BATCH_BYTES: usize = 32 * 1024;
 const MEDIA_DEFAULT_RESULT_BYTES: usize = 4 * 4096;
 const MEDIA_DEFAULT_BITSTREAM_BYTES: usize = 8 * 1024 * 1024;
 const MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES: usize = 16 * 1024 * 1024;
+const MEDIA_DEFAULT_AVC_SCRATCH_BYTES: usize = 4 * 1024 * 1024;
 pub(super) const MEDIA_SUBMIT_POLL_ITERS: usize = 100_000;
 
 const MI_STORE_DWORD_IMM_GEN4: u32 = (0x20 << 23) | 2;
@@ -226,6 +227,7 @@ pub(crate) struct MediaGpuWindowLayout {
     pub batch_gpu_addr: u64,
     pub bitstream_gpu_addr: u64,
     pub output_surface_gpu_addr: u64,
+    pub avc_scratch_gpu_addr: u64,
     pub result_gpu_addr: u64,
 }
 
@@ -510,6 +512,9 @@ pub(super) struct MediaBitstreamBacking {
     pub(super) output_surface_phys: u64,
     pub(super) output_surface_virt: *mut u8,
     pub(super) output_surface_bytes: usize,
+    pub(super) avc_scratch_phys: u64,
+    pub(super) avc_scratch_virt: *mut u8,
+    pub(super) avc_scratch_bytes: usize,
     pub(super) ppgtt_pml4_phys: u64,
 }
 
@@ -565,7 +570,7 @@ fn current_topology() -> MediaTopology {
 
 fn current_api_shape(transport: MediaSubmissionTransport) -> MediaApiShape {
     let mut api = MediaApiShape::empty();
-    api.route_count = 3;
+    api.route_count = 2;
     api.routes[0] = MediaApiRoute {
         name: "media.jpeg.submit",
         workload: MediaWorkloadKind::DecodeBitstream,
@@ -574,13 +579,6 @@ fn current_api_shape(transport: MediaSubmissionTransport) -> MediaApiShape {
         summary: "submit one boot-logo JPEG through the VCS media path",
     };
     api.routes[1] = MediaApiRoute {
-        name: "media.h264.stream_probe",
-        workload: MediaWorkloadKind::DecodeBitstream,
-        preferred_engine_class: Some(MediaEngineClass::VideoDecode),
-        transport,
-        summary: "copy one embedded Annex-B H.264 stream into the VCS bitstream path",
-    };
-    api.routes[2] = MediaApiRoute {
         name: "media.observe.snapshot",
         workload: MediaWorkloadKind::SessionSnapshot,
         preferred_engine_class: None,
@@ -599,6 +597,7 @@ fn engine_window(slot: usize) -> MediaGpuWindowLayout {
         result_gpu_addr: base + 0x0010_0000,
         bitstream_gpu_addr: base + 0x0020_0000,
         output_surface_gpu_addr: base + 0x00A0_0000,
+        avc_scratch_gpu_addr: base + 0x01A0_0000,
     }
 }
 
@@ -753,6 +752,12 @@ pub(super) fn classify_media_acthd(
             backing.output_surface_bytes,
             backing.output_surface_virt,
         ),
+        (
+            "avc_scratch",
+            windows.avc_scratch_gpu_addr,
+            backing.avc_scratch_bytes,
+            backing.avc_scratch_virt,
+        ),
     ];
 
     for (name, gpu_addr, buffer_bytes, base_virt) in regions {
@@ -800,8 +805,45 @@ fn byte_signature(bytes: &[u8]) -> u32 {
     signature
 }
 
+pub(super) const MEDIA_TILE64_W: usize = 256;
+pub(super) const MEDIA_TILE64_H: usize = 256;
 const MEDIA_YTILE_W: usize = 128;
 const MEDIA_YTILE_H: usize = 32;
+pub(super) const MEDIA_NV12_BLACK_LUMA: u8 = 16;
+pub(super) const MEDIA_NV12_NEUTRAL_CHROMA: u8 = 128;
+
+pub(super) fn media_tile64_nv12_surface_layout(
+    coded_height: usize,
+    output_pitch: usize,
+) -> Option<(usize, usize)> {
+    if coded_height == 0 || output_pitch == 0 || !output_pitch.is_multiple_of(MEDIA_TILE64_W) {
+        return None;
+    }
+    let chroma_y_offset = coded_height.next_multiple_of(MEDIA_TILE64_H);
+    let total_height = chroma_y_offset.saturating_add(coded_height.div_ceil(2));
+    let bytes = total_height
+        .div_ceil(MEDIA_TILE64_H)
+        .saturating_mul(output_pitch)
+        .saturating_mul(MEDIA_TILE64_H);
+    Some((chroma_y_offset, bytes))
+}
+
+#[inline(always)]
+pub(super) fn media_tile64_8bpp_offset(byte_x: usize, row_y: usize, tiles_per_row: usize) -> usize {
+    let tile_col = byte_x / MEDIA_TILE64_W;
+    let tile_row = row_y / MEDIA_TILE64_H;
+    let u = byte_x % MEDIA_TILE64_W;
+    let v = row_y % MEDIA_TILE64_H;
+    let within_tile = ((u & 0x0f) << 0)
+        | ((v & 0x03) << 4)
+        | (((u >> 4) & 0x03) << 6)
+        | (((v >> 2) & 0x01) << 8)
+        | (((u >> 6) & 0x01) << 9)
+        | (((v >> 3) & 0x03) << 10)
+        | (((u >> 7) & 0x01) << 12)
+        | (((v >> 5) & 0x07) << 13);
+    (tile_row * tiles_per_row + tile_col) * (64 * 1024) + within_tile
+}
 
 #[inline(always)]
 fn media_ytile_offset(byte_x: usize, row_y: usize, tiles_per_row: usize) -> usize {
@@ -841,6 +883,175 @@ fn probe_tiled_rect(
             let value = *surface.get(media_ytile_offset(col, row, tiles_per_row))?;
             signature = signature.rotate_left(5) ^ u32::from(value);
             active_samples += usize::from(value != baseline);
+            sample_count += 1;
+            min_value = min_value.min(value);
+            max_value = max_value.max(value);
+        }
+    }
+    Some(MediaSurfaceProbeBand {
+        signature,
+        active_samples,
+        sample_count,
+        min_value,
+        max_value,
+    })
+}
+
+fn probe_tile64_rect(
+    surface: &[u8],
+    output_pitch: usize,
+    byte_x: usize,
+    row_y: usize,
+    width: usize,
+    row_count: usize,
+    baseline: u8,
+) -> Option<MediaSurfaceProbeBand> {
+    if width == 0 || row_count == 0 || output_pitch < byte_x.saturating_add(width) {
+        return None;
+    }
+    let tiles_per_row = output_pitch / MEDIA_TILE64_W;
+    if tiles_per_row == 0 {
+        return None;
+    }
+    let mut signature = 0u32;
+    let mut active_samples = 0usize;
+    let mut sample_count = 0usize;
+    let mut min_value = u8::MAX;
+    let mut max_value = u8::MIN;
+    for row in row_y..row_y.saturating_add(row_count) {
+        for col in byte_x..byte_x.saturating_add(width) {
+            let value = *surface.get(media_tile64_8bpp_offset(col, row, tiles_per_row))?;
+            signature = signature.rotate_left(5) ^ u32::from(value);
+            active_samples += usize::from(value != baseline);
+            sample_count += 1;
+            min_value = min_value.min(value);
+            max_value = max_value.max(value);
+        }
+    }
+    Some(MediaSurfaceProbeBand {
+        signature,
+        active_samples,
+        sample_count,
+        min_value,
+        max_value,
+    })
+}
+
+fn probe_linear_rect(
+    surface: &[u8],
+    output_pitch: usize,
+    byte_x: usize,
+    row_y: usize,
+    width: usize,
+    row_count: usize,
+    baseline: u8,
+) -> Option<MediaSurfaceProbeBand> {
+    if width == 0 || row_count == 0 || output_pitch < byte_x.saturating_add(width) {
+        return None;
+    }
+    let mut signature = 0u32;
+    let mut active_samples = 0usize;
+    let mut sample_count = 0usize;
+    let mut min_value = u8::MAX;
+    let mut max_value = u8::MIN;
+    for row in row_y..row_y.saturating_add(row_count) {
+        let row_start = row.saturating_mul(output_pitch);
+        for col in byte_x..byte_x.saturating_add(width) {
+            let value = *surface.get(row_start.saturating_add(col))?;
+            signature = signature.rotate_left(5) ^ u32::from(value);
+            active_samples += usize::from(value != baseline);
+            sample_count += 1;
+            min_value = min_value.min(value);
+            max_value = max_value.max(value);
+        }
+    }
+    Some(MediaSurfaceProbeBand {
+        signature,
+        active_samples,
+        sample_count,
+        min_value,
+        max_value,
+    })
+}
+
+fn probe_linear_nv12_chroma_rect(
+    surface: &[u8],
+    output_pitch: usize,
+    uv_offset: usize,
+    pair_x: usize,
+    row_y: usize,
+    pair_width: usize,
+    row_count: usize,
+    component_offset: usize,
+) -> Option<MediaSurfaceProbeBand> {
+    if pair_width == 0 || row_count == 0 || component_offset > 1 {
+        return None;
+    }
+    let byte_x = pair_x.saturating_mul(2).saturating_add(component_offset);
+    let byte_width = pair_width.saturating_mul(2);
+    if output_pitch < byte_x.saturating_add(byte_width.saturating_sub(1)) {
+        return None;
+    }
+    let mut signature = 0u32;
+    let mut active_samples = 0usize;
+    let mut sample_count = 0usize;
+    let mut min_value = u8::MAX;
+    let mut max_value = u8::MIN;
+    for row in row_y..row_y.saturating_add(row_count) {
+        let row_start = uv_offset.saturating_add(row.saturating_mul(output_pitch));
+        for pair in 0..pair_width {
+            let value = *surface.get(row_start.saturating_add(byte_x + pair * 2))?;
+            signature = signature.rotate_left(5) ^ u32::from(value);
+            active_samples += usize::from(value != MEDIA_NV12_NEUTRAL_CHROMA);
+            sample_count += 1;
+            min_value = min_value.min(value);
+            max_value = max_value.max(value);
+        }
+    }
+    Some(MediaSurfaceProbeBand {
+        signature,
+        active_samples,
+        sample_count,
+        min_value,
+        max_value,
+    })
+}
+
+fn probe_tiled_nv12_chroma_rect(
+    surface: &[u8],
+    output_pitch: usize,
+    chroma_y_offset: usize,
+    pair_x: usize,
+    row_y: usize,
+    pair_width: usize,
+    row_count: usize,
+    component_offset: usize,
+) -> Option<MediaSurfaceProbeBand> {
+    if pair_width == 0 || row_count == 0 || component_offset > 1 {
+        return None;
+    }
+    let tiles_per_row = output_pitch / MEDIA_TILE64_W;
+    if tiles_per_row == 0 {
+        return None;
+    }
+    let byte_x = pair_x.saturating_mul(2).saturating_add(component_offset);
+    let byte_width = pair_width.saturating_mul(2);
+    if output_pitch < byte_x.saturating_add(byte_width.saturating_sub(1)) {
+        return None;
+    }
+    let mut signature = 0u32;
+    let mut active_samples = 0usize;
+    let mut sample_count = 0usize;
+    let mut min_value = u8::MAX;
+    let mut max_value = u8::MIN;
+    for row in row_y..row_y.saturating_add(row_count) {
+        let tiled_row = chroma_y_offset.saturating_add(row);
+        for pair in 0..pair_width {
+            let tiled_x = byte_x + pair * 2;
+            let value =
+                *surface.get(media_tile64_8bpp_offset(tiled_x, tiled_row, tiles_per_row))?;
+            signature = signature.rotate_left(5) ^ u32::from(value);
+            active_samples += usize::from(value != MEDIA_NV12_NEUTRAL_CHROMA);
             sample_count += 1;
             min_value = min_value.min(value);
             max_value = max_value.max(value);
@@ -1061,6 +1272,413 @@ pub(super) fn probe_output_surface(
             .unwrap_or_else(MediaSurfaceProbeBand::empty),
         luma_storage_pad_last_row: luma_storage_pad_last_row
             .unwrap_or_else(MediaSurfaceProbeBand::empty),
+        luma_center_band: luma_center_band.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        luma_prev_mb_row: luma_prev_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        luma_bottom_mb_row: luma_bottom_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        cb_center_band: cb_center_band.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        cb_center_hi_band: cb_center_hi_band.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        cb_prev_mb_row: cb_prev_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        cb_bottom_mb_row: cb_bottom_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        cr_center_band: cr_center_band.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        cr_prev_mb_row: cr_prev_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        cr_bottom_mb_row: cr_bottom_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+    }
+}
+
+pub(super) fn probe_linear_nv12_output_surface(
+    output_surface: &[u8],
+    coded_width: u16,
+    coded_height: u16,
+    visible_x: u16,
+    visible_y: u16,
+    visible_width: u16,
+    visible_height: u16,
+    output_pitch: usize,
+) -> MediaSurfaceProbe {
+    let coded_width = coded_width as usize;
+    let coded_height = coded_height as usize;
+    let visible_x = visible_x as usize;
+    let visible_y = visible_y as usize;
+    let visible_width = visible_width as usize;
+    let visible_height = visible_height as usize;
+    if coded_width == 0
+        || coded_height == 0
+        || visible_width == 0
+        || visible_height == 0
+        || output_pitch < coded_width
+    {
+        return MediaSurfaceProbe::empty();
+    }
+    let visible_bottom = visible_y.saturating_add(visible_height).min(coded_height);
+    if visible_x.saturating_add(visible_width) > coded_width || visible_bottom <= visible_y {
+        return MediaSurfaceProbe::empty();
+    }
+    let uv_offset = output_pitch.saturating_mul(coded_height);
+    let needed = uv_offset.saturating_add(output_pitch.saturating_mul(coded_height.div_ceil(2)));
+    if output_surface.len() < needed {
+        return MediaSurfaceProbe::empty();
+    }
+
+    let bottom_luma_rows = coded_height.min(16);
+    let bottom_luma_row = coded_height.saturating_sub(bottom_luma_rows);
+    let prev_luma_rows = bottom_luma_row.min(16);
+    let prev_luma_row = bottom_luma_row.saturating_sub(prev_luma_rows);
+    let visible_last_row = visible_bottom.saturating_sub(1);
+    let visible_tail8_row = visible_bottom.saturating_sub(8).max(visible_y);
+    let center_luma_rows = visible_height.min(16);
+    let center_luma_row = visible_y
+        .saturating_add(visible_height / 2)
+        .saturating_sub(center_luma_rows / 2)
+        .min(coded_height.saturating_sub(center_luma_rows));
+    let chroma_width_pairs = coded_width.div_ceil(2);
+    let center_chroma_x = visible_x / 2;
+    let center_chroma_width = visible_width.div_ceil(2).min(chroma_width_pairs);
+    let center_chroma_hi_x = center_chroma_x.saturating_add(center_chroma_width);
+    let (center_chroma_row, center_chroma_rows) =
+        luma_band_to_chroma_band(center_luma_row, center_luma_rows);
+    let (prev_chroma_row, prev_chroma_rows) =
+        luma_band_to_chroma_band(prev_luma_row, prev_luma_rows);
+    let (bottom_chroma_row, bottom_chroma_rows) =
+        luma_band_to_chroma_band(bottom_luma_row, bottom_luma_rows);
+
+    let luma_visible_last_row = probe_linear_rect(
+        output_surface,
+        output_pitch,
+        visible_x,
+        visible_last_row,
+        visible_width,
+        1,
+        MEDIA_NV12_BLACK_LUMA,
+    );
+    let luma_visible_tail8_row = probe_linear_rect(
+        output_surface,
+        output_pitch,
+        visible_x,
+        visible_tail8_row,
+        visible_width,
+        1,
+        MEDIA_NV12_BLACK_LUMA,
+    );
+    let luma_center_band = probe_linear_rect(
+        output_surface,
+        output_pitch,
+        visible_x,
+        center_luma_row,
+        visible_width,
+        center_luma_rows,
+        MEDIA_NV12_BLACK_LUMA,
+    );
+    let luma_prev_mb_row = probe_linear_rect(
+        output_surface,
+        output_pitch,
+        0,
+        prev_luma_row,
+        coded_width,
+        prev_luma_rows,
+        MEDIA_NV12_BLACK_LUMA,
+    );
+    let luma_bottom_mb_row = probe_linear_rect(
+        output_surface,
+        output_pitch,
+        0,
+        bottom_luma_row,
+        coded_width,
+        bottom_luma_rows,
+        MEDIA_NV12_BLACK_LUMA,
+    );
+    let cb_center_band = probe_linear_nv12_chroma_rect(
+        output_surface,
+        output_pitch,
+        uv_offset,
+        center_chroma_x,
+        center_chroma_row,
+        center_chroma_width,
+        center_chroma_rows,
+        0,
+    );
+    let cb_center_hi_band = probe_linear_nv12_chroma_rect(
+        output_surface,
+        output_pitch,
+        uv_offset,
+        center_chroma_hi_x,
+        center_chroma_row,
+        center_chroma_width.min(chroma_width_pairs.saturating_sub(center_chroma_hi_x)),
+        center_chroma_rows,
+        0,
+    );
+    let cb_prev_mb_row = probe_linear_nv12_chroma_rect(
+        output_surface,
+        output_pitch,
+        uv_offset,
+        0,
+        prev_chroma_row,
+        chroma_width_pairs,
+        prev_chroma_rows,
+        0,
+    );
+    let cb_bottom_mb_row = probe_linear_nv12_chroma_rect(
+        output_surface,
+        output_pitch,
+        uv_offset,
+        0,
+        bottom_chroma_row,
+        chroma_width_pairs,
+        bottom_chroma_rows,
+        0,
+    );
+    let cr_center_band = probe_linear_nv12_chroma_rect(
+        output_surface,
+        output_pitch,
+        uv_offset,
+        center_chroma_x,
+        center_chroma_row,
+        center_chroma_width,
+        center_chroma_rows,
+        1,
+    );
+    let cr_prev_mb_row = probe_linear_nv12_chroma_rect(
+        output_surface,
+        output_pitch,
+        uv_offset,
+        0,
+        prev_chroma_row,
+        chroma_width_pairs,
+        prev_chroma_rows,
+        1,
+    );
+    let cr_bottom_mb_row = probe_linear_nv12_chroma_rect(
+        output_surface,
+        output_pitch,
+        uv_offset,
+        0,
+        bottom_chroma_row,
+        chroma_width_pairs,
+        bottom_chroma_rows,
+        1,
+    );
+    let valid = luma_visible_last_row.is_some()
+        && luma_visible_tail8_row.is_some()
+        && luma_center_band.is_some()
+        && luma_prev_mb_row.is_some()
+        && luma_bottom_mb_row.is_some()
+        && cb_center_band.is_some()
+        && cb_center_hi_band.is_some()
+        && cb_prev_mb_row.is_some()
+        && cb_bottom_mb_row.is_some()
+        && cr_center_band.is_some()
+        && cr_prev_mb_row.is_some()
+        && cr_bottom_mb_row.is_some();
+    MediaSurfaceProbe {
+        valid,
+        luma_visible_last_row: luma_visible_last_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        luma_visible_tail8_row: luma_visible_tail8_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        luma_storage_pad_first_row: MediaSurfaceProbeBand::empty(),
+        luma_storage_pad_last_row: MediaSurfaceProbeBand::empty(),
+        luma_center_band: luma_center_band.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        luma_prev_mb_row: luma_prev_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        luma_bottom_mb_row: luma_bottom_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        cb_center_band: cb_center_band.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        cb_center_hi_band: cb_center_hi_band.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        cb_prev_mb_row: cb_prev_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        cb_bottom_mb_row: cb_bottom_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        cr_center_band: cr_center_band.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        cr_prev_mb_row: cr_prev_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        cr_bottom_mb_row: cr_bottom_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+    }
+}
+
+pub(super) fn probe_tiled_nv12_output_surface(
+    output_surface: &[u8],
+    coded_width: u16,
+    coded_height: u16,
+    visible_x: u16,
+    visible_y: u16,
+    visible_width: u16,
+    visible_height: u16,
+    output_pitch: usize,
+) -> MediaSurfaceProbe {
+    let coded_width = coded_width as usize;
+    let coded_height = coded_height as usize;
+    let visible_x = visible_x as usize;
+    let visible_y = visible_y as usize;
+    let visible_width = visible_width as usize;
+    let visible_height = visible_height as usize;
+    if coded_width == 0
+        || coded_height == 0
+        || visible_width == 0
+        || visible_height == 0
+        || output_pitch < coded_width
+    {
+        return MediaSurfaceProbe::empty();
+    }
+    let visible_bottom = visible_y.saturating_add(visible_height).min(coded_height);
+    if visible_x.saturating_add(visible_width) > coded_width || visible_bottom <= visible_y {
+        return MediaSurfaceProbe::empty();
+    }
+    let Some((chroma_y_offset, needed)) =
+        media_tile64_nv12_surface_layout(coded_height, output_pitch)
+    else {
+        return MediaSurfaceProbe::empty();
+    };
+    if output_surface.len() < needed {
+        return MediaSurfaceProbe::empty();
+    }
+
+    let bottom_luma_rows = coded_height.min(16);
+    let bottom_luma_row = coded_height.saturating_sub(bottom_luma_rows);
+    let prev_luma_rows = bottom_luma_row.min(16);
+    let prev_luma_row = bottom_luma_row.saturating_sub(prev_luma_rows);
+    let visible_last_row = visible_bottom.saturating_sub(1);
+    let visible_tail8_row = visible_bottom.saturating_sub(8).max(visible_y);
+    let center_luma_rows = visible_height.min(16);
+    let center_luma_row = visible_y
+        .saturating_add(visible_height / 2)
+        .saturating_sub(center_luma_rows / 2)
+        .min(coded_height.saturating_sub(center_luma_rows));
+    let chroma_width_pairs = coded_width.div_ceil(2);
+    let center_chroma_x = visible_x / 2;
+    let center_chroma_width = visible_width.div_ceil(2).min(chroma_width_pairs);
+    let center_chroma_hi_x = center_chroma_x.saturating_add(center_chroma_width);
+    let (center_chroma_row, center_chroma_rows) =
+        luma_band_to_chroma_band(center_luma_row, center_luma_rows);
+    let (prev_chroma_row, prev_chroma_rows) =
+        luma_band_to_chroma_band(prev_luma_row, prev_luma_rows);
+    let (bottom_chroma_row, bottom_chroma_rows) =
+        luma_band_to_chroma_band(bottom_luma_row, bottom_luma_rows);
+
+    let luma_visible_last_row = probe_tile64_rect(
+        output_surface,
+        output_pitch,
+        visible_x,
+        visible_last_row,
+        visible_width,
+        1,
+        MEDIA_NV12_BLACK_LUMA,
+    );
+    let luma_visible_tail8_row = probe_tile64_rect(
+        output_surface,
+        output_pitch,
+        visible_x,
+        visible_tail8_row,
+        visible_width,
+        1,
+        MEDIA_NV12_BLACK_LUMA,
+    );
+    let luma_center_band = probe_tile64_rect(
+        output_surface,
+        output_pitch,
+        visible_x,
+        center_luma_row,
+        visible_width,
+        center_luma_rows,
+        MEDIA_NV12_BLACK_LUMA,
+    );
+    let luma_prev_mb_row = probe_tile64_rect(
+        output_surface,
+        output_pitch,
+        0,
+        prev_luma_row,
+        coded_width,
+        prev_luma_rows,
+        MEDIA_NV12_BLACK_LUMA,
+    );
+    let luma_bottom_mb_row = probe_tile64_rect(
+        output_surface,
+        output_pitch,
+        0,
+        bottom_luma_row,
+        coded_width,
+        bottom_luma_rows,
+        MEDIA_NV12_BLACK_LUMA,
+    );
+    let cb_center_band = probe_tiled_nv12_chroma_rect(
+        output_surface,
+        output_pitch,
+        chroma_y_offset,
+        center_chroma_x,
+        center_chroma_row,
+        center_chroma_width,
+        center_chroma_rows,
+        0,
+    );
+    let cb_center_hi_band = probe_tiled_nv12_chroma_rect(
+        output_surface,
+        output_pitch,
+        chroma_y_offset,
+        center_chroma_hi_x,
+        center_chroma_row,
+        center_chroma_width.min(chroma_width_pairs.saturating_sub(center_chroma_hi_x)),
+        center_chroma_rows,
+        0,
+    );
+    let cb_prev_mb_row = probe_tiled_nv12_chroma_rect(
+        output_surface,
+        output_pitch,
+        chroma_y_offset,
+        0,
+        prev_chroma_row,
+        chroma_width_pairs,
+        prev_chroma_rows,
+        0,
+    );
+    let cb_bottom_mb_row = probe_tiled_nv12_chroma_rect(
+        output_surface,
+        output_pitch,
+        chroma_y_offset,
+        0,
+        bottom_chroma_row,
+        chroma_width_pairs,
+        bottom_chroma_rows,
+        0,
+    );
+    let cr_center_band = probe_tiled_nv12_chroma_rect(
+        output_surface,
+        output_pitch,
+        chroma_y_offset,
+        center_chroma_x,
+        center_chroma_row,
+        center_chroma_width,
+        center_chroma_rows,
+        1,
+    );
+    let cr_prev_mb_row = probe_tiled_nv12_chroma_rect(
+        output_surface,
+        output_pitch,
+        chroma_y_offset,
+        0,
+        prev_chroma_row,
+        chroma_width_pairs,
+        prev_chroma_rows,
+        1,
+    );
+    let cr_bottom_mb_row = probe_tiled_nv12_chroma_rect(
+        output_surface,
+        output_pitch,
+        chroma_y_offset,
+        0,
+        bottom_chroma_row,
+        chroma_width_pairs,
+        bottom_chroma_rows,
+        1,
+    );
+    let valid = luma_visible_last_row.is_some()
+        && luma_visible_tail8_row.is_some()
+        && luma_center_band.is_some()
+        && luma_prev_mb_row.is_some()
+        && luma_bottom_mb_row.is_some()
+        && cb_center_band.is_some()
+        && cb_center_hi_band.is_some()
+        && cb_prev_mb_row.is_some()
+        && cb_bottom_mb_row.is_some()
+        && cr_center_band.is_some()
+        && cr_prev_mb_row.is_some()
+        && cr_bottom_mb_row.is_some();
+    MediaSurfaceProbe {
+        valid,
+        luma_visible_last_row: luma_visible_last_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        luma_visible_tail8_row: luma_visible_tail8_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        luma_storage_pad_first_row: MediaSurfaceProbeBand::empty(),
+        luma_storage_pad_last_row: MediaSurfaceProbeBand::empty(),
         luma_center_band: luma_center_band.unwrap_or_else(MediaSurfaceProbeBand::empty),
         luma_prev_mb_row: luma_prev_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
         luma_bottom_mb_row: luma_bottom_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
@@ -1675,6 +2293,8 @@ pub(super) fn ensure_decode_backing(
         crate::dma::alloc(MEDIA_DEFAULT_BITSTREAM_BYTES, crate::intel::WARM_ALIGN)?;
     let (output_surface_phys, output_surface_virt) =
         crate::dma::alloc(MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES, crate::intel::WARM_ALIGN)?;
+    let (avc_scratch_phys, avc_scratch_virt) =
+        crate::dma::alloc(MEDIA_DEFAULT_AVC_SCRATCH_BYTES, crate::intel::WARM_ALIGN)?;
     let mapped = super::map_ggtt(dev, ring_phys, MEDIA_DEFAULT_RING_BYTES, windows.ring_gpu_addr)
         && super::map_ggtt(
             dev,
@@ -1695,6 +2315,12 @@ pub(super) fn ensure_decode_backing(
             output_surface_phys,
             MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES,
             windows.output_surface_gpu_addr,
+        )
+        && super::map_ggtt(
+            dev,
+            avc_scratch_phys,
+            MEDIA_DEFAULT_AVC_SCRATCH_BYTES,
+            windows.avc_scratch_gpu_addr,
         );
     if !mapped {
         return None;
@@ -1704,6 +2330,7 @@ pub(super) fn ensure_decode_backing(
         (windows.batch_gpu_addr, batch_phys, MEDIA_DEFAULT_BATCH_BYTES),
         (windows.bitstream_gpu_addr, bitstream_phys, MEDIA_DEFAULT_BITSTREAM_BYTES),
         (windows.output_surface_gpu_addr, output_surface_phys, MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES),
+        (windows.avc_scratch_gpu_addr, avc_scratch_phys, MEDIA_DEFAULT_AVC_SCRATCH_BYTES),
         (windows.result_gpu_addr, result_phys, MEDIA_DEFAULT_RESULT_BYTES),
     ])?;
     let backing = MediaBitstreamBacking {
@@ -1725,6 +2352,9 @@ pub(super) fn ensure_decode_backing(
         output_surface_phys,
         output_surface_virt,
         output_surface_bytes: MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES,
+        avc_scratch_phys,
+        avc_scratch_virt,
+        avc_scratch_bytes: MEDIA_DEFAULT_AVC_SCRATCH_BYTES,
         ppgtt_pml4_phys,
     };
     *MEDIA_BACKING.lock() = Some(backing);

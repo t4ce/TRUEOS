@@ -31,7 +31,7 @@ const DMA_GUC_WOPCM_OFFSET: usize = 0x0000_C340;
 const GUC_WOPCM_SIZE: usize = 0x0000_C050;
 const UOS_RSA_SCRATCH_BASE: usize = 0x0000_C200;
 const GUC_MODULE_STRING: &[u8] = b"trueos.fw.guc";
-const GUC_MODULE_PATH_SUFFIX: &[u8] = b"/EFI/BOOT/adlp_guc_70.bin";
+const GUC_MODULE_PATH_SUFFIX: &[u8] = b"/EFI/BOOT/tgl_guc_70.bin";
 
 const GUC_DISABLE_SRAM_INIT_TO_ZEROES: u32 = 1 << 0;
 const GT_DOORBELL_ENABLE: u32 = 1 << 0;
@@ -148,7 +148,7 @@ pub(crate) fn load_fw() -> crate::intel::Buf {
         crate::limine::module_bytes_by_path_suffix(GUC_MODULE_PATH_SUFFIX).inspect(|bytes| {
             crate::log!(
                 "intel/guc: firmware module found by path fallback suffix={} len=0x{:X}\n",
-                core::str::from_utf8(GUC_MODULE_PATH_SUFFIX).unwrap_or("adlp_guc_70.bin"),
+                core::str::from_utf8(GUC_MODULE_PATH_SUFFIX).unwrap_or("tgl_guc_70.bin"),
                 bytes.len()
             );
         })

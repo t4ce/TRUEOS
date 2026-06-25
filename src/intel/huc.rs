@@ -1,7 +1,7 @@
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use spin::Mutex;
 
-const HUC_MODULE_STRING: &[u8] = b"trueos.fw.huc.candidate.tgl";
+const HUC_MODULE_STRING: &[u8] = b"trueos.fw.huc.tgl";
 const DMA_ADDR_0_LOW: usize = 0x0000_C300;
 const DMA_ADDR_0_HIGH: usize = 0x0000_C304;
 const DMA_ADDR_1_LOW: usize = 0x0000_C308;

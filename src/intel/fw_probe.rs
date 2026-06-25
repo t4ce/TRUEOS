@@ -1,9 +1,9 @@
 const DMC_MODULE_STRING: &[u8] = b"trueos.fw.dmc";
-const HUC_CANDIDATE_MODULE_STRING: &[u8] = b"trueos.fw.huc.candidate.tgl";
+const HUC_MODULE_STRING: &[u8] = b"trueos.fw.huc.tgl";
 
 pub(crate) fn log_probe_modules(device_id: u16) {
     log_module_probe("dmc", DMC_MODULE_STRING, "adls-probe", device_id);
-    log_module_probe("huc", HUC_CANDIDATE_MODULE_STRING, "tgl-candidate-probe-only", device_id);
+    log_module_probe("huc", HUC_MODULE_STRING, "adls-rkl-platform-maps-to-tgl", device_id);
 }
 
 fn log_module_probe(

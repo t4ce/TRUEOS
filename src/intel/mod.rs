@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+extern crate alloc;
+
 mod blt;
 mod display;
 mod dmc;
@@ -22,6 +24,7 @@ pub(crate) mod types;
 mod uc_fw;
 pub(crate) mod xelp_media2_ngin;
 pub(crate) mod xelp_media2_ngin_hw_pic;
+pub(crate) mod xelp_media_avc_decode_recipe;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -70,10 +73,13 @@ pub(crate) const GS_BOOTROM_MASK: u32 = 0x7F << 1;
 pub(crate) const GS_UKERNEL_MASK: u32 = 0xFF << 8;
 pub(crate) const GS_AUTH_STATUS_MASK: u32 = 0x03 << 30;
 const DISPLAY_PLANE1_BOOT_DEMO_ENABLED: bool = true;
-const MEDIA_BOOT_DEMO_ENABLED: bool = true;
+const MEDIA_BOOT_DEMO_ENABLED: bool = false;
+const MEDIA_H264_BOOT_PROBE_ENABLED: bool = true;
+const MEDIA_H264_BOOT_PROBE_TIMEOUT_MS: u64 = 5_000;
 const MEDIA_BOOT_DEMO_DELAY_MS: u64 = 2_000;
 const MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT: u32 = 3;
-const HW_VID_PROBE_H264: &[u8] = include_bytes!("../../tools/vid/x31_head_movie.annexb.h264");
+const MEDIA_H264_BOOT_PROBE_FIRST_FRAME: &[u8] =
+    include_bytes!("../../tools/vid/x31_head_movie_first_frame.h264");
 const PCI_DEVICE_ALDER_LAKE_S_GT1: u16 = 0x4680;
 const PCI_DEVICE_ALDER_LAKE_N_N100_UHD: u16 = 0x46D1;
 const PCI_DEVICE_RAPTOR_LAKE_S_GT1_UHD770: u16 = 0xA780;
@@ -800,6 +806,10 @@ pub(crate) fn has_media_decode_engine() -> bool {
         .unwrap_or(false)
 }
 
+pub(crate) fn hw_vid_probe_enabled() -> bool {
+    MEDIA_H264_BOOT_PROBE_ENABLED
+}
+
 pub(crate) fn hw_pic_service()
 -> Result<embassy_executor::SpawnToken<impl Send>, embassy_executor::SpawnError> {
     self::hw_pic::hw_pic_service()
@@ -831,42 +841,84 @@ pub(crate) fn hw_logo_present_task()
 
 #[embassy_executor::task]
 pub(crate) async fn hw_vid_probe_task() {
+    if !MEDIA_H264_BOOT_PROBE_ENABLED {
+        crate::log!("intel/hw_vid: probe disabled reason=h264-boot-probe-disabled\n");
+        return;
+    }
+    if !has_media_decode_engine() {
+        crate::log!("intel/hw_vid: probe skipped reason=no-media-decode-engine\n");
+        return;
+    }
+
+    Timer::after(EmbassyDuration::from_millis(MEDIA_BOOT_DEMO_DELAY_MS)).await;
+    let before = hw_pic_snapshot();
     crate::log!(
-        "intel/hw_vid: probe begin source=embedded-x31-annexb-video codec=h264 bytes=0x{:X}\n",
-        HW_VID_PROBE_H264.len()
+        "intel/hw_vid: h264-probe submit bytes={} pending={} outputs={} service_started={}\n",
+        MEDIA_H264_BOOT_PROBE_FIRST_FRAME.len(),
+        before.pending,
+        before.outputs,
+        before.service_started as u8
     );
-    let id = match self::hw_pic_submit_h264(HW_VID_PROBE_H264) {
+
+    let id = match hw_pic_submit_h264(MEDIA_H264_BOOT_PROBE_FIRST_FRAME) {
         Ok(id) => id,
-        Err(code) => {
-            let snap = self::hw_pic_snapshot();
-            crate::log!(
-                "intel/hw_vid: submit failed code={} bytes=0x{:X} pending={} outputs={} service={}\n",
-                code,
-                HW_VID_PROBE_H264.len(),
-                snap.pending,
-                snap.outputs,
-                snap.service_started as u8
-            );
+        Err(err) => {
+            crate::log!("intel/hw_vid: h264-probe submit-failed err={}\n", err);
             return;
         }
     };
-    crate::log!(
-        "intel/hw_vid: submit ok id={} bytes=0x{:X} source=embedded-x31-annexb-video\n",
-        id,
-        HW_VID_PROBE_H264.len()
-    );
-    let Some(output) = self::hw_pic_wait_output_for_id(id, 5000).await else {
-        crate::log!("intel/hw_vid: output timeout id={}\n", id);
+
+    let Some(output) = hw_pic_wait_output_for_id(id, MEDIA_H264_BOOT_PROBE_TIMEOUT_MS).await else {
+        let after = hw_pic_snapshot();
+        crate::log!(
+            "intel/hw_vid: h264-probe timeout id={} pending={} outputs={} service_started={}\n",
+            id,
+            after.pending,
+            after.outputs,
+            after.service_started as u8
+        );
         return;
     };
+
+    let stored = if matches!(
+        output.status,
+        self::hw_pic::HwPicStatus::Ready | self::hw_pic::HwPicStatus::Streamed
+    ) && output.format == self::hw_pic::HwPicPixelFormat::Nv12
+        && output.width != 0
+        && output.height != 0
+        && output.pitch_bytes != 0
+        && output.byte_len != 0
+        && output.virt_addr != 0
+    {
+        let src =
+            unsafe { core::slice::from_raw_parts(output.virt_addr as *const u8, output.byte_len) };
+        self::display::present_nv12_surface_center(
+            src,
+            output.width,
+            output.height,
+            0,
+            0,
+            output.width,
+            output.height,
+            output.pitch_bytes,
+        )
+    } else {
+        false
+    };
+
     crate::log!(
-        "intel/hw_vid: output id={} status={:?} fmt={:?} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} err={} note=stream-probe-only\n",
+        "intel/hw_vid: h264-probe output id={} codec={:?} status={:?} fmt={:?} decoded={}x{} pitch=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} stored={} err={}\n",
         output.id,
+        output.codec,
         output.status,
         output.format,
+        output.width,
+        output.height,
+        output.pitch_bytes,
         output.byte_len,
         output.gpu_addr,
         output.phys_addr,
+        stored as u8,
         output.error_code
     );
 }
