@@ -159,3 +159,6 @@ symphonia-core = { path = "vendor/symphonia-core-0.5.5-trueos" }
 symphonia-codec-aac = { path = "vendor/symphonia-codec-aac-0.5.5-trueos" }
 rayon = { path = "vendor/rayon" }
 rayon-core = { path = "vendor/rayon/rayon-core" }
+crossbeam-deque = { path = "vendor/crossbeam-deque-0.8.6" }
+crossbeam-epoch = { path = "vendor/crossbeam-epoch-0.9.18" }
+crossbeam-utils = { path = "vendor/crossbeam-utils-0.8.21" }
