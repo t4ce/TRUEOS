@@ -207,11 +207,21 @@ fn compat_addr_port(addr: Option<CompatAddr>) -> Option<u16> {
     }
 }
 
+fn compat_addr_is_ipv4_loopback(addr: CompatAddr) -> bool {
+    matches!(
+        addr,
+        CompatAddr::V4 {
+            addr: [127, _, _, _],
+            ..
+        }
+    )
+}
+
 fn probe_tcp_socket(socket: &MioSocketState) -> bool {
     socket.kind == MioSocketKind::TcpStream
         && (crate::logflag::NET_LOG_TCP_FLOW
             || matches!(compat_addr_port(socket.local), Some(4 | 5))
-            || matches!(compat_addr_port(socket.peer), Some(80 | 443)))
+            || matches!(compat_addr_port(socket.peer), Some(80 | 443 | 4242 | 4965 | 7822)))
 }
 
 fn should_log_selector_probe(readiness: u8) -> bool {
@@ -673,6 +683,86 @@ impl MioCompat {
         }
     }
 
+    fn queue_loopback_accept_from_client(
+        &mut self,
+        client_socket_id: u32,
+        client_handle: api::NetHandle,
+    ) {
+        let Some(client) = self.socket(client_socket_id) else {
+            return;
+        };
+        let Some(target) = client.peer else {
+            return;
+        };
+        let client_owner_vm = client.owner_vm;
+        if !compat_addr_is_ipv4_loopback(target) {
+            return;
+        }
+        let Some(target_port) = compat_addr_port(Some(target)) else {
+            return;
+        };
+
+        let server_handle = api::NetHandle(client_handle.0.wrapping_add(1));
+        if self.socket_by_handle_mut(server_handle).is_some() {
+            return;
+        }
+
+        let Some(listener_id) = self
+            .sockets
+            .iter()
+            .find(|socket| {
+                socket.kind == MioSocketKind::TcpListener
+                    && !socket.closed
+                    && socket.owner_vm == client_owner_vm
+                    && socket.listen_port == Some(target_port)
+            })
+            .map(|socket| socket.id)
+        else {
+            return;
+        };
+
+        let child_id = self.alloc_socket_id();
+        let (owner_vm, local, fallback_peer) = {
+            let listener = self.socket(listener_id).unwrap();
+            (
+                listener.owner_vm,
+                listener.local,
+                listener.local.map(CompatAddr::unspecified_same_family),
+            )
+        };
+
+        self.sockets.push(MioSocketState {
+            id: child_id,
+            owner_vm,
+            kind: MioSocketKind::TcpStream,
+            handle: Some(server_handle),
+            listen_handles: Vec::new(),
+            local,
+            peer: fallback_peer,
+            listen_port: None,
+            connected: true,
+            closed: false,
+            error: STATUS_OK,
+            rx_stream: VecDeque::new(),
+            rx_dgrams: VecDeque::new(),
+            accept_queue: VecDeque::new(),
+        });
+
+        if let Some(listener) = self.socket_mut(listener_id) {
+            listener.accept_queue.push_back(child_id);
+            crate::log!(
+                "mio_compat: tcp loopback accept queued listener={} child={} client_handle={} server_handle={} pending={}\n",
+                listener_id,
+                child_id,
+                client_handle.0,
+                server_handle.0,
+                listener.accept_queue.len()
+            );
+        }
+
+        MIO_SELECTOR_WAIT.notify_all();
+    }
+
     fn tcp_connect_status_for_owner(&self, socket_id: u32, owner_vm: Option<u8>) -> Option<i32> {
         let socket = self.socket_for_owner(socket_id, owner_vm)?;
         if socket.kind != MioSocketKind::TcpStream {
@@ -900,10 +990,17 @@ impl MioCompat {
                 } else if let Some(socket) = self.socket_by_handle_mut(handle) {
                     socket.connected = true;
                     if socket.kind == MioSocketKind::TcpStream
+                        && let Some(peer) = CompatAddr::from_vnet(peer, peer6)
+                    {
+                        socket.peer = Some(peer);
+                    }
+                    if socket.kind == MioSocketKind::TcpStream
                         && let Some(peer) = socket.peer
                     {
                         log_tcp_endpoint("mio_compat: tcp established", socket.id, handle.0, peer);
                     }
+                    let socket_id = socket.id;
+                    self.queue_loopback_accept_from_client(socket_id, handle);
                 } else if crate::logflag::NET_LOG_TCP_FLOW {
                     let mut listener_count = 0usize;
                     let mut first_listener_socket = 0u32;
@@ -1013,6 +1110,17 @@ impl MioCompat {
                         socket.listen_handles.retain(|h| *h != handle);
                         refill_listener = Some(socket.id);
                     } else {
+                        if socket.kind == MioSocketKind::TcpStream
+                            && !socket.connected
+                            && let Some(peer) = socket.peer
+                        {
+                            log_tcp_endpoint(
+                                "mio_compat: tcp closed before established",
+                                socket.id,
+                                handle.0,
+                                peer,
+                            );
+                        }
                         socket.handle = None;
                         socket.closed = true;
                     }
