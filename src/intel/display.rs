@@ -1022,9 +1022,14 @@ pub(crate) async fn hw_logo_present_task() {
                 (0, 0, 0, 0, 0, 0)
             };
 
-        let stored = if output.status == crate::intel::hw_pic::HwPicStatus::Ready
-            && matches!(output.format, crate::intel::hw_pic::HwPicPixelFormat::Imc3)
-            && output.width != 0
+        let stored = if matches!(
+            output.status,
+            crate::intel::hw_pic::HwPicStatus::Ready | crate::intel::hw_pic::HwPicStatus::Streamed
+        ) && matches!(
+            output.format,
+            crate::intel::hw_pic::HwPicPixelFormat::Imc3
+                | crate::intel::hw_pic::HwPicPixelFormat::Nv12
+        ) && output.width != 0
             && output.height != 0
             && output.pitch_bytes != 0
             && output.byte_len != 0
@@ -1035,6 +1040,16 @@ pub(crate) async fn hw_logo_present_task() {
             };
             match output.format {
                 crate::intel::hw_pic::HwPicPixelFormat::Imc3 => present_imc3_surface_center(
+                    src,
+                    output.width,
+                    output.height,
+                    visible_x,
+                    visible_y,
+                    visible_width,
+                    visible_height,
+                    output.pitch_bytes,
+                ),
+                crate::intel::hw_pic::HwPicPixelFormat::Nv12 => present_nv12_surface_center(
                     src,
                     output.width,
                     output.height,
@@ -3182,16 +3197,18 @@ pub(crate) fn present_nv12_surface_center(
         return false;
     }
 
-    const YTILE_W: usize = 128;
-    const YTILE_H: usize = 32;
-    let tiles_per_row = src_pitch_bytes / YTILE_W;
+    if !src_pitch_bytes.is_multiple_of(super::xelp_media2_ngin::MEDIA_TILE64_W) {
+        return false;
+    }
+    let tiles_per_row = src_pitch_bytes / super::xelp_media2_ngin::MEDIA_TILE64_W;
     if tiles_per_row == 0 {
         return false;
     }
-    let chroma_y_offset = (coded_height + YTILE_H - 1) & !(YTILE_H - 1);
-    let total_height = chroma_y_offset + coded_height.div_ceil(2);
-    let total_tile_rows = (total_height + YTILE_H - 1) / YTILE_H;
-    let needed = total_tile_rows * tiles_per_row * 4096;
+    let Some((chroma_y_offset, needed)) =
+        super::xelp_media2_ngin::media_tile64_nv12_surface_layout(coded_height, src_pitch_bytes)
+    else {
+        return false;
+    };
     if src.len() < needed {
         return false;
     }
@@ -3210,18 +3227,6 @@ pub(crate) fn present_nv12_surface_center(
     let dst_x = dst_width.saturating_sub(copy_w) / 2;
     let dst_y = dst_height.saturating_sub(copy_h) / 2;
 
-    #[inline(always)]
-    fn ytile_offset(byte_x: usize, row_y: usize, tiles_per_row: usize) -> usize {
-        let tile_col = byte_x / YTILE_W;
-        let tile_row = row_y / YTILE_H;
-        let in_x = byte_x % YTILE_W;
-        let in_y = row_y % YTILE_H;
-        let oword_col = in_x / 16;
-        let byte_in_oword = in_x % 16;
-        let within_tile = oword_col * 512 + in_y * 16 + byte_in_oword;
-        (tile_row * tiles_per_row + tile_col) * 4096 + within_tile
-    }
-
     for row_idx in 0..copy_h {
         let src_y = visible_y.saturating_add(
             row_idx
@@ -3234,7 +3239,6 @@ pub(crate) fn present_nv12_surface_center(
             .saturating_mul(dst_pitch)
             .saturating_add(dst_x.saturating_mul(4));
         let dst_row = unsafe { surface.virt.add(dst_row_off) as *mut u32 };
-        let uv_row = chroma_y_offset + src_y / 2;
         for col_idx in 0..copy_w {
             let src_x = visible_x.saturating_add(
                 col_idx
@@ -3243,10 +3247,14 @@ pub(crate) fn present_nv12_surface_center(
                     .unwrap_or(0)
                     .min(visible_width.saturating_sub(1)),
             );
-            let y_off = ytile_offset(src_x, src_y, tiles_per_row);
-            let uv_x = (src_x / 2) * 2;
-            let u_off = ytile_offset(uv_x, uv_row, tiles_per_row);
-            let v_off = u_off + 1;
+            let y_off =
+                super::xelp_media2_ngin::media_tile64_8bpp_offset(src_x, src_y, tiles_per_row);
+            let uv_x = (src_x / 2).saturating_mul(2);
+            let uv_row = chroma_y_offset.saturating_add(src_y / 2);
+            let u_off =
+                super::xelp_media2_ngin::media_tile64_8bpp_offset(uv_x, uv_row, tiles_per_row);
+            let v_off =
+                super::xelp_media2_ngin::media_tile64_8bpp_offset(uv_x + 1, uv_row, tiles_per_row);
             let y = unsafe { i32::from(*src.get_unchecked(y_off)) };
             let c = (y - 16).max(0);
             let u = unsafe { i32::from(*src.get_unchecked(u_off)) } - 128;

@@ -37,6 +37,7 @@ pub(crate) enum HwPicStatus {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HwPicPixelFormat {
     Imc3,
+    Nv12,
     Unknown,
 }
 
@@ -181,7 +182,7 @@ async fn hw_pic_service_inner() {
 fn process_job(job: HwPicJob) -> HwPicOutput {
     match job.codec {
         HwPicCodec::Jpeg => process_jpeg_job(job),
-        HwPicCodec::H264 => process_h264_probe_job(job),
+        HwPicCodec::H264 => process_h264_job(job),
     }
 }
 
@@ -213,34 +214,158 @@ fn failed_output(job: &HwPicJob, code: i32) -> HwPicOutput {
     }
 }
 
-fn count_annexb_nals(encoded: &[u8]) -> (usize, u32) {
-    let mut count = 0usize;
-    let mut type_mask = 0u32;
-    let mut idx = 0usize;
-    while idx + 4 <= encoded.len() {
-        let start_len = if encoded[idx..].starts_with(&[0, 0, 1]) {
-            3usize
-        } else if encoded[idx..].starts_with(&[0, 0, 0, 1]) {
-            4usize
-        } else {
-            idx += 1;
-            continue;
-        };
-        let nal_off = idx + start_len;
-        if let Some(&header) = encoded.get(nal_off) {
-            let nal_type = header & 0x1F;
-            if nal_type < 32 {
-                type_mask |= 1u32 << nal_type;
-            }
-            count += 1;
-        }
-        idx = nal_off.saturating_add(1);
+fn align_up_usize(value: usize, align: usize) -> usize {
+    if align == 0 {
+        return value;
     }
-    (count, type_mask)
+    (value + align - 1) & !(align - 1)
 }
 
-fn process_h264_probe_job(job: HwPicJob) -> HwPicOutput {
-    log_stage(job.id, "job-start", true, "codec=h264", 0);
+fn avc_scratch_bindings(
+    plan: crate::intel::xelp_media_avc_decode_recipe::AvcLongFormatIdrPlan,
+    dest_gpu_addr: u64,
+    dest_bytes: usize,
+    missing_reference_gpu_addr: u64,
+    missing_reference_bytes: usize,
+    bitstream_gpu_addr: u64,
+    bitstream_bytes: usize,
+    scratch_gpu_addr: u64,
+    scratch_bytes: usize,
+) -> crate::intel::xelp_media_avc_decode_recipe::AvcPacketResourceBindings {
+    use crate::intel::xelp_media_avc_decode_recipe::{
+        AvcGpuResourceRange, MFX_GENERAL_STATE_ALIGNMENT,
+    };
+
+    let align = MFX_GENERAL_STATE_ALIGNMENT as usize;
+    let mut next = scratch_gpu_addr;
+    let scratch_end = scratch_gpu_addr.saturating_add(scratch_bytes as u64);
+    let intra = AvcGpuResourceRange {
+        gpu_addr: next,
+        bytes: plan.resources.rowstore.intra,
+    };
+    next += align_up_usize(intra.bytes, align) as u64;
+    let deblocking_filter = AvcGpuResourceRange {
+        gpu_addr: next,
+        bytes: plan.resources.rowstore.deblocking_filter,
+    };
+    next += align_up_usize(deblocking_filter.bytes, align) as u64;
+    let bsd_mpc = AvcGpuResourceRange {
+        gpu_addr: next,
+        bytes: plan.resources.rowstore.bsd_mpc,
+    };
+    next += align_up_usize(bsd_mpc.bytes, align) as u64;
+    let mpr = AvcGpuResourceRange {
+        gpu_addr: next,
+        bytes: plan.resources.rowstore.mpr,
+    };
+    next += align_up_usize(mpr.bytes, align) as u64;
+    let dmv_write = AvcGpuResourceRange {
+        gpu_addr: next,
+        bytes: plan.resources.dmv_write_buffer_bytes,
+    };
+    next += align_up_usize(dmv_write.bytes, align) as u64;
+    let dmv_reference = AvcGpuResourceRange {
+        gpu_addr: next,
+        bytes: plan.resources.dmv_reference_buffer_bytes,
+    };
+    let required_end = dmv_reference
+        .gpu_addr
+        .saturating_add(dmv_reference.bytes as u64);
+    let (dmv_write, dmv_reference) = if required_end <= scratch_end {
+        (dmv_write, dmv_reference)
+    } else {
+        let invalid = AvcGpuResourceRange {
+            gpu_addr: scratch_gpu_addr,
+            bytes: 0,
+        };
+        (invalid, invalid)
+    };
+
+    crate::intel::xelp_media_avc_decode_recipe::AvcPacketResourceBindings {
+        dest_surface: AvcGpuResourceRange {
+            gpu_addr: dest_gpu_addr,
+            bytes: dest_bytes,
+        },
+        missing_reference_surface: AvcGpuResourceRange {
+            gpu_addr: missing_reference_gpu_addr,
+            bytes: missing_reference_bytes,
+        },
+        bitstream: AvcGpuResourceRange {
+            gpu_addr: bitstream_gpu_addr,
+            bytes: bitstream_bytes,
+        },
+        intra_rowstore: intra,
+        deblocking_filter_rowstore: deblocking_filter,
+        bsd_mpc_rowstore: bsd_mpc,
+        mpr_rowstore: mpr,
+        dmv_write_buffer: dmv_write,
+        dmv_reference_buffer: dmv_reference,
+    }
+}
+
+fn process_h264_job(job: HwPicJob) -> HwPicOutput {
+    use crate::intel::xelp_media_avc_decode_recipe::{
+        AVC_CMD_OFFSET_AVC_BSD_OBJECT, AVC_CMD_OFFSET_AVC_DIRECTMODE_STATE,
+        AVC_CMD_OFFSET_AVC_IMG_STATE, AVC_CMD_OFFSET_AVC_PICID_STATE,
+        AVC_CMD_OFFSET_AVC_QM_INTRA_4X4_STATE, AVC_CMD_OFFSET_AVC_REF_IDX_STATE,
+        AVC_CMD_OFFSET_AVC_SLICE_STATE, AVC_CMD_OFFSET_BSP_BUF_BASE_ADDR_STATE,
+        AVC_CMD_OFFSET_IND_OBJ_BASE_ADDR_STATE, AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE,
+        AVC_CMD_OFFSET_PIPE_MODE, AVC_CMD_OFFSET_SURFACE_STATE, MFX_AVC_DMV_DEST_BOTTOM,
+        MFX_AVC_DMV_DEST_TOP, avc_missing_reference_surface_offset,
+        build_long_format_single_idr_command_stream, parse_annexb_single_idr_plan,
+    };
+
+    log_stage(job.id, "job-start", true, "codec=h264 stage=avc-single-idr-live", 0);
+
+    let plan = match parse_annexb_single_idr_plan(job.encoded.as_slice()) {
+        Ok(plan) => plan,
+        Err(err) => {
+            hw_pic_info!(
+                "intel/hw_pic-stage: id={} stage=avc-parse accepted=0 code=-20 err={:?} bytes=0x{:X}\n",
+                job.id,
+                err,
+                job.encoded.len()
+            );
+            return failed_output(&job, -20);
+        }
+    };
+
+    hw_pic_info!(
+        "intel/hw_pic-stage: id={} stage=avc-parse accepted=1 milestone=long-format-single-idr coded={}x{} mb={}x{} poc={}/{} bitstream=0x{:X} slice=0x{:X}+0x{:X} payload_bit={} first_mb_byte={} first_mb_bit={} qp_delta={} entropy={} transform8x8={}\n",
+        job.id,
+        plan.picture.coded_width(),
+        plan.picture.coded_height(),
+        plan.picture.pic_width_in_mbs(),
+        plan.picture.pic_height_in_mbs(),
+        plan.picture.top_field_order_cnt,
+        plan.picture.bottom_field_order_cnt,
+        plan.bitstream_bytes,
+        plan.slice.slice_data_offset,
+        plan.slice.slice_data_size,
+        plan.slice.slice_data_bit_offset_from_payload,
+        plan.slice.first_mb_byte_offset,
+        plan.slice.slice_data_bit_offset,
+        plan.slice.slice_qp_delta,
+        plan.picture.entropy_coding_mode as u8,
+        plan.picture.transform_8x8 as u8
+    );
+    hw_pic_info!(
+        "intel/hw_pic-stage: id={} stage=avc-resources accepted=1 surface={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} rowstore intra=0x{:X} deblock=0x{:X} bsd_mpc=0x{:X} mpr=0x{:X} dmv_write=0x{:X} dmv_ref=0x{:X} refs={}\n",
+        job.id,
+        plan.resources.dest_surface.width,
+        plan.resources.dest_surface.height,
+        plan.resources.dest_surface.pitch_bytes,
+        plan.resources.dest_surface.uv_offset,
+        plan.resources.dest_surface.byte_len,
+        plan.resources.rowstore.intra,
+        plan.resources.rowstore.deblocking_filter,
+        plan.resources.rowstore.bsd_mpc,
+        plan.resources.rowstore.mpr,
+        plan.resources.dmv_write_buffer_bytes,
+        plan.resources.dmv_reference_buffer_bytes,
+        plan.resources.reference_surface_count
+    );
+
     let Some(dev) = super::claimed_device() else {
         log_stage(job.id, "device", false, "claimed_device=none", -2);
         return failed_output(&job, -2);
@@ -249,12 +374,9 @@ fn process_h264_probe_job(job: HwPicJob) -> HwPicOutput {
 
     let (engine, windows) = super::xelp_media2_ngin_hw_pic::default_decode_engine_and_window();
     hw_pic_info!(
-        "intel/hw_pic-stage: id={} stage=route accepted=1 codec=h264 engine={} ring_gpu=0x{:X} ctx_gpu=0x{:X} batch_gpu=0x{:X} bitstream_gpu=0x{:X} output_gpu=0x{:X} result_gpu=0x{:X}\n",
+        "intel/hw_pic-stage: id={} stage=route accepted=1 codec=h264 engine={} bitstream_gpu=0x{:X} output_gpu=0x{:X} result_gpu=0x{:X}\n",
         job.id,
         engine.name,
-        windows.ring_gpu_addr,
-        windows.context_gpu_addr,
-        windows.batch_gpu_addr,
         windows.bitstream_gpu_addr,
         windows.output_surface_gpu_addr,
         windows.result_gpu_addr
@@ -268,15 +390,62 @@ fn process_h264_probe_job(job: HwPicJob) -> HwPicOutput {
         log_stage(job.id, "input", false, "encoded-larger-than-bitstream", -12);
         return failed_output(&job, -12);
     }
-
-    let (nal_count, nal_type_mask) = count_annexb_nals(job.encoded.as_slice());
+    if plan.resources.dest_surface.byte_len > backing.output_surface_bytes {
+        log_stage(job.id, "surface", false, "planned-surface-larger-than-backing", -22);
+        return failed_output(&job, -22);
+    }
+    let missing_ref_offset =
+        avc_missing_reference_surface_offset(plan.resources.dest_surface.byte_len);
+    let missing_ref_required =
+        missing_ref_offset.saturating_add(plan.resources.dest_surface.byte_len);
+    if missing_ref_required > backing.output_surface_bytes {
+        hw_pic_info!(
+            "intel/hw_pic-stage: id={} stage=avc-dummy-ref accepted=0 code=-27 offset=0x{:X} bytes=0x{:X} capacity=0x{:X}\n",
+            job.id,
+            missing_ref_offset,
+            plan.resources.dest_surface.byte_len,
+            backing.output_surface_bytes
+        );
+        return failed_output(&job, -27);
+    }
+    let avc_scratch_required = align_up_usize(
+        plan.resources.rowstore.intra,
+        crate::intel::xelp_media_avc_decode_recipe::MFX_GENERAL_STATE_ALIGNMENT as usize,
+    )
+    .saturating_add(align_up_usize(
+        plan.resources.rowstore.deblocking_filter,
+        crate::intel::xelp_media_avc_decode_recipe::MFX_GENERAL_STATE_ALIGNMENT as usize,
+    ))
+    .saturating_add(align_up_usize(
+        plan.resources.rowstore.bsd_mpc,
+        crate::intel::xelp_media_avc_decode_recipe::MFX_GENERAL_STATE_ALIGNMENT as usize,
+    ))
+    .saturating_add(align_up_usize(
+        plan.resources.rowstore.mpr,
+        crate::intel::xelp_media_avc_decode_recipe::MFX_GENERAL_STATE_ALIGNMENT as usize,
+    ))
+    .saturating_add(align_up_usize(
+        plan.resources.dmv_write_buffer_bytes,
+        crate::intel::xelp_media_avc_decode_recipe::MFX_GENERAL_STATE_ALIGNMENT as usize,
+    ))
+    .saturating_add(plan.resources.dmv_reference_buffer_bytes);
+    if avc_scratch_required > backing.avc_scratch_bytes {
+        hw_pic_info!(
+            "intel/hw_pic-stage: id={} stage=avc-scratch accepted=0 code=-23 required=0x{:X} capacity=0x{:X}\n",
+            job.id,
+            avc_scratch_required,
+            backing.avc_scratch_bytes
+        );
+        return failed_output(&job, -23);
+    }
     hw_pic_info!(
-        "intel/hw_pic-stage: id={} stage=input accepted=1 codec=h264 encoded=0x{:X} bitstream_capacity=0x{:X} annexb_nals={} nal_type_mask=0x{:08X}\n",
+        "intel/hw_pic-stage: id={} stage=avc-scratch accepted=1 gpu=0x{:X} phys=0x{:X} virt=0x{:X} required=0x{:X} capacity=0x{:X}\n",
         job.id,
-        job.encoded.len(),
-        backing.bitstream_bytes,
-        nal_count,
-        nal_type_mask
+        windows.avc_scratch_gpu_addr,
+        backing.avc_scratch_phys,
+        backing.avc_scratch_virt as usize,
+        avc_scratch_required,
+        backing.avc_scratch_bytes
     );
 
     let Some(proof) = super::xelp_media2_ngin_hw_pic::stream_encoded_to_bitstream(
@@ -289,150 +458,380 @@ fn process_h264_probe_job(job: HwPicJob) -> HwPicOutput {
         log_stage(job.id, "stream", false, "copy-to-bitstream-failed", -6);
         return failed_output(&job, -6);
     };
-
     hw_pic_info!(
-        "intel/hw_pic: h264 stream-probe id={} engine={} bytes=0x{:X}/0x{:X} annexb_nals={} nal_type_mask=0x{:08X} bitstream_gpu=0x{:X} bitstream_phys=0x{:X} bitstream_virt=0x{:X} sig=0x{:08X} fw_engine_ack_reg=0x{:X} fw_engine_ack=0x{:08X} fw_engine_awake={} fw_global_ack=0x{:08X} fw_awake={}\n",
+        "intel/hw_pic-stage: id={} stage=stream accepted=1 codec=h264 engine={} bytes=0x{:X}/0x{:X} sig=0x{:08X} bitstream_gpu=0x{:X} fw_engine_awake={} fw_global_ack=0x{:08X}\n",
         job.id,
         proof.engine_name,
         proof.bytes_written,
         proof.capacity,
-        nal_count,
-        nal_type_mask,
-        proof.bitstream_gpu_addr,
-        proof.bitstream_phys,
-        proof.bitstream_virt,
         proof.signature,
-        proof.forcewake_engine_ack_reg,
-        proof.forcewake_engine_ack,
-        proof.forcewake_engine_awake,
-        proof.forcewake_global_ack,
-        proof.forcewake_awake_count
+        proof.bitstream_gpu_addr,
+        proof.forcewake_engine_awake as u8,
+        proof.forcewake_global_ack
     );
 
-    log_stage(job.id, "submit", true, "enter-media-h264-smoke-batch", 0);
-    let Some(smoke) = super::xelp_media2_ngin_hw_pic::submit_h264_smoke_batch(
+    let bindings = avc_scratch_bindings(
+        plan,
+        windows.output_surface_gpu_addr,
+        plan.resources.dest_surface.byte_len,
+        windows
+            .output_surface_gpu_addr
+            .saturating_add(missing_ref_offset as u64),
+        plan.resources.dest_surface.byte_len,
+        windows.bitstream_gpu_addr,
+        backing.bitstream_bytes,
+        windows.avc_scratch_gpu_addr,
+        backing.avc_scratch_bytes,
+    );
+    let stream = match build_long_format_single_idr_command_stream(plan, bindings) {
+        Ok(stream) => stream,
+        Err(err) => {
+            hw_pic_info!(
+                "intel/hw_pic-stage: id={} stage=avc-command-stream accepted=0 code=-21 err={:?}\n",
+                job.id,
+                err
+            );
+            return failed_output(&job, -21);
+        }
+    };
+    let command_dword = |offset: usize| stream.dwords.get(offset).copied().unwrap_or(0);
+    let command_addr = |offset: usize| {
+        u64::from(command_dword(offset)) | (u64::from(command_dword(offset + 1)) << 32)
+    };
+
+    hw_pic_info!(
+        "intel/hw_pic-stage: id={} stage=avc-command-stream accepted=1 submit_ready=1 commands={} dwords={} headers pipe=0x{:08X} surface=0x{:08X} pipebuf=0x{:08X} indobj=0x{:08X} bsp=0x{:08X} picid=0x{:08X} img=0x{:08X} qm0=0x{:08X} direct=0x{:08X} refidx=0x{:08X} slice=0x{:08X} bsd=0x{:08X}\n",
+        job.id,
+        stream.command_count,
+        stream.dwords.len(),
+        stream
+            .dwords
+            .get(AVC_CMD_OFFSET_PIPE_MODE)
+            .copied()
+            .unwrap_or(0),
+        stream
+            .dwords
+            .get(AVC_CMD_OFFSET_SURFACE_STATE)
+            .copied()
+            .unwrap_or(0),
+        stream
+            .dwords
+            .get(AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE)
+            .copied()
+            .unwrap_or(0),
+        stream
+            .dwords
+            .get(AVC_CMD_OFFSET_IND_OBJ_BASE_ADDR_STATE)
+            .copied()
+            .unwrap_or(0),
+        stream
+            .dwords
+            .get(AVC_CMD_OFFSET_BSP_BUF_BASE_ADDR_STATE)
+            .copied()
+            .unwrap_or(0),
+        stream
+            .dwords
+            .get(AVC_CMD_OFFSET_AVC_PICID_STATE)
+            .copied()
+            .unwrap_or(0),
+        stream
+            .dwords
+            .get(AVC_CMD_OFFSET_AVC_IMG_STATE)
+            .copied()
+            .unwrap_or(0),
+        stream
+            .dwords
+            .get(AVC_CMD_OFFSET_AVC_QM_INTRA_4X4_STATE)
+            .copied()
+            .unwrap_or(0),
+        stream
+            .dwords
+            .get(AVC_CMD_OFFSET_AVC_DIRECTMODE_STATE)
+            .copied()
+            .unwrap_or(0),
+        stream
+            .dwords
+            .get(AVC_CMD_OFFSET_AVC_REF_IDX_STATE)
+            .copied()
+            .unwrap_or(0),
+        stream
+            .dwords
+            .get(AVC_CMD_OFFSET_AVC_SLICE_STATE)
+            .copied()
+            .unwrap_or(0),
+        stream
+            .dwords
+            .get(AVC_CMD_OFFSET_AVC_BSD_OBJECT)
+            .copied()
+            .unwrap_or(0)
+    );
+    hw_pic_info!(
+        "intel/hw_pic-stage: id={} stage=avc-bitstream-state accepted=1 pipe_pre=0x{:X}/0x{:08X} pipe_post=0x{:X}/0x{:08X} ind_base=0x{:X} ind_attr=0x{:08X} ind_upper=0x{:X} bsd_len=0x{:X} bsd_start=0x{:X} bsd_dw3=0x{:08X} bsd_dw4=0x{:08X} bsd_dw5=0x{:08X} surface_dw2=0x{:08X} surface_dw3=0x{:08X} surface_y=0x{:08X} surface_uv=0x{:08X}\n",
+        job.id,
+        command_addr(AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 1),
+        command_dword(AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 3),
+        command_addr(AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 4),
+        command_dword(AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 6),
+        command_addr(AVC_CMD_OFFSET_IND_OBJ_BASE_ADDR_STATE + 1),
+        command_dword(AVC_CMD_OFFSET_IND_OBJ_BASE_ADDR_STATE + 3),
+        command_addr(AVC_CMD_OFFSET_IND_OBJ_BASE_ADDR_STATE + 4),
+        command_dword(AVC_CMD_OFFSET_AVC_BSD_OBJECT + 1),
+        command_dword(AVC_CMD_OFFSET_AVC_BSD_OBJECT + 2),
+        command_dword(AVC_CMD_OFFSET_AVC_BSD_OBJECT + 3),
+        command_dword(AVC_CMD_OFFSET_AVC_BSD_OBJECT + 4),
+        command_dword(AVC_CMD_OFFSET_AVC_BSD_OBJECT + 5),
+        command_dword(AVC_CMD_OFFSET_SURFACE_STATE + 2),
+        command_dword(AVC_CMD_OFFSET_SURFACE_STATE + 3),
+        command_dword(AVC_CMD_OFFSET_SURFACE_STATE + 4),
+        command_dword(AVC_CMD_OFFSET_SURFACE_STATE + 5)
+    );
+    hw_pic_info!(
+        "intel/hw_pic-stage: id={} stage=avc-bindings accepted=1 synthetic_rowstore=0 nv12_clear_y={} nv12_clear_uv={} dest=0x{:X}/0x{:X} missing_ref=0x{:X}/0x{:X} missing_ref_offset=0x{:X} bitstream=0x{:X}/0x{:X} intra=0x{:X}/0x{:X} deblock=0x{:X}/0x{:X} bsd_mpc=0x{:X}/0x{:X} mpr=0x{:X}/0x{:X} dmv_write=0x{:X}/0x{:X} dmv_ref=0x{:X}/0x{:X}\n",
+        job.id,
+        super::xelp_media2_ngin::MEDIA_NV12_BLACK_LUMA,
+        super::xelp_media2_ngin::MEDIA_NV12_NEUTRAL_CHROMA,
+        bindings.dest_surface.gpu_addr,
+        bindings.dest_surface.bytes,
+        bindings.missing_reference_surface.gpu_addr,
+        bindings.missing_reference_surface.bytes,
+        missing_ref_offset,
+        bindings.bitstream.gpu_addr,
+        bindings.bitstream.bytes,
+        bindings.intra_rowstore.gpu_addr,
+        bindings.intra_rowstore.bytes,
+        bindings.deblocking_filter_rowstore.gpu_addr,
+        bindings.deblocking_filter_rowstore.bytes,
+        bindings.bsd_mpc_rowstore.gpu_addr,
+        bindings.bsd_mpc_rowstore.bytes,
+        bindings.mpr_rowstore.gpu_addr,
+        bindings.mpr_rowstore.bytes,
+        bindings.dmv_write_buffer.gpu_addr,
+        bindings.dmv_write_buffer.bytes,
+        bindings.dmv_reference_buffer.gpu_addr,
+        bindings.dmv_reference_buffer.bytes
+    );
+    hw_pic_info!(
+        "intel/hw_pic-stage: id={} stage=avc-ref-state accepted=1 picid_dw1=0x{:08X} picid_list0=0x{:08X} pipe_ref0=0x{:X} pipe_ref15=0x{:X} direct_ref0=0x{:X} direct_ref15=0x{:X} direct_attr=0x{:08X} direct_write=0x{:X} direct_write_attr=0x{:08X} poc_top={} poc_bottom={} refidx_dw1=0x{:08X} refidx_entry0=0x{:08X}\n",
+        job.id,
+        command_dword(AVC_CMD_OFFSET_AVC_PICID_STATE + 1),
+        command_dword(AVC_CMD_OFFSET_AVC_PICID_STATE + 2),
+        command_addr(AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 19),
+        command_addr(AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 49),
+        command_addr(AVC_CMD_OFFSET_AVC_DIRECTMODE_STATE + 1),
+        command_addr(AVC_CMD_OFFSET_AVC_DIRECTMODE_STATE + 31),
+        command_dword(AVC_CMD_OFFSET_AVC_DIRECTMODE_STATE + 33),
+        command_addr(AVC_CMD_OFFSET_AVC_DIRECTMODE_STATE + 34),
+        command_dword(AVC_CMD_OFFSET_AVC_DIRECTMODE_STATE + 36),
+        command_dword(AVC_CMD_OFFSET_AVC_DIRECTMODE_STATE + 37 + MFX_AVC_DMV_DEST_TOP),
+        command_dword(AVC_CMD_OFFSET_AVC_DIRECTMODE_STATE + 37 + MFX_AVC_DMV_DEST_BOTTOM),
+        command_dword(AVC_CMD_OFFSET_AVC_REF_IDX_STATE + 1),
+        command_dword(AVC_CMD_OFFSET_AVC_REF_IDX_STATE + 2)
+    );
+    hw_pic_info!(
+        "intel/hw_pic-stage: id={} stage=avc-img-state accepted=1 dw3=0x{:08X} dw4=0x{:08X} dw13=0x{:08X} dw14=0x{:08X} dw15=0x{:08X} active_l0={} active_l1={} ref_frames={}\n",
+        job.id,
+        stream
+            .dwords
+            .get(AVC_CMD_OFFSET_AVC_IMG_STATE + 3)
+            .copied()
+            .unwrap_or(0),
+        stream
+            .dwords
+            .get(AVC_CMD_OFFSET_AVC_IMG_STATE + 4)
+            .copied()
+            .unwrap_or(0),
+        stream
+            .dwords
+            .get(AVC_CMD_OFFSET_AVC_IMG_STATE + 13)
+            .copied()
+            .unwrap_or(0),
+        stream
+            .dwords
+            .get(AVC_CMD_OFFSET_AVC_IMG_STATE + 14)
+            .copied()
+            .unwrap_or(0),
+        stream
+            .dwords
+            .get(AVC_CMD_OFFSET_AVC_IMG_STATE + 15)
+            .copied()
+            .unwrap_or(0),
+        plan.picture.num_ref_idx_l0_active_minus1.saturating_add(1),
+        plan.picture.num_ref_idx_l1_active_minus1.saturating_add(1),
+        plan.resources.reference_surface_count
+    );
+
+    log_stage(job.id, "submit", true, "enter-media-avc-single-idr-batch", 0);
+    let Some(avc) = super::xelp_media2_ngin_hw_pic::submit_avc_single_idr_batch(
         dev,
         engine,
         windows,
         backing,
+        stream.dwords.as_slice(),
         proof.bytes_written,
+        plan.picture.coded_width(),
+        plan.picture.coded_height(),
+        plan.resources.dest_surface.pitch_bytes,
+        plan.resources.dest_surface.byte_len,
+        missing_ref_offset,
         job.id,
     ) else {
-        log_stage(job.id, "submit", false, "media-h264-smoke-batch-failed", -32);
-        return failed_output(&job, -32);
+        log_stage(job.id, "submit", false, "media-avc-single-idr-batch-failed", -24);
+        return failed_output(&job, -24);
     };
 
     hw_pic_info!(
-        "intel/hw_pic-stage: id={} stage=h264-submit accepted={} engine={} retired={} polls={} coded={}x{} pitch=0x{:X} surface_bytes=0x{:X} nals={} nal_mask=0x{:08X} slices={} batch_bytes=0x{:X} ring_bytes=0x{:X}\n",
+        "intel/hw_pic-stage: id={} stage=submit accepted=1 codec=h264 engine={} retired={} detail={} polls={} coded={}x{} pitch=0x{:X} surface_bytes=0x{:X} command_dwords={} batch_bytes=0x{:X} ring_bytes=0x{:X}\n",
         job.id,
-        smoke.retired as u8,
-        smoke.engine_name,
-        smoke.retired as u8,
-        smoke.poll_iters,
-        smoke.coded_width,
-        smoke.coded_height,
-        smoke.output_surface_pitch,
-        smoke.output_surface_bytes,
-        smoke.nal_count,
-        smoke.nal_type_mask,
-        smoke.slice_count,
-        smoke.batch_tail_bytes,
-        smoke.ring_tail_bytes
+        avc.engine_name,
+        avc.retired as u8,
+        avc.output_surface_detail as u8,
+        avc.poll_iters,
+        avc.coded_width,
+        avc.coded_height,
+        avc.output_surface_pitch,
+        avc.output_surface_bytes,
+        avc.command_dwords,
+        avc.batch_tail_bytes,
+        avc.ring_tail_bytes
     );
     hw_pic_info!(
-        "intel/hw_pic-stage: id={} stage=h264-state accepted=1 sps={} pps={} frame_num={} slice_type={} mb={}x{} slice=0x{:X}+0x{:X} first_mb={}.{} pipe_mode=0x{:08X} surface=0x{:08X}/0x{:08X} img=0x{:08X}/0x{:08X}/0x{:08X}/0x{:08X}/0x{:08X} slice_dw=0x{:08X}/0x{:08X}/0x{:08X} bsd=0x{:08X}/0x{:08X}/0x{:08X}\n",
+        "intel/hw_pic-stage: id={} stage=markers accepted={} kickoff=0x{:08X}/0x{:08X} presubmit=0x{:08X}/0x{:08X} postsubmit=0x{:08X}/0x{:08X} complete=0x{:08X}/0x{:08X}\n",
         job.id,
-        smoke.sps_id,
-        smoke.pps_id,
-        smoke.frame_num,
-        smoke.slice_type,
-        smoke.pic_width_mbs,
-        smoke.frame_height_mbs,
-        smoke.first_slice_offset,
-        smoke.first_slice_len,
-        smoke.first_mb_byte_offset,
-        smoke.first_mb_bit_offset,
-        smoke.pipe_mode_dw1,
-        smoke.surface_dw2,
-        smoke.surface_dw3,
-        smoke.avc_img_dw1,
-        smoke.avc_img_dw2,
-        smoke.avc_img_dw4,
-        smoke.avc_img_dw13,
-        smoke.avc_img_dw14,
-        smoke.avc_slice_dw1,
-        smoke.avc_slice_dw3,
-        smoke.avc_slice_dw4,
-        smoke.avc_bsd_dw1,
-        smoke.avc_bsd_dw2,
-        smoke.avc_bsd_dw4
+        avc.retired as u8,
+        avc.kickoff_value,
+        avc.kickoff_marker,
+        avc.presubmit_value,
+        avc.presubmit_marker,
+        avc.postsubmit_value,
+        avc.postsubmit_marker,
+        avc.complete_value,
+        avc.complete_marker
     );
     hw_pic_info!(
-        "intel/hw_pic-stage: id={} stage=h264-markers accepted={} kickoff=0x{:08X}/0x{:08X} presubmit=0x{:08X}/0x{:08X} postsubmit=0x{:08X}/0x{:08X} complete=0x{:08X}/0x{:08X} out_sig=0x{:08X} out_nonzero={}\n",
+        "intel/hw_pic-stage: id={} stage=engine-regs accepted=1 el=0x{:08X}:0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X}:0x{:08X} acthd_region={} acthd_off=0x{:X} acthd_dword=0x{:08X} bbaddr=0x{:08X}:0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} fault=0x{:08X}/0x{:08X} stage_flags=0x{:08X} sig=0x{:08X} nonzero={}\n",
         job.id,
-        smoke.retired as u8,
-        smoke.kickoff_value,
-        smoke.kickoff_marker,
-        smoke.presubmit_value,
-        smoke.presubmit_marker,
-        smoke.postsubmit_value,
-        smoke.postsubmit_marker,
-        smoke.complete_value,
-        smoke.complete_marker,
-        smoke.output_surface_signature,
-        smoke.output_surface_nonzero_samples
+        avc.execlist_status_lo,
+        avc.execlist_status_hi,
+        avc.ring_head,
+        avc.ring_tail,
+        avc.ring_acthd_hi,
+        avc.ring_acthd,
+        avc.acthd_region,
+        avc.acthd_offset_bytes,
+        avc.acthd_dword,
+        avc.bbaddr_hi,
+        avc.bbaddr_lo,
+        avc.ipeir,
+        avc.ipehr,
+        avc.fault_gen8,
+        avc.fault_gen12,
+        avc.stage_flags_value,
+        avc.output_surface_signature,
+        avc.output_surface_nonzero_samples
     );
     hw_pic_info!(
-        "intel/hw_pic-stage: id={} stage=h264-engine-regs accepted=1 el=0x{:08X}:0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X}:0x{:08X} acthd_region={} acthd_off=0x{:X} acthd_dw=0x{:08X} bbaddr=0x{:08X}:0x{:08X} dma_fadd=0x{:08X}:0x{:08X} bbstate=0x{:08X} esr=0x{:08X} instps=0x{:08X} psmi=0x{:08X} nopid=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} fault=0x{:08X}/0x{:08X}\n",
+        "intel/hw_pic: avc-submit id={} engine={} retired={} detail={} batch_gpu=0x{:X} result_gpu=0x{:X} bitstream_gpu=0x{:X} output_gpu=0x{:X} scratch_gpu=0x{:X} bytes=0x{:X} coded={}x{} pitch=0x{:X} surface_bytes=0x{:X} command_dwords={} batch_bytes=0x{:X} ring_bytes=0x{:X} kickoff=0x{:08X}/0x{:08X} presubmit=0x{:08X}/0x{:08X} postsubmit=0x{:08X}/0x{:08X} complete=0x{:08X}/0x{:08X} el=0x{:08X}:0x{:08X} start=0x{:08X} ctl=0x{:08X} hws=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X}:0x{:08X} acthd_region={} acthd_off=0x{:X} acthd_dword=0x{:08X} bbaddr64=0x{:016X} dma_fadd64=0x{:016X} bbstate=0x{:08X} esr=0x{:08X} instps=0x{:08X} psmi_ctl=0x{:08X} nopid=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} fault8=0x{:08X} fault12=0x{:08X} fault8_tlb=0x{:08X}/0x{:08X} fault12_tlb=0x{:08X}/0x{:08X} bitstream_dword0=0x{:08X} sig=0x{:08X} nonzero={}\n",
         job.id,
-        smoke.execlist_status_lo,
-        smoke.execlist_status_hi,
-        smoke.ring_head,
-        smoke.ring_tail,
-        smoke.ring_acthd_hi,
-        smoke.ring_acthd,
-        smoke.acthd_region,
-        smoke.acthd_offset_bytes,
-        smoke.acthd_dword,
-        smoke.bbaddr_hi,
-        smoke.bbaddr_lo,
-        smoke.dma_fadd_hi,
-        smoke.dma_fadd_lo,
-        smoke.bbstate,
-        smoke.esr,
-        smoke.instps,
-        smoke.psmi_ctl,
-        smoke.nopid,
-        smoke.ipeir,
-        smoke.ipehr,
-        smoke.fault_gen8,
-        smoke.fault_gen12
+        avc.engine_name,
+        avc.retired as u8,
+        avc.output_surface_detail as u8,
+        avc.batch_gpu_addr,
+        avc.result_gpu_addr,
+        avc.bitstream_gpu_addr,
+        avc.output_surface_gpu_addr,
+        avc.avc_scratch_gpu_addr,
+        avc.bitstream_bytes,
+        avc.coded_width,
+        avc.coded_height,
+        avc.output_surface_pitch,
+        avc.output_surface_bytes,
+        avc.command_dwords,
+        avc.batch_tail_bytes,
+        avc.ring_tail_bytes,
+        avc.kickoff_value,
+        avc.kickoff_marker,
+        avc.presubmit_value,
+        avc.presubmit_marker,
+        avc.postsubmit_value,
+        avc.postsubmit_marker,
+        avc.complete_value,
+        avc.complete_marker,
+        avc.execlist_status_lo,
+        avc.execlist_status_hi,
+        avc.ring_start,
+        avc.ring_ctl,
+        avc.ring_hws_pga,
+        avc.ring_head,
+        avc.ring_tail,
+        avc.ring_acthd_hi,
+        avc.ring_acthd,
+        avc.acthd_region,
+        avc.acthd_offset_bytes,
+        avc.acthd_dword,
+        ((avc.bbaddr_hi as u64) << 32) | avc.bbaddr_lo as u64,
+        ((avc.dma_fadd_hi as u64) << 32) | avc.dma_fadd_lo as u64,
+        avc.bbstate,
+        avc.esr,
+        avc.instps,
+        avc.psmi_ctl,
+        avc.nopid,
+        avc.ipeir,
+        avc.ipehr,
+        avc.fault_gen8,
+        avc.fault_gen12,
+        avc.fault_tlb_data0_gen8,
+        avc.fault_tlb_data1_gen8,
+        avc.fault_tlb_data0_gen12,
+        avc.fault_tlb_data1_gen12,
+        avc.bitstream_dword0,
+        avc.output_surface_signature,
+        avc.output_surface_nonzero_samples
     );
 
-    if !smoke.retired {
-        log_stage(job.id, "submit", false, "media-h264-smoke-batch-not-retired", -33);
-    }
+    let output_status = if avc.retired && avc.output_surface_detail {
+        HwPicStatus::Ready
+    } else if avc.retired {
+        HwPicStatus::Streamed
+    } else {
+        HwPicStatus::Failed
+    };
+    let output_presentable = avc.retired;
+    let output_error = if avc.retired {
+        if avc.output_surface_detail { 0 } else { -26 }
+    } else {
+        -25
+    };
+    hw_pic_info!(
+        "intel/hw_pic-stage: id={} stage=classify accepted={} retired={} detail={} status={:?} err={}\n",
+        job.id,
+        output_presentable as u8,
+        avc.retired as u8,
+        avc.output_surface_detail as u8,
+        output_status,
+        output_error
+    );
+
     HwPicOutput {
         id: job.id,
         codec: job.codec,
-        status: if smoke.retired {
-            HwPicStatus::Ready
+        status: output_status,
+        format: HwPicPixelFormat::Nv12,
+        width: if avc.retired { avc.coded_width } else { 0 },
+        height: if avc.retired { avc.coded_height } else { 0 },
+        pitch_bytes: if avc.retired {
+            avc.output_surface_pitch
         } else {
-            HwPicStatus::Streamed
+            0
         },
-        format: if smoke.retired {
-            HwPicPixelFormat::Imc3
+        byte_len: if avc.retired {
+            avc.output_surface_bytes
         } else {
-            HwPicPixelFormat::Unknown
+            job.encoded.len()
         },
-        width: smoke.coded_width,
-        height: smoke.coded_height,
-        pitch_bytes: smoke.output_surface_pitch,
-        byte_len: smoke.output_surface_bytes,
         gpu_addr: windows.output_surface_gpu_addr,
         phys_addr: backing.output_surface_phys,
         virt_addr: backing.output_surface_virt as usize,
-        error_code: if smoke.retired { 0 } else { -33 },
+        error_code: output_error,
     }
 }
 
