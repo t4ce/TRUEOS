@@ -6,8 +6,8 @@ use alloc::vec::Vec;
 use crate::vcabi;
 pub use crate::vcabi::{
     TrueosHidCursorEvent, TrueosHidHutCombo, TrueosHidHutKeyboardState, TrueosHidHutMouseState,
-    TrueosHidHutTabletState, TrueosHidKeyboardSample, TrueosHidMouseSample,
-    TrueosHidTabletSample, TrueosMouseState, TrueosTabletEvent,
+    TrueosHidHutTabletState, TrueosHidKeyboardSample, TrueosHidMouseSample, TrueosHidTabletSample,
+    TrueosMouseState, TrueosTabletEvent,
 };
 
 #[inline]
@@ -197,8 +197,9 @@ pub fn hid_hut_bind_combo_mouse(
     slot_id: u32,
     ep_target: u32,
 ) -> Result<(), i32> {
-    let rc =
-        unsafe { vcabi::trueos_cabi_hid_hut_bind_combo_mouse(combo_id, controller_id, slot_id, ep_target) };
+    let rc = unsafe {
+        vcabi::trueos_cabi_hid_hut_bind_combo_mouse(combo_id, controller_id, slot_id, ep_target)
+    };
     if rc == 0 { Ok(()) } else { Err(rc) }
 }
 
@@ -222,8 +223,9 @@ pub fn hid_hut_bind_combo_tablet(
     slot_id: u32,
     ep_target: u32,
 ) -> Result<(), i32> {
-    let rc =
-        unsafe { vcabi::trueos_cabi_hid_hut_bind_combo_tablet(combo_id, controller_id, slot_id, ep_target) };
+    let rc = unsafe {
+        vcabi::trueos_cabi_hid_hut_bind_combo_tablet(combo_id, controller_id, slot_id, ep_target)
+    };
     if rc == 0 { Ok(()) } else { Err(rc) }
 }
 

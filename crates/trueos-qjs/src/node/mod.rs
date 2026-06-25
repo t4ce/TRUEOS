@@ -164,6 +164,86 @@ unsafe fn ensure_global_web_platform(ctx: *mut qjs::JSContext) {
         G.File = File;
     }
 
+    if (typeof G.TextDecoder !== 'function') {
+        function TextDecoder(label) {
+            const enc = label == null ? 'utf-8' : String(label).toLowerCase();
+            if (enc !== 'utf-8' && enc !== 'utf8') {
+                throw new RangeError('TextDecoder shim supports utf-8 only');
+            }
+            this.encoding = 'utf-8';
+            this.fatal = false;
+            this.ignoreBOM = false;
+        }
+        TextDecoder.prototype.decode = function (input) {
+            if (input == null) return '';
+            let bytes;
+            if (input instanceof ArrayBuffer) {
+                bytes = new Uint8Array(input);
+            } else if (input && input.buffer instanceof ArrayBuffer && typeof input.byteLength === 'number') {
+                bytes = new Uint8Array(input.buffer, input.byteOffset || 0, input.byteLength);
+            } else {
+                bytes = new Uint8Array(input);
+            }
+
+            let out = '';
+            let pending = [];
+            const flush = function () {
+                if (pending.length === 0) return;
+                out += String.fromCharCode.apply(String, pending);
+                pending.length = 0;
+            };
+            const emit = function (cp) {
+                if (cp <= 0xFFFF) {
+                    pending.push(cp);
+                } else {
+                    cp -= 0x10000;
+                    pending.push(0xD800 + (cp >> 10), 0xDC00 + (cp & 0x3FF));
+                }
+                if (pending.length >= 1024) flush();
+            };
+            const repl = 0xFFFD;
+            for (let i = 0; i < bytes.length;) {
+                const b0 = bytes[i++];
+                if (b0 < 0x80) {
+                    emit(b0);
+                } else if (b0 >= 0xC2 && b0 <= 0xDF && i < bytes.length) {
+                    const b1 = bytes[i];
+                    if ((b1 & 0xC0) === 0x80) {
+                        i += 1;
+                        emit(((b0 & 0x1F) << 6) | (b1 & 0x3F));
+                    } else {
+                        emit(repl);
+                    }
+                } else if (b0 >= 0xE0 && b0 <= 0xEF && i + 1 < bytes.length) {
+                    const b1 = bytes[i], b2 = bytes[i + 1];
+                    const valid = (b1 & 0xC0) === 0x80 && (b2 & 0xC0) === 0x80 &&
+                        !(b0 === 0xE0 && b1 < 0xA0) && !(b0 === 0xED && b1 >= 0xA0);
+                    if (valid) {
+                        i += 2;
+                        emit(((b0 & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F));
+                    } else {
+                        emit(repl);
+                    }
+                } else if (b0 >= 0xF0 && b0 <= 0xF4 && i + 2 < bytes.length) {
+                    const b1 = bytes[i], b2 = bytes[i + 1], b3 = bytes[i + 2];
+                    const valid = (b1 & 0xC0) === 0x80 && (b2 & 0xC0) === 0x80 && (b3 & 0xC0) === 0x80 &&
+                        !(b0 === 0xF0 && b1 < 0x90) && !(b0 === 0xF4 && b1 >= 0x90);
+                    if (valid) {
+                        i += 3;
+                        emit(((b0 & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F));
+                    } else {
+                        emit(repl);
+                    }
+                } else {
+                    emit(repl);
+                }
+            }
+            flush();
+            return out;
+        };
+        G.TextDecoder = TextDecoder;
+    }
+
     if (typeof G.btoa !== 'function') {
         G.btoa = function (_s) { return ''; };
     }

@@ -30,7 +30,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
 
     let active_target = matrix_target_for_backend(io);
     let target = switch_matrix_target_slot(&active_target, DIASHOW_SLOT);
-    print_matrix_target_line(&target, "diashow: scanning /diashow/*.jpeg on AP1 uicore");
+    print_matrix_target_line(&target, "diashow: scanning /diashow/**/*.jpg|jpeg on AP1 uicore");
 
     let Some(ap1) = crate::workers::spawner_for_slot(AP1_UI_SERVICE_SLOT) else {
         print_matrix_target_line(&target, "diashow: AP1 uicore spawner is not registered");
@@ -70,7 +70,7 @@ async fn run_diashow(target: &MatrixTarget) -> Result<(), String> {
 
     let paths = collect_jpeg_paths(disk).await?;
     if paths.is_empty() {
-        return Err(String::from("no .jpeg files found in /diashow"));
+        return Err(String::from("no .jpg/.jpeg files found in /diashow"));
     }
 
     print_matrix_target_line(
@@ -155,23 +155,50 @@ async fn run_diashow(target: &MatrixTarget) -> Result<(), String> {
 }
 
 async fn collect_jpeg_paths(disk: block::DeviceHandle) -> Result<Vec<String>, String> {
-    let Some(listing) = crate::r::fs::trueosfs::list_dir_async(disk, DIASHOW_DIR)
-        .await
-        .map_err(|err| alloc::format!("list /{} failed: {:?}", DIASHOW_DIR, err))?
-    else {
-        return Err(String::from("TRUEOSFS root is unavailable"));
-    };
+    let mut paths = Vec::new();
+    let mut dirs = Vec::new();
+    dirs.push(String::from(DIASHOW_DIR));
 
-    let mut paths: Vec<String> = listing
-        .lines()
-        .filter(|name| is_jpeg_name(name))
-        .take(MAX_IMAGES)
-        .map(|name| alloc::format!("{}/{}", DIASHOW_DIR, name))
-        .collect();
+    while let Some(dir) = dirs.pop() {
+        let Some(listing) = crate::r::fs::trueosfs::list_dir_async(disk, dir.as_str())
+            .await
+            .map_err(|err| alloc::format!("list /{} failed: {:?}", dir, err))?
+        else {
+            continue;
+        };
+
+        for name in listing.lines().filter(|name| !name.is_empty()) {
+            let path = alloc::format!("{}/{}", dir, name);
+            if is_jpeg_name(name) {
+                if crate::r::fs::trueosfs::file_info_async(disk, path.as_str())
+                    .await
+                    .map_err(|err| alloc::format!("stat {} failed: {:?}", path, err))?
+                    .is_some()
+                {
+                    paths.push(path);
+                    if paths.len() >= MAX_IMAGES {
+                        paths.sort();
+                        return Ok(paths);
+                    }
+                    continue;
+                }
+            }
+
+            if crate::r::fs::trueosfs::dir_has_children_async(disk, path.as_str())
+                .await
+                .map_err(|err| alloc::format!("stat dir {} failed: {:?}", path, err))?
+            {
+                dirs.push(path);
+            }
+        }
+    }
+
     paths.sort();
     Ok(paths)
 }
 
 fn is_jpeg_name(name: &str) -> bool {
-    name.len() > ".jpeg".len() && name.to_ascii_lowercase().ends_with(".jpeg")
+    let lower = name.to_ascii_lowercase();
+    (name.len() > ".jpg".len() && lower.ends_with(".jpg"))
+        || (name.len() > ".jpeg".len() && lower.ends_with(".jpeg"))
 }

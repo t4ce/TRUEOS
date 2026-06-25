@@ -2,7 +2,6 @@
 ///
 /// This is meant to be stable and portable for higher layers (e.g. containers).
 /// The kernel adapts these types to its internal network stack and device drivers.
-
 use core::fmt;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -114,12 +113,7 @@ impl fmt::Debug for BytePreview<'_> {
 
 impl<const N: usize> fmt::Debug for ByteBuf<N> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "ByteBuf {{ len: {}, data: {:?} }}",
-            self.len(),
-            BytePreview(self.as_slice())
-        )
+        write!(f, "ByteBuf {{ len: {}, data: {:?} }}", self.len(), BytePreview(self.as_slice()))
     }
 }
 

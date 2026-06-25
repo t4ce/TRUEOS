@@ -28,6 +28,7 @@ libc.workspace = true
 
 [target.'cfg(target_os = "trueos")'.dependencies]
 core3.workspace = true
+v.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["processthreadsapi"] }

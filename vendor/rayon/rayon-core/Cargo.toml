@@ -32,6 +32,7 @@ wasm_sync = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "trueos")'.dependencies]
 spin.workspace = true
+v.workspace = true
 
 [dev-dependencies]
 rand.workspace = true

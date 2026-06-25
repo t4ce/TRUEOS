@@ -102,6 +102,10 @@ fn dir_exists(disk: DeviceHandle, path: &str) -> Result<bool, block::Error> {
     })
 }
 
+fn path_exists(disk: DeviceHandle, path: &str) -> Result<bool, block::Error> {
+    Ok(file_exists(disk, path)? || dir_exists(disk, path)?)
+}
+
 fn list_dir(disk: DeviceHandle, path: &str) -> Result<Vec<String>, block::Error> {
     let path = String::from(path);
     crate::wait::spawn_and_wait_local(async move {
@@ -150,6 +154,14 @@ fn collect_dir_files(
 }
 
 fn move_path(disk: DeviceHandle, src: &str, dst: &str) -> Result<(usize, usize), block::Error> {
+    if src == dst || dst.starts_with(alloc::format!("{src}/").as_str()) {
+        return Ok((0, 1));
+    }
+
+    if path_exists(disk, dst)? {
+        return Ok((0, 1));
+    }
+
     if file_exists(disk, src)? {
         return if rename_file(disk, src, dst)? {
             Ok((1, 0))
@@ -175,11 +187,38 @@ fn move_path(disk: DeviceHandle, src: &str, dst: &str) -> Result<(usize, usize),
     }
 }
 
+fn move_children(
+    disk: DeviceHandle,
+    src_dir: &str,
+    dst_dir: &str,
+) -> Result<(usize, usize), block::Error> {
+    if src_dir == dst_dir
+        || dst_dir.starts_with(alloc::format!("{src_dir}/").as_str())
+        || !dir_exists(disk, src_dir)?
+        || !dir_exists(disk, dst_dir)?
+    {
+        return Ok((0, 1));
+    }
+
+    let mut files = Vec::new();
+    collect_dir_files(disk, src_dir, &mut files)?;
+    let count = files.len();
+    if count == 0 {
+        return Ok((0, 1));
+    }
+
+    if rename_dir(disk, src_dir, dst_dir)? {
+        Ok((count, 0))
+    } else {
+        Ok((0, count.max(1)))
+    }
+}
+
 fn print_usage(io: &'static dyn ShellBackend2, name: &str) {
     print_shell_line(
         io,
         alloc::format!(
-            "{name}: usage `{name} <src> <dst>` | `{name} -regx <pattern> <src-dir> <dst-dir>`"
+            "{name}: usage `{name} <src> <dst>` | `{name} <src-dir>/* <dst-dir>` | `{name} -regx <pattern> <src-dir> <dst-dir>`"
         )
         .as_str(),
     );
@@ -287,6 +326,24 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, name: &str, rest: &str) 
             return ParseOutcome::Handled;
         }
     };
+    if let Some(src_dir) = src.strip_suffix("/*") {
+        match move_children(disk, src_dir, dst.as_str()) {
+            Ok((moved, 0)) if moved > 0 => {
+                print_shell_line(io, alloc::format!("{name}: moved {moved} files").as_str());
+            }
+            Ok((moved, missed)) => {
+                print_shell_line(
+                    io,
+                    alloc::format!("{name}: moved {moved} files, {missed} missed").as_str(),
+                );
+            }
+            Err(err) => {
+                print_shell_line(io, alloc::format!("{name}: {:?}", err).as_str());
+            }
+        }
+        return ParseOutcome::Handled;
+    }
+
     if dir_exists(disk, dst.as_str()).unwrap_or(false) {
         dst = join_path(dst.as_str(), basename(src.as_str()));
     }
