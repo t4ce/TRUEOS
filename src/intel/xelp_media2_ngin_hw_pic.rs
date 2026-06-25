@@ -1012,7 +1012,7 @@ fn clear_output_surface_to_tiled_nv12_black(
     unsafe {
         core::ptr::write_bytes(
             output_surface_virt,
-            media::MEDIA_NV12_BLACK_LUMA,
+            media::MEDIA_AVC_ROLLBACK_CLEAR_LUMA,
             output_surface_bytes,
         );
     }
@@ -1027,11 +1027,11 @@ fn clear_output_surface_to_tiled_nv12_black(
             unsafe {
                 core::ptr::write_volatile(
                     output_surface_virt.add(u_offset),
-                    media::MEDIA_NV12_NEUTRAL_CHROMA,
+                    media::MEDIA_AVC_ROLLBACK_CLEAR_CHROMA,
                 );
                 core::ptr::write_volatile(
                     output_surface_virt.add(v_offset),
-                    media::MEDIA_NV12_NEUTRAL_CHROMA,
+                    media::MEDIA_AVC_ROLLBACK_CLEAR_CHROMA,
                 );
             }
             byte_x += 2;

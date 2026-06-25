@@ -393,8 +393,7 @@ pub(crate) struct MfxSurfaceStateParams {
     pub surface_id: u8,
     pub width_minus1: u32,
     pub height_minus1: u32,
-    pub tile_walk_y_major: bool,
-    pub tiled_surface: bool,
+    pub tilemode: u32,
     pub surface_pitch_minus1: u32,
     pub compression_format: u32,
     pub interleave_chroma: u8,
@@ -740,18 +739,14 @@ pub(crate) fn validate_long_format_single_idr_command_stream_shape(
         && stream.dwords[AVC_CMD_OFFSET_PIPE_MODE] == MFX_PIPE_MODE_SELECT_DW0
         && stream.dwords[AVC_CMD_OFFSET_WAIT_AFTER_PIPE_MODE] == MFX_WAIT_SYNC_DW0
         && stream.dwords[AVC_CMD_OFFSET_SURFACE_STATE] == MFX_SURFACE_STATE_DW0
-        && (stream.dwords[AVC_CMD_OFFSET_SURFACE_STATE + 3] & MFX_SURFACE_TILE_WALK_YMAJOR) != 0
-        && (stream.dwords[AVC_CMD_OFFSET_SURFACE_STATE + 3] & MFX_SURFACE_TILED_SURFACE) != 0
+        && (stream.dwords[AVC_CMD_OFFSET_SURFACE_STATE + 3] & 0x03)
+            == MFX_SURFACE_TILEMODE_TILEYS_64K
         && stream.dwords[AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE] == MFX_PIPE_BUF_ADDR_STATE_DW0
-        && stream.dwords[AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 1] == 0
-        && stream.dwords[AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 2] == 0
-        && stream.dwords[AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 3] == 0
-        && stream.dwords[AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 6]
-            == (MFX_MEMORY_OBJECT_CONTROL_UC | MFX_TILED_RESOURCE_MODE_TILEYS)
+        && stream.dwords[AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 3] == MFX_MEMORY_OBJECT_CONTROL_UC
+        && stream.dwords[AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 6] == MFX_MEMORY_OBJECT_CONTROL_UC
         && stream.dwords[AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 15] == MFX_MEMORY_OBJECT_CONTROL_UC
         && stream.dwords[AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 18] == MFX_MEMORY_OBJECT_CONTROL_UC
-        && stream.dwords[AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 51]
-            == (MFX_MEMORY_OBJECT_CONTROL_UC | MFX_TILED_RESOURCE_MODE_TILEYS)
+        && stream.dwords[AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 51] == MFX_MEMORY_OBJECT_CONTROL_UC
         && stream.dwords[AVC_CMD_OFFSET_IND_OBJ_BASE_ADDR_STATE] == MFX_IND_OBJ_BASE_ADDR_STATE_DW0
         && stream.dwords[AVC_CMD_OFFSET_IND_OBJ_BASE_ADDR_STATE + 3]
             == MFX_MEMORY_ADDRESS_ATTRIBUTES_UC
@@ -1070,8 +1065,7 @@ pub(crate) const MFX_CODEC_SELECT_DECODE: u8 = 0;
 pub(crate) const MFX_DECODER_MODE_VLD: u8 = 0;
 pub(crate) const MFX_DECODER_LONG_FORMAT_MODE: u8 = 1;
 pub(crate) const MFX_SURFACE_ID_DECODED_PICTURE_AND_REFERENCES: u8 = 0;
-pub(crate) const MFX_SURFACE_TILE_WALK_YMAJOR: u32 = 1 << 0;
-pub(crate) const MFX_SURFACE_TILED_SURFACE: u32 = 1 << 1;
+pub(crate) const MFX_SURFACE_TILEMODE_TILEYS_64K: u32 = 1;
 pub(crate) const MFX_SURFACE_FORMAT_PLANAR_420_8: u32 = 4;
 pub(crate) const MFX_INTERLEAVE_CHROMA_ENABLE: u8 = 1;
 pub(crate) const MFX_COMPRESSION_FORMAT_DISABLED: u32 = 0;
@@ -1084,7 +1078,6 @@ pub(crate) const MEDIA_TILE64_W: usize = 256;
 pub(crate) const MEDIA_TILE64_H: usize = 256;
 pub(crate) const MFX_MEMORY_OBJECT_CONTROL_UC: u32 = 1;
 pub(crate) const MFX_MEMORY_ADDRESS_ATTRIBUTES_UC: u32 = 1 << 1;
-pub(crate) const MFX_TILED_RESOURCE_MODE_TILEYS: u32 = 2 << 13;
 pub(crate) const MFX_INDIRECT_OBJECT_BASE_ALIGNMENT: u64 = 4096;
 
 pub(crate) const MFX_PIPE_MODE_SELECT_DWORD_COUNT: usize = 5;
@@ -1392,8 +1385,7 @@ pub(crate) const fn mfx_surface_state_params_for_nv12_decode_dest(
         surface_id: MFX_SURFACE_ID_DECODED_PICTURE_AND_REFERENCES,
         width_minus1: surface.width - 1,
         height_minus1: surface.height - 1,
-        tile_walk_y_major: true,
-        tiled_surface: true,
+        tilemode: MFX_SURFACE_TILEMODE_TILEYS_64K,
         surface_pitch_minus1: surface.pitch_bytes as u32 - 1,
         compression_format: MFX_COMPRESSION_FORMAT_DISABLED,
         interleave_chroma: MFX_INTERLEAVE_CHROMA_ENABLE,
@@ -1411,16 +1403,7 @@ pub(crate) const fn encode_mfx_surface_state(
             MFX_SURFACE_STATE_DW0,
             (params.surface_id as u32) & 0x0f,
             ((params.width_minus1 & 0x3fff) << 4) | ((params.height_minus1 & 0x3fff) << 18),
-            (if params.tile_walk_y_major {
-                MFX_SURFACE_TILE_WALK_YMAJOR
-            } else {
-                0
-            })
-                | (if params.tiled_surface {
-                    MFX_SURFACE_TILED_SURFACE
-                } else {
-                    0
-                })
+            (params.tilemode & 0x03)
                 | ((params.surface_pitch_minus1 & 0x1_ffff) << 3)
                 | ((params.compression_format & 0x1f) << 22)
                 | (((params.interleave_chroma as u32) & 0x01) << 27)
@@ -1432,19 +1415,15 @@ pub(crate) const fn encode_mfx_surface_state(
 }
 
 pub(crate) const fn encode_mfx_pipe_buf_addr_state(
-    params: MfxPipeBufAddrStateParams,
+    _params: MfxPipeBufAddrStateParams,
     resources: AvcPacketResourceBindings,
 ) -> MfxPipeBufAddrStateDwords {
     let mut dwords = [0u32; MFX_PIPE_BUF_ADDR_STATE_DWORD_COUNT];
     dwords[0] = MFX_PIPE_BUF_ADDR_STATE_DW0;
-    if params.pre_deblock_surface_is_dest {
-        write_addr64(&mut dwords, 1, resources.dest_surface.gpu_addr);
-        dwords[3] = MFX_MEMORY_OBJECT_CONTROL_UC | MFX_TILED_RESOURCE_MODE_TILEYS;
-    }
-    if params.post_deblock_surface_is_dest {
-        write_addr64(&mut dwords, 4, resources.dest_surface.gpu_addr);
-        dwords[6] = MFX_MEMORY_OBJECT_CONTROL_UC | MFX_TILED_RESOURCE_MODE_TILEYS;
-    }
+    write_addr64(&mut dwords, 1, resources.dest_surface.gpu_addr);
+    dwords[3] = MFX_MEMORY_OBJECT_CONTROL_UC;
+    write_addr64(&mut dwords, 4, resources.dest_surface.gpu_addr);
+    dwords[6] = MFX_MEMORY_OBJECT_CONTROL_UC;
     write_addr64(&mut dwords, 13, resources.intra_rowstore.gpu_addr);
     dwords[15] = MFX_MEMORY_OBJECT_CONTROL_UC;
     write_addr64(&mut dwords, 16, resources.deblocking_filter_rowstore.gpu_addr);
@@ -1454,7 +1433,7 @@ pub(crate) const fn encode_mfx_pipe_buf_addr_state(
         write_addr64(&mut dwords, 19 + ref_idx * 2, resources.missing_reference_surface.gpu_addr);
         ref_idx += 1;
     }
-    dwords[51] = MFX_MEMORY_OBJECT_CONTROL_UC | MFX_TILED_RESOURCE_MODE_TILEYS;
+    dwords[51] = MFX_MEMORY_OBJECT_CONTROL_UC;
     MfxPipeBufAddrStateDwords { dwords }
 }
 
@@ -1487,10 +1466,7 @@ pub(crate) const fn encode_mfx_ind_obj_base_addr_state(
     bitstream: AvcGpuResourceRange,
 ) -> MfxIndObjBaseAddrStateDwords {
     let base = bitstream.gpu_addr.saturating_add(params.data_offset as u64);
-    let upper_bound = align_ceil_u64(
-        base.saturating_add(params.data_size as u64),
-        MFX_INDIRECT_OBJECT_BASE_ALIGNMENT,
-    );
+    let upper_bound = bitstream.gpu_addr.saturating_add(bitstream.bytes as u64);
     let mut dwords = [0u32; MFX_IND_OBJ_BASE_ADDR_STATE_DWORD_COUNT];
     dwords[0] = MFX_IND_OBJ_BASE_ADDR_STATE_DW0;
     dwords[1] = base as u32;

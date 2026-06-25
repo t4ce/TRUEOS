@@ -811,6 +811,8 @@ const MEDIA_YTILE_W: usize = 128;
 const MEDIA_YTILE_H: usize = 32;
 pub(super) const MEDIA_NV12_BLACK_LUMA: u8 = 16;
 pub(super) const MEDIA_NV12_NEUTRAL_CHROMA: u8 = 128;
+pub(super) const MEDIA_AVC_ROLLBACK_CLEAR_LUMA: u8 = 0;
+pub(super) const MEDIA_AVC_ROLLBACK_CLEAR_CHROMA: u8 = 0;
 
 pub(super) fn media_tile64_nv12_surface_layout(
     coded_height: usize,
@@ -1985,7 +1987,13 @@ pub(super) fn log_output_surface_probe(
     submit_completed: bool,
     probe: MediaSurfaceProbe,
 ) {
-    log_output_surface_probe_layout(engine_name, sample_idx, submit_completed, "tile64-nv12", probe);
+    log_output_surface_probe_layout(
+        engine_name,
+        sample_idx,
+        submit_completed,
+        "tile64-nv12",
+        probe,
+    );
 }
 
 pub(super) fn log_output_surface_probe_layout(

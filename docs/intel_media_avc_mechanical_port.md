@@ -77,15 +77,19 @@ First TRUEOS milestone:
   `TILEMODE_TILEYS_64K = 1`; `3` is `TILEMODE_TILEF`. The Rust packet recipe
   names the constant after that generated enum and validates the surface field
   widths before emitting the command.
-- NV12 pre-clear uses video-range black (`Y=16`, `UV=128`) for both the decode
-  destination and the dummy reference surface. The output probe uses the same
-  baseline so an unchanged surface is not misclassified as decoded detail.
-- `MFX_PIPE_BUF_ADDR_STATE` follows upstream AVC decode selection: when
-  deblocking is enabled, bind the destination only as post-deblock (`DW4..6`);
-  when it is disabled, bind it only as pre-deblock (`DW1..3`). The current
-  single-IDR sample enables deblocking, so the probe expects pre=0/post=dest.
-- `MFX_IND_OBJ_BASE_ADDR_STATE` uses the mapped 4K-aligned bitstream window as
-  its upper bound; the BSD object still carries the exact encoded slice length.
+- Current hardware rollback profile: NV12 pre-clear uses a zero-filled
+  diagnostic baseline (`Y=0`, `UV=0`) for both the decode destination and the
+  dummy reference surface. This restores the dark-green visual anchor that made
+  partial VDBOX writes obvious; it should go back to video-range black
+  (`Y=16`, `UV=128`) once packet state is no longer the active variable.
+- Current hardware rollback profile: `MFX_PIPE_BUF_ADDR_STATE` binds the
+  destination surface in both pre-deblock (`DW1..3`) and post-deblock
+  (`DW4..6`) slots with plain UC MOCS. This is less faithful to the upstream
+  branch selection than post-only/deblock-enabled, but it was the last TRUEOS
+  state that produced moving decode artifacts instead of a static surface.
+- Current hardware rollback profile: `MFX_IND_OBJ_BASE_ADDR_STATE` uses the
+  whole mapped bitstream backing as its upper bound; `MFD_AVC_BSD_OBJECT` still
+  carries the exact encoded slice length.
 - `MFD_AVC_BSD_OBJECT` byte/bit offsets are derived from an explicit
   payload-relative slice bit offset plus one included NAL header byte.  For the
   current sample this is payload bit `26`, byte offset `4`, low bit offset `2`.
