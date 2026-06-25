@@ -2,9 +2,9 @@
 //! `HashMap` data structures from the standard library.
 
 mod util {
+    use core::hash::Hash;
     use rayon::prelude::*;
     use std::collections::{HashMap, LinkedList};
-    use std::hash::Hash;
     use std::sync::Mutex;
 
     /// Do whatever `collect` does by default.

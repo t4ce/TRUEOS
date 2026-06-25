@@ -16,9 +16,9 @@ Options:
 ";
 
 use crate::cpu_time::{self, CpuMeasure};
+use core::iter::repeat_n;
 use rand::distr::StandardUniform;
 use rand::{RngExt, rng};
-use std::iter::repeat_n;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};

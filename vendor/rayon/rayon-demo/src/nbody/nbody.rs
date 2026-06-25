@@ -30,9 +30,9 @@
 // [1]: https://github.com/IntelLabs/RiverTrail/blob/master/examples/nbody-webgl/NBody.js
 
 use cgmath::{InnerSpace, Point3, Vector3, Zero};
+use core::f64::consts::PI;
 use rand::RngExt;
 use rayon::prelude::*;
-use std::f64::consts::PI;
 
 const INITIAL_VELOCITY: f64 = 8.0; // set to 0.0 to turn off.
 

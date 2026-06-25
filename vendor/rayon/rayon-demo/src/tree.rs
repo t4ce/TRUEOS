@@ -1,6 +1,8 @@
 //! Some benches for tree walks.
 use rayon::prelude::*;
 
+use core::iter;
+
 const SIZE: u64 = 100_000;
 const VAL: u64 = SIZE * (SIZE - 1) / 2;
 
@@ -13,8 +15,8 @@ fn tree_prefix_collect(b: &mut ::test::Bencher) {
                 // root is smallest
                 let mid = (r.start + 1 + r.end) / 2;
                 // small indices to the left, large to the right
-                std::iter::once((r.start + 1)..mid)
-                    .chain(std::iter::once(mid..r.end))
+                iter::once((r.start + 1)..mid)
+                    .chain(iter::once(mid..r.end))
                     .filter(|r| !r.is_empty())
             })
             .map(|r| r.start)
@@ -33,8 +35,8 @@ fn tree_postfix_collect(b: &mut ::test::Bencher) {
                 // root is largest
                 let mid = (r.start + r.end - 1) / 2;
                 // small indices to the left, large to the right
-                std::iter::once(r.start..mid)
-                    .chain(std::iter::once(mid..(r.end - 1)))
+                iter::once(r.start..mid)
+                    .chain(iter::once(mid..(r.end - 1)))
                     .filter(|r| !r.is_empty())
             })
             .map(|r| r.end - 1)
@@ -51,8 +53,8 @@ fn tree_prefix_sum(b: &mut ::test::Bencher) {
             // root is smallest
             let mid = (r.start + 1 + r.end) / 2;
             // small indices to the left, large to the right
-            std::iter::once((r.start + 1)..mid)
-                .chain(std::iter::once(mid..r.end))
+            iter::once((r.start + 1)..mid)
+                .chain(iter::once(mid..r.end))
                 .filter(|r| !r.is_empty())
         })
         .map(|r| r.start)
@@ -68,8 +70,8 @@ fn tree_postfix_sum(b: &mut ::test::Bencher) {
             // root is smallest
             let mid = (r.start + 1 + r.end) / 2;
             // small indices to the left, large to the right
-            std::iter::once((r.start + 1)..mid)
-                .chain(std::iter::once(mid..r.end))
+            iter::once((r.start + 1)..mid)
+                .chain(iter::once(mid..r.end))
                 .filter(|r| !r.is_empty())
         })
         .map(|r| r.start)

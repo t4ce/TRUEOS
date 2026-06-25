@@ -26,8 +26,8 @@ pub struct Args {
 
 use docopt::Docopt;
 
-use std::mem::MaybeUninit;
-use std::slice;
+use core::mem::MaybeUninit;
+use core::slice;
 use std::time::Instant;
 
 pub fn merge_sort<T: Ord + Send + Copy>(v: &mut [T]) {

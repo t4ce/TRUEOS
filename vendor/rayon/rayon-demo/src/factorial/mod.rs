@@ -1,8 +1,8 @@
 //! Benchmark Factorial N! = 1×2×⋯×N
 
+use core::ops::Mul;
 use num::{BigUint, One};
 use rayon::prelude::*;
-use std::ops::Mul;
 
 const N: u32 = 9999;
 

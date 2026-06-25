@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use core::cmp::Ordering;
 use std::sync::Arc;
 
 use super::graph::{Node, NodeSet};
