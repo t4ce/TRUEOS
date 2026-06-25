@@ -66,6 +66,8 @@ use core::marker::PhantomData;
 use core::str::FromStr;
 use core3::io;
 use std::env;
+#[cfg(not(target_os = "trueos"))]
+use std as host_std;
 use std::thread;
 
 mod broadcast;
@@ -147,29 +149,33 @@ enum ErrorKind {
     IOError(io::Error),
 }
 
-fn io_error_from_std(error: std::io::Error) -> io::Error {
-    use std::io::ErrorKind as StdErrorKind;
+#[cfg(not(target_os = "trueos"))]
+type StdIoError = host_std::io::Error;
+#[cfg(not(target_os = "trueos"))]
+type StdIoErrorKind = host_std::io::ErrorKind;
 
+#[cfg(not(target_os = "trueos"))]
+fn io_error_from_std(error: StdIoError) -> io::Error {
     let kind = match error.kind() {
-        StdErrorKind::NotFound => io::ErrorKind::NotFound,
-        StdErrorKind::PermissionDenied => io::ErrorKind::PermissionDenied,
-        StdErrorKind::ConnectionRefused => io::ErrorKind::ConnectionRefused,
-        StdErrorKind::ConnectionReset => io::ErrorKind::ConnectionReset,
-        StdErrorKind::ConnectionAborted => io::ErrorKind::ConnectionAborted,
-        StdErrorKind::NotConnected => io::ErrorKind::NotConnected,
-        StdErrorKind::AddrInUse => io::ErrorKind::AddrInUse,
-        StdErrorKind::AddrNotAvailable => io::ErrorKind::AddrNotAvailable,
-        StdErrorKind::BrokenPipe => io::ErrorKind::BrokenPipe,
-        StdErrorKind::AlreadyExists => io::ErrorKind::AlreadyExists,
-        StdErrorKind::WouldBlock => io::ErrorKind::WouldBlock,
-        StdErrorKind::InvalidInput => io::ErrorKind::InvalidInput,
-        StdErrorKind::InvalidData => io::ErrorKind::InvalidData,
-        StdErrorKind::TimedOut => io::ErrorKind::TimedOut,
-        StdErrorKind::WriteZero => io::ErrorKind::WriteZero,
-        StdErrorKind::Interrupted => io::ErrorKind::Interrupted,
-        StdErrorKind::Other => io::ErrorKind::Other,
-        StdErrorKind::UnexpectedEof => io::ErrorKind::UnexpectedEof,
-        StdErrorKind::Unsupported => io::ErrorKind::Uncategorized,
+        StdIoErrorKind::NotFound => io::ErrorKind::NotFound,
+        StdIoErrorKind::PermissionDenied => io::ErrorKind::PermissionDenied,
+        StdIoErrorKind::ConnectionRefused => io::ErrorKind::ConnectionRefused,
+        StdIoErrorKind::ConnectionReset => io::ErrorKind::ConnectionReset,
+        StdIoErrorKind::ConnectionAborted => io::ErrorKind::ConnectionAborted,
+        StdIoErrorKind::NotConnected => io::ErrorKind::NotConnected,
+        StdIoErrorKind::AddrInUse => io::ErrorKind::AddrInUse,
+        StdIoErrorKind::AddrNotAvailable => io::ErrorKind::AddrNotAvailable,
+        StdIoErrorKind::BrokenPipe => io::ErrorKind::BrokenPipe,
+        StdIoErrorKind::AlreadyExists => io::ErrorKind::AlreadyExists,
+        StdIoErrorKind::WouldBlock => io::ErrorKind::WouldBlock,
+        StdIoErrorKind::InvalidInput => io::ErrorKind::InvalidInput,
+        StdIoErrorKind::InvalidData => io::ErrorKind::InvalidData,
+        StdIoErrorKind::TimedOut => io::ErrorKind::TimedOut,
+        StdIoErrorKind::WriteZero => io::ErrorKind::WriteZero,
+        StdIoErrorKind::Interrupted => io::ErrorKind::Interrupted,
+        StdIoErrorKind::Other => io::ErrorKind::Other,
+        StdIoErrorKind::UnexpectedEof => io::ErrorKind::UnexpectedEof,
+        StdIoErrorKind::Unsupported => io::ErrorKind::Uncategorized,
         _ => io::ErrorKind::Uncategorized,
     };
 
