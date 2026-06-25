@@ -1,17 +1,11 @@
 use core::sync::atomic::AtomicBool;
 use log::{Level, LevelFilter};
 use spin::Once;
-// im sorry for the state of this but hardware bringup makes it a nightmare
-// as i learn that just flags for the pieces, was not good
-// then way later i gave it trace info warn... levels but
-// what can i do? go ahead and backpatch this reasonably, to these levels in hindsight
-// reasonably fast? No... so its defered but TODO that this gets to be
-// not completely mazy and actually not what i is entirly supposed to do!
 
 pub(crate) const GLOBAL_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const BOOT_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const SERVICE_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
-pub(crate) const NET_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
+pub(crate) const NET_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const USB_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const STORAGE_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
 pub(crate) const GFX_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
