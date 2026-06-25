@@ -588,8 +588,8 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
     hw_pic_info!(
         "intel/hw_pic-stage: id={} stage=avc-bindings accepted=1 synthetic_rowstore=0 nv12_clear_y={} nv12_clear_uv={} dest=0x{:X}/0x{:X} missing_ref=0x{:X}/0x{:X} missing_ref_offset=0x{:X} bitstream=0x{:X}/0x{:X} intra=0x{:X}/0x{:X} deblock=0x{:X}/0x{:X} bsd_mpc=0x{:X}/0x{:X} mpr=0x{:X}/0x{:X} dmv_write=0x{:X}/0x{:X} dmv_ref=0x{:X}/0x{:X}\n",
         job.id,
-        super::xelp_media2_ngin::MEDIA_NV12_BLACK_LUMA,
-        super::xelp_media2_ngin::MEDIA_NV12_NEUTRAL_CHROMA,
+        super::xelp_media2_ngin::MEDIA_AVC_ROLLBACK_CLEAR_LUMA,
+        super::xelp_media2_ngin::MEDIA_AVC_ROLLBACK_CLEAR_CHROMA,
         bindings.dest_surface.gpu_addr,
         bindings.dest_surface.bytes,
         bindings.missing_reference_surface.gpu_addr,

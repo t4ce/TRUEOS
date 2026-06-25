@@ -33,8 +33,7 @@ fn main() {
     let base = 0x1_0000_0000u64;
     let bitstream_base = base + 0x0100_0000;
     let bitstream_window_bytes = 8 * 1024 * 1024;
-    let bitstream_upper_bound =
-        bitstream_base + align_up(plan.bitstream_bytes, MFX_INDIRECT_OBJECT_BASE_ALIGNMENT as usize) as u64;
+    let bitstream_upper_bound = bitstream_base + bitstream_window_bytes as u64;
     let missing_reference =
         base + avc_missing_reference_surface_offset(plan.resources.dest_surface.byte_len) as u64;
     let scratch = base + 0x0200_0000;
@@ -119,7 +118,7 @@ fn main() {
     assert_eq!(stream.dwords[AVC_CMD_OFFSET_PIPE_MODE + 1], 0x0002_0202);
     assert_eq!(
         stream.dwords[AVC_CMD_OFFSET_SURFACE_STATE + 3] & 0x03,
-        MFX_SURFACE_TILE_WALK_YMAJOR | MFX_SURFACE_TILED_SURFACE
+        MFX_SURFACE_TILEMODE_TILEYS_64K
     );
     assert_eq!(
         stream.dwords[AVC_CMD_OFFSET_SURFACE_STATE + 2],
@@ -153,10 +152,16 @@ fn main() {
     );
     assert_eq!(
         stream.dwords[AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 1],
-        0
+        base as u32
     );
-    assert_eq!(stream.dwords[AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 2], 0);
-    assert_eq!(stream.dwords[AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 3], 0);
+    assert_eq!(
+        stream.dwords[AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 2],
+        (base >> 32) as u32
+    );
+    assert_eq!(
+        stream.dwords[AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 3],
+        MFX_MEMORY_OBJECT_CONTROL_UC
+    );
     assert_eq!(
         stream.dwords[AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 4],
         base as u32
@@ -167,7 +172,7 @@ fn main() {
     );
     assert_eq!(
         stream.dwords[AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 6],
-        MFX_MEMORY_OBJECT_CONTROL_UC | MFX_TILED_RESOURCE_MODE_TILEYS
+        MFX_MEMORY_OBJECT_CONTROL_UC
     );
     assert_eq!(
         addr_lo(&stream.dwords, AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 13),
@@ -199,7 +204,7 @@ fn main() {
     }
     assert_eq!(
         stream.dwords[AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + 51],
-        MFX_MEMORY_OBJECT_CONTROL_UC | MFX_TILED_RESOURCE_MODE_TILEYS
+        MFX_MEMORY_OBJECT_CONTROL_UC
     );
     assert_eq!(
         addr_lo(&stream.dwords, AVC_CMD_OFFSET_BSP_BUF_BASE_ADDR_STATE + 1),
