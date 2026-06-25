@@ -159,6 +159,10 @@ symphonia-core = { path = "vendor/symphonia-core-0.5.5-trueos" }
 symphonia-codec-aac = { path = "vendor/symphonia-codec-aac-0.5.5-trueos" }
 rayon = { path = "vendor/rayon" }
 rayon-core = { path = "vendor/rayon/rayon-core" }
+crossbeam = { path = "vendor/crossbeam-0.8.4" }
+crossbeam-channel = { path = "vendor/crossbeam-channel-0.5.15" }
 crossbeam-deque = { path = "vendor/crossbeam-deque-0.8.6" }
 crossbeam-epoch = { path = "vendor/crossbeam-epoch-0.9.18" }
+crossbeam-queue = { path = "vendor/crossbeam-queue-0.3.12" }
+crossbeam-skiplist = { path = "vendor/crossbeam-skiplist-0.1.3" }
 crossbeam-utils = { path = "vendor/crossbeam-utils-0.8.21" }
