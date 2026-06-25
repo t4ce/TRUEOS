@@ -17,7 +17,6 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use core3::io;
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use std::hash::DefaultHasher;
-use std::sync::Once;
 use std::thread;
 
 /// Thread builder used for customization via [`ThreadPoolBuilder::spawn_handler()`].
@@ -154,7 +153,10 @@ pub(super) struct Registry {
 // Initialization
 
 static mut THE_REGISTRY: Option<Arc<Registry>> = None;
-static THE_REGISTRY_SET: Once = Once::new();
+#[cfg(not(target_os = "trueos"))]
+static THE_REGISTRY_SET: std::sync::Once = std::sync::Once::new();
+#[cfg(target_os = "trueos")]
+static THE_REGISTRY_SET: spin::Once<()> = spin::Once::new();
 
 /// Starts the worker threads (if that has not already happened). If
 /// initialization has not already occurred, use the default

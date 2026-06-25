@@ -31,6 +31,7 @@ const TOOL_JSON_7Z: &str = r#"{"type":"object","properties":{"path":{"type":"str
 const TOOL_JSON_C4: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["file","inline"],"description":"Compile from a TRUEOSFS file or inline C4 source."},"path":{"type":"string","description":"TRUEOSFS source path when mode=file."},"source":{"type":"string","description":"Inline C4 source when mode=inline."}},"required":["mode"],"additionalProperties":false}"#;
 const TOOL_JSON_DIASHOW: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc","log"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format or optional disk id for action=log."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."},"max":{"type":"integer","minimum":1,"maximum":4096,"description":"Maximum raw TRUEOSFS log records to print for action=log."}},"required":["action"],"additionalProperties":false}"#;
+const TOOL_JSON_ETC: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["diashow","gboy"],"description":"etc subcommand to run."},"path":{"type":"string","description":"TRUEOSFS Game Boy ROM path for subcommand=gboy."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_GBOY: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS Game Boy ROM path."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_GPGPU: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["canvas2d","canvas3d","artificial-fragment","smoke"],"description":"GPGPU command to run."},"canvas2d":{"type":"string","enum":["sprite","sprites64","mandel64"],"description":"Optional canvas2d mode."},"canvas3d":{"type":"string","enum":["cube","ico","para"],"description":"Optional canvas3d mode."},"duration_ms":{"type":"integer","description":"Optional canvas2d sprite runtime in milliseconds."},"cadence_ms":{"type":"integer","description":"Optional canvas2d sprite minimum launch cadence in milliseconds."},"count":{"type":"integer","minimum":1,"maximum":256,"description":"Optional canvas2d sprite descriptors per batch."},"present_every":{"type":"integer","minimum":1,"maximum":1024,"description":"Optional canvas2d sprite present interval."},"iterations":{"type":"integer","description":"Optional canvas2d mandel64 iteration count."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_HYPER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","probe"],"description":"Hyper transport view to print."},"url":{"type":"string","description":"Optional URL to download into TRUEOSFS."},"path":{"type":"string","description":"Optional TRUEOSFS destination path."}},"required":[],"additionalProperties":false}"#;
@@ -120,6 +121,33 @@ fn dispatch_c4(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Parse
 
 fn dispatch_diashow(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::diashow::try_parse(io, rest)
+}
+
+fn dispatch_etc(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    let trimmed = rest.trim_start();
+    if trimmed.is_empty() {
+        super::print_shell_line(io, "etc: usage `etc diashow` | `etc gboy <rom.gb>`");
+        return ParseOutcome::Handled;
+    }
+
+    let command_end = trimmed
+        .char_indices()
+        .find_map(|(idx, ch)| ch.is_whitespace().then_some(idx))
+        .unwrap_or(trimmed.len());
+    let command = &trimmed[..command_end];
+    let tail = trimmed[command_end..].trim_start();
+
+    if command.eq_ignore_ascii_case("diashow") {
+        super::cmds::diashow::try_parse(io, tail)
+    } else if command.eq_ignore_ascii_case("gboy") {
+        super::cmds::gboy::try_parse(io, tail)
+    } else if command.eq_ignore_ascii_case("help") {
+        super::print_shell_line(io, "etc: commands `diashow`, `gboy <rom.gb>`");
+        ParseOutcome::Handled
+    } else {
+        super::print_shell_line(io, alloc::format!("etc: unknown subcommand `{command}`").as_str());
+        ParseOutcome::Handled
+    }
 }
 
 fn dispatch_disc(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -215,12 +243,21 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         name: "diashow",
         mode: "cmd",
         color: Some(STATUS_PINK_RGB),
-        advertised: true,
+        advertised: false,
         handler: dispatch_diashow,
         tool_description: Some(
             "Decode up to 200 /diashow/*.jpeg files with the kernel zune JPEG path and present them centered on the primary scanout from AP1.",
         ),
         tool_parameters_json: Some(TOOL_JSON_DIASHOW),
+    },
+    BuiltinShell2CmdEntry {
+        name: "etc",
+        mode: "cmd",
+        color: Some(STATUS_GRAY_RGB),
+        advertised: true,
+        handler: dispatch_etc,
+        tool_description: Some("Run miscellaneous commands such as diashow and gboy."),
+        tool_parameters_json: Some(TOOL_JSON_ETC),
     },
     BuiltinShell2CmdEntry {
         name: "fslog",
@@ -235,7 +272,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         name: "gboy",
         mode: "cmd",
         color: Some(STATUS_PINK_RGB),
-        advertised: true,
+        advertised: false,
         handler: dispatch_gboy,
         tool_description: Some(
             "Load a Game Boy ROM from TRUEOSFS and present it on the Intel backend.",
@@ -443,8 +480,8 @@ pub(crate) fn try_dispatch(
 
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
-        "7z", "lsd", "rm", "mv", "sha", "diashow", "gboy", "disc", "install", "update", "hyper",
-        "net", "c4", "txt", "gpgpu", "aud", "acpi", "tlb", "smp",
+        "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "net", "c4", "txt",
+        "gpgpu", "aud", "acpi", "tlb", "smp", "etc",
     ];
 
     let mut out = AllocString::new();

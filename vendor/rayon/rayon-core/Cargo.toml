@@ -30,6 +30,9 @@ crossbeam-deque.workspace = true
 crossbeam-utils.workspace = true
 wasm_sync = { workspace = true, optional = true }
 
+[target.'cfg(target_os = "trueos")'.dependencies]
+spin.workspace = true
+
 [dev-dependencies]
 rand.workspace = true
 scoped-tls.workspace = true
