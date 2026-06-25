@@ -134,6 +134,86 @@ pub(super) struct MediaJpegSmokeSubmitProof {
     pub bitstream_dword0: u32,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub(super) struct MediaH264SmokeSubmitProof {
+    pub engine_name: &'static str,
+    pub batch_gpu_addr: u64,
+    pub result_gpu_addr: u64,
+    pub bitstream_gpu_addr: u64,
+    pub output_surface_gpu_addr: u64,
+    pub bitstream_bytes: usize,
+    pub coded_width: u32,
+    pub coded_height: u32,
+    pub output_surface_pitch: usize,
+    pub output_surface_bytes: usize,
+    pub nal_count: usize,
+    pub nal_type_mask: u32,
+    pub slice_count: usize,
+    pub sps_id: u32,
+    pub pps_id: u32,
+    pub frame_num: u32,
+    pub slice_type: u32,
+    pub pic_width_mbs: u32,
+    pub frame_height_mbs: u32,
+    pub first_slice_offset: u32,
+    pub first_slice_len: u32,
+    pub first_mb_byte_offset: u32,
+    pub first_mb_bit_offset: u32,
+    pub pipe_mode_dw1: u32,
+    pub surface_dw2: u32,
+    pub surface_dw3: u32,
+    pub avc_img_dw1: u32,
+    pub avc_img_dw2: u32,
+    pub avc_img_dw4: u32,
+    pub avc_img_dw13: u32,
+    pub avc_img_dw14: u32,
+    pub avc_slice_dw1: u32,
+    pub avc_slice_dw3: u32,
+    pub avc_slice_dw4: u32,
+    pub avc_bsd_dw1: u32,
+    pub avc_bsd_dw2: u32,
+    pub avc_bsd_dw4: u32,
+    pub batch_tail_bytes: usize,
+    pub ring_tail_bytes: usize,
+    pub kickoff_marker: u32,
+    pub presubmit_marker: u32,
+    pub postsubmit_marker: u32,
+    pub complete_marker: u32,
+    pub kickoff_value: u32,
+    pub presubmit_value: u32,
+    pub postsubmit_value: u32,
+    pub complete_value: u32,
+    pub retired: bool,
+    pub poll_iters: usize,
+    pub output_surface_signature: u32,
+    pub output_surface_nonzero_samples: usize,
+    pub execlist_status_lo: u32,
+    pub execlist_status_hi: u32,
+    pub ring_start: u32,
+    pub ring_ctl: u32,
+    pub ring_hws_pga: u32,
+    pub ring_head: u32,
+    pub ring_tail: u32,
+    pub ring_acthd: u32,
+    pub ring_acthd_hi: u32,
+    pub acthd_region: &'static str,
+    pub acthd_offset_bytes: u32,
+    pub acthd_dword: u32,
+    pub bbaddr_lo: u32,
+    pub bbaddr_hi: u32,
+    pub dma_fadd_lo: u32,
+    pub dma_fadd_hi: u32,
+    pub bbstate: u32,
+    pub esr: u32,
+    pub instps: u32,
+    pub psmi_ctl: u32,
+    pub nopid: u32,
+    pub ipeir: u32,
+    pub ipehr: u32,
+    pub fault_gen8: u32,
+    pub fault_gen12: u32,
+}
+
 const JPEG_QM_SCAN_8X8: [usize; 64] = [
     0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20,
     13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59,
@@ -739,15 +819,34 @@ pub(super) fn stream_encoded_to_bitstream(
 }
 
 const MEDIA_CMD_OPCODE_MFX_JPEG: u32 = 7;
+const MEDIA_CMD_OPCODE_MFX_AVC_COMMON: u32 = 1;
+const MEDIA_CMD_OPCODE_MFX_AVC_DEC: u32 = 1;
 const MFX_JPEG_PIC_STATE: u32 = 0;
 const MFD_JPEG_BSD_OBJECT: u32 = 8;
+const MFX_AVC_IMG_STATE: u32 = 0;
+const MFX_AVC_DIRECTMODE_STATE: u32 = 2;
+const MFX_AVC_SLICE_STATE: u32 = 3;
+const MFD_AVC_PICID_STATE: u32 = 5;
+const MFD_AVC_DPB_STATE: u32 = 6;
+const MFD_AVC_BSD_OBJECT: u32 = 8;
 const MFX_CMD_LEN_JPEG_PIC_STATE: u32 = 1;
 const MFX_CMD_LEN_JPEG_BSD_OBJECT: u32 = 4;
+const MFX_CMD_LEN_AVC_IMG_STATE: u32 = 19;
+const MFX_CMD_LEN_AVC_DIRECTMODE_STATE: u32 = 69;
+const MFX_CMD_LEN_AVC_SLICE_STATE: u32 = 9;
+const MFX_CMD_LEN_AVC_PICID_STATE: u32 = 8;
+const MFX_CMD_LEN_AVC_DPB_STATE: u32 = 25;
+const MFX_CMD_LEN_AVC_BSD_OBJECT: u32 = 5;
 const MFX_JPEG_HUFF_TABLE_STATE: u32 = 2;
 const MFX_CMD_LEN_JPEG_HUFF_TABLE_STATE: u32 = 51;
+const MFX_PIPE_MODE_CODEC_AVC: u32 = 2;
 const MFX_PIPE_MODE_CODEC_JPEG: u32 = 3;
 const MFX_PIPE_MODE_LONG_FORMAT: u32 = 1 << 17;
 const MFX_PIPE_MODE_PRE_DEBLOCK_OUTPUT: u32 = 1 << 8;
+const MEDIA_STAGE_FLAG_H264_SMOKE: u32 = 1 << 16;
+const MEDIA_STAGE_FLAG_H264_PIC_STATE: u32 = 1 << 17;
+const MEDIA_STAGE_FLAG_H264_SLICE_STATE: u32 = 1 << 18;
+const MEDIA_STAGE_FLAG_H264_BSD_OBJECT: u32 = 1 << 19;
 const MEDIA_STAGE_FLAG_JPEG_SMOKE: u32 = 1 << 8;
 const MEDIA_STAGE_FLAG_JPEG_PIC_STATE: u32 = 1 << 9;
 const MEDIA_STAGE_FLAG_JPEG_QM_STATE: u32 = 1 << 10;
@@ -761,6 +860,499 @@ fn pack_u8x4(bytes: &[u8]) -> u32 {
         value |= u32::from(*byte) << (shift * 8);
     }
     value
+}
+
+#[derive(Copy, Clone, Debug)]
+struct H264SpsInfo {
+    id: u32,
+    profile_idc: u8,
+    pic_width_in_mbs_minus1: u32,
+    pic_height_in_map_units_minus1: u32,
+    frame_mbs_only_flag: bool,
+    direct_8x8_inference_flag: bool,
+    chroma_format_idc: u32,
+    log2_max_frame_num_minus4: u32,
+    pic_order_cnt_type: u32,
+    log2_max_pic_order_cnt_lsb_minus4: u32,
+    delta_pic_order_always_zero_flag: bool,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct H264PpsInfo {
+    id: u32,
+    sps_id: u32,
+    entropy_coding_mode_flag: bool,
+    bottom_field_pic_order_in_frame_present_flag: bool,
+    num_ref_idx_l0_default_active_minus1: u32,
+    num_ref_idx_l1_default_active_minus1: u32,
+    weighted_pred_flag: bool,
+    weighted_bipred_idc: u32,
+    pic_init_qp_minus26: i32,
+    chroma_qp_index_offset: i32,
+    deblocking_filter_control_present_flag: bool,
+    constrained_intra_pred_flag: bool,
+    transform_8x8_mode_flag: bool,
+    second_chroma_qp_index_offset: i32,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct H264SliceInfo {
+    nal_offset: usize,
+    nal_len: usize,
+    nal_type: u8,
+    nal_ref_idc: u8,
+    first_mb_in_slice: u32,
+    slice_type: u32,
+    pic_parameter_set_id: u32,
+    frame_num: u32,
+    idr_pic_id: u32,
+    slice_qp_delta: i32,
+    disable_deblocking_filter_idc: u32,
+    slice_alpha_c0_offset_div2: i32,
+    slice_beta_offset_div2: i32,
+    first_mb_byte_offset: u32,
+    first_mb_bit_offset: u32,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct H264PictureInfo {
+    sps: H264SpsInfo,
+    pps: H264PpsInfo,
+    slice: H264SliceInfo,
+    nal_count: usize,
+    nal_type_mask: u32,
+    slice_count: usize,
+}
+
+struct H264BitReader<'a> {
+    data: &'a [u8],
+    bit_pos: usize,
+}
+
+impl<'a> H264BitReader<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self { data, bit_pos: 0 }
+    }
+
+    fn bit_pos(&self) -> usize {
+        self.bit_pos
+    }
+
+    fn read_bit(&mut self) -> Option<u32> {
+        let byte = *self.data.get(self.bit_pos / 8)?;
+        let shift = 7usize.saturating_sub(self.bit_pos % 8);
+        self.bit_pos = self.bit_pos.saturating_add(1);
+        Some(u32::from((byte >> shift) & 1))
+    }
+
+    fn read_bits(&mut self, count: usize) -> Option<u32> {
+        if count > 31 {
+            return None;
+        }
+        let mut value = 0u32;
+        for _ in 0..count {
+            value = (value << 1) | self.read_bit()?;
+        }
+        Some(value)
+    }
+
+    fn read_ue(&mut self) -> Option<u32> {
+        let mut leading_zero_bits = 0usize;
+        while leading_zero_bits < 31 {
+            if self.read_bit()? != 0 {
+                break;
+            }
+            leading_zero_bits += 1;
+        }
+        let suffix = if leading_zero_bits == 0 {
+            0
+        } else {
+            self.read_bits(leading_zero_bits)?
+        };
+        Some((1u32 << leading_zero_bits) - 1 + suffix)
+    }
+
+    fn read_se(&mut self) -> Option<i32> {
+        let code_num = self.read_ue()? as i32;
+        let value = (code_num + 1) / 2;
+        if (code_num & 1) == 0 {
+            Some(-value)
+        } else {
+            Some(value)
+        }
+    }
+}
+
+fn h264_nal_payload_to_rbsp(payload: &[u8], rbsp: &mut [u8]) -> Option<usize> {
+    let mut out = 0usize;
+    let mut zero_run = 0usize;
+    for &byte in payload {
+        if zero_run >= 2 && byte == 0x03 {
+            zero_run = 0;
+            continue;
+        }
+        if out >= rbsp.len() {
+            return None;
+        }
+        rbsp[out] = byte;
+        out += 1;
+        if byte == 0 {
+            zero_run += 1;
+        } else {
+            zero_run = 0;
+        }
+    }
+    Some(out)
+}
+
+fn h264_find_start_code(data: &[u8], mut idx: usize) -> Option<(usize, usize)> {
+    while idx + 3 <= data.len() {
+        if idx + 4 <= data.len()
+            && data[idx] == 0
+            && data[idx + 1] == 0
+            && data[idx + 2] == 0
+            && data[idx + 3] == 1
+        {
+            return Some((idx, 4));
+        }
+        if data[idx] == 0 && data[idx + 1] == 0 && data[idx + 2] == 1 {
+            return Some((idx, 3));
+        }
+        idx += 1;
+    }
+    None
+}
+
+fn h264_nal_units(data: &[u8], out: &mut [(usize, usize, u8); 16]) -> (usize, u32, usize) {
+    let mut count = 0usize;
+    let mut type_mask = 0u32;
+    let mut slice_count = 0usize;
+    let mut search = 0usize;
+    while let Some((start, code_len)) = h264_find_start_code(data, search) {
+        let payload_start = start + code_len;
+        if payload_start >= data.len() {
+            break;
+        }
+        let next = h264_find_start_code(data, payload_start)
+            .map(|(next_start, _)| next_start)
+            .unwrap_or(data.len());
+        if next > payload_start {
+            let nal_type = data[payload_start] & 0x1F;
+            if nal_type < 32 {
+                type_mask |= 1u32 << nal_type;
+            }
+            if nal_type == 1 || nal_type == 5 {
+                slice_count += 1;
+            }
+            if count < out.len() {
+                out[count] = (payload_start, next - payload_start, nal_type);
+                count += 1;
+            }
+        }
+        search = next;
+    }
+    (count, type_mask, slice_count)
+}
+
+fn h264_skip_scaling_list(reader: &mut H264BitReader<'_>, size: usize) -> Option<()> {
+    let mut last_scale = 8i32;
+    let mut next_scale = 8i32;
+    for _ in 0..size {
+        if next_scale != 0 {
+            let delta_scale = reader.read_se()?;
+            next_scale = (last_scale + delta_scale + 256) % 256;
+        }
+        last_scale = if next_scale == 0 {
+            last_scale
+        } else {
+            next_scale
+        };
+    }
+    Some(())
+}
+
+fn h264_parse_sps(payload: &[u8]) -> Option<H264SpsInfo> {
+    if payload.len() < 2 {
+        return None;
+    }
+    let mut rbsp = [0u8; 512];
+    let rbsp_len = h264_nal_payload_to_rbsp(&payload[1..], &mut rbsp)?;
+    let mut reader = H264BitReader::new(&rbsp[..rbsp_len]);
+    let profile_idc = reader.read_bits(8)? as u8;
+    let _constraint_flags = reader.read_bits(8)?;
+    let _level_idc = reader.read_bits(8)?;
+    let id = reader.read_ue()?;
+    let mut chroma_format_idc = 1u32;
+    if matches!(
+        profile_idc,
+        100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134 | 135
+    ) {
+        chroma_format_idc = reader.read_ue()?;
+        if chroma_format_idc == 3 {
+            let _separate_colour_plane_flag = reader.read_bit()?;
+        }
+        let _bit_depth_luma_minus8 = reader.read_ue()?;
+        let _bit_depth_chroma_minus8 = reader.read_ue()?;
+        let _qpprime_y_zero_transform_bypass_flag = reader.read_bit()?;
+        if reader.read_bit()? != 0 {
+            let scaling_count = if chroma_format_idc == 3 { 12 } else { 8 };
+            for i in 0..scaling_count {
+                if reader.read_bit()? != 0 {
+                    h264_skip_scaling_list(&mut reader, if i < 6 { 16 } else { 64 })?;
+                }
+            }
+        }
+    }
+    let log2_max_frame_num_minus4 = reader.read_ue()?;
+    let pic_order_cnt_type = reader.read_ue()?;
+    let mut log2_max_pic_order_cnt_lsb_minus4 = 0u32;
+    let mut delta_pic_order_always_zero_flag = false;
+    if pic_order_cnt_type == 0 {
+        log2_max_pic_order_cnt_lsb_minus4 = reader.read_ue()?;
+    } else if pic_order_cnt_type == 1 {
+        delta_pic_order_always_zero_flag = reader.read_bit()? != 0;
+        let _offset_for_non_ref_pic = reader.read_se()?;
+        let _offset_for_top_to_bottom_field = reader.read_se()?;
+        let num_ref_frames_in_pic_order_cnt_cycle = reader.read_ue()?;
+        for _ in 0..num_ref_frames_in_pic_order_cnt_cycle.min(256) {
+            let _offset_for_ref_frame = reader.read_se()?;
+        }
+    }
+    let _max_num_ref_frames = reader.read_ue()?;
+    let _gaps_in_frame_num_value_allowed_flag = reader.read_bit()?;
+    let pic_width_in_mbs_minus1 = reader.read_ue()?;
+    let pic_height_in_map_units_minus1 = reader.read_ue()?;
+    let frame_mbs_only_flag = reader.read_bit()? != 0;
+    if !frame_mbs_only_flag {
+        let _mb_adaptive_frame_field_flag = reader.read_bit()?;
+    }
+    let direct_8x8_inference_flag = reader.read_bit()? != 0;
+    let mut crop_left = 0u32;
+    let mut crop_right = 0u32;
+    let mut crop_top = 0u32;
+    let mut crop_bottom = 0u32;
+    if reader.read_bit()? != 0 {
+        crop_left = reader.read_ue()?;
+        crop_right = reader.read_ue()?;
+        crop_top = reader.read_ue()?;
+        crop_bottom = reader.read_ue()?;
+    }
+    let sub_width_c = if chroma_format_idc == 1 || chroma_format_idc == 2 {
+        2
+    } else {
+        1
+    };
+    let sub_height_c = if chroma_format_idc == 1 { 2 } else { 1 };
+    let crop_unit_x = sub_width_c;
+    let crop_unit_y = sub_height_c * if frame_mbs_only_flag { 1 } else { 2 };
+    let width = (pic_width_in_mbs_minus1 + 1)
+        .saturating_mul(16)
+        .saturating_sub((crop_left + crop_right).saturating_mul(crop_unit_x));
+    let height = (2 - frame_mbs_only_flag as u32)
+        .saturating_mul(pic_height_in_map_units_minus1 + 1)
+        .saturating_mul(16)
+        .saturating_sub((crop_top + crop_bottom).saturating_mul(crop_unit_y));
+    Some(H264SpsInfo {
+        id,
+        profile_idc,
+        pic_width_in_mbs_minus1,
+        pic_height_in_map_units_minus1,
+        frame_mbs_only_flag,
+        direct_8x8_inference_flag,
+        chroma_format_idc,
+        log2_max_frame_num_minus4,
+        pic_order_cnt_type,
+        log2_max_pic_order_cnt_lsb_minus4,
+        delta_pic_order_always_zero_flag,
+        width,
+        height,
+    })
+}
+
+fn h264_parse_pps(payload: &[u8]) -> Option<H264PpsInfo> {
+    if payload.len() < 2 {
+        return None;
+    }
+    let mut rbsp = [0u8; 256];
+    let rbsp_len = h264_nal_payload_to_rbsp(&payload[1..], &mut rbsp)?;
+    let mut reader = H264BitReader::new(&rbsp[..rbsp_len]);
+    let id = reader.read_ue()?;
+    let sps_id = reader.read_ue()?;
+    let entropy_coding_mode_flag = reader.read_bit()? != 0;
+    let bottom_field_pic_order_in_frame_present_flag = reader.read_bit()? != 0;
+    let num_slice_groups_minus1 = reader.read_ue()?;
+    if num_slice_groups_minus1 != 0 {
+        return None;
+    }
+    let num_ref_idx_l0_default_active_minus1 = reader.read_ue()?;
+    let num_ref_idx_l1_default_active_minus1 = reader.read_ue()?;
+    let weighted_pred_flag = reader.read_bit()? != 0;
+    let weighted_bipred_idc = reader.read_bits(2)?;
+    let pic_init_qp_minus26 = reader.read_se()?;
+    let _pic_init_qs_minus26 = reader.read_se()?;
+    let chroma_qp_index_offset = reader.read_se()?;
+    let deblocking_filter_control_present_flag = reader.read_bit()? != 0;
+    let constrained_intra_pred_flag = reader.read_bit()? != 0;
+    let _redundant_pic_cnt_present_flag = reader.read_bit()?;
+    let mut transform_8x8_mode_flag = false;
+    let mut second_chroma_qp_index_offset = chroma_qp_index_offset;
+    if reader.bit_pos() + 1 < rbsp_len * 8 {
+        transform_8x8_mode_flag = reader.read_bit()? != 0;
+        if reader.read_bit()? != 0 {
+            let scaling_count = 6 + if transform_8x8_mode_flag { 2 } else { 0 };
+            for i in 0..scaling_count {
+                if reader.read_bit()? != 0 {
+                    h264_skip_scaling_list(&mut reader, if i < 6 { 16 } else { 64 })?;
+                }
+            }
+        }
+        second_chroma_qp_index_offset = reader.read_se()?;
+    }
+    Some(H264PpsInfo {
+        id,
+        sps_id,
+        entropy_coding_mode_flag,
+        bottom_field_pic_order_in_frame_present_flag,
+        num_ref_idx_l0_default_active_minus1,
+        num_ref_idx_l1_default_active_minus1,
+        weighted_pred_flag,
+        weighted_bipred_idc,
+        pic_init_qp_minus26,
+        chroma_qp_index_offset,
+        deblocking_filter_control_present_flag,
+        constrained_intra_pred_flag,
+        transform_8x8_mode_flag,
+        second_chroma_qp_index_offset,
+    })
+}
+
+fn h264_parse_slice(
+    payload: &[u8],
+    nal_offset: usize,
+    nal_len: usize,
+    sps: H264SpsInfo,
+    pps: H264PpsInfo,
+) -> Option<H264SliceInfo> {
+    if payload.len() < 2 {
+        return None;
+    }
+    let nal_header = payload[0];
+    let nal_ref_idc = (nal_header >> 5) & 0x03;
+    let nal_type = nal_header & 0x1F;
+    let mut rbsp = [0u8; 1024];
+    let rbsp_len = h264_nal_payload_to_rbsp(&payload[1..], &mut rbsp)?;
+    let mut reader = H264BitReader::new(&rbsp[..rbsp_len]);
+    let first_mb_in_slice = reader.read_ue()?;
+    let slice_type = reader.read_ue()? % 5;
+    let pic_parameter_set_id = reader.read_ue()?;
+    let frame_num = reader.read_bits((sps.log2_max_frame_num_minus4 + 4) as usize)?;
+    if !sps.frame_mbs_only_flag {
+        let field_pic_flag = reader.read_bit()? != 0;
+        if field_pic_flag {
+            let _bottom_field_flag = reader.read_bit()?;
+        }
+    }
+    let mut idr_pic_id = 0u32;
+    if nal_type == 5 {
+        idr_pic_id = reader.read_ue()?;
+    }
+    if sps.pic_order_cnt_type == 0 {
+        let _pic_order_cnt_lsb =
+            reader.read_bits((sps.log2_max_pic_order_cnt_lsb_minus4 + 4) as usize)?;
+        if pps.bottom_field_pic_order_in_frame_present_flag && sps.frame_mbs_only_flag {
+            let _delta_pic_order_cnt_bottom = reader.read_se()?;
+        }
+    } else if sps.pic_order_cnt_type == 1 && !sps.delta_pic_order_always_zero_flag {
+        let _delta_pic_order_cnt0 = reader.read_se()?;
+        if pps.bottom_field_pic_order_in_frame_present_flag && sps.frame_mbs_only_flag {
+            let _delta_pic_order_cnt1 = reader.read_se()?;
+        }
+    }
+    if nal_ref_idc != 0 {
+        if nal_type == 5 {
+            let _no_output_of_prior_pics_flag = reader.read_bit()?;
+            let _long_term_reference_flag = reader.read_bit()?;
+        } else if reader.read_bit()? != 0 {
+            return None;
+        }
+    }
+    let slice_qp_delta = reader.read_se().unwrap_or(0);
+    let mut disable_deblocking_filter_idc = 0u32;
+    let mut slice_alpha_c0_offset_div2 = 0i32;
+    let mut slice_beta_offset_div2 = 0i32;
+    if pps.deblocking_filter_control_present_flag {
+        disable_deblocking_filter_idc = reader.read_ue().unwrap_or(0);
+        if disable_deblocking_filter_idc != 1 {
+            slice_alpha_c0_offset_div2 = reader.read_se().unwrap_or(0);
+            slice_beta_offset_div2 = reader.read_se().unwrap_or(0);
+        }
+    }
+    let bit_pos = reader.bit_pos();
+    Some(H264SliceInfo {
+        nal_offset,
+        nal_len,
+        nal_type,
+        nal_ref_idc,
+        first_mb_in_slice,
+        slice_type,
+        pic_parameter_set_id,
+        frame_num,
+        idr_pic_id,
+        slice_qp_delta,
+        disable_deblocking_filter_idc,
+        slice_alpha_c0_offset_div2,
+        slice_beta_offset_div2,
+        first_mb_byte_offset: 1 + (bit_pos / 8) as u32,
+        first_mb_bit_offset: (bit_pos % 8) as u32,
+    })
+}
+
+fn parse_h264_picture(bitstream: &[u8]) -> Option<H264PictureInfo> {
+    let mut nals = [(0usize, 0usize, 0u8); 16];
+    let (nal_count, nal_type_mask, slice_count) = h264_nal_units(bitstream, &mut nals);
+    let mut sps = None;
+    let mut pps = None;
+    for &(off, len, nal_type) in nals.iter().take(nal_count) {
+        let payload = &bitstream[off..off + len];
+        match nal_type {
+            7 => sps = h264_parse_sps(payload),
+            8 => pps = h264_parse_pps(payload),
+            _ => {}
+        }
+    }
+    let sps = sps?;
+    let pps = pps?;
+    if pps.sps_id != sps.id {
+        return None;
+    }
+    for &(off, len, nal_type) in nals.iter().take(nal_count) {
+        if nal_type == 1 || nal_type == 5 {
+            let slice = h264_parse_slice(&bitstream[off..off + len], off, len, sps, pps)?;
+            if slice.pic_parameter_set_id == pps.id {
+                return Some(H264PictureInfo {
+                    sps,
+                    pps,
+                    slice,
+                    nal_count,
+                    nal_type_mask,
+                    slice_count,
+                });
+            }
+        }
+    }
+    None
+}
+
+#[inline]
+fn h264_signed_5(value: i32) -> u32 {
+    (value & 0x1F) as u32
+}
+
+#[inline]
+fn h264_clamp_qp(value: i32) -> u32 {
+    value.clamp(0, 51) as u32
 }
 
 fn emit_jpeg_huff_table_state(
@@ -1222,6 +1814,680 @@ fn build_jpeg_smoke_batch_skeleton(
     batch[idx + 1] = media::MI_BATCH_BUFFER_END;
     batch[idx + 2] = media::MI_NOOP;
     Some((idx + 3).saturating_mul(core::mem::size_of::<u32>()))
+}
+
+fn build_h264_smoke_batch_skeleton(
+    batch_virt: *mut u8,
+    batch_bytes: usize,
+    result_gpu_addr: u64,
+    bitstream_gpu_addr: u64,
+    output_surface_gpu_addr: u64,
+    output_surface_bytes: usize,
+    bitstream_bytes: usize,
+    picture: H264PictureInfo,
+    kickoff_marker: u32,
+    presubmit_marker: u32,
+    postsubmit_marker: u32,
+    complete_marker: u32,
+) -> Option<usize> {
+    let batch = unsafe {
+        core::slice::from_raw_parts_mut(
+            batch_virt as *mut u32,
+            batch_bytes / core::mem::size_of::<u32>(),
+        )
+    };
+    let mut idx = 0usize;
+    let coded_width = picture.sps.width.max(16);
+    let coded_height = picture.sps.height.max(16);
+    let output_pitch = media::align_up_u32(coded_width, 128);
+    let (chroma_y_offset, cr_y_offset, _) =
+        imc3_tiled_surface_layout(coded_height, output_pitch as usize)?;
+    let pic_width_mbs = picture.sps.pic_width_in_mbs_minus1 + 1;
+    let frame_height_mbs = (2 - picture.sps.frame_mbs_only_flag as u32)
+        * (picture.sps.pic_height_in_map_units_minus1 + 1);
+    let frame_size_mbs = pic_width_mbs.saturating_mul(frame_height_mbs);
+    let initial_qp =
+        h264_clamp_qp(26 + picture.pps.pic_init_qp_minus26 + picture.slice.slice_qp_delta);
+    let pipe_mode_dw1 =
+        MFX_PIPE_MODE_CODEC_AVC | MFX_PIPE_MODE_LONG_FORMAT | MFX_PIPE_MODE_PRE_DEBLOCK_OUTPUT;
+    let surface_dw2 =
+        ((coded_width.saturating_sub(1)) << 4) | ((coded_height.saturating_sub(1)) << 18);
+    let surface_dw3 = (1 << 1) | 1 | ((output_pitch.saturating_sub(1)) << 3);
+    let avc_img_dw1 = frame_size_mbs.saturating_sub(1);
+    let avc_img_dw2 =
+        picture.sps.pic_width_in_mbs_minus1 | (picture.sps.pic_height_in_map_units_minus1 << 16);
+    let avc_img_dw3 = (h264_signed_5(picture.pps.chroma_qp_index_offset) << 16)
+        | (h264_signed_5(picture.pps.second_chroma_qp_index_offset) << 24)
+        | ((picture.pps.weighted_bipred_idc & 0x03) << 10)
+        | ((picture.pps.weighted_pred_flag as u32) << 12);
+    let avc_img_dw4 = ((picture.sps.frame_mbs_only_flag as u32) << 2)
+        | ((picture.pps.transform_8x8_mode_flag as u32) << 3)
+        | ((picture.sps.direct_8x8_inference_flag as u32) << 4)
+        | ((picture.pps.constrained_intra_pred_flag as u32) << 5)
+        | ((picture.slice.nal_ref_idc == 0) as u32) << 6
+        | ((picture.pps.entropy_coding_mode_flag as u32) << 7)
+        | ((picture.sps.chroma_format_idc & 0x03) << 10);
+    let avc_img_dw13 = initial_qp
+        | ((picture.pps.num_ref_idx_l0_default_active_minus1 + 1).min(32) << 8)
+        | ((picture.pps.num_ref_idx_l1_default_active_minus1 + 1).min(32) << 16)
+        | (1 << 24);
+    let avc_img_dw14 = (picture.sps.pic_order_cnt_type & 0x03) << 2
+        | ((picture.pps.deblocking_filter_control_present_flag as u32) << 15)
+        | ((picture.sps.log2_max_frame_num_minus4 & 0xFF) << 16)
+        | ((picture.sps.log2_max_pic_order_cnt_lsb_minus4 & 0xFF) << 24);
+    let avc_img_dw15 = picture.slice.frame_num << 16;
+    let avc_slice_dw1 = picture.slice.slice_type & 0x0F;
+    let avc_slice_dw3 = h264_signed_5(picture.slice.slice_alpha_c0_offset_div2)
+        | (h264_signed_5(picture.slice.slice_beta_offset_div2) << 8)
+        | (initial_qp << 16)
+        | ((picture.slice.disable_deblocking_filter_idc & 0x03) << 27);
+    let avc_slice_dw4 = picture.slice.first_mb_in_slice
+        | ((picture.slice.first_mb_in_slice % pic_width_mbs) << 16)
+        | ((picture.slice.first_mb_in_slice / pic_width_mbs) << 24);
+    let avc_slice_dw5 = pic_width_mbs | (frame_height_mbs.saturating_sub(1) << 16);
+    let avc_slice_dw6 = 1 << 19;
+    let avc_bsd_dw1 = picture.slice.nal_len as u32;
+    let avc_bsd_dw2 = picture.slice.nal_offset as u32;
+    let avc_bsd_dw4 = (1 << 3)
+        | ((picture.slice.first_mb_byte_offset & 0xFFFF) << 16)
+        | (picture.slice.first_mb_bit_offset & 0x07);
+    let stage_flags = MEDIA_STAGE_FLAG_H264_SMOKE
+        | MEDIA_STAGE_FLAG_H264_PIC_STATE
+        | MEDIA_STAGE_FLAG_H264_SLICE_STATE
+        | MEDIA_STAGE_FLAG_H264_BSD_OBJECT;
+
+    if !media::emit_store_dword_ppgtt(
+        batch,
+        &mut idx,
+        result_gpu_addr + media::MEDIA_RESULT_KICKOFF_SLOT,
+        kickoff_marker,
+    ) || !media::emit_store_dword_ppgtt(
+        batch,
+        &mut idx,
+        result_gpu_addr + media::MEDIA_RESULT_BITSTREAM_ADDR_LO_SLOT,
+        bitstream_gpu_addr as u32,
+    ) || !media::emit_store_dword_ppgtt(
+        batch,
+        &mut idx,
+        result_gpu_addr + media::MEDIA_RESULT_BITSTREAM_ADDR_HI_SLOT,
+        (bitstream_gpu_addr >> 32) as u32,
+    ) || !media::emit_store_dword_ppgtt(
+        batch,
+        &mut idx,
+        result_gpu_addr + media::MEDIA_RESULT_BITSTREAM_BYTES_SLOT,
+        bitstream_bytes as u32,
+    ) || !media::emit_store_dword_ppgtt(
+        batch,
+        &mut idx,
+        result_gpu_addr + media::MEDIA_RESULT_SAMPLE_NALS_SLOT,
+        picture.nal_count as u32,
+    ) || !media::emit_store_dword_ppgtt(
+        batch,
+        &mut idx,
+        result_gpu_addr + media::MEDIA_RESULT_STAGE_FLAGS_SLOT,
+        stage_flags,
+    ) || !media::emit_store_dword_ppgtt(
+        batch,
+        &mut idx,
+        result_gpu_addr + media::MEDIA_RESULT_OUTPUT_SURFACE_ADDR_LO_SLOT,
+        output_surface_gpu_addr as u32,
+    ) || !media::emit_store_dword_ppgtt(
+        batch,
+        &mut idx,
+        result_gpu_addr + media::MEDIA_RESULT_OUTPUT_SURFACE_ADDR_HI_SLOT,
+        (output_surface_gpu_addr >> 32) as u32,
+    ) || !media::emit_store_dword_ppgtt(
+        batch,
+        &mut idx,
+        result_gpu_addr + media::MEDIA_RESULT_OUTPUT_SURFACE_BYTES_SLOT,
+        output_surface_bytes as u32,
+    ) || !media::emit_store_dword_ppgtt(
+        batch,
+        &mut idx,
+        result_gpu_addr + media::MEDIA_RESULT_FRAME_DIMS_SLOT,
+        coded_width | (coded_height << 16),
+    ) {
+        return None;
+    }
+
+    let presubmit_flush = media::begin_batch_packet(
+        batch,
+        &mut idx,
+        5,
+        media::MI_FLUSH_DW
+            | media::MI_FLUSH_DW_VIDEO_PIPELINE_CACHE_INVALIDATE
+            | media::MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE,
+    )?;
+    batch[presubmit_flush + 1] = (result_gpu_addr + media::MEDIA_RESULT_PRESUBMIT_SLOT) as u32;
+    batch[presubmit_flush + 2] =
+        ((result_gpu_addr + media::MEDIA_RESULT_PRESUBMIT_SLOT) >> 32) as u32;
+    batch[presubmit_flush + 3] = presubmit_marker;
+
+    if idx.saturating_add(2) > batch.len() {
+        return None;
+    }
+    batch[idx] = media::MI_FORCE_WAKEUP;
+    batch[idx + 1] = media::MI_FORCE_WAKEUP_MFX_WELL;
+    idx += 2;
+    if !media::emit_mfx_wait(batch, &mut idx) {
+        return None;
+    }
+
+    let pipe_mode = media::begin_batch_packet(
+        batch,
+        &mut idx,
+        (media::MFX_CMD_LEN_PIPE_MODE_SELECT + 2) as usize,
+        media::media_cmd_header(
+            media::MEDIA_CMD_OPCODE_MFX_COMMON,
+            0,
+            media::MFX_PIPE_MODE_SELECT,
+            media::MFX_CMD_LEN_PIPE_MODE_SELECT,
+        ),
+    )?;
+    batch[pipe_mode + 1] = pipe_mode_dw1;
+    if !media::emit_mfx_wait(batch, &mut idx) {
+        return None;
+    }
+
+    let surface = media::begin_batch_packet(
+        batch,
+        &mut idx,
+        (media::MFX_CMD_LEN_SURFACE_STATE + 2) as usize,
+        media::media_cmd_header(
+            media::MEDIA_CMD_OPCODE_MFX_COMMON,
+            0,
+            media::MFX_SURFACE_STATE,
+            media::MFX_CMD_LEN_SURFACE_STATE,
+        ),
+    )?;
+    batch[surface + 2] = surface_dw2;
+    batch[surface + 3] = surface_dw3;
+    batch[surface + 4] = chroma_y_offset;
+    batch[surface + 5] = cr_y_offset;
+
+    let pipe_buf = media::begin_batch_packet(
+        batch,
+        &mut idx,
+        (media::MFX_CMD_LEN_PIPE_BUF_ADDR_STATE + 2) as usize,
+        media::media_cmd_header(
+            media::MEDIA_CMD_OPCODE_MFX_COMMON,
+            0,
+            media::MFX_PIPE_BUF_ADDR_STATE,
+            media::MFX_CMD_LEN_PIPE_BUF_ADDR_STATE,
+        ),
+    )?;
+    media::packet_write_addr64(batch, pipe_buf, 1, output_surface_gpu_addr);
+    batch[pipe_buf + 3] = media::MFX_MOCS_UC;
+    media::packet_write_addr64(batch, pipe_buf, 4, output_surface_gpu_addr);
+    batch[pipe_buf + 6] = media::MFX_MOCS_UC;
+    batch[pipe_buf + 9] = media::MFX_MOCS_UC;
+    batch[pipe_buf + 12] = media::MFX_MOCS_UC;
+
+    let ind_obj = media::begin_batch_packet(
+        batch,
+        &mut idx,
+        (media::MFX_CMD_LEN_IND_OBJ_BASE_ADDR_STATE + 2) as usize,
+        media::media_cmd_header(
+            media::MEDIA_CMD_OPCODE_MFX_COMMON,
+            0,
+            media::MFX_IND_OBJ_BASE_ADDR_STATE,
+            media::MFX_CMD_LEN_IND_OBJ_BASE_ADDR_STATE,
+        ),
+    )?;
+    media::packet_write_addr64(batch, ind_obj, 1, bitstream_gpu_addr);
+    batch[ind_obj + 3] = media::MFX_MOCS_UC;
+    media::packet_write_addr64(batch, ind_obj, 4, bitstream_gpu_addr + bitstream_bytes as u64);
+    batch[ind_obj + 8] = media::MFX_MOCS_UC;
+    batch[ind_obj + 13] = media::MFX_MOCS_UC;
+    batch[ind_obj + 18] = media::MFX_MOCS_UC;
+    batch[ind_obj + 23] = media::MFX_MOCS_UC;
+
+    let picid = media::begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_AVC_PICID_STATE + 2) as usize,
+        media::media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_AVC_DEC,
+            1,
+            MFD_AVC_PICID_STATE,
+            MFX_CMD_LEN_AVC_PICID_STATE,
+        ),
+    )?;
+    batch[picid + 1] = 1;
+
+    let direct = media::begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_AVC_DIRECTMODE_STATE + 2) as usize,
+        media::media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_AVC_COMMON,
+            0,
+            MFX_AVC_DIRECTMODE_STATE,
+            MFX_CMD_LEN_AVC_DIRECTMODE_STATE,
+        ),
+    )?;
+    for dw in 1..(MFX_CMD_LEN_AVC_DIRECTMODE_STATE as usize + 2) {
+        batch[direct + dw] = 0;
+    }
+
+    let img = media::begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_AVC_IMG_STATE + 2) as usize,
+        media::media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_AVC_COMMON,
+            0,
+            MFX_AVC_IMG_STATE,
+            MFX_CMD_LEN_AVC_IMG_STATE,
+        ),
+    )?;
+    batch[img + 1] = avc_img_dw1;
+    batch[img + 2] = avc_img_dw2;
+    batch[img + 3] = avc_img_dw3;
+    batch[img + 4] = avc_img_dw4;
+    batch[img + 5] = 0x3000_0000;
+    batch[img + 12] = 1 << 20;
+    batch[img + 13] = avc_img_dw13;
+    batch[img + 14] = avc_img_dw14;
+    batch[img + 15] = avc_img_dw15;
+
+    let dpb = media::begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_AVC_DPB_STATE + 2) as usize,
+        media::media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_AVC_DEC,
+            1,
+            MFD_AVC_DPB_STATE,
+            MFX_CMD_LEN_AVC_DPB_STATE,
+        ),
+    )?;
+    batch[dpb + 1] = 0xFFFF;
+
+    let slice = media::begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_AVC_SLICE_STATE + 2) as usize,
+        media::media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_AVC_COMMON,
+            0,
+            MFX_AVC_SLICE_STATE,
+            MFX_CMD_LEN_AVC_SLICE_STATE,
+        ),
+    )?;
+    batch[slice + 1] = avc_slice_dw1;
+    batch[slice + 2] = (picture.pps.num_ref_idx_l0_default_active_minus1 + 1).min(32) << 16
+        | ((picture.pps.num_ref_idx_l1_default_active_minus1 + 1).min(32) << 24);
+    batch[slice + 3] = avc_slice_dw3;
+    batch[slice + 4] = avc_slice_dw4;
+    batch[slice + 5] = avc_slice_dw5;
+    batch[slice + 6] = avc_slice_dw6;
+
+    let bsd = media::begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_AVC_BSD_OBJECT + 2) as usize,
+        media::media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_AVC_DEC,
+            1,
+            MFD_AVC_BSD_OBJECT,
+            MFX_CMD_LEN_AVC_BSD_OBJECT,
+        ),
+    )?;
+    batch[bsd + 1] = avc_bsd_dw1;
+    batch[bsd + 2] = avc_bsd_dw2;
+    batch[bsd + 4] = avc_bsd_dw4;
+
+    if !media::emit_store_dword_ppgtt(
+        batch,
+        &mut idx,
+        result_gpu_addr + media::MEDIA_RESULT_POSTSUBMIT_SLOT,
+        postsubmit_marker,
+    ) {
+        return None;
+    }
+
+    let done_flush = media::begin_batch_packet(
+        batch,
+        &mut idx,
+        5,
+        media::MI_FLUSH_DW
+            | media::MI_FLUSH_DW_VIDEO_PIPELINE_CACHE_INVALIDATE
+            | media::MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE,
+    )?;
+    batch[done_flush + 1] = (result_gpu_addr + media::MEDIA_RESULT_COMPLETE_SLOT) as u32;
+    batch[done_flush + 2] = ((result_gpu_addr + media::MEDIA_RESULT_COMPLETE_SLOT) >> 32) as u32;
+    batch[done_flush + 3] = complete_marker;
+
+    if idx.saturating_add(3) > batch.len() {
+        return None;
+    }
+    batch[idx] = media::MI_ARB_CHECK;
+    batch[idx + 1] = media::MI_BATCH_BUFFER_END;
+    batch[idx + 2] = media::MI_NOOP;
+    Some((idx + 3).saturating_mul(core::mem::size_of::<u32>()))
+}
+
+pub(super) fn submit_h264_smoke_batch(
+    dev: crate::intel::Dev,
+    engine: MediaEngineDescriptor,
+    windows: MediaGpuWindowLayout,
+    backing: MediaBitstreamBacking,
+    bitstream_bytes: usize,
+    submit_token: u32,
+) -> Option<MediaH264SmokeSubmitProof> {
+    if bitstream_bytes == 0 || bitstream_bytes > backing.bitstream_bytes {
+        return None;
+    }
+    let bitstream = unsafe {
+        core::slice::from_raw_parts(backing.bitstream_virt as *const u8, bitstream_bytes)
+    };
+    let picture = parse_h264_picture(bitstream)?;
+    let coded_width = picture.sps.width.max(16);
+    let coded_height = picture.sps.height.max(16);
+    let output_surface_pitch = media::align_up_u32(coded_width, 128) as usize;
+    let (_, _, output_surface_bytes) =
+        imc3_tiled_surface_layout(coded_height, output_surface_pitch)?;
+    if output_surface_bytes == 0 || output_surface_bytes > backing.output_surface_bytes {
+        return None;
+    }
+    if !clear_output_surface_to_imc3_black(
+        backing.output_surface_virt,
+        backing.output_surface_bytes,
+        coded_width,
+        coded_height,
+        output_surface_pitch,
+    ) {
+        return None;
+    }
+
+    let ring_virt = backing.ring_virt;
+    let context_virt = backing.context_virt;
+    let ring_gpu_addr = windows.ring_gpu_addr;
+    let context_gpu_addr = windows.context_gpu_addr;
+    let kickoff_marker = media::marker_base(engine)
+        .wrapping_add(0x180)
+        .wrapping_add((submit_token & 0x3F) << 2);
+    let ring_prelaunch_marker = kickoff_marker.wrapping_sub(1);
+    let presubmit_marker = kickoff_marker + 1;
+    let postsubmit_marker = kickoff_marker + 2;
+    let complete_marker = kickoff_marker + 3;
+
+    media::reset_media_engine(dev, engine, context_virt);
+    media::wake_media_engine_forcewake(dev, engine);
+
+    unsafe {
+        core::ptr::write_bytes(ring_virt, 0, backing.ring_bytes);
+        core::ptr::write_bytes(context_virt, 0, backing.context_bytes);
+        core::ptr::write_bytes(backing.batch_virt, 0, backing.batch_bytes);
+        core::ptr::write_bytes(backing.result_virt, 0, backing.result_bytes);
+    }
+
+    let batch_tail_bytes = build_h264_smoke_batch_skeleton(
+        backing.batch_virt,
+        backing.batch_bytes,
+        windows.result_gpu_addr,
+        windows.bitstream_gpu_addr,
+        windows.output_surface_gpu_addr,
+        output_surface_bytes,
+        bitstream_bytes,
+        picture,
+        kickoff_marker,
+        presubmit_marker,
+        postsubmit_marker,
+        complete_marker,
+    )?;
+
+    let ring_tail_bytes = media::build_ring_batch_start_words(
+        ring_virt,
+        backing.ring_bytes,
+        0,
+        windows.result_gpu_addr,
+        ring_prelaunch_marker,
+        windows.batch_gpu_addr,
+    )?;
+    let ring_ctl = media::ring_ctl_value_for_size(backing.ring_bytes)?;
+    let ring_start = ring_gpu_addr as u32;
+    let pphwsp_gpu = (context_gpu_addr & !0xFFF) as u32;
+    let ctx_ctl_after = media::media_ctx_control_value(false);
+    if !media::init_gen12_video_context_image(
+        context_virt,
+        backing.context_bytes,
+        engine.ring_base,
+        0,
+        ring_start,
+        ring_tail_bytes as u32,
+        ring_ctl,
+        pphwsp_gpu,
+        backing.ppgtt_pml4_phys,
+        false,
+    ) {
+        return None;
+    }
+
+    {
+        let mode_bits = media::GFX_RUN_LIST_ENABLE | media::GEN11_GFX_DISABLE_LEGACY_MODE;
+        super::mmio_write(
+            dev,
+            engine.ring_base + media::RING_MODE_GEN7,
+            mode_bits | (mode_bits << 16),
+        );
+    }
+    media::seed_media_ring_live_state(
+        dev,
+        engine.ring_base,
+        pphwsp_gpu,
+        ring_start,
+        ring_ctl,
+        ring_tail_bytes as u32,
+    );
+    media::init_csb_pointers(dev, engine.ring_base, context_virt);
+
+    super::dma_flush(backing.batch_virt, batch_tail_bytes);
+    super::dma_flush(ring_virt, ring_tail_bytes);
+    super::dma_flush(context_virt, backing.context_bytes);
+    super::dma_flush(backing.result_virt, backing.result_bytes);
+
+    {
+        super::mmio_write(dev, engine.ring_base + media::RING_CONTEXT_CONTROL, ctx_ctl_after);
+        super::mmio_write(dev, engine.ring_base + media::RING_CONTEXT_CONTROL_REF, ctx_ctl_after);
+        super::mmio_write(
+            dev,
+            engine.ring_base + media::RING_MI_MODE,
+            media::masked_bit_disable(media::STOP_RING),
+        );
+        super::mmio_write(dev, engine.ring_base + media::RING_HWS_PGA, pphwsp_gpu);
+    }
+
+    let submit_counter = submit_token.wrapping_add(17) & 0x3F;
+    let (ctx_desc_lo, ctx_desc_hi) = media::build_media_execlist_context_descriptor(
+        context_gpu_addr,
+        engine,
+        submit_counter,
+        true,
+    );
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    media::execlist_submit_port_push(dev, engine.ring_base, ctx_desc_lo, ctx_desc_hi, 0, 0);
+    super::mmio_write(dev, engine.ring_base + media::RING_EXECLIST_CONTROL, media::EL_CTRL_LOAD);
+
+    let mut retired = false;
+    let mut poll_iters = 0usize;
+    let mut complete_value = 0u32;
+    while poll_iters < media::MEDIA_SUBMIT_POLL_ITERS {
+        super::dma_flush(
+            unsafe {
+                backing
+                    .result_virt
+                    .add(media::MEDIA_RESULT_COMPLETE_SLOT as usize)
+            },
+            8,
+        );
+        complete_value =
+            media::read_result_dword(backing.result_virt, media::MEDIA_RESULT_COMPLETE_SLOT);
+        if complete_value == complete_marker {
+            retired = true;
+            break;
+        }
+        core::hint::spin_loop();
+        poll_iters += 1;
+    }
+
+    super::dma_flush(backing.output_surface_virt, output_surface_bytes);
+    super::dma_flush(backing.result_virt, backing.result_bytes);
+    let output_surface = unsafe {
+        core::slice::from_raw_parts(backing.output_surface_virt as *const u8, output_surface_bytes)
+    };
+    let (output_surface_signature, output_surface_nonzero_samples) =
+        media::surface_signature(output_surface);
+    let ring_acthd = super::mmio_read(dev, engine.ring_base + media::RING_ACTHD);
+    let ring_acthd_hi = super::mmio_read(dev, engine.ring_base + media::RING_ACTHD_UDW);
+    let bbaddr_lo = super::mmio_read(dev, engine.ring_base + media::RING_BBADDR);
+    let bbaddr_hi = super::mmio_read(dev, engine.ring_base + media::RING_BBADDR_UDW);
+    let dma_fadd_lo = super::mmio_read(dev, engine.ring_base + media::RING_DMA_FADD);
+    let dma_fadd_hi = super::mmio_read(dev, engine.ring_base + media::RING_DMA_FADD_UDW);
+    let fault_gen8 = super::mmio_read(dev, 0x4094);
+    let fault_gen12 = super::mmio_read(dev, media::GEN12_RING_FAULT_REG);
+    let (acthd_region, acthd_offset_bytes, acthd_dword) = media::classify_media_acthd(
+        ring_acthd,
+        windows,
+        backing,
+        batch_tail_bytes,
+        ring_tail_bytes,
+    );
+
+    let pic_width_mbs = picture.sps.pic_width_in_mbs_minus1 + 1;
+    let frame_height_mbs = (2 - picture.sps.frame_mbs_only_flag as u32)
+        * (picture.sps.pic_height_in_map_units_minus1 + 1);
+    let initial_qp =
+        h264_clamp_qp(26 + picture.pps.pic_init_qp_minus26 + picture.slice.slice_qp_delta);
+    let pipe_mode_dw1 =
+        MFX_PIPE_MODE_CODEC_AVC | MFX_PIPE_MODE_LONG_FORMAT | MFX_PIPE_MODE_PRE_DEBLOCK_OUTPUT;
+    let avc_img_dw1 = pic_width_mbs
+        .saturating_mul(frame_height_mbs)
+        .saturating_sub(1);
+    let avc_img_dw2 =
+        picture.sps.pic_width_in_mbs_minus1 | (picture.sps.pic_height_in_map_units_minus1 << 16);
+    let avc_img_dw4 = ((picture.sps.frame_mbs_only_flag as u32) << 2)
+        | ((picture.pps.transform_8x8_mode_flag as u32) << 3)
+        | ((picture.sps.direct_8x8_inference_flag as u32) << 4)
+        | ((picture.pps.constrained_intra_pred_flag as u32) << 5)
+        | ((picture.slice.nal_ref_idc == 0) as u32) << 6
+        | ((picture.pps.entropy_coding_mode_flag as u32) << 7)
+        | ((picture.sps.chroma_format_idc & 0x03) << 10);
+    let avc_img_dw13 = initial_qp
+        | ((picture.pps.num_ref_idx_l0_default_active_minus1 + 1).min(32) << 8)
+        | ((picture.pps.num_ref_idx_l1_default_active_minus1 + 1).min(32) << 16)
+        | (1 << 24);
+    let avc_img_dw14 = (picture.sps.pic_order_cnt_type & 0x03) << 2
+        | ((picture.pps.deblocking_filter_control_present_flag as u32) << 15)
+        | ((picture.sps.log2_max_frame_num_minus4 & 0xFF) << 16)
+        | ((picture.sps.log2_max_pic_order_cnt_lsb_minus4 & 0xFF) << 24);
+    let avc_slice_dw1 = picture.slice.slice_type & 0x0F;
+    let avc_slice_dw3 = h264_signed_5(picture.slice.slice_alpha_c0_offset_div2)
+        | (h264_signed_5(picture.slice.slice_beta_offset_div2) << 8)
+        | (initial_qp << 16)
+        | ((picture.slice.disable_deblocking_filter_idc & 0x03) << 27);
+    let avc_slice_dw4 = picture.slice.first_mb_in_slice
+        | ((picture.slice.first_mb_in_slice % pic_width_mbs) << 16)
+        | ((picture.slice.first_mb_in_slice / pic_width_mbs) << 24);
+    let avc_bsd_dw4 = (1 << 3)
+        | ((picture.slice.first_mb_byte_offset & 0xFFFF) << 16)
+        | (picture.slice.first_mb_bit_offset & 0x07);
+
+    Some(MediaH264SmokeSubmitProof {
+        engine_name: engine.name,
+        batch_gpu_addr: windows.batch_gpu_addr,
+        result_gpu_addr: windows.result_gpu_addr,
+        bitstream_gpu_addr: windows.bitstream_gpu_addr,
+        output_surface_gpu_addr: windows.output_surface_gpu_addr,
+        bitstream_bytes,
+        coded_width,
+        coded_height,
+        output_surface_pitch,
+        output_surface_bytes,
+        nal_count: picture.nal_count,
+        nal_type_mask: picture.nal_type_mask,
+        slice_count: picture.slice_count,
+        sps_id: picture.sps.id,
+        pps_id: picture.pps.id,
+        frame_num: picture.slice.frame_num,
+        slice_type: picture.slice.slice_type,
+        pic_width_mbs,
+        frame_height_mbs,
+        first_slice_offset: picture.slice.nal_offset as u32,
+        first_slice_len: picture.slice.nal_len as u32,
+        first_mb_byte_offset: picture.slice.first_mb_byte_offset,
+        first_mb_bit_offset: picture.slice.first_mb_bit_offset,
+        pipe_mode_dw1,
+        surface_dw2: ((coded_width.saturating_sub(1)) << 4)
+            | ((coded_height.saturating_sub(1)) << 18),
+        surface_dw3: (1 << 1) | 1 | ((output_surface_pitch as u32).saturating_sub(1) << 3),
+        avc_img_dw1,
+        avc_img_dw2,
+        avc_img_dw4,
+        avc_img_dw13,
+        avc_img_dw14,
+        avc_slice_dw1,
+        avc_slice_dw3,
+        avc_slice_dw4,
+        avc_bsd_dw1: picture.slice.nal_len as u32,
+        avc_bsd_dw2: picture.slice.nal_offset as u32,
+        avc_bsd_dw4,
+        batch_tail_bytes,
+        ring_tail_bytes,
+        kickoff_marker,
+        presubmit_marker,
+        postsubmit_marker,
+        complete_marker,
+        kickoff_value: media::read_result_dword(
+            backing.result_virt,
+            media::MEDIA_RESULT_KICKOFF_SLOT,
+        ),
+        presubmit_value: media::read_result_dword(
+            backing.result_virt,
+            media::MEDIA_RESULT_PRESUBMIT_SLOT,
+        ),
+        postsubmit_value: media::read_result_dword(
+            backing.result_virt,
+            media::MEDIA_RESULT_POSTSUBMIT_SLOT,
+        ),
+        complete_value,
+        retired,
+        poll_iters,
+        output_surface_signature,
+        output_surface_nonzero_samples,
+        execlist_status_lo: super::mmio_read(
+            dev,
+            engine.ring_base + media::RING_EXECLIST_STATUS_LO,
+        ),
+        execlist_status_hi: super::mmio_read(
+            dev,
+            engine.ring_base + media::RING_EXECLIST_STATUS_HI,
+        ),
+        ring_start,
+        ring_ctl,
+        ring_hws_pga: pphwsp_gpu,
+        ring_head: super::mmio_read(dev, engine.ring_base + media::RING_HEAD),
+        ring_tail: super::mmio_read(dev, engine.ring_base + media::RING_TAIL),
+        ring_acthd,
+        ring_acthd_hi,
+        acthd_region,
+        acthd_offset_bytes,
+        acthd_dword,
+        bbaddr_lo,
+        bbaddr_hi,
+        dma_fadd_lo,
+        dma_fadd_hi,
+        bbstate: super::mmio_read(dev, engine.ring_base + media::RING_BBSTATE),
+        esr: super::mmio_read(dev, engine.ring_base + media::RING_ESR),
+        instps: super::mmio_read(dev, engine.ring_base + media::RING_INSTPS),
+        psmi_ctl: super::mmio_read(dev, engine.ring_base + media::RING_PSMI_CTL),
+        nopid: super::mmio_read(dev, engine.ring_base + media::RING_NOPID),
+        ipeir: super::mmio_read(dev, engine.ring_base + media::RING_IPEIR),
+        ipehr: super::mmio_read(dev, engine.ring_base + media::RING_IPEHR),
+        fault_gen8,
+        fault_gen12,
+    })
 }
 
 pub(super) fn submit_jpeg_smoke_batch(

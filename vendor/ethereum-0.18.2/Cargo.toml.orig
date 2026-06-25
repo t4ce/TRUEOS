@@ -1,0 +1,47 @@
+[package]
+name = "ethereum"
+version = "0.18.2"
+license = "Apache-2.0"
+authors = ["Wei Tang <hi@that.world>"]
+description = "Core block and transaction types for Ethereum."
+repository = "https://github.com/rust-blockchain/ethereum"
+keywords = ["no_std", "ethereum"]
+edition = "2021"
+
+[dependencies]
+bytes = { version = "1.0", default-features = false }
+ethereum-types = { version = "0.15", default-features = false, features = ["rlp", "codec"] }
+hash-db = { version = "0.16", default-features = false }
+hash256-std-hasher = { version = "0.15", default-features = false }
+k256 = { version = "0.13", default-features = false, features = ["ecdsa", "sha256"] }
+rlp = { version = "0.6", default-features = false, features = ["derive"] }
+sha3 = { version = "0.10", default-features = false }
+trie-root = { version = "0.18", default-features = false }
+
+scale-codec = { package = "parity-scale-codec", version = "3.2", default-features = false, features = ["derive"], optional = true }
+scale-info = { version = "2.3", default-features = false, features = ["derive"], optional = true }
+serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
+
+[dev-dependencies]
+hash-db15 = { package = "hash-db", version = "0.15.2" }
+hex-literal = "0.4.1"
+rand = "0.8"
+triehash = "0.8.4"
+
+[features]
+default = ["std"]
+with-scale = ["scale-codec", "scale-info", "ethereum-types/codec"]
+with-serde = ["serde", "ethereum-types/serialize"]
+std = [
+	"bytes/std",
+	"ethereum-types/std",
+	"hash-db/std",
+	"hash256-std-hasher/std",
+	"k256/std",
+	"rlp/std",
+	"sha3/std",
+	"trie-root/std",
+	"scale-codec?/std",
+	"scale-info?/std",
+	"serde?/std",
+]

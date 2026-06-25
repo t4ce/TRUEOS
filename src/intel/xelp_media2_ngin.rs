@@ -578,7 +578,7 @@ fn current_api_shape(transport: MediaSubmissionTransport) -> MediaApiShape {
         workload: MediaWorkloadKind::DecodeBitstream,
         preferred_engine_class: Some(MediaEngineClass::VideoDecode),
         transport,
-        summary: "copy one embedded H.264 access unit into the VCS bitstream path",
+        summary: "copy one embedded Annex-B H.264 stream into the VCS bitstream path",
     };
     api.routes[2] = MediaApiRoute {
         name: "media.observe.snapshot",
