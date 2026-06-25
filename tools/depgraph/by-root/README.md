@@ -16,7 +16,7 @@ Each SVG expands one direct dependency of the TRUEOS root. Blue note nodes are i
 | dma-api<br>0.7.3<br>/vendor/dma-api-0.7.3 | [`dma-api-v0.7.3.svg`](dma-api-v0.7.3.svg) | 1 | 1 | 3 |
 | embassy-executor<br>0.10.0<br>/crates/trueos-executor | [`embassy-executor-v0.10.0.svg`](embassy-executor-v0.10.0.svg) | 13 | 3 | 1 |
 | embassy-sync<br>0.8.0 | [`embassy-sync-v0.8.0.svg`](embassy-sync-v0.8.0.svg) | 4 | 3 | 6 |
-| embassy-time<br>0.5.1<br>/vendor/embassy-time-0.5.1-trueos | [`embassy-time-v0.5.1.svg`](embassy-time-v0.5.1.svg) | 1 | 2 | 2 |
+| embassy-time<br>0.5.1<br>/crates/trueos-executor/embassy-time | [`embassy-time-v0.5.1.svg`](embassy-time-v0.5.1.svg) | 1 | 2 | 2 |
 | embassy-time-driver<br>0.2.2 | [`embassy-time-driver-v0.2.2.svg`](embassy-time-driver-v0.2.2.svg) | 1 | 2 | 1 |
 | embedded-io-async<br>0.7.0 | [`embedded-io-async-v0.7.0.svg`](embedded-io-async-v0.7.0.svg) | 1 | 1 | 1 |
 | embedded-websocket<br>0.9.4<br>/vendor/embedded-websocket-0.9.4 | [`embedded-websocket-v0.9.4.svg`](embedded-websocket-v0.9.4.svg) | 14 | 6 | 6 |

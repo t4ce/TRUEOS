@@ -22,7 +22,7 @@ digraph "trueos-qjs-v0.1.0" {
   n0 -> out2 [style=dashed, color="#d19922"];
   out3 [label=<to embassy-time-driver-v0.2.2.svg<BR/><B>embassy-time-driver</B><BR/>0.2.2>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out3 [style=dashed, color="#d19922"];
-  out4 [label=<to embassy-time-v0.5.1.svg<BR/><B>embassy-time</B><BR/>0.5.1<BR/>/vendor/embassy-time-0.5.1-trueos>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  out4 [label=<to embassy-time-v0.5.1.svg<BR/><B>embassy-time</B><BR/>0.5.1<BR/>/crates/trueos-executor/embassy-time>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out4 [style=dashed, color="#d19922"];
   out5 [label=<to kurbo-v0.11.3.svg<BR/><B>kurbo</B><BR/>0.11.3<BR/>/vendor/kurbo-0.11.3>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n7 -> out5 [style=dashed, color="#d19922"];
