@@ -162,7 +162,7 @@
 3hash32 v0.3.1
 4byteorder v1.5.0
 3stable_deref_trait v1.2.1
-1embassy-time v0.5.1 (/home/t4ce/REPOS/TRUEOS/vendor/embassy-time-0.5.1-trueos)
+1embassy-time v0.5.1 (/home/t4ce/REPOS/TRUEOS/crates/trueos-executor/embassy-time)
 2embassy-time-driver v0.2.2
 3document-features v0.2.12 (proc-macro) (*)
 2futures-core v0.3.32
@@ -521,7 +521,7 @@
 2tower-service v0.3.3 (/home/t4ce/REPOS/TRUEOS/vendor/tower-service-0.3.3)
 1trueos-c4 v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-c4)
 1trueos-esp v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-esp)
-2embassy-time v0.5.1 (/home/t4ce/REPOS/TRUEOS/vendor/embassy-time-0.5.1-trueos) (*)
+2embassy-time v0.5.1 (/home/t4ce/REPOS/TRUEOS/crates/trueos-executor/embassy-time) (*)
 2heapless v0.9.3 (*)
 2v v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-v)
 3serde v1.0.228 (*)
@@ -538,7 +538,7 @@
 1trueos-qjs v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-qjs)
 2embassy-executor v0.10.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-executor) (*)
 2embassy-sync v0.8.0 (*)
-2embassy-time v0.5.1 (/home/t4ce/REPOS/TRUEOS/vendor/embassy-time-0.5.1-trueos) (*)
+2embassy-time v0.5.1 (/home/t4ce/REPOS/TRUEOS/crates/trueos-executor/embassy-time) (*)
 2embassy-time-driver v0.2.2 (*)
 2libm v0.2.16
 2parry2d v0.26.1 (*)

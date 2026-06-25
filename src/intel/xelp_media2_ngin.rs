@@ -1066,6 +1066,54 @@ fn probe_tiled_nv12_chroma_rect(
     })
 }
 
+fn probe_ytile_nv12_chroma_rect(
+    surface: &[u8],
+    output_pitch: usize,
+    chroma_y_offset: usize,
+    pair_x: usize,
+    row_y: usize,
+    pair_width: usize,
+    row_count: usize,
+    component_offset: usize,
+) -> Option<MediaSurfaceProbeBand> {
+    if pair_width == 0 || row_count == 0 || component_offset > 1 {
+        return None;
+    }
+    let tiles_per_row = output_pitch / MEDIA_YTILE_W;
+    if tiles_per_row == 0 {
+        return None;
+    }
+    let byte_x = pair_x.saturating_mul(2).saturating_add(component_offset);
+    let byte_width = pair_width.saturating_mul(2);
+    if output_pitch < byte_x.saturating_add(byte_width.saturating_sub(1)) {
+        return None;
+    }
+    let mut signature = 0u32;
+    let mut active_samples = 0usize;
+    let mut sample_count = 0usize;
+    let mut min_value = u8::MAX;
+    let mut max_value = u8::MIN;
+    for row in row_y..row_y.saturating_add(row_count) {
+        let tiled_row = chroma_y_offset.saturating_add(row);
+        for pair in 0..pair_width {
+            let tiled_x = byte_x + pair * 2;
+            let value = *surface.get(media_ytile_offset(tiled_x, tiled_row, tiles_per_row))?;
+            signature = signature.rotate_left(5) ^ u32::from(value);
+            active_samples += usize::from(value != MEDIA_NV12_NEUTRAL_CHROMA);
+            sample_count += 1;
+            min_value = min_value.min(value);
+            max_value = max_value.max(value);
+        }
+    }
+    Some(MediaSurfaceProbeBand {
+        signature,
+        active_samples,
+        sample_count,
+        min_value,
+        max_value,
+    })
+}
+
 #[inline]
 fn luma_band_to_chroma_band(luma_row: usize, luma_rows: usize) -> (usize, usize) {
     let chroma_row = luma_row / 2;
@@ -1136,8 +1184,16 @@ pub(super) fn probe_output_surface(
     let cr_y_offset = chroma_y_offset.saturating_add(chroma_plane_stride_rows);
     let chroma_width = coded_width.div_ceil(2);
     let center_chroma_x = visible_x / 2;
-    let center_chroma_width = visible_width.div_ceil(2).min(chroma_width);
-    let center_chroma_hi_x = center_chroma_x.saturating_add(center_chroma_width);
+    let center_chroma_width = visible_width
+        .div_ceil(2)
+        .min(chroma_width.saturating_sub(center_chroma_x));
+    let center_chroma_lo_width = center_chroma_width.div_ceil(2);
+    let center_chroma_hi_width = center_chroma_width
+        .saturating_sub(center_chroma_lo_width)
+        .max(center_chroma_lo_width);
+    let center_chroma_hi_x = center_chroma_x
+        .saturating_add(center_chroma_width)
+        .saturating_sub(center_chroma_hi_width);
     let (center_chroma_row, center_chroma_rows) =
         luma_band_to_chroma_band(center_luma_row, center_luma_rows);
     let (prev_chroma_row, prev_chroma_rows) =
@@ -1194,7 +1250,7 @@ pub(super) fn probe_output_surface(
         output_pitch,
         center_chroma_x,
         chroma_y_offset.saturating_add(center_chroma_row),
-        center_chroma_width,
+        center_chroma_lo_width,
         center_chroma_rows,
         0x80,
     );
@@ -1203,7 +1259,7 @@ pub(super) fn probe_output_surface(
         output_pitch,
         center_chroma_hi_x,
         chroma_y_offset.saturating_add(center_chroma_row),
-        center_chroma_width.min(coded_width.saturating_sub(center_chroma_hi_x)),
+        center_chroma_hi_width,
         center_chroma_rows,
         0x80,
     );
@@ -1230,7 +1286,7 @@ pub(super) fn probe_output_surface(
         output_pitch,
         center_chroma_x,
         cr_y_offset.saturating_add(center_chroma_row),
-        center_chroma_width,
+        center_chroma_lo_width,
         center_chroma_rows,
         0x80,
     );
@@ -1272,6 +1328,221 @@ pub(super) fn probe_output_surface(
             .unwrap_or_else(MediaSurfaceProbeBand::empty),
         luma_storage_pad_last_row: luma_storage_pad_last_row
             .unwrap_or_else(MediaSurfaceProbeBand::empty),
+        luma_center_band: luma_center_band.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        luma_prev_mb_row: luma_prev_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        luma_bottom_mb_row: luma_bottom_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        cb_center_band: cb_center_band.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        cb_center_hi_band: cb_center_hi_band.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        cb_prev_mb_row: cb_prev_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        cb_bottom_mb_row: cb_bottom_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        cr_center_band: cr_center_band.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        cr_prev_mb_row: cr_prev_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        cr_bottom_mb_row: cr_bottom_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+    }
+}
+
+pub(super) fn probe_ytile_nv12_output_surface(
+    output_surface: &[u8],
+    coded_width: u16,
+    coded_height: u16,
+    visible_x: u16,
+    visible_y: u16,
+    visible_width: u16,
+    visible_height: u16,
+    output_pitch: usize,
+) -> MediaSurfaceProbe {
+    let coded_width = coded_width as usize;
+    let coded_height = coded_height as usize;
+    let visible_x = visible_x as usize;
+    let visible_y = visible_y as usize;
+    let visible_width = visible_width as usize;
+    let visible_height = visible_height as usize;
+    if coded_width == 0
+        || coded_height == 0
+        || visible_width == 0
+        || visible_height == 0
+        || output_pitch < coded_width
+        || !output_pitch.is_multiple_of(MEDIA_YTILE_W)
+    {
+        return MediaSurfaceProbe::empty();
+    }
+    let visible_bottom = visible_y.saturating_add(visible_height).min(coded_height);
+    if visible_x.saturating_add(visible_width) > coded_width || visible_bottom <= visible_y {
+        return MediaSurfaceProbe::empty();
+    }
+    let chroma_y_offset = coded_height.next_multiple_of(MEDIA_YTILE_H);
+    let total_height = chroma_y_offset.saturating_add(coded_height.div_ceil(2));
+    let needed = total_height
+        .div_ceil(MEDIA_YTILE_H)
+        .saturating_mul(output_pitch / MEDIA_YTILE_W)
+        .saturating_mul(4096);
+    if output_surface.len() < needed {
+        return MediaSurfaceProbe::empty();
+    }
+
+    let bottom_luma_rows = coded_height.min(16);
+    let bottom_luma_row = coded_height.saturating_sub(bottom_luma_rows);
+    let prev_luma_rows = bottom_luma_row.min(16);
+    let prev_luma_row = bottom_luma_row.saturating_sub(prev_luma_rows);
+    let visible_last_row = visible_bottom.saturating_sub(1);
+    let visible_tail8_row = visible_bottom.saturating_sub(8).max(visible_y);
+    let center_luma_rows = visible_height.min(16);
+    let center_luma_row = visible_y
+        .saturating_add(visible_height / 2)
+        .saturating_sub(center_luma_rows / 2)
+        .min(coded_height.saturating_sub(center_luma_rows));
+    let chroma_width_pairs = coded_width.div_ceil(2);
+    let center_chroma_x = visible_x / 2;
+    let center_chroma_width = visible_width
+        .div_ceil(2)
+        .min(chroma_width_pairs.saturating_sub(center_chroma_x));
+    let center_chroma_lo_width = center_chroma_width.div_ceil(2);
+    let center_chroma_hi_width = center_chroma_width
+        .saturating_sub(center_chroma_lo_width)
+        .max(center_chroma_lo_width);
+    let center_chroma_hi_x = center_chroma_x
+        .saturating_add(center_chroma_width)
+        .saturating_sub(center_chroma_hi_width);
+    let (center_chroma_row, center_chroma_rows) =
+        luma_band_to_chroma_band(center_luma_row, center_luma_rows);
+    let (prev_chroma_row, prev_chroma_rows) =
+        luma_band_to_chroma_band(prev_luma_row, prev_luma_rows);
+    let (bottom_chroma_row, bottom_chroma_rows) =
+        luma_band_to_chroma_band(bottom_luma_row, bottom_luma_rows);
+
+    let luma_visible_last_row = probe_tiled_rect(
+        output_surface,
+        output_pitch,
+        visible_x,
+        visible_last_row,
+        visible_width,
+        1,
+        MEDIA_NV12_BLACK_LUMA,
+    );
+    let luma_visible_tail8_row = probe_tiled_rect(
+        output_surface,
+        output_pitch,
+        visible_x,
+        visible_tail8_row,
+        visible_width,
+        1,
+        MEDIA_NV12_BLACK_LUMA,
+    );
+    let luma_center_band = probe_tiled_rect(
+        output_surface,
+        output_pitch,
+        visible_x,
+        center_luma_row,
+        visible_width,
+        center_luma_rows,
+        MEDIA_NV12_BLACK_LUMA,
+    );
+    let luma_prev_mb_row = probe_tiled_rect(
+        output_surface,
+        output_pitch,
+        0,
+        prev_luma_row,
+        coded_width,
+        prev_luma_rows,
+        MEDIA_NV12_BLACK_LUMA,
+    );
+    let luma_bottom_mb_row = probe_tiled_rect(
+        output_surface,
+        output_pitch,
+        0,
+        bottom_luma_row,
+        coded_width,
+        bottom_luma_rows,
+        MEDIA_NV12_BLACK_LUMA,
+    );
+    let cb_center_band = probe_ytile_nv12_chroma_rect(
+        output_surface,
+        output_pitch,
+        chroma_y_offset,
+        center_chroma_x,
+        center_chroma_row,
+        center_chroma_lo_width,
+        center_chroma_rows,
+        0,
+    );
+    let cb_center_hi_band = probe_ytile_nv12_chroma_rect(
+        output_surface,
+        output_pitch,
+        chroma_y_offset,
+        center_chroma_hi_x,
+        center_chroma_row,
+        center_chroma_hi_width,
+        center_chroma_rows,
+        0,
+    );
+    let cb_prev_mb_row = probe_ytile_nv12_chroma_rect(
+        output_surface,
+        output_pitch,
+        chroma_y_offset,
+        0,
+        prev_chroma_row,
+        chroma_width_pairs,
+        prev_chroma_rows,
+        0,
+    );
+    let cb_bottom_mb_row = probe_ytile_nv12_chroma_rect(
+        output_surface,
+        output_pitch,
+        chroma_y_offset,
+        0,
+        bottom_chroma_row,
+        chroma_width_pairs,
+        bottom_chroma_rows,
+        0,
+    );
+    let cr_center_band = probe_ytile_nv12_chroma_rect(
+        output_surface,
+        output_pitch,
+        chroma_y_offset,
+        center_chroma_x,
+        center_chroma_row,
+        center_chroma_lo_width,
+        center_chroma_rows,
+        1,
+    );
+    let cr_prev_mb_row = probe_ytile_nv12_chroma_rect(
+        output_surface,
+        output_pitch,
+        chroma_y_offset,
+        0,
+        prev_chroma_row,
+        chroma_width_pairs,
+        prev_chroma_rows,
+        1,
+    );
+    let cr_bottom_mb_row = probe_ytile_nv12_chroma_rect(
+        output_surface,
+        output_pitch,
+        chroma_y_offset,
+        0,
+        bottom_chroma_row,
+        chroma_width_pairs,
+        bottom_chroma_rows,
+        1,
+    );
+    let valid = luma_visible_last_row.is_some()
+        && luma_visible_tail8_row.is_some()
+        && luma_center_band.is_some()
+        && luma_prev_mb_row.is_some()
+        && luma_bottom_mb_row.is_some()
+        && cb_center_band.is_some()
+        && cb_center_hi_band.is_some()
+        && cb_prev_mb_row.is_some()
+        && cb_bottom_mb_row.is_some()
+        && cr_center_band.is_some()
+        && cr_prev_mb_row.is_some()
+        && cr_bottom_mb_row.is_some();
+    MediaSurfaceProbe {
+        valid,
+        luma_visible_last_row: luma_visible_last_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        luma_visible_tail8_row: luma_visible_tail8_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        luma_storage_pad_first_row: MediaSurfaceProbeBand::empty(),
+        luma_storage_pad_last_row: MediaSurfaceProbeBand::empty(),
         luma_center_band: luma_center_band.unwrap_or_else(MediaSurfaceProbeBand::empty),
         luma_prev_mb_row: luma_prev_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
         luma_bottom_mb_row: luma_bottom_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
@@ -1332,8 +1603,16 @@ pub(super) fn probe_linear_nv12_output_surface(
         .min(coded_height.saturating_sub(center_luma_rows));
     let chroma_width_pairs = coded_width.div_ceil(2);
     let center_chroma_x = visible_x / 2;
-    let center_chroma_width = visible_width.div_ceil(2).min(chroma_width_pairs);
-    let center_chroma_hi_x = center_chroma_x.saturating_add(center_chroma_width);
+    let center_chroma_width = visible_width
+        .div_ceil(2)
+        .min(chroma_width_pairs.saturating_sub(center_chroma_x));
+    let center_chroma_lo_width = center_chroma_width.div_ceil(2);
+    let center_chroma_hi_width = center_chroma_width
+        .saturating_sub(center_chroma_lo_width)
+        .max(center_chroma_lo_width);
+    let center_chroma_hi_x = center_chroma_x
+        .saturating_add(center_chroma_width)
+        .saturating_sub(center_chroma_hi_width);
     let (center_chroma_row, center_chroma_rows) =
         luma_band_to_chroma_band(center_luma_row, center_luma_rows);
     let (prev_chroma_row, prev_chroma_rows) =
@@ -1392,7 +1671,7 @@ pub(super) fn probe_linear_nv12_output_surface(
         uv_offset,
         center_chroma_x,
         center_chroma_row,
-        center_chroma_width,
+        center_chroma_lo_width,
         center_chroma_rows,
         0,
     );
@@ -1402,7 +1681,7 @@ pub(super) fn probe_linear_nv12_output_surface(
         uv_offset,
         center_chroma_hi_x,
         center_chroma_row,
-        center_chroma_width.min(chroma_width_pairs.saturating_sub(center_chroma_hi_x)),
+        center_chroma_hi_width,
         center_chroma_rows,
         0,
     );
@@ -1432,7 +1711,7 @@ pub(super) fn probe_linear_nv12_output_surface(
         uv_offset,
         center_chroma_x,
         center_chroma_row,
-        center_chroma_width,
+        center_chroma_lo_width,
         center_chroma_rows,
         1,
     );
@@ -1537,8 +1816,16 @@ pub(super) fn probe_tiled_nv12_output_surface(
         .min(coded_height.saturating_sub(center_luma_rows));
     let chroma_width_pairs = coded_width.div_ceil(2);
     let center_chroma_x = visible_x / 2;
-    let center_chroma_width = visible_width.div_ceil(2).min(chroma_width_pairs);
-    let center_chroma_hi_x = center_chroma_x.saturating_add(center_chroma_width);
+    let center_chroma_width = visible_width
+        .div_ceil(2)
+        .min(chroma_width_pairs.saturating_sub(center_chroma_x));
+    let center_chroma_lo_width = center_chroma_width.div_ceil(2);
+    let center_chroma_hi_width = center_chroma_width
+        .saturating_sub(center_chroma_lo_width)
+        .max(center_chroma_lo_width);
+    let center_chroma_hi_x = center_chroma_x
+        .saturating_add(center_chroma_width)
+        .saturating_sub(center_chroma_hi_width);
     let (center_chroma_row, center_chroma_rows) =
         luma_band_to_chroma_band(center_luma_row, center_luma_rows);
     let (prev_chroma_row, prev_chroma_rows) =
@@ -1597,7 +1884,7 @@ pub(super) fn probe_tiled_nv12_output_surface(
         chroma_y_offset,
         center_chroma_x,
         center_chroma_row,
-        center_chroma_width,
+        center_chroma_lo_width,
         center_chroma_rows,
         0,
     );
@@ -1607,7 +1894,7 @@ pub(super) fn probe_tiled_nv12_output_surface(
         chroma_y_offset,
         center_chroma_hi_x,
         center_chroma_row,
-        center_chroma_width.min(chroma_width_pairs.saturating_sub(center_chroma_hi_x)),
+        center_chroma_hi_width,
         center_chroma_rows,
         0,
     );
@@ -1637,7 +1924,7 @@ pub(super) fn probe_tiled_nv12_output_surface(
         chroma_y_offset,
         center_chroma_x,
         center_chroma_row,
-        center_chroma_width,
+        center_chroma_lo_width,
         center_chroma_rows,
         1,
     );
@@ -1698,9 +1985,20 @@ pub(super) fn log_output_surface_probe(
     submit_completed: bool,
     probe: MediaSurfaceProbe,
 ) {
+    log_output_surface_probe_layout(engine_name, sample_idx, submit_completed, "tile64-nv12", probe);
+}
+
+pub(super) fn log_output_surface_probe_layout(
+    engine_name: &'static str,
+    sample_idx: u32,
+    submit_completed: bool,
+    layout: &'static str,
+    probe: MediaSurfaceProbe,
+) {
     if !probe.valid {
         crate::log!(
-            "intel/media2: output-probe phase=pre-present engine={} sample={} submit_completed={} valid=false\n",
+            "intel/media2: output-probe phase=pre-present layout={} engine={} sample={} submit_completed={} valid=false\n",
+            layout,
             engine_name,
             sample_idx,
             submit_completed
@@ -1708,7 +2006,8 @@ pub(super) fn log_output_surface_probe(
         return;
     }
     crate::log!(
-        "intel/media2: output-probe phase=pre-present engine={} sample={} submit_completed={} y_last(sig=0x{:08X} active={}/{} range={}..{}) y_tail8(sig=0x{:08X} active={}/{} range={}..{}) y_pad_first(sig=0x{:08X} active={}/{} range={}..{}) y_pad_last(sig=0x{:08X} active={}/{} range={}..{}) y_center(sig=0x{:08X} active={}/{} range={}..{}) y_prev_mb(sig=0x{:08X} active={}/{} range={}..{}) y_bottom_mb(sig=0x{:08X} active={}/{} range={}..{}) cb_center(sig=0x{:08X} active={}/{} range={}..{}) cb_center_hi(sig=0x{:08X} active={}/{} range={}..{}) cb_prev_mb(sig=0x{:08X} active={}/{} range={}..{}) cb_bottom_mb(sig=0x{:08X} active={}/{} range={}..{}) cr_center(sig=0x{:08X} active={}/{} range={}..{}) cr_prev_mb(sig=0x{:08X} active={}/{} range={}..{}) cr_bottom_mb(sig=0x{:08X} active={}/{} range={}..{})\n",
+        "intel/media2: output-probe phase=pre-present layout={} engine={} sample={} submit_completed={} y_last(sig=0x{:08X} active={}/{} range={}..{}) y_tail8(sig=0x{:08X} active={}/{} range={}..{}) y_pad_first(sig=0x{:08X} active={}/{} range={}..{}) y_pad_last(sig=0x{:08X} active={}/{} range={}..{}) y_center(sig=0x{:08X} active={}/{} range={}..{}) y_prev_mb(sig=0x{:08X} active={}/{} range={}..{}) y_bottom_mb(sig=0x{:08X} active={}/{} range={}..{}) cb_center(sig=0x{:08X} active={}/{} range={}..{}) cb_center_hi(sig=0x{:08X} active={}/{} range={}..{}) cb_prev_mb(sig=0x{:08X} active={}/{} range={}..{}) cb_bottom_mb(sig=0x{:08X} active={}/{} range={}..{}) cr_center(sig=0x{:08X} active={}/{} range={}..{}) cr_prev_mb(sig=0x{:08X} active={}/{} range={}..{}) cr_bottom_mb(sig=0x{:08X} active={}/{} range={}..{})\n",
+        layout,
         engine_name,
         sample_idx,
         submit_completed,

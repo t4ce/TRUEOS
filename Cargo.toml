@@ -98,7 +98,7 @@ debug = false
 opt-level = 2
 
 [patch.crates-io]
-embassy-time = { path = "vendor/embassy-time-0.5.1-trueos" }
+embassy-time = { path = "crates/trueos-executor/embassy-time" }
 trait-ffi = { git = "https://github.com/t4ce/trait-ffi", branch = "convert-case-0.10" }
 embassy-executor = { path = "crates/trueos-executor" }
 png = { path = "vendor/png-0.18.1" }
