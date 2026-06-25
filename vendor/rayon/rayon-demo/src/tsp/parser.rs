@@ -1,6 +1,6 @@
+use core::str::{FromStr, Lines};
 use regex::Regex;
 use std::collections::HashMap;
-use std::str::{FromStr, Lines};
 use std::sync::LazyLock;
 
 use super::graph::{Graph, Node};

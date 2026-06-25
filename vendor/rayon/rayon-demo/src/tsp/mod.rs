@@ -3,9 +3,9 @@
 //! Based on code developed at ETH by Christoph von Praun, Florian
 //! Schneider, Nicholas Matsakis, and Thomas Gross.
 
+use core::error::Error;
+use core::fmt::Write;
 use docopt::Docopt;
-use std::error::Error;
-use std::fmt::Write;
 use std::fs::File;
 use std::io::prelude::*;
 use std::path::Path;

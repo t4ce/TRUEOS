@@ -1,4 +1,4 @@
-use std::mem::MaybeUninit;
+use core::mem::MaybeUninit;
 use winapi::um::processthreadsapi::{GetCurrentProcess, GetProcessTimes};
 
 pub fn get_cpu_time() -> Option<u64> {

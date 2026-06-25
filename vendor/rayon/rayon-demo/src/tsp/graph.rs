@@ -1,5 +1,5 @@
+use core::iter;
 use fixedbitset::FixedBitSet;
-use std::iter;
 
 use super::weight::Weight;
 

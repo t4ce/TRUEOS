@@ -1,8 +1,8 @@
+use core::sync::atomic::AtomicUsize;
+use core::sync::atomic::Ordering::SeqCst;
 use rand::RngExt;
 use rand::distr::{Alphanumeric, StandardUniform, Uniform};
 use rayon::prelude::*;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering::SeqCst;
 use test::{Bencher, black_box};
 
 fn gen_ascending(len: usize) -> Vec<u64> {

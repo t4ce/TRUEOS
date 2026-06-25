@@ -93,6 +93,6 @@ fn main() {
 
 fn seeded_rng() -> rand::rngs::StdRng {
     use rand::SeedableRng;
-    let seed = std::array::from_fn(|i| i as u8);
+    let seed = core::array::from_fn(|i| i as u8);
     rand::rngs::StdRng::from_seed(seed)
 }
