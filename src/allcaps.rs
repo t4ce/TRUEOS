@@ -38,7 +38,10 @@ pub mod hv {
     pub const GUEST_STACK_DEFAULT_MIB: usize = 64;
     pub const GUEST_STACK_MAX_MIB: usize = 512;
 
-    pub const EPT_DYNAMIC_PD_CAP: usize = 16;
+    // Each 4 GiB guest heap can occupy up to five 1 GiB EPT PD slots when the
+    // physical arena is not 1 GiB aligned. Keep enough metadata for the declared
+    // VM limit plus fixed kernel/stack/comm/table spans.
+    pub const EPT_DYNAMIC_PD_CAP: usize = 8 + VM_ID_LIMIT * 5;
     pub const EPT_DYNAMIC_PT_CAP: usize = 1024;
 }
 

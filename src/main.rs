@@ -177,8 +177,6 @@ pub extern "C" fn kmain() -> ! {
         "boot: stage=bsp-early log_config boot_level={:?}\n",
         crate::logflag::BOOT_LOG_LEVEL
     );
-    #[cfg(target_os = "trueos")]
-    aud::alsa_trueos_backend::install();
     exceptions::init();
     if crate::logflag::BOOT_INFO_LOGS {
         crate::log!("long_mode_active: {}\n", cpu::long_mode_active());
@@ -249,6 +247,8 @@ pub extern "C" fn kmain() -> ! {
 
     tga::init_once();
     net::init();
+    #[cfg(target_os = "trueos")]
+    aud::alsa_trueos_backend::install();
 
     if crate::allcaps::probes::MIO_BOOT_PROBE {
         mio_probe::log_boot_probe();

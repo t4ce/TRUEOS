@@ -256,6 +256,7 @@ pub enum VmBootMode {
 enum BlueprintMemoryClass {
     TokioRuntime,
     NetworkClient,
+    NetworkServer,
     ServerRuntime,
     HeavyGraphics,
     Unknown,
@@ -266,6 +267,7 @@ impl BlueprintMemoryClass {
         match self {
             Self::TokioRuntime => "tokio-runtime",
             Self::NetworkClient => "network-client",
+            Self::NetworkServer => "network-server",
             Self::ServerRuntime => "server-runtime",
             Self::HeavyGraphics => "heavy-graphics",
             Self::Unknown => "unknown",
@@ -986,10 +988,17 @@ fn classify_blueprint_memory(
     stats: crate::hv::blueprint::ElfAllocStats,
     imports: &[crate::hv::blueprint::ElfImport<'_>],
 ) -> BlueprintMemoryClass {
+    let network_server_signal = archive_has(archive, "server")
+        || import_name_has(imports, "trueos_mio_tcp_listener_")
+        || import_name_has(imports, "tcp_listener");
+    if network_server_signal {
+        return BlueprintMemoryClass::NetworkServer;
+    }
+
     let server_signal = archive_has(archive, "horizon")
-        || archive_has(archive, "server")
         || archive_has(archive, "game")
-        || import_name_has(imports, "pthread_");
+        || import_name_has(imports, "pthread_create")
+        || import_name_has(imports, "pthread_join");
     if server_signal {
         return BlueprintMemoryClass::ServerRuntime;
     }
@@ -1057,10 +1066,18 @@ fn estimate_blueprint_memory_profile(
                 16,
                 64,
             ),
+            BlueprintMemoryClass::NetworkServer => (
+                128,
+                round_pow2_mib(base_live_mib.saturating_mul(64).saturating_add(256)).max(512),
+                1024,
+                16,
+                32,
+                64,
+            ),
             BlueprintMemoryClass::ServerRuntime => (
                 512,
-                round_pow2_mib(base_live_mib.saturating_mul(96).saturating_add(1024)).max(4096),
-                4096,
+                round_pow2_mib(base_live_mib.saturating_mul(96).saturating_add(512)).max(1024),
+                2048,
                 16,
                 64,
                 128,
