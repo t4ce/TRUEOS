@@ -1499,7 +1499,6 @@ pub unsafe extern "C" fn __memset_chk(
     dest
 }
 
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn memchr(ptr: *const c_void, value: c_int, len: usize) -> *mut c_void {
     if ptr.is_null() {
         return ptr::null_mut();
@@ -1513,12 +1512,10 @@ pub unsafe extern "C" fn memchr(ptr: *const c_void, value: c_int, len: usize) ->
         .unwrap_or(ptr::null_mut())
 }
 
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn strcmp(left: *const c_char, right: *const c_char) -> c_int {
     unsafe { strncmp(left, right, usize::MAX) }
 }
 
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn strncmp(left: *const c_char, right: *const c_char, max: usize) -> c_int {
     if left.is_null() || right.is_null() {
         return if left == right { 0 } else { -1 };
@@ -1535,7 +1532,6 @@ pub unsafe extern "C" fn strncmp(left: *const c_char, right: *const c_char, max:
     0
 }
 
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn strchr(text: *const c_char, needle: c_int) -> *mut c_char {
     if text.is_null() {
         return ptr::null_mut();
@@ -1554,7 +1550,6 @@ pub unsafe extern "C" fn strchr(text: *const c_char, needle: c_int) -> *mut c_ch
     }
 }
 
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn strrchr(text: *const c_char, needle: c_int) -> *mut c_char {
     if text.is_null() {
         return ptr::null_mut();
@@ -1718,7 +1713,6 @@ pub unsafe extern "C" fn geteuid() -> u32 {
     0
 }
 
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn time(out: *mut i64) -> i64 {
     let now = trueos_time_unix_seconds().min(i64::MAX as u64) as i64;
     if !out.is_null() {
@@ -1727,7 +1721,6 @@ pub unsafe extern "C" fn time(out: *mut i64) -> i64 {
     now
 }
 
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn gettimeofday(tv: *mut c_void, _tz: *mut c_void) -> c_int {
     if tv.is_null() {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
@@ -1751,7 +1744,6 @@ pub unsafe extern "C" fn gettimeofday(tv: *mut c_void, _tz: *mut c_void) -> c_in
     0
 }
 
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn localtime_r(timep: *const i64, result: *mut c_void) -> *mut c_void {
     if timep.is_null() || result.is_null() {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
