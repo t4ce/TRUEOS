@@ -5,7 +5,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::alloc::Layout;
-use core::ffi::{c_char, c_int, c_long, c_void};
+use core::ffi::{c_char, c_double, c_int, c_long, c_void};
 use core::ptr;
 use core::slice;
 use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
@@ -69,6 +69,7 @@ const TRUEOS_EAI_NONAME: c_int = 8;
 const TRUEOS_EAI_SERVICE: c_int = 9;
 const TRUEOS_EAI_SOCKTYPE: c_int = 10;
 const TRUEOS_ETIMEDOUT: c_int = 110;
+const TRUEOS_ENOMEM: c_int = 12;
 const TRUEOS_O_ACCMODE: c_int = 0x3;
 const TRUEOS_O_RDONLY: c_int = 0;
 const TRUEOS_O_WRONLY: c_int = 1;
@@ -151,7 +152,31 @@ struct TrueosStat {
     st_spare4: [c_long; 2],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct TrueosTimeval {
+    tv_sec: i64,
+    tv_usec: i64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct TrueosTm {
+    tm_sec: c_int,
+    tm_min: c_int,
+    tm_hour: c_int,
+    tm_mday: c_int,
+    tm_mon: c_int,
+    tm_year: c_int,
+    tm_wday: c_int,
+    tm_yday: c_int,
+    tm_isdst: c_int,
+    tm_gmtoff: c_long,
+    tm_zone: *const c_char,
+}
+
 static GAI_STRERROR_SYSTEM: &[u8] = b"trueos getaddrinfo unavailable\0";
+static TRUEOS_UTC_TZ: &[u8] = b"UTC\0";
 
 #[derive(Clone, Copy)]
 struct AllocationRecord {
@@ -232,6 +257,15 @@ impl OpenFile {
     fn set_offset(&mut self, next: usize) {
         match self {
             Self::Read { offset, .. } | Self::Write { offset, .. } => *offset = next,
+        }
+    }
+
+    fn resize(&mut self, next: usize) -> bool {
+        match self {
+            Self::Read { bytes, .. } | Self::Write { bytes, .. } => {
+                bytes.resize(next, 0);
+                true
+            }
         }
     }
 }
@@ -1360,6 +1394,12 @@ pub unsafe extern "C" fn exit(code: c_int) -> ! {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn __stack_chk_fail() -> ! {
+    uart_write(b"std-abi: stack check failed\n");
+    unsafe { sys_halt() }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn errno_location() -> *mut c_int {
     (&TRUEOS_ERRNO as *const AtomicI32)
         .cast_mut()
@@ -1427,6 +1467,197 @@ pub unsafe extern "C" fn __xpg_strerror_r(errnum: c_int, buf: *mut c_char, bufle
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn __memcpy_chk(
+    dest: *mut c_void,
+    src: *const c_void,
+    len: usize,
+    _dest_len: usize,
+) -> *mut c_void {
+    unsafe { ptr::copy_nonoverlapping(src.cast::<u8>(), dest.cast::<u8>(), len) };
+    dest
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __memmove_chk(
+    dest: *mut c_void,
+    src: *const c_void,
+    len: usize,
+    _dest_len: usize,
+) -> *mut c_void {
+    unsafe { ptr::copy(src.cast::<u8>(), dest.cast::<u8>(), len) };
+    dest
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __memset_chk(
+    dest: *mut c_void,
+    value: c_int,
+    len: usize,
+    _dest_len: usize,
+) -> *mut c_void {
+    unsafe { ptr::write_bytes(dest.cast::<u8>(), value as u8, len) };
+    dest
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn memchr(ptr: *const c_void, value: c_int, len: usize) -> *mut c_void {
+    if ptr.is_null() {
+        return ptr::null_mut();
+    }
+    let bytes = unsafe { slice::from_raw_parts(ptr.cast::<u8>(), len) };
+    let needle = value as u8;
+    bytes
+        .iter()
+        .position(|byte| *byte == needle)
+        .map(|offset| unsafe { ptr.cast::<u8>().add(offset).cast_mut().cast::<c_void>() })
+        .unwrap_or(ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn strcmp(left: *const c_char, right: *const c_char) -> c_int {
+    unsafe { strncmp(left, right, usize::MAX) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn strncmp(left: *const c_char, right: *const c_char, max: usize) -> c_int {
+    if left.is_null() || right.is_null() {
+        return if left == right { 0 } else { -1 };
+    }
+    let mut index = 0usize;
+    while index < max {
+        let a = unsafe { *left.cast::<u8>().add(index) };
+        let b = unsafe { *right.cast::<u8>().add(index) };
+        if a != b || a == 0 || b == 0 {
+            return a as c_int - b as c_int;
+        }
+        index = index.saturating_add(1);
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn strchr(text: *const c_char, needle: c_int) -> *mut c_char {
+    if text.is_null() {
+        return ptr::null_mut();
+    }
+    let needle = needle as u8;
+    let mut index = 0usize;
+    loop {
+        let byte = unsafe { *text.cast::<u8>().add(index) };
+        if byte == needle {
+            return unsafe { text.add(index).cast_mut() };
+        }
+        if byte == 0 {
+            return ptr::null_mut();
+        }
+        index = index.saturating_add(1);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn strrchr(text: *const c_char, needle: c_int) -> *mut c_char {
+    if text.is_null() {
+        return ptr::null_mut();
+    }
+    let needle = needle as u8;
+    let mut last = ptr::null_mut();
+    let mut index = 0usize;
+    loop {
+        let byte = unsafe { *text.cast::<u8>().add(index) };
+        if byte == needle {
+            last = unsafe { text.add(index).cast_mut() };
+        }
+        if byte == 0 {
+            return last;
+        }
+        index = index.saturating_add(1);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn strspn(text: *const c_char, accept: *const c_char) -> usize {
+    unsafe { str_span(text, accept, true) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn strcspn(text: *const c_char, reject: *const c_char) -> usize {
+    unsafe { str_span(text, reject, false) }
+}
+
+unsafe fn str_span(text: *const c_char, set: *const c_char, accept_mode: bool) -> usize {
+    if text.is_null() || set.is_null() {
+        return 0;
+    }
+    let mut len = 0usize;
+    loop {
+        let byte = unsafe { *text.cast::<u8>().add(len) };
+        if byte == 0 {
+            return len;
+        }
+        let contains = unsafe { cstr_contains_byte(set, byte) };
+        if contains != accept_mode {
+            return len;
+        }
+        len = len.saturating_add(1);
+    }
+}
+
+unsafe fn cstr_contains_byte(text: *const c_char, needle: u8) -> bool {
+    let mut index = 0usize;
+    loop {
+        let byte = unsafe { *text.cast::<u8>().add(index) };
+        if byte == 0 {
+            return false;
+        }
+        if byte == needle {
+            return true;
+        }
+        index = index.saturating_add(1);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn log(value: c_double) -> c_double {
+    libm::log(value)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn qsort(
+    base: *mut c_void,
+    count: usize,
+    size: usize,
+    compar: Option<unsafe extern "C" fn(*const c_void, *const c_void) -> c_int>,
+) {
+    if base.is_null() || size == 0 || count < 2 {
+        return;
+    }
+    let Some(compare) = compar else {
+        return;
+    };
+    let mut scratch = Vec::new();
+    scratch.resize(size, 0);
+    let base = base.cast::<u8>();
+    for _ in 0..count {
+        let mut swapped = false;
+        for index in 1..count {
+            let left = unsafe { base.add((index - 1).saturating_mul(size)) };
+            let right = unsafe { base.add(index.saturating_mul(size)) };
+            if unsafe { compare(left.cast::<c_void>(), right.cast::<c_void>()) } > 0 {
+                unsafe {
+                    ptr::copy_nonoverlapping(left, scratch.as_mut_ptr(), size);
+                    ptr::copy(right, left, size);
+                    ptr::copy_nonoverlapping(scratch.as_ptr(), right, size);
+                }
+                swapped = true;
+            }
+        }
+        if !swapped {
+            break;
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn posix_memalign(
     memptr: *mut *mut c_void,
     align: usize,
@@ -1473,6 +1704,128 @@ pub unsafe extern "C" fn getcwd(buf: *mut c_char, size: usize) -> *mut c_char {
     out[..cwd.len()].copy_from_slice(cwd);
     out[cwd.len()] = 0;
     buf
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn getpid() -> c_int {
+    crate::hv::current_hull_guest_context_vm_id()
+        .map(|vm_id| 1000 + vm_id as c_int)
+        .unwrap_or(1)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn geteuid() -> u32 {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn time(out: *mut i64) -> i64 {
+    let now = trueos_time_unix_seconds().min(i64::MAX as u64) as i64;
+    if !out.is_null() {
+        let _ = copy_to_abi_out(out.cast::<u8>(), &now.to_ne_bytes());
+    }
+    now
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn gettimeofday(tv: *mut c_void, _tz: *mut c_void) -> c_int {
+    if tv.is_null() {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    let now = trueos_time_unix_seconds().min(i64::MAX as u64) as i64;
+    let out = TrueosTimeval {
+        tv_sec: now,
+        tv_usec: 0,
+    };
+    if !copy_to_abi_out(tv.cast::<u8>(), unsafe {
+        slice::from_raw_parts(
+            (&out as *const TrueosTimeval).cast::<u8>(),
+            core::mem::size_of::<TrueosTimeval>(),
+        )
+    }) {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn localtime_r(timep: *const i64, result: *mut c_void) -> *mut c_void {
+    if timep.is_null() || result.is_null() {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return ptr::null_mut();
+    }
+    let Some(seconds) = abi_read_struct(timep) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return ptr::null_mut();
+    };
+    let tm = unix_seconds_to_utc_tm(seconds);
+    if !copy_to_abi_out(result.cast::<u8>(), unsafe {
+        slice::from_raw_parts(
+            (&tm as *const TrueosTm).cast::<u8>(),
+            core::mem::size_of::<TrueosTm>(),
+        )
+    }) {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return ptr::null_mut();
+    }
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    result
+}
+
+fn unix_seconds_to_utc_tm(seconds: i64) -> TrueosTm {
+    let days = seconds.div_euclid(86_400);
+    let seconds_of_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let yday = day_of_year(year, month, day);
+    TrueosTm {
+        tm_sec: (seconds_of_day % 60) as c_int,
+        tm_min: ((seconds_of_day / 60) % 60) as c_int,
+        tm_hour: (seconds_of_day / 3600) as c_int,
+        tm_mday: day as c_int,
+        tm_mon: month as c_int - 1,
+        tm_year: year as c_int - 1900,
+        tm_wday: ((days + 4).rem_euclid(7)) as c_int,
+        tm_yday: yday as c_int,
+        tm_isdst: 0,
+        tm_gmtoff: 0,
+        tm_zone: TRUEOS_UTC_TZ.as_ptr().cast::<c_char>(),
+    }
+}
+
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 }.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096).div_euclid(365);
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2).div_euclid(153);
+    let d = doy - (153 * mp + 2).div_euclid(5) + 1;
+    let m = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if m <= 2 { 1 } else { 0 };
+    (year, m, d)
+}
+
+fn day_of_year(year: i64, month: i64, day: i64) -> i64 {
+    const CUMULATIVE: [i64; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+    let mut yday = CUMULATIVE[(month - 1).clamp(0, 11) as usize] + day - 1;
+    if month > 2 && is_leap_year(year) {
+        yday += 1;
+    }
+    yday
+}
+
+fn is_leap_year(year: i64) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nanosleep(_req: *const c_void, _rem: *mut c_void) -> c_int {
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    0
 }
 
 #[unsafe(no_mangle)]
@@ -1968,6 +2321,16 @@ pub unsafe extern "C" fn lstat(path: *const c_char, buf: *mut c_void) -> c_int {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn stat64(path: *const c_char, buf: *mut c_void) -> c_int {
+    unsafe { stat(path, buf) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lstat64(path: *const c_char, buf: *mut c_void) -> c_int {
+    unsafe { stat(path, buf) }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, _mode: c_int) -> c_int {
     if path.is_null() {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
@@ -2006,6 +2369,11 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, _mode: c_int) -
     }
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
     fd
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn open64(path: *const c_char, flags: c_int, mode: c_int) -> c_int {
+    unsafe { open(path, flags, mode) }
 }
 
 #[unsafe(no_mangle)]
@@ -2052,6 +2420,11 @@ pub unsafe extern "C" fn fcntl(fd: c_int, _cmd: c_int, _arg: c_int) -> c_int {
     }
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
     0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fcntl64(fd: c_int, cmd: c_int, arg: c_int) -> c_int {
+    unsafe { fcntl(fd, cmd, arg) }
 }
 
 #[unsafe(no_mangle)]
@@ -2171,6 +2544,108 @@ pub unsafe extern "C" fn lseek(fd: c_int, offset: isize, whence: c_int) -> isize
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn pread64(
+    fd: c_int,
+    buf: *mut c_void,
+    count: usize,
+    offset: i64,
+) -> isize {
+    if offset < 0 || (count != 0 && buf.is_null()) {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    if count == 0 {
+        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+        return 0;
+    }
+    let mut table = OPEN_FILES.lock();
+    let Some(file) = table.get_mut(fd) else {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    };
+    let OpenFile::Read { bytes, .. } = file else {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    };
+    let offset = offset as usize;
+    let remaining = bytes.len().saturating_sub(offset);
+    let n = core::cmp::min(count, remaining);
+    if n != 0 && !copy_to_abi_out(buf.cast::<u8>(), &bytes[offset..offset + n]) {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    n as isize
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pwrite64(
+    fd: c_int,
+    buf: *const c_void,
+    count: usize,
+    offset: i64,
+) -> isize {
+    if (count != 0 && buf.is_null()) || offset < 0 {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    if count == 0 {
+        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+        return 0;
+    }
+    let Some(input) = abi_read_bytes(buf.cast::<u8>(), count) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    let mut table = OPEN_FILES.lock();
+    let Some(file) = table.get_mut(fd) else {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    };
+    let OpenFile::Write { bytes, .. } = file else {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    };
+    let offset = offset as usize;
+    let end = offset.saturating_add(input.len());
+    if bytes.len() < end {
+        bytes.resize(end, 0);
+    }
+    bytes[offset..end].copy_from_slice(input);
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    input.len() as isize
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fsync(fd: c_int) -> c_int {
+    if fd < 0 || OPEN_FILES.lock().get(fd).is_none() {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    }
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ftruncate64(fd: c_int, len: i64) -> c_int {
+    if len < 0 {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    let mut table = OPEN_FILES.lock();
+    let Some(file) = table.get_mut(fd) else {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    };
+    if !file.resize(len as usize) {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    }
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    0
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fstat(fd: c_int, buf: *mut c_void) -> c_int {
     if buf.is_null() {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
@@ -2216,6 +2691,11 @@ pub unsafe extern "C" fn fstat(fd: c_int, buf: *mut c_void) -> c_int {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn fstat64(fd: c_int, buf: *mut c_void) -> c_int {
+    unsafe { fstat(fd, buf) }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn opendir(_path: *const c_char) -> *mut TrueosDir {
     TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
     ptr::null_mut()
@@ -2257,6 +2737,98 @@ pub unsafe extern "C" fn mkdir(path: *const c_char, _mode: c_int) -> c_int {
 pub unsafe extern "C" fn unlink(_path: *const c_char) -> c_int {
     TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
     -1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rmdir(_path: *const c_char) -> c_int {
+    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+    -1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn access(path: *const c_char, _mode: c_int) -> c_int {
+    let mut stat_buf = [0u8; core::mem::size_of::<TrueosStat>()];
+    unsafe { stat(path, stat_buf.as_mut_ptr().cast::<c_void>()) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fchmod(fd: c_int, _mode: u32) -> c_int {
+    if fd < 0 || OPEN_FILES.lock().get(fd).is_none() {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    }
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fchown(fd: c_int, _owner: u32, _group: u32) -> c_int {
+    if fd < 0 || OPEN_FILES.lock().get(fd).is_none() {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    }
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn utimes(_path: *const c_char, _times: *const c_void) -> c_int {
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mmap64(
+    _addr: *mut c_void,
+    _len: usize,
+    _prot: c_int,
+    _flags: c_int,
+    _fd: c_int,
+    _offset: i64,
+) -> *mut c_void {
+    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+    usize::MAX as *mut c_void
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mremap(
+    _old_address: *mut c_void,
+    _old_size: usize,
+    _new_size: usize,
+    _flags: c_int,
+) -> *mut c_void {
+    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+    usize::MAX as *mut c_void
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn munmap(_addr: *mut c_void, _len: usize) -> c_int {
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dlopen(_filename: *const c_char, _flags: c_int) -> *mut c_void {
+    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+    ptr::null_mut()
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dlsym(_handle: *mut c_void, _symbol: *const c_char) -> *mut c_void {
+    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+    ptr::null_mut()
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dlclose(_handle: *mut c_void) -> c_int {
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dlerror() -> *const c_char {
+    static DLERROR: &[u8] = b"dynamic loading unavailable\0";
+    DLERROR.as_ptr().cast::<c_char>()
 }
 
 #[unsafe(no_mangle)]
