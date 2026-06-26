@@ -347,6 +347,15 @@ impl<T> CompletionCell<T> {
             self.wait.wait_for_event_blocking(0);
         }
     }
+
+    pub fn join_blocking_parked(&self) -> T {
+        loop {
+            if let Some(value) = self.try_take() {
+                return value;
+            }
+            self.wait.wait_for_event_blocking_parked(0);
+        }
+    }
 }
 
 pub struct LocalJoinHandle<T> {

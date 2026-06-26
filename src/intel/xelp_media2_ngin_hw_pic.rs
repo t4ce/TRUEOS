@@ -1688,6 +1688,40 @@ pub(super) fn submit_avc_single_idr_batch(
         output_surface_pitch,
     );
     media::log_output_surface_probe(engine.name, submit_token, retired, output_surface_probe);
+    let output_surface_probe_ytile = media::probe_ytile_nv12_output_surface(
+        output_surface,
+        u16::try_from(coded_width).unwrap_or(u16::MAX),
+        u16::try_from(coded_height).unwrap_or(u16::MAX),
+        0,
+        0,
+        u16::try_from(coded_width).unwrap_or(u16::MAX),
+        u16::try_from(coded_height).unwrap_or(u16::MAX),
+        output_surface_pitch,
+    );
+    media::log_output_surface_probe_layout(
+        engine.name,
+        submit_token,
+        retired,
+        "ytile-nv12",
+        output_surface_probe_ytile,
+    );
+    let output_surface_probe_linear = media::probe_linear_nv12_output_surface(
+        output_surface,
+        u16::try_from(coded_width).unwrap_or(u16::MAX),
+        u16::try_from(coded_height).unwrap_or(u16::MAX),
+        0,
+        0,
+        u16::try_from(coded_width).unwrap_or(u16::MAX),
+        u16::try_from(coded_height).unwrap_or(u16::MAX),
+        output_surface_pitch,
+    );
+    media::log_output_surface_probe_layout(
+        engine.name,
+        submit_token,
+        retired,
+        "linear-nv12",
+        output_surface_probe_linear,
+    );
     let output_surface_detail = media::output_surface_has_decoded_detail(&output_surface_probe);
     let (output_surface_signature, output_surface_nonzero_samples) =
         media::surface_signature(output_surface);
@@ -1989,7 +2023,7 @@ pub(super) fn submit_jpeg_smoke_batch(
     let output_surface = unsafe {
         core::slice::from_raw_parts(backing.output_surface_virt as *const u8, output_surface_bytes)
     };
-    let output_surface_probe = media::probe_output_surface(
+    let output_surface_probe = media::probe_tiled_nv12_output_surface(
         output_surface,
         u16::try_from(coded_width).unwrap_or(u16::MAX),
         u16::try_from(coded_height).unwrap_or(u16::MAX),
@@ -2000,6 +2034,40 @@ pub(super) fn submit_jpeg_smoke_batch(
         output_surface_pitch,
     );
     media::log_output_surface_probe(engine.name, submit_token, retired, output_surface_probe);
+    let output_surface_probe_ytile = media::probe_ytile_nv12_output_surface(
+        output_surface,
+        u16::try_from(coded_width).unwrap_or(u16::MAX),
+        u16::try_from(coded_height).unwrap_or(u16::MAX),
+        0,
+        0,
+        u16::try_from(coded_width).unwrap_or(u16::MAX),
+        u16::try_from(coded_height).unwrap_or(u16::MAX),
+        output_surface_pitch,
+    );
+    media::log_output_surface_probe_layout(
+        engine.name,
+        submit_token,
+        retired,
+        "ytile-nv12",
+        output_surface_probe_ytile,
+    );
+    let output_surface_probe_linear = media::probe_linear_nv12_output_surface(
+        output_surface,
+        u16::try_from(coded_width).unwrap_or(u16::MAX),
+        u16::try_from(coded_height).unwrap_or(u16::MAX),
+        0,
+        0,
+        u16::try_from(coded_width).unwrap_or(u16::MAX),
+        u16::try_from(coded_height).unwrap_or(u16::MAX),
+        output_surface_pitch,
+    );
+    media::log_output_surface_probe_layout(
+        engine.name,
+        submit_token,
+        retired,
+        "linear-nv12",
+        output_surface_probe_linear,
+    );
     let output_surface_detail = media::output_surface_has_decoded_detail(&output_surface_probe);
     let (output_surface_signature, output_surface_nonzero_samples) =
         media::surface_signature(output_surface);

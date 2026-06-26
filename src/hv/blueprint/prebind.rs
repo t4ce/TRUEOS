@@ -30,6 +30,15 @@ pub(crate) fn prebind_import_readiness(name: &str) -> u32 {
     mask
 }
 
+pub(crate) fn prebind_import_error(name: &str) -> Option<&'static str> {
+    match name {
+        "trueos_tokio_tls_current_slot" => Some(
+            "legacy TLS ABI import trueos_tokio_tls_current_slot; rebuild/refetch the blueprint so TLS uses WLS trueos_cabi_wls_current_slot",
+        ),
+        _ => None,
+    }
+}
+
 fn is_rayon_import(name: &str) -> bool {
     name.starts_with("trueos_cabi_rayon_") || name.starts_with("trueos_rayon_")
 }
@@ -47,6 +56,9 @@ pub(crate) fn prebind_required_readiness(module_bytes: &[u8]) -> Result<u32, Str
     let mut required = prebind_base_readiness();
     let imports = super::elf_imports(unpacked.as_slice()).map_err(String::from)?;
     for import in imports.iter() {
+        if let Some(err) = prebind_import_error(import.name) {
+            return Err(String::from(err));
+        }
         required |= prebind_import_readiness(import.name);
     }
     Ok(required)

@@ -22,8 +22,10 @@ pub const GUEST_STACK_PT_CAP: usize = GUEST_STACK_MAX_BYTES.div_ceil(PAGE_SIZE_2
 pub const GUEST_LOW_PT_COUNT: usize = GUEST_STACK_PT_CAP + 1;
 pub const GUEST_COMM_PAGE_VA: u64 = GUEST_STACK_VA_BASE + GUEST_STACK_MAX_BYTES as u64;
 pub const GUEST_HIGH_IMAGE_PT_COUNT: usize = 1024;
-pub const GUEST_HEAP_PD_COUNT: usize = 8;
+pub const GUEST_HEAP_PD_COUNT: usize = 512;
 pub const GUEST_HIGH_IMAGE_MAX_BYTES: u64 = GUEST_HIGH_IMAGE_PT_COUNT as u64 * PAGE_SIZE_2M;
+const MIB_BYTES: u64 = 1024 * 1024;
+const GIB_BYTES: u64 = 1024 * MIB_BYTES;
 pub const ELF64_HEADER_LEN: usize = 64;
 const EPT_ROOT_PML4_INDEX: usize = 0;
 const EPT_DYNAMIC_PD_CAP: usize = crate::allcaps::hv::EPT_DYNAMIC_PD_CAP;
@@ -1172,13 +1174,6 @@ pub fn build_guest_cr3_for_vm_with_mode(
         map_table_entry(guest_pml4, pml4_index(code_base), high_pdpt_pa);
         map_table_entry(guest_high_pdpt, pdpt_index(code_base), high_pd_pa);
         map_table_entry(guest_high_pd, pd_index(code_base), code_pt_pa);
-        map_region_4k(
-            guest_code_pt,
-            code_pt_base,
-            host_va_to_pa(code_pt_base).ok_or("guest code pa")?,
-            PAGE_SIZE_2M as usize,
-            PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE,
-        )?;
         let mut pt_slot = 0usize;
         let (mapped_code_base, mapped_code_len) = match boot_mode {
             crate::hv::VmBootMode::Hull => {
@@ -1900,28 +1895,30 @@ fn map_guest_image_span(
 
     let mut va = start_chunk_base;
     while va < end_aligned {
-        if va != code_pt_base {
-            if *pt_slot >= GUEST_HIGH_IMAGE_PT_COUNT {
-                return Err("guest image pt pool");
-            }
-
-            let chunk_start = if va < start { start } else { va };
-            let chunk_end = core::cmp::min(va.saturating_add(PAGE_SIZE_2M), end);
-            if chunk_start < chunk_end {
-                let tables = guest_tables_ptr()?;
+        let chunk_start = if va < start { start } else { va };
+        let chunk_end = core::cmp::min(va.saturating_add(PAGE_SIZE_2M), end);
+        if chunk_start < chunk_end {
+            let tables = guest_tables_ptr()?;
+            let image_pt = if va == code_pt_base {
+                unsafe { core::ptr::addr_of_mut!((*tables).code_pt.0) }
+            } else {
+                if *pt_slot >= GUEST_HIGH_IMAGE_PT_COUNT {
+                    return Err("guest image pt pool");
+                }
                 let image_pt = unsafe { core::ptr::addr_of_mut!((*tables).image_pts[*pt_slot].0) };
                 let image_pt_pa = host_va_to_pa(image_pt as u64).ok_or("guest image pt pa")?;
                 map_table_entry(pd, pd_index(va), image_pt_pa);
-                let phys = host_va_to_pa(chunk_start).ok_or("guest kernel image pa")?;
-                map_region_4k(
-                    image_pt,
-                    chunk_start,
-                    phys,
-                    chunk_end.saturating_sub(chunk_start) as usize,
-                    PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE,
-                )?;
                 *pt_slot += 1;
-            }
+                image_pt
+            };
+            let phys = host_va_to_pa(chunk_start).ok_or("guest kernel image pa")?;
+            map_region_4k(
+                image_pt,
+                chunk_start,
+                phys,
+                chunk_end.saturating_sub(chunk_start) as usize,
+                PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE,
+            )?;
         }
         va = va
             .checked_add(PAGE_SIZE_2M)
@@ -2091,6 +2088,31 @@ fn map_guest_heap_span(
                 heap_pd_slots[pdpt_idx]
             } else {
                 if heap_pd_count >= GUEST_HEAP_PD_COUNT {
+                    let heap_span_bytes = end_aligned.saturating_sub(start_chunk_base);
+                    let heap_span_mib = heap_span_bytes.div_ceil(MIB_BYTES);
+                    let heap_pd_needed = heap_span_bytes.div_ceil(GIB_BYTES);
+                    let budget_kib = GUEST_HEAP_PD_COUNT
+                        .saturating_mul(PAGE_SIZE_4K)
+                        .saturating_div(1024);
+                    hvlogf(format_args!(
+                        "hv: vm{} ERROR guest heap PD budget exhausted while mapping vm{} heap used={} cap={} next_pdpt_idx={}",
+                        current_vm_id_for_log(),
+                        vm_id,
+                        heap_pd_count,
+                        GUEST_HEAP_PD_COUNT,
+                        pdpt_idx
+                    ));
+                    hvlogf(format_args!(
+                        "hv: vm{} math: 1 heap PD page is 4KiB metadata and maps 1GiB heap; this heap={}MiB needs={} PD pages",
+                        current_vm_id_for_log(),
+                        heap_span_mib,
+                        heap_pd_needed
+                    ));
+                    hvlogf(format_args!(
+                        "hv: vm{} fix: raise GUEST_HEAP_PD_COUNT or reduce live VM heaps; current budget metadata={}KiB, not heap RAM",
+                        current_vm_id_for_log(),
+                        budget_kib
+                    ));
                     return Err("guest heap pd pool");
                 }
                 let slot = heap_pd_count;

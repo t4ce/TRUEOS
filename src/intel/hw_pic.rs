@@ -586,6 +586,12 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         command_dword(AVC_CMD_OFFSET_SURFACE_STATE + 5)
     );
     hw_pic_info!(
+        "intel/hw_pic-stage: id={} stage=avc-profile accepted=1 name=green-rollback clear_y={} clear_uv={} surface=tileys64-dw3-0x48003ff9 pipe=both ind=full-bitstream-window probe=tile64+ytile+linear\n",
+        job.id,
+        super::xelp_media2_ngin::MEDIA_AVC_ROLLBACK_CLEAR_LUMA,
+        super::xelp_media2_ngin::MEDIA_AVC_ROLLBACK_CLEAR_CHROMA
+    );
+    hw_pic_info!(
         "intel/hw_pic-stage: id={} stage=avc-bindings accepted=1 synthetic_rowstore=0 nv12_clear_y={} nv12_clear_uv={} dest=0x{:X}/0x{:X} missing_ref=0x{:X}/0x{:X} missing_ref_offset=0x{:X} bitstream=0x{:X}/0x{:X} intra=0x{:X}/0x{:X} deblock=0x{:X}/0x{:X} bsd_mpc=0x{:X}/0x{:X} mpr=0x{:X}/0x{:X} dmv_write=0x{:X}/0x{:X} dmv_ref=0x{:X}/0x{:X}\n",
         job.id,
         super::xelp_media2_ngin::MEDIA_AVC_ROLLBACK_CLEAR_LUMA,

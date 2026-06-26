@@ -16,6 +16,16 @@ const TOKIO_WORKER_RECORD_VERSION: u32 = 1;
 const VM_HULL_RECORD_MAGIC: u32 = 0x4C48_4D56; // "VMHL", little endian in memory.
 const VM_HULL_RECORD_VERSION: u32 = 1;
 pub const VM_HULL_RECORD_ROLE_VM_HULL: u8 = 1;
+const WLS_HOST_WORKER_BASE: usize = 0;
+const WLS_BLUEPRINT_RUNTIME_BASE: usize = WLS_HOST_WORKER_BASE + TOKIO_LANE_COUNT;
+const WLS_BLUEPRINT_WORKER_BASE: usize =
+    WLS_BLUEPRINT_RUNTIME_BASE + crate::allcaps::hv::VM_ID_LIMIT;
+const WLS_BLUEPRINT_THREAD_SLOTS_PER_VM: usize = 64;
+const WLS_BLUEPRINT_THREAD_BASE: usize =
+    WLS_BLUEPRINT_WORKER_BASE + crate::allcaps::hv::VM_ID_LIMIT * TOKIO_LANE_COUNT;
+const WLS_HOST_FALLBACK_BASE: usize =
+    WLS_BLUEPRINT_THREAD_BASE + crate::allcaps::hv::VM_ID_LIMIT * WLS_BLUEPRINT_THREAD_SLOTS_PER_VM;
+const NO_BLUEPRINT_THREAD_ID: u32 = 0;
 
 #[repr(align(64))]
 #[allow(dead_code)]
@@ -47,7 +57,12 @@ static LOGGED_TOKIO_LANE: [AtomicBool; TOKIO_LANE_COUNT] =
 static TOKIO_CURRENT_LANE_BY_CPU: [AtomicU32; TOKIO_TLS_CPU_TRACK_COUNT] =
     [const { AtomicU32::new(u32::MAX) }; TOKIO_TLS_CPU_TRACK_COUNT];
 static LOGGED_TOKIO_LANE_BUSY: AtomicBool = AtomicBool::new(false);
-static LOGGED_GUEST_TOKIO_TLS_SLOT: [AtomicBool; 32] = [const { AtomicBool::new(false) }; 32];
+static LOGGED_BLUEPRINT_RUNTIME_WLS_SLOT: [AtomicBool; 32] = [const { AtomicBool::new(false) }; 32];
+static LOGGED_BLUEPRINT_WORKER_WLS_SLOT: [AtomicBool; 32] = [const { AtomicBool::new(false) }; 32];
+static LOGGED_BLUEPRINT_THREAD_WLS_SLOT: [AtomicBool; 32] = [const { AtomicBool::new(false) }; 32];
+static LOGGED_HOST_WLS_FALLBACK: AtomicBool = AtomicBool::new(false);
+static CURRENT_BLUEPRINT_THREAD_ID_BY_CPU: [AtomicU32; crate::allcaps::hv::VM_CPU_SLOT_LIMIT] =
+    [const { AtomicU32::new(NO_BLUEPRINT_THREAD_ID) }; crate::allcaps::hv::VM_CPU_SLOT_LIMIT];
 static VM_HULL_FS_BASE: [AtomicU64; crate::allcaps::hv::VM_ID_LIMIT] =
     [const { AtomicU64::new(0) }; crate::allcaps::hv::VM_ID_LIMIT];
 
@@ -123,16 +138,94 @@ fn cpu_slot_now() -> u32 {
     }
 }
 
+#[inline]
+fn wls_host_worker_slot(worker_id: usize) -> u32 {
+    WLS_HOST_WORKER_BASE.saturating_add(worker_id.min(TOKIO_LANE_COUNT - 1)) as u32
+}
+
+#[inline]
+fn wls_blueprint_runtime_slot(vm_id: u8) -> u32 {
+    WLS_BLUEPRINT_RUNTIME_BASE.saturating_add(vm_id as usize) as u32
+}
+
+#[inline]
+fn wls_blueprint_worker_slot(vm_id: u8, worker_id: usize) -> u32 {
+    WLS_BLUEPRINT_WORKER_BASE
+        .saturating_add((vm_id as usize).saturating_mul(TOKIO_LANE_COUNT))
+        .saturating_add(worker_id.min(TOKIO_LANE_COUNT - 1)) as u32
+}
+
+#[inline]
+fn wls_blueprint_thread_slot(vm_id: u8, thread_id: u32) -> u32 {
+    let thread_index = thread_id
+        .saturating_sub(1)
+        .min((WLS_BLUEPRINT_THREAD_SLOTS_PER_VM - 1) as u32) as usize;
+    WLS_BLUEPRINT_THREAD_BASE
+        .saturating_add((vm_id as usize).saturating_mul(WLS_BLUEPRINT_THREAD_SLOTS_PER_VM))
+        .saturating_add(thread_index) as u32
+}
+
+#[inline]
+fn wls_host_fallback_slot(cpu_slot: u32) -> u32 {
+    if cpu_slot == NO_CPU_SLOT {
+        WLS_HOST_FALLBACK_BASE.saturating_add(TOKIO_TLS_CPU_TRACK_COUNT) as u32
+    } else {
+        WLS_HOST_FALLBACK_BASE.saturating_add(cpu_slot as usize) as u32
+    }
+}
+
+#[inline]
+fn current_blueprint_worker_id() -> Option<usize> {
+    current_tokio_worker_id().or_else(|| {
+        let cpu_slot = cpu_slot_now();
+        if cpu_slot == NO_CPU_SLOT {
+            None
+        } else {
+            Some((cpu_slot as usize) % TOKIO_LANE_COUNT)
+        }
+    })
+}
+
+pub fn current_blueprint_thread_id() -> Option<u32> {
+    let cpu_slot = cpu_slot_now();
+    if cpu_slot == NO_CPU_SLOT {
+        return None;
+    }
+    let thread_id = CURRENT_BLUEPRINT_THREAD_ID_BY_CPU
+        .get(cpu_slot as usize)?
+        .load(Ordering::Acquire);
+    if thread_id == NO_BLUEPRINT_THREAD_ID {
+        None
+    } else {
+        Some(thread_id)
+    }
+}
+
+pub fn with_current_blueprint_thread_id<R>(thread_id: usize, f: impl FnOnce() -> R) -> R {
+    let cpu_slot = cpu_slot_now();
+    if cpu_slot == NO_CPU_SLOT {
+        return f();
+    }
+    let Some(slot) = CURRENT_BLUEPRINT_THREAD_ID_BY_CPU.get(cpu_slot as usize) else {
+        return f();
+    };
+    let thread_id = thread_id.min(u32::MAX as usize) as u32;
+    let previous = slot.swap(thread_id.max(1), Ordering::AcqRel);
+    let result = f();
+    slot.store(previous, Ordering::Release);
+    result
+}
+
 #[unsafe(no_mangle)]
-pub extern "Rust" fn trueos_tokio_tls_current_slot() -> u32 {
+pub extern "C" fn trueos_cabi_wls_current_slot() -> u32 {
     if let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() {
-        let slot = (TOKIO_LANE_COUNT as u32).saturating_add(vm_id as u32);
+        let slot = wls_blueprint_runtime_slot(vm_id);
         let vm_index = vm_id as usize;
-        if vm_index < LOGGED_GUEST_TOKIO_TLS_SLOT.len()
-            && !LOGGED_GUEST_TOKIO_TLS_SLOT[vm_index].swap(true, Ordering::AcqRel)
+        if vm_index < LOGGED_BLUEPRINT_RUNTIME_WLS_SLOT.len()
+            && !LOGGED_BLUEPRINT_RUNTIME_WLS_SLOT[vm_index].swap(true, Ordering::AcqRel)
         {
             crate::log!(
-                "stackkeeper: guest tokio tls slot source=vm-fallback vm={} slot={}\n",
+                "stackkeeper: blueprint runtime wls vm={} worker=main slot={}\n",
                 vm_id,
                 slot
             );
@@ -140,32 +233,52 @@ pub extern "Rust" fn trueos_tokio_tls_current_slot() -> u32 {
         return slot;
     }
 
-    if tokio_blocking_backing_enabled()
-        && let Some(slot) = current_tokio_worker_tls_slot()
-    {
+    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
+        if let Some(thread_id) = current_blueprint_thread_id() {
+            let slot = wls_blueprint_thread_slot(vm_id, thread_id);
+            let vm_index = vm_id as usize;
+            if vm_index < LOGGED_BLUEPRINT_THREAD_WLS_SLOT.len()
+                && !LOGGED_BLUEPRINT_THREAD_WLS_SLOT[vm_index].swap(true, Ordering::AcqRel)
+            {
+                crate::log!(
+                    "stackkeeper: blueprint thread wls vm={} thread={} slot={}\n",
+                    vm_id,
+                    thread_id,
+                    slot
+                );
+            }
+            return slot;
+        }
+        let worker_id = current_blueprint_worker_id().unwrap_or(0);
+        let slot = wls_blueprint_worker_slot(vm_id, worker_id);
+        let vm_index = vm_id as usize;
+        if vm_index < LOGGED_BLUEPRINT_WORKER_WLS_SLOT.len()
+            && !LOGGED_BLUEPRINT_WORKER_WLS_SLOT[vm_index].swap(true, Ordering::AcqRel)
+        {
+            crate::log!(
+                "stackkeeper: blueprint worker wls vm={} worker={} slot={}\n",
+                vm_id,
+                worker_id,
+                slot
+            );
+        }
         return slot;
     }
 
-    let cpu_slot = cpu_slot_now();
-
-    if cpu_slot != NO_CPU_SLOT {
-        let cpu_slot_usize = cpu_slot as usize;
-        if cpu_slot_usize < TOKIO_TLS_CPU_TRACK_COUNT {
-            let lane_id = TOKIO_CURRENT_LANE_BY_CPU[cpu_slot_usize].load(Ordering::Acquire);
-            if (lane_id as usize) < TOKIO_LANE_COUNT
-                && TOKIO_LANE_ACTIVE[lane_id as usize].load(Ordering::Acquire)
-            {
-                return lane_id;
-            }
-        }
+    if let Some(worker_id) = current_tokio_worker_id() {
+        return wls_host_worker_slot(worker_id);
     }
 
-    let fallback = TOKIO_LANE_COUNT as u32;
-    let slot = if cpu_slot == NO_CPU_SLOT {
-        fallback
-    } else {
-        fallback.saturating_add(cpu_slot)
-    };
+    let cpu_slot = cpu_slot_now();
+    let slot = wls_host_fallback_slot(cpu_slot);
+
+    if !LOGGED_HOST_WLS_FALLBACK.swap(true, Ordering::AcqRel) {
+        crate::log!(
+            "stackkeeper: host wls fallback source=cpu cpu_slot={} slot={}\n",
+            cpu_slot,
+            slot
+        );
+    }
 
     slot
 }

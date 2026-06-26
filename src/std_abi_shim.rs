@@ -409,6 +409,18 @@ fn pthread_current_id() -> usize {
         return 0x2_0000usize.saturating_add(vm_id as usize);
     }
 
+    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
+        if let Some(thread_id) = crate::stackkeeper::current_blueprint_thread_id() {
+            return 0x4_0000usize
+                .saturating_add((vm_id as usize).saturating_mul(PTHREAD_THREAD_CAPACITY))
+                .saturating_add(thread_id as usize);
+        }
+        let worker_id = crate::stackkeeper::current_tokio_worker_id().unwrap_or(0);
+        return 0x3_0000usize
+            .saturating_add((vm_id as usize).saturating_mul(crate::stackkeeper::TOKIO_LANE_COUNT))
+            .saturating_add(worker_id);
+    }
+
     if crate::stackkeeper::tokio_blocking_backing_enabled()
         && let Some(worker_id) = crate::stackkeeper::current_tokio_worker_id()
     {
@@ -2754,6 +2766,21 @@ pub unsafe extern "C" fn pthread_setname_np(_thread: usize, _name: *const c_char
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_attr_init(_attr: *mut c_void) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_attr_setstacksize(_attr: *mut c_void, _stacksize: usize) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_attr_destroy(_attr: *mut c_void) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn pthread_create(
     thread: *mut usize,
     _attr: *const c_void,
@@ -2787,7 +2814,9 @@ pub unsafe extern "C" fn pthread_create(
     let job = Box::new(move || {
         let start: unsafe extern "C" fn(*mut c_void) -> *mut c_void =
             unsafe { core::mem::transmute(start) };
-        let result = unsafe { start(arg as *mut c_void) } as usize;
+        let result = crate::stackkeeper::with_current_blueprint_thread_id(thread_id, || {
+            (unsafe { start(arg as *mut c_void) }) as usize
+        });
         let _ = completion.complete(result);
         pthread_thread_finish(thread_id);
     });
@@ -2815,7 +2844,7 @@ pub unsafe extern "C" fn pthread_join(thread: usize, retval: *mut *mut c_void) -
         state.completion.clone()
     };
 
-    let result = completion.join_blocking();
+    let result = completion.join_blocking_parked();
     let _ = PTHREAD_THREADS.lock().remove(thread);
 
     if !retval.is_null() {
