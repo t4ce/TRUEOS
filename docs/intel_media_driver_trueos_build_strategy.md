@@ -1,8 +1,9 @@
 # Intel Media Driver TRUEOS Build Strategy
 
-The upstream `intel/media-driver` checkout is useful as a spec source, but its
-normal build target is not a small standalone decoder library. It builds the
-Linux VAAPI driver `iHD_drv_video.so` through CMake.
+The upstream `intel/media-driver` checkout must be compiled as a Linux-side
+oracle before TRUEOS trusts any hand-ported AVC packet stream. Its normal build
+target is not a small standalone decoder library; it builds the Linux VAAPI
+driver `iHD_drv_video.so` through CMake.
 
 Observed upstream build shape:
 
@@ -20,12 +21,31 @@ Practical conclusion:
 1. Building the whole driver for TRUEOS is a port of the Linux userspace media
    stack, not a quick link step. It would require a TRUEOS implementation of the
    driver OS interface and resource allocator before the AVC packets can run.
-2. A C ABI shim can still be useful later, but it should be a packet compiler:
+2. Building the upstream Linux driver is still mandatory as an oracle. Use
+   `tools/build_intel_media_driver_oracle.sh` to compile the pinned
+   `a203cfc` checkout and write the TRUEOS AVC recipe trace next to the driver
+   artifact under `bld/intel-media-driver-oracle/`.
+3. A C ABI shim can still be useful later, but it should be a packet compiler:
    TRUEOS-owned inputs in, validated command dwords and resource requirements
    out. That shim must not own GPU submission, memory management, or VAAPI.
-3. The fastest path for the single playback case is the Rust mechanical port:
+4. The fastest path for the single playback case is the Rust mechanical port:
    keep translating upstream `SETPAR`/`ADDCMD` into typed Rust params and dword
-   encoders, then wire the result into TRUEOS' existing media ring and GGTT code.
+   encoders, but treat the compiled upstream driver/oracle as the reference
+   implementation for every packet field before wiring into TRUEOS' existing
+   media ring and GGTT code.
+
+Current host gate:
+
+```sh
+tools/build_intel_media_driver_oracle.sh
+```
+
+The wrapper expects the pinned checkout at
+`/home/t4ce/REPOS/reference/intel-media-driver` by default. It requires local
+LibVA, libdrm, and GmmLib development packages because upstream discovers those
+through `pkg-config`. If they are installed in a custom prefix, export
+`PKG_CONFIG_PATH`; if the checkout lives elsewhere, export
+`INTEL_MEDIA_DRIVER_SRC`.
 
 Candidate C ABI boundary, if we choose to generate from upstream C++ later:
 
@@ -46,6 +66,6 @@ Rules for such a shim:
 - No allocation or GPU submission inside the shim.
 - Every output dword still maps back to an upstream `SETPAR` or `ADDCMD`.
 
-For now, keep the shim idea behind the Rust port. If the Rust dword encoders
-start diverging too far from upstream, then generate or compile just the packet
-compiler layer.
+For now, keep the shim idea behind the compiled Linux oracle plus Rust port. If
+the Rust dword encoders start diverging too far from upstream, then generate or
+compile just the packet compiler layer.
