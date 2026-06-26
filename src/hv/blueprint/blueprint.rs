@@ -351,7 +351,9 @@ pub(crate) fn rustc_runtime_import_note(name: &str) -> Option<&'static str> {
             .rsplit_once("___rustc")
             .is_some_and(|(_, tail)| tail.contains("___rust_no_alloc_shim_is_unstable"))
     {
-        return Some("class=rustc-no-alloc-shim need=noop-provider reason=allocator-presence-marker");
+        return Some(
+            "class=rustc-no-alloc-shim need=noop-provider reason=allocator-presence-marker",
+        );
     }
     if name == "__rust_alloc"
         || name
@@ -1294,8 +1296,8 @@ fn resolve_known_import(name: &str) -> Option<usize> {
         "acosf" => Some(trueos_math::acosf as *const () as usize),
         "asinf" => Some(trueos_math::asinf as *const () as usize),
         "log2f" => Some(trueos_math::log2f as *const () as usize),
-        "trueos_tokio_tls_current_slot" => {
-            Some(crate::stackkeeper::trueos_tokio_tls_current_slot as *const () as usize)
+        "trueos_cabi_wls_current_slot" => {
+            Some(crate::stackkeeper::trueos_cabi_wls_current_slot as *const () as usize)
         }
         "_Unwind_Backtrace" => Some(portal_unwind_backtrace as *const () as usize),
         "_Unwind_GetIP" => Some(portal_unwind_get_ip as *const () as usize),
@@ -1434,6 +1436,13 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "pthread_detach" => Some(crate::std_abi_shim::pthread_detach as *const () as usize),
         "pthread_self" => Some(crate::std_abi_shim::pthread_self as *const () as usize),
         "pthread_setname_np" => Some(crate::std_abi_shim::pthread_setname_np as *const () as usize),
+        "pthread_attr_init" => Some(crate::std_abi_shim::pthread_attr_init as *const () as usize),
+        "pthread_attr_setstacksize" => {
+            Some(crate::std_abi_shim::pthread_attr_setstacksize as *const () as usize)
+        }
+        "pthread_attr_destroy" => {
+            Some(crate::std_abi_shim::pthread_attr_destroy as *const () as usize)
+        }
         "pthread_key_create" => Some(crate::std_abi_shim::pthread_key_create as *const () as usize),
         "pthread_key_delete" => Some(crate::std_abi_shim::pthread_key_delete as *const () as usize),
         "pthread_setspecific" => {

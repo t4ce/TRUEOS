@@ -615,6 +615,9 @@ async fn preflight_blueprint_launch(
                     )
                     .as_str());
                     for import in imports.iter() {
+                        if let Some(err) = crate::hv::blueprint::prebind_import_error(import.name) {
+                            return Err(String::from(err));
+                        }
                         required_readiness |=
                             crate::hv::blueprint::prebind_import_readiness(import.name);
                         log_blueprint_import(import, log);
