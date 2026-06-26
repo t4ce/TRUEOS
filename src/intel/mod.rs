@@ -892,7 +892,7 @@ pub(crate) async fn hw_vid_probe_task() {
     {
         let src =
             unsafe { core::slice::from_raw_parts(output.virt_addr as *const u8, output.byte_len) };
-        self::display::present_nv12_surface_center(
+        self::display::present_ytile_nv12_surface_center(
             src,
             output.width,
             output.height,
@@ -907,7 +907,7 @@ pub(crate) async fn hw_vid_probe_task() {
     };
 
     crate::log!(
-        "intel/hw_vid: h264-probe output id={} codec={:?} status={:?} fmt={:?} decoded={}x{} pitch=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} stored={} err={}\n",
+        "intel/hw_vid: h264-probe output id={} codec={:?} status={:?} fmt={:?} decoded={}x{} pitch=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} stored={} present=ytile-nv12-diagnostic err={}\n",
         output.id,
         output.codec,
         output.status,

@@ -3044,6 +3044,21 @@ fn center_crop_size(
     (src_width.min(dst_width), src_height.min(dst_height))
 }
 
+#[inline(always)]
+fn media_ytile_8bpp_offset(byte_x: usize, row_y: usize, tiles_per_row: usize) -> usize {
+    const YTILE_W: usize = 128;
+    const YTILE_H: usize = 32;
+
+    let tile_col = byte_x / YTILE_W;
+    let tile_row = row_y / YTILE_H;
+    let in_x = byte_x % YTILE_W;
+    let in_y = row_y % YTILE_H;
+    let oword_col = in_x / 16;
+    let byte_in_oword = in_x % 16;
+    let within_tile = oword_col * 512 + in_y * 16 + byte_in_oword;
+    (tile_row * tiles_per_row + tile_col) * 4096 + within_tile
+}
+
 pub(crate) fn present_imc3_surface_center(
     src: &[u8],
     coded_width: u32,
@@ -3162,6 +3177,118 @@ pub(crate) fn present_imc3_surface_center(
     let byte_len = dst_pitch.saturating_mul(dst_height);
     crate::intel::dma_flush(surface.virt, byte_len);
     notify_primary_surface_present(surface, "hw-logo-imc3-center", byte_len);
+    true
+}
+
+pub(crate) fn present_ytile_nv12_surface_center(
+    src: &[u8],
+    coded_width: u32,
+    coded_height: u32,
+    visible_x: u32,
+    visible_y: u32,
+    visible_width: u32,
+    visible_height: u32,
+    src_pitch_bytes: usize,
+) -> bool {
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+        return false;
+    };
+    if surface.virt.is_null() || coded_width == 0 || coded_height == 0 {
+        return false;
+    }
+
+    const YTILE_W: usize = 128;
+    const YTILE_H: usize = 32;
+
+    let coded_width = coded_width as usize;
+    let coded_height = coded_height as usize;
+    let visible_x = visible_x as usize;
+    let visible_y = visible_y as usize;
+    let visible_width = visible_width as usize;
+    let visible_height = visible_height as usize;
+    if src_pitch_bytes < coded_width
+        || !src_pitch_bytes.is_multiple_of(YTILE_W)
+        || visible_width == 0
+        || visible_height == 0
+    {
+        return false;
+    }
+    if visible_x.saturating_add(visible_width) > coded_width
+        || visible_y.saturating_add(visible_height) > coded_height
+    {
+        return false;
+    }
+
+    let tiles_per_row = src_pitch_bytes / YTILE_W;
+    if tiles_per_row == 0 {
+        return false;
+    }
+    let chroma_y_offset = coded_height.next_multiple_of(YTILE_H);
+    let total_height = chroma_y_offset.saturating_add(coded_height.div_ceil(2));
+    let needed = total_height
+        .div_ceil(YTILE_H)
+        .saturating_mul(tiles_per_row)
+        .saturating_mul(4096);
+    if src.len() < needed {
+        return false;
+    }
+
+    let dst_width = surface.width as usize;
+    let dst_height = surface.height as usize;
+    let dst_pitch = surface.pitch_bytes as usize;
+    if dst_pitch < dst_width.saturating_mul(4) {
+        return false;
+    }
+
+    let (copy_w, copy_h) = aspect_fit_size(visible_width, visible_height, dst_width, dst_height);
+    if copy_w == 0 || copy_h == 0 {
+        return false;
+    }
+    let dst_x = dst_width.saturating_sub(copy_w) / 2;
+    let dst_y = dst_height.saturating_sub(copy_h) / 2;
+
+    for row_idx in 0..copy_h {
+        let src_y = visible_y.saturating_add(
+            row_idx
+                .saturating_mul(visible_height)
+                .checked_div(copy_h.max(1))
+                .unwrap_or(0)
+                .min(visible_height.saturating_sub(1)),
+        );
+        let dst_row_off = (dst_y + row_idx)
+            .saturating_mul(dst_pitch)
+            .saturating_add(dst_x.saturating_mul(4));
+        let dst_row = unsafe { surface.virt.add(dst_row_off) as *mut u32 };
+        for col_idx in 0..copy_w {
+            let src_x = visible_x.saturating_add(
+                col_idx
+                    .saturating_mul(visible_width)
+                    .checked_div(copy_w.max(1))
+                    .unwrap_or(0)
+                    .min(visible_width.saturating_sub(1)),
+            );
+            let y_off = media_ytile_8bpp_offset(src_x, src_y, tiles_per_row);
+            let uv_x = (src_x / 2).saturating_mul(2);
+            let uv_row = chroma_y_offset.saturating_add(src_y / 2);
+            let u_off = media_ytile_8bpp_offset(uv_x, uv_row, tiles_per_row);
+            let v_off = media_ytile_8bpp_offset(uv_x + 1, uv_row, tiles_per_row);
+            let y = unsafe { i32::from(*src.get_unchecked(y_off)) };
+            let c = (y - 16).max(0);
+            let u = unsafe { i32::from(*src.get_unchecked(u_off)) } - 128;
+            let v = unsafe { i32::from(*src.get_unchecked(v_off)) } - 128;
+            let r = clamp_u8_i32((298 * c + 409 * v + 128) >> 8);
+            let g = clamp_u8_i32((298 * c - 100 * u - 208 * v + 128) >> 8);
+            let b = clamp_u8_i32((298 * c + 516 * u + 128) >> 8);
+            let pixel = u32::from_le_bytes([b, g, r, 0]);
+            unsafe {
+                core::ptr::write_volatile(dst_row.add(col_idx), pixel);
+            }
+        }
+    }
+
+    let byte_len = dst_pitch.saturating_mul(dst_height);
+    crate::intel::dma_flush(surface.virt, byte_len);
+    notify_primary_surface_present(surface, "ytile-nv12-center", byte_len);
     true
 }
 

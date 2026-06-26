@@ -138,12 +138,17 @@ First TRUEOS milestone:
   `coded=1920x1088`, `mb=120x68`, `command_blocks=19`,
   `command_dwords=326`, with Tile64 pitch/UV layout asserted.
 - `tools/avc_recipe_trace.rs` emits the full long-format IDR command stream
-  grouped by command block, offset, dword count, and upstream symbol. Use this
-  as the local side of any future diff against an instrumented
-  `intel/media-driver` packet compiler or C ABI shim.
+  grouped by command block, offset, dword count, and upstream symbol.
+- `tools/build_intel_media_driver_oracle.sh` compiles the pinned upstream
+  `intel/media-driver` checkout into `iHD_drv_video.so` and emits the TRUEOS
+  AVC recipe trace under `bld/intel-media-driver-oracle/`. That compiled
+  upstream build is the required oracle side for any packet diff or future C ABI
+  shim.
 
 Remaining gate before reporting playback:
 
+- Build the compiled upstream oracle and diff the packet fields for the current
+  sample against TRUEOS' trace.
 - Boot the live VDBOX submit path on hardware and inspect retire/fault/detail
   logs for the AVC batch.
 - Trust `HwPicStatus::Ready` only when the batch retires and the NV12 output
