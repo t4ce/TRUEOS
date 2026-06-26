@@ -41,10 +41,27 @@ tools/build_intel_media_driver_oracle.sh
 ```
 
 The wrapper expects the pinned checkout at
-`/home/t4ce/REPOS/reference/intel-media-driver` by default. It requires local
-LibVA, libdrm, and GmmLib development packages because upstream discovers those
-through `pkg-config`. If they are installed in a custom prefix, export
-`PKG_CONFIG_PATH`; if the checkout lives elsewhere, export
+`/home/t4ce/REPOS/reference/intel-media-driver` by default. If LibVA, libdrm,
+or GmmLib are not visible through `pkg-config`, it bootstraps them from source
+under `bld/intel-media-driver-oracle/`:
+
+- `src/libdrm`, built with optional display/vendor extras disabled
+- `src/libva`, built DRM-only with X11/Wayland/GLX disabled
+- `src/gmmlib`, built with CMake and installed as `libigdgmm.so.12`
+
+The media-driver build uses that local prefix through `PKG_CONFIG_PATH` and
+`LD_LIBRARY_PATH`, and demotes GCC 15's `-Warray-bounds` STL initializer warning
+with `-Wno-error=array-bounds`. The expected outputs are:
+
+- Driver oracle:
+  `bld/intel-media-driver-oracle/build/media_driver/iHD_drv_video.so`
+- TRUEOS packet trace:
+  `bld/intel-media-driver-oracle/trueos_avc_recipe_trace.txt`
+- Build manifest:
+  `bld/intel-media-driver-oracle/manifest.txt`
+
+To force system/package dependencies instead of the local bootstrap, set
+`TRUEOS_INTEL_MEDIA_BOOTSTRAP_DEPS=0`. If the checkout lives elsewhere, export
 `INTEL_MEDIA_DRIVER_SRC`.
 
 Candidate C ABI boundary, if we choose to generate from upstream C++ later:
