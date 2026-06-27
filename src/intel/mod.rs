@@ -77,8 +77,8 @@ const DISPLAY_PLANE1_BOOT_DEMO_ENABLED: bool = true;
 const MEDIA_BOOT_DEMO_ENABLED: bool = false;
 const MEDIA_H264_BOOT_PROBE_ENABLED: bool = true;
 const MEDIA_H264_BOOT_PROBE_PLAYBACK_ENABLED: bool = true;
-const MEDIA_H264_BOOT_PROBE_PLAYBACK_MAX_IDR: usize = 8;
-const MEDIA_H264_BOOT_PROBE_PLAYBACK_FRAME_MS: u64 = 240;
+const MEDIA_H264_BOOT_PROBE_PLAYBACK_MAX_FRAMES: usize = 200;
+const MEDIA_H264_BOOT_PROBE_PLAYBACK_FRAME_MS: u64 = 33;
 const MEDIA_H264_BOOT_PROBE_TIMEOUT_MS: u64 = 5_000;
 const MEDIA_BOOT_DEMO_DELAY_MS: u64 = 2_000;
 const MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT: u32 = 3;
@@ -864,7 +864,7 @@ pub(crate) async fn hw_vid_probe_task() {
 
     Timer::after(EmbassyDuration::from_millis(MEDIA_BOOT_DEMO_DELAY_MS)).await;
     if MEDIA_H264_BOOT_PROBE_PLAYBACK_ENABLED {
-        h264_keyframe_playback_probe().await;
+        h264_i_p_playback_probe().await;
         return;
     }
 
@@ -879,20 +879,20 @@ struct H264BootNal {
     nal_type: u8,
 }
 
-async fn h264_keyframe_playback_probe() {
+async fn h264_i_p_playback_probe() {
     let mut offset = 0usize;
     let mut nal_count = 0usize;
     let mut idr_seen = 0usize;
-    let mut idr_submitted = 0usize;
-    let mut non_idr_slices = 0usize;
-    let mut skipped_idr_missing_headers = 0usize;
+    let mut p_seen = 0usize;
+    let mut submitted = 0usize;
+    let mut skipped_missing_headers = 0usize;
     let mut last_sps = None;
     let mut last_pps = None;
 
     crate::log!(
-        "intel/hw_vid: h264-playback-probe start bytes={} max_idr={} frame_ms={} subset=idr-only source=x31-annexb\n",
+        "intel/hw_vid: h264-playback-probe start bytes={} max_frames={} frame_ms={} subset=idr-plus-p source=x31-annexb\n",
         MEDIA_H264_BOOT_PROBE_STREAM.len(),
-        MEDIA_H264_BOOT_PROBE_PLAYBACK_MAX_IDR,
+        MEDIA_H264_BOOT_PROBE_PLAYBACK_MAX_FRAMES,
         MEDIA_H264_BOOT_PROBE_PLAYBACK_FRAME_MS
     );
 
@@ -903,10 +903,14 @@ async fn h264_keyframe_playback_probe() {
         match nal.nal_type {
             7 => last_sps = Some(nal),
             8 => last_pps = Some(nal),
-            5 => {
-                idr_seen += 1;
+            1 | 5 => {
+                if nal.nal_type == 5 {
+                    idr_seen += 1;
+                } else {
+                    p_seen += 1;
+                }
                 let (Some(sps), Some(pps)) = (last_sps, last_pps) else {
-                    skipped_idr_missing_headers += 1;
+                    skipped_missing_headers += 1;
                     continue;
                 };
                 let mut frame =
@@ -915,30 +919,29 @@ async fn h264_keyframe_playback_probe() {
                 h264_push_nal(&mut frame, MEDIA_H264_BOOT_PROBE_STREAM, pps);
                 h264_push_nal(&mut frame, MEDIA_H264_BOOT_PROBE_STREAM, nal);
 
-                idr_submitted += 1;
-                let _ = h264_submit_wait_present_probe_frame(idr_submitted, idr_seen, &frame).await;
+                submitted += 1;
+                let _ = h264_submit_wait_present_probe_frame(submitted, idr_seen, &frame).await;
                 Timer::after(EmbassyDuration::from_millis(MEDIA_H264_BOOT_PROBE_PLAYBACK_FRAME_MS))
                     .await;
 
-                if idr_submitted >= MEDIA_H264_BOOT_PROBE_PLAYBACK_MAX_IDR {
+                if submitted >= MEDIA_H264_BOOT_PROBE_PLAYBACK_MAX_FRAMES {
                     break;
                 }
             }
-            1 => non_idr_slices += 1,
             _ => {}
         }
     }
 
     crate::log!(
-        "intel/hw_vid: h264-playback-probe done nals={} idr_seen={} idr_submitted={} non_idr_slices_skipped={} idr_missing_headers={} stopped_at=0x{:X} reason={}\n",
+        "intel/hw_vid: h264-playback-probe done nals={} idr_seen={} p_seen={} submitted={} missing_headers={} stopped_at=0x{:X} reason={}\n",
         nal_count,
         idr_seen,
-        idr_submitted,
-        non_idr_slices,
-        skipped_idr_missing_headers,
+        p_seen,
+        submitted,
+        skipped_missing_headers,
         offset,
-        if idr_submitted >= MEDIA_H264_BOOT_PROBE_PLAYBACK_MAX_IDR {
-            "max-idr"
+        if submitted >= MEDIA_H264_BOOT_PROBE_PLAYBACK_MAX_FRAMES {
+            "max-frames"
         } else {
             "eos"
         }
