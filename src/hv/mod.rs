@@ -728,6 +728,15 @@ fn start_with_mode(
         return Err(StartError::MissingGuestModule);
     }
 
+    let is_blueprint_start = pending_blueprint.is_some();
+    if is_blueprint_start {
+        memory::clear_restore_meta_for_vm(vm_id);
+        hvlogf(format_args!(
+            "hv: vm{} lifecycle: fresh blueprint start disarmed restore metadata",
+            vm_id
+        ));
+    }
+
     let requested_stack_mb = stack_mb.unwrap_or(memory::guest_stack_default_mb());
     let active_stack_mb = memory::clamp_guest_stack_mb(requested_stack_mb);
     if memory::prepare_guest_stack_mb_for_vm(vm_id, active_stack_mb).is_err() {
@@ -1932,6 +1941,14 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
     vm.stop_req.store(false, Ordering::Release);
     vm.preserve_req.store(false, Ordering::Release);
     vm.preserve_exit.store(false, Ordering::Release);
+    let mio_closed = crate::mio_compat::close_sockets_for_vm(vm_id);
+    let cabi_closed = crate::r::net::socket_cabi::close_sockets_for_vm(vm_id);
+    if mio_closed != 0 || cabi_closed != 0 {
+        hvlogf(format_args!(
+            "hv: vm{} lifecycle: net cleanup mio={} socket_cabi={}",
+            vm_id, mio_closed, cabi_closed
+        ));
+    }
     clear_blueprint_pending_launch(vm_id);
     let _ = take_blueprint_launch(vm_id);
     clear_blueprint_process_context(vm_id);

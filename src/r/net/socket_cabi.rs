@@ -1,6 +1,9 @@
 extern crate alloc;
 
-use alloc::collections::{BTreeMap, VecDeque};
+use alloc::{
+    collections::{BTreeMap, VecDeque},
+    vec::Vec,
+};
 use core::slice;
 
 use spin::Mutex;
@@ -415,6 +418,30 @@ pub(crate) fn socket_tcp_close_host(socket_id: u32) -> i32 {
     drop(sockets);
     close_socket_state(&mut socket);
     0
+}
+
+pub(crate) fn close_sockets_for_vm(vm_id: u8) -> usize {
+    let mut sockets = SOCKETS.lock();
+    let socket_ids: Vec<u32> = sockets
+        .iter()
+        .filter_map(|(id, socket)| (socket.owner_vm == Some(vm_id)).then_some(*id))
+        .collect();
+    let mut closed = Vec::new();
+    for socket_id in socket_ids {
+        if let Some(socket) = sockets.remove(&socket_id) {
+            closed.push(socket);
+        }
+    }
+    drop(sockets);
+
+    let count = closed.len();
+    for mut socket in closed {
+        close_socket_state(&mut socket);
+    }
+    if count != 0 {
+        crate::log!("socket-cabi: closed vm{} sockets count={}\n", vm_id, count);
+    }
+    count
 }
 
 pub(crate) fn socket_tcp_set_nonblocking_host(socket_id: u32, nonblocking: u32) -> i32 {

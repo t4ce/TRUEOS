@@ -683,19 +683,38 @@ fn prepare_guest_hull_rw_backing_for_vm(
         return Ok(None);
     }
 
-    {
-        let backing = *GUEST_HULL_RW_BACKINGS[idx].lock();
-        if backing.arena.is_some() {
-            return Ok(Some(backing));
-        }
-    }
-
     let template = prepare_guest_hull_rw_template(layout)?;
     let Some(template_arena) = template.arena else {
         return Ok(None);
     };
     let guest_start = template.guest_start;
     let bytes = template.active_bytes;
+    {
+        let backing = *GUEST_HULL_RW_BACKINGS[idx].lock();
+        if let Some(arena) = backing.arena
+            && backing.guest_start == guest_start
+            && backing.active_bytes == bytes
+        {
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    template_arena.virt_start as *const u8,
+                    arena.virt_start as *mut u8,
+                    bytes,
+                );
+            }
+            patch_guest_hull_rw_dynamic_state(vm_id, arena.virt_start, guest_start, bytes);
+            hvlogf(format_args!(
+                "hv: vm{} reporting: hull rw private refreshed guest=0x{:016X}..0x{:016X} phys=0x{:016X} bytes={}",
+                vm_id,
+                guest_start,
+                guest_start.saturating_add(bytes as u64),
+                arena.phys_start,
+                bytes
+            ));
+            return Ok(Some(backing));
+        }
+    }
+
     let arena = crate::phys::reserve_heap_arena(bytes, PAGE_SIZE_4K).ok_or("hull rw alloc")?;
     unsafe {
         core::ptr::copy_nonoverlapping(
@@ -704,32 +723,7 @@ fn prepare_guest_hull_rw_backing_for_vm(
             bytes,
         );
     }
-    patch_guest_hull_rw_u8(
-        arena.virt_start,
-        guest_start,
-        bytes,
-        crate::hv::current_vm_lapic_low_tag_addr(),
-        vm_id.saturating_add(1),
-    );
-    hvlogf(format_args!(
-        "hv: vm{} reporting: hull rw shared hv-guest-allocator-state spans={}",
-        vm_id,
-        crate::allocators::hv_guest_allocator_state_spans().len()
-    ));
-    if crate::hv::blueprint_launch_active(vm_id) {
-        let (guest_addr, len) = crate::hv::blueprint_launch_states_span();
-        patch_guest_hull_rw_bytes(arena.virt_start, guest_start, bytes, guest_addr, len);
-        hvlogf(format_args!(
-            "hv: vm{} reporting: hull rw patched blueprint-launch-state bytes={} guest=0x{:016X}",
-            vm_id, len, guest_addr
-        ));
-        let (guest_addr, len) = crate::hv::blueprint_process_contexts_span();
-        patch_guest_hull_rw_bytes(arena.virt_start, guest_start, bytes, guest_addr, len);
-        hvlogf(format_args!(
-            "hv: vm{} reporting: hull rw patched blueprint-process-context bytes={} guest=0x{:016X}",
-            vm_id, len, guest_addr
-        ));
-    }
+    patch_guest_hull_rw_dynamic_state(vm_id, arena.virt_start, guest_start, bytes);
 
     let backing = GuestHullRwBacking {
         arena: Some(arena),
@@ -746,6 +740,35 @@ fn prepare_guest_hull_rw_backing_for_vm(
         bytes
     ));
     Ok(Some(backing))
+}
+
+fn patch_guest_hull_rw_dynamic_state(vm_id: u8, arena_virt: usize, guest_start: u64, bytes: usize) {
+    patch_guest_hull_rw_u8(
+        arena_virt,
+        guest_start,
+        bytes,
+        crate::hv::current_vm_lapic_low_tag_addr(),
+        vm_id.saturating_add(1),
+    );
+    hvlogf(format_args!(
+        "hv: vm{} reporting: hull rw shared hv-guest-allocator-state spans={}",
+        vm_id,
+        crate::allocators::hv_guest_allocator_state_spans().len()
+    ));
+    if crate::hv::blueprint_launch_active(vm_id) {
+        let (guest_addr, len) = crate::hv::blueprint_launch_states_span();
+        patch_guest_hull_rw_bytes(arena_virt, guest_start, bytes, guest_addr, len);
+        hvlogf(format_args!(
+            "hv: vm{} reporting: hull rw patched blueprint-launch-state bytes={} guest=0x{:016X}",
+            vm_id, len, guest_addr
+        ));
+        let (guest_addr, len) = crate::hv::blueprint_process_contexts_span();
+        patch_guest_hull_rw_bytes(arena_virt, guest_start, bytes, guest_addr, len);
+        hvlogf(format_args!(
+            "hv: vm{} reporting: hull rw patched blueprint-process-context bytes={} guest=0x{:016X}",
+            vm_id, len, guest_addr
+        ));
+    }
 }
 
 fn patch_guest_hull_rw_u8(
@@ -1299,6 +1322,12 @@ pub fn build_guest_cr3_for_vm_with_mode(
 
 pub fn active_restore_meta(vm_id: u8) -> Option<VmSnapshotMeta> {
     vm_restore_meta_lock(vm_id).and_then(|meta| *meta.lock())
+}
+
+pub fn clear_restore_meta_for_vm(vm_id: u8) {
+    if let Some(meta) = vm_restore_meta_lock(vm_id) {
+        *meta.lock() = None;
+    }
 }
 
 pub fn current_guest_cr3_pa() -> Result<u64, &'static str> {

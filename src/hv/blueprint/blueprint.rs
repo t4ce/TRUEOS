@@ -27,6 +27,8 @@ const R_X86_64_PC32: u32 = 2;
 const R_X86_64_PLT32: u32 = 4;
 const R_X86_64_GOTPCREL: u32 = 9;
 const R_X86_64_32S: u32 = 11;
+const R_X86_64_GOTPCRELX: u32 = 41;
+const R_X86_64_REX_GOTPCRELX: u32 = 42;
 const IMPORT_THUNK_ALIGN: usize = 16;
 const IMPORT_THUNK_SIZE: usize = 16;
 
@@ -763,7 +765,17 @@ fn abbreviate_symbol_name(name: &str) -> String {
     alloc::format!("{}..{}", &name[..HEAD], &name[name.len() - TAIL..])
 }
 
-fn collect_gotpc_rel_symbols(bytes: &[u8], sections: &[ElfSection]) -> Result<Vec<usize>, String> {
+fn is_gotpc_rel_relocation(r_type: u32) -> bool {
+    matches!(
+        r_type,
+        R_X86_64_GOTPCREL | R_X86_64_GOTPCRELX | R_X86_64_REX_GOTPCRELX
+    )
+}
+
+fn collect_gotpc_rel_symbols(
+    bytes: &[u8],
+    sections: &[ElfSection],
+) -> Result<Vec<usize>, String> {
     let mut symbols = BTreeMap::new();
     for section in sections.iter() {
         if section.section_type != SHT_RELA {
@@ -784,7 +796,7 @@ fn collect_gotpc_rel_symbols(bytes: &[u8], sections: &[ElfSection]) -> Result<Ve
         for chunk in rela.chunks_exact(ELF64_RELA_LEN) {
             let r_info =
                 le_u64(chunk, 8).ok_or_else(|| String::from("ELF relocation truncated"))?;
-            if r_info as u32 == R_X86_64_GOTPCREL {
+            if is_gotpc_rel_relocation(r_info as u32) {
                 symbols.insert((r_info >> 32) as usize, ());
             }
         }
@@ -1059,7 +1071,7 @@ fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, String> {
                             .map_err(|_| String::from("R_X86_64_PC32 out of range"))?;
                         (place as *mut i32).write_unaligned(value_i32);
                     }
-                    R_X86_64_GOTPCREL => {
+                    R_X86_64_GOTPCREL | R_X86_64_GOTPCRELX | R_X86_64_REX_GOTPCRELX => {
                         let got_entry = *synthetic_got_entries
                             .get(&r_sym)
                             .ok_or_else(|| String::from("R_X86_64_GOTPCREL missing GOT entry"))?
@@ -1291,18 +1303,6 @@ fn resolve_known_import(name: &str) -> Option<usize> {
         "memset" => Some(trueos_qjs::trueos_shims::memset as *const () as usize),
         "memcmp" => Some(trueos_qjs::trueos_shims::memcmp as *const () as usize),
         "strlen" => Some(trueos_qjs::trueos_shims::strlen as *const () as usize),
-        "__memcpy_chk" => Some(crate::std_abi_shim::__memcpy_chk as *const () as usize),
-        "__memmove_chk" => Some(crate::std_abi_shim::__memmove_chk as *const () as usize),
-        "__memset_chk" => Some(crate::std_abi_shim::__memset_chk as *const () as usize),
-        "memchr" => Some(crate::std_abi_shim::memchr as *const () as usize),
-        "strcmp" => Some(crate::std_abi_shim::strcmp as *const () as usize),
-        "strncmp" => Some(crate::std_abi_shim::strncmp as *const () as usize),
-        "strchr" => Some(crate::std_abi_shim::strchr as *const () as usize),
-        "strrchr" => Some(crate::std_abi_shim::strrchr as *const () as usize),
-        "strspn" => Some(crate::std_abi_shim::strspn as *const () as usize),
-        "strcspn" => Some(crate::std_abi_shim::strcspn as *const () as usize),
-        "qsort" => Some(crate::std_abi_shim::qsort as *const () as usize),
-        "log" => Some(crate::std_abi_shim::log as *const () as usize),
         "sinf" => Some(trueos_math::sinf as *const () as usize),
         "cosf" => Some(trueos_math::cosf as *const () as usize),
         "acosf" => Some(trueos_math::acosf as *const () as usize),
@@ -1333,7 +1333,9 @@ fn resolve_known_import(name: &str) -> Option<usize> {
         | "_RNvCs2csqI13tepL_7___rustc19___rust_alloc_zeroed" => {
             Some(portal_rust_alloc_zeroed as *const () as usize)
         }
-        _ => resolve_std_abi_import(name).or_else(|| resolve_cabi_import(name)),
+        _ => resolve_runtime_abi_import(name)
+            .or_else(|| resolve_cabi_import(name))
+            .or_else(|| crate::unix_compat::resolve_import(name)),
     }
 }
 
@@ -1342,22 +1344,20 @@ fn resolve_import(name: &str) -> Option<usize> {
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-fn resolve_std_abi_import(name: &str) -> Option<usize> {
+fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
+    if crate::unix_compat::is_unix_import(name) {
+        return None;
+    }
     match name {
         "sys_alloc_words" => Some(crate::std_abi_shim::sys_alloc_words as *const () as usize),
         "sys_alloc_aligned" => Some(crate::std_abi_shim::sys_alloc_aligned as *const () as usize),
         "sys_rand" => Some(crate::std_abi_shim::sys_rand as *const () as usize),
         "sys_write" => Some(crate::std_abi_shim::sys_write as *const () as usize),
-        "read" => Some(crate::std_abi_shim::read as *const () as usize),
-        "readv" => Some(crate::std_abi_shim::readv as *const () as usize),
-        "write" => Some(crate::std_abi_shim::write as *const () as usize),
-        "writev" => Some(crate::std_abi_shim::writev as *const () as usize),
         "trueos_internal_log_write" => {
             Some(crate::std_abi_shim::trueos_internal_log_write as *const () as usize)
         }
         "sys_read" => Some(crate::std_abi_shim::sys_read as *const () as usize),
         "sys_getenv" => Some(crate::std_abi_shim::sys_getenv as *const () as usize),
-        "getenv" => Some(crate::r::io::env::getenv as *const () as usize),
         "sys_argc" => Some(crate::std_abi_shim::sys_argc as *const () as usize),
         "sys_argv" => Some(crate::std_abi_shim::sys_argv as *const () as usize),
         "sys_output" => Some(crate::std_abi_shim::sys_output as *const () as usize),
@@ -1369,150 +1369,8 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "sys_halt" => Some(crate::std_abi_shim::sys_halt as *const () as usize),
         "exit" => Some(crate::std_abi_shim::exit as *const () as usize),
         "abort" => Some(trueos_qjs::trueos_shims::abort as *const () as usize),
-        "__stack_chk_fail" => Some(crate::std_abi_shim::__stack_chk_fail as *const () as usize),
-        "errno_location" => Some(crate::std_abi_shim::errno_location as *const () as usize),
-        "__errno_location" => Some(crate::std_abi_shim::__errno_location as *const () as usize),
-        "__errno" => Some(crate::std_abi_shim::__errno as *const () as usize),
-        "strerror_r" => Some(crate::std_abi_shim::strerror_r as *const () as usize),
-        "__xpg_strerror_r" => Some(crate::std_abi_shim::__xpg_strerror_r as *const () as usize),
-        "malloc" => Some(crate::std_abi_shim::malloc as *const () as usize),
-        "calloc" => Some(crate::std_abi_shim::calloc as *const () as usize),
-        "realloc" => Some(crate::std_abi_shim::realloc as *const () as usize),
-        "free" => Some(crate::std_abi_shim::free as *const () as usize),
-        "open" => Some(crate::std_abi_shim::open as *const () as usize),
-        "open64" => Some(crate::std_abi_shim::open64 as *const () as usize),
-        "close" => Some(crate::std_abi_shim::close as *const () as usize),
-        "lseek" => Some(crate::std_abi_shim::lseek as *const () as usize),
-        "pread64" => Some(crate::std_abi_shim::pread64 as *const () as usize),
-        "pwrite64" => Some(crate::std_abi_shim::pwrite64 as *const () as usize),
-        "fsync" => Some(crate::std_abi_shim::fsync as *const () as usize),
-        "ftruncate64" => Some(crate::std_abi_shim::ftruncate64 as *const () as usize),
-        "fstat" => Some(crate::std_abi_shim::fstat as *const () as usize),
-        "fstat64" => Some(crate::std_abi_shim::fstat64 as *const () as usize),
-        "stat" => Some(crate::std_abi_shim::stat as *const () as usize),
-        "stat64" => Some(crate::std_abi_shim::stat64 as *const () as usize),
-        "lstat" => Some(crate::std_abi_shim::lstat as *const () as usize),
-        "lstat64" => Some(crate::std_abi_shim::lstat64 as *const () as usize),
-        "opendir" => Some(crate::std_abi_shim::opendir as *const () as usize),
-        "readdir" => Some(crate::std_abi_shim::readdir as *const () as usize),
-        "readdir_r" => Some(crate::std_abi_shim::readdir_r as *const () as usize),
-        "closedir" => Some(crate::std_abi_shim::closedir as *const () as usize),
-        "dirfd" => Some(crate::std_abi_shim::dirfd as *const () as usize),
-        "mkdir" => Some(crate::std_abi_shim::mkdir as *const () as usize),
-        "unlink" => Some(crate::std_abi_shim::unlink as *const () as usize),
-        "rmdir" => Some(crate::std_abi_shim::rmdir as *const () as usize),
-        "access" => Some(crate::std_abi_shim::access as *const () as usize),
-        "fchmod" => Some(crate::std_abi_shim::fchmod as *const () as usize),
-        "fchown" => Some(crate::std_abi_shim::fchown as *const () as usize),
-        "utimes" => Some(crate::std_abi_shim::utimes as *const () as usize),
-        "readlink" => Some(crate::std_abi_shim::readlink as *const () as usize),
-        "realpath" => Some(crate::std_abi_shim::realpath as *const () as usize),
-        "mmap64" => Some(crate::std_abi_shim::mmap64 as *const () as usize),
-        "mremap" => Some(crate::std_abi_shim::mremap as *const () as usize),
-        "munmap" => Some(crate::std_abi_shim::munmap as *const () as usize),
-        "dlopen" => Some(crate::std_abi_shim::dlopen as *const () as usize),
-        "dlsym" => Some(crate::std_abi_shim::dlsym as *const () as usize),
-        "dlclose" => Some(crate::std_abi_shim::dlclose as *const () as usize),
-        "dlerror" => Some(crate::std_abi_shim::dlerror as *const () as usize),
-        "getaddrinfo" => Some(crate::std_abi_shim::getaddrinfo as *const () as usize),
-        "freeaddrinfo" => Some(crate::std_abi_shim::freeaddrinfo as *const () as usize),
-        "gai_strerror" => Some(crate::std_abi_shim::gai_strerror as *const () as usize),
         "trueos_cabi_dns_resolve_ipv4" => {
             Some(crate::std_abi_shim::trueos_cabi_dns_resolve_ipv4 as *const () as usize)
-        }
-        "socket" => Some(crate::std_abi_shim::socket as *const () as usize),
-        "bind" => Some(crate::std_abi_shim::bind as *const () as usize),
-        "listen" => Some(crate::std_abi_shim::listen as *const () as usize),
-        "accept" => Some(crate::std_abi_shim::accept as *const () as usize),
-        "accept4" => Some(crate::std_abi_shim::accept4 as *const () as usize),
-        "setsockopt" => Some(crate::std_abi_shim::setsockopt as *const () as usize),
-        "getsockname" => Some(crate::std_abi_shim::getsockname as *const () as usize),
-        "getpeername" => Some(crate::std_abi_shim::getpeername as *const () as usize),
-        "fcntl" => Some(crate::std_abi_shim::fcntl as *const () as usize),
-        "fcntl64" => Some(crate::std_abi_shim::fcntl64 as *const () as usize),
-        "send" => Some(crate::std_abi_shim::send as *const () as usize),
-        "recv" => Some(crate::std_abi_shim::recv as *const () as usize),
-        "posix_memalign" => Some(crate::std_abi_shim::posix_memalign as *const () as usize),
-        "getcwd" => Some(crate::std_abi_shim::getcwd as *const () as usize),
-        "getpid" => Some(crate::std_abi_shim::getpid as *const () as usize),
-        "geteuid" => Some(crate::std_abi_shim::geteuid as *const () as usize),
-        "time" => Some(crate::std_abi_shim::time as *const () as usize),
-        "gettimeofday" => Some(crate::std_abi_shim::gettimeofday as *const () as usize),
-        "localtime_r" => Some(crate::std_abi_shim::localtime_r as *const () as usize),
-        "nanosleep" => Some(crate::std_abi_shim::nanosleep as *const () as usize),
-        "sysconf" => Some(crate::std_abi_shim::sysconf as *const () as usize),
-        "sched_yield" => Some(crate::std_abi_shim::sched_yield as *const () as usize),
-        "tcgetattr" => Some(crate::std_abi_shim::tcgetattr as *const () as usize),
-        "tcsetattr" => Some(crate::std_abi_shim::tcsetattr as *const () as usize),
-        "signal" => Some(crate::std_abi_shim::signal as *const () as usize),
-        "waitpid" => Some(crate::std_abi_shim::waitpid as *const () as usize),
-        "setuid" => Some(crate::std_abi_shim::setuid as *const () as usize),
-        "setgid" => Some(crate::std_abi_shim::setgid as *const () as usize),
-        "setgroups" => Some(crate::std_abi_shim::setgroups as *const () as usize),
-        "setsid" => Some(crate::std_abi_shim::setsid as *const () as usize),
-        "setpgid" => Some(crate::std_abi_shim::setpgid as *const () as usize),
-        "pthread_mutexattr_init" => {
-            Some(crate::std_abi_shim::pthread_mutexattr_init as *const () as usize)
-        }
-        "pthread_mutexattr_settype" => {
-            Some(crate::std_abi_shim::pthread_mutexattr_settype as *const () as usize)
-        }
-        "pthread_mutexattr_destroy" => {
-            Some(crate::std_abi_shim::pthread_mutexattr_destroy as *const () as usize)
-        }
-        "pthread_mutex_init" => Some(crate::std_abi_shim::pthread_mutex_init as *const () as usize),
-        "pthread_mutex_destroy" => {
-            Some(crate::std_abi_shim::pthread_mutex_destroy as *const () as usize)
-        }
-        "pthread_mutex_lock" => Some(crate::std_abi_shim::pthread_mutex_lock as *const () as usize),
-        "pthread_mutex_trylock" => {
-            Some(crate::std_abi_shim::pthread_mutex_trylock as *const () as usize)
-        }
-        "pthread_mutex_unlock" => {
-            Some(crate::std_abi_shim::pthread_mutex_unlock as *const () as usize)
-        }
-        "pthread_create" => Some(crate::std_abi_shim::pthread_create as *const () as usize),
-        "pthread_join" => Some(crate::std_abi_shim::pthread_join as *const () as usize),
-        "pthread_detach" => Some(crate::std_abi_shim::pthread_detach as *const () as usize),
-        "pthread_self" => Some(crate::std_abi_shim::pthread_self as *const () as usize),
-        "pthread_setname_np" => Some(crate::std_abi_shim::pthread_setname_np as *const () as usize),
-        "pthread_attr_init" => Some(crate::std_abi_shim::pthread_attr_init as *const () as usize),
-        "pthread_attr_setstacksize" => {
-            Some(crate::std_abi_shim::pthread_attr_setstacksize as *const () as usize)
-        }
-        "pthread_attr_destroy" => {
-            Some(crate::std_abi_shim::pthread_attr_destroy as *const () as usize)
-        }
-        "pthread_key_create" => Some(crate::std_abi_shim::pthread_key_create as *const () as usize),
-        "pthread_key_delete" => Some(crate::std_abi_shim::pthread_key_delete as *const () as usize),
-        "pthread_setspecific" => {
-            Some(crate::std_abi_shim::pthread_setspecific as *const () as usize)
-        }
-        "pthread_getspecific" => {
-            Some(crate::std_abi_shim::pthread_getspecific as *const () as usize)
-        }
-        "pthread_cond_init" => Some(crate::std_abi_shim::pthread_cond_init as *const () as usize),
-        "pthread_condattr_init" => {
-            Some(crate::std_abi_shim::pthread_condattr_init as *const () as usize)
-        }
-        "pthread_condattr_setclock" => {
-            Some(crate::std_abi_shim::pthread_condattr_setclock as *const () as usize)
-        }
-        "pthread_condattr_destroy" => {
-            Some(crate::std_abi_shim::pthread_condattr_destroy as *const () as usize)
-        }
-        "pthread_cond_destroy" => {
-            Some(crate::std_abi_shim::pthread_cond_destroy as *const () as usize)
-        }
-        "pthread_cond_wait" => Some(crate::std_abi_shim::pthread_cond_wait as *const () as usize),
-        "pthread_cond_timedwait" => {
-            Some(crate::std_abi_shim::pthread_cond_timedwait as *const () as usize)
-        }
-        "pthread_cond_signal" => {
-            Some(crate::std_abi_shim::pthread_cond_signal as *const () as usize)
-        }
-        "pthread_cond_broadcast" => {
-            Some(crate::std_abi_shim::pthread_cond_broadcast as *const () as usize)
         }
         "trueos_platform_monotonic_nanos" => {
             Some(crate::r::platform::trueos_platform_monotonic_nanos as *const () as usize)
@@ -1541,7 +1399,6 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "trueos_time_unix_seconds" => {
             Some(crate::std_abi_shim::trueos_time_unix_seconds as *const () as usize)
         }
-        "clock_gettime" => Some(trueos_qjs::trueos_shims::clock_gettime as *const () as usize),
         "trueos_tokio_platform_log_semantic_gap" => {
             Some(crate::r::platform::trueos_tokio_platform_log_semantic_gap as *const () as usize)
         }
@@ -1628,7 +1485,7 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
 }
 
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-fn resolve_std_abi_import(_name: &str) -> Option<usize> {
+fn resolve_runtime_abi_import(_name: &str) -> Option<usize> {
     None
 }
 
