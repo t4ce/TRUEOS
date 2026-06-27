@@ -44,13 +44,8 @@ LIMINE_SOURCE_STAMP := $(LIMINE_DIST)/.source_stamp
 LIMINE_CONFIG_STAMP := $(LIMINE_BUILD_DIR)/.config_args
 LIMINE_TOOLCHAIN_STAMP := $(LIMINE_BUILD_DIR)/.toolchain_args
 LIMINE_INSTALL_STAMP := $(LIMINE_BUILD_DIR)/.installed
-# Upstream i915 maps ADL-S/RKL GuC and HuC firmware selection to TGL blobs.
-GUC_FW_HOST_PATH ?= /lib/firmware/i915/tgl_guc_70.bin.zst
-GUC_FW_ISO_REL_PATH ?= EFI/BOOT/tgl_guc_70.bin
 DMC_FW_HOST_PATH ?= /lib/firmware/i915/adls_dmc_ver2_01.bin.zst
 DMC_FW_ISO_REL_PATH ?= EFI/BOOT/adls_dmc_ver2_01.bin
-HUC_FW_HOST_PATH ?= /lib/firmware/i915/tgl_huc.bin.zst
-HUC_FW_ISO_REL_PATH ?= EFI/BOOT/tgl_huc.bin
 HORIZON_BP_HOST_PATH ?= ../TRUEOS-Blueprints/dist/horizon.bp
 HORIZON_BP_ISO_REL_PATH ?= EFI/BOOT/apps/horizon.bp
 ENABLE_BLUEPRINTS ?= 0
@@ -186,21 +181,7 @@ iso: artifacts images limine
 	mkdir -p $(ISO_BOOT_DIR)
 	cp $(ARTIFACT_RUNTIME_ELF) $(ISO_BOOT_DIR)/TRUEOS.elf
 	mkdir -p $(ISO_DIR)/EFI/BOOT
-	rm -f $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin $(ISO_DIR)/EFI/BOOT/tgl_guc_70.bin
 	cp $(LIMINE_BOOTX64) $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
-	@if [ ! -f "$(GUC_FW_HOST_PATH)" ]; then \
-		echo "error: GUC firmware not found at $(GUC_FW_HOST_PATH)"; \
-		exit 1; \
-	fi
-	@case "$(GUC_FW_HOST_PATH)" in \
-		*.zst) \
-			command -v zstd >/dev/null 2>&1 || { echo "error: zstd command not found; cannot decompress $(GUC_FW_HOST_PATH)"; exit 1; }; \
-			zstd -d -c "$(GUC_FW_HOST_PATH)" > "$(ISO_DIR)/EFI/BOOT/$$(basename "$(GUC_FW_ISO_REL_PATH)")"; \
-			;; \
-		*) \
-			cp "$(GUC_FW_HOST_PATH)" "$(ISO_DIR)/EFI/BOOT/$$(basename "$(GUC_FW_ISO_REL_PATH)")"; \
-			;; \
-	esac
 	@if [ -f "$(DMC_FW_HOST_PATH)" ]; then \
 		case "$(DMC_FW_HOST_PATH)" in \
 			*.zst) zstd -d -c "$(DMC_FW_HOST_PATH)" > "$(ISO_DIR)/EFI/BOOT/$$(basename "$(DMC_FW_ISO_REL_PATH)")" ;; \
@@ -209,23 +190,9 @@ iso: artifacts images limine
 	else \
 		echo "iso: skipping DMC firmware probe artifact, missing $(DMC_FW_HOST_PATH)"; \
 	fi
-	@if [ -f "$(HUC_FW_HOST_PATH)" ]; then \
-		case "$(HUC_FW_HOST_PATH)" in \
-			*.zst) zstd -d -c "$(HUC_FW_HOST_PATH)" > "$(ISO_DIR)/EFI/BOOT/$$(basename "$(HUC_FW_ISO_REL_PATH)")" ;; \
-			*) cp "$(HUC_FW_HOST_PATH)" "$(ISO_DIR)/EFI/BOOT/$$(basename "$(HUC_FW_ISO_REL_PATH)")" ;; \
-		esac; \
-	else \
-		echo "iso: skipping HuC firmware probe artifact, missing $(HUC_FW_HOST_PATH)"; \
-	fi
-	mkdir -p $(ISO_BOOT_DIR)/$(dir $(GUC_FW_ISO_REL_PATH))
-	cp "$(ISO_DIR)/EFI/BOOT/$$(basename "$(GUC_FW_ISO_REL_PATH)")" "$(ISO_BOOT_DIR)/$(GUC_FW_ISO_REL_PATH)"
 	@if [ -f "$(ISO_DIR)/EFI/BOOT/$$(basename "$(DMC_FW_ISO_REL_PATH)")" ]; then \
 		mkdir -p $(ISO_BOOT_DIR)/$(dir $(DMC_FW_ISO_REL_PATH)); \
 		cp "$(ISO_DIR)/EFI/BOOT/$$(basename "$(DMC_FW_ISO_REL_PATH)")" "$(ISO_BOOT_DIR)/$(DMC_FW_ISO_REL_PATH)"; \
-	fi
-	@if [ -f "$(ISO_DIR)/EFI/BOOT/$$(basename "$(HUC_FW_ISO_REL_PATH)")" ]; then \
-		mkdir -p $(ISO_BOOT_DIR)/$(dir $(HUC_FW_ISO_REL_PATH)); \
-		cp "$(ISO_DIR)/EFI/BOOT/$$(basename "$(HUC_FW_ISO_REL_PATH)")" "$(ISO_BOOT_DIR)/$(HUC_FW_ISO_REL_PATH)"; \
 	fi
 	@if [ "$(ENABLE_BLUEPRINTS)" = "1" ]; then \
 		if [ ! -f "$(HORIZON_BP_HOST_PATH)" ]; then \
@@ -247,12 +214,6 @@ iso: artifacts images limine
 			"module_string: trueos.fw.dmc" \
 			>> "$(LIMINE_CFG_GENERATED)"; \
 	fi
-	@if [ -f "$(ISO_BOOT_DIR)/$(HUC_FW_ISO_REL_PATH)" ]; then \
-		printf '%s\n%s\n' \
-			"module_path: boot():/$(HUC_FW_ISO_REL_PATH)" \
-			"module_string: trueos.fw.huc.tgl" \
-			>> "$(LIMINE_CFG_GENERATED)"; \
-	fi
 	printf '%s\n%s\n' \
 		"module_path: boot():/$(ISO_EFI_IMG)" \
 		"module_string: trueos.install.efi_img" \
@@ -262,10 +223,6 @@ iso: artifacts images limine
 			"module_path: boot():/$(HORIZON_BP_ISO_REL_PATH)" \
 			"module_string: trueos.app.horizon" \
 			>> "$(LIMINE_CFG_GENERATED)"; \
-	fi
-	@if [ "$(GUC_FW_ISO_REL_PATH)" != "EFI/BOOT/tgl_guc_70.bin" ]; then \
-		mkdir -p $(ISO_BOOT_DIR)/EFI/BOOT; \
-		cp "$(ISO_DIR)/EFI/BOOT/$$(basename "$(GUC_FW_ISO_REL_PATH)")" "$(ISO_BOOT_DIR)/EFI/BOOT/tgl_guc_70.bin"; \
 	fi
 	cp $(LIMINE_CFG_GENERATED) $(ISO_BOOT_DIR)/limine.conf
 	cp $(LIMINE_CFG_GENERATED) $(ISO_DIR)/EFI/BOOT/limine.conf

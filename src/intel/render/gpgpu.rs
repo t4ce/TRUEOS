@@ -120,7 +120,7 @@ pub(crate) fn gpgpu_preflight_status() -> GpgpuPreflightStatus {
         submitted: GPGPU_PREFLIGHT_SUBMITTED.load(Ordering::Acquire),
         accepted: GPGPU_PREFLIGHT_ACCEPTED.load(Ordering::Acquire),
         completed: GPGPU_PREFLIGHT_COMPLETED.load(Ordering::Acquire),
-        guc_ready: crate::intel::guc_ready(),
+        guc_ready: false,
         marker: GPGPU_PREFLIGHT_MARKER.load(Ordering::Acquire),
         dot: GPGPU_PREFLIGHT_DOT.load(Ordering::Acquire),
         sum_a: GPGPU_PREFLIGHT_SUM_A.load(Ordering::Acquire),
@@ -195,7 +195,6 @@ pub(crate) fn submit_gpgpu_preflight_once() {
     }
     let arena_mapped = ensure_gpgpu_tile_arena_mapped(dev, warm);
     log_gpgpu_tile_arena_status(warm, arena_mapped);
-    crate::intel::log_guc_submission_contract(dev, "gpgpu-preflight");
     let accepted = submit_gpgpu_preflight(dev, warm);
     if !accepted {
         recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-preflight");
@@ -357,7 +356,6 @@ fn submit_gpgpu_preflight(dev: crate::intel::Dev, warm: RenderWarmState) -> bool
     let gpu_sum_a = read_result_dword(warm, RESULT_SLOT_GPGPU_PREFLIGHT_SUM_A_DWORD);
     let gpu_sum_b = read_result_dword(warm, RESULT_SLOT_GPGPU_PREFLIGHT_SUM_B_DWORD);
     let gpu_lanes = read_result_dword(warm, RESULT_SLOT_GPGPU_PREFLIGHT_LANES_DWORD);
-    let guc_status = crate::intel::guc_status(warm);
     let accepted = completed
         && marker == RCS_EXEC_RESULT_GPGPU_PREFLIGHT_DONE
         && gpu_dot == dot
@@ -373,7 +371,7 @@ fn submit_gpgpu_preflight(dev: crate::intel::Dev, warm: RenderWarmState) -> bool
     GPGPU_PREFLIGHT_LANES_OBSERVED.store(gpu_lanes, Ordering::Release);
 
     crate::log!(
-        "intel/gpgpu: preflight-readback accepted={} completed={} result_gpu=0x{:X} marker_slot={} marker_expected=0x{:08X} marker_observed=0x{:08X} dot_slot={} dot_expected={} dot_observed={} sum_a_slot={} sum_a_expected={} sum_a_observed={} sum_b_slot={} sum_b_expected={} sum_b_observed={} lanes_slot={} lanes_expected={} lanes_observed={} batch_bytes=0x{:X} does_not_prove=eu_thread_execution_or_matmul_or_guc_scheduling\n",
+        "intel/gpgpu: preflight-readback accepted={} completed={} result_gpu=0x{:X} marker_slot={} marker_expected=0x{:08X} marker_observed=0x{:08X} dot_slot={} dot_expected={} dot_observed={} sum_a_slot={} sum_a_expected={} sum_a_observed={} sum_b_slot={} sum_b_expected={} sum_b_observed={} lanes_slot={} lanes_expected={} lanes_observed={} batch_bytes=0x{:X} does_not_prove=eu_thread_execution_or_matmul\n",
         accepted as u8,
         completed as u8,
         GPU_VA_RESULT_BASE,
@@ -396,11 +394,9 @@ fn submit_gpgpu_preflight(dev: crate::intel::Dev, warm: RenderWarmState) -> bool
     );
 
     crate::log!(
-        "intel/gpgpu: preflight accepted={} completed={} backend=rcs-mi-store-constants guc_ready={} guc_status=0x{:08X} lanes={} marker=0x{:08X} dot={} sum_a={} sum_b={} batch_bytes=0x{:X} input_a_gpu=0x{:X} input_b_gpu=0x{:X} result_gpu=0x{:X} next=eu-kernel-dispatch does_not_prove=eu_thread_execution_or_matmul_or_guc_scheduling\n",
+        "intel/gpgpu: preflight accepted={} completed={} backend=rcs-mi-store-constants submission=direct-execlist uc_fw_disabled=1 lanes={} marker=0x{:08X} dot={} sum_a={} sum_b={} batch_bytes=0x{:X} input_a_gpu=0x{:X} input_b_gpu=0x{:X} result_gpu=0x{:X} next=eu-kernel-dispatch does_not_prove=eu_thread_execution_or_matmul\n",
         accepted as u8,
         completed as u8,
-        crate::intel::guc_ready() as u8,
-        guc_status,
         gpu_lanes,
         marker,
         gpu_dot,

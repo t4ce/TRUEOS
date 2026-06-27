@@ -6,12 +6,8 @@ mod blt;
 mod display;
 mod dmc;
 pub(crate) mod format;
-mod fw_probe;
 pub(crate) mod gpgpu;
-mod guc;
-pub(crate) mod guc_ctb;
 pub mod hda;
-mod huc;
 mod hw_cursor;
 pub(crate) mod hw_pic;
 pub(crate) mod opencl;
@@ -33,11 +29,6 @@ use spin::Mutex;
 
 pub(crate) const INTEL_VENDOR_ID: u16 = 0x8086;
 pub(crate) const PCI_CLASS_DISPLAY: u8 = 0x03;
-pub(crate) const GPU_VA_HUC_FW_BASE: u64 = 0x0020_0000;
-pub(crate) const GPU_VA_HUC_RSA_BASE: u64 = 0x0030_0000;
-pub(crate) const GPU_VA_GUC_CTB_BASE: u64 = 0x0700_0000;
-pub(crate) const GPU_VA_GUC_FW_BASE: u64 = 0x0085_0000;
-pub(crate) const GPU_VA_GUC_ADS_BASE: u64 = 0x0100_0000;
 pub(crate) const GPU_VA_DISPLAY_PRIMARY_BASE: u64 = 0x0200_0000;
 pub(crate) const GPU_VA_DISPLAY_OVERLAY_BASE: u64 = 0x0300_0000;
 pub(crate) const GPU_VA_DISPLAY_UI2_BASE_BASE: u64 = 0x0400_0000;
@@ -62,30 +53,18 @@ const FORCEWAKE_FALLBACK: u32 = 1 << 15;
 const FORCEWAKE_POLL_ITERS: usize = 20_000;
 const GFX_FLSH_CNTL_GEN6: usize = 0x101008;
 const GFX_FLSH_CNTL_EN: u32 = 1 << 0;
-const GUC_WOPCM_OFFSET_SHIFT: u32 = 14;
-const GUC_WOPCM_SIZE_MASK: u32 = 0xFFFFF << 12;
-const GEN11_WOPCM_SIZE: u32 = 0x0020_0000;
-const WOPCM_RESERVED_SIZE: u32 = 0x0000_4000;
-const GUC_WOPCM_RESERVED_SIZE: u32 = 0x0000_4000;
-const GUC_WOPCM_STACK_RESERVED_SIZE: u32 = 0x0000_2000;
-const WOPCM_HW_CTX_RESERVED_SIZE: u32 = 0x0000_9000;
-const GUC_WOPCM_OFFSET_ALIGNMENT: u32 = 1 << GUC_WOPCM_OFFSET_SHIFT;
-pub(crate) const GS_BOOTROM_MASK: u32 = 0x7F << 1;
-pub(crate) const GS_UKERNEL_MASK: u32 = 0xFF << 8;
-pub(crate) const GS_AUTH_STATUS_MASK: u32 = 0x03 << 30;
 const DISPLAY_PLANE1_BOOT_DEMO_ENABLED: bool = true;
 const MEDIA_BOOT_DEMO_ENABLED: bool = false;
 const MEDIA_H264_BOOT_PROBE_ENABLED: bool = true;
 const MEDIA_H264_BOOT_PROBE_PLAYBACK_ENABLED: bool = true;
 const MEDIA_H264_BOOT_PROBE_PLAYBACK_MAX_FRAMES: usize = 200;
 const MEDIA_H264_BOOT_PROBE_PLAYBACK_FRAME_MS: u64 = 33;
+const MEDIA_H264_BOOT_PROBE_STREAM_LOAD_TIMEOUT_MS: u64 = 20_000;
+const MEDIA_H264_BOOT_PROBE_STREAM_LOAD_POLL_MS: u64 = 250;
 const MEDIA_H264_BOOT_PROBE_TIMEOUT_MS: u64 = 5_000;
 const MEDIA_BOOT_DEMO_DELAY_MS: u64 = 2_000;
 const MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT: u32 = 3;
-const MEDIA_H264_BOOT_PROBE_FIRST_FRAME: &[u8] =
-    include_bytes!("../../tools/vid/x31_head_movie_first_frame.h264");
-const MEDIA_H264_BOOT_PROBE_STREAM: &[u8] =
-    include_bytes!("../../tools/vid/x31_head_movie.annexb.h264");
+const MEDIA_H264_BOOT_PROBE_STREAM_PATH: &str = "x31_head_movie.annexb.h264";
 const PCI_DEVICE_ALDER_LAKE_S_GT1: u16 = 0x4680;
 const PCI_DEVICE_ALDER_LAKE_N_N100_UHD: u16 = 0x46D1;
 const PCI_DEVICE_RAPTOR_LAKE_S_GT1_UHD770: u16 = 0xA780;
@@ -266,90 +245,13 @@ pub fn init_once() {
     }
     if full_ui3_boot {
         let _ = self::blt::submit_bcs0_mi_smoke_once();
-        self::fw_probe::log_probe_modules(dev.device_id);
         self::dmc::wire_load_path(dev);
-        let huc_fw = self::huc::load_fw();
-        let fw = self::guc::load_fw();
-        if fw.len == 0 {
-            crate::log!(
-                "intel/guc: firmware module missing or invalid; continuing to display bring-up\n"
-            );
-        } else {
-            crate::log!(
-                "intel/guc: firmware found phys=0x{:X} gpu=0x{:X} len=0x{:X} xfer=0x{:X}\n",
-                fw.phys,
-                fw.gpu,
-                fw.len,
-                fw.xfer_len
-            );
-            let ads = self::guc::alloc_ads(fw.private_data_size);
-            if ads.len == 0 {
-                crate::log!(
-                    "intel/guc: ads alloc failed private_data=0x{:X}; continuing to display bring-up\n",
-                    fw.private_data_size
-                );
-            } else {
-                let huc_mapped = huc_fw.len != 0
-                    && map_ggtt(dev, huc_fw.phys, huc_fw.len, huc_fw.gpu)
-                    && self::huc::map_rsa(dev);
-                if !map_ggtt(dev, fw.phys, fw.len, fw.gpu)
-                    || !map_ggtt(dev, ads.phys, ads.len, ads.gpu)
-                {
-                    crate::log!(
-                        "intel/guc: ggtt map failed fw_len=0x{:X} ads_len=0x{:X}; continuing to display bring-up\n",
-                        fw.len,
-                        ads.len
-                    );
-                } else {
-                    ggtt_invalidate(dev);
-                    forcewake(dev);
-                    self::guc::configure_wopcm(
-                        dev,
-                        fw,
-                        huc_fw.len != 0 && huc_mapped,
-                        "pre-huc-upload",
-                    );
-                    let huc_uploaded = if huc_fw.len != 0 {
-                        if huc_mapped {
-                            self::huc::upload_via_dma(dev, huc_fw)
-                        } else {
-                            crate::log!(
-                                "intel/huc: dma-upload skipped reason=ggtt-map-failed fw_len=0x{:X}\n",
-                                huc_fw.len
-                            );
-                            false
-                        }
-                    } else {
-                        false
-                    };
-                    let ready = self::guc::bootstrap(dev, fw, ads, huc_uploaded);
-                    let status = self::guc::status(dev);
-                    let (bootrom, ukernel, auth) = self::guc::describe_status(status);
-                    crate::log!(
-                        "intel/guc: bootstrap ready={} status=0x{:08X} bootrom={} ukernel={} auth=0x{:X}\n",
-                        ready as u8,
-                        status,
-                        bootrom,
-                        ukernel,
-                        auth
-                    );
-                    if ready {
-                        let ctb_ready = self::guc_ctb::init_and_enable(dev);
-                        if !ctb_ready {
-                            self::guc::prove_h2g_mmio_once(dev, "boot-control-ctb-disable");
-                        }
-                        if huc_uploaded {
-                            self::huc::authenticate_via_guc(dev, huc_fw);
-                        } else if huc_fw.len != 0 {
-                            crate::log!("intel/huc: auth skipped reason=dma-upload-not-complete\n");
-                        }
-                    }
-                }
-            }
-        }
+        crate::log!(
+            "intel/uc-fw: firmware bring-up skipped reason=unused-by-display-render-media path=direct-execlist-and-vdbox\n"
+        );
     } else {
         crate::log!(
-            "intel/guc: firmware/engine bring-up skipped device=0x{:04X} name={} reason=logo-only-bringup\n",
+            "intel/uc-fw: firmware bring-up skipped device=0x{:04X} name={} reason=logo-only-bringup\n",
             dev.device_id,
             display_device_name(dev.device_id)
         );
@@ -401,22 +303,6 @@ pub fn init_once() {
     } else {
         crate::log!("intel/media: boot demo disabled\n");
     }
-}
-
-pub fn guc_ready() -> bool {
-    self::guc::ready()
-}
-
-pub(crate) fn guc_h2g_mmio_accepted() -> bool {
-    self::guc::h2g_mmio_accepted()
-}
-
-pub(crate) fn guc_ctb_enabled() -> bool {
-    self::guc_ctb::enabled()
-}
-
-pub fn huc_ready() -> bool {
-    self::huc::authenticated()
 }
 
 pub fn has_claimed_device() -> bool {
@@ -566,10 +452,6 @@ pub fn rcs_draw_screen_tex_triangles(
 
 pub fn warm_state() -> Option<()> {
     None
-}
-
-pub fn guc_status(_state: ()) -> u32 {
-    0
 }
 
 pub(crate) fn clear_primary_surface_color(color: u32, reason: &str) -> bool {
@@ -864,11 +746,21 @@ pub(crate) async fn hw_vid_probe_task() {
 
     Timer::after(EmbassyDuration::from_millis(MEDIA_BOOT_DEMO_DELAY_MS)).await;
     if MEDIA_H264_BOOT_PROBE_PLAYBACK_ENABLED {
-        h264_i_p_playback_probe().await;
+        if let Some(stream) = h264_load_playback_stream().await {
+            h264_i_p_playback_probe(stream.as_slice()).await;
+        } else {
+            crate::log!(
+                "intel/hw_vid: h264-playback-probe skipped reason=stream-file-unavailable path={} action=require-trueosfs-file\n",
+                MEDIA_H264_BOOT_PROBE_STREAM_PATH
+            );
+        }
         return;
     }
 
-    let _ = h264_submit_wait_present_probe_frame(0, 0, MEDIA_H264_BOOT_PROBE_FIRST_FRAME).await;
+    crate::log!(
+        "intel/hw_vid: probe skipped reason=playback-disabled-and-no-embedded-first-frame path={}\n",
+        MEDIA_H264_BOOT_PROBE_STREAM_PATH
+    );
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -879,7 +771,61 @@ struct H264BootNal {
     nal_type: u8,
 }
 
-async fn h264_i_p_playback_probe() {
+async fn h264_load_playback_stream() -> Option<Vec<u8>> {
+    let mut waited_ms = 0u64;
+    let mut attempts = 0usize;
+    let mut last_reason = "not-tried";
+
+    loop {
+        attempts += 1;
+        if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
+            match crate::r::fs::trueosfs::file_out_async(disk, MEDIA_H264_BOOT_PROBE_STREAM_PATH)
+                .await
+            {
+                Ok(Some(bytes)) => {
+                    crate::log!(
+                        "intel/hw_vid: h264-playback-probe stream-load accepted=1 path={} bytes={} source=trueosfs-root attempts={} waited_ms={}\n",
+                        MEDIA_H264_BOOT_PROBE_STREAM_PATH,
+                        bytes.len(),
+                        attempts,
+                        waited_ms
+                    );
+                    return Some(bytes);
+                }
+                Ok(None) => last_reason = "file-missing",
+                Err(err) => {
+                    crate::log!(
+                        "intel/hw_vid: h264-playback-probe stream-load retry path={} attempt={} waited_ms={} err={:?}\n",
+                        MEDIA_H264_BOOT_PROBE_STREAM_PATH,
+                        attempts,
+                        waited_ms,
+                        err
+                    );
+                    last_reason = "read-error";
+                }
+            }
+        } else {
+            last_reason = "no-trueosfs-root";
+        }
+
+        if waited_ms >= MEDIA_H264_BOOT_PROBE_STREAM_LOAD_TIMEOUT_MS {
+            crate::log!(
+                "intel/hw_vid: h264-playback-probe stream-load accepted=0 path={} reason={} attempts={} waited_ms={} timeout_ms={}\n",
+                MEDIA_H264_BOOT_PROBE_STREAM_PATH,
+                last_reason,
+                attempts,
+                waited_ms,
+                MEDIA_H264_BOOT_PROBE_STREAM_LOAD_TIMEOUT_MS
+            );
+            return None;
+        }
+
+        Timer::after(EmbassyDuration::from_millis(MEDIA_H264_BOOT_PROBE_STREAM_LOAD_POLL_MS)).await;
+        waited_ms = waited_ms.saturating_add(MEDIA_H264_BOOT_PROBE_STREAM_LOAD_POLL_MS);
+    }
+}
+
+async fn h264_i_p_playback_probe(stream: &[u8]) {
     let mut offset = 0usize;
     let mut nal_count = 0usize;
     let mut idr_seen = 0usize;
@@ -890,14 +836,14 @@ async fn h264_i_p_playback_probe() {
     let mut last_pps = None;
 
     crate::log!(
-        "intel/hw_vid: h264-playback-probe start bytes={} max_frames={} frame_ms={} subset=idr-plus-p source=x31-annexb\n",
-        MEDIA_H264_BOOT_PROBE_STREAM.len(),
+        "intel/hw_vid: h264-playback-probe start bytes={} max_frames={} frame_ms={} subset=idr-plus-p source=trueosfs-root path={}\n",
+        stream.len(),
         MEDIA_H264_BOOT_PROBE_PLAYBACK_MAX_FRAMES,
-        MEDIA_H264_BOOT_PROBE_PLAYBACK_FRAME_MS
+        MEDIA_H264_BOOT_PROBE_PLAYBACK_FRAME_MS,
+        MEDIA_H264_BOOT_PROBE_STREAM_PATH
     );
 
-    while let Some((nal, next_offset)) = h264_next_annexb_nal(MEDIA_H264_BOOT_PROBE_STREAM, offset)
-    {
+    while let Some((nal, next_offset)) = h264_next_annexb_nal(stream, offset) {
         offset = next_offset;
         nal_count += 1;
         match nal.nal_type {
@@ -915,9 +861,9 @@ async fn h264_i_p_playback_probe() {
                 };
                 let mut frame =
                     Vec::with_capacity(h264_nal_len(sps) + h264_nal_len(pps) + h264_nal_len(nal));
-                h264_push_nal(&mut frame, MEDIA_H264_BOOT_PROBE_STREAM, sps);
-                h264_push_nal(&mut frame, MEDIA_H264_BOOT_PROBE_STREAM, pps);
-                h264_push_nal(&mut frame, MEDIA_H264_BOOT_PROBE_STREAM, nal);
+                h264_push_nal(&mut frame, stream, sps);
+                h264_push_nal(&mut frame, stream, pps);
+                h264_push_nal(&mut frame, stream, nal);
 
                 submitted += 1;
                 let _ = h264_submit_wait_present_probe_frame(submitted, idr_seen, &frame).await;
@@ -1230,23 +1176,7 @@ pub(crate) fn mask_en(v: u32) -> u32 {
 pub(crate) fn mask_dis(v: u32) -> u32 {
     v << 16
 }
-pub(crate) fn compute_wopcm(fw: u32) -> Option<(u32, u32)> {
-    let usable = GEN11_WOPCM_SIZE.checked_sub(WOPCM_HW_CTX_RESERVED_SIZE)?;
-    let min = fw
-        .checked_add(GUC_WOPCM_RESERVED_SIZE)?
-        .checked_add(GUC_WOPCM_STACK_RESERVED_SIZE)?;
-    let base = align_up_u32(WOPCM_RESERVED_SIZE, GUC_WOPCM_OFFSET_ALIGNMENT)?;
-    if base >= usable {
-        return None;
-    }
-    let size = (usable - base) & GUC_WOPCM_SIZE_MASK;
-    if size < min { None } else { Some((base, size)) }
-}
 pub(crate) fn align_up(v: usize, a: usize) -> Option<usize> {
-    let m = a.checked_sub(1)?;
-    v.checked_add(m).map(|x| x & !m)
-}
-fn align_up_u32(v: u32, a: u32) -> Option<u32> {
     let m = a.checked_sub(1)?;
     v.checked_add(m).map(|x| x & !m)
 }
