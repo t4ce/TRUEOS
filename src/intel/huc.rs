@@ -114,64 +114,46 @@ pub(crate) fn authenticate_via_guc(dev: crate::intel::Dev, fw: crate::intel::Buf
         crate::log!("intel/huc: auth skipped reason=guc-not-ready\n");
         return false;
     }
-    let rsa_gpu = rsa_gpu().unwrap_or_else(|| fw.gpu.saturating_add(fw.rsa_offset as u64) as u32);
+    let separate_rsa_gpu = rsa_gpu();
+    let inline_rsa_gpu = inline_rsa_gpu(fw);
+    let candidates = auth_candidates(separate_rsa_gpu, inline_rsa_gpu);
+    crate::log!(
+        "intel/huc: auth-probe separate_present={} separate_gpu=0x{:X} inline_present={} inline_gpu=0x{:X} rsa_offset=0x{:X} rsa_size=0x{:X} strategy=separate-then-inline\n",
+        separate_rsa_gpu.is_some() as u8,
+        separate_rsa_gpu.unwrap_or(0),
+        inline_rsa_gpu.is_some() as u8,
+        inline_rsa_gpu.unwrap_or(0),
+        fw.rsa_offset,
+        fw.rsa_size
+    );
     let before = huc_auth_status(dev);
     if crate::intel::guc_ctb::enabled() {
-        let result =
-            crate::intel::guc_ctb::send_hxg_action(dev, GUC_ACTION_AUTHENTICATE_HUC, &[rsa_gpu]);
-        if result.accepted {
-            let mut status = before;
-            let mut poll_iters = 0usize;
-            while poll_iters < HUC_AUTH_POLL_ITERS {
-                status = huc_auth_status(dev);
-                if huc_auth_verified(status) {
-                    break;
-                }
-                poll_iters += 1;
-                core::hint::spin_loop();
+        for candidate in candidates.iter().copied().flatten() {
+            if auth_once_via_ctb(dev, before, candidate) {
+                return true;
             }
-            LAST_STATUS2.store(status, Ordering::Release);
-            let verified = huc_auth_verified(status);
-            AUTHENTICATED.store(verified, Ordering::Release);
-            crate::log!(
-                "intel/huc: auth-via-ctb accepted=1 rsa_gpu=0x{:X} status_reg=GEN11_HUC_KERNEL_LOAD_INFO status_before=0x{:08X} status=0x{:08X} verified={} response=0x{:08X} response_type={} error={} h2g_poll_iters={} g2h_poll_iters={} status_poll_iters={} does_not_prove=media-codec-path\n",
-                rsa_gpu,
-                before,
-                status,
-                verified as u8,
-                result.response,
-                result.response_type,
-                result.error,
-                result.h2g_poll_iters,
-                result.g2h_poll_iters,
-                poll_iters
-            );
-            return verified;
         }
-        let status = huc_auth_status(dev);
-        LAST_STATUS2.store(status, Ordering::Release);
-        AUTHENTICATED.store(false, Ordering::Release);
-        crate::log!(
-            "intel/huc: auth-via-ctb accepted=0 rsa_gpu=0x{:X} status_reg=GEN11_HUC_KERNEL_LOAD_INFO status_before=0x{:08X} status=0x{:08X} verified=0 response=0x{:08X} response_type={} error={} h2g_poll_iters={} g2h_poll_iters={} fallback=mmio does_not_prove=media-codec-path\n",
-            rsa_gpu,
-            before,
-            status,
-            result.response,
-            result.response_type,
-            result.error,
-            result.h2g_poll_iters,
-            result.g2h_poll_iters
-        );
     }
-    let result =
-        crate::intel::guc::send_h2g_mmio_action(dev, GUC_ACTION_AUTHENTICATE_HUC, &[rsa_gpu]);
+    let Some(mmio_candidate) = candidates[0] else {
+        crate::log!(
+            "intel/huc: auth skipped reason=no-rsa-candidate status_reg=GEN11_HUC_KERNEL_LOAD_INFO status_before=0x{:08X}\n",
+            before
+        );
+        return false;
+    };
+    let result = crate::intel::guc::send_h2g_mmio_action(
+        dev,
+        GUC_ACTION_AUTHENTICATE_HUC,
+        &[mmio_candidate.gpu],
+    );
     if !result.accepted {
         let status = huc_auth_status(dev);
         LAST_STATUS2.store(status, Ordering::Release);
         AUTHENTICATED.store(false, Ordering::Release);
         crate::log!(
-            "intel/huc: auth-via-guc accepted=0 rsa_gpu=0x{:X} status_reg=GEN11_HUC_KERNEL_LOAD_INFO status_before=0x{:08X} status=0x{:08X} verified=0 response=0x{:08X} response_type={} error={} h2g_poll_iters={} status_poll_iters=0 blocker=ctb-required-or-auth-rejected next=guc-ctb-register does_not_prove=media-codec-path\n",
-            rsa_gpu,
+            "intel/huc: auth-via-guc accepted=0 rsa_source={} rsa_gpu=0x{:X} status_reg=GEN11_HUC_KERNEL_LOAD_INFO status_before=0x{:08X} status=0x{:08X} verified=0 response=0x{:08X} response_type={} error={} h2g_poll_iters={} status_poll_iters=0 blocker=ctb-required-or-auth-rejected next=guc-ctb-register does_not_prove=media-codec-path\n",
+            mmio_candidate.source,
+            mmio_candidate.gpu,
             before,
             status,
             result.response,
@@ -195,9 +177,10 @@ pub(crate) fn authenticate_via_guc(dev: crate::intel::Dev, fw: crate::intel::Buf
     let verified = huc_auth_verified(status);
     AUTHENTICATED.store(verified, Ordering::Release);
     crate::log!(
-        "intel/huc: auth-via-guc accepted={} rsa_gpu=0x{:X} status_reg=GEN11_HUC_KERNEL_LOAD_INFO status_before=0x{:08X} status=0x{:08X} verified={} response=0x{:08X} response_type={} error={} h2g_poll_iters={} status_poll_iters={} does_not_prove=media-codec-path\n",
+        "intel/huc: auth-via-guc accepted={} rsa_source={} rsa_gpu=0x{:X} status_reg=GEN11_HUC_KERNEL_LOAD_INFO status_before=0x{:08X} status=0x{:08X} verified={} response=0x{:08X} response_type={} error={} h2g_poll_iters={} status_poll_iters={} does_not_prove=media-codec-path\n",
         result.accepted as u8,
-        rsa_gpu,
+        mmio_candidate.source,
+        mmio_candidate.gpu,
         before,
         status,
         verified as u8,
@@ -208,6 +191,84 @@ pub(crate) fn authenticate_via_guc(dev: crate::intel::Dev, fw: crate::intel::Buf
         poll_iters
     );
     verified
+}
+
+#[derive(Copy, Clone)]
+struct AuthCandidate {
+    gpu: u32,
+    source: &'static str,
+}
+
+fn auth_candidates(separate: Option<u32>, inline: Option<u32>) -> [Option<AuthCandidate>; 2] {
+    let first = separate.or(inline).map(|gpu| AuthCandidate {
+        gpu,
+        source: if separate == Some(gpu) {
+            "separate-rsa-page"
+        } else {
+            "inline-firmware-rsa"
+        },
+    });
+    let second = match (separate, inline) {
+        (Some(separate_gpu), Some(inline_gpu)) if separate_gpu != inline_gpu => {
+            Some(AuthCandidate {
+                gpu: inline_gpu,
+                source: "inline-firmware-rsa-probe",
+            })
+        }
+        _ => None,
+    };
+    [first, second]
+}
+
+fn auth_once_via_ctb(dev: crate::intel::Dev, before: u32, candidate: AuthCandidate) -> bool {
+    let result =
+        crate::intel::guc_ctb::send_hxg_action(dev, GUC_ACTION_AUTHENTICATE_HUC, &[candidate.gpu]);
+    if result.accepted {
+        let mut status = before;
+        let mut poll_iters = 0usize;
+        while poll_iters < HUC_AUTH_POLL_ITERS {
+            status = huc_auth_status(dev);
+            if huc_auth_verified(status) {
+                break;
+            }
+            poll_iters += 1;
+            core::hint::spin_loop();
+        }
+        LAST_STATUS2.store(status, Ordering::Release);
+        let verified = huc_auth_verified(status);
+        AUTHENTICATED.store(verified, Ordering::Release);
+        crate::log!(
+            "intel/huc: auth-via-ctb accepted=1 rsa_source={} rsa_gpu=0x{:X} status_reg=GEN11_HUC_KERNEL_LOAD_INFO status_before=0x{:08X} status=0x{:08X} verified={} response=0x{:08X} response_type={} error={} h2g_poll_iters={} g2h_poll_iters={} status_poll_iters={} does_not_prove=media-codec-path\n",
+            candidate.source,
+            candidate.gpu,
+            before,
+            status,
+            verified as u8,
+            result.response,
+            result.response_type,
+            result.error,
+            result.h2g_poll_iters,
+            result.g2h_poll_iters,
+            poll_iters
+        );
+        return verified;
+    }
+    let status = huc_auth_status(dev);
+    LAST_STATUS2.store(status, Ordering::Release);
+    AUTHENTICATED.store(false, Ordering::Release);
+    crate::log!(
+        "intel/huc: auth-via-ctb accepted=0 rsa_source={} rsa_gpu=0x{:X} status_reg=GEN11_HUC_KERNEL_LOAD_INFO status_before=0x{:08X} status=0x{:08X} verified=0 response=0x{:08X} response_type={} error={} h2g_poll_iters={} g2h_poll_iters={} fallback=next-rsa-candidate-or-mmio does_not_prove=media-codec-path\n",
+        candidate.source,
+        candidate.gpu,
+        before,
+        status,
+        result.response,
+        result.response_type,
+        result.error,
+        result.h2g_poll_iters,
+        result.g2h_poll_iters
+    );
+    false
 }
 
 fn huc_auth_status(dev: crate::intel::Dev) -> u32 {
@@ -250,6 +311,15 @@ fn stage_rsa_only(blob: &[u8], rsa_offset: usize, rsa_size: usize) -> u64 {
 
 fn rsa_gpu() -> Option<u32> {
     RSA_DATA.lock().map(|rsa| rsa.gpu as u32)
+}
+
+fn inline_rsa_gpu(fw: crate::intel::Buf) -> Option<u32> {
+    let gpu = fw.gpu.checked_add(fw.rsa_offset as u64)?;
+    if gpu <= u32::MAX as u64 {
+        Some(gpu as u32)
+    } else {
+        None
+    }
 }
 
 pub(crate) fn upload_via_dma(dev: crate::intel::Dev, fw: crate::intel::Buf) -> bool {

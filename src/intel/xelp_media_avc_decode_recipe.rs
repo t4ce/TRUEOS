@@ -263,6 +263,8 @@ pub(crate) struct AvcPictureParams {
     pub deblocking_filter_control_present: bool,
     pub delta_pic_order_always_zero: bool,
     pub slice_group_change_rate_minus1: u16,
+    pub visible_width: u32,
+    pub visible_height: u32,
 }
 
 impl AvcPictureParams {
@@ -284,6 +286,14 @@ impl AvcPictureParams {
 
     pub(crate) const fn coded_height(self) -> u32 {
         self.pic_height_in_mbs() as u32 * 16
+    }
+
+    pub(crate) const fn visible_width(self) -> u32 {
+        self.visible_width
+    }
+
+    pub(crate) const fn visible_height(self) -> u32 {
+        self.visible_height
     }
 }
 
@@ -923,6 +933,8 @@ pub(crate) fn parse_annexb_single_idr_plan(
         deblocking_filter_control_present: pps.deblocking_filter_control_present,
         delta_pic_order_always_zero: sps.delta_pic_order_always_zero,
         slice_group_change_rate_minus1: pps.slice_group_change_rate_minus1,
+        visible_width: sps.visible_width,
+        visible_height: sps.visible_height,
     };
     let resources = AvcDecodeResourcePlan {
         dest_surface: surface,
@@ -1918,6 +1930,8 @@ struct ParsedSps {
     pic_height_in_mbs_minus1: u16,
     coded_width: u32,
     coded_height: u32,
+    visible_width: u32,
+    visible_height: u32,
     log2_max_frame_num_minus4: u8,
     pic_order_cnt_type: u8,
     log2_max_pic_order_cnt_lsb_minus4: u8,
@@ -2005,23 +2019,44 @@ fn parse_sps(payload: &[u8]) -> Result<ParsedSps, AvcAnnexBPlanError> {
     }
     let direct_8x8_inference = br.read_bool()?;
     let frame_cropping_flag = br.read_bool()?;
+    let mut frame_crop_left_offset = 0u32;
+    let mut frame_crop_right_offset = 0u32;
+    let mut frame_crop_top_offset = 0u32;
+    let mut frame_crop_bottom_offset = 0u32;
     if frame_cropping_flag {
-        let _frame_crop_left_offset = br.read_ue()?;
-        let _frame_crop_right_offset = br.read_ue()?;
-        let _frame_crop_top_offset = br.read_ue()?;
-        let _frame_crop_bottom_offset = br.read_ue()?;
+        frame_crop_left_offset = br.read_ue()?;
+        frame_crop_right_offset = br.read_ue()?;
+        frame_crop_top_offset = br.read_ue()?;
+        frame_crop_bottom_offset = br.read_ue()?;
     }
     let frame_height_multiplier = if frame_mbs_only { 1 } else { 2 };
     let pic_height_in_mbs =
         frame_height_multiplier * (usize::from(pic_height_in_map_units_minus1) + 1);
     let pic_height_in_mbs_minus1 =
         checked_u16((pic_height_in_mbs - 1) as u32, AvcAnnexBPlanError::UnsupportedSps)?;
+    let coded_width = (u32::from(pic_width_in_mbs_minus1) + 1) * 16;
+    let coded_height = (u32::from(pic_height_in_mbs_minus1) + 1) * 16;
+    let crop_unit_x = 2u32;
+    let crop_unit_y = if frame_mbs_only { 2u32 } else { 4u32 };
+    let crop_x = frame_crop_left_offset
+        .checked_add(frame_crop_right_offset)
+        .and_then(|v| v.checked_mul(crop_unit_x))
+        .ok_or(AvcAnnexBPlanError::UnsupportedSps)?;
+    let crop_y = frame_crop_top_offset
+        .checked_add(frame_crop_bottom_offset)
+        .and_then(|v| v.checked_mul(crop_unit_y))
+        .ok_or(AvcAnnexBPlanError::UnsupportedSps)?;
+    if crop_x >= coded_width || crop_y >= coded_height {
+        return Err(AvcAnnexBPlanError::UnsupportedSps);
+    }
     Ok(ParsedSps {
         seq_parameter_set_id,
         pic_width_in_mbs_minus1,
         pic_height_in_mbs_minus1,
-        coded_width: (u32::from(pic_width_in_mbs_minus1) + 1) * 16,
-        coded_height: (u32::from(pic_height_in_mbs_minus1) + 1) * 16,
+        coded_width,
+        coded_height,
+        visible_width: coded_width - crop_x,
+        visible_height: coded_height - crop_y,
         log2_max_frame_num_minus4,
         pic_order_cnt_type,
         log2_max_pic_order_cnt_lsb_minus4,

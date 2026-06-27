@@ -47,6 +47,7 @@ const DMA_ADDRESS_SPACE_GGTT: u32 = 8 << 16;
 const UOS_MOVE: u32 = 1 << 4;
 const START_DMA: u32 = 1 << 0;
 const GUC_WOPCM_OFFSET_VALID: u32 = 1 << 0;
+const HUC_LOADING_AGENT_GUC: u32 = 1 << 1;
 const GUC_WOPCM_SIZE_LOCKED: u32 = 1 << 0;
 const GUC_BOOT_DEST_WOPCM_OFFSET: u32 = 0x2000;
 const GUC_RSA_IN_MEMORY_THRESHOLD_BYTES: usize = 256;
@@ -213,6 +214,7 @@ pub(crate) fn bootstrap(
     dev: crate::intel::Dev,
     fw: crate::intel::Buf,
     ads: crate::intel::Buf,
+    huc_auth: bool,
 ) -> bool {
     crate::intel::mmio_write(dev, GDRST, GRDOM_GUC);
     for _ in 0..GUC_RESET_POLL_ITERS {
@@ -246,14 +248,7 @@ pub(crate) fn bootstrap(
     build_ads(dev, ads);
     init_params(dev, ads);
     mirror_rsa(dev, fw);
-    let size = crate::intel::mmio_read(dev, GUC_WOPCM_SIZE);
-    let off = crate::intel::mmio_read(dev, DMA_GUC_WOPCM_OFFSET);
-    if (size & GUC_WOPCM_SIZE_LOCKED) == 0 || (off & GUC_WOPCM_OFFSET_VALID) == 0 {
-        if let Some((base, sz)) = crate::intel::compute_wopcm(fw.xfer_len as u32) {
-            crate::intel::mmio_write(dev, GUC_WOPCM_SIZE, sz | GUC_WOPCM_SIZE_LOCKED);
-            crate::intel::mmio_write(dev, DMA_GUC_WOPCM_OFFSET, base | GUC_WOPCM_OFFSET_VALID);
-        }
-    }
+    configure_wopcm(dev, fw, huc_auth, "bootstrap-recheck");
     let src = fw.gpu + fw.css_offset as u64;
     crate::intel::mmio_write(dev, DMA_ADDR_0_LOW, src as u32);
     crate::intel::mmio_write(dev, DMA_ADDR_0_HIGH, ((src >> 32) as u32) | DMA_ADDRESS_SPACE_GGTT);
@@ -279,6 +274,54 @@ pub(crate) fn bootstrap(
     }
     READY.store(false, Ordering::Release);
     false
+}
+
+pub(crate) fn configure_wopcm(
+    dev: crate::intel::Dev,
+    fw: crate::intel::Buf,
+    huc_auth: bool,
+    stage: &'static str,
+) {
+    let size = crate::intel::mmio_read(dev, GUC_WOPCM_SIZE);
+    let off = crate::intel::mmio_read(dev, DMA_GUC_WOPCM_OFFSET);
+    let huc_agent = if huc_auth { HUC_LOADING_AGENT_GUC } else { 0 };
+    let needs_size = (size & GUC_WOPCM_SIZE_LOCKED) == 0;
+    let needs_offset =
+        (off & GUC_WOPCM_OFFSET_VALID) == 0 || (huc_auth && (off & HUC_LOADING_AGENT_GUC) == 0);
+    let mut programmed = false;
+    if needs_size || needs_offset {
+        if let Some((base, sz)) = crate::intel::compute_wopcm(fw.xfer_len as u32) {
+            if needs_size {
+                crate::intel::mmio_write(dev, GUC_WOPCM_SIZE, sz | GUC_WOPCM_SIZE_LOCKED);
+            }
+            crate::intel::mmio_write(
+                dev,
+                DMA_GUC_WOPCM_OFFSET,
+                base | huc_agent | GUC_WOPCM_OFFSET_VALID,
+            );
+            programmed = true;
+        }
+    }
+    let size_after = crate::intel::mmio_read(dev, GUC_WOPCM_SIZE);
+    let off_after = crate::intel::mmio_read(dev, DMA_GUC_WOPCM_OFFSET);
+    crate::log!(
+        "intel/guc: wopcm-config stage={} programmed={} huc_auth={} huc_agent={} size_before=0x{:08X} off_before=0x{:08X} size_after=0x{:08X} off_after=0x{:08X} valid={} locked={} blocker={}\n",
+        stage,
+        programmed as u8,
+        huc_auth as u8,
+        ((off_after & HUC_LOADING_AGENT_GUC) != 0) as u8,
+        size,
+        off,
+        size_after,
+        off_after,
+        ((off_after & GUC_WOPCM_OFFSET_VALID) != 0) as u8,
+        ((size_after & GUC_WOPCM_SIZE_LOCKED) != 0) as u8,
+        if huc_auth && (off_after & HUC_LOADING_AGENT_GUC) == 0 {
+            "missing-huc-loading-agent"
+        } else {
+            "none"
+        }
+    );
 }
 
 pub(crate) fn status(dev: crate::intel::Dev) -> u32 {

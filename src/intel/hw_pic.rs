@@ -49,7 +49,10 @@ pub(crate) struct HwPicOutput {
     pub format: HwPicPixelFormat,
     pub width: u32,
     pub height: u32,
+    pub visible_width: u32,
+    pub visible_height: u32,
     pub pitch_bytes: usize,
+    pub uv_offset: usize,
     pub byte_len: usize,
     pub gpu_addr: u64,
     pub phys_addr: u64,
@@ -160,14 +163,17 @@ async fn hw_pic_service_inner() {
         };
         let output = process_job(job);
         hw_pic_info!(
-            "intel/hw_pic: output id={} codec={:?} status={:?} fmt={:?} size={}x{} pitch=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} virt=0x{:X} err={}\n",
+            "intel/hw_pic: output id={} codec={:?} status={:?} fmt={:?} size={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} virt=0x{:X} err={}\n",
             output.id,
             output.codec,
             output.status,
             output.format,
             output.width,
             output.height,
+            output.visible_width,
+            output.visible_height,
             output.pitch_bytes,
+            output.uv_offset,
             output.byte_len,
             output.gpu_addr,
             output.phys_addr,
@@ -205,7 +211,10 @@ fn failed_output(job: &HwPicJob, code: i32) -> HwPicOutput {
         format: HwPicPixelFormat::Unknown,
         width: 0,
         height: 0,
+        visible_width: 0,
+        visible_height: 0,
         pitch_bytes: 0,
+        uv_offset: 0,
         byte_len: job.encoded.len(),
         gpu_addr: 0,
         phys_addr: 0,
@@ -331,10 +340,12 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
     };
 
     hw_pic_info!(
-        "intel/hw_pic-stage: id={} stage=avc-parse accepted=1 milestone=long-format-single-idr coded={}x{} mb={}x{} poc={}/{} bitstream=0x{:X} slice=0x{:X}+0x{:X} payload_bit={} first_mb_byte={} first_mb_bit={} qp_delta={} entropy={} transform8x8={}\n",
+        "intel/hw_pic-stage: id={} stage=avc-parse accepted=1 milestone=long-format-single-idr coded={}x{} visible={}x{} mb={}x{} poc={}/{} bitstream=0x{:X} slice=0x{:X}+0x{:X} payload_bit={} first_mb_byte={} first_mb_bit={} qp_delta={} entropy={} transform8x8={}\n",
         job.id,
         plan.picture.coded_width(),
         plan.picture.coded_height(),
+        plan.picture.visible_width(),
+        plan.picture.visible_height(),
         plan.picture.pic_width_in_mbs(),
         plan.picture.pic_height_in_mbs(),
         plan.picture.top_field_order_cnt,
@@ -824,8 +835,23 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         format: HwPicPixelFormat::Nv12,
         width: if avc.retired { avc.coded_width } else { 0 },
         height: if avc.retired { avc.coded_height } else { 0 },
+        visible_width: if avc.retired {
+            plan.picture.visible_width()
+        } else {
+            0
+        },
+        visible_height: if avc.retired {
+            plan.picture.visible_height()
+        } else {
+            0
+        },
         pitch_bytes: if avc.retired {
             avc.output_surface_pitch
+        } else {
+            0
+        },
+        uv_offset: if avc.retired {
+            plan.resources.dest_surface.uv_offset
         } else {
             0
         },
@@ -1103,11 +1129,14 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         },
         width: if retired { smoke.coded_width } else { 0 },
         height: if retired { smoke.coded_height } else { 0 },
+        visible_width: if retired { smoke.coded_width } else { 0 },
+        visible_height: if retired { smoke.coded_height } else { 0 },
         pitch_bytes: if retired {
             smoke.output_surface_pitch
         } else {
             0
         },
+        uv_offset: 0,
         byte_len: if retired {
             smoke.output_surface_bytes
         } else {

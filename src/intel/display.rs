@@ -989,18 +989,20 @@ pub(crate) async fn hw_logo_present_task() {
         let (visible_x, visible_y, visible_width, visible_height, target_width, target_height) =
             if output.width != 0 && output.height != 0 {
                 if let Some(surface) = *PRIMARY_SURFACE.lock() {
+                    let source_width = output.visible_width.max(1).min(output.width);
+                    let source_height = output.visible_height.max(1).min(output.height);
                     if JPG_CENTER_CROP
-                        && (output.width > surface.width || output.height > surface.height)
+                        && (source_width > surface.width || source_height > surface.height)
                     {
                         let (crop_w, crop_h) = center_crop_size(
-                            output.width as usize,
-                            output.height as usize,
+                            source_width as usize,
+                            source_height as usize,
                             surface.width as usize,
                             surface.height as usize,
                         );
                         (
-                            output.width.saturating_sub(crop_w as u32) / 2,
-                            output.height.saturating_sub(crop_h as u32) / 2,
+                            source_width.saturating_sub(crop_w as u32) / 2,
+                            source_height.saturating_sub(crop_h as u32) / 2,
                             crop_w as u32,
                             crop_h as u32,
                             surface.width as usize,
@@ -1008,12 +1010,12 @@ pub(crate) async fn hw_logo_present_task() {
                         )
                     } else {
                         let (fit_w, fit_h) = aspect_fit_size(
-                            output.width as usize,
-                            output.height as usize,
+                            source_width as usize,
+                            source_height as usize,
                             surface.width as usize,
                             surface.height as usize,
                         );
-                        (0, 0, output.width, output.height, fit_w, fit_h)
+                        (0, 0, source_width, source_height, fit_w, fit_h)
                     }
                 } else {
                     (0, 0, 0, 0, 0, 0)
@@ -1031,6 +1033,8 @@ pub(crate) async fn hw_logo_present_task() {
                 | crate::intel::hw_pic::HwPicPixelFormat::Nv12
         ) && output.width != 0
             && output.height != 0
+            && output.visible_width != 0
+            && output.visible_height != 0
             && output.pitch_bytes != 0
             && output.byte_len != 0
             && output.virt_addr != 0
@@ -1045,8 +1049,8 @@ pub(crate) async fn hw_logo_present_task() {
                     output.height,
                     visible_x,
                     visible_y,
-                    visible_width,
-                    visible_height,
+                    output.visible_width.min(visible_width),
+                    output.visible_height.min(visible_height),
                     output.pitch_bytes,
                 ),
                 crate::intel::hw_pic::HwPicPixelFormat::Nv12 => present_nv12_surface_center(
@@ -1055,8 +1059,8 @@ pub(crate) async fn hw_logo_present_task() {
                     output.height,
                     visible_x,
                     visible_y,
-                    visible_width,
-                    visible_height,
+                    output.visible_width.min(visible_width),
+                    output.visible_height.min(visible_height),
                     output.pitch_bytes,
                 ),
                 _ => false,
@@ -1066,15 +1070,18 @@ pub(crate) async fn hw_logo_present_task() {
         };
 
         crate::log!(
-            "intel/display: hw-logo output id={} status={:?} fmt={:?} decoded={}x{} target={}x{} pitch=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} stored={} err={}\n",
+            "intel/display: hw-logo output id={} status={:?} fmt={:?} decoded={}x{} visible={}x{} target={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} stored={} err={}\n",
             output.id,
             output.status,
             output.format,
             output.width,
             output.height,
+            output.visible_width,
+            output.visible_height,
             target_width,
             target_height,
             output.pitch_bytes,
+            output.uv_offset,
             output.byte_len,
             output.gpu_addr,
             output.phys_addr,
@@ -3189,6 +3196,7 @@ pub(crate) fn present_ytile_nv12_surface_center(
     visible_width: u32,
     visible_height: u32,
     src_pitch_bytes: usize,
+    src_uv_offset: usize,
 ) -> bool {
     let Some(surface) = *PRIMARY_SURFACE.lock() else {
         return false;
@@ -3223,7 +3231,12 @@ pub(crate) fn present_ytile_nv12_surface_center(
     if tiles_per_row == 0 {
         return false;
     }
-    let chroma_y_offset = coded_height.next_multiple_of(YTILE_H);
+    if src_uv_offset < src_pitch_bytes.saturating_mul(coded_height)
+        || src_uv_offset % src_pitch_bytes != 0
+    {
+        return false;
+    }
+    let chroma_y_offset = src_uv_offset / src_pitch_bytes;
     let total_height = chroma_y_offset.saturating_add(coded_height.div_ceil(2));
     let needed = total_height
         .div_ceil(YTILE_H)
