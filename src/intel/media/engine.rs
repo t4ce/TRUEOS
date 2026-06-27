@@ -805,7 +805,7 @@ fn byte_signature(bytes: &[u8]) -> u32 {
     signature
 }
 
-pub(super) const MEDIA_TILE64_W: usize = 256;
+pub(crate) const MEDIA_TILE64_W: usize = 256;
 pub(super) const MEDIA_TILE64_H: usize = 256;
 const MEDIA_YTILE_W: usize = 128;
 const MEDIA_YTILE_H: usize = 32;
@@ -814,7 +814,7 @@ pub(super) const MEDIA_NV12_NEUTRAL_CHROMA: u8 = 128;
 pub(super) const MEDIA_AVC_ROLLBACK_CLEAR_LUMA: u8 = 0;
 pub(super) const MEDIA_AVC_ROLLBACK_CLEAR_CHROMA: u8 = 0;
 
-pub(super) fn media_tile64_nv12_surface_layout(
+pub(crate) fn media_tile64_nv12_surface_layout(
     coded_height: usize,
     output_pitch: usize,
 ) -> Option<(usize, usize)> {
@@ -831,7 +831,7 @@ pub(super) fn media_tile64_nv12_surface_layout(
 }
 
 #[inline(always)]
-pub(super) fn media_tile64_8bpp_offset(byte_x: usize, row_y: usize, tiles_per_row: usize) -> usize {
+pub(crate) fn media_tile64_8bpp_offset(byte_x: usize, row_y: usize, tiles_per_row: usize) -> usize {
     let tile_col = byte_x / MEDIA_TILE64_W;
     let tile_row = row_y / MEDIA_TILE64_H;
     let u = byte_x % MEDIA_TILE64_W;
