@@ -547,7 +547,7 @@ fn current_topology() -> MediaTopology {
         capabilities: MediaCapabilities {
             decode: true,
             enhance: false,
-            huc_assist: crate::intel::huc_ready(),
+            huc_assist: false,
             sfc: true,
             relative_mmio_lrc: true,
         },
@@ -699,8 +699,8 @@ fn rebuild_kickoff_state(stage: MediaKickoffStage) -> Option<MediaKickoffState> 
         wake: snapshot_forcewake(dev),
         api: current_api_shape(transport),
         preferred_transport: transport,
-        guc_ready: super::guc_ready(),
-        guc_status: super::guc::status(dev),
+        guc_ready: false,
+        guc_status: 0,
         stage,
         last_decode_frame: None,
     })
