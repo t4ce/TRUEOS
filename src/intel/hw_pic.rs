@@ -230,6 +230,48 @@ fn align_up_usize(value: usize, align: usize) -> usize {
     (value + align - 1) & !(align - 1)
 }
 
+#[derive(Copy, Clone, Debug)]
+struct AvcDpbProbeLayout {
+    slot_bytes: usize,
+    slot_count: usize,
+    current_slot: usize,
+    reference_slots: usize,
+    current_gpu_addr: u64,
+    first_reference_gpu_addr: u64,
+    capacity_bytes: usize,
+}
+
+fn avc_dpb_probe_layout(
+    output_gpu_addr: u64,
+    output_capacity_bytes: usize,
+    surface_bytes: usize,
+) -> Option<AvcDpbProbeLayout> {
+    if surface_bytes == 0 || surface_bytes > output_capacity_bytes {
+        return None;
+    }
+    let slot_bytes = align_up_usize(
+        surface_bytes,
+        crate::intel::xelp_media_avc_decode_recipe::MFX_GENERAL_STATE_ALIGNMENT as usize,
+    );
+    if slot_bytes == 0 || slot_bytes > output_capacity_bytes {
+        return None;
+    }
+    let slot_count = output_capacity_bytes / slot_bytes;
+    if slot_count == 0 {
+        return None;
+    }
+    let reference_slots = slot_count.saturating_sub(1).min(15);
+    Some(AvcDpbProbeLayout {
+        slot_bytes,
+        slot_count,
+        current_slot: 0,
+        reference_slots,
+        current_gpu_addr: output_gpu_addr,
+        first_reference_gpu_addr: output_gpu_addr.saturating_add(slot_bytes as u64),
+        capacity_bytes: output_capacity_bytes,
+    })
+}
+
 fn avc_scratch_bindings(
     plan: crate::intel::xelp_media_avc_decode_recipe::AvcLongFormatIdrPlan,
     dest_gpu_addr: u64,
@@ -405,6 +447,30 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         log_stage(job.id, "surface", false, "planned-surface-larger-than-backing", -22);
         return failed_output(&job, -22);
     }
+    let Some(dpb_layout) = avc_dpb_probe_layout(
+        windows.output_surface_gpu_addr,
+        backing.output_surface_bytes,
+        plan.resources.dest_surface.byte_len,
+    ) else {
+        hw_pic_info!(
+            "intel/hw_pic-stage: id={} stage=avc-dpb-layout accepted=0 code=-28 surface_bytes=0x{:X} capacity=0x{:X}\n",
+            job.id,
+            plan.resources.dest_surface.byte_len,
+            backing.output_surface_bytes
+        );
+        return failed_output(&job, -28);
+    };
+    hw_pic_info!(
+        "intel/hw_pic-stage: id={} stage=avc-dpb-layout accepted=1 current_slot={} ref_slots={} total_slots={} slot_bytes=0x{:X} capacity=0x{:X} current_gpu=0x{:X} first_ref_gpu=0x{:X} policy=current-plus-retained-refs note=command-stream-still-idr-only\n",
+        job.id,
+        dpb_layout.current_slot,
+        dpb_layout.reference_slots,
+        dpb_layout.slot_count,
+        dpb_layout.slot_bytes,
+        dpb_layout.capacity_bytes,
+        dpb_layout.current_gpu_addr,
+        dpb_layout.first_reference_gpu_addr
+    );
     let missing_ref_offset =
         avc_missing_reference_surface_offset(plan.resources.dest_surface.byte_len);
     let missing_ref_required =
