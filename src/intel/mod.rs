@@ -26,6 +26,7 @@ pub(crate) mod xelp_media2_ngin;
 pub(crate) mod xelp_media2_ngin_hw_pic;
 pub(crate) mod xelp_media_avc_decode_recipe;
 
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
@@ -75,11 +76,16 @@ pub(crate) const GS_AUTH_STATUS_MASK: u32 = 0x03 << 30;
 const DISPLAY_PLANE1_BOOT_DEMO_ENABLED: bool = true;
 const MEDIA_BOOT_DEMO_ENABLED: bool = false;
 const MEDIA_H264_BOOT_PROBE_ENABLED: bool = true;
+const MEDIA_H264_BOOT_PROBE_PLAYBACK_ENABLED: bool = true;
+const MEDIA_H264_BOOT_PROBE_PLAYBACK_MAX_IDR: usize = 8;
+const MEDIA_H264_BOOT_PROBE_PLAYBACK_FRAME_MS: u64 = 240;
 const MEDIA_H264_BOOT_PROBE_TIMEOUT_MS: u64 = 5_000;
 const MEDIA_BOOT_DEMO_DELAY_MS: u64 = 2_000;
 const MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT: u32 = 3;
 const MEDIA_H264_BOOT_PROBE_FIRST_FRAME: &[u8] =
     include_bytes!("../../tools/vid/x31_head_movie_first_frame.h264");
+const MEDIA_H264_BOOT_PROBE_STREAM: &[u8] =
+    include_bytes!("../../tools/vid/x31_head_movie.annexb.h264");
 const PCI_DEVICE_ALDER_LAKE_S_GT1: u16 = 0x4680;
 const PCI_DEVICE_ALDER_LAKE_N_N100_UHD: u16 = 0x46D1;
 const PCI_DEVICE_RAPTOR_LAKE_S_GT1_UHD770: u16 = 0xA780;
@@ -857,36 +863,158 @@ pub(crate) async fn hw_vid_probe_task() {
     }
 
     Timer::after(EmbassyDuration::from_millis(MEDIA_BOOT_DEMO_DELAY_MS)).await;
+    if MEDIA_H264_BOOT_PROBE_PLAYBACK_ENABLED {
+        h264_keyframe_playback_probe().await;
+        return;
+    }
+
+    let _ = h264_submit_wait_present_probe_frame(0, 0, MEDIA_H264_BOOT_PROBE_FIRST_FRAME).await;
+}
+
+#[derive(Copy, Clone, Debug)]
+struct H264BootNal {
+    start: usize,
+    payload_start: usize,
+    end: usize,
+    nal_type: u8,
+}
+
+async fn h264_keyframe_playback_probe() {
+    let mut offset = 0usize;
+    let mut nal_count = 0usize;
+    let mut idr_seen = 0usize;
+    let mut idr_submitted = 0usize;
+    let mut non_idr_slices = 0usize;
+    let mut skipped_idr_missing_headers = 0usize;
+    let mut last_sps = None;
+    let mut last_pps = None;
+
+    crate::log!(
+        "intel/hw_vid: h264-playback-probe start bytes={} max_idr={} frame_ms={} subset=idr-only source=x31-annexb\n",
+        MEDIA_H264_BOOT_PROBE_STREAM.len(),
+        MEDIA_H264_BOOT_PROBE_PLAYBACK_MAX_IDR,
+        MEDIA_H264_BOOT_PROBE_PLAYBACK_FRAME_MS
+    );
+
+    while let Some((nal, next_offset)) = h264_next_annexb_nal(MEDIA_H264_BOOT_PROBE_STREAM, offset)
+    {
+        offset = next_offset;
+        nal_count += 1;
+        match nal.nal_type {
+            7 => last_sps = Some(nal),
+            8 => last_pps = Some(nal),
+            5 => {
+                idr_seen += 1;
+                let (Some(sps), Some(pps)) = (last_sps, last_pps) else {
+                    skipped_idr_missing_headers += 1;
+                    continue;
+                };
+                let mut frame =
+                    Vec::with_capacity(h264_nal_len(sps) + h264_nal_len(pps) + h264_nal_len(nal));
+                h264_push_nal(&mut frame, MEDIA_H264_BOOT_PROBE_STREAM, sps);
+                h264_push_nal(&mut frame, MEDIA_H264_BOOT_PROBE_STREAM, pps);
+                h264_push_nal(&mut frame, MEDIA_H264_BOOT_PROBE_STREAM, nal);
+
+                idr_submitted += 1;
+                let _ = h264_submit_wait_present_probe_frame(idr_submitted, idr_seen, &frame).await;
+                Timer::after(EmbassyDuration::from_millis(MEDIA_H264_BOOT_PROBE_PLAYBACK_FRAME_MS))
+                    .await;
+
+                if idr_submitted >= MEDIA_H264_BOOT_PROBE_PLAYBACK_MAX_IDR {
+                    break;
+                }
+            }
+            1 => non_idr_slices += 1,
+            _ => {}
+        }
+    }
+
+    crate::log!(
+        "intel/hw_vid: h264-playback-probe done nals={} idr_seen={} idr_submitted={} non_idr_slices_skipped={} idr_missing_headers={} stopped_at=0x{:X} reason={}\n",
+        nal_count,
+        idr_seen,
+        idr_submitted,
+        non_idr_slices,
+        skipped_idr_missing_headers,
+        offset,
+        if idr_submitted >= MEDIA_H264_BOOT_PROBE_PLAYBACK_MAX_IDR {
+            "max-idr"
+        } else {
+            "eos"
+        }
+    );
+}
+
+async fn h264_submit_wait_present_probe_frame(
+    playback_frame: usize,
+    stream_idr_index: usize,
+    encoded: &[u8],
+) -> bool {
     let before = hw_pic_snapshot();
     crate::log!(
-        "intel/hw_vid: h264-probe submit bytes={} pending={} outputs={} service_started={}\n",
-        MEDIA_H264_BOOT_PROBE_FIRST_FRAME.len(),
+        "intel/hw_vid: h264-probe submit playback_frame={} stream_idr={} bytes={} pending={} outputs={} service_started={}\n",
+        playback_frame,
+        stream_idr_index,
+        encoded.len(),
         before.pending,
         before.outputs,
         before.service_started as u8
     );
 
-    let id = match hw_pic_submit_h264(MEDIA_H264_BOOT_PROBE_FIRST_FRAME) {
+    let id = match hw_pic_submit_h264(encoded) {
         Ok(id) => id,
         Err(err) => {
-            crate::log!("intel/hw_vid: h264-probe submit-failed err={}\n", err);
-            return;
+            crate::log!(
+                "intel/hw_vid: h264-probe submit-failed playback_frame={} stream_idr={} err={}\n",
+                playback_frame,
+                stream_idr_index,
+                err
+            );
+            return false;
         }
     };
 
     let Some(output) = hw_pic_wait_output_for_id(id, MEDIA_H264_BOOT_PROBE_TIMEOUT_MS).await else {
         let after = hw_pic_snapshot();
         crate::log!(
-            "intel/hw_vid: h264-probe timeout id={} pending={} outputs={} service_started={}\n",
+            "intel/hw_vid: h264-probe timeout playback_frame={} stream_idr={} id={} pending={} outputs={} service_started={}\n",
+            playback_frame,
+            stream_idr_index,
             id,
             after.pending,
             after.outputs,
             after.service_started as u8
         );
-        return;
+        return false;
     };
 
-    let stored = if matches!(
+    let stored = h264_present_probe_output(&output);
+
+    crate::log!(
+        "intel/hw_vid: h264-probe output playback_frame={} stream_idr={} id={} codec={:?} status={:?} fmt={:?} decoded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} stored={} present=ytile-nv12-diagnostic err={}\n",
+        playback_frame,
+        stream_idr_index,
+        output.id,
+        output.codec,
+        output.status,
+        output.format,
+        output.width,
+        output.height,
+        output.visible_width,
+        output.visible_height,
+        output.pitch_bytes,
+        output.uv_offset,
+        output.byte_len,
+        output.gpu_addr,
+        output.phys_addr,
+        stored as u8,
+        output.error_code
+    );
+    stored
+}
+
+fn h264_present_probe_output(output: &self::hw_pic::HwPicOutput) -> bool {
+    if matches!(
         output.status,
         self::hw_pic::HwPicStatus::Ready | self::hw_pic::HwPicStatus::Streamed
     ) && output.format == self::hw_pic::HwPicPixelFormat::Nv12
@@ -911,26 +1039,57 @@ pub(crate) async fn hw_vid_probe_task() {
         )
     } else {
         false
-    };
+    }
+}
 
-    crate::log!(
-        "intel/hw_vid: h264-probe output id={} codec={:?} status={:?} fmt={:?} decoded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} stored={} present=ytile-nv12-diagnostic err={}\n",
-        output.id,
-        output.codec,
-        output.status,
-        output.format,
-        output.width,
-        output.height,
-        output.visible_width,
-        output.visible_height,
-        output.pitch_bytes,
-        output.uv_offset,
-        output.byte_len,
-        output.gpu_addr,
-        output.phys_addr,
-        stored as u8,
-        output.error_code
-    );
+fn h264_nal_len(nal: H264BootNal) -> usize {
+    nal.end.saturating_sub(nal.start)
+}
+
+fn h264_push_nal(dst: &mut Vec<u8>, bytes: &[u8], nal: H264BootNal) {
+    if nal.start <= nal.end && nal.end <= bytes.len() {
+        dst.extend_from_slice(&bytes[nal.start..nal.end]);
+    }
+}
+
+fn h264_next_annexb_nal(bytes: &[u8], offset: usize) -> Option<(H264BootNal, usize)> {
+    let mut cursor = offset;
+    loop {
+        let (start, start_code_len) = h264_find_start_code(bytes, cursor)?;
+        let payload_start = start + start_code_len;
+        let end = h264_find_start_code(bytes, payload_start)
+            .map(|(next, _)| next)
+            .unwrap_or(bytes.len());
+        cursor = end;
+        if payload_start < end && payload_start < bytes.len() {
+            return Some((
+                H264BootNal {
+                    start,
+                    payload_start,
+                    end,
+                    nal_type: bytes[payload_start] & 0x1f,
+                },
+                cursor,
+            ));
+        }
+        if cursor >= bytes.len() {
+            return None;
+        }
+    }
+}
+
+fn h264_find_start_code(bytes: &[u8], offset: usize) -> Option<(usize, usize)> {
+    let mut i = offset.min(bytes.len());
+    while i + 3 <= bytes.len() {
+        if bytes[i..].starts_with(&[0, 0, 1]) {
+            return Some((i, 3));
+        }
+        if i + 4 <= bytes.len() && bytes[i..].starts_with(&[0, 0, 0, 1]) {
+            return Some((i, 4));
+        }
+        i += 1;
+    }
+    None
 }
 
 pub(crate) fn hw_vid_probe_task_spawn()
