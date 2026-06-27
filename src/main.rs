@@ -74,6 +74,7 @@ mod stackkeeper;
 mod std_abi_shim;
 mod surfer;
 mod tga;
+mod unix_compat;
 #[path = "../crates/trueos-gboi/mod.rs"]
 mod trueos_gboi;
 mod tst;

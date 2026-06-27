@@ -1643,6 +1643,44 @@ pub(crate) unsafe fn mio_socket_close_host(socket_id: u32) -> i32 {
     })
 }
 
+pub(crate) fn close_sockets_for_vm(vm_id: u8) -> usize {
+    with_compat(|compat| {
+        compat.pump();
+        let mut handles = Vec::new();
+        let mut socket_ids = Vec::new();
+        let mut closed = 0usize;
+        let mut index = 0usize;
+
+        while index < compat.sockets.len() {
+            if compat.sockets[index].owner_vm == Some(vm_id) {
+                let mut socket = compat.sockets.remove(index);
+                socket_ids.push(socket.id);
+                if let Some(handle) = socket.handle.take() {
+                    handles.push(handle);
+                }
+                handles.extend(socket.listen_handles.drain(..));
+                closed = closed.saturating_add(1);
+            } else {
+                index = index.saturating_add(1);
+            }
+        }
+
+        for socket_id in socket_ids.iter().copied() {
+            compat.drop_pending_open(socket_id);
+        }
+        compat
+            .registrations
+            .retain(|reg| reg.owner_vm != Some(vm_id) && !socket_ids.contains(&reg.socket_id));
+        for handle in handles {
+            let _ = compat.submit(api::Command::Close { handle });
+        }
+        if closed != 0 {
+            crate::log!("mio_compat: closed vm{} sockets count={}\n", vm_id, closed);
+        }
+        closed
+    })
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_mio_socket_close(socket_id: u32) -> i32 {
     if vm_guest_vmcall_active() {
