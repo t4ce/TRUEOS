@@ -297,6 +297,12 @@ pub fn init_once() {
                 } else {
                     ggtt_invalidate(dev);
                     forcewake(dev);
+                    self::guc::configure_wopcm(
+                        dev,
+                        fw,
+                        huc_fw.len != 0 && huc_mapped,
+                        "pre-huc-upload",
+                    );
                     let huc_uploaded = if huc_fw.len != 0 {
                         if huc_mapped {
                             self::huc::upload_via_dma(dev, huc_fw)
@@ -310,7 +316,7 @@ pub fn init_once() {
                     } else {
                         false
                     };
-                    let ready = self::guc::bootstrap(dev, fw, ads);
+                    let ready = self::guc::bootstrap(dev, fw, ads, huc_uploaded);
                     let status = self::guc::status(dev);
                     let (bootrom, ukernel, auth) = self::guc::describe_status(status);
                     crate::log!(
@@ -898,23 +904,27 @@ pub(crate) async fn hw_vid_probe_task() {
             output.height,
             0,
             0,
-            output.width,
-            output.height,
+            output.visible_width,
+            output.visible_height,
             output.pitch_bytes,
+            output.uv_offset,
         )
     } else {
         false
     };
 
     crate::log!(
-        "intel/hw_vid: h264-probe output id={} codec={:?} status={:?} fmt={:?} decoded={}x{} pitch=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} stored={} present=ytile-nv12-diagnostic err={}\n",
+        "intel/hw_vid: h264-probe output id={} codec={:?} status={:?} fmt={:?} decoded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} stored={} present=ytile-nv12-diagnostic err={}\n",
         output.id,
         output.codec,
         output.status,
         output.format,
         output.width,
         output.height,
+        output.visible_width,
+        output.visible_height,
         output.pitch_bytes,
+        output.uv_offset,
         output.byte_len,
         output.gpu_addr,
         output.phys_addr,
