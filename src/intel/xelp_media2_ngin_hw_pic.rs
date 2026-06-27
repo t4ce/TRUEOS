@@ -1496,6 +1496,7 @@ pub(super) fn submit_avc_single_idr_batch(
     coded_height: u32,
     output_surface_pitch: usize,
     output_surface_bytes: usize,
+    output_surface_offset_bytes: usize,
     missing_reference_surface_offset_bytes: usize,
     submit_token: u32,
 ) -> Option<MediaAvcSubmitProof> {
@@ -1507,13 +1508,20 @@ pub(super) fn submit_avc_single_idr_batch(
     {
         return None;
     }
-    let missing_reference_surface_end =
-        missing_reference_surface_offset_bytes.checked_add(output_surface_bytes)?;
-    if missing_reference_surface_offset_bytes == 0
-        || missing_reference_surface_end > backing.output_surface_bytes
-    {
+    let output_surface_end = output_surface_offset_bytes.checked_add(output_surface_bytes)?;
+    if output_surface_end > backing.output_surface_bytes {
         return None;
     }
+    let missing_reference_surface_end =
+        missing_reference_surface_offset_bytes.checked_add(output_surface_bytes)?;
+    if missing_reference_surface_end > backing.output_surface_bytes {
+        return None;
+    }
+    let output_surface_gpu_addr = windows
+        .output_surface_gpu_addr
+        .saturating_add(output_surface_offset_bytes as u64);
+    let output_surface_virt =
+        unsafe { backing.output_surface_virt.add(output_surface_offset_bytes) };
 
     let ring_virt = backing.ring_virt;
     let context_virt = backing.context_virt;
@@ -1538,8 +1546,8 @@ pub(super) fn submit_avc_single_idr_batch(
         core::ptr::write_bytes(backing.avc_scratch_virt, 0, backing.avc_scratch_bytes);
     }
     if !clear_output_surface_to_tiled_nv12_black(
-        backing.output_surface_virt,
-        backing.output_surface_bytes,
+        output_surface_virt,
+        output_surface_bytes,
         coded_width,
         coded_height,
         output_surface_pitch,
@@ -1566,7 +1574,7 @@ pub(super) fn submit_avc_single_idr_batch(
         backing.batch_bytes,
         windows.result_gpu_addr,
         windows.bitstream_gpu_addr,
-        windows.output_surface_gpu_addr,
+        output_surface_gpu_addr,
         output_surface_bytes,
         bitstream_bytes,
         coded_width,
@@ -1672,10 +1680,10 @@ pub(super) fn submit_avc_single_idr_batch(
         poll_iters += 1;
     }
 
-    super::dma_flush(backing.output_surface_virt, output_surface_bytes);
+    super::dma_flush(output_surface_virt, output_surface_bytes);
     super::dma_flush(backing.result_virt, backing.result_bytes);
     let output_surface = unsafe {
-        core::slice::from_raw_parts(backing.output_surface_virt as *const u8, output_surface_bytes)
+        core::slice::from_raw_parts(output_surface_virt as *const u8, output_surface_bytes)
     };
     let output_surface_probe = media::probe_tiled_nv12_output_surface(
         output_surface,
@@ -1747,7 +1755,7 @@ pub(super) fn submit_avc_single_idr_batch(
         batch_gpu_addr: windows.batch_gpu_addr,
         result_gpu_addr: windows.result_gpu_addr,
         bitstream_gpu_addr: windows.bitstream_gpu_addr,
-        output_surface_gpu_addr: windows.output_surface_gpu_addr,
+        output_surface_gpu_addr,
         avc_scratch_gpu_addr: windows.avc_scratch_gpu_addr,
         bitstream_bytes,
         coded_width,
