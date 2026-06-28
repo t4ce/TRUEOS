@@ -164,8 +164,8 @@ static PRIMARY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
 static UI_SURFACE_PRIMARY_COPY_SEQ: AtomicU32 = AtomicU32::new(0);
 static PRIMARY_SURFACE: Mutex<Option<PrimarySurface>> = Mutex::new(None);
 static PRIMARY_PLANE_SOURCE_BINDING: Mutex<Option<PrimaryPlaneSourceBinding>> = Mutex::new(None);
-static UI2_BASE_SURFACE: Mutex<Option<DisplayRgba8Surface>> = Mutex::new(None);
-static UI2_FRAME_SURFACE: Mutex<Option<DisplayRgba8Surface>> = Mutex::new(None);
+static UI3_BASE_SURFACE: Mutex<Option<DisplayRgba8Surface>> = Mutex::new(None);
+static UI3_FRAME_SURFACE: Mutex<Option<DisplayRgba8Surface>> = Mutex::new(None);
 static OVERLAY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
 static OVERLAY_SURFACE: Mutex<OverlaySurfacePool> = Mutex::new(OverlaySurfacePool::new());
 static RGB_PLANE_PROBE_SURFACES: Mutex<[Option<RgbPlaneProbeSurface>; RGB_PLANE_PROBE_SLOT_COUNT]> =
@@ -628,8 +628,8 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
             crate::intel::display_device_name(dev.device_id)
         );
     }
-    let ui2_base_ok = false;
-    let ui2_frame_ok = false;
+    let ui3_base_ok = false;
+    let ui3_frame_ok = false;
     log_primary_scanout_pte_window(dev, "after-primary-init", byte_len);
 
     let logo_ok = if PRIMARY_BOOT_LOGO_ENABLED {
@@ -653,7 +653,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     }
 
     crate::log!(
-        "intel/display: primary-boot-surface pipe={} size={}x{} backing={}x{} pitch=0x{:X} bytes=0x{:X} guard={} gpu=0x{:X} phys=0x{:X} plane_enabled={} ctl_before=0x{:08X} ctl_after=0x{:08X} surf_before=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ok={} logo={} ui3_ready={} default_overlay_marker={} ui2_base={} ui2_frame={}\n",
+        "intel/display: primary-boot-surface pipe={} size={}x{} backing={}x{} pitch=0x{:X} bytes=0x{:X} guard={} gpu=0x{:X} phys=0x{:X} plane_enabled={} ctl_before=0x{:08X} ctl_after=0x{:08X} surf_before=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ok={} logo={} ui3_ready={} default_overlay_marker={} ui3_base={} ui3_frame={}\n",
         pipe.name,
         width,
         height,
@@ -674,12 +674,12 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         logo_ok as u8,
         (ok && ui3_boot) as u8,
         default_overlay_marker_ok as u8,
-        ui2_base_ok as u8,
-        ui2_frame_ok as u8
+        ui3_base_ok as u8,
+        ui3_frame_ok as u8
     );
 }
 
-fn init_ui2_base_surface(
+fn init_ui3_base_surface(
     dev: crate::intel::Dev,
     width: u32,
     height: u32,
@@ -687,35 +687,35 @@ fn init_ui2_base_surface(
     byte_len: usize,
 ) -> bool {
     let Some((phys, virt)) = crate::dma::alloc(byte_len, crate::intel::WARM_ALIGN) else {
-        crate::log!("intel/display: ui2-base-surface alloc failed bytes=0x{:X}\n", byte_len);
+        crate::log!("intel/display: ui3-base-surface alloc failed bytes=0x{:X}\n", byte_len);
         return false;
     };
 
     fill_surface_color(virt, pitch_bytes as usize, width, height, 0x00FF_FFFF);
     crate::intel::dma_flush(virt, byte_len);
 
-    if !crate::intel::map_ggtt(dev, phys, byte_len, crate::intel::GPU_VA_DISPLAY_UI2_BASE_BASE) {
+    if !crate::intel::map_ggtt(dev, phys, byte_len, crate::intel::GPU_VA_DISPLAY_UI3_BASE_BASE) {
         crate::log!(
-            "intel/display: ui2-base-surface ggtt map failed bytes=0x{:X} gpu=0x{:X}\n",
+            "intel/display: ui3-base-surface ggtt map failed bytes=0x{:X} gpu=0x{:X}\n",
             byte_len,
-            crate::intel::GPU_VA_DISPLAY_UI2_BASE_BASE
+            crate::intel::GPU_VA_DISPLAY_UI3_BASE_BASE
         );
         return false;
     }
 
-    *UI2_BASE_SURFACE.lock() = Some(DisplayRgba8Surface {
+    *UI3_BASE_SURFACE.lock() = Some(DisplayRgba8Surface {
         width,
         height,
         pitch_bytes,
         phys,
         virt,
-        gpu: crate::intel::GPU_VA_DISPLAY_UI2_BASE_BASE,
+        gpu: crate::intel::GPU_VA_DISPLAY_UI3_BASE_BASE,
         byte_len,
     });
     true
 }
 
-fn init_ui2_frame_surface(
+fn init_ui3_frame_surface(
     dev: crate::intel::Dev,
     width: u32,
     height: u32,
@@ -723,29 +723,29 @@ fn init_ui2_frame_surface(
     byte_len: usize,
 ) -> bool {
     let Some((phys, virt)) = crate::dma::alloc(byte_len, crate::intel::WARM_ALIGN) else {
-        crate::log!("intel/display: ui2-frame-surface alloc failed bytes=0x{:X}\n", byte_len);
+        crate::log!("intel/display: ui3-frame-surface alloc failed bytes=0x{:X}\n", byte_len);
         return false;
     };
 
     fill_surface_color(virt, pitch_bytes as usize, width, height, 0x00FF_FFFF);
     crate::intel::dma_flush(virt, byte_len);
 
-    if !crate::intel::map_ggtt(dev, phys, byte_len, crate::intel::GPU_VA_DISPLAY_UI2_FRAME_BASE) {
+    if !crate::intel::map_ggtt(dev, phys, byte_len, crate::intel::GPU_VA_DISPLAY_UI3_FRAME_BASE) {
         crate::log!(
-            "intel/display: ui2-frame-surface ggtt map failed bytes=0x{:X} gpu=0x{:X}\n",
+            "intel/display: ui3-frame-surface ggtt map failed bytes=0x{:X} gpu=0x{:X}\n",
             byte_len,
-            crate::intel::GPU_VA_DISPLAY_UI2_FRAME_BASE
+            crate::intel::GPU_VA_DISPLAY_UI3_FRAME_BASE
         );
         return false;
     }
 
-    *UI2_FRAME_SURFACE.lock() = Some(DisplayRgba8Surface {
+    *UI3_FRAME_SURFACE.lock() = Some(DisplayRgba8Surface {
         width,
         height,
         pitch_bytes,
         phys,
         virt,
-        gpu: crate::intel::GPU_VA_DISPLAY_UI2_FRAME_BASE,
+        gpu: crate::intel::GPU_VA_DISPLAY_UI3_FRAME_BASE,
         byte_len,
     });
     true
@@ -1692,8 +1692,8 @@ pub(super) fn primary_surface_gpgpu_marker_target() -> Option<PrimarySurfaceGpgp
     })
 }
 
-pub(super) fn ui2_base_surface_gpgpu() -> Option<DisplayRgba8GpgpuSurface> {
-    let surface = (*UI2_BASE_SURFACE.lock())?;
+pub(super) fn ui3_base_surface_gpgpu() -> Option<DisplayRgba8GpgpuSurface> {
+    let surface = (*UI3_BASE_SURFACE.lock())?;
     if surface.virt.is_null() || surface.byte_len == 0 {
         return None;
     }
@@ -1708,8 +1708,8 @@ pub(super) fn ui2_base_surface_gpgpu() -> Option<DisplayRgba8GpgpuSurface> {
     })
 }
 
-pub(super) fn ui2_frame_surface_gpgpu() -> Option<DisplayRgba8GpgpuSurface> {
-    let surface = (*UI2_FRAME_SURFACE.lock())?;
+pub(super) fn ui3_frame_surface_gpgpu() -> Option<DisplayRgba8GpgpuSurface> {
+    let surface = (*UI3_FRAME_SURFACE.lock())?;
     if surface.virt.is_null() || surface.byte_len == 0 {
         return None;
     }

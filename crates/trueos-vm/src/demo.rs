@@ -250,7 +250,7 @@ fn build_probe_summary(buf: &mut [u8; 64], summary: ProbeSummary) -> usize {
     n = push_bytes(buf, n, bool_mark(summary.fs_ok).as_bytes());
     n = push_bytes(buf, n, b" net=");
     n = push_bytes(buf, n, bool_mark(summary.net_ok).as_bytes());
-    n = push_bytes(buf, n, b" ui2=");
+    n = push_bytes(buf, n, b" ui3=");
     push_bytes(buf, n, bool_mark(summary.ui_ok).as_bytes())
 }
 

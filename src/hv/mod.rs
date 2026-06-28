@@ -779,7 +779,7 @@ fn start_with_mode(
 
     // Preserve the VM hull execution contract:
     // actual guest work must stay on HV-reserved VM lanes only, never on BSP
-    // and never on the AP1 UI2/service lane.
+    // and never on the AP1 UI/service lane.
     if !profile.requires_reserved_vm_lane() || !target.supports(profile) {
         clear_blueprint_pending_launch(vm_id);
         vm.starting.store(false, Ordering::Release);

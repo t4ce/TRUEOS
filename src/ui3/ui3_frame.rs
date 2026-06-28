@@ -6,8 +6,9 @@ use libm::{ceilf, fabsf, floorf};
 use spin::Mutex;
 
 use crate::intel::types::{
-    RGB_VERTEX_SIZE, RgbVertex, Rgba8, TEX_VERTEX_SIZE, TexVertex, UiPlaneSlot, UiPresent,
-    UiPresentPath, UiRect, UiSurfaceFormat, read_rgb_vertex_bytes, read_tex_vertex_bytes,
+    Rgba8, SOLID_RECT_SIZE, SPRITE_QUAD_SIZE, SolidRect, SpriteCorner, SpriteQuad, UiPlaneSlot,
+    UiPresent, UiPresentPath, UiRect, UiSurfaceFormat, read_solid_rect_bytes,
+    read_sprite_quad_bytes,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -47,13 +48,19 @@ static UI3_FRAME_BEGINS: AtomicU64 = AtomicU64::new(0);
 static UI3_FRAME_ENDS: AtomicU64 = AtomicU64::new(0);
 static UI3_FRAME_PRESENTS: AtomicU64 = AtomicU64::new(0);
 static UI3_FRAME_PRESENT_FAILS: AtomicU64 = AtomicU64::new(0);
-static UI3_DRAW_RGB_CALLS: AtomicU64 = AtomicU64::new(0);
-static UI3_DRAW_RGB_BYTES: AtomicU64 = AtomicU64::new(0);
-static UI3_DRAW_TEX_CALLS: AtomicU64 = AtomicU64::new(0);
-static UI3_DRAW_TEX_BYTES: AtomicU64 = AtomicU64::new(0);
+static UI3_DRAW_SOLID_CALLS: AtomicU64 = AtomicU64::new(0);
+static UI3_DRAW_SOLID_BYTES: AtomicU64 = AtomicU64::new(0);
+static UI3_DRAW_SPRITE_CALLS: AtomicU64 = AtomicU64::new(0);
+static UI3_DRAW_SPRITE_BYTES: AtomicU64 = AtomicU64::new(0);
 static UI3_TEXTURE_MISSES: AtomicU64 = AtomicU64::new(0);
 static UI3_TARGET_SWITCHES: AtomicU64 = AtomicU64::new(0);
 static UI3_OFFSCREEN_ALLOCS: AtomicU64 = AtomicU64::new(0);
+static UI3_BEGIN_NS: AtomicU64 = AtomicU64::new(0);
+static UI3_DRAW_SOLID_NS: AtomicU64 = AtomicU64::new(0);
+static UI3_DRAW_SPRITE_NS: AtomicU64 = AtomicU64::new(0);
+static UI3_PRESENT_FLUSH_NS: AtomicU64 = AtomicU64::new(0);
+static UI3_PRESENT_SURFACE_NS: AtomicU64 = AtomicU64::new(0);
+static UI3_COMMIT_NS: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn create_frame(x: i32, y: i32, width: u32, height: u32, tex_id: u32) -> u32 {
     let width = width.max(1);
@@ -176,6 +183,7 @@ pub(crate) fn begin_frame(
     preserve_contents: bool,
     allow_present: bool,
 ) -> i32 {
+    let begin_start_ns = now_ns();
     let (front_surface, back_surface) = {
         let mut frames = FRAMES.lock();
         let Some(frame) = frames.get_mut(&frame_id) else {
@@ -199,6 +207,7 @@ pub(crate) fn begin_frame(
         let _ = crate::r::ui_surface::clear_surface_rgb(back_surface, clear_rgb & 0x00FF_FFFF);
     }
     UI3_FRAME_BEGINS.fetch_add(1, Ordering::Relaxed);
+    UI3_BEGIN_NS.fetch_add(elapsed_ns_since(begin_start_ns), Ordering::Relaxed);
     0
 }
 
@@ -254,12 +263,13 @@ pub(crate) fn set_render_target(frame_id: u32, tex_id: u32) -> i32 {
     0
 }
 
-pub(crate) fn draw_rgb_triangles(frame_id: u32, bytes: &[u8]) -> i32 {
-    if bytes.len() % (RGB_VERTEX_SIZE * 3) != 0 {
+pub(crate) fn draw_solid_batch(frame_id: u32, bytes: &[u8]) -> i32 {
+    if bytes.len() % SOLID_RECT_SIZE != 0 {
         return -3;
     }
-    UI3_DRAW_RGB_CALLS.fetch_add(1, Ordering::Relaxed);
-    UI3_DRAW_RGB_BYTES.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+    let draw_start_ns = now_ns();
+    UI3_DRAW_SOLID_CALLS.fetch_add(1, Ordering::Relaxed);
+    UI3_DRAW_SOLID_BYTES.fetch_add(bytes.len() as u64, Ordering::Relaxed);
     let Some(frame) = frame_snapshot(frame_id) else {
         return -1;
     };
@@ -273,7 +283,7 @@ pub(crate) fn draw_rgb_triangles(frame_id: u32, bytes: &[u8]) -> i32 {
                 return -1;
             };
             let dst = unsafe { core::slice::from_raw_parts_mut(access.virt, access.byte_len) };
-            raster_rgb_triangles(
+            raster_solid_batch(
                 dst,
                 access.pitch as usize,
                 access.width,
@@ -288,7 +298,7 @@ pub(crate) fn draw_rgb_triangles(frame_id: u32, bytes: &[u8]) -> i32 {
             let image = offscreen
                 .entry(tex_id)
                 .or_insert_with(|| new_cpu_image(frame.width, frame.height));
-            raster_rgb_triangles(
+            raster_solid_batch(
                 &mut image.rgba,
                 image.width as usize * 4,
                 image.width,
@@ -298,15 +308,17 @@ pub(crate) fn draw_rgb_triangles(frame_id: u32, bytes: &[u8]) -> i32 {
             );
         }
     }
+    UI3_DRAW_SOLID_NS.fetch_add(elapsed_ns_since(draw_start_ns), Ordering::Relaxed);
     0
 }
 
-pub(crate) fn draw_tex_triangles(frame_id: u32, tex_id: u32, bytes: &[u8]) -> i32 {
-    if bytes.len() % (TEX_VERTEX_SIZE * 3) != 0 {
+pub(crate) fn draw_sprite_batch(frame_id: u32, tex_id: u32, bytes: &[u8]) -> i32 {
+    if bytes.len() % SPRITE_QUAD_SIZE != 0 {
         return -3;
     }
-    UI3_DRAW_TEX_CALLS.fetch_add(1, Ordering::Relaxed);
-    UI3_DRAW_TEX_BYTES.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+    let draw_start_ns = now_ns();
+    UI3_DRAW_SPRITE_CALLS.fetch_add(1, Ordering::Relaxed);
+    UI3_DRAW_SPRITE_BYTES.fetch_add(bytes.len() as u64, Ordering::Relaxed);
     let Some(frame) = frame_snapshot(frame_id) else {
         return -1;
     };
@@ -324,7 +336,7 @@ pub(crate) fn draw_tex_triangles(frame_id: u32, tex_id: u32, bytes: &[u8]) -> i3
                 return -1;
             };
             let dst = unsafe { core::slice::from_raw_parts_mut(access.virt, access.byte_len) };
-            raster_tex_triangles(
+            raster_sprite_batch(
                 dst,
                 access.pitch as usize,
                 access.width,
@@ -340,7 +352,7 @@ pub(crate) fn draw_tex_triangles(frame_id: u32, tex_id: u32, bytes: &[u8]) -> i3
             let image = offscreen
                 .entry(dst_tex_id)
                 .or_insert_with(|| new_cpu_image(frame.width, frame.height));
-            raster_tex_triangles(
+            raster_sprite_batch(
                 &mut image.rgba,
                 image.width as usize * 4,
                 image.width,
@@ -351,6 +363,7 @@ pub(crate) fn draw_tex_triangles(frame_id: u32, tex_id: u32, bytes: &[u8]) -> i3
             );
         }
     }
+    UI3_DRAW_SPRITE_NS.fetch_add(elapsed_ns_since(draw_start_ns), Ordering::Relaxed);
     0
 }
 
@@ -367,7 +380,9 @@ fn present_frame(frame_id: u32, swap_on_success: bool) -> bool {
     } else {
         frame.front_surface
     };
+    let flush_start_ns = now_ns();
     crate::r::ui_surface::flush_surface(surface);
+    UI3_PRESENT_FLUSH_NS.fetch_add(elapsed_ns_since(flush_start_ns), Ordering::Relaxed);
     let dst_x = frame.x.max(0) as u32;
     let dst_y = frame.y.max(0) as u32;
     let present = UiPresent {
@@ -375,7 +390,9 @@ fn present_frame(frame_id: u32, swap_on_success: bool) -> bool {
         dst: UiRect::new(dst_x, dst_y, frame.width, frame.height),
         plane: UiPlaneSlot::Primary,
     };
+    let present_start_ns = now_ns();
     let result = crate::r::ui_surface::present_surface(surface, present, "ui3-frame");
+    UI3_PRESENT_SURFACE_NS.fetch_add(elapsed_ns_since(present_start_ns), Ordering::Relaxed);
     let present_count = UI3_FRAME_PRESENTS.fetch_add(1, Ordering::Relaxed) + 1;
     match result {
         Ok(path) => {
@@ -403,6 +420,7 @@ fn present_frame(frame_id: u32, swap_on_success: bool) -> bool {
 }
 
 fn commit_frame_without_present(frame_id: u32) -> bool {
+    let commit_start_ns = now_ns();
     let frame = {
         let frames = FRAMES.lock();
         let Some(frame) = frames.get(&frame_id) else {
@@ -412,6 +430,7 @@ fn commit_frame_without_present(frame_id: u32) -> bool {
     };
     let _ = crate::r::ui_surface::flush_surface(frame.back_surface);
     swap_frame_surfaces(frame_id, frame.front_surface, frame.back_surface);
+    UI3_COMMIT_NS.fetch_add(elapsed_ns_since(commit_start_ns), Ordering::Relaxed);
     true
 }
 
@@ -420,7 +439,7 @@ fn log_present_stats(count: u64, frame_id: u32, frame: Ui3Frame, path: UiPresent
         return;
     }
     crate::log!(
-        "ui3/frame: present#{} frame={} path={:?} size={}x{} dst={},{} begin={} end={} tex_calls={} tex_bytes={} rgb_calls={} rgb_bytes={} target_switches={} offscreen_allocs={} tex_misses={}\n",
+        "ui3/frame: present#{} frame={} path={:?} size={}x{} dst={},{} begin={} end={} sprite_calls={} sprite_bytes={} sprite_ms={} sprite_avg_us={} solid_calls={} solid_bytes={} solid_ms={} solid_avg_us={} begin_ms={} present_flush_ms={} present_surface_ms={} present_avg_ms={} commit_ms={} target_switches={} offscreen_allocs={} sprite_misses={}\n",
         count,
         frame_id,
         path,
@@ -430,14 +449,65 @@ fn log_present_stats(count: u64, frame_id: u32, frame: Ui3Frame, path: UiPresent
         frame.y.max(0),
         UI3_FRAME_BEGINS.load(Ordering::Relaxed),
         UI3_FRAME_ENDS.load(Ordering::Relaxed),
-        UI3_DRAW_TEX_CALLS.load(Ordering::Relaxed),
-        UI3_DRAW_TEX_BYTES.load(Ordering::Relaxed),
-        UI3_DRAW_RGB_CALLS.load(Ordering::Relaxed),
-        UI3_DRAW_RGB_BYTES.load(Ordering::Relaxed),
+        UI3_DRAW_SPRITE_CALLS.load(Ordering::Relaxed),
+        UI3_DRAW_SPRITE_BYTES.load(Ordering::Relaxed),
+        ns_to_ms(UI3_DRAW_SPRITE_NS.load(Ordering::Relaxed)),
+        avg_ns_to_us(
+            UI3_DRAW_SPRITE_NS.load(Ordering::Relaxed),
+            UI3_DRAW_SPRITE_CALLS.load(Ordering::Relaxed)
+        ),
+        UI3_DRAW_SOLID_CALLS.load(Ordering::Relaxed),
+        UI3_DRAW_SOLID_BYTES.load(Ordering::Relaxed),
+        ns_to_ms(UI3_DRAW_SOLID_NS.load(Ordering::Relaxed)),
+        avg_ns_to_us(
+            UI3_DRAW_SOLID_NS.load(Ordering::Relaxed),
+            UI3_DRAW_SOLID_CALLS.load(Ordering::Relaxed)
+        ),
+        ns_to_ms(UI3_BEGIN_NS.load(Ordering::Relaxed)),
+        ns_to_ms(UI3_PRESENT_FLUSH_NS.load(Ordering::Relaxed)),
+        ns_to_ms(UI3_PRESENT_SURFACE_NS.load(Ordering::Relaxed)),
+        avg_ns_to_ms(
+            UI3_PRESENT_SURFACE_NS.load(Ordering::Relaxed),
+            UI3_FRAME_PRESENTS.load(Ordering::Relaxed)
+        ),
+        ns_to_ms(UI3_COMMIT_NS.load(Ordering::Relaxed)),
         UI3_TARGET_SWITCHES.load(Ordering::Relaxed),
         UI3_OFFSCREEN_ALLOCS.load(Ordering::Relaxed),
         UI3_TEXTURE_MISSES.load(Ordering::Relaxed)
     );
+}
+
+#[inline]
+fn now_ns() -> u64 {
+    crate::chronos::monotonic_nanos()
+}
+
+#[inline]
+fn elapsed_ns_since(start_ns: u64) -> u64 {
+    now_ns().saturating_sub(start_ns)
+}
+
+#[inline]
+fn ns_to_ms(ns: u64) -> u64 {
+    ns / 1_000_000
+}
+
+#[inline]
+fn avg_ns_to_us(total_ns: u64, count: u64) -> u64 {
+    if count == 0 {
+        0
+    } else {
+        total_ns / count / 1_000
+    }
+}
+
+#[inline]
+fn avg_ns_to_ms(total_ns: u64, count: u64) -> u64 {
+    if count == 0 {
+        0
+    } else {
+        total_ns / count / 1_000_000
+    }
 }
 
 fn frame_snapshot(frame_id: u32) -> Option<Ui3Frame> {
@@ -551,7 +621,7 @@ fn texture_source(tex_id: u32) -> Option<CpuImage> {
     })
 }
 
-fn raster_rgb_triangles(
+fn raster_solid_batch(
     dst: &mut [u8],
     pitch: usize,
     width: u32,
@@ -559,24 +629,18 @@ fn raster_rgb_triangles(
     format: UiSurfaceFormat,
     bytes: &[u8],
 ) {
-    let tri_bytes = RGB_VERTEX_SIZE * 3;
+    let item_bytes = SOLID_RECT_SIZE;
     let mut off = 0usize;
-    while off + tri_bytes <= bytes.len() {
-        let Some(v0) = read_rgb_vertex_bytes(bytes, off) else {
+    while off + item_bytes <= bytes.len() {
+        let Some(rect) = read_solid_rect_bytes(bytes, off) else {
             break;
         };
-        let Some(v1) = read_rgb_vertex_bytes(bytes, off + RGB_VERTEX_SIZE) else {
-            break;
-        };
-        let Some(v2) = read_rgb_vertex_bytes(bytes, off + RGB_VERTEX_SIZE * 2) else {
-            break;
-        };
-        raster_rgb_triangle(dst, pitch, width, height, format, v0, v1, v2);
-        off += tri_bytes;
+        raster_solid_rect(dst, pitch, width, height, format, rect);
+        off += item_bytes;
     }
 }
 
-fn raster_tex_triangles(
+fn raster_sprite_batch(
     dst: &mut [u8],
     pitch: usize,
     width: u32,
@@ -585,138 +649,94 @@ fn raster_tex_triangles(
     src: &CpuImage,
     bytes: &[u8],
 ) {
-    let tri_bytes = TEX_VERTEX_SIZE * 3;
+    let item_bytes = SPRITE_QUAD_SIZE;
     let mut off = 0usize;
-    while off + tri_bytes <= bytes.len() {
-        let Some(v0) = read_tex_vertex_bytes(bytes, off) else {
+    while off + item_bytes <= bytes.len() {
+        let Some(quad) = read_sprite_quad_bytes(bytes, off) else {
             break;
         };
-        let Some(v1) = read_tex_vertex_bytes(bytes, off + TEX_VERTEX_SIZE) else {
-            break;
-        };
-        let Some(v2) = read_tex_vertex_bytes(bytes, off + TEX_VERTEX_SIZE * 2) else {
-            break;
-        };
-        raster_tex_triangle(dst, pitch, width, height, format, src, v0, v1, v2);
-        off += tri_bytes;
+        raster_sprite_quad(dst, pitch, width, height, format, src, quad);
+        off += item_bytes;
     }
 }
 
-fn raster_rgb_triangle(
+fn raster_solid_rect(
     dst: &mut [u8],
     pitch: usize,
     width: u32,
     height: u32,
     format: UiSurfaceFormat,
-    v0: RgbVertex,
-    v1: RgbVertex,
-    v2: RgbVertex,
+    rect: SolidRect,
 ) {
-    let p0 = to_pixel(v0.x, v0.y, width, height);
-    let p1 = to_pixel(v1.x, v1.y, width, height);
-    let p2 = to_pixel(v2.x, v2.y, width, height);
-    let Some((min_x, min_y, max_x, max_y, area)) = triangle_bounds(p0, p1, p2, width, height)
-    else {
+    if !(rect.w > 0.0 && rect.h > 0.0) {
         return;
-    };
-    for y in min_y..=max_y {
-        for x in min_x..=max_x {
-            let p = (x as f32 + 0.5, y as f32 + 0.5);
-            let w0 = edge(p1, p2, p) / area;
-            let w1 = edge(p2, p0, p) / area;
-            let w2 = edge(p0, p1, p) / area;
-            if inside(w0, w1, w2) {
-                let color = mix_color(v0.color, v1.color, v2.color, w0, w1, w2);
-                blend_pixel(dst, pitch, x as u32, y as u32, format, color);
-            }
-        }
-    }
-}
-
-fn raster_tex_triangle(
-    dst: &mut [u8],
-    pitch: usize,
-    width: u32,
-    height: u32,
-    format: UiSurfaceFormat,
-    src: &CpuImage,
-    v0: TexVertex,
-    v1: TexVertex,
-    v2: TexVertex,
-) {
-    let p0 = to_pixel(v0.x, v0.y, width, height);
-    let p1 = to_pixel(v1.x, v1.y, width, height);
-    let p2 = to_pixel(v2.x, v2.y, width, height);
-    let Some((min_x, min_y, max_x, max_y, area)) = triangle_bounds(p0, p1, p2, width, height)
-    else {
-        return;
-    };
-    for y in min_y..=max_y {
-        for x in min_x..=max_x {
-            let p = (x as f32 + 0.5, y as f32 + 0.5);
-            let w0 = edge(p1, p2, p) / area;
-            let w1 = edge(p2, p0, p) / area;
-            let w2 = edge(p0, p1, p) / area;
-            if inside(w0, w1, w2) {
-                let u = v0.u * w0 + v1.u * w1 + v2.u * w2;
-                let v = v0.v * w0 + v1.v * w1 + v2.v * w2;
-                let texel = sample_rgba(src, u, v);
-                let tint = mix_color(v0.color, v1.color, v2.color, w0, w1, w2);
-                blend_pixel(dst, pitch, x as u32, y as u32, format, modulate(texel, tint));
-            }
-        }
-    }
-}
-
-fn to_pixel(x: f32, y: f32, width: u32, height: u32) -> (f32, f32) {
-    ((x + 1.0) * 0.5 * width.max(1) as f32, (1.0 - y) * 0.5 * height.max(1) as f32)
-}
-
-fn triangle_bounds(
-    p0: (f32, f32),
-    p1: (f32, f32),
-    p2: (f32, f32),
-    width: u32,
-    height: u32,
-) -> Option<(i32, i32, i32, i32, f32)> {
-    let area = edge(p0, p1, p2);
-    if fabsf(area) < 0.00001 {
-        return None;
     }
     let max_w = width.max(1) as i32 - 1;
     let max_h = height.max(1) as i32 - 1;
-    let min_x = floorf(p0.0.min(p1.0).min(p2.0)).max(0.0) as i32;
-    let min_y = floorf(p0.1.min(p1.1).min(p2.1)).max(0.0) as i32;
-    let max_x = (ceilf(p0.0.max(p1.0).max(p2.0)) as i32).min(max_w);
-    let max_y = (ceilf(p0.1.max(p1.1).max(p2.1)) as i32).min(max_h);
+    let min_x = floorf(rect.x).max(0.0) as i32;
+    let min_y = floorf(rect.y).max(0.0) as i32;
+    let max_x = (ceilf(rect.x + rect.w) as i32 - 1).min(max_w);
+    let max_y = (ceilf(rect.y + rect.h) as i32 - 1).min(max_h);
     if min_x > max_x || min_y > max_y {
-        return None;
+        return;
     }
-    Some((min_x, min_y, max_x, max_y, area))
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            blend_pixel(dst, pitch, x as u32, y as u32, format, rect.color);
+        }
+    }
+}
+
+fn raster_sprite_quad(
+    dst: &mut [u8],
+    pitch: usize,
+    width: u32,
+    height: u32,
+    format: UiSurfaceFormat,
+    src: &CpuImage,
+    quad: SpriteQuad,
+) {
+    let SpriteQuad {
+        c0,
+        c1,
+        c2,
+        c3,
+        color,
+    } = quad;
+    let ex = (c1.x - c0.x, c1.y - c0.y);
+    let ey = (c3.x - c0.x, c3.y - c0.y);
+    let det = ex.0 * ey.1 - ex.1 * ey.0;
+    if fabsf(det) < 0.00001 {
+        return;
+    }
+    let max_w = width.max(1) as i32 - 1;
+    let max_h = height.max(1) as i32 - 1;
+    let min_x = floorf(c0.x.min(c1.x).min(c2.x).min(c3.x)).max(0.0) as i32;
+    let min_y = floorf(c0.y.min(c1.y).min(c2.y).min(c3.y)).max(0.0) as i32;
+    let max_x = (ceilf(c0.x.max(c1.x).max(c2.x).max(c3.x)) as i32).min(max_w);
+    let max_y = (ceilf(c0.y.max(c1.y).max(c2.y).max(c3.y)) as i32).min(max_h);
+    if min_x > max_x || min_y > max_y {
+        return;
+    }
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let dx = x as f32 + 0.5 - c0.x;
+            let dy = y as f32 + 0.5 - c0.y;
+            let s = (dx * ey.1 - dy * ey.0) / det;
+            let t = (ex.0 * dy - ex.1 * dx) / det;
+            if (-0.0001..=1.0001).contains(&s) && (-0.0001..=1.0001).contains(&t) {
+                let u = lerp2(c0.u, c1.u, c3.u, s, t);
+                let v = lerp2(c0.v, c1.v, c3.v, s, t);
+                let texel = sample_rgba(src, u, v);
+                blend_pixel(dst, pitch, x as u32, y as u32, format, modulate(texel, color));
+            }
+        }
+    }
 }
 
 #[inline]
-fn edge(a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> f32 {
-    (c.0 - a.0) * (b.1 - a.1) - (c.1 - a.1) * (b.0 - a.0)
-}
-
-#[inline]
-fn inside(w0: f32, w1: f32, w2: f32) -> bool {
-    w0 >= -0.0001 && w1 >= -0.0001 && w2 >= -0.0001
-}
-
-fn mix_color(c0: Rgba8, c1: Rgba8, c2: Rgba8, w0: f32, w1: f32, w2: f32) -> Rgba8 {
-    Rgba8::new(
-        mix_u8(c0.r, c1.r, c2.r, w0, w1, w2),
-        mix_u8(c0.g, c1.g, c2.g, w0, w1, w2),
-        mix_u8(c0.b, c1.b, c2.b, w0, w1, w2),
-        mix_u8(c0.a, c1.a, c2.a, w0, w1, w2),
-    )
-}
-
-#[inline]
-fn mix_u8(a: u8, b: u8, c: u8, w0: f32, w1: f32, w2: f32) -> u8 {
-    ((a as f32 * w0 + b as f32 * w1 + c as f32 * w2).clamp(0.0, 255.0) + 0.5) as u8
+fn lerp2(origin: f32, axis_x: f32, axis_y: f32, s: f32, t: f32) -> f32 {
+    origin + (axis_x - origin) * s + (axis_y - origin) * t
 }
 
 fn sample_rgba(src: &CpuImage, u: f32, v: f32) -> Rgba8 {

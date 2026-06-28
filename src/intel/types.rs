@@ -204,6 +204,35 @@ pub struct TexVertex {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(C)]
+pub struct SolidRect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub color: Rgba8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(C)]
+pub struct SpriteCorner {
+    pub x: f32,
+    pub y: f32,
+    pub u: f32,
+    pub v: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(C)]
+pub struct SpriteQuad {
+    pub c0: SpriteCorner,
+    pub c1: SpriteCorner,
+    pub c2: SpriteCorner,
+    pub c3: SpriteCorner,
+    pub color: Rgba8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RgbVertexF32 {
     pub x: f32,
     pub y: f32,
@@ -234,6 +263,8 @@ pub struct RgbVertexPx {
 
 pub const RGB_VERTEX_SIZE: usize = core::mem::size_of::<RgbVertex>();
 pub const TEX_VERTEX_SIZE: usize = core::mem::size_of::<TexVertex>();
+pub const SOLID_RECT_SIZE: usize = core::mem::size_of::<SolidRect>();
+pub const SPRITE_QUAD_SIZE: usize = core::mem::size_of::<SpriteQuad>();
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ViewTransform {
@@ -380,6 +411,54 @@ pub fn read_tex_vertex_f32_bytes(bytes: &[u8], off: usize) -> Option<TexVertexF3
         g: (vertex.color.g as f32) / 255.0,
         b: (vertex.color.b as f32) / 255.0,
         a: (vertex.color.a as f32) / 255.0,
+    })
+}
+
+#[inline]
+fn read_f32_le(bytes: &[u8], off: usize) -> Option<f32> {
+    Some(f32::from_le_bytes([
+        *bytes.get(off)?,
+        *bytes.get(off + 1)?,
+        *bytes.get(off + 2)?,
+        *bytes.get(off + 3)?,
+    ]))
+}
+
+#[inline]
+pub fn read_solid_rect_bytes(bytes: &[u8], off: usize) -> Option<SolidRect> {
+    if off + SOLID_RECT_SIZE > bytes.len() {
+        return None;
+    }
+    Some(SolidRect {
+        x: read_f32_le(bytes, off)?,
+        y: read_f32_le(bytes, off + 4)?,
+        w: read_f32_le(bytes, off + 8)?,
+        h: read_f32_le(bytes, off + 12)?,
+        color: Rgba8::new(bytes[off + 16], bytes[off + 17], bytes[off + 18], bytes[off + 19]),
+    })
+}
+
+#[inline]
+pub fn read_sprite_corner_bytes(bytes: &[u8], off: usize) -> Option<SpriteCorner> {
+    Some(SpriteCorner {
+        x: read_f32_le(bytes, off)?,
+        y: read_f32_le(bytes, off + 4)?,
+        u: read_f32_le(bytes, off + 8)?,
+        v: read_f32_le(bytes, off + 12)?,
+    })
+}
+
+#[inline]
+pub fn read_sprite_quad_bytes(bytes: &[u8], off: usize) -> Option<SpriteQuad> {
+    if off + SPRITE_QUAD_SIZE > bytes.len() {
+        return None;
+    }
+    Some(SpriteQuad {
+        c0: read_sprite_corner_bytes(bytes, off)?,
+        c1: read_sprite_corner_bytes(bytes, off + 16)?,
+        c2: read_sprite_corner_bytes(bytes, off + 32)?,
+        c3: read_sprite_corner_bytes(bytes, off + 48)?,
+        color: Rgba8::new(bytes[off + 64], bytes[off + 65], bytes[off + 66], bytes[off + 67]),
     })
 }
 

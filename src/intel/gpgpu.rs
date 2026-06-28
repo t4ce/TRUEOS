@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use libm::{ceilf, floorf, roundf};
 use spin::{Mutex, Once};
@@ -726,6 +726,7 @@ static DIRECT_RCS_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 static DIRECT_RCS_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
 static COPY_RECT_WALKER_RAN: AtomicBool = AtomicBool::new(false);
 static PRESENT_RGBA8_TO_PRIMARY_XRGB_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
+static PRESENT_RGBA8_TO_PRIMARY_XRGB_UI3_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
 static COPY_RECT_256_RAN: AtomicBool = AtomicBool::new(false);
 static COPY_RECT_256X2_RAN: AtomicBool = AtomicBool::new(false);
 static RECT_API_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
@@ -2963,6 +2964,7 @@ pub(crate) fn present_rgba8_rect_to_primary_xrgb_stats_with_flip(
     ) {
         return None;
     }
+    log_present_rgba8_to_primary_stats(src_rect, dst_xy, primary, stats);
     Some(stats)
 }
 
@@ -3744,8 +3746,8 @@ fn clear_rgba8_surface_white_stats(dst: GpgpuRgba8Surface) -> GpgpuSubmitStats {
     }
 }
 
-pub(crate) fn clear_ui2_frame_rgba8_white_stats() -> Option<GpgpuSubmitStats> {
-    let target = super::display::ui2_frame_surface_gpgpu()?;
+pub(crate) fn clear_ui3_frame_rgba8_white_stats() -> Option<GpgpuSubmitStats> {
+    let target = super::display::ui3_frame_surface_gpgpu()?;
     let frame = display_rgba8_surface_from_target(target)?;
     let stats = clear_rgba8_surface_white_stats(frame);
     (stats.submits > 0).then_some(stats)
@@ -3787,9 +3789,9 @@ pub(crate) fn clear_primary_rgba8_white_for_redraw_stats(
     })
 }
 
-pub(crate) fn copy_ui2_base_to_primary_rgba8() -> Option<GpgpuSubmitStats> {
+pub(crate) fn copy_ui3_base_to_primary_rgba8() -> Option<GpgpuSubmitStats> {
     let total_start_tick = direct_rcs_now_tick();
-    let src_target = super::display::ui2_base_surface_gpgpu()?;
+    let src_target = super::display::ui3_base_surface_gpgpu()?;
     let primary_target = super::display::primary_surface_gpgpu_marker_target()?;
     let src = GpgpuRgba8Surface::new(
         src_target.phys,
@@ -3825,7 +3827,7 @@ pub(crate) fn copy_ui2_base_to_primary_rgba8() -> Option<GpgpuSubmitStats> {
     }
     let present_start_tick = direct_rcs_now_tick();
     super::display::notify_primary_surface_external_write(
-        "gpgpu-ui2-base-copy",
+        "gpgpu-ui3-base-copy",
         0,
         primary_target.byte_len,
     )
@@ -7024,6 +7026,7 @@ fn submit_present_rgba8_to_primary_xrgb_spans_with_stats(
     params: PresentRgba8ToPrimaryXrgbRectParams,
     flavor: CopyRectKernelFlavor,
 ) -> GpgpuSubmitStats {
+    let total_start_tick = direct_rcs_now_tick();
     let Some(total_spans) =
         present_rect_span_count(params, flavor.span_pixels, flavor.rows_per_walker)
     else {
@@ -7042,26 +7045,84 @@ fn submit_present_rgba8_to_primary_xrgb_spans_with_stats(
         };
         span_params.push(span);
         if span_params.len() == COPY_RECT_BATCH_MAX_SPANS {
+            let submit_start_tick = direct_rcs_now_tick();
             if !submit_present_rgba8_to_primary_xrgb_span_params_batch(
                 src,
                 dst,
                 &span_params,
                 flavor,
             ) {
+                stats.total_ms = direct_rcs_elapsed_ms_since(total_start_tick);
                 return stats;
             }
+            stats.submit_ms = stats
+                .submit_ms
+                .saturating_add(direct_rcs_elapsed_ms_since(submit_start_tick));
             stats.spans = stats.spans.saturating_add(span_params.len());
             stats.submits = stats.submits.saturating_add(1);
             span_params.clear();
         }
     }
-    if !span_params.is_empty()
-        && submit_present_rgba8_to_primary_xrgb_span_params_batch(src, dst, &span_params, flavor)
-    {
-        stats.spans = stats.spans.saturating_add(span_params.len());
-        stats.submits = stats.submits.saturating_add(1);
+    if !span_params.is_empty() {
+        let submit_start_tick = direct_rcs_now_tick();
+        if submit_present_rgba8_to_primary_xrgb_span_params_batch(src, dst, &span_params, flavor) {
+            stats.submit_ms = stats
+                .submit_ms
+                .saturating_add(direct_rcs_elapsed_ms_since(submit_start_tick));
+            stats.spans = stats.spans.saturating_add(span_params.len());
+            stats.submits = stats.submits.saturating_add(1);
+        } else {
+            stats.total_ms = direct_rcs_elapsed_ms_since(total_start_tick);
+            return stats;
+        }
     }
+    stats.total_ms = direct_rcs_elapsed_ms_since(total_start_tick);
     stats
+}
+
+fn log_present_rgba8_to_primary_stats(
+    src_rect: GpgpuRect,
+    dst_xy: GpgpuPoint,
+    primary: GpgpuRgba8Surface,
+    stats: GpgpuSubmitStats,
+) {
+    let seq = PRESENT_RGBA8_TO_PRIMARY_XRGB_UI3_LOG_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+    if seq > 8 && seq % 60 != 0 {
+        return;
+    }
+    let pixels = (src_rect.width as u64).saturating_mul(src_rect.height as u64);
+    let spans_per_submit = if stats.submits == 0 {
+        0
+    } else {
+        stats.spans / stats.submits
+    };
+    crate::log!(
+        "intel/gpgpu-present: seq={} rect={}x{} dst={},{} primary={}x{} pitch={} pixels={} spans={} submits={} spans_per_submit={} submit_ms={} total_ms={} avg_submit_us={}\n",
+        seq,
+        src_rect.width,
+        src_rect.height,
+        dst_xy.x,
+        dst_xy.y,
+        primary.width,
+        primary.height,
+        primary.pitch_bytes,
+        pixels,
+        stats.spans,
+        stats.submits,
+        spans_per_submit,
+        stats.submit_ms,
+        stats.total_ms,
+        avg_ms_to_us(stats.submit_ms, stats.submits as u64)
+    );
+}
+
+#[inline]
+fn avg_ms_to_us(total_ms: u64, count: u64) -> u64 {
+    if count == 0 {
+        0
+    } else {
+        total_ms.saturating_mul(1000) / count
+    }
 }
 
 fn copy_rect_span_count(

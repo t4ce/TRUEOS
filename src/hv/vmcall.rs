@@ -11,7 +11,7 @@
 
 use crate::hv::hvlogf;
 use crate::hv::memory::kernel_va_to_pa;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ── op codes (u32, written by guest before vmcall) ──────────────────────────
 pub const OP_PRESERVE: u32 = 0x01; // snapshot + stop
@@ -30,8 +30,8 @@ pub const OP_BP_UI3_FRAME_SET_SIZE: u32 = 0x86; // arg0=frame_id, arg1=w/h -> rc
 pub const OP_BP_UI3_FRAME_BEGIN: u32 = 0x87; // arg0=frame_id, arg1=clear/flags -> rc
 pub const OP_BP_UI3_FRAME_END: u32 = 0x88; // arg0=frame_id -> rc
 pub const OP_BP_UI3_FRAME_SET_RENDER_TARGET: u32 = 0x89; // arg0=frame_id, arg1=tex_id -> rc
-pub const OP_BP_UI3_FRAME_DRAW_RGB_TRIANGLES: u32 = 0x8A; // arg0=frame_id -> rc
-pub const OP_BP_UI3_FRAME_DRAW_TEX_TRIANGLES: u32 = 0x8B; // arg0=frame_id,arg1=tex_id -> rc
+pub const OP_BP_UI3_FRAME_DRAW_SOLID_BATCH: u32 = 0x8A; // arg0=frame_id -> rc
+pub const OP_BP_UI3_FRAME_DRAW_SPRITE_BATCH: u32 = 0x8B; // arg0=frame_id,arg1=tex_id -> rc
 pub const OP_BP_UI3_TEXTURE_UPLOAD_BEGIN: u32 = 0x8C; // arg0=tex_id, arg1=w/h, data=total_len -> rc
 pub const OP_BP_UI3_TEXTURE_UPLOAD_CHUNK: u32 = 0x8D; // arg0=tex_id, arg1=offset, payload=rgba -> rc
 pub const OP_BP_UI3_TEXTURE_UPLOAD_FINISH: u32 = 0x8E; // arg0=tex_id -> rc
@@ -152,6 +152,16 @@ pub enum DispatchOutcome {
 }
 
 static GUEST_CABI_SEQ: AtomicU32 = AtomicU32::new(1);
+static UI3_VMCALL_COUNT: AtomicU64 = AtomicU64::new(0);
+static UI3_VMCALL_BYTES: AtomicU64 = AtomicU64::new(0);
+static UI3_VMCALL_NS: AtomicU64 = AtomicU64::new(0);
+static UI3_VMCALL_MAX_NS: AtomicU64 = AtomicU64::new(0);
+static UI3_VMCALL_DRAW_SPRITE_COUNT: AtomicU64 = AtomicU64::new(0);
+static UI3_VMCALL_DRAW_SPRITE_NS: AtomicU64 = AtomicU64::new(0);
+static UI3_VMCALL_DRAW_SOLID_COUNT: AtomicU64 = AtomicU64::new(0);
+static UI3_VMCALL_DRAW_SOLID_NS: AtomicU64 = AtomicU64::new(0);
+static UI3_VMCALL_UPLOAD_CHUNK_COUNT: AtomicU64 = AtomicU64::new(0);
+static UI3_VMCALL_UPLOAD_CHUNK_NS: AtomicU64 = AtomicU64::new(0);
 
 /// Static 4 K backing page for CommPage.
 #[repr(C, align(4096))]
@@ -340,6 +350,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         hvlogf(format_args!("hv: vm{} reporting: vmcall bad vm id", vm_id));
         return DispatchOutcome::Stop;
     };
+    let dispatch_start_ns = crate::chronos::monotonic_nanos();
     match op {
         OP_PRESERVE => {
             write_response(vm_id, seq, STATUS_OK, 0, 0);
@@ -377,28 +388,33 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             } else {
                 write_response(vm_id, seq, STATUS_OK, frame_id as u64, 0);
             }
+            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
             DispatchOutcome::Resume
         }
         OP_BP_UI3_FRAME_CLOSE => {
             let ok = crate::ui3::ui3_frame::close_frame(arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, if ok { 0 } else { (-1i64) as u64 }, 0);
+            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
             DispatchOutcome::Resume
         }
         OP_BP_UI3_FRAME_REQUEST_REPAINT => {
             let ok = crate::ui3::ui3_frame::request_repaint(arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, if ok { 0 } else { (-1i64) as u64 }, 0);
+            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
             DispatchOutcome::Resume
         }
         OP_BP_UI3_FRAME_SET_POSITION => {
             let (x, y) = unpack_i32_pair(arg1);
             let ok = crate::ui3::ui3_frame::set_position(arg0 as u32, x, y);
             write_response(vm_id, seq, STATUS_OK, if ok { 0 } else { (-1i64) as u64 }, 0);
+            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
             DispatchOutcome::Resume
         }
         OP_BP_UI3_FRAME_SET_SIZE => {
             let (width, height) = unpack_u32_pair(arg1);
             let ok = crate::ui3::ui3_frame::set_size(arg0 as u32, width, height);
             write_response(vm_id, seq, STATUS_OK, if ok { 0 } else { (-1i64) as u64 }, 0);
+            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
             DispatchOutcome::Resume
         }
         OP_BP_UI3_FRAME_BEGIN => {
@@ -413,34 +429,41 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 allow_present,
             );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
             DispatchOutcome::Resume
         }
         OP_BP_UI3_FRAME_END => {
             let rc = crate::ui3::ui3_frame::end_frame(arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
             DispatchOutcome::Resume
         }
         OP_BP_UI3_FRAME_SET_RENDER_TARGET => {
             let rc = crate::ui3::ui3_frame::set_render_target(arg0 as u32, arg1 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
             DispatchOutcome::Resume
         }
-        OP_BP_UI3_FRAME_DRAW_RGB_TRIANGLES => {
+        OP_BP_UI3_FRAME_DRAW_SOLID_BATCH => {
             let Some(payload) = request_payload(vm_id, req_len) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
                 return DispatchOutcome::Resume;
             };
-            let rc = crate::ui3::ui3_frame::draw_rgb_triangles(arg0 as u32, payload);
+            let rc = crate::ui3::ui3_frame::draw_solid_batch(arg0 as u32, payload);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
             DispatchOutcome::Resume
         }
-        OP_BP_UI3_FRAME_DRAW_TEX_TRIANGLES => {
+        OP_BP_UI3_FRAME_DRAW_SPRITE_BATCH => {
             let Some(payload) = request_payload(vm_id, req_len) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
                 return DispatchOutcome::Resume;
             };
-            let rc = crate::ui3::ui3_frame::draw_tex_triangles(arg0 as u32, arg1 as u32, payload);
+            let rc = crate::ui3::ui3_frame::draw_sprite_batch(arg0 as u32, arg1 as u32, payload);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
             DispatchOutcome::Resume
         }
         OP_BP_UI3_TEXTURE_UPLOAD_BEGIN => {
@@ -462,11 +485,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 total_len,
             );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
             DispatchOutcome::Resume
         }
         OP_BP_UI3_TEXTURE_UPLOAD_CHUNK => {
             let Some(payload) = request_payload(vm_id, req_len) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
                 return DispatchOutcome::Resume;
             };
             let rc = crate::ui3::ui3_img::write_rgba_upload_chunk(
@@ -476,16 +501,19 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 payload,
             );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
             DispatchOutcome::Resume
         }
         OP_BP_UI3_TEXTURE_UPLOAD_FINISH => {
             let rc = crate::ui3::ui3_img::finish_rgba_upload(vm_id, arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
             DispatchOutcome::Resume
         }
         OP_BP_UI3_TEXTURE_STATUS => {
             let status = crate::ui3::ui3_img::image_status(arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (status as i64) as u64, 0);
+            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
             DispatchOutcome::Resume
         }
         OP_BP_UI3_TEXTURE_DIMENSIONS => {
@@ -494,6 +522,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             } else {
                 write_response(vm_id, seq, STATUS_OK, 0, 0);
             }
+            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
             DispatchOutcome::Resume
         }
         OP_YIELD => {
@@ -1540,5 +1569,73 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_UNKNOWN_OP, 0, 0);
             DispatchOutcome::Resume
         }
+    }
+}
+
+fn record_ui3_vmcall_timing(op: u32, req_len: u32, start_ns: u64) {
+    let elapsed_ns = crate::chronos::monotonic_nanos().saturating_sub(start_ns);
+    let count = UI3_VMCALL_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    UI3_VMCALL_BYTES.fetch_add(req_len as u64, Ordering::Relaxed);
+    UI3_VMCALL_NS.fetch_add(elapsed_ns, Ordering::Relaxed);
+    UI3_VMCALL_MAX_NS.fetch_max(elapsed_ns, Ordering::Relaxed);
+
+    match op {
+        OP_BP_UI3_FRAME_DRAW_SPRITE_BATCH => {
+            UI3_VMCALL_DRAW_SPRITE_COUNT.fetch_add(1, Ordering::Relaxed);
+            UI3_VMCALL_DRAW_SPRITE_NS.fetch_add(elapsed_ns, Ordering::Relaxed);
+        }
+        OP_BP_UI3_FRAME_DRAW_SOLID_BATCH => {
+            UI3_VMCALL_DRAW_SOLID_COUNT.fetch_add(1, Ordering::Relaxed);
+            UI3_VMCALL_DRAW_SOLID_NS.fetch_add(elapsed_ns, Ordering::Relaxed);
+        }
+        OP_BP_UI3_TEXTURE_UPLOAD_CHUNK => {
+            UI3_VMCALL_UPLOAD_CHUNK_COUNT.fetch_add(1, Ordering::Relaxed);
+            UI3_VMCALL_UPLOAD_CHUNK_NS.fetch_add(elapsed_ns, Ordering::Relaxed);
+        }
+        _ => {}
+    }
+
+    if count <= 16 || count % 512 == 0 {
+        let total_ns = UI3_VMCALL_NS.load(Ordering::Relaxed);
+        let bytes = UI3_VMCALL_BYTES.load(Ordering::Relaxed);
+        let draw_sprite_count = UI3_VMCALL_DRAW_SPRITE_COUNT.load(Ordering::Relaxed);
+        let draw_solid_count = UI3_VMCALL_DRAW_SOLID_COUNT.load(Ordering::Relaxed);
+        let upload_count = UI3_VMCALL_UPLOAD_CHUNK_COUNT.load(Ordering::Relaxed);
+        crate::log!(
+            "ui3/vmcall: calls={} bytes={} total_ms={} avg_us={} max_us={} sprite_calls={} sprite_avg_us={} solid_calls={} solid_avg_us={} upload_chunks={} upload_avg_us={} last_op=0x{:02X} last_len={} last_us={}\n",
+            count,
+            bytes,
+            ns_to_ms(total_ns),
+            avg_ns_to_us(total_ns, count),
+            ns_to_us(UI3_VMCALL_MAX_NS.load(Ordering::Relaxed)),
+            draw_sprite_count,
+            avg_ns_to_us(UI3_VMCALL_DRAW_SPRITE_NS.load(Ordering::Relaxed), draw_sprite_count),
+            draw_solid_count,
+            avg_ns_to_us(UI3_VMCALL_DRAW_SOLID_NS.load(Ordering::Relaxed), draw_solid_count),
+            upload_count,
+            avg_ns_to_us(UI3_VMCALL_UPLOAD_CHUNK_NS.load(Ordering::Relaxed), upload_count),
+            op,
+            req_len,
+            ns_to_us(elapsed_ns)
+        );
+    }
+}
+
+#[inline]
+fn ns_to_us(ns: u64) -> u64 {
+    ns / 1_000
+}
+
+#[inline]
+fn ns_to_ms(ns: u64) -> u64 {
+    ns / 1_000_000
+}
+
+#[inline]
+fn avg_ns_to_us(total_ns: u64, count: u64) -> u64 {
+    if count == 0 {
+        0
+    } else {
+        total_ns / count / 1_000
     }
 }

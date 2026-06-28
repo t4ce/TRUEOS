@@ -27,14 +27,14 @@ fn vmcall_payload_i32(op: u32, arg0: u64, arg1: u64, payload: &[u8]) -> i32 {
     }
 }
 
-fn vmcall_chunked_triangles(op: u32, arg0: u64, arg1: u64, bytes: &[u8], tri_bytes: usize) -> i32 {
-    if tri_bytes == 0 || bytes.len() % tri_bytes != 0 {
+fn vmcall_chunked_batches(op: u32, arg0: u64, arg1: u64, bytes: &[u8], item_bytes: usize) -> i32 {
+    if item_bytes == 0 || bytes.len() % item_bytes != 0 {
         return -3;
     }
     if bytes.is_empty() {
         return vmcall_payload_i32(op, arg0, arg1, &[]);
     }
-    let max_chunk = (trueos_vm::vmcall::PAYLOAD_CAP / tri_bytes) * tri_bytes;
+    let max_chunk = (trueos_vm::vmcall::PAYLOAD_CAP / item_bytes) * item_bytes;
     if max_chunk == 0 {
         return -3;
     }
@@ -184,7 +184,7 @@ pub extern "C" fn trueos_cabi_ui3_frame_set_render_target(frame_id: u32, tex_id:
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_ui3_frame_draw_rgb_triangles(
+pub unsafe extern "C" fn trueos_cabi_ui3_frame_draw_solid_batch(
     frame_id: u32,
     data_ptr: *const u8,
     data_len: usize,
@@ -198,12 +198,12 @@ pub unsafe extern "C" fn trueos_cabi_ui3_frame_draw_rgb_triangles(
         } else {
             unsafe { core::slice::from_raw_parts(data_ptr, data_len) }
         };
-        return vmcall_chunked_triangles(
-            trueos_vm::vmcall::OP_BP_UI3_FRAME_DRAW_RGB_TRIANGLES,
+        return vmcall_chunked_batches(
+            trueos_vm::vmcall::OP_BP_UI3_FRAME_DRAW_SOLID_BATCH,
             frame_id as u64,
             0,
             bytes,
-            crate::intel::types::RGB_VERTEX_SIZE * 3,
+            crate::intel::types::SOLID_RECT_SIZE,
         );
     }
 
@@ -215,11 +215,11 @@ pub unsafe extern "C" fn trueos_cabi_ui3_frame_draw_rgb_triangles(
     } else {
         unsafe { core::slice::from_raw_parts(data_ptr, data_len) }
     };
-    crate::ui3::ui3_frame::draw_rgb_triangles(frame_id, bytes)
+    crate::ui3::ui3_frame::draw_solid_batch(frame_id, bytes)
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_ui3_frame_draw_tex_triangles(
+pub unsafe extern "C" fn trueos_cabi_ui3_frame_draw_sprite_batch(
     frame_id: u32,
     tex_id: u32,
     data_ptr: *const u8,
@@ -234,12 +234,12 @@ pub unsafe extern "C" fn trueos_cabi_ui3_frame_draw_tex_triangles(
         } else {
             unsafe { core::slice::from_raw_parts(data_ptr, data_len) }
         };
-        return vmcall_chunked_triangles(
-            trueos_vm::vmcall::OP_BP_UI3_FRAME_DRAW_TEX_TRIANGLES,
+        return vmcall_chunked_batches(
+            trueos_vm::vmcall::OP_BP_UI3_FRAME_DRAW_SPRITE_BATCH,
             frame_id as u64,
             tex_id as u64,
             bytes,
-            crate::intel::types::TEX_VERTEX_SIZE * 3,
+            crate::intel::types::SPRITE_QUAD_SIZE,
         );
     }
 
@@ -251,5 +251,5 @@ pub unsafe extern "C" fn trueos_cabi_ui3_frame_draw_tex_triangles(
     } else {
         unsafe { core::slice::from_raw_parts(data_ptr, data_len) }
     };
-    crate::ui3::ui3_frame::draw_tex_triangles(frame_id, tex_id, bytes)
+    crate::ui3::ui3_frame::draw_sprite_batch(frame_id, tex_id, bytes)
 }

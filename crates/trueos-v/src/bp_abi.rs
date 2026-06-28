@@ -103,12 +103,12 @@ unsafe extern "C" {
     ) -> i32;
     pub fn trueos_cabi_ui3_frame_end(frame_id: u32) -> i32;
     pub fn trueos_cabi_ui3_frame_set_render_target(frame_id: u32, tex_id: u32) -> i32;
-    pub fn trueos_cabi_ui3_frame_draw_rgb_triangles(
+    pub fn trueos_cabi_ui3_frame_draw_solid_batch(
         frame_id: u32,
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32;
-    pub fn trueos_cabi_ui3_frame_draw_tex_triangles(
+    pub fn trueos_cabi_ui3_frame_draw_sprite_batch(
         frame_id: u32,
         tex_id: u32,
         data_ptr: *const u8,
