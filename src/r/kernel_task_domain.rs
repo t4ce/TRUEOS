@@ -6,7 +6,7 @@ pub enum KernelTaskDomain {
     Unknown = 0,
     HostKernel = 1,
     HostService = 2,
-    Ui2Service = 3,
+    UiService = 3,
     NetService = 4,
     GfxService = 5,
     ComputeWorker = 6,
@@ -22,7 +22,7 @@ impl KernelTaskDomain {
         match raw {
             1 => Self::HostKernel,
             2 => Self::HostService,
-            3 => Self::Ui2Service,
+            3 => Self::UiService,
             4 => Self::NetService,
             5 => Self::GfxService,
             6 => Self::ComputeWorker,

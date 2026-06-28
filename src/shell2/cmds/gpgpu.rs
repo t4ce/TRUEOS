@@ -9,7 +9,7 @@ use crate::intel::gpgpu::{
     shell_mandel64_worklist_scanout, shell_twemoji_atlas_worklist_present_scanout,
     shell_twemoji_atlas_worklist_scanout, shell_twemoji_atlas_worklist_scanout_present,
 };
-use crate::shell2::shell2_cmd::{CommandSessionKind, ParseOutcome};
+use crate::shell2::shell2_cmd::ParseOutcome;
 
 const CANVAS2D_SPRITE_DEFAULT_DURATION_MS: u64 = 5_000;
 const CANVAS2D_SPRITE_DEFAULT_CADENCE_MS: u64 = 0;
@@ -28,10 +28,7 @@ fn usage(io: &'static dyn ShellBackend2) {
     );
     print_shell_line(io, "gpgpu canvas2d sprites64");
     print_shell_line(io, "gpgpu canvas2d mandel64 [iterations]");
-    print_shell_line(io, "gpgpu canvas3d cube");
-    print_shell_line(io, "gpgpu canvas3d ico");
-    print_shell_line(io, "gpgpu canvas3d para");
-    print_shell_line(io, "gpgpu artificial-fragment");
+    print_shell_line(io, "gpgpu artificial-pixel");
     print_shell_line(io, "gpgpu smoke");
 }
 
@@ -348,38 +345,6 @@ fn run_canvas2d_mandel64(io: &'static dyn ShellBackend2, args: &mut SplitWhitesp
     result.ok
 }
 
-fn run_canvas3d(
-    spawner: &Spawner,
-    io: &'static dyn ShellBackend2,
-    args: &mut SplitWhitespace<'_>,
-) -> ParseOutcome {
-    let Some(kind) = args.next() else {
-        usage(io);
-        return ParseOutcome::Handled;
-    };
-    if !expect_no_more(io, args) {
-        return ParseOutcome::Handled;
-    }
-
-    let session_id = if kind.eq_ignore_ascii_case("cube") {
-        crate::ui3::ui3_canvas::submit_canvas3d_cube(spawner, io)
-    } else if kind.eq_ignore_ascii_case("ico") {
-        crate::ui3::ui3_canvas::submit_canvas3d_ico(spawner, io)
-    } else if kind.eq_ignore_ascii_case("para") {
-        crate::ui3::ui3_canvas::submit_canvas3d_para(spawner, io)
-    } else {
-        usage(io);
-        return ParseOutcome::Handled;
-    };
-
-    match session_id {
-        Some(session_id) => {
-            ParseOutcome::StartSession(CommandSessionKind::GpuCanvasRunning(session_id))
-        }
-        None => ParseOutcome::Handled,
-    }
-}
-
 fn run_smoke(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
     if !expect_no_more(io, args) {
         return;
@@ -396,7 +361,7 @@ fn run_smoke(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
     print_shell_line(io, msg.as_str());
 }
 
-fn run_artificial_fragment(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+fn run_artificial_pixel(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
     if !expect_no_more(io, args) {
         return;
     }
@@ -404,12 +369,12 @@ fn run_artificial_fragment(io: &'static dyn ShellBackend2, args: &mut SplitWhite
     let Some(result) = shell_mandel64_worklist_scanout(MANDEL64_WORKLIST_DEFAULT_ITERATIONS) else {
         print_shell_line(
             io,
-            "gpgpu artificial-fragment: no result (check primary surface, iGPU claim, and mandel artifact)",
+            "gpgpu artificial-pixel: no result (check primary surface, iGPU claim, and mandel artifact)",
         );
         return;
     };
     let msg = alloc::format!(
-        "gpgpu artificial-fragment: mode=mandel64-worklist ok={} desc={} walkers={} pixels={} submit_ms={} present_ms={} presented={} meaning=shader-driven-pixels-not-wm-fragments",
+        "gpgpu artificial-pixel: mode=mandel64-worklist ok={} desc={} walkers={} pixels={} submit_ms={} present_ms={} presented={} meaning=compute-driven-pixels-not-wm",
         result.ok as u8,
         result.descriptors,
         result.walkers,
@@ -422,7 +387,7 @@ fn run_artificial_fragment(io: &'static dyn ShellBackend2, args: &mut SplitWhite
 }
 
 pub(crate) fn try_parse(
-    spawner: &Spawner,
+    _spawner: &Spawner,
     io: &'static dyn ShellBackend2,
     args: &mut SplitWhitespace<'_>,
 ) -> ParseOutcome {
@@ -433,10 +398,8 @@ pub(crate) fn try_parse(
 
     if cmd.eq_ignore_ascii_case("canvas2d") {
         run_canvas2d(io, args);
-    } else if cmd.eq_ignore_ascii_case("canvas3d") {
-        return run_canvas3d(spawner, io, args);
-    } else if cmd.eq_ignore_ascii_case("artificial-fragment") {
-        run_artificial_fragment(io, args);
+    } else if cmd.eq_ignore_ascii_case("artificial-pixel") {
+        run_artificial_pixel(io, args);
     } else if cmd.eq_ignore_ascii_case("smoke") {
         run_smoke(io, args);
     } else {

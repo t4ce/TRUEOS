@@ -110,8 +110,8 @@ fn parse_fetch_url(url: &str) -> Result<FetchTarget, &'static str> {
             String::from(suffix)
         }
     };
-    if let Some(fragment) = path_and_query.find('#') {
-        path_and_query.truncate(fragment);
+    if let Some(anchor) = path_and_query.find('#') {
+        path_and_query.truncate(anchor);
     }
     if path_and_query.is_empty() {
         path_and_query.push('/');

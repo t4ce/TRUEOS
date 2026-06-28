@@ -48,7 +48,7 @@ const NTP_UNIX_EPOCH_OFFSET: u64 = 2_208_988_800;
 
 #[inline]
 fn alloc_local_port() -> u16 {
-    // Ephemeral range fragment to reduce collisions with other UDP users.
+    // Ephemeral range slice to reduce collisions with other UDP users.
     let seq = NTP_LOCAL_PORT_SEQ.fetch_add(1, Ordering::Relaxed);
     49152u16.wrapping_add(seq % 8192)
 }

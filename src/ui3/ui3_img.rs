@@ -170,7 +170,7 @@ fn upload_svg_bytes_to_texture_rgba(tex_id: u32, bytes: &[u8], flags: u32) -> i3
     #[cfg(not(feature = "trueos_rdp"))]
     preserve_encoded_texture(tex_id, (), flags, bytes);
 
-    match crate::ui3::img::svg::rasterize_svg_bytes_rgba(bytes) {
+    match crate::ui3::img::svg::render_svg_bytes_rgba(bytes) {
         Ok((info, rgba)) => upload_decoded_rgba(tex_id, info.width, info.height, rgba),
         Err(err) => set_error(tex_id, err),
     }

@@ -74,7 +74,6 @@ define_started_flags!(
     NET_TCP_SHELL_STARTED,
     UI3_SHELL_STARTED,
     LOGTOTCP_STARTED,
-    SHADER_COMPILE_SERVICE_STARTED,
     SILK_SERVICE_STARTED,
     ATOMIC_BOMB_STARTED,
     SURFER_PARSE_POOL_STARTED,
@@ -97,40 +96,36 @@ macro_rules! define_stop_flags {
 }
 
 define_stop_flags!(
-    STOP_UI2_TEXT_INPUT_DEMO,
-    STOP_UI2_TEXT_AREA_DEMO,
-    STOP_UI2_ANALOG_CLOCK_DEMO,
-    STOP_UI2_BGRT_DEMO,
-    STOP_UI2_CORETICKS_DEMO,
-    STOP_UI2_CURSORPICKER_DEMO,
-    STOP_UI2_GBOI_DEMO,
-    STOP_UI2_INTEL_CANVAS3D_DEMO,
-    STOP_UI2_INTEL_CANVAS3D_PLANE_PATCH_DEMO,
-    STOP_UI2_MANDELBROT_DEMO,
-    STOP_UI2_PLAYER_DEMO,
-    STOP_UI2_RAPLE_DEMO,
-    STOP_UI2_SMILEY_FOUNTAIN_DEMO,
-    STOP_UI2_SHELL_DEMO,
-    STOP_UI2_SWARM_DEMO,
+    STOP_UI_TEXT_INPUT_DEMO,
+    STOP_UI_TEXT_AREA_DEMO,
+    STOP_UI_ANALOG_CLOCK_DEMO,
+    STOP_UI_BGRT_DEMO,
+    STOP_UI_CORETICKS_DEMO,
+    STOP_UI_CURSORPICKER_DEMO,
+    STOP_UI_GBOI_DEMO,
+    STOP_UI_MANDELBROT_DEMO,
+    STOP_UI_PLAYER_DEMO,
+    STOP_UI_RAPLE_DEMO,
+    STOP_UI_SMILEY_FOUNTAIN_DEMO,
+    STOP_UI_SHELL_DEMO,
+    STOP_UI_SWARM_DEMO,
 );
 
 fn stop_flag_by_task_name(name: &str) -> Option<&'static AtomicBool> {
     match name {
-        "ui2-text-input-demo" => Some(&STOP_UI2_TEXT_INPUT_DEMO),
-        "ui2-text-area-demo" => Some(&STOP_UI2_TEXT_AREA_DEMO),
-        "ui2-analog-clock-demo" => Some(&STOP_UI2_ANALOG_CLOCK_DEMO),
-        "ui2-bgrt-demo" => Some(&STOP_UI2_BGRT_DEMO),
-        "ui2-coreticks-demo" => Some(&STOP_UI2_CORETICKS_DEMO),
-        "ui2-cursorpicker-demo" => Some(&STOP_UI2_CURSORPICKER_DEMO),
-        "ui2-gboi-demo" => Some(&STOP_UI2_GBOI_DEMO),
-        "ui2-intel-canvas3d-demo" => Some(&STOP_UI2_INTEL_CANVAS3D_DEMO),
-        "ui2-intel-canvas3d-plane-patch-demo" => Some(&STOP_UI2_INTEL_CANVAS3D_PLANE_PATCH_DEMO),
-        "ui2-mandelbrot-demo" => Some(&STOP_UI2_MANDELBROT_DEMO),
-        "ui2-player-demo" => Some(&STOP_UI2_PLAYER_DEMO),
-        "ui2-raple-demo" => Some(&STOP_UI2_RAPLE_DEMO),
-        "ui2-smiley-fountain-demo" => Some(&STOP_UI2_SMILEY_FOUNTAIN_DEMO),
-        "ui2-shell-demo" => Some(&STOP_UI2_SHELL_DEMO),
-        "ui2-swarm-demo" => Some(&STOP_UI2_SWARM_DEMO),
+        "ui-text-input-demo" => Some(&STOP_UI_TEXT_INPUT_DEMO),
+        "ui-text-area-demo" => Some(&STOP_UI_TEXT_AREA_DEMO),
+        "ui-analog-clock-demo" => Some(&STOP_UI_ANALOG_CLOCK_DEMO),
+        "ui-bgrt-demo" => Some(&STOP_UI_BGRT_DEMO),
+        "ui-coreticks-demo" => Some(&STOP_UI_CORETICKS_DEMO),
+        "ui-cursorpicker-demo" => Some(&STOP_UI_CURSORPICKER_DEMO),
+        "ui-gboi-demo" => Some(&STOP_UI_GBOI_DEMO),
+        "ui-mandelbrot-demo" => Some(&STOP_UI_MANDELBROT_DEMO),
+        "ui-player-demo" => Some(&STOP_UI_PLAYER_DEMO),
+        "ui-raple-demo" => Some(&STOP_UI_RAPLE_DEMO),
+        "ui-smiley-fountain-demo" => Some(&STOP_UI_SMILEY_FOUNTAIN_DEMO),
+        "ui-shell-demo" => Some(&STOP_UI_SHELL_DEMO),
+        "ui-swarm-demo" => Some(&STOP_UI_SWARM_DEMO),
         _ => None,
     }
 }
@@ -413,10 +408,6 @@ fn spawn_resource_monitor(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::globalog::logtotcp::logtotcp_task())
-}
-
-fn spawn_shader_compile_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::r::shader::shader_compile_service_task())
 }
 
 fn spawn_silk_service(spawner: Spawner) -> SpawnAttempt {
@@ -1123,7 +1114,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 57 + cfg!(feature = "trueos_rdp") as usize;
+const TASK_COUNT: usize = 56 + cfg!(feature = "trueos_rdp") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1230,12 +1221,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
         &TRUEOSFS_RW_PROBE_STARTED,
         spawn_trueosfs_rw_probe,
-    ),
-    TaskSpec::enabled(
-        "shader-compile-service",
-        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
-        &SHADER_COMPILE_SERVICE_STARTED,
-        spawn_shader_compile_service,
     ),
     TaskSpec::disabled(
         "silk-service",
@@ -1449,10 +1434,10 @@ pub async fn spawn_service_task(spawner: Spawner) {
                         if matches!(
                             spec.name,
                             "gfx_loadscreen"
-                                | "ui2"
-                                | "ui2-gfx-browser"
-                                | "ui2-mandelbrot-demo"
-                                | "ui2-shell-demo"
+                                | "ui"
+                                | "ui-gfx-browser"
+                                | "ui-mandelbrot-demo"
+                                | "ui-shell-demo"
                         ) {
                             crate::log_info!(
                                 target: "service";

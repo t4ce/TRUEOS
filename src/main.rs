@@ -310,7 +310,7 @@ fn _loop(executor: &'static Executor) -> ! {
         time::poll();
         unsafe { executor.poll() };
         //if counter.is_multiple_of(5_000) {
-        //    let _ = crate::tst::ui2::coreticks_demo::ui2_coreticks_tick_tile_index(0);
+        //    let _ = crate::tst::coreticks_demo::coreticks_tick_tile_index(0);
         //}
         //if counter.is_multiple_of(10_000_000) {
         //    globalog::debugcon_write_byte_raw(b'0');

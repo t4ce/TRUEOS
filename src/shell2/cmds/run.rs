@@ -423,7 +423,6 @@ fn classify_blueprint_memory(
     }
 
     let heavy_graphics_signal = archive_has(archive, "mandelbrot")
-        || archive_has(archive, "shader")
         || archive_has(archive, "particle")
         || archive_has(archive, "virgl")
         || stats.alloc_bytes > 4 * MIB

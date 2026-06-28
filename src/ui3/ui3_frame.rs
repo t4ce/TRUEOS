@@ -6,9 +6,8 @@ use libm::{ceilf, fabsf, floorf};
 use spin::Mutex;
 
 use crate::intel::types::{
-    Rgba8, SOLID_RECT_SIZE, SPRITE_QUAD_SIZE, SolidRect, SpriteCorner, SpriteQuad, UiPlaneSlot,
-    UiPresent, UiPresentPath, UiRect, UiSurfaceFormat, read_solid_rect_bytes,
-    read_sprite_quad_bytes,
+    Rgba8, SOLID_RECT_SIZE, SPRITE_QUAD_SIZE, SolidRect, SpriteQuad, UiPlaneSlot, UiPresent,
+    UiPresentPath, UiRect, UiSurfaceFormat, read_solid_rect_bytes, read_sprite_quad_bytes,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -283,7 +282,7 @@ pub(crate) fn draw_solid_batch(frame_id: u32, bytes: &[u8]) -> i32 {
                 return -1;
             };
             let dst = unsafe { core::slice::from_raw_parts_mut(access.virt, access.byte_len) };
-            raster_solid_batch(
+            paint_solid_batch(
                 dst,
                 access.pitch as usize,
                 access.width,
@@ -298,7 +297,7 @@ pub(crate) fn draw_solid_batch(frame_id: u32, bytes: &[u8]) -> i32 {
             let image = offscreen
                 .entry(tex_id)
                 .or_insert_with(|| new_cpu_image(frame.width, frame.height));
-            raster_solid_batch(
+            paint_solid_batch(
                 &mut image.rgba,
                 image.width as usize * 4,
                 image.width,
@@ -336,7 +335,7 @@ pub(crate) fn draw_sprite_batch(frame_id: u32, tex_id: u32, bytes: &[u8]) -> i32
                 return -1;
             };
             let dst = unsafe { core::slice::from_raw_parts_mut(access.virt, access.byte_len) };
-            raster_sprite_batch(
+            paint_sprite_batch(
                 dst,
                 access.pitch as usize,
                 access.width,
@@ -352,7 +351,7 @@ pub(crate) fn draw_sprite_batch(frame_id: u32, tex_id: u32, bytes: &[u8]) -> i32
             let image = offscreen
                 .entry(dst_tex_id)
                 .or_insert_with(|| new_cpu_image(frame.width, frame.height));
-            raster_sprite_batch(
+            paint_sprite_batch(
                 &mut image.rgba,
                 image.width as usize * 4,
                 image.width,
@@ -621,7 +620,7 @@ fn texture_source(tex_id: u32) -> Option<CpuImage> {
     })
 }
 
-fn raster_solid_batch(
+fn paint_solid_batch(
     dst: &mut [u8],
     pitch: usize,
     width: u32,
@@ -635,12 +634,12 @@ fn raster_solid_batch(
         let Some(rect) = read_solid_rect_bytes(bytes, off) else {
             break;
         };
-        raster_solid_rect(dst, pitch, width, height, format, rect);
+        paint_solid_rect(dst, pitch, width, height, format, rect);
         off += item_bytes;
     }
 }
 
-fn raster_sprite_batch(
+fn paint_sprite_batch(
     dst: &mut [u8],
     pitch: usize,
     width: u32,
@@ -655,12 +654,12 @@ fn raster_sprite_batch(
         let Some(quad) = read_sprite_quad_bytes(bytes, off) else {
             break;
         };
-        raster_sprite_quad(dst, pitch, width, height, format, src, quad);
+        paint_sprite_quad(dst, pitch, width, height, format, src, quad);
         off += item_bytes;
     }
 }
 
-fn raster_solid_rect(
+fn paint_solid_rect(
     dst: &mut [u8],
     pitch: usize,
     width: u32,
@@ -687,7 +686,7 @@ fn raster_solid_rect(
     }
 }
 
-fn raster_sprite_quad(
+fn paint_sprite_quad(
     dst: &mut [u8],
     pitch: usize,
     width: u32,

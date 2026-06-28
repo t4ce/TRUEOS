@@ -23,7 +23,7 @@ pub(crate) struct GpgpuShellCube20ProjectResult {
     pub(crate) primary_width: u32,
     pub(crate) primary_height: u32,
     pub(crate) canvas_xy: GpgpuPoint,
-    pub(crate) vertex_count: usize,
+    pub(crate) point_count: usize,
     pub(crate) radius_px: u32,
     pub(crate) last_angle_deg: u32,
     pub(crate) work_group_x: u32,
@@ -33,7 +33,7 @@ pub(crate) struct GpgpuShellCube20ProjectResult {
     pub(crate) post_marker: u32,
 }
 
-pub(crate) struct GpgpuCanvas3dUi2TextureFrame {
+pub(crate) struct GpgpuCanvas3dUiTextureFrame {
     pub(crate) result: GpgpuShellCube20ProjectResult,
     pub(crate) width: u32,
     pub(crate) height: u32,
@@ -105,11 +105,11 @@ pub(crate) fn submit_canvas3d_project_once() -> bool {
             CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
         );
     let params = Canvas3dProjectRgba8Params {
-        vertices_gpu: DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
+        points_gpu: DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
         out_gpu: CANVAS3D_PROJECT_OUT_GPU,
-        src_first_vertex: CANVAS3D_PROJECT_SMOKE_SRC_FIRST,
+        src_first_point: CANVAS3D_PROJECT_SMOKE_SRC_FIRST,
         out_first_point: CANVAS3D_PROJECT_SMOKE_OUT_FIRST,
-        vertex_count: CANVAS3D_PROJECT_SAMPLE_COUNT as u32,
+        point_count: CANVAS3D_PROJECT_SAMPLE_COUNT as u32,
         canvas_width: CANVAS3D_PROJECT_SMOKE_CANVAS_WIDTH,
         canvas_height: CANVAS3D_PROJECT_SMOKE_CANVAS_HEIGHT,
     };
@@ -143,7 +143,7 @@ pub(crate) fn submit_canvas3d_project_once() -> bool {
 
     crate::log_info!(
         target: "gpgpu";
-        "intel/gpgpu: canvas3d-project forcewake={} ggtt={} ppgtt={} kernel_ppgtt={} vertices_ppgtt={} out_ppgtt={} batch={} submitted={} retired={} retire_ms={} ok={} samples={}/{} visible={}/{} src_first={} out_first={} vertex_count={} canvas={}x{} pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} vertices_gpu=0x{:X} out_gpu=0x{:X} vertex_bytes=0x{:X} out_bytes=0x{:X} idd_off=0x{:X} payload_off=0x{:X} out0=[xy=0x{:08X},rgba=0x{:08X}] out1=[xy=0x{:08X},rgba=0x{:08X}] out2=[xy=0x{:08X},rgba=0x{:08X}] out6=[xy=0x{:08X},rgba=0x{:08X}] ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=direct-execlist no_guc_submit=1 next=canvas-lines-or-cpu-copy\n",
+        "intel/gpgpu: canvas3d-project forcewake={} ggtt={} ppgtt={} kernel_ppgtt={} vertices_ppgtt={} out_ppgtt={} batch={} submitted={} retired={} retire_ms={} ok={} samples={}/{} visible={}/{} src_first={} out_first={} point_count={} canvas={}x{} pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} points_gpu=0x{:X} out_gpu=0x{:X} vertex_bytes=0x{:X} out_bytes=0x{:X} idd_off=0x{:X} payload_off=0x{:X} out0=[xy=0x{:08X},rgba=0x{:08X}] out1=[xy=0x{:08X},rgba=0x{:08X}] out2=[xy=0x{:08X},rgba=0x{:08X}] out6=[xy=0x{:08X},rgba=0x{:08X}] ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=direct-execlist no_guc_submit=1 next=canvas-lines-or-cpu-copy\n",
         forcewake_ok as u8,
         mapped_ok as u8,
         ppgtt_ok as u8,
@@ -161,7 +161,7 @@ pub(crate) fn submit_canvas3d_project_once() -> bool {
         CANVAS3D_PROJECT_SAMPLE_COUNT,
         CANVAS3D_PROJECT_SMOKE_SRC_FIRST,
         CANVAS3D_PROJECT_SMOKE_OUT_FIRST,
-        params.vertex_count,
+        params.point_count,
         CANVAS3D_PROJECT_SMOKE_CANVAS_WIDTH,
         CANVAS3D_PROJECT_SMOKE_CANVAS_HEIGHT,
         pre_marker,
@@ -319,9 +319,9 @@ pub(crate) fn submit_canvas3d_clip_box_q16_once() -> bool {
     let params = Canvas3dClipBoxQ16Params {
         src_gpu: DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
         dst_gpu: CANVAS3D_PROJECT_OUT_GPU,
-        src_first_vertex: CANVAS3D_TRANSFORM_SRC_FIRST,
-        dst_first_vertex: CANVAS3D_TRANSFORM_DST_FIRST,
-        vertex_count: CANVAS3D_TRANSFORM_TEST_COUNT,
+        src_first_point: CANVAS3D_TRANSFORM_SRC_FIRST,
+        dst_first_point: CANVAS3D_TRANSFORM_DST_FIRST,
+        point_count: CANVAS3D_TRANSFORM_TEST_COUNT,
         min_q16,
         max_q16,
     };
@@ -1572,7 +1572,7 @@ pub(crate) fn shell_cube20_project_spin(
         primary_width: target.width,
         primary_height: target.height,
         canvas_xy,
-        vertex_count: CANVAS3D_VISUAL_VERTEX_COUNT,
+        point_count: CANVAS3D_VISUAL_VERTEX_COUNT,
         radius_px: (CUBE20_SEED_HALF_Q16 as u32).saturating_mul(target.width.min(target.height))
             / CANVAS3D_PROJECT_Q16_ONE as u32,
         last_angle_deg: angle_deg,
@@ -1693,7 +1693,7 @@ pub(crate) fn canvas3d_ico_project_rect(
             true,
         );
     let presented = intel::display::notify_primary_surface_external_write(
-        "ui2-intel-canvas3d-demo",
+        "ui-intel-canvas3d-demo",
         flush_offset,
         flush_bytes,
     ) as u32;
@@ -1715,7 +1715,7 @@ pub(crate) fn canvas3d_ico_project_rect(
         primary_width: target.width,
         primary_height: target.height,
         canvas_xy,
-        vertex_count: ICO90_VERTEX_COUNT,
+        point_count: ICO90_VERTEX_COUNT,
         radius_px: (CUBE20_SEED_HALF_Q16 as u32).saturating_mul(canvas_width.min(canvas_height))
             / CANVAS3D_PROJECT_Q16_ONE as u32,
         last_angle_deg: frame.wrapping_mul(2) % 360,
@@ -1731,7 +1731,7 @@ pub(crate) fn canvas3d_ico_project_texture_frame(
     frame: u32,
     width: u32,
     height: u32,
-) -> Option<GpgpuCanvas3dUi2TextureFrame> {
+) -> Option<GpgpuCanvas3dUiTextureFrame> {
     const CADENCE_US: u64 = 33_000;
 
     let width = width.clamp(1, 512);
@@ -1923,7 +1923,7 @@ pub(crate) fn canvas3d_ico_project_texture_frame(
         primary_width: width,
         primary_height: height,
         canvas_xy: GpgpuPoint::new(0, 0),
-        vertex_count: canvas3d_ico::FACE_COUNT,
+        point_count: canvas3d_ico::FACE_COUNT,
         radius_px: (CUBE20_SEED_HALF_Q16 as u32).saturating_mul(width.min(height))
             / CANVAS3D_PROJECT_Q16_ONE as u32,
         last_angle_deg: frame.wrapping_mul(2) % 360,
@@ -1934,7 +1934,7 @@ pub(crate) fn canvas3d_ico_project_texture_frame(
         post_marker: work_post_marker,
     };
 
-    Some(GpgpuCanvas3dUi2TextureFrame {
+    Some(GpgpuCanvas3dUiTextureFrame {
         result,
         width,
         height,
@@ -1942,11 +1942,11 @@ pub(crate) fn canvas3d_ico_project_texture_frame(
     })
 }
 
-pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
+pub(crate) fn ui_canvas3d_plane_patch_texture_frame(
     frame: u32,
     width: u32,
     height: u32,
-) -> Option<GpgpuCanvas3dUi2TextureFrame> {
+) -> Option<GpgpuCanvas3dUiTextureFrame> {
     const CADENCE_US: u64 = 33_000;
 
     let width = width.clamp(1, 512);
@@ -2069,7 +2069,7 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
             },
         ];
         let face_descs = [
-            canvas3d_plane_patch_ui2_face_desc(
+            canvas3d_plane_patch_ui_face_desc(
                 staging.surface,
                 width,
                 height,
@@ -2079,7 +2079,7 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
                 constraints,
                 0xFF22_3355,
             ),
-            canvas3d_plane_patch_ui2_face_desc(
+            canvas3d_plane_patch_ui_face_desc(
                 staging.surface,
                 width,
                 height,
@@ -2089,7 +2089,7 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
                 constraints,
                 0xFF2F_80ED,
             ),
-            canvas3d_plane_patch_ui2_face_desc(
+            canvas3d_plane_patch_ui_face_desc(
                 staging.surface,
                 width,
                 height,
@@ -2099,7 +2099,7 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
                 constraints,
                 0xFF36_4A58,
             ),
-            canvas3d_plane_patch_ui2_face_desc(
+            canvas3d_plane_patch_ui_face_desc(
                 staging.surface,
                 width,
                 height,
@@ -2109,7 +2109,7 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
                 constraints,
                 0xFFFF_8844,
             ),
-            canvas3d_plane_patch_ui2_face_desc(
+            canvas3d_plane_patch_ui_face_desc(
                 staging.surface,
                 width,
                 height,
@@ -2119,7 +2119,7 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
                 constraints,
                 0xFFFF_D166,
             ),
-            canvas3d_plane_patch_ui2_face_desc(
+            canvas3d_plane_patch_ui_face_desc(
                 staging.surface,
                 width,
                 height,
@@ -2253,7 +2253,7 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
         primary_width: width,
         primary_height: height,
         canvas_xy: GpgpuPoint::new(0, 0),
-        vertex_count: 6,
+        point_count: 6,
         radius_px: (half as u32).saturating_mul(width.min(height))
             / CANVAS3D_PROJECT_Q16_ONE as u32,
         last_angle_deg: frame.wrapping_mul(4) % 360,
@@ -2264,7 +2264,7 @@ pub(crate) fn ui2_canvas3d_plane_patch_texture_frame(
         post_marker: work_post_marker,
     };
 
-    Some(GpgpuCanvas3dUi2TextureFrame {
+    Some(GpgpuCanvas3dUiTextureFrame {
         result,
         width,
         height,
@@ -2422,7 +2422,7 @@ pub(crate) fn canvas3d_ico_project_surface_frame(
         primary_width: dst.width,
         primary_height: dst.height,
         canvas_xy: GpgpuPoint::new(0, 0),
-        vertex_count: canvas3d_ico::FACE_COUNT,
+        point_count: canvas3d_ico::FACE_COUNT,
         radius_px: (CUBE20_SEED_HALF_Q16 as u32).saturating_mul(dst.width.min(dst.height))
             / CANVAS3D_PROJECT_Q16_ONE as u32,
         last_angle_deg: frame.wrapping_mul(2) % 360,
@@ -2562,7 +2562,7 @@ pub(crate) fn canvas3d_para_project_surface_frame(
         primary_width: dst.width,
         primary_height: dst.height,
         canvas_xy: GpgpuPoint::new(0, 0),
-        vertex_count: SHEET_COUNT,
+        point_count: SHEET_COUNT,
         radius_px: dst.width.min(dst.height) / 2,
         last_angle_deg: frame.wrapping_mul(2) % 360,
         work_group_x,
@@ -3156,7 +3156,7 @@ fn canvas3d_polygon_edge_constraint_q16(a: (i32, i32), b: (i32, i32)) -> Canvas3
     }
 }
 
-pub(crate) fn ui2_canvas3d_plane_patch_render_surface_frame(
+pub(crate) fn ui_canvas3d_plane_patch_render_surface_frame(
     frame: u32,
     dst: GpgpuRgba8Surface,
 ) -> Option<GpgpuShellCube20ProjectResult> {
@@ -3387,7 +3387,7 @@ fn canvas3d_plane_patch_render_surface_frame_in_rect(
         let canvas_width = rect.x.saturating_mul(2).saturating_add(rect.width);
         let canvas_height = rect.y.saturating_mul(2).saturating_add(rect.height);
         let face_descs = [
-            canvas3d_plane_patch_ui2_face_desc_in_rect(
+            canvas3d_plane_patch_ui_face_desc_in_rect(
                 dst,
                 canvas_width,
                 canvas_height,
@@ -3401,7 +3401,7 @@ fn canvas3d_plane_patch_render_surface_frame_in_rect(
                 constraints,
                 0xFF22_3355,
             ),
-            canvas3d_plane_patch_ui2_face_desc_in_rect(
+            canvas3d_plane_patch_ui_face_desc_in_rect(
                 dst,
                 canvas_width,
                 canvas_height,
@@ -3415,7 +3415,7 @@ fn canvas3d_plane_patch_render_surface_frame_in_rect(
                 constraints,
                 0xFF2F_80ED,
             ),
-            canvas3d_plane_patch_ui2_face_desc_in_rect(
+            canvas3d_plane_patch_ui_face_desc_in_rect(
                 dst,
                 canvas_width,
                 canvas_height,
@@ -3429,7 +3429,7 @@ fn canvas3d_plane_patch_render_surface_frame_in_rect(
                 constraints,
                 0xFF36_4A58,
             ),
-            canvas3d_plane_patch_ui2_face_desc_in_rect(
+            canvas3d_plane_patch_ui_face_desc_in_rect(
                 dst,
                 canvas_width,
                 canvas_height,
@@ -3443,7 +3443,7 @@ fn canvas3d_plane_patch_render_surface_frame_in_rect(
                 constraints,
                 0xFFFF_8844,
             ),
-            canvas3d_plane_patch_ui2_face_desc_in_rect(
+            canvas3d_plane_patch_ui_face_desc_in_rect(
                 dst,
                 canvas_width,
                 canvas_height,
@@ -3457,7 +3457,7 @@ fn canvas3d_plane_patch_render_surface_frame_in_rect(
                 constraints,
                 0xFFFF_D166,
             ),
-            canvas3d_plane_patch_ui2_face_desc_in_rect(
+            canvas3d_plane_patch_ui_face_desc_in_rect(
                 dst,
                 canvas_width,
                 canvas_height,
@@ -3577,7 +3577,7 @@ fn canvas3d_plane_patch_render_surface_frame_in_rect(
         primary_width: dst.width,
         primary_height: dst.height,
         canvas_xy: GpgpuPoint::new(0, 0),
-        vertex_count: 6,
+        point_count: 6,
         radius_px: (half as u32).saturating_mul(rect.width.min(rect.height))
             / CANVAS3D_PROJECT_Q16_ONE as u32,
         last_angle_deg: frame.wrapping_mul(4) % 360,
@@ -3655,7 +3655,7 @@ fn canvas3d_vec3_rotate_z_q16(vertex: Canvas3dVec3Q16, deg: u32) -> Canvas3dVec3
     }
 }
 
-fn canvas3d_plane_patch_ui2_face_desc(
+fn canvas3d_plane_patch_ui_face_desc(
     surface: GpgpuRgba8Surface,
     width: u32,
     height: u32,
@@ -3665,7 +3665,7 @@ fn canvas3d_plane_patch_ui2_face_desc(
     constraints: [Canvas3dVec3Q16; 4],
     color_rgba: u32,
 ) -> Canvas3dPlanePatchWorklistRgba8Desc {
-    canvas3d_plane_patch_ui2_face_desc_in_rect(
+    canvas3d_plane_patch_ui_face_desc_in_rect(
         surface,
         width,
         height,
@@ -3681,7 +3681,7 @@ fn canvas3d_plane_patch_ui2_face_desc(
     )
 }
 
-fn canvas3d_plane_patch_ui2_face_desc_in_rect(
+fn canvas3d_plane_patch_ui_face_desc_in_rect(
     surface: GpgpuRgba8Surface,
     canvas_width: u32,
     canvas_height: u32,
@@ -3695,7 +3695,7 @@ fn canvas3d_plane_patch_ui2_face_desc_in_rect(
     constraints: [Canvas3dVec3Q16; 4],
     color_rgba: u32,
 ) -> Canvas3dPlanePatchWorklistRgba8Desc {
-    canvas3d_plane_patch_ui2_face_desc_in_rect_with_count(
+    canvas3d_plane_patch_ui_face_desc_in_rect_with_count(
         surface,
         canvas_width,
         canvas_height,
@@ -3712,7 +3712,7 @@ fn canvas3d_plane_patch_ui2_face_desc_in_rect(
     )
 }
 
-fn canvas3d_plane_patch_ui2_face_desc_in_rect_with_count(
+fn canvas3d_plane_patch_ui_face_desc_in_rect_with_count(
     surface: GpgpuRgba8Surface,
     canvas_width: u32,
     canvas_height: u32,
@@ -4092,7 +4092,7 @@ fn shell_canvas3d_cpu_copy_projected_points_to_primary_count(
     canvas_y: u32,
     canvas_width: u32,
     canvas_height: u32,
-    vertex_count: usize,
+    point_count: usize,
     archaeology_colors: bool,
 ) -> (usize, usize) {
     intel::dma_flush(state.canvas3d_out_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
@@ -4111,7 +4111,7 @@ fn shell_canvas3d_cpu_copy_projected_points_to_primary_count(
     }
     let mut visible = 0usize;
     let mut stamped = 0usize;
-    let vertex_count = vertex_count.min(CANVAS3D_PROJECT_VERTEX_COUNT);
+    let point_count = point_count.min(CANVAS3D_PROJECT_VERTEX_COUNT);
     let mut point_xy = [(0i32, 0i32); CANVAS3D_PROJECT_VERTEX_COUNT];
     let mut point_visible = [false; CANVAS3D_PROJECT_VERTEX_COUNT];
 
@@ -4125,7 +4125,7 @@ fn shell_canvas3d_cpu_copy_projected_points_to_primary_count(
         }
 
         let out = state.canvas3d_out_virt as *const Canvas3dProjectedRgba8;
-        for index in 0..vertex_count {
+        for index in 0..point_count {
             let point = core::ptr::read_volatile(out.add(index));
             if (point.packed_xy & 0x8000_0000) == 0 {
                 continue;
@@ -4137,7 +4137,7 @@ fn shell_canvas3d_cpu_copy_projected_points_to_primary_count(
             point_visible[index] = true;
         }
 
-        for index in 0..vertex_count {
+        for index in 0..point_count {
             if !point_visible[index] {
                 continue;
             }
@@ -4169,7 +4169,7 @@ fn shell_canvas3d_copy_projected_points_to_rgba8(
     state: DirectRcsState,
     width: usize,
     height: usize,
-    vertex_count: usize,
+    point_count: usize,
     archaeology_colors: bool,
     rgba: &mut [u8],
 ) -> (usize, usize) {
@@ -4186,11 +4186,11 @@ fn shell_canvas3d_copy_projected_points_to_rgba8(
 
     let mut visible = 0usize;
     let mut stamped = 0usize;
-    let vertex_count = vertex_count.min(CANVAS3D_PROJECT_VERTEX_COUNT);
+    let point_count = point_count.min(CANVAS3D_PROJECT_VERTEX_COUNT);
 
     unsafe {
         let out = state.canvas3d_out_virt as *const Canvas3dProjectedRgba8;
-        for index in 0..vertex_count {
+        for index in 0..point_count {
             let point = core::ptr::read_volatile(out.add(index));
             if (point.packed_xy & 0x8000_0000) == 0 {
                 continue;
@@ -4240,9 +4240,9 @@ fn submit_canvas3d_transform_fused_smoke(
     let params = Canvas3dTransformFusedQ16Params {
         src_gpu: DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
         dst_gpu: CANVAS3D_PROJECT_OUT_GPU,
-        src_first_vertex: CANVAS3D_TRANSFORM_SRC_FIRST,
-        dst_first_vertex: CANVAS3D_TRANSFORM_DST_FIRST,
-        vertex_count: CANVAS3D_TRANSFORM_TEST_COUNT,
+        src_first_point: CANVAS3D_TRANSFORM_SRC_FIRST,
+        dst_first_point: CANVAS3D_TRANSFORM_DST_FIRST,
+        point_count: CANVAS3D_TRANSFORM_TEST_COUNT,
         scale_q16,
         rotate_q16,
         translate_q16,
@@ -4369,9 +4369,9 @@ fn submit_canvas3d_transform_fused_frame_range(
     src_phys: u64,
     dst_gpu: u64,
     dst_phys: u64,
-    src_first_vertex: u32,
-    dst_first_vertex: u32,
-    vertex_count: u32,
+    src_first_point: u32,
+    dst_first_point: u32,
+    point_count: u32,
     scale_q16: Canvas3dVec3Q16,
     rotate_q16: Canvas3dVec3Q16,
     translate_q16: Canvas3dVec3Q16,
@@ -4382,9 +4382,9 @@ fn submit_canvas3d_transform_fused_frame_range(
     let params = Canvas3dTransformFusedQ16Params {
         src_gpu,
         dst_gpu,
-        src_first_vertex,
-        dst_first_vertex,
-        vertex_count,
+        src_first_point,
+        dst_first_point,
+        point_count,
         scale_q16,
         rotate_q16,
         translate_q16,
@@ -4442,9 +4442,9 @@ fn submit_canvas3d_clip_box_frame(
     let params = Canvas3dClipBoxQ16Params {
         src_gpu,
         dst_gpu,
-        src_first_vertex: 0,
-        dst_first_vertex: 0,
-        vertex_count: CANVAS3D_PROJECT_VERTEX_COUNT as u32,
+        src_first_point: 0,
+        dst_first_point: 0,
+        point_count: CANVAS3D_PROJECT_VERTEX_COUNT as u32,
         min_q16,
         max_q16,
     };
@@ -4505,22 +4505,22 @@ fn submit_canvas3d_project_frame_from(
     dev: intel::Dev,
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
-    vertices_gpu: u64,
+    points_gpu: u64,
     vertices_phys: u64,
-    vertex_count: u32,
+    point_count: u32,
     canvas_width: u32,
     canvas_height: u32,
 ) -> Option<u64> {
     let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
-    if vertex_count == 0 || canvas_width == 0 || canvas_height == 0 {
+    if point_count == 0 || canvas_width == 0 || canvas_height == 0 {
         return None;
     }
     let params = Canvas3dProjectRgba8Params {
-        vertices_gpu,
+        points_gpu,
         out_gpu: CANVAS3D_PROJECT_OUT_GPU,
-        src_first_vertex: 0,
+        src_first_point: 0,
         out_first_point: 0,
-        vertex_count,
+        point_count,
         canvas_width,
         canvas_height,
     };
@@ -4532,7 +4532,7 @@ fn submit_canvas3d_project_frame_from(
     let vertices_ppgtt_ok = kernel_ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(
             state,
-            vertices_gpu,
+            points_gpu,
             vertices_phys,
             CANVAS3D_PROJECT_VERTEX_BYTES,
         );

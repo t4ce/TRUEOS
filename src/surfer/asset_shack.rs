@@ -176,7 +176,7 @@ fn decode_asset_rgba(kind: &str, url: &str, bytes: &[u8]) -> Result<(u32, u32, V
         "jpeg" => crate::ui3::img::jpeg_codec::decode_jpeg_rgba(bytes)
             .map(|decoded| (decoded.width, decoded.height, decoded.rgba))
             .map_err(|err| err.code()),
-        "svg" => crate::ui3::img::svg::rasterize_svg_bytes_rgba(bytes)
+        "svg" => crate::ui3::img::svg::render_svg_bytes_rgba(bytes)
             .map(|(info, rgba)| (info.width, info.height, rgba)),
         _ => Err(-8),
     }

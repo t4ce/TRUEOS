@@ -1641,7 +1641,7 @@ fn redraw_live_overlay(scene: &Ui3Scene, state: &Ui3LiveOverlayState, reason: &s
             viewport_height,
         );
     }
-    let preserve = crate::ui3::ui3_canvas::live_overlay_preserve_rect(rects.as_slice());
+    let preserve = None;
     crate::ui3::ui3_orbits::submit_live_overlay_rects(rects.as_slice(), preserve, reason)
 }
 

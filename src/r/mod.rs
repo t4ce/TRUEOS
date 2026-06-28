@@ -13,7 +13,6 @@ pub mod path;
 pub mod platform;
 pub mod rdp;
 pub mod readiness;
-pub mod shader;
 pub mod silk_service;
 pub mod spawn_service;
 pub mod spawn_spec;
@@ -22,7 +21,7 @@ pub mod static_slots;
 pub mod stream;
 pub mod sync;
 pub mod time;
-pub mod ui2;
+pub mod ui_cursor;
 pub mod ui_surface;
 
 #[cfg(feature = "trueos_rdp")]
