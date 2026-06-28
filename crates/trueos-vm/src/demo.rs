@@ -175,15 +175,10 @@ fn log_probe_summary(summary: ProbeSummary) {
     net_line(as_str(&line[..len]));
 }
 
-fn refresh_probe_window_title(_now: u64) {
-}
+fn refresh_probe_window_title(_now: u64) {}
 
 fn bool_mark(ok: bool) -> &'static str {
-    if ok {
-        "ok"
-    } else {
-        "no"
-    }
+    if ok { "ok" } else { "no" }
 }
 
 fn net_line(text: &str) {

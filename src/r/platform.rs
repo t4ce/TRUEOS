@@ -26,11 +26,19 @@ const TRUEOS_LOG_ERROR: u32 = 5;
 
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_platform_monotonic_nanos() -> u64 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return crate::hv::vmcall::guest_monotonic_nanos();
+    }
+
     crate::chronos::monotonic_nanos()
 }
 
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_platform_unix_seconds() -> u64 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return crate::hv::vmcall::guest_unix_seconds();
+    }
+
     crate::chronos::best_effort_unix_time_seconds().unwrap_or(0)
 }
 

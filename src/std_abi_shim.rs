@@ -1318,16 +1318,28 @@ pub unsafe extern "C" fn sys_cycle_count() -> usize {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_time_monotonic_nanos() -> u64 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return crate::hv::vmcall::guest_monotonic_nanos();
+    }
+
     crate::chronos::monotonic_nanos()
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_time_unix_seconds() -> u64 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return crate::hv::vmcall::guest_unix_seconds();
+    }
+
     crate::chronos::best_effort_unix_time_seconds().unwrap_or(0)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_time_unix_nanos() -> u64 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return crate::hv::vmcall::guest_unix_seconds().saturating_mul(1_000_000_000);
+    }
+
     crate::chronos::best_effort_unix_time_seconds()
         .unwrap_or(0)
         .saturating_mul(1_000_000_000)

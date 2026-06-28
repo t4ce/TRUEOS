@@ -1,9 +1,9 @@
 pub mod althlasfont;
 pub(crate) mod img;
 pub(crate) mod screenshot;
-mod small_linked_list;
 pub(crate) mod ui3_canvas;
 pub(crate) mod ui3_font;
+pub(crate) mod ui3_frame;
 pub(crate) mod ui3_hid;
 pub(crate) mod ui3_img;
 pub(crate) mod ui3_orbits;

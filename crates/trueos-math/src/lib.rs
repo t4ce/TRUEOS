@@ -44,6 +44,11 @@ pub fn log2_f32(x: f32) -> f32 {
     libm::log2f(x)
 }
 
+#[inline]
+pub fn hypot_f32(x: f32, y: f32) -> f32 {
+    libm::hypotf(x, y)
+}
+
 // Kernel-side C math ABI symbols needed by linked no_std code. Keep this list
 // intentionally narrow; trueos-math owns these f32 wrappers over libm.
 #[unsafe(no_mangle)]
@@ -69,6 +74,11 @@ pub extern "C" fn asinf(x: f32) -> f32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn log2f(x: f32) -> f32 {
     log2_f32(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn hypotf(x: f32, y: f32) -> f32 {
+    hypot_f32(x, y)
 }
 
 pub(crate) mod ascii_tree;

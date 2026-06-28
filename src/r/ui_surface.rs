@@ -44,6 +44,18 @@ struct TrustedUiSurface {
 unsafe impl Send for TrustedUiSurface {}
 unsafe impl Sync for TrustedUiSurface {}
 
+#[derive(Clone, Copy)]
+pub(crate) struct UiSurfaceRgbaAccess {
+    pub virt: *mut u8,
+    pub byte_len: usize,
+    pub width: u32,
+    pub height: u32,
+    pub pitch: u32,
+}
+
+unsafe impl Send for UiSurfaceRgbaAccess {}
+unsafe impl Sync for UiSurfaceRgbaAccess {}
+
 static SURFACES: Mutex<[Option<TrustedUiSurface>; MAX_UI_SURFACES]> =
     Mutex::new([None; MAX_UI_SURFACES]);
 
@@ -114,6 +126,28 @@ pub fn surface(handle: UiSurfaceHandle) -> Option<UiSurface> {
     lookup(handle).map(|surface| surface.desc)
 }
 
+pub(crate) fn rgba_access(handle: UiSurfaceHandle) -> Option<UiSurfaceRgbaAccess> {
+    let surface = lookup(handle)?;
+    if surface.desc.format != UiSurfaceFormat::Rgba8888 {
+        return None;
+    }
+    Some(UiSurfaceRgbaAccess {
+        virt: surface.virt,
+        byte_len: surface.byte_len,
+        width: surface.desc.width,
+        height: surface.desc.height,
+        pitch: surface.desc.pitch,
+    })
+}
+
+pub(crate) fn flush_surface(handle: UiSurfaceHandle) -> bool {
+    let Some(surface) = lookup(handle) else {
+        return false;
+    };
+    crate::intel::dma_flush(surface.virt, surface.byte_len);
+    true
+}
+
 pub fn write_surface_rgba(
     handle: UiSurfaceHandle,
     dst: UiRect,
@@ -150,6 +184,35 @@ pub fn write_surface_rgba(
     }
 
     flush_surface_rect(surface, dst);
+    Ok(())
+}
+
+pub fn clear_surface_rgb(handle: UiSurfaceHandle, rgb: u32) -> Result<()> {
+    let surface = lookup(handle).ok_or(Error::NotFound)?;
+    let rect = UiRect::new(0, 0, surface.desc.width, surface.desc.height);
+    if rect.is_empty() {
+        return Err(Error::Invalid);
+    }
+
+    let r = (rgb >> 16) & 0xFF;
+    let g = (rgb >> 8) & 0xFF;
+    let b = rgb & 0xFF;
+    let dst_pitch_pixels = surface.desc.pitch as usize / 4;
+    let dst_words = surface.virt as *mut u32;
+    for y in 0..surface.desc.height as usize {
+        let row = unsafe { dst_words.add(y.saturating_mul(dst_pitch_pixels)) };
+        for x in 0..surface.desc.width as usize {
+            let pixel = match surface.desc.format {
+                UiSurfaceFormat::Rgba8888 => r | (g << 8) | (b << 16) | (0xFF << 24),
+                UiSurfaceFormat::Xbgr8888 => (b << 16) | (g << 8) | r,
+                UiSurfaceFormat::Xrgb8888 => (r << 16) | (g << 8) | b,
+            };
+            unsafe {
+                core::ptr::write_volatile(row.add(x), pixel);
+            }
+        }
+    }
+    flush_surface_rect(surface, rect);
     Ok(())
 }
 

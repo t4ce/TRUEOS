@@ -118,6 +118,7 @@ enum H264ForwardCache {
 
 struct H264StripeStudyCandidate {
     metric: u64,
+    decoded_y_metric: u64,
     source_index: usize,
     reverse_step: usize,
     snapshot: crate::intel::display::PrimarySurfaceBgra8Snapshot,
@@ -843,15 +844,16 @@ async fn h264_stripe_study_from_full_cache(
         let reverse_step = reverse_offset + 1;
         let stored = h264_present_decoded_frame(decoded);
         let snapshot = crate::intel::capture_primary_surface_bgra8();
-        let metric = snapshot
+        let primary_metric = snapshot
             .as_ref()
             .map(|snapshot| h264_vertical_black_stripe_metric(snapshot, decoded))
             .unwrap_or(0);
+        let decoded_y_metric = h264_decoded_luma_stripe_metric(decoded);
         scanned += 1;
         captured += usize::from(snapshot.is_some());
-        max_metric = max_metric.max(metric);
+        max_metric = max_metric.max(primary_metric);
         crate::log!(
-            "intel/hw_vid: h264-stripe-study frame reverse_step={} source_frame={} gop_frame={} stream_idr={} class={} frame_num={} poc={}/{} metric={} stored={} captured={} decoded={}x{} visible={}x{}\n",
+            "intel/hw_vid: h264-stripe-study frame reverse_step={} source_frame={} gop_frame={} stream_idr={} class={} frame_num={} poc={}/{} primary_metric={} decoded_y_metric={} stored={} captured={} decoded={}x{} visible={}x{}\n",
             reverse_step,
             source_index + 1,
             h264_gop_frame_number(frame, source_index),
@@ -860,7 +862,8 @@ async fn h264_stripe_study_from_full_cache(
             h264_frame_num_i32(frame),
             h264_frame_poc_top(frame),
             h264_frame_poc_bottom(frame),
-            metric,
+            primary_metric,
+            decoded_y_metric,
             stored as u8,
             snapshot.is_some() as u8,
             decoded.width,
@@ -872,7 +875,8 @@ async fn h264_stripe_study_from_full_cache(
             h264_stripe_study_insert_candidate(
                 &mut candidates,
                 H264StripeStudyCandidate {
-                    metric,
+                    metric: primary_metric,
+                    decoded_y_metric,
                     source_index,
                     reverse_step,
                     snapshot,
@@ -882,7 +886,7 @@ async fn h264_stripe_study_from_full_cache(
         Timer::after(EmbassyDuration::from_millis(H264_BOOT_PROBE_STRIPE_STUDY_FRAME_MS)).await;
     }
 
-    h264_write_stripe_study_artifacts(frames, candidates.as_slice()).await;
+    h264_write_stripe_study_artifacts(frames, cache, candidates.as_slice()).await;
     crate::log!(
         "intel/hw_vid: h264-stripe-study done scanned={} captured={} stored={} max_metric={}\n",
         scanned,
@@ -915,6 +919,7 @@ fn h264_stripe_study_insert_candidate(
 
 async fn h264_write_stripe_study_artifacts(
     frames: &[H264IndexedFrame],
+    cache: &[H264DecodedFrame],
     candidates: &[H264StripeStudyCandidate],
 ) {
     let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
@@ -925,21 +930,21 @@ async fn h264_write_stripe_study_artifacts(
     let mut manifest = String::new();
     let _ = writeln!(
         manifest,
-        "kind=h264-stripe-study format=primary-bgra8-raw candidates={}",
+        "kind=h264-stripe-study format=primary-bgra8-raw+decoded-nv12-raw candidates={}",
         candidates.len()
     );
 
     for (rank, candidate) in candidates.iter().enumerate() {
         let frame = &frames[candidate.source_index];
-        let path = format!(
-            "h264_stripe_study_rank{:02}_src{:05}_metric{}.bgra",
+        let primary_path = format!(
+            "h264_stripe_study_rank{:02}_src{:05}_primary_metric{}.bgra",
             rank + 1,
             candidate.source_index + 1,
             candidate.metric
         );
-        let wrote = match crate::r::fs::trueosfs::file_in_async(
+        let primary_wrote = match crate::r::fs::trueosfs::file_in_async(
             disk,
-            path.as_str(),
+            primary_path.as_str(),
             candidate.snapshot.pixels.as_slice(),
         )
         .await
@@ -948,23 +953,60 @@ async fn h264_write_stripe_study_artifacts(
             Err(err) => {
                 crate::log!(
                     "intel/hw_vid: h264-stripe-study write failed path={} err={:?}\n",
-                    path.as_str(),
+                    primary_path.as_str(),
                     err
                 );
                 false
             }
         };
-        crate::log!(
-            "intel/hw_vid: h264-stripe-study artifact rank={} path={} wrote={} source_frame={} reverse_step={} metric={} width={} height={} bytes=0x{:X} class={} frame_num={} poc={}/{}\n",
+        let decoded_path = format!(
+            "h264_stripe_study_rank{:02}_src{:05}_decoded_nv12.yuv",
             rank + 1,
-            path.as_str(),
-            wrote as u8,
+            candidate.source_index + 1
+        );
+        let decoded = cache.get(candidate.source_index);
+        let decoded_wrote = if let Some(decoded) = decoded {
+            match crate::r::fs::trueosfs::file_in_async(
+                disk,
+                decoded_path.as_str(),
+                decoded.bytes.as_slice(),
+            )
+            .await
+            {
+                Ok(ok) => ok,
+                Err(err) => {
+                    crate::log!(
+                        "intel/hw_vid: h264-stripe-study write failed path={} err={:?}\n",
+                        decoded_path.as_str(),
+                        err
+                    );
+                    false
+                }
+            }
+        } else {
+            false
+        };
+        crate::log!(
+            "intel/hw_vid: h264-stripe-study artifact rank={} primary_path={} primary_wrote={} decoded_path={} decoded_wrote={} source_frame={} reverse_step={} primary_metric={} decoded_y_metric={} primary_width={} primary_height={} primary_bytes=0x{:X} decoded_width={} decoded_height={} decoded_visible={}x{} decoded_pitch=0x{:X} decoded_uv=0x{:X} decoded_bytes=0x{:X} class={} frame_num={} poc={}/{}\n",
+            rank + 1,
+            primary_path.as_str(),
+            primary_wrote as u8,
+            decoded_path.as_str(),
+            decoded_wrote as u8,
             candidate.source_index + 1,
             candidate.reverse_step,
             candidate.metric,
+            candidate.decoded_y_metric,
             candidate.snapshot.width,
             candidate.snapshot.height,
             candidate.snapshot.pixels.len(),
+            decoded.map(|decoded| decoded.width).unwrap_or(0),
+            decoded.map(|decoded| decoded.height).unwrap_or(0),
+            decoded.map(|decoded| decoded.visible_width).unwrap_or(0),
+            decoded.map(|decoded| decoded.visible_height).unwrap_or(0),
+            decoded.map(|decoded| decoded.pitch_bytes).unwrap_or(0),
+            decoded.map(|decoded| decoded.uv_offset).unwrap_or(0),
+            decoded.map(|decoded| decoded.bytes.len()).unwrap_or(0),
             h264_frame_class_label(frame),
             h264_frame_num_i32(frame),
             h264_frame_poc_top(frame),
@@ -972,16 +1014,26 @@ async fn h264_write_stripe_study_artifacts(
         );
         let _ = writeln!(
             manifest,
-            "rank={} path={} wrote={} source_frame={} reverse_step={} metric={} width={} height={} bytes={} class={} frame_num={} poc_top={} poc_bottom={}",
+            "rank={} primary_path={} primary_wrote={} decoded_path={} decoded_wrote={} source_frame={} reverse_step={} primary_metric={} decoded_y_metric={} primary_width={} primary_height={} primary_bytes={} decoded_width={} decoded_height={} decoded_visible_width={} decoded_visible_height={} decoded_pitch={} decoded_uv={} decoded_bytes={} class={} frame_num={} poc_top={} poc_bottom={}",
             rank + 1,
-            path.as_str(),
-            wrote as u8,
+            primary_path.as_str(),
+            primary_wrote as u8,
+            decoded_path.as_str(),
+            decoded_wrote as u8,
             candidate.source_index + 1,
             candidate.reverse_step,
             candidate.metric,
+            candidate.decoded_y_metric,
             candidate.snapshot.width,
             candidate.snapshot.height,
             candidate.snapshot.pixels.len(),
+            decoded.map(|decoded| decoded.width).unwrap_or(0),
+            decoded.map(|decoded| decoded.height).unwrap_or(0),
+            decoded.map(|decoded| decoded.visible_width).unwrap_or(0),
+            decoded.map(|decoded| decoded.visible_height).unwrap_or(0),
+            decoded.map(|decoded| decoded.pitch_bytes).unwrap_or(0),
+            decoded.map(|decoded| decoded.uv_offset).unwrap_or(0),
+            decoded.map(|decoded| decoded.bytes.len()).unwrap_or(0),
             h264_frame_class_label(frame),
             h264_frame_num_i32(frame),
             h264_frame_poc_top(frame),
@@ -1081,6 +1133,91 @@ fn h264_bgra_column_luma_average(
     }
 
     if count == 0 { 0 } else { sum / count }
+}
+
+fn h264_decoded_luma_stripe_metric(frame: &H264DecodedFrame) -> u64 {
+    let width = frame.visible_width as usize;
+    let height = frame.visible_height as usize;
+    let pitch = frame.pitch_bytes;
+    const YTILE_W: usize = 128;
+    if width < 16 || height < 16 || pitch < width || !pitch.is_multiple_of(YTILE_W) {
+        return 0;
+    }
+
+    let tiles_per_row = pitch / YTILE_W;
+    if tiles_per_row == 0 {
+        return 0;
+    }
+
+    let x_start = width / 10;
+    let x_end = width.saturating_mul(9) / 10;
+    let y_start = height / 8;
+    let y_end = height.saturating_mul(7) / 8;
+    if x_end <= x_start + 2 || y_end <= y_start {
+        return 0;
+    }
+
+    let mut max_deficit = 0u64;
+    let mut total_deficit = 0u64;
+    let mut x = x_start + 1;
+    while x + 1 < x_end {
+        let cur = h264_ytile_nv12_luma_column_average(frame, x, y_start, y_end, tiles_per_row);
+        let left = h264_ytile_nv12_luma_column_average(frame, x - 1, y_start, y_end, tiles_per_row);
+        let right =
+            h264_ytile_nv12_luma_column_average(frame, x + 1, y_start, y_end, tiles_per_row);
+        let neighbor = (left + right) / 2;
+        if neighbor > cur && cur < 96 {
+            let deficit = neighbor - cur;
+            max_deficit = max_deficit.max(deficit);
+            total_deficit = total_deficit.saturating_add(deficit);
+        }
+        x += 1;
+    }
+
+    max_deficit
+        .saturating_mul(1_000_000)
+        .saturating_add(total_deficit)
+}
+
+fn h264_ytile_nv12_luma_column_average(
+    frame: &H264DecodedFrame,
+    x: usize,
+    y_start: usize,
+    y_end: usize,
+    tiles_per_row: usize,
+) -> u64 {
+    let width = frame.visible_width as usize;
+    if width == 0 || x >= width {
+        return 0;
+    }
+
+    let mut sum = 0u64;
+    let mut count = 0u64;
+    let mut y = y_start;
+    while y < y_end {
+        let off = h264_ytile_8bpp_offset(x, y, tiles_per_row);
+        if off < frame.bytes.len() && off < frame.uv_offset {
+            sum = sum.saturating_add(frame.bytes[off] as u64);
+            count += 1;
+        }
+        y += 8;
+    }
+
+    if count == 0 { 0 } else { sum / count }
+}
+
+#[inline(always)]
+fn h264_ytile_8bpp_offset(byte_x: usize, row_y: usize, tiles_per_row: usize) -> usize {
+    const YTILE_W: usize = 128;
+    const YTILE_H: usize = 32;
+    let tile_col = byte_x / YTILE_W;
+    let tile_row = row_y / YTILE_H;
+    let in_x = byte_x % YTILE_W;
+    let in_y = row_y % YTILE_H;
+    let oword_col = in_x / 16;
+    let byte_in_oword = in_x % 16;
+    let within_tile = oword_col * 512 + in_y * 16 + byte_in_oword;
+    (tile_row * tiles_per_row + tile_col) * 4096 + within_tile
 }
 
 async fn h264_read_indexed_frame_span(

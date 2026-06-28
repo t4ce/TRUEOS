@@ -18,6 +18,14 @@ pub(crate) struct Ui3Image {
 
 static UI3_IMAGES: Mutex<BTreeMap<u32, Ui3Image>> = Mutex::new(BTreeMap::new());
 static UI3_IMAGE_STATUS: Mutex<BTreeMap<u32, i32>> = Mutex::new(BTreeMap::new());
+static UI3_IMAGE_UPLOADS: Mutex<BTreeMap<(u8, u32), Ui3ImageUpload>> = Mutex::new(BTreeMap::new());
+
+struct Ui3ImageUpload {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+    written: usize,
+}
 
 fn valid_tex_id(tex_id: u32) -> bool {
     tex_id != 0
@@ -49,6 +57,65 @@ unsafe fn encoded_bytes<'a>(data_ptr: *const u8, data_len: usize) -> Result<&'a 
         return Err(UI3_IMG_ERR_EMPTY);
     }
     Ok(unsafe { core::slice::from_raw_parts(data_ptr, data_len) })
+}
+
+#[inline]
+fn running_in_hull_guest() -> bool {
+    crate::hv::current_hull_guest_context_vm_id().is_some()
+}
+
+fn vmcall_texture_rc(op: u32, arg0: u64, arg1: u64, payload: &[u8]) -> i32 {
+    let (status, data) = trueos_vm::vmcall::call_with_payload(op, arg0, arg1, payload, &mut []);
+    if status == trueos_vm::vmcall::STATUS_OK {
+        data as i64 as i32
+    } else {
+        -1
+    }
+}
+
+fn upload_rgba_image_to_host(
+    tex_id: u32,
+    width: u32,
+    height: u32,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> i32 {
+    if data_ptr.is_null() {
+        return -2;
+    }
+    let Some(expected) = expected_rgba_len(width, height) else {
+        return -7;
+    };
+    if data_len < expected {
+        return -3;
+    }
+    let total_len = (expected as u64).to_le_bytes();
+    let rc = vmcall_texture_rc(
+        trueos_vm::vmcall::OP_BP_UI3_TEXTURE_UPLOAD_BEGIN,
+        tex_id as u64,
+        ((width as u64) << 32) | (height as u64),
+        &total_len,
+    );
+    if rc != 0 {
+        return rc;
+    }
+
+    let src = unsafe { core::slice::from_raw_parts(data_ptr, expected) };
+    let mut offset = 0usize;
+    while offset < expected {
+        let end = core::cmp::min(offset.saturating_add(trueos_vm::vmcall::PAYLOAD_CAP), expected);
+        let rc = vmcall_texture_rc(
+            trueos_vm::vmcall::OP_BP_UI3_TEXTURE_UPLOAD_CHUNK,
+            tex_id as u64,
+            offset as u64,
+            &src[offset..end],
+        );
+        if rc != 0 {
+            return rc;
+        }
+        offset = end;
+    }
+    vmcall_texture_rc(trueos_vm::vmcall::OP_BP_UI3_TEXTURE_UPLOAD_FINISH, tex_id as u64, 0, &[])
 }
 
 #[cfg(feature = "trueos_rdp")]
@@ -134,6 +201,68 @@ pub(crate) fn store_rgba_image(tex_id: u32, width: u32, height: u32, rgba: Vec<u
     0
 }
 
+pub(crate) fn image_clone(tex_id: u32) -> Option<Ui3Image> {
+    UI3_IMAGES.lock().get(&tex_id).cloned()
+}
+
+pub(crate) fn begin_rgba_upload(
+    vm_id: u8,
+    tex_id: u32,
+    width: u32,
+    height: u32,
+    total_len: usize,
+) -> i32 {
+    if !valid_tex_id(tex_id) || width == 0 || height == 0 {
+        return -1;
+    }
+    let Some(expected) = expected_rgba_len(width, height) else {
+        return -7;
+    };
+    if total_len < expected {
+        return -3;
+    }
+    set_status(tex_id, UI3_IMG_STATUS_PENDING);
+    let mut rgba = Vec::new();
+    rgba.resize(expected, 0);
+    UI3_IMAGE_UPLOADS.lock().insert(
+        (vm_id, tex_id),
+        Ui3ImageUpload {
+            width,
+            height,
+            rgba,
+            written: 0,
+        },
+    );
+    0
+}
+
+pub(crate) fn write_rgba_upload_chunk(vm_id: u8, tex_id: u32, offset: usize, bytes: &[u8]) -> i32 {
+    let mut uploads = UI3_IMAGE_UPLOADS.lock();
+    let Some(upload) = uploads.get_mut(&(vm_id, tex_id)) else {
+        return -1;
+    };
+    let Some(end) = offset.checked_add(bytes.len()) else {
+        return -7;
+    };
+    if end > upload.rgba.len() {
+        return -3;
+    }
+    upload.rgba[offset..end].copy_from_slice(bytes);
+    upload.written = upload.written.max(end);
+    0
+}
+
+pub(crate) fn finish_rgba_upload(vm_id: u8, tex_id: u32) -> i32 {
+    let upload = UI3_IMAGE_UPLOADS.lock().remove(&(vm_id, tex_id));
+    let Some(upload) = upload else {
+        return -1;
+    };
+    if upload.written < upload.rgba.len() {
+        return -3;
+    }
+    store_rgba_image(tex_id, upload.width, upload.height, upload.rgba)
+}
+
 pub(crate) fn image_dimensions(tex_id: u32) -> Option<(u32, u32)> {
     UI3_IMAGES
         .lock()
@@ -168,6 +297,9 @@ pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_rgba_image(
     data_ptr: *const u8,
     data_len: usize,
 ) -> i32 {
+    if running_in_hull_guest() {
+        return upload_rgba_image_to_host(tex_id, width, height, data_ptr, data_len);
+    }
     if data_ptr.is_null() {
         return -2;
     }
@@ -284,6 +416,20 @@ pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_svg_async(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_gfx_texture_status(tex_id: u32) -> i32 {
+    if running_in_hull_guest() {
+        let (status, data) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_UI3_TEXTURE_STATUS,
+            tex_id as u64,
+            0,
+            &[],
+            &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            data as i64 as i32
+        } else {
+            UI3_IMG_STATUS_UNKNOWN
+        };
+    }
     image_status(tex_id)
 }
 
@@ -293,6 +439,31 @@ pub unsafe extern "C" fn trueos_cabi_gfx_texture_dimensions(
     out_width: *mut u32,
     out_height: *mut u32,
 ) -> i32 {
+    if running_in_hull_guest() {
+        let (status, data) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_UI3_TEXTURE_DIMENSIONS,
+            tex_id as u64,
+            0,
+            &[],
+            &mut [],
+        );
+        if status != trueos_vm::vmcall::STATUS_OK || data == 0 {
+            return UI3_IMG_STATUS_UNKNOWN;
+        }
+        let width = (data >> 32) as u32;
+        let height = data as u32;
+        if !out_width.is_null() {
+            unsafe {
+                *out_width = width;
+            }
+        }
+        if !out_height.is_null() {
+            unsafe {
+                *out_height = height;
+            }
+        }
+        return UI3_IMG_STATUS_READY;
+    }
     let Some((width, height)) = image_dimensions(tex_id) else {
         return UI3_IMG_STATUS_UNKNOWN;
     };
