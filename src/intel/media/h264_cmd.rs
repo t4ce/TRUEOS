@@ -173,6 +173,17 @@ impl AvcSliceClass {
     pub(crate) const fn is_i_only(self) -> bool {
         matches!(self, Self::I | Self::Si)
     }
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::I => "I",
+            Self::P => "P",
+            Self::B => "B",
+            Self::Si => "SI",
+            Self::Sp => "SP",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -340,6 +351,23 @@ pub(crate) struct AvcLongFormatIdrPlan {
     pub resources: AvcDecodeResourcePlan,
     pub bitstream_bytes: usize,
     pub bitstream_data_offset: u32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AvcFrameDebug {
+    pub class: AvcSliceClass,
+    pub nal_type: u8,
+    pub frame_num: u16,
+    pub top_field_order_cnt: i32,
+    pub bottom_field_order_cnt: i32,
+    pub pic_order_cnt_type: u8,
+    pub log2_max_frame_num_minus4: u8,
+    pub log2_max_pic_order_cnt_lsb_minus4: u8,
+    pub num_ref_idx_l0_active_minus1: u8,
+    pub coded_width: u32,
+    pub coded_height: u32,
+    pub visible_width: u32,
+    pub visible_height: u32,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -709,6 +737,7 @@ pub(crate) fn build_long_format_single_idr_command_stream(
     let ind_obj =
         encode_mfx_ind_obj_base_addr_state(params.ind_obj_base_addr_state, resources.bitstream);
     let bsp_buf = encode_mfx_bsp_buf_base_addr_state(params.bsp_buf_base_addr_state, resources);
+    let dpb = encode_mfd_avc_dpb_state(mfd_avc_dpb_state_params_for_idr());
     let picid = encode_mfd_avc_picid_state(params.avc_picid_state);
     let img = encode_mfx_avc_img_state(params.avc_img_state);
     let qm_states = [
@@ -735,6 +764,7 @@ pub(crate) fn build_long_format_single_idr_command_stream(
     dwords.extend_from_slice(&pipe_buf.dwords);
     dwords.extend_from_slice(&ind_obj.dwords);
     dwords.extend_from_slice(&bsp_buf.dwords);
+    dwords.extend_from_slice(&dpb.dwords);
     dwords.extend_from_slice(&picid.dwords);
     dwords.extend_from_slice(&img.dwords);
     for qm in qm_states {
@@ -781,6 +811,7 @@ pub(crate) fn build_long_format_single_i_or_p_command_stream(
         mfx_bsp_buf_base_addr_state_params(plan.resources.rowstore),
         resources,
     );
+    let dpb = encode_mfd_avc_dpb_state(mfd_avc_dpb_state_params_for_refs(references));
     let picid = encode_mfd_avc_picid_state(mfd_avc_picid_state_params_for_idr());
     let img = encode_mfx_avc_img_state(mfx_avc_img_state_params_for_idr(plan));
     let qm_states = mfx_qm_state_params_flat_avc_defaults();
@@ -806,6 +837,7 @@ pub(crate) fn build_long_format_single_i_or_p_command_stream(
     dwords.extend_from_slice(&pipe_buf.dwords);
     dwords.extend_from_slice(&ind_obj.dwords);
     dwords.extend_from_slice(&bsp_buf.dwords);
+    dwords.extend_from_slice(&dpb.dwords);
     dwords.extend_from_slice(&picid.dwords);
     dwords.extend_from_slice(&img.dwords);
     for qm in qm_states {
@@ -872,6 +904,7 @@ fn validate_long_format_command_stream_shape(
         && stream.dwords[AVC_CMD_OFFSET_IND_OBJ_BASE_ADDR_STATE + 23]
             == MFX_MEMORY_ADDRESS_ATTRIBUTES_UC
         && stream.dwords[AVC_CMD_OFFSET_BSP_BUF_BASE_ADDR_STATE] == MFX_BSP_BUF_BASE_ADDR_STATE_DW0
+        && stream.dwords[AVC_CMD_OFFSET_AVC_DPB_STATE] == MFD_AVC_DPB_STATE_DW0
         && stream.dwords[AVC_CMD_OFFSET_AVC_PICID_STATE] == MFD_AVC_PICID_STATE_DW0
         && stream.dwords[AVC_CMD_OFFSET_AVC_IMG_STATE] == MFX_AVC_IMG_STATE_DW0
         && stream.dwords[AVC_CMD_OFFSET_AVC_QM_INTRA_4X4_STATE] == MFX_QM_STATE_DW0
@@ -1086,6 +1119,28 @@ pub(crate) fn parse_annexb_single_i_or_p_plan(
         resources,
         bitstream_bytes: bytes.len(),
         bitstream_data_offset: 0,
+    })
+}
+
+pub(crate) fn parse_annexb_single_i_or_p_debug(
+    bytes: &[u8],
+) -> Result<AvcFrameDebug, AvcAnnexBPlanError> {
+    let plan = parse_annexb_single_i_or_p_plan(bytes)?;
+    let nal_type = if plan.slice.class.is_i_only() { 5 } else { 1 };
+    Ok(AvcFrameDebug {
+        class: plan.slice.class,
+        nal_type,
+        frame_num: plan.picture.frame_num,
+        top_field_order_cnt: plan.picture.top_field_order_cnt,
+        bottom_field_order_cnt: plan.picture.bottom_field_order_cnt,
+        pic_order_cnt_type: plan.picture.pic_order_cnt_type,
+        log2_max_frame_num_minus4: plan.picture.log2_max_frame_num_minus4,
+        log2_max_pic_order_cnt_lsb_minus4: plan.picture.log2_max_pic_order_cnt_lsb_minus4,
+        num_ref_idx_l0_active_minus1: plan.picture.num_ref_idx_l0_active_minus1,
+        coded_width: plan.picture.coded_width(),
+        coded_height: plan.picture.coded_height(),
+        visible_width: plan.picture.visible_width(),
+        visible_height: plan.picture.visible_height(),
     })
 }
 
@@ -1348,7 +1403,7 @@ pub(crate) const MFX_AVC_SLICE_STATE_DWORD_COUNT: usize = 11;
 pub(crate) const MFD_AVC_BSD_OBJECT_DWORD_COUNT: usize = 7;
 pub(crate) const MFX_AVC_DMV_DEST_TOP: usize = 32;
 pub(crate) const MFX_AVC_DMV_DEST_BOTTOM: usize = 33;
-pub(crate) const AVC_LONG_FORMAT_SINGLE_IDR_COMMAND_COUNT: usize = 19;
+pub(crate) const AVC_LONG_FORMAT_SINGLE_IDR_COMMAND_COUNT: usize = 20;
 pub(crate) const AVC_LONG_FORMAT_SINGLE_IDR_COMMAND_DWORDS: usize = 2
     + 1
     + MFX_PIPE_MODE_SELECT_DWORD_COUNT
@@ -1357,6 +1412,7 @@ pub(crate) const AVC_LONG_FORMAT_SINGLE_IDR_COMMAND_DWORDS: usize = 2
     + MFX_PIPE_BUF_ADDR_STATE_DWORD_COUNT
     + MFX_IND_OBJ_BASE_ADDR_STATE_DWORD_COUNT
     + MFX_BSP_BUF_BASE_ADDR_STATE_DWORD_COUNT
+    + MFD_AVC_DPB_STATE_DWORD_COUNT
     + MFD_AVC_PICID_STATE_DWORD_COUNT
     + MFX_AVC_IMG_STATE_DWORD_COUNT
     + (MFX_QM_STATE_DWORD_COUNT * AVC_QM_STATE_COUNT)
@@ -1377,8 +1433,10 @@ pub(crate) const AVC_CMD_OFFSET_IND_OBJ_BASE_ADDR_STATE: usize =
     AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE + MFX_PIPE_BUF_ADDR_STATE_DWORD_COUNT;
 pub(crate) const AVC_CMD_OFFSET_BSP_BUF_BASE_ADDR_STATE: usize =
     AVC_CMD_OFFSET_IND_OBJ_BASE_ADDR_STATE + MFX_IND_OBJ_BASE_ADDR_STATE_DWORD_COUNT;
-pub(crate) const AVC_CMD_OFFSET_AVC_PICID_STATE: usize =
+pub(crate) const AVC_CMD_OFFSET_AVC_DPB_STATE: usize =
     AVC_CMD_OFFSET_BSP_BUF_BASE_ADDR_STATE + MFX_BSP_BUF_BASE_ADDR_STATE_DWORD_COUNT;
+pub(crate) const AVC_CMD_OFFSET_AVC_PICID_STATE: usize =
+    AVC_CMD_OFFSET_AVC_DPB_STATE + MFD_AVC_DPB_STATE_DWORD_COUNT;
 pub(crate) const AVC_CMD_OFFSET_AVC_IMG_STATE: usize =
     AVC_CMD_OFFSET_AVC_PICID_STATE + MFD_AVC_PICID_STATE_DWORD_COUNT;
 pub(crate) const AVC_CMD_OFFSET_AVC_QM_INTRA_4X4_STATE: usize =
@@ -1457,6 +1515,13 @@ pub(crate) const AVC_LONG_FORMAT_SINGLE_IDR_COMMAND_BLOCKS: [AvcCommandBlock;
         command: "MFX_BSP_BUF_BASE_ADDR_STATE",
         upstream_file: "media_softlet/agnostic/common/codec/hal/dec/avc/packet/decode_avc_picture_packet.cpp",
         upstream_symbol: "SETPAR(MFX_BSP_BUF_BASE_ADDR_STATE, AvcDecodePicPkt)",
+    },
+    AvcCommandBlock {
+        offset: AVC_CMD_OFFSET_AVC_DPB_STATE,
+        dword_count: MFD_AVC_DPB_STATE_DWORD_COUNT,
+        command: "MFD_AVC_DPB_STATE",
+        upstream_file: "media_softlet/agnostic/common/codec/hal/dec/avc/packet/decode_avc_picture_packet.cpp",
+        upstream_symbol: "SETPAR(MFD_AVC_DPB_STATE, AvcDecodePicPkt)",
     },
     AvcCommandBlock {
         offset: AVC_CMD_OFFSET_AVC_PICID_STATE,
@@ -1767,6 +1832,30 @@ pub(crate) const fn mfd_avc_dpb_state_params_for_idr() -> MfdAvcDpbStateParams {
         long_term_frame_flags: 0,
         used_for_reference_flags: 0,
         ref_frame_order: [0; 16],
+    }
+}
+
+pub(crate) const fn mfd_avc_dpb_state_params_for_refs(
+    references: AvcReferenceState,
+) -> MfdAvcDpbStateParams {
+    let mut used_for_reference_flags = 0u32;
+    let mut ref_frame_order = [0u16; 16];
+    let mut idx = 0usize;
+    while idx < 16 {
+        if let Some(reference) = references.refs[idx] {
+            let frame_store_id = reference.frame_store_id as usize;
+            if frame_store_id < 16 {
+                used_for_reference_flags |= 0x3 << (frame_store_id * 2);
+                ref_frame_order[frame_store_id] = reference.frame_num;
+            }
+        }
+        idx += 1;
+    }
+    MfdAvcDpbStateParams {
+        non_existing_frame_flags: 0,
+        long_term_frame_flags: 0,
+        used_for_reference_flags,
+        ref_frame_order,
     }
 }
 
