@@ -579,7 +579,7 @@ fn avc_scratch_bindings(
 fn process_h264_job(job: HwPicJob) -> HwPicOutput {
     use crate::intel::xelp_media_avc_decode_recipe::{
         AVC_CMD_OFFSET_AVC_BSD_OBJECT, AVC_CMD_OFFSET_AVC_DIRECTMODE_STATE,
-        AVC_CMD_OFFSET_AVC_IMG_STATE, AVC_CMD_OFFSET_AVC_PICID_STATE,
+        AVC_CMD_OFFSET_AVC_DPB_STATE, AVC_CMD_OFFSET_AVC_IMG_STATE, AVC_CMD_OFFSET_AVC_PICID_STATE,
         AVC_CMD_OFFSET_AVC_QM_INTRA_4X4_STATE, AVC_CMD_OFFSET_AVC_REF_IDX_STATE,
         AVC_CMD_OFFSET_AVC_SLICE_STATE, AVC_CMD_OFFSET_BSP_BUF_BASE_ADDR_STATE,
         AVC_CMD_OFFSET_IND_OBJ_BASE_ADDR_STATE, AVC_CMD_OFFSET_PIPE_BUF_ADDR_STATE,
@@ -843,7 +843,7 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
     };
 
     hw_pic_info!(
-        "intel/hw_pic-stage: id={} stage=avc-command-stream accepted=1 submit_ready=1 commands={} dwords={} headers pipe=0x{:08X} surface=0x{:08X} pipebuf=0x{:08X} indobj=0x{:08X} bsp=0x{:08X} picid=0x{:08X} img=0x{:08X} qm0=0x{:08X} direct=0x{:08X} refidx=0x{:08X} slice=0x{:08X} bsd=0x{:08X}\n",
+        "intel/hw_pic-stage: id={} stage=avc-command-stream accepted=1 submit_ready=1 commands={} dwords={} headers pipe=0x{:08X} surface=0x{:08X} pipebuf=0x{:08X} indobj=0x{:08X} bsp=0x{:08X} dpb=0x{:08X} picid=0x{:08X} img=0x{:08X} qm0=0x{:08X} direct=0x{:08X} refidx=0x{:08X} slice=0x{:08X} bsd=0x{:08X}\n",
         job.id,
         stream.command_count,
         stream.dwords.len(),
@@ -870,6 +870,11 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         stream
             .dwords
             .get(AVC_CMD_OFFSET_BSP_BUF_BASE_ADDR_STATE)
+            .copied()
+            .unwrap_or(0),
+        stream
+            .dwords
+            .get(AVC_CMD_OFFSET_AVC_DPB_STATE)
             .copied()
             .unwrap_or(0),
         stream
@@ -927,6 +932,16 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         command_dword(AVC_CMD_OFFSET_SURFACE_STATE + 3),
         command_dword(AVC_CMD_OFFSET_SURFACE_STATE + 4),
         command_dword(AVC_CMD_OFFSET_SURFACE_STATE + 5)
+    );
+    hw_pic_info!(
+        "intel/hw_pic-stage: id={} stage=avc-dpb-state accepted=1 dw1=0x{:08X} used=0x{:08X} order0=0x{:08X} order1=0x{:08X} order2=0x{:08X} order3=0x{:08X}\n",
+        job.id,
+        command_dword(AVC_CMD_OFFSET_AVC_DPB_STATE + 1),
+        command_dword(AVC_CMD_OFFSET_AVC_DPB_STATE + 2),
+        command_dword(AVC_CMD_OFFSET_AVC_DPB_STATE + 3),
+        command_dword(AVC_CMD_OFFSET_AVC_DPB_STATE + 4),
+        command_dword(AVC_CMD_OFFSET_AVC_DPB_STATE + 5),
+        command_dword(AVC_CMD_OFFSET_AVC_DPB_STATE + 6)
     );
     hw_pic_info!(
         "intel/hw_pic-stage: id={} stage=avc-profile accepted=1 name=green-rollback clear_y={} clear_uv={} surface=tileys64-dw3-0x48003ff9 pipe=both ind=full-bitstream-window probe=tile64+ytile+linear\n",
