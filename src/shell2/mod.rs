@@ -1167,6 +1167,9 @@ fn handle_command_session_input(
                 spawner, io, &target, submitted, disc_id,
             )
         }
+        shell2_cmd::CommandSessionKind::GpuCanvasRunning(session_id) => {
+            crate::ui3::ui3_canvas::handle_session_input(session_id, &target, submitted)
+        }
         shell2_cmd::CommandSessionKind::RemoveSure(session_id) => {
             crate::shell2::cmds::rm::handle_session_input(&target, submitted, session_id)
         }
