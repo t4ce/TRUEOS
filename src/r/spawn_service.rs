@@ -190,15 +190,12 @@ fn spawn_local<S>(
 }
 
 #[inline]
-fn spawn_on_ap1<S: Send>(
+fn spawn_on_ap1_ui_core<S: Send>(
     spawner: Spawner,
     task: impl FnOnce(crate::workers::WorkerSpawner) -> Result<SpawnToken<S>, SpawnError>,
 ) -> SpawnAttempt {
-    let _ = spawner; // keep signature stable; this task intentionally targets AP1.
-    let Some(profile) = crate::cpu::CpuProfile::for_slot(1) else {
-        return SpawnAttempt::Skipped;
-    };
-    let Some(ap1_spawner) = crate::workers::spawner_for_slot(profile.slot()) else {
+    let _ = spawner; // keep signature stable; this task intentionally targets the AP1 UI core.
+    let Some(ap1_spawner) = crate::workers::ap1_ui_core_spawner() else {
         return SpawnAttempt::Skipped;
     };
     match task(ap1_spawner) {
@@ -252,10 +249,7 @@ fn spawn_smp_hlt_history(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_codec_service(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
-    let Some(profile) = crate::cpu::CpuProfile::for_slot(1) else {
-        return SpawnAttempt::Skipped;
-    };
-    let Some(ap1_spawner) = crate::workers::spawner_for_slot(profile.slot()) else {
+    let Some(ap1_spawner) = crate::workers::ap1_ui_core_spawner() else {
         return SpawnAttempt::Skipped;
     };
 
@@ -381,7 +375,7 @@ fn spawn_net_service(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_i226_diagnostic_display(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |_worker_spawner| crate::net::i226::i226_diagnostic_display_task())
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::net::i226::i226_diagnostic_display_task())
 }
 
 fn spawn_net_cache_service(spawner: Spawner) -> SpawnAttempt {
@@ -422,7 +416,7 @@ fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_shader_compile_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::r::shader::shader_compile_service_task())
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::r::shader::shader_compile_service_task())
 }
 
 fn spawn_silk_service(spawner: Spawner) -> SpawnAttempt {
@@ -480,23 +474,23 @@ async fn intel_cursor_service_task() {
 }
 
 fn spawn_intel_cursor_service_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| intel_cursor_service_task())
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| intel_cursor_service_task())
 }
 
 fn spawn_hw_pic_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |_worker_spawner| crate::intel::hw_pic_service())
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::intel::hw_pic_service())
 }
 
 fn spawn_hw_vid_probe_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |_worker_spawner| crate::intel::hw_vid_probe_task_spawn())
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::intel::hw_vid_probe_task_spawn())
 }
 
 fn spawn_hw_logo_present_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |_worker_spawner| crate::intel::hw_logo_present_task())
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::intel::hw_logo_present_task())
 }
 
 fn spawn_virtio_gpu_ui_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |_worker_spawner| crate::virtio_gpu_logo::emulator_ui_task())
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::virtio_gpu_logo::emulator_ui_task())
 }
 
 fn spawn_intel_hda_audio_demo_task(spawner: Spawner) -> SpawnAttempt {
@@ -507,7 +501,7 @@ fn spawn_intel_hda_audio_demo_task(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_raple_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::power::rapl::raple_service())
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::power::rapl::raple_service())
 }
 
 fn html_fetch_service(spawner: Spawner) -> SpawnAttempt {
@@ -523,19 +517,19 @@ fn spawn_truesurfer_parse_pool(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_ui3_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |_ap1_spawner| crate::ui3::ui3_service_task())
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::ui3::ui3_service_task())
 }
 
 fn spawn_ui3_orbits(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |_ap1_spawner| crate::ui3::ui3_orbits::ui3_orbits_task())
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::ui3::ui3_orbits::ui3_orbits_task())
 }
 
 fn spawn_aud_file_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |_ap1_spawner| crate::aud::file_service::aud_file_service_task())
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::aud::file_service::aud_file_service_task())
 }
 
 fn spawn_tinyaudio_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |_ap1_spawner| crate::tst::esynth::tinyaudio_service_task())
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::tst::esynth::tinyaudio_service_task())
 }
 
 fn spawn_tinyaudio_live_http(spawner: Spawner) -> SpawnAttempt {

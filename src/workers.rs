@@ -10,6 +10,7 @@ use spin::Mutex;
 pub const CORE_KIND_UNKNOWN: u8 = 0;
 pub const CORE_KIND_PERF: u8 = 1;
 pub const CORE_KIND_EFF: u8 = 2;
+pub const AP1_UI_SERVICE_SLOT: u32 = 1;
 
 // Slot 0 is BSP and slot 1 is the UI2/service AP; background carriers start at AP2.
 const FIRST_BACKGROUND_SLOT: u32 = 2;
@@ -121,6 +122,10 @@ pub fn raw_spawner_for_slot(cpu_slot: u32) -> Option<SendSpawner> {
 
 pub fn spawner_for_slot(cpu_slot: u32) -> Option<WorkerSpawner> {
     raw_spawner_for_slot(cpu_slot).map(|spawner| worker_spawner(cpu_slot, spawner))
+}
+
+pub fn ap1_ui_core_spawner() -> Option<WorkerSpawner> {
+    spawner_for_slot(AP1_UI_SERVICE_SLOT)
 }
 
 pub fn background_slot_range() -> core::ops::Range<u32> {

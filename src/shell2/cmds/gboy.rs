@@ -7,7 +7,6 @@ use super::super::{
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const GBOY_SLOT: &str = "gb";
-const AP1_UI_SERVICE_SLOT: u32 = 1;
 
 fn parse_one_path(rest: &str) -> Result<Option<String>, &'static str> {
     let mut out = String::new();
@@ -84,7 +83,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
     let target = switch_matrix_target_slot(&active_target, GBOY_SLOT);
     print_matrix_target_line(&target, alloc::format!("gboy: queueing {}", path).as_str());
 
-    let Some(ap1) = crate::workers::spawner_for_slot(AP1_UI_SERVICE_SLOT) else {
+    let Some(ap1) = crate::workers::ap1_ui_core_spawner() else {
         print_matrix_target_line(&target, "gboy: AP1 uicore spawner is not registered");
         return ParseOutcome::Handled;
     };

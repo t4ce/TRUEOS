@@ -15,7 +15,6 @@ const DIASHOW_SLOT: &str = "dia";
 const MAX_IMAGES: usize = 200;
 const START_DELAY_MS: u64 = 1_000;
 const FRAME_DELAY_MS: u64 = 33;
-const AP1_UI_SERVICE_SLOT: u32 = 1;
 
 struct Slide {
     path: String,
@@ -32,7 +31,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
     let target = switch_matrix_target_slot(&active_target, DIASHOW_SLOT);
     print_matrix_target_line(&target, "diashow: scanning /diashow/**/*.jpg|jpeg on AP1 uicore");
 
-    let Some(ap1) = crate::workers::spawner_for_slot(AP1_UI_SERVICE_SLOT) else {
+    let Some(ap1) = crate::workers::ap1_ui_core_spawner() else {
         print_matrix_target_line(&target, "diashow: AP1 uicore spawner is not registered");
         return ParseOutcome::Handled;
     };
