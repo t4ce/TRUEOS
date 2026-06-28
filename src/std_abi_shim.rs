@@ -2548,12 +2548,7 @@ pub unsafe extern "C" fn lseek(fd: c_int, offset: isize, whence: c_int) -> isize
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pread64(
-    fd: c_int,
-    buf: *mut c_void,
-    count: usize,
-    offset: i64,
-) -> isize {
+pub unsafe extern "C" fn pread64(fd: c_int, buf: *mut c_void, count: usize, offset: i64) -> isize {
     if offset < 0 || (count != 0 && buf.is_null()) {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;

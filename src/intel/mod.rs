@@ -352,6 +352,17 @@ pub(crate) fn present_ui_surface_to_primary_plane(
     self::display::present_ui_surface_to_primary_plane(surface, phys, byte_len, src, dst, reason)
 }
 
+pub(crate) fn present_ui_surface_to_primary_backing(
+    surface: types::UiSurface,
+    virt: *const u8,
+    byte_len: usize,
+    src: types::UiRect,
+    dst: types::UiRect,
+    reason: &str,
+) -> bool {
+    self::display::present_ui_surface_to_primary_backing(surface, virt, byte_len, src, dst, reason)
+}
+
 pub fn primary_surface_gpu_addr() -> Option<u64> {
     self::display::primary_surface_gpu_addr()
 }
