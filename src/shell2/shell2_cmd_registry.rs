@@ -44,6 +44,7 @@ const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"i
 const TOOL_JSON_SHA: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file to hash with SHA-256."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"description":"Optional SMP slot. Omit to list all slots."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pcibar","mem","cpu","turbo","ucode","pmu","acpi","aml","facp","madt","hpet","mcfg","ssdt","uefi","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."},"signature":{"type":"string","minLength":4,"maxLength":4,"description":"Optional ACPI signature when target=acpi, for example SSDT or FACP."},"index":{"type":"integer","minimum":1,"description":"Optional 1-based instance index when target=acpi and the signature repeats."},"subcommand":{"type":"string","enum":["ec","symbol","prefix"],"description":"Optional AML subcommand when target=aml."},"path":{"type":"string","description":"Optional AML path or prefix when target=aml and subcommand is symbol or prefix."}},"required":["target"],"additionalProperties":false}"#;
+const TOOL_JSON_VID: &str = r#"{"type":"object","properties":{"fps":{"type":"integer","minimum":1,"maximum":144,"description":"Playback speed in frames per second."},"direction":{"type":"string","enum":["forward","reverse"],"description":"Forward only or chained forward then reverse playback."},"cache":{"type":"string","enum":["off","tail","full"],"description":"Decoded-frame cache strategy for reverse playback experiments."},"study":{"type":"boolean","description":"Write stripe-study artifacts from the full decoded cache."},"fill":{"type":"boolean","description":"Show frames while filling reverse GOP cache."}},"required":["fps"],"additionalProperties":false}"#;
 
 fn dispatch_acpi(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
@@ -187,6 +188,10 @@ fn dispatch_tlb(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
 fn dispatch_txt(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let _ = spawner;
     super::cmds::txt::try_parse(io, rest)
+}
+
+fn dispatch_vid(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::vid::try_parse(spawner, io, rest)
 }
 
 const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
@@ -417,6 +422,17 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {
+        name: "vid",
+        mode: "cmd",
+        color: Some(STATUS_BLUE_RGB),
+        advertised: true,
+        handler: dispatch_vid,
+        tool_description: Some(
+            "Play the fixed H.264 video asset through the Intel media decode path with runtime playback experiments.",
+        ),
+        tool_parameters_json: Some(TOOL_JSON_VID),
+    },
+    BuiltinShell2CmdEntry {
         name: "update",
         mode: "cmd",
         color: Some(STATUS_PINK_RGB),
@@ -481,7 +497,7 @@ pub(crate) fn try_dispatch(
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
         "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "net", "c4", "txt",
-        "gpgpu", "aud", "acpi", "tlb", "smp", "etc",
+        "gpgpu", "vid", "aud", "acpi", "tlb", "smp", "etc",
     ];
 
     let mut out = AllocString::new();

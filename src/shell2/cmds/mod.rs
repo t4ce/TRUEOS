@@ -25,6 +25,7 @@ pub(crate) mod tlb;
 pub(crate) mod tlb_helper;
 pub(crate) mod txt;
 pub(crate) mod update;
+pub(crate) mod vid;
 
 pub(crate) fn command_registry_json() -> AllocString {
     super::shell2_cmd_registry::command_registry_json()

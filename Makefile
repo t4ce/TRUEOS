@@ -44,8 +44,6 @@ LIMINE_SOURCE_STAMP := $(LIMINE_DIST)/.source_stamp
 LIMINE_CONFIG_STAMP := $(LIMINE_BUILD_DIR)/.config_args
 LIMINE_TOOLCHAIN_STAMP := $(LIMINE_BUILD_DIR)/.toolchain_args
 LIMINE_INSTALL_STAMP := $(LIMINE_BUILD_DIR)/.installed
-DMC_FW_HOST_PATH ?= /lib/firmware/i915/adls_dmc_ver2_01.bin.zst
-DMC_FW_ISO_REL_PATH ?= EFI/BOOT/adls_dmc_ver2_01.bin
 HORIZON_BP_HOST_PATH ?= ../TRUEOS-Blueprints/dist/horizon.bp
 HORIZON_BP_ISO_REL_PATH ?= EFI/BOOT/apps/horizon.bp
 ENABLE_BLUEPRINTS ?= 0
@@ -182,18 +180,6 @@ iso: artifacts images limine
 	cp $(ARTIFACT_RUNTIME_ELF) $(ISO_BOOT_DIR)/TRUEOS.elf
 	mkdir -p $(ISO_DIR)/EFI/BOOT
 	cp $(LIMINE_BOOTX64) $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
-	@if [ -f "$(DMC_FW_HOST_PATH)" ]; then \
-		case "$(DMC_FW_HOST_PATH)" in \
-			*.zst) zstd -d -c "$(DMC_FW_HOST_PATH)" > "$(ISO_DIR)/EFI/BOOT/$$(basename "$(DMC_FW_ISO_REL_PATH)")" ;; \
-			*) cp "$(DMC_FW_HOST_PATH)" "$(ISO_DIR)/EFI/BOOT/$$(basename "$(DMC_FW_ISO_REL_PATH)")" ;; \
-		esac; \
-	else \
-		echo "iso: skipping DMC firmware probe artifact, missing $(DMC_FW_HOST_PATH)"; \
-	fi
-	@if [ -f "$(ISO_DIR)/EFI/BOOT/$$(basename "$(DMC_FW_ISO_REL_PATH)")" ]; then \
-		mkdir -p $(ISO_BOOT_DIR)/$(dir $(DMC_FW_ISO_REL_PATH)); \
-		cp "$(ISO_DIR)/EFI/BOOT/$$(basename "$(DMC_FW_ISO_REL_PATH)")" "$(ISO_BOOT_DIR)/$(DMC_FW_ISO_REL_PATH)"; \
-	fi
 	@if [ "$(ENABLE_BLUEPRINTS)" = "1" ]; then \
 		if [ ! -f "$(HORIZON_BP_HOST_PATH)" ]; then \
 			echo "error: Horizon blueprint not found at $(HORIZON_BP_HOST_PATH)"; \
@@ -208,12 +194,6 @@ iso: artifacts images limine
 		echo "iso: skipping Blueprint modules (ENABLE_BLUEPRINTS=0)"; \
 	fi
 	cp "$(LIMINE_CFG)" "$(LIMINE_CFG_GENERATED)"
-	@if [ -f "$(ISO_BOOT_DIR)/$(DMC_FW_ISO_REL_PATH)" ]; then \
-		printf '%s\n%s\n' \
-			"module_path: boot():/$(DMC_FW_ISO_REL_PATH)" \
-			"module_string: trueos.fw.dmc" \
-			>> "$(LIMINE_CFG_GENERATED)"; \
-	fi
 	printf '%s\n%s\n' \
 		"module_path: boot():/$(ISO_EFI_IMG)" \
 		"module_string: trueos.install.efi_img" \

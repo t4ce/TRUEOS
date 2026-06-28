@@ -1,5 +1,6 @@
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use spin::Mutex;
 
@@ -19,6 +20,8 @@ pub(crate) struct Ui3Image {
 static UI3_IMAGES: Mutex<BTreeMap<u32, Ui3Image>> = Mutex::new(BTreeMap::new());
 static UI3_IMAGE_STATUS: Mutex<BTreeMap<u32, i32>> = Mutex::new(BTreeMap::new());
 static UI3_IMAGE_UPLOADS: Mutex<BTreeMap<(u8, u32), Ui3ImageUpload>> = Mutex::new(BTreeMap::new());
+static UI3_UPLOAD_FINISH_COUNT: AtomicU64 = AtomicU64::new(0);
+static UI3_UPLOAD_BYTES_TOTAL: AtomicU64 = AtomicU64::new(0);
 
 struct Ui3ImageUpload {
     width: u32,
@@ -260,7 +263,27 @@ pub(crate) fn finish_rgba_upload(vm_id: u8, tex_id: u32) -> i32 {
     if upload.written < upload.rgba.len() {
         return -3;
     }
-    store_rgba_image(tex_id, upload.width, upload.height, upload.rgba)
+    let byte_len = upload.rgba.len() as u64;
+    let width = upload.width;
+    let height = upload.height;
+    let rc = store_rgba_image(tex_id, width, height, upload.rgba);
+    if rc == 0 {
+        let count = UI3_UPLOAD_FINISH_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        let total = UI3_UPLOAD_BYTES_TOTAL.fetch_add(byte_len, Ordering::Relaxed) + byte_len;
+        if count <= 16 || count % 64 == 0 {
+            crate::log!(
+                "ui3/img: upload#{} vm={} tex={} size={}x{} bytes={} total_bytes={}\n",
+                count,
+                vm_id,
+                tex_id,
+                width,
+                height,
+                byte_len,
+                total
+            );
+        }
+    }
+    rc
 }
 
 pub(crate) fn image_dimensions(tex_id: u32) -> Option<(u32, u32)> {
@@ -448,7 +471,7 @@ pub unsafe extern "C" fn trueos_cabi_gfx_texture_dimensions(
             &mut [],
         );
         if status != trueos_vm::vmcall::STATUS_OK || data == 0 {
-            return UI3_IMG_STATUS_UNKNOWN;
+            return -1;
         }
         let width = (data >> 32) as u32;
         let height = data as u32;
@@ -462,10 +485,10 @@ pub unsafe extern "C" fn trueos_cabi_gfx_texture_dimensions(
                 *out_height = height;
             }
         }
-        return UI3_IMG_STATUS_READY;
+        return 0;
     }
     let Some((width, height)) = image_dimensions(tex_id) else {
-        return UI3_IMG_STATUS_UNKNOWN;
+        return -1;
     };
     if !out_width.is_null() {
         unsafe {
@@ -477,5 +500,5 @@ pub unsafe extern "C" fn trueos_cabi_gfx_texture_dimensions(
             *out_height = height;
         }
     }
-    UI3_IMG_STATUS_READY
+    0
 }

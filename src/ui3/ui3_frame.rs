@@ -1,13 +1,13 @@
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use libm::{ceilf, fabsf, floorf};
 use spin::Mutex;
 
 use crate::intel::types::{
-    RGB_VERTEX_SIZE, RgbVertex, Rgba8, TEX_VERTEX_SIZE, TexVertex, UiPlaneSlot, UiPresent, UiRect,
-    UiSurfaceFormat, read_rgb_vertex_bytes, read_tex_vertex_bytes,
+    RGB_VERTEX_SIZE, RgbVertex, Rgba8, TEX_VERTEX_SIZE, TexVertex, UiPlaneSlot, UiPresent,
+    UiPresentPath, UiRect, UiSurfaceFormat, read_rgb_vertex_bytes, read_tex_vertex_bytes,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,6 +41,18 @@ struct CpuImage {
 static NEXT_FRAME_ID: AtomicU32 = AtomicU32::new(1);
 static FRAMES: Mutex<BTreeMap<u32, Ui3Frame>> = Mutex::new(BTreeMap::new());
 static OFFSCREEN: Mutex<BTreeMap<u32, CpuImage>> = Mutex::new(BTreeMap::new());
+static UI3_FRAME_CREATES: AtomicU64 = AtomicU64::new(0);
+static UI3_FRAME_BEGINS: AtomicU64 = AtomicU64::new(0);
+static UI3_FRAME_ENDS: AtomicU64 = AtomicU64::new(0);
+static UI3_FRAME_PRESENTS: AtomicU64 = AtomicU64::new(0);
+static UI3_FRAME_PRESENT_FAILS: AtomicU64 = AtomicU64::new(0);
+static UI3_DRAW_RGB_CALLS: AtomicU64 = AtomicU64::new(0);
+static UI3_DRAW_RGB_BYTES: AtomicU64 = AtomicU64::new(0);
+static UI3_DRAW_TEX_CALLS: AtomicU64 = AtomicU64::new(0);
+static UI3_DRAW_TEX_BYTES: AtomicU64 = AtomicU64::new(0);
+static UI3_TEXTURE_MISSES: AtomicU64 = AtomicU64::new(0);
+static UI3_TARGET_SWITCHES: AtomicU64 = AtomicU64::new(0);
+static UI3_OFFSCREEN_ALLOCS: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn create_frame(x: i32, y: i32, width: u32, height: u32, tex_id: u32) -> u32 {
     let width = width.max(1);
@@ -70,6 +82,19 @@ pub(crate) fn create_frame(x: i32, y: i32, width: u32, height: u32, tex_id: u32)
             target: Ui3RenderTarget::Frame,
         },
     );
+    let count = UI3_FRAME_CREATES.fetch_add(1, Ordering::Relaxed) + 1;
+    if count <= 8 {
+        crate::log!(
+            "ui3/frame: create#{} frame={} tex={} pos={},{} size={}x{}\n",
+            count,
+            id,
+            tex_id,
+            x,
+            y,
+            width,
+            height
+        );
+    }
     id
 }
 
@@ -147,6 +172,7 @@ pub(crate) fn begin_frame(
     if !preserve_contents {
         let _ = crate::r::ui_surface::clear_surface_rgb(surface, clear_rgb & 0x00FF_FFFF);
     }
+    UI3_FRAME_BEGINS.fetch_add(1, Ordering::Relaxed);
     0
 }
 
@@ -166,6 +192,7 @@ pub(crate) fn end_frame(frame_id: u32) -> i32 {
     if allow_present && !present_frame(frame_id) {
         return -3;
     }
+    UI3_FRAME_ENDS.fetch_add(1, Ordering::Relaxed);
     0
 }
 
@@ -184,6 +211,9 @@ pub(crate) fn set_render_target(frame_id: u32, tex_id: u32) -> i32 {
             && !frame.preserve_contents
             && frame.target != target
             && matches!(target, Ui3RenderTarget::Texture(_));
+        if frame.target != target {
+            UI3_TARGET_SWITCHES.fetch_add(1, Ordering::Relaxed);
+        }
         frame.target = target;
         (target, clear, frame.clear_rgb, frame.width, frame.height)
     };
@@ -198,6 +228,8 @@ pub(crate) fn draw_rgb_triangles(frame_id: u32, bytes: &[u8]) -> i32 {
     if bytes.len() % (RGB_VERTEX_SIZE * 3) != 0 {
         return -3;
     }
+    UI3_DRAW_RGB_CALLS.fetch_add(1, Ordering::Relaxed);
+    UI3_DRAW_RGB_BYTES.fetch_add(bytes.len() as u64, Ordering::Relaxed);
     let Some(frame) = frame_snapshot(frame_id) else {
         return -1;
     };
@@ -235,6 +267,8 @@ pub(crate) fn draw_tex_triangles(frame_id: u32, tex_id: u32, bytes: &[u8]) -> i3
     if bytes.len() % (TEX_VERTEX_SIZE * 3) != 0 {
         return -3;
     }
+    UI3_DRAW_TEX_CALLS.fetch_add(1, Ordering::Relaxed);
+    UI3_DRAW_TEX_BYTES.fetch_add(bytes.len() as u64, Ordering::Relaxed);
     let Some(frame) = frame_snapshot(frame_id) else {
         return -1;
     };
@@ -242,6 +276,7 @@ pub(crate) fn draw_tex_triangles(frame_id: u32, tex_id: u32, bytes: &[u8]) -> i3
         return -2;
     }
     let Some(src) = texture_source(tex_id) else {
+        UI3_TEXTURE_MISSES.fetch_add(1, Ordering::Relaxed);
         return 0;
     };
 
@@ -295,7 +330,53 @@ fn present_frame(frame_id: u32) -> bool {
         dst: UiRect::new(dst_x, dst_y, frame.width, frame.height),
         plane: UiPlaneSlot::Primary,
     };
-    crate::r::ui_surface::present_surface(frame.surface, present, "ui3-frame").is_ok()
+    let result = crate::r::ui_surface::present_surface(frame.surface, present, "ui3-frame");
+    let present_count = UI3_FRAME_PRESENTS.fetch_add(1, Ordering::Relaxed) + 1;
+    match result {
+        Ok(path) => {
+            log_present_stats(present_count, frame_id, frame, path);
+            true
+        }
+        Err(err) => {
+            let fail_count = UI3_FRAME_PRESENT_FAILS.fetch_add(1, Ordering::Relaxed) + 1;
+            crate::log!(
+                "ui3/frame: present failed#{} frame={} err={:?} size={}x{} dst={},{}\n",
+                fail_count,
+                frame_id,
+                err,
+                frame.width,
+                frame.height,
+                dst_x,
+                dst_y
+            );
+            false
+        }
+    }
+}
+
+fn log_present_stats(count: u64, frame_id: u32, frame: Ui3Frame, path: UiPresentPath) {
+    if count > 8 && count % 60 != 0 {
+        return;
+    }
+    crate::log!(
+        "ui3/frame: present#{} frame={} path={:?} size={}x{} dst={},{} begin={} end={} tex_calls={} tex_bytes={} rgb_calls={} rgb_bytes={} target_switches={} offscreen_allocs={} tex_misses={}\n",
+        count,
+        frame_id,
+        path,
+        frame.width,
+        frame.height,
+        frame.x.max(0),
+        frame.y.max(0),
+        UI3_FRAME_BEGINS.load(Ordering::Relaxed),
+        UI3_FRAME_ENDS.load(Ordering::Relaxed),
+        UI3_DRAW_TEX_CALLS.load(Ordering::Relaxed),
+        UI3_DRAW_TEX_BYTES.load(Ordering::Relaxed),
+        UI3_DRAW_RGB_CALLS.load(Ordering::Relaxed),
+        UI3_DRAW_RGB_BYTES.load(Ordering::Relaxed),
+        UI3_TARGET_SWITCHES.load(Ordering::Relaxed),
+        UI3_OFFSCREEN_ALLOCS.load(Ordering::Relaxed),
+        UI3_TEXTURE_MISSES.load(Ordering::Relaxed)
+    );
 }
 
 fn frame_snapshot(frame_id: u32) -> Option<Ui3Frame> {
@@ -304,11 +385,16 @@ fn frame_snapshot(frame_id: u32) -> Option<Ui3Frame> {
 
 fn ensure_offscreen(tex_id: u32, width: u32, height: u32, clear: bool, clear_rgb: u32) {
     let mut offscreen = OFFSCREEN.lock();
+    let was_present = offscreen.contains_key(&tex_id);
     let image = offscreen
         .entry(tex_id)
         .or_insert_with(|| new_cpu_image(width, height));
+    if !was_present {
+        UI3_OFFSCREEN_ALLOCS.fetch_add(1, Ordering::Relaxed);
+    }
     if image.width != width || image.height != height {
         *image = new_cpu_image(width, height);
+        UI3_OFFSCREEN_ALLOCS.fetch_add(1, Ordering::Relaxed);
     }
     if clear {
         clear_pixels(

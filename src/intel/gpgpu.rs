@@ -8266,6 +8266,7 @@ fn direct_rcs_encode_copy_rect_multi_walker_batch(
             batch,
             &mut cursor,
             payload_offset,
+            COPY_RECT_INDIRECT_BYTES,
             copy_rect_walker_right_mask_for(span_params.width, flavor.pixels_per_lane),
         );
         ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
@@ -8397,6 +8398,7 @@ fn direct_rcs_encode_copy_rect_span_params_batch(
             batch,
             &mut cursor,
             payload_offset,
+            COPY_RECT_INDIRECT_BYTES,
             copy_rect_walker_right_mask_for(params.width, flavor.pixels_per_lane),
         );
         ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
@@ -10092,6 +10094,7 @@ fn direct_rcs_encode_present_rgba8_to_primary_xrgb_span_params_batch(
             batch,
             &mut cursor,
             payload_offset,
+            PRESENT_RGBA8_TO_PRIMARY_XRGB_INDIRECT_BYTES,
             copy_rect_walker_right_mask_for(params.width, flavor.pixels_per_lane),
         );
         ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
@@ -11707,11 +11710,12 @@ fn direct_rcs_push_copy_rect_walker(
     batch: &mut [u32],
     cursor: &mut usize,
     payload_offset: usize,
+    indirect_bytes: usize,
     right_mask: u32,
 ) -> bool {
     direct_rcs_push(batch, cursor, GPGPU_WALKER_CMD)
         && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, COPY_RECT_INDIRECT_BYTES as u32)
+        && direct_rcs_push(batch, cursor, indirect_bytes as u32)
         && direct_rcs_push(batch, cursor, payload_offset as u32)
         && direct_rcs_push(
             batch,
