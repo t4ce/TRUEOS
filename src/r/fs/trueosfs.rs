@@ -82,6 +82,25 @@ struct FileWriteStream {
     stream: trueos_fs::PutWriteStream,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct FileReadHandle {
+    disk: block::DeviceHandle,
+    params: trueos_fs::FsParams,
+    record: trueos_fs::FileRecordRef,
+}
+
+impl FileReadHandle {
+    #[inline]
+    pub const fn data_len(&self) -> u64 {
+        self.record.data_len
+    }
+
+    #[inline]
+    pub const fn data_lba(&self) -> u64 {
+        self.record.data_lba
+    }
+}
+
 static FILE_WRITE_STREAM_SEQ: AtomicU32 = AtomicU32::new(1);
 static FILE_WRITE_STREAMS: Mutex<BTreeMap<u32, FileWriteStream>> = Mutex::new(BTreeMap::new());
 
@@ -1271,6 +1290,61 @@ pub async fn file_info_async(
     }
 
     Ok(None)
+}
+
+/// Async TRUEOSFS: open a file for repeated range reads.
+///
+/// This pins the current placement and file record, avoiding repeated root
+/// location and index/cache lookups for seek-heavy readers.
+pub async fn file_read_open_async(
+    disk: block::DeviceHandle,
+    name: &str,
+) -> Result<Option<FileReadHandle>, block::Error> {
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    let Some(placement) = locate_async(disk).await? else {
+        return Ok(None);
+    };
+
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+
+    let disk_id = disk.id();
+    let record = file_record_cache_lookup(disk_id, name);
+    let record = match record {
+        Some(v) => Some(v),
+        None => {
+            let rec = lookup_via_index_async(disk, &placement, name).await?;
+            if let Some(r) = rec {
+                file_record_cache_insert(disk_id, name, r);
+                Some(r)
+            } else {
+                None
+            }
+        }
+    };
+
+    Ok(record.map(|record| FileReadHandle {
+        disk,
+        params,
+        record,
+    }))
+}
+
+/// Async TRUEOSFS: read a file range through an open read handle.
+pub async fn file_read_handle_range_async(
+    handle: FileReadHandle,
+    offset: u64,
+    out: &mut [u8],
+) -> Result<Option<usize>, block::Error> {
+    let io = KernelBlockIo::new(handle.disk);
+    trueos_fs::read_file_range_at(&io, &handle.params, &handle.record, offset, out)
+        .await
+        .map_err(map_engine_err)
 }
 
 /// Async TRUEOSFS: read a file range into a caller-provided buffer.
