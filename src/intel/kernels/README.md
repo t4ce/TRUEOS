@@ -62,7 +62,7 @@ The rect worklist evo kernels share a descriptor-driven shape with the
 - packed coordinates use 16-bit lanes; destination coordinates are signed
 
 These are intended to replace the old single-rect stage-1 fill/alpha path for
-batched UI2 chrome/overlay subsets while keeping the smaller kernels available
+batched UI chrome/overlay subsets while keeping the smaller kernels available
 for targeted bring-up.
 
 `artifacts/adls/copy_rect_rgba8.bin` is the current Alder Lake S build produced
@@ -80,7 +80,7 @@ Its SHA-256 is:
 ```
 
 `artifacts/adls/gradient_rect_worklist_rgba8.bin` is the descriptor gradient
-evo build for UI2 chrome bands and procedural strips. Its SHA-256 is:
+evo build for UI chrome bands and procedural strips. Its SHA-256 is:
 
 ```text
 d3e6d5ec26c2b789d43d3308cf740977ce52f5b4df2325a27c92a687796d9149

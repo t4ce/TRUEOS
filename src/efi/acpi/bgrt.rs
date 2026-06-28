@@ -68,7 +68,7 @@ pub fn log_once() {
             }
         };
 
-        // Decode the BGRT BMP directly into BGRT_PIXELS for UI2 consumption.
+        // Decode the BGRT BMP directly into BGRT_PIXELS for early UI consumption.
         if let Some(bmp) = bmp {
             let src_w = bmp.width as usize;
             let src_h = bmp.height as usize;

@@ -1,7 +1,6 @@
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use libm::{ceilf, floorf, roundf};
 use spin::{Mutex, Once};
 mod canvas3d_cube;
 mod canvas3d_ico;
@@ -919,11 +918,11 @@ pub(crate) struct Canvas3dProjectedRgba8 {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct Canvas3dProjectRgba8Params {
-    pub(crate) vertices_gpu: u64,
+    pub(crate) points_gpu: u64,
     pub(crate) out_gpu: u64,
-    pub(crate) src_first_vertex: u32,
+    pub(crate) src_first_point: u32,
     pub(crate) out_first_point: u32,
-    pub(crate) vertex_count: u32,
+    pub(crate) point_count: u32,
     pub(crate) canvas_width: u32,
     pub(crate) canvas_height: u32,
 }
@@ -933,9 +932,9 @@ pub(crate) struct Canvas3dProjectRgba8Params {
 pub(crate) struct Canvas3dTransformFusedQ16Params {
     pub(crate) src_gpu: u64,
     pub(crate) dst_gpu: u64,
-    pub(crate) src_first_vertex: u32,
-    pub(crate) dst_first_vertex: u32,
-    pub(crate) vertex_count: u32,
+    pub(crate) src_first_point: u32,
+    pub(crate) dst_first_point: u32,
+    pub(crate) point_count: u32,
     pub(crate) scale_q16: Canvas3dVec3Q16,
     pub(crate) rotate_q16: Canvas3dVec3Q16,
     pub(crate) translate_q16: Canvas3dVec3Q16,
@@ -946,9 +945,9 @@ pub(crate) struct Canvas3dTransformFusedQ16Params {
 pub(crate) struct Canvas3dClipBoxQ16Params {
     pub(crate) src_gpu: u64,
     pub(crate) dst_gpu: u64,
-    pub(crate) src_first_vertex: u32,
-    pub(crate) dst_first_vertex: u32,
-    pub(crate) vertex_count: u32,
+    pub(crate) src_first_point: u32,
+    pub(crate) dst_first_point: u32,
+    pub(crate) point_count: u32,
     pub(crate) min_q16: Canvas3dVec3Q16,
     pub(crate) max_q16: Canvas3dVec3Q16,
 }
@@ -1354,12 +1353,6 @@ pub(crate) struct GpgpuSolidRect {
     pub(crate) color_rgba: u32,
 }
 
-#[derive(Clone, Debug, Default)]
-pub(crate) struct GpgpuRgbMesh {
-    pub(crate) vertices: Vec<super::types::RgbVertexPx>,
-    pub(crate) indices: Vec<u16>,
-}
-
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct GpgpuGradientRect {
     pub(crate) rect: GpgpuRect,
@@ -1382,15 +1375,6 @@ pub(crate) struct GpgpuSolidRectOverlayResult {
     pub(crate) blend_ms: u64,
     pub(crate) presented: bool,
     pub(crate) present_ms: u64,
-    pub(crate) total_ms: u64,
-}
-
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuMeshOverlayResult {
-    pub(crate) ok: bool,
-    pub(crate) meshes: usize,
-    pub(crate) triangles: usize,
-    pub(crate) pixels: usize,
     pub(crate) total_ms: u64,
 }
 
@@ -2865,44 +2849,6 @@ pub(crate) fn cpu_solid_rects_rgba8_over_primary(
     })
 }
 
-pub(crate) fn cpu_rgb_meshes_rgba8_over_primary(
-    meshes: &[GpgpuRgbMesh],
-) -> Option<GpgpuMeshOverlayResult> {
-    let total_start_tick = direct_rcs_now_tick();
-    let target = super::display::primary_surface_gpgpu_marker_target()?;
-    if target.virt.is_null() || meshes.is_empty() {
-        return None;
-    }
-
-    let mut result = GpgpuMeshOverlayResult {
-        ok: true,
-        meshes: meshes.len(),
-        ..GpgpuMeshOverlayResult::default()
-    };
-
-    unsafe {
-        for mesh in meshes {
-            for tri in mesh.indices.chunks_exact(3) {
-                let Some(v0) = mesh.vertices.get(tri[0] as usize).copied() else {
-                    continue;
-                };
-                let Some(v1) = mesh.vertices.get(tri[1] as usize).copied() else {
-                    continue;
-                };
-                let Some(v2) = mesh.vertices.get(tri[2] as usize).copied() else {
-                    continue;
-                };
-                let pixels = raster_rgb_triangle_over_primary(target, v0, v1, v2);
-                result.triangles = result.triangles.saturating_add(1);
-                result.pixels = result.pixels.saturating_add(pixels);
-            }
-        }
-    }
-
-    result.total_ms = direct_rcs_elapsed_ms_since(total_start_tick);
-    Some(result)
-}
-
 pub(crate) fn present_rgba8_to_primary_xrgb_rect_stats(
     src: GpgpuRgba8Surface,
     src_rect: GpgpuRect,
@@ -2966,100 +2912,6 @@ pub(crate) fn present_rgba8_rect_to_primary_xrgb_stats_with_flip(
     }
     log_present_rgba8_to_primary_stats(src_rect, dst_xy, primary, stats);
     Some(stats)
-}
-
-unsafe fn raster_rgb_triangle_over_primary(
-    target: super::display::PrimarySurfaceGpgpuTarget,
-    v0: super::types::RgbVertexPx,
-    v1: super::types::RgbVertexPx,
-    v2: super::types::RgbVertexPx,
-) -> usize {
-    if !v0.x.is_finite()
-        || !v0.y.is_finite()
-        || !v1.x.is_finite()
-        || !v1.y.is_finite()
-        || !v2.x.is_finite()
-        || !v2.y.is_finite()
-    {
-        return 0;
-    }
-
-    let area = edge_fn(v0.x, v0.y, v1.x, v1.y, v2.x, v2.y);
-    if area.abs() <= 0.0001 {
-        return 0;
-    }
-
-    let min_x = floorf(v0.x.min(v1.x).min(v2.x)).max(0.0) as i32;
-    let min_y = floorf(v0.y.min(v1.y).min(v2.y)).max(0.0) as i32;
-    let max_x = ceilf(v0.x.max(v1.x).max(v2.x)).min(target.width as f32) as i32;
-    let max_y = ceilf(v0.y.max(v1.y).max(v2.y)).min(target.height as f32) as i32;
-    if max_x <= min_x || max_y <= min_y {
-        return 0;
-    }
-
-    let mut pixels = 0usize;
-    for y in min_y..max_y {
-        let row = target
-            .virt
-            .add((y as usize).saturating_mul(target.pitch_bytes as usize))
-            as *mut u32;
-        let py = y as f32 + 0.5;
-        for x in min_x..max_x {
-            let px = x as f32 + 0.5;
-            let w0 = edge_fn(v1.x, v1.y, v2.x, v2.y, px, py);
-            let w1 = edge_fn(v2.x, v2.y, v0.x, v0.y, px, py);
-            let w2 = edge_fn(v0.x, v0.y, v1.x, v1.y, px, py);
-            if (area > 0.0 && (w0 < 0.0 || w1 < 0.0 || w2 < 0.0))
-                || (area < 0.0 && (w0 > 0.0 || w1 > 0.0 || w2 > 0.0))
-            {
-                continue;
-            }
-
-            let inv_area = 1.0 / area;
-            let b0 = w0 * inv_area;
-            let b1 = w1 * inv_area;
-            let b2 = w2 * inv_area;
-            let color = interpolate_rgb_vertex_color(v0.color, v1.color, v2.color, b0, b1, b2);
-            if color.a == 0 {
-                continue;
-            }
-            let dst = core::ptr::read_volatile(row.add(x as usize));
-            core::ptr::write_volatile(
-                row.add(x as usize),
-                blend_rgba8_over_kernel_rgba(color, dst),
-            );
-            pixels = pixels.saturating_add(1);
-        }
-    }
-    pixels
-}
-
-#[inline]
-fn edge_fn(ax: f32, ay: f32, bx: f32, by: f32, px: f32, py: f32) -> f32 {
-    (px - ax) * (by - ay) - (py - ay) * (bx - ax)
-}
-
-#[inline]
-fn interpolate_rgb_vertex_color(
-    c0: super::types::Rgba8,
-    c1: super::types::Rgba8,
-    c2: super::types::Rgba8,
-    w0: f32,
-    w1: f32,
-    w2: f32,
-) -> super::types::Rgba8 {
-    super::types::Rgba8 {
-        r: interpolate_u8(c0.r, c1.r, c2.r, w0, w1, w2),
-        g: interpolate_u8(c0.g, c1.g, c2.g, w0, w1, w2),
-        b: interpolate_u8(c0.b, c1.b, c2.b, w0, w1, w2),
-        a: interpolate_u8(c0.a, c1.a, c2.a, w0, w1, w2),
-    }
-}
-
-#[inline]
-fn interpolate_u8(a: u8, b: u8, c: u8, w0: f32, w1: f32, w2: f32) -> u8 {
-    let value = (a as f32) * w0 + (b as f32) * w1 + (c as f32) * w2;
-    roundf(value.max(0.0).min(255.0)) as u8
 }
 
 #[inline]
@@ -4370,7 +4222,7 @@ pub(crate) fn twemoji_sprite64_worklist_primary(
     placements: &[GpgpuTwemojiSprite64Placement],
     present: bool,
 ) -> Option<GpgpuShellAtlasWorklistResult> {
-    sprite64_worklist_primary_inner(placements, present, "ui2-cursor-sprite64-worklist")
+    sprite64_worklist_primary_inner(placements, present, "ui3-cursor-sprite64-worklist")
 }
 
 pub(crate) fn sprite64_worklist_primary(
@@ -9109,10 +8961,10 @@ fn direct_rcs_encode_canvas3d_project_batch(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
     params: Canvas3dProjectRgba8Params,
-    vertices_bytes: usize,
+    points_bytes: usize,
     out_bytes: usize,
 ) -> bool {
-    if params.vertex_count == 0
+    if params.point_count == 0
         || CANVAS3D_PROJECT_PAYLOAD_OFFSET_BYTES + CANVAS3D_PROJECT_INDIRECT_BYTES
             > DIRECT_RCS_BATCH_BYTES
     {
@@ -9138,8 +8990,8 @@ fn direct_rcs_encode_canvas3d_project_batch(
         CANVAS3D_PROJECT_BINDING_TABLE_OFFSET_BYTES,
         CANVAS3D_PROJECT_VERTICES_SURFACE_STATE_OFFSET_BYTES,
         CANVAS3D_PROJECT_OUT_SURFACE_STATE_OFFSET_BYTES,
-        params.vertices_gpu,
-        vertices_bytes,
+        params.points_gpu,
+        points_bytes,
         params.out_gpu,
         out_bytes,
     ) {
@@ -9229,7 +9081,7 @@ fn direct_rcs_encode_canvas3d_transform_fused_batch(
     src_bytes: usize,
     dst_bytes: usize,
 ) -> bool {
-    if params.vertex_count == 0
+    if params.point_count == 0
         || CANVAS3D_TRANSFORM_PAYLOAD_OFFSET_BYTES + CANVAS3D_TRANSFORM_FUSED_INDIRECT_BYTES
             > DIRECT_RCS_BATCH_BYTES
     {
@@ -9345,7 +9197,7 @@ fn direct_rcs_encode_canvas3d_clip_box_batch(
     src_bytes: usize,
     dst_bytes: usize,
 ) -> bool {
-    if params.vertex_count == 0
+    if params.point_count == 0
         || CANVAS3D_CLIP_BOX_PAYLOAD_OFFSET_BYTES + CANVAS3D_CLIP_BOX_INDIRECT_BYTES
             > DIRECT_RCS_BATCH_BYTES
     {
@@ -10955,13 +10807,13 @@ fn direct_rcs_write_canvas3d_project_payload(
         core::ptr::write_volatile(dwords.add(8), 16);
         core::ptr::write_volatile(dwords.add(9), 1);
         core::ptr::write_volatile(dwords.add(10), 1);
-        core::ptr::write_volatile(dwords.add(12), params.vertices_gpu as u32);
-        core::ptr::write_volatile(dwords.add(13), (params.vertices_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(12), params.points_gpu as u32);
+        core::ptr::write_volatile(dwords.add(13), (params.points_gpu >> 32) as u32);
         core::ptr::write_volatile(dwords.add(14), params.out_gpu as u32);
         core::ptr::write_volatile(dwords.add(15), (params.out_gpu >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(16), params.src_first_vertex);
+        core::ptr::write_volatile(dwords.add(16), params.src_first_point);
         core::ptr::write_volatile(dwords.add(17), params.out_first_point);
-        core::ptr::write_volatile(dwords.add(18), params.vertex_count);
+        core::ptr::write_volatile(dwords.add(18), params.point_count);
         core::ptr::write_volatile(dwords.add(19), params.canvas_width);
         core::ptr::write_volatile(dwords.add(20), params.canvas_height);
 
@@ -11001,9 +10853,9 @@ fn direct_rcs_write_canvas3d_transform_fused_payload(
         core::ptr::write_volatile(dwords.add(13), (params.src_gpu >> 32) as u32);
         core::ptr::write_volatile(dwords.add(14), params.dst_gpu as u32);
         core::ptr::write_volatile(dwords.add(15), (params.dst_gpu >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(16), params.src_first_vertex);
-        core::ptr::write_volatile(dwords.add(17), params.dst_first_vertex);
-        core::ptr::write_volatile(dwords.add(18), params.vertex_count);
+        core::ptr::write_volatile(dwords.add(16), params.src_first_point);
+        core::ptr::write_volatile(dwords.add(17), params.dst_first_point);
+        core::ptr::write_volatile(dwords.add(18), params.point_count);
         core::ptr::write_volatile(dwords.add(19), 0);
         core::ptr::write_volatile(dwords.add(20), params.scale_q16.x as u32);
         core::ptr::write_volatile(dwords.add(21), params.scale_q16.y as u32);
@@ -11052,9 +10904,9 @@ fn direct_rcs_write_canvas3d_clip_box_payload(
         core::ptr::write_volatile(dwords.add(13), (params.src_gpu >> 32) as u32);
         core::ptr::write_volatile(dwords.add(14), params.dst_gpu as u32);
         core::ptr::write_volatile(dwords.add(15), (params.dst_gpu >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(16), params.src_first_vertex);
-        core::ptr::write_volatile(dwords.add(17), params.dst_first_vertex);
-        core::ptr::write_volatile(dwords.add(18), params.vertex_count);
+        core::ptr::write_volatile(dwords.add(16), params.src_first_point);
+        core::ptr::write_volatile(dwords.add(17), params.dst_first_point);
+        core::ptr::write_volatile(dwords.add(18), params.point_count);
         core::ptr::write_volatile(dwords.add(19), 0);
         core::ptr::write_volatile(dwords.add(20), params.min_q16.x as u32);
         core::ptr::write_volatile(dwords.add(21), params.min_q16.y as u32);

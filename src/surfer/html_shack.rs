@@ -745,8 +745,8 @@ fn parse_http_url(url: &str) -> Result<HttpTarget, HttpFetchError> {
             String::from(suffix)
         }
     };
-    if let Some(fragment) = path_and_query.find('#') {
-        path_and_query.truncate(fragment);
+    if let Some(anchor) = path_and_query.find('#') {
+        path_and_query.truncate(anchor);
     }
     if path_and_query.is_empty() {
         path_and_query.push('/');
@@ -796,8 +796,8 @@ fn parse_https_url(url: &str) -> Result<HttpsTarget, HttpFetchError> {
             String::from(suffix)
         }
     };
-    if let Some(fragment) = path_and_query.find('#') {
-        path_and_query.truncate(fragment);
+    if let Some(anchor) = path_and_query.find('#') {
+        path_and_query.truncate(anchor);
     }
     if path_and_query.is_empty() {
         path_and_query.push('/');

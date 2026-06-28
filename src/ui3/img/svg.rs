@@ -7,8 +7,8 @@ use libm::{ceilf, floorf, sqrtf};
 use lyon_geom::point;
 use lyon_tessellation::path::Path as LyonPath;
 use lyon_tessellation::{
-    BuffersBuilder, FillOptions, FillRule as LyonFillRule, FillTessellator, FillVertex,
-    VertexBuffers,
+    BuffersBuilder, FillOptions, FillRule as LyonFillRule, FillTessellator,
+    FillVertex as LyonFillPoint, VertexBuffers as LyonPointBuffers,
 };
 use tiny_skia_path::{
     Path as TinyPath, PathBuilder as TinyPathBuilder, PathSegment, Point as TinyPoint,
@@ -29,7 +29,7 @@ pub struct SvgTextureInfo {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct SvgMeshInfo {
+pub struct SvgPaintInfo {
     pub width: u32,
     pub height: u32,
 }
@@ -60,42 +60,42 @@ pub enum SvgPaintStyle {
 }
 
 #[derive(Clone, Debug)]
-pub struct SvgMeshPrimitive {
-    pub vertices: Vec<[f32; 2]>,
-    pub indices: Vec<u32>,
+pub struct SvgPaintPrimitive {
+    pub points: Vec<[f32; 2]>,
+    pub point_indices: Vec<u32>,
     pub paint: SvgPaintStyle,
 }
 
 #[derive(Clone, Debug)]
-pub struct SvgMeshDocument {
-    pub info: SvgMeshInfo,
-    pub primitives: Vec<SvgMeshPrimitive>,
+pub struct SvgPaintDocument {
+    pub info: SvgPaintInfo,
+    pub primitives: Vec<SvgPaintPrimitive>,
 }
 
-struct SvgMeshBuilder {
+struct SvgPaintBuilder {
     scale_x: f32,
     scale_y: f32,
-    primitives: Vec<SvgMeshPrimitive>,
-    fill_tess: FillTessellator,
+    primitives: Vec<SvgPaintPrimitive>,
+    path_fill: FillTessellator,
 }
 
-struct SvgRasterizer {
+struct SvgCpuPainter {
     width: u32,
     height: u32,
     pixels: Vec<u8>,
 }
 
-impl SvgMeshBuilder {
+impl SvgPaintBuilder {
     fn new(width: u32, height: u32, svg_w: f32, svg_h: f32) -> Self {
         Self {
             scale_x: width as f32 / svg_w.max(1.0),
             scale_y: height as f32 / svg_h.max(1.0),
             primitives: Vec::new(),
-            fill_tess: FillTessellator::new(),
+            path_fill: FillTessellator::new(),
         }
     }
 
-    fn tessellate_group(&mut self, group: &Group, inherited_opacity: f32) {
+    fn collect_group_paths(&mut self, group: &Group, inherited_opacity: f32) {
         let group_opacity = inherited_opacity * group.opacity().get();
         if group_opacity <= 0.0 {
             return;
@@ -103,7 +103,7 @@ impl SvgMeshBuilder {
 
         for node in group.children() {
             match node {
-                Node::Group(group) => self.tessellate_group(group, group_opacity),
+                Node::Group(group) => self.collect_group_paths(group, group_opacity),
                 Node::Path(path) => {
                     if !path.is_visible() {
                         continue;
@@ -183,26 +183,26 @@ impl SvgMeshBuilder {
         };
 
         let lyon_path = tiny_path_to_lyon(path);
-        let mut buffers: VertexBuffers<[f32; 2], u32> = VertexBuffers::new();
+        let mut buffers: LyonPointBuffers<[f32; 2], u32> = Default::default();
         let mut options = FillOptions::default();
         options.fill_rule = match fill.rule() {
             usvg::FillRule::NonZero => LyonFillRule::NonZero,
             usvg::FillRule::EvenOdd => LyonFillRule::EvenOdd,
         };
         if self
-            .fill_tess
+            .path_fill
             .tessellate_path(
                 &lyon_path,
                 &options,
-                &mut BuffersBuilder::new(&mut buffers, |v: FillVertex| {
-                    [v.position().x, v.position().y]
+                &mut BuffersBuilder::new(&mut buffers, |point: LyonFillPoint| {
+                    [point.position().x, point.position().y]
                 }),
             )
             .is_ok()
         {
-            self.primitives.push(SvgMeshPrimitive {
-                vertices: buffers.vertices,
-                indices: buffers.indices,
+            self.primitives.push(SvgPaintPrimitive {
+                points: buffers.vertices,
+                point_indices: buffers.indices,
                 paint,
             });
         }
@@ -234,28 +234,28 @@ impl SvgMeshBuilder {
         };
 
         let lyon_path = tiny_path_to_lyon(&stroked);
-        let mut buffers: VertexBuffers<[f32; 2], u32> = VertexBuffers::new();
+        let mut buffers: LyonPointBuffers<[f32; 2], u32> = Default::default();
         if self
-            .fill_tess
+            .path_fill
             .tessellate_path(
                 &lyon_path,
                 &FillOptions::default(),
-                &mut BuffersBuilder::new(&mut buffers, |v: FillVertex| {
-                    [v.position().x, v.position().y]
+                &mut BuffersBuilder::new(&mut buffers, |point: LyonFillPoint| {
+                    [point.position().x, point.position().y]
                 }),
             )
             .is_ok()
         {
-            self.primitives.push(SvgMeshPrimitive {
-                vertices: buffers.vertices,
-                indices: buffers.indices,
+            self.primitives.push(SvgPaintPrimitive {
+                points: buffers.vertices,
+                point_indices: buffers.indices,
                 paint,
             });
         }
     }
 }
 
-impl SvgRasterizer {
+impl SvgCpuPainter {
     fn new(width: u32, height: u32) -> Self {
         let len = (width as usize)
             .saturating_mul(height as usize)
@@ -267,38 +267,32 @@ impl SvgRasterizer {
         }
     }
 
-    fn rasterize_document(&mut self, doc: &SvgMeshDocument) {
+    fn paint_document(&mut self, doc: &SvgPaintDocument) {
         for primitive in &doc.primitives {
-            self.rasterize_mesh(
-                primitive.vertices.as_slice(),
-                primitive.indices.as_slice(),
+            self.paint_cells(
+                primitive.points.as_slice(),
+                primitive.point_indices.as_slice(),
                 &primitive.paint,
             );
         }
     }
 
-    fn rasterize_mesh(&mut self, vertices: &[[f32; 2]], indices: &[u32], paint: &SvgPaintStyle) {
-        for tri in indices.chunks_exact(3) {
-            let Some(p0) = vertices.get(tri[0] as usize) else {
+    fn paint_cells(&mut self, points: &[[f32; 2]], point_indices: &[u32], paint: &SvgPaintStyle) {
+        for cell in point_indices.chunks_exact(3) {
+            let Some(p0) = points.get(cell[0] as usize) else {
                 continue;
             };
-            let Some(p1) = vertices.get(tri[1] as usize) else {
+            let Some(p1) = points.get(cell[1] as usize) else {
                 continue;
             };
-            let Some(p2) = vertices.get(tri[2] as usize) else {
+            let Some(p2) = points.get(cell[2] as usize) else {
                 continue;
             };
-            self.rasterize_triangle(*p0, *p1, *p2, paint);
+            self.paint_cell(*p0, *p1, *p2, paint);
         }
     }
 
-    fn rasterize_triangle(
-        &mut self,
-        p0: [f32; 2],
-        p1: [f32; 2],
-        p2: [f32; 2],
-        paint: &SvgPaintStyle,
-    ) {
+    fn paint_cell(&mut self, p0: [f32; 2], p1: [f32; 2], p2: [f32; 2], paint: &SvgPaintStyle) {
         let min_x = floorf(p0[0].min(p1[0]).min(p2[0])).max(0.0) as i32;
         let min_y = floorf(p0[1].min(p1[1]).min(p2[1])).max(0.0) as i32;
         let max_x = p0[0].max(p1[0]).max(p2[0]);
@@ -378,12 +372,12 @@ pub fn upload_svg_bytes_to_texture(tex_id: u32, bytes: &[u8]) -> Result<SvgTextu
     upload_svg_text_to_texture(tex_id, svg_text)
 }
 
-pub fn rasterize_svg_bytes_rgba(bytes: &[u8]) -> Result<(SvgTextureInfo, Vec<u8>), i32> {
+pub fn render_svg_bytes_rgba(bytes: &[u8]) -> Result<(SvgTextureInfo, Vec<u8>), i32> {
     let svg_text = str::from_utf8(bytes).map_err(|_| ERR_SVG_INVALID_UTF8)?;
-    rasterize_svg_text_rgba(svg_text)
+    render_svg_text_rgba(svg_text)
 }
 
-pub fn tessellate_svg_text(svg_text: &str) -> Result<SvgMeshDocument, i32> {
+pub fn svg_paint_document_from_text(svg_text: &str) -> Result<SvgPaintDocument, i32> {
     let svg_text = normalize_svg_text(svg_text);
     let tree = match Tree::from_str(svg_text.as_ref(), &Options::default()) {
         Ok(tree) => tree,
@@ -413,7 +407,7 @@ pub fn tessellate_svg_text(svg_text: &str) -> Result<SvgMeshDocument, i32> {
         }
     };
     let (width, height, svg_w, svg_h) = choose_output_size(&tree)?;
-    tessellate_svg_tree_with_size(&tree, width, height, svg_w, svg_h)
+    svg_paint_document_with_size(&tree, width, height, svg_w, svg_h)
 }
 
 fn normalize_svg_text(svg_text: &str) -> Cow<'_, str> {
@@ -442,36 +436,36 @@ fn starts_with_xml_decl(text: &str) -> bool {
         && bytes[4].eq_ignore_ascii_case(&b'l')
 }
 
-fn tessellate_svg_tree_with_size(
+fn svg_paint_document_with_size(
     tree: &Tree,
     width: u32,
     height: u32,
     svg_w: f32,
     svg_h: f32,
-) -> Result<SvgMeshDocument, i32> {
-    let mut builder = SvgMeshBuilder::new(width, height, svg_w, svg_h);
-    builder.tessellate_group(tree.root(), 1.0);
-    Ok(SvgMeshDocument {
-        info: SvgMeshInfo { width, height },
+) -> Result<SvgPaintDocument, i32> {
+    let mut builder = SvgPaintBuilder::new(width, height, svg_w, svg_h);
+    builder.collect_group_paths(tree.root(), 1.0);
+    Ok(SvgPaintDocument {
+        info: SvgPaintInfo { width, height },
         primitives: builder.primitives,
     })
 }
 
-pub fn rasterize_svg_text_rgba(svg_text: &str) -> Result<(SvgTextureInfo, Vec<u8>), i32> {
-    let mesh = tessellate_svg_text(svg_text)?;
-    let mut raster = SvgRasterizer::new(mesh.info.width, mesh.info.height);
-    raster.rasterize_document(&mesh);
+pub fn render_svg_text_rgba(svg_text: &str) -> Result<(SvgTextureInfo, Vec<u8>), i32> {
+    let document = svg_paint_document_from_text(svg_text)?;
+    let mut painter = SvgCpuPainter::new(document.info.width, document.info.height);
+    painter.paint_document(&document);
     Ok((
         SvgTextureInfo {
-            width: mesh.info.width,
-            height: mesh.info.height,
+            width: document.info.width,
+            height: document.info.height,
         },
-        raster.pixels,
+        painter.pixels,
     ))
 }
 
 pub fn upload_svg_text_to_texture(tex_id: u32, svg_text: &str) -> Result<SvgTextureInfo, i32> {
-    let (info, rgba) = rasterize_svg_text_rgba(svg_text)?;
+    let (info, rgba) = render_svg_text_rgba(svg_text)?;
 
     let rc = unsafe {
         crate::r::io::cabi::trueos_cabi_gfx_upload_texture_rgba_image(

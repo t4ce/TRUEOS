@@ -79,44 +79,14 @@ pub fn publish_texture_jpeg(_tex_id: u32, _flags: u32, _data: &[u8]) {}
 
 pub fn publish_texture_svg(_tex_id: u32, _flags: u32, _data: &[u8]) {}
 
-pub fn publish_draw_rgb_triangles(_frame_seq: u32, _vcount: u32, _vertices: &[u8]) {}
+pub fn publish_draw_solid_batch(_frame_seq: u32, _rect_count: u32, _records: &[u8]) {}
 
-pub fn publish_draw_tex_triangles(
+pub fn publish_draw_sprite_batch(
     _frame_seq: u32,
     _tex_id: u32,
-    _vcount: u32,
+    _quad_count: u32,
     _sampler_flags: u32,
     _sample_kind: u32,
-    _vertices: &[u8],
-) {
-}
-
-pub fn publish_shader_create(
-    _shader_id: u32,
-    _stage: u32,
-    _format: u32,
-    _flags: u32,
-    _source: &[u8],
-) {
-}
-
-pub fn publish_pipeline_create(
-    _pipeline_id: u32,
-    _stride: u32,
-    _pos_offset: u32,
-    _color_offset: u32,
-    _color_format: u32,
-    _texcoord_offset: u32,
-    _texcoord_format: u32,
-    _vs_shader_id: u32,
-    _fs_shader_id: u32,
-) {
-}
-
-pub fn publish_draw_pipeline_triangles(
-    _frame_seq: u32,
-    _pipeline_id: u32,
-    _vcount: u32,
-    _vertices: &[u8],
+    _records: &[u8],
 ) {
 }

@@ -132,7 +132,7 @@ fn run_sentinel(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) 
     match crate::intel::render::submit_render_artificial_fragment_sentinel() {
         Ok(result) => {
             let msg = alloc::format!(
-                "render sentinel: mode={} ok={} descs={} rt_gpu=0x{:X} before=0x{:08X} after=0x{:08X} remapped_render={} meaning=artificial-fragment-not-wm",
+                "render sentinel: mode={} ok={} descs={} rt_gpu=0x{:X} before=0x{:08X} after=0x{:08X} remapped_render={} meaning=artificial-pixel-not-wm",
                 result.mode,
                 result.ok as u8,
                 result.descs,

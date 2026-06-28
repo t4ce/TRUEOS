@@ -12,7 +12,7 @@ pub const CORE_KIND_PERF: u8 = 1;
 pub const CORE_KIND_EFF: u8 = 2;
 pub const AP1_UI_SERVICE_SLOT: u32 = 1;
 
-// Slot 0 is BSP and slot 1 is the UI2/service AP; background carriers start at AP2.
+// Slot 0 is BSP and slot 1 is the UI/service AP; background carriers start at AP2.
 const FIRST_BACKGROUND_SLOT: u32 = 2;
 const APP_PARALLELISM_NO_UI: bool = false;
 const WORKER_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
