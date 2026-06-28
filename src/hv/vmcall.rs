@@ -21,6 +21,22 @@ pub const OP_YIELD: u32 = 0x04; // cooperative host yield point
 pub const OP_SLEEP_MS: u32 = 0x05; // cooperative host sleep before resume
 pub const OP_RAND_BYTES: u32 = 0x06; // arg0 requested bytes, response payload is random bytes
 pub const OP_BP_CPU_COUNT: u32 = 0x07; // response is app-visible CPU/service lane count
+pub const OP_MONOTONIC_NANOS: u32 = 0x08; // response_data = host monotonic nanos
+pub const OP_BP_UI3_FRAME_CREATE: u32 = 0x82; // arg0=x/y, arg1=w/h -> frame id
+pub const OP_BP_UI3_FRAME_CLOSE: u32 = 0x83; // arg0=frame_id -> rc
+pub const OP_BP_UI3_FRAME_REQUEST_REPAINT: u32 = 0x84; // arg0=frame_id -> rc
+pub const OP_BP_UI3_FRAME_SET_POSITION: u32 = 0x85; // arg0=frame_id, arg1=x/y -> rc
+pub const OP_BP_UI3_FRAME_SET_SIZE: u32 = 0x86; // arg0=frame_id, arg1=w/h -> rc
+pub const OP_BP_UI3_FRAME_BEGIN: u32 = 0x87; // arg0=frame_id, arg1=clear/flags -> rc
+pub const OP_BP_UI3_FRAME_END: u32 = 0x88; // arg0=frame_id -> rc
+pub const OP_BP_UI3_FRAME_SET_RENDER_TARGET: u32 = 0x89; // arg0=frame_id, arg1=tex_id -> rc
+pub const OP_BP_UI3_FRAME_DRAW_RGB_TRIANGLES: u32 = 0x8A; // arg0=frame_id -> rc
+pub const OP_BP_UI3_FRAME_DRAW_TEX_TRIANGLES: u32 = 0x8B; // arg0=frame_id,arg1=tex_id -> rc
+pub const OP_BP_UI3_TEXTURE_UPLOAD_BEGIN: u32 = 0x8C; // arg0=tex_id, arg1=w/h, data=total_len -> rc
+pub const OP_BP_UI3_TEXTURE_UPLOAD_CHUNK: u32 = 0x8D; // arg0=tex_id, arg1=offset, payload=rgba -> rc
+pub const OP_BP_UI3_TEXTURE_UPLOAD_FINISH: u32 = 0x8E; // arg0=tex_id -> rc
+pub const OP_BP_UI3_TEXTURE_STATUS: u32 = 0x8F; // arg0=tex_id -> status
+pub const OP_BP_UI3_TEXTURE_DIMENSIONS: u32 = 0x90; // arg0=tex_id -> status + packed w/h
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -213,6 +229,14 @@ fn write_response(vm_id: u8, seq: u32, status: u32, data: u64, len: u32) {
     }
 }
 
+fn request_payload(vm_id: u8, req_len: u32) -> Option<&'static [u8]> {
+    if req_len as usize > PAYLOAD_CAP {
+        return None;
+    }
+    let p = host_ptr(vm_id)?;
+    Some(unsafe { &(&(*p).payload)[..req_len as usize] })
+}
+
 pub fn guest_call(op: u32, arg0: u64, arg1: u64) -> (u32, u64) {
     let seq = GUEST_CABI_SEQ.fetch_add(1, Ordering::Relaxed);
     let p = comm_page_guest_va() as *mut CommPage;
@@ -244,6 +268,36 @@ pub fn guest_cpu_count() -> Option<usize> {
     } else {
         None
     }
+}
+
+pub fn guest_monotonic_nanos() -> u64 {
+    let (status, nanos) = guest_call(OP_MONOTONIC_NANOS, 0, 0);
+    if status == STATUS_OK { nanos } else { 0 }
+}
+
+pub fn guest_unix_seconds() -> u64 {
+    let (status, seconds) = guest_call(OP_UNIX_TIME, 0, 0);
+    if status == STATUS_OK { seconds } else { 0 }
+}
+
+#[inline]
+pub fn pack_i32_pair(a: i32, b: i32) -> u64 {
+    ((a as u32 as u64) << 32) | (b as u32 as u64)
+}
+
+#[inline]
+pub fn pack_u32_pair(a: u32, b: u32) -> u64 {
+    ((a as u64) << 32) | (b as u64)
+}
+
+#[inline]
+fn unpack_i32_pair(raw: u64) -> (i32, i32) {
+    ((raw >> 32) as u32 as i32, raw as u32 as i32)
+}
+
+#[inline]
+fn unpack_u32_pair(raw: u64) -> (u32, u32) {
+    ((raw >> 32) as u32, raw as u32)
 }
 
 const MIO_ADDR_BYTES: usize = core::mem::size_of::<crate::mio_compat::TrueosMioSocketAddr>();
@@ -301,8 +355,145 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_UNIX_TIME => {
-            let t = crate::r::net::ntp::current_unix_seconds().unwrap_or(0);
+            let t = crate::chronos::best_effort_unix_time_seconds().unwrap_or(0);
             write_response(vm_id, seq, STATUS_OK, t, 0);
+            DispatchOutcome::Resume
+        }
+        OP_MONOTONIC_NANOS => {
+            let t = crate::chronos::monotonic_nanos();
+            write_response(vm_id, seq, STATUS_OK, t, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI3_FRAME_CREATE => {
+            let (x, y) = unpack_i32_pair(arg0);
+            let (width, height) = unpack_u32_pair(arg1);
+            let tex_id = request_payload(vm_id, req_len)
+                .and_then(|payload| payload.get(..4))
+                .map(|bytes| u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+                .unwrap_or(0);
+            let frame_id = crate::ui3::ui3_frame::create_frame(x, y, width, height, tex_id);
+            if frame_id == 0 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+            } else {
+                write_response(vm_id, seq, STATUS_OK, frame_id as u64, 0);
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI3_FRAME_CLOSE => {
+            let ok = crate::ui3::ui3_frame::close_frame(arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, if ok { 0 } else { (-1i64) as u64 }, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI3_FRAME_REQUEST_REPAINT => {
+            let ok = crate::ui3::ui3_frame::request_repaint(arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, if ok { 0 } else { (-1i64) as u64 }, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI3_FRAME_SET_POSITION => {
+            let (x, y) = unpack_i32_pair(arg1);
+            let ok = crate::ui3::ui3_frame::set_position(arg0 as u32, x, y);
+            write_response(vm_id, seq, STATUS_OK, if ok { 0 } else { (-1i64) as u64 }, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI3_FRAME_SET_SIZE => {
+            let (width, height) = unpack_u32_pair(arg1);
+            let ok = crate::ui3::ui3_frame::set_size(arg0 as u32, width, height);
+            write_response(vm_id, seq, STATUS_OK, if ok { 0 } else { (-1i64) as u64 }, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI3_FRAME_BEGIN => {
+            let clear_rgb = arg1 as u32;
+            let flags = (arg1 >> 32) as u32;
+            let preserve_contents = (flags & 1) != 0;
+            let allow_present = (flags & 2) != 0;
+            let rc = crate::ui3::ui3_frame::begin_frame(
+                arg0 as u32,
+                clear_rgb,
+                preserve_contents,
+                allow_present,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI3_FRAME_END => {
+            let rc = crate::ui3::ui3_frame::end_frame(arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI3_FRAME_SET_RENDER_TARGET => {
+            let rc = crate::ui3::ui3_frame::set_render_target(arg0 as u32, arg1 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI3_FRAME_DRAW_RGB_TRIANGLES => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let rc = crate::ui3::ui3_frame::draw_rgb_triangles(arg0 as u32, payload);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI3_FRAME_DRAW_TEX_TRIANGLES => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let rc = crate::ui3::ui3_frame::draw_tex_triangles(arg0 as u32, arg1 as u32, payload);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI3_TEXTURE_UPLOAD_BEGIN => {
+            let (width, height) = unpack_u32_pair(arg1);
+            let total_len = request_payload(vm_id, req_len)
+                .and_then(|payload| payload.get(..8))
+                .map(|bytes| {
+                    u64::from_le_bytes([
+                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
+                        bytes[7],
+                    ]) as usize
+                })
+                .unwrap_or(0);
+            let rc = crate::ui3::ui3_img::begin_rgba_upload(
+                vm_id,
+                arg0 as u32,
+                width,
+                height,
+                total_len,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI3_TEXTURE_UPLOAD_CHUNK => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let rc = crate::ui3::ui3_img::write_rgba_upload_chunk(
+                vm_id,
+                arg0 as u32,
+                arg1 as usize,
+                payload,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI3_TEXTURE_UPLOAD_FINISH => {
+            let rc = crate::ui3::ui3_img::finish_rgba_upload(vm_id, arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI3_TEXTURE_STATUS => {
+            let status = crate::ui3::ui3_img::image_status(arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (status as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI3_TEXTURE_DIMENSIONS => {
+            if let Some((width, height)) = crate::ui3::ui3_img::image_dimensions(arg0 as u32) {
+                write_response(vm_id, seq, STATUS_OK, pack_u32_pair(width, height), 0);
+            } else {
+                write_response(vm_id, seq, STATUS_OK, 0, 0);
+            }
             DispatchOutcome::Resume
         }
         OP_YIELD => {

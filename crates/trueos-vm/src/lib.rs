@@ -70,7 +70,23 @@ pub mod vmcall {
     pub const OP_PRESERVE: u32 = 0x01;
     pub const OP_PING: u32 = 0x02;
     pub const OP_UNIX_TIME: u32 = 0x03;
+    pub const OP_MONOTONIC_NANOS: u32 = 0x08;
     pub const OP_BP_CPU_COUNT: u32 = 0x07;
+    pub const OP_BP_UI3_FRAME_CREATE: u32 = 0x82;
+    pub const OP_BP_UI3_FRAME_CLOSE: u32 = 0x83;
+    pub const OP_BP_UI3_FRAME_REQUEST_REPAINT: u32 = 0x84;
+    pub const OP_BP_UI3_FRAME_SET_POSITION: u32 = 0x85;
+    pub const OP_BP_UI3_FRAME_SET_SIZE: u32 = 0x86;
+    pub const OP_BP_UI3_FRAME_BEGIN: u32 = 0x87;
+    pub const OP_BP_UI3_FRAME_END: u32 = 0x88;
+    pub const OP_BP_UI3_FRAME_SET_RENDER_TARGET: u32 = 0x89;
+    pub const OP_BP_UI3_FRAME_DRAW_RGB_TRIANGLES: u32 = 0x8A;
+    pub const OP_BP_UI3_FRAME_DRAW_TEX_TRIANGLES: u32 = 0x8B;
+    pub const OP_BP_UI3_TEXTURE_UPLOAD_BEGIN: u32 = 0x8C;
+    pub const OP_BP_UI3_TEXTURE_UPLOAD_CHUNK: u32 = 0x8D;
+    pub const OP_BP_UI3_TEXTURE_UPLOAD_FINISH: u32 = 0x8E;
+    pub const OP_BP_UI3_TEXTURE_STATUS: u32 = 0x8F;
+    pub const OP_BP_UI3_TEXTURE_DIMENSIONS: u32 = 0x90;
     pub const OP_NET_TCP_WRITE: u32 = 0x10;
     pub const OP_NET_TCP_READ: u32 = 0x11;
     pub const OP_BP_NET_OPEN: u32 = 0x20;
@@ -133,6 +149,10 @@ pub mod vmcall {
     }
 
     pub fn unix_time() -> u64 {
+        0
+    }
+
+    pub fn monotonic_nanos() -> u64 {
         0
     }
 

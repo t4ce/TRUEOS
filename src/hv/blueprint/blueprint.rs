@@ -1308,6 +1308,7 @@ fn resolve_known_import(name: &str) -> Option<usize> {
         "acosf" => Some(trueos_math::acosf as *const () as usize),
         "asinf" => Some(trueos_math::asinf as *const () as usize),
         "log2f" => Some(trueos_math::log2f as *const () as usize),
+        "hypotf" => Some(trueos_math::hypotf as *const () as usize),
         "trueos_cabi_wls_current_slot" => {
             Some(crate::stackkeeper::trueos_cabi_wls_current_slot as *const () as usize)
         }
