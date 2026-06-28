@@ -26,7 +26,7 @@ impl VmLaneProfile {
     ///
     /// Keep guest hulls on HV-reserved VM lanes only:
     /// - never on BSP/local
-    /// - never on the AP1 UI2/service lane
+    /// - never on the AP1 UI/service lane
     /// - use every registered AP2+ worker lane
     ///
     /// This is the placement policy that lane-indexed `vm[n]` scheduling must

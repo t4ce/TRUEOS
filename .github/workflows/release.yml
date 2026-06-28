@@ -302,15 +302,49 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -d '' release_assets < <(find dist -maxdepth 1 -type f ! -name 'release-notes.md' -print0 | sort -z)
+          if [[ "${#release_assets[@]}" -eq 0 ]]; then
+            echo "No release assets were staged" >&2
+            exit 1
+          fi
 
           if gh release view "${TAG}" >/dev/null 2>&1; then
-            gh release upload "${TAG}" "${release_assets[@]}" --clobber
-            gh release edit "${TAG}" \
-              --title "TRUEOS ${VERSION}" \
-              --notes-file dist/release-notes.md
+            is_draft="$(gh release view "${TAG}" --json isDraft --jq '.isDraft')"
+            if [[ "${is_draft}" == "true" ]]; then
+              gh release upload "${TAG}" "${release_assets[@]}" --clobber
+              gh release edit "${TAG}" \
+                --draft=false \
+                --title "TRUEOS ${VERSION}" \
+                --notes-file dist/release-notes.md
+            else
+              mapfile -t existing_assets < <(gh release view "${TAG}" --json assets --jq '.assets[].name' | sort)
+              declare -A existing_asset_names=()
+              for asset_name in "${existing_assets[@]}"; do
+                existing_asset_names["${asset_name}"]=1
+              done
+
+              missing_assets=()
+              for asset in "${release_assets[@]}"; do
+                asset_name="$(basename "${asset}")"
+                if [[ -z "${existing_asset_names[${asset_name}]+x}" ]]; then
+                  missing_assets+=("${asset_name}")
+                fi
+              done
+
+              if [[ "${#missing_assets[@]}" -ne 0 ]]; then
+                printf 'Release %s is already published and is missing expected immutable asset(s):\n' "${TAG}" >&2
+                printf '  %s\n' "${missing_assets[@]}" >&2
+                echo "Create a new release tag, or delete/recreate the release before immutability is enabled." >&2
+                exit 1
+              fi
+
+              echo "Release ${TAG} is already published with all expected assets; leaving immutable release unchanged."
+            fi
           else
-            gh release create "${TAG}" "${release_assets[@]}" \
+            gh release create "${TAG}" \
+              --draft \
               --target "${GITHUB_SHA}" \
               --title "TRUEOS ${VERSION}" \
               --notes-file dist/release-notes.md
+            gh release upload "${TAG}" "${release_assets[@]}"
+            gh release edit "${TAG}" --draft=false
           fi

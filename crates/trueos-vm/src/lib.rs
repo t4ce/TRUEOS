@@ -80,8 +80,8 @@ pub mod vmcall {
     pub const OP_BP_UI3_FRAME_BEGIN: u32 = 0x87;
     pub const OP_BP_UI3_FRAME_END: u32 = 0x88;
     pub const OP_BP_UI3_FRAME_SET_RENDER_TARGET: u32 = 0x89;
-    pub const OP_BP_UI3_FRAME_DRAW_RGB_TRIANGLES: u32 = 0x8A;
-    pub const OP_BP_UI3_FRAME_DRAW_TEX_TRIANGLES: u32 = 0x8B;
+    pub const OP_BP_UI3_FRAME_DRAW_SOLID_BATCH: u32 = 0x8A;
+    pub const OP_BP_UI3_FRAME_DRAW_SPRITE_BATCH: u32 = 0x8B;
     pub const OP_BP_UI3_TEXTURE_UPLOAD_BEGIN: u32 = 0x8C;
     pub const OP_BP_UI3_TEXTURE_UPLOAD_CHUNK: u32 = 0x8D;
     pub const OP_BP_UI3_TEXTURE_UPLOAD_FINISH: u32 = 0x8E;
@@ -98,8 +98,8 @@ pub mod vmcall {
     pub const OP_BP_FETCH_BYTES_DISCARD: u32 = 0x26;
     pub const OP_BP_THREAD_CURRENT_ID: u32 = 0x61;
     pub const OP_BP_TOKIO_BLOCKING_SPAWN: u32 = 0x62;
-    pub const OP_BP_UI2_WINDOW_CREATE: u32 = 0x63;
-    pub const OP_BP_UI2_WINDOW_OP: u32 = 0x64;
+    pub const OP_BP_LEGACY_FRAME_CREATE: u32 = 0x63;
+    pub const OP_BP_LEGACY_FRAME_OP: u32 = 0x64;
     pub const OP_BP_GFX_TEXTURE_UPLOAD_BEGIN: u32 = 0x65;
     pub const OP_BP_GFX_TEXTURE_UPLOAD_CHUNK: u32 = 0x66;
     pub const OP_BP_GFX_TEXTURE_UPLOAD_FINISH: u32 = 0x67;
