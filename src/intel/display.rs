@@ -1883,6 +1883,7 @@ fn set_primary_plane_source_inner(
     let ctl_enabled = primary_plane_ctl_enabled_for_format(ctl_before, source.format);
     let color_ctl_off = pipe.plane_ctl_off + UNI_PLANE_COLOR_CTL_OFF;
     let color_ctl = crate::intel::mmio_read(dev, color_ctl_off);
+    let surf_live_before = crate::intel::mmio_read(dev, pipe.plane_surf_live_off);
     crate::intel::mmio_write(dev, pipe.plane_stride_off, stride_reg);
     crate::intel::mmio_write(
         dev,
@@ -1908,11 +1909,14 @@ fn set_primary_plane_source_inner(
     crate::intel::mmio_write(dev, pipe.plane_surf_off, surface_reg);
 
     let surf_after = crate::intel::mmio_read(dev, pipe.plane_surf_off);
+    let (surf_live_after, surf_live_iter) =
+        wait_for_primary_plane_live(dev, pipe, surface_reg, 200_000);
     intel_display_verbose_log!(
-        "intel/display: primary-plane-source reason={} pipe={} ok={} mapped={} fmt={:?} src={}x{} dst={}x{} size={}x{} pitch=0x{:X} surf=0x{:08X} after=0x{:08X}\n",
+        "intel/display: primary-plane-source reason={} pipe={} ok={} live_ok={} mapped={} fmt={:?} src={}x{} dst={}x{} size={}x{} pitch=0x{:X} surf=0x{:08X} after=0x{:08X} live=0x{:08X}=>0x{:08X} live_iter={}\n",
         reason,
         pipe.name,
         (surf_after == surface_reg) as u8,
+        (surf_live_after == surface_reg) as u8,
         mapped_now as u8,
         source.format,
         source.src_x,
@@ -1923,9 +1927,12 @@ fn set_primary_plane_source_inner(
         dst_h,
         source.pitch_bytes,
         surface_reg,
-        surf_after
+        surf_after,
+        surf_live_before,
+        surf_live_after,
+        surf_live_iter
     );
-    surf_after == surface_reg
+    surf_after == surface_reg && surf_live_after == surface_reg
 }
 
 pub(crate) fn present_ui_surface_to_primary_plane(

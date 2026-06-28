@@ -56,6 +56,19 @@ pub(crate) struct UiSurfaceRgbaAccess {
 unsafe impl Send for UiSurfaceRgbaAccess {}
 unsafe impl Sync for UiSurfaceRgbaAccess {}
 
+#[derive(Clone, Copy)]
+pub(crate) struct UiSurfacePixelAccess {
+    pub virt: *mut u8,
+    pub byte_len: usize,
+    pub width: u32,
+    pub height: u32,
+    pub pitch: u32,
+    pub format: UiSurfaceFormat,
+}
+
+unsafe impl Send for UiSurfacePixelAccess {}
+unsafe impl Sync for UiSurfacePixelAccess {}
+
 static SURFACES: Mutex<[Option<TrustedUiSurface>; MAX_UI_SURFACES]> =
     Mutex::new([None; MAX_UI_SURFACES]);
 
@@ -137,6 +150,18 @@ pub(crate) fn rgba_access(handle: UiSurfaceHandle) -> Option<UiSurfaceRgbaAccess
         width: surface.desc.width,
         height: surface.desc.height,
         pitch: surface.desc.pitch,
+    })
+}
+
+pub(crate) fn pixel_access(handle: UiSurfaceHandle) -> Option<UiSurfacePixelAccess> {
+    let surface = lookup(handle)?;
+    Some(UiSurfacePixelAccess {
+        virt: surface.virt,
+        byte_len: surface.byte_len,
+        width: surface.desc.width,
+        height: surface.desc.height,
+        pitch: surface.desc.pitch,
+        format: surface.desc.format,
     })
 }
 

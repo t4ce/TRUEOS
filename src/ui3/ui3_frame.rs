@@ -18,7 +18,8 @@ enum Ui3RenderTarget {
 
 #[derive(Clone, Copy, Debug)]
 struct Ui3Frame {
-    surface: crate::r::ui_surface::UiSurfaceHandle,
+    front_surface: crate::r::ui_surface::UiSurfaceHandle,
+    back_surface: crate::r::ui_surface::UiSurfaceHandle,
     tex_id: u32,
     x: i32,
     y: i32,
@@ -57,19 +58,27 @@ static UI3_OFFSCREEN_ALLOCS: AtomicU64 = AtomicU64::new(0);
 pub(crate) fn create_frame(x: i32, y: i32, width: u32, height: u32, tex_id: u32) -> u32 {
     let width = width.max(1);
     let height = height.max(1);
-    let Ok(surface) =
-        crate::r::ui_surface::create_surface(width, height, UiSurfaceFormat::Rgba8888)
+    let Ok(front_surface) =
+        crate::r::ui_surface::create_surface(width, height, UiSurfaceFormat::Xrgb8888)
     else {
         return 0;
     };
-    let _ = crate::r::ui_surface::clear_surface_rgb(surface, 0);
+    let Ok(back_surface) =
+        crate::r::ui_surface::create_surface(width, height, UiSurfaceFormat::Xrgb8888)
+    else {
+        crate::r::ui_surface::destroy_surface(front_surface);
+        return 0;
+    };
+    let _ = crate::r::ui_surface::clear_surface_rgb(front_surface, 0);
+    let _ = crate::r::ui_surface::clear_surface_rgb(back_surface, 0);
     let id = NEXT_FRAME_ID
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| Some(id.wrapping_add(1).max(1)))
         .unwrap_or(1);
     FRAMES.lock().insert(
         id,
         Ui3Frame {
-            surface,
+            front_surface,
+            back_surface,
             tex_id,
             x,
             y,
@@ -105,7 +114,9 @@ pub(crate) fn close_frame(frame_id: u32) -> bool {
     if frame.tex_id != 0 {
         OFFSCREEN.lock().remove(&frame.tex_id);
     }
-    crate::r::ui_surface::destroy_surface(frame.surface)
+    let front_ok = crate::r::ui_surface::destroy_surface(frame.front_surface);
+    let back_ok = crate::r::ui_surface::destroy_surface(frame.back_surface);
+    front_ok && back_ok
 }
 
 pub(crate) fn set_position(frame_id: u32, x: i32, y: i32) -> bool {
@@ -128,24 +139,35 @@ pub(crate) fn set_size(frame_id: u32, width: u32, height: u32) -> bool {
     if frame.width == width && frame.height == height {
         return true;
     }
-    let Ok(surface) =
-        crate::r::ui_surface::create_surface(width, height, UiSurfaceFormat::Rgba8888)
+    let Ok(front_surface) =
+        crate::r::ui_surface::create_surface(width, height, UiSurfaceFormat::Xrgb8888)
     else {
         return false;
     };
-    let old_surface = frame.surface;
-    frame.surface = surface;
+    let Ok(back_surface) =
+        crate::r::ui_surface::create_surface(width, height, UiSurfaceFormat::Xrgb8888)
+    else {
+        crate::r::ui_surface::destroy_surface(front_surface);
+        return false;
+    };
+    let old_front_surface = frame.front_surface;
+    let old_back_surface = frame.back_surface;
+    frame.front_surface = front_surface;
+    frame.back_surface = back_surface;
     frame.width = width;
     frame.height = height;
     frame.active = false;
     frame.target = Ui3RenderTarget::Frame;
-    let _ = crate::r::ui_surface::clear_surface_rgb(surface, 0);
+    let _ = crate::r::ui_surface::clear_surface_rgb(front_surface, 0);
+    let _ = crate::r::ui_surface::clear_surface_rgb(back_surface, 0);
     drop(frames);
-    crate::r::ui_surface::destroy_surface(old_surface)
+    let front_ok = crate::r::ui_surface::destroy_surface(old_front_surface);
+    let back_ok = crate::r::ui_surface::destroy_surface(old_back_surface);
+    front_ok && back_ok
 }
 
 pub(crate) fn request_repaint(frame_id: u32) -> bool {
-    present_frame(frame_id)
+    present_frame(frame_id, false)
 }
 
 pub(crate) fn begin_frame(
@@ -154,7 +176,7 @@ pub(crate) fn begin_frame(
     preserve_contents: bool,
     allow_present: bool,
 ) -> i32 {
-    let surface = {
+    let (front_surface, back_surface) = {
         let mut frames = FRAMES.lock();
         let Some(frame) = frames.get_mut(&frame_id) else {
             return -1;
@@ -167,10 +189,14 @@ pub(crate) fn begin_frame(
         frame.preserve_contents = preserve_contents;
         frame.clear_rgb = clear_rgb & 0x00FF_FFFF;
         frame.target = Ui3RenderTarget::Frame;
-        frame.surface
+        (frame.front_surface, frame.back_surface)
     };
-    if !preserve_contents {
-        let _ = crate::r::ui_surface::clear_surface_rgb(surface, clear_rgb & 0x00FF_FFFF);
+    if preserve_contents {
+        if !copy_surface_pixels(front_surface, back_surface) {
+            let _ = crate::r::ui_surface::clear_surface_rgb(back_surface, clear_rgb & 0x00FF_FFFF);
+        }
+    } else {
+        let _ = crate::r::ui_surface::clear_surface_rgb(back_surface, clear_rgb & 0x00FF_FFFF);
     }
     UI3_FRAME_BEGINS.fetch_add(1, Ordering::Relaxed);
     0
@@ -189,7 +215,7 @@ pub(crate) fn end_frame(frame_id: u32) -> i32 {
         frame.target = Ui3RenderTarget::Frame;
         frame.allow_present
     };
-    if allow_present && !present_frame(frame_id) {
+    if allow_present && !present_frame(frame_id, true) {
         return -3;
     }
     UI3_FRAME_ENDS.fetch_add(1, Ordering::Relaxed);
@@ -239,12 +265,19 @@ pub(crate) fn draw_rgb_triangles(frame_id: u32, bytes: &[u8]) -> i32 {
 
     match frame.target {
         Ui3RenderTarget::Frame => {
-            let Some(access) = crate::r::ui_surface::rgba_access(frame.surface) else {
+            let Some(access) = crate::r::ui_surface::pixel_access(frame.back_surface) else {
                 return -1;
             };
             let dst = unsafe { core::slice::from_raw_parts_mut(access.virt, access.byte_len) };
-            raster_rgb_triangles(dst, access.pitch as usize, access.width, access.height, bytes);
-            crate::r::ui_surface::flush_surface(frame.surface);
+            raster_rgb_triangles(
+                dst,
+                access.pitch as usize,
+                access.width,
+                access.height,
+                access.format,
+                bytes,
+            );
+            let _ = crate::r::ui_surface::flush_surface(frame.back_surface);
         }
         Ui3RenderTarget::Texture(tex_id) => {
             let mut offscreen = OFFSCREEN.lock();
@@ -256,6 +289,7 @@ pub(crate) fn draw_rgb_triangles(frame_id: u32, bytes: &[u8]) -> i32 {
                 image.width as usize * 4,
                 image.width,
                 image.height,
+                UiSurfaceFormat::Rgba8888,
                 bytes,
             );
         }
@@ -282,7 +316,7 @@ pub(crate) fn draw_tex_triangles(frame_id: u32, tex_id: u32, bytes: &[u8]) -> i3
 
     match frame.target {
         Ui3RenderTarget::Frame => {
-            let Some(access) = crate::r::ui_surface::rgba_access(frame.surface) else {
+            let Some(access) = crate::r::ui_surface::pixel_access(frame.back_surface) else {
                 return -1;
             };
             let dst = unsafe { core::slice::from_raw_parts_mut(access.virt, access.byte_len) };
@@ -291,10 +325,11 @@ pub(crate) fn draw_tex_triangles(frame_id: u32, tex_id: u32, bytes: &[u8]) -> i3
                 access.pitch as usize,
                 access.width,
                 access.height,
+                access.format,
                 &src,
                 bytes,
             );
-            crate::r::ui_surface::flush_surface(frame.surface);
+            let _ = crate::r::ui_surface::flush_surface(frame.back_surface);
         }
         Ui3RenderTarget::Texture(dst_tex_id) => {
             let mut offscreen = OFFSCREEN.lock();
@@ -306,6 +341,7 @@ pub(crate) fn draw_tex_triangles(frame_id: u32, tex_id: u32, bytes: &[u8]) -> i3
                 image.width as usize * 4,
                 image.width,
                 image.height,
+                UiSurfaceFormat::Rgba8888,
                 &src,
                 bytes,
             );
@@ -314,7 +350,7 @@ pub(crate) fn draw_tex_triangles(frame_id: u32, tex_id: u32, bytes: &[u8]) -> i3
     0
 }
 
-fn present_frame(frame_id: u32) -> bool {
+fn present_frame(frame_id: u32, swap_on_success: bool) -> bool {
     let frame = {
         let frames = FRAMES.lock();
         let Some(frame) = frames.get(&frame_id) else {
@@ -322,7 +358,12 @@ fn present_frame(frame_id: u32) -> bool {
         };
         *frame
     };
-    crate::r::ui_surface::flush_surface(frame.surface);
+    let surface = if swap_on_success {
+        frame.back_surface
+    } else {
+        frame.front_surface
+    };
+    crate::r::ui_surface::flush_surface(surface);
     let dst_x = frame.x.max(0) as u32;
     let dst_y = frame.y.max(0) as u32;
     let present = UiPresent {
@@ -330,10 +371,13 @@ fn present_frame(frame_id: u32) -> bool {
         dst: UiRect::new(dst_x, dst_y, frame.width, frame.height),
         plane: UiPlaneSlot::Primary,
     };
-    let result = crate::r::ui_surface::present_surface(frame.surface, present, "ui3-frame");
+    let result = crate::r::ui_surface::present_surface(surface, present, "ui3-frame");
     let present_count = UI3_FRAME_PRESENTS.fetch_add(1, Ordering::Relaxed) + 1;
     match result {
         Ok(path) => {
+            if swap_on_success {
+                swap_frame_surfaces(frame_id, frame.front_surface, frame.back_surface);
+            }
             log_present_stats(present_count, frame_id, frame, path);
             true
         }
@@ -381,6 +425,63 @@ fn log_present_stats(count: u64, frame_id: u32, frame: Ui3Frame, path: UiPresent
 
 fn frame_snapshot(frame_id: u32) -> Option<Ui3Frame> {
     FRAMES.lock().get(&frame_id).copied()
+}
+
+fn swap_frame_surfaces(
+    frame_id: u32,
+    expected_front: crate::r::ui_surface::UiSurfaceHandle,
+    expected_back: crate::r::ui_surface::UiSurfaceHandle,
+) {
+    let mut frames = FRAMES.lock();
+    let Some(frame) = frames.get_mut(&frame_id) else {
+        return;
+    };
+    if frame.front_surface != expected_front || frame.back_surface != expected_back {
+        return;
+    }
+    core::mem::swap(&mut frame.front_surface, &mut frame.back_surface);
+}
+
+fn copy_surface_pixels(
+    src_handle: crate::r::ui_surface::UiSurfaceHandle,
+    dst_handle: crate::r::ui_surface::UiSurfaceHandle,
+) -> bool {
+    let Some(src) = crate::r::ui_surface::pixel_access(src_handle) else {
+        return false;
+    };
+    let Some(dst) = crate::r::ui_surface::pixel_access(dst_handle) else {
+        return false;
+    };
+    if src.format != dst.format {
+        return false;
+    }
+    let row_bytes = src
+        .width
+        .min(dst.width)
+        .saturating_mul(core::mem::size_of::<u32>() as u32) as usize;
+    let rows = src.height.min(dst.height) as usize;
+    if row_bytes == 0 || rows == 0 {
+        return false;
+    }
+    let src_pitch = src.pitch as usize;
+    let dst_pitch = dst.pitch as usize;
+    if src_pitch < row_bytes || dst_pitch < row_bytes {
+        return false;
+    }
+    for row in 0..rows {
+        let src_off = row.saturating_mul(src_pitch);
+        let dst_off = row.saturating_mul(dst_pitch);
+        if src_off.saturating_add(row_bytes) > src.byte_len
+            || dst_off.saturating_add(row_bytes) > dst.byte_len
+        {
+            return false;
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(src.virt.add(src_off), dst.virt.add(dst_off), row_bytes);
+        }
+    }
+    crate::r::ui_surface::flush_surface(dst_handle);
+    true
 }
 
 fn ensure_offscreen(tex_id: u32, width: u32, height: u32, clear: bool, clear_rgb: u32) {
@@ -433,7 +534,14 @@ fn texture_source(tex_id: u32) -> Option<CpuImage> {
     })
 }
 
-fn raster_rgb_triangles(dst: &mut [u8], pitch: usize, width: u32, height: u32, bytes: &[u8]) {
+fn raster_rgb_triangles(
+    dst: &mut [u8],
+    pitch: usize,
+    width: u32,
+    height: u32,
+    format: UiSurfaceFormat,
+    bytes: &[u8],
+) {
     let tri_bytes = RGB_VERTEX_SIZE * 3;
     let mut off = 0usize;
     while off + tri_bytes <= bytes.len() {
@@ -446,7 +554,7 @@ fn raster_rgb_triangles(dst: &mut [u8], pitch: usize, width: u32, height: u32, b
         let Some(v2) = read_rgb_vertex_bytes(bytes, off + RGB_VERTEX_SIZE * 2) else {
             break;
         };
-        raster_rgb_triangle(dst, pitch, width, height, v0, v1, v2);
+        raster_rgb_triangle(dst, pitch, width, height, format, v0, v1, v2);
         off += tri_bytes;
     }
 }
@@ -456,6 +564,7 @@ fn raster_tex_triangles(
     pitch: usize,
     width: u32,
     height: u32,
+    format: UiSurfaceFormat,
     src: &CpuImage,
     bytes: &[u8],
 ) {
@@ -471,7 +580,7 @@ fn raster_tex_triangles(
         let Some(v2) = read_tex_vertex_bytes(bytes, off + TEX_VERTEX_SIZE * 2) else {
             break;
         };
-        raster_tex_triangle(dst, pitch, width, height, src, v0, v1, v2);
+        raster_tex_triangle(dst, pitch, width, height, format, src, v0, v1, v2);
         off += tri_bytes;
     }
 }
@@ -481,6 +590,7 @@ fn raster_rgb_triangle(
     pitch: usize,
     width: u32,
     height: u32,
+    format: UiSurfaceFormat,
     v0: RgbVertex,
     v1: RgbVertex,
     v2: RgbVertex,
@@ -500,7 +610,7 @@ fn raster_rgb_triangle(
             let w2 = edge(p0, p1, p) / area;
             if inside(w0, w1, w2) {
                 let color = mix_color(v0.color, v1.color, v2.color, w0, w1, w2);
-                blend_pixel(dst, pitch, x as u32, y as u32, color);
+                blend_pixel(dst, pitch, x as u32, y as u32, format, color);
             }
         }
     }
@@ -511,6 +621,7 @@ fn raster_tex_triangle(
     pitch: usize,
     width: u32,
     height: u32,
+    format: UiSurfaceFormat,
     src: &CpuImage,
     v0: TexVertex,
     v1: TexVertex,
@@ -534,7 +645,7 @@ fn raster_tex_triangle(
                 let v = v0.v * w0 + v1.v * w1 + v2.v * w2;
                 let texel = sample_rgba(src, u, v);
                 let tint = mix_color(v0.color, v1.color, v2.color, w0, w1, w2);
-                blend_pixel(dst, pitch, x as u32, y as u32, modulate(texel, tint));
+                blend_pixel(dst, pitch, x as u32, y as u32, format, modulate(texel, tint));
             }
         }
     }
@@ -638,7 +749,7 @@ fn clear_pixels(dst: &mut [u8], width: u32, height: u32, pitch: usize, rgb: u32)
     }
 }
 
-fn blend_pixel(dst: &mut [u8], pitch: usize, x: u32, y: u32, src: Rgba8) {
+fn blend_pixel(dst: &mut [u8], pitch: usize, x: u32, y: u32, format: UiSurfaceFormat, src: Rgba8) {
     let off = (y as usize)
         .saturating_mul(pitch)
         .saturating_add(x as usize * 4);
@@ -646,21 +757,52 @@ fn blend_pixel(dst: &mut [u8], pitch: usize, x: u32, y: u32, src: Rgba8) {
         return;
     }
     if src.a == 255 {
-        dst[off] = src.r;
-        dst[off + 1] = src.g;
-        dst[off + 2] = src.b;
-        dst[off + 3] = 255;
+        write_pixel(dst, off, format, src.r, src.g, src.b, 255);
         return;
     }
     let inv = 255u16.saturating_sub(src.a as u16);
-    dst[off] = blend_channel(src.r, src.a, dst[off], inv);
-    dst[off + 1] = blend_channel(src.g, src.a, dst[off + 1], inv);
-    dst[off + 2] = blend_channel(src.b, src.a, dst[off + 2], inv);
-    let out_a = src.a as u16 + (((dst[off + 3] as u16) * inv + 127) / 255);
-    dst[off + 3] = out_a.min(255) as u8;
+    let (dst_r, dst_g, dst_b, dst_a) = read_pixel(dst, off, format);
+    let out_r = blend_channel(src.r, src.a, dst_r, inv);
+    let out_g = blend_channel(src.g, src.a, dst_g, inv);
+    let out_b = blend_channel(src.b, src.a, dst_b, inv);
+    let out_a = src.a as u16 + (((dst_a as u16) * inv + 127) / 255);
+    write_pixel(dst, off, format, out_r, out_g, out_b, out_a.min(255) as u8);
 }
 
 #[inline]
 fn blend_channel(src: u8, src_a: u8, dst: u8, inv_a: u16) -> u8 {
     ((((src as u16) * (src_a as u16)) + ((dst as u16) * inv_a) + 127) / 255) as u8
+}
+
+#[inline]
+fn read_pixel(dst: &[u8], off: usize, format: UiSurfaceFormat) -> (u8, u8, u8, u8) {
+    match format {
+        UiSurfaceFormat::Rgba8888 => (dst[off], dst[off + 1], dst[off + 2], dst[off + 3]),
+        UiSurfaceFormat::Xrgb8888 => (dst[off + 2], dst[off + 1], dst[off], 255),
+        UiSurfaceFormat::Xbgr8888 => (dst[off], dst[off + 1], dst[off + 2], 255),
+    }
+}
+
+#[inline]
+fn write_pixel(dst: &mut [u8], off: usize, format: UiSurfaceFormat, r: u8, g: u8, b: u8, a: u8) {
+    match format {
+        UiSurfaceFormat::Rgba8888 => {
+            dst[off] = r;
+            dst[off + 1] = g;
+            dst[off + 2] = b;
+            dst[off + 3] = a;
+        }
+        UiSurfaceFormat::Xrgb8888 => {
+            dst[off] = b;
+            dst[off + 1] = g;
+            dst[off + 2] = r;
+            dst[off + 3] = 0;
+        }
+        UiSurfaceFormat::Xbgr8888 => {
+            dst[off] = r;
+            dst[off + 1] = g;
+            dst[off + 2] = b;
+            dst[off + 3] = 0;
+        }
+    }
 }
