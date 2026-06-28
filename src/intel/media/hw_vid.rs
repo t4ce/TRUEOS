@@ -3,14 +3,14 @@ use core::fmt::Write;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
 const H264_BOOT_PROBE_ENABLED: bool = true;
-const H264_BOOT_PROBE_PLAYBACK_ENABLED: bool = true;
-const H264_BOOT_PROBE_PLAYBACK_MODE: H264PlaybackMode = H264PlaybackMode {
-    reverse_after_forward: true,
+const H264_BOOT_PROBE_PLAYBACK_ENABLED: bool = false;
+const H264_BOOT_PROBE_PLAYBACK_OPTIONS: H264PlaybackOptions = H264PlaybackOptions {
+    fps: 30,
+    reverse_after_forward: false,
+    cache_mode: H264PlaybackCacheMode::Off,
+    stripe_study: false,
+    show_cache_fill: false,
 };
-const H264_BOOT_PROBE_PLAYBACK_FRAME_MS: u64 = 33;
-const H264_BOOT_PROBE_FORWARD_FULL_CACHE: bool = true;
-const H264_BOOT_PROBE_REVERSE_SHOW_CACHE_FILL: bool = false;
-const H264_BOOT_PROBE_STRIPE_STUDY_ENABLED: bool = true;
 const H264_BOOT_PROBE_STRIPE_STUDY_FRAME_MS: u64 = 120;
 const H264_BOOT_PROBE_STRIPE_STUDY_STORE_TOP: usize = 8;
 const H264_BOOT_PROBE_STREAM_LOAD_TIMEOUT_MS: u64 = 20_000;
@@ -18,24 +18,83 @@ const H264_BOOT_PROBE_STREAM_LOAD_POLL_MS: u64 = 250;
 const H264_BOOT_PROBE_STREAM_CHUNK_BYTES: usize = 64 * 1024;
 const H264_BOOT_PROBE_TIMEOUT_MS: u64 = 5_000;
 const H264_BOOT_PROBE_DELAY_MS: u64 = 2_000;
-const H264_BOOT_PROBE_STREAM_PATH: &str = "x31_head_movie.annexb.h264";
+pub(crate) const H264_BOOT_PROBE_STREAM_PATH: &str = "x31_head_movie.annexb.h264";
 
 #[derive(Copy, Clone, Debug)]
-struct H264PlaybackMode {
-    reverse_after_forward: bool,
+pub(crate) enum H264PlaybackCacheMode {
+    Off,
+    Tail,
+    Full,
 }
 
-impl H264PlaybackMode {
-    const fn reverse_after_forward(self) -> bool {
+impl H264PlaybackCacheMode {
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Tail => "tail",
+            Self::Full => "full",
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct H264PlaybackOptions {
+    fps: u16,
+    reverse_after_forward: bool,
+    cache_mode: H264PlaybackCacheMode,
+    stripe_study: bool,
+    show_cache_fill: bool,
+}
+
+impl H264PlaybackOptions {
+    pub(crate) const fn new(
+        fps: u16,
+        reverse_after_forward: bool,
+        cache_mode: H264PlaybackCacheMode,
+        stripe_study: bool,
+        show_cache_fill: bool,
+    ) -> Self {
+        Self {
+            fps,
+            reverse_after_forward,
+            cache_mode,
+            stripe_study,
+            show_cache_fill,
+        }
+    }
+
+    pub(crate) const fn fps(self) -> u16 {
+        self.fps
+    }
+
+    const fn frame_ms(self) -> u64 {
+        let fps = self.fps as u64;
+        let ms = (1000 + fps / 2) / fps;
+        if ms == 0 { 1 } else { ms }
+    }
+
+    pub(crate) const fn reverse_after_forward(self) -> bool {
         self.reverse_after_forward
     }
 
-    const fn name(self) -> &'static str {
+    pub(crate) const fn name(self) -> &'static str {
         if self.reverse_after_forward {
             "forward-then-reverse"
         } else {
             "forward"
         }
+    }
+
+    pub(crate) const fn cache_mode(self) -> H264PlaybackCacheMode {
+        self.cache_mode
+    }
+
+    pub(crate) const fn stripe_study(self) -> bool {
+        self.stripe_study
+    }
+
+    pub(crate) const fn show_cache_fill(self) -> bool {
+        self.show_cache_fill
     }
 }
 
@@ -57,7 +116,7 @@ pub(crate) async fn hw_vid_probe_task() {
     Timer::after(EmbassyDuration::from_millis(H264_BOOT_PROBE_DELAY_MS)).await;
     if H264_BOOT_PROBE_PLAYBACK_ENABLED {
         if let Some(file) = h264_wait_for_playback_stream().await {
-            h264_i_p_playback_probe(file, H264_BOOT_PROBE_PLAYBACK_MODE).await;
+            h264_i_p_playback_probe(file, H264_BOOT_PROBE_PLAYBACK_OPTIONS).await;
         } else {
             crate::log!(
                 "intel/hw_vid: h264-playback-probe skipped reason=stream-file-unavailable path={} action=require-trueosfs-file\n",
@@ -71,6 +130,19 @@ pub(crate) async fn hw_vid_probe_task() {
         "intel/hw_vid: probe skipped reason=playback-disabled-and-no-embedded-first-frame path={}\n",
         H264_BOOT_PROBE_STREAM_PATH
     );
+}
+
+pub(crate) async fn run_shell_vid_playback(
+    options: H264PlaybackOptions,
+) -> Result<(), &'static str> {
+    if !crate::intel::has_media_decode_engine() {
+        return Err("media decode engine unavailable");
+    }
+    let Some(file) = h264_open_playback_stream_once().await else {
+        return Err("video asset missing from TRUEOSFS root");
+    };
+    h264_i_p_playback_probe(file, options).await;
+    Ok(())
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -323,9 +395,45 @@ async fn h264_wait_for_playback_stream() -> Option<crate::r::fs::trueosfs::FileR
     }
 }
 
+async fn h264_open_playback_stream_once() -> Option<crate::r::fs::trueosfs::FileReadHandle> {
+    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
+        crate::log!(
+            "intel/hw_vid: h264-playback-probe stream-open accepted=0 path={} reason=no-trueosfs-root mode=shell\n",
+            H264_BOOT_PROBE_STREAM_PATH
+        );
+        return None;
+    };
+    match crate::r::fs::trueosfs::file_read_open_async(disk, H264_BOOT_PROBE_STREAM_PATH).await {
+        Ok(Some(file)) => {
+            crate::log!(
+                "intel/hw_vid: h264-playback-probe stream-open accepted=1 path={} bytes={} data_lba={} source=trueosfs-root mode=shell-open-handle-range-stream\n",
+                H264_BOOT_PROBE_STREAM_PATH,
+                file.data_len(),
+                file.data_lba()
+            );
+            Some(file)
+        }
+        Ok(None) => {
+            crate::log!(
+                "intel/hw_vid: h264-playback-probe stream-open accepted=0 path={} reason=file-missing mode=shell\n",
+                H264_BOOT_PROBE_STREAM_PATH
+            );
+            None
+        }
+        Err(err) => {
+            crate::log!(
+                "intel/hw_vid: h264-playback-probe stream-open accepted=0 path={} reason=read-error err={:?} mode=shell\n",
+                H264_BOOT_PROBE_STREAM_PATH,
+                err
+            );
+            None
+        }
+    }
+}
+
 async fn h264_i_p_playback_probe(
     file: crate::r::fs::trueosfs::FileReadHandle,
-    mode: H264PlaybackMode,
+    mode: H264PlaybackOptions,
 ) {
     let stream_bytes = file.data_len();
     let mut reader = H264RangeNalReader::new(file, H264_BOOT_PROBE_STREAM_PATH, stream_bytes);
@@ -338,20 +446,27 @@ async fn h264_i_p_playback_probe(
     let mut last_pps: Option<Vec<u8>> = None;
     let mut indexed_frames = Vec::new();
     let mut last_idr_frame: Option<usize> = None;
-    let forward_full_cache_enabled =
-        mode.reverse_after_forward() && H264_BOOT_PROBE_FORWARD_FULL_CACHE;
+    let forward_full_cache_enabled = matches!(mode.cache_mode(), H264PlaybackCacheMode::Full)
+        && (mode.reverse_after_forward() || mode.stripe_study());
+    let forward_tail_cache_enabled =
+        matches!(mode.cache_mode(), H264PlaybackCacheMode::Tail) && mode.reverse_after_forward();
+    let capture_forward_output = forward_full_cache_enabled || forward_tail_cache_enabled;
     let mut forward_full_cache = Vec::new();
     let mut forward_tail_start_frame = 0usize;
     let mut forward_tail_cache = Vec::new();
     let mut stopped_at = 0u64;
 
     crate::log!(
-        "intel/hw_vid: h264-playback-probe start bytes={} frame_ms={} subset=idr-plus-p source=trueosfs-root path={} mode=range-stream chunk=0x{:X} playback_mode={} stop=eos\n",
+        "intel/hw_vid: h264-playback-probe start bytes={} fps={} frame_ms={} subset=idr-plus-p source=trueosfs-root path={} mode=range-stream chunk=0x{:X} playback_mode={} cache={} stripe_study={} fill={} stop=eos\n",
         stream_bytes,
-        H264_BOOT_PROBE_PLAYBACK_FRAME_MS,
+        mode.fps(),
+        mode.frame_ms(),
         H264_BOOT_PROBE_STREAM_PATH,
         H264_BOOT_PROBE_STREAM_CHUNK_BYTES,
-        mode.name()
+        mode.name(),
+        mode.cache_mode().name(),
+        mode.stripe_study() as u8,
+        mode.show_cache_fill() as u8
     );
 
     while let Some(nal) = reader.next_nal().await {
@@ -373,7 +488,7 @@ async fn h264_i_p_playback_probe(
                 let indexed_frame = indexed_frames.len();
                 if nal.meta.nal_type == 5 {
                     last_idr_frame = Some(indexed_frame);
-                    if !forward_full_cache_enabled {
+                    if forward_tail_cache_enabled {
                         forward_tail_start_frame = indexed_frame;
                         forward_tail_cache.clear();
                     }
@@ -415,19 +530,19 @@ async fn h264_i_p_playback_probe(
                     idr_seen,
                     &frame,
                     true,
-                    mode.reverse_after_forward(),
+                    capture_forward_output,
                 )
                 .await;
-                if let Some(decoded) = decoded {
-                    if mode.reverse_after_forward() {
+                if capture_forward_output {
+                    if let Some(decoded) = decoded {
                         if forward_full_cache_enabled {
                             forward_full_cache.push(decoded);
-                        } else {
+                        } else if forward_tail_cache_enabled {
                             forward_tail_cache.push(decoded);
                         }
                     }
                 }
-                Timer::after(EmbassyDuration::from_millis(H264_BOOT_PROBE_PLAYBACK_FRAME_MS)).await;
+                Timer::after(EmbassyDuration::from_millis(mode.frame_ms())).await;
             }
             _ => {}
         }
@@ -454,10 +569,15 @@ async fn h264_i_p_playback_probe(
         "eos"
     );
 
+    if mode.stripe_study() && forward_full_cache.len() == indexed_frames.len() {
+        h264_stripe_study_from_full_cache(indexed_frames.as_slice(), forward_full_cache.as_slice())
+            .await;
+    }
+
     if mode.reverse_after_forward() {
         let forward_cache = if forward_full_cache_enabled && !forward_full_cache.is_empty() {
             Some(H264ForwardCache::Full(forward_full_cache))
-        } else if !forward_tail_cache.is_empty() {
+        } else if forward_tail_cache_enabled && !forward_tail_cache.is_empty() {
             Some(H264ForwardCache::Tail(H264ForwardTailCache {
                 start_frame: forward_tail_start_frame,
                 frames: forward_tail_cache,
@@ -465,7 +585,7 @@ async fn h264_i_p_playback_probe(
         } else {
             None
         };
-        h264_reverse_playback_probe(file, indexed_frames.as_slice(), forward_cache).await;
+        h264_reverse_playback_probe(file, indexed_frames.as_slice(), forward_cache, mode).await;
     }
 }
 
@@ -567,6 +687,7 @@ async fn h264_reverse_playback_probe(
     file: crate::r::fs::trueosfs::FileReadHandle,
     frames: &[H264IndexedFrame],
     forward_cache: Option<H264ForwardCache>,
+    mode: H264PlaybackOptions,
 ) {
     if frames.is_empty() {
         crate::log!("intel/hw_vid: h264-reverse-probe skipped reason=no-indexed-frames\n");
@@ -607,7 +728,7 @@ async fn h264_reverse_playback_probe(
             .as_ref()
             .map(|tail| tail.frames.len())
             .unwrap_or(0),
-        H264_BOOT_PROBE_REVERSE_SHOW_CACHE_FILL as u8,
+        mode.show_cache_fill() as u8,
         H264_BOOT_PROBE_STREAM_PATH
     );
 
@@ -647,17 +768,15 @@ async fn h264_reverse_playback_probe(
                     decoded.pitch_bytes,
                     decoded.uv_offset
                 );
-                Timer::after(EmbassyDuration::from_millis(H264_BOOT_PROBE_PLAYBACK_FRAME_MS)).await;
+                Timer::after(EmbassyDuration::from_millis(mode.frame_ms())).await;
             }
-
-            h264_stripe_study_from_full_cache(frames, cache.as_slice()).await;
 
             crate::log!(
                 "intel/hw_vid: h264-reverse-probe done frames={} gops=0 presented={} submitted=0 cached_peak={} read_failures=0 decode_failures=0 visible_cache_fill={} strategy=forward-full-cache reason=eos\n",
                 frames.len(),
                 presented,
                 cache.len(),
-                H264_BOOT_PROBE_REVERSE_SHOW_CACHE_FILL as u8
+                mode.show_cache_fill() as u8
             );
             return;
         }
@@ -727,7 +846,7 @@ async fn h264_reverse_playback_probe(
                     h264_build_indexed_frame_packet_from_span(&frames[decode_frame], &gop_bytes);
                 submitted += 1;
                 let Some(decoded) = h264_submit_wait_probe_frame(
-                    if H264_BOOT_PROBE_REVERSE_SHOW_CACHE_FILL {
+                    if mode.show_cache_fill() {
                         "reverse-cache-visible"
                     } else {
                         "reverse-cache"
@@ -735,7 +854,7 @@ async fn h264_reverse_playback_probe(
                     submitted,
                     frames[decode_frame].stream_idr_index,
                     packet.as_slice(),
-                    H264_BOOT_PROBE_REVERSE_SHOW_CACHE_FILL,
+                    mode.show_cache_fill(),
                     true,
                 )
                 .await
@@ -792,7 +911,7 @@ async fn h264_reverse_playback_probe(
                 decoded.pitch_bytes,
                 decoded.uv_offset
             );
-            Timer::after(EmbassyDuration::from_millis(H264_BOOT_PROBE_PLAYBACK_FRAME_MS)).await;
+            Timer::after(EmbassyDuration::from_millis(mode.frame_ms())).await;
         }
 
         gop_end = gop_start;
@@ -807,7 +926,7 @@ async fn h264_reverse_playback_probe(
         cached_peak,
         read_failures,
         decode_failures,
-        H264_BOOT_PROBE_REVERSE_SHOW_CACHE_FILL as u8
+        mode.show_cache_fill() as u8
     );
 }
 
@@ -815,9 +934,6 @@ async fn h264_stripe_study_from_full_cache(
     frames: &[H264IndexedFrame],
     cache: &[H264DecodedFrame],
 ) {
-    if !H264_BOOT_PROBE_STRIPE_STUDY_ENABLED {
-        return;
-    }
     if frames.len() != cache.len() || cache.is_empty() {
         crate::log!(
             "intel/hw_vid: h264-stripe-study skipped reason=cache-shape frames={} cache={}\n",

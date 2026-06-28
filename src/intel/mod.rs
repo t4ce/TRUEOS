@@ -4,7 +4,6 @@ extern crate alloc;
 
 mod blt;
 mod display;
-mod dmc;
 pub(crate) mod format;
 pub(crate) mod gpgpu;
 pub mod hda;
@@ -238,7 +237,6 @@ pub fn init_once() {
     }
     if full_ui3_boot {
         let _ = self::blt::submit_bcs0_mi_smoke_once();
-        self::dmc::wire_load_path(dev);
         crate::log!(
             "intel/uc-fw: firmware bring-up skipped reason=unused-by-display-render-media path=direct-execlist-and-vdbox\n"
         );

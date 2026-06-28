@@ -99,12 +99,10 @@ jobs:
             exit 1
           fi
 
-          dmc_path="$(find /lib/firmware /usr/lib/firmware -type f \( -name adls_dmc_ver2_01.bin -o -name adls_dmc_ver2_01.bin.zst \) 2>/dev/null | sort | head -n 1 || true)"
           huc_path="$(find /lib/firmware /usr/lib/firmware -type f \( -name tgl_huc.bin -o -name tgl_huc.bin.zst \) 2>/dev/null | sort | head -n 1 || true)"
 
           echo "ovmf=${ovmf_path}" >> "${GITHUB_OUTPUT}"
           echo "guc=${guc_path}" >> "${GITHUB_OUTPUT}"
-          echo "dmc=${dmc_path}" >> "${GITHUB_OUTPUT}"
           echo "huc=${huc_path}" >> "${GITHUB_OUTPUT}"
 
       - name: Build release bundle
@@ -116,7 +114,6 @@ jobs:
             PUBLISH_RELEASE_SMB=0 \
             OVMF_BUNDLE_PATH="${{ steps.paths.outputs.ovmf }}" \
             GUC_FW_HOST_PATH="${{ steps.paths.outputs.guc }}" \
-            DMC_FW_HOST_PATH="${{ steps.paths.outputs.dmc }}" \
             HUC_FW_HOST_PATH="${{ steps.paths.outputs.huc }}"
 
       - name: Resolve release version
