@@ -215,7 +215,11 @@ pub(crate) fn end_frame(frame_id: u32) -> i32 {
         frame.target = Ui3RenderTarget::Frame;
         frame.allow_present
     };
-    if allow_present && !present_frame(frame_id, true) {
+    if allow_present {
+        if !present_frame(frame_id, true) {
+            return -3;
+        }
+    } else if !commit_frame_without_present(frame_id) {
         return -3;
     }
     UI3_FRAME_ENDS.fetch_add(1, Ordering::Relaxed);
@@ -396,6 +400,19 @@ fn present_frame(frame_id: u32, swap_on_success: bool) -> bool {
             false
         }
     }
+}
+
+fn commit_frame_without_present(frame_id: u32) -> bool {
+    let frame = {
+        let frames = FRAMES.lock();
+        let Some(frame) = frames.get(&frame_id) else {
+            return false;
+        };
+        *frame
+    };
+    let _ = crate::r::ui_surface::flush_surface(frame.back_surface);
+    swap_frame_surfaces(frame_id, frame.front_surface, frame.back_surface);
+    true
 }
 
 fn log_present_stats(count: u64, frame_id: u32, frame: Ui3Frame, path: UiPresentPath) {

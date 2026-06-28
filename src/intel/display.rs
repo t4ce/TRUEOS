@@ -161,6 +161,7 @@ const RGB_PLANE_PROBE_GPU_STRIDE: u64 = 0x0010_0000;
 
 static PRIMARY_BOOT_SURFACE_INIT: AtomicBool = AtomicBool::new(false);
 static PRIMARY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
+static UI_SURFACE_PRIMARY_COPY_SEQ: AtomicU32 = AtomicU32::new(0);
 static PRIMARY_SURFACE: Mutex<Option<PrimarySurface>> = Mutex::new(None);
 static PRIMARY_PLANE_SOURCE_BINDING: Mutex<Option<PrimaryPlaneSourceBinding>> = Mutex::new(None);
 static UI2_BASE_SURFACE: Mutex<Option<DisplayRgba8Surface>> = Mutex::new(None);
@@ -299,6 +300,21 @@ struct PrimaryPlaneSourceBinding {
     height: u32,
     pitch_bytes: u32,
     format: PrimaryPlaneSourceFormat,
+}
+
+#[derive(Copy, Clone)]
+struct PrimaryBackingCopyRect {
+    src_x: usize,
+    src_y: usize,
+    dst_x: usize,
+    dst_y: usize,
+    width: usize,
+    height: usize,
+    src_pitch: usize,
+    dst_pitch: usize,
+    row_bytes: usize,
+    flush_offset: usize,
+    flush_bytes: usize,
 }
 
 #[derive(Copy, Clone)]
@@ -1969,6 +1985,166 @@ pub(crate) fn present_ui_surface_to_primary_plane(
         },
         reason,
     )
+}
+
+pub(crate) fn present_ui_surface_to_primary_backing(
+    surface: UiSurface,
+    virt: *const u8,
+    byte_len: usize,
+    src: UiRect,
+    dst: UiRect,
+    reason: &str,
+) -> bool {
+    let Some(primary) = *PRIMARY_SURFACE.lock() else {
+        return false;
+    };
+    if !matches!(surface.format, UiSurfaceFormat::Xrgb8888 | UiSurfaceFormat::Xbgr8888) {
+        return false;
+    }
+    if virt.is_null()
+        || primary.virt.is_null()
+        || byte_len == 0
+        || surface.width == 0
+        || surface.height == 0
+        || src.is_empty()
+        || dst.is_empty()
+        || surface.pitch < surface.width.saturating_mul(4)
+        || primary.pitch_bytes < primary.width.saturating_mul(PRIMARY_BYTES_PER_PIXEL)
+    {
+        return false;
+    }
+
+    let Some(rect) = primary_backing_copy_rect(surface, primary, src, dst, byte_len) else {
+        return false;
+    };
+
+    for row in 0..rect.height {
+        let src_off = rect
+            .src_y
+            .saturating_add(row)
+            .saturating_mul(rect.src_pitch)
+            .saturating_add(rect.src_x.saturating_mul(4));
+        let dst_off = rect
+            .dst_y
+            .saturating_add(row)
+            .saturating_mul(rect.dst_pitch)
+            .saturating_add(rect.dst_x.saturating_mul(PRIMARY_BYTES_PER_PIXEL as usize));
+        if src_off.saturating_add(rect.row_bytes) > byte_len
+            || dst_off.saturating_add(rect.row_bytes) > primary.byte_len
+        {
+            return false;
+        }
+        match surface.format {
+            UiSurfaceFormat::Xrgb8888 => unsafe {
+                core::ptr::copy_nonoverlapping(
+                    virt.add(src_off),
+                    primary.virt.add(dst_off),
+                    rect.row_bytes,
+                );
+            },
+            UiSurfaceFormat::Xbgr8888 => {
+                let src_row =
+                    unsafe { core::slice::from_raw_parts(virt.add(src_off), rect.row_bytes) };
+                let dst_row = unsafe { primary.virt.add(dst_off) as *mut u32 };
+                for col in 0..rect.width {
+                    let off = col.saturating_mul(4);
+                    let r = src_row[off];
+                    let g = src_row[off + 1];
+                    let b = src_row[off + 2];
+                    unsafe {
+                        core::ptr::write_volatile(
+                            dst_row.add(col),
+                            u32::from_le_bytes([b, g, r, 0]),
+                        );
+                    }
+                }
+            }
+            UiSurfaceFormat::Rgba8888 => return false,
+        }
+    }
+
+    let presented =
+        notify_primary_surface_external_write(reason, rect.flush_offset, rect.flush_bytes);
+    let seq = UI_SURFACE_PRIMARY_COPY_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    if seq <= 8 || seq.is_multiple_of(60) {
+        crate::log!(
+            "intel/display: ui-surface-primary-copy seq={} reason={} fmt={:?} src={},{} {}x{} dst={},{} copied={}x{} presented={}\n",
+            seq,
+            reason,
+            surface.format,
+            src.x,
+            src.y,
+            src.w,
+            src.h,
+            dst.x,
+            dst.y,
+            rect.width,
+            rect.height,
+            presented as u8
+        );
+    }
+    presented
+}
+
+fn primary_backing_copy_rect(
+    surface: UiSurface,
+    primary: PrimarySurface,
+    src: UiRect,
+    dst: UiRect,
+    byte_len: usize,
+) -> Option<PrimaryBackingCopyRect> {
+    let src_pitch = surface.pitch as usize;
+    let dst_pitch = primary.pitch_bytes as usize;
+    let src_x = src.x as usize;
+    let src_y = src.y as usize;
+    let dst_x = dst.x as usize;
+    let dst_y = dst.y as usize;
+    let src_w = surface.width.saturating_sub(src.x).min(src.w).min(dst.w) as usize;
+    let src_h = surface.height.saturating_sub(src.y).min(src.h).min(dst.h) as usize;
+    let dst_w = primary.width.saturating_sub(dst.x) as usize;
+    let dst_h = primary.height.saturating_sub(dst.y) as usize;
+    let width = src_w.min(dst_w);
+    let height = src_h.min(dst_h);
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    let row_bytes = width.checked_mul(PRIMARY_BYTES_PER_PIXEL as usize)?;
+    let src_last = src_y
+        .checked_add(height.saturating_sub(1))?
+        .checked_mul(src_pitch)?
+        .checked_add(src_x.checked_mul(4)?)?
+        .checked_add(row_bytes)?;
+    let dst_last = dst_y
+        .checked_add(height.saturating_sub(1))?
+        .checked_mul(dst_pitch)?
+        .checked_add(dst_x.checked_mul(PRIMARY_BYTES_PER_PIXEL as usize)?)?
+        .checked_add(row_bytes)?;
+    if src_last > byte_len || dst_last > primary.byte_len {
+        return None;
+    }
+
+    let flush_offset = dst_y
+        .checked_mul(dst_pitch)?
+        .checked_add(dst_x.checked_mul(PRIMARY_BYTES_PER_PIXEL as usize)?)?;
+    let flush_bytes = height
+        .saturating_sub(1)
+        .checked_mul(dst_pitch)?
+        .checked_add(row_bytes)?;
+
+    Some(PrimaryBackingCopyRect {
+        src_x,
+        src_y,
+        dst_x,
+        dst_y,
+        width,
+        height,
+        src_pitch,
+        dst_pitch,
+        row_bytes,
+        flush_offset,
+        flush_bytes,
+    })
 }
 
 pub(crate) fn present_rgba_primary(

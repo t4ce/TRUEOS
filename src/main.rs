@@ -74,7 +74,6 @@ mod stackkeeper;
 mod std_abi_shim;
 mod surfer;
 mod tga;
-mod unix_compat;
 #[path = "../crates/trueos-gboi/mod.rs"]
 mod trueos_gboi;
 mod tst;
@@ -92,6 +91,7 @@ mod turbo;
 #[allow(non_snake_case)]
 mod tyche;
 mod ui3;
+mod unix_compat;
 #[path = "usb3/mod.rs"]
 pub(crate) mod usb3;
 mod virtio_gpu_logo;

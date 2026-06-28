@@ -264,52 +264,69 @@ fn present_primary(
     dst: UiRect,
     reason: &'static str,
 ) -> Result<UiPresentPath> {
-    if matches!(surface.desc.format, UiSurfaceFormat::Xrgb8888 | UiSurfaceFormat::Xbgr8888)
-        && crate::intel::present_ui_surface_to_primary_plane(
+    if present_primary_backing_copy(surface, src, dst, reason) {
+        return Ok(UiPresentPath::CpuCopy);
+    }
+
+    if present_primary_rgba_kernel_blit(surface, src, dst)? {
+        return Ok(UiPresentPath::KernelBlit);
+    }
+
+    Err(Error::Unsupported)
+}
+
+fn present_primary_backing_copy(
+    surface: TrustedUiSurface,
+    src: UiRect,
+    dst: UiRect,
+    reason: &'static str,
+) -> bool {
+    matches!(surface.desc.format, UiSurfaceFormat::Xrgb8888 | UiSurfaceFormat::Xbgr8888)
+        && crate::intel::present_ui_surface_to_primary_backing(
             surface.desc,
-            surface.phys,
+            surface.virt.cast_const(),
             surface.byte_len,
             src,
             dst,
             reason,
         )
-    {
-        return Ok(UiPresentPath::PlaneSourceOffset);
+}
+
+fn present_primary_rgba_kernel_blit(
+    surface: TrustedUiSurface,
+    src: UiRect,
+    dst: UiRect,
+) -> Result<bool> {
+    if surface.desc.format != UiSurfaceFormat::Rgba8888 {
+        return Ok(false);
     }
 
-    if surface.desc.format == UiSurfaceFormat::Rgba8888 {
-        let src_surface = crate::intel::gpgpu::GpgpuRgba8Surface::new(
-            surface.phys,
-            surface.desc.gpu,
-            surface.byte_len,
-            surface.desc.width,
-            surface.desc.height,
-            surface.desc.pitch,
-        )
-        .ok_or(Error::Invalid)?;
-        let src_rect = crate::intel::gpgpu::GpgpuRect::new(
-            i32::try_from(src.x).map_err(|_| Error::Invalid)?,
-            i32::try_from(src.y).map_err(|_| Error::Invalid)?,
-            src.w,
-            src.h,
-        );
-        let dst_xy = crate::intel::gpgpu::GpgpuPoint::new(
-            i32::try_from(dst.x).map_err(|_| Error::Invalid)?,
-            i32::try_from(dst.y).map_err(|_| Error::Invalid)?,
-        );
-        if crate::intel::gpgpu::present_rgba8_rect_to_primary_xrgb_stats_with_flip(
-            src_surface,
-            src_rect,
-            dst_xy,
-            false,
-        )
-        .is_some()
-        {
-            return Ok(UiPresentPath::KernelBlit);
-        }
-    }
-
-    Err(Error::Unsupported)
+    let src_surface = crate::intel::gpgpu::GpgpuRgba8Surface::new(
+        surface.phys,
+        surface.desc.gpu,
+        surface.byte_len,
+        surface.desc.width,
+        surface.desc.height,
+        surface.desc.pitch,
+    )
+    .ok_or(Error::Invalid)?;
+    let src_rect = crate::intel::gpgpu::GpgpuRect::new(
+        i32::try_from(src.x).map_err(|_| Error::Invalid)?,
+        i32::try_from(src.y).map_err(|_| Error::Invalid)?,
+        src.w,
+        src.h,
+    );
+    let dst_xy = crate::intel::gpgpu::GpgpuPoint::new(
+        i32::try_from(dst.x).map_err(|_| Error::Invalid)?,
+        i32::try_from(dst.y).map_err(|_| Error::Invalid)?,
+    );
+    Ok(crate::intel::gpgpu::present_rgba8_rect_to_primary_xrgb_stats_with_flip(
+        src_surface,
+        src_rect,
+        dst_xy,
+        false,
+    )
+    .is_some())
 }
 
 fn lookup(handle: UiSurfaceHandle) -> Option<TrustedUiSurface> {
