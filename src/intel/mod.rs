@@ -182,6 +182,13 @@ pub fn init_once() {
         let _ = self::gpgpu::upload_present_rgba8_to_primary_xrgb_rect_kernel();
         let _ = self::gpgpu::upload_sprite64_worklist_rgba8_kernel();
         let _ = self::gpgpu::upload_mandel64_worklist_rgba8_kernel();
+        let _ = self::gpgpu::upload_canvas3d_project_rgba8_kernel();
+        let _ = self::gpgpu::upload_canvas3d_transform_q16_kernel();
+        let _ = self::gpgpu::upload_canvas3d_clip_box_q16_kernel();
+        let _ = self::gpgpu::upload_canvas3d_plane_sample_rgba8_kernel();
+        let _ = self::gpgpu::upload_canvas3d_plane_fill_rgba8_kernel();
+        let _ = self::gpgpu::upload_canvas3d_plane_patch_fill_cut_rgba8_kernel();
+        let _ = self::gpgpu::upload_canvas3d_plane_patch_worklist_rgba8_kernel();
         let opencl_smoke = self::opencl::trueos_cl_source_build_smoke();
         crate::log!(
             "intel/opencl: source-build-smoke source_compile={} build_err={} registry_kernels={} registry_ok={} queue_completed={} fill_rect_uploaded={} queue_err={} note=source-build-currently-scaffold-aot-path-active\n",
@@ -211,6 +218,13 @@ pub fn init_once() {
                 self::gpgpu::alpha_blend_worklist_probe_ok() as u8,
                 self::gpgpu::rect_worklist_probe_ready() as u8
             );
+            let _ = self::gpgpu::submit_canvas3d_project_once();
+            let _ = self::gpgpu::submit_canvas3d_transform_smoke_once();
+            let _ = self::gpgpu::submit_canvas3d_clip_box_q16_once();
+            let _ = self::gpgpu::submit_canvas3d_plane_sample_rgba8_once();
+            let _ = self::gpgpu::submit_canvas3d_plane_fill_rgba8_once();
+            let _ = self::gpgpu::submit_canvas3d_plane_patch_fill_cut_rgba8_once();
+            let _ = self::gpgpu::submit_canvas3d_plane_patch_worklist_rgba8_once();
         } else {
             crate::log!("intel/gpgpu: artifact boot smoketests skipped allcaps=0\n");
         }
