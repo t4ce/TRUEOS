@@ -280,8 +280,8 @@ pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x4F, 0x3F, 0x4E, 0xEF, 0x78, 0xDF, 0x2E, 0x66, 0x7B, 0x9F, 0x40, 0x4E, 0x34, 0xA8, 0x22, 0xFB,
 ];
 pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
-    0x2D, 0xF0, 0x14, 0x19, 0x4F, 0x50, 0xB4, 0x41, 0x8D, 0x7D, 0xB2, 0xFC, 0x70, 0x32, 0xDC, 0x0B,
-    0xC7, 0x18, 0x29, 0x9D, 0xEB, 0xAA, 0x3E, 0xB8, 0x3E, 0xD6, 0x5B, 0xC9, 0xD7, 0xCF, 0x6D, 0x1C,
+    0x61, 0x0C, 0xDA, 0x44, 0xF7, 0xCD, 0x04, 0x34, 0xD0, 0x10, 0x41, 0x97, 0x46, 0x90, 0x5A, 0xB9,
+    0x5C, 0xE3, 0x26, 0x59, 0x54, 0xA9, 0x51, 0x02, 0xD9, 0xF5, 0x79, 0x04, 0xFA, 0x43, 0x04, 0x49,
 ];
 pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x79, 0xC7, 0xD4, 0x17, 0x05, 0x40, 0x65, 0x04, 0x17, 0x48, 0x9A, 0x88, 0x2E, 0x52, 0xC5, 0x2B,
@@ -507,6 +507,12 @@ const SPRITE_QUAD_WORKLIST_CROSS_THREAD_BYTES: usize =
 const SPRITE_QUAD_WORKLIST_PER_THREAD_BYTES: usize = 96;
 const SPRITE_QUAD_WORKLIST_INDIRECT_BYTES: usize =
     SPRITE_QUAD_WORKLIST_CROSS_THREAD_BYTES + SPRITE_QUAD_WORKLIST_PER_THREAD_BYTES;
+const SPRITE_QUAD_WORKLIST_RUN_STATE_BLOCK_BYTES: usize = 0x140;
+const SPRITE_QUAD_WORKLIST_RUN_IDD_REL: usize = 0x00;
+const SPRITE_QUAD_WORKLIST_RUN_BINDING_REL: usize = 0x40;
+const SPRITE_QUAD_WORKLIST_RUN_SRC_SURFACE_REL: usize = 0x80;
+const SPRITE_QUAD_WORKLIST_RUN_DST_SURFACE_REL: usize = 0xC0;
+const SPRITE_QUAD_WORKLIST_RUN_DESC_SURFACE_REL: usize = 0x100;
 const RECT_WORKLIST_PRE_MARKER_SLOT: usize = 15;
 const RECT_WORKLIST_POST_MARKER_SLOT: usize = 14;
 const FILL_RECT_WORKLIST_PRE_MARKER: u32 = 0xC0DE_5801;
@@ -529,11 +535,11 @@ const RECT_WORKLIST_DESCS_PER_WALKER: usize = 16;
 const RECT_WORKLIST_MAX_WALKERS: usize = RECT_WORKLIST_MAX_DESCS / RECT_WORKLIST_DESCS_PER_WALKER;
 const RECT_WORKLIST_DESC_BYTES: usize = 8192;
 const SPRITE_QUAD_WORKLIST_MAX_DESCS: usize = 256;
-const SPRITE_QUAD_WORKLIST_DESCS_PER_WALKER: usize = 16;
-const SPRITE_QUAD_WORKLIST_MAX_WALKERS: usize =
-    SPRITE_QUAD_WORKLIST_MAX_DESCS / SPRITE_QUAD_WORKLIST_DESCS_PER_WALKER;
+const SPRITE_QUAD_WORKLIST_DESCS_PER_WALKER: usize = SPRITE_QUAD_WORKLIST_MAX_DESCS;
+const SPRITE_QUAD_WORKLIST_MAX_WALKERS: usize = 1;
 const SPRITE_QUAD_WORKLIST_DESC_BYTES: usize =
     SPRITE_QUAD_WORKLIST_MAX_DESCS * core::mem::size_of::<GpgpuSpriteQuadWorklistDesc>();
+const SPRITE_QUAD_WORKLIST_MAX_GROUPS_PER_WALKER: usize = SPRITE_QUAD_WORKLIST_MAX_DESCS;
 const MANDEL64_WORKLIST_CELL_PIXELS: u32 = 64;
 const MANDEL64_WORKLIST_BAND_ROWS: u32 = 4;
 const MANDEL64_WORKLIST_BANDS_PER_TILE: usize =
@@ -1014,6 +1020,12 @@ pub(crate) struct GpgpuSpriteQuadWorklistDesc {
     pub(crate) c3_v: f32,
     pub(crate) color_rgba: u32,
     pub(crate) flags: u32,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct GpgpuSpriteQuadWorklistRun<'a> {
+    pub(crate) src: GpgpuRgba8Surface,
+    pub(crate) descs: &'a [GpgpuSpriteQuadWorklistDesc],
 }
 
 pub(crate) const COMPOSITE_WORKLIST_FLAG_COPY: u32 = 1 << 0;
@@ -2782,53 +2794,77 @@ pub(crate) fn sprite_quad_worklist_rgba8_over_stats(
     dst: GpgpuRgba8Surface,
     descs: &[GpgpuSpriteQuadWorklistDesc],
 ) -> GpgpuWorklistSubmitStats {
+    let mut stats = GpgpuWorklistSubmitStats::default();
+    for chunk in descs.chunks(SPRITE_QUAD_WORKLIST_MAX_DESCS) {
+        if chunk.is_empty() {
+            continue;
+        }
+        let run = GpgpuSpriteQuadWorklistRun { src, descs: chunk };
+        let chunk_stats =
+            sprite_quad_worklist_rgba8_runs_over_stats(dst, core::slice::from_ref(&run));
+        if chunk_stats.descs != chunk.len() {
+            break;
+        }
+        stats.descs = stats.descs.saturating_add(chunk_stats.descs);
+        stats.walkers = stats.walkers.saturating_add(chunk_stats.walkers);
+        stats.submits = stats.submits.saturating_add(chunk_stats.submits);
+        stats.submit_ms = stats.submit_ms.saturating_add(chunk_stats.submit_ms);
+    }
+    stats
+}
+
+pub(crate) fn sprite_quad_worklist_rgba8_runs_over_stats(
+    dst: GpgpuRgba8Surface,
+    runs: &[GpgpuSpriteQuadWorklistRun<'_>],
+) -> GpgpuWorklistSubmitStats {
     if !sprite_quad_worklist_ready() {
         return GpgpuWorklistSubmitStats::default();
     }
     let Some(desc_buffer) = sprite_quad_worklist_desc_buffer_once() else {
         return GpgpuWorklistSubmitStats::default();
     };
+    let total_descs = runs
+        .iter()
+        .try_fold(0usize, |total, run| total.checked_add(run.descs.len()));
+    let Some(total_descs) = total_descs else {
+        return GpgpuWorklistSubmitStats::default();
+    };
+    if total_descs == 0 || total_descs > SPRITE_QUAD_WORKLIST_MAX_DESCS {
+        return GpgpuWorklistSubmitStats::default();
+    }
+    if runs.iter().any(|run| run.descs.is_empty()) {
+        return GpgpuWorklistSubmitStats::default();
+    }
+
     let mut stats = GpgpuWorklistSubmitStats::default();
-    for chunk in descs.chunks(SPRITE_QUAD_WORKLIST_MAX_DESCS) {
-        if chunk.is_empty() {
-            continue;
-        }
-        let _desc_guard = RECT_WORKLIST_DESC_SUBMIT_LOCK.lock();
-        unsafe {
-            core::ptr::write_bytes(desc_buffer.virt, 0, desc_buffer.bytes);
-            let out = desc_buffer.virt as *mut GpgpuSpriteQuadWorklistDesc;
-            for (index, desc) in chunk.iter().copied().enumerate() {
+    let _desc_guard = RECT_WORKLIST_DESC_SUBMIT_LOCK.lock();
+    unsafe {
+        core::ptr::write_bytes(desc_buffer.virt, 0, desc_buffer.bytes);
+        let out = desc_buffer.virt as *mut GpgpuSpriteQuadWorklistDesc;
+        let mut index = 0usize;
+        for run in runs {
+            for desc in run.descs.iter().copied() {
                 core::ptr::write_volatile(out.add(index), desc);
+                index = index.saturating_add(1);
             }
         }
-        super::dma_flush(desc_buffer.virt, desc_buffer.bytes);
-
-        let params = SpriteQuadWorklistRgba8Params {
-            src_gpu: src.gpu,
-            dst_gpu: dst.gpu,
-            desc_gpu: desc_buffer.gpu,
-            src_pitch_bytes: src.pitch_bytes,
-            dst_pitch_bytes: dst.pitch_bytes,
-            src_width: src.width,
-            src_height: src.height,
-            dst_width: dst.width,
-            dst_height: dst.height,
-            desc_base: 0,
-            desc_count: chunk.len() as u32,
-        };
-        let submit_start_tick = direct_rcs_now_tick();
-        if !submit_sprite_quad_worklist(src, dst, desc_buffer, params) {
-            break;
-        }
-        stats.submit_ms = stats
-            .submit_ms
-            .saturating_add(direct_rcs_elapsed_ms_since(submit_start_tick));
-        stats.descs = stats.descs.saturating_add(chunk.len());
-        stats.walkers = stats
-            .walkers
-            .saturating_add(sprite_quad_worklist_walker_count(chunk.len()));
-        stats.submits = stats.submits.saturating_add(1);
     }
+    super::dma_flush(desc_buffer.virt, desc_buffer.bytes);
+
+    let submit_start_tick = direct_rcs_now_tick();
+    if !submit_sprite_quad_worklist_runs(dst, desc_buffer, runs) {
+        return stats;
+    }
+    stats.submit_ms = stats
+        .submit_ms
+        .saturating_add(direct_rcs_elapsed_ms_since(submit_start_tick));
+    stats.descs = total_descs;
+    stats.walkers = runs
+        .iter()
+        .fold(0usize, |total, run| {
+            total.saturating_add(sprite_quad_worklist_walker_count(run.descs.len()))
+        });
+    stats.submits = 1;
     stats
 }
 
@@ -7968,6 +8004,99 @@ fn submit_sprite_quad_worklist(
     observed == SPRITE_QUAD_WORKLIST_POST_MARKER
 }
 
+fn submit_sprite_quad_worklist_runs(
+    dst: GpgpuRgba8Surface,
+    desc: GpgpuRectWorklistDescBuffer,
+    runs: &[GpgpuSpriteQuadWorklistRun<'_>],
+) -> bool {
+    if runs.is_empty() {
+        return false;
+    }
+    let total_descs = runs
+        .iter()
+        .try_fold(0usize, |total, run| total.checked_add(run.descs.len()));
+    let Some(total_descs) = total_descs else {
+        return false;
+    };
+    if total_descs == 0 || total_descs > SPRITE_QUAD_WORKLIST_MAX_DESCS {
+        return false;
+    }
+    if runs.iter().any(|run| run.descs.is_empty()) {
+        return false;
+    }
+
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let Some(dev) = super::claimed_device() else {
+        return false;
+    };
+    let Some(upload) = upload_sprite_quad_worklist_rgba8_kernel() else {
+        return false;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        return false;
+    };
+
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let dst_ppgtt_ok =
+        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
+    let desc_ppgtt_ok =
+        dst_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
+    let mut src_ppgtt_ok = desc_ppgtt_ok;
+    if src_ppgtt_ok {
+        for run in runs {
+            if !direct_rcs_map_ppgtt_kernel(state, run.src.gpu, run.src.phys, run.src.bytes) {
+                src_ppgtt_ok = false;
+                break;
+            }
+        }
+    }
+    let batch_ok = src_ppgtt_ok
+        && direct_rcs_encode_sprite_quad_worklist_runs_batch(state, upload, dst, desc, runs);
+    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
+    let observed = if submitted {
+        direct_rcs_poll_result_slot(
+            state,
+            SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
+            SPRITE_QUAD_WORKLIST_POST_MARKER,
+        )
+    } else {
+        0
+    };
+    if observed != SPRITE_QUAD_WORKLIST_POST_MARKER {
+        let fail_count = SPRITE_QUAD_WORKLIST_SUBMIT_FAIL_LOGS.fetch_add(1, Ordering::Relaxed) + 1;
+        if fail_count <= 16 || fail_count.is_power_of_two() {
+            crate::log!(
+                "intel/gpgpu: sprite-quad-worklist-runs submit failed count={} forcewake={} mapped={} ppgtt={} kernel={} dst={} desc={} src={} batch={} submitted={} observed=0x{:X} want=0x{:X} runs={} descs={} ppgtt_limit=0x{:X} upload_gpu=0x{:X} dst_gpu=0x{:X} dst_end=0x{:X} desc_gpu=0x{:X} desc_end=0x{:X}\n",
+                fail_count,
+                forcewake_ok as u8,
+                mapped_ok as u8,
+                ppgtt_ok as u8,
+                kernel_ppgtt_ok as u8,
+                dst_ppgtt_ok as u8,
+                desc_ppgtt_ok as u8,
+                src_ppgtt_ok as u8,
+                batch_ok as u8,
+                submitted as u8,
+                observed,
+                SPRITE_QUAD_WORKLIST_POST_MARKER,
+                runs.len(),
+                total_descs,
+                direct_rcs_ppgtt_limit_bytes(),
+                upload.gpu,
+                dst.gpu,
+                dst.gpu.saturating_add(dst.bytes as u64),
+                desc.gpu,
+                desc.gpu.saturating_add(desc.bytes as u64)
+            );
+        }
+    }
+    observed == SPRITE_QUAD_WORKLIST_POST_MARKER
+}
+
 fn submit_fill_rect_worklist(
     dst: GpgpuRgba8Surface,
     desc: GpgpuRectWorklistDescBuffer,
@@ -9534,6 +9663,113 @@ fn direct_rcs_encode_sprite_quad_worklist_batch(
     direct_rcs_encode_sprite_quad_worklist_command_stream(state, upload, walker_count, desc_count)
 }
 
+fn direct_rcs_encode_sprite_quad_worklist_runs_batch(
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    dst: GpgpuRgba8Surface,
+    desc: GpgpuRectWorklistDescBuffer,
+    runs: &[GpgpuSpriteQuadWorklistRun<'_>],
+) -> bool {
+    if runs.is_empty() || runs.len() > SPRITE_QUAD_WORKLIST_MAX_DESCS {
+        return false;
+    }
+    let total_descs = runs
+        .iter()
+        .try_fold(0usize, |total, run| total.checked_add(run.descs.len()));
+    let Some(total_descs) = total_descs else {
+        return false;
+    };
+    if total_descs == 0 || total_descs > SPRITE_QUAD_WORKLIST_MAX_DESCS {
+        return false;
+    }
+    if runs.iter().any(|run| run.descs.is_empty()) {
+        return false;
+    }
+
+    let state_bytes = runs
+        .len()
+        .checked_mul(SPRITE_QUAD_WORKLIST_RUN_STATE_BLOCK_BYTES);
+    let Some(state_bytes) = state_bytes else {
+        return false;
+    };
+    let Some(payload_base) = align_up(
+        RECT_WORKLIST_IDD_OFFSET_BYTES.saturating_add(state_bytes),
+        0x40,
+    ) else {
+        return false;
+    };
+    let payload_end =
+        payload_base.saturating_add(runs.len().saturating_mul(SPRITE_QUAD_WORKLIST_INDIRECT_BYTES));
+    if payload_end > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+
+    unsafe {
+        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
+        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+    }
+
+    let mut desc_base = 0usize;
+    for (run_index, run) in runs.iter().enumerate() {
+        let run_base = RECT_WORKLIST_IDD_OFFSET_BYTES
+            + run_index * SPRITE_QUAD_WORKLIST_RUN_STATE_BLOCK_BYTES;
+        let idd_offset = run_base + SPRITE_QUAD_WORKLIST_RUN_IDD_REL;
+        let binding_offset = run_base + SPRITE_QUAD_WORKLIST_RUN_BINDING_REL;
+        let src_surface_offset = run_base + SPRITE_QUAD_WORKLIST_RUN_SRC_SURFACE_REL;
+        let dst_surface_offset = run_base + SPRITE_QUAD_WORKLIST_RUN_DST_SURFACE_REL;
+        let desc_surface_offset = run_base + SPRITE_QUAD_WORKLIST_RUN_DESC_SURFACE_REL;
+        if !direct_rcs_write_sprite_quad_worklist_interface_descriptor_at(
+            state,
+            idd_offset,
+            binding_offset,
+        ) {
+            return false;
+        }
+        if !direct_rcs_write_alpha_blend_worklist_surface_states_at(
+            state,
+            binding_offset,
+            src_surface_offset,
+            dst_surface_offset,
+            desc_surface_offset,
+            run.src.gpu,
+            run.src.bytes,
+            dst.gpu,
+            dst.bytes,
+            desc.gpu,
+            desc.bytes,
+        ) {
+            return false;
+        }
+        let payload_offset =
+            payload_base + run_index.saturating_mul(SPRITE_QUAD_WORKLIST_INDIRECT_BYTES);
+        let params = SpriteQuadWorklistRgba8Params {
+            src_gpu: run.src.gpu,
+            dst_gpu: dst.gpu,
+            desc_gpu: desc.gpu,
+            src_pitch_bytes: run.src.pitch_bytes,
+            dst_pitch_bytes: dst.pitch_bytes,
+            src_width: run.src.width,
+            src_height: run.src.height,
+            dst_width: dst.width,
+            dst_height: dst.height,
+            desc_base: desc_base as u32,
+            desc_count: run.descs.len() as u32,
+        };
+        if !direct_rcs_write_sprite_quad_worklist_payload_at(state, payload_offset, params) {
+            return false;
+        }
+        desc_base = desc_base.saturating_add(run.descs.len());
+    }
+
+    direct_rcs_encode_sprite_quad_worklist_runs_command_stream(
+        state,
+        upload,
+        runs,
+        payload_base,
+    )
+}
+
 fn direct_rcs_encode_rect_worklist_command_stream(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
@@ -9622,6 +9858,95 @@ fn direct_rcs_encode_rect_worklist_command_stream(
     true
 }
 
+fn direct_rcs_encode_sprite_quad_worklist_runs_command_stream(
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    runs: &[GpgpuSpriteQuadWorklistRun<'_>],
+    payload_base: usize,
+) -> bool {
+    let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
+    let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
+    let mut cursor = 0usize;
+    let mut ok = true;
+
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL | 1,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_3D);
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
+    );
+    ok &= direct_rcs_push_state_base_address(
+        batch,
+        &mut cursor,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        upload.gpu,
+    );
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_VFE_STATE_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW3_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW5_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        SPRITE_QUAD_WORKLIST_PRE_MARKER_SLOT,
+        SPRITE_QUAD_WORKLIST_PRE_MARKER,
+    );
+    for (run_index, run) in runs.iter().enumerate() {
+        let idd_offset = RECT_WORKLIST_IDD_OFFSET_BYTES
+            + run_index * SPRITE_QUAD_WORKLIST_RUN_STATE_BLOCK_BYTES;
+        let payload_offset =
+            payload_base + run_index.saturating_mul(SPRITE_QUAD_WORKLIST_INDIRECT_BYTES);
+        ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
+        ok &= direct_rcs_push(batch, &mut cursor, 0);
+        ok &= direct_rcs_push(batch, &mut cursor, RECT_WORKLIST_IDD_BYTES as u32);
+        ok &= direct_rcs_push(batch, &mut cursor, idd_offset as u32);
+        ok &= direct_rcs_push_sprite_quad_worklist_walker(
+            batch,
+            &mut cursor,
+            payload_offset,
+            run.descs.len() as u32,
+            simd16_right_mask(16),
+        );
+        ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
+        ok &= direct_rcs_push(batch, &mut cursor, 0);
+    }
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
+        SPRITE_QUAD_WORKLIST_POST_MARKER,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, MI_BATCH_BUFFER_END);
+    ok &= direct_rcs_push(batch, &mut cursor, MI_NOOP);
+
+    if !ok {
+        return false;
+    }
+
+    super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
+    super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
+    true
+}
+
 fn direct_rcs_encode_sprite_quad_worklist_command_stream(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
@@ -9688,7 +10013,8 @@ fn direct_rcs_encode_sprite_quad_worklist_command_stream(
             batch,
             &mut cursor,
             payload_offset,
-            simd16_right_mask(local_count as u32),
+            local_count as u32,
+            simd16_right_mask(16),
         );
     }
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
@@ -11351,16 +11677,49 @@ fn direct_rcs_write_sprite_quad_worklist_interface_descriptor(state: DirectRcsSt
     )
 }
 
+fn direct_rcs_write_sprite_quad_worklist_interface_descriptor_at(
+    state: DirectRcsState,
+    idd_offset: usize,
+    binding_table_offset: usize,
+) -> bool {
+    direct_rcs_write_rect_worklist_interface_descriptor_at(
+        state,
+        idd_offset,
+        binding_table_offset,
+        SPRITE_QUAD_WORKLIST_RGBA8_TEXT_OFFSET_BYTES,
+        3,
+        SPRITE_QUAD_WORKLIST_CROSS_THREAD_GRFS,
+    )
+}
+
 fn direct_rcs_write_rect_worklist_interface_descriptor(
     state: DirectRcsState,
     text_offset_bytes: u64,
     binding_table_entries: u32,
     cross_thread_grfs: u32,
 ) -> bool {
-    if RECT_WORKLIST_IDD_OFFSET_BYTES + RECT_WORKLIST_IDD_BYTES > DIRECT_RCS_BATCH_BYTES {
+    direct_rcs_write_rect_worklist_interface_descriptor_at(
+        state,
+        RECT_WORKLIST_IDD_OFFSET_BYTES,
+        RECT_WORKLIST_BINDING_TABLE_OFFSET_BYTES,
+        text_offset_bytes,
+        binding_table_entries,
+        cross_thread_grfs,
+    )
+}
+
+fn direct_rcs_write_rect_worklist_interface_descriptor_at(
+    state: DirectRcsState,
+    idd_offset: usize,
+    binding_table_offset: usize,
+    text_offset_bytes: u64,
+    binding_table_entries: u32,
+    cross_thread_grfs: u32,
+) -> bool {
+    if idd_offset + RECT_WORKLIST_IDD_BYTES > DIRECT_RCS_BATCH_BYTES {
         return false;
     }
-    let idd = unsafe { state.batch_virt.add(RECT_WORKLIST_IDD_OFFSET_BYTES) as *mut u32 };
+    let idd = unsafe { state.batch_virt.add(idd_offset) as *mut u32 };
     unsafe {
         core::ptr::write_volatile(idd, text_offset_bytes as u32);
         core::ptr::write_volatile(idd.add(1), 0);
@@ -11368,7 +11727,7 @@ fn direct_rcs_write_rect_worklist_interface_descriptor(
         core::ptr::write_volatile(idd.add(3), 0);
         core::ptr::write_volatile(
             idd.add(4),
-            (RECT_WORKLIST_BINDING_TABLE_OFFSET_BYTES as u32) | binding_table_entries,
+            (binding_table_offset as u32) | binding_table_entries,
         );
         core::ptr::write_volatile(idd.add(5), 3 << 16);
         core::ptr::write_volatile(idd.add(6), GPGPU_WALKER_GROUP_THREADS);
@@ -11428,11 +11787,39 @@ fn direct_rcs_write_alpha_blend_worklist_surface_states(
     desc_gpu: u64,
     desc_bytes: usize,
 ) -> bool {
-    let binding_end = RECT_WORKLIST_BINDING_TABLE_OFFSET_BYTES + 3 * core::mem::size_of::<u32>();
+    direct_rcs_write_alpha_blend_worklist_surface_states_at(
+        state,
+        RECT_WORKLIST_BINDING_TABLE_OFFSET_BYTES,
+        RECT_WORKLIST_SRC_SURFACE_STATE_OFFSET_BYTES,
+        RECT_WORKLIST_DST_SURFACE_STATE_OFFSET_BYTES,
+        RECT_WORKLIST_DESC_SURFACE_STATE_OFFSET_BYTES,
+        src_gpu,
+        src_bytes,
+        dst_gpu,
+        dst_bytes,
+        desc_gpu,
+        desc_bytes,
+    )
+}
+
+fn direct_rcs_write_alpha_blend_worklist_surface_states_at(
+    state: DirectRcsState,
+    binding_table_offset: usize,
+    src_surface_state_offset: usize,
+    dst_surface_state_offset: usize,
+    desc_surface_state_offset: usize,
+    src_gpu: u64,
+    src_bytes: usize,
+    dst_gpu: u64,
+    dst_bytes: usize,
+    desc_gpu: u64,
+    desc_bytes: usize,
+) -> bool {
+    let binding_end = binding_table_offset + 3 * core::mem::size_of::<u32>();
     let surface_bytes = COPY_RECT_SURFACE_STATE_DWORDS * core::mem::size_of::<u32>();
-    let src_surface_end = RECT_WORKLIST_SRC_SURFACE_STATE_OFFSET_BYTES + surface_bytes;
-    let dst_surface_end = RECT_WORKLIST_DST_SURFACE_STATE_OFFSET_BYTES + surface_bytes;
-    let desc_surface_end = RECT_WORKLIST_DESC_SURFACE_STATE_OFFSET_BYTES + surface_bytes;
+    let src_surface_end = src_surface_state_offset + surface_bytes;
+    let dst_surface_end = dst_surface_state_offset + surface_bytes;
+    let desc_surface_end = desc_surface_state_offset + surface_bytes;
     if binding_end > DIRECT_RCS_BATCH_BYTES
         || src_surface_end > DIRECT_RCS_BATCH_BYTES
         || dst_surface_end > DIRECT_RCS_BATCH_BYTES
@@ -11444,31 +11831,28 @@ fn direct_rcs_write_alpha_blend_worklist_surface_states(
     unsafe {
         let binding = state
             .batch_virt
-            .add(RECT_WORKLIST_BINDING_TABLE_OFFSET_BYTES) as *mut u32;
-        core::ptr::write_volatile(binding, RECT_WORKLIST_SRC_SURFACE_STATE_OFFSET_BYTES as u32);
-        core::ptr::write_volatile(
-            binding.add(1),
-            RECT_WORKLIST_DST_SURFACE_STATE_OFFSET_BYTES as u32,
-        );
+            .add(binding_table_offset) as *mut u32;
+        core::ptr::write_volatile(binding, src_surface_state_offset as u32);
+        core::ptr::write_volatile(binding.add(1), dst_surface_state_offset as u32);
         core::ptr::write_volatile(
             binding.add(2),
-            RECT_WORKLIST_DESC_SURFACE_STATE_OFFSET_BYTES as u32,
+            desc_surface_state_offset as u32,
         );
     }
 
     direct_rcs_write_buffer_surface_state(
         state,
-        RECT_WORKLIST_SRC_SURFACE_STATE_OFFSET_BYTES,
+        src_surface_state_offset,
         src_gpu,
         src_bytes,
     ) && direct_rcs_write_buffer_surface_state(
         state,
-        RECT_WORKLIST_DST_SURFACE_STATE_OFFSET_BYTES,
+        dst_surface_state_offset,
         dst_gpu,
         dst_bytes,
     ) && direct_rcs_write_buffer_surface_state(
         state,
-        RECT_WORKLIST_DESC_SURFACE_STATE_OFFSET_BYTES,
+        desc_surface_state_offset,
         desc_gpu,
         desc_bytes,
     )
@@ -12707,8 +13091,12 @@ fn direct_rcs_push_sprite_quad_worklist_walker(
     batch: &mut [u32],
     cursor: &mut usize,
     payload_offset: usize,
+    group_x: u32,
     right_mask: u32,
 ) -> bool {
+    if group_x == 0 || group_x as usize > SPRITE_QUAD_WORKLIST_MAX_GROUPS_PER_WALKER {
+        return false;
+    }
     direct_rcs_push(batch, cursor, GPGPU_WALKER_CMD)
         && direct_rcs_push(batch, cursor, 0)
         && direct_rcs_push(batch, cursor, SPRITE_QUAD_WORKLIST_INDIRECT_BYTES as u32)
@@ -12720,7 +13108,7 @@ fn direct_rcs_push_sprite_quad_worklist_walker(
         )
         && direct_rcs_push(batch, cursor, 0)
         && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, 1)
+        && direct_rcs_push(batch, cursor, group_x)
         && direct_rcs_push(batch, cursor, 0)
         && direct_rcs_push(batch, cursor, 0)
         && direct_rcs_push(batch, cursor, 1)

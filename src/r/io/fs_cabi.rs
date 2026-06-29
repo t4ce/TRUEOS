@@ -265,8 +265,21 @@ fn fs_rc_name(rc: i32) -> &'static str {
     core::str::from_utf8(cabi_rc_name(rc)).unwrap_or("UNKNOWN")
 }
 
-fn log_fs_cabi_path_fail(op: &str, raw: &str, resolved: Option<&str>, detail: &str, rc: i32) {
+#[inline]
+fn should_log_fs_cabi_path_fail(op: &str, rc: i32) -> bool {
     if rc >= 0 {
+        return false;
+    }
+
+    if rc == FS_ERR_NOT_FOUND && matches!(op, "read_len" | "read_chunk") {
+        return false;
+    }
+
+    true
+}
+
+fn log_fs_cabi_path_fail(op: &str, raw: &str, resolved: Option<&str>, detail: &str, rc: i32) {
+    if !should_log_fs_cabi_path_fail(op, rc) {
         return;
     }
     match resolved {
