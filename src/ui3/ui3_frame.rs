@@ -10,6 +10,12 @@ use crate::intel::types::{
     UiPresentPath, UiRect, UiSurfaceFormat, read_solid_rect_bytes, read_sprite_quad_bytes,
 };
 
+const UI3_EXPERIMENTAL_GPU_SPRITES: bool = true;
+const UI3_GPU_SPRITE_DESC_BATCH_CAP: usize = 256;
+const UI3_GPU_SPRITE_TILE_PIXELS: f32 = 64.0;
+const UI3_GPU_SPRITE_TILE_MIN_AREA: i32 = 4096;
+const UI3_GPU_SPRITE_TILE_MAX_AXIS: usize = 16;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Ui3RenderTarget {
     Frame,
@@ -37,11 +43,23 @@ struct CpuImage {
     width: u32,
     height: u32,
     rgba: Vec<u8>,
+    surface: Option<crate::r::ui_surface::UiSurfaceHandle>,
+}
+
+struct PendingGpuSpriteBatch {
+    frame_id: u32,
+    target: Ui3RenderTarget,
+    src_tex_id: u32,
+    src_surface: crate::intel::gpgpu::GpgpuRgba8Surface,
+    dst_surface: crate::intel::gpgpu::GpgpuRgba8Surface,
+    descs: Vec<crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc>,
+    payload: Vec<u8>,
 }
 
 static NEXT_FRAME_ID: AtomicU32 = AtomicU32::new(1);
 static FRAMES: Mutex<BTreeMap<u32, Ui3Frame>> = Mutex::new(BTreeMap::new());
 static OFFSCREEN: Mutex<BTreeMap<u32, CpuImage>> = Mutex::new(BTreeMap::new());
+static PENDING_GPU_SPRITES: Mutex<Option<PendingGpuSpriteBatch>> = Mutex::new(None);
 static UI3_FRAME_CREATES: AtomicU64 = AtomicU64::new(0);
 static UI3_FRAME_BEGINS: AtomicU64 = AtomicU64::new(0);
 static UI3_FRAME_ENDS: AtomicU64 = AtomicU64::new(0);
@@ -57,6 +75,12 @@ static UI3_OFFSCREEN_ALLOCS: AtomicU64 = AtomicU64::new(0);
 static UI3_BEGIN_NS: AtomicU64 = AtomicU64::new(0);
 static UI3_DRAW_SOLID_NS: AtomicU64 = AtomicU64::new(0);
 static UI3_DRAW_SPRITE_NS: AtomicU64 = AtomicU64::new(0);
+static UI3_DRAW_SPRITE_GPU_CALLS: AtomicU64 = AtomicU64::new(0);
+static UI3_DRAW_SPRITE_GPU_DESCS: AtomicU64 = AtomicU64::new(0);
+static UI3_DRAW_SPRITE_GPU_FALLBACKS: AtomicU64 = AtomicU64::new(0);
+static UI3_DRAW_SPRITE_GPU_FALLBACK_LOGS: AtomicU64 = AtomicU64::new(0);
+static UI3_DRAW_SPRITE_GPU_TILED_QUADS: AtomicU64 = AtomicU64::new(0);
+static UI3_DRAW_SPRITE_GPU_TILED_DESCS: AtomicU64 = AtomicU64::new(0);
 static UI3_PRESENT_FLUSH_NS: AtomicU64 = AtomicU64::new(0);
 static UI3_PRESENT_SURFACE_NS: AtomicU64 = AtomicU64::new(0);
 static UI3_COMMIT_NS: AtomicU64 = AtomicU64::new(0);
@@ -65,12 +89,12 @@ pub(crate) fn create_frame(x: i32, y: i32, width: u32, height: u32, tex_id: u32)
     let width = width.max(1);
     let height = height.max(1);
     let Ok(front_surface) =
-        crate::r::ui_surface::create_surface(width, height, UiSurfaceFormat::Xrgb8888)
+        crate::r::ui_surface::create_surface(width, height, UiSurfaceFormat::Rgba8888)
     else {
         return 0;
     };
     let Ok(back_surface) =
-        crate::r::ui_surface::create_surface(width, height, UiSurfaceFormat::Xrgb8888)
+        crate::r::ui_surface::create_surface(width, height, UiSurfaceFormat::Rgba8888)
     else {
         crate::r::ui_surface::destroy_surface(front_surface);
         return 0;
@@ -114,11 +138,14 @@ pub(crate) fn create_frame(x: i32, y: i32, width: u32, height: u32, tex_id: u32)
 }
 
 pub(crate) fn close_frame(frame_id: u32) -> bool {
+    flush_pending_gpu_sprites_for_frame(frame_id);
     let Some(frame) = FRAMES.lock().remove(&frame_id) else {
         return false;
     };
     if frame.tex_id != 0 {
-        OFFSCREEN.lock().remove(&frame.tex_id);
+        if let Some(image) = OFFSCREEN.lock().remove(&frame.tex_id) {
+            destroy_cpu_image(image);
+        }
     }
     let front_ok = crate::r::ui_surface::destroy_surface(frame.front_surface);
     let back_ok = crate::r::ui_surface::destroy_surface(frame.back_surface);
@@ -138,6 +165,7 @@ pub(crate) fn set_position(frame_id: u32, x: i32, y: i32) -> bool {
 pub(crate) fn set_size(frame_id: u32, width: u32, height: u32) -> bool {
     let width = width.max(1);
     let height = height.max(1);
+    flush_pending_gpu_sprites_for_frame(frame_id);
     let mut frames = FRAMES.lock();
     let Some(frame) = frames.get_mut(&frame_id) else {
         return false;
@@ -146,12 +174,12 @@ pub(crate) fn set_size(frame_id: u32, width: u32, height: u32) -> bool {
         return true;
     }
     let Ok(front_surface) =
-        crate::r::ui_surface::create_surface(width, height, UiSurfaceFormat::Xrgb8888)
+        crate::r::ui_surface::create_surface(width, height, UiSurfaceFormat::Rgba8888)
     else {
         return false;
     };
     let Ok(back_surface) =
-        crate::r::ui_surface::create_surface(width, height, UiSurfaceFormat::Xrgb8888)
+        crate::r::ui_surface::create_surface(width, height, UiSurfaceFormat::Rgba8888)
     else {
         crate::r::ui_surface::destroy_surface(front_surface);
         return false;
@@ -182,6 +210,7 @@ pub(crate) fn begin_frame(
     preserve_contents: bool,
     allow_present: bool,
 ) -> i32 {
+    flush_pending_gpu_sprites_for_frame(frame_id);
     let begin_start_ns = now_ns();
     let (front_surface, back_surface) = {
         let mut frames = FRAMES.lock();
@@ -211,6 +240,7 @@ pub(crate) fn begin_frame(
 }
 
 pub(crate) fn end_frame(frame_id: u32) -> i32 {
+    flush_pending_gpu_sprites_for_frame(frame_id);
     let allow_present = {
         let mut frames = FRAMES.lock();
         let Some(frame) = frames.get_mut(&frame_id) else {
@@ -235,6 +265,7 @@ pub(crate) fn end_frame(frame_id: u32) -> i32 {
 }
 
 pub(crate) fn set_render_target(frame_id: u32, tex_id: u32) -> i32 {
+    flush_pending_gpu_sprites_for_frame(frame_id);
     let (target, clear, clear_rgb, width, height) = {
         let mut frames = FRAMES.lock();
         let Some(frame) = frames.get_mut(&frame_id) else {
@@ -266,6 +297,7 @@ pub(crate) fn draw_solid_batch(frame_id: u32, bytes: &[u8]) -> i32 {
     if bytes.len() % SOLID_RECT_SIZE != 0 {
         return -3;
     }
+    flush_pending_gpu_sprites_for_frame(frame_id);
     let draw_start_ns = now_ns();
     UI3_DRAW_SOLID_CALLS.fetch_add(1, Ordering::Relaxed);
     UI3_DRAW_SOLID_BYTES.fetch_add(bytes.len() as u64, Ordering::Relaxed);
@@ -297,14 +329,7 @@ pub(crate) fn draw_solid_batch(frame_id: u32, bytes: &[u8]) -> i32 {
             let image = offscreen
                 .entry(tex_id)
                 .or_insert_with(|| new_cpu_image(frame.width, frame.height));
-            paint_solid_batch(
-                &mut image.rgba,
-                image.width as usize * 4,
-                image.width,
-                image.height,
-                UiSurfaceFormat::Rgba8888,
-                bytes,
-            );
+            paint_solid_batch_to_image(image, bytes);
         }
     }
     UI3_DRAW_SOLID_NS.fetch_add(elapsed_ns_since(draw_start_ns), Ordering::Relaxed);
@@ -324,13 +349,32 @@ pub(crate) fn draw_sprite_batch(frame_id: u32, tex_id: u32, bytes: &[u8]) -> i32
     if !frame.active {
         return -2;
     }
-    let Some(src) = texture_source(tex_id) else {
+    flush_pending_gpu_sprites_for_frame(frame_id);
+    let Some((src_width, src_height)) = texture_dimensions(tex_id) else {
         UI3_TEXTURE_MISSES.fetch_add(1, Ordering::Relaxed);
         return 0;
     };
 
     match frame.target {
         Ui3RenderTarget::Frame => {
+            if queue_gpu_sprite_batch_to_frame(
+                frame_id,
+                frame.back_surface,
+                tex_id,
+                src_width,
+                src_height,
+                frame.width,
+                frame.height,
+                bytes,
+            ) {
+                UI3_DRAW_SPRITE_NS.fetch_add(elapsed_ns_since(draw_start_ns), Ordering::Relaxed);
+                return 0;
+            }
+            flush_pending_gpu_sprites_for_frame(frame_id);
+            let Some(src) = texture_source(tex_id) else {
+                UI3_TEXTURE_MISSES.fetch_add(1, Ordering::Relaxed);
+                return 0;
+            };
             let Some(access) = crate::r::ui_surface::pixel_access(frame.back_surface) else {
                 return -1;
             };
@@ -347,19 +391,29 @@ pub(crate) fn draw_sprite_batch(frame_id: u32, tex_id: u32, bytes: &[u8]) -> i32
             let _ = crate::r::ui_surface::flush_surface(frame.back_surface);
         }
         Ui3RenderTarget::Texture(dst_tex_id) => {
+            if queue_gpu_sprite_batch_to_texture(
+                frame_id,
+                dst_tex_id,
+                tex_id,
+                src_width,
+                src_height,
+                frame.width,
+                frame.height,
+                bytes,
+            ) {
+                UI3_DRAW_SPRITE_NS.fetch_add(elapsed_ns_since(draw_start_ns), Ordering::Relaxed);
+                return 0;
+            }
+            flush_pending_gpu_sprites_for_frame(frame_id);
+            let Some(src) = texture_source(tex_id) else {
+                UI3_TEXTURE_MISSES.fetch_add(1, Ordering::Relaxed);
+                return 0;
+            };
             let mut offscreen = OFFSCREEN.lock();
             let image = offscreen
                 .entry(dst_tex_id)
                 .or_insert_with(|| new_cpu_image(frame.width, frame.height));
-            paint_sprite_batch(
-                &mut image.rgba,
-                image.width as usize * 4,
-                image.width,
-                image.height,
-                UiSurfaceFormat::Rgba8888,
-                &src,
-                bytes,
-            );
+            paint_sprite_batch_to_image(image, &src, bytes);
         }
     }
     UI3_DRAW_SPRITE_NS.fetch_add(elapsed_ns_since(draw_start_ns), Ordering::Relaxed);
@@ -367,6 +421,7 @@ pub(crate) fn draw_sprite_batch(frame_id: u32, tex_id: u32, bytes: &[u8]) -> i32
 }
 
 fn present_frame(frame_id: u32, swap_on_success: bool) -> bool {
+    flush_pending_gpu_sprites_for_frame(frame_id);
     let frame = {
         let frames = FRAMES.lock();
         let Some(frame) = frames.get(&frame_id) else {
@@ -419,6 +474,7 @@ fn present_frame(frame_id: u32, swap_on_success: bool) -> bool {
 }
 
 fn commit_frame_without_present(frame_id: u32) -> bool {
+    flush_pending_gpu_sprites_for_frame(frame_id);
     let commit_start_ns = now_ns();
     let frame = {
         let frames = FRAMES.lock();
@@ -438,7 +494,7 @@ fn log_present_stats(count: u64, frame_id: u32, frame: Ui3Frame, path: UiPresent
         return;
     }
     crate::log!(
-        "ui3/frame: present#{} frame={} path={:?} size={}x{} dst={},{} begin={} end={} sprite_calls={} sprite_bytes={} sprite_ms={} sprite_avg_us={} solid_calls={} solid_bytes={} solid_ms={} solid_avg_us={} begin_ms={} present_flush_ms={} present_surface_ms={} present_avg_ms={} commit_ms={} target_switches={} offscreen_allocs={} sprite_misses={}\n",
+        "ui3/frame: present#{} frame={} path={:?} size={}x{} dst={},{} begin={} end={} sprite_calls={} sprite_bytes={} sprite_ms={} sprite_avg_us={} sprite_gpu_calls={} sprite_gpu_descs={} sprite_gpu_fallbacks={} sprite_gpu_tiled_quads={} sprite_gpu_tiled_descs={} solid_calls={} solid_bytes={} solid_ms={} solid_avg_us={} begin_ms={} present_flush_ms={} present_surface_ms={} present_avg_ms={} commit_ms={} target_switches={} offscreen_allocs={} sprite_misses={}\n",
         count,
         frame_id,
         path,
@@ -455,6 +511,11 @@ fn log_present_stats(count: u64, frame_id: u32, frame: Ui3Frame, path: UiPresent
             UI3_DRAW_SPRITE_NS.load(Ordering::Relaxed),
             UI3_DRAW_SPRITE_CALLS.load(Ordering::Relaxed)
         ),
+        UI3_DRAW_SPRITE_GPU_CALLS.load(Ordering::Relaxed),
+        UI3_DRAW_SPRITE_GPU_DESCS.load(Ordering::Relaxed),
+        UI3_DRAW_SPRITE_GPU_FALLBACKS.load(Ordering::Relaxed),
+        UI3_DRAW_SPRITE_GPU_TILED_QUADS.load(Ordering::Relaxed),
+        UI3_DRAW_SPRITE_GPU_TILED_DESCS.load(Ordering::Relaxed),
         UI3_DRAW_SOLID_CALLS.load(Ordering::Relaxed),
         UI3_DRAW_SOLID_BYTES.load(Ordering::Relaxed),
         ns_to_ms(UI3_DRAW_SOLID_NS.load(Ordering::Relaxed)),
@@ -580,17 +641,12 @@ fn ensure_offscreen(tex_id: u32, width: u32, height: u32, clear: bool, clear_rgb
         UI3_OFFSCREEN_ALLOCS.fetch_add(1, Ordering::Relaxed);
     }
     if image.width != width || image.height != height {
-        *image = new_cpu_image(width, height);
+        let old = core::mem::replace(image, new_cpu_image(width, height));
+        destroy_cpu_image(old);
         UI3_OFFSCREEN_ALLOCS.fetch_add(1, Ordering::Relaxed);
     }
     if clear {
-        clear_pixels(
-            &mut image.rgba,
-            image.width,
-            image.height,
-            image.width as usize * 4,
-            clear_rgb,
-        );
+        clear_cpu_image(image, clear_rgb);
     }
 }
 
@@ -602,22 +658,524 @@ fn new_cpu_image(width: u32, height: u32) -> CpuImage {
         .saturating_mul(4);
     let mut rgba = Vec::new();
     rgba.resize(len, 0);
+    let surface = if UI3_EXPERIMENTAL_GPU_SPRITES {
+        crate::r::ui_surface::create_surface(width, height, UiSurfaceFormat::Rgba8888)
+            .ok()
+            .inspect(|surface| {
+                let _ = crate::r::ui_surface::clear_surface_rgb(*surface, 0);
+            })
+    } else {
+        None
+    };
     CpuImage {
         width,
         height,
         rgba,
+        surface,
     }
 }
 
+fn destroy_cpu_image(image: CpuImage) {
+    if let Some(surface) = image.surface {
+        let _ = crate::r::ui_surface::destroy_surface(surface);
+    }
+}
+
+fn clear_cpu_image(image: &mut CpuImage, clear_rgb: u32) {
+    if let Some(surface) = image.surface {
+        let _ = crate::r::ui_surface::clear_surface_rgb(surface, clear_rgb & 0x00FF_FFFF);
+    } else {
+        clear_pixels(
+            &mut image.rgba,
+            image.width,
+            image.height,
+            image.width as usize * 4,
+            clear_rgb,
+        );
+    }
+}
+
+fn paint_solid_batch_to_image(image: &mut CpuImage, bytes: &[u8]) {
+    if let Some(surface) = image.surface
+        && let Some(access) = crate::r::ui_surface::pixel_access(surface)
+    {
+        let dst = unsafe { core::slice::from_raw_parts_mut(access.virt, access.byte_len) };
+        paint_solid_batch(
+            dst,
+            access.pitch as usize,
+            access.width,
+            access.height,
+            access.format,
+            bytes,
+        );
+        let _ = crate::r::ui_surface::flush_surface(surface);
+        return;
+    }
+    paint_solid_batch(
+        &mut image.rgba,
+        image.width as usize * 4,
+        image.width,
+        image.height,
+        UiSurfaceFormat::Rgba8888,
+        bytes,
+    );
+}
+
+fn paint_sprite_batch_to_image(image: &mut CpuImage, src: &CpuImage, bytes: &[u8]) {
+    if let Some(surface) = image.surface
+        && let Some(access) = crate::r::ui_surface::pixel_access(surface)
+    {
+        let dst = unsafe { core::slice::from_raw_parts_mut(access.virt, access.byte_len) };
+        paint_sprite_batch(
+            dst,
+            access.pitch as usize,
+            access.width,
+            access.height,
+            access.format,
+            src,
+            bytes,
+        );
+        let _ = crate::r::ui_surface::flush_surface(surface);
+        return;
+    }
+    paint_sprite_batch(
+        &mut image.rgba,
+        image.width as usize * 4,
+        image.width,
+        image.height,
+        UiSurfaceFormat::Rgba8888,
+        src,
+        bytes,
+    );
+}
+
+fn clone_cpu_image_from_surface(image: &CpuImage) -> Option<CpuImage> {
+    let surface = image.surface?;
+    let access = crate::r::ui_surface::pixel_access(surface)?;
+    if access.format != UiSurfaceFormat::Rgba8888 {
+        return None;
+    }
+    let row_bytes = (access.width as usize).checked_mul(4)?;
+    let mut rgba = Vec::new();
+    rgba.resize(row_bytes.checked_mul(access.height as usize)?, 0);
+    let src = unsafe { core::slice::from_raw_parts(access.virt, access.byte_len) };
+    for y in 0..access.height as usize {
+        let src_off = y.checked_mul(access.pitch as usize)?;
+        let dst_off = y.checked_mul(row_bytes)?;
+        if src_off.checked_add(row_bytes)? > src.len()
+            || dst_off.checked_add(row_bytes)? > rgba.len()
+        {
+            return None;
+        }
+        rgba[dst_off..dst_off + row_bytes].copy_from_slice(&src[src_off..src_off + row_bytes]);
+    }
+    Some(CpuImage {
+        width: access.width,
+        height: access.height,
+        rgba,
+        surface: image.surface,
+    })
+}
+
+fn texture_dimensions(tex_id: u32) -> Option<(u32, u32)> {
+    if let Some(image) = OFFSCREEN.lock().get(&tex_id) {
+        return Some((image.width, image.height));
+    }
+    crate::ui3::ui3_img::image_dimensions(tex_id)
+}
+
 fn texture_source(tex_id: u32) -> Option<CpuImage> {
-    if let Some(image) = OFFSCREEN.lock().get(&tex_id).cloned() {
-        return Some(image);
+    if let Some(image) = OFFSCREEN.lock().get(&tex_id) {
+        return clone_cpu_image_from_surface(image).or_else(|| Some(image.clone()));
     }
     crate::ui3::ui3_img::image_clone(tex_id).map(|image| CpuImage {
         width: image.width,
         height: image.height,
         rgba: image.rgba,
+        surface: None,
     })
+}
+
+fn texture_gpgpu_surface(tex_id: u32) -> Option<crate::intel::gpgpu::GpgpuRgba8Surface> {
+    if let Some(surface) = OFFSCREEN
+        .lock()
+        .get(&tex_id)
+        .and_then(|image| image.surface)
+    {
+        return crate::r::ui_surface::gpgpu_rgba_surface(surface);
+    }
+    crate::ui3::ui3_img::image_gpgpu_surface(tex_id)
+}
+
+fn offscreen_gpgpu_surface(
+    tex_id: u32,
+    width: u32,
+    height: u32,
+) -> Option<crate::intel::gpgpu::GpgpuRgba8Surface> {
+    ensure_offscreen(tex_id, width, height, false, 0);
+    let surface = OFFSCREEN
+        .lock()
+        .get(&tex_id)
+        .and_then(|image| image.surface)?;
+    crate::r::ui_surface::gpgpu_rgba_surface(surface)
+}
+
+fn queue_gpu_sprite_batch_to_frame(
+    frame_id: u32,
+    dst_handle: crate::r::ui_surface::UiSurfaceHandle,
+    tex_id: u32,
+    src_width: u32,
+    src_height: u32,
+    dst_width: u32,
+    dst_height: u32,
+    bytes: &[u8],
+) -> bool {
+    if !UI3_EXPERIMENTAL_GPU_SPRITES {
+        record_gpu_sprite_fallback("disabled");
+        return false;
+    }
+    if !crate::intel::gpgpu::sprite_quad_worklist_ready() {
+        record_gpu_sprite_fallback("probe-not-ready");
+        return false;
+    }
+    let Some(src_surface) = texture_gpgpu_surface(tex_id) else {
+        record_gpu_sprite_fallback("src-surface");
+        return false;
+    };
+    let Some(dst_surface) = crate::r::ui_surface::gpgpu_rgba_surface(dst_handle) else {
+        record_gpu_sprite_fallback("dst-surface");
+        return false;
+    };
+    queue_gpu_sprite_batch(
+        frame_id,
+        Ui3RenderTarget::Frame,
+        tex_id,
+        src_surface,
+        dst_surface,
+        src_width,
+        src_height,
+        dst_width,
+        dst_height,
+        bytes,
+    )
+}
+
+fn queue_gpu_sprite_batch_to_texture(
+    frame_id: u32,
+    dst_tex_id: u32,
+    tex_id: u32,
+    src_width: u32,
+    src_height: u32,
+    width: u32,
+    height: u32,
+    bytes: &[u8],
+) -> bool {
+    if !UI3_EXPERIMENTAL_GPU_SPRITES {
+        record_gpu_sprite_fallback("disabled");
+        return false;
+    }
+    if !crate::intel::gpgpu::sprite_quad_worklist_ready() {
+        record_gpu_sprite_fallback("probe-not-ready");
+        return false;
+    }
+    let Some(src_surface) = texture_gpgpu_surface(tex_id) else {
+        record_gpu_sprite_fallback("src-surface");
+        return false;
+    };
+    let Some(dst_surface) = offscreen_gpgpu_surface(dst_tex_id, width, height) else {
+        record_gpu_sprite_fallback("dst-surface");
+        return false;
+    };
+    queue_gpu_sprite_batch(
+        frame_id,
+        Ui3RenderTarget::Texture(dst_tex_id),
+        tex_id,
+        src_surface,
+        dst_surface,
+        src_width,
+        src_height,
+        width,
+        height,
+        bytes,
+    )
+}
+
+fn queue_gpu_sprite_batch(
+    frame_id: u32,
+    target: Ui3RenderTarget,
+    tex_id: u32,
+    src_surface: crate::intel::gpgpu::GpgpuRgba8Surface,
+    dst_surface: crate::intel::gpgpu::GpgpuRgba8Surface,
+    _src_width: u32,
+    _src_height: u32,
+    _dst_width: u32,
+    _dst_height: u32,
+    bytes: &[u8],
+) -> bool {
+    let quad_count = bytes.len() / SPRITE_QUAD_SIZE;
+    if quad_count == 0 {
+        return true;
+    }
+    let mut descs = Vec::with_capacity(quad_count);
+    let mut off = 0usize;
+    while off + SPRITE_QUAD_SIZE <= bytes.len() {
+        let Some(quad) = read_sprite_quad_bytes(bytes, off) else {
+            record_gpu_sprite_fallback("bad-payload");
+            return false;
+        };
+        if !push_sprite_quad_descs_for_gpu(quad, dst_surface.width, dst_surface.height, &mut descs)
+        {
+            record_gpu_sprite_fallback("bad-quad");
+            return false;
+        }
+        if descs.len() > UI3_GPU_SPRITE_DESC_BATCH_CAP {
+            record_gpu_sprite_fallback("too-many-descs");
+            return false;
+        }
+        off += SPRITE_QUAD_SIZE;
+    }
+    if descs.is_empty() {
+        return true;
+    }
+    let mut pending = PENDING_GPU_SPRITES.lock();
+    let can_append = pending.as_ref().is_some_and(|batch| {
+        batch.frame_id == frame_id
+            && batch.target == target
+            && batch.src_tex_id == tex_id
+            && batch.src_surface.gpu == src_surface.gpu
+            && batch.dst_surface.gpu == dst_surface.gpu
+            && batch.descs.len().saturating_add(descs.len()) <= UI3_GPU_SPRITE_DESC_BATCH_CAP
+    });
+    if !can_append {
+        drop(pending);
+        flush_pending_gpu_sprites();
+        pending = PENDING_GPU_SPRITES.lock();
+    }
+    if let Some(batch) = pending.as_mut() {
+        batch.descs.extend(descs);
+        batch.payload.extend_from_slice(bytes);
+    } else {
+        *pending = Some(PendingGpuSpriteBatch {
+            frame_id,
+            target,
+            src_tex_id: tex_id,
+            src_surface,
+            dst_surface,
+            descs,
+            payload: bytes.to_vec(),
+        });
+    }
+    true
+}
+
+fn flush_pending_gpu_sprites_for_frame(frame_id: u32) {
+    let should_flush = PENDING_GPU_SPRITES
+        .lock()
+        .as_ref()
+        .is_some_and(|batch| batch.frame_id == frame_id);
+    if should_flush {
+        flush_pending_gpu_sprites();
+    }
+}
+
+fn flush_pending_gpu_sprites() {
+    let Some(batch) = PENDING_GPU_SPRITES.lock().take() else {
+        return;
+    };
+    if batch.descs.is_empty() {
+        return;
+    }
+    let submit_start_ns = now_ns();
+    let stats = crate::intel::gpgpu::sprite_quad_worklist_rgba8_over_stats(
+        batch.src_surface,
+        batch.dst_surface,
+        batch.descs.as_slice(),
+    );
+    UI3_DRAW_SPRITE_NS.fetch_add(elapsed_ns_since(submit_start_ns), Ordering::Relaxed);
+    if stats.descs != batch.descs.len() {
+        record_gpu_sprite_fallback("submit");
+        cpu_fallback_pending_gpu_sprites(&batch);
+        return;
+    }
+    UI3_DRAW_SPRITE_GPU_CALLS.fetch_add(stats.submits as u64, Ordering::Relaxed);
+    UI3_DRAW_SPRITE_GPU_DESCS.fetch_add(stats.descs as u64, Ordering::Relaxed);
+}
+
+fn push_sprite_quad_descs_for_gpu(
+    quad: SpriteQuad,
+    dst_width: u32,
+    dst_height: u32,
+    out: &mut Vec<crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc>,
+) -> bool {
+    let c0 = quad.c0;
+    let c1 = quad.c1;
+    let c2 = quad.c2;
+    let c3 = quad.c3;
+    if !sprite_corner_is_finite(c0)
+        || !sprite_corner_is_finite(c1)
+        || !sprite_corner_is_finite(c2)
+        || !sprite_corner_is_finite(c3)
+    {
+        return false;
+    }
+
+    let Some((bbox_w, bbox_h)) = sprite_quad_clipped_bbox_size(quad, dst_width, dst_height) else {
+        return true;
+    };
+    let bbox_area = bbox_w.saturating_mul(bbox_h);
+    if bbox_area <= UI3_GPU_SPRITE_TILE_MIN_AREA {
+        out.push(lower_sprite_quad_desc_unchecked(quad));
+        return true;
+    }
+
+    let cols = (ceilf(bbox_w as f32 / UI3_GPU_SPRITE_TILE_PIXELS) as usize)
+        .clamp(1, UI3_GPU_SPRITE_TILE_MAX_AXIS);
+    let rows = (ceilf(bbox_h as f32 / UI3_GPU_SPRITE_TILE_PIXELS) as usize)
+        .clamp(1, UI3_GPU_SPRITE_TILE_MAX_AXIS);
+    if cols == 1 && rows == 1 {
+        out.push(lower_sprite_quad_desc_unchecked(quad));
+        return true;
+    }
+
+    let before = out.len();
+    for row in 0..rows {
+        let t0 = row as f32 / rows as f32;
+        let t1 = (row + 1) as f32 / rows as f32;
+        for col in 0..cols {
+            let s0 = col as f32 / cols as f32;
+            let s1 = (col + 1) as f32 / cols as f32;
+            out.push(lower_sprite_quad_desc_unchecked(SpriteQuad {
+                c0: sprite_corner_lerp2(c0, c1, c3, s0, t0),
+                c1: sprite_corner_lerp2(c0, c1, c3, s1, t0),
+                c2: sprite_corner_lerp2(c0, c1, c3, s1, t1),
+                c3: sprite_corner_lerp2(c0, c1, c3, s0, t1),
+                color: quad.color,
+            }));
+        }
+    }
+    let added = out.len().saturating_sub(before);
+    if added > 1 {
+        UI3_DRAW_SPRITE_GPU_TILED_QUADS.fetch_add(1, Ordering::Relaxed);
+        UI3_DRAW_SPRITE_GPU_TILED_DESCS.fetch_add(added as u64, Ordering::Relaxed);
+    }
+    true
+}
+
+fn lower_sprite_quad_desc_unchecked(
+    quad: SpriteQuad,
+) -> crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc {
+    let c0 = quad.c0;
+    let c1 = quad.c1;
+    let c2 = quad.c2;
+    let c3 = quad.c3;
+    let color_rgba = rgba_to_gpgpu_word(quad.color);
+    crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc {
+        c0_x: c0.x,
+        c0_y: c0.y,
+        c0_u: c0.u,
+        c0_v: c0.v,
+        c1_x: c1.x,
+        c1_y: c1.y,
+        c1_u: c1.u,
+        c1_v: c1.v,
+        c2_x: c2.x,
+        c2_y: c2.y,
+        c2_u: c2.u,
+        c2_v: c2.v,
+        c3_x: c3.x,
+        c3_y: c3.y,
+        c3_u: c3.u,
+        c3_v: c3.v,
+        color_rgba,
+        flags: crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER,
+    }
+}
+
+fn sprite_quad_clipped_bbox_size(
+    quad: SpriteQuad,
+    dst_width: u32,
+    dst_height: u32,
+) -> Option<(i32, i32)> {
+    let c0 = quad.c0;
+    let c1 = quad.c1;
+    let c2 = quad.c2;
+    let c3 = quad.c3;
+    let max_w = dst_width.max(1) as i32 - 1;
+    let max_h = dst_height.max(1) as i32 - 1;
+    let min_x = floorf(c0.x.min(c1.x).min(c2.x).min(c3.x)).max(0.0) as i32;
+    let min_y = floorf(c0.y.min(c1.y).min(c2.y).min(c3.y)).max(0.0) as i32;
+    let max_x = (ceilf(c0.x.max(c1.x).max(c2.x).max(c3.x)) as i32).min(max_w);
+    let max_y = (ceilf(c0.y.max(c1.y).max(c2.y).max(c3.y)) as i32).min(max_h);
+    if min_x > max_x || min_y > max_y {
+        return None;
+    }
+    Some((
+        max_x.saturating_sub(min_x).saturating_add(1),
+        max_y.saturating_sub(min_y).saturating_add(1),
+    ))
+}
+
+fn sprite_corner_lerp2(
+    c0: crate::intel::types::SpriteCorner,
+    c1: crate::intel::types::SpriteCorner,
+    c3: crate::intel::types::SpriteCorner,
+    s: f32,
+    t: f32,
+) -> crate::intel::types::SpriteCorner {
+    crate::intel::types::SpriteCorner {
+        x: lerp2(c0.x, c1.x, c3.x, s, t),
+        y: lerp2(c0.y, c1.y, c3.y, s, t),
+        u: lerp2(c0.u, c1.u, c3.u, s, t),
+        v: lerp2(c0.v, c1.v, c3.v, s, t),
+    }
+}
+
+fn sprite_corner_is_finite(corner: crate::intel::types::SpriteCorner) -> bool {
+    corner.x.is_finite() && corner.y.is_finite() && corner.u.is_finite() && corner.v.is_finite()
+}
+
+fn cpu_fallback_pending_gpu_sprites(batch: &PendingGpuSpriteBatch) {
+    let Some(src) = texture_source(batch.src_tex_id) else {
+        UI3_TEXTURE_MISSES.fetch_add(1, Ordering::Relaxed);
+        return;
+    };
+
+    match batch.target {
+        Ui3RenderTarget::Frame => {
+            let Some(frame) = frame_snapshot(batch.frame_id) else {
+                return;
+            };
+            let Some(access) = crate::r::ui_surface::pixel_access(frame.back_surface) else {
+                return;
+            };
+            let dst = unsafe { core::slice::from_raw_parts_mut(access.virt, access.byte_len) };
+            paint_sprite_batch(
+                dst,
+                access.pitch as usize,
+                access.width,
+                access.height,
+                access.format,
+                &src,
+                batch.payload.as_slice(),
+            );
+            let _ = crate::r::ui_surface::flush_surface(frame.back_surface);
+        }
+        Ui3RenderTarget::Texture(dst_tex_id) => {
+            let mut offscreen = OFFSCREEN.lock();
+            let image = offscreen.entry(dst_tex_id).or_insert_with(|| {
+                new_cpu_image(batch.dst_surface.width, batch.dst_surface.height)
+            });
+            paint_sprite_batch_to_image(image, &src, batch.payload.as_slice());
+        }
+    }
+}
+
+fn record_gpu_sprite_fallback(reason: &'static str) {
+    let count = UI3_DRAW_SPRITE_GPU_FALLBACKS.fetch_add(1, Ordering::Relaxed) + 1;
+    let logs = UI3_DRAW_SPRITE_GPU_FALLBACK_LOGS.fetch_add(1, Ordering::Relaxed);
+    if logs < 16 || count.is_power_of_two() {
+        crate::log!("ui3/frame: sprite-gpu-fallback count={} reason={}\n", count, reason);
+    }
 }
 
 fn paint_solid_batch(
@@ -765,6 +1323,14 @@ fn modulate(src: Rgba8, tint: Rgba8) -> Rgba8 {
 #[inline]
 fn mul_u8(a: u8, b: u8) -> u8 {
     (((a as u16) * (b as u16) + 127) / 255) as u8
+}
+
+#[inline]
+fn rgba_to_gpgpu_word(color: Rgba8) -> u32 {
+    u32::from(color.r)
+        | (u32::from(color.g) << 8)
+        | (u32::from(color.b) << 16)
+        | (u32::from(color.a) << 24)
 }
 
 fn clear_pixels(dst: &mut [u8], width: u32, height: u32, pitch: usize, rgb: u32) {
