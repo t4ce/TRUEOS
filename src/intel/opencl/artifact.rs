@@ -274,6 +274,17 @@ impl<'a> KernelArgDesc<'a> {
             align_bytes,
         }
     }
+
+    pub(crate) const fn from_call_arg(arg: KernelCallArg<'a>) -> Self {
+        Self {
+            index: arg.index,
+            name: arg.name,
+            type_name: arg.type_name,
+            kind: arg.kind,
+            size_bytes: arg.size_bytes,
+            align_bytes: arg.align_bytes,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug)]

@@ -28,7 +28,7 @@ impl BackendCaps {
         upload_status: true,
         known_kernel_upload: true,
         known_kernel_execute_stub: true,
-        source_compile: false,
+        source_compile: true,
         svm: false,
     };
 }
@@ -179,14 +179,18 @@ impl IntelOpenClBackend {
 
     pub(crate) fn build_program_from_source(
         &self,
-        _source: &str,
-        _options: &str,
+        source: &str,
+        options: &str,
     ) -> ClResult<BuiltProgram<'static>> {
         if !self.caps.source_compile {
             return Err(ClError::CompilerNotAvailable);
         }
+        if !options.trim().is_empty() {
+            return Err(ClError::InvalidBuildOptions);
+        }
 
-        Err(ClError::BuildProgramFailure)
+        registry::build_program_from_known_source(source, options)
+            .ok_or(ClError::BuildProgramFailure)
     }
 
     pub(crate) fn upload_fill_rect_worklist_rgba8(&self) -> Option<UploadedKernelRef> {

@@ -181,6 +181,7 @@ pub fn init_once() {
         let _ = self::gpgpu::upload_glyph_mask_rgba8_kernel();
         let _ = self::gpgpu::upload_present_rgba8_to_primary_xrgb_rect_kernel();
         let _ = self::gpgpu::upload_sprite64_worklist_rgba8_kernel();
+        let _ = self::gpgpu::upload_sprite_quad_worklist_rgba8_kernel();
         let _ = self::gpgpu::upload_mandel64_worklist_rgba8_kernel();
         let _ = self::gpgpu::upload_canvas3d_project_rgba8_kernel();
         let _ = self::gpgpu::upload_canvas3d_transform_q16_kernel();
@@ -191,7 +192,7 @@ pub fn init_once() {
         let _ = self::gpgpu::upload_canvas3d_plane_patch_worklist_rgba8_kernel();
         let opencl_smoke = self::opencl::trueos_cl_source_build_smoke();
         crate::log!(
-            "intel/opencl: source-build-smoke source_compile={} build_err={} registry_kernels={} registry_ok={} queue_completed={} fill_rect_uploaded={} queue_err={} note=source-build-currently-scaffold-aot-path-active\n",
+            "intel/opencl: source-build-smoke source_compile={} build_err={} registry_kernels={} registry_ok={} queue_completed={} fill_rect_uploaded={} queue_err={} note=known-source-igc-aot-artifact-path-active\n",
             opencl_smoke.source_compile_cap as u8,
             opencl_smoke
                 .source_build_error
@@ -208,6 +209,7 @@ pub fn init_once() {
             let _ = self::gpgpu::submit_fill_rect_worklist_rgba8_probe_once();
             let _ = self::gpgpu::submit_gradient_rect_worklist_rgba8_probe_once();
             let _ = self::gpgpu::submit_alpha_blend_worklist_rgba8_probe_once();
+            let _ = self::gpgpu::submit_sprite_quad_worklist_rgba8_probe_once();
             crate::log!(
                 "intel/gpgpu: rect-worklist-probes fill_ran={} fill_ok={} gradient_ran={} gradient_ok={} alpha_ran={} alpha_ok={} ready={}\n",
                 self::gpgpu::fill_rect_worklist_probe_ran() as u8,

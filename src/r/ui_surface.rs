@@ -165,6 +165,23 @@ pub(crate) fn pixel_access(handle: UiSurfaceHandle) -> Option<UiSurfacePixelAcce
     })
 }
 
+pub(crate) fn gpgpu_rgba_surface(
+    handle: UiSurfaceHandle,
+) -> Option<crate::intel::gpgpu::GpgpuRgba8Surface> {
+    let surface = lookup(handle)?;
+    if surface.desc.format != UiSurfaceFormat::Rgba8888 {
+        return None;
+    }
+    crate::intel::gpgpu::GpgpuRgba8Surface::new(
+        surface.phys,
+        surface.desc.gpu,
+        surface.byte_len,
+        surface.desc.width,
+        surface.desc.height,
+        surface.desc.pitch,
+    )
+}
+
 pub(crate) fn flush_surface(handle: UiSurfaceHandle) -> bool {
     let Some(surface) = lookup(handle) else {
         return false;
@@ -264,6 +281,18 @@ fn present_primary(
     dst: UiRect,
     reason: &'static str,
 ) -> Result<UiPresentPath> {
+    if surface.desc.format == UiSurfaceFormat::Rgba8888 {
+        if present_primary_rgba_kernel_blit(surface, src, dst)? {
+            return Ok(UiPresentPath::KernelBlit);
+        }
+
+        if present_primary_backing_copy(surface, src, dst, reason) {
+            return Ok(UiPresentPath::CpuCopy);
+        }
+
+        return Err(Error::Unsupported);
+    }
+
     if present_primary_backing_copy(surface, src, dst, reason) {
         return Ok(UiPresentPath::CpuCopy);
     }
@@ -281,15 +310,17 @@ fn present_primary_backing_copy(
     dst: UiRect,
     reason: &'static str,
 ) -> bool {
-    matches!(surface.desc.format, UiSurfaceFormat::Xrgb8888 | UiSurfaceFormat::Xbgr8888)
-        && crate::intel::present_ui_surface_to_primary_backing(
-            surface.desc,
-            surface.virt.cast_const(),
-            surface.byte_len,
-            src,
-            dst,
-            reason,
-        )
+    matches!(
+        surface.desc.format,
+        UiSurfaceFormat::Rgba8888 | UiSurfaceFormat::Xrgb8888 | UiSurfaceFormat::Xbgr8888
+    ) && crate::intel::present_ui_surface_to_primary_backing(
+        surface.desc,
+        surface.virt.cast_const(),
+        surface.byte_len,
+        src,
+        dst,
+        reason,
+    )
 }
 
 fn present_primary_rgba_kernel_blit(

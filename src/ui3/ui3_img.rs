@@ -4,17 +4,30 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use spin::Mutex;
 
+const UI3_TEXTURE_GPU_BASE: u64 = 0x2400_0000;
+const UI3_TEXTURE_GPU_ALIGN: u64 = 0x1000;
 const UI3_IMG_STATUS_UNKNOWN: i32 = 0;
 const UI3_IMG_STATUS_PENDING: i32 = 1;
 const UI3_IMG_STATUS_READY: i32 = 2;
 const UI3_IMG_ERR_NULL: i32 = -2;
 const UI3_IMG_ERR_EMPTY: i32 = -3;
 
+#[derive(Clone, Copy)]
+pub(crate) struct Ui3GpuImage {
+    pub surface: crate::intel::gpgpu::GpgpuRgba8Surface,
+    pub _virt: *mut u8,
+    pub _bytes: usize,
+}
+
+unsafe impl Send for Ui3GpuImage {}
+unsafe impl Sync for Ui3GpuImage {}
+
 #[derive(Clone)]
 pub(crate) struct Ui3Image {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+    pub gpu: Option<Ui3GpuImage>,
 }
 
 static UI3_IMAGES: Mutex<BTreeMap<u32, Ui3Image>> = Mutex::new(BTreeMap::new());
@@ -22,6 +35,7 @@ static UI3_IMAGE_STATUS: Mutex<BTreeMap<u32, i32>> = Mutex::new(BTreeMap::new())
 static UI3_IMAGE_UPLOADS: Mutex<BTreeMap<(u8, u32), Ui3ImageUpload>> = Mutex::new(BTreeMap::new());
 static UI3_UPLOAD_FINISH_COUNT: AtomicU64 = AtomicU64::new(0);
 static UI3_UPLOAD_BYTES_TOTAL: AtomicU64 = AtomicU64::new(0);
+static UI3_TEXTURE_GPU_NEXT: AtomicU64 = AtomicU64::new(0);
 
 struct Ui3ImageUpload {
     width: u32,
@@ -38,6 +52,54 @@ fn expected_rgba_len(width: u32, height: u32) -> Option<usize> {
     (width as usize)
         .checked_mul(height as usize)?
         .checked_mul(4)
+}
+
+fn aligned_texture_pitch(width: u32) -> Option<u32> {
+    let row_bytes = (width as usize).checked_mul(4)?;
+    crate::intel::align_up(row_bytes, 64).and_then(|pitch| u32::try_from(pitch).ok())
+}
+
+fn reserve_texture_gpu(bytes: usize) -> Option<u64> {
+    let bytes = crate::intel::align_up(bytes, UI3_TEXTURE_GPU_ALIGN as usize)? as u64;
+    let offset = UI3_TEXTURE_GPU_NEXT.fetch_add(bytes, Ordering::Relaxed);
+    Some(UI3_TEXTURE_GPU_BASE.checked_add(offset)?)
+}
+
+fn create_gpu_image(width: u32, height: u32, rgba: &[u8]) -> Option<Ui3GpuImage> {
+    let pitch = aligned_texture_pitch(width)?;
+    let row_bytes = (width as usize).checked_mul(4)?;
+    let raw_bytes = (pitch as usize).checked_mul(height as usize)?;
+    let bytes = crate::intel::align_up(raw_bytes, crate::intel::WARM_ALIGN)?;
+    let gpu = reserve_texture_gpu(bytes)?;
+    let Some(dev) = crate::intel::claimed_device() else {
+        return None;
+    };
+    let (phys, virt) = crate::dma::alloc(bytes, crate::intel::WARM_ALIGN)?;
+    unsafe {
+        core::ptr::write_bytes(virt, 0, bytes);
+        for y in 0..height as usize {
+            let src_off = y.checked_mul(row_bytes)?;
+            let dst_off = y.checked_mul(pitch as usize)?;
+            core::ptr::copy_nonoverlapping(
+                rgba.as_ptr().add(src_off),
+                virt.add(dst_off),
+                row_bytes,
+            );
+        }
+    }
+    crate::intel::dma_flush(virt, bytes);
+    if !crate::intel::map_ggtt(dev, phys, bytes, gpu) {
+        crate::dma::dealloc(virt, bytes);
+        return None;
+    }
+    crate::intel::ggtt_invalidate(dev);
+    Some(Ui3GpuImage {
+        surface: crate::intel::gpgpu::GpgpuRgba8Surface::new(
+            phys, gpu, bytes, width, height, pitch,
+        )?,
+        _virt: virt,
+        _bytes: bytes,
+    })
 }
 
 fn set_status(tex_id: u32, status: i32) {
@@ -192,12 +254,14 @@ pub(crate) fn store_rgba_image(tex_id: u32, width: u32, height: u32, rgba: Vec<u
 
     let mut image = rgba;
     image.truncate(expected);
+    let gpu = create_gpu_image(width, height, image.as_slice());
     UI3_IMAGES.lock().insert(
         tex_id,
         Ui3Image {
             width,
             height,
             rgba: image,
+            gpu,
         },
     );
     set_status(tex_id, UI3_IMG_STATUS_READY);
@@ -206,6 +270,13 @@ pub(crate) fn store_rgba_image(tex_id: u32, width: u32, height: u32, rgba: Vec<u
 
 pub(crate) fn image_clone(tex_id: u32) -> Option<Ui3Image> {
     UI3_IMAGES.lock().get(&tex_id).cloned()
+}
+
+pub(crate) fn image_gpgpu_surface(tex_id: u32) -> Option<crate::intel::gpgpu::GpgpuRgba8Surface> {
+    UI3_IMAGES
+        .lock()
+        .get(&tex_id)
+        .and_then(|image| image.gpu.map(|gpu| gpu.surface))
 }
 
 pub(crate) fn begin_rgba_upload(

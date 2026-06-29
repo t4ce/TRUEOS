@@ -28,6 +28,7 @@ The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 - `present_rgba8_to_primary_xrgb_rect.cl`: RGBA8 scene rect to primary XRGB rect with optional source Y flip
 - `stamp_mandel_rgba8.cl`: ten-iteration Mandelbrot stamp using destination x/y as both stamp origin and view offset
 - `sprite64_worklist_rgba8.cl`: fixed 64x64 sprite descriptors copied/blended from atlas to destination; shell path batches descriptor slices as multiple walkers in one command buffer
+- `sprite_quad_worklist_rgba8.cl`: arbitrary UI3 SpriteQuad descriptors sampled from RGBA8 source surfaces and source-over blended into RGBA8 destinations
 - `mandel64_worklist_rgba8.cl`: clipped 64x4 Mandelbrot row-band descriptors; shell scanout computes the top half and mirrors it across the real axis
 - `canvas3d_project_rgba8.cl`: Q16 vec3 projection into packed XY/RGBA point records with source/output ranges and dynamic canvas dimensions
 - `canvas3d_transform_q16.cl`: range/subset Q16 vec3 fused scale, quaternion rotation, and translation from source int4 vertices to destination int4 vertices
@@ -59,6 +60,7 @@ The rect worklist evo kernels share a descriptor-driven shape with the
 - `fill_rect_worklist_rgba8.cl` descriptors are `{ dst_xy, size, color_rgba }`
 - `gradient_rect_worklist_rgba8.cl` descriptors are `{ dst_xy, size, color0_rgba, color1_rgba, flags }`, with `flags bit0` selecting vertical instead of horizontal
 - `alpha_blend_worklist_rgba8.cl` descriptors are `{ src_xy, dst_xy, size, flags, color_rgba }`, with flags for direct copy, source-over, RGB tint, alpha tint, and premultiplied source
+- `sprite_quad_worklist_rgba8.cl` descriptors are four `x/y/u/v` float corners plus `{ color_rgba, flags }`; the current flag bit selects source-over
 - packed coordinates use 16-bit lanes; destination coordinates are signed
 
 These are intended to replace the old single-rect stage-1 fill/alpha path for
@@ -90,7 +92,28 @@ d3e6d5ec26c2b789d43d3308cf740977ce52f5b4df2325a27c92a687796d9149
 evo build. Its SHA-256 is:
 
 ```text
-636bd6dd2dde9e184d26c185ea04f6692476c1dec2c5fa26bf5f5b670cc1eb7e
+74e2f00828973323f4bebb4b9c513ef249fc15080fddbd39a1b8a9e412b646a7
+```
+
+`artifacts/adls/present_rgba8_to_primary_xrgb_rect.bin` is the RGBA scene to
+primary XRGB present rect build. Its SHA-256 is:
+
+```text
+11afc516532bc0f48e9b9ede0e282fc3eb50c64ebc02dba06e38646e3b20e54a
+```
+
+`artifacts/adls/sprite64_worklist_rgba8.bin` is the fixed-size sprite worklist
+build. Its SHA-256 is:
+
+```text
+7942acab497d8fd3b7d406679f1b2a614f3f4eef78df2e667b9f404e34a822fb
+```
+
+`artifacts/adls/sprite_quad_worklist_rgba8.bin` is the arbitrary UI3 sprite
+quad worklist build. Its SHA-256 is:
+
+```text
+2df014194f50b4418d7db2fc7032dc0bc718299debaa3eb83ed65bc9d7cf6d1c
 ```
 
 `artifacts/adls/mandel64_worklist_rgba8.bin` is the descriptor Mandelbrot
@@ -102,14 +125,18 @@ scale. Its SHA-256 is:
 79c7d4170540650417489a882e52c52b1a47f85182790dfc1c3a22ad64a6248d
 ```
 
-Regenerate it with:
+Regenerate one or more ADL-S artifacts with the Intel IGC/`ocloc` toolchain:
 
 ```sh
-tools/intel_gpgpu/build_copy_rect_rgba8.sh
+tools/intel_gpgpu/bake_adls_artifacts.sh alpha_blend_worklist_rgba8 present_rgba8_to_primary_xrgb_rect sprite64_worklist_rgba8
 ```
 
-Generate the embedded API seed artifacts with:
+With no arguments, the script rebuilds every kernel source that has a matching
+`artifacts/adls/*.bin` output:
 
 ```sh
-tools/intel_gpgpu/build_rect_api_artifacts.sh
+tools/intel_gpgpu/bake_adls_artifacts.sh
 ```
+
+The script accepts `OCLOC=/path/to/ocloc` for a system toolchain. If `OCLOC` is
+not set, it uses the local extracted toolchain under `bld/intel-tools/root`.

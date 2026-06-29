@@ -1998,7 +1998,10 @@ pub(crate) fn present_ui_surface_to_primary_backing(
     let Some(primary) = *PRIMARY_SURFACE.lock() else {
         return false;
     };
-    if !matches!(surface.format, UiSurfaceFormat::Xrgb8888 | UiSurfaceFormat::Xbgr8888) {
+    if !matches!(
+        surface.format,
+        UiSurfaceFormat::Rgba8888 | UiSurfaceFormat::Xrgb8888 | UiSurfaceFormat::Xbgr8888
+    ) {
         return false;
     }
     if virt.is_null()
@@ -2059,7 +2062,23 @@ pub(crate) fn present_ui_surface_to_primary_backing(
                     }
                 }
             }
-            UiSurfaceFormat::Rgba8888 => return false,
+            UiSurfaceFormat::Rgba8888 => {
+                let src_row =
+                    unsafe { core::slice::from_raw_parts(virt.add(src_off), rect.row_bytes) };
+                let dst_row = unsafe { primary.virt.add(dst_off) as *mut u32 };
+                for col in 0..rect.width {
+                    let off = col.saturating_mul(4);
+                    let r = src_row[off];
+                    let g = src_row[off + 1];
+                    let b = src_row[off + 2];
+                    unsafe {
+                        core::ptr::write_volatile(
+                            dst_row.add(col),
+                            u32::from_le_bytes([b, g, r, 0]),
+                        );
+                    }
+                }
+            }
         }
     }
 

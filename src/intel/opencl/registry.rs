@@ -3,9 +3,13 @@
 //! This keeps the OpenCL facade honest: a kernel is "known" only if the current
 //! TRUEOS GPGPU backend can upload and report status for its AOT binary.
 
+use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
+use spin::Mutex;
+
 use super::artifact::{
-    DescriptorField, DescriptorLayout, GpuArtifactProducer, GpuKernelContract, KernelArgAccess,
-    KernelArgKind, KernelCallArg, KernelLaunchContract,
+    BuiltProgram, DescriptorField, DescriptorLayout, GpuArtifactProducer, GpuKernelContract,
+    KernelArgAccess, KernelArgDesc, KernelArgKind, KernelCallArg, KernelLaunchContract,
+    KernelMetadata, ProgramArtifact, ProgramBinaryKind,
 };
 use crate::intel::gpgpu;
 
@@ -56,6 +60,8 @@ const RECT_WORKLIST_CROSS_THREAD_BYTES: u32 = 96;
 const RECT_WORKLIST_PER_THREAD_BYTES: u32 = 96;
 const SPRITE64_WORKLIST_CROSS_THREAD_BYTES: u32 = 96;
 const SPRITE64_WORKLIST_PER_THREAD_BYTES: u32 = 96;
+const SPRITE_QUAD_WORKLIST_CROSS_THREAD_BYTES: u32 = 128;
+const SPRITE_QUAD_WORKLIST_PER_THREAD_BYTES: u32 = 96;
 const GLYPH_MASK_CROSS_THREAD_BYTES: u32 = 128;
 const PRESENT_CROSS_THREAD_BYTES: u32 = 128;
 const CANVAS3D_PROJECT_CROSS_THREAD_BYTES: u32 = 96;
@@ -123,6 +129,17 @@ const SPRITE64_DESC_FIELDS: &[DescriptorField<'_>] = &[
 ];
 const SPRITE64_DESC: DescriptorLayout<'_> =
     DescriptorLayout::new("Sprite64Desc", 4, Some(256), SPRITE64_DESC_FIELDS);
+
+const SPRITE_QUAD_DESC_FIELDS: &[DescriptorField<'_>] = &[
+    DescriptorField::new("c0", 0, 4),
+    DescriptorField::new("c1", 4, 4),
+    DescriptorField::new("c2", 8, 4),
+    DescriptorField::new("c3", 12, 4),
+    DescriptorField::new("color_rgba", 16, 1),
+    DescriptorField::new("flags", 17, 1),
+];
+const SPRITE_QUAD_DESC: DescriptorLayout<'_> =
+    DescriptorLayout::new("SpriteQuadDesc", 18, Some(256), SPRITE_QUAD_DESC_FIELDS);
 
 const MANDEL64_DESC_FIELDS: &[DescriptorField<'_>] = &[
     DescriptorField::new("src_xy", 0, 1),
@@ -196,6 +213,7 @@ const FILL_RECT_DESCS: &[DescriptorLayout<'_>] = &[FILL_RECT_DESC];
 const GRADIENT_RECT_DESCS: &[DescriptorLayout<'_>] = &[GRADIENT_RECT_DESC];
 const ALPHA_BLEND_DESCS: &[DescriptorLayout<'_>] = &[ALPHA_BLEND_DESC];
 const SPRITE64_DESCS: &[DescriptorLayout<'_>] = &[SPRITE64_DESC];
+const SPRITE_QUAD_DESCS: &[DescriptorLayout<'_>] = &[SPRITE_QUAD_DESC];
 const MANDEL64_DESCS: &[DescriptorLayout<'_>] = &[MANDEL64_DESC];
 const PATCH_DESCS: &[DescriptorLayout<'_>] = &[PATCH_DESC];
 
@@ -393,6 +411,34 @@ const SPRITE64_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     descriptor_layouts: SPRITE64_DESCS,
     launch: KernelLaunchContract::descriptor_worklist(16),
     consumers: UI3_TEXT_CONSUMERS,
+};
+
+const SPRITE_QUAD_ARGS: &[KernelCallArg<'_>] = &[
+    ro_buf!(0, "src_rgba", "__global const uint*", 0, 12),
+    rw_buf!(1, "dst_rgba", "__global uint*", 1, 14),
+    ro_buf!(2, "descs", "__global const uint*", 2, 16),
+    u32_arg!(3, "src_pitch_bytes", 18),
+    u32_arg!(4, "dst_pitch_bytes", 19),
+    u32_arg!(5, "src_width", 20),
+    u32_arg!(6, "src_height", 21),
+    u32_arg!(7, "dst_width", 22),
+    u32_arg!(8, "dst_height", 23),
+    u32_arg!(9, "desc_base", 24),
+    u32_arg!(10, "desc_count", 25),
+];
+const SPRITE_QUAD_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
+    name: gpgpu::SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME,
+    source_path: "src/intel/kernels/sprite_quad_worklist_rgba8.cl",
+    producer: IGC,
+    target: ADLS,
+    entry_text_offset_bytes: TEXT_OFFSET,
+    cross_thread_bytes: SPRITE_QUAD_WORKLIST_CROSS_THREAD_BYTES,
+    per_thread_bytes: SPRITE_QUAD_WORKLIST_PER_THREAD_BYTES,
+    binding_count: 3,
+    args: SPRITE_QUAD_ARGS,
+    descriptor_layouts: SPRITE_QUAD_DESCS,
+    launch: KernelLaunchContract::descriptor_worklist(16),
+    consumers: &["intel::init_once upload", "ui3::ui3_frame sprite batches"],
 };
 
 const MANDEL64_ARGS: &[KernelCallArg<'_>] = FILL_RECT_WORKLIST_ARGS;
@@ -663,6 +709,14 @@ pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
         role: KnownKernelRole::Sprite,
     },
     KnownAotKernel {
+        name: gpgpu::SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME,
+        artifact: &gpgpu::SPRITE_QUAD_WORKLIST_RGBA8_ADLS_ARTIFACT,
+        contract: &SPRITE_QUAD_CONTRACT,
+        upload: gpgpu::upload_sprite_quad_worklist_rgba8_kernel,
+        status: gpgpu::sprite_quad_worklist_rgba8_upload_status,
+        role: KnownKernelRole::Sprite,
+    },
+    KnownAotKernel {
         name: gpgpu::MANDEL64_WORKLIST_RGBA8_KERNEL_NAME,
         artifact: &gpgpu::MANDEL64_WORKLIST_RGBA8_ADLS_ARTIFACT,
         contract: &MANDEL64_CONTRACT,
@@ -728,10 +782,65 @@ pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
     },
 ];
 
+static SOURCE_PROGRAM_CACHE: Mutex<BTreeMap<&'static str, &'static ProgramArtifact<'static>>> =
+    Mutex::new(BTreeMap::new());
+
 pub(crate) fn known_aot_kernel(name: &str) -> Option<&'static KnownAotKernel> {
     KNOWN_AOT_KERNELS.iter().find(|kernel| kernel.name == name)
 }
 
 pub(crate) fn is_known_aot_kernel(name: &str) -> bool {
     known_aot_kernel(name).is_some()
+}
+
+pub(crate) fn known_aot_kernel_by_source(source: &str) -> Option<&'static KnownAotKernel> {
+    KNOWN_AOT_KERNELS
+        .iter()
+        .find(|kernel| gpgpu::kernel_opencl_source(kernel.name) == Some(source))
+}
+
+pub(crate) fn build_program_from_known_source(
+    source: &str,
+    build_options: &str,
+) -> Option<BuiltProgram<'static>> {
+    if !build_options.trim().is_empty() {
+        return None;
+    }
+    let kernel = known_aot_kernel_by_source(source)?;
+
+    {
+        let cache = SOURCE_PROGRAM_CACHE.lock();
+        if let Some(program) = cache.get(kernel.name) {
+            return Some(BuiltProgram::from_artifact(program));
+        }
+    }
+
+    let mut args = Vec::with_capacity(kernel.contract.args.len());
+    for arg in kernel.contract.args.iter().copied() {
+        args.push(KernelArgDesc::from_call_arg(arg));
+    }
+    let args: &'static [KernelArgDesc<'static>] = Box::leak(args.into_boxed_slice());
+    let kernels: &'static [KernelMetadata<'static>] = Box::leak(
+        alloc::vec![KernelMetadata::with_gpgpu_artifact(
+            kernel.name,
+            args,
+            kernel.artifact,
+        )]
+        .into_boxed_slice(),
+    );
+    let program: &'static ProgramArtifact<'static> = Box::leak(Box::new(ProgramArtifact {
+        name: kernel.name,
+        target: kernel.artifact.target,
+        binary_kind: ProgramBinaryKind::IntelGenBinary,
+        binary: kernel.artifact.bin,
+        binary_sha256: Some(kernel.artifact.bin_sha256),
+        spirv: Some(kernel.artifact.spv),
+        source: gpgpu::kernel_opencl_source(kernel.name),
+        build_options: "",
+        kernels,
+        gpgpu_artifact: Some(kernel.artifact),
+    }));
+
+    SOURCE_PROGRAM_CACHE.lock().insert(kernel.name, program);
+    Some(BuiltProgram::from_artifact(program))
 }
