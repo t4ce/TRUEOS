@@ -1,3 +1,5 @@
+use alloc::string::String;
+use core::fmt::Write;
 use core::str::SplitWhitespace;
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -6,6 +8,7 @@ use embassy_executor::Spawner;
 use super::super::{ShellBackend2, print_shell_line};
 use crate::intel::gpgpu::{
     GpgpuPoint, MANDEL64_WORKLIST_DEFAULT_ITERATIONS, MANDEL64_WORKLIST_MAX_ITERATIONS,
+    reload_all_known_kernel_artifacts, reload_known_kernel_artifact,
     shell_mandel64_worklist_scanout, shell_twemoji_atlas_worklist_present_scanout,
     shell_twemoji_atlas_worklist_scanout, shell_twemoji_atlas_worklist_scanout_present,
 };
@@ -32,6 +35,7 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "gpgpu canvas3d ico");
     print_shell_line(io, "gpgpu canvas3d para");
     print_shell_line(io, "gpgpu artificial-pixel");
+    print_shell_line(io, "gpgpu artifacts reload <kernel|all>");
     print_shell_line(io, "gpgpu smoke");
 }
 
@@ -421,6 +425,67 @@ fn run_artificial_pixel(io: &'static dyn ShellBackend2, args: &mut SplitWhitespa
     print_shell_line(io, msg.as_str());
 }
 
+fn digest_hex(digest: &[u8; 32]) -> String {
+    let mut out = String::with_capacity(64);
+    for byte in digest {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
+fn run_artifacts(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+    let Some(cmd) = args.next() else {
+        usage(io);
+        return;
+    };
+    if !cmd.eq_ignore_ascii_case("reload") {
+        usage(io);
+        return;
+    }
+    let Some(name) = args.next() else {
+        usage(io);
+        return;
+    };
+    if !expect_no_more(io, args) {
+        return;
+    }
+
+    if name.eq_ignore_ascii_case("all") {
+        let summary = reload_all_known_kernel_artifacts();
+        print_shell_line(
+            io,
+            alloc::format!(
+                "gpgpu artifacts reload all: attempted={} reloaded={} failed={}",
+                summary.attempted,
+                summary.reloaded,
+                summary.failed
+            )
+            .as_str(),
+        );
+        return;
+    }
+
+    match reload_known_kernel_artifact(name) {
+        Ok(upload) => print_shell_line(
+            io,
+            alloc::format!(
+                "gpgpu artifacts reload {}: ok source={} gpu=0x{:X} bytes=0x{:X} sha256={}",
+                upload.name,
+                upload.source,
+                upload.gpu,
+                upload.bytes,
+                digest_hex(&upload.bin_sha256)
+            )
+            .as_str(),
+        ),
+        Err(err) => print_shell_line(
+            io,
+            alloc::format!("gpgpu artifacts reload {}: failed reason={}", name, err.label())
+                .as_str(),
+        ),
+    }
+}
+
 pub(crate) fn try_parse(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
@@ -437,6 +502,8 @@ pub(crate) fn try_parse(
         return run_canvas3d(spawner, io, args);
     } else if cmd.eq_ignore_ascii_case("artificial-pixel") {
         run_artificial_pixel(io, args);
+    } else if cmd.eq_ignore_ascii_case("artifacts") {
+        run_artifacts(io, args);
     } else if cmd.eq_ignore_ascii_case("smoke") {
         run_smoke(io, args);
     } else {

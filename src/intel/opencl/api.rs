@@ -77,6 +77,15 @@ pub(crate) fn trueos_cl_upload_known_kernel(name: &str) -> ClResult<UploadedKern
     backend.require_known_aot_upload(name)
 }
 
+pub(crate) fn trueos_cl_reload_known_kernel(name: &str) -> ClResult<UploadedKernelRef> {
+    IntelOpenClBackend::new().reload_known_aot(name)
+}
+
+pub(crate) fn trueos_cl_reload_all_known_kernels() -> crate::intel::gpgpu::GpgpuArtifactReloadSummary
+{
+    IntelOpenClBackend::new().reload_all_known_aot()
+}
+
 pub(crate) fn trueos_cl_build_program_from_source(
     source: &str,
     options: &str,

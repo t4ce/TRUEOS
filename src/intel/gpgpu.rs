@@ -1,6 +1,8 @@
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
+use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
+use sha2::{Digest, Sha256};
 use spin::{Mutex, Once};
 mod canvas3d_cube;
 mod canvas3d_ico;
@@ -280,8 +282,8 @@ pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x4F, 0x3F, 0x4E, 0xEF, 0x78, 0xDF, 0x2E, 0x66, 0x7B, 0x9F, 0x40, 0x4E, 0x34, 0xA8, 0x22, 0xFB,
 ];
 pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
-    0x61, 0x0C, 0xDA, 0x44, 0xF7, 0xCD, 0x04, 0x34, 0xD0, 0x10, 0x41, 0x97, 0x46, 0x90, 0x5A, 0xB9,
-    0x5C, 0xE3, 0x26, 0x59, 0x54, 0xA9, 0x51, 0x02, 0xD9, 0xF5, 0x79, 0x04, 0xFA, 0x43, 0x04, 0x49,
+    0x93, 0x82, 0x13, 0x9A, 0x63, 0xA3, 0x3C, 0x0E, 0x46, 0x18, 0x17, 0x11, 0x58, 0x75, 0x95, 0x13,
+    0x41, 0x86, 0x9F, 0x91, 0x2E, 0x56, 0x61, 0x0C, 0x0D, 0xFA, 0x50, 0x99, 0xBD, 0xCB, 0xDD, 0xD7,
 ];
 pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x79, 0xC7, 0xD4, 0x17, 0x05, 0x40, 0x65, 0x04, 0x17, 0x48, 0x9A, 0x88, 0x2E, 0x52, 0xC5, 0x2B,
@@ -501,7 +503,7 @@ const RECT_WORKLIST_CROSS_THREAD_BYTES: usize = RECT_WORKLIST_CROSS_THREAD_GRFS 
 const RECT_WORKLIST_PER_THREAD_BYTES: usize = 96;
 const RECT_WORKLIST_INDIRECT_BYTES: usize =
     RECT_WORKLIST_CROSS_THREAD_BYTES + RECT_WORKLIST_PER_THREAD_BYTES;
-const SPRITE_QUAD_WORKLIST_CROSS_THREAD_GRFS: u32 = 4;
+const SPRITE_QUAD_WORKLIST_CROSS_THREAD_GRFS: u32 = 3;
 const SPRITE_QUAD_WORKLIST_CROSS_THREAD_BYTES: usize =
     SPRITE_QUAD_WORKLIST_CROSS_THREAD_GRFS as usize * 32;
 const SPRITE_QUAD_WORKLIST_PER_THREAD_BYTES: usize = 96;
@@ -1855,12 +1857,14 @@ pub(crate) struct GpgpuKernelArtifact {
 pub(crate) struct UploadedKernelArtifact {
     pub(crate) name: &'static str,
     pub(crate) target: &'static str,
+    pub(crate) source: &'static str,
     pub(crate) gpu: u64,
     pub(crate) phys: u64,
     pub(crate) virt: *mut u8,
     pub(crate) bytes: usize,
     pub(crate) mapped_bytes: usize,
     pub(crate) verified: bool,
+    pub(crate) bin_sha256: [u8; 32],
 }
 
 unsafe impl Send for UploadedKernelArtifact {}
@@ -2498,6 +2502,196 @@ pub(crate) fn upload_canvas3d_plane_patch_worklist_rgba8_kernel() -> Option<Uplo
     Some(upload)
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GpgpuArtifactReloadError {
+    UnknownKernel,
+    NoClaimedDevice,
+    UploadFailed,
+}
+
+impl GpgpuArtifactReloadError {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::UnknownKernel => "unknown-kernel",
+            Self::NoClaimedDevice => "no-claimed-device",
+            Self::UploadFailed => "upload-failed",
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GpgpuArtifactReloadSummary {
+    pub(crate) attempted: usize,
+    pub(crate) reloaded: usize,
+    pub(crate) failed: usize,
+}
+
+struct GpgpuKnownArtifactSlot {
+    artifact: GpgpuKernelArtifact,
+    gpu: u64,
+    upload: &'static Mutex<Option<UploadedKernelArtifact>>,
+}
+
+const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
+    COPY_RECT_RGBA8_KERNEL_NAME,
+    FILL_RECT_RGBA8_KERNEL_NAME,
+    FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME,
+    GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME,
+    ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME,
+    GLYPH_MASK_RGBA8_KERNEL_NAME,
+    PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_KERNEL_NAME,
+    SPRITE64_WORKLIST_RGBA8_KERNEL_NAME,
+    SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME,
+    MANDEL64_WORKLIST_RGBA8_KERNEL_NAME,
+    CANVAS3D_PROJECT_RGBA8_KERNEL_NAME,
+    CANVAS3D_TRANSFORM_Q16_KERNEL_NAME,
+    CANVAS3D_CLIP_BOX_Q16_KERNEL_NAME,
+    CANVAS3D_PLANE_SAMPLE_RGBA8_KERNEL_NAME,
+    CANVAS3D_PLANE_FILL_RGBA8_KERNEL_NAME,
+    CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_KERNEL_NAME,
+    CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_KERNEL_NAME,
+];
+
+pub(crate) fn reload_known_kernel_artifact(
+    name: &str,
+) -> Result<UploadedKernelArtifact, GpgpuArtifactReloadError> {
+    let Some(slot) = known_artifact_slot(name) else {
+        return Err(GpgpuArtifactReloadError::UnknownKernel);
+    };
+    let Some(dev) = super::claimed_device() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: {} reload failed reason=no-claimed-device\n",
+            slot.artifact.name
+        );
+        return Err(GpgpuArtifactReloadError::NoClaimedDevice);
+    };
+
+    let Some(upload) = upload_artifact_from_sources(dev, slot.artifact, slot.gpu, true) else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: {} reload failed reason=upload-failed previous=kept\n",
+            slot.artifact.name
+        );
+        return Err(GpgpuArtifactReloadError::UploadFailed);
+    };
+
+    *slot.upload.lock() = Some(upload);
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/gpgpu: {} reload ok=1 source={} gpu=0x{:X} bytes=0x{:X} sha256={}\n",
+        upload.name,
+        upload.source,
+        upload.gpu,
+        upload.bytes,
+        digest_hex(&upload.bin_sha256).as_str()
+    );
+    Ok(upload)
+}
+
+pub(crate) fn reload_all_known_kernel_artifacts() -> GpgpuArtifactReloadSummary {
+    let mut summary = GpgpuArtifactReloadSummary::default();
+    for name in GPGPU_KNOWN_ARTIFACT_NAMES {
+        summary.attempted = summary.attempted.saturating_add(1);
+        match reload_known_kernel_artifact(name) {
+            Ok(_) => summary.reloaded = summary.reloaded.saturating_add(1),
+            Err(_) => summary.failed = summary.failed.saturating_add(1),
+        }
+    }
+    summary
+}
+
+fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
+    match name {
+        COPY_RECT_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: COPY_RECT_RGBA8_ADLS_ARTIFACT,
+            gpu: COPY_RECT_RGBA8_ADLS_GPU,
+            upload: &COPY_RECT_RGBA8_UPLOAD,
+        }),
+        FILL_RECT_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: FILL_RECT_RGBA8_ADLS_ARTIFACT,
+            gpu: FILL_RECT_RGBA8_ADLS_GPU,
+            upload: &FILL_RECT_RGBA8_UPLOAD,
+        }),
+        FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: FILL_RECT_WORKLIST_RGBA8_ADLS_ARTIFACT,
+            gpu: FILL_RECT_WORKLIST_RGBA8_ADLS_GPU,
+            upload: &FILL_RECT_WORKLIST_RGBA8_UPLOAD,
+        }),
+        GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: GRADIENT_RECT_WORKLIST_RGBA8_ADLS_ARTIFACT,
+            gpu: GRADIENT_RECT_WORKLIST_RGBA8_ADLS_GPU,
+            upload: &GRADIENT_RECT_WORKLIST_RGBA8_UPLOAD,
+        }),
+        ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: ALPHA_BLEND_WORKLIST_RGBA8_ADLS_ARTIFACT,
+            gpu: ALPHA_BLEND_WORKLIST_RGBA8_ADLS_GPU,
+            upload: &ALPHA_BLEND_WORKLIST_RGBA8_UPLOAD,
+        }),
+        GLYPH_MASK_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: GLYPH_MASK_RGBA8_ADLS_ARTIFACT,
+            gpu: GLYPH_MASK_RGBA8_ADLS_GPU,
+            upload: &GLYPH_MASK_RGBA8_UPLOAD,
+        }),
+        PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_ADLS_ARTIFACT,
+            gpu: PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_ADLS_GPU,
+            upload: &PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_UPLOAD,
+        }),
+        SPRITE64_WORKLIST_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: SPRITE64_WORKLIST_RGBA8_ADLS_ARTIFACT,
+            gpu: SPRITE64_WORKLIST_RGBA8_ADLS_GPU,
+            upload: &SPRITE64_WORKLIST_RGBA8_UPLOAD,
+        }),
+        SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: SPRITE_QUAD_WORKLIST_RGBA8_ADLS_ARTIFACT,
+            gpu: SPRITE_QUAD_WORKLIST_RGBA8_ADLS_GPU,
+            upload: &SPRITE_QUAD_WORKLIST_RGBA8_UPLOAD,
+        }),
+        MANDEL64_WORKLIST_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: MANDEL64_WORKLIST_RGBA8_ADLS_ARTIFACT,
+            gpu: MANDEL64_WORKLIST_RGBA8_ADLS_GPU,
+            upload: &MANDEL64_WORKLIST_RGBA8_UPLOAD,
+        }),
+        CANVAS3D_PROJECT_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: CANVAS3D_PROJECT_RGBA8_ADLS_ARTIFACT,
+            gpu: CANVAS3D_PROJECT_RGBA8_ADLS_GPU,
+            upload: &CANVAS3D_PROJECT_RGBA8_UPLOAD,
+        }),
+        CANVAS3D_TRANSFORM_Q16_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: CANVAS3D_TRANSFORM_Q16_ADLS_ARTIFACT,
+            gpu: CANVAS3D_TRANSFORM_Q16_ADLS_GPU,
+            upload: &CANVAS3D_TRANSFORM_Q16_UPLOAD,
+        }),
+        CANVAS3D_CLIP_BOX_Q16_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: CANVAS3D_CLIP_BOX_Q16_ADLS_ARTIFACT,
+            gpu: CANVAS3D_CLIP_BOX_Q16_ADLS_GPU,
+            upload: &CANVAS3D_CLIP_BOX_Q16_UPLOAD,
+        }),
+        CANVAS3D_PLANE_SAMPLE_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: CANVAS3D_PLANE_SAMPLE_RGBA8_ADLS_ARTIFACT,
+            gpu: CANVAS3D_PLANE_SAMPLE_RGBA8_ADLS_GPU,
+            upload: &CANVAS3D_PLANE_SAMPLE_RGBA8_UPLOAD,
+        }),
+        CANVAS3D_PLANE_FILL_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: CANVAS3D_PLANE_FILL_RGBA8_ADLS_ARTIFACT,
+            gpu: CANVAS3D_PLANE_FILL_RGBA8_ADLS_GPU,
+            upload: &CANVAS3D_PLANE_FILL_RGBA8_UPLOAD,
+        }),
+        CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_ADLS_ARTIFACT,
+            gpu: CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_ADLS_GPU,
+            upload: &CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_UPLOAD,
+        }),
+        CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_ARTIFACT,
+            gpu: CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_GPU,
+            upload: &CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_UPLOAD,
+        }),
+        _ => None,
+    }
+}
+
 fn copy_rect_kernel_flavor_narrow() -> Option<CopyRectKernelFlavor> {
     Some(CopyRectKernelFlavor {
         upload: upload_copy_rect_rgba8_kernel()?,
@@ -2859,11 +3053,9 @@ pub(crate) fn sprite_quad_worklist_rgba8_runs_over_stats(
         .submit_ms
         .saturating_add(direct_rcs_elapsed_ms_since(submit_start_tick));
     stats.descs = total_descs;
-    stats.walkers = runs
-        .iter()
-        .fold(0usize, |total, run| {
-            total.saturating_add(sprite_quad_worklist_walker_count(run.descs.len()))
-        });
+    stats.walkers = runs.iter().fold(0usize, |total, run| {
+        total.saturating_add(sprite_quad_worklist_walker_count(run.descs.len()))
+    });
     stats.submits = 1;
     stats
 }
@@ -7932,6 +8124,15 @@ fn submit_sprite_quad_worklist(
     desc: GpgpuRectWorklistDescBuffer,
     params: SpriteQuadWorklistRgba8Params,
 ) -> bool {
+    submit_known_descriptor_worklist_sprite_quad(src, dst, desc, params)
+}
+
+fn submit_known_descriptor_worklist_sprite_quad(
+    src: GpgpuRgba8Surface,
+    dst: GpgpuRgba8Surface,
+    desc: GpgpuRectWorklistDescBuffer,
+    params: SpriteQuadWorklistRgba8Params,
+) -> bool {
     if params.desc_count == 0 || params.desc_count as usize > SPRITE_QUAD_WORKLIST_MAX_DESCS {
         return false;
     }
@@ -8328,24 +8529,119 @@ fn upload_artifact(
     artifact: GpgpuKernelArtifact,
     gpu: u64,
 ) -> Option<UploadedKernelArtifact> {
-    let mapped_bytes = align_up(artifact.bin.len(), super::WARM_ALIGN)?;
+    upload_artifact_from_sources(dev, artifact, gpu, false)
+}
+
+fn upload_artifact_from_sources(
+    dev: super::Dev,
+    artifact: GpgpuKernelArtifact,
+    gpu: u64,
+    strict_runtime_artifact: bool,
+) -> Option<UploadedKernelArtifact> {
+    match read_runtime_artifact_bytes(artifact.name) {
+        Ok(Some(bytes)) if !bytes.is_empty() => {
+            let path = runtime_artifact_display_path(artifact.name);
+            let spv_bytes = read_runtime_spv_len(artifact.name).unwrap_or(artifact.spv.len());
+            return upload_artifact_bytes(
+                dev,
+                artifact,
+                gpu,
+                bytes.as_slice(),
+                "fs",
+                path.as_str(),
+                spv_bytes,
+            );
+        }
+        Ok(Some(_)) => {
+            crate::log_info!(
+                target: "gpgpu";
+                "intel/gpgpu: {} runtime artifact rejected reason=empty path={}\n",
+                artifact.name,
+                runtime_artifact_display_path(artifact.name)
+            );
+            if strict_runtime_artifact {
+                return None;
+            }
+        }
+        Ok(None) => {}
+        Err(err) => {
+            crate::log_info!(
+                target: "gpgpu";
+                "intel/gpgpu: {} runtime artifact read failed path={} err={:?}\n",
+                artifact.name,
+                runtime_artifact_display_path(artifact.name),
+                err
+            );
+            if strict_runtime_artifact {
+                return None;
+            }
+        }
+    }
+
+    let source_path = kernel_source_path(artifact.name).unwrap_or("embedded");
+    upload_artifact_bytes(
+        dev,
+        artifact,
+        gpu,
+        artifact.bin,
+        "embedded",
+        source_path,
+        artifact.spv.len(),
+    )
+}
+
+fn upload_artifact_bytes(
+    dev: super::Dev,
+    artifact: GpgpuKernelArtifact,
+    gpu: u64,
+    bin: &[u8],
+    source: &'static str,
+    source_path: &str,
+    spv_bytes: usize,
+) -> Option<UploadedKernelArtifact> {
+    if bin.is_empty() {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: {} upload failed reason=empty source={} path={}\n",
+            artifact.name,
+            source,
+            source_path
+        );
+        return None;
+    }
+    if let Err(reason) = validate_kernel_artifact_bytes(bin) {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: {} upload failed reason={} source={} path={} bytes=0x{:X}\n",
+            artifact.name,
+            reason,
+            source,
+            source_path,
+            bin.len()
+        );
+        return None;
+    }
+
+    let mapped_bytes = align_up(bin.len(), super::WARM_ALIGN)?;
     let (phys, virt) = crate::dma::alloc(mapped_bytes, super::WARM_ALIGN)?;
     unsafe {
         core::ptr::write_bytes(virt, 0, mapped_bytes);
-        core::ptr::copy_nonoverlapping(artifact.bin.as_ptr(), virt, artifact.bin.len());
+        core::ptr::copy_nonoverlapping(bin.as_ptr(), virt, bin.len());
     }
     super::dma_flush(virt, mapped_bytes);
 
-    let uploaded = unsafe { core::slice::from_raw_parts(virt, artifact.bin.len()) };
-    let verified = uploaded == artifact.bin;
+    let uploaded = unsafe { core::slice::from_raw_parts(virt, bin.len()) };
+    let verified = uploaded == bin;
     if !verified {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: {} upload failed reason=verify phys=0x{:X} gpu=0x{:X} bytes=0x{:X}\n",
+            "intel/gpgpu: {} upload failed reason=verify source={} path={} phys=0x{:X} gpu=0x{:X} bytes=0x{:X}\n",
             artifact.name,
+            source,
+            source_path,
             phys,
             gpu,
-            artifact.bin.len()
+            bin.len()
         );
         crate::dma::dealloc(virt, mapped_bytes);
         return None;
@@ -8354,8 +8650,10 @@ fn upload_artifact(
     if !super::map_ggtt(dev, phys, mapped_bytes, gpu) {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: {} upload failed reason=ggtt-map phys=0x{:X} gpu=0x{:X} bytes=0x{:X}\n",
+            "intel/gpgpu: {} upload failed reason=ggtt-map source={} path={} phys=0x{:X} gpu=0x{:X} bytes=0x{:X}\n",
             artifact.name,
+            source,
+            source_path,
             phys,
             gpu,
             mapped_bytes
@@ -8368,35 +8666,95 @@ fn upload_artifact(
     let upload = UploadedKernelArtifact {
         name: artifact.name,
         target: artifact.target,
+        source,
         gpu,
         phys,
         virt,
-        bytes: artifact.bin.len(),
+        bytes: bin.len(),
         mapped_bytes,
         verified,
+        bin_sha256: sha256_digest(bin),
     };
-    let source_path = kernel_source_path(artifact.name).unwrap_or("opaque");
     let source_bytes = kernel_opencl_source(artifact.name)
         .map(|source| source.len())
         .unwrap_or(0);
+    let sha256 = digest_hex(&upload.bin_sha256);
     crate::log_info!(
         target: "gpgpu";
-        "intel/gpgpu: {} upload ok=1 target={} source={} source_bytes=0x{:X} spv_bytes=0x{:X} phys=0x{:X} gpu=0x{:X} bytes=0x{:X} mapped=0x{:X} sha256={:02X}{:02X}{:02X}{:02X}...\n",
+        "intel/gpgpu: {} upload ok=1 target={} source={} path={} source_bytes=0x{:X} spv_bytes=0x{:X} phys=0x{:X} gpu=0x{:X} bytes=0x{:X} mapped=0x{:X} sha256={}\n",
         artifact.name,
         artifact.target,
+        upload.source,
         source_path,
         source_bytes,
-        artifact.spv.len(),
+        spv_bytes,
         upload.phys,
         upload.gpu,
         upload.bytes,
         upload.mapped_bytes,
-        artifact.bin_sha256[0],
-        artifact.bin_sha256[1],
-        artifact.bin_sha256[2],
-        artifact.bin_sha256[3],
+        sha256.as_str(),
     );
     Some(upload)
+}
+
+fn runtime_artifact_rel_path(name: &str, ext: &str) -> String {
+    alloc::format!("gpgpu/adls/{name}.{ext}")
+}
+
+fn runtime_artifact_display_path(name: &str) -> String {
+    alloc::format!("/{}", runtime_artifact_rel_path(name, "bin"))
+}
+
+fn read_runtime_artifact_bytes(name: &str) -> Result<Option<Vec<u8>>, crate::io::kfs::FsError> {
+    match crate::io::kfs::read_file(runtime_artifact_rel_path(name, "bin").as_str()) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(crate::io::kfs::FsError::NoRoot | crate::io::kfs::FsError::NotFound) => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+fn read_runtime_spv_len(name: &str) -> Option<usize> {
+    match crate::io::kfs::read_file_len(runtime_artifact_rel_path(name, "spv").as_str()) {
+        Ok(len) => Some(len),
+        Err(_) => None,
+    }
+}
+
+fn validate_kernel_artifact_bytes(bytes: &[u8]) -> Result<(), &'static str> {
+    const ELF64_HEADER_BYTES: usize = 64;
+    const ELF_MACHINE_INTEL_GT: u16 = 0x00CD;
+    if bytes.len() < ELF64_HEADER_BYTES {
+        return Err("truncated-elf");
+    }
+    if &bytes[0..4] != b"\x7FELF" {
+        return Err("not-elf");
+    }
+    if bytes[4] != 2 {
+        return Err("not-elf64");
+    }
+    if bytes[5] != 1 {
+        return Err("not-little-endian");
+    }
+    let machine = u16::from_le_bytes([bytes[18], bytes[19]]);
+    if machine != ELF_MACHINE_INTEL_GT {
+        return Err("wrong-machine");
+    }
+    Ok(())
+}
+
+fn sha256_digest(bytes: &[u8]) -> [u8; 32] {
+    let digest = Sha256::digest(bytes);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
+    out
+}
+
+fn digest_hex(digest: &[u8; 32]) -> String {
+    let mut out = String::with_capacity(64);
+    for byte in digest {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -9692,14 +10050,15 @@ fn direct_rcs_encode_sprite_quad_worklist_runs_batch(
     let Some(state_bytes) = state_bytes else {
         return false;
     };
-    let Some(payload_base) = align_up(
-        RECT_WORKLIST_IDD_OFFSET_BYTES.saturating_add(state_bytes),
-        0x40,
-    ) else {
+    let Some(payload_base) =
+        align_up(RECT_WORKLIST_IDD_OFFSET_BYTES.saturating_add(state_bytes), 0x40)
+    else {
         return false;
     };
-    let payload_end =
-        payload_base.saturating_add(runs.len().saturating_mul(SPRITE_QUAD_WORKLIST_INDIRECT_BYTES));
+    let payload_end = payload_base.saturating_add(
+        runs.len()
+            .saturating_mul(SPRITE_QUAD_WORKLIST_INDIRECT_BYTES),
+    );
     if payload_end > DIRECT_RCS_BATCH_BYTES {
         return false;
     }
@@ -9712,8 +10071,8 @@ fn direct_rcs_encode_sprite_quad_worklist_runs_batch(
 
     let mut desc_base = 0usize;
     for (run_index, run) in runs.iter().enumerate() {
-        let run_base = RECT_WORKLIST_IDD_OFFSET_BYTES
-            + run_index * SPRITE_QUAD_WORKLIST_RUN_STATE_BLOCK_BYTES;
+        let run_base =
+            RECT_WORKLIST_IDD_OFFSET_BYTES + run_index * SPRITE_QUAD_WORKLIST_RUN_STATE_BLOCK_BYTES;
         let idd_offset = run_base + SPRITE_QUAD_WORKLIST_RUN_IDD_REL;
         let binding_offset = run_base + SPRITE_QUAD_WORKLIST_RUN_BINDING_REL;
         let src_surface_offset = run_base + SPRITE_QUAD_WORKLIST_RUN_SRC_SURFACE_REL;
@@ -9762,12 +10121,7 @@ fn direct_rcs_encode_sprite_quad_worklist_runs_batch(
         desc_base = desc_base.saturating_add(run.descs.len());
     }
 
-    direct_rcs_encode_sprite_quad_worklist_runs_command_stream(
-        state,
-        upload,
-        runs,
-        payload_base,
-    )
+    direct_rcs_encode_sprite_quad_worklist_runs_command_stream(state, upload, runs, payload_base)
 }
 
 fn direct_rcs_encode_rect_worklist_command_stream(
@@ -9858,6 +10212,58 @@ fn direct_rcs_encode_rect_worklist_command_stream(
     true
 }
 
+fn direct_rcs_push_gpgpu_dispatch_prologue(
+    batch: &mut [u32],
+    cursor: &mut usize,
+    upload: UploadedKernelArtifact,
+) -> bool {
+    direct_rcs_push_pipe_control_full(
+        batch,
+        cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL | 1,
+    ) && direct_rcs_push(batch, cursor, PIPELINE_SELECT_GPGPU)
+        && direct_rcs_push_pipe_control_full(batch, cursor, 1 << 9, PIPE_CONTROL_CS_STALL)
+        && direct_rcs_push(batch, cursor, PIPELINE_SELECT_3D)
+        && direct_rcs_push_pipe_control_full(
+            batch,
+            cursor,
+            (1 << 9) | (1 << 11),
+            PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
+        )
+        && direct_rcs_push_state_base_address(
+            batch,
+            cursor,
+            DIRECT_RCS_GPU_VA_BATCH_BASE,
+            DIRECT_RCS_GPU_VA_BATCH_BASE,
+            upload.gpu,
+        )
+        && direct_rcs_push_pipe_control(batch, cursor, PIPE_CONTROL_INVALIDATE_BITS)
+        && direct_rcs_push(batch, cursor, PIPELINE_SELECT_GPGPU)
+        && direct_rcs_push_pipe_control_full(batch, cursor, 1 << 9, PIPE_CONTROL_CS_STALL)
+        && direct_rcs_push(batch, cursor, MEDIA_VFE_STATE_CMD)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, GPGPU_VFE_DW3_UOS)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, GPGPU_VFE_DW5_UOS)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, 0)
+}
+
+fn direct_rcs_push_gpgpu_dispatch_epilogue(
+    batch: &mut [u32],
+    cursor: &mut usize,
+    post_marker_slot: usize,
+    post_marker: u32,
+) -> bool {
+    direct_rcs_push_pipe_control(batch, cursor, PIPE_CONTROL_FLUSH_BITS)
+        && direct_rcs_push_store_marker(batch, cursor, post_marker_slot, post_marker)
+        && direct_rcs_push(batch, cursor, MI_BATCH_BUFFER_END)
+        && direct_rcs_push(batch, cursor, MI_NOOP)
+}
+
 fn direct_rcs_encode_sprite_quad_worklist_runs_command_stream(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
@@ -9869,40 +10275,7 @@ fn direct_rcs_encode_sprite_quad_worklist_runs_command_stream(
     let mut cursor = 0usize;
     let mut ok = true;
 
-    ok &= direct_rcs_push_pipe_control_full(
-        batch,
-        &mut cursor,
-        (1 << 9) | (1 << 11),
-        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL | 1,
-    );
-    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
-    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
-    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_3D);
-    ok &= direct_rcs_push_pipe_control_full(
-        batch,
-        &mut cursor,
-        (1 << 9) | (1 << 11),
-        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
-    );
-    ok &= direct_rcs_push_state_base_address(
-        batch,
-        &mut cursor,
-        DIRECT_RCS_GPU_VA_BATCH_BASE,
-        DIRECT_RCS_GPU_VA_BATCH_BASE,
-        upload.gpu,
-    );
-    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
-    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
-    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
-    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_VFE_STATE_CMD);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW3_UOS);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW5_UOS);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push_gpgpu_dispatch_prologue(batch, &mut cursor, upload);
     ok &= direct_rcs_push_store_marker(
         batch,
         &mut cursor,
@@ -9910,8 +10283,8 @@ fn direct_rcs_encode_sprite_quad_worklist_runs_command_stream(
         SPRITE_QUAD_WORKLIST_PRE_MARKER,
     );
     for (run_index, run) in runs.iter().enumerate() {
-        let idd_offset = RECT_WORKLIST_IDD_OFFSET_BYTES
-            + run_index * SPRITE_QUAD_WORKLIST_RUN_STATE_BLOCK_BYTES;
+        let idd_offset =
+            RECT_WORKLIST_IDD_OFFSET_BYTES + run_index * SPRITE_QUAD_WORKLIST_RUN_STATE_BLOCK_BYTES;
         let payload_offset =
             payload_base + run_index.saturating_mul(SPRITE_QUAD_WORKLIST_INDIRECT_BYTES);
         ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
@@ -9928,15 +10301,12 @@ fn direct_rcs_encode_sprite_quad_worklist_runs_command_stream(
         ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
         ok &= direct_rcs_push(batch, &mut cursor, 0);
     }
-    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
-    ok &= direct_rcs_push_store_marker(
+    ok &= direct_rcs_push_gpgpu_dispatch_epilogue(
         batch,
         &mut cursor,
         SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
         SPRITE_QUAD_WORKLIST_POST_MARKER,
     );
-    ok &= direct_rcs_push(batch, &mut cursor, MI_BATCH_BUFFER_END);
-    ok &= direct_rcs_push(batch, &mut cursor, MI_NOOP);
 
     if !ok {
         return false;
@@ -9958,40 +10328,7 @@ fn direct_rcs_encode_sprite_quad_worklist_command_stream(
     let mut cursor = 0usize;
     let mut ok = true;
 
-    ok &= direct_rcs_push_pipe_control_full(
-        batch,
-        &mut cursor,
-        (1 << 9) | (1 << 11),
-        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL | 1,
-    );
-    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
-    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
-    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_3D);
-    ok &= direct_rcs_push_pipe_control_full(
-        batch,
-        &mut cursor,
-        (1 << 9) | (1 << 11),
-        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
-    );
-    ok &= direct_rcs_push_state_base_address(
-        batch,
-        &mut cursor,
-        DIRECT_RCS_GPU_VA_BATCH_BASE,
-        DIRECT_RCS_GPU_VA_BATCH_BASE,
-        upload.gpu,
-    );
-    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
-    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
-    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
-    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_VFE_STATE_CMD);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW3_UOS);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW5_UOS);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push_gpgpu_dispatch_prologue(batch, &mut cursor, upload);
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push(batch, &mut cursor, RECT_WORKLIST_IDD_BYTES as u32);
@@ -10019,15 +10356,12 @@ fn direct_rcs_encode_sprite_quad_worklist_command_stream(
     }
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
-    ok &= direct_rcs_push_store_marker(
+    ok &= direct_rcs_push_gpgpu_dispatch_epilogue(
         batch,
         &mut cursor,
         SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
         SPRITE_QUAD_WORKLIST_POST_MARKER,
     );
-    ok &= direct_rcs_push(batch, &mut cursor, MI_BATCH_BUFFER_END);
-    ok &= direct_rcs_push(batch, &mut cursor, MI_NOOP);
 
     if !ok {
         return false;
@@ -11829,33 +12163,25 @@ fn direct_rcs_write_alpha_blend_worklist_surface_states_at(
     }
 
     unsafe {
-        let binding = state
-            .batch_virt
-            .add(binding_table_offset) as *mut u32;
+        let binding = state.batch_virt.add(binding_table_offset) as *mut u32;
         core::ptr::write_volatile(binding, src_surface_state_offset as u32);
         core::ptr::write_volatile(binding.add(1), dst_surface_state_offset as u32);
-        core::ptr::write_volatile(
-            binding.add(2),
-            desc_surface_state_offset as u32,
-        );
+        core::ptr::write_volatile(binding.add(2), desc_surface_state_offset as u32);
     }
 
-    direct_rcs_write_buffer_surface_state(
-        state,
-        src_surface_state_offset,
-        src_gpu,
-        src_bytes,
-    ) && direct_rcs_write_buffer_surface_state(
-        state,
-        dst_surface_state_offset,
-        dst_gpu,
-        dst_bytes,
-    ) && direct_rcs_write_buffer_surface_state(
-        state,
-        desc_surface_state_offset,
-        desc_gpu,
-        desc_bytes,
-    )
+    direct_rcs_write_buffer_surface_state(state, src_surface_state_offset, src_gpu, src_bytes)
+        && direct_rcs_write_buffer_surface_state(
+            state,
+            dst_surface_state_offset,
+            dst_gpu,
+            dst_bytes,
+        )
+        && direct_rcs_write_buffer_surface_state(
+            state,
+            desc_surface_state_offset,
+            desc_gpu,
+            desc_bytes,
+        )
 }
 
 fn direct_rcs_write_fill_rect_worklist_payload_at(
@@ -12028,20 +12354,20 @@ fn direct_rcs_write_sprite_quad_worklist_payload_at(
         core::ptr::write_volatile(dwords.add(8), 16);
         core::ptr::write_volatile(dwords.add(9), 1);
         core::ptr::write_volatile(dwords.add(10), 1);
-        core::ptr::write_volatile(dwords.add(12), params.src_gpu as u32);
-        core::ptr::write_volatile(dwords.add(13), (params.src_gpu >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(14), params.dst_gpu as u32);
-        core::ptr::write_volatile(dwords.add(15), (params.dst_gpu >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(16), params.desc_gpu as u32);
-        core::ptr::write_volatile(dwords.add(17), (params.desc_gpu >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(18), params.src_pitch_bytes);
-        core::ptr::write_volatile(dwords.add(19), params.dst_pitch_bytes);
-        core::ptr::write_volatile(dwords.add(20), params.src_width);
-        core::ptr::write_volatile(dwords.add(21), params.src_height);
-        core::ptr::write_volatile(dwords.add(22), params.dst_width);
-        core::ptr::write_volatile(dwords.add(23), params.dst_height);
-        core::ptr::write_volatile(dwords.add(24), params.desc_base);
-        core::ptr::write_volatile(dwords.add(25), params.desc_count);
+        core::ptr::write_volatile(dwords.add(8), params.src_gpu as u32);
+        core::ptr::write_volatile(dwords.add(9), (params.src_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(10), params.dst_gpu as u32);
+        core::ptr::write_volatile(dwords.add(11), (params.dst_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(12), params.desc_gpu as u32);
+        core::ptr::write_volatile(dwords.add(13), (params.desc_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(14), params.src_pitch_bytes);
+        core::ptr::write_volatile(dwords.add(15), params.dst_pitch_bytes);
+        core::ptr::write_volatile(dwords.add(16), params.src_width);
+        core::ptr::write_volatile(dwords.add(17), params.src_height);
+        core::ptr::write_volatile(dwords.add(18), params.dst_width);
+        core::ptr::write_volatile(dwords.add(19), params.dst_height);
+        core::ptr::write_volatile(dwords.add(20), params.desc_base);
+        core::ptr::write_volatile(dwords.add(21), params.desc_count);
 
         let local_ids = payload.add(SPRITE_QUAD_WORKLIST_CROSS_THREAD_BYTES) as *mut u16;
         for lane in 0..16usize {
