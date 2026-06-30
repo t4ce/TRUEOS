@@ -52,7 +52,7 @@ QEMU_BIN ?= qemu-system-x86_64
 QEMU_MEMORY ?= 12000M
 QEMU_UEFI_FIRMWARE = $(OVMF_BUNDLE_PATH)
 NVME_IMG := tools/nvme.img
-CNT_FILE := bld/cnt
+CNT_FILE := tools/cnt
 QEMU_BRIDGE ?= br0
 QEMU_BRIDGE_HELPER ?= $(firstword $(wildcard /usr/lib/qemu/qemu-bridge-helper /usr/libexec/qemu-bridge-helper /usr/lib/qemu-bridge-helper))
 QEMU_HDA_AUDIODEV ?= none,id=snd0
