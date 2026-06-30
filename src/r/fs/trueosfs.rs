@@ -1913,143 +1913,6 @@ async fn ensure_index_async(
     result
 }
 
-/// Best-effort: build an HTML `<ul>/<li>` tree of the TRUEOSFS directory structure.
-///
-/// Returns `Ok(None)` if the disk does not contain TRUEOSFS.
-///
-/// Notes:
-/// - Traversal is capped (`max_entries`) to keep this usable for tiny HTTP responses.
-/// - Uses the same HTML escaping guarantees as `trueos_math::Tree::html_tree_string`.
-pub async fn html_tree_async(
-    disk: block::DeviceHandle,
-    max_entries: usize,
-) -> Result<Option<String>, block::Error> {
-    use alloc::string::String as AString;
-    use alloc::{collections::BTreeMap, vec::Vec};
-    use trueos_math::{NodeId, Tree};
-
-    if max_entries == 0 {
-        return Ok(Some(String::from("<ul></ul>")));
-    }
-    if disk.parent().is_some() {
-        return Err(block::Error::InvalidParam);
-    }
-
-    let Some(placement) = locate_async(disk).await? else {
-        return Ok(None);
-    };
-
-    ensure_index_async(disk, &placement).await?;
-    let disk_id = disk.id();
-
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    enum FsKind {
-        Root,
-        Dir,
-        File,
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    struct FsEntry {
-        kind: FsKind,
-        name: AString,
-    }
-
-    // Keep memory bounded: CAP is the allocation for nodes/edges, while max_entries
-    // constrains traversal and output size.
-    const CAP: usize = 1024;
-    let cap_limit = core::cmp::min(max_entries.saturating_add(1), CAP);
-
-    let mut tree: Tree<FsEntry, CAP> = Tree::new();
-    let Some(root) = tree.add_root(FsEntry {
-        kind: FsKind::Root,
-        name: AString::from("/"),
-    }) else {
-        return Ok(Some(String::from("<ul><li>alloc failed</li></ul>")));
-    };
-
-    let mut dir_nodes: BTreeMap<Vec<u8>, NodeId> = BTreeMap::new();
-    dir_nodes.insert(Vec::new(), root);
-
-    {
-        let roots = ROOTS.lock();
-        let Some(mount) = roots.iter().find(|m| m.disk_id == disk_id) else {
-            return Err(block::Error::NotReady);
-        };
-        let Some(index) = &mount.index else {
-            return Err(block::Error::Corrupted);
-        };
-
-        'files: for key in index.keys() {
-            let Ok(path) = core::str::from_utf8(key.as_slice()) else {
-                continue;
-            };
-            if path.is_empty() {
-                continue;
-            }
-
-            let mut parent_node = root;
-            let mut dir_path: Vec<u8> = Vec::new();
-            let mut parts = path.split('/').filter(|seg| !seg.is_empty()).peekable();
-            while let Some(seg) = parts.next() {
-                let is_last = parts.peek().is_none();
-                if is_last {
-                    if tree.len() >= cap_limit {
-                        break 'files;
-                    }
-                    if tree
-                        .add_child(
-                            parent_node,
-                            FsEntry {
-                                kind: FsKind::File,
-                                name: AString::from(seg),
-                            },
-                        )
-                        .is_none()
-                    {
-                        break 'files;
-                    }
-                    continue;
-                }
-
-                if !dir_path.is_empty() {
-                    dir_path.push(b'/');
-                }
-                dir_path.extend_from_slice(seg.as_bytes());
-
-                if let Some(existing) = dir_nodes.get(&dir_path).copied() {
-                    parent_node = existing;
-                    continue;
-                }
-
-                if tree.len() >= cap_limit {
-                    break 'files;
-                }
-                let Some(node) = tree.add_child(
-                    parent_node,
-                    FsEntry {
-                        kind: FsKind::Dir,
-                        name: AString::from(seg),
-                    },
-                ) else {
-                    break 'files;
-                };
-                dir_nodes.insert(dir_path.clone(), node);
-                parent_node = node;
-            }
-        }
-    }
-
-    Ok(Some(tree.html_tree_string(root, |e, out| match e.kind {
-        FsKind::Root => out.push('/'),
-        FsKind::Dir => {
-            out.push_str(e.name.as_str());
-            out.push('/');
-        }
-        FsKind::File => out.push_str(e.name.as_str()),
-    })))
-}
-
 fn push_json_string_escaped(out: &mut String, value: &str) {
     out.push('"');
     for ch in value.chars() {
@@ -2321,6 +2184,38 @@ pub fn root_index_paths(disk_id: block::DiscId, max_paths: usize) -> Option<Vec<
         }
     }
     Some(out)
+}
+
+pub(super) async fn index_path_snapshot_async(
+    disk: block::DeviceHandle,
+) -> Result<Option<Vec<String>>, block::Error> {
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    let Some(placement) = locate_async(disk).await? else {
+        return Ok(None);
+    };
+
+    ensure_index_async(disk, &placement).await?;
+    let disk_id = disk.id();
+
+    let roots = ROOTS.lock();
+    let Some(mount) = roots.iter().find(|m| m.disk_id == disk_id) else {
+        return Err(block::Error::NotReady);
+    };
+    let Some(index) = mount.index.as_ref() else {
+        return Err(block::Error::Corrupted);
+    };
+
+    let mut out = Vec::with_capacity(index.len());
+    for key in index.keys() {
+        if let Ok(path) = core::str::from_utf8(key.as_slice())
+            && !path.is_empty()
+        {
+            out.push(String::from(path));
+        }
+    }
+    Ok(Some(out))
 }
 
 pub async fn raw_log_scan_async(

@@ -194,7 +194,7 @@ pub mod kfs {
     pub fn html_tree(max_entries: usize) -> Result<String> {
         let disk = root_disk()?;
         crate::wait::spawn_and_wait_local(async move {
-            match crate::r::fs::trueosfs::html_tree_async(disk, max_entries).await? {
+            match crate::r::fs::fs_html::html_tree_async(disk, max_entries).await? {
                 Some(v) => Ok(v),
                 None => Err(FsError::NoRoot),
             }

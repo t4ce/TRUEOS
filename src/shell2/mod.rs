@@ -1408,7 +1408,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
 
     let mut line: HString<MAX_LINE> = HString::new();
     let mut transcript: VecDeque<TranscriptEntry> = current_transcript_for_task(io);
-    let mut last_matrix_revision = matrix::revision();
+    let mut last_matrix_revision = matrix::visible_revision(output_mask);
     let mut saw_cr = false;
     let mut esc = EscState::None;
     let mut csi_param: u16 = 0;
@@ -1416,7 +1416,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     let mut live_history_cursor: Option<usize> = None;
 
     loop {
-        let matrix_revision = matrix::revision();
+        let matrix_revision = matrix::visible_revision(output_mask);
         if matrix_revision != last_matrix_revision {
             last_matrix_revision = matrix_revision;
             configure_output_view(&out, output_mask);

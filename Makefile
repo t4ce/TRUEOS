@@ -76,7 +76,7 @@ CARGO_GFX_FLAGS =
 
 IMG_SIZE ?= 25G
 
-.PHONY: images empty-libs kernel artifacts limine baremetal-reboot-log iso provenance-git-clean provenance verify-provenance release-git-clean release dbg run
+.PHONY: images empty-libs kernel artifacts limine baremetal-reboot-log iso provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
 
 images: $(NVME_IMG)
 
@@ -91,7 +91,6 @@ empty-libs:
 	ar crs $(KERNEL_EMPTY_LIB_DIR)/libgcc_s.a
 
 kernel: empty-libs
-	@mkdir -p "$$(dirname "$(CNT_FILE)")"; count=$$(cat "$(CNT_FILE)" 2>/dev/null || echo 0); count=$${count:-0}; printf '%s\n' $$((count + 1)) | tee "$(CNT_FILE)"
 	cargo +nightly build $(CARGO_GFX_FLAGS) $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc,panic_abort -Z json-target-spec --target .cargo/x86_64-unknown-trueos.json
 
 artifacts: kernel
@@ -281,10 +280,19 @@ release-git-clean:
 	printf 'release source commit: %s\n' "$$(git rev-parse HEAD)"; \
 	printf 'release source tree:   %s\n' "$$(git rev-parse 'HEAD^{tree}')"
 
+release-count:
+	@mkdir -p "$$(dirname "$(CNT_FILE)")"; \
+	count=$$(cat "$(CNT_FILE)" 2>/dev/null || echo 0); \
+	count=$${count:-0}; \
+	next=$$((count + 1)); \
+	printf '%s\n' "$$next" > "$(CNT_FILE)"; \
+	printf 'release counter: %s -> %s (%s)\n' "$$count" "$$next" "$(CNT_FILE)"
+
 release: BUILD_MODE := release
 release: CARGO_BUILD_FLAGS += --release
-release: PROVENANCE_CLEAN_FLAG := --require-clean
-release: release-git-clean provenance
+release: release-git-clean
+	$(MAKE) --no-print-directory release-count
+	$(MAKE) --no-print-directory BUILD_MODE="$(BUILD_MODE)" CARGO_BUILD_FLAGS="$(CARGO_BUILD_FLAGS)" PROVENANCE_CLEAN_FLAG=--allow-dirty PROVENANCE_SOURCE_MANIFEST=git-index provenance
 	$(MAKE) --no-print-directory verify-provenance
 	@if [ -z "$(OVMF_BUNDLE_PATH)" ] || [ ! -f "$(OVMF_BUNDLE_PATH)" ]; then \
 		echo "error: no OVMF firmware found to bundle"; \
