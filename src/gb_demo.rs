@@ -7,6 +7,7 @@ const PRESENT_MAX_SCALE: usize = 4;
 const PRESENT_BG_XRGB: u32 = 0x00FF_FFFF;
 const DEBUG_ATLAS_PATH: &str = "gboy_athlas.bmp";
 const DEBUG_ATLAS_META_PATH: &str = "gboy_athlas.txt";
+const DEBUG_ATLAS_MARKER_PATH: &str = "gboy_athlas.marker.txt";
 const DEBUG_ATLAS_WARMUP_FRAMES: u64 = 8;
 const GB_TILE_BYTES: usize = 16;
 const GB_TILE_PIXELS: usize = 8;
@@ -90,21 +91,39 @@ async fn run_gboy(
 
         if !debug_atlas_written && frame >= DEBUG_ATLAS_WARMUP_FRAMES {
             debug_atlas_written = true;
+            crate::log!(
+                "gboy: debug atlas attempt frame={} path={} meta={} marker={}\n",
+                frame,
+                DEBUG_ATLAS_PATH,
+                DEBUG_ATLAS_META_PATH,
+                DEBUG_ATLAS_MARKER_PATH
+            );
             match write_gboy_debug_atlas(path, rom_hash, &emulator).await {
-                Ok(()) => crate::shell2::print_matrix_target_line(
-                    target,
-                    alloc::format!(
-                        "gboy: wrote /{} and /{} after {} frame(s)",
+                Ok(()) => {
+                    crate::log!(
+                        "gboy: debug atlas written frame={} bmp={} meta={}\n",
+                        frame,
                         DEBUG_ATLAS_PATH,
-                        DEBUG_ATLAS_META_PATH,
-                        frame
-                    )
-                    .as_str(),
-                ),
-                Err(err) => crate::shell2::print_matrix_target_line(
-                    target,
-                    alloc::format!("gboy: debug atlas write failed: {err}").as_str(),
-                ),
+                        DEBUG_ATLAS_META_PATH
+                    );
+                    crate::shell2::print_matrix_target_line(
+                        target,
+                        alloc::format!(
+                            "gboy: wrote /{} and /{} after {} frame(s)",
+                            DEBUG_ATLAS_PATH,
+                            DEBUG_ATLAS_META_PATH,
+                            frame
+                        )
+                        .as_str(),
+                    );
+                }
+                Err(err) => {
+                    crate::log!("gboy: debug atlas write failed frame={} err={}\n", frame, err);
+                    crate::shell2::print_matrix_target_line(
+                        target,
+                        alloc::format!("gboy: debug atlas write failed: {err}").as_str(),
+                    );
+                }
             }
         }
 
@@ -173,6 +192,17 @@ async fn write_gboy_debug_atlas(
         .ok_or_else(|| String::from("no TRUEOSFS root mounted"))?;
     let bmp = encode_gboy_vram_atlas_bmp(&emulator.gpu);
     let meta = gboy_debug_atlas_metadata(rom_path, rom_hash, emulator);
+
+    let ok = crate::r::fs::trueosfs::file_in_async(
+        disk,
+        DEBUG_ATLAS_MARKER_PATH,
+        b"gboy debug atlas hook reached\n",
+    )
+    .await
+    .map_err(|err| alloc::format!("marker write failed: {:?}", err))?;
+    if !ok {
+        return Err(String::from("marker write rejected by TRUEOSFS"));
+    }
 
     let ok = crate::r::fs::trueosfs::file_in_async(disk, DEBUG_ATLAS_PATH, bmp.as_slice())
         .await
