@@ -34,6 +34,7 @@ pub(crate) struct MatrixSlotView {
 struct MatrixSlot {
     id: MatrixSlotId,
     lifetime_generation: u64,
+    revision: u64,
     lines: VecDeque<TranscriptEntry>,
     activity: MatrixSlotActivity,
     running_count: usize,
@@ -56,6 +57,10 @@ struct MatrixState {
     net_active: MatrixSlotId,
     ui3_active: MatrixSlotId,
     container_active: MatrixSlotId,
+    uart_view_revision: u64,
+    net_view_revision: u64,
+    ui3_view_revision: u64,
+    container_view_revision: u64,
     user_input_record: VecDeque<AllocString>,
     live_user_input_record: VecDeque<LiveUserInputEntry>,
     revision: u64,
@@ -72,6 +77,10 @@ fn state() -> &'static spin::Mutex<MatrixState> {
             net_active: default_slot_id(),
             ui3_active: default_slot_id(),
             container_active: default_slot_id(),
+            uart_view_revision: 1,
+            net_view_revision: 1,
+            ui3_view_revision: 1,
+            container_view_revision: 1,
             user_input_record: VecDeque::new(),
             live_user_input_record: VecDeque::new(),
             revision: 1,
@@ -115,6 +124,7 @@ fn ensure_slot_index(slots: &mut Vec<MatrixSlot>, id: &MatrixSlotId) -> usize {
     slots.push(MatrixSlot {
         id: id.clone(),
         lifetime_generation: NEXT_SLOT_LIFETIME_GENERATION.fetch_add(1, Ordering::AcqRel),
+        revision: 1,
         lines: VecDeque::new(),
         activity: MatrixSlotActivity::Idle,
         running_count: 0,
@@ -129,6 +139,41 @@ fn ensure_slot_index(slots: &mut Vec<MatrixSlot>, id: &MatrixSlotId) -> usize {
 
 fn bump_revision(state: &mut MatrixState) {
     state.revision = state.revision.wrapping_add(1);
+}
+
+fn bump_slot_revision(state: &mut MatrixState, idx: usize) {
+    state.slots[idx].revision = state.slots[idx].revision.wrapping_add(1).max(1);
+    bump_revision(state);
+}
+
+fn active_view_revision_ref(state: &MatrixState, output_mask: u8) -> &u64 {
+    if (output_mask & super::OUTPUT_NET_TCP_MASK) != 0 {
+        &state.net_view_revision
+    } else if (output_mask & super::OUTPUT_UI3_MASK) != 0 {
+        &state.ui3_view_revision
+    } else if (output_mask & super::OUTPUT_CONTAINER_MASK) != 0 {
+        &state.container_view_revision
+    } else {
+        &state.uart_view_revision
+    }
+}
+
+fn active_view_revision_mut(state: &mut MatrixState, output_mask: u8) -> &mut u64 {
+    if (output_mask & super::OUTPUT_NET_TCP_MASK) != 0 {
+        &mut state.net_view_revision
+    } else if (output_mask & super::OUTPUT_UI3_MASK) != 0 {
+        &mut state.ui3_view_revision
+    } else if (output_mask & super::OUTPUT_CONTAINER_MASK) != 0 {
+        &mut state.container_view_revision
+    } else {
+        &mut state.uart_view_revision
+    }
+}
+
+fn bump_active_view_revision(state: &mut MatrixState, output_mask: u8) {
+    let revision = active_view_revision_mut(state, output_mask);
+    *revision = revision.wrapping_add(1).max(1);
+    bump_revision(state);
 }
 
 fn active_slot_id_ref(state: &MatrixState, output_mask: u8) -> &MatrixSlotId {
@@ -207,9 +252,11 @@ pub(crate) fn switch_active_slot(output_mask: u8, requested: &str) -> MatrixSlot
     let next_id = normalize_slot_id(requested);
     let mut guard = state().lock();
     let idx = ensure_slot_index(&mut guard.slots, &next_id);
-    *active_slot_id_mut(&mut guard, output_mask) = next_id.clone();
+    if *active_slot_id_ref(&guard, output_mask) != next_id {
+        *active_slot_id_mut(&mut guard, output_mask) = next_id.clone();
+        bump_active_view_revision(&mut guard, output_mask);
+    }
     let _ = idx;
-    bump_revision(&mut guard);
     next_id
 }
 
@@ -273,7 +320,7 @@ pub(crate) fn reserve_available_vm_slot_selected(output_mask: u8, preferred: &st
 
     if preferred_id != default_id && reserve_vm_slot_id(&mut guard, &preferred_id) {
         *active_slot_id_mut(&mut guard, output_mask) = preferred_id.clone();
-        bump_revision(&mut guard);
+        bump_active_view_revision(&mut guard, output_mask);
         return preferred_id;
     }
 
@@ -284,7 +331,7 @@ pub(crate) fn reserve_available_vm_slot_selected(output_mask: u8, preferred: &st
         }
         if reserve_vm_slot_id(&mut guard, &candidate) {
             *active_slot_id_mut(&mut guard, output_mask) = candidate.clone();
-            bump_revision(&mut guard);
+            bump_active_view_revision(&mut guard, output_mask);
             return candidate;
         }
     }
@@ -293,14 +340,14 @@ pub(crate) fn reserve_available_vm_slot_selected(output_mask: u8, preferred: &st
         let candidate = broad_slot_candidate(attempt);
         if reserve_vm_slot_id(&mut guard, &candidate) {
             *active_slot_id_mut(&mut guard, output_mask) = candidate.clone();
-            bump_revision(&mut guard);
+            bump_active_view_revision(&mut guard, output_mask);
             return candidate;
         }
     }
 
     let _ = reserve_vm_slot_id(&mut guard, &preferred_id);
     *active_slot_id_mut(&mut guard, output_mask) = preferred_id.clone();
-    bump_revision(&mut guard);
+    bump_active_view_revision(&mut guard, output_mask);
     preferred_id
 }
 
@@ -325,18 +372,25 @@ pub(crate) fn free_slot(requested: &str) -> MatrixSlotId {
             slot.vm_id = None;
             slot.vm_launch_reserved = false;
             slot.line_width = DEFAULT_MATRIX_SLOT_LINE_WIDTH;
-            changed = true;
+            bump_slot_revision(&mut guard, idx);
         }
     } else if let Some(idx) = guard.slots.iter().position(|slot| slot.id == freed_id) {
         let _ = guard.slots.remove(idx);
         if guard.uart_active == freed_id {
             guard.uart_active = default_id.clone();
+            bump_active_view_revision(&mut guard, super::OUTPUT_UART1_MASK);
         }
         if guard.net_active == freed_id {
             guard.net_active = default_id.clone();
+            bump_active_view_revision(&mut guard, super::OUTPUT_NET_TCP_MASK);
         }
         if guard.ui3_active == freed_id {
             guard.ui3_active = default_id.clone();
+            bump_active_view_revision(&mut guard, super::OUTPUT_UI3_MASK);
+        }
+        if guard.container_active == freed_id {
+            guard.container_active = default_id.clone();
+            bump_active_view_revision(&mut guard, super::OUTPUT_CONTAINER_MASK);
         }
         changed = true;
     }
@@ -368,7 +422,7 @@ pub(crate) fn set_active_line_width(output_mask: u8, width: usize) {
     let idx = ensure_slot_index(&mut guard.slots, &slot_id);
     if guard.slots[idx].line_width != width {
         guard.slots[idx].line_width = width;
-        bump_revision(&mut guard);
+        bump_slot_revision(&mut guard, idx);
     }
 }
 
@@ -381,7 +435,7 @@ pub(crate) fn record_line_for_output(
     let slot_id = active_slot_id_ref(&guard, output_mask).clone();
     let idx = ensure_slot_index(&mut guard.slots, &slot_id);
     push_line(&mut guard.slots[idx], source, text);
-    bump_revision(&mut guard);
+    bump_slot_revision(&mut guard, idx);
     slot_id
 }
 
@@ -390,14 +444,14 @@ pub(crate) fn record_line_in_default(source: LineSource, text: &str) {
     let default_id = default_slot_id();
     let idx = ensure_slot_index(&mut guard.slots, &default_id);
     push_line(&mut guard.slots[idx], source, text);
-    bump_revision(&mut guard);
+    bump_slot_revision(&mut guard, idx);
 }
 
 pub(crate) fn record_line_in_slot(slot_id: &MatrixSlotId, source: LineSource, text: &str) {
     let mut guard = state().lock();
     let idx = ensure_slot_index(&mut guard.slots, slot_id);
     push_line(&mut guard.slots[idx], source, text);
-    bump_revision(&mut guard);
+    bump_slot_revision(&mut guard, idx);
 }
 
 pub(crate) fn record_line_in_live_slot(
@@ -414,7 +468,7 @@ pub(crate) fn record_line_in_live_slot(
         return false;
     }
     push_line(&mut guard.slots[idx], source, text);
-    bump_revision(&mut guard);
+    bump_slot_revision(&mut guard, idx);
     true
 }
 
@@ -461,7 +515,7 @@ pub(crate) fn set_slot_activity(slot_id: &MatrixSlotId, activity: MatrixSlotActi
     };
     if guard.slots[idx].activity != next {
         guard.slots[idx].activity = next;
-        bump_revision(&mut guard);
+        bump_slot_revision(&mut guard, idx);
     }
 }
 
@@ -472,7 +526,7 @@ pub(crate) fn begin_slot_running(slot_id: &MatrixSlotId) {
     guard.slots[idx].running_count = guard.slots[idx].running_count.saturating_add(1);
     let is_running = visible_activity(&guard.slots[idx]) == MatrixSlotActivity::Running;
     if was_running != is_running {
-        bump_revision(&mut guard);
+        bump_slot_revision(&mut guard, idx);
     }
 }
 
@@ -488,7 +542,7 @@ pub(crate) fn begin_live_slot_running(slot_id: &MatrixSlotId, lifetime_generatio
     guard.slots[idx].running_count = guard.slots[idx].running_count.saturating_add(1);
     let is_running = visible_activity(&guard.slots[idx]) == MatrixSlotActivity::Running;
     if was_running != is_running {
-        bump_revision(&mut guard);
+        bump_slot_revision(&mut guard, idx);
     }
     true
 }
@@ -500,7 +554,7 @@ pub(crate) fn end_slot_running(slot_id: &MatrixSlotId) {
     guard.slots[idx].running_count = guard.slots[idx].running_count.saturating_sub(1);
     let is_running = visible_activity(&guard.slots[idx]) == MatrixSlotActivity::Running;
     if was_running != is_running {
-        bump_revision(&mut guard);
+        bump_slot_revision(&mut guard, idx);
     }
 }
 
@@ -516,7 +570,7 @@ pub(crate) fn end_live_slot_running(slot_id: &MatrixSlotId, lifetime_generation:
     guard.slots[idx].running_count = guard.slots[idx].running_count.saturating_sub(1);
     let is_running = visible_activity(&guard.slots[idx]) == MatrixSlotActivity::Running;
     if was_running != is_running {
-        bump_revision(&mut guard);
+        bump_slot_revision(&mut guard, idx);
     }
     true
 }
@@ -549,7 +603,7 @@ pub(crate) fn request_slot_interrupt(slot_id: &MatrixSlotId) -> (u64, Option<u8>
     guard.slots[idx].interrupt_generation = guard.slots[idx].interrupt_generation.wrapping_add(1);
     let generation = guard.slots[idx].interrupt_generation;
     let vm_id = guard.slots[idx].vm_id;
-    bump_revision(&mut guard);
+    bump_slot_revision(&mut guard, idx);
     (generation, vm_id)
 }
 
@@ -581,7 +635,7 @@ pub(crate) fn bind_slot_vm(slot_id: &MatrixSlotId, vm_id: u8, input_attached: bo
         guard.slots[idx].vm_id = Some(vm_id);
         guard.slots[idx].vm_input_attached = input_attached;
         guard.slots[idx].vm_launch_reserved = false;
-        bump_revision(&mut guard);
+        bump_slot_revision(&mut guard, idx);
     }
 }
 
@@ -599,7 +653,7 @@ pub(crate) fn release_vm_slot_reservation(
         return false;
     }
     guard.slots[idx].vm_launch_reserved = false;
-    bump_revision(&mut guard);
+    bump_slot_revision(&mut guard, idx);
     true
 }
 
@@ -610,7 +664,7 @@ pub(crate) fn unbind_slot_vm(slot_id: &MatrixSlotId, vm_id: u8) {
         guard.slots[idx].vm_id = None;
         guard.slots[idx].vm_input_attached = false;
         guard.slots[idx].vm_launch_reserved = false;
-        bump_revision(&mut guard);
+        bump_slot_revision(&mut guard, idx);
     }
 }
 
@@ -632,6 +686,15 @@ pub(crate) fn slot_views(output_mask: u8) -> Vec<MatrixSlotView> {
 
 pub(crate) fn revision() -> u64 {
     state().lock().revision
+}
+
+pub(crate) fn visible_revision(output_mask: u8) -> u64 {
+    let mut guard = state().lock();
+    let slot_id = active_slot_id_ref(&guard, output_mask).clone();
+    let idx = ensure_slot_index(&mut guard.slots, &slot_id);
+    active_view_revision_ref(&guard, output_mask)
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(guard.slots[idx].revision)
 }
 
 pub(crate) fn history_total_lines() -> usize {
