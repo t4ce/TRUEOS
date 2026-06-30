@@ -24,7 +24,8 @@ pub(crate) mod validation;
 pub(crate) use api::{
     KnownKernelInfo, SourceBuildSmoke, trueos_cl_build_program_from_source,
     trueos_cl_known_kernel_count, trueos_cl_known_kernel_info, trueos_cl_known_kernel_uploaded,
-    trueos_cl_probe_known_aot_queue, trueos_cl_source_build_smoke, trueos_cl_upload_known_kernel,
+    trueos_cl_probe_known_aot_queue, trueos_cl_reload_all_known_kernels,
+    trueos_cl_reload_known_kernel, trueos_cl_source_build_smoke, trueos_cl_upload_known_kernel,
     trueos_cl_validate_known_aot_registry, trueos_cl_validate_known_aot_status,
 };
 pub(crate) use artifact::{

@@ -43,11 +43,13 @@ impl Default for BackendCaps {
 pub(crate) struct UploadedKernelRef {
     pub(crate) name: &'static str,
     pub(crate) target: &'static str,
+    pub(crate) source: &'static str,
     pub(crate) gpu: u64,
     pub(crate) phys: u64,
     pub(crate) bytes: usize,
     pub(crate) mapped_bytes: usize,
     pub(crate) verified: bool,
+    pub(crate) bin_sha256: [u8; 32],
 }
 
 impl UploadedKernelRef {
@@ -61,11 +63,13 @@ impl From<gpgpu::UploadedKernelArtifact> for UploadedKernelRef {
         Self {
             name: upload.name,
             target: upload.target,
+            source: upload.source,
             gpu: upload.gpu,
             phys: upload.phys,
             bytes: upload.bytes,
             mapped_bytes: upload.mapped_bytes,
             verified: upload.verified,
+            bin_sha256: upload.bin_sha256,
         }
     }
 }
@@ -175,6 +179,19 @@ impl IntelOpenClBackend {
         } else {
             Err(ClError::InvalidBinary)
         }
+    }
+
+    pub(crate) fn reload_known_aot(&self, kernel_name: &str) -> ClResult<UploadedKernelRef> {
+        match gpgpu::reload_known_kernel_artifact(kernel_name) {
+            Ok(upload) => Ok(UploadedKernelRef::from(upload)),
+            Err(gpgpu::GpgpuArtifactReloadError::UnknownKernel) => Err(ClError::InvalidKernelName),
+            Err(gpgpu::GpgpuArtifactReloadError::NoClaimedDevice) => Err(ClError::OutOfResources),
+            Err(gpgpu::GpgpuArtifactReloadError::UploadFailed) => Err(ClError::InvalidBinary),
+        }
+    }
+
+    pub(crate) fn reload_all_known_aot(&self) -> gpgpu::GpgpuArtifactReloadSummary {
+        gpgpu::reload_all_known_kernel_artifacts()
     }
 
     pub(crate) fn build_program_from_source(
