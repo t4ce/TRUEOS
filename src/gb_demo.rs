@@ -9,6 +9,8 @@ const DEBUG_ATLAS_PATH: &str = "gboy_athlas.bmp";
 const DEBUG_ATLAS_META_PATH: &str = "gboy_athlas.txt";
 const DEBUG_ATLAS_MARKER_PATH: &str = "gboy_athlas.marker.txt";
 const DEBUG_ATLAS_WARMUP_FRAMES: u64 = 8;
+const DEBUG_ATLAS_FALLBACK_FRAMES: u64 = 240;
+const DEBUG_ATLAS_MIN_NONZERO_BYTES: usize = 64;
 const GB_TILE_BYTES: usize = 16;
 const GB_TILE_PIXELS: usize = 8;
 const GB_TILE_COUNT: usize = 384;
@@ -21,6 +23,38 @@ const FNV1A64_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV1A64_PRIME: u64 = 0x0000_0100_0000_01b3;
 
 static GBOY_RUN_GENERATION: AtomicU32 = AtomicU32::new(0);
+
+#[derive(Clone, Copy)]
+struct GboyVramAtlasStats {
+    bank_nonzero_bytes: [usize; GB_ATLAS_BANKS],
+    bank_nonzero_tiles: [usize; GB_ATLAS_BANKS],
+    oam_nonzero_bytes: usize,
+}
+
+impl GboyVramAtlasStats {
+    fn total_nonzero_bytes(self) -> usize {
+        self.bank_nonzero_bytes.iter().sum()
+    }
+
+    fn total_nonzero_tiles(self) -> usize {
+        self.bank_nonzero_tiles.iter().sum()
+    }
+}
+
+#[derive(Clone, Copy)]
+enum GboyDebugAtlasReason {
+    VramSeeded,
+    Fallback,
+}
+
+impl GboyDebugAtlasReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            GboyDebugAtlasReason::VramSeeded => "vram_seeded",
+            GboyDebugAtlasReason::Fallback => "fallback",
+        }
+    }
+}
 
 pub(crate) fn next_run_generation() -> u32 {
     GBOY_RUN_GENERATION
@@ -90,40 +124,74 @@ async fn run_gboy(
         frame = frame.wrapping_add(1);
 
         if !debug_atlas_written && frame >= DEBUG_ATLAS_WARMUP_FRAMES {
-            debug_atlas_written = true;
-            crate::log!(
-                "gboy: debug atlas attempt frame={} path={} meta={} marker={}\n",
-                frame,
-                DEBUG_ATLAS_PATH,
-                DEBUG_ATLAS_META_PATH,
-                DEBUG_ATLAS_MARKER_PATH
-            );
-            match write_gboy_debug_atlas(path, rom_hash, &emulator).await {
-                Ok(()) => {
+            let stats = gboy_vram_atlas_stats(&emulator.gpu);
+            let reason = if stats.total_nonzero_bytes() >= DEBUG_ATLAS_MIN_NONZERO_BYTES {
+                Some(GboyDebugAtlasReason::VramSeeded)
+            } else if frame >= DEBUG_ATLAS_FALLBACK_FRAMES {
+                Some(GboyDebugAtlasReason::Fallback)
+            } else {
+                None
+            };
+
+            match reason {
+                Some(reason) => {
+                    debug_atlas_written = true;
                     crate::log!(
-                        "gboy: debug atlas written frame={} bmp={} meta={}\n",
+                        "gboy: debug atlas attempt frame={} reason={} vram0_nonzero_bytes={} vram1_nonzero_bytes={} nonzero_tiles={} path={} meta={} marker={}\n",
                         frame,
+                        reason.as_str(),
+                        stats.bank_nonzero_bytes[0],
+                        stats.bank_nonzero_bytes[1],
+                        stats.total_nonzero_tiles(),
                         DEBUG_ATLAS_PATH,
-                        DEBUG_ATLAS_META_PATH
+                        DEBUG_ATLAS_META_PATH,
+                        DEBUG_ATLAS_MARKER_PATH
                     );
-                    crate::shell2::print_matrix_target_line(
-                        target,
-                        alloc::format!(
-                            "gboy: wrote /{} and /{} after {} frame(s)",
-                            DEBUG_ATLAS_PATH,
-                            DEBUG_ATLAS_META_PATH,
-                            frame
-                        )
-                        .as_str(),
+                    match write_gboy_debug_atlas(path, rom_hash, &emulator, frame, reason, stats)
+                        .await
+                    {
+                        Ok(()) => {
+                            crate::log!(
+                                "gboy: debug atlas written frame={} reason={} bmp={} meta={}\n",
+                                frame,
+                                reason.as_str(),
+                                DEBUG_ATLAS_PATH,
+                                DEBUG_ATLAS_META_PATH
+                            );
+                            crate::shell2::print_matrix_target_line(
+                                target,
+                                alloc::format!(
+                                    "gboy: wrote /{} and /{} after {} frame(s)",
+                                    DEBUG_ATLAS_PATH,
+                                    DEBUG_ATLAS_META_PATH,
+                                    frame
+                                )
+                                .as_str(),
+                            );
+                        }
+                        Err(err) => {
+                            crate::log!(
+                                "gboy: debug atlas write failed frame={} err={}\n",
+                                frame,
+                                err
+                            );
+                            crate::shell2::print_matrix_target_line(
+                                target,
+                                alloc::format!("gboy: debug atlas write failed: {err}").as_str(),
+                            );
+                        }
+                    }
+                }
+                None if frame == DEBUG_ATLAS_WARMUP_FRAMES || frame.is_multiple_of(60) => {
+                    crate::log!(
+                        "gboy: debug atlas waiting frame={} vram0_nonzero_bytes={} vram1_nonzero_bytes={} nonzero_tiles={}\n",
+                        frame,
+                        stats.bank_nonzero_bytes[0],
+                        stats.bank_nonzero_bytes[1],
+                        stats.total_nonzero_tiles()
                     );
                 }
-                Err(err) => {
-                    crate::log!("gboy: debug atlas write failed frame={} err={}\n", frame, err);
-                    crate::shell2::print_matrix_target_line(
-                        target,
-                        alloc::format!("gboy: debug atlas write failed: {err}").as_str(),
-                    );
-                }
+                None => {}
             }
         }
 
@@ -187,11 +255,14 @@ async fn write_gboy_debug_atlas(
     rom_path: &str,
     rom_hash: u64,
     emulator: &crate::trueos_gboi::GameBoyEmulator,
+    frame: u64,
+    reason: GboyDebugAtlasReason,
+    stats: GboyVramAtlasStats,
 ) -> Result<(), String> {
     let disk = crate::r::fs::trueosfs::primary_root_handle()
         .ok_or_else(|| String::from("no TRUEOSFS root mounted"))?;
     let bmp = encode_gboy_vram_atlas_bmp(&emulator.gpu);
-    let meta = gboy_debug_atlas_metadata(rom_path, rom_hash, emulator);
+    let meta = gboy_debug_atlas_metadata(rom_path, rom_hash, emulator, frame, reason, stats);
 
     let ok = crate::r::fs::trueosfs::file_in_async(
         disk,
@@ -225,18 +296,55 @@ fn gboy_debug_atlas_metadata(
     rom_path: &str,
     rom_hash: u64,
     emulator: &crate::trueos_gboi::GameBoyEmulator,
+    frame: u64,
+    reason: GboyDebugAtlasReason,
+    stats: GboyVramAtlasStats,
 ) -> String {
     alloc::format!(
-        "rom_path={}\nrom_title={}\nrom_hash_fnv1a64={:016x}\ncgb={}\nwarmup_frames={}\natlas_file={}\nformat=bmp-bgra32\nwidth={}\nheight={}\nlayout=bank0 tiles 0..383 top, bank1 tiles 0..383 bottom, 16 columns, 8x8 pixels per tile\n",
+        "rom_path={}\nrom_title={}\nrom_hash_fnv1a64={:016x}\ncgb={}\nwarmup_frames={}\nfallback_frames={}\nmin_nonzero_bytes={}\ndump_frame={}\ndump_reason={}\nvram0_nonzero_bytes={}\nvram1_nonzero_bytes={}\nvram0_nonzero_tiles={}\nvram1_nonzero_tiles={}\noam_nonzero_bytes={}\natlas_file={}\nformat=bmp-bgra32\nwidth={}\nheight={}\nlayout=bank0 tiles 0..383 top, bank1 tiles 0..383 bottom, 16 columns, 8x8 pixels per tile\n",
         rom_path,
         cartridge_title(&emulator.cart.title),
         rom_hash,
         emulator.cgb_mode as u8,
         DEBUG_ATLAS_WARMUP_FRAMES,
+        DEBUG_ATLAS_FALLBACK_FRAMES,
+        DEBUG_ATLAS_MIN_NONZERO_BYTES,
+        frame,
+        reason.as_str(),
+        stats.bank_nonzero_bytes[0],
+        stats.bank_nonzero_bytes[1],
+        stats.bank_nonzero_tiles[0],
+        stats.bank_nonzero_tiles[1],
+        stats.oam_nonzero_bytes,
         DEBUG_ATLAS_PATH,
         GB_ATLAS_WIDTH,
         GB_ATLAS_HEIGHT,
     )
+}
+
+fn gboy_vram_atlas_stats(gpu: &crate::trueos_gboi::gpu::Gpu) -> GboyVramAtlasStats {
+    GboyVramAtlasStats {
+        bank_nonzero_bytes: [
+            count_nonzero_bytes(gpu.vram.as_slice()),
+            count_nonzero_bytes(gpu.vram1.as_slice()),
+        ],
+        bank_nonzero_tiles: [
+            count_nonzero_tiles(gpu.vram.as_slice()),
+            count_nonzero_tiles(gpu.vram1.as_slice()),
+        ],
+        oam_nonzero_bytes: count_nonzero_bytes(gpu.oam.as_slice()),
+    }
+}
+
+fn count_nonzero_bytes(bytes: &[u8]) -> usize {
+    bytes.iter().filter(|byte| **byte != 0).count()
+}
+
+fn count_nonzero_tiles(vram: &[u8]) -> usize {
+    vram.chunks_exact(GB_TILE_BYTES)
+        .take(GB_TILE_COUNT)
+        .filter(|tile| tile.iter().any(|byte| *byte != 0))
+        .count()
 }
 
 fn cartridge_title(title: &[u8; 16]) -> String {
