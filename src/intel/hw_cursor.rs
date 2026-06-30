@@ -668,10 +668,10 @@ fn log_kernel_cursor_probe(
     log_cursor_ddb_map_once(dev);
 
     let aux = cursor_aux_regs_for_pipe(pipe.slot);
-    let plane_ctl = crate::intel::mmio_read(dev, pipe.plane_ctl_off);
-    let plane_stride = crate::intel::mmio_read(dev, pipe.plane_stride_off);
-    let plane_surf = crate::intel::mmio_read(dev, pipe.plane_surf_off);
-    let plane_surf_live = crate::intel::mmio_read(dev, pipe.plane_surf_live_off);
+    let plane_ctl = crate::intel::mmio_read(dev, pipe.primary_plane().ctl());
+    let plane_stride = crate::intel::mmio_read(dev, pipe.primary_plane().stride());
+    let plane_surf = crate::intel::mmio_read(dev, pipe.primary_plane().surf());
+    let plane_surf_live = crate::intel::mmio_read(dev, pipe.primary_plane().surf_live());
     let plane_buf_cfg = plane_buf_cfg_for_pipe_slot(dev, pipe, 0);
     let cursor_ctl = crate::intel::mmio_read(dev, regs.ctl_off);
     let cursor_base = crate::intel::mmio_read(dev, regs.base_off);
