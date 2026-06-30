@@ -1,6 +1,6 @@
 use alloc::{format, string::String, vec::Vec};
 use core::fmt::Write;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant as EmbassyInstant, Timer};
 
 const H264_BOOT_PROBE_ENABLED: bool = true;
 const H264_BOOT_PROBE_PLAYBACK_ENABLED: bool = false;
@@ -10,6 +10,8 @@ const H264_BOOT_PROBE_PLAYBACK_OPTIONS: H264PlaybackOptions = H264PlaybackOption
     cache_mode: H264PlaybackCacheMode::Off,
     stripe_study: false,
     show_cache_fill: false,
+    diagnostics: true,
+    noreset_lite: false,
 };
 const H264_BOOT_PROBE_STRIPE_STUDY_FRAME_MS: u64 = 120;
 const H264_BOOT_PROBE_STRIPE_STUDY_STORE_TOP: usize = 8;
@@ -44,6 +46,8 @@ pub(crate) struct H264PlaybackOptions {
     cache_mode: H264PlaybackCacheMode,
     stripe_study: bool,
     show_cache_fill: bool,
+    diagnostics: bool,
+    noreset_lite: bool,
 }
 
 impl H264PlaybackOptions {
@@ -53,6 +57,8 @@ impl H264PlaybackOptions {
         cache_mode: H264PlaybackCacheMode,
         stripe_study: bool,
         show_cache_fill: bool,
+        diagnostics: bool,
+        noreset_lite: bool,
     ) -> Self {
         Self {
             fps,
@@ -60,6 +66,8 @@ impl H264PlaybackOptions {
             cache_mode,
             stripe_study,
             show_cache_fill,
+            diagnostics,
+            noreset_lite,
         }
     }
 
@@ -71,6 +79,10 @@ impl H264PlaybackOptions {
         let fps = self.fps as u64;
         let ms = (1000 + fps / 2) / fps;
         if ms == 0 { 1 } else { ms }
+    }
+
+    const fn frame_period(self) -> EmbassyDuration {
+        EmbassyDuration::from_hz(self.fps as u64)
     }
 
     pub(crate) const fn reverse_after_forward(self) -> bool {
@@ -95,6 +107,178 @@ impl H264PlaybackOptions {
 
     pub(crate) const fn show_cache_fill(self) -> bool {
         self.show_cache_fill
+    }
+
+    pub(crate) const fn diagnostics(self) -> bool {
+        self.diagnostics
+    }
+
+    pub(crate) const fn noreset_lite(self) -> bool {
+        self.noreset_lite
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct H264PlaybackReport {
+    pub(crate) target_fps: u16,
+    pub(crate) target_frame_ms: u64,
+    pub(crate) submitted: usize,
+    pub(crate) elapsed_ms: u64,
+    pub(crate) effective_fps_x100: u64,
+    pub(crate) waited_frames: usize,
+    pub(crate) late_frames: usize,
+    pub(crate) total_wait_ms: u64,
+    pub(crate) avg_decode_us: u64,
+    pub(crate) max_decode_us: u64,
+    pub(crate) max_late_ms: u64,
+    pub(crate) avg_queue_us: u64,
+    pub(crate) avg_process_us: u64,
+    pub(crate) avg_reset_us: u64,
+    pub(crate) avg_zero_clear_us: u64,
+    pub(crate) avg_zero_us: u64,
+    pub(crate) avg_scratch_zero_us: u64,
+    pub(crate) avg_output_clear_us: u64,
+    pub(crate) avg_missing_clear_us: u64,
+    pub(crate) avg_scratch_flush_us: u64,
+    pub(crate) avg_build_ctx_us: u64,
+    pub(crate) avg_poll_us: u64,
+    pub(crate) max_poll_us: u64,
+    pub(crate) avg_post_us: u64,
+    pub(crate) avg_present_us: u64,
+    pub(crate) max_present_us: u64,
+    pub(crate) avg_poll_iters: u64,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+struct H264PlaybackTiming {
+    waited_frames: usize,
+    late_frames: usize,
+    total_wait_ticks: u64,
+    total_decode_ticks: u64,
+    max_decode_ticks: u64,
+    max_late_ticks: u64,
+    total_queue_us: u64,
+    total_process_us: u64,
+    total_reset_us: u64,
+    total_zero_clear_us: u64,
+    total_zero_us: u64,
+    total_scratch_zero_us: u64,
+    total_output_clear_us: u64,
+    total_missing_clear_us: u64,
+    total_scratch_flush_us: u64,
+    total_build_ctx_us: u64,
+    total_poll_us: u64,
+    max_poll_us: u64,
+    total_post_us: u64,
+    total_present_ticks: u64,
+    max_present_ticks: u64,
+    total_poll_iters: u64,
+}
+
+impl H264PlaybackTiming {
+    fn record_decode_ticks(&mut self, ticks: u64) {
+        self.total_decode_ticks = self.total_decode_ticks.saturating_add(ticks);
+        self.max_decode_ticks = self.max_decode_ticks.max(ticks);
+    }
+
+    fn record_hw_pic_timing(&mut self, timing: crate::intel::hw_pic::HwPicTiming) {
+        self.total_queue_us = self.total_queue_us.saturating_add(timing.queue_wait_us);
+        self.total_process_us = self.total_process_us.saturating_add(timing.process_us);
+        self.total_reset_us = self.total_reset_us.saturating_add(timing.backend_reset_us);
+        self.total_zero_clear_us = self
+            .total_zero_clear_us
+            .saturating_add(timing.backend_zero_clear_us);
+        self.total_zero_us = self.total_zero_us.saturating_add(timing.backend_zero_us);
+        self.total_scratch_zero_us = self
+            .total_scratch_zero_us
+            .saturating_add(timing.backend_scratch_zero_us);
+        self.total_output_clear_us = self
+            .total_output_clear_us
+            .saturating_add(timing.backend_output_clear_us);
+        self.total_missing_clear_us = self
+            .total_missing_clear_us
+            .saturating_add(timing.backend_missing_clear_us);
+        self.total_scratch_flush_us = self
+            .total_scratch_flush_us
+            .saturating_add(timing.backend_scratch_flush_us);
+        self.total_build_ctx_us = self
+            .total_build_ctx_us
+            .saturating_add(timing.backend_build_ctx_us);
+        self.total_poll_us = self.total_poll_us.saturating_add(timing.backend_poll_us);
+        self.max_poll_us = self.max_poll_us.max(timing.backend_poll_us);
+        self.total_post_us = self.total_post_us.saturating_add(timing.backend_post_us);
+        self.total_poll_iters = self
+            .total_poll_iters
+            .saturating_add(timing.backend_poll_iters as u64);
+    }
+
+    fn record_present_ticks(&mut self, ticks: u64) {
+        self.total_present_ticks = self.total_present_ticks.saturating_add(ticks);
+        self.max_present_ticks = self.max_present_ticks.max(ticks);
+    }
+
+    fn avg_us(total_us: u64, submitted: usize) -> u64 {
+        if submitted == 0 {
+            0
+        } else {
+            total_us / submitted as u64
+        }
+    }
+
+    fn report(
+        self,
+        mode: H264PlaybackOptions,
+        submitted: usize,
+        playback_start: EmbassyInstant,
+    ) -> H264PlaybackReport {
+        let elapsed_ms = playback_start.elapsed().as_millis();
+        let effective_fps_x100 = if elapsed_ms == 0 {
+            0
+        } else {
+            (submitted as u64).saturating_mul(100_000) / elapsed_ms
+        };
+        let avg_decode_us = if submitted == 0 {
+            0
+        } else {
+            h264_ticks_to_micros(self.total_decode_ticks) / submitted as u64
+        };
+        H264PlaybackReport {
+            target_fps: mode.fps(),
+            target_frame_ms: mode.frame_ms(),
+            submitted,
+            elapsed_ms,
+            effective_fps_x100,
+            waited_frames: self.waited_frames,
+            late_frames: self.late_frames,
+            total_wait_ms: h264_ticks_to_millis(self.total_wait_ticks),
+            avg_decode_us,
+            max_decode_us: h264_ticks_to_micros(self.max_decode_ticks),
+            max_late_ms: h264_ticks_to_millis(self.max_late_ticks),
+            avg_queue_us: Self::avg_us(self.total_queue_us, submitted),
+            avg_process_us: Self::avg_us(self.total_process_us, submitted),
+            avg_reset_us: Self::avg_us(self.total_reset_us, submitted),
+            avg_zero_clear_us: Self::avg_us(self.total_zero_clear_us, submitted),
+            avg_zero_us: Self::avg_us(self.total_zero_us, submitted),
+            avg_scratch_zero_us: Self::avg_us(self.total_scratch_zero_us, submitted),
+            avg_output_clear_us: Self::avg_us(self.total_output_clear_us, submitted),
+            avg_missing_clear_us: Self::avg_us(self.total_missing_clear_us, submitted),
+            avg_scratch_flush_us: Self::avg_us(self.total_scratch_flush_us, submitted),
+            avg_build_ctx_us: Self::avg_us(self.total_build_ctx_us, submitted),
+            avg_poll_us: Self::avg_us(self.total_poll_us, submitted),
+            max_poll_us: self.max_poll_us,
+            avg_post_us: Self::avg_us(self.total_post_us, submitted),
+            avg_present_us: if submitted == 0 {
+                0
+            } else {
+                h264_ticks_to_micros(self.total_present_ticks) / submitted as u64
+            },
+            max_present_us: h264_ticks_to_micros(self.max_present_ticks),
+            avg_poll_iters: if submitted == 0 {
+                0
+            } else {
+                self.total_poll_iters / submitted as u64
+            },
+        }
     }
 }
 
@@ -134,15 +318,24 @@ pub(crate) async fn hw_vid_probe_task() {
 
 pub(crate) async fn run_shell_vid_playback(
     options: H264PlaybackOptions,
-) -> Result<(), &'static str> {
+) -> Result<H264PlaybackReport, &'static str> {
     if !crate::intel::has_media_decode_engine() {
         return Err("media decode engine unavailable");
     }
     let Some(file) = h264_open_playback_stream_once().await else {
         return Err("video asset missing from TRUEOSFS root");
     };
-    h264_i_p_playback_probe(file, options).await;
-    Ok(())
+    let old_hw_pic_logging =
+        crate::intel::hw_pic::set_detailed_logging_enabled(options.diagnostics());
+    let old_surface_probes =
+        crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(options.diagnostics());
+    let old_noreset_lite =
+        crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(options.noreset_lite());
+    let report = h264_i_p_playback_probe(file, options).await;
+    crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(old_noreset_lite);
+    crate::intel::hw_pic::set_detailed_logging_enabled(old_hw_pic_logging);
+    crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(old_surface_probes);
+    Ok(report)
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -431,10 +624,41 @@ async fn h264_open_playback_stream_once() -> Option<crate::r::fs::trueosfs::File
     }
 }
 
+fn h264_ticks_to_millis(ticks: u64) -> u64 {
+    let hz = embassy_time_driver::TICK_HZ.max(1);
+    ((ticks as u128).saturating_mul(1_000) / hz as u128) as u64
+}
+
+fn h264_ticks_to_micros(ticks: u64) -> u64 {
+    let hz = embassy_time_driver::TICK_HZ.max(1);
+    ((ticks as u128).saturating_mul(1_000_000) / hz as u128) as u64
+}
+
+async fn h264_wait_until_next_frame(
+    next_deadline: &mut EmbassyInstant,
+    frame_period: EmbassyDuration,
+    timing: &mut H264PlaybackTiming,
+) {
+    *next_deadline += frame_period;
+    let now = EmbassyInstant::now();
+    if now < *next_deadline {
+        let wait_start = now.as_ticks();
+        Timer::at(*next_deadline).await;
+        timing.waited_frames += 1;
+        timing.total_wait_ticks = timing
+            .total_wait_ticks
+            .saturating_add(EmbassyInstant::now().as_ticks().saturating_sub(wait_start));
+    } else {
+        timing.late_frames += 1;
+        let late_ticks = now.saturating_duration_since(*next_deadline).as_ticks();
+        timing.max_late_ticks = timing.max_late_ticks.max(late_ticks);
+    }
+}
+
 async fn h264_i_p_playback_probe(
     file: crate::r::fs::trueosfs::FileReadHandle,
     mode: H264PlaybackOptions,
-) {
+) -> H264PlaybackReport {
     let stream_bytes = file.data_len();
     let mut reader = H264RangeNalReader::new(file, H264_BOOT_PROBE_STREAM_PATH, stream_bytes);
     let mut nal_count = 0usize;
@@ -455,18 +679,25 @@ async fn h264_i_p_playback_probe(
     let mut forward_tail_start_frame = 0usize;
     let mut forward_tail_cache = Vec::new();
     let mut stopped_at = 0u64;
+    let playback_start = EmbassyInstant::now();
+    let frame_period = mode.frame_period();
+    let mut next_frame_deadline = playback_start;
+    let mut playback_timing = H264PlaybackTiming::default();
 
     crate::log!(
-        "intel/hw_vid: h264-playback-probe start bytes={} fps={} frame_ms={} subset=idr-plus-p source=trueosfs-root path={} mode=range-stream chunk=0x{:X} playback_mode={} cache={} stripe_study={} fill={} stop=eos\n",
+        "intel/hw_vid: h264-playback-probe start bytes={} fps={} frame_ms={} frame_ticks={} subset=idr-plus-p source=trueosfs-root path={} mode=range-stream chunk=0x{:X} playback_mode={} cache={} stripe_study={} fill={} diagnostics={} noreset_lite={} stop=eos\n",
         stream_bytes,
         mode.fps(),
         mode.frame_ms(),
+        frame_period.as_ticks(),
         H264_BOOT_PROBE_STREAM_PATH,
         H264_BOOT_PROBE_STREAM_CHUNK_BYTES,
         mode.name(),
         mode.cache_mode().name(),
         mode.stripe_study() as u8,
-        mode.show_cache_fill() as u8
+        mode.show_cache_fill() as u8,
+        mode.diagnostics() as u8,
+        mode.noreset_lite() as u8
     );
 
     while let Some(nal) = reader.next_nal().await {
@@ -521,9 +752,12 @@ async fn h264_i_p_playback_probe(
                     sps: sps.clone(),
                     pps: pps.clone(),
                 });
-                h264_log_frame_index(&indexed_frames[indexed_frame], indexed_frame);
+                if mode.diagnostics() {
+                    h264_log_frame_index(&indexed_frames[indexed_frame], indexed_frame);
+                }
 
                 submitted += 1;
+                let decode_start = EmbassyInstant::now();
                 let decoded = h264_submit_wait_probe_frame(
                     "forward",
                     submitted,
@@ -531,8 +765,15 @@ async fn h264_i_p_playback_probe(
                     &frame,
                     true,
                     capture_forward_output,
+                    mode.diagnostics(),
+                    Some(&mut playback_timing),
                 )
                 .await;
+                playback_timing.record_decode_ticks(
+                    EmbassyInstant::now()
+                        .saturating_duration_since(decode_start)
+                        .as_ticks(),
+                );
                 if capture_forward_output {
                     if let Some(decoded) = decoded {
                         if forward_full_cache_enabled {
@@ -542,7 +783,12 @@ async fn h264_i_p_playback_probe(
                         }
                     }
                 }
-                Timer::after(EmbassyDuration::from_millis(mode.frame_ms())).await;
+                h264_wait_until_next_frame(
+                    &mut next_frame_deadline,
+                    frame_period,
+                    &mut playback_timing,
+                )
+                .await;
             }
             _ => {}
         }
@@ -552,9 +798,10 @@ async fn h264_i_p_playback_probe(
     let forward_full_cache_bytes = h264_decoded_frames_total_bytes(forward_full_cache.as_slice());
     let forward_tail_cache_frames = forward_tail_cache.len();
     let forward_tail_cache_bytes = h264_decoded_frames_total_bytes(forward_tail_cache.as_slice());
+    let playback_report = playback_timing.report(mode, submitted, playback_start);
 
     crate::log!(
-        "intel/hw_vid: h264-playback-probe done nals={} idr_seen={} p_seen={} submitted={} indexed_frames={} missing_headers={} stopped_at=0x{:X} forward_full_cache={} forward_full_cache_bytes=0x{:X} forward_tail_cache={} forward_tail_cache_bytes=0x{:X} reason={}\n",
+        "intel/hw_vid: h264-playback-probe done nals={} idr_seen={} p_seen={} submitted={} indexed_frames={} missing_headers={} stopped_at=0x{:X} target_fps={} target_frame_ms={} elapsed_ms={} effective_fps_x100={} waited_frames={} late_frames={} total_wait_ms={} avg_decode_us={} max_decode_us={} max_late_ms={} avg_queue_us={} avg_process_us={} avg_reset_us={} avg_zero_clear_us={} avg_zero_us={} avg_scratch_zero_us={} avg_output_clear_us={} avg_missing_clear_us={} avg_scratch_flush_us={} avg_build_ctx_us={} avg_poll_us={} max_poll_us={} avg_post_us={} avg_present_us={} max_present_us={} avg_poll_iters={} forward_full_cache={} forward_full_cache_bytes=0x{:X} forward_tail_cache={} forward_tail_cache_bytes=0x{:X} reason={}\n",
         nal_count,
         idr_seen,
         p_seen,
@@ -562,6 +809,32 @@ async fn h264_i_p_playback_probe(
         indexed_frames.len(),
         skipped_missing_headers,
         stopped_at,
+        playback_report.target_fps,
+        playback_report.target_frame_ms,
+        playback_report.elapsed_ms,
+        playback_report.effective_fps_x100,
+        playback_report.waited_frames,
+        playback_report.late_frames,
+        playback_report.total_wait_ms,
+        playback_report.avg_decode_us,
+        playback_report.max_decode_us,
+        playback_report.max_late_ms,
+        playback_report.avg_queue_us,
+        playback_report.avg_process_us,
+        playback_report.avg_reset_us,
+        playback_report.avg_zero_clear_us,
+        playback_report.avg_zero_us,
+        playback_report.avg_scratch_zero_us,
+        playback_report.avg_output_clear_us,
+        playback_report.avg_missing_clear_us,
+        playback_report.avg_scratch_flush_us,
+        playback_report.avg_build_ctx_us,
+        playback_report.avg_poll_us,
+        playback_report.max_poll_us,
+        playback_report.avg_post_us,
+        playback_report.avg_present_us,
+        playback_report.max_present_us,
+        playback_report.avg_poll_iters,
         forward_full_cache_frames,
         forward_full_cache_bytes,
         forward_tail_cache_frames,
@@ -587,6 +860,7 @@ async fn h264_i_p_playback_probe(
         };
         h264_reverse_playback_probe(file, indexed_frames.as_slice(), forward_cache, mode).await;
     }
+    playback_report
 }
 
 async fn h264_submit_wait_probe_frame(
@@ -596,20 +870,24 @@ async fn h264_submit_wait_probe_frame(
     encoded: &[u8],
     present_output: bool,
     capture_output: bool,
+    diagnostics: bool,
+    mut timing: Option<&mut H264PlaybackTiming>,
 ) -> Option<H264DecodedFrame> {
-    let before = crate::intel::hw_pic_snapshot();
-    crate::log!(
-        "intel/hw_vid: h264-probe submit phase={} playback_frame={} stream_idr={} bytes={} present={} capture={} pending={} outputs={} service_started={}\n",
-        phase,
-        playback_frame,
-        stream_idr_index,
-        encoded.len(),
-        present_output as u8,
-        capture_output as u8,
-        before.pending,
-        before.outputs,
-        before.service_started as u8
-    );
+    if diagnostics {
+        let before = crate::intel::hw_pic_snapshot();
+        crate::log!(
+            "intel/hw_vid: h264-probe submit phase={} playback_frame={} stream_idr={} bytes={} present={} capture={} pending={} outputs={} service_started={}\n",
+            phase,
+            playback_frame,
+            stream_idr_index,
+            encoded.len(),
+            present_output as u8,
+            capture_output as u8,
+            before.pending,
+            before.outputs,
+            before.service_started as u8
+        );
+    }
 
     let id = match crate::intel::hw_pic_submit_h264(encoded) {
         Ok(id) => id,
@@ -642,38 +920,51 @@ async fn h264_submit_wait_probe_frame(
         return None;
     };
 
+    if let Some(timing) = timing.as_deref_mut() {
+        timing.record_hw_pic_timing(output.timing);
+    }
+    let present_start = EmbassyInstant::now();
     let stored = if present_output {
         h264_present_probe_output(&output)
     } else {
         false
     };
+    if let Some(timing) = timing.as_deref_mut() {
+        timing.record_present_ticks(
+            EmbassyInstant::now()
+                .saturating_duration_since(present_start)
+                .as_ticks(),
+        );
+    }
 
-    crate::log!(
-        "intel/hw_vid: h264-probe output phase={} playback_frame={} stream_idr={} id={} codec={:?} status={:?} fmt={:?} decoded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} stored={} present={} err={}\n",
-        phase,
-        playback_frame,
-        stream_idr_index,
-        output.id,
-        output.codec,
-        output.status,
-        output.format,
-        output.width,
-        output.height,
-        output.visible_width,
-        output.visible_height,
-        output.pitch_bytes,
-        output.uv_offset,
-        output.byte_len,
-        output.gpu_addr,
-        output.phys_addr,
-        stored as u8,
-        if present_output {
-            "ytile-nv12-diagnostic"
-        } else {
-            "decode-only"
-        },
-        output.error_code
-    );
+    if diagnostics {
+        crate::log!(
+            "intel/hw_vid: h264-probe output phase={} playback_frame={} stream_idr={} id={} codec={:?} status={:?} fmt={:?} decoded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} stored={} present={} err={}\n",
+            phase,
+            playback_frame,
+            stream_idr_index,
+            output.id,
+            output.codec,
+            output.status,
+            output.format,
+            output.width,
+            output.height,
+            output.visible_width,
+            output.visible_height,
+            output.pitch_bytes,
+            output.uv_offset,
+            output.byte_len,
+            output.gpu_addr,
+            output.phys_addr,
+            stored as u8,
+            if present_output {
+                "ytile-nv12-diagnostic"
+            } else {
+                "decode-only"
+            },
+            output.error_code
+        );
+    }
     if capture_output {
         h264_capture_probe_output(&output)
     } else if stored {
@@ -703,6 +994,9 @@ async fn h264_reverse_playback_probe(
     let mut reused_forward_tail = false;
     let mut forward_full_cache = None;
     let mut forward_tail = None;
+    let frame_period = mode.frame_period();
+    let mut next_present_deadline = EmbassyInstant::now();
+    let mut present_timing = H264PlaybackTiming::default();
     match forward_cache {
         Some(H264ForwardCache::Full(cache)) => forward_full_cache = Some(cache),
         Some(H264ForwardCache::Tail(tail)) => forward_tail = Some(tail),
@@ -768,15 +1062,24 @@ async fn h264_reverse_playback_probe(
                     decoded.pitch_bytes,
                     decoded.uv_offset
                 );
-                Timer::after(EmbassyDuration::from_millis(mode.frame_ms())).await;
+                h264_wait_until_next_frame(
+                    &mut next_present_deadline,
+                    frame_period,
+                    &mut present_timing,
+                )
+                .await;
             }
 
             crate::log!(
-                "intel/hw_vid: h264-reverse-probe done frames={} gops=0 presented={} submitted=0 cached_peak={} read_failures=0 decode_failures=0 visible_cache_fill={} strategy=forward-full-cache reason=eos\n",
+                "intel/hw_vid: h264-reverse-probe done frames={} gops=0 presented={} submitted=0 cached_peak={} read_failures=0 decode_failures=0 visible_cache_fill={} waited_frames={} late_frames={} total_wait_ms={} max_late_ms={} strategy=forward-full-cache reason=eos\n",
                 frames.len(),
                 presented,
                 cache.len(),
-                mode.show_cache_fill() as u8
+                mode.show_cache_fill() as u8,
+                present_timing.waited_frames,
+                present_timing.late_frames,
+                h264_ticks_to_millis(present_timing.total_wait_ticks),
+                h264_ticks_to_millis(present_timing.max_late_ticks)
             );
             return;
         }
@@ -856,6 +1159,8 @@ async fn h264_reverse_playback_probe(
                     packet.as_slice(),
                     mode.show_cache_fill(),
                     true,
+                    mode.diagnostics(),
+                    None,
                 )
                 .await
                 else {
@@ -911,14 +1216,19 @@ async fn h264_reverse_playback_probe(
                 decoded.pitch_bytes,
                 decoded.uv_offset
             );
-            Timer::after(EmbassyDuration::from_millis(mode.frame_ms())).await;
+            h264_wait_until_next_frame(
+                &mut next_present_deadline,
+                frame_period,
+                &mut present_timing,
+            )
+            .await;
         }
 
         gop_end = gop_start;
     }
 
     crate::log!(
-        "intel/hw_vid: h264-reverse-probe done frames={} gops={} presented={} submitted={} cached_peak={} read_failures={} decode_failures={} visible_cache_fill={} reason=eos\n",
+        "intel/hw_vid: h264-reverse-probe done frames={} gops={} presented={} submitted={} cached_peak={} read_failures={} decode_failures={} visible_cache_fill={} waited_frames={} late_frames={} total_wait_ms={} max_late_ms={} reason=eos\n",
         frames.len(),
         gops,
         presented,
@@ -926,7 +1236,11 @@ async fn h264_reverse_playback_probe(
         cached_peak,
         read_failures,
         decode_failures,
-        mode.show_cache_fill() as u8
+        mode.show_cache_fill() as u8,
+        present_timing.waited_frames,
+        present_timing.late_frames,
+        h264_ticks_to_millis(present_timing.total_wait_ticks),
+        h264_ticks_to_millis(present_timing.max_late_ticks)
     );
 }
 

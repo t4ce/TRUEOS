@@ -140,8 +140,17 @@ pub(super) const MEDIA_RESULT_FRAME_DIMS_SLOT: u64 =
 
 static MEDIA_KICKOFF_RAN: AtomicBool = AtomicBool::new(false);
 static MEDIA_DECODE_RAN: AtomicBool = AtomicBool::new(false);
+static MEDIA_OUTPUT_SURFACE_PROBES_ENABLED: AtomicBool = AtomicBool::new(true);
 static MEDIA_KICKOFF_STATE: Mutex<Option<MediaKickoffState>> = Mutex::new(None);
 static MEDIA_BACKING: Mutex<Option<MediaBitstreamBacking>> = Mutex::new(None);
+
+pub(crate) fn set_output_surface_probes_enabled(enabled: bool) -> bool {
+    MEDIA_OUTPUT_SURFACE_PROBES_ENABLED.swap(enabled, Ordering::AcqRel)
+}
+
+pub(super) fn output_surface_probes_enabled() -> bool {
+    MEDIA_OUTPUT_SURFACE_PROBES_ENABLED.load(Ordering::Acquire)
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MediaEngineClass {
