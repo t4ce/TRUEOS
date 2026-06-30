@@ -5,6 +5,19 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 
 const PRESENT_MAX_SCALE: usize = 4;
 const PRESENT_BG_XRGB: u32 = 0x00FF_FFFF;
+const DEBUG_ATLAS_PATH: &str = "gboy_athlas.bmp";
+const DEBUG_ATLAS_META_PATH: &str = "gboy_athlas.txt";
+const DEBUG_ATLAS_WARMUP_FRAMES: u64 = 8;
+const GB_TILE_BYTES: usize = 16;
+const GB_TILE_PIXELS: usize = 8;
+const GB_TILE_COUNT: usize = 384;
+const GB_ATLAS_COLS: usize = 16;
+const GB_ATLAS_BANK_ROWS: usize = GB_TILE_COUNT / GB_ATLAS_COLS;
+const GB_ATLAS_BANKS: usize = 2;
+const GB_ATLAS_WIDTH: usize = GB_ATLAS_COLS * GB_TILE_PIXELS;
+const GB_ATLAS_HEIGHT: usize = GB_ATLAS_BANK_ROWS * GB_TILE_PIXELS * GB_ATLAS_BANKS;
+const FNV1A64_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV1A64_PRIME: u64 = 0x0000_0100_0000_01b3;
 
 static GBOY_RUN_GENERATION: AtomicU32 = AtomicU32::new(0);
 
@@ -52,6 +65,8 @@ async fn run_gboy(
     let mut argb = vec![0u32; present_width * present_height];
     let mut rgba = vec![0u8; present_width * present_height * core::mem::size_of::<u32>()];
     let mut frame = 0u64;
+    let mut debug_atlas_written = false;
+    let rom_hash = fnv1a64(rom.as_slice());
 
     let scanout = crate::intel::active_scanout_dimensions()
         .map(|(w, h)| alloc::format!(" scanout={}x{}", w, h))
@@ -71,6 +86,28 @@ async fn run_gboy(
     while current_run_generation() == generation {
         sync_gboy_buttons_from_hid_hut(&mut emulator);
         emulator.tick();
+        frame = frame.wrapping_add(1);
+
+        if !debug_atlas_written && frame >= DEBUG_ATLAS_WARMUP_FRAMES {
+            debug_atlas_written = true;
+            match write_gboy_debug_atlas(path, rom_hash, &emulator).await {
+                Ok(()) => crate::shell2::print_matrix_target_line(
+                    target,
+                    alloc::format!(
+                        "gboy: wrote /{} and /{} after {} frame(s)",
+                        DEBUG_ATLAS_PATH,
+                        DEBUG_ATLAS_META_PATH,
+                        frame
+                    )
+                    .as_str(),
+                ),
+                Err(err) => crate::shell2::print_matrix_target_line(
+                    target,
+                    alloc::format!("gboy: debug atlas write failed: {err}").as_str(),
+                ),
+            }
+        }
+
         emulator.render(&mut argb, present_width, present_height);
         argb_to_rgba(&argb, &mut rgba);
 
@@ -82,7 +119,6 @@ async fn run_gboy(
             PRESENT_BG_XRGB,
             "gboy",
         );
-        frame = frame.wrapping_add(1);
         if frame <= 8 || frame.is_multiple_of(120) || !presented {
             crate::shell2::print_matrix_target_line(
                 target,
@@ -126,6 +162,156 @@ async fn read_rom(path: &str, target: &crate::shell2::MatrixTarget) -> Result<Ve
         Some(bytes) => Ok(bytes),
         None => Err(alloc::format!("{path}: not found")),
     }
+}
+
+async fn write_gboy_debug_atlas(
+    rom_path: &str,
+    rom_hash: u64,
+    emulator: &crate::trueos_gboi::GameBoyEmulator,
+) -> Result<(), String> {
+    let disk = crate::r::fs::trueosfs::primary_root_handle()
+        .ok_or_else(|| String::from("no TRUEOSFS root mounted"))?;
+    let bmp = encode_gboy_vram_atlas_bmp(&emulator.gpu);
+    let meta = gboy_debug_atlas_metadata(rom_path, rom_hash, emulator);
+
+    let ok = crate::r::fs::trueosfs::file_in_async(disk, DEBUG_ATLAS_PATH, bmp.as_slice())
+        .await
+        .map_err(|err| alloc::format!("bmp write failed: {:?}", err))?;
+    if !ok {
+        return Err(String::from("bmp write rejected by TRUEOSFS"));
+    }
+
+    let ok = crate::r::fs::trueosfs::file_in_async(disk, DEBUG_ATLAS_META_PATH, meta.as_bytes())
+        .await
+        .map_err(|err| alloc::format!("metadata write failed: {:?}", err))?;
+    if !ok {
+        return Err(String::from("metadata write rejected by TRUEOSFS"));
+    }
+
+    Ok(())
+}
+
+fn gboy_debug_atlas_metadata(
+    rom_path: &str,
+    rom_hash: u64,
+    emulator: &crate::trueos_gboi::GameBoyEmulator,
+) -> String {
+    alloc::format!(
+        "rom_path={}\nrom_title={}\nrom_hash_fnv1a64={:016x}\ncgb={}\nwarmup_frames={}\natlas_file={}\nformat=bmp-bgra32\nwidth={}\nheight={}\nlayout=bank0 tiles 0..383 top, bank1 tiles 0..383 bottom, 16 columns, 8x8 pixels per tile\n",
+        rom_path,
+        cartridge_title(&emulator.cart.title),
+        rom_hash,
+        emulator.cgb_mode as u8,
+        DEBUG_ATLAS_WARMUP_FRAMES,
+        DEBUG_ATLAS_PATH,
+        GB_ATLAS_WIDTH,
+        GB_ATLAS_HEIGHT,
+    )
+}
+
+fn cartridge_title(title: &[u8; 16]) -> String {
+    let mut out = String::new();
+    for &byte in title.iter() {
+        if byte == 0 {
+            break;
+        }
+        if (0x20..=0x7e).contains(&byte) {
+            out.push(byte as char);
+        }
+    }
+    if out.is_empty() {
+        out.push_str("unknown");
+    }
+    out
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = FNV1A64_OFFSET;
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(FNV1A64_PRIME);
+    }
+    hash
+}
+
+fn encode_gboy_vram_atlas_bmp(gpu: &crate::trueos_gboi::gpu::Gpu) -> Vec<u8> {
+    let pixel_bytes = GB_ATLAS_WIDTH * GB_ATLAS_HEIGHT * 4;
+    let file_size = 14 + 40 + pixel_bytes;
+    let mut out = Vec::with_capacity(file_size);
+
+    out.extend_from_slice(b"BM");
+    push_le_u32(&mut out, file_size as u32);
+    push_le_u16(&mut out, 0);
+    push_le_u16(&mut out, 0);
+    push_le_u32(&mut out, 14 + 40);
+
+    push_le_u32(&mut out, 40);
+    push_le_i32(&mut out, GB_ATLAS_WIDTH as i32);
+    push_le_i32(&mut out, GB_ATLAS_HEIGHT as i32);
+    push_le_u16(&mut out, 1);
+    push_le_u16(&mut out, 32);
+    push_le_u32(&mut out, 0);
+    push_le_u32(&mut out, pixel_bytes as u32);
+    push_le_i32(&mut out, 2835);
+    push_le_i32(&mut out, 2835);
+    push_le_u32(&mut out, 0);
+    push_le_u32(&mut out, 0);
+
+    for bmp_y in 0..GB_ATLAS_HEIGHT {
+        let y = GB_ATLAS_HEIGHT - 1 - bmp_y;
+        for x in 0..GB_ATLAS_WIDTH {
+            let bank = y / (GB_ATLAS_BANK_ROWS * GB_TILE_PIXELS);
+            let bank_y = y % (GB_ATLAS_BANK_ROWS * GB_TILE_PIXELS);
+            let tile_col = x / GB_TILE_PIXELS;
+            let tile_row = bank_y / GB_TILE_PIXELS;
+            let tile_idx = tile_row * GB_ATLAS_COLS + tile_col;
+            let px = x % GB_TILE_PIXELS;
+            let py = bank_y % GB_TILE_PIXELS;
+            let color = gb_tile_color_id(gpu, bank, tile_idx, px, py);
+            let shade = match color {
+                0 => 0xF8,
+                1 => 0xB8,
+                2 => 0x68,
+                _ => 0x18,
+            };
+            out.push(shade);
+            out.push(shade);
+            out.push(shade);
+            out.push(0xFF);
+        }
+    }
+
+    out
+}
+
+fn gb_tile_color_id(
+    gpu: &crate::trueos_gboi::gpu::Gpu,
+    bank: usize,
+    tile_idx: usize,
+    px: usize,
+    py: usize,
+) -> u8 {
+    let vram = if bank == 1 { &gpu.vram1 } else { &gpu.vram };
+    let off = tile_idx * GB_TILE_BYTES + py * 2;
+    if off + 1 >= vram.len() {
+        return 0;
+    }
+    let bit = 7 - px;
+    let lo = (vram[off] >> bit) & 1;
+    let hi = (vram[off + 1] >> bit) & 1;
+    lo | (hi << 1)
+}
+
+fn push_le_u16(out: &mut Vec<u8>, value: u16) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_le_u32(out: &mut Vec<u8>, value: u32) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_le_i32(out: &mut Vec<u8>, value: i32) {
+    out.extend_from_slice(&value.to_le_bytes());
 }
 
 fn present_size() -> (usize, usize, usize) {
