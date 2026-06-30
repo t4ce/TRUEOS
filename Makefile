@@ -14,6 +14,8 @@ PROVENANCE_SCRIPT := tools/provenance_chain.py
 PROVENANCE_CLEAN_FLAG ?= --require-clean
 PROVENANCE_SOURCE_MANIFEST ?= git-commit
 START_BAREMETAL_LOG ?= 1
+RELEASE_BUMP_CNT ?= $(if $(CI),0,1)
+START_NET_SHELL_CONSOLE ?= $(if $(CI),0,1)
 ISO_DIR := bld
 ISO_PATH := bld/trueos.iso
 ISO_BOOT_DIR := bld/iso-bootroot
@@ -69,6 +71,7 @@ BAREMETAL_LOG_HOST ?= 192.168.178.94
 BAREMETAL_LOG_PORT ?= 1
 BAREMETAL_LOG_DELAY ?= 15
 BAREMETAL_LOG_DIR ?= bld/baremetal-logs
+NET_SHELL_CONSOLE_PID := $(ISO_DIR)/net-shell-console.pid
 
 CARGO_BUILD_FLAGS ?=
 
@@ -76,7 +79,7 @@ CARGO_GFX_FLAGS =
 
 IMG_SIZE ?= 25G
 
-.PHONY: images empty-libs kernel artifacts limine baremetal-reboot-log iso provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
+.PHONY: images empty-libs kernel artifacts limine baremetal-reboot-log net-shell-console iso provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
 
 images: $(NVME_IMG)
 
@@ -170,6 +173,21 @@ baremetal-reboot-log:
 	python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('',7777)); exec(\"while True:\n d,a=s.recvfrom(2048)\n if d==b'probe': s.sendto(b'ack',(a[0],7777)); break\")" &
 	@TRUEOS_BAREMETAL_LOG_HOST="$(BAREMETAL_LOG_HOST)" TRUEOS_BAREMETAL_LOG_PORT="$(BAREMETAL_LOG_PORT)" TRUEOS_BAREMETAL_LOG_DELAY="$(BAREMETAL_LOG_DELAY)" TRUEOS_BAREMETAL_LOG_DIR="$(BAREMETAL_LOG_DIR)" "$(BAREMETAL_LOG_DRAIN)" start
 
+net-shell-console:
+	@mkdir -p "$(dir $(NET_SHELL_CONSOLE_PID))"
+	@if [ -f "$(NET_SHELL_CONSOLE_PID)" ]; then \
+		old=$$(cat "$(NET_SHELL_CONSOLE_PID)" 2>/dev/null || true); \
+		if [ -n "$$old" ] && kill -0 "$$old" 2>/dev/null; then \
+			kill "$$old" 2>/dev/null || true; \
+			sleep 0.1; \
+			if kill -0 "$$old" 2>/dev/null; then \
+				kill -9 "$$old" 2>/dev/null || true; \
+			fi; \
+		fi; \
+		rm -f "$(NET_SHELL_CONSOLE_PID)"; \
+	fi
+	@konsole --title TRUEOS-net-shell -e sh -c 'trap "stty sane 2>/dev/null || true" EXIT; trap "stty sane 2>/dev/null || true; exit 0" INT TERM; stty -echo -icanon cols 200 rows 60; while ! nc 192.168.178.94 4245 2>/dev/null; do sleep 1; done' & echo $$! > "$(NET_SHELL_CONSOLE_PID)"
+
 FORCE:
 
 iso: artifacts images limine
@@ -231,6 +249,11 @@ iso: artifacts images limine
 	else \
 		echo "iso: skipping baremetal log drain (START_BAREMETAL_LOG=$(START_BAREMETAL_LOG))"; \
 	fi
+	@if [ "$(START_NET_SHELL_CONSOLE)" = "1" ]; then \
+		$(MAKE) --no-print-directory net-shell-console; \
+	else \
+		echo "iso: skipping net shell console (START_NET_SHELL_CONSOLE=$(START_NET_SHELL_CONSOLE))"; \
+	fi
 
 provenance-git-clean:
 	@if [ "$(PROVENANCE_CLEAN_FLAG)" = "--require-clean" ]; then \
@@ -291,8 +314,16 @@ release-count:
 release: BUILD_MODE := release
 release: CARGO_BUILD_FLAGS += --release
 release: release-git-clean
-	$(MAKE) --no-print-directory release-count
-	$(MAKE) --no-print-directory BUILD_MODE="$(BUILD_MODE)" CARGO_BUILD_FLAGS="$(CARGO_BUILD_FLAGS)" PROVENANCE_CLEAN_FLAG=--allow-dirty PROVENANCE_SOURCE_MANIFEST=git-index provenance
+	@if [ "$(RELEASE_BUMP_CNT)" = "1" ]; then \
+		$(MAKE) --no-print-directory release-count; \
+	else \
+		echo "release: using committed counter (RELEASE_BUMP_CNT=$(RELEASE_BUMP_CNT))"; \
+	fi
+	@if [ "$(RELEASE_BUMP_CNT)" = "1" ]; then \
+		$(MAKE) --no-print-directory BUILD_MODE="$(BUILD_MODE)" CARGO_BUILD_FLAGS="$(CARGO_BUILD_FLAGS)" PROVENANCE_CLEAN_FLAG=--allow-dirty PROVENANCE_SOURCE_MANIFEST=git-index provenance; \
+	else \
+		$(MAKE) --no-print-directory BUILD_MODE="$(BUILD_MODE)" CARGO_BUILD_FLAGS="$(CARGO_BUILD_FLAGS)" PROVENANCE_CLEAN_FLAG=--require-clean PROVENANCE_SOURCE_MANIFEST=git-commit provenance; \
+	fi
 	$(MAKE) --no-print-directory verify-provenance
 	@if [ -z "$(OVMF_BUNDLE_PATH)" ] || [ ! -f "$(OVMF_BUNDLE_PATH)" ]; then \
 		echo "error: no OVMF firmware found to bundle"; \
