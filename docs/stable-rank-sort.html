@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stable Rank Sort Idea</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f7f4ee;
+      --ink: #171717;
+      --muted: #5b5b5b;
+      --panel: #ffffff;
+      --line: #d8d0c4;
+      --accent: #0f766e;
+      --accent-2: #7c2d12;
+      --accent-3: #334155;
+      --soft: #e8f4f1;
+      --warn: #fff0d7;
+      font-family:
+        Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", sans-serif;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #151515;
+        --ink: #f4f1eb;
+        --muted: #c3beb5;
+        --panel: #202020;
+        --line: #3f3a33;
+        --accent: #5eead4;
+        --accent-2: #fdba74;
+        --accent-3: #cbd5e1;
+        --soft: #173d39;
+        --warn: #3c2a12;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.55;
+    }
+
+    main {
+      width: min(1080px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 36px 0 56px;
+    }
+
+    header {
+      padding: 24px 0 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 780px;
+      font-size: clamp(2rem, 4vw, 4.25rem);
+      line-height: 1.02;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 1.35rem;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 1rem;
+    }
+
+    p {
+      margin: 0 0 14px;
+      color: var(--muted);
+    }
+
+    code,
+    pre {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 0.95em;
+    }
+
+    pre {
+      margin: 0;
+      overflow: auto;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--panel), var(--bg) 28%);
+      color: var(--ink);
+    }
+
+    section {
+      padding: 28px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .lead {
+      margin-top: 18px;
+      max-width: 760px;
+      font-size: 1.12rem;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+      align-items: start;
+    }
+
+    .card {
+      min-width: 0;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    .formula {
+      display: grid;
+      gap: 8px;
+      margin-top: 14px;
+      padding: 16px;
+      border-radius: 8px;
+      background: var(--soft);
+      color: var(--ink);
+      font-weight: 700;
+    }
+
+    .array {
+      display: grid;
+      grid-template-columns: repeat(10, minmax(38px, 1fr));
+      gap: 6px;
+      margin-top: 16px;
+    }
+
+    .cell {
+      min-height: 46px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      font-weight: 800;
+      position: relative;
+    }
+
+    .cell small {
+      position: absolute;
+      left: 6px;
+      bottom: 4px;
+      color: var(--muted);
+      font-size: 0.62rem;
+      font-weight: 600;
+    }
+
+    .cell.pick {
+      border-color: var(--accent);
+      background: var(--soft);
+      box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent), transparent 66%);
+    }
+
+    .cell.equal {
+      border-color: var(--accent-2);
+      background: var(--warn);
+    }
+
+    .arrow {
+      margin: 18px 0;
+      color: var(--accent-3);
+      font-weight: 800;
+      text-align: center;
+    }
+
+    .lanes {
+      display: grid;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .lane {
+      display: grid;
+      grid-template-columns: 88px 1fr 110px;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .bar {
+      height: 24px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background:
+        repeating-linear-gradient(
+          90deg,
+          color-mix(in srgb, var(--accent), transparent 35%) 0 18px,
+          color-mix(in srgb, var(--panel), var(--bg) 20%) 18px 36px
+        );
+    }
+
+    .note-list {
+      display: grid;
+      gap: 10px;
+      padding: 0;
+      margin: 0;
+      list-style: none;
+    }
+
+    .note-list li {
+      padding: 12px 14px;
+      border-left: 4px solid var(--accent);
+      background: color-mix(in srgb, var(--panel), var(--bg) 20%);
+      border-radius: 0 8px 8px 0;
+      color: var(--muted);
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      color: var(--ink);
+      background: var(--panel);
+      font-size: 0.82rem;
+      font-weight: 700;
+    }
+
+    @media (max-width: 760px) {
+      main {
+        width: min(100% - 20px, 1080px);
+        padding-top: 18px;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .array {
+        grid-template-columns: repeat(5, minmax(38px, 1fr));
+      }
+
+      .lane {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <span class="tag">trueos-math / sort.rs</span>
+      <h1>Stable rank sort from shared read-only memory</h1>
+      <p class="lead">
+        The idea is bubble-sort-like in spirit: each value discovers how far it
+        should rise or sink. Instead of adjacent swaps, it counts the values
+        below it and jumps directly to its final stable position.
+      </p>
+    </header>
+
+    <section>
+      <div class="grid">
+        <div>
+          <h2>Core Rule</h2>
+          <p>
+            For source element <code>input[i]</code>, every worker can read the
+            whole input array and compute one final destination index.
+          </p>
+          <div class="formula">
+            <code>less = count(input[j] &lt; input[i])</code>
+            <code>equal_before = count(input[j] == input[i] and j &lt; i)</code>
+            <code>final_index = less + equal_before</code>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Stability</h3>
+          <p>
+            The <code>equal_before</code> term preserves duplicate order. If
+            three values compare equal, the one with the earlier source index
+            receives the earlier sorted index.
+          </p>
+          <p>
+            In Rust code, equality should mean <code>cmp() == Equal</code>, not
+            necessarily full structural equality, so keyed payloads stay stable.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Example</h2>
+      <p>
+        Source values. The highlighted <code>2c</code> has two smaller values
+        before it in the sorted order: <code>0</code> and <code>1</code>. It also
+        has two equal <code>2</code> values before it.
+      </p>
+      <div class="array" aria-label="Input array">
+        <div class="cell equal">2a<small>0</small></div>
+        <div class="cell equal">2b<small>1</small></div>
+        <div class="cell">4<small>2</small></div>
+        <div class="cell">5<small>3</small></div>
+        <div class="cell">6<small>4</small></div>
+        <div class="cell pick">2c<small>5</small></div>
+        <div class="cell">1<small>6</small></div>
+        <div class="cell">0<small>7</small></div>
+        <div class="cell">9<small>8</small></div>
+        <div class="cell">8<small>9</small></div>
+      </div>
+
+      <div class="arrow">less 2 + equal_before 2 = final index 4</div>
+
+      <div class="array" aria-label="Sorted array">
+        <div class="cell">0<small>0</small></div>
+        <div class="cell">1<small>1</small></div>
+        <div class="cell equal">2a<small>2</small></div>
+        <div class="cell equal">2b<small>3</small></div>
+        <div class="cell pick">2c<small>4</small></div>
+        <div class="cell">4<small>5</small></div>
+        <div class="cell">5<small>6</small></div>
+        <div class="cell">6<small>7</small></div>
+        <div class="cell">8<small>8</small></div>
+        <div class="cell">9<small>9</small></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="grid">
+        <div>
+          <h2>Worker Shape</h2>
+          <p>
+            With 100 values and 10 workers, each worker can own 10 source
+            indexes. Each worker streams over the same read-only input and
+            updates counters for its owned candidates.
+          </p>
+          <div class="lanes" aria-label="Worker lanes">
+            <div class="lane"><strong>worker 0</strong><div class="bar"></div><code>0..10</code></div>
+            <div class="lane"><strong>worker 1</strong><div class="bar"></div><code>10..20</code></div>
+            <div class="lane"><strong>worker 2</strong><div class="bar"></div><code>20..30</code></div>
+            <div class="lane"><strong>...</strong><div class="bar"></div><code>...</code></div>
+            <div class="lane"><strong>worker 9</strong><div class="bar"></div><code>90..100</code></div>
+          </div>
+        </div>
+        <div>
+          <h2>Careful Parts</h2>
+          <ul class="note-list">
+            <li>Input must be read-only while workers are ranking values.</li>
+            <li>Each source index must be handled by exactly one worker.</li>
+            <li>Output writes are unique because stable ranks are unique.</li>
+            <li>Total work is O(n squared), even when many cores share it.</li>
+            <li>Speedup depends on cache behavior, memory bandwidth, and core count.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>No-alloc Rust Shape</h2>
+      <pre><code>for i in worker_range {
+    let mut rank = 0;
+
+    for j in 0..input.len() {
+        match input[j].cmp(&input[i]) {
+            Ordering::Less =&gt; rank += 1,
+            Ordering::Equal if j &lt; i =&gt; rank += 1,
+            _ =&gt; {}
+        }
+    }
+
+    output[rank] = input[i];
+}</code></pre>
+    </section>
+  </main>
+</body>
+</html>
