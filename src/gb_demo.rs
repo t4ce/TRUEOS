@@ -10,7 +10,7 @@ const DEBUG_ATLAS_META_PATH: &str = "gboy_athlas.txt";
 const DEBUG_ATLAS_MARKER_PATH: &str = "gboy_athlas.marker.txt";
 const DEBUG_ATLAS_WARMUP_FRAMES: u64 = 8;
 const DEBUG_ATLAS_FALLBACK_FRAMES: u64 = 240;
-const DEBUG_ATLAS_MIN_NONZERO_BYTES: usize = 64;
+const DEBUG_ATLAS_MIN_NONZERO_TILE_BYTES: usize = 64;
 const GB_TILE_BYTES: usize = 16;
 const GB_TILE_PIXELS: usize = 8;
 const GB_TILE_COUNT: usize = 384;
@@ -27,6 +27,7 @@ static GBOY_RUN_GENERATION: AtomicU32 = AtomicU32::new(0);
 #[derive(Clone, Copy)]
 struct GboyVramAtlasStats {
     bank_nonzero_bytes: [usize; GB_ATLAS_BANKS],
+    bank_nonzero_tile_bytes: [usize; GB_ATLAS_BANKS],
     bank_nonzero_tiles: [usize; GB_ATLAS_BANKS],
     oam_nonzero_bytes: usize,
 }
@@ -38,6 +39,10 @@ impl GboyVramAtlasStats {
 
     fn total_nonzero_tiles(self) -> usize {
         self.bank_nonzero_tiles.iter().sum()
+    }
+
+    fn total_nonzero_tile_bytes(self) -> usize {
+        self.bank_nonzero_tile_bytes.iter().sum()
     }
 }
 
@@ -125,7 +130,7 @@ async fn run_gboy(
 
         if !debug_atlas_written && frame >= DEBUG_ATLAS_WARMUP_FRAMES {
             let stats = gboy_vram_atlas_stats(&emulator.gpu);
-            let reason = if stats.total_nonzero_bytes() >= DEBUG_ATLAS_MIN_NONZERO_BYTES {
+            let reason = if stats.total_nonzero_tile_bytes() >= DEBUG_ATLAS_MIN_NONZERO_TILE_BYTES {
                 Some(GboyDebugAtlasReason::VramSeeded)
             } else if frame >= DEBUG_ATLAS_FALLBACK_FRAMES {
                 Some(GboyDebugAtlasReason::Fallback)
@@ -137,11 +142,12 @@ async fn run_gboy(
                 Some(reason) => {
                     debug_atlas_written = true;
                     crate::log!(
-                        "gboy: debug atlas attempt frame={} reason={} vram0_nonzero_bytes={} vram1_nonzero_bytes={} nonzero_tiles={} path={} meta={} marker={}\n",
+                        "gboy: debug atlas attempt frame={} reason={} vram0_nonzero_bytes={} vram1_nonzero_bytes={} tile_nonzero_bytes={} nonzero_tiles={} path={} meta={} marker={}\n",
                         frame,
                         reason.as_str(),
                         stats.bank_nonzero_bytes[0],
                         stats.bank_nonzero_bytes[1],
+                        stats.total_nonzero_tile_bytes(),
                         stats.total_nonzero_tiles(),
                         DEBUG_ATLAS_PATH,
                         DEBUG_ATLAS_META_PATH,
@@ -184,10 +190,11 @@ async fn run_gboy(
                 }
                 None if frame == DEBUG_ATLAS_WARMUP_FRAMES || frame.is_multiple_of(60) => {
                     crate::log!(
-                        "gboy: debug atlas waiting frame={} vram0_nonzero_bytes={} vram1_nonzero_bytes={} nonzero_tiles={}\n",
+                        "gboy: debug atlas waiting frame={} vram0_nonzero_bytes={} vram1_nonzero_bytes={} tile_nonzero_bytes={} nonzero_tiles={}\n",
                         frame,
                         stats.bank_nonzero_bytes[0],
                         stats.bank_nonzero_bytes[1],
+                        stats.total_nonzero_tile_bytes(),
                         stats.total_nonzero_tiles()
                     );
                 }
@@ -301,18 +308,20 @@ fn gboy_debug_atlas_metadata(
     stats: GboyVramAtlasStats,
 ) -> String {
     alloc::format!(
-        "rom_path={}\nrom_title={}\nrom_hash_fnv1a64={:016x}\ncgb={}\nwarmup_frames={}\nfallback_frames={}\nmin_nonzero_bytes={}\ndump_frame={}\ndump_reason={}\nvram0_nonzero_bytes={}\nvram1_nonzero_bytes={}\nvram0_nonzero_tiles={}\nvram1_nonzero_tiles={}\noam_nonzero_bytes={}\natlas_file={}\nformat=bmp-bgra32\nwidth={}\nheight={}\nlayout=bank0 tiles 0..383 top, bank1 tiles 0..383 bottom, 16 columns, 8x8 pixels per tile\n",
+        "rom_path={}\nrom_title={}\nrom_hash_fnv1a64={:016x}\ncgb={}\nwarmup_frames={}\nfallback_frames={}\nmin_nonzero_tile_bytes={}\ndump_frame={}\ndump_reason={}\nvram0_nonzero_bytes={}\nvram1_nonzero_bytes={}\nvram0_nonzero_tile_bytes={}\nvram1_nonzero_tile_bytes={}\nvram0_nonzero_tiles={}\nvram1_nonzero_tiles={}\noam_nonzero_bytes={}\natlas_file={}\nformat=bmp-bgra32\nwidth={}\nheight={}\nlayout=bank0 tiles 0..383 top, bank1 tiles 0..383 bottom, 16 columns, 8x8 pixels per tile\n",
         rom_path,
         cartridge_title(&emulator.cart.title),
         rom_hash,
         emulator.cgb_mode as u8,
         DEBUG_ATLAS_WARMUP_FRAMES,
         DEBUG_ATLAS_FALLBACK_FRAMES,
-        DEBUG_ATLAS_MIN_NONZERO_BYTES,
+        DEBUG_ATLAS_MIN_NONZERO_TILE_BYTES,
         frame,
         reason.as_str(),
         stats.bank_nonzero_bytes[0],
         stats.bank_nonzero_bytes[1],
+        stats.bank_nonzero_tile_bytes[0],
+        stats.bank_nonzero_tile_bytes[1],
         stats.bank_nonzero_tiles[0],
         stats.bank_nonzero_tiles[1],
         stats.oam_nonzero_bytes,
@@ -328,6 +337,10 @@ fn gboy_vram_atlas_stats(gpu: &crate::trueos_gboi::gpu::Gpu) -> GboyVramAtlasSta
             count_nonzero_bytes(gpu.vram.as_slice()),
             count_nonzero_bytes(gpu.vram1.as_slice()),
         ],
+        bank_nonzero_tile_bytes: [
+            count_nonzero_tile_bytes(gpu.vram.as_slice()),
+            count_nonzero_tile_bytes(gpu.vram1.as_slice()),
+        ],
         bank_nonzero_tiles: [
             count_nonzero_tiles(gpu.vram.as_slice()),
             count_nonzero_tiles(gpu.vram1.as_slice()),
@@ -338,6 +351,13 @@ fn gboy_vram_atlas_stats(gpu: &crate::trueos_gboi::gpu::Gpu) -> GboyVramAtlasSta
 
 fn count_nonzero_bytes(bytes: &[u8]) -> usize {
     bytes.iter().filter(|byte| **byte != 0).count()
+}
+
+fn count_nonzero_tile_bytes(vram: &[u8]) -> usize {
+    vram.iter()
+        .take(GB_TILE_COUNT * GB_TILE_BYTES)
+        .filter(|byte| **byte != 0)
+        .count()
 }
 
 fn count_nonzero_tiles(vram: &[u8]) -> usize {

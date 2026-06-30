@@ -3268,6 +3268,79 @@ fn media_ytile_8bpp_offset(byte_x: usize, row_y: usize, tiles_per_row: usize) ->
     (tile_row * tiles_per_row + tile_col) * 4096 + within_tile
 }
 
+#[inline(always)]
+fn nv12_pixel_to_bgra(y: i32, u: i32, v: i32) -> u32 {
+    let c = (y - 16).max(0);
+    let u = u - 128;
+    let v = v - 128;
+    let r = clamp_u8_i32((298 * c + 409 * v + 128) >> 8);
+    let g = clamp_u8_i32((298 * c - 100 * u - 208 * v + 128) >> 8);
+    let b = clamp_u8_i32((298 * c + 516 * u + 128) >> 8);
+    u32::from_le_bytes([b, g, r, 0])
+}
+
+fn present_ytile_nv12_surface_center_1to1(
+    surface: PrimarySurface,
+    src: &[u8],
+    visible_x: usize,
+    visible_y: usize,
+    visible_width: usize,
+    visible_height: usize,
+    tiles_per_row: usize,
+    chroma_y_offset: usize,
+    dst_x: usize,
+    dst_y: usize,
+) {
+    let dst_pitch = surface.pitch_bytes as usize;
+    for row_idx in 0..visible_height {
+        let src_y = visible_y + row_idx;
+        let uv_row = chroma_y_offset + src_y / 2;
+        let dst_row_off = (dst_y + row_idx)
+            .saturating_mul(dst_pitch)
+            .saturating_add(dst_x.saturating_mul(4));
+        let dst_row = unsafe { surface.virt.add(dst_row_off) as *mut u32 };
+        for col_idx in 0..visible_width {
+            let src_x = visible_x + col_idx;
+            let y_off = media_ytile_8bpp_offset(src_x, src_y, tiles_per_row);
+            let uv_x = (src_x / 2).saturating_mul(2);
+            let u_off = media_ytile_8bpp_offset(uv_x, uv_row, tiles_per_row);
+            let v_off = media_ytile_8bpp_offset(uv_x + 1, uv_row, tiles_per_row);
+            let pixel = nv12_pixel_to_bgra(
+                unsafe { i32::from(*src.get_unchecked(y_off)) },
+                unsafe { i32::from(*src.get_unchecked(u_off)) },
+                unsafe { i32::from(*src.get_unchecked(v_off)) },
+            );
+            unsafe {
+                core::ptr::write_volatile(dst_row.add(col_idx), pixel);
+            }
+        }
+    }
+}
+
+fn dma_flush_primary_rect(
+    surface: PrimarySurface,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+) -> usize {
+    let dst_pitch = surface.pitch_bytes as usize;
+    let row_bytes = width.saturating_mul(4);
+    if row_bytes == 0 || height == 0 {
+        return 0;
+    }
+    for row_idx in 0..height {
+        let row_off = y
+            .saturating_add(row_idx)
+            .saturating_mul(dst_pitch)
+            .saturating_add(x.saturating_mul(4));
+        unsafe {
+            crate::intel::dma_flush(surface.virt.add(row_off), row_bytes);
+        }
+    }
+    row_bytes.saturating_mul(height)
+}
+
 pub(crate) fn present_imc3_surface_center(
     src: &[u8],
     coded_width: u32,
@@ -3462,6 +3535,24 @@ pub(crate) fn present_ytile_nv12_surface_center(
     let dst_x = dst_width.saturating_sub(copy_w) / 2;
     let dst_y = dst_height.saturating_sub(copy_h) / 2;
 
+    if copy_w == visible_width && copy_h == visible_height {
+        present_ytile_nv12_surface_center_1to1(
+            surface,
+            src,
+            visible_x,
+            visible_y,
+            visible_width,
+            visible_height,
+            tiles_per_row,
+            chroma_y_offset,
+            dst_x,
+            dst_y,
+        );
+        let byte_len = dma_flush_primary_rect(surface, dst_x, dst_y, copy_w, copy_h);
+        notify_primary_surface_present(surface, "ytile-nv12-center-1to1", byte_len);
+        return true;
+    }
+
     for row_idx in 0..copy_h {
         let src_y = visible_y.saturating_add(
             row_idx
@@ -3487,14 +3578,11 @@ pub(crate) fn present_ytile_nv12_surface_center(
             let uv_row = chroma_y_offset.saturating_add(src_y / 2);
             let u_off = media_ytile_8bpp_offset(uv_x, uv_row, tiles_per_row);
             let v_off = media_ytile_8bpp_offset(uv_x + 1, uv_row, tiles_per_row);
-            let y = unsafe { i32::from(*src.get_unchecked(y_off)) };
-            let c = (y - 16).max(0);
-            let u = unsafe { i32::from(*src.get_unchecked(u_off)) } - 128;
-            let v = unsafe { i32::from(*src.get_unchecked(v_off)) } - 128;
-            let r = clamp_u8_i32((298 * c + 409 * v + 128) >> 8);
-            let g = clamp_u8_i32((298 * c - 100 * u - 208 * v + 128) >> 8);
-            let b = clamp_u8_i32((298 * c + 516 * u + 128) >> 8);
-            let pixel = u32::from_le_bytes([b, g, r, 0]);
+            let pixel = nv12_pixel_to_bgra(
+                unsafe { i32::from(*src.get_unchecked(y_off)) },
+                unsafe { i32::from(*src.get_unchecked(u_off)) },
+                unsafe { i32::from(*src.get_unchecked(v_off)) },
+            );
             unsafe {
                 core::ptr::write_volatile(dst_row.add(col_idx), pixel);
             }

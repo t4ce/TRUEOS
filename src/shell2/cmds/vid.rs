@@ -16,6 +16,8 @@ const DEFAULT_REVERSE: bool = false;
 const DEFAULT_CACHE: H264PlaybackCacheMode = H264PlaybackCacheMode::Off;
 const DEFAULT_STUDY: bool = false;
 const DEFAULT_FILL: bool = false;
+const DEFAULT_DIAGNOSTICS: bool = false;
+const DEFAULT_NORESET_LITE: bool = false;
 
 pub(crate) fn try_parse(
     spawner: &Spawner,
@@ -36,13 +38,15 @@ pub(crate) fn try_parse(
             print_matrix_target_line(
                 &target,
                 alloc::format!(
-                    "vid: queued {} fps={} mode={} cache={} study={} fill={}",
+                    "vid: queued {} fps={} mode={} cache={} study={} fill={} diag={} warm={}",
                     H264_BOOT_PROBE_STREAM_PATH,
                     options.fps(),
                     options.name(),
                     options.cache_mode().name(),
                     options.stripe_study() as u8,
-                    options.show_cache_fill() as u8
+                    options.show_cache_fill() as u8,
+                    options.diagnostics() as u8,
+                    options.noreset_lite() as u8
                 )
                 .as_str(),
             );
@@ -79,6 +83,8 @@ fn parse_options(
     let mut cache_set = false;
     let mut study = DEFAULT_STUDY;
     let mut fill = DEFAULT_FILL;
+    let mut diagnostics = DEFAULT_DIAGNOSTICS;
+    let mut noreset_lite = DEFAULT_NORESET_LITE;
 
     for arg in args {
         if arg.eq_ignore_ascii_case("reverse") || arg.eq_ignore_ascii_case("rev") {
@@ -95,6 +101,17 @@ fn parse_options(
             fill = true;
         } else if arg.eq_ignore_ascii_case("nofill") {
             fill = false;
+        } else if arg.eq_ignore_ascii_case("debug") || arg.eq_ignore_ascii_case("diag") {
+            diagnostics = true;
+        } else if arg.eq_ignore_ascii_case("quiet") || arg.eq_ignore_ascii_case("fast") {
+            diagnostics = false;
+        } else if arg.eq_ignore_ascii_case("warm")
+            || arg.eq_ignore_ascii_case("noreset")
+            || arg.eq_ignore_ascii_case("noreset-lite")
+        {
+            noreset_lite = true;
+        } else if arg.eq_ignore_ascii_case("cold") || arg.eq_ignore_ascii_case("reset") {
+            noreset_lite = false;
         } else if let Some(raw) = arg.strip_prefix("cache=") {
             cache = parse_cache(raw)?;
             cache_set = true;
@@ -120,7 +137,7 @@ fn parse_options(
         cache = H264PlaybackCacheMode::Off;
     }
 
-    Some(H264PlaybackOptions::new(fps, reverse, cache, study, fill))
+    Some(H264PlaybackOptions::new(fps, reverse, cache, study, fill, diagnostics, noreset_lite))
 }
 
 fn parse_cache(raw: &str) -> Option<H264PlaybackCacheMode> {
@@ -138,11 +155,11 @@ fn parse_cache(raw: &str) -> Option<H264PlaybackCacheMode> {
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "vid: usage `vid <fps 1..144> [reverse|forward] [cache=full|tail|off] [study] [fill]`",
+        "vid: usage `vid <fps 1..144> [reverse|forward] [cache=full|tail|off] [study] [fill] [quiet|debug] [warm|cold]`",
     );
     print_shell_line(
         io,
-        "vid: examples `vid 30`, `vid 15 reverse`, `vid 60 reverse cache=off fill`",
+        "vid: examples `vid 30`, `vid 60 warm`, `vid 60 debug`, `vid 15 reverse warm`",
     );
 }
 
@@ -151,19 +168,50 @@ async fn vid_task(target: MatrixTarget, options: H264PlaybackOptions) {
     print_matrix_target_line(
         &target,
         alloc::format!(
-            "vid: start asset={} fps={} mode={} cache={} study={} fill={}",
+            "vid: start asset={} fps={} mode={} cache={} study={} fill={} diag={} warm={}",
             H264_BOOT_PROBE_STREAM_PATH,
             options.fps(),
             options.name(),
             options.cache_mode().name(),
             options.stripe_study() as u8,
-            options.show_cache_fill() as u8
+            options.show_cache_fill() as u8,
+            options.diagnostics() as u8,
+            options.noreset_lite() as u8
         )
         .as_str(),
     );
 
     match crate::intel::media::hw_vid::run_shell_vid_playback(options).await {
-        Ok(()) => print_matrix_target_line(&target, "vid: done"),
+        Ok(report) => print_matrix_target_line(
+            &target,
+            alloc::format!(
+                "vid: done submitted={} target_fps={} elapsed_ms={} effective_fps={}.{:02} waited={} late={} wait_ms={} avg_decode_us={} max_decode_us={} max_late_ms={} avg_process_us={} avg_reset_us={} avg_zero_clear_us={} avg_zero_us={} avg_scratch_zero_us={} avg_output_clear_us={} avg_missing_clear_us={} avg_scratch_flush_us={} avg_build_ctx_us={} avg_poll_us={} avg_post_us={} avg_present_us={}",
+                report.submitted,
+                report.target_fps,
+                report.elapsed_ms,
+                report.effective_fps_x100 / 100,
+                report.effective_fps_x100 % 100,
+                report.waited_frames,
+                report.late_frames,
+                report.total_wait_ms,
+                report.avg_decode_us,
+                report.max_decode_us,
+                report.max_late_ms,
+                report.avg_process_us,
+                report.avg_reset_us,
+                report.avg_zero_clear_us,
+                report.avg_zero_us,
+                report.avg_scratch_zero_us,
+                report.avg_output_clear_us,
+                report.avg_missing_clear_us,
+                report.avg_scratch_flush_us,
+                report.avg_build_ctx_us,
+                report.avg_poll_us,
+                report.avg_post_us,
+                report.avg_present_us
+            )
+            .as_str(),
+        ),
         Err(err) => print_matrix_target_line(&target, alloc::format!("vid: {err}").as_str()),
     }
     set_matrix_target_active(&target, false);

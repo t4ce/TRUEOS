@@ -8,6 +8,50 @@
 use super::xelp_media2_ngin::{
     self as media, MediaBitstreamBacking, MediaEngineDescriptor, MediaGpuWindowLayout,
 };
+use core::sync::atomic::{AtomicBool, Ordering};
+
+static AVC_NORESET_LITE_ENABLED: AtomicBool = AtomicBool::new(false);
+static AVC_NORESET_LITE_RESET_DONE: AtomicBool = AtomicBool::new(false);
+static AVC_NORESET_LITE_STATIC_CLEAR_DONE: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn set_avc_noreset_lite_enabled(enabled: bool) -> bool {
+    let old = AVC_NORESET_LITE_ENABLED.swap(enabled, Ordering::AcqRel);
+    AVC_NORESET_LITE_RESET_DONE.store(false, Ordering::Release);
+    AVC_NORESET_LITE_STATIC_CLEAR_DONE.store(false, Ordering::Release);
+    old
+}
+
+fn avc_noreset_lite_enabled() -> bool {
+    AVC_NORESET_LITE_ENABLED.load(Ordering::Acquire)
+}
+
+fn avc_should_reset_media_engine() -> bool {
+    if !avc_noreset_lite_enabled() {
+        return true;
+    }
+    !AVC_NORESET_LITE_RESET_DONE.swap(true, Ordering::AcqRel)
+}
+
+fn avc_should_clear_static_decode_surfaces() -> bool {
+    if !avc_noreset_lite_enabled() {
+        return true;
+    }
+    !AVC_NORESET_LITE_STATIC_CLEAR_DONE.swap(true, Ordering::AcqRel)
+}
+
+fn avc_should_clear_current_output_surface() -> bool {
+    !avc_noreset_lite_enabled()
+}
+
+fn media_backend_now_ticks() -> u64 {
+    embassy_time_driver::now()
+}
+
+fn media_backend_elapsed_us(start: u64) -> u64 {
+    let hz = embassy_time_driver::TICK_HZ.max(1);
+    let ticks = media_backend_now_ticks().saturating_sub(start);
+    ((ticks as u128).saturating_mul(1_000_000) / hz as u128) as u64
+}
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct JpegQuantTables {
@@ -161,6 +205,16 @@ pub(super) struct MediaAvcSubmitProof {
     pub complete_value: u32,
     pub retired: bool,
     pub poll_iters: usize,
+    pub reset_us: u64,
+    pub zero_clear_us: u64,
+    pub zero_us: u64,
+    pub scratch_zero_us: u64,
+    pub output_clear_us: u64,
+    pub missing_clear_us: u64,
+    pub scratch_flush_us: u64,
+    pub build_ctx_us: u64,
+    pub poll_us: u64,
+    pub post_us: u64,
     pub execlist_status_lo: u32,
     pub execlist_status_hi: u32,
     pub ring_start: u32,
@@ -1535,40 +1589,76 @@ pub(super) fn submit_avc_single_idr_batch(
     let postsubmit_marker = kickoff_marker + 2;
     let complete_marker = kickoff_marker + 3;
 
-    media::reset_media_engine(dev, engine, context_virt);
+    let reset_start = media_backend_now_ticks();
+    if avc_should_reset_media_engine() {
+        media::reset_media_engine(dev, engine, context_virt);
+    }
     media::wake_media_engine_forcewake(dev, engine);
+    let reset_us = media_backend_elapsed_us(reset_start);
 
+    let zero_start = media_backend_now_ticks();
     unsafe {
         core::ptr::write_bytes(ring_virt, 0, backing.ring_bytes);
         core::ptr::write_bytes(context_virt, 0, backing.context_bytes);
         core::ptr::write_bytes(backing.batch_virt, 0, backing.batch_bytes);
         core::ptr::write_bytes(backing.result_virt, 0, backing.result_bytes);
-        core::ptr::write_bytes(backing.avc_scratch_virt, 0, backing.avc_scratch_bytes);
     }
-    if !clear_output_surface_to_tiled_nv12_black(
-        output_surface_virt,
-        output_surface_bytes,
-        coded_width,
-        coded_height,
-        output_surface_pitch,
-    ) {
-        return None;
-    }
-    if !clear_output_surface_to_tiled_nv12_black(
-        unsafe {
-            backing
-                .output_surface_virt
-                .add(missing_reference_surface_offset_bytes)
-        },
-        output_surface_bytes,
-        coded_width,
-        coded_height,
-        output_surface_pitch,
-    ) {
-        return None;
-    }
-    super::dma_flush(backing.avc_scratch_virt, backing.avc_scratch_bytes);
+    let zero_us = media_backend_elapsed_us(zero_start);
 
+    let clear_static_decode_surfaces = avc_should_clear_static_decode_surfaces();
+    let scratch_zero_start = media_backend_now_ticks();
+    if clear_static_decode_surfaces {
+        unsafe {
+            core::ptr::write_bytes(backing.avc_scratch_virt, 0, backing.avc_scratch_bytes);
+        }
+    }
+    let scratch_zero_us = media_backend_elapsed_us(scratch_zero_start);
+
+    let clear_current_output_surface = avc_should_clear_current_output_surface();
+    let output_clear_start = media_backend_now_ticks();
+    if clear_current_output_surface {
+        if !clear_output_surface_to_tiled_nv12_black(
+            output_surface_virt,
+            output_surface_bytes,
+            coded_width,
+            coded_height,
+            output_surface_pitch,
+        ) {
+            return None;
+        }
+    }
+    let output_clear_us = media_backend_elapsed_us(output_clear_start);
+
+    let missing_clear_start = media_backend_now_ticks();
+    if clear_static_decode_surfaces {
+        if !clear_output_surface_to_tiled_nv12_black(
+            unsafe {
+                backing
+                    .output_surface_virt
+                    .add(missing_reference_surface_offset_bytes)
+            },
+            output_surface_bytes,
+            coded_width,
+            coded_height,
+            output_surface_pitch,
+        ) {
+            return None;
+        }
+    }
+    let missing_clear_us = media_backend_elapsed_us(missing_clear_start);
+
+    let scratch_flush_start = media_backend_now_ticks();
+    if clear_static_decode_surfaces {
+        super::dma_flush(backing.avc_scratch_virt, backing.avc_scratch_bytes);
+    }
+    let scratch_flush_us = media_backend_elapsed_us(scratch_flush_start);
+    let zero_clear_us = zero_us
+        .saturating_add(scratch_zero_us)
+        .saturating_add(output_clear_us)
+        .saturating_add(missing_clear_us)
+        .saturating_add(scratch_flush_us);
+
+    let build_ctx_start = media_backend_now_ticks();
     let batch_tail_bytes = build_avc_single_idr_batch_skeleton(
         backing.batch_virt,
         backing.batch_bytes,
@@ -1646,6 +1736,7 @@ pub(super) fn submit_avc_single_idr_batch(
         );
         super::mmio_write(dev, engine.ring_base + media::RING_HWS_PGA, pphwsp_gpu);
     }
+    let build_ctx_us = media_backend_elapsed_us(build_ctx_start);
 
     let submit_counter = submit_token.wrapping_add(1) & 0x3F;
     let (ctx_desc_lo, ctx_desc_hi) = media::build_media_execlist_context_descriptor(
@@ -1658,6 +1749,7 @@ pub(super) fn submit_avc_single_idr_batch(
     media::execlist_submit_port_push(dev, engine.ring_base, ctx_desc_lo, ctx_desc_hi, 0, 0);
     super::mmio_write(dev, engine.ring_base + media::RING_EXECLIST_CONTROL, media::EL_CTRL_LOAD);
 
+    let poll_start = media_backend_now_ticks();
     let mut retired = false;
     let mut poll_iters = 0usize;
     let mut complete_value = 0u32;
@@ -1679,60 +1771,74 @@ pub(super) fn submit_avc_single_idr_batch(
         core::hint::spin_loop();
         poll_iters += 1;
     }
+    let poll_us = media_backend_elapsed_us(poll_start);
 
+    let post_start = media_backend_now_ticks();
     super::dma_flush(output_surface_virt, output_surface_bytes);
     super::dma_flush(backing.result_virt, backing.result_bytes);
     let output_surface = unsafe {
         core::slice::from_raw_parts(output_surface_virt as *const u8, output_surface_bytes)
     };
-    let output_surface_probe = media::probe_tiled_nv12_output_surface(
-        output_surface,
-        u16::try_from(coded_width).unwrap_or(u16::MAX),
-        u16::try_from(coded_height).unwrap_or(u16::MAX),
-        0,
-        0,
-        u16::try_from(coded_width).unwrap_or(u16::MAX),
-        u16::try_from(coded_height).unwrap_or(u16::MAX),
-        output_surface_pitch,
-    );
-    media::log_output_surface_probe(engine.name, submit_token, retired, output_surface_probe);
-    let output_surface_probe_ytile = media::probe_ytile_nv12_output_surface(
-        output_surface,
-        u16::try_from(coded_width).unwrap_or(u16::MAX),
-        u16::try_from(coded_height).unwrap_or(u16::MAX),
-        0,
-        0,
-        u16::try_from(coded_width).unwrap_or(u16::MAX),
-        u16::try_from(coded_height).unwrap_or(u16::MAX),
-        output_surface_pitch,
-    );
-    media::log_output_surface_probe_layout(
-        engine.name,
-        submit_token,
-        retired,
-        "ytile-nv12",
-        output_surface_probe_ytile,
-    );
-    let output_surface_probe_linear = media::probe_linear_nv12_output_surface(
-        output_surface,
-        u16::try_from(coded_width).unwrap_or(u16::MAX),
-        u16::try_from(coded_height).unwrap_or(u16::MAX),
-        0,
-        0,
-        u16::try_from(coded_width).unwrap_or(u16::MAX),
-        u16::try_from(coded_height).unwrap_or(u16::MAX),
-        output_surface_pitch,
-    );
-    media::log_output_surface_probe_layout(
-        engine.name,
-        submit_token,
-        retired,
-        "linear-nv12",
-        output_surface_probe_linear,
-    );
-    let output_surface_detail = media::output_surface_has_decoded_detail(&output_surface_probe);
-    let (output_surface_signature, output_surface_nonzero_samples) =
-        media::surface_signature(output_surface);
+    let (output_surface_detail, output_surface_signature, output_surface_nonzero_samples) =
+        if media::output_surface_probes_enabled() {
+            let output_surface_probe = media::probe_tiled_nv12_output_surface(
+                output_surface,
+                u16::try_from(coded_width).unwrap_or(u16::MAX),
+                u16::try_from(coded_height).unwrap_or(u16::MAX),
+                0,
+                0,
+                u16::try_from(coded_width).unwrap_or(u16::MAX),
+                u16::try_from(coded_height).unwrap_or(u16::MAX),
+                output_surface_pitch,
+            );
+            media::log_output_surface_probe(
+                engine.name,
+                submit_token,
+                retired,
+                output_surface_probe,
+            );
+            let output_surface_probe_ytile = media::probe_ytile_nv12_output_surface(
+                output_surface,
+                u16::try_from(coded_width).unwrap_or(u16::MAX),
+                u16::try_from(coded_height).unwrap_or(u16::MAX),
+                0,
+                0,
+                u16::try_from(coded_width).unwrap_or(u16::MAX),
+                u16::try_from(coded_height).unwrap_or(u16::MAX),
+                output_surface_pitch,
+            );
+            media::log_output_surface_probe_layout(
+                engine.name,
+                submit_token,
+                retired,
+                "ytile-nv12",
+                output_surface_probe_ytile,
+            );
+            let output_surface_probe_linear = media::probe_linear_nv12_output_surface(
+                output_surface,
+                u16::try_from(coded_width).unwrap_or(u16::MAX),
+                u16::try_from(coded_height).unwrap_or(u16::MAX),
+                0,
+                0,
+                u16::try_from(coded_width).unwrap_or(u16::MAX),
+                u16::try_from(coded_height).unwrap_or(u16::MAX),
+                output_surface_pitch,
+            );
+            media::log_output_surface_probe_layout(
+                engine.name,
+                submit_token,
+                retired,
+                "linear-nv12",
+                output_surface_probe_linear,
+            );
+            let output_surface_detail =
+                media::output_surface_has_decoded_detail(&output_surface_probe);
+            let (output_surface_signature, output_surface_nonzero_samples) =
+                media::surface_signature(output_surface);
+            (output_surface_detail, output_surface_signature, output_surface_nonzero_samples)
+        } else {
+            (retired, 0, 0)
+        };
 
     let ring_acthd = super::mmio_read(dev, engine.ring_base + media::RING_ACTHD);
     let ring_acthd_hi = super::mmio_read(dev, engine.ring_base + media::RING_ACTHD_UDW);
@@ -1749,6 +1855,37 @@ pub(super) fn submit_avc_single_idr_batch(
         batch_tail_bytes,
         ring_tail_bytes,
     );
+    let kickoff_value =
+        media::read_result_dword(backing.result_virt, media::MEDIA_RESULT_KICKOFF_SLOT);
+    let presubmit_value =
+        media::read_result_dword(backing.result_virt, media::MEDIA_RESULT_PRESUBMIT_SLOT);
+    let postsubmit_value =
+        media::read_result_dword(backing.result_virt, media::MEDIA_RESULT_POSTSUBMIT_SLOT);
+    let execlist_status_lo =
+        super::mmio_read(dev, engine.ring_base + media::RING_EXECLIST_STATUS_LO);
+    let execlist_status_hi =
+        super::mmio_read(dev, engine.ring_base + media::RING_EXECLIST_STATUS_HI);
+    let ring_start_read = super::mmio_read(dev, engine.ring_base + media::RING_START);
+    let ring_ctl_read = super::mmio_read(dev, engine.ring_base + media::RING_CTL);
+    let ring_hws_pga_read = super::mmio_read(dev, engine.ring_base + media::RING_HWS_PGA);
+    let ring_head_read = super::mmio_read(dev, engine.ring_base + media::RING_HEAD);
+    let ring_tail_read = super::mmio_read(dev, engine.ring_base + media::RING_TAIL);
+    let bbstate = super::mmio_read(dev, engine.ring_base + media::RING_BBSTATE);
+    let esr = super::mmio_read(dev, engine.ring_base + media::RING_ESR);
+    let instps = super::mmio_read(dev, engine.ring_base + media::RING_INSTPS);
+    let psmi_ctl = super::mmio_read(dev, engine.ring_base + media::RING_PSMI_CTL);
+    let nopid = super::mmio_read(dev, engine.ring_base + media::RING_NOPID);
+    let ipeir = super::mmio_read(dev, engine.ring_base + media::RING_IPEIR);
+    let ipehr = super::mmio_read(dev, engine.ring_base + media::RING_IPEHR);
+    let fault_tlb_data0_gen8 = super::mmio_read(dev, 0x4B10);
+    let fault_tlb_data1_gen8 = super::mmio_read(dev, 0x4B14);
+    let fault_tlb_data0_gen12 = super::mmio_read(dev, 0xCEB8);
+    let fault_tlb_data1_gen12 = super::mmio_read(dev, 0xCEBC);
+    let stage_flags_value =
+        media::read_result_dword(backing.result_virt, media::MEDIA_RESULT_STAGE_FLAGS_SLOT);
+    let bitstream_dword0 =
+        media::sample_buffer_dword(backing.bitstream_virt, backing.bitstream_bytes, 0);
+    let post_us = media_backend_elapsed_us(post_start);
 
     Some(MediaAvcSubmitProof {
         engine_name: engine.name,
@@ -1770,34 +1907,29 @@ pub(super) fn submit_avc_single_idr_batch(
         presubmit_marker,
         postsubmit_marker,
         complete_marker,
-        kickoff_value: media::read_result_dword(
-            backing.result_virt,
-            media::MEDIA_RESULT_KICKOFF_SLOT,
-        ),
-        presubmit_value: media::read_result_dword(
-            backing.result_virt,
-            media::MEDIA_RESULT_PRESUBMIT_SLOT,
-        ),
-        postsubmit_value: media::read_result_dword(
-            backing.result_virt,
-            media::MEDIA_RESULT_POSTSUBMIT_SLOT,
-        ),
+        kickoff_value,
+        presubmit_value,
+        postsubmit_value,
         complete_value,
         retired,
         poll_iters,
-        execlist_status_lo: super::mmio_read(
-            dev,
-            engine.ring_base + media::RING_EXECLIST_STATUS_LO,
-        ),
-        execlist_status_hi: super::mmio_read(
-            dev,
-            engine.ring_base + media::RING_EXECLIST_STATUS_HI,
-        ),
-        ring_start: super::mmio_read(dev, engine.ring_base + media::RING_START),
-        ring_ctl: super::mmio_read(dev, engine.ring_base + media::RING_CTL),
-        ring_hws_pga: super::mmio_read(dev, engine.ring_base + media::RING_HWS_PGA),
-        ring_head: super::mmio_read(dev, engine.ring_base + media::RING_HEAD),
-        ring_tail: super::mmio_read(dev, engine.ring_base + media::RING_TAIL),
+        reset_us,
+        zero_clear_us,
+        zero_us,
+        scratch_zero_us,
+        output_clear_us,
+        missing_clear_us,
+        scratch_flush_us,
+        build_ctx_us,
+        poll_us,
+        post_us,
+        execlist_status_lo,
+        execlist_status_hi,
+        ring_start: ring_start_read,
+        ring_ctl: ring_ctl_read,
+        ring_hws_pga: ring_hws_pga_read,
+        ring_head: ring_head_read,
+        ring_tail: ring_tail_read,
         ring_acthd,
         ring_acthd_hi,
         acthd_region,
@@ -1807,28 +1939,21 @@ pub(super) fn submit_avc_single_idr_batch(
         bbaddr_hi,
         dma_fadd_lo,
         dma_fadd_hi,
-        bbstate: super::mmio_read(dev, engine.ring_base + media::RING_BBSTATE),
-        esr: super::mmio_read(dev, engine.ring_base + media::RING_ESR),
-        instps: super::mmio_read(dev, engine.ring_base + media::RING_INSTPS),
-        psmi_ctl: super::mmio_read(dev, engine.ring_base + media::RING_PSMI_CTL),
-        nopid: super::mmio_read(dev, engine.ring_base + media::RING_NOPID),
-        ipeir: super::mmio_read(dev, engine.ring_base + media::RING_IPEIR),
-        ipehr: super::mmio_read(dev, engine.ring_base + media::RING_IPEHR),
+        bbstate,
+        esr,
+        instps,
+        psmi_ctl,
+        nopid,
+        ipeir,
+        ipehr,
         fault_gen8,
         fault_gen12,
-        fault_tlb_data0_gen8: super::mmio_read(dev, 0x4B10),
-        fault_tlb_data1_gen8: super::mmio_read(dev, 0x4B14),
-        fault_tlb_data0_gen12: super::mmio_read(dev, 0xCEB8),
-        fault_tlb_data1_gen12: super::mmio_read(dev, 0xCEBC),
-        stage_flags_value: media::read_result_dword(
-            backing.result_virt,
-            media::MEDIA_RESULT_STAGE_FLAGS_SLOT,
-        ),
-        bitstream_dword0: media::sample_buffer_dword(
-            backing.bitstream_virt,
-            backing.bitstream_bytes,
-            0,
-        ),
+        fault_tlb_data0_gen8,
+        fault_tlb_data1_gen8,
+        fault_tlb_data0_gen12,
+        fault_tlb_data1_gen12,
+        stage_flags_value,
+        bitstream_dword0,
         output_surface_signature,
         output_surface_nonzero_samples,
     })
@@ -2031,54 +2156,66 @@ pub(super) fn submit_jpeg_smoke_batch(
     let output_surface = unsafe {
         core::slice::from_raw_parts(backing.output_surface_virt as *const u8, output_surface_bytes)
     };
-    let output_surface_probe = media::probe_tiled_nv12_output_surface(
-        output_surface,
-        u16::try_from(coded_width).unwrap_or(u16::MAX),
-        u16::try_from(coded_height).unwrap_or(u16::MAX),
-        0,
-        0,
-        u16::try_from(coded_width).unwrap_or(u16::MAX),
-        u16::try_from(coded_height).unwrap_or(u16::MAX),
-        output_surface_pitch,
-    );
-    media::log_output_surface_probe(engine.name, submit_token, retired, output_surface_probe);
-    let output_surface_probe_ytile = media::probe_ytile_nv12_output_surface(
-        output_surface,
-        u16::try_from(coded_width).unwrap_or(u16::MAX),
-        u16::try_from(coded_height).unwrap_or(u16::MAX),
-        0,
-        0,
-        u16::try_from(coded_width).unwrap_or(u16::MAX),
-        u16::try_from(coded_height).unwrap_or(u16::MAX),
-        output_surface_pitch,
-    );
-    media::log_output_surface_probe_layout(
-        engine.name,
-        submit_token,
-        retired,
-        "ytile-nv12",
-        output_surface_probe_ytile,
-    );
-    let output_surface_probe_linear = media::probe_linear_nv12_output_surface(
-        output_surface,
-        u16::try_from(coded_width).unwrap_or(u16::MAX),
-        u16::try_from(coded_height).unwrap_or(u16::MAX),
-        0,
-        0,
-        u16::try_from(coded_width).unwrap_or(u16::MAX),
-        u16::try_from(coded_height).unwrap_or(u16::MAX),
-        output_surface_pitch,
-    );
-    media::log_output_surface_probe_layout(
-        engine.name,
-        submit_token,
-        retired,
-        "linear-nv12",
-        output_surface_probe_linear,
-    );
-    let output_surface_detail = media::output_surface_has_decoded_detail(&output_surface_probe);
-    let (output_surface_signature, output_surface_nonzero_samples) =
-        media::surface_signature(output_surface);
+    let (output_surface_detail, output_surface_signature, output_surface_nonzero_samples) =
+        if media::output_surface_probes_enabled() {
+            let output_surface_probe = media::probe_tiled_nv12_output_surface(
+                output_surface,
+                u16::try_from(coded_width).unwrap_or(u16::MAX),
+                u16::try_from(coded_height).unwrap_or(u16::MAX),
+                0,
+                0,
+                u16::try_from(coded_width).unwrap_or(u16::MAX),
+                u16::try_from(coded_height).unwrap_or(u16::MAX),
+                output_surface_pitch,
+            );
+            media::log_output_surface_probe(
+                engine.name,
+                submit_token,
+                retired,
+                output_surface_probe,
+            );
+            let output_surface_probe_ytile = media::probe_ytile_nv12_output_surface(
+                output_surface,
+                u16::try_from(coded_width).unwrap_or(u16::MAX),
+                u16::try_from(coded_height).unwrap_or(u16::MAX),
+                0,
+                0,
+                u16::try_from(coded_width).unwrap_or(u16::MAX),
+                u16::try_from(coded_height).unwrap_or(u16::MAX),
+                output_surface_pitch,
+            );
+            media::log_output_surface_probe_layout(
+                engine.name,
+                submit_token,
+                retired,
+                "ytile-nv12",
+                output_surface_probe_ytile,
+            );
+            let output_surface_probe_linear = media::probe_linear_nv12_output_surface(
+                output_surface,
+                u16::try_from(coded_width).unwrap_or(u16::MAX),
+                u16::try_from(coded_height).unwrap_or(u16::MAX),
+                0,
+                0,
+                u16::try_from(coded_width).unwrap_or(u16::MAX),
+                u16::try_from(coded_height).unwrap_or(u16::MAX),
+                output_surface_pitch,
+            );
+            media::log_output_surface_probe_layout(
+                engine.name,
+                submit_token,
+                retired,
+                "linear-nv12",
+                output_surface_probe_linear,
+            );
+            let output_surface_detail =
+                media::output_surface_has_decoded_detail(&output_surface_probe);
+            let (output_surface_signature, output_surface_nonzero_samples) =
+                media::surface_signature(output_surface);
+            (output_surface_detail, output_surface_signature, output_surface_nonzero_samples)
+        } else {
+            (retired, 0, 0)
+        };
     if !output_surface_detail {
         crate::log!(
             "intel/media2: jpeg blank-surface engine={} sample={} retired={} detail_range=0 sig=0x{:08X} nonzero_samples={}\n",

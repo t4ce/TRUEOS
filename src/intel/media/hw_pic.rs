@@ -10,6 +10,7 @@ const HW_PIC_OUTPUT_CAP: usize = 32;
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 static SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
+static DETAILED_LOGGING_ENABLED: AtomicBool = AtomicBool::new(true);
 static PENDING: Mutex<VecDeque<HwPicJob>> = Mutex::new(VecDeque::new());
 static OUTPUTS: Mutex<VecDeque<HwPicOutput>> = Mutex::new(VecDeque::new());
 static WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
@@ -20,7 +21,9 @@ const AVC_DPB_RETAINED_REFS: usize = 3;
 
 macro_rules! hw_pic_info {
     ($($arg:tt)*) => {
-        crate::log_info!(target: "media"; $($arg)*);
+        if $crate::intel::hw_pic::detailed_logging_enabled() {
+            crate::log_info!(target: "media"; $($arg)*);
+        }
     };
 }
 
@@ -45,6 +48,49 @@ pub(crate) enum HwPicPixelFormat {
 }
 
 #[derive(Copy, Clone, Debug)]
+pub(crate) struct HwPicTiming {
+    pub queue_wait_us: u64,
+    pub process_us: u64,
+    pub backend_reset_us: u64,
+    pub backend_zero_clear_us: u64,
+    pub backend_zero_us: u64,
+    pub backend_scratch_zero_us: u64,
+    pub backend_output_clear_us: u64,
+    pub backend_missing_clear_us: u64,
+    pub backend_scratch_flush_us: u64,
+    pub backend_build_ctx_us: u64,
+    pub backend_poll_us: u64,
+    pub backend_post_us: u64,
+    pub backend_poll_iters: usize,
+}
+
+impl HwPicTiming {
+    const fn empty() -> Self {
+        Self {
+            queue_wait_us: 0,
+            process_us: 0,
+            backend_reset_us: 0,
+            backend_zero_clear_us: 0,
+            backend_zero_us: 0,
+            backend_scratch_zero_us: 0,
+            backend_output_clear_us: 0,
+            backend_missing_clear_us: 0,
+            backend_scratch_flush_us: 0,
+            backend_build_ctx_us: 0,
+            backend_poll_us: 0,
+            backend_post_us: 0,
+            backend_poll_iters: 0,
+        }
+    }
+}
+
+impl Default for HwPicTiming {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
 pub(crate) struct HwPicOutput {
     pub id: u32,
     pub codec: HwPicCodec,
@@ -61,6 +107,7 @@ pub(crate) struct HwPicOutput {
     pub phys_addr: u64,
     pub virt_addr: usize,
     pub error_code: i32,
+    pub timing: HwPicTiming,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -73,6 +120,7 @@ pub(crate) struct HwPicQueueSnapshot {
 struct HwPicJob {
     id: u32,
     codec: HwPicCodec,
+    submitted_tick: u64,
     encoded: Vec<u8>,
 }
 
@@ -175,6 +223,15 @@ fn avc_dpb_entry_older(lhs: Option<AvcDpbEntry>, rhs: Option<AvcDpbEntry>) -> bo
     }
 }
 
+fn hw_pic_now_ticks() -> u64 {
+    embassy_time_driver::now()
+}
+
+fn hw_pic_ticks_to_micros(ticks: u64) -> u64 {
+    let hz = embassy_time_driver::TICK_HZ.max(1);
+    ((ticks as u128).saturating_mul(1_000_000) / hz as u128) as u64
+}
+
 pub(crate) fn submit_encoded(codec: HwPicCodec, encoded: &[u8]) -> Result<u32, i32> {
     if encoded.is_empty() {
         return Err(-3);
@@ -188,6 +245,7 @@ pub(crate) fn submit_encoded(codec: HwPicCodec, encoded: &[u8]) -> Result<u32, i
     pending.push_back(HwPicJob {
         id,
         codec,
+        submitted_tick: hw_pic_now_ticks(),
         encoded: encoded.to_vec(),
     });
     drop(pending);
@@ -202,6 +260,14 @@ pub(crate) fn submit_jpeg(encoded: &[u8]) -> Result<u32, i32> {
 
 pub(crate) fn submit_h264(encoded: &[u8]) -> Result<u32, i32> {
     submit_encoded(HwPicCodec::H264, encoded)
+}
+
+pub(crate) fn set_detailed_logging_enabled(enabled: bool) -> bool {
+    DETAILED_LOGGING_ENABLED.swap(enabled, Ordering::AcqRel)
+}
+
+pub(crate) fn detailed_logging_enabled() -> bool {
+    DETAILED_LOGGING_ENABLED.load(Ordering::Acquire)
 }
 
 pub(crate) fn output_for_id(id: u32) -> Option<HwPicOutput> {
@@ -263,9 +329,15 @@ async fn hw_pic_service_inner() {
             WAIT.wait_for_event().await;
             continue;
         };
-        let output = process_job(job);
+        let queue_wait_us =
+            hw_pic_ticks_to_micros(hw_pic_now_ticks().saturating_sub(job.submitted_tick));
+        let process_start = hw_pic_now_ticks();
+        let mut output = process_job(job);
+        output.timing.queue_wait_us = queue_wait_us;
+        output.timing.process_us =
+            hw_pic_ticks_to_micros(hw_pic_now_ticks().saturating_sub(process_start));
         hw_pic_info!(
-            "intel/hw_pic: output id={} codec={:?} status={:?} fmt={:?} size={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} virt=0x{:X} err={}\n",
+            "intel/hw_pic: output id={} codec={:?} status={:?} fmt={:?} size={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} virt=0x{:X} err={} queue_us={} process_us={} reset_us={} zero_clear_us={} zero_us={} scratch_zero_us={} output_clear_us={} missing_clear_us={} scratch_flush_us={} build_ctx_us={} poll_us={} post_us={} poll_iters={}\n",
             output.id,
             output.codec,
             output.status,
@@ -280,7 +352,20 @@ async fn hw_pic_service_inner() {
             output.gpu_addr,
             output.phys_addr,
             output.virt_addr,
-            output.error_code
+            output.error_code,
+            output.timing.queue_wait_us,
+            output.timing.process_us,
+            output.timing.backend_reset_us,
+            output.timing.backend_zero_clear_us,
+            output.timing.backend_zero_us,
+            output.timing.backend_scratch_zero_us,
+            output.timing.backend_output_clear_us,
+            output.timing.backend_missing_clear_us,
+            output.timing.backend_scratch_flush_us,
+            output.timing.backend_build_ctx_us,
+            output.timing.backend_poll_us,
+            output.timing.backend_post_us,
+            output.timing.backend_poll_iters
         );
         push_output(output);
         embassy_time::Timer::after_millis(1).await;
@@ -322,6 +407,7 @@ fn failed_output(job: &HwPicJob, code: i32) -> HwPicOutput {
         phys_addr: 0,
         virt_addr: 0,
         error_code: code,
+        timing: HwPicTiming::default(),
     }
 }
 
@@ -1045,12 +1131,22 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
     };
 
     hw_pic_info!(
-        "intel/hw_pic-stage: id={} stage=submit accepted=1 codec=h264 engine={} retired={} detail={} polls={} coded={}x{} pitch=0x{:X} surface_bytes=0x{:X} command_dwords={} batch_bytes=0x{:X} ring_bytes=0x{:X}\n",
+        "intel/hw_pic-stage: id={} stage=submit accepted=1 codec=h264 engine={} retired={} detail={} polls={} reset_us={} zero_clear_us={} zero_us={} scratch_zero_us={} output_clear_us={} missing_clear_us={} scratch_flush_us={} build_ctx_us={} poll_us={} post_us={} coded={}x{} pitch=0x{:X} surface_bytes=0x{:X} command_dwords={} batch_bytes=0x{:X} ring_bytes=0x{:X}\n",
         job.id,
         avc.engine_name,
         avc.retired as u8,
         avc.output_surface_detail as u8,
         avc.poll_iters,
+        avc.reset_us,
+        avc.zero_clear_us,
+        avc.zero_us,
+        avc.scratch_zero_us,
+        avc.output_clear_us,
+        avc.missing_clear_us,
+        avc.scratch_flush_us,
+        avc.build_ctx_us,
+        avc.poll_us,
+        avc.post_us,
         avc.coded_width,
         avc.coded_height,
         avc.output_surface_pitch,
@@ -1234,6 +1330,20 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         phys_addr: output_phys_addr,
         virt_addr: output_virt_addr as usize,
         error_code: output_error,
+        timing: HwPicTiming {
+            backend_reset_us: avc.reset_us,
+            backend_zero_clear_us: avc.zero_clear_us,
+            backend_zero_us: avc.zero_us,
+            backend_scratch_zero_us: avc.scratch_zero_us,
+            backend_output_clear_us: avc.output_clear_us,
+            backend_missing_clear_us: avc.missing_clear_us,
+            backend_scratch_flush_us: avc.scratch_flush_us,
+            backend_build_ctx_us: avc.build_ctx_us,
+            backend_poll_us: avc.poll_us,
+            backend_post_us: avc.post_us,
+            backend_poll_iters: avc.poll_iters,
+            ..HwPicTiming::default()
+        },
     }
 }
 
@@ -1516,5 +1626,6 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         phys_addr: backing.output_surface_phys,
         virt_addr: backing.output_surface_virt as usize,
         error_code: if output_ready { 0 } else { -13 },
+        timing: HwPicTiming::default(),
     }
 }
