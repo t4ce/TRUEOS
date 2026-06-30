@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use spin::Mutex;
 
@@ -10,12 +10,21 @@ const RGB_PLANE_PROBE_SLOT_COUNT: usize = 3;
 const RGB_PLANE_PROBE_GPU_BASE: u64 = crate::intel::GPU_VA_DISPLAY_OVERLAY_BASE;
 const RGB_PLANE_PROBE_GPU_STRIDE: u64 = 0x0010_0000;
 const DIRECT_NV12_PLANE_PROBE_ENABLED: bool = true;
-const DIRECT_NV12_PLANE_PROBE_CYCLE_CANDIDATES: bool = true;
-const DIRECT_NV12_PLANE_PROBE_SLOT: usize = OVERLAY_PLANE_SLOT;
+const DIRECT_NV12_LINEAR_PATTERN_PROBE_ONLY: bool = true;
+const DIRECT_NV12_LINEAR_PATTERN_GPU: u64 = 0x1200_0000;
+const DIRECT_NV12_LINEAR_PATTERN_WIDTH: u32 = 640;
+const DIRECT_NV12_LINEAR_PATTERN_HEIGHT: u32 = 360;
+const DIRECT_NV12_INPUT_CSC_PROBE_ENABLED: bool = true;
+const DIRECT_NV12_LINKED_PLANES_PROBE_ENABLED: bool = true;
+const DIRECT_NV12_PLANE_PROBE_CYCLE_CANDIDATES: bool = false;
+const DIRECT_NV12_PLANE_PROBE_SLOT: usize = VIDEO_NV12_PLANE_SLOT;
+const DIRECT_NV12_Y_PLANE_PROBE_SLOT: usize = VIDEO_NV12_Y_PLANE_SLOT;
 
 static DIRECT_NV12_PLANE_PROBE_SEQ: AtomicU32 = AtomicU32::new(0);
+static DIRECT_NV12_LINEAR_PATTERN_ARMED: AtomicBool = AtomicBool::new(false);
 static RGB_PLANE_PROBE_SURFACES: Mutex<[Option<RgbPlaneProbeSurface>; RGB_PLANE_PROBE_SLOT_COUNT]> =
     Mutex::new([None; RGB_PLANE_PROBE_SLOT_COUNT]);
+static DIRECT_NV12_LINEAR_PATTERN_SURFACE: Mutex<Option<Nv12PlaneProbeSurface>> = Mutex::new(None);
 
 #[derive(Copy, Clone)]
 struct RgbPlaneProbeSurface {
@@ -32,6 +41,22 @@ struct RgbPlaneProbeSurface {
 
 unsafe impl Send for RgbPlaneProbeSurface {}
 unsafe impl Sync for RgbPlaneProbeSurface {}
+
+#[derive(Copy, Clone)]
+struct Nv12PlaneProbeSurface {
+    width: u32,
+    height: u32,
+    pitch_bytes: u32,
+    uv_offset: usize,
+    byte_len: usize,
+    phys: u64,
+    virt: *mut u8,
+    pipe: PipeInfo,
+    gpu: u64,
+}
+
+unsafe impl Send for Nv12PlaneProbeSurface {}
+unsafe impl Sync for Nv12PlaneProbeSurface {}
 
 pub(super) fn probe_boot_logo_decode() -> bool {
     match PRIMARY_BOOT_LOGO_DECODE_MODE {
@@ -212,7 +237,7 @@ impl DirectNv12PlaneTiling {
 
 fn direct_nv12_probe_tiling_for_seq(seq: u32) -> DirectNv12PlaneTiling {
     if !DIRECT_NV12_PLANE_PROBE_CYCLE_CANDIDATES {
-        return DirectNv12PlaneTiling::Y;
+        return DirectNv12PlaneTiling::Linear;
     }
     match seq % 3 {
         1 => DirectNv12PlaneTiling::Y,
@@ -229,14 +254,442 @@ fn direct_nv12_plane_ctl_enabled(ctl_before: u32, tiling: DirectNv12PlaneTiling)
             | PLANE_CTL_KEY_ENABLE_MASK
             | PLANE_CTL_TILED_MASK
             | PLANE_CTL_ORDER_RGBX
+            | PLANE_CTL_YUV420_Y_PLANE
             | PLANE_CTL_ROTATE_MASK))
         | PLANE_CTL_ENABLE
-        | PLANE_CTL_ARB_SLOTS_4BPP
         | PLANE_CTL_FORMAT_NV12
         | tiling.ctl_bits()
 }
 
-pub(crate) fn arm_decoded_nv12_overlay_plane_probe(
+fn direct_nv12_y_plane_ctl_enabled(ctl_before: u32, tiling: DirectNv12PlaneTiling) -> u32 {
+    direct_nv12_plane_ctl_enabled(ctl_before, tiling) | PLANE_CTL_YUV420_Y_PLANE
+}
+
+fn direct_nv12_plane_color_ctl_enabled(color_ctl_before: u32) -> u32 {
+    let color_ctl = (color_ctl_before
+        & !(PLANE_COLOR_ALPHA_MASK
+            | PLANE_COLOR_YUV_RANGE_CORRECTION_DISABLE
+            | PLANE_COLOR_PIPE_CSC_ENABLE
+            | PLANE_COLOR_PLANE_CSC_ENABLE
+            | PLANE_COLOR_INPUT_CSC_ENABLE
+            | PLANE_COLOR_CSC_MODE_MASK))
+        | PLANE_COLOR_PLANE_GAMMA_DISABLE
+        | PLANE_COLOR_ALPHA_DISABLE;
+    if DIRECT_NV12_INPUT_CSC_PROBE_ENABLED {
+        color_ctl | PLANE_COLOR_INPUT_CSC_ENABLE
+    } else {
+        color_ctl | PLANE_COLOR_CSC_MODE_YUV709_TO_RGB709
+    }
+}
+
+fn direct_nv12_plane_cus_ctl_enabled() -> u32 {
+    if DIRECT_NV12_INPUT_CSC_PROBE_ENABLED {
+        PLANE_CUS_ENABLE
+            | PLANE_CUS_HPHASE_0
+            | PLANE_CUS_VPHASE_SIGN_NEGATIVE
+            | PLANE_CUS_VPHASE_0_25
+    } else {
+        0
+    }
+}
+
+const fn plane_input_csc_coeff_value(index: usize) -> u32 {
+    match index {
+        0 => (0x7C98 << 16) | 0x7800,
+        1 => 0x0000 << 16,
+        2 => (0x9EF8 << 16) | 0x7800,
+        3 => 0xAC00 << 16,
+        4 => 0x0000 | 0x7800,
+        5 => 0x7ED8 << 16,
+        _ => 0,
+    }
+}
+
+const fn plane_input_csc_preoff_value(index: usize) -> u32 {
+    match index {
+        0 => 0x1800,
+        1 => 0x0000,
+        2 => 0x1800,
+        _ => 0,
+    }
+}
+
+fn program_direct_nv12_input_csc(
+    dev: crate::intel::Dev,
+    plane_base: usize,
+    pipe: PipeInfo,
+    reason: &str,
+    probe_name: &str,
+    owner: &str,
+) {
+    if !DIRECT_NV12_INPUT_CSC_PROBE_ENABLED {
+        return;
+    }
+
+    let coeff0_off = plane_base + UNI_PLANE_INPUT_CSC_COEFF_OFF;
+    let coeff1_off = coeff0_off + 4;
+    let coeff2_off = coeff0_off + 8;
+    let coeff3_off = coeff0_off + 12;
+    let coeff4_off = coeff0_off + 16;
+    let coeff5_off = coeff0_off + 20;
+    let pre0_off = plane_base + UNI_PLANE_INPUT_CSC_PREOFF_OFF;
+    let pre1_off = pre0_off + 4;
+    let pre2_off = pre0_off + 8;
+    let post0_off = plane_base + UNI_PLANE_INPUT_CSC_POSTOFF_OFF;
+    let post1_off = post0_off + 4;
+    let post2_off = post0_off + 8;
+    let c0_before = crate::intel::mmio_read(dev, coeff0_off);
+    let c1_before = crate::intel::mmio_read(dev, coeff1_off);
+    let c2_before = crate::intel::mmio_read(dev, coeff2_off);
+    let c3_before = crate::intel::mmio_read(dev, coeff3_off);
+    let c4_before = crate::intel::mmio_read(dev, coeff4_off);
+    let c5_before = crate::intel::mmio_read(dev, coeff5_off);
+    let pre0_before = crate::intel::mmio_read(dev, pre0_off);
+    let pre1_before = crate::intel::mmio_read(dev, pre1_off);
+    let pre2_before = crate::intel::mmio_read(dev, pre2_off);
+    let post0_before = crate::intel::mmio_read(dev, post0_off);
+    let post1_before = crate::intel::mmio_read(dev, post1_off);
+    let post2_before = crate::intel::mmio_read(dev, post2_off);
+
+    crate::intel::mmio_write(dev, coeff0_off, plane_input_csc_coeff_value(0));
+    crate::intel::mmio_write(dev, coeff1_off, plane_input_csc_coeff_value(1));
+    crate::intel::mmio_write(dev, coeff2_off, plane_input_csc_coeff_value(2));
+    crate::intel::mmio_write(dev, coeff3_off, plane_input_csc_coeff_value(3));
+    crate::intel::mmio_write(dev, coeff4_off, plane_input_csc_coeff_value(4));
+    crate::intel::mmio_write(dev, coeff5_off, plane_input_csc_coeff_value(5));
+    crate::intel::mmio_write(dev, pre0_off, plane_input_csc_preoff_value(0));
+    crate::intel::mmio_write(dev, pre1_off, plane_input_csc_preoff_value(1));
+    crate::intel::mmio_write(dev, pre2_off, plane_input_csc_preoff_value(2));
+    crate::intel::mmio_write(dev, post0_off, 0);
+    crate::intel::mmio_write(dev, post1_off, 0);
+    crate::intel::mmio_write(dev, post2_off, 0);
+
+    crate::log!(
+        "intel/display: nv12-input-csc probe={} reason={} owner={} pipe={} slot={} coeff=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}]->[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pre=[0x{:08X},0x{:08X},0x{:08X}]->[0x{:08X},0x{:08X},0x{:08X}] post=[0x{:08X},0x{:08X},0x{:08X}]->[0x{:08X},0x{:08X},0x{:08X}]\n",
+        probe_name,
+        reason,
+        owner,
+        pipe.name,
+        DIRECT_NV12_PLANE_PROBE_SLOT,
+        c0_before,
+        c1_before,
+        c2_before,
+        c3_before,
+        c4_before,
+        c5_before,
+        crate::intel::mmio_read(dev, coeff0_off),
+        crate::intel::mmio_read(dev, coeff1_off),
+        crate::intel::mmio_read(dev, coeff2_off),
+        crate::intel::mmio_read(dev, coeff3_off),
+        crate::intel::mmio_read(dev, coeff4_off),
+        crate::intel::mmio_read(dev, coeff5_off),
+        pre0_before,
+        pre1_before,
+        pre2_before,
+        crate::intel::mmio_read(dev, pre0_off),
+        crate::intel::mmio_read(dev, pre1_off),
+        crate::intel::mmio_read(dev, pre2_off),
+        post0_before,
+        post1_before,
+        post2_before,
+        crate::intel::mmio_read(dev, post0_off),
+        crate::intel::mmio_read(dev, post1_off),
+        crate::intel::mmio_read(dev, post2_off)
+    );
+}
+
+fn fill_linear_nv12_pattern(
+    ptr: *mut u8,
+    pitch_bytes: usize,
+    width: u32,
+    height: u32,
+    uv_offset: usize,
+) {
+    let width = width as usize;
+    let height = height as usize;
+    if width == 0 || height == 0 || pitch_bytes < width {
+        return;
+    }
+
+    for y in 0..height {
+        for x in 0..pitch_bytes {
+            let value = if x < width {
+                let bar = x.saturating_mul(8) / width.max(1);
+                match bar {
+                    0 => 32,
+                    1 => 64,
+                    2 => 96,
+                    3 => 128,
+                    4 => 160,
+                    5 => 192,
+                    6 => 224,
+                    _ => 235,
+                }
+            } else {
+                16
+            };
+            unsafe {
+                core::ptr::write_volatile(ptr.add(y * pitch_bytes + x), value);
+            }
+        }
+    }
+
+    for y in 0..(height / 2) {
+        for x in (0..pitch_bytes).step_by(2) {
+            let (u, v) = if x < width {
+                let top = y < height / 4;
+                let left = x < width / 2;
+                match (top, left) {
+                    (true, true) => (128, 128),
+                    (true, false) => (90, 240),
+                    (false, true) => (240, 90),
+                    (false, false) => (128, 128),
+                }
+            } else {
+                (128, 128)
+            };
+            let offset = uv_offset + y * pitch_bytes + x;
+            unsafe {
+                core::ptr::write_volatile(ptr.add(offset), u);
+                if x + 1 < pitch_bytes {
+                    core::ptr::write_volatile(ptr.add(offset + 1), v);
+                }
+            }
+        }
+    }
+}
+
+fn sample_probe_byte(ptr: *const u8, byte_len: usize, offset: usize) -> u8 {
+    if offset >= byte_len {
+        return 0;
+    }
+    unsafe { core::ptr::read_volatile(ptr.add(offset)) }
+}
+
+fn sample_probe_pair(ptr: *const u8, byte_len: usize, offset: usize) -> (u8, u8) {
+    (
+        sample_probe_byte(ptr, byte_len, offset),
+        sample_probe_byte(ptr, byte_len, offset.saturating_add(1)),
+    )
+}
+
+fn log_nv12_probe_surface_samples(
+    label: &str,
+    ptr: *const u8,
+    byte_len: usize,
+    width: u32,
+    height: u32,
+    pitch_bytes: usize,
+    uv_offset: usize,
+) {
+    let width = width as usize;
+    let height = height as usize;
+    if ptr.is_null() || byte_len == 0 || width == 0 || height == 0 || pitch_bytes == 0 {
+        crate::log!(
+            "intel/display: nv12-probe-samples label={} skipped ptr=0x{:X} bytes=0x{:X} size={}x{} pitch=0x{:X} uv=0x{:X}\n",
+            label,
+            ptr as usize,
+            byte_len,
+            width,
+            height,
+            pitch_bytes,
+            uv_offset
+        );
+        return;
+    }
+
+    let sample_x = |x: usize| x.min(width.saturating_sub(1));
+    let sample_y = |y: usize| y.min(height.saturating_sub(1));
+    let y_off = |row: usize, x: usize| {
+        sample_y(row)
+            .saturating_mul(pitch_bytes)
+            .saturating_add(sample_x(x))
+    };
+    let even_x = |x: usize| {
+        let max_x = width.saturating_sub(2);
+        x.min(max_x) & !1
+    };
+    let uv_off = |row: usize, x: usize| {
+        uv_offset
+            .saturating_add(row.min(height / 2).saturating_mul(pitch_bytes))
+            .saturating_add(even_x(x))
+    };
+
+    let y0_0 = sample_probe_byte(ptr, byte_len, y_off(0, 0));
+    let y0_1 = sample_probe_byte(ptr, byte_len, y_off(0, width / 4));
+    let y0_2 = sample_probe_byte(ptr, byte_len, y_off(0, width / 2));
+    let y0_3 = sample_probe_byte(ptr, byte_len, y_off(0, width.saturating_mul(3) / 4));
+    let y0_4 = sample_probe_byte(ptr, byte_len, y_off(0, width.saturating_sub(1)));
+    let ym_0 = sample_probe_byte(ptr, byte_len, y_off(height / 2, 0));
+    let ym_1 = sample_probe_byte(ptr, byte_len, y_off(height / 2, width / 4));
+    let ym_2 = sample_probe_byte(ptr, byte_len, y_off(height / 2, width / 2));
+    let ym_3 = sample_probe_byte(
+        ptr,
+        byte_len,
+        y_off(height / 2, width.saturating_mul(3) / 4),
+    );
+    let ym_4 = sample_probe_byte(ptr, byte_len, y_off(height / 2, width.saturating_sub(1)));
+    let (uv0_0_u, uv0_0_v) = sample_probe_pair(ptr, byte_len, uv_off(0, 0));
+    let (uv0_1_u, uv0_1_v) = sample_probe_pair(ptr, byte_len, uv_off(0, width / 2));
+    let (uvm_0_u, uvm_0_v) = sample_probe_pair(ptr, byte_len, uv_off(height / 4, 0));
+    let (uvm_1_u, uvm_1_v) = sample_probe_pair(ptr, byte_len, uv_off(height / 4, width / 2));
+
+    crate::log!(
+        "intel/display: nv12-probe-samples label={} ptr=0x{:X} bytes=0x{:X} size={}x{} pitch=0x{:X} uv=0x{:X} y0=[0x{:02X},0x{:02X},0x{:02X},0x{:02X},0x{:02X}] ym=[0x{:02X},0x{:02X},0x{:02X},0x{:02X},0x{:02X}] uv0=[0x{:02X}/0x{:02X},0x{:02X}/0x{:02X}] uvm=[0x{:02X}/0x{:02X},0x{:02X}/0x{:02X}]\n",
+        label,
+        ptr as usize,
+        byte_len,
+        width,
+        height,
+        pitch_bytes,
+        uv_offset,
+        y0_0,
+        y0_1,
+        y0_2,
+        y0_3,
+        y0_4,
+        ym_0,
+        ym_1,
+        ym_2,
+        ym_3,
+        ym_4,
+        uv0_0_u,
+        uv0_0_v,
+        uv0_1_u,
+        uv0_1_v,
+        uvm_0_u,
+        uvm_0_v,
+        uvm_1_u,
+        uvm_1_v
+    );
+}
+
+fn ensure_linear_nv12_pattern_surface(
+    dev: crate::intel::Dev,
+    pipe: PipeInfo,
+) -> Option<Nv12PlaneProbeSurface> {
+    let width = DIRECT_NV12_LINEAR_PATTERN_WIDTH;
+    let height = DIRECT_NV12_LINEAR_PATTERN_HEIGHT;
+    let gpu = DIRECT_NV12_LINEAR_PATTERN_GPU;
+
+    {
+        let state = DIRECT_NV12_LINEAR_PATTERN_SURFACE.lock();
+        if let Some(surface) = *state
+            && surface.width == width
+            && surface.height == height
+            && surface.pipe.slot == pipe.slot
+            && surface.gpu == gpu
+        {
+            return Some(surface);
+        }
+    }
+
+    let pitch_bytes = aligned_pitch_bytes(width, 1)?;
+    let raw_uv_offset = usize::try_from(u64::from(pitch_bytes) * u64::from(height)).ok()?;
+    let uv_offset = crate::intel::align_up(raw_uv_offset, crate::intel::WARM_ALIGN)?;
+    let uv_bytes = usize::try_from(u64::from(pitch_bytes) * u64::from(height / 2)).ok()?;
+    let byte_len = uv_offset.checked_add(uv_bytes)?;
+    let (phys, virt) = crate::dma::alloc(byte_len, crate::intel::WARM_ALIGN)?;
+    fill_linear_nv12_pattern(virt, pitch_bytes as usize, width, height, uv_offset);
+    crate::intel::dma_flush(virt, byte_len);
+    log_nv12_probe_surface_samples(
+        "nv12-linear-pattern-filled",
+        virt,
+        byte_len,
+        width,
+        height,
+        pitch_bytes as usize,
+        uv_offset,
+    );
+
+    if !crate::intel::map_display_scanout_ggtt(dev, phys, byte_len, gpu) {
+        crate::log!(
+            "intel/display: nv12-linear-pattern-surface ggtt map failed pipe={} size={}x{} pitch=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X}\n",
+            pipe.name,
+            width,
+            height,
+            pitch_bytes,
+            byte_len,
+            gpu,
+            phys
+        );
+        return None;
+    }
+    crate::intel::ggtt_invalidate(dev);
+
+    let surface = Nv12PlaneProbeSurface {
+        width,
+        height,
+        pitch_bytes,
+        uv_offset,
+        byte_len,
+        phys,
+        virt,
+        pipe,
+        gpu,
+    };
+    *DIRECT_NV12_LINEAR_PATTERN_SURFACE.lock() = Some(surface);
+    crate::log!(
+        "intel/display: nv12-linear-pattern-surface pipe={} size={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} virt=0x{:X}\n",
+        pipe.name,
+        width,
+        height,
+        pitch_bytes,
+        uv_offset,
+        byte_len,
+        gpu,
+        phys,
+        virt as usize
+    );
+    Some(surface)
+}
+
+fn arm_linear_nv12_pattern_video_plane_probe(
+    dev: crate::intel::Dev,
+    pipe: PipeInfo,
+    reason: &str,
+) -> bool {
+    if DIRECT_NV12_LINEAR_PATTERN_ARMED.load(Ordering::Acquire) {
+        return true;
+    }
+    let Some(surface) = ensure_linear_nv12_pattern_surface(dev, pipe) else {
+        return false;
+    };
+    crate::intel::dma_flush(surface.virt, surface.byte_len);
+    log_nv12_probe_surface_samples(
+        "nv12-linear-pattern-arm",
+        surface.virt,
+        surface.byte_len,
+        surface.width,
+        surface.height,
+        surface.pitch_bytes as usize,
+        surface.uv_offset,
+    );
+    let armed = arm_nv12_video_plane_probe_surface(
+        "nv12-linear-pattern",
+        "linear-pattern",
+        reason,
+        surface.gpu,
+        surface.phys,
+        surface.virt as usize,
+        surface.width,
+        surface.height,
+        surface.width,
+        surface.height,
+        surface.pitch_bytes as usize,
+        surface.uv_offset,
+        surface.byte_len,
+        DirectNv12PlaneTiling::Linear,
+    );
+    if armed {
+        DIRECT_NV12_LINEAR_PATTERN_ARMED.store(true, Ordering::Release);
+    }
+    armed
+}
+
+fn arm_nv12_video_plane_probe_surface(
+    probe_name: &str,
+    owner: &str,
     reason: &str,
     gpu_addr: u64,
     phys_addr: u64,
@@ -248,7 +701,27 @@ pub(crate) fn arm_decoded_nv12_overlay_plane_probe(
     pitch_bytes: usize,
     uv_offset: usize,
     byte_len: usize,
+    tiling: DirectNv12PlaneTiling,
 ) -> bool {
+    if DIRECT_NV12_LINKED_PLANES_PROBE_ENABLED {
+        return arm_nv12_linked_video_plane_probe_surface(
+            probe_name,
+            owner,
+            reason,
+            gpu_addr,
+            phys_addr,
+            virt_addr,
+            coded_width,
+            coded_height,
+            visible_width,
+            visible_height,
+            pitch_bytes,
+            uv_offset,
+            byte_len,
+            tiling,
+        );
+    }
+
     if !DIRECT_NV12_PLANE_PROBE_ENABLED {
         return false;
     }
@@ -260,8 +733,10 @@ pub(crate) fn arm_decoded_nv12_overlay_plane_probe(
     };
     if gpu_addr == 0 || coded_width == 0 || coded_height == 0 || pitch_bytes == 0 {
         crate::log!(
-            "intel/display: nv12-plane-probe skipped reason={} cause=bad-surface gpu=0x{:X} coded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X}\n",
+            "intel/display: nv12-plane-probe skipped probe={} reason={} owner={} cause=bad-surface gpu=0x{:X} coded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X}\n",
+            probe_name,
             reason,
+            owner,
             gpu_addr,
             coded_width,
             coded_height,
@@ -290,14 +765,25 @@ pub(crate) fn arm_decoded_nv12_overlay_plane_probe(
     let pos_y = scanout_h.saturating_sub(plane_height) / 2;
     let plane_base = overlay_plane_base(pipe, DIRECT_NV12_PLANE_PROBE_SLOT);
     let seq = DIRECT_NV12_PLANE_PROBE_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
-    let tiling = direct_nv12_probe_tiling_for_seq(seq);
     let uv_rows = if pitch_bytes == 0 {
         0
     } else {
         uv_offset / pitch_bytes
     };
+    let Some(uv_y_offset) = u32::try_from(uv_rows).ok() else {
+        crate::log!(
+            "intel/display: nv12-plane-probe skipped probe={} reason={} owner={} cause=bad-uv-offset pitch=0x{:X} uv=0x{:X} uv_rows={}\n",
+            probe_name,
+            reason,
+            owner,
+            pitch_bytes,
+            uv_offset,
+            uv_rows
+        );
+        return false;
+    };
 
-    program_two_plane_stack_resources(dev, pipe, DIRECT_NV12_PLANE_PROBE_SLOT, reason);
+    program_three_plane_stack_resources(dev, pipe, reason);
 
     let ctl_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_CTL_OFF);
     let stride_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_STRIDE_OFF);
@@ -312,8 +798,8 @@ pub(crate) fn arm_decoded_nv12_overlay_plane_probe(
     let aux_offset_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_AUX_OFFSET_OFF);
     let ctl_disabled = ctl_before & !PLANE_CTL_ENABLE;
     let ctl_enabled = direct_nv12_plane_ctl_enabled(ctl_before, tiling);
-    let color_ctl_enabled =
-        (color_ctl_before & !PLANE_COLOR_ALPHA_MASK) | PLANE_COLOR_PLANE_GAMMA_DISABLE;
+    let color_ctl_enabled = direct_nv12_plane_color_ctl_enabled(color_ctl_before);
+    let cus_ctl_enabled = direct_nv12_plane_cus_ctl_enabled();
 
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_CTL_OFF, ctl_disabled);
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_SURF_OFF, 0);
@@ -333,9 +819,14 @@ pub(crate) fn arm_decoded_nv12_overlay_plane_probe(
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_KEYMAX_OFF, 0);
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_OFFSET_OFF, plane_pos_reg_value(0, 0));
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_AUX_DIST_OFF, 0);
-    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_AUX_OFFSET_OFF, 0);
-    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_CUS_CTL_OFF, 0);
+    crate::intel::mmio_write(
+        dev,
+        plane_base + UNI_PLANE_AUX_OFFSET_OFF,
+        plane_pos_reg_value(0, uv_y_offset),
+    );
+    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_CUS_CTL_OFF, cus_ctl_enabled);
     crate::intel::mmio_write(dev, color_ctl_off, color_ctl_enabled);
+    program_direct_nv12_input_csc(dev, plane_base, pipe, reason, probe_name, owner);
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_CTL_OFF, ctl_enabled);
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_SURF_OFF, surface_reg);
 
@@ -353,9 +844,11 @@ pub(crate) fn arm_decoded_nv12_overlay_plane_probe(
     let ok = live_after == surface_reg;
 
     crate::log!(
-        "intel/display: nv12-plane-probe seq={} reason={} pipe={} slot={} candidate={} ok={} ctl=0x{:08X}->0x{:08X}/0x{:08X} format={} tiled={} stride=0x{:08X}->0x{:08X}/0x{:08X} pos=0x{:08X}->0x{:08X}({}x{}) size=0x{:08X}->0x{:08X}({}x{}) offset=0x{:08X} surf=0x{:08X}->0x{:08X} live=0x{:08X}->0x{:08X} color=0x{:08X}->0x{:08X} alpha={} cus=0x{:08X}->0x{:08X} aux=0x{:08X}/0x{:08X}->0x{:08X}/0x{:08X} coded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} uv_rows={} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} virt=0x{:X} scanout={}x{} frame={}=>{} frame_wait={} live_iters={}\n",
+        "intel/display: nv12-plane-probe seq={} probe={} reason={} owner={} pipe={} slot={} candidate={} ok={} ctl=0x{:08X}->0x{:08X}/0x{:08X} format={} tiled={} stride=0x{:08X}->0x{:08X}/0x{:08X} pos=0x{:08X}->0x{:08X}({}x{}) size=0x{:08X}->0x{:08X}({}x{}) offset=0x{:08X} surf=0x{:08X}->0x{:08X} live=0x{:08X}->0x{:08X} color=0x{:08X}->0x{:08X} alpha={} cus=0x{:08X}->0x{:08X} aux=0x{:08X}/0x{:08X}->0x{:08X}/0x{:08X} coded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} uv_rows={} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} virt=0x{:X} scanout={}x{} frame={}=>{} frame_wait={} live_iters={}\n",
         seq,
+        probe_name,
         reason,
+        owner,
         pipe.name,
         DIRECT_NV12_PLANE_PROBE_SLOT,
         tiling.name(),
@@ -410,6 +903,276 @@ pub(crate) fn arm_decoded_nv12_overlay_plane_probe(
     );
 
     ok
+}
+
+fn arm_nv12_linked_video_plane_probe_surface(
+    probe_name: &str,
+    owner: &str,
+    reason: &str,
+    gpu_addr: u64,
+    phys_addr: u64,
+    virt_addr: usize,
+    coded_width: u32,
+    coded_height: u32,
+    visible_width: u32,
+    visible_height: u32,
+    pitch_bytes: usize,
+    uv_offset: usize,
+    byte_len: usize,
+    tiling: DirectNv12PlaneTiling,
+) -> bool {
+    if !DIRECT_NV12_PLANE_PROBE_ENABLED {
+        return false;
+    }
+    let Some(dev) = crate::intel::claimed_device() else {
+        return false;
+    };
+    let Some(pipe) = active_pipe(dev) else {
+        return false;
+    };
+    if gpu_addr == 0 || coded_width == 0 || coded_height == 0 || pitch_bytes == 0 {
+        crate::log!(
+            "intel/display: nv12-linked-plane-probe skipped probe={} reason={} owner={} cause=bad-surface gpu=0x{:X} coded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X}\n",
+            probe_name,
+            reason,
+            owner,
+            gpu_addr,
+            coded_width,
+            coded_height,
+            visible_width,
+            visible_height,
+            pitch_bytes,
+            uv_offset,
+            byte_len
+        );
+        return false;
+    }
+
+    let Some(y_surface_reg) = u32::try_from(gpu_addr).ok() else {
+        return false;
+    };
+    let Some(uv_gpu_addr) = gpu_addr.checked_add(uv_offset as u64) else {
+        return false;
+    };
+    let Some(uv_surface_reg) = u32::try_from(uv_gpu_addr).ok() else {
+        return false;
+    };
+    let Some(stride_reg) = u32::try_from(pitch_bytes)
+        .ok()
+        .and_then(plane_stride_reg_value)
+    else {
+        return false;
+    };
+
+    let plane_width = coded_width;
+    let plane_height = coded_height;
+    let (scanout_w, scanout_h) = active_scanout_dimensions().unwrap_or((plane_width, plane_height));
+    let pos_x = scanout_w.saturating_sub(plane_width) / 2;
+    let pos_y = scanout_h.saturating_sub(plane_height) / 2;
+    let uv_base = overlay_plane_base(pipe, DIRECT_NV12_PLANE_PROBE_SLOT);
+    let y_base = overlay_plane_base(pipe, DIRECT_NV12_Y_PLANE_PROBE_SLOT);
+    let seq = DIRECT_NV12_PLANE_PROBE_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+
+    program_three_plane_stack_resources(dev, pipe, reason);
+
+    let uv_ctl_before = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_CTL_OFF);
+    let uv_stride_before = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_STRIDE_OFF);
+    let uv_surf_before = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_SURF_OFF);
+    let uv_live_before = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_SURFLIVE_OFF);
+    let uv_color_ctl_off = uv_base + UNI_PLANE_COLOR_CTL_OFF;
+    let uv_color_before = crate::intel::mmio_read(dev, uv_color_ctl_off);
+    let uv_cus_before = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_CUS_CTL_OFF);
+    let y_ctl_before = crate::intel::mmio_read(dev, y_base + UNI_PLANE_CTL_OFF);
+    let y_stride_before = crate::intel::mmio_read(dev, y_base + UNI_PLANE_STRIDE_OFF);
+    let y_surf_before = crate::intel::mmio_read(dev, y_base + UNI_PLANE_SURF_OFF);
+    let y_live_before = crate::intel::mmio_read(dev, y_base + UNI_PLANE_SURFLIVE_OFF);
+    let y_color_ctl_off = y_base + UNI_PLANE_COLOR_CTL_OFF;
+    let y_color_before = crate::intel::mmio_read(dev, y_color_ctl_off);
+    let y_cus_before = crate::intel::mmio_read(dev, y_base + UNI_PLANE_CUS_CTL_OFF);
+    let uv_ctl_enabled = direct_nv12_plane_ctl_enabled(uv_ctl_before, tiling);
+    let y_ctl_enabled = direct_nv12_y_plane_ctl_enabled(y_ctl_before, tiling);
+    let uv_color_enabled = direct_nv12_plane_color_ctl_enabled(uv_color_before);
+    let y_color_enabled = (y_color_before
+        & !(PLANE_COLOR_ALPHA_MASK
+            | PLANE_COLOR_YUV_RANGE_CORRECTION_DISABLE
+            | PLANE_COLOR_PIPE_CSC_ENABLE
+            | PLANE_COLOR_PLANE_CSC_ENABLE
+            | PLANE_COLOR_INPUT_CSC_ENABLE
+            | PLANE_COLOR_CSC_MODE_MASK))
+        | PLANE_COLOR_PLANE_GAMMA_DISABLE
+        | PLANE_COLOR_ALPHA_DISABLE
+        | PLANE_COLOR_CSC_MODE_YUV709_TO_RGB709;
+    let uv_cus_enabled = direct_nv12_plane_cus_ctl_enabled();
+
+    crate::intel::mmio_write(dev, uv_base + UNI_PLANE_CTL_OFF, uv_ctl_before & !PLANE_CTL_ENABLE);
+    crate::intel::mmio_write(dev, y_base + UNI_PLANE_CTL_OFF, y_ctl_before & !PLANE_CTL_ENABLE);
+    crate::intel::mmio_write(dev, uv_base + UNI_PLANE_SURF_OFF, 0);
+    crate::intel::mmio_write(dev, y_base + UNI_PLANE_SURF_OFF, 0);
+
+    for plane_base in [y_base, uv_base] {
+        crate::intel::mmio_write(dev, plane_base + UNI_PLANE_STRIDE_OFF, stride_reg);
+        crate::intel::mmio_write(
+            dev,
+            plane_base + UNI_PLANE_POS_OFF,
+            plane_pos_reg_value(pos_x, pos_y),
+        );
+        crate::intel::mmio_write(
+            dev,
+            plane_base + UNI_PLANE_SIZE_OFF,
+            plane_size_reg_value(plane_width, plane_height),
+        );
+        crate::intel::mmio_write(dev, plane_base + UNI_PLANE_KEYVAL_OFF, 0);
+        crate::intel::mmio_write(dev, plane_base + UNI_PLANE_KEYMSK_OFF, 0);
+        crate::intel::mmio_write(dev, plane_base + UNI_PLANE_KEYMAX_OFF, 0);
+        crate::intel::mmio_write(dev, plane_base + UNI_PLANE_OFFSET_OFF, plane_pos_reg_value(0, 0));
+        crate::intel::mmio_write(dev, plane_base + UNI_PLANE_AUX_DIST_OFF, 0);
+        crate::intel::mmio_write(dev, plane_base + UNI_PLANE_AUX_OFFSET_OFF, 0);
+    }
+
+    crate::intel::mmio_write(dev, y_base + UNI_PLANE_CUS_CTL_OFF, 0);
+    crate::intel::mmio_write(dev, y_color_ctl_off, y_color_enabled);
+    crate::intel::mmio_write(dev, y_base + UNI_PLANE_CTL_OFF, y_ctl_enabled);
+    crate::intel::mmio_write(dev, y_base + UNI_PLANE_SURF_OFF, y_surface_reg);
+
+    crate::intel::mmio_write(dev, uv_base + UNI_PLANE_CUS_CTL_OFF, uv_cus_enabled);
+    crate::intel::mmio_write(dev, uv_color_ctl_off, uv_color_enabled);
+    program_direct_nv12_input_csc(dev, uv_base, pipe, reason, probe_name, owner);
+    crate::intel::mmio_write(dev, uv_base + UNI_PLANE_CTL_OFF, uv_ctl_enabled);
+    crate::intel::mmio_write(dev, uv_base + UNI_PLANE_SURF_OFF, uv_surface_reg);
+
+    let (frame_before, frame_after, frame_iters) = wait_for_pipe_next_frame(dev, pipe);
+    let (uv_live_after, uv_live_iters) = wait_for_plane_live(dev, uv_base, uv_surface_reg, 20_000);
+    let (y_live_after, y_live_iters) = wait_for_plane_live(dev, y_base, y_surface_reg, 20_000);
+    let uv_ctl_after = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_CTL_OFF);
+    let uv_stride_after = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_STRIDE_OFF);
+    let uv_surf_after = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_SURF_OFF);
+    let uv_color_after = crate::intel::mmio_read(dev, uv_color_ctl_off);
+    let uv_cus_after = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_CUS_CTL_OFF);
+    let y_ctl_after = crate::intel::mmio_read(dev, y_base + UNI_PLANE_CTL_OFF);
+    let y_stride_after = crate::intel::mmio_read(dev, y_base + UNI_PLANE_STRIDE_OFF);
+    let y_surf_after = crate::intel::mmio_read(dev, y_base + UNI_PLANE_SURF_OFF);
+    let y_color_after = crate::intel::mmio_read(dev, y_color_ctl_off);
+    let y_cus_after = crate::intel::mmio_read(dev, y_base + UNI_PLANE_CUS_CTL_OFF);
+    let ok = uv_live_after == uv_surface_reg && y_live_after == y_surface_reg;
+
+    crate::log!(
+        "intel/display: nv12-linked-plane-probe seq={} probe={} reason={} owner={} pipe={} ok={} uv_slot={} y_slot={} candidate={} uv_ctl=0x{:08X}->0x{:08X}/0x{:08X} uv_format={} uv_tiled={} uv_stride=0x{:08X}->0x{:08X}/0x{:08X} uv_surf=0x{:08X}->0x{:08X} uv_live=0x{:08X}->0x{:08X} uv_color=0x{:08X}->0x{:08X} uv_cus=0x{:08X}->0x{:08X} y_ctl=0x{:08X}->0x{:08X}/0x{:08X} y_format={} y_tiled={} y_is_y={} y_stride=0x{:08X}->0x{:08X}/0x{:08X} y_surf=0x{:08X}->0x{:08X} y_live=0x{:08X}->0x{:08X} y_color=0x{:08X}->0x{:08X} y_cus=0x{:08X}->0x{:08X} coded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} y_gpu=0x{:X} uv_gpu=0x{:X} y_phys=0x{:X} uv_phys=0x{:X} virt=0x{:X} scanout={}x{} pos={}x{} size={}x{} frame={}=>{} frame_wait={} uv_live_iters={} y_live_iters={}\n",
+        seq,
+        probe_name,
+        reason,
+        owner,
+        pipe.name,
+        ok as u8,
+        DIRECT_NV12_PLANE_PROBE_SLOT,
+        DIRECT_NV12_Y_PLANE_PROBE_SLOT,
+        tiling.name(),
+        uv_ctl_before,
+        uv_ctl_enabled,
+        uv_ctl_after,
+        decode_plane_format(uv_ctl_after),
+        decode_plane_tiling(uv_ctl_after),
+        uv_stride_before,
+        stride_reg,
+        uv_stride_after,
+        uv_surf_before,
+        uv_surf_after,
+        uv_live_before,
+        uv_live_after,
+        uv_color_before,
+        uv_color_after,
+        uv_cus_before,
+        uv_cus_after,
+        y_ctl_before,
+        y_ctl_enabled,
+        y_ctl_after,
+        decode_plane_format(y_ctl_after),
+        decode_plane_tiling(y_ctl_after),
+        ((y_ctl_after & PLANE_CTL_YUV420_Y_PLANE) != 0) as u8,
+        y_stride_before,
+        stride_reg,
+        y_stride_after,
+        y_surf_before,
+        y_surf_after,
+        y_live_before,
+        y_live_after,
+        y_color_before,
+        y_color_after,
+        y_cus_before,
+        y_cus_after,
+        coded_width,
+        coded_height,
+        visible_width,
+        visible_height,
+        pitch_bytes,
+        uv_offset,
+        byte_len,
+        gpu_addr,
+        uv_gpu_addr,
+        phys_addr,
+        phys_addr.saturating_add(uv_offset as u64),
+        virt_addr,
+        scanout_w,
+        scanout_h,
+        pos_x,
+        pos_y,
+        plane_width,
+        plane_height,
+        frame_before,
+        frame_after,
+        frame_iters,
+        uv_live_iters,
+        y_live_iters
+    );
+
+    ok
+}
+
+pub(crate) fn arm_decoded_nv12_overlay_plane_probe(
+    reason: &str,
+    gpu_addr: u64,
+    phys_addr: u64,
+    virt_addr: usize,
+    coded_width: u32,
+    coded_height: u32,
+    visible_width: u32,
+    visible_height: u32,
+    pitch_bytes: usize,
+    uv_offset: usize,
+    byte_len: usize,
+) -> bool {
+    if !DIRECT_NV12_PLANE_PROBE_ENABLED {
+        return false;
+    }
+    let Some(dev) = crate::intel::claimed_device() else {
+        return false;
+    };
+    let Some(pipe) = active_pipe(dev) else {
+        return false;
+    };
+    if DIRECT_NV12_LINEAR_PATTERN_PROBE_ONLY {
+        return arm_linear_nv12_pattern_video_plane_probe(dev, pipe, reason);
+    }
+    let seq = DIRECT_NV12_PLANE_PROBE_SEQ.load(Ordering::Acquire) + 1;
+    arm_nv12_video_plane_probe_surface(
+        "decoded-nv12",
+        "video-nv12",
+        reason,
+        gpu_addr,
+        phys_addr,
+        virt_addr,
+        coded_width,
+        coded_height,
+        visible_width,
+        visible_height,
+        pitch_bytes,
+        uv_offset,
+        byte_len,
+        direct_nv12_probe_tiling_for_seq(seq),
+    )
+}
+
+pub(crate) fn decoded_nv12_overlay_plane_probe_replaces_cpu_present() -> bool {
+    DIRECT_NV12_LINEAR_PATTERN_PROBE_ONLY
 }
 
 fn rgb_plane_probe_spec(index: usize) -> Option<(usize, u32, u32, u32, u32, u32, &'static str)> {

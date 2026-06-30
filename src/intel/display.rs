@@ -36,7 +36,8 @@ macro_rules! intel_display_verbose_log {
 
 mod display_probes;
 pub(crate) use self::display_probes::{
-    arm_decoded_nv12_overlay_plane_probe, log_display_plane_ladder_probe,
+    arm_decoded_nv12_overlay_plane_probe, decoded_nv12_overlay_plane_probe_replaces_cpu_present,
+    log_display_plane_ladder_probe,
 };
 use self::display_probes::{
     arm_rgb_plane_probe_planes, log_pipe_scanout_probe, log_primary_dimensions_probe,
@@ -72,7 +73,11 @@ const fn pipe_bottom_color_u0_10(red: u32, green: u32, blue: u32) -> u32 {
 }
 const JPG_CENTER_CROP: bool = true;
 const PRIMARY_REARM_PRESERVE_NON_PRIMARY_PLANES: bool = true;
-const OVERLAY_PLANE_SLOT: usize = 1;
+// Universal plane role map for pipe-local planes.
+const UI_OVERLAY_PLANE_SLOT: usize = 1;
+const VIDEO_NV12_PLANE_SLOT: usize = 2;
+const VIDEO_NV12_Y_PLANE_SLOT: usize = 3;
+const OVERLAY_PLANE_SLOT: usize = UI_OVERLAY_PLANE_SLOT;
 const DEFAULT_OVERLAY_MARKER_ENABLED: bool = true;
 const DEFAULT_OVERLAY_MARKER_SIZE: u32 = 50;
 const DEFAULT_OVERLAY_MARKER_COLOR: u32 = 0x0000_0000;
@@ -1540,7 +1545,7 @@ pub(super) fn commit_ui3_canvas_overlay_gpgpu(
     }
 
     crate::intel::dma_flush(target.virt, target.byte_len);
-    program_two_plane_stack_resources(dev, surface.pipe, surface.plane_slot, reason);
+    program_three_plane_stack_resources(dev, surface.pipe, reason);
     arm_overlay_plane(dev, surface, 0, 0, OverlayAlphaMode::Straight, reason)
 }
 
@@ -2706,7 +2711,7 @@ pub(crate) fn present_live_overlay_rects_preserving(
     crate::intel::dma_flush(surface.virt, byte_len);
 
     if overlay_plane_needs_rearm(dev, surface, 0, 0, OverlayAlphaMode::Straight) {
-        program_two_plane_stack_resources(dev, surface.pipe, surface.plane_slot, reason);
+        program_three_plane_stack_resources(dev, surface.pipe, reason);
         if !arm_overlay_plane(dev, surface, 0, 0, OverlayAlphaMode::Straight, reason) {
             return false;
         }
@@ -2797,7 +2802,7 @@ pub(crate) fn present_ui3_canvas_rgba(
     crate::intel::dma_flush(surface.virt, byte_len);
 
     if overlay_plane_needs_rearm(dev, surface, 0, 0, OverlayAlphaMode::Straight) {
-        program_two_plane_stack_resources(dev, surface.pipe, surface.plane_slot, reason);
+        program_three_plane_stack_resources(dev, surface.pipe, reason);
         if !arm_overlay_plane(dev, surface, 0, 0, OverlayAlphaMode::Straight, reason) {
             return false;
         }
@@ -2867,7 +2872,7 @@ fn present_rgba_overlay(
         .map(|(x, y)| overlay_plane_clamped_position(surface, x, y))
         .unwrap_or_else(|| overlay_plane_top_right_position(surface));
     if overlay_plane_needs_rearm(dev, surface, pos_x, pos_y, alpha) {
-        program_two_plane_stack_resources(dev, surface.pipe, surface.plane_slot, reason);
+        program_three_plane_stack_resources(dev, surface.pipe, reason);
         if !arm_overlay_plane(dev, surface, pos_x, pos_y, alpha, reason) {
             return false;
         }
@@ -3704,14 +3709,11 @@ fn program_plane_buf_cfg(
     (before, crate::intel::mmio_read(dev, plane_base + UNI_PLANE_BUF_CFG_OFF))
 }
 
-fn program_two_plane_stack_resources(
-    dev: crate::intel::Dev,
-    pipe: PipeInfo,
-    overlay_slot: usize,
-    reason: &str,
-) {
+fn program_three_plane_stack_resources(dev: crate::intel::Dev, pipe: PipeInfo, reason: &str) {
     let primary_base = overlay_plane_base(pipe, 0);
-    let overlay_base = overlay_plane_base(pipe, overlay_slot);
+    let ui_base = overlay_plane_base(pipe, UI_OVERLAY_PLANE_SLOT);
+    let video_uv_base = overlay_plane_base(pipe, VIDEO_NV12_PLANE_SLOT);
+    let video_y_base = overlay_plane_base(pipe, VIDEO_NV12_Y_PLANE_SLOT);
 
     program_plane_watermark_boot_safe(dev, primary_base, true);
     let (primary_buf_before, primary_buf_after) = program_plane_buf_cfg(
@@ -3725,25 +3727,49 @@ fn program_two_plane_stack_resources(
         let _ = wait_for_pipe_next_frame(dev, pipe);
     }
 
-    program_plane_watermark_boot_safe(dev, overlay_base, true);
-    let (overlay_buf_before, overlay_buf_after) = program_plane_buf_cfg(
+    program_plane_watermark_boot_safe(dev, ui_base, true);
+    let (ui_buf_before, ui_buf_after) = program_plane_buf_cfg(
         dev,
-        overlay_base,
-        PLANE_DBUF_OVERLAY_STACK_START,
-        PLANE_DBUF_OVERLAY_STACK_END,
+        ui_base,
+        PLANE_DBUF_UI_OVERLAY_STACK_START,
+        PLANE_DBUF_UI_OVERLAY_STACK_END,
+    );
+
+    program_plane_watermark_boot_safe(dev, video_uv_base, true);
+    let (video_uv_buf_before, video_uv_buf_after) = program_plane_buf_cfg(
+        dev,
+        video_uv_base,
+        PLANE_DBUF_VIDEO_NV12_UV_STACK_START,
+        PLANE_DBUF_VIDEO_NV12_UV_STACK_END,
+    );
+
+    program_plane_watermark_boot_safe(dev, video_y_base, true);
+    let (video_y_buf_before, video_y_buf_after) = program_plane_buf_cfg(
+        dev,
+        video_y_base,
+        PLANE_DBUF_VIDEO_NV12_Y_STACK_START,
+        PLANE_DBUF_VIDEO_NV12_Y_STACK_END,
     );
 
     crate::log!(
-        "intel/display: plane-stack-resources reason={} pipe={} primary_slot=0 buf=0x{:08X}=>0x{:08X} wm0=0x{:08X} overlay_slot={} buf=0x{:08X}=>0x{:08X} wm0=0x{:08X}\n",
+        "intel/display: plane-stack-resources reason={} pipe={} primary_slot=0 buf=0x{:08X}=>0x{:08X} wm0=0x{:08X} ui_slot={} buf=0x{:08X}=>0x{:08X} wm0=0x{:08X} video_uv_slot={} buf=0x{:08X}=>0x{:08X} wm0=0x{:08X} video_y_slot={} buf=0x{:08X}=>0x{:08X} wm0=0x{:08X}\n",
         reason,
         pipe.name,
         primary_buf_before,
         primary_buf_after,
         crate::intel::mmio_read(dev, primary_base + UNI_PLANE_WM_0_OFF),
-        overlay_slot,
-        overlay_buf_before,
-        overlay_buf_after,
-        crate::intel::mmio_read(dev, overlay_base + UNI_PLANE_WM_0_OFF),
+        UI_OVERLAY_PLANE_SLOT,
+        ui_buf_before,
+        ui_buf_after,
+        crate::intel::mmio_read(dev, ui_base + UNI_PLANE_WM_0_OFF),
+        VIDEO_NV12_PLANE_SLOT,
+        video_uv_buf_before,
+        video_uv_buf_after,
+        crate::intel::mmio_read(dev, video_uv_base + UNI_PLANE_WM_0_OFF),
+        VIDEO_NV12_Y_PLANE_SLOT,
+        video_y_buf_before,
+        video_y_buf_after,
+        crate::intel::mmio_read(dev, video_y_base + UNI_PLANE_WM_0_OFF),
     );
 }
 
@@ -4245,7 +4271,7 @@ fn init_default_overlay_marker(dev: crate::intel::Dev, primary: PrimarySurface) 
     let pos_y = scanout_h.saturating_sub(surface.height) / 2;
     let reason = "default-overlay-marker";
     if overlay_plane_needs_rearm(dev, surface, pos_x, pos_y, OverlayAlphaMode::Opaque) {
-        program_two_plane_stack_resources(dev, surface.pipe, surface.plane_slot, reason);
+        program_three_plane_stack_resources(dev, surface.pipe, reason);
         if !arm_overlay_plane(dev, surface, pos_x, pos_y, OverlayAlphaMode::Opaque, reason) {
             return false;
         }

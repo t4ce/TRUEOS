@@ -1740,7 +1740,7 @@ fn h264_present_probe_output(output: &super::hw_pic::HwPicOutput) -> bool {
     {
         let src =
             unsafe { core::slice::from_raw_parts(output.virt_addr as *const u8, output.byte_len) };
-        let _ = crate::intel::display::arm_decoded_nv12_overlay_plane_probe(
+        let direct_presented = crate::intel::display::arm_decoded_nv12_overlay_plane_probe(
             "h264-decoded-nv12",
             output.gpu_addr,
             output.phys_addr,
@@ -1753,6 +1753,11 @@ fn h264_present_probe_output(output: &super::hw_pic::HwPicOutput) -> bool {
             output.uv_offset,
             output.byte_len,
         );
+        if direct_presented
+            && crate::intel::display::decoded_nv12_overlay_plane_probe_replaces_cpu_present()
+        {
+            return true;
+        }
         crate::intel::display::present_ytile_nv12_surface_center(
             src,
             output.width,
