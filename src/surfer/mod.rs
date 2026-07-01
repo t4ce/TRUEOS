@@ -2,6 +2,7 @@ extern crate alloc;
 
 pub(crate) mod asset_shack;
 pub(crate) mod html_shack;
+pub(crate) mod media_stream;
 
 use alloc::string::String;
 use core::sync::atomic::{AtomicU64, Ordering};

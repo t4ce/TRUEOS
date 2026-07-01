@@ -10,12 +10,17 @@ const RGB_PLANE_PROBE_SLOT_COUNT: usize = 3;
 const RGB_PLANE_PROBE_GPU_BASE: u64 = crate::intel::GPU_VA_DISPLAY_OVERLAY_BASE;
 const RGB_PLANE_PROBE_GPU_STRIDE: u64 = 0x0010_0000;
 const DIRECT_NV12_PLANE_PROBE_ENABLED: bool = true;
-const DIRECT_NV12_LINEAR_PATTERN_PROBE_ONLY: bool = true;
+const DIRECT_NV12_LINEAR_PATTERN_PROBE_ONLY: bool = false;
 const DIRECT_NV12_LINEAR_PATTERN_GPU: u64 = 0x1200_0000;
 const DIRECT_NV12_LINEAR_PATTERN_WIDTH: u32 = 640;
 const DIRECT_NV12_LINEAR_PATTERN_HEIGHT: u32 = 360;
+const DIRECT_NV12_DECODED_LINEAR_STAGING_ENABLED: bool = true;
+const DIRECT_NV12_DECODED_LINEAR_STAGING_GPU: u64 = 0x1300_0000;
+const DIRECT_NV12_DECODED_LINEAR_STAGING_COUNT: usize = 3;
+const DIRECT_NV12_DECODED_LINEAR_STAGING_GPU_STRIDE: u64 = 0x0040_0000;
 const DIRECT_NV12_INPUT_CSC_PROBE_ENABLED: bool = true;
 const DIRECT_NV12_LINKED_PLANES_PROBE_ENABLED: bool = true;
+const DIRECT_NV12_LINKED_PLANES_SURF_ONLY_FLIP: bool = true;
 const DIRECT_NV12_PLANE_PROBE_CYCLE_CANDIDATES: bool = false;
 const DIRECT_NV12_PLANE_PROBE_SLOT: usize = VIDEO_NV12_PLANE_SLOT;
 const DIRECT_NV12_Y_PLANE_PROBE_SLOT: usize = VIDEO_NV12_Y_PLANE_SLOT;
@@ -25,6 +30,10 @@ static DIRECT_NV12_LINEAR_PATTERN_ARMED: AtomicBool = AtomicBool::new(false);
 static RGB_PLANE_PROBE_SURFACES: Mutex<[Option<RgbPlaneProbeSurface>; RGB_PLANE_PROBE_SLOT_COUNT]> =
     Mutex::new([None; RGB_PLANE_PROBE_SLOT_COUNT]);
 static DIRECT_NV12_LINEAR_PATTERN_SURFACE: Mutex<Option<Nv12PlaneProbeSurface>> = Mutex::new(None);
+static DIRECT_NV12_DECODED_LINEAR_STAGING_SURFACES: Mutex<
+    [Option<Nv12PlaneProbeSurface>; DIRECT_NV12_DECODED_LINEAR_STAGING_COUNT],
+> = Mutex::new([None; DIRECT_NV12_DECODED_LINEAR_STAGING_COUNT]);
+static DIRECT_NV12_DECODED_LINEAR_STAGING_NEXT: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Copy, Clone)]
 struct RgbPlaneProbeSurface {
@@ -243,6 +252,14 @@ fn direct_nv12_probe_tiling_for_seq(seq: u32) -> DirectNv12PlaneTiling {
         1 => DirectNv12PlaneTiling::Y,
         2 => DirectNv12PlaneTiling::Yf,
         _ => DirectNv12PlaneTiling::Linear,
+    }
+}
+
+fn direct_nv12_decoded_probe_tiling_for_seq(seq: u32) -> DirectNv12PlaneTiling {
+    if DIRECT_NV12_PLANE_PROBE_CYCLE_CANDIDATES {
+        direct_nv12_probe_tiling_for_seq(seq)
+    } else {
+        DirectNv12PlaneTiling::Y
     }
 }
 
@@ -687,6 +704,331 @@ fn arm_linear_nv12_pattern_video_plane_probe(
     armed
 }
 
+fn ensure_decoded_linear_nv12_staging_surface(
+    dev: crate::intel::Dev,
+    pipe: PipeInfo,
+    width: u32,
+    height: u32,
+) -> Option<(Nv12PlaneProbeSurface, usize)> {
+    let slot = (DIRECT_NV12_DECODED_LINEAR_STAGING_NEXT.fetch_add(1, Ordering::AcqRel) as usize)
+        % DIRECT_NV12_DECODED_LINEAR_STAGING_COUNT;
+    let gpu = DIRECT_NV12_DECODED_LINEAR_STAGING_GPU
+        .checked_add((slot as u64).checked_mul(DIRECT_NV12_DECODED_LINEAR_STAGING_GPU_STRIDE)?)?;
+    {
+        let state = DIRECT_NV12_DECODED_LINEAR_STAGING_SURFACES.lock();
+        if let Some(surface) = state[slot]
+            && surface.width == width
+            && surface.height == height
+            && surface.pipe.slot == pipe.slot
+            && surface.gpu == gpu
+        {
+            return Some((surface, slot));
+        }
+    }
+
+    let pitch_bytes = aligned_pitch_bytes(width, 1)?;
+    let raw_uv_offset = usize::try_from(u64::from(pitch_bytes) * u64::from(height)).ok()?;
+    let uv_offset = crate::intel::align_up(raw_uv_offset, crate::intel::WARM_ALIGN)?;
+    let uv_rows = height.div_ceil(2);
+    let uv_bytes = usize::try_from(u64::from(pitch_bytes) * u64::from(uv_rows)).ok()?;
+    let byte_len = uv_offset.checked_add(uv_bytes)?;
+    let (phys, virt) = crate::dma::alloc(byte_len, crate::intel::WARM_ALIGN)?;
+    unsafe {
+        core::ptr::write_bytes(virt, 16, raw_uv_offset);
+        core::ptr::write_bytes(virt.add(uv_offset), 128, uv_bytes);
+    }
+    crate::intel::dma_flush(virt, byte_len);
+
+    if !crate::intel::map_display_scanout_ggtt(dev, phys, byte_len, gpu) {
+        crate::log!(
+            "intel/display: decoded-nv12-linear-staging ggtt map failed pipe={} stage_slot={} size={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X}\n",
+            pipe.name,
+            slot,
+            width,
+            height,
+            pitch_bytes,
+            uv_offset,
+            byte_len,
+            gpu,
+            phys
+        );
+        return None;
+    }
+    crate::intel::ggtt_invalidate(dev);
+
+    let surface = Nv12PlaneProbeSurface {
+        width,
+        height,
+        pitch_bytes,
+        uv_offset,
+        byte_len,
+        phys,
+        virt,
+        pipe,
+        gpu,
+    };
+    DIRECT_NV12_DECODED_LINEAR_STAGING_SURFACES.lock()[slot] = Some(surface);
+    crate::log!(
+        "intel/display: decoded-nv12-linear-staging allocated pipe={} stage_slot={} size={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} virt=0x{:X}\n",
+        pipe.name,
+        slot,
+        width,
+        height,
+        pitch_bytes,
+        uv_offset,
+        byte_len,
+        gpu,
+        phys,
+        virt as usize
+    );
+    Some((surface, slot))
+}
+
+#[inline(always)]
+fn decoded_nv12_ytile_8bpp_offset(byte_x: usize, row_y: usize, tiles_per_row: usize) -> usize {
+    const YTILE_W: usize = 128;
+    const YTILE_H: usize = 32;
+
+    let tile_col = byte_x / YTILE_W;
+    let tile_row = row_y / YTILE_H;
+    let in_x = byte_x % YTILE_W;
+    let in_y = row_y % YTILE_H;
+    let oword_col = in_x / 16;
+    let byte_in_oword = in_x % 16;
+    let within_tile = oword_col * 512 + in_y * 16 + byte_in_oword;
+    (tile_row * tiles_per_row + tile_col) * 4096 + within_tile
+}
+
+fn copy_decoded_ytile_nv12_to_linear_staging(
+    src_virt: usize,
+    src_byte_len: usize,
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+    src_uv_offset: usize,
+    dst: Nv12PlaneProbeSurface,
+) -> bool {
+    if src_virt == 0
+        || src_byte_len == 0
+        || src_width == 0
+        || src_height == 0
+        || src_pitch_bytes < src_width as usize
+        || !src_pitch_bytes.is_multiple_of(128)
+        || src_uv_offset < src_pitch_bytes.saturating_mul(src_height as usize)
+        || !src_uv_offset.is_multiple_of(src_pitch_bytes)
+        || dst.virt.is_null()
+        || dst.width != src_width
+        || dst.height != src_height
+    {
+        return false;
+    }
+
+    let src_uv_row = src_uv_offset / src_pitch_bytes;
+    let src_tiles_per_row = src_pitch_bytes / 128;
+    let dst_pitch = dst.pitch_bytes as usize;
+    if dst_pitch < src_width as usize {
+        return false;
+    }
+
+    let src = unsafe { core::slice::from_raw_parts(src_virt as *const u8, src_byte_len) };
+    let width = src_width as usize;
+    let height = src_height as usize;
+    for row in 0..height {
+        let dst_row = unsafe { dst.virt.add(row.saturating_mul(dst_pitch)) };
+        for col in 0..width {
+            let src_off = decoded_nv12_ytile_8bpp_offset(col, row, src_tiles_per_row);
+            let Some(&value) = src.get(src_off) else {
+                return false;
+            };
+            unsafe {
+                core::ptr::write_volatile(dst_row.add(col), value);
+            }
+        }
+    }
+
+    let uv_rows = height.div_ceil(2);
+    for row in 0..uv_rows {
+        let dst_row = unsafe { dst.virt.add(dst.uv_offset + row.saturating_mul(dst_pitch)) };
+        let src_row = src_uv_row.saturating_add(row);
+        for col in (0..width).step_by(2) {
+            let u_off = decoded_nv12_ytile_8bpp_offset(col, src_row, src_tiles_per_row);
+            let v_off =
+                decoded_nv12_ytile_8bpp_offset(col.saturating_add(1), src_row, src_tiles_per_row);
+            let (Some(&u), Some(&v)) = (src.get(u_off), src.get(v_off)) else {
+                return false;
+            };
+            unsafe {
+                core::ptr::write_volatile(dst_row.add(col), u);
+                core::ptr::write_volatile(dst_row.add(col.saturating_add(1)), v);
+            }
+        }
+    }
+
+    crate::intel::dma_flush(dst.virt, dst.byte_len);
+    true
+}
+
+fn log_linear_nv12_green_probe(
+    reason: &str,
+    pipe: PipeInfo,
+    stage_slot: usize,
+    surface: Nv12PlaneProbeSurface,
+    visible_width: u32,
+    visible_height: u32,
+) {
+    if surface.virt.is_null()
+        || surface.pitch_bytes == 0
+        || surface.uv_offset >= surface.byte_len
+        || visible_width < 2
+        || visible_height < 2
+    {
+        return;
+    }
+
+    let width = visible_width.min(surface.width) as usize;
+    let height = visible_height.min(surface.height) as usize;
+    let pitch = surface.pitch_bytes as usize;
+    let cols = 8usize;
+    let rows = 6usize;
+    let mut samples = 0usize;
+    let mut greenish = 0usize;
+    let mut y_sum = 0usize;
+    let mut u_sum = 0usize;
+    let mut v_sum = 0usize;
+    let mut y_min = u8::MAX;
+    let mut y_max = u8::MIN;
+    let mut u_min = u8::MAX;
+    let mut u_max = u8::MIN;
+    let mut v_min = u8::MAX;
+    let mut v_max = u8::MIN;
+
+    for row in 0..rows {
+        let y = ((row + 1) * height / (rows + 1)).min(height.saturating_sub(1));
+        for col in 0..cols {
+            let x = ((col + 1) * width / (cols + 1)).min(width.saturating_sub(1));
+            let uv_x = x & !1;
+            let uv_y = y / 2;
+            let y_off = y.saturating_mul(pitch).saturating_add(x);
+            let uv_off = surface
+                .uv_offset
+                .saturating_add(uv_y.saturating_mul(pitch))
+                .saturating_add(uv_x);
+            if y_off >= surface.byte_len || uv_off.saturating_add(1) >= surface.byte_len {
+                continue;
+            }
+            let y_value = unsafe { core::ptr::read_volatile(surface.virt.add(y_off)) };
+            let u_value = unsafe { core::ptr::read_volatile(surface.virt.add(uv_off)) };
+            let v_value = unsafe { core::ptr::read_volatile(surface.virt.add(uv_off + 1)) };
+            samples += 1;
+            y_sum = y_sum.saturating_add(y_value as usize);
+            u_sum = u_sum.saturating_add(u_value as usize);
+            v_sum = v_sum.saturating_add(v_value as usize);
+            y_min = y_min.min(y_value);
+            y_max = y_max.max(y_value);
+            u_min = u_min.min(u_value);
+            u_max = u_max.max(u_value);
+            v_min = v_min.min(v_value);
+            v_max = v_max.max(v_value);
+            if y_value > 48 && u_value < 112 && v_value < 112 {
+                greenish += 1;
+            }
+        }
+    }
+
+    if samples != 0 && greenish.saturating_mul(4) >= samples.saturating_mul(3) {
+        crate::log!(
+            "intel/display: decoded-nv12-green-suspect reason={} pipe={} stage_slot={} samples={} greenish={} y_avg={} u_avg={} v_avg={} y_range={}..{} u_range={}..{} v_range={}..{} gpu=0x{:X} uv_gpu=0x{:X}\n",
+            reason,
+            pipe.name,
+            stage_slot,
+            samples,
+            greenish,
+            y_sum / samples,
+            u_sum / samples,
+            v_sum / samples,
+            y_min,
+            y_max,
+            u_min,
+            u_max,
+            v_min,
+            v_max,
+            surface.gpu,
+            surface.gpu.saturating_add(surface.uv_offset as u64)
+        );
+    }
+}
+
+fn arm_decoded_linear_nv12_staging_video_plane_probe(
+    dev: crate::intel::Dev,
+    pipe: PipeInfo,
+    reason: &str,
+    src_gpu_addr: u64,
+    src_phys_addr: u64,
+    src_virt_addr: usize,
+    coded_width: u32,
+    coded_height: u32,
+    visible_width: u32,
+    visible_height: u32,
+    src_pitch_bytes: usize,
+    src_uv_offset: usize,
+    src_byte_len: usize,
+) -> Option<bool> {
+    let (staging, staging_slot) =
+        ensure_decoded_linear_nv12_staging_surface(dev, pipe, coded_width, coded_height)?;
+    let copied = copy_decoded_ytile_nv12_to_linear_staging(
+        src_virt_addr,
+        src_byte_len,
+        coded_width,
+        coded_height,
+        src_pitch_bytes,
+        src_uv_offset,
+        staging,
+    );
+    crate::log!(
+        "intel/display: decoded-nv12-linear-staging copy reason={} pipe={} stage_slot={} copied={} src_layout=ytile src_gpu=0x{:X} src_phys=0x{:X} src_virt=0x{:X} src_size={}x{} src_pitch=0x{:X} src_uv=0x{:X} src_bytes=0x{:X} dst_gpu=0x{:X} dst_phys=0x{:X} dst_virt=0x{:X} dst_pitch=0x{:X} dst_uv=0x{:X} dst_bytes=0x{:X}\n",
+        reason,
+        pipe.name,
+        staging_slot,
+        copied as u8,
+        src_gpu_addr,
+        src_phys_addr,
+        src_virt_addr,
+        coded_width,
+        coded_height,
+        src_pitch_bytes,
+        src_uv_offset,
+        src_byte_len,
+        staging.gpu,
+        staging.phys,
+        staging.virt as usize,
+        staging.pitch_bytes,
+        staging.uv_offset,
+        staging.byte_len
+    );
+    if !copied {
+        return Some(false);
+    }
+
+    log_linear_nv12_green_probe(reason, pipe, staging_slot, staging, visible_width, visible_height);
+
+    Some(arm_nv12_video_plane_probe_surface(
+        "decoded-nv12-linear-staging",
+        "video-nv12-staging",
+        reason,
+        staging.gpu,
+        staging.phys,
+        staging.virt as usize,
+        staging.width,
+        staging.height,
+        visible_width,
+        visible_height,
+        staging.pitch_bytes as usize,
+        staging.uv_offset,
+        staging.byte_len,
+        DirectNv12PlaneTiling::Linear,
+    ))
+}
+
 fn arm_nv12_video_plane_probe_surface(
     probe_name: &str,
     owner: &str,
@@ -1003,6 +1345,58 @@ fn arm_nv12_linked_video_plane_probe_surface(
         | PLANE_COLOR_ALPHA_DISABLE
         | PLANE_COLOR_CSC_MODE_YUV709_TO_RGB709;
     let uv_cus_enabled = direct_nv12_plane_cus_ctl_enabled();
+    let want_pos = plane_pos_reg_value(pos_x, pos_y);
+    let want_size = plane_size_reg_value(plane_width, plane_height);
+
+    if DIRECT_NV12_LINKED_PLANES_SURF_ONLY_FLIP
+        && (uv_ctl_before & PLANE_CTL_ENABLE) != 0
+        && (y_ctl_before & PLANE_CTL_ENABLE) != 0
+        && uv_stride_before == stride_reg
+        && y_stride_before == stride_reg
+        && crate::intel::mmio_read(dev, uv_base + UNI_PLANE_POS_OFF) == want_pos
+        && crate::intel::mmio_read(dev, y_base + UNI_PLANE_POS_OFF) == want_pos
+        && crate::intel::mmio_read(dev, uv_base + UNI_PLANE_SIZE_OFF) == want_size
+        && crate::intel::mmio_read(dev, y_base + UNI_PLANE_SIZE_OFF) == want_size
+    {
+        crate::intel::mmio_write(dev, uv_base + UNI_PLANE_SURF_OFF, uv_surface_reg);
+        crate::intel::mmio_write(dev, y_base + UNI_PLANE_SURF_OFF, y_surface_reg);
+
+        let (frame_before, frame_after, frame_iters) = wait_for_pipe_next_frame(dev, pipe);
+        let (uv_live_after, uv_live_iters) =
+            wait_for_plane_live(dev, uv_base, uv_surface_reg, 20_000);
+        let (y_live_after, y_live_iters) = wait_for_plane_live(dev, y_base, y_surface_reg, 20_000);
+        let ok = uv_live_after == uv_surface_reg && y_live_after == y_surface_reg;
+
+        crate::log!(
+            "intel/display: nv12-linked-plane-flip seq={} probe={} reason={} owner={} pipe={} ok={} uv_slot={} y_slot={} candidate={} uv_surf=0x{:08X}->0x{:08X} uv_live=0x{:08X}->0x{:08X} y_surf=0x{:08X}->0x{:08X} y_live=0x{:08X}->0x{:08X} y_gpu=0x{:X} uv_gpu=0x{:X} frame={}=>{} frame_wait={} uv_live_iters={} y_live_iters={}\n",
+            seq,
+            probe_name,
+            reason,
+            owner,
+            pipe.name,
+            ok as u8,
+            DIRECT_NV12_PLANE_PROBE_SLOT,
+            DIRECT_NV12_Y_PLANE_PROBE_SLOT,
+            tiling.name(),
+            uv_surf_before,
+            crate::intel::mmio_read(dev, uv_base + UNI_PLANE_SURF_OFF),
+            uv_live_before,
+            uv_live_after,
+            y_surf_before,
+            crate::intel::mmio_read(dev, y_base + UNI_PLANE_SURF_OFF),
+            y_live_before,
+            y_live_after,
+            gpu_addr,
+            uv_gpu_addr,
+            frame_before,
+            frame_after,
+            frame_iters,
+            uv_live_iters,
+            y_live_iters
+        );
+
+        return ok;
+    }
 
     crate::intel::mmio_write(dev, uv_base + UNI_PLANE_CTL_OFF, uv_ctl_before & !PLANE_CTL_ENABLE);
     crate::intel::mmio_write(dev, y_base + UNI_PLANE_CTL_OFF, y_ctl_before & !PLANE_CTL_ENABLE);
@@ -1014,13 +1408,9 @@ fn arm_nv12_linked_video_plane_probe_surface(
         crate::intel::mmio_write(
             dev,
             plane_base + UNI_PLANE_POS_OFF,
-            plane_pos_reg_value(pos_x, pos_y),
+            want_pos,
         );
-        crate::intel::mmio_write(
-            dev,
-            plane_base + UNI_PLANE_SIZE_OFF,
-            plane_size_reg_value(plane_width, plane_height),
-        );
+        crate::intel::mmio_write(dev, plane_base + UNI_PLANE_SIZE_OFF, want_size);
         crate::intel::mmio_write(dev, plane_base + UNI_PLANE_KEYVAL_OFF, 0);
         crate::intel::mmio_write(dev, plane_base + UNI_PLANE_KEYMSK_OFF, 0);
         crate::intel::mmio_write(dev, plane_base + UNI_PLANE_KEYMAX_OFF, 0);
@@ -1153,6 +1543,49 @@ pub(crate) fn arm_decoded_nv12_overlay_plane_probe(
         return arm_linear_nv12_pattern_video_plane_probe(dev, pipe, reason);
     }
     let seq = DIRECT_NV12_PLANE_PROBE_SEQ.load(Ordering::Acquire) + 1;
+    let tiling = direct_nv12_decoded_probe_tiling_for_seq(seq);
+    crate::log!(
+        "intel/display: decoded-nv12-direct-probe reason={} pipe={} owner=video-nv12 staging={} tiling={} gpu=0x{:X} phys=0x{:X} virt=0x{:X} coded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} y_gpu_page_aligned={} uv_gpu=0x{:X} uv_gpu_page_aligned={} uv_offset_page_aligned={} byte_len_covers_uv={}\n",
+        reason,
+        pipe.name,
+        DIRECT_NV12_DECODED_LINEAR_STAGING_ENABLED as u8,
+        tiling.name(),
+        gpu_addr,
+        phys_addr,
+        virt_addr,
+        coded_width,
+        coded_height,
+        visible_width,
+        visible_height,
+        pitch_bytes,
+        uv_offset,
+        byte_len,
+        ((gpu_addr as usize) & (crate::intel::WARM_ALIGN - 1) == 0) as u8,
+        gpu_addr.saturating_add(uv_offset as u64),
+        (((gpu_addr.saturating_add(uv_offset as u64)) as usize) & (crate::intel::WARM_ALIGN - 1)
+            == 0) as u8,
+        (uv_offset & (crate::intel::WARM_ALIGN - 1) == 0) as u8,
+        (byte_len > uv_offset) as u8
+    );
+    if DIRECT_NV12_DECODED_LINEAR_STAGING_ENABLED
+        && let Some(armed) = arm_decoded_linear_nv12_staging_video_plane_probe(
+            dev,
+            pipe,
+            reason,
+            gpu_addr,
+            phys_addr,
+            virt_addr,
+            coded_width,
+            coded_height,
+            visible_width,
+            visible_height,
+            pitch_bytes,
+            uv_offset,
+            byte_len,
+        )
+    {
+        return armed;
+    }
     arm_nv12_video_plane_probe_surface(
         "decoded-nv12",
         "video-nv12",
@@ -1167,12 +1600,12 @@ pub(crate) fn arm_decoded_nv12_overlay_plane_probe(
         pitch_bytes,
         uv_offset,
         byte_len,
-        direct_nv12_probe_tiling_for_seq(seq),
+        tiling,
     )
 }
 
 pub(crate) fn decoded_nv12_overlay_plane_probe_replaces_cpu_present() -> bool {
-    DIRECT_NV12_LINEAR_PATTERN_PROBE_ONLY
+    DIRECT_NV12_LINKED_PLANES_PROBE_ENABLED
 }
 
 fn rgb_plane_probe_spec(index: usize) -> Option<(usize, u32, u32, u32, u32, u32, &'static str)> {

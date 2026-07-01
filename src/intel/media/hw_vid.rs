@@ -12,6 +12,7 @@ const H264_BOOT_PROBE_PLAYBACK_OPTIONS: H264PlaybackOptions = H264PlaybackOption
     show_cache_fill: false,
     diagnostics: true,
     noreset_lite: false,
+    loop_playback: false,
 };
 const H264_BOOT_PROBE_STRIPE_STUDY_FRAME_MS: u64 = 120;
 const H264_BOOT_PROBE_STRIPE_STUDY_STORE_TOP: usize = 8;
@@ -48,6 +49,7 @@ pub(crate) struct H264PlaybackOptions {
     show_cache_fill: bool,
     diagnostics: bool,
     noreset_lite: bool,
+    loop_playback: bool,
 }
 
 impl H264PlaybackOptions {
@@ -59,6 +61,7 @@ impl H264PlaybackOptions {
         show_cache_fill: bool,
         diagnostics: bool,
         noreset_lite: bool,
+        loop_playback: bool,
     ) -> Self {
         Self {
             fps,
@@ -68,6 +71,7 @@ impl H264PlaybackOptions {
             show_cache_fill,
             diagnostics,
             noreset_lite,
+            loop_playback,
         }
     }
 
@@ -115,6 +119,10 @@ impl H264PlaybackOptions {
 
     pub(crate) const fn noreset_lite(self) -> bool {
         self.noreset_lite
+    }
+
+    pub(crate) const fn loop_playback(self) -> bool {
+        self.loop_playback
     }
 }
 
@@ -685,7 +693,7 @@ async fn h264_i_p_playback_probe(
     let mut playback_timing = H264PlaybackTiming::default();
 
     crate::log!(
-        "intel/hw_vid: h264-playback-probe start bytes={} fps={} frame_ms={} frame_ticks={} subset=idr-plus-p source=trueosfs-root path={} mode=range-stream chunk=0x{:X} playback_mode={} cache={} stripe_study={} fill={} diagnostics={} noreset_lite={} stop=eos\n",
+        "intel/hw_vid: h264-playback-probe start bytes={} fps={} frame_ms={} frame_ticks={} subset=idr-plus-p source=trueosfs-root path={} mode=range-stream chunk=0x{:X} playback_mode={} cache={} stripe_study={} fill={} diagnostics={} noreset_lite={} loop={} stop=eos\n",
         stream_bytes,
         mode.fps(),
         mode.frame_ms(),
@@ -697,7 +705,8 @@ async fn h264_i_p_playback_probe(
         mode.stripe_study() as u8,
         mode.show_cache_fill() as u8,
         mode.diagnostics() as u8,
-        mode.noreset_lite() as u8
+        mode.noreset_lite() as u8,
+        mode.loop_playback() as u8
     );
 
     while let Some(nal) = reader.next_nal().await {
@@ -798,6 +807,7 @@ async fn h264_i_p_playback_probe(
     let forward_full_cache_bytes = h264_decoded_frames_total_bytes(forward_full_cache.as_slice());
     let forward_tail_cache_frames = forward_tail_cache.len();
     let forward_tail_cache_bytes = h264_decoded_frames_total_bytes(forward_tail_cache.as_slice());
+    h264_log_keyframe_summary(indexed_frames.as_slice(), stream_bytes);
     let playback_report = playback_timing.report(mode, submitted, playback_start);
 
     crate::log!(
@@ -925,7 +935,7 @@ async fn h264_submit_wait_probe_frame(
     }
     let present_start = EmbassyInstant::now();
     let stored = if present_output {
-        h264_present_probe_output(&output)
+        h264_present_probe_output(phase, playback_frame, stream_idr_index, &output)
     } else {
         false
     };
@@ -1727,7 +1737,32 @@ async fn h264_read_stream_range(
     Some(out)
 }
 
-fn h264_present_probe_output(output: &super::hw_pic::HwPicOutput) -> bool {
+fn h264_present_probe_output(
+    phase: &str,
+    playback_frame: usize,
+    stream_idr_index: usize,
+    output: &super::hw_pic::HwPicOutput,
+) -> bool {
+    if output.error_code != 0 {
+        crate::log!(
+            "intel/hw_vid: h264-present skipped reason=decode-error phase={} playback_frame={} stream_idr={} id={} err={} status={:?} fmt={:?} decoded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} gpu=0x{:X}\n",
+            phase,
+            playback_frame,
+            stream_idr_index,
+            output.id,
+            output.error_code,
+            output.status,
+            output.format,
+            output.width,
+            output.height,
+            output.visible_width,
+            output.visible_height,
+            output.pitch_bytes,
+            output.uv_offset,
+            output.gpu_addr
+        );
+        return false;
+    }
     if matches!(
         output.status,
         super::hw_pic::HwPicStatus::Ready | super::hw_pic::HwPicStatus::Streamed
@@ -1740,8 +1775,12 @@ fn h264_present_probe_output(output: &super::hw_pic::HwPicOutput) -> bool {
     {
         let src =
             unsafe { core::slice::from_raw_parts(output.virt_addr as *const u8, output.byte_len) };
+        let reason = format!(
+            "h264-decoded-nv12:{}:frame{}:idr{}:id{}",
+            phase, playback_frame, stream_idr_index, output.id
+        );
         let direct_presented = crate::intel::display::arm_decoded_nv12_overlay_plane_probe(
-            "h264-decoded-nv12",
+            reason.as_str(),
             output.gpu_addr,
             output.phys_addr,
             output.virt_addr,
@@ -1838,6 +1877,34 @@ fn h264_decoded_frames_total_bytes(frames: &[H264DecodedFrame]) -> usize {
     frames
         .iter()
         .fold(0usize, |total, frame| total.saturating_add(frame.bytes.len()))
+}
+
+fn h264_log_keyframe_summary(frames: &[H264IndexedFrame], stream_bytes: u64) {
+    let mut idrs = 0usize;
+    let mut list = String::new();
+    for (index, frame) in frames.iter().enumerate() {
+        if frame.nal_type != 5 {
+            continue;
+        }
+        idrs += 1;
+        if !list.is_empty() {
+            let _ = write!(list, ",");
+        }
+        let _ = write!(
+            list,
+            "{}@0x{:X}+0x{:X}",
+            index + 1,
+            frame.stream_offset,
+            frame.bytes
+        );
+    }
+    crate::log!(
+        "intel/hw_vid: h264-keyframe-summary frames={} idr={} stream_bytes=0x{:X} keyframes=[{}]\n",
+        frames.len(),
+        idrs,
+        stream_bytes,
+        list.as_str()
+    );
 }
 
 fn h264_log_frame_index(frame: &H264IndexedFrame, index: usize) {

@@ -145,6 +145,86 @@ function pushBrowserAssetRef(tag, url, kind) {
   }
 }
 
+function decodeEscapedUrlFragment(value) {
+  let text = safeString(value);
+  if (!text) return '';
+  for (let pass = 0; pass < 3; pass += 1) {
+    const before = text;
+    text = text
+      .replace(/\\u0026/g, '&')
+      .replace(/\\\//g, '/')
+      .replace(/&amp;/gi, '&');
+    try {
+      text = decodeURIComponent(text);
+    } catch (_) {}
+    if (text === before) break;
+  }
+  return text;
+}
+
+function mediaKindForUrl(url) {
+  const lower = safeString(url).toLowerCase();
+  if (lower.includes('.m3u8') || lower.includes('mpegurl')) return 'video/mpegurl';
+  if (lower.includes('mime=video/mp4') || lower.includes('.mp4')) return 'video/mp4';
+  if (lower.includes('mime=video/webm') || lower.includes('.webm')) return 'video/webm';
+  if (lower.includes('videoplayback') || lower.includes('googlevideo.com')) return 'video/stream';
+  return '';
+}
+
+function pushMediaCandidate(candidates, seen, rawUrl, source) {
+  const url = decodeEscapedUrlFragment(rawUrl).trim();
+  if (!url || seen.has(url)) return;
+  const kind = mediaKindForUrl(url);
+  if (!kind) return;
+  seen.add(url);
+  candidates.push({ url, kind, source });
+}
+
+function collectMediaCandidatesFromHtml(html) {
+  const source = safeString(html);
+  const candidates = [];
+  const seen = new Set();
+
+  const directJsonUrlRe = /"url"\s*:\s*"([^"]*(?:videoplayback|googlevideo\.com|\.mp4|\.m3u8)[^"]*)"/gi;
+  let match;
+  while ((match = directJsonUrlRe.exec(source))) {
+    pushMediaCandidate(candidates, seen, match[1], 'json-url');
+  }
+
+  const cipherRe = /"(?:signatureCipher|cipher)"\s*:\s*"([^"]+)"/gi;
+  while ((match = cipherRe.exec(source))) {
+    const decoded = decodeEscapedUrlFragment(match[1]);
+    const urlMatch = /(?:^|[&?])url=([^&]+)/.exec(decoded);
+    if (urlMatch) {
+      pushMediaCandidate(candidates, seen, urlMatch[1], 'signature-cipher-url');
+    }
+  }
+
+  const htmlMediaRe = /<(?:video|source)\b[^>]*\bsrc\s*=\s*(["'])([\s\S]*?)\1/gi;
+  while ((match = htmlMediaRe.exec(source))) {
+    pushMediaCandidate(candidates, seen, resolveNavigationUrl(currentNavigationUrl, match[2]), 'html-media-src');
+  }
+
+  return candidates;
+}
+
+function tagHtmlMediaRefs(html) {
+  const candidates = collectMediaCandidatesFromHtml(html);
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    const rc = pushBrowserAssetRef(`media:${index}`, candidate.url, candidate.kind);
+    log(
+      `[truesurfer media] browser=${browserId} candidate=${index + 1}/${candidates.length} rc=${rc} source=${candidate.source} kind=${candidate.kind} url=${candidate.url}`,
+    );
+  }
+  if (candidates.length === 0) {
+    log(`[truesurfer media] browser=${browserId} candidates=0 url=${currentNavigationUrl}`);
+  }
+  return {
+    total: candidates.length,
+  };
+}
+
 function tagWidgetTreeAssetRefs(widgetTree) {
   const urls = [];
   const unique = new Set();
@@ -487,6 +567,7 @@ function setHtml(nextHtml, meta) {
     const styleIndexMs = Date.now() - styleStart;
     const widgetTree = domToWidgetsFn(parsedDocument);
     const imageSummary = tagWidgetTreeAssetRefs(widgetTree);
+    const mediaSummary = tagHtmlMediaRefs(html);
     const parsed = extractDocumentArtifactsFn(html, { styleIndex, styleIndexMs });
     currentArtifactsState = {
       url,
@@ -504,6 +585,7 @@ function setHtml(nextHtml, meta) {
       scriptCount: parsed.scriptCount,
       scriptBytes: parsed.scriptBytes,
       imageSummary,
+      mediaSummary,
     };
     publishLatestArtifacts();
     logSyncPipeline(url, parsed);
@@ -532,6 +614,7 @@ function setHtml(nextHtml, meta) {
       scriptCount: parsed.scriptCount,
       scriptBytes: parsed.scriptBytes,
       imageSummary,
+      mediaSummary,
       renderHash: renderTreeArtifact ? renderTreeArtifact.renderHash : null,
       layoutHash: renderTreeArtifact ? renderTreeArtifact.layoutHash : null,
       renderTreeJson: renderTreeArtifact ? renderTreeArtifact.renderTreeJson : null,
