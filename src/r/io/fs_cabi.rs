@@ -337,7 +337,12 @@ pub(crate) fn fs_read_file_len_host(path: &str) -> isize {
         return FS_ERR_TOO_LARGE as isize;
     }
     match super::kfs::read_file_len(path.as_str()) {
-        Ok(len) => len as isize,
+        Ok(len) => {
+            if path.contains("ggml-tiny") {
+                crate::log!("fs-cabi: read_len ok resolved={} len={}\n", path.as_str(), len);
+            }
+            len as isize
+        }
         Err(e) => {
             let rc = fs_error_to_code(e);
             log_fs_cabi_path_fail("read_len", path.as_str(), Some(path.as_str()), "", rc);
@@ -371,14 +376,18 @@ pub(crate) fn fs_read_file_chunk_host(path: &str, offset: usize, out: &mut [u8])
         );
         return FS_ERR_TOO_LARGE as isize;
     }
-    match super::kfs::read_file(path.as_str()) {
-        Ok(bytes) => {
-            if offset >= bytes.len() || out.is_empty() {
-                return 0;
+    match super::kfs::read_file_range(path.as_str(), offset as u64, out) {
+        Ok(got) => {
+            if path.contains("ggml-tiny") && (offset == 0 || got == 0) {
+                crate::log!(
+                    "fs-cabi: read_chunk ok resolved={} offset={} cap={} got={}\n",
+                    path.as_str(),
+                    offset,
+                    out.len(),
+                    got
+                );
             }
-            let n = core::cmp::min(out.len(), bytes.len() - offset);
-            out[..n].copy_from_slice(&bytes[offset..offset + n]);
-            n as isize
+            got as isize
         }
         Err(e) => {
             let rc = fs_error_to_code(e);
@@ -568,6 +577,14 @@ pub(crate) fn fs_stat_host(path: &str, out_kind: &mut u32, out_len: &mut u64) ->
                 super::kfs::FsNodeKind::Directory => 2,
             };
             *out_len = stat.len;
+            if path.contains("ggml-tiny") {
+                crate::log!(
+                    "fs-cabi: stat ok resolved={} kind={} len={}\n",
+                    path.as_str(),
+                    *out_kind,
+                    *out_len
+                );
+            }
             0
         }
         Err(e) => {
@@ -772,7 +789,7 @@ fn guest_fs_stat(path_bytes: &[u8], out_kind: *mut u32, out_len: *mut u64) -> i3
     if path_bytes.len() > trueos_vm::vmcall::PAYLOAD_CAP {
         return FS_ERR_TOO_LARGE;
     }
-    let mut out = [0u8; 1];
+    let mut out = [0u8; 12];
     let (status, data) = trueos_vm::vmcall::call_with_payload(
         trueos_vm::vmcall::OP_BP_FS_STAT,
         0,
@@ -788,16 +805,16 @@ fn guest_fs_stat(path_bytes: &[u8], out_kind: *mut u32, out_len: *mut u64) -> i3
         return rc;
     }
     unsafe {
-        *out_kind = (data >> 32) as u32;
-        *out_len = if *out_kind == 1 {
-            let len = guest_fs_read_file(path_bytes, core::ptr::null_mut(), 0);
-            if len < 0 {
-                return len as i32;
-            }
-            len as u64
+        let payload_kind = u32::from_le_bytes([out[0], out[1], out[2], out[3]]);
+        if payload_kind != 0 {
+            *out_kind = payload_kind;
+            *out_len = u64::from_le_bytes([
+                out[4], out[5], out[6], out[7], out[8], out[9], out[10], out[11],
+            ]);
         } else {
-            0
-        };
+            *out_kind = (data >> 32) as u32;
+            *out_len = 0;
+        }
     }
     0
 }

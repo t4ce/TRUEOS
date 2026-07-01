@@ -476,6 +476,12 @@ unsafe extern "C" fn portal_unwind_get_ip(_context: *mut c_void) -> usize {
     0
 }
 
+unsafe extern "C" fn portal_unwind_raise_exception(
+    _exception: *mut c_void,
+) -> PortalUnwindReasonCode {
+    PORTAL_URC_END_OF_STACK
+}
+
 include!(concat!(env!("OUT_DIR"), "/generated_portal_imports.rs"));
 
 pub(crate) fn entry_hint_section(entry: u64) -> u32 {
@@ -1302,16 +1308,27 @@ fn resolve_known_import(name: &str) -> Option<usize> {
         "acosf" => Some(trueos_math::acosf as *const () as usize),
         "asinf" => Some(trueos_math::asinf as *const () as usize),
         "log2f" => Some(trueos_math::log2f as *const () as usize),
+        "logf" => Some(trueos_math::logf as *const () as usize),
+        "log10f" => Some(trueos_math::log10f as *const () as usize),
+        "expf" => Some(trueos_math::expf as *const () as usize),
+        "powf" => Some(trueos_math::powf as *const () as usize),
+        "tanhf" => Some(trueos_math::tanhf as *const () as usize),
         "hypotf" => Some(trueos_math::hypotf as *const () as usize),
         "sin" => Some(trueos_math::sin as *const () as usize),
         "cos" => Some(trueos_math::cos as *const () as usize),
         "log2" => Some(trueos_math::log2 as *const () as usize),
+        "log" => Some(trueos_math::log as *const () as usize),
+        "log10" => Some(trueos_math::log10 as *const () as usize),
+        "exp" => Some(trueos_math::exp as *const () as usize),
+        "pow" => Some(trueos_math::pow as *const () as usize),
+        "tanh" => Some(trueos_math::tanh as *const () as usize),
         "hypot" => Some(trueos_math::hypot as *const () as usize),
         "trueos_cabi_wls_current_slot" => {
             Some(crate::stackkeeper::trueos_cabi_wls_current_slot as *const () as usize)
         }
         "_Unwind_Backtrace" => Some(portal_unwind_backtrace as *const () as usize),
         "_Unwind_GetIP" => Some(portal_unwind_get_ip as *const () as usize),
+        "_Unwind_RaiseException" => Some(portal_unwind_raise_exception as *const () as usize),
         "__rust_alloc"
         | "_RNvCs75cmLyI1ip2_7___rustc12___rust_alloc"
         | "_RNvCs2csqI13tepL_7___rustc12___rust_alloc" => {

@@ -920,7 +920,7 @@ fn log_backend_dispatch_contract(
             | "computed-stencil"
     ) as u32;
 
-    intel_render_focus_log!(
+    intel_render_verbose_log!(
         "intel/render: probe-backend-decoded wm[stats={} force_thread_dispatch={}({}) edsc={}({})] ps_blend[writeable_rt={} blend_enable={} alpha_test={} alpha_to_coverage={}] wm_depth_stencil[depth_test={} depth_write={} stencil_test={} stencil_write={} double_sided_stencil={}]\n",
         wm_statistics_enable,
         wm_force_thread_dispatch,
@@ -937,7 +937,7 @@ fn log_backend_dispatch_contract(
         wm_stencil_write_enable,
         wm_double_sided_stencil,
     );
-    intel_render_focus_log!(
+    intel_render_verbose_log!(
         "intel/render: probe-backend-gate wm_hz_op[active={} depth_clear={} depth_resolve={} hier_resolve={} stencil_clear={} stencil_resolve={} full_surface_clear={} partial_resolve={} scissor={} samples={} sample_mask=0x{:X}] ps_extra[valid={} attribute_enable={} per_sample={} has_uav={} kills={} computed_depth={} computes_stencil={}] dispatch_armed={} reason={}\n",
         wm_hz_op_active,
         wm_hz_depth_clear,
@@ -1004,7 +1004,7 @@ fn log_mesa_spec_cross_compare(
         crate::intel::shader::DispatchMode::Simd32 => "simd32",
     };
 
-    intel_render_focus_log!(
+    intel_render_verbose_log!(
         "intel/render: mesa-compare target=device=0x{:04X} note={} host_sbe[read_offset=1 read_length=1 force_read_offset=1 force_read_length=1 num_sf_attrs=0] trueos_sbe[read_offset={} read_length={} force_read_offset={} force_read_length={} num_sf_attrs={}] host_clip[perspective_divide_disable=1] trueos_clip[perspective_divide_disable={} clip_mode={}({}) clip_enable={} statistics={}] debug_sf[statistics={}] host_raster[cull_mode=none sample_mask=0x1] trueos_raster[cull_mode={}({}) sample_mask=1]\n",
         warm.device_id,
         crate::intel::shader::triangle_pipeline_note(),
@@ -1022,7 +1022,7 @@ fn log_mesa_spec_cross_compare(
         trueos_raster_cull_mode,
         decode_cull_mode_name(trueos_raster_cull_mode),
     );
-    intel_render_focus_log!(
+    intel_render_verbose_log!(
         "intel/render: mesa-compare host_ps[vector_mask=0 binding_table_entry_count=0 push_constants=0 dispatch=simd8 max_threads_per_psd=63] trueos_ps[vector_mask={} binding_table_entry_count={} push_constants={} dispatch={} max_threads_per_psd={}] host_ps_extra[attribute_enable=0 per_sample=0 computed_depth=0 computes_stencil=0] trueos_ps_extra[attribute_enable={} per_sample={} computed_depth={} computes_stencil={}] spec_pre_raster[baked_vs_urb_output_len={} programmed_vs_urb_output_len={} sbe_read_offset={} sbe_read_length={}]\n",
         trueos_ps_vector_mask,
         trueos_ps_binding_table_entry_count,

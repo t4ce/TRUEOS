@@ -365,6 +365,14 @@ pub(crate) fn present_ui_surface_to_primary_backing(
     self::display::present_ui_surface_to_primary_backing(surface, virt, byte_len, src, dst, reason)
 }
 
+pub(crate) fn hide_decoded_nv12_overlay_plane(reason: &str) -> bool {
+    self::display::hide_decoded_nv12_overlay_plane(reason)
+}
+
+pub(crate) fn set_decoded_nv12_overlay_plane_alpha(alpha: u8, reason: &str) -> bool {
+    self::display::set_decoded_nv12_overlay_plane_alpha(alpha, reason)
+}
+
 pub fn primary_surface_gpu_addr() -> Option<u64> {
     self::display::primary_surface_gpu_addr()
 }

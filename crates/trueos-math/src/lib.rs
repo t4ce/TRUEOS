@@ -45,6 +45,31 @@ pub fn log2_f32(x: f32) -> f32 {
 }
 
 #[inline]
+pub fn log_f32(x: f32) -> f32 {
+    libm::logf(x)
+}
+
+#[inline]
+pub fn log10_f32(x: f32) -> f32 {
+    libm::log10f(x)
+}
+
+#[inline]
+pub fn exp_f32(x: f32) -> f32 {
+    libm::expf(x)
+}
+
+#[inline]
+pub fn pow_f32(x: f32, y: f32) -> f32 {
+    libm::powf(x, y)
+}
+
+#[inline]
+pub fn tanh_f32(x: f32) -> f32 {
+    libm::tanhf(x)
+}
+
+#[inline]
 pub fn hypot_f32(x: f32, y: f32) -> f32 {
     libm::hypotf(x, y)
 }
@@ -62,6 +87,31 @@ pub fn cos_f64(x: f64) -> f64 {
 #[inline]
 pub fn log2_f64(x: f64) -> f64 {
     libm::log2(x)
+}
+
+#[inline]
+pub fn log_f64(x: f64) -> f64 {
+    libm::log(x)
+}
+
+#[inline]
+pub fn log10_f64(x: f64) -> f64 {
+    libm::log10(x)
+}
+
+#[inline]
+pub fn exp_f64(x: f64) -> f64 {
+    libm::exp(x)
+}
+
+#[inline]
+pub fn pow_f64(x: f64, y: f64) -> f64 {
+    libm::pow(x, y)
+}
+
+#[inline]
+pub fn tanh_f64(x: f64) -> f64 {
+    libm::tanh(x)
 }
 
 #[inline]
@@ -97,6 +147,31 @@ pub extern "C" fn log2f(x: f32) -> f32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn logf(x: f32) -> f32 {
+    log_f32(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn log10f(x: f32) -> f32 {
+    log10_f32(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn expf(x: f32) -> f32 {
+    exp_f32(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn powf(x: f32, y: f32) -> f32 {
+    pow_f32(x, y)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn tanhf(x: f32) -> f32 {
+    tanh_f32(x)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn hypotf(x: f32, y: f32) -> f32 {
     hypot_f32(x, y)
 }
@@ -114,6 +189,30 @@ pub extern "C" fn cos(x: f64) -> f64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn log2(x: f64) -> f64 {
     log2_f64(x)
+}
+
+pub extern "C" fn log(x: f64) -> f64 {
+    log_f64(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn log10(x: f64) -> f64 {
+    log10_f64(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn exp(x: f64) -> f64 {
+    exp_f64(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pow(x: f64, y: f64) -> f64 {
+    pow_f64(x, y)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn tanh(x: f64) -> f64 {
+    tanh_f64(x)
 }
 
 #[unsafe(no_mangle)]

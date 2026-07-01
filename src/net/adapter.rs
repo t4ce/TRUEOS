@@ -689,21 +689,25 @@ fn pop_command_for_device(device_index: usize) -> Option<(&'static str, NetComma
 fn push_event(target: &'static str, event: NetEvent) -> bool {
     static DROP_COUNT: AtomicU64 = AtomicU64::new(0);
 
-    let is_tcp_signal = matches!(
+    let wakes_mio = matches!(
         event,
-        NetEvent::TcpData { .. } | NetEvent::TcpEstablished { .. } | NetEvent::Closed { .. }
+        NetEvent::TcpData { .. }
+            | NetEvent::TcpEstablished { .. }
+            | NetEvent::Closed { .. }
+            | NetEvent::UdpPacket { .. }
+            | NetEvent::UdpPacketV6 { .. }
     );
 
     let guard = APP_QUEUES.lock();
     if let Some(entry) = guard.iter().find(|e| e.name == target) {
         let ok = entry.events.push(event).is_ok();
-        if ok && is_tcp_signal {
+        if ok && wakes_mio {
             crate::mio_compat::notify_net_event();
         }
-        if !ok && is_tcp_signal {
+        if !ok && wakes_mio {
             let n = DROP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
             if n <= 2 || n.is_power_of_two() {
-                crate::log_info!(target: "net"; "net: event drop owner={} (tcp-signal) count={}\n", target, n);
+                crate::log_info!(target: "net"; "net: event drop owner={} (mio-signal) count={}\n", target, n);
             }
         }
         ok
@@ -1596,6 +1600,8 @@ impl NetService {
 
         // mDNS/DNS-SD uses IPv4 multicast.
         let _ = iface.join_multicast_group(IpAddress::Ipv4(Ipv4Address::new(224, 0, 0, 251)));
+        // ESP32 Wi-Fi RTP microphone stream.
+        let _ = iface.join_multicast_group(IpAddress::Ipv4(Ipv4Address::new(239, 255, 77, 77)));
         // Ensure the stack accepts multicast IPv6 control traffic.
         // Router Advertisements are commonly sent to ff02::1 (all-nodes).
         let _ = iface.join_multicast_group(IpAddress::Ipv6(Ipv6Address::new(

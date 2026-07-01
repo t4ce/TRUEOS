@@ -36,6 +36,38 @@ static DIRECT_NV12_DECODED_LINEAR_STAGING_SURFACES: Mutex<
 > = Mutex::new([None; DIRECT_NV12_DECODED_LINEAR_STAGING_COUNT]);
 static DIRECT_NV12_DECODED_LINEAR_STAGING_NEXT: AtomicU32 = AtomicU32::new(0);
 
+fn log_decoded_nv12_plane_alpha_program(
+    seq: u32,
+    phase: &str,
+    reason: &str,
+    owner: &str,
+    pipe: PipeInfo,
+    proof: DecodedNv12PlaneAlphaProgram,
+) {
+    if proof.alpha == 0xFF && seq > 3 {
+        return;
+    }
+    crate::log!(
+        "intel/display: nv12-linked-plane-alpha seq={} phase={} reason={} owner={} pipe={} alpha={} uv_slot={} y_slot={} uv_keymsk=0x{:08X}->0x{:08X} uv_keymax=0x{:08X}->0x{:08X} y_keymsk=0x{:08X}->0x{:08X} y_keymax=0x{:08X}->0x{:08X}\n",
+        seq,
+        phase,
+        reason,
+        owner,
+        pipe.name,
+        proof.alpha,
+        DIRECT_NV12_PLANE_PROBE_SLOT,
+        DIRECT_NV12_Y_PLANE_PROBE_SLOT,
+        proof.uv_keymsk_before,
+        proof.uv_keymsk_after,
+        proof.uv_keymax_before,
+        proof.uv_keymax_after,
+        proof.y_keymsk_before,
+        proof.y_keymsk_after,
+        proof.y_keymax_before,
+        proof.y_keymax_after
+    );
+}
+
 #[derive(Copy, Clone)]
 struct RgbPlaneProbeSurface {
     width: u32,
@@ -1410,6 +1442,7 @@ fn arm_nv12_linked_video_plane_probe_surface(
         && crate::intel::mmio_read(dev, uv_base + UNI_PLANE_SIZE_OFF) == want_size
         && crate::intel::mmio_read(dev, y_base + UNI_PLANE_SIZE_OFF) == want_size
     {
+        let alpha_proof = program_decoded_nv12_overlay_plane_alpha(dev, uv_base, y_base);
         crate::intel::mmio_write(dev, uv_base + UNI_PLANE_SURF_OFF, uv_surface_reg);
         crate::intel::mmio_write(dev, y_base + UNI_PLANE_SURF_OFF, y_surface_reg);
 
@@ -1418,6 +1451,7 @@ fn arm_nv12_linked_video_plane_probe_surface(
             wait_for_plane_live(dev, uv_base, uv_surface_reg, 20_000);
         let (y_live_after, y_live_iters) = wait_for_plane_live(dev, y_base, y_surface_reg, 20_000);
         let ok = uv_live_after == uv_surface_reg && y_live_after == y_surface_reg;
+        log_decoded_nv12_plane_alpha_program(seq, "flip", reason, owner, pipe, alpha_proof);
 
         crate::log!(
             "intel/display: nv12-linked-plane-flip seq={} probe={} reason={} owner={} pipe={} ok={} uv_slot={} y_slot={} candidate={} uv_surf=0x{:08X}->0x{:08X} uv_live=0x{:08X}->0x{:08X} y_surf=0x{:08X}->0x{:08X} y_live=0x{:08X}->0x{:08X} y_gpu=0x{:X} uv_gpu=0x{:X} frame={}=>{} frame_wait={} uv_live_iters={} y_live_iters={}\n",
@@ -1466,6 +1500,7 @@ fn arm_nv12_linked_video_plane_probe_surface(
         crate::intel::mmio_write(dev, plane_base + UNI_PLANE_AUX_DIST_OFF, 0);
         crate::intel::mmio_write(dev, plane_base + UNI_PLANE_AUX_OFFSET_OFF, 0);
     }
+    let alpha_proof = program_decoded_nv12_overlay_plane_alpha(dev, uv_base, y_base);
 
     crate::intel::mmio_write(dev, y_base + UNI_PLANE_CUS_CTL_OFF, 0);
     crate::intel::mmio_write(dev, y_color_ctl_off, y_color_enabled);
@@ -1492,6 +1527,7 @@ fn arm_nv12_linked_video_plane_probe_surface(
     let y_color_after = crate::intel::mmio_read(dev, y_color_ctl_off);
     let y_cus_after = crate::intel::mmio_read(dev, y_base + UNI_PLANE_CUS_CTL_OFF);
     let ok = uv_live_after == uv_surface_reg && y_live_after == y_surface_reg;
+    log_decoded_nv12_plane_alpha_program(seq, "arm", reason, owner, pipe, alpha_proof);
 
     crate::log!(
         "intel/display: nv12-linked-plane-probe seq={} probe={} reason={} owner={} pipe={} ok={} uv_slot={} y_slot={} candidate={} uv_ctl=0x{:08X}->0x{:08X}/0x{:08X} uv_format={} uv_tiled={} uv_stride=0x{:08X}->0x{:08X}/0x{:08X} uv_surf=0x{:08X}->0x{:08X} uv_live=0x{:08X}->0x{:08X} uv_color=0x{:08X}->0x{:08X} uv_cus=0x{:08X}->0x{:08X} y_ctl=0x{:08X}->0x{:08X}/0x{:08X} y_format={} y_tiled={} y_is_y={} y_stride=0x{:08X}->0x{:08X}/0x{:08X} y_surf=0x{:08X}->0x{:08X} y_live=0x{:08X}->0x{:08X} y_color=0x{:08X}->0x{:08X} y_cus=0x{:08X}->0x{:08X} coded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} y_gpu=0x{:X} uv_gpu=0x{:X} y_phys=0x{:X} uv_phys=0x{:X} virt=0x{:X} scanout={}x{} pos={}x{} size={}x{} frame={}=>{} frame_wait={} uv_live_iters={} y_live_iters={}\n",

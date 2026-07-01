@@ -213,7 +213,7 @@ fn write_triangle_probe_state(
         | (SHADER_CHANNEL_RED << 25);
     surface[8] = draw.rt_gpu_addr as u32;
     surface[9] = (draw.rt_gpu_addr >> 32) as u32;
-    intel_render_focus_log!(
+    intel_render_verbose_log!(
         "intel/render: probe-surface-rt backend={} surf0=0x{:08X} format={} halign_raw={} valign_raw={} size={}x{} pitch=0x{:X} rt_gpu=0x{:X} note=render-target-descriptor\n",
         backend_probe_mode.label(),
         surface[0],
@@ -303,6 +303,7 @@ fn write_triangle_probe_state(
 }
 
 fn encode_triangle_probe_batch(
+    submit_name: &'static str,
     batch_dwords: &mut [u32],
     warm: RenderWarmState,
     draw: TriangleDrawPrep,
@@ -676,21 +677,24 @@ fn encode_triangle_probe_batch(
             CLIP_MODE_ACCEPT_ALL
         } else {
             0
+        } | if backend_probe_mode.clip_api_d3d() {
+            1 << 30
+        } else {
+            0
+        } | if backend_probe_mode.enable_viewport_xy_clip() {
+            1 << 28
+        } else {
+            0
+        } | if backend_probe_mode.disable_clip_unit() {
+            0
+        } else {
+            1 << 31
         }
-            | if backend_probe_mode.clip_api_d3d() { 1 << 30 } else { 0 }
-            | if backend_probe_mode.enable_viewport_xy_clip() {
-                1 << 28
-            } else {
-                0
-            }
-            | if backend_probe_mode.disable_clip_unit() {
-                0
-            } else {
-                1 << 31
-            }
     };
     let point_width_raw = if batch_mode.point_raster() {
-        backend_probe_mode.point_width_raw_override().unwrap_or(0x200)
+        backend_probe_mode
+            .point_width_raw_override()
+            .unwrap_or(0x200)
     } else {
         0
     };
@@ -708,7 +712,11 @@ fn encode_triangle_probe_batch(
     let sf_viewport_transform_enable =
         !(batch_mode.screen_space_raster() || backend_probe_mode.disable_sf_viewport_transform());
     let sf_dw1 = (u32::from(sf_viewport_transform_enable) << 1) | (1 << 10);
-    let sf_dw2 = if backend_probe_mode.sf_deref_block_zero() { 0 } else { 1 << 29 };
+    let sf_dw2 = if backend_probe_mode.sf_deref_block_zero() {
+        0
+    } else {
+        1 << 29
+    };
     // SF.DW3[10:0] is PointWidth, and DW3[11] selects state-sourced width.
     // Use a deliberately large U8.3-ish value for point-list raster smoke
     // tests so a single center point should cover visible samples if SF/raster
@@ -747,6 +755,7 @@ fn encode_triangle_probe_batch(
         } else {
             0
         }
+        | ((backend_probe_mode.forced_raster_sample_count() & 0x7) << 18)
         | if backend_probe_mode.front_ccw() {
             1 << 21
         } else {
@@ -923,7 +932,9 @@ fn encode_triangle_probe_batch(
         | BackendProbeMode::RasterWmInputOaPointWidth1023
         | BackendProbeMode::RasterWmInputOaPointWidth1023NoWmPoint
         | BackendProbeMode::RasterWmInputOaPointWidth1023Scissor
-        | BackendProbeMode::RasterWmInputOaPointWidthVertex => {
+        | BackendProbeMode::RasterWmInputOaPointWidthVertex
+        | BackendProbeMode::RasterWmInputOaHammer
+        | BackendProbeMode::RasterWmInputOaScreenHammer => {
             pipeline.ps.meta.kernel.binding_table_entry_count
         }
         BackendProbeMode::PsBindingTableCountOne => {
@@ -1027,7 +1038,11 @@ fn encode_triangle_probe_batch(
             "intel/render: l3alloc-init device=0x{:04X} value=0x{:08X} profile={}\n",
             warm.device_id,
             l3alloc,
-            if device_is_gfx125(warm.device_id) { "gfx125-full-ways" } else { "adl-gfx12-default" },
+            if device_is_gfx125(warm.device_id) {
+                "gfx125-full-ways"
+            } else {
+                "adl-gfx12-default"
+            },
         );
     }
 
@@ -1226,11 +1241,11 @@ fn encode_triangle_probe_batch(
                     &mut cursor,
                     0,
                     0,
-                    SURFACE_FORMAT_R32G32B32A32_FLOAT,
+                    SURFACE_FORMAT_R32G32B32_FLOAT,
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_SRC,
-                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_1_FP,
                 )?;
             }
             StreamoutProofExperiment::PositionSlot1 => {
@@ -1250,11 +1265,11 @@ fn encode_triangle_probe_batch(
                     &mut cursor,
                     0,
                     0,
-                    SURFACE_FORMAT_R32G32B32A32_FLOAT,
+                    SURFACE_FORMAT_R32G32B32_FLOAT,
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_SRC,
-                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_1_FP,
                 )?;
             }
             StreamoutProofExperiment::HeaderAndPositionSlots01 => {
@@ -1334,19 +1349,15 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, 0)?;
     }
     log_batch_offset(cursor, "3DSTATE_VF");
-    let vf_geometry_distribution_enable =
-        if (mesa_simple_rect_stack || backend_probe_mode.force_vf_geometry_distribution())
-            && device_is_gfx125(warm.device_id)
-        {
-            1 << 12
-        } else {
-            0
-        };
-    push(
-        batch_dwords,
-        &mut cursor,
-        CMD_3DSTATE_VF | vf_geometry_distribution_enable,
-    )?;
+    let vf_geometry_distribution_enable = if (mesa_simple_rect_stack
+        || backend_probe_mode.force_vf_geometry_distribution())
+        && device_is_gfx125(warm.device_id)
+    {
+        1 << 12
+    } else {
+        0
+    };
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_VF | vf_geometry_distribution_enable)?;
     push(batch_dwords, &mut cursor, 0)?;
     log_batch_offset(cursor, "3DSTATE_VF_SGVS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_SGVS)?;
@@ -1639,7 +1650,7 @@ fn encode_triangle_probe_batch(
     if backend_probe_mode.sample_mask_before_clip() {
         log_batch_offset(cursor, "3DSTATE_MULTISAMPLE early-raster-gate");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_MULTISAMPLE)?;
-        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, backend_probe_mode.multisample_dw1())?;
         log_batch_offset(cursor, "3DSTATE_SAMPLE_MASK early-raster-gate");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_SAMPLE_MASK)?;
         push(batch_dwords, &mut cursor, 1)?;
@@ -1832,7 +1843,7 @@ fn encode_triangle_probe_batch(
     if !backend_probe_mode.sample_mask_before_clip() {
         log_batch_offset(cursor, "3DSTATE_MULTISAMPLE");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_MULTISAMPLE)?;
-        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, backend_probe_mode.multisample_dw1())?;
         log_batch_offset(cursor, "3DSTATE_SAMPLE_MASK");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_SAMPLE_MASK)?;
         push(batch_dwords, &mut cursor, 1)?;
@@ -2003,7 +2014,11 @@ fn encode_triangle_probe_batch(
         .and_then(|row| row.checked_add(artificial_marker_x.saturating_mul(4)))
         .ok_or("probe-artificial-marker-offset")?;
     let artificial_marker_post_offset = artificial_marker_pre_offset
-        .checked_add(if artificial_marker_x + 1 < draw.target_w { 4 } else { 0 })
+        .checked_add(if artificial_marker_x + 1 < draw.target_w {
+            4
+        } else {
+            0
+        })
         .ok_or("probe-artificial-marker-post-offset")?;
     if backend_probe_mode.artificial_fragment_markers() {
         log_batch_offset(cursor, "MI_STORE_DATA_IMM artificial-fragment-pre");
@@ -2169,7 +2184,7 @@ fn encode_triangle_probe_batch(
         wm_hz_op_dw3,
         wm_hz_op_dw4,
     );
-    intel_render_focus_log!(
+    intel_render_verbose_log!(
         "intel/render: probe-binding-table-pool base=0x{:X} base_dw=0x{:08X} size_dw=0x{:08X} mocs=0x{:X} enable={} ps_bt_ptr=0x{:X} bt_gpu=0x{:X} bt_entry0=0x{:08X} surf_gpu=0x{:X} contract=pool-relative\n",
         shader_layout.state_region_gpu_addr,
         binding_table_pool_base_dw,
@@ -2207,6 +2222,103 @@ fn encode_triangle_probe_batch(
         wm_hz_op_dw4,
         ps_extra_dw1,
     );
+    let ps_valid = (ps_extra_dw1 >> 31) & 0x1;
+    let ps_has_uav = (ps_extra_dw1 >> 2) & 0x1;
+    let ps_computes_stencil = (ps_extra_dw1 >> 5) & 0x1;
+    let ps_attribute_enable = (ps_extra_dw1 >> 8) & 0x1;
+    let ps_computed_depth = (ps_extra_dw1 >> 26) & 0x3;
+    let ps_kills = (ps_extra_dw1 >> 28) & 0x1;
+    let ps_blend_has_writeable_rt = (ps_blend_dw1 >> 30) & 0x1;
+    let wm_force_thread_dispatch = (wm_dw1 >> 19) & 0x3;
+    let wm_hz_op_active =
+        ((wm_hz_op_dw1 | wm_hz_op_dw2 | wm_hz_op_dw3 | wm_hz_op_dw4) != 0) as u32;
+    let wm_depth_test_enable = (wm_depth_stencil_dw1 >> 1) & 0x1;
+    let wm_stencil_test_enable = (wm_depth_stencil_dw1 >> 3) & 0x1;
+    let wm_depth_write_enable = (wm_depth_stencil_dw1 >> 28) & 0x1;
+    let dispatch_reason = if wm_force_thread_dispatch == 1 {
+        "force-thread-dispatch-off"
+    } else if ps_valid == 0 {
+        "ps-invalid"
+    } else if wm_force_thread_dispatch == 2 {
+        "force-thread-dispatch-on"
+    } else if wm_hz_op_active != 0 {
+        "wm-hz-op-active"
+    } else if ps_blend_has_writeable_rt != 0 {
+        "writeable-rt"
+    } else if ps_has_uav != 0 {
+        "ps-uav"
+    } else if ps_kills != 0 {
+        "ps-kill"
+    } else if ps_computed_depth != 0 && (wm_depth_test_enable != 0 || wm_depth_write_enable != 0)
+    {
+        "computed-depth"
+    } else if ps_computes_stencil != 0 && wm_stencil_test_enable != 0 {
+        "computed-stencil"
+    } else {
+        "no-ps-dispatch-qualifier"
+    };
+    let dispatch_armed = matches!(
+        dispatch_reason,
+        "force-thread-dispatch-on"
+            | "writeable-rt"
+            | "ps-uav"
+            | "ps-kill"
+            | "computed-depth"
+            | "computed-stencil"
+    ) as u32;
+    let ps_bary_coeffs = ((ps_extra_dw1
+        & (PS_EXTRA_REQUIRES_NONPERSPECTIVE_BARY_PLANE
+            | PS_EXTRA_REQUIRES_PERSPECTIVE_BARY_PLANE))
+        != 0) as u8;
+    let ps_source_depth_w =
+        ((ps_extra_dw1 & PS_EXTRA_REQUIRES_SOURCE_DEPTH_W_PLANE) != 0) as u8;
+    let no_varying_payload = (pipeline.ps.meta.num_varying_inputs == 0
+        && !ps_push_constant_enable
+        && ps_attribute_enable == 0
+        && ps_bary_coeffs == 0
+        && ps_source_depth_w == 0) as u8;
+    intel_render_focus_log!(
+        "intel/render: {} pre-ps-contract backend={} topo={} sbe[dw1=0x{:08X} read_offset={} read_len={} attrs={} force_off={} force_len={}] vue[vs_baked={} vs_prog={} vf_synth={}] wm[dw1=0x{:08X} stats={} bary=0x{:X} force_dispatch={} hz_active={} hz_sample_mask=0x{:X}] ps[dw3=0x{:08X} dw6=0x{:08X} dw7=0x{:08X} extra=0x{:08X} valid={} bt_count={} dispatch_bits={}{}{} push={} attr={} bary={} src_depth_w={} grf_start={} max_threads={}] rt[writeable={} bt_ptr=0x{:X} surf=0x{:X}] launch_qualifier={} dispatch_armed={} no_varying_payload={} note=pre-ps-frontier\n",
+        submit_name,
+        backend_probe_mode.label(),
+        primitive_topology_label(batch_mode.topology()),
+        sbe_dw1,
+        sbe_vertex_read_offset,
+        sbe_vertex_read_length,
+        sbe_num_sf_attrs,
+        front_end_contract.force_sbe_read_offset as u8,
+        front_end_contract.force_sbe_read_length as u8,
+        baked_vs_urb_output_length,
+        programmed_vs_urb_output_length,
+        vf_synthesized_vue as u8,
+        wm_dw1,
+        (wm_dw1 >> 31) & 0x1,
+        (wm_dw1 >> 11) & 0x3F,
+        wm_force_thread_dispatch,
+        wm_hz_op_active,
+        wm_hz_op_dw4 & 0xFFFF,
+        ps_dw3,
+        ps_dw6,
+        ps_dw7,
+        ps_extra_dw1,
+        ps_valid,
+        ps_binding_table_entry_count,
+        ps_dispatch_8,
+        ps_dispatch_16,
+        ps_dispatch_32,
+        ps_push_constant_enable as u8,
+        ps_attribute_enable,
+        ps_bary_coeffs,
+        ps_source_depth_w,
+        ps_grf_start,
+        ps_max_threads_per_psd,
+        ps_blend_has_writeable_rt,
+        binding_table_pointer_offset,
+        probe_state.surface_state_offset_bytes,
+        dispatch_reason,
+        dispatch_armed,
+        no_varying_payload,
+    );
     let clip_mode = (clip_dw2 >> 13) & 0x7;
     let api_mode = (clip_dw2 >> 30) & 0x1;
     let provoking_tri_fan = clip_dw2 & 0x3;
@@ -2222,7 +2334,7 @@ fn encode_triangle_probe_batch(
     let max_vp_idx = clip_dw3 & 0xF;
     let force_zero_rta_index = (clip_dw3 >> 5) & 0x1;
     let max_point_width_raw = (clip_dw3 >> 6) & 0x7FF;
-    intel_render_focus_log!(
+    intel_render_verbose_log!(
         "intel/render: probe-clip-decoded topo={} patchlist=0 gs_active=0 ClipMode={}({}) APIMode={}({}) GuardbandClipTestEnable={} ViewportXYClipTestEnable={} ClipEnable={} PerspectiveDivideDisable={} ForceClipMode={} EarlyCullEnable={} StatisticsEnable={} VertexSubPixelPrecisionSelect={} TriangleFanProvokingVertexSelect={} LineStripListProvokingVertexSelect={} TriangleStripListProvokingVertexSelect={} MaximumVPIndex={} ForceZeroRTAIndexEnable={} MaximumPointWidthRaw=0x{:X}\n",
         primitive_topology_label(batch_mode.topology()),
         clip_mode,
@@ -2244,7 +2356,7 @@ fn encode_triangle_probe_batch(
         force_zero_rta_index,
         max_point_width_raw,
     );
-    intel_render_focus_log!(
+    intel_render_verbose_log!(
         "intel/render: probe-sf-decoded ViewportTransformEnable={} StatisticsEnable={} LegacyGlobalDepthBiasEnable={} DerefBlockSize={}({}) LineWidth=0x{:X} PointWidth=0x{:X} PointWidthSource={} SmoothPointEnable={} LastPixelEnable={} TriangleStripListProvokingVertexSelect={} LineStripListProvokingVertexSelect={} TriangleFanProvokingVertexSelect={}\n",
         (sf_dw1 >> 1) & 0x1,
         (sf_dw1 >> 10) & 0x1,
@@ -2264,7 +2376,7 @@ fn encode_triangle_probe_batch(
         (sf_dw3 >> 27) & 0x3,
         (sf_dw3 >> 25) & 0x3,
     );
-    intel_render_focus_log!(
+    intel_render_verbose_log!(
         "intel/render: probe-raster-decoded sf_viewport=0x{:X} cc_viewport=0x{:X} scissor_ptr=0x{:X} cull={} fill_front={} fill_back={} front={} scissor_enable={} aa_enable={} smooth_point={} msaa_rast_enable={} msaa_rast_mode={} force_msaa={} forced_samples={} sample_mask=0x1\n",
         probe_state.sf_clip_viewport_offset_bytes,
         probe_state.cc_viewport_offset_bytes,
@@ -2281,13 +2393,30 @@ fn encode_triangle_probe_batch(
         (raster_dw1 >> 14) & 0x1,
         (raster_dw1 >> 18) & 0x7,
     );
-    intel_render_focus_log!(
+    if backend_probe_mode.raster_hammer() {
+        intel_render_verbose_log!(
+            "intel/render: probe-raster-hammer backend={} early_sample={} early_draw_rect={} scissor={} kill_pixel_off={} forced_ms={} dx_ms={} ps_bt_count={} sf_viewport_transform={} point_width_raw=0x{:X} clip_max_point_width_raw=0x{:X} wm_hz_sample_mask={}\n",
+            backend_probe_mode.label(),
+            backend_probe_mode.sample_mask_before_clip() as u8,
+            backend_probe_mode.draw_rect_before_clip() as u8,
+            backend_probe_mode.enable_raster_scissor() as u8,
+            backend_probe_mode.force_kill_pixel_off() as u8,
+            backend_probe_mode.force_multisample_raster() as u8,
+            backend_probe_mode.dx_multisample_raster() as u8,
+            ps_binding_table_entry_count,
+            ((sf_dw1 >> 1) & 0x1),
+            sf_dw3 & 0x7FF,
+            max_point_width_raw,
+            wm_hz_op_dw4 & 0xFFFF,
+        );
+    }
+    intel_render_verbose_log!(
         "intel/render: probe-prim-repl-decoded replication_count={} replica_mask=0x{:X} rtai0={}\n",
         primitive_replication_dw1 & 0xF,
         (primitive_replication_dw1 >> 16) & 0xFFFF,
         0,
     );
-    intel_render_focus_log!(
+    intel_render_verbose_log!(
         "intel/render: probe-handoff-decoded clip_out=sf vue_in_urb=1 baked_vs_urb_out_len={} programmed_vs_urb_out_len={} sbe_read_offset={} sbe_read_len={} ps_varyings={} streamout={}\n",
         baked_vs_urb_output_length,
         programmed_vs_urb_output_length,
@@ -2296,7 +2425,7 @@ fn encode_triangle_probe_batch(
         sbe_num_sf_attrs,
         batch_mode.streamout_enabled() as u8,
     );
-    intel_render_focus_log!(
+    intel_render_verbose_log!(
         "intel/render: probe-ps-payload-decoded backend={} push_constant_enable={} push_constant_bytes={} scratch=0x{:X} grf_start={} grf_used={} ps_extra=0x{:08X} attr_enable={} simple_hint={} src_depth={} src_w={} src_depth_w_coeff={} bary_coeffs={} wm_bary=0x{:X} ps_dispatch_bits={}{}{} does_not_prove=ps_thread_launch\n",
         backend_probe_mode.label(),
         ps_push_constant_enable as u8,
@@ -2319,7 +2448,7 @@ fn encode_triangle_probe_batch(
         ps_dispatch_16,
         ps_dispatch_32,
     );
-    intel_render_focus_log!(
+    intel_render_verbose_log!(
         "intel/render: probe-ps-grf-decoded backend={} baked_grf_start={} programmed_grf_start={} grf_used={} register_blocks_16={} max_threads_per_psd={} ps_dw6=0x{:08X} ps_dw7=0x{:08X} dispatch_bits={}{}{} does_not_prove=ps_thread_launch\n",
         backend_probe_mode.label(),
         pipeline.ps.meta.kernel.grf_start_register,
@@ -2605,7 +2734,11 @@ fn encode_minimal_streamout_proof_batch(
             "intel/render: streamout-l3alloc-init device=0x{:04X} value=0x{:08X} profile={}\n",
             warm.device_id,
             l3alloc,
-            if device_is_gfx125(warm.device_id) { "gfx125-full-ways" } else { "adl-gfx12-default" },
+            if device_is_gfx125(warm.device_id) {
+                "gfx125-full-ways"
+            } else {
+                "adl-gfx12-default"
+            },
         );
     }
 
