@@ -60,7 +60,7 @@ const VIDEO_NV12_BLACK_PROOF_LIFT: bool = false;
 const PRIMARY_BOOT_LOGO_JPEG: &[u8] = include_bytes!("../../logo.jpg");
 const PRIMARY_BOOT_HORIZON_STAMP_PNG: &[u8] = include_bytes!("../../HorizonServer.png");
 const PRIMARY_BOOT_LOGO_ENABLED: bool = true;
-const PRIMARY_BOOT_HORIZON_STAMP_ENABLED: bool = true;
+const PRIMARY_BOOT_HORIZON_STAMP_ENABLED: bool = false;
 const PRIMARY_BOOT_LOGO_DECODE_MODE: PrimaryBootLogoDecodeMode =
     PrimaryBootLogoDecodeMode::ZuneJpeg;
 const PRIMARY_BOOT_LOGO_WAIT_TIMEOUT_MS: u64 = 5000;

@@ -7,7 +7,8 @@ use super::super::{
     print_shell_line, set_matrix_target_active, switch_matrix_target_slot,
 };
 use crate::intel::media::hw_vid::{
-    H264_BOOT_PROBE_STREAM_PATH, H264PlaybackCacheMode, H264PlaybackOptions,
+    H264_BOOT_PROBE_STREAM_PATH, H264_MEDIA_URL_PROBE_URL, H264PlaybackCacheMode,
+    H264PlaybackOptions,
 };
 use crate::shell2::shell2_cmd::ParseOutcome;
 
@@ -20,27 +21,57 @@ const DEFAULT_DIAGNOSTICS: bool = false;
 const DEFAULT_NORESET_LITE: bool = true;
 const DEFAULT_LOOP: bool = false;
 
+#[derive(Copy, Clone)]
+enum VidSource {
+    TrueosFs,
+    Online,
+}
+
+impl VidSource {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::TrueosFs => "trueosfs",
+            Self::Online => "online",
+        }
+    }
+
+    const fn asset(self) -> &'static str {
+        match self {
+            Self::TrueosFs => H264_BOOT_PROBE_STREAM_PATH,
+            Self::Online => H264_MEDIA_URL_PROBE_URL,
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+struct VidCommand {
+    source: VidSource,
+    options: H264PlaybackOptions,
+}
+
 pub(crate) fn try_parse(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
     rest: &str,
 ) -> ParseOutcome {
     let mut args = rest.split_whitespace();
-    let Some(options) = parse_options(io, &mut args) else {
+    let Some(command) = parse_options(io, &mut args) else {
         return ParseOutcome::Handled;
     };
+    let options = command.options;
 
     let active_target = matrix_target_for_backend(io);
     let target = switch_matrix_target_slot(&active_target, VID_SLOT);
     set_matrix_target_active(&target, true);
-    match vid_task(target.clone(), options) {
+    match vid_task(target.clone(), command) {
         Ok(token) => {
             spawner.spawn(token);
             print_matrix_target_line(
                 &target,
                 alloc::format!(
-                    "vid: queued source=trueosfs asset={} fps={} mode={} cache={} study={} fill={} diag={} warm={} loop={}",
-                    H264_BOOT_PROBE_STREAM_PATH,
+                    "vid: queued source={} asset={} fps={} mode={} cache={} study={} fill={} diag={} warm={} loop={}",
+                    command.source.name(),
+                    command.source.asset(),
                     options.fps(),
                     options.name(),
                     options.cache_mode().name(),
@@ -65,7 +96,7 @@ pub(crate) fn try_parse(
 fn parse_options(
     io: &'static dyn ShellBackend2,
     args: &mut SplitWhitespace<'_>,
-) -> Option<H264PlaybackOptions> {
+) -> Option<VidCommand> {
     let fps = match args.next() {
         Some(raw) => match raw.parse::<u16>() {
             Ok(value @ 1..=144) => value,
@@ -88,6 +119,7 @@ fn parse_options(
     let mut diagnostics = DEFAULT_DIAGNOSTICS;
     let mut noreset_lite = DEFAULT_NORESET_LITE;
     let mut loop_playback = DEFAULT_LOOP;
+    let mut source = VidSource::TrueosFs;
 
     for arg in args {
         if arg.eq_ignore_ascii_case("reverse") || arg.eq_ignore_ascii_case("rev") {
@@ -125,11 +157,20 @@ fn parse_options(
         {
             print_shell_line(
                 io,
-                "vid: browser/web source removed; use Surf for URLs, boot media-url-probe for network video",
+                "vid: browser/web source removed; use Surf for browsing or `vid <fps> online` for the built-in network video probe",
             );
             usage(io);
             return None;
-        } else if arg.eq_ignore_ascii_case("fs") || arg.eq_ignore_ascii_case("trueosfs") {
+        } else if arg.eq_ignore_ascii_case("fs")
+            || arg.eq_ignore_ascii_case("trueosfs")
+            || arg.eq_ignore_ascii_case("local")
+        {
+            source = VidSource::TrueosFs;
+        } else if arg.eq_ignore_ascii_case("online")
+            || arg.eq_ignore_ascii_case("net")
+            || arg.eq_ignore_ascii_case("url")
+        {
+            source = VidSource::Online;
         } else if let Some(raw) = arg.strip_prefix("cache=") {
             cache = parse_cache(raw)?;
             cache_set = true;
@@ -153,16 +194,19 @@ fn parse_options(
         cache = H264PlaybackCacheMode::Off;
     }
 
-    Some(H264PlaybackOptions::new(
-        fps,
-        reverse,
-        cache,
-        study,
-        fill,
-        diagnostics,
-        noreset_lite,
-        loop_playback,
-    ))
+    Some(VidCommand {
+        source,
+        options: H264PlaybackOptions::new(
+            fps,
+            reverse,
+            cache,
+            study,
+            fill,
+            diagnostics,
+            noreset_lite,
+            loop_playback,
+        ),
+    })
 }
 
 fn parse_cache(raw: &str) -> Option<H264PlaybackCacheMode> {
@@ -180,21 +224,23 @@ fn parse_cache(raw: &str) -> Option<H264PlaybackCacheMode> {
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "vid: usage `vid <fps 1..144> [trueosfs] [loop|once] [reverse|forward] [cache=full|tail|off] [study] [fill] [quiet|debug] [warm|cold]`",
+        "vid: usage `vid <fps 1..144> [trueosfs|online] [loop|once] [reverse|forward] [cache=full|tail|off] [study] [fill] [quiet|debug] [warm|cold]`",
     );
     print_shell_line(
         io,
-        "vid: examples `vid 60`, `vid 60 loop`, `vid 60 debug cold`, `vid 15 reverse`",
+        "vid: examples `vid 60`, `vid 60 online`, `vid 60 loop`, `vid 60 debug cold`, `vid 15 reverse`",
     );
 }
 
 #[embassy_executor::task(pool_size = 1)]
-async fn vid_task(target: MatrixTarget, options: H264PlaybackOptions) {
+async fn vid_task(target: MatrixTarget, command: VidCommand) {
+    let options = command.options;
     print_matrix_target_line(
         &target,
         alloc::format!(
-            "vid: start source=trueosfs asset={} fps={} mode={} cache={} study={} fill={} diag={} warm={} loop={}",
-            H264_BOOT_PROBE_STREAM_PATH,
+            "vid: start source={} asset={} fps={} mode={} cache={} study={} fill={} diag={} warm={} loop={}",
+            command.source.name(),
+            command.source.asset(),
             options.fps(),
             options.name(),
             options.cache_mode().name(),
@@ -210,7 +256,14 @@ async fn vid_task(target: MatrixTarget, options: H264PlaybackOptions) {
     let mut lap = 0usize;
     loop {
         lap = lap.saturating_add(1);
-        let result = crate::intel::media::hw_vid::run_shell_vid_playback(options).await;
+        let result = match command.source {
+            VidSource::TrueosFs => {
+                crate::intel::media::hw_vid::run_shell_vid_playback(options).await
+            }
+            VidSource::Online => {
+                crate::intel::media::hw_vid::run_online_vid_playback(options).await
+            }
+        };
         match result {
             Ok(report) => print_matrix_target_line(
                 &target,

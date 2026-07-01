@@ -29,20 +29,8 @@ const H264_BROWSER_INNERTUBE_TIMEOUT_MS: u64 = 45_000;
 const H264_BROWSER_INNERTUBE_MAX_BYTES: usize = 4 * 1024 * 1024;
 const H264_BROWSER_SABR_PROBE_TIMEOUT_MS: u64 = 30_000;
 const H264_BROWSER_SABR_PROBE_BYTES: usize = 64 * 1024;
-const H264_MEDIA_URL_BOOT_PROBE_ENABLED: bool = true;
-const H264_MEDIA_URL_BOOT_PROBE_DELAY_MS: u64 = 6_000;
-const H264_MEDIA_URL_BOOT_PROBE_URL: &str =
+pub(crate) const H264_MEDIA_URL_PROBE_URL: &str =
     "https://docs.evostream.com/sample_content/assets/bun33s.mp4";
-const H264_MEDIA_URL_BOOT_PROBE_OPTIONS: H264PlaybackOptions = H264PlaybackOptions {
-    fps: 25,
-    reverse_after_forward: false,
-    cache_mode: H264PlaybackCacheMode::Off,
-    stripe_study: false,
-    show_cache_fill: false,
-    diagnostics: false,
-    noreset_lite: true,
-    loop_playback: false,
-};
 pub(crate) const H264_BOOT_PROBE_STREAM_PATH: &str = "x31_head_movie.annexb.h264";
 
 #[derive(Copy, Clone, Debug)]
@@ -346,55 +334,6 @@ pub(crate) async fn hw_vid_probe_task() {
     );
 }
 
-#[embassy_executor::task]
-pub(crate) async fn hw_vid_media_url_probe_task() {
-    if !H264_MEDIA_URL_BOOT_PROBE_ENABLED {
-        crate::log!("intel/hw_vid: media-url-probe disabled\n");
-        return;
-    }
-    if !crate::intel::has_media_decode_engine() {
-        crate::log!("intel/hw_vid: media-url-probe skipped reason=no-media-decode-engine\n");
-        return;
-    }
-
-    Timer::after(EmbassyDuration::from_millis(H264_MEDIA_URL_BOOT_PROBE_DELAY_MS)).await;
-    crate::log!(
-        "intel/hw_vid: media-url-probe begin fps={} url={}\n",
-        H264_MEDIA_URL_BOOT_PROBE_OPTIONS.fps(),
-        H264_MEDIA_URL_BOOT_PROBE_URL
-    );
-    match run_media_url_playback(
-        H264_MEDIA_URL_BOOT_PROBE_URL,
-        H264_MEDIA_URL_BOOT_PROBE_OPTIONS,
-        "media-url-probe",
-        "media-url-probe",
-    )
-    .await
-    {
-        Ok(report) => crate::log!(
-            "intel/hw_vid: media-url-probe done submitted={} target_fps={} elapsed_ms={} effective_fps={}.{:02} waited={} late={} wait_ms={} avg_decode_us={} max_decode_us={} avg_process_us={} avg_present_us={} url={}\n",
-            report.submitted,
-            report.target_fps,
-            report.elapsed_ms,
-            report.effective_fps_x100 / 100,
-            report.effective_fps_x100 % 100,
-            report.waited_frames,
-            report.late_frames,
-            report.total_wait_ms,
-            report.avg_decode_us,
-            report.max_decode_us,
-            report.avg_process_us,
-            report.avg_present_us,
-            H264_MEDIA_URL_BOOT_PROBE_URL
-        ),
-        Err(err) => crate::log!(
-            "intel/hw_vid: media-url-probe failed err={} url={}\n",
-            err,
-            H264_MEDIA_URL_BOOT_PROBE_URL
-        ),
-    }
-}
-
 pub(crate) async fn run_shell_vid_playback(
     options: H264PlaybackOptions,
 ) -> Result<H264PlaybackReport, &'static str> {
@@ -415,6 +354,13 @@ pub(crate) async fn run_shell_vid_playback(
     crate::intel::hw_pic::set_detailed_logging_enabled(old_hw_pic_logging);
     crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(old_surface_probes);
     Ok(report)
+}
+
+pub(crate) async fn run_online_vid_playback(
+    options: H264PlaybackOptions,
+) -> Result<H264PlaybackReport, &'static str> {
+    run_media_url_playback(H264_MEDIA_URL_PROBE_URL, options, "media-url-shell", "media-url-shell")
+        .await
 }
 
 async fn run_media_url_playback(

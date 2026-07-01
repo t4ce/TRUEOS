@@ -161,8 +161,10 @@ const PRIMARY_USE_MI_SCANOUT_PROOF: bool = false;
 const PRIMARY_USE_3D_NO_DRAW_PROBE: bool = false;
 const PRIMARY_USE_DRAW_PATH_BOOT_ONCE: bool = true;
 const PRIMARY_BOOT_3D_PROBES_ENABLED: bool = true;
-const PRIMARY_DISABLE_RENDER_BRINGUP: bool = false;
-const GPGPU_SUBMIT_WHEN_PRIMARY_RENDER_DISABLED: bool = true;
+// Temporary one-boot quiet switch: keep RCS render/GPGPU probes off while
+// validating the rest of boot without render-engine traffic.
+const PRIMARY_DISABLE_RENDER_BRINGUP: bool = true;
+const GPGPU_SUBMIT_WHEN_PRIMARY_RENDER_DISABLED: bool = false;
 const MI_STRIPE_COUNT: usize = 12;
 const MI_STRIPE_WIDTH_PX: usize = 4;
 const MI_STRIPE_X_STEP_PX: u32 = 1;

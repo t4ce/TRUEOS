@@ -58,7 +58,6 @@ define_started_flags!(
     INTEL_CURSOR_SERVICE_STARTED,
     HW_PIC_SERVICE_STARTED,
     HW_VID_PROBE_STARTED,
-    HW_VID_MEDIA_URL_PROBE_STARTED,
     HW_LOGO_PRESENT_TASK_STARTED,
     VIRTIO_GPU_UI_STARTED,
     INTEL_HDA_AUDIO_DEMO_STARTED,
@@ -479,10 +478,6 @@ fn spawn_hw_pic_service(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_hw_vid_probe_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::intel::hw_vid_probe_task_spawn())
-}
-
-fn spawn_hw_vid_media_url_probe_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::intel::hw_vid_media_url_probe_task_spawn())
 }
 
 fn spawn_hw_logo_present_task(spawner: Spawner) -> SpawnAttempt {
@@ -1123,7 +1118,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 57 + cfg!(feature = "trueos_rdp") as usize;
+const TASK_COUNT: usize = 56 + cfg!(feature = "trueos_rdp") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1302,13 +1297,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         intel_media_engine_gate,
         &HW_VID_PROBE_STARTED,
         spawn_hw_vid_probe_task,
-    ),
-    TaskSpec::enabled_gated(
-        "hw_vid_media_url_probe_task",
-        crate::r::readiness::NET_V4_CONFIGURED,
-        intel_media_engine_gate,
-        &HW_VID_MEDIA_URL_PROBE_STARTED,
-        spawn_hw_vid_media_url_probe_task,
     ),
     TaskSpec::enabled_gated(
         "hw_logo_present_task",
