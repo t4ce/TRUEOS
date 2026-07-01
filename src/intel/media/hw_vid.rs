@@ -526,6 +526,7 @@ async fn h264_resolve_youtube_innertube_candidate(url: &str) -> Result<String, &
         url_query_encode(probe.api_key.as_str())
     );
 
+    let mut deferred_n_url: Option<String> = None;
     for profile in
         youtube_innertube_profiles(probe.client_name.as_str(), probe.client_version.as_str())
     {
@@ -581,7 +582,25 @@ async fn h264_resolve_youtube_innertube_candidate(url: &str) -> Result<String, &
             probe.video_id.as_str(),
             profile.label,
         ) {
-            Ok(url) => return Ok(url),
+            Ok(url) => {
+                if youtube_url_has_query_field(url.as_str(), "n") {
+                    crate::log!(
+                        "intel/hw_vid: youtube-innertube direct-h264 deferred profile={} reason=n-param-needs-transform video_id={} url={}\n",
+                        profile.label,
+                        probe.video_id,
+                        url
+                    );
+                    deferred_n_url.get_or_insert(url);
+                    continue;
+                }
+                crate::log!(
+                    "intel/hw_vid: youtube-innertube direct-h264 selected profile={} n_param=0 video_id={} url={}\n",
+                    profile.label,
+                    probe.video_id,
+                    url
+                );
+                return Ok(url);
+            }
             Err(err) => {
                 crate::log!(
                     "intel/hw_vid: youtube-innertube profile miss profile={} err={} video_id={}\n",
@@ -591,6 +610,14 @@ async fn h264_resolve_youtube_innertube_candidate(url: &str) -> Result<String, &
                 );
             }
         }
+    }
+    if let Some(url) = deferred_n_url {
+        crate::log!(
+            "intel/hw_vid: youtube-innertube direct-h264 selected profile=deferred-web n_param=1 action=fetch-to-confirm-or-need-n-transform video_id={} url={}\n",
+            probe.video_id,
+            url
+        );
+        return Ok(url);
     }
     Err("browser media innertube no direct h264")
 }
@@ -960,6 +987,23 @@ fn query_field(query: &str, key: &str) -> Option<String> {
     None
 }
 
+fn youtube_url_has_query_field(url: &str, key: &str) -> bool {
+    let Some((_, after_query)) = url.split_once('?') else {
+        return false;
+    };
+    let query = after_query
+        .split_once('#')
+        .map(|(query, _)| query)
+        .unwrap_or(after_query);
+    query.split('&').any(|part| {
+        let raw_key = part
+            .split_once('=')
+            .map(|(raw_key, _)| raw_key)
+            .unwrap_or(part);
+        url_decode_component(raw_key).as_str() == key
+    })
+}
+
 fn url_decode_component(value: &str) -> String {
     let bytes = value.as_bytes();
     let mut out = Vec::new();
@@ -1063,6 +1107,7 @@ fn hex_prefix(bytes: &[u8], max_len: usize) -> String {
 }
 
 async fn h264_fetch_browser_media_candidate(url: &str) -> Result<Vec<u8>, &'static str> {
+    let youtube_n_param = youtube_url_has_query_field(url, "n");
     let profiles = [
         "browser-range",
         "plain-range",
@@ -1074,10 +1119,11 @@ async fn h264_fetch_browser_media_candidate(url: &str) -> Result<Vec<u8>, &'stat
     for profile in profiles {
         let started = EmbassyInstant::now();
         crate::log!(
-            "intel/hw_vid: browser-media fetch begin profile={} timeout_ms={} max_bytes={} url={}\n",
+            "intel/hw_vid: browser-media fetch begin profile={} timeout_ms={} max_bytes={} youtube_n_param={} url={}\n",
             profile,
             H264_BROWSER_MEDIA_FETCH_TIMEOUT_MS,
             H264_BROWSER_MEDIA_FETCH_MAX_BYTES,
+            youtube_n_param as u8,
             url
         );
         match crate::r::net::https::get_browser_media_bytes_profile_shared(
@@ -1115,8 +1161,9 @@ async fn h264_fetch_browser_media_candidate(url: &str) -> Result<Vec<u8>, &'stat
         }
     }
     crate::log!(
-        "intel/hw_vid: browser-media fetch exhausted profiles={} action=check-url-signature-or-n-transform url={}\n",
+        "intel/hw_vid: browser-media fetch exhausted profiles={} youtube_n_param={} action=check-url-signature-or-n-transform url={}\n",
         profiles.len(),
+        youtube_n_param as u8,
         url
     );
     Err("browser media fetch failed")
@@ -1143,11 +1190,27 @@ struct Mp4SampleRef {
     keyframe: bool,
 }
 
+struct Mp4AvcTrackInfo {
+    track_id: u32,
+    length_size: usize,
+    sps: Vec<Vec<u8>>,
+    pps: Vec<Vec<u8>>,
+}
+
 struct Mp4AvcTrack {
+    track_id: u32,
     length_size: usize,
     sps: Vec<Vec<u8>>,
     pps: Vec<Vec<u8>>,
     samples: Vec<Mp4SampleRef>,
+}
+
+struct Mp4Tfhd {
+    track_id: u32,
+    flags: u32,
+    base_data_offset: Option<u64>,
+    default_sample_size: Option<usize>,
+    default_sample_flags: Option<u32>,
 }
 
 fn mp4_read_u16(data: &[u8], offset: usize) -> Option<u16> {
@@ -1303,6 +1366,46 @@ fn mp4_parse_stsd_avc1(
     Err("mp4 stsd has no avc1 entry")
 }
 
+fn mp4_parse_tkhd_track_id(data: &[u8], tkhd: Mp4Box) -> Result<u32, &'static str> {
+    let version = *data.get(tkhd.payload_start).ok_or("mp4 tkhd too short")?;
+    let track_id_offset = if version == 1 {
+        tkhd.payload_start + 20
+    } else {
+        tkhd.payload_start + 12
+    };
+    mp4_read_u32(data, track_id_offset).ok_or("mp4 tkhd missing track id")
+}
+
+fn mp4_parse_avc_track_info(
+    data: &[u8],
+    trak: Mp4Box,
+) -> Result<Option<Mp4AvcTrackInfo>, &'static str> {
+    let Some(mdia) = mp4_find_child(data, trak.payload_start, trak.end, *b"mdia") else {
+        return Ok(None);
+    };
+    let Some(hdlr) = mp4_find_child(data, mdia.payload_start, mdia.end, *b"hdlr") else {
+        return Ok(None);
+    };
+    if mp4_fourcc(data, hdlr.payload_start + 8) != Some(*b"vide") {
+        return Ok(None);
+    }
+    let tkhd = mp4_find_child(data, trak.payload_start, trak.end, *b"tkhd")
+        .ok_or("mp4 video track missing tkhd")?;
+    let minf = mp4_find_child(data, mdia.payload_start, mdia.end, *b"minf")
+        .ok_or("mp4 video track missing minf")?;
+    let stbl = mp4_find_child(data, minf.payload_start, minf.end, *b"stbl")
+        .ok_or("mp4 video track missing stbl")?;
+    let stsd = mp4_find_child(data, stbl.payload_start, stbl.end, *b"stsd")
+        .ok_or("mp4 video track missing stsd")?;
+    let (length_size, sps, pps) = mp4_parse_stsd_avc1(data, stsd)?;
+    Ok(Some(Mp4AvcTrackInfo {
+        track_id: mp4_parse_tkhd_track_id(data, tkhd)?,
+        length_size,
+        sps,
+        pps,
+    }))
+}
+
 fn mp4_parse_stsz(data: &[u8], stsz: Mp4Box) -> Result<Vec<usize>, &'static str> {
     let sample_size =
         mp4_read_u32(data, stsz.payload_start + 4).ok_or("mp4 stsz missing sample size")? as usize;
@@ -1425,21 +1528,15 @@ fn mp4_build_samples(
 }
 
 fn mp4_parse_avc_track(data: &[u8], trak: Mp4Box) -> Result<Option<Mp4AvcTrack>, &'static str> {
-    let Some(mdia) = mp4_find_child(data, trak.payload_start, trak.end, *b"mdia") else {
+    let Some(info) = mp4_parse_avc_track_info(data, trak)? else {
         return Ok(None);
     };
-    let Some(hdlr) = mp4_find_child(data, mdia.payload_start, mdia.end, *b"hdlr") else {
-        return Ok(None);
-    };
-    if mp4_fourcc(data, hdlr.payload_start + 8) != Some(*b"vide") {
-        return Ok(None);
-    }
+    let mdia = mp4_find_child(data, trak.payload_start, trak.end, *b"mdia")
+        .ok_or("mp4 video track missing mdia")?;
     let minf = mp4_find_child(data, mdia.payload_start, mdia.end, *b"minf")
         .ok_or("mp4 video track missing minf")?;
     let stbl = mp4_find_child(data, minf.payload_start, minf.end, *b"stbl")
         .ok_or("mp4 video track missing stbl")?;
-    let stsd = mp4_find_child(data, stbl.payload_start, stbl.end, *b"stsd")
-        .ok_or("mp4 video track missing stsd")?;
     let stsz = mp4_find_child(data, stbl.payload_start, stbl.end, *b"stsz")
         .ok_or("mp4 video track missing stsz")?;
     let stsc_box = mp4_find_child(data, stbl.payload_start, stbl.end, *b"stsc")
@@ -1447,7 +1544,6 @@ fn mp4_parse_avc_track(data: &[u8], trak: Mp4Box) -> Result<Option<Mp4AvcTrack>,
     let offset_box = mp4_find_child(data, stbl.payload_start, stbl.end, *b"stco")
         .or_else(|| mp4_find_child(data, stbl.payload_start, stbl.end, *b"co64"))
         .ok_or("mp4 video track missing chunk offsets")?;
-    let (length_size, sps, pps) = mp4_parse_stsd_avc1(data, stsd)?;
     let sample_sizes = mp4_parse_stsz(data, stsz)?;
     let stsc = mp4_parse_stsc(data, stsc_box)?;
     let chunk_offsets = mp4_parse_chunk_offsets(data, offset_box)?;
@@ -1464,11 +1560,197 @@ fn mp4_parse_avc_track(data: &[u8], trak: Mp4Box) -> Result<Option<Mp4AvcTrack>,
         data.len(),
     )?;
     Ok(Some(Mp4AvcTrack {
-        length_size,
-        sps,
-        pps,
+        track_id: info.track_id,
+        length_size: info.length_size,
+        sps: info.sps,
+        pps: info.pps,
         samples,
     }))
+}
+
+fn mp4_parse_tfhd(data: &[u8], tfhd: Mp4Box) -> Result<Mp4Tfhd, &'static str> {
+    let flags =
+        mp4_read_u32(data, tfhd.payload_start).ok_or("mp4 tfhd missing flags")? & 0x00ff_ffff;
+    let track_id = mp4_read_u32(data, tfhd.payload_start + 4).ok_or("mp4 tfhd missing track id")?;
+    let mut cursor = tfhd.payload_start + 8;
+    let base_data_offset = if flags & 0x000001 != 0 {
+        let value = mp4_read_u64(data, cursor).ok_or("mp4 tfhd missing base data offset")?;
+        cursor = cursor.saturating_add(8);
+        Some(value)
+    } else {
+        None
+    };
+    if flags & 0x000002 != 0 {
+        cursor = cursor.saturating_add(4);
+    }
+    if flags & 0x000008 != 0 {
+        cursor = cursor.saturating_add(4);
+    }
+    let default_sample_size = if flags & 0x000010 != 0 {
+        let value =
+            mp4_read_u32(data, cursor).ok_or("mp4 tfhd missing default sample size")? as usize;
+        cursor = cursor.saturating_add(4);
+        Some(value)
+    } else {
+        None
+    };
+    let default_sample_flags = if flags & 0x000020 != 0 {
+        Some(mp4_read_u32(data, cursor).ok_or("mp4 tfhd missing default sample flags")?)
+    } else {
+        None
+    };
+    Ok(Mp4Tfhd {
+        track_id,
+        flags,
+        base_data_offset,
+        default_sample_size,
+        default_sample_flags,
+    })
+}
+
+fn mp4_sample_flags_keyframe(flags: u32) -> bool {
+    flags == 0 || (flags & 0x0001_0000) == 0
+}
+
+fn mp4_parse_trun_samples(
+    data: &[u8],
+    moof: Mp4Box,
+    trun: Mp4Box,
+    tfhd: &Mp4Tfhd,
+    fallback_data_offset: usize,
+) -> Result<Vec<Mp4SampleRef>, &'static str> {
+    let flags =
+        mp4_read_u32(data, trun.payload_start).ok_or("mp4 trun missing flags")? & 0x00ff_ffff;
+    let sample_count =
+        mp4_read_u32(data, trun.payload_start + 4).ok_or("mp4 trun missing sample count")? as usize;
+    let mut cursor = trun.payload_start + 8;
+    let mut data_offset = fallback_data_offset as i64;
+    if flags & 0x000001 != 0 {
+        let raw = mp4_read_u32(data, cursor).ok_or("mp4 trun missing data offset")?;
+        cursor = cursor.saturating_add(4);
+        let signed = i32::from_be_bytes(raw.to_be_bytes()) as i64;
+        let base = tfhd
+            .base_data_offset
+            .unwrap_or(if tfhd.flags & 0x020000 != 0 {
+                moof.start as u64
+            } else {
+                moof.start as u64
+            }) as i64;
+        data_offset = base.saturating_add(signed);
+    }
+    let first_sample_flags = if flags & 0x000004 != 0 {
+        let value = mp4_read_u32(data, cursor).ok_or("mp4 trun missing first sample flags")?;
+        cursor = cursor.saturating_add(4);
+        Some(value)
+    } else {
+        None
+    };
+
+    let has_duration = flags & 0x000100 != 0;
+    let has_size = flags & 0x000200 != 0;
+    let has_flags = flags & 0x000400 != 0;
+    let has_composition_time = flags & 0x000800 != 0;
+    let mut sample_offset =
+        usize::try_from(data_offset).map_err(|_| "mp4 trun negative data offset")?;
+    let mut samples = Vec::with_capacity(sample_count);
+    for index in 0..sample_count {
+        if has_duration {
+            cursor = cursor.saturating_add(4);
+        }
+        let size = if has_size {
+            let value = mp4_read_u32(data, cursor).ok_or("mp4 trun missing sample size")? as usize;
+            cursor = cursor.saturating_add(4);
+            value
+        } else {
+            tfhd.default_sample_size
+                .ok_or("mp4 trun missing default sample size")?
+        };
+        let sample_flags = if has_flags {
+            let value = mp4_read_u32(data, cursor).ok_or("mp4 trun missing sample flags")?;
+            cursor = cursor.saturating_add(4);
+            value
+        } else if index == 0 {
+            first_sample_flags
+                .or(tfhd.default_sample_flags)
+                .unwrap_or(0)
+        } else {
+            tfhd.default_sample_flags.unwrap_or(0)
+        };
+        if has_composition_time {
+            cursor = cursor.saturating_add(4);
+        }
+        let sample_end = sample_offset
+            .checked_add(size)
+            .ok_or("mp4 trun sample offset overflow")?;
+        if sample_end > data.len() {
+            return Err("mp4 trun sample outside file");
+        }
+        samples.push(Mp4SampleRef {
+            offset: sample_offset,
+            size,
+            keyframe: mp4_sample_flags_keyframe(sample_flags),
+        });
+        sample_offset = sample_end;
+    }
+    Ok(samples)
+}
+
+fn mp4_find_following_mdat(data: &[u8], cursor: usize) -> Option<Mp4Box> {
+    let mut cursor = cursor;
+    while cursor + 8 <= data.len() {
+        let b = mp4_next_box(data, cursor, data.len())?;
+        if b.typ == *b"mdat" {
+            return Some(b);
+        }
+        cursor = b.end;
+    }
+    None
+}
+
+fn mp4_parse_fragmented_samples(
+    data: &[u8],
+    track_id: u32,
+) -> Result<Vec<Mp4SampleRef>, &'static str> {
+    let mut samples = Vec::new();
+    let mut cursor = 0usize;
+    while cursor + 8 <= data.len() {
+        let Some(moof) = mp4_next_box(data, cursor, data.len()) else {
+            break;
+        };
+        if moof.typ != *b"moof" {
+            cursor = moof.end;
+            continue;
+        }
+        let fallback_data_offset = mp4_find_following_mdat(data, moof.end)
+            .map(|mdat| mdat.payload_start)
+            .ok_or("mp4 fragment missing following mdat")?;
+        let trafs = mp4_collect_children(data, moof.payload_start, moof.end, *b"traf");
+        for traf in trafs {
+            let Some(tfhd_box) = mp4_find_child(data, traf.payload_start, traf.end, *b"tfhd")
+            else {
+                continue;
+            };
+            let tfhd = mp4_parse_tfhd(data, tfhd_box)?;
+            if tfhd.track_id != track_id {
+                continue;
+            }
+            let truns = mp4_collect_children(data, traf.payload_start, traf.end, *b"trun");
+            for trun in truns {
+                samples.extend(mp4_parse_trun_samples(
+                    data,
+                    moof,
+                    trun,
+                    &tfhd,
+                    fallback_data_offset,
+                )?);
+            }
+        }
+        cursor = moof.end;
+    }
+    if samples.is_empty() {
+        return Err("mp4 fragmented video track has no samples");
+    }
+    Ok(samples)
 }
 
 fn mp4_emit_annexb_nal(out: &mut Vec<u8>, nal: &[u8]) {
@@ -1476,71 +1758,101 @@ fn mp4_emit_annexb_nal(out: &mut Vec<u8>, nal: &[u8]) {
     out.extend_from_slice(nal);
 }
 
+fn mp4_emit_track_annexb(
+    data: &[u8],
+    track: &Mp4AvcTrack,
+    mode: &str,
+) -> Result<Vec<u8>, &'static str> {
+    let mut out = Vec::with_capacity(data.len().min(128 * 1024 * 1024));
+    for sps in track.sps.as_slice() {
+        mp4_emit_annexb_nal(&mut out, sps.as_slice());
+    }
+    for pps in track.pps.as_slice() {
+        mp4_emit_annexb_nal(&mut out, pps.as_slice());
+    }
+    let mut samples_emitted = 0usize;
+    for sample in track.samples.as_slice() {
+        if sample.keyframe {
+            for sps in track.sps.as_slice() {
+                mp4_emit_annexb_nal(&mut out, sps.as_slice());
+            }
+            for pps in track.pps.as_slice() {
+                mp4_emit_annexb_nal(&mut out, pps.as_slice());
+            }
+        }
+        let sample_end = sample.offset + sample.size;
+        let mut cursor = sample.offset;
+        while cursor + track.length_size <= sample_end {
+            let nal_len = match track.length_size {
+                1 => data[cursor] as usize,
+                2 => mp4_read_u16(data, cursor).ok_or("mp4 sample truncated nal length")? as usize,
+                4 => mp4_read_u32(data, cursor).ok_or("mp4 sample truncated nal length")? as usize,
+                _ => return Err("mp4 unsupported avc nal length size"),
+            };
+            cursor = cursor.saturating_add(track.length_size);
+            if nal_len == 0 {
+                continue;
+            }
+            let nal_end = cursor
+                .checked_add(nal_len)
+                .ok_or("mp4 nal length overflow")?;
+            if nal_end > sample_end {
+                return Err("mp4 sample nal outside sample");
+            }
+            mp4_emit_annexb_nal(&mut out, &data[cursor..nal_end]);
+            cursor = nal_end;
+        }
+        samples_emitted += 1;
+    }
+    if out.is_empty() || samples_emitted == 0 {
+        return Err("mp4 avc track produced no annexb");
+    }
+    crate::log!(
+        "intel/hw_vid: browser-media mp4-demux track=video codec=avc1 mode={} track_id={} length_size={} samples={} sps={} pps={} annexb_bytes={} first_box={}\n",
+        mode,
+        track.track_id,
+        track.length_size,
+        samples_emitted,
+        track.sps.len(),
+        track.pps.len(),
+        out.len(),
+        mp4_fourcc_name(mp4_fourcc(data, 4).unwrap_or(*b"????")).as_str()
+    );
+    Ok(out)
+}
+
 fn mp4_avc1_to_annexb(data: &[u8]) -> Result<Vec<u8>, &'static str> {
     let moov = mp4_find_child(data, 0, data.len(), *b"moov").ok_or("mp4 missing moov")?;
     let traks = mp4_collect_children(data, moov.payload_start, moov.end, *b"trak");
-    for trak in traks {
-        let Some(track) = mp4_parse_avc_track(data, trak)? else {
-            continue;
+    let mut first_classic_err = None;
+    for trak in traks.as_slice() {
+        match mp4_parse_avc_track(data, *trak) {
+            Ok(Some(track)) => return mp4_emit_track_annexb(data, &track, "classic"),
+            Ok(None) => {}
+            Err(err) => {
+                let _ = first_classic_err.get_or_insert(err);
+            }
         };
-        let mut out = Vec::with_capacity(data.len().min(128 * 1024 * 1024));
-        for sps in track.sps.as_slice() {
-            mp4_emit_annexb_nal(&mut out, sps.as_slice());
-        }
-        for pps in track.pps.as_slice() {
-            mp4_emit_annexb_nal(&mut out, pps.as_slice());
-        }
-        let mut samples_emitted = 0usize;
-        for sample in track.samples.as_slice() {
-            if sample.keyframe {
-                for sps in track.sps.as_slice() {
-                    mp4_emit_annexb_nal(&mut out, sps.as_slice());
-                }
-                for pps in track.pps.as_slice() {
-                    mp4_emit_annexb_nal(&mut out, pps.as_slice());
-                }
-            }
-            let sample_end = sample.offset + sample.size;
-            let mut cursor = sample.offset;
-            while cursor + track.length_size <= sample_end {
-                let nal_len = match track.length_size {
-                    1 => data[cursor] as usize,
-                    2 => mp4_read_u16(data, cursor).ok_or("mp4 sample truncated nal length")?
-                        as usize,
-                    4 => mp4_read_u32(data, cursor).ok_or("mp4 sample truncated nal length")?
-                        as usize,
-                    _ => return Err("mp4 unsupported avc nal length size"),
-                };
-                cursor = cursor.saturating_add(track.length_size);
-                if nal_len == 0 {
-                    continue;
-                }
-                let nal_end = cursor
-                    .checked_add(nal_len)
-                    .ok_or("mp4 nal length overflow")?;
-                if nal_end > sample_end {
-                    return Err("mp4 sample nal outside sample");
-                }
-                mp4_emit_annexb_nal(&mut out, &data[cursor..nal_end]);
-                cursor = nal_end;
-            }
-            samples_emitted += 1;
-        }
-        if out.is_empty() || samples_emitted == 0 {
-            return Err("mp4 avc track produced no annexb");
-        }
-        crate::log!(
-            "intel/hw_vid: browser-media mp4-demux track=video codec=avc1 length_size={} samples={} sps={} pps={} annexb_bytes={} first_box={}\n",
-            track.length_size,
-            samples_emitted,
-            track.sps.len(),
-            track.pps.len(),
-            out.len(),
-            mp4_fourcc_name(mp4_fourcc(data, 4).unwrap_or(*b"????")).as_str()
-        );
-        return Ok(out);
     }
-    Err("mp4 has no avc1 video track")
+
+    if mp4_find_child(data, 0, data.len(), *b"moof").is_some() {
+        for trak in traks {
+            let Some(info) = mp4_parse_avc_track_info(data, trak)? else {
+                continue;
+            };
+            let samples = mp4_parse_fragmented_samples(data, info.track_id)?;
+            let track = Mp4AvcTrack {
+                track_id: info.track_id,
+                length_size: info.length_size,
+                sps: info.sps,
+                pps: info.pps,
+                samples,
+            };
+            return mp4_emit_track_annexb(data, &track, "fragmented");
+        }
+    }
+
+    Err(first_classic_err.unwrap_or("mp4 has no avc1 video track"))
 }
 
 #[derive(Copy, Clone, Debug)]

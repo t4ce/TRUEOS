@@ -1377,6 +1377,12 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         "trueos_cabi_dns_resolve_ipv4" => {
             Some(crate::std_abi_shim::trueos_cabi_dns_resolve_ipv4 as *const () as usize)
         }
+        "trueos_vlayer_rapl_snapshot_read" => {
+            Some(crate::r::net::vlayer::trueos_vlayer_rapl_snapshot_read as *const () as usize)
+        }
+        "trueos_vlayer_rapl_history_read" => {
+            Some(crate::r::net::vlayer::trueos_vlayer_rapl_history_read as *const () as usize)
+        }
         "trueos_platform_monotonic_nanos" => {
             Some(crate::r::platform::trueos_platform_monotonic_nanos as *const () as usize)
         }

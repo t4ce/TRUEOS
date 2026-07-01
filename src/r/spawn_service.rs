@@ -496,7 +496,7 @@ fn spawn_intel_hda_audio_demo_task(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_raple_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::power::rapl::raple_service())
+    spawn_local(spawner, |_spawner| crate::power::rapl::raple_service())
 }
 
 fn html_fetch_service(spawner: Spawner) -> SpawnAttempt {

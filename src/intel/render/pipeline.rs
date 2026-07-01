@@ -153,6 +153,7 @@ fn write_triangle_probe_state(
     draw: TriangleDrawPrep,
     shader_layout: TriangleShaderLayout,
     blend_mode: TriangleBlendProbeMode,
+    backend_probe_mode: BackendProbeMode,
 ) -> Result<TriangleProbeStateLayout, &'static str> {
     let mut cursor = shader_layout.state_region_offset_bytes as usize;
     let binding_table_offset = cursor;
@@ -198,9 +199,10 @@ fn write_triangle_probe_state(
 
     let surface = &mut dwords[surface_state_offset / 4..surface_state_offset / 4 + 16];
     surface.fill(0);
+    let surface_halign = backend_probe_mode.surface_halign_raw(warm.device_id);
     surface[0] = (SURFTYPE_2D << 29)
         | (SURFACE_FORMAT_B8G8R8A8_UNORM << 18)
-        | (SURFACE_HALIGN_4 << 14)
+        | (surface_halign << 14)
         | (SURFACE_VALIGN_4 << 16);
     surface[1] = RENDER_MOCS << 24;
     surface[2] = draw.target_w.saturating_sub(1) | (draw.target_h.saturating_sub(1) << 16);
@@ -211,6 +213,18 @@ fn write_triangle_probe_state(
         | (SHADER_CHANNEL_RED << 25);
     surface[8] = draw.rt_gpu_addr as u32;
     surface[9] = (draw.rt_gpu_addr >> 32) as u32;
+    intel_render_focus_log!(
+        "intel/render: probe-surface-rt backend={} surf0=0x{:08X} format={} halign_raw={} valign_raw={} size={}x{} pitch=0x{:X} rt_gpu=0x{:X} note=render-target-descriptor\n",
+        backend_probe_mode.label(),
+        surface[0],
+        (surface[0] >> 18) & 0x1FF,
+        (surface[0] >> 14) & 0x3,
+        (surface[0] >> 16) & 0x3,
+        draw.target_w,
+        draw.target_h,
+        draw.rt_pitch,
+        draw.rt_gpu_addr,
+    );
 
     let sampler = &mut dwords[sampler_state_offset / 4..sampler_state_offset / 4 + 4];
     sampler.fill(0);
@@ -845,6 +859,7 @@ fn encode_triangle_probe_batch(
         | BackendProbeMode::WmHzSampleMask
         | BackendProbeMode::WmLateReemit
         | BackendProbeMode::RasterWmInputOa
+        | BackendProbeMode::RasterWmInputOaSurfaceHalign128
         | BackendProbeMode::RasterWmInputOaKillOff
         | BackendProbeMode::RasterWmInputOaSmoothPoint
         | BackendProbeMode::RasterWmInputOaMsRaster
@@ -890,6 +905,7 @@ fn encode_triangle_probe_batch(
         | BackendProbeMode::RasterWmInputOaPointWidth8
         | BackendProbeMode::RasterWmInputOaPointWidth8ClipMax
         | BackendProbeMode::RasterWmInputOaPointWidth64
+        | BackendProbeMode::RasterWmInputOaPointWidth64SurfaceHalign128
         | BackendProbeMode::RasterWmInputOaPointWidth64ClipMax
         | BackendProbeMode::RasterWmInputOaPointWidth64Early
         | BackendProbeMode::RasterWmInputOaPointWidth64EarlyScissor
