@@ -257,6 +257,11 @@ function mediaKindForFormat(format, url) {
   return mediaKindForUrl(url);
 }
 
+function looksLikeMp4DocumentBody(html) {
+  const head = safeString(html).slice(0, 512);
+  return head.indexOf('ftyp') >= 0 && (head.indexOf('isom') >= 0 || head.indexOf('mp4') >= 0 || head.indexOf('avc1') >= 0);
+}
+
 function pushMediaCandidate(candidates, seen, rawUrl, source, meta) {
   const url = decodeEscapedUrlFragment(rawUrl).trim();
   if (!url || seen.has(url)) return;
@@ -600,6 +605,38 @@ function collectMediaCandidatesFromHtml(html) {
   const source = safeString(html);
   const candidates = [];
   const seen = new Set();
+  const navigationKind = mediaKindForUrl(currentNavigationUrl);
+  if (navigationKind) {
+    log(
+      `[truesurfer media] browser=${browserId} direct_navigation_media=1 source=url kind=${navigationKind} url=${currentNavigationUrl}`,
+    );
+    pushMediaCandidate(candidates, seen, currentNavigationUrl, 'navigation-url', {
+      kind: navigationKind,
+      mimeType: navigationKind,
+      codecs: navigationKind === 'video/mp4' ? 'avc1?' : '',
+      h264: navigationKind === 'video/mp4' ? 1 : 0,
+      qualityLabel: 'direct',
+      width: 0,
+      height: 0,
+      bitrate: 0,
+      ciphered: 0,
+    });
+  } else if (currentNavigationUrl && looksLikeMp4DocumentBody(source)) {
+    log(
+      `[truesurfer media] browser=${browserId} direct_navigation_media=1 source=body-ftyp kind=video/mp4 url=${currentNavigationUrl}`,
+    );
+    pushMediaCandidate(candidates, seen, currentNavigationUrl, 'navigation-body-ftyp', {
+      kind: 'video/mp4',
+      mimeType: 'video/mp4',
+      codecs: 'avc1?',
+      h264: 1,
+      qualityLabel: 'direct',
+      width: 0,
+      height: 0,
+      bitrate: 0,
+      ciphered: 0,
+    });
+  }
   const youtubeResponses = collectYoutubePlayerResponses(source);
   const youtubeConfig = collectYoutubeConfig(source);
   const playerScripts = collectYoutubePlayerScriptRefs(source);

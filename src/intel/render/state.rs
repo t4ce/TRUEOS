@@ -216,6 +216,7 @@ enum BackendProbeMode {
     WmHzSampleMask,
     WmLateReemit,
     RasterWmInputOa,
+    RasterWmInputOaSurfaceHalign128,
     RasterWmInputOaKillOff,
     RasterWmInputOaSmoothPoint,
     RasterWmInputOaMsRaster,
@@ -261,6 +262,7 @@ enum BackendProbeMode {
     RasterWmInputOaPointWidth8,
     RasterWmInputOaPointWidth8ClipMax,
     RasterWmInputOaPointWidth64,
+    RasterWmInputOaPointWidth64SurfaceHalign128,
     RasterWmInputOaPointWidth64ClipMax,
     RasterWmInputOaPointWidth64Early,
     RasterWmInputOaPointWidth64EarlyScissor,
@@ -406,6 +408,7 @@ impl BackendProbeMode {
             Self::WmHzSampleMask => "wm-hz-sample-mask",
             Self::WmLateReemit => "wm-late-reemit",
             Self::RasterWmInputOa => "raster-wm-input-oa",
+            Self::RasterWmInputOaSurfaceHalign128 => "raster-wm-input-oa-surface-halign-128",
             Self::RasterWmInputOaKillOff => "raster-wm-input-oa-killoff",
             Self::RasterWmInputOaSmoothPoint => "raster-wm-input-oa-smooth-point",
             Self::RasterWmInputOaMsRaster => "raster-wm-input-oa-ms-raster",
@@ -485,6 +488,9 @@ impl BackendProbeMode {
                 "raster-wm-input-oa-point-width-8-clipmax"
             }
             Self::RasterWmInputOaPointWidth64 => "raster-wm-input-oa-point-width-64",
+            Self::RasterWmInputOaPointWidth64SurfaceHalign128 => {
+                "raster-wm-input-oa-point-width-64-surface-halign-128"
+            }
             Self::RasterWmInputOaPointWidth64ClipMax => {
                 "raster-wm-input-oa-point-width-64-clipmax"
             }
@@ -579,6 +585,7 @@ impl BackendProbeMode {
         matches!(
             self,
             Self::RasterWmInputOa
+                | Self::RasterWmInputOaSurfaceHalign128
                 | Self::RasterWmInputOaKillOff
                 | Self::RasterWmInputOaSmoothPoint
                 | Self::RasterWmInputOaMsRaster
@@ -624,6 +631,7 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaPointWidth8
                 | Self::RasterWmInputOaPointWidth8ClipMax
                 | Self::RasterWmInputOaPointWidth64
+                | Self::RasterWmInputOaPointWidth64SurfaceHalign128
                 | Self::RasterWmInputOaPointWidth64ClipMax
                 | Self::RasterWmInputOaPointWidth64Early
                 | Self::RasterWmInputOaPointWidth64EarlyScissor
@@ -647,6 +655,20 @@ impl BackendProbeMode {
 
     fn force_kill_pixel_off(self) -> bool {
         matches!(self, Self::RasterWmInputOaKillOff | Self::RasterWmInputOaEarlyKillOff)
+    }
+
+    fn surface_halign_raw(self, device_id: u16) -> u32 {
+        if device_is_gfx125(device_id)
+            && matches!(
+                self,
+                Self::RasterWmInputOaSurfaceHalign128
+                    | Self::RasterWmInputOaPointWidth64SurfaceHalign128
+            )
+        {
+            SURFACE_HALIGN_128_GFX125
+        } else {
+            SURFACE_HALIGN_4
+        }
     }
 
     fn smooth_point_raster(self) -> bool {
@@ -1269,6 +1291,7 @@ fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
             | "point-vf-giant-oa-w8"
             | "point-vf-giant-oa-w8-clipmax"
             | "point-vf-giant-oa-w64"
+            | "point-vf-giant-oa-w64-halign128"
             | "point-vf-giant-oa-w64-clipmax"
             | "point-vf-giant-oa-w64-wm-normal"
             | "point-vf-giant-oa-w64-wm-reemit"
@@ -1302,6 +1325,7 @@ fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
             | "vf-rect-oa-header"
             | "vf-rect-oa-deref0"
             | "vf-rect-ndc-oa"
+            | "vf-rect-ndc-oa-halign128"
             | "vf-rect-ndc-oa-sbe-pre-clip"
             | "vf-rect-ndc-oa-sbe-pre-sf"
             | "vf-rect-ndc-oa-drawrect-early"
@@ -1383,6 +1407,7 @@ fn is_raster_wm_oa_submit_name(submit_name: &str) -> bool {
             | "point-vf-giant-oa-w8"
             | "point-vf-giant-oa-w8-clipmax"
             | "point-vf-giant-oa-w64"
+            | "point-vf-giant-oa-w64-halign128"
             | "point-vf-giant-oa-w64-clipmax"
             | "point-vf-giant-oa-w64-wm-normal"
             | "point-vf-giant-oa-w64-wm-reemit"
@@ -1415,6 +1440,7 @@ fn is_raster_wm_oa_submit_name(submit_name: &str) -> bool {
             | "vf-rect-oa-header"
             | "vf-rect-oa-deref0"
             | "vf-rect-ndc-oa"
+            | "vf-rect-ndc-oa-halign128"
             | "vf-rect-ndc-oa-sbe-pre-clip"
             | "vf-rect-ndc-oa-sbe-pre-sf"
             | "vf-rect-ndc-oa-drawrect-early"
@@ -1527,6 +1553,7 @@ fn is_surface_draw_submit_name(submit_name: &str) -> bool {
             | "point-vf-giant-oa-w8"
             | "point-vf-giant-oa-w8-clipmax"
             | "point-vf-giant-oa-w64"
+            | "point-vf-giant-oa-w64-halign128"
             | "point-vf-giant-oa-w64-clipmax"
             | "point-vf-giant-oa-w64-wm-normal"
             | "point-vf-giant-oa-w64-wm-reemit"
@@ -1562,6 +1589,7 @@ fn is_surface_draw_submit_name(submit_name: &str) -> bool {
             | "vf-rect-oa-header"
             | "vf-rect-oa-deref0"
             | "vf-rect-ndc-oa"
+            | "vf-rect-ndc-oa-halign128"
             | "vf-rect-ndc-oa-sbe-pre-clip"
             | "vf-rect-ndc-oa-sbe-pre-sf"
             | "vf-rect-ndc-oa-drawrect-early"
@@ -1684,6 +1712,7 @@ fn is_fragment_candidate_submit_name(submit_name: &str) -> bool {
             | "point-vf-giant-oa-w8"
             | "point-vf-giant-oa-w8-clipmax"
             | "point-vf-giant-oa-w64"
+            | "point-vf-giant-oa-w64-halign128"
             | "point-vf-giant-oa-w64-clipmax"
             | "point-vf-giant-oa-w64-wm-normal"
             | "point-vf-giant-oa-w64-wm-reemit"
@@ -1719,6 +1748,7 @@ fn is_fragment_candidate_submit_name(submit_name: &str) -> bool {
             | "vf-rect-oa-header"
             | "vf-rect-oa-deref0"
             | "vf-rect-ndc-oa"
+            | "vf-rect-ndc-oa-halign128"
             | "vf-rect-ndc-oa-sbe-pre-clip"
             | "vf-rect-ndc-oa-sbe-pre-sf"
             | "vf-rect-ndc-oa-drawrect-early"

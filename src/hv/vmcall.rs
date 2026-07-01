@@ -37,6 +37,8 @@ pub const OP_BP_UI3_TEXTURE_UPLOAD_CHUNK: u32 = 0x8D; // arg0=tex_id, arg1=offse
 pub const OP_BP_UI3_TEXTURE_UPLOAD_FINISH: u32 = 0x8E; // arg0=tex_id -> rc
 pub const OP_BP_UI3_TEXTURE_STATUS: u32 = 0x8F; // arg0=tex_id -> status
 pub const OP_BP_UI3_TEXTURE_DIMENSIONS: u32 = 0x90; // arg0=tex_id -> status + packed w/h
+pub const OP_BP_RAPL_SNAPSHOT_READ: u32 = 0x91; // arg0 offset, arg1 cap -> latest RAPL snapshot text
+pub const OP_BP_RAPL_HISTORY_READ: u32 = 0x92; // arg0 offset, arg1 cap -> capped RAPL history text
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -245,6 +247,29 @@ fn request_payload(vm_id: u8, req_len: u32) -> Option<&'static [u8]> {
     }
     let p = host_ptr(vm_id)?;
     Some(unsafe { &(&(*p).payload)[..req_len as usize] })
+}
+
+fn handle_rapl_text_read_vmcall(
+    vm_id: u8,
+    seq: u32,
+    offset: u64,
+    cap: u64,
+    len_fn: fn() -> usize,
+    read_fn: fn(usize, &mut [u8]) -> usize,
+) {
+    if cap == 0 {
+        write_response(vm_id, seq, STATUS_OK, len_fn() as u64, 0);
+        return;
+    }
+
+    let Some(p) = host_ptr(vm_id) else {
+        write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+        return;
+    };
+
+    let want = core::cmp::min(cap as usize, PAYLOAD_CAP);
+    let copied = unsafe { read_fn(offset as usize, &mut (&mut (*p).payload)[..want]) };
+    write_response(vm_id, seq, STATUS_OK, copied as u64, copied as u32);
 }
 
 pub fn guest_call(op: u32, arg0: u64, arg1: u64) -> (u32, u64) {
@@ -635,6 +660,28 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     );
                 }
             }
+            DispatchOutcome::Resume
+        }
+        OP_BP_RAPL_SNAPSHOT_READ => {
+            handle_rapl_text_read_vmcall(
+                vm_id,
+                seq,
+                arg0,
+                arg1,
+                crate::r::net::vlayer::rapl_snapshot_len_host,
+                crate::r::net::vlayer::rapl_snapshot_read_host,
+            );
+            DispatchOutcome::Resume
+        }
+        OP_BP_RAPL_HISTORY_READ => {
+            handle_rapl_text_read_vmcall(
+                vm_id,
+                seq,
+                arg0,
+                arg1,
+                crate::r::net::vlayer::rapl_history_len_host,
+                crate::r::net::vlayer::rapl_history_read_host,
+            );
             DispatchOutcome::Resume
         }
         OP_NET_TCP_WRITE => {

@@ -1,5 +1,9 @@
 #![allow(dead_code)]
 
+extern crate alloc;
+
+use alloc::string::String;
+
 use embassy_sync::watch::{Receiver as WatchReceiver, Watch};
 
 // ARMTODO: RAPL is an Intel/x86 MSR-based energy telemetry path. A real
@@ -7,6 +11,7 @@ use embassy_sync::watch::{Receiver as WatchReceiver, Watch};
 // and service wiring instead of Intel CPUID + RAPL MSRs.
 
 const RAPL_WATCH_RECEIVERS: usize = 8;
+pub const RAPL_HISTORY_MAX_BYTES: usize = 5 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug)]
 pub struct RaplCaps {
@@ -125,8 +130,10 @@ impl RaplProbe {
 pub struct RaplSnapshot {
     pub update_count: u64,
     pub last_update_ms: u64,
+    pub interval_ms: u64,
     pub cpuid_supported: bool,
     pub sample_valid: bool,
+    pub previous: Option<RaplProbe>,
     pub latest: Option<RaplProbe>,
 }
 
@@ -135,8 +142,10 @@ impl RaplSnapshot {
         Self {
             update_count: 0,
             last_update_ms: 0,
+            interval_ms: 0,
             cpuid_supported: false,
             sample_valid: false,
+            previous: None,
             latest: None,
         }
     }
@@ -166,6 +175,18 @@ pub fn latest_snapshot() -> RaplSnapshot {
     RAPL_WATCH.try_get().unwrap_or(RaplSnapshot::empty())
 }
 
+pub fn latest_snapshot_text() -> String {
+    String::from("rapl snapshot\ncpuid_supported=false\nsample_valid=false\n")
+}
+
+pub fn history_len() -> usize {
+    0
+}
+
+pub fn copy_history_slice(_offset: usize, _out: &mut [u8]) -> usize {
+    0
+}
+
 pub fn subscribe() -> Option<RaplReceiver<'static>> {
     RAPL_WATCH.receiver()
 }
@@ -173,6 +194,12 @@ pub fn subscribe() -> Option<RaplReceiver<'static>> {
 pub fn anon_snapshot() -> RaplSnapshot {
     let mut receiver = RAPL_WATCH.anon_receiver();
     receiver.try_get().unwrap_or(RaplSnapshot::empty())
+}
+
+pub fn refresh_snapshot_once() -> RaplSnapshot {
+    let snapshot = RaplSnapshot::empty();
+    RAPL_WATCH.sender().send(snapshot);
+    snapshot
 }
 
 pub unsafe fn probe_local() -> Option<RaplProbe> {

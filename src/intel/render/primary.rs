@@ -778,6 +778,16 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
             backend: BackendProbeMode::RasterWmInputOaPointWidth64,
             sync: light_post_no_cs,
         }
+    } else if name.eq_ignore_ascii_case("point-oa-w64-halign128") {
+        RenderJokerSpec {
+            variant: "point-oa-w64-halign128",
+            submit_name: "point-vf-giant-oa-w64-halign128",
+            target: scratch,
+            blend: zeroed,
+            geometry: point,
+            backend: BackendProbeMode::RasterWmInputOaPointWidth64SurfaceHalign128,
+            sync: light_post_no_cs,
+        }
     } else if name.eq_ignore_ascii_case("point-oa-w64-clipmax") {
         RenderJokerSpec {
             variant: "point-oa-w64-clipmax",
@@ -1126,6 +1136,16 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
             blend: zeroed,
             geometry: ndc_rect,
             backend: BackendProbeMode::RasterWmInputOa,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa-halign128") {
+        RenderJokerSpec {
+            variant: "vf-rect-ndc-oa-halign128",
+            submit_name: "vf-rect-ndc-oa-halign128",
+            target: scratch,
+            blend: zeroed,
+            geometry: ndc_rect,
+            backend: BackendProbeMode::RasterWmInputOaSurfaceHalign128,
             sync: light_post_no_cs,
         }
     } else if name.eq_ignore_ascii_case("vf-rect-ndc-oa-sbe-pre-clip") {
@@ -2444,6 +2464,14 @@ fn submit_primary_probe_now(reason: &'static str) -> bool {
     completed
 }
 
+fn seed_render_scratch_rt(warm: RenderWarmState) {
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+}
+
 fn submit_primary_triangle_with_retries(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
@@ -2540,11 +2568,7 @@ fn submit_primary_triangle_with_retries(
 
     run_postdraw_pc_retire_spectrum(dev, warm, surface_gpu, pitch_bytes, width, height);
 
-    unsafe {
-        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
-        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
-    }
-    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+    seed_render_scratch_rt(warm);
     let ps_bt0_scratch_rt = submit_triangle_vf_draw_to_surface(
         "ps-bt0-scratch-rt",
         dev,
@@ -2570,11 +2594,7 @@ fn submit_primary_triangle_with_retries(
         recover_render_engine_after_nonretired_submit(dev, warm, "ps-bt0-scratch-rt");
     }
 
-    unsafe {
-        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
-        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
-    }
-    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+    seed_render_scratch_rt(warm);
     let raster_wm_oa_probe = submit_triangle_vf_draw_to_surface(
         "raster-wm-oa-probe",
         dev,
@@ -2601,20 +2621,17 @@ fn submit_primary_triangle_with_retries(
     }
 
     let fragment_candidate_ready = fragment_candidate_ready();
-    let fragment_boundary_observed = fragment_boundary_observed();
+    let fragment_boundary_seen = fragment_boundary_observed();
     intel_render_focus_log!(
         "intel/render: primary-fragment-boundary-gate candidate_ready={} fragment_observed={} action={} reason=shape_to_fragment_boundary_precedes_ps_spectrum\n",
         fragment_candidate_ready as u8,
-        fragment_boundary_observed as u8,
-        if fragment_boundary_observed {
+        fragment_boundary_seen as u8,
+        if fragment_boundary_seen {
             "continue-ps-spectrum"
         } else {
-            "halt-ps-spectrum"
+            "continue-ps-spectrum-diagnostic"
         },
     );
-    if !fragment_boundary_observed {
-        return false;
-    }
 
     let ps_bt1_big_primitive = submit_triangle_vf_draw_to_surface(
         "ps-bt1-big-primitive",
@@ -2804,6 +2821,17 @@ fn submit_primary_triangle_with_retries(
         return true;
     }
 
+    reset_fragment_boundary_probe();
+    let fragment_shape_frontier = run_fragment_shape_frontier_spectrum(dev, warm);
+    intel_render_focus_log!(
+        "intel/render: primary-fragment-shape-spectrum completed={} observed={} note=shape_clip_sf_axis_after_ps_state_axis\n",
+        fragment_shape_frontier as u8,
+        fragment_boundary_observed() as u8,
+    );
+    if fragment_shape_frontier {
+        return true;
+    }
+
     let vs_draw_frontier_precheck = submit_triangle_vs_draw_frontier_to_surface(
         dev,
         warm,
@@ -2907,6 +2935,220 @@ fn submit_primary_triangle_with_retries(
         }
     }
     completed_any
+}
+
+fn run_fragment_shape_frontier_spectrum(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
+    let scratch_pitch = 8 * core::mem::size_of::<u32>();
+    let probes = [
+        (
+            "point-vf-giant-oa-w64",
+            VfPrimitiveGeometry::CenterPoint,
+            BackendProbeMode::RasterWmInputOaPointWidth64,
+            StreamoutProofExperiment::PointSizeSlot0PositionSlot1,
+        ),
+        (
+            "point-vf-giant-oa-w64-halign128",
+            VfPrimitiveGeometry::CenterPoint,
+            BackendProbeMode::RasterWmInputOaPointWidth64SurfaceHalign128,
+            StreamoutProofExperiment::PointSizeSlot0PositionSlot1,
+        ),
+        (
+            "point-vf-giant-oa-w1023",
+            VfPrimitiveGeometry::CenterPoint,
+            BackendProbeMode::RasterWmInputOaPointWidth1023,
+            StreamoutProofExperiment::PointSizeSlot0PositionSlot1,
+        ),
+        (
+            "point-vf-giant-oa-msrast",
+            VfPrimitiveGeometry::CenterPoint,
+            BackendProbeMode::RasterWmInputOaMsRaster,
+            StreamoutProofExperiment::PointSizeSlot0PositionSlot1,
+        ),
+        (
+            "point-vf-giant-oa-msrast-force",
+            VfPrimitiveGeometry::CenterPoint,
+            BackendProbeMode::RasterWmInputOaMsRasterForced,
+            StreamoutProofExperiment::PointSizeSlot0PositionSlot1,
+        ),
+        (
+            "point-vf-giant-oa-early-msrast-force",
+            VfPrimitiveGeometry::CenterPoint,
+            BackendProbeMode::RasterWmInputOaEarlyMsRasterForced,
+            StreamoutProofExperiment::PointSizeSlot0PositionSlot1,
+        ),
+        (
+            "point-vf-giant-oa-early-w1023",
+            VfPrimitiveGeometry::CenterPoint,
+            BackendProbeMode::RasterWmInputOaEarlyPointWidth1023,
+            StreamoutProofExperiment::PointSizeSlot0PositionSlot1,
+        ),
+        (
+            "point-vf-giant-oa-w64-early",
+            VfPrimitiveGeometry::CenterPoint,
+            BackendProbeMode::RasterWmInputOaPointWidth64Early,
+            StreamoutProofExperiment::PointSizeSlot0PositionSlot1,
+        ),
+        (
+            "point-vf-giant-oa-w64-early-scissor",
+            VfPrimitiveGeometry::CenterPoint,
+            BackendProbeMode::RasterWmInputOaPointWidth64EarlyScissor,
+            StreamoutProofExperiment::PointSizeSlot0PositionSlot1,
+        ),
+        (
+            "point-vf-giant-oa-w1023-scissor",
+            VfPrimitiveGeometry::CenterPoint,
+            BackendProbeMode::RasterWmInputOaPointWidth1023Scissor,
+            StreamoutProofExperiment::PointSizeSlot0PositionSlot1,
+        ),
+        (
+            "point-vf-screen-oa-w64",
+            VfPrimitiveGeometry::ScreenSpacePoint8x8,
+            BackendProbeMode::RasterWmInputOaPointWidth64Screen,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "point-vf-giant-oa-w64-wm-normal",
+            VfPrimitiveGeometry::CenterPoint,
+            BackendProbeMode::RasterWmInputOaPointWidth64WmNormalDispatch,
+            StreamoutProofExperiment::PointSizeSlot0PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOa,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa-halign128",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaSurfaceHalign128,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa-early",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaEarlySample,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa-sample-early",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaSampleMaskEarlyOnly,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa-pc-clip-sf",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaPipeControlClipSf,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa-hz-pre-wm",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaWmHzOpBeforeWm,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa-hz-post-extra",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaWmHzOpAfterPsExtra,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa-frontccw",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaFrontCcw,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa-hz0",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaNoHzOp,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa-clip-disable",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaClipDisabled,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa-bt1",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaBtCountOne,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-order-b-oa",
+            VfPrimitiveGeometry::ScreenSpaceRect8x8OrderB,
+            BackendProbeMode::RasterWmInputOa,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-order-b-scissor-oa",
+            VfPrimitiveGeometry::ScreenSpaceRect8x8OrderB,
+            BackendProbeMode::RasterWmInputOaScissorOnly,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-order-c-early-oa",
+            VfPrimitiveGeometry::NdcRectUrLrUl,
+            BackendProbeMode::RasterWmInputOaEarlySample,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-mesa-simple-oa-early",
+            VfPrimitiveGeometry::ScreenSpaceRect8x8OrderB,
+            BackendProbeMode::RasterWmInputOaMesaSimpleRectEarly,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "screen-rect-oa-early",
+            VfPrimitiveGeometry::ScreenSpaceRect8x8,
+            BackendProbeMode::RasterWmInputOaEarlySample,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+    ];
+
+    intel_render_focus_log!(
+        "intel/render: primary-fragment-shape-spectrum begin probes={} target=scratch-8x8 truth=fragment_boundary_observed\n",
+        probes.len(),
+    );
+    for (submit_name, geometry, backend, vf_experiment) in probes {
+        seed_render_scratch_rt(warm);
+        let completed = submit_triangle_vf_draw_to_surface_ext(
+            submit_name,
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            scratch_pitch,
+            8,
+            8,
+            TriangleBlendProbeMode::MesaZeroedState,
+            geometry,
+            backend,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+            vf_experiment,
+        );
+        let observed = fragment_boundary_observed();
+        intel_render_focus_log!(
+            "intel/render: primary-fragment-shape-spectrum submit={} geometry={} backend={} vf_contract={} completed={} candidate_ready={} observed={}\n",
+            submit_name,
+            geometry.label(),
+            backend.label(),
+            vf_experiment.vf_slot_contract(),
+            completed as u8,
+            fragment_candidate_ready() as u8,
+            observed as u8,
+        );
+        if completed {
+            recover_render_engine_after_nonretired_submit(dev, warm, submit_name);
+        }
+        if observed {
+            return true;
+        }
+    }
+    false
 }
 
 fn run_postdraw_pc_retire_spectrum(
@@ -3300,7 +3542,13 @@ fn submit_triangle_vf_draw_to_surface_ext(
         pipeline.ps.meta.kernel.dispatch_mode
     );
 
-    let probe_state = match write_triangle_probe_state(warm, draw, shader_layout, blend_mode) {
+    let probe_state = match write_triangle_probe_state(
+        warm,
+        draw,
+        shader_layout,
+        blend_mode,
+        backend_probe_mode,
+    ) {
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!(
@@ -3870,6 +4118,7 @@ fn submit_triangle_streamout_proof(
         draw,
         shader_layout,
         TriangleBlendProbeMode::ExplicitRt0,
+        BackendProbeMode::MesaLike,
     ) {
         Ok(layout) => layout,
         Err(reason) => {
@@ -4314,7 +4563,13 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         pipeline.ps.meta.kernel.dispatch_mode
     );
 
-    let probe_state = match write_triangle_probe_state(warm, draw, shader_layout, blend_mode) {
+    let probe_state = match write_triangle_probe_state(
+        warm,
+        draw,
+        shader_layout,
+        blend_mode,
+        backend_probe_mode,
+    ) {
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!(

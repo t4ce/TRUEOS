@@ -73,16 +73,20 @@ pub(crate) fn push_candidate(candidate: BrowserMediaCandidate) -> usize {
 }
 
 pub(crate) fn begin_browser_generation(browser_instance_id: u32, generation: u32) -> usize {
-    let dropped = with_media_streams(|streams| {
+    let (dropped, retained) = with_media_streams(|streams| {
         let before = streams.candidates.len();
-        streams.candidates.clear();
-        before
+        streams.candidates.retain(|candidate| {
+            candidate.browser_instance_id != browser_instance_id
+                || candidate.generation.saturating_add(1) >= generation
+        });
+        (before.saturating_sub(streams.candidates.len()), streams.candidates.len())
     });
     crate::log!(
-        "surfer-media: browser generation begin browser={} generation={} dropped_candidates={} action=clear-latest-media-queue\n",
+        "surfer-media: browser generation begin browser={} generation={} dropped_candidates={} retained_candidates={} action=age-latest-media-queue\n",
         browser_instance_id,
         generation,
-        dropped
+        dropped,
+        retained
     );
     dropped
 }
