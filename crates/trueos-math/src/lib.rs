@@ -49,8 +49,28 @@ pub fn hypot_f32(x: f32, y: f32) -> f32 {
     libm::hypotf(x, y)
 }
 
+#[inline]
+pub fn sin_f64(x: f64) -> f64 {
+    libm::sin(x)
+}
+
+#[inline]
+pub fn cos_f64(x: f64) -> f64 {
+    libm::cos(x)
+}
+
+#[inline]
+pub fn log2_f64(x: f64) -> f64 {
+    libm::log2(x)
+}
+
+#[inline]
+pub fn hypot_f64(x: f64, y: f64) -> f64 {
+    libm::hypot(x, y)
+}
+
 // Kernel-side C math ABI symbols needed by linked no_std code. Keep this list
-// intentionally narrow; trueos-math owns these f32 wrappers over libm.
+// intentionally narrow; trueos-math owns these wrappers over libm.
 #[unsafe(no_mangle)]
 pub extern "C" fn sinf(x: f32) -> f32 {
     sin_f32(x)
@@ -79,6 +99,26 @@ pub extern "C" fn log2f(x: f32) -> f32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn hypotf(x: f32, y: f32) -> f32 {
     hypot_f32(x, y)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sin(x: f64) -> f64 {
+    sin_f64(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn cos(x: f64) -> f64 {
+    cos_f64(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn log2(x: f64) -> f64 {
+    log2_f64(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn hypot(x: f64, y: f64) -> f64 {
+    hypot_f64(x, y)
 }
 
 pub(crate) mod ascii_tree;

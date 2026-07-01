@@ -604,6 +604,8 @@ struct YoutubeInnertubeProbe {
     visitor_data: String,
     hl: String,
     gl: String,
+    watch_url: String,
+    signature_timestamp: String,
 }
 
 impl YoutubeInnertubeProbe {
@@ -620,6 +622,10 @@ impl YoutubeInnertubeProbe {
         let visitor_data = query_field(query, "visitor_data").unwrap_or_default();
         let hl = query_field(query, "hl").unwrap_or_else(|| String::from("en"));
         let gl = query_field(query, "gl").unwrap_or_else(|| String::from("US"));
+        let watch_url = query_field(query, "watch_url")
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| format!("https://www.youtube.com/watch?v={}", video_id));
+        let signature_timestamp = query_field(query, "sts").unwrap_or_default();
         if video_id.is_empty() || api_key.is_empty() || client_version.is_empty() {
             return Err("browser media innertube bad probe");
         }
@@ -631,6 +637,8 @@ impl YoutubeInnertubeProbe {
             visitor_data,
             hl,
             gl,
+            watch_url,
+            signature_timestamp,
         })
     }
 }
@@ -641,6 +649,8 @@ struct YoutubeInnertubeProfile<'a> {
     client_name: &'a str,
     client_version: &'a str,
     use_visitor: bool,
+    rich_web_context: bool,
+    playback_context: bool,
     client_extra_json: &'static str,
     context_extra_json: &'static str,
 }
@@ -648,14 +658,26 @@ struct YoutubeInnertubeProfile<'a> {
 fn youtube_innertube_profiles<'a>(
     page_client_name: &'a str,
     page_client_version: &'a str,
-) -> [YoutubeInnertubeProfile<'a>; 5] {
+) -> [YoutubeInnertubeProfile<'a>; 7] {
     [
         YoutubeInnertubeProfile {
             label: "page-web",
             client_name: page_client_name,
             client_version: page_client_version,
             use_visitor: true,
+            rich_web_context: false,
+            playback_context: false,
             client_extra_json: "",
+            context_extra_json: "",
+        },
+        YoutubeInnertubeProfile {
+            label: "page-web-watch",
+            client_name: page_client_name,
+            client_version: page_client_version,
+            use_visitor: true,
+            rich_web_context: true,
+            playback_context: true,
+            client_extra_json: ",\"clientScreen\":\"WATCH\"",
             context_extra_json: "",
         },
         YoutubeInnertubeProfile {
@@ -663,7 +685,19 @@ fn youtube_innertube_profiles<'a>(
             client_name: page_client_name,
             client_version: page_client_version,
             use_visitor: false,
+            rich_web_context: false,
+            playback_context: false,
             client_extra_json: "",
+            context_extra_json: "",
+        },
+        YoutubeInnertubeProfile {
+            label: "page-web-watch-novisitor",
+            client_name: page_client_name,
+            client_version: page_client_version,
+            use_visitor: false,
+            rich_web_context: true,
+            playback_context: true,
+            client_extra_json: ",\"clientScreen\":\"WATCH\"",
             context_extra_json: "",
         },
         YoutubeInnertubeProfile {
@@ -671,6 +705,8 @@ fn youtube_innertube_profiles<'a>(
             client_name: "WEB_EMBEDDED_PLAYER",
             client_version: page_client_version,
             use_visitor: false,
+            rich_web_context: true,
+            playback_context: true,
             client_extra_json: "",
             context_extra_json: ",\"thirdParty\":{\"embedUrl\":\"https://www.youtube.com/\"}",
         },
@@ -679,6 +715,8 @@ fn youtube_innertube_profiles<'a>(
             client_name: "ANDROID",
             client_version: "19.09.37",
             use_visitor: false,
+            rich_web_context: false,
+            playback_context: false,
             client_extra_json: ",\"androidSdkVersion\":30,\"osName\":\"Android\",\"osVersion\":\"11\"",
             context_extra_json: "",
         },
@@ -687,6 +725,8 @@ fn youtube_innertube_profiles<'a>(
             client_name: "IOS",
             client_version: "19.09.3",
             use_visitor: false,
+            rich_web_context: false,
+            playback_context: false,
             client_extra_json: ",\"deviceMake\":\"Apple\",\"deviceModel\":\"iPhone16,2\",\"osName\":\"iOS\",\"osVersion\":\"17.5.1.21F90\"",
             context_extra_json: "",
         },
@@ -707,8 +747,39 @@ fn youtube_innertube_player_body(
     probe: &YoutubeInnertubeProbe,
     profile: &YoutubeInnertubeProfile<'_>,
 ) -> String {
-    format!(
-        "{{\"context\":{{\"client\":{{\"clientName\":\"{}\",\"clientVersion\":\"{}\",\"hl\":\"{}\",\"gl\":\"{}\",\"visitorData\":\"{}\"{}}}{}}},\"videoId\":\"{}\",\"contentCheckOk\":true,\"racyCheckOk\":true}}",
+    let rich_client = if profile.rich_web_context {
+        format!(
+            ",\"originalUrl\":\"{}\",\"platform\":\"DESKTOP\",\"userAgent\":\"{}\"",
+            json_escape(probe.watch_url.as_str()),
+            json_escape(YOUTUBE_WEB_USER_AGENT)
+        )
+    } else {
+        String::new()
+    };
+    let request_context = if profile.rich_web_context {
+        String::from(",\"request\":{\"useSsl\":true},\"user\":{\"lockedSafetyMode\":false}")
+    } else {
+        String::new()
+    };
+    let playback_context = if profile.playback_context {
+        let current_url =
+            youtube_watch_path_from_url(probe.watch_url.as_str(), probe.video_id.as_str());
+        let sts = probe.signature_timestamp.trim();
+        let sts_json = if sts.chars().all(|ch| ch.is_ascii_digit()) && !sts.is_empty() {
+            format!(",\"signatureTimestamp\":{}", sts)
+        } else {
+            String::new()
+        };
+        format!(
+            ",\"playbackContext\":{{\"contentPlaybackContext\":{{\"currentUrl\":\"{}\",\"html5Preference\":\"HTML5_PREF_WANTS\",\"lactMilliseconds\":\"-1\"{}}}}}",
+            json_escape(current_url.as_str()),
+            sts_json
+        )
+    } else {
+        String::new()
+    };
+    let client = format!(
+        "\"client\":{{\"clientName\":\"{}\",\"clientVersion\":\"{}\",\"hl\":\"{}\",\"gl\":\"{}\",\"visitorData\":\"{}\"{}{}}}",
         json_escape(profile.client_name),
         json_escape(profile.client_version),
         json_escape(probe.hl.as_str()),
@@ -718,10 +789,29 @@ fn youtube_innertube_player_body(
         } else {
             String::new()
         },
-        profile.client_extra_json,
+        rich_client,
+        profile.client_extra_json
+    );
+    format!(
+        "{{\"context\":{{{}{}{}}},\"videoId\":\"{}\"{},\"contentCheckOk\":true,\"racyCheckOk\":true}}",
+        client,
+        request_context,
         profile.context_extra_json,
-        json_escape(probe.video_id.as_str())
+        json_escape(probe.video_id.as_str()),
+        playback_context
     )
+}
+
+const YOUTUBE_WEB_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
+fn youtube_watch_path_from_url(url: &str, video_id: &str) -> String {
+    if let Some(path_start) = url.find("youtube.com") {
+        let after_host = &url[path_start + "youtube.com".len()..];
+        if after_host.starts_with("/watch?") {
+            return after_host.to_string();
+        }
+    }
+    format!("/watch?v={}", video_id)
 }
 
 fn h264_pick_youtube_innertube_direct_h264(
