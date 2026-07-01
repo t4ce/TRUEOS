@@ -742,11 +742,6 @@ pub(crate) fn hw_vid_probe_task_spawn()
     self::media::hw_vid::hw_vid_probe_task()
 }
 
-pub(crate) fn hw_vid_media_url_probe_task_spawn()
--> Result<embassy_executor::SpawnToken<impl Send>, embassy_executor::SpawnError> {
-    self::media::hw_vid::hw_vid_media_url_probe_task()
-}
-
 pub async fn run_media_source_warmup_async() {
     crate::log!("intel/media: source warmup skipped reason=media-decode-disabled\n");
 }

@@ -2256,6 +2256,7 @@ fn submit_render_joker_probe_locked(
             front_end_contract,
             spec.backend,
             spec.sync,
+            None,
         )
     } else {
         submit_triangle_vf_draw_to_surface_ext(
@@ -2501,7 +2502,7 @@ fn submit_primary_triangle_with_retries(
         return completed;
     }
     intel_render_focus_log!(
-        "intel/render: primary-boot-3d-probes enabled=1 action=run-frontier-ladder vf_streamout=1 ps_spectrum=1 vs_frontier=1 revision=nonvisual-vs-scratch-rt32-geometry-sbe0-fanout\n",
+        "intel/render: primary-boot-3d-probes enabled=1 action=run-frontier-ladder vf_streamout=1 ps_spectrum=1 vs_frontier=1 revision=nonvisual-vs-scratch-rt32-trilist-split\n",
     );
 
     let initial_streamout_experiment =
@@ -4316,16 +4317,28 @@ fn submit_triangle_vs_draw_frontier_to_scratch(
         return false;
     }
     let variants = [
-        ("vs-draw-frontier-scratch", VfPrimitiveGeometry::Canonical),
-        ("vs-draw-frontier-scratch-ndc-rect", VfPrimitiveGeometry::NdcRect),
-        ("vs-draw-frontier-scratch-ndc-rect-cw", VfPrimitiveGeometry::NdcRectCw),
+        ("vs-draw-frontier-scratch", VfPrimitiveGeometry::Canonical, None),
+        ("vs-draw-frontier-scratch-ndc-rect", VfPrimitiveGeometry::NdcRect, None),
+        (
+            "vs-draw-frontier-scratch-ndc-rect-trilist",
+            VfPrimitiveGeometry::NdcRect,
+            Some(TriangleBatchMode::Draw),
+        ),
+        ("vs-draw-frontier-scratch-ndc-rect-cw", VfPrimitiveGeometry::NdcRectCw, None),
+        (
+            "vs-draw-frontier-scratch-ndc-rect-cw-trilist",
+            VfPrimitiveGeometry::NdcRectCw,
+            Some(TriangleBatchMode::Draw),
+        ),
         (
             "vs-draw-frontier-scratch-screen-rect",
             VfPrimitiveGeometry::ScreenSpaceRect8x8OrderB,
+            None,
         ),
         (
             "vs-draw-frontier-scratch-ndc-large",
             VfPrimitiveGeometry::NdcTriangleLarge,
+            None,
         ),
     ];
     let contracts = [
@@ -4333,7 +4346,7 @@ fn submit_triangle_vs_draw_frontier_to_scratch(
         VS_DRAW_SBE_READ0_CONTRACT,
         VS_DRAW_FRONTIER_CONTRACTS[2],
     ];
-    for (submit_name, geometry) in variants {
+    for (submit_name, geometry, batch_mode_override) in variants {
         for contract in contracts {
             seed_render_scratch_rt(warm);
             let completed = submit_triangle_real_vs_draw_probe_to_surface_ext(
@@ -4349,6 +4362,7 @@ fn submit_triangle_vs_draw_frontier_to_scratch(
                 contract,
                 BackendProbeMode::MesaLike,
                 PostDrawSyncVariant::LightPostSyncNoCs,
+                batch_mode_override,
             );
             let observed = fragment_boundary_observed();
             intel_render_focus_log!(
@@ -4523,6 +4537,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
         front_end_contract,
         BackendProbeMode::MesaLike,
         PostDrawSyncVariant::HeavyAll,
+        None,
     )
 }
 
@@ -4539,6 +4554,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
     front_end_contract: TriangleFrontEndContract,
     backend_probe_mode: BackendProbeMode,
     post_draw_sync_variant: PostDrawSyncVariant,
+    batch_mode_override: Option<TriangleBatchMode>,
 ) -> bool {
     let Some(draw) = prepare_triangle_draw_resources_for_geometry(
         warm,
@@ -4718,13 +4734,15 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
     let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
     let batch =
         unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
-    let batch_mode = if geometry.rect_candidate() {
-        TriangleBatchMode::DrawScreenSpaceRect
-    } else if geometry.screen_space_candidate() {
-        TriangleBatchMode::DrawScreenSpace
-    } else {
-        TriangleBatchMode::Draw
-    };
+    let batch_mode = batch_mode_override.unwrap_or_else(|| {
+        if geometry.rect_candidate() {
+            TriangleBatchMode::DrawScreenSpaceRect
+        } else if geometry.screen_space_candidate() {
+            TriangleBatchMode::DrawScreenSpace
+        } else {
+            TriangleBatchMode::Draw
+        }
+    });
     let batch_tail_bytes = match encode_triangle_probe_batch(
         batch,
         warm,
