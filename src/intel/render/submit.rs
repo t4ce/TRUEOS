@@ -598,7 +598,10 @@ fn submit_warm_render_batch(
     if is_surface_draw_submit_name(submit_name) {
         log_triangle_demo_stats(dev, completed);
     }
-    if completed && is_surface_draw_submit_name(submit_name) {
+    if completed
+        && is_surface_draw_submit_name(submit_name)
+        && !is_scratch_rt_submit_name(submit_name)
+    {
         let label = match submit_name {
             "vf-draw-path" => "post-vf-draw-path",
             "vs-draw-frontier" => "post-vs-draw-frontier",

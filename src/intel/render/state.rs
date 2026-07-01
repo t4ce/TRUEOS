@@ -657,14 +657,12 @@ impl BackendProbeMode {
         matches!(self, Self::RasterWmInputOaKillOff | Self::RasterWmInputOaEarlyKillOff)
     }
 
-    fn surface_halign_raw(self, device_id: u16) -> u32 {
-        if device_is_gfx125(device_id)
-            && matches!(
-                self,
-                Self::RasterWmInputOaSurfaceHalign128
-                    | Self::RasterWmInputOaPointWidth64SurfaceHalign128
-            )
-        {
+    fn surface_halign_raw(self, _device_id: u16) -> u32 {
+        if matches!(
+            self,
+            Self::RasterWmInputOaSurfaceHalign128
+                | Self::RasterWmInputOaPointWidth64SurfaceHalign128
+        ) {
             SURFACE_HALIGN_128_GFX125
         } else {
             SURFACE_HALIGN_4
@@ -1254,7 +1252,22 @@ fn is_triangle_debug_submit_name(submit_name: &str) -> bool {
         || is_scratch_rt_submit_name(submit_name)
 }
 
+fn fragment_target_variant_base(submit_name: &str) -> Option<&str> {
+    submit_name.strip_suffix("-rt32")
+}
+
+fn is_vs_draw_frontier_scratch_submit_name(submit_name: &str) -> bool {
+    submit_name == "vs-draw-frontier-scratch"
+        || submit_name.starts_with("vs-draw-frontier-scratch-")
+}
+
 fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
+    if let Some(base) = fragment_target_variant_base(submit_name) {
+        return is_scratch_rt_submit_name(base);
+    }
+    if is_vs_draw_frontier_scratch_submit_name(submit_name) {
+        return true;
+    }
     matches!(
         submit_name,
         "ps-bt0-scratch-rt"
@@ -1373,6 +1386,9 @@ fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
 }
 
 fn is_raster_wm_oa_submit_name(submit_name: &str) -> bool {
+    if let Some(base) = fragment_target_variant_base(submit_name) {
+        return is_raster_wm_oa_submit_name(base);
+    }
     matches!(
         submit_name,
         "raster-wm-oa-probe"
@@ -1487,6 +1503,12 @@ fn is_raster_wm_oa_submit_name(submit_name: &str) -> bool {
 }
 
 fn is_surface_draw_submit_name(submit_name: &str) -> bool {
+    if let Some(base) = fragment_target_variant_base(submit_name) {
+        return is_surface_draw_submit_name(base);
+    }
+    if is_vs_draw_frontier_scratch_submit_name(submit_name) {
+        return true;
+    }
     matches!(
         submit_name,
         "draw-path"
@@ -1647,6 +1669,12 @@ fn is_surface_draw_submit_name(submit_name: &str) -> bool {
 }
 
 fn is_fragment_candidate_submit_name(submit_name: &str) -> bool {
+    if let Some(base) = fragment_target_variant_base(submit_name) {
+        return is_fragment_candidate_submit_name(base);
+    }
+    if is_vs_draw_frontier_scratch_submit_name(submit_name) {
+        return true;
+    }
     matches!(
         submit_name,
         "ps-launch-big-primitive"

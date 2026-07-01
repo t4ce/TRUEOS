@@ -967,9 +967,10 @@ fn queue_gpu_sprite_batch(
     }
     if let Some(batch) = pending.as_mut() {
         batch.total_descs = batch.total_descs.saturating_add(desc_count);
-        let append_to_last = batch.runs.last().is_some_and(|run| {
-            run.src_tex_id == tex_id && run.src_surface.gpu == src_surface.gpu
-        });
+        let append_to_last = batch
+            .runs
+            .last()
+            .is_some_and(|run| run.src_tex_id == tex_id && run.src_surface.gpu == src_surface.gpu);
         if append_to_last {
             if let Some(run) = batch.runs.last_mut() {
                 run.descs.extend(descs);

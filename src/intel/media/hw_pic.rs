@@ -690,7 +690,7 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
     };
 
     hw_pic_info!(
-        "intel/hw_pic-stage: id={} stage=avc-parse accepted=1 milestone=long-format-single-i-or-p class={:?} frame_num={} poc={}/{} refs_l0={} coded={}x{} visible={}x{} mb={}x{} bitstream=0x{:X} slice=0x{:X}+0x{:X} payload_bit={} first_mb_byte={} first_mb_bit={} qp_delta={} entropy={} transform8x8={}\n",
+        "intel/hw_pic-stage: id={} stage=avc-parse accepted=1 milestone=long-format-i-or-p-access-unit class={:?} frame_num={} poc={}/{} refs_l0={} coded={}x{} visible={}x{} mb={}x{} bitstream=0x{:X} slices={} first_slice=0x{:X}+0x{:X} payload_bit={} first_mb_byte={} first_mb_bit={} qp_delta={} entropy={} transform8x8={}\n",
         job.id,
         plan.slice.class,
         plan.picture.frame_num,
@@ -704,6 +704,7 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         plan.picture.pic_width_in_mbs(),
         plan.picture.pic_height_in_mbs(),
         plan.bitstream_bytes,
+        plan.slice_count,
         plan.slice.slice_data_offset,
         plan.slice.slice_data_size,
         plan.slice.slice_data_bit_offset_from_payload,

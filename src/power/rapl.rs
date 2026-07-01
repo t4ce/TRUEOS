@@ -18,6 +18,7 @@ const RAPL_TRUEOSFS_PERSIST_PERIOD_MS: u64 = 10_000;
 const RAPL_TRUEOSFS_PATH: &str = "rapl.txt";
 pub const RAPL_HISTORY_MAX_BYTES: usize = 5 * 1024 * 1024;
 const RAPL_HISTORY_TRIM_BYTES: usize = 1024 * 1024;
+const RAPL_HISTORY_HEADER: &[u8] = b"# trueos rapl history v1\n# ms,dt_ms,update,valid,pkg_j,pp0_j,pp1_j,dram_j,psys_j,pkg_w,pp0_w,pp1_w,dram_w,psys_w\n";
 const RAPL_WATCH_RECEIVERS: usize = 8;
 
 #[derive(Clone, Copy, Debug)]
@@ -408,13 +409,12 @@ async fn persist_history_to_trueosfs() {
 }
 
 fn append_snapshot_to_history(snapshot: RaplSnapshot) {
-    let text = format_snapshot_text(snapshot);
+    let text = format_history_row(snapshot);
     let mut history = RAPL_HISTORY.lock();
-    history.extend_from_slice(text.as_bytes());
-    if !history.ends_with(b"\n") {
-        history.push(b'\n');
+    if history.is_empty() {
+        history.extend_from_slice(RAPL_HISTORY_HEADER);
     }
-    history.push(b'\n');
+    history.extend_from_slice(text.as_bytes());
     trim_history_if_needed(&mut history);
 }
 
@@ -438,6 +438,51 @@ fn trim_history_if_needed(history: &mut Vec<u8>) {
     }
 
     history.drain(..drop_len);
+    if !history.starts_with(b"# trueos rapl history v1\n") {
+        let mut rebuilt =
+            Vec::with_capacity(history.len().saturating_add(RAPL_HISTORY_HEADER.len()));
+        rebuilt.extend_from_slice(RAPL_HISTORY_HEADER);
+        rebuilt.extend_from_slice(history);
+        *history = rebuilt;
+    }
+}
+
+fn format_history_row(snapshot: RaplSnapshot) -> String {
+    let mut out = String::new();
+    let _ = write!(
+        out,
+        "{},{},{},{}",
+        snapshot.last_update_ms,
+        snapshot.interval_ms,
+        snapshot.update_count,
+        if snapshot.sample_valid { 1 } else { 0 }
+    );
+
+    let Some(probe) = snapshot.latest else {
+        let _ = writeln!(out, ",,,,,,,,,,");
+        return out;
+    };
+
+    for sample in probe.samples() {
+        let _ = write!(out, ",{:.6}", sample.joules);
+    }
+
+    let interval_seconds = snapshot.interval_ms as f64 / 1000.0;
+    for sample in probe.samples() {
+        let previous_sample = snapshot
+            .previous
+            .and_then(|probe| sample_for_domain(probe, sample.domain));
+        let watts = previous_sample.and_then(|earlier| {
+            sample.average_power_watts_since(earlier, probe.units, interval_seconds)
+        });
+        if let Some(watts) = watts {
+            let _ = write!(out, ",{:.3}", watts);
+        } else {
+            let _ = write!(out, ",");
+        }
+    }
+    let _ = writeln!(out);
+    out
 }
 
 fn format_snapshot_text(snapshot: RaplSnapshot) -> String {

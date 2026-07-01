@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 pub(crate) const UPSTREAM_INTEL_MEDIA_DRIVER_REPO: &str = "https://github.com/intel/media-driver";
 pub(crate) const UPSTREAM_INTEL_MEDIA_DRIVER_COMMIT: &str = "a203cfc";
 pub(crate) const UPSTREAM_AVC_PLATFORM: &str = "Xe_LPM_plus_base";
+pub(crate) const AVC_MAX_SLICES_PER_PICTURE: usize = 64;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AvcDecodePhase {
@@ -348,6 +349,8 @@ pub(crate) struct AvcDecodeResourcePlan {
 pub(crate) struct AvcLongFormatIdrPlan {
     pub picture: AvcPictureParams,
     pub slice: AvcSliceParams,
+    pub slices: [AvcSliceParams; AVC_MAX_SLICES_PER_PICTURE],
+    pub slice_count: usize,
     pub resources: AvcDecodeResourcePlan,
     pub bitstream_bytes: usize,
     pub bitstream_data_offset: u32,
@@ -825,10 +828,10 @@ pub(crate) fn build_long_format_single_i_or_p_command_stream(
     } else {
         mfx_avc_ref_idx_state_params_dummy_l0()
     });
-    let slice = encode_mfx_avc_slice_state(mfx_avc_slice_state_params_for_single_idr(plan));
-    let bsd = encode_mfd_avc_bsd_object(mfd_avc_bsd_object_params_for_single_idr(plan));
-
-    let mut dwords = Vec::with_capacity(AVC_LONG_FORMAT_SINGLE_IDR_COMMAND_DWORDS);
+    let slice_pair_dwords = (MFX_AVC_SLICE_STATE_DWORD_COUNT + MFD_AVC_BSD_OBJECT_DWORD_COUNT)
+        .saturating_mul(plan.slice_count.saturating_sub(1));
+    let mut dwords =
+        Vec::with_capacity(AVC_LONG_FORMAT_SINGLE_IDR_COMMAND_DWORDS + slice_pair_dwords);
     dwords.extend_from_slice(&[MI_FORCE_WAKEUP_DW0, MI_FORCE_WAKEUP_MFX_WELL_DW1]);
     dwords.push(MFX_WAIT_SYNC_DW0);
     dwords.extend_from_slice(&pipe_mode.dwords);
@@ -845,14 +848,27 @@ pub(crate) fn build_long_format_single_i_or_p_command_stream(
     }
     dwords.extend_from_slice(&directmode.dwords);
     dwords.extend_from_slice(&ref_idx.dwords);
-    dwords.extend_from_slice(&slice.dwords);
-    dwords.extend_from_slice(&bsd.dwords);
+    for idx in 0..plan.slice_count {
+        let slice = plan.slices[idx];
+        let is_last_slice = idx + 1 == plan.slice_count;
+        let slice_state = encode_mfx_avc_slice_state(mfx_avc_slice_state_params_for_slice(
+            plan,
+            slice,
+            idx,
+            is_last_slice,
+        ));
+        let bsd =
+            encode_mfd_avc_bsd_object(mfd_avc_bsd_object_params_for_slice(slice, is_last_slice));
+        dwords.extend_from_slice(&slice_state.dwords);
+        dwords.extend_from_slice(&bsd.dwords);
+    }
     dwords.push(MI_FLUSH_DW_VIDEO_DW0);
     dwords.extend_from_slice(&[0, 0, 0, 0]);
 
     let stream = AvcLongFormatIdrCommandStream {
         dwords,
-        command_count: AVC_LONG_FORMAT_SINGLE_IDR_COMMAND_COUNT,
+        command_count: AVC_LONG_FORMAT_SINGLE_IDR_COMMAND_COUNT
+            + plan.slice_count.saturating_sub(1).saturating_mul(2),
     };
     if !validate_long_format_single_i_or_p_command_stream_shape(&stream) {
         return Err(AvcCommandStreamBlocker::CommandShapeMismatch);
@@ -876,8 +892,25 @@ fn validate_long_format_command_stream_shape(
     stream: &AvcLongFormatIdrCommandStream,
     allow_ref_idx_entries: bool,
 ) -> bool {
-    stream.command_count == AVC_LONG_FORMAT_SINGLE_IDR_COMMAND_COUNT
-        && stream.dwords.len() == AVC_LONG_FORMAT_SINGLE_IDR_COMMAND_DWORDS
+    let slice_pair_dwords = MFX_AVC_SLICE_STATE_DWORD_COUNT + MFD_AVC_BSD_OBJECT_DWORD_COUNT;
+    if stream.dwords.len()
+        < AVC_CMD_OFFSET_AVC_SLICE_STATE + slice_pair_dwords + MI_FLUSH_DW_DWORD_COUNT
+    {
+        return false;
+    }
+    let slice_region_dwords = stream
+        .dwords
+        .len()
+        .saturating_sub(AVC_CMD_OFFSET_AVC_SLICE_STATE)
+        .saturating_sub(MI_FLUSH_DW_DWORD_COUNT);
+    if slice_region_dwords == 0 || slice_region_dwords % slice_pair_dwords != 0 {
+        return false;
+    }
+    let slice_count = slice_region_dwords / slice_pair_dwords;
+    let expected_command_count =
+        AVC_LONG_FORMAT_SINGLE_IDR_COMMAND_COUNT + slice_count.saturating_sub(1).saturating_mul(2);
+    let flush_offset = AVC_CMD_OFFSET_AVC_SLICE_STATE + slice_region_dwords;
+    stream.command_count == expected_command_count
         && validate_long_format_single_idr_command_blocks()
         && stream.dwords[AVC_CMD_OFFSET_FORCE_WAKEUP] == MI_FORCE_WAKEUP_DW0
         && stream.dwords[AVC_CMD_OFFSET_WAIT_BEFORE_PIPE_MODE] == MFX_WAIT_SYNC_DW0
@@ -927,9 +960,31 @@ fn validate_long_format_command_stream_shape(
                 && stream.dwords[AVC_CMD_OFFSET_AVC_REF_IDX_STATE + 7] == 0
                 && stream.dwords[AVC_CMD_OFFSET_AVC_REF_IDX_STATE + 8] == 0
                 && stream.dwords[AVC_CMD_OFFSET_AVC_REF_IDX_STATE + 9] == 0))
-        && stream.dwords[AVC_CMD_OFFSET_AVC_SLICE_STATE] == MFX_AVC_SLICE_STATE_DW0
-        && stream.dwords[AVC_CMD_OFFSET_AVC_BSD_OBJECT] == MFD_AVC_BSD_OBJECT_DW0
-        && stream.dwords[AVC_CMD_OFFSET_FLUSH] == MI_FLUSH_DW_VIDEO_DW0
+        && validate_long_format_slice_command_region(stream, slice_count)
+        && stream.dwords[flush_offset] == MI_FLUSH_DW_VIDEO_DW0
+}
+
+fn validate_long_format_slice_command_region(
+    stream: &AvcLongFormatIdrCommandStream,
+    slice_count: usize,
+) -> bool {
+    let slice_pair_dwords = MFX_AVC_SLICE_STATE_DWORD_COUNT + MFD_AVC_BSD_OBJECT_DWORD_COUNT;
+    let mut idx = 0usize;
+    while idx < slice_count {
+        let offset = AVC_CMD_OFFSET_AVC_SLICE_STATE + idx * slice_pair_dwords;
+        if stream.dwords.get(offset).copied().unwrap_or(0) != MFX_AVC_SLICE_STATE_DW0
+            || stream
+                .dwords
+                .get(offset + MFX_AVC_SLICE_STATE_DWORD_COUNT)
+                .copied()
+                .unwrap_or(0)
+                != MFD_AVC_BSD_OBJECT_DW0
+        {
+            return false;
+        }
+        idx += 1;
+    }
+    true
 }
 
 pub(crate) const fn validate_long_format_single_idr_command_blocks() -> bool {
@@ -1011,7 +1066,7 @@ pub(crate) fn parse_annexb_single_i_or_p_plan(
 ) -> Result<AvcLongFormatIdrPlan, AvcAnnexBPlanError> {
     let mut sps = None;
     let mut pps = None;
-    let mut slice_nal = None;
+    let mut slice_nals = Vec::new();
 
     let mut scan = AnnexBNalScanner::new(bytes);
     while let Some(nal) = scan.next() {
@@ -1025,7 +1080,7 @@ pub(crate) fn parse_annexb_single_i_or_p_plan(
         match nal_type {
             7 => sps = Some(parse_sps(payload)?),
             8 => pps = Some(parse_pps(payload)?),
-            1 | 5 => slice_nal = Some((nal, nal_type, nal_ref_idc, payload)),
+            1 | 5 => slice_nals.push((nal, nal_type, nal_ref_idc, payload)),
             6 | 9 => {}
             _ => return Err(AvcAnnexBPlanError::UnsupportedNal),
         }
@@ -1036,10 +1091,19 @@ pub(crate) fn parse_annexb_single_i_or_p_plan(
     if pps.seq_parameter_set_id != sps.seq_parameter_set_id {
         return Err(AvcAnnexBPlanError::UnsupportedPps);
     }
-    let (slice_nal, nal_type, nal_ref_idc, slice_payload) =
-        slice_nal.ok_or(AvcAnnexBPlanError::MissingIdrSlice)?;
+    if slice_nals.is_empty() {
+        return Err(AvcAnnexBPlanError::MissingIdrSlice);
+    }
+    if slice_nals.len() > AVC_MAX_SLICES_PER_PICTURE {
+        return Err(AvcAnnexBPlanError::UnsupportedSlice);
+    }
 
-    let slice = parse_avc_slice(slice_payload, nal_type, nal_ref_idc, &sps, &pps)?;
+    let mut parsed_slices = Vec::new();
+    for (slice_nal, nal_type, nal_ref_idc, slice_payload) in slice_nals.as_slice() {
+        let parsed = parse_avc_slice(slice_payload, *nal_type, *nal_ref_idc, &sps, &pps)?;
+        parsed_slices.push((*slice_nal, *nal_type, *nal_ref_idc, parsed));
+    }
+    let first_slice = parsed_slices[0].3;
     let pitch_bytes = align_ceil_usize(sps.coded_width as usize, MEDIA_TILE64_W);
     let chroma_y_offset = align_ceil_usize(sps.coded_height as usize, MEDIA_TILE64_H);
     let surface = AvcSurfaceLayout::nv12_tile64(
@@ -1062,13 +1126,15 @@ pub(crate) fn parse_annexb_single_i_or_p_plan(
         frame_mbs_only: sps.frame_mbs_only,
         mb_adaptive_frame_field: sps.mb_adaptive_frame_field,
         field_pic: false,
-        reference_pic: nal_ref_idc != 0,
-        num_ref_idx_l0_active_minus1: slice.num_ref_idx_l0_active_minus1,
-        num_ref_idx_l1_active_minus1: slice.num_ref_idx_l1_active_minus1,
+        reference_pic: parsed_slices
+            .iter()
+            .any(|(_, _, nal_ref_idc, _)| *nal_ref_idc != 0),
+        num_ref_idx_l0_active_minus1: first_slice.num_ref_idx_l0_active_minus1,
+        num_ref_idx_l1_active_minus1: first_slice.num_ref_idx_l1_active_minus1,
         pic_init_qp_minus26: pps.pic_init_qp_minus26,
         chroma_qp_index_offset: pps.chroma_qp_index_offset,
         second_chroma_qp_index_offset: pps.second_chroma_qp_index_offset,
-        frame_num: slice.frame_num,
+        frame_num: first_slice.frame_num,
         log2_max_frame_num_minus4: sps.log2_max_frame_num_minus4,
         log2_max_pic_order_cnt_lsb_minus4: sps.log2_max_pic_order_cnt_lsb_minus4,
         num_slice_groups_minus1: pps.num_slice_groups_minus1,
@@ -1076,8 +1142,8 @@ pub(crate) fn parse_annexb_single_i_or_p_plan(
         pic_order_present: pps.pic_order_present,
         slice_group_map_type: pps.slice_group_map_type,
         pic_order_cnt_type: sps.pic_order_cnt_type,
-        top_field_order_cnt: slice.top_field_order_cnt,
-        bottom_field_order_cnt: slice.bottom_field_order_cnt,
+        top_field_order_cnt: first_slice.top_field_order_cnt,
+        bottom_field_order_cnt: first_slice.bottom_field_order_cnt,
         deblocking_filter_control_present: pps.deblocking_filter_control_present,
         delta_pic_order_always_zero: sps.delta_pic_order_always_zero,
         slice_group_change_rate_minus1: pps.slice_group_change_rate_minus1,
@@ -1091,12 +1157,37 @@ pub(crate) fn parse_annexb_single_i_or_p_plan(
         dmv_reference_buffer_bytes: avc_dmv_buffer_bytes_for_picture(picture),
         reference_surface_count: 0,
     };
-    Ok(AvcLongFormatIdrPlan {
-        picture,
-        slice: AvcSliceParams {
+    let macroblock_count = picture.macroblock_count() as u32;
+    let mut slices = [AvcSliceParams {
+        class: first_slice.class,
+        first_mb_in_slice: 0,
+        first_mb_in_next_slice: macroblock_count,
+        slice_data_offset: 0,
+        slice_data_size: 0,
+        slice_data_bit_offset_from_payload: 0,
+        first_mb_byte_offset: 0,
+        slice_data_bit_offset: 0,
+        disable_deblocking_filter_idc: 0,
+        slice_alpha_c0_offset_div2: 0,
+        slice_beta_offset_div2: 0,
+        slice_qp_delta: 0,
+        direct_spatial_mv_pred: false,
+        num_ref_idx_l0_active_minus1: 0,
+        num_ref_idx_l1_active_minus1: 0,
+        top_field_order_cnt: 0,
+        bottom_field_order_cnt: 0,
+    }; AVC_MAX_SLICES_PER_PICTURE];
+    let slice_count = parsed_slices.len();
+    for idx in 0..slice_count {
+        let (slice_nal, _nal_type, _nal_ref_idc, slice) = parsed_slices[idx];
+        let first_mb_in_next_slice = parsed_slices
+            .get(idx + 1)
+            .map(|(_, _, _, next_slice)| next_slice.first_mb_in_slice)
+            .unwrap_or(macroblock_count);
+        slices[idx] = AvcSliceParams {
             class: slice.class,
             first_mb_in_slice: slice.first_mb_in_slice,
-            first_mb_in_next_slice: picture.macroblock_count() as u32,
+            first_mb_in_next_slice,
             slice_data_offset: slice_nal.payload_start as u32,
             slice_data_size: (slice_nal.payload_end - slice_nal.payload_start) as u32,
             slice_data_bit_offset_from_payload: slice.first_mb_bit_offset_from_payload,
@@ -1115,7 +1206,13 @@ pub(crate) fn parse_annexb_single_i_or_p_plan(
             num_ref_idx_l1_active_minus1: slice.num_ref_idx_l1_active_minus1,
             top_field_order_cnt: slice.top_field_order_cnt,
             bottom_field_order_cnt: slice.bottom_field_order_cnt,
-        },
+        };
+    }
+    Ok(AvcLongFormatIdrPlan {
+        picture,
+        slice: slices[0],
+        slices,
+        slice_count,
         resources,
         bitstream_bytes: bytes.len(),
         bitstream_data_offset: 0,
@@ -1245,6 +1342,9 @@ pub(crate) fn validate_long_format_single_i_or_p(
     plan: AvcLongFormatIdrPlan,
     references: AvcReferenceState,
 ) -> Result<(), AvcCommandStreamBlocker> {
+    if plan.slice_count == 0 || plan.slice_count > AVC_MAX_SLICES_PER_PICTURE {
+        return Err(AvcCommandStreamBlocker::Milestone(AvcMilestoneBlocker::InvalidSliceRange));
+    }
     if plan.picture.picture_structure != AvcPictureStructure::Frame {
         return Err(AvcCommandStreamBlocker::Milestone(
             AvcMilestoneBlocker::UnsupportedPictureStructure,
@@ -1263,8 +1363,12 @@ pub(crate) fn validate_long_format_single_i_or_p(
             AvcMilestoneBlocker::UnsupportedChromaFormat,
         ));
     }
-    if !matches!(plan.slice.class, AvcSliceClass::I | AvcSliceClass::P) {
-        return Err(AvcCommandStreamBlocker::Milestone(AvcMilestoneBlocker::UnsupportedSliceClass));
+    for idx in 0..plan.slice_count {
+        if !matches!(plan.slices[idx].class, AvcSliceClass::I | AvcSliceClass::P) {
+            return Err(AvcCommandStreamBlocker::Milestone(
+                AvcMilestoneBlocker::UnsupportedSliceClass,
+            ));
+        }
     }
     if plan.picture.weighted_pred || plan.picture.weighted_bipred_idc != 0 {
         return Err(AvcCommandStreamBlocker::Milestone(AvcMilestoneBlocker::WeightedPrediction));
@@ -1282,23 +1386,32 @@ pub(crate) fn validate_long_format_single_i_or_p(
     {
         return Err(AvcCommandStreamBlocker::Milestone(AvcMilestoneBlocker::InvalidSliceRange));
     }
-    if plan.slice.class == AvcSliceClass::P {
-        let active_l0 = usize::from(plan.slice.num_ref_idx_l0_active_minus1) + 1;
-        if active_l0 == 0 || active_l0 > references.l0_count || references.l0_count > 16 {
-            return Err(AvcCommandStreamBlocker::Milestone(AvcMilestoneBlocker::ReferencesPresent));
-        }
-        let mut idx = 0;
-        while idx < active_l0 {
-            let frame_store_id = references.l0[idx] as usize;
-            if frame_store_id >= references.refs.len() || references.refs[frame_store_id].is_none()
-            {
+    for slice_idx in 0..plan.slice_count {
+        let slice = plan.slices[slice_idx];
+        if slice.class == AvcSliceClass::P {
+            let active_l0 = usize::from(slice.num_ref_idx_l0_active_minus1) + 1;
+            if active_l0 == 0 || active_l0 > references.l0_count || references.l0_count > 16 {
                 return Err(AvcCommandStreamBlocker::Milestone(
                     AvcMilestoneBlocker::ReferencesPresent,
                 ));
             }
-            idx += 1;
+            let mut idx = 0;
+            while idx < active_l0 {
+                let frame_store_id = references.l0[idx] as usize;
+                if frame_store_id >= references.refs.len()
+                    || references.refs[frame_store_id].is_none()
+                {
+                    return Err(AvcCommandStreamBlocker::Milestone(
+                        AvcMilestoneBlocker::ReferencesPresent,
+                    ));
+                }
+                idx += 1;
+            }
+        } else if references.l0_count != 0 {
+            return Err(AvcCommandStreamBlocker::Milestone(AvcMilestoneBlocker::ReferencesPresent));
         }
-    } else if references.l0_count != 0 {
+    }
+    if plan.slice.class != AvcSliceClass::P && references.l0_count != 0 {
         return Err(AvcCommandStreamBlocker::Milestone(AvcMilestoneBlocker::ReferencesPresent));
     }
     if references.ref_count > 16 || plan.resources.reference_surface_count > 16 {
@@ -1334,25 +1447,21 @@ pub(crate) fn validate_long_format_single_i_or_p(
     {
         return Err(AvcCommandStreamBlocker::Milestone(AvcMilestoneBlocker::InvalidSurfaceLayout));
     }
-    if plan.slice.slice_data_size == 0
-        || plan.slice.first_mb_in_slice != 0
-        || plan.slice.first_mb_in_next_slice as usize != plan.picture.macroblock_count()
-        || plan.slice.slice_data_offset as usize >= plan.bitstream_bytes
-        || plan.slice.first_mb_byte_offset >= plan.slice.slice_data_size
-        || plan.slice.first_mb_byte_offset
-            != avc_long_format_first_mb_byte_offset(plan.slice.slice_data_bit_offset_from_payload)
-        || plan.slice.slice_data_bit_offset
-            != avc_long_format_first_mb_bit_offset(plan.slice.slice_data_bit_offset_from_payload)
-        || avc_long_format_slice_record(plan.slice).offset != plan.slice.first_mb_byte_offset
-        || avc_long_format_slice_record(plan.slice).length
-            + avc_long_format_slice_record(plan.slice).offset
-            != plan.slice.slice_data_size
-        || (plan.slice.slice_data_offset as usize)
-            .saturating_add(plan.slice.slice_data_size as usize)
-            > plan.bitstream_bytes
-        || plan.slice.slice_data_bit_offset > 7
-    {
-        return Err(AvcCommandStreamBlocker::Milestone(AvcMilestoneBlocker::InvalidSliceRange));
+    let macroblock_count = plan.picture.macroblock_count();
+    for idx in 0..plan.slice_count {
+        let slice = plan.slices[idx];
+        let expected_first_mb = if idx == 0 {
+            0
+        } else {
+            plan.slices[idx - 1].first_mb_in_next_slice
+        };
+        if slice.first_mb_in_slice != expected_first_mb
+            || !validate_long_format_slice_range(slice, plan.bitstream_bytes, macroblock_count)
+            || (idx + 1 == plan.slice_count
+                && slice.first_mb_in_next_slice as usize != macroblock_count)
+        {
+            return Err(AvcCommandStreamBlocker::Milestone(AvcMilestoneBlocker::InvalidSliceRange));
+        }
     }
     if plan.resources.rowstore != avc_rowstore_scratch_bytes(plan.picture.pic_width_in_mbs()) {
         return Err(AvcCommandStreamBlocker::Milestone(AvcMilestoneBlocker::MissingRowstore));
@@ -1364,6 +1473,32 @@ pub(crate) fn validate_long_format_single_i_or_p(
         return Err(AvcCommandStreamBlocker::Milestone(AvcMilestoneBlocker::MissingDmvBuffer));
     }
     Ok(())
+}
+
+fn validate_long_format_slice_range(
+    slice: AvcSliceParams,
+    bitstream_bytes: usize,
+    macroblock_count: usize,
+) -> bool {
+    if slice.slice_data_size == 0
+        || slice.first_mb_in_next_slice <= slice.first_mb_in_slice
+        || slice.first_mb_in_next_slice as usize > macroblock_count
+        || slice.slice_data_offset as usize >= bitstream_bytes
+        || slice.first_mb_byte_offset >= slice.slice_data_size
+        || slice.first_mb_byte_offset
+            != avc_long_format_first_mb_byte_offset(slice.slice_data_bit_offset_from_payload)
+        || slice.slice_data_bit_offset
+            != avc_long_format_first_mb_bit_offset(slice.slice_data_bit_offset_from_payload)
+        || avc_long_format_slice_record(slice).offset != slice.first_mb_byte_offset
+        || avc_long_format_slice_record(slice).length + avc_long_format_slice_record(slice).offset
+            != slice.slice_data_size
+        || (slice.slice_data_offset as usize).saturating_add(slice.slice_data_size as usize)
+            > bitstream_bytes
+        || slice.slice_data_bit_offset > 7
+    {
+        return false;
+    }
+    true
 }
 
 pub(crate) const CODECHAL_DECODE_MODE_AVCVLD: u32 = 4;
@@ -2131,8 +2266,16 @@ pub(crate) const fn encode_mfx_avc_ref_idx_state(
 pub(crate) const fn mfx_avc_slice_state_params_for_single_idr(
     plan: AvcLongFormatIdrPlan,
 ) -> MfxAvcSliceStateParams {
+    mfx_avc_slice_state_params_for_slice(plan, plan.slice, 0, true)
+}
+
+pub(crate) const fn mfx_avc_slice_state_params_for_slice(
+    plan: AvcLongFormatIdrPlan,
+    slice: AvcSliceParams,
+    slice_id: usize,
+    is_last_slice: bool,
+) -> MfxAvcSliceStateParams {
     let picture = plan.picture;
-    let slice = plan.slice;
     let width_in_mbs = picture.pic_width_in_mbs() as u32;
     let frame_height_in_mbs = picture.pic_height_in_mbs() as u32;
     let first_mb = slice.first_mb_in_slice;
@@ -2164,13 +2307,13 @@ pub(crate) const fn mfx_avc_slice_state_params_for_single_idr(
         } else {
             next_mb / width_in_mbs
         },
-        slice_id: 0,
+        slice_id: slice_id as u8,
         cabac_zero_word_insertion_enable: false,
         emulation_byte_slice_insert_enable: false,
         tail_insertion_present_in_bitstream: false,
         slice_data_insertion_present_in_bitstream: false,
         header_insertion_present_in_bitstream: false,
-        is_last_slice: true,
+        is_last_slice,
         round_intra: 5,
         round_inter: 2,
         round_inter_enable: false,
@@ -2216,7 +2359,13 @@ pub(crate) const fn encode_mfx_avc_slice_state(
 pub(crate) const fn mfd_avc_bsd_object_params_for_single_idr(
     plan: AvcLongFormatIdrPlan,
 ) -> MfdAvcBsdObjectParams {
-    let slice = plan.slice;
+    mfd_avc_bsd_object_params_for_slice(plan.slice, true)
+}
+
+pub(crate) const fn mfd_avc_bsd_object_params_for_slice(
+    slice: AvcSliceParams,
+    last_slice: bool,
+) -> MfdAvcBsdObjectParams {
     let slice_record = avc_long_format_slice_record(slice);
     MfdAvcBsdObjectParams {
         indirect_bsd_data_length: slice_record.length + slice_record.offset,
@@ -2225,7 +2374,7 @@ pub(crate) const fn mfd_avc_bsd_object_params_for_single_idr(
         first_macroblock_mb_bit_offset: avc_long_format_first_mb_bit_offset(
             slice.slice_data_bit_offset_from_payload,
         ),
-        last_slice: true,
+        last_slice,
         fix_prev_mb_skipped: true,
         intra_predmode_4x4_8x8_luma_error_control: true,
         intra_prediction_error_control: true,

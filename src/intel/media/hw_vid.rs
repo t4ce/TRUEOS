@@ -29,6 +29,20 @@ const H264_BROWSER_INNERTUBE_TIMEOUT_MS: u64 = 45_000;
 const H264_BROWSER_INNERTUBE_MAX_BYTES: usize = 4 * 1024 * 1024;
 const H264_BROWSER_SABR_PROBE_TIMEOUT_MS: u64 = 30_000;
 const H264_BROWSER_SABR_PROBE_BYTES: usize = 64 * 1024;
+const H264_MEDIA_URL_BOOT_PROBE_ENABLED: bool = true;
+const H264_MEDIA_URL_BOOT_PROBE_DELAY_MS: u64 = 6_000;
+const H264_MEDIA_URL_BOOT_PROBE_URL: &str =
+    "https://docs.evostream.com/sample_content/assets/bun33s.mp4";
+const H264_MEDIA_URL_BOOT_PROBE_OPTIONS: H264PlaybackOptions = H264PlaybackOptions {
+    fps: 25,
+    reverse_after_forward: false,
+    cache_mode: H264PlaybackCacheMode::Off,
+    stripe_study: false,
+    show_cache_fill: false,
+    diagnostics: false,
+    noreset_lite: true,
+    loop_playback: false,
+};
 pub(crate) const H264_BOOT_PROBE_STREAM_PATH: &str = "x31_head_movie.annexb.h264";
 
 #[derive(Copy, Clone, Debug)]
@@ -332,6 +346,55 @@ pub(crate) async fn hw_vid_probe_task() {
     );
 }
 
+#[embassy_executor::task]
+pub(crate) async fn hw_vid_media_url_probe_task() {
+    if !H264_MEDIA_URL_BOOT_PROBE_ENABLED {
+        crate::log!("intel/hw_vid: media-url-probe disabled\n");
+        return;
+    }
+    if !crate::intel::has_media_decode_engine() {
+        crate::log!("intel/hw_vid: media-url-probe skipped reason=no-media-decode-engine\n");
+        return;
+    }
+
+    Timer::after(EmbassyDuration::from_millis(H264_MEDIA_URL_BOOT_PROBE_DELAY_MS)).await;
+    crate::log!(
+        "intel/hw_vid: media-url-probe begin fps={} url={}\n",
+        H264_MEDIA_URL_BOOT_PROBE_OPTIONS.fps(),
+        H264_MEDIA_URL_BOOT_PROBE_URL
+    );
+    match run_media_url_playback(
+        H264_MEDIA_URL_BOOT_PROBE_URL,
+        H264_MEDIA_URL_BOOT_PROBE_OPTIONS,
+        "media-url-probe",
+        "media-url-probe",
+    )
+    .await
+    {
+        Ok(report) => crate::log!(
+            "intel/hw_vid: media-url-probe done submitted={} target_fps={} elapsed_ms={} effective_fps={}.{:02} waited={} late={} wait_ms={} avg_decode_us={} max_decode_us={} avg_process_us={} avg_present_us={} url={}\n",
+            report.submitted,
+            report.target_fps,
+            report.elapsed_ms,
+            report.effective_fps_x100 / 100,
+            report.effective_fps_x100 % 100,
+            report.waited_frames,
+            report.late_frames,
+            report.total_wait_ms,
+            report.avg_decode_us,
+            report.max_decode_us,
+            report.avg_process_us,
+            report.avg_present_us,
+            H264_MEDIA_URL_BOOT_PROBE_URL
+        ),
+        Err(err) => crate::log!(
+            "intel/hw_vid: media-url-probe failed err={} url={}\n",
+            err,
+            H264_MEDIA_URL_BOOT_PROBE_URL
+        ),
+    }
+}
+
 pub(crate) async fn run_shell_vid_playback(
     options: H264PlaybackOptions,
 ) -> Result<H264PlaybackReport, &'static str> {
@@ -348,6 +411,40 @@ pub(crate) async fn run_shell_vid_playback(
     let old_noreset_lite =
         crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(options.noreset_lite());
     let report = h264_i_p_playback_probe(file, options).await;
+    crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(old_noreset_lite);
+    crate::intel::hw_pic::set_detailed_logging_enabled(old_hw_pic_logging);
+    crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(old_surface_probes);
+    Ok(report)
+}
+
+async fn run_media_url_playback(
+    url: &str,
+    options: H264PlaybackOptions,
+    log_scope: &'static str,
+    playback_path: &'static str,
+) -> Result<H264PlaybackReport, &'static str> {
+    if !crate::intel::has_media_decode_engine() {
+        return Err("media decode engine unavailable");
+    }
+    let mp4_bytes = h264_fetch_media_url_bytes(url, log_scope).await?;
+    let annexb = mp4_avc1_to_annexb(mp4_bytes.as_slice())?;
+    crate::log!(
+        "intel/hw_vid: {} demux accepted=1 container=mp4 codec=avc1 mp4_bytes={} annexb_bytes={} url={}\n",
+        log_scope,
+        mp4_bytes.len(),
+        annexb.len(),
+        url
+    );
+
+    let old_hw_pic_logging =
+        crate::intel::hw_pic::set_detailed_logging_enabled(options.diagnostics());
+    let old_surface_probes =
+        crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(options.diagnostics());
+    let old_noreset_lite =
+        crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(options.noreset_lite());
+    let report =
+        h264_i_p_playback_probe_annexb_bytes(annexb, "media-url-mp4-avc1", playback_path, options)
+            .await;
     crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(old_noreset_lite);
     crate::intel::hw_pic::set_detailed_logging_enabled(old_hw_pic_logging);
     crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(old_surface_probes);
@@ -1107,6 +1204,13 @@ fn hex_prefix(bytes: &[u8], max_len: usize) -> String {
 }
 
 async fn h264_fetch_browser_media_candidate(url: &str) -> Result<Vec<u8>, &'static str> {
+    h264_fetch_media_url_bytes(url, "browser-media").await
+}
+
+async fn h264_fetch_media_url_bytes(
+    url: &str,
+    log_scope: &'static str,
+) -> Result<Vec<u8>, &'static str> {
     let youtube_n_param = youtube_url_has_query_field(url, "n");
     let profiles = [
         "browser-range",
@@ -1119,7 +1223,8 @@ async fn h264_fetch_browser_media_candidate(url: &str) -> Result<Vec<u8>, &'stat
     for profile in profiles {
         let started = EmbassyInstant::now();
         crate::log!(
-            "intel/hw_vid: browser-media fetch begin profile={} timeout_ms={} max_bytes={} youtube_n_param={} url={}\n",
+            "intel/hw_vid: {} fetch begin profile={} timeout_ms={} max_bytes={} youtube_n_param={} url={}\n",
+            log_scope,
             profile,
             H264_BROWSER_MEDIA_FETCH_TIMEOUT_MS,
             H264_BROWSER_MEDIA_FETCH_MAX_BYTES,
@@ -1136,7 +1241,8 @@ async fn h264_fetch_browser_media_candidate(url: &str) -> Result<Vec<u8>, &'stat
         {
             Ok(bytes) => {
                 crate::log!(
-                    "intel/hw_vid: browser-media fetch done profile={} bytes={} waited_ms={} marker_ftyp={} marker_moov={} marker_mdat={} marker_avcc={} head_hex={} url={}\n",
+                    "intel/hw_vid: {} fetch done profile={} bytes={} waited_ms={} marker_ftyp={} marker_moov={} marker_mdat={} marker_avcc={} head_hex={} url={}\n",
+                    log_scope,
                     profile,
                     bytes.len(),
                     started.elapsed().as_millis(),
@@ -1151,7 +1257,8 @@ async fn h264_fetch_browser_media_candidate(url: &str) -> Result<Vec<u8>, &'stat
             }
             Err(err) => {
                 crate::log!(
-                    "intel/hw_vid: browser-media fetch failed profile={} err={} waited_ms={} url={}\n",
+                    "intel/hw_vid: {} fetch failed profile={} err={} waited_ms={} url={}\n",
+                    log_scope,
                     profile,
                     err,
                     started.elapsed().as_millis(),
@@ -1161,7 +1268,8 @@ async fn h264_fetch_browser_media_candidate(url: &str) -> Result<Vec<u8>, &'stat
         }
     }
     crate::log!(
-        "intel/hw_vid: browser-media fetch exhausted profiles={} youtube_n_param={} action=check-url-signature-or-n-transform url={}\n",
+        "intel/hw_vid: {} fetch exhausted profiles={} youtube_n_param={} action=check-url-signature-or-n-transform url={}\n",
+        log_scope,
         profiles.len(),
         youtube_n_param as u8,
         url
@@ -1266,7 +1374,7 @@ fn mp4_next_box(data: &[u8], cursor: usize, limit: usize) -> Option<Mp4Box> {
         return None;
     }
     let end = cursor.checked_add(size as usize)?;
-    if end > limit || end <= payload_start {
+    if end > limit || end < payload_start {
         return None;
     }
     Some(Mp4Box {
@@ -1758,6 +1866,11 @@ fn mp4_emit_annexb_nal(out: &mut Vec<u8>, nal: &[u8]) {
     out.extend_from_slice(nal);
 }
 
+fn mp4_emit_annexb_aud(out: &mut Vec<u8>) {
+    // primary_pic_type=7 keeps the marker generic for mixed I/P streams.
+    out.extend_from_slice(&[0, 0, 0, 1, 0x09, 0xF0]);
+}
+
 fn mp4_emit_track_annexb(
     data: &[u8],
     track: &Mp4AvcTrack,
@@ -1780,6 +1893,7 @@ fn mp4_emit_track_annexb(
                 mp4_emit_annexb_nal(&mut out, pps.as_slice());
             }
         }
+        mp4_emit_annexb_aud(&mut out);
         let sample_end = sample.offset + sample.size;
         let mut cursor = sample.offset;
         while cursor + track.length_size <= sample_end {
@@ -1865,6 +1979,82 @@ struct H264StreamNal {
 struct H264BufferedNal {
     meta: H264StreamNal,
     bytes: Vec<u8>,
+}
+
+struct H264AccessUnit {
+    stream_offset: u64,
+    bytes: usize,
+    nal_type: u8,
+    vcl_nals: usize,
+    nals: usize,
+    data: Vec<u8>,
+    sps: Vec<u8>,
+    pps: Vec<u8>,
+}
+
+struct H264AccessUnitBuilder {
+    stream_offset: u64,
+    bytes: usize,
+    nal_type: u8,
+    vcl_nals: usize,
+    nals: usize,
+    data: Vec<u8>,
+}
+
+impl H264AccessUnitBuilder {
+    fn new(nal: &H264BufferedNal) -> Self {
+        Self {
+            stream_offset: nal.meta.stream_offset,
+            bytes: nal.meta.bytes,
+            nal_type: nal.meta.nal_type,
+            vcl_nals: 1,
+            nals: 1,
+            data: nal.bytes.clone(),
+        }
+    }
+
+    fn push(&mut self, nal: H264BufferedNal) {
+        self.bytes = nal
+            .meta
+            .stream_offset
+            .saturating_add(nal.meta.bytes as u64)
+            .saturating_sub(self.stream_offset) as usize;
+        if nal.meta.nal_type == 5 {
+            self.nal_type = 5;
+        }
+        if matches!(nal.meta.nal_type, 1 | 5) {
+            self.vcl_nals += 1;
+        }
+        self.nals += 1;
+        self.data.extend_from_slice(nal.bytes.as_slice());
+    }
+
+    fn finish(self, sps: &[u8], pps: &[u8]) -> H264AccessUnit {
+        H264AccessUnit {
+            stream_offset: self.stream_offset,
+            bytes: self.bytes,
+            nal_type: self.nal_type,
+            vcl_nals: self.vcl_nals,
+            nals: self.nals,
+            data: self.data,
+            sps: sps.to_vec(),
+            pps: pps.to_vec(),
+        }
+    }
+}
+
+fn h264_finish_pending_access_unit(
+    pending: Option<H264AccessUnitBuilder>,
+    last_sps: &Option<Vec<u8>>,
+    last_pps: &Option<Vec<u8>>,
+    skipped_missing_headers: &mut usize,
+) -> Option<H264AccessUnit> {
+    let pending = pending?;
+    let (Some(sps), Some(pps)) = (last_sps, last_pps) else {
+        *skipped_missing_headers = skipped_missing_headers.saturating_add(1);
+        return None;
+    };
+    Some(pending.finish(sps.as_slice(), pps.as_slice()))
 }
 
 struct H264IndexedFrame {
@@ -2319,6 +2509,9 @@ async fn h264_i_p_playback_probe_with_reader(
     let mut skipped_missing_headers = 0usize;
     let mut last_sps: Option<Vec<u8>> = None;
     let mut last_pps: Option<Vec<u8>> = None;
+    let mut access_units = Vec::new();
+    let mut pending_au: Option<H264AccessUnitBuilder> = None;
+    let mut vcl_nals_seen = 0usize;
     let mut indexed_frames = Vec::new();
     let mut last_idr_frame: Option<usize> = None;
     let forward_full_cache_enabled = matches!(mode.cache_mode(), H264PlaybackCacheMode::Full)
@@ -2330,9 +2523,7 @@ async fn h264_i_p_playback_probe_with_reader(
     let mut forward_tail_start_frame = 0usize;
     let mut forward_tail_cache = Vec::new();
     let mut stopped_at = 0u64;
-    let playback_start = EmbassyInstant::now();
     let frame_period = mode.frame_period();
-    let mut next_frame_deadline = playback_start;
     let mut playback_timing = H264PlaybackTiming::default();
 
     crate::log!(
@@ -2359,92 +2550,140 @@ async fn h264_i_p_playback_probe_with_reader(
         match nal.meta.nal_type {
             7 => last_sps = Some(nal.bytes),
             8 => last_pps = Some(nal.bytes),
-            1 | 5 => {
-                if nal.meta.nal_type == 5 {
-                    idr_seen += 1;
-                } else {
-                    p_seen += 1;
+            9 => {
+                if let Some(unit) = h264_finish_pending_access_unit(
+                    pending_au.take(),
+                    &last_sps,
+                    &last_pps,
+                    &mut skipped_missing_headers,
+                ) {
+                    access_units.push(unit);
                 }
-                let (Some(sps), Some(pps)) = (&last_sps, &last_pps) else {
-                    skipped_missing_headers += 1;
-                    continue;
-                };
-                let indexed_frame = indexed_frames.len();
-                if nal.meta.nal_type == 5 {
-                    last_idr_frame = Some(indexed_frame);
-                    if forward_tail_cache_enabled {
-                        forward_tail_start_frame = indexed_frame;
-                        forward_tail_cache.clear();
-                    }
-                }
-                let mut frame = Vec::with_capacity(sps.len() + pps.len() + nal.bytes.len());
-                frame.extend_from_slice(sps.as_slice());
-                frame.extend_from_slice(pps.as_slice());
-                frame.extend_from_slice(nal.bytes.as_slice());
-                let detail = super::h264_cmd::parse_annexb_single_i_or_p_debug(frame.as_slice())
-                    .map_err(|err| {
-                        crate::log!(
-                            "intel/hw_vid: h264-frame-index detail-parse-failed source_frame={} stream_idr={} nal={} offset=0x{:X} bytes=0x{:X} err={:?}\n",
-                            indexed_frame + 1,
-                            idr_seen,
-                            nal.meta.nal_type,
-                            nal.meta.stream_offset,
-                            nal.meta.bytes,
-                            err
-                        );
-                        err
-                    })
-                    .ok();
-                indexed_frames.push(H264IndexedFrame {
-                    stream_offset: nal.meta.stream_offset,
-                    bytes: nal.meta.bytes,
-                    nal_type: nal.meta.nal_type,
-                    stream_idr_index: idr_seen,
-                    decode_start_frame: last_idr_frame.unwrap_or(indexed_frame),
-                    detail,
-                    sps: sps.clone(),
-                    pps: pps.clone(),
-                });
-                if mode.diagnostics() {
-                    h264_log_frame_index(&indexed_frames[indexed_frame], indexed_frame);
-                }
-
-                submitted += 1;
-                let decode_start = EmbassyInstant::now();
-                let decoded = h264_submit_wait_probe_frame(
-                    "forward",
-                    submitted,
-                    idr_seen,
-                    &frame,
-                    true,
-                    capture_forward_output,
-                    mode.diagnostics(),
-                    Some(&mut playback_timing),
-                )
-                .await;
-                playback_timing.record_decode_ticks(
-                    EmbassyInstant::now()
-                        .saturating_duration_since(decode_start)
-                        .as_ticks(),
-                );
-                if capture_forward_output {
-                    if let Some(decoded) = decoded {
-                        if forward_full_cache_enabled {
-                            forward_full_cache.push(decoded);
-                        } else if forward_tail_cache_enabled {
-                            forward_tail_cache.push(decoded);
-                        }
-                    }
-                }
-                h264_wait_until_next_frame(
-                    &mut next_frame_deadline,
-                    frame_period,
-                    &mut playback_timing,
-                )
-                .await;
             }
-            _ => {}
+            1 | 5 => {
+                vcl_nals_seen = vcl_nals_seen.saturating_add(1);
+                let begins_new_picture = pending_au.is_some()
+                    && h264_slice_first_mb_in_slice(nal.bytes.as_slice()) == Some(0);
+                if begins_new_picture {
+                    if let Some(unit) = h264_finish_pending_access_unit(
+                        pending_au.take(),
+                        &last_sps,
+                        &last_pps,
+                        &mut skipped_missing_headers,
+                    ) {
+                        access_units.push(unit);
+                    }
+                }
+                if let Some(pending) = pending_au.as_mut() {
+                    pending.push(nal);
+                } else {
+                    pending_au = Some(H264AccessUnitBuilder::new(&nal));
+                }
+            }
+            _ => {
+                if let Some(pending) = pending_au.as_mut() {
+                    pending.push(nal);
+                }
+            }
         }
+    }
+    if let Some(unit) = h264_finish_pending_access_unit(
+        pending_au.take(),
+        &last_sps,
+        &last_pps,
+        &mut skipped_missing_headers,
+    ) {
+        access_units.push(unit);
+    }
+
+    crate::log!(
+        "intel/hw_vid: h264-access-units nals={} vcl_nals={} access_units={} missing_headers={} stopped_at=0x{:X}\n",
+        nal_count,
+        vcl_nals_seen,
+        access_units.len(),
+        skipped_missing_headers,
+        stopped_at
+    );
+
+    let playback_start = EmbassyInstant::now();
+    let mut next_frame_deadline = playback_start;
+    for unit in access_units {
+        if unit.nal_type == 5 {
+            idr_seen += 1;
+        } else {
+            p_seen += 1;
+        }
+        let indexed_frame = indexed_frames.len();
+        if unit.nal_type == 5 {
+            last_idr_frame = Some(indexed_frame);
+            if forward_tail_cache_enabled {
+                forward_tail_start_frame = indexed_frame;
+                forward_tail_cache.clear();
+            }
+        }
+        let mut frame = Vec::with_capacity(unit.sps.len() + unit.pps.len() + unit.data.len());
+        frame.extend_from_slice(unit.sps.as_slice());
+        frame.extend_from_slice(unit.pps.as_slice());
+        frame.extend_from_slice(unit.data.as_slice());
+        let detail = super::h264_cmd::parse_annexb_single_i_or_p_debug(frame.as_slice())
+            .map_err(|err| {
+                crate::log!(
+                    "intel/hw_vid: h264-frame-index detail-parse-failed source_frame={} stream_idr={} nal={} offset=0x{:X} bytes=0x{:X} slices={} nals={} err={:?}\n",
+                    indexed_frame + 1,
+                    idr_seen,
+                    unit.nal_type,
+                    unit.stream_offset,
+                    unit.bytes,
+                    unit.vcl_nals,
+                    unit.nals,
+                    err
+                );
+                err
+            })
+            .ok();
+        indexed_frames.push(H264IndexedFrame {
+            stream_offset: unit.stream_offset,
+            bytes: unit.bytes,
+            nal_type: unit.nal_type,
+            stream_idr_index: idr_seen,
+            decode_start_frame: last_idr_frame.unwrap_or(indexed_frame),
+            detail,
+            sps: unit.sps,
+            pps: unit.pps,
+        });
+        if mode.diagnostics() {
+            h264_log_frame_index(&indexed_frames[indexed_frame], indexed_frame);
+        }
+
+        submitted += 1;
+        let decode_start = EmbassyInstant::now();
+        let decoded = h264_submit_wait_probe_frame(
+            "forward",
+            submitted,
+            idr_seen,
+            &frame,
+            true,
+            capture_forward_output,
+            mode.diagnostics(),
+            Some(&mut playback_timing),
+        )
+        .await;
+        playback_timing.record_decode_ticks(
+            EmbassyInstant::now()
+                .saturating_duration_since(decode_start)
+                .as_ticks(),
+        );
+        if capture_forward_output {
+            if let Some(decoded) = decoded {
+                if forward_full_cache_enabled {
+                    forward_full_cache.push(decoded);
+                } else if forward_tail_cache_enabled {
+                    forward_tail_cache.push(decoded);
+                }
+            }
+        }
+        h264_wait_until_next_frame(&mut next_frame_deadline, frame_period, &mut playback_timing)
+            .await;
     }
 
     let forward_full_cache_frames = forward_full_cache.len();
@@ -3686,6 +3925,66 @@ fn h264_find_start_code(bytes: &[u8], offset: usize) -> Option<(usize, usize)> {
             return Some((i, 4));
         }
         i += 1;
+    }
+    None
+}
+
+fn h264_slice_first_mb_in_slice(nal: &[u8]) -> Option<u32> {
+    let (start, start_code_len) = h264_find_start_code(nal, 0)?;
+    let payload_start = start.checked_add(start_code_len)?;
+    let header = *nal.get(payload_start)?;
+    if !matches!(header & 0x1f, 1 | 5) {
+        return None;
+    }
+    let payload = nal.get(payload_start + 1..)?;
+    h264_read_first_ue_from_ebsp(payload)
+}
+
+fn h264_read_first_ue_from_ebsp(payload: &[u8]) -> Option<u32> {
+    let mut leading_zero_bits = 0usize;
+    let mut bit_index = 0usize;
+    loop {
+        let bit = h264_ebsp_bit(payload, bit_index)?;
+        bit_index += 1;
+        if bit == 0 {
+            leading_zero_bits += 1;
+            if leading_zero_bits > 31 {
+                return None;
+            }
+        } else {
+            break;
+        }
+    }
+
+    let mut suffix = 0u32;
+    for _ in 0..leading_zero_bits {
+        let bit = h264_ebsp_bit(payload, bit_index)? as u32;
+        bit_index += 1;
+        suffix = (suffix << 1) | bit;
+    }
+    Some(((1u32 << leading_zero_bits) - 1).saturating_add(suffix))
+}
+
+fn h264_ebsp_bit(payload: &[u8], bit_index: usize) -> Option<u8> {
+    let mut zero_run = 0usize;
+    let mut rbsp_bit = 0usize;
+    for byte in payload.iter().copied() {
+        if zero_run >= 2 && byte == 0x03 {
+            zero_run = 0;
+            continue;
+        }
+        let next_zero_run = if byte == 0 {
+            zero_run.saturating_add(1)
+        } else {
+            0
+        };
+        for bit in (0..8).rev() {
+            if rbsp_bit == bit_index {
+                return Some((byte >> bit) & 1);
+            }
+            rbsp_bit += 1;
+        }
+        zero_run = next_zero_run;
     }
     None
 }
