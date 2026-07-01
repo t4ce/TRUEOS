@@ -63,7 +63,7 @@ pub const OP_BP_FS_WRITE_ABORT: u32 = 0x31; // arg0 handle -> rc
 pub const OP_BP_FS_CREATE_DIR_ALL: u32 = 0x32; // payload path -> rc
 pub const OP_BP_FS_EXISTS: u32 = 0x33; // payload path -> 0/1/rc
 pub const OP_BP_FS_REMOVE: u32 = 0x34; // payload path -> rc
-pub const OP_BP_FS_STAT: u32 = 0x60; // payload path -> rc + kind in response_data[63:32]
+pub const OP_BP_FS_STAT: u32 = 0x60; // payload path -> rc + kind in response_data[63:32], optional payload kind:u32 len:u64
 pub const OP_BP_THREAD_CURRENT_ID: u32 = 0x61; // response is current TRUEOS vthread id
 pub const OP_BP_SERVICE_LANE_SUBMIT: u32 = 0x62; // arg0/arg1 boxed service-lane job raw parts
 pub const OP_BP_TOKIO_BLOCKING_SPAWN: u32 = OP_BP_SERVICE_LANE_SUBMIT; // compatibility alias
@@ -1135,7 +1135,24 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let mut len = 0u64;
             let rc = crate::r::io::cabi::fs_stat_host(path, &mut kind, &mut len);
             let data = (rc as u32 as u64) | ((kind as u64) << 32);
-            write_response(vm_id, seq, STATUS_OK, data, 0);
+            if path.contains("ggml-tiny") {
+                crate::log!(
+                    "vmcall: bp-fs-stat path={} rc={} kind={} len={}\n",
+                    path,
+                    rc,
+                    kind,
+                    len
+                );
+            }
+            let out_len = if rc == 0 {
+                let payload = unsafe { &mut (&mut (*p).payload)[..12] };
+                payload[..4].copy_from_slice(&kind.to_le_bytes());
+                payload[4..12].copy_from_slice(&len.to_le_bytes());
+                12
+            } else {
+                0
+            };
+            write_response(vm_id, seq, STATUS_OK, data, out_len);
             DispatchOutcome::Resume
         }
         OP_BP_FS_REMOVE => {

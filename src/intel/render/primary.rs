@@ -1990,9 +1990,7 @@ fn render_joker_vf_experiment(variant: &str) -> StreamoutProofExperiment {
         | "vf-rect-mesa-simple-oa-arm"
         | "vf-rect-ndc-mesa-simple-oa"
         | "vf-rect-mesa-nosrc-header-oa"
-        | "vf-rect-ndc-mesa-nosrc-header-oa" => {
-            StreamoutProofExperiment::PositionSlot0
-        }
+        | "vf-rect-ndc-mesa-nosrc-header-oa" => StreamoutProofExperiment::PositionSlot0,
         "vf-rect-oa-pos0" => StreamoutProofExperiment::PositionSlot0,
         "point-oa-header" | "vf-rect-oa-header" | "so-vf-header" | "so-vs-header" => {
             StreamoutProofExperiment::HeaderAndPositionSlots01
@@ -2031,8 +2029,8 @@ pub(crate) fn submit_render_joker_probe(name: &str) -> Result<RenderJokerResult,
     result
 }
 
-pub(crate) fn submit_render_artificial_fragment_sentinel(
-) -> Result<RenderArtificialFragmentResult, &'static str> {
+pub(crate) fn submit_render_artificial_fragment_sentinel()
+-> Result<RenderArtificialFragmentResult, &'static str> {
     if PRIMARY_PROBE_IN_FLIGHT
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -2045,8 +2043,8 @@ pub(crate) fn submit_render_artificial_fragment_sentinel(
     result
 }
 
-fn submit_render_artificial_fragment_sentinel_locked(
-) -> Result<RenderArtificialFragmentResult, &'static str> {
+fn submit_render_artificial_fragment_sentinel_locked()
+-> Result<RenderArtificialFragmentResult, &'static str> {
     let Some(dev) = crate::intel::claimed_device() else {
         crate::log!("intel/render: artificial-fragment-sentinel skipped reason=no-device\n");
         return Err("no-device");
@@ -3003,9 +3001,27 @@ fn run_fragment_shape_frontier_spectrum(dev: crate::intel::Dev, warm: RenderWarm
             StreamoutProofExperiment::PointSizeSlot0PositionSlot1,
         ),
         (
+            "point-vf-giant-oa-hammer",
+            VfPrimitiveGeometry::CenterPoint,
+            BackendProbeMode::RasterWmInputOaHammer,
+            StreamoutProofExperiment::PointSizeSlot0PositionSlot1,
+        ),
+        (
             "point-vf-screen-oa-w64",
             VfPrimitiveGeometry::ScreenSpacePoint8x8,
             BackendProbeMode::RasterWmInputOaPointWidth64Screen,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "point-vf-screen-oa-hammer",
+            VfPrimitiveGeometry::ScreenSpacePoint8x8,
+            BackendProbeMode::RasterWmInputOaScreenHammer,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "line-vf-screen-oa-hammer",
+            VfPrimitiveGeometry::ScreenSpaceLine8x8,
+            BackendProbeMode::RasterWmInputOaScreenHammer,
             StreamoutProofExperiment::PositionSlot1,
         ),
         (
@@ -3110,6 +3126,12 @@ fn run_fragment_shape_frontier_spectrum(dev: crate::intel::Dev, warm: RenderWarm
             BackendProbeMode::RasterWmInputOaEarlySample,
             StreamoutProofExperiment::PositionSlot1,
         ),
+        (
+            "screen-rect-oa-hammer",
+            VfPrimitiveGeometry::ScreenSpaceRect8x8OrderB,
+            BackendProbeMode::RasterWmInputOaScreenHammer,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
     ];
     let aligned_target_probes = [
         (
@@ -3128,6 +3150,18 @@ fn run_fragment_shape_frontier_spectrum(dev: crate::intel::Dev, warm: RenderWarm
             "vf-rect-ndc-oa-early-rt32",
             VfPrimitiveGeometry::NdcRect,
             BackendProbeMode::RasterWmInputOaEarlySample,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa-hammer-rt32",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaHammer,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-line-ndc-oa-hammer-rt32",
+            VfPrimitiveGeometry::NdcLine,
+            BackendProbeMode::RasterWmInputOaHammer,
             StreamoutProofExperiment::PositionSlot1,
         ),
         (
@@ -3485,7 +3519,9 @@ fn submit_triangle_vf_draw_to_surface_ext(
             draw.target_h.saturating_sub(1),
         );
     } else if geometry.point_candidate() {
-        let point_width_raw = backend_probe_mode.point_width_raw_override().unwrap_or(0x200);
+        let point_width_raw = backend_probe_mode
+            .point_width_raw_override()
+            .unwrap_or(0x200);
         intel_render_focus_log!(
             "intel/render: {} fragment-candidate-shape accepted=1 geometry={} topology=pointlist ndc=center point_width_raw=0x{:X} point_width_source={} vf_contract={} screen_center=[{},{}] coverage_contract=giant-point does_not_prove=raster_samples_or_ps\n",
             submit_name,
@@ -3499,6 +3535,15 @@ fn submit_triangle_vf_draw_to_surface_ext(
             vf_experiment.vf_slot_contract(),
             draw.target_w / 2,
             draw.target_h / 2,
+        );
+    } else if geometry.line_candidate() {
+        intel_render_focus_log!(
+            "intel/render: {} fragment-candidate-shape accepted=1 geometry={} topology=linelist vf_contract={} target={}x{} coverage_contract=diagonal-line does_not_prove=raster_samples_or_ps\n",
+            submit_name,
+            geometry.label(),
+            vf_experiment.vf_slot_contract(),
+            draw.target_w,
+            draw.target_h,
         );
     }
 
@@ -3604,23 +3649,19 @@ fn submit_triangle_vf_draw_to_surface_ext(
         pipeline.ps.meta.kernel.dispatch_mode
     );
 
-    let probe_state = match write_triangle_probe_state(
-        warm,
-        draw,
-        shader_layout,
-        blend_mode,
-        backend_probe_mode,
-    ) {
-        Ok(layout) => layout,
-        Err(reason) => {
-            crate::log!(
-                "intel/render: {} staging skipped reason=probe-state-error detail={}\n",
-                submit_name,
-                reason
-            );
-            return false;
-        }
-    };
+    let probe_state =
+        match write_triangle_probe_state(warm, draw, shader_layout, blend_mode, backend_probe_mode)
+        {
+            Ok(layout) => layout,
+            Err(reason) => {
+                crate::log!(
+                    "intel/render: {} staging skipped reason=probe-state-error detail={}\n",
+                    submit_name,
+                    reason
+                );
+                return false;
+            }
+        };
 
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
@@ -3635,6 +3676,8 @@ fn submit_triangle_vf_draw_to_surface_ext(
         unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
     let batch_mode = if geometry.point_candidate() {
         TriangleBatchMode::VfPointDraw
+    } else if geometry.line_candidate() {
+        TriangleBatchMode::VfLineDraw
     } else if geometry.ndc_rect_candidate() {
         TriangleBatchMode::VfRectClipDraw
     } else if geometry.rect_candidate() {
@@ -3643,6 +3686,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
         TriangleBatchMode::VfDraw
     };
     let batch_tail_bytes = match encode_triangle_probe_batch(
+        submit_name,
         batch,
         warm,
         draw,
@@ -3733,8 +3777,10 @@ fn submit_triangle_vf_draw_to_surface_ext(
         RESULT_SLOT_FINAL_DWORD,
         submit_name,
     );
-    if let (Some((scratch_before, center_before, post_before, center_offset, post_offset)), Some(stats_before)) =
-        (scratch_rt_before, scratch_stats_before)
+    if let (
+        Some((scratch_before, center_before, post_before, center_offset, post_offset)),
+        Some(stats_before),
+    ) = (scratch_rt_before, scratch_stats_before)
     {
         crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
         let read_scratch_dword = |byte_offset: usize| -> u32 {
@@ -3761,7 +3807,8 @@ fn submit_triangle_vf_draw_to_surface_ext(
         let possible_draw_window_write = artificial_markers
             && artificial_post_marker
             && center_after != RCS_ARTIFICIAL_FRAGMENT_PRE_COLOR;
-        let accepted = ps_counter_accept || (!artificial_markers && rt_changed) || possible_draw_window_write;
+        let accepted =
+            ps_counter_accept || (!artificial_markers && rt_changed) || possible_draw_window_write;
         record_fragment_boundary_probe(true, accepted);
         intel_render_focus_log!(
             "intel/render: {} scratch-rt-fragment-proof accepted={} completed={} rt_gpu=0x{:X} size={}x{} pitch=0x{:X} before=0x{:08X} after=0x{:08X} center_before=0x{:08X} center_after=0x{:08X} post_before=0x{:08X} post_after=0x{:08X} changed={} artificial={} artificial_pre_marker={} artificial_post_marker={} possible_draw_window_write={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=display_scanout\n",
@@ -3882,7 +3929,7 @@ fn log_raster_wm_oa_raw_deltas(submit_name: &'static str, begin: &[u32], end: &[
         }
         i += 1;
     }
-    intel_render_focus_log!(
+    intel_render_verbose_log!(
         "intel/render: {} oa-raw-a-delta changed={} a00={} a01={} a02={} a03={} a04={} a05={} a06={} a07={} a08={} a09={} a10={} a11={}\n",
         submit_name,
         changed,
@@ -3899,7 +3946,7 @@ fn log_raster_wm_oa_raw_deltas(submit_name: &'static str, begin: &[u32], end: &[
         a[10],
         a[11],
     );
-    intel_render_focus_log!(
+    intel_render_verbose_log!(
         "intel/render: {} oa-raw-a-delta a12={} a13={} a14={} a15={} a16={} a17={} a18={} a19={} a20={} a21={} a22={} a23={}\n",
         submit_name,
         a[12],
@@ -3915,7 +3962,7 @@ fn log_raster_wm_oa_raw_deltas(submit_name: &'static str, begin: &[u32], end: &[
         a[22],
         a[23],
     );
-    intel_render_focus_log!(
+    intel_render_verbose_log!(
         "intel/render: {} oa-raw-a-delta a24={} a25={} a26={} a27={} a28={} a29={} a30={} a31={} a32={} a33={} a34={} a35={} note=raw-counter-index-audit\n",
         submit_name,
         a[24],
@@ -4206,6 +4253,7 @@ fn submit_triangle_streamout_proof(
     let batch =
         unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
     let batch_tail_bytes = match encode_triangle_probe_batch(
+        "streamout-proof",
         batch,
         warm,
         draw,
@@ -4335,11 +4383,7 @@ fn submit_triangle_vs_draw_frontier_to_scratch(
             VfPrimitiveGeometry::ScreenSpaceRect8x8OrderB,
             None,
         ),
-        (
-            "vs-draw-frontier-scratch-ndc-large",
-            VfPrimitiveGeometry::NdcTriangleLarge,
-            None,
-        ),
+        ("vs-draw-frontier-scratch-ndc-large", VfPrimitiveGeometry::NdcTriangleLarge, None),
     ];
     let contracts = [
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
@@ -4705,23 +4749,19 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         pipeline.ps.meta.kernel.dispatch_mode
     );
 
-    let probe_state = match write_triangle_probe_state(
-        warm,
-        draw,
-        shader_layout,
-        blend_mode,
-        backend_probe_mode,
-    ) {
-        Ok(layout) => layout,
-        Err(reason) => {
-            crate::log!(
-                "intel/render: {} staging skipped reason=probe-state-error detail={}\n",
-                submit_name,
-                reason
-            );
-            return false;
-        }
-    };
+    let probe_state =
+        match write_triangle_probe_state(warm, draw, shader_layout, blend_mode, backend_probe_mode)
+        {
+            Ok(layout) => layout,
+            Err(reason) => {
+                crate::log!(
+                    "intel/render: {} staging skipped reason=probe-state-error detail={}\n",
+                    submit_name,
+                    reason
+                );
+                return false;
+            }
+        };
 
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
@@ -4744,6 +4784,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         }
     });
     let batch_tail_bytes = match encode_triangle_probe_batch(
+        submit_name,
         batch,
         warm,
         draw,

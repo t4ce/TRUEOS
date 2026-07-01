@@ -163,7 +163,7 @@ const PRIMARY_USE_DRAW_PATH_BOOT_ONCE: bool = true;
 const PRIMARY_BOOT_3D_PROBES_ENABLED: bool = true;
 // Temporary one-boot quiet switch: keep RCS render/GPGPU probes off while
 // validating the rest of boot without render-engine traffic.
-const PRIMARY_DISABLE_RENDER_BRINGUP: bool = true;
+const PRIMARY_DISABLE_RENDER_BRINGUP: bool = false;
 const GPGPU_SUBMIT_WHEN_PRIMARY_RENDER_DISABLED: bool = false;
 const MI_STRIPE_COUNT: usize = 12;
 const MI_STRIPE_WIDTH_PX: usize = 4;
@@ -224,7 +224,8 @@ const CMD_3DSTATE_3D_MODE: u32 = 3 | (30 << 16) | (1 << 24) | (3 << 27) | (3 << 
 const CMD_3DSTATE_SLICE_TABLE_STATE_POINTERS: u32 = (32 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_BINDING_TABLE_POOL_ALLOC: u32 =
     2 | (25 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
-const CMD_3DSTATE_CONSTANT_ALL_EMPTY_ALL_STAGES: u32 = (109 << 16) | (0x1F << 8) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_CONSTANT_ALL_EMPTY_ALL_STAGES: u32 =
+    (109 << 16) | (0x1F << 8) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_VS: u32 = 7 | (16 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_GS: u32 = 8 | (17 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_CLEAR_PARAMS: u32 = 1 | (4 << 16) | (3 << 27) | (3 << 29);
@@ -372,6 +373,7 @@ const RESULT_OA_RASTER_WM_END_ID: u32 = 0x0A0A_2102;
 const SO_NUM_PRIMS_WRITTEN_0: usize = 0x5200;
 const SO_WRITE_OFFSET_0: usize = 0x5280;
 const TRIANGLE_TOPOLOGY_POINTLIST: u32 = 1;
+const TRIANGLE_TOPOLOGY_LINELIST: u32 = 2;
 const TRIANGLE_TOPOLOGY_TRILIST: u32 = 4;
 const TRIANGLE_TOPOLOGY_RECTLIST: u32 = 15;
 const TRIANGLE_PS_MAX_THREADS: u32 = 63;

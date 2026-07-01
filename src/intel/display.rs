@@ -91,6 +91,8 @@ const OVERLAY_COMPOSITION_PROOF_MARKER_Y: u32 = 48;
 const OVERLAY_SWAP_BUFFER_COUNT: usize = 2;
 const OVERLAY_SWAP_GPU_BASE: u64 = 0x0700_0000;
 const OVERLAY_SWAP_GPU_STRIDE: u64 = 0x0200_0000;
+const VIDEO_NV12_HIDE_PARK_BEFORE_DISABLE: bool = true;
+const VIDEO_NV12_HIDE_PARK_SIZE: u32 = 64;
 
 static PRIMARY_BOOT_SURFACE_INIT: AtomicBool = AtomicBool::new(false);
 static PRIMARY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
@@ -101,6 +103,7 @@ static UI3_BASE_SURFACE: Mutex<Option<DisplayRgba8Surface>> = Mutex::new(None);
 static UI3_FRAME_SURFACE: Mutex<Option<DisplayRgba8Surface>> = Mutex::new(None);
 static OVERLAY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
 static OVERLAY_SURFACE: Mutex<OverlaySurfacePool> = Mutex::new(OverlaySurfacePool::new());
+static VIDEO_NV12_PLANE_ALPHA: AtomicU32 = AtomicU32::new(0xFF);
 static HW_LOGO_PENDING_IDS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 static HW_LOGO_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 static HW_LOGO_NEXT_STAGE: AtomicU32 = AtomicU32::new(0);
@@ -306,6 +309,19 @@ struct OverlaySurfacePool {
     pipe_slot: usize,
     front_index: Option<usize>,
     surfaces: [Option<OverlaySurface>; OVERLAY_SWAP_BUFFER_COUNT],
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(super) struct DecodedNv12PlaneAlphaProgram {
+    alpha: u8,
+    uv_keymsk_before: u32,
+    uv_keymsk_after: u32,
+    uv_keymax_before: u32,
+    uv_keymax_after: u32,
+    y_keymsk_before: u32,
+    y_keymsk_after: u32,
+    y_keymax_before: u32,
+    y_keymax_after: u32,
 }
 
 impl OverlaySurfacePool {
@@ -3673,6 +3689,106 @@ fn plane_color_ctl_alpha(color_ctl: u32, alpha: OverlayAlphaMode) -> u32 {
     (color_ctl & !PLANE_COLOR_ALPHA_MASK) | PLANE_COLOR_PLANE_GAMMA_DISABLE | alpha_bits
 }
 
+fn plane_keymax_alpha(alpha: u8) -> u32 {
+    (u32::from(alpha) << 24) & PLANE_KEYMAX_ALPHA_MASK
+}
+
+fn plane_keymsk_alpha(alpha: u8) -> u32 {
+    if alpha < 0xFF {
+        PLANE_KEYMSK_ALPHA_ENABLE
+    } else {
+        0
+    }
+}
+
+pub(super) fn decoded_nv12_overlay_plane_alpha() -> u8 {
+    VIDEO_NV12_PLANE_ALPHA.load(Ordering::Acquire) as u8
+}
+
+pub(super) fn program_decoded_nv12_overlay_plane_alpha(
+    dev: crate::intel::Dev,
+    uv_base: usize,
+    y_base: usize,
+) -> DecodedNv12PlaneAlphaProgram {
+    let alpha = decoded_nv12_overlay_plane_alpha();
+    let keymsk = plane_keymsk_alpha(alpha);
+    let keymax = plane_keymax_alpha(alpha);
+    let uv_keymsk_before = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_KEYMSK_OFF);
+    let uv_keymax_before = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_KEYMAX_OFF);
+    let y_keymsk_before = crate::intel::mmio_read(dev, y_base + UNI_PLANE_KEYMSK_OFF);
+    let y_keymax_before = crate::intel::mmio_read(dev, y_base + UNI_PLANE_KEYMAX_OFF);
+
+    crate::intel::mmio_write(dev, uv_base + UNI_PLANE_KEYMSK_OFF, keymsk);
+    crate::intel::mmio_write(dev, uv_base + UNI_PLANE_KEYMAX_OFF, keymax);
+    crate::intel::mmio_write(dev, y_base + UNI_PLANE_KEYMSK_OFF, keymsk);
+    crate::intel::mmio_write(dev, y_base + UNI_PLANE_KEYMAX_OFF, keymax);
+
+    DecodedNv12PlaneAlphaProgram {
+        alpha,
+        uv_keymsk_before,
+        uv_keymsk_after: crate::intel::mmio_read(dev, uv_base + UNI_PLANE_KEYMSK_OFF),
+        uv_keymax_before,
+        uv_keymax_after: crate::intel::mmio_read(dev, uv_base + UNI_PLANE_KEYMAX_OFF),
+        y_keymsk_before,
+        y_keymsk_after: crate::intel::mmio_read(dev, y_base + UNI_PLANE_KEYMSK_OFF),
+        y_keymax_before,
+        y_keymax_after: crate::intel::mmio_read(dev, y_base + UNI_PLANE_KEYMAX_OFF),
+    }
+}
+
+pub(crate) fn set_decoded_nv12_overlay_plane_alpha(alpha: u8, reason: &str) -> bool {
+    let before = VIDEO_NV12_PLANE_ALPHA.swap(u32::from(alpha), Ordering::AcqRel) as u8;
+    let mut applied = None;
+    if let Some(dev) = crate::intel::claimed_device()
+        && let Some(pipe) = active_pipe(dev)
+    {
+        let uv_base = overlay_plane_base(pipe, VIDEO_NV12_PLANE_SLOT);
+        let y_base = overlay_plane_base(pipe, VIDEO_NV12_Y_PLANE_SLOT);
+        let uv_ctl = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_CTL_OFF);
+        let y_ctl = crate::intel::mmio_read(dev, y_base + UNI_PLANE_CTL_OFF);
+        if (uv_ctl & PLANE_CTL_ENABLE) != 0 && (y_ctl & PLANE_CTL_ENABLE) != 0 {
+            let proof = program_decoded_nv12_overlay_plane_alpha(dev, uv_base, y_base);
+            let uv_surf = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_SURF_OFF);
+            let y_surf = crate::intel::mmio_read(dev, y_base + UNI_PLANE_SURF_OFF);
+            crate::intel::mmio_write(dev, uv_base + UNI_PLANE_SURF_OFF, uv_surf);
+            crate::intel::mmio_write(dev, y_base + UNI_PLANE_SURF_OFF, y_surf);
+            let (frame_before, frame_after, frame_wait) = wait_for_pipe_next_frame(dev, pipe);
+            applied = Some((pipe, proof, frame_before, frame_after, frame_wait));
+        }
+    }
+
+    if let Some((pipe, proof, frame_before, frame_after, frame_wait)) = applied {
+        crate::log!(
+            "intel/display: nv12-linked-plane-alpha-set reason={} pipe={} stored={}=>{} applied=1 uv_slot={} y_slot={} uv_keymsk=0x{:08X}->0x{:08X} uv_keymax=0x{:08X}->0x{:08X} y_keymsk=0x{:08X}->0x{:08X} y_keymax=0x{:08X}->0x{:08X} frame={}=>{} frame_wait={}\n",
+            reason,
+            pipe.name,
+            before,
+            alpha,
+            VIDEO_NV12_PLANE_SLOT,
+            VIDEO_NV12_Y_PLANE_SLOT,
+            proof.uv_keymsk_before,
+            proof.uv_keymsk_after,
+            proof.uv_keymax_before,
+            proof.uv_keymax_after,
+            proof.y_keymsk_before,
+            proof.y_keymsk_after,
+            proof.y_keymax_before,
+            proof.y_keymax_after,
+            frame_before,
+            frame_after,
+            frame_wait
+        );
+    } else {
+        crate::log!(
+            "intel/display: nv12-linked-plane-alpha-set reason={} stored={}=>{} applied=0 note=will-apply-on-next-nv12-arm\n",
+            reason,
+            before,
+            alpha
+        );
+    }
+    true
+}
+
 fn plane_buf_cfg_value(start: u16, end_inclusive: u16) -> u32 {
     ((u32::from(end_inclusive) & 0x1FFF) << 16) | (u32::from(start) & 0x1FFF)
 }
@@ -3771,6 +3887,223 @@ fn program_three_plane_stack_resources(dev: crate::intel::Dev, pipe: PipeInfo, r
         video_y_buf_after,
         crate::intel::mmio_read(dev, video_y_base + UNI_PLANE_WM_0_OFF),
     );
+}
+
+fn park_decoded_nv12_overlay_plane_before_disable(
+    dev: crate::intel::Dev,
+    pipe: PipeInfo,
+    uv_base: usize,
+    y_base: usize,
+    reason: &str,
+) -> bool {
+    let uv_ctl = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_CTL_OFF);
+    let y_ctl = crate::intel::mmio_read(dev, y_base + UNI_PLANE_CTL_OFF);
+    if (uv_ctl & PLANE_CTL_ENABLE) == 0 || (y_ctl & PLANE_CTL_ENABLE) == 0 {
+        return false;
+    }
+
+    let uv_pos_before = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_POS_OFF);
+    let uv_size_before = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_SIZE_OFF);
+    let y_pos_before = crate::intel::mmio_read(dev, y_base + UNI_PLANE_POS_OFF);
+    let y_size_before = crate::intel::mmio_read(dev, y_base + UNI_PLANE_SIZE_OFF);
+    let uv_surf_before = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_SURF_OFF);
+    let y_surf_before = crate::intel::mmio_read(dev, y_base + UNI_PLANE_SURF_OFF);
+    let (scanout_w, scanout_h) = active_scanout_dimensions()
+        .unwrap_or((VIDEO_NV12_HIDE_PARK_SIZE, VIDEO_NV12_HIDE_PARK_SIZE));
+    let mut park_w = VIDEO_NV12_HIDE_PARK_SIZE.min(scanout_w);
+    let mut park_h = VIDEO_NV12_HIDE_PARK_SIZE.min(scanout_h);
+    if park_w > 1 {
+        park_w &= !1;
+    }
+    if park_h > 1 {
+        park_h &= !1;
+    }
+    if park_w == 0 || park_h == 0 {
+        return false;
+    }
+    let hide_pos =
+        plane_pos_reg_value(scanout_w.saturating_sub(park_w), scanout_h.saturating_sub(park_h));
+    let hide_size = plane_size_reg_value(park_w, park_h);
+
+    crate::intel::mmio_write(dev, uv_base + UNI_PLANE_POS_OFF, hide_pos);
+    crate::intel::mmio_write(dev, y_base + UNI_PLANE_POS_OFF, hide_pos);
+    crate::intel::mmio_write(dev, uv_base + UNI_PLANE_SIZE_OFF, hide_size);
+    crate::intel::mmio_write(dev, y_base + UNI_PLANE_SIZE_OFF, hide_size);
+    crate::intel::mmio_write(dev, uv_base + UNI_PLANE_SURF_OFF, uv_surf_before);
+    crate::intel::mmio_write(dev, y_base + UNI_PLANE_SURF_OFF, y_surf_before);
+
+    let (frame_before, frame_after, frame_wait) = wait_for_pipe_next_frame(dev, pipe);
+    let uv_pos_after = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_POS_OFF);
+    let y_pos_after = crate::intel::mmio_read(dev, y_base + UNI_PLANE_POS_OFF);
+    let uv_size_after = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_SIZE_OFF);
+    let y_size_after = crate::intel::mmio_read(dev, y_base + UNI_PLANE_SIZE_OFF);
+    let ok = uv_pos_after == hide_pos
+        && y_pos_after == hide_pos
+        && uv_size_after == hide_size
+        && y_size_after == hide_size;
+
+    crate::log!(
+        "intel/display: nv12-linked-plane-park-before-hide reason={} pipe={} ok={} uv_slot={} y_slot={} scanout={}x{} park={}x{} pos=0x{:08X}/0x{:08X}->0x{:08X} y_pos=0x{:08X}->0x{:08X} size=0x{:08X}/0x{:08X}->0x{:08X} y_size=0x{:08X}->0x{:08X} frame={}=>{} frame_wait={}\n",
+        reason,
+        pipe.name,
+        ok as u8,
+        VIDEO_NV12_PLANE_SLOT,
+        VIDEO_NV12_Y_PLANE_SLOT,
+        scanout_w,
+        scanout_h,
+        park_w,
+        park_h,
+        uv_pos_before,
+        hide_pos,
+        uv_pos_after,
+        y_pos_before,
+        y_pos_after,
+        uv_size_before,
+        hide_size,
+        uv_size_after,
+        y_size_before,
+        y_size_after,
+        frame_before,
+        frame_after,
+        frame_wait
+    );
+
+    ok
+}
+
+fn mute_decoded_nv12_overlay_plane_before_hide(
+    dev: crate::intel::Dev,
+    pipe: PipeInfo,
+    uv_base: usize,
+    y_base: usize,
+    reason: &str,
+) -> bool {
+    let uv_ctl = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_CTL_OFF);
+    let y_ctl = crate::intel::mmio_read(dev, y_base + UNI_PLANE_CTL_OFF);
+    if (uv_ctl & PLANE_CTL_ENABLE) == 0 || (y_ctl & PLANE_CTL_ENABLE) == 0 {
+        return false;
+    }
+
+    let uv_keymsk_before = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_KEYMSK_OFF);
+    let uv_keymax_before = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_KEYMAX_OFF);
+    let y_keymsk_before = crate::intel::mmio_read(dev, y_base + UNI_PLANE_KEYMSK_OFF);
+    let y_keymax_before = crate::intel::mmio_read(dev, y_base + UNI_PLANE_KEYMAX_OFF);
+    let uv_surf = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_SURF_OFF);
+    let y_surf = crate::intel::mmio_read(dev, y_base + UNI_PLANE_SURF_OFF);
+
+    let keymsk = plane_keymsk_alpha(0);
+    let keymax = plane_keymax_alpha(0);
+    crate::intel::mmio_write(dev, uv_base + UNI_PLANE_KEYMSK_OFF, keymsk);
+    crate::intel::mmio_write(dev, uv_base + UNI_PLANE_KEYMAX_OFF, keymax);
+    crate::intel::mmio_write(dev, y_base + UNI_PLANE_KEYMSK_OFF, keymsk);
+    crate::intel::mmio_write(dev, y_base + UNI_PLANE_KEYMAX_OFF, keymax);
+    crate::intel::mmio_write(dev, uv_base + UNI_PLANE_SURF_OFF, uv_surf);
+    crate::intel::mmio_write(dev, y_base + UNI_PLANE_SURF_OFF, y_surf);
+
+    let (frame_before, frame_after, frame_wait) = wait_for_pipe_next_frame(dev, pipe);
+    let uv_keymsk_after = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_KEYMSK_OFF);
+    let uv_keymax_after = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_KEYMAX_OFF);
+    let y_keymsk_after = crate::intel::mmio_read(dev, y_base + UNI_PLANE_KEYMSK_OFF);
+    let y_keymax_after = crate::intel::mmio_read(dev, y_base + UNI_PLANE_KEYMAX_OFF);
+    let ok = uv_keymsk_after == keymsk
+        && uv_keymax_after == keymax
+        && y_keymsk_after == keymsk
+        && y_keymax_after == keymax;
+
+    crate::log!(
+        "intel/display: nv12-linked-plane-mute-before-hide reason={} pipe={} ok={} uv_slot={} y_slot={} uv_keymsk=0x{:08X}->0x{:08X} uv_keymax=0x{:08X}->0x{:08X} y_keymsk=0x{:08X}->0x{:08X} y_keymax=0x{:08X}->0x{:08X} frame={}=>{} frame_wait={}\n",
+        reason,
+        pipe.name,
+        ok as u8,
+        VIDEO_NV12_PLANE_SLOT,
+        VIDEO_NV12_Y_PLANE_SLOT,
+        uv_keymsk_before,
+        uv_keymsk_after,
+        uv_keymax_before,
+        uv_keymax_after,
+        y_keymsk_before,
+        y_keymsk_after,
+        y_keymax_before,
+        y_keymax_after,
+        frame_before,
+        frame_after,
+        frame_wait
+    );
+
+    ok
+}
+
+pub(crate) fn hide_decoded_nv12_overlay_plane(reason: &str) -> bool {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return false;
+    };
+    let Some(pipe) = active_pipe(dev) else {
+        return false;
+    };
+
+    let uv_base = overlay_plane_base(pipe, VIDEO_NV12_PLANE_SLOT);
+    let y_base = overlay_plane_base(pipe, VIDEO_NV12_Y_PLANE_SLOT);
+    let muted_ok = mute_decoded_nv12_overlay_plane_before_hide(dev, pipe, uv_base, y_base, reason);
+    let parked_ok = VIDEO_NV12_HIDE_PARK_BEFORE_DISABLE
+        && park_decoded_nv12_overlay_plane_before_disable(dev, pipe, uv_base, y_base, reason);
+    let uv_ctl_before = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_CTL_OFF);
+    let uv_surf_before = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_SURF_OFF);
+    let uv_live_before = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_SURFLIVE_OFF);
+    let y_ctl_before = crate::intel::mmio_read(dev, y_base + UNI_PLANE_CTL_OFF);
+    let y_surf_before = crate::intel::mmio_read(dev, y_base + UNI_PLANE_SURF_OFF);
+    let y_live_before = crate::intel::mmio_read(dev, y_base + UNI_PLANE_SURFLIVE_OFF);
+
+    let uv_ctl_after_want = uv_ctl_before & !PLANE_CTL_ENABLE;
+    let y_ctl_after_want = y_ctl_before & !PLANE_CTL_ENABLE;
+    crate::intel::mmio_write(dev, uv_base + UNI_PLANE_CTL_OFF, uv_ctl_after_want);
+    crate::intel::mmio_write(dev, y_base + UNI_PLANE_CTL_OFF, y_ctl_after_want);
+    crate::intel::mmio_write(dev, uv_base + UNI_PLANE_SURF_OFF, 0);
+    crate::intel::mmio_write(dev, y_base + UNI_PLANE_SURF_OFF, 0);
+    let (frame_before, frame_after, frame_wait) = wait_for_pipe_next_frame(dev, pipe);
+    let (uv_live_after, uv_live_iters) = wait_for_plane_live(dev, uv_base, 0, 20_000);
+    let (y_live_after, y_live_iters) = wait_for_plane_live(dev, y_base, 0, 20_000);
+
+    crate::intel::mmio_write(dev, uv_base + UNI_PLANE_CUS_CTL_OFF, 0);
+    crate::intel::mmio_write(dev, y_base + UNI_PLANE_CUS_CTL_OFF, 0);
+
+    let uv_ctl_after = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_CTL_OFF);
+    let uv_surf_after = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_SURF_OFF);
+    let y_ctl_after = crate::intel::mmio_read(dev, y_base + UNI_PLANE_CTL_OFF);
+    let y_surf_after = crate::intel::mmio_read(dev, y_base + UNI_PLANE_SURF_OFF);
+    let ok = (uv_ctl_after & PLANE_CTL_ENABLE) == 0
+        && (y_ctl_after & PLANE_CTL_ENABLE) == 0
+        && uv_surf_after == 0
+        && y_surf_after == 0;
+
+    crate::log!(
+        "intel/display: nv12-linked-plane-hide reason={} pipe={} ok={} muted={} parked={} uv_slot={} y_slot={} uv_ctl=0x{:08X}->0x{:08X} uv_surf=0x{:08X}->0x{:08X} uv_live=0x{:08X}->0x{:08X} y_ctl=0x{:08X}->0x{:08X} y_surf=0x{:08X}->0x{:08X} y_live=0x{:08X}->0x{:08X} frame={}=>{} frame_wait={} uv_live_iters={} y_live_iters={}\n",
+        reason,
+        pipe.name,
+        ok as u8,
+        muted_ok as u8,
+        parked_ok as u8,
+        VIDEO_NV12_PLANE_SLOT,
+        VIDEO_NV12_Y_PLANE_SLOT,
+        uv_ctl_before,
+        uv_ctl_after,
+        uv_surf_before,
+        uv_surf_after,
+        uv_live_before,
+        uv_live_after,
+        y_ctl_before,
+        y_ctl_after,
+        y_surf_before,
+        y_surf_after,
+        y_live_before,
+        y_live_after,
+        frame_before,
+        frame_after,
+        frame_wait,
+        uv_live_iters,
+        y_live_iters
+    );
+
+    ok
 }
 
 fn disable_non_primary_universal_planes(dev: crate::intel::Dev, pipe: PipeInfo, reason: &str) {

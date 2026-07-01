@@ -81,6 +81,37 @@ pub mod kfs {
     }
 
     #[inline]
+    pub fn read_file_range(path: &str, offset: u64, out: &mut [u8]) -> Result<usize> {
+        if out.is_empty() {
+            return Ok(0);
+        }
+
+        let disk = root_disk()?;
+        let name = normalize_rel(path, false)?;
+        let cap = out.len();
+        let bytes = crate::wait::spawn_and_wait_local(async move {
+            let mut scratch = alloc::vec![0u8; cap];
+            match crate::r::fs::trueosfs::file_read_range_async(
+                disk,
+                name.as_str(),
+                offset,
+                scratch.as_mut_slice(),
+            )
+            .await?
+            {
+                Some(got) => {
+                    scratch.truncate(got);
+                    Ok(scratch)
+                }
+                None => Err(FsError::NotFound),
+            }
+        })?;
+        let got = core::cmp::min(bytes.len(), out.len());
+        out[..got].copy_from_slice(&bytes[..got]);
+        Ok(got)
+    }
+
+    #[inline]
     pub fn stat(path: &str) -> Result<FsStat> {
         let disk = root_disk()?;
         let name = normalize_rel(path, true)?;

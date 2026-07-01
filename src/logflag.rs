@@ -10,6 +10,7 @@ pub(crate) const USB_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const STORAGE_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const GFX_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const GPGPU_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
+pub(crate) const RENDER_LOG_LEVEL: LevelFilter = LevelFilter::Info;
 pub(crate) const HDA_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const HV_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
 pub(crate) const APPS_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
@@ -85,6 +86,7 @@ pub(crate) fn concept_log_enabled(concept: &str, level: Level) -> bool {
         "fs" | "storage" | "trueosfs" | "nvme" => STORAGE_LOG_LEVEL,
         "gfx" | "intel" | "display" => GFX_LOG_LEVEL,
         "gpgpu" | "intel/gpgpu" => GPGPU_LOG_LEVEL,
+        "render" | "intel/render" => RENDER_LOG_LEVEL,
         "hda" | "audio" => HDA_LOG_LEVEL,
         "hv" => HV_LOG_LEVEL,
         "apps" | "blueprint" | "bp" => APPS_LOG_LEVEL,
