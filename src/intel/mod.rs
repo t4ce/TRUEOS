@@ -54,78 +54,12 @@ const FORCEWAKE_POLL_ITERS: usize = 20_000;
 const GFX_FLSH_CNTL_GEN6: usize = 0x101008;
 const GFX_FLSH_CNTL_EN: u32 = 1 << 0;
 const DISPLAY_PLANE1_BOOT_DEMO_ENABLED: bool = true;
-const MEDIA_BOOT_DEMO_ENABLED: bool = false;
-const MEDIA_BOOT_DEMO_DELAY_MS: u64 = 2_000;
-const MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT: u32 = 3;
+const RENDER_BOOT_PROBE_DELAY_MS: u64 = 15_000;
 const PCI_DEVICE_ALDER_LAKE_S_GT1: u16 = 0x4680;
 const PCI_DEVICE_ALDER_LAKE_N_N100_UHD: u16 = 0x46D1;
 const PCI_DEVICE_RAPTOR_LAKE_S_GT1_UHD770: u16 = 0xA780;
 static INIT: AtomicBool = AtomicBool::new(false);
 static CLAIMED_DEVICE: Mutex<Option<Dev>> = Mutex::new(None);
-
-fn pick_media_boot_demo_spawner() -> Option<(u32, crate::workers::WorkerSpawner)> {
-    let background_slots = crate::workers::background_worker_slots();
-
-    let pick_slot = |predicate: fn(u32) -> bool| {
-        background_slots.iter().copied().find(|slot| {
-            predicate(*slot)
-                && crate::cpu::CpuProfile::for_slot(*slot)
-                    .map(|profile| profile.is_perf())
-                    .unwrap_or(false)
-        })
-    };
-
-    let selected_slot = pick_slot(|slot| slot >= MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT)
-        .or_else(|| {
-            background_slots
-                .iter()
-                .copied()
-                .find(|slot| *slot >= MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT)
-        })
-        .or_else(|| pick_slot(|slot| slot > 2))
-        .or_else(|| background_slots.iter().copied().find(|slot| *slot > 2))?;
-
-    crate::workers::spawner_for_slot(selected_slot).map(|spawner| (selected_slot, spawner))
-}
-
-fn log_media_demo_task_profile(origin: &str, requested_slot: u32, queued_at_ms: u64) {
-    let queued_ms = embassy_time::Instant::now()
-        .as_millis()
-        .saturating_sub(queued_at_ms);
-    let cpu = crate::percpu::this_cpu();
-    let executor_ptr = cpu.executor_ptr() as usize;
-    if let Some(profile) = crate::cpu::CpuProfile::current() {
-        crate::log!(
-            "intel/media: task profile origin={} slot={} lapic={} core={} requested_slot={} queued_ms={} executor=0x{:016X}\n",
-            origin,
-            profile.slot(),
-            profile.lapic_id(),
-            profile.core_kind_name(),
-            requested_slot,
-            queued_ms,
-            executor_ptr,
-        );
-    } else {
-        crate::log!(
-            "intel/media: task profile origin={} slot=? lapic=? core=? requested_slot={} queued_ms={} executor=0x{:016X}\n",
-            origin,
-            requested_slot,
-            queued_ms,
-            executor_ptr,
-        );
-    }
-}
-
-#[embassy_executor::task]
-async fn media_boot_demo_task(requested_slot: u32, queued_at_ms: u64) {
-    log_media_demo_task_profile("worker", requested_slot, queued_at_ms);
-    crate::log!("intel/media: boot demo begin\n");
-    let first_frame = run_media2_first_frame_async().await;
-    crate::log!(
-        "intel/media: boot demo first-frame origin=worker returned={}\n",
-        first_frame.is_some() as u8,
-    );
-}
 
 #[derive(Copy, Clone)]
 pub(crate) struct Dev {
@@ -251,51 +185,22 @@ pub fn init_once() {
     }
     if DISPLAY_PLANE1_BOOT_DEMO_ENABLED {
         self::display::init_primary_boot_surface(dev);
-        self::render::submit_primary_triangle_once();
+        if RENDER_BOOT_PROBE_DELAY_MS == 0 {
+            self::render::submit_primary_triangle_once();
+        } else {
+            crate::log!(
+                "intel/render: scheduled boot probe delay_ms={}\n",
+                RENDER_BOOT_PROBE_DELAY_MS
+            );
+            crate::wait::spawn_local_detached(async move {
+                Timer::after(EmbassyDuration::from_millis(RENDER_BOOT_PROBE_DELAY_MS)).await;
+                self::render::submit_primary_triangle_once();
+            });
+        }
     } else {
         crate::log!("intel/display: plane1 boot demo disabled\n");
     }
     crate::log!("intel/media: source warmup disabled trigger=trueosfs-root-mounted\n",);
-    if MEDIA_BOOT_DEMO_ENABLED {
-        crate::log!("intel/media: scheduled boot demo delay_ms={}\n", MEDIA_BOOT_DEMO_DELAY_MS);
-        crate::wait::spawn_local_detached(async move {
-            Timer::after(EmbassyDuration::from_millis(MEDIA_BOOT_DEMO_DELAY_MS)).await;
-            let queued_at_ms = embassy_time::Instant::now().as_millis() as u64;
-            if let Some((slot, worker_spawner)) = pick_media_boot_demo_spawner() {
-                match media_boot_demo_task(slot, queued_at_ms) {
-                    Ok(token) => {
-                        crate::log!(
-                            "intel/media: boot demo handoff target_slot={} mode=worker\n",
-                            slot,
-                        );
-                        worker_spawner.spawn(token);
-                        return;
-                    }
-                    Err(err) => {
-                        crate::log!(
-                            "intel/media: boot demo handoff failed target_slot={} err={:?} fallback=local\n",
-                            slot,
-                            err,
-                        );
-                    }
-                }
-            } else {
-                crate::log!(
-                    "intel/media: boot demo handoff skipped reason=no-worker-ap fallback=local\n"
-                );
-            }
-
-            log_media_demo_task_profile("local", 0, queued_at_ms);
-            crate::log!("intel/media: boot demo begin\n");
-            let first_frame = self::run_media2_first_frame_async().await;
-            crate::log!(
-                "intel/media: boot demo first-frame origin=local returned={}\n",
-                first_frame.is_some() as u8,
-            );
-        });
-    } else {
-        crate::log!("intel/media: boot demo disabled\n");
-    }
 }
 
 pub fn has_claimed_device() -> bool {

@@ -123,7 +123,8 @@ pub const OP_BP_MIO_SELECTOR_WAKE: u32 = 0x80;
 
 pub const STATUS_OK: u32 = 0;
 pub const STATUS_BAD_ARG: u32 = 2;
-pub const PAYLOAD_CAP: usize = 4096 - 56;
+pub const COMM_PAGE_BYTES: usize = 160 * 1024;
+pub const PAYLOAD_CAP: usize = COMM_PAGE_BYTES - 56;
 
 /// Guest virtual address of the shared comm page.
 const COMM_PAGE_VA: u64 = 0x0000_0000_2040_0000;

@@ -339,7 +339,7 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
             &mut next_pt,
             &mut leaf_2m,
             comm_pa,
-            PAGE_SIZE_4K as u64,
+            crate::hv::vmcall::COMM_PAGE_BYTES as u64,
             "comm-page",
         )?;
     }
@@ -1179,9 +1179,8 @@ pub fn build_guest_cr3_for_vm_with_mode(
             stack_left -= chunk_bytes;
         }
 
-        // Map comm page at a fixed VA above the maximum supported stack span so
+        // Map comm pages at a fixed VA above the maximum supported stack span so
         // guest-side helpers can keep using a stable address.
-        let comm_pa = crate::hv::vmcall::pa_for_vm(vm_id).ok_or("comm page pa")?;
         let comm_pt = core::ptr::addr_of_mut!((*tables).low_pts[GUEST_STACK_PT_CAP].0);
         let comm_pt_pa = host_va_to_pa(comm_pt as u64).ok_or("comm page pt pa")?;
         map_table_entry(
@@ -1189,8 +1188,13 @@ pub fn build_guest_cr3_for_vm_with_mode(
             pd_index(crate::hv::vmcall::comm_page_guest_va()),
             comm_pt_pa,
         );
-        (*comm_pt)[pt_index(crate::hv::vmcall::comm_page_guest_va())] =
-            (comm_pa & 0x000F_FFFF_FFFF_F000) | PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE;
+        let comm_pt_start = pt_index(crate::hv::vmcall::comm_page_guest_va());
+        for page_index in 0..crate::hv::vmcall::COMM_PAGE_PAGES {
+            let comm_pa =
+                crate::hv::vmcall::pa_for_vm_page(vm_id, page_index).ok_or("comm page pa")?;
+            (*comm_pt)[comm_pt_start + page_index] =
+                (comm_pa & 0x000F_FFFF_FFFF_F000) | PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE;
+        }
 
         let code_base = page_align_down(guest_rip);
         let code_pt_base = page_align_down_2m(guest_rip);
@@ -1739,7 +1743,9 @@ fn classify_guest_va(guest_va: u64) -> &'static str {
     }
 
     if guest_va >= crate::hv::vmcall::comm_page_guest_va()
-        && guest_va < crate::hv::vmcall::comm_page_guest_va().saturating_add(PAGE_SIZE_4K as u64)
+        && guest_va
+            < crate::hv::vmcall::comm_page_guest_va()
+                .saturating_add(crate::hv::vmcall::COMM_PAGE_BYTES as u64)
     {
         return "comm-page";
     }

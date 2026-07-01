@@ -351,6 +351,22 @@ pub(crate) fn fs_read_file_len_host(path: &str) -> isize {
     }
 }
 
+const MODEL_READ_PROGRESS_STEP: usize = 4 * 1024 * 1024;
+
+fn should_log_model_read_chunk(path: &str, offset: usize, cap: usize, got: usize) -> bool {
+    if !path.contains("ggml-tiny") {
+        return false;
+    }
+    if offset == 0 || got == 0 {
+        return true;
+    }
+    if cap < trueos_vm::vmcall::PAYLOAD_CAP {
+        return true;
+    }
+    let end = offset.saturating_add(got);
+    (offset / MODEL_READ_PROGRESS_STEP) != (end / MODEL_READ_PROGRESS_STEP)
+}
+
 pub(crate) fn fs_read_file_chunk_host(path: &str, offset: usize, out: &mut [u8]) -> isize {
     if path.len() > QJS_ASYNC_FS_MAX_PATH {
         log_fs_cabi_path_fail(
@@ -378,13 +394,16 @@ pub(crate) fn fs_read_file_chunk_host(path: &str, offset: usize, out: &mut [u8])
     }
     match super::kfs::read_file_range(path.as_str(), offset as u64, out) {
         Ok(got) => {
-            if path.contains("ggml-tiny") && (offset == 0 || got == 0) {
+            if should_log_model_read_chunk(path.as_str(), offset, out.len(), got) {
+                let end = offset.saturating_add(got);
                 crate::log!(
-                    "fs-cabi: read_chunk ok resolved={} offset={} cap={} got={}\n",
+                    "fs-cabi: read_chunk progress resolved={} offset={} end={} cap={} got={} mib={}\n",
                     path.as_str(),
                     offset,
+                    end,
                     out.len(),
-                    got
+                    got,
+                    end / (1024 * 1024)
                 );
             }
             got as isize

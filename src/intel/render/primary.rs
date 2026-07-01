@@ -141,6 +141,7 @@ const RENDER_JOKER_VARIANTS: &[&str] = &[
     "vf-rect-order-b-scissor-oa",
     "vf-rect-mesa-simple-oa",
     "vf-rect-mesa-simple-oa-early",
+    "vf-tri-mesa-simple-oa-early",
     "vf-rect-mesa-simple-oa-arm",
     "vf-rect-mesa-nosrc-header-oa",
     "vf-rect-order-c-oa",
@@ -372,6 +373,7 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
     let screen_point = VfPrimitiveGeometry::ScreenSpacePoint8x8;
     let screen_space = VfPrimitiveGeometry::ScreenSpace8x8;
     let screen_rect = VfPrimitiveGeometry::ScreenSpaceRect8x8;
+    let screen_tri_order_b = VfPrimitiveGeometry::ScreenSpaceTri8x8OrderB;
     let screen_rect_order_b = VfPrimitiveGeometry::ScreenSpaceRect8x8OrderB;
     let screen_rect_order_c = VfPrimitiveGeometry::ScreenSpaceRect8x8OrderC;
     let ndc_triangle = VfPrimitiveGeometry::NdcTriangleLarge;
@@ -1485,6 +1487,16 @@ fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
             target: scratch,
             blend: zeroed,
             geometry: screen_rect_order_b,
+            backend: BackendProbeMode::RasterWmInputOaMesaSimpleRectEarly,
+            sync: light_post_no_cs,
+        }
+    } else if name.eq_ignore_ascii_case("vf-tri-mesa-simple-oa-early") {
+        RenderJokerSpec {
+            variant: "vf-tri-mesa-simple-oa-early",
+            submit_name: "vf-tri-mesa-simple-oa-early",
+            target: scratch,
+            blend: zeroed,
+            geometry: screen_tri_order_b,
             backend: BackendProbeMode::RasterWmInputOaMesaSimpleRectEarly,
             sync: light_post_no_cs,
         }
@@ -3073,6 +3085,42 @@ fn run_fragment_shape_frontier_spectrum(dev: crate::intel::Dev, warm: RenderWarm
             StreamoutProofExperiment::PositionSlot1,
         ),
         (
+            "vf-rect-ndc-oa-payload-attr",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaPayloadAttributeEnable,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa-payload-depthw",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaPayloadSourceDepthW,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa-payload-bary",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaPayloadBaryPlanes,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa-sample-all",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaSampleAll,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa-wm-handoff",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaWmHandoff,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa-sample-all-wm-handoff",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaSampleAllWmHandoff,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
             "vf-rect-ndc-oa-frontccw",
             VfPrimitiveGeometry::NdcRect,
             BackendProbeMode::RasterWmInputOaFrontCcw,
@@ -3121,6 +3169,12 @@ fn run_fragment_shape_frontier_spectrum(dev: crate::intel::Dev, warm: RenderWarm
             StreamoutProofExperiment::PositionSlot1,
         ),
         (
+            "vf-tri-mesa-simple-oa-early",
+            VfPrimitiveGeometry::ScreenSpaceTri8x8OrderB,
+            BackendProbeMode::RasterWmInputOaMesaSimpleRectEarly,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
             "screen-rect-oa-early",
             VfPrimitiveGeometry::ScreenSpaceRect8x8,
             BackendProbeMode::RasterWmInputOaEarlySample,
@@ -3153,6 +3207,36 @@ fn run_fragment_shape_frontier_spectrum(dev: crate::intel::Dev, warm: RenderWarm
             StreamoutProofExperiment::PositionSlot1,
         ),
         (
+            "vf-rect-ndc-oa-payload-attr-rt32",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaPayloadAttributeEnable,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa-payload-bary-rt32",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaPayloadBaryPlanes,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa-sample-all-rt32",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaSampleAll,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa-wm-handoff-rt32",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaWmHandoff,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa-sample-all-wm-handoff-rt32",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaSampleAllWmHandoff,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
             "vf-rect-ndc-oa-hammer-rt32",
             VfPrimitiveGeometry::NdcRect,
             BackendProbeMode::RasterWmInputOaHammer,
@@ -3167,6 +3251,12 @@ fn run_fragment_shape_frontier_spectrum(dev: crate::intel::Dev, warm: RenderWarm
         (
             "vf-rect-mesa-simple-oa-early-rt32",
             VfPrimitiveGeometry::ScreenSpaceRect8x8OrderB,
+            BackendProbeMode::RasterWmInputOaMesaSimpleRectEarly,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-tri-mesa-simple-oa-early-rt32",
+            VfPrimitiveGeometry::ScreenSpaceTri8x8OrderB,
             BackendProbeMode::RasterWmInputOaMesaSimpleRectEarly,
             StreamoutProofExperiment::PositionSlot1,
         ),
@@ -3682,6 +3772,8 @@ fn submit_triangle_vf_draw_to_surface_ext(
         TriangleBatchMode::VfRectClipDraw
     } else if geometry.rect_candidate() {
         TriangleBatchMode::VfRectDraw
+    } else if geometry.screen_space_candidate() {
+        TriangleBatchMode::VfScreenSpaceDraw
     } else {
         TriangleBatchMode::VfDraw
     };

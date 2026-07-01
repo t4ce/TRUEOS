@@ -133,23 +133,24 @@ struct TrueosAddrInfo {
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct TrueosStat {
-    st_dev: u32,
-    st_ino: u32,
+    st_dev: u64,
+    st_ino: u64,
+    st_nlink: u64,
     st_mode: u32,
-    st_nlink: u16,
     st_uid: u32,
     st_gid: u32,
-    st_rdev: u32,
+    __pad0: u32,
+    st_rdev: u64,
     st_size: i64,
-    st_atime: i32,
-    st_atime_nsec: c_long,
-    st_mtime: i32,
-    st_mtime_nsec: c_long,
-    st_ctime: i32,
-    st_ctime_nsec: c_long,
-    st_blksize: i32,
-    st_blocks: i32,
-    st_spare4: [c_long; 2],
+    st_blksize: i64,
+    st_blocks: i64,
+    st_atime: i64,
+    st_atime_nsec: i64,
+    st_mtime: i64,
+    st_mtime_nsec: i64,
+    st_ctime: i64,
+    st_ctime_nsec: i64,
+    __unused: [i64; 3],
 }
 
 #[repr(C)]
@@ -2286,25 +2287,26 @@ pub unsafe extern "C" fn stat(path: *const c_char, buf: *mut c_void) -> c_int {
             return -1;
         }
     };
-    let blocks = core::cmp::min(len.saturating_add(511) / 512, i32::MAX as u64) as i32;
+    let blocks = core::cmp::min(len.saturating_add(511) / 512, i64::MAX as u64) as i64;
     let out = TrueosStat {
         st_dev: 1,
         st_ino: 1,
-        st_mode: mode,
         st_nlink: if kind == 2 { 2 } else { 1 },
+        st_mode: mode,
         st_uid: 0,
         st_gid: 0,
+        __pad0: 0,
         st_rdev: 0,
         st_size: core::cmp::min(len, i64::MAX as u64) as i64,
+        st_blksize: 1024,
+        st_blocks: blocks,
         st_atime: 0,
         st_atime_nsec: 0,
         st_mtime: 0,
         st_mtime_nsec: 0,
         st_ctime: 0,
         st_ctime_nsec: 0,
-        st_blksize: 1024,
-        st_blocks: blocks,
-        st_spare4: [0; 2],
+        __unused: [0; 3],
     };
     if !copy_to_abi_out(buf.cast::<u8>(), unsafe {
         slice::from_raw_parts(
@@ -2656,25 +2658,26 @@ pub unsafe extern "C" fn fstat(fd: c_int, buf: *mut c_void) -> c_int {
         return -1;
     };
     let len = file.len() as u64;
-    let blocks = core::cmp::min(len.saturating_add(511) / 512, i32::MAX as u64) as i32;
+    let blocks = core::cmp::min(len.saturating_add(511) / 512, i64::MAX as u64) as i64;
     let out = TrueosStat {
         st_dev: 1,
-        st_ino: fd as u32,
-        st_mode: TRUEOS_FILE_MODE,
+        st_ino: fd as u64,
         st_nlink: 1,
+        st_mode: TRUEOS_FILE_MODE,
         st_uid: 0,
         st_gid: 0,
+        __pad0: 0,
         st_rdev: 0,
         st_size: core::cmp::min(len, i64::MAX as u64) as i64,
+        st_blksize: 1024,
+        st_blocks: blocks,
         st_atime: 0,
         st_atime_nsec: 0,
         st_mtime: 0,
         st_mtime_nsec: 0,
         st_ctime: 0,
         st_ctime_nsec: 0,
-        st_blksize: 1024,
-        st_blocks: blocks,
-        st_spare4: [0; 2],
+        __unused: [0; 3],
     };
     if !copy_to_abi_out(buf.cast::<u8>(), unsafe {
         slice::from_raw_parts(
