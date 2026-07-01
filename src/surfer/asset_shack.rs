@@ -341,6 +341,17 @@ pub fn push_browser_asset_ref(
     let Some(generation) = current_generation(browser_instance_id) else {
         return -1;
     };
+    if crate::surfer::media_stream::is_stream_candidate(kind.as_str(), url.as_str()) {
+        return crate::surfer::media_stream::push_candidate(
+            crate::surfer::media_stream::BrowserMediaCandidate {
+                browser_instance_id,
+                generation,
+                tag,
+                url,
+                kind,
+            },
+        ) as i32;
+    }
     with_asset_shack(|shack| {
         if shack.queued.len() >= ASSET_FETCH_QUEUE_CAP {
             return -4;
