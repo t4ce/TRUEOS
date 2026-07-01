@@ -971,7 +971,10 @@ fn log_mesa_spec_cross_compare(
     clip_dw1: u32,
     clip_dw2: u32,
     sf_dw1: u32,
+    sf_dw2: u32,
     raster_dw1: u32,
+    topology: u32,
+    primitive_replication_dw1: u32,
     ps_dw3: u32,
     ps_dw6: u32,
     ps_extra_dw1: u32,
@@ -991,7 +994,10 @@ fn log_mesa_spec_cross_compare(
     let trueos_clip_enable = (clip_dw2 >> 31) & 0x1;
     let trueos_clip_stats = (clip_dw1 >> 10) & 0x1;
     let trueos_sf_stats = (sf_dw1 >> 10) & 0x1;
+    let trueos_sf_deref_block = (sf_dw2 >> 29) & 0x3;
     let trueos_raster_cull_mode = (raster_dw1 >> 16) & 0x3;
+    let trueos_primitive_replication_count = primitive_replication_dw1 & 0xF;
+    let trueos_primitive_replication_mask = (primitive_replication_dw1 >> 16) & 0xFFFF;
     let trueos_ps_attribute_enable = (ps_extra_dw1 >> 8) & 0x1;
     let trueos_ps_per_sample = (ps_extra_dw1 >> 6) & 0x1;
     let trueos_ps_computed_depth = (ps_extra_dw1 >> 26) & 0x3;
@@ -1005,9 +1011,10 @@ fn log_mesa_spec_cross_compare(
     };
 
     intel_render_verbose_log!(
-        "intel/render: mesa-compare target=device=0x{:04X} note={} host_sbe[read_offset=1 read_length=1 force_read_offset=1 force_read_length=1 num_sf_attrs=0] trueos_sbe[read_offset={} read_length={} force_read_offset={} force_read_length={} num_sf_attrs={}] host_clip[perspective_divide_disable=1] trueos_clip[perspective_divide_disable={} clip_mode={}({}) clip_enable={} statistics={}] debug_sf[statistics={}] host_raster[cull_mode=none sample_mask=0x1] trueos_raster[cull_mode={}({}) sample_mask=1]\n",
+        "intel/render: mesa-compare target=device=0x{:04X} note={} host_topology=trilist trueos_topology={} host_sbe[read_offset=1 read_length=1 force_read_offset=1 force_read_length=1 num_sf_attrs=0] trueos_sbe[read_offset={} read_length={} force_read_offset={} force_read_length={} num_sf_attrs={}] host_clip[perspective_divide_disable=1] trueos_clip[perspective_divide_disable={} clip_mode={}({}) clip_enable={} statistics={}] host_sf[deref=1(PerPoly) statistics=1] trueos_sf[deref={}({}) statistics={}] host_prim_repl[count=0 mask=0x1] trueos_prim_repl[count={} mask=0x{:X}] host_raster[cull_mode=none sample_mask=0x1] trueos_raster[cull_mode={}({}) sample_mask=1]\n",
         warm.device_id,
         crate::intel::shader::triangle_pipeline_note(),
+        primitive_topology_label(topology),
         trueos_sbe_read_offset,
         trueos_sbe_read_length,
         trueos_sbe_force_read_offset,
@@ -1018,7 +1025,11 @@ fn log_mesa_spec_cross_compare(
         decode_clip_mode_name(trueos_clip_mode),
         trueos_clip_enable,
         trueos_clip_stats,
+        trueos_sf_deref_block,
+        decode_deref_block_size_name(trueos_sf_deref_block),
         trueos_sf_stats,
+        trueos_primitive_replication_count,
+        trueos_primitive_replication_mask,
         trueos_raster_cull_mode,
         decode_cull_mode_name(trueos_raster_cull_mode),
     );

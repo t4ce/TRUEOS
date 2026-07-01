@@ -834,7 +834,7 @@ fn encode_triangle_probe_batch(
         || (backend_probe_mode.uses_raster_wm_oa()
             && !backend_probe_mode.suppress_wm_hz_op_sample_mask())
     {
-        1
+        backend_probe_mode.wm_hz_op_sample_mask() & 0xFFFF
     } else {
         0
     };
@@ -908,6 +908,9 @@ fn encode_triangle_probe_batch(
         | BackendProbeMode::RasterWmInputOaPayloadAttributeEnable
         | BackendProbeMode::RasterWmInputOaPayloadSourceDepthW
         | BackendProbeMode::RasterWmInputOaPayloadBaryPlanes
+        | BackendProbeMode::RasterWmInputOaSampleAll
+        | BackendProbeMode::RasterWmInputOaWmHandoff
+        | BackendProbeMode::RasterWmInputOaSampleAllWmHandoff
         | BackendProbeMode::RasterWmInputOaFrontCcw
         | BackendProbeMode::RasterWmInputOaNoPrimitiveReplication
         | BackendProbeMode::RasterWmInputOaVfGeometryDistribution
@@ -1653,7 +1656,7 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, backend_probe_mode.multisample_dw1())?;
         log_batch_offset(cursor, "3DSTATE_SAMPLE_MASK early-raster-gate");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_SAMPLE_MASK)?;
-        push(batch_dwords, &mut cursor, 1)?;
+        push(batch_dwords, &mut cursor, backend_probe_mode.sample_mask_dw())?;
     }
 
     if backend_probe_mode.draw_rect_before_clip() {
@@ -1846,7 +1849,7 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, backend_probe_mode.multisample_dw1())?;
         log_batch_offset(cursor, "3DSTATE_SAMPLE_MASK");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_SAMPLE_MASK)?;
-        push(batch_dwords, &mut cursor, 1)?;
+        push(batch_dwords, &mut cursor, backend_probe_mode.sample_mask_dw())?;
     }
 
     if !backend_probe_mode.draw_rect_before_clip() {
@@ -2205,7 +2208,10 @@ fn encode_triangle_probe_batch(
         clip_dw1,
         clip_dw2,
         sf_dw1,
+        sf_dw2,
         raster_dw1,
+        batch_mode.topology(),
+        primitive_replication_dw1,
         ps_dw3,
         ps_dw6,
         ps_extra_dw1,
@@ -2278,7 +2284,7 @@ fn encode_triangle_probe_batch(
         && ps_bary_coeffs == 0
         && ps_source_depth_w == 0) as u8;
     intel_render_focus_log!(
-        "intel/render: {} pre-ps-contract backend={} topo={} sbe[dw1=0x{:08X} read_offset={} read_len={} attrs={} force_off={} force_len={}] vue[vs_baked={} vs_prog={} vf_synth={}] wm[dw1=0x{:08X} stats={} bary=0x{:X} force_dispatch={} hz_active={} hz_sample_mask=0x{:X}] ps[dw3=0x{:08X} dw6=0x{:08X} dw7=0x{:08X} extra=0x{:08X} valid={} bt_count={} dispatch_bits={}{}{} push={} attr={} bary={} src_depth_w={} grf_start={} max_threads={}] rt[writeable={} bt_ptr=0x{:X} surf=0x{:X}] launch_qualifier={} dispatch_armed={} no_varying_payload={} note=pre-ps-frontier\n",
+        "intel/render: {} pre-ps-contract backend={} topo={} sbe[dw1=0x{:08X} read_offset={} read_len={} attrs={} force_off={} force_len={}] vue[vs_baked={} vs_prog={} vf_synth={}] raster[dw1=0x{:08X} msaa={} forced_ms={} forced_samples={} scissor={} sample_mask=0x{:X}] wm[dw1=0x{:08X} stats={} bary=0x{:X} force_dispatch={} hz_active={} hz_sample_mask=0x{:X}] ps[dw3=0x{:08X} dw6=0x{:08X} dw7=0x{:08X} extra=0x{:08X} valid={} bt_count={} dispatch_bits={}{}{} push={} attr={} bary={} src_depth_w={} grf_start={} max_threads={}] rt[writeable={} bt_ptr=0x{:X} surf=0x{:X}] launch_qualifier={} dispatch_armed={} no_varying_payload={} note=pre-ps-frontier\n",
         submit_name,
         backend_probe_mode.label(),
         primitive_topology_label(batch_mode.topology()),
@@ -2291,6 +2297,12 @@ fn encode_triangle_probe_batch(
         baked_vs_urb_output_length,
         programmed_vs_urb_output_length,
         vf_synthesized_vue as u8,
+        raster_dw1,
+        (raster_dw1 >> 14) & 0x1,
+        (raster_dw1 >> 12) & 0x1,
+        (raster_dw1 >> 18) & 0x7,
+        (raster_dw1 >> 1) & 0x1,
+        backend_probe_mode.sample_mask_dw(),
         wm_dw1,
         (wm_dw1 >> 31) & 0x1,
         (wm_dw1 >> 11) & 0x3F,

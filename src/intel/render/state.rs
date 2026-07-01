@@ -182,6 +182,7 @@ enum TriangleBatchMode {
     DrawScreenSpace,
     DrawScreenSpaceRect,
     VfDraw,
+    VfScreenSpaceDraw,
     VfPointDraw,
     VfLineDraw,
     VfRectDraw,
@@ -257,6 +258,9 @@ enum BackendProbeMode {
     RasterWmInputOaPayloadAttributeEnable,
     RasterWmInputOaPayloadSourceDepthW,
     RasterWmInputOaPayloadBaryPlanes,
+    RasterWmInputOaSampleAll,
+    RasterWmInputOaWmHandoff,
+    RasterWmInputOaSampleAllWmHandoff,
     RasterWmInputOaFrontCcw,
     RasterWmInputOaNoPrimitiveReplication,
     RasterWmInputOaVfGeometryDistribution,
@@ -461,6 +465,11 @@ impl BackendProbeMode {
             }
             Self::RasterWmInputOaPayloadSourceDepthW => "raster-wm-input-oa-payload-source-depth-w",
             Self::RasterWmInputOaPayloadBaryPlanes => "raster-wm-input-oa-payload-bary-planes",
+            Self::RasterWmInputOaSampleAll => "raster-wm-input-oa-sample-all",
+            Self::RasterWmInputOaWmHandoff => "raster-wm-input-oa-wm-handoff",
+            Self::RasterWmInputOaSampleAllWmHandoff => {
+                "raster-wm-input-oa-sample-all-wm-handoff"
+            }
             Self::RasterWmInputOaFrontCcw => "raster-wm-input-oa-front-ccw",
             Self::RasterWmInputOaNoPrimitiveReplication => {
                 "raster-wm-input-oa-no-primitive-replication"
@@ -604,6 +613,9 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaPayloadAttributeEnable
                 | Self::RasterWmInputOaPayloadSourceDepthW
                 | Self::RasterWmInputOaPayloadBaryPlanes
+                | Self::RasterWmInputOaSampleAll
+                | Self::RasterWmInputOaWmHandoff
+                | Self::RasterWmInputOaSampleAllWmHandoff
                 | Self::RasterWmInputOaFrontCcw
                 | Self::RasterWmInputOaNoPrimitiveReplication
                 | Self::RasterWmInputOaVfGeometryDistribution
@@ -639,6 +651,8 @@ impl BackendProbeMode {
             self,
             Self::RasterWmInputOaKillOff
                 | Self::RasterWmInputOaEarlyKillOff
+                | Self::RasterWmInputOaWmHandoff
+                | Self::RasterWmInputOaSampleAllWmHandoff
                 | Self::RasterWmInputOaHammer
                 | Self::RasterWmInputOaScreenHammer
         )
@@ -666,6 +680,8 @@ impl BackendProbeMode {
             Self::RasterWmInputOaMsRaster
                 | Self::RasterWmInputOaMsRasterForced
                 | Self::RasterWmInputOaEarlyMsRasterForced
+                | Self::RasterWmInputOaSampleAll
+                | Self::RasterWmInputOaSampleAllWmHandoff
                 | Self::RasterWmInputOaHammer
                 | Self::RasterWmInputOaScreenHammer
         )
@@ -676,17 +692,43 @@ impl BackendProbeMode {
             self,
             Self::RasterWmInputOaMsRasterForced
                 | Self::RasterWmInputOaEarlyMsRasterForced
+                | Self::RasterWmInputOaSampleAll
+                | Self::RasterWmInputOaSampleAllWmHandoff
                 | Self::RasterWmInputOaHammer
                 | Self::RasterWmInputOaScreenHammer
         )
     }
 
     fn forced_raster_sample_count(self) -> u32 {
-        if self.raster_hammer() { 1 } else { 0 }
+        if self.raster_hammer() || self.force_sample_generation() {
+            1
+        } else {
+            0
+        }
     }
 
     fn multisample_dw1(self) -> u32 {
-        if self.raster_hammer() { 1 } else { 0 }
+        if self.raster_hammer() || self.force_sample_generation() {
+            1
+        } else {
+            0
+        }
+    }
+
+    fn sample_mask_dw(self) -> u32 {
+        if self.force_sample_generation() {
+            0xFFFF
+        } else {
+            1
+        }
+    }
+
+    fn wm_hz_op_sample_mask(self) -> u32 {
+        if self.force_sample_generation() {
+            0xFFFF
+        } else {
+            1
+        }
     }
 
     fn sf_deref_block_zero(self) -> bool {
@@ -726,6 +768,8 @@ impl BackendProbeMode {
             self,
             Self::RasterWmInputOaWmReemitAfterPsExtra
                 | Self::RasterWmInputOaPointWidth64WmReemitAfterPsExtra
+                | Self::RasterWmInputOaWmHandoff
+                | Self::RasterWmInputOaSampleAllWmHandoff
         )
     }
 
@@ -740,6 +784,8 @@ impl BackendProbeMode {
         matches!(
             self,
             Self::RasterWmInputOaBtCountOne
+                | Self::RasterWmInputOaWmHandoff
+                | Self::RasterWmInputOaSampleAllWmHandoff
                 | Self::RasterWmInputOaHammer
                 | Self::RasterWmInputOaScreenHammer
         )
@@ -767,6 +813,7 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaEarlyClipViewportXy
                 | Self::RasterWmInputOaEarlyPointWidth1023
                 | Self::RasterWmInputOaEarlyMsRasterForced
+                | Self::RasterWmInputOaSampleAllWmHandoff
                 | Self::RasterWmInputOaPointWidth64Early
                 | Self::RasterWmInputOaPointWidth64EarlyScissor
                 | Self::RasterWmInputOaMesaSimpleRectEarly
@@ -776,11 +823,17 @@ impl BackendProbeMode {
     }
 
     fn early_sample_mask_only(self) -> bool {
-        matches!(self, Self::RasterWmInputOaSampleMaskEarlyOnly)
+        matches!(
+            self,
+            Self::RasterWmInputOaSampleMaskEarlyOnly | Self::RasterWmInputOaSampleAll
+        )
     }
 
     fn early_draw_rect_only(self) -> bool {
-        matches!(self, Self::RasterWmInputOaDrawRectEarlyOnly)
+        matches!(
+            self,
+            Self::RasterWmInputOaDrawRectEarlyOnly | Self::RasterWmInputOaSampleAll
+        )
     }
 
     fn sample_mask_before_clip(self) -> bool {
@@ -797,6 +850,7 @@ impl BackendProbeMode {
                 self,
                 Self::RasterWmInputOaPointWidth1023Scissor
                     | Self::RasterWmInputOaScissorOnly
+                    | Self::RasterWmInputOaSampleAll
                     | Self::RasterWmInputOaPointWidth64EarlyScissor
                     | Self::RasterWmInputOaHammer
                     | Self::RasterWmInputOaScreenHammer
@@ -805,6 +859,13 @@ impl BackendProbeMode {
 
     fn raster_hammer(self) -> bool {
         matches!(self, Self::RasterWmInputOaHammer | Self::RasterWmInputOaScreenHammer)
+    }
+
+    fn force_sample_generation(self) -> bool {
+        matches!(
+            self,
+            Self::RasterWmInputOaSampleAll | Self::RasterWmInputOaSampleAllWmHandoff
+        )
     }
 
     fn clip_accept_all(self) -> bool {
@@ -874,6 +935,8 @@ impl BackendProbeMode {
                 | Self::RasterWmInputOaPayloadAttributeEnable
                 | Self::RasterWmInputOaPayloadSourceDepthW
                 | Self::RasterWmInputOaPayloadBaryPlanes
+                | Self::RasterWmInputOaWmHandoff
+                | Self::RasterWmInputOaSampleAllWmHandoff
                 | Self::RasterWmInputOaPointWidth64PayloadAttributeEnable
                 | Self::RasterWmInputOaPointWidth64PayloadSourceDepthW
                 | Self::RasterWmInputOaPointWidth64PayloadBaryPlanes
@@ -885,6 +948,7 @@ impl BackendProbeMode {
             self,
             Self::PsPayloadSourceDepthW
                 | Self::RasterWmInputOaPayloadSourceDepthW
+                | Self::RasterWmInputOaSampleAllWmHandoff
                 | Self::RasterWmInputOaPointWidth64PayloadSourceDepthW
         )
     }
@@ -894,6 +958,8 @@ impl BackendProbeMode {
             self,
             Self::PsPayloadBaryPlanes
                 | Self::RasterWmInputOaPayloadBaryPlanes
+                | Self::RasterWmInputOaWmHandoff
+                | Self::RasterWmInputOaSampleAllWmHandoff
                 | Self::RasterWmInputOaPointWidth64PayloadBaryPlanes
         )
     }
@@ -904,6 +970,8 @@ impl BackendProbeMode {
             Self::RasterWmInputOaPayloadAttributeEnable
                 | Self::RasterWmInputOaPayloadSourceDepthW
                 | Self::RasterWmInputOaPayloadBaryPlanes
+                | Self::RasterWmInputOaWmHandoff
+                | Self::RasterWmInputOaSampleAllWmHandoff
                 | Self::RasterWmInputOaPointWidth64PayloadAttributeEnable
                 | Self::RasterWmInputOaPointWidth64PayloadSourceDepthW
                 | Self::RasterWmInputOaPointWidth64PayloadBaryPlanes
@@ -991,6 +1059,7 @@ enum VfPrimitiveGeometry {
     ScreenSpacePoint8x8,
     ScreenSpaceLine8x8,
     ScreenSpace8x8,
+    ScreenSpaceTri8x8OrderB,
     ScreenSpaceRect8x8,
     ScreenSpaceRect8x8OrderB,
     ScreenSpaceRect8x8OrderC,
@@ -1013,6 +1082,7 @@ impl VfPrimitiveGeometry {
             Self::ScreenSpacePoint8x8 => "screen-space-point-8x8",
             Self::ScreenSpaceLine8x8 => "screen-space-line-8x8",
             Self::ScreenSpace8x8 => "screen-space-8x8",
+            Self::ScreenSpaceTri8x8OrderB => "screen-space-tri-8x8-order-b",
             Self::ScreenSpaceRect8x8 => "screen-space-rect-8x8",
             Self::ScreenSpaceRect8x8OrderB => "screen-space-rect-8x8-order-b",
             Self::ScreenSpaceRect8x8OrderC => "screen-space-rect-8x8-order-c",
@@ -1045,7 +1115,9 @@ impl VfPrimitiveGeometry {
             Self::ScreenSpace8x8 | Self::ScreenSpaceRect8x8 => {
                 [[0.5, 0.5, 0.0], [7.5, 0.5, 0.0], [0.5, 7.5, 0.0]]
             }
-            Self::ScreenSpaceRect8x8OrderB => [[0.5, 0.5, 0.0], [0.5, 7.5, 0.0], [7.5, 0.5, 0.0]],
+            Self::ScreenSpaceTri8x8OrderB | Self::ScreenSpaceRect8x8OrderB => {
+                [[0.5, 0.5, 0.0], [0.5, 7.5, 0.0], [7.5, 0.5, 0.0]]
+            }
             Self::ScreenSpaceRect8x8OrderC => [[7.5, 7.5, 0.0], [7.5, 0.5, 0.0], [0.5, 7.5, 0.0]],
             Self::NdcTriangleLarge => [[-0.75, -0.75, 0.0], [0.75, -0.75, 0.0], [-0.75, 0.75, 0.0]],
             Self::NdcTriangleLargeCw => {
@@ -1074,6 +1146,7 @@ impl VfPrimitiveGeometry {
             Self::ScreenSpacePoint8x8
                 | Self::ScreenSpaceLine8x8
                 | Self::ScreenSpace8x8
+                | Self::ScreenSpaceTri8x8OrderB
                 | Self::ScreenSpaceRect8x8
                 | Self::ScreenSpaceRect8x8OrderB
                 | Self::ScreenSpaceRect8x8OrderC
@@ -1217,7 +1290,9 @@ fn select_streamout_proof_experiment(probe_seq: u32) -> StreamoutProofExperiment
 impl TriangleBatchMode {
     fn topology(self) -> u32 {
         match self {
-            Self::Draw | Self::DrawScreenSpace | Self::VfDraw => TRIANGLE_TOPOLOGY_TRILIST,
+            Self::Draw | Self::DrawScreenSpace | Self::VfDraw | Self::VfScreenSpaceDraw => {
+                TRIANGLE_TOPOLOGY_TRILIST
+            }
             Self::VfLineDraw => TRIANGLE_TOPOLOGY_LINELIST,
             Self::DrawScreenSpaceRect | Self::VfRectDraw | Self::VfRectClipDraw => {
                 TRIANGLE_TOPOLOGY_RECTLIST
@@ -1235,6 +1310,7 @@ impl TriangleBatchMode {
             Self::DrawScreenSpace => "draw-screen-space",
             Self::DrawScreenSpaceRect => "draw-screen-space-rect",
             Self::VfDraw => "vf-draw",
+            Self::VfScreenSpaceDraw => "vf-screen-space-draw",
             Self::VfPointDraw => "vf-point-draw",
             Self::VfLineDraw => "vf-line-draw",
             Self::VfRectDraw => "vf-rect-draw",
@@ -1249,6 +1325,7 @@ impl TriangleBatchMode {
         matches!(
             self,
             Self::VfDraw
+                | Self::VfScreenSpaceDraw
                 | Self::VfPointDraw
                 | Self::VfLineDraw
                 | Self::VfRectDraw
@@ -1261,7 +1338,13 @@ impl TriangleBatchMode {
     }
 
     fn screen_space_raster(self) -> bool {
-        matches!(self, Self::DrawScreenSpace | Self::DrawScreenSpaceRect | Self::VfRectDraw)
+        matches!(
+            self,
+            Self::DrawScreenSpace
+                | Self::DrawScreenSpaceRect
+                | Self::VfScreenSpaceDraw
+                | Self::VfRectDraw
+        )
     }
 
     fn streamout_enabled(self) -> bool {

@@ -120,7 +120,8 @@ pub mod vmcall {
 
     pub const STATUS_OK: u32 = 0;
     pub const STATUS_BAD_ARG: u32 = 2;
-    pub const PAYLOAD_CAP: usize = 4096 - 56;
+    pub const COMM_PAGE_BYTES: usize = 160 * 1024;
+    pub const PAYLOAD_CAP: usize = COMM_PAGE_BYTES - 56;
 
     pub fn hull_bss_anchor() -> u64 {
         0

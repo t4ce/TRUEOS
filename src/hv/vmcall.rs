@@ -123,7 +123,9 @@ pub const COMM_PAGE_VM_ID_MAGIC: u32 = 0x4856_0000;
 pub fn comm_page_guest_va() -> u64 {
     crate::hv::memory::GUEST_COMM_PAGE_VA
 }
-pub const PAYLOAD_CAP: usize = 4096 - 56;
+pub const COMM_PAGE_BYTES: usize = 160 * 1024;
+pub const COMM_PAGE_PAGES: usize = COMM_PAGE_BYTES / 4096;
+pub const PAYLOAD_CAP: usize = COMM_PAGE_BYTES - 56;
 
 /// Layout of the communication page shared between guest and host.
 /// Guest writes request_* fields then vmcall.
@@ -166,12 +168,12 @@ static UI3_VMCALL_DRAW_SOLID_NS: AtomicU64 = AtomicU64::new(0);
 static UI3_VMCALL_UPLOAD_CHUNK_COUNT: AtomicU64 = AtomicU64::new(0);
 static UI3_VMCALL_UPLOAD_CHUNK_NS: AtomicU64 = AtomicU64::new(0);
 
-/// Static 4 K backing page for CommPage.
+/// Static backing pages for CommPage.
 #[repr(C, align(4096))]
-pub struct CommPageBacking([u8; 4096]);
+pub struct CommPageBacking([u8; COMM_PAGE_BYTES]);
 
 pub static mut COMM_PAGES: [CommPageBacking; crate::hv::TRUEOS_VM_ID_LIMIT] =
-    [const { CommPageBacking([0u8; 4096]) }; crate::hv::TRUEOS_VM_ID_LIMIT];
+    [const { CommPageBacking([0u8; COMM_PAGE_BYTES]) }; crate::hv::TRUEOS_VM_ID_LIMIT];
 
 #[inline]
 fn host_ptr(vm_id: u8) -> Option<*mut CommPage> {
@@ -207,10 +209,18 @@ pub(crate) fn guest_comm_page_vm_id_tag() -> Option<u32> {
 }
 
 pub fn pa_for_vm(vm_id: u8) -> Option<u64> {
+    pa_for_vm_page(vm_id, 0)
+}
+
+pub fn pa_for_vm_page(vm_id: u8, page_index: usize) -> Option<u64> {
     if (vm_id as usize) >= crate::hv::TRUEOS_VM_ID_LIMIT {
         return None;
     }
-    let va = unsafe { core::ptr::addr_of!(COMM_PAGES[vm_id as usize].0) as u64 };
+    if page_index >= COMM_PAGE_PAGES {
+        return None;
+    }
+    let va = unsafe { core::ptr::addr_of!(COMM_PAGES[vm_id as usize].0) as u64 }
+        .saturating_add((page_index * 4096) as u64);
     kernel_va_to_pa(va)
 }
 
