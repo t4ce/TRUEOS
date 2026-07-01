@@ -409,6 +409,7 @@ function collectYoutubeConfig(source) {
     hl: '',
     gl: '',
     rolloutToken: '',
+    signatureTimestamp: '',
   };
   const applyConfigObject = (obj) => {
     if (!obj || typeof obj !== 'object') return;
@@ -419,6 +420,7 @@ function collectYoutubeConfig(source) {
     config.hl = config.hl || safeString(obj.HL || obj.INNERTUBE_CONTEXT_HL);
     config.gl = config.gl || safeString(obj.GL || obj.INNERTUBE_CONTEXT_GL);
     config.rolloutToken = config.rolloutToken || safeString(obj.ROLLOUT_TOKEN);
+    config.signatureTimestamp = config.signatureTimestamp || safeString(obj.STS || obj.signatureTimestamp);
     const contextClient = obj.INNERTUBE_CONTEXT && obj.INNERTUBE_CONTEXT.client;
     if (contextClient && typeof contextClient === 'object') {
       config.clientName = config.clientName || safeString(contextClient.clientName);
@@ -440,11 +442,11 @@ function collectYoutubeConfig(source) {
     searchAt = markerIndex + 9;
   }
 
-  const pairRe = /"(INNERTUBE_API_KEY|INNERTUBE_CLIENT_NAME|INNERTUBE_CONTEXT_CLIENT_NAME|INNERTUBE_CLIENT_VERSION|CLIENT_VERSION|VISITOR_DATA|HL|GL|ROLLOUT_TOKEN)"\s*:\s*"((?:\\.|[^"\\])*)"/g;
+  const pairRe = /"(INNERTUBE_API_KEY|INNERTUBE_CLIENT_NAME|INNERTUBE_CONTEXT_CLIENT_NAME|INNERTUBE_CLIENT_VERSION|CLIENT_VERSION|VISITOR_DATA|HL|GL|ROLLOUT_TOKEN|STS|signatureTimestamp)"\s*:\s*("((?:\\.|[^"\\])*)"|[0-9]+)/g;
   let match;
   while ((match = pairRe.exec(source))) {
     const key = match[1];
-    const value = decodeJsonStringLiteralFragment(match[2]);
+    const value = match[3] !== undefined ? decodeJsonStringLiteralFragment(match[3]) : safeString(match[2]);
     if (key === 'INNERTUBE_API_KEY') config.apiKey = config.apiKey || value;
     else if (key === 'INNERTUBE_CLIENT_NAME' || key === 'INNERTUBE_CONTEXT_CLIENT_NAME') config.clientName = config.clientName || value;
     else if (key === 'INNERTUBE_CLIENT_VERSION' || key === 'CLIENT_VERSION') config.clientVersion = config.clientVersion || value;
@@ -452,6 +454,7 @@ function collectYoutubeConfig(source) {
     else if (key === 'HL') config.hl = config.hl || value;
     else if (key === 'GL') config.gl = config.gl || value;
     else if (key === 'ROLLOUT_TOKEN') config.rolloutToken = config.rolloutToken || value;
+    else if (key === 'STS' || key === 'signatureTimestamp') config.signatureTimestamp = config.signatureTimestamp || value;
   }
   return config;
 }
@@ -637,8 +640,10 @@ function collectMediaCandidatesFromHtml(html) {
     probeUrl = appendProbeParam(probeUrl, 'visitor_data', youtubeConfig.visitorData);
     probeUrl = appendProbeParam(probeUrl, 'hl', youtubeConfig.hl || 'en');
     probeUrl = appendProbeParam(probeUrl, 'gl', youtubeConfig.gl || 'US');
+    probeUrl = appendProbeParam(probeUrl, 'watch_url', currentNavigationUrl);
+    probeUrl = appendProbeParam(probeUrl, 'sts', youtubeConfig.signatureTimestamp);
     log(
-      `[truesurfer media] browser=${browserId} youtube_innertube_candidate=1 probe_rev=${TRUESURFER_MEDIA_PROBE_REV} action=queue-player-direct-format-probe video_id=${youtubeVideoIdFromUrl(currentNavigationUrl)} client_name=${safeString(youtubeConfig.clientName || 'WEB')} client_version=${safeString(youtubeConfig.clientVersion)}`,
+      `[truesurfer media] browser=${browserId} youtube_innertube_candidate=1 probe_rev=${TRUESURFER_MEDIA_PROBE_REV} action=queue-player-direct-format-probe video_id=${youtubeVideoIdFromUrl(currentNavigationUrl)} client_name=${safeString(youtubeConfig.clientName || 'WEB')} client_version=${safeString(youtubeConfig.clientVersion)} sts=${safeString(youtubeConfig.signatureTimestamp || '0')}`,
     );
     pushMediaCandidate(candidates, seen, probeUrl, 'youtube-innertube', {
       kind: 'video/youtube-innertube',
@@ -682,7 +687,7 @@ function tagHtmlMediaRefs(html) {
     const apiKey = safeString(youtubeConfig.apiKey);
     const apiKeySuffix = apiKey ? apiKey.slice(Math.max(0, apiKey.length - 6)) : '';
     log(
-      `[truesurfer media] browser=${browserId} youtube_context responses=${youtubeStats.responses} playability=${safeString(youtubeStats.playabilityStatus)} reason=${safeString(youtubeStats.playabilityReason)} client_name=${safeString(youtubeConfig.clientName)} client_version=${safeString(youtubeConfig.clientVersion)} api_key=${apiKey ? 1 : 0} api_key_len=${apiKey.length} api_key_suffix=${safeString(apiKeySuffix)} visitor=${youtubeConfig.visitorData ? 1 : 0} hl=${safeString(youtubeConfig.hl)} gl=${safeString(youtubeConfig.gl)} rollout=${youtubeConfig.rolloutToken ? 1 : 0} url=${currentNavigationUrl}`,
+      `[truesurfer media] browser=${browserId} youtube_context responses=${youtubeStats.responses} playability=${safeString(youtubeStats.playabilityStatus)} reason=${safeString(youtubeStats.playabilityReason)} client_name=${safeString(youtubeConfig.clientName)} client_version=${safeString(youtubeConfig.clientVersion)} api_key=${apiKey ? 1 : 0} api_key_len=${apiKey.length} api_key_suffix=${safeString(apiKeySuffix)} visitor=${youtubeConfig.visitorData ? 1 : 0} hl=${safeString(youtubeConfig.hl)} gl=${safeString(youtubeConfig.gl)} rollout=${youtubeConfig.rolloutToken ? 1 : 0} sts=${safeString(youtubeConfig.signatureTimestamp || '0')} url=${currentNavigationUrl}`,
     );
   }
   if (youtubeStats.responses > 0) {

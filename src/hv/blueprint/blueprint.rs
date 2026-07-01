@@ -1309,6 +1309,10 @@ fn resolve_known_import(name: &str) -> Option<usize> {
         "asinf" => Some(trueos_math::asinf as *const () as usize),
         "log2f" => Some(trueos_math::log2f as *const () as usize),
         "hypotf" => Some(trueos_math::hypotf as *const () as usize),
+        "sin" => Some(trueos_math::sin as *const () as usize),
+        "cos" => Some(trueos_math::cos as *const () as usize),
+        "log2" => Some(trueos_math::log2 as *const () as usize),
+        "hypot" => Some(trueos_math::hypot as *const () as usize),
         "trueos_cabi_wls_current_slot" => {
             Some(crate::stackkeeper::trueos_cabi_wls_current_slot as *const () as usize)
         }
@@ -1641,7 +1645,8 @@ pub(crate) fn build_process_env(
     vars.insert(String::from("XDG_CACHE_HOME"), String::from("/cache"));
     vars.insert(String::from("BAT_CONFIG_DIR"), String::from("/config/bat"));
     vars.insert(String::from("BAT_CACHE_PATH"), String::from("/cache/bat"));
-    if safe_archive_stem(archive) == "bat" {
+    let archive_stem = safe_archive_stem(archive);
+    if archive_stem == "bat" {
         vars.insert(
             String::from("BAT_OPTS"),
             String::from(
@@ -1651,6 +1656,11 @@ pub(crate) fn build_process_env(
         vars.insert(String::from("BAT_PAGING"), String::from("never"));
         vars.insert(String::from("BAT_PAGER"), String::new());
         vars.insert(String::from("BAT_WIDTH"), String::from("100"));
+    }
+    if archive_stem == "prism_q_probe" {
+        vars.insert(String::from("PRISM_MAX_SV_QUBITS"), String::from("26"));
+        vars.insert(String::from("PRISM_MAX_PROB_QUBITS"), String::from("26"));
+        vars.insert(String::from("PRISM_MAX_EXPORT_QUBITS"), String::from("26"));
     }
     vars.insert(String::from("TRUEOS_APP_ARCHIVE"), String::from(archive));
     if let Some(root) = app_fs_root {
