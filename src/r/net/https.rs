@@ -72,6 +72,13 @@ struct HttpsRequest<'a> {
     body: &'a [u8],
 }
 
+fn request_has_header(request: &HttpsRequest<'_>, name: &str) -> bool {
+    request
+        .headers
+        .iter()
+        .any(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
+}
+
 fn parse_fetch_url(url: &str) -> Result<FetchTarget, &'static str> {
     let trimmed = url.trim();
     let (scheme, rest, default_port) = if let Some(rest) = trimmed.strip_prefix("https://") {
@@ -373,9 +380,21 @@ async fn request_https_bytes(
                         continue;
                     }
                     let mut req = format!(
-                        "{} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS net-fetch\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n",
+                        "{} {} HTTP/1.1\r\nHost: {}\r\n",
                         request.method, target.path_and_query, target.host
                     );
+                    if !request_has_header(request, "User-Agent") {
+                        req.push_str("User-Agent: TRUEOS net-fetch\r\n");
+                    }
+                    if !request_has_header(request, "Accept") {
+                        req.push_str("Accept: */*\r\n");
+                    }
+                    if !request_has_header(request, "Accept-Encoding") {
+                        req.push_str("Accept-Encoding: identity\r\n");
+                    }
+                    if !request_has_header(request, "Connection") {
+                        req.push_str("Connection: close\r\n");
+                    }
                     if let Some(content_type) = request.content_type {
                         req.push_str("Content-Type: ");
                         req.push_str(content_type);
@@ -507,6 +526,82 @@ pub async fn get_range_bytes_shared(
         content_type: None,
         headers: vec![(String::from("Range"), format!("bytes={}-{}", offset, end))],
         body: &[],
+    };
+    request_https_bytes(&target, &request, timeout_ms.max(1), max_bytes).await
+}
+
+pub async fn get_browser_media_bytes_shared(
+    url: &str,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    let target = parse_fetch_url(url).map_err(String::from)?;
+    if target.scheme != "https" {
+        return Err(String::from("unsupported scheme"));
+    }
+    let request = HttpsRequest {
+        method: "GET",
+        content_type: None,
+        headers: vec![
+            (
+                String::from("User-Agent"),
+                String::from(
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                ),
+            ),
+            (String::from("Accept"), String::from("video/webm,video/mp4,video/*;q=0.9,*/*;q=0.8")),
+            (String::from("Accept-Language"), String::from("en-US,en;q=0.9")),
+            (String::from("Accept-Encoding"), String::from("identity")),
+            (String::from("Origin"), String::from("https://www.youtube.com")),
+            (String::from("Referer"), String::from("https://www.youtube.com/")),
+            (String::from("Sec-Fetch-Dest"), String::from("video")),
+            (String::from("Sec-Fetch-Mode"), String::from("no-cors")),
+            (String::from("Sec-Fetch-Site"), String::from("cross-site")),
+            (String::from("Range"), String::from("bytes=0-")),
+            (String::from("Connection"), String::from("close")),
+        ],
+        body: &[],
+    };
+    request_https_bytes(&target, &request, timeout_ms.max(1), max_bytes).await
+}
+
+pub async fn post_youtubei_player_bytes_shared(
+    url: &str,
+    body_json: &str,
+    client_name: &str,
+    client_version: &str,
+    visitor_data: Option<&str>,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    let target = parse_fetch_url(url).map_err(String::from)?;
+    if target.scheme != "https" {
+        return Err(String::from("unsupported scheme"));
+    }
+    let mut headers = vec![
+        (
+            String::from("User-Agent"),
+            String::from(
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            ),
+        ),
+        (String::from("Accept"), String::from("application/json")),
+        (String::from("Accept-Language"), String::from("en-US,en;q=0.9")),
+        (String::from("Accept-Encoding"), String::from("identity")),
+        (String::from("Origin"), String::from("https://www.youtube.com")),
+        (String::from("Referer"), String::from("https://www.youtube.com/")),
+        (String::from("X-YouTube-Client-Name"), String::from(client_name)),
+        (String::from("X-YouTube-Client-Version"), String::from(client_version)),
+        (String::from("Connection"), String::from("close")),
+    ];
+    if let Some(visitor) = visitor_data.filter(|value| !value.trim().is_empty()) {
+        headers.push((String::from("X-Goog-Visitor-Id"), String::from(visitor)));
+    }
+    let request = HttpsRequest {
+        method: "POST",
+        content_type: Some("application/json"),
+        headers,
+        body: body_json.as_bytes(),
     };
     request_https_bytes(&target, &request, timeout_ms.max(1), max_bytes).await
 }

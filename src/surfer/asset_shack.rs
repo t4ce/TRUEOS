@@ -12,6 +12,7 @@ const ASSET_FETCH_POLL_MS: u64 = 8;
 const ASSET_BATCH_MONITOR_MS: u64 = 50;
 const ASSET_BATCH_TIMEOUT_MS: u64 = 5_000;
 const ASSET_FETCH_FIELD_MAX: usize = 512;
+const ASSET_FETCH_URL_MAX: usize = 8192;
 const ASSET_FETCH_QUEUE_CAP: usize = 256;
 const ASSET_READY_CAP: usize = 256;
 pub(crate) const ASSET_FETCH_WORKERS: usize = 4;
@@ -92,8 +93,8 @@ fn with_asset_shack<R>(f: impl FnOnce(&mut AssetShack) -> R) -> R {
     f(shack)
 }
 
-fn bounded_utf8(ptr: *const u8, len: usize) -> Option<String> {
-    if ptr.is_null() || len == 0 || len > ASSET_FETCH_FIELD_MAX {
+fn bounded_utf8(ptr: *const u8, len: usize, max_len: usize) -> Option<String> {
+    if ptr.is_null() || len == 0 || len > max_len {
         return None;
     }
     let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
@@ -321,13 +322,16 @@ pub fn begin_browser_asset_refs(browser_instance_id: u32) -> i32 {
         let dropped_batches = batches_before.saturating_sub(shack.batches.len());
         (dropped_queued, dropped_ready, dropped_batches)
     });
+    let dropped_media_candidates =
+        crate::surfer::media_stream::begin_browser_generation(browser_instance_id, next_generation);
     crate::log!(
-        "asset_shack: browser begin browser={} generation={} dropped_queued={} dropped_ready={} dropped_batches={} active_cancel_signal=1\n",
+        "asset_shack: browser begin browser={} generation={} dropped_queued={} dropped_ready={} dropped_batches={} dropped_media_candidates={} active_cancel_signal=1\n",
         browser_instance_id,
         next_generation,
         dropped_queued,
         dropped_ready,
-        dropped_batches
+        dropped_batches,
+        dropped_media_candidates
     );
     0
 }
@@ -383,13 +387,14 @@ pub unsafe extern "C" fn trueos_cabi_browser_asset_ref_push(
     kind_ptr: *const u8,
     kind_len: usize,
 ) -> i32 {
-    let Some(tag) = bounded_utf8(tag_ptr, tag_len) else {
+    let Some(tag) = bounded_utf8(tag_ptr, tag_len, ASSET_FETCH_FIELD_MAX) else {
         return -2;
     };
-    let Some(url) = bounded_utf8(url_ptr, url_len) else {
+    let Some(url) = bounded_utf8(url_ptr, url_len, ASSET_FETCH_URL_MAX) else {
         return -3;
     };
-    let kind = bounded_utf8(kind_ptr, kind_len).unwrap_or_else(|| String::from("asset"));
+    let kind = bounded_utf8(kind_ptr, kind_len, ASSET_FETCH_FIELD_MAX)
+        .unwrap_or_else(|| String::from("asset"));
     push_browser_asset_ref(browser_instance_id, tag, url, kind)
 }
 

@@ -1,6 +1,7 @@
-use alloc::{format, string::String, vec::Vec};
+use alloc::{format, string::String, string::ToString, vec::Vec};
 use core::fmt::Write;
 use embassy_time::{Duration as EmbassyDuration, Instant as EmbassyInstant, Timer};
+use serde_json::Value;
 
 const H264_BOOT_PROBE_ENABLED: bool = true;
 const H264_BOOT_PROBE_PLAYBACK_ENABLED: bool = false;
@@ -21,6 +22,11 @@ const H264_BOOT_PROBE_STREAM_LOAD_POLL_MS: u64 = 250;
 const H264_BOOT_PROBE_STREAM_CHUNK_BYTES: usize = 64 * 1024;
 const H264_BOOT_PROBE_TIMEOUT_MS: u64 = 5_000;
 const H264_BOOT_PROBE_DELAY_MS: u64 = 2_000;
+const H264_BROWSER_MEDIA_FETCH_TIMEOUT_MS: u64 = 120_000;
+const H264_BROWSER_MEDIA_FETCH_MAX_BYTES: usize = 160 * 1024 * 1024;
+const H264_BROWSER_MEDIA_CANDIDATE_WAIT_MS: u64 = 60_000;
+const H264_BROWSER_INNERTUBE_TIMEOUT_MS: u64 = 45_000;
+const H264_BROWSER_INNERTUBE_MAX_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const H264_BOOT_PROBE_STREAM_PATH: &str = "x31_head_movie.annexb.h264";
 
 #[derive(Copy, Clone, Debug)]
@@ -346,6 +352,975 @@ pub(crate) async fn run_shell_vid_playback(
     Ok(report)
 }
 
+pub(crate) async fn run_browser_media_playback(
+    options: H264PlaybackOptions,
+) -> Result<H264PlaybackReport, &'static str> {
+    if !crate::intel::has_media_decode_engine() {
+        return Err("media decode engine unavailable");
+    }
+    let queued_before = crate::surfer::media_stream::candidate_count();
+    crate::log!(
+        "intel/hw_vid: browser-media candidate-wait begin queued={} timeout_ms={}\n",
+        queued_before,
+        H264_BROWSER_MEDIA_CANDIDATE_WAIT_MS
+    );
+    let Some(candidate) =
+        crate::surfer::media_stream::wait_latest_candidate(H264_BROWSER_MEDIA_CANDIDATE_WAIT_MS)
+            .await
+    else {
+        crate::log!(
+            "intel/hw_vid: browser-media candidate-wait timeout queued={} action=open-youtube-in-surf-before-vid\n",
+            crate::surfer::media_stream::candidate_count()
+        );
+        return Err("no browser media candidate queued");
+    };
+    crate::log!(
+        "intel/hw_vid: browser-media start browser={} generation={} tag={} kind={} fetch_timeout_ms={} url={}\n",
+        candidate.browser_instance_id,
+        candidate.generation,
+        candidate.tag,
+        candidate.kind,
+        H264_BROWSER_MEDIA_FETCH_TIMEOUT_MS,
+        candidate.url
+    );
+    let media_url = if h264_browser_media_is_innertube(
+        candidate.kind.as_str(),
+        candidate.url.as_str(),
+    ) {
+        h264_resolve_youtube_innertube_candidate(candidate.url.as_str()).await?
+    } else if h264_browser_media_is_sabr(candidate.kind.as_str(), candidate.url.as_str()) {
+        crate::log!(
+            "intel/hw_vid: browser-media unsupported kind=sabr action=needs-sabr-demux-or-innertube-direct-format browser={} generation={} tag={} url={}\n",
+            candidate.browser_instance_id,
+            candidate.generation,
+            candidate.tag,
+            candidate.url
+        );
+        return Err("browser media SABR unsupported");
+    } else {
+        candidate.url.clone()
+    };
+
+    let mp4_bytes = h264_fetch_browser_media_candidate(media_url.as_str()).await?;
+    let annexb = mp4_avc1_to_annexb(mp4_bytes.as_slice())?;
+    crate::log!(
+        "intel/hw_vid: browser-media demux accepted=1 container=mp4 codec=avc1 mp4_bytes={} annexb_bytes={} source=browser url={}\n",
+        mp4_bytes.len(),
+        annexb.len(),
+        media_url
+    );
+
+    let old_hw_pic_logging =
+        crate::intel::hw_pic::set_detailed_logging_enabled(options.diagnostics());
+    let old_surface_probes =
+        crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(options.diagnostics());
+    let old_noreset_lite =
+        crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(options.noreset_lite());
+    let report =
+        h264_i_p_playback_probe_annexb_bytes(annexb, "browser-mp4-avc1", "browser-media", options)
+            .await;
+    crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(old_noreset_lite);
+    crate::intel::hw_pic::set_detailed_logging_enabled(old_hw_pic_logging);
+    crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(old_surface_probes);
+    Ok(report)
+}
+
+fn h264_browser_media_is_sabr(kind: &str, url: &str) -> bool {
+    let kind = kind.to_ascii_lowercase();
+    let url = url.to_ascii_lowercase();
+    kind.contains("sabr") || url.contains("sabr=1") || url.contains("sabr%3d1")
+}
+
+fn h264_browser_media_is_innertube(kind: &str, url: &str) -> bool {
+    kind.to_ascii_lowercase().contains("youtube-innertube")
+        || url.to_ascii_lowercase().starts_with("innertube://player?")
+}
+
+async fn h264_resolve_youtube_innertube_candidate(url: &str) -> Result<String, &'static str> {
+    let probe = YoutubeInnertubeProbe::from_url(url)?;
+    let request_url = format!(
+        "https://www.youtube.com/youtubei/v1/player?key={}&prettyPrint=false",
+        url_query_encode(probe.api_key.as_str())
+    );
+
+    for profile in
+        youtube_innertube_profiles(probe.client_name.as_str(), probe.client_version.as_str())
+    {
+        let started = EmbassyInstant::now();
+        let visitor = if profile.use_visitor && !probe.visitor_data.is_empty() {
+            Some(probe.visitor_data.as_str())
+        } else {
+            None
+        };
+        crate::log!(
+            "intel/hw_vid: youtube-innertube fetch begin profile={} video_id={} client_name={} client_version={} visitor={} timeout_ms={} max_bytes={}\n",
+            profile.label,
+            probe.video_id,
+            profile.client_name,
+            profile.client_version,
+            visitor.is_some() as u8,
+            H264_BROWSER_INNERTUBE_TIMEOUT_MS,
+            H264_BROWSER_INNERTUBE_MAX_BYTES
+        );
+        let body = youtube_innertube_player_body(&probe, &profile);
+        let bytes = match crate::r::net::https::post_youtubei_player_bytes_shared(
+            request_url.as_str(),
+            body.as_str(),
+            youtube_client_header_name(profile.client_name),
+            profile.client_version,
+            visitor,
+            H264_BROWSER_INNERTUBE_TIMEOUT_MS as u32,
+            H264_BROWSER_INNERTUBE_MAX_BYTES,
+        )
+        .await
+        {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                crate::log!(
+                    "intel/hw_vid: youtube-innertube fetch failed profile={} err={} waited_ms={} video_id={}\n",
+                    profile.label,
+                    err,
+                    started.elapsed().as_millis(),
+                    probe.video_id
+                );
+                continue;
+            }
+        };
+        crate::log!(
+            "intel/hw_vid: youtube-innertube fetch done profile={} bytes={} waited_ms={} video_id={}\n",
+            profile.label,
+            bytes.len(),
+            started.elapsed().as_millis(),
+            probe.video_id
+        );
+        match h264_pick_youtube_innertube_direct_h264(
+            bytes.as_slice(),
+            probe.video_id.as_str(),
+            profile.label,
+        ) {
+            Ok(url) => return Ok(url),
+            Err(err) => {
+                crate::log!(
+                    "intel/hw_vid: youtube-innertube profile miss profile={} err={} video_id={}\n",
+                    profile.label,
+                    err,
+                    probe.video_id
+                );
+            }
+        }
+    }
+    Err("browser media innertube no direct h264")
+}
+
+#[derive(Debug)]
+struct YoutubeInnertubeProbe {
+    video_id: String,
+    api_key: String,
+    client_name: String,
+    client_version: String,
+    visitor_data: String,
+    hl: String,
+    gl: String,
+}
+
+impl YoutubeInnertubeProbe {
+    fn from_url(url: &str) -> Result<Self, &'static str> {
+        let Some((_, query)) = url.split_once('?') else {
+            return Err("browser media innertube bad probe");
+        };
+        let video_id =
+            query_field(query, "video_id").ok_or("browser media innertube no video id")?;
+        let api_key = query_field(query, "api_key").ok_or("browser media innertube no api key")?;
+        let client_name = query_field(query, "client_name").unwrap_or_else(|| String::from("WEB"));
+        let client_version = query_field(query, "client_version")
+            .ok_or("browser media innertube no client version")?;
+        let visitor_data = query_field(query, "visitor_data").unwrap_or_default();
+        let hl = query_field(query, "hl").unwrap_or_else(|| String::from("en"));
+        let gl = query_field(query, "gl").unwrap_or_else(|| String::from("US"));
+        if video_id.is_empty() || api_key.is_empty() || client_version.is_empty() {
+            return Err("browser media innertube bad probe");
+        }
+        Ok(Self {
+            video_id,
+            api_key,
+            client_name,
+            client_version,
+            visitor_data,
+            hl,
+            gl,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct YoutubeInnertubeProfile<'a> {
+    label: &'static str,
+    client_name: &'a str,
+    client_version: &'a str,
+    use_visitor: bool,
+    client_extra_json: &'static str,
+    context_extra_json: &'static str,
+}
+
+fn youtube_innertube_profiles<'a>(
+    page_client_name: &'a str,
+    page_client_version: &'a str,
+) -> [YoutubeInnertubeProfile<'a>; 5] {
+    [
+        YoutubeInnertubeProfile {
+            label: "page-web",
+            client_name: page_client_name,
+            client_version: page_client_version,
+            use_visitor: true,
+            client_extra_json: "",
+            context_extra_json: "",
+        },
+        YoutubeInnertubeProfile {
+            label: "page-web-novisitor",
+            client_name: page_client_name,
+            client_version: page_client_version,
+            use_visitor: false,
+            client_extra_json: "",
+            context_extra_json: "",
+        },
+        YoutubeInnertubeProfile {
+            label: "web-embedded",
+            client_name: "WEB_EMBEDDED_PLAYER",
+            client_version: page_client_version,
+            use_visitor: false,
+            client_extra_json: "",
+            context_extra_json: ",\"thirdParty\":{\"embedUrl\":\"https://www.youtube.com/\"}",
+        },
+        YoutubeInnertubeProfile {
+            label: "android",
+            client_name: "ANDROID",
+            client_version: "19.09.37",
+            use_visitor: false,
+            client_extra_json: ",\"androidSdkVersion\":30,\"osName\":\"Android\",\"osVersion\":\"11\"",
+            context_extra_json: "",
+        },
+        YoutubeInnertubeProfile {
+            label: "ios",
+            client_name: "IOS",
+            client_version: "19.09.3",
+            use_visitor: false,
+            client_extra_json: ",\"deviceMake\":\"Apple\",\"deviceModel\":\"iPhone16,2\",\"osName\":\"iOS\",\"osVersion\":\"17.5.1.21F90\"",
+            context_extra_json: "",
+        },
+    ]
+}
+
+fn youtube_client_header_name(client_name: &str) -> &str {
+    match client_name {
+        "WEB" => "1",
+        "ANDROID" => "3",
+        "IOS" => "5",
+        "WEB_EMBEDDED_PLAYER" => "56",
+        _ => client_name,
+    }
+}
+
+fn youtube_innertube_player_body(
+    probe: &YoutubeInnertubeProbe,
+    profile: &YoutubeInnertubeProfile<'_>,
+) -> String {
+    format!(
+        "{{\"context\":{{\"client\":{{\"clientName\":\"{}\",\"clientVersion\":\"{}\",\"hl\":\"{}\",\"gl\":\"{}\",\"visitorData\":\"{}\"{}}}{}}},\"videoId\":\"{}\",\"contentCheckOk\":true,\"racyCheckOk\":true}}",
+        json_escape(profile.client_name),
+        json_escape(profile.client_version),
+        json_escape(probe.hl.as_str()),
+        json_escape(probe.gl.as_str()),
+        if profile.use_visitor {
+            json_escape(probe.visitor_data.as_str())
+        } else {
+            String::new()
+        },
+        profile.client_extra_json,
+        profile.context_extra_json,
+        json_escape(probe.video_id.as_str())
+    )
+}
+
+fn h264_pick_youtube_innertube_direct_h264(
+    bytes: &[u8],
+    video_id: &str,
+    profile: &str,
+) -> Result<String, &'static str> {
+    let value = serde_json::from_slice::<Value>(bytes)
+        .map_err(|_| "browser media innertube json failed")?;
+    let playability_status = value
+        .get("playabilityStatus")
+        .and_then(|entry| entry.get("status"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let playability_reason = value
+        .get("playabilityStatus")
+        .and_then(|entry| entry.get("reason"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let streaming = value.get("streamingData");
+    let regular = streaming
+        .and_then(|entry| entry.get("formats"))
+        .and_then(Value::as_array)
+        .map(|formats| formats.len())
+        .unwrap_or(0);
+    let adaptive = streaming
+        .and_then(|entry| entry.get("adaptiveFormats"))
+        .and_then(Value::as_array)
+        .map(|formats| formats.len())
+        .unwrap_or(0);
+    let server_abr = streaming
+        .and_then(|entry| entry.get("serverAbrStreamingUrl"))
+        .and_then(Value::as_str)
+        .is_some();
+    let mut total_video = 0usize;
+    let mut direct_url = 0usize;
+    let mut h264 = 0usize;
+    let mut h264_direct = 0usize;
+    let mut picked: Option<(String, String, String, u64, u64, u64)> = None;
+    if let Some(streaming) = streaming {
+        for group in ["formats", "adaptiveFormats"] {
+            let Some(formats) = streaming.get(group).and_then(Value::as_array) else {
+                continue;
+            };
+            for format in formats {
+                let mime = format.get("mimeType").and_then(Value::as_str).unwrap_or("");
+                if !mime.to_ascii_lowercase().contains("video/") {
+                    continue;
+                }
+                total_video += 1;
+                let url = format.get("url").and_then(Value::as_str).unwrap_or("");
+                if !url.is_empty() {
+                    direct_url += 1;
+                }
+                if !youtube_format_is_h264(format, mime) {
+                    continue;
+                }
+                h264 += 1;
+                if url.is_empty() {
+                    continue;
+                }
+                h264_direct += 1;
+                let quality = format
+                    .get("qualityLabel")
+                    .or_else(|| format.get("quality"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let itag = format.get("itag").and_then(Value::as_u64).unwrap_or(0);
+                let width = format.get("width").and_then(Value::as_u64).unwrap_or(0);
+                let height = format.get("height").and_then(Value::as_u64).unwrap_or(0);
+                let bitrate = format.get("bitrate").and_then(Value::as_u64).unwrap_or(0);
+                let score = youtube_direct_h264_score(group, itag, height);
+                let replace = picked
+                    .as_ref()
+                    .map(|(_, _, _, old_score, _, _)| score > *old_score)
+                    .unwrap_or(true);
+                if replace {
+                    picked = Some((
+                        String::from(url),
+                        String::from(mime),
+                        String::from(quality),
+                        score,
+                        width,
+                        bitrate,
+                    ));
+                }
+            }
+        }
+    }
+    crate::log!(
+        "intel/hw_vid: youtube-innertube formats profile={} video_id={} playability={} reason={} regular={} adaptive={} total_video={} direct_url={} h264={} h264_direct={} server_abr={}\n",
+        profile,
+        video_id,
+        playability_status,
+        log_token(playability_reason).as_str(),
+        regular,
+        adaptive,
+        total_video,
+        direct_url,
+        h264,
+        h264_direct,
+        server_abr as u8
+    );
+    if let Some((url, mime, quality, score, width, bitrate)) = picked {
+        crate::log!(
+            "intel/hw_vid: youtube-innertube direct-h264 candidate profile={} score={} quality={} width={} bitrate={} mime={} url={}\n",
+            profile,
+            score,
+            quality,
+            width,
+            bitrate,
+            mime,
+            url
+        );
+        return Ok(url);
+    }
+    Err("browser media innertube no direct h264")
+}
+
+fn youtube_format_is_h264(format: &Value, mime: &str) -> bool {
+    let lower = mime.to_ascii_lowercase();
+    if lower.contains("video/mp4") && (lower.contains("avc1") || lower.contains("avc3")) {
+        return true;
+    }
+    matches!(
+        format.get("itag").and_then(Value::as_u64).unwrap_or(0),
+        18 | 22 | 37 | 38 | 82 | 83 | 84 | 85
+    )
+}
+
+fn youtube_direct_h264_score(group: &str, itag: u64, height: u64) -> u64 {
+    if itag == 18 {
+        return 10_000;
+    }
+    let progressive_bonus = if group == "formats" { 1_000 } else { 0 };
+    progressive_bonus + height.min(4_000)
+}
+
+fn query_field(query: &str, key: &str) -> Option<String> {
+    for part in query.split('&') {
+        let (raw_key, raw_value) = part.split_once('=').unwrap_or((part, ""));
+        if url_decode_component(raw_key).as_str() == key {
+            return Some(url_decode_component(raw_value));
+        }
+    }
+    None
+}
+
+fn url_decode_component(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::new();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
+            {
+                out.push((hi << 4) | lo);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(if bytes[index] == b'+' {
+            b' '
+        } else {
+            bytes[index]
+        });
+        index += 1;
+    }
+    String::from_utf8(out).unwrap_or_default()
+}
+
+fn url_query_encode(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            out.push(byte as char);
+        } else {
+            let _ = write!(out, "%{:02X}", byte);
+        }
+    }
+    out
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn json_escape(value: &str) -> String {
+    let mut out = String::new();
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch if (ch as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04X}", ch as u32);
+            }
+            ch => out.push(ch),
+        }
+    }
+    out
+}
+
+fn log_token(value: &str) -> String {
+    let mut out = String::new();
+    for ch in value.chars().take(96) {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':') {
+            out.push(ch);
+        } else if ch.is_whitespace() {
+            out.push('_');
+        }
+    }
+    if out.is_empty() {
+        out.push('-');
+    }
+    out
+}
+
+async fn h264_fetch_browser_media_candidate(url: &str) -> Result<Vec<u8>, &'static str> {
+    let started = EmbassyInstant::now();
+    crate::log!(
+        "intel/hw_vid: browser-media fetch begin profile=browser-video range=0- timeout_ms={} max_bytes={} url={}\n",
+        H264_BROWSER_MEDIA_FETCH_TIMEOUT_MS,
+        H264_BROWSER_MEDIA_FETCH_MAX_BYTES,
+        url
+    );
+    match crate::r::net::https::get_browser_media_bytes_shared(
+        url,
+        H264_BROWSER_MEDIA_FETCH_TIMEOUT_MS as u32,
+        H264_BROWSER_MEDIA_FETCH_MAX_BYTES,
+    )
+    .await
+    {
+        Ok(bytes) => {
+            crate::log!(
+                "intel/hw_vid: browser-media fetch done bytes={} waited_ms={} url={}\n",
+                bytes.len(),
+                started.elapsed().as_millis(),
+                url
+            );
+            Ok(bytes)
+        }
+        Err(err) => {
+            crate::log!(
+                "intel/hw_vid: browser-media fetch failed err={} waited_ms={} url={}\n",
+                err,
+                started.elapsed().as_millis(),
+                url
+            );
+            Err("browser media fetch failed")
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Mp4Box {
+    typ: [u8; 4],
+    start: usize,
+    payload_start: usize,
+    end: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Mp4StscEntry {
+    first_chunk: u32,
+    samples_per_chunk: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Mp4SampleRef {
+    offset: usize,
+    size: usize,
+    keyframe: bool,
+}
+
+struct Mp4AvcTrack {
+    length_size: usize,
+    sps: Vec<Vec<u8>>,
+    pps: Vec<Vec<u8>>,
+    samples: Vec<Mp4SampleRef>,
+}
+
+fn mp4_read_u16(data: &[u8], offset: usize) -> Option<u16> {
+    let bytes = data.get(offset..offset + 2)?;
+    Some(u16::from_be_bytes([bytes[0], bytes[1]]))
+}
+
+fn mp4_read_u32(data: &[u8], offset: usize) -> Option<u32> {
+    let bytes = data.get(offset..offset + 4)?;
+    Some(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn mp4_read_u64(data: &[u8], offset: usize) -> Option<u64> {
+    let bytes = data.get(offset..offset + 8)?;
+    Some(u64::from_be_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+    ]))
+}
+
+fn mp4_fourcc(data: &[u8], offset: usize) -> Option<[u8; 4]> {
+    let bytes = data.get(offset..offset + 4)?;
+    Some([bytes[0], bytes[1], bytes[2], bytes[3]])
+}
+
+fn mp4_fourcc_name(fourcc: [u8; 4]) -> String {
+    let mut text = String::new();
+    for byte in fourcc {
+        let ch = if byte.is_ascii_graphic() {
+            byte as char
+        } else {
+            '?'
+        };
+        let _ = text.write_char(ch);
+    }
+    text
+}
+
+fn mp4_next_box(data: &[u8], cursor: usize, limit: usize) -> Option<Mp4Box> {
+    if cursor.checked_add(8)? > limit || limit > data.len() {
+        return None;
+    }
+    let size32 = mp4_read_u32(data, cursor)? as u64;
+    let typ = mp4_fourcc(data, cursor + 4)?;
+    let (payload_start, size) = if size32 == 1 {
+        let size64 = mp4_read_u64(data, cursor + 8)?;
+        (cursor.checked_add(16)?, size64)
+    } else if size32 == 0 {
+        (cursor.checked_add(8)?, (limit - cursor) as u64)
+    } else {
+        (cursor.checked_add(8)?, size32)
+    };
+    if size < (payload_start - cursor) as u64 {
+        return None;
+    }
+    let end = cursor.checked_add(size as usize)?;
+    if end > limit || end <= payload_start {
+        return None;
+    }
+    Some(Mp4Box {
+        typ,
+        start: cursor,
+        payload_start,
+        end,
+    })
+}
+
+fn mp4_find_child(data: &[u8], start: usize, end: usize, typ: [u8; 4]) -> Option<Mp4Box> {
+    let mut cursor = start;
+    while cursor + 8 <= end {
+        let Some(b) = mp4_next_box(data, cursor, end) else {
+            break;
+        };
+        if b.typ == typ {
+            return Some(b);
+        }
+        cursor = b.end;
+    }
+    None
+}
+
+fn mp4_collect_children(data: &[u8], start: usize, end: usize, typ: [u8; 4]) -> Vec<Mp4Box> {
+    let mut out = Vec::new();
+    let mut cursor = start;
+    while cursor + 8 <= end {
+        let Some(b) = mp4_next_box(data, cursor, end) else {
+            break;
+        };
+        if b.typ == typ {
+            out.push(b);
+        }
+        cursor = b.end;
+    }
+    out
+}
+
+fn mp4_parse_avcc(
+    data: &[u8],
+    start: usize,
+    end: usize,
+) -> Result<(usize, Vec<Vec<u8>>, Vec<Vec<u8>>), &'static str> {
+    if end.saturating_sub(start) < 7 {
+        return Err("mp4 avcC too short");
+    }
+    let length_size = ((data[start + 4] & 0x03) + 1) as usize;
+    let mut cursor = start + 6;
+    let sps_count = (data[start + 5] & 0x1f) as usize;
+    let mut sps = Vec::new();
+    for _ in 0..sps_count {
+        let len = mp4_read_u16(data, cursor).ok_or("mp4 avcC truncated sps length")? as usize;
+        cursor = cursor.saturating_add(2);
+        let nal = data
+            .get(cursor..cursor + len)
+            .ok_or("mp4 avcC truncated sps")?;
+        sps.push(nal.to_vec());
+        cursor = cursor.saturating_add(len);
+    }
+    let pps_count = *data.get(cursor).ok_or("mp4 avcC missing pps count")? as usize;
+    cursor = cursor.saturating_add(1);
+    let mut pps = Vec::new();
+    for _ in 0..pps_count {
+        let len = mp4_read_u16(data, cursor).ok_or("mp4 avcC truncated pps length")? as usize;
+        cursor = cursor.saturating_add(2);
+        let nal = data
+            .get(cursor..cursor + len)
+            .ok_or("mp4 avcC truncated pps")?;
+        pps.push(nal.to_vec());
+        cursor = cursor.saturating_add(len);
+    }
+    if sps.is_empty() || pps.is_empty() {
+        return Err("mp4 avcC missing sps or pps");
+    }
+    Ok((length_size, sps, pps))
+}
+
+fn mp4_parse_stsd_avc1(
+    data: &[u8],
+    stsd: Mp4Box,
+) -> Result<(usize, Vec<Vec<u8>>, Vec<Vec<u8>>), &'static str> {
+    let entry_count =
+        mp4_read_u32(data, stsd.payload_start + 4).ok_or("mp4 stsd missing entry count")? as usize;
+    let mut cursor = stsd.payload_start + 8;
+    for _ in 0..entry_count {
+        let entry =
+            mp4_next_box(data, cursor, stsd.end).ok_or("mp4 stsd truncated sample entry")?;
+        if entry.typ == *b"avc1" || entry.typ == *b"avc3" {
+            let child_start = entry.payload_start.saturating_add(78);
+            let avcc = mp4_find_child(data, child_start, entry.end, *b"avcC")
+                .ok_or("mp4 avc1 missing avcC")?;
+            return mp4_parse_avcc(data, avcc.payload_start, avcc.end);
+        }
+        cursor = entry.end;
+    }
+    Err("mp4 stsd has no avc1 entry")
+}
+
+fn mp4_parse_stsz(data: &[u8], stsz: Mp4Box) -> Result<Vec<usize>, &'static str> {
+    let sample_size =
+        mp4_read_u32(data, stsz.payload_start + 4).ok_or("mp4 stsz missing sample size")? as usize;
+    let sample_count =
+        mp4_read_u32(data, stsz.payload_start + 8).ok_or("mp4 stsz missing sample count")? as usize;
+    if sample_size != 0 {
+        return Ok(alloc::vec![sample_size; sample_count]);
+    }
+    let mut sizes = Vec::with_capacity(sample_count);
+    let mut cursor = stsz.payload_start + 12;
+    for _ in 0..sample_count {
+        sizes.push(mp4_read_u32(data, cursor).ok_or("mp4 stsz truncated table")? as usize);
+        cursor = cursor.saturating_add(4);
+    }
+    Ok(sizes)
+}
+
+fn mp4_parse_stsc(data: &[u8], stsc: Mp4Box) -> Result<Vec<Mp4StscEntry>, &'static str> {
+    let entry_count =
+        mp4_read_u32(data, stsc.payload_start + 4).ok_or("mp4 stsc missing entry count")? as usize;
+    let mut entries = Vec::with_capacity(entry_count);
+    let mut cursor = stsc.payload_start + 8;
+    for _ in 0..entry_count {
+        entries.push(Mp4StscEntry {
+            first_chunk: mp4_read_u32(data, cursor).ok_or("mp4 stsc truncated first_chunk")?,
+            samples_per_chunk: mp4_read_u32(data, cursor + 4)
+                .ok_or("mp4 stsc truncated samples_per_chunk")?,
+        });
+        cursor = cursor.saturating_add(12);
+    }
+    if entries.is_empty() {
+        return Err("mp4 stsc empty");
+    }
+    Ok(entries)
+}
+
+fn mp4_parse_chunk_offsets(data: &[u8], box_: Mp4Box) -> Result<Vec<u64>, &'static str> {
+    let entry_count = mp4_read_u32(data, box_.payload_start + 4)
+        .ok_or("mp4 chunk offset missing count")? as usize;
+    let mut offsets = Vec::with_capacity(entry_count);
+    let mut cursor = box_.payload_start + 8;
+    if box_.typ == *b"co64" {
+        for _ in 0..entry_count {
+            offsets.push(mp4_read_u64(data, cursor).ok_or("mp4 co64 truncated table")?);
+            cursor = cursor.saturating_add(8);
+        }
+    } else {
+        for _ in 0..entry_count {
+            offsets.push(mp4_read_u32(data, cursor).ok_or("mp4 stco truncated table")? as u64);
+            cursor = cursor.saturating_add(4);
+        }
+    }
+    Ok(offsets)
+}
+
+fn mp4_parse_stss(
+    data: &[u8],
+    stss: Option<Mp4Box>,
+    sample_count: usize,
+) -> Result<Vec<bool>, &'static str> {
+    let mut keyframes = alloc::vec![stss.is_none(); sample_count];
+    let Some(stss) = stss else {
+        return Ok(keyframes);
+    };
+    keyframes.fill(false);
+    let entry_count =
+        mp4_read_u32(data, stss.payload_start + 4).ok_or("mp4 stss missing count")? as usize;
+    let mut cursor = stss.payload_start + 8;
+    for _ in 0..entry_count {
+        let sample_number = mp4_read_u32(data, cursor).ok_or("mp4 stss truncated table")? as usize;
+        if sample_number != 0 && sample_number <= sample_count {
+            keyframes[sample_number - 1] = true;
+        }
+        cursor = cursor.saturating_add(4);
+    }
+    Ok(keyframes)
+}
+
+fn mp4_build_samples(
+    sample_sizes: &[usize],
+    stsc: &[Mp4StscEntry],
+    chunk_offsets: &[u64],
+    keyframes: &[bool],
+    data_len: usize,
+) -> Result<Vec<Mp4SampleRef>, &'static str> {
+    let mut samples = Vec::with_capacity(sample_sizes.len());
+    let mut sample_index = 0usize;
+    let mut stsc_index = 0usize;
+    for chunk_index0 in 0..chunk_offsets.len() {
+        let chunk_number = (chunk_index0 + 1) as u32;
+        if stsc_index + 1 < stsc.len() && chunk_number >= stsc[stsc_index + 1].first_chunk {
+            stsc_index += 1;
+        }
+        let samples_per_chunk = stsc[stsc_index].samples_per_chunk as usize;
+        let mut offset = chunk_offsets[chunk_index0] as usize;
+        for _ in 0..samples_per_chunk {
+            if sample_index >= sample_sizes.len() {
+                return Ok(samples);
+            }
+            let size = sample_sizes[sample_index];
+            let end = offset
+                .checked_add(size)
+                .ok_or("mp4 sample offset overflow")?;
+            if end > data_len {
+                return Err("mp4 sample outside file");
+            }
+            samples.push(Mp4SampleRef {
+                offset,
+                size,
+                keyframe: keyframes.get(sample_index).copied().unwrap_or(false),
+            });
+            offset = end;
+            sample_index += 1;
+        }
+    }
+    if sample_index == 0 {
+        return Err("mp4 no samples mapped");
+    }
+    Ok(samples)
+}
+
+fn mp4_parse_avc_track(data: &[u8], trak: Mp4Box) -> Result<Option<Mp4AvcTrack>, &'static str> {
+    let Some(mdia) = mp4_find_child(data, trak.payload_start, trak.end, *b"mdia") else {
+        return Ok(None);
+    };
+    let Some(hdlr) = mp4_find_child(data, mdia.payload_start, mdia.end, *b"hdlr") else {
+        return Ok(None);
+    };
+    if mp4_fourcc(data, hdlr.payload_start + 8) != Some(*b"vide") {
+        return Ok(None);
+    }
+    let minf = mp4_find_child(data, mdia.payload_start, mdia.end, *b"minf")
+        .ok_or("mp4 video track missing minf")?;
+    let stbl = mp4_find_child(data, minf.payload_start, minf.end, *b"stbl")
+        .ok_or("mp4 video track missing stbl")?;
+    let stsd = mp4_find_child(data, stbl.payload_start, stbl.end, *b"stsd")
+        .ok_or("mp4 video track missing stsd")?;
+    let stsz = mp4_find_child(data, stbl.payload_start, stbl.end, *b"stsz")
+        .ok_or("mp4 video track missing stsz")?;
+    let stsc_box = mp4_find_child(data, stbl.payload_start, stbl.end, *b"stsc")
+        .ok_or("mp4 video track missing stsc")?;
+    let offset_box = mp4_find_child(data, stbl.payload_start, stbl.end, *b"stco")
+        .or_else(|| mp4_find_child(data, stbl.payload_start, stbl.end, *b"co64"))
+        .ok_or("mp4 video track missing chunk offsets")?;
+    let (length_size, sps, pps) = mp4_parse_stsd_avc1(data, stsd)?;
+    let sample_sizes = mp4_parse_stsz(data, stsz)?;
+    let stsc = mp4_parse_stsc(data, stsc_box)?;
+    let chunk_offsets = mp4_parse_chunk_offsets(data, offset_box)?;
+    let keyframes = mp4_parse_stss(
+        data,
+        mp4_find_child(data, stbl.payload_start, stbl.end, *b"stss"),
+        sample_sizes.len(),
+    )?;
+    let samples = mp4_build_samples(
+        sample_sizes.as_slice(),
+        stsc.as_slice(),
+        chunk_offsets.as_slice(),
+        keyframes.as_slice(),
+        data.len(),
+    )?;
+    Ok(Some(Mp4AvcTrack {
+        length_size,
+        sps,
+        pps,
+        samples,
+    }))
+}
+
+fn mp4_emit_annexb_nal(out: &mut Vec<u8>, nal: &[u8]) {
+    out.extend_from_slice(&[0, 0, 0, 1]);
+    out.extend_from_slice(nal);
+}
+
+fn mp4_avc1_to_annexb(data: &[u8]) -> Result<Vec<u8>, &'static str> {
+    let moov = mp4_find_child(data, 0, data.len(), *b"moov").ok_or("mp4 missing moov")?;
+    let traks = mp4_collect_children(data, moov.payload_start, moov.end, *b"trak");
+    for trak in traks {
+        let Some(track) = mp4_parse_avc_track(data, trak)? else {
+            continue;
+        };
+        let mut out = Vec::with_capacity(data.len().min(128 * 1024 * 1024));
+        for sps in track.sps.as_slice() {
+            mp4_emit_annexb_nal(&mut out, sps.as_slice());
+        }
+        for pps in track.pps.as_slice() {
+            mp4_emit_annexb_nal(&mut out, pps.as_slice());
+        }
+        let mut samples_emitted = 0usize;
+        for sample in track.samples.as_slice() {
+            if sample.keyframe {
+                for sps in track.sps.as_slice() {
+                    mp4_emit_annexb_nal(&mut out, sps.as_slice());
+                }
+                for pps in track.pps.as_slice() {
+                    mp4_emit_annexb_nal(&mut out, pps.as_slice());
+                }
+            }
+            let sample_end = sample.offset + sample.size;
+            let mut cursor = sample.offset;
+            while cursor + track.length_size <= sample_end {
+                let nal_len = match track.length_size {
+                    1 => data[cursor] as usize,
+                    2 => mp4_read_u16(data, cursor).ok_or("mp4 sample truncated nal length")?
+                        as usize,
+                    4 => mp4_read_u32(data, cursor).ok_or("mp4 sample truncated nal length")?
+                        as usize,
+                    _ => return Err("mp4 unsupported avc nal length size"),
+                };
+                cursor = cursor.saturating_add(track.length_size);
+                if nal_len == 0 {
+                    continue;
+                }
+                let nal_end = cursor
+                    .checked_add(nal_len)
+                    .ok_or("mp4 nal length overflow")?;
+                if nal_end > sample_end {
+                    return Err("mp4 sample nal outside sample");
+                }
+                mp4_emit_annexb_nal(&mut out, &data[cursor..nal_end]);
+                cursor = nal_end;
+            }
+            samples_emitted += 1;
+        }
+        if out.is_empty() || samples_emitted == 0 {
+            return Err("mp4 avc track produced no annexb");
+        }
+        crate::log!(
+            "intel/hw_vid: browser-media mp4-demux track=video codec=avc1 length_size={} samples={} sps={} pps={} annexb_bytes={} first_box={}\n",
+            track.length_size,
+            samples_emitted,
+            track.sps.len(),
+            track.pps.len(),
+            out.len(),
+            mp4_fourcc_name(mp4_fourcc(data, 4).unwrap_or(*b"????")).as_str()
+        );
+        return Ok(out);
+    }
+    Err("mp4 has no avc1 video track")
+}
+
 #[derive(Copy, Clone, Debug)]
 struct H264StreamNal {
     stream_offset: u64,
@@ -406,6 +1381,106 @@ struct H264RangeNalReader {
     scan_offset: usize,
     buffer: Vec<u8>,
     eof: bool,
+}
+
+struct H264MemoryNalReader {
+    buffer_base: u64,
+    scan_offset: usize,
+    buffer: Vec<u8>,
+    eof: bool,
+}
+
+impl H264MemoryNalReader {
+    fn new(buffer: Vec<u8>) -> Self {
+        Self {
+            buffer_base: 0,
+            scan_offset: 0,
+            buffer,
+            eof: true,
+        }
+    }
+
+    async fn next_nal(&mut self) -> Option<H264BufferedNal> {
+        self.try_take_nal()
+    }
+
+    fn try_take_nal(&mut self) -> Option<H264BufferedNal> {
+        loop {
+            let (start, start_code_len) = match h264_find_start_code(&self.buffer, self.scan_offset)
+            {
+                Some(found) => found,
+                None => {
+                    self.discard_start_code_search_prefix();
+                    return None;
+                }
+            };
+            let payload_start = start + start_code_len;
+            let next = h264_find_start_code(&self.buffer, payload_start);
+            let end = if let Some((next_start, _)) = next {
+                next_start
+            } else if self.eof {
+                self.buffer.len()
+            } else {
+                self.scan_offset = start;
+                return None;
+            };
+
+            self.scan_offset = end;
+            if payload_start < end && payload_start < self.buffer.len() {
+                let mut bytes = Vec::with_capacity(end - start);
+                bytes.extend_from_slice(&self.buffer[start..end]);
+                let nal_type = self.buffer[payload_start] & 0x1f;
+                let stream_offset = self.buffer_base.saturating_add(start as u64);
+                self.drain_before(end);
+                return Some(H264BufferedNal {
+                    meta: H264StreamNal {
+                        stream_offset,
+                        bytes: end - start,
+                        nal_type,
+                    },
+                    bytes,
+                });
+            }
+
+            if end > start {
+                self.drain_before(end);
+            } else {
+                self.scan_offset = self.scan_offset.saturating_add(1);
+            }
+        }
+    }
+
+    fn discard_start_code_search_prefix(&mut self) {
+        if self.buffer.len() > 3 {
+            let keep = 3usize;
+            let drain = self.buffer.len() - keep;
+            self.drain_before(drain);
+        }
+    }
+
+    fn drain_before(&mut self, end: usize) {
+        let drain = end.min(self.buffer.len());
+        if drain == 0 {
+            return;
+        }
+        self.buffer.drain(0..drain);
+        self.buffer_base = self.buffer_base.saturating_add(drain as u64);
+        self.scan_offset = self.scan_offset.saturating_sub(drain);
+    }
+}
+
+enum H264NalReader {
+    Range(H264RangeNalReader),
+    Memory(H264MemoryNalReader),
+}
+
+impl H264NalReader {
+    async fn next_nal(&mut self) -> Option<H264BufferedNal> {
+        match self {
+            Self::Range(reader) => reader.next_nal().await,
+            Self::Memory(reader) => reader.next_nal().await,
+        }
+    }
 }
 
 impl H264RangeNalReader {
@@ -668,7 +1743,41 @@ async fn h264_i_p_playback_probe(
     mode: H264PlaybackOptions,
 ) -> H264PlaybackReport {
     let stream_bytes = file.data_len();
-    let mut reader = H264RangeNalReader::new(file, H264_BOOT_PROBE_STREAM_PATH, stream_bytes);
+    let reader = H264NalReader::Range(H264RangeNalReader::new(
+        file,
+        H264_BOOT_PROBE_STREAM_PATH,
+        stream_bytes,
+    ));
+    h264_i_p_playback_probe_with_reader(
+        reader,
+        stream_bytes,
+        "trueosfs-root",
+        H264_BOOT_PROBE_STREAM_PATH,
+        mode,
+        Some(file),
+    )
+    .await
+}
+
+async fn h264_i_p_playback_probe_annexb_bytes(
+    bytes: Vec<u8>,
+    source: &'static str,
+    path: &'static str,
+    mode: H264PlaybackOptions,
+) -> H264PlaybackReport {
+    let stream_bytes = bytes.len() as u64;
+    let reader = H264NalReader::Memory(H264MemoryNalReader::new(bytes));
+    h264_i_p_playback_probe_with_reader(reader, stream_bytes, source, path, mode, None).await
+}
+
+async fn h264_i_p_playback_probe_with_reader(
+    mut reader: H264NalReader,
+    stream_bytes: u64,
+    source: &'static str,
+    path: &'static str,
+    mode: H264PlaybackOptions,
+    reverse_file: Option<crate::r::fs::trueosfs::FileReadHandle>,
+) -> H264PlaybackReport {
     let mut nal_count = 0usize;
     let mut idr_seen = 0usize;
     let mut p_seen = 0usize;
@@ -693,12 +1802,13 @@ async fn h264_i_p_playback_probe(
     let mut playback_timing = H264PlaybackTiming::default();
 
     crate::log!(
-        "intel/hw_vid: h264-playback-probe start bytes={} fps={} frame_ms={} frame_ticks={} subset=idr-plus-p source=trueosfs-root path={} mode=range-stream chunk=0x{:X} playback_mode={} cache={} stripe_study={} fill={} diagnostics={} noreset_lite={} loop={} stop=eos\n",
+        "intel/hw_vid: h264-playback-probe start bytes={} fps={} frame_ms={} frame_ticks={} subset=idr-plus-p source={} path={} mode=range-stream chunk=0x{:X} playback_mode={} cache={} stripe_study={} fill={} diagnostics={} noreset_lite={} loop={} stop=eos\n",
         stream_bytes,
         mode.fps(),
         mode.frame_ms(),
         frame_period.as_ticks(),
-        H264_BOOT_PROBE_STREAM_PATH,
+        source,
+        path,
         H264_BOOT_PROBE_STREAM_CHUNK_BYTES,
         mode.name(),
         mode.cache_mode().name(),
@@ -868,7 +1978,15 @@ async fn h264_i_p_playback_probe(
         } else {
             None
         };
-        h264_reverse_playback_probe(file, indexed_frames.as_slice(), forward_cache, mode).await;
+        if let Some(file) = reverse_file {
+            h264_reverse_playback_probe(file, indexed_frames.as_slice(), forward_cache, mode).await;
+        } else {
+            crate::log!(
+                "intel/hw_vid: h264-reverse-probe skipped reason=source-not-seekable source={} path={}\n",
+                source,
+                path
+            );
+        }
     }
     playback_report
 }
@@ -1890,13 +3008,7 @@ fn h264_log_keyframe_summary(frames: &[H264IndexedFrame], stream_bytes: u64) {
         if !list.is_empty() {
             let _ = write!(list, ",");
         }
-        let _ = write!(
-            list,
-            "{}@0x{:X}+0x{:X}",
-            index + 1,
-            frame.stream_offset,
-            frame.bytes
-        );
+        let _ = write!(list, "{}@0x{:X}+0x{:X}", index + 1, frame.stream_offset, frame.bytes);
     }
     crate::log!(
         "intel/hw_vid: h264-keyframe-summary frames={} idr={} stream_bytes=0x{:X} keyframes=[{}]\n",
