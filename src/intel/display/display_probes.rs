@@ -15,6 +15,7 @@ const DIRECT_NV12_LINEAR_PATTERN_GPU: u64 = 0x1200_0000;
 const DIRECT_NV12_LINEAR_PATTERN_WIDTH: u32 = 640;
 const DIRECT_NV12_LINEAR_PATTERN_HEIGHT: u32 = 360;
 const DIRECT_NV12_DECODED_LINEAR_STAGING_ENABLED: bool = true;
+const DIRECT_NV12_DECODED_LINEAR_STAGING_SCALE: u32 = 2;
 const DIRECT_NV12_DECODED_LINEAR_STAGING_GPU: u64 = 0x1300_0000;
 const DIRECT_NV12_DECODED_LINEAR_STAGING_COUNT: usize = 3;
 const DIRECT_NV12_DECODED_LINEAR_STAGING_GPU_STRIDE: u64 = 0x0040_0000;
@@ -540,11 +541,7 @@ fn log_nv12_probe_surface_samples(
     let ym_0 = sample_probe_byte(ptr, byte_len, y_off(height / 2, 0));
     let ym_1 = sample_probe_byte(ptr, byte_len, y_off(height / 2, width / 4));
     let ym_2 = sample_probe_byte(ptr, byte_len, y_off(height / 2, width / 2));
-    let ym_3 = sample_probe_byte(
-        ptr,
-        byte_len,
-        y_off(height / 2, width.saturating_mul(3) / 4),
-    );
+    let ym_3 = sample_probe_byte(ptr, byte_len, y_off(height / 2, width.saturating_mul(3) / 4));
     let ym_4 = sample_probe_byte(ptr, byte_len, y_off(height / 2, width.saturating_sub(1)));
     let (uv0_0_u, uv0_0_v) = sample_probe_pair(ptr, byte_len, uv_off(0, 0));
     let (uv0_1_u, uv0_1_v) = sample_probe_pair(ptr, byte_len, uv_off(0, width / 2));
@@ -807,7 +804,9 @@ fn copy_decoded_ytile_nv12_to_linear_staging(
     src_pitch_bytes: usize,
     src_uv_offset: usize,
     dst: Nv12PlaneProbeSurface,
+    scale: u32,
 ) -> bool {
+    let scale = scale.max(1) as usize;
     if src_virt == 0
         || src_byte_len == 0
         || src_width == 0
@@ -817,8 +816,8 @@ fn copy_decoded_ytile_nv12_to_linear_staging(
         || src_uv_offset < src_pitch_bytes.saturating_mul(src_height as usize)
         || !src_uv_offset.is_multiple_of(src_pitch_bytes)
         || dst.virt.is_null()
-        || dst.width != src_width
-        || dst.height != src_height
+        || dst.width as usize != (src_width as usize).saturating_mul(scale)
+        || dst.height as usize != (src_height as usize).saturating_mul(scale)
     {
         return false;
     }
@@ -826,7 +825,7 @@ fn copy_decoded_ytile_nv12_to_linear_staging(
     let src_uv_row = src_uv_offset / src_pitch_bytes;
     let src_tiles_per_row = src_pitch_bytes / 128;
     let dst_pitch = dst.pitch_bytes as usize;
-    if dst_pitch < src_width as usize {
+    if dst_pitch < dst.width as usize {
         return false;
     }
 
@@ -834,21 +833,29 @@ fn copy_decoded_ytile_nv12_to_linear_staging(
     let width = src_width as usize;
     let height = src_height as usize;
     for row in 0..height {
-        let dst_row = unsafe { dst.virt.add(row.saturating_mul(dst_pitch)) };
         for col in 0..width {
             let src_off = decoded_nv12_ytile_8bpp_offset(col, row, src_tiles_per_row);
             let Some(&value) = src.get(src_off) else {
                 return false;
             };
-            unsafe {
-                core::ptr::write_volatile(dst_row.add(col), value);
+            let dst_y0 = row.saturating_mul(scale);
+            let dst_x0 = col.saturating_mul(scale);
+            for dy in 0..scale {
+                let dst_row = unsafe {
+                    dst.virt
+                        .add(dst_y0.saturating_add(dy).saturating_mul(dst_pitch))
+                };
+                for dx in 0..scale {
+                    unsafe {
+                        core::ptr::write_volatile(dst_row.add(dst_x0.saturating_add(dx)), value);
+                    }
+                }
             }
         }
     }
 
     let uv_rows = height.div_ceil(2);
     for row in 0..uv_rows {
-        let dst_row = unsafe { dst.virt.add(dst.uv_offset + row.saturating_mul(dst_pitch)) };
         let src_row = src_uv_row.saturating_add(row);
         for col in (0..width).step_by(2) {
             let u_off = decoded_nv12_ytile_8bpp_offset(col, src_row, src_tiles_per_row);
@@ -857,9 +864,22 @@ fn copy_decoded_ytile_nv12_to_linear_staging(
             let (Some(&u), Some(&v)) = (src.get(u_off), src.get(v_off)) else {
                 return false;
             };
-            unsafe {
-                core::ptr::write_volatile(dst_row.add(col), u);
-                core::ptr::write_volatile(dst_row.add(col.saturating_add(1)), v);
+            let dst_uv_y0 = row.saturating_mul(scale);
+            let dst_chroma_x0 = (col / 2).saturating_mul(scale);
+            for dy in 0..scale {
+                let dst_row = unsafe {
+                    dst.virt.add(
+                        dst.uv_offset
+                            .saturating_add(dst_uv_y0.saturating_add(dy).saturating_mul(dst_pitch)),
+                    )
+                };
+                for dx in 0..scale {
+                    let dst_col = dst_chroma_x0.saturating_add(dx).saturating_mul(2);
+                    unsafe {
+                        core::ptr::write_volatile(dst_row.add(dst_col), u);
+                        core::ptr::write_volatile(dst_row.add(dst_col.saturating_add(1)), v);
+                    }
+                }
             }
         }
     }
@@ -973,8 +993,25 @@ fn arm_decoded_linear_nv12_staging_video_plane_probe(
     src_uv_offset: usize,
     src_byte_len: usize,
 ) -> Option<bool> {
+    let (scanout_w, scanout_h) = active_scanout_dimensions().unwrap_or((coded_width, coded_height));
+    let scale = if DIRECT_NV12_DECODED_LINEAR_STAGING_SCALE > 1
+        && coded_width
+            .checked_mul(DIRECT_NV12_DECODED_LINEAR_STAGING_SCALE)
+            .is_some_and(|width| width <= scanout_w)
+        && coded_height
+            .checked_mul(DIRECT_NV12_DECODED_LINEAR_STAGING_SCALE)
+            .is_some_and(|height| height <= scanout_h)
+    {
+        DIRECT_NV12_DECODED_LINEAR_STAGING_SCALE
+    } else {
+        1
+    };
+    let dst_width = coded_width.checked_mul(scale)?;
+    let dst_height = coded_height.checked_mul(scale)?;
+    let dst_visible_width = visible_width.checked_mul(scale)?;
+    let dst_visible_height = visible_height.checked_mul(scale)?;
     let (staging, staging_slot) =
-        ensure_decoded_linear_nv12_staging_surface(dev, pipe, coded_width, coded_height)?;
+        ensure_decoded_linear_nv12_staging_surface(dev, pipe, dst_width, dst_height)?;
     let copied = copy_decoded_ytile_nv12_to_linear_staging(
         src_virt_addr,
         src_byte_len,
@@ -983,24 +1020,32 @@ fn arm_decoded_linear_nv12_staging_video_plane_probe(
         src_pitch_bytes,
         src_uv_offset,
         staging,
+        scale,
     );
     crate::log!(
-        "intel/display: decoded-nv12-linear-staging copy reason={} pipe={} stage_slot={} copied={} src_layout=ytile src_gpu=0x{:X} src_phys=0x{:X} src_virt=0x{:X} src_size={}x{} src_pitch=0x{:X} src_uv=0x{:X} src_bytes=0x{:X} dst_gpu=0x{:X} dst_phys=0x{:X} dst_virt=0x{:X} dst_pitch=0x{:X} dst_uv=0x{:X} dst_bytes=0x{:X}\n",
+        "intel/display: decoded-nv12-linear-staging copy reason={} pipe={} stage_slot={} copied={} scale={} src_layout=ytile src_gpu=0x{:X} src_phys=0x{:X} src_virt=0x{:X} src_size={}x{} src_visible={}x{} src_pitch=0x{:X} src_uv=0x{:X} src_bytes=0x{:X} dst_gpu=0x{:X} dst_phys=0x{:X} dst_virt=0x{:X} dst_size={}x{} dst_visible={}x{} dst_pitch=0x{:X} dst_uv=0x{:X} dst_bytes=0x{:X}\n",
         reason,
         pipe.name,
         staging_slot,
         copied as u8,
+        scale,
         src_gpu_addr,
         src_phys_addr,
         src_virt_addr,
         coded_width,
         coded_height,
+        visible_width,
+        visible_height,
         src_pitch_bytes,
         src_uv_offset,
         src_byte_len,
         staging.gpu,
         staging.phys,
         staging.virt as usize,
+        staging.width,
+        staging.height,
+        dst_visible_width,
+        dst_visible_height,
         staging.pitch_bytes,
         staging.uv_offset,
         staging.byte_len
@@ -1009,7 +1054,14 @@ fn arm_decoded_linear_nv12_staging_video_plane_probe(
         return Some(false);
     }
 
-    log_linear_nv12_green_probe(reason, pipe, staging_slot, staging, visible_width, visible_height);
+    log_linear_nv12_green_probe(
+        reason,
+        pipe,
+        staging_slot,
+        staging,
+        dst_visible_width,
+        dst_visible_height,
+    );
 
     Some(arm_nv12_video_plane_probe_surface(
         "decoded-nv12-linear-staging",
@@ -1020,8 +1072,8 @@ fn arm_decoded_linear_nv12_staging_video_plane_probe(
         staging.virt as usize,
         staging.width,
         staging.height,
-        visible_width,
-        visible_height,
+        dst_visible_width,
+        dst_visible_height,
         staging.pitch_bytes as usize,
         staging.uv_offset,
         staging.byte_len,
@@ -1405,11 +1457,7 @@ fn arm_nv12_linked_video_plane_probe_surface(
 
     for plane_base in [y_base, uv_base] {
         crate::intel::mmio_write(dev, plane_base + UNI_PLANE_STRIDE_OFF, stride_reg);
-        crate::intel::mmio_write(
-            dev,
-            plane_base + UNI_PLANE_POS_OFF,
-            want_pos,
-        );
+        crate::intel::mmio_write(dev, plane_base + UNI_PLANE_POS_OFF, want_pos);
         crate::intel::mmio_write(dev, plane_base + UNI_PLANE_SIZE_OFF, want_size);
         crate::intel::mmio_write(dev, plane_base + UNI_PLANE_KEYVAL_OFF, 0);
         crate::intel::mmio_write(dev, plane_base + UNI_PLANE_KEYMSK_OFF, 0);

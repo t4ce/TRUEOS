@@ -2501,7 +2501,7 @@ fn submit_primary_triangle_with_retries(
         return completed;
     }
     intel_render_focus_log!(
-        "intel/render: primary-boot-3d-probes enabled=1 action=run-frontier-ladder vf_streamout=1 ps_spectrum=1 vs_frontier=1\n",
+        "intel/render: primary-boot-3d-probes enabled=1 action=run-frontier-ladder vf_streamout=1 ps_spectrum=1 vs_frontier=1 revision=nonvisual-vs-scratch-rt32-geometry-sbe0-fanout\n",
     );
 
     let initial_streamout_experiment =
@@ -2832,22 +2832,22 @@ fn submit_primary_triangle_with_retries(
         return true;
     }
 
-    let vs_draw_frontier_precheck = submit_triangle_vs_draw_frontier_to_surface(
-        dev,
-        warm,
-        surface_gpu,
-        pitch_bytes,
-        width,
-        height,
-        TriangleBlendProbeMode::ExplicitRt0,
+    let vs_draw_frontier_scratch = submit_triangle_vs_draw_frontier_to_scratch(dev, warm);
+    intel_render_focus_log!(
+        "intel/render: primary-vs-draw-frontier-scratch completed={} observed={} note=nonvisual-vs-clip-join-probe\n",
+        vs_draw_frontier_scratch as u8,
+        fragment_boundary_observed() as u8,
     );
-    intel_render_verbose_log!(
-        "intel/render: primary-vs-draw-frontier-precheck completed={}\n",
-        vs_draw_frontier_precheck as u8,
-    );
-    if vs_draw_frontier_precheck {
+    if vs_draw_frontier_scratch {
         return true;
     }
+    intel_render_focus_log!(
+        "intel/render: primary-vs-draw-frontier-precheck skipped reason=scratch-frontier-unobserved avoid_visible_scanout_flash surface=0x{:X} size={}x{} pitch=0x{:X}\n",
+        surface_gpu,
+        width,
+        height,
+        pitch_bytes,
+    );
 
     let mut vs_streamout_experiment = initial_streamout_experiment;
     let mut vs_streamout_precheck = false;
@@ -2939,6 +2939,7 @@ fn submit_primary_triangle_with_retries(
 
 fn run_fragment_shape_frontier_spectrum(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
     let scratch_pitch = 8 * core::mem::size_of::<u32>();
+    let aligned_scratch_pitch = 32 * core::mem::size_of::<u32>();
     let probes = [
         (
             "point-vf-giant-oa-w64",
@@ -3109,10 +3110,36 @@ fn run_fragment_shape_frontier_spectrum(dev: crate::intel::Dev, warm: RenderWarm
             StreamoutProofExperiment::PositionSlot1,
         ),
     ];
+    let aligned_target_probes = [
+        (
+            "vf-rect-ndc-oa-rt32",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOa,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa-halign128-rt32",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaSurfaceHalign128,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-ndc-oa-early-rt32",
+            VfPrimitiveGeometry::NdcRect,
+            BackendProbeMode::RasterWmInputOaEarlySample,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+        (
+            "vf-rect-mesa-simple-oa-early-rt32",
+            VfPrimitiveGeometry::ScreenSpaceRect8x8OrderB,
+            BackendProbeMode::RasterWmInputOaMesaSimpleRectEarly,
+            StreamoutProofExperiment::PositionSlot1,
+        ),
+    ];
 
     intel_render_focus_log!(
-        "intel/render: primary-fragment-shape-spectrum begin probes={} target=scratch-8x8 truth=fragment_boundary_observed\n",
-        probes.len(),
+        "intel/render: primary-fragment-shape-spectrum begin probes={} target=scratch-8x8+rt32 truth=fragment_boundary_observed\n",
+        probes.len() + aligned_target_probes.len(),
     );
     for (submit_name, geometry, backend, vf_experiment) in probes {
         seed_render_scratch_rt(warm);
@@ -3124,6 +3151,40 @@ fn run_fragment_shape_frontier_spectrum(dev: crate::intel::Dev, warm: RenderWarm
             scratch_pitch,
             8,
             8,
+            TriangleBlendProbeMode::MesaZeroedState,
+            geometry,
+            backend,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+            vf_experiment,
+        );
+        let observed = fragment_boundary_observed();
+        intel_render_focus_log!(
+            "intel/render: primary-fragment-shape-spectrum submit={} geometry={} backend={} vf_contract={} completed={} candidate_ready={} observed={}\n",
+            submit_name,
+            geometry.label(),
+            backend.label(),
+            vf_experiment.vf_slot_contract(),
+            completed as u8,
+            fragment_candidate_ready() as u8,
+            observed as u8,
+        );
+        if completed {
+            recover_render_engine_after_nonretired_submit(dev, warm, submit_name);
+        }
+        if observed {
+            return true;
+        }
+    }
+    for (submit_name, geometry, backend, vf_experiment) in aligned_target_probes {
+        seed_render_scratch_rt(warm);
+        let completed = submit_triangle_vf_draw_to_surface_ext(
+            submit_name,
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            aligned_scratch_pitch,
+            32,
+            32,
             TriangleBlendProbeMode::MesaZeroedState,
             geometry,
             backend,
@@ -4241,6 +4302,71 @@ fn submit_triangle_vs_draw_frontier_to_surface(
     false
 }
 
+fn submit_triangle_vs_draw_frontier_to_scratch(
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+) -> bool {
+    let scratch_pitch = 32 * core::mem::size_of::<u32>();
+    if warm.streamout_len < scratch_pitch * 32 {
+        intel_render_focus_log!(
+            "intel/render: vs-draw-frontier-scratch skipped reason=streamout-too-small len=0x{:X} required=0x{:X}\n",
+            warm.streamout_len,
+            scratch_pitch * 32,
+        );
+        return false;
+    }
+    let variants = [
+        ("vs-draw-frontier-scratch", VfPrimitiveGeometry::Canonical),
+        ("vs-draw-frontier-scratch-ndc-rect", VfPrimitiveGeometry::NdcRect),
+        ("vs-draw-frontier-scratch-ndc-rect-cw", VfPrimitiveGeometry::NdcRectCw),
+        (
+            "vs-draw-frontier-scratch-screen-rect",
+            VfPrimitiveGeometry::ScreenSpaceRect8x8OrderB,
+        ),
+        (
+            "vs-draw-frontier-scratch-ndc-large",
+            VfPrimitiveGeometry::NdcTriangleLarge,
+        ),
+    ];
+    let contracts = [
+        TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+        VS_DRAW_SBE_READ0_CONTRACT,
+        VS_DRAW_FRONTIER_CONTRACTS[2],
+    ];
+    for (submit_name, geometry) in variants {
+        for contract in contracts {
+            seed_render_scratch_rt(warm);
+            let completed = submit_triangle_real_vs_draw_probe_to_surface_ext(
+                dev,
+                warm,
+                GPU_VA_STREAMOUT_BASE,
+                scratch_pitch,
+                32,
+                32,
+                TriangleBlendProbeMode::MesaZeroedState,
+                geometry,
+                submit_name,
+                contract,
+                BackendProbeMode::MesaLike,
+                PostDrawSyncVariant::LightPostSyncNoCs,
+            );
+            let observed = fragment_boundary_observed();
+            intel_render_focus_log!(
+                "intel/render: vs-draw-frontier-scratch variant={} geometry={} contract={} completed={} observed={} target=scratch-rt32\n",
+                submit_name,
+                geometry.label(),
+                contract.label,
+                completed as u8,
+                observed as u8,
+            );
+            if observed {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn wait_eq(dev: crate::intel::Dev, reg: usize, mask: u32, want: u32, n: usize) -> bool {
     for _ in 0..n {
         if (crate::intel::mmio_read(dev, reg) & mask) == want {
@@ -4645,6 +4771,40 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
     intel_render_verbose_log!("intel/render: {} blend-probe={}\n", submit_name, blend_mode.label());
     log_triangle_probe_state(warm, shader_layout, probe_state);
 
+    let scratch_rt_before = if is_scratch_rt_submit_name(submit_name) {
+        crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+        let center_x = draw.target_w / 2;
+        let center_y = draw.target_h / 2;
+        let center_offset = center_y
+            .saturating_mul(draw.rt_pitch)
+            .saturating_add(center_x.saturating_mul(4)) as usize;
+        let post_offset =
+            center_offset.saturating_add(if center_x + 1 < draw.target_w { 4 } else { 0 });
+        let read_scratch_dword = |byte_offset: usize| -> u32 {
+            if byte_offset.saturating_add(core::mem::size_of::<u32>()) > warm.streamout_len {
+                return 0;
+            }
+            unsafe {
+                let ptr = (warm.streamout_virt as *const u8).add(byte_offset) as *const u32;
+                core::ptr::read_volatile(ptr)
+            }
+        };
+        Some((
+            read_scratch_dword(0),
+            read_scratch_dword(center_offset),
+            read_scratch_dword(post_offset),
+            center_offset,
+            post_offset,
+        ))
+    } else {
+        None
+    };
+    let scratch_stats_before = if scratch_rt_before.is_some() {
+        Some(capture_triangle_stage_stats(dev))
+    } else {
+        None
+    };
+
     let completed = submit_warm_render_batch(
         dev,
         warm,
@@ -4654,6 +4814,53 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
     );
     if !completed {
         recover_render_engine_after_nonretired_submit(dev, warm, submit_name);
+    }
+    if let (
+        Some((scratch_before, center_before, post_before, center_offset, post_offset)),
+        Some(stats_before),
+    ) = (scratch_rt_before, scratch_stats_before)
+    {
+        crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+        let read_scratch_dword = |byte_offset: usize| -> u32 {
+            if byte_offset.saturating_add(core::mem::size_of::<u32>()) > warm.streamout_len {
+                return 0;
+            }
+            unsafe {
+                let ptr = (warm.streamout_virt as *const u8).add(byte_offset) as *const u32;
+                core::ptr::read_volatile(ptr)
+            }
+        };
+        let scratch_after = read_scratch_dword(0);
+        let center_after = read_scratch_dword(center_offset);
+        let post_after = read_scratch_dword(post_offset);
+        let delta = capture_triangle_stage_stats(dev).delta_since(stats_before);
+        let ps_counter_accept =
+            delta.ps_invocations > 0 || delta.cps_invocations > 0 || delta.ps_depth > 0;
+        let rt_changed = scratch_after != scratch_before
+            || center_after != center_before
+            || post_after != post_before;
+        let accepted = ps_counter_accept || rt_changed;
+        record_fragment_boundary_probe(true, accepted);
+        intel_render_focus_log!(
+            "intel/render: {} scratch-rt-fragment-proof accepted={} completed={} rt_gpu=0x{:X} size={}x{} pitch=0x{:X} before=0x{:08X} after=0x{:08X} center_before=0x{:08X} center_after=0x{:08X} post_before=0x{:08X} post_after=0x{:08X} changed={} ps_delta={} cps_delta={} ps_depth_delta={} source=real-vs does_not_prove=display_scanout\n",
+            submit_name,
+            accepted as u8,
+            completed as u8,
+            draw.rt_gpu_addr,
+            draw.target_w,
+            draw.target_h,
+            draw.rt_pitch,
+            scratch_before,
+            scratch_after,
+            center_before,
+            center_after,
+            post_before,
+            post_after,
+            rt_changed as u8,
+            delta.ps_invocations,
+            delta.cps_invocations,
+            delta.ps_depth,
+        );
     }
     completed
 }

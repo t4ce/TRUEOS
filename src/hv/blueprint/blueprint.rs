@@ -766,16 +766,10 @@ fn abbreviate_symbol_name(name: &str) -> String {
 }
 
 fn is_gotpc_rel_relocation(r_type: u32) -> bool {
-    matches!(
-        r_type,
-        R_X86_64_GOTPCREL | R_X86_64_GOTPCRELX | R_X86_64_REX_GOTPCRELX
-    )
+    matches!(r_type, R_X86_64_GOTPCREL | R_X86_64_GOTPCRELX | R_X86_64_REX_GOTPCRELX)
 }
 
-fn collect_gotpc_rel_symbols(
-    bytes: &[u8],
-    sections: &[ElfSection],
-) -> Result<Vec<usize>, String> {
+fn collect_gotpc_rel_symbols(bytes: &[u8], sections: &[ElfSection]) -> Result<Vec<usize>, String> {
     let mut symbols = BTreeMap::new();
     for section in sections.iter() {
         if section.section_type != SHT_RELA {
@@ -1382,6 +1376,9 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         }
         "trueos_vlayer_rapl_history_read" => {
             Some(crate::r::net::vlayer::trueos_vlayer_rapl_history_read as *const () as usize)
+        }
+        "trueos_vlayer_pci_snapshot_read" => {
+            Some(crate::r::net::vlayer::trueos_vlayer_pci_snapshot_read as *const () as usize)
         }
         "trueos_platform_monotonic_nanos" => {
             Some(crate::r::platform::trueos_platform_monotonic_nanos as *const () as usize)

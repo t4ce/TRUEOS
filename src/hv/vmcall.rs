@@ -39,6 +39,7 @@ pub const OP_BP_UI3_TEXTURE_STATUS: u32 = 0x8F; // arg0=tex_id -> status
 pub const OP_BP_UI3_TEXTURE_DIMENSIONS: u32 = 0x90; // arg0=tex_id -> status + packed w/h
 pub const OP_BP_RAPL_SNAPSHOT_READ: u32 = 0x91; // arg0 offset, arg1 cap -> latest RAPL snapshot text
 pub const OP_BP_RAPL_HISTORY_READ: u32 = 0x92; // arg0 offset, arg1 cap -> capped RAPL history text
+pub const OP_BP_PCI_SNAPSHOT_READ: u32 = 0x93; // arg0 offset, arg1 cap -> latest PCI snapshot text
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -249,7 +250,7 @@ fn request_payload(vm_id: u8, req_len: u32) -> Option<&'static [u8]> {
     Some(unsafe { &(&(*p).payload)[..req_len as usize] })
 }
 
-fn handle_rapl_text_read_vmcall(
+fn handle_vlayer_text_read_vmcall(
     vm_id: u8,
     seq: u32,
     offset: u64,
@@ -663,7 +664,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_RAPL_SNAPSHOT_READ => {
-            handle_rapl_text_read_vmcall(
+            handle_vlayer_text_read_vmcall(
                 vm_id,
                 seq,
                 arg0,
@@ -674,13 +675,24 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_RAPL_HISTORY_READ => {
-            handle_rapl_text_read_vmcall(
+            handle_vlayer_text_read_vmcall(
                 vm_id,
                 seq,
                 arg0,
                 arg1,
                 crate::r::net::vlayer::rapl_history_len_host,
                 crate::r::net::vlayer::rapl_history_read_host,
+            );
+            DispatchOutcome::Resume
+        }
+        OP_BP_PCI_SNAPSHOT_READ => {
+            handle_vlayer_text_read_vmcall(
+                vm_id,
+                seq,
+                arg0,
+                arg1,
+                crate::r::net::vlayer::pci_snapshot_len_host,
+                crate::r::net::vlayer::pci_snapshot_read_host,
             );
             DispatchOutcome::Resume
         }
