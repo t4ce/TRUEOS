@@ -103,6 +103,21 @@ pub(crate) fn latest_candidate() -> Option<BrowserMediaCandidate> {
     })
 }
 
+pub(crate) fn sabr_candidate() -> Option<BrowserMediaCandidate> {
+    with_media_streams(|streams| {
+        streams
+            .candidates
+            .iter()
+            .rev()
+            .find(|candidate| {
+                let kind = candidate.kind.to_ascii_lowercase();
+                let url = candidate.url.to_ascii_lowercase();
+                kind.contains("sabr") || url.contains("sabr=1") || url.contains("sabr%3d1")
+            })
+            .cloned()
+    })
+}
+
 fn browser_media_candidate_rank(kind: &str, url: &str) -> u8 {
     let kind = kind.to_ascii_lowercase();
     let url = url.to_ascii_lowercase();

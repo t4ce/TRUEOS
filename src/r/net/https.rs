@@ -535,31 +535,126 @@ pub async fn get_browser_media_bytes_shared(
     timeout_ms: u32,
     max_bytes: usize,
 ) -> Result<Vec<u8>, String> {
+    get_browser_media_bytes_profile_shared(url, "browser-range", timeout_ms, max_bytes).await
+}
+
+pub async fn get_browser_media_bytes_profile_shared(
+    url: &str,
+    profile: &str,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
     let target = parse_fetch_url(url).map_err(String::from)?;
     if target.scheme != "https" {
         return Err(String::from("unsupported scheme"));
     }
+    let chrome_ua = String::from(
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    );
+    let mut headers = vec![
+        (String::from("User-Agent"), chrome_ua),
+        (String::from("Accept-Encoding"), String::from("identity")),
+        (String::from("Connection"), String::from("close")),
+    ];
+    let use_range = !profile.contains("norange");
+    match profile {
+        "plain-range" | "plain-norange" => {
+            headers.push((String::from("Accept"), String::from("*/*")));
+        }
+        "youtube-range" | "youtube-norange" => {
+            headers.push((String::from("Accept"), String::from("*/*")));
+            headers.push((String::from("Origin"), String::from("https://www.youtube.com")));
+            headers.push((String::from("Referer"), String::from("https://www.youtube.com/")));
+            headers.push((String::from("X-YouTube-Client-Name"), String::from("1")));
+            headers
+                .push((String::from("X-YouTube-Client-Version"), String::from("2.20260626.01.00")));
+        }
+        _ => {
+            headers.push((
+                String::from("Accept"),
+                String::from("video/webm,video/mp4,video/*;q=0.9,*/*;q=0.8"),
+            ));
+            headers.push((String::from("Accept-Language"), String::from("en-US,en;q=0.9")));
+            headers.push((String::from("Origin"), String::from("https://www.youtube.com")));
+            headers.push((String::from("Referer"), String::from("https://www.youtube.com/")));
+            headers.push((String::from("Sec-Fetch-Dest"), String::from("video")));
+            headers.push((String::from("Sec-Fetch-Mode"), String::from("no-cors")));
+            headers.push((String::from("Sec-Fetch-Site"), String::from("cross-site")));
+        }
+    }
+    if use_range {
+        headers.push((String::from("Range"), String::from("bytes=0-")));
+    }
     let request = HttpsRequest {
         method: "GET",
         content_type: None,
-        headers: vec![
-            (
-                String::from("User-Agent"),
-                String::from(
-                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-                ),
-            ),
-            (String::from("Accept"), String::from("video/webm,video/mp4,video/*;q=0.9,*/*;q=0.8")),
-            (String::from("Accept-Language"), String::from("en-US,en;q=0.9")),
-            (String::from("Accept-Encoding"), String::from("identity")),
-            (String::from("Origin"), String::from("https://www.youtube.com")),
-            (String::from("Referer"), String::from("https://www.youtube.com/")),
-            (String::from("Sec-Fetch-Dest"), String::from("video")),
-            (String::from("Sec-Fetch-Mode"), String::from("no-cors")),
-            (String::from("Sec-Fetch-Site"), String::from("cross-site")),
-            (String::from("Range"), String::from("bytes=0-")),
-            (String::from("Connection"), String::from("close")),
-        ],
+        headers,
+        body: &[],
+    };
+    request_https_bytes(&target, &request, timeout_ms.max(1), max_bytes).await
+}
+
+pub async fn get_browser_media_probe_bytes_shared(
+    url: &str,
+    range_end_inclusive: usize,
+    profile: &str,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    let target = parse_fetch_url(url).map_err(String::from)?;
+    if target.scheme != "https" {
+        return Err(String::from("unsupported scheme"));
+    }
+    let chrome_ua = String::from(
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    );
+    let mut headers = vec![
+        (String::from("User-Agent"), chrome_ua),
+        (String::from("Accept-Encoding"), String::from("identity")),
+        (String::from("Connection"), String::from("close")),
+    ];
+    let use_range = !profile.contains("norange");
+    match profile {
+        "plain-range" | "plain-norange" => {
+            headers.push((String::from("Accept"), String::from("*/*")));
+        }
+        "youtube-range" | "youtube-norange" => {
+            headers.push((String::from("Accept"), String::from("*/*")));
+            headers.push((String::from("Origin"), String::from("https://www.youtube.com")));
+            headers.push((String::from("Referer"), String::from("https://www.youtube.com/")));
+            headers.push((String::from("X-YouTube-Client-Name"), String::from("1")));
+            headers
+                .push((String::from("X-YouTube-Client-Version"), String::from("2.20260626.01.00")));
+        }
+        "sabr-range" | "sabr-norange" => {
+            headers.push((String::from("Accept"), String::from("*/*")));
+            headers.push((String::from("Origin"), String::from("https://www.youtube.com")));
+            headers.push((String::from("Referer"), String::from("https://www.youtube.com/")));
+            headers.push((String::from("X-YouTube-Client-Name"), String::from("1")));
+            headers
+                .push((String::from("X-YouTube-Client-Version"), String::from("2.20260626.01.00")));
+            headers.push((String::from("X-Goog-FieldMask"), String::from("*")));
+        }
+        _ => {
+            headers.push((
+                String::from("Accept"),
+                String::from("video/webm,video/mp4,video/*;q=0.9,*/*;q=0.8"),
+            ));
+            headers.push((String::from("Accept-Language"), String::from("en-US,en;q=0.9")));
+            headers.push((String::from("Origin"), String::from("https://www.youtube.com")));
+            headers.push((String::from("Referer"), String::from("https://www.youtube.com/")));
+            headers.push((String::from("Sec-Fetch-Dest"), String::from("video")));
+            headers.push((String::from("Sec-Fetch-Mode"), String::from("no-cors")));
+            headers.push((String::from("Sec-Fetch-Site"), String::from("cross-site")));
+        }
+    }
+    if use_range {
+        headers.push((String::from("Range"), format!("bytes=0-{}", range_end_inclusive)));
+    }
+    let request = HttpsRequest {
+        method: "GET",
+        content_type: None,
+        headers,
         body: &[],
     };
     request_https_bytes(&target, &request, timeout_ms.max(1), max_bytes).await

@@ -629,22 +629,6 @@ function collectMediaCandidatesFromHtml(html) {
   while ((match = htmlMediaRe.exec(source))) {
     pushMediaCandidate(candidates, seen, resolveNavigationUrl(currentNavigationUrl, match[2]), 'html-media-src');
   }
-  if (candidates.length === 0 && youtubeStats.serverAbrUrl) {
-    log(
-      `[truesurfer media] browser=${browserId} youtube_sabr_candidate=1 probe_rev=${TRUESURFER_MEDIA_PROBE_REV} action=queue-unsupported-sabr-probe url=${youtubeStats.serverAbrUrl}`,
-    );
-    pushMediaCandidate(candidates, seen, youtubeStats.serverAbrUrl, 'youtube-sabr', {
-      kind: 'video/sabr',
-      mimeType: 'application/vnd.youtube.sabr',
-      codecs: '',
-      h264: 0,
-      qualityLabel: 'sabr',
-      width: 0,
-      height: 0,
-      bitrate: 0,
-      ciphered: 0,
-    });
-  }
   if (candidates.length === 0 && youtubeStats.serverAbrUrl && youtubeConfig.apiKey && youtubeConfig.clientVersion) {
     let probeUrl = `innertube://player?video_id=${encodeURIComponent(youtubeVideoIdFromUrl(currentNavigationUrl))}`;
     probeUrl = appendProbeParam(probeUrl, 'api_key', youtubeConfig.apiKey);
@@ -662,6 +646,22 @@ function collectMediaCandidatesFromHtml(html) {
       codecs: '',
       h264: 0,
       qualityLabel: 'innertube',
+      width: 0,
+      height: 0,
+      bitrate: 0,
+      ciphered: 0,
+    });
+  }
+  if (youtubeStats.serverAbrUrl) {
+    log(
+      `[truesurfer media] browser=${browserId} youtube_sabr_candidate=1 probe_rev=${TRUESURFER_MEDIA_PROBE_REV} action=queue-unsupported-sabr-probe url=${youtubeStats.serverAbrUrl}`,
+    );
+    pushMediaCandidate(candidates, seen, youtubeStats.serverAbrUrl, 'youtube-sabr', {
+      kind: 'video/sabr',
+      mimeType: 'application/vnd.youtube.sabr',
+      codecs: '',
+      h264: 0,
+      qualityLabel: 'sabr',
       width: 0,
       height: 0,
       bitrate: 0,

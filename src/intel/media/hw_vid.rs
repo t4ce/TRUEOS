@@ -27,6 +27,8 @@ const H264_BROWSER_MEDIA_FETCH_MAX_BYTES: usize = 160 * 1024 * 1024;
 const H264_BROWSER_MEDIA_CANDIDATE_WAIT_MS: u64 = 60_000;
 const H264_BROWSER_INNERTUBE_TIMEOUT_MS: u64 = 45_000;
 const H264_BROWSER_INNERTUBE_MAX_BYTES: usize = 4 * 1024 * 1024;
+const H264_BROWSER_SABR_PROBE_TIMEOUT_MS: u64 = 30_000;
+const H264_BROWSER_SABR_PROBE_BYTES: usize = 64 * 1024;
 pub(crate) const H264_BOOT_PROBE_STREAM_PATH: &str = "x31_head_movie.annexb.h264";
 
 #[derive(Copy, Clone, Debug)]
@@ -387,8 +389,17 @@ pub(crate) async fn run_browser_media_playback(
         candidate.kind.as_str(),
         candidate.url.as_str(),
     ) {
-        h264_resolve_youtube_innertube_candidate(candidate.url.as_str()).await?
+        match h264_resolve_youtube_innertube_candidate(candidate.url.as_str()).await {
+            Ok(url) => url,
+            Err(err) => {
+                if let Some(sabr) = crate::surfer::media_stream::sabr_candidate() {
+                    h264_probe_sabr_candidate(&sabr).await;
+                }
+                return Err(err);
+            }
+        }
     } else if h264_browser_media_is_sabr(candidate.kind.as_str(), candidate.url.as_str()) {
+        h264_probe_sabr_candidate(&candidate).await;
         crate::log!(
             "intel/hw_vid: browser-media unsupported kind=sabr action=needs-sabr-demux-or-innertube-direct-format browser={} generation={} tag={} url={}\n",
             candidate.browser_instance_id,
@@ -401,7 +412,15 @@ pub(crate) async fn run_browser_media_playback(
         candidate.url.clone()
     };
 
-    let mp4_bytes = h264_fetch_browser_media_candidate(media_url.as_str()).await?;
+    let mp4_bytes = match h264_fetch_browser_media_candidate(media_url.as_str()).await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            if let Some(sabr) = crate::surfer::media_stream::sabr_candidate() {
+                h264_probe_sabr_candidate(&sabr).await;
+            }
+            return Err(err);
+        }
+    };
     let annexb = mp4_avc1_to_annexb(mp4_bytes.as_slice())?;
     crate::log!(
         "intel/hw_vid: browser-media demux accepted=1 container=mp4 codec=avc1 mp4_bytes={} annexb_bytes={} source=browser url={}\n",
@@ -434,6 +453,70 @@ fn h264_browser_media_is_sabr(kind: &str, url: &str) -> bool {
 fn h264_browser_media_is_innertube(kind: &str, url: &str) -> bool {
     kind.to_ascii_lowercase().contains("youtube-innertube")
         || url.to_ascii_lowercase().starts_with("innertube://player?")
+}
+
+async fn h264_probe_sabr_candidate(candidate: &crate::surfer::media_stream::BrowserMediaCandidate) {
+    let range_end = H264_BROWSER_SABR_PROBE_BYTES.saturating_sub(1);
+    for profile in [
+        "browser-range",
+        "plain-range",
+        "youtube-range",
+        "sabr-range",
+        "plain-norange",
+        "youtube-norange",
+        "sabr-norange",
+    ] {
+        let started = EmbassyInstant::now();
+        crate::log!(
+            "intel/hw_vid: browser-media sabr-probe begin profile={} browser={} generation={} tag={} timeout_ms={} range=0-{} url={}\n",
+            profile,
+            candidate.browser_instance_id,
+            candidate.generation,
+            candidate.tag,
+            H264_BROWSER_SABR_PROBE_TIMEOUT_MS,
+            range_end,
+            candidate.url
+        );
+        match crate::r::net::https::get_browser_media_probe_bytes_shared(
+            candidate.url.as_str(),
+            range_end,
+            profile,
+            H264_BROWSER_SABR_PROBE_TIMEOUT_MS as u32,
+            H264_BROWSER_SABR_PROBE_BYTES,
+        )
+        .await
+        {
+            Ok(bytes) => {
+                let head = hex_prefix(bytes.as_slice(), 32);
+                crate::log!(
+                    "intel/hw_vid: browser-media sabr-probe done profile={} bytes={} waited_ms={} marker_ftyp={} marker_moof={} marker_mdat={} marker_avcc={} marker_start_code={} marker_sabr={} head_hex={}\n",
+                    profile,
+                    bytes.len(),
+                    started.elapsed().as_millis(),
+                    bytes_contains(bytes.as_slice(), b"ftyp") as u8,
+                    bytes_contains(bytes.as_slice(), b"moof") as u8,
+                    bytes_contains(bytes.as_slice(), b"mdat") as u8,
+                    bytes_contains(bytes.as_slice(), b"avcC") as u8,
+                    has_h264_start_code(bytes.as_slice()) as u8,
+                    bytes_contains(bytes.as_slice(), b"sabr") as u8,
+                    head
+                );
+                return;
+            }
+            Err(err) => {
+                crate::log!(
+                    "intel/hw_vid: browser-media sabr-probe failed profile={} err={} waited_ms={} url={}\n",
+                    profile,
+                    err,
+                    started.elapsed().as_millis(),
+                    candidate.url
+                );
+            }
+        }
+    }
+    crate::log!(
+        "intel/hw_vid: browser-media sabr-probe exhausted profiles=7 action=need-sabr-request-shape-or-demux\n"
+    );
 }
 
 async fn h264_resolve_youtube_innertube_candidate(url: &str) -> Result<String, &'static str> {
@@ -864,40 +947,89 @@ fn log_token(value: &str) -> String {
     out
 }
 
-async fn h264_fetch_browser_media_candidate(url: &str) -> Result<Vec<u8>, &'static str> {
-    let started = EmbassyInstant::now();
-    crate::log!(
-        "intel/hw_vid: browser-media fetch begin profile=browser-video range=0- timeout_ms={} max_bytes={} url={}\n",
-        H264_BROWSER_MEDIA_FETCH_TIMEOUT_MS,
-        H264_BROWSER_MEDIA_FETCH_MAX_BYTES,
-        url
-    );
-    match crate::r::net::https::get_browser_media_bytes_shared(
-        url,
-        H264_BROWSER_MEDIA_FETCH_TIMEOUT_MS as u32,
-        H264_BROWSER_MEDIA_FETCH_MAX_BYTES,
-    )
-    .await
-    {
-        Ok(bytes) => {
-            crate::log!(
-                "intel/hw_vid: browser-media fetch done bytes={} waited_ms={} url={}\n",
-                bytes.len(),
-                started.elapsed().as_millis(),
-                url
-            );
-            Ok(bytes)
+fn bytes_contains(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty()
+        && haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
+}
+
+fn has_h264_start_code(bytes: &[u8]) -> bool {
+    bytes_contains(bytes, &[0, 0, 1]) || bytes_contains(bytes, &[0, 0, 0, 1])
+}
+
+fn hex_prefix(bytes: &[u8], max_len: usize) -> String {
+    let mut out = String::new();
+    for (idx, byte) in bytes.iter().take(max_len).copied().enumerate() {
+        if idx != 0 {
+            out.push('_');
         }
-        Err(err) => {
-            crate::log!(
-                "intel/hw_vid: browser-media fetch failed err={} waited_ms={} url={}\n",
-                err,
-                started.elapsed().as_millis(),
-                url
-            );
-            Err("browser media fetch failed")
+        let _ = write!(out, "{:02X}", byte);
+    }
+    if out.is_empty() {
+        out.push('-');
+    }
+    out
+}
+
+async fn h264_fetch_browser_media_candidate(url: &str) -> Result<Vec<u8>, &'static str> {
+    let profiles = [
+        "browser-range",
+        "plain-range",
+        "youtube-range",
+        "browser-norange",
+        "plain-norange",
+        "youtube-norange",
+    ];
+    for profile in profiles {
+        let started = EmbassyInstant::now();
+        crate::log!(
+            "intel/hw_vid: browser-media fetch begin profile={} timeout_ms={} max_bytes={} url={}\n",
+            profile,
+            H264_BROWSER_MEDIA_FETCH_TIMEOUT_MS,
+            H264_BROWSER_MEDIA_FETCH_MAX_BYTES,
+            url
+        );
+        match crate::r::net::https::get_browser_media_bytes_profile_shared(
+            url,
+            profile,
+            H264_BROWSER_MEDIA_FETCH_TIMEOUT_MS as u32,
+            H264_BROWSER_MEDIA_FETCH_MAX_BYTES,
+        )
+        .await
+        {
+            Ok(bytes) => {
+                crate::log!(
+                    "intel/hw_vid: browser-media fetch done profile={} bytes={} waited_ms={} marker_ftyp={} marker_moov={} marker_mdat={} marker_avcc={} head_hex={} url={}\n",
+                    profile,
+                    bytes.len(),
+                    started.elapsed().as_millis(),
+                    bytes_contains(bytes.as_slice(), b"ftyp") as u8,
+                    bytes_contains(bytes.as_slice(), b"moov") as u8,
+                    bytes_contains(bytes.as_slice(), b"mdat") as u8,
+                    bytes_contains(bytes.as_slice(), b"avcC") as u8,
+                    hex_prefix(bytes.as_slice(), 24),
+                    url
+                );
+                return Ok(bytes);
+            }
+            Err(err) => {
+                crate::log!(
+                    "intel/hw_vid: browser-media fetch failed profile={} err={} waited_ms={} url={}\n",
+                    profile,
+                    err,
+                    started.elapsed().as_millis(),
+                    url
+                );
+            }
         }
     }
+    crate::log!(
+        "intel/hw_vid: browser-media fetch exhausted profiles={} action=check-url-signature-or-n-transform url={}\n",
+        profiles.len(),
+        url
+    );
+    Err("browser media fetch failed")
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -2472,6 +2472,9 @@ fn submit_primary_triangle_with_retries(
         );
         return completed;
     }
+    intel_render_focus_log!(
+        "intel/render: primary-boot-3d-probes enabled=1 action=run-frontier-ladder vf_streamout=1 ps_spectrum=1 vs_frontier=1\n",
+    );
 
     let initial_streamout_experiment =
         select_streamout_proof_experiment(PRIMARY_PROBE_SEQ.load(Ordering::Acquire));
