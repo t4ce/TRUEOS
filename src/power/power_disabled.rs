@@ -8,6 +8,10 @@ pub mod rapl {
     include!("rapl_disabled.rs");
 }
 
+pub mod thermal {
+    include!("thermal_disabled.rs");
+}
+
 pub mod turbo {
     use core::sync::atomic::{AtomicU8, Ordering};
 

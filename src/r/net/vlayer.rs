@@ -119,6 +119,26 @@ pub fn rapl_history_read_host(offset: usize, out: &mut [u8]) -> usize {
     crate::power::rapl::copy_history_slice(offset, out)
 }
 
+pub fn thermal_snapshot_len_host() -> usize {
+    crate::power::thermal::latest_snapshot_text().len()
+}
+
+pub fn thermal_snapshot_read_host(offset: usize, out: &mut [u8]) -> usize {
+    if out.is_empty() {
+        return 0;
+    }
+
+    let text = crate::power::thermal::latest_snapshot_text();
+    let bytes = text.as_bytes();
+    if offset >= bytes.len() {
+        return 0;
+    }
+
+    let n = core::cmp::min(out.len(), bytes.len() - offset);
+    out[..n].copy_from_slice(&bytes[offset..offset + n]);
+    n
+}
+
 pub fn pci_snapshot_text_host() -> String {
     ensure_pci_devices_enumerated();
 
@@ -258,6 +278,21 @@ pub unsafe extern "C" fn trueos_vlayer_pci_snapshot_read(
         trueos_vm::vmcall::OP_BP_PCI_SNAPSHOT_READ,
         pci_snapshot_len_host,
         pci_snapshot_read_host,
+        offset,
+        out_ptr,
+        out_cap,
+    )
+}
+
+pub unsafe extern "C" fn trueos_vlayer_thermal_snapshot_read(
+    offset: usize,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    vlayer_read_runtime(
+        trueos_vm::vmcall::OP_BP_THERMAL_SNAPSHOT_READ,
+        thermal_snapshot_len_host,
+        thermal_snapshot_read_host,
         offset,
         out_ptr,
         out_cap,

@@ -9,6 +9,10 @@ from the first-party source without prior written permission. Blueprints,
 scripts, applications, data, and configuration are the intended path for
 extending and programming TRUEOS at runtime, including commercially.
 
+# What matters is not “TRUEOS has X feature.” Features are cheap to # claim. The deeper question is:
+# Are the foundation decisions coherent enough that the system 
+# deserves to exist?
+
 ```
 TRUE OS § ® 2026
 ██████████████████████████████████████████████████████████████████████
@@ -32,7 +36,7 @@ A constant influx of resources, money, and safety.
 > Makes it impossible to alter the build tools
 > and sourcefiles are signed & included
 
-## Cloud releases
+## Cloud releases - Batteries included
 
 Official public releases are built upstream by GitHub Actions:
 

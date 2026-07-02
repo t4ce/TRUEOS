@@ -33,6 +33,7 @@ pub const OP_BP_UI3_TEXTURE_DIMENSIONS: u32 = 0x90;
 pub const OP_BP_RAPL_SNAPSHOT_READ: u32 = 0x91;
 pub const OP_BP_RAPL_HISTORY_READ: u32 = 0x92;
 pub const OP_BP_PCI_SNAPSHOT_READ: u32 = 0x93;
+pub const OP_BP_THERMAL_SNAPSHOT_READ: u32 = 0x94;
 pub const OP_NET_TCP_WRITE: u32 = 0x10;
 pub const OP_NET_TCP_READ: u32 = 0x11;
 pub const OP_BP_NET_OPEN: u32 = 0x20;

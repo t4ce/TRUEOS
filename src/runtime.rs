@@ -52,6 +52,7 @@ pub fn run_ap_forever() -> ! {
         crate::time::poll();
         poll_local_executor();
         let sleep_ticks = crate::time::ticks_until_next_wake().unwrap_or(u64::MAX);
+        crate::power::thermal::poll_current_core_passive(sleep_ticks);
 
         disable_interrupts();
         if let Some(sleep_ticks) = wants_chill(sleep_ticks) {

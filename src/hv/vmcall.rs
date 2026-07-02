@@ -40,6 +40,7 @@ pub const OP_BP_UI3_TEXTURE_DIMENSIONS: u32 = 0x90; // arg0=tex_id -> status + p
 pub const OP_BP_RAPL_SNAPSHOT_READ: u32 = 0x91; // arg0 offset, arg1 cap -> latest RAPL snapshot text
 pub const OP_BP_RAPL_HISTORY_READ: u32 = 0x92; // arg0 offset, arg1 cap -> capped RAPL history text
 pub const OP_BP_PCI_SNAPSHOT_READ: u32 = 0x93; // arg0 offset, arg1 cap -> latest PCI snapshot text
+pub const OP_BP_THERMAL_SNAPSHOT_READ: u32 = 0x94; // arg0 offset, arg1 cap -> latest thermal snapshot text
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -703,6 +704,17 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 arg1,
                 crate::r::net::vlayer::pci_snapshot_len_host,
                 crate::r::net::vlayer::pci_snapshot_read_host,
+            );
+            DispatchOutcome::Resume
+        }
+        OP_BP_THERMAL_SNAPSHOT_READ => {
+            handle_vlayer_text_read_vmcall(
+                vm_id,
+                seq,
+                arg0,
+                arg1,
+                crate::r::net::vlayer::thermal_snapshot_len_host,
+                crate::r::net::vlayer::thermal_snapshot_read_host,
             );
             DispatchOutcome::Resume
         }

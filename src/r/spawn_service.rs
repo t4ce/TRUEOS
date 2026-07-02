@@ -62,6 +62,7 @@ define_started_flags!(
     VIRTIO_GPU_UI_STARTED,
     INTEL_HDA_AUDIO_DEMO_STARTED,
     RAPLE_SERVICE_STARTED,
+    THERMAL_SERVICE_STARTED,
     HTML_SHACK_SERVICE_STARTED,
     ASSET_SHACK_SERVICE_STARTED,
     USB_CONTROLLER_TASKS_STARTED,
@@ -497,6 +498,10 @@ fn spawn_intel_hda_audio_demo_task(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_raple_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::power::rapl::raple_service())
+}
+
+fn spawn_thermal_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::power::thermal::thermal_service())
 }
 
 fn html_fetch_service(spawner: Spawner) -> SpawnAttempt {
@@ -1118,7 +1123,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 56 + cfg!(feature = "trueos_rdp") as usize;
+const TASK_COUNT: usize = 57 + cfg!(feature = "trueos_rdp") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1326,6 +1331,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_intel_hda_audio_demo_task,
     ),
     TaskSpec::enabled("raple-service", 0, &RAPLE_SERVICE_STARTED, spawn_raple_service),
+    TaskSpec::enabled("thermal-service", 0, &THERMAL_SERVICE_STARTED, spawn_thermal_service),
     TaskSpec::enabled(
         "html_fetch_service",
         crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,

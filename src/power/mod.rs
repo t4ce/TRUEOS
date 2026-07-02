@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 pub(crate) mod rapl;
+pub(crate) mod thermal;
 pub(crate) mod turbo;
 
 use core::sync::atomic::{AtomicU8, Ordering};
