@@ -9,9 +9,16 @@ from the first-party source without prior written permission. Blueprints,
 scripts, applications, data, and configuration are the intended path for
 extending and programming TRUEOS at runtime, including commercially.
 
-# What matters is not “TRUEOS has X feature.” Features are cheap to # claim. The deeper question is:
-# Are the foundation decisions coherent enough that the system 
-# deserves to exist?
+# “You can boot a tiny Rust OS and make it do real things.”
+## Why it is interesting
+
+- Tiny bootable ISO, currently around 5 MB
+- Rust-first bare-metal runtime
+- Video/JPEG/media playback experiments
+- Async and parallel Rust workload support
+- Blueprint-based runtime extension model
+- Signed upstream GitHub Actions releases
+- QEMU, VFIO, bridge networking, and hardware bring-up workflows
 
 ```
 TRUE OS § ® 2026
