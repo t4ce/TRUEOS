@@ -49,6 +49,7 @@ pub(crate) enum KnownKernelRole {
     Sprite,
     Mandel,
     Canvas3d,
+    FluidX3d,
 }
 
 const ADLS: &str = "adls";

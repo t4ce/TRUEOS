@@ -1,0 +1,46 @@
+Before publishing a new crate
+names on crates.io are allocated on a first-come-first-serve basis, it cannot be used for another crate.
+
+metadata you can specify in Cargo.toml ensures crate discovered more easily, make sure you have filled:
+
+license
+description
+homepage
+repository
+readme
+
+It would also be a good idea to include some keywords and categories, though they are not required.
+If you are publishing a library, you may also want to consult the Rust API Guidelines.
+
+The next step is to package up your crate and upload it to crates.io. For this we’ll use the cargo publish subcommand. This command performs the following steps:
+
+verification checks, Compress your source code, Extract int temp dir and verify compile, Upload to crates.io.
+additional checks on the uploaded package, recommended run cargo publish --dry-run (or cargo package which is equivalent) 
+to ensure there aren’t any warnings or errors before publishing. This will perform the first three steps listed above.
+
+$ cargo publish --dry-run
+You can inspect the generated .crate file in the target/package directory. crates.io currently has a 10MB size limit on the .crate file. You may want to check the size of the .crate file to ensure you didn’t accidentally package up large assets that are not required to build your package, such as test data, website documentation, or code generation. You can check which files are included with the following command:
+
+$ cargo package --list
+Cargo will automatically ignore files ignored by your version control system when packaging, but if you want to specify an extra set of files to ignore you can use the exclude key in the manifest:
+
+[package]
+# ...
+exclude = [
+    "public/assets/*",
+    "videos/*",
+]
+
+If you’d rather explicitly list the files to include, Cargo also supports an include key, which if set, overrides the exclude key:
+
+[package]
+# ...
+include = [
+    "**/*.rs",
+]
+
+Uploading
+When you are ready to publish, use the cargo publish command to upload to crates.io:
+$ cargo publish
+
+And that’s it

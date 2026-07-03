@@ -4,7 +4,7 @@
 //! The status check only reads the existing GPGPU upload records; it does not
 //! trigger a kernel upload by itself.
 
-use super::{UploadedKernelRef, registry::KNOWN_AOT_KERNELS};
+use super::{IntelGpuTarget, UploadedKernelRef, registry::KNOWN_AOT_KERNELS};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum KnownAotValidationIssueKind {
@@ -98,7 +98,7 @@ pub(crate) fn validate_known_aot_registry() -> KnownAotValidationReport {
                 KnownAotValidationIssueKind::ArtifactNameMismatch,
             );
         }
-        if kernel.artifact.target != "adls" {
+        if IntelGpuTarget::from_label(kernel.artifact.target).is_none() {
             report.record_issue(
                 index,
                 kernel.name,
