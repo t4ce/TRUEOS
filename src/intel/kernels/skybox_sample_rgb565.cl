@@ -17,6 +17,64 @@ static inline uint rgba_from_rgb565(ushort pixel)
     return 0xFF000000u | (b << 16) | (g << 8) | r;
 }
 
+static inline float abs_f32(float value)
+{
+    return value < 0.0f ? -value : value;
+}
+
+static inline float clamp_f32(float value, float lo, float hi)
+{
+    return value < lo ? lo : (value > hi ? hi : value);
+}
+
+static inline uint clamp_u32_255(uint value)
+{
+    return value > 255u ? 255u : value;
+}
+
+static inline int floor_i32(float value)
+{
+    int i = (int)value;
+    return ((float)i > value) ? i - 1 : i;
+}
+
+static inline float fast_atan_unit(float z)
+{
+    float az = abs_f32(z);
+    return z * (0.7853981633974483f + 0.273f * (1.0f - az));
+}
+
+static inline float fast_atan2_f32(float y, float x)
+{
+    float ay = abs_f32(y);
+    float ax = abs_f32(x);
+    if (ax + ay < 0.0000001f) {
+        return 0.0f;
+    }
+
+    float angle;
+    if (ax >= ay) {
+        angle = fast_atan_unit(y / (x + (x >= 0.0f ? 0.0000001f : -0.0000001f)));
+        if (x < 0.0f) {
+            angle += y >= 0.0f ? 3.1415926535897932f : -3.1415926535897932f;
+        }
+    } else {
+        angle = 1.5707963267948966f - fast_atan_unit(x / (y + (y >= 0.0f ? 0.0000001f : -0.0000001f)));
+        if (y < 0.0f) {
+            angle -= 3.1415926535897932f;
+        }
+    }
+    return angle;
+}
+
+static inline float fast_asin_f32(float z)
+{
+    float cz = clamp_f32(z, -1.0f, 1.0f);
+    float one_minus = 1.0f - cz * cz;
+    float root = one_minus <= 0.0f ? 0.0f : one_minus * rsqrt(one_minus);
+    return fast_atan2_f32(cz, root);
+}
+
 static inline uint bilerp_rgb565(
     __global const ushort *skybox,
     uint pitch_pixels,
@@ -27,8 +85,8 @@ static inline uint bilerp_rgb565(
 {
     float fx = u * (float)width - 0.5f;
     float fy = v * (float)height - 0.5f;
-    int x0 = (int)floor(fx);
-    int y0 = (int)floor(fy);
+    int x0 = floor_i32(fx);
+    int y0 = floor_i32(fy);
     float tx = fx - (float)x0;
     float ty = fy - (float)y0;
 
@@ -67,9 +125,9 @@ static inline uint bilerp_rgb565(
     float g = (g00 * omt_x + g10 * tx) * omt_y + (g01 * omt_x + g11 * tx) * ty;
     float b = (b00 * omt_x + b10 * tx) * omt_y + (b01 * omt_x + b11 * tx) * ty;
 
-    uint ru = clamp((uint)(r + 0.5f), 0u, 255u);
-    uint gu = clamp((uint)(g + 0.5f), 0u, 255u);
-    uint bu = clamp((uint)(b + 0.5f), 0u, 255u);
+    uint ru = clamp_u32_255((uint)(r + 0.5f));
+    uint gu = clamp_u32_255((uint)(g + 0.5f));
+    uint bu = clamp_u32_255((uint)(b + 0.5f));
     return 0xFF000000u | (bu << 16) | (gu << 8) | ru;
 }
 
@@ -125,8 +183,8 @@ __kernel void skybox_sample_rgb565(
     dy *= inv_len;
     dz *= inv_len;
 
-    float u = atan2(dx, dy) * (0.5f / 3.14159265358979323846f) + 0.5f;
-    float v = 0.5f - asin(clamp(dz, -1.0f, 1.0f)) * (1.0f / 3.14159265358979323846f);
+    float u = fast_atan2_f32(dx, dy) * (0.5f / 3.14159265358979323846f) + 0.5f;
+    float v = 0.5f - fast_asin_f32(dz) * (1.0f / 3.14159265358979323846f);
 
     uint sky_pitch_pixels = sky_pitch_bytes >> 1;
     uint pixel = bilerp_rgb565(skybox_rgb565, sky_pitch_pixels, sky_width, sky_height, u, v);

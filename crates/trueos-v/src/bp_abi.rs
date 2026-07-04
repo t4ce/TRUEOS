@@ -83,6 +83,13 @@ unsafe extern "C" {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32;
+    pub fn trueos_cabi_gfx_upload_skybox_rgb565(
+        skybox_id: u32,
+        width: u32,
+        height: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32;
 
     pub fn trueos_cabi_ui3_frame_create(
         x: i32,
@@ -113,6 +120,12 @@ unsafe extern "C" {
         tex_id: u32,
         data_ptr: *const u8,
         data_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_ui3_frame_render_skybox_rgb565(
+        frame_id: u32,
+        skybox_id: u32,
+        params_ptr: *const u8,
+        params_len: usize,
     ) -> i32;
 
     pub fn trueos_cabi_net_fetch_start(

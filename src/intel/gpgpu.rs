@@ -327,8 +327,8 @@ pub(crate) const CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     0xAC, 0xC4, 0xB9, 0x2E, 0x3C, 0x52, 0x69, 0x09, 0x4D, 0x28, 0x73, 0xBC, 0xA6, 0x36, 0x31, 0x93,
 ];
 pub(crate) const SKYBOX_SAMPLE_RGB565_ADLS_BIN_SHA256: [u8; 32] = [
-    0x68, 0xE3, 0xF3, 0x29, 0x3B, 0x82, 0xC0, 0x26, 0x0D, 0xB1, 0x99, 0xAC, 0x46, 0xBE, 0xDC, 0xE6,
-    0xD9, 0x23, 0x97, 0x70, 0xF1, 0xE0, 0x46, 0xE6, 0x3F, 0xFC, 0x41, 0x87, 0xE4, 0x4F, 0x3B, 0x6C,
+    0xC0, 0xBA, 0x26, 0xB3, 0x1C, 0x54, 0xED, 0x16, 0xC8, 0x32, 0x3E, 0x3D, 0xE6, 0x54, 0xAA, 0x90,
+    0x8A, 0xB4, 0xBC, 0xDC, 0xCF, 0xC8, 0xBB, 0xD5, 0xF1, 0x05, 0x2F, 0x1B, 0xF7, 0x75, 0x76, 0x38,
 ];
 
 const COPY_RECT_RGBA8_ADLS_GPU: u64 = 0x0D20_0000;
@@ -7946,7 +7946,14 @@ fn submit_fill_rect_span(dst: GpgpuRgba8Surface, params: FillRectRgba8Params) ->
     if params.width == 0 || params.width > 16 || params.height != 1 {
         return false;
     }
-    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let Some(_guard) = DIRECT_RCS_SUBMIT_LOCK.try_lock() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: skybox-sample-rgb565 direct submit busy seq={} fallback=cpu\n",
+            seq
+        );
+        return false;
+    };
     let Some(dev) = super::claimed_device() else {
         return false;
     };
@@ -8239,14 +8246,41 @@ pub(crate) fn skybox_sample_rgb565_to_rgba8(
     params.rect_width = params.rect_width.min(dst.width - params.rect_x);
     params.rect_height = params.rect_height.min(dst.height - params.rect_y);
 
+    let seq = PRESENT_RGBA8_TO_PRIMARY_XRGB_UI3_LOG_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+    let trace = seq <= 8 || seq % 120 == 0;
+    if trace {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: skybox-sample-rgb565 begin seq={} rect={}x{} dst={}x{} sky={}x{} sky_gpu=0x{:X} dst_gpu=0x{:X}\n",
+            seq,
+            params.rect_width,
+            params.rect_height,
+            dst.width,
+            dst.height,
+            skybox.width,
+            skybox.height,
+            skybox.gpu,
+            dst.gpu
+        );
+    }
+
     let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
     let Some(dev) = super::claimed_device() else {
+        if trace {
+            crate::log_info!(target: "gpgpu"; "intel/gpgpu: skybox-sample-rgb565 no claimed device seq={}\n", seq);
+        }
         return false;
     };
     let Some(upload) = upload_skybox_sample_rgb565_kernel() else {
+        if trace {
+            crate::log_info!(target: "gpgpu"; "intel/gpgpu: skybox-sample-rgb565 kernel upload unavailable seq={}\n", seq);
+        }
         return false;
     };
     let Some(state) = direct_rcs_state_once(dev) else {
+        if trace {
+            crate::log_info!(target: "gpgpu"; "intel/gpgpu: skybox-sample-rgb565 direct state unavailable seq={}\n", seq);
+        }
         return false;
     };
 
@@ -8269,21 +8303,22 @@ pub(crate) fn skybox_sample_rgb565_to_rgba8(
         );
     let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
     let observed = if submitted {
-        direct_rcs_poll_result_slot(
+        direct_rcs_poll_result_slot_timeout_ms(
             state,
             SKYBOX_SAMPLE_POST_MARKER_SLOT,
             SKYBOX_SAMPLE_POST_MARKER,
+            50,
         )
     } else {
         0
     };
     let ok = observed == SKYBOX_SAMPLE_POST_MARKER;
     if ok {
-        let seq = PRESENT_RGBA8_TO_PRIMARY_XRGB_UI3_LOG_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
-        if seq <= 8 || seq % 120 == 0 {
+        if trace {
             crate::log_info!(
                 target: "gpgpu";
-                "intel/gpgpu: skybox-sample-rgb565 submitted=1 size={}x{} dst={}x{} marker=0x{:X}\n",
+                "intel/gpgpu: skybox-sample-rgb565 submitted=1 seq={} size={}x{} dst={}x{} marker=0x{:X}\n",
+                seq,
                 params.rect_width,
                 params.rect_height,
                 dst.width,
@@ -8291,6 +8326,27 @@ pub(crate) fn skybox_sample_rgb565_to_rgba8(
                 observed
             );
         }
+    } else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: skybox-sample-rgb565 failed seq={} forcewake={} mapped={} ppgtt={} kernel={} sky={} dst={} batch={} submitted={} observed=0x{:X} want=0x{:X} upload_gpu=0x{:X} sky_gpu=0x{:X} dst_gpu=0x{:X} sky_bytes=0x{:X} dst_bytes=0x{:X}\n",
+            seq,
+            forcewake_ok as u8,
+            mapped_ok as u8,
+            ppgtt_ok as u8,
+            kernel_ppgtt_ok as u8,
+            sky_ppgtt_ok as u8,
+            dst_ppgtt_ok as u8,
+            batch_ok as u8,
+            submitted as u8,
+            observed,
+            SKYBOX_SAMPLE_POST_MARKER,
+            upload.gpu,
+            skybox.gpu,
+            dst.gpu,
+            skybox.bytes,
+            dst.bytes
+        );
     }
     ok
 }
@@ -14143,6 +14199,27 @@ fn direct_rcs_poll_result_slot(state: DirectRcsState, slot: usize, expected: u32
     for _ in 0..DIRECT_RCS_SMOKE_POLL_ITERS {
         observed = direct_rcs_read_result_slot(state, slot);
         if observed == expected {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    observed
+}
+
+fn direct_rcs_poll_result_slot_timeout_ms(
+    state: DirectRcsState,
+    slot: usize,
+    expected: u32,
+    timeout_ms: u64,
+) -> u32 {
+    let deadline = direct_rcs_now_tick().saturating_add(direct_rcs_ticks_from_ms(timeout_ms));
+    let mut observed = 0;
+    for _ in 0..DIRECT_RCS_SMOKE_POLL_ITERS {
+        observed = direct_rcs_read_result_slot(state, slot);
+        if observed == expected {
+            break;
+        }
+        if direct_rcs_now_tick() >= deadline {
             break;
         }
         core::hint::spin_loop();

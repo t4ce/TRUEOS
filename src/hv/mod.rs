@@ -1026,21 +1026,22 @@ fn classify_blueprint_memory(
         return BlueprintMemoryClass::NetworkClient;
     }
 
-    let tokio_signal = archive_has(archive, "tokio")
-        || import_name_has(imports, "trueos_tokio_")
-        || import_name_has(imports, "tokio_")
-        || import_name_has(imports, "sleep_ms");
-    if tokio_signal {
-        return BlueprintMemoryClass::TokioRuntime;
-    }
-
     let heavy_graphics_signal = archive_has(archive, "mandelbrot")
+        || archive_has(archive, "skybox")
         || archive_has(archive, "particle")
         || archive_has(archive, "virgl")
         || stats.alloc_bytes > 4 * MIB
         || raw_payload_len > 8 * MIB;
     if heavy_graphics_signal {
         return BlueprintMemoryClass::HeavyGraphics;
+    }
+
+    let tokio_signal = archive_has(archive, "tokio")
+        || import_name_has(imports, "trueos_tokio_")
+        || import_name_has(imports, "tokio_")
+        || import_name_has(imports, "sleep_ms");
+    if tokio_signal {
+        return BlueprintMemoryClass::TokioRuntime;
     }
 
     BlueprintMemoryClass::Unknown
@@ -1139,11 +1140,8 @@ fn clear_blueprint_pending_launch(vm_id: u8) {
     }
 }
 
-fn log_blueprint_launch_line(target: Option<&MatrixTarget>, args: core::fmt::Arguments<'_>) {
+fn log_blueprint_launch_line(_target: Option<&MatrixTarget>, args: core::fmt::Arguments<'_>) {
     let line = alloc::format!("{}", args);
-    if let Some(target) = target {
-        crate::shell2::print_matrix_target_line(target, line.as_str());
-    }
     hvlogf(format_args!("{}", line.as_str()));
 }
 
@@ -1180,6 +1178,7 @@ fn prepare_blueprint_launch_on_lane(
     if !crate::allocators::prepare_hv_guest_heap_for_vm(
         vm_id,
         profile.heap_recommended_mib.saturating_mul(MIB),
+        profile.heap_lower_mib.saturating_mul(MIB),
     ) {
         return Err(AllocString::from("app-vm heap profile allocation failed"));
     }

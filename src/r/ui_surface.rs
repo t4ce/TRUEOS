@@ -282,12 +282,12 @@ fn present_primary(
     reason: &'static str,
 ) -> Result<UiPresentPath> {
     if surface.desc.format == UiSurfaceFormat::Rgba8888 {
-        if present_primary_rgba_kernel_blit(surface, src, dst)? {
-            return Ok(UiPresentPath::KernelBlit);
-        }
-
         if present_primary_backing_copy(surface, src, dst, reason) {
             return Ok(UiPresentPath::CpuCopy);
+        }
+
+        if let Some(path) = present_primary_rgba_kernel_blit(surface, src, dst)? {
+            return Ok(path);
         }
 
         return Err(Error::Unsupported);
@@ -297,8 +297,8 @@ fn present_primary(
         return Ok(UiPresentPath::CpuCopy);
     }
 
-    if present_primary_rgba_kernel_blit(surface, src, dst)? {
-        return Ok(UiPresentPath::KernelBlit);
+    if let Some(path) = present_primary_rgba_kernel_blit(surface, src, dst)? {
+        return Ok(path);
     }
 
     Err(Error::Unsupported)
@@ -327,9 +327,9 @@ fn present_primary_rgba_kernel_blit(
     surface: TrustedUiSurface,
     src: UiRect,
     dst: UiRect,
-) -> Result<bool> {
+) -> Result<Option<UiPresentPath>> {
     if surface.desc.format != UiSurfaceFormat::Rgba8888 {
-        return Ok(false);
+        return Ok(None);
     }
 
     let src_surface = crate::intel::gpgpu::GpgpuRgba8Surface::new(
@@ -351,13 +351,22 @@ fn present_primary_rgba_kernel_blit(
         i32::try_from(dst.x).map_err(|_| Error::Invalid)?,
         i32::try_from(dst.y).map_err(|_| Error::Invalid)?,
     );
+    if crate::intel::present_rgba8_surface_to_primary_swap_xrgb(
+        src_surface,
+        src_rect,
+        dst_xy,
+        "ui3-frame-primary-swap",
+    ) {
+        return Ok(Some(UiPresentPath::PrimarySwapKernelBlit));
+    }
     Ok(crate::intel::gpgpu::present_rgba8_rect_to_primary_xrgb_stats_with_flip(
         src_surface,
         src_rect,
         dst_xy,
         false,
     )
-    .is_some())
+    .is_some()
+    .then_some(UiPresentPath::KernelBlit))
 }
 
 fn lookup(handle: UiSurfaceHandle) -> Option<TrustedUiSurface> {

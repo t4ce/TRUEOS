@@ -270,6 +270,15 @@ pub(crate) fn present_ui_surface_to_primary_backing(
     self::display::present_ui_surface_to_primary_backing(surface, virt, byte_len, src, dst, reason)
 }
 
+pub(crate) fn present_rgba8_surface_to_primary_swap_xrgb(
+    src: self::gpgpu::GpgpuRgba8Surface,
+    src_rect: self::gpgpu::GpgpuRect,
+    dst_xy: self::gpgpu::GpgpuPoint,
+    reason: &str,
+) -> bool {
+    self::display::present_rgba8_surface_to_primary_swap_xrgb(src, src_rect, dst_xy, reason)
+}
+
 pub(crate) fn hide_decoded_nv12_overlay_plane(reason: &str) -> bool {
     self::display::hide_decoded_nv12_overlay_plane(reason)
 }

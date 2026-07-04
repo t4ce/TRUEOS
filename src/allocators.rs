@@ -12,13 +12,15 @@ const HV_GUEST_HEAP_ALIGN: usize = 2 * 1024 * 1024;
 pub const HV_GUEST_HEAP_MIN_ARENA_SIZE: usize = 16 * 1024 * 1024;
 pub const HV_GUEST_HEAP_MAX_ARENA_SIZE: usize = 4 * 1024 * 1024 * 1024;
 const HV_GUEST_HEAP_LARGE_FALLBACK_ARENA_SIZE: usize = 3 * 1024 * 1024 * 1024;
-const HV_GUEST_HEAP_CANDIDATES: [usize; 7] = [
+const HV_GUEST_HEAP_CANDIDATES: [usize; 9] = [
     HV_GUEST_HEAP_MAX_ARENA_SIZE,
     HV_GUEST_HEAP_LARGE_FALLBACK_ARENA_SIZE,
     2 * 1024 * 1024 * 1024,
     1024 * 1024 * 1024,
     512 * 1024 * 1024,
+    384 * 1024 * 1024,
     256 * 1024 * 1024,
+    192 * 1024 * 1024,
     128 * 1024 * 1024,
 ];
 
@@ -748,13 +750,18 @@ fn round_hv_guest_heap_request(size: usize) -> usize {
     clamped.next_multiple_of(HV_GUEST_HEAP_ALIGN)
 }
 
-pub fn prepare_hv_guest_heap_for_vm(vm_id: u8, requested_size: usize) -> bool {
+pub fn prepare_hv_guest_heap_for_vm(
+    vm_id: u8,
+    requested_size: usize,
+    minimum_acceptable_size: usize,
+) -> bool {
     if (vm_id as usize) >= crate::allcaps::hv::VM_ID_LIMIT {
         return false;
     }
 
     let requested_size = round_hv_guest_heap_request(requested_size);
-    let minimum_acceptable_size = requested_size;
+    let minimum_acceptable_size =
+        round_hv_guest_heap_request(minimum_acceptable_size).min(requested_size);
     let ready_bit = 1u64 << vm_id;
     let mut guard = HV_GUEST_ALLOCATORS[vm_id as usize].lock();
     if guard.initialized {

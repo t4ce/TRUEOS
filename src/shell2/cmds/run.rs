@@ -8,9 +8,9 @@ use spin::Mutex;
 
 use super::super::{
     MatrixTarget, ShellBackend2, UART1_COM1_BACKEND, line_width_for_backend,
-    matrix_target_for_backend, matrix_target_interrupted, print_matrix_target_line,
-    print_shell_line, release_matrix_target_vm_reservation,
-    reserve_matrix_target_for_vm_slot_selected, set_matrix_target_active,
+    matrix_target_for_backend, matrix_target_interrupted, print_shell_line,
+    release_matrix_target_vm_reservation, reserve_matrix_target_for_vm_slot_selected,
+    set_matrix_target_active,
 };
 use super::tlb_helper::TlbTable;
 
@@ -301,8 +301,7 @@ fn enqueue_blueprint_request(
     });
 }
 
-fn log_run_target_line(target: &MatrixTarget, line: &str) {
-    print_matrix_target_line(target, line);
+fn log_run_target_line(_target: &MatrixTarget, line: &str) {
     crate::hv::hvlogf(format_args!("{}", line));
 }
 
@@ -313,7 +312,6 @@ fn dequeue_request() -> Option<AppVmLaunchRequest> {
 async fn execute_request(spawner: &Spawner, request: AppVmLaunchRequest) {
     let target = request.target.clone();
     let log = |line: &str| {
-        print_matrix_target_line(&target, line);
         crate::hv::hvlogf(format_args!("{}", line));
     };
 
@@ -414,21 +412,22 @@ fn classify_blueprint_memory(
         return BlueprintMemoryClass::NetworkClient;
     }
 
-    let tokio_signal = archive_has(archive, "tokio")
-        || import_name_has(imports, "trueos_tokio_")
-        || import_name_has(imports, "tokio_")
-        || import_name_has(imports, "sleep_ms");
-    if tokio_signal {
-        return BlueprintMemoryClass::TokioRuntime;
-    }
-
     let heavy_graphics_signal = archive_has(archive, "mandelbrot")
+        || archive_has(archive, "skybox")
         || archive_has(archive, "particle")
         || archive_has(archive, "virgl")
         || stats.alloc_bytes > 4 * MIB
         || raw_payload_len > 8 * MIB;
     if heavy_graphics_signal {
         return BlueprintMemoryClass::HeavyGraphics;
+    }
+
+    let tokio_signal = archive_has(archive, "tokio")
+        || import_name_has(imports, "trueos_tokio_")
+        || import_name_has(imports, "tokio_")
+        || import_name_has(imports, "sleep_ms");
+    if tokio_signal {
+        return BlueprintMemoryClass::TokioRuntime;
     }
 
     BlueprintMemoryClass::Unknown

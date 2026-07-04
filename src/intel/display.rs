@@ -91,6 +91,9 @@ const OVERLAY_COMPOSITION_PROOF_MARKER_Y: u32 = 48;
 const OVERLAY_SWAP_BUFFER_COUNT: usize = 2;
 const OVERLAY_SWAP_GPU_BASE: u64 = 0x0700_0000;
 const OVERLAY_SWAP_GPU_STRIDE: u64 = 0x0200_0000;
+const PRIMARY_SWAP_BUFFER_COUNT: usize = 2;
+const PRIMARY_SWAP_GPU_BASE: u64 = 0x3000_0000;
+const PRIMARY_SWAP_GPU_STRIDE: u64 = 0x0200_0000;
 const VIDEO_NV12_HIDE_PARK_BEFORE_DISABLE: bool = true;
 const VIDEO_NV12_HIDE_PARK_SIZE: u32 = 64;
 
@@ -103,6 +106,8 @@ static UI3_BASE_SURFACE: Mutex<Option<DisplayRgba8Surface>> = Mutex::new(None);
 static UI3_FRAME_SURFACE: Mutex<Option<DisplayRgba8Surface>> = Mutex::new(None);
 static OVERLAY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
 static OVERLAY_SURFACE: Mutex<OverlaySurfacePool> = Mutex::new(OverlaySurfacePool::new());
+static PRIMARY_SWAP_SURFACE: Mutex<PrimarySwapSurfacePool> =
+    Mutex::new(PrimarySwapSurfacePool::new());
 static VIDEO_NV12_PLANE_ALPHA: AtomicU32 = AtomicU32::new(0xFF);
 static HW_LOGO_PENDING_IDS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 static HW_LOGO_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
@@ -311,6 +316,31 @@ struct OverlaySurfacePool {
     surfaces: [Option<OverlaySurface>; OVERLAY_SWAP_BUFFER_COUNT],
 }
 
+#[derive(Copy, Clone)]
+struct PrimarySwapSurface {
+    width: u32,
+    height: u32,
+    pitch_bytes: u32,
+    byte_len: usize,
+    phys: u64,
+    virt: *mut u8,
+    gpu: u64,
+    pipe: PipeInfo,
+    buffer_index: usize,
+}
+
+unsafe impl Send for PrimarySwapSurface {}
+unsafe impl Sync for PrimarySwapSurface {}
+
+#[derive(Copy, Clone)]
+struct PrimarySwapSurfacePool {
+    width: u32,
+    height: u32,
+    pipe_slot: usize,
+    front_index: Option<usize>,
+    surfaces: [Option<PrimarySwapSurface>; PRIMARY_SWAP_BUFFER_COUNT],
+}
+
 #[derive(Copy, Clone, Debug)]
 pub(super) struct DecodedNv12PlaneAlphaProgram {
     alpha: u8,
@@ -332,6 +362,22 @@ impl OverlaySurfacePool {
             pipe_slot: usize::MAX,
             front_index: None,
             surfaces: [None; OVERLAY_SWAP_BUFFER_COUNT],
+        }
+    }
+
+    fn matches(self, width: u32, height: u32, pipe: PipeInfo) -> bool {
+        self.width == width && self.height == height && self.pipe_slot == pipe.slot
+    }
+}
+
+impl PrimarySwapSurfacePool {
+    const fn new() -> Self {
+        Self {
+            width: 0,
+            height: 0,
+            pipe_slot: usize::MAX,
+            front_index: None,
+            surfaces: [None; PRIMARY_SWAP_BUFFER_COUNT],
         }
     }
 
@@ -2827,6 +2873,123 @@ pub(crate) fn present_ui3_canvas_rgba(
     true
 }
 
+pub(crate) fn present_rgba8_surface_to_primary_swap_xrgb(
+    src: crate::intel::gpgpu::GpgpuRgba8Surface,
+    src_rect: crate::intel::gpgpu::GpgpuRect,
+    dst_xy: crate::intel::gpgpu::GpgpuPoint,
+    reason: &str,
+) -> bool {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return false;
+    };
+    let (width, height) = active_scanout_dimensions()
+        .or_else(|| {
+            PRIMARY_SURFACE
+                .lock()
+                .as_ref()
+                .map(|primary| (primary.width, primary.height))
+        })
+        .unwrap_or((0, 0));
+    if width == 0 || height == 0 || src_rect.is_empty() || dst_xy.x < 0 || dst_xy.y < 0 {
+        return false;
+    }
+
+    let Some(surface) = ensure_primary_swap_surface(dev, width, height) else {
+        return false;
+    };
+    let dst_x = dst_xy.x as u32;
+    let dst_y = dst_xy.y as u32;
+    if dst_x >= surface.width || dst_y >= surface.height {
+        return false;
+    }
+    let copy_w = src_rect.width.min(surface.width.saturating_sub(dst_x));
+    let copy_h = src_rect.height.min(surface.height.saturating_sub(dst_y));
+    if copy_w == 0 || copy_h == 0 {
+        return false;
+    }
+    let covers_surface =
+        dst_x == 0 && dst_y == 0 && copy_w >= surface.width && copy_h >= surface.height;
+    if !covers_surface {
+        let _ = copy_primary_swap_front_into_back(surface);
+    } else {
+        fill_surface_color(
+            surface.virt,
+            surface.pitch_bytes as usize,
+            surface.width,
+            surface.height,
+            0,
+        );
+    }
+
+    let Some(dst) = crate::intel::gpgpu::GpgpuRgba8Surface::new(
+        surface.phys,
+        surface.gpu,
+        surface.byte_len,
+        surface.width,
+        surface.height,
+        surface.pitch_bytes,
+    ) else {
+        return false;
+    };
+    let clipped_src_rect =
+        crate::intel::gpgpu::GpgpuRect::new(src_rect.x, src_rect.y, copy_w, copy_h);
+    let clipped_dst_xy = crate::intel::gpgpu::GpgpuPoint::new(dst_x as i32, dst_y as i32);
+    let stats = crate::intel::gpgpu::present_rgba8_to_primary_xrgb_rect_stats(
+        src,
+        clipped_src_rect,
+        dst,
+        clipped_dst_xy,
+        false,
+    );
+    if stats.spans == 0 || stats.submits == 0 {
+        return false;
+    }
+
+    crate::intel::dma_flush(surface.virt, surface.byte_len);
+    if !set_primary_plane_source(
+        PrimaryPlaneSource {
+            phys: surface.phys,
+            gpu: surface.gpu,
+            byte_len: surface.byte_len,
+            width: surface.width,
+            height: surface.height,
+            pitch_bytes: surface.pitch_bytes,
+            format: PrimaryPlaneSourceFormat::Xrgb8888,
+            src_x: 0,
+            src_y: 0,
+            dst_x: 0,
+            dst_y: 0,
+            dst_w: surface.width,
+            dst_h: surface.height,
+        },
+        reason,
+    ) {
+        return false;
+    }
+    mark_primary_swap_surface_front(surface);
+
+    let seq = PRIMARY_PRESENT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    if seq <= 8 || seq.is_multiple_of(60) {
+        crate::log!(
+            "intel/display: primary-swap-gpgpu-present seq={} reason={} pipe={} buffer={} rect={}x{}@{},{} size={}x{} pitch=0x{:X} gpu=0x{:X}\n",
+            seq,
+            reason,
+            surface.pipe.name,
+            surface.buffer_index,
+            copy_w,
+            copy_h,
+            dst_x,
+            dst_y,
+            surface.width,
+            surface.height,
+            surface.pitch_bytes,
+            surface.gpu,
+        );
+    }
+
+    true
+}
+
 fn clear_overlay_except_rect(surface: OverlaySurface, rect: LiveOverlayRect) {
     let x0 = rect.x.min(surface.width);
     let y0 = rect.y.min(surface.height);
@@ -4512,14 +4675,34 @@ fn overlay_surface_gpu_for_index(index: usize) -> Option<u64> {
     OVERLAY_SWAP_GPU_BASE.checked_add((index as u64).checked_mul(OVERLAY_SWAP_GPU_STRIDE)?)
 }
 
+fn primary_swap_surface_gpu_for_index(index: usize) -> Option<u64> {
+    if index >= PRIMARY_SWAP_BUFFER_COUNT {
+        return None;
+    }
+    PRIMARY_SWAP_GPU_BASE.checked_add((index as u64).checked_mul(PRIMARY_SWAP_GPU_STRIDE)?)
+}
+
 fn overlay_back_buffer_index(pool: OverlaySurfacePool) -> usize {
     pool.front_index
         .map(|front| (front + 1) % OVERLAY_SWAP_BUFFER_COUNT)
         .unwrap_or(0)
 }
 
+fn primary_swap_back_buffer_index(pool: PrimarySwapSurfacePool) -> usize {
+    pool.front_index
+        .map(|front| (front + 1) % PRIMARY_SWAP_BUFFER_COUNT)
+        .unwrap_or(0)
+}
+
 fn mark_overlay_surface_front(surface: OverlaySurface) {
     let mut pool = OVERLAY_SURFACE.lock();
+    if pool.matches(surface.width, surface.height, surface.pipe) {
+        pool.front_index = Some(surface.buffer_index);
+    }
+}
+
+fn mark_primary_swap_surface_front(surface: PrimarySwapSurface) {
+    let mut pool = PRIMARY_SWAP_SURFACE.lock();
     if pool.matches(surface.width, surface.height, surface.pipe) {
         pool.front_index = Some(surface.buffer_index);
     }
@@ -4541,6 +4724,36 @@ fn overlay_surface_for_gpu(width: u32, height: u32, gpu: u64) -> Option<OverlayS
 fn copy_overlay_front_into_back(back: OverlaySurface) -> bool {
     let front = {
         let pool = OVERLAY_SURFACE.lock();
+        if !pool.matches(back.width, back.height, back.pipe) {
+            return false;
+        }
+        let Some(front_index) = pool.front_index else {
+            return false;
+        };
+        if front_index == back.buffer_index {
+            return false;
+        }
+        let Some(front) = pool.surfaces[front_index] else {
+            return false;
+        };
+        front
+    };
+    if front.virt.is_null()
+        || back.virt.is_null()
+        || front.byte_len != back.byte_len
+        || front.pitch_bytes != back.pitch_bytes
+    {
+        return false;
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(front.virt, back.virt, back.byte_len);
+    }
+    true
+}
+
+fn copy_primary_swap_front_into_back(back: PrimarySwapSurface) -> bool {
+    let front = {
+        let pool = PRIMARY_SWAP_SURFACE.lock();
         if !pool.matches(back.width, back.height, back.pipe) {
             return false;
         }
@@ -4694,6 +4907,84 @@ fn ensure_overlay_surface(
         "intel/display: overlay-surface pipe={} slot={} buffer={} size={}x{} pitch=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X}\n",
         active_pipe.name,
         OVERLAY_PLANE_SLOT,
+        buffer_index,
+        width,
+        height,
+        pitch_bytes,
+        byte_len,
+        gpu,
+        phys
+    );
+    Some(surface)
+}
+
+fn ensure_primary_swap_surface(
+    dev: crate::intel::Dev,
+    width: u32,
+    height: u32,
+) -> Option<PrimarySwapSurface> {
+    let active_pipe = active_pipe(dev)?;
+    let buffer_index = {
+        let pool = PRIMARY_SWAP_SURFACE.lock();
+        if pool.matches(width, height, active_pipe) {
+            let index = primary_swap_back_buffer_index(*pool);
+            if let Some(surface) = pool.surfaces[index] {
+                return Some(surface);
+            }
+            index
+        } else {
+            0
+        }
+    };
+    let gpu = primary_swap_surface_gpu_for_index(buffer_index)?;
+
+    let pitch_bytes = aligned_pitch_bytes(width, PRIMARY_BYTES_PER_PIXEL)?;
+    let byte_len = usize::try_from(u64::from(pitch_bytes) * u64::from(height)).ok()?;
+    let (phys, virt) = crate::dma::alloc(byte_len, crate::intel::WARM_ALIGN)?;
+    fill_surface_color(virt, pitch_bytes as usize, width, height, 0);
+    crate::intel::dma_flush(virt, byte_len);
+
+    if !crate::intel::map_display_scanout_ggtt(dev, phys, byte_len, gpu) {
+        crate::log!(
+            "intel/display: primary-swap-surface ggtt map failed pipe={} buffer={} size={}x{} bytes=0x{:X} gpu=0x{:X}\n",
+            active_pipe.name,
+            buffer_index,
+            width,
+            height,
+            byte_len,
+            gpu
+        );
+        return None;
+    }
+    crate::intel::ggtt_invalidate(dev);
+
+    let surface = PrimarySwapSurface {
+        width,
+        height,
+        pitch_bytes,
+        byte_len,
+        phys,
+        virt,
+        gpu,
+        pipe: active_pipe,
+        buffer_index,
+    };
+    {
+        let mut pool = PRIMARY_SWAP_SURFACE.lock();
+        if !pool.matches(width, height, active_pipe) {
+            *pool = PrimarySwapSurfacePool {
+                width,
+                height,
+                pipe_slot: active_pipe.slot,
+                front_index: None,
+                surfaces: [None; PRIMARY_SWAP_BUFFER_COUNT],
+            };
+        }
+        pool.surfaces[buffer_index] = Some(surface);
+    }
+    crate::log!(
+        "intel/display: primary-swap-surface pipe={} buffer={} size={}x{} pitch=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X}\n",
+        active_pipe.name,
         buffer_index,
         width,
         height,
