@@ -22,6 +22,16 @@ pub(crate) struct Ui3GpuImage {
 unsafe impl Send for Ui3GpuImage {}
 unsafe impl Sync for Ui3GpuImage {}
 
+#[derive(Clone, Copy)]
+pub(crate) struct Ui3GpuSkyboxRgb565 {
+    pub surface: crate::intel::gpgpu::GpgpuRgb565Surface,
+    pub _virt: *mut u8,
+    pub _bytes: usize,
+}
+
+unsafe impl Send for Ui3GpuSkyboxRgb565 {}
+unsafe impl Sync for Ui3GpuSkyboxRgb565 {}
+
 #[derive(Clone)]
 pub(crate) struct Ui3Image {
     pub width: u32,
@@ -31,8 +41,11 @@ pub(crate) struct Ui3Image {
 }
 
 static UI3_IMAGES: Mutex<BTreeMap<u32, Ui3Image>> = Mutex::new(BTreeMap::new());
+static UI3_SKYBOX_RGB565: Mutex<BTreeMap<u32, Ui3GpuSkyboxRgb565>> = Mutex::new(BTreeMap::new());
 static UI3_IMAGE_STATUS: Mutex<BTreeMap<u32, i32>> = Mutex::new(BTreeMap::new());
 static UI3_IMAGE_UPLOADS: Mutex<BTreeMap<(u8, u32), Ui3ImageUpload>> = Mutex::new(BTreeMap::new());
+static UI3_SKYBOX_RGB565_UPLOADS: Mutex<BTreeMap<(u8, u32), Ui3SkyboxRgb565Upload>> =
+    Mutex::new(BTreeMap::new());
 static UI3_UPLOAD_FINISH_COUNT: AtomicU64 = AtomicU64::new(0);
 static UI3_UPLOAD_BYTES_TOTAL: AtomicU64 = AtomicU64::new(0);
 static UI3_TEXTURE_GPU_NEXT: AtomicU64 = AtomicU64::new(0);
@@ -41,6 +54,13 @@ struct Ui3ImageUpload {
     width: u32,
     height: u32,
     rgba: Vec<u8>,
+    written: usize,
+}
+
+struct Ui3SkyboxRgb565Upload {
+    width: u32,
+    height: u32,
+    bytes: Vec<u8>,
     written: usize,
 }
 
@@ -54,8 +74,19 @@ fn expected_rgba_len(width: u32, height: u32) -> Option<usize> {
         .checked_mul(4)
 }
 
+fn expected_rgb565_len(width: u32, height: u32) -> Option<usize> {
+    (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(2)
+}
+
 fn aligned_texture_pitch(width: u32) -> Option<u32> {
     let row_bytes = (width as usize).checked_mul(4)?;
+    crate::intel::align_up(row_bytes, 64).and_then(|pitch| u32::try_from(pitch).ok())
+}
+
+fn aligned_rgb565_pitch(width: u32) -> Option<u32> {
+    let row_bytes = (width as usize).checked_mul(2)?;
     crate::intel::align_up(row_bytes, 64).and_then(|pitch| u32::try_from(pitch).ok())
 }
 
@@ -95,6 +126,43 @@ fn create_gpu_image(width: u32, height: u32, rgba: &[u8]) -> Option<Ui3GpuImage>
     crate::intel::ggtt_invalidate(dev);
     Some(Ui3GpuImage {
         surface: crate::intel::gpgpu::GpgpuRgba8Surface::new(
+            phys, gpu, bytes, width, height, pitch,
+        )?,
+        _virt: virt,
+        _bytes: bytes,
+    })
+}
+
+fn create_gpu_skybox_rgb565(width: u32, height: u32, rgb565: &[u8]) -> Option<Ui3GpuSkyboxRgb565> {
+    let pitch = aligned_rgb565_pitch(width)?;
+    let row_bytes = (width as usize).checked_mul(2)?;
+    let raw_bytes = (pitch as usize).checked_mul(height as usize)?;
+    let bytes = crate::intel::align_up(raw_bytes, crate::intel::WARM_ALIGN)?;
+    let gpu = reserve_texture_gpu(bytes)?;
+    let Some(dev) = crate::intel::claimed_device() else {
+        return None;
+    };
+    let (phys, virt) = crate::dma::alloc(bytes, crate::intel::WARM_ALIGN)?;
+    unsafe {
+        core::ptr::write_bytes(virt, 0, bytes);
+        for y in 0..height as usize {
+            let src_off = y.checked_mul(row_bytes)?;
+            let dst_off = y.checked_mul(pitch as usize)?;
+            core::ptr::copy_nonoverlapping(
+                rgb565.as_ptr().add(src_off),
+                virt.add(dst_off),
+                row_bytes,
+            );
+        }
+    }
+    crate::intel::dma_flush(virt, bytes);
+    if !crate::intel::map_ggtt(dev, phys, bytes, gpu) {
+        crate::dma::dealloc(virt, bytes);
+        return None;
+    }
+    crate::intel::ggtt_invalidate(dev);
+    Some(Ui3GpuSkyboxRgb565 {
+        surface: crate::intel::gpgpu::GpgpuRgb565Surface::new(
             phys, gpu, bytes, width, height, pitch,
         )?,
         _virt: virt,
@@ -181,6 +249,56 @@ fn upload_rgba_image_to_host(
         offset = end;
     }
     vmcall_texture_rc(trueos_vm::vmcall::OP_BP_UI3_TEXTURE_UPLOAD_FINISH, tex_id as u64, 0, &[])
+}
+
+fn upload_skybox_rgb565_to_host(
+    skybox_id: u32,
+    width: u32,
+    height: u32,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> i32 {
+    if data_ptr.is_null() {
+        return -2;
+    }
+    let Some(expected) = expected_rgb565_len(width, height) else {
+        return -7;
+    };
+    if data_len < expected {
+        return -3;
+    }
+    let total_len = (expected as u64).to_le_bytes();
+    let rc = vmcall_texture_rc(
+        trueos_vm::vmcall::OP_BP_UI3_SKYBOX_RGB565_UPLOAD_BEGIN,
+        skybox_id as u64,
+        ((width as u64) << 32) | (height as u64),
+        &total_len,
+    );
+    if rc != 0 {
+        return rc;
+    }
+
+    let src = unsafe { core::slice::from_raw_parts(data_ptr, expected) };
+    let mut offset = 0usize;
+    while offset < expected {
+        let end = core::cmp::min(offset.saturating_add(trueos_vm::vmcall::PAYLOAD_CAP), expected);
+        let rc = vmcall_texture_rc(
+            trueos_vm::vmcall::OP_BP_UI3_SKYBOX_RGB565_UPLOAD_CHUNK,
+            skybox_id as u64,
+            offset as u64,
+            &src[offset..end],
+        );
+        if rc != 0 {
+            return rc;
+        }
+        offset = end;
+    }
+    vmcall_texture_rc(
+        trueos_vm::vmcall::OP_BP_UI3_SKYBOX_RGB565_UPLOAD_FINISH,
+        skybox_id as u64,
+        0,
+        &[],
+    )
 }
 
 #[cfg(feature = "trueos_rdp")]
@@ -277,6 +395,108 @@ pub(crate) fn image_gpgpu_surface(tex_id: u32) -> Option<crate::intel::gpgpu::Gp
         .lock()
         .get(&tex_id)
         .and_then(|image| image.gpu.map(|gpu| gpu.surface))
+}
+
+pub(crate) fn skybox_rgb565_surface(
+    skybox_id: u32,
+) -> Option<crate::intel::gpgpu::GpgpuRgb565Surface> {
+    UI3_SKYBOX_RGB565
+        .lock()
+        .get(&skybox_id)
+        .map(|skybox| skybox.surface)
+}
+
+pub(crate) fn store_skybox_rgb565(skybox_id: u32, width: u32, height: u32, bytes: Vec<u8>) -> i32 {
+    if !valid_tex_id(skybox_id) || width == 0 || height == 0 {
+        return -1;
+    }
+    let Some(expected) = expected_rgb565_len(width, height) else {
+        return -7;
+    };
+    if bytes.len() < expected {
+        return -3;
+    }
+    let Some(gpu) = create_gpu_skybox_rgb565(width, height, &bytes[..expected]) else {
+        return -8;
+    };
+    UI3_SKYBOX_RGB565.lock().insert(skybox_id, gpu);
+    0
+}
+
+pub(crate) fn begin_skybox_rgb565_upload(
+    vm_id: u8,
+    skybox_id: u32,
+    width: u32,
+    height: u32,
+    total_len: usize,
+) -> i32 {
+    if !valid_tex_id(skybox_id) || width == 0 || height == 0 {
+        return -1;
+    }
+    let Some(expected) = expected_rgb565_len(width, height) else {
+        return -7;
+    };
+    if total_len < expected {
+        return -3;
+    }
+    let mut bytes = Vec::new();
+    bytes.resize(expected, 0);
+    UI3_SKYBOX_RGB565_UPLOADS.lock().insert(
+        (vm_id, skybox_id),
+        Ui3SkyboxRgb565Upload {
+            width,
+            height,
+            bytes,
+            written: 0,
+        },
+    );
+    0
+}
+
+pub(crate) fn write_skybox_rgb565_upload_chunk(
+    vm_id: u8,
+    skybox_id: u32,
+    offset: usize,
+    bytes: &[u8],
+) -> i32 {
+    let mut uploads = UI3_SKYBOX_RGB565_UPLOADS.lock();
+    let Some(upload) = uploads.get_mut(&(vm_id, skybox_id)) else {
+        return -1;
+    };
+    let Some(end) = offset.checked_add(bytes.len()) else {
+        return -7;
+    };
+    if end > upload.bytes.len() {
+        return -3;
+    }
+    upload.bytes[offset..end].copy_from_slice(bytes);
+    upload.written = upload.written.max(end);
+    0
+}
+
+pub(crate) fn finish_skybox_rgb565_upload(vm_id: u8, skybox_id: u32) -> i32 {
+    let upload = UI3_SKYBOX_RGB565_UPLOADS.lock().remove(&(vm_id, skybox_id));
+    let Some(upload) = upload else {
+        return -1;
+    };
+    if upload.written < upload.bytes.len() {
+        return -3;
+    }
+    let byte_len = upload.bytes.len();
+    let width = upload.width;
+    let height = upload.height;
+    let rc = store_skybox_rgb565(skybox_id, width, height, upload.bytes);
+    if rc == 0 {
+        crate::log!(
+            "ui3/img: skybox-rgb565 upload vm={} id={} size={}x{} bytes={}\n",
+            vm_id,
+            skybox_id,
+            width,
+            height,
+            byte_len
+        );
+    }
+    rc
 }
 
 pub(crate) fn begin_rgba_upload(
@@ -406,6 +626,30 @@ pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_rgba_image(
     set_status(tex_id, UI3_IMG_STATUS_PENDING);
     let rgba = unsafe { core::slice::from_raw_parts(data_ptr, expected) }.to_vec();
     store_rgba_image(tex_id, width, height, rgba)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_gfx_upload_skybox_rgb565(
+    skybox_id: u32,
+    width: u32,
+    height: u32,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> i32 {
+    if running_in_hull_guest() {
+        return upload_skybox_rgb565_to_host(skybox_id, width, height, data_ptr, data_len);
+    }
+    if data_ptr.is_null() {
+        return -2;
+    }
+    let Some(expected) = expected_rgb565_len(width, height) else {
+        return -7;
+    };
+    if data_len < expected {
+        return -3;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(data_ptr, expected) }.to_vec();
+    store_skybox_rgb565(skybox_id, width, height, bytes)
 }
 
 #[unsafe(no_mangle)]

@@ -4,7 +4,10 @@ include!("../cabi_codes.rs");
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::{
+    fmt,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -146,17 +149,19 @@ fn process_text_stream(stream: ConsoleStream, text: &str) {
 }
 
 fn guest_shell_attached_write(data: &[u8]) -> usize {
+    guest_shell_write_op(trueos_vm::vmcall::OP_BP_SHELL_ATTACHED_WRITE, data)
+}
+
+fn guest_shell2_raw_write(data: &[u8]) -> usize {
+    guest_shell_write_op(trueos_vm::vmcall::OP_BP_SHELL_RAW_WRITE, data)
+}
+
+fn guest_shell_write_op(op: u32, data: &[u8]) -> usize {
     let mut written = 0usize;
     while written < data.len() {
         let end = core::cmp::min(written + trueos_vm::vmcall::PAYLOAD_CAP, data.len());
         let chunk = &data[written..end];
-        let (status, count) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_SHELL_ATTACHED_WRITE,
-            0,
-            0,
-            chunk,
-            &mut [],
-        );
+        let (status, count) = trueos_vm::vmcall::call_with_payload(op, 0, 0, chunk, &mut []);
         if status != trueos_vm::vmcall::STATUS_OK {
             break;
         }
@@ -1267,6 +1272,39 @@ pub unsafe extern "C" fn trueos_cabi_env_var(
 
 static SHELL_ATTACHED_REJECTS: AtomicU32 = AtomicU32::new(0);
 
+#[derive(Clone, Copy)]
+struct KonsoleFrameState {
+    cols: u32,
+    rows: u32,
+    reserved_top_rows: u32,
+}
+
+static KONSOLE_FRAME_STATES: spin::Mutex<BTreeMap<u32, KonsoleFrameState>> =
+    spin::Mutex::new(BTreeMap::new());
+
+fn konsole_frame_state() -> Option<KonsoleFrameState> {
+    KONSOLE_FRAME_STATES.lock().get(&current_cpu_key()).copied()
+}
+
+fn konsole_write_bytes(data: &[u8]) -> usize {
+    if data.is_empty() {
+        return 0;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_shell2_raw_write(data);
+    }
+    if let Some(target) = super::env::console_target() {
+        return crate::shell2::raw_write_matrix_target(&target, data);
+    }
+    crate::shell2::uart1_com1::write_bytes(data);
+    data.len()
+}
+
+fn konsole_write_fmt(args: fmt::Arguments<'_>) -> usize {
+    let text = alloc::format!("{}", args);
+    konsole_write_bytes(text.as_bytes())
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_uart1_shell_write(
     data_ptr: *const u8,
@@ -1300,6 +1338,112 @@ pub unsafe extern "C" fn trueos_cabi_shell_attached_write(
     }
     crate::shell2::uart1_com1::write_bytes(data);
     data_len
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_shell2_raw_write(
+    data_ptr: *const u8,
+    data_len: usize,
+) -> usize {
+    if data_ptr.is_null() || data_len == 0 {
+        return 0;
+    }
+    let data = unsafe { core::slice::from_raw_parts(data_ptr, data_len) };
+    konsole_write_bytes(data)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_konsole_begin_frame(
+    cols: u32,
+    rows: u32,
+    reserved_top_rows: u32,
+) -> i32 {
+    if cols == 0 || rows == 0 {
+        return -1;
+    }
+
+    let state = KonsoleFrameState {
+        cols: cols.min(512),
+        rows: rows.min(512),
+        reserved_top_rows: reserved_top_rows.min(32),
+    };
+    KONSOLE_FRAME_STATES.lock().insert(current_cpu_key(), state);
+
+    let _ = konsole_write_bytes(b"\x1b[0m\x1b[?25l");
+    for row in 0..state.rows {
+        let terminal_row = state
+            .reserved_top_rows
+            .saturating_add(row)
+            .saturating_add(1);
+        let _ = konsole_write_fmt(format_args!("\x1b[{};1H\x1b[2K", terminal_row));
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_konsole_write_row(
+    row: u32,
+    col: u32,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> i32 {
+    if data_ptr.is_null() && data_len != 0 {
+        return -1;
+    }
+    let Some(state) = konsole_frame_state() else {
+        return -1;
+    };
+    if row >= state.rows || col >= state.cols {
+        return -1;
+    }
+
+    let terminal_row = state
+        .reserved_top_rows
+        .saturating_add(row)
+        .saturating_add(1);
+    let terminal_col = col.saturating_add(1);
+    let _ = konsole_write_fmt(format_args!("\x1b[{};{}H", terminal_row, terminal_col));
+    if data_len != 0 {
+        let data = unsafe { core::slice::from_raw_parts(data_ptr, data_len) };
+        let _ = konsole_write_bytes(data);
+    }
+    let _ = konsole_write_bytes(b"\x1b[K");
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_konsole_set_cursor(row: u32, col: u32, visible: u32) -> i32 {
+    let Some(state) = konsole_frame_state() else {
+        return -1;
+    };
+    if visible == 0 {
+        let _ = konsole_write_bytes(b"\x1b[?25l");
+        return 0;
+    }
+    if row >= state.rows || col >= state.cols {
+        return -1;
+    }
+
+    let terminal_row = state
+        .reserved_top_rows
+        .saturating_add(row)
+        .saturating_add(1);
+    let terminal_col = col.saturating_add(1);
+    let _ = konsole_write_fmt(format_args!("\x1b[{};{}H\x1b[?25h", terminal_row, terminal_col));
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_konsole_end_frame() -> i32 {
+    let Some(state) = konsole_frame_state() else {
+        return -1;
+    };
+    let terminal_row = state
+        .reserved_top_rows
+        .saturating_add(state.rows)
+        .saturating_add(1);
+    let _ = konsole_write_fmt(format_args!("\x1b[{};1H", terminal_row));
+    0
 }
 
 #[unsafe(no_mangle)]

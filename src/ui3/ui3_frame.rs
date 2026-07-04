@@ -433,6 +433,69 @@ pub(crate) fn draw_sprite_batch(frame_id: u32, tex_id: u32, bytes: &[u8]) -> i32
     0
 }
 
+pub(crate) fn render_skybox_rgb565(
+    frame_id: u32,
+    skybox_id: u32,
+    params: crate::intel::gpgpu::SkyboxRenderParamsAbi,
+) -> i32 {
+    flush_pending_gpu_sprites_for_frame(frame_id);
+    let Some(frame) = frame_snapshot(frame_id) else {
+        return -1;
+    };
+    if !frame.active {
+        return -2;
+    }
+    if frame.target != Ui3RenderTarget::Frame {
+        return -4;
+    }
+    let Some(skybox) = crate::ui3::ui3_img::skybox_rgb565_surface(skybox_id) else {
+        return -5;
+    };
+    let Some(dst) = crate::r::ui_surface::gpgpu_rgba_surface(frame.back_surface) else {
+        return -6;
+    };
+    let rect_width = if params.rect_width == 0 {
+        frame.width
+    } else {
+        params.rect_width
+    };
+    let rect_height = if params.rect_height == 0 {
+        frame.height
+    } else {
+        params.rect_height
+    };
+    let gpu_params = crate::intel::gpgpu::SkyboxSampleRgb565Params {
+        sky_gpu: 0,
+        dst_gpu: 0,
+        sky_pitch_bytes: 0,
+        sky_width: 0,
+        sky_height: 0,
+        dst_pitch_bytes: 0,
+        dst_width: 0,
+        dst_height: 0,
+        rect_x: params.rect_x,
+        rect_y: params.rect_y,
+        rect_width,
+        rect_height,
+        right_x: params.right_x,
+        right_y: params.right_y,
+        right_z: params.right_z,
+        up_x: params.up_x,
+        up_y: params.up_y,
+        up_z: params.up_z,
+        forward_x: params.forward_x,
+        forward_y: params.forward_y,
+        forward_z: params.forward_z,
+        aspect_tan_half_fov_y: params.aspect_tan_half_fov_y,
+        tan_half_fov_y: params.tan_half_fov_y,
+    };
+    if crate::intel::gpgpu::skybox_sample_rgb565_to_rgba8(skybox, dst, gpu_params) {
+        0
+    } else {
+        -7
+    }
+}
+
 fn present_frame(frame_id: u32, swap_on_success: bool) -> bool {
     flush_pending_gpu_sprites_for_frame(frame_id);
     let frame = {

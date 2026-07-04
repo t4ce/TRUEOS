@@ -158,7 +158,7 @@ fn container_shell_command(raw: &str) -> bool {
             attached_write_line(line.as_str());
         }
         "help" => attached_write_line(
-            "commands: echo hostname homedir env disc thread help stop pause preserve exit",
+            "commands: echo hostname homedir env thread help stop pause preserve exit",
         ),
         "stop" | "pause" | "preserve" | "exit" => return false,
         _ => attached_write_line("unknown command; try `help`"),
@@ -289,9 +289,7 @@ pub extern "C" fn trueos_hv_guest_shell_run() -> ! {
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_hv_guest_container_shell_run() -> ! {
     attached_write_line("vmx-shell: ready");
-    attached_write_line(
-        "commands: echo hostname homedir env disc thread help stop pause preserve exit",
-    );
+    attached_write_line("commands: echo hostname homedir env thread help stop pause preserve exit");
     let mut line = Vec::new();
     loop {
         container_shell_prompt();
@@ -396,14 +394,11 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     ));
 
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        if let Err(err) = create_blueprint_dir_all(app_fs_root.as_str()) {
-            log(alloc::format!(
-                "run: guest app fs root create failed path={} err={}",
-                app_fs_root.as_str(),
-                err
-            )
-            .as_str());
-        }
+        log(alloc::format!(
+            "run: guest app fs root create skipped in hull path={}",
+            app_fs_root.as_str()
+        )
+        .as_str());
     } else {
         match create_blueprint_dir_all(app_fs_root.as_str()) {
             Ok(()) => {
@@ -420,14 +415,11 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     }
 
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        if let Err(err) = create_blueprint_dir_all(app_fs_common.as_str()) {
-            log(alloc::format!(
-                "run: guest app fs common create failed path={} err={}",
-                app_fs_common.as_str(),
-                err
-            )
-            .as_str());
-        }
+        log(alloc::format!(
+            "run: guest app fs common create skipped in hull path={}",
+            app_fs_common.as_str()
+        )
+        .as_str());
     } else {
         match create_blueprint_dir_all(app_fs_common.as_str()) {
             Ok(()) => log(alloc::format!(

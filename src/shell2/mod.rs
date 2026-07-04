@@ -381,8 +381,7 @@ impl<'a> AlignedWriter<'a> {
         let styled = alloc::format!("{}", term_style::paint("vmx").bold().color(VMX_STATUS_RGB));
         self.push_plain(&mut text, styled.as_str());
         for command in [
-            "hostname", "homedir", "env", "disc", "thread", "help", "stop", "pause", "preserve",
-            "detach",
+            "hostname", "homedir", "env", "thread", "help", "stop", "pause", "preserve",
         ] {
             self.push_plain(&mut text, " ");
             self.push_plain(&mut text, command);
@@ -989,17 +988,7 @@ fn handle_matrix_operator(io: &'static dyn ShellBackend2, submitted: &str) {
 fn is_vmx_control_command(submitted: &str) -> bool {
     matches!(
         submitted.split_whitespace().next().unwrap_or(""),
-        "hostname"
-            | "homedir"
-            | "env"
-            | "disc"
-            | "file"
-            | "thread"
-            | "help"
-            | "stop"
-            | "pause"
-            | "preserve"
-            | "detach"
+        "hostname" | "homedir" | "env" | "file" | "thread" | "help" | "stop" | "pause" | "preserve"
     )
 }
 
@@ -1756,8 +1745,15 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     } else if let Some(vm_id) = active_matrix_vm_id(output_mask) {
                         if !submitted.is_empty() {
                             record_user_line_for_active_slot(io, submitted);
-                            let _ =
-                                crate::hv::blueprint_console_submit_control_line(vm_id, submitted);
+                            if is_vmx_control_command(submitted) {
+                                let _ = crate::hv::blueprint_console_submit_control_line(
+                                    vm_id, submitted,
+                                );
+                            } else {
+                                let mut input = alloc::vec::Vec::from(submitted.as_bytes());
+                                input.push(b'\n');
+                                let _ = crate::hv::blueprint_console_submit_stdin(vm_id, &input);
+                            }
                             transcript = current_transcript_for_task(io);
                             out.render_transcript(&transcript);
                         }

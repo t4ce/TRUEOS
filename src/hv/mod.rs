@@ -1461,6 +1461,14 @@ pub(crate) fn blueprint_console_write(vm_id: u8, data: &[u8]) -> usize {
     written
 }
 
+pub(crate) fn blueprint_console_raw_write(vm_id: u8, data: &[u8]) -> usize {
+    let target = {
+        let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
+        context.and_then(|slot| slot.lock().as_ref()?.console_target.clone())
+    };
+    blueprint_console_write_to_target(target.as_ref(), data)
+}
+
 fn blueprint_console_write_to_target(target: Option<&MatrixTarget>, data: &[u8]) -> usize {
     if let Some(target) = target {
         return crate::shell2::raw_write_matrix_target(&target, data);
@@ -1580,7 +1588,7 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
         }
         "help" => blueprint_control_shell_line(
             vm_id,
-            "commands: hostname homedir env disc thread help stop pause preserve detach",
+            "commands: hostname homedir env thread help stop pause preserve",
         ),
         "stop" => match stop(vm_id) {
             Ok(true) => blueprint_control_shell_line(vm_id, "vmx-shell: stop requested"),
@@ -1598,7 +1606,6 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
                 alloc::format!("vmx-shell: preserve failed: {:?}", err).as_str(),
             ),
         },
-        "detach" => blueprint_control_shell_line(vm_id, "vm: switch matrix slots with `§<slot>`"),
         _ => blueprint_control_shell_line(vm_id, "unknown command; try `help`"),
     }
 }

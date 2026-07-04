@@ -258,6 +258,14 @@ pub fn attached_write(bytes: &[u8]) -> usize {
 }
 
 #[inline]
+pub fn shell2_raw_write(bytes: &[u8]) -> usize {
+    if bytes.is_empty() {
+        return 0;
+    }
+    unsafe { vcabi::trueos_cabi_shell2_raw_write(bytes.as_ptr(), bytes.len()) }
+}
+
+#[inline]
 pub fn attached_read_byte() -> Option<u8> {
     let value = unsafe { vcabi::trueos_cabi_shell_attached_read_byte() };
     if (0..=255).contains(&value) {
@@ -306,6 +314,31 @@ pub fn attached_retarget_slot(slot: &str) -> bool {
         return false;
     }
     unsafe { vcabi::trueos_cabi_shell_attached_retarget_slot(slot.as_ptr(), slot.len()) == 0 }
+}
+
+#[inline]
+pub fn konsole_begin_frame(cols: u32, rows: u32, reserved_top_rows: u32) -> i32 {
+    unsafe { vcabi::trueos_cabi_konsole_begin_frame(cols, rows, reserved_top_rows) }
+}
+
+#[inline]
+pub fn konsole_write_row(row: u32, col: u32, bytes: &[u8]) -> i32 {
+    let ptr = if bytes.is_empty() {
+        core::ptr::null()
+    } else {
+        bytes.as_ptr()
+    };
+    unsafe { vcabi::trueos_cabi_konsole_write_row(row, col, ptr, bytes.len()) }
+}
+
+#[inline]
+pub fn konsole_set_cursor(row: u32, col: u32, visible: bool) -> i32 {
+    unsafe { vcabi::trueos_cabi_konsole_set_cursor(row, col, u32::from(visible)) }
+}
+
+#[inline]
+pub fn konsole_end_frame() -> i32 {
+    unsafe { vcabi::trueos_cabi_konsole_end_frame() }
 }
 
 #[inline]

@@ -41,6 +41,10 @@ pub const OP_BP_RAPL_SNAPSHOT_READ: u32 = 0x91; // arg0 offset, arg1 cap -> late
 pub const OP_BP_RAPL_HISTORY_READ: u32 = 0x92; // arg0 offset, arg1 cap -> capped RAPL history text
 pub const OP_BP_PCI_SNAPSHOT_READ: u32 = 0x93; // arg0 offset, arg1 cap -> latest PCI snapshot text
 pub const OP_BP_THERMAL_SNAPSHOT_READ: u32 = 0x94; // arg0 offset, arg1 cap -> latest thermal snapshot text
+pub const OP_BP_UI3_SKYBOX_RGB565_UPLOAD_BEGIN: u32 = 0x95; // arg0=id, arg1=w/h, data=total_len -> rc
+pub const OP_BP_UI3_SKYBOX_RGB565_UPLOAD_CHUNK: u32 = 0x96; // arg0=id, arg1=offset, payload=rgb565 -> rc
+pub const OP_BP_UI3_SKYBOX_RGB565_UPLOAD_FINISH: u32 = 0x97; // arg0=id -> rc
+pub const OP_BP_UI3_FRAME_RENDER_SKYBOX_RGB565: u32 = 0x98; // arg0=frame,arg1=id,payload=params -> rc
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -77,6 +81,7 @@ pub const OP_BP_SHELL_ATTACHED_READ_BYTE: u32 = 0x6D; // response is byte or u64
 pub const OP_BP_ENV_ALL: u32 = 0x6E; // response payload is newline-separated key=value text
 pub const OP_BP_FS_LIST_TREE: u32 = 0x6F; // payload path -> response payload tree text
 pub const OP_BP_FS_LIST_DIR: u32 = 0x81; // arg0 offset, arg1 cap; payload path -> newline children
+pub const OP_BP_SHELL_RAW_WRITE: u32 = 0x99; // payload bytes -> shell2 raw surface, no log mirror
 pub const OP_BP_SOCKET_TCP_OPEN: u32 = 0x35; // arg0 domain/type, arg1 protocol -> socket/rc
 pub const OP_BP_SOCKET_TCP_CLOSE: u32 = 0x36; // arg0 socket -> rc
 pub const OP_BP_SOCKET_TCP_SET_NONBLOCKING: u32 = 0x37; // arg0 socket, arg1 bool -> rc
@@ -562,6 +567,71 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
             DispatchOutcome::Resume
         }
+        OP_BP_UI3_SKYBOX_RGB565_UPLOAD_BEGIN => {
+            let (width, height) = unpack_u32_pair(arg1);
+            let total_len = request_payload(vm_id, req_len)
+                .and_then(|payload| payload.get(..8))
+                .map(|bytes| {
+                    u64::from_le_bytes([
+                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
+                        bytes[7],
+                    ]) as usize
+                })
+                .unwrap_or(0);
+            let rc = crate::ui3::ui3_img::begin_skybox_rgb565_upload(
+                vm_id,
+                arg0 as u32,
+                width,
+                height,
+                total_len,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI3_SKYBOX_RGB565_UPLOAD_CHUNK => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
+                return DispatchOutcome::Resume;
+            };
+            let rc = crate::ui3::ui3_img::write_skybox_rgb565_upload_chunk(
+                vm_id,
+                arg0 as u32,
+                arg1 as usize,
+                payload,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI3_SKYBOX_RGB565_UPLOAD_FINISH => {
+            let rc = crate::ui3::ui3_img::finish_skybox_rgb565_upload(vm_id, arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI3_FRAME_RENDER_SKYBOX_RGB565 => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
+                return DispatchOutcome::Resume;
+            };
+            if payload.len() != core::mem::size_of::<crate::intel::gpgpu::SkyboxRenderParamsAbi>() {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
+                return DispatchOutcome::Resume;
+            }
+            let params = unsafe {
+                core::ptr::read_unaligned(
+                    payload.as_ptr() as *const crate::intel::gpgpu::SkyboxRenderParamsAbi
+                )
+            };
+            let rc = crate::ui3::ui3_frame::render_skybox_rgb565(arg0 as u32, arg1 as u32, params);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
+            DispatchOutcome::Resume
+        }
         OP_YIELD => {
             write_response(vm_id, seq, STATUS_OK, 0, 0);
             DispatchOutcome::Yield
@@ -951,6 +1021,17 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             };
             let data = unsafe { &(&(*p).payload)[..n] };
             let written = crate::hv::blueprint_console_write(vm_id, data);
+            write_response(vm_id, seq, STATUS_OK, written as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SHELL_RAW_WRITE => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let data = unsafe { &(&(*p).payload)[..n] };
+            let written = crate::hv::blueprint_console_raw_write(vm_id, data);
             write_response(vm_id, seq, STATUS_OK, written as u64, 0);
             DispatchOutcome::Resume
         }

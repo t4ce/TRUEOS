@@ -87,6 +87,10 @@ pub mod vmcall {
     pub const OP_BP_UI3_TEXTURE_UPLOAD_FINISH: u32 = 0x8E;
     pub const OP_BP_UI3_TEXTURE_STATUS: u32 = 0x8F;
     pub const OP_BP_UI3_TEXTURE_DIMENSIONS: u32 = 0x90;
+    pub const OP_BP_UI3_SKYBOX_RGB565_UPLOAD_BEGIN: u32 = 0x95;
+    pub const OP_BP_UI3_SKYBOX_RGB565_UPLOAD_CHUNK: u32 = 0x96;
+    pub const OP_BP_UI3_SKYBOX_RGB565_UPLOAD_FINISH: u32 = 0x97;
+    pub const OP_BP_UI3_FRAME_RENDER_SKYBOX_RGB565: u32 = 0x98;
     pub const OP_NET_TCP_WRITE: u32 = 0x10;
     pub const OP_NET_TCP_READ: u32 = 0x11;
     pub const OP_BP_NET_OPEN: u32 = 0x20;
@@ -117,6 +121,7 @@ pub mod vmcall {
     pub const OP_BP_ENV_ALL: u32 = 0x6E;
     pub const OP_BP_FS_LIST_TREE: u32 = 0x6F;
     pub const OP_BP_FS_LIST_DIR: u32 = 0x81;
+    pub const OP_BP_SHELL_RAW_WRITE: u32 = 0x99;
 
     pub const STATUS_OK: u32 = 0;
     pub const STATUS_BAD_ARG: u32 = 2;

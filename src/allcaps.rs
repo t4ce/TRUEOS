@@ -15,7 +15,7 @@ pub mod probes {
 }
 
 pub mod blueprint {
-    pub const PORTAL_IMAGE_CAP_BYTES: usize = 16 * 1024 * 1024;
+    pub const PORTAL_IMAGE_CAP_BYTES: usize = 128 * 1024 * 1024;
 }
 
 pub mod gfx {

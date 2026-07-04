@@ -1,10 +1,10 @@
 pub use crate::ui3::ui3_img::{
     trueos_cabi_gfx_texture_dimensions, trueos_cabi_gfx_texture_status,
-    trueos_cabi_gfx_upload_texture_jpeg, trueos_cabi_gfx_upload_texture_jpeg_async,
-    trueos_cabi_gfx_upload_texture_png, trueos_cabi_gfx_upload_texture_png_async,
-    trueos_cabi_gfx_upload_texture_rgba, trueos_cabi_gfx_upload_texture_rgba_image,
-    trueos_cabi_gfx_upload_texture_rgba_image_async, trueos_cabi_gfx_upload_texture_svg,
-    trueos_cabi_gfx_upload_texture_svg_async,
+    trueos_cabi_gfx_upload_skybox_rgb565, trueos_cabi_gfx_upload_texture_jpeg,
+    trueos_cabi_gfx_upload_texture_jpeg_async, trueos_cabi_gfx_upload_texture_png,
+    trueos_cabi_gfx_upload_texture_png_async, trueos_cabi_gfx_upload_texture_rgba,
+    trueos_cabi_gfx_upload_texture_rgba_image, trueos_cabi_gfx_upload_texture_rgba_image_async,
+    trueos_cabi_gfx_upload_texture_svg, trueos_cabi_gfx_upload_texture_svg_async,
 };
 
 #[inline]
@@ -252,4 +252,37 @@ pub unsafe extern "C" fn trueos_cabi_ui3_frame_draw_sprite_batch(
         unsafe { core::slice::from_raw_parts(data_ptr, data_len) }
     };
     crate::ui3::ui3_frame::draw_sprite_batch(frame_id, tex_id, bytes)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui3_frame_render_skybox_rgb565(
+    frame_id: u32,
+    skybox_id: u32,
+    params_ptr: *const u8,
+    params_len: usize,
+) -> i32 {
+    if params_ptr.is_null()
+        || params_len != core::mem::size_of::<crate::intel::gpgpu::SkyboxRenderParamsAbi>()
+    {
+        return -1;
+    }
+    let params = unsafe {
+        core::ptr::read_unaligned(params_ptr as *const crate::intel::gpgpu::SkyboxRenderParamsAbi)
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let bytes = unsafe {
+            core::slice::from_raw_parts(
+                params_ptr.cast::<u8>(),
+                core::mem::size_of::<crate::intel::gpgpu::SkyboxRenderParamsAbi>(),
+            )
+        };
+        return vmcall_payload_i32(
+            trueos_vm::vmcall::OP_BP_UI3_FRAME_RENDER_SKYBOX_RGB565,
+            frame_id as u64,
+            skybox_id as u64,
+            bytes,
+        );
+    }
+
+    crate::ui3::ui3_frame::render_skybox_rgb565(frame_id, skybox_id, params)
 }

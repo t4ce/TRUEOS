@@ -78,6 +78,9 @@ pub(crate) const CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_KERNEL_NAME: &str =
     "canvas3d_plane_patch_worklist_rgba8";
 pub(crate) const CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/canvas3d_plane_patch_worklist_rgba8.cl");
+pub(crate) const SKYBOX_SAMPLE_RGB565_KERNEL_NAME: &str = "skybox_sample_rgb565";
+pub(crate) const SKYBOX_SAMPLE_RGB565_OPENCL_SOURCE: &str =
+    include_str!("kernels/skybox_sample_rgb565.cl");
 
 pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
     match name {
@@ -109,6 +112,7 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_KERNEL_NAME => {
             Some(CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_OPENCL_SOURCE)
         }
+        SKYBOX_SAMPLE_RGB565_KERNEL_NAME => Some(SKYBOX_SAMPLE_RGB565_OPENCL_SOURCE),
         _ => None,
     }
 }
@@ -153,6 +157,7 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_KERNEL_NAME => {
             Some("src/intel/kernels/canvas3d_plane_patch_worklist_rgba8.cl")
         }
+        SKYBOX_SAMPLE_RGB565_KERNEL_NAME => Some("src/intel/kernels/skybox_sample_rgb565.cl"),
         _ => None,
     }
 }
@@ -237,6 +242,10 @@ pub(crate) const CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/canvas3d_plane_patch_worklist_rgba8.bin");
 pub(crate) const CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/canvas3d_plane_patch_worklist_rgba8.spv");
+pub(crate) const SKYBOX_SAMPLE_RGB565_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/skybox_sample_rgb565.bin");
+pub(crate) const SKYBOX_SAMPLE_RGB565_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/skybox_sample_rgb565.spv");
 pub(crate) const COPY_RECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x10, 0x86, 0x60, 0x24, 0xAA, 0xFF, 0xAE, 0x96, 0xF9, 0x2C, 0xFC, 0x25, 0xA5, 0xFB, 0x18, 0x8C,
     0xA4, 0x21, 0x99, 0x47, 0x89, 0xAF, 0xBC, 0x4D, 0xBA, 0x3D, 0xDC, 0x29, 0x0B, 0xD5, 0x83, 0xAB,
@@ -317,6 +326,10 @@ pub(crate) const CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     0x4A, 0xC7, 0xC0, 0xD7, 0xC1, 0x1A, 0xC7, 0x99, 0xC9, 0x74, 0x03, 0x7E, 0x42, 0x89, 0x8C, 0xAE,
     0xAC, 0xC4, 0xB9, 0x2E, 0x3C, 0x52, 0x69, 0x09, 0x4D, 0x28, 0x73, 0xBC, 0xA6, 0x36, 0x31, 0x93,
 ];
+pub(crate) const SKYBOX_SAMPLE_RGB565_ADLS_BIN_SHA256: [u8; 32] = [
+    0x68, 0xE3, 0xF3, 0x29, 0x3B, 0x82, 0xC0, 0x26, 0x0D, 0xB1, 0x99, 0xAC, 0x46, 0xBE, 0xDC, 0xE6,
+    0xD9, 0x23, 0x97, 0x70, 0xF1, 0xE0, 0x46, 0xE6, 0x3F, 0xFC, 0x41, 0x87, 0xE4, 0x4F, 0x3B, 0x6C,
+];
 
 const COPY_RECT_RGBA8_ADLS_GPU: u64 = 0x0D20_0000;
 const SPRITE64_WORKLIST_RGBA8_ADLS_GPU: u64 = 0x0D24_0000;
@@ -336,6 +349,7 @@ const CANVAS3D_PLANE_SAMPLE_RGBA8_ADLS_GPU: u64 = 0x0D32_0000;
 const CANVAS3D_PLANE_FILL_RGBA8_ADLS_GPU: u64 = 0x0D33_0000;
 const CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_ADLS_GPU: u64 = 0x0D34_0000;
 const CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_GPU: u64 = 0x0D35_0000;
+const SKYBOX_SAMPLE_RGB565_ADLS_GPU: u64 = 0x0D38_0000;
 const COPY_RECT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const FILL_RECT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const FILL_RECT_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
@@ -354,6 +368,7 @@ const CANVAS3D_PLANE_SAMPLE_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const CANVAS3D_PLANE_FILL_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
+const SKYBOX_SAMPLE_RGB565_TEXT_OFFSET_BYTES: u64 = 0x40;
 
 const RCS_RING_BASE: usize = 0x0000_2000;
 const RCS_RING_TAIL: usize = RCS_RING_BASE + 0x30;
@@ -674,6 +689,20 @@ const CANVAS3D_PLANE_PATCH_WORKLIST_TILE_ROWS: u32 = 16;
 const CANVAS3D_PLANE_PATCH_WORKLIST_DESC_BYTES: usize = CANVAS3D_PLANE_PATCH_WORKLIST_MAX_DESCS
     * CANVAS3D_PLANE_PATCH_WORKLIST_DESC_DWORDS
     * core::mem::size_of::<u32>();
+const SKYBOX_SAMPLE_IDD_OFFSET_BYTES: usize = 0x4200;
+const SKYBOX_SAMPLE_BINDING_TABLE_OFFSET_BYTES: usize = 0x4240;
+const SKYBOX_SAMPLE_SRC_SURFACE_STATE_OFFSET_BYTES: usize = 0x4280;
+const SKYBOX_SAMPLE_DST_SURFACE_STATE_OFFSET_BYTES: usize = 0x42C0;
+const SKYBOX_SAMPLE_PAYLOAD_OFFSET_BYTES: usize = 0x4400;
+const SKYBOX_SAMPLE_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
+const SKYBOX_SAMPLE_CROSS_THREAD_BYTES: usize = 160;
+const SKYBOX_SAMPLE_PER_THREAD_BYTES: usize = 96;
+const SKYBOX_SAMPLE_INDIRECT_BYTES: usize =
+    SKYBOX_SAMPLE_CROSS_THREAD_BYTES + SKYBOX_SAMPLE_PER_THREAD_BYTES;
+const SKYBOX_SAMPLE_PRE_MARKER_SLOT: usize = 27;
+const SKYBOX_SAMPLE_POST_MARKER_SLOT: usize = 26;
+const SKYBOX_SAMPLE_PRE_MARKER: u32 = 0xC0DE_5C01;
+const SKYBOX_SAMPLE_POST_MARKER: u32 = 0xC0DE_5C02;
 const CANVAS3D_PLANE_FILL_TEST_WIDTH: u32 = 64;
 const CANVAS3D_PLANE_FILL_TEST_HEIGHT: u32 = 48;
 const CANVAS3D_PLANE_FILL_TEST_PITCH_BYTES: u32 =
@@ -827,6 +856,7 @@ static CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_UPLOAD: Mutex<Option<UploadedKernelAr
     Mutex::new(None);
 static CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> =
     Mutex::new(None);
+static SKYBOX_SAMPLE_RGB565_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static DIRECT_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static GPGPU_SHELL_SURFACE: Mutex<Option<GpgpuShellSurface>> = Mutex::new(None);
 static GPGPU_PRESENT_STAGING_SURFACE: Mutex<Option<GpgpuPresentStagingSurface>> = Mutex::new(None);
@@ -1178,6 +1208,53 @@ pub(crate) struct Canvas3dPlanePatchWorklistRgba8Params {
     pub(crate) group_z: u32,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct SkyboxSampleRgb565Params {
+    pub(crate) sky_gpu: u64,
+    pub(crate) dst_gpu: u64,
+    pub(crate) sky_pitch_bytes: u32,
+    pub(crate) sky_width: u32,
+    pub(crate) sky_height: u32,
+    pub(crate) dst_pitch_bytes: u32,
+    pub(crate) dst_width: u32,
+    pub(crate) dst_height: u32,
+    pub(crate) rect_x: u32,
+    pub(crate) rect_y: u32,
+    pub(crate) rect_width: u32,
+    pub(crate) rect_height: u32,
+    pub(crate) right_x: f32,
+    pub(crate) right_y: f32,
+    pub(crate) right_z: f32,
+    pub(crate) up_x: f32,
+    pub(crate) up_y: f32,
+    pub(crate) up_z: f32,
+    pub(crate) forward_x: f32,
+    pub(crate) forward_y: f32,
+    pub(crate) forward_z: f32,
+    pub(crate) aspect_tan_half_fov_y: f32,
+    pub(crate) tan_half_fov_y: f32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct SkyboxRenderParamsAbi {
+    pub(crate) right_x: f32,
+    pub(crate) right_y: f32,
+    pub(crate) right_z: f32,
+    pub(crate) up_x: f32,
+    pub(crate) up_y: f32,
+    pub(crate) up_z: f32,
+    pub(crate) forward_x: f32,
+    pub(crate) forward_y: f32,
+    pub(crate) forward_z: f32,
+    pub(crate) aspect_tan_half_fov_y: f32,
+    pub(crate) tan_half_fov_y: f32,
+    pub(crate) rect_x: u32,
+    pub(crate) rect_y: u32,
+    pub(crate) rect_width: u32,
+    pub(crate) rect_height: u32,
+}
+
 pub(crate) const CANVAS3D_PLANE_PATCH_DESC_FLAG_SCREEN_EDGES: u32 = 1 << 0;
 pub(crate) const CANVAS3D_PLANE_PATCH_MAX_CONSTRAINTS: u32 = 8;
 
@@ -1405,6 +1482,66 @@ impl GpgpuRgba8Surface {
 
     pub(crate) const fn bounds(self) -> GpgpuRect {
         GpgpuRect::new(0, 0, self.width, self.height)
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuRgb565Surface {
+    pub(crate) phys: u64,
+    pub(crate) gpu: u64,
+    pub(crate) bytes: usize,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) pitch_bytes: u32,
+}
+
+impl GpgpuRgb565Surface {
+    pub(crate) fn new(
+        phys: u64,
+        gpu: u64,
+        bytes: usize,
+        width: u32,
+        height: u32,
+        pitch_bytes: u32,
+    ) -> Option<Self> {
+        let surface = Self {
+            phys,
+            gpu,
+            bytes,
+            width,
+            height,
+            pitch_bytes,
+        };
+        if surface.is_valid() {
+            Some(surface)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn is_valid(self) -> bool {
+        if self.width == 0 || self.height == 0 {
+            return false;
+        }
+        if (self.phys & 0xFFF) != 0 {
+            return false;
+        }
+        let min_pitch = self
+            .width
+            .saturating_mul(core::mem::size_of::<u16>() as u32);
+        if self.pitch_bytes < min_pitch {
+            return false;
+        }
+        let Some(last_row) = (self.height as usize)
+            .checked_sub(1)
+            .and_then(|row| row.checked_mul(self.pitch_bytes as usize))
+        else {
+            return false;
+        };
+        let Some(min_bytes) = last_row.checked_add(min_pitch as usize) else {
+            return false;
+        };
+        min_bytes <= self.bytes
     }
 }
 
@@ -2049,6 +2186,14 @@ pub(crate) const CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelA
         bin_sha256: CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_BIN_SHA256,
     };
 
+pub(crate) const SKYBOX_SAMPLE_RGB565_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
+    name: SKYBOX_SAMPLE_RGB565_KERNEL_NAME,
+    target: "adls",
+    bin: SKYBOX_SAMPLE_RGB565_ADLS_BIN,
+    spv: SKYBOX_SAMPLE_RGB565_ADLS_SPV,
+    bin_sha256: SKYBOX_SAMPLE_RGB565_ADLS_BIN_SHA256,
+};
+
 pub(crate) fn copy_rect_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *COPY_RECT_RGBA8_UPLOAD.lock()
 }
@@ -2117,6 +2262,10 @@ pub(crate) fn canvas3d_plane_patch_fill_cut_rgba8_upload_status() -> Option<Uplo
 pub(crate) fn canvas3d_plane_patch_worklist_rgba8_upload_status() -> Option<UploadedKernelArtifact>
 {
     *CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_UPLOAD.lock()
+}
+
+pub(crate) fn skybox_sample_rgb565_upload_status() -> Option<UploadedKernelArtifact> {
+    *SKYBOX_SAMPLE_RGB565_UPLOAD.lock()
 }
 
 pub(crate) fn upload_copy_rect_rgba8_kernel() -> Option<UploadedKernelArtifact> {
@@ -2502,6 +2651,25 @@ pub(crate) fn upload_canvas3d_plane_patch_worklist_rgba8_kernel() -> Option<Uplo
     Some(upload)
 }
 
+pub(crate) fn upload_skybox_sample_rgb565_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *SKYBOX_SAMPLE_RGB565_UPLOAD.lock() {
+        return Some(upload);
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: skybox-sample-rgb565 upload skipped reason=no-claimed-device\n"
+        );
+        return None;
+    };
+
+    let upload =
+        upload_artifact(dev, SKYBOX_SAMPLE_RGB565_ADLS_ARTIFACT, SKYBOX_SAMPLE_RGB565_ADLS_GPU)?;
+    *SKYBOX_SAMPLE_RGB565_UPLOAD.lock() = Some(upload);
+    Some(upload)
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GpgpuArtifactReloadError {
     UnknownKernel,
@@ -2550,6 +2718,7 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     CANVAS3D_PLANE_FILL_RGBA8_KERNEL_NAME,
     CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_KERNEL_NAME,
     CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_KERNEL_NAME,
+    SKYBOX_SAMPLE_RGB565_KERNEL_NAME,
 ];
 
 pub(crate) fn reload_known_kernel_artifact(
@@ -2687,6 +2856,11 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_ARTIFACT,
             gpu: CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_GPU,
             upload: &CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_UPLOAD,
+        }),
+        SKYBOX_SAMPLE_RGB565_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: SKYBOX_SAMPLE_RGB565_ADLS_ARTIFACT,
+            gpu: SKYBOX_SAMPLE_RGB565_ADLS_GPU,
+            upload: &SKYBOX_SAMPLE_RGB565_UPLOAD,
         }),
         _ => None,
     }
@@ -8043,6 +8217,84 @@ fn submit_present_rgba8_to_primary_xrgb_rect_2d(
     observed == COPY_RECT_POST_MARKER
 }
 
+pub(crate) fn skybox_sample_rgb565_to_rgba8(
+    skybox: GpgpuRgb565Surface,
+    dst: GpgpuRgba8Surface,
+    mut params: SkyboxSampleRgb565Params,
+) -> bool {
+    if !skybox.is_valid() || !dst.is_valid() || params.rect_width == 0 || params.rect_height == 0 {
+        return false;
+    }
+    if params.rect_x >= dst.width || params.rect_y >= dst.height {
+        return false;
+    }
+    params.sky_gpu = skybox.gpu;
+    params.dst_gpu = dst.gpu;
+    params.sky_pitch_bytes = skybox.pitch_bytes;
+    params.sky_width = skybox.width;
+    params.sky_height = skybox.height;
+    params.dst_pitch_bytes = dst.pitch_bytes;
+    params.dst_width = dst.width;
+    params.dst_height = dst.height;
+    params.rect_width = params.rect_width.min(dst.width - params.rect_x);
+    params.rect_height = params.rect_height.min(dst.height - params.rect_y);
+
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let Some(dev) = super::claimed_device() else {
+        return false;
+    };
+    let Some(upload) = upload_skybox_sample_rgb565_kernel() else {
+        return false;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        return false;
+    };
+
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let sky_ppgtt_ok = kernel_ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, skybox.gpu, skybox.phys, skybox.bytes);
+    let dst_ppgtt_ok =
+        sky_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
+    let batch_ok = dst_ppgtt_ok
+        && direct_rcs_encode_skybox_sample_rgb565_batch(
+            state,
+            upload,
+            params,
+            skybox.bytes,
+            dst.bytes,
+        );
+    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
+    let observed = if submitted {
+        direct_rcs_poll_result_slot(
+            state,
+            SKYBOX_SAMPLE_POST_MARKER_SLOT,
+            SKYBOX_SAMPLE_POST_MARKER,
+        )
+    } else {
+        0
+    };
+    let ok = observed == SKYBOX_SAMPLE_POST_MARKER;
+    if ok {
+        let seq = PRESENT_RGBA8_TO_PRIMARY_XRGB_UI3_LOG_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+        if seq <= 8 || seq % 120 == 0 {
+            crate::log_info!(
+                target: "gpgpu";
+                "intel/gpgpu: skybox-sample-rgb565 submitted=1 size={}x{} dst={}x{} marker=0x{:X}\n",
+                params.rect_width,
+                params.rect_height,
+                dst.width,
+                dst.height,
+                observed
+            );
+        }
+    }
+    ok
+}
+
 fn submit_sprite64_worklist(
     atlas: GpgpuRgba8Surface,
     dst: GpgpuRgba8Surface,
@@ -11581,6 +11833,142 @@ fn direct_rcs_encode_present_rgba8_to_primary_xrgb_rect_2d(
     true
 }
 
+fn direct_rcs_encode_skybox_sample_rgb565_batch(
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    params: SkyboxSampleRgb565Params,
+    skybox_bytes: usize,
+    dst_bytes: usize,
+) -> bool {
+    if params.rect_width == 0 || params.rect_height == 0 {
+        return false;
+    }
+    if SKYBOX_SAMPLE_PAYLOAD_OFFSET_BYTES + SKYBOX_SAMPLE_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+
+    unsafe {
+        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
+        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+    }
+
+    if !direct_rcs_write_copy_rect_interface_descriptor_at_with_cross_thread_grfs(
+        state,
+        SKYBOX_SAMPLE_IDD_OFFSET_BYTES,
+        SKYBOX_SAMPLE_BINDING_TABLE_OFFSET_BYTES,
+        SKYBOX_SAMPLE_RGB565_TEXT_OFFSET_BYTES,
+        5,
+    ) {
+        return false;
+    }
+    if !direct_rcs_write_copy_rect_surface_states_at(
+        state,
+        SKYBOX_SAMPLE_BINDING_TABLE_OFFSET_BYTES,
+        SKYBOX_SAMPLE_SRC_SURFACE_STATE_OFFSET_BYTES,
+        SKYBOX_SAMPLE_DST_SURFACE_STATE_OFFSET_BYTES,
+        params.sky_gpu,
+        skybox_bytes,
+        params.dst_gpu,
+        dst_bytes,
+    ) {
+        return false;
+    }
+    if !direct_rcs_write_skybox_sample_rgb565_payload_at(
+        state,
+        SKYBOX_SAMPLE_PAYLOAD_OFFSET_BYTES,
+        params,
+    ) {
+        return false;
+    }
+
+    let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
+    let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
+    let mut cursor = 0usize;
+    let mut ok = true;
+    let group_x = params.rect_width.div_ceil(16).max(1);
+    let group_y = params.rect_height.max(1);
+    let last_group_pixels = ((params.rect_width - 1) % 16) + 1;
+    let right_mask = if last_group_pixels >= 16 {
+        GPGPU_WALKER_SIMD16_MASK
+    } else {
+        (1u32 << last_group_pixels) - 1
+    };
+
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL | 1,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_3D);
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
+    );
+    ok &= direct_rcs_push_state_base_address(
+        batch,
+        &mut cursor,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        upload.gpu,
+    );
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_VFE_STATE_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW3_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW5_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, SKYBOX_SAMPLE_IDD_BYTES as u32);
+    ok &= direct_rcs_push(batch, &mut cursor, SKYBOX_SAMPLE_IDD_OFFSET_BYTES as u32);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        SKYBOX_SAMPLE_PRE_MARKER_SLOT,
+        SKYBOX_SAMPLE_PRE_MARKER,
+    );
+    ok &= direct_rcs_push_gpgpu_walker_2d(
+        batch,
+        &mut cursor,
+        SKYBOX_SAMPLE_PAYLOAD_OFFSET_BYTES,
+        SKYBOX_SAMPLE_INDIRECT_BYTES,
+        group_x,
+        group_y,
+        right_mask,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        SKYBOX_SAMPLE_POST_MARKER_SLOT,
+        SKYBOX_SAMPLE_POST_MARKER,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, MI_BATCH_BUFFER_END);
+    ok &= direct_rcs_push(batch, &mut cursor, MI_NOOP);
+
+    if !ok {
+        return false;
+    }
+
+    super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
+    super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
+    true
+}
+
 fn direct_rcs_write_copy_rect_interface_descriptor(state: DirectRcsState) -> bool {
     direct_rcs_write_copy_rect_interface_descriptor_at(
         state,
@@ -11837,6 +12225,61 @@ fn direct_rcs_write_present_rgba8_to_primary_xrgb_payload_at(
         core::ptr::write_volatile(dwords.add(24), params.flip_y);
 
         let local_ids = payload.add(PRESENT_RGBA8_TO_PRIMARY_XRGB_CROSS_THREAD_BYTES) as *mut u16;
+        for lane in 0..16usize {
+            core::ptr::write_volatile(local_ids.add(lane), lane as u16);
+            core::ptr::write_volatile(local_ids.add(16 + lane), 0);
+            core::ptr::write_volatile(local_ids.add(32 + lane), 0);
+        }
+    }
+    true
+}
+
+fn direct_rcs_write_skybox_sample_rgb565_payload_at(
+    state: DirectRcsState,
+    payload_offset: usize,
+    params: SkyboxSampleRgb565Params,
+) -> bool {
+    if payload_offset + SKYBOX_SAMPLE_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+
+    unsafe {
+        let payload = state.batch_virt.add(payload_offset);
+        core::ptr::write_bytes(payload, 0, SKYBOX_SAMPLE_INDIRECT_BYTES);
+        let dwords = payload as *mut u32;
+        core::ptr::write_volatile(dwords.add(3), 16);
+        core::ptr::write_volatile(dwords.add(4), 1);
+        core::ptr::write_volatile(dwords.add(5), 1);
+        core::ptr::write_volatile(dwords.add(8), 16);
+        core::ptr::write_volatile(dwords.add(9), 1);
+        core::ptr::write_volatile(dwords.add(10), 1);
+        core::ptr::write_volatile(dwords.add(12), params.sky_gpu as u32);
+        core::ptr::write_volatile(dwords.add(13), (params.sky_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(14), params.dst_gpu as u32);
+        core::ptr::write_volatile(dwords.add(15), (params.dst_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(16), params.sky_pitch_bytes);
+        core::ptr::write_volatile(dwords.add(17), params.sky_width);
+        core::ptr::write_volatile(dwords.add(18), params.sky_height);
+        core::ptr::write_volatile(dwords.add(19), params.dst_pitch_bytes);
+        core::ptr::write_volatile(dwords.add(20), params.dst_width);
+        core::ptr::write_volatile(dwords.add(21), params.dst_height);
+        core::ptr::write_volatile(dwords.add(22), params.rect_x);
+        core::ptr::write_volatile(dwords.add(23), params.rect_y);
+        core::ptr::write_volatile(dwords.add(24), params.rect_width);
+        core::ptr::write_volatile(dwords.add(25), params.rect_height);
+        core::ptr::write_volatile(dwords.add(26), params.right_x.to_bits());
+        core::ptr::write_volatile(dwords.add(27), params.right_y.to_bits());
+        core::ptr::write_volatile(dwords.add(28), params.right_z.to_bits());
+        core::ptr::write_volatile(dwords.add(29), params.up_x.to_bits());
+        core::ptr::write_volatile(dwords.add(30), params.up_y.to_bits());
+        core::ptr::write_volatile(dwords.add(31), params.up_z.to_bits());
+        core::ptr::write_volatile(dwords.add(32), params.forward_x.to_bits());
+        core::ptr::write_volatile(dwords.add(33), params.forward_y.to_bits());
+        core::ptr::write_volatile(dwords.add(34), params.forward_z.to_bits());
+        core::ptr::write_volatile(dwords.add(35), params.aspect_tan_half_fov_y.to_bits());
+        core::ptr::write_volatile(dwords.add(36), params.tan_half_fov_y.to_bits());
+
+        let local_ids = payload.add(SKYBOX_SAMPLE_CROSS_THREAD_BYTES) as *mut u16;
         for lane in 0..16usize {
             core::ptr::write_volatile(local_ids.add(lane), lane as u16);
             core::ptr::write_volatile(local_ids.add(16 + lane), 0);
