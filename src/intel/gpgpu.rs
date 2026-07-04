@@ -7946,14 +7946,7 @@ fn submit_fill_rect_span(dst: GpgpuRgba8Surface, params: FillRectRgba8Params) ->
     if params.width == 0 || params.width > 16 || params.height != 1 {
         return false;
     }
-    let Some(_guard) = DIRECT_RCS_SUBMIT_LOCK.try_lock() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: skybox-sample-rgb565 direct submit busy seq={} fallback=cpu\n",
-            seq
-        );
-        return false;
-    };
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
     let Some(dev) = super::claimed_device() else {
         return false;
     };
@@ -8264,7 +8257,16 @@ pub(crate) fn skybox_sample_rgb565_to_rgba8(
         );
     }
 
-    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let Some(_guard) = DIRECT_RCS_SUBMIT_LOCK.try_lock() else {
+        if trace {
+            crate::log_info!(
+                target: "gpgpu";
+                "intel/gpgpu: skybox-sample-rgb565 direct submit busy seq={} fallback=cpu\n",
+                seq
+            );
+        }
+        return false;
+    };
     let Some(dev) = super::claimed_device() else {
         if trace {
             crate::log_info!(target: "gpgpu"; "intel/gpgpu: skybox-sample-rgb565 no claimed device seq={}\n", seq);

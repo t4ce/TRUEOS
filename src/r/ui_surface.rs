@@ -351,14 +351,6 @@ fn present_primary_rgba_kernel_blit(
         i32::try_from(dst.x).map_err(|_| Error::Invalid)?,
         i32::try_from(dst.y).map_err(|_| Error::Invalid)?,
     );
-    if crate::intel::present_rgba8_surface_to_primary_swap_xrgb(
-        src_surface,
-        src_rect,
-        dst_xy,
-        "ui3-frame-primary-swap",
-    ) {
-        return Ok(Some(UiPresentPath::PrimarySwapKernelBlit));
-    }
     Ok(crate::intel::gpgpu::present_rgba8_rect_to_primary_xrgb_stats_with_flip(
         src_surface,
         src_rect,
