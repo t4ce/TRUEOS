@@ -164,12 +164,10 @@ pub fn log_with_purpose(purpose: Option<&str>, args: fmt::Arguments<'_>) {
         fn write_str(&mut self, s: &str) -> fmt::Result {
             if !self.wrote_prefix {
                 if let Some(purpose) = self.purpose {
-                    debugcon::log(format_args!("[{}] ", purpose));
                     logtotcp::log(format_args!("[{}] ", purpose));
                 }
                 self.wrote_prefix = true;
             }
-            debugcon::log(format_args!("{}", s));
             logtotcp::log(format_args!("{}", s));
             Ok(())
         }
@@ -287,11 +285,6 @@ static KERNEL_LOG_FACADE: KernelLogFacade = KernelLogFacade;
 pub fn init_log_facade() {
     let _ = log::set_logger(&KERNEL_LOG_FACADE);
     log::set_max_level(log::LevelFilter::Trace);
-}
-
-#[inline(always)]
-pub(crate) fn debugcon_write_byte_raw(b: u8) {
-    debugcon::write_byte_raw(b)
 }
 
 pub mod logtotcp {
@@ -462,35 +455,5 @@ pub mod logtotcp {
 
             Timer::after(EmbassyDuration::from_millis(10)).await;
         }
-    }
-}
-
-mod debugcon {
-    use core::fmt;
-
-    #[inline(always)]
-    pub(super) fn write_byte_raw(b: u8) {
-        #[cfg(target_arch = "x86_64")]
-        unsafe {
-            crate::portio::outb(0xE9, b)
-        };
-
-        #[cfg(target_arch = "aarch64")]
-        let _ = b;
-    }
-
-    struct Writer;
-
-    impl fmt::Write for Writer {
-        fn write_str(&mut self, s: &str) -> fmt::Result {
-            for &b in s.as_bytes() {
-                write_byte_raw(b);
-            }
-            Ok(())
-        }
-    }
-
-    pub(super) fn log(args: fmt::Arguments<'_>) {
-        let _ = fmt::write(&mut Writer, args);
     }
 }

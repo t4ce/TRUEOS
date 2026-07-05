@@ -1,6 +1,5 @@
 const RELEASE_COUNT_BYTES: &[u8] = include_bytes!("../tools/cnt");
 
-#[allow(dead_code)]
 pub(crate) const RELEASE_COUNT: u64 = parse_release_count(RELEASE_COUNT_BYTES);
 
 #[used]

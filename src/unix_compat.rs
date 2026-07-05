@@ -32,11 +32,13 @@ pub(crate) fn is_unix_import(name: &str) -> bool {
             | "fchown"
             | "fcntl"
             | "fcntl64"
+            | "fdatasync"
             | "free"
             | "freeaddrinfo"
             | "fstat"
             | "fstat64"
             | "fsync"
+            | "ftruncate"
             | "ftruncate64"
             | "gai_strerror"
             | "getaddrinfo"
@@ -64,6 +66,7 @@ pub(crate) fn is_unix_import(name: &str) -> bool {
             | "open64"
             | "opendir"
             | "posix_memalign"
+            | "pread"
             | "pread64"
             | "pthread_attr_destroy"
             | "pthread_attr_init"
@@ -94,6 +97,7 @@ pub(crate) fn is_unix_import(name: &str) -> bool {
             | "pthread_self"
             | "pthread_setname_np"
             | "pthread_setspecific"
+            | "pwrite"
             | "pwrite64"
             | "qsort"
             | "read"
@@ -163,11 +167,13 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         "fchown" => Some(crate::std_abi_shim::fchown as *const () as usize),
         "fcntl" => Some(crate::std_abi_shim::fcntl as *const () as usize),
         "fcntl64" => Some(crate::std_abi_shim::fcntl64 as *const () as usize),
+        "fdatasync" => Some(crate::std_abi_shim::fdatasync as *const () as usize),
         "free" => Some(crate::std_abi_shim::free as *const () as usize),
         "freeaddrinfo" => Some(crate::std_abi_shim::freeaddrinfo as *const () as usize),
         "fstat" => Some(crate::std_abi_shim::fstat as *const () as usize),
         "fstat64" => Some(crate::std_abi_shim::fstat64 as *const () as usize),
         "fsync" => Some(crate::std_abi_shim::fsync as *const () as usize),
+        "ftruncate" => Some(crate::std_abi_shim::ftruncate as *const () as usize),
         "ftruncate64" => Some(crate::std_abi_shim::ftruncate64 as *const () as usize),
         "gai_strerror" => Some(crate::std_abi_shim::gai_strerror as *const () as usize),
         "getaddrinfo" => Some(crate::std_abi_shim::getaddrinfo as *const () as usize),
@@ -195,6 +201,7 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         "open64" => Some(crate::std_abi_shim::open64 as *const () as usize),
         "opendir" => Some(crate::std_abi_shim::opendir as *const () as usize),
         "posix_memalign" => Some(crate::std_abi_shim::posix_memalign as *const () as usize),
+        "pread" => Some(crate::std_abi_shim::pread as *const () as usize),
         "pread64" => Some(crate::std_abi_shim::pread64 as *const () as usize),
         "pthread_attr_destroy" => {
             Some(crate::std_abi_shim::pthread_attr_destroy as *const () as usize)
@@ -259,6 +266,7 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         "pthread_setspecific" => {
             Some(crate::std_abi_shim::pthread_setspecific as *const () as usize)
         }
+        "pwrite" => Some(crate::std_abi_shim::pwrite as *const () as usize),
         "pwrite64" => Some(crate::std_abi_shim::pwrite64 as *const () as usize),
         "qsort" => Some(crate::std_abi_shim::qsort as *const () as usize),
         "read" => Some(crate::std_abi_shim::read as *const () as usize),

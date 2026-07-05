@@ -74,6 +74,8 @@ const TRUEOS_O_ACCMODE: c_int = 0x3;
 const TRUEOS_O_RDONLY: c_int = 0;
 const TRUEOS_O_WRONLY: c_int = 1;
 const TRUEOS_O_RDWR: c_int = 2;
+const TRUEOS_O_CREAT: c_int = 0o100;
+const TRUEOS_O_TRUNC: c_int = 0o1000;
 const TRUEOS_SC_PAGESIZE: c_int = 30;
 const TRUEOS_SC_PAGE_SIZE: c_int = TRUEOS_SC_PAGESIZE;
 const TRUEOS_SC_NPROCESSORS_CONF: c_int = 83;
@@ -85,6 +87,11 @@ const TRUEOS_S_IFDIR: u32 = 0o040000;
 const TRUEOS_S_IFREG: u32 = 0o100000;
 const TRUEOS_DIR_MODE: u32 = TRUEOS_S_IFDIR | 0o755;
 const TRUEOS_FILE_MODE: u32 = TRUEOS_S_IFREG | 0o644;
+const TRUEOS_ASYNC_WRITE_BEGIN_RETRIES: usize = 100;
+// TRUEOSFS writes can spend real time in placement/index work on cold or busy
+// media. A POSIX close/fsync path should fail on actual IO errors, not on a
+// short userland-style patience budget.
+const TRUEOS_ASYNC_WRITE_TIMEOUT_MS: u64 = 120_000;
 
 #[repr(C)]
 pub struct Iovec {
@@ -203,14 +210,13 @@ struct PthreadThreadState {
 }
 
 enum OpenFile {
-    Read {
+    Regular {
+        path: Option<String>,
         bytes: Vec<u8>,
         offset: usize,
-    },
-    Write {
-        path: String,
-        bytes: Vec<u8>,
-        offset: usize,
+        readable: bool,
+        writable: bool,
+        dirty: bool,
     },
 }
 
@@ -245,26 +251,35 @@ impl SocketFd {
 impl OpenFile {
     fn len(&self) -> usize {
         match self {
-            Self::Read { bytes, .. } | Self::Write { bytes, .. } => bytes.len(),
+            Self::Regular { bytes, .. } => bytes.len(),
         }
     }
 
     fn offset(&self) -> usize {
         match self {
-            Self::Read { offset, .. } | Self::Write { offset, .. } => *offset,
+            Self::Regular { offset, .. } => *offset,
         }
     }
 
     fn set_offset(&mut self, next: usize) {
         match self {
-            Self::Read { offset, .. } | Self::Write { offset, .. } => *offset = next,
+            Self::Regular { offset, .. } => *offset = next,
         }
     }
 
     fn resize(&mut self, next: usize) -> bool {
         match self {
-            Self::Read { bytes, .. } | Self::Write { bytes, .. } => {
+            Self::Regular {
+                bytes,
+                writable,
+                dirty,
+                ..
+            } => {
+                if !*writable {
+                    return false;
+                }
                 bytes.resize(next, 0);
+                *dirty = true;
                 true
             }
         }
@@ -1004,6 +1019,21 @@ fn fs_rc_to_errno(rc: i32) -> c_int {
     }
 }
 
+fn block_error_to_errno(err: crate::disc::block::Error) -> c_int {
+    match err {
+        crate::disc::block::Error::InvalidParam | crate::disc::block::Error::OutOfBounds => {
+            TRUEOS_EINVAL
+        }
+        crate::disc::block::Error::NotSupported => TRUEOS_ENOSYS,
+        crate::disc::block::Error::NotReady
+        | crate::disc::block::Error::DmaUnavailable
+        | crate::disc::block::Error::MmioMapFailed
+        | crate::disc::block::Error::Timeout
+        | crate::disc::block::Error::Io
+        | crate::disc::block::Error::Corrupted => TRUEOS_EIO,
+    }
+}
+
 fn read_file_from_cabi(path: &str) -> Result<Vec<u8>, c_int> {
     let len = unsafe {
         crate::r::io::cabi::trueos_cabi_fs_read_file(path.as_ptr(), path.len(), ptr::null_mut(), 0)
@@ -1062,6 +1092,124 @@ fn write_file_to_cabi(path: &str, bytes: &[u8]) -> Result<(), c_int> {
         return Err(fs_rc_to_errno(rc));
     }
     Ok(())
+}
+
+async fn write_file_to_trueosfs_async(path: &str, bytes: &[u8]) -> Result<(), c_int> {
+    crate::log!("std-abi-shim: async-write stage=resolve path={} bytes={}\n", path, bytes.len());
+    let Some(path) = crate::r::io::env::resolve_fs_path(path, false) else {
+        crate::log!("std-abi-shim: async-write failed stage=resolve errno={}\n", TRUEOS_EINVAL);
+        return Err(TRUEOS_EINVAL);
+    };
+    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
+        crate::log!(
+            "std-abi-shim: async-write failed stage=root path={} errno={}\n",
+            path.as_str(),
+            TRUEOS_ENOENT
+        );
+        return Err(TRUEOS_ENOENT);
+    };
+    crate::log!(
+        "std-abi-shim: async-write stage=begin disk={} path={} bytes={}\n",
+        disk.id().raw(),
+        path.as_str(),
+        bytes.len()
+    );
+
+    let mut begin_attempt = 0usize;
+    let handle = loop {
+        let begin = match embassy_time::with_timeout(
+            embassy_time::Duration::from_millis(TRUEOS_ASYNC_WRITE_TIMEOUT_MS),
+            crate::r::fs::trueosfs::file_write_begin_async(disk, path.as_str(), bytes.len() as u64),
+        )
+        .await
+        {
+            Ok(begin) => begin,
+            Err(_) => {
+                crate::log!(
+                    "std-abi-shim: async-write failed stage=begin errno={} reason=timeout\n",
+                    TRUEOS_EIO
+                );
+                return Err(TRUEOS_EIO);
+            }
+        };
+        match begin {
+            Ok(Some(handle)) => break handle,
+            Ok(None) => return Err(TRUEOS_EIO),
+            Err(crate::disc::block::Error::NotReady)
+                if begin_attempt < TRUEOS_ASYNC_WRITE_BEGIN_RETRIES =>
+            {
+                begin_attempt = begin_attempt.saturating_add(1);
+                if begin_attempt == 1 || begin_attempt % 10 == 0 {
+                    crate::log!(
+                        "std-abi-shim: async-write retry stage=begin attempt={} err=NotReady\n",
+                        begin_attempt
+                    );
+                }
+                embassy_time::Timer::after(embassy_time::Duration::from_millis(25)).await;
+            }
+            Err(err) => return Err(block_error_to_errno(err)),
+        }
+    };
+    crate::log!(
+        "std-abi-shim: async-write success stage=begin handle={} attempts={}\n",
+        handle,
+        begin_attempt.saturating_add(1)
+    );
+
+    let mut offset = 0usize;
+    while offset < bytes.len() {
+        let end = core::cmp::min(offset.saturating_add(64 * 1024), bytes.len());
+        crate::log!(
+            "std-abi-shim: async-write stage=chunk handle={} offset={} len={}\n",
+            handle,
+            offset,
+            end - offset
+        );
+        let chunk = embassy_time::with_timeout(
+            embassy_time::Duration::from_millis(TRUEOS_ASYNC_WRITE_TIMEOUT_MS),
+            crate::r::fs::trueosfs::file_write_chunk_async(handle, &bytes[offset..end]),
+        )
+        .await;
+        match chunk {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                let _ = crate::r::fs::trueosfs::file_write_abort_async(handle).await;
+                return Err(block_error_to_errno(err));
+            }
+            Err(_) => {
+                let _ = crate::r::fs::trueosfs::file_write_abort_async(handle).await;
+                crate::log!(
+                    "std-abi-shim: async-write failed stage=chunk handle={} errno={}\n",
+                    handle,
+                    TRUEOS_EIO
+                );
+                return Err(TRUEOS_EIO);
+            }
+        }
+        offset = end;
+    }
+
+    crate::log!("std-abi-shim: async-write stage=finish handle={}\n", handle);
+    let finish = embassy_time::with_timeout(
+        embassy_time::Duration::from_millis(TRUEOS_ASYNC_WRITE_TIMEOUT_MS),
+        crate::r::fs::trueosfs::file_write_finish_async(handle),
+    )
+    .await;
+    match finish {
+        Ok(Ok(())) => {
+            crate::log!("std-abi-shim: async-write success stage=finish handle={}\n", handle);
+            Ok(())
+        }
+        Ok(Err(err)) => Err(block_error_to_errno(err)),
+        Err(_) => {
+            crate::log!(
+                "std-abi-shim: async-write failed stage=finish handle={} errno={}\n",
+                handle,
+                TRUEOS_EIO
+            );
+            Err(TRUEOS_EIO)
+        }
+    }
 }
 
 fn next_file_fd() -> c_int {
@@ -1858,16 +2006,24 @@ pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: usize) -> i
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     };
-    let OpenFile::Write { bytes, offset, .. } = file else {
+    let OpenFile::Regular {
+        bytes,
+        offset,
+        writable,
+        dirty,
+        ..
+    } = file;
+    if !*writable {
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
-    };
+    }
     let end = offset.saturating_add(input.len());
     if bytes.len() < end {
         bytes.resize(end, 0);
     }
     bytes[*offset..end].copy_from_slice(input);
     *offset = end;
+    *dirty = true;
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
     input.len() as isize
 }
@@ -1892,10 +2048,16 @@ pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: usize) -> isiz
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     };
-    let OpenFile::Read { bytes, offset } = file else {
+    let OpenFile::Regular {
+        bytes,
+        offset,
+        readable,
+        ..
+    } = file;
+    if !*readable {
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
-    };
+    }
     let remaining = bytes.len().saturating_sub(*offset);
     let n = core::cmp::min(count, remaining);
     if n != 0 && !copy_to_abi_out(buf.cast::<u8>(), &bytes[*offset..*offset + n]) {
@@ -2347,22 +2509,45 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, _mode: c_int) -
         return -1;
     };
 
-    let file = match flags & TRUEOS_O_ACCMODE {
-        TRUEOS_O_RDONLY => {
-            let bytes = match read_file_from_cabi(path.as_str()) {
-                Ok(bytes) => bytes,
-                Err(errno) => {
-                    TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
-                    return -1;
+    let access = flags & TRUEOS_O_ACCMODE;
+    let readable = access == TRUEOS_O_RDONLY || access == TRUEOS_O_RDWR;
+    let writable = access == TRUEOS_O_WRONLY || access == TRUEOS_O_RDWR;
+    let should_truncate = flags & TRUEOS_O_TRUNC != 0;
+    let should_create = flags & TRUEOS_O_CREAT != 0;
+
+    let file = match access {
+        TRUEOS_O_RDONLY | TRUEOS_O_WRONLY | TRUEOS_O_RDWR => {
+            let mut dirty = false;
+            let bytes = if should_truncate && writable && should_create {
+                dirty = true;
+                Vec::new()
+            } else {
+                let mut bytes = match read_file_from_cabi(path.as_str()) {
+                    Ok(bytes) => bytes,
+                    Err(TRUEOS_ENOENT) if should_create => {
+                        dirty = writable;
+                        Vec::new()
+                    }
+                    Err(errno) => {
+                        TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
+                        return -1;
+                    }
+                };
+                if should_truncate {
+                    bytes.clear();
+                    dirty |= writable;
                 }
+                bytes
             };
-            OpenFile::Read { bytes, offset: 0 }
+            OpenFile::Regular {
+                path: writable.then_some(path),
+                bytes,
+                offset: 0,
+                readable,
+                writable,
+                dirty,
+            }
         }
-        TRUEOS_O_WRONLY | TRUEOS_O_RDWR => OpenFile::Write {
-            path,
-            bytes: Vec::new(),
-            offset: 0,
-        },
         _ => {
             TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
             return -1;
@@ -2408,11 +2593,52 @@ pub unsafe extern "C" fn close(fd: c_int) -> c_int {
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     };
-    if let OpenFile::Write { path, bytes, .. } = file {
+    let OpenFile::Regular {
+        path,
+        bytes,
+        writable,
+        dirty,
+        ..
+    } = file;
+    if writable
+        && dirty
+        && let Some(path) = path
+    {
         if let Err(errno) = write_file_to_cabi(path.as_str(), bytes.as_slice()) {
             TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
             return -1;
         }
+    }
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    0
+}
+
+pub async fn close_async(fd: c_int) -> c_int {
+    if (0..=2).contains(&fd) {
+        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+        return 0;
+    }
+    if SOCKET_FDS.lock().get(fd).is_some() {
+        return unsafe { close(fd) };
+    }
+    let Some(file) = OPEN_FILES.lock().remove(fd) else {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    };
+    let OpenFile::Regular {
+        path,
+        bytes,
+        writable,
+        dirty,
+        ..
+    } = file;
+    if writable
+        && dirty
+        && let Some(path) = path
+        && let Err(errno) = write_file_to_trueosfs_async(path.as_str(), bytes.as_slice()).await
+    {
+        TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
+        return -1;
     }
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
     0
@@ -2564,10 +2790,13 @@ pub unsafe extern "C" fn pread64(fd: c_int, buf: *mut c_void, count: usize, offs
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     };
-    let OpenFile::Read { bytes, .. } = file else {
+    let OpenFile::Regular {
+        bytes, readable, ..
+    } = file;
+    if !*readable {
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
-    };
+    }
     let offset = offset as usize;
     let remaining = bytes.len().saturating_sub(offset);
     let n = core::cmp::min(count, remaining);
@@ -2577,6 +2806,11 @@ pub unsafe extern "C" fn pread64(fd: c_int, buf: *mut c_void, count: usize, offs
     }
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
     n as isize
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pread(fd: c_int, buf: *mut c_void, count: usize, offset: i64) -> isize {
+    unsafe { pread64(fd, buf, count, offset) }
 }
 
 #[unsafe(no_mangle)]
@@ -2603,18 +2837,30 @@ pub unsafe extern "C" fn pwrite64(
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     };
-    let OpenFile::Write { bytes, .. } = file else {
+    let OpenFile::Regular {
+        bytes,
+        writable,
+        dirty,
+        ..
+    } = file;
+    if !*writable {
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
-    };
+    }
     let offset = offset as usize;
     let end = offset.saturating_add(input.len());
     if bytes.len() < end {
         bytes.resize(end, 0);
     }
     bytes[offset..end].copy_from_slice(input);
+    *dirty = true;
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
     input.len() as isize
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pwrite(fd: c_int, buf: *const c_void, count: usize, offset: i64) -> isize {
+    unsafe { pwrite64(fd, buf, count, offset) }
 }
 
 #[unsafe(no_mangle)]
@@ -2625,6 +2871,11 @@ pub unsafe extern "C" fn fsync(fd: c_int) -> c_int {
     }
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
     0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fdatasync(fd: c_int) -> c_int {
+    unsafe { fsync(fd) }
 }
 
 #[unsafe(no_mangle)]
@@ -2644,6 +2895,11 @@ pub unsafe extern "C" fn ftruncate64(fd: c_int, len: i64) -> c_int {
     }
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
     0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ftruncate(fd: c_int, len: i64) -> c_int {
+    unsafe { ftruncate64(fd, len) }
 }
 
 #[unsafe(no_mangle)]

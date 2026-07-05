@@ -1365,7 +1365,11 @@ pub extern "C" fn trueos_cabi_konsole_begin_frame(
     let state = KonsoleFrameState {
         cols: cols.min(512),
         rows: rows.min(512),
-        reserved_top_rows: reserved_top_rows.min(32),
+        reserved_top_rows: if crate::hv::current_hull_guest_context_vm_id().is_some() {
+            0
+        } else {
+            reserved_top_rows.min(32)
+        },
     };
     KONSOLE_FRAME_STATES.lock().insert(current_cpu_key(), state);
 

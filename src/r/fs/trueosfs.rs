@@ -528,12 +528,31 @@ impl trueos_fs::BlockIo for KernelBlockIo {
             1
         };
 
+        let start_ms = trueosfs_trace_now_ms();
+        crate::log!(
+            "trueosfs: block-write start disk={} lba={} bytes={} bs={} max_blocks={} max_xfer={}\n",
+            self.handle.id().raw(),
+            lba,
+            buf.len(),
+            bs,
+            max_blocks,
+            info.max_transfer_bytes
+        );
+
         let mut cur_lba = lba;
         let mut off = 0usize;
         while off < buf.len() {
             let remaining = buf.len() - off;
             let blocks_here = core::cmp::min(max_blocks, remaining / bs);
             let bytes_here = blocks_here * bs;
+            crate::log!(
+                "trueosfs: block-write chunk disk={} lba={} blocks={} bytes={} off={}\n",
+                self.handle.id().raw(),
+                cur_lba,
+                blocks_here,
+                bytes_here,
+                off
+            );
             self.handle
                 .write_blocks(cur_lba, &buf[off..off + bytes_here])
                 .await?;
@@ -541,12 +560,28 @@ impl trueos_fs::BlockIo for KernelBlockIo {
             off = off.saturating_add(bytes_here);
         }
 
+        crate::log!(
+            "trueosfs: block-write done disk={} lba={} bytes={} elapsed_ms={}\n",
+            self.handle.id().raw(),
+            lba,
+            buf.len(),
+            trueosfs_trace_now_ms().saturating_sub(start_ms)
+        );
         Ok(())
     }
 
     #[inline]
     async fn flush(&self) -> Result<(), block::Error> {
-        self.handle.flush().await
+        let start_ms = trueosfs_trace_now_ms();
+        crate::log!("trueosfs: block-flush start disk={}\n", self.handle.id().raw());
+        let out = self.handle.flush().await;
+        crate::log!(
+            "trueosfs: block-flush done disk={} result={:?} elapsed_ms={}\n",
+            self.handle.id().raw(),
+            out,
+            trueosfs_trace_now_ms().saturating_sub(start_ms)
+        );
+        out
     }
 }
 
@@ -1019,12 +1054,34 @@ pub async fn file_write_begin_async(
     name: &str,
     total_len: u64,
 ) -> Result<Option<u32>, block::Error> {
+    crate::log!(
+        "trueosfs: file-write-begin stage=start disk={} path={} bytes={}\n",
+        disk.id().raw(),
+        name,
+        total_len
+    );
     if disk.parent().is_some() {
+        crate::log!(
+            "trueosfs: file-write-begin failed stage=start disk={} err=InvalidParamParent\n",
+            disk.id().raw()
+        );
         return Err(block::Error::InvalidParam);
     }
+    crate::log!("trueosfs: file-write-begin stage=locate disk={}\n", disk.id().raw());
     let Some(placement) = locate_async(disk).await? else {
+        crate::log!(
+            "trueosfs: file-write-begin failed stage=locate disk={} err=no-placement\n",
+            disk.id().raw()
+        );
         return Ok(None);
     };
+    crate::log!(
+        "trueosfs: file-write-begin stage=engine disk={} super_lba={} data_lba={} data_end={:?}\n",
+        disk.id().raw(),
+        placement.super_lba,
+        placement.data_lba,
+        placement.data_end_lba_exclusive
+    );
 
     let params = trueos_fs::FsParams {
         super_lba: placement.super_lba,
@@ -1036,6 +1093,10 @@ pub async fn file_write_begin_async(
         .await
         .map_err(map_engine_err)?
     else {
+        crate::log!(
+            "trueosfs: file-write-begin failed stage=engine disk={} err=no-space\n",
+            disk.id().raw()
+        );
         return Ok(None);
     };
 
@@ -1047,6 +1108,13 @@ pub async fn file_write_begin_async(
         stream,
     };
     FILE_WRITE_STREAMS.lock().insert(handle, entry);
+    crate::log!(
+        "trueosfs: file-write-begin success disk={} handle={} path={} bytes={}\n",
+        disk.id().raw(),
+        handle,
+        name,
+        total_len
+    );
     Ok(Some(handle))
 }
 

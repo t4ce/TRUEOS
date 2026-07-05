@@ -92,6 +92,7 @@ mod turbo;
 mod tyche;
 mod ui3;
 mod unix_compat;
+mod unix_fd_probe;
 #[path = "usb3/mod.rs"]
 pub(crate) mod usb3;
 mod virtio_gpu_logo;

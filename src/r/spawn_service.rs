@@ -84,7 +84,8 @@ define_started_flags!(
     AUD_FILE_SERVICE_STARTED,
     TINYAUDIO_SERVICE_STARTED,
     TINYAUDIO_LIVE_HTTP_STARTED,
-    EXECUTOR_REALM_MIGRATION_SMOKE_STARTED
+    EXECUTOR_REALM_MIGRATION_SMOKE_STARTED,
+    UNIX_FD_PROBE_STARTED
 );
 
 #[cfg(feature = "trueos_rdp")]
@@ -629,6 +630,7 @@ fn spawn_trueosfs_ready_hook(spawner: Spawner) -> SpawnAttempt {
 const TRUEOSFS_RW_PROBE_PATH: &str = "trueos/probe/rw-500k.bin";
 const TRUEOSFS_RW_PROBE_BYTES: usize = 500 * 1024;
 const TRUEOSFS_RW_PROBE_CHUNK_BYTES: usize = 64 * 1024;
+const TRUEOSFS_RW_PROBE_BEGIN_RETRIES: usize = 100;
 
 fn trueosfs_rw_probe_now_ms() -> u64 {
     let ticks = embassy_time_driver::now();
@@ -670,21 +672,34 @@ async fn trueosfs_rw_probe_task() {
     let mut expected = Vec::with_capacity(TRUEOSFS_RW_PROBE_BYTES);
     trueosfs_rw_probe_fill(&mut expected, TRUEOSFS_RW_PROBE_BYTES);
 
-    let handle = match crate::r::fs::trueosfs::file_write_begin_async(
-        disk,
-        TRUEOSFS_RW_PROBE_PATH,
-        TRUEOSFS_RW_PROBE_BYTES as u64,
-    )
-    .await
-    {
-        Ok(Some(handle)) => handle,
-        Ok(None) => {
-            crate::log!("trueosfs-rw-probe: result=failed phase=begin err=no-space-or-fs\n");
-            return;
-        }
-        Err(err) => {
-            crate::log!("trueosfs-rw-probe: result=failed phase=begin err={:?}\n", err);
-            return;
+    let mut begin_attempt = 0usize;
+    let handle = loop {
+        match crate::r::fs::trueosfs::file_write_begin_async(
+            disk,
+            TRUEOSFS_RW_PROBE_PATH,
+            TRUEOSFS_RW_PROBE_BYTES as u64,
+        )
+        .await
+        {
+            Ok(Some(handle)) => break handle,
+            Ok(None) => {
+                crate::log!("trueosfs-rw-probe: result=failed phase=begin err=no-space-or-fs\n");
+                return;
+            }
+            Err(crate::disc::block::Error::NotReady)
+                if begin_attempt < TRUEOSFS_RW_PROBE_BEGIN_RETRIES =>
+            {
+                begin_attempt = begin_attempt.saturating_add(1);
+                Timer::after(EmbassyDuration::from_millis(25)).await;
+            }
+            Err(err) => {
+                crate::log!(
+                    "trueosfs-rw-probe: result=failed phase=begin attempts={} err={:?}\n",
+                    begin_attempt.saturating_add(1),
+                    err
+                );
+                return;
+            }
         }
     };
 
@@ -779,6 +794,10 @@ async fn trueosfs_rw_probe_task() {
 
 fn spawn_trueosfs_rw_probe(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| trueosfs_rw_probe_task())
+}
+
+fn spawn_unix_fd_probe(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::unix_fd_probe::unix_fd_probe_task())
 }
 
 fn spawn_app_vm_run_queue(spawner: Spawner) -> SpawnAttempt {
@@ -1123,7 +1142,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 57 + cfg!(feature = "trueos_rdp") as usize;
+const TASK_COUNT: usize = 58 + cfg!(feature = "trueos_rdp") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1225,11 +1244,17 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &HTTP_TRUEOSFS_STARTED,
         spawn_http_trueosfs,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "trueosfs-rw-probe",
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
         &TRUEOSFS_RW_PROBE_STARTED,
         spawn_trueosfs_rw_probe,
+    ),
+    TaskSpec::enabled(
+        "unix-fd-probe",
+        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
+        &UNIX_FD_PROBE_STARTED,
+        spawn_unix_fd_probe,
     ),
     TaskSpec::disabled(
         "silk-service",

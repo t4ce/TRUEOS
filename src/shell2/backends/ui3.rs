@@ -69,7 +69,7 @@ enum EscapeState {
     Osc,
 }
 
-struct TerminalState {
+pub(crate) struct TerminalState {
     cols: usize,
     rows: usize,
     cursor_col: usize,
@@ -90,7 +90,7 @@ struct TerminalState {
 }
 
 impl TerminalState {
-    fn new(cols: usize, rows: usize) -> Self {
+    pub(crate) fn new(cols: usize, rows: usize) -> Self {
         let mut out = Self {
             cols: cols.max(1),
             rows: rows.max(1),
@@ -132,7 +132,7 @@ impl TerminalState {
         self.utf8_expected = 0;
     }
 
-    fn resize_preserving_contents(&mut self, cols: usize, rows: usize) {
+    pub(crate) fn resize_preserving_contents(&mut self, cols: usize, rows: usize) {
         let next_cols = cols.max(1);
         let next_rows = rows.max(1);
         if self.cols == next_cols && self.rows == next_rows {
@@ -178,7 +178,7 @@ impl TerminalState {
         }
     }
 
-    fn snapshot(&self) -> Ui3ShellScreenSnapshot {
+    pub(crate) fn snapshot(&self) -> Ui3ShellScreenSnapshot {
         Ui3ShellScreenSnapshot {
             cols: self.cols as u32,
             rows: self.rows as u32,
@@ -559,7 +559,7 @@ impl TerminalState {
         }
     }
 
-    fn feed_bytes(&mut self, bytes: &[u8]) {
+    pub(crate) fn feed_bytes(&mut self, bytes: &[u8]) {
         for &b in bytes {
             self.feed_byte(b);
         }

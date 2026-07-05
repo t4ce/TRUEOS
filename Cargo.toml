@@ -134,7 +134,6 @@ rand = { path = "vendor/rand-0.8.6" }
 rand_distr = { path = "vendor/rand_distr-0.4.3" }
 serde_path_to_error = { path = "vendor/serde_path_to_error-0.1.20" }
 tungstenite = { path = "vendor/tungstenite-0.29.0" }
-reqwest = { path = "vendor/reqwest-0.13.3" }
 kurbo = { path = "vendor/kurbo-0.11.3" }
 svgtypes = { path = "vendor/svgtypes-0.15.3" }
 xmlwriter = { path = "vendor/xmlwriter-0.1.0" }

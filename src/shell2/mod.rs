@@ -39,6 +39,7 @@ const BANNER_ROW: usize = 1;
 const STATUS_ROW: usize = 2;
 const PROMPT_ROW: usize = 3;
 const SCROLL_TOP_ROW: usize = 4;
+const VM_TERMINAL_TOP_ROW: usize = 3;
 const DEFAULT_TRANSCRIPT_VIEW_ROWS: usize = 48;
 const STATUS_SELECTED_RGB: (u8, u8, u8) = (255, 55, 255);
 const FUNCTION_KEY_RGB: (u8, u8, u8) = (255, 255, 255);
@@ -200,23 +201,66 @@ impl<'a> AlignedWriter<'a> {
     }
 
     fn render_transcript(&self, transcript: &VecDeque<TranscriptEntry>) {
+        self.render_transcript_at(SCROLL_TOP_ROW, transcript);
+    }
+
+    fn render_transcript_at(&self, top_row: usize, transcript: &VecDeque<TranscriptEntry>) {
         self.io.raw_write_str(ecma48::SAVE_CURSOR);
-        self.move_to(SCROLL_TOP_ROW, 1);
+        self.move_to(top_row, 1);
         self.io.raw_write_str("\x1b[J");
         let view_rows = self.transcript_view_rows.get().max(1);
 
         if transcript_prefers_chronological_layout(transcript) {
             for (idx, entry) in transcript.iter().take(view_rows).enumerate() {
-                let row = SCROLL_TOP_ROW + idx;
+                let row = top_row + idx;
                 self.transcript_line_at(row, entry.source, entry.text.as_str());
             }
         } else {
             for (idx, entry) in transcript.iter().rev().take(view_rows).enumerate() {
-                let row = SCROLL_TOP_ROW + idx;
+                let row = top_row + idx;
                 self.transcript_line_at(row, entry.source, entry.text.as_str());
             }
         }
         self.io.raw_write_str(ecma48::RESTORE_CURSOR);
+    }
+
+    fn render_terminal_snapshot(&self, top_row: usize, snapshot: &Ui3ShellScreenSnapshot) {
+        self.move_to(top_row, 1);
+        self.io.raw_write_str("\x1b[J");
+
+        let cols = snapshot.cols as usize;
+        let rows = snapshot.rows as usize;
+        for row in 0..rows {
+            self.move_to(top_row + row, 1);
+            let mut current_fg: Option<(u8, u8, u8)> = None;
+            let mut current_bg: Option<(u8, u8, u8)> = None;
+            for col in 0..cols {
+                let idx = row.saturating_mul(cols).saturating_add(col);
+                let Some(cell) = snapshot.cells.get(idx) else {
+                    break;
+                };
+                if current_fg != Some(cell.fg) || current_bg != Some(cell.bg) {
+                    current_fg = Some(cell.fg);
+                    current_bg = Some(cell.bg);
+                    self.io.raw_write_fmt(format_args!(
+                        "\x1b[38;2;{};{};{};48;2;{};{};{}m",
+                        cell.fg.0, cell.fg.1, cell.fg.2, cell.bg.0, cell.bg.1, cell.bg.2
+                    ));
+                }
+                self.io.raw_write_char(cell.ch);
+            }
+            self.io.raw_write_str(ecma48::RESET);
+        }
+
+        if snapshot.cursor_visible {
+            self.move_to(
+                top_row.saturating_add(snapshot.cursor_row as usize),
+                (snapshot.cursor_col as usize).saturating_add(1),
+            );
+            self.io.raw_write_str(ecma48::SHOW_CURSOR);
+        } else {
+            self.io.raw_write_str("\x1b[?25l");
+        }
     }
 
     fn push_transcript_line(&self, entry: &TranscriptEntry) {
@@ -459,7 +503,10 @@ impl<'a> AlignedWriter<'a> {
         out
     }
 
-    fn prompt(&self, _output_mask: u8) {
+    fn prompt(&self, output_mask: u8) {
+        if active_matrix_slot_is_vmx(output_mask) {
+            return;
+        }
         self.move_to(PROMPT_ROW, 1);
         self.clear_line();
         self.io.raw_write_str("\x1b[0m");
@@ -573,12 +620,47 @@ fn line_width_for_output(output_mask: u8) -> usize {
 }
 
 fn transcript_view_rows_for_output(output_mask: u8) -> usize {
+    let top_row = slot_content_top_row(output_mask);
     if (output_mask & OUTPUT_UI3_MASK) != 0 {
         ui3_shell_rows()
-            .saturating_sub(SCROLL_TOP_ROW.saturating_sub(1))
+            .saturating_sub(top_row.saturating_sub(1))
             .max(1)
     } else {
         DEFAULT_TRANSCRIPT_VIEW_ROWS
+    }
+}
+
+fn slot_content_top_row(output_mask: u8) -> usize {
+    if active_matrix_slot_is_vmx(output_mask) {
+        VM_TERMINAL_TOP_ROW
+    } else {
+        SCROLL_TOP_ROW
+    }
+}
+
+fn slot_content_rows_for_output(output_mask: u8) -> usize {
+    transcript_view_rows_for_output(output_mask)
+}
+
+fn active_terminal_snapshot_for_output(output_mask: u8) -> Option<Ui3ShellScreenSnapshot> {
+    matrix::active_terminal_snapshot(
+        output_mask,
+        line_width_for_output(output_mask),
+        slot_content_rows_for_output(output_mask),
+    )
+}
+
+fn render_active_slot_content(
+    out: &AlignedWriter<'_>,
+    output_mask: u8,
+    transcript: &VecDeque<TranscriptEntry>,
+) -> bool {
+    if let Some(snapshot) = active_terminal_snapshot_for_output(output_mask) {
+        out.render_terminal_snapshot(slot_content_top_row(output_mask), &snapshot);
+        true
+    } else {
+        out.render_transcript_at(slot_content_top_row(output_mask), transcript);
+        false
     }
 }
 
@@ -876,6 +958,16 @@ pub(crate) fn raw_write_matrix_target(target: &MatrixTarget, bytes: &[u8]) -> us
         return 0;
     }
 
+    if matrix::record_raw_in_live_slot(
+        &target.slot_id,
+        target.slot_lifetime_generation,
+        line_width_for_output(target.output_mask),
+        slot_content_rows_for_output(target.output_mask),
+        bytes,
+    ) {
+        return bytes.len();
+    }
+
     let io: &'static dyn ShellIo2 = if (target.output_mask & OUTPUT_NET_TCP_MASK) != 0 {
         &NET_TCP_SHELL_BACKEND
     } else if (target.output_mask & OUTPUT_UI3_MASK) != 0 {
@@ -929,10 +1021,10 @@ pub(crate) fn repaint_backend_screen(io: &'static dyn ShellBackend2) {
 
     out.banner(output_mask, mode, time_text.as_str());
     out.mode_status(output_mask, mode, qjs_mode, apps_mode, surf_prefix, None, 0);
-    out.set_scroll_region(SCROLL_TOP_ROW);
+    out.set_scroll_region(slot_content_top_row(output_mask));
 
     let transcript = current_transcript_for_task(io);
-    out.render_transcript(&transcript);
+    render_active_slot_content(&out, output_mask, &transcript);
     out.prompt(output_mask);
 }
 
@@ -1238,7 +1330,7 @@ fn apply_matrix_operator_and_refresh(
         running_go2_phase,
     );
     let transcript = current_transcript_for_task(io);
-    out.render_transcript(&transcript);
+    render_active_slot_content(out, output_mask, &transcript);
     transcript
 }
 
@@ -1268,7 +1360,7 @@ fn switch_to_default_slot_and_refresh(
         running_go2_phase,
     );
     let transcript = current_transcript_for_task(io);
-    out.render_transcript(&transcript);
+    render_active_slot_content(out, output_mask, &transcript);
     out.prompt(output_mask);
     transcript
 }
@@ -1334,7 +1426,7 @@ fn handle_control_c(
 
     line.clear();
     let transcript = current_transcript_for_task(io);
-    out.render_transcript(&transcript);
+    render_active_slot_content(out, output_mask, &transcript);
     out.prompt(output_mask);
     transcript
 }
@@ -1392,7 +1484,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
         running_go2_phase,
     );
 
-    out.set_scroll_region(SCROLL_TOP_ROW);
+    out.set_scroll_region(slot_content_top_row(output_mask));
     out.prompt(output_mask);
 
     let mut line: HString<MAX_LINE> = HString::new();
@@ -1424,10 +1516,12 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 running_go2_phase,
             );
             out.io.raw_write_str(ecma48::RESTORE_CURSOR);
-            if let Some(entry) = appended_transcript_line(&transcript, &next_transcript) {
+            if active_terminal_snapshot_for_output(output_mask).is_some() {
+                render_active_slot_content(&out, output_mask, &next_transcript);
+            } else if let Some(entry) = appended_transcript_line(&transcript, &next_transcript) {
                 out.push_transcript_line(entry);
             } else {
-                out.render_transcript(&next_transcript);
+                render_active_slot_content(&out, output_mask, &next_transcript);
             }
             transcript = next_transcript;
         }
@@ -1740,7 +1834,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 let _ = crate::hv::blueprint_console_submit_stdin(vm_id, &input);
                             }
                             transcript = current_transcript_for_task(io);
-                            out.render_transcript(&transcript);
+                            render_active_slot_content(&out, output_mask, &transcript);
                         }
                     } else if let Some(vm_id) = active_matrix_vm_id(output_mask) {
                         if !submitted.is_empty() {
@@ -1755,13 +1849,13 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 let _ = crate::hv::blueprint_console_submit_stdin(vm_id, &input);
                             }
                             transcript = current_transcript_for_task(io);
-                            out.render_transcript(&transcript);
+                            render_active_slot_content(&out, output_mask, &transcript);
                         }
                     } else if has_broadcast_sessions {
                         if !submitted.is_empty() {
                             record_user_line_for_active_slot(io, submitted);
                             transcript = current_transcript_for_task(io);
-                            out.render_transcript(&transcript);
+                            render_active_slot_content(&out, output_mask, &transcript);
                         }
                         let mut remove_indexes: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
                         for session_idx in session_indexes {
@@ -1803,7 +1897,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         if !submitted.is_empty() {
                             record_user_line_for_active_slot(io, submitted);
                             transcript = current_transcript_for_task(io);
-                            out.render_transcript(&transcript);
+                            render_active_slot_content(&out, output_mask, &transcript);
                         }
                         match handle_command_session_input(
                             &spawner,
@@ -1840,12 +1934,12 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 running_go2_phase,
                             );
                             transcript = current_transcript_for_task(io);
-                            out.render_transcript(&transcript);
+                            render_active_slot_content(&out, output_mask, &transcript);
                         } else {
                             if !submitted.is_empty() {
                                 record_user_line_for_active_slot(io, submitted);
                                 transcript = current_transcript_for_task(io);
-                                out.render_transcript(&transcript);
+                                render_active_slot_content(&out, output_mask, &transcript);
                             }
                             match handle_submit(
                                 &spawner,
@@ -1870,7 +1964,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                         running_go2_phase,
                                     );
                                     transcript = current_transcript_for_task(io);
-                                    out.render_transcript(&transcript);
+                                    render_active_slot_content(&out, output_mask, &transcript);
                                 }
                                 HandleSubmitResult::StartSession(kind) => {
                                     let slot_id = matrix::active_slot_id(output_mask);

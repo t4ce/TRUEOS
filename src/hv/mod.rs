@@ -579,10 +579,6 @@ pub fn hvlogf(args: core::fmt::Arguments<'_>) {
         if !hvlog_console_enabled(line.as_str(), level) {
             return;
         }
-        for &b in line.as_bytes() {
-            crate::globalog::debugcon_write_byte_raw(b);
-        }
-        crate::globalog::debugcon_write_byte_raw(b'\n');
         let _ = trueos_vm::vmcall::net_tcp_write(line.as_bytes());
         let _ = trueos_vm::vmcall::net_tcp_write(b"\n");
         return;

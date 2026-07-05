@@ -6,6 +6,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use heapless::String as HString;
 use spin::Once;
 
+use super::backends::{Ui3ShellScreenSnapshot, ui3::TerminalState};
 use super::{LineSource, TranscriptEntry};
 
 pub(crate) const MATRIX_SLOT_ID_MAX: usize = 3;
@@ -30,7 +31,6 @@ pub(crate) struct MatrixSlotView {
     pub(crate) activity: MatrixSlotActivity,
 }
 
-#[derive(Clone)]
 struct MatrixSlot {
     id: MatrixSlotId,
     lifetime_generation: u64,
@@ -43,6 +43,7 @@ struct MatrixSlot {
     vm_input_attached: bool,
     vm_launch_reserved: bool,
     line_width: usize,
+    terminal: Option<TerminalState>,
 }
 
 #[derive(Clone)]
@@ -133,6 +134,7 @@ fn ensure_slot_index(slots: &mut Vec<MatrixSlot>, id: &MatrixSlotId) -> usize {
         vm_input_attached: false,
         vm_launch_reserved: false,
         line_width: DEFAULT_MATRIX_SLOT_LINE_WIDTH,
+        terminal: None,
     });
     slots.len() - 1
 }
@@ -364,6 +366,7 @@ pub(crate) fn free_slot(requested: &str) -> MatrixSlotId {
             || slot.activity != MatrixSlotActivity::Idle
             || slot.running_count != 0
             || slot.line_width != DEFAULT_MATRIX_SLOT_LINE_WIDTH
+            || slot.terminal.is_some()
         {
             slot.lines.clear();
             slot.activity = MatrixSlotActivity::Idle;
@@ -372,6 +375,7 @@ pub(crate) fn free_slot(requested: &str) -> MatrixSlotId {
             slot.vm_id = None;
             slot.vm_launch_reserved = false;
             slot.line_width = DEFAULT_MATRIX_SLOT_LINE_WIDTH;
+            slot.terminal = None;
             bump_slot_revision(&mut guard, idx);
         }
     } else if let Some(idx) = guard.slots.iter().position(|slot| slot.id == freed_id) {
@@ -407,6 +411,52 @@ pub(crate) fn active_lines(output_mask: u8) -> VecDeque<TranscriptEntry> {
     let slot_id = active_slot_id_ref(&guard, output_mask).clone();
     let idx = ensure_slot_index(&mut guard.slots, &slot_id);
     guard.slots[idx].lines.clone()
+}
+
+pub(crate) fn active_terminal_snapshot(
+    output_mask: u8,
+    cols: usize,
+    rows: usize,
+) -> Option<Ui3ShellScreenSnapshot> {
+    let mut guard = state().lock();
+    let slot_id = active_slot_id_ref(&guard, output_mask).clone();
+    let idx = ensure_slot_index(&mut guard.slots, &slot_id);
+    let terminal = guard.slots[idx].terminal.as_mut()?;
+    let before = terminal.snapshot();
+    terminal.resize_preserving_contents(cols.max(1), rows.max(1));
+    let after = terminal.snapshot();
+    if before != after {
+        bump_slot_revision(&mut guard, idx);
+    }
+    Some(after)
+}
+
+pub(crate) fn record_raw_in_live_slot(
+    slot_id: &MatrixSlotId,
+    lifetime_generation: u64,
+    cols: usize,
+    rows: usize,
+    bytes: &[u8],
+) -> bool {
+    if bytes.is_empty() {
+        return true;
+    }
+
+    let mut guard = state().lock();
+    let Some(idx) = guard.slots.iter().position(|slot| slot.id == *slot_id) else {
+        return false;
+    };
+    if guard.slots[idx].lifetime_generation != lifetime_generation {
+        return false;
+    }
+
+    let terminal = guard.slots[idx]
+        .terminal
+        .get_or_insert_with(|| TerminalState::new(cols.max(1), rows.max(1)));
+    terminal.resize_preserving_contents(cols.max(1), rows.max(1));
+    terminal.feed_bytes(bytes);
+    bump_slot_revision(&mut guard, idx);
+    true
 }
 
 pub(crate) fn active_line_width(output_mask: u8) -> usize {
