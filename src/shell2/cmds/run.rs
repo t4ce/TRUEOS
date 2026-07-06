@@ -10,7 +10,7 @@ use super::super::{
     MatrixTarget, ShellBackend2, UART1_COM1_BACKEND, line_width_for_backend,
     matrix_target_for_backend, matrix_target_interrupted, print_shell_line,
     release_matrix_target_vm_reservation, reserve_matrix_target_for_vm_slot_selected,
-    set_matrix_target_active,
+    set_matrix_target_active, set_matrix_target_app_label,
 };
 use super::tlb_helper::TlbTable;
 
@@ -59,6 +59,13 @@ fn preferred_slot_for_archive(archive: &str) -> String {
     } else {
         out
     }
+}
+
+fn app_label_for_archive(archive: &str) -> &str {
+    archive
+        .trim()
+        .trim_end_matches(".bp")
+        .trim_end_matches(".vm")
 }
 
 fn reserve_target_for_archive(target: &MatrixTarget, archive: &str) -> MatrixTarget {
@@ -827,6 +834,7 @@ pub(crate) fn enqueue_blueprint_bytes(
     }
 
     let target = reserve_target_for_archive(&target, archive.as_str());
+    set_matrix_target_app_label(&target, app_label_for_archive(archive.as_str()));
     let line = alloc::format!("apps: queued {}", archive.as_str());
     log_run_target_line(&target, line.as_str());
     enqueue_blueprint_request(target, archive, "direct", module_bytes, app_args, false);
@@ -871,6 +879,7 @@ async fn submit_module_bytes_to_target_async(
     }
     crate::allocators::with_host_alloc_domain(|| {
         let target = reserve_target_for_archive(&target, archive_name);
+        set_matrix_target_app_label(&target, app_label_for_archive(archive_name));
         let line = alloc::format!("apps: queued {}", archive_name);
         log_run_target_line(&target, line.as_str());
         enqueue_blueprint_request(

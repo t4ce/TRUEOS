@@ -31,7 +31,7 @@ const TOOL_JSON_C4: &str = r#"{"type":"object","properties":{"mode":{"type":"str
 const TOOL_JSON_DIASHOW: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc","log"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format or optional disk id for action=log."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."},"max":{"type":"integer","minimum":1,"maximum":4096,"description":"Maximum raw TRUEOSFS log records to print for action=log."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_ETC: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["diashow","gboy"],"description":"etc subcommand to run."},"path":{"type":"string","description":"TRUEOSFS Game Boy ROM path for subcommand=gboy."}},"required":["subcommand"],"additionalProperties":false}"#;
-const TOOL_JSON_FONT: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["probe","stack","bench"],"description":"Optional font action."},"bench":{"type":"string","enum":["athlas","vector","skrifa"],"description":"Font benchmark target when subcommand is bench."}},"required":[],"additionalProperties":false}"#;
+const TOOL_JSON_FONT: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["tessel"],"description":"Run the current no-op font tessellation doorway."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_GBOY: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS Game Boy ROM path."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_GPGPU: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["canvas2d","canvas3d","artificial-pixel","smoke"],"description":"GPGPU command to run."},"canvas2d":{"type":"string","enum":["sprite","sprites64","mandel64"],"description":"Optional canvas2d mode."},"canvas3d":{"type":"string","enum":["cube","ico","para"],"description":"Optional canvas3d mode."},"duration_ms":{"type":"integer","description":"Optional canvas2d sprite runtime in milliseconds."},"cadence_ms":{"type":"integer","description":"Optional canvas2d sprite minimum launch cadence in milliseconds."},"count":{"type":"integer","minimum":1,"maximum":256,"description":"Optional canvas2d sprite descriptors per batch."},"present_every":{"type":"integer","minimum":1,"maximum":1024,"description":"Optional canvas2d sprite present interval."},"iterations":{"type":"integer","description":"Optional canvas2d mandel64 iteration count."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_HYPER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","probe"],"description":"Hyper transport view to print."},"url":{"type":"string","description":"Optional URL to download into TRUEOSFS."},"path":{"type":"string","description":"Optional TRUEOSFS destination path."}},"required":[],"additionalProperties":false}"#;
@@ -270,9 +270,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some(STATUS_ORANGE_RGB),
         advertised: true,
         handler: dispatch_font,
-        tool_description: Some(
-            "Inspect the font stack or run observational Athlas/vector/skrifa timing probes.",
-        ),
+        tool_description: Some("Inspect the warmed graphics font cache tessellation doorway."),
         tool_parameters_json: Some(TOOL_JSON_FONT),
     },
     BuiltinShell2CmdEntry {

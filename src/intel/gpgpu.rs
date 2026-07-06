@@ -826,6 +826,7 @@ const DIRECT_RCS_GPU_VA_PRESENT_STAGING_BASE: u64 = 0x00A0_0000;
 const DIRECT_RCS_GPU_VA_SOLID_RECT_SOURCE_BASE: u64 = 0x0400_0000;
 const DIRECT_RCS_GPU_VA_BATCH_BASE: u64 = 0x0180_0000;
 const DIRECT_RCS_SMOKE_MARKER: u32 = 0xC0DE_5101;
+const DIRECT_RCS_FONT_TESSEL_MARKER: u32 = 0xF07E_5501;
 const DIRECT_RCS_SMOKE_POLL_ITERS: usize = 262_144;
 pub(crate) const GPGPU_SHELL_SURFACE_WIDTH: u32 = 1024;
 pub(crate) const GPGPU_SHELL_SURFACE_HEIGHT: u32 = 64;
@@ -910,6 +911,51 @@ pub(crate) struct GpgpuActivitySnapshot {
     pub(crate) ipeir: u32,
     pub(crate) ipehr: u32,
     pub(crate) eir: u32,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct DirectRcsMarkerProbeResult {
+    pub(crate) available: bool,
+    pub(crate) forcewake_ok: bool,
+    pub(crate) mapped_ok: bool,
+    pub(crate) ppgtt_ok: bool,
+    pub(crate) batch_ok: bool,
+    pub(crate) submitted: bool,
+    pub(crate) retired: bool,
+    pub(crate) retire_ms: u64,
+    pub(crate) observed: u32,
+    pub(crate) expected: u32,
+    pub(crate) submit_seq: u32,
+    pub(crate) head: u32,
+    pub(crate) tail: u32,
+    pub(crate) acthd: u32,
+    pub(crate) ipeir: u32,
+    pub(crate) ipehr: u32,
+    pub(crate) eir: u32,
+}
+
+impl Default for DirectRcsMarkerProbeResult {
+    fn default() -> Self {
+        Self {
+            available: false,
+            forcewake_ok: false,
+            mapped_ok: false,
+            ppgtt_ok: false,
+            batch_ok: false,
+            submitted: false,
+            retired: false,
+            retire_ms: 0,
+            observed: 0,
+            expected: DIRECT_RCS_FONT_TESSEL_MARKER,
+            submit_seq: DIRECT_RCS_SUBMIT_COUNTER.load(Ordering::Relaxed),
+            head: 0,
+            tail: 0,
+            acthd: 0,
+            ipeir: 0,
+            ipehr: 0,
+            eir: 0,
+        }
+    }
 }
 
 #[repr(C)]
@@ -5518,6 +5564,78 @@ pub(crate) fn activity_snapshot() -> GpgpuActivitySnapshot {
     }
 }
 
+pub(crate) fn submit_direct_rcs_marker_probe_now() -> DirectRcsMarkerProbeResult {
+    let mut result = DirectRcsMarkerProbeResult::default();
+    if !DIRECT_RCS_ENABLED {
+        return result;
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: direct-rcs-marker-probe skipped reason=no-claimed-device path=font-tessel\n"
+        );
+        return result;
+    };
+    result.available = true;
+    let Some(state) = direct_rcs_state_once(dev) else {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: direct-rcs-marker-probe failed rung=alloc path=font-tessel\n"
+        );
+        return result;
+    };
+
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    result.forcewake_ok = direct_rcs_forcewake(dev);
+    result.mapped_ok = result.forcewake_ok && direct_rcs_map_state(dev, state);
+    result.ppgtt_ok = result.mapped_ok && direct_rcs_init_ppgtt(state);
+    result.batch_ok = result.ppgtt_ok && direct_rcs_encode_marker_batch(state, result.expected);
+    let submit_start_tick = direct_rcs_now_tick();
+    result.submitted = result.batch_ok && direct_rcs_submit_batch(dev, state);
+    result.observed = if result.submitted {
+        direct_rcs_poll_result(state, result.expected)
+    } else {
+        0
+    };
+    result.retire_ms = if result.submitted {
+        direct_rcs_elapsed_ms_since(submit_start_tick)
+    } else {
+        0
+    };
+    result.retired = result.observed == result.expected;
+    result.submit_seq = DIRECT_RCS_SUBMIT_COUNTER.load(Ordering::Relaxed);
+    result.head = super::mmio_read(dev, RCS_RING_HEAD);
+    result.tail = super::mmio_read(dev, RCS_RING_TAIL);
+    result.acthd = super::mmio_read(dev, RCS_RING_ACTHD);
+    result.ipeir = super::mmio_read(dev, RCS_RING_IPEIR);
+    result.ipehr = super::mmio_read(dev, RCS_RING_IPEHR);
+    result.eir = super::mmio_read(dev, RCS_RING_EIR);
+
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/gpgpu: direct-rcs-marker-probe forcewake={} ggtt={} ppgtt={} batch={} submitted={} retired={} retire_ms={} observed=0x{:08X} expected=0x{:08X} submit_seq={} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=font-tessel note=triangle-rasterizer-not-wired\n",
+        result.forcewake_ok as u8,
+        result.mapped_ok as u8,
+        result.ppgtt_ok as u8,
+        result.batch_ok as u8,
+        result.submitted as u8,
+        result.retired as u8,
+        result.retire_ms,
+        result.observed,
+        result.expected,
+        result.submit_seq,
+        result.head,
+        result.tail,
+        result.acthd,
+        result.ipeir,
+        result.ipehr,
+        result.eir,
+    );
+
+    result
+}
+
 pub(crate) fn submit_direct_rcs_smoke_once() -> bool {
     if !DIRECT_RCS_ENABLED || DIRECT_RCS_SMOKE_RAN.swap(true, Ordering::AcqRel) {
         return false;
@@ -9330,6 +9448,31 @@ fn direct_rcs_encode_smoke_batch(state: DirectRcsState) -> bool {
         core::ptr::write_volatile(batch.add(5), MI_NOOP);
     }
     super::dma_flush(state.batch_virt, 6 * core::mem::size_of::<u32>());
+    super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
+    true
+}
+
+fn direct_rcs_encode_marker_batch(state: DirectRcsState, marker: u32) -> bool {
+    unsafe {
+        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
+        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+    }
+
+    let batch = unsafe {
+        core::slice::from_raw_parts_mut(
+            state.batch_virt as *mut u32,
+            DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>(),
+        )
+    };
+    let mut cursor = 0usize;
+    let ok = direct_rcs_push_store_marker(batch, &mut cursor, 0, marker)
+        && direct_rcs_push(batch, &mut cursor, MI_BATCH_BUFFER_END)
+        && direct_rcs_push(batch, &mut cursor, MI_NOOP);
+    if !ok {
+        return false;
+    }
+    super::dma_flush(state.batch_virt, cursor * core::mem::size_of::<u32>());
     super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
     true
 }

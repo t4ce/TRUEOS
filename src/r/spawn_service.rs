@@ -940,8 +940,6 @@ async fn bp_autostart_task() {
         }
     }
 
-    // crate::font_probe::log_boot_font_probe();
-
     //let html = crate::surfer::html_shack::Html::new(
     //    "inline://trueos/input.html",
     //    include_str!("../../crates/trueos-qjs/src/html/input.html"),

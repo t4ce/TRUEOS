@@ -7,6 +7,7 @@
 
 pub(crate) mod decoder;
 pub(crate) mod encoder;
+pub(crate) mod font;
 
 pub(crate) use self::decoder::jpeg as jpeg_codec;
 pub(crate) use self::decoder::jpeg_layout;

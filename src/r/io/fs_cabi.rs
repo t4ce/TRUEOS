@@ -1283,6 +1283,9 @@ struct KonsoleFrameState {
     bytes: Vec<u8>,
 }
 
+const KONSOLE_FRAME_FLAG_ODE_TO_USERSPACE: u32 = 1 << 31;
+const KONSOLE_RESERVED_TOP_ROWS_MASK: u32 = 0x0000_FFFF;
+
 static KONSOLE_FRAME_STATES: spin::Mutex<BTreeMap<u32, KonsoleFrameState>> =
     spin::Mutex::new(BTreeMap::new());
 
@@ -1373,7 +1376,7 @@ pub extern "C" fn trueos_cabi_konsole_begin_frame(
         reserved_top_rows: if crate::hv::current_hull_guest_context_vm_id().is_some() {
             0
         } else {
-            reserved_top_rows.min(32)
+            (reserved_top_rows & KONSOLE_RESERVED_TOP_ROWS_MASK).min(32)
         },
         cursor_row: 0,
         cursor_col: 0,
@@ -1385,6 +1388,11 @@ pub extern "C" fn trueos_cabi_konsole_begin_frame(
     states.insert(key, state);
     if let Some(state) = states.get_mut(&key) {
         state.bytes.extend_from_slice(b"\x1b[0m\x1b[?25l");
+        if (reserved_top_rows & KONSOLE_FRAME_FLAG_ODE_TO_USERSPACE) != 0 {
+            state
+                .bytes
+                .extend_from_slice(b"\x1b]777;ode_to_userspace=1\x07");
+        }
     }
     0
 }

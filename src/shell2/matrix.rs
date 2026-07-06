@@ -43,6 +43,8 @@ struct MatrixSlot {
     vm_input_attached: bool,
     vm_launch_reserved: bool,
     line_width: usize,
+    app_label: Option<AllocString>,
+    hotkey_mode: bool,
     terminal: Option<TerminalState>,
 }
 
@@ -134,6 +136,8 @@ fn ensure_slot_index(slots: &mut Vec<MatrixSlot>, id: &MatrixSlotId) -> usize {
         vm_input_attached: false,
         vm_launch_reserved: false,
         line_width: DEFAULT_MATRIX_SLOT_LINE_WIDTH,
+        app_label: None,
+        hotkey_mode: false,
         terminal: None,
     });
     slots.len() - 1
@@ -366,6 +370,8 @@ pub(crate) fn free_slot(requested: &str) -> MatrixSlotId {
             || slot.activity != MatrixSlotActivity::Idle
             || slot.running_count != 0
             || slot.line_width != DEFAULT_MATRIX_SLOT_LINE_WIDTH
+            || slot.app_label.is_some()
+            || slot.hotkey_mode
             || slot.terminal.is_some()
         {
             slot.lines.clear();
@@ -375,6 +381,8 @@ pub(crate) fn free_slot(requested: &str) -> MatrixSlotId {
             slot.vm_id = None;
             slot.vm_launch_reserved = false;
             slot.line_width = DEFAULT_MATRIX_SLOT_LINE_WIDTH;
+            slot.app_label = None;
+            slot.hotkey_mode = false;
             slot.terminal = None;
             bump_slot_revision(&mut guard, idx);
         }
@@ -431,6 +439,31 @@ pub(crate) fn active_terminal_snapshot(
     Some(after)
 }
 
+pub(crate) fn active_terminal_hotkey_mode(output_mask: u8) -> bool {
+    let mut guard = state().lock();
+    let slot_id = active_slot_id_ref(&guard, output_mask).clone();
+    let idx = ensure_slot_index(&mut guard.slots, &slot_id);
+    guard.slots[idx].hotkey_mode
+}
+
+pub(crate) fn set_active_terminal_hotkey_mode(output_mask: u8, enabled: bool) -> bool {
+    let mut guard = state().lock();
+    let slot_id = active_slot_id_ref(&guard, output_mask).clone();
+    let idx = ensure_slot_index(&mut guard.slots, &slot_id);
+    if guard.slots[idx].hotkey_mode != enabled {
+        guard.slots[idx].hotkey_mode = enabled;
+        bump_slot_revision(&mut guard, idx);
+    }
+    enabled
+}
+
+pub(crate) fn active_slot_app_label(output_mask: u8) -> Option<AllocString> {
+    let mut guard = state().lock();
+    let slot_id = active_slot_id_ref(&guard, output_mask).clone();
+    let idx = ensure_slot_index(&mut guard.slots, &slot_id);
+    guard.slots[idx].app_label.clone()
+}
+
 pub(crate) fn record_raw_in_live_slot(
     slot_id: &MatrixSlotId,
     lifetime_generation: u64,
@@ -454,8 +487,20 @@ pub(crate) fn record_raw_in_live_slot(
         .terminal
         .get_or_insert_with(|| TerminalState::new(cols.max(1), rows.max(1)));
     terminal.resize_preserving_contents(cols.max(1), rows.max(1));
+    let before = terminal.snapshot();
     terminal.feed_bytes(bytes);
-    bump_slot_revision(&mut guard, idx);
+    let after = terminal.snapshot();
+    let hotkey_mode = guard.slots[idx].hotkey_mode;
+    let visual_changed = before.cols != after.cols
+        || before.rows != after.rows
+        || before.cells != after.cells
+        || (hotkey_mode
+            && (before.cursor_col != after.cursor_col
+                || before.cursor_row != after.cursor_row
+                || before.cursor_visible != after.cursor_visible));
+    if visual_changed {
+        bump_slot_revision(&mut guard, idx);
+    }
     true
 }
 
@@ -689,6 +734,20 @@ pub(crate) fn bind_slot_vm(slot_id: &MatrixSlotId, vm_id: u8, input_attached: bo
     }
 }
 
+pub(crate) fn set_slot_app_label(slot_id: &MatrixSlotId, label: &str) {
+    let mut guard = state().lock();
+    let idx = ensure_slot_index(&mut guard.slots, slot_id);
+    let next = if label.trim().is_empty() {
+        None
+    } else {
+        Some(AllocString::from(label.trim()))
+    };
+    if guard.slots[idx].app_label != next {
+        guard.slots[idx].app_label = next;
+        bump_slot_revision(&mut guard, idx);
+    }
+}
+
 pub(crate) fn release_vm_slot_reservation(
     slot_id: &MatrixSlotId,
     lifetime_generation: u64,
@@ -714,6 +773,8 @@ pub(crate) fn unbind_slot_vm(slot_id: &MatrixSlotId, vm_id: u8) {
         guard.slots[idx].vm_id = None;
         guard.slots[idx].vm_input_attached = false;
         guard.slots[idx].vm_launch_reserved = false;
+        guard.slots[idx].hotkey_mode = false;
+        guard.slots[idx].app_label = None;
         bump_slot_revision(&mut guard, idx);
     }
 }

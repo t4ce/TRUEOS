@@ -13,7 +13,9 @@ use crate::r::keyboard::{
     KEYBOARD_KEY_PAGE_UP, KEYBOARD_KEY_TAB, KEYBOARD_OUTPUT_KIND_KEY, KEYBOARD_OUTPUT_KIND_TEXT,
     TrueosKeyboardOutputEvent,
 };
-use crate::shell2::{ShellBackend2, ShellIo2, UI3_ESCAPE_KEY_BYTE};
+use crate::shell2::{
+    ShellBackend2, ShellIo2, UI3_ESCAPE_KEY_BYTE, UI3_F1_KEY_BYTE, UI3_UNMAPPED_KEY_BYTE,
+};
 
 const UI3_SHELL_DEFAULT_FG: (u8, u8, u8) = (0xF1, 0xF4, 0xF8);
 const UI3_SHELL_DEFAULT_BG: (u8, u8, u8) = (0x0C, 0x10, 0x16);
@@ -37,6 +39,7 @@ pub(crate) struct Ui3ShellScreenSnapshot {
     pub cursor_col: u32,
     pub cursor_row: u32,
     pub cursor_visible: bool,
+    pub userspace_owns_slot: bool,
     pub cells: Vec<Ui3ShellCell>,
 }
 
@@ -76,6 +79,7 @@ pub(crate) struct TerminalState {
     cursor_row: usize,
     saved_col: usize,
     saved_row: usize,
+    pending_wrap: bool,
     scroll_top: usize,
     scroll_bottom: usize,
     cursor_visible: bool,
@@ -87,6 +91,7 @@ pub(crate) struct TerminalState {
     utf8_buf: [u8; 4],
     utf8_len: usize,
     utf8_expected: usize,
+    userspace_owns_slot: bool,
 }
 
 impl TerminalState {
@@ -98,6 +103,7 @@ impl TerminalState {
             cursor_row: 0,
             saved_col: 0,
             saved_row: 0,
+            pending_wrap: false,
             scroll_top: 0,
             scroll_bottom: rows.max(1).saturating_sub(1),
             cursor_visible: true,
@@ -109,6 +115,7 @@ impl TerminalState {
             utf8_buf: [0; 4],
             utf8_len: 0,
             utf8_expected: 0,
+            userspace_owns_slot: false,
         };
         out.resize(cols, rows);
         out
@@ -123,6 +130,7 @@ impl TerminalState {
         self.cursor_row = 0;
         self.saved_col = 0;
         self.saved_row = 0;
+        self.pending_wrap = false;
         self.style = TerminalStyle::default();
         self.cells = vec![Self::blank_cell(); self.cols.saturating_mul(self.rows)];
         self.esc_state = EscapeState::None;
@@ -130,6 +138,7 @@ impl TerminalState {
         self.osc_buf.clear();
         self.utf8_len = 0;
         self.utf8_expected = 0;
+        self.userspace_owns_slot = false;
     }
 
     pub(crate) fn resize_preserving_contents(&mut self, cols: usize, rows: usize) {
@@ -166,6 +175,7 @@ impl TerminalState {
         self.cursor_row = self.cursor_row.min(self.rows.saturating_sub(1));
         self.saved_col = self.saved_col.min(self.cols.saturating_sub(1));
         self.saved_row = self.saved_row.min(self.rows.saturating_sub(1));
+        self.pending_wrap = false;
         if had_full_scroll_region {
             self.scroll_top = 0;
             self.scroll_bottom = self.rows.saturating_sub(1);
@@ -185,6 +195,7 @@ impl TerminalState {
             cursor_col: self.cursor_col as u32,
             cursor_row: self.cursor_row as u32,
             cursor_visible: self.cursor_visible,
+            userspace_owns_slot: self.userspace_owns_slot,
             cells: self.cells.clone(),
         }
     }
@@ -307,19 +318,34 @@ impl TerminalState {
 
     fn put_char(&mut self, ch: char) {
         match ch {
-            '\r' => self.cursor_col = 0,
-            '\n' => self.line_feed(),
-            '\u{0008}' => self.cursor_col = self.cursor_col.saturating_sub(1),
+            '\r' => {
+                self.pending_wrap = false;
+                self.cursor_col = 0;
+            }
+            '\n' => {
+                self.pending_wrap = false;
+                self.line_feed();
+            }
+            '\u{0008}' => {
+                self.pending_wrap = false;
+                self.cursor_col = self.cursor_col.saturating_sub(1);
+            }
             '\t' => {
+                self.pending_wrap = false;
                 let next_tab = ((self.cursor_col / 8).saturating_add(1)).saturating_mul(8);
                 self.cursor_col = next_tab.min(self.cols.saturating_sub(1));
             }
             _ => {
-                self.set_cell(self.cursor_row, self.cursor_col, ch);
-                self.cursor_col = self.cursor_col.saturating_add(1);
-                if self.cursor_col >= self.cols {
+                if self.pending_wrap {
                     self.cursor_col = 0;
                     self.line_feed();
+                    self.pending_wrap = false;
+                }
+                self.set_cell(self.cursor_row, self.cursor_col, ch);
+                if self.cursor_col >= self.cols.saturating_sub(1) {
+                    self.pending_wrap = true;
+                } else {
+                    self.cursor_col = self.cursor_col.saturating_add(1);
                 }
             }
         }
@@ -358,12 +384,30 @@ impl TerminalState {
             }
             EscapeState::Osc => {
                 if b == 0x07 {
+                    self.exec_osc();
                     self.osc_buf.clear();
                     self.esc_state = EscapeState::None;
                 } else {
                     self.osc_buf.push(b);
                 }
             }
+        }
+    }
+
+    fn exec_osc(&mut self) {
+        let Ok(raw) = core::str::from_utf8(self.osc_buf.as_slice()) else {
+            return;
+        };
+        match raw {
+            "777;ode_to_userspace=1" => {
+                self.userspace_owns_slot = true;
+                self.cursor_visible = false;
+                self.cursor_col = 0;
+                self.cursor_row = 0;
+                self.clear_all();
+            }
+            "777;ode_to_userspace=0" => self.userspace_owns_slot = false,
+            _ => {}
         }
     }
 
@@ -428,6 +472,7 @@ impl TerminalState {
     fn exec_csi(&mut self, final_char: char) {
         let raw = core::str::from_utf8(self.csi_buf.as_slice()).unwrap_or("");
         let params = self.parse_params();
+        self.pending_wrap = false;
         match final_char {
             'H' | 'f' => {
                 let row = params.first().copied().unwrap_or(1).max(1) as usize;
@@ -733,12 +778,12 @@ fn queue_key_sequence(window_id: u32, key_code: u16) -> bool {
         KEYBOARD_KEY_PAGE_UP => queue_input_bytes(window_id, b"\x1B[5~"),
         KEYBOARD_KEY_PAGE_DOWN => queue_input_bytes(window_id, b"\x1B[6~"),
         KEYBOARD_KEY_DELETE => queue_input_bytes(window_id, b"\x7F"),
-        KEYBOARD_KEY_F1 => queue_input_bytes(window_id, b"\x1BOP"),
+        KEYBOARD_KEY_F1 => queue_input_bytes(window_id, &[UI3_F1_KEY_BYTE]),
         KEYBOARD_KEY_F2 => queue_input_bytes(window_id, b"\x1BOQ"),
         KEYBOARD_KEY_F3 => queue_input_bytes(window_id, b"\x1BOR"),
         KEYBOARD_KEY_F4 => queue_input_bytes(window_id, b"\x1BOS"),
         KEYBOARD_KEY_F5 => queue_input_bytes(window_id, b"\x1BOT"),
-        _ => false,
+        _ => queue_input_bytes(window_id, &[UI3_UNMAPPED_KEY_BYTE]),
     }
 }
 

@@ -33,7 +33,6 @@ mod exceptions;
 #[path = "exceptions_disabled.rs"]
 mod exceptions;
 mod executor_cache;
-mod font_probe;
 mod gb_demo;
 mod globalog;
 #[path = "../crates/trueos-graphics/mod.rs"]
@@ -303,6 +302,10 @@ fn boot_secondary_processors(resp: Option<&'static crate::limine::MpResponse>) {
 }
 
 fn spawn_bsp_services(spawner: Spawner) {
+    match crate::graphics::font::font_warm_task() {
+        Ok(token) => spawner.spawn(token),
+        Err(e) => crate::log!("graphics-font: spawn failed: {:?}\n", e),
+    }
     match crate::r::spawn_service::spawn_service_task(spawner) {
         Ok(token) => spawner.spawn(token),
         Err(e) => crate::log!("spawn-svc: spawn failed: {:?}\n", e),

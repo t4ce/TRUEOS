@@ -39,7 +39,7 @@ const BANNER_ROW: usize = 1;
 const STATUS_ROW: usize = 2;
 const PROMPT_ROW: usize = 3;
 const SCROLL_TOP_ROW: usize = 4;
-const VM_TERMINAL_TOP_ROW: usize = 3;
+const VM_HOTKEY_TERMINAL_TOP_ROW: usize = 2;
 const DEFAULT_TRANSCRIPT_VIEW_ROWS: usize = 48;
 const STATUS_SELECTED_RGB: (u8, u8, u8) = (255, 55, 255);
 const FUNCTION_KEY_RGB: (u8, u8, u8) = (255, 255, 255);
@@ -59,6 +59,8 @@ const BANNER_TITLE_TEXT: &str = "TRUE OS";
 const BANNER_CLOCK_WIDTH: usize = 5;
 const BANNER_GROUP_GAP_WIDTH: usize = 1;
 pub(crate) const UI3_ESCAPE_KEY_BYTE: u8 = 0x1d;
+pub(crate) const UI3_F1_KEY_BYTE: u8 = 0x1c;
+pub(crate) const UI3_UNMAPPED_KEY_BYTE: u8 = 0x1e;
 
 static REGISTERED_OUTPUTS: AtomicU8 = AtomicU8::new(0);
 
@@ -225,7 +227,12 @@ impl<'a> AlignedWriter<'a> {
         self.io.raw_write_str(ecma48::RESTORE_CURSOR);
     }
 
-    fn render_terminal_snapshot(&self, top_row: usize, snapshot: &Ui3ShellScreenSnapshot) {
+    fn render_terminal_snapshot(
+        &self,
+        top_row: usize,
+        snapshot: &Ui3ShellScreenSnapshot,
+        allow_snapshot_cursor: bool,
+    ) {
         let cols = snapshot.cols as usize;
         let rows = snapshot.rows as usize;
         for row in 0..rows {
@@ -250,13 +257,13 @@ impl<'a> AlignedWriter<'a> {
             self.io.raw_write_str(ecma48::RESET);
         }
 
-        if snapshot.cursor_visible {
+        if allow_snapshot_cursor && snapshot.cursor_visible {
             self.move_to(
                 top_row.saturating_add(snapshot.cursor_row as usize),
                 (snapshot.cursor_col as usize).saturating_add(1),
             );
             self.io.raw_write_str(ecma48::SHOW_CURSOR);
-        } else {
+        } else if allow_snapshot_cursor {
             self.io.raw_write_str("\x1b[?25l");
         }
     }
@@ -285,6 +292,17 @@ impl<'a> AlignedWriter<'a> {
         let styled_count =
             alloc::format!("{}", term_style::paint(count_text.as_str()).color(TITLE_COUNT_RGB));
         self.io.raw_write_str(styled_count.as_str());
+        if active_matrix_slot_is_vmx(output_mask)
+            && let Some(label) = matrix::active_slot_app_label(output_mask)
+        {
+            let styled_label = alloc::format!(
+                " {}",
+                term_style::paint(label.as_str())
+                    .bold()
+                    .color(VMX_STATUS_RGB)
+            );
+            self.io.raw_write_str(styled_label.as_str());
+        }
     }
 
     fn mode_status(
@@ -297,6 +315,9 @@ impl<'a> AlignedWriter<'a> {
         cmd_status_text: Option<&str>,
         running_go2_phase: usize,
     ) {
+        if active_terminal_hotkey_mode(output_mask) {
+            return;
+        }
         self.move_to(STATUS_ROW, 1);
         self.clear_line();
         let slot_text = self.slot_status_text(output_mask, running_go2_phase);
@@ -336,11 +357,20 @@ impl<'a> AlignedWriter<'a> {
                 alloc::format!("{}", term_style::paint("VMX").bold().color(VMX_STATUS_RGB));
             self.push_plain(&mut text, styled.as_str());
             self.push_plain(&mut text, " ");
-            self.push_function_key_label(&mut text, "[F1]");
-            self.push_plain(&mut text, " ");
-            self.push_function_key_label(&mut text, "[§]");
-            self.push_plain(&mut text, " ");
-            self.push_function_key_label(&mut text, "[ESC]");
+            if active_terminal_hotkey_mode(output_mask) {
+                let hotkey =
+                    alloc::format!("{}", term_style::paint("HOTKEY").bold().color((255, 55, 255)));
+                self.push_plain(&mut text, hotkey.as_str());
+                self.push_plain(&mut text, " keys->app ");
+                self.push_function_key_label(&mut text, "[ESC]");
+                self.push_plain(&mut text, " back ");
+                self.push_function_key_label(&mut text, "[F1]");
+                self.push_plain(&mut text, " host");
+            } else {
+                self.push_function_key_label(&mut text, "[F1]");
+                self.push_plain(&mut text, " ");
+                self.push_function_key_label(&mut text, "[§]");
+            }
         } else {
             self.push_plain(&mut text, self.main_mode_text(mode).as_str());
         }
@@ -425,7 +455,9 @@ impl<'a> AlignedWriter<'a> {
 
     fn vmx_status(&self) {
         let mut text = AllocString::new();
-        for command in ["host", "home", "env", "smp", "stop", "pause", "preserve"] {
+        for command in [
+            "host", "home", "env", "smp", "hotkey", "stop", "pause", "preserve",
+        ] {
             if !text.is_empty() {
                 self.push_plain(&mut text, " ");
             }
@@ -505,7 +537,7 @@ impl<'a> AlignedWriter<'a> {
     }
 
     fn prompt(&self, output_mask: u8) {
-        if active_matrix_slot_is_vmx(output_mask) {
+        if active_terminal_hotkey_mode(output_mask) {
             return;
         }
         self.move_to(PROMPT_ROW, 1);
@@ -632,8 +664,8 @@ fn transcript_view_rows_for_output(output_mask: u8) -> usize {
 }
 
 fn slot_content_top_row(output_mask: u8) -> usize {
-    if active_matrix_slot_is_vmx(output_mask) {
-        VM_TERMINAL_TOP_ROW
+    if active_matrix_slot_is_vmx(output_mask) && active_terminal_hotkey_mode(output_mask) {
+        VM_HOTKEY_TERMINAL_TOP_ROW
     } else {
         SCROLL_TOP_ROW
     }
@@ -657,7 +689,11 @@ fn render_active_slot_content(
     transcript: &VecDeque<TranscriptEntry>,
 ) -> bool {
     if let Some(snapshot) = active_terminal_snapshot_for_output(output_mask) {
-        out.render_terminal_snapshot(slot_content_top_row(output_mask), &snapshot);
+        out.render_terminal_snapshot(
+            slot_content_top_row(output_mask),
+            &snapshot,
+            active_terminal_hotkey_mode(output_mask),
+        );
         true
     } else {
         out.render_transcript_at(slot_content_top_row(output_mask), transcript);
@@ -680,21 +716,41 @@ fn set_line_width_for_output(output_mask: u8, width: usize) {
 }
 
 fn minimum_line_width_for_output(output_mask: u8) -> usize {
-    let left = ecma48::visible_width(BANNER_TITLE_TEXT)
-        .saturating_add(1)
-        .saturating_add(BANNER_CLOCK_WIDTH);
+    let left = banner_left_visible_width(output_mask);
     left.saturating_add(BANNER_GROUP_GAP_WIDTH)
         .saturating_add(banner_right_visible_width(output_mask))
 }
 
+fn banner_left_visible_width(output_mask: u8) -> usize {
+    let mut width = ecma48::visible_width(BANNER_TITLE_TEXT)
+        .saturating_add(1)
+        .saturating_add(BANNER_CLOCK_WIDTH)
+        .saturating_add(ecma48::visible_width(" CNT "))
+        .saturating_add(ecma48::visible_width(
+            alloc::format!("{}", crate::release_count::RELEASE_COUNT).as_str(),
+        ));
+    if active_matrix_slot_is_vmx(output_mask)
+        && let Some(label) = matrix::active_slot_app_label(output_mask)
+    {
+        width = width
+            .saturating_add(1)
+            .saturating_add(ecma48::visible_width(label.as_str()));
+    }
+    width
+}
+
 fn banner_right_visible_width(output_mask: u8) -> usize {
     if active_matrix_slot_is_vmx(output_mask) {
-        return ecma48::visible_width("VMX [F1] [§] [ESC]");
+        return ecma48::visible_width("VMX HOTKEY keys->app [ESC] back [F1] host");
     }
 
     active_slot_label_visible_width(output_mask)
         .saturating_add(1)
         .saturating_add(main_mode_visible_width(output_mask))
+}
+
+fn active_terminal_hotkey_mode(output_mask: u8) -> bool {
+    matrix::active_terminal_hotkey_mode(output_mask)
 }
 
 fn active_slot_label_visible_width(output_mask: u8) -> usize {
@@ -861,6 +917,10 @@ pub(crate) fn bind_matrix_target_vm_input(target: &MatrixTarget, vm_id: u8) {
 
 pub(crate) fn unbind_matrix_target_vm(target: &MatrixTarget, vm_id: u8) {
     matrix::unbind_slot_vm(&target.slot_id, vm_id);
+}
+
+pub(crate) fn set_matrix_target_app_label(target: &MatrixTarget, label: &str) {
+    matrix::set_slot_app_label(&target.slot_id, label);
 }
 
 pub(crate) fn release_matrix_target_vm_reservation(target: &MatrixTarget) {
@@ -1083,6 +1143,104 @@ fn is_vmx_control_command(submitted: &str) -> bool {
         submitted.split_whitespace().next().unwrap_or(""),
         "host" | "home" | "env" | "smp" | "stop" | "pause" | "preserve"
     )
+}
+
+#[derive(Clone, Copy)]
+enum VmxHotkeyCommand {
+    Toggle,
+    Set(bool),
+    Status,
+}
+
+fn parse_vmx_hotkey_command(submitted: &str) -> Option<VmxHotkeyCommand> {
+    let mut parts = submitted.split_whitespace();
+    let command = parts.next()?;
+    if !matches!(command, "hotkey" | "hotkeys" | "hk") {
+        return None;
+    }
+
+    match parts.next() {
+        None => Some(VmxHotkeyCommand::Toggle),
+        Some("on" | "enable" | "enabled" | "1") => Some(VmxHotkeyCommand::Set(true)),
+        Some("off" | "disable" | "disabled" | "0") => Some(VmxHotkeyCommand::Set(false)),
+        Some("status" | "?") => Some(VmxHotkeyCommand::Status),
+        Some(_) => Some(VmxHotkeyCommand::Status),
+    }
+}
+
+fn redraw_active_view(
+    out: &AlignedWriter<'_>,
+    io: &'static dyn ShellBackend2,
+    output_mask: u8,
+    mode: ShellMode2,
+    qjs_mode: QjsPromptMode,
+    apps_mode: AppsPromptMode,
+    surf_prefix: SurfPromptPrefix,
+    cmd_status_text: Option<&str>,
+    running_go2_phase: usize,
+    minute_text: &str,
+) -> VecDeque<TranscriptEntry> {
+    configure_output_view(out, output_mask);
+    out.clear_screen_home();
+    out.reset_scroll_region();
+    out.banner(output_mask, mode, minute_text);
+    out.mode_status(
+        output_mask,
+        mode,
+        qjs_mode,
+        apps_mode,
+        surf_prefix,
+        cmd_status_text,
+        running_go2_phase,
+    );
+    out.set_scroll_region(slot_content_top_row(output_mask));
+    let transcript = current_transcript_for_task(io);
+    render_active_slot_content(out, output_mask, &transcript);
+    out.prompt(output_mask);
+    transcript
+}
+
+fn apply_vmx_hotkey_command(
+    out: &AlignedWriter<'_>,
+    io: &'static dyn ShellBackend2,
+    output_mask: u8,
+    mode: ShellMode2,
+    qjs_mode: QjsPromptMode,
+    apps_mode: AppsPromptMode,
+    surf_prefix: SurfPromptPrefix,
+    cmd_status_text: Option<&str>,
+    running_go2_phase: usize,
+    minute_text: &str,
+    command: VmxHotkeyCommand,
+) -> VecDeque<TranscriptEntry> {
+    let current = active_terminal_hotkey_mode(output_mask);
+    let next = match command {
+        VmxHotkeyCommand::Toggle => !current,
+        VmxHotkeyCommand::Set(enabled) => enabled,
+        VmxHotkeyCommand::Status => current,
+    };
+    let _ = matrix::set_active_terminal_hotkey_mode(output_mask, next);
+    redraw_active_view(
+        out,
+        io,
+        output_mask,
+        mode,
+        qjs_mode,
+        apps_mode,
+        surf_prefix,
+        cmd_status_text,
+        running_go2_phase,
+        minute_text,
+    )
+}
+
+fn show_hotkey_notice(out: &AlignedWriter<'_>, output_mask: u8, text: &str) {
+    out.io.raw_write_str(ecma48::SAVE_CURSOR);
+    out.io.raw_write_str(ecma48::RESET);
+    out.banner_left(output_mask, clock_bucket_and_text().1.as_str());
+    let styled = alloc::format!("{}", term_style::paint(text).bold().color((255, 55, 255)));
+    out.right_text(BANNER_ROW, styled.as_str());
+    out.io.raw_write_str(ecma48::RESTORE_CURSOR);
 }
 
 fn rainbow_status_text(phase: usize) -> AllocString {
@@ -1521,6 +1679,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
             } else {
                 render_active_slot_content(&out, output_mask, &next_transcript);
             }
+            out.prompt(output_mask);
             transcript = next_transcript;
         }
 
@@ -1531,21 +1690,37 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
         }
 
         if let Some(b) = io.read_byte() {
-            if b == 0x03 {
+            if b == UI3_ESCAPE_KEY_BYTE {
                 esc = EscState::None;
                 text_decode = ecma48::InputDecodeState::None;
                 live_history_cursor = None;
                 cmd_status_text = None;
-                transcript = handle_control_c(io, &out, output_mask, &mut line);
+                if active_terminal_hotkey_mode(output_mask) {
+                    line.clear();
+                    let _ = matrix::set_active_terminal_hotkey_mode(output_mask, false);
+                    transcript = redraw_active_view(
+                        &out,
+                        io,
+                        output_mask,
+                        mode,
+                        qjs_mode,
+                        apps_mode,
+                        surf_prefix,
+                        cmd_status_text.as_deref(),
+                        running_go2_phase,
+                        minute_text.as_str(),
+                    );
+                }
                 continue;
             }
-            if b == UI3_ESCAPE_KEY_BYTE {
+            if b == UI3_F1_KEY_BYTE {
                 esc = EscState::None;
                 text_decode = ecma48::InputDecodeState::None;
                 live_history_cursor = None;
                 cmd_status_text = None;
                 if active_matrix_slot_is_vmx(output_mask) {
                     line.clear();
+                    let _ = matrix::set_active_terminal_hotkey_mode(output_mask, false);
                     transcript = switch_to_default_slot_and_refresh(
                         &out,
                         io,
@@ -1558,7 +1733,43 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         running_go2_phase,
                         minute_text.as_str(),
                     );
+                } else {
+                    mode = ShellMode2::Surf;
+                    apply_mode_toggle(
+                        &out,
+                        output_mask,
+                        mode,
+                        qjs_mode,
+                        apps_mode,
+                        surf_prefix,
+                        cmd_status_text.as_deref(),
+                        running_go2_phase,
+                        &line,
+                        minute_text.as_str(),
+                    );
                 }
+                continue;
+            }
+            if b == UI3_UNMAPPED_KEY_BYTE {
+                if active_terminal_hotkey_mode(output_mask) {
+                    show_hotkey_notice(&out, output_mask, "unmapped key");
+                }
+                continue;
+            }
+            if active_terminal_hotkey_mode(output_mask) {
+                if let Some(vm_id) = active_matrix_vm_input_id(output_mask)
+                    .or_else(|| active_matrix_vm_id(output_mask))
+                {
+                    let _ = crate::hv::blueprint_console_submit_stdin(vm_id, &[b]);
+                }
+                continue;
+            }
+            if b == 0x03 {
+                esc = EscState::None;
+                text_decode = ecma48::InputDecodeState::None;
+                live_history_cursor = None;
+                cmd_status_text = None;
+                transcript = handle_control_c(io, &out, output_mask, &mut line);
                 continue;
             }
             match esc {
@@ -1844,32 +2055,64 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     } else if let Some(vm_id) = active_matrix_vm_input_id(output_mask) {
                         if !submitted.is_empty() {
                             record_user_line_for_active_slot(io, submitted);
-                            if is_vmx_control_command(submitted) {
+                            if let Some(command) = parse_vmx_hotkey_command(submitted) {
+                                transcript = apply_vmx_hotkey_command(
+                                    &out,
+                                    io,
+                                    output_mask,
+                                    mode,
+                                    qjs_mode,
+                                    apps_mode,
+                                    surf_prefix,
+                                    cmd_status_text.as_deref(),
+                                    running_go2_phase,
+                                    minute_text.as_str(),
+                                    command,
+                                );
+                            } else if is_vmx_control_command(submitted) {
                                 let _ = crate::hv::blueprint_console_submit_control_line(
                                     vm_id, submitted,
                                 );
+                                transcript = current_transcript_for_task(io);
+                                render_active_slot_content(&out, output_mask, &transcript);
                             } else {
                                 let mut input = alloc::vec::Vec::from(submitted.as_bytes());
                                 input.push(b'\n');
                                 let _ = crate::hv::blueprint_console_submit_stdin(vm_id, &input);
+                                transcript = current_transcript_for_task(io);
+                                render_active_slot_content(&out, output_mask, &transcript);
                             }
-                            transcript = current_transcript_for_task(io);
-                            render_active_slot_content(&out, output_mask, &transcript);
                         }
                     } else if let Some(vm_id) = active_matrix_vm_id(output_mask) {
                         if !submitted.is_empty() {
                             record_user_line_for_active_slot(io, submitted);
-                            if is_vmx_control_command(submitted) {
+                            if let Some(command) = parse_vmx_hotkey_command(submitted) {
+                                transcript = apply_vmx_hotkey_command(
+                                    &out,
+                                    io,
+                                    output_mask,
+                                    mode,
+                                    qjs_mode,
+                                    apps_mode,
+                                    surf_prefix,
+                                    cmd_status_text.as_deref(),
+                                    running_go2_phase,
+                                    minute_text.as_str(),
+                                    command,
+                                );
+                            } else if is_vmx_control_command(submitted) {
                                 let _ = crate::hv::blueprint_console_submit_control_line(
                                     vm_id, submitted,
                                 );
+                                transcript = current_transcript_for_task(io);
+                                render_active_slot_content(&out, output_mask, &transcript);
                             } else {
                                 let mut input = alloc::vec::Vec::from(submitted.as_bytes());
                                 input.push(b'\n');
                                 let _ = crate::hv::blueprint_console_submit_stdin(vm_id, &input);
+                                transcript = current_transcript_for_task(io);
+                                render_active_slot_content(&out, output_mask, &transcript);
                             }
-                            transcript = current_transcript_for_task(io);
-                            render_active_slot_content(&out, output_mask, &transcript);
                         }
                     } else if has_broadcast_sessions {
                         if !submitted.is_empty() {
