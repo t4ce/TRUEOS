@@ -15,6 +15,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
     let mut args = rest.split_whitespace();
     match args.next().unwrap_or("").to_ascii_lowercase().as_str() {
         "stack" if args.next().is_none() => print_stack(io),
+        "warm" if args.next().is_none() => print_warm(io),
         "bench" => match args.next().unwrap_or("").to_ascii_lowercase().as_str() {
             "athlas" if args.next().is_none() => print_bench_athlas(io),
             "vector" if args.next().is_none() => print_bench_vector(io),
@@ -131,6 +132,83 @@ fn print_stack(io: &'static dyn ShellBackend2) {
     );
 }
 
+fn print_warm(io: &'static dyn ShellBackend2) {
+    print_native_line(
+        io,
+        format!(
+            "{}",
+            term_style::paint("font: warm skrifa outlines")
+                .bold()
+                .color(FONT_CMD_RGB)
+        )
+        .as_str(),
+    );
+    match crate::font_probe::warm_skrifa_outline_cache() {
+        Ok(warm) => {
+            print_shell_line(
+                io,
+                format!(
+                    "font-warm: status={} font=L_10646.TTF bytes={} tables={} glyphs={} units_per_em={}",
+                    warm.status, warm.bytes, warm.tables, warm.glyphs, warm.units_per_em
+                )
+                .as_str(),
+            );
+            print_shell_line(
+                io,
+                format!(
+                    "font-warm-cache: resident_bytes={} outline_cache_bytes={} range_bytes={} op_bytes={} commands={} first_gid={} last_gid={} max_ops_per_glyph={}",
+                    warm.resident_bytes,
+                    warm.cache_bytes,
+                    warm.range_bytes,
+                    warm.op_bytes,
+                    warm.commands,
+                    warm.range_first_glyph,
+                    warm.range_last_glyph,
+                    warm.range_max_ops
+                )
+                .as_str(),
+            );
+            print_shell_line(
+                io,
+                format!(
+                    "font-warm-outlines: outline_glyphs={} success={} failures={} empty={} move={} line={} quad={} curve={} close={}",
+                    warm.outline_glyphs,
+                    warm.outline_success,
+                    warm.outline_failures,
+                    warm.empty_outlines,
+                    warm.move_to,
+                    warm.line_to,
+                    warm.quad_to,
+                    warm.curve_to,
+                    warm.close
+                )
+                .as_str(),
+            );
+            print_shell_line(
+                io,
+                format!(
+                    "font-warm-bounds: min_x={} min_y={} max_x={} max_y={} parse_ms={} outline_ms={} total_ms={}",
+                    warm.min_x as i32,
+                    warm.min_y as i32,
+                    warm.max_x as i32,
+                    warm.max_y as i32,
+                    warm.parse_ms,
+                    warm.outline_ms,
+                    warm.total_ms
+                )
+                .as_str(),
+            );
+            print_shell_line(
+                io,
+                "font-warm-boundary: cached=font-units-outline-commands tessellation=not-run raster_pixels=not-rendered production-path=unchanged",
+            );
+        }
+        Err(err) => {
+            print_shell_line(io, format!("font-warm: status=failed err={:?}", err).as_str());
+        }
+    }
+}
+
 fn print_bench_athlas(io: &'static dyn ShellBackend2) {
     print_native_line(
         io,
@@ -212,10 +290,7 @@ fn print_bench_vector(io: &'static dyn ShellBackend2) {
             );
         }
         Err(err) => {
-            print_shell_line(
-                io,
-                format!("font-bench-vector: status=failed err={}", err).as_str(),
-            );
+            print_shell_line(io, format!("font-bench-vector: status=failed err={}", err).as_str());
         }
     }
 }
@@ -280,6 +355,6 @@ fn print_bench_skrifa(io: &'static dyn ShellBackend2) {
 fn print_usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "font: usage `font` | `font probe` | `font stack` | `font bench athlas|vector|skrifa`",
+        "font: usage `font` | `font probe` | `font stack` | `font warm` | `font bench athlas|vector|skrifa`",
     );
 }

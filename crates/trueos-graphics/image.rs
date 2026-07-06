@@ -95,13 +95,14 @@ pub(crate) fn decode_encoded_image_kind_rgba(
                 rgba: decoded.rgba,
             })
             .map_err(|err| err.code()),
-        EncodedImageKind::Svg => svg::render_svg_bytes_rgba(bytes)
-            .map(|(info, rgba)| DecodedRgbaImage {
+        EncodedImageKind::Svg => {
+            svg::render_svg_bytes_rgba(bytes).map(|(info, rgba)| DecodedRgbaImage {
                 kind,
                 width: info.width,
                 height: info.height,
                 rgba,
-            }),
+            })
+        }
         EncodedImageKind::Unknown => Err(kind.decode_error_code()),
     }
 }

@@ -113,19 +113,16 @@ fn container_shell_read_line(line: &mut Vec<u8>) {
 
 fn container_shell_command(raw: &str) -> bool {
     let trimmed = raw.trim();
-    let mut words = trimmed.splitn(2, char::is_whitespace);
-    let cmd = words.next().unwrap_or("");
-    let rest = words.next().unwrap_or("").trim_start();
+    let cmd = trimmed.split_whitespace().next().unwrap_or("");
     match cmd {
         "" => {}
-        "echo" => attached_write_line(rest),
-        "hostname" => {
+        "host" => {
             let hostname = guest_env_var("HOSTNAME")
                 .or_else(|| guest_env_var("TRUEOS_HOSTNAME"))
                 .unwrap_or_else(|| String::from("TRUEOS"));
             attached_write_line(hostname.as_str());
         }
-        "homedir" => {
+        "home" => {
             let home = guest_env_var("HOME").unwrap_or_else(|| String::from("/"));
             attached_write_line(home.as_str());
         }
@@ -133,35 +130,20 @@ fn container_shell_command(raw: &str) -> bool {
             Some(text) if !text.is_empty() => attached_write_str(text.as_str()),
             _ => attached_write_line("env: unavailable"),
         },
-        "file" => {
-            let path = if rest.is_empty() {
-                guest_env_var("HOME").unwrap_or_else(|| String::from("/"))
-            } else {
-                String::from(rest)
-            };
-            match guest_text_vmcall(trueos_vm::vmcall::OP_BP_FS_LIST_TREE, path.as_bytes()) {
-                Some(text) if !text.is_empty() => attached_write_str(text.as_str()),
-                _ => attached_write_line("file: unavailable"),
-            }
-        }
-        "thread" => {
+        "smp" => {
             let vm_id = crate::hv::current_vm_id().unwrap_or(0);
             let (status, vtid) =
                 trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_THREAD_CURRENT_ID, 0, 0);
             let mut line = String::new();
             if status == trueos_vm::vmcall::STATUS_OK {
-                let _ = write!(line, "thread: vm={} vthread={} async_jobs=not-wired", vm_id, vtid);
+                let _ = write!(line, "smp: vm={} vthread={} async_jobs=not-wired", vm_id, vtid);
             } else {
-                let _ =
-                    write!(line, "thread: vm={} vthread=unavailable async_jobs=not-wired", vm_id);
+                let _ = write!(line, "smp: vm={} vthread=unavailable async_jobs=not-wired", vm_id);
             }
             attached_write_line(line.as_str());
         }
-        "help" => attached_write_line(
-            "commands: echo hostname homedir env thread help stop pause preserve exit",
-        ),
-        "stop" | "pause" | "preserve" | "exit" => return false,
-        _ => attached_write_line("unknown command; try `help`"),
+        "stop" | "pause" | "preserve" => return false,
+        _ => attached_write_line("unknown vmx command"),
     }
     true
 }
@@ -289,7 +271,7 @@ pub extern "C" fn trueos_hv_guest_shell_run() -> ! {
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_hv_guest_container_shell_run() -> ! {
     attached_write_line("vmx-shell: ready");
-    attached_write_line("commands: echo hostname homedir env thread help stop pause preserve exit");
+    attached_write_line("commands: host home env smp stop pause preserve");
     let mut line = Vec::new();
     loop {
         container_shell_prompt();

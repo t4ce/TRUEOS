@@ -155,14 +155,7 @@ pub(crate) fn draw_paint_plan_primary(
         &mut collect,
     );
     let collect_ms = elapsed_ms_since(collect_start);
-    finish_draw_primary(
-        scratch,
-        collect,
-        gradient_collect,
-        collect_ms,
-        scene,
-        present_reason,
-    )
+    finish_draw_primary(scratch, collect, gradient_collect, collect_ms, scene, present_reason)
 }
 
 pub(crate) fn draw_paint_plan_backend(
@@ -1694,9 +1687,7 @@ fn push_text_line_placements(
         }
         let slot_start = embassy_time_driver::now();
         let slot = crate::intel::gpgpu::sprite64_font_slot_for_region(face, region);
-        stats.slot_ms = stats
-            .slot_ms
-            .saturating_add(elapsed_ms_since(slot_start));
+        stats.slot_ms = stats.slot_ms.saturating_add(elapsed_ms_since(slot_start));
         let Some(slot) = slot else {
             stats.slot_misses = stats.slot_misses.saturating_add(1);
             pen_x += advance;

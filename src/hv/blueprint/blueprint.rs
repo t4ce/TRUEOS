@@ -1323,6 +1323,7 @@ fn resolve_known_import(name: &str) -> Option<usize> {
         "pow" => Some(trueos_math::pow as *const () as usize),
         "tanh" => Some(trueos_math::tanh as *const () as usize),
         "hypot" => Some(trueos_math::hypot as *const () as usize),
+        "atan2" => Some(trueos_math::atan2 as *const () as usize),
         "trueos_cabi_wls_current_slot" => {
             Some(crate::stackkeeper::trueos_cabi_wls_current_slot as *const () as usize)
         }

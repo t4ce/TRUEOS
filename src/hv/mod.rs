@@ -1531,18 +1531,16 @@ fn blueprint_control_shell_write_text(vm_id: u8, text: &str) {
 
 fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
     let trimmed = raw.trim();
-    let mut words = trimmed.splitn(2, char::is_whitespace);
-    let cmd = words.next().unwrap_or("");
-    let rest = words.next().unwrap_or("").trim_start();
+    let cmd = trimmed.split_whitespace().next().unwrap_or("");
     match cmd {
         "" => {}
-        "hostname" => {
+        "host" => {
             let hostname = blueprint_process_env_var(vm_id, "HOSTNAME")
                 .or_else(|| blueprint_process_env_var(vm_id, "TRUEOS_HOSTNAME"))
                 .unwrap_or_else(|| AllocString::from("TRUEOS"));
             blueprint_control_shell_line(vm_id, hostname.as_str());
         }
-        "homedir" => {
+        "home" => {
             let home =
                 blueprint_process_env_var(vm_id, "HOME").unwrap_or_else(|| AllocString::from("/"));
             blueprint_control_shell_line(vm_id, home.as_str());
@@ -1553,26 +1551,13 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
             }
             _ => blueprint_control_shell_line(vm_id, "env: unavailable"),
         },
-        "file" => {
-            let path = if rest.is_empty() {
-                blueprint_process_env_var(vm_id, "HOME").unwrap_or_else(|| AllocString::from("/"))
-            } else {
-                AllocString::from(rest)
-            };
-            match blueprint_process_file_tree_text(vm_id, path.as_str()) {
-                Some(text) if !text.is_empty() => {
-                    blueprint_control_shell_write_text(vm_id, text.as_str())
-                }
-                _ => blueprint_control_shell_line(vm_id, "file: unavailable"),
-            }
-        }
-        "thread" => {
+        "smp" => {
             let record = crate::stackkeeper::vm_hull_record(vm_id);
             let state = vm_state(vm_id);
             blueprint_control_shell_line(
                 vm_id,
                 alloc::format!(
-                    "thread: vm={} vthread={} running={} starting={} async_jobs=not-wired",
+                    "smp: vm={} vthread={} running={} starting={} async_jobs=not-wired",
                     vm_id,
                     record.vtid(),
                     state.running as u8,
@@ -1581,10 +1566,6 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
                 .as_str(),
             );
         }
-        "help" => blueprint_control_shell_line(
-            vm_id,
-            "commands: hostname homedir env thread help stop pause preserve",
-        ),
         "stop" => match stop(vm_id) {
             Ok(true) => blueprint_control_shell_line(vm_id, "vmx-shell: stop requested"),
             Ok(false) => blueprint_control_shell_line(vm_id, "vmx-shell: vm is not running"),
@@ -1601,7 +1582,7 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
                 alloc::format!("vmx-shell: preserve failed: {:?}", err).as_str(),
             ),
         },
-        _ => blueprint_control_shell_line(vm_id, "unknown command; try `help`"),
+        _ => blueprint_control_shell_line(vm_id, "unknown vmx command"),
     }
 }
 

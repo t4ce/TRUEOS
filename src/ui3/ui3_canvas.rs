@@ -5,9 +5,9 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
+use crate::graphics::primitives::Rgba8;
 use crate::intel::LiveOverlayRect;
 use crate::intel::gpgpu::GpgpuRgba8Surface;
-use crate::graphics::primitives::Rgba8;
 use crate::shell2::{
     CommandSessionInputResult, MatrixTarget, ShellBackend2, matrix_target_for_backend,
     matrix_target_interrupted, print_matrix_target_line, print_shell_line,

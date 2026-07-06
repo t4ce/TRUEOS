@@ -58,6 +58,7 @@ const STATUS_NORMAL_RGB: (u8, u8, u8) = (255, 255, 255);
 const BANNER_TITLE_TEXT: &str = "TRUE OS";
 const BANNER_CLOCK_WIDTH: usize = 5;
 const BANNER_GROUP_GAP_WIDTH: usize = 1;
+pub(crate) const UI3_ESCAPE_KEY_BYTE: u8 = 0x1d;
 
 static REGISTERED_OUTPUTS: AtomicU8 = AtomicU8::new(0);
 
@@ -225,9 +226,6 @@ impl<'a> AlignedWriter<'a> {
     }
 
     fn render_terminal_snapshot(&self, top_row: usize, snapshot: &Ui3ShellScreenSnapshot) {
-        self.move_to(top_row, 1);
-        self.io.raw_write_str("\x1b[J");
-
         let cols = snapshot.cols as usize;
         let rows = snapshot.rows as usize;
         for row in 0..rows {
@@ -334,10 +332,15 @@ impl<'a> AlignedWriter<'a> {
     fn banner_right_text(&self, output_mask: u8, mode: ShellMode2) -> AllocString {
         let mut text = AllocString::new();
         if active_matrix_slot_is_vmx(output_mask) {
+            let styled =
+                alloc::format!("{}", term_style::paint("VMX").bold().color(VMX_STATUS_RGB));
+            self.push_plain(&mut text, styled.as_str());
+            self.push_plain(&mut text, " ");
             self.push_function_key_label(&mut text, "[F1]");
             self.push_plain(&mut text, " ");
-            let styled = alloc::format!("{}", term_style::paint("§").bold().color(VMX_STATUS_RGB));
-            self.push_plain(&mut text, styled.as_str());
+            self.push_function_key_label(&mut text, "[§]");
+            self.push_plain(&mut text, " ");
+            self.push_function_key_label(&mut text, "[ESC]");
         } else {
             self.push_plain(&mut text, self.main_mode_text(mode).as_str());
         }
@@ -422,12 +425,10 @@ impl<'a> AlignedWriter<'a> {
 
     fn vmx_status(&self) {
         let mut text = AllocString::new();
-        let styled = alloc::format!("{}", term_style::paint("vmx").bold().color(VMX_STATUS_RGB));
-        self.push_plain(&mut text, styled.as_str());
-        for command in [
-            "hostname", "homedir", "env", "thread", "help", "stop", "pause", "preserve",
-        ] {
-            self.push_plain(&mut text, " ");
+        for command in ["host", "home", "env", "smp", "stop", "pause", "preserve"] {
+            if !text.is_empty() {
+                self.push_plain(&mut text, " ");
+            }
             self.push_plain(&mut text, command);
         }
         self.right_text(STATUS_ROW, text.as_str());
@@ -687,6 +688,10 @@ fn minimum_line_width_for_output(output_mask: u8) -> usize {
 }
 
 fn banner_right_visible_width(output_mask: u8) -> usize {
+    if active_matrix_slot_is_vmx(output_mask) {
+        return ecma48::visible_width("VMX [F1] [§] [ESC]");
+    }
+
     active_slot_label_visible_width(output_mask)
         .saturating_add(1)
         .saturating_add(main_mode_visible_width(output_mask))
@@ -698,10 +703,6 @@ fn active_slot_label_visible_width(output_mask: u8) -> usize {
 }
 
 fn main_mode_visible_width(output_mask: u8) -> usize {
-    if active_matrix_slot_is_vmx(output_mask) {
-        return ecma48::visible_width("[F1] §");
-    }
-
     let modes = [
         ShellMode2::Surf,
         ShellMode2::Apps,
@@ -1080,7 +1081,7 @@ fn handle_matrix_operator(io: &'static dyn ShellBackend2, submitted: &str) {
 fn is_vmx_control_command(submitted: &str) -> bool {
     matches!(
         submitted.split_whitespace().next().unwrap_or(""),
-        "hostname" | "homedir" | "env" | "file" | "thread" | "help" | "stop" | "pause" | "preserve"
+        "host" | "home" | "env" | "smp" | "stop" | "pause" | "preserve"
     )
 }
 
@@ -1240,9 +1241,6 @@ fn handle_command_session_input(
     let target =
         matrix_target_for_slot(output_mask, &session.slot_id, session.slot_lifetime_generation);
     match session.kind {
-        shell2_cmd::CommandSessionKind::AudControl => {
-            crate::shell2::cmds::aud::handle_session_input(&target, submitted)
-        }
         shell2_cmd::CommandSessionKind::FormatSure(disc_id) => {
             crate::shell2::cmds::format::handle_session_input(
                 spawner, io, &target, submitted, disc_id,
@@ -1539,6 +1537,28 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 live_history_cursor = None;
                 cmd_status_text = None;
                 transcript = handle_control_c(io, &out, output_mask, &mut line);
+                continue;
+            }
+            if b == UI3_ESCAPE_KEY_BYTE {
+                esc = EscState::None;
+                text_decode = ecma48::InputDecodeState::None;
+                live_history_cursor = None;
+                cmd_status_text = None;
+                if active_matrix_slot_is_vmx(output_mask) {
+                    line.clear();
+                    transcript = switch_to_default_slot_and_refresh(
+                        &out,
+                        io,
+                        output_mask,
+                        &mut mode,
+                        qjs_mode,
+                        apps_mode,
+                        surf_prefix,
+                        cmd_status_text.as_deref(),
+                        running_go2_phase,
+                        minute_text.as_str(),
+                    );
+                }
                 continue;
             }
             match esc {
@@ -2007,7 +2027,25 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 _ => {
                     cmd_status_text = None;
                     if let Some(ch) = ecma48::decode_input_byte_lossy(&mut text_decode, b) {
-                        push_input_char(&out, &mut line, ch);
+                        if ch == '§' && active_matrix_slot_is_vmx(output_mask) {
+                            text_decode = ecma48::InputDecodeState::None;
+                            live_history_cursor = None;
+                            line.clear();
+                            transcript = switch_to_default_slot_and_refresh(
+                                &out,
+                                io,
+                                output_mask,
+                                &mut mode,
+                                qjs_mode,
+                                apps_mode,
+                                surf_prefix,
+                                cmd_status_text.as_deref(),
+                                running_go2_phase,
+                                minute_text.as_str(),
+                            );
+                        } else {
+                            push_input_char(&out, &mut line, ch);
+                        }
                     }
                 }
             }

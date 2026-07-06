@@ -13,7 +13,7 @@ use crate::r::keyboard::{
     KEYBOARD_KEY_PAGE_UP, KEYBOARD_KEY_TAB, KEYBOARD_OUTPUT_KIND_KEY, KEYBOARD_OUTPUT_KIND_TEXT,
     TrueosKeyboardOutputEvent,
 };
-use crate::shell2::{ShellBackend2, ShellIo2};
+use crate::shell2::{ShellBackend2, ShellIo2, UI3_ESCAPE_KEY_BYTE};
 
 const UI3_SHELL_DEFAULT_FG: (u8, u8, u8) = (0xF1, 0xF4, 0xF8);
 const UI3_SHELL_DEFAULT_BG: (u8, u8, u8) = (0x0C, 0x10, 0x16);
@@ -723,7 +723,7 @@ fn queue_key_sequence(window_id: u32, key_code: u16) -> bool {
         KEYBOARD_KEY_BACKSPACE => queue_input_bytes(window_id, b"\x08"),
         KEYBOARD_KEY_TAB => queue_input_bytes(window_id, b"\t"),
         KEYBOARD_KEY_ENTER => queue_input_bytes(window_id, b"\r"),
-        KEYBOARD_KEY_ESCAPE => queue_input_bytes(window_id, b"\x1B"),
+        KEYBOARD_KEY_ESCAPE => queue_input_bytes(window_id, &[UI3_ESCAPE_KEY_BYTE]),
         KEYBOARD_KEY_ARROW_UP => queue_input_bytes(window_id, b"\x1B[A"),
         KEYBOARD_KEY_ARROW_DOWN => queue_input_bytes(window_id, b"\x1B[B"),
         KEYBOARD_KEY_ARROW_RIGHT => queue_input_bytes(window_id, b"\x1B[C"),

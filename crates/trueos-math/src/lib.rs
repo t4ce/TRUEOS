@@ -119,6 +119,11 @@ pub fn hypot_f64(x: f64, y: f64) -> f64 {
     libm::hypot(x, y)
 }
 
+#[inline]
+pub fn atan2_f64(y: f64, x: f64) -> f64 {
+    libm::atan2(y, x)
+}
+
 // Kernel-side C math ABI symbols needed by linked no_std code. Keep this list
 // intentionally narrow; trueos-math owns these wrappers over libm.
 #[unsafe(no_mangle)]
@@ -218,6 +223,11 @@ pub extern "C" fn tanh(x: f64) -> f64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn hypot(x: f64, y: f64) -> f64 {
     hypot_f64(x, y)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn atan2(y: f64, x: f64) -> f64 {
+    atan2_f64(y, x)
 }
 
 pub(crate) mod ascii_tree;

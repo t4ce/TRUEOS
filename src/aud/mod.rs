@@ -14,7 +14,6 @@
 pub mod alsa_trueos_backend;
 pub mod cabi;
 pub mod dmg;
-pub mod file_service;
 pub mod live_piano;
 pub mod m4a;
 pub mod m4a_demux;

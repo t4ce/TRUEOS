@@ -37,8 +37,7 @@ pub(crate) fn encode_rgb_u32_png(
         return Err(PngEncodeError::BufferTooSmall);
     }
 
-    let mut filtered =
-        Vec::with_capacity(checked_filtered_len(width_usize, height_usize, 3)?);
+    let mut filtered = Vec::with_capacity(checked_filtered_len(width_usize, height_usize, 3)?);
     for y in 0..height_usize {
         let row = &pixels[y * width_usize..(y + 1) * width_usize];
         filtered.push(0);
@@ -81,8 +80,7 @@ pub(crate) fn encode_rgb8_png(
         return Err(PngEncodeError::BufferTooSmall);
     }
 
-    let mut filtered =
-        Vec::with_capacity(checked_filtered_len(width_usize, height_usize, 3)?);
+    let mut filtered = Vec::with_capacity(checked_filtered_len(width_usize, height_usize, 3)?);
     for y in 0..height_usize {
         let row_start = y
             .checked_mul(stride_bytes)
