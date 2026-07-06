@@ -1,4 +1,4 @@
-use crate::intel::types::Rgba8;
+use crate::graphics::primitives::Rgba8;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;

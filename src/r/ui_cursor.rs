@@ -1,4 +1,4 @@
-use crate::intel::types::Rgba8;
+use crate::graphics::primitives::Rgba8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CursorOverlayGlyphSpec {

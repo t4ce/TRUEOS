@@ -635,7 +635,7 @@ fn stamp_horizon_logo_top_left_screen() -> bool {
         return false;
     }
 
-    let stamp = match crate::ui3::img::png_codec::decode_png_rgba(PRIMARY_BOOT_HORIZON_STAMP_PNG) {
+    let stamp = match crate::graphics::png_codec::decode_png_rgba(PRIMARY_BOOT_HORIZON_STAMP_PNG) {
         Ok(stamp) => stamp,
         Err(err) => {
             crate::log!(

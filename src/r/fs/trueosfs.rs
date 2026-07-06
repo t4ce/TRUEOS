@@ -529,7 +529,7 @@ impl trueos_fs::BlockIo for KernelBlockIo {
         };
 
         let start_ms = trueosfs_trace_now_ms();
-        crate::log!(
+        crate::log_trace!(target: "trueosfs";
             "trueosfs: block-write start disk={} lba={} bytes={} bs={} max_blocks={} max_xfer={}\n",
             self.handle.id().raw(),
             lba,
@@ -545,7 +545,7 @@ impl trueos_fs::BlockIo for KernelBlockIo {
             let remaining = buf.len() - off;
             let blocks_here = core::cmp::min(max_blocks, remaining / bs);
             let bytes_here = blocks_here * bs;
-            crate::log!(
+            crate::log_trace!(target: "trueosfs";
                 "trueosfs: block-write chunk disk={} lba={} blocks={} bytes={} off={}\n",
                 self.handle.id().raw(),
                 cur_lba,
@@ -560,7 +560,7 @@ impl trueos_fs::BlockIo for KernelBlockIo {
             off = off.saturating_add(bytes_here);
         }
 
-        crate::log!(
+        crate::log_trace!(target: "trueosfs";
             "trueosfs: block-write done disk={} lba={} bytes={} elapsed_ms={}\n",
             self.handle.id().raw(),
             lba,
@@ -573,9 +573,9 @@ impl trueos_fs::BlockIo for KernelBlockIo {
     #[inline]
     async fn flush(&self) -> Result<(), block::Error> {
         let start_ms = trueosfs_trace_now_ms();
-        crate::log!("trueosfs: block-flush start disk={}\n", self.handle.id().raw());
+        crate::log_trace!(target: "trueosfs"; "trueosfs: block-flush start disk={}\n", self.handle.id().raw());
         let out = self.handle.flush().await;
-        crate::log!(
+        crate::log_trace!(target: "trueosfs";
             "trueosfs: block-flush done disk={} result={:?} elapsed_ms={}\n",
             self.handle.id().raw(),
             out,

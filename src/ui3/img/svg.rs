@@ -34,6 +34,23 @@ pub struct SvgPaintInfo {
     pub height: u32,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SvgRenderBenchStats {
+    pub width: u32,
+    pub height: u32,
+    pub primitives: usize,
+    pub vertices: usize,
+    pub indices: usize,
+    pub triangles: usize,
+    pub pixels: usize,
+    pub parse_ms: u64,
+    pub tessellate_ms: u64,
+    pub paint_ms: u64,
+    pub upload_ms: u64,
+    pub total_ms: u64,
+    pub upload_status: &'static str,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct SvgGradientStop {
     pub offset: f32,
@@ -379,10 +396,16 @@ pub fn render_svg_bytes_rgba(bytes: &[u8]) -> Result<(SvgTextureInfo, Vec<u8>), 
 
 pub fn svg_paint_document_from_text(svg_text: &str) -> Result<SvgPaintDocument, i32> {
     let svg_text = normalize_svg_text(svg_text);
-    let tree = match Tree::from_str(svg_text.as_ref(), &Options::default()) {
-        Ok(tree) => tree,
+    let tree = parse_svg_tree(svg_text.as_ref())?;
+    let (width, height, svg_w, svg_h) = choose_output_size(&tree)?;
+    svg_paint_document_with_size(&tree, width, height, svg_w, svg_h)
+}
+
+fn parse_svg_tree(svg_text: &str) -> Result<Tree, i32> {
+    match Tree::from_str(svg_text, &Options::default()) {
+        Ok(tree) => Ok(tree),
         Err(err) => {
-            let trimmed = svg_text.as_ref().trim_start();
+            let trimmed = svg_text.trim_start();
             let mut sample = [0u8; 48];
             let sample_len = trimmed.as_bytes().len().min(sample.len());
             for (dst, src) in sample
@@ -398,16 +421,14 @@ pub fn svg_paint_document_from_text(svg_text: &str) -> Result<SvgPaintDocument, 
             let sample_text = core::str::from_utf8(&sample[..sample_len]).unwrap_or("");
             crate::log!(
                 "gfx-svg: parse failed len={} starts_svg={} sample=\"{}\" err={}\n",
-                svg_text.as_ref().len(),
+                svg_text.len(),
                 trimmed.starts_with("<svg") as u8,
                 sample_text,
                 err
             );
-            return Err(ERR_SVG_PARSE);
+            Err(ERR_SVG_PARSE)
         }
-    };
-    let (width, height, svg_w, svg_h) = choose_output_size(&tree)?;
-    svg_paint_document_with_size(&tree, width, height, svg_w, svg_h)
+    }
 }
 
 fn normalize_svg_text(svg_text: &str) -> Cow<'_, str> {
@@ -464,6 +485,61 @@ pub fn render_svg_text_rgba(svg_text: &str) -> Result<(SvgTextureInfo, Vec<u8>),
     ))
 }
 
+pub fn render_svg_text_rgba_profile(
+    svg_text: &str,
+) -> Result<(SvgTextureInfo, Vec<u8>, SvgRenderBenchStats), i32> {
+    let total_start = embassy_time_driver::now();
+    let svg_text = normalize_svg_text(svg_text);
+
+    let parse_start = embassy_time_driver::now();
+    let tree = parse_svg_tree(svg_text.as_ref())?;
+    let parse_ms = elapsed_ms_since(parse_start);
+
+    let tessellate_start = embassy_time_driver::now();
+    let (width, height, svg_w, svg_h) = choose_output_size(&tree)?;
+    let document = svg_paint_document_with_size(&tree, width, height, svg_w, svg_h)?;
+    let tessellate_ms = elapsed_ms_since(tessellate_start);
+
+    let primitives = document.primitives.len();
+    let vertices = document
+        .primitives
+        .iter()
+        .map(|primitive| primitive.points.len())
+        .sum();
+    let indices: usize = document
+        .primitives
+        .iter()
+        .map(|primitive| primitive.point_indices.len())
+        .sum();
+    let triangles = indices / 3;
+
+    let paint_start = embassy_time_driver::now();
+    let mut painter = SvgCpuPainter::new(document.info.width, document.info.height);
+    painter.paint_document(&document);
+    let paint_ms = elapsed_ms_since(paint_start);
+
+    let info = SvgTextureInfo {
+        width: document.info.width,
+        height: document.info.height,
+    };
+    let stats = SvgRenderBenchStats {
+        width: info.width,
+        height: info.height,
+        primitives,
+        vertices,
+        indices,
+        triangles,
+        pixels: (info.width as usize).saturating_mul(info.height as usize),
+        parse_ms,
+        tessellate_ms,
+        paint_ms,
+        upload_ms: 0,
+        total_ms: elapsed_ms_since(total_start),
+        upload_status: "not-run:no-texture-id",
+    };
+    Ok((info, painter.pixels, stats))
+}
+
 pub fn upload_svg_text_to_texture(tex_id: u32, svg_text: &str) -> Result<SvgTextureInfo, i32> {
     let (info, rgba) = render_svg_text_rgba(svg_text)?;
 
@@ -501,6 +577,17 @@ fn choose_output_size(tree: &Tree) -> Result<(u32, u32, f32, f32), i32> {
     }
 
     Ok((width.max(1), height.max(1), svg_w, svg_h))
+}
+
+fn elapsed_ms_since(start: u64) -> u64 {
+    let now = embassy_time_driver::now();
+    let ticks = now.saturating_sub(start);
+    let hz = embassy_time_driver::TICK_HZ;
+    if hz == 0 {
+        0
+    } else {
+        ticks.saturating_mul(1000) / hz
+    }
 }
 
 fn build_paint_style(

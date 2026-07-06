@@ -224,7 +224,7 @@ impl WeatherState {
                 0,
                 0,
                 0,
-                crate::intel::types::Rgba8::new(0, 0, 0, 0),
+                crate::graphics::primitives::Rgba8::new(0, 0, 0, 0),
             ),
             seed: 0,
         }
@@ -300,7 +300,7 @@ impl Slot1CanvasLayer {
                 0,
                 0,
                 0,
-                crate::intel::types::Rgba8::new(0, 0, 0, 0),
+                crate::graphics::primitives::Rgba8::new(0, 0, 0, 0),
             ),
             src: core::ptr::null_mut(),
             src_pitch_bytes: 0,
@@ -401,7 +401,7 @@ pub(crate) fn maybe_proc_weather_from_drag(start_x: u32, start_y: u32, end_x: u3
             y0,
             width.max(1),
             height.max(1),
-            crate::intel::types::Rgba8::new(0, 0, 0, 0),
+            crate::graphics::primitives::Rgba8::new(0, 0, 0, 0),
         ),
         seed,
     };
@@ -843,7 +843,7 @@ fn present_orbit_frame_buffer(buffer: OrbitFrameBuffer, reason: &str) -> bool {
         0,
         buffer.width,
         buffer.height,
-        crate::intel::types::Rgba8::new(0, 0, 0, 0),
+        crate::graphics::primitives::Rgba8::new(0, 0, 0, 0),
     );
     crate::intel::present_ui3_canvas_rgba(rect, buffer.virt, buffer.pitch_bytes as usize, reason)
 }
@@ -928,7 +928,7 @@ fn draw_live_rect(buffer: OrbitFrameBuffer, rect: crate::intel::LiveOverlayRect)
     }
 }
 
-fn rgba8_word(color: crate::intel::types::Rgba8) -> u32 {
+fn rgba8_word(color: crate::graphics::primitives::Rgba8) -> u32 {
     ((color.a as u32) << 24) | ((color.b as u32) << 16) | ((color.g as u32) << 8) | color.r as u32
 }
 
@@ -1409,7 +1409,7 @@ fn draw_center_butterfly(
 fn orbit_atlas_once() -> Option<&'static OrbitAtlas> {
     ORBIT_ATLAS
         .call_once(|| {
-            let decoded = crate::ui3::img::png_codec::decode_png_rgba(
+            let decoded = crate::graphics::png_codec::decode_png_rgba(
                 crate::ui3::althlasfont::twemoji::TWEMOJI_ATLAS_PNG,
             )
             .ok()?;

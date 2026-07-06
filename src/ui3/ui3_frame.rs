@@ -5,7 +5,7 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use libm::{ceilf, fabsf, floorf};
 use spin::Mutex;
 
-use crate::intel::types::{
+use crate::graphics::primitives::{
     Rgba8, SOLID_RECT_SIZE, SPRITE_QUAD_SIZE, SolidRect, SpriteQuad, UiPlaneSlot, UiPresent,
     UiPresentPath, UiRect, UiSurfaceFormat, read_solid_rect_bytes, read_sprite_quad_bytes,
 };
@@ -1246,13 +1246,13 @@ impl SpriteQuadGpuBbox {
 }
 
 fn sprite_corner_lerp2(
-    c0: crate::intel::types::SpriteCorner,
-    c1: crate::intel::types::SpriteCorner,
-    c3: crate::intel::types::SpriteCorner,
+    c0: crate::graphics::primitives::SpriteCorner,
+    c1: crate::graphics::primitives::SpriteCorner,
+    c3: crate::graphics::primitives::SpriteCorner,
     s: f32,
     t: f32,
-) -> crate::intel::types::SpriteCorner {
-    crate::intel::types::SpriteCorner {
+) -> crate::graphics::primitives::SpriteCorner {
+    crate::graphics::primitives::SpriteCorner {
         x: lerp2(c0.x, c1.x, c3.x, s, t),
         y: lerp2(c0.y, c1.y, c3.y, s, t),
         u: lerp2(c0.u, c1.u, c3.u, s, t),
@@ -1260,7 +1260,7 @@ fn sprite_corner_lerp2(
     }
 }
 
-fn sprite_corner_is_finite(corner: crate::intel::types::SpriteCorner) -> bool {
+fn sprite_corner_is_finite(corner: crate::graphics::primitives::SpriteCorner) -> bool {
     corner.x.is_finite() && corner.y.is_finite() && corner.u.is_finite() && corner.v.is_finite()
 }
 

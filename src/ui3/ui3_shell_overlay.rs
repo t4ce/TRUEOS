@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use crate::intel::types::Rgba8;
+use crate::graphics::primitives::Rgba8;
 
 const UI3_SHELL_WINDOW_ID: u32 = 0x5533_0001;
 const UI3_SHELL_PADDING_PX: u32 = 18;

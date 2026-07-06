@@ -258,6 +258,10 @@ unsafe extern "C" {
     pub fn trueos_cabi_audio_close(handle: u32) -> i32;
     pub fn trueos_cabi_audio_start(handle: u32) -> i32;
     pub fn trueos_cabi_audio_drop(handle: u32) -> i32;
+    pub fn trueos_cabi_audio_set_paused(handle: u32, paused: u32) -> i32;
+    pub fn trueos_cabi_audio_paused(handle: u32) -> i32;
+    pub fn trueos_cabi_audio_set_volume_percent(handle: u32, percent: u32) -> i32;
+    pub fn trueos_cabi_audio_volume_percent(handle: u32) -> i32;
     pub fn trueos_cabi_audio_drain(handle: u32, timeout_ms: u64) -> i32;
     pub fn trueos_cabi_audio_write_i16_interleaved(
         handle: u32,

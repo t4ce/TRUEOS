@@ -34,6 +34,11 @@ pub(crate) struct Ui3FontScene {
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct Ui3FontDrawResult {
     pub(crate) text_nodes: usize,
+    pub(crate) chars: usize,
+    pub(crate) whitespace: usize,
+    pub(crate) glyph_hits: usize,
+    pub(crate) glyph_misses: usize,
+    pub(crate) slot_misses: usize,
     pub(crate) placements: usize,
     pub(crate) assets: usize,
     pub(crate) layout_shift_px: u32,
@@ -42,6 +47,10 @@ pub(crate) struct Ui3FontDrawResult {
     pub(crate) clipped: usize,
     pub(crate) clear_ok: bool,
     pub(crate) clear_ms: u64,
+    pub(crate) collect_ms: u64,
+    pub(crate) glyph_lookup_ms: u64,
+    pub(crate) slot_ms: u64,
+    pub(crate) placement_ms: u64,
     pub(crate) rect_ms: u64,
     pub(crate) asset_ms: u64,
     pub(crate) text_ms: u64,
@@ -55,7 +64,15 @@ pub(crate) struct Ui3FontDrawResult {
 #[derive(Copy, Clone, Debug, Default)]
 struct Ui3TextCollectStats {
     text_nodes: usize,
+    chars: usize,
+    whitespace: usize,
+    glyph_hits: usize,
+    glyph_misses: usize,
+    slot_misses: usize,
     clipped: usize,
+    glyph_lookup_ms: u64,
+    slot_ms: u64,
+    placement_ms: u64,
     text_node_cap_hit: bool,
     placement_cap_hit: bool,
 }
@@ -96,6 +113,7 @@ pub(crate) fn draw_paint_plan_primary(
     scratch.layout_adjustments.clear();
     let mut collect = Ui3TextCollectStats::default();
     let mut gradient_collect = Ui3GradientCollectStats::default();
+    let collect_start = embassy_time_driver::now();
     collect_paint_plan_ready_assets(
         plan,
         scene.scroll_y,
@@ -136,7 +154,15 @@ pub(crate) fn draw_paint_plan_primary(
         &mut scratch.placements,
         &mut collect,
     );
-    finish_draw_primary(scratch, collect, gradient_collect, scene, present_reason)
+    let collect_ms = elapsed_ms_since(collect_start);
+    finish_draw_primary(
+        scratch,
+        collect,
+        gradient_collect,
+        collect_ms,
+        scene,
+        present_reason,
+    )
 }
 
 pub(crate) fn draw_paint_plan_backend(
@@ -191,6 +217,11 @@ pub(crate) fn stamp_sprite64_backend(
 
     Ui3FontDrawResult {
         text_nodes: 0,
+        chars: 0,
+        whitespace: 0,
+        glyph_hits: 0,
+        glyph_misses: 0,
+        slot_misses: 0,
         placements: if text_submitted { 1 } else { 0 },
         assets: 0,
         layout_shift_px: 0,
@@ -199,6 +230,10 @@ pub(crate) fn stamp_sprite64_backend(
         clipped: if text_submitted { 0 } else { 1 },
         clear_ok: true,
         clear_ms,
+        collect_ms: 0,
+        glyph_lookup_ms: 0,
+        slot_ms: 0,
+        placement_ms: 0,
         rect_ms: 0,
         asset_ms: 0,
         text_ms,
@@ -228,6 +263,7 @@ pub(crate) fn draw_paint_plan_backend_band(
     scratch.layout_adjustments.clear();
     let mut collect = Ui3TextCollectStats::default();
     let mut gradient_collect = Ui3GradientCollectStats::default();
+    let collect_start = embassy_time_driver::now();
     collect_paint_plan_ready_assets(
         plan,
         scene.scroll_y,
@@ -268,10 +304,12 @@ pub(crate) fn draw_paint_plan_backend_band(
         &mut scratch.placements,
         &mut collect,
     );
+    let collect_ms = elapsed_ms_since(collect_start);
     finish_draw_backend(
         scratch,
         collect,
         gradient_collect,
+        collect_ms,
         scene,
         surface,
         band_y,
@@ -285,6 +323,7 @@ fn finish_draw_primary(
     scratch: &mut Ui3FontScratch,
     collect: Ui3TextCollectStats,
     gradient_collect: Ui3GradientCollectStats,
+    collect_ms: u64,
     scene: Ui3FontScene,
     present_reason: &str,
 ) -> Ui3FontDrawResult {
@@ -359,6 +398,11 @@ fn finish_draw_primary(
 
     Ui3FontDrawResult {
         text_nodes: collect.text_nodes,
+        chars: collect.chars,
+        whitespace: collect.whitespace,
+        glyph_hits: collect.glyph_hits,
+        glyph_misses: collect.glyph_misses,
+        slot_misses: collect.slot_misses,
         placements: scratch.placements.len(),
         assets: assets_drawn,
         layout_shift_px: layout_adjustment_total_px(scratch.layout_adjustments.as_slice()),
@@ -370,6 +414,10 @@ fn finish_draw_primary(
             .as_ref()
             .map(|result| result.total_ms)
             .unwrap_or(0),
+        collect_ms,
+        glyph_lookup_ms: collect.glyph_lookup_ms,
+        slot_ms: collect.slot_ms,
+        placement_ms: collect.placement_ms,
         rect_ms: gradient_result
             .as_ref()
             .map(|result| result.fill_ms.saturating_add(result.blend_ms))
@@ -458,6 +506,7 @@ fn finish_draw_backend(
     scratch: &mut Ui3FontScratch,
     collect: Ui3TextCollectStats,
     gradient_collect: Ui3GradientCollectStats,
+    collect_ms: u64,
     scene: Ui3FontScene,
     surface: &crate::ui3::ui3_surface::Ui3RgbaSurface,
     target_y: u32,
@@ -537,6 +586,11 @@ fn finish_draw_backend(
 
     Ui3FontDrawResult {
         text_nodes: collect.text_nodes,
+        chars: collect.chars,
+        whitespace: collect.whitespace,
+        glyph_hits: collect.glyph_hits,
+        glyph_misses: collect.glyph_misses,
+        slot_misses: collect.slot_misses,
         placements: scratch.placements.len(),
         assets: assets_drawn,
         layout_shift_px: layout_adjustment_total_px(scratch.layout_adjustments.as_slice()),
@@ -545,6 +599,10 @@ fn finish_draw_backend(
         clipped: collect.clipped,
         clear_ok: true,
         clear_ms,
+        collect_ms,
+        glyph_lookup_ms: collect.glyph_lookup_ms,
+        slot_ms: collect.slot_ms,
+        placement_ms: collect.placement_ms,
         rect_ms,
         asset_ms,
         text_ms,
@@ -1590,12 +1648,15 @@ fn push_text_line_placements(
     let (max_draw_x, max_draw_y) = (fallback_max_x, fallback_max_y);
     let dst_y = floor_i32(y);
     if dst_y < 0 || dst_y > max_draw_y {
-        stats.clipped = stats.clipped.saturating_add(text.chars().count());
+        let chars = text.chars().count();
+        stats.chars = stats.chars.saturating_add(chars);
+        stats.clipped = stats.clipped.saturating_add(chars);
         return;
     }
 
     let mut pen_x = x;
     for ch in text.chars() {
+        stats.chars = stats.chars.saturating_add(1);
         if placements.len() >= UI3_TEXT_PLACEMENT_MAX {
             stats.placement_cap_hit = true;
             break;
@@ -1604,6 +1665,7 @@ fn push_text_line_placements(
             continue;
         }
         if ch.is_whitespace() {
+            stats.whitespace = stats.whitespace.saturating_add(1);
             pen_x += if preserve_whitespace && ch == '\t' {
                 preserved_space_advance * 4.0
             } else {
@@ -1611,12 +1673,17 @@ fn push_text_line_placements(
             };
             continue;
         }
-        let Some(region) =
-            crate::ui3::althlasfont::bitmapfont::athlas_lookup_glyph_region(face, ch)
-        else {
+        let lookup_start = embassy_time_driver::now();
+        let region = crate::ui3::althlasfont::bitmapfont::athlas_lookup_glyph_region(face, ch);
+        stats.glyph_lookup_ms = stats
+            .glyph_lookup_ms
+            .saturating_add(elapsed_ms_since(lookup_start));
+        let Some(region) = region else {
+            stats.glyph_misses = stats.glyph_misses.saturating_add(1);
             pen_x += line_height * 0.35;
             continue;
         };
+        stats.glyph_hits = stats.glyph_hits.saturating_add(1);
         let advance =
             f32::from(crate::ui3::althlasfont::bitmapfont::athlas_glyph_advance_px(region));
         let dst_x = floor_i32(pen_x);
@@ -1625,13 +1692,23 @@ fn push_text_line_placements(
             pen_x += advance;
             continue;
         }
-        let Some(slot) = crate::intel::gpgpu::sprite64_font_slot_for_region(face, region) else {
+        let slot_start = embassy_time_driver::now();
+        let slot = crate::intel::gpgpu::sprite64_font_slot_for_region(face, region);
+        stats.slot_ms = stats
+            .slot_ms
+            .saturating_add(elapsed_ms_since(slot_start));
+        let Some(slot) = slot else {
+            stats.slot_misses = stats.slot_misses.saturating_add(1);
             pen_x += advance;
             continue;
         };
+        let placement_start = embassy_time_driver::now();
         placements.push(crate::intel::gpgpu::GpgpuSprite64Placement::tinted_src_over(
             slot, dst_x, dst_y, color_rgba,
         ));
+        stats.placement_ms = stats
+            .placement_ms
+            .saturating_add(elapsed_ms_since(placement_start));
         pen_x += advance;
     }
 }

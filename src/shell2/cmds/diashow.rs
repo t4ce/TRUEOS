@@ -18,7 +18,7 @@ const FRAME_DELAY_MS: u64 = 33;
 
 struct Slide {
     path: String,
-    decoded: crate::ui3::img::jpeg_codec::DecodedJpeg,
+    decoded: crate::graphics::jpeg_codec::DecodedJpeg,
 }
 
 pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -86,7 +86,7 @@ async fn run_diashow(target: &MatrixTarget) -> Result<(), String> {
             continue;
         };
 
-        match crate::ui3::img::jpeg_codec::decode_jpeg_rgba(bytes.as_slice()) {
+        match crate::graphics::jpeg_codec::decode_jpeg_rgba(bytes.as_slice()) {
             Ok(decoded) => {
                 slides.push(Slide { path, decoded });
             }

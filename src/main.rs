@@ -36,6 +36,8 @@ mod executor_cache;
 mod font_probe;
 mod gb_demo;
 mod globalog;
+#[path = "../crates/trueos-graphics/mod.rs"]
+mod graphics;
 #[cfg(target_arch = "x86_64")]
 mod hv;
 #[cfg(not(target_arch = "x86_64"))]

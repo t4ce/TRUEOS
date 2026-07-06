@@ -108,6 +108,30 @@ impl Stream {
         rc_unit(unsafe { vcabi::trueos_cabi_audio_drain(self.handle, timeout_ms) })
     }
 
+    pub fn pause(self) -> Result<(), i32> {
+        self.set_paused(true)
+    }
+
+    pub fn resume(self) -> Result<(), i32> {
+        self.set_paused(false)
+    }
+
+    pub fn set_paused(self, paused: bool) -> Result<(), i32> {
+        rc_unit(unsafe { vcabi::trueos_cabi_audio_set_paused(self.handle, u32::from(paused)) })
+    }
+
+    pub fn paused(self) -> Result<bool, i32> {
+        bool_result(unsafe { vcabi::trueos_cabi_audio_paused(self.handle) })
+    }
+
+    pub fn set_volume_percent(self, percent: u32) -> Result<u32, i32> {
+        u32_result(unsafe { vcabi::trueos_cabi_audio_set_volume_percent(self.handle, percent) })
+    }
+
+    pub fn volume_percent(self) -> Result<u32, i32> {
+        u32_result(unsafe { vcabi::trueos_cabi_audio_volume_percent(self.handle) })
+    }
+
     pub fn drop_stream(self) -> Result<(), i32> {
         rc_unit(unsafe { vcabi::trueos_cabi_audio_drop(self.handle) })
     }
@@ -156,7 +180,7 @@ impl Monitor {
                 &mut next,
             )
         };
-        let count = frames_result(samples)?;
+        let count = count_result(samples)?;
         self.cursor = next;
         Ok(count)
     }
@@ -167,9 +191,30 @@ fn rc_unit(rc: i32) -> Result<(), i32> {
 }
 
 fn frames_result(frames: isize) -> Result<usize, i32> {
+    count_result(frames)
+}
+
+fn count_result(frames: isize) -> Result<usize, i32> {
     if frames < 0 {
         Err(frames as i32)
     } else {
         Ok(frames as usize)
+    }
+}
+
+fn u32_result(value: i32) -> Result<u32, i32> {
+    if value < 0 {
+        Err(value)
+    } else {
+        Ok(value as u32)
+    }
+}
+
+fn bool_result(value: i32) -> Result<bool, i32> {
+    match value {
+        0 => Ok(false),
+        1 => Ok(true),
+        err if err < 0 => Err(err),
+        other => Err(other),
     }
 }

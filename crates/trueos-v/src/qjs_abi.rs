@@ -6,7 +6,6 @@
 pub use crate::bp_abi::*;
 
 unsafe extern "C" {
-    pub fn trueos_cabi_gfx_capture_screenshot_data_url(out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_gfx_texture_dimensions(
         tex_id: u32,
         out_width: *mut u32,

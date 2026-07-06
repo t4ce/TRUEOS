@@ -7014,7 +7014,7 @@ fn sprite64_worklist_atlas_once() -> Option<GpgpuSprite64WorklistAtlasSurface> {
                 let bucket_pngs =
                     crate::ui3::althlasfont::bitmapfont::athlas_font_bucket_pngs(face);
                 for (bucket, png) in bucket_pngs.iter().enumerate() {
-                    let decoded = crate::ui3::img::png_codec::decode_png_rgba(png).ok()?;
+                    let decoded = crate::graphics::png_codec::decode_png_rgba(png).ok()?;
                     let metrics =
                         crate::ui3::althlasfont::bitmapfont::athlas_font_bucket_atlas_metrics(
                             face, bucket,
@@ -7235,7 +7235,7 @@ fn rect_is_inside_atlas(width: u32, height: u32, rect: GpgpuRect) -> bool {
 fn twemoji_atlas_cache_once() -> Option<&'static GpgpuTwemojiAtlasCache> {
     GPGPU_TWEMOJI_ATLAS
         .call_once(|| {
-            let decoded = crate::ui3::img::png_codec::decode_png_rgba(
+            let decoded = crate::graphics::png_codec::decode_png_rgba(
                 crate::ui3::althlasfont::twemoji::TWEMOJI_ATLAS_PNG,
             )
             .ok()?;

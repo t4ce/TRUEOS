@@ -1,5 +1,3 @@
-pub(crate) mod jpeg_codec;
-pub(crate) mod jpeg_layout;
-pub(crate) mod png_codec;
-pub(crate) mod png_decode_pool;
-pub(crate) mod svg;
+pub(crate) use crate::graphics::image::{
+    jpeg_codec, jpeg_layout, png_codec, png_decode_pool, svg,
+};

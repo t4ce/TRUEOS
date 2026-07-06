@@ -1,4 +1,4 @@
-use crate::intel::types::{
+use crate::graphics::primitives::{
     Error, Result, UiPlaneSlot, UiPresent, UiPresentPath, UiRect, UiSurface, UiSurfaceFormat,
 };
 use spin::Mutex;

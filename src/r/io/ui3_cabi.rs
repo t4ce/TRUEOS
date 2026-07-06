@@ -203,7 +203,7 @@ pub unsafe extern "C" fn trueos_cabi_ui3_frame_draw_solid_batch(
             frame_id as u64,
             0,
             bytes,
-            crate::intel::types::SOLID_RECT_SIZE,
+            crate::graphics::primitives::SOLID_RECT_SIZE,
         );
     }
 
@@ -239,7 +239,7 @@ pub unsafe extern "C" fn trueos_cabi_ui3_frame_draw_sprite_batch(
             frame_id as u64,
             tex_id as u64,
             bytes,
-            crate::intel::types::SPRITE_QUAD_SIZE,
+            crate::graphics::primitives::SPRITE_QUAD_SIZE,
         );
     }
 

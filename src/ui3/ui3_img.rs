@@ -320,40 +320,68 @@ fn upload_decoded_rgba(tex_id: u32, width: u32, height: u32, rgba: Vec<u8>) -> i
     if rc != 0 { set_error(tex_id, rc) } else { rc }
 }
 
-fn upload_png_bytes_to_texture(tex_id: u32, bytes: &[u8], flags: u32) -> i32 {
+#[cfg(feature = "trueos_rdp")]
+fn encoded_resource_kind(
+    kind: crate::graphics::image::EncodedImageKind,
+) -> Option<crate::r::resource_monitor::EncodedKind> {
+    match kind {
+        crate::graphics::image::EncodedImageKind::Png => {
+            Some(crate::r::resource_monitor::EncodedKind::Png)
+        }
+        crate::graphics::image::EncodedImageKind::Jpeg => {
+            Some(crate::r::resource_monitor::EncodedKind::Jpeg)
+        }
+        crate::graphics::image::EncodedImageKind::Svg => {
+            Some(crate::r::resource_monitor::EncodedKind::Svg)
+        }
+        crate::graphics::image::EncodedImageKind::Unknown => None,
+    }
+}
+
+fn upload_encoded_image_bytes_to_texture(
+    tex_id: u32,
+    kind: crate::graphics::image::EncodedImageKind,
+    bytes: &[u8],
+    flags: u32,
+) -> i32 {
     #[cfg(feature = "trueos_rdp")]
-    preserve_encoded_texture(tex_id, crate::r::resource_monitor::EncodedKind::Png, flags, bytes);
+    if let Some(resource_kind) = encoded_resource_kind(kind) {
+        preserve_encoded_texture(tex_id, resource_kind, flags, bytes);
+    }
     #[cfg(not(feature = "trueos_rdp"))]
     preserve_encoded_texture(tex_id, (), flags, bytes);
 
-    match crate::ui3::img::png_codec::decode_png_rgba(bytes) {
+    match crate::graphics::image::decode_encoded_image_kind_rgba(kind, bytes) {
         Ok(decoded) => upload_decoded_rgba(tex_id, decoded.width, decoded.height, decoded.rgba),
-        Err(err) => set_error(tex_id, err.code()),
+        Err(err) => set_error(tex_id, err),
     }
+}
+
+fn upload_png_bytes_to_texture(tex_id: u32, bytes: &[u8], flags: u32) -> i32 {
+    upload_encoded_image_bytes_to_texture(
+        tex_id,
+        crate::graphics::image::EncodedImageKind::Png,
+        bytes,
+        flags,
+    )
 }
 
 fn upload_jpeg_bytes_to_texture(tex_id: u32, bytes: &[u8], flags: u32) -> i32 {
-    #[cfg(feature = "trueos_rdp")]
-    preserve_encoded_texture(tex_id, crate::r::resource_monitor::EncodedKind::Jpeg, flags, bytes);
-    #[cfg(not(feature = "trueos_rdp"))]
-    preserve_encoded_texture(tex_id, (), flags, bytes);
-
-    match crate::ui3::img::jpeg_codec::decode_jpeg_rgba(bytes) {
-        Ok(decoded) => upload_decoded_rgba(tex_id, decoded.width, decoded.height, decoded.rgba),
-        Err(err) => set_error(tex_id, err.code()),
-    }
+    upload_encoded_image_bytes_to_texture(
+        tex_id,
+        crate::graphics::image::EncodedImageKind::Jpeg,
+        bytes,
+        flags,
+    )
 }
 
 fn upload_svg_bytes_to_texture_rgba(tex_id: u32, bytes: &[u8], flags: u32) -> i32 {
-    #[cfg(feature = "trueos_rdp")]
-    preserve_encoded_texture(tex_id, crate::r::resource_monitor::EncodedKind::Svg, flags, bytes);
-    #[cfg(not(feature = "trueos_rdp"))]
-    preserve_encoded_texture(tex_id, (), flags, bytes);
-
-    match crate::ui3::img::svg::render_svg_bytes_rgba(bytes) {
-        Ok((info, rgba)) => upload_decoded_rgba(tex_id, info.width, info.height, rgba),
-        Err(err) => set_error(tex_id, err),
-    }
+    upload_encoded_image_bytes_to_texture(
+        tex_id,
+        crate::graphics::image::EncodedImageKind::Svg,
+        bytes,
+        flags,
+    )
 }
 
 pub(crate) fn store_rgba_image(tex_id: u32, width: u32, height: u32, rgba: Vec<u8>) -> i32 {

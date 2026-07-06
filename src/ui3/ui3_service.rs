@@ -260,7 +260,7 @@ pub async fn ui3_service_task() {
                         );
                     }
                     crate::log!(
-                        "ui3-service: asset batch redraw browser={} seq={} invalidated={} scroll_y={} content_height={} viewport={}x{} text_nodes={} placements={} gradients={} assets={} layout_shift={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} asset_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
+                        "ui3-service: asset batch redraw browser={} seq={} invalidated={} scroll_y={} content_height={} viewport={}x{} text_nodes={} chars={} whitespace={} glyph_hits={} glyph_misses={} slot_misses={} placements={} gradients={} assets={} layout_shift={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} collect_ms={} glyph_lookup_ms={} slot_ms={} placement_ms={} rect_ms={} asset_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
                         scene.frame.browser_instance_id,
                         scene.frame.seq,
                         invalidated,
@@ -269,6 +269,11 @@ pub async fn ui3_service_task() {
                         scene.viewport_width,
                         scene.viewport_height,
                         present.text_nodes,
+                        present.chars,
+                        present.whitespace,
+                        present.glyph_hits,
+                        present.glyph_misses,
+                        present.slot_misses,
                         present.placements,
                         present.gradients,
                         present.assets,
@@ -278,6 +283,10 @@ pub async fn ui3_service_task() {
                         present.batches,
                         present.clear_ok as u8,
                         present.clear_ms,
+                        present.collect_ms,
+                        present.glyph_lookup_ms,
+                        present.slot_ms,
+                        present.placement_ms,
                         present.rect_ms,
                         present.asset_ms,
                         present.text_ms,
@@ -317,7 +326,7 @@ fn consume_render_tree_frame(
     let present = redraw_scene_text(scene, font, taken_seq, false);
     let frame = &scene.frame;
     crate::log!(
-        "ui3-service: frame taken={} browser={} seq={} render_hash={} layout_hash={} render_bytes={} layout_bytes={} scroll_y={} scroll_redraw=0 content_height={} viewport={}x{} text_nodes={} placements={} gradients={} assets={} layout_shift={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} asset_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
+        "ui3-service: frame taken={} browser={} seq={} render_hash={} layout_hash={} render_bytes={} layout_bytes={} scroll_y={} scroll_redraw=0 content_height={} viewport={}x{} text_nodes={} chars={} whitespace={} glyph_hits={} glyph_misses={} slot_misses={} placements={} gradients={} assets={} layout_shift={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} collect_ms={} glyph_lookup_ms={} slot_ms={} placement_ms={} rect_ms={} asset_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
         taken_seq,
         frame.browser_instance_id,
         frame.seq,
@@ -330,6 +339,11 @@ fn consume_render_tree_frame(
         scene.viewport_width,
         scene.viewport_height,
         present.text_nodes,
+        present.chars,
+        present.whitespace,
+        present.glyph_hits,
+        present.glyph_misses,
+        present.slot_misses,
         present.placements,
         present.gradients,
         present.assets,
@@ -339,6 +353,10 @@ fn consume_render_tree_frame(
         present.batches,
         present.clear_ok as u8,
         present.clear_ms,
+        present.collect_ms,
+        present.glyph_lookup_ms,
+        present.slot_ms,
+        present.placement_ms,
         present.rect_ms,
         present.asset_ms,
         present.text_ms,
@@ -355,6 +373,11 @@ fn consume_render_tree_frame(
 #[derive(Copy, Clone, Debug, Default)]
 struct Ui3LayoutInspectResult {
     text_nodes: usize,
+    chars: usize,
+    whitespace: usize,
+    glyph_hits: usize,
+    glyph_misses: usize,
+    slot_misses: usize,
     placements: usize,
     assets: usize,
     layout_shift_px: u32,
@@ -366,6 +389,10 @@ struct Ui3LayoutInspectResult {
     presented: bool,
     clear_ok: bool,
     clear_ms: u64,
+    collect_ms: u64,
+    glyph_lookup_ms: u64,
+    slot_ms: u64,
+    placement_ms: u64,
     rect_ms: u64,
     asset_ms: u64,
     text_ms: u64,
@@ -481,15 +508,22 @@ fn redraw_scene_text(
     );
     if prefetch.submit_ok || prefetch.clear_ok {
         crate::log!(
-            "ui3-service: band-prefetch browser={} seq={} from_y={} bands={} text_nodes={} placements={} gradients={} assets={} submit_ok={} ms={}\n",
+            "ui3-service: band-prefetch browser={} seq={} from_y={} bands={} text_nodes={} chars={} glyph_hits={} glyph_misses={} placements={} gradients={} assets={} collect_ms={} glyph_lookup_ms={} slot_ms={} placement_ms={} submit_ok={} ms={}\n",
             browser_instance_id,
             frame_seq,
             visible_y1,
             scene.painted_bands.len(),
             prefetch.text_nodes,
+            prefetch.chars,
+            prefetch.glyph_hits,
+            prefetch.glyph_misses,
             prefetch.placements,
             prefetch.gradients,
             prefetch.assets,
+            prefetch.collect_ms,
+            prefetch.glyph_lookup_ms,
+            prefetch.slot_ms,
+            prefetch.placement_ms,
             prefetch.submit_ok as u8,
             elapsed_ms_since(prefetch_start)
         );
@@ -499,7 +533,7 @@ fn redraw_scene_text(
 
     if is_scroll {
         crate::log!(
-            "ui3-service: scroll taken={} browser={} seq={} scroll_y={} content_height={} viewport={}x{} text_nodes={} placements={} gradients={} assets={} layout_shift={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} rect_ms={} asset_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
+            "ui3-service: scroll taken={} browser={} seq={} scroll_y={} content_height={} viewport={}x{} text_nodes={} chars={} whitespace={} glyph_hits={} glyph_misses={} slot_misses={} placements={} gradients={} assets={} layout_shift={} embedded_scenes={} clipped={} batches={} clear_ok={} clear_ms={} collect_ms={} glyph_lookup_ms={} slot_ms={} placement_ms={} rect_ms={} asset_ms={} text_ms={} show_ms={} presented={} submit_ok={} submit_ms={} present_ms={} total_ms={} url={}\n",
             taken_seq,
             browser_instance_id,
             frame_seq,
@@ -508,6 +542,11 @@ fn redraw_scene_text(
             scene.viewport_width,
             scene.viewport_height,
             draw.text_nodes,
+            draw.chars,
+            draw.whitespace,
+            draw.glyph_hits,
+            draw.glyph_misses,
+            draw.slot_misses,
             draw.placements,
             draw.gradients,
             draw.assets,
@@ -517,6 +556,10 @@ fn redraw_scene_text(
             draw.batches,
             draw.clear_ok as u8,
             draw.clear_ms,
+            draw.collect_ms,
+            draw.glyph_lookup_ms,
+            draw.slot_ms,
+            draw.placement_ms,
             draw.rect_ms,
             draw.asset_ms,
             draw.text_ms,
@@ -532,6 +575,11 @@ fn redraw_scene_text(
 
     Ui3LayoutInspectResult {
         text_nodes: draw.text_nodes,
+        chars: draw.chars,
+        whitespace: draw.whitespace,
+        glyph_hits: draw.glyph_hits,
+        glyph_misses: draw.glyph_misses,
+        slot_misses: draw.slot_misses,
         placements: draw.placements,
         assets: draw.assets,
         layout_shift_px: draw.layout_shift_px,
@@ -543,6 +591,10 @@ fn redraw_scene_text(
         presented: draw.presented || scanout,
         clear_ok: draw.clear_ok,
         clear_ms: draw.clear_ms,
+        collect_ms: draw.collect_ms,
+        glyph_lookup_ms: draw.glyph_lookup_ms,
+        slot_ms: draw.slot_ms,
+        placement_ms: draw.placement_ms,
         rect_ms: draw.rect_ms,
         asset_ms: draw.asset_ms,
         text_ms: draw.text_ms,
@@ -606,16 +658,23 @@ fn paint_missing_scene_bands(
         merge_font_draw_result(&mut out, draw);
         painted = painted.saturating_add(1);
         crate::log!(
-            "ui3-service: band-paint reason={} y={}..{} band_h={} painted_bands={} text_nodes={} placements={} gradients={} assets={} submit_ok={}\n",
+            "ui3-service: band-paint reason={} y={}..{} band_h={} painted_bands={} text_nodes={} chars={} glyph_hits={} glyph_misses={} placements={} gradients={} assets={} collect_ms={} glyph_lookup_ms={} slot_ms={} placement_ms={} submit_ok={}\n",
             reason,
             band_y0,
             band_y1,
             band_height,
             scene.painted_bands.len(),
             draw.text_nodes,
+            draw.chars,
+            draw.glyph_hits,
+            draw.glyph_misses,
             draw.placements,
             draw.gradients,
             draw.assets,
+            draw.collect_ms,
+            draw.glyph_lookup_ms,
+            draw.slot_ms,
+            draw.placement_ms,
             draw.submit_ok as u8
         );
         band_y0 = band_y1;
@@ -660,6 +719,11 @@ fn merge_font_draw_result(
     draw: crate::ui3::ui3_font::Ui3FontDrawResult,
 ) {
     out.text_nodes = out.text_nodes.saturating_add(draw.text_nodes);
+    out.chars = out.chars.saturating_add(draw.chars);
+    out.whitespace = out.whitespace.saturating_add(draw.whitespace);
+    out.glyph_hits = out.glyph_hits.saturating_add(draw.glyph_hits);
+    out.glyph_misses = out.glyph_misses.saturating_add(draw.glyph_misses);
+    out.slot_misses = out.slot_misses.saturating_add(draw.slot_misses);
     out.placements = out.placements.saturating_add(draw.placements);
     out.assets = out.assets.saturating_add(draw.assets);
     out.layout_shift_px = out.layout_shift_px.max(draw.layout_shift_px);
@@ -668,6 +732,10 @@ fn merge_font_draw_result(
     out.clipped = out.clipped.saturating_add(draw.clipped);
     out.clear_ok |= draw.clear_ok;
     out.clear_ms = out.clear_ms.saturating_add(draw.clear_ms);
+    out.collect_ms = out.collect_ms.saturating_add(draw.collect_ms);
+    out.glyph_lookup_ms = out.glyph_lookup_ms.saturating_add(draw.glyph_lookup_ms);
+    out.slot_ms = out.slot_ms.saturating_add(draw.slot_ms);
+    out.placement_ms = out.placement_ms.saturating_add(draw.placement_ms);
     out.rect_ms = out.rect_ms.saturating_add(draw.rect_ms);
     out.asset_ms = out.asset_ms.saturating_add(draw.asset_ms);
     out.text_ms = out.text_ms.saturating_add(draw.text_ms);

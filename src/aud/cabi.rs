@@ -87,6 +87,7 @@ pub unsafe extern "C" fn trueos_cabi_audio_open_playback(
     }
     state.open = true;
     state.running = false;
+    crate::aud::pcm_lane::set_paused(false);
 
     unsafe {
         out_handle.write(TRUEOS_AUDIO_HANDLE);
@@ -116,6 +117,7 @@ pub extern "C" fn trueos_cabi_audio_start(handle: u32) -> i32 {
     if !state.open {
         return -ENODEV;
     }
+    crate::aud::pcm_lane::set_paused(false);
     state.running = true;
     0
 }
@@ -133,6 +135,55 @@ pub extern "C" fn trueos_cabi_audio_drop(handle: u32) -> i32 {
     state.running = false;
     crate::aud::pcm_lane::request_stop();
     0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_audio_set_paused(handle: u32, paused: u32) -> i32 {
+    if !valid_handle(handle) {
+        return -EBADF;
+    }
+    if !AUDIO_CABI_STATE.lock().open {
+        return -ENODEV;
+    }
+
+    crate::aud::pcm_lane::set_paused(paused != 0);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_audio_paused(handle: u32) -> i32 {
+    if !valid_handle(handle) {
+        return -EBADF;
+    }
+    if !AUDIO_CABI_STATE.lock().open {
+        return -ENODEV;
+    }
+
+    i32::from(crate::aud::pcm_lane::paused())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_audio_set_volume_percent(handle: u32, percent: u32) -> i32 {
+    if !valid_handle(handle) {
+        return -EBADF;
+    }
+    if !AUDIO_CABI_STATE.lock().open {
+        return -ENODEV;
+    }
+
+    crate::aud::pcm_lane::set_volume_percent(percent.min(u16::MAX as u32) as u16) as i32
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_audio_volume_percent(handle: u32) -> i32 {
+    if !valid_handle(handle) {
+        return -EBADF;
+    }
+    if !AUDIO_CABI_STATE.lock().open {
+        return -ENODEV;
+    }
+
+    crate::aud::pcm_lane::volume_percent() as i32
 }
 
 #[unsafe(no_mangle)]

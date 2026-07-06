@@ -8,8 +8,7 @@ use core::ptr;
 pub use v::qjs_abi::{
     TrueosHidCursorEvent, TrueosHidKeyboardSample, TrueosMouseState, trueos_cabi_fs_read_file,
     trueos_cabi_fs_remove, trueos_cabi_fs_write_abort, trueos_cabi_fs_write_begin,
-    trueos_cabi_fs_write_chunk, trueos_cabi_fs_write_finish,
-    trueos_cabi_gfx_capture_screenshot_data_url, trueos_cabi_hid_keyboard_read,
+    trueos_cabi_fs_write_chunk, trueos_cabi_fs_write_finish, trueos_cabi_hid_keyboard_read,
     trueos_cabi_input_cursor_buttons, trueos_cabi_input_cursor_pos, trueos_cabi_input_pop_mouse,
     trueos_cabi_input_read_cursor_events_since, trueos_cabi_input_write_cursor,
     trueos_cabi_mouse_poll, trueos_cabi_net_fetch_bytes_discard, trueos_cabi_net_fetch_bytes_read,
@@ -30,22 +29,6 @@ pub use v::vshell::{
     shell_command_registry_json, shell1_submit_input, shell2_print_line, uart1_shell_write,
 };
 pub use v::vsys::{log_error, log_info, write_log_stream};
-
-pub fn gfx_capture_screenshot_data_url() -> Option<String> {
-    let len = unsafe { trueos_cabi_gfx_capture_screenshot_data_url(core::ptr::null_mut(), 0) };
-    if len <= 0 {
-        return None;
-    }
-
-    let mut bytes = vec![0u8; len as usize];
-    let got =
-        unsafe { trueos_cabi_gfx_capture_screenshot_data_url(bytes.as_mut_ptr(), bytes.len()) };
-    if got <= 0 {
-        return None;
-    }
-    bytes.truncate(got as usize);
-    String::from_utf8(bytes).ok()
-}
 
 #[inline]
 fn log_bytes(bytes: &[u8]) {

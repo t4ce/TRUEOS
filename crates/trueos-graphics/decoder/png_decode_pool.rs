@@ -6,7 +6,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use spin::Mutex;
 
-use super::png_codec::PngDecodeError;
+use super::png::PngDecodeError;
 
 const PNG_ROW_EXPAND_TASK_POOL_SIZE: usize = 16;
 const PNG_ROW_EXPAND_MIN_ROWS_PER_TASK: usize = 8;

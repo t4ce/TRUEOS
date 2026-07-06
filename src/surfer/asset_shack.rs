@@ -134,28 +134,12 @@ fn pop_next_asset_request(policy: u8) -> Option<BrowserAssetRequest> {
     })
 }
 
-fn infer_decode_kind(kind: &str, url: &str, bytes: &[u8]) -> &'static str {
-    let kind = kind.to_ascii_lowercase();
-    let url = url.to_ascii_lowercase();
-    if kind.contains("svg") || url.ends_with(".svg") || bytes.starts_with(b"<svg") {
-        return "svg";
-    }
-    if kind.contains("png") || url.ends_with(".png") || bytes.starts_with(b"\x89PNG\r\n\x1A\n") {
-        return "png";
-    }
-    if kind.contains("jpg")
-        || kind.contains("jpeg")
-        || url.ends_with(".jpg")
-        || url.ends_with(".jpeg")
-        || bytes.starts_with(&[0xFF, 0xD8, 0xFF])
-    {
-        return "jpeg";
-    }
-    "unknown"
-}
-
 fn request_prefers_perf_core(request: &BrowserAssetRequest) -> bool {
-    matches!(infer_decode_kind(&request.kind, &request.url, &[]), "png" | "jpeg")
+    matches!(
+        crate::graphics::image::infer_encoded_image_kind(&request.kind, &request.url, &[]),
+        crate::graphics::image::EncodedImageKind::Png
+            | crate::graphics::image::EncodedImageKind::Jpeg
+    )
 }
 
 fn current_worker_residency() -> (usize, u8, &'static str) {
@@ -170,17 +154,8 @@ fn current_worker_residency() -> (usize, u8, &'static str) {
 }
 
 fn decode_asset_rgba(kind: &str, url: &str, bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), i32> {
-    match infer_decode_kind(kind, url, bytes) {
-        "png" => crate::ui3::img::png_codec::decode_png_rgba(bytes)
-            .map(|decoded| (decoded.width, decoded.height, decoded.rgba))
-            .map_err(|err| err.code()),
-        "jpeg" => crate::ui3::img::jpeg_codec::decode_jpeg_rgba(bytes)
-            .map(|decoded| (decoded.width, decoded.height, decoded.rgba))
-            .map_err(|err| err.code()),
-        "svg" => crate::ui3::img::svg::render_svg_bytes_rgba(bytes)
-            .map(|(info, rgba)| (info.width, info.height, rgba)),
-        _ => Err(-8),
-    }
+    crate::graphics::image::decode_encoded_image_rgba(kind, url, bytes)
+        .map(|decoded| (decoded.width, decoded.height, decoded.rgba))
 }
 
 fn browser_asset_batch_mut(

@@ -716,7 +716,7 @@ impl EmulatorUi {
         let scanout_bytes = bytes_for_surface(width, height)?;
         let scanout_backing = DmaRegion::alloc(scanout_bytes, 4096)?;
 
-        let logo = match crate::ui3::img::jpeg_codec::decode_jpeg_rgba(LOGO_JPEG) {
+        let logo = match crate::graphics::jpeg_codec::decode_jpeg_rgba(LOGO_JPEG) {
             Ok(logo) => logo,
             Err(err) => {
                 crate::log!("virtio-gpu-ui: logo decode failed code={}\n", err.code());
@@ -855,7 +855,7 @@ fn draw_centered_logo(
     dst: *mut u8,
     dst_w: u32,
     dst_h: u32,
-    logo: &crate::ui3::img::jpeg_codec::DecodedJpeg,
+    logo: &crate::graphics::jpeg_codec::DecodedJpeg,
 ) -> LogoCopy {
     let dst_len = bytes_for_surface(dst_w, dst_h).unwrap_or(0);
     unsafe { core::ptr::write_bytes(dst, 0, dst_len) };
