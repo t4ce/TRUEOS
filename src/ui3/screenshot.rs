@@ -136,6 +136,19 @@ fn next_frame_blocking(timeout_ms: u64) -> Option<ImageBuffer> {
 static LAST_SCREENSHOT_BUFFER: LastScreenshotBuffer = LastScreenshotBuffer::new();
 static VIRGL_SCREENSHOT_AWAIT: ScreenshotAwait = ScreenshotAwait::new(&LAST_SCREENSHOT_BUFFER);
 
+pub(crate) fn capture_screenshot_png_blocking(timeout_ms: u64) -> Option<Vec<u8>> {
+    if !crate::allcaps::gfx::SCREENSHOT_CAPTURE_ENABLED {
+        return None;
+    }
+    let image = next_frame_blocking(timeout_ms)?;
+    crate::graphics::encoder::png::encode_rgb_u32_png(
+        image.width,
+        image.height,
+        image.pixels.as_slice(),
+    )
+    .ok()
+}
+
 pub(crate) fn screenshot_capture_armed() -> bool {
     crate::allcaps::gfx::SCREENSHOT_CAPTURE_ENABLED && LAST_SCREENSHOT_BUFFER.is_capture_armed()
 }

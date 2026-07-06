@@ -1,6 +1,3 @@
-extern crate alloc;
-
-use alloc::{string::String, vec};
 use core::ffi::CStr;
 use core::ffi::{c_char, c_int, c_long, c_void};
 use core::ptr;
